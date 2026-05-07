@@ -1,0 +1,142 @@
+body {
+  font-family: Arial, sans-serif;
+  margin: 24px;
+  color: #111;
+  background: #fff;
+}
+h1 {
+  margin: 0 0 8px 0;
+  font-size: 28px;
+}
+h2.section {
+  margin: 28px 0 8px 0;
+  font-size: 20px;
+}
+h2.section .n,
+.data-table .n {
+  color: #666;
+  font-weight: 400;
+  font-size: 12px;
+}
+.meta,
+.note {
+  margin: 0 0 16px 0;
+  color: #555;
+}
+.note {
+  margin: 6px 0 14px 0;
+  font-size: 13px;
+}
+.nav {
+  margin-bottom: 16px;
+}
+.nav a {
+  margin-right: 12px;
+}
+.legend,
+.legend-note {
+  margin: 16px 0 22px 0;
+  padding: 12px 14px;
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  background: #fafafa;
+}
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  align-items: center;
+}
+.legend-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: center;
+}
+.legend-item {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 13px;
+}
+.swatch {
+  width: 18px;
+  height: 18px;
+  display: inline-block;
+  border: 1px solid #ccc;
+  box-sizing: border-box;
+}
+.legend-gradient {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+.gradient-strip {
+  width: 160px;
+  height: 14px;
+  border-radius: 999px;
+  border: 1px solid #bbb;
+  display: inline-block;
+}
+.table-wrap {
+  overflow: auto;
+  max-width: 100%;
+}
+.data-table {
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.data-table th,
+.data-table td {
+  border: 1px solid #dddddd;
+  padding: 6px 10px;
+  text-align: center;
+  white-space: nowrap;
+}
+.data-table thead th,
+.data-table .metric-cell {
+  background: #fafafa;
+  font-weight: 600;
+}
+.metric-table th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+.metric-table td {
+  min-width: 110px;
+}
+.data-table .task-cell,
+.data-table .metric-cell {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background-color: #ffffff;
+  text-align: left;
+}
+.agg-table .mode-head,
+.agg-table .metric-head {
+  background: #eef3fa;
+  font-weight: 700;
+}
+.agg-table .mode-head {
+  min-width: 270px;
+}
+.agg-table .quantile-head {
+  background: #f6f8fb;
+  min-width: 90px;
+}
+.agg-table .sr-cell {
+  font-weight: 600;
+}
+caption {
+  caption-side: top;
+  text-align: left;
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+ul {
+  line-height: 1.8;
+}
