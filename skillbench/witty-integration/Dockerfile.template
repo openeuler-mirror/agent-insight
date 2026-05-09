@@ -1,0 +1,7 @@
+# Add this to end of Dockerfile 
+
+COPY witty-setup.sh /root/witty-setup.sh
+COPY .env /root/.skill-insight/.env
+COPY skills /root/.opencode/skill
+
+RUN /root/witty-setup.sh

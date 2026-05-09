@@ -123,8 +123,8 @@ set +a
 # Debug: Print DB_HOST to confirm it's visible
 echo "DB_HOST for server: $DB_HOST"
 
-nohup npm run dev > server.log 2>&1 &
-NEW_PID=$!
+  HOST=${HOST:-0.0.0.0} nohup npm run dev > server.log 2>&1 &
+  NEW_PID=$!
 
 echo "Server started successfully."
 echo "PID: $NEW_PID"

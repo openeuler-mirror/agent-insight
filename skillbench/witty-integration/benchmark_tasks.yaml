@@ -1,0 +1,96 @@
+# Tasks selected for Witty benchmark integration.
+# These task directories live under `skillbench/tasks/` (the full catalog
+# downloaded by `scripts/download_skillbench.py`) and are copied into
+# `skillbench/tasks_init/` by `prepare-benchmark-tasks.sh`.
+# First third of the catalog (30 out of 89).
+
+tasks:
+  - id: 3d-scan-calc
+    source: skillbench/tasks/3d-scan-calc
+
+  - id: adaptive-cruise-control
+    source: skillbench/tasks/adaptive-cruise-control
+
+  - id: azure-bgp-oscillation-route-leak
+    source: skillbench/tasks/azure-bgp-oscillation-route-leak
+
+  - id: citation-check
+    source: skillbench/tasks/citation-check
+
+  - id: civ6-adjacency-optimizer
+    source: skillbench/tasks/civ6-adjacency-optimizer
+
+  - id: court-form-filling
+    source: skillbench/tasks/court-form-filling
+
+  - id: crystallographic-wyckoff-position-analysis
+    source: skillbench/tasks/crystallographic-wyckoff-position-analysis
+
+  - id: dapt-intrusion-detection
+    source: skillbench/tasks/dapt-intrusion-detection
+
+  - id: data-to-d3
+    source: skillbench/tasks/data-to-d3
+
+  - id: dialogue-parser
+    source: skillbench/tasks/dialogue-parser
+
+  - id: dynamic-object-aware-egomotion
+    source: skillbench/tasks/dynamic-object-aware-egomotion
+
+  - id: earthquake-phase-association
+    source: skillbench/tasks/earthquake-phase-association
+
+  - id: earthquake-plate-calculation
+    source: skillbench/tasks/earthquake-plate-calculation
+
+  - id: econ-detrending-correlation
+    source: skillbench/tasks/econ-detrending-correlation
+
+  - id: edit-pdf
+    source: skillbench/tasks/edit-pdf
+
+  - id: energy-ac-optimal-power-flow
+    source: skillbench/tasks/energy-ac-optimal-power-flow
+
+  - id: energy-market-pricing
+    source: skillbench/tasks/energy-market-pricing
+
+  - id: enterprise-information-search
+    source: skillbench/tasks/enterprise-information-search
+
+  - id: exceltable-in-ppt
+    source: skillbench/tasks/exceltable-in-ppt
+
+  - id: exoplanet-detection-period
+    source: skillbench/tasks/exoplanet-detection-period
+
+  - id: financial-modeling-qa
+    source: skillbench/tasks/financial-modeling-qa
+
+  - id: find-topk-similiar-chemicals
+    source: skillbench/tasks/find-topk-similiar-chemicals
+
+  - id: fix-build-agentops
+    source: skillbench/tasks/fix-build-agentops
+
+  - id: fix-build-google-auto
+    source: skillbench/tasks/fix-build-google-auto
+
+  - id: fix-druid-loophole-cve
+    source: skillbench/tasks/fix-druid-loophole-cve
+
+  - id: fix-erlang-ssh-cve
+    source: skillbench/tasks/fix-erlang-ssh-cve
+
+  - id: fix-visual-stability
+    source: skillbench/tasks/fix-visual-stability
+
+  - id: flink-query
+    source: skillbench/tasks/flink-query
+
+  - id: flood-risk-analysis
+    source: skillbench/tasks/flood-risk-analysis
+
+  - id: gh-repo-analytics
+    source: skillbench/tasks/gh-repo-analytics

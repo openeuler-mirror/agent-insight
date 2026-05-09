@@ -1,0 +1,30 @@
+<div class="legend">
+  <div class="legend-status">
+    <div class="legend-item">
+      <span class="swatch" style="background:$missing_bg;"></span>
+      <span>missing</span>
+    </div>
+    <div class="legend-item">
+      <span class="swatch" style="background:$agent_timeout_bg;"></span>
+      <span>agent timeout</span>
+    </div>
+    <div class="legend-item">
+      <span class="swatch" style="background:$setup_timeout_bg;"></span>
+      <span>setup timeout</span>
+    </div>
+    <div class="legend-item">
+      <span class="swatch" style="background:$env_timeout_bg;"></span>
+      <span>environment timeout</span>
+    </div>
+$fail_item
+    <div class="legend-item">
+      <span class="swatch" style="border:2px solid #000;background:#fff;"></span>
+      <span>best mode in row</span>
+    </div>
+  </div>
+  <div class="legend-gradient">
+    <span>$left_label</span>
+    <span class="gradient-strip" style="background:$gradient_css;"></span>
+    <span>$right_label</span>
+  </div>
+</div>

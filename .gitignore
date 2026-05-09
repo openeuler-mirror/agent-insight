@@ -34,7 +34,7 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env.local
-.env
+**/.env
 
 # custom model config (copy from custom-models.example.json)
 custom-models.json
@@ -71,3 +71,8 @@ bun.lock
 # Agent development configuration
 .agentdev/
 _local_legacy/
+AGENTS.md
+
+# Skillbench folders
+skillbench/runs/
+skillbench/tasks*/
