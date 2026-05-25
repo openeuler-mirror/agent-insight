@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-import { inferSubagentNamesFromInteractions } from "@/lib/subagent-inference"
+import { inferSubagentNamesFromInteractions } from "@/lib/engine/observability/subagent-inference"
 
 test("inferSubagentNamesFromInteractions fills subagent_name from nearest preceding task subagent_type", () => {
   const interactions = [

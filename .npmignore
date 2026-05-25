@@ -26,6 +26,9 @@ server.log
 .vscode
 .trae
 *.iml
+.agents
+.codex
+AGENTS.md
 
 # Test coverage
 coverage

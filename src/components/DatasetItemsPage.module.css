@@ -1,0 +1,543 @@
+/* Dataset detail toolbar + batch import modal */
+
+.tableShell {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--card-bg);
+  box-shadow: 0 1px 2px var(--shadow-color);
+}
+
+.tableToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 12px 16px;
+  background: linear-gradient(180deg, var(--background-secondary) 0%, var(--card-bg) 100%);
+  border-bottom: 1px solid var(--border);
+}
+
+.toolbarLeft {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.sectionTitle {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--foreground);
+  letter-spacing: -0.01em;
+}
+
+.toolbarMeta {
+  font-size: 12px;
+  color: var(--foreground-muted);
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--background-tertiary);
+}
+
+.toolbarRight {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.refreshGhost {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 12px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--foreground-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.refreshGhost:hover:not(:disabled) {
+  background: var(--background-secondary);
+  border-color: var(--border);
+}
+
+.refreshGhost:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.addSplit {
+  display: inline-flex;
+  align-items: stretch;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--primary-subtle-border);
+  box-shadow: 0 1px 3px var(--shadow-color);
+}
+
+.addSplitSecondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 14px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--primary);
+  background: var(--primary-subtle);
+  border: none;
+  border-right: 1px solid var(--primary-subtle-border);
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+
+.addSplitSecondary:hover:not(:disabled) {
+  filter: brightness(0.96);
+  color: var(--primary-hover);
+}
+
+.addSplitSecondary:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.addSplitPrimary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 16px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--primary-foreground);
+  background: var(--primary);
+  border: none;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.addSplitPrimary:hover:not(:disabled) {
+  background: var(--primary-hover);
+}
+
+.addSplitPrimary:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.tableScroll {
+  overflow-x: auto;
+}
+
+.dataTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+  min-width: 720px;
+}
+
+.dataTable thead tr {
+  background: var(--table-header-bg);
+  border-bottom: 1px solid var(--table-border);
+}
+
+.dataTable th {
+  text-align: left;
+  padding: 11px 14px;
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--foreground-muted);
+  white-space: nowrap;
+}
+
+.dataTable tbody tr {
+  border-bottom: 1px solid var(--table-row-border);
+  transition: background 0.12s ease;
+}
+
+.dataTable tbody tr:hover {
+  background: var(--primary-subtle);
+}
+
+.dataTable td {
+  padding: 11px 14px;
+  vertical-align: top;
+}
+
+.idTag {
+  display: inline-block;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--tag-gray-bg);
+  color: var(--tag-gray-fg);
+  max-width: 100%;
+}
+
+.linkBtn {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  color: var(--primary);
+}
+
+.linkBtn:hover {
+  text-decoration: underline;
+}
+
+.linkBtnDanger {
+  background: none;
+  border: none;
+  padding: 0;
+  margin-left: 14px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  color: var(--error);
+}
+
+.linkBtnDanger:hover {
+  text-decoration: underline;
+}
+
+/* Modal */
+.modalBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  background: rgba(26, 26, 24, 0.38);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  animation: modalIn 0.2s ease-out;
+}
+
+@keyframes modalIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.modalPanel {
+  width: 100%;
+  max-width: 560px;
+  max-height: min(90vh, 720px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 14px;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  box-shadow:
+    0 24px 48px rgba(26, 26, 24, 0.14),
+    0 8px 16px rgba(26, 26, 24, 0.06);
+  animation: modalSlide 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes modalSlide {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.modalHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(135deg, var(--primary-subtle) 0%, var(--card-bg) 52%);
+}
+
+.modalTitleWrap {
+  min-width: 0;
+}
+
+.modalTitle {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--foreground);
+  letter-spacing: -0.02em;
+}
+
+.modalSubtitle {
+  margin: 4px 0 0;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--foreground-muted);
+}
+
+.modalClose {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--foreground-muted);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+
+.modalClose:hover:not(:disabled) {
+  background: var(--background-secondary);
+  color: var(--foreground);
+}
+
+.modalClose:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.modalBody {
+  padding: 18px 20px;
+  overflow-y: auto;
+}
+
+.segmented {
+  display: flex;
+  padding: 4px;
+  border-radius: 10px;
+  background: var(--background-secondary);
+  border: 1px solid var(--border);
+  gap: 4px;
+  margin-bottom: 16px;
+}
+
+.segmentedBtn {
+  flex: 1;
+  height: 34px;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--foreground-secondary);
+  background: transparent;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.segmentedBtn:hover:not(:disabled) {
+  color: var(--foreground);
+}
+
+.segmentedBtnActive {
+  background: var(--card-bg);
+  color: var(--primary);
+  box-shadow: 0 1px 3px var(--shadow-color);
+}
+
+.segmentedBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.batchTextarea {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 220px;
+  border-radius: 10px;
+  border: 1px solid var(--input-border);
+  padding: 14px;
+  font-size: 13px;
+  line-height: 1.55;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  resize: vertical;
+  color: var(--foreground);
+  background: var(--input-bg);
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.batchTextarea:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--ring);
+}
+
+.batchTextarea:disabled {
+  opacity: 0.65;
+}
+
+.dropZone {
+  border: 2px dashed var(--border-dark);
+  border-radius: 12px;
+  padding: 28px 20px;
+  text-align: center;
+  background: var(--background-secondary);
+  cursor: pointer;
+  transition:
+    border-color 0.18s ease,
+    background 0.18s ease,
+    transform 0.18s ease;
+}
+
+.dropZone:hover:not(.dropZoneDisabled) {
+  border-color: var(--primary-subtle-border);
+  background: var(--primary-subtle);
+}
+
+.dropZoneActive {
+  border-color: var(--primary);
+  background: var(--primary-subtle);
+  transform: scale(1.008);
+}
+
+.dropZoneDisabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.dropZoneIcon {
+  margin: 0 auto 10px;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  color: var(--primary);
+}
+
+.dropZoneTitle {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--foreground);
+  margin: 0 0 6px;
+}
+
+.dropZoneHint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--foreground-muted);
+  line-height: 1.5;
+}
+
+.dropZoneFileName {
+  margin-top: 12px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--primary);
+  word-break: break-all;
+}
+
+.hintCard {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--primary-subtle);
+  border: 1px solid var(--primary-subtle-border);
+  font-size: 13px;
+  color: var(--foreground-secondary);
+  line-height: 1.55;
+}
+
+.modalError {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 14px;
+  background: var(--error-subtle);
+  border: 1px solid var(--error-subtle-border);
+  color: var(--error);
+}
+
+.modalFooter {
+  padding: 14px 20px 18px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  border-top: 1px solid var(--border);
+  background: var(--background-secondary);
+}
+
+.btnGhost {
+  height: 36px;
+  padding: 0 18px;
+  font-size: 14px;
+  font-weight: 600;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--card-bg);
+  color: var(--foreground-secondary);
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.btnGhost:hover:not(:disabled) {
+  background: var(--background-secondary);
+  border-color: var(--border-dark);
+}
+
+.btnGhost:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btnPrimary {
+  height: 36px;
+  padding: 0 18px;
+  font-size: 14px;
+  font-weight: 600;
+  border-radius: 10px;
+  border: none;
+  background: var(--primary);
+  color: var(--primary-foreground);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.btnPrimary:hover:not(:disabled) {
+  background: var(--primary-hover);
+}
+
+.btnPrimary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

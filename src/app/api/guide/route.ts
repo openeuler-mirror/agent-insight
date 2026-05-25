@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getDatabaseAdapter } from '@/lib/db-interface';
+import { getDatabaseAdapter } from '@/lib/storage/db-interface';
 
 interface GuideUpdateBody {
     guideDisabled?: boolean;

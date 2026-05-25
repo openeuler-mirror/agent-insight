@@ -1,0 +1,420 @@
+.wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.sectionTitle {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--foreground);
+  letter-spacing: 0.03em;
+  text-transform: none;
+}
+
+/* 详情页底部：相对全局 ai-btn 略放大字号（仅本页） */
+.detailFooter {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 22px;
+}
+
+.detailFooter :global(.ai-btn-p) {
+  font-size: 13px;
+  font-weight: 500;
+  padding: 7px 15px;
+}
+
+.detailFooter :global(.ai-btn-s) {
+  font-size: 12.5px;
+  padding: 6px 12px;
+}
+
+.detailHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+
+.detailHeader :global(.ai-btn-s) {
+  font-size: 12.5px;
+  padding: 6px 12px;
+}
+
+.basicCard {
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px 20px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.field + .field {
+  margin-top: 16px;
+}
+
+.label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--foreground);
+}
+
+.req {
+  color: var(--error);
+}
+
+.input {
+  width: 100%;
+  box-sizing: border-box;
+  height: 40px;
+  border-radius: 10px;
+  border: 1px solid var(--input-border);
+  background: var(--input-bg);
+  color: var(--foreground);
+  padding: 0 14px;
+  font-size: 13px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.input:focus {
+  outline: none;
+  border-color: var(--primary, #7c3aed);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary, #7c3aed) 18%, transparent);
+}
+
+.textarea {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 72px;
+  border-radius: 10px;
+  border: 1px solid var(--input-border);
+  background: var(--input-bg);
+  color: var(--foreground);
+  padding: 12px 14px;
+  font-size: 13px;
+  line-height: 1.5;
+  resize: vertical;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.textarea:focus {
+  outline: none;
+  border-color: var(--primary, #7c3aed);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary, #7c3aed) 18%, transparent);
+}
+
+.counter {
+  font-size: 11px;
+  color: var(--foreground-muted);
+  text-align: right;
+}
+
+.configShell {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--background);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 20px 28px;
+  padding: 14px 18px;
+  background: var(--background-secondary);
+  border-bottom: 1px solid var(--border);
+}
+
+.toolbarBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.toolbarBlockGrow {
+  flex: 1;
+  min-width: 160px;
+}
+
+.langPills {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--foreground) 4%, transparent);
+  border: 1px solid var(--border);
+}
+
+.langPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--foreground-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.25;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.langPill:hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+}
+
+.langPillActive {
+  color: var(--foreground);
+  background: var(--background);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+.langPillSub {
+  font-size: 9px;
+  font-weight: 500;
+  opacity: 0.72;
+  letter-spacing: 0.02em;
+}
+
+.langIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 700;
+  font-family: ui-monospace, monospace;
+}
+
+.langIconPy {
+  background: linear-gradient(135deg, #306998 0%, #4b8bbe 100%);
+  color: #fff;
+}
+
+.langIconJs {
+  background: linear-gradient(135deg, #323330 0%, #f7df1e 160%);
+  color: #f7df1e;
+}
+
+.scoreSeg {
+  display: inline-flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.scoreBtn {
+  padding: 8px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--input-border);
+  background: var(--input-bg);
+  color: var(--foreground-secondary);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.scoreBtn:hover {
+  border-color: color-mix(in srgb, var(--primary, #7c3aed) 45%, var(--border));
+  color: var(--foreground);
+}
+
+.scoreBtnActive {
+  border-color: color-mix(in srgb, var(--primary, #7c3aed) 55%, var(--border));
+  background: color-mix(in srgb, var(--primary, #7c3aed) 12%, var(--background));
+  color: var(--primary, #7c3aed);
+}
+
+.hintBanner {
+  margin: 0 18px;
+  margin-top: 12px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--foreground-secondary);
+  background: color-mix(in srgb, var(--primary, #6366f1) 8%, var(--background-secondary));
+  border: 1px solid color-mix(in srgb, var(--primary, #6366f1) 22%, var(--border));
+}
+
+.split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+  min-height: 0;
+  margin-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+@media (max-width: 900px) {
+  .split {
+    grid-template-columns: 1fr;
+  }
+
+  .paneCode {
+    border-right: none !important;
+    border-bottom: 1px solid var(--border);
+  }
+}
+
+.pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--background-secondary);
+}
+
+.paneCode {
+  border-right: 1px solid var(--border);
+}
+
+.paneHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--foreground-secondary);
+  background: color-mix(in srgb, var(--foreground) 3%, var(--background));
+  border-bottom: 1px solid var(--border);
+}
+
+.paneHeadMeta {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--foreground-muted);
+}
+
+.editorMount {
+  flex-shrink: 0;
+}
+
+.monacoLoading {
+  height: 400px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  color: var(--foreground-muted);
+  background: var(--background-secondary);
+}
+
+.docHint {
+  margin: 14px 18px 18px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px dashed var(--border);
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--foreground-secondary);
+  background: var(--background-secondary);
+}
+
+.docHint code {
+  font-size: 11.5px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--background-tertiary);
+}
+
+.promptAddBtn {
+  width: 100%;
+  min-height: 44px;
+  border: 1px dashed var(--input-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--foreground) 4%, var(--background));
+  color: var(--foreground-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.promptAddBtn:hover {
+  border-color: color-mix(in srgb, var(--primary, #7c3aed) 40%, var(--border));
+  background: color-mix(in srgb, var(--primary, #7c3aed) 6%, var(--background));
+  color: var(--foreground);
+}
+
+.promptCard {
+  border: 1px solid var(--input-border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--background);
+}
+
+.promptCardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--foreground) 2%, var(--background));
+}
+
+.promptCardTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--foreground-muted);
+  letter-spacing: 0.04em;
+}
+
+.promptCardAction {
+  border: none;
+  background: transparent;
+  color: var(--foreground-muted);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.promptCardAction:hover {
+  color: var(--foreground);
+}
+
+.promptCardTextarea {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 96px;
+  border: none;
+  outline: none;
+  resize: vertical;
+  background: transparent;
+  color: var(--foreground);
+  padding: 12px 14px;
+  font-size: 12.5px;
+  line-height: 1.6;
+}

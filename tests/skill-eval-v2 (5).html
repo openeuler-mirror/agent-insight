@@ -1,0 +1,5814 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>调测分析 · Agent Insight</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #FAFAF7;
+    --bg-elev: #FFFFFF;
+    --bg-soft: #F4F3EE;
+    --bg-sidebar: #FBFAF5;
+    --ink: #14130F;
+    --ink-2: #46443D;
+    --ink-3: #8A887F;
+    --ink-4: #B8B5A8;
+    --line: #E8E5DB;
+    --line-strong: #D6D2C4;
+    --accent: #2B5BD7;
+    --accent-soft: #EEF2FE;
+    --success: #2D7D5A;
+    --success-soft: #E8F3ED;
+    --warn: #B8721C;
+    --warn-soft: #FBF1DC;
+    --danger: #B83A2A;
+    --danger-soft: #F8E5E0;
+    --shadow-sm: 0 1px 2px rgba(20,19,15,0.04);
+    --shadow-md: 0 4px 16px rgba(20,19,15,0.06), 0 1px 3px rgba(20,19,15,0.04);
+    --shadow-lg: 0 12px 40px rgba(20,19,15,0.08), 0 2px 8px rgba(20,19,15,0.04);
+    --radius: 10px;
+    --radius-sm: 6px;
+    --radius-lg: 14px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'Inter Tight', -apple-system, sans-serif;
+    font-size: 14px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    letter-spacing: -0.005em;
+  }
+
+  body {
+    height: 100vh;
+    overflow: hidden;
+    display: flex;
+  }
+
+  /* ==================== LEFT SIDEBAR (保留原框架) ==================== */
+  .sidebar-left {
+    width: 240px;
+    background: var(--bg-sidebar);
+    border-right: 1px solid var(--line);
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    overflow: hidden;
+  }
+
+  .brand-block {
+    padding: 18px 20px 16px;
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .brand-mark {
+    width: 38px; height: 38px;
+    background: var(--accent);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-size: 18px;
+  }
+
+  .brand-info .name {
+    font-weight: 600;
+    font-size: 15px;
+    color: var(--ink);
+    letter-spacing: -0.01em;
+  }
+  .brand-info .sub {
+    font-size: 11px;
+    color: var(--ink-3);
+    margin-top: 2px;
+  }
+
+  .nav-section {
+    padding: 12px 12px 6px;
+    flex: 1;
+    overflow-y: auto;
+  }
+
+  .nav-group {
+    margin-bottom: 4px;
+  }
+
+  .nav-group-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--ink-3);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-family: 'JetBrains Mono', monospace;
+    cursor: pointer;
+  }
+  .nav-group-head.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+    border-radius: var(--radius-sm);
+  }
+  .nav-group-head .chev {
+    font-size: 10px;
+    transition: transform 0.2s;
+  }
+  .nav-group-head.collapsed .chev { transform: rotate(-90deg); }
+
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 10px;
+    border-radius: var(--radius-sm);
+    color: var(--ink-2);
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.15s;
+    margin-bottom: 1px;
+  }
+  .nav-item:hover {
+    background: var(--bg-soft);
+    color: var(--ink);
+  }
+  .nav-item.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-weight: 500;
+  }
+  .nav-item.indent { padding-left: 28px; font-size: 12.5px; }
+
+  .nav-item svg { width: 14px; height: 14px; flex-shrink: 0; }
+
+  .nav-divider {
+    height: 1px;
+    background: var(--line);
+    margin: 8px 4px;
+  }
+
+  /* config bottom section */
+  .sidebar-bottom {
+    border-top: 1px solid var(--line);
+    padding: 10px 12px;
+  }
+
+  .user-block {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+  }
+  .user-block:hover { background: var(--bg-soft); }
+
+  .avatar {
+    width: 30px; height: 30px;
+    background: var(--ink);
+    color: #fff;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .user-info .email { font-size: 12px; color: var(--ink-2); font-weight: 500; }
+  .user-info .role { font-size: 10.5px; color: var(--ink-3); margin-top: 1px; font-family: 'JetBrains Mono', monospace; }
+
+  .lang-toggle {
+    display: flex;
+    gap: 4px;
+    padding: 4px;
+    background: var(--bg-soft);
+    border-radius: var(--radius-sm);
+    margin-top: 8px;
+  }
+  .lang-toggle .opt {
+    flex: 1;
+    text-align: center;
+    padding: 4px 6px;
+    font-size: 11px;
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--ink-3);
+    cursor: pointer;
+    border-radius: 4px;
+  }
+  .lang-toggle .opt.active {
+    background: var(--bg-elev);
+    color: var(--ink);
+    box-shadow: var(--shadow-sm);
+  }
+
+  /* ==================== MAIN AREA ==================== */
+  .main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-width: 0;
+  }
+
+  /* ===== TOP BAR ===== */
+  .topbar {
+    height: 52px;
+    background: var(--bg-elev);
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    align-items: center;
+    padding: 0 24px;
+    gap: 16px;
+    flex-shrink: 0;
+  }
+
+  .topbar-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .topbar-icon {
+    width: 28px; height: 28px;
+    background: var(--bg-soft);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--ink-2);
+  }
+  .topbar-title h1 {
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+
+  .tabs {
+    display: flex;
+    gap: 4px;
+    margin-left: 24px;
+  }
+  .tab {
+    padding: 6px 14px;
+    font-size: 13px;
+    color: var(--ink-3);
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    font-weight: 500;
+  }
+  .tab.active {
+    color: var(--accent);
+    background: var(--accent-soft);
+  }
+  .tab:hover:not(.active) {
+    color: var(--ink);
+    background: var(--bg-soft);
+  }
+
+  .topbar-right {
+    margin-left: auto;
+    display: flex;
+    gap: 8px;
+  }
+
+  /* ===== CONTENT ===== */
+  .content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 24px 28px;
+  }
+
+  /* ===== STEP TABS (新设计) ===== */
+  .step-tabs {
+    display: flex;
+    background: var(--bg-elev);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    padding: 6px;
+    margin-bottom: 20px;
+    box-shadow: var(--shadow-sm);
+  }
+
+  .step-tab {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 18px;
+    cursor: pointer;
+    border-radius: var(--radius);
+    transition: all 0.2s;
+    position: relative;
+  }
+
+  .step-tab:hover { background: var(--bg-soft); }
+
+  .step-tab.active {
+    background: var(--ink);
+    color: #fff;
+  }
+  .step-tab.active .step-num,
+  .step-tab.active .step-num-mini {
+    background: rgba(255,255,255,0.15);
+    color: #fff;
+    border-color: transparent;
+  }
+  .step-tab.active .step-name { color: #fff; }
+  .step-tab.active .step-desc { color: rgba(255,255,255,0.6); }
+
+  .step-tab.done .step-num-mini {
+    background: var(--success);
+    color: #fff;
+    border-color: var(--success);
+  }
+  .step-tab.done .step-num-mini::before { content: "✓"; }
+  .step-tab.done .step-num-mini span { display: none; }
+
+  .step-num-mini {
+    width: 32px; height: 32px;
+    border-radius: 8px;
+    background: var(--bg-soft);
+    border: 1px solid var(--line-strong);
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink-2);
+    flex-shrink: 0;
+  }
+
+  .step-tab-text {
+    flex: 1;
+    min-width: 0;
+  }
+  .step-name {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--ink);
+    margin-bottom: 2px;
+  }
+  .step-desc {
+    font-size: 11.5px;
+    color: var(--ink-3);
+    font-family: 'JetBrains Mono', monospace;
+    letter-spacing: 0;
+  }
+
+  .step-arrow {
+    color: var(--ink-4);
+    flex-shrink: 0;
+    margin: 0 -8px;
+    align-self: center;
+  }
+
+  /* ===== LAYOUT ===== */
+  .work-area {
+    display: grid;
+    grid-template-columns: 1fr 320px;
+    gap: 16px;
+    align-items: start;
+  }
+
+  /* ===== STEP PANELS ===== */
+  .step-panel { display: none; }
+  .step-panel.active { display: block; animation: fadeIn 0.3s ease; }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ===== CARDS ===== */
+  .card {
+    background: var(--bg-elev);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 20px;
+    margin-bottom: 14px;
+  }
+
+  .card-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 14px;
+  }
+
+  .card-head .label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    font-weight: 500;
+    margin-bottom: 4px;
+  }
+
+  .card-head h3 {
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+
+  /* ===== FORM ===== */
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+
+  .field { margin-bottom: 14px; }
+
+  .field-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11.5px;
+    font-weight: 500;
+    color: var(--ink-2);
+    margin-bottom: 7px;
+    font-family: 'JetBrains Mono', monospace;
+    letter-spacing: 0.02em;
+  }
+  .field-label .req { color: var(--danger); }
+  .field-label .hint {
+    color: var(--ink-4);
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: 0;
+    font-family: 'Inter Tight', sans-serif;
+    font-size: 11.5px;
+    margin-left: 4px;
+  }
+
+  .input, .select, .textarea {
+    width: 100%;
+    padding: 9px 11px;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius-sm);
+    background: var(--bg-elev);
+    font-family: inherit;
+    font-size: 13px;
+    color: var(--ink);
+    transition: all 0.15s;
+  }
+  .input:focus, .select:focus, .textarea:focus {
+    outline: none;
+    border-color: var(--ink);
+    box-shadow: 0 0 0 3px rgba(20,19,15,0.06);
+  }
+
+  /* ===== BUTTONS ===== */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 8px 14px;
+    border: 1px solid var(--line-strong);
+    background: var(--bg-elev);
+    border-radius: var(--radius-sm);
+    font-family: inherit;
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--ink);
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
+  .btn:hover { border-color: var(--ink-2); background: var(--bg-soft); }
+  .btn-primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .btn-primary:hover { background: #1E48B8; border-color: #1E48B8; }
+  .btn-dark { background: var(--ink); color: #fff; border-color: var(--ink); }
+  .btn-dark:hover { background: #000; border-color: #000; }
+  .btn-ghost { border-color: transparent; background: transparent; }
+  .btn-ghost:hover { background: var(--bg-soft); border-color: var(--line); }
+  .btn-sm { padding: 5px 9px; font-size: 11.5px; }
+  .btn-lg { padding: 11px 20px; font-size: 13px; }
+
+  .btn-ai {
+    background: linear-gradient(135deg, #14130F 0%, #2B5BD7 100%);
+    color: #fff;
+    border: none;
+    position: relative;
+    overflow: hidden;
+  }
+  .btn-ai::before {
+    content: "";
+    position: absolute;
+    top: 0; left: -100%;
+    width: 100%; height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+    transition: left 0.6s;
+  }
+  .btn-ai:hover::before { left: 100%; }
+
+  /* ===== TAGS ===== */
+  .tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-size: 10.5px;
+    font-weight: 500;
+    background: var(--bg-soft);
+    color: var(--ink-2);
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .tag-blue { background: var(--accent-soft); color: var(--accent); }
+  .tag-green { background: var(--success-soft); color: var(--success); }
+  .tag-amber { background: var(--warn-soft); color: var(--warn); }
+  .tag-red { background: var(--danger-soft); color: var(--danger); }
+
+  /* ===== TEST CASES ===== */
+  .case-row {
+    display: grid;
+    grid-template-columns: 22px 1fr auto auto;
+    gap: 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    margin-bottom: 5px;
+    align-items: center;
+    background: var(--bg-elev);
+    transition: all 0.15s;
+    cursor: pointer;
+  }
+  .case-row:hover { border-color: var(--line-strong); }
+  .case-row.selected {
+    border-color: var(--ink);
+    background: #FAFAF7;
+  }
+
+  .case-checkbox {
+    width: 15px; height: 15px;
+    border: 1.5px solid var(--line-strong);
+    border-radius: 3px;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--bg-elev);
+  }
+  .case-row.selected .case-checkbox {
+    background: var(--ink);
+    border-color: var(--ink);
+  }
+  .case-row.selected .case-checkbox::before {
+    content: "✓";
+    color: #fff;
+    font-size: 10px;
+    font-weight: 700;
+  }
+
+  .case-content { min-width: 0; }
+  .case-title {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--ink);
+    margin-bottom: 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .case-meta {
+    font-size: 10.5px;
+    color: var(--ink-3);
+    font-family: 'JetBrains Mono', monospace;
+    display: flex;
+    gap: 8px;
+  }
+
+  /* ===== EVALUATOR CARDS ===== */
+  .evaluator-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+  }
+
+  .eval-card {
+    background: var(--bg-elev);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 14px;
+    position: relative;
+    transition: all 0.2s;
+  }
+  .eval-card:hover {
+    border-color: var(--line-strong);
+    box-shadow: var(--shadow-sm);
+  }
+
+  .eval-card.ai-generated {
+    border-color: rgba(43,91,215,0.3);
+    background: linear-gradient(135deg, var(--bg-elev) 0%, rgba(238,242,254,0.4) 100%);
+  }
+  .eval-card.ai-generated::before {
+    content: "AI";
+    position: absolute;
+    top: -7px; left: 12px;
+    background: var(--ink);
+    color: #fff;
+    font-size: 9.5px;
+    font-family: 'JetBrains Mono', monospace;
+    padding: 2px 6px;
+    border-radius: 3px;
+    letter-spacing: 0.08em;
+    font-weight: 600;
+  }
+
+  .eval-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+  }
+
+  .eval-name {
+    font-size: 13px;
+    font-weight: 600;
+    display: flex; align-items: center; gap: 7px;
+  }
+
+  .eval-icon {
+    width: 22px; height: 22px;
+    border-radius: 5px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px;
+    font-weight: 600;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .eval-icon.fact { background: var(--accent-soft); color: var(--accent); }
+  .eval-icon.tool { background: var(--success-soft); color: var(--success); }
+  .eval-icon.format { background: var(--warn-soft); color: var(--warn); }
+  .eval-icon.safe { background: var(--danger-soft); color: var(--danger); }
+
+  .eval-desc {
+    font-size: 11.5px;
+    color: var(--ink-3);
+    line-height: 1.5;
+    margin-bottom: 10px;
+  }
+
+  .eval-foot {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-top: 8px;
+    border-top: 1px dashed var(--line);
+  }
+
+  .weight-bar {
+    flex: 1;
+    height: 4px;
+    background: var(--line);
+    border-radius: 2px;
+    margin: 0 10px;
+    overflow: hidden;
+  }
+  .weight-bar-fill {
+    height: 100%;
+    background: var(--ink);
+    border-radius: 2px;
+  }
+  .weight-text {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    color: var(--ink-2);
+    font-weight: 600;
+  }
+
+  /* ===== RUN SUMMARY ===== */
+  .run-summary {
+    background: linear-gradient(135deg, #14130F 0%, #2D2C26 100%);
+    color: #fff;
+    border-radius: var(--radius);
+    padding: 20px 22px;
+    margin-bottom: 14px;
+    position: relative;
+    overflow: hidden;
+  }
+  .run-summary::before {
+    content: "";
+    position: absolute;
+    top: -50%; right: -10%;
+    width: 350px; height: 350px;
+    background: radial-gradient(circle, rgba(43,91,215,0.18) 0%, transparent 70%);
+    pointer-events: none;
+  }
+
+  .run-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 20px;
+    position: relative;
+  }
+
+  .summary-stat .label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    color: rgba(255,255,255,0.5);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 6px;
+  }
+  .summary-stat .value {
+    font-family: 'Instrument Serif', serif;
+    font-size: 28px;
+    font-weight: 400;
+    letter-spacing: -0.02em;
+    color: #fff;
+    line-height: 1;
+  }
+  .summary-stat .value em {
+    font-style: italic;
+    color: rgba(255,255,255,0.6);
+    font-size: 16px;
+  }
+
+  /* ===== TABLE ===== */
+  .exec-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12.5px;
+    background: var(--bg-elev);
+    border-radius: var(--radius);
+    overflow: hidden;
+    border: 1px solid var(--line);
+  }
+  .exec-table thead th {
+    text-align: left;
+    padding: 9px 12px;
+    background: var(--bg-soft);
+    border-bottom: 1px solid var(--line);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    color: var(--ink-3);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 500;
+  }
+  .exec-table tbody td {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: middle;
+  }
+  .exec-table tbody tr:last-child td { border-bottom: none; }
+  .exec-table tbody tr { transition: background 0.15s; cursor: pointer; }
+  .exec-table tbody tr:hover { background: var(--bg-soft); }
+
+  .status-dot {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 500;
+  }
+  .status-dot::before {
+    content: "";
+    width: 6px; height: 6px;
+    border-radius: 50%;
+  }
+  .status-dot.pass { color: var(--success); }
+  .status-dot.pass::before { background: var(--success); }
+  .status-dot.fail { color: var(--danger); }
+  .status-dot.fail::before { background: var(--danger); }
+  .status-dot.run { color: var(--accent); }
+  .status-dot.run::before {
+    background: var(--accent);
+    animation: pulse 1.4s infinite;
+  }
+  .status-dot.wait { color: var(--ink-4); }
+  .status-dot.wait::before { background: var(--ink-4); }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.4; transform: scale(1.4); }
+  }
+
+  /* ===== METRICS ===== */
+  .metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-bottom: 14px;
+  }
+
+  .metric-card {
+    background: var(--bg-elev);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 18px;
+    transition: all 0.2s;
+  }
+  .metric-card:hover {
+    border-color: var(--line-strong);
+    box-shadow: var(--shadow-sm);
+  }
+
+  .metric-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    color: var(--ink-3);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 10px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .metric-value {
+    font-family: 'Instrument Serif', serif;
+    font-size: 36px;
+    line-height: 1;
+    letter-spacing: -0.025em;
+    margin-bottom: 5px;
+    font-weight: 400;
+  }
+  .metric-value .unit {
+    font-size: 16px;
+    color: var(--ink-3);
+    margin-left: 2px;
+  }
+
+  .metric-sub {
+    font-size: 11px;
+    color: var(--ink-3);
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  .metric-trend {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    font-size: 10.5px;
+    font-weight: 600;
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: var(--success-soft);
+    color: var(--success);
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .metric-trend.down { background: var(--danger-soft); color: var(--danger); }
+
+  .metric-card.highlight {
+    background: linear-gradient(135deg, var(--ink) 0%, #2D2C26 100%);
+    color: #fff;
+    border: none;
+  }
+  .metric-card.highlight .metric-label,
+  .metric-card.highlight .metric-sub { color: rgba(255,255,255,0.5); }
+  .metric-card.highlight .metric-value { color: #fff; }
+  .metric-card.highlight .metric-value .unit { color: rgba(255,255,255,0.6); }
+
+  /* ===== DIM BARS ===== */
+  .dim-row {
+    display: grid;
+    grid-template-columns: 150px 1fr 60px;
+    gap: 14px;
+    align-items: center;
+    padding: 9px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .dim-row:last-child { border-bottom: none; }
+
+  .dim-name {
+    font-size: 12.5px;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+  }
+
+  .dim-bar-track {
+    height: 7px;
+    background: var(--bg-soft);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .dim-bar-fill {
+    height: 100%;
+    border-radius: 4px;
+    background: linear-gradient(90deg, var(--success) 0%, #4FAE82 100%);
+    transition: width 0.6s ease;
+  }
+  .dim-bar-fill.warn { background: linear-gradient(90deg, var(--warn) 0%, #D89942 100%); }
+  .dim-bar-fill.danger { background: linear-gradient(90deg, var(--danger) 0%, #D9624F 100%); }
+
+  .dim-value {
+    text-align: right;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12.5px;
+    font-weight: 600;
+  }
+
+  /* ===== FAILURE REASONS ===== */
+  .reason-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 11px 8px;
+    border-bottom: 1px solid var(--line);
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    margin: 0 -8px;
+  }
+  .reason-row:hover { background: var(--bg-soft); }
+  .reason-row:last-child { border-bottom: none; }
+
+  .reason-info { display: flex; align-items: center; gap: 10px; }
+  .reason-icon {
+    width: 28px; height: 28px;
+    border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px;
+    font-weight: 600;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .reason-text .name { font-size: 12.5px; font-weight: 500; }
+  .reason-text .desc { font-size: 11px; color: var(--ink-3); margin-top: 1px; }
+
+  .reason-count {
+    font-family: 'Instrument Serif', serif;
+    font-size: 22px;
+    color: var(--ink);
+  }
+
+  /* ===== SIDEBAR (右侧调测历史) ===== */
+  .right-panel {
+    background: var(--bg-elev);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 16px;
+    position: sticky;
+    top: 0;
+  }
+
+  .right-panel-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+  }
+
+  .history-item {
+    padding: 11px 12px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    margin-bottom: 6px;
+    cursor: pointer;
+    transition: all 0.15s;
+    background: var(--bg-elev);
+  }
+  .history-item:hover { border-color: var(--line-strong); }
+  .history-item.current {
+    border-color: var(--ink);
+    background: var(--bg-soft);
+  }
+  .history-meta {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 5px;
+  }
+  .history-time {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    color: var(--ink-3);
+  }
+  .history-pass {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11.5px;
+    font-weight: 700;
+  }
+  .history-pass.high { color: var(--success); }
+  .history-pass.mid { color: var(--warn); }
+  .history-pass.low { color: var(--danger); }
+  .history-tags {
+    display: flex; gap: 4px; flex-wrap: wrap;
+    margin-top: 5px;
+  }
+
+  /* ===== NAV FOOTER ===== */
+  .nav-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-top: 18px;
+    margin-top: 18px;
+    border-top: 1px solid var(--line);
+  }
+
+  /* ===== ICON BUTTON ===== */
+  .icon-btn {
+    width: 28px; height: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    background: var(--bg-elev);
+    cursor: pointer;
+    color: var(--ink-2);
+    transition: all 0.15s;
+  }
+  .icon-btn:hover { border-color: var(--ink-2); background: var(--bg-soft); }
+
+  /* ===== PROGRESS ===== */
+  .progress-bar {
+    height: 6px;
+    background: var(--bg-soft);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.3s;
+  }
+
+  /* ===== MODAL ===== */
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(20,19,15,0.45);
+    backdrop-filter: blur(6px);
+    z-index: 200;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    animation: fadeIn 0.2s;
+  }
+  .modal-backdrop.active { display: flex; }
+  .modal {
+    background: var(--bg-elev);
+    border-radius: var(--radius-lg);
+    width: 760px;
+    max-width: 90vw;
+    max-height: 85vh;
+    overflow: hidden;
+    box-shadow: var(--shadow-lg);
+    display: flex;
+    flex-direction: column;
+  }
+  .modal-head {
+    padding: 20px 24px;
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .modal-title {
+    font-family: 'Instrument Serif', serif;
+    font-size: 22px;
+    letter-spacing: -0.01em;
+  }
+  .modal-title em { font-style: italic; color: var(--accent); }
+  .modal-body {
+    padding: 22px 24px;
+    overflow-y: auto;
+    flex: 1;
+  }
+  .modal-foot {
+    padding: 14px 24px;
+    border-top: 1px solid var(--line);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: var(--bg-soft);
+  }
+
+  /* ===== AI GEN STATE ===== */
+  .ai-gen-state {
+    text-align: center;
+    padding: 30px 0 20px;
+  }
+  .ai-gen-icon {
+    width: 56px; height: 56px;
+    margin: 0 auto 16px;
+    border-radius: 14px;
+    background: linear-gradient(135deg, var(--ink) 0%, var(--accent) 100%);
+    display: flex; align-items: center; justify-content: center;
+    color: #fff;
+    font-family: 'Instrument Serif', serif;
+    font-size: 28px;
+    box-shadow: 0 8px 24px rgba(43,91,215,0.25);
+    position: relative;
+  }
+  .ai-gen-icon::after {
+    content: "";
+    position: absolute;
+    inset: -3px;
+    border-radius: 17px;
+    background: linear-gradient(135deg, var(--ink), var(--accent), var(--ink));
+    z-index: -1;
+    animation: spin 3s linear infinite;
+    opacity: 0.5;
+  }
+  @keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+  .ai-gen-steps {
+    text-align: left;
+    max-width: 420px;
+    margin: 20px auto 0;
+  }
+  .ai-step {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    padding: 9px 0;
+    font-size: 12.5px;
+    color: var(--ink-3);
+    border-bottom: 1px dashed var(--line);
+  }
+  .ai-step:last-child { border-bottom: none; }
+  .ai-step.done { color: var(--ink); }
+  .ai-step.active { color: var(--accent); font-weight: 500; }
+  .ai-step .check {
+    width: 17px; height: 17px;
+    border-radius: 50%;
+    background: var(--bg-soft);
+    border: 1.5px solid var(--line-strong);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px;
+    flex-shrink: 0;
+  }
+  .ai-step.done .check {
+    background: var(--success);
+    border-color: var(--success);
+    color: #fff;
+  }
+  .ai-step.done .check::before { content: "✓"; }
+  .ai-step.active .check {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+  .ai-step.active .check::before {
+    content: "";
+    width: 5px; height: 5px;
+    border-radius: 50%;
+    background: var(--accent);
+    animation: pulse 1.4s infinite;
+  }
+
+  /* TRACE STEPS */
+  .trace-step {
+    display: grid;
+    grid-template-columns: 22px 1fr;
+    gap: 12px;
+    padding-bottom: 14px;
+    position: relative;
+  }
+  .trace-step::before {
+    content: "";
+    position: absolute;
+    left: 10px; top: 22px;
+    width: 1px;
+    height: calc(100% - 12px);
+    background: var(--line);
+  }
+  .trace-step:last-child::before { display: none; }
+  .trace-marker {
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    background: var(--bg-elev);
+    border: 1.5px solid var(--line-strong);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--ink-2);
+    z-index: 1;
+  }
+  .trace-marker.tool { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+  .trace-marker.llm { background: var(--ink); border-color: var(--ink); color: #fff; }
+  .trace-content {
+    background: var(--bg-soft);
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
+    font-size: 12px;
+  }
+  .trace-content .head {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 5px;
+    font-weight: 500;
+  }
+  .trace-content .head .meta {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    color: var(--ink-3);
+    font-weight: 400;
+  }
+  .trace-content code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--ink-2);
+    background: var(--bg-elev);
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+
+  /* ===== STEP 2: SINGLE PAGE EVAL FLOW ===== */
+  /* Task strip (顶部任务标题条) */
+  .task-strip {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 16px;
+    background: var(--bg-elev);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    margin-bottom: 14px;
+  }
+  .task-strip-eyebrow {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    color: var(--ink-3);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 500;
+    margin-bottom: 2px;
+    display: block;
+  }
+  .task-strip-title {
+    font-family: 'Instrument Serif', serif;
+    font-size: 22px;
+    letter-spacing: -0.015em;
+    font-weight: 400;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .task-strip-edit {
+    font-size: 13px;
+    color: var(--ink-3);
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 4px;
+    transition: all 0.15s;
+  }
+  .task-strip-edit:hover {
+    background: var(--bg-soft);
+    color: var(--ink);
+  }
+
+  /* Run card (主配置卡片) */
+  .run-card {
+    background: var(--bg-elev);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    margin-bottom: 14px;
+    overflow: hidden;
+  }
+
+  .run-section {
+    padding: 20px 22px;
+    border-bottom: 1px solid var(--line);
+  }
+  .run-section:last-child { border-bottom: none; }
+
+  .run-section-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 14px;
+  }
+
+  .run-section-label {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--ink);
+  }
+
+  .run-section-num {
+    width: 22px; height: 22px;
+    border-radius: 5px;
+    background: var(--ink);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 700;
+  }
+
+  .run-section-hint {
+    font-size: 11.5px;
+    color: var(--ink-3);
+    font-weight: 400;
+    font-family: 'JetBrains Mono', monospace;
+    letter-spacing: 0;
+  }
+
+  /* Dataset cards */
+  .dataset-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+  }
+
+  .dataset-card {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 13px 15px;
+    border: 1.5px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--bg-elev);
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .dataset-card:hover {
+    border-color: var(--line-strong);
+  }
+  .dataset-card.selected {
+    border-color: var(--ink);
+    background: #FAFAF7;
+  }
+
+  .dataset-card input[type=checkbox] {
+    margin-top: 2px;
+    flex-shrink: 0;
+    width: 15px;
+    height: 15px;
+    accent-color: var(--ink);
+    cursor: pointer;
+  }
+
+  .dataset-card-body { flex: 1; min-width: 0; }
+
+  .dataset-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+  }
+
+  .dataset-name {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--ink);
+  }
+
+  .dataset-stats {
+    font-size: 11px;
+    color: var(--ink-3);
+    font-family: 'JetBrains Mono', monospace;
+    margin-bottom: 7px;
+    display: flex;
+    gap: 6px;
+  }
+  .dataset-stats b {
+    color: var(--ink);
+    font-weight: 700;
+  }
+
+  .dataset-tags {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+  }
+
+  .dataset-card.empty-add {
+    border-style: dashed;
+    border-color: var(--line-strong);
+    background: transparent;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s;
+    min-height: 96px;
+  }
+  .dataset-card.empty-add:hover {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+  .empty-add-content { text-align: center; }
+  .empty-add-icon {
+    width: 30px; height: 30px;
+    margin: 0 auto 5px;
+    border: 1.5px dashed var(--line-strong);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--ink-3);
+    font-size: 17px;
+    font-weight: 300;
+  }
+  .dataset-card.empty-add:hover .empty-add-icon {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  .empty-add-text {
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--ink-2);
+  }
+  .dataset-card.empty-add:hover .empty-add-text { color: var(--accent); }
+
+  /* Evaluator rows */
+  .evaluator-row-list {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+  }
+  .evaluator-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 11px 14px;
+    border: 1.5px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--bg-elev);
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .evaluator-row:hover { border-color: var(--line-strong); }
+  .evaluator-row.selected {
+    border-color: var(--ink);
+    background: #FAFAF7;
+  }
+  .evaluator-row input[type=radio] { display: none; }
+
+  .evaluator-radio {
+    width: 16px; height: 16px;
+    border: 1.5px solid var(--line-strong);
+    border-radius: 50%;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-elev);
+  }
+  .evaluator-row.selected .evaluator-radio { border-color: var(--ink); }
+  .evaluator-row.selected .evaluator-radio::after {
+    content: "";
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--ink);
+  }
+
+  .evaluator-row-info { flex: 1; min-width: 0; }
+  .evaluator-row-name {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--ink);
+    margin-bottom: 3px;
+  }
+  .tag-dark {
+    background: var(--ink) !important;
+    color: #fff !important;
+  }
+  .evaluator-row-meta {
+    font-size: 11.5px;
+    color: var(--ink-3);
+    font-family: 'JetBrains Mono', monospace;
+    line-height: 1.5;
+  }
+
+  /* Run launch CTA */
+  .run-launch {
+    padding: 18px 22px;
+    background: linear-gradient(135deg, #14130F 0%, #2D2C26 100%);
+    color: #fff;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 20px;
+    position: relative;
+    overflow: hidden;
+  }
+  .run-launch::before {
+    content: "";
+    position: absolute;
+    top: -50%; right: -10%;
+    width: 320px; height: 320px;
+    background: radial-gradient(circle, rgba(43,91,215,0.18) 0%, transparent 70%);
+    pointer-events: none;
+  }
+
+  .run-launch-summary { position: relative; }
+
+  .run-launch-stats {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    margin-bottom: 4px;
+    flex-wrap: wrap;
+  }
+  .run-launch-stats b {
+    font-family: 'Instrument Serif', serif;
+    font-size: 22px;
+    font-weight: 400;
+    margin: 0 2px;
+    letter-spacing: -0.01em;
+    vertical-align: -2px;
+  }
+  .run-launch-stats .dot {
+    width: 3px; height: 3px;
+    background: rgba(255,255,255,0.4);
+    border-radius: 50%;
+  }
+
+  .run-launch-est {
+    font-size: 11.5px;
+    font-family: 'JetBrains Mono', monospace;
+    color: rgba(255,255,255,0.5);
+  }
+  .run-launch-est b {
+    color: rgba(255,255,255,0.85);
+    font-weight: 600;
+  }
+
+  .btn-launch {
+    background: #fff;
+    color: var(--ink);
+    border: none;
+    padding: 13px 24px;
+    border-radius: var(--radius);
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: -0.005em;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    transition: all 0.2s;
+    flex-shrink: 0;
+    z-index: 1;
+    position: relative;
+  }
+  .btn-launch:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 8px 20px rgba(0,0,0,0.25);
+  }
+
+  /* Run progress (启动后展示) */
+  .run-progress {
+    padding: 18px 22px;
+    background: linear-gradient(135deg, #FAFAF7 0%, #F4F3EE 100%);
+    border-top: 1px solid var(--line);
+  }
+
+  .run-progress-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    margin-bottom: 12px;
+  }
+
+  .run-progress-eyebrow {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    color: var(--ink-3);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 4px;
+  }
+
+  .run-progress-title {
+    font-family: 'Instrument Serif', serif;
+    font-size: 20px;
+    letter-spacing: -0.01em;
+    color: var(--ink);
+  }
+
+  .run-progress-bar {
+    height: 8px;
+    background: var(--bg-soft);
+    border-radius: 4px;
+    overflow: hidden;
+    margin-bottom: 10px;
+    border: 1px solid var(--line);
+  }
+  .run-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--ink) 0%, var(--accent) 100%);
+    border-radius: 4px;
+    transition: width 0.4s ease;
+  }
+
+  .run-progress-stats {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+    color: var(--ink-3);
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .run-progress-stats .dot {
+    width: 3px; height: 3px;
+    background: var(--ink-4);
+    border-radius: 50%;
+  }
+
+  /* Result summary */
+  .result-summary {
+    background: var(--bg-elev);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 18px 22px;
+    margin-bottom: 14px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 20px;
+  }
+
+  .result-summary-stats {
+    display: flex;
+    gap: 36px;
+    align-items: center;
+  }
+
+  .result-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .result-stat-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    color: var(--ink-3);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  .result-stat-value {
+    font-family: 'Instrument Serif', serif;
+    font-size: 30px;
+    line-height: 1;
+    letter-spacing: -0.025em;
+    color: var(--ink);
+  }
+  .result-stat-value .unit {
+    font-size: 14px;
+    color: var(--ink-3);
+    margin-left: 1px;
+  }
+
+  .result-summary-actions {
+    display: flex;
+    gap: 8px;
+  }
+
+  /* ===== Stage Area (执行 → 评估 两阶段流程) ===== */
+  .stage-area {
+    border-top: 1px solid var(--line);
+    background: linear-gradient(180deg, #FAFAF7 0%, #F4F3EE 100%);
+  }
+
+  /* 阶段指示器 */
+  .stage-track {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 16px 22px 14px;
+  }
+
+  .stage-node {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+  }
+
+  .stage-node-num {
+    width: 26px; height: 26px;
+    border-radius: 7px;
+    background: var(--bg-elev);
+    border: 1.5px solid var(--line-strong);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--ink-3);
+    transition: all 0.3s;
+  }
+
+  .stage-node.active .stage-node-num {
+    background: var(--ink);
+    border-color: var(--ink);
+    color: #fff;
+    box-shadow: 0 0 0 4px rgba(20,19,15,0.08);
+  }
+
+  .stage-node.done .stage-node-num {
+    background: var(--success);
+    border-color: var(--success);
+    color: #fff;
+  }
+  .stage-node.done .stage-node-num::before { content: "✓"; }
+  .stage-node.done .stage-node-num span,
+  .stage-node.done .stage-node-num { font-size: 0; }
+  .stage-node.done .stage-node-num::before { font-size: 13px; }
+
+  .stage-node-label {
+    line-height: 1.2;
+  }
+  .stage-node-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink-3);
+    display: block;
+    transition: color 0.2s;
+  }
+  .stage-node.active .stage-node-name { color: var(--ink); }
+  .stage-node.done .stage-node-name { color: var(--ink-2); }
+
+  .stage-node-meta {
+    font-size: 10.5px;
+    color: var(--ink-4);
+    font-family: 'JetBrains Mono', monospace;
+    margin-top: 2px;
+    display: block;
+  }
+  .stage-node.active .stage-node-meta { color: var(--accent); }
+  .stage-node.done .stage-node-meta { color: var(--success); }
+
+  .stage-connector {
+    flex: 1;
+    height: 1px;
+    background: linear-gradient(to right, var(--line-strong) 50%, transparent 50%);
+    background-size: 6px 1px;
+    background-repeat: repeat-x;
+    min-width: 30px;
+    transition: all 0.3s;
+  }
+  .stage-connector.done {
+    background: var(--success);
+  }
+
+  /* 当前阶段进度 */
+  .stage-progress {
+    padding: 4px 22px 18px;
+  }
+
+  .stage-progress-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    margin-bottom: 12px;
+  }
+
+  .stage-progress-eyebrow {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    color: var(--ink-3);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 4px;
+  }
+
+  .stage-progress-title {
+    font-family: 'Instrument Serif', serif;
+    font-size: 19px;
+    letter-spacing: -0.01em;
+    color: var(--ink);
+  }
+
+  /* 阶段过渡 CTA (执行完成后显示评估按钮) */
+  .stage-cta {
+    margin: 0 22px 18px;
+    padding: 14px 18px;
+    background: var(--bg-elev);
+    border: 1.5px solid var(--success);
+    border-radius: var(--radius);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    box-shadow: 0 0 0 4px rgba(45,125,90,0.08);
+    animation: ctaIn 0.4s ease;
+  }
+  @keyframes ctaIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .stage-cta-info {}
+  .stage-cta-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--ink);
+    margin-bottom: 4px;
+  }
+  .stage-cta-meta {
+    font-size: 11.5px;
+    color: var(--ink-3);
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .stage-cta-meta b {
+    color: var(--ink);
+    font-weight: 700;
+  }
+
+  .stage-cta-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-shrink: 0;
+  }
+
+  .btn-launch-sm {
+    padding: 9px 16px;
+    font-size: 13px;
+    background: var(--ink);
+    color: #fff;
+  }
+  .btn-launch-sm:hover {
+    background: #000;
+    transform: translateY(-1px);
+    box-shadow: 0 6px 14px rgba(20,19,15,0.2);
+  }
+
+  /* ===== 工作台表格中心页 ===== */
+
+  /* 配置栏 - 紧凑型 chips */
+  .config-bar {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 16px;
+    background: var(--bg-elev);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    margin-bottom: 12px;
+  }
+
+  .config-bar-section {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .config-bar-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    color: var(--ink-3);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 600;
+    margin-right: 4px;
+  }
+
+  .config-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    background: var(--bg-soft);
+    border: 1px solid var(--line);
+    border-radius: 20px;
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--ink);
+    cursor: pointer;
+    transition: all 0.15s;
+    font-family: inherit;
+  }
+  .config-chip.filled {
+    background: var(--ink);
+    color: #fff;
+    border-color: var(--ink);
+  }
+  .config-chip.filled:hover {
+    background: #000;
+  }
+  .config-chip:hover {
+    border-color: var(--ink);
+  }
+  .config-chip-meta {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    opacity: 0.6;
+    margin-left: 2px;
+  }
+  .config-chip.add {
+    background: transparent;
+    border-style: dashed;
+    color: var(--ink-3);
+  }
+  .config-chip.add:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  .config-chip-icon {
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    border: 1px solid var(--line);
+    background: var(--bg-elev);
+    color: var(--ink-3);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .config-chip-icon:hover {
+    border-color: var(--ink);
+    color: var(--ink);
+  }
+
+  .config-bar-divider {
+    width: 1px;
+    height: 22px;
+    background: var(--line);
+  }
+
+  .config-bar-summary {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    padding-left: 12px;
+    border-left: 1px solid var(--line);
+  }
+  .config-bar-summary-num {
+    font-family: 'Instrument Serif', serif;
+    font-size: 24px;
+    line-height: 1;
+    letter-spacing: -0.02em;
+    color: var(--ink);
+  }
+  .config-bar-summary-label {
+    font-size: 11px;
+    color: var(--ink-3);
+    font-family: 'JetBrains Mono', monospace;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  /* 工作表格卡片 */
+  .work-table-card {
+    background: var(--bg-elev);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+
+  /* 表格工具栏 */
+  .table-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--line);
+    background: var(--bg-soft);
+    gap: 14px;
+  }
+
+  .table-toolbar-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .table-toolbar-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .toolbar-status {
+    font-size: 12.5px;
+    color: var(--ink-2);
+    font-weight: 500;
+  }
+
+  .bulk-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    animation: bulkIn 0.25s ease;
+  }
+  @keyframes bulkIn {
+    from { opacity: 0; transform: translateX(-8px); }
+    to { opacity: 1; transform: translateX(0); }
+  }
+
+  .bulk-divider {
+    width: 1px;
+    height: 18px;
+    background: var(--line-strong);
+    margin: 0 4px;
+  }
+
+  .filter-count {
+    margin-left: 4px;
+    padding: 1px 5px;
+    background: var(--bg-soft);
+    border-radius: 8px;
+    font-size: 10px;
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--ink-3);
+  }
+  .filter-btn.active .filter-count {
+    background: var(--ink);
+    color: #fff;
+  }
+
+  .table-search {
+    width: 200px !important;
+    padding: 6px 11px !important;
+    font-size: 12px !important;
+  }
+
+  /* 自定义复选框 */
+  .row-checkbox,
+  .select-all-checkbox {
+    display: inline-flex;
+    align-items: center;
+    cursor: pointer;
+    position: relative;
+  }
+
+  .row-checkbox input,
+  .select-all-checkbox input {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .checkbox-mark {
+    width: 15px;
+    height: 15px;
+    border: 1.5px solid var(--line-strong);
+    border-radius: 3px;
+    background: var(--bg-elev);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s;
+  }
+
+  .row-checkbox input:checked + .checkbox-mark,
+  .select-all-checkbox input:checked + .checkbox-mark {
+    background: var(--ink);
+    border-color: var(--ink);
+  }
+
+  .row-checkbox input:checked + .checkbox-mark::before,
+  .select-all-checkbox input:checked + .checkbox-mark::before {
+    content: "✓";
+    color: #fff;
+    font-size: 10px;
+    font-weight: 700;
+  }
+
+  /* 主工作表 */
+  .work-table-wrapper {
+    overflow-x: auto;
+  }
+
+  .work-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+
+  .work-table thead th {
+    text-align: left;
+    padding: 11px 12px;
+    background: var(--bg-elev);
+    border-bottom: 1px solid var(--line);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    color: var(--ink-3);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 600;
+  }
+
+  .work-table tbody td {
+    padding: 12px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: middle;
+  }
+
+  .work-table tbody tr:last-child td {
+    border-bottom: none;
+  }
+
+  .work-table tbody tr {
+    transition: background 0.12s;
+  }
+
+  .work-table tbody tr:hover {
+    background: var(--bg-soft);
+  }
+
+  .work-table tbody tr.row-fail {
+    background: rgba(184,58,42,0.025);
+  }
+  .work-table tbody tr.row-fail:hover {
+    background: rgba(184,58,42,0.05);
+  }
+
+  .num-col {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11.5px;
+    color: var(--ink-3);
+    font-weight: 600;
+  }
+
+  .case-cell-title {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--ink);
+    margin-bottom: 3px;
+    line-height: 1.4;
+  }
+  .case-cell-meta {
+    font-size: 11px;
+    color: var(--ink-3);
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  /* 行状态标签 */
+  .row-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11.5px;
+    font-weight: 600;
+    font-family: 'JetBrains Mono', monospace;
+    padding: 3px 8px;
+    border-radius: 4px;
+  }
+  .row-status.pending {
+    color: var(--ink-3);
+    background: var(--bg-soft);
+  }
+  .row-status.running {
+    color: var(--accent);
+    background: var(--accent-soft);
+  }
+  .row-status.executed {
+    color: var(--warn);
+    background: var(--warn-soft);
+  }
+  .row-status.pass {
+    color: var(--success);
+    background: var(--success-soft);
+  }
+  .row-status.fail {
+    color: var(--danger);
+    background: var(--danger-soft);
+  }
+
+  /* 行内操作按钮 */
+  .row-action-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 10px;
+    border: 1px solid var(--line);
+    background: var(--bg-elev);
+    border-radius: 5px;
+    font-family: inherit;
+    font-size: 11.5px;
+    font-weight: 500;
+    color: var(--ink-2);
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
+  .row-action-btn:hover {
+    border-color: var(--ink);
+    color: var(--ink);
+    background: var(--bg-soft);
+  }
+  .row-action-btn.primary {
+    background: var(--ink);
+    color: #fff;
+    border-color: var(--ink);
+  }
+  .row-action-btn.primary:hover {
+    background: #000;
+  }
+  .row-action-btn.done {
+    background: var(--bg-soft);
+    color: var(--ink-2);
+    border-color: var(--line);
+  }
+  .row-action-btn.disabled {
+    background: var(--bg-soft);
+    color: var(--ink-4);
+    border-color: var(--line);
+    cursor: not-allowed;
+  }
+  .row-action-btn.disabled:hover {
+    border-color: var(--line);
+    background: var(--bg-soft);
+  }
+  .row-action-btn.loading {
+    background: var(--accent-soft);
+    color: var(--accent);
+    border-color: var(--accent);
+    cursor: wait;
+  }
+
+  .spinner {
+    display: inline-block;
+    width: 11px;
+    height: 11px;
+    border: 1.5px solid var(--accent);
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: spinIt 0.8s linear infinite;
+  }
+  @keyframes spinIt {
+    to { transform: rotate(360deg); }
+  }
+
+  /* 分数按钮 (评估完成后展示) */
+  .score-btn {
+    padding: 4px 10px;
+    min-width: 56px;
+    justify-content: center;
+  }
+  .score-num {
+    font-family: 'Instrument Serif', serif;
+    font-size: 17px;
+    font-weight: 600;
+    line-height: 1;
+    letter-spacing: -0.01em;
+  }
+  .score-num.pass { color: var(--success); }
+  .score-num.fail { color: var(--danger); }
+
+  .row-more {
+    width: 26px;
+    height: 26px;
+    border: none;
+    background: transparent;
+    color: var(--ink-3);
+    cursor: pointer;
+    border-radius: 4px;
+    font-size: 16px;
+    line-height: 1;
+    font-weight: 700;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .row-more:hover {
+    background: var(--bg-soft);
+    color: var(--ink);
+  }
+
+  /* 表格底部 */
+  .table-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    border-top: 1px solid var(--line);
+    background: var(--bg-soft);
+    gap: 14px;
+  }
+
+  .table-footer-summary {
+    font-size: 12px;
+    color: var(--ink-3);
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .table-footer-summary b {
+    color: var(--ink);
+  }
+
+  .table-footer-pager {
+    display: flex;
+    gap: 3px;
+  }
+  .pager-btn {
+    width: 26px;
+    height: 26px;
+    border: 1px solid var(--line);
+    background: var(--bg-elev);
+    border-radius: 4px;
+    font-size: 12px;
+    cursor: pointer;
+    color: var(--ink-2);
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .pager-btn:hover:not(:disabled) {
+    border-color: var(--ink);
+    color: var(--ink);
+  }
+  .pager-btn.active {
+    background: var(--ink);
+    border-color: var(--ink);
+    color: #fff;
+  }
+  .pager-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .table-footer-progress {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .progress-mini-label {
+    color: var(--ink-3);
+  }
+  .progress-mini-bar {
+    width: 100px;
+    height: 5px;
+    background: var(--line);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .progress-mini-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--success) 0%, #4FAE82 100%);
+    border-radius: 3px;
+    transition: width 0.4s;
+  }
+  .progress-mini-pct {
+    color: var(--ink);
+    font-weight: 600;
+  }
+
+  /* ===== 弹窗系统 ===== */
+  .modal-mask {
+    position: fixed;
+    inset: 0;
+    background: rgba(20,19,15,0.5);
+    backdrop-filter: blur(6px);
+    z-index: 1000;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    animation: fadeIn 0.2s;
+  }
+  .modal-mask.show { display: flex; }
+
+  .modal-box {
+    background: var(--bg-elev);
+    border-radius: var(--radius-lg);
+    width: 720px;
+    max-width: 92vw;
+    max-height: 86vh;
+    overflow: hidden;
+    box-shadow: var(--shadow-lg);
+    display: flex;
+    flex-direction: column;
+    animation: modalIn 0.25s ease;
+  }
+  @keyframes modalIn {
+    from { opacity: 0; transform: scale(0.96) translateY(8px); }
+    to { opacity: 1; transform: scale(1) translateY(0); }
+  }
+
+  .modal-box-head {
+    padding: 18px 22px;
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .modal-box-title {
+    font-family: 'Instrument Serif', serif;
+    font-size: 22px;
+    letter-spacing: -0.015em;
+    font-weight: 400;
+  }
+  .modal-box-title em {
+    font-style: italic;
+    color: var(--accent);
+  }
+  .modal-box-sub {
+    font-size: 12px;
+    color: var(--ink-3);
+    margin-top: 3px;
+  }
+  .modal-box-body {
+    padding: 18px 22px;
+    overflow-y: auto;
+    flex: 1;
+  }
+  .modal-box-foot {
+    padding: 12px 22px;
+    border-top: 1px solid var(--line);
+    background: var(--bg-soft);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  /* 弹窗里的数据集列表 */
+  .modal-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .modal-list-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    border: 1.5px solid var(--line);
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: all 0.15s;
+    background: var(--bg-elev);
+  }
+  .modal-list-item:hover { border-color: var(--line-strong); }
+  .modal-list-item.checked {
+    border-color: var(--ink);
+    background: #FAFAF7;
+  }
+  .modal-list-item-content { flex: 1; min-width: 0; }
+  .modal-list-item-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 3px;
+  }
+  .modal-list-item-name {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--ink);
+  }
+  .modal-list-item-meta {
+    font-size: 11.5px;
+    color: var(--ink-3);
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .modal-list-item input[type=checkbox],
+  .modal-list-item input[type=radio] {
+    display: none;
+  }
+
+  .modal-list-divider {
+    height: 1px;
+    background: var(--line);
+    margin: 12px 0;
+  }
+  .modal-list-section-title {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    color: var(--ink-3);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+
+  /* ===== 抽屉 (右侧滑出) ===== */
+  .drawer-mask {
+    position: fixed;
+    inset: 0;
+    background: rgba(20,19,15,0.4);
+    backdrop-filter: blur(4px);
+    z-index: 900;
+    display: none;
+    animation: fadeIn 0.2s;
+  }
+  .drawer-mask.show { display: block; }
+
+  .drawer {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 640px;
+    max-width: 92vw;
+    background: var(--bg-elev);
+    box-shadow: -8px 0 40px rgba(20,19,15,0.12);
+    z-index: 901;
+    display: none;
+    flex-direction: column;
+    animation: drawerIn 0.3s ease;
+  }
+  .drawer.show { display: flex; }
+  @keyframes drawerIn {
+    from { transform: translateX(100%); }
+    to { transform: translateX(0); }
+  }
+
+  .drawer-head {
+    padding: 18px 22px;
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+  }
+  .drawer-head-info { flex: 1; min-width: 0; }
+  .drawer-head-eyebrow {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    color: var(--ink-3);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 4px;
+  }
+  .drawer-head-title {
+    font-family: 'Instrument Serif', serif;
+    font-size: 22px;
+    letter-spacing: -0.015em;
+    font-weight: 400;
+    line-height: 1.25;
+  }
+  .drawer-head-actions {
+    display: flex;
+    gap: 6px;
+    margin-left: 10px;
+  }
+  .drawer-body {
+    padding: 18px 22px;
+    overflow-y: auto;
+    flex: 1;
+  }
+  .drawer-foot {
+    padding: 12px 22px;
+    border-top: 1px solid var(--line);
+    background: var(--bg-soft);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  /* ===== 行操作菜单 (popover) ===== */
+  .row-menu {
+    position: absolute;
+    background: var(--bg-elev);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-md);
+    z-index: 800;
+    min-width: 160px;
+    padding: 5px;
+    display: none;
+  }
+  .row-menu.show {
+    display: block;
+    animation: fadeIn 0.15s;
+  }
+  .row-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    font-size: 12.5px;
+    color: var(--ink-2);
+    cursor: pointer;
+    border-radius: 4px;
+    transition: background 0.1s;
+  }
+  .row-menu-item:hover {
+    background: var(--bg-soft);
+    color: var(--ink);
+  }
+  .row-menu-item.danger {
+    color: var(--danger);
+  }
+  .row-menu-divider {
+    height: 1px;
+    background: var(--line);
+    margin: 4px 0;
+  }
+
+  /* ===== 评估结果抽屉的内容样式 ===== */
+  .result-stat-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-bottom: 18px;
+    padding: 14px;
+    background: var(--bg-soft);
+    border-radius: var(--radius-sm);
+  }
+  .result-stat-row .result-stat-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--ink-3);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 4px;
+  }
+  .result-stat-row .result-stat-value {
+    font-family: 'Instrument Serif', serif;
+    font-size: 24px;
+    line-height: 1;
+    letter-spacing: -0.02em;
+  }
+
+  .dim-result-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .dim-result-item {
+    display: grid;
+    grid-template-columns: 28px 1fr 60px;
+    gap: 12px;
+    align-items: center;
+    padding: 11px 14px;
+    background: var(--bg-soft);
+    border-radius: var(--radius-sm);
+    border-left: 3px solid transparent;
+  }
+  .dim-result-item.fail {
+    background: var(--danger-soft);
+    border-left-color: var(--danger);
+  }
+  .dim-result-item.pass {
+    border-left-color: var(--success);
+  }
+  .dim-result-name {
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 2px;
+  }
+  .dim-result-reason {
+    font-size: 11.5px;
+    color: var(--ink-3);
+    line-height: 1.5;
+  }
+  .dim-result-item.fail .dim-result-reason {
+    color: var(--danger);
+  }
+  .dim-result-score {
+    text-align: right;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 16px;
+    font-weight: 700;
+  }
+  .dim-result-score.pass { color: var(--success); }
+  .dim-result-score.fail { color: var(--danger); }
+
+  /* ===== End 工作台 ===== */
+
+  /* ===== Multi-Page Routing ===== */
+  .page { animation: fadeIn 0.3s ease; }
+
+  /* Page header */
+  .page-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 4px 0 18px;
+    margin-bottom: 18px;
+    border-bottom: 1px solid var(--line);
+  }
+  .page-header-left {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .page-header-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .btn-back {
+    width: 32px; height: 32px;
+    border: 1px solid var(--line);
+    background: var(--bg-elev);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--ink-2);
+    transition: all 0.15s;
+  }
+  .btn-back:hover {
+    border-color: var(--ink);
+    background: var(--bg-soft);
+    color: var(--ink);
+  }
+
+  .page-eyebrow {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    color: var(--ink-3);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 500;
+    margin-bottom: 3px;
+  }
+
+  .page-title-h1 {
+    font-family: 'Instrument Serif', serif;
+    font-size: 32px;
+    font-weight: 400;
+    letter-spacing: -0.02em;
+    line-height: 1.1;
+    color: var(--ink);
+  }
+
+  /* Page stats row */
+  .page-stats-row {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    padding: 14px 18px;
+    background: var(--bg-elev);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    margin-bottom: 14px;
+  }
+
+  .page-stat {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+  .page-stat-value {
+    font-family: 'Instrument Serif', serif;
+    font-size: 26px;
+    line-height: 1;
+    letter-spacing: -0.02em;
+    color: var(--ink);
+  }
+  .page-stat-label {
+    font-size: 11.5px;
+    color: var(--ink-3);
+    font-family: 'JetBrains Mono', monospace;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .page-stat-divider {
+    width: 1px;
+    height: 22px;
+    background: var(--line);
+  }
+
+  /* Filter group */
+  .filter-group {
+    display: flex;
+    gap: 4px;
+    background: var(--bg-soft);
+    padding: 3px;
+    border-radius: var(--radius-sm);
+  }
+  .filter-btn {
+    padding: 5px 11px;
+    font-size: 12px;
+    color: var(--ink-3);
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: inherit;
+    font-weight: 500;
+  }
+  .filter-btn:hover { color: var(--ink); }
+  .filter-btn.active {
+    background: var(--bg-elev);
+    color: var(--ink);
+    box-shadow: var(--shadow-sm);
+  }
+
+  /* Data table */
+  .data-table {
+    background: var(--bg-elev);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .entity-name {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--ink);
+    margin-bottom: 2px;
+  }
+  .entity-desc {
+    font-size: 11.5px;
+    color: var(--ink-3);
+  }
+  .num-cell {
+    font-family: 'Instrument Serif', serif;
+    font-size: 18px;
+    color: var(--ink);
+    line-height: 1;
+  }
+  .meta-cell {
+    font-size: 11.5px;
+    color: var(--ink-3);
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  /* Source / Creation cards */
+  .source-grid,
+  .creation-mode-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+  }
+  .source-grid { grid-template-columns: repeat(4, 1fr); }
+
+  .source-card,
+  .creation-card {
+    border: 1.5px solid var(--line);
+    border-radius: var(--radius);
+    padding: 16px;
+    cursor: pointer;
+    transition: all 0.15s;
+    position: relative;
+    background: var(--bg-elev);
+  }
+  .source-card:hover,
+  .creation-card:hover {
+    border-color: var(--line-strong);
+  }
+  .source-card.selected,
+  .creation-card.selected {
+    border-color: var(--ink);
+    background: #FAFAF7;
+  }
+
+  .source-card input[type=radio],
+  .creation-card input[type=radio] { display: none; }
+
+  .source-icon,
+  .creation-icon {
+    width: 38px; height: 38px;
+    border-radius: 9px;
+    background: var(--bg-soft);
+    color: var(--ink-2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 12px;
+  }
+  .source-card.selected .source-icon {
+    background: var(--ink);
+    color: #fff;
+  }
+
+  .source-name,
+  .creation-name {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--ink);
+    margin-bottom: 5px;
+  }
+  .source-desc,
+  .creation-desc {
+    font-size: 11.5px;
+    color: var(--ink-3);
+    line-height: 1.5;
+    margin-bottom: 8px;
+  }
+
+  .source-tag {
+    position: absolute;
+    top: 12px; right: 12px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9.5px;
+    background: var(--ink);
+    color: #fff;
+    padding: 2px 7px;
+    border-radius: 3px;
+    letter-spacing: 0.06em;
+    font-weight: 600;
+  }
+  .source-tag.tag-ai {
+    background: linear-gradient(135deg, var(--ink) 0%, var(--accent) 100%);
+  }
+
+  .creation-card-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+  }
+  .creation-card-head .tag-dark {
+    background: var(--ink);
+    color: #fff;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    font-weight: 600;
+  }
+  .creation-card-head .creation-icon { margin-bottom: 0; }
+
+  .creation-meta {
+    font-size: 11px;
+    color: var(--ink-3);
+    font-family: 'JetBrains Mono', monospace;
+    display: flex;
+    gap: 6px;
+    padding-top: 8px;
+    border-top: 1px dashed var(--line);
+  }
+
+  /* Preference tags */
+  .preference-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .pref-tag {
+    display: inline-flex;
+    align-items: center;
+    padding: 6px 12px;
+    border: 1px solid var(--line-strong);
+    border-radius: 20px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.15s;
+    background: var(--bg-elev);
+    color: var(--ink-2);
+  }
+  .pref-tag:hover { border-color: var(--ink-2); }
+  .pref-tag.selected {
+    background: var(--ink);
+    color: #fff;
+    border-color: var(--ink);
+  }
+  .pref-tag input[type=checkbox] { display: none; }
+
+  /* AI trigger */
+  .ai-trigger {
+    margin-top: 20px;
+    padding: 16px 18px;
+    background: linear-gradient(135deg, #14130F 0%, #2D2C26 100%);
+    border-radius: var(--radius);
+    color: #fff;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    position: relative;
+    overflow: hidden;
+  }
+  .ai-trigger::before {
+    content: "";
+    position: absolute;
+    top: -50%; right: -10%;
+    width: 280px; height: 280px;
+    background: radial-gradient(circle, rgba(43,91,215,0.18) 0%, transparent 70%);
+    pointer-events: none;
+  }
+  .ai-trigger-info { position: relative; }
+  .ai-trigger-title {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 4px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .ai-trigger-meta {
+    font-size: 11.5px;
+    font-family: 'JetBrains Mono', monospace;
+    color: rgba(255,255,255,0.6);
+  }
+
+  /* Evaluator page grid */
+  .evaluator-page-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+  }
+
+  .evaluator-page-card {
+    background: var(--bg-elev);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 18px;
+    cursor: pointer;
+    transition: all 0.15s;
+    display: flex;
+    flex-direction: column;
+  }
+  .evaluator-page-card:hover {
+    border-color: var(--line-strong);
+    box-shadow: var(--shadow-sm);
+    transform: translateY(-1px);
+  }
+
+  .evaluator-page-card-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 8px;
+  }
+
+  .evaluator-page-card-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--ink);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .evaluator-page-card-desc {
+    font-size: 12px;
+    color: var(--ink-3);
+    line-height: 1.5;
+    margin-bottom: 14px;
+  }
+
+  .dim-mini-list {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    margin-bottom: 14px;
+    flex: 1;
+  }
+
+  .dim-mini {
+    display: grid;
+    grid-template-columns: 22px 1fr auto;
+    gap: 9px;
+    align-items: center;
+    padding: 6px 10px;
+    background: var(--bg-soft);
+    border-radius: 5px;
+  }
+  .dim-mini-name {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--ink);
+  }
+  .dim-mini-weight {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11.5px;
+    font-weight: 700;
+    color: var(--ink-2);
+  }
+
+  .evaluator-page-card-foot {
+    display: flex;
+    justify-content: space-between;
+    padding-top: 12px;
+    border-top: 1px dashed var(--line);
+  }
+
+  .evaluator-page-card.add-new {
+    border-style: dashed;
+    border-color: var(--line-strong);
+    background: transparent;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    min-height: 240px;
+  }
+  .evaluator-page-card.add-new:hover {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+  .add-new-icon {
+    width: 44px; height: 44px;
+    border: 1.5px dashed var(--line-strong);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--ink-3);
+    font-size: 22px;
+    font-weight: 300;
+    margin-bottom: 12px;
+  }
+  .evaluator-page-card.add-new:hover .add-new-icon {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  .add-new-text {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--ink-2);
+    margin-bottom: 5px;
+  }
+  .evaluator-page-card.add-new:hover .add-new-text { color: var(--accent); }
+  .add-new-sub {
+    font-size: 11.5px;
+    color: var(--ink-3);
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  /* AI generating state */
+  .ai-generating {
+    margin-top: 20px;
+    padding: 24px;
+    background: var(--bg-soft);
+    border-radius: var(--radius);
+  }
+
+  .ai-result {
+    margin-top: 20px;
+  }
+
+  /* ===== End Multi-Page Routing ===== */
+
+  /* Section divider (流式分隔标题,用于在主流程中插入"深度分析"小节) */
+  .section-divider {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin: 26px 0 14px;
+    padding: 0 4px;
+  }
+  .section-divider::before,
+  .section-divider::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: linear-gradient(to right, transparent, var(--line-strong), transparent);
+  }
+  .section-divider::before {
+    background: linear-gradient(to left, var(--line-strong), transparent);
+  }
+  .section-divider::after {
+    background: linear-gradient(to right, var(--line-strong), transparent);
+  }
+  .section-divider-label {
+    font-family: 'Instrument Serif', serif;
+    font-size: 22px;
+    letter-spacing: -0.015em;
+    color: var(--ink);
+    font-style: italic;
+  }
+  .section-divider-meta {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--ink-3);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  /* Make table rows clickable visually */
+  .exec-table tbody tr[onclick] { cursor: pointer; }
+
+  /* Original simplified styles - kept for compatibility */
+  /* Original simplified styles - kept for compatibility */
+  .overview-strip {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    padding: 14px 18px;
+    background: var(--bg-elev);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    margin-bottom: 14px;
+  }
+
+  .overview-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .overview-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--ink-3);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 500;
+  }
+
+  .overview-value {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink);
+    letter-spacing: -0.01em;
+  }
+
+  .overview-meta {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--ink-3);
+    font-weight: 400;
+    margin-left: 4px;
+  }
+
+  .overview-divider {
+    width: 1px;
+    height: 26px;
+    background: var(--line);
+  }
+
+  .exec-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    margin-bottom: 16px;
+  }
+
+  .card-light {
+    background: var(--bg-elev);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 18px 20px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .card-light-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 14px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .card-light-eyebrow {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--ink-3);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 500;
+    margin-bottom: 3px;
+  }
+
+  .card-light-title {
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .count-badge {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--ink-3);
+    background: var(--bg-soft);
+    padding: 2px 8px;
+    border-radius: 10px;
+    letter-spacing: 0;
+  }
+
+  /* Compact case list */
+  .case-list-compact {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+
+  .case-compact {
+    display: grid;
+    grid-template-columns: 26px 1fr auto;
+    gap: 10px;
+    align-items: center;
+    padding: 9px 4px;
+    border-bottom: 1px dashed var(--line);
+    transition: background 0.15s;
+    cursor: default;
+  }
+  .case-compact:hover { background: var(--bg-soft); }
+  .case-compact:last-child { border-bottom: none; }
+
+  .case-compact.more {
+    color: var(--ink-3);
+    font-style: italic;
+    cursor: pointer;
+  }
+  .case-compact.more .case-num,
+  .case-compact.more .case-text {
+    color: var(--ink-3);
+  }
+
+  .case-num {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--ink-3);
+    font-weight: 600;
+  }
+
+  .case-text {
+    font-size: 12.5px;
+    color: var(--ink);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Eval mini list */
+  .eval-mini-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .eval-mini {
+    display: grid;
+    grid-template-columns: 28px 1fr auto;
+    gap: 12px;
+    align-items: center;
+    padding: 10px 12px;
+    background: var(--bg-soft);
+    border-radius: var(--radius-sm);
+    transition: all 0.15s;
+  }
+  .eval-mini:hover {
+    background: var(--accent-soft);
+  }
+
+  .eval-mini-content {
+    min-width: 0;
+  }
+
+  .eval-mini-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink);
+    margin-bottom: 2px;
+    display: flex;
+    align-items: center;
+  }
+
+  .eval-mini-desc {
+    font-size: 11.5px;
+    color: var(--ink-3);
+    line-height: 1.4;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .eval-mini-weight {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--ink);
+  }
+
+  .eval-foot-info {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px dashed var(--line);
+    display: flex;
+    justify-content: center;
+  }
+
+  /* Run action area */
+  .run-action {
+    background: linear-gradient(135deg, #FAFAF7 0%, #F4F3EE 100%);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius-lg);
+    padding: 22px 28px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .run-action::before {
+    content: "";
+    position: absolute;
+    top: -50%;
+    left: -10%;
+    width: 320px;
+    height: 320px;
+    background: radial-gradient(circle, rgba(43,91,215,0.05) 0%, transparent 70%);
+    pointer-events: none;
+  }
+
+  .run-action-text {
+    position: relative;
+  }
+
+  .run-action-title {
+    font-family: 'Instrument Serif', serif;
+    font-size: 24px;
+    line-height: 1.2;
+    letter-spacing: -0.015em;
+    margin-bottom: 4px;
+  }
+
+  .run-action-sub {
+    font-size: 12.5px;
+    color: var(--ink-3);
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  .btn-run {
+    background: var(--ink);
+    color: #fff;
+    border: none;
+    padding: 14px 28px;
+    border-radius: var(--radius);
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: -0.005em;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    box-shadow: 0 4px 14px rgba(20,19,15,0.15);
+    transition: all 0.2s;
+    position: relative;
+    z-index: 1;
+  }
+  .btn-run:hover {
+    background: #000;
+    transform: translateY(-1px);
+    box-shadow: 0 8px 20px rgba(20,19,15,0.2);
+  }
+  .btn-run:active {
+    transform: translateY(0);
+  }
+
+  /* SCROLLBAR */
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: var(--line-strong);
+    border-radius: 4px;
+  }
+  ::-webkit-scrollbar-thumb:hover { background: var(--ink-4); }
+
+  svg { display: block; }
+</style>
+</head>
+<body>
+
+<!-- ============ LEFT SIDEBAR (保留原框架) ============ -->
+<aside class="sidebar-left">
+  <div class="brand-block">
+    <div class="brand-mark">✱</div>
+    <div class="brand-info">
+      <div class="name">Agent Insight</div>
+      <div class="sub">Powered by Skill-insight</div>
+    </div>
+  </div>
+
+  <div class="nav-section">
+    <div class="nav-group">
+      <div class="nav-group-head">
+        <span>AGENT WORKSPACE</span>
+        <span class="chev">▾</span>
+      </div>
+      <div class="nav-item">
+        <svg viewBox="0 0 14 14" fill="none"><rect x="1" y="1" width="5.5" height="5.5" stroke="currentColor" stroke-width="1.3"/><rect x="7.5" y="1" width="5.5" height="5.5" stroke="currentColor" stroke-width="1.3"/><rect x="1" y="7.5" width="5.5" height="5.5" stroke="currentColor" stroke-width="1.3"/><rect x="7.5" y="7.5" width="5.5" height="5.5" stroke="currentColor" stroke-width="1.3"/></svg>
+        概览
+      </div>
+      <div class="nav-item">
+        <svg viewBox="0 0 14 14" fill="none"><circle cx="7" cy="4.5" r="2" stroke="currentColor" stroke-width="1.3"/><path d="M2 12c.5-2.5 2.5-4 5-4s4.5 1.5 5 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+        Agent 管理
+      </div>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-group-head active">
+        <span>SKILLS 能力</span>
+        <span class="chev">▾</span>
+      </div>
+      <div class="nav-item indent">
+        <svg viewBox="0 0 14 14" fill="none"><rect x="1" y="1" width="5" height="5" stroke="currentColor" stroke-width="1.3"/><rect x="8" y="1" width="5" height="5" stroke="currentColor" stroke-width="1.3"/><rect x="1" y="8" width="5" height="5" stroke="currentColor" stroke-width="1.3"/><rect x="8" y="8" width="5" height="5" stroke="currentColor" stroke-width="1.3"/></svg>
+        Skills 管理
+      </div>
+      <div class="nav-item indent">
+        <svg viewBox="0 0 14 14" fill="none"><rect x="1" y="2" width="12" height="9" rx="1" stroke="currentColor" stroke-width="1.3"/><path d="M5 6l3 1.5L5 9V6z" fill="currentColor"/></svg>
+        Playground
+      </div>
+      <div class="nav-item indent active" onclick="goPage('eval')">
+        <svg viewBox="0 0 14 14" fill="none"><path d="M2 11l3-3 2 2 4-4 1 1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="11" cy="3" r="1.2" fill="currentColor"/></svg>
+        调测分析
+      </div>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-group-head">
+        <span>评测中心</span>
+        <span class="chev">▾</span>
+      </div>
+      <div class="nav-item indent" onclick="goPage('datasets')">
+        <svg viewBox="0 0 14 14" fill="none"><ellipse cx="7" cy="3" rx="5" ry="2" stroke="currentColor" stroke-width="1.3"/><path d="M2 3v8c0 1 2 2 5 2s5-1 5-2V3" stroke="currentColor" stroke-width="1.3"/></svg>
+        评测数据集
+      </div>
+      <div class="nav-item indent" onclick="goPage('evaluators')">
+        <svg viewBox="0 0 14 14" fill="none"><rect x="2" y="7" width="2" height="5" stroke="currentColor" stroke-width="1.3"/><rect x="6" y="4" width="2" height="8" stroke="currentColor" stroke-width="1.3"/><rect x="10" y="2" width="2" height="10" stroke="currentColor" stroke-width="1.3"/></svg>
+        评估器
+      </div>
+      <div class="nav-item indent">
+        <svg viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="6" stroke="currentColor" stroke-width="1.3"/><path d="M4 7l2 2 4-4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        评测执行
+      </div>
+      <div class="nav-item indent">
+        <svg viewBox="0 0 14 14" fill="none"><path d="M2 4c0-1 1-2 2-2h6c1 0 2 1 2 2v6c0 1-1 2-2 2H4c-1 0-2-1-2-2V4z" stroke="currentColor" stroke-width="1.3"/><path d="M5 6h4M5 9h3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+        记忆评估
+      </div>
+    </div>
+
+    <div class="nav-item" style="margin-top: 4px;">
+      <svg viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="6" stroke="currentColor" stroke-width="1.3"/><path d="M4 7l2 2 4-4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      发布管理
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-group-head">
+        <span>运行观测</span>
+        <span class="chev">▾</span>
+      </div>
+      <div class="nav-item indent">
+        <svg viewBox="0 0 14 14" fill="none"><path d="M2 7h3l2-4 2 8 2-4h1" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        链路分析
+      </div>
+      <div class="nav-item indent">
+        <svg viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="6" stroke="currentColor" stroke-width="1.3"/><path d="M7 4v3M7 9.5v.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+        故障定位
+      </div>
+      <div class="nav-item indent" style="color: var(--warn);">
+        <svg viewBox="0 0 14 14" fill="none"><path d="M2 11l3-5 2 2 5-6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        质量监控
+      </div>
+    </div>
+
+    <div class="nav-divider"></div>
+
+    <div class="nav-group">
+      <div class="nav-group-head">
+        <span>配置</span>
+        <span class="chev">▾</span>
+      </div>
+      <div class="nav-item">
+        <svg viewBox="0 0 14 14" fill="none"><rect x="1.5" y="3" width="11" height="8" rx="1" stroke="currentColor" stroke-width="1.3"/><path d="M4 3V2.5c0-.5.5-1 1-1h4c.5 0 1 .5 1 1V3" stroke="currentColor" stroke-width="1.3"/></svg>
+        模型注册
+      </div>
+      <div class="nav-item">
+        <svg viewBox="0 0 14 14" fill="none"><path d="M7 2v8M3.5 7L7 10.5 10.5 7M2 12h10" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        安装指导
+      </div>
+    </div>
+  </div>
+
+  <div class="sidebar-bottom">
+    <div class="user-block">
+      <div class="avatar">N</div>
+      <div class="user-info">
+        <div class="email">m10240@gmail.com</div>
+        <div class="role">Admin</div>
+      </div>
+    </div>
+    <div class="lang-toggle">
+      <div class="opt">☾ Dark</div>
+      <div class="opt active">EN</div>
+    </div>
+  </div>
+</aside>
+
+<!-- ============ MAIN AREA ============ -->
+<main class="main">
+
+  <!-- TOP BAR -->
+  <div class="topbar">
+    <div class="topbar-title">
+      <div class="topbar-icon">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="1.5" y="1.5" width="11" height="11" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M5 1.5v11" stroke="currentColor" stroke-width="1.3"/></svg>
+      </div>
+      <h1 id="topbarTitle">调测分析</h1>
+    </div>
+
+    <div class="tabs" id="topbarTabs">
+      <div class="tab">灰度测评</div>
+      <div class="tab active">用例测评</div>
+    </div>
+
+    <div class="topbar-right" id="topbarActions">
+      <button class="btn btn-sm">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="5" stroke="currentColor" stroke-width="1.3"/><path d="M6 3v3l2 1" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+        调测历史记录
+      </button>
+      <button class="btn btn-sm">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1v3M2.5 4l1.5 1M9.5 4L8 5M2 8h2M8 8h2M3 11l1.5-1.5M9 11l-1.5-1.5M6 8a2 2 0 100-4 2 2 0 000 4z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+        重置环境
+      </button>
+    </div>
+  </div>
+
+  <!-- CONTENT -->
+  <div class="content">
+    <div class="page" id="page-eval">
+
+      <!-- 顶部任务条 -->
+      <div class="task-strip">
+        <div class="task-strip-left">
+          <span class="task-strip-eyebrow">当前评测任务</span>
+          <h2 class="task-strip-title">退货退款 v1.4 回归 <span class="task-strip-edit" title="重命名">✎</span></h2>
+        </div>
+        <div class="task-strip-right">
+          <button class="btn btn-sm" onclick="openModal('historyModal')">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="5" stroke="currentColor" stroke-width="1.3"/><path d="M6 3v3l2 1" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+            历史评测 (12)
+          </button>
+          <button class="btn btn-sm">+ 新建评测任务</button>
+        </div>
+      </div>
+
+      <!-- 紧凑配置条 -->
+      <div class="config-bar">
+        <div class="config-bar-section">
+          <span class="config-bar-label">数据集</span>
+          <button class="config-chip filled" onclick="openModal('datasetModal')">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><ellipse cx="6" cy="3" rx="4" ry="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M2 3v6c0 .8 1.8 1.5 4 1.5s4-.7 4-1.5V3" stroke="currentColor" stroke-width="1.3"/></svg>
+            <span>客服·退货退款</span>
+            <span class="config-chip-meta">28 条</span>
+          </button>
+          <button class="config-chip filled" onclick="openModal('datasetModal')">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><ellipse cx="6" cy="3" rx="4" ry="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M2 3v6c0 .8 1.8 1.5 4 1.5s4-.7 4-1.5V3" stroke="currentColor" stroke-width="1.3"/></svg>
+            <span>售后·多轮</span>
+            <span class="config-chip-meta">15 条</span>
+          </button>
+          <button class="config-chip add" onclick="openModal('datasetModal')">
+            <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M5.5 1v9M1 5.5h9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+            添加数据集
+          </button>
+        </div>
+
+        <div class="config-bar-divider"></div>
+
+        <div class="config-bar-section">
+          <span class="config-bar-label">评估器</span>
+          <button class="config-chip filled" onclick="openModal('evaluatorModal')">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><rect x="2" y="6" width="2" height="4" stroke="currentColor" stroke-width="1.3"/><rect x="5.5" y="4" width="2" height="6" stroke="currentColor" stroke-width="1.3"/><rect x="9" y="2" width="2" height="8" stroke="currentColor" stroke-width="1.3"/></svg>
+            <span>客服评估器·标准版</span>
+            <span class="config-chip-meta">v1.0 · 4 维度</span>
+          </button>
+          <button class="config-chip-icon" onclick="openModal('evaluatorModal')" title="切换评估器">
+            <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M2 4l3-2 3 2v3l-3 2-3-2V4z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+
+        <div style="flex:1;"></div>
+
+        <div class="config-bar-summary">
+          <span class="config-bar-summary-num">43</span>
+          <span class="config-bar-summary-label">总用例</span>
+        </div>
+      </div>
+
+      <!-- 主工作区:表格 -->
+      <div class="work-table-card">
+
+        <!-- 表格工具栏 -->
+        <div class="table-toolbar">
+          <div class="table-toolbar-left">
+            <label class="select-all-checkbox">
+              <input type="checkbox" id="selectAllCb" onchange="toggleSelectAll(this)" />
+              <span class="checkbox-mark"></span>
+            </label>
+            <span class="toolbar-status" id="toolbarStatus">共 43 条用例</span>
+
+            <!-- 批量操作 (选中后显示) -->
+            <div class="bulk-actions" id="bulkActions" style="display: none;">
+              <span class="bulk-divider"></span>
+              <button class="btn btn-sm btn-dark" onclick="bulkAction('execute')">
+                <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M3 2l6 3.5L3 9V2z" fill="currentColor"/></svg>
+                批量执行
+              </button>
+              <button class="btn btn-sm" onclick="bulkAction('evaluate')">
+                <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M2 5.5L4.5 8 9 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                批量评测
+              </button>
+              <button class="btn btn-sm">
+                <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M3 4h5M3 6h5M3 8h3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+                导出选中
+              </button>
+            </div>
+          </div>
+
+          <div class="table-toolbar-right">
+            <!-- 状态筛选 -->
+            <div class="filter-group">
+              <button class="filter-btn active" onclick="filterCases('all')">全部 <span class="filter-count">43</span></button>
+              <button class="filter-btn" onclick="filterCases('pending')">未执行 <span class="filter-count">15</span></button>
+              <button class="filter-btn" onclick="filterCases('executed')">已执行 <span class="filter-count">20</span></button>
+              <button class="filter-btn" onclick="filterCases('evaluated')">已评测 <span class="filter-count">8</span></button>
+              <button class="filter-btn" onclick="filterCases('failed')">失败 <span class="filter-count" style="color: var(--danger);">3</span></button>
+            </div>
+            <input class="input table-search" placeholder="🔍 搜索用例..." />
+          </div>
+        </div>
+
+        <!-- 主表格 -->
+        <div class="work-table-wrapper">
+          <table class="work-table">
+            <thead>
+              <tr>
+                <th style="width: 36px; padding-right: 0;"></th>
+                <th style="width: 40px;">#</th>
+                <th>测试用例</th>
+                <th style="width: 110px;">数据集</th>
+                <th style="width: 90px;">状态</th>
+                <th style="width: 100px;">执行</th>
+                <th style="width: 100px;">评测</th>
+                <th style="width: 70px;">操作</th>
+              </tr>
+            </thead>
+            <tbody id="caseTableBody">
+
+              <!-- 状态1: 已评测 (展示完整能力) -->
+              <tr data-status="evaluated">
+                <td><label class="row-checkbox"><input type="checkbox" onchange="updateSelection()" /><span class="checkbox-mark"></span></label></td>
+                <td class="num-col">001</td>
+                <td>
+                  <div class="case-cell-title">用户购买 7 天后申请无理由退货,商品已拆封但未使用</div>
+                  <div class="case-cell-meta">P0 · 退货流程 · 单轮</div>
+                </td>
+                <td><span class="tag tag-blue">客服·退货</span></td>
+                <td><span class="row-status pass">✓ 已评测</span></td>
+                <td>
+                  <button class="row-action-btn done" onclick="openTraceDrawer(1)">
+                    <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M2 5.5h7M5.5 2v7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+                    Trace
+                  </button>
+                </td>
+                <td>
+                  <button class="row-action-btn done score-btn" onclick="openResultDrawer(1)">
+                    <span class="score-num pass">92</span>
+                  </button>
+                </td>
+                <td>
+                  <button class="row-more" onclick="openCaseMenu(event, 1)">⋯</button>
+                </td>
+              </tr>
+
+              <tr data-status="evaluated">
+                <td><label class="row-checkbox"><input type="checkbox" onchange="updateSelection()" /><span class="checkbox-mark"></span></label></td>
+                <td class="num-col">002</td>
+                <td>
+                  <div class="case-cell-title">用户已申请退款但快递已发出,询问能否拦截</div>
+                  <div class="case-cell-meta">P1 · 退款政策 · 多轮 · 工具调用</div>
+                </td>
+                <td><span class="tag tag-blue">客服·退货</span></td>
+                <td><span class="row-status pass">✓ 已评测</span></td>
+                <td>
+                  <button class="row-action-btn done" onclick="openTraceDrawer(2)">
+                    <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M2 5.5h7M5.5 2v7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+                    Trace
+                  </button>
+                </td>
+                <td>
+                  <button class="row-action-btn done score-btn" onclick="openResultDrawer(2)">
+                    <span class="score-num pass">88</span>
+                  </button>
+                </td>
+                <td>
+                  <button class="row-more" onclick="openCaseMenu(event, 2)">⋯</button>
+                </td>
+              </tr>
+
+              <tr data-status="evaluated" class="row-fail">
+                <td><label class="row-checkbox"><input type="checkbox" onchange="updateSelection()" /><span class="checkbox-mark"></span></label></td>
+                <td class="num-col">003</td>
+                <td>
+                  <div class="case-cell-title">VIP 用户超过退货期 (45 天) 申请退货,要求特殊处理</div>
+                  <div class="case-cell-meta">P0 · 边缘 case · 高优</div>
+                </td>
+                <td><span class="tag tag-blue">客服·退货</span></td>
+                <td><span class="row-status fail">✗ 失败</span></td>
+                <td>
+                  <button class="row-action-btn done" onclick="openTraceDrawer(3)">
+                    <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M2 5.5h7M5.5 2v7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+                    Trace
+                  </button>
+                </td>
+                <td>
+                  <button class="row-action-btn done score-btn" onclick="openResultDrawer(3)">
+                    <span class="score-num fail">42</span>
+                  </button>
+                </td>
+                <td>
+                  <button class="row-more" onclick="openCaseMenu(event, 3)">⋯</button>
+                </td>
+              </tr>
+
+              <!-- 状态2: 已执行,待评测 -->
+              <tr data-status="executed">
+                <td><label class="row-checkbox"><input type="checkbox" onchange="updateSelection()" /><span class="checkbox-mark"></span></label></td>
+                <td class="num-col">004</td>
+                <td>
+                  <div class="case-cell-title">商品质量问题导致退货,用户提供照片证据</div>
+                  <div class="case-cell-meta">P1 · 退货流程 · 多模态</div>
+                </td>
+                <td><span class="tag tag-blue">客服·退货</span></td>
+                <td><span class="row-status executed">● 待评测</span></td>
+                <td>
+                  <button class="row-action-btn done" onclick="openTraceDrawer(4)">
+                    <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M2 5.5h7M5.5 2v7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+                    Trace
+                  </button>
+                </td>
+                <td>
+                  <button class="row-action-btn primary" onclick="rowEvaluate(this, 4)">
+                    <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M2 5.5L4.5 8 9 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    评测
+                  </button>
+                </td>
+                <td>
+                  <button class="row-more" onclick="openCaseMenu(event, 4)">⋯</button>
+                </td>
+              </tr>
+
+              <tr data-status="executed">
+                <td><label class="row-checkbox"><input type="checkbox" onchange="updateSelection()" /><span class="checkbox-mark"></span></label></td>
+                <td class="num-col">005</td>
+                <td>
+                  <div class="case-cell-title">用户退货时商品包装丢失,询问是否影响退款</div>
+                  <div class="case-cell-meta">P1 · 退货流程 · 边缘 case</div>
+                </td>
+                <td><span class="tag tag-blue">客服·退货</span></td>
+                <td><span class="row-status executed">● 待评测</span></td>
+                <td>
+                  <button class="row-action-btn done" onclick="openTraceDrawer(5)">
+                    <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M2 5.5h7M5.5 2v7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+                    Trace
+                  </button>
+                </td>
+                <td>
+                  <button class="row-action-btn primary" onclick="rowEvaluate(this, 5)">
+                    <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M2 5.5L4.5 8 9 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    评测
+                  </button>
+                </td>
+                <td>
+                  <button class="row-more" onclick="openCaseMenu(event, 5)">⋯</button>
+                </td>
+              </tr>
+
+              <!-- 状态3: 执行中 (运行态) -->
+              <tr data-status="running">
+                <td><label class="row-checkbox"><input type="checkbox" onchange="updateSelection()" /><span class="checkbox-mark"></span></label></td>
+                <td class="num-col">006</td>
+                <td>
+                  <div class="case-cell-title">跨境订单退货,涉及关税和运费扣除</div>
+                  <div class="case-cell-meta">P1 · 退款政策 · 边缘 case</div>
+                </td>
+                <td><span class="tag tag-blue">客服·退货</span></td>
+                <td><span class="row-status running">⌛ 执行中</span></td>
+                <td>
+                  <button class="row-action-btn loading" disabled>
+                    <span class="spinner"></span>
+                    执行中
+                  </button>
+                </td>
+                <td>
+                  <button class="row-action-btn disabled" disabled>
+                    <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M2 5.5L4.5 8 9 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    评测
+                  </button>
+                </td>
+                <td>
+                  <button class="row-more" onclick="openCaseMenu(event, 6)">⋯</button>
+                </td>
+              </tr>
+
+              <!-- 状态4: 未执行 -->
+              <tr data-status="pending">
+                <td><label class="row-checkbox"><input type="checkbox" onchange="updateSelection()" /><span class="checkbox-mark"></span></label></td>
+                <td class="num-col">007</td>
+                <td>
+                  <div class="case-cell-title">订单已超过 30 天,用户主张商品质量问题</div>
+                  <div class="case-cell-meta">P1 · 退货流程 · 多轮对话</div>
+                </td>
+                <td><span class="tag tag-blue">客服·退货</span></td>
+                <td><span class="row-status pending">○ 未执行</span></td>
+                <td>
+                  <button class="row-action-btn primary" onclick="rowExecute(this, 7)">
+                    <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M3 2l6 3.5L3 9V2z" fill="currentColor"/></svg>
+                    执行
+                  </button>
+                </td>
+                <td>
+                  <button class="row-action-btn disabled" disabled>
+                    <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M2 5.5L4.5 8 9 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    评测
+                  </button>
+                </td>
+                <td>
+                  <button class="row-more" onclick="openCaseMenu(event, 7)">⋯</button>
+                </td>
+              </tr>
+
+              <tr data-status="pending">
+                <td><label class="row-checkbox"><input type="checkbox" onchange="updateSelection()" /><span class="checkbox-mark"></span></label></td>
+                <td class="num-col">008</td>
+                <td>
+                  <div class="case-cell-title">用户使用优惠券购买的商品退货,涉及优惠券返还</div>
+                  <div class="case-cell-meta">P0 · 退款政策 · 工具调用</div>
+                </td>
+                <td><span class="tag tag-blue">客服·退货</span></td>
+                <td><span class="row-status pending">○ 未执行</span></td>
+                <td>
+                  <button class="row-action-btn primary" onclick="rowExecute(this, 8)">
+                    <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M3 2l6 3.5L3 9V2z" fill="currentColor"/></svg>
+                    执行
+                  </button>
+                </td>
+                <td>
+                  <button class="row-action-btn disabled" disabled>
+                    <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M2 5.5L4.5 8 9 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    评测
+                  </button>
+                </td>
+                <td>
+                  <button class="row-more" onclick="openCaseMenu(event, 8)">⋯</button>
+                </td>
+              </tr>
+
+              <tr data-status="pending">
+                <td><label class="row-checkbox"><input type="checkbox" onchange="updateSelection()" /><span class="checkbox-mark"></span></label></td>
+                <td class="num-col">009</td>
+                <td>
+                  <div class="case-cell-title">多轮对话:先咨询退货政策,再要求处理具体订单</div>
+                  <div class="case-cell-meta">P1 · 售后·多轮 · 多轮对话</div>
+                </td>
+                <td><span class="tag tag-blue">售后·多轮</span></td>
+                <td><span class="row-status pending">○ 未执行</span></td>
+                <td>
+                  <button class="row-action-btn primary" onclick="rowExecute(this, 9)">
+                    <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M3 2l6 3.5L3 9V2z" fill="currentColor"/></svg>
+                    执行
+                  </button>
+                </td>
+                <td>
+                  <button class="row-action-btn disabled" disabled>
+                    <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M2 5.5L4.5 8 9 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    评测
+                  </button>
+                </td>
+                <td>
+                  <button class="row-more" onclick="openCaseMenu(event, 9)">⋯</button>
+                </td>
+              </tr>
+
+              <tr data-status="pending">
+                <td><label class="row-checkbox"><input type="checkbox" onchange="updateSelection()" /><span class="checkbox-mark"></span></label></td>
+                <td class="num-col">010</td>
+                <td>
+                  <div class="case-cell-title">投诉商品与描述严重不符,要求平台介入</div>
+                  <div class="case-cell-meta">P0 · 边缘 case · 升级</div>
+                </td>
+                <td><span class="tag tag-blue">售后·多轮</span></td>
+                <td><span class="row-status pending">○ 未执行</span></td>
+                <td>
+                  <button class="row-action-btn primary" onclick="rowExecute(this, 10)">
+                    <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M3 2l6 3.5L3 9V2z" fill="currentColor"/></svg>
+                    执行
+                  </button>
+                </td>
+                <td>
+                  <button class="row-action-btn disabled" disabled>
+                    <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M2 5.5L4.5 8 9 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    评测
+                  </button>
+                </td>
+                <td>
+                  <button class="row-more" onclick="openCaseMenu(event, 10)">⋯</button>
+                </td>
+              </tr>
+
+            </tbody>
+          </table>
+        </div>
+
+        <!-- 表格底部:分页 + 汇总 -->
+        <div class="table-footer">
+          <div class="table-footer-summary">
+            显示 <b>1 - 10</b> 条,共 <b>43</b> 条
+          </div>
+          <div class="table-footer-pager">
+            <button class="pager-btn" disabled>‹</button>
+            <button class="pager-btn active">1</button>
+            <button class="pager-btn">2</button>
+            <button class="pager-btn">3</button>
+            <button class="pager-btn">4</button>
+            <button class="pager-btn">5</button>
+            <button class="pager-btn">›</button>
+          </div>
+          <div class="table-footer-progress">
+            <span class="progress-mini-label">已评测 8 / 43</span>
+            <div class="progress-mini-bar"><div class="progress-mini-fill" style="width: 18.6%;"></div></div>
+            <span class="progress-mini-pct">18.6%</span>
+          </div>
+        </div>
+
+      </div>
+
+    </div><!-- /page-eval -->
+
+    <!-- ===================== 数据集管理页 ===================== -->
+    <div class="page" id="page-datasets" style="display: none;">
+      <!-- 顶部页面标题 -->
+      <div class="page-header">
+        <div class="page-header-left">
+          <button class="btn-back" onclick="goPage('eval')">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M9 3l-4 4 4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <div>
+            <div class="page-eyebrow">EVALUATION CENTER</div>
+            <h1 class="page-title-h1">评测数据集</h1>
+          </div>
+        </div>
+        <div class="page-header-right">
+          <input class="input" style="width: 240px; font-size: 12.5px; padding: 7px 11px;" placeholder="🔍 搜索数据集..." />
+          <button class="btn btn-sm" onclick="goPage('eval')">取消</button>
+          <button class="btn btn-sm btn-dark" onclick="goPage('dataset-new')">
+            <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M5.5 1v9M1 5.5h9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+            新建数据集
+          </button>
+        </div>
+      </div>
+
+      <!-- 统计 + 过滤 -->
+      <div class="page-stats-row">
+        <div class="page-stat">
+          <span class="page-stat-value">12</span>
+          <span class="page-stat-label">数据集</span>
+        </div>
+        <div class="page-stat-divider"></div>
+        <div class="page-stat">
+          <span class="page-stat-value">348</span>
+          <span class="page-stat-label">总用例</span>
+        </div>
+        <div class="page-stat-divider"></div>
+        <div class="page-stat">
+          <span class="page-stat-value">8</span>
+          <span class="page-stat-label">本周评测使用</span>
+        </div>
+        <div style="flex: 1;"></div>
+        <div class="filter-group">
+          <button class="filter-btn active">全部</button>
+          <button class="filter-btn">客服场景</button>
+          <button class="filter-btn">订单查询</button>
+          <button class="filter-btn">售后</button>
+          <button class="filter-btn">其他</button>
+        </div>
+      </div>
+
+      <!-- 数据集表格 -->
+      <div class="data-table">
+        <table class="exec-table">
+          <thead>
+            <tr>
+              <th style="width: 40%;">名称</th>
+              <th style="width: 80px;">用例数</th>
+              <th style="width: 100px;">版本</th>
+              <th>标签</th>
+              <th style="width: 130px;">最近更新</th>
+              <th style="width: 120px;">使用次数</th>
+              <th style="width: 100px;">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr onclick="goPage('eval')">
+              <td>
+                <div class="entity-name">客服 · 退货退款</div>
+                <div class="entity-desc">退货流程、退款政策、边缘 case</div>
+              </td>
+              <td><span class="num-cell">28</span></td>
+              <td><span class="tag tag-blue">v2.3</span></td>
+              <td>
+                <span class="tag">退货</span>
+                <span class="tag">边缘 case</span>
+              </td>
+              <td class="meta-cell">3 天前</td>
+              <td class="meta-cell">已使用 12 次</td>
+              <td>
+                <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();goPage('eval')">查看</button>
+              </td>
+            </tr>
+            <tr onclick="goPage('eval')">
+              <td>
+                <div class="entity-name">售后咨询 · 多轮</div>
+                <div class="entity-desc">多轮对话场景的咨询、投诉、建议</div>
+              </td>
+              <td><span class="num-cell">15</span></td>
+              <td><span class="tag tag-blue">v1.0</span></td>
+              <td>
+                <span class="tag">多轮对话</span>
+              </td>
+              <td class="meta-cell">1 周前</td>
+              <td class="meta-cell">已使用 4 次</td>
+              <td>
+                <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();goPage('eval')">查看</button>
+              </td>
+            </tr>
+            <tr onclick="goPage('eval')">
+              <td>
+                <div class="entity-name">订单查询 · 全场景</div>
+                <div class="entity-desc">订单状态、物流、发票相关查询</div>
+              </td>
+              <td><span class="num-cell">36</span></td>
+              <td><span class="tag tag-blue">v2.1</span></td>
+              <td>
+                <span class="tag">工具调用</span>
+                <span class="tag">高频</span>
+              </td>
+              <td class="meta-cell">2 周前</td>
+              <td class="meta-cell">已使用 23 次</td>
+              <td>
+                <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();goPage('eval')">查看</button>
+              </td>
+            </tr>
+            <tr onclick="goPage('eval')">
+              <td>
+                <div class="entity-name">支付与发票</div>
+                <div class="entity-desc">支付方式咨询、发票申请与开具</div>
+              </td>
+              <td><span class="num-cell">22</span></td>
+              <td><span class="tag tag-blue">v1.2</span></td>
+              <td>
+                <span class="tag">合规</span>
+              </td>
+              <td class="meta-cell">3 周前</td>
+              <td class="meta-cell">已使用 7 次</td>
+              <td>
+                <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();goPage('eval')">查看</button>
+              </td>
+            </tr>
+            <tr onclick="goPage('eval')">
+              <td>
+                <div class="entity-name">VIP 服务 · 优先级</div>
+                <div class="entity-desc">VIP 客户专属流程,含升级判定</div>
+              </td>
+              <td><span class="num-cell">18</span></td>
+              <td><span class="tag tag-blue">v1.0</span></td>
+              <td>
+                <span class="tag tag-amber">边界</span>
+                <span class="tag">VIP</span>
+              </td>
+              <td class="meta-cell">1 个月前</td>
+              <td class="meta-cell">已使用 3 次</td>
+              <td>
+                <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();goPage('eval')">查看</button>
+              </td>
+            </tr>
+            <tr onclick="goPage('eval')">
+              <td>
+                <div class="entity-name">投诉处理流程</div>
+                <div class="entity-desc">客户投诉的标准应答与升级判定</div>
+              </td>
+              <td><span class="num-cell">31</span></td>
+              <td><span class="tag tag-blue">v1.5</span></td>
+              <td>
+                <span class="tag tag-red">高优</span>
+                <span class="tag">合规</span>
+              </td>
+              <td class="meta-cell">1 个月前</td>
+              <td class="meta-cell">已使用 9 次</td>
+              <td>
+                <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();goPage('eval')">查看</button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+</div>
+
+    <!-- ===================== 评估器管理页 ===================== -->
+    <div class="page" id="page-evaluators" style="display: none;">
+      <div class="page-header">
+        <div class="page-header-left">
+          <button class="btn-back" onclick="goPage('eval')">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M9 3l-4 4 4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <div>
+            <div class="page-eyebrow">EVALUATION CENTER</div>
+            <h1 class="page-title-h1">评估器</h1>
+          </div>
+        </div>
+        <div class="page-header-right">
+          <input class="input" style="width: 240px; font-size: 12.5px; padding: 7px 11px;" placeholder="🔍 搜索评估器..." />
+          <button class="btn btn-sm" onclick="goPage('eval')">取消</button>
+          <button class="btn btn-sm btn-dark" onclick="goPage('evaluator-new')">
+            <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M5.5 1v9M1 5.5h9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+            新建评估器
+          </button>
+        </div>
+      </div>
+
+      <div class="page-stats-row">
+        <div class="page-stat">
+          <span class="page-stat-value">7</span>
+          <span class="page-stat-label">评估器</span>
+        </div>
+        <div class="page-stat-divider"></div>
+        <div class="page-stat">
+          <span class="page-stat-value">28</span>
+          <span class="page-stat-label">总维度数</span>
+        </div>
+        <div class="page-stat-divider"></div>
+        <div class="page-stat">
+          <span class="page-stat-value">4</span>
+          <span class="page-stat-label">AI 生成</span>
+        </div>
+        <div style="flex: 1;"></div>
+        <div class="filter-group">
+          <button class="filter-btn active">全部</button>
+          <button class="filter-btn">客服</button>
+          <button class="filter-btn">通用</button>
+          <button class="filter-btn">AI 生成</button>
+        </div>
+      </div>
+
+      <!-- 评估器卡片网格 -->
+      <div class="evaluator-page-grid">
+        <div class="evaluator-page-card" onclick="goPage('eval')">
+          <div class="evaluator-page-card-head">
+            <div class="evaluator-page-card-title">
+              客服评估器 · 标准版
+              <span class="tag tag-blue">v1.0</span>
+              <span class="tag tag-dark">AI 生成</span>
+            </div>
+            <button class="icon-btn" onclick="event.stopPropagation()">
+              <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><circle cx="5.5" cy="5.5" r="1" fill="currentColor"/><circle cx="5.5" cy="2" r="1" fill="currentColor"/><circle cx="5.5" cy="9" r="1" fill="currentColor"/></svg>
+            </button>
+          </div>
+          <div class="evaluator-page-card-desc">基于 customer-service-refund 自动生成,覆盖 4 个核心评估维度</div>
+
+          <div class="dim-mini-list">
+            <div class="dim-mini">
+              <div class="eval-icon fact">F</div>
+              <span class="dim-mini-name">事实准确性</span>
+              <span class="dim-mini-weight">35%</span>
+            </div>
+            <div class="dim-mini">
+              <div class="eval-icon tool">T</div>
+              <span class="dim-mini-name">工具调用</span>
+              <span class="dim-mini-weight">30%</span>
+            </div>
+            <div class="dim-mini">
+              <div class="eval-icon format">M</div>
+              <span class="dim-mini-name">格式合规</span>
+              <span class="dim-mini-weight">20%</span>
+            </div>
+            <div class="dim-mini">
+              <div class="eval-icon safe">S</div>
+              <span class="dim-mini-name">安全合规</span>
+              <span class="dim-mini-weight">15%</span>
+            </div>
+          </div>
+
+          <div class="evaluator-page-card-foot">
+            <span class="meta-cell">阈值 ≥ 80 · 4 维度</span>
+            <span class="meta-cell">已使用 12 次</span>
+          </div>
+        </div>
+
+        <div class="evaluator-page-card" onclick="goPage('eval')">
+          <div class="evaluator-page-card-head">
+            <div class="evaluator-page-card-title">
+              客服评估器 · 严格版
+              <span class="tag tag-blue">v1.2</span>
+            </div>
+            <button class="icon-btn" onclick="event.stopPropagation()">
+              <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><circle cx="5.5" cy="5.5" r="1" fill="currentColor"/><circle cx="5.5" cy="2" r="1" fill="currentColor"/><circle cx="5.5" cy="9" r="1" fill="currentColor"/></svg>
+            </button>
+          </div>
+          <div class="evaluator-page-card-desc">在标准版基础上加入语气、用户满意度、合规等维度,适合上线前验收</div>
+
+          <div class="dim-mini-list">
+            <div class="dim-mini">
+              <div class="eval-icon fact">F</div>
+              <span class="dim-mini-name">事实准确性</span>
+              <span class="dim-mini-weight">25%</span>
+            </div>
+            <div class="dim-mini">
+              <div class="eval-icon tool">T</div>
+              <span class="dim-mini-name">工具调用</span>
+              <span class="dim-mini-weight">20%</span>
+            </div>
+            <div class="dim-mini">
+              <div class="eval-icon format">M</div>
+              <span class="dim-mini-name">格式合规</span>
+              <span class="dim-mini-weight">15%</span>
+            </div>
+            <div class="dim-mini">
+              <div class="eval-icon" style="background: #F3E5D8; color: #8B6914;">L</div>
+              <span class="dim-mini-name">语气风格</span>
+              <span class="dim-mini-weight">15%</span>
+            </div>
+            <div class="dim-mini">
+              <div class="eval-icon safe">S</div>
+              <span class="dim-mini-name">安全合规</span>
+              <span class="dim-mini-weight">15%</span>
+            </div>
+            <div class="dim-mini">
+              <div class="eval-icon" style="background: #E5F0E8; color: #2D7D5A;">U</div>
+              <span class="dim-mini-name">用户满意度</span>
+              <span class="dim-mini-weight">10%</span>
+            </div>
+          </div>
+
+          <div class="evaluator-page-card-foot">
+            <span class="meta-cell">阈值 ≥ 90 · 6 维度</span>
+            <span class="meta-cell">已使用 5 次</span>
+          </div>
+        </div>
+
+        <div class="evaluator-page-card" onclick="goPage('eval')">
+          <div class="evaluator-page-card-head">
+            <div class="evaluator-page-card-title">
+              通用工具调用评估器
+              <span class="tag tag-blue">v2.0</span>
+              <span class="tag tag-dark">AI 生成</span>
+            </div>
+            <button class="icon-btn" onclick="event.stopPropagation()">
+              <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><circle cx="5.5" cy="5.5" r="1" fill="currentColor"/><circle cx="5.5" cy="2" r="1" fill="currentColor"/><circle cx="5.5" cy="9" r="1" fill="currentColor"/></svg>
+            </button>
+          </div>
+          <div class="evaluator-page-card-desc">仅评估工具调用正确性,适合 ReAct 类 agent 的链路验证</div>
+
+          <div class="dim-mini-list">
+            <div class="dim-mini">
+              <div class="eval-icon tool">T</div>
+              <span class="dim-mini-name">工具选择</span>
+              <span class="dim-mini-weight">40%</span>
+            </div>
+            <div class="dim-mini">
+              <div class="eval-icon" style="background: var(--accent-soft); color: var(--accent);">P</div>
+              <span class="dim-mini-name">参数正确</span>
+              <span class="dim-mini-weight">35%</span>
+            </div>
+            <div class="dim-mini">
+              <div class="eval-icon" style="background: #F0E8F3; color: #8B5CF6;">O</div>
+              <span class="dim-mini-name">调用顺序</span>
+              <span class="dim-mini-weight">25%</span>
+            </div>
+          </div>
+
+          <div class="evaluator-page-card-foot">
+            <span class="meta-cell">阈值 ≥ 85 · 3 维度</span>
+            <span class="meta-cell">已使用 18 次</span>
+          </div>
+        </div>
+
+        <div class="evaluator-page-card" onclick="goPage('eval')">
+          <div class="evaluator-page-card-head">
+            <div class="evaluator-page-card-title">
+              事实准确性单维度
+              <span class="tag tag-blue">v1.0</span>
+            </div>
+            <button class="icon-btn" onclick="event.stopPropagation()">
+              <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><circle cx="5.5" cy="5.5" r="1" fill="currentColor"/><circle cx="5.5" cy="2" r="1" fill="currentColor"/><circle cx="5.5" cy="9" r="1" fill="currentColor"/></svg>
+            </button>
+          </div>
+          <div class="evaluator-page-card-desc">仅检查回复中的事实信息是否与知识库一致,适合 RAG 类应用</div>
+
+          <div class="dim-mini-list">
+            <div class="dim-mini">
+              <div class="eval-icon fact">F</div>
+              <span class="dim-mini-name">事实准确性</span>
+              <span class="dim-mini-weight">100%</span>
+            </div>
+          </div>
+
+          <div class="evaluator-page-card-foot">
+            <span class="meta-cell">阈值 ≥ 90 · 1 维度</span>
+            <span class="meta-cell">已使用 6 次</span>
+          </div>
+        </div>
+
+        <!-- 添加新评估器卡 -->
+        <div class="evaluator-page-card add-new" onclick="goPage('evaluator-new')">
+          <div class="add-new-icon">+</div>
+          <div class="add-new-text">新建评估器</div>
+          <div class="add-new-sub">支持 AI 自动生成,或手动配置维度</div>
+        </div>
+      </div>
+
+</div>
+
+    <!-- ===================== 创建数据集页 ===================== -->
+    <div class="page" id="page-dataset-new" style="display: none;">
+      <!-- 顶部 -->
+      <div class="page-header">
+        <div class="page-header-left">
+          <button class="btn-back" onclick="goPage('datasets')">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M9 3l-4 4 4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <div>
+            <div class="page-eyebrow">DATASETS / NEW</div>
+            <h1 class="page-title-h1">新建评测数据集</h1>
+          </div>
+        </div>
+        <div class="page-header-right">
+          <button class="btn btn-sm" onclick="goPage('datasets')">取消</button>
+          <button class="btn btn-sm btn-dark" onclick="goPage('datasets')">
+            <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M2 6l3 3 6-7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            保存数据集
+          </button>
+        </div>
+      </div>
+
+      <!-- 步骤 1: 基本信息 -->
+      <div class="card" style="margin-bottom: 14px;">
+        <div class="card-head">
+          <div>
+            <div class="label">A · 基本信息</div>
+            <h3>数据集元信息</h3>
+          </div>
+        </div>
+        <div class="grid-2">
+          <div class="field">
+            <label class="field-label">数据集名称<span class="req">*</span></label>
+            <input class="input" placeholder="例:客服 · 退货退款" />
+          </div>
+          <div class="field">
+            <label class="field-label">关联场景<span class="hint">用于分类与搜索</span></label>
+            <select class="select">
+              <option>客服场景</option>
+              <option>订单查询</option>
+              <option>售后咨询</option>
+              <option>其他</option>
+            </select>
+          </div>
+        </div>
+        <div class="field" style="margin-bottom: 0;">
+          <label class="field-label">描述</label>
+          <textarea class="textarea" placeholder="简要说明此数据集的考察范围和用途..."></textarea>
+        </div>
+      </div>
+
+      <!-- 步骤 2: 用例来源 -->
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <div class="label">B · 用例来源</div>
+            <h3>选择用例创建方式</h3>
+          </div>
+        </div>
+
+        <div class="source-grid">
+          <label class="source-card selected">
+            <input type="radio" name="source" checked />
+            <div class="source-icon">
+              <svg width="22" height="22" viewBox="0 0 22 22" fill="none"><path d="M3 5h16M3 11h16M3 17h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="18" cy="17" r="2.5" stroke="currentColor" stroke-width="1.5"/><path d="M19.5 18.5l1.5 1.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            </div>
+            <div class="source-name">从生产 Trace 转化</div>
+            <div class="source-desc">从「运行观测」中筛选典型 case,自动转换为评测用例</div>
+            <div class="source-tag">推荐</div>
+          </label>
+
+          <label class="source-card">
+            <input type="radio" name="source" />
+            <div class="source-icon">
+              <svg width="22" height="22" viewBox="0 0 22 22" fill="none"><path d="M11 3v10M6 8l5-5 5 5M3 19h16" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </div>
+            <div class="source-name">上传 CSV / JSON</div>
+            <div class="source-desc">从外部文件批量导入用例,支持标准模板</div>
+          </label>
+
+          <label class="source-card">
+            <input type="radio" name="source" />
+            <div class="source-icon">
+              <svg width="22" height="22" viewBox="0 0 22 22" fill="none"><path d="M11 5v12M5 11h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="11" cy="11" r="9" stroke="currentColor" stroke-width="1.5"/></svg>
+            </div>
+            <div class="source-name">手动添加</div>
+            <div class="source-desc">逐条录入用例,适合精标的小规模数据集</div>
+          </label>
+
+          <label class="source-card">
+            <input type="radio" name="source" />
+            <div class="source-icon">
+              <svg width="22" height="22" viewBox="0 0 22 22" fill="none"><path d="M11 3l1.8 5.6L18 9.5l-4 3.6 1 5.4L11 16l-4 2.5 1-5.4-4-3.6 5.2-.9L11 3z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
+            </div>
+            <div class="source-name">AI 生成种子用例</div>
+            <div class="source-desc">基于 Skill 内容,AI 自动生成 N 条多样化用例</div>
+            <div class="source-tag tag-ai">AI</div>
+          </label>
+        </div>
+      </div>
+
+      <!-- 步骤 3: 从生产 Trace 选择 -->
+      <div class="card" style="margin-top: 14px;">
+        <div class="card-head">
+          <div>
+            <div class="label">C · 从生产 Trace 筛选</div>
+            <h3>挑选要转化的 Trace</h3>
+          </div>
+          <div style="display: flex; gap: 6px;">
+            <select class="select" style="width: 140px; font-size: 12px; padding: 5px 9px;">
+              <option>过去 7 天</option>
+              <option>过去 30 天</option>
+              <option>自定义</option>
+            </select>
+            <select class="select" style="width: 140px; font-size: 12px; padding: 5px 9px;">
+              <option>所有 Skill</option>
+              <option>refund v1.4.0</option>
+            </select>
+          </div>
+        </div>
+
+        <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+          <button class="filter-btn active">全部 (2,341)</button>
+          <button class="filter-btn">异常 Trace (147)</button>
+          <button class="filter-btn">用户负反馈 (28)</button>
+          <button class="filter-btn">长尾 case (89)</button>
+          <div style="flex:1;"></div>
+          <span style="font-size: 12px; color: var(--ink-3); font-family: 'JetBrains Mono', monospace; align-self: center;">已选 <b style="color: var(--ink);">12</b> 条</span>
+        </div>
+
+        <table class="exec-table">
+          <thead>
+            <tr>
+              <th style="width: 28px;"><input type="checkbox" style="accent-color: var(--ink);" /></th>
+              <th>用户输入 (摘要)</th>
+              <th style="width: 90px;">Skill</th>
+              <th style="width: 80px;">耗时</th>
+              <th style="width: 90px;">用户反馈</th>
+              <th style="width: 100px;">时间</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr style="background: var(--bg-soft);">
+              <td><input type="checkbox" checked style="accent-color: var(--ink);" /></td>
+              <td>VIP 客户 45 天前买的鞋子穿了几次想退...</td>
+              <td><span class="tag tag-blue">refund</span></td>
+              <td class="meta-cell">8.1s</td>
+              <td><span class="tag tag-red">👎 不满意</span></td>
+              <td class="meta-cell">2 天前</td>
+            </tr>
+            <tr style="background: var(--bg-soft);">
+              <td><input type="checkbox" checked style="accent-color: var(--ink);" /></td>
+              <td>商品包装丢了,但能退款吗?</td>
+              <td><span class="tag tag-blue">refund</span></td>
+              <td class="meta-cell">3.8s</td>
+              <td><span class="tag tag-amber">⚠ 转人工</span></td>
+              <td class="meta-cell">2 天前</td>
+            </tr>
+            <tr>
+              <td><input type="checkbox" style="accent-color: var(--ink);" /></td>
+              <td>用了 3 张优惠券,部分商品退货怎么算?</td>
+              <td><span class="tag tag-blue">refund</span></td>
+              <td class="meta-cell">6.4s</td>
+              <td><span class="tag tag-red">👎 不满意</span></td>
+              <td class="meta-cell">3 天前</td>
+            </tr>
+            <tr>
+              <td><input type="checkbox" style="accent-color: var(--ink);" /></td>
+              <td>跨境订单退货关税谁出?</td>
+              <td><span class="tag tag-blue">refund</span></td>
+              <td class="meta-cell">7.2s</td>
+              <td>—</td>
+              <td class="meta-cell">3 天前</td>
+            </tr>
+            <tr>
+              <td><input type="checkbox" style="accent-color: var(--ink);" /></td>
+              <td>申请退款后快递发出了能不能拦截?</td>
+              <td><span class="tag tag-blue">refund</span></td>
+              <td class="meta-cell">5.7s</td>
+              <td>—</td>
+              <td class="meta-cell">5 天前</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div style="text-align: center; padding: 10px 0;">
+          <button class="btn btn-ghost btn-sm">展开剩余 2,336 条 ↓</button>
+        </div>
+      </div>
+
+</div>
+
+    <!-- ===================== 创建评估器页 ===================== -->
+    <div class="page" id="page-evaluator-new" style="display: none;">
+      <div class="page-header">
+        <div class="page-header-left">
+          <button class="btn-back" onclick="goPage('evaluators')">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M9 3l-4 4 4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <div>
+            <div class="page-eyebrow">EVALUATORS / NEW</div>
+            <h1 class="page-title-h1">新建评估器</h1>
+          </div>
+        </div>
+        <div class="page-header-right">
+          <button class="btn btn-sm" onclick="goPage('evaluators')">取消</button>
+          <button class="btn btn-sm btn-dark" onclick="goPage('evaluators')">
+            <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M2 6l3 3 6-7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            保存评估器
+          </button>
+        </div>
+      </div>
+
+      <!-- 选择创建方式 -->
+      <div class="card" style="margin-bottom: 14px;">
+        <div class="card-head">
+          <div>
+            <div class="label">A · 创建方式</div>
+            <h3>选择评估器创建方式</h3>
+          </div>
+        </div>
+
+        <div class="creation-mode-grid">
+          <label class="creation-card selected" onclick="toggleCreationMode('ai')">
+            <input type="radio" name="creation-mode" checked />
+            <div class="creation-card-head">
+              <div class="creation-icon" style="background: linear-gradient(135deg, var(--ink) 0%, var(--accent) 100%); color: #fff;">
+                <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 2l2 5 5 1-3.5 3.5 1 5L10 14l-4.5 2.5 1-5L3 8l5-1 2-5z" fill="currentColor"/></svg>
+              </div>
+              <span class="tag tag-dark">推荐</span>
+            </div>
+            <div class="creation-name">AI 自动生成</div>
+            <div class="creation-desc">基于 Skill 内容,模型分析后自动生成评估维度、判定 prompt 与权重。可在生成后人工调整。</div>
+            <div class="creation-meta">
+              <span>⏱ 约 15 秒</span>
+              <span>·</span>
+              <span>🪙 ~3k token</span>
+            </div>
+          </label>
+
+          <label class="creation-card" onclick="toggleCreationMode('manual')">
+            <input type="radio" name="creation-mode" />
+            <div class="creation-card-head">
+              <div class="creation-icon" style="background: var(--bg-soft); color: var(--ink-2);">
+                <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M3 6c0-1.5 1.5-3 3-3h8c1.5 0 3 1.5 3 3v8c0 1.5-1.5 3-3 3H6c-1.5 0-3-1.5-3-3V6z" stroke="currentColor" stroke-width="1.5"/><path d="M7 9h6M7 12h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+              </div>
+            </div>
+            <div class="creation-name">手动配置</div>
+            <div class="creation-desc">逐个添加评估维度,自定义判定逻辑、权重与阈值。适合有明确评估标准的高级用户。</div>
+            <div class="creation-meta">
+              <span>⏱ 约 5-10 分钟</span>
+            </div>
+          </label>
+        </div>
+      </div>
+
+      <!-- AI 生成模式: 配置 -->
+      <div class="card" id="aiGenConfig">
+        <div class="card-head">
+          <div>
+            <div class="label">B · AI 生成配置</div>
+            <h3>选择基础 Skill 与生成参数</h3>
+          </div>
+        </div>
+
+        <div class="grid-2" style="margin-bottom: 14px;">
+          <div class="field" style="margin-bottom: 0;">
+            <label class="field-label">评估器名称<span class="req">*</span></label>
+            <input class="input" placeholder="例:客服评估器 · 标准版" />
+          </div>
+          <div class="field" style="margin-bottom: 0;">
+            <label class="field-label">基础 Skill<span class="req">*</span><span class="hint">用于推断评估维度</span></label>
+            <select class="select">
+              <option>customer-service-refund · v1.4.0</option>
+              <option>order-query · v2.1</option>
+              <option>aftersales-multi-turn · v1.0</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="grid-2" style="margin-bottom: 14px;">
+          <div class="field" style="margin-bottom: 0;">
+            <label class="field-label">参考样本数据集<span class="hint">辅助维度推断</span></label>
+            <select class="select">
+              <option>客服 · 退货退款 v2.3 (28 用例)</option>
+              <option>不使用样本</option>
+            </select>
+          </div>
+          <div class="field" style="margin-bottom: 0;">
+            <label class="field-label">通过阈值</label>
+            <select class="select">
+              <option>≥ 80 (默认)</option>
+              <option>≥ 85 (严格)</option>
+              <option>≥ 90 (上线验收)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="field" style="margin-bottom: 14px;">
+          <label class="field-label">生成偏好<span class="hint">指导模型生成什么样的维度</span></label>
+          <div class="preference-tags">
+            <label class="pref-tag selected">
+              <input type="checkbox" checked />
+              <span>事实准确性</span>
+            </label>
+            <label class="pref-tag selected">
+              <input type="checkbox" checked />
+              <span>工具调用正确性</span>
+            </label>
+            <label class="pref-tag selected">
+              <input type="checkbox" checked />
+              <span>输出格式合规</span>
+            </label>
+            <label class="pref-tag selected">
+              <input type="checkbox" checked />
+              <span>安全与合规</span>
+            </label>
+            <label class="pref-tag">
+              <input type="checkbox" />
+              <span>语气与风格</span>
+            </label>
+            <label class="pref-tag">
+              <input type="checkbox" />
+              <span>用户满意度</span>
+            </label>
+            <label class="pref-tag">
+              <input type="checkbox" />
+              <span>响应效率</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="field" style="margin-bottom: 0;">
+          <label class="field-label">补充指令<span class="hint">可选,告诉 AI 关注的特殊点</span></label>
+          <textarea class="textarea" placeholder="例:对 VIP 用户的特殊处理要严格,涉及金额的回复必须精确到分..."></textarea>
+        </div>
+
+        <!-- 触发生成 CTA -->
+        <div class="ai-trigger" id="aiTrigger">
+          <div class="ai-trigger-info">
+            <div class="ai-trigger-title">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1l1.8 4.5L14 7l-4 3.2L11 15 8 12.5 5 15l1-4.8L2 7l4.2-1.5L8 1z" fill="currentColor"/></svg>
+              准备就绪
+            </div>
+            <div class="ai-trigger-meta">将基于 refund v1.4.0 + 28 条样本生成 4 个评估维度</div>
+          </div>
+          <button class="btn-launch" onclick="triggerAiGen()">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1l1.5 4 4 1L9 9l1 4L7 11l-3 2 1-4L1.5 6l4-1L7 1z" fill="currentColor"/></svg>
+            开始 AI 生成
+          </button>
+        </div>
+
+        <!-- 生成中状态 -->
+        <div class="ai-generating" id="aiGenerating" style="display: none;">
+          <div class="ai-gen-state">
+            <div class="ai-gen-icon">✱</div>
+            <div style="font-family: 'Instrument Serif', serif; font-size: 22px; letter-spacing: -0.01em;">正在分析 Skill 内容...</div>
+            <div style="font-size: 12.5px; color: var(--ink-3); margin-top: 6px;">预计 15 秒</div>
+          </div>
+          <div class="ai-gen-steps">
+            <div class="ai-step done"><div class="check"></div><div>读取 Skill prompt 与工具定义</div></div>
+            <div class="ai-step done"><div class="check"></div><div>分析 28 条样本用例的输入分布</div></div>
+            <div class="ai-step active"><div class="check"></div><div>识别核心成功标准与硬约束</div></div>
+            <div class="ai-step"><div class="check"></div><div>生成评估维度与判定 prompt</div></div>
+            <div class="ai-step"><div class="check"></div><div>预跑样本验证评估器效果</div></div>
+          </div>
+        </div>
+
+        <!-- 生成完成: 维度卡片 + 可编辑 -->
+        <div class="ai-result" id="aiResult" style="display: none;">
+          <div style="background: var(--success-soft); border-radius: var(--radius-sm); padding: 12px 14px; margin-bottom: 14px; display: flex; gap: 10px; align-items: center;">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" style="flex-shrink: 0;"><circle cx="8" cy="8" r="7" stroke="#2D7D5A" stroke-width="1.4"/><path d="M5 8l2.5 2.5L11 6" stroke="#2D7D5A" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <div style="font-size: 13px; color: var(--success); flex: 1;">
+              <b>已生成 4 个评估维度。</b>你可以调整权重、修改判定 prompt,或新增/删除维度。
+            </div>
+            <button class="btn btn-sm">重新生成</button>
+          </div>
+
+          <div class="evaluator-grid">
+            <div class="eval-card ai-generated">
+              <div class="eval-head">
+                <div class="eval-name">
+                  <div class="eval-icon fact">F</div>
+                  事实准确性
+                </div>
+                <button class="icon-btn" style="width:22px; height:22px; border:none;">
+                  <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M2 8.5L8 2.5l1 1L3 9.5l-1-1z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+                </button>
+              </div>
+              <div class="eval-desc">回复信息是否与政策文档、订单数据一致</div>
+              <div class="eval-foot">
+                <span class="tag">LLM-judge</span>
+                <div class="weight-bar"><div class="weight-bar-fill" style="width: 35%"></div></div>
+                <span class="weight-text">35%</span>
+              </div>
+            </div>
+
+            <div class="eval-card ai-generated">
+              <div class="eval-head">
+                <div class="eval-name">
+                  <div class="eval-icon tool">T</div>
+                  工具调用正确性
+                </div>
+                <button class="icon-btn" style="width:22px; height:22px; border:none;">
+                  <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M2 8.5L8 2.5l1 1L3 9.5l-1-1z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+                </button>
+              </div>
+              <div class="eval-desc">工具选择、参数、调用顺序是否合理</div>
+              <div class="eval-foot">
+                <span class="tag">规则+LLM</span>
+                <div class="weight-bar"><div class="weight-bar-fill" style="width: 30%"></div></div>
+                <span class="weight-text">30%</span>
+              </div>
+            </div>
+
+            <div class="eval-card ai-generated">
+              <div class="eval-head">
+                <div class="eval-name">
+                  <div class="eval-icon format">M</div>
+                  输出格式合规
+                </div>
+                <button class="icon-btn" style="width:22px; height:22px; border:none;">
+                  <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M2 8.5L8 2.5l1 1L3 9.5l-1-1z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+                </button>
+              </div>
+              <div class="eval-desc">三段式结构、客服话术规范</div>
+              <div class="eval-foot">
+                <span class="tag">规则匹配</span>
+                <div class="weight-bar"><div class="weight-bar-fill" style="width: 20%"></div></div>
+                <span class="weight-text">20%</span>
+              </div>
+            </div>
+
+            <div class="eval-card ai-generated">
+              <div class="eval-head">
+                <div class="eval-name">
+                  <div class="eval-icon safe">S</div>
+                  安全与合规
+                </div>
+                <button class="icon-btn" style="width:22px; height:22px; border:none;">
+                  <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M2 8.5L8 2.5l1 1L3 9.5l-1-1z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+                </button>
+              </div>
+              <div class="eval-desc">不得违反退款政策,不得泄露隐私</div>
+              <div class="eval-foot">
+                <span class="tag tag-red">硬约束</span>
+                <div class="weight-bar"><div class="weight-bar-fill" style="width: 15%"></div></div>
+                <span class="weight-text">15%</span>
+              </div>
+            </div>
+          </div>
+
+          <div style="display: flex; justify-content: space-between; margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--line);">
+            <button class="btn btn-sm">+ 添加自定义维度</button>
+            <button class="btn btn-sm btn-ghost">
+              <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M3 3l5 2.5L3 8V3z" fill="currentColor"/></svg>
+              在 3 条用例上预跑验证
+            </button>
+          </div>
+        </div>
+      </div>
+
+</div>
+
+  </div>
+</main>
+
+<!-- ============= 数据集选择弹窗 ============= -->
+<div class="modal-mask" id="datasetModal">
+  <div class="modal-box">
+    <div class="modal-box-head">
+      <div>
+        <div class="modal-box-title">选择<em>评测数据集</em></div>
+        <div class="modal-box-sub">支持多选,数据集中的用例将合并到工作表中</div>
+      </div>
+      <button class="icon-btn" onclick="closeModal('datasetModal')">
+        <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M3 3l7 7M10 3l-7 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <div class="modal-box-body">
+      <input class="input" style="margin-bottom: 12px;" placeholder="🔍 搜索数据集..." />
+
+      <div class="modal-list-section-title">已选择 (2)</div>
+      <div class="modal-list">
+        <label class="modal-list-item checked">
+          <span class="checkbox-mark" style="width:15px;height:15px;border-color:var(--ink);background:var(--ink);"><span style="color:#fff;font-size:10px;font-weight:700;">✓</span></span>
+          <div class="modal-list-item-content">
+            <div class="modal-list-item-title">
+              <span class="modal-list-item-name">客服 · 退货退款</span>
+              <span class="tag tag-blue">v2.3</span>
+            </div>
+            <div class="modal-list-item-meta">28 条用例 · 退货流程、边缘 case · 3 天前更新</div>
+          </div>
+        </label>
+        <label class="modal-list-item checked">
+          <span class="checkbox-mark" style="width:15px;height:15px;border-color:var(--ink);background:var(--ink);"><span style="color:#fff;font-size:10px;font-weight:700;">✓</span></span>
+          <div class="modal-list-item-content">
+            <div class="modal-list-item-title">
+              <span class="modal-list-item-name">售后咨询 · 多轮</span>
+              <span class="tag tag-blue">v1.0</span>
+            </div>
+            <div class="modal-list-item-meta">15 条用例 · 多轮对话场景 · 1 周前更新</div>
+          </div>
+        </label>
+      </div>
+
+      <div class="modal-list-divider"></div>
+
+      <div class="modal-list-section-title">可选 (10)</div>
+      <div class="modal-list">
+        <label class="modal-list-item">
+          <span class="checkbox-mark"></span>
+          <div class="modal-list-item-content">
+            <div class="modal-list-item-title">
+              <span class="modal-list-item-name">订单查询 · 全场景</span>
+              <span class="tag tag-blue">v2.1</span>
+            </div>
+            <div class="modal-list-item-meta">36 条用例 · 工具调用、高频 · 2 周前更新</div>
+          </div>
+        </label>
+        <label class="modal-list-item">
+          <span class="checkbox-mark"></span>
+          <div class="modal-list-item-content">
+            <div class="modal-list-item-title">
+              <span class="modal-list-item-name">支付与发票</span>
+              <span class="tag tag-blue">v1.2</span>
+            </div>
+            <div class="modal-list-item-meta">22 条用例 · 合规相关 · 3 周前更新</div>
+          </div>
+        </label>
+        <label class="modal-list-item">
+          <span class="checkbox-mark"></span>
+          <div class="modal-list-item-content">
+            <div class="modal-list-item-title">
+              <span class="modal-list-item-name">VIP 服务 · 优先级</span>
+              <span class="tag tag-blue">v1.0</span>
+            </div>
+            <div class="modal-list-item-meta">18 条用例 · 边界 case、VIP · 1 个月前</div>
+          </div>
+        </label>
+        <label class="modal-list-item">
+          <span class="checkbox-mark"></span>
+          <div class="modal-list-item-content">
+            <div class="modal-list-item-title">
+              <span class="modal-list-item-name">投诉处理流程</span>
+              <span class="tag tag-blue">v1.5</span>
+            </div>
+            <div class="modal-list-item-meta">31 条用例 · 高优、合规 · 1 个月前</div>
+          </div>
+        </label>
+      </div>
+    </div>
+    <div class="modal-box-foot">
+      <button class="btn btn-sm" onclick="goPage('dataset-new');closeModal('datasetModal')">
+        <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M5.5 1v9M1 5.5h9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+        新建数据集
+      </button>
+      <div style="display: flex; gap: 8px; align-items: center;">
+        <span style="font-size: 12px; color: var(--ink-3); font-family: 'JetBrains Mono', monospace;">已选 <b style="color: var(--ink);">2</b> 个 · <b style="color: var(--ink);">43</b> 条用例</span>
+        <button class="btn btn-sm" onclick="closeModal('datasetModal')">取消</button>
+        <button class="btn btn-sm btn-dark" onclick="closeModal('datasetModal')">确认选择</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============= 评估器选择弹窗 ============= -->
+<div class="modal-mask" id="evaluatorModal">
+  <div class="modal-box">
+    <div class="modal-box-head">
+      <div>
+        <div class="modal-box-title">选择<em>评估器</em></div>
+        <div class="modal-box-sub">单选,定义评分维度与通过标准</div>
+      </div>
+      <button class="icon-btn" onclick="closeModal('evaluatorModal')">
+        <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M3 3l7 7M10 3l-7 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <div class="modal-box-body">
+      <div class="modal-list">
+        <label class="modal-list-item checked">
+          <span class="evaluator-radio" style="border-color:var(--ink);"><span style="display:block;width:8px;height:8px;border-radius:50%;background:var(--ink);"></span></span>
+          <div class="modal-list-item-content">
+            <div class="modal-list-item-title">
+              <span class="modal-list-item-name">客服评估器 · 标准版</span>
+              <span class="tag tag-blue">v1.0</span>
+              <span class="tag tag-dark">AI 生成</span>
+            </div>
+            <div class="modal-list-item-meta">事实准确性 35% / 工具调用 30% / 格式 20% / 安全 15% · 阈值 ≥ 80</div>
+          </div>
+        </label>
+
+        <label class="modal-list-item">
+          <span class="evaluator-radio"></span>
+          <div class="modal-list-item-content">
+            <div class="modal-list-item-title">
+              <span class="modal-list-item-name">客服评估器 · 严格版</span>
+              <span class="tag tag-blue">v1.2</span>
+            </div>
+            <div class="modal-list-item-meta">6 维度 · 含语气、合规、用户满意度 · 阈值 ≥ 90</div>
+          </div>
+        </label>
+
+        <label class="modal-list-item">
+          <span class="evaluator-radio"></span>
+          <div class="modal-list-item-content">
+            <div class="modal-list-item-title">
+              <span class="modal-list-item-name">通用工具调用评估器</span>
+              <span class="tag tag-blue">v2.0</span>
+              <span class="tag tag-dark">AI 生成</span>
+            </div>
+            <div class="modal-list-item-meta">仅评估工具调用正确性,适合 ReAct 类 agent</div>
+          </div>
+        </label>
+
+        <label class="modal-list-item">
+          <span class="evaluator-radio"></span>
+          <div class="modal-list-item-content">
+            <div class="modal-list-item-title">
+              <span class="modal-list-item-name">事实准确性单维度</span>
+              <span class="tag tag-blue">v1.0</span>
+            </div>
+            <div class="modal-list-item-meta">仅检查回复中的事实信息是否与知识库一致</div>
+          </div>
+        </label>
+      </div>
+    </div>
+    <div class="modal-box-foot">
+      <button class="btn btn-sm" onclick="goPage('evaluator-new');closeModal('evaluatorModal')">
+        <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M5.5 1v9M1 5.5h9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+        新建评估器
+      </button>
+      <div style="display: flex; gap: 8px;">
+        <button class="btn btn-sm" onclick="closeModal('evaluatorModal')">取消</button>
+        <button class="btn btn-sm btn-dark" onclick="closeModal('evaluatorModal')">确认</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============= 历史评测弹窗 ============= -->
+<div class="modal-mask" id="historyModal">
+  <div class="modal-box">
+    <div class="modal-box-head">
+      <div>
+        <div class="modal-box-title">历史<em>评测任务</em></div>
+        <div class="modal-box-sub">点击恢复任务进度,或对比版本差异</div>
+      </div>
+      <button class="icon-btn" onclick="closeModal('historyModal')">
+        <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M3 3l7 7M10 3l-7 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <div class="modal-box-body">
+      <div class="modal-list">
+        <label class="modal-list-item checked" onclick="closeModal('historyModal')">
+          <div class="modal-list-item-content">
+            <div class="modal-list-item-title">
+              <span class="modal-list-item-name">退货退款 v1.4 回归</span>
+              <span class="tag tag-amber">进行中</span>
+            </div>
+            <div class="modal-list-item-meta">5 月 7 日 14:23 · refund v1.4.0 · 已评测 8/43 · 通过率 75%</div>
+          </div>
+        </label>
+        <label class="modal-list-item" onclick="closeModal('historyModal')">
+          <div class="modal-list-item-content">
+            <div class="modal-list-item-title">
+              <span class="modal-list-item-name">退货退款 v1.3 完整跑</span>
+              <span class="tag tag-green">已完成</span>
+            </div>
+            <div class="modal-list-item-meta">5 月 7 日 11:08 · refund v1.3.0 · 28/28 · 通过率 66.7%</div>
+          </div>
+        </label>
+        <label class="modal-list-item" onclick="closeModal('historyModal')">
+          <div class="modal-list-item-content">
+            <div class="modal-list-item-title">
+              <span class="modal-list-item-name">订单查询 全场景验证</span>
+              <span class="tag tag-green">已完成</span>
+            </div>
+            <div class="modal-list-item-meta">5 月 6 日 18:45 · order-query v2.1 · 36/36 · 通过率 91.7%</div>
+          </div>
+        </label>
+        <label class="modal-list-item" onclick="closeModal('historyModal')">
+          <div class="modal-list-item-content">
+            <div class="modal-list-item-title">
+              <span class="modal-list-item-name">售后咨询 多轮</span>
+              <span class="tag tag-green">已完成</span>
+            </div>
+            <div class="modal-list-item-meta">5 月 4 日 16:22 · aftersales v1.0 · 24/24 · 通过率 78%</div>
+          </div>
+        </label>
+      </div>
+    </div>
+    <div class="modal-box-foot">
+      <span style="font-size: 12px; color: var(--ink-3); font-family: 'JetBrains Mono', monospace;">本月共 12 次评测</span>
+      <button class="btn btn-sm" onclick="closeModal('historyModal')">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============= Trace 抽屉 ============= -->
+<div class="drawer-mask" id="traceDrawerMask" onclick="closeDrawer('traceDrawer')"></div>
+<div class="drawer" id="traceDrawer">
+  <div class="drawer-head">
+    <div class="drawer-head-info">
+      <div class="drawer-head-eyebrow">TRACE · #<span id="traceCaseNum">001</span></div>
+      <div class="drawer-head-title" id="traceCaseTitle">用户购买 7 天后申请无理由退货,商品已拆封但未使用</div>
+    </div>
+    <div class="drawer-head-actions">
+      <button class="btn btn-sm" onclick="alert('跳转到完整链路跟踪页面')">
+        <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M3 1.5h6v6M9 1.5l-7 7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+        在新页面打开
+      </button>
+      <button class="icon-btn" onclick="closeDrawer('traceDrawer')">
+        <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M3 3l7 7M10 3l-7 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+  </div>
+  <div class="drawer-body">
+    <div class="result-stat-row">
+      <div>
+        <div class="result-stat-label">耗时</div>
+        <div class="result-stat-value">3.2<span style="font-size:14px;color:var(--ink-3);">s</span></div>
+      </div>
+      <div>
+        <div class="result-stat-label">Token</div>
+        <div class="result-stat-value">4.1<span style="font-size:14px;color:var(--ink-3);">k</span></div>
+      </div>
+      <div>
+        <div class="result-stat-label">工具调用</div>
+        <div class="result-stat-value">2<span style="font-size:14px;color:var(--ink-3);"> 次</span></div>
+      </div>
+      <div>
+        <div class="result-stat-label">链路状态</div>
+        <div class="result-stat-value" style="color: var(--success);">✓</div>
+      </div>
+    </div>
+
+    <div style="font-size: 13px; font-weight: 600; margin-bottom: 10px; display: flex; align-items: center; gap: 8px;">
+      执行链路 <span class="tag">5 步</span>
+    </div>
+
+    <div style="margin-bottom: 18px;">
+      <div class="trace-step">
+        <div class="trace-marker">U</div>
+        <div class="trace-content">
+          <div class="head">用户输入 <span class="meta">0.0s</span></div>
+          <div style="color: var(--ink-2);">"我 7 天前买的鞋子,刚拆封发现尺码不对,可以退吗?"</div>
+        </div>
+      </div>
+      <div class="trace-step">
+        <div class="trace-marker llm">L</div>
+        <div class="trace-content">
+          <div class="head">LLM 推理 <span class="meta">+0.8s · 1.2k tok</span></div>
+          <div>识别为退货请求,准备查询订单</div>
+        </div>
+      </div>
+      <div class="trace-step">
+        <div class="trace-marker tool">T</div>
+        <div class="trace-content">
+          <div class="head">工具调用 <span class="meta">+1.5s · query_order</span></div>
+          <div>参数: <code>{order_id: "ORD-2024-7821"}</code></div>
+        </div>
+      </div>
+      <div class="trace-step">
+        <div class="trace-marker llm">L</div>
+        <div class="trace-content">
+          <div class="head">LLM 推理 <span class="meta">+2.6s · 2.1k tok</span></div>
+          <div>订单在 7 天无理由期内,商品状态符合退货条件</div>
+        </div>
+      </div>
+      <div class="trace-step">
+        <div class="trace-marker">A</div>
+        <div class="trace-content">
+          <div class="head">最终回复 <span class="meta">+3.2s</span></div>
+          <div style="color: var(--ink-2);">"您好,您的订单符合 7 天无理由退货条件,我已为您发起退货申请..."</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="drawer-foot">
+    <button class="btn btn-sm">‹ 上一条</button>
+    <div style="display: flex; gap: 6px;">
+      <button class="btn btn-sm">复制 Trace JSON</button>
+      <button class="btn btn-sm btn-dark">基于此评测</button>
+    </div>
+    <button class="btn btn-sm">下一条 ›</button>
+  </div>
+</div>
+
+<!-- ============= 评测结果抽屉 ============= -->
+<div class="drawer-mask" id="resultDrawerMask" onclick="closeDrawer('resultDrawer')"></div>
+<div class="drawer" id="resultDrawer">
+  <div class="drawer-head">
+    <div class="drawer-head-info">
+      <div class="drawer-head-eyebrow">EVALUATION · #<span id="resultCaseNum">003</span></div>
+      <div class="drawer-head-title" id="resultCaseTitle">VIP 用户超过退货期 (45 天) 申请退货,要求特殊处理</div>
+    </div>
+    <div class="drawer-head-actions">
+      <button class="icon-btn" onclick="closeDrawer('resultDrawer')">
+        <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M3 3l7 7M10 3l-7 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+  </div>
+  <div class="drawer-body">
+    <div class="result-stat-row">
+      <div>
+        <div class="result-stat-label">综合得分</div>
+        <div class="result-stat-value" style="color: var(--danger);" id="resultScore">42<span style="font-size:14px;color:var(--ink-3);"> / 100</span></div>
+      </div>
+      <div>
+        <div class="result-stat-label">判定</div>
+        <div class="result-stat-value" style="color: var(--danger);">✗ 失败</div>
+      </div>
+      <div>
+        <div class="result-stat-label">主要归因</div>
+        <div class="result-stat-value" style="font-size: 13px;color:var(--ink);">逻辑判断偏差</div>
+      </div>
+      <div>
+        <div class="result-stat-label">评估器</div>
+        <div class="result-stat-value" style="font-size: 13px;color:var(--ink);">客服·标准版 v1.0</div>
+      </div>
+    </div>
+
+    <div style="font-size: 13px; font-weight: 600; margin-bottom: 10px;">维度判定</div>
+    <div class="dim-result-list">
+      <div class="dim-result-item pass">
+        <div class="eval-icon fact">F</div>
+        <div>
+          <div class="dim-result-name">事实准确性</div>
+          <div class="dim-result-reason">回复内容与政策文档基本一致,引用的退货政策条款无误</div>
+        </div>
+        <div class="dim-result-score pass">90</div>
+      </div>
+      <div class="dim-result-item pass">
+        <div class="eval-icon tool">T</div>
+        <div>
+          <div class="dim-result-name">工具调用正确性</div>
+          <div class="dim-result-reason">正确调用 query_order 查询订单,参数无误</div>
+        </div>
+        <div class="dim-result-score pass">95</div>
+      </div>
+      <div class="dim-result-item pass">
+        <div class="eval-icon format">M</div>
+        <div>
+          <div class="dim-result-name">输出格式合规</div>
+          <div class="dim-result-reason">回复结构符合三段式规范</div>
+        </div>
+        <div class="dim-result-score pass">85</div>
+      </div>
+      <div class="dim-result-item fail">
+        <div class="eval-icon safe">S</div>
+        <div>
+          <div class="dim-result-name">安全与合规 · 硬约束未通过</div>
+          <div class="dim-result-reason">VIP 用户超期场景应触发升级人工流程,模型未识别该业务规则</div>
+        </div>
+        <div class="dim-result-score fail">0</div>
+      </div>
+    </div>
+
+    <div style="margin-top: 18px; padding: 14px; background: var(--warn-soft); border-radius: var(--radius-sm); font-size: 12.5px; color: var(--warn); display: flex; gap: 10px; align-items: flex-start;">
+      <span style="font-size:14px;">💡</span>
+      <div>
+        <b>修复建议:</b>在 Skill prompt 中补充 VIP 用户超期判定规则,或在工具调用中加入 user_level 参数。建议沉淀为回归用例。
+      </div>
+    </div>
+  </div>
+  <div class="drawer-foot">
+    <button class="btn btn-sm">‹ 上一条</button>
+    <div style="display: flex; gap: 6px;">
+      <button class="btn btn-sm">沉淀为回归用例</button>
+      <button class="btn btn-sm">查看 Trace</button>
+      <button class="btn btn-sm btn-dark">重新评测</button>
+    </div>
+    <button class="btn btn-sm">下一条 ›</button>
+  </div>
+</div>
+
+<!-- 行操作菜单 popover -->
+<div class="row-menu" id="rowMenu">
+  <div class="row-menu-item">
+    <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M2 2h9v9H2V2zM5 5h3M5 7h2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+    查看用例详情
+  </div>
+  <div class="row-menu-item">
+    <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M2 6.5a4.5 4.5 0 119 0 4.5 4.5 0 01-9 0zM6.5 4v3M6.5 8v.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+    重新执行
+  </div>
+  <div class="row-menu-item">
+    <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M3 6.5L5.5 9 10 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    重新评测
+  </div>
+  <div class="row-menu-divider"></div>
+  <div class="row-menu-item">
+    <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M3 5h7M3 8h5M2 2h9v9H2V2z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+    沉淀为回归用例
+  </div>
+  <div class="row-menu-item danger">
+    <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M3 4h7l-.5 7.5h-6L3 4zM5 6v3M8 6v3M2 4h9M5 4V2.5h3V4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+    从评测中移除
+  </div>
+</div>
+
+<!-- ============ AI GENERATE MODAL ============ -->
+<div class="modal-backdrop" id="aigenModal">
+  <div class="modal">
+    <div class="modal-head">
+      <div>
+        <div class="modal-title">AI 自动生成<em>评估器</em></div>
+        <div style="font-size: 12px; color: var(--ink-3); margin-top: 3px;">基于 Skill 内容与样本用例,智能推断关键评估维度</div>
+      </div>
+      <button class="icon-btn" onclick="document.getElementById('aigenModal').classList.remove('active')">
+        <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M3 3l7 7M10 3l-7 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div class="ai-gen-state">
+        <div class="ai-gen-icon">✱</div>
+        <div style="font-family: 'Instrument Serif', serif; font-size: 22px; letter-spacing: -0.01em;">正在分析 Skill 内容...</div>
+        <div style="font-size: 12.5px; color: var(--ink-3); margin-top: 6px;">预计 15 秒,可在后台运行</div>
+      </div>
+
+      <div class="ai-gen-steps">
+        <div class="ai-step done">
+          <div class="check"></div>
+          <div>读取 Skill prompt 与工具定义</div>
+        </div>
+        <div class="ai-step done">
+          <div class="check"></div>
+          <div>分析 12 条样本用例的输入分布</div>
+        </div>
+        <div class="ai-step active">
+          <div class="check"></div>
+          <div>识别核心成功标准与硬约束</div>
+        </div>
+        <div class="ai-step">
+          <div class="check"></div>
+          <div>生成评估维度与判定 prompt</div>
+        </div>
+        <div class="ai-step">
+          <div class="check"></div>
+          <div>预跑样本验证评估器效果</div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span style="font-size: 11.5px; color: var(--ink-3); font-family: 'JetBrains Mono', monospace;">使用模型 · claude-sonnet-4-7</span>
+      <div style="display: flex; gap: 6px;">
+        <button class="btn btn-sm" onclick="document.getElementById('aigenModal').classList.remove('active')">取消</button>
+        <button class="btn btn-sm" disabled style="opacity: 0.5;">生成中...</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ TRACE MODAL ============ -->
+<div class="modal-backdrop" id="traceModal">
+  <div class="modal" style="width: 820px;">
+    <div class="modal-head">
+      <div>
+        <div class="modal-title">Trace 详情<em> · </em>#TC-003</div>
+        <div style="font-size: 12px; color: var(--ink-3); margin-top: 3px;">VIP 用户超过退货期 (45 天) 申请退货,要求特殊处理</div>
+      </div>
+      <button class="icon-btn" onclick="document.getElementById('traceModal').classList.remove('active')">
+        <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M3 3l7 7M10 3l-7 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div style="display: grid; grid-template-columns: repeat(4,1fr); gap: 10px; margin-bottom: 18px; padding: 12px; background: var(--bg-soft); border-radius: var(--radius-sm);">
+        <div>
+          <div style="font-size: 9.5px; color: var(--ink-3); font-family:'JetBrains Mono', monospace; text-transform: uppercase;">综合分</div>
+          <div style="font-family: 'Instrument Serif', serif; font-size: 22px; color: var(--danger);">42<span style="font-size: 13px; color: var(--ink-3);"> / 100</span></div>
+        </div>
+        <div>
+          <div style="font-size: 9.5px; color: var(--ink-3); font-family:'JetBrains Mono', monospace; text-transform: uppercase;">状态</div>
+          <div style="font-family: 'Instrument Serif', serif; font-size: 22px; color: var(--danger);">失败</div>
+        </div>
+        <div>
+          <div style="font-size: 9.5px; color: var(--ink-3); font-family:'JetBrains Mono', monospace; text-transform: uppercase;">耗时</div>
+          <div style="font-family: 'Instrument Serif', serif; font-size: 22px;">8.1s</div>
+        </div>
+        <div>
+          <div style="font-size: 9.5px; color: var(--ink-3); font-family:'JetBrains Mono', monospace; text-transform: uppercase;">Token</div>
+          <div style="font-family: 'Instrument Serif', serif; font-size: 22px;">9.2k</div>
+        </div>
+      </div>
+
+      <div style="font-size: 12.5px; font-weight: 600; margin-bottom: 10px; display: flex; align-items: center; gap: 6px;">
+        执行链路 <span class="tag">5 步</span>
+      </div>
+
+      <div style="margin-bottom: 18px;">
+        <div class="trace-step">
+          <div class="trace-marker">U</div>
+          <div class="trace-content">
+            <div class="head">用户输入 <span class="meta">0.0s</span></div>
+            <div style="color: var(--ink-2);">"我是 VIP 客户,45 天前买的鞋子穿了几次发现不合脚,能退吗?"</div>
+          </div>
+        </div>
+        <div class="trace-step">
+          <div class="trace-marker llm">L</div>
+          <div class="trace-content">
+            <div class="head">LLM 推理 <span class="meta">+1.2s · 1.4k tok</span></div>
+            <div>判断为「超期退货」,准备调用 <code>query_order</code></div>
+          </div>
+        </div>
+        <div class="trace-step">
+          <div class="trace-marker tool">T</div>
+          <div class="trace-content">
+            <div class="head">工具调用 <span class="meta">+2.8s · query_order</span></div>
+            <div>参数: <code>{order_id: "VIP-2024-3892"}</code> · 返回: VIP 等级 + 超期 15 天</div>
+          </div>
+        </div>
+        <div class="trace-step">
+          <div class="trace-marker llm">L</div>
+          <div class="trace-content">
+            <div class="head">LLM 推理 <span class="meta">+5.4s · 4.2k tok</span></div>
+            <div style="color: var(--ink-2);">未识别 VIP 等级与超期的特殊关系,直接走标准超期拒绝流程</div>
+          </div>
+        </div>
+        <div class="trace-step">
+          <div class="trace-marker">A</div>
+          <div class="trace-content">
+            <div class="head">最终回复 <span class="meta">+8.1s</span></div>
+            <div style="color: var(--ink-2);">"很抱歉,您的订单已超过 30 天退货期限,根据政策无法办理退货..."</div>
+          </div>
+        </div>
+      </div>
+
+      <div style="font-size: 12.5px; font-weight: 600; margin-bottom: 10px;">评估器判定</div>
+      <div style="display: grid; gap: 6px;">
+        <div style="display: grid; grid-template-columns: 22px 1fr 50px; gap: 10px; align-items: center; padding: 9px 11px; background: var(--bg-soft); border-radius: var(--radius-sm); font-size: 12px;">
+          <div class="eval-icon fact" style="width: 20px; height: 20px; font-size: 10px;">F</div>
+          <div>
+            <div style="font-weight: 500;">事实准确性</div>
+            <div style="font-size: 11px; color: var(--ink-3); margin-top: 1px;">回复内容与政策文档基本一致</div>
+          </div>
+          <div style="font-family: 'JetBrains Mono', monospace; color: var(--success); font-weight: 700; text-align: right;">90</div>
+        </div>
+        <div style="display: grid; grid-template-columns: 22px 1fr 50px; gap: 10px; align-items: center; padding: 9px 11px; background: var(--bg-soft); border-radius: var(--radius-sm); font-size: 12px;">
+          <div class="eval-icon tool" style="width: 20px; height: 20px; font-size: 10px;">T</div>
+          <div>
+            <div style="font-weight: 500;">工具调用正确性</div>
+            <div style="font-size: 11px; color: var(--ink-3); margin-top: 1px;">正确调用 query_order,参数无误</div>
+          </div>
+          <div style="font-family: 'JetBrains Mono', monospace; color: var(--success); font-weight: 700; text-align: right;">95</div>
+        </div>
+        <div style="display: grid; grid-template-columns: 22px 1fr 50px; gap: 10px; align-items: center; padding: 9px 11px; background: var(--danger-soft); border-radius: var(--radius-sm); font-size: 12px;">
+          <div class="eval-icon safe" style="width: 20px; height: 20px; font-size: 10px;">S</div>
+          <div>
+            <div style="font-weight: 500;">逻辑判断 (硬约束未通过)</div>
+            <div style="font-size: 11px; color: var(--danger); margin-top: 1px;">VIP 用户超期场景应升级人工,未触发升级流程</div>
+          </div>
+          <div style="font-family: 'JetBrains Mono', monospace; color: var(--danger); font-weight: 700; text-align: right;">0</div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-sm">‹ 上一条</button>
+      <div style="display: flex; gap: 6px;">
+        <button class="btn btn-sm">沉淀为回归用例</button>
+        <button class="btn btn-sm btn-primary">查看 Prompt</button>
+      </div>
+      <button class="btn btn-sm">下一条 ›</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ===== 多页路由 =====
+  function goPage(name) {
+    document.querySelectorAll('.page').forEach(p => p.style.display = 'none');
+    const target = document.getElementById('page-' + name);
+    if (target) target.style.display = 'block';
+    document.querySelector('.content').scrollTo({ top: 0, behavior: 'smooth' });
+
+    // 切换 topbar 标题与 tabs 可见性
+    const titleMap = {
+      'eval': '调测分析',
+      'datasets': '评测数据集',
+      'dataset-new': '评测数据集',
+      'evaluators': '评估器',
+      'evaluator-new': '评估器'
+    };
+    const navMap = {
+      'eval': '调测分析',
+      'datasets': '评测数据集',
+      'dataset-new': '评测数据集',
+      'evaluators': '评估器',
+      'evaluator-new': '评估器'
+    };
+    document.getElementById('topbarTitle').textContent = titleMap[name] || '';
+    const tabs = document.getElementById('topbarTabs');
+    const actions = document.getElementById('topbarActions');
+    if (name === 'eval') {
+      tabs.style.display = 'flex';
+      actions.style.display = 'flex';
+    } else {
+      tabs.style.display = 'none';
+      actions.style.display = 'none';
+    }
+
+    // 同步左侧导航高亮
+    const targetName = navMap[name];
+    document.querySelectorAll('.nav-item').forEach(item => {
+      item.classList.remove('active');
+      if (targetName && item.textContent.trim() === targetName) {
+        item.classList.add('active');
+      }
+    });
+  }
+
+  // 创建评估器: 模式切换
+  function toggleCreationMode(mode) {
+    document.querySelectorAll('.creation-card').forEach(c => c.classList.remove('selected'));
+    event.currentTarget.classList.add('selected');
+    const aiConfig = document.getElementById('aiGenConfig');
+    if (mode === 'manual') {
+      aiConfig.style.opacity = '0.4';
+      aiConfig.style.pointerEvents = 'none';
+    } else {
+      aiConfig.style.opacity = '1';
+      aiConfig.style.pointerEvents = 'auto';
+    }
+  }
+
+  // 触发 AI 生成
+  function triggerAiGen() {
+    document.getElementById('aiTrigger').style.display = 'none';
+    document.getElementById('aiGenerating').style.display = 'block';
+    setTimeout(() => {
+      document.getElementById('aiGenerating').style.display = 'none';
+      document.getElementById('aiResult').style.display = 'block';
+      document.getElementById('aiResult').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 2500);
+  }
+
+  // 偏好标签切换
+  document.querySelectorAll('.pref-tag').forEach(tag => {
+    tag.addEventListener('click', e => {
+      e.preventDefault();
+      tag.classList.toggle('selected');
+      const cb = tag.querySelector('input[type=checkbox]');
+      if (cb) cb.checked = tag.classList.contains('selected');
+    });
+  });
+
+  // ===== 工作台表格中心交互 =====
+
+  // 全选/取消全选
+  function toggleSelectAll(cb) {
+    const rows = document.querySelectorAll('#caseTableBody .row-checkbox input');
+    rows.forEach(r => r.checked = cb.checked);
+    updateSelection();
+  }
+
+  // 更新选中状态:显示批量操作工具栏
+  function updateSelection() {
+    const rows = document.querySelectorAll('#caseTableBody .row-checkbox input:checked');
+    const count = rows.length;
+    const status = document.getElementById('toolbarStatus');
+    const bulk = document.getElementById('bulkActions');
+    if (count > 0) {
+      status.innerHTML = '已选 <b style="color:var(--ink);">' + count + '</b> 条';
+      bulk.style.display = 'flex';
+    } else {
+      status.textContent = '共 43 条用例';
+      bulk.style.display = 'none';
+    }
+  }
+
+  // 单条执行
+  function rowExecute(btn, caseId) {
+    // 切换为加载状态
+    btn.classList.remove('primary');
+    btn.classList.add('loading');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>执行中';
+
+    const row = btn.closest('tr');
+    const statusCell = row.querySelector('.row-status');
+    statusCell.className = 'row-status running';
+    statusCell.textContent = '⌛ 执行中';
+
+    setTimeout(() => {
+      // 完成: 执行按钮变成 Trace
+      btn.className = 'row-action-btn done';
+      btn.innerHTML = '<svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M2 5.5h7M5.5 2v7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>Trace';
+      btn.disabled = false;
+      btn.onclick = function() { openTraceDrawer(caseId); };
+
+      // 状态变成"待评测"
+      statusCell.className = 'row-status executed';
+      statusCell.textContent = '● 待评测';
+
+      // 评测按钮激活
+      const evalBtn = row.querySelector('td:nth-child(7) .row-action-btn');
+      evalBtn.classList.remove('disabled');
+      evalBtn.classList.add('primary');
+      evalBtn.disabled = false;
+      evalBtn.onclick = function() { rowEvaluate(evalBtn, caseId); };
+    }, 1500 + Math.random() * 1000);
+  }
+
+  // 单条评测
+  function rowEvaluate(btn, caseId) {
+    btn.classList.remove('primary');
+    btn.classList.add('loading');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>评测中';
+
+    const row = btn.closest('tr');
+    const statusCell = row.querySelector('.row-status');
+    statusCell.className = 'row-status running';
+    statusCell.textContent = '⌛ 评测中';
+
+    setTimeout(() => {
+      // 模拟评分(随机演示)
+      const score = Math.floor(60 + Math.random() * 40);
+      const isPass = score >= 80;
+
+      btn.className = 'row-action-btn done score-btn';
+      btn.disabled = false;
+      btn.innerHTML = '<span class="score-num ' + (isPass ? 'pass' : 'fail') + '">' + score + '</span>';
+      btn.onclick = function() { openResultDrawer(caseId); };
+
+      statusCell.className = 'row-status ' + (isPass ? 'pass' : 'fail');
+      statusCell.textContent = isPass ? '✓ 已评测' : '✗ 失败';
+
+      if (!isPass) row.classList.add('row-fail');
+
+      // 更新底部进度
+      updateOverallProgress();
+    }, 1200 + Math.random() * 800);
+  }
+
+  function updateOverallProgress() {
+    const total = document.querySelectorAll('#caseTableBody tr').length;
+    const evaluated = document.querySelectorAll('#caseTableBody .score-btn').length;
+    // 简化:不真的实时算,占位
+  }
+
+  // 批量操作
+  function bulkAction(action) {
+    const rows = document.querySelectorAll('#caseTableBody .row-checkbox input:checked');
+    if (action === 'execute') {
+      rows.forEach(cb => {
+        const tr = cb.closest('tr');
+        const execBtn = tr.querySelector('td:nth-child(6) .row-action-btn');
+        if (execBtn && execBtn.classList.contains('primary')) {
+          rowExecute(execBtn, parseInt(tr.querySelector('.num-col').textContent));
+        }
+      });
+    } else if (action === 'evaluate') {
+      rows.forEach(cb => {
+        const tr = cb.closest('tr');
+        const evalBtn = tr.querySelector('td:nth-child(7) .row-action-btn');
+        if (evalBtn && evalBtn.classList.contains('primary')) {
+          rowEvaluate(evalBtn, parseInt(tr.querySelector('.num-col').textContent));
+        }
+      });
+    }
+  }
+
+  // 状态筛选
+  function filterCases(status) {
+    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    event.currentTarget.classList.add('active');
+    const rows = document.querySelectorAll('#caseTableBody tr');
+    rows.forEach(r => {
+      if (status === 'all') r.style.display = '';
+      else if (status === 'failed') r.style.display = r.classList.contains('row-fail') ? '' : 'none';
+      else r.style.display = r.dataset.status === status ? '' : 'none';
+    });
+  }
+
+  // ===== 弹窗 =====
+  function openModal(id) {
+    document.getElementById(id).classList.add('show');
+  }
+  function closeModal(id) {
+    document.getElementById(id).classList.remove('show');
+  }
+
+  // 弹窗内列表项点击切换
+  document.querySelectorAll('.modal-list-item').forEach(item => {
+    item.addEventListener('click', e => {
+      // radio 模式: 同一弹窗内单选
+      const isRadio = item.querySelector('.evaluator-radio');
+      if (isRadio) {
+        const parent = item.closest('.modal-list');
+        if (parent) parent.querySelectorAll('.modal-list-item').forEach(i => {
+          i.classList.remove('checked');
+          const r = i.querySelector('.evaluator-radio');
+          if (r) {
+            r.style.borderColor = 'var(--line-strong)';
+            r.innerHTML = '';
+          }
+        });
+        item.classList.add('checked');
+        const r = item.querySelector('.evaluator-radio');
+        if (r) {
+          r.style.borderColor = 'var(--ink)';
+          r.innerHTML = '<span style="display:block;width:8px;height:8px;border-radius:50%;background:var(--ink);"></span>';
+        }
+      } else {
+        // checkbox 模式: 多选
+        item.classList.toggle('checked');
+        const m = item.querySelector('.checkbox-mark');
+        if (m) {
+          if (item.classList.contains('checked')) {
+            m.style.borderColor = 'var(--ink)';
+            m.style.background = 'var(--ink)';
+            m.innerHTML = '<span style="color:#fff;font-size:10px;font-weight:700;">✓</span>';
+          } else {
+            m.style.borderColor = 'var(--line-strong)';
+            m.style.background = 'var(--bg-elev)';
+            m.innerHTML = '';
+          }
+        }
+      }
+    });
+  });
+
+  // ===== 抽屉 =====
+  function openTraceDrawer(caseId) {
+    document.getElementById('traceCaseNum').textContent = String(caseId).padStart(3, '0');
+    document.getElementById('traceDrawerMask').classList.add('show');
+    document.getElementById('traceDrawer').classList.add('show');
+  }
+  function openResultDrawer(caseId) {
+    document.getElementById('resultCaseNum').textContent = String(caseId).padStart(3, '0');
+    document.getElementById('resultDrawerMask').classList.add('show');
+    document.getElementById('resultDrawer').classList.add('show');
+  }
+  function closeDrawer(id) {
+    document.getElementById(id).classList.remove('show');
+    document.getElementById(id + 'Mask').classList.remove('show');
+  }
+
+  // 行操作菜单 (popover)
+  function openCaseMenu(e, caseId) {
+    e.stopPropagation();
+    const menu = document.getElementById('rowMenu');
+    const rect = e.currentTarget.getBoundingClientRect();
+    menu.style.top = (rect.bottom + 4) + 'px';
+    menu.style.left = (rect.right - 160) + 'px';
+    menu.classList.add('show');
+  }
+  document.addEventListener('click', e => {
+    if (!e.target.closest('.row-more') && !e.target.closest('.row-menu')) {
+      const menu = document.getElementById('rowMenu');
+      if (menu) menu.classList.remove('show');
+    }
+  });
+
+  // ESC 关闭弹窗/抽屉
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') {
+      document.querySelectorAll('.modal-mask.show, .drawer.show, .drawer-mask.show').forEach(el => el.classList.remove('show'));
+    }
+  });
+
+    document.querySelectorAll('.case-row').forEach(row => {
+    row.addEventListener('click', e => {
+      if (e.target.closest('.icon-btn') || e.target.closest('.btn')) return;
+      row.classList.toggle('selected');
+    });
+  });
+
+  // Dataset cards toggle
+  document.querySelectorAll('.dataset-card:not(.empty-add)').forEach(card => {
+    card.addEventListener('click', e => {
+      const checkbox = card.querySelector('input[type=checkbox]');
+      if (checkbox && e.target !== checkbox) {
+        checkbox.checked = !checkbox.checked;
+      }
+      card.classList.toggle('selected', checkbox && checkbox.checked);
+    });
+  });
+
+  // Evaluator radio toggle
+  document.querySelectorAll('.evaluator-select-item').forEach(item => {
+    item.addEventListener('click', () => {
+      document.querySelectorAll('.evaluator-select-item').forEach(i => i.classList.remove('selected'));
+      item.classList.add('selected');
+      const radio = item.querySelector('input[type=radio]');
+      if (radio) radio.checked = true;
+    });
+  });
+
+  document.querySelectorAll('.modal-backdrop').forEach(m => {
+    m.addEventListener('click', e => {
+      if (e.target === m) m.classList.remove('active');
+    });
+  });
+</script>
+
+</body>
+</html>

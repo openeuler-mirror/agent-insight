@@ -223,19 +223,18 @@ ${actualSteps}
 ---
 
 你的任务是：
-1. 为每个实际执行步骤生成一条匹配记录（放在 matches 数组）
-2. 将实际步骤与预期流程匹配，或标记为意外步骤
+1. 为每个输入的 evaluationStep 生成一条匹配记录（放在 matches 数组）
+2. 将 evaluationStep 与预期流程匹配，或标记为意外步骤
 3. 找出所有未被实际执行匹配的预期步骤（放在 skippedExpectedSteps 数组）
-4. 为有问题的步骤提供详细分析
+4. 为有问题的步骤提供简短分析
 
 请只用 JSON 对象回复，格式如下：
 {
   "matches": [
     {
+      "evaluationStepId": "main-0",
       "expectedStepId": "step-1",
       "expectedStepName": "预期流程中的步骤名称",
-      "actualStepIndex": 0,
-      "actualAction": "具体的操作描述（动词+对象格式）",
       "matchStatus": "matched",
       "matchReason": "简要解释"
     }
@@ -257,7 +256,7 @@ ${actualSteps}
   },
   "problemSteps": [
     {
-      "stepIndex": 2,
+      "evaluationStepId": "main-2",
       "stepName": "步骤名称",
       "status": "unexpected",
       "problem": "问题描述",
@@ -270,22 +269,24 @@ ${actualSteps}
 - "matched": 步骤与预期流程匹配良好（符合预期）
 - "partial": 步骤部分匹配，意图正确但执行方式有问题（部分偏离）
 - "unexpected": 步骤完全不在预期流程中（非预期调用）
+- "non_business": 步骤是上下文收集、环境预热、读取 Skill/文件/日志、背景探索等过渡操作，不属于主 Skill 业务流程
 
 重要规则：
-1. matches 数组：必须包含每个实际执行步骤的记录，不能遗漏任何实际步骤
-2. matches 数组中的 matchStatus 只能是 "matched"、"partial" 或 "unexpected"，不能是 "skipped"
+1. matches 数组：必须包含每个输入 evaluationStep 的记录，不能遗漏
+2. matches 数组中的 matchStatus 只能是 "matched"、"partial"、"unexpected" 或 "non_business"，不能是 "skipped"
 3. skippedExpectedSteps 数组：包含所有未被实际执行匹配的预期步骤（即被跳过的预期步骤）
-4. actualAction 命名规范：
-   - 格式：动词 + 对象 + （可选）目的/结果
-   - 必须具体、明确，禁止模糊命名
-   - 正确示例："读取配置文件获取数据库连接参数"、"调用天气API获取城市天气数据"
-   - 禁止示例："检查配置"、"分析结果"、"处理数据"（太模糊）
-5. problemSteps 只包含有问题的步骤（status 为 partial 或 unexpected 的步骤）
+4. 必须原样返回输入里的 evaluationStepId；不要返回 actualStepIndex，不要使用数组下标代替 evaluationStepId
+5. problemSteps 只包含有问题的 evaluationStep（status 为 partial 或 unexpected）；non_business 不写入 problemSteps
+6. problemSteps 的 problem/suggestion 必须简短，避免重复复制同一段长分析
+7. 实际执行步骤已经是主 Skill 视角的摘要；如果某一步是“委派/调用子 Skill”，只判断这次委派是否属于主 Skill 预期，不要展开分析子 Skill 内部行为
+8. 输入中的 uiStepIndexes 只用于定位，不要改写步骤标题或描述
+9. 过渡操作包括：背景代理探索、读取/加载 SKILL.md、grep/less/cat/sed/head/tail 查看原始上下文、读取日志或文件以收集上下文、环境初始化/工作区检查。它们不应被判为 unexpected。
 
 评分指南：
 - matched: 贡献 1.0 分
 - partial: 贡献 0.5 分  
 - unexpected: 贡献 -0.2 分（惩罚）
+- non_business: 不参与评分分子和分母
 - skipped: 贡献 0 分
 - orderViolations: 每个 -0.1 分惩罚
 `;

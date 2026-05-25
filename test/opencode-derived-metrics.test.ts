@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-import { deriveOpencodeExecutionFields } from "@/lib/opencode-derived-metrics"
+import { deriveOpencodeExecutionFields } from "@/lib/engine/observability/opencode-derived-metrics"
 
 test("opencode: deriveOpencodeExecutionFields is deterministic and prefers top-level assistant final_result", () => {
   const interactions = [

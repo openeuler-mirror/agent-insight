@@ -84,6 +84,23 @@ bash scripts/restart.sh
 curl -sSf http://<IP>:<PORT>/api/setup | bash
 ```
 
+### 开发 mock 数据（可选）
+
+新 dev 想直接看到 `/skill-opt` 页面有 skill 列表 + 优化点列表，可以注入一份 mock
+数据。不依赖真实评估器或 trace 数据，本地开发联调用。
+
+```bash
+# 注入 mock 数据：3 个 skill + 5 个优化点
+# （pdf-extractor / doc-summarizer / chart-gen，全部 source='static'）
+npm run seed:skill-opt
+
+# 清理 mock 数据（cascade 删 SkillVersion / Evaluation / SkillIssue）
+npm run clean:skill-opt
+```
+
+数据归属 `user='skill-insight@huawei.com'`（项目默认登录账号）；脚本幂等，重跑安全。
+脚本头部注释里有详细说明。
+
 ## 快速上手
 
 以下以 OpenCode 为例，演示完整的生成 → 评测 → 优化流程。

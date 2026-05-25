@@ -13,6 +13,7 @@
     "isolatedModules": true,
     "jsx": "react-jsx",
     "incremental": true,
+    "baseUrl": ".",
     "plugins": [
       {
         "name": "next"
@@ -30,5 +31,5 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": ["node_modules", "scripts/opencode_tui_plugin.tsx", "opencode/**", "exclude/**", "data/**"]
+  "exclude": ["node_modules", "scripts/opencode_tui_plugin.tsx", "opencode/**", "exclude/**", "data/**", "src/example/**", "3rd-pro/**"]
 }

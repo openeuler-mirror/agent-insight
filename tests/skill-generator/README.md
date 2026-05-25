@@ -126,7 +126,6 @@ graph TB
   ✓ SKILL.md ≤ 500 行
 
 **L2 检查项:**
-  ✓ keywords 是数组且非空
   ✓ scripts/*.sh 语法检查 (bash -n)
   ✓ references/ 下的引用路径在 SKILL.md 中被提及
   ✓ 无空目录

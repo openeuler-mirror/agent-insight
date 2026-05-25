@@ -87,6 +87,24 @@ bash scripts/restart.sh
 curl -sSf http://<IP>:<PORT>/api/setup | bash
 ```
 
+### Mock Data for Development (Optional)
+
+To populate `/skill-opt` with sample skills + issues for local dev (without
+running real evaluators or collecting traces):
+
+```bash
+# Seed mock data: 3 skills + 5 issues
+# (pdf-extractor / doc-summarizer / chart-gen, all source='static')
+npm run seed:skill-opt
+
+# Clean mock data (cascade-deletes SkillVersion / Evaluation / SkillIssue)
+npm run clean:skill-opt
+```
+
+All seeded rows are owned by `user='skill-insight@huawei.com'` (the default
+account). Both scripts are idempotent — safe to re-run. See script headers for
+implementation details.
+
 ## Quick Start
 
 The following example uses OpenCode to demonstrate the complete Generate → Evaluate → Optimize workflow.

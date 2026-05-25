@@ -3,12 +3,13 @@
 import dynamic from 'next/dynamic';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useMemo, useState } from 'react';
-import ExecutionFlowComparison from '@/components/ExecutionFlowComparison';
-import { SkillLinks } from '@/components/SkillLink';
-import { useAuth } from '@/lib/auth-context';
-import { useTheme, useThemeColors } from '@/lib/theme-context';
-import { useLocale } from '@/lib/locale-context';
-import { apiFetch } from '@/lib/api';
+import ExecutionFlowComparison from '@/components/eval/ExecutionFlowComparison';
+import AgentTraceView from '@/components/observe/AgentTraceView';
+import { SkillLinks } from '@/components/skills/SkillLink';
+import { useAuth } from '@/lib/auth/auth-context';
+import { useTheme, useThemeColors } from '@/lib/client/theme-context';
+import { useLocale } from '@/lib/client/locale-context';
+import { apiFetch } from '@/lib/client/api';
 
 const Line = dynamic(() => import('recharts').then(mod => mod.Line), { ssr: false });
 const LineChart = dynamic(() => import('recharts').then(mod => mod.LineChart), { ssr: false });
@@ -47,7 +48,7 @@ interface Execution {
     model?: string;
     final_result?: string;
     is_skill_correct?: boolean;
-    skill_recall_rate?: number | null;
+    skill_trigger_rate?: number | null;
     is_answer_correct?: boolean;
     answer_score?: number;
     judgment_reason?: string;
@@ -100,11 +101,6 @@ interface EvaluationItem {
     match_score: number;
     explanation: string;
     weight: number;
-    isLoopGroup?: boolean;
-    actionCount?: number;
-    isLoopSubAction?: boolean;
-    isLoopGroupHeader?: boolean;
-    isLoopAction?: boolean;
 }
 
 function parseEvaluationItemsFromReason(judgmentReason: string): EvaluationItem[] {
@@ -128,67 +124,8 @@ function parseEvaluationItemsFromReason(judgmentReason: string): EvaluationItem[
             continue;
         }
         
-        // 匹配循环组标题（新格式）- 跳过不显示
-        const loopGroupHeaderMatch = line.match(/\*\*Key Action\*\*\s*\[循环组:\s*(.*?)\]\s*\(包含\s*(\d+)\s*个动作\):$/);
-        if (loopGroupHeaderMatch) {
-            // 跳过循环组标题，不添加到items中
-            continue;
-        }
-        
-        // 匹配循环组内的动作（缩进的行，新格式）
-        const loopActionMatch = line.match(/^\s+-\s*\*\*Key Action\*\*\s*\[(.*?)\]\s*\(循环\):\s*(\d+)%\s*match\.\s*(.+?)\s*\(Weight:\s*([\d.]+)\)/);
-        if (loopActionMatch) {
-            items.push({
-                id: `KA-${itemIndex.ka++}`,
-                type: 'key_action',
-                content: loopActionMatch[1].replace(/\.{3}$/, ''),
-                match_score: parseInt(loopActionMatch[2]) / 100,
-                explanation: loopActionMatch[3].trim(),
-                weight: parseFloat(loopActionMatch[4]),
-                isLoopAction: true
-            });
-            continue;
-        }
-        
-        // 匹配旧的循环组格式（向后兼容）
-        const loopGroupMatch = line.match(/\*\*Key Action\*\*\s*\[循环组:\s*(.*?)\]\s*:\s*(\d+)%\s*match\.\s*(.+?)\s*\(Weight:\s*([\d.]+),\s*包含\s*(\d+)\s*个动作\)/);
-        if (loopGroupMatch) {
-            const loopCondition = loopGroupMatch[1];
-            const matchScore = parseInt(loopGroupMatch[2]) / 100;
-            const explanation = loopGroupMatch[3].trim();
-            const weight = parseFloat(loopGroupMatch[4]);
-            const actionCount = parseInt(loopGroupMatch[5]);
-            
-            items.push({
-                id: `KA-${itemIndex.ka++}`,
-                type: 'key_action',
-                content: `[循环组: ${loopCondition}]`,
-                match_score: matchScore,
-                explanation: explanation,
-                weight: weight,
-                isLoopGroup: true,
-                actionCount: actionCount
-            });
-            continue;
-        }
-        
-        // 匹配旧的循环组内的子动作（向后兼容）
-        const loopSubActionMatch = line.match(/^\s+-\s*\[(.*?)\]:\s*(\d+)%\s*match\.\s*(.+)/);
-        if (loopSubActionMatch) {
-            items.push({
-                id: `KA-${itemIndex.ka++}`,
-                type: 'key_action',
-                content: loopSubActionMatch[1].replace(/\.{3}$/, ''),
-                match_score: parseInt(loopSubActionMatch[2]) / 100,
-                explanation: loopSubActionMatch[3].trim(),
-                weight: 0,  // 子动作不计入总分
-                isLoopSubAction: true
-            });
-            continue;
-        }
-        
-        // 匹配有 Weight 的 Key Action（包括可选、衔接等类型）
-        const kaMatchWithWeight = line.match(/\*\*Key Action\*\*\s*\[(.*?)\](?:\s*\(.*?\))?\s*:\s*(\d+)%\s*match\.\s*(.+?)\s*\(Weight:\s*([\d.]+)/);
+        // 匹配有 Weight 的 Key Action
+        const kaMatchWithWeight = line.match(/\*\*Key Action\*\*\s*\[(.*?)\]\s*.*?:\s*(\d+)%\s*match\.\s*(.+?)\s*\(Weight:\s*([\d.]+)\)/);
         if (kaMatchWithWeight) {
             items.push({
                 id: `KA-${itemIndex.ka++}`,
@@ -202,7 +139,7 @@ function parseEvaluationItemsFromReason(judgmentReason: string): EvaluationItem[
         }
         
         // 匹配不计入总分的 Key Action（没有 Weight）
-        const kaMatchSkipped = line.match(/\*\*Key Action\*\*\s*\[(.*?)\](?:\s*\(.*?\))?\s*:\s*(\d+)%\s*match\.\s*(.+?)\s*\(该分支未触发，不计入总分\)/);
+        const kaMatchSkipped = line.match(/\*\*Key Action\*\*\s*\[(.*?)\]\s*.*?:\s*(\d+)%\s*match\.\s*(.+?)\s*\(该分支未触发，不计入总分\)/);
         if (kaMatchSkipped) {
             items.push({
                 id: `KA-${itemIndex.ka++}`,
@@ -846,6 +783,7 @@ function DetailPage() {
     const [isDetailsExpanded, setIsDetailsExpanded] = useState(true);
     const [isSessionJsonExpanded, setIsSessionJsonExpanded] = useState(true);
     const [isAnalysisExpanded, setIsAnalysisExpanded] = useState(true);
+    const [isAgentTraceExpanded, setIsAgentTraceExpanded] = useState(true);
 
     useEffect(() => {
         const tid = currentRecord
@@ -860,7 +798,7 @@ function DetailPage() {
         }
 
         const fetchOnce = (id: string) =>
-            apiFetch(`/api/session?taskId=${encodeURIComponent(id)}`)
+            apiFetch(`/api/observe/session?taskId=${encodeURIComponent(id)}`)
                 .then(res => res.ok ? res.json() : { error: 'Error' })
                 .then(json => {
                     if (json && !json.error) return json;
@@ -880,7 +818,7 @@ function DetailPage() {
     }, [currentRecord]);
 
     useEffect(() => {
-        let url = '/api/data?';
+        let url = '/api/observe/data?';
         const params = new URLSearchParams();
         if (user) params.append('user', user);
         if (query) params.append('query', query);
@@ -1070,15 +1008,15 @@ function DetailPage() {
             };
         });
 
-        const skillRecallRateData = items.map(item => {
+        const skillTriggerRateData = items.map(item => {
             const records = filteredData.filter(d => d[key] === item);
-            const recordsWithRecallRate = records.filter(r => r.skill_recall_rate !== null && r.skill_recall_rate !== undefined);
-            const totalCount = recordsWithRecallRate.length;
-            const totalRecallRate = recordsWithRecallRate.reduce((sum, r) => sum + (r.skill_recall_rate || 0), 0);
-            const avgSkillRecallRate = totalCount > 0 ? (totalRecallRate / totalCount) : 0;
+            const recordsWithTriggerRate = records.filter(r => r.skill_trigger_rate !== null && r.skill_trigger_rate !== undefined);
+            const totalCount = recordsWithTriggerRate.length;
+            const totalTriggerRate = recordsWithTriggerRate.reduce((sum, r) => sum + (r.skill_trigger_rate || 0), 0);
+            const avgSkillTriggerRate = totalCount > 0 ? (totalTriggerRate / totalCount) : 0;
             return {
                 name: item,
-                skill_recall_rate: avgSkillRecallRate
+                skill_trigger_rate: avgSkillTriggerRate
             };
         });
 
@@ -1097,7 +1035,7 @@ function DetailPage() {
             latency: latencyData,
             tokens: tokensData,
             accuracy: accuracyData,
-            skillRecallRate: skillRecallRateData,
+            skillTriggerRate: skillTriggerRateData,
             contextWindow: ctxWindowData
         };
     }, [filteredData, comparisonDim]);
@@ -1157,7 +1095,7 @@ function DetailPage() {
         if (!val) return;
         setQuerySaveStatus({ id: taskId, status: 'saving' });
         try {
-            const res = await apiFetch('/api/data', {
+            const res = await apiFetch('/api/observe/data', {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -1186,7 +1124,7 @@ function DetailPage() {
                 params.set('expandTaskId', taskId);
                 router.push(`/details?${params.toString()}`);
             } else {
-                const refreshUrl = user ? `/api/data?user=${encodeURIComponent(user)}` : '/api/data';
+                const refreshUrl = user ? `/api/observe/data?user=${encodeURIComponent(user)}` : '/api/observe/data';
                 const dataRes = await apiFetch(refreshUrl);
                 const data: any[] = await dataRes.json();
                 const filtered = data.filter(d =>
@@ -1223,7 +1161,7 @@ function DetailPage() {
         if (!val) return;
         setResultSaveStatus({ id: taskId, status: 'saving' });
         try {
-            const res = await apiFetch('/api/data', {
+            const res = await apiFetch('/api/observe/data', {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -1267,7 +1205,7 @@ function DetailPage() {
         const formData = new FormData();
         formData.append('document', file);
         try {
-            const res = await apiFetch('/api/parse-document', {
+            const res = await apiFetch('/api/ingest/parse-document', {
                 method: 'POST',
                 body: formData
             });
@@ -1957,6 +1895,36 @@ function DetailPage() {
                                     </div>
                                 </div>
                             </div>
+
+                            {/* 4.5 Agent Trace — multi-agent call graph */}
+                            {session && !session.error && Array.isArray(session.interactions) && session.interactions.length > 0 && (
+                                <div style={{ marginBottom: '1.5rem' }}>
+                                    <div style={{
+                                        display: 'flex',
+                                        justifyContent: 'flex-start',
+                                        alignItems: 'center',
+                                        gap: '8px',
+                                        marginBottom: '0.5rem',
+                                        borderBottom: '1px solid var(--border)',
+                                        paddingBottom: '4px',
+                                        minHeight: '34px'
+                                    }}>
+                                        <button
+                                            onClick={() => setIsAgentTraceExpanded(!isAgentTraceExpanded)}
+                                            style={{ background: 'transparent', border: 'none', color: 'var(--primary)', cursor: 'pointer', padding: 0 }}
+                                        >
+                                            {isAgentTraceExpanded ? '▼' : '▶'}
+                                        </button>
+                                        <h4 style={sectionHeader}>Agent Trace</h4>
+                                        <span style={{ fontSize: '0.75rem', color: 'var(--foreground-muted)' }}>
+                                            多 Agent 调用关系 / Multi-agent call graph
+                                        </span>
+                                    </div>
+                                    {isAgentTraceExpanded && (
+                                        <AgentTraceView interactions={session.interactions} />
+                                    )}
+                                </div>
+                            )}
 
                             {/* 5. Session Data & Execution Steps */}
                             {session ? (
@@ -2674,8 +2642,8 @@ function DetailPage() {
                 </div>
                 <div className="card" style={cardStyle}>
                     <h3 style={chartTitleStyle}>
-                            {t('details.skillRecallTrend')}
-                        <CustomTooltip content={t('details.skillRecallTooltip')} />
+                            {t('details.skillTriggerTrend')}
+                        <CustomTooltip content={t('details.skillTriggerTooltip')} />
                     </h3>
                     <ResponsiveContainer width="100%" height={200}>
                         <LineChart data={filteredData}>
@@ -2692,7 +2660,7 @@ function DetailPage() {
                                     label={{ value: t('details.thisRun'), fill: 'var(--warning)', fontSize: 11, position: 'insideTopLeft' }}
                                 />
                             )}
-                            <Line type="monotone" dataKey="skill_recall_rate" stroke="#f472b6" dot={true} strokeWidth={2} />
+                            <Line type="monotone" dataKey="skill_trigger_rate" stroke="#f472b6" dot={true} strokeWidth={2} />
                         </LineChart>
                     </ResponsiveContainer>
                 </div>
@@ -2784,16 +2752,16 @@ function DetailPage() {
                         </div>
                         <div className="card" style={cardStyle}>
                             <h3 style={chartTitleStyle}>
-                                {t('details.skillRecallBy', { dimension: comparisonDim === 'label' ? t('details.label') : t('details.model') })}
-                                <CustomTooltip content={t('details.skillRecallTooltip')} />
+                                {t('details.skillTriggerBy', { dimension: comparisonDim === 'label' ? t('details.label') : t('details.model') })}
+                                <CustomTooltip content={t('details.skillTriggerTooltip')} />
                             </h3>
                             <ResponsiveContainer width="100%" height={200}>
-                                <LineChart data={compareDimData.skillRecallRate}>
+                                <LineChart data={compareDimData.skillTriggerRate}>
                                     <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
                                     <XAxis dataKey="name" tickFormatter={(v) => String(v)} stroke="#64748b" fontSize={11} />
                                     <YAxis stroke="#64748b" fontSize={11} domain={[0, 1]} />
                                     <Tooltip contentStyle={{ background: '#1e292b', borderColor: c.border }} />
-                                    <Line type="monotone" dataKey="skill_recall_rate" stroke="#f472b6" dot={true} strokeWidth={2} />
+                                    <Line type="monotone" dataKey="skill_trigger_rate" stroke="#f472b6" dot={true} strokeWidth={2} />
                                 </LineChart>
                             </ResponsiveContainer>
                         </div>
@@ -2813,7 +2781,7 @@ function DetailPage() {
                     <div>{t('details.recordTable.label')}</div>
                     <div>{t('details.recordTable.latency')}</div>
                     <div>{t('details.recordTable.consumption')}</div>
-                    <div>{t('details.recordTable.skillRecallRate')}</div>
+                    <div>{t('details.recordTable.skillTriggerRate')}</div>
                     <div>{t('details.recordTable.contextWindowPercent')}</div>
                     <div>{t('details.recordTable.score')}</div>
                 </div>
@@ -2880,13 +2848,13 @@ function DetailPage() {
                                 <div>{item.latency ? (item.latency < 1 ? (item.latency * 1000).toFixed(0) + 'ms' : item.latency.toFixed(2) + 's') : '-'}</div>
                                 <div>{item.tokens}</div>
                                 <div style={{
-                                    color: item.skill_recall_rate !== null && item.skill_recall_rate !== undefined ?
-                                           (item.skill_recall_rate === 1.0 ? c.success :
-                                            item.skill_recall_rate > 0 ? c.warning : c.error) : c.fgMuted,
+                                    color: item.skill_trigger_rate !== null && item.skill_trigger_rate !== undefined ?
+                                           (item.skill_trigger_rate === 1.0 ? c.success :
+                                            item.skill_trigger_rate > 0 ? c.warning : c.error) : c.fgMuted,
                                     fontWeight: 'bold'
                                 }}>
-                                    {item.skill_recall_rate !== null && item.skill_recall_rate !== undefined ?
-                                     (item.skill_recall_rate * 100).toFixed(0) + '%' : '--'}
+                                    {item.skill_trigger_rate !== null && item.skill_trigger_rate !== undefined ?
+                                     (item.skill_trigger_rate * 100).toFixed(0) + '%' : '--'}
                                 </div>
                                 <div style={{ color: item.context_window_pct != null ? (item.context_window_pct > 90 ? c.error : c.success) : c.fgMuted }}>
                                     {item.context_window_pct != null ? `${item.context_window_pct.toFixed(1)}%` : '-'}

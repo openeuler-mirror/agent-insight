@@ -1,5 +1,5 @@
-import { resolveUser } from '@/lib/auth';
-import { db } from '@/lib/prisma';
+import { resolveUser } from '@/lib/auth/auth';
+import { db } from '@/lib/storage/prisma';
 import { NextRequest, NextResponse } from 'next/server';
 
 export const dynamic = 'force-dynamic';

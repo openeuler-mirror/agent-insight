@@ -4,7 +4,7 @@
  * Fetches configured skills from Dashboard and installs them locally.
  * Usage: node sync_skills.js [--check-only] [--agent <name>]
  * 
- * Requires: ~/.witty/.env configuration
+ * Requires: ~/.skill-insight/.env or ~/.witty/.env configuration
  */
 
 import { execSync } from 'child_process';
@@ -29,9 +29,12 @@ interface Config {
 function loadConfiguration(): Config {
     let config: Record<string, string> = {};
     try {
-        const envPath = path.join(os.homedir(), '.witty', '.env');
-        if (fs.existsSync(envPath)) {
-            const content = fs.readFileSync(envPath, 'utf8');
+        const envPath = path.join(os.homedir(), '.skill-insight', '.env');
+        const legacyEnvPath = path.join(os.homedir(), '.witty', '.env');
+        const selectedEnvPath = fs.existsSync(envPath) ? envPath : legacyEnvPath;
+        
+        if (fs.existsSync(selectedEnvPath)) {
+            const content = fs.readFileSync(selectedEnvPath, 'utf8');
             content.split('\n').forEach(line => {
                 const match = line.match(/^\s*([\w_]+)\s*=\s*(.*)?\s*$/);
                 if (match && match[1]) {
@@ -42,8 +45,8 @@ function loadConfiguration(): Config {
     } catch (e) {}
     
     return {
-        apiKey: config['WITTY_INSIGHT_API_KEY'] || process.env.WITTY_INSIGHT_API_KEY,
-        host: config['WITTY_INSIGHT_HOST'] || process.env.WITTY_INSIGHT_HOST || '127.0.0.1:3000'
+        apiKey: config['SKILL_INSIGHT_API_KEY'] || config['WITTY_INSIGHT_API_KEY'] || process.env.SKILL_INSIGHT_API_KEY || process.env.WITTY_INSIGHT_API_KEY,
+        host: config['SKILL_INSIGHT_HOST'] || config['WITTY_INSIGHT_HOST'] || process.env.SKILL_INSIGHT_HOST || process.env.WITTY_INSIGHT_HOST || '127.0.0.1:3000'
     };
 }
 

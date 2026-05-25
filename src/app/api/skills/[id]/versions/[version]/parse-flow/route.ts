@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { parseSkillFlow, getParsedFlow } from '@/lib/flow-parser';
-import { db } from '@/lib/prisma';
+import { parseSkillFlow, getParsedFlow } from '@/lib/engine/observability/flow-parser';
+import { db } from '@/lib/storage/prisma';
 
 interface SkillVersion {
   version: number;

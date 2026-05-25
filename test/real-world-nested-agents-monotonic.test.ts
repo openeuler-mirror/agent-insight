@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-import { mergeSessionInteractionsMonotonic } from "@/lib/session-interactions-merge"
+import { mergeSessionInteractionsMonotonic } from "@/lib/engine/observability/session-interactions-merge"
 
 test("nested agents + out-of-order uploads never drop an already-seen child session", () => {
   const base = [

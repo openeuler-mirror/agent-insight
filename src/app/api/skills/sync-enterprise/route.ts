@@ -1,5 +1,5 @@
-import { resolveUser } from '@/lib/auth';
-import { syncEnterpriseSkills } from '@/lib/skill-sync-service';
+import { resolveUser } from '@/lib/auth/auth';
+import { syncEnterpriseSkills } from '@/lib/engine/skill-generation/legacy/skill-sync-service';
 import { NextRequest, NextResponse } from 'next/server';
 
 let syncStatus = {

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-import { parseLabelSkillVersionBinding } from "@/lib/label-skill-binding"
+import { parseLabelSkillVersionBinding } from "@/lib/engine/evaluation/label-skill-binding"
 
 test("label binding: parses <skill>-v<version> and produces skill binding payload", () => {
   const b = parseLabelSkillVersionBinding("vmcore-analysis-v3")

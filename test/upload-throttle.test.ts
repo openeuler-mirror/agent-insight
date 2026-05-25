@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-import { createPerKeyThrottle } from "@/lib/upload-throttle"
+import { createPerKeyThrottle } from "@/lib/ingest/upload-throttle"
 
 test("createPerKeyThrottle: runs immediately then throttles to at most once per interval, last wins", async () => {
   const throttle = createPerKeyThrottle(30)

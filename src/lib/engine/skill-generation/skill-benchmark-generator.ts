@@ -1,0 +1,1 @@
+export { generateBenchmarksForSkill } from "./legacy/skill-benchmark-generator";
