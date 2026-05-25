@@ -17,6 +17,7 @@ import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
 import { STATIC_EVAL_STANDARDS } from '@/components/evaluation';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
 import { diffLines } from 'diff';
 import {
@@ -2846,17 +2847,25 @@ function TabRuns({
 function SkillDrawer({
     skill,
     user,
+    initialVersion,
     onClose,
     onChanged,
 }: {
     skill: SkillListItem;
     user: string | null;
+    /**
+     * 从外部 (例如 trace 详情 Skills 页签的 SkillLink) 跳进来时指定要打开哪个版本。
+     * 不传 / 不合法时落到 skill.activeVersion。落到具体版本后,用户仍可用 VersionSwitcher
+     * 在抽屉内切别的版本。
+     */
+    initialVersion?: number;
     onClose: () => void;
     onChanged: () => void;
 }) {
+    const initialVer = initialVersion ?? skill.activeVersion ?? 0;
     const [versions, setVersions] = useState<VersionMeta[]>([]);
     const [activeVersion, setActiveVersion] = useState<number>(skill.activeVersion ?? 0);
-    const [currentVersion, setCurrentVersion] = useState<number>(skill.activeVersion ?? 0);
+    const [currentVersion, setCurrentVersion] = useState<number>(initialVer);
     const [tab, setTab] = useState<string>('overview');
 
     const [versionDetail, setVersionDetail] = useState<VersionDetail | null>(null);
@@ -2885,8 +2894,10 @@ function SkillDrawer({
     useEffect(() => { loadVersions(); /* eslint-disable-next-line */ }, [skill.id]);
 
     useEffect(() => {
+        // 平台后台变更 activeVersion (例如管理员把 v3 设为激活) 时同步徽章显示;
+        // 不再强制把 currentVersion 也拉回 activeVersion —— 之前的实现会把外部 initialVersion
+        // 或用户手动切到的版本立刻覆盖掉,体验差。用户想看新激活版本可以自己点。
         setActiveVersion(skill.activeVersion ?? 0);
-        setCurrentVersion(skill.activeVersion ?? 0);
     }, [skill.id, skill.activeVersion]);
 
     const current = versions.find(v => v.version === currentVersion);
@@ -3138,11 +3149,21 @@ function SkillDrawer({
 
 export function SkillCatalogV2({ refresh, onUploadClick }: { refresh: number; onUploadClick?: () => void }) {
     const { user } = useAuth();
+    const router = useRouter();
+    const searchParams = useSearchParams();
     const [skills, setSkills] = useState<SkillListItem[]>([]);
     const [loading, setLoading] = useState(true);
     const [selected, setSelected] = useState<SkillListItem | null>(null);
     const [search, setSearch] = useState('');
     const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
+
+    // 从 trace 详情、Dashboard 等地跳过来时,URL 带 ?openSkillId=...&openVersion=N
+    // SkillLink 用这个协议把 trace 上报的版本带过来,这里读出来后下面 useEffect 自动开对应 drawer。
+    const openSkillIdParam = searchParams.get('openSkillId');
+    const openVersionParam = searchParams.get('openVersion');
+    const openInitialVersion = openVersionParam !== null && openVersionParam !== ''
+        ? (() => { const n = Number(openVersionParam); return Number.isFinite(n) ? n : undefined; })()
+        : undefined;
 
     const fetchSkills = () => {
         if (!user) return;
@@ -3166,6 +3187,18 @@ export function SkillCatalogV2({ refresh, onUploadClick }: { refresh: number; on
             if (!u) setSelected(null);
         }
     }, [skills]); // eslint-disable-line
+
+    // 列表加载完成后,如果 URL 上带了 openSkillId 就自动打开对应 skill 的抽屉。
+    // 用 ref 标记"已经响应过这次 URL 参数",避免用户手动关掉抽屉后又被拉回来。
+    const honoredOpenSkillRef = useRef<string | null>(null);
+    useEffect(() => {
+        if (!openSkillIdParam || skills.length === 0) return;
+        if (honoredOpenSkillRef.current === openSkillIdParam) return;
+        const match = skills.find(s => s.id === openSkillIdParam);
+        if (!match) return;
+        honoredOpenSkillRef.current = openSkillIdParam;
+        setSelected(match);
+    }, [openSkillIdParam, skills]);
 
     const filtered = useMemo(() => {
         return skills.filter(s => {
@@ -3303,7 +3336,23 @@ export function SkillCatalogV2({ refresh, onUploadClick }: { refresh: number; on
                 <SkillDrawer
                     skill={selected}
                     user={user || null}
-                    onClose={() => setSelected(null)}
+                    initialVersion={selected.id === openSkillIdParam ? openInitialVersion : undefined}
+                    onClose={() => {
+                        setSelected(null);
+                        // 清掉 URL 上的 open* 参数 —— 用户主动关掉抽屉后刷新页面或再点别的卡片,
+                        // 不应该被旧参数拉回原来那个 skill。用 history.replaceState 静默改 URL,
+                        // 不触发 router 重新 mount。
+                        if (openSkillIdParam) {
+                            const url = new URL(window.location.href);
+                            url.searchParams.delete('openSkillId');
+                            url.searchParams.delete('openVersion');
+                            const qs = url.searchParams.toString();
+                            const next = url.pathname + (qs ? `?${qs}` : '');
+                            window.history.replaceState(null, '', next);
+                            // 同步给 next/navigation,后续 useSearchParams 也读到清空后的值
+                            router.replace(next, { scroll: false });
+                        }
+                    }}
                     onChanged={fetchSkills}
                 />
             )}
