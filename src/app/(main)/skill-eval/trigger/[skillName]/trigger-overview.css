@@ -1,0 +1,345 @@
+/* 触发评测「执行概览」卡 —— 复用 .ev-* 主题色与 .ev-card 卡壳，
+   定位等同静态合规分析的 DimensionScoresCard。 */
+
+.trigger-overview-wrap {
+  margin-bottom: 14px;
+}
+
+.trigger-overview-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.trigger-overview-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.trigger-overview-head h2 {
+  margin: 0 0 4px;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--ev-fg);
+}
+
+.trigger-overview-head small {
+  color: var(--ev-muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.trigger-overview-pill {
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  flex: none;
+}
+
+.trigger-overview-head-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+.trigger-overview-history-badge {
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #a16207;
+  background: rgba(161, 98, 7, 0.12);
+  vertical-align: middle;
+}
+
+.trigger-overview-back-btn {
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--ev-line);
+  background: var(--ev-bg);
+  color: var(--ev-fg2);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.trigger-overview-back-btn:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+/* ---------- 历史数据集面板 ---------- */
+
+.trigger-history-wrap {
+  margin-bottom: 14px;
+  border: 1px solid var(--ev-line);
+  border-radius: 10px;
+  background: var(--ev-bg);
+  overflow: hidden;
+}
+
+.trigger-history-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: var(--ev-fg);
+}
+
+.trigger-history-toggle:hover {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.trigger-history-chevron {
+  display: inline-block;
+  transition: transform 0.15s ease;
+  color: var(--ev-muted);
+  font-size: 12px;
+}
+
+.trigger-history-chevron.open {
+  transform: rotate(90deg);
+}
+
+.trigger-history-title {
+  font-weight: 600;
+  font-size: 13.5px;
+}
+
+.trigger-history-count {
+  color: var(--ev-muted);
+  font-size: 12px;
+}
+
+.trigger-history-viewing {
+  color: #a16207;
+  font-size: 12px;
+}
+
+.trigger-history-spacer {
+  flex: 1;
+}
+
+.trigger-history-reset {
+  padding: 3px 10px;
+  border-radius: 5px;
+  background: #fef3c7;
+  color: #a16207;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+}
+
+.trigger-history-reset:hover {
+  background: #fde68a;
+}
+
+.trigger-history-body {
+  border-top: 1px solid var(--ev-line);
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.trigger-history-empty {
+  padding: 16px 14px;
+  color: var(--ev-muted);
+  font-size: 12.5px;
+  text-align: center;
+}
+
+.trigger-history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.trigger-history-list li + li .trigger-history-row {
+  border-top: 1px solid var(--ev-line);
+}
+
+.trigger-history-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) minmax(150px, auto) minmax(220px, auto);
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: var(--ev-fg);
+}
+
+.trigger-history-row:hover {
+  background: rgba(59, 101, 232, 0.06);
+}
+
+.trigger-history-row.selected {
+  background: rgba(59, 101, 232, 0.1);
+  box-shadow: inset 3px 0 0 #3b65e8;
+}
+
+.trigger-history-row.failed .trigger-history-time {
+  color: var(--ev-muted);
+}
+
+.trigger-history-time {
+  font-size: 13px;
+  color: var(--ev-fg);
+  white-space: nowrap;
+}
+
+.trigger-history-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.trigger-history-tag {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(99, 102, 241, 0.12);
+  color: #4f46e5;
+  white-space: nowrap;
+}
+
+.trigger-history-tag.muted {
+  background: rgba(113, 113, 122, 0.12);
+  color: var(--ev-muted);
+  font-weight: 500;
+}
+
+.trigger-history-tag.latest {
+  background: rgba(16, 185, 129, 0.15);
+  color: #047857;
+}
+
+.trigger-history-tag.viewing {
+  background: rgba(234, 88, 12, 0.15);
+  color: #c2410c;
+}
+
+.trigger-history-metrics {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  justify-content: flex-end;
+}
+
+.trigger-history-metric {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  line-height: 1.1;
+}
+
+.trigger-history-metric em {
+  font-style: normal;
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--ev-fg);
+}
+
+.trigger-history-metric span {
+  font-size: 10.5px;
+  color: var(--ev-muted);
+}
+
+.trigger-history-status {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.trigger-history-status.status-running {
+  background: rgba(8, 145, 178, 0.12);
+  color: #0891b2;
+}
+
+.trigger-history-status.status-failed {
+  background: rgba(220, 38, 38, 0.12);
+  color: #dc2626;
+}
+
+@media (max-width: 720px) {
+  .trigger-history-row {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+  .trigger-history-metrics {
+    justify-content: flex-start;
+  }
+}
+
+.trigger-overview-error {
+  padding: 10px 12px;
+  border: 1px solid #fecaca;
+  background: #fef2f2;
+  color: #991b1b;
+  border-radius: 6px;
+  font-size: 12.5px;
+}
+
+/* =========================================================================
+   触发分析页 ③ 结果块的局部样式（SectionShell/Hero 通用部分已迁到
+   evaluation-content.css 的 .ev-section* / .ev-hero*）。这里只剩双列编辑
+   器 grid + 执行块按钮行 + 结果空态——都是触发分析独有形态。
+   ========================================================================= */
+
+.recall-editor-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+@media (max-width: 900px) {
+  .recall-editor-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.recall-exec-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.recall-exec-hint {
+  font-size: 12px;
+  color: var(--ev-muted);
+}
+
+.recall-result-meta {
+  font-size: 12px;
+  color: var(--ev-muted);
+}
+
+.recall-empty {
+  padding: 36px 20px;
+  text-align: center;
+  color: var(--ev-muted);
+  font-size: 13px;
+  background: var(--ev-bg);
+  border-radius: 8px;
+}
+
+.recall-empty b {
+  color: var(--ev-fg);
+}

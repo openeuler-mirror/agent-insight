@@ -1,0 +1,2542 @@
+.skill-generator-container {
+    box-sizing: border-box;
+    display: flex;
+    flex: 1; /* Automatically fill remaining space in the layout's main column */
+    min-height: 0; /* Critical: allow flex children to shrink and scroll internally */
+    overflow: hidden; /* Lock the window from global scrolling */
+    background: #f3f4f6;
+    padding: 16px;
+    gap: 16px;
+}
+
+/* When IDE is open, the resizer sits between chat-panel and ide-box and
+   acts as the visual separator, so we drop the container gap to avoid
+   doubled spacing. ide-closed keeps the original layout behavior. */
+.skill-generator-container.ide-open {
+    gap: 0;
+}
+
+.skill-generator-container.ide-open > .chat-panel {
+    margin-right: 0;
+}
+
+.skill-generator-container.ide-closed .chat-panel {
+    flex: 1;
+    width: 100%; /* Fill the entire container when IDE is closed */
+    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.skill-generator-container.ide-open .chat-panel {
+    /* width 由 --pg-chat-w 驱动（startResize 在 pointermove 时直接改这个变量，
+       绕过 React 重渲染；state 只在 pointerup 时提交一次用于持久化）。 */
+    width: var(--pg-chat-w, 380px);
+    flex: none;
+    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* 拖拽中关掉 transition，否则每次 width 变化都触发 400ms 缓动，
+   多帧叠加/打断就是"卡卡缓慢"的感觉。 */
+.skill-generator-container.dragging .chat-panel,
+.skill-generator-container.dragging .file-tree-panel {
+    transition: none !important;
+}
+
+/* 拖拽中禁掉子节点的 pointer-events，避免 iframe / monaco 抢光标。 */
+.skill-generator-container.dragging .editor-panel,
+.skill-generator-container.dragging .chat-messages,
+.skill-generator-container.dragging .file-tree-scroll {
+    pointer-events: none;
+}
+
+/* Panel Styles */
+.skill-generator-panel {
+    display: flex;
+    flex-direction: column;
+    background: #ffffff;
+    border-radius: 12px;
+    border: 1px solid #e5e7eb;
+    overflow: hidden;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    height: 100%; /* Ensure panel fills container height */
+}
+
+.chat-panel {
+    height: 100%;
+}
+
+.skill-generator-ide-box {
+    flex: 1;
+    display: flex;
+    background: #ffffff;
+    border-radius: 12px;
+    border: 1px solid #e5e7eb;
+    overflow: hidden;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+    height: 100%;
+    min-height: 0;
+}
+
+.file-tree-panel {
+    /* width 由 --pg-tree-w 驱动；同 chat-panel，参见上面的注释。 */
+    width: var(--pg-tree-w, 240px);
+    background: #f8f9fa;
+    border-right: 1px solid #e5e7eb;
+    border-radius: 0; /* Reset within box */
+    border: none;
+    border-right: 1px solid #e5e7eb;
+}
+
+.editor-panel {
+    flex: 1;
+    min-width: 0;
+    border: none;
+    border-radius: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden; /* Ensure panel context is locked */
+}
+
+.panel-header {
+    height: 48px;
+    padding: 0 16px;
+    display: flex;
+    align-items: center;
+    border-bottom: 1px solid #f3f4f6;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--foreground-secondary);
+}
+
+/* Chat Styles */
+.chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    scrollbar-width: thin;
+    scrollbar-color: #e5e7eb transparent;
+}
+
+.chat-messages::-webkit-scrollbar {
+    width: 6px;
+}
+
+.chat-messages::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.chat-messages::-webkit-scrollbar-thumb {
+    background: #e5e7eb;
+    border-radius: 10px;
+}
+
+.chat-messages::-webkit-scrollbar-thumb:hover {
+    background: #d1d5db;
+}
+
+.skill-generator-container.ide-closed .message-bubble {
+    max-width: 800px; /* Cap width for readability in full-width mode */
+}
+
+.message-bubble {
+    padding: 12px 16px;
+    border-radius: 14px;
+    font-size: 13.5px;
+    line-height: 1.6;
+    max-width: 90%;
+    position: relative;
+    box-sizing: border-box;
+    /* 长 token（路径如 a/b/c.md、参数列表 personal/family/backpacker/business）默认只在
+       空白处折行，窄屏会撑出 bubble 横向溢出。anywhere 让浏览器在内容超宽时按字符断开，
+       但短内容仍按 word 边界折行（不会过激）。min-width:0 是 flex 子项必备，否则
+       max-width 99% 也不能压缩下来。 */
+    overflow-wrap: anywhere;
+    min-width: 0;
+}
+
+.message-user {
+    align-self: flex-end;
+    background: linear-gradient(135deg, #5850ec 0%, #6d63f5 100%);
+    color: #ffffff;
+    border-bottom-right-radius: 4px;
+    box-shadow: 0 2px 8px rgba(88, 80, 236, 0.25);
+}
+
+.message-agent {
+    align-self: flex-start;
+    background: #ffffff;
+    color: var(--foreground);
+    border-bottom-left-radius: 4px;
+    border: 1px solid #e9ebee;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.05);
+}
+
+/* ── Markdown rendered inside agent messages ────────────────────────
+   MarkdownText uses Tailwind utility classes that may not all apply
+   cleanly inside message-bubble (parent font-size + cascade). Add
+   explicit styles here so markdown looks right regardless of utility
+   class hit/miss. */
+.message-agent h1,
+.message-agent h2,
+.message-agent h3,
+.message-agent h4,
+.message-agent h5,
+.message-agent h6 {
+    font-weight: 600;
+    line-height: 1.3;
+    margin: 14px 0 6px;
+    color: var(--foreground);
+}
+.message-agent h1 { font-size: 18px; margin-top: 0; }
+.message-agent h2 { font-size: 16px; }
+.message-agent h3 { font-size: 14.5px; }
+.message-agent h4 { font-size: 13.5px; }
+.message-agent h5,
+.message-agent h6 { font-size: 13px; color: var(--foreground-secondary); }
+
+.message-agent p {
+    margin: 6px 0;
+    line-height: 1.6;
+}
+.message-agent p:first-child { margin-top: 0; }
+.message-agent p:last-child { margin-bottom: 0; }
+
+.message-agent ul,
+.message-agent ol {
+    margin: 6px 0;
+    padding-left: 22px;
+    line-height: 1.6;
+}
+.message-agent ul { list-style: disc; }
+.message-agent ol { list-style: decimal; }
+.message-agent li { margin: 2px 0; }
+.message-agent li > p { margin: 2px 0; }
+.message-agent ul ul,
+.message-agent ol ol,
+.message-agent ul ol,
+.message-agent ol ul { margin: 2px 0; }
+
+.message-agent code {
+    background: rgba(0, 0, 0, 0.05);
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    /* MarkdownText 给所有 <code> 加了 font-semibold（用于内联高亮），但放在
+       chat 气泡的浅灰底上看着太粗——尤其无 language 的 fenced block（被当成
+       <pre><code>），整段都加粗很糟。统一回归 normal 字重。 */
+    font-weight: normal;
+}
+.message-agent pre {
+    background: rgba(0, 0, 0, 0.04);
+    color: var(--foreground);
+    padding: 10px 12px;
+    border-radius: 6px;
+    overflow-x: auto;
+    margin: 8px 0;
+    font-size: 12px;
+    line-height: 1.5;
+}
+.message-agent pre code {
+    background: transparent;
+    padding: 0;
+    font-size: inherit;
+}
+
+.message-agent blockquote {
+    border-left: 3px solid var(--border);
+    padding-left: 10px;
+    margin: 8px 0;
+    color: var(--foreground-secondary);
+    font-style: italic;
+}
+
+.message-agent table {
+    border-collapse: collapse;
+    margin: 8px 0;
+    font-size: 12px;
+    width: 100%;
+}
+.message-agent th,
+.message-agent td {
+    border: 1px solid var(--border);
+    padding: 4px 8px;
+    text-align: left;
+}
+.message-agent th {
+    background: rgba(0, 0, 0, 0.03);
+    font-weight: 600;
+}
+
+.message-agent hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 10px 0;
+}
+
+.message-agent a {
+    color: var(--primary);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+/* ── Inline collapsible blocks (thinking / tool_call) ───────────────── */
+
+.inline-block {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    margin: 3px 0;
+    border-radius: 8px;
+    border: 1px solid #e9eaec;
+    background: #f8f9fb;
+    overflow: hidden;
+    font-size: 12px;
+    transition: border-color 0.12s ease;
+}
+
+.inline-block:hover {
+    border-color: #d8dadc;
+}
+
+/* Thinking: keep a very faint purple tint */
+.inline-block.thinking {
+    border-color: #ede9fe;
+    background: #fdfcff;
+}
+
+/* All tool statuses share the same neutral base —
+   the icon color alone signals ok / running / error */
+.inline-block.tool.status-running {
+    border-color: #e0eeff;
+    background: #f8fbff;
+}
+
+.inline-block.tool.status-ok {
+    border-color: #e9eaec;
+    background: #f8f9fb;
+}
+
+.inline-block.tool.status-error {
+    border-color: #fee2e2;
+    background: #fffafa;
+}
+
+/* ── Grouped routine tools ───────────────────────────────────────────
+   Slightly more prominent card — represents a "did N things" summary.
+   Styled like Claude's "Searched the web" collapsed card.
+*/
+.inline-block.tool-group {
+    border-color: #e4e6e9;
+    background: #f5f6f8;
+}
+
+.inline-block.tool-group .inline-block-label {
+    font-weight: 500;
+    color: #374151;
+}
+
+.inline-block.tool-group .inline-block-icon {
+    color: #6b7280;
+}
+
+.inline-block.tool-group.status-error .inline-block-icon { color: #dc2626; }
+.inline-block.tool-group.status-running .inline-block-icon { color: #3b82f6; }
+.inline-block.tool-group.status-ok .inline-block-icon { color: #059669; }
+
+.tool-group-body {
+    padding: 4px 10px 8px 10px;
+    border-top: 1px solid #e9eaec;
+    background: #f0f1f3;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+/* Inside a group: minimal flat rows, no nested cards */
+.tool-group-body .inline-block {
+    margin: 0;
+    border-color: #e4e6e9;
+    background: #ffffff;
+    border-radius: 6px;
+}
+
+/* ── Todo checklist (write_todos special render) ───────────────────── */
+.todo-checklist {
+    list-style: none;
+    margin: 0;
+    padding: 4px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.todo-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    font-size: 12px;
+    line-height: 1.45;
+    padding: 2px 0;
+}
+
+.todo-checkbox {
+    flex-shrink: 0;
+    width: 16px;
+    height: 16px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: 1px;
+    color: var(--foreground-muted);
+}
+
+.todo-content {
+    flex: 1 1 auto;
+    color: var(--foreground);
+    word-break: break-word;
+}
+
+.todo-completed .todo-checkbox { color: rgb(22, 163, 74); }
+.todo-completed .todo-content {
+    color: var(--foreground-muted);
+    text-decoration: line-through;
+    text-decoration-color: rgba(0, 0, 0, 0.3);
+}
+
+.todo-in_progress .todo-checkbox { color: rgb(59, 130, 246); }
+.todo-in_progress .todo-content { font-weight: 500; }
+
+.todo-pending .todo-checkbox { color: var(--foreground-muted); opacity: 0.6; }
+.todo-pending .todo-content { color: var(--foreground-secondary); }
+
+.todo-cancelled .todo-checkbox { color: rgb(239, 68, 68); opacity: 0.6; }
+.todo-cancelled .todo-content {
+    color: var(--foreground-muted);
+    text-decoration: line-through;
+    text-decoration-color: rgba(239, 68, 68, 0.5);
+}
+
+/* TodoBlock：永远展开的 todo 计划块（agent 调 todowrite 时渲染）。
+   跟普通 ToolBlock 不一样的地方：不可折叠 + header 直接显示状态计数 + 用 emoji 图标。 */
+.todos-block {
+    margin: 6px 0;
+    padding: 8px 10px;
+    background: rgba(59, 130, 246, 0.04);
+    border: 1px solid rgba(59, 130, 246, 0.18);
+    border-radius: 6px;
+}
+
+.todos-header {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+    margin-bottom: 6px;
+    font-size: 12px;
+}
+
+.todos-icon { font-size: 14px; }
+
+.todos-title {
+    font-weight: 600;
+    color: var(--foreground);
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+}
+
+.todos-progress {
+    font-weight: 400;
+    color: var(--foreground-muted);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+}
+
+.todos-counts {
+    margin-left: auto;
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--foreground-muted);
+}
+
+.todos-count {
+    white-space: nowrap;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-variant-numeric: tabular-nums;
+}
+
+.todos-count.completed { color: rgb(22, 163, 74); background: rgba(22, 163, 74, 0.1); }
+.todos-count.in-progress { color: rgb(59, 130, 246); background: rgba(59, 130, 246, 0.1); font-weight: 500; }
+.todos-count.pending { color: var(--foreground-muted); background: rgba(0, 0, 0, 0.04); }
+.todos-count.cancelled { color: rgb(239, 68, 68); background: rgba(239, 68, 68, 0.08); }
+
+.inline-block-header {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    width: 100%;
+    padding: 5px 10px 5px 8px;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    color: #374151;
+    text-align: left;
+    font-size: 12px;
+    font-family: inherit;
+    overflow: hidden;
+    min-width: 0;
+}
+
+.inline-block-header:hover {
+    background: rgba(0, 0, 0, 0.03);
+}
+
+/* Tool group header is slightly taller for emphasis */
+.tool-group > .inline-block-header {
+    padding: 7px 10px 7px 10px;
+}
+
+.inline-block-icon {
+    flex-shrink: 0;
+    display: inline-flex;
+    width: 16px;
+    height: 16px;
+    align-items: center;
+    justify-content: center;
+    color: #9ca3af;
+    border-radius: 3px;
+}
+
+.inline-block.thinking .inline-block-icon { color: #8b5cf6; }
+.inline-block.tool.status-ok .inline-block-icon { color: #059669; }
+.inline-block.tool.status-error .inline-block-icon { color: #dc2626; }
+.inline-block.tool.status-running .inline-block-icon { color: #3b82f6; }
+
+.inline-block-label {
+    font-weight: 500;
+    color: var(--foreground);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+    flex-shrink: 1;
+    font-size: 12px;
+    letter-spacing: 0.01em;
+}
+
+.inline-block-summary {
+    /* flex: 1 1 0 so it can shrink below its intrinsic width (necessary for
+       text-overflow: ellipsis to actually clip). min-width: 0 same reason. */
+    flex: 1 1 0;
+    min-width: 0;
+    color: var(--foreground-muted);
+    font-size: 11.5px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+
+.inline-block-chevron {
+    margin-left: auto;
+    color: var(--foreground-muted);
+    transition: transform 0.18s ease;
+    font-size: 10px;
+}
+
+.inline-block-chevron[data-open="false"] {
+    transform: rotate(-90deg);
+}
+
+.inline-block-body {
+    padding: 7px 12px 9px 30px;
+    border-top: 1px solid #ebebed;
+    color: #6b7280;
+    font-size: 11.5px;
+    line-height: 1.55;
+    background: #ffffff;
+    /* 同 .message-bubble：thinking/tool 展开后的长路径/长参数也得能在窄屏断开 */
+    overflow-wrap: anywhere;
+    min-width: 0;
+}
+
+.thinking-body {
+    white-space: pre-wrap;
+    font-style: italic;
+    color: var(--foreground-secondary);
+}
+
+.tool-body { font-style: normal; }
+
+.tool-row {
+    display: flex;
+    gap: 8px;
+    margin: 4px 0;
+    align-items: flex-start;
+}
+
+.tool-row-key {
+    flex-shrink: 0;
+    width: 60px;
+    color: var(--foreground-muted);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding-top: 3px;
+}
+
+.tool-row code,
+.tool-args {
+    background: rgba(0, 0, 0, 0.04);
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11.5px;
+    word-break: break-all;
+}
+
+/* tool-row 内的"值"侧——必须 min-width:0 才能让里面的 <pre> 在 flex 容器里
+   正确换行/收缩，否则长行会撑爆父级宽度溢出消息气泡。 */
+.tool-row-value {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.tool-row-value > code,
+.tool-row code.tool-row-value {
+    background: rgba(0, 0, 0, 0.04);
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11.5px;
+}
+
+.tool-row-empty {
+    color: var(--foreground-muted);
+    font-style: italic;
+    font-size: 11.5px;
+}
+
+/* input 段里 args (rest JSON) 和 content (write/edit 内容) 上下垒。 */
+.tool-input-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+/* args / content / result 的多行展示——
+   关键是 white-space:pre-wrap 让长行折回，word-break:break-word 处理超长 token，
+   再加 overflow-wrap:anywhere 兜底（路径、JSON value 这种没空格的串）。
+   max-height + overflow:auto 保证超长输出不撑爆，但要内部滚动而不是溢出消息气泡。 */
+.tool-args-pre,
+.tool-content-pre,
+.tool-result-pre {
+    margin: 0;
+    padding: 6px 8px;
+    background: rgba(0, 0, 0, 0.04);
+    border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11.5px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+    max-height: 320px;
+    overflow: auto;
+    color: var(--foreground);
+    /* flex 容器里要让 pre 自己也能 shrink，不能因为内部超长 token 撑大整个 row */
+    max-width: 100%;
+    box-sizing: border-box;
+}
+
+.tool-content-pre {
+    /* write/edit 大段 content 区分一下，浅蓝底，更像"代码内容"而不是"参数"。
+       data-label 通过 ::before 渲染一个标签条提示 "文件内容"。 */
+    background: rgba(59, 130, 246, 0.05);
+    border: 1px solid rgba(59, 130, 246, 0.12);
+    max-height: 280px;
+    position: relative;
+}
+
+.tool-content-pre::before {
+    content: attr(data-label);
+    display: block;
+    margin: -6px -8px 6px;
+    padding: 3px 8px;
+    background: rgba(59, 130, 246, 0.1);
+    color: rgb(37, 99, 235);
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.3px;
+    border-bottom: 1px solid rgba(59, 130, 246, 0.18);
+}
+
+.tool-result-pre {
+    background: rgba(0, 0, 0, 0.03);
+    border: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.tool-row-error { color: rgb(220, 38, 38); }
+.tool-row-error .tool-result-pre {
+    background: rgba(239, 68, 68, 0.06);
+    border-color: rgba(239, 68, 68, 0.2);
+    color: rgb(185, 28, 28);
+}
+
+.tool-open-link {
+    margin-top: 6px;
+    padding: 3px 10px;
+    font-size: 11px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--card-bg);
+    color: var(--primary);
+    cursor: pointer;
+}
+
+.tool-open-link:hover { background: rgba(88, 80, 236, 0.08); }
+
+.inline-block-spinner {
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    border: 1.5px solid currentColor;
+    border-top-color: transparent;
+    animation: spin 0.75s linear infinite;
+    display: inline-block;
+    opacity: 0.85;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* ── Resizable column splitter ───────────────────────────────────────
+   Sits between two flex children. The visible track is 4px but we extend
+   the hit area to 12px via padding so the cursor change feels responsive.
+*/
+.resizer-vertical {
+    flex-shrink: 0;
+    width: 12px;
+    cursor: col-resize;
+    background: transparent;
+    position: relative;
+    z-index: 5;
+    transition: background 0.15s ease;
+    align-self: stretch;
+}
+
+/* Visual track inside the wider hit area. */
+.resizer-vertical::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 2px;
+    background: transparent;
+    border-radius: 2px;
+    transition: background 0.15s ease;
+}
+
+.resizer-vertical:hover::after,
+.resizer-vertical:active::after {
+    background: rgba(88, 80, 236, 0.55);
+}
+
+.resizer-vertical.resizer-inside {
+    /* Inside .skill-generator-ide-box, narrower because no visual gutter needed. */
+    width: 8px;
+}
+
+/* ── File tree (collapsible folders) ───────────────────────────────── */
+.file-tree-panel .panel-header {
+    padding-left: 16px;
+}
+
+.file-tree {
+    padding: 6px 8px 12px;
+    font-size: 12px;
+}
+
+.tree-folder {
+    margin-bottom: 2px;
+}
+
+.tree-category {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 6px;
+    border-radius: 5px;
+    cursor: pointer;
+    user-select: none;
+    color: var(--foreground-secondary);
+    font-weight: 500;
+    text-transform: uppercase;
+    font-size: 10.5px;
+    letter-spacing: 0.5px;
+    transition: background 0.12s ease;
+}
+
+.tree-category:hover {
+    background: rgba(0, 0, 0, 0.04);
+    color: var(--foreground);
+}
+
+.tree-chevron {
+    flex-shrink: 0;
+    transition: transform 0.18s ease;
+    color: var(--foreground-muted);
+}
+
+.tree-category.collapsed .tree-chevron {
+    transform: rotate(-90deg);
+}
+
+.tree-folder-icon {
+    flex-shrink: 0;
+    color: rgb(245, 158, 11); /* warm folder yellow */
+}
+
+.tree-category-label {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.tree-category-count {
+    flex-shrink: 0;
+    font-size: 10px;
+    color: var(--foreground-muted);
+    background: rgba(0, 0, 0, 0.06);
+    padding: 0 6px;
+    border-radius: 8px;
+    line-height: 14px;
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: 600;
+}
+
+.tree-folder-children {
+    /* Vertical guide line + indent for the file rows under each folder. */
+    margin-left: 12px;
+    padding-left: 10px;
+    border-left: 1px dashed var(--border);
+    margin-top: 1px;
+    margin-bottom: 4px;
+}
+
+.file-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 8px;
+    border-radius: 5px;
+    cursor: pointer;
+    color: var(--foreground-secondary);
+    font-size: 12px;
+    transition: background 0.12s ease, color 0.12s ease;
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: 400;
+}
+
+.file-item:hover {
+    background: rgba(0, 0, 0, 0.04);
+    color: var(--foreground);
+}
+
+.file-item.active {
+    background: var(--primary-subtle, rgba(88, 80, 236, 0.1));
+    color: var(--primary);
+    font-weight: 500;
+}
+
+.file-item-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}
+
+/* ── Download card (Claude-style) ──────────────────────────────────── */
+.download-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 10px 0 4px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--card-bg);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+    box-sizing: border-box;
+    width: 100%;
+    overflow: hidden;
+}
+
+.download-card-icon {
+    flex-shrink: 0;
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    background: rgba(88, 80, 236, 0.1);
+    color: var(--primary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.download-card-info {
+    flex: 1 1 0;
+    min-width: 0;
+}
+
+.download-card-name {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--foreground);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.download-card-meta {
+    font-size: 11px;
+    color: var(--foreground-muted);
+    margin-top: 2px;
+}
+
+.download-card-btn {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: 500;
+    border-radius: 6px;
+    background: var(--primary);
+    color: var(--primary-foreground, #fff);
+    border: none;
+    cursor: pointer;
+    transition: opacity 0.15s ease;
+    font-family: inherit;
+}
+
+.download-card-btn:hover { opacity: 0.9; }
+.download-card-btn:active { opacity: 0.8; }
+
+.download-card-clickable {
+    cursor: pointer;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.05s ease;
+}
+.download-card-clickable:hover {
+    border-color: var(--primary);
+    box-shadow: 0 1px 3px rgba(88, 80, 236, 0.18);
+}
+.download-card-clickable:active { transform: translateY(1px); }
+.download-card-clickable:focus-visible {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px rgba(88, 80, 236, 0.25);
+}
+
+.chat-input-area {
+    padding: 16px;
+    border-top: 1px solid var(--border);
+    background: var(--card-bg);
+    position: relative;
+}
+
+/* 输入框拖大手柄：水平条，位于 .chat-input-area 顶部正上沿（覆盖 area 的
+   border-top），向上拖即增大输入区高度。中间一条短 grip 给视觉提示，
+   hover 时整条变蓝紫色高亮。 */
+.chat-input-resizer {
+    position: absolute;
+    top: -3px;
+    left: 0;
+    right: 0;
+    height: 6px;
+    cursor: ns-resize;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 5;
+}
+
+.chat-input-resizer-grip {
+    width: 40px;
+    height: 3px;
+    border-radius: 2px;
+    background: var(--border);
+    transition: background 0.12s ease;
+}
+
+.chat-input-resizer:hover .chat-input-resizer-grip,
+.skill-generator-container.dragging .chat-input-resizer-grip {
+    background: #5850ec;
+}
+
+.chat-controls {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 8px;
+    padding: 0 4px;
+    align-items: center;
+    /* 禁止任意子项换行/竖排——窄场景下走"更多"折叠面板，而不是让 inline 控件挤竖 */
+    flex-wrap: nowrap;
+    white-space: nowrap;
+}
+
+.chat-controls.is-collapsed {
+    justify-content: space-between;
+}
+
+/* "更多"按钮 + 弹出面板：popover 锚定在按钮左下，定宽 220px，给 select 留够吐字空间 */
+.chat-controls-more-wrap {
+    position: relative;
+    display: inline-flex;
+}
+
+.chat-controls-more-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 26px;
+    padding: 0 8px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--background-secondary);
+    color: var(--foreground-muted);
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.chat-controls-more-btn:hover {
+    background: var(--background-tertiary, #e5e7eb);
+}
+
+.chat-controls-popover {
+    position: absolute;
+    left: 0;
+    z-index: 20;
+    min-width: 220px;
+    /* max-height + overflow-y:auto——将来加更多配置项时不会撑出屏幕，里头自带滚动条 */
+    max-height: 320px;
+    overflow-y: auto;
+    padding: 10px 12px;
+    background: var(--background, #ffffff);
+    border: 1px solid var(--border, #e5e7eb);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+/* 默认向下弹（按钮下方有空间） */
+.chat-controls-popover.placement-bottom {
+    top: calc(100% + 6px);
+}
+
+/* 向上弹（按钮下方不够，比如 chat-input 拉高了的场景）：
+   bottom 锚定到按钮顶部之上 6px，阴影方向也跟着翻——看起来像从上方掉下来 */
+.chat-controls-popover.placement-top {
+    bottom: calc(100% + 6px);
+    box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.12);
+}
+
+/* popover 里的 control-item 改用 label 在上、控件在下的纵排，select 拉满宽度 */
+.control-item.control-item-stacked {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
+}
+
+.control-item.control-item-stacked label {
+    font-size: 11px;
+    color: var(--foreground-muted);
+}
+
+.control-item.control-item-stacked select {
+    width: 100%;
+    height: 28px;
+    font-size: 12px;
+    /* 复用 inline 那一套 chevron，但 padding 略宽以匹配更大的字号 */
+    padding-right: 26px;
+    background-size: 12px 12px;
+    background-position: right 8px center;
+}
+
+.control-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.control-item label {
+    font-size: 11px;
+    color: var(--foreground-muted);
+    white-space: nowrap;
+}
+
+.control-item select {
+    /* 显式画一个 chevron 当下拉箭头，避免依赖各浏览器原生样式（Safari/Chrome 默认箭头
+       很小、Firefox 又不一样）。data-URL SVG 内联，不额外发请求。 */
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
+    padding: 2px 22px 2px 8px;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
+    background-repeat: no-repeat;
+    background-position: right 6px center;
+    background-size: 10px 10px;
+    font-size: 11px;
+    height: 24px;
+    border-radius: 4px;
+    background-color: var(--background-secondary);
+    border: 1px solid var(--border);
+    cursor: pointer;
+}
+
+.control-divider {
+    width: 1px;
+    height: 16px;
+    background: var(--border);
+    margin: 0 4px;
+}
+
+.chat-clear-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 4px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--foreground-muted);
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.chat-clear-btn:hover {
+    background: #fee2e2;
+    color: #ef4444;
+    border-color: #fecaca;
+}
+
+.chat-input-container {
+    background: var(--background-secondary);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 6px 12px;
+    display: flex;
+    flex-direction: column;
+}
+
+.chat-input-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 4px 0;
+}
+
+/* contenteditable chat-input：placeholder 通过 :empty + data-attr 伪元素呈现，
+   只在完全为空时显示。chip 是 inline span，不打断文字流。 */
+.chat-input-rich {
+    flex: 1;
+    /* 高度走 CSS 变量，由 .chat-input-resizer 拖拽时直改 root 上的变量。
+       不用 native resize: vertical（grip 在右下角不直观）——改成上方一条
+       水平 drag handle，向上拖增大。 */
+    height: var(--pg-chat-input-h, 80px);
+    overflow-y: auto;
+    outline: none;
+    line-height: 1.5;
+    font-size: 13px;
+    color: #111827;
+    padding: 6px 4px;
+    word-break: break-word;
+    white-space: pre-wrap;
+}
+
+.chat-input-rich:empty::before {
+    content: attr(data-placeholder);
+    color: #9ca3af;
+    pointer-events: none;
+}
+
+/* inline chip：背景淡色 + 圆角，垂直居中跟着字基线走；包含图标 / 文件名 / 行号徽章。
+   contenteditable=false 让浏览器把它当原子单位处理（光标不进入、backspace 整删）。 */
+.chat-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 6px 1px 6px;
+    margin: 0 2px;
+    background: #eef2ff;
+    border: 1px solid #c7d2fe;
+    border-radius: 5px;
+    font-size: 12px;
+    color: #3730a3;
+    line-height: 1.4;
+    vertical-align: baseline;
+    user-select: none;
+    cursor: default;
+    max-width: 240px;
+}
+
+.chat-chip > svg {
+    flex-shrink: 0;
+    opacity: 0.7;
+}
+
+.chat-chip-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 160px;
+    font-weight: 500;
+}
+
+.chat-chip-lines {
+    padding: 0 5px;
+    font-size: 11px;
+    color: #6366f1;
+    background: #ffffff;
+    border-radius: 4px;
+    line-height: 1.5;
+    font-variant-numeric: tabular-nums;
+}
+
+.chat-chip-remove {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    margin-left: 2px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    color: #6366f1;
+    border-radius: 3px;
+    cursor: pointer;
+    opacity: 0.55;
+    transition: opacity 0.1s ease, background 0.1s ease;
+}
+
+.chat-chip-remove:hover {
+    opacity: 1;
+    background: #ffffff;
+}
+
+/* chip 显示在用户气泡（紫色渐变 bg）里：去掉 hover 行为、收紧 padding，
+   底色提到接近纯白让指示性更强（紫底 + 白底 chip 对比度最大）。 */
+.chat-chip-bubble {
+    background: #ffffff;
+    border-color: #c7d2fe;
+    color: #3730a3;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+.chat-chip-bubble .chat-chip-lines {
+    background: #eef2ff;
+    color: #4338ca;
+}
+
+/* 附件 chip 列表：贴在 chat-input-row 上方，自动换行；与对话引用 chip 视觉风格区分
+   开（绿色调而非蓝紫调），让用户分清"这是我上传的素材"与"这是从代码 / 选区引用进来的"。 */
+.chat-attachments-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px 0 8px;
+}
+
+.chat-attachment-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 6px;
+    background: #ecfdf5;
+    border: 1px solid #a7f3d0;
+    border-radius: 5px;
+    font-size: 12px;
+    color: #065f46;
+    line-height: 1.4;
+    max-width: 240px;
+}
+
+.chat-attachment-chip > svg {
+    flex-shrink: 0;
+    opacity: 0.75;
+}
+
+.chat-attachment-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 160px;
+    font-weight: 500;
+}
+
+.chat-attachment-tag {
+    padding: 0 5px;
+    font-size: 10px;
+    color: #047857;
+    background: #ffffff;
+    border-radius: 4px;
+    line-height: 1.5;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.chat-attachment-remove {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    margin-left: 2px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    color: #047857;
+    border-radius: 3px;
+    cursor: pointer;
+    opacity: 0.55;
+}
+
+.chat-attachment-remove:hover {
+    opacity: 1;
+    background: #ffffff;
+}
+
+.chat-attachment-status {
+    font-size: 12px;
+    color: #6b7280;
+}
+
+.chat-attachment-error {
+    font-size: 12px;
+    color: #b91c1c;
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    padding: 2px 6px;
+    border-radius: 5px;
+    max-width: 320px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* 联网搜索 toggle —— 在 chat-controls 里跟 clear-btn 并列。on/off 通过背景色区分，
+   未配 key (disabled) 时进一步降不透明度 + 拒绝鼠标事件。 */
+.chat-web-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 26px;
+    padding: 0 8px;
+    border-radius: 6px;
+    border: 1px solid #d1d5db;
+    background: #f3f4f6;
+    color: #6b7280;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+    /* 文本永不换行——之前在窄场景看到的"竖"是 inline-flex 里 svg+span 间被换行符断开 */
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.chat-web-toggle:not(:disabled):hover {
+    background: #e5e7eb;
+}
+
+.chat-web-toggle.is-on {
+    background: #ecfdf5;
+    border-color: #6ee7b7;
+    color: #047857;
+}
+
+.chat-web-toggle.is-on:hover {
+    background: #d1fae5;
+}
+
+.chat-web-toggle:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.chat-web-toggle svg {
+    flex-shrink: 0;
+    opacity: 0.85;
+}
+
+/* 指示灯：配过 key 绿色（has-key），未配灰色（no-key）。
+   不跟 is-on/is-off 关联——它表达"key 是否就绪"，跟用户当前是否开启搜索是两个维度：
+   配过 key + 关掉 = 灰底按钮 + 绿点（"能用但本轮没开"）；
+   未配 key = 灰底按钮 + 灰点（"未就绪"，引导去 Model Registry）。 */
+.chat-web-toggle-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #cbd5e1;
+    flex-shrink: 0;
+    margin-left: 2px;
+    transition: background 0.15s, box-shadow 0.15s;
+}
+
+.chat-web-toggle.has-key .chat-web-toggle-dot {
+    background: #10b981;
+    /* 微微外发光，绿点更显眼 */
+    box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.18);
+}
+
+/* user-bubble 里多个 chip + 文字混排时，行间距比纯文字稍大一些更舒服。 */
+.user-message-content {
+    line-height: 1.65;
+}
+
+.chat-upload-btn, .chat-send-icon-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    background: transparent;
+    border: none;
+    color: #6b7280;
+    cursor: pointer;
+    border-radius: 6px;
+    transition: all 0.2s;
+    margin-top: 2px;
+}
+
+.chat-upload-btn:hover, .chat-send-icon-btn:hover {
+    background: #f3f4f6;
+    color: #111827;
+}
+
+/* 上传按钮 + hover 时的支持类型 popover。
+   wrap 是 hover 命中区；popover 用 absolute 定位贴在按钮上方，
+   默认 hidden（visibility 而非 display:none，方便淡入过渡）。 */
+.chat-upload-btn-wrap {
+    position: relative;
+    display: inline-flex;
+}
+
+.chat-upload-tooltip {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 0;
+    z-index: 50;
+    width: 320px;
+    padding: 12px 14px;
+    background: #ffffff;
+    color: #111827;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    box-shadow: 0 10px 24px rgba(17, 24, 39, 0.08), 0 2px 6px rgba(17, 24, 39, 0.04);
+    font-size: 12px;
+    line-height: 1.45;
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(4px);
+    transition: opacity 0.12s ease, transform 0.12s ease, visibility 0s linear 0.12s;
+    pointer-events: none;
+}
+
+.chat-upload-btn-wrap:hover .chat-upload-tooltip,
+.chat-upload-btn-wrap:focus-within .chat-upload-tooltip {
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0);
+    transition: opacity 0.12s ease, transform 0.12s ease, visibility 0s linear 0s;
+}
+
+.chat-upload-tooltip-title {
+    font-weight: 600;
+    color: #111827;
+    margin-bottom: 2px;
+}
+
+.chat-upload-tooltip-summary {
+    color: #6b7280;
+    margin-bottom: 10px;
+}
+
+.chat-upload-tooltip-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: transparent;
+}
+
+.chat-upload-tooltip-table th,
+.chat-upload-tooltip-table td {
+    background: transparent;
+    border: none;
+}
+
+.chat-upload-tooltip-table th {
+    width: 44px;
+    padding: 4px 10px 4px 0;
+    text-align: left;
+    vertical-align: top;
+    font-weight: 500;
+    color: #6b7280;
+    white-space: nowrap;
+}
+
+.chat-upload-tooltip-table td {
+    padding: 4px 0;
+    vertical-align: top;
+    color: #374151;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    word-break: break-word;
+}
+
+.chat-upload-tooltip-footer {
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid #e5e7eb;
+    color: #6b7280;
+    font-size: 11px;
+}
+
+.chat-send-icon-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+}
+
+.chat-stop-icon-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    flex-shrink: 0;
+    background: transparent;
+    border: 1.5px solid #5850ec;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s;
+    margin-top: 2px;
+}
+
+.chat-stop-icon-btn:hover {
+    background: #ede9fe;
+}
+
+.chat-input {
+    flex: 1;
+    border: none;
+    background: transparent;
+    resize: none;
+    font-size: 13.5px;
+    outline: none;
+    min-height: 24px;
+    max-height: 120px;
+    padding: 8px 0;
+    line-height: 1.5;
+}
+
+/* File Tree Styles */
+.file-tree {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 0;
+}
+
+.file-item {
+    padding: 8px 16px;
+    font-size: 13px;
+    color: #4b5563;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.file-item:hover {
+    background: #f3f4f6;
+}
+
+.file-item.active {
+    background: #f0f0ff;
+    color: #5850ec;
+    font-weight: 500;
+}
+
+.dir-item {
+    padding: 12px 16px 4px;
+    font-size: 11px;
+    color: #9ca3af;
+    text-transform: lowercase;
+}
+
+/* Editor Styles */
+.editor-header {
+    height: 48px;
+    padding: 0 16px;
+    background: #ffffff;
+    border-bottom: 1px solid #f3f4f6;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.editor-body {
+    flex: 1;
+    min-height: 0; /* Allow the body to shrink and scroll internally in a flex layout */
+    position: relative;
+    overflow: hidden; /* Contain the scrollable children */
+}
+
+.doc-title {
+    font-size: 24px;
+    font-weight: 700;
+    color: #111827;
+    margin-bottom: 12px;
+}
+
+.doc-divider {
+    border-bottom: 1px solid #f3f4f6;
+    margin-bottom: 24px;
+}
+
+.doc-content {
+    font-size: 14px;
+    line-height: 1.6;
+    color: #374151;
+    white-space: pre-wrap;
+}
+
+.doc-content h1, .doc-content h2, .doc-content h3 {
+    color: #5850ec;
+}
+
+.btn-download {
+    padding: 4px 12px;
+    font-size: 12px;
+    border: 1px solid #e5e7eb;
+    background: #ffffff;
+    border-radius: 6px;
+    color: #4b5563;
+    cursor: pointer;
+}
+
+.header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.btn-close-ide {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    border: none;
+    background: transparent;
+    color: #9ca3af;
+    cursor: pointer;
+    transition: all 0.2s;
+    margin-left: 4px;
+}
+
+.btn-close-ide:hover {
+    background: #fee2e2;
+    color: #ef4444;
+}
+
+.markdown-body {
+    max-width: 800px;
+    margin: 0 auto;
+}
+
+/* Card Styles for messages */
+.skill-card-preview {
+    margin-top: 12px;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    box-shadow: 0 4px 20px var(--shadow-color-lg);
+    max-width: 340px;
+    border-left: 4px solid var(--primary);
+}
+
+.skill-card-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.skill-card-icon {
+    width: 32px;
+    height: 32px;
+    background: var(--primary-subtle);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--primary);
+}
+
+.skill-card-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--foreground);
+}
+
+.skill-card-subtitle {
+    font-size: 11px;
+    color: var(--foreground-muted);
+}
+
+.skill-card-desc {
+    font-size: 12px;
+    color: var(--foreground-secondary);
+    line-height: 1.4;
+}
+
+.skill-card-stats {
+    display: flex;
+    gap: 12px;
+    padding: 8px 0;
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+}
+
+.stat-item {
+    font-size: 11px;
+    color: var(--foreground-muted);
+}
+
+.stat-item span {
+    color: var(--primary);
+    font-weight: 600;
+}
+
+.skill-card-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.skill-card-actions .ai-btn-sp {
+    padding: 4px 8px;
+    font-size: 10.5px;
+    background: transparent;
+    color: var(--primary);
+    border: 1px dashed var(--primary);
+    cursor: pointer;
+    border-radius: 4px;
+    transition: all 0.2s;
+}
+
+/* History Dropdown Styles */
+.history-dropdown-wrapper {
+    position: relative;
+    z-index: 1000;
+}
+
+.history-btn {
+    display: flex;
+    align-items: center;
+    padding: 4px 10px;
+    font-size: 11px;
+    font-weight: 500;
+    color: #4b5563;
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.history-btn:hover {
+    background: #f9fafb;
+    border-color: #d1d5db;
+}
+
+.history-menu {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    width: 280px;
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+/* The "New Chat" button now lives next to the History dropdown as a top-level
+   action — its old in-menu styling is gone. .new-chat-btn just inherits the
+   shared .ai-btn-s sizing. */
+
+.history-empty {
+    padding: 28px 16px;
+    text-align: center;
+    color: var(--foreground-muted);
+    font-size: 12px;
+}
+
+.history-list {
+    max-height: 320px;
+    overflow-y: auto;
+}
+
+.history-item {
+    padding: 10px 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+    border-bottom: 1px solid #f9fafb;
+    transition: background 0.2s;
+}
+
+.history-item:hover {
+    background: #f9fafb;
+}
+
+.history-item.active {
+    background: #f0f0ff;
+    border-left: 3px solid #5850ec;
+}
+
+.history-item-content {
+    flex: 1;
+    min-width: 0;
+}
+
+.history-item-title {
+    font-size: 12.5px;
+    font-weight: 500;
+    color: #111827;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.history-item-date {
+    font-size: 10px;
+    color: #9ca3af;
+    margin-top: 2px;
+}
+
+.history-item-delete {
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #9ca3af;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    opacity: 0;
+    transition: all 0.2s;
+}
+
+.history-item:hover .history-item-delete {
+    opacity: 1;
+}
+
+.history-item-delete:hover {
+    background: #fee2e2;
+    color: #ef4444;
+}
+
+.markdown-preview {
+    padding: 32px 48px;
+    height: 100%;
+    width: 100%;
+    overflow-y: auto;
+    overflow-x: hidden;
+    word-break: break-word;
+    overflow-wrap: break-word;
+    font-size: 14px;
+    line-height: 1.6;
+    color: #374151;
+    background: #fff;
+    scrollbar-width: thin;
+    box-sizing: border-box;
+}
+
+/* skill 元信息卡：把 SKILL.md 顶部 frontmatter 单独渲染出来。
+   原本 `---/name/description/---` 会被 ReactMarkdown 渲成 hr + setext-h2 + hr
+   三件套，难看；page.tsx 在送进 ReactMarkdown 前把 frontmatter 剥出来，
+   单独用这张卡片呈现。 */
+.skill-frontmatter-card {
+    margin-bottom: 28px;
+    padding: 16px 20px 18px;
+    background: linear-gradient(135deg, #f6f5ff 0%, #eef0ff 100%);
+    border: 1px solid #e0e3f5;
+    border-radius: 10px;
+    box-shadow: 0 1px 2px rgba(88, 80, 236, 0.04);
+}
+
+.skill-frontmatter-label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    color: #7a72f0;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+}
+
+.skill-frontmatter-name {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 16px;
+    font-weight: 600;
+    color: #1f2240;
+    margin-bottom: 8px;
+    line-height: 1.3;
+}
+
+.skill-frontmatter-desc {
+    font-size: 13.5px;
+    line-height: 1.65;
+    color: #4b5563;
+}
+
+.markdown-preview h1 {
+    font-size: 24px;
+    font-weight: 700;
+    margin-bottom: 16px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #f3f4f6;
+    color: #111827;
+}
+
+.markdown-preview h2 {
+    font-size: 18px;
+    font-weight: 600;
+    margin-top: 24px;
+    margin-bottom: 12px;
+    color: #1f2937;
+}
+
+.markdown-preview h3 {
+    font-size: 15px;
+    font-weight: 600;
+    margin-top: 16px;
+    margin-bottom: 8px;
+    color: #374151;
+}
+
+.markdown-preview p {
+    margin-bottom: 16px;
+}
+
+.markdown-preview code {
+    background: #f3f4f6;
+    padding: 2px 4px;
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    font-size: 0.85em;
+    color: #e02424;
+}
+
+.markdown-preview pre {
+    background: #f9fafb;
+    padding: 16px;
+    border-radius: 8px;
+    overflow-x: auto;
+    margin-bottom: 16px;
+    border: 1px solid #f3f4f6;
+}
+
+.markdown-preview pre code {
+    background: transparent;
+    padding: 0;
+    color: #1f2937;
+    font-size: 13px;
+}
+
+.markdown-preview ul, .markdown-preview ol {
+    padding-left: 20px;
+    margin-bottom: 16px;
+}
+
+.markdown-preview li {
+    margin-bottom: 4px;
+}
+
+.markdown-preview blockquote {
+    border-left: 4px solid #e5e7eb;
+    padding-left: 16px;
+    color: #6b7280;
+    margin: 16px 0;
+}
+
+.markdown-preview table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 16px;
+}
+
+.markdown-preview th, .markdown-preview td {
+    border: 1px solid #e5e7eb;
+    padding: 8px 12px;
+    text-align: left;
+}
+
+.markdown-preview th {
+    background: #f9fafb;
+    font-weight: 600;
+}
+
+.panel-title-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    padding: 4px 8px;
+    margin-left: -8px;
+    border-radius: 6px;
+    transition: background 0.2s;
+}
+
+.panel-title-wrapper:hover {
+    background: #f3f4f6;
+}
+
+.panel-title-wrapper .edit-icon {
+    opacity: 0;
+    transition: opacity 0.2s;
+    color: #9ca3af;
+}
+
+.panel-title-wrapper:hover .edit-icon {
+    opacity: 1;
+}
+
+.title-edit-input {
+    background: transparent;
+    border: 1px solid #5850ec;
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 13px;
+    font-weight: 600;
+    color: #111827;
+    outline: none;
+    width: 240px;
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+.spinner {
+    animation: spin 1s linear infinite;
+}
+
+/* ── Web search results card (Claude "Searched the web" style) ────────── */
+.web-search-block {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    margin: 3px 0;
+    border-radius: 10px;
+    border: 1px solid #e4e6e9;
+    background: #f5f6f8;
+    overflow: hidden;
+    font-size: 12px;
+}
+
+.web-search-header {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 7px 10px;
+    cursor: pointer;
+    border: none;
+    background: transparent;
+    width: 100%;
+    text-align: left;
+    font-family: inherit;
+    font-size: 12px;
+    color: #374151;
+}
+
+.web-search-header:hover { background: rgba(0,0,0,0.03); }
+
+.web-search-header-icon {
+    flex-shrink: 0;
+    color: #6b7280;
+}
+
+.web-search-header-label {
+    flex: 1 1 0;
+    font-weight: 500;
+    color: #374151;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.web-search-count-badge {
+    flex-shrink: 0;
+    font-size: 10.5px;
+    color: #6b7280;
+    background: #e4e6e9;
+    padding: 1px 7px;
+    border-radius: 10px;
+    font-weight: 500;
+}
+
+.web-search-chevron {
+    flex-shrink: 0;
+    color: #9ca3af;
+    font-size: 10px;
+    transition: transform 0.15s ease;
+}
+
+.web-search-chevron[data-open="false"] { transform: rotate(-90deg); }
+
+.web-search-body {
+    border-top: 1px solid #e9eaec;
+    background: #ffffff;
+}
+
+.web-search-query-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-bottom: 1px solid #f3f4f6;
+    font-size: 11.5px;
+    color: #6b7280;
+}
+
+.web-search-query-text {
+    font-style: italic;
+    color: #374151;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.web-search-results-list {
+    max-height: 240px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: #e5e7eb transparent;
+}
+
+.web-search-result-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    padding: 7px 12px;
+    border-bottom: 1px solid #f5f6f7;
+    cursor: default;
+    transition: background 0.1s ease;
+}
+
+.web-search-result-item:last-child { border-bottom: none; }
+.web-search-result-item:hover { background: #fafafa; }
+
+.web-search-favicon {
+    flex-shrink: 0;
+    width: 16px;
+    height: 16px;
+    border-radius: 3px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: 1px;
+    color: #9ca3af;
+}
+
+.web-search-result-info {
+    flex: 1 1 0;
+    min-width: 0;
+}
+
+.web-search-result-title {
+    font-size: 12px;
+    font-weight: 500;
+    color: #1d4ed8;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    line-height: 1.4;
+}
+
+.web-search-result-domain {
+    font-size: 11px;
+    color: #6b7280;
+    margin-top: 1px;
+}
+
+.web-search-raw {
+    padding: 8px 12px;
+    font-size: 11.5px;
+    color: #6b7280;
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.5;
+}
+
+/* ── Editor tab bar (VS Code-style) ──────────────────────────────────── */
+.editor-tabs {
+    display: flex;
+    align-items: stretch;
+    height: 36px;
+    background: #f3f4f6;
+    border-bottom: 1px solid #e5e7eb;
+    overflow-x: auto;
+    overflow-y: hidden;
+    flex-shrink: 0;
+    scrollbar-width: none;
+}
+
+.editor-tabs::-webkit-scrollbar { display: none; }
+
+.editor-tab {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 10px 0 12px;
+    height: 100%;
+    min-width: 80px;
+    max-width: 180px;
+    border-right: 1px solid #e5e7eb;
+    cursor: pointer;
+    font-size: 12px;
+    color: #6b7280;
+    white-space: nowrap;
+    overflow: hidden;
+    transition: background 0.12s ease, color 0.12s ease;
+    user-select: none;
+    flex-shrink: 0;
+    position: relative;
+}
+
+.editor-tab:hover {
+    background: #e9ebee;
+    color: #374151;
+}
+
+.editor-tab.active {
+    background: #ffffff;
+    color: #111827;
+    font-weight: 500;
+}
+
+.editor-tab.active::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: #5850ec;
+    border-radius: 2px 2px 0 0;
+}
+
+.editor-tab-name {
+    flex: 1 1 0;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.tab-close-btn {
+    flex-shrink: 0;
+    width: 16px;
+    height: 16px;
+    border-radius: 4px;
+    border: none;
+    background: transparent;
+    color: #9ca3af;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.12s ease, background 0.12s ease, color 0.12s ease;
+    padding: 0;
+    line-height: 1;
+    font-size: 13px;
+}
+
+.editor-tab:hover .tab-close-btn,
+.editor-tab.active .tab-close-btn {
+    opacity: 1;
+}
+
+.tab-close-btn:hover {
+    background: #fecdd3;
+    color: #ef4444;
+    opacity: 1;
+}
+
+.editor-tabs-empty {
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    height: 36px;
+    font-size: 12px;
+    color: #9ca3af;
+    background: #f3f4f6;
+    border-bottom: 1px solid #e5e7eb;
+    flex-shrink: 0;
+}
+
+/* ── File tree improvements ───────────────────────────────────────────── */
+.file-tree-panel {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow: hidden;
+}
+
+.file-tree-panel .panel-header {
+    background: #f8f9fb;
+    border-bottom: 1px solid #e5e7eb;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #6b7280;
+    padding: 0 14px;
+    height: 36px;
+    flex-shrink: 0;
+}
+
+.file-tree-scroll {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 0 16px;
+    scrollbar-width: thin;
+    scrollbar-color: #e5e7eb transparent;
+}
+
+.file-tree-scroll::-webkit-scrollbar { width: 4px; }
+.file-tree-scroll::-webkit-scrollbar-track { background: transparent; }
+.file-tree-scroll::-webkit-scrollbar-thumb { background: #e5e7eb; border-radius: 4px; }
+
+/* Improved file icon colors */
+.file-icon-md { color: #3b82f6; }
+.file-icon-sh { color: #10b981; }
+.file-icon-default { color: #6b7280; }
+
+/* ── Panel header + breadcrumb improvements ──────────────────────────── */
+.editor-header {
+    background: #ffffff;
+    border-bottom: 1px solid #e9ebee;
+}
+
+.breadcrumb {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12.5px;
+    color: #374151;
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+    flex: 1;
+}
+
+.breadcrumb svg { flex-shrink: 0; opacity: 0.7; }
+
+.btn-publish {
+    padding: 5px 14px;
+    font-size: 12px;
+    font-weight: 500;
+    background: #5850ec;
+    color: #ffffff;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.btn-publish:hover {
+    background: #4f46e5;
+    box-shadow: 0 2px 8px rgba(88, 80, 236, 0.3);
+}
+
+.btn-download {
+    padding: 5px 12px;
+    font-size: 12px;
+    font-weight: 500;
+    border: 1px solid #e5e7eb;
+    background: #ffffff;
+    border-radius: 6px;
+    color: #374151;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.btn-download:hover {
+    background: #f9fafb;
+    border-color: #d1d5db;
+}
+
+.btn-md-toggle {
+    padding: 5px 12px;
+    font-size: 12px;
+    font-weight: 500;
+    border: 1px solid #e5e7eb;
+    background: #ffffff;
+    border-radius: 6px;
+    color: #5850ec;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.btn-md-toggle:hover {
+    background: #f5f3ff;
+    border-color: #c4b5fd;
+}
+
+/* ── Selection "Add to Chat" floating bubble ────────────────────────────
+   定位由 page.tsx 里 SelectionBubble 计算（基于选区 rect），这里只管样式。
+   z-index 必须高于 Monaco 的 overlay（默认 ~10），否则点不上。 */
+.selection-add-to-chat {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 500;
+    background: #111827;
+    color: #ffffff;
+    border: none;
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+    cursor: pointer;
+    z-index: 30;
+    white-space: nowrap;
+    transition: transform 0.1s ease, background 0.15s ease;
+}
+
+.selection-add-to-chat:hover {
+    background: #1f2937;
+    transform: translateY(-1px);
+}
+
+.selection-add-to-chat svg {
+    opacity: 0.9;
+}
+
+/* ── Chat panel header improvements ─────────────────────────────────── */
+.panel-header {
+    background: #ffffff;
+}
+
+
+/* ── New chat panel empty state ──────────────────────────────────────── */
+.chat-empty-state {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 40px 20px;
+    color: #9ca3af;
+    text-align: center;
+}
+
+.chat-empty-state-icon {
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+    background: linear-gradient(135deg, #f0eeff 0%, #e8e4ff 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #7c3aed;
+    margin-bottom: 4px;
+}
+
+.chat-empty-state h3 {
+    font-size: 15px;
+    font-weight: 600;
+    color: #374151;
+    margin: 0;
+}
+
+.chat-empty-state p {
+    font-size: 13px;
+    color: #9ca3af;
+    margin: 0;
+    line-height: 1.5;
+    max-width: 260px;
+}
+
+.agent-streaming-indicator {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 0 2px;
+    color: #9ca3af;
+    font-size: 12px;
+}
+
+/* 3-dot pulse animation (Claude/ChatGPT style) */
+.streaming-dots {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    height: 16px;
+}
+
+.streaming-dots span {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: #9ca3af;
+    display: inline-block;
+    animation: dot-bounce 1.4s ease-in-out infinite;
+}
+
+.streaming-dots span:nth-child(1) { animation-delay: 0s; }
+.streaming-dots span:nth-child(2) { animation-delay: 0.2s; }
+.streaming-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes dot-bounce {
+    0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+    30% { transform: translateY(-4px); opacity: 1; }
+}
