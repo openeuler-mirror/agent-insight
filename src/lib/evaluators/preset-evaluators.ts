@@ -1,0 +1,38 @@
+import type { EvaluatorCard } from './custom-evaluator-model';
+
+export const presetEvaluators: EvaluatorCard[] = [
+  {
+    id: 'preset-agent-task-completion',
+    name: 'Agent 任务完成度',
+    description: '评估 Agent 是否成功、完整地实现了用户目标，适合回归集和上线验收。',
+    evaluatorType: 'LLM',
+    source: 'preset',
+    targetTypes: ['结果'],
+    objectives: ['任务完成', '内容质量'],
+    scenarios: ['Agent通用评测'],
+    runMode: 'LLM Judge',
+    scoreRange: '0-1',
+    popularity: 96,
+    mappedMetrics: ['目标达成', '步骤完整', '答案可用'],
+    status: 'ready',
+    runtimeHref: '/eval/trajectory',
+    runtimeNote: 'opencode-task-completion-evaluator.ts (opencode agent + 1 subagent)',
+  },
+  {
+    id: 'preset-agent-trace-quality',
+    name: 'Agent 轨迹质量',
+    description: '评估 Agent 内部执行轨迹是否准确、稳定，关注规划、调用和中间结果。基于 opencode 多 subagent 协作（completeness / tool-choice / attribution + 规则工具 detect_redundancy）。',
+    evaluatorType: 'LLM',
+    source: 'preset',
+    targetTypes: ['轨迹'],
+    objectives: ['轨迹质量'],
+    scenarios: ['Agent通用评测', '轨迹评测'],
+    runMode: 'Trace Judge (opencode)',
+    scoreRange: '0-1',
+    popularity: 91,
+    mappedMetrics: ['轨迹准确性', '推理连续性', '异常处理'],
+    status: 'ready',
+    runtimeHref: '/eval/trajectory',
+    runtimeNote: 'opencode-trajectory-evaluator.ts (opencode agent + 3 subagents)',
+  },
+];

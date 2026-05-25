@@ -1,0 +1,1 @@
+export type { SkillMetadata } from "./legacy/skill-types";
