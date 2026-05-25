@@ -7,6 +7,7 @@ import {
     type TrajectoryEvalInput,
 } from '@/lib/engine/evaluation/opencode-trajectory-evaluator';
 import { evaluateTaskCompletionViaOpencode } from '@/lib/engine/evaluation/opencode-task-completion-evaluator';
+import { startOrReplace as startEvalTask, finish as finishEvalTask } from '@/lib/evaluation-task-manager';
 import { deriveAndPersistOptPoints } from '@/lib/engine/evaluation/derive-skill-opt-points';
 import {
     analyzeDynamicOnly,
@@ -272,10 +273,14 @@ async function evaluateTaskCompletionAgainstExpected(
     expectedOutput: string,
     actualOutput: string,
     user?: string | null,
+    skillName?: string | null,
+    skillVersion?: number | null,
 ): Promise<ResultJudgment> {
     const result = await evaluateTaskCompletionViaOpencode(
         { caseInput, expectedOutput, actualOutput },
         user,
+        skillName,
+        skillVersion,
     );
     return {
         isCorrect: result.isCorrect,
@@ -832,6 +837,16 @@ class StagedEvaluationError extends Error {
 
 /** 包装 evaluateTrajectory + 加超时；分阶段抛错便于 UI 显示根因 */
 async function runOneEvaluation(user: string, id: string): Promise<void> {
+ // 注册到 evaluation-task-manager 的 activeTasks 内存表 —— 让 GET /api/observe/data 的
+ // is_evaluating 字段在轮询时对这条 trace 返 true,前端"已评测历史"列表立刻显示"评测中",
+ // 不会再卡在老评测结果不刷新。
+ // (之前 bug: runOneEvaluation 只改 DB.status='running',没注册内存表,前端 isActive()
+ //  查内存表始终 false → trace 状态不刷新。)
+ // 在最早能拿到 taskId 的时机就 startOrReplace, 保证用户点"再次评测"后下次轮询(3s 内)
+ // 就能看到状态变化。
+ let registeredTaskId: string | null = null;
+ let registeredRunId: string | null = null;
+ try {
     // ---- 0. 标 running ----
     await prisma.trajectoryEvalResult.update({
         where: { id },
@@ -841,6 +856,34 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
     // ---- 1. 加载行 + case + interactions ----
     const row = await prisma.trajectoryEvalResult.findUnique({ where: { id } });
     if (!row) throw new StagedEvaluationError('lookup', `result row ${id} disappeared`);
+    // 注册 isActive: 必须在 row 加载后才有 taskId, 但要尽早调以缩短"用户点评测" → "isActive=true"的窗口
+    if (row.taskId) {
+        registeredTaskId = row.taskId;
+        const r = startEvalTask(user, row.taskId, 'rejudge');
+        registeredRunId = r.runId;
+    }
+    // 反查关联的 execution 拿到 skill + skillVersion,后面传给 evaluator → limiter,
+    // 让"后台分析任务"面板能按 skill 严格过滤。row 自己没存 skill 字段, 要通过 execution 关联。
+    // 关键: 大部分 row 的 executionId 是 null (历史数据/ingest 路径没回填),所以必须 fallback
+    // 用 row.taskId 反查 execution.taskId; 实测 99% 的 row 通过 taskId 都能找到对应 execution。
+    let linkedExecution: { skill: string | null; skillVersion: number | null } | null = null;
+    if (row.executionId) {
+        linkedExecution = await prisma.execution.findUnique({
+            where: { id: row.executionId },
+            select: { skill: true, skillVersion: true },
+        }).catch(() => null);
+    }
+    if (!linkedExecution && row.taskId) {
+        linkedExecution = await prisma.execution.findFirst({
+            where: { taskId: row.taskId },
+            orderBy: { timestamp: 'desc' },
+            select: { skill: true, skillVersion: true },
+        }).catch(() => null);
+    }
+    const evalSkillName: string | null = linkedExecution?.skill || null;
+    const evalSkillVersion: number | null = typeof linkedExecution?.skillVersion === 'number'
+        ? linkedExecution.skillVersion
+        : null;
     const evaluatorMeta = readSelectedEvaluatorMeta(row.rawAnalysisJson);
     const taskMeta = extractTrajectoryTaskMeta(row.rawAnalysisJson, row.createdAt);
     const shouldRunTraceEvaluation = evaluatorMeta.selectedEvaluators.includes(TRACE_EVALUATOR_ID);
@@ -1232,6 +1275,8 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
                         caseEntry.expectedOutput,
                         resultActualOutput,
                         user,
+                        evalSkillName,
+                        evalSkillVersion,
                     );
                     resultEvaluationRawAnalysis = {
                         ...(resultJudgment.rawAnalysis || {}),
@@ -1311,7 +1356,7 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
                     expectedOutput: needsCustomReferenceOutput ? caseEntry!.expectedOutput : '',
                     actualOutput: actualOutputForCustom,
                     traceText: traceTextForCustom,
-                }).catch(e => ({
+                }, evalSkillName, evalSkillVersion).catch(e => ({
                     evaluatorId,
                     evaluatorName: evaluatorId,
                     score: null as number | null,
@@ -1390,7 +1435,7 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
     let out: Awaited<ReturnType<typeof evaluateTrajectoryViaOpencode>>;
     try {
         out = await Promise.race([
-            evaluateTrajectoryViaOpencode(input, user),
+            evaluateTrajectoryViaOpencode(input, user, evalSkillName, evalSkillVersion),
             new Promise<never>((_, reject) =>
                 setTimeout(
                     () => reject(new StagedEvaluationError('timeout', `单条评测超过 ${PER_RESULT_TIMEOUT_MS / 1000}s 未完成`)),
@@ -1439,6 +1484,16 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
     }
 
     await derivePointsAfterDone(user, id, execution);
+ } finally {
+    // 无论成功 / 失败 / throw,都从 activeTasks 摘掉这条注册,让 isActive() 返 false,
+    // 前端轮询拿到 is_evaluating=false → trace 状态更新为最新分数 / 失败信息。
+    if (registeredTaskId && registeredRunId) {
+        try { finishEvalTask(user, registeredTaskId, registeredRunId); }
+        catch (e) {
+            console.warn(`[trajectory-eval] finishEvalTask failed user=${user} task=${registeredTaskId}: ${(e as Error)?.message}`);
+        }
+    }
+ }
 }
 
 /**

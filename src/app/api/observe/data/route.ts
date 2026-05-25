@@ -1,5 +1,5 @@
 import { readRecords, saveExecutionRecord } from '@/lib/storage/data-service';
-import { db } from '@/lib/storage/prisma';
+import { db, prismaRaw as prisma } from '@/lib/storage/prisma';
 import { NextResponse } from 'next/server';
 import { isActive } from '@/lib/evaluation-task-manager';
 import { triggerTrajectoryAutoWatchForTask } from '@/lib/engine/evaluation/trajectory-auto-watch';
@@ -322,19 +322,54 @@ export async function GET(request: Request) {
       { attachEvaluations }
     );
     
+    // 批量查每条 trace 的最近一次 TrajectoryEvalResult.status, 让前端 trace 行能反映"上次评测
+    // 跑成功 / 失败"。之前 trace 行 status 只看 resultScore/trajScore + 前端内存 failedTaskIds
+    // (刷新就丢),导致评测失败 + 老分数还在的 trace 会被错误显示成"已评测"。
+    // findMany 按 createdAt desc 排序,第一条命中就是该 taskId 的最新一次评测。
+    const recordTaskIdsForEvalLookup = Array.from(new Set(
+        data.map(r => r.task_id || r.upload_id || '').filter(Boolean)
+    ));
+    const lastEvalByTaskId = new Map<string, { status: string; errorMessage: string | null }>();
+    if (user && recordTaskIdsForEvalLookup.length > 0) {
+        try {
+            const recentEvalRows = await prisma.trajectoryEvalResult.findMany({
+                where: { user, taskId: { in: recordTaskIdsForEvalLookup } },
+                orderBy: { createdAt: 'desc' },
+                select: { taskId: true, status: true, errorMessage: true },
+            });
+            for (const row of recentEvalRows) {
+                if (row.taskId && !lastEvalByTaskId.has(row.taskId)) {
+                    lastEvalByTaskId.set(row.taskId, {
+                        status: row.status,
+                        errorMessage: row.errorMessage,
+                    });
+                }
+            }
+        } catch (e) {
+            console.warn('[Data-API] failed to fetch last eval status:', (e as Error)?.message);
+        }
+    }
+
     const enrichedData = await Promise.all(data.map(async record => {
         const recordTaskId = record.task_id || record.upload_id || '';
         const is_evaluating = user && recordTaskId ? isActive(user, recordTaskId) : false;
+        const lastEval = recordTaskId ? lastEvalByTaskId.get(recordTaskId) : null;
+        const last_eval_status = lastEval?.status ?? null;
+        const last_eval_error = lastEval?.errorMessage ?? null;
         if (skipAutoEvalReady) {
             return {
                 ...record,
                 is_evaluating,
+                last_eval_status,
+                last_eval_error,
             };
         }
         const readiness = await getAutoEvalReadiness(record, new URL(request.url).origin);
         return {
             ...record,
             is_evaluating,
+            last_eval_status,
+            last_eval_error,
             auto_eval_ready: readiness.autoEvalReady,
             autoEvalReady: readiness.autoEvalReady,
             auto_eval_wait_reason: readiness.autoEvalWaitReason,
