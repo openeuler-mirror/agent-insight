@@ -102,6 +102,10 @@ interface TraceRecord {
     answer_score?: number | null;
     answerScore?: number | null;
     is_evaluating?: boolean;
+    /** 最近一次 TrajectoryEvalResult.status: pending/running/done/failed | null (从未评测过) */
+    last_eval_status?: string | null;
+    /** 最近一次评测失败时的错误信息 (status=failed 时有值) */
+    last_eval_error?: string | null;
     execution_match?: {
         matchJson?: string | null;
         matchedAt?: string | null;
@@ -1298,6 +1302,7 @@ function SkillAnalysisPage() {
                 )}
 
                 {view === 'overview' && (
+                  <>
                     <AnalysisOverview
                         user={user}
                         selectedSkill={selectedSkill}
@@ -1326,6 +1331,7 @@ function SkillAnalysisPage() {
                         smartRunBusy={smartRunBusy}
                         onSmartRunBusyChange={setSmartRunBusy}
                     />
+                  </>
                 )}
 
                 {view === 'trace' && (
@@ -2744,6 +2750,29 @@ function TraceDeviationPanel({
     // （status: pending/running）。下方 useEffect 会在 mount + traces 变化时扫一遍
     // 后端进行中的评测，把对应 taskId 补回这个 Map——刷新页面后"评测中"徽章不消失。
     const [triggeredTaskIds, setTriggeredTaskIds] = useState<Map<string, number>>(new Map());
+
+    // 自动清理 triggeredTaskIds: 当 trace 的后端 is_evaluating 变成 false (评测真的结束了),
+    // 把这条 taskId 从 Map 移除,让 getTraceEvalStatus 不再返回 'pending',UI 自然切回 'done' 或
+    // 显示新的分数。否则"已评测的 trace 重新评测后" Map 残留 → 永久卡在"评测中"。
+    // 这条 effect 依赖后端 /api/observe/data 的 is_evaluating 字段真实反映 isActive,
+    // 而后者依赖 runOneEvaluation 注册了 startOrReplace + finish (见 trajectory/run/route.ts)。
+    useEffect(() => {
+        if (triggeredTaskIds.size === 0) return;
+        setTriggeredTaskIds(prev => {
+            let changed = false;
+            const next = new Map(prev);
+            for (const t of traces) {
+                const id = (t as any).task_id || (t as any).taskId;
+                if (!id) continue;
+                if (next.has(id) && t.is_evaluating === false) {
+                    next.delete(id);
+                    changed = true;
+                }
+            }
+            return changed ? next : prev;
+        });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [traces]);
     // 失败评测 trace id → 错误信息。后端的"静默失败"（status=done 但 LLM 调用挂掉/score 为 null）
     // 之前完全没暴露给前端,trace 显示"未评估"用户以为没触发,实际上是 API key 失效一类的真实错误。
     // 现在 recovery 时把这种行也抓出来,UI 用红色"评测失败"徽章 + tooltip 显示根因。
@@ -3302,7 +3331,16 @@ function TraceDeviationPanel({
        - "已评测"门槛：结果分 + 轨迹分双双就绪（与 sa-score-dot.ok 同口径）
        - avgScore = (resultAvg + trajAvg) / 2，与外层卡片"已分析平均分"的语义对齐
        ─────────────────────────────────────────────────── */
-    type ScoredTrace = { trace: TraceRecord; id: string; query: string; resultScore: number | null; trajScore: number | null };
+    type ScoredTrace = {
+        trace: TraceRecord;
+        id: string;
+        query: string;
+        resultScore: number | null;
+        trajScore: number | null;
+        isEvaluating: boolean;
+        lastEvalStatus: string | null;
+        lastEvalError: string | null;
+    };
     const scoredTraces: ScoredTrace[] = traces.map(t => {
         // answer_score / answerScore 后端写的是 0-1 (clampTaskScore 范围)，
         // 这里统一 × 100 转 0-100 跟 trajScore 一致——之前少了 × 100 导致
@@ -3319,6 +3357,11 @@ function TraceDeviationPanel({
             query: t.query || '(无 query)',
             resultScore: r,
             trajScore: j == null ? null : Math.round(j * 100),
+            // 后端 isActive (我们注册 evaluation-task-manager 的 activeTasks 后会真实返 true/false)
+            isEvaluating: t.is_evaluating === true,
+            // 后端 TrajectoryEvalResult 最近一次 status,让"评测失败"的 trace 即使有老分数也能正确显示
+            lastEvalStatus: t.last_eval_status ?? null,
+            lastEvalError: t.last_eval_error ?? null,
         };
     });
     // 每条 trace 的评测状态：
@@ -3328,12 +3371,19 @@ function TraceDeviationPanel({
     //   failed  —— 后端 row 有 errorMessage 或 status=failed 或 status=done 但**全无**分（API key 失效那种"静默挂"）
     //   idle    —— 完全没触发过
     type EvalStatus = 'done' | 'partial' | 'pending' | 'failed' | 'idle';
-    const getTraceEvalStatus = (s: { id: string; resultScore: number | null; trajScore: number | null }): EvalStatus => {
+    const getTraceEvalStatus = (s: { id: string; resultScore: number | null; trajScore: number | null; isEvaluating?: boolean; lastEvalStatus?: string | null }): EvalStatus => {
+        // 优先级:
+        // 1. pending: 后端正在跑(isEvaluating) 或 前端刚触发但还没反馈(triggeredTaskIds)
+        //    对"已评测的 trace 再次评测"的场景必须优先于 done,否则会卡死显示已评测。
+        // 2. failed: 后端 TrajectoryEvalResult 最近一次 status='failed'。优先于 done —— 即使
+        //    trace 上次评测成功留下了分数,这次评测失败也要让用户看到。也兼顾前端 failedTaskIds
+        //    (页面 session 内的 batch run 失败)。
+        // 3. done: 双分都有 (完整成功)
+        // 4. partial: 只有一边分数
+        // 5. idle: 完全没数据
+        if (s.isEvaluating || triggeredTaskIds.has(s.id)) return 'pending';
+        if (s.lastEvalStatus === 'failed' || failedTaskIds.has(s.id)) return 'failed';
         if (s.resultScore != null && s.trajScore != null) return 'done';
-        if (triggeredTaskIds.has(s.id)) return 'pending';
-        if (failedTaskIds.has(s.id)) return 'failed';
-        // "部分成功"——只有一边分数。优先级排在 pending/failed 之后，因为如果后台还在跑另一边
-        // (triggered map 有它) 应该显示"评测中"而非"部分完成"。
         if (s.resultScore != null || s.trajScore != null) return 'partial';
         return 'idle';
     };

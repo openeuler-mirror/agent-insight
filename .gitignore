@@ -82,6 +82,9 @@ scripts/otel_data/opencode/
 # workspace 目录不纳入版本控制
 workspace/
 
+# 本地诊断/复现脚本，不纳入版本控制
+exclude/
+
 # Claude
 .claude
 .claude/

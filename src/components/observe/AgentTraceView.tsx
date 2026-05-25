@@ -2061,15 +2061,15 @@ function SkillUsageCard({ skill, currentUser }: { skill: TraceSkillUsage; curren
             <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                     <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--foreground)' }}>
-                        {/* 所有 skill 都包成 SkillLink ——
-                           managed 跳 /skill-detail?id=<id>，unregistered 跳 ?name=<name>&user=<user>,
-                           skill-detail 页面对 not found 已经有友好提示;
-                           之前 unregistered 渲染成纯文本,完全没法点击 */}
+                        {/* managed: SkillLink 内部跳 /skills?openSkillId=<id>&openVersion=<displayVersion>,
+                           skill 管理 (SkillCatalogV2) 读这俩 query 自动打开对应 skill 的抽屉并落到 trace 上报版本。
+                           unregistered: disabled SkillLink,灰字不可点 + tooltip。 */}
                         <SkillLink
                             skillId={skill.asset?.id}
                             skillName={skill.name}
                             version={skill.displayVersion}
                             user={currentUser}
+                            disabled={!managed}
                         />
                     </span>
                     <span style={{
