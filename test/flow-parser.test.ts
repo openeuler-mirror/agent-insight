@@ -5,7 +5,7 @@ import {
   mergeKeyActionsFromMultipleSkills,
   ParsedFlowResult,
   ExtractedKeyAction
-} from "../src/lib/flow-parser"
+} from "../src/lib/engine/observability/flow-parser"
 
 test("测试用例 1：线性步骤抽取", () => {
   const input: ParsedFlowResult = {

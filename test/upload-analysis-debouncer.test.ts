@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-import { debounceByKey } from "@/lib/upload-analysis-debouncer"
+import { debounceByKey } from "@/lib/ingest/upload-analysis-debouncer"
 
 test("debounceByKey runs only once per key and keeps latest payload", async () => {
   const seen: number[] = []

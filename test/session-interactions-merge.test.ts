@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-import { mergeSessionInteractionsMonotonic } from "@/lib/session-interactions-merge"
+import { mergeSessionInteractionsMonotonic } from "@/lib/engine/observability/session-interactions-merge"
 
 test("mergeSessionInteractionsMonotonic preserves existing child-session messages even if incoming is longer but missing them", () => {
   const existing = [

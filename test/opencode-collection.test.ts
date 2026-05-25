@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { extractSkillsWithVersionsFromOpencodeSession, normalizeInteractions } from "../src/lib/interaction-utils"
+import { extractSkillsWithVersionsFromOpencodeSession, normalizeInteractions } from "../src/lib/shared/interaction-utils"
 
 test("opencode: normalizeInteractions groups into a single turn and preserves assistant request tool calls", () => {
   const messages = [
