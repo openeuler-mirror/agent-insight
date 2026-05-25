@@ -679,6 +679,14 @@ async function startServerForUser(
     proc.stderr?.on('data', (b: Buffer) =>
       process.stderr.write(`[opencode:${user}] ${b.toString()}`),
     )
+  } else {
+    // 即使不转发日志也必须消费 pipe，否则父进程不读 → ~64KB pipe buffer 撑满 →
+    // opencode 真二进制 (Go) 内部 write(2) syscall 被 OS 阻塞 → 整个 server 进程冻死，
+    // 现象就是"跑一段时间 opencode 卡死、HTTP/SSE 全不响应"。.resume() 把数据丢到
+    // 黑洞，buffer 始终空，不会回压。stdio:'ignore' 不行——必须 'pipe' 才能继承 plugin
+    // 上报相关的 stdin/stdout 协议；只是不能让它 piped 后没人读。
+    proc.stdout?.resume()
+    proc.stderr?.resume()
   }
 
   // 关键:server 进程崩了或主动退出后,清空 map 中对应条目，下次请求会自动 respawn。
