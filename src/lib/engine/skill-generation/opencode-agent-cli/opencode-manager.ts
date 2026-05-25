@@ -18,6 +18,8 @@ type SingleServer = {
   /** Hash of the model config (apiKey/baseURL/providerID/modelID) used to spawn this
    *  instance. 用于检测用户在 UI 改了 apiKey 后判断是否需要重启实例。 */
   configHash: string
+  /** spawn 时间戳 (ms)。dashboard 用来算 uptime,排查长时间未活动的卡死实例。 */
+  startedAt: number
 }
 
 // ── 模块状态 ─────────────────────────────────────────────────────────
@@ -718,6 +720,7 @@ async function startServerForUser(
     baseUrl: `http://127.0.0.1:${port}`,
     user,
     configHash,
+    startedAt: Date.now(),
   }
 }
 
@@ -869,4 +872,77 @@ export function getServerUrl(user?: string): string | null {
 /** 调试用：当前活跃实例数。 */
 export function getActiveServerCount(): number {
   return state.servers.size
+}
+
+/**
+ * Per-task ephemeral opencode 进程: 每次 spawn 独立实例 → 跑 fn → finally 杀。
+ *
+ * 跟 ensureOpencodeServer 的区别:
+ *   - ensureOpencodeServer: per-user 长驻复用,启动时凝固 skill / 自定义 agent / plugin /
+ *     provider config —— 用户编辑这些东西后,旧实例不会自动 reload,需要手动重启。
+ *   - runWithEphemeralOpencodeServer: per-call 新启进程,fn 跑完立即 SIGTERM (→ 5s SIGKILL 兜底)。
+ *     保证每个后台任务都用最新 skill,杜绝跨 task 的软污染 (plugin 全局状态 / provider 缓存等)。
+ *
+ * 代价:
+ *   - 冷启动 +3-10s / 任务 (spawn + plugin 加载 + healthcheck)
+ *   - 内存峰值 ~50-100MB × 并发任务数 (默认上限 5,所以 ~250-500MB)
+ *
+ * 适用场景: 后台评测 / A·B 灰度等"对正确性比对时延敏感"的任务。用户实时对话 (如
+ * skill-generator-bridge) 仍走 ensureOpencodeServer 复用,因为用户在等回复,冷启动延迟
+ * 会让用户体验恶化。
+ *
+ * 注意: 这里**不进 state.servers map** —— ephemeral 实例不被任何代码持有引用,杀完即弃。
+ * 因此 dashboard "opencode 实例" 列表大部分时间是空的 (短暂任务峰值时才会一闪而过)。
+ */
+export async function runWithEphemeralOpencodeServer<T>(
+  opts: { user?: string; verbose?: boolean },
+  fn: (serverUrl: string) => Promise<T>,
+): Promise<T> {
+  const userKey = opts.user || ANONYMOUS_USER_KEY
+  const verbose = opts.verbose ?? false
+  // 注意: 直接调内部 startServerForUser 不走 cache, 也不写 state.servers。
+  // 多个 ephemeral 调用并发时各自起独立进程,互不复用,自然隔离。
+  const inst = await startServerForUser(userKey, { verbose })
+  try {
+    return await fn(inst.baseUrl)
+  } finally {
+    try {
+      await terminateOpencodeProcess(inst.process, `ephemeral cleanup for ${userKey}`)
+    } catch (cleanupErr) {
+      // cleanup 失败不应该掩盖 fn 的真错误,只 warn 不抛
+      console.warn(
+        `[opencode] ephemeral cleanup for ${userKey} failed:`,
+        cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr),
+      )
+    }
+  }
+}
+
+/**
+ * Dashboard / debug 用：当前所有活跃 opencode 实例的快照。不会暴露 ChildProcess 句柄,
+ * 只导出可序列化的可观测字段:user、PID、port、startedAt、uptime、是否已 exit。
+ *
+ * 注意: 后台任务从 v0.7 起走 runWithEphemeralOpencodeServer 模式 (per-task spawn-and-kill),
+ * 不进 state.servers map; 这里只列出 ensureOpencodeServer 复用模式下持有的实例 (典型场景:
+ * skill-generator-bridge 的用户实时对话)。大部分时间这个列表是空的。
+ */
+export function getOpencodeServersSnapshot(): Array<{
+  user: string
+  pid: number | null
+  port: number
+  baseUrl: string
+  startedAt: number
+  uptimeMs: number
+  exitCode: number | null
+}> {
+  const now = Date.now()
+  return Array.from(state.servers.entries()).map(([userKey, srv]) => ({
+    user: userKey,
+    pid: srv.process.pid ?? null,
+    port: srv.port,
+    baseUrl: srv.baseUrl,
+    startedAt: srv.startedAt,
+    uptimeMs: Math.max(0, now - srv.startedAt),
+    exitCode: srv.process.exitCode,
+  }))
 }

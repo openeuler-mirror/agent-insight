@@ -847,6 +847,8 @@ async function executeSingleAgentRun(args: {
             system: buildGrayscaleExecutionSystem(args.version),
             interactionPolicy: 'auto-deny',
             systemAgentName: args.version ? 'grayscale-skill-agent' : 'grayscale-baseline-agent',
+            // 后台批量任务: 每次起独立 opencode 进程,跑完杀,保证拿最新 skill 内容
+            ephemeralServer: true,
             sessionTitle: `grayscale ${target.side.toUpperCase()} r${target.roundIndex} · ${args.user} · ${args.taskId}`,
             workspaceTag: `grayscale-${args.taskId}-${target.side}-${target.caseId}-r${target.roundIndex}`,
             timeoutMs: GRAYSCALE_AGENT_TIMEOUT_MS,
@@ -1084,7 +1086,15 @@ async function evaluateRunsWithConcurrency(args: {
             const beforeRunId = target.run.evaluatorRunId;
             await withBackgroundOpencodeSlot(
                 () => evaluateSingleRunTarget({ ...args, target }),
-                { label: `eval-${target.side}-${target.caseId}` },
+                {
+                    taskType: 'grayscale-eval',
+                    user: args.user,
+                    label: `eval-${target.side}-${target.caseId}`,
+                    // TODO: evaluateRunsWithConcurrency 当前从 args.config.skillId 索引,这一层
+                    // 拿不到具体 versionA/B 的 skillName/version。后续 refactor 让 caller 把
+                    // versionA/B 显式传进 args 后再补齐 skill 透传。当前 grayscale-eval 任务
+                    // 在 dashboard 按 skill 过滤时会看不见,需要在"显示所有"模式才能看到。
+                },
             );
             if (target.run.evaluatorRunId && target.run.evaluatorRunId !== beforeRunId) {
                 evaluatorRunIds.push(target.run.evaluatorRunId);
@@ -1187,7 +1197,13 @@ async function runGrayscaleTask(args: {
                     version,
                     target: item,
                 }),
-                { label: `grayscale-${item.side}-${item.caseId}-r${item.roundIndex}` },
+                {
+                    taskType: 'grayscale-ab',
+                    user,
+                    label: `grayscale-${item.side}-${item.caseId}-r${item.roundIndex}`,
+                    skill: version?.skillName,
+                    skillVersion: version?.version ?? null,
+                },
             );
         });
     };
