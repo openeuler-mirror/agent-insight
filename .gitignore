@@ -34,7 +34,7 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env.local
-**/.env
+.env
 
 # custom model config (copy from custom-models.example.json)
 custom-models.json
@@ -60,6 +60,10 @@ __pycache__/
 .opencode/
 bun.lock
 
+# git worktrees
+.worktrees/
+3rd-pro/
+
 # macOS
 .DS_Store
 .AppleDouble
@@ -71,8 +75,21 @@ bun.lock
 # Agent development configuration
 .agentdev/
 _local_legacy/
-AGENTS.md
 
-# Skillbench folders
-skillbench/runs/
-skillbench/tasks*/
+# OpenCode OTel local capture samples (dev-only)
+scripts/otel_data/opencode/
+
+# workspace 目录不纳入版本控制
+workspace/
+
+# Claude
+.claude
+.claude/
+
+# IDE configurations
+.idea
+.vscode
+.trae
+*.iml
+.agents
+.codex

@@ -809,6 +809,9 @@ export default async function WittySkillInsightPlugin(input) {
               let toolCallErrorCount = 0;
               let maxSingleCallTokens = 0;
 
+              let firstTs = Number.MAX_SAFE_INTEGER;
+              let lastTs = 0;
+
               for (const m of messages) {
                   if (m.role === 'user' && !firstUserQuery) firstUserQuery = m.content;
                   const isCompletion = m.role === 'assistant' || m.role === 'subagent';
@@ -817,6 +820,23 @@ export default async function WittySkillInsightPlugin(input) {
                       if (m.model) model = m.model;
                       else if (m.modelID) model = m.modelID;
                   }
+
+                  const t1 = toMsTimestamp(m.timestamp) || 0;
+                  const t2 = toMsTimestamp(m.timeInfo?.completed) || 0;
+                  const t3 = toMsTimestamp(m.timeInfo?.created) || 0;
+                  
+                  if (t1 > 0) {
+                      firstTs = Math.min(firstTs, t1);
+                      lastTs = Math.max(lastTs, t1);
+                  }
+                  if (t2 > 0) {
+                      lastTs = Math.max(lastTs, t2);
+                  }
+                  if (t3 > 0) {
+                      firstTs = Math.min(firstTs, t3);
+                      lastTs = Math.max(lastTs, t3);
+                  }
+
                   if (isCompletion) {
                       llmCallCount++;
                       
@@ -851,18 +871,6 @@ export default async function WittySkillInsightPlugin(input) {
                           const callTotal = inputToks + cacheReadToks + cacheCreateToks + outputToks;
                           if (callTotal > maxSingleCallTokens) maxSingleCallTokens = callTotal;
                       }
-                      
-                      // Latency Logic
-                      let mDuration = 0;
-                      if (m.timeInfo?.created && m.timeInfo?.completed) {
-                           mDuration = new Date(m.timeInfo.completed).getTime() - new Date(m.timeInfo.created).getTime();
-                      } else if (m.partBasedDuration > 0) {
-                           mDuration = m.partBasedDuration + 100;
-                      }
-
-                      if (mDuration > 0 && mDuration < 3600000) {
-                          totalLatencyMs += mDuration;
-                      }
 
                       // Count tool calls from this message
                       if (m.tool_calls && Array.isArray(m.tool_calls)) {
@@ -874,6 +882,10 @@ export default async function WittySkillInsightPlugin(input) {
                           }
                       }
                   }
+              }
+
+              if (firstTs !== Number.MAX_SAFE_INTEGER && lastTs > firstTs) {
+                  totalLatencyMs = lastTs - firstTs;
               }
 
               logDebug(`Uploading session ${sessionId}. Latency: ${totalLatencyMs}ms, Messages: ${messages.length}`);

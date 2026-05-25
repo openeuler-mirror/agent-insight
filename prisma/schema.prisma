@@ -20,10 +20,12 @@ model Skill {
   
   // Relations
   versions    SkillVersion[]
-  
+  evaluations Evaluation[]
+  issues      SkillIssue[]
+
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
-  
+
   activeVersion Int?   @default(0)
   isUploaded    Boolean  @default(false)
 
@@ -73,6 +75,8 @@ model Execution {
   reasoningTokens          Int?
   timestamp       DateTime @default(now())
   model           String?
+  agentName       String?
+  agentId         String?
   finalResult     String?
   skill           String?
   skills          String?  // JSON array of strings (skill names)
@@ -87,7 +91,114 @@ model Execution {
   skillVersion    Int?
   label           String?
   user            String?
-  skillRecallRate      Float? // Execution-level metric: correct_invoked_skills / expected_skills (per execution)
+  // Execution-level trigger-accuracy metric: correct_invoked_skills / expected_skills (per execution).
+  skillTriggerRate     Float?
+
+  // --- 多 Agent 拆分字段 ---
+  // 一次主 agent 的 trace 会被拆成 1 条 root execution + N 条 sub-agent execution，
+  // 父子靠 parentExecutionId 串，整棵树共享 rootExecutionId。
+  // 列表/聚合默认按 isSubagent=false 过滤 root；详情页可下钻到任意 sub-agent。
+  parentExecutionId String?   // null 表示 root；否则指向上一级 Execution.id
+  rootExecutionId   String?   // 整棵树的根（root 自身可为 null 或自指）
+  agentSessionId    String?   // 对应 framework 给的 sessionID（root 或 sub-agent 各自的）
+  subagentType      String?   // 'kuafu' / 'general' / null（root）
+  subagentName      String?   // 完整显示名（如 "Kuafu (General Diagnostic Executor)"）
+  isSubagent        Boolean   @default(false)
+
+  // 反向关系：被多少次 Evaluation 评估过（dynamic 类型，重评懒删除）
+  evaluations          Evaluation[]
+
+  @@index([parentExecutionId])
+  @@index([rootExecutionId])
+  @@index([isSubagent, timestamp])
+  @@index([agentSessionId])
+}
+
+/// 一次评估事件——静态评估和动态评估统一到这张表，按 type 区分。
+/// 详细设计见 docs/plans/2026-05-08-skill-opt-issues-api-design.md
+model Evaluation {
+  id            String   @id @default(cuid())
+  type          String   // 'static' | 'dynamic'
+
+  // 评估目标
+  skillId       String
+  version       Int
+  user          String?
+
+  // dynamic 专用：指向被评估的 trace。同一条 trace 可被多个 evaluation 引用
+  // （重评懒删除：旧 evaluation 不删，多个评估器并存）
+  executionId   String?
+  Execution     Execution? @relation(fields: [executionId], references: [id])
+
+  // static 专用：内容 hash，作"快速查最近一次同 content 的评估"的索引线索
+  // 不是 unique 约束——同 SkillVersion 允许多次重评（评估器自行决定 skip）
+  contentHash   String?
+  l2ScoresJson  String?  // {Role:1-5, Structure:1-5, ...}（V2 接 LLM 5D 时填）
+
+  // 通用元数据
+  ranAt         DateTime @default(now())
+  status        String   @default("ok")  // 'ok' | 'partial' | 'failed'
+  errorMessage  String?
+  durationMs    Int?
+  generator     String?  // 'static-linter@0.1' / 'judge.ts@1.2' 等
+
+  // dynamic 评估批次（trajectory-evaluator 的 evaluatorRunId）；用于过滤"某轮评测产出的 issue"
+  runId         String?
+
+  Skill         Skill        @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  issues        SkillIssue[]
+
+  @@index([skillId, version])
+  @@index([type, ranAt])
+  @@index([skillId, version, type, contentHash])  // 评估器查"最近一次同 content 评估"用；非 unique
+  @@index([executionId])
+  @@index([runId])
+}
+
+/// 单个优化点。每行 = 一个独立 issue。
+/// FK 指向产生它的 Evaluation；source 字段从 Evaluation.type denormalize 过来便于热路径查询。
+model SkillIssue {
+  id            String   @id @default(cuid())
+  evaluationId  String
+  Evaluation    Evaluation @relation(fields: [evaluationId], references: [id], onDelete: Cascade)
+
+  // denormalized：避免热路径 join Evaluation
+  source        String   // 'static' | 'dynamic' | 'feedback'
+  skillId       String
+  version       Int
+  user          String?
+
+  // 内容识别：跨 evaluation 聚合"同一 issue"的语义键
+  // - static: ruleId（如 "frontmatter_missing_name"）
+  // - dynamic: hash6(content + explanation)
+  dedupKey      String
+
+  // 内容字段（前端直接消费）
+  severity      String   // 'high' | 'medium' | 'low'
+  summary       String
+  evidence      String?
+  reasoning     String?
+  suggestedFix  String?
+
+  // 静态专用元数据（前端可忽略）
+  ruleId        String?
+  dimension     String?  // L2 评估维度，纯审计
+
+  // 业务分类（前端展示用）：'轨迹偏差' | '关键观点遗漏' | '工具误用' | '静态扫描' | '其它'
+  category      String?
+
+  // 解决标记：skill-opt 完成一轮优化后调 PATCH /resolve 把对应 id 置位；列表默认过滤
+  resolvedAt    DateTime?
+  resolvedRunId String?  // 哪轮 skill-opt（threadId）把它解掉的
+
+  createdAt     DateTime @default(now())
+
+  Skill         Skill    @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@index([skillId, version, dedupKey])  // 跨 eval prevalence 聚合用
+  @@index([evaluationId])
+  @@index([source, severity])             // 前端按来源/严重度筛选
+  @@index([skillId, version, resolvedAt]) // 列表默认过滤 resolvedAt = null
 }
 
 model Config {
@@ -173,4 +284,315 @@ model UserGuideState {
   dismissedAt       DateTime?
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
+}
+
+model SkillGeneratorSession {
+  id        String   @id @default(cuid())
+  title     String   @default("New Chat")
+  user      String?  // Link to user username
+  files     String   @default("{}") // Store FilesState as JSON string
+  // 绑定到 opencode 后端的 sessionID；多轮对话时复用 opencode 内的对话上下文。
+  // opencode server 重启会让此 ID 失效，bridge 检测到后自动起新 session（磁盘文件仍保留，agent 内对话历史会丢）。
+  opencodeSessionId String?
+  // 内部 agent tag 持久化：bridge 跑 runGeneralAgent 时会用 internal-agent-tag.ts 在内存里
+  // 登记 opencodeSessionId → agentName/skill 映射，让 upload 路由把 plugin 默认填的字段
+  // 覆写成正确的系统 agent 归属。但内存映射在 dev server 重启时会清空——重启前生成 session、
+  // 重启后才被 uploader 上报的话，trace 里 agentName 就空了。这里把同一份信息冗余到 DB，
+  // upload 路由内存查不到时回退读这里。
+  agentName        String?
+  // SYSTEM_AGENTS 里该 agent 的 traceSkill 字段，缓存一份避免上报路径再 join 一次。
+  agentTraceSkill  String?
+  messages  SkillGeneratorMessage[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // 表名保留 PlaygroundSession，避免 DB 迁移；只把 Prisma model 层重命名以跟路由统一。
+  @@map("PlaygroundSession")
+}
+
+model SkillGeneratorMessage {
+  id        String                @id @default(cuid())
+  sessionId String
+  session   SkillGeneratorSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  role      String                // "user" | "agent"
+  content   String                // Markdown content (text-only fallback for legacy clients)
+  blocks    String                @default("[]") // JSON-encoded Block[] — restores thinking/tool/download UI on reload
+  createdAt DateTime              @default(now())
+
+  @@map("PlaygroundMessage")
+}
+
+/// skill-opt 优化页的会话。结构镜像 PlaygroundSession，多两个业务字段（skillName/baseVersion）
+/// 标识"哪个 skill 哪个 base 版本起的优化"。详见 docs/plans/2026-05-09-skill-opt-history-design.md。
+model SkillOptSession {
+  id          String   @id @default(cuid())
+  user        String?  // username（与其它表对齐）
+  skillName   String
+  baseVersion Int
+  title       String   @default("新对话")
+  files       String   @default("{}")  // 最新 vfs 的全量文件 JSON
+  // opencode 多轮上下文复用；server 重启失效时 bridge 自动起新 session
+  opencodeSessionId String?
+  // 同 PlaygroundSession：trace 归属冗余字段，dev server 重启后内存 tag 失效时回退用
+  agentName        String?
+  agentTraceSkill  String?
+  messages    SkillOptMessage[]
+  iterations  SkillOptIteration[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // 列表页核心查询：按 user + skill + baseVersion 列出最近会话
+  @@index([user, skillName, baseVersion, updatedAt])
+}
+
+model SkillOptMessage {
+  id        String          @id @default(cuid())
+  sessionId String
+  session   SkillOptSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  role      String          // "user" | "agent"
+  content   String          // markdown 兜底
+  blocks    String          @default("[]")  // JSON Block[]，复用 playground Block 协议
+  createdAt DateTime        @default(now())
+
+  @@index([sessionId, createdAt])
+}
+
+/// 一次 agent turn 跑完后产生的"草稿"快照——files 全量 + agent 修改总结 + 这次处理了哪些 issue。
+/// 用户点开历史会话时，diff viewer 用它还原"v{N} → 草稿 #M"的对比和优化报告。
+model SkillOptIteration {
+  id              String          @id @default(cuid())
+  sessionId       String
+  session         SkillOptSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  /// session 内的草稿编号（递增；UI 显示为 "草稿 #N"）
+  draftNumber     Int
+  /// agent 输出的"## 修改总结" markdown 主体，作为优化报告正文
+  summary         String
+  /// 全量文件快照 JSON：{ relPath: content }
+  files           String
+  /// 这次处理的 issue id 列表 JSON。reload 后 UI 上"已优化"标记基于它重建
+  resolvedIssueIds String         @default("[]")
+  createdAt       DateTime        @default(now())
+
+  @@unique([sessionId, draftNumber])
+  @@index([sessionId, createdAt])
+}
+
+/// 用户自建评估器列表（整段 JSON）；预置评估器不入库。
+model CustomEvaluatorList {
+  user      String   @id // username，与其它表的 user 一致
+  itemsJson String   @default("[]")
+  updatedAt DateTime @updatedAt
+}
+
+/// 评测集定义与数据项（cases 存 JSON）
+model AgentEvalDataset {
+  id           String   @id
+  user         String
+  name         String
+  description  String   @default("")
+  targetAgent  String   @default("")
+  /// 服务于哪个 skill；为空表示通用 agent eval（不绑定 skill）。skill 生成时
+  /// 自动起草的行为评测集会填这个字段（用 Skill.name）。
+  targetSkill  String   @default("")
+  tagsJson     String   @default("[]")
+  casesJson    String   @default("[]")
+  datasetKind  String   @default("ideal_output")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([user])
+  @@index([user, targetSkill])
+}
+
+model DebugHistory {
+  id          String   @id @default(cuid())
+  user        String
+  skillId     String
+  skillName   String
+  versionA    String
+  versionB    String
+  query       String
+  temperature String
+  resultsJson String   // Store results as JSON string
+  createdAt   DateTime @default(now())
+
+  @@index([user])
+}
+
+model BatchEvalTask {
+  id                  String   @id @default(cuid())
+  user                String
+  taskName            String
+  configJson          String   @default("{}") // { datasetIds, skillId, versionId, sourceMode, evaluatorId, traceSkillId, ... }
+  caseStatesJson      String   @default("{}") // { [caseId]: CaseState }
+  traceEvalStatesJson String   @default("{}") // { [key]: TraceEvalStateInfo } — trace-mode eval states
+  createdAt           DateTime @default(now())
+
+  @@index([user])
+}
+
+model GrayscaleTask {
+  id             String   @id @default(cuid())
+  user           String
+  skillId        String
+  skillName      String
+  skillVersion   Int
+  skillVersionId String
+  taskName       String
+  configJson     String   @default("{}") // { datasetIds, skillId, versionAId, versionBId }；skillId/versionBId 必须等于任务绑定 skill + B 版本
+  caseStatesJson String   @default("{}") // { [caseId]: { a: PerVersionState, b: PerVersionState } }
+  createdAt      DateTime @default(now())
+
+  @@index([user])
+  @@index([user, skillId])
+  @@index([user, skillId, skillVersion])
+  @@unique([user, skillName, skillVersion])
+}
+
+/// Persisted debug job results — survives server restarts
+model DebugJobResult {
+  id         String   @id // jobId
+  user       String
+  status     String   // "completed" | "failed"
+  output     String?
+  timeCost   String?
+  tokenUsage Int?
+  sessionId  String?  // opencode session id — used for Trace link and trajectory eval
+  error      String?
+  createdAt  DateTime @default(now())
+
+  @@index([user])
+}
+
+/// 轨迹评估器单次评测结果（one row = one case × one execution trace）
+/// 由 trajectory-evaluator（deepagents）产出。同一 (datasetId, caseId, executionId)
+/// 可重跑多次 → 多行历史，按 evaluatorRunId 分组。
+/// 对接 EvaluatorsCenter 中预置评估器 preset-agent-trace-quality 的执行链路。
+model TrajectoryEvalResult {
+  id                  String   @id @default(cuid())
+  user                String
+  evaluatorRunId      String
+  datasetId           String
+  caseId              String
+  executionId         String?
+  taskId              String?
+  status              String   @default("pending") // pending | running | done | failed
+  errorMessage        String?
+
+  trajectoryScore     Float?
+  /// JSON: { completeness, toolChoice, redundancy, attribution }
+  dimensionScoresJson String?
+  /// JSON: 偏离步骤列表 [{ stepIndex, kind, name, deviation, severity }]
+  deviationStepsJson  String?
+  rootCauseStep       String?
+  reasonText          String?
+  /// 评估器原始输出（含 subagent 中间结果）
+  rawAnalysisJson     String?
+
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@index([user])
+  @@index([datasetId])
+  @@index([executionId])
+  @@index([evaluatorRunId])
+}
+
+model RegisteredAgent {
+  id             String   @id @default(cuid())
+  platform       String
+  name           String
+  description    String?
+  user           String?
+  agentType      String   @default("main")
+  agentOwnership String   @default("user")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([platform, name, user])
+}
+
+model FaultDiagnosisSession {
+  id                String   @id @default(cuid())
+  executionId       String   @unique
+  user              String?
+  opencodeSessionId String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  messages          FaultDiagnosisMessage[]
+}
+
+model FaultDiagnosisMessage {
+  id        String   @id @default(cuid())
+  sessionId String
+  session   FaultDiagnosisSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  role      String
+  content   String
+  createdAt DateTime @default(now())
+}
+
+// 注：旧 `SkillOptimizationPoint` 单表方案已废弃，统一收敛到 `Evaluation` + `SkillIssue`
+// 两表设计（详见 docs/plans/2026-05-08-skill-opt-issues-api-design.md）。
+// `SkillIssue.category` / `resolvedAt` / `resolvedRunId` + `Evaluation.runId` 把原表能力
+// 全部覆盖；frequency 合并由读取时的 prevalenceCount 派生（重评懒删除模型）。
+
+// =========================================================================
+// Skill 触发评价集（TriggerTestSet）—— 给 skill 分析页"触发分析"卡用
+// 详见 docs/designs/agents/skill-eval-datasets/design.md
+// =========================================================================
+
+model SkillTriggerEvalSet {
+  id                   String   @id @default(cuid())
+  user                 String
+  /// (user, skillName) 下的一个**版本快照**——一行 = 一个数据集版本
+  skillName            String
+  /// 同 (user, skillName) 下递增；最大版本即「latest / 当前可编辑版本」
+  version              Int      @default(1)
+  /// 该版本怎么来：'llm-draft' | 'user-upload' | 'manual'
+  versionSource        String   @default("manual")
+  /// 可选备注：上传时落文件名，AI 起草时落模型名等
+  versionNote          String?
+  description          String   @default("")
+  /// JSON array of { id, query, shouldTrigger, rationale?, source }
+  /// source: 'llm-draft' | 'user-added' | 'user-edited' | 'trace-mined'
+  itemsJson            String   @default("[]")
+  /// 起草时基于的 SKILL.md 内容 hash（sha256 前 16 位即可）
+  /// 用于后续判断 SKILL.md 改了之后要不要建议"重新起草"
+  draftedFromSkillHash String?
+  /// 起草状态：'drafting' | 'ready'（生成 pipeline 异步起草时 drafting，完成后 ready）
+  status               String   @default("ready")
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@unique([user, skillName, version])
+  @@index([user, skillName])
+}
+
+model SkillTriggerEvalRun {
+  id                 String   @id @default(cuid())
+  user               String
+  skillName          String
+  skillVersion       Int
+  /// FK 到 SkillTriggerEvalSet（按 user+skillName 唯一，不用 id 关联也行；这里冗余 id 方便排障）
+  triggerSetId       String
+  /// JSON array of { itemId, query, shouldTrigger, runsTriggered, runsTotal, triggerRate, pass, latencyMsAvg, competingSkill? }
+  /// competingSkill: 命中的不是本 skill 而是别的 skill（兄弟竞争诊断）
+  resultsJson        String   @default("[]")
+  passRate           Float    @default(0)
+  truePositiveRate   Float    @default(0)
+  falsePositiveRate  Float    @default(0)
+  runsPerQuery       Int      @default(1)
+  triggerThreshold   Float    @default(0.5)
+  timeoutMs          Int      @default(30000)
+  durationMs         Int?
+  modelId            String?
+  /// opencode 看到的项目根目录（worktree path），便于排障
+  workspaceRoot      String?
+  /// 'running' | 'done' | 'failed'
+  status             String   @default("running")
+  errorMessage       String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([user, skillName, skillVersion, createdAt])
 }

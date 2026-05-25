@@ -1,13 +1,13 @@
-import { db } from '../src/lib/prisma';
-import { normalizeExpectedSkills, normalizeConfigDatasetType } from '../src/lib/config-dataset';
-import { normalizeConfigSkillName, normalizeOptionalSkillVersion } from '../src/lib/config-target';
+import { db } from '../src/lib/storage/prisma';
+import { normalizeExpectedSkills, normalizeConfigDatasetType } from '../src/lib/engine/evaluation/config-dataset';
+import { normalizeConfigSkillName, normalizeOptionalSkillVersion } from '../src/lib/engine/evaluation/config-target';
 import {
   parseSkillFlow,
   extractKeyActionsFromFlow,
   mergeKeyActionsFromMultipleSkills,
   type ExtractedKeyAction,
   type ParsedFlowResult,
-} from '../src/lib/flow-parser';
+} from '../src/lib/engine/observability/flow-parser';
 
 type RawConfigRecord = {
   id: string;

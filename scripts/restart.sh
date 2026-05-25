@@ -48,7 +48,7 @@ echo "Checking port $PORT..."
 if [ -f .env ]; then
   # Load .env variables safely
   set -a
-  source .env
+  . .env
   set +a
 fi
 
@@ -84,6 +84,21 @@ else
   echo "No PID found via standard tools (lsof/netstat/ss)."
 fi
 
+# 1.5 清理孤儿 opencode 子进程
+# Next.js 通过 opencode-manager.ts spawn 一组 `opencode serve` 子进程作为内部
+# AI runtime（playground/skill-gen 等用）。SIGKILL Next.js 时这些子进程不会跟着死，
+# 多次 restart 后会 leak 一堆，占内存、占端口、阻碍新启动。
+# 通过 node_modules 路径匹配，只清掉本项目 spawn 的那些；不影响用户机器上其它 opencode 实例。
+PROJECT_OPENCODE_PATH="$(pwd)/node_modules/opencode-ai/bin"
+if command -v pkill >/dev/null 2>&1; then
+  ORPHAN_COUNT=$(pgrep -f "${PROJECT_OPENCODE_PATH}/.opencode" 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$ORPHAN_COUNT" -gt 0 ]; then
+    echo "Killing $ORPHAN_COUNT orphan opencode child(ren) from $PROJECT_OPENCODE_PATH..."
+    pkill -f "${PROJECT_OPENCODE_PATH}/.opencode" 2>/dev/null || true
+    sleep 1
+  fi
+fi
+
 # 2. Force kill using fuser if available (very reliable)
 if command -v fuser >/dev/null 2>&1; then
   echo "Attempting to force kill with fuser..."
@@ -105,6 +120,9 @@ echo "Port $PORT is confirmed free."
 
 # 4. Build
 echo "-----------------------------------"
+echo "Clearing Next.js build cache (.next)..."
+rm -rf .next
+
 echo "Syncing database schema..."
 npx prisma db push
 
