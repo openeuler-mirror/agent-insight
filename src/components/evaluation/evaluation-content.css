@@ -1,0 +1,766 @@
+/**
+ * EvaluationContent 样式：
+ * - .ev-* 独立命名空间，避免和 skill-eval 的 .sa-* / .sk-* 冲突
+ * - 视觉对齐 skill-eval 的标准卡片（structures/colors 直接复刻）
+ * - 不依赖 .sk-scope；可在任意页面挂载
+ */
+
+.ev-content {
+    --ev-fg: #18181b;
+    --ev-fg2: #52525b;
+    --ev-muted: #71717a;
+    --ev-line: #e5e7eb;
+    --ev-line-strong: #d4d4d8;
+    --ev-bg: #fafafa;
+    --ev-surface: #ffffff;
+    --ev-success: #16a34a;
+    --ev-success-soft: rgba(22, 163, 74, 0.1);
+    --ev-warning: #d97706;
+    --ev-warning-soft: rgba(217, 119, 6, 0.1);
+    --ev-error: #dc2626;
+    --ev-error-soft: rgba(220, 38, 38, 0.1);
+    --ev-info: #2563eb;
+    --ev-info-soft: rgba(37, 99, 235, 0.08);
+    color: var(--ev-fg);
+    font-family: 'Manrope', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+/* ───────── Card shell ───────── */
+
+.ev-card {
+    background: var(--ev-surface);
+    border: 1px solid var(--ev-line);
+    border-radius: 10px;
+    padding: 18px 20px;
+}
+
+/* ───────── Radar card layout ───────── */
+
+.ev-radar-card {
+    padding: 18px 20px;
+}
+
+/* 卡片均分两栏：雷达图在左半屏正中、文字在右半屏正中；
+   各栏内容自身居中（justify-self），随容器宽度自适应 */
+.ev-radar-body {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    align-items: center;
+    gap: 24px;
+}
+
+.ev-radar-svg-wrap {
+    justify-self: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 400px;
+    width: 100%;
+    max-width: 500px;
+}
+
+.ev-radar-svg {
+    width: 100%;
+    height: auto;
+    display: block;
+    /* SVG 自身不裁切（防止极端标签贴边时被截，比如 9 字的「脚本及参考文档质量」） */
+    overflow: visible;
+}
+
+.ev-radar-empty {
+    color: var(--ev-muted);
+    font-size: 14px;
+    text-align: center;
+    padding: 40px 16px;
+}
+
+.ev-radar-stats {
+    justify-self: center;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    width: 100%;
+    max-width: 320px;
+}
+
+.ev-radar-score {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    line-height: 1;
+}
+
+.ev-radar-score b {
+    font-size: 60px;
+    font-weight: 700;
+    line-height: 1;
+}
+
+.ev-radar-score span {
+    color: var(--ev-muted);
+    font-size: 15px;
+}
+
+.ev-radar-line {
+    color: var(--ev-muted);
+    font-size: 13.5px;
+}
+
+.ev-severity-row {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.ev-sev-chip {
+    padding: 6px 14px;
+    border-radius: 6px;
+    background: #fafafa;
+    border: 1px solid;
+    min-width: 62px;
+    text-align: center;
+}
+
+.ev-sev-chip b {
+    display: block;
+    font-size: 18px;
+    font-weight: 700;
+    line-height: 1;
+}
+
+.ev-sev-chip span {
+    font-size: 11px;
+    color: var(--ev-muted);
+}
+
+.ev-sev-chip.high {
+    border-color: rgba(220, 38, 38, 0.25);
+}
+
+.ev-sev-chip.high b {
+    color: var(--ev-error);
+}
+
+.ev-sev-chip.medium {
+    border-color: rgba(234, 88, 12, 0.25);
+}
+
+.ev-sev-chip.medium b {
+    color: #ea580c;
+}
+
+.ev-sev-chip.low {
+    border-color: rgba(101, 163, 13, 0.25);
+}
+
+.ev-sev-chip.low b {
+    color: #65a30d;
+}
+
+.ev-sev-total {
+    color: var(--ev-muted);
+    font-size: 12px;
+}
+
+/* ───────── Weak dimensions list ───────── */
+
+.ev-weak {
+    margin-top: 4px;
+    padding-top: 12px;
+    border-top: 1px dashed var(--ev-line);
+}
+
+.ev-weak-title {
+    color: var(--ev-fg2);
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 10px;
+}
+
+.ev-weak-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.ev-weak-list li {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    line-height: 1.4;
+}
+
+.ev-weak-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.ev-weak-name {
+    font-weight: 500;
+}
+
+.ev-weak-score {
+    color: var(--ev-fg2);
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px;
+    font-weight: 600;
+    margin-left: 4px;
+}
+
+.ev-weak-issues {
+    color: var(--ev-muted);
+    font-size: 12.5px;
+}
+
+/* Responsive: 窄屏时雷达图 + 统计区改为单列上下叠放 */
+@media (max-width: 720px) {
+    .ev-radar-body {
+        grid-template-columns: 1fr;
+        gap: 16px;
+    }
+}
+
+/* ───────── Comments ───────── */
+
+.ev-comments {
+    margin-top: 14px;
+    padding: 10px 12px;
+    background: rgba(0, 0, 0, 0.02);
+    border-left: 3px solid var(--ev-line-strong);
+    border-radius: 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 12.5px;
+    line-height: 1.6;
+    color: var(--ev-fg);
+}
+
+.ev-comments b {
+    margin-right: 4px;
+}
+
+/* ───────── Standard list ───────── */
+
+.ev-standards {
+    background: var(--ev-surface);
+    border: 1px solid var(--ev-line);
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+.ev-standards-head {
+    padding: 12px 18px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid var(--ev-line);
+    background: #fafaf7;
+}
+
+.ev-standards-head h3 {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.ev-standards-head span {
+    color: var(--ev-muted);
+    font-size: 12px;
+}
+
+.ev-standard {
+    border-bottom: 1px solid var(--ev-line);
+}
+
+.ev-standard:last-child {
+    border-bottom: 0;
+}
+
+.ev-standard-head {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 22px 1fr auto auto 14px;
+    align-items: center;
+    gap: 12px;
+    border: 0;
+    background: #fff;
+    padding: 12px 18px;
+    text-align: left;
+    cursor: default;
+}
+
+.ev-standard.failed .ev-standard-head,
+.ev-standard.warn .ev-standard-head {
+    cursor: pointer;
+}
+
+.ev-standard-icon {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    font-weight: 800;
+}
+
+.ev-standard.passed .ev-standard-icon {
+    color: var(--ev-success);
+    background: var(--ev-success-soft);
+}
+
+.ev-standard.failed .ev-standard-icon {
+    color: var(--ev-error);
+    background: var(--ev-error-soft);
+}
+
+.ev-standard.warn .ev-standard-icon {
+    color: var(--ev-warning);
+    background: var(--ev-warning-soft);
+}
+
+.ev-standard.notEvaluated .ev-standard-icon {
+    color: var(--ev-muted);
+    background: rgba(0, 0, 0, 0.04);
+}
+
+.ev-standard-head b {
+    display: block;
+    font-size: 13.5px;
+}
+
+.ev-standard-head small {
+    display: block;
+    color: var(--ev-muted);
+    font-size: 12px;
+}
+
+.ev-standard-head code {
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--ev-fg2);
+    background: #f4f4f5;
+    border-radius: 4px;
+    padding: 3px 8px;
+    font-size: 11.5px;
+    white-space: nowrap;
+}
+
+.ev-standard.passed .ev-standard-head code {
+    color: var(--ev-success);
+    background: var(--ev-success-soft);
+}
+
+.ev-standard.failed .ev-standard-head code {
+    color: var(--ev-error);
+    background: var(--ev-error-soft);
+}
+
+.ev-standard.warn .ev-standard-head code {
+    color: var(--ev-warning);
+    background: var(--ev-warning-soft);
+}
+
+.ev-sev-tag {
+    border-radius: 3px;
+    color: #fff;
+    font-size: 10px;
+    font-weight: 800;
+    padding: 2px 6px;
+}
+
+.ev-sev-tag.high {
+    background: var(--ev-error);
+}
+
+.ev-sev-tag.medium {
+    background: var(--ev-warning);
+}
+
+.ev-sev-tag.low {
+    background: var(--ev-muted);
+}
+
+.ev-chev {
+    color: var(--ev-muted);
+    transform: rotate(0deg);
+    transition: transform 0.15s;
+}
+
+.ev-standard.open .ev-chev {
+    transform: rotate(90deg);
+}
+
+.ev-standard-body {
+    border-top: 1px dashed #fecaca;
+    background: rgba(220, 38, 38, 0.02);
+    padding: 10px 18px 16px 52px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.ev-standard.passed .ev-standard-body {
+    border-top-color: rgba(22, 163, 74, 0.25);
+    background: rgba(22, 163, 74, 0.025);
+}
+
+/* ───────── Issue card ───────── */
+
+.ev-issue {
+    background: #fff;
+    border: 1px solid var(--ev-line);
+    border-left: 4px solid var(--ev-line-strong);
+    border-radius: 8px;
+    padding: 12px 14px;
+}
+
+.ev-issue.high {
+    border-left-color: var(--ev-error);
+}
+
+.ev-issue.medium {
+    border-left-color: var(--ev-warning);
+}
+
+.ev-issue.low {
+    border-left-color: var(--ev-muted);
+}
+
+.ev-issue-head {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.ev-issue-head b {
+    flex: 1;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.ev-issue-pill {
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.ev-issue-pill.high {
+    background: rgba(220, 38, 38, 0.12);
+    color: var(--ev-error);
+}
+
+.ev-issue-pill.medium {
+    background: rgba(217, 119, 6, 0.12);
+    color: var(--ev-warning);
+}
+
+.ev-issue-pill.low {
+    background: rgba(113, 113, 122, 0.14);
+    color: var(--ev-fg2);
+}
+
+.ev-issue-sections {
+    margin-top: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.ev-issue-section .ev-issue-section-label {
+    color: var(--ev-muted);
+    font-size: 11px;
+    margin-bottom: 4px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.ev-issue-section .ev-issue-section-body {
+    background: #f9f9f7;
+    border: 1px solid #f0efe9;
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 12.5px;
+    line-height: 1.55;
+    color: var(--ev-fg);
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.ev-issue-meta {
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px dashed var(--ev-line);
+    color: var(--ev-muted);
+    font-size: 11px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+.ev-issue-meta code {
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    background: #f4f4f5;
+    border-radius: 3px;
+    padding: 1px 5px;
+}
+
+/* ───────── Empty state ───────── */
+
+.ev-empty {
+    background: var(--ev-surface);
+    border: 1px solid var(--ev-line);
+    border-radius: 10px;
+    padding: 28px;
+    text-align: center;
+    color: var(--ev-muted);
+    font-size: 13px;
+}
+
+/* =========================================================================
+   三段式 SectionShell（① 配置 / ② 执行 / ③ 结果）—— 通用折叠卡外壳。
+   触发分析、用例分析、A/B 测试、静态合规将来都用同一套。CSS 变量在此重定义
+   一遍，保证 SectionShell 不依赖外层 .ev-content 也能正常着色。
+   ========================================================================= */
+
+.ev-section {
+    --ev-fg: #18181b;
+    --ev-fg2: #52525b;
+    --ev-muted: #71717a;
+    --ev-line: #e5e7eb;
+    --ev-line-strong: #d4d4d8;
+    --ev-bg: #fafafa;
+    --ev-surface: #ffffff;
+    --ev-success: #16a34a;
+    --ev-success-soft: rgba(22, 163, 74, 0.1);
+    --ev-warning: #d97706;
+    --ev-warning-soft: rgba(217, 119, 6, 0.1);
+    --ev-error: #dc2626;
+    --ev-error-soft: rgba(220, 38, 38, 0.1);
+    --ev-info: #2563eb;
+    --ev-info-soft: rgba(37, 99, 235, 0.08);
+    background: var(--ev-surface);
+    border: 1px solid var(--ev-line);
+    border-radius: 10px;
+    overflow: hidden;
+    margin-bottom: 14px;
+    color: var(--ev-fg);
+    font-family: 'Manrope', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+.ev-section-head {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 36px 1fr auto 14px;
+    align-items: center;
+    gap: 14px;
+    padding: 14px 20px;
+    background: #fff;
+    border: 0;
+    border-bottom: 1px solid transparent;
+    cursor: pointer;
+    font: inherit;
+    color: var(--ev-fg);
+    text-align: left;
+}
+
+.ev-section.open .ev-section-head {
+    border-bottom-color: var(--ev-line);
+}
+
+.ev-section-num {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    font-size: 13px;
+    font-weight: 800;
+    background: var(--ev-info-soft);
+    color: var(--ev-info);
+}
+
+.ev-section-result .ev-section-num {
+    background: var(--ev-success-soft);
+    color: var(--ev-success);
+}
+
+.ev-section-title {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.ev-section-title b {
+    font-size: 15px;
+    font-weight: 700;
+}
+
+.ev-section-title small {
+    font-size: 12px;
+    color: var(--ev-muted);
+}
+
+.ev-section-summary {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    font-size: 12.5px;
+    color: var(--ev-fg2);
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.ev-section-summary code {
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: #f4f4f5;
+    color: var(--ev-fg2);
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-size: 11.5px;
+}
+
+.ev-section-summary code.score-good {
+    background: var(--ev-success-soft);
+    color: var(--ev-success);
+    font-weight: 700;
+}
+
+.ev-section-summary code.score-warn {
+    background: var(--ev-warning-soft);
+    color: var(--ev-warning);
+    font-weight: 700;
+}
+
+.ev-section-summary code.score-bad {
+    background: var(--ev-error-soft);
+    color: var(--ev-error);
+    font-weight: 700;
+}
+
+.ev-section-chev {
+    color: var(--ev-muted);
+    transition: transform 0.2s;
+    font-size: 16px;
+}
+
+.ev-section.open .ev-section-chev {
+    transform: rotate(90deg);
+}
+
+.ev-section-body {
+    padding: 16px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+/* =========================================================================
+   Hero —— ③ 结果块顶部主分大字 + 4 个 mini 指标横排。同样是通用形态，
+   触发分析 / 用例分析共用，将来 A/B 测试 / 静态合规也复用。
+   ========================================================================= */
+
+.ev-hero {
+    display: flex;
+    align-items: center;
+    gap: 32px;
+    padding: 22px 26px;
+    background: linear-gradient(135deg, #fff 60%, var(--ev-info-soft));
+    border: 1px solid var(--ev-line);
+    border-radius: 10px;
+}
+
+.ev-hero-main {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.ev-hero-num {
+    font-size: 52px;
+    font-weight: 800;
+    line-height: 1;
+    color: var(--ev-info);
+    font-feature-settings: 'tnum';
+    display: flex;
+    align-items: baseline;
+}
+
+.ev-hero-num.good { color: var(--ev-success); }
+.ev-hero-num.warn { color: var(--ev-warning); }
+.ev-hero-num.bad { color: var(--ev-error); }
+
+.ev-hero-unit {
+    font-size: 24px;
+    font-weight: 600;
+    margin-left: 6px;
+    color: inherit;
+}
+
+.ev-hero-label {
+    font-size: 13px;
+    color: var(--ev-muted);
+    font-weight: 600;
+}
+
+.ev-hero-sub {
+    flex: 1;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    padding-left: 24px;
+    border-left: 1px solid var(--ev-line);
+}
+
+.ev-hero-sub-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.ev-hero-sub-num {
+    font-size: 20px;
+    font-weight: 700;
+    font-feature-settings: 'tnum';
+    color: var(--ev-fg);
+}
+
+.ev-hero-sub-num.good { color: var(--ev-success); }
+.ev-hero-sub-num.bad { color: var(--ev-error); }
+
+.ev-hero-sub-label {
+    font-size: 11.5px;
+    color: var(--ev-muted);
+    font-weight: 600;
+}
+
+.ev-hero-sub-hint {
+    font-size: 10.5px;
+    color: var(--ev-muted);
+    margin-top: 1px;
+}
+
+@media (max-width: 900px) {
+    .ev-hero {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 18px;
+    }
+    .ev-hero-sub {
+        padding-left: 0;
+        border-left: 0;
+        width: 100%;
+    }
+}

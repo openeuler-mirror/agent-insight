@@ -1,0 +1,150 @@
+/* EvaluatorFindingsView — 评估器深度分析视图样式
+ * 不依赖外部全局类（避免被多页样式互相污染），用 .efv-* 前缀。
+ */
+
+.efv-root {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.efv-empty {
+    padding: 14px 16px;
+    border: 1px solid #d1eae2;
+    background: #f4f9f6;
+    border-radius: 6px;
+    color: #0F7B57;
+    font-size: 12.5px;
+    line-height: 1.5;
+}
+
+.efv-summary {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: #4a4842;
+    padding: 8px 12px;
+    background: #f9f9fb;
+    border: 1px solid #eceae4;
+    border-radius: 5px;
+}
+
+.efv-summary-sep {
+    color: #c3c1bb;
+}
+
+.efv-attr-num {
+    color: #b45309;
+}
+
+.efv-non-attr-num {
+    color: #6b6a66;
+}
+
+.efv-group {
+    border: 1px solid #eceae4;
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.efv-group-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px;
+    background: #f5f4f0;
+    font-size: 12px;
+    font-weight: 600;
+    color: #2c2b28;
+    border-bottom: 1px solid #eceae4;
+}
+
+.efv-group-count {
+    font-size: 11px;
+    font-weight: 500;
+    color: #6b6a66;
+    background: #fff;
+    border: 1px solid #eceae4;
+    border-radius: 9px;
+    padding: 1px 7px;
+}
+
+.efv-card {
+    padding: 8px 12px;
+    border-bottom: 1px solid #f3f2ee;
+    background: #fff;
+}
+.efv-card:last-child {
+    border-bottom: none;
+}
+.efv-card.sev-high {
+    background: #fff8f8;
+}
+.efv-card.sev-medium {
+    background: #fffbf3;
+}
+.efv-card.non-attr {
+    opacity: 0.7;
+}
+
+.efv-card-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+    flex-wrap: wrap;
+}
+
+.efv-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: #1a1a18;
+    flex: 1;
+    min-width: 200px;
+}
+
+.efv-pill {
+    font-size: 10px;
+    padding: 1px 7px;
+    border-radius: 9px;
+    background: #f0eeea;
+    color: #6b6a66;
+    border: 1px solid #eceae4;
+}
+.efv-pill.err {
+    background: #fdecec;
+    color: #a32d2d;
+    border-color: #f5cfcf;
+}
+.efv-pill.warn {
+    background: #fff4d6;
+    color: #9a7311;
+    border-color: #f0e0a8;
+}
+
+.efv-desc {
+    font-size: 11.5px;
+    color: #4a4842;
+    line-height: 1.55;
+    margin-bottom: 4px;
+}
+
+.efv-suggestion {
+    font-size: 11.5px;
+    color: #2c2b28;
+    line-height: 1.55;
+    padding: 6px 8px;
+    background: #f0f7f4;
+    border-left: 2px solid #5cb89a;
+    border-radius: 3px;
+    margin-top: 4px;
+}
+
+.efv-suggestion-label {
+    display: inline-block;
+    font-weight: 600;
+    color: #0F7B57;
+    margin-right: 6px;
+    font-size: 11px;
+}
