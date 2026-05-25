@@ -10,7 +10,7 @@ import {
   type QuestionAskEvent,
   type SendPromptPayload,
 } from '@/lib/engine/skill-generation/opencode-agent-cli/opencode-client';
-import { ensureOpencodeServer } from '@/lib/engine/skill-generation/opencode-agent-cli/opencode-manager';
+import { ensureOpencodeServer, runWithEphemeralOpencodeServer } from '@/lib/engine/skill-generation/opencode-agent-cli/opencode-manager';
 
 import { resolveSkill, skillToSystemPrompt } from './skill-resolver';
 import { loadServerModelForUser } from './server-model-config';
@@ -162,6 +162,17 @@ export interface RunGeneralAgentInput {
   handlers?: ChatHandlers;
   chatOptions?: ChatOptions;
   timeoutMs?: number;
+  /**
+   * true: 这次调用起一个**独立** opencode 进程,跑完立刻杀 (per-task ephemeral)。
+   *   避免跨任务 server 内存级软污染 (plugin 全局缓存 / provider runtime cache /
+   *   server 启动时凝固的 skill / 自定义 agent 等)。代价:每次冷启 ~5-10s。
+   * false / 默认: per-user 复用长驻 server (cachedClients + ensureOpencodeServer)。
+   *   响应快,适合用户实时对话 (skill-generator-bridge 等)。
+   *
+   * 后台批量任务 (评测 / A·B 灰度) 都该传 true,保证每次都拿最新 skill;
+   * 用户实时对话保持默认,避免冷启延迟拖累交互体验。
+   */
+  ephemeralServer?: boolean;
 }
 
 export interface RunGeneralAgentResult {
@@ -204,9 +215,33 @@ export async function runGeneralAgent(
   const query = String(input.query || '').trim();
   if (!query) throw new Error('query is required');
 
-  // Per-user client: 每个 user 对应一个独立 opencode-server 实例（apiKey 隔离）。
+  // ephemeral 模式: 起独立 opencode 进程,跑完自动杀。后台批量任务用这条路保证拿最新 skill。
+  // 不能复用 cachedClients (会污染下次 shared 模式), 直接 new AgentInsight 用临时 baseURL。
+  if (input.ephemeralServer) {
+    ensureDispatcher();
+    return runWithEphemeralOpencodeServer({ user, verbose: false }, async (baseURL) => {
+      const ephemeralClient = new AgentInsight({
+        baseURL,
+        timeout: 180_000,
+        maxRetries: 2,
+        logLevel: (process.env.OPENCODE_LOG_LEVEL as any) || 'warn',
+      });
+      return runGeneralAgentWithClient(input, user, query, ephemeralClient);
+    });
+  }
+
+  // 默认/shared 模式: Per-user 复用长驻 opencode-server (apiKey 隔离)。
   // 单机 dev 单 user 等同 singleton；多 user 同时跑评估/skill-generator 各起一份。
   const client = await getClient(user);
+  return runGeneralAgentWithClient(input, user, query, client);
+}
+
+async function runGeneralAgentWithClient(
+  input: RunGeneralAgentInput,
+  user: string,
+  query: string,
+  client: AgentInsight,
+): Promise<RunGeneralAgentResult> {
 
   // ── Workspace 先行确定（skill 部署依赖 workspaceDir，需要在 skill 处理前就 ensure）──
   ensureUserWorkspace(user);

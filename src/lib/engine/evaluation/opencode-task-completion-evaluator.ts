@@ -3,7 +3,8 @@ import {
     type SendPromptPayload,
     type ChatHandlers,
 } from '@/lib/engine/skill-generation/opencode-agent-cli/opencode-client';
-import { ensureOpencodeServer } from '@/lib/engine/skill-generation/opencode-agent-cli/opencode-manager';
+import { runWithEphemeralOpencodeServer } from '@/lib/engine/skill-generation/opencode-agent-cli/opencode-manager';
+import { withBackgroundOpencodeSlot } from '@/lib/engine/general-agent/concurrency-limiter';
 import { buildEvaluatorPermissions } from '@/lib/engine/general-agent/workspace';
 import { getActiveConfig, type ModelConfig } from '@/lib/storage/server-config';
 import {
@@ -238,7 +239,11 @@ function normalizeOutput(parsed: Record<string, unknown>): TaskCompletionEvalOut
 export async function evaluateTaskCompletionViaOpencode(
     input: TaskCompletionEvalInput,
     user?: string | null,
+    skillName?: string | null,    // 透传给 limiter,让"后台分析任务"按 skill 严格过滤
+    skillVersion?: number | null, // skill 版本号,展示用
 ): Promise<TaskCompletionEvalOutput> {
+  return withBackgroundOpencodeSlot(async () => {
+   return runWithEphemeralOpencodeServer({ user: user || undefined, verbose: false }, async (serverUrl) => {
     const rootCauses = await extractRootCausesFromExpected(input.caseInput, input.expectedOutput, user);
     const config = await getActiveConfig(user);
     if (!config) {
@@ -284,7 +289,7 @@ export async function evaluateTaskCompletionViaOpencode(
     };
 
     try {
-        const serverUrl = await ensureOpencodeServer({ user: user || undefined, verbose: false });
+        // serverUrl 由外层 runWithEphemeralOpencodeServer 注入 —— per-task 新进程,跑完自动杀
         const insight = new AgentInsight({
             baseURL: serverUrl,
             logLevel: 'warn',
@@ -350,6 +355,18 @@ export async function evaluateTaskCompletionViaOpencode(
 
     const detail = runtimeError?.message || `Agent 输出前 800 字符：${fullText.slice(0, 800)}`;
     throw new Error(`任务完成度评估器未产出有效 JSON。opencode 评测失败：${detail}`);
+   });
+  }, {
+    taskType: 'task-completion-eval',
+    user: user ?? undefined,
+    skill: skillName ?? undefined,
+    skillVersion: skillVersion ?? null,
+    label: `task-completion: ${(input.caseInput || '').slice(0, 40)}`,
+    // silent: 只占 slot 限流, 不写 task record 到 dashboard。
+    // 用户视角下"用例分析评测"是一个 row-level 任务(由 runOneEvaluation 注册 displayOnly),
+    // 这里的 task-completion 是它内部的一个步骤, 不再单独显示。
+    silent: true,
+  });
 }
 
 export const TASK_COMPLETION_EVALUATOR_AGENTS = [

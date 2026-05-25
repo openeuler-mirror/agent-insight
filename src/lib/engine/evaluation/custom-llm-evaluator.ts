@@ -11,7 +11,8 @@ import {
     type ChatHandlers,
     type SendPromptPayload,
 } from '@/lib/engine/skill-generation/opencode-agent-cli/opencode-client';
-import { ensureOpencodeServer } from '@/lib/engine/skill-generation/opencode-agent-cli/opencode-manager';
+import { runWithEphemeralOpencodeServer } from '@/lib/engine/skill-generation/opencode-agent-cli/opencode-manager';
+import { withBackgroundOpencodeSlot } from '@/lib/engine/general-agent/concurrency-limiter';
 import { buildEvaluatorPermissions } from '@/lib/engine/general-agent/workspace';
 import { getActiveConfig, type ModelConfig } from '@/lib/storage/server-config';
 import {
@@ -367,7 +368,11 @@ export async function runCustomLlmEvaluator(
     user: string,
     evaluatorId: string,
     input: CustomEvaluatorInput,
+    skillName?: string | null,    // 透传给 limiter,让"后台分析任务"按 skill 严格过滤
+    skillVersion?: number | null, // skill 版本号,展示用
 ): Promise<CustomEvaluatorResult> {
+  return withBackgroundOpencodeSlot(async () => {
+   return runWithEphemeralOpencodeServer({ user, verbose: false }, async (serverUrl) => {
     const startedAt = Date.now();
     const bundle = await loadCustomEvaluator(user, evaluatorId);
     if (!bundle) {
@@ -458,7 +463,7 @@ export async function runCustomLlmEvaluator(
     };
 
     try {
-        const serverUrl = await ensureOpencodeServer({ user, verbose: false });
+        // serverUrl 由外层 runWithEphemeralOpencodeServer 注入 —— per-task 新进程,跑完自动杀
         const insight = new AgentInsight({
             baseURL: serverUrl,
             logLevel: 'warn',
@@ -533,4 +538,14 @@ export async function runCustomLlmEvaluator(
         durationMs: Date.now() - startedAt,
         error: score == null ? '未能从模型响应中解析出 0-1 分数' : undefined,
     };
+   });
+  }, {
+    taskType: 'custom-llm-eval',
+    user,
+    skill: skillName ?? undefined,
+    skillVersion: skillVersion ?? null,
+    label: `custom-eval: ${evaluatorId}`,
+    // silent: 自定义评测器作为 row-level "用例分析"的内部子步骤,不单独显示。
+    silent: true,
+  });
 }

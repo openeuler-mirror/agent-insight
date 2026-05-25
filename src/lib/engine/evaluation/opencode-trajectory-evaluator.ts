@@ -24,7 +24,8 @@ import {
     type SendPromptPayload,
     type ChatHandlers,
 } from '@/lib/engine/skill-generation/opencode-agent-cli/opencode-client';
-import { ensureOpencodeServer } from '@/lib/engine/skill-generation/opencode-agent-cli/opencode-manager';
+import { runWithEphemeralOpencodeServer } from '@/lib/engine/skill-generation/opencode-agent-cli/opencode-manager';
+import { withBackgroundOpencodeSlot } from '@/lib/engine/general-agent/concurrency-limiter';
 import { getActiveConfig, type ModelConfig } from '@/lib/storage/server-config';
 import {
     inferProviderFromBaseUrl,
@@ -518,7 +519,11 @@ function extractFinalResultFromText(fullText: string): unknown | null {
 export async function evaluateTrajectoryViaOpencode(
     input: TrajectoryEvalInput,
     user?: string | null,
+    skillName?: string | null,    // 透传给 limiter,让"后台分析任务"按 skill 严格过滤
+    skillVersion?: number | null, // skill 版本号,展示用
 ): Promise<TrajectoryEvalOutput> {
+  return withBackgroundOpencodeSlot(async () => {
+   return runWithEphemeralOpencodeServer({ user: user || undefined, verbose: false }, async (serverUrl) => {
     const config = await getActiveConfig(user);
     if (!config) {
         throw new TrajectoryEvalConfigError(
@@ -572,7 +577,7 @@ export async function evaluateTrajectoryViaOpencode(
     };
 
     try {
-        const serverUrl = await ensureOpencodeServer({ user: user || undefined, verbose: false });
+        // serverUrl 由外层 runWithEphemeralOpencodeServer 注入 —— per-task 新进程,跑完自动杀
         const insight = new AgentInsight({
             baseURL: serverUrl,
             logLevel: 'warn',
@@ -640,6 +645,16 @@ export async function evaluateTrajectoryViaOpencode(
             `轨迹评估器未产出有效 JSON。opencode 评测失败：${primaryDetail}；直接 LLM 评测也失败：${fallbackDetail}`,
         );
     }
+   });
+  }, {
+    taskType: 'trajectory-eval',
+    user: user ?? undefined,
+    skill: skillName ?? undefined,
+    skillVersion: skillVersion ?? null,
+    label: `trajectory: ${(input.caseInput || '').slice(0, 40)}`,
+    // silent: 同 task-completion 注释,内部子步骤不单独显示。
+    silent: true,
+  });
 }
 
 function resolveProviderID(config: ModelConfig): string {
