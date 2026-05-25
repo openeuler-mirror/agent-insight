@@ -1,0 +1,905 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>灰度测评 - Agent Insight</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.0.0/dist/tabler-icons.min.css">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg-page: #F5F4EE;
+    --bg-primary: #FFFFFF;
+    --bg-secondary: #F1EFE8;
+    --bg-tertiary: #FAFAF7;
+    --bg-info: #E6F1FB;
+    --bg-success: #E1F5EE;
+    --text-primary: #2C2C2A;
+    --text-secondary: #5F5E5A;
+    --text-tertiary: #888780;
+    --text-info: #185FA5;
+    --text-info-dark: #0C447C;
+    --text-success: #0F6E56;
+    --text-amber: #854F0B;
+    --border-tertiary: rgba(0, 0, 0, 0.08);
+    --border-secondary: rgba(0, 0, 0, 0.15);
+    --border-info: #B5D4F4;
+    --border-success: #9FE1CB;
+    --color-blue: #185FA5;
+    --color-gray-dark: #444441;
+    --color-green: #1D9E75;
+    --color-amber: #BA7517;
+    --radius-sm: 4px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+  }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    background: var(--bg-page);
+    color: var(--text-primary);
+    font-size: 14px;
+    line-height: 1.6;
+    min-height: 100vh;
+  }
+  button { font-family: inherit; cursor: pointer; }
+  input, select { font-family: inherit; }
+  .app { display: flex; min-height: 100vh; }
+
+  /* ============ 侧边栏 ============ */
+  .sidebar {
+    width: 240px;
+    background: var(--bg-primary);
+    border-right: 0.5px solid var(--border-tertiary);
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+  }
+  .sidebar-header {
+    padding: 18px 20px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    border-bottom: 0.5px solid var(--border-tertiary);
+  }
+  .logo {
+    width: 32px; height: 32px;
+    background: var(--color-blue);
+    border-radius: var(--radius-md);
+    display: flex; align-items: center; justify-content: center;
+    color: white;
+  }
+  .logo-text { font-size: 14px; font-weight: 500; }
+  .logo-sub { font-size: 11px; color: var(--text-tertiary); }
+  .sidebar-section {
+    padding: 14px 16px 6px;
+    font-size: 11px;
+    color: var(--text-info);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .nav-item {
+    padding: 8px 14px;
+    margin: 1px 8px;
+    border-radius: var(--radius-md);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .nav-item:hover { background: var(--bg-secondary); }
+  .nav-item.active { background: var(--bg-info); color: var(--text-info); font-weight: 500; }
+  .nav-item.parent { color: var(--text-info); font-weight: 500; }
+  .nav-item .ti { font-size: 16px; }
+  .nav-sub { padding-left: 22px; }
+  .sidebar-footer {
+    margin-top: auto;
+    padding: 12px;
+    border-top: 0.5px solid var(--border-tertiary);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+  }
+  .avatar {
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    background: var(--color-gray-dark);
+    color: white;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px;
+    font-weight: 500;
+  }
+
+  /* ============ 主内容区 ============ */
+  .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 24px;
+    background: var(--bg-primary);
+    border-bottom: 0.5px solid var(--border-tertiary);
+  }
+  .topbar-left { display: flex; align-items: center; gap: 12px; }
+  .topbar-title { font-size: 15px; font-weight: 500; }
+  .topbar-right { display: flex; align-items: center; gap: 8px; }
+  .btn {
+    font-size: 13px;
+    padding: 6px 14px;
+    background: transparent;
+    border: 0.5px solid var(--border-secondary);
+    border-radius: var(--radius-md);
+    color: var(--text-secondary);
+    transition: all 0.15s;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+  }
+  .btn:hover { background: var(--bg-secondary); }
+  .btn.active {
+    background: var(--bg-info);
+    border-color: var(--border-info);
+    color: var(--text-info);
+    font-weight: 500;
+  }
+  .btn .ti { font-size: 14px; }
+
+  .content { flex: 1; padding: 20px 24px; overflow-y: auto; }
+
+  /* ============ 任务头部卡片 ============ */
+  .task-header-card {
+    background: var(--bg-primary);
+    border: 0.5px solid var(--border-tertiary);
+    border-radius: var(--radius-lg);
+    padding: 18px 24px;
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .task-info-label {
+    font-size: 12px;
+    color: var(--text-tertiary);
+    margin-bottom: 4px;
+  }
+  .task-info-title {
+    font-size: 17px;
+    font-weight: 500;
+  }
+  .task-info-time {
+    font-size: 12px;
+    color: var(--text-tertiary);
+    font-weight: 400;
+    margin-left: 8px;
+  }
+  .task-actions { display: flex; gap: 8px; }
+  .badge-count {
+    background: var(--bg-secondary);
+    padding: 1px 6px;
+    border-radius: 8px;
+    margin-left: 4px;
+    font-size: 11px;
+  }
+
+  /* ============ 配置条 ============ */
+  .config-bar {
+    background: var(--bg-primary);
+    border: 0.5px solid var(--border-tertiary);
+    border-radius: var(--radius-lg);
+    padding: 14px 24px;
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    flex-wrap: wrap;
+  }
+  .config-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .config-key {
+    font-size: 12px;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    flex-shrink: 0;
+  }
+  .data-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px 5px 10px;
+    background: var(--bg-tertiary);
+    border: 0.5px solid var(--border-tertiary);
+    border-radius: var(--radius-md);
+    font-size: 13px;
+  }
+  .data-pill .ti { font-size: 14px; color: var(--text-secondary); }
+  .data-pill .pill-count {
+    font-size: 11px;
+    color: var(--text-tertiary);
+  }
+  .data-pill .pill-close {
+    color: var(--text-tertiary);
+    margin-left: 4px;
+    cursor: pointer;
+    font-size: 12px;
+  }
+  .config-add-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    background: transparent;
+    border: 0.5px dashed var(--border-secondary);
+    border-radius: var(--radius-md);
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+  .total-stat {
+    margin-left: auto;
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+  }
+  .total-stat .num { font-size: 20px; font-weight: 500; }
+  .total-stat .lab { font-size: 12px; color: var(--text-tertiary); }
+
+  /* ============ AB Skill 选择条 ============ */
+  .ab-bar {
+    background: var(--bg-primary);
+    border: 0.5px solid var(--border-tertiary);
+    border-radius: var(--radius-lg);
+    padding: 14px 24px;
+    margin-bottom: 14px;
+    display: grid;
+    grid-template-columns: auto 1fr auto 1fr auto;
+    gap: 16px;
+    align-items: center;
+  }
+  .ab-bar-key {
+    font-size: 12px;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .ab-skill-select {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    background: var(--bg-tertiary);
+    border: 0.5px solid var(--border-tertiary);
+    border-radius: var(--radius-md);
+    font-size: 13px;
+  }
+  .ab-skill-select.b {
+    background: var(--bg-info);
+    border-color: var(--border-info);
+  }
+  .ab-tag {
+    color: white;
+    font-size: 10px;
+    font-weight: 500;
+    padding: 2px 7px;
+    border-radius: var(--radius-sm);
+    flex-shrink: 0;
+  }
+  .ab-tag.a { background: var(--color-gray-dark); }
+  .ab-tag.b { background: var(--color-blue); }
+  .ab-skill-name {
+    flex: 1;
+    color: var(--text-primary);
+  }
+  .ab-skill-select.b .ab-skill-name { color: var(--text-info-dark); }
+  .ab-skill-select .ti-chevron-down {
+    font-size: 14px;
+    color: var(--text-tertiary);
+  }
+  .ab-vs {
+    font-size: 12px;
+    color: var(--text-tertiary);
+    font-weight: 500;
+    padding: 0 4px;
+  }
+  .start-btn {
+    background: var(--text-primary);
+    color: white;
+    border: none;
+    padding: 8px 18px;
+    border-radius: var(--radius-md);
+    font-size: 13px;
+    font-weight: 500;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .start-btn .ti { font-size: 14px; }
+
+  /* ============ 主表格区域 ============ */
+  .table-card {
+    background: var(--bg-primary);
+    border: 0.5px solid var(--border-tertiary);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+  }
+  .table-head-row {
+    padding: 14px 24px;
+    border-bottom: 0.5px solid var(--border-tertiary);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    background: var(--bg-tertiary);
+  }
+  .table-head-left {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+  .checkbox {
+    width: 16px;
+    height: 16px;
+    border: 0.5px solid var(--border-secondary);
+    border-radius: var(--radius-sm);
+    background: var(--bg-primary);
+    cursor: pointer;
+  }
+  .filter-tabs {
+    display: flex;
+    gap: 14px;
+    align-items: center;
+    font-size: 13px;
+  }
+  .filter-tab {
+    padding: 4px 10px;
+    border-radius: var(--radius-md);
+    color: var(--text-secondary);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .filter-tab.active {
+    background: var(--text-primary);
+    color: white;
+  }
+  .filter-tab.active .filter-num {
+    background: rgba(255,255,255,0.25);
+    color: white;
+  }
+  .filter-num {
+    background: var(--bg-secondary);
+    padding: 0 6px;
+    border-radius: 8px;
+    font-size: 11px;
+  }
+  .search-input {
+    padding: 5px 12px;
+    border: 0.5px solid var(--border-secondary);
+    border-radius: var(--radius-md);
+    font-size: 12px;
+    width: 200px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+  }
+  .search-input::placeholder { color: var(--text-tertiary); }
+
+  /* ============ 列标题 ============ */
+  .col-headers {
+    display: grid;
+    grid-template-columns: 50px 60px 1fr 130px 120px 120px 130px 130px 120px;
+    padding: 12px 24px;
+    font-size: 12px;
+    color: var(--text-tertiary);
+    border-bottom: 0.5px solid var(--border-tertiary);
+    align-items: center;
+    gap: 12px;
+  }
+
+  /* ============ 数据行 (用例 + Skill 子行) ============ */
+  .case-row {
+    display: grid;
+    grid-template-columns: 50px 60px 1fr 130px 120px 120px 130px 130px 120px;
+    padding: 16px 24px;
+    align-items: center;
+    gap: 12px;
+    border-bottom: 0.5px solid var(--border-tertiary);
+    background: var(--bg-tertiary);
+  }
+  .case-row .case-id {
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+  .case-row .case-text {
+    font-size: 13px;
+    line-height: 1.6;
+  }
+  .case-row .case-text-main { font-weight: 500; color: var(--text-primary); }
+  .case-row .case-meta {
+    font-size: 11px;
+    color: var(--text-tertiary);
+    margin-top: 4px;
+  }
+  .case-row .dataset-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    background: var(--bg-info);
+    color: var(--text-info);
+    font-size: 11px;
+    border-radius: var(--radius-sm);
+    font-family: ui-monospace, SFMono-Regular, monospace;
+  }
+
+  /* ============ Skill 子行 ============ */
+  .skill-row {
+    display: grid;
+    grid-template-columns: 50px 60px 1fr 130px 120px 120px 130px 130px 120px;
+    padding: 14px 24px;
+    align-items: center;
+    gap: 12px;
+    border-bottom: 0.5px solid var(--border-tertiary);
+    position: relative;
+  }
+  .skill-row:last-of-type { border-bottom: none; }
+  .skill-row.b {
+    background: linear-gradient(to right, var(--bg-info) 0%, var(--bg-info) 4px, transparent 4px);
+  }
+  .skill-row.a {
+    background: linear-gradient(to right, var(--bg-secondary) 0%, var(--bg-secondary) 4px, transparent 4px);
+  }
+  .skill-tree-line {
+    color: var(--text-tertiary);
+    font-size: 11px;
+    padding-left: 14px;
+  }
+  .skill-tag-cell {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .skill-name-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .skill-name {
+    font-size: 13px;
+    font-weight: 500;
+  }
+  .skill-version {
+    font-size: 11px;
+    color: var(--text-tertiary);
+  }
+  .skill-version-tag {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 0 5px;
+    background: var(--bg-secondary);
+    border-radius: 3px;
+    font-size: 10px;
+    color: var(--text-secondary);
+    font-family: ui-monospace, monospace;
+  }
+  .baseline-tag {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 0 5px;
+    background: transparent;
+    border: 0.5px solid var(--border-tertiary);
+    border-radius: 3px;
+    font-size: 10px;
+    color: var(--text-tertiary);
+  }
+
+  /* 数据集列在 Skill 行为空 */
+  .empty-cell {
+    color: var(--text-tertiary);
+    font-size: 12px;
+  }
+
+  /* ============ 状态徽章 ============ */
+  .status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 10px;
+    border-radius: var(--radius-md);
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .status-badge.success {
+    background: var(--bg-success);
+    color: var(--text-success);
+  }
+  .status-badge.running {
+    background: #FAEEDA;
+    color: var(--text-amber);
+  }
+  .status-badge.pending {
+    background: var(--bg-secondary);
+    color: var(--text-tertiary);
+  }
+  .status-badge.waiting {
+    background: transparent;
+    color: var(--text-tertiary);
+    border: 0.5px dashed var(--border-secondary);
+  }
+  .status-badge .ti { font-size: 12px; }
+  .status-badge .spinner {
+    width: 10px; height: 10px;
+    border: 1.5px solid var(--color-amber);
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ============ 评测分数显示 ============ */
+  .score-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    font-size: 12px;
+  }
+  .score-row-mini {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .score-label {
+    font-size: 10px;
+    color: var(--text-tertiary);
+    width: 28px;
+  }
+  .score-num {
+    font-weight: 500;
+    color: var(--text-primary);
+  }
+  .score-num.win { color: var(--text-success); }
+  .score-bar-wrap {
+    flex: 1;
+    height: 3px;
+    background: var(--bg-secondary);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .score-bar-fill {
+    height: 100%;
+    background: var(--text-tertiary);
+  }
+  .score-bar-fill.win { background: var(--color-green); }
+
+  /* ============ 操作按钮 ============ */
+  .action-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    background: transparent;
+    border: 0.5px solid var(--border-secondary);
+    border-radius: var(--radius-md);
+    font-size: 12px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+  }
+  .action-btn:hover { background: var(--bg-secondary); }
+  .action-btn:disabled {
+    color: var(--text-tertiary);
+    background: var(--bg-tertiary);
+    cursor: not-allowed;
+  }
+  .action-btn .ti { font-size: 12px; }
+  .action-btn-group { display: flex; gap: 6px; }
+
+  /* ============ 底部统计条 ============ */
+  .table-footer {
+    padding: 12px 24px;
+    background: var(--bg-tertiary);
+    border-top: 0.5px solid var(--border-tertiary);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+  .progress-mini {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .progress-track {
+    width: 200px;
+    height: 6px;
+    background: var(--bg-secondary);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%;
+    background: var(--color-green);
+  }
+
+  /* ============ 滚动条 ============ */
+  .content::-webkit-scrollbar { width: 8px; }
+  .content::-webkit-scrollbar-track { background: transparent; }
+  .content::-webkit-scrollbar-thumb {
+    background: var(--border-secondary);
+    border-radius: 4px;
+  }
+
+  /* ============ Winner Indicator ============ */
+  .winner-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: 8px;
+    font-size: 11px;
+    color: var(--text-success);
+    font-weight: 500;
+  }
+  .winner-indicator .ti { font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ===== 侧边栏 ===== -->
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <div class="logo">✱</div>
+      <div>
+        <div class="logo-text">Agent Insight</div>
+        <div class="logo-sub">Powered by Skill-insight</div>
+      </div>
+    </div>
+
+    <div class="sidebar-section">
+      <i class="ti ti-menu-2"></i> AGENT WORKSPACE
+    </div>
+    <div class="nav-item"><i class="ti ti-layout-dashboard"></i>概览</div>
+    <div class="nav-item"><i class="ti ti-users"></i>Agent 管理</div>
+    <div class="nav-item parent"><i class="ti ti-apps"></i>Skills 能力</div>
+    <div class="nav-item nav-sub"><i class="ti ti-grid-dots"></i>Skills 管理</div>
+    <div class="nav-item nav-sub"><i class="ti ti-square-check"></i>Playground</div>
+    <div class="nav-item nav-sub active"><i class="ti ti-test-pipe"></i>调测分析</div>
+    <div class="nav-item"><i class="ti ti-circle-check"></i>评测中心</div>
+    <div class="nav-item"><i class="ti ti-rocket"></i>发布管理</div>
+    <div class="nav-item"><i class="ti ti-target"></i>运行观测</div>
+
+    <div class="sidebar-footer">
+      <div class="avatar">N</div>
+      <div>
+        <div style="font-size: 12px;">m10240@gmail.com</div>
+        <div style="font-size: 11px; color: var(--text-tertiary);">Admin</div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ===== 主内容 ===== -->
+  <main class="main">
+
+    <!-- 顶部栏 -->
+    <div class="topbar">
+      <div class="topbar-left">
+        <i class="ti ti-layout-sidebar-left-collapse" style="font-size: 18px; color: var(--text-secondary); cursor: pointer;"></i>
+        <span class="topbar-title">调测分析</span>
+      </div>
+      <div class="topbar-right">
+        <button class="btn">用例测评</button>
+        <button class="btn active">灰度测评</button>
+        <button class="btn"><i class="ti ti-history"></i>调测历史</button>
+        <button class="btn"><i class="ti ti-refresh"></i>重置环境</button>
+      </div>
+    </div>
+
+    <!-- 内容区 -->
+    <div class="content">
+
+      <!-- 任务头部 -->
+      <div class="task-header-card">
+        <div>
+          <div class="task-info-label">当前灰度测评任务</div>
+          <div>
+            <span class="task-info-title">disk-diagnosis A/B 对比</span>
+            <span class="task-info-time">5月7日 23:15</span>
+          </div>
+        </div>
+        <div class="task-actions">
+          <button class="btn"><i class="ti ti-history"></i>历史任务<span class="badge-count">3</span></button>
+          <button class="btn"><i class="ti ti-plus"></i>新建灰度</button>
+          <button class="btn"><i class="ti ti-plus"></i>新建数据集</button>
+        </div>
+      </div>
+
+      <!-- 配置条:数据集 + 评估器 -->
+      <div class="config-bar">
+        <div class="config-item">
+          <span class="config-key">数据集</span>
+          <span class="data-pill">
+            <i class="ti ti-database"></i>
+            witty-diagnosis-agent
+            <span class="pill-count">1 条</span>
+            <span class="pill-close">×</span>
+          </span>
+          <button class="config-add-btn"><i class="ti ti-plus" style="font-size:12px;"></i>添加数据集</button>
+        </div>
+        <div class="config-item">
+          <span class="config-key">评估器</span>
+          <span class="data-pill">
+            <i class="ti ti-circle-check"></i>
+            准确性评估
+          </span>
+          <span class="data-pill">
+            <i class="ti ti-circle-check"></i>
+            响应质量评估
+          </span>
+          <button class="config-add-btn"><i class="ti ti-plus" style="font-size:12px;"></i>添加评估器</button>
+        </div>
+        <div class="total-stat">
+          <span class="num">1</span>
+          <span class="lab">总用例</span>
+        </div>
+      </div>
+
+      <!-- A/B Skill 选择条 -->
+      <div class="ab-bar">
+        <span class="ab-bar-key">SKILL 对比</span>
+        <div class="ab-skill-select">
+          <span class="ab-tag a">A</span>
+          <span class="ab-skill-name">disk-diagnosis-by-log</span>
+          <span style="font-size: 11px; color: var(--text-tertiary); font-family: ui-monospace, monospace; padding: 1px 5px; background: var(--bg-secondary); border-radius: 3px;">v1</span>
+          <i class="ti ti-chevron-down"></i>
+        </div>
+        <span class="ab-vs">VS</span>
+        <div class="ab-skill-select b">
+          <span class="ab-tag b">B</span>
+          <span class="ab-skill-name">disk-diagnosis-by-log</span>
+          <span style="font-size: 11px; color: var(--text-info); font-family: ui-monospace, monospace; padding: 1px 5px; background: var(--bg-primary); border-radius: 3px;">v2</span>
+          <i class="ti ti-chevron-down"></i>
+        </div>
+        <button class="start-btn"><i class="ti ti-player-play"></i>开始对比</button>
+      </div>
+
+      <!-- 主表格 -->
+      <div class="table-card">
+
+        <!-- 表头工具栏 -->
+        <div class="table-head-row">
+          <div class="table-head-left">
+            <div class="checkbox"></div>
+            <span>共 1 条用例 · 2 个 Skill 版本</span>
+          </div>
+          <div class="filter-tabs">
+            <span class="filter-tab active">全部 <span class="filter-num">2</span></span>
+            <span class="filter-tab">未执行 <span class="filter-num">0</span></span>
+            <span class="filter-tab">待评测 <span class="filter-num">0</span></span>
+            <span class="filter-tab">已评测 <span class="filter-num">2</span></span>
+            <input type="text" class="search-input" placeholder="搜索用例…">
+          </div>
+        </div>
+
+        <!-- 列标题 -->
+        <div class="col-headers">
+          <div></div>
+          <div>#</div>
+          <div>测试用例 / Skill</div>
+          <div>数据集</div>
+          <div>状态</div>
+          <div>评测得分</div>
+          <div>执行</div>
+          <div>评测</div>
+          <div>操作</div>
+        </div>
+
+        <!-- ============ 用例 001 ============ -->
+        <!-- 用例主行 -->
+        <div class="case-row">
+          <div class="checkbox"></div>
+          <div class="case-id">001</div>
+          <div>
+            <div class="case-text case-text-main">我的服务器磁盘出现了故障,你帮我分析下,日志路径:/opt/data/jinshan_cloud_log/disk_logs/10.112.17.32/"</div>
+            <div class="case-meta">witty-diagnosis-agent · 包含 2 个 Skill 版本对比</div>
+          </div>
+          <div><span class="dataset-pill">witty-di</span></div>
+          <div><span class="status-badge success"><i class="ti ti-check"></i>对比完成</span></div>
+          <div style="font-size: 11px; color: var(--text-success); font-weight: 500;"><i class="ti ti-trending-up" style="font-size: 12px; vertical-align: -1px;"></i> B 版本胜出</div>
+          <div></div>
+          <div></div>
+          <div></div>
+        </div>
+
+        <!-- Skill A 子行 -->
+        <div class="skill-row a">
+          <div class="skill-tree-line">└─</div>
+          <div class="skill-tag-cell"><span class="ab-tag a">A</span></div>
+          <div class="skill-name-cell">
+            <div class="skill-name">
+              disk-diagnosis-by-log
+              <span class="skill-version-tag">v1</span>
+              <span class="baseline-tag">基线</span>
+            </div>
+            <div class="skill-version">耗时 198.2s · 1,842 tokens</div>
+          </div>
+          <div class="empty-cell">—</div>
+          <div><span class="status-badge success"><i class="ti ti-check"></i>已评测</span></div>
+          <div class="score-cell">
+            <div class="score-row-mini">
+              <span class="score-label">准确性</span>
+              <div class="score-bar-wrap"><div class="score-bar-fill" style="width: 72%;"></div></div>
+              <span class="score-num">7.2</span>
+            </div>
+            <div class="score-row-mini">
+              <span class="score-label">质量</span>
+              <div class="score-bar-wrap"><div class="score-bar-fill" style="width: 81%;"></div></div>
+              <span class="score-num">8.1</span>
+            </div>
+          </div>
+          <div><button class="action-btn"><i class="ti ti-refresh"></i>重新执行</button></div>
+          <div><button class="action-btn"><i class="ti ti-route"></i>Trace</button></div>
+          <div><button class="action-btn"><i class="ti ti-arrow-right"></i>评测结果</button></div>
+        </div>
+
+        <!-- Skill B 子行 -->
+        <div class="skill-row b">
+          <div class="skill-tree-line">└─</div>
+          <div class="skill-tag-cell"><span class="ab-tag b">B</span></div>
+          <div class="skill-name-cell">
+            <div class="skill-name">
+              disk-diagnosis-by-log
+              <span class="skill-version-tag" style="background: var(--bg-info); color: var(--text-info);">v2</span>
+              <span class="winner-indicator"><i class="ti ti-trophy"></i>胜出</span>
+            </div>
+            <div class="skill-version">耗时 218.4s · 2,486 tokens</div>
+          </div>
+          <div class="empty-cell">—</div>
+          <div><span class="status-badge success"><i class="ti ti-check"></i>已评测</span></div>
+          <div class="score-cell">
+            <div class="score-row-mini">
+              <span class="score-label">准确性</span>
+              <div class="score-bar-wrap"><div class="score-bar-fill win" style="width: 89%;"></div></div>
+              <span class="score-num win">8.9</span>
+            </div>
+            <div class="score-row-mini">
+              <span class="score-label">质量</span>
+              <div class="score-bar-wrap"><div class="score-bar-fill win" style="width: 92%;"></div></div>
+              <span class="score-num win">9.2</span>
+            </div>
+          </div>
+          <div><button class="action-btn"><i class="ti ti-refresh"></i>重新执行</button></div>
+          <div><button class="action-btn"><i class="ti ti-route"></i>Trace</button></div>
+          <div><button class="action-btn"><i class="ti ti-arrow-right"></i>评测结果</button></div>
+        </div>
+
+        <!-- 底部统计 -->
+        <div class="table-footer">
+          <div>
+            共 <strong style="color: var(--text-primary);">1</strong> 条用例 · <strong style="color: var(--text-primary);">2</strong> 个 Skill 版本 · <span style="color: var(--text-success);">B 胜 1</span>
+          </div>
+          <div class="progress-mini">
+            <span>已评测 2 / 2</span>
+            <div class="progress-track"><div class="progress-fill" style="width: 100%;"></div></div>
+            <span>100%</span>
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+  </main>
+</div>
+</body>
+</html>

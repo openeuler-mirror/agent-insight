@@ -1,0 +1,11 @@
+{
+  "name": "@witty-ai/mcp-web-search",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Internal MCP stdio server exposing web_search / web_fetch tools to the playground skill-generator agent.",
+  "type": "module",
+  "main": "index.ts",
+  "scripts": {
+    "start": "tsx index.ts"
+  }
+}
