@@ -1,6 +1,6 @@
-import { readRecords, type OutcomeSkillBreakdown, type RoutingSkillBreakdown } from '@/lib/data-service';
-import { db } from '@/lib/prisma';
-import { resolveUser } from '@/lib/auth';
+import { readRecords, type OutcomeSkillBreakdown, type RoutingSkillBreakdown } from '@/lib/storage/data-service';
+import { db } from '@/lib/storage/prisma';
+import { resolveUser } from '@/lib/auth/auth';
 import { NextResponse } from 'next/server';
 
 export async function GET(request: Request) {

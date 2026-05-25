@@ -1,7 +1,7 @@
-import { canAccessSkill, resolveUser } from '@/lib/auth';
-import { db } from '@/lib/prisma';
+import { canAccessSkill, resolveUser } from '@/lib/auth/auth';
+import { db } from '@/lib/storage/prisma';
 import { NextRequest, NextResponse } from 'next/server';
-import { deleteEnterpriseSkill, fetchEnterpriseSkillInfo } from '@/lib/skill-sync-service';
+import { deleteEnterpriseSkill, fetchEnterpriseSkillInfo } from '@/lib/engine/skill-generation/legacy/skill-sync-service';
 
 export async function DELETE(
     request: NextRequest,

@@ -1,11 +1,11 @@
 'use client';
 
-import { useAuth } from '@/lib/auth-context';
+import { useAuth } from '@/lib/auth/auth-context';
 import { useRouter } from 'next/navigation';
 import { useState, useEffect } from 'react';
-import { useTheme } from '@/lib/theme-context';
-import { useLocale } from '@/lib/locale-context';
-import { apiFetch } from '@/lib/api';
+import { useTheme } from '@/lib/client/theme-context';
+import { useLocale } from '@/lib/client/locale-context';
+import { apiFetch } from '@/lib/client/api';
 
 export default function LoginPage() {
   const [username, setUsername] = useState('');
@@ -18,7 +18,7 @@ export default function LoginPage() {
   const { t } = useLocale();
 
   useEffect(() => {
-    apiFetch('/api/config/status?check_org=true')
+    apiFetch('/api/eval/config/status?check_org=true')
       .then(res => res.json())
       .then(data => {
         setIsOrgMode(data.org_mode || false);
@@ -135,7 +135,7 @@ export default function LoginPage() {
                 whiteSpace: 'nowrap',
                 boxShadow: `0 8px 16px -4px ${colors.primaryGlow}`
             }}>
-                Skill
+                Agent
             </div>
             <div style={{ display: 'flex', flexDirection: 'column' }}>
                 <h1 style={{ fontSize: '2.25rem', fontWeight: 700, color: colors.fg, margin: 0, lineHeight: 1, letterSpacing: '-0.025em' }}>Insight</h1>

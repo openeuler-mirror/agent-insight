@@ -36,7 +36,19 @@ skill-name/
 
 ### Step 1：文档预处理（仅在用户提供了文档时执行）
 
-若用户提供了文档（PDF/MD/TXT/URL），在场景识别之前先提取文本内容：
+用户提供文档有两种交付方式，按情况处理：
+
+**情况 A：文档已在 `./uploads/` 目录下**（外层链路预处理过）
+
+system prompt 顶部会出现"用户上传的参考资料"清单。直接用 `read` 工具读对应文件即可：
+
+- 二进制原文（PDF / docx）已由外层转出同名 `.txt` 副本，**优先读 `.txt`**，不要尝试解析二进制。
+- `./uploads/` 是**只读**的——禁止写入或修改。
+- 跳过下面的 `parse_doc.py`，已经无需再解析。
+
+**情况 B：用户在对话里给出本地路径或 URL**
+
+调用脚本提取文本：
 
 ```bash
 uv run python scripts/parse_doc.py <文件路径或URL> -o /tmp/extracted_doc.md
@@ -44,7 +56,8 @@ uv run python scripts/parse_doc.py <文件路径或URL> -o /tmp/extracted_doc.md
 
 依赖缺失时引导用户执行 `uv pip install -r scripts/requirements.txt`。
 
-读取提取结果后，进入 Step 2 进行场景识别。后续场景模块将基于提取后的文本内容工作，无需再处理原始文档。
+无论走哪条路径，读取到文本后进入 Step 2 进行场景识别。后续场景模块将基于提取后的文本内容工作，
+无需再处理原始文档。
 
 ### Step 2：场景识别
 

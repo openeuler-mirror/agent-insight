@@ -1,6 +1,6 @@
-import { canAccessSkill, resolveUser } from '@/lib/auth';
-import { normalizeOptionalSkillVersion } from '@/lib/config-target';
-import { generateBenchmarksForSkill } from '@/lib/skill-benchmark-generator';
+import { canAccessSkill, resolveUser } from '@/lib/auth/auth';
+import { normalizeOptionalSkillVersion } from '@/lib/engine/evaluation/config-target';
+import { generateBenchmarksForSkill } from '@/lib/engine/skill-generation/skill-benchmark-generator';
 import { NextRequest, NextResponse } from 'next/server';
 
 export const dynamic = 'force-dynamic';

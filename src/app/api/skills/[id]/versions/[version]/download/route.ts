@@ -1,6 +1,6 @@
 
-import { canAccessSkill, resolveUser } from '@/lib/auth';
-import { db } from '@/lib/prisma';
+import { canAccessSkill, resolveUser } from '@/lib/auth/auth';
+import { db } from '@/lib/storage/prisma';
 import archiver from 'archiver';
 import fs from 'fs';
 import { NextRequest, NextResponse } from 'next/server';

@@ -1,6 +1,6 @@
-import { resolveUser } from '@/lib/auth';
-import { parseSkillFlow } from '@/lib/flow-parser';
-import { db } from '@/lib/prisma';
+import { resolveUser } from '@/lib/auth/auth';
+import { parseSkillFlow } from '@/lib/engine/observability/flow-parser';
+import { db } from '@/lib/storage/prisma';
 import fs from 'fs';
 import { NextRequest, NextResponse } from 'next/server';
 import path from 'path';

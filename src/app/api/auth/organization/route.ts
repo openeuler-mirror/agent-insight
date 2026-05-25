@@ -1,4 +1,4 @@
-import { db } from '@/lib/prisma';
+import { db } from '@/lib/storage/prisma';
 import crypto from 'crypto';
 import { NextResponse } from 'next/server';
 

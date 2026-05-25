@@ -131,11 +131,6 @@
 
 必须包含 YAML frontmatter。主体结构参考 `references/skill-template.md`。
 
-**keyword 提取规则**：严格从 Skill 内容提取，包含：
-- 工具名/技术栈（如 Git、Terraform、K8s）
-- 核心操作动词（如"部署"、"提交"、"检查"）
-- 适用环境（如适用）
-
 #### 5.2 scripts/ 生成规范
 
 - 只在用户明确需要自动化操作，或步骤中有可复用的命令集时生成
