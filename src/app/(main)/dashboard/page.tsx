@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { AppTopBar } from '@/components/shell/AppTopBar';
+import { apiFetch } from '@/lib/client/api';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -694,6 +695,7 @@ function BlockAgents({ agents, router }: { agents: AgentRow[]; router: ReturnTyp
         </Section>
     );
 }
+
 
 // ─── Block 5：快捷入口 + 近期活动 ────────────────────────────────────────────
 
