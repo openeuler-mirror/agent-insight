@@ -20,10 +20,6 @@ export const SYSTEM_AGENT_NAMES: readonly string[] = [
   'trace-quality-evaluator',  // 轨迹质量评估
   'task-completion-evaluator', // 任务完成度评估
   'skill-trigger-analyzer',    // 触发分析评测 ← 用户特别提到的"做触发分析时跑的用例"
-  'completeness-checker',      // 评测 sub-agent
-  'tool-choice-judge',         // 评测 sub-agent
-  'attribution-locator',       // 评测 sub-agent
-  'key-points-checker',        // 评测 sub-agent
 
   // 灰度测评 (A/B) 的 agent: A/B 数据量大(N rounds × M cases),让它在 case analysis
   // 列表也冒出来会冲淡真实 user trace。用户在专门的 A/B 测评页看这些数据,这里隔离。

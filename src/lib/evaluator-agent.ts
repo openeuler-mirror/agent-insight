@@ -15,11 +15,7 @@ const EVALUATOR_TRACE_MARKERS = [
 
 export const EVALUATOR_AGENT_NAMES = new Set([
   'trace-quality-evaluator',
-  'completeness-checker',
-  'tool-choice-judge',
-  'attribution-locator',
   'task-completion-evaluator',
-  'key-points-checker',
 ]);
 
 export interface EvaluatorAgentLike {

@@ -928,11 +928,6 @@ function EvaluatorCardView({
           <span className={`ai-badge ${card.status === 'ready' ? 'ai-badge-g' : card.status === 'draft' ? 'ai-badge-gr' : 'ai-badge-b'}`}>
             {card.status === 'ready' ? '已就绪' : card.status === 'draft' ? '草稿' : '预置'}
           </span>
-          {card.runtimeNote ? (
-            <span style={{ color: 'var(--foreground-muted)', fontSize: 10.5 }} title={card.runtimeNote}>
-              · {card.runtimeNote}
-            </span>
-          ) : null}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           {activeTab === 'custom' && onDeleteCustom ? (

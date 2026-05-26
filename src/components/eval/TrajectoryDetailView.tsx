@@ -227,14 +227,12 @@ function deriveResultEvaluationPayload(
                 reason?: unknown;
                 key_point_summary?: unknown;
                 key_point_findings?: unknown;
-                raw_subagent_outputs?: { key_points?: { covered_points?: unknown } };
             };
             resultEvaluationError?: unknown;
             resultActualOutput?: unknown;
             score?: unknown;
             reason?: unknown;
             key_point_findings?: unknown;
-            raw_subagent_outputs?: { key_points?: { covered_points?: unknown } };
         }
         : null;
 
@@ -243,11 +241,8 @@ function deriveResultEvaluationPayload(
         String(execution?.judgment_reason || execution?.judgmentReason || ''),
     );
     const directFindingsRaw = root?.resultEvaluation?.key_point_findings
-        ?? root?.key_point_findings
-        ?? root?.resultEvaluation?.raw_subagent_outputs?.key_points?.covered_points
-        ?? root?.raw_subagent_outputs?.key_points?.covered_points;
-    const fallbackFindingsRaw = parsedFromReason?.key_point_findings
-        ?? (parsedFromReason?.raw_subagent_outputs as { key_points?: { covered_points?: unknown } } | undefined)?.key_points?.covered_points;
+        ?? root?.key_point_findings;
+    const fallbackFindingsRaw = parsedFromReason?.key_point_findings;
     const fallbackFindings = normalizeFindings(
         fallbackFindingsRaw,
     );
@@ -334,10 +329,8 @@ function deriveResultEvaluationFindings(rawAnalysis: unknown): ResultEvaluationF
         ? rawAnalysis as {
             resultEvaluation?: {
                 key_point_findings?: unknown;
-                raw_subagent_outputs?: { key_points?: { covered_points?: unknown } };
             };
             key_point_findings?: unknown;
-            raw_subagent_outputs?: { key_points?: { covered_points?: unknown } };
         }
         : null;
 
@@ -346,10 +339,6 @@ function deriveResultEvaluationFindings(rawAnalysis: unknown): ResultEvaluationF
             ? root.resultEvaluation.key_point_findings
             : Array.isArray(root?.key_point_findings)
             ? root.key_point_findings
-            : Array.isArray(root?.resultEvaluation?.raw_subagent_outputs?.key_points?.covered_points)
-            ? root.resultEvaluation.raw_subagent_outputs.key_points.covered_points
-            : Array.isArray(root?.raw_subagent_outputs?.key_points?.covered_points)
-            ? root.raw_subagent_outputs.key_points.covered_points
             : [];
     return normalizeFindings(rawFindings);
 }
@@ -1332,7 +1321,7 @@ function DimensionCard({
 }
 
 /**
- * 把 rawAnalysis.raw_subagent_outputs 派生成 4 张卡片各自的 findings 列表。
+ * 把 rawAnalysis.dimension_details 派生成 4 张卡片各自的 findings 列表。
  * 任何字段缺失都安全降级为空数组。
  */
 function asRecord(value: unknown): Record<string, unknown> {
@@ -1348,7 +1337,7 @@ function deriveDimensionFindings(rawAnalysis: unknown): {
     attribution: { type: 'high' | 'medium' | 'low' | 'info'; text: string }[];
 } {
     const root = asRecord(rawAnalysis);
-    const sub = asRecord(root.raw_subagent_outputs ?? root.rawSubagentOutputs);
+    const details = asRecord(root.dimension_details ?? root.dimensionDetails);
     const sev = (s: unknown): 'high' | 'medium' | 'low' | 'info' => {
         const v = String(s || '').toLowerCase();
         if (v === 'high') return 'high';
@@ -1358,7 +1347,7 @@ function deriveDimensionFindings(rawAnalysis: unknown): {
     };
 
     const completeness: { type: ReturnType<typeof sev>; text: string }[] = [];
-    const cmpt = asRecord(sub.completeness);
+    const cmpt = asRecord(details.completeness);
     for (const raw of (Array.isArray(cmpt.missing_steps) ? cmpt.missing_steps : [])) {
         const m = asRecord(raw);
         completeness.push({ type: sev(m.severity), text: `缺失：${m.description || '(未给描述)'}` });
@@ -1373,7 +1362,7 @@ function deriveDimensionFindings(rawAnalysis: unknown): {
     }
 
     const toolChoice: { type: ReturnType<typeof sev>; text: string }[] = [];
-    const tc = asRecord(sub.tool_choice ?? sub.toolChoice);
+    const tc = asRecord(details.tool_choice ?? details.toolChoice);
     for (const raw of (Array.isArray(tc.problematic_steps) ? tc.problematic_steps : [])) {
         const m = asRecord(raw);
         const idx = m.step_index ?? m.stepIndex;
@@ -1385,7 +1374,7 @@ function deriveDimensionFindings(rawAnalysis: unknown): {
     }
 
     const redundancy: { type: ReturnType<typeof sev>; text: string }[] = [];
-    const rd = asRecord(sub.redundancy);
+    const rd = asRecord(details.redundancy);
     for (const raw of (Array.isArray(rd.consecutive_same_runs) ? rd.consecutive_same_runs : [])) {
         const r = asRecord(raw);
         const name = r.name || '?';
@@ -1406,7 +1395,7 @@ function deriveDimensionFindings(rawAnalysis: unknown): {
     }
 
     const attribution: { type: ReturnType<typeof sev>; text: string }[] = [];
-    const at = asRecord(sub.attribution);
+    const at = asRecord(details.attribution);
     if (at.root_cause_step) {
         attribution.push({ type: 'high', text: `根因：${at.root_cause_step}` });
     }

@@ -305,12 +305,9 @@ async function persistResultJudgment(
     const raw = judgment.rawAnalysis && typeof judgment.rawAnalysis === 'object'
         ? judgment.rawAnalysis as {
             key_point_findings?: unknown;
-            raw_subagent_outputs?: { key_points?: { covered_points?: unknown } };
         }
         : null;
-    const findings =
-        raw?.key_point_findings
-        ?? raw?.raw_subagent_outputs?.key_points?.covered_points;
+    const findings = raw?.key_point_findings;
     const isStructuredReady = typeof judgment.score === 'number'
         && Number.isFinite(judgment.score)
         && Boolean(String(judgment.reason || '').trim())

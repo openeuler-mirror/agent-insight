@@ -5,7 +5,7 @@
  *
  * 输入：
  *   - trajectory 评测产出（deviationSteps / rootCauseStep / reasonText / rawAnalysis）
- *   - 任务完成度评测产出（rawAnalysis.key_point_findings —— 来自 result-evaluation 子代理）
+ *   - 任务完成度评测产出（rawAnalysis.key_point_findings —— 来自主评估器）
  *   - Execution 行（拿 invokedSkills + skillVersion + id）
  *
  * 写入分工（详见 docs/plans/2026-05-08-skill-opt-issues-api-design.md）：
@@ -275,14 +275,13 @@ function extractToolChoiceIssues(
 ): DerivedIssue[] {
   const raw = parseJsonObject(row.rawAnalysisJson);
   if (!raw) return [];
-  const subagent = raw.raw_subagent_outputs;
   const toolChoice =
-    subagent && typeof subagent === 'object'
-      ? (subagent as Record<string, unknown>).tool_choice
+    raw.dimension_details && typeof raw.dimension_details === 'object'
+      ? (raw.dimension_details as Record<string, unknown>).tool_choice
       : undefined;
   const issues = arrayOrEmpty<RawToolChoiceFinding>(
     toolChoice && typeof toolChoice === 'object'
-      ? (toolChoice as Record<string, unknown>).issues
+      ? (toolChoice as Record<string, unknown>).problematic_steps
       : undefined,
   );
   const out: DerivedIssue[] = [];

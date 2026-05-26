@@ -78,26 +78,8 @@ export const SYSTEM_AGENTS: SystemAgentDefinition[] = [
   {
     platform: 'opencode',
     name: 'trace-quality-evaluator',
-    description: '内置：Agent 轨迹质量评估器（基于 opencode 多子代理协作评估执行轨迹）',
+    description: '内置：Agent 轨迹质量评估器（基于 opencode 单主评估器评估执行轨迹）',
     agentType: 'main',
-  },
-  {
-    platform: 'opencode',
-    name: 'completeness-checker',
-    description: '内置：Agent 轨迹质量评估器的步骤完整性检查子代理',
-    agentType: 'subagent',
-  },
-  {
-    platform: 'opencode',
-    name: 'tool-choice-judge',
-    description: '内置：Agent 轨迹质量评估器的工具选择合理性检查子代理',
-    agentType: 'subagent',
-  },
-  {
-    platform: 'opencode',
-    name: 'attribution-locator',
-    description: '内置：Agent 轨迹质量评估器的根因定位子代理',
-    agentType: 'subagent',
   },
   {
     platform: 'opencode',
@@ -111,12 +93,6 @@ export const SYSTEM_AGENTS: SystemAgentDefinition[] = [
     description: '内置：Skill 触发分析评测 Agent（read-only 模式跑触发集，与用例评估 trace 分流）',
     agentType: 'main',
     previousNames: ['skill-recall-analyzer'],
-  },
-  {
-    platform: 'opencode',
-    name: 'key-points-checker',
-    description: '内置：Agent 任务完成度评估器的关键观点覆盖检查子代理',
-    agentType: 'subagent',
   },
   // 后续：skill-optimizer 等内置 agent
   // 加新 Agent 时同时填 traceSkill（如果有内置 skill），server 重启自动注册
