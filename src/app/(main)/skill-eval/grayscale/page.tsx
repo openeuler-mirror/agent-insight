@@ -453,14 +453,16 @@ function mergeServerCaseStates(
         const lRuns = l.runs ?? [];
         const rRuns = r.runs ?? [];
         const lLatest = lRuns[lRuns.length - 1];
-        // 本地比远端多 run，且最新一条是 in-flight：远端还没看见，保留本地
+        // 唯一保留本地的场景: 用户刚点过「重跑」, runCaseSide 已经 push 了一条新
+        // running 占位 + 发 PATCH, 但 PATCH 还没落库, polling tick 拿到的是旧
+        // caseStatesJson(没新这条 run)。这时本地 runs[] 比远端多, 且末尾是
+        // in-flight, 必须保留本地不被擦。
         if (lRuns.length > rRuns.length && lLatest && !FINISHED.includes(lLatest.status)) {
             return l;
         }
-        // 本地顶层是 running/evaluating 而远端不是 → 本地是更新的乐观状态
-        if ((l.status === 'running' || l.status === 'evaluating') && !FINISHED.includes(l.status) && l.status !== r.status) {
-            return l;
-        }
+        // 其它一律采用 server——之前还有条 "本地 running/evaluating 而远端不是 →
+        // keep local" 的兜底, 但 server 把状态从 evaluating 推到 pass 是正常进程,
+        // 那条规则会让本地永久卡在 evaluating, 即使 server 已经写 pass。已删。
         return r;
     };
     const ids = new Set([...Object.keys(local), ...Object.keys(remote)]);

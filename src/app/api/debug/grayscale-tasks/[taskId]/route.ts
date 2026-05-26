@@ -1097,6 +1097,13 @@ async function evaluateRunsWithConcurrency(args: {
                     taskType: 'grayscale-eval',
                     user: args.user,
                     label: `eval-${target.side}-${target.caseId}`,
+                    // displayOnly: 这层是 orchestration 只发 HTTP 给 /api/eval/trajectory/run,
+                    // 内部 trajectory + task-completion 各自再走 withBackgroundOpencodeSlot
+                    // 占自己的 slot。如果外层也占 slot, 1 个 case 2 个 side 就要 2(外) +
+                    // 4(2 side × 2 evaluator) = 6 个 slot, 超过默认 max=5, 用户会看到
+                    // "1 评测中 + 1 排队中" 的奇怪现象。displayOnly=true 表示 dashboard
+                    // 上仍能看到这个任务条目, 但不实际占 slot, 杜绝外/内双重计数。
+                    displayOnly: true,
                     // TODO: evaluateRunsWithConcurrency 当前从 args.config.skillId 索引,这一层
                     // 拿不到具体 versionA/B 的 skillName/version。后续 refactor 让 caller 把
                     // versionA/B 显式传进 args 后再补齐 skill 透传。当前 grayscale-eval 任务
