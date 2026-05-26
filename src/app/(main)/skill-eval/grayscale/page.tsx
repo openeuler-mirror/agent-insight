@@ -1404,6 +1404,31 @@ export function GrayscaleEvaluation({
             datasetId: 'traces',
         }));
 
+    // Auto-prune checkedCaseIds: 切换 sourceMode / 时间窗 / 数据集后, 原来勾选
+    // 的 ID 在新的 allCases 里可能找不到了（dataset case id ≠ trace upload_id,
+    // 数据被清掉等）。这里把 stale ID 过滤掉, 同步落回 DB, 避免：
+    //   - 「已选样本 5 个」UI 上看不见、勾不掉
+    //   - 「执行」时尝试跑不存在的 case
+    // Guard 1: allCases 为空时 skip——避免 loading 中误把所有勾选清光
+    // Guard 2: 必须有 currentTask 才同步落库, 否则只改本地 state
+    useEffect(() => {
+        if (allCases.length === 0) return;
+        const validIds = new Set(allCases.map(c => c.id));
+        const stale = checkedCaseIds.filter(id => !validIds.has(id));
+        if (stale.length === 0) return;
+        const next = checkedCaseIds.filter(id => validIds.has(id));
+        setCheckedCaseIds(next);
+        if (currentTask) {
+            persistTaskUpdate(currentTask.id, {
+                ...currentConfigRef.current,
+                selectedCaseIds: next,
+                checkedCaseIds: next,
+            });
+        }
+    // 依赖只挂 allCases；checkedCaseIds 也读但不挂依赖以避免自己 set 自己导致 loop。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [allCases]);
+
     // Selection
     useEffect(() => {
         if (allCases.length > 0 && !selectedCaseId) {
@@ -1449,7 +1474,11 @@ export function GrayscaleEvaluation({
         const state = caseStates[c.id] || { a: { status: 'pending' }, b: { status: 'pending' } };
         return state.a.status === 'pass' && state.b.status === 'pass';
     }).length;
-    const selectedSampleCount = checkedCaseIds.length;
+    // 只统计「在当前 allCases 里能找到」的那些勾选 ID。否则切了 sourceMode /
+    // 时间窗 / 数据集后, 老的 stale 勾选 ID 会让计数虚高（用户在 UI 上看不见,
+    // 也勾不掉, 就疑惑「已选 5 个」是从哪里来的）。
+    const checkedVisibleIds = checkedCaseIds.filter(id => allCases.some(c => c.id === id));
+    const selectedSampleCount = checkedVisibleIds.length;
 
     const bWins = allCases.filter(c => {
         const state = caseStates[c.id];
