@@ -308,23 +308,44 @@ function TracePageContent() {
     }, [setTaskIdParam]);
 
     // Resolve selectedExecution from URL on data load or URL change.
+    // fetchGuardRef: 记录已经为哪个 taskIdParam fire 过 fallback fetch, 避免:
+    //   - data 列表里没这条(比如系统 agent grayscale-* 被前端过滤掉)
+    //   - 每次 fetch 返回新对象 ref → setSelectedExecution → 因为
+    //     selectedExecution 在 deps 里, effect 重新跑, 又走 fetch → 死循环
+    // 死循环 + 反复 setState 会让 TraceDetailView 的子 effect 反复 abort/重启,
+    // 表现就是用户「click → 跳到 trace 列表页, detail 永远渲染不上」。
+    const fetchGuardRef = useRef<{ taskId: string; user: string } | null>(null);
     useEffect(() => {
         if (!taskIdParam) {
             if (selectedExecution) setSelectedExecution(null);
+            fetchGuardRef.current = null;
             return;
         }
         const exec = data.find(e => e.task_id === taskIdParam || e.upload_id === taskIdParam);
         if (exec) {
             if (selectedExecution !== exec) setSelectedExecution(exec);
-        } else if (user) {
-            apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&taskId=${encodeURIComponent(taskIdParam)}&includeEvaluations=0`)
-                .then(r => r.json())
-                .then((d: Execution[]) => {
-                    if (Array.isArray(d) && d.length > 0) setSelectedExecution(d[0]);
-                })
-                .catch(() => { /* silent */ });
+            return;
         }
-    }, [taskIdParam, data, user, selectedExecution]);
+        // data 里没有, fallback 到 API 直查; 每个 (taskId, user) 只 fetch 一次
+        if (!user) return;
+        const guardKey = { taskId: taskIdParam, user };
+        if (
+            fetchGuardRef.current?.taskId === guardKey.taskId
+            && fetchGuardRef.current?.user === guardKey.user
+        ) return;
+        fetchGuardRef.current = guardKey;
+        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&taskId=${encodeURIComponent(taskIdParam)}&includeEvaluations=0`)
+            .then(r => r.json())
+            .then((d: Execution[]) => {
+                if (Array.isArray(d) && d.length > 0) setSelectedExecution(d[0]);
+            })
+            .catch(() => {
+                // 失败让用户能重试: 清掉 guard, 下次 effect 再 fire 时还能再试一次
+                if (fetchGuardRef.current?.taskId === taskIdParam) fetchGuardRef.current = null;
+            });
+    // selectedExecution 不放 deps——它由本 effect 自己写, 放进去就死循环
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [taskIdParam, data, user]);
 
     useEffect(() => {
         if (!user) return;
