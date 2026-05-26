@@ -1393,16 +1393,19 @@ export async function POST(
         const storeKey = `${user}:${taskId}`;
         // === action: abort —— 用户点「终止」按钮 ===
         if (action === 'abort') {
+            // 双场景:
+            //   A. activeRuns 里有 → 任务真在跑, abort signal + 清 DB + 删 active
+            //   B. activeRuns 里没有 → server 重启等原因丢了 in-memory state, 但
+            //      caseStatesJson 还卡在 running/evaluating (孤儿状态)。前端 UI 因为
+            //      hasRunningStates 还显示「执行中」, 用户点终止 → 必须也能清掉这些
+            //      孤儿, 否则用户被永久锁死。之前直接返回 404, 反而堵了用户唯一的
+            //      自救入口。
             const active = activeRuns().get(storeKey);
-            if (!active) {
-                return NextResponse.json({ error: 'no active run' }, { status: 404 });
+            if (active) {
+                try { active.abortController?.abort(); } catch { /* already aborted */ }
             }
-            // 1) 触发 AbortSignal: in-flight opencode chat 会感知到, 尽快返回
-            try { active.abortController?.abort(); } catch { /* already aborted */ }
-            // 2) 把 caseStatesJson 里所有 running/evaluating 状态推到 fail, 让 UI 立刻
-            //    脱离"执行中"。如果还有真在跑的 opencode session, 它的 .catch() 也会
-            //    更新对应 run, 但本次 patch 已经把 user-visible 状态变 fail, 用户不再
-            //    被锁在 busy 按钮上。
+            // 不管 active 在不在, 都 patch DB 把 running/evaluating 推到 fail
+            let patchedCount = 0;
             try {
                 const taskRow = await loadTask(taskId, user);
                 if (taskRow) {
@@ -1414,6 +1417,7 @@ export async function POST(
                             if (sideState.status === 'running' || sideState.status === 'evaluating') {
                                 sideState.status = 'fail';
                                 sideState.output = sideState.output || '用户终止';
+                                patchedCount++;
                             }
                             for (const run of sideState.runs || []) {
                                 if (run.status === 'running' || run.status === 'evaluating') {
@@ -1421,18 +1425,25 @@ export async function POST(
                                     run.failureType = 'agent_error';
                                     run.failureDetail = '用户终止';
                                     run.output = run.output || '用户终止';
+                                    patchedCount++;
                                 }
                             }
                         }
                     }
-                    await persistTaskState(taskId, user, taskRow.configJson, states);
+                    if (patchedCount > 0) {
+                        await persistTaskState(taskId, user, taskRow.configJson, states);
+                    }
                 }
             } catch (e) {
                 console.warn('[GRAYSCALE_TASKS_ABORT] persist fail patch failed:', e);
             }
-            // 3) 从 activeRuns 删除—— polling 下一 tick 看到 activeRun=null, 真正停下
-            activeRuns().delete(storeKey);
-            return NextResponse.json({ ok: true, aborted: true });
+            if (active) activeRuns().delete(storeKey);
+            return NextResponse.json({
+                ok: true,
+                aborted: true,
+                hadActiveRun: !!active,
+                patchedCount,
+            });
         }
 
         if (activeRuns().has(storeKey)) {
