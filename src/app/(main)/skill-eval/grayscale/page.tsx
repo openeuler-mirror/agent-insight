@@ -192,6 +192,48 @@ function hasPendingAutoEvaluationCaseStates(states: Record<string, { a: PerVersi
 
 type CaseStatus = 'pending' | 'running' | 'executed' | 'evaluating' | 'pass' | 'fail';
 
+// 状态徽章中文映射，对齐"用例分析"卡的术语（✓已评测 / 评测中 / ⚠评测失败 等），
+// 给 A/B 执行记录 modal 用。颜色风格也跟 trace 行的徽章对齐。
+const CASE_STATUS_DISPLAY: Record<CaseStatus, { label: string; bg: string; fg: string; icon?: string; pulse?: boolean }> = {
+    pending:    { label: '排队中', bg: 'rgba(100,116,139,.10)', fg: '#475569' },
+    running:    { label: '执行中', bg: 'rgba(37,99,235,.10)',   fg: '#2563EB', pulse: true },
+    executed:   { label: '执行完成 · 待评测', bg: 'rgba(217,119,6,.10)', fg: '#B45309' },
+    evaluating: { label: '评测中', bg: 'rgba(37,99,235,.10)',   fg: '#2563EB', pulse: true },
+    pass:       { label: '已评测', bg: 'rgba(22,163,74,.10)',   fg: '#15803D', icon: '✓' },
+    fail:       { label: '评测失败', bg: 'rgba(220,38,38,.10)', fg: '#B91C1C', icon: '⚠' },
+};
+
+function CaseStatusBadge({ status }: { status: CaseStatus | string | undefined }) {
+    const cfg = CASE_STATUS_DISPLAY[status as CaseStatus] ?? CASE_STATUS_DISPLAY.pending;
+    return (
+        <span style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            fontSize: 11,
+            fontWeight: 700,
+            padding: '3px 8px',
+            borderRadius: 99,
+            background: cfg.bg,
+            color: cfg.fg,
+            whiteSpace: 'nowrap',
+        }}>
+            {cfg.pulse && (
+                <span style={{
+                    display: 'inline-block',
+                    width: 7,
+                    height: 7,
+                    borderRadius: '50%',
+                    background: 'currentColor',
+                    animation: 'pulse 1.5s ease-in-out infinite',
+                }} />
+            )}
+            {cfg.icon && <span>{cfg.icon}</span>}
+            {cfg.label}
+        </span>
+    );
+}
+
 // ──────────────── caseStates side-state 修改助手 ────────────────
 // 历史 bug：runCaseSide / evaluateCaseSide 在每次 setCaseStates 时
 // 直接用 `[side]: { status: 'running' }` 这种方式整段替换 side state，
@@ -1878,8 +1920,8 @@ export function GrayscaleEvaluation({
                                         <span style={{ color: '#B8B6AE' }}>—</span>
                                     )}
                                 </div>
-                                <div style={{ textAlign: 'right' }}>
-                                    <div style={{ color: '#5F5E5A' }}>{record.status}</div>
+                                <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+                                    <CaseStatusBadge status={record.status} />
                                     <div style={{ color: accent, fontWeight: 700 }}>{typeof record.score === 'number' ? record.score : '—'}</div>
                                 </div>
                             </div>
