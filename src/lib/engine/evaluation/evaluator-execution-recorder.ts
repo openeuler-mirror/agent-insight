@@ -123,7 +123,7 @@ function isRawOpencodeMessage(value: unknown): value is { info?: Record<string, 
 export function normalizeEvaluatorExecutionInteractions(messages: unknown[]): EvaluatorTraceInteraction[] {
   if (!Array.isArray(messages) || messages.length === 0) return [];
 
-  return messages
+  const result = messages
     .map(message => {
       if (!isRawOpencodeMessage(message)) return null;
       const info = (message.info || {}) as Record<string, unknown>;
@@ -159,7 +159,7 @@ export function normalizeEvaluatorExecutionInteractions(messages: unknown[]): Ev
             output: state.output,
           } satisfies Record<string, unknown>;
         })
-        .filter((toolCall): toolCall is Record<string, unknown> => Boolean(toolCall));
+        .filter(Boolean) as Record<string, unknown>[];
 
       const tokens = info.tokens && typeof info.tokens === 'object'
         ? info.tokens as OpencodeTokenUsage
@@ -190,7 +190,8 @@ export function normalizeEvaluatorExecutionInteractions(messages: unknown[]): Ev
         cost: info.cost,
       } satisfies EvaluatorTraceInteraction;
     })
-    .filter((interaction): interaction is EvaluatorTraceInteraction => Boolean(interaction))
+    .filter((interaction) => interaction !== null) as EvaluatorTraceInteraction[];
+  return result
     .sort((a, b) => (toTimestamp(a.timeInfo?.created) || 0) - (toTimestamp(b.timeInfo?.created) || 0));
 }
 

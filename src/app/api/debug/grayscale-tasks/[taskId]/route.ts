@@ -839,6 +839,7 @@ async function executeSingleAgentRun(args: {
                 reject(new GrayscaleAgentTimeoutError(`agent_timeout: exceeded ${Math.round(GRAYSCALE_AGENT_TIMEOUT_MS / 1000)}s${lastToolSummary ? `; last_tool=${lastToolSummary}` : ''}`));
             }, GRAYSCALE_AGENT_TIMEOUT_MS);
         });
+        const grayAgentName = args.version ? 'grayscale-skill-agent' : 'grayscale-baseline-agent';
         const agentPromise = runGeneralAgent({
             user: args.user,
             query: args.caseMap.get(target.caseId)!.input,
@@ -846,9 +847,13 @@ async function executeSingleAgentRun(args: {
             skillVersion: args.version?.version,
             system: buildGrayscaleExecutionSystem(args.version),
             interactionPolicy: 'auto-deny',
-            systemAgentName: args.version ? 'grayscale-skill-agent' : 'grayscale-baseline-agent',
+            systemAgentName: grayAgentName,
             // 后台批量任务: 每次起独立 opencode 进程,跑完杀,保证拿最新 skill 内容
             ephemeralServer: true,
+            // 让 runGeneralAgent 跑完后内部 listMessages + saveExecutionRecord 写 Execution 行。
+            // 不依赖 plugin/OTEL 上报, 避免新 grayscale session 在 DB 里查不到 → trace 详情跳转空跳。
+            // 复用同事 821236e 引入的 recordEvaluatorExecution helper, 写入真实 trajectory。
+            recordTraceAs: grayAgentName,
             sessionTitle: `grayscale ${target.side.toUpperCase()} r${target.roundIndex} · ${args.user} · ${args.taskId}`,
             workspaceTag: `grayscale-${args.taskId}-${target.side}-${target.caseId}-r${target.roundIndex}`,
             timeoutMs: GRAYSCALE_AGENT_TIMEOUT_MS,
@@ -885,6 +890,8 @@ async function executeSingleAgentRun(args: {
         run.toolCallCount = result.stats?.toolCallCount || toolCalls.length;
         run.toolCalls = Array.from(new Set(toolCalls)).slice(0, 8);
         markRunCompleted(run);
+        // Execution 行的写库已经由 runGeneralAgent 里的 recordTraceAs 选项处理
+        // (上面调用时传了 grayAgentName)。不在这里重复写。
     } catch (err) {
         const classified = classifyAgentRunError(err);
         run.status = 'fail';
