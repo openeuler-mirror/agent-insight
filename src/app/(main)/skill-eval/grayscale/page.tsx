@@ -1391,6 +1391,33 @@ export function GrayscaleEvaluation({
         pollCurrentTask(currentTask.id);
     }, [currentTask?.id, isTaskRunInFlight, pollCurrentTask]);
 
+    // 用户点「终止」按钮: 让后端马上 abort in-flight chat / 不再 dispatch 新 work,
+    // 把 caseStates 里所有 running/evaluating 推到 fail, 让用户脱离"执行中"锁死状态。
+    const abortCurrentRun = async () => {
+        if (!currentTask) return;
+        if (!window.confirm(locale === 'zh'
+            ? '确定终止当前 A/B 测试? 已 in-flight 的执行/评测会被标记为「用户终止」失败, 但产生的 trace 不会被清。'
+            : 'Abort current A/B test? In-flight runs will be marked as user-aborted failures; existing traces are preserved.')) {
+            return;
+        }
+        try {
+            const res = await apiFetch(`/api/debug/grayscale-tasks/${currentTask.id}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user: user || 'debug-user', action: 'abort' }),
+            });
+            if (!res.ok) {
+                const data = await res.json().catch(() => ({}));
+                alert((locale === 'zh' ? '终止失败: ' : 'Abort failed: ') + (data.error || res.status));
+                return;
+            }
+            // 强制刷一次, 不等下一 polling tick
+            pollCurrentTask(currentTask.id);
+        } catch (err) {
+            alert(String(err));
+        }
+    };
+
     const runComparisonForCheckedCases = async () => {
         if (isTaskRunInFlightRef.current || currentTaskRef.current?.activeRun || hasRunningStates(caseStatesRef.current)) {
             return;
@@ -2602,6 +2629,29 @@ export function GrayscaleEvaluation({
                             >
                                 <PlayIcon /> {runButtonLabel}
                             </button>
+                            {/* 终止按钮: 仅 busy 时显示, 让用户能干涉死锁在执行中的任务 */}
+                            {runButtonBusy && (
+                                <button
+                                    onClick={abortCurrentRun}
+                                    title={locale === 'zh' ? '终止当前 A/B 测试' : 'Abort current A/B test'}
+                                    style={{
+                                        padding: '10px 18px',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: 6,
+                                        background: '#FEE2E2',
+                                        color: '#B91C1C',
+                                        border: '1px solid #FCA5A5',
+                                        borderRadius: 8,
+                                        height: 38,
+                                        fontSize: 13,
+                                        fontWeight: 700,
+                                        cursor: 'pointer',
+                                    }}
+                                >
+                                    ⏹ {locale === 'zh' ? '终止' : 'Abort'}
+                                </button>
+                            )}
                             <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, fontWeight: 700, color: '#2C2C2A' }}>
                                 <span>{locale === 'zh' ? 'Agent 最大并发数' : 'Max agent concurrency'}</span>
                                 <select
