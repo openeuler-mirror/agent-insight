@@ -11,10 +11,10 @@
  * 评估器内部维度：
  *  - 规则冗余检测：
  *      纯代码统计连续重复调用、超高频调用
- *  - LLM 维度评估：
- *      completeness-checker  : 步骤完整性
- *      tool-choice-judge     : 工具/Skill 选择合理性
- *      attribution-locator   : 步骤级根因定位
+ *  - 主评估器直接完成的 LLM 维度评估：
+ *      completeness : 步骤完整性
+ *      tool_choice  : 工具/Skill 选择合理性
+ *      attribution  : 步骤级根因定位
  *
  * 输入：单个 (case × actualTrace) 对（离线模式 = trace 已存在于 Session.interactions）。
  * 输出：dimensionScores + trajectoryScore + deviationSteps + rootCauseStep + reasonText。
@@ -39,6 +39,7 @@ import {
     summarizeTrace,
     type TraceSummary,
 } from './trace-summarizer';
+import { recordEvaluatorExecution } from './evaluator-execution-recorder';
 import { tagOpencodeSession } from '@/lib/internal-agent-tag';
 import { findSystemAgentDefinition, getSystemAgentId } from '@/lib/system-agents';
 
@@ -63,19 +64,52 @@ type JsonRecord = Record<string, unknown>;
 const EVALUATOR_AGENT_NAME = 'trace-quality-evaluator';
 const OPENCODE_FALLBACK_AGENT_NAME = 'build';
 
-const COORDINATOR_SYSTEM_PROMPT = `你是「轨迹评估器」的总协调者。你会收到一个 (case + actual_trace + reference_trajectory) 三元组，必要时还会带 reference_key_actions 与 actual_extracted_steps，需要协调 3 个 subagent 与 1 个规则工具，产出结构化评测结果。
+const COORDINATOR_SYSTEM_PROMPT = `你是 Skill Insight 的「轨迹质量评估器」。你会收到一个 (case + actual_trace + reference_trajectory) 三元组，必要时还会带 reference_key_actions 与 actual_extracted_steps，以及已由规则代码计算好的冗余检测结果。
+
+请按下面 5 个步骤完成内部分析，但最终只输出 JSON。不要输出步骤过程、Markdown、解释性前言或额外文本。
 
 【比较模式】
 - 当 comparison_mode = trajectory 时：按 reference_trajectory 和 actual_trace 做常规轨迹对比。
 - 当 comparison_mode = skill_key_actions 时：优先按 reference_key_actions 和 actual_extracted_steps 做关键步骤覆盖/偏离分析，再结合 actual_trace 判断工具选择与根因。
 
-【必须遵循的工作流程】
-1. **不要自己直接评估**，所有评估都通过 subagent 或 tool 完成。
-2. 步骤 1：调用 \`detect_redundancy_and_loops\` 工具拿到规则检测结果（死循环 / 重复调用 / redundancy_score）。
-3. 步骤 2：用 \`task\` 工具派发给 \`completeness-checker\`，把「参考轨迹」和「实际轨迹」原样转交，让它输出 JSON 完整性评估。
-4. 步骤 3：用 \`task\` 工具派发给 \`tool-choice-judge\`，把「实际轨迹」（必要时附参考）转交，让它输出 JSON 工具选择评估。
-5. 步骤 4：把 redundancy + completeness + tool-choice 的发现综合起来，用 \`task\` 工具派发给 \`attribution-locator\`，让它定位 root cause。
-6. 步骤 5：把所有结果聚合成下面**严格的 JSON**，用 \`write_file\` 工具写入文件路径 \`final_result.json\`：
+【硬性约束】
+- 你必须自己完成全部评测，禁止派发、调用或生成任何 subagent / task；本次评测只能由你这个主评估器独立完成。
+- 不要调用工具、不要写文件、不要尝试重新检测冗余；输入里的规则冗余结果就是唯一依据。
+- 所有分数必须是 0.0 到 1.0 之间的数字。
+- \`dimension_scores.completeness\` 必须等于 \`dimension_details.completeness.score\`。
+- \`dimension_scores.tool_choice\` 必须等于 \`dimension_details.tool_choice.score\`。
+- \`dimension_scores.redundancy\` 必须等于输入规则结果里的 \`redundancy_score\`。
+- \`dimension_scores.attribution\` 必须等于 \`dimension_details.attribution.attribution_score\`。
+- \`trajectory_score\` 必须按公式计算，可四舍五入到 3 位小数。
+
+【内部分析步骤】
+Step 1：冗余分析
+- 直接采用输入中已计算好的 redundancy_score。
+- 把规则检测结果摘要写入 \`dimension_details.redundancy\`。
+
+Step 2：完整性分析
+- comparison_mode = trajectory 时，对比 reference_trajectory 与 actual_trace。
+- comparison_mode = skill_key_actions 时，优先对比 reference_key_actions 与 actual_extracted_steps。
+- 列出 missing_steps（应有但未执行）和 extra_steps（多余或明显绕路）。
+- 给出 completeness 评分。
+
+Step 3：工具选择分析
+- 逐步检查 actual_trace 中每个 tool / skill 调用。
+- 判断工具选择、参数、调用时机是否合理。
+- 列出 problematic_steps。
+- 给出 tool_choice 评分。
+
+Step 4：根因定位与 Skill 归因
+- 综合完整性与工具选择发现，定位最关键的偏离步骤；没有显著偏离时 root_cause_step 为 null。
+- 对每个 deviation_step 判断 is_skill_attributable：
+  · true：如果在 SKILL.md 增加明确规则、示例或前置约束，能显著降低这个错误复现概率。
+  · false：偏差主要来自 agent 自身推理、模型能力、外部环境或一次性执行波动。
+- 仅当 is_skill_attributable=true 时，给出具体到 SKILL.md 小节级别的 improvement_suggestion。
+- attribution 评分只表示根因是否明确、证据是否充分；不要把它当作 Skill 可归因比例。
+
+Step 5：聚合输出
+- trajectory_score = 0.35 * completeness + 0.30 * tool_choice + 0.15 * redundancy + 0.20 * attribution。
+- 只输出下面 schema 对应的严格 JSON：
 
 \`\`\`json
 {
@@ -99,98 +133,39 @@ const COORDINATOR_SYSTEM_PROMPT = `你是「轨迹评估器」的总协调者。
   ],
   "root_cause_step": "step#5: bash",
   "reason_text": "(中文 markdown 综述, 200-400 字)",
-  "raw_subagent_outputs": {
-    "redundancy": {},
-    "completeness": {},
-    "tool_choice": {},
-    "attribution": {}
+  "dimension_details": {
+    "redundancy": {
+      "consecutive_same_runs": [],
+      "heavy_repeated_calls": [],
+      "total_tool_calls": 0,
+      "total_skill_calls": 0,
+      "redundancy_score": 1.0
+    },
+    "completeness": {
+      "score": 0.85,
+      "missing_steps": [],
+      "extra_steps": [],
+      "explanation": "..."
+    },
+    "tool_choice": {
+      "score": 0.78,
+      "problematic_steps": [],
+      "explanation": "..."
+    },
+    "attribution": {
+      "root_cause_step": "step#5: bash",
+      "reasoning": "...",
+      "attribution_score": 1.0
+    }
   }
 }
 \`\`\`
 
-【关键观点 - 关于 deviation_steps 的两个新字段】
-- is_skill_attributable：判断这条偏差是否由"SKILL.md 写得不够清楚"导致。
-  · true  → SKILL 缺关键规则/示例/前置约束，需要补 SKILL 内容
-  · false → 偏差是 agent 自身推理 / 模型能力问题，写再多 SKILL 也避免不了
-  · 判断方法：reread SKILL 文本，问自己"如果在 SKILL 里加一段明确指令，agent 还会犯这个错吗？"
-- improvement_suggestion：仅当 is_skill_attributable=true 时填，**写到具体小节级别**：
-  "在 SKILL.md 的 'Step 2: 数据收集' 章节加一段：「在 dmesg 之前先采集 journalctl + iotop 时间序列，避免遗漏 IO 压力线索」"。不要写空话。
-- 即使是 low severity，只要确实跟 skill 相关也要标 is_skill_attributable=true（severity 是问题严重度，is_skill_attributable 是归因维度，两者独立）。
+【关于 dimension_details 字段】
+- redundancy 放规则检测结果摘要。
+- completeness / tool_choice / attribution 分别放 3 个维度的结构化分析，供前端与 skill-opt 直接消费。
 
-【聚合公式】
-- trajectory_score = 0.35 * completeness + 0.30 * tool_choice + 0.15 * redundancy + 0.20 * attribution
-- 各维度分数取自对应 subagent / 规则工具输出的 score 字段。
-
-完成 write_file 后只回复一句"已写入 final_result.json"。`;
-
-const COMPLETENESS_CHECKER_PROMPT = `你是 Agent 执行轨迹「步骤完整性」评估专家。
-
-输入会包含两种之一：
-- 常规模式：参考轨迹 + 实际轨迹
-- 关键步骤模式：参考关键步骤 + 实际提取关键步骤
-
-任务：
-1. 找出参考轨迹中**应有但实际没执行**的步骤（missing_steps）。
-2. 找出实际轨迹中**多余、参考里没有**的步骤（extra_steps）。
-3. 给出综合完整性评分：0.0（完全偏离）～ 1.0（完全覆盖）。
-
-只输出**严格 JSON**（包在 \`\`\`json 代码块里）：
-
-\`\`\`json
-{
-  "score": 0.85,
-  "missing_steps": [
-    {"description": "参考要求先 grep 关键字再分析，但实际跳过了", "severity": "high"}
-  ],
-  "extra_steps": [
-    {"step_index": 5, "description": "重复调用了 ls", "severity": "low"}
-  ],
-  "explanation": "..."
-}
-\`\`\`
-
-完成后简短回复"已输出 JSON"。`;
-
-const TOOL_CHOICE_JUDGE_PROMPT = `你是 Agent 执行轨迹「工具选择合理性」评估专家。
-
-任务：审视实际轨迹中每个 tool / skill 调用，判断：
-- 在当前上下文下，是否选了合适的工具？
-- 工具的参数是否合理？
-- 是否存在错用工具（例如本该用 grep 却用 ls）？
-
-只输出**严格 JSON**（包在 \`\`\`json 代码块里）：
-
-\`\`\`json
-{
-  "score": 0.78,
-  "problematic_steps": [
-    {"step_index": 3, "name": "bash", "issue": "...", "severity": "medium"}
-  ],
-  "explanation": "..."
-}
-\`\`\`
-
-完成后简短回复"已输出 JSON"。`;
-
-const ATTRIBUTION_LOCATOR_PROMPT = `你是 Agent 执行轨迹的「根因定位」专家。
-
-输入：完整三元组 + 前面 subagent / 规则工具的发现。
-
-任务：在所有候选偏离中，挑出**最关键**的那一步（导致整段执行偏离参考轨迹的"罪魁祸首"），并给出清晰归因。如果没有显著偏离，可以返回 root_cause_step = null。
-
-只输出**严格 JSON**（包在 \`\`\`json 代码块里）：
-
-\`\`\`json
-{
-  "root_cause_step": "step#5: bash",
-  "reasoning": "在第 5 步 bash 调用时使用了 ls 而非 grep，导致后续步骤无法定位错误日志",
-  "attribution_score": 1.0
-}
-\`\`\`
-
-attribution_score 含义：1.0 = 根因明确且单一；0.5 = 多个候选难分主次；0.0 = 完全归因不出来。
-
-完成后简短回复"已输出 JSON"。`;
+只输出严格 JSON。`;
 
 function buildRedundancyDetectionPrompt(traceSummary: TraceSummary): string {
     const steps = traceSummary.steps;
@@ -284,54 +259,12 @@ ${traceText}
 
 ${redundancySection}
 
-请按 systemPrompt 中的工作流程完成评估，并把最终结果 JSON 写入 \`final_result.json\` 文件。
+请在不派发任何子代理的前提下，直接完成完整性、工具选择、根因定位 3 个维度的评估，并只输出符合 schema 的 JSON。
 
-注意：冗余检测已由规则工具完成，结果已在上方提供。请直接使用该 redundancy_score，
-然后依次派发 completeness-checker、tool-choice-judge、attribution-locator 三个子代理。`;
+注意：冗余检测已由规则代码完成，结果已在上方提供。请直接使用该 redundancy_score，不要再调用 task 或生成任何子代理。`;
 }
 
-const DIRECT_EVALUATOR_SYSTEM_PROMPT = `你是 Skill Insight 的预置评估器「trace-quality-evaluator」。
-
-你会收到一个 (case + actual_trace + reference_trajectory) 三元组，以及已经由规则代码计算好的冗余检测结果。
-请评估执行轨迹相对参考轨迹/参考答案的质量，并只输出严格 JSON，不要输出 Markdown 代码块或额外解释。
-
-JSON 结构必须为：
-{
-  "trajectory_score": 0.0,
-  "dimension_scores": {
-    "completeness": 0.0,
-    "tool_choice": 0.0,
-    "redundancy": 0.0,
-    "attribution": 0.0
-  },
-  "deviation_steps": [
-    {
-      "step_index": 5,
-      "kind": "tool",
-      "name": "bash",
-      "deviation": "...",
-      "severity": "low|medium|high",
-      "is_skill_attributable": true,
-      "improvement_suggestion": "在 SKILL.md 哪段加什么约束（具体到小节，仅 is_skill_attributable=true 时填）"
-    }
-  ],
-  "root_cause_step": "step#5: bash",
-  "reason_text": "中文 markdown 综述，说明主要偏离与分数原因",
-  "raw_subagent_outputs": {
-    "redundancy": {},
-    "completeness": {},
-    "tool_choice": {},
-    "attribution": {}
-  }
-}
-
-评分说明：
-- completeness：参考轨迹/参考答案关键步骤覆盖度。
-- tool_choice：工具、Skill 或操作选择是否合理。
-- redundancy：直接采用输入中的 redundancy_score。
-- attribution：是否能明确定位最关键偏离步骤。
-- trajectory_score = 0.35 * completeness + 0.30 * tool_choice + 0.15 * redundancy + 0.20 * attribution。
-所有分数必须在 0.0 到 1.0 之间。`;
+const DIRECT_EVALUATOR_SYSTEM_PROMPT = COORDINATOR_SYSTEM_PROMPT;
 
 function buildDirectUserMessage(input: TrajectoryEvalInput, traceText: string, redundancySection: string): string {
     return `# 待评估三元组
@@ -421,7 +354,7 @@ function normalizeOutput(parsedInput: unknown): TrajectoryEvalOutput {
               .map(asRecord)
               .filter(d => Object.keys(d).length > 0)
               .map(d => {
-                  // is_skill_attributable 缺省（旧评测数据 / 子代理漏字段）按 true 兜底，
+                  // is_skill_attributable 缺省（旧评测数据 / 维度分析漏字段）按 true 兜底，
                   // 避免漏报；用户在 skill-opt 页可以手动忽略。
                   const skillAttr = d.is_skill_attributable ?? d.isSkillAttributable;
                   const suggestion = String(d.improvement_suggestion ?? d.improvementSuggestion ?? '').trim();
@@ -561,6 +494,8 @@ export async function evaluateTrajectoryViaOpencode(
     let fullText = '';
     let runtimeError: Error | null = null;
     let evaluatorSessionId = '';
+    let unexpectedSubagent: string | null = null;
+    let insight: AgentInsight | null = null;
     const handlers: ChatHandlers = {
         onText: (e) => {
             fullText += e.delta;
@@ -569,16 +504,21 @@ export async function evaluateTrajectoryViaOpencode(
             runtimeError = e;
         },
         onSubagent: (e) => {
-            console.log(`[opencode-trajectory-eval] subagent ${e.agent}: phase=${e.phase}`);
+            unexpectedSubagent = e.agent || e.sessionID || 'unknown-subagent';
+            console.warn(`[opencode-trajectory-eval] unexpected subagent spawned: ${unexpectedSubagent}`);
         },
         onTool: (e) => {
+            if (e.name === 'task') {
+                unexpectedSubagent = unexpectedSubagent || 'task';
+                console.warn('[opencode-trajectory-eval] unexpected task tool invocation detected');
+            }
             console.log(`[opencode-trajectory-eval] tool ${e.name}: phase=${e.phase}`);
         },
     };
 
     try {
         // serverUrl 由外层 runWithEphemeralOpencodeServer 注入 —— per-task 新进程,跑完自动杀
-        const insight = new AgentInsight({
+        insight = new AgentInsight({
             baseURL: serverUrl,
             logLevel: 'warn',
         });
@@ -609,6 +549,17 @@ export async function evaluateTrajectoryViaOpencode(
 
         fullText = result.text || fullText;
 
+        await recordEvaluatorExecution(insight, {
+            taskId: sessionId,
+            agentName: EVALUATOR_AGENT_NAME,
+            user,
+            query: input.caseInput,
+        });
+
+        if (unexpectedSubagent) {
+            throw new Error(`轨迹评估器不允许派发子代理，但实际派发了：${unexpectedSubagent}`);
+        }
+
         const parsed = extractFinalResultFromText(fullText);
         if (parsed) {
             const normalized = normalizeOutput(parsed);
@@ -624,6 +575,22 @@ export async function evaluateTrajectoryViaOpencode(
         runtimeError = e instanceof Error ? e : new Error(String(e));
     }
 
+    if (evaluatorSessionId && insight) {
+        try {
+            await recordEvaluatorExecution(insight, {
+                taskId: evaluatorSessionId,
+                agentName: EVALUATOR_AGENT_NAME,
+                user,
+                query: input.caseInput,
+            });
+        } catch (persistError) {
+            console.warn(
+                '[opencode-trajectory-eval] failed to persist evaluator execution:',
+                (persistError as Error)?.message || persistError,
+            );
+        }
+    }
+
     console.warn(
         '[opencode-trajectory-eval] opencode evaluator did not produce JSON, falling back to direct LLM evaluator:',
         runtimeError?.message || fullText.slice(0, 300),
@@ -636,6 +603,7 @@ export async function evaluateTrajectoryViaOpencode(
             rawAnalysis: {
                 ...(direct.rawAnalysis || {}),
                 evaluatorSessionId: evaluatorSessionId || undefined,
+                unexpectedSubagent: unexpectedSubagent || undefined,
             },
         };
     } catch (fallbackError) {
@@ -663,9 +631,6 @@ function resolveProviderID(config: ModelConfig): string {
 
 export const EVALUATOR_AGENT_PROMPTS = {
     coordinator: COORDINATOR_SYSTEM_PROMPT,
-    completenessChecker: COMPLETENESS_CHECKER_PROMPT,
-    toolChoiceJudge: TOOL_CHOICE_JUDGE_PROMPT,
-    attributionLocator: ATTRIBUTION_LOCATOR_PROMPT,
 };
 
 export const EVALUATOR_AGENTS = [
@@ -681,51 +646,6 @@ export const EVALUATOR_AGENTS = [
         successRate: '—',
         todayCalls: '—',
         lastExecutedAt: new Date().toISOString(),
-        description: 'Agent 轨迹质量评估器 — 基于 opencode 多 subagent 协作（completeness / tool-choice / attribution + 规则冗余检测）',
-    },
-    {
-        id: 'completeness-checker',
-        name: 'completeness-checker',
-        ownership: 'system' as const,
-        layer: 'subagent' as const,
-        platform: 'opencode' as const,
-        version: 'v1.0',
-        framework: 'opencode',
-        status: 'running' as const,
-        successRate: '—',
-        todayCalls: '—',
-        lastExecutedAt: new Date().toISOString(),
-        parentAgent: 'trace-quality-evaluator',
-        description: '步骤完整性评估子代理 — 比较参考轨迹与实际轨迹，评估步骤覆盖度',
-    },
-    {
-        id: 'tool-choice-judge',
-        name: 'tool-choice-judge',
-        ownership: 'system' as const,
-        layer: 'subagent' as const,
-        platform: 'opencode' as const,
-        version: 'v1.0',
-        framework: 'opencode',
-        status: 'running' as const,
-        successRate: '—',
-        todayCalls: '—',
-        lastExecutedAt: new Date().toISOString(),
-        parentAgent: 'trace-quality-evaluator',
-        description: '工具选择合理性评估子代理 — 评估每步工具/Skill 选择是否合理',
-    },
-    {
-        id: 'attribution-locator',
-        name: 'attribution-locator',
-        ownership: 'system' as const,
-        layer: 'subagent' as const,
-        platform: 'opencode' as const,
-        version: 'v1.0',
-        framework: 'opencode',
-        status: 'running' as const,
-        successRate: '—',
-        todayCalls: '—',
-        lastExecutedAt: new Date().toISOString(),
-        parentAgent: 'trace-quality-evaluator',
-        description: '步骤级根因归因子代理 — 定位最关键的偏离根因步骤',
+        description: 'Agent 轨迹质量评估器 — 基于 opencode 的单主评估器，直接完成 completeness / tool-choice / attribution 评估，并结合规则冗余检测输出结果',
     },
 ];
