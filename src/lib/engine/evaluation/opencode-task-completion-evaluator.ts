@@ -12,18 +12,19 @@ import {
     loadServerModelForUser,
     normalizeProviderID,
 } from '@/lib/engine/general-agent/server-model-config';
-import { generateRootCauseExtractionPrompt } from '@/prompts/config-extraction-prompt';
-import { ChatOpenAI } from '@langchain/openai';
-import { HumanMessage } from '@langchain/core/messages';
 import { tagOpencodeSession } from '@/lib/internal-agent-tag';
 import { findSystemAgentDefinition, getSystemAgentId } from '@/lib/system-agents';
+import { type RootCauseItem } from '@/lib/dataset-case-root-causes';
 import { recordEvaluatorExecution } from './evaluator-execution-recorder';
+import { extractRootCausesFromExpected } from './root-cause-extractor';
 import { parseLooseJson } from './task-completion-json';
 
 export interface TaskCompletionEvalInput {
     caseInput: string;
     expectedOutput: string;
     actualOutput: string;
+    precomputedRootCauses?: RootCauseItem[];
+    precomputedRootCauseSource?: 'dataset-cache' | 'none';
 }
 
 export interface TaskCompletionEvalOutput {
@@ -31,11 +32,6 @@ export interface TaskCompletionEvalOutput {
     score: number;
     reason: string;
     rawAnalysis?: Record<string, unknown>;
-}
-
-interface RootCauseItem {
-    content: string;
-    weight: number;
 }
 
 const TASK_COMPLETION_EVALUATOR_NAME = 'task-completion-evaluator';
@@ -132,43 +128,30 @@ function isTaskCompletionPayload(parsed: Record<string, unknown>): boolean {
     return false;
 }
 
-async function makeDirectModel(user?: string | null) {
-    const config = await getActiveConfig(user);
-    if (!config) return null;
-    return new ChatOpenAI({
-        apiKey: config.apiKey || 'no-api-key',
-        model: config.model || 'deepseek-chat',
-        configuration: {
-            baseURL: config.baseUrl || 'https://api.deepseek.com',
-        },
-        temperature: 0.1,
-    });
-}
-
-async function extractRootCausesFromExpected(
-    caseInput: string,
-    expectedOutput: string,
+async function resolveRootCauses(
+    input: TaskCompletionEvalInput,
     user?: string | null,
-): Promise<RootCauseItem[]> {
-    if (!String(expectedOutput || '').trim()) return [];
-    const model = await makeDirectModel(user);
-    if (!model) return [];
-    const response = await model.invoke([
-        new HumanMessage(generateRootCauseExtractionPrompt(caseInput || 'Task completion', expectedOutput)),
-    ]);
-    const content = typeof response.content === 'string'
-        ? response.content
-        : JSON.stringify(response.content);
-    const parsed = parseLooseJson(content);
-    const rawItems = Array.isArray(parsed?.root_causes) ? parsed.root_causes : [];
-    return rawItems
-        .map(item => item && typeof item === 'object' ? item as Record<string, unknown> : null)
-        .filter((item): item is Record<string, unknown> => Boolean(item))
-        .map(item => ({
-            content: String(item.content || '').trim(),
-            weight: typeof item.weight === 'number' ? item.weight : 1,
-        }))
-        .filter(item => item.content);
+): Promise<{ rootCauses: RootCauseItem[]; source: 'dataset-cache' | 'live-extract' | 'none' }> {
+    if (input.precomputedRootCauseSource === 'none') {
+        return { rootCauses: [], source: 'none' };
+    }
+    if (input.precomputedRootCauseSource === 'dataset-cache') {
+        return {
+            rootCauses: Array.isArray(input.precomputedRootCauses) ? input.precomputedRootCauses : [],
+            source: 'dataset-cache',
+        };
+    }
+    if (!String(input.expectedOutput || '').trim()) {
+        return { rootCauses: [], source: 'none' };
+    }
+    try {
+        return {
+            rootCauses: await extractRootCausesFromExpected(input.caseInput, input.expectedOutput, user),
+            source: 'live-extract',
+        };
+    } catch {
+        return { rootCauses: [], source: 'none' };
+    }
 }
 
 function buildUserMessage(input: TaskCompletionEvalInput, rootCauses: RootCauseItem[]): string {
@@ -218,13 +201,16 @@ export async function evaluateTaskCompletionViaOpencode(
 ): Promise<TaskCompletionEvalOutput> {
   return withBackgroundOpencodeSlot(async () => {
    return runWithEphemeralOpencodeServer({ user: user || undefined, verbose: false, isolateHome: true }, async (serverUrl) => {
-    const rootCauses = await extractRootCausesFromExpected(input.caseInput, input.expectedOutput, user);
+    const { rootCauses, source: rootCauseSource } = await resolveRootCauses(input, user);
     const config = await getActiveConfig(user);
     if (!config) {
         return {
             isCorrect: false,
             score: 0,
             reason: '请先在模型配置中激活一个评测模型，才能执行结果评测。',
+            rawAnalysis: {
+                root_cause_source: rootCauseSource,
+            },
         };
     }
 
@@ -320,6 +306,7 @@ export async function evaluateTaskCompletionViaOpencode(
                 rawAnalysis: {
                     ...(normalized.rawAnalysis || {}),
                     evaluatorSessionId,
+                    root_cause_source: rootCauseSource,
                 },
             };
         }
@@ -357,6 +344,7 @@ export async function evaluateTaskCompletionViaOpencode(
             rawAnalysis: {
                 ...(salvaged.rawAnalysis || {}),
                 evaluatorSessionId: evaluatorSessionId || undefined,
+                root_cause_source: rootCauseSource,
             },
         };
     }

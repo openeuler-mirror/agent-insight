@@ -3,6 +3,15 @@ import path from 'path';
 import { randomUUID } from 'crypto';
 import { PrismaClient } from '@prisma/client';
 import { db } from '@/lib/storage/prisma';
+import {
+  canReuseRootCauseCache,
+  hashExpectedOutput,
+  normalizeRootCauseItems,
+  normalizeRootCauseMeta,
+  type DatasetCaseRootCauseMeta,
+  type RootCauseItem,
+} from '@/lib/dataset-case-root-causes';
+import { extractRootCausesFromExpected } from '@/lib/engine/evaluation/root-cause-extractor';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const LEGACY_FILE = path.join(DATA_DIR, 'agent_datasets.json');
@@ -37,6 +46,8 @@ export interface DatasetCase {
   trajectory: string;
   /** 默认 'user'；存量数据无此字段时按 'user' 兜底。 */
   source?: DatasetCaseSource;
+  rootCauses?: RootCauseItem[];
+  rootCauseMeta?: DatasetCaseRootCauseMeta;
 }
 
 export interface AgentDatasetRecord {
@@ -99,6 +110,8 @@ export function normalizeCase(item: unknown): DatasetCase {
     tags: normalizeTags(obj.tags),
     trajectory,
     source: normalizeCaseSource((obj as { source?: unknown }).source),
+    rootCauses: normalizeRootCauseItems((obj as { rootCauses?: unknown }).rootCauses),
+    rootCauseMeta: normalizeRootCauseMeta((obj as { rootCauseMeta?: unknown }).rootCauseMeta),
   };
 }
 
@@ -382,6 +395,135 @@ export async function updateAgentDatasetRecord(updated: AgentDatasetRecord): Pro
   datasets[index] = updated;
   writeLegacyFileSync(datasets);
   return true;
+}
+
+export interface DatasetRootCauseWarning {
+  caseId: string;
+  message: string;
+}
+
+function buildRootCauseFailureMeta(
+  expectedOutput: string,
+  nowIso: string,
+  error: string,
+): DatasetCaseRootCauseMeta {
+  return {
+    status: 'failed',
+    expectedOutputHash: hashExpectedOutput(expectedOutput),
+    updatedAt: nowIso,
+    error,
+  };
+}
+
+function buildRootCauseEmptyMeta(nowIso: string): DatasetCaseRootCauseMeta {
+  return {
+    status: 'empty',
+    expectedOutputHash: hashExpectedOutput(''),
+    updatedAt: nowIso,
+  };
+}
+
+function buildRootCauseReadyMeta(expectedOutput: string, nowIso: string): DatasetCaseRootCauseMeta {
+  return {
+    status: 'ready',
+    expectedOutputHash: hashExpectedOutput(expectedOutput),
+    updatedAt: nowIso,
+  };
+}
+
+export interface PrepareDatasetCasesOptions {
+  nextCases: DatasetCase[];
+  previousCases?: DatasetCase[];
+  user?: string | null;
+  now?: Date;
+  forceRefresh?: boolean;
+  retryFailed?: boolean;
+  extractor?: (
+    caseInput: string,
+    expectedOutput: string,
+    user?: string | null,
+  ) => Promise<RootCauseItem[]>;
+}
+
+export interface PrepareDatasetCasesResult {
+  cases: DatasetCase[];
+  warnings: DatasetRootCauseWarning[];
+}
+
+export async function prepareDatasetCasesForPersistence(
+  options: PrepareDatasetCasesOptions,
+): Promise<PrepareDatasetCasesResult> {
+  const {
+    nextCases,
+    previousCases = [],
+    user,
+    now = new Date(),
+    forceRefresh = false,
+    retryFailed = false,
+    extractor = extractRootCausesFromExpected,
+  } = options;
+  const nowIso = now.toISOString();
+  const previousById = new Map(previousCases.map(item => [item.id, normalizeCase(item)]));
+  const warnings: DatasetRootCauseWarning[] = [];
+  const cases: DatasetCase[] = [];
+
+  for (const rawCase of nextCases) {
+    const nextCase = normalizeCase(rawCase);
+    const prevCase = previousById.get(nextCase.id);
+
+    if (!nextCase.expectedOutput) {
+      cases.push({
+        ...nextCase,
+        rootCauses: [],
+        rootCauseMeta: buildRootCauseEmptyMeta(nowIso),
+      });
+      continue;
+    }
+
+    const expectedOutputChanged = prevCase
+      ? prevCase.expectedOutput !== nextCase.expectedOutput
+      : true;
+    const shouldRetryFailed = retryFailed && prevCase?.rootCauseMeta?.status === 'failed';
+    const canReusePrev =
+      !forceRefresh &&
+      !expectedOutputChanged &&
+      !shouldRetryFailed &&
+      prevCase &&
+      canReuseRootCauseCache(prevCase.expectedOutput, prevCase.rootCauseMeta);
+
+    if (canReusePrev) {
+      cases.push({
+        ...nextCase,
+        rootCauses: normalizeRootCauseItems(prevCase.rootCauses),
+        rootCauseMeta: prevCase.rootCauseMeta,
+      });
+      continue;
+    }
+
+    try {
+      const rootCauses = normalizeRootCauseItems(
+        await extractor(nextCase.input, nextCase.expectedOutput, user),
+      );
+      cases.push({
+        ...nextCase,
+        rootCauses,
+        rootCauseMeta: buildRootCauseReadyMeta(nextCase.expectedOutput, nowIso),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '关键观点提取失败';
+      warnings.push({
+        caseId: nextCase.id,
+        message,
+      });
+      cases.push({
+        ...nextCase,
+        rootCauses: [],
+        rootCauseMeta: buildRootCauseFailureMeta(nextCase.expectedOutput, nowIso, message),
+      });
+    }
+  }
+
+  return { cases, warnings };
 }
 
 /**

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db, prismaRaw as prisma } from '@/lib/storage/prisma';
 import { findAgentDataset, readAllAgentDatasets, type AgentDatasetRecord, type DatasetCase } from '@/server/agent_datasets_storage';
+import { canReuseRootCauseCache, type RootCauseItem } from '@/lib/dataset-case-root-causes';
 import {
     evaluateTrajectoryViaOpencode,
     TrajectoryEvalConfigError,
@@ -272,12 +273,14 @@ async function evaluateTaskCompletionAgainstExpected(
     caseInput: string,
     expectedOutput: string,
     actualOutput: string,
+    precomputedRootCauses?: RootCauseItem[],
+    precomputedRootCauseSource?: 'dataset-cache' | 'none',
     user?: string | null,
     skillName?: string | null,
     skillVersion?: number | null,
 ): Promise<ResultJudgment> {
     const result = await evaluateTaskCompletionViaOpencode(
-        { caseInput, expectedOutput, actualOutput },
+        { caseInput, expectedOutput, actualOutput, precomputedRootCauses, precomputedRootCauseSource },
         user,
         skillName,
         skillVersion,
@@ -957,7 +960,15 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
             }
         }
     }
-    let caseEntry: { id?: string; input: string; expectedOutput: string; trajectory: string; evaluationFocus: string } | null = null;
+    let caseEntry: {
+        id?: string;
+        input: string;
+        expectedOutput: string;
+        trajectory: string;
+        evaluationFocus: string;
+        rootCauses?: RootCauseItem[];
+        rootCauseMeta?: DatasetCase['rootCauseMeta'];
+    } | null = null;
     // 记录 case 匹配的来源信息——给结果分析 UI 展示"这条 trace 是用哪条 case 比对的"
     // matchKind 取值：
     //   'explicit-pair' 用户显式传 datasetId+caseId
@@ -1057,7 +1068,7 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
             // LLM 调用失败)仍然抛错——那不是"没数据集",是真的有问题。
             if (e instanceof StagedEvaluationError && e.stage === 'no-evaluable-case' && !shouldRunResultEvaluation) {
                 console.warn(`[trajectory/run] no matching dataset, falling back to empty case: ${e.message}`);
-                caseEntry = { input: traceQuery, expectedOutput: '', trajectory: '', evaluationFocus: '' };
+                caseEntry = { input: traceQuery, expectedOutput: '', trajectory: '', evaluationFocus: '', rootCauses: [] };
                 matchKind = 'fallback';
             } else if (e instanceof StagedEvaluationError) {
                 throw e;
@@ -1093,11 +1104,11 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
                 );
             }
         } else {
-            caseEntry = { input: traceQuery, expectedOutput: '', trajectory: '', evaluationFocus: '' };
+            caseEntry = { input: traceQuery, expectedOutput: '', trajectory: '', evaluationFocus: '', rootCauses: [] };
         }
     } else {
         // 无数据集：用空参考，依赖 skill key actions 和纯轨迹质量评估
-        caseEntry = { input: traceQuery, expectedOutput: '', trajectory: '', evaluationFocus: '' };
+        caseEntry = { input: traceQuery, expectedOutput: '', trajectory: '', evaluationFocus: '', rootCauses: [] };
     }
 
     if (shouldRunResultEvaluation && !normalizeMatchText(caseEntry.expectedOutput)) {
@@ -1113,6 +1124,17 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
         );
     }
 
+    const cachedRootCausesUsable = Boolean(
+        caseEntry?.rootCauseMeta
+        && canReuseRootCauseCache(caseEntry.expectedOutput, caseEntry.rootCauseMeta),
+    );
+    const precomputedRootCauses = cachedRootCausesUsable && caseEntry?.rootCauseMeta?.status === 'ready'
+        ? caseEntry.rootCauses || []
+        : undefined;
+    const precomputedRootCauseSource = cachedRootCausesUsable
+        ? (caseEntry?.rootCauseMeta?.status === 'empty' ? 'none' : caseEntry?.rootCauseMeta?.status === 'ready' ? 'dataset-cache' : undefined)
+        : undefined;
+
     const taskInputForEvaluation = traceQuery || caseEntry.input || '';
     const caseSnapshot = {
         id: caseEntry.id || row.caseId || '',
@@ -1123,6 +1145,8 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
         expectedOutput: caseEntry.expectedOutput,
         trajectory: caseEntry.trajectory,
         evaluationFocus: caseEntry.evaluationFocus,
+        rootCauseCacheStatus: caseEntry.rootCauseMeta?.status || null,
+        rootCauseCacheUpdatedAt: caseEntry.rootCauseMeta?.updatedAt || null,
         // dataset 上下文——给"匹配的 Case"区块展示用
         datasetId: matchedDatasetMeta?.id || row.datasetId || '',
         datasetName: matchedDatasetMeta?.name || '',
@@ -1271,6 +1295,8 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
                         caseEntry.input,
                         caseEntry.expectedOutput,
                         resultActualOutput,
+                        precomputedRootCauses,
+                        precomputedRootCauseSource,
                         user,
                         evalSkillName,
                         evalSkillVersion,
