@@ -1307,7 +1307,12 @@ async function runGrayscaleTask(args: {
     await runExecutionBatch(work);
     for (let retry = 1; retry <= MAX_EXECUTION_RETRIES; retry++) {
         if (taskSignal?.aborted) break;
-        const failedWork = work.filter(item => item.run.status === 'fail');
+        // 只对 agent_error 重试 (大概率 transient: network glitch / opencode crash 等)。
+        // agent_timeout / permission_blocked / question_blocked 是确定性失败, 重试
+        // 不会改变结果, 反而让 UI 经历 fail → running → fail 的闪烁循环, 用户疑惑。
+        const failedWork = work.filter(item =>
+            item.run.status === 'fail' && item.run.failureType === 'agent_error'
+        );
         if (failedWork.length === 0) break;
         await runExecutionBatch(failedWork);
     }

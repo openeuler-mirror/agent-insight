@@ -2055,10 +2055,21 @@ export function GrayscaleEvaluation({
                             return (
                             <div
                                 key={`${side}-${record.caseId}-${record.roundIndex}-${idx}`}
-                                style={{ display: 'grid', gridTemplateColumns: '86px 1fr 1fr 60px', gap: 10, alignItems: 'flex-start', padding: '10px 12px', borderTop: idx === 0 ? 'none' : '1px solid #F1EFE8', fontSize: 12 }}
+                                style={{ display: 'grid', gridTemplateColumns: '160px 1fr 1fr 60px', gap: 12, alignItems: 'flex-start', padding: '10px 12px', borderTop: idx === 0 ? 'none' : '1px solid #F1EFE8', fontSize: 12 }}
                             >
-                                <div style={{ color: '#5F5E5A', fontWeight: 600, paddingTop: 2 }}>
-                                    R{record.roundIndex || '-'} · {record.caseId}
+                                <div
+                                    style={{
+                                        color: '#5F5E5A',
+                                        fontWeight: 600,
+                                        paddingTop: 2,
+                                        overflow: 'hidden',
+                                        textOverflow: 'ellipsis',
+                                        whiteSpace: 'nowrap',
+                                        minWidth: 0,
+                                    }}
+                                    title={`R${record.roundIndex || '-'} · ${record.caseId}`}
+                                >
+                                    R{record.roundIndex || '-'} · <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11 }}>{record.caseId}</span>
                                 </div>
 
                                 {/* 执行 session id 列：根据状态显示 id button / 状态文字 / 失败 hover */}
