@@ -1435,8 +1435,13 @@ export async function POST(
             if (active) {
                 try { active.abortController?.abort(); } catch { /* already aborted */ }
             }
-            // 不管 active 在不在, 都 patch DB 把 running/evaluating 推到 fail
+            // 不管 active 在不在, 都 patch DB 把 in-flight 状态推到 fail。
+            // 包括 pending——pending 在 rebuildSideAggregate 里被算作 running 同类
+            // (line 502: runs.some(r => status==='running' || status==='pending')),
+            // 所以哪怕把 running/evaluating 都标了 fail, pending 没动 → rebuild 算出
+            // top='running', 用户看 UI 仍然是「执行中」, abort 失效。
             let patchedCount = 0;
+            const cancelable: CaseStatus[] = ['running', 'evaluating', 'pending'];
             try {
                 const taskRow = await loadTask(taskId, user);
                 if (taskRow) {
@@ -1445,19 +1450,28 @@ export async function POST(
                         for (const side of ['a', 'b'] as Side[]) {
                             const sideState = states[cid][side];
                             if (!sideState) continue;
-                            if (sideState.status === 'running' || sideState.status === 'evaluating') {
-                                sideState.status = 'fail';
-                                sideState.output = sideState.output || '用户终止';
-                                patchedCount++;
-                            }
                             for (const run of sideState.runs || []) {
-                                if (run.status === 'running' || run.status === 'evaluating') {
+                                if (cancelable.includes(run.status)) {
                                     run.status = 'fail';
                                     run.failureType = 'agent_error';
                                     run.failureDetail = '用户终止';
                                     run.output = run.output || '用户终止';
                                     patchedCount++;
                                 }
+                            }
+                            // 主动 rebuild: 让 sideState.status 跟 runs[] 严格一致
+                            // (按上面 patch 完后, 所有 run 要么是 fail/pass/executed 等
+                            // 终态, rebuild 算出来必然不是 'running')
+                            states[cid][side] = rebuildSideAggregate(
+                                sideState,
+                                sideState.runCount || sideState.runs?.length || 0,
+                            );
+                            // 兜底: 万一 rebuild 仍然算成 running/evaluating (例如所有
+                            // run 都是 pass 但 totalRuns 比 runs 长度多), 强行推到 fail
+                            const rebuilt = states[cid][side];
+                            if (rebuilt.status === 'running' || rebuilt.status === 'evaluating') {
+                                rebuilt.status = 'fail';
+                                rebuilt.output = rebuilt.output || '用户终止';
                             }
                         }
                     }
