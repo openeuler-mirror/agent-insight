@@ -182,6 +182,17 @@ declare global {
 
 const NONE_VERSION_ID = '__NONE__';
 const STALE_EVALUATION_MS = 15 * 60 * 1000;
+// 本次 next.js server 进程的启动时间。TrajectoryEvalResult.updatedAt 早于此
+// 时间但还停在 pending/running 的, 必然是上一个 server 生命周期遗留的孤儿
+// (eval 进程跟着 server 一起挂了, 永远不会再 progress)。reconcile 用这条
+// 规则比 STALE_EVALUATION_MS=15min 的纯时间阈值更快地恢复, 用户重启后不需要
+// 等 15 分钟看到状态自然修复。globalThis 兜一层避免 dev 热更新 module 重载
+// 把启动时间也重置 (热更不算真重启, 老 eval 可能还在跑)。
+const SERVER_START_TIME: number = (() => {
+    const g = globalThis as { __grayscaleServerStartTime?: number };
+    if (!g.__grayscaleServerStartTime) g.__grayscaleServerStartTime = Date.now();
+    return g.__grayscaleServerStartTime;
+})();
 const MAX_EXECUTION_RETRIES = 2;
 const MAX_EVALUATION_RETRIES = 2;
 const GRAYSCALE_AGENT_TIMEOUT_MS = Number(process.env.GRAYSCALE_AGENT_TIMEOUT_MS) || 3 * 60 * 1000;
@@ -718,7 +729,13 @@ async function reconcileFinishedEvaluations(user: string, config: GrayscaleConfi
     const staleRows = rows.filter(row => {
         if (row.status !== 'pending' && row.status !== 'running') return false;
         const updatedAt = row.updatedAt instanceof Date ? row.updatedAt.getTime() : 0;
-        return updatedAt > 0 && Date.now() - updatedAt > STALE_EVALUATION_MS;
+        if (updatedAt <= 0) return false;
+        // 1) 15 min 无更新 → 经典 stale 判定 (对真在跑但卡死的 eval 兜底)
+        if (Date.now() - updatedAt > STALE_EVALUATION_MS) return true;
+        // 2) updatedAt 早于本次 server 启动 → 上次进程的孤儿, 立刻标 stale
+        //    (server 重启后 eval 进程肯定不在了, 没必要等满 15 min)
+        if (updatedAt < SERVER_START_TIME) return true;
+        return false;
     });
     if (staleRows.length > 0) {
         for (const row of staleRows) {
