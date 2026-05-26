@@ -217,9 +217,11 @@ export async function runGeneralAgent(
 
   // ephemeral 模式: 起独立 opencode 进程,跑完自动杀。后台批量任务用这条路保证拿最新 skill。
   // 不能复用 cachedClients (会污染下次 shared 模式), 直接 new AgentInsight 用临时 baseURL。
+  // 默认开 isolateHome: 后台任务都不该看 user HOME 下的 skill (避免污染);
+  // 被测的 skill 通过 workspace 的 .opencode/skills/ 由 deploySkillToWorkspace 注入。
   if (input.ephemeralServer) {
     ensureDispatcher();
-    return runWithEphemeralOpencodeServer({ user, verbose: false }, async (baseURL) => {
+    return runWithEphemeralOpencodeServer({ user, verbose: false, isolateHome: true }, async (baseURL) => {
       const ephemeralClient = new AgentInsight({
         baseURL,
         timeout: 180_000,

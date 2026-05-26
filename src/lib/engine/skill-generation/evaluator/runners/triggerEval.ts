@@ -639,7 +639,7 @@ export async function runTriggerEvalLive(
   args: RunTriggerEvalLiveArgs,
 ): Promise<RunTriggerEvalLiveResult> {
  return withBackgroundOpencodeSlot(async () => {
-  return runWithEphemeralOpencodeServer({ user: args.user, verbose: false }, async (baseURL) => {
+  return runWithEphemeralOpencodeServer({ user: args.user, verbose: false, isolateHome: true }, async (baseURL) => {
   const {
     triggerSet,
     skillName,
