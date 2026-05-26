@@ -20,6 +20,7 @@ import {
     findNode,
     formatDuration,
     formatTokens,
+    InteractionUsage,
     RawInteraction,
     ToolCall,
     walkTree,
@@ -1356,15 +1357,259 @@ function ContentModal({ title, raw, onClose }: { title: string; raw: string; onC
 // ─── RoleSection: one message-role block inside the Input group ───────────────
 // 角色颜色仅在 LLM 详情面板内使用，用于区分 system/user/assistant 消息，不对外使用
 const ROLE_ACCENT: Record<string, string> = {
-    system:    '#7C3AED',  // violet — 系统提示用深紫区分
-    user:      '#0284C7',  // sky — 用户消息用蓝区分
-    assistant: 'var(--primary)',
+    system:     '#7C3AED',  // violet — 系统提示用深紫区分
+    user:       '#0284C7',  // sky — 用户消息用蓝区分
+    assistant:  'var(--primary)',
+    compaction: '#D97706',  // amber — context-compaction summary 用琥珀色，提示"摘要替代了原文"
 };
 const ROLE_BG: Record<string, string> = {
-    system:    'rgba(124,58,237,0.03)',
-    user:      'rgba(2,132,199,0.03)',
-    assistant: 'rgba(79,70,229,0.03)',
+    system:     'rgba(124,58,237,0.03)',
+    user:       'rgba(2,132,199,0.03)',
+    assistant:  'rgba(79,70,229,0.03)',
+    compaction: 'rgba(217,119,6,0.04)',
 };
+
+/** Section rendered between System and User when the current LLM step happens
+ *  after a context-compaction boundary. Shows the compaction summary as what
+ *  the model actually sees, plus a "view original" expander to inspect the
+ *  messages that were folded behind the summary. */
+function CompactionSection({
+    summaryRaw,
+    foldedOriginalRaw,
+    foldedCount,
+    modelLabel,
+    summaryUsage,
+    modalTitleBase,
+}: {
+    summaryRaw: string;
+    foldedOriginalRaw: string | null;
+    foldedCount: number;
+    modelLabel?: string;
+    summaryUsage?: InteractionUsage;
+    modalTitleBase: string;
+}) {
+    const [showSummary, setShowSummary] = useState(false);
+    const [showFolded, setShowFolded] = useState(false);
+    const accent = ROLE_ACCENT.compaction;
+    const bg = ROLE_BG.compaction;
+    const trimmed = summaryRaw.trim();
+    const preview = trimmed.slice(0, PREVIEW_CHARS);
+    const isTruncated = trimmed.length > PREVIEW_CHARS;
+
+    const totalTokens = summaryUsage?.total ?? undefined;
+
+    return (
+        <>
+            <div style={{ borderBottom: '1px solid var(--border)', background: bg }}>
+                {/* Header bar */}
+                <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '0.3rem 0.625rem',
+                    borderBottom: '1px solid var(--border)',
+                    background: bg,
+                }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', flexWrap: 'wrap' }}>
+                        <span style={{ width: 6, height: 6, borderRadius: '50%', background: accent, flexShrink: 0, display: 'inline-block' }} />
+                        <span style={{ fontSize: '0.5625rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: accent }}>
+                            Compacted History
+                        </span>
+                        <span style={{ fontSize: '0.5625rem', color: 'var(--foreground-muted)' }}>
+                            {foldedCount > 0
+                                ? `${foldedCount} prior turn${foldedCount === 1 ? '' : 's'} replaced by summary`
+                                : 'prior context replaced by summary'}
+                            {modelLabel && <> · via <b style={{ color: 'var(--foreground)' }}>{modelLabel}</b></>}
+                            {totalTokens != null && totalTokens > 0 && <> · {formatTokens(totalTokens)} tok</>}
+                        </span>
+                    </div>
+                    <button
+                        onClick={() => setShowSummary(true)}
+                        style={{ fontSize: '0.5625rem', color: 'var(--primary)', background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontWeight: 500 }}
+                    >
+                        查看摘要全文 ›
+                    </button>
+                </div>
+                {/* Summary preview body — what the model now sees in place of the originals */}
+                <div
+                    onClick={() => setShowSummary(true)}
+                    style={{
+                        padding: '0.5rem 0.75rem',
+                        fontSize: '0.75rem',
+                        lineHeight: 1.6,
+                        color: 'var(--foreground)',
+                        whiteSpace: 'pre-wrap',
+                        wordBreak: 'break-word',
+                        cursor: 'pointer',
+                        maxHeight: 110,
+                        overflow: 'hidden',
+                        position: 'relative',
+                        userSelect: 'none',
+                    }}
+                >
+                    {preview}{isTruncated && ' …'}
+                    {isTruncated && (
+                        <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 32, background: `linear-gradient(transparent, ${bg || 'var(--background-secondary)'})` }} />
+                    )}
+                </div>
+                {/* "View original folded messages" link */}
+                {foldedOriginalRaw && foldedCount > 0 && (
+                    <div style={{
+                        padding: '0.25rem 0.75rem 0.4rem',
+                        borderTop: '1px dashed var(--border)',
+                        fontSize: '0.5625rem',
+                        color: 'var(--foreground-muted)',
+                    }}>
+                        <button
+                            onClick={() => setShowFolded(true)}
+                            style={{ fontSize: '0.625rem', color: 'var(--primary)', background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontWeight: 500 }}
+                        >
+                            ▸ 查看被折叠的原始消息 ({foldedCount})
+                        </button>
+                        <span style={{ marginLeft: '0.5rem', color: 'var(--foreground-muted)' }}>
+                            — 模型已不再看到这部分，仅供回溯
+                        </span>
+                    </div>
+                )}
+            </div>
+            {showSummary && (
+                <ContentModal
+                    title={`${modalTitleBase} — Compaction Summary`}
+                    raw={summaryRaw}
+                    onClose={() => setShowSummary(false)}
+                />
+            )}
+            {showFolded && foldedOriginalRaw && (
+                <ContentModal
+                    title={`${modalTitleBase} — Folded Original Messages (${foldedCount})`}
+                    raw={foldedOriginalRaw}
+                    onClose={() => setShowFolded(false)}
+                />
+            )}
+        </>
+    );
+}
+
+/** One row per conversation turn in the Input (Prompt) panel. Default state is
+ *  a single-line collapsed preview (role badge + position + first line); click
+ *  toggles inline-expand to the full content. A "查看全部" link in the expanded
+ *  header opens the modal for very long content. This replaces the old "all
+ *  users glued together, all assistants glued together" rendering. */
+function TurnPreviewRow({
+    role,
+    content,
+    position,
+    defaultExpanded,
+    modalTitle,
+}: {
+    role: string;
+    content: string;
+    position: number;
+    defaultExpanded?: boolean;
+    modalTitle: string;
+}) {
+    const [expanded, setExpanded] = useState(!!defaultExpanded);
+    const [showModal, setShowModal] = useState(false);
+    const accent = ROLE_ACCENT[role] || 'var(--foreground-muted)';
+    const bg     = ROLE_BG[role]    || 'transparent';
+    const trimmed = (content || '').trim();
+    const firstLine = trimmed.split(/\n/).find(l => l.trim()) || '';
+    const oneLine = firstLine.slice(0, 110);
+    const isEmpty = trimmed.length === 0;
+    const isLong  = trimmed.length > PREVIEW_CHARS;
+
+    return (
+        <>
+            <div style={{ borderBottom: '1px solid var(--border)', background: bg }}>
+                {/* Header row — always visible, click toggles */}
+                <div
+                    onClick={() => !isEmpty && setExpanded(v => !v)}
+                    style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.5rem',
+                        padding: '0.3rem 0.625rem',
+                        cursor: isEmpty ? 'default' : 'pointer',
+                        userSelect: 'none',
+                    }}
+                >
+                    <span style={{ width: 6, height: 6, borderRadius: '50%', background: accent, flexShrink: 0, display: 'inline-block' }} />
+                    <span style={{ fontSize: '0.5625rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: accent, flexShrink: 0 }}>
+                        {role}
+                    </span>
+                    <span style={{ fontSize: '0.5625rem', color: 'var(--foreground-muted)', flexShrink: 0 }}>
+                        #{position}
+                    </span>
+                    {/* Inline first-line preview when collapsed (helps scan w/o expanding) */}
+                    {!expanded && !isEmpty && (
+                        <span
+                            style={{
+                                flex: 1,
+                                fontSize: '0.6875rem',
+                                color: 'var(--foreground-muted)',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
+                            }}
+                        >
+                            {oneLine}{firstLine.length > 110 ? '…' : ''}
+                        </span>
+                    )}
+                    {isEmpty && (
+                        <span style={{ flex: 1, fontSize: '0.6875rem', color: 'var(--foreground-muted)', fontStyle: 'italic' }}>
+                            (无文本内容)
+                        </span>
+                    )}
+                    {/* Spacer when expanded so the chevron sits right */}
+                    {expanded && <span style={{ flex: 1 }} />}
+                    {!isEmpty && (
+                        <span style={{ fontSize: '0.625rem', color: 'var(--foreground-muted)', flexShrink: 0 }}>
+                            {expanded ? '▾' : '▸'}
+                        </span>
+                    )}
+                </div>
+                {/* Expanded body */}
+                {expanded && !isEmpty && (
+                    <div style={{ borderTop: '1px solid var(--border)' }}>
+                        <div
+                            style={{
+                                padding: '0.5rem 0.75rem',
+                                fontSize: '0.75rem',
+                                lineHeight: 1.6,
+                                color: 'var(--foreground)',
+                                whiteSpace: 'pre-wrap',
+                                wordBreak: 'break-word',
+                                maxHeight: 280,
+                                overflowY: 'auto',
+                            }}
+                        >
+                            {trimmed}
+                        </div>
+                        {isLong && (
+                            <div
+                                style={{
+                                    padding: '0.25rem 0.75rem 0.4rem',
+                                    borderTop: '1px dashed var(--border)',
+                                    textAlign: 'right',
+                                }}
+                            >
+                                <button
+                                    onClick={(e) => { e.stopPropagation(); setShowModal(true); }}
+                                    style={{ fontSize: '0.625rem', color: 'var(--primary)', background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontWeight: 500 }}
+                                >
+                                    查看全部 ›
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                )}
+            </div>
+            {showModal && (
+                <ContentModal title={modalTitle} raw={trimmed} onClose={() => setShowModal(false)} />
+            )}
+        </>
+    );
+}
 
 function RoleSection({ role, label, raw, modalTitle }: { role: string; label: string; raw: string; modalTitle: string }) {
     const [showModal, setShowModal] = useState(false);
@@ -1541,33 +1786,130 @@ function LLMEventBody({ event, responseText, interactions, node }: {
         return n !== 'task' && n !== 'skill';
     });
 
-    // Build separate raw strings for system / user / assistant messages
-    const { systemRaw, userRaw, assistantRaw } = useMemo(() => {
+    // Build chronological per-turn views for the Input (Prompt) panel.
+    // If a context compaction happened in this node before the current LLM
+    // event, the messages before the compaction were replaced (from the
+    // model's perspective) by the compaction summary. We:
+    //   - filter "prior verbatim turns" to those strictly AFTER the most
+    //     recent compaction boundary, so the per-turn list only contains
+    //     what the model still sees verbatim;
+    //   - expose the active compaction (summary text + the now-folded
+    //     original messages) so the UI can render a "Compacted History"
+    //     section between System and the turn list.
+    const { systemRaw, priorTurns, activeCompaction, foldedOriginalRaw, foldedOriginalCount } = useMemo(() => {
         const eventIdx = event.interactionIndex;
-        const priorNodeIndices = new Set(node.interactionIndices.filter(i => i < eventIdx));
-        const priorMessages = interactions.filter((_, i) => priorNodeIndices.has(i));
+
+        // Most recent compaction boundary before this event in this node.
+        const boundaries = node.compactions || [];
+        const cutoff = boundaries.length
+            ? [...boundaries].filter(c => c.interactionIndex < eventIdx).pop()
+            : undefined;
+        const cutoffIdx = cutoff ? cutoff.interactionIndex : -1;
+
+        // Indices that the panel renders verbatim: post-cutoff, pre-event.
+        const verbatimNodeIndices = new Set(
+            node.interactionIndices.filter(i => i > cutoffIdx && i < eventIdx),
+        );
+        const verbatimMessages = interactions.filter((_, i) => verbatimNodeIndices.has(i));
+
+        // Indices folded by the compaction (everything in the node that came
+        // before the boundary). We keep them off the per-turn render path;
+        // users can still drill in via the "view original" toggle.
+        const foldedIndices = cutoff
+            ? node.interactionIndices.filter(i => i < cutoffIdx)
+            : [];
+        const foldedMessages = foldedIndices.map(i => interactions[i]).filter(Boolean);
 
         const systemPrompts = node.systemPrompts || [];
         const systemParts: string[] = systemPrompts.map(sp => sp.text);
+        const sep = '\n\n---\n\n';
 
-        const userParts: string[] = [];
-        const assistantParts: string[] = [];
-
-        for (const m of priorMessages) {
-            if (m.role === 'system') continue;
-            const content = typeof m.content === 'string' ? m.content : JSON.stringify(m.content, null, 2);
-            if (m.role === 'user' || m.role === 'opencode') {
-                userParts.push(content);
-            } else if (m.role === 'assistant' || m.role === 'subagent') {
-                assistantParts.push(content);
+        // When an assistant message has no text content, it usually means this
+        // turn was a "pure tool-calling step" — the model emitted reasoning +
+        // tool calls but no user-facing prose. Empty-rendering those is bad UX
+        // (a wall of "(无文本内容)" rows). Synthesize a readable description
+        // from tool_calls / reasoning parts so each turn carries real signal.
+        const summarizeArgs = (raw: unknown): string => {
+            if (raw == null) return '';
+            try {
+                const obj = typeof raw === 'string' ? JSON.parse(raw) : raw;
+                if (obj && typeof obj === 'object') {
+                    const r = obj as Record<string, unknown>;
+                    // Prefer human-friendly keys when present.
+                    for (const k of ['path', 'file_path', 'pattern', 'command', 'description', 'query', 'url']) {
+                        const v = r[k];
+                        if (typeof v === 'string' && v.trim()) return `${k}: ${v.length > 60 ? v.slice(0, 60) + '…' : v}`;
+                    }
+                    const keys = Object.keys(r);
+                    if (keys.length) return keys.slice(0, 3).join(',') + (keys.length > 3 ? '…' : '');
+                }
+                return '';
+            } catch {
+                const s = typeof raw === 'string' ? raw : '';
+                return s.length > 60 ? s.slice(0, 60) + '…' : s;
             }
+        };
+        const messageToText = (m: RawInteraction): string => {
+            const text = typeof m.content === 'string' ? m.content : '';
+            if (text.trim()) return text;
+            // Empty text — fall back to tool-call / reasoning summary.
+            const blocks: string[] = [];
+            if (Array.isArray(m.parts)) {
+                const reasoning = m.parts
+                    .filter(p => (p?.type || '').toLowerCase() === 'reasoning')
+                    .map(p => (typeof p.text === 'string' ? p.text.trim() : ''))
+                    .filter(Boolean)
+                    .join('\n\n');
+                if (reasoning) blocks.push(`[reasoning]\n${reasoning}`);
+            }
+            if (Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
+                const lines = m.tool_calls.map(tc => {
+                    const name = tc.function?.name || tc.name || 'tool';
+                    const args = tc.function?.arguments ?? tc.arguments;
+                    const argSum = summarizeArgs(args);
+                    return argSum ? `→ ${name}(${argSum})` : `→ ${name}()`;
+                });
+                blocks.push(`[tool calls × ${m.tool_calls.length}]\n${lines.join('\n')}`);
+            }
+            if (typeof m.content !== 'string' && m.content != null) {
+                blocks.push(JSON.stringify(m.content, null, 2));
+            }
+            return blocks.join('\n\n');
+        };
+        const normalizeRole = (role: string | undefined) =>
+            role === 'opencode' ? 'user' :
+            role === 'subagent' ? 'assistant' :
+            (role || 'unknown');
+
+        // Walk verbatimMessages in chronological order; produce one card per
+        // message, dropping role==='system' (those are already shown above).
+        // The very last verbatim message is usually the user turn that
+        // triggered this LLM call — we default-expand that one so the most
+        // relevant context is visible at a glance.
+        const turns: { role: string; content: string; position: number; isMostRecent: boolean }[] = [];
+        let position = 0;
+        for (let i = 0; i < verbatimMessages.length; i++) {
+            const m = verbatimMessages[i];
+            if (m.role === 'system') continue;
+            position += 1;
+            turns.push({
+                role: normalizeRole(m.role),
+                content: messageToText(m),
+                position,
+                isMostRecent: i === verbatimMessages.length - 1,
+            });
         }
 
-        const sep = '\n\n---\n\n';
+        const foldedRendered = foldedMessages
+            .map(m => `[${normalizeRole(m.role)}] ${messageToText(m)}`)
+            .join(sep);
+
         return {
             systemRaw:    systemParts.length > 0    ? systemParts.join(sep)    : null,
-            userRaw:      userParts.length > 0      ? userParts.join(sep)      : null,
-            assistantRaw: assistantParts.length > 0 ? assistantParts.join(sep) : null,
+            priorTurns:   turns,
+            activeCompaction: cutoff || null,
+            foldedOriginalRaw: foldedRendered || null,
+            foldedOriginalCount: foldedMessages.length,
         };
     }, [event.interactionIndex, interactions, node]);
 
@@ -1632,10 +1974,17 @@ function LLMEventBody({ event, responseText, interactions, node }: {
                 </div>
             )}
 
-            {/* Input — grouped section containing System / User / Assistant */}
-            {(systemRaw || userRaw || assistantRaw) && (
+            {/* Input — System + [Compacted History] + chronological turn list */}
+            {(systemRaw || priorTurns.length > 0 || activeCompaction) && (
                 <div>
-                    <SectionTitle>Input (Prompt)</SectionTitle>
+                    <SectionTitle>
+                        Input (Prompt)
+                        {priorTurns.length > 0 && (
+                            <span style={{ marginLeft: '0.5rem', fontSize: '0.625rem', fontWeight: 400, color: 'var(--foreground-muted)' }}>
+                                · {priorTurns.length} turn{priorTurns.length === 1 ? '' : 's'}
+                            </span>
+                        )}
+                    </SectionTitle>
                     <div style={{
                         border: '1px solid var(--border)',
                         borderRadius: 7,
@@ -1644,12 +1993,26 @@ function LLMEventBody({ event, responseText, interactions, node }: {
                         {systemRaw && (
                             <RoleSection role="system" label="System" raw={systemRaw} modalTitle={`${title} — System`} />
                         )}
-                        {userRaw && (
-                            <RoleSection role="user" label="User" raw={userRaw} modalTitle={`${title} — User`} />
+                        {activeCompaction && (
+                            <CompactionSection
+                                summaryRaw={activeCompaction.summaryText || ''}
+                                foldedOriginalRaw={foldedOriginalRaw}
+                                foldedCount={foldedOriginalCount}
+                                modelLabel={activeCompaction.modelID || activeCompaction.providerID}
+                                summaryUsage={activeCompaction.usage}
+                                modalTitleBase={title}
+                            />
                         )}
-                        {assistantRaw && (
-                            <RoleSection role="assistant" label="Assistant" raw={assistantRaw} modalTitle={`${title} — Assistant`} />
-                        )}
+                        {priorTurns.map((turn, i) => (
+                            <TurnPreviewRow
+                                key={`${turn.role}-${turn.position}-${i}`}
+                                role={turn.role}
+                                content={turn.content}
+                                position={turn.position}
+                                defaultExpanded={turn.isMostRecent}
+                                modalTitle={`${title} — ${turn.role} #${turn.position}`}
+                            />
+                        ))}
                     </div>
                 </div>
             )}

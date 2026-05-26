@@ -585,9 +585,30 @@ function buildMessagesForSession(state, sid) {
         }
       : undefined
 
+    // Preserve the raw part structure so downstream can distinguish
+    //   text / reasoning / tool / patch / step-start / step-finish / compaction
+    // and so compaction-trigger user messages (which carry only a "compaction"
+    // part with no text) are not silently dropped. messageID/sessionID on each
+    // part are redundant with the enclosing message — strip them.
+    const rawParts = msgParts.get(mid) || []
+    const partsOut = rawParts.length
+      ? rawParts.map((p) => {
+          const { messageID: _mid, sessionID: _sid, ...rest } = p || {}
+          // For text parts, prefer the streamed-complete text from text.complete
+          // hook over whatever partial we captured on message.part.updated.
+          if ((rest?.type || "").toLowerCase() === "text") {
+            const key = `${mid}:${rest.id}`
+            const finalText = partText.get(key)
+            if (typeof finalText === "string" && finalText) rest.text = finalText
+          }
+          return rest
+        })
+      : undefined
+
     const m = {
       role,
       content,
+      parts: partsOut,
       tool_calls: tool_calls.length ? tool_calls : undefined,
       usage: u,
       timestamp: created != null ? new Date(created).toISOString() : undefined,
@@ -596,6 +617,19 @@ function buildMessagesForSession(state, sid) {
       modelID: info?.modelID,
       providerID: info?.providerID,
       cost: info?.cost,
+      // Compaction signal lives here:
+      //   mode === "compaction" + summary === true  →  this is a compaction-summary
+      //   message and the prior context should be folded behind it.
+      mode: info?.mode,
+      // opencode overloads `info.summary`:
+      //   - boolean `true`  → compaction marker we want
+      //   - object `{diffs: [...]}` → per-turn file-diff summary (can be ~80KB);
+      //     not needed for prompt rendering, and shipping it would balloon the
+      //     upload payload, so drop it. If we ever want a diff-aware trace view
+      //     it should go through its own channel.
+      summary: info?.summary === true ? true : undefined,
+      finish: info?.finish,
+      variant: info?.variant,
     }
     messages.push(m)
   }
