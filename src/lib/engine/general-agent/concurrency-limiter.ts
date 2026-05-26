@@ -60,6 +60,15 @@ export interface BackgroundTaskOptions extends Partial<BackgroundTaskMeta> {
    * displayOnly=false (默认): 正常 acquire/release。
    */
   displayOnly?: boolean;
+  /**
+   * 任务级 AbortSignal。传了后:
+   *   - acquire 时已 aborted → 立刻抛 AbortError (不进 record / waiters)
+   *   - acquire 排队等 slot 时 signal fires → 从 waiters 队列移出 + reject AbortError
+   *   - fn() 执行期间 abort 不会直接打断 (fn 自己的内部代码需自行响应 signal)
+   * 配合 grayscale「终止」按钮: 用户点终止 → semaphore queue 里所有 waiter 立刻 reject,
+   * runWithConcurrency 抓 catch 标 fail, 不再等死。
+   */
+  signal?: AbortSignal;
 }
 
 /** 任务生命周期状态 —— 前端按这个语义展示给用户(排队等待 / 执行中 / 成功 / 异常)。 */
@@ -142,7 +151,13 @@ class AsyncSemaphore {
     }
   }
 
-  async acquire(meta?: BackgroundTaskMeta, modeOpts?: { silent?: boolean; displayOnly?: boolean }): Promise<string> {
+  async acquire(meta?: BackgroundTaskMeta, modeOpts?: { silent?: boolean; displayOnly?: boolean; signal?: AbortSignal }): Promise<string> {
+    // 调用方传了 signal 且已经 aborted → 立刻抛, 不进 record / waiters
+    if (modeOpts?.signal?.aborted) {
+      const err = new Error('opencode slot acquire aborted by user');
+      (err as Error & { name: string }).name = 'AbortError';
+      throw err;
+    }
     this.state.counters.totalAcquired += 1;
     const id = `bg-${this.state.nextId.v++}`;
     const now = Date.now();
@@ -178,13 +193,30 @@ class AsyncSemaphore {
     }
     // 没 permit, 排队等。状态仍为 'queued' 直到 waiter 被 resolve
     this.state.counters.totalQueuedWait += 1;
-    return new Promise<string>((resolve) => {
-      this.waiters.push(() => {
+    return new Promise<string>((resolve, reject) => {
+      const waiter = () => {
         this.state.counters.active += 1;
         record.status = 'running';
         record.startedAt = Date.now();
+        if (modeOpts?.signal) modeOpts.signal.removeEventListener('abort', onAbort);
         resolve(id);
-      });
+      };
+      const onAbort = () => {
+        // 从 waiters 队列里把自己移出去, 否则后面 release 取下一个 waiter 时会
+        // 调到一个 dangling callback, permit 被白消耗 + record 永远停在 queued
+        const idx = this.waiters.indexOf(waiter);
+        if (idx >= 0) this.waiters.splice(idx, 1);
+        if (record.status === 'queued') {
+          record.status = 'failed';
+          record.endedAt = Date.now();
+          record.errorMessage = 'aborted while waiting for slot';
+        }
+        const err = new Error('opencode slot acquire aborted by user');
+        (err as Error & { name: string }).name = 'AbortError';
+        reject(err);
+      };
+      this.waiters.push(waiter);
+      if (modeOpts?.signal) modeOpts.signal.addEventListener('abort', onAbort, { once: true });
     });
   }
 
@@ -303,7 +335,7 @@ export async function withBackgroundOpencodeSlot<T>(
     skill: opts?.skill,
     skillVersion: opts?.skillVersion,
   };
-  const modeOpts = { silent: opts?.silent, displayOnly: opts?.displayOnly };
+  const modeOpts = { silent: opts?.silent, displayOnly: opts?.displayOnly, signal: opts?.signal };
   const waitStart = Date.now();
   const taskId = await semaphore.acquire(meta, modeOpts);
   const waited = Date.now() - waitStart;

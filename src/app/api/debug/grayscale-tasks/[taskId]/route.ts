@@ -1103,6 +1103,7 @@ async function evaluateRunsWithConcurrency(args: {
     caseIds: string[];
     evaluatorId?: string;
     onlyMissingEvaluation?: boolean;
+    parentSignal?: AbortSignal;
 }) {
     const targets: EvaluationTarget[] = [];
     for (const caseId of args.caseIds) {
@@ -1127,30 +1128,47 @@ async function evaluateRunsWithConcurrency(args: {
     // 也就是说全局后台 opencode 总并发上限就是 5, agent + evaluator 一起算。
     const runEvaluationBatch = async (batch: EvaluationTarget[]) => {
         await runWithConcurrency(batch, concurrency, async target => {
+            if (args.parentSignal?.aborted) {
+                target.run.status = 'fail';
+                target.run.output = '用户终止';
+                markRunCompleted(target.run);
+                return;
+            }
             const beforeRunId = target.run.evaluatorRunId;
-            await withBackgroundOpencodeSlot(
-                () => evaluateSingleRunTarget({ ...args, target }),
-                {
-                    taskType: 'grayscale-eval',
-                    user: args.user,
-                    label: `eval-${target.side}-${target.caseId}`,
-                    // displayOnly: 这层是 orchestration 只发 HTTP 给 /api/eval/trajectory/run,
-                    // 内部 trajectory + task-completion 各自再走 withBackgroundOpencodeSlot
-                    // 占自己的 slot。如果外层也占 slot, 1 个 case 2 个 side 就要 2(外) +
-                    // 4(2 side × 2 evaluator) = 6 个 slot, 超过默认 max=5, 用户会看到
-                    // "1 评测中 + 1 排队中" 的奇怪现象。displayOnly=true 表示 dashboard
-                    // 上仍能看到这个任务条目, 但不实际占 slot, 杜绝外/内双重计数。
-                    displayOnly: true,
-                    // TODO: evaluateRunsWithConcurrency 当前从 args.config.skillId 索引,这一层
-                    // 拿不到具体 versionA/B 的 skillName/version。后续 refactor 让 caller 把
-                    // versionA/B 显式传进 args 后再补齐 skill 透传。当前 grayscale-eval 任务
-                    // 在 dashboard 按 skill 过滤时会看不见,需要在"显示所有"模式才能看到。
-                },
-            );
+            try {
+                await withBackgroundOpencodeSlot(
+                    () => evaluateSingleRunTarget({ ...args, target }),
+                    {
+                        taskType: 'grayscale-eval',
+                        user: args.user,
+                        label: `eval-${target.side}-${target.caseId}`,
+                        // displayOnly: 这层是 orchestration 只发 HTTP 给 /api/eval/trajectory/run,
+                        // 内部 trajectory + task-completion 各自再走 withBackgroundOpencodeSlot
+                        // 占自己的 slot。如果外层也占 slot, 1 个 case 2 个 side 就要 2(外) +
+                        // 4(2 side × 2 evaluator) = 6 个 slot, 超过默认 max=5, 用户会看到
+                        // "1 评测中 + 1 排队中" 的奇怪现象。displayOnly=true 表示 dashboard
+                        // 上仍能看到这个任务条目, 但不实际占 slot, 杜绝外/内双重计数。
+                        displayOnly: true,
+                        signal: args.parentSignal,
+                        // TODO: evaluateRunsWithConcurrency 当前从 args.config.skillId 索引,这一层
+                        // 拿不到具体 versionA/B 的 skillName/version。后续 refactor 让 caller 把
+                        // versionA/B 显式传进 args 后再补齐 skill 透传。当前 grayscale-eval 任务
+                        // 在 dashboard 按 skill 过滤时会看不见,需要在"显示所有"模式才能看到。
+                    },
+                );
+            } catch (err) {
+                if (args.parentSignal?.aborted || (err as Error)?.name === 'AbortError') {
+                    target.run.status = 'fail';
+                    target.run.output = '用户终止';
+                    markRunCompleted(target.run);
+                    return;
+                }
+                throw err;
+            }
             if (target.run.evaluatorRunId && target.run.evaluatorRunId !== beforeRunId) {
                 evaluatorRunIds.push(target.run.evaluatorRunId);
             }
-        });
+        }, args.parentSignal);
     };
 
     await runEvaluationBatch(targets);
@@ -1238,38 +1256,51 @@ async function runGrayscaleTask(args: {
     // 时创建, action='abort' 时 fire。下面 runWithConcurrency / executeSingleAgentRun
     // 都监听它, 用户点终止后所有 in-flight 都尽快退出。
     const taskSignal = activeRuns().get(storeKey)?.abortController?.signal;
+    const markRunAborted = (item: ExecutionTarget) => {
+        item.run.status = 'fail';
+        item.run.failureType = 'agent_error';
+        item.run.failureDetail = '用户终止';
+        item.run.output = item.run.output || '用户终止';
+        markRunCompleted(item.run);
+        states[item.caseId][item.side] = rebuildSideAggregate(states[item.caseId][item.side], totalRunsPerSide);
+    };
     const runExecutionBatch = async (batch: ExecutionTarget[]) => {
         await runWithConcurrency(batch, concurrency, async item => {
             if (taskSignal?.aborted) {
-                item.run.status = 'fail';
-                item.run.failureType = 'agent_error';
-                item.run.failureDetail = '用户终止';
-                item.run.output = item.run.output || '用户终止';
-                markRunCompleted(item.run);
-                states[item.caseId][item.side] = rebuildSideAggregate(states[item.caseId][item.side], totalRunsPerSide);
+                markRunAborted(item);
                 return;
             }
             const version = item.side === 'a' ? versionA : versionB;
-            await withBackgroundOpencodeSlot(
-                () => executeSingleAgentRun({
-                    taskId,
-                    user,
-                    config,
-                    states,
-                    caseMap,
-                    totalRunsPerSide,
-                    version,
-                    target: item,
-                    parentSignal: taskSignal,
-                }),
-                {
-                    taskType: 'grayscale-ab',
-                    user,
-                    label: `grayscale-${item.side}-${item.caseId}-r${item.roundIndex}`,
-                    skill: version?.skillName,
-                    skillVersion: version?.version ?? null,
-                },
-            );
+            try {
+                await withBackgroundOpencodeSlot(
+                    () => executeSingleAgentRun({
+                        taskId,
+                        user,
+                        config,
+                        states,
+                        caseMap,
+                        totalRunsPerSide,
+                        version,
+                        target: item,
+                        parentSignal: taskSignal,
+                    }),
+                    {
+                        taskType: 'grayscale-ab',
+                        user,
+                        label: `grayscale-${item.side}-${item.caseId}-r${item.roundIndex}`,
+                        skill: version?.skillName,
+                        skillVersion: version?.version ?? null,
+                        signal: taskSignal,
+                    },
+                );
+            } catch (err) {
+                // 排队中被 abort: semaphore.acquire 抛 AbortError → 标 fail, 不抛
+                if (taskSignal?.aborted || (err as Error)?.name === 'AbortError') {
+                    markRunAborted(item);
+                    return;
+                }
+                throw err;
+            }
         }, taskSignal);
     };
 
@@ -1289,7 +1320,7 @@ async function runGrayscaleTask(args: {
             startedAt: Date.now(),
             abortController: activeRuns().get(storeKey)?.abortController,
         });
-        await evaluateRunsWithConcurrency({ taskId, user, origin, config, states, caseIds, evaluatorId });
+        await evaluateRunsWithConcurrency({ taskId, user, origin, config, states, caseIds, evaluatorId, parentSignal: taskSignal });
     }
 }
 
