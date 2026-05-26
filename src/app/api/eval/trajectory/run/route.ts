@@ -13,6 +13,7 @@ import {
     analyzeDynamicOnly,
     extractKeyActionsFromFlow,
     mergeKeyActionsFromMultipleSkills,
+    parseSkillFlow,
     type ExtractedKeyAction,
     type ParsedFlowResult,
 } from '@/lib/engine/observability/flow-parser';
@@ -439,9 +440,35 @@ async function buildSkillKeyActionComparison(
             continue;
         }
 
-        const parsedFlow = await db.findParsedFlow(skillRecord.id, resolvedVersion, user || null);
+        let parsedFlow = await db.findParsedFlow(skillRecord.id, resolvedVersion, user || null);
         if (!parsedFlow?.flowJson) {
-            missingParsedFlowSkills.push(target.skill);
+            // 没解析过——之前直接报错让用户去 UI 手动触发, UX 太差; 现在直接在这里
+            // 拉取 SKILL.md 内容 + 调 parseSkillFlow 同步解析一次。成功就用新结果继续,
+            // 失败 (LLM 没配 / SKILL.md 缺失 / 解析错误) 再 fallback 到原来的 missing 报错,
+            // 错误信息里带上根因方便排查。
+            const versionRow = await db.findSkillVersion(skillRecord.id, resolvedVersion);
+            const skillContent = versionRow?.content;
+            if (!skillContent || !skillContent.trim()) {
+                console.warn(`[trajectory-eval] auto-parse skill flow skipped: SkillVersion ${skillRecord.id}/v${resolvedVersion} 内容为空`);
+                missingParsedFlowSkills.push(target.skill);
+                continue;
+            }
+            console.log(`[trajectory-eval] auto-parsing skill flow for ${target.skill} v${resolvedVersion}...`);
+            const t0 = Date.now();
+            const parseResult = await parseSkillFlow(skillContent, skillRecord.id, resolvedVersion, user || null);
+            const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+            if (!parseResult.success) {
+                console.warn(`[trajectory-eval] auto-parse skill flow failed for ${target.skill} v${resolvedVersion} (${elapsed}s): ${parseResult.error || 'unknown'}`);
+                missingParsedFlowSkills.push(target.skill);
+                continue;
+            }
+            console.log(`[trajectory-eval] auto-parsed skill flow for ${target.skill} v${resolvedVersion} in ${elapsed}s`);
+            parsedFlow = await db.findParsedFlow(skillRecord.id, resolvedVersion, user || null);
+            if (!parsedFlow?.flowJson) {
+                // parseSkillFlow 说成功了但 DB 里没落 → 数据写库失败, 罕见。
+                console.warn(`[trajectory-eval] auto-parse reported success but DB has no flowJson for ${target.skill} v${resolvedVersion}`);
+                missingParsedFlowSkills.push(target.skill);
+            }
         }
     }
 
