@@ -182,6 +182,17 @@ declare global {
 
 const NONE_VERSION_ID = '__NONE__';
 const STALE_EVALUATION_MS = 15 * 60 * 1000;
+// 本次 next.js server 进程的启动时间。TrajectoryEvalResult.updatedAt 早于此
+// 时间但还停在 pending/running 的, 必然是上一个 server 生命周期遗留的孤儿
+// (eval 进程跟着 server 一起挂了, 永远不会再 progress)。reconcile 用这条
+// 规则比 STALE_EVALUATION_MS=15min 的纯时间阈值更快地恢复, 用户重启后不需要
+// 等 15 分钟看到状态自然修复。globalThis 兜一层避免 dev 热更新 module 重载
+// 把启动时间也重置 (热更不算真重启, 老 eval 可能还在跑)。
+const SERVER_START_TIME: number = (() => {
+    const g = globalThis as { __grayscaleServerStartTime?: number };
+    if (!g.__grayscaleServerStartTime) g.__grayscaleServerStartTime = Date.now();
+    return g.__grayscaleServerStartTime;
+})();
 const MAX_EXECUTION_RETRIES = 2;
 const MAX_EVALUATION_RETRIES = 2;
 const GRAYSCALE_AGENT_TIMEOUT_MS = Number(process.env.GRAYSCALE_AGENT_TIMEOUT_MS) || 3 * 60 * 1000;
@@ -718,7 +729,13 @@ async function reconcileFinishedEvaluations(user: string, config: GrayscaleConfi
     const staleRows = rows.filter(row => {
         if (row.status !== 'pending' && row.status !== 'running') return false;
         const updatedAt = row.updatedAt instanceof Date ? row.updatedAt.getTime() : 0;
-        return updatedAt > 0 && Date.now() - updatedAt > STALE_EVALUATION_MS;
+        if (updatedAt <= 0) return false;
+        // 1) 15 min 无更新 → 经典 stale 判定 (对真在跑但卡死的 eval 兜底)
+        if (Date.now() - updatedAt > STALE_EVALUATION_MS) return true;
+        // 2) updatedAt 早于本次 server 启动 → 上次进程的孤儿, 立刻标 stale
+        //    (server 重启后 eval 进程肯定不在了, 没必要等满 15 min)
+        if (updatedAt < SERVER_START_TIME) return true;
+        return false;
     });
     if (staleRows.length > 0) {
         for (const row of staleRows) {
@@ -839,6 +856,7 @@ async function executeSingleAgentRun(args: {
                 reject(new GrayscaleAgentTimeoutError(`agent_timeout: exceeded ${Math.round(GRAYSCALE_AGENT_TIMEOUT_MS / 1000)}s${lastToolSummary ? `; last_tool=${lastToolSummary}` : ''}`));
             }, GRAYSCALE_AGENT_TIMEOUT_MS);
         });
+        const grayAgentName = args.version ? 'grayscale-skill-agent' : 'grayscale-baseline-agent';
         const agentPromise = runGeneralAgent({
             user: args.user,
             query: args.caseMap.get(target.caseId)!.input,
@@ -846,9 +864,13 @@ async function executeSingleAgentRun(args: {
             skillVersion: args.version?.version,
             system: buildGrayscaleExecutionSystem(args.version),
             interactionPolicy: 'auto-deny',
-            systemAgentName: args.version ? 'grayscale-skill-agent' : 'grayscale-baseline-agent',
+            systemAgentName: grayAgentName,
             // 后台批量任务: 每次起独立 opencode 进程,跑完杀,保证拿最新 skill 内容
             ephemeralServer: true,
+            // 让 runGeneralAgent 跑完后内部 listMessages + saveExecutionRecord 写 Execution 行。
+            // 不依赖 plugin/OTEL 上报, 避免新 grayscale session 在 DB 里查不到 → trace 详情跳转空跳。
+            // 复用同事 821236e 引入的 recordEvaluatorExecution helper, 写入真实 trajectory。
+            recordTraceAs: grayAgentName,
             sessionTitle: `grayscale ${target.side.toUpperCase()} r${target.roundIndex} · ${args.user} · ${args.taskId}`,
             workspaceTag: `grayscale-${args.taskId}-${target.side}-${target.caseId}-r${target.roundIndex}`,
             timeoutMs: GRAYSCALE_AGENT_TIMEOUT_MS,
@@ -885,6 +907,8 @@ async function executeSingleAgentRun(args: {
         run.toolCallCount = result.stats?.toolCallCount || toolCalls.length;
         run.toolCalls = Array.from(new Set(toolCalls)).slice(0, 8);
         markRunCompleted(run);
+        // Execution 行的写库已经由 runGeneralAgent 里的 recordTraceAs 选项处理
+        // (上面调用时传了 grayAgentName)。不在这里重复写。
     } catch (err) {
         const classified = classifyAgentRunError(err);
         run.status = 'fail';
@@ -1090,6 +1114,13 @@ async function evaluateRunsWithConcurrency(args: {
                     taskType: 'grayscale-eval',
                     user: args.user,
                     label: `eval-${target.side}-${target.caseId}`,
+                    // displayOnly: 这层是 orchestration 只发 HTTP 给 /api/eval/trajectory/run,
+                    // 内部 trajectory + task-completion 各自再走 withBackgroundOpencodeSlot
+                    // 占自己的 slot。如果外层也占 slot, 1 个 case 2 个 side 就要 2(外) +
+                    // 4(2 side × 2 evaluator) = 6 个 slot, 超过默认 max=5, 用户会看到
+                    // "1 评测中 + 1 排队中" 的奇怪现象。displayOnly=true 表示 dashboard
+                    // 上仍能看到这个任务条目, 但不实际占 slot, 杜绝外/内双重计数。
+                    displayOnly: true,
                     // TODO: evaluateRunsWithConcurrency 当前从 args.config.skillId 索引,这一层
                     // 拿不到具体 versionA/B 的 skillName/version。后续 refactor 让 caller 把
                     // versionA/B 显式传进 args 后再补齐 skill 透传。当前 grayscale-eval 任务

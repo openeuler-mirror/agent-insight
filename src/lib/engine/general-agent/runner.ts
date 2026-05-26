@@ -173,6 +173,24 @@ export interface RunGeneralAgentInput {
    * 用户实时对话保持默认,避免冷启延迟拖累交互体验。
    */
   ephemeralServer?: boolean;
+  /**
+   * 传了之后, agent run 完成后内部立刻把这次 opencode session 的真实 messages
+   * (client.listMessages) 规范化后写一行 Execution 到 DB (走 saveExecutionRecord)。
+   * agentName 字段就是这里传的字符串。
+   *
+   * 解决的问题: 之前 grayscale A/B 等后台任务依赖 opencode 子进程的 OTEL exporter
+   * 上报到 /api/ingest/otel/v1/traces 才产生 Execution 行。但 spawn 时没注入
+   * OTEL env, exporter silent drop, 永远没 Execution 行——modal 里点 session id
+   * 跳 /trace?taskId=X, trace page 查 DB 空数组, fallback 渲染 list 主页, 体验上
+   * 像"跳转挂了"。
+   *
+   * 不传时跳过, 沿用旧行为 (依赖 plugin / OTEL 上报)。caller 是 user 实时对话
+   * (skill-generator 等) 时不需要主动写 Execution——plugin 会处理。
+   *
+   * 复用同事 821236e 引入的 recordEvaluatorExecution 模式 (拿 client.listMessages
+   * 的真实 messages, 不是只填顶层字段), trace 详情页能看到完整 trajectory + tool calls。
+   */
+  recordTraceAs?: string;
 }
 
 export interface RunGeneralAgentResult {
@@ -430,6 +448,23 @@ async function runGeneralAgentWithClient(
     textLen: result.text.length,
     stats: result.stats,
   });
+
+  // 可选: 主动把这次 session 写一行 Execution——给 grayscale 等 caller 用
+  // (它们不依赖 plugin/OTEL 上报)。复用同事 recordEvaluatorExecution helper
+  // (会拉 client.listMessages 拿真实 messages, 写完整 trajectory 而非顶层片段)。
+  if (input.recordTraceAs) {
+    try {
+      const { recordEvaluatorExecution } = await import('@/lib/engine/evaluation/evaluator-execution-recorder');
+      await recordEvaluatorExecution(client, {
+        taskId: sessionId,
+        agentName: input.recordTraceAs,
+        user: input.user,
+        query: input.query,
+      });
+    } catch (err) {
+      console.warn(`[general-agent] recordTraceAs failed for session ${sessionId}:`, (err as Error)?.message || err);
+    }
+  }
 
   return {
     sessionId,

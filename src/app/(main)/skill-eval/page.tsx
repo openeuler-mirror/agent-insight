@@ -1467,6 +1467,110 @@ function SkillAnalysisPage() {
     );
 }
 
+// ──────────────── Background opencode task status (banner helpers) ────────────────
+//
+// 数据源：GET /api/background-tasks，背后是 concurrency-limiter 的 ring buffer
+// (queued + running + 最近 5min done/failed)。
+// 用法：在卡片头下方挂一条小条状态条，把 queued/running/done/failed 的实时计数
+// 渲染出来；全空闲时不渲染，避免 idle 卡片视觉污染。
+interface BackgroundTaskCounts {
+    queued: number;
+    running: number;
+    done: number;
+    failed: number;
+}
+
+const EMPTY_TASK_COUNTS: BackgroundTaskCounts = { queued: 0, running: 0, done: 0, failed: 0 };
+
+function useBackgroundTaskCounts(opts: {
+    user: string | null;
+    skillName?: string;
+    skillVersion?: number | null;
+    taskType?: string;
+    enabled?: boolean;
+}): BackgroundTaskCounts {
+    const { user, skillName, skillVersion, taskType, enabled = true } = opts;
+    const [counts, setCounts] = useState<BackgroundTaskCounts>(EMPTY_TASK_COUNTS);
+
+    useEffect(() => {
+        if (!enabled || !user) {
+            setCounts(EMPTY_TASK_COUNTS);
+            return;
+        }
+        let cancelled = false;
+        const qs = new URLSearchParams({ user });
+        if (skillName) qs.set('skill', skillName);
+        if (skillVersion != null) qs.set('version', String(skillVersion));
+        if (taskType) qs.set('taskType', taskType);
+        const url = `/api/background-tasks?${qs.toString()}`;
+
+        const fetchOnce = async () => {
+            try {
+                const res = await apiFetch(url, { cache: 'no-store' });
+                if (!res.ok) return;
+                const data = await res.json();
+                if (!cancelled) setCounts(data?.counts ?? EMPTY_TASK_COUNTS);
+            } catch {
+                // 网络抖动忽略；下个 tick 自动恢复
+            }
+        };
+
+        fetchOnce();
+        const timer = setInterval(fetchOnce, 2500);
+        return () => { cancelled = true; clearInterval(timer); };
+    }, [user, skillName, skillVersion, taskType, enabled]);
+
+    return counts;
+}
+
+function TaskQueueBanner({ counts, hint }: { counts: BackgroundTaskCounts; hint?: string }) {
+    const { queued, running, done, failed } = counts;
+    if (queued + running + done + failed === 0) return null;
+    return (
+        <div
+            style={{
+                display: 'flex',
+                gap: 10,
+                padding: '6px 10px',
+                margin: '8px 0 0',
+                background: 'var(--background-secondary)',
+                border: '1px solid var(--border)',
+                borderRadius: 6,
+                fontSize: 11,
+                color: 'var(--foreground-secondary)',
+                alignItems: 'center',
+                flexWrap: 'wrap',
+            }}
+            title={hint || '后台 opencode 任务状态（2.5s 刷新一次；近 5 分钟内完成的会短暂保留显示）'}
+        >
+            {queued > 0 && (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#ca8a04' }} />
+                    排队 <b style={{ color: 'var(--foreground)' }}>{queued}</b>
+                </span>
+            )}
+            {running > 0 && (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#2563eb' }} />
+                    执行中 <b style={{ color: 'var(--foreground)' }}>{running}</b>
+                </span>
+            )}
+            {done > 0 && (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#16a34a' }} />
+                    已完成 <b style={{ color: 'var(--foreground)' }}>{done}</b>
+                </span>
+            )}
+            {failed > 0 && (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#dc2626' }} />
+                    失败 <b style={{ color: 'var(--foreground)' }}>{failed}</b>
+                </span>
+            )}
+        </div>
+    );
+}
+
 function AnalysisOverview({
     user,
     selectedSkill,
@@ -1522,6 +1626,25 @@ function AnalysisOverview({
     smartRunBusy: boolean;
     onSmartRunBusyChange: (busy: boolean) => void;
 }) {
+    // 后台 opencode 任务实时状态——给 A/B 卡和 触发 卡顶部的 banner 喂数。
+    // 静态合规走 LLM/linter，不过 concurrency-limiter，不需要这条线。
+    // A/B 不按 taskType 过滤：它在跑时会同时驱动 trajectory-eval +
+    // task-completion-eval + custom-llm-eval 多个 task 类型，这里直接看
+    // 「本 skill+version 维度上所有 opencode 后台任务」整体即可。
+    const grayTaskCounts = useBackgroundTaskCounts({
+        user,
+        skillName: selectedSkill?.name,
+        skillVersion: selectedVersion,
+        enabled: !!selectedSkill,
+    });
+    const triggerTaskCounts = useBackgroundTaskCounts({
+        user,
+        skillName: selectedSkill?.name,
+        skillVersion: selectedVersion,
+        taskType: 'trigger-eval',
+        enabled: !!selectedSkill,
+    });
+
     const staticStats = computeStaticPassRate(staticSummary?.latest ?? null);
     const staticHasResult = !!staticSummary?.latest;
     const traceStats = summarizeTraceMatches(traces);
@@ -2416,6 +2539,8 @@ function AnalysisOverview({
                         </span>
                     </div>
 
+                    <TaskQueueBanner counts={grayTaskCounts} hint="本 skill 当前所有 opencode 后台任务的实时调度状态 (A/B 跑评测时涉及 trajectory / task-completion / custom-llm 多类型)" />
+
                     {grayHasResult ? (
                         <>
                             <div className="sa-card-score" style={{ alignItems: 'baseline', gap: 8, marginTop: 18 }}>
@@ -2579,6 +2704,8 @@ function AnalysisOverview({
                             <span className="sa-card-status warn">未配置</span>
                         )}
                     </div>
+
+                    <TaskQueueBanner counts={triggerTaskCounts} hint="触发分析评测的实时调度状态 (taskType=trigger-eval)" />
 
                     {triggerHasResult && triggerSummary?.latestRun ? (
                         <div className="sa-card-score">

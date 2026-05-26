@@ -192,6 +192,290 @@ function hasPendingAutoEvaluationCaseStates(states: Record<string, { a: PerVersi
 
 type CaseStatus = 'pending' | 'running' | 'executed' | 'evaluating' | 'pass' | 'fail';
 
+// 状态徽章中文映射，对齐"用例分析"卡的术语（✓已评测 / 评测中 / ⚠评测失败 等），
+// 给 A/B 执行记录 modal 用。颜色风格也跟 trace 行的徽章对齐。
+//
+// 注: A/B 任务有「执行 + 评测」两个阶段, 单一 CaseStatus 字段实际表达的是
+// 两阶段串起来的当前位置。renderExecutionRecordSection 把它拆成两个徽章
+// 分别展示（执行: 排队/执行中/✓完成/⚠失败, 评测: 待评测/评测中/✓已评测/⚠失败）,
+// 让用户一眼看清是哪一步挂了。
+type BadgeTone = 'pending' | 'running' | 'done' | 'fail';
+const BADGE_TONE: Record<BadgeTone, { bg: string; fg: string; pulse?: boolean; icon?: string }> = {
+    pending: { bg: 'rgba(100,116,139,.10)', fg: '#475569' },
+    running: { bg: 'rgba(37,99,235,.10)',   fg: '#2563EB', pulse: true },
+    done:    { bg: 'rgba(22,163,74,.10)',   fg: '#15803D', icon: '✓' },
+    fail:    { bg: 'rgba(220,38,38,.10)',   fg: '#B91C1C', icon: '⚠' },
+};
+
+// 带 1s 延迟关闭的 hover tooltip——鼠标移开 trigger 后还有 1s 时间能移进 tooltip
+// 里复制错误信息。tooltip 内部 user-select:text + cursor:text。
+function HoverTooltip({ trigger, content }: { trigger: React.ReactNode; content: string | React.ReactNode }) {
+    const [open, setOpen] = useState(false);
+    const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const cancelClose = () => {
+        if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
+    };
+    const scheduleClose = () => {
+        cancelClose();
+        timerRef.current = setTimeout(() => setOpen(false), 1000);
+    };
+    useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current); }, []);
+    return (
+        <span
+            style={{ position: 'relative', display: 'inline-block' }}
+            onMouseEnter={() => { cancelClose(); setOpen(true); }}
+            onMouseLeave={scheduleClose}
+        >
+            {trigger}
+            {open && (
+                <div
+                    onMouseEnter={cancelClose}
+                    onMouseLeave={scheduleClose}
+                    style={{
+                        position: 'absolute',
+                        top: '100%',
+                        left: 0,
+                        marginTop: 6,
+                        zIndex: 50,
+                        background: '#1F2937',
+                        color: '#F9FAFB',
+                        padding: '10px 12px',
+                        borderRadius: 6,
+                        fontSize: 11,
+                        lineHeight: 1.5,
+                        maxWidth: 480,
+                        minWidth: 240,
+                        whiteSpace: 'pre-wrap',
+                        wordBreak: 'break-word',
+                        userSelect: 'text',
+                        cursor: 'text',
+                        boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
+                    }}
+                >
+                    {content}
+                </div>
+            )}
+        </span>
+    );
+}
+
+// inline 文字状态: 给 session id 列在"还没拿到 id 时"占位用。
+// pending/running 时 prefix 加个圆点 + 动效, 跟 trace 卡 pending 徽章观感一致。
+function StatusText({ label, tone }: { label: string; tone: BadgeTone }) {
+    const cfg = BADGE_TONE[tone];
+    return (
+        <span style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            fontSize: 12,
+            fontWeight: 600,
+            color: cfg.fg,
+            whiteSpace: 'nowrap',
+        }}>
+            {cfg.pulse && (
+                <span style={{
+                    display: 'inline-block',
+                    width: 6,
+                    height: 6,
+                    borderRadius: '50%',
+                    background: 'currentColor',
+                    animation: 'pulse 1.5s ease-in-out infinite',
+                }} />
+            )}
+            {cfg.icon && <span>{cfg.icon}</span>}
+            {label}
+        </span>
+    );
+}
+
+function ToneBadge({ label, tone, prefix, title }: { label: string; tone: BadgeTone; prefix?: string; title?: string }) {
+    const cfg = BADGE_TONE[tone];
+    return (
+        <span
+            title={title}
+            style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
+                fontSize: 11,
+                fontWeight: 700,
+                padding: '3px 8px',
+                borderRadius: 99,
+                background: cfg.bg,
+                color: cfg.fg,
+                whiteSpace: 'nowrap',
+                cursor: title ? 'help' : 'default',
+            }}
+        >
+            {cfg.pulse && (
+                <span style={{
+                    display: 'inline-block',
+                    width: 7,
+                    height: 7,
+                    borderRadius: '50%',
+                    background: 'currentColor',
+                    animation: 'pulse 1.5s ease-in-out infinite',
+                }} />
+            )}
+            {cfg.icon && <span>{cfg.icon}</span>}
+            {prefix && <span style={{ opacity: 0.7 }}>{prefix}</span>}
+            {label}
+        </span>
+    );
+}
+
+// 从单一 CaseStatus + failureType 推出执行阶段和评测阶段两个独立 status。
+// 区分逻辑: failureType 有值 = 执行阶段挂了 (agent_timeout / permission_blocked /
+// agent_error 等); failureType 空 + status='fail' = 执行成功但评测器失败。
+function deriveExecAndEval(
+    status: CaseStatus | string | undefined,
+    hasExecFailure: boolean,
+): { exec: { label: string; tone: BadgeTone }; evaluation: { label: string; tone: BadgeTone } | null } {
+    const s = (status ?? 'pending') as CaseStatus;
+    // 执行阶段
+    let exec: { label: string; tone: BadgeTone };
+    if (s === 'fail' && hasExecFailure) {
+        exec = { label: '执行失败', tone: 'fail' };
+    } else if (s === 'pending') {
+        exec = { label: '排队中', tone: 'pending' };
+    } else if (s === 'running') {
+        exec = { label: '执行中', tone: 'running' };
+    } else {
+        // executed / evaluating / pass / fail (无 failureType=评测失败, 执行其实是成功的)
+        exec = { label: '执行完成', tone: 'done' };
+    }
+    // 评测阶段——只有执行成功才会有评测阶段
+    if (s === 'pending' || s === 'running' || (s === 'fail' && hasExecFailure)) {
+        return { exec, evaluation: null };
+    }
+    let evaluation: { label: string; tone: BadgeTone };
+    if (s === 'executed') {
+        evaluation = { label: '待评测', tone: 'pending' };
+    } else if (s === 'evaluating') {
+        evaluation = { label: '评测中', tone: 'running' };
+    } else if (s === 'pass') {
+        evaluation = { label: '已评测', tone: 'done' };
+    } else {
+        // s === 'fail' 且无 failureType → 评测器自己挂了
+        evaluation = { label: '评测失败', tone: 'fail' };
+    }
+    return { exec, evaluation };
+}
+
+// ──────────────── caseStates side-state 修改助手 ────────────────
+// 历史 bug：runCaseSide / evaluateCaseSide 在每次 setCaseStates 时
+// 直接用 `[side]: { status: 'running' }` 这种方式整段替换 side state，
+// 导致 runs[] 历史被擦光、执行记录 modal 表面无变化。下面两个 helper 把
+// 「保留 runs[] + 顶层字段同步最新 run」的逻辑统一封一遍，所有 setCaseStates
+// 改动一律走这里：
+//
+//   - appendNewRunningRun(side)：用户点「重跑」时调用。在 runs[] 末尾 push
+//     一条 {status: 'running'} 占位 run，并把 side 顶层 status 切到 'running'。
+//     records modal 就能立刻看到新一行 "running"。
+//
+//   - patchLatestRun(side, patch)：跑完 / 评测完 / 失败时调用。把 runs[] 最后
+//     一条 run merge patch 字段，同时把 side 顶层的镜像字段(status/score/jobId
+//     /sessionId/...)也同步过去，避免顶层和 runs 末尾分裂。
+
+function appendNewRunningRun(side: PerVersionState | undefined): PerVersionState {
+    const base: PerVersionState = side ?? { status: 'pending' };
+    const prevRuns = base.runs ?? [];
+    const nextIndex = prevRuns.length + 1;
+    const newRun: RunResult = {
+        status: 'running',
+        runIndex: nextIndex,
+        roundIndex: nextIndex,
+    };
+    return {
+        ...base,
+        status: 'running',
+        // 顶层 score/output/jobId/sessionId 等先清掉，避免上一轮的残留干扰
+        // 卡片汇总位置（顶层字段被当作"最新 run 的镜像"）。runs[] 里的旧值
+        // 仍然完整保留在 modal 里可见。
+        score: undefined,
+        output: undefined,
+        jobId: undefined,
+        sessionId: undefined,
+        timeCost: undefined,
+        tokenUsage: undefined,
+        evaluatorRunId: undefined,
+        tier: undefined,
+        runs: [...prevRuns, newRun],
+    };
+}
+
+function patchLatestRun(side: PerVersionState | undefined, patch: Partial<RunResult>): PerVersionState {
+    const base: PerVersionState = side ?? { status: 'pending' };
+    const runs = base.runs ?? [];
+    let updatedRuns: RunResult[];
+    if (runs.length > 0) {
+        updatedRuns = runs.map((r, i) => (i === runs.length - 1 ? { ...r, ...patch } : r));
+    } else {
+        // 极少见兜底：runs[] 为空（比如调用方没先走 appendNewRunningRun）。
+        // 现造一条 run 把 patch 装进去，避免 patch 字段被静默吞掉。
+        updatedRuns = [{
+            runIndex: 1,
+            roundIndex: 1,
+            status: patch.status ?? base.status ?? 'running',
+            ...patch,
+        } as RunResult];
+    }
+    return {
+        ...base,
+        // side 顶层字段镜像最新 run，UI 任何地方读 side 顶层都拿到最新 run 状态
+        status: patch.status ?? base.status,
+        jobId: patch.jobId ?? base.jobId,
+        output: patch.output ?? base.output,
+        score: patch.score ?? base.score,
+        tier: patch.tier ?? base.tier,
+        sessionId: patch.sessionId ?? base.sessionId,
+        timeCost: patch.timeCost ?? base.timeCost,
+        tokenUsage: patch.tokenUsage ?? base.tokenUsage,
+        evaluatorRunId: patch.evaluatorRunId ?? base.evaluatorRunId,
+        runs: updatedRuns,
+    };
+}
+
+// 跟 polling tick 的 setCaseStates(nextStates) 配合：如果本地某 case-side 正处于
+// 「比 server 多了一条 in-flight running run」的状态（用户刚点了重跑还没回写到 DB
+// 或者写完了但 server 那条记录还没进 caseStatesJson），polling 直接覆盖会把那条
+// running run 抹掉。这里做 case-side 级别的 reconcile：只要本地 runs 长度 ≥ 远端
+// 且本地末尾是非 finished 状态，就保留本地不动；否则采用远端。
+function mergeServerCaseStates(
+    local: Record<string, { a: PerVersionState; b: PerVersionState }>,
+    remote: Record<string, { a: PerVersionState; b: PerVersionState }>,
+): Record<string, { a: PerVersionState; b: PerVersionState }> {
+    const FINISHED: CaseStatus[] = ['pass', 'fail', 'executed'];
+    const mergeSide = (l?: PerVersionState, r?: PerVersionState): PerVersionState => {
+        if (!l) return r ?? { status: 'pending' };
+        if (!r) return l;
+        const lRuns = l.runs ?? [];
+        const rRuns = r.runs ?? [];
+        const lLatest = lRuns[lRuns.length - 1];
+        // 唯一保留本地的场景: 用户刚点过「重跑」, runCaseSide 已经 push 了一条新
+        // running 占位 + 发 PATCH, 但 PATCH 还没落库, polling tick 拿到的是旧
+        // caseStatesJson(没新这条 run)。这时本地 runs[] 比远端多, 且末尾是
+        // in-flight, 必须保留本地不被擦。
+        if (lRuns.length > rRuns.length && lLatest && !FINISHED.includes(lLatest.status)) {
+            return l;
+        }
+        // 其它一律采用 server——之前还有条 "本地 running/evaluating 而远端不是 →
+        // keep local" 的兜底, 但 server 把状态从 evaluating 推到 pass 是正常进程,
+        // 那条规则会让本地永久卡在 evaluating, 即使 server 已经写 pass。已删。
+        return r;
+    };
+    const ids = new Set([...Object.keys(local), ...Object.keys(remote)]);
+    const merged: Record<string, { a: PerVersionState; b: PerVersionState }> = {};
+    for (const id of ids) {
+        merged[id] = {
+            a: mergeSide(local[id]?.a, remote[id]?.a),
+            b: mergeSide(local[id]?.b, remote[id]?.b),
+        };
+    }
+    return merged;
+}
+
 import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
 
 const BUILT_IN_EVALUATORS = [
@@ -759,13 +1043,15 @@ export function GrayscaleEvaluation({
         const version = isNone ? null : versions.find(v => v.id === versionId);
         const selectedSkill = skills.find(s => s.id === selectedSkillId);
 
+        // 1) 入口：往 runs[] push 一条 running 占位，让执行记录 modal 立刻
+        //    看到「新一行 running」，同时把 side 顶层 status 切到 running。
         setCaseStates(prev => {
             const current = prev[caseId] || { a: { status: 'pending' }, b: { status: 'pending' } };
             const updated = {
                 ...prev,
                 [caseId]: {
                     ...current,
-                    [side]: { status: 'running' }
+                    [side]: appendNewRunningRun(current[side]),
                 }
             };
             persistCaseStates(updated);
@@ -782,18 +1068,25 @@ export function GrayscaleEvaluation({
                     query,
                     skill: isNone ? undefined : selectedSkill?.name,
                     skillVersion: (isNone || !version) ? undefined : Number(version.version),
-                    mode: 'grayscale'
+                    mode: 'grayscale',
+                    // 把任务归属传给后端: 关掉浏览器/网断时, 后端 .then/.catch 会自己
+                    // 把 caseStatesJson 的对应 side 从 running 推到 executed/fail。
+                    // 不传或缺任一字段则跳过, 退化为旧的「前端独占写库」行为(兼容其它调用点)。
+                    grayscaleTaskId: currentTask?.id,
+                    caseId,
+                    side,
                 }),
             });
             const data = await res.json();
             if (!res.ok || !data.jobId) {
+                // dispatch 失败：把刚刚 push 的占位 run 标 fail
                 setCaseStates(prev => {
                     const current = prev[caseId] || { a: { status: 'pending' }, b: { status: 'pending' } };
                     const updated = {
                         ...prev,
                         [caseId]: {
                             ...current,
-                            [side]: { status: 'fail', output: data.error || 'dispatch failed' }
+                            [side]: patchLatestRun(current[side], { status: 'fail', output: data.error || 'dispatch failed' }),
                         }
                     };
                     persistCaseStates(updated);
@@ -809,7 +1102,7 @@ export function GrayscaleEvaluation({
                     ...prev,
                     [caseId]: {
                         ...current,
-                        [side]: { status: 'fail', output: String(err) }
+                        [side]: patchLatestRun(current[side], { status: 'fail', output: String(err) }),
                     }
                 };
                 persistCaseStates(updated);
@@ -818,13 +1111,14 @@ export function GrayscaleEvaluation({
             return;
         }
 
+        // 2) dispatch 成功：把 jobId 装到刚 push 的占位 run 上
         setCaseStates(prev => {
             const current = prev[caseId] || { a: { status: 'pending' }, b: { status: 'pending' } };
             const updated = {
                 ...prev,
                 [caseId]: {
                     ...current,
-                    [side]: { status: 'running', jobId }
+                    [side]: patchLatestRun(current[side], { status: 'running', jobId }),
                 }
             };
             persistCaseStates(updated);
@@ -836,7 +1130,7 @@ export function GrayscaleEvaluation({
                 const res = await apiFetch(`/api/debug/execute/${jobId}`);
                 const data = await res.json();
                 if (data.status === 'completed') {
-                    const newState: PerVersionState = {
+                    const runPatch: Partial<RunResult> = {
                         status: 'executed',
                         jobId,
                         output: data.output ?? '',
@@ -844,31 +1138,34 @@ export function GrayscaleEvaluation({
                         tokenUsage: data.tokenUsage ?? 0,
                         sessionId: data.sessionId,
                     };
+                    let executedState: PerVersionState | null = null;
                     setCaseStates(prev => {
                         const current = prev[caseId] || { a: { status: 'pending' }, b: { status: 'pending' } };
+                        const nextSide = patchLatestRun(current[side], runPatch);
+                        executedState = nextSide;
                         const updated = {
                             ...prev,
                             [caseId]: {
                                 ...current,
-                                [side]: newState
+                                [side]: nextSide,
                             }
                         };
                         persistCaseStates(updated);
-                        if (autoEval) {
-                            evaluateCaseSide(caseId, side, newState);
-                        }
                         return updated;
                     });
+                    // autoEval 时把执行完整的最新 side state 喂给 evaluator
+                    if (autoEval && executedState) {
+                        evaluateCaseSide(caseId, side, executedState);
+                    }
                     return true;
                 } else if (data.status === 'failed' || !data.status || data.error) {
-                    const newState: PerVersionState = { status: 'fail', jobId, output: data.error || 'agent failed' };
                     setCaseStates(prev => {
                         const current = prev[caseId] || { a: { status: 'pending' }, b: { status: 'pending' } };
                         const updated = {
                             ...prev,
                             [caseId]: {
                                 ...current,
-                                [side]: newState
+                                [side]: patchLatestRun(current[side], { status: 'fail', jobId, output: data.error || 'agent failed' }),
                             }
                         };
                         persistCaseStates(updated);
@@ -927,7 +1224,7 @@ export function GrayscaleEvaluation({
                 ...prev,
                 [caseId]: {
                     ...current,
-                    [side]: { ...execState, status: 'evaluating' }
+                    [side]: patchLatestRun(current[side], { status: 'evaluating' }),
                 }
             };
             persistCaseStates(updated);
@@ -954,7 +1251,7 @@ export function GrayscaleEvaluation({
                         ...prev,
                         [caseId]: {
                             ...current,
-                            [side]: { ...execState, status: 'fail', output: data.error || '评测提交失败' }
+                            [side]: patchLatestRun(current[side], { status: 'fail', output: data.error || '评测提交失败' }),
                         }
                     };
                     persistCaseStates(updated);
@@ -970,7 +1267,7 @@ export function GrayscaleEvaluation({
                     ...prev,
                     [caseId]: {
                         ...current,
-                        [side]: { ...execState, status: 'fail', output: String(err) }
+                        [side]: patchLatestRun(current[side], { status: 'fail', output: String(err) }),
                     }
                 };
                 persistCaseStates(updated);
@@ -985,7 +1282,7 @@ export function GrayscaleEvaluation({
                 ...prev,
                 [caseId]: {
                     ...current,
-                    [side]: { ...execState, status: 'evaluating', evaluatorRunId }
+                    [side]: patchLatestRun(current[side], { status: 'evaluating', evaluatorRunId }),
                 }
             };
             persistCaseStates(updated);
@@ -1008,7 +1305,7 @@ export function GrayscaleEvaluation({
                             ...prev,
                             [caseId]: {
                                 ...current,
-                                [side]: { ...execState, status: 'pass', score, tier }
+                                [side]: patchLatestRun(current[side], { status: 'pass', score, tier }),
                             }
                         };
                         persistCaseStates(updated);
@@ -1022,7 +1319,7 @@ export function GrayscaleEvaluation({
                             ...prev,
                             [caseId]: {
                                 ...current,
-                                [side]: { ...execState, status: 'fail', output: result.errorMessage || '评测失败' }
+                                [side]: patchLatestRun(current[side], { status: 'fail', output: result.errorMessage || '评测失败' }),
                             }
                         };
                         persistCaseStates(updated);
@@ -1071,7 +1368,10 @@ export function GrayscaleEvaluation({
                     return;
                 }
                 const nextStates = data.caseStatesJson || {};
-                setCaseStates(nextStates);
+                // Polling 不要无脑覆盖本地：用户刚点过「重跑」可能还有 in-flight
+                // 占位 run 在本地等 PATCH 落库；mergeServerCaseStates 会按
+                // case-side 粒度保留本地更新的 in-flight 状态，避免被擦回老值。
+                setCaseStates(prev => mergeServerCaseStates(prev, nextStates));
                 setCurrentTask(prev => prev ? { ...prev, ...data } : data);
                 if (!data.activeRun && !hasRunningStates(nextStates) && !(data.configJson?.autoEval !== false && hasPendingAutoEvaluationCaseStates(nextStates))) {
                     setIsTaskRunInFlight(false);
@@ -1277,6 +1577,31 @@ export function GrayscaleEvaluation({
             datasetId: 'traces',
         }));
 
+    // Auto-prune checkedCaseIds: 切换 sourceMode / 时间窗 / 数据集后, 原来勾选
+    // 的 ID 在新的 allCases 里可能找不到了（dataset case id ≠ trace upload_id,
+    // 数据被清掉等）。这里把 stale ID 过滤掉, 同步落回 DB, 避免：
+    //   - 「已选样本 5 个」UI 上看不见、勾不掉
+    //   - 「执行」时尝试跑不存在的 case
+    // Guard 1: allCases 为空时 skip——避免 loading 中误把所有勾选清光
+    // Guard 2: 必须有 currentTask 才同步落库, 否则只改本地 state
+    useEffect(() => {
+        if (allCases.length === 0) return;
+        const validIds = new Set(allCases.map(c => c.id));
+        const stale = checkedCaseIds.filter(id => !validIds.has(id));
+        if (stale.length === 0) return;
+        const next = checkedCaseIds.filter(id => validIds.has(id));
+        setCheckedCaseIds(next);
+        if (currentTask) {
+            persistTaskUpdate(currentTask.id, {
+                ...currentConfigRef.current,
+                selectedCaseIds: next,
+                checkedCaseIds: next,
+            });
+        }
+    // 依赖只挂 allCases；checkedCaseIds 也读但不挂依赖以避免自己 set 自己导致 loop。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [allCases]);
+
     // Selection
     useEffect(() => {
         if (allCases.length > 0 && !selectedCaseId) {
@@ -1322,7 +1647,11 @@ export function GrayscaleEvaluation({
         const state = caseStates[c.id] || { a: { status: 'pending' }, b: { status: 'pending' } };
         return state.a.status === 'pass' && state.b.status === 'pass';
     }).length;
-    const selectedSampleCount = checkedCaseIds.length;
+    // 只统计「在当前 allCases 里能找到」的那些勾选 ID。否则切了 sourceMode /
+    // 时间窗 / 数据集后, 老的 stale 勾选 ID 会让计数虚高（用户在 UI 上看不见,
+    // 也勾不掉, 就疑惑「已选 5 个」是从哪里来的）。
+    const checkedVisibleIds = checkedCaseIds.filter(id => allCases.some(c => c.id === id));
+    const selectedSampleCount = checkedVisibleIds.length;
 
     const bWins = allCases.filter(c => {
         const state = caseStates[c.id];
@@ -1656,6 +1985,10 @@ export function GrayscaleEvaluation({
                 evaluatorRunId: run.evaluatorRunId || '',
                 status: run.status,
                 score: run.score,
+                // 失败相关字段一并透出, modal 显示双 badge + 错误详情用
+                failureType: (run as RunResult & { failureType?: string }).failureType,
+                failureDetail: (run as RunResult & { failureDetail?: string }).failureDetail,
+                output: run.output,
             }));
         });
     };
@@ -1683,17 +2016,35 @@ export function GrayscaleEvaluation({
                     </div>
                 ) : (
                     <div style={{ display: 'flex', flexDirection: 'column', maxHeight: 420, overflowY: 'auto' }}>
-                        {records.map((record, idx) => (
+                        {records.map((record, idx) => {
+                            const hasExecFailure = !!record.failureType;
+                            const { exec, evaluation } = deriveExecAndEval(record.status, hasExecFailure);
+                            const execErrMsg = hasExecFailure
+                                ? `[${record.failureType}] ${record.failureDetail || record.output || '执行失败'}`
+                                : '';
+                            const evalErrMsg = (!hasExecFailure && record.status === 'fail')
+                                ? (record.output || '评测失败')
+                                : '';
+                            return (
                             <div
                                 key={`${side}-${record.caseId}-${record.roundIndex}-${idx}`}
-                                style={{ display: 'grid', gridTemplateColumns: '86px 1fr 1fr 82px', gap: 10, alignItems: 'center', padding: '10px 12px', borderTop: idx === 0 ? 'none' : '1px solid #F1EFE8', fontSize: 12 }}
+                                style={{ display: 'grid', gridTemplateColumns: '86px 1fr 1fr 60px', gap: 10, alignItems: 'flex-start', padding: '10px 12px', borderTop: idx === 0 ? 'none' : '1px solid #F1EFE8', fontSize: 12 }}
                             >
-                                <div style={{ color: '#5F5E5A', fontWeight: 600 }}>
+                                <div style={{ color: '#5F5E5A', fontWeight: 600, paddingTop: 2 }}>
                                     R{record.roundIndex || '-'} · {record.caseId}
                                 </div>
+
+                                {/* 执行 session id 列：根据状态显示 id button / 状态文字 / 失败 hover */}
                                 <div style={{ minWidth: 0 }}>
                                     <div style={{ color: '#888780', marginBottom: 2 }}>{locale === 'zh' ? '执行 session id' : 'Execution session id'}</div>
-                                    {record.executionTraceId ? (
+                                    {exec.tone === 'fail' ? (
+                                        <HoverTooltip
+                                            trigger={<StatusText label={exec.label} tone="fail" />}
+                                            content={execErrMsg}
+                                        />
+                                    ) : exec.tone === 'pending' || exec.tone === 'running' ? (
+                                        <StatusText label={exec.label} tone={exec.tone} />
+                                    ) : record.executionTraceId ? (
                                         <button
                                             className="v2-action-btn"
                                             style={{ maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'ui-monospace, monospace' }}
@@ -1702,14 +2053,24 @@ export function GrayscaleEvaluation({
                                             {record.executionTraceId}
                                         </button>
                                     ) : (
-                                        <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'ui-monospace, monospace', color: record.evaluatorRunId ? '#888780' : '#B8B6AE' }}>
-                                            {record.evaluatorRunId || '—'}
-                                        </span>
+                                        <span style={{ color: '#B8B6AE' }}>—</span>
                                     )}
                                 </div>
+
+                                {/* 评估 session id 列：同样的逻辑——状态决定显文字还是 id */}
                                 <div style={{ minWidth: 0 }}>
                                     <div style={{ color: '#888780', marginBottom: 2 }}>{locale === 'zh' ? '评估 session id' : 'Evaluation session id'}</div>
-                                    {record.evaluationTraceId ? (
+                                    {!evaluation ? (
+                                        // 执行还没完成 / 执行失败时, 评测阶段还没开始
+                                        <span style={{ color: '#B8B6AE' }}>—</span>
+                                    ) : evaluation.tone === 'fail' ? (
+                                        <HoverTooltip
+                                            trigger={<StatusText label={evaluation.label} tone="fail" />}
+                                            content={evalErrMsg}
+                                        />
+                                    ) : evaluation.tone === 'pending' || evaluation.tone === 'running' ? (
+                                        <StatusText label={evaluation.label} tone={evaluation.tone} />
+                                    ) : record.evaluationTraceId ? (
                                         <button
                                             className="v2-action-btn"
                                             style={{ maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'ui-monospace, monospace' }}
@@ -1719,15 +2080,19 @@ export function GrayscaleEvaluation({
                                             {record.evaluationTraceId}
                                         </button>
                                     ) : (
-                                        <span style={{ color: '#B8B6AE' }}>—</span>
+                                        // pass 但没拿到 evaluationTraceId, fallback 到 evaluatorRunId
+                                        <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'ui-monospace, monospace', color: '#888780' }}>
+                                            {record.evaluatorRunId || '—'}
+                                        </span>
                                     )}
                                 </div>
-                                <div style={{ textAlign: 'right' }}>
-                                    <div style={{ color: '#5F5E5A' }}>{record.status}</div>
-                                    <div style={{ color: accent, fontWeight: 700 }}>{typeof record.score === 'number' ? record.score : '—'}</div>
+
+                                <div style={{ textAlign: 'right', color: accent, fontWeight: 700, fontSize: 14, paddingTop: 2 }}>
+                                    {typeof record.score === 'number' ? record.score : '—'}
                                 </div>
                             </div>
-                        ))}
+                            );
+                        })}
                     </div>
                 )}
             </div>
