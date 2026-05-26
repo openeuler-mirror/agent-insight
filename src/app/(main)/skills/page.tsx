@@ -9,13 +9,21 @@
  * 注：toolbar 由 SkillCatalogV2 内部渲染（拿得到 stats / search / filter / 上传回调），
  * 这一层只负责挂 AppTopBar + 触发上传 modal。
  */
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { SkillCatalog, SkillUpload, EnterpriseSync } from '@/components/skills/SkillRegistry';
 import { apiFetch } from '@/lib/client/api';
 import { X } from 'lucide-react';
 
 export default function SkillsPage() {
+    return (
+        <Suspense fallback={null}>
+            <SkillsPageInner />
+        </Suspense>
+    );
+}
+
+function SkillsPageInner() {
     const [refreshKey, setRefreshKey] = useState(0);
     const [uploadOpen, setUploadOpen] = useState(false);
     const [isEnterpriseMode, setIsEnterpriseMode] = useState(false);

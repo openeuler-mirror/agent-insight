@@ -25,14 +25,16 @@ find_pid_on_port() {
   local pid=""
   
   if command -v lsof >/dev/null 2>&1; then
-    pid=$(lsof -t -i:$port)
+    # Only match LISTEN sockets — otherwise outbound connections to a remote
+    # :$port (e.g. a browser tab) get reported as "occupying" the local port.
+    pid=$(lsof -t -iTCP:$port -sTCP:LISTEN 2>/dev/null)
   fi
-  
+
   if [ -z "$pid" ] && command -v netstat >/dev/null 2>&1; then
-    # Parse netstat output for PIDs
+    # `-l` already restricts to listeners on Linux netstat.
     pid=$(netstat -nlp 2>/dev/null | grep ":$port " | awk '{print $7}' | cut -d'/' -f1)
   fi
-  
+
   if [ -z "$pid" ] && command -v ss >/dev/null 2>&1; then
     pid=$(ss -lptn "sport = :$port" 2>/dev/null | grep -oP 'pid=\K\d+')
   fi

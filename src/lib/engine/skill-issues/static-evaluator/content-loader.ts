@@ -50,7 +50,9 @@ export function loadAssetBundle(assetPath: string | null | undefined): AssetBund
   if (!assetPath) {
     return { references: '', scripts: '', totalChars: 0, fileCount: 0 };
   }
-  const rootAbs = path.isAbsolute(assetPath) ? assetPath : path.join(process.cwd(), assetPath);
+  // path.resolve 等价于 path.join(process.cwd(), x)，但避开 Turbopack
+  // 对 `path.join(process.cwd(), <dynamic>)` 的 broad-pattern 警告。
+  const rootAbs = path.resolve(assetPath);
   const refs = readDirRecursive(rootAbs, 'references');
   const scripts = readDirRecursive(rootAbs, 'scripts');
 
