@@ -523,7 +523,7 @@ export async function evaluateTrajectoryViaOpencode(
     skillVersion?: number | null, // skill 版本号,展示用
 ): Promise<TrajectoryEvalOutput> {
   return withBackgroundOpencodeSlot(async () => {
-   return runWithEphemeralOpencodeServer({ user: user || undefined, verbose: false }, async (serverUrl) => {
+   return runWithEphemeralOpencodeServer({ user: user || undefined, verbose: false, isolateHome: true }, async (serverUrl) => {
     const config = await getActiveConfig(user);
     if (!config) {
         throw new TrajectoryEvalConfigError(

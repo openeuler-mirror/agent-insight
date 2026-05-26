@@ -372,7 +372,7 @@ export async function runCustomLlmEvaluator(
     skillVersion?: number | null, // skill 版本号,展示用
 ): Promise<CustomEvaluatorResult> {
   return withBackgroundOpencodeSlot(async () => {
-   return runWithEphemeralOpencodeServer({ user, verbose: false }, async (serverUrl) => {
+   return runWithEphemeralOpencodeServer({ user, verbose: false, isolateHome: true }, async (serverUrl) => {
     const startedAt = Date.now();
     const bundle = await loadCustomEvaluator(user, evaluatorId);
     if (!bundle) {
