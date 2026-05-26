@@ -194,30 +194,38 @@ type CaseStatus = 'pending' | 'running' | 'executed' | 'evaluating' | 'pass' | '
 
 // 状态徽章中文映射，对齐"用例分析"卡的术语（✓已评测 / 评测中 / ⚠评测失败 等），
 // 给 A/B 执行记录 modal 用。颜色风格也跟 trace 行的徽章对齐。
-const CASE_STATUS_DISPLAY: Record<CaseStatus, { label: string; bg: string; fg: string; icon?: string; pulse?: boolean }> = {
-    pending:    { label: '排队中', bg: 'rgba(100,116,139,.10)', fg: '#475569' },
-    running:    { label: '执行中', bg: 'rgba(37,99,235,.10)',   fg: '#2563EB', pulse: true },
-    executed:   { label: '执行完成 · 待评测', bg: 'rgba(217,119,6,.10)', fg: '#B45309' },
-    evaluating: { label: '评测中', bg: 'rgba(37,99,235,.10)',   fg: '#2563EB', pulse: true },
-    pass:       { label: '已评测', bg: 'rgba(22,163,74,.10)',   fg: '#15803D', icon: '✓' },
-    fail:       { label: '评测失败', bg: 'rgba(220,38,38,.10)', fg: '#B91C1C', icon: '⚠' },
+//
+// 注: A/B 任务有「执行 + 评测」两个阶段, 单一 CaseStatus 字段实际表达的是
+// 两阶段串起来的当前位置。renderExecutionRecordSection 把它拆成两个徽章
+// 分别展示（执行: 排队/执行中/✓完成/⚠失败, 评测: 待评测/评测中/✓已评测/⚠失败）,
+// 让用户一眼看清是哪一步挂了。
+type BadgeTone = 'pending' | 'running' | 'done' | 'fail';
+const BADGE_TONE: Record<BadgeTone, { bg: string; fg: string; pulse?: boolean; icon?: string }> = {
+    pending: { bg: 'rgba(100,116,139,.10)', fg: '#475569' },
+    running: { bg: 'rgba(37,99,235,.10)',   fg: '#2563EB', pulse: true },
+    done:    { bg: 'rgba(22,163,74,.10)',   fg: '#15803D', icon: '✓' },
+    fail:    { bg: 'rgba(220,38,38,.10)',   fg: '#B91C1C', icon: '⚠' },
 };
 
-function CaseStatusBadge({ status }: { status: CaseStatus | string | undefined }) {
-    const cfg = CASE_STATUS_DISPLAY[status as CaseStatus] ?? CASE_STATUS_DISPLAY.pending;
+function ToneBadge({ label, tone, prefix, title }: { label: string; tone: BadgeTone; prefix?: string; title?: string }) {
+    const cfg = BADGE_TONE[tone];
     return (
-        <span style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 4,
-            fontSize: 11,
-            fontWeight: 700,
-            padding: '3px 8px',
-            borderRadius: 99,
-            background: cfg.bg,
-            color: cfg.fg,
-            whiteSpace: 'nowrap',
-        }}>
+        <span
+            title={title}
+            style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
+                fontSize: 11,
+                fontWeight: 700,
+                padding: '3px 8px',
+                borderRadius: 99,
+                background: cfg.bg,
+                color: cfg.fg,
+                whiteSpace: 'nowrap',
+                cursor: title ? 'help' : 'default',
+            }}
+        >
             {cfg.pulse && (
                 <span style={{
                     display: 'inline-block',
@@ -229,9 +237,48 @@ function CaseStatusBadge({ status }: { status: CaseStatus | string | undefined }
                 }} />
             )}
             {cfg.icon && <span>{cfg.icon}</span>}
-            {cfg.label}
+            {prefix && <span style={{ opacity: 0.7 }}>{prefix}</span>}
+            {label}
         </span>
     );
+}
+
+// 从单一 CaseStatus + failureType 推出执行阶段和评测阶段两个独立 status。
+// 区分逻辑: failureType 有值 = 执行阶段挂了 (agent_timeout / permission_blocked /
+// agent_error 等); failureType 空 + status='fail' = 执行成功但评测器失败。
+function deriveExecAndEval(
+    status: CaseStatus | string | undefined,
+    hasExecFailure: boolean,
+): { exec: { label: string; tone: BadgeTone }; evaluation: { label: string; tone: BadgeTone } | null } {
+    const s = (status ?? 'pending') as CaseStatus;
+    // 执行阶段
+    let exec: { label: string; tone: BadgeTone };
+    if (s === 'fail' && hasExecFailure) {
+        exec = { label: '执行失败', tone: 'fail' };
+    } else if (s === 'pending') {
+        exec = { label: '排队中', tone: 'pending' };
+    } else if (s === 'running') {
+        exec = { label: '执行中', tone: 'running' };
+    } else {
+        // executed / evaluating / pass / fail (无 failureType=评测失败, 执行其实是成功的)
+        exec = { label: '执行完成', tone: 'done' };
+    }
+    // 评测阶段——只有执行成功才会有评测阶段
+    if (s === 'pending' || s === 'running' || (s === 'fail' && hasExecFailure)) {
+        return { exec, evaluation: null };
+    }
+    let evaluation: { label: string; tone: BadgeTone };
+    if (s === 'executed') {
+        evaluation = { label: '待评测', tone: 'pending' };
+    } else if (s === 'evaluating') {
+        evaluation = { label: '评测中', tone: 'running' };
+    } else if (s === 'pass') {
+        evaluation = { label: '已评测', tone: 'done' };
+    } else {
+        // s === 'fail' 且无 failureType → 评测器自己挂了
+        evaluation = { label: '评测失败', tone: 'fail' };
+    }
+    return { exec, evaluation };
 }
 
 // ──────────────── caseStates side-state 修改助手 ────────────────
@@ -1854,6 +1901,10 @@ export function GrayscaleEvaluation({
                 evaluatorRunId: run.evaluatorRunId || '',
                 status: run.status,
                 score: run.score,
+                // 失败相关字段一并透出, modal 显示双 badge + 错误详情用
+                failureType: (run as RunResult & { failureType?: string }).failureType,
+                failureDetail: (run as RunResult & { failureDetail?: string }).failureDetail,
+                output: run.output,
             }));
         });
     };
@@ -1881,10 +1932,18 @@ export function GrayscaleEvaluation({
                     </div>
                 ) : (
                     <div style={{ display: 'flex', flexDirection: 'column', maxHeight: 420, overflowY: 'auto' }}>
-                        {records.map((record, idx) => (
+                        {records.map((record, idx) => {
+                            const hasExecFailure = !!record.failureType;
+                            const { exec, evaluation } = deriveExecAndEval(record.status, hasExecFailure);
+                            // 错误原因: 执行失败 → failureDetail (失败类型 + 详情);
+                            //          评测失败 → output 字段在 evaluator 失败路径里被覆盖成 errorMessage
+                            const errorMsg = hasExecFailure
+                                ? (record.failureDetail || record.output || '执行失败')
+                                : (exec.tone !== 'fail' && evaluation?.tone === 'fail' ? (record.output || '评测失败') : null);
+                            return (
                             <div
                                 key={`${side}-${record.caseId}-${record.roundIndex}-${idx}`}
-                                style={{ display: 'grid', gridTemplateColumns: '86px 1fr 1fr 82px', gap: 10, alignItems: 'center', padding: '10px 12px', borderTop: idx === 0 ? 'none' : '1px solid #F1EFE8', fontSize: 12 }}
+                                style={{ display: 'grid', gridTemplateColumns: '86px 1fr 1fr 140px', gap: 10, alignItems: 'flex-start', padding: '10px 12px', borderTop: idx === 0 ? 'none' : '1px solid #F1EFE8', fontSize: 12 }}
                             >
                                 <div style={{ color: '#5F5E5A', fontWeight: 600 }}>
                                     R{record.roundIndex || '-'} · {record.caseId}
@@ -1920,12 +1979,38 @@ export function GrayscaleEvaluation({
                                         <span style={{ color: '#B8B6AE' }}>—</span>
                                     )}
                                 </div>
-                                <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
-                                    <CaseStatusBadge status={record.status} />
-                                    <div style={{ color: accent, fontWeight: 700 }}>{typeof record.score === 'number' ? record.score : '—'}</div>
+                                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, minWidth: 0 }}>
+                                    <ToneBadge label={exec.label} tone={exec.tone} prefix="执行:" title={hasExecFailure ? (record.failureType ? `失败类型: ${record.failureType}` : undefined) : undefined} />
+                                    {evaluation && (
+                                        <ToneBadge label={evaluation.label} tone={evaluation.tone} prefix="评测:" title={evaluation.tone === 'fail' ? (record.output || '评测失败') : undefined} />
+                                    )}
+                                    <div style={{ color: accent, fontWeight: 700, fontSize: 13 }}>{typeof record.score === 'number' ? record.score : '—'}</div>
                                 </div>
                             </div>
-                        ))}
+                            );
+                        })}
+                        {records.some(r => r.failureType || (r.status === 'fail' && !r.failureType)) && (
+                            <div style={{ padding: '8px 12px', borderTop: '1px solid #F1EFE8', background: '#FEF7F7' }}>
+                                <div style={{ fontSize: 11, fontWeight: 700, color: '#B91C1C', marginBottom: 4 }}>失败详情</div>
+                                {records.map((record, idx) => {
+                                    const hasExecFail = !!record.failureType;
+                                    const isEvalFail = !hasExecFail && record.status === 'fail';
+                                    if (!hasExecFail && !isEvalFail) return null;
+                                    const msg = hasExecFail
+                                        ? `[${record.failureType}] ${record.failureDetail || record.output || ''}`
+                                        : (record.output || '评测失败');
+                                    return (
+                                        <div key={`err-${side}-${record.caseId}-${record.roundIndex}-${idx}`} style={{ fontSize: 11, color: '#7F1D1D', marginBottom: 4, lineHeight: 1.4 }}>
+                                            <b>R{record.roundIndex || '-'} · {record.caseId}</b>
+                                            {' '}<span style={{ opacity: 0.7 }}>({hasExecFail ? '执行' : '评测'}阶段)</span>
+                                            <div style={{ marginTop: 2, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                                                {msg.length > 600 ? msg.slice(0, 600) + '…' : msg}
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
                     </div>
                 )}
             </div>
