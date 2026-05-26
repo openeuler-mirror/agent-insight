@@ -895,7 +895,13 @@ export function GrayscaleEvaluation({
                     query,
                     skill: isNone ? undefined : selectedSkill?.name,
                     skillVersion: (isNone || !version) ? undefined : Number(version.version),
-                    mode: 'grayscale'
+                    mode: 'grayscale',
+                    // 把任务归属传给后端: 关掉浏览器/网断时, 后端 .then/.catch 会自己
+                    // 把 caseStatesJson 的对应 side 从 running 推到 executed/fail。
+                    // 不传或缺任一字段则跳过, 退化为旧的「前端独占写库」行为(兼容其它调用点)。
+                    grayscaleTaskId: currentTask?.id,
+                    caseId,
+                    side,
                 }),
             });
             const data = await res.json();
