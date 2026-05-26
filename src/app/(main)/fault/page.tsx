@@ -33,6 +33,7 @@ import { AppTopBar } from '@/components/shell/AppTopBar';
 import { useAuth } from '@/lib/auth/auth-context';
 import { useLocale } from '@/lib/client/locale-context';
 import { apiFetch } from '@/lib/client/api';
+import { Term } from '@/components/text/Term';
 import { formatDuration, type AgentEvent, type RawInteraction } from '@/lib/engine/observability/agent-trace';
 import { buildFaultPathSteps, type FailureTraceAnchor } from '@/lib/engine/observability/fault-path';
 
@@ -331,7 +332,7 @@ function FaultPageContent() {
 
     return (
         <>
-            <AppTopBar title={t('nav.fault')} showDefaultActions={false} />
+            <AppTopBar title={<Term id="fault-diagnosis" label={t('nav.fault')} />} showDefaultActions={false} />
             <div style={{ flex: 1, overflowY: 'auto', padding: '18px 20px' }}>
                 {selectedExecution ? (
                     <FaultDetailView
@@ -526,7 +527,7 @@ function FaultPageContent() {
 
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 9 }}>
                             <span className="ai-section-title">
-                                {locale === 'zh' ? '故障事件清单' : 'Fault events'}
+                                <Term id="fault-item" label={locale === 'zh' ? '故障事件清单' : 'Fault events'} />
                                 <span style={{ marginLeft: 8, color: 'var(--foreground-muted)', fontWeight: 400 }}>{filtered.length}</span>
                             </span>
                             <span className="ai-section-hint">
@@ -815,7 +816,7 @@ function FaultDetailView({ execution, locale, user, onBack }: { execution: Execu
                     </div>
                 </div>
                 <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 0 }}>
-                    <SessionStat label={locale === 'zh' ? '链路状态' : 'Status'} value={faultSummary.statusLabel} valueColor={faultSummary.hasFault ? 'var(--warning,#d97706)' : 'var(--success,#15a572)'} />
+                    <SessionStat label={<Term id="chain-status" label={locale === 'zh' ? '链路状态' : 'Status'} />} value={faultSummary.statusLabel} valueColor={faultSummary.hasFault ? 'var(--warning,#d97706)' : 'var(--success,#15a572)'} />
                     <SessionStat label={locale === 'zh' ? '执行节点' : 'Nodes'} value={String(faultSummary.executed)} />
                     <SessionStat label="LLM" value={String(execution.llm_call_count ?? '—')} />
                     <SessionStat label={locale === 'zh' ? '故障节点' : 'Faults'} value={String(faultSummary.faultNodeCount)} valueColor={faultSummary.faultNodeCount > 0 ? 'var(--warning,#d97706)' : undefined} />
@@ -1607,7 +1608,7 @@ function flatToTree(nodes: TraceNodeItem[]): { roots: TreeTraceNode[]; nodeMap: 
 }
 
 /* ── Session header stat cell ── */
-function SessionStat({ label, value, valueColor }: { label: string; value: string; valueColor?: string }) {
+function SessionStat({ label, value, valueColor }: { label: React.ReactNode; value: string; valueColor?: string }) {
     return (
         <div style={{ padding: '0 14px', borderLeft: '1px solid var(--border)', textAlign: 'center', flexShrink: 0 }}>
             <div style={{ fontSize: 9.5, color: 'var(--foreground-muted)', fontWeight: 700, letterSpacing: '.10em', textTransform: 'uppercase', marginBottom: 3 }}>{label}</div>

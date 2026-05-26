@@ -36,6 +36,7 @@
 | 代码块 | `src/components/text/CodeBlock.tsx` | 多行代码 / Prompt | `<pre>{code}</pre>` |
 | JSON 展示 | `src/components/text/JsonViewer.tsx` | 所有结构化数据展示 | `JSON.stringify(obj, null, 2)` |
 | 错误堆栈 | `src/components/feedback/ErrorDetail.tsx` | 任何 `err.stack` 展示位置 | 整段塞 `<pre>` |
+| 术语提示 | `src/components/text/TermPopover.tsx` | KPI 卡指标名 / 表头列名 / 卡片标题里的领域术语 / 长文本叙述里首次出现的术语 / 表单字段标签 | 自己用原生 `title="..."`；用 `<Tooltip>` 塞多行术语解释；inline 写一个浮层 |
 
 > 标 ⚠️ 的组件部分尚未实现 —— 参考本文件 §4 "已有 / 需新增 组件清单" 中的"待建"标记。**未实现的组件不构成"我可以自己写一版"的理由**：第一个需要它的页面**有责任**把它建成共享组件，而不是在本页面内嵌一个私有版本。
 
@@ -233,6 +234,185 @@
 > - **2026-05-19 #2**：→ Pink `#EC4899`（槽位 7）→ 唯一暖色解决了色相距离问题，但 Pink 偏红、在高频出现下视觉疲劳 + 隐含"出错"暗示。
 > - **2026-05-19 #3（当前）**：→ Violet `#8B5CF6`（槽位 6）→ Violet 原属 SKILL；改为 LLM 取 violet（§1.4 的 AI 语义本就最贴 LLM），SKILL 让到 Pink（SKILL 频次低，暖色可接受）。LLM/AGENT 色相靠近的代价由"容器 vs 叶节点"结构差异和 chip 文字标签兜底。
 
+### E.14 TermPopover（术语提示 · 圆形 i 角标 + Popover）
+
+观测平台术语密集（Trace / Span / Skill / CHAIN_ERROR / P95 / SMART RUN…），新用户对着列名 / 指标名"猜意思"。本组件统一所有"挂角标 → 浮层解释"的实现；禁止任何页面再用原生 `title=""`、`<Tooltip>` 塞多行术语，或自管浮层。
+
+唯一来源 `src/components/text/TermPopover.tsx`（🆕 待建）。
+
+> 本节是 v1 高保真 `glossary-popover-v2.html` 的正式规范化收口：HTML 里用了 `#5a3df0` 主色、`#00a870 / #ff8800 / #f53f3f` 状态色、`13×13` 角标 + `9px` 字符、自定义双层 box-shadow、`3px` 圆角和 5 色 type tag —— 这些值与 [`foundations.md`](./foundations.md) §1.2 / §B.3 / §B.5 / §C.2 / §D.2 / §D.3 都有冲突。本节给出的 Token / 字号 / 尺寸为**正式值**，HTML 的具体像素不再作参考。
+
+#### E.14.1 与 Tooltip 的差异（什么时候用哪个）
+
+| 维度 | `<Tooltip>` | `<TermPopover>` |
+| --- | --- | --- |
+| 信息量 | ≤ 1 行短语 | 1-4 行 + 可选公式块 + 可选关联链接 |
+| 可点击内容 | ❌ 不允许（hover 移出即消失） | ✅ 允许（popover 内可放关联跳转链接） |
+| 触发器 | 触发器自带语义（图标按钮、被截断的文字） | 触发器是**术语文字 + 圆形 i 角标** |
+| 触发方式 | hover / focus | hover / focus / tap（移动端） |
+| 典型用例 | "点击复制"、被 truncate 的完整文本、键盘快捷键提示 | "P95 是什么？"、"CHAIN_ERROR 怎么解读？"、"综合健康分如何计算？" |
+
+🚫 红线：术语解释一律走 `<TermPopover>`，**禁止**用 `<Tooltip>` 塞 ≥ 2 行术语解释。
+
+#### E.14.2 API
+
+```tsx
+<TermPopover
+  term="P95 时延"
+  tag="metric"                // 'metric' | 'trace' | 'tool' | 'skill' | 'fault' | 'eval'
+  body="把所有请求耗时从小到大排序，第 95 个百分位的值。代表绝大多数用户能感受到的最差体验。"
+  formula={{                  // 可选：公式 / 阈值 / 取值范围
+    label: '阈值参考',         // 短标签，<= 8 字
+    content: '< 2s 良好 · 2-5s 可接受 · > 5s 需关注'
+  }}
+  related={[                  // 可选：跳转到术语表 / 关联指标的链接
+    { label: '置信加权', href: '/glossary/confidence-weighted' },
+    { label: 'SMART RUN', href: '/glossary/smart-run' }
+  ]}
+>
+  P95 时延   {/* 触发器文本；不传 children 时自动用 term */}
+</TermPopover>
+```
+
+推荐用法是 `<Term id="p95-latency" />` —— 由 id 从术语表 (`docs/agent-insight-glossary.md`，待建) 取出完整字段，避免每个用法处重复写文案。详见 E.14.7。
+
+#### E.14.3 视觉规格（Token / 字号 / 尺寸 / 间距）
+
+**① 触发器：lucide `<Info>` 图标（不是圆圈包字符）**
+
+| 维度 | 值 | Token / 备注 |
+| --- | --- | --- |
+| 图标库 | `lucide-react` 的 `<Info>` | 项目已装；**禁止**用 Unicode `ⓘ` 字符（移植性差、字体回退不可控） |
+| 尺寸 | `size-3` (12×12px) | 比 14px 文字小一档，形成清晰层级；**不用** `size-3.5` / `size-4`（视觉抢戏） |
+| 透明度 | `opacity-70` | 进一步让图标视觉退后 |
+| 默认字色 | `--foreground-muted`（badgeTone="muted"，默认）/ `--primary`（badgeTone="primary"，仅高亮卡片如渐变 KPI 用） | — |
+| 与术语文字间距 | `gap-1` (4px) | — |
+| 与基线对齐 | `align-baseline` | — |
+| Focus 环 | `focus-visible:ring-2 ring-ring`（套在 trigger span 上） | 与 §P.4 主操作以外的统一 focus 规则一致 |
+| 光标 | `cursor-help` | 跨平台一致的"可补充信息"语义 |
+
+🚫 红线：
+- 不用渐变、阴影、发光（违反 §0.2 锚点②的渐变白名单）。
+- 不用 hover 切换主色填充——Tooltip 已经在 hover 时显示卡片，图标再变色是双重信号、视觉嘈杂。
+
+**② Tooltip 卡片**
+
+| 维度 | 值 | Token |
+| --- | --- | --- |
+| 背景 | `bg-card` | `--card-bg` |
+| 边框 | `border border-card-border` (1px) | `--card-border` |
+| 圆角 | `rounded-md` (8px) | `--radius-md`；**不用** HTML 的 3px |
+| 阴影 | `shadow-sm` | §D.3 三档之一；**禁止**自定义双层 box-shadow |
+| 宽度 | `w-[260px]` 固定 | 带 formula / related 时按内容自然撑高；**不允许**横向溢出滚动 |
+| 内 padding | `p-4` (16px 各边) | 落到 4px 网格 |
+| 与触发器距离 | `sideOffset={6}` (Radix prop) | — |
+| 三角箭头 | **无**（Tooltip 默认无 Arrow，比 Popover 视觉更轻；如需，可用 `<Tooltip.Arrow />` 但与"补充说明"语义不符） | — |
+| 边界翻转 | Radix `collisionPadding={12}` 自动处理 | **不**写自定义 `term-end` 类 |
+| Z-index | `z-50` | 不允许手写 `z-[xxx]` |
+
+**③ Popover 内容结构（5 个固定槽位 · 自上而下）**
+
+```
+┌─────────────────────────────────┐
+│  ① TypeTag      ◀── 单个 tag，左对齐
+│                                 
+│  ② Term         ◀── 术语本身
+│                                 
+│  ③ Body         ◀── 解释，最多 4 行
+│                                 
+│  ┌───────────────────────────┐  
+│  │ ④ Formula 块（可选）       │  
+│  │   label 行（小写小标签）   │  
+│  │   content 行（等宽数字）   │  
+│  └───────────────────────────┘  
+│  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─  ◀── dashed 分隔
+│  ⑤ Related: [chip] [chip] ...   
+└─────────────────────────────────┘
+```
+
+| 槽位 | 字号 | 字色 / 字重 | 间距 |
+| --- | --- | --- | --- |
+| ① TypeTag | `text-[10px] font-medium uppercase tracking-wide` | 见 §E.14.4 配色表；`px-1.5 py-0.5 rounded-sm` | `mb-1.5` |
+| ② Term | `text-sm font-semibold` | `text-foreground` | `mb-1` |
+| ③ Body | `text-xs leading-relaxed` (11/18) | `text-foreground-secondary` | `mb-0` |
+| ④ Formula 容器 | — | `bg-background-tertiary rounded-md px-2 py-1.5` | `mt-2` |
+| ④.a Formula label | `text-[10px] uppercase tracking-wider` | `text-foreground-muted` | `block mb-0.5` |
+| ④.b Formula content | `font-mono text-xs tabular-nums` | `text-foreground` | — |
+| ⑤ Related 容器 | — | `flex flex-wrap items-center gap-1 pt-2 border-t border-dashed border-border` | `mt-2` |
+| ⑤.a Related label | `text-[10px]` | `text-foreground-muted mr-1` | — |
+| ⑤.b Related link | `text-[10px] px-1.5 py-0.5 rounded-sm` | `bg-primary-subtle text-primary hover:bg-primary-subtle-border` | — |
+
+⚠️ Body 超过 4 行时用 `<ExpandableText lines={4}>` 包；**不允许** popover 内出现滚动条（滚动会破坏 hover 状态、移动端体验差）。如果术语解释天然 > 6 行，把详细信息挪到术语表页面，popover 只放 1-2 句概要 + `related` 跳转。
+
+#### E.14.4 类型 Tag 配色（6 类 · 唯一权威表）
+
+类型 Tag 表达"术语属于哪个领域"，不是状态信号。规则：**95% 走灰**，仅 2 类术语本身就在描述错误 / 评测语义时保留 `--error` / `--success`。
+
+| Tag | 适用术语示例 | 背景 | 文字 | 选用理由 |
+| --- | --- | --- | --- | --- |
+| `metric` 指标 | P95 时延 / 成功率 / 调用量 / Token 数 | `--tag-gray-bg` | `--tag-gray-fg` | 默认灰，避免与 KPI 卡的状态色争抢注意力 |
+| `trace` 链路 | Trace ID / Span / 执行状态列名 / 执行时间 | `--tag-gray-bg` | `--tag-gray-fg` | 灰；链路术语高频出现，必须低噪音 |
+| `tool` 工具 | background_output / search / file_write | `--tag-gray-bg` | `--tag-gray-fg` | 灰；与 trace 同档 |
+| `skill` Skill | 综合健康分 / 置信加权 / A/B 测试 / SMART RUN | `--tag-purple-bg` | `--tag-purple-fg` | 紫；**唯一**符合 §B.5"紫仅用于 AI/模型领域"白名单的术语类 |
+| `fault` 故障 | CHAIN_ERROR / TIMEOUT / NODE_DOWN | `--error-subtle` | `--error` | 红；术语本身在描述错误，语义对齐 §B.4 `--error` |
+| `eval` 评测 | 命中率 / 误触发率 / Judge 分 / 评估覆盖度 | `--success-subtle` | `--success` | 绿；术语本身在描述"通过 / 评分"，语义对齐 §B.4 `--success` |
+
+🚫 红线 · HTML 高保真里"指标 = 紫、链路 = 蓝"的方案**不被采纳**：
+- 紫色重复使用会与 §B.3"主色仅用于可交互"和 §B.5"紫仅 AI/模型"白名单冲突。
+- 蓝色会与 §B.4 `--running` 蓝（仅运行状态）冲突——用户会把"Trace ID 列名"读成"列在运行中"。
+
+🚫 红线 · 禁止自创第 7 类 tag。如果出现一个不属于上述 6 类的术语，先在 PR 里讨论是否新增类型，**而不是临时再挑一个色相**。
+
+#### E.14.5 触发与可访问性
+
+| 端 | 行为 |
+| --- | --- |
+| 桌面 hover | 角标 / 术语文字 hover → **150ms** 延迟展开；移出 → 自动收起；hover 进卡片内部时不收起（Tooltip 默认 hoverable content）；同区域内连续切换术语 → **50ms** 即时展开（`skipDelayDuration`） |
+| 桌面键盘 | Tab 焦点到角标 → **自动展开**（focus = hover 等价）；Esc 收起，焦点回到角标 |
+| 移动 / 触屏 | tap 切换（首次 tap 打开、再 tap 关闭）；外部 tap 关闭。Related 链接需挂在 popover 内部，确保移动端可点 |
+| `prefers-reduced-motion: reduce` | 关闭 transition，立即显隐 |
+
+- **必须**基于 [`Radix Tooltip`](https://www.radix-ui.com/primitives/docs/components/tooltip)（项目已装 `@radix-ui/react-tooltip`）；禁止用纯 CSS `:hover` 实现（HTML v2 用的就是 CSS hover，移动端不可用、键盘不可达）。
+- 不用 Radix Popover：Popover 需要点击触发，跟术语提示的"补充说明"语义不符；Tooltip 的 hover/focus 触发更轻、无需用户主动点击。
+- 全局每屏最多 1 个 tooltip 同时打开（Radix 默认）。
+- 触发器 `aria-label="术语解释：{term}"`；卡片容器 `role="tooltip"` 由 Radix 处理。
+
+#### E.14.6 何时挂角标（详见 [`patterns.md`](./patterns.md) §2.5 "术语提示 4 类挂载场景"）
+
+**允许**：
+- ✅ KPI 卡指标名（"P95 时延"、"今日调用量"）
+- ✅ 表格表头列名（"Trace ID"、"执行状态"、"执行时间"）
+- ✅ 卡片标题里的领域术语（"综合健康分 · 置信加权"）
+- ✅ 长文本叙述中**首次出现**的专业术语（"系统检测到一次 CHAIN_ERROR…"）
+- ✅ 表单字段标签（替代 [`patterns.md`](./patterns.md) §7.D.5 旧的"小 ? 图标 + Tooltip"方案）
+
+**禁止**：
+- ❌ 列表行数据里逐行重复挂角标（噪音、信息冗余）
+- ❌ 同一术语在同一屏出现 ≥ 2 次时除首次外重复挂（违反"首次出现"原则）
+- ❌ 当作"详情链接"用（详情链接走 `<a>` 下划线 + 跳转，不走 popover）
+- ❌ Popover 内塞操作按钮（"开始评测"、"删除"），破坏"只读 = 解释"语义
+- ❌ 一个角标里放多个 term（每个角标对应一个术语）
+
+#### E.14.7 内容来源（与术语表单一事实源）
+
+- 所有术语文案来自 `docs/agent-insight-glossary.md`（🆕 待建）。
+- **禁止**在组件用法处 inline 写术语解释 —— 改一处全站不一致。
+- 推荐封装：
+
+  ```tsx
+  // src/components/text/Term.tsx
+  export function Term({ id, children }: { id: TermId; children?: ReactNode }) {
+    const def = GLOSSARY[id];  // 注册表查表
+    return <TermPopover {...def}>{children ?? def.term}</TermPopover>;
+  }
+
+  // 用法
+  <Term id="p95-latency" />
+  <Term id="chain-error">CHAIN_ERROR</Term>   {/* 自定义触发器文字 */}
+  ```
+
+- 术语表注册表落在 `src/lib/glossary/registry.ts`，导出 `GLOSSARY: Record<TermId, TermDef>`；新增术语必须同步更新 `docs/agent-insight-glossary.md`。
+
 ---
 
 ---
@@ -334,6 +514,8 @@
 | IdChip | 🆕 | 长 ID 头尾保留 + 复制 |
 | ErrorDetail | 🆕 | 错误堆栈折叠展示 + 复制 |
 | TagList | 🆕 | 列表 + "+N" 超量提示 |
+| TermPopover | 🆕 | 圆形 i 角标 + Popover 术语解释，6 类 type tag（详见 §2 E.14） |
+| Term | 🆕 | TermPopover + 术语表注册表的薄包装；用法 `<Term id="p95-latency" />` |
 
 ### 多步骤流程
 
@@ -439,6 +621,7 @@
 - [ ] 长 URL / 文件路径 / ID 用 `<TruncateMiddle>` 或 `<IdChip>`
 - [ ] 数值用 `<MetricValue>` 或 `font-mono tabular-nums`
 - [ ] 空值显示 `—`，不显示 `null` / `undefined` / `N/A`
+- [ ] 术语解释走 `<TermPopover>` / `<Term id>`，不用 `<Tooltip>` 塞多行；术语在同一屏只在**首次出现**处挂角标
 
 ### 页面布局（[`patterns.md`](./patterns.md) §1 6 类模板）
 
@@ -570,6 +753,9 @@
 | `text-gray-500` | `text-foreground-secondary` 或 `text-foreground-muted` |
 | `border-gray-200` | `border-border` |
 | `localStorage` 存筛选 | `useQueryStates` (nuqs) |
+| `<span title="P95 时延是...">P95</span>` 原生 title | `<Term id="p95-latency" />` |
+| `<Tooltip><span>P95 <Info /></span><div>多行解释...</div></Tooltip>` Tooltip 塞多行术语 | `<Term id="p95-latency" />`（用 TermPopover，支持 formula / related） |
+| 自管 popover `<div className="popover-card">...</div>` + 自写 hover 显隐 | `<TermPopover>`（基于 Radix Tooltip 悬停触发，三端可达） |
 
 ---
 

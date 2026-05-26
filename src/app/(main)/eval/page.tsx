@@ -22,6 +22,7 @@ import {
     getPrimaryExecutionAgentName,
     isEvaluatorTraceRecord,
 } from '@/lib/evaluator-agent';
+import { Term } from '@/components/text/Term';
 
 interface TrajectoryDimensionScores {
     completeness: number;
@@ -497,7 +498,7 @@ function EvalPageContent() {
 
     return (
         <>
-            <AppTopBar title={t('nav.eval')} actions={topBarActions} showDefaultActions={false} />
+            <AppTopBar title={<Term id="eval-batch" label={t('nav.eval')} />} actions={topBarActions} showDefaultActions={false} />
             <div style={{ flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 }}>
                 {/* 主区：选中批次的 trace 列表 */}
                 <main style={{ flex: 1, overflowY: 'auto', minWidth: 0, color: COLORS.text }}>
@@ -827,7 +828,9 @@ function RunPanel({
                             }}
                         >
                             <div style={{ minWidth: 0 }}>
-                                <div style={{ fontSize: 11.5, color: COLORS.textMuted, marginBottom: 4 }}>自动观测</div>
+                                <div style={{ fontSize: 11.5, color: COLORS.textMuted, marginBottom: 4 }}>
+                                    <Term id="auto-observe" label="自动观测" />
+                                </div>
                                 <div style={{ fontSize: 14, color: autoWatchEnabled ? COLORS.success : COLORS.textDisabled, fontWeight: 700 }}>
                                     {autoWatchEnabled ? '开启中' : '已关闭'}
                                 </div>
@@ -852,13 +855,13 @@ function RunPanel({
                     }}
                 >
                     <Stat
-                        label="执行 Agent"
+                        label={<Term id="eval-agent" label="执行 Agent" />}
                         value={run.executionAgent || '—'}
                         mono
                         primary
                         truncate
                     />
-                    <Stat label="评估器" value={run.evaluatorName || '—'} truncate />
+                    <Stat label={<Term id="evaluator" label="评估器" />} value={run.evaluatorName || '—'} truncate />
                     <Stat label="trace 总数" value={String(run.traceCount)} />
                     <Stat
                         label="评测进度"
@@ -1028,9 +1031,9 @@ function RunPanel({
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                     <thead>
                         <tr style={{ background: COLORS.bgSoft, borderBottom: `1px solid ${COLORS.border}` }}>
-                            <th style={thStyle(170, 'left')}>TRACE ID</th>
-                            <th style={thStyle(undefined, 'left')}>Trace 实际输入</th>
-                            <th style={thStyle(undefined, 'left')}>Trace 实际输出</th>
+                            <th style={thStyle(170, 'left')}><Term id="trace" label="TRACE ID" /></th>
+                            <th style={thStyle(undefined, 'left')}><Term id="trace" label="Trace 实际输入" /></th>
+                            <th style={thStyle(undefined, 'left')}><Term id="trace" label="Trace 实际输出" /></th>
                             <th style={thStyle(80, 'center')}>评测状态</th>
                             <th style={thStyle(92, 'left')}>得分</th>
                             <th style={thStyle(110, 'left')}>评测时间</th>
@@ -1251,7 +1254,7 @@ function Stat({
     valueColor,
     truncate,
 }: {
-    label: string;
+    label: React.ReactNode;
     value: string;
     detail?: React.ReactNode;
     primary?: boolean;

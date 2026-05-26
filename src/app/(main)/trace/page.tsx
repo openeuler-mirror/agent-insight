@@ -37,6 +37,7 @@ import { EmptyState } from '@/components/feedback/EmptyState';
 import { IdChip } from '@/components/text/IdChip';
 import { TruncateText } from '@/components/text/TruncateText';
 import { RelativeTime } from '@/components/text/RelativeTime';
+import { Term } from '@/components/text/Term';
 import { cn } from '@/lib/utils';
 
 const basePath = process.env.NEXT_PUBLIC_URL_PREFIX || '';
@@ -508,7 +509,7 @@ function TracePageContent() {
 
     return (
         <>
-            <AppTopBar title={t('nav.trace')} actions={undefined} showDefaultActions={false} />
+            <AppTopBar title={<Term id="trace" label={t('nav.trace')} />} actions={undefined} showDefaultActions={false} />
             <PageContainer>
                 {selectedExecution ? (
                     <TraceDetailView
@@ -518,14 +519,20 @@ function TracePageContent() {
                 ) : (
                     <>
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-                            <StatCard label={t('tracePage.statTotal')} value={stats.total.toLocaleString()} />
                             <StatCard
-                                label={t('tracePage.statFailed')}
+                                label={<Term id="trace" label={t('tracePage.statTotal')} />}
+                                value={stats.total.toLocaleString()}
+                            />
+                            <StatCard
+                                label={<Term id="fault-item" label={t('tracePage.statFailed')} />}
                                 value={String(stats.failedCount)}
                                 accent={stats.failedCount > 0 ? 'error' : undefined}
                             />
                             <StatCard label={t('tracePage.statAvgLatency')} value={fmtSec(stats.avgLatency)} />
-                            <StatCard label={t('tracePage.statToolErrorRate')} value={`${stats.errRate}%`} />
+                            <StatCard
+                                label={<Term id="tool-error-rate" label={t('tracePage.statToolErrorRate')} align="end" />}
+                                value={`${stats.errRate}%`}
+                            />
                         </div>
 
                         <PageToolbar className="border border-border bg-background-secondary rounded-md p-2 mb-3">
@@ -649,9 +656,15 @@ function TracePageContent() {
                                         </colgroup>
                                         <thead className="sticky top-0 z-10">
                                             <tr className="bg-background-secondary text-left">
-                                                <Th colKey="traceId" currentWidth={widths.traceId} onResize={setColumnWidth}>{t('tracePage.columnTraceId')}</Th>
-                                                <SortableTh sortKey="agent" currentKey={sortKey as SortKey} dir={sortDir as SortDir} onSort={handleSort} colKey="agent" currentWidth={widths.agent} onResize={setColumnWidth}>{t('tracePage.columnAgent')}</SortableTh>
-                                                <SortableTh sortKey="status" currentKey={sortKey as SortKey} dir={sortDir as SortDir} onSort={handleSort} colKey="status" currentWidth={widths.status} onResize={setColumnWidth}>{t('tracePage.columnStatus')}</SortableTh>
+                                                <Th colKey="traceId" currentWidth={widths.traceId} onResize={setColumnWidth}>
+                                                    <Term id="trace" label={t('tracePage.columnTraceId')} />
+                                                </Th>
+                                                <SortableTh sortKey="agent" currentKey={sortKey as SortKey} dir={sortDir as SortDir} onSort={handleSort} colKey="agent" currentWidth={widths.agent} onResize={setColumnWidth}>
+                                                    <Term id="agent" label={t('tracePage.columnAgent')} />
+                                                </SortableTh>
+                                                <SortableTh sortKey="status" currentKey={sortKey as SortKey} dir={sortDir as SortDir} onSort={handleSort} colKey="status" currentWidth={widths.status} onResize={setColumnWidth}>
+                                                    <Term id="chain-status" label={t('tracePage.columnStatus')} />
+                                                </SortableTh>
                                                 <Th colKey="tags" currentWidth={widths.tags} onResize={setColumnWidth}>{t('tracePage.columnTags')}</Th>
                                                 <Th>{t('tracePage.columnTask')}</Th>
                                                 <SortableTh sortKey="timestamp" currentKey={sortKey as SortKey} dir={sortDir as SortDir} onSort={handleSort} colKey="time" currentWidth={widths.time} onResize={setColumnWidth}>{t('tracePage.columnTime')}</SortableTh>
@@ -821,7 +834,7 @@ function TraceDetailView({
                     <Separator orientation="vertical" className="h-5" />
                 ) : null}
                 {typeof tokens === 'number' && tokens > 0 && (
-                    <MetricPill label={t('tracePage.metricTokens')} value={tokens.toLocaleString()} />
+                    <MetricPill label={<Term id="tokens" label={t('tracePage.metricTokens')} />} value={tokens.toLocaleString()} />
                 )}
                 {typeof latency === 'number' && latency > 0 && (
                     <MetricPill label={t('tracePage.metricDuration')} value={fmtSec(toDisplayLatencyMs(latency, framework))} />
@@ -954,7 +967,7 @@ function FailureCard({ failures }: { failures: any[] }) {
     );
 }
 
-function MetricPill({ label, value }: { label: string; value: string }) {
+function MetricPill({ label, value }: { label: React.ReactNode; value: string }) {
     return (
         <span className="inline-flex items-baseline gap-1 text-xs">
             <span className="text-foreground-muted">{label}</span>
@@ -963,7 +976,7 @@ function MetricPill({ label, value }: { label: string; value: string }) {
     );
 }
 
-function StatCard({ label, value, accent }: { label: string; value: string; accent?: 'error' }) {
+function StatCard({ label, value, accent }: { label: React.ReactNode; value: string; accent?: 'error' }) {
     return (
         <div className="rounded-md border border-card-border bg-card p-3">
             <div className="text-xs text-foreground-muted">{label}</div>

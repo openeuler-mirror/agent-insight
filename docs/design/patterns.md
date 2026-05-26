@@ -645,6 +645,105 @@ export interface PageHeaderProps {
 - ❌ Markdown 通过 `dangerouslySetInnerHTML` 渲染。
 - ❌ 显示 `null` / `undefined` / `N/A` 字面值给用户看。
 
+### L.7 术语提示 4 类挂载场景（TermPopover 的"挂在哪里"）
+
+> 与长文本规范紧贴的姊妹规则：长文本规范回答"长内容怎么截断"，术语提示规范回答"专业名词怎么解释"。
+> 组件契约（API、Token、配色、可访问性）见 [`components.md`](./components.md) §2 E.14；本节只规定**在哪些页面位置可以挂、必须挂、禁止挂**。
+
+观测平台的术语密度远高于通用 SaaS。一个新接手的工程师 / 业务用户在 Dashboard / 表格 / 故障叙述里会同时遭遇 `P95`、`CHAIN_ERROR`、`Span`、`置信加权`、`SMART RUN`…—— 没有 popover 就只能"自己 Google"。但**挂得过密**又会让页面看起来"满屏 i 角标"，反而降低专业感。
+
+下面 4 个场景是**唯一允许**挂角标的位置，每个场景给出取舍依据与红线。
+
+#### 场景 1 · KPI 卡 / 指标卡的指标名
+
+```
+┌─ Card ──────────────────┐
+│  P95 时延 (ⓘ)            │  ← 指标名右侧紧贴 i 角标
+│  ──────────────────     │
+│   2.4 s                 │
+│  均值 1.8s · 预估 $0.02  │
+└─────────────────────────┘
+```
+
+- 触发器位置：指标名末尾 `gap-1` (4px) 后挂角标。
+- 必须挂的指标：所有非显然的统计指标（P50/P95/P99、成功率、Token 数、健康分、置信加权…）。
+- 不挂：自明的字段（"今日"、"用户名"、"创建时间"）。
+- 在 Dashboard"主色渐变 KPI 卡"上 (§0.2 锚点②白名单外)：角标改用 `border-white/50 text-white/80`，hover 切到 `bg-white/95 text-primary`。这是 KPI 卡的**唯一**前景反白例外，其它位置不允许复刻。
+
+#### 场景 2 · 表格表头列名
+
+```
+┌─ Table ─────────────────────────────────────────────────┐
+│  TRACE ID (ⓘ)   AGENT    执行状态 (ⓘ)   ...   执行时间 (ⓘ)  │
+└─────────────────────────────────────────────────────────┘
+```
+
+- 触发器位置：列标题文字末尾。
+- 必须挂的列：业务术语命名的列（"Trace ID"、"执行状态"、"P95"、"执行时间"、"Token 数"、"健康分"…）。
+- 不挂：自然语言列（"任务内容"、"创建者"、"备注"）。
+- 表格最右侧列必须传 Radix `align="end"` / `collisionPadding={8}`（组件已封装），避免 popover 溢出可视区。
+- 🚫 **行数据里禁止逐行挂角标**——表头挂一次就够了，行内重复挂会把表格变成"i 矩阵"。
+
+#### 场景 3 · 卡片标题 / 区块标题里的领域术语
+
+```
+┌─ Card ──────────────────────────────────────────────────┐
+│  综合健康分 (ⓘ)  · 置信加权                  [待分析 (ⓘ)] │
+└─────────────────────────────────────────────────────────┘
+```
+
+- 触发器位置：紧贴术语字段末尾。
+- 必须挂：标题里**第一个**关键业务术语（"综合健康分"、"置信加权"、"评估覆盖度"…）。
+- CardHeader 右侧的元信息（"待分析"、"已完成"、状态徽章）如果是术语，也允许挂角标。
+- 🚫 一个 CardHeader 内 ≤ 2 个角标；超过说明卡片承担了太多术语，应该拆。
+
+#### 场景 4 · 长文本叙述 / 故障描述里**首次出现**的专业术语
+
+```
+系统检测到一次 CHAIN_ERROR (ⓘ)，失败的 Span (ⓘ) 位于 Fuxi-Sub 子 Agent 
+的 background_output (ⓘ) 工具调用上。建议运行 SMART RUN (ⓘ) 一次性补齐
+缺失的评估维度。
+```
+
+- 触发器位置：术语文字旁，与正文 inline 排版。
+- 必须挂：**段落内首次出现**的术语；同段后续重复出现的同一术语**不再挂**。
+- 跨段落 / 跨卡片再次出现：仍按"该上下文范围内首次出现"判定。
+- 阅读流上的术语 popover 应**轻而短**（推荐紧凑版 `w-[260px]`，不强制 formula / related）。
+- 🚫 不允许把整段文字都包成 `<TermPopover>`——只圈术语本身。
+
+#### 场景外 · 一律不挂角标的位置
+
+| 位置 | 为什么不挂 |
+| --- | --- |
+| 列表 / 表格行的数据值 | 行级噪音爆炸；列名挂一次足够 |
+| 同一术语第二次起出现 | 首次原则，避免冗余 |
+| 输入框 placeholder | placeholder 不能容纳交互元素；规则术语放 `<FormHint>` 灰字 |
+| 按钮文字内 | 按钮是动作不是阅读；如需解释把按钮配旁注 `<FormHint>` 灰字 |
+| Toast / 通知 | 浮层套浮层，焦点冲突 |
+| Dialog Title | Dialog Body 第一段叙述里首次出现处再挂 |
+| `<Tooltip>` 内 | 浮层套浮层，焦点冲突 |
+
+#### 关键 Token / 字号 / 间距速记（详见 [`components.md`](./components.md) §2 E.14.3）
+
+| 元素 | 值 |
+| --- | --- |
+| 触发器 | Radix Tooltip（hover / focus 自动展开 150ms 延迟），**非** Popover |
+| 角标图标 | lucide `<Info>`（不是 Unicode `ⓘ`） |
+| 角标尺寸 | `size-3` (12×12px) + `opacity-70`，比 14px 文字小一档，形成层级 |
+| 角标与术语文字间距 | `gap-1` (4px) |
+| 卡片宽度 | `w-[260px]` 固定，按内容自然撑高 |
+| 卡片圆角 | `rounded-md` (8px / `--radius-md`) |
+| 卡片阴影 | `shadow-sm`（**不**自定义双层阴影） |
+| 卡片与触发器距离 | `sideOffset={6}` (6px) |
+| 卡片内 padding | `p-4` (16px 各边) |
+| Type Tag 字号 | `text-[10px]` |
+| Term（术语本身）字号 | `text-sm font-medium` |
+| Body（解释）字号 | `text-xs leading-[18px]` |
+| Formula content 字号 | `font-mono text-[11px] tabular-nums` |
+| Related link 字号 | `text-[11px] text-primary` |
+
+颜色：所有元素必须走 Token —— 背景 `--card-bg`、边框 `--border`、文字 `--foreground` / `--foreground-secondary` / `--foreground-muted`、Type Tag 6 种配色见 [`components.md`](./components.md) §2 E.14.4。**禁止**任何 `#xxxxxx` / `bg-[#xxx]` / `text-gray-500` —— 这是把 HTML v2 高保真规范化为本项目设计系统的核心改动。
+
 ---
 
 ---
@@ -830,8 +929,10 @@ TabContent: 主体
 
 ### D.5 字段说明
 
-- 字段右上角小 `?` 图标 + Tooltip 解释术语（Skill / Agent / Trace 这类业务术语）。
-- 例子放在 `placeholder`，单位 / 边界放在 `<FormHint>` 灰色字。
+- 业务术语（Skill / Agent / Trace / P95 / CHAIN_ERROR…）一律走 `<Term id>` / `<TermPopover>`（详见 [`components.md`](./components.md) §2 E.14），**不再**用 `?` 图标 + 自管 `<Tooltip>` 拼。
+  - 触发器是术语文字旁的 lucide `<Info>` 图标（`size-3` / 12px / `opacity-70`）；hover / focus / tap 三端可达。
+  - 卡片内可放公式块（如 P95 阈值参考）与关联术语跳转链接 —— TermPopover 已经基于 Radix Tooltip 封装好，related links 仍可正常点击（Tooltip 默认 hoverable content）。
+- 字段示例放在 `placeholder`；单位 / 取值边界 / 格式约束放在 `<FormHint>` 灰色辅助字（不是术语解释，不挂角标）。
 
 ### D.6 上传文件
 
@@ -1271,6 +1372,7 @@ TabContent: 主体
 - [ ] URL 上能恢复 Tab / 筛选 / 分页。
 - [ ] 状态用 `<StatusBadge>` 三重编码（色 + 图标 + 文案）。
 - [ ] 长文本截断 + 完整态入口（Tooltip / Dialog / Copy 至少一种）。
+- [ ] 业务术语走 `<Term id>` / `<TermPopover>`（不是 `<Tooltip>`），且只在挂载场景 4 类（KPI 指标名 / 表头列名 / 卡片标题术语 / 长文叙述首次出现）内挂角标，行数据/重复出现处不挂。
 - [ ] Markdown / JSON / 错误堆栈走 `<Prose>` / `<JsonViewer>` / `<ErrorDetail>`，不裸渲染。
 - [ ] 空值显示 `—`，不显示 `null` / `undefined` / `N/A`。
 - [ ] 切到 dark mode 看一眼无明显违和。

@@ -18,6 +18,7 @@ import {
     Trash2
 } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { Term } from '@/components/text/Term';
 
 type AgentOwnership = 'system' | 'user' | 'unregistered';
 type AgentLayer = 'main' | 'subagent';
@@ -976,13 +977,15 @@ function AgentsPageInner() {
                     <div style={{ minWidth: 280, flex: 1 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
                             <span className="ai-badge ai-badge-b">Agents</span>
-                            <span style={{ color: 'var(--foreground-muted)', fontSize: 11 }}>管理已接入Agent</span>
+                            <span style={{ color: 'var(--foreground-muted)', fontSize: 11 }}>
+                                管理<Term id="connected-agent" label="已接入 Agent" />
+                            </span>
                         </div>
                         <h1 style={{ margin: 0, fontSize: 22, lineHeight: 1.2, fontWeight: 600, color: 'var(--foreground)' }}>
                             Agent管理
                         </h1>
                         <p style={{ margin: '6px 0 0', color: 'var(--foreground-secondary)', fontSize: 12.5, maxWidth: 760 }}>
-                            Agent 管理模块汇聚了当前环境中运行的所有已接入 Agent 实例。您可以查看其运行状态、成功率指标，并进行全链路分析与故障分析。
+                            Agent 管理模块汇聚了当前环境中运行的所有<Term id="connected-agent" label="已接入 Agent" /> 实例。您可以查看其运行状态、成功率指标，并进行全链路分析与故障分析。
                         </p>
                     </div>
                     <div style={{ display: 'flex', gap: 8 }}>
