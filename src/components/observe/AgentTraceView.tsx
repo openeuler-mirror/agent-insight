@@ -108,6 +108,48 @@ interface TraceSkillUsage {
 const agentKey = (id: string) => `a:${id}`;
 const eventKey = (nodeId: string, idx: number) => `e:${nodeId}:${idx}`;
 
+/**
+ * 复制文本到剪贴板,带 fallback。
+ *
+ * navigator.clipboard.writeText 会在以下场景 throw:
+ *   - document 没 focus (用户 focus 在 DevTools / 别的窗口) → NotAllowedError
+ *   - 非 secure context (HTTP, 非 localhost) → 接口 undefined
+ *   - 某些 iframe 嵌套场景
+ *
+ * fallback: 隐藏 textarea + document.execCommand('copy') —— deprecated 但
+ * 兼容性极好 (所有浏览器都支持,不依赖 secure context / focus 状态)。
+ */
+async function copyText(text: string): Promise<void> {
+  // 先试 modern clipboard API
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch (e) {
+      // 常见 root cause: 'Document is not focused' (DevTools 抢焦点 / 弹窗丢焦点 等)
+      console.warn('[copyText] clipboard.writeText failed, fallback to execCommand:',
+        (e as Error)?.message || e);
+    }
+  }
+  // Fallback: 隐藏 textarea + execCommand
+  if (typeof document === 'undefined') throw new Error('no document available');
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.top = '0';
+  ta.style.left = '0';
+  ta.style.opacity = '0';
+  ta.setAttribute('readonly', '');
+  document.body.appendChild(ta);
+  ta.select();
+  try {
+    const ok = document.execCommand('copy');
+    if (!ok) throw new Error('execCommand("copy") returned false');
+  } finally {
+    document.body.removeChild(ta);
+  }
+}
+
 // Build nodeId → AgentNode map for the whole tree
 function buildNodeMap(root: AgentNode): Map<string, AgentNode> {
     const map = new Map<string, AgentNode>();
@@ -1277,12 +1319,14 @@ function ContentModal({ title, raw, onClose }: { title: string; raw: string; onC
     const [copied, setCopied] = useState(false);
     const copy = async () => {
         try {
-            await navigator.clipboard.writeText(raw);
+            await copyText(raw);
             setCopied(true);
             toast.success('Copied');
             setTimeout(() => setCopied(false), 1400);
-        } catch {
-            toast.error('Copy failed');
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            console.error('[copy] all methods failed:', msg);
+            toast.error(`Copy failed: ${msg.slice(0, 60)}`);
         }
     };
     return (
@@ -1679,12 +1723,14 @@ function ToolCallContentModal({ name, args, onClose }: { name: string; args: str
     const [copied, setCopied] = useState(false);
     const copy = async () => {
         try {
-            await navigator.clipboard.writeText(args);
+            await copyText(args);
             setCopied(true);
             toast.success('Copied');
             setTimeout(() => setCopied(false), 1400);
-        } catch {
-            toast.error('Copy failed');
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            console.error('[copy] all methods failed:', msg);
+            toast.error(`Copy failed: ${msg.slice(0, 60)}`);
         }
     };
 
@@ -1768,12 +1814,14 @@ function MessageContentModal({ role, content, onClose }: { role: string; content
     const [copied, setCopied] = useState(false);
     const copy = async () => {
         try {
-            await navigator.clipboard.writeText(content);
+            await copyText(content);
             setCopied(true);
             toast.success('Copied');
             setTimeout(() => setCopied(false), 1400);
-        } catch {
-            toast.error('Copy failed');
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            console.error('[copy] all methods failed:', msg);
+            toast.error(`Copy failed: ${msg.slice(0, 60)}`);
         }
     };
     const displayRole = role === 'opencode' ? 'user' : role === 'subagent' ? 'assistant' : role;
@@ -2493,12 +2541,14 @@ function SystemPromptModal({ prompt, index, total, onClose }: { prompt: NonNulla
     const [copied, setCopied] = useState(false);
     const copy = async () => {
         try {
-            await navigator.clipboard.writeText(prompt.text);
+            await copyText(prompt.text);
             setCopied(true);
             toast.success('Copied');
             setTimeout(() => setCopied(false), 1400);
-        } catch {
-            toast.error('Copy failed');
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            console.error('[copy] all methods failed:', msg);
+            toast.error(`Copy failed: ${msg.slice(0, 60)}`);
         }
     };
     const chars = prompt.length ?? prompt.text.length;
