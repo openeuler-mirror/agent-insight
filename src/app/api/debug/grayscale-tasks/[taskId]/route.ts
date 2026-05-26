@@ -732,24 +732,27 @@ async function reconcileFinishedEvaluations(user: string, config: GrayscaleConfi
     });
     if (rows.length === 0) return false;
 
-    const staleRows = rows.filter(row => {
-        if (row.status !== 'pending' && row.status !== 'running') return false;
+    const staleRows: Array<{ row: typeof rows[number]; reason: string }> = [];
+    for (const row of rows) {
+        if (row.status !== 'pending' && row.status !== 'running') continue;
         const updatedAt = row.updatedAt instanceof Date ? row.updatedAt.getTime() : 0;
-        if (updatedAt <= 0) return false;
-        // 1) 15 min 无更新 → 经典 stale 判定 (对真在跑但卡死的 eval 兜底)
-        if (Date.now() - updatedAt > STALE_EVALUATION_MS) return true;
-        // 2) updatedAt 早于本次 server 启动 → 上次进程的孤儿, 立刻标 stale
-        //    (server 重启后 eval 进程肯定不在了, 没必要等满 15 min)
-        if (updatedAt < SERVER_START_TIME) return true;
-        return false;
-    });
+        if (updatedAt <= 0) continue;
+        // 区分两种 stale 原因, 让 errorMessage 更易读 (用户看 modal hover 气泡就懂):
+        //   - 15min 无更新 → 真卡死, 评估器进程还在但 hang 住
+        //   - 早于 SERVER_START_TIME → server 重启遗弃, 评估器进程已经没了
+        if (Date.now() - updatedAt > STALE_EVALUATION_MS) {
+            staleRows.push({ row, reason: `评测超时(>${Math.round(STALE_EVALUATION_MS / 60000)}min 无进展)` });
+        } else if (updatedAt < SERVER_START_TIME) {
+            staleRows.push({ row, reason: '服务重启中断, 请重新评测' });
+        }
+    }
     if (staleRows.length > 0) {
-        for (const row of staleRows) {
+        for (const { row, reason } of staleRows) {
             if (row.evaluatorRunId) {
-                await markEvaluatorRunFailed(user, row.evaluatorRunId, 'evaluation stale timeout').catch(() => {});
+                await markEvaluatorRunFailed(user, row.evaluatorRunId, reason).catch(() => {});
             }
             row.status = 'failed';
-            row.errorMessage = row.errorMessage || 'evaluation stale timeout';
+            row.errorMessage = row.errorMessage || reason;
         }
     }
 
