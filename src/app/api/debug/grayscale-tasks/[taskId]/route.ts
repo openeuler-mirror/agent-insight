@@ -77,6 +77,12 @@ interface ActiveGrayscaleRun {
     runId: string;
     status: 'running' | 'evaluating';
     startedAt: number;
+    /**
+     * 任务级 AbortController, 用户点「终止」按钮时调用 .abort() 让所有 in-flight
+     * 子任务尽快收尾。signal 会传给 runGeneralAgent.chatOptions.signal, opencode
+     * 检测到 abort 立即返回; runWithConcurrency 的 worker 循环也会检查并 bail。
+     */
+    abortController?: AbortController;
 }
 
 interface GrayscaleTaskRow {
@@ -793,10 +799,13 @@ async function reconcileFinishedEvaluations(user: string, config: GrayscaleConfi
     return changed;
 }
 
-async function runWithConcurrency<T>(items: T[], concurrency: number, worker: (item: T) => Promise<void>) {
+async function runWithConcurrency<T>(items: T[], concurrency: number, worker: (item: T) => Promise<void>, signal?: AbortSignal) {
     const queue = [...items];
     const workers = Array.from({ length: Math.max(1, Math.min(concurrency, items.length || 1)) }, async () => {
         while (queue.length > 0) {
+            // signal 是任务级 abortController.signal, 用户点「终止」时 fires。
+            // 这里早退一次 → 不再 dispatch 新 work, 已 in-flight 的等其自己结束。
+            if (signal?.aborted) return;
             const item = queue.shift();
             if (!item) return;
             await worker(item);
@@ -818,6 +827,8 @@ async function executeSingleAgentRun(args: {
     totalRunsPerSide: number;
     version: ResolvedVersion;
     target: ExecutionTarget;
+    /** 任务级 abort 信号: 用户点终止时, 这里桥接到本次 chat 的 abortController, 让 opencode chat 提前返回。 */
+    parentSignal?: AbortSignal;
 }) {
     const { target } = args;
     const state = args.states[target.caseId];
@@ -846,6 +857,15 @@ async function executeSingleAgentRun(args: {
     const toolCalls: string[] = [];
     let lastToolSummary = '';
     const abortController = new AbortController();
+    // 监听任务级终止信号——用户在 UI 点「终止」按钮触发的 abort 通过这里传到本次 chat
+    if (args.parentSignal) {
+        if (args.parentSignal.aborted) {
+            abortController.abort();
+        } else {
+            const onParentAbort = () => abortController.abort();
+            args.parentSignal.addEventListener('abort', onParentAbort, { once: true });
+        }
+    }
     let didTimeout = false;
     let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
     try {
@@ -1214,8 +1234,21 @@ async function runGrayscaleTask(args: {
     // 内层每个 work item 进 withBackgroundOpencodeSlot 排队,跟全局 5 个 opencode 后台任务
     // 上限对齐——A/B 一把 200 个 work 也只会有 5 个真在跑 opencode,其余在信号量队列等。
     // 这样不管 user 把 agentMaxConcurrency / repeatRounds 调多大,内存也不会失控。
+    // 任务级 AbortSignal——activeRuns().get(storeKey)?.abortController 在 POST start
+    // 时创建, action='abort' 时 fire。下面 runWithConcurrency / executeSingleAgentRun
+    // 都监听它, 用户点终止后所有 in-flight 都尽快退出。
+    const taskSignal = activeRuns().get(storeKey)?.abortController?.signal;
     const runExecutionBatch = async (batch: ExecutionTarget[]) => {
         await runWithConcurrency(batch, concurrency, async item => {
+            if (taskSignal?.aborted) {
+                item.run.status = 'fail';
+                item.run.failureType = 'agent_error';
+                item.run.failureDetail = '用户终止';
+                item.run.output = item.run.output || '用户终止';
+                markRunCompleted(item.run);
+                states[item.caseId][item.side] = rebuildSideAggregate(states[item.caseId][item.side], totalRunsPerSide);
+                return;
+            }
             const version = item.side === 'a' ? versionA : versionB;
             await withBackgroundOpencodeSlot(
                 () => executeSingleAgentRun({
@@ -1227,6 +1260,7 @@ async function runGrayscaleTask(args: {
                     totalRunsPerSide,
                     version,
                     target: item,
+                    parentSignal: taskSignal,
                 }),
                 {
                     taskType: 'grayscale-ab',
@@ -1236,18 +1270,25 @@ async function runGrayscaleTask(args: {
                     skillVersion: version?.version ?? null,
                 },
             );
-        });
+        }, taskSignal);
     };
 
     await runExecutionBatch(work);
     for (let retry = 1; retry <= MAX_EXECUTION_RETRIES; retry++) {
+        if (taskSignal?.aborted) break;
         const failedWork = work.filter(item => item.run.status === 'fail');
         if (failedWork.length === 0) break;
         await runExecutionBatch(failedWork);
     }
 
-    if (config.autoEval !== false) {
-        activeRuns().set(storeKey, { taskId, runId: activeRuns().get(storeKey)?.runId || '', status: 'evaluating', startedAt: Date.now() });
+    if (config.autoEval !== false && !taskSignal?.aborted) {
+        activeRuns().set(storeKey, {
+            taskId,
+            runId: activeRuns().get(storeKey)?.runId || '',
+            status: 'evaluating',
+            startedAt: Date.now(),
+            abortController: activeRuns().get(storeKey)?.abortController,
+        });
         await evaluateRunsWithConcurrency({ taskId, user, origin, config, states, caseIds, evaluatorId });
     }
 }
@@ -1350,6 +1391,50 @@ export async function POST(
             return NextResponse.json({ error: 'caseIds are required' }, { status: 400 });
         }
         const storeKey = `${user}:${taskId}`;
+        // === action: abort —— 用户点「终止」按钮 ===
+        if (action === 'abort') {
+            const active = activeRuns().get(storeKey);
+            if (!active) {
+                return NextResponse.json({ error: 'no active run' }, { status: 404 });
+            }
+            // 1) 触发 AbortSignal: in-flight opencode chat 会感知到, 尽快返回
+            try { active.abortController?.abort(); } catch { /* already aborted */ }
+            // 2) 把 caseStatesJson 里所有 running/evaluating 状态推到 fail, 让 UI 立刻
+            //    脱离"执行中"。如果还有真在跑的 opencode session, 它的 .catch() 也会
+            //    更新对应 run, 但本次 patch 已经把 user-visible 状态变 fail, 用户不再
+            //    被锁在 busy 按钮上。
+            try {
+                const taskRow = await loadTask(taskId, user);
+                if (taskRow) {
+                    const states = taskRow.caseStatesJson || {};
+                    for (const cid of Object.keys(states)) {
+                        for (const side of ['a', 'b'] as Side[]) {
+                            const sideState = states[cid][side];
+                            if (!sideState) continue;
+                            if (sideState.status === 'running' || sideState.status === 'evaluating') {
+                                sideState.status = 'fail';
+                                sideState.output = sideState.output || '用户终止';
+                            }
+                            for (const run of sideState.runs || []) {
+                                if (run.status === 'running' || run.status === 'evaluating') {
+                                    run.status = 'fail';
+                                    run.failureType = 'agent_error';
+                                    run.failureDetail = '用户终止';
+                                    run.output = run.output || '用户终止';
+                                }
+                            }
+                        }
+                    }
+                    await persistTaskState(taskId, user, taskRow.configJson, states);
+                }
+            } catch (e) {
+                console.warn('[GRAYSCALE_TASKS_ABORT] persist fail patch failed:', e);
+            }
+            // 3) 从 activeRuns 删除—— polling 下一 tick 看到 activeRun=null, 真正停下
+            activeRuns().delete(storeKey);
+            return NextResponse.json({ ok: true, aborted: true });
+        }
+
         if (activeRuns().has(storeKey)) {
             return NextResponse.json({ error: 'task is already running' }, { status: 409 });
         }
@@ -1362,7 +1447,14 @@ export async function POST(
         }
         const origin = req.nextUrl.origin;
         const runId = `gray_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-        activeRuns().set(storeKey, { taskId, runId, status: action === 'evaluate' ? 'evaluating' : 'running', startedAt: Date.now() });
+        const abortController = new AbortController();
+        activeRuns().set(storeKey, {
+            taskId,
+            runId,
+            status: action === 'evaluate' ? 'evaluating' : 'running',
+            startedAt: Date.now(),
+            abortController,
+        });
 
         const job = action === 'evaluate'
             ? evaluateExistingTask({ taskId, user, origin, caseIds, evaluatorId })

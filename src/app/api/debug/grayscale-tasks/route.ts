@@ -6,6 +6,8 @@ interface ActiveGrayscaleRun {
     runId: string;
     status: 'running' | 'evaluating';
     startedAt: number;
+    /** Sibling /[taskId]/route.ts 用它做任务终止信号; 这里类型对齐避免 globalThis 重声明冲突。 */
+    abortController?: AbortController;
 }
 
 type JsonRecord = Record<string, unknown>;
