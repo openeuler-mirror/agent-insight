@@ -207,6 +207,88 @@ const BADGE_TONE: Record<BadgeTone, { bg: string; fg: string; pulse?: boolean; i
     fail:    { bg: 'rgba(220,38,38,.10)',   fg: '#B91C1C', icon: '⚠' },
 };
 
+// 带 1s 延迟关闭的 hover tooltip——鼠标移开 trigger 后还有 1s 时间能移进 tooltip
+// 里复制错误信息。tooltip 内部 user-select:text + cursor:text。
+function HoverTooltip({ trigger, content }: { trigger: React.ReactNode; content: string | React.ReactNode }) {
+    const [open, setOpen] = useState(false);
+    const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const cancelClose = () => {
+        if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
+    };
+    const scheduleClose = () => {
+        cancelClose();
+        timerRef.current = setTimeout(() => setOpen(false), 1000);
+    };
+    useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current); }, []);
+    return (
+        <span
+            style={{ position: 'relative', display: 'inline-block' }}
+            onMouseEnter={() => { cancelClose(); setOpen(true); }}
+            onMouseLeave={scheduleClose}
+        >
+            {trigger}
+            {open && (
+                <div
+                    onMouseEnter={cancelClose}
+                    onMouseLeave={scheduleClose}
+                    style={{
+                        position: 'absolute',
+                        top: '100%',
+                        left: 0,
+                        marginTop: 6,
+                        zIndex: 50,
+                        background: '#1F2937',
+                        color: '#F9FAFB',
+                        padding: '10px 12px',
+                        borderRadius: 6,
+                        fontSize: 11,
+                        lineHeight: 1.5,
+                        maxWidth: 480,
+                        minWidth: 240,
+                        whiteSpace: 'pre-wrap',
+                        wordBreak: 'break-word',
+                        userSelect: 'text',
+                        cursor: 'text',
+                        boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
+                    }}
+                >
+                    {content}
+                </div>
+            )}
+        </span>
+    );
+}
+
+// inline 文字状态: 给 session id 列在"还没拿到 id 时"占位用。
+// pending/running 时 prefix 加个圆点 + 动效, 跟 trace 卡 pending 徽章观感一致。
+function StatusText({ label, tone }: { label: string; tone: BadgeTone }) {
+    const cfg = BADGE_TONE[tone];
+    return (
+        <span style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            fontSize: 12,
+            fontWeight: 600,
+            color: cfg.fg,
+            whiteSpace: 'nowrap',
+        }}>
+            {cfg.pulse && (
+                <span style={{
+                    display: 'inline-block',
+                    width: 6,
+                    height: 6,
+                    borderRadius: '50%',
+                    background: 'currentColor',
+                    animation: 'pulse 1.5s ease-in-out infinite',
+                }} />
+            )}
+            {cfg.icon && <span>{cfg.icon}</span>}
+            {label}
+        </span>
+    );
+}
+
 function ToneBadge({ label, tone, prefix, title }: { label: string; tone: BadgeTone; prefix?: string; title?: string }) {
     const cfg = BADGE_TONE[tone];
     return (
@@ -1935,22 +2017,32 @@ export function GrayscaleEvaluation({
                         {records.map((record, idx) => {
                             const hasExecFailure = !!record.failureType;
                             const { exec, evaluation } = deriveExecAndEval(record.status, hasExecFailure);
-                            // 错误原因: 执行失败 → failureDetail (失败类型 + 详情);
-                            //          评测失败 → output 字段在 evaluator 失败路径里被覆盖成 errorMessage
-                            const errorMsg = hasExecFailure
-                                ? (record.failureDetail || record.output || '执行失败')
-                                : (exec.tone !== 'fail' && evaluation?.tone === 'fail' ? (record.output || '评测失败') : null);
+                            const execErrMsg = hasExecFailure
+                                ? `[${record.failureType}] ${record.failureDetail || record.output || '执行失败'}`
+                                : '';
+                            const evalErrMsg = (!hasExecFailure && record.status === 'fail')
+                                ? (record.output || '评测失败')
+                                : '';
                             return (
                             <div
                                 key={`${side}-${record.caseId}-${record.roundIndex}-${idx}`}
-                                style={{ display: 'grid', gridTemplateColumns: '86px 1fr 1fr 140px', gap: 10, alignItems: 'flex-start', padding: '10px 12px', borderTop: idx === 0 ? 'none' : '1px solid #F1EFE8', fontSize: 12 }}
+                                style={{ display: 'grid', gridTemplateColumns: '86px 1fr 1fr 60px', gap: 10, alignItems: 'flex-start', padding: '10px 12px', borderTop: idx === 0 ? 'none' : '1px solid #F1EFE8', fontSize: 12 }}
                             >
-                                <div style={{ color: '#5F5E5A', fontWeight: 600 }}>
+                                <div style={{ color: '#5F5E5A', fontWeight: 600, paddingTop: 2 }}>
                                     R{record.roundIndex || '-'} · {record.caseId}
                                 </div>
+
+                                {/* 执行 session id 列：根据状态显示 id button / 状态文字 / 失败 hover */}
                                 <div style={{ minWidth: 0 }}>
                                     <div style={{ color: '#888780', marginBottom: 2 }}>{locale === 'zh' ? '执行 session id' : 'Execution session id'}</div>
-                                    {record.executionTraceId ? (
+                                    {exec.tone === 'fail' ? (
+                                        <HoverTooltip
+                                            trigger={<StatusText label={exec.label} tone="fail" />}
+                                            content={execErrMsg}
+                                        />
+                                    ) : exec.tone === 'pending' || exec.tone === 'running' ? (
+                                        <StatusText label={exec.label} tone={exec.tone} />
+                                    ) : record.executionTraceId ? (
                                         <button
                                             className="v2-action-btn"
                                             style={{ maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'ui-monospace, monospace' }}
@@ -1959,14 +2051,24 @@ export function GrayscaleEvaluation({
                                             {record.executionTraceId}
                                         </button>
                                     ) : (
-                                        <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'ui-monospace, monospace', color: record.evaluatorRunId ? '#888780' : '#B8B6AE' }}>
-                                            {record.evaluatorRunId || '—'}
-                                        </span>
+                                        <span style={{ color: '#B8B6AE' }}>—</span>
                                     )}
                                 </div>
+
+                                {/* 评估 session id 列：同样的逻辑——状态决定显文字还是 id */}
                                 <div style={{ minWidth: 0 }}>
                                     <div style={{ color: '#888780', marginBottom: 2 }}>{locale === 'zh' ? '评估 session id' : 'Evaluation session id'}</div>
-                                    {record.evaluationTraceId ? (
+                                    {!evaluation ? (
+                                        // 执行还没完成 / 执行失败时, 评测阶段还没开始
+                                        <span style={{ color: '#B8B6AE' }}>—</span>
+                                    ) : evaluation.tone === 'fail' ? (
+                                        <HoverTooltip
+                                            trigger={<StatusText label={evaluation.label} tone="fail" />}
+                                            content={evalErrMsg}
+                                        />
+                                    ) : evaluation.tone === 'pending' || evaluation.tone === 'running' ? (
+                                        <StatusText label={evaluation.label} tone={evaluation.tone} />
+                                    ) : record.evaluationTraceId ? (
                                         <button
                                             className="v2-action-btn"
                                             style={{ maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'ui-monospace, monospace' }}
@@ -1976,41 +2078,19 @@ export function GrayscaleEvaluation({
                                             {record.evaluationTraceId}
                                         </button>
                                     ) : (
-                                        <span style={{ color: '#B8B6AE' }}>—</span>
+                                        // pass 但没拿到 evaluationTraceId, fallback 到 evaluatorRunId
+                                        <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'ui-monospace, monospace', color: '#888780' }}>
+                                            {record.evaluatorRunId || '—'}
+                                        </span>
                                     )}
                                 </div>
-                                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, minWidth: 0 }}>
-                                    <ToneBadge label={exec.label} tone={exec.tone} prefix="执行:" title={hasExecFailure ? (record.failureType ? `失败类型: ${record.failureType}` : undefined) : undefined} />
-                                    {evaluation && (
-                                        <ToneBadge label={evaluation.label} tone={evaluation.tone} prefix="评测:" title={evaluation.tone === 'fail' ? (record.output || '评测失败') : undefined} />
-                                    )}
-                                    <div style={{ color: accent, fontWeight: 700, fontSize: 13 }}>{typeof record.score === 'number' ? record.score : '—'}</div>
+
+                                <div style={{ textAlign: 'right', color: accent, fontWeight: 700, fontSize: 14, paddingTop: 2 }}>
+                                    {typeof record.score === 'number' ? record.score : '—'}
                                 </div>
                             </div>
                             );
                         })}
-                        {records.some(r => r.failureType || (r.status === 'fail' && !r.failureType)) && (
-                            <div style={{ padding: '8px 12px', borderTop: '1px solid #F1EFE8', background: '#FEF7F7' }}>
-                                <div style={{ fontSize: 11, fontWeight: 700, color: '#B91C1C', marginBottom: 4 }}>失败详情</div>
-                                {records.map((record, idx) => {
-                                    const hasExecFail = !!record.failureType;
-                                    const isEvalFail = !hasExecFail && record.status === 'fail';
-                                    if (!hasExecFail && !isEvalFail) return null;
-                                    const msg = hasExecFail
-                                        ? `[${record.failureType}] ${record.failureDetail || record.output || ''}`
-                                        : (record.output || '评测失败');
-                                    return (
-                                        <div key={`err-${side}-${record.caseId}-${record.roundIndex}-${idx}`} style={{ fontSize: 11, color: '#7F1D1D', marginBottom: 4, lineHeight: 1.4 }}>
-                                            <b>R{record.roundIndex || '-'} · {record.caseId}</b>
-                                            {' '}<span style={{ opacity: 0.7 }}>({hasExecFail ? '执行' : '评测'}阶段)</span>
-                                            <div style={{ marginTop: 2, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                                                {msg.length > 600 ? msg.slice(0, 600) + '…' : msg}
-                                            </div>
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        )}
                     </div>
                 )}
             </div>
