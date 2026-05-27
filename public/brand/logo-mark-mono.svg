@@ -1,8 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Agent Insight">
-  <title>Agent Insight</title>
-  <rect width="32" height="32" rx="7" fill="currentColor"/>
-  <g fill="#FFFFFF" font-family="Inter, -apple-system, 'Segoe UI', sans-serif" font-weight="700" font-size="15" letter-spacing="-0.04em" text-anchor="middle">
-    <text x="16" y="21">Ai</text>
-  </g>
-</svg>

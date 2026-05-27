@@ -26,27 +26,27 @@
 
 文件位于 [`public/brand/`](../../public/brand/)：
 
-| 文件 | viewBox | 用途 |
-| --- | --- | --- |
-| `logo-mark.svg` | 32×32 | **主 Logo 标记**。带 135° 渐变的圆角方块 + 白色 `Ai` 字母。 |
-| `logo-mark-mono.svg` | 32×32 | **单色版**。`fill="currentColor"`，由调用方决定颜色——用于深色按钮内、报表单色场景。 |
-| `logo-wordmark.svg` | 200×32 | **横版 Logo + Wordmark**。给 Login 页、Marketing、Footer、PDF 报表头。 |
-| `favicon.svg` | 32×32 | **小尺寸优化版**。字母略大、圆角略大，为 16/24/32px favicon 而设计。 |
+| 文件 | 用途 |
+| --- | --- |
+| `favicon.svg` | 浏览器标签页、16/32/48px — 极简变体 |
+| `mark-only.svg` | **主 Logo 标记**。独立符号、社交头像、不需要文字的场景。 |
+| `logo-horizontal-light.svg` | 网站页眉、浅色背景、邮件、文档。 |
+| `logo-horizontal-dark.svg` | 暗黑模式站点、深色主题材料。 |
+| `app-icon.svg` | iOS/macOS/PWA 应用图标，256×256 带圆角容器。 |
 
 ### 1.2 颜色定义（与 foundations.md 对齐）
 
-主 Logo 的渐变在 SVG 内部定义：
+主 Logo 的颜色定义：
 
-```
-#6366F1  →  #3730A3     /* Indigo-500  →  Indigo-800 · 135° */
-```
-
-设计决策：
-
-- **不直接用 `--primary` 渐变到 `--primary-hover`**——`#4F46E5 → #4338CA` 色差太小，渲染到 32px 内几乎看不出渐变。
-- **不抄参考原型里的 `#6c5ce7 → #4a3cb8`**——这是来源原型的随手值；统一在 Tailwind Indigo 色阶上（项目已用 Indigo），便于未来与 chart palette / `--primary` 协调。
-- **暗黑下不另做版本**：渐变 `#6366F1 → #3730A3` 在 light/dark 两套表面（`#FFFFFF` / `#18181B`）上对比度均 ≥ 7:1。
-- **`logo-mark-mono.svg` 用 `currentColor`**——遇到不能放渐变的位置（譬如全黑导出、印刷品），让调用方传 `color`。
+| Token | Hex | 用途 |
+|-------|-----|-----|
+| Primary teal | `#0F766E` | Logo 标记、主要品牌色、CTA 按钮（亮色模式） |
+| Teal · dark | `#5EEAD4` | 暗黑模式下的 Logo 标记、深色背景上的强调色 |
+| Accent amber | `#F59E0B` | 放大镜高亮、焦点 / 注意力状态 |
+| Amber · dark | `#FBBF24` | 同样的强调色，暗黑模式变体 |
+| Ink | `#1A1A1A` | 正文文字、浅色背景上的 "Insight" 字标 |
+| Canvas | `#FAFAF7` | 米白色背景，比纯白更温暖 |
+| Dark canvas | `#0F0F14` | 暗黑模式背景 |
 
 ### 1.3 尺寸 & 留白
 
@@ -71,14 +71,12 @@
 
 ### 1.5 关于现有 `AppSidebar` 的差异
 
-[`src/components/shell/AppSidebar.tsx:217-228`](../../src/components/shell/AppSidebar.tsx) 当前用的是 **26×26 纯 `--primary` 底色 + 4 笔白色 SVG 线条**（"星芒"形态），不是 Logo 资产里的 `Ai` 字母。
+[`src/components/shell/AppSidebar.tsx:217-228`](../../src/components/shell/AppSidebar.tsx) 已经从之前的占位图标替换为新的品牌资产：
 
-**保留还是替换？** 这是落地阶段的产品决策，本文不强行规定。两种走法都合规：
+1. **已替换为 `mark-only.svg`**：与 `public/brand/` 资产一致，作为品牌一致性的展示。
+2. **favicon 引用**：已在 `public/favicon.svg` 放置最新版本。
 
-1. **替换为 `logo-mark.svg`**：与 `public/brand/` 资产一致，渐变作为品牌一致性的小型投放。注意——`foundations.md` §0.2 把"渐变"列在 AI 卡片描边一处；Logo 是品牌识别，**不算违反**（品牌识别本身是允许的视觉个性来源）。
-2. **保留星芒线条**：把它从 inline SVG 重构为 `public/brand/logo-mark-line.svg`，与 `logo-mark.svg` 并列作为 "另一种"标识——但同一时间产品上**只能选一个**主标。
-
-推荐 1，理由：参考原型与设计共识一致都是 `Ai` 字母 + 渐变；现有星芒是开发期占位。
+推荐使用 `mark-only.svg` 作为 Sidebar 的主标，因为它在小尺寸下具有更好的可读性。
 
 ---
 
