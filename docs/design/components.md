@@ -27,7 +27,7 @@
 | 长 ID | `src/components/text/IdChip.tsx` | 所有 cuid / uuid / hash 字段 | 整 ID 直接渲染 |
 | 相对时间 | `src/components/text/RelativeTime.tsx` | 列表"更新时间" / Trace 时间戳 | `new Date().toLocaleString()` 字符串拼 |
 | AI 卡片 | `src/components/feedback/AiCard.tsx` | Skill 推理 / Trace 流式 / Eval 自动评分 | 自己用 `border-image` 模仿渐变 |
-| 页面头部 | `src/components/shell/PageHeader.tsx`（契约见 [`patterns.md`](./patterns.md) §1 PageHeader 小节） | 所有页面 | inline `<h1>` + 按钮；自管 breadcrumbs / KPI Strip / 实时刷新集群 |
+| 页面头部 | `src/components/shell/PageHeader.tsx`（契约见 [`patterns.md`](./patterns.md) §1 PageHeader 小节，含 4 个变体 `management` / `detail` / `live` / `detail-object`） | **所有页面**（v2.1 起作为页面顶部唯一 header，已废弃独立的 `AppTopBar.tsx`） | inline `<h1>` + 按钮；自管 breadcrumbs / KPI Strip / 实时刷新集群；自管 sidebar-toggle；🆕 **重新引入 `AppTopBar` / 任何"全局顶栏"行** |
 | 页面容器 | `src/components/shell/PageContainer.tsx` | 所有页面 | inline padding / max-width |
 | 筛选条 | `src/components/filter/FilterBar.tsx` | 所有列表 / Dashboard | 自管的 search input + chips |
 | 二次确认 | `src/components/feedback/ConfirmDialog.tsx` | 所有破坏性操作 | `window.confirm` / 自管 Dialog |
@@ -646,7 +646,7 @@
 
 - [ ] **① eyebrow** —— 至少传了 `breadcrumbs` 或 `moduleLabel` 之一（首页除外）；breadcrumb 至少 1 项
 - [ ] **② title-row 左** —— 传了 `title`（必填，不允许为空字符串）；标题文本不含主操作动词（"上传 Skill" 不是标题，是 action）
-- [ ] **② title-row 右** —— 三种变体（`management` / `detail` / `live`）**只选其一**；不存在"既传 action 又传 live" 的混乱状态
+- [ ] **② title-row 右** —— 四种变体（`management` / `detail` / `live` / `detail-object`）**只选其一**；不存在"既传 action 又传 live" / "既传 contextObject 又传 title" 的混乱状态
 - [ ] **③ description** —— 如传，长度 ≤ 2 行；超 2 行用 `<ExpandableText>` 包；不允许把 description 当成"行动提示"塞 CTA 文案
 - [ ] **④ hairline** —— 没有 `borderBottom={false}` / 自己叠 `border-b-0` 把底边隐藏（hairline 是结构性的）
 - [ ] **⑤ banner** —— 如传，只用 1 个 `<Alert>`；多条通知请改走页面级 NotificationCenter，不要在 banner 里堆叠
@@ -656,7 +656,8 @@
 
 - [ ] `variant="management"`（列表/表单/管理类）—— title-row 右是**唯一** `default` Button；按钮文案是动词（"注册 Agent" / "上传 Skill"），不是"+ 新建"等通用词
 - [ ] `variant="detail"`（详情类）—— title-row 右是 `default` Button + `ghost icon` `⋯` Overflow Menu；次要操作（Edit / Duplicate / Delete）进 Overflow，不直接铺在标题行
-- [ ] `variant="live"`（Dashboard/流式）—— title-row 右是实时集群（StatusBadge 呼吸 + 时间戳 + 刷新频率 + 暂停按钮）；**不**允许把这组元素塞进 AppTopBar 或散落在页面其他位置
+- [ ] `variant="live"`（Dashboard/流式）—— title-row 右是实时集群（StatusBadge 呼吸 + 时间戳 + 刷新频率 + 暂停按钮）；**不**允许把这组元素散落在页面其他位置（v2.1 起 AppTopBar 已废弃，不再是合法去处）
+- [ ] 🆕 `variant="detail-object"`（对象详情）—— 双行 header（h=36 crumbs + h=56 context）；row-2 含对象 icon（单字母 mono）+ title（mono）+ 版本下拉（Radix DropdownMenu + chev）+ 最多 1 个 secondary + 1 个 default action；**没有** ⋯ Overflow Menu
 
 **视觉签名 3 处（§A.5.1）**
 
@@ -682,7 +683,10 @@
 
 - [ ] 没有 `<h1 className="text-3xl">` 等自定义标题字号
 - [ ] 没有把"+ 上传"/"+ 新建" inline 写在标题文本旁
-- [ ] 没有把"实时刷新"/"暂停"按钮放在 AppTopBar 或独立条
+- [ ] 没有把"实时刷新"/"暂停"按钮放在 PageHeader 以外的任何位置（v2.1 起 AppTopBar 已废弃）
+- [ ] 🆕 没有重新引入 `AppTopBar` 或任何"全局顶栏"行（全局元素已迁入 Sidebar）
+- [ ] 🆕 `detail-object` 的对象 icon 是**单字母大写 + font-mono**，不是 emoji / lucide 图标 / 头像照片
+- [ ] 🆕 `detail-object` row-2 没有 ⋯ Overflow Menu（重操作进 Settings Tab）
 - [ ] 没有把通知 banner 写成 PageHeader 之外的独立卡片
 - [ ] 没有用 `/` `>` `→` 作为 breadcrumb 分隔符
 - [ ] 没有自己 grid 拼 KPI Strip（必须 `metaStrip.kind='kpi'`）
@@ -744,6 +748,9 @@
 | `<h1 className="text-3xl">Skill 管理 <Button>+ 上传</Button></h1>` 主操作 inline | `<PageHeader variant="management" title="Skill 管理" action={{ label: '上传 Skill', ... }} />` |
 | 自己写 breadcrumb：`Skills / 管理已接入 Agent` | `<PageHeader breadcrumbs={[{ label: 'Skills' }, { label: '管理已接入 Agent' }]} />`（分隔符 ` › ` 自动渲染） |
 | AppTopBar 里塞"实时刷新 / 3s / 暂停" | `<PageHeader variant="live" live={{ lastUpdate, refreshRate: '3s', paused, onTogglePause }} />` |
+| 🆕 `<AppTopBar title=... />` 整行（v1.x 遗留） | 删除整个 AppTopBar 节点 + 让页面直接挂 `<PageHeader>`；sidebar-toggle / breadcrumb / 主操作 / 实时集群全部进 PageHeader（v2.1 §A.1） |
+| 🆕 Skill / Trace / Agent 详情页自己用 `<h1>{objName} <ChevronDown/></h1>` + 双行布局 | `<PageHeader variant="detail-object" contextObject={{ iconChar, title, sub, versionMenu }} secondaryAction={...} action={...} />`（patterns.md §A.5.3 Case D） |
+| 🆕 Sidebar 自己渲染折叠按钮 / 页面里另写 ☰ 按钮 | 删除；sidebar-toggle 由 `<PageHeader>` 自动渲染在 row-1 最左侧（patterns.md §A.5.2 槽位 ⓪） |
 | 通知 banner 写成 PageHeader 之外的卡片 | `<PageHeader banner={{ variant: 'info', message: '...', action: {...} }} />` |
 | KPI 4 卡自己 grid `<div className="grid grid-cols-4">` | `<PageHeader metaStrip={{ kind: 'kpi', items: [...] }} />`，KPI 数值内走 `<MetricValue>` |
 | 列表页"筛选与排序"独立卡片 | `<PageHeader metaStrip={{ kind: 'filter', children: <FilterBar /> }} />` 或留在 PageToolbar，二选一 |
