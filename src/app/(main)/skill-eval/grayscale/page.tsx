@@ -120,6 +120,10 @@ interface RunResult {
     skillTriggered?: boolean;
     toolCallCount?: number;
     toolCalls?: string[];
+    // backend 写过来的失败元数据 (agent 执行失败时填); modal 用它跟 evaluator
+    // 失败区分, retry 时也要清掉防止下次显示残留错误
+    failureType?: string;
+    failureDetail?: string;
 }
 
 function scoreTierFromComposite(score: number): ScoreTier {
