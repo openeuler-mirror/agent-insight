@@ -2159,7 +2159,7 @@ export function GrayscaleEvaluation({
                             return (
                             <div
                                 key={`${side}-${record.caseId}-${record.roundIndex}-${idx}`}
-                                style={{ display: 'grid', gridTemplateColumns: '160px 1fr 1fr 60px', gap: 12, alignItems: 'center', padding: '10px 12px', borderTop: '1px solid #F1EFE8', fontSize: 12 }}
+                                style={{ display: 'grid', gridTemplateColumns: '160px 1fr 1fr 60px 70px', gap: 12, alignItems: 'center', padding: '10px 12px', borderTop: '1px solid #F1EFE8', fontSize: 12 }}
                             >
                                 {/* Case ID 列: 可点击, 跳到 dataset 详情对应 case */}
                                 <div
