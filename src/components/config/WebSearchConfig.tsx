@@ -17,6 +17,7 @@ import {
 import { apiFetch } from '@/lib/client/api';
 import { useAuth } from '@/lib/auth/auth-context';
 import { useLocale } from '@/lib/client/locale-context';
+import { Term } from '@/components/text/Term';
 
 /**
  * 联网搜索配置页(独立路由:/modelconfig/web-search)。
@@ -146,7 +147,7 @@ export function WebSearchConfig() {
                         <div style={sectionHeading}>
                             <Globe size={14} strokeWidth={2.2} style={{ color: 'var(--primary)' }} />
                             <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--foreground)' }}>
-                                {isZh ? '联网搜索' : 'Web Search'}
+                                <Term id="web-search" label={isZh ? '联网搜索' : 'Web Search'} />
                             </span>
                             <span style={configured ? badgeHealthy : badgeWarn}>
                                 {configured ? <Check size={11} strokeWidth={2.5} /> : null}

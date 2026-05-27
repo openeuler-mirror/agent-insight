@@ -15,6 +15,7 @@ import {
   type LlmEvaluatorConfig,
   type CodeEvaluatorConfig,
 } from '@/lib/evaluators/custom-evaluator-model';
+import { Term } from '@/components/text/Term';
 import styles from './code-evaluator-detail.module.css';
 
 const CodeMonacoEditor = dynamic(
@@ -166,7 +167,7 @@ export default function CustomEvaluatorDetailPage() {
   if (!user) {
     return (
       <>
-        <AppTopBar title={t('nav.evalMetrics')} />
+        <AppTopBar title={<Term id="evaluator" label={t('nav.evalMetrics')} />} />
         <div style={{ flex: 1, overflowY: 'auto', padding: 24 }} className="loading">
           请先登录
         </div>
@@ -177,7 +178,7 @@ export default function CustomEvaluatorDetailPage() {
   if (loading) {
     return (
       <>
-        <AppTopBar title={locale === 'zh' ? '评估器配置' : 'Evaluator'} />
+        <AppTopBar title={<Term id="evaluator" label={locale === 'zh' ? '评估器配置' : 'Evaluator'} />} />
         <div style={{ flex: 1, overflowY: 'auto', padding: 24 }} className="loading">
           加载中…
         </div>
@@ -188,7 +189,7 @@ export default function CustomEvaluatorDetailPage() {
   if (!card) {
     return (
       <>
-        <AppTopBar title={locale === 'zh' ? '评估器配置' : 'Evaluator'} />
+        <AppTopBar title={<Term id="evaluator" label={locale === 'zh' ? '评估器配置' : 'Evaluator'} />} />
         <div style={{ flex: 1, overflowY: 'auto', padding: 22 }}>
           <p style={{ color: 'var(--error)' }}>{error || '未找到该自建评估器'}</p>
           <Link href="/metrics" className="ai-btn-s" style={{ display: 'inline-block', marginTop: 12 }}>
@@ -201,7 +202,7 @@ export default function CustomEvaluatorDetailPage() {
 
   return (
     <>
-      <AppTopBar title={locale === 'zh' ? '配置评估器' : 'Configure evaluator'} />
+      <AppTopBar title={<Term id="evaluator" label={locale === 'zh' ? '配置评估器' : 'Configure evaluator'} />} />
       <div
         style={{
           flex: 1,

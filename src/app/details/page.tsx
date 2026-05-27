@@ -3,6 +3,7 @@
 import dynamic from 'next/dynamic';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useMemo, useState } from 'react';
+import { Info } from 'lucide-react';
 import ExecutionFlowComparison from '@/components/eval/ExecutionFlowComparison';
 import AgentTraceView from '@/components/observe/AgentTraceView';
 import { SkillLinks } from '@/components/skills/SkillLink';
@@ -159,11 +160,12 @@ const CustomTooltip = ({ content }: { content: string }) => {
     const [visible, setVisible] = useState(false);
     return (
         <span
-            style={{ position: 'relative', marginLeft: '4px', cursor: 'help', fontSize: '0.8rem', display: 'inline-block' }}
+            style={{ position: 'relative', marginLeft: '4px', cursor: 'help', display: 'inline-flex', alignItems: 'center', color: 'var(--foreground-muted)' }}
             onMouseEnter={() => setVisible(true)}
             onMouseLeave={() => setVisible(false)}
+            aria-label="字段说明"
         >
-            ⓘ
+            <Info style={{ width: 16, height: 16 }} aria-hidden />
             {visible && (
                 <div style={{
                     position: 'absolute',

@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { apiFetch } from '@/lib/client/api';
+import { Term } from '@/components/text/Term';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -125,7 +126,7 @@ function Sparkline({ data, color = 'var(--primary)' }: { data: number[]; color?:
 // ─── Filter Bar ───────────────────────────────────────────────────────────────
 
 function FilterSelect({ label, value, onChange, options }: {
-    label: string;
+    label: React.ReactNode;
     value: string;
     onChange: (v: string) => void;
     options: { value: string; label: string }[];
@@ -201,13 +202,13 @@ function FilterBar({
         }}>
             <span style={{ fontSize: 11, color: 'var(--foreground-muted)', opacity: 0.7 }}>筛选</span>
             <FilterSelect
-                label="平台"
+                label={<Term id="platform" label="平台" />}
                 value={filterPlatform}
                 onChange={setFilterPlatform}
                 options={platformOptions}
             />
             <FilterSelect
-                label="Agent 类型"
+                label={<Term id="agent-type" label="Agent 类型" />}
                 value={filterOwnership}
                 onChange={setFilterOwnership}
                 options={ownershipOptions}
@@ -217,7 +218,9 @@ function FilterBar({
 
             {/* Supported platforms notice */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ fontSize: 11, color: 'var(--foreground-muted)' }}>支持平台</span>
+                <span style={{ fontSize: 11, color: 'var(--foreground-muted)' }}>
+                    <Term id="platform" label="支持平台" />
+                </span>
                 <span style={{
                     fontSize: 11, padding: '2px 8px', borderRadius: 4,
                     background: 'var(--primary-subtle)',
@@ -238,7 +241,7 @@ function FilterBar({
 // ─── Block 1：系统健康快照 ────────────────────────────────────────────────────
 
 function HealthCard({ title, value, sub, spark, sparkColor, highlight }: {
-    title: string;
+    title: React.ReactNode;
     value: React.ReactNode;
     sub: React.ReactNode;
     spark?: number[];
@@ -307,7 +310,7 @@ function BlockHealth({ stats }: { stats: DashboardStats }) {
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
                 <HealthCard
                     highlight
-                    title="Agent 在线 / 总数"
+                    title={<Term id="agent" label="Agent 在线 / 总数" badgeTone="primary" />}
                     value={<>
                         {health.onlineAgents}
                         <span style={{ fontSize: 16, opacity: .6 }}> / {health.totalAgents}</span>
@@ -339,7 +342,7 @@ function BlockHealth({ stats }: { stats: DashboardStats }) {
                     sparkColor="var(--tag-green-fg)"
                 />
                 <HealthCard
-                    title="P95 时延 / 今日成本"
+                    title={<Term id="p95-latency" label="P95 时延 / 今日成本" />}
                     value={p95Str}
                     sub={`${avgStr} · 预估 ${costStr}`}
                 />
@@ -638,8 +641,17 @@ function BlockAgents({ agents, router }: { agents: AgentRow[]; router: ReturnTyp
                     padding: '8px 14px',
                     borderBottom: '1px solid var(--border)',
                 }}>
-                    {['Agent', '平台', '状态', '今日调用', '成功率', 'P95'].map(h => (
-                        <span key={h} style={{ fontSize: 11, color: 'var(--foreground-muted)', fontWeight: 500 }}>{h}</span>
+                    {([
+                        { id: 'agent', label: 'Agent' },
+                        { id: 'platform', label: '平台' },
+                        { id: 'agent-status', label: '状态' },
+                        { id: null, label: '今日调用' },
+                        { id: null, label: '成功率' },
+                        { id: 'p95-latency', label: 'P95', align: 'end' as const },
+                    ]).map((h, i) => (
+                        <span key={i} style={{ fontSize: 11, color: 'var(--foreground-muted)', fontWeight: 500 }}>
+                            {h.id ? <Term id={h.id} label={h.label} align={h.align} /> : h.label}
+                        </span>
                     ))}
                 </div>
 

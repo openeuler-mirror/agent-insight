@@ -1,5 +1,6 @@
 'use client';
 
+import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
@@ -204,34 +205,24 @@ export function AppSidebar() {
         >
             <div
                 style={{
-                    padding: '12px 14px 10px',
+                    padding: '16px 14px 14px',
                     borderBottom: '1px solid var(--sidebar-border)',
                     display: 'flex',
                     alignItems: 'center',
-                    gap: 9,
                     whiteSpace: 'nowrap',
                     opacity: isCollapsed ? 0 : 1,
                     transition: 'opacity 0.2s'
                 }}
             >
-                <div
-                    style={{
-                        width: 26, height: 26, borderRadius: 7,
-                        background: 'var(--primary)',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        flexShrink: 0,
-                    }}
-                >
-                    <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M2 7h10M7 2v10M4 4l6 6M10 4l-6 6" />
-                    </svg>
-                </div>
-                <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--foreground)' }}>Agent Insight</div>
-                    <div style={{ fontSize: 10, color: 'var(--foreground-muted)', marginTop: 1 }}>
-                        {t('app.poweredBy')}
-                    </div>
-                </div>
+                <Image
+                    src={isDark ? '/brand/logo-horizontal-dark.svg' : '/brand/logo-horizontal-light.svg'}
+                    alt="Agent Insight"
+                    width={180}
+                    height={45}
+                    priority
+                    unoptimized
+                    style={{ flexShrink: 0, display: 'block' }}
+                />
             </div>
 
             <div style={{ flex: 1, overflowY: 'auto', padding: '2px 0' }}>

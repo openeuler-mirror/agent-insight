@@ -31,6 +31,8 @@ import {
     type FindingGroup,
 } from '@/components/evaluation';
 import { toast } from 'sonner';
+import { Info } from 'lucide-react';
+import { Term } from '@/components/text/Term';
 import './debug.css';
 import './skill-analysis.css';
 import '@/components/evaluation/evaluation-content.css';
@@ -2294,7 +2296,7 @@ function AnalysisOverview({
                 <div className={`sa-hero-score ${scoreTier}`}>
                     <div className="sa-hero-score-eyebrow">
                         <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M7 1L13 12H1z"/><path d="M7 5.5v3"/><circle cx="7" cy="10.5" r=".5" fill="currentColor"/></svg>
-                        综合健康分 · 置信加权
+                        <Term id="health-score" label="综合健康分 · 置信加权" />
                     </div>
                     <div className="sa-hero-score-body">
                         <div className="sa-hero-score-num">{health == null ? '--' : health}</div>
@@ -2304,7 +2306,7 @@ function AnalysisOverview({
                     
                     <div className="sa-hero-coverage" style={{ marginTop: 14 }}>
                         <div className="sa-hero-coverage-label">
-                            <span>评估覆盖度</span>
+                            <span><Term id="eval-coverage" label="评估覆盖度" /></span>
                             <b>{coveredCount} / {totalEvaluators} 维 · {Math.round((coveredCount / totalEvaluators) * 100)}%</b>
                         </div>
                         <div className="sa-hero-coverage-bar">
@@ -2325,7 +2327,7 @@ function AnalysisOverview({
                 <div className="sa-hero-narr">
                     <div>
                         <div className="sa-hero-narr-eyebrow">
-                            一句话诊断
+                            <Term id="one-line-diagnosis" label="一句话诊断" />
                             <span className="sa-hero-narr-ai">
                                 {diagnosisStatus === 'loading' || narrative.mode === 'llm' ? (
                                     <>
@@ -2359,7 +2361,7 @@ function AnalysisOverview({
                 <div className="sa-hero-cta">
                     <div className="sa-hero-cta-eyebrow">
                         <svg width="11" height="11" viewBox="0 0 14 14" fill="currentColor"><path d="M8 1L1 8h5l-1 5 7-7h-5z"/></svg>
-                        Smart Run
+                        <Term id="smart-run" label="Smart Run" />
                     </div>
                     <div className="sa-hero-cta-title">
                         <span>选择要一键测试的维度</span>
@@ -2374,7 +2376,7 @@ function AnalysisOverview({
                             <input type="checkbox" checked={selectedRunKeys.includes('static')} onChange={() => toggleRunKey('static')} disabled={!staticCanTest} />
                             <span className="dot" style={{ '--cdot': 'var(--sa-purple)' } as React.CSSProperties}></span>
                             <span className="nm">
-                                静态合规 <span className="wpct">10%</span>
+                                <Term id="static-compliance" label="静态合规" /> <span className="wpct">10%</span>
                                 {!staticCanTest && <span className="cfg-tag">待扫描</span>}
                             </span>
                             {!staticCanTest ? (
@@ -2406,7 +2408,7 @@ function AnalysisOverview({
                             />
                             <span className="dot" style={{ '--cdot': 'var(--sa-info, #6366f1)' } as React.CSSProperties}></span>
                             <span className="nm">
-                                触发分析 <span className="wpct">20%</span>
+                                <Term id="trigger-analysis" label="触发分析" /> <span className="wpct">20%</span>
                                 {!triggerHasSet && <span className="cfg-tag">未配置</span>}
                                 {triggerHasSet && !triggerHasResult && <span className="cfg-tag">待评测</span>}
                                 {triggerHasResult && triggerSummary?.latestRun && (
@@ -2429,7 +2431,7 @@ function AnalysisOverview({
                             <input type="checkbox" checked={selectedRunKeys.includes('trace')} onChange={() => toggleRunKey('trace')} disabled={!traceCanTest} />
                             <span className="dot" style={{ '--cdot': 'var(--sa-success)' } as React.CSSProperties}></span>
                             <span className="nm">
-                                用例分析 <span className="wpct">30%</span>
+                                <Term id="case-analysis" label="用例分析" /> <span className="wpct">30%</span>
                                 {!traceCanTest && <span className="cfg-tag">待分析</span>}
                             </span>
                             {!traceCanTest ? (
@@ -2464,7 +2466,7 @@ function AnalysisOverview({
                             <span className="dot" style={{ '--cdot': 'var(--sa-warning)' } as React.CSSProperties}></span>
                             <span className="nm">
                                 <span className="sa-cta-mainline">
-                                    A/B 测试 <span className="wpct">{AB_WEIGHT_LABEL}</span>
+                                    <Term id="ab-test" label="A/B 测试" /> <span className="wpct">{AB_WEIGHT_LABEL}</span>
                                     {!grayCanTest && <span className="cfg-tag">未配置</span>}
                                 </span>
                                 <span className="sa-cta-subline">
@@ -2512,7 +2514,7 @@ function AnalysisOverview({
 
             <div className="sa-section-head">
                 <h2>
-                    4 维评估能力 <span className="count">{coveredCount} / {totalEvaluators} 已配置 · 按前序关系排序</span>
+                    <Term id="four-dim-eval" label="4 维评估能力" /> <span className="count">{coveredCount} / {totalEvaluators} 已配置 · 按前序关系排序</span>
                 </h2>
                 <span className="head-meta">点击卡片进入详情 · 百分制分数</span>
             </div>
@@ -4013,9 +4015,12 @@ function TraceDeviationPanel({
                                                 {/* 部分评测:把缺失那边的原因也平铺出来,用户立刻知道"轨迹评测为什么没跑成"。
                                                     不显原始 stack/api err,显简短的"缺什么"——具体长错误走 hover。 */}
                                                 {status === 'partial' && partialMissingSide && (
-                                                    <div style={{ marginTop: 4, fontSize: 11, color: 'var(--ev-warning)', whiteSpace: 'normal', lineHeight: 1.4 }}>
-                                                        ⓘ 缺 <b>{partialMissingSide}</b>
-                                                        {partialErr && ': ' + (partialErr.length > 150 ? partialErr.slice(0, 150) + '…' : partialErr)}
+                                                    <div style={{ marginTop: 4, fontSize: 11, color: 'var(--ev-warning)', whiteSpace: 'normal', lineHeight: 1.4, display: 'flex', alignItems: 'flex-start', gap: 4 }}>
+                                                        <Info style={{ width: 14, height: 14, flexShrink: 0, marginTop: 1 }} aria-hidden />
+                                                        <span>
+                                                            缺 <b>{partialMissingSide}</b>
+                                                            {partialErr && ': ' + (partialErr.length > 150 ? partialErr.slice(0, 150) + '…' : partialErr)}
+                                                        </span>
                                                     </div>
                                                 )}
                                             </td>

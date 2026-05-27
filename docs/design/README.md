@@ -12,6 +12,8 @@
 | [`foundations.md`](./foundations.md) | **基础视觉规则**：Token、颜色、字体、暗黑模式、动效、可访问性 | 设计、前端、Reviewer |
 | [`components.md`](./components.md) | **组件契约**：强制复用清单、组件 API、PR 自查表、迁移对照 | 前端、Reviewer |
 | [`patterns.md`](./patterns.md) | **页面骨架与交互行为**：6 类页面模板、长文本、表单、Wizard | 设计、产品、前端、QA |
+| [`brand.md`](./brand.md) | **品牌与素材落地**：Logo / 品牌色 / UI 整理参考资料的应用计划（2026-05 暂存，落地后并入 `foundations.md`） | 设计、前端、产品 |
+| [`refs/`](./refs/) | **参考素材原件**：外部设计稿、原型 HTML、调研、截图——不进 `src/`，仅供阅读 | 设计、前端 |
 | [`ROADMAP.md`](./ROADMAP.md) | **临时**：从当前代码到规范的差距与排期；落地后即删除项 | 前端、TL |
 
 **Token 实际值**唯一事实来源 = [`src/app/globals.css`](../../src/app/globals.css) 的 `:root` / `[data-theme='dark']` 双声明块。文档只描述规则与索引，不复述 hex。
