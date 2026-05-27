@@ -2368,6 +2368,84 @@ function AnalysisOverview({
 
                     <div className="sa-cta-list">
                         <label
+                            className={`sa-cta-row${!staticCanTest ? ' disabled' : ''}`}
+                            title={staticCanTest ? '可触发详情页“重新扫描”' : '需先选择 Skill 与版本'}
+                        >
+                            <input type="checkbox" checked={selectedRunKeys.includes('static')} onChange={() => toggleRunKey('static')} disabled={!staticCanTest} />
+                            <span className="dot" style={{ '--cdot': 'var(--sa-purple)' } as React.CSSProperties}></span>
+                            <span className="nm">
+                                静态合规 <span className="wpct">10%</span>
+                                {!staticCanTest && <span className="cfg-tag">待扫描</span>}
+                            </span>
+                            {!staticCanTest ? (
+                                <a
+                                    className="cfg-link"
+                                    href="#"
+                                    onClick={e => { e.preventDefault(); onOpen('static'); }}
+                                >
+                                    前往评测 →
+                                </a>
+                            ) : (
+                                <span className="ago">{staticAgoLabel}</span>
+                            )}
+                        </label>
+
+                        <label
+                            className={`sa-cta-row${!triggerCanTest ? ' disabled' : ''}`}
+                            title={!triggerHasSet
+                                ? '尚未配置触发集，需先到编辑器里起草或手填'
+                                : (triggerSummary?.itemCount ?? 0) === 0
+                                    ? '触发集为空，需先补充触发分析数据'
+                                    : '触发集已准备，可触发详情页“立即评测/立即复测”'}
+                        >
+                            <input
+                                type="checkbox"
+                                checked={selectedRunKeys.includes('trigger')}
+                                onChange={() => toggleRunKey('trigger')}
+                                disabled={!triggerCanTest}
+                            />
+                            <span className="dot" style={{ '--cdot': 'var(--sa-info, #6366f1)' } as React.CSSProperties}></span>
+                            <span className="nm">
+                                触发分析 <span className="wpct">20%</span>
+                                {!triggerHasSet && <span className="cfg-tag">未配置</span>}
+                                {triggerHasSet && !triggerHasResult && <span className="cfg-tag">待评测</span>}
+                                {triggerHasResult && triggerSummary?.latestRun && (
+                                    <span className="ago">{Math.round(triggerSummary.latestRun.passRate * 100)}% 通过</span>
+                                )}
+                            </span>
+                            <a
+                                className="cfg-link"
+                                href="#"
+                                onClick={e => { e.preventDefault(); onOpenTriggerEditor(); }}
+                            >
+                                {!triggerHasSet ? '前往配置 →' : '打开编辑器 →'}
+                            </a>
+                        </label>
+
+                        <label
+                            className={`sa-cta-row${!traceCanTest ? ' disabled' : ''}`}
+                            title={traceCanTest ? '当前 Trace 可触发详情页“分析当前 Trace”' : traces.length === 0 ? '暂无 Trace 可分析' : '当前 Trace 缺少主 Skill 信息，详情页按钮不可点击'}
+                        >
+                            <input type="checkbox" checked={selectedRunKeys.includes('trace')} onChange={() => toggleRunKey('trace')} disabled={!traceCanTest} />
+                            <span className="dot" style={{ '--cdot': 'var(--sa-success)' } as React.CSSProperties}></span>
+                            <span className="nm">
+                                用例分析 <span className="wpct">30%</span>
+                                {!traceCanTest && <span className="cfg-tag">待分析</span>}
+                            </span>
+                            {!traceCanTest ? (
+                                <a
+                                    className="cfg-link"
+                                    href="#"
+                                    onClick={e => { e.preventDefault(); onOpen('trace'); }}
+                                >
+                                    前往评测 →
+                                </a>
+                            ) : (
+                                <span className="ago">测试当前 Trace</span>
+                            )}
+                        </label>
+
+                        <label
                             className={`sa-cta-row sa-cta-row-ab${!grayCanTest ? ' disabled' : ''}`}
                             title={grayCanTest
                                 ? `A/B 版本：${grayPairLabel}，可触发详情页“开始执行”`
@@ -2413,83 +2491,6 @@ function AnalysisOverview({
                                 <span className="ago">{grayAgoLabel}</span>
                             )}
                         </label>
-                        <label
-                            className={`sa-cta-row${!traceCanTest ? ' disabled' : ''}`}
-                            title={traceCanTest ? '当前 Trace 可触发详情页“分析当前 Trace”' : traces.length === 0 ? '暂无 Trace 可分析' : '当前 Trace 缺少主 Skill 信息，详情页按钮不可点击'}
-                        >
-                            <input type="checkbox" checked={selectedRunKeys.includes('trace')} onChange={() => toggleRunKey('trace')} disabled={!traceCanTest} />
-                            <span className="dot" style={{ '--cdot': 'var(--sa-success)' } as React.CSSProperties}></span>
-                            <span className="nm">
-                                用例分析 <span className="wpct">30%</span>
-                                {!traceCanTest && <span className="cfg-tag">待分析</span>}
-                            </span>
-                            {!traceCanTest ? (
-                                <a
-                                    className="cfg-link"
-                                    href="#"
-                                    onClick={e => { e.preventDefault(); onOpen('trace'); }}
-                                >
-                                    前往评测 →
-                                </a>
-                            ) : (
-                                <span className="ago">测试当前 Trace</span>
-                            )}
-                        </label>
-                        
-                        <label
-                            className={`sa-cta-row${!triggerCanTest ? ' disabled' : ''}`}
-                            title={!triggerHasSet
-                                ? '尚未配置触发集，需先到编辑器里起草或手填'
-                                : (triggerSummary?.itemCount ?? 0) === 0
-                                    ? '触发集为空，需先补充触发分析数据'
-                                    : '触发集已准备，可触发详情页“立即评测/立即复测”'}
-                        >
-                            <input
-                                type="checkbox"
-                                checked={selectedRunKeys.includes('trigger')}
-                                onChange={() => toggleRunKey('trigger')}
-                                disabled={!triggerCanTest}
-                            />
-                            <span className="dot" style={{ '--cdot': 'var(--sa-info, #6366f1)' } as React.CSSProperties}></span>
-                            <span className="nm">
-                                触发分析 <span className="wpct">20%</span>
-                                {!triggerHasSet && <span className="cfg-tag">未配置</span>}
-                                {triggerHasSet && !triggerHasResult && <span className="cfg-tag">待评测</span>}
-                                {triggerHasResult && triggerSummary?.latestRun && (
-                                    <span className="ago">{Math.round(triggerSummary.latestRun.passRate * 100)}% 通过</span>
-                                )}
-                            </span>
-                            <a
-                                className="cfg-link"
-                                href="#"
-                                onClick={e => { e.preventDefault(); onOpenTriggerEditor(); }}
-                            >
-                                {!triggerHasSet ? '前往配置 →' : '打开编辑器 →'}
-                            </a>
-                        </label>
-
-                        <label
-                            className={`sa-cta-row${!staticCanTest ? ' disabled' : ''}`}
-                            title={staticCanTest ? '可触发详情页“重新扫描”' : '需先选择 Skill 与版本'}
-                        >
-                            <input type="checkbox" checked={selectedRunKeys.includes('static')} onChange={() => toggleRunKey('static')} disabled={!staticCanTest} />
-                            <span className="dot" style={{ '--cdot': 'var(--sa-purple)' } as React.CSSProperties}></span>
-                            <span className="nm">
-                                静态合规 <span className="wpct">10%</span>
-                                {!staticCanTest && <span className="cfg-tag">待扫描</span>}
-                            </span>
-                            {!staticCanTest ? (
-                                <a
-                                    className="cfg-link"
-                                    href="#"
-                                    onClick={e => { e.preventDefault(); onOpen('static'); }}
-                                >
-                                    前往评测 →
-                                </a>
-                            ) : (
-                                <span className="ago">{staticAgoLabel}</span>
-                            )}
-                        </label>
                     </div>
 
                     <div className="sa-hero-cta-meta">
@@ -2511,161 +2512,62 @@ function AnalysisOverview({
 
             <div className="sa-section-head">
                 <h2>
-                    4 维评估能力 <span className="count">{coveredCount} / {totalEvaluators} 已配置 · 按权重 desc 排序</span>
+                    4 维评估能力 <span className="count">{coveredCount} / {totalEvaluators} 已配置 · 按前序关系排序</span>
                 </h2>
-                <span className="head-meta">点击卡片进入详情 · 百分制分数 · 权重越大越靠前</span>
+                <span className="head-meta">点击卡片进入详情 · 百分制分数</span>
             </div>
 
             <section className="sa-cards">
-                {/* 1. A/B 测试 (gray) */}
-                <div className="sa-card k-gray" onClick={(e) => {
-                    if ((e.target as HTMLElement).closest('a,button')) return;
-                    onOpen('gray');
-                }}>
+                {/* 1. 静态合规 (static) */}
+                <div className="sa-card k-static" onClick={() => onOpen('static')}>
                     <div className="sa-card-head">
                         <span className="sa-card-icon">
                             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-                                <circle cx="5" cy="8" r="3"/>
-                                <circle cx="11" cy="8" r="3"/>
-                                <path d="M5 5v6M11 5v6" opacity=".4"/>
+                                <path d="M3 2.5h7l3 3v8a.5.5 0 0 1-.5.5h-9.5a.5.5 0 0 1-.5-.5v-10.5a.5.5 0 0 1 .5-.5z"/>
+                                <path d="M9.5 2.5v3h3"/>
+                                <path d="M5.5 9l1.5 1.5 3-3"/>
                             </svg>
                         </span>
                         <div className="sa-card-title">
-                            <span className="t-row">A/B 测试</span>
-                            <small>{grayPairLabel}</small>
+                            <span className="t-row">静态合规</span>
+                            <small>写得规范吗？能被正确加载吗？</small>
                         </div>
-                        <span className={`sa-card-status ${graySummary ? (graySummary.scoring.decision === 'reject' ? 'err' : graySummary.scoring.decision === 'direct-release' || graySummary.scoring.decision === 'monitor-release' ? 'ok' : 'neutral') : 'warn'}`}>
-                            {grayCardStatus}
-                        </span>
-                    </div>
-
-                    <TaskQueueBanner counts={grayTaskCounts} hint="本 skill 当前所有 opencode 后台任务的实时调度状态 (A/B 跑评测时涉及 trajectory / task-completion / custom-llm 多类型)" />
-
-                    {grayHasResult ? (
-                        <>
-                            <div className="sa-card-score" style={{ alignItems: 'baseline', gap: 8, marginTop: 18 }}>
-                                <span style={{ fontSize: 12, fontWeight: 800, color: 'var(--sa-muted)', alignSelf: 'flex-start', marginTop: 12 }}>最终评分</span>
-                                <span style={{ fontSize: 62, lineHeight: 1, fontWeight: 900, color: 'var(--sa-warning)' }}>
-                                    {graySummary?.scoring.totalScore ?? '--'}
-                                </span>
-                                <span style={{ fontSize: 24, fontWeight: 800, color: 'var(--sa-muted)' }}>/100</span>
-                            </div>
-
-                            <div className="sa-card-stats">
-                                <div className="sa-card-stat">
-                                    <div className="sa-card-stat-label">能力</div>
-                                    <div className="sa-card-stat-val">{graySummary?.scoring.capability.deltaPp == null ? '—' : `${graySummary.scoring.capability.deltaPp > 0 ? '+' : ''}${graySummary.scoring.capability.deltaPp}pp`}</div>
-                                </div>
-                                <div className="sa-card-stat">
-                                    <div className="sa-card-stat-label">成本</div>
-                                    <div className="sa-card-stat-val">{graySummary?.scoring.cost.deltaTokenPct == null ? '—' : `${graySummary.scoring.cost.deltaTokenPct > 0 ? '+' : ''}${graySummary.scoring.cost.deltaTokenPct}% Token`}</div>
-                                </div>
-                                <div className="sa-card-stat">
-                                    <div className="sa-card-stat-label">稳定性</div>
-                                    <div className="sa-card-stat-val">{graySummary?.scoring.stability.invokeRate == null ? '—' : `${graySummary.scoring.stability.invokeRate}% 触发`}</div>
-                                </div>
-                            </div>
-
-                            <div className="sa-card-stats">
-                                <div className="sa-card-stat">
-                                    <div className="sa-card-stat-label">样本</div>
-                                    <div className="sa-card-stat-val">{graySummary ? `${graySampleLabel} · ${grayRunLabel}` : '待选择样本'}</div>
-                                </div>
-                                <div className="sa-card-stat">
-                                    <div className="sa-card-stat-label">显著性</div>
-                                    <div className="sa-card-stat-val">{grayPValueLabel}</div>
-                                </div>
-                            </div>
-
-                            <div className="sa-card-foot">
-                                <span className="sa-card-foot-meta">
-                                    <svg width="11" height="11" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="7" cy="7" r="5"/><path d="M7 4v3l2 1" strokeLinecap="round"/></svg>
-                                    {grayAgoLabel} · 入总分 = v2.2 最终评分 {graySummary?.scoring.totalScore ?? '--'}
-                                </span>
-                                <a className="sa-card-foot-link" onClick={e => { e.preventDefault(); onOpen('gray'); }}>查看详情 →</a>
-                            </div>
-                        </>
-                    ) : (
-                        <>
-                            <div className="sa-card-score sa-card-score-placeholder">
-                                <span className="sa-card-score-placeholder-text">尚未配置</span>
-                            </div>
-
-                            <div className="sa-card-stats">
-                                <div className="sa-card-stat">
-                                    <div className="sa-card-stat-label">实验版本</div>
-                                    <div className="sa-card-stat-val muted">{grayFallbackBLabel}</div>
-                                </div>
-                                <div className="sa-card-stat">
-                                    <div className="sa-card-stat-label">影响</div>
-                                    <div className="sa-card-stat-val muted">不计入总分 (-40%)</div>
-                                </div>
-                            </div>
-
-                            <button className="sa-card-empty-cta" onClick={e => { e.stopPropagation(); onOpen('gray'); }}>
-                                <svg width="11" height="11" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"><path d="M3 7h8M8 4l3 3-3 3"/></svg>
-                                前往配置 A/B 测试
-                            </button>
-                        </>
-                    )}
-                </div>
-
-                {/* 2. 用例分析 (trace) */}
-                <div className="sa-card k-batch" onClick={(e) => {
-                    if (!(e.target as HTMLElement).closest('a,button')) {
-                        onOpen('trace');
-                    }
-                }}>
-                    <div className="sa-card-head">
-                        <span className="sa-card-icon">
-                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-                                <rect x="2" y="2.5" width="5" height="5" rx="1"/>
-                                <rect x="9" y="2.5" width="5" height="5" rx="1"/>
-                                <rect x="2" y="9" width="5" height="5" rx="1"/>
-                                <rect x="9" y="9" width="5" height="5" rx="1"/>
-                                <path d="M3.6 5l1 1L5.8 4.8"/>
-                                <path d="M10.6 5l1 1 1.2-1.2"/>
-                                <path d="M3.6 11.5l1 1L5.8 11.3"/>
-                                <path d="M10.6 11.5l1 1 1.2-1.2"/>
-                            </svg>
-                        </span>
-                        <div className="sa-card-title">
-                            <span className="t-row">用例分析</span>
-                            <small>结果分析 + 轨迹分析 双维度</small>
-                        </div>
-                        <span className={`sa-card-status ${traceCardStatus === '正常' ? 'ok' : traceCardStatus === '需关注' ? 'warn' : 'neutral'}`}>
-                            {traceCardStatus}
+                        <span className={`sa-card-status ${staticCardStatus === '正常' ? 'ok' : staticCardStatus === '需关注' ? 'warn' : 'neutral'}`}>
+                            {staticCardStatus}
                         </span>
                     </div>
 
                     <div className="sa-card-score">
-                        <span className="sa-card-score-num">{traceCardScoreValue ?? '--'}</span>
-                        <span className="sa-card-score-unit">{traceCardScoreValue == null ? '待分析' : '/ 100'}</span>
+                        {/* 没评估过就显示空态 "--" + "待分析"，不要给 mock 数字（之前默认 91 容易误导用户） */}
+                        <span className={staticHasResult && staticStats.avgPct != null ? 'sa-card-score-num' : 'sa-card-score-empty'}>
+                            {staticHasResult && staticStats.avgPct != null ? staticStats.avgPct : '--'}
+                        </span>
+                        <span className="sa-card-score-unit">{staticHasResult && staticStats.avgPct != null ? '/ 100' : '待分析'}</span>
                     </div>
 
                     <div className="sa-card-stats">
                         <div className="sa-card-stat">
-                            <div className="sa-card-stat-label" title="结果分 + 轨迹分双双就绪的 trace 数；只跑一边的不计入">已完整评测</div>
-                            <div className="sa-card-stat-val">{traces.length === 0 ? '暂无 Trace' : `${fullyEvaluatedCount} / ${traces.length}`}</div>
+                            <div className="sa-card-stat-label">已评估维度</div>
+                            <div className="sa-card-stat-val">{staticHasResult ? `${staticStats.scoredCount} / ${STATIC_EVAL_STANDARDS.length} 项` : '尚未评估'}</div>
                         </div>
                         <div className="sa-card-stat">
-                            <div className="sa-card-stat-label">高偏离</div>
-                            <div className="sa-card-stat-val">{highDeviation > 0 ? `${highDeviation} 条` : '无'}</div>
+                            <div className="sa-card-stat-label">未评估</div>
+                            <div className="sa-card-stat-val">{staticHasResult ? (STATIC_EVAL_STANDARDS.length - staticStats.scoredCount > 0 ? `${STATIC_EVAL_STANDARDS.length - staticStats.scoredCount} 项` : '无') : '—'}</div>
                         </div>
                     </div>
 
-                    {traceCanTest ? (
+                    {staticCanTest ? (
                         <div className="sa-card-foot">
                             <span className="sa-card-foot-meta">
                                 <svg width="11" height="11" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="7" cy="7" r="5"/><path d="M7 4v3l2 1" strokeLinecap="round"/></svg>
-                                {traceCardFooterAt ? formatRelative(traceCardFooterAt) : '点击进入用例分析详情'}
+                                {staticHasResult && staticSummary?.latest ? formatRelative(staticSummary.latest.ranAt) : '点击进入静态评估详情'}
                             </span>
-                            <a className="sa-card-foot-link" onClick={e => { e.preventDefault(); onOpen('trace'); }}>查看详情 →</a>
+                            <a className="sa-card-foot-link" onClick={e => { e.preventDefault(); onOpen('static'); }}>查看详情 →</a>
                         </div>
                     ) : (
                         <button
                             className="sa-card-empty-cta"
-                            onClick={e => { e.stopPropagation(); onOpen('trace'); }}
+                            onClick={e => { e.stopPropagation(); onOpen('static'); }}
                         >
                             <svg width="11" height="11" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"><path d="M3 7h8M8 4l3 3-3 3"/></svg>
                             打开评测页扫描
@@ -2673,7 +2575,7 @@ function AnalysisOverview({
                     )}
                 </div>
 
-                {/* 3. 触发分析 (trigger) —— 数据来自 GET /api/skill-eval/trigger/<name>{,/runs}。
+                {/* 2. 触发分析 (trigger) —— 数据来自 GET /api/skill-eval/trigger/<name>{,/runs}。
                     点卡片或按钮跳到 /skill-eval/trigger/<name> 全功能编辑器。 */}
                 <div
                     className="sa-card k-trigger"
@@ -2692,7 +2594,7 @@ function AnalysisOverview({
                         </span>
                         <div className="sa-card-title">
                             <span className="t-row">触发分析</span>
-                            <small>触发集命中率 · opencode-live</small>
+                            <small>该触发的时候，触发了吗？</small>
                         </div>
                         {triggerHasResult && triggerSummary?.latestRun ? (
                             <span className={`sa-card-status ${triggerSummary.latestRun.passRate >= 0.8 ? 'ok' : triggerSummary.latestRun.passRate >= 0.6 ? 'warn' : 'err'}`}>
@@ -2763,60 +2665,163 @@ function AnalysisOverview({
                     )}
                 </div>
 
-                {/* 4. 静态合规 (static) */}
-                <div className="sa-card k-static" onClick={() => onOpen('static')}>
+                {/* 3. 用例分析 (trace) */}
+                <div className="sa-card k-batch" onClick={(e) => {
+                    if (!(e.target as HTMLElement).closest('a,button')) {
+                        onOpen('trace');
+                    }
+                }}>
                     <div className="sa-card-head">
                         <span className="sa-card-icon">
                             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-                                <path d="M3 2.5h7l3 3v8a.5.5 0 0 1-.5.5h-9.5a.5.5 0 0 1-.5-.5v-10.5a.5.5 0 0 1 .5-.5z"/>
-                                <path d="M9.5 2.5v3h3"/>
-                                <path d="M5.5 9l1.5 1.5 3-3"/>
+                                <rect x="2" y="2.5" width="5" height="5" rx="1"/>
+                                <rect x="9" y="2.5" width="5" height="5" rx="1"/>
+                                <rect x="2" y="9" width="5" height="5" rx="1"/>
+                                <rect x="9" y="9" width="5" height="5" rx="1"/>
+                                <path d="M3.6 5l1 1L5.8 4.8"/>
+                                <path d="M10.6 5l1 1 1.2-1.2"/>
+                                <path d="M3.6 11.5l1 1L5.8 11.3"/>
+                                <path d="M10.6 11.5l1 1 1.2-1.2"/>
                             </svg>
                         </span>
                         <div className="sa-card-title">
-                            <span className="t-row">静态合规</span>
-                            <small>SKILL.md 规范打分</small>
+                            <span className="t-row">用例分析</span>
+                            <small>做的怎么样？结果&amp;轨迹分析</small>
                         </div>
-                        <span className={`sa-card-status ${staticCardStatus === '正常' ? 'ok' : staticCardStatus === '需关注' ? 'warn' : 'neutral'}`}>
-                            {staticCardStatus}
+                        <span className={`sa-card-status ${traceCardStatus === '正常' ? 'ok' : traceCardStatus === '需关注' ? 'warn' : 'neutral'}`}>
+                            {traceCardStatus}
                         </span>
                     </div>
 
                     <div className="sa-card-score">
-                        {/* 没评估过就显示空态 "--" + "待分析"，不要给 mock 数字（之前默认 91 容易误导用户） */}
-                        <span className={staticHasResult && staticStats.avgPct != null ? 'sa-card-score-num' : 'sa-card-score-empty'}>
-                            {staticHasResult && staticStats.avgPct != null ? staticStats.avgPct : '--'}
-                        </span>
-                        <span className="sa-card-score-unit">{staticHasResult && staticStats.avgPct != null ? '/ 100' : '待分析'}</span>
+                        <span className="sa-card-score-num">{traceCardScoreValue ?? '--'}</span>
+                        <span className="sa-card-score-unit">{traceCardScoreValue == null ? '待分析' : '/ 100'}</span>
                     </div>
 
                     <div className="sa-card-stats">
                         <div className="sa-card-stat">
-                            <div className="sa-card-stat-label">已评估维度</div>
-                            <div className="sa-card-stat-val">{staticHasResult ? `${staticStats.scoredCount} / ${STATIC_EVAL_STANDARDS.length} 项` : '尚未评估'}</div>
+                            <div className="sa-card-stat-label" title="结果分 + 轨迹分双双就绪的 trace 数；只跑一边的不计入">已完整评测</div>
+                            <div className="sa-card-stat-val">{traces.length === 0 ? '暂无 Trace' : `${fullyEvaluatedCount} / ${traces.length}`}</div>
                         </div>
                         <div className="sa-card-stat">
-                            <div className="sa-card-stat-label">未评估</div>
-                            <div className="sa-card-stat-val">{staticHasResult ? (STATIC_EVAL_STANDARDS.length - staticStats.scoredCount > 0 ? `${STATIC_EVAL_STANDARDS.length - staticStats.scoredCount} 项` : '无') : '—'}</div>
+                            <div className="sa-card-stat-label">高偏离</div>
+                            <div className="sa-card-stat-val">{highDeviation > 0 ? `${highDeviation} 条` : '无'}</div>
                         </div>
                     </div>
 
-                    {staticCanTest ? (
+                    {traceCanTest ? (
                         <div className="sa-card-foot">
                             <span className="sa-card-foot-meta">
                                 <svg width="11" height="11" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="7" cy="7" r="5"/><path d="M7 4v3l2 1" strokeLinecap="round"/></svg>
-                                {staticHasResult && staticSummary?.latest ? formatRelative(staticSummary.latest.ranAt) : '点击进入静态评估详情'}
+                                {traceCardFooterAt ? formatRelative(traceCardFooterAt) : '点击进入用例分析详情'}
                             </span>
-                            <a className="sa-card-foot-link" onClick={e => { e.preventDefault(); onOpen('static'); }}>查看详情 →</a>
+                            <a className="sa-card-foot-link" onClick={e => { e.preventDefault(); onOpen('trace'); }}>查看详情 →</a>
                         </div>
                     ) : (
                         <button
                             className="sa-card-empty-cta"
-                            onClick={e => { e.stopPropagation(); onOpen('static'); }}
+                            onClick={e => { e.stopPropagation(); onOpen('trace'); }}
                         >
                             <svg width="11" height="11" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"><path d="M3 7h8M8 4l3 3-3 3"/></svg>
                             打开评测页扫描
                         </button>
+                    )}
+                </div>
+
+                {/* 4. A/B 测试 (gray) */}
+                <div className="sa-card k-gray" onClick={(e) => {
+                    if ((e.target as HTMLElement).closest('a,button')) return;
+                    onOpen('gray');
+                }}>
+                    <div className="sa-card-head">
+                        <span className="sa-card-icon">
+                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                                <circle cx="5" cy="8" r="3"/>
+                                <circle cx="11" cy="8" r="3"/>
+                                <path d="M5 5v6M11 5v6" opacity=".4"/>
+                            </svg>
+                        </span>
+                        <div className="sa-card-title">
+                            <span className="t-row">A/B 测试</span>
+                            <small>这个 skill 真的带来增益了吗？</small>
+                        </div>
+                        <span className={`sa-card-status ${graySummary ? (graySummary.scoring.decision === 'reject' ? 'err' : graySummary.scoring.decision === 'direct-release' || graySummary.scoring.decision === 'monitor-release' ? 'ok' : 'neutral') : 'warn'}`}>
+                            {grayCardStatus}
+                        </span>
+                    </div>
+
+                    <TaskQueueBanner counts={grayTaskCounts} hint="本 skill 当前所有 opencode 后台任务的实时调度状态 (A/B 跑评测时涉及 trajectory / task-completion / custom-llm 多类型)" />
+
+                    {grayHasResult ? (
+                        <>
+                            <div className="sa-card-score" style={{ alignItems: 'baseline', gap: 8, marginTop: 18 }}>
+                                <span style={{ fontSize: 12, fontWeight: 800, color: 'var(--sa-muted)', alignSelf: 'flex-start', marginTop: 12 }}>最终评分</span>
+                                <span style={{ fontSize: 62, lineHeight: 1, fontWeight: 900, color: 'var(--sa-warning)' }}>
+                                    {graySummary?.scoring.totalScore ?? '--'}
+                                </span>
+                                <span style={{ fontSize: 24, fontWeight: 800, color: 'var(--sa-muted)' }}>/100</span>
+                            </div>
+
+                            <div className="sa-card-stats">
+                                <div className="sa-card-stat">
+                                    <div className="sa-card-stat-label">能力</div>
+                                    <div className="sa-card-stat-val">{graySummary?.scoring.capability.deltaPp == null ? '—' : `${graySummary.scoring.capability.deltaPp > 0 ? '+' : ''}${graySummary.scoring.capability.deltaPp}pp`}</div>
+                                </div>
+                                <div className="sa-card-stat">
+                                    <div className="sa-card-stat-label">成本</div>
+                                    <div className="sa-card-stat-val">{graySummary?.scoring.cost.deltaTokenPct == null ? '—' : `${graySummary.scoring.cost.deltaTokenPct > 0 ? '+' : ''}${graySummary.scoring.cost.deltaTokenPct}% Token`}</div>
+                                </div>
+                                <div className="sa-card-stat">
+                                    <div className="sa-card-stat-label">稳定性</div>
+                                    <div className="sa-card-stat-val">{graySummary?.scoring.stability.invokeRate == null ? '—' : `${graySummary.scoring.stability.invokeRate}% 触发`}</div>
+                                </div>
+                            </div>
+
+                            <div className="sa-card-stats">
+                                <div className="sa-card-stat">
+                                    <div className="sa-card-stat-label">对比版本</div>
+                                    <div className="sa-card-stat-val">{grayPairLabel}</div>
+                                </div>
+                                <div className="sa-card-stat">
+                                    <div className="sa-card-stat-label">样本</div>
+                                    <div className="sa-card-stat-val">{graySummary ? `${graySampleLabel} · ${grayRunLabel}` : '待选择样本'}</div>
+                                </div>
+                                <div className="sa-card-stat">
+                                    <div className="sa-card-stat-label">显著性</div>
+                                    <div className="sa-card-stat-val">{grayPValueLabel}</div>
+                                </div>
+                            </div>
+
+                            <div className="sa-card-foot">
+                                <span className="sa-card-foot-meta">
+                                    <svg width="11" height="11" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="7" cy="7" r="5"/><path d="M7 4v3l2 1" strokeLinecap="round"/></svg>
+                                    {grayAgoLabel} · 入总分 = v2.2 最终评分 {graySummary?.scoring.totalScore ?? '--'}
+                                </span>
+                                <a className="sa-card-foot-link" onClick={e => { e.preventDefault(); onOpen('gray'); }}>查看详情 →</a>
+                            </div>
+                        </>
+                    ) : (
+                        <>
+                            <div className="sa-card-score sa-card-score-placeholder">
+                                <span className="sa-card-score-placeholder-text">尚未配置</span>
+                            </div>
+
+                            <div className="sa-card-stats">
+                                <div className="sa-card-stat">
+                                    <div className="sa-card-stat-label">实验版本</div>
+                                    <div className="sa-card-stat-val muted">{grayFallbackBLabel}</div>
+                                </div>
+                                <div className="sa-card-stat">
+                                    <div className="sa-card-stat-label">影响</div>
+                                    <div className="sa-card-stat-val muted">不计入总分 (-40%)</div>
+                                </div>
+                            </div>
+
+                            <button className="sa-card-empty-cta" onClick={e => { e.stopPropagation(); onOpen('gray'); }}>
+                                <svg width="11" height="11" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"><path d="M3 7h8M8 4l3 3-3 3"/></svg>
+                                前往配置 A/B 测试
+                            </button>
+                        </>
                     )}
                 </div>
             </section>
