@@ -1,0 +1,167 @@
+export type AgentDebugModule = 'memory' | 'reflection' | 'planning' | 'action' | 'system' | 'others' | 'unknown';
+export type AgentDebugSeverity = 'high' | 'medium' | 'low';
+export type AgentDebugStatus = 'pending' | 'running' | 'done' | 'failed';
+
+export interface DebugToolCall {
+  id?: string;
+  name: string;
+  args: unknown;
+  output?: unknown;
+  status: 'ok' | 'error' | 'unknown';
+  startedAt?: number;
+  completedAt?: number;
+  anchorId?: string;
+  traceStepIndex?: number;
+  rawError?: string;
+}
+
+export interface DebugTurn {
+  turnIndex: number;
+  sourceInteractionIndex: number;
+  agentName?: string;
+  role: 'assistant' | 'subagent' | 'opencode';
+  text: string;
+  reasoningText?: string;
+  toolCalls: DebugToolCall[];
+  requestContextPreview?: string;
+  startedAt?: number;
+  completedAt?: number;
+  anchorIds: string[];
+  traceStepIndex?: number;
+}
+
+export interface AgentDebugCandidateWindow {
+  id: string;
+  reason: string;
+  source: 'failure' | 'tool_error' | 'evaluation' | 'fallback';
+  centerTurnIndex: number;
+  startTurnIndex: number;
+  endTurnIndex: number;
+  anchorId?: string;
+}
+
+export interface AgentDebugIssue {
+  id: string;
+  step: number;
+  module: AgentDebugModule;
+  errorType: string;
+  severity: AgentDebugSeverity;
+  evidence: string;
+  reasoning: string;
+  confidence: number;
+  anchorId?: string;
+  windowId?: string;
+}
+
+export interface AgentDebugRootCause {
+  criticalStep: number | null;
+  criticalModule: AgentDebugModule;
+  criticalErrorType: string;
+  summary: string;
+  evidence: string;
+  cascadingChain: Array<{
+    step: number;
+    module: AgentDebugModule;
+    errorType: string;
+    consequence: string;
+    anchorId?: string;
+  }>;
+  correctionGuidance: string;
+  confidence: number;
+}
+
+export interface AgentDebugTriage {
+  category: 'normal' | 'infra' | 'tool_systemic' | 'early_fatal';
+  shortCircuited: boolean;
+  fatalDiagnosis?: {
+    errorType: string;
+    toolName?: string;
+    affectedSteps: number[];
+    summary: string;
+    recommendation: string;
+    rawErrorEvidence: string;
+    anchorId?: string;
+  } | null;
+  prefilterHints?: {
+    forceFullSteps: number[];
+  };
+  notes?: string[];
+}
+
+export interface AgentDebugModuleOutput {
+  module: Exclude<AgentDebugModule, 'unknown'>;
+  content: string;
+  confidence: number;
+  source: 'tag' | 'llm' | 'raw_tool' | 'implicit' | 'system';
+}
+
+export interface AgentDebugStepRecord {
+  step: number;
+  sourceInteractionIndex: number;
+  title: string;
+  inputContext: string;
+  agentOutput: string;
+  environmentResponse: string;
+  anchorId?: string;
+  modules: {
+    memory: AgentDebugModuleOutput;
+    reflection: AgentDebugModuleOutput;
+    planning: AgentDebugModuleOutput;
+    action: AgentDebugModuleOutput;
+    system: AgentDebugModuleOutput;
+  };
+}
+
+export interface AgentDebugPhase1Cell {
+  step: number;
+  module: Exclude<AgentDebugModule, 'unknown'>;
+  errorDetected: boolean;
+  errorType: string;
+  severity: AgentDebugSeverity;
+  evidence: string;
+  reasoning: string;
+  confidence: number;
+  anchorId?: string;
+}
+
+export interface AgentDebugReportPayload {
+  schemaVersion: 1;
+  generator: string;
+  executionId: string;
+  interactionHash: string;
+  status: 'done';
+  generatedAt: string;
+  triage?: AgentDebugTriage;
+  rootCause: AgentDebugRootCause | null;
+  issues: AgentDebugIssue[];
+  phase1Grid?: AgentDebugPhase1Cell[];
+  stepRecords?: AgentDebugStepRecord[];
+  candidateWindows: AgentDebugCandidateWindow[];
+  modelLabel?: string | null;
+  llmPowered?: boolean;
+  stats: {
+    stepCount: number;
+    candidateWindowCount: number;
+    issueCount: number;
+    llmCallCount: number;
+    durationMs: number;
+  };
+  skippedReason?: string;
+}
+
+export interface AgentDebugReportRow {
+  id: string;
+  executionId: string;
+  user: string | null;
+  interactionsHash: string;
+  status: AgentDebugStatus;
+  errorMessage: string | null;
+  reportJson: string | null;
+  stepCount: number;
+  issueCount: number;
+  llmCallCount: number;
+  durationMs: number | null;
+  generator: string;
+  ranAt: string | Date;
+  updatedAt: string | Date;
+}
