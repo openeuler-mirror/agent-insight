@@ -10,6 +10,8 @@ interface RecordEvaluatorExecutionInput {
   user?: string | null;
   query?: string | null;
   framework?: string | null;
+  skill?: string | null;
+  skillVersion?: number | null;
 }
 
 interface OpencodeTokenUsage {
@@ -221,6 +223,8 @@ export async function recordEvaluatorExecution(
     user: input.user ?? null,
     agent: agentName,
     agentName,
+    skill: input.skill ?? undefined,
+    skill_version: input.skillVersion ?? undefined,
     interactions,
     timestamp: inferTimestampFromInteractions(interactions),
     skip_evaluation: true,

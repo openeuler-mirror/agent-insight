@@ -7,6 +7,10 @@ import { useLocale } from '@/lib/client/locale-context';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
 import { calculateAbScoring, DEFAULT_AB_SCORING_POLICY, type AbScoringResult } from '@/lib/skill-analysis/ab-scoring';
+import {
+    buildGrayscaleTraceCase,
+    findLatestRunnableRunIndex,
+} from '@/lib/skill-analysis/grayscale-utils';
 import '../debug.css';
 import '../skill-analysis.css';
 
@@ -38,7 +42,21 @@ interface TraceRecord {
     timestamp?: string;
     timeCost?: string;
     framework?: string;
+    dataset_id?: string;
+    dataset_name?: string;
 }
+
+type EvaluationCaseItem = {
+    id: string;
+    input: string;
+    datasetName: string;
+    datasetId: string;
+    sourceType?: 'dataset' | 'trace';
+    sourceExecutionSessionId?: string;
+    sourceUploadId?: string;
+    sourceDatasetId?: string;
+    sourceDatasetName?: string;
+};
 
 interface GrayscaleTask {
     id: string;
@@ -1439,27 +1457,12 @@ export function GrayscaleEvaluation({
     // Evaluate single side
     const evaluateCaseSide = async (caseId: string, side: 'a' | 'b', execState: PerVersionState) => {
         if (currentTask) {
-            try {
-                const res = await apiFetch(`/api/debug/grayscale-tasks/${currentTask.id}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        user: user || 'debug-user',
-                        action: 'evaluate',
-                        caseIds: checkedCaseIds.length > 0 ? checkedCaseIds : [caseId],
-                        evaluatorId: selectedEvaluatorId,
-                    }),
-                });
-                const data = await res.json().catch(() => ({}));
-                if (!res.ok) {
-                    alert(data.error || (locale === 'zh' ? '评测提交失败' : 'Evaluation failed to start'));
-                    return;
-                }
-                pollCurrentTask(currentTask.id);
-            } catch (err) {
-                alert(String(err));
+            const sideState = caseStatesRef.current[caseId]?.[side];
+            const latestRunIndex = findLatestRunnableRunIndex(sideState?.runs);
+            if (latestRunIndex != null) {
+                await retryEvaluation(caseId, side, latestRunIndex);
+                return;
             }
-            return;
         }
         const sessionId = execState.sessionId;
         if (!sessionId) return;
@@ -1839,16 +1842,17 @@ export function GrayscaleEvaluation({
 
     // Unified case list
     const activeLinkedDatasetIds = linkedDatasetIds.length > 0 ? linkedDatasetIds : (selectedDatasetId ? [selectedDatasetId] : []);
-    const allCases = sourceMode === 'dataset'
+    const allCases: EvaluationCaseItem[] = sourceMode === 'dataset'
         ? datasets
             .filter(ds => activeLinkedDatasetIds.includes(ds.id))
-            .flatMap(ds => (ds.cases || []).map((c: any) => ({ ...c, datasetName: ds.name, datasetId: ds.id })))
-        : traceRecords.map((r, idx) => ({
-            id: r.upload_id || r.task_id || `trace_${idx}`,
-            input: r.query || r.task_id || '',
-            datasetName: 'Traces',
-            datasetId: 'traces',
-        }));
+            .flatMap(ds => (ds.cases || []).map((c: any) => ({
+                ...c,
+                datasetName: ds.name,
+                datasetId: ds.id,
+                sourceType: 'dataset' as const,
+            })))
+        : traceRecords.map((r, idx) => buildGrayscaleTraceCase(r, idx));
+    const caseLookup = useMemo(() => new Map(allCases.map(item => [item.id, item])), [allCases]);
 
     // Auto-prune checkedCaseIds: 切换 sourceMode / 时间窗 / 数据集后, 原来勾选
     // 的 ID 在新的 allCases 里可能找不到了（dataset case id ≠ trace upload_id,
@@ -2331,13 +2335,22 @@ export function GrayscaleEvaluation({
                             const evalErrMsg = (!hasExecFailure && record.status === 'fail')
                                 ? (record.output || '评测失败')
                                 : '';
-                            // case id 跳转目标: /dataset/<datasetId>?case=<caseId>
-                            // datasetId 从当前 task 配置拿; DatasetItemsPage 看到 ?case=
-                            // 会滚动到对应行并短暂高亮 (下面 DatasetItemsPage 同步加这个支持)
-                            const datasetId = currentTask?.configJson?.selectedDatasetId;
-                            const caseDetailUrl = datasetId && record.caseId
-                                ? `/dataset/${encodeURIComponent(datasetId)}?case=${encodeURIComponent(record.caseId)}`
-                                : null;
+                            const caseItem = caseLookup.get(record.caseId);
+                            const datasetId = caseItem?.datasetId || currentTask?.configJson?.selectedDatasetId;
+                            const caseDetailUrl = caseItem?.sourceType === 'trace'
+                                ? (caseItem.sourceExecutionSessionId
+                                    ? `/trace?taskId=${encodeURIComponent(caseItem.sourceExecutionSessionId)}`
+                                    : null)
+                                : (datasetId && record.caseId
+                                    ? `/dataset/${encodeURIComponent(datasetId)}?case=${encodeURIComponent(record.caseId)}`
+                                    : null);
+                            const caseDetailTitle = caseItem?.sourceType === 'trace'
+                                ? [
+                                    caseItem.sourceDatasetName ? `dataset: ${caseItem.sourceDatasetName}` : '',
+                                    caseItem.sourceUploadId ? `upload: ${caseItem.sourceUploadId}` : '',
+                                    caseItem.sourceExecutionSessionId ? `execution: ${caseItem.sourceExecutionSessionId}` : '',
+                                ].filter(Boolean).join(' | ')
+                                : `R${record.roundIndex || '-'} · ${record.caseId}`;
                             return (
                             <div
                                 key={`${side}-${record.caseId}-${record.roundIndex}-${idx}`}
@@ -2351,7 +2364,7 @@ export function GrayscaleEvaluation({
                                         whiteSpace: 'nowrap',
                                         minWidth: 0,
                                     }}
-                                    title={`R${record.roundIndex || '-'} · ${record.caseId}`}
+                                    title={caseDetailTitle}
                                 >
                                     <span style={{ color: '#5F5E5A', fontWeight: 600, marginRight: 4 }}>R{record.roundIndex || '-'}</span>
                                     {caseDetailUrl ? (
@@ -2816,21 +2829,9 @@ export function GrayscaleEvaluation({
                                         />
                                         <span>{locale === 'zh' ? '自动评测' : 'Auto-evaluate'}</span>
                                     </label>
-                                    <label className="v2-config-checkbox-row" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                        <input
-                                            type="checkbox"
-                                            checked={recordTriggerDetails}
-                                            onChange={e => {
-                                                const v = e.target.checked;
-                                                setRecordTriggerDetails(v);
-                                                if (currentTask) persistTaskUpdate(currentTask.id, { ...currentConfigRef.current, recordTriggerDetails: v });
-                                            }}
-                                        />
-                                        <span>{locale === 'zh' ? '记录 Skill 触发详情' : 'Record Skill triggers'}</span>
-                                    </label>
                                 </div>
                                 <div className="v2-config-item-hint" style={{ marginTop: 4, color: '#0F6E56', fontWeight: 500 }}>
-                                    {locale === 'zh' ? '* 自动评估后返回准确评分与 Skill 是否调用' : '* Auto-evaluate on finish with scores & triggers'}
+                                    {locale === 'zh' ? '* 自动评估后返回准确评分与 Skill 是否调用' : '* Auto-evaluate on finish with scores and trigger status'}
                                 </div>
                             </div>
                         </div>
@@ -2920,6 +2921,15 @@ export function GrayscaleEvaluation({
                                             <div style={{ fontSize: 13, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                                 {c.input}
                                             </div>
+                                            {c.sourceType === 'trace' && (
+                                                <div style={{ marginTop: 4, fontSize: 11, color: '#78716C', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                    {[
+                                                        c.sourceDatasetName ? `dataset ${c.sourceDatasetName}` : '',
+                                                        c.sourceUploadId ? `upload ${c.sourceUploadId}` : '',
+                                                        c.sourceExecutionSessionId ? `exec ${c.sourceExecutionSessionId}` : '',
+                                                    ].filter(Boolean).join(' · ')}
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
                                 );
@@ -3065,7 +3075,7 @@ export function GrayscaleEvaluation({
                                 <div className="v2-col-header" style={{ background: '#FAFAF7', borderBottom: '0.5px solid rgba(0,0,0,0.08)' }}>
                                     <div className="v2-col-tag a" style={{ background: '#BA7517' }}>A</div>
                                     <div className="v2-col-name-block">
-                                        <div className="v2-col-name">{locale === 'zh' ? '对照组: 基础 Agent' : 'Control Group'}</div>
+                                        <div className="v2-col-name">{locale === 'zh' ? '对照组' : 'Control Group'}</div>
                                         <div className="v2-col-variant-line">
                                             <span className={`v2-skill-state ${versionAId === NONE_VERSION_ID ? 'off' : 'on'}`} style={versionAId === NONE_VERSION_ID ? {} : { background: '#FEF3C7', color: '#BA7517' }}>
                                                 Skill: {versionAId === NONE_VERSION_ID 
@@ -3154,8 +3164,21 @@ export function GrayscaleEvaluation({
                                   </div>
                                   <div className="v2-col-actions" style={{ background: '#FAFAF7', borderTop: '0.5px solid rgba(0,0,0,0.08)' }}>
                                       <button className="v2-action-btn" onClick={() => setRecordModal({ title: locale === 'zh' ? 'A 对照组执行记录' : 'A Control Records', side: 'a' })}>{locale === 'zh' ? '↗ 执行记录' : 'Records'}</button>
-                                      <button className="v2-action-btn" onClick={() => runCaseSide(selectedCaseId, 'a')}>{locale === 'zh' ? '▶ 重跑' : 'Re-run'}</button>
-                                      <button className="v2-action-btn primary" style={{ background: '#2C2C2A', color: 'white' }} onClick={() => evaluateCaseSide(selectedCaseId, 'a', simA)}>{locale === 'zh' ? '✓ 评测' : 'Evaluate'}</button>
+                                      <button
+                                          className="v2-action-btn"
+                                          title={locale === 'zh' ? '仅重新执行当前 Case 在 A 侧的 session' : 'Re-execute the current case on side A only'}
+                                          onClick={() => activeCase?.id && runCaseSide(activeCase.id, 'a')}
+                                      >
+                                          {locale === 'zh' ? '▶ 重执行' : 'Re-execute'}
+                                      </button>
+                                      <button
+                                          className="v2-action-btn primary"
+                                          style={{ background: '#2C2C2A', color: 'white' }}
+                                          title={locale === 'zh' ? '仅重新评测当前 Case 在 A 侧最新一次执行 session' : 'Re-evaluate the latest execution session for the current case on side A only'}
+                                          onClick={() => activeCase?.id && evaluateCaseSide(activeCase.id, 'a', simA)}
+                                      >
+                                          {locale === 'zh' ? '✓ 重评' : 'Re-evaluate'}
+                                      </button>
                                       <span className="v2-trace-id">{simA.sessionId}</span>
                                   </div>
                             </div>
@@ -3170,7 +3193,7 @@ export function GrayscaleEvaluation({
                                 <div className="v2-col-header" style={{ background: '#E6F1FB', borderBottom: '0.5px solid rgba(0,0,0,0.08)' }}>
                                     <div className="v2-col-tag b" style={{ background: '#1D9E75' }}>B</div>
                                     <div className="v2-col-name-block">
-                                        <div className="v2-col-name" style={{ color: '#0C447C' }}>{locale === 'zh' ? '实验组: 基础 Agent' : 'Experiment Group'}</div>
+                                        <div className="v2-col-name" style={{ color: '#0C447C' }}>{locale === 'zh' ? '实验组' : 'Experiment Group'}</div>
                                         <div className="v2-col-variant-line">
                                             <span className={`v2-skill-state ${versionBId === NONE_VERSION_ID ? 'off' : 'on'}`} style={versionBId === NONE_VERSION_ID ? {} : { background: '#D1FAE5', color: '#065F46' }}>
                                                 Skill: {versionBId === NONE_VERSION_ID 
@@ -3259,8 +3282,21 @@ export function GrayscaleEvaluation({
                                 </div>
                                 <div className="v2-col-actions" style={{ background: '#FAFAF7', borderTop: '0.5px solid rgba(0,0,0,0.08)' }}>
                                     <button className="v2-action-btn" onClick={() => setRecordModal({ title: locale === 'zh' ? 'B 实验组执行记录' : 'B Experiment Records', side: 'b' })}>{locale === 'zh' ? '↗ 执行记录' : 'Records'}</button>
-                                    <button className="v2-action-btn" onClick={() => runCaseSide(selectedCaseId, 'b')}>{locale === 'zh' ? '▶ 重跑' : 'Re-run'}</button>
-                                    <button className="v2-action-btn primary" style={{ background: '#2C2C2A', color: 'white' }} onClick={() => evaluateCaseSide(selectedCaseId, 'b', simB)}>{locale === 'zh' ? '✓ 评测' : 'Evaluate'}</button>
+                                    <button
+                                        className="v2-action-btn"
+                                        title={locale === 'zh' ? '仅重新执行当前 Case 在 B 侧的 session' : 'Re-execute the current case on side B only'}
+                                        onClick={() => activeCase?.id && runCaseSide(activeCase.id, 'b')}
+                                    >
+                                        {locale === 'zh' ? '▶ 重执行' : 'Re-execute'}
+                                    </button>
+                                    <button
+                                        className="v2-action-btn primary"
+                                        style={{ background: '#2C2C2A', color: 'white' }}
+                                        title={locale === 'zh' ? '仅重新评测当前 Case 在 B 侧最新一次执行 session' : 'Re-evaluate the latest execution session for the current case on side B only'}
+                                        onClick={() => activeCase?.id && evaluateCaseSide(activeCase.id, 'b', simB)}
+                                    >
+                                        {locale === 'zh' ? '✓ 重评' : 'Re-evaluate'}
+                                    </button>
                                     <span className="v2-trace-id">{simB.sessionId}</span>
                                 </div>
                             </div>

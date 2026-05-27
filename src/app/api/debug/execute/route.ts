@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { runGeneralAgent } from '@/lib/engine/general-agent';
+import { extractDebugJobTokenUsage } from '@/lib/skill-analysis/grayscale-utils';
 import { prisma } from '@/lib/storage/prisma';
 
 export const dynamic = 'force-dynamic';
@@ -204,7 +205,7 @@ export async function POST(request: Request) {
         startedAt,
         output: result.output ?? '',
         timeCost: `${elapsed}s`,
-        tokenUsage: result.stats?.toolCallCount ?? 0,
+        tokenUsage: extractDebugJobTokenUsage(result.stats),
         sessionId: result.sessionId,
       };
       store.set(jobId, completed);
