@@ -1,49 +1,18 @@
 import { prismaRaw as prisma } from '@/lib/storage/prisma';
-import { isEvaluatorAgentName } from '@/lib/evaluator-agent';
-
-type JsonRecord = Record<string, unknown>;
+import {
+    autoWatchAgentNamesMatch,
+    isAutoWatchWindowMatch,
+    loadTrajectoryCandidateAgentMap,
+    mergeWatchedAgentIntoRawAnalysis,
+    normalizeAutoWatchAgent,
+    normalizeAutoWatchEnabledAt,
+    resolveWatchedAgentForRunRows,
+    safeParseAutoWatchRecord,
+    type AutoWatchRunRowLike,
+} from '@/lib/engine/evaluation/trajectory-auto-watch-helper';
 
 const inFlightTaskKeys = new Set<string>();
 const pendingTaskKeys = new Set<string>();
-
-function safeParseRecord(text: string | null | undefined): JsonRecord {
-    if (!text) return {};
-    try {
-        const parsed = JSON.parse(text);
-        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as JsonRecord : {};
-    } catch {
-        return {};
-    }
-}
-
-function normalizeAgentName(value: unknown): string {
-    return String(value || '').trim();
-}
-
-function namesMatch(a: string, b: string): boolean {
-    return a.trim().toLowerCase() === b.trim().toLowerCase();
-}
-
-async function resolveExecutionAgent(taskId: string, executionAgentName?: string | null): Promise<string> {
-    const direct = normalizeAgentName(executionAgentName);
-    if (direct) return direct;
-
-    const session = await prisma.session.findUnique({
-        where: { taskId },
-        select: { interactions: true },
-    });
-    if (!session?.interactions) return '';
-
-    try {
-        const interactions = JSON.parse(session.interactions);
-        if (!Array.isArray(interactions)) return '';
-        return interactions
-            .map((item: { agent?: unknown }) => normalizeAgentName(item.agent))
-            .find(name => name && !isEvaluatorAgentName(name)) || '';
-    } catch {
-        return '';
-    }
-}
 
 export async function triggerTrajectoryAutoWatchForTask(
     user: string | null | undefined,
@@ -73,13 +42,18 @@ export async function triggerTrajectoryAutoWatchForTask(
                 id: true,
                 taskId: true,
                 timestamp: true,
-                finalResult: true,
                 agentName: true,
             },
         });
-        if (!execution || !String(execution.finalResult || '').trim()) return;
+        if (!execution) return;
 
-        const executionAgent = await resolveExecutionAgent(safeTaskId, execution.agentName);
+        const session = await prisma.session.findUnique({
+            where: { taskId: safeTaskId },
+            select: { endTime: true },
+        });
+        if (!session?.endTime) return;
+
+        const executionAgent = (await loadTrajectoryCandidateAgentMap(safeUser, [safeTaskId])).get(safeTaskId) || '';
         if (!executionAgent) return;
 
         const rows = await prisma.trajectoryEvalResult.findMany({
@@ -92,10 +66,8 @@ export async function triggerTrajectoryAutoWatchForTask(
 
         const rowsByRun = new Map<string, typeof rows>();
         for (const row of rows) {
-            const raw = safeParseRecord(row.rawAnalysisJson);
+            const raw = safeParseAutoWatchRecord(row.rawAnalysisJson);
             if (raw.autoWatch !== true) continue;
-            const watchedAgent = normalizeAgentName(raw.watchedAgent);
-            if (!watchedAgent || !namesMatch(watchedAgent, executionAgent)) continue;
             const group = rowsByRun.get(row.evaluatorRunId) || [];
             group.push(row);
             rowsByRun.set(row.evaluatorRunId, group);
@@ -103,17 +75,33 @@ export async function triggerTrajectoryAutoWatchForTask(
 
         for (const [runId, runRows] of rowsByRun) {
             if (runRows.length === 0) continue;
+            const watchedAgent = await resolveWatchedAgentForRunRows(safeUser, runRows as AutoWatchRunRowLike[]);
+            if (!watchedAgent || !autoWatchAgentNamesMatch(watchedAgent, executionAgent)) continue;
+            const firstRaw = safeParseAutoWatchRecord(runRows[0]?.rawAnalysisJson);
+            const autoWatchEnabledAt = normalizeAutoWatchEnabledAt(firstRaw.autoWatchEnabledAt);
+            if (!isAutoWatchWindowMatch(autoWatchEnabledAt, session.endTime)) continue;
+
+            const rowsNeedingWatchedAgentRepair = runRows.filter(row => {
+                const raw = safeParseAutoWatchRecord(row.rawAnalysisJson);
+                return normalizeAutoWatchAgent(raw.watchedAgent) !== watchedAgent;
+            });
+            if (rowsNeedingWatchedAgentRepair.length > 0) {
+                await prisma.$transaction(
+                    rowsNeedingWatchedAgentRepair.map(row => prisma.trajectoryEvalResult.update({
+                        where: { id: row.id },
+                        data: {
+                            rawAnalysisJson: mergeWatchedAgentIntoRawAnalysis(row.rawAnalysisJson, watchedAgent),
+                        },
+                    })),
+                );
+            }
+
             const existingTaskIds = new Set(
                 runRows
                     .map(row => row.taskId || row.executionId || '')
                     .filter(Boolean),
             );
             if (existingTaskIds.has(safeTaskId) || existingTaskIds.has(execution.id)) continue;
-
-            const runCreatedAt = runRows
-                .map(row => row.createdAt.getTime())
-                .reduce((a, b) => Math.min(a, b), Number.POSITIVE_INFINITY);
-            if (execution.timestamp && execution.timestamp.getTime() < runCreatedAt) continue;
 
             const response = await fetch(`${safeBaseUrl}/api/eval/trajectory/run`, {
                 method: 'POST',
@@ -123,7 +111,7 @@ export async function triggerTrajectoryAutoWatchForTask(
                     evaluatorRunId: runId,
                     taskIds: [safeTaskId],
                     autoWatch: true,
-                    watchedAgent: executionAgent,
+                    watchedAgent,
                 }),
             });
 
