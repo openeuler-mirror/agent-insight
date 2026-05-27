@@ -386,46 +386,9 @@ function deriveExecAndEval(
 }
 
 // ──────────────── caseStates side-state 修改助手 ────────────────
-// 历史 bug：runCaseSide / evaluateCaseSide 在每次 setCaseStates 时
-// 直接用 `[side]: { status: 'running' }` 这种方式整段替换 side state，
-// 导致 runs[] 历史被擦光、执行记录 modal 表面无变化。下面两个 helper 把
-// 「保留 runs[] + 顶层字段同步最新 run」的逻辑统一封一遍，所有 setCaseStates
-// 改动一律走这里：
-//
-//   - appendNewRunningRun(side)：用户点「重跑」时调用。在 runs[] 末尾 push
-//     一条 {status: 'running'} 占位 run，并把 side 顶层 status 切到 'running'。
-//     records modal 就能立刻看到新一行 "running"。
-//
-//   - patchLatestRun(side, patch)：跑完 / 评测完 / 失败时调用。把 runs[] 最后
-//     一条 run merge patch 字段，同时把 side 顶层的镜像字段(status/score/jobId
-//     /sessionId/...)也同步过去，避免顶层和 runs 末尾分裂。
-
-function appendNewRunningRun(side: PerVersionState | undefined): PerVersionState {
-    const base: PerVersionState = side ?? { status: 'pending' };
-    const prevRuns = base.runs ?? [];
-    const nextIndex = prevRuns.length + 1;
-    const newRun: RunResult = {
-        status: 'running',
-        runIndex: nextIndex,
-        roundIndex: nextIndex,
-    };
-    return {
-        ...base,
-        status: 'running',
-        // 顶层 score/output/jobId/sessionId 等先清掉，避免上一轮的残留干扰
-        // 卡片汇总位置（顶层字段被当作"最新 run 的镜像"）。runs[] 里的旧值
-        // 仍然完整保留在 modal 里可见。
-        score: undefined,
-        output: undefined,
-        jobId: undefined,
-        sessionId: undefined,
-        timeCost: undefined,
-        tokenUsage: undefined,
-        evaluatorRunId: undefined,
-        tier: undefined,
-        runs: [...prevRuns, newRun],
-    };
-}
+// patchLatestRun(side, patch)：跑完 / 评测完 / 失败时调用。把 runs[] 最后
+// 一条 run merge patch 字段，同时把 side 顶层的镜像字段(status/score/jobId
+// /sessionId/...)也同步过去，避免顶层和 runs 末尾分裂。
 
 function patchLatestRun(side: PerVersionState | undefined, patch: Partial<RunResult>): PerVersionState {
     const base: PerVersionState = side ?? { status: 'pending' };
@@ -434,8 +397,7 @@ function patchLatestRun(side: PerVersionState | undefined, patch: Partial<RunRes
     if (runs.length > 0) {
         updatedRuns = runs.map((r, i) => (i === runs.length - 1 ? { ...r, ...patch } : r));
     } else {
-        // 极少见兜底：runs[] 为空（比如调用方没先走 appendNewRunningRun）。
-        // 现造一条 run 把 patch 装进去，避免 patch 字段被静默吞掉。
+        // 极少见兜底：runs[] 为空时现造一条 run 把 patch 装进去，避免 patch 字段被静默吞掉。
         updatedRuns = [{
             runIndex: 1,
             roundIndex: 1,
@@ -459,11 +421,10 @@ function patchLatestRun(side: PerVersionState | undefined, patch: Partial<RunRes
     };
 }
 
-// 跟 polling tick 的 setCaseStates(nextStates) 配合：如果本地某 case-side 正处于
-// 「比 server 多了一条 in-flight running run」的状态（用户刚点了重跑还没回写到 DB
-// 或者写完了但 server 那条记录还没进 caseStatesJson），polling 直接覆盖会把那条
-// running run 抹掉。这里做 case-side 级别的 reconcile：只要本地 runs 长度 ≥ 远端
-// 且本地末尾是非 finished 状态，就保留本地不动；否则采用远端。
+// 跟 polling tick 的 setCaseStates(nextStates) 配合：如果本地某 case-side 有
+// 比 server 更新的 in-flight 状态，polling 直接覆盖会把那条 running run 抹掉。
+// 这里做 case-side 级别的 reconcile：只要本地 runs 长度 ≥ 远端且本地末尾是
+// 非 finished 状态，就保留本地不动；否则采用远端。
 function mergeServerCaseStates(
     local: Record<string, { a: PerVersionState; b: PerVersionState }>,
     remote: Record<string, { a: PerVersionState; b: PerVersionState }>,
@@ -475,10 +436,8 @@ function mergeServerCaseStates(
         const lRuns = l.runs ?? [];
         const rRuns = r.runs ?? [];
         const lLatest = lRuns[lRuns.length - 1];
-        // 唯一保留本地的场景: 用户刚点过「重跑」, runCaseSide 已经 push 了一条新
-        // running 占位 + 发 PATCH, 但 PATCH 还没落库, polling tick 拿到的是旧
-        // caseStatesJson(没新这条 run)。这时本地 runs[] 比远端多, 且末尾是
-        // in-flight, 必须保留本地不被擦。
+        // 保留本地比远端更多的 in-flight run，避免 polling tick 用旧 caseStatesJson
+        // 把刚产生的本地进行中状态擦回去。
         if (lRuns.length > rRuns.length && lLatest && !FINISHED.includes(lLatest.status)) {
             return l;
         }
@@ -1054,176 +1013,17 @@ export function GrayscaleEvaluation({
         if (versionBId !== matchedVersion.id) setVersionBId(matchedVersion.id);
     }, [parentSkillVersion, versionBId, versions]);
 
-    // Execute single side
-    const runCaseSide = async (caseId: string, side: 'a' | 'b') => {
-        const targetCase = allCases.find(c => c.id === caseId);
-        const query = targetCase?.input || '';
-        if (!query.trim()) return;
-
-        const versionId = side === 'a' ? versionAId : versionBId;
-        const isNone = versionId === NONE_VERSION_ID;
-        const version = isNone ? null : versions.find(v => v.id === versionId);
-        const selectedSkill = skills.find(s => s.id === selectedSkillId);
-
-        // 1) 入口：往 runs[] push 一条 running 占位，让执行记录 modal 立刻
-        //    看到「新一行 running」，同时把 side 顶层 status 切到 running。
-        setCaseStates(prev => {
-            const current = prev[caseId] || { a: { status: 'pending' }, b: { status: 'pending' } };
-            const updated = {
-                ...prev,
-                [caseId]: {
-                    ...current,
-                    [side]: appendNewRunningRun(current[side]),
-                }
-            };
-            persistCaseStates(updated);
-            return updated;
-        });
-
-        let jobId: string;
-        try {
-            const res = await apiFetch('/api/debug/execute', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    user: user || 'debug-user',
-                    query,
-                    skill: isNone ? undefined : selectedSkill?.name,
-                    skillVersion: (isNone || !version) ? undefined : Number(version.version),
-                    mode: 'grayscale',
-                    // 把任务归属传给后端: 关掉浏览器/网断时, 后端 .then/.catch 会自己
-                    // 把 caseStatesJson 的对应 side 从 running 推到 executed/fail。
-                    // 不传或缺任一字段则跳过, 退化为旧的「前端独占写库」行为(兼容其它调用点)。
-                    grayscaleTaskId: currentTask?.id,
-                    caseId,
-                    side,
-                }),
-            });
-            const data = await res.json();
-            if (!res.ok || !data.jobId) {
-                // dispatch 失败：把刚刚 push 的占位 run 标 fail
-                setCaseStates(prev => {
-                    const current = prev[caseId] || { a: { status: 'pending' }, b: { status: 'pending' } };
-                    const updated = {
-                        ...prev,
-                        [caseId]: {
-                            ...current,
-                            [side]: patchLatestRun(current[side], { status: 'fail', output: data.error || 'dispatch failed' }),
-                        }
-                    };
-                    persistCaseStates(updated);
-                    return updated;
-                });
-                return;
-            }
-            jobId = data.jobId;
-        } catch (err) {
-            setCaseStates(prev => {
-                const current = prev[caseId] || { a: { status: 'pending' }, b: { status: 'pending' } };
-                const updated = {
-                    ...prev,
-                    [caseId]: {
-                        ...current,
-                        [side]: patchLatestRun(current[side], { status: 'fail', output: String(err) }),
-                    }
-                };
-                persistCaseStates(updated);
-                return updated;
-            });
-            return;
-        }
-
-        // 2) dispatch 成功：把 jobId 装到刚 push 的占位 run 上
-        setCaseStates(prev => {
-            const current = prev[caseId] || { a: { status: 'pending' }, b: { status: 'pending' } };
-            const updated = {
-                ...prev,
-                [caseId]: {
-                    ...current,
-                    [side]: patchLatestRun(current[side], { status: 'running', jobId }),
-                }
-            };
-            persistCaseStates(updated);
-            return updated;
-        });
-
-        const poll = async () => {
-            try {
-                const res = await apiFetch(`/api/debug/execute/${jobId}`);
-                const data = await res.json();
-                if (data.status === 'completed') {
-                    const runPatch: Partial<RunResult> = {
-                        status: 'executed',
-                        jobId,
-                        output: data.output ?? '',
-                        timeCost: data.timeCost,
-                        tokenUsage: data.tokenUsage ?? 0,
-                        sessionId: data.sessionId,
-                    };
-                    let executedState: PerVersionState | null = null;
-                    setCaseStates(prev => {
-                        const current = prev[caseId] || { a: { status: 'pending' }, b: { status: 'pending' } };
-                        const nextSide = patchLatestRun(current[side], runPatch);
-                        executedState = nextSide;
-                        const updated = {
-                            ...prev,
-                            [caseId]: {
-                                ...current,
-                                [side]: nextSide,
-                            }
-                        };
-                        persistCaseStates(updated);
-                        return updated;
-                    });
-                    // autoEval 时把执行完整的最新 side state 喂给 evaluator
-                    if (autoEval && executedState) {
-                        evaluateCaseSide(caseId, side, executedState);
-                    }
-                    return true;
-                } else if (data.status === 'failed' || !data.status || data.error) {
-                    setCaseStates(prev => {
-                        const current = prev[caseId] || { a: { status: 'pending' }, b: { status: 'pending' } };
-                        const updated = {
-                            ...prev,
-                            [caseId]: {
-                                ...current,
-                                [side]: patchLatestRun(current[side], { status: 'fail', jobId, output: data.error || 'agent failed' }),
-                            }
-                        };
-                        persistCaseStates(updated);
-                        return updated;
-                    });
-                    return false;
-                }
-                return null;
-            } catch {
-                return null;
-            }
-        };
-
-        const pollKey = `${caseId}_${side}`;
-        if (activePollsRef.current[pollKey]) clearInterval(activePollsRef.current[pollKey]);
-        activePollsRef.current[pollKey] = setInterval(async () => {
-            const done = await poll();
-            if (done !== null) {
-                clearInterval(activePollsRef.current[pollKey]);
-                delete activePollsRef.current[pollKey];
-            }
-        }, 3000);
-    };
-
     /**
      * 行级执行重试: 原地覆盖指定 runIndex 的 run, 不 push 新行。
      *
-     * 跟 runCaseSide (重跑整个 case-side, append 新 run) 不同, 这里是"再试这一行"
-     * 语义——用户在 modal 里看到某一行执行失败, 想再跑一次, 同一行覆盖结果。
+     * 这是执行记录 modal 里的"再试这一行"语义——用户看到某一行执行失败,
+     * 想再跑一次, 同一行覆盖结果。
      *
      * 步骤:
      *   1) 找到 (caseId, side, runIndex) 那条 run, reset 它的状态为 'running',
      *      清掉 sessionId/output/score/eval 相关字段, 保留 runIndex/roundIndex
      *   2) PATCH caseStatesJson 落库
-     *   3) POST /api/debug/execute (不带 grayscaleTaskId/caseId/side, 避免 backend
-     *      recordTraceAs 走老的 append 路径), 等 jobId
+     *   3) POST /api/debug/execute 等 jobId
      *   4) 轮询 /api/debug/execute/{jobId}, completion 时按 runIndex 找到对应 run
      *      原地更新结果字段; autoEval=true 时自动触发该 run 的 evaluate
      */
@@ -1272,7 +1072,7 @@ export function GrayscaleEvaluation({
         if (!nextStates) return;
         await persistTaskUpdate(currentTask.id, currentConfigRef.current, nextStates);
 
-        // 2) POST /api/debug/execute (不传 grayscaleTaskId, 避免 backend 重复写库)
+        // 2) POST /api/debug/execute
         let jobId: string;
         try {
             const res = await apiFetch('/api/debug/execute', {
@@ -1593,13 +1393,6 @@ export function GrayscaleEvaluation({
         }, 2000);
     };
 
-    const runCaseBoth = async (caseId: string) => {
-        await Promise.all([
-            runCaseSide(caseId, 'a'),
-            runCaseSide(caseId, 'b')
-        ]);
-    };
-
     const hasRunningStates = hasRunningCaseStates;
 
     const pollCurrentTask = useCallback((taskId: string) => {
@@ -1617,9 +1410,8 @@ export function GrayscaleEvaluation({
                     return;
                 }
                 const nextStates = data.caseStatesJson || {};
-                // Polling 不要无脑覆盖本地：用户刚点过「重跑」可能还有 in-flight
-                // 占位 run 在本地等 PATCH 落库；mergeServerCaseStates 会按
-                // case-side 粒度保留本地更新的 in-flight 状态，避免被擦回老值。
+                // Polling 不要无脑覆盖本地：mergeServerCaseStates 会按 case-side
+                // 粒度保留本地更新的 in-flight 状态，避免被擦回老值。
                 setCaseStates(prev => mergeServerCaseStates(prev, nextStates));
                 setCurrentTask(prev => prev ? { ...prev, ...data } : data);
                 if (!data.activeRun && !hasRunningStates(nextStates) && !(data.configJson?.autoEval !== false && hasPendingAutoEvaluationCaseStates(nextStates))) {
@@ -1989,7 +1781,6 @@ export function GrayscaleEvaluation({
                 score: undefined as number | undefined,
                 triggerRate: '—',
                 toolCall: '—',
-                accuracy: '—',
                 sessionId: '',
                 output: ''
             };
@@ -2043,7 +1834,6 @@ export function GrayscaleEvaluation({
                 score: undefined as number | undefined,
                 triggerRate: '—',
                 toolCall: '—',
-                accuracy: '—',
                 sessionId: '',
                 output: ''
             };
@@ -2058,7 +1848,6 @@ export function GrayscaleEvaluation({
                 score: undefined as number | undefined,
                 triggerRate: '—',
                 toolCall: '—',
-                accuracy: '—',
                 sessionId: '',
                 output: ''
             };
@@ -2073,7 +1862,6 @@ export function GrayscaleEvaluation({
                 score: undefined as number | undefined,
                 triggerRate: '—',
                 toolCall: '—',
-                accuracy: '—',
                 sessionId: '',
                 output: ''
             };
@@ -2113,8 +1901,6 @@ export function GrayscaleEvaluation({
         const toolNames = Array.from(new Set(terminalStates.flatMap(s => s.toolCalls || []))).slice(0, 3);
         const totalToolCalls = terminalStates.reduce((sum, s) => sum + (s.toolCallCount || 0), 0);
         const toolCall = toolNames.length > 0 ? `${toolNames.join(', ')} · ${totalToolCalls}` : (totalToolCalls > 0 ? `${totalToolCalls} calls` : '无');
-        const correctCount = terminalStates.filter(s => typeof s.score === 'number' && s.score >= 80).length;
-        const accuracy = scoredCount > 0 ? `${correctCount}/${scoredCount} 正确` : '—';
 
         return {
             status: 'executed' as CaseStatus,
@@ -2124,7 +1910,6 @@ export function GrayscaleEvaluation({
             score: avgScore,
             triggerRate,
             toolCall,
-            accuracy,
             sessionId: terminalStates[0]?.sessionId || '',
             output: terminalStates[0]?.output || 'Success'
         };
@@ -3062,7 +2847,7 @@ export function GrayscaleEvaluation({
                             </div>
                             <div className="v2-stage-card-subtitle">
                                 {locale === 'zh'
-                                    ? `对照组 (${getVersionLabel(versions.find(v => v.id === versionAId) || versionAId)}) vs 实验组 (${getVersionLabel(versions.find(v => v.id === versionBId) || versionBId)}) · 暴露每次执行的过程数据`
+                                    ? `对照组 (${getVersionLabel(versions.find(v => v.id === versionAId) || versionAId)}) vs 实验组 (${getVersionLabel(versions.find(v => v.id === versionBId) || versionBId)}) · 每次执行的过程数据`
                                     : `Control (${getVersionLabel(versions.find(v => v.id === versionAId) || versionAId)}) vs Experiment (${getVersionLabel(versions.find(v => v.id === versionBId) || versionBId)}) · Exposing raw execution steps`}
                             </div>
                         </div>
@@ -3141,10 +2926,6 @@ export function GrayscaleEvaluation({
                                                 fontSize: 11
                                             }}>{simA.toolCall}</span>
                                         </div>
-                                        <div className="v2-process-row">
-                                            <span className="v2-process-label">{locale === 'zh' ? '答案准确性' : 'Accuracy'}</span>
-                                            <span className="v2-process-value" style={{ color: '#dc2626', fontWeight: 700 }}>{simA.accuracy}</span>
-                                        </div>
                                     </div>
 
                                     <div className="v2-metric-row" style={{ borderRadius: 8, overflow: 'hidden', marginTop: 12 }}>
@@ -3164,13 +2945,6 @@ export function GrayscaleEvaluation({
                                   </div>
                                   <div className="v2-col-actions" style={{ background: '#FAFAF7', borderTop: '0.5px solid rgba(0,0,0,0.08)' }}>
                                       <button className="v2-action-btn" onClick={() => setRecordModal({ title: locale === 'zh' ? 'A 对照组执行记录' : 'A Control Records', side: 'a' })}>{locale === 'zh' ? '↗ 执行记录' : 'Records'}</button>
-                                      <button
-                                          className="v2-action-btn"
-                                          title={locale === 'zh' ? '仅重新执行当前 Case 在 A 侧的 session' : 'Re-execute the current case on side A only'}
-                                          onClick={() => activeCase?.id && runCaseSide(activeCase.id, 'a')}
-                                      >
-                                          {locale === 'zh' ? '▶ 重执行' : 'Re-execute'}
-                                      </button>
                                       <button
                                           className="v2-action-btn primary"
                                           style={{ background: '#2C2C2A', color: 'white' }}
@@ -3259,10 +3033,6 @@ export function GrayscaleEvaluation({
                                                 fontSize: 11
                                             }}>{simB.toolCall}</span>
                                         </div>
-                                        <div className="v2-process-row">
-                                            <span className="v2-process-label">{locale === 'zh' ? '答案准确性' : 'Accuracy'}</span>
-                                            <span className="v2-process-value" style={{ color: '#1D9E75', fontWeight: 700 }}>{simB.accuracy}</span>
-                                        </div>
                                     </div>
 
                                     <div className="v2-metric-row" style={{ borderRadius: 8, overflow: 'hidden', marginTop: 12 }}>
@@ -3282,13 +3052,6 @@ export function GrayscaleEvaluation({
                                 </div>
                                 <div className="v2-col-actions" style={{ background: '#FAFAF7', borderTop: '0.5px solid rgba(0,0,0,0.08)' }}>
                                     <button className="v2-action-btn" onClick={() => setRecordModal({ title: locale === 'zh' ? 'B 实验组执行记录' : 'B Experiment Records', side: 'b' })}>{locale === 'zh' ? '↗ 执行记录' : 'Records'}</button>
-                                    <button
-                                        className="v2-action-btn"
-                                        title={locale === 'zh' ? '仅重新执行当前 Case 在 B 侧的 session' : 'Re-execute the current case on side B only'}
-                                        onClick={() => activeCase?.id && runCaseSide(activeCase.id, 'b')}
-                                    >
-                                        {locale === 'zh' ? '▶ 重执行' : 'Re-execute'}
-                                    </button>
                                     <button
                                         className="v2-action-btn primary"
                                         style={{ background: '#2C2C2A', color: 'white' }}
