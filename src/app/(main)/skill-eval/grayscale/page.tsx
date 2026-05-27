@@ -2047,7 +2047,7 @@ export function GrayscaleEvaluation({
                         <div
                             style={{
                                 display: 'grid',
-                                gridTemplateColumns: '160px 1fr 1fr 60px',
+                                gridTemplateColumns: '160px 1fr 1fr 60px 70px',
                                 gap: 12,
                                 padding: '8px 12px',
                                 background: '#FAFAF7',
@@ -2066,6 +2066,7 @@ export function GrayscaleEvaluation({
                             <div>{locale === 'zh' ? '执行 session id' : 'Execution session id'}</div>
                             <div>{locale === 'zh' ? '评估 session id' : 'Evaluation session id'}</div>
                             <div style={{ textAlign: 'right' }}>{locale === 'zh' ? '分数' : 'Score'}</div>
+                            <div style={{ textAlign: 'right' }}>{locale === 'zh' ? '操作' : 'Action'}</div>
                         </div>
                         {records.map((record, idx) => {
                             const hasExecFailure = !!record.failureType;
@@ -2166,6 +2167,45 @@ export function GrayscaleEvaluation({
 
                                 <div style={{ textAlign: 'right', color: accent, fontWeight: 700, fontSize: 14 }}>
                                     {typeof record.score === 'number' ? record.score : '—'}
+                                </div>
+
+                                {/* 操作列: 失败行才显示重试按钮 */}
+                                <div style={{ textAlign: 'right' }}>
+                                    {exec.tone === 'fail' || (evaluation && evaluation.tone === 'fail') ? (
+                                        <button
+                                            className="v2-action-btn"
+                                            style={{
+                                                fontSize: 11,
+                                                padding: '4px 8px',
+                                                background: '#1C1917',
+                                                color: 'white',
+                                                border: 'none',
+                                                borderRadius: 4,
+                                                cursor: 'pointer',
+                                                whiteSpace: 'nowrap',
+                                            }}
+                                            title={hasExecFailure
+                                                ? (locale === 'zh' ? '执行失败 → 从执行重试 (会自动评测)' : 'Retry from execution (auto-evaluate)')
+                                                : (locale === 'zh' ? '评测失败 → 只重新评测 (复用现有 session)' : 'Retry evaluation only')}
+                                            onClick={() => {
+                                                // 执行失败 → 重跑 agent (会 push 新 run, 自动 autoEval)
+                                                // 评测失败 → 只重评 (走 action='evaluate' POST, 复用现有 sessionId)
+                                                if (hasExecFailure) {
+                                                    void runCaseSide(record.caseId, side);
+                                                } else {
+                                                    // 拿当前 side state (含 sessionId) 传给 evaluator
+                                                    const sideState = caseStates[record.caseId]?.[side];
+                                                    if (sideState) {
+                                                        void evaluateCaseSide(record.caseId, side, sideState);
+                                                    }
+                                                }
+                                            }}
+                                        >
+                                            🔁 {locale === 'zh' ? '重试' : 'Retry'}
+                                        </button>
+                                    ) : (
+                                        <span style={{ color: '#B8B6AE', fontSize: 11 }}>—</span>
+                                    )}
                                 </div>
                             </div>
                             );
