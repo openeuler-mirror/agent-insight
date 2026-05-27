@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
+import { Info } from 'lucide-react';
 import { apiFetch } from '@/lib/client/api';
 import { useAuth } from '@/lib/auth/auth-context';
 import { getPresetEvaluatorDetail, type PresetEvaluatorDetail } from '@/lib/evaluators/preset-evaluator-details';
@@ -1209,7 +1210,13 @@ function LlmEvaluatorCreatePanel({
       <section style={{ marginBottom: 28, padding: 14, borderRadius: 8, background: 'var(--background-secondary)', border: '1px solid var(--border)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
           <span className="ai-section-title" style={{ margin: 0 }}>输出</span>
-          <span title="评测模型须遵守的输出约定" style={{ cursor: 'help', color: 'var(--foreground-muted)' }}>ⓘ</span>
+          <span
+            title="评测模型须遵守的输出约定"
+            aria-label="评测模型须遵守的输出约定"
+            style={{ cursor: 'help', color: 'var(--foreground-muted)', display: 'inline-flex', alignItems: 'center' }}
+          >
+            <Info style={{ width: 16, height: 16 }} aria-hidden />
+          </span>
         </div>
         <p style={{ margin: '0 0 10px', fontSize: 12.5, color: 'var(--foreground-secondary)', lineHeight: 1.65 }}>
           <strong style={{ color: 'var(--foreground)' }}>得分：</strong>

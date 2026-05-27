@@ -1,6 +1,7 @@
 'use client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { Info } from 'lucide-react';
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { SkillLinks } from '@/components/skills/SkillLink';
 import { useTheme, useThemeColors } from '@/lib/client/theme-context';
@@ -711,11 +712,12 @@ const CustomTooltip = ({ content }: { content: React.ReactNode }) => {
         <>
             <span
                 ref={triggerRef}
-                style={{ marginLeft: '4px', cursor: 'help', fontSize: '0.8rem', display: 'inline-block' }}
+                style={{ marginLeft: '4px', cursor: 'help', display: 'inline-flex', alignItems: 'center', color: 'var(--foreground-muted)' }}
                 onMouseEnter={handleMouseEnter}
                 onMouseLeave={() => setVisible(false)}
+                aria-label="字段说明"
             >
-                ⓘ
+                <Info style={{ width: 16, height: 16 }} aria-hidden />
             </span>
             {visible && typeof document !== 'undefined' && createPortal(
                 <div style={{

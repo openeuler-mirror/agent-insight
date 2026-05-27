@@ -18,6 +18,7 @@ import {
     Trash2
 } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { AppTopBar } from '@/components/shell/AppTopBar';
 
 type AgentOwnership = 'system' | 'user' | 'unregistered';
 type AgentLayer = 'main' | 'subagent';
@@ -969,30 +970,18 @@ function AgentsPageInner() {
     };
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--background)', overflowY: 'auto' }}>
-            <div style={{ padding: '18px 22px 28px', maxWidth: 1280, margin: '0 auto', width: '100%', boxSizing: 'border-box' }}>
-                {/* Header */}
-                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
-                    <div style={{ minWidth: 280, flex: 1 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                            <span className="ai-badge ai-badge-b">Agents</span>
-                            <span style={{ color: 'var(--foreground-muted)', fontSize: 11 }}>管理已接入Agent</span>
-                        </div>
-                        <h1 style={{ margin: 0, fontSize: 22, lineHeight: 1.2, fontWeight: 600, color: 'var(--foreground)' }}>
-                            Agent管理
-                        </h1>
-                        <p style={{ margin: '6px 0 0', color: 'var(--foreground-secondary)', fontSize: 12.5, maxWidth: 760 }}>
-                            Agent 管理模块汇聚了当前环境中运行的所有已接入 Agent 实例。您可以查看其运行状态、成功率指标，并进行全链路分析与故障分析。
-                        </p>
-                    </div>
-                    <div style={{ display: 'flex', gap: 8 }}>
-                        <Btn variant="default" onClick={() => setIsRegisterDialogOpen(true)}>
-                            <Plus style={{ width: 14, height: 14 }} />
-                            {t('nav.registerAgent')}
-                        </Btn>
-                    </div>
-                </div>
-
+        <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+            <AppTopBar
+                title={t('nav.agents')}
+                showDefaultActions={false}
+                actions={
+                    <Btn variant="default" size="sm" onClick={() => setIsRegisterDialogOpen(true)}>
+                        <Plus style={{ width: 14, height: 14 }} />
+                        {t('nav.registerAgent')}
+                    </Btn>
+                }
+            />
+            <div style={{ flex: 1, overflowY: 'auto', padding: '18px 22px 28px', width: '100%', boxSizing: 'border-box' }}>
                 {/* Unregistered Alert */}
                 {unregisteredCount > 0 && (
                     <div style={{

@@ -8,6 +8,7 @@ import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
 import type { SkillSummary } from './types';
 import { FilePreview } from './_FilePreview';
+import { Term } from '@/components/text/Term';
 import './skill-opt.css';
 
 export default function SkillOptListPage() {
@@ -133,7 +134,7 @@ export default function SkillOptListPage() {
 
     return (
         <>
-            <AppTopBar title={t('nav.skillOpt')} />
+            <AppTopBar title={<Term id="skill-optimization" label={t('nav.skillOpt')} />} />
             <div className="skopt-list-root">
                 <div className="skopt-list-toolbar">
                     <input

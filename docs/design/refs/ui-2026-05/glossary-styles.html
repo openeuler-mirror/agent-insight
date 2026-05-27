@@ -1,0 +1,1098 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1.0" />
+<title>Agent Insight · 术语提示样式候选</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Noto+Serif+SC:wght@400;600;900&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #fafaf7;
+    --ink: #1a1a1f;
+    --ink-soft: #4a4a55;
+    --muted: #8a8a95;
+    --line: #e6e3da;
+    --accent: #6b46ff;
+    --accent-soft: #f0ecff;
+    --warn: #d97706;
+    --warn-soft: #fef3c7;
+    --green: #047857;
+    --green-soft: #d1fae5;
+    --pink: #ec4899;
+    --card-bg: #ffffff;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Inter', -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    line-height: 1.6;
+    padding: 0;
+    min-height: 100vh;
+    background-image:
+      radial-gradient(circle at 20% 10%, rgba(107,70,255,0.04) 0%, transparent 40%),
+      radial-gradient(circle at 80% 80%, rgba(236,72,153,0.03) 0%, transparent 40%);
+  }
+
+  .page {
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: 64px 40px 120px;
+  }
+
+  /* ===== HEADER ===== */
+  header.hero {
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 32px;
+    margin-bottom: 48px;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: end;
+    gap: 24px;
+  }
+  .eyebrow {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 12px;
+  }
+  h1 {
+    font-family: 'Noto Serif SC', serif;
+    font-weight: 900;
+    font-size: 44px;
+    line-height: 1.1;
+    letter-spacing: -0.01em;
+  }
+  h1 em {
+    font-style: italic;
+    font-weight: 400;
+    color: var(--accent);
+  }
+  .hero-meta {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--muted);
+    text-align: right;
+    line-height: 1.7;
+  }
+  .hero-meta strong { color: var(--ink); font-weight: 500; }
+
+  /* ===== CARD ===== */
+  .style-card {
+    background: var(--card-bg);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    margin-bottom: 40px;
+    overflow: visible;
+    position: relative;
+    transition: box-shadow 0.3s;
+  }
+  .style-card:hover {
+    box-shadow: 0 1px 0 var(--ink-soft);
+  }
+
+  .card-header {
+    padding: 24px 32px;
+    border-bottom: 1px dashed var(--line);
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 24px;
+    flex-wrap: wrap;
+  }
+  .card-num {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--accent);
+    letter-spacing: 0.1em;
+  }
+  .card-title {
+    font-family: 'Noto Serif SC', serif;
+    font-size: 24px;
+    font-weight: 600;
+    margin-top: 4px;
+  }
+  .card-tagline {
+    font-size: 13px;
+    color: var(--ink-soft);
+    margin-top: 6px;
+    max-width: 560px;
+  }
+  .card-tags {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .tag {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.05em;
+    padding: 4px 8px;
+    border: 1px solid var(--line);
+    border-radius: 2px;
+    color: var(--ink-soft);
+    background: var(--bg);
+  }
+  .tag.good { color: var(--green); border-color: var(--green-soft); background: var(--green-soft); }
+  .tag.warn { color: var(--warn); border-color: var(--warn-soft); background: var(--warn-soft); }
+
+  .card-demo {
+    padding: 48px 32px;
+    background:
+      repeating-linear-gradient(
+        45deg,
+        transparent,
+        transparent 16px,
+        rgba(107,70,255,0.015) 16px,
+        rgba(107,70,255,0.015) 17px
+      ),
+      var(--card-bg);
+    min-height: 200px;
+  }
+  .demo-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--muted);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-bottom: 24px;
+  }
+  .mock-line {
+    font-size: 15px;
+    color: var(--ink);
+    margin-bottom: 16px;
+    line-height: 2.2;
+  }
+  .mock-line:last-child { margin-bottom: 0; }
+
+  .card-pros {
+    padding: 20px 32px;
+    background: var(--bg);
+    border-top: 1px solid var(--line);
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 32px;
+    font-size: 13px;
+  }
+  .pros-block { }
+  .pros-block-title {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 8px;
+  }
+  .pros-block ul { list-style: none; }
+  .pros-block li { padding-left: 14px; position: relative; margin-bottom: 4px; color: var(--ink-soft); }
+  .pros-block li::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 9px;
+    width: 6px;
+    height: 1px;
+    background: var(--ink-soft);
+  }
+
+  /* ============================================
+     STYLE 1: DOTTED UNDERLINE TOOLTIP
+     ============================================ */
+  .term-dotted {
+    border-bottom: 1px dotted var(--accent);
+    cursor: help;
+    position: relative;
+    color: var(--ink);
+    font-weight: 500;
+  }
+  .term-dotted::after {
+    content: attr(data-tip);
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%) translateY(4px);
+    background: var(--ink);
+    color: #fff;
+    padding: 8px 12px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 400;
+    white-space: nowrap;
+    max-width: 320px;
+    white-space: normal;
+    width: max-content;
+    max-width: 280px;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.2s, transform 0.2s;
+    z-index: 100;
+    line-height: 1.5;
+  }
+  .term-dotted::before {
+    content: '';
+    position: absolute;
+    bottom: calc(100% + 4px);
+    left: 50%;
+    transform: translateX(-50%);
+    border: 4px solid transparent;
+    border-top-color: var(--ink);
+    opacity: 0;
+    transition: opacity 0.2s;
+  }
+  .term-dotted:hover::after,
+  .term-dotted:hover::before {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+
+  /* ============================================
+     STYLE 2: SUPERSCRIPT BADGE + POPOVER
+     ============================================ */
+  .term-badge {
+    position: relative;
+    color: var(--accent);
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .term-badge sup {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border: 1px solid var(--accent);
+    border-radius: 50%;
+    font-size: 9px;
+    text-align: center;
+    line-height: 12px;
+    margin-left: 3px;
+    font-weight: 700;
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--accent);
+    background: var(--accent-soft);
+    vertical-align: super;
+    transition: all 0.2s;
+  }
+  .term-badge:hover sup {
+    background: var(--accent);
+    color: #fff;
+  }
+  .term-badge .popover {
+    position: absolute;
+    top: calc(100% + 12px);
+    left: 0;
+    background: #fff;
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--accent);
+    padding: 14px 18px;
+    width: 320px;
+    box-shadow: 0 12px 32px -8px rgba(26,26,31,0.15);
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(-4px);
+    transition: all 0.25s;
+    z-index: 200;
+    font-weight: 400;
+    color: var(--ink);
+    pointer-events: none;
+  }
+  .term-badge:hover .popover {
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0);
+  }
+  .popover-title {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 4px;
+  }
+  .popover-term {
+    font-family: 'Noto Serif SC', serif;
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 8px;
+    color: var(--ink);
+  }
+  .popover-body {
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--ink-soft);
+  }
+
+  /* ============================================
+     STYLE 3: INLINE EXPAND (ACCORDION)
+     ============================================ */
+  .term-inline {
+    display: inline;
+  }
+  .term-inline-trigger {
+    color: var(--ink);
+    font-weight: 500;
+    border-bottom: 2px solid var(--accent-soft);
+    cursor: pointer;
+    padding: 0 1px;
+    transition: background 0.2s;
+  }
+  .term-inline-trigger:hover { background: var(--accent-soft); }
+  .term-inline-trigger::after {
+    content: '+';
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--accent);
+    margin-left: 3px;
+    font-weight: 700;
+    transition: transform 0.2s;
+    display: inline-block;
+  }
+  .term-inline.is-open .term-inline-trigger::after { content: '−'; }
+
+  .term-inline-content {
+    display: none;
+    margin: 12px 0;
+    padding: 14px 18px;
+    background: linear-gradient(to right, var(--accent-soft) 0%, var(--accent-soft) 4px, var(--bg) 4px);
+    border-radius: 2px;
+    font-size: 13px;
+    color: var(--ink-soft);
+    line-height: 1.65;
+    animation: slideDown 0.25s ease;
+  }
+  .term-inline.is-open .term-inline-content { display: block; }
+  @keyframes slideDown {
+    from { opacity: 0; transform: translateY(-4px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .term-inline-content strong {
+    color: var(--ink);
+    font-weight: 600;
+  }
+
+  /* ============================================
+     STYLE 4: SIDE DRAWER
+     ============================================ */
+  .term-drawer {
+    color: var(--ink);
+    font-weight: 500;
+    cursor: pointer;
+    background: linear-gradient(transparent 60%, var(--warn-soft) 60%);
+    padding: 0 2px;
+    transition: background 0.2s;
+  }
+  .term-drawer:hover {
+    background: linear-gradient(transparent 0%, var(--warn-soft) 0%);
+  }
+  .term-drawer::after {
+    content: '↗';
+    font-size: 10px;
+    margin-left: 2px;
+    color: var(--warn);
+    vertical-align: super;
+  }
+
+  .drawer-mask {
+    position: fixed;
+    inset: 0;
+    background: rgba(26,26,31,0.4);
+    backdrop-filter: blur(2px);
+    opacity: 0;
+    visibility: hidden;
+    transition: all 0.3s;
+    z-index: 998;
+  }
+  .drawer-mask.show { opacity: 1; visibility: visible; }
+  .drawer {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 420px;
+    max-width: 90vw;
+    background: #fff;
+    border-left: 1px solid var(--line);
+    transform: translateX(100%);
+    transition: transform 0.35s cubic-bezier(0.32, 0.72, 0, 1);
+    z-index: 999;
+    overflow-y: auto;
+  }
+  .drawer.show { transform: translateX(0); }
+  .drawer-head {
+    padding: 32px 32px 24px;
+    border-bottom: 1px solid var(--line);
+    position: relative;
+  }
+  .drawer-close {
+    position: absolute;
+    top: 24px;
+    right: 24px;
+    width: 28px;
+    height: 28px;
+    border: 1px solid var(--line);
+    background: var(--bg);
+    cursor: pointer;
+    font-size: 14px;
+    border-radius: 2px;
+    line-height: 1;
+  }
+  .drawer-eyebrow {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 8px;
+  }
+  .drawer-title {
+    font-family: 'Noto Serif SC', serif;
+    font-size: 28px;
+    font-weight: 700;
+    margin-bottom: 4px;
+  }
+  .drawer-subtitle {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .drawer-body {
+    padding: 28px 32px;
+  }
+  .drawer-section {
+    margin-bottom: 28px;
+  }
+  .drawer-section:last-child { margin-bottom: 0; }
+  .drawer-section-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 10px;
+    padding-bottom: 6px;
+    border-bottom: 1px dashed var(--line);
+  }
+  .drawer-section p {
+    font-size: 14px;
+    line-height: 1.7;
+    color: var(--ink-soft);
+    margin-bottom: 10px;
+  }
+  .drawer-related {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .drawer-related a {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    padding: 4px 10px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    text-decoration: none;
+    border-radius: 2px;
+    transition: all 0.15s;
+  }
+  .drawer-related a:hover { background: var(--accent); color: #fff; }
+
+  /* ============================================
+     STYLE 5: MARGIN ANNOTATION
+     ============================================ */
+  .demo-margin {
+    display: grid;
+    grid-template-columns: 1fr 240px;
+    gap: 40px;
+    align-items: start;
+  }
+  .demo-margin-text {
+    font-size: 15px;
+    line-height: 2.1;
+  }
+  .term-margin {
+    background: var(--green-soft);
+    padding: 0 4px;
+    color: var(--green);
+    font-weight: 500;
+    cursor: pointer;
+    position: relative;
+    counter-increment: margin-note;
+  }
+  .term-margin::after {
+    content: counter(margin-note);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px;
+    vertical-align: super;
+    margin-left: 2px;
+    font-weight: 700;
+  }
+  .demo-margin-text {
+    counter-reset: margin-note;
+  }
+
+  .margin-notes {
+    border-left: 2px solid var(--green);
+    padding-left: 20px;
+    font-family: 'JetBrains Mono', monospace;
+    counter-reset: margin-note-out;
+  }
+  .margin-note {
+    margin-bottom: 18px;
+    font-size: 11px;
+    line-height: 1.6;
+    color: var(--ink-soft);
+    counter-increment: margin-note-out;
+    position: relative;
+    padding-left: 22px;
+    cursor: pointer;
+    transition: color 0.2s;
+  }
+  .margin-note:hover { color: var(--ink); }
+  .margin-note::before {
+    content: counter(margin-note-out);
+    position: absolute;
+    left: 0;
+    top: 0;
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--green);
+    background: var(--green-soft);
+    width: 16px;
+    height: 16px;
+    text-align: center;
+    line-height: 16px;
+    border-radius: 2px;
+  }
+  .margin-note strong {
+    font-family: 'Noto Serif SC', serif;
+    color: var(--ink);
+    font-weight: 600;
+    display: block;
+    margin-bottom: 2px;
+    font-size: 12px;
+  }
+
+  /* ===== RECOMMENDATION ===== */
+  .verdict {
+    margin-top: 64px;
+    padding: 40px;
+    background: var(--ink);
+    color: #fff;
+    border-radius: 4px;
+    background-image:
+      repeating-linear-gradient(
+        45deg,
+        transparent,
+        transparent 20px,
+        rgba(255,255,255,0.02) 20px,
+        rgba(255,255,255,0.02) 21px
+      );
+  }
+  .verdict h2 {
+    font-family: 'Noto Serif SC', serif;
+    font-size: 28px;
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+  .verdict h2 em {
+    color: var(--pink);
+    font-style: italic;
+    font-weight: 400;
+  }
+  .verdict-sub {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: rgba(255,255,255,0.5);
+    margin-bottom: 28px;
+  }
+  .verdict-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 20px;
+  }
+  .verdict-item {
+    padding: 18px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 4px;
+  }
+  .verdict-item-key {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--pink);
+    margin-bottom: 6px;
+    letter-spacing: 0.05em;
+  }
+  .verdict-item-val {
+    font-size: 14px;
+    line-height: 1.6;
+    color: rgba(255,255,255,0.88);
+  }
+  .verdict-item-val strong {
+    font-family: 'Noto Serif SC', serif;
+    font-weight: 600;
+    color: #fff;
+  }
+
+  @media (max-width: 768px) {
+    .page { padding: 32px 20px 80px; }
+    h1 { font-size: 32px; }
+    header.hero { grid-template-columns: 1fr; }
+    .hero-meta { text-align: left; }
+    .card-pros { grid-template-columns: 1fr; }
+    .demo-margin { grid-template-columns: 1fr; }
+    .verdict-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header class="hero">
+    <div>
+      <div class="eyebrow">Agent Insight · Glossary UX</div>
+      <h1>5 种<em>术语提示</em>样式<br/>给你挑</h1>
+    </div>
+    <div class="hero-meta">
+      Hover / Click<br/>
+      所有样例均可<strong>真实交互</strong><br/>
+      <strong>v0 · candidates</strong>
+    </div>
+  </header>
+
+  <!-- ============== STYLE 1 ============== -->
+  <section class="style-card">
+    <div class="card-header">
+      <div>
+        <div class="card-num">01 / 05</div>
+        <div class="card-title">虚线下划线 · Tooltip</div>
+        <div class="card-tagline">最轻量的方案。名词带一条点状虚线，鼠标悬停 0.2 秒弹出黑色小气泡。气泡不超过两行。</div>
+      </div>
+      <div class="card-tags">
+        <span class="tag good">轻量</span>
+        <span class="tag">hover</span>
+        <span class="tag warn">移动端弱</span>
+      </div>
+    </div>
+    <div class="card-demo">
+      <div class="demo-label">// 实际效果 — 把鼠标移到带点状线的名词上</div>
+      <div class="mock-line">
+        当前 Skill 的<span class="term-dotted" data-tip="评估覆盖度 = 已完成评测的维度数 ÷ 全部 4 个评估维度">综合健康分</span>采用<span class="term-dotted" data-tip="未跑完的维度不计入分母，跑了多少算多少。新 Skill 早期分数虚高的元凶被它干掉了">置信加权</span>计算，最近一次<span class="term-dotted" data-tip="同输入分别在「开 Skill」「关 Skill」下各跑 N 轮，对比效果差异">A/B 测试</span>显示<span class="term-dotted" data-tip="Trace 中模型与工具/用户的对话总轮数，反映任务复杂度">LLM Turns</span>从 8 降到 5。
+      </div>
+      <div class="mock-line">
+        建议先补齐<span class="term-dotted" data-tip="覆盖路由准确度，评估「该命中本 Skill 的 query 是否被命中」">触发分析</span>维度，<span class="term-dotted" data-tip="一次完整执行的全部调用记录，包含若干 Span">Trace</span>样本数已达标。
+      </div>
+    </div>
+    <div class="card-pros">
+      <div class="pros-block">
+        <div class="pros-block-title">适合用在</div>
+        <ul>
+          <li>正文密度大、不想打断阅读的场景</li>
+          <li>解释只需 1–2 句话的常见名词</li>
+          <li>表格、卡片标题旁的小字段</li>
+        </ul>
+      </div>
+      <div class="pros-block">
+        <div class="pros-block-title">注意</div>
+        <ul>
+          <li>移动端没有 hover，需要降级成点击</li>
+          <li>不适合放图片、代码块、链接</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============== STYLE 2 ============== -->
+  <section class="style-card">
+    <div class="card-header">
+      <div>
+        <div class="card-num">02 / 05</div>
+        <div class="card-title">圆形角标 · Popover 卡片</div>
+        <div class="card-tagline">名词后挂一枚小问号。悬停弹出一张带左侧色条的卡片，可放 3–4 行说明 + 公式 + 关联链接。</div>
+      </div>
+      <div class="card-tags">
+        <span class="tag good">信息量适中</span>
+        <span class="tag">hover/click</span>
+        <span class="tag good">桌面 + 移动</span>
+      </div>
+    </div>
+    <div class="card-demo" style="overflow:visible;">
+      <div class="demo-label">// 实际效果 — 把鼠标移到带 i 标的名词上</div>
+      <div class="mock-line">
+        系统健康快照里的
+        <span class="term-badge">
+          P95 时延<sup>i</sup>
+          <div class="popover">
+            <div class="popover-title">指标 · LATENCY</div>
+            <div class="popover-term">P95 时延</div>
+            <div class="popover-body">把所有请求耗时从小到大排序后，第 95 个百分位的值。代表绝大多数用户能感受到的"最差体验"，对长尾敏感。</div>
+          </div>
+        </span>
+        是 8.4 分钟，比上周高出
+        <span class="term-badge">
+          P50<sup>i</sup>
+          <div class="popover">
+            <div class="popover-title">指标 · LATENCY</div>
+            <div class="popover-term">P50 时延（中位数）</div>
+            <div class="popover-body">把请求耗时从小到大排序后正中间那个值。代表"普通一次调用"的耗时，跟平均值不同——它不会被极慢的少数请求带偏。</div>
+          </div>
+        </span>
+        约 2 倍。
+      </div>
+      <div class="mock-line">
+        失败原因为
+        <span class="term-badge">
+          Timeout<sup>i</sup>
+          <div class="popover">
+            <div class="popover-title">故障类型 · ORIGIN</div>
+            <div class="popover-term">Timeout 类故障</div>
+            <div class="popover-body">代理等待后台任务超过设定时长仍未返回。属于「原始错误类故障」——直接由系统/工具抛出的硬错误。</div>
+          </div>
+        </span>
+        ，发生在第 13 个
+        <span class="term-badge">
+          Span<sup>i</sup>
+          <div class="popover">
+            <div class="popover-title">追踪结构 · TRACING</div>
+            <div class="popover-term">Span</div>
+            <div class="popover-body">Trace 中的单个执行片段，可代表一次 LLM 调用、一次 Tool Call，或一次子 Agent 派生。Span 嵌套形成调用树。</div>
+          </div>
+        </span>
+        节点。
+      </div>
+    </div>
+    <div class="card-pros">
+      <div class="pros-block">
+        <div class="pros-block-title">适合用在</div>
+        <ul>
+          <li>有公式、阈值、单位的指标名词</li>
+          <li>用户首次接触平台的概览/诊断页</li>
+          <li>仪表盘里的关键数字旁</li>
+        </ul>
+      </div>
+      <div class="pros-block">
+        <div class="pros-block-title">注意</div>
+        <ul>
+          <li>角标会增加视觉密度，每屏 ≤ 6 个为宜</li>
+          <li>popover 边界离屏幕边缘要做翻转</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============== STYLE 3 ============== -->
+  <section class="style-card">
+    <div class="card-header">
+      <div>
+        <div class="card-num">03 / 05</div>
+        <div class="card-title">内联折叠 · Inline Expand</div>
+        <div class="card-tagline">点击名词当场展开一行解释卡。不打断布局、不弹层、不需要悬停。最适合做"渐进式学习"。</div>
+      </div>
+      <div class="card-tags">
+        <span class="tag good">移动友好</span>
+        <span class="tag">click</span>
+        <span class="tag good">无遮挡</span>
+      </div>
+    </div>
+    <div class="card-demo">
+      <div class="demo-label">// 实际效果 — 点击带 + 号的名词</div>
+      <div class="mock-line">
+        本次 A/B 测试设置了
+        <span class="term-inline">
+          <span class="term-inline-trigger" onclick="toggleInline(this)">重复轮次</span>
+          <span class="term-inline-content">
+            <strong>重复轮次：</strong>同一样本在相同配置下重复执行的次数。用于计算方差、消除模型随机性。一般取 3 轮起步，对成本敏感的场景可取 1。
+          </span>
+        </span>
+        为 3，
+        <span class="term-inline">
+          <span class="term-inline-trigger" onclick="toggleInline(this)">对照版本</span>
+          <span class="term-inline-content">
+            <strong>对照版本 (A)：</strong>不挂载本 Skill 的基线 Agent。它要尽量保持与实验版本除「是否启用 Skill」之外的所有条件一致，否则结论不可信。
+          </span>
+        </span>
+        为不挂载本 Skill 的 baseline。
+      </div>
+      <div class="mock-line">
+        若实验版本的
+        <span class="term-inline">
+          <span class="term-inline-trigger" onclick="toggleInline(this)">触发集命中率</span>
+          <span class="term-inline-content">
+            <strong>触发集命中率：</strong>「应该触发本 Skill 的样本中，确实被触发的比例」。数值越高越好。它与「误触发率」一起决定 Skill 的路由质量——单看命中率会掩盖误伤问题。
+          </span>
+        </span>
+        高于 80%，可推进到上线评估。
+      </div>
+    </div>
+    <div class="card-pros">
+      <div class="pros-block">
+        <div class="pros-block-title">适合用在</div>
+        <ul>
+          <li>新手引导、教学文档</li>
+          <li>移动端为主的页面</li>
+          <li>需要塞下 4–6 行解释的复杂名词</li>
+        </ul>
+      </div>
+      <div class="pros-block">
+        <div class="pros-block-title">注意</div>
+        <ul>
+          <li>展开会撑高页面，密集文本里不要一次开太多</li>
+          <li>建议加「全部展开/收起」开关</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============== STYLE 4 ============== -->
+  <section class="style-card">
+    <div class="card-header">
+      <div>
+        <div class="card-num">04 / 05</div>
+        <div class="card-title">侧边抽屉 · Detail Drawer</div>
+        <div class="card-tagline">点击名词从右侧推出一张完整文档卡：定义、公式、示例、关联名词。重武器，专治"我真的要搞懂这个概念"的用户。</div>
+      </div>
+      <div class="card-tags">
+        <span class="tag good">信息量大</span>
+        <span class="tag">click</span>
+        <span class="tag">可路由</span>
+      </div>
+    </div>
+    <div class="card-demo">
+      <div class="demo-label">// 实际效果 — 点击带高亮 ↗ 的名词</div>
+      <div class="mock-line">
+        Skill 进入
+        <span class="term-drawer" onclick="openDrawer('lifecycle')">SKILL 生命周期</span>
+        的第二阶段时，需要先跑齐
+        <span class="term-drawer" onclick="openDrawer('coverage')">评估覆盖度</span>
+        ，再判断是否进入
+        <span class="term-drawer" onclick="openDrawer('optimize')">Skill 优化器</span>
+        。
+      </div>
+      <div class="mock-line">
+        当一次执行的
+        <span class="term-drawer" onclick="openDrawer('chainerror')">链路状态</span>
+        标记为 CHAIN_ERROR · L13 时，问题节点已被定位。
+      </div>
+    </div>
+    <div class="card-pros">
+      <div class="pros-block">
+        <div class="pros-block-title">适合用在</div>
+        <ul>
+          <li>核心概念（Skill / Trace / Evaluator）</li>
+          <li>解释里要塞图表、代码、外链的场景</li>
+          <li>用户文档 + 产品页打通时</li>
+        </ul>
+      </div>
+      <div class="pros-block">
+        <div class="pros-block-title">注意</div>
+        <ul>
+          <li>动作较重，频次过高会让人反感</li>
+          <li>建议只对 10–20 个核心名词使用</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============== STYLE 5 ============== -->
+  <section class="style-card">
+    <div class="card-header">
+      <div>
+        <div class="card-num">05 / 05</div>
+        <div class="card-title">边注 · Margin Annotation</div>
+        <div class="card-tagline">把名词解释放到正文右侧，像古籍批注。视线不离开页面，所有名词解释一次性可见。适合静态长文档/说明页。</div>
+      </div>
+      <div class="card-tags">
+        <span class="tag good">一览无遗</span>
+        <span class="tag">静态</span>
+        <span class="tag warn">占空间</span>
+      </div>
+    </div>
+    <div class="card-demo">
+      <div class="demo-label">// 实际效果 — 右侧批注与正文一一对应，可悬停高亮</div>
+      <div class="demo-margin">
+        <div class="demo-margin-text">
+          系统检测到一次
+          <span class="term-margin">CHAIN_ERROR</span>，
+          失败的
+          <span class="term-margin">Span</span>
+          位于 Fuxi-Sub 子 Agent 的
+          <span class="term-margin">background_output</span>
+          工具调用上。建议运行
+          <span class="term-margin">SMART RUN</span>
+          一次性补齐缺失的评估维度。
+        </div>
+        <aside class="margin-notes">
+          <div class="margin-note">
+            <strong>CHAIN_ERROR</strong>
+            一次 Trace 的最终状态标记，表示链路中某节点出错且未被恢复。后缀 L13 = 第 13 个节点。
+          </div>
+          <div class="margin-note">
+            <strong>Span</strong>
+            Trace 中的单个执行片段——一次 LLM 调用、一次 Tool 调用，或一次子 Agent 派生。
+          </div>
+          <div class="margin-note">
+            <strong>background_output</strong>
+            异步任务取结果的工具调用。超过 timeout 仍未完成会触发 Timeout 类故障。
+          </div>
+          <div class="margin-note">
+            <strong>SMART RUN</strong>
+            一键调度所有未完成评估维度（A/B、用例、触发、静态）的批量执行入口。
+          </div>
+        </aside>
+      </div>
+    </div>
+    <div class="card-pros">
+      <div class="pros-block">
+        <div class="pros-block-title">适合用在</div>
+        <ul>
+          <li>"术语手册""新人 onboarding"等长文档</li>
+          <li>智能诊断详情页（左 Trace 右注释）</li>
+          <li>打印/导出 PDF 友好</li>
+        </ul>
+      </div>
+      <div class="pros-block">
+        <div class="pros-block-title">注意</div>
+        <ul>
+          <li>需要 ≥ 1024px 宽，否则要降级</li>
+          <li>批注数量 > 8 个时会显得拥挤</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============== VERDICT ============== -->
+  <section class="verdict">
+    <h2>组合<em>推荐</em></h2>
+    <div class="verdict-sub">建议按场景混用，而不是只选一种</div>
+    <div class="verdict-grid">
+      <div class="verdict-item">
+        <div class="verdict-item-key">主力 · 70% 场景</div>
+        <div class="verdict-item-val">
+          <strong>样式 02 · 圆形角标 + Popover</strong><br/>
+          覆盖概览页、链路追踪、评测中心的所有指标与字段。信息量适中、桌面移动通吃。
+        </div>
+      </div>
+      <div class="verdict-item">
+        <div class="verdict-item-key">补丁 · 正文密集处</div>
+        <div class="verdict-item-val">
+          <strong>样式 01 · 虚线 Tooltip</strong><br/>
+          用在卡片标题、表头、Trace 节点等空间紧张但需要短解释的位置。
+        </div>
+      </div>
+      <div class="verdict-item">
+        <div class="verdict-item-key">核心概念专用</div>
+        <div class="verdict-item-val">
+          <strong>样式 04 · 侧边抽屉</strong><br/>
+          只对 10–20 个核心概念（Skill、Trace、A/B 测试、Evaluator…）做深度解释，可直链文档。
+        </div>
+      </div>
+      <div class="verdict-item">
+        <div class="verdict-item-key">教学场景</div>
+        <div class="verdict-item-val">
+          <strong>样式 03 · 内联折叠</strong> 用于新手引导；<strong>样式 05 · 边注</strong> 用于完整术语手册页。
+        </div>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<!-- ============== DRAWER ============== -->
+<div class="drawer-mask" id="drawerMask" onclick="closeDrawer()"></div>
+<div class="drawer" id="drawer">
+  <div class="drawer-head">
+    <button class="drawer-close" onclick="closeDrawer()">×</button>
+    <div class="drawer-eyebrow" id="drawerEyebrow">SKILLS · LIFECYCLE</div>
+    <div class="drawer-title" id="drawerTitle">SKILL 生命周期</div>
+    <div class="drawer-subtitle" id="drawerSubtitle">三阶段流水：生成 → 分析 → 优化</div>
+  </div>
+  <div class="drawer-body" id="drawerBody">
+    <!-- 内容由 JS 注入 -->
+  </div>
+</div>
+
+<script>
+  // ===== STYLE 3: inline expand =====
+  function toggleInline(el) {
+    const parent = el.parentElement;
+    parent.classList.toggle('is-open');
+  }
+
+  // ===== STYLE 4: drawer =====
+  const drawerData = {
+    lifecycle: {
+      eyebrow: 'SKILLS · LIFECYCLE',
+      title: 'SKILL 生命周期',
+      subtitle: '三阶段流水：生成 → 分析 → 优化',
+      sections: [
+        { label: '定义', body: '一个 Skill 从被创建到稳定运行所经历的三段流程：①生成 — 产出 SKILL.md 与配套 scripts / references；②分析 — 在 4 个维度上评测；③优化 — 根据分析结果迭代版本。' },
+        { label: '当前阶段判定', body: '在 Skill 卡片上以 "流程进度 2/3" 这样的形式呈现。分析阶段未跑完时，"优化"入口处于禁用状态。' },
+        { label: '关联名词', body: '<span class="drawer-related"><a>综合健康分</a><a>评估覆盖度</a><a>SMART RUN</a><a>Skill 优化器</a></span>' }
+      ]
+    },
+    coverage: {
+      eyebrow: 'METRIC · SCORE',
+      title: '评估覆盖度',
+      subtitle: '4 个维度中已完成评测的占比',
+      sections: [
+        { label: '计算', body: '已跑完的评估维度数 ÷ 4。完整 4 维 = A/B 测试 + 用例分析 + 触发分析 + 静态合规。' },
+        { label: '为什么它重要', body: '覆盖度低时，综合健康分会启用「置信加权」，未跑维度不计入分母——避免新 Skill 被单一维度带偏。' },
+        { label: '关联名词', body: '<span class="drawer-related"><a>综合健康分</a><a>置信加权</a><a>SMART RUN</a></span>' }
+      ]
+    },
+    optimize: {
+      eyebrow: 'SKILLS · OPTIMIZE',
+      title: 'Skill 优化器',
+      subtitle: '基于分析结果的版本迭代工具',
+      sections: [
+        { label: '何时进入', body: '只有当 4 维评估至少跑完 2 个维度、综合健康分可信时，"前往 Skill 优化器"按钮才会激活。' },
+        { label: '产物', body: '产出 SKILL.md / scripts / references 的新版本草稿，发布后可被 Agent 引用，原版本会保留为历史。' },
+        { label: '关联名词', body: '<span class="drawer-related"><a>SKILL 生命周期</a><a>预期执行链路</a><a>版本</a></span>' }
+      ]
+    },
+    chainerror: {
+      eyebrow: 'TRACE · STATUS',
+      title: '链路状态 CHAIN_ERROR',
+      subtitle: '一次 Trace 的最终状态枚举之一',
+      sections: [
+        { label: '含义', body: '链路中某节点出错且未被恢复机制兜住。后缀如 L13 表示在第 13 个节点处中断。' },
+        { label: '与其它状态对比', body: 'SUCCESS = 全链路无错；TOOL_ERROR = 单工具失败但被重试覆盖；CHAIN_ERROR = 影响到了最终输出。' },
+        { label: '关联名词', body: '<span class="drawer-related"><a>Trace</a><a>Span</a><a>故障标记</a><a>智能诊断</a></span>' }
+      ]
+    }
+  };
+
+  function openDrawer(key) {
+    const data = drawerData[key];
+    if (!data) return;
+    document.getElementById('drawerEyebrow').textContent = data.eyebrow;
+    document.getElementById('drawerTitle').textContent = data.title;
+    document.getElementById('drawerSubtitle').textContent = data.subtitle;
+    const body = document.getElementById('drawerBody');
+    body.innerHTML = data.sections.map(s => `
+      <div class="drawer-section">
+        <div class="drawer-section-label">${s.label}</div>
+        <p>${s.body}</p>
+      </div>
+    `).join('');
+    document.getElementById('drawer').classList.add('show');
+    document.getElementById('drawerMask').classList.add('show');
+    document.body.style.overflow = 'hidden';
+  }
+
+  function closeDrawer() {
+    document.getElementById('drawer').classList.remove('show');
+    document.getElementById('drawerMask').classList.remove('show');
+    document.body.style.overflow = '';
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeDrawer();
+  });
+</script>
+
+</body>
+</html>

@@ -2,7 +2,6 @@ export const en = {
   app: {
     title: 'Agent-insight',
     subtitle: 'Observability, Evaluation, Attribution & Optimization for Agents',
-    poweredBy: 'Powered by Skill-insight',
   },
 
   theme: {

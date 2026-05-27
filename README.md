@@ -1,77 +1,52 @@
-<p align="center">
-  <a href="https://gitcode.com/openeuler/witty-skill-insight">
-    <strong style="font-size: 6em;">Skill-insight</strong>
-  </a>
-</p>
-<p align="center">让 Agent 的 Skill 从"能用"到"好用"——基于执行过程数据，实现 Skill 生成、评测与优化的全生命周期闭环</p>
-<p align="center">
-  <a href="https://www.npmjs.com/package/@witty-ai/skill-insight"><img alt="npm" src="https://img.shields.io/npm/v/@witty-ai/skill-insight?style=flat-square" /></a>
-  <a href="https://gitcode.com/openeuler/witty-skill-insight/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/npm/l/@witty-ai/skill-insight?style=flat-square" /></a>
-</p>
+# Agent-Insight
 
-<p align="center">
-  <a href="README.md">简体中文</a> |
-  <a href="README_en.md">English</a>
-</p>
+**让每一个 Agent 都可被观测、可被评估、可自我进化。**
 
-[![Skill-insight Dashboard](docs/images/dashboard_main.png)](https://gitcode.com/openeuler/witty-skill-insight)
+## 为什么需要 Agent-Insight？
 
----
+随着 Agent 在各行业的落地，开发者面临三大痛点：Agent 运行过程如同黑盒，难以定位问题根因；Skill 质量参差不齐，缺少体系化的评测与迭代手段；Agent 经验无法沉淀复用，每次优化都从零开始。Agent-Insight 正是为解决这些问题而生——它是一个框架无关的 Agent Insight 工程底座，让运行在 OpenCode、Claude Code、LangChain、OpenClaw 等任意框架上的 Agent 都能被持续观测、系统评测和自主优化。
 
-## 为什么需要 Skill-insight
+## 架构
 
-Skill 正在成为 Agent 落地的关键载体，但实际使用中普遍面临三个问题：
-
-- **Skill 越多越不好用**：相似文档生成大量冗余 Skill，研究表明 Skill 超过 40-50 个后召回率从 95% 骤降至 30% 以下
-- **执行过程看不见**：评测只看"任务是否完成"，即使结果正确也可能跳过了关键步骤，埋下隐患
-- **优化靠猜测**：没有执行数据支撑，只能基于结果反复试错，无法定位具体瓶颈
-
-Skill-insight 正是为了解决这些问题而生。
+<img src="docs/images/architecture.png" alt="Diagnosis Agent架构图" />
 
 ## 核心能力
 
-### 🔨 Skill 生成 — 一句话生成，批量去重
+- **Agent观测与自进化**：围绕运行数据采集 → 链路跟踪 → 评测分析 → 经验沉淀 → 辅助决策，构建 Agent 全生命周期的数据飞轮，将运行数据转化为实时决策能力，持续提升 Agent 运行效能。
+- **Skill 开发与自进化**：围绕 Skill 生成 → 调试 → 观测 → 评估 → 优化，构建全生命周期能力闭环，将 Skill 打造为可持续进化的工程资产，提升开发效率与运行效能。
 
-- 支持一句话快速生成 Skill
-- 批量生成时自动去冗余、合相似、抽模式，减少 Skill 膨胀
-- 支持从 Markdown、PDF、目录、URL 等多种数据源输入
-
-### 📊 多维评测与执行追溯
-
-- 覆盖效果（准确率、Skill 召回率、Skill 提升率）、效率（时延、调用次数）、成本（Token、模型费用、CPSR）等多维指标
-- 自动生成执行流程图，与 Skill 预期流程逐步对比，标识偏离、冗余与跳过
-- 支持从 Skill、框架、模型、任务四个维度交叉对比分析
-- 更多指标详见 [指标详解](docs/metrics.md)
-
-### 🔄 数据驱动的 Skill 自优化
-
-- 基于评测归因结果，自动定位 Skill 缺陷并针对性修补
-- 区分 Skill 设计问题与模型能力问题，避免"改错方向"
-- 形成 **评测 → 归因 → 优化 → 再评测** 的持续改进闭环
+---
 
 ## 支持框架
 
 | Agent 框架    | 采集方式 |
-| :---------- | :--- |
+|:----------- |:---- |
 | OpenCode    | 原生插件 |
 | Claude Code | 日志旁路 |
 | OpenClaw    | 日志旁路 |
 
-## 安装 （Node.js 版本必须 ≥ v20.x）
+---
+
+## 安装
+
+### 安装服务端
+
+#### 环境要求
+
+- Node.js >= 20.0.0
+- 3000 端口未被占用
+
+#### 一键安装
 
 ```bash
-# 一键安装
-npx @witty-ai/skill-insight install
+npx @witty-ai/agen-insight install
 ```
 
-> [!TIP]
-> 安装完成后在 `http://localhost:3000` 访问看板，默认账号 `admin`。
-
-### 源码安装
+#### 源码安装
 
 ```bash
-git clone https://gitcode.com/openeuler/witty-skill-insight.git
-cd witty-skill-insight
+git clone https://gitcode.com/openeuler/witty-agent-insight.git
+cd witty-agent-insight
 npm install
 
 # 开发模式
@@ -84,80 +59,119 @@ bash scripts/restart.sh
 curl -sSf http://<IP>:<PORT>/api/setup | bash
 ```
 
-### 开发 mock 数据（可选）
-
-新 dev 想直接看到 `/skill-opt` 页面有 skill 列表 + 优化点列表，可以注入一份 mock
-数据。不依赖真实评估器或 trace 数据，本地开发联调用。
+#### 启动服务
 
 ```bash
-# 注入 mock 数据：3 个 skill + 5 个优化点
-# （pdf-extractor / doc-summarizer / chart-gen，全部 source='static'）
-npm run seed:skill-opt
+cd witty-agent-insight
 
-# 清理 mock 数据（cascade 删 SkillVersion / Evaluation / SkillIssue）
-npm run clean:skill-opt
+# 开发模式
+bash scripts/restart_dev.sh
+
+# 生产模式
+bash scripts/restart.sh
 ```
 
-数据归属 `user='skill-insight@huawei.com'`（项目默认登录账号）；脚本幂等，重跑安全。
-脚本头部注释里有详细说明。
+#### 访问看板
+
+浏览器打开 `http://localhost:3000`，使用任意邮箱登录即可，例如 `demo@163.com`。
+<img src="docs/images/login.png" alt="登陆" />
+
+### 安装客户端
+
+以下以 Linux 系统 + OpenCode 运行时为例：
+
+1. 在看板的 **安装指导** 页面复制客户端安装命令。
+   <img src="docs/images/guide.png" alt="安装指导" />
+2. 在 Agent 所在服务器执行安装命令：
+
+```bash
+curl -sSf "http://172.29.209.207:3000/api/ingest/setup" | bash
+```
+
+3. 选择 Agent 运行时。
+   
+   <img src="docs/images/guide-framework.png" alt="安装指导"  />
+
+4. 粘贴在 **安装指导** 页面复制的API Key。
+   
+   <img src="docs/images/guide-apikey.png" alt="输入API Key"  />
+
+5. 执行安装成功后提示的 Usage 命令，例如：
+
+```bash
+opencode run 'hello'
+```
+
+6. 在看板的 **链路追踪** 页面确认链路数据已生成，即表示客户端安装成功。
+   
+   <img src="docs/images/trace.png" alt="链路追踪" />
+
+---
 
 ## 快速上手
 
-以下以 OpenCode 为例，演示完整的生成 → 评测 → 优化流程。
+以下演示在 Agent-Insight 看板中完成 **Skill 生成 → 评测 → 优化** 的完整流程。
 
-**前置条件**：已完成 Skill-insight 平台安装和 OpenCode 安装。
+### 注册模型
 
-### 第一步：安装 Skill 工具包
+1. 进入 **模型注册**，单击 **注册首个模型**。
+   <img src="docs/images/model-view.png" alt="注册模型" />
 
-```bash
-npx skills add https://gitcode.com/openeuler/witty-skill-insight.git
-```
+2. 选择模型供应商。
+   <img src="docs/images/model-provider.png" alt="选择模型供应商" />
 
-### 第二步：生成 Skill
+3. 配置 API 密钥，单击 **测试连接并保存**。
+   
+   <img src="docs/images/model-configkey.png" alt="配置API Key" />
 
-在 OpenCode 终端输入：
+### 生成 Skill
 
-```
-根据案例文档 Docker应用卡顿故障案例.pdf 生成一个 Skill
-```
+1. 进入 **Skills 生成**，提交需求描述，例如：
+   
+   > 创建一个 Skill，当用户请求查看系统信息时，自动执行 shell 脚本收集当前系统的关键信息（操作系统、CPU、内存、磁盘、网络等），以 Markdown 报告呈现给用户。
+   > 
+   > <img src="docs/images/skill-gen.png" alt="生成Skill" />
 
-### 第三步：执行任务
+2. 单击 **保存并发布**。
 
-将生成的 Skill 放在 OpenCode 的 Skill 目录下，执行任务：
+### 分析 Skill
 
-```
-我在本机部署的docker应用有时会卡顿，使用相关技能帮我分析下原因，并给出分析报告
-```
+1. 进入 **Skills 分析**，单击 **静态合规**。
+   <img src="docs/images/skill-analyse.png" alt="分析Skill" />
 
-### 第四步：查看观测结果
+2. 单击 **重新扫描**，查看分析结果。
+   
+   <img src="docs/images/skill-analyse-static.png" alt="分析Skill" />
 
-任务执行完毕后，点击 OpenCode 终端页面右上角 Skill insight 卡片中的**查看详情**，跳转到平台查看执行详情。
+### 优化 Skill
 
-### 第五步：深度评测（可选）
+1. 进入 **Skills 优化**，选择 Skill 并单击 **优化**。
+   <img src="docs/images/skill-optimization.png" alt="优化Skill" />
+2. 选择可优化项并单击 **开始优化**，或直接输入优化需求后单击 **发送**。
+   <img src="docs/images/skill-optimization-result.png" alt="优化Skill" />
+3. 优化完成后，单击 **发布为 v1**，系统将自动保存为新版本。
 
-如需使用准确率、Skill 召回率、失败归因等深度评测能力：
-
-1. 在平台主页面点击左上角 **⚙️ Eval Config**，添加评测模型配置（支持 DeepSeek / OpenAI / Anthropic / 自定义）
-2. 点击右上角 **数据集管理**，配置用户问题、预期答案、预期使用的 Skill
-
-### 第六步：优化 Skill
-
-在 OpenCode 终端输入：
-
-```
-/si-optimizer <待优化的Skill路径>
-```
-
-优化完成后，Skill 会自动加载到 OpenCode 的 Skill 目录下。重启 OpenCode 后再次执行同一任务，即可在平台对比优化前后的效果差异。
+---
 
 ## 文档
 
 详细使用指南见 [docs/guide](docs/guide/) 目录。
 
-## 贡献
+---
+
+## 如何贡献
+
+我们诚挚欢迎新贡献者加入项目，也会为新加入者提供全面的指导与帮助。
 
 贡献代码前，请先签署 [CLA](https://clasign.osinfra.cn/sign/6983225bdcbb19710248ccf0)，再参考 [代码贡献指引](https://www.openeuler.org/zh/community/contribution/detail#_4-2-代码类贡献) 提交代码。
 
+如有任何疑问、建议或讨论需求，欢迎通过以下方式联系我们：
+
+- 提交 [Issue](https://atomgit.com/openeuler/witty-diagnosis-agent/issues)
+- 发送邮件至 <intelligence@openeuler.org>
+
 ---
 
-**加入社区** [Issue](https://atomgit.com/openeuler/witty-skill-insight/issues) | <intelligence@openeuler.org>
+## License
+
+本项目采用MIT开源协议。

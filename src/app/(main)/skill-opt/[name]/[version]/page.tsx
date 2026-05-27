@@ -18,6 +18,7 @@ import { hydrateSkillOptChat } from '@/lib/chat/hydrate-messages';
 import { safeUUID } from '@/lib/safe-uuid';
 import type { OptIssue, OptimizationIteration, SkillSummary } from '../../types';
 import { FileDiff } from '../../_FileDiff';
+import { Term } from '@/components/text/Term';
 import '../../skill-opt.css';
 
 /**
@@ -890,7 +891,7 @@ export default function SkillOptimizePage() {
     if (!skill) {
         return (
             <>
-                <AppTopBar title={t('nav.skillOpt')} />
+                <AppTopBar title={<Term id="skill-optimization" label={t('nav.skillOpt')} />} />
                 <div className="skopt-not-found">
                     找不到 skill：<code>{skillName}</code>
                     <button onClick={() => router.push('/skill-opt')}>返回列表</button>
@@ -902,7 +903,7 @@ export default function SkillOptimizePage() {
     const breadcrumb = (
         <span className="skopt-crumb">
             <a className="crumb-link" onClick={() => router.push('/skill-opt')}>
-                {t('nav.skillOpt')}
+                <Term id="skill-optimization" label={t('nav.skillOpt')} />
             </a>
             <span className="sep">/</span>
             <span className="crumb-name">{skill.name}</span>

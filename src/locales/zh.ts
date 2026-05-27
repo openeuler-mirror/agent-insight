@@ -2,7 +2,6 @@ export const zh = {
   app: {
     title: 'Agent-insight',
     subtitle: 'Agent 可观测、评估、归因与优化平台',
-    poweredBy: 'Powered by Skill-insight',
   },
 
   theme: {

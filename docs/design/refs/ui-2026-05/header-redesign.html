@@ -1,0 +1,1216 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>评测任务 Header 重设计 · 方案 A & B</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.17.0/dist/tabler-icons.min.css">
+<style>
+  :root {
+    /* Surfaces */
+    --bg-page: #FAFAF7;
+    --bg-surface: #FFFFFF;
+    --bg-subtle: #F5F4EF;
+    --bg-subtler: #EFEEE8;
+    --bg-hover: rgba(15, 14, 12, 0.04);
+
+    /* Text */
+    --text-primary: #1A1A18;
+    --text-secondary: #5F5E5A;
+    --text-tertiary: #8A8985;
+    --text-quaternary: #B4B2A9;
+
+    /* Borders */
+    --border-faint: rgba(15, 14, 12, 0.06);
+    --border-default: rgba(15, 14, 12, 0.10);
+    --border-strong: rgba(15, 14, 12, 0.18);
+
+    /* Brand */
+    --brand: #6D63D6;
+    --brand-hover: #5C53C2;
+    --brand-bg: #EEEDFE;
+    --brand-text: #3C3489;
+
+    /* Semantic */
+    --success-bg: #E1F5EE;
+    --success-text: #0F6E56;
+    --success-dot: #1D9E75;
+
+    --info-bg: #E6F1FB;
+    --info-text: #185FA5;
+
+    --warning-bg: #FAEEDA;
+    --warning-text: #854F0B;
+
+    /* Type */
+    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-mono: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+
+    /* Geometry */
+    --radius-sm: 4px;
+    --radius-md: 6px;
+    --radius-lg: 8px;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg-page);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    font-feature-settings: 'cv11', 'ss01';
+  }
+
+  /* ===== Page chrome ===== */
+  .page-frame {
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 32px 24px 80px;
+  }
+
+  .page-intro {
+    margin-bottom: 28px;
+  }
+  .page-intro h1 {
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    margin: 0 0 6px;
+    color: var(--text-primary);
+  }
+  .page-intro p {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin: 0;
+    max-width: 640px;
+    line-height: 1.6;
+  }
+
+  /* Switcher between A/B/Original */
+  .variant-tabs {
+    display: inline-flex;
+    background: var(--bg-subtle);
+    padding: 3px;
+    border-radius: var(--radius-md);
+    margin: 24px 0 16px;
+    gap: 2px;
+  }
+  .variant-tab {
+    padding: 6px 14px;
+    border: none;
+    background: transparent;
+    font-family: var(--font-sans);
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: all 120ms ease;
+    letter-spacing: -0.005em;
+  }
+  .variant-tab:hover { color: var(--text-primary); }
+  .variant-tab.is-active {
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    box-shadow: 0 1px 2px rgba(15, 14, 12, 0.06);
+  }
+
+  .variant-label {
+    font-size: 12px;
+    color: var(--text-tertiary);
+    margin-bottom: 10px;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+  .variant-label strong {
+    color: var(--text-secondary);
+    font-weight: 500;
+  }
+
+  /* ===== Mock app shell ===== */
+  .app-shell {
+    background: var(--bg-surface);
+    border: 0.5px solid var(--border-default);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    display: grid;
+    grid-template-columns: 200px 1fr;
+    min-height: 540px;
+    box-shadow: 0 1px 2px rgba(15, 14, 12, 0.04), 0 4px 16px rgba(15, 14, 12, 0.03);
+  }
+
+  /* Sidebar */
+  .sidebar {
+    background: var(--bg-surface);
+    border-right: 0.5px solid var(--border-faint);
+    padding: 14px 10px;
+    font-size: 13px;
+  }
+  .sidebar-brand {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 4px 8px 16px;
+    border-bottom: 0.5px solid var(--border-faint);
+    margin-bottom: 10px;
+  }
+  .sidebar-brand-icon {
+    width: 26px;
+    height: 26px;
+    border-radius: 6px;
+    background: linear-gradient(135deg, #7F77DD, #534AB7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+  .sidebar-brand-text { line-height: 1.2; }
+  .sidebar-brand-text strong {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    display: block;
+  }
+  .sidebar-brand-text span {
+    font-size: 11px;
+    color: var(--text-tertiary);
+  }
+
+  .sidebar-section {
+    padding: 6px 0;
+  }
+  .sidebar-item {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 6px 8px;
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 13px;
+    line-height: 1.4;
+  }
+  .sidebar-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+  .sidebar-item i { font-size: 16px; color: var(--text-tertiary); }
+  .sidebar-item.is-active {
+    background: var(--brand-bg);
+    color: var(--brand-text);
+    font-weight: 500;
+  }
+  .sidebar-item.is-active i { color: var(--brand-text); }
+
+  .sidebar-subgroup {
+    padding-left: 25px;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .sidebar-subitem {
+    padding: 5px 8px;
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 13px;
+  }
+  .sidebar-subitem:hover { background: var(--bg-hover); }
+  .sidebar-subitem.is-active { color: var(--brand-text); font-weight: 500; }
+
+  /* Main */
+  .main {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  /* ===== HEADER — Variant ORIGINAL (your current design) ===== */
+  .hd-orig-row1 {
+    height: 44px;
+    padding: 0 20px;
+    border-bottom: 0.5px solid var(--border-faint);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+  }
+  .hd-orig-row1 .menu-btn {
+    color: var(--text-secondary);
+    margin-right: 4px;
+    cursor: pointer;
+  }
+  .hd-orig-row1 .crumb {
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+  .hd-orig-row1 .crumb-sep {
+    color: var(--text-quaternary);
+    font-size: 12px;
+  }
+  .hd-orig-row1 .skill-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 8px;
+    border: 0.5px solid var(--border-default);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    font-size: 13px;
+  }
+  .hd-orig-row1 .skill-chip strong { font-weight: 600; color: var(--text-primary); }
+  .hd-orig-row1 .skill-chip-letter {
+    width: 18px; height: 18px; border-radius: 4px;
+    background: var(--info-bg); color: var(--info-text);
+    font-size: 11px; font-weight: 600;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .hd-orig-row1 .skill-chip-version {
+    color: var(--text-tertiary);
+    font-size: 12px;
+    font-family: var(--font-mono);
+  }
+
+  .hd-orig-row2 {
+    height: 52px;
+    padding: 0 20px;
+    border-bottom: 0.5px solid var(--border-faint);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 13px;
+  }
+  .hd-orig-row2 .label {
+    color: var(--text-secondary);
+    font-size: 13px;
+  }
+  .hd-orig-row2 .task-id-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 10px;
+    background: var(--bg-subtle);
+    border-radius: var(--radius-md);
+    font-size: 13px;
+    color: var(--text-primary);
+  }
+  .hd-orig-row2 .task-id-chip strong { font-family: var(--font-mono); font-weight: 500; color: var(--text-tertiary); }
+  .hd-orig-row2 .status-badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 3px 9px;
+    background: var(--success-bg);
+    color: var(--success-text);
+    border-radius: 10px;
+    font-size: 12px;
+    font-weight: 500;
+  }
+  .hd-orig-row2 .status-badge::before {
+    content: '';
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--success-dot);
+  }
+  .hd-orig-row2 .meta {
+    color: var(--text-tertiary);
+    font-size: 12px;
+    font-family: var(--font-mono);
+  }
+  .hd-orig-row2 .spacer { flex: 1; }
+  .hd-orig-row2 .btn {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 5px 10px;
+    background: transparent;
+    border: 0.5px solid var(--border-default);
+    border-radius: var(--radius-md);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    color: var(--text-primary);
+    cursor: pointer;
+  }
+  .hd-orig-row2 .btn:hover { background: var(--bg-hover); }
+  .hd-orig-row2 .btn-primary {
+    background: var(--brand);
+    color: white;
+    border-color: var(--brand);
+    font-weight: 500;
+  }
+  .hd-orig-row2 .btn-primary:hover { background: var(--brand-hover); }
+  .hd-orig-row2 .btn i { font-size: 14px; }
+
+  /* ===== HEADER — Variant A (compact single-row) ===== */
+  .hd-a-crumb {
+    height: 36px;
+    padding: 0 20px;
+    display: flex;
+    align-items: center;
+    border-bottom: 0.5px solid var(--border-faint);
+    font-size: 12px;
+    color: var(--text-tertiary);
+    gap: 6px;
+  }
+  .hd-a-crumb .menu-btn {
+    color: var(--text-secondary);
+    margin-right: 8px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+  }
+  .hd-a-crumb .crumb-item {
+    cursor: pointer;
+    transition: color 100ms;
+  }
+  .hd-a-crumb .crumb-item:hover { color: var(--text-primary); }
+  .hd-a-crumb .crumb-sep {
+    color: var(--text-quaternary);
+    font-size: 11px;
+  }
+  .hd-a-crumb .crumb-current {
+    color: var(--text-secondary);
+    font-weight: 500;
+  }
+  .hd-a-crumb .crumb-version {
+    margin-left: 4px;
+    padding: 1px 6px;
+    background: var(--bg-subtle);
+    border-radius: 3px;
+    font-size: 11px;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+  }
+  .hd-a-crumb .crumb-switcher {
+    margin-left: 2px;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    padding: 2px;
+    border-radius: 3px;
+  }
+  .hd-a-crumb .crumb-switcher:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+
+  .hd-a-main {
+    padding: 16px 20px 10px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .hd-a-main .task-id {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--text-tertiary);
+    padding: 3px 8px;
+    background: var(--bg-subtle);
+    border-radius: var(--radius-sm);
+    font-weight: 500;
+  }
+  .hd-a-main h1 {
+    font-size: 18px;
+    font-weight: 600;
+    margin: 0;
+    color: var(--text-primary);
+    line-height: 1.3;
+    flex: 1;
+    letter-spacing: -0.01em;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .hd-a-main .status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 9px;
+    background: var(--success-bg);
+    color: var(--success-text);
+    border-radius: 10px;
+    font-size: 12px;
+    font-weight: 500;
+    flex-shrink: 0;
+  }
+  .hd-a-main .status-badge::before {
+    content: '';
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--success-dot);
+  }
+  .hd-a-main .icon-group {
+    display: flex;
+    gap: 2px;
+    padding-left: 8px;
+    margin-left: 4px;
+    border-left: 0.5px solid var(--border-faint);
+    flex-shrink: 0;
+  }
+  .hd-a-main .icon-btn {
+    width: 30px;
+    height: 30px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    cursor: pointer;
+    position: relative;
+    transition: background 100ms;
+  }
+  .hd-a-main .icon-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+  .hd-a-main .icon-btn i { font-size: 17px; }
+  .hd-a-main .icon-btn .badge-dot {
+    position: absolute;
+    top: 4px; right: 4px;
+    background: var(--text-tertiary);
+    color: white;
+    font-size: 9px;
+    font-weight: 600;
+    min-width: 14px;
+    height: 14px;
+    border-radius: 7px;
+    padding: 0 3px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-mono);
+  }
+  .hd-a-main .btn-primary {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    background: var(--brand);
+    color: white;
+    border: none;
+    border-radius: var(--radius-md);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background 100ms;
+  }
+  .hd-a-main .btn-primary:hover { background: var(--brand-hover); }
+  .hd-a-main .btn-primary i { font-size: 14px; }
+
+  .hd-a-meta {
+    padding: 0 20px 14px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    font-size: 12px;
+    color: var(--text-tertiary);
+    border-bottom: 0.5px solid var(--border-faint);
+  }
+  .hd-a-meta .meta-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .hd-a-meta .meta-item i { font-size: 13px; }
+  .hd-a-meta .meta-divider {
+    width: 1px;
+    height: 10px;
+    background: var(--border-default);
+  }
+  .hd-a-meta .judge-tag {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    background: var(--brand-bg);
+    color: var(--brand-text);
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 500;
+  }
+
+  /* ===== HEADER — Variant B (two-tier with skill switcher) ===== */
+  .hd-b-context {
+    height: 40px;
+    padding: 0 20px;
+    background: var(--bg-subtle);
+    border-bottom: 0.5px solid var(--border-faint);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .hd-b-context .crumb {
+    display: flex;
+    align-items: center;
+    font-size: 12px;
+    color: var(--text-tertiary);
+    gap: 6px;
+  }
+  .hd-b-context .menu-btn {
+    color: var(--text-secondary);
+    margin-right: 8px;
+    cursor: pointer;
+    display: inline-flex;
+  }
+  .hd-b-context .crumb-item { cursor: pointer; }
+  .hd-b-context .crumb-item:hover { color: var(--text-primary); }
+  .hd-b-context .crumb-sep { color: var(--text-quaternary); font-size: 11px; }
+  .hd-b-context .crumb-current { color: var(--text-secondary); font-weight: 500; }
+
+  .hd-b-context .skill-switcher {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px 4px 5px;
+    background: var(--bg-surface);
+    border: 0.5px solid var(--border-default);
+    border-radius: var(--radius-md);
+    font-size: 12px;
+    cursor: pointer;
+    transition: border-color 100ms;
+  }
+  .hd-b-context .skill-switcher:hover {
+    border-color: var(--border-strong);
+  }
+  .hd-b-context .skill-letter {
+    width: 18px;
+    height: 18px;
+    background: var(--info-bg);
+    color: var(--info-text);
+    font-size: 11px;
+    font-weight: 600;
+    border-radius: 3px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .hd-b-context .skill-name {
+    font-weight: 500;
+    color: var(--text-primary);
+  }
+  .hd-b-context .skill-version {
+    color: var(--text-tertiary);
+    font-size: 11px;
+    font-family: var(--font-mono);
+  }
+
+  .hd-b-task {
+    padding: 16px 20px 14px;
+    border-bottom: 0.5px solid var(--border-faint);
+  }
+  .hd-b-task-row1 {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+  .hd-b-task-row1 .task-id {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--text-tertiary);
+    padding: 3px 8px;
+    background: var(--bg-subtle);
+    border-radius: var(--radius-sm);
+    font-weight: 500;
+  }
+  .hd-b-task-row1 h1 {
+    font-size: 18px;
+    font-weight: 600;
+    margin: 0;
+    color: var(--text-primary);
+    line-height: 1.3;
+    letter-spacing: -0.01em;
+  }
+  .hd-b-task-row1 .status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 9px;
+    background: var(--success-bg);
+    color: var(--success-text);
+    border-radius: 10px;
+    font-size: 12px;
+    font-weight: 500;
+  }
+  .hd-b-task-row1 .status-badge::before {
+    content: '';
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--success-dot);
+  }
+  .hd-b-task-row1 .judge-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    background: var(--brand-bg);
+    color: var(--brand-text);
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 500;
+  }
+
+  .hd-b-task-row2 {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+  }
+  .hd-b-task-row2 .meta {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    font-size: 12px;
+    color: var(--text-tertiary);
+  }
+  .hd-b-task-row2 .meta-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .hd-b-task-row2 .meta-item i { font-size: 13px; }
+  .hd-b-task-row2 .meta-item.clickable { cursor: pointer; }
+  .hd-b-task-row2 .meta-item.clickable:hover { color: var(--text-primary); }
+
+  .hd-b-task-row2 .actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .hd-b-task-row2 .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 6px 10px;
+    background: transparent;
+    border: 0.5px solid var(--border-default);
+    border-radius: var(--radius-md);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: all 100ms;
+  }
+  .hd-b-task-row2 .btn:hover {
+    background: var(--bg-hover);
+    border-color: var(--border-strong);
+  }
+  .hd-b-task-row2 .btn i { font-size: 14px; color: var(--text-secondary); }
+  .hd-b-task-row2 .btn-primary {
+    background: var(--brand);
+    color: white;
+    border-color: var(--brand);
+    font-weight: 500;
+    padding: 6px 12px;
+  }
+  .hd-b-task-row2 .btn-primary:hover {
+    background: var(--brand-hover);
+    border-color: var(--brand-hover);
+  }
+  .hd-b-task-row2 .btn-primary i { color: white; }
+
+  /* ===== Page body (preview placeholder) ===== */
+  .body-preview {
+    padding: 28px 24px;
+    flex: 1;
+    background: var(--bg-page);
+  }
+  .body-preview-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 6px;
+  }
+  .body-preview-title h2 {
+    font-size: 18px;
+    font-weight: 600;
+    margin: 0;
+    color: var(--text-primary);
+    letter-spacing: -0.01em;
+  }
+  .body-preview-title .judge-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    background: var(--brand-bg);
+    color: var(--brand-text);
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 500;
+  }
+  .body-preview-subtitle {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 20px;
+  }
+
+  .stepper {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 0;
+    background: var(--bg-surface);
+    border: 0.5px solid var(--border-default);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+  }
+  .step {
+    padding: 16px 18px;
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    border-right: 0.5px solid var(--border-faint);
+    position: relative;
+  }
+  .step:last-child { border-right: none; }
+  .step-num {
+    width: 26px; height: 26px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 600;
+    flex-shrink: 0;
+  }
+  .step-1 .step-num { background: var(--brand); color: white; }
+  .step-2 .step-num, .step-3 .step-num {
+    background: var(--bg-subtler);
+    color: var(--text-tertiary);
+  }
+  .step-tag {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-tertiary);
+    font-weight: 600;
+    margin-bottom: 3px;
+  }
+  .step-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 2px;
+  }
+  .step-meta {
+    font-size: 12px;
+    color: var(--text-tertiary);
+  }
+  .step-2 .step-title, .step-3 .step-title { color: var(--text-secondary); }
+
+  /* ===== Notes panel ===== */
+  .notes {
+    margin-top: 32px;
+    padding: 20px 22px;
+    background: var(--bg-surface);
+    border: 0.5px solid var(--border-default);
+    border-radius: var(--radius-lg);
+  }
+  .notes h3 {
+    font-size: 13px;
+    font-weight: 600;
+    margin: 0 0 12px;
+    color: var(--text-primary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 11px;
+  }
+  .notes ul {
+    margin: 0;
+    padding-left: 18px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.75;
+  }
+  .notes ul li::marker { color: var(--text-quaternary); }
+  .notes code {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    background: var(--bg-subtle);
+    padding: 1px 5px;
+    border-radius: 3px;
+    color: var(--text-primary);
+  }
+
+  /* ===== View switching ===== */
+  .variant-view { display: none; }
+  .variant-view.is-active { display: block; }
+
+  .variant-notes { display: none; }
+  .variant-notes.is-active { display: block; }
+
+  /* ===== Tooltip on icon buttons ===== */
+  [data-tooltip] {
+    position: relative;
+  }
+  [data-tooltip]:hover::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    bottom: -30px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--text-primary);
+    color: white;
+    font-size: 11px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    white-space: nowrap;
+    pointer-events: none;
+    z-index: 10;
+    font-weight: 400;
+  }
+</style>
+</head>
+<body>
+
+<div class="page-frame">
+
+  <div class="page-intro">
+    <h1>评测任务 Header 重设计</h1>
+    <p>对比当前实现与两种重设计方案。点击 Tab 切换查看效果。两个方案的核心差异在于 skill 切换器的可见性：方案 A 优先压缩垂直空间，方案 B 保留 skill 切换的常驻入口。</p>
+  </div>
+
+  <div class="variant-tabs" role="tablist">
+    <button class="variant-tab" data-variant="original" role="tab">当前实现</button>
+    <button class="variant-tab is-active" data-variant="a" role="tab">方案 A · 紧凑单行</button>
+    <button class="variant-tab" data-variant="b" role="tab">方案 B · 双层分离</button>
+  </div>
+
+  <div class="variant-label">
+    <strong id="variant-name">方案 A · 紧凑单行</strong>
+    <span id="variant-desc">面包屑 + 标题 + 元数据三段式，skill 切换收在面包屑里。Header 总高 ~110px。</span>
+  </div>
+
+  <!-- ===================== APP SHELL ===================== -->
+  <div class="app-shell">
+
+    <!-- Sidebar (shared) -->
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <div class="sidebar-brand-icon">Ai</div>
+        <div class="sidebar-brand-text">
+          <strong>Agent Insight</strong>
+          <span>by Skill-insight</span>
+        </div>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-item"><i class="ti ti-layout-dashboard"></i>概览</div>
+        <div class="sidebar-item"><i class="ti ti-user-cog"></i>Agent 管理</div>
+        <div class="sidebar-item"><i class="ti ti-eye"></i>运行观测</div>
+        <div class="sidebar-item is-active"><i class="ti ti-stars"></i>Skills</div>
+        <div class="sidebar-subgroup">
+          <div class="sidebar-subitem">管理</div>
+          <div class="sidebar-subitem">生成</div>
+          <div class="sidebar-subitem is-active">分析</div>
+          <div class="sidebar-subitem">优化</div>
+        </div>
+        <div class="sidebar-item"><i class="ti ti-clipboard-check"></i>评测</div>
+        <div class="sidebar-item"><i class="ti ti-settings"></i>设置</div>
+      </div>
+    </aside>
+
+    <!-- Main -->
+    <div class="main">
+
+      <!-- ============ VARIANT: ORIGINAL ============ -->
+      <div class="variant-view" data-view="original">
+        <div class="hd-orig-row1">
+          <i class="ti ti-menu-2 menu-btn"></i>
+          <span class="crumb">Skills</span>
+          <i class="ti ti-chevron-right crumb-sep"></i>
+          <span class="crumb">分析</span>
+          <i class="ti ti-chevron-right crumb-sep"></i>
+          <span class="crumb">用例分析</span>
+          <i class="ti ti-chevron-right crumb-sep"></i>
+          <div class="skill-chip">
+            <span class="skill-chip-letter">L</span>
+            <strong>linux-disk-cleanup</strong>
+            <span class="skill-chip-version">v0</span>
+            <i class="ti ti-chevron-down" style="font-size:12px;color:var(--text-tertiary);"></i>
+          </div>
+        </div>
+        <div class="hd-orig-row2">
+          <span class="label">评测任务</span>
+          <span class="task-id-chip"><strong>#12</strong> 改进 prompt v2 后回归</span>
+          <span class="status-badge">已完成</span>
+          <span class="meta">v0 · 05-20 17:06 · 用例 84/100</span>
+          <span class="spacer"></span>
+          <button class="btn"><i class="ti ti-history"></i>历史 (8)</button>
+          <button class="btn"><i class="ti ti-plus"></i>新建任务</button>
+          <button class="btn"><i class="ti ti-device-floppy"></i>保存配置</button>
+          <button class="btn btn-primary"><i class="ti ti-player-play"></i>开始评测</button>
+        </div>
+        <div class="body-preview">
+          <div class="body-preview-title">
+            <h2>用例分析</h2>
+            <span class="judge-tag"><i class="ti ti-sparkles" style="font-size:11px;"></i>LLM Judge</span>
+          </div>
+          <div class="body-preview-subtitle">基于已评测 Trace 的双维度分析：结果分析 + 轨迹分析</div>
+          <div class="stepper">
+            <div class="step step-1">
+              <div class="step-num">1</div>
+              <div>
+                <div class="step-tag">STEP 1 · CONFIG</div>
+                <div class="step-title">配置用例集</div>
+                <div class="step-meta">从 Trace 关联 0 条</div>
+              </div>
+            </div>
+            <div class="step step-2">
+              <div class="step-num">2</div>
+              <div>
+                <div class="step-tag">STEP 2 · EXECUTION</div>
+                <div class="step-title">跑用例评测</div>
+                <div class="step-meta">已评测 0 / 0</div>
+              </div>
+            </div>
+            <div class="step step-3">
+              <div class="step-num">3</div>
+              <div>
+                <div class="step-tag">STEP 3 · DECISION</div>
+                <div class="step-title">用例分析结果</div>
+                <div class="step-meta">未评测</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============ VARIANT: A ============ -->
+      <div class="variant-view is-active" data-view="a">
+        <div class="hd-a-crumb">
+          <span class="menu-btn"><i class="ti ti-menu-2" style="font-size:14px;"></i></span>
+          <span class="crumb-item">Skills</span>
+          <i class="ti ti-chevron-right crumb-sep"></i>
+          <span class="crumb-item">分析</span>
+          <i class="ti ti-chevron-right crumb-sep"></i>
+          <span class="crumb-item">用例分析</span>
+          <i class="ti ti-chevron-right crumb-sep"></i>
+          <span class="crumb-current">linux-disk-cleanup</span>
+          <span class="crumb-version">v0</span>
+          <span class="crumb-switcher" data-tooltip="切换 skill"><i class="ti ti-selector" style="font-size:13px;"></i></span>
+        </div>
+
+        <div class="hd-a-main">
+          <span class="task-id">#12</span>
+          <h1>改进 prompt v2 后回归</h1>
+          <span class="status-badge">已完成</span>
+          <div class="icon-group">
+            <button class="icon-btn" data-tooltip="历史 (8)">
+              <i class="ti ti-history"></i>
+              <span class="badge-dot">8</span>
+            </button>
+            <button class="icon-btn" data-tooltip="新建任务"><i class="ti ti-plus"></i></button>
+            <button class="icon-btn" data-tooltip="保存配置"><i class="ti ti-device-floppy"></i></button>
+            <button class="icon-btn" data-tooltip="更多"><i class="ti ti-dots"></i></button>
+          </div>
+          <button class="btn-primary"><i class="ti ti-player-play"></i>开始评测</button>
+        </div>
+
+        <div class="hd-a-meta">
+          <span class="meta-item"><i class="ti ti-clock"></i>05-20 17:06</span>
+          <span class="meta-divider"></span>
+          <span class="meta-item"><i class="ti ti-list-check"></i>用例 84 / 100</span>
+          <span class="meta-divider"></span>
+          <span class="meta-item"><i class="ti ti-tag"></i>v0</span>
+          <span class="judge-tag"><i class="ti ti-sparkles" style="font-size:10px;"></i>LLM Judge</span>
+        </div>
+
+        <div class="body-preview">
+          <div class="body-preview-title">
+            <h2>用例分析</h2>
+          </div>
+          <div class="body-preview-subtitle">基于已评测 Trace 的双维度分析：结果分析 + 轨迹分析</div>
+          <div class="stepper">
+            <div class="step step-1">
+              <div class="step-num">1</div>
+              <div>
+                <div class="step-tag">STEP 1 · CONFIG</div>
+                <div class="step-title">配置用例集</div>
+                <div class="step-meta">从 Trace 关联 0 条</div>
+              </div>
+            </div>
+            <div class="step step-2">
+              <div class="step-num">2</div>
+              <div>
+                <div class="step-tag">STEP 2 · EXECUTION</div>
+                <div class="step-title">跑用例评测</div>
+                <div class="step-meta">已评测 0 / 0</div>
+              </div>
+            </div>
+            <div class="step step-3">
+              <div class="step-num">3</div>
+              <div>
+                <div class="step-tag">STEP 3 · DECISION</div>
+                <div class="step-title">用例分析结果</div>
+                <div class="step-meta">未评测</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============ VARIANT: B ============ -->
+      <div class="variant-view" data-view="b">
+        <div class="hd-b-context">
+          <div class="crumb">
+            <span class="menu-btn"><i class="ti ti-menu-2" style="font-size:14px;"></i></span>
+            <span class="crumb-item">Skills</span>
+            <i class="ti ti-chevron-right crumb-sep"></i>
+            <span class="crumb-item">分析</span>
+            <i class="ti ti-chevron-right crumb-sep"></i>
+            <span class="crumb-current">用例分析</span>
+          </div>
+          <div class="skill-switcher" data-tooltip="切换 skill">
+            <span class="skill-letter">L</span>
+            <span class="skill-name">linux-disk-cleanup</span>
+            <span class="skill-version">v0</span>
+            <i class="ti ti-chevron-down" style="font-size:12px;color:var(--text-tertiary);"></i>
+          </div>
+        </div>
+
+        <div class="hd-b-task">
+          <div class="hd-b-task-row1">
+            <span class="task-id">#12</span>
+            <h1>改进 prompt v2 后回归</h1>
+            <span class="status-badge">已完成</span>
+            <span class="judge-tag"><i class="ti ti-sparkles" style="font-size:10px;"></i>LLM Judge</span>
+          </div>
+          <div class="hd-b-task-row2">
+            <div class="meta">
+              <span class="meta-item"><i class="ti ti-clock"></i>05-20 17:06</span>
+              <span class="meta-item"><i class="ti ti-list-check"></i>用例 84 / 100</span>
+              <span class="meta-item clickable"><i class="ti ti-history"></i>历史 8 个版本</span>
+            </div>
+            <div class="actions">
+              <button class="btn"><i class="ti ti-plus"></i>新建任务</button>
+              <button class="btn"><i class="ti ti-device-floppy"></i>保存配置</button>
+              <button class="btn btn-primary"><i class="ti ti-player-play"></i>开始评测</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="body-preview">
+          <div class="body-preview-title">
+            <h2>用例分析</h2>
+          </div>
+          <div class="body-preview-subtitle">基于已评测 Trace 的双维度分析：结果分析 + 轨迹分析</div>
+          <div class="stepper">
+            <div class="step step-1">
+              <div class="step-num">1</div>
+              <div>
+                <div class="step-tag">STEP 1 · CONFIG</div>
+                <div class="step-title">配置用例集</div>
+                <div class="step-meta">从 Trace 关联 0 条</div>
+              </div>
+            </div>
+            <div class="step step-2">
+              <div class="step-num">2</div>
+              <div>
+                <div class="step-tag">STEP 2 · EXECUTION</div>
+                <div class="step-title">跑用例评测</div>
+                <div class="step-meta">已评测 0 / 0</div>
+              </div>
+            </div>
+            <div class="step step-3">
+              <div class="step-num">3</div>
+              <div>
+                <div class="step-tag">STEP 3 · DECISION</div>
+                <div class="step-title">用例分析结果</div>
+                <div class="step-meta">未评测</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Notes per variant -->
+  <div class="variant-notes is-active" data-notes="a">
+    <div class="notes">
+      <h3>方案 A 的设计决策</h3>
+      <ul>
+        <li>面包屑只占 <code>36px</code>，所有导航上下文压缩到一行；<code>linux-disk-cleanup v0</code> 放在面包屑末端作为"当前 skill"指示，旁边的 <code>⇅</code> 图标提供切换入口。</li>
+        <li><code>#12 改进 prompt v2 后回归</code> 作为 <code>H1</code>（18px / 600），占据主视线焦点；<code>#12</code> 用等宽字体 + 灰底胶囊，沿用 GitHub Issue 的语义。</li>
+        <li>"历史 / 新建任务 / 保存配置 / 更多"全部降级为 <code>30×30</code> 的 icon button，hover 显示 tooltip。历史按钮右上角带 <code>8</code> 的数字气泡，保留信息量。</li>
+        <li>只有「开始评测」是填色主按钮，左侧用 0.5px 分隔线和 icon 组隔开，避免误触。</li>
+        <li>元数据（时间 / 用例数 / 版本）独立成一行小字，<code>12px / text-tertiary</code>，是参考信息而非决策信息。</li>
+        <li><code>LLM Judge</code> 标签从原本的「用例分析」标题旁移到 header 元数据右端，作为任务属性而非页面属性更合理。</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="variant-notes" data-notes="b">
+    <div class="notes">
+      <h3>方案 B 的设计决策</h3>
+      <ul>
+        <li>第一层是 <code>40px</code> 的灰底 context strip：左边是简化的面包屑（不含 skill），右边是常驻的 skill 切换器 chip。skill 切换变成了一个明确的、视觉上独立的入口。</li>
+        <li>第二层是任务主体区，<code>H1</code> 标题 + 状态徽章 + <code>LLM Judge</code> 标签作为身份信息；下方一行左边是元数据，右边是动作组。"历史"作为可点击的元数据展示<code>8 个版本</code>，比单独按钮更有信息量。</li>
+        <li>动作分两级：「新建任务」「保存配置」是线框次按钮，「开始评测」是填色主按钮，视觉权重一眼分明。</li>
+        <li>适合场景：用户需要频繁在不同 skill 间对比评测任务（"linux-disk-cleanup 和 docker-cleanup 的 baseline 哪个好"）。</li>
+        <li>代价：比方案 A 高 ~12px，但换来 skill 切换的常驻可见性。</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="variant-notes" data-notes="original">
+    <div class="notes">
+      <h3>当前实现的问题</h3>
+      <ul>
+        <li><strong>信息层级混乱</strong>：第二行把"评测任务"label、任务 ID、标题、状态、元数据、4 个动作按钮全塞在一行。</li>
+        <li><strong>主体被次要化</strong>：<code>linux-disk-cleanup</code>（skill）放在第一行末端，而真正的页面主体「#12 改进 prompt v2 后回归」被挤在第二行更小的位置。</li>
+        <li><strong>动作缺乏分组</strong>：「历史」（查看）、「新建任务」（创建）、「保存配置」（写当前态）、「开始评测」（触发流程）四个语义完全不同的按钮视觉权重几乎一致，"保存配置"和"开始评测"挨着尤其容易误触。</li>
+        <li><strong>"评测任务"前缀冗余</strong>：<code>#12</code> 这种 ID 风格本身就足够表明这是一个任务，类似 GitHub Issue / Linear 的惯例。</li>
+      </ul>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  const tabs = document.querySelectorAll('.variant-tab');
+  const views = document.querySelectorAll('.variant-view');
+  const notes = document.querySelectorAll('.variant-notes');
+  const variantName = document.getElementById('variant-name');
+  const variantDesc = document.getElementById('variant-desc');
+
+  const meta = {
+    original: {
+      name: '当前实现',
+      desc: '两行 header，信息层级混乱，需要重新设计。Header 总高 ~96px。'
+    },
+    a: {
+      name: '方案 A · 紧凑单行',
+      desc: '面包屑 + 标题 + 元数据三段式，skill 切换收在面包屑里。Header 总高 ~110px。'
+    },
+    b: {
+      name: '方案 B · 双层分离',
+      desc: '上层是 context strip（含常驻 skill 切换器），下层是任务主体。Header 总高 ~118px。'
+    }
+  };
+
+  tabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+      const v = tab.dataset.variant;
+      tabs.forEach(t => t.classList.toggle('is-active', t === tab));
+      views.forEach(view => view.classList.toggle('is-active', view.dataset.view === v));
+      notes.forEach(n => n.classList.toggle('is-active', n.dataset.notes === v));
+      variantName.textContent = meta[v].name;
+      variantDesc.textContent = meta[v].desc;
+    });
+  });
+</script>
+
+</body>
+</html>

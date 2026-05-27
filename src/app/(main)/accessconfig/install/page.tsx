@@ -18,6 +18,7 @@ import { AppTopBar } from '@/components/shell/AppTopBar';
 import { useAuth } from '@/lib/auth/auth-context';
 import { useLocale } from '@/lib/client/locale-context';
 import { apiFetch, getApiUrl } from '@/lib/client/api';
+import { Term } from '@/components/text/Term';
 
 /**
  * 客户端安装指导页。
@@ -116,7 +117,7 @@ export default function AccessInstallPage() {
 
     return (
         <>
-            <AppTopBar title={t('nav.accessInstall')} />
+            <AppTopBar title={<Term id="install-guide" label={t('nav.accessInstall')} />} />
             <div style={pageWrap}>
                 <div style={pageInner}>
                     {/* === Page intro === */}

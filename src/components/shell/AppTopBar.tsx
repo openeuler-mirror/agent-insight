@@ -1,82 +1,63 @@
 'use client';
 
-import { useLocale } from '@/lib/client/locale-context';
+/**
+ * AppTopBar — v2.1 兼容层（2026-05-27）
+ *
+ * `docs/design/patterns.md` §A.1 v2.1 起废弃独立 AppTopBar 行。本组件保留旧
+ * API（title / actions / showDefaultActions）让 27 个调用点继续工作，但内部
+ * 渲染已切换为新统一 header（h=56, sidebar-toggle 在左, lucide 图标, 单行
+ * 容器）—— 全站视觉立刻一致。
+ *
+ * @deprecated 新增页面请直接 `import { PageHeader } from '@/components/shell/PageHeader'`
+ *   以使用 4 种 variant（management / detail / live / detail-object）。
+ */
+
+import * as React from 'react';
+import { PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+
 import { useSidebar } from '@/lib/client/sidebar-context';
 
 export interface AppTopBarProps {
-    /** Page title — string or arbitrary node (e.g. clickable breadcrumb) */
+    /** 页面标题（字符串或 ReactNode，如 `<Term/>`） */
     title: React.ReactNode;
-    /** Optional secondary actions on the right */
+    /** 右侧次要操作集群（按钮、selector 等） */
     actions?: React.ReactNode;
-    /** When true, show the right-side default chips (version + time + export) */
+    /**
+     * 是否显示默认右侧 chips（v1 的"近 24h"）。
+     * v2.1 起默认 false —— 已无默认 chip 可显示。保留参数仅为不破坏调用点 API。
+     */
     showDefaultActions?: boolean;
 }
 
-/**
- * Hifi v5-aligned page header.
- * Renders inside each (main) route page so different tabs can plug their own
- * controls into the right side without coupling to the sidebar shell.
- */
-export function AppTopBar({ title, actions, showDefaultActions = true }: AppTopBarProps) {
-    const { t } = useLocale();
+export function AppTopBar({ title, actions }: AppTopBarProps) {
     const { isCollapsed, toggleSidebar } = useSidebar();
-    
-    return (
-        <div
-            style={{
-                height: 50,
-                padding: '0 16px',
-                borderBottom: '1px solid var(--border)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 12,
-                flexShrink: 0,
-                background: 'var(--card-bg)',
-                position: 'sticky',
-                top: 0,
-                zIndex: 10,
-            }}
-        >
-            <button 
-                onClick={toggleSidebar}
-                className="sidebar-toggle-btn"
-                style={{
-                    width: 32,
-                    height: 32,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    borderRadius: 6,
-                    border: '1px solid var(--border)',
-                    background: 'var(--background)',
-                    cursor: 'pointer',
-                    color: 'var(--foreground)',
-                    transition: 'all 0.2s ease'
-                }}
-            >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    {isCollapsed ? (
-                        <path d="M3 3h18v18H3z M9 3v18 M12 15l3-3-3-3" />
-                    ) : (
-                        <path d="M3 3h18v18H3z M9 3v18 M15 9l-3 3 3 3" />
-                    )}
-                </svg>
-            </button>
-            <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--foreground)' }}>{title}</span>
-            <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 7 }}>
-                {actions}
-                {showDefaultActions && <DefaultActions t={t} />}
-            </div>
-        </div>
-    );
-}
+    const ToggleIcon = isCollapsed ? PanelLeftOpen : PanelLeftClose;
 
-function DefaultActions({ t }: { t: (k: string) => string }) {
     return (
-        <>
-            <div className="ai-chip" title={t('topbar.timeRange')}>
-                {t('topbar.last24h') || '近 24h'}
+        <header
+            className="sticky top-0 z-10 flex h-14 items-center gap-3 border-b border-border bg-card px-6"
+            style={{ flexShrink: 0 }}
+        >
+            <button
+                type="button"
+                onClick={toggleSidebar}
+                aria-label={isCollapsed ? '展开侧栏' : '折叠侧栏'}
+                className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-foreground-secondary transition-colors hover:bg-background-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+                <ToggleIcon className="size-4" />
+            </button>
+
+            <div className="flex min-w-0 flex-1 items-center gap-2 text-sm font-medium text-foreground">
+                {typeof title === 'string' ? (
+                    <span className="truncate">{title}</span>
+                ) : (
+                    title
+                )}
             </div>
-        </>
+
+            {actions && (
+                <div className="flex items-center gap-2">{actions}</div>
+            )}
+        </header>
     );
 }

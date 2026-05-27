@@ -11,6 +11,7 @@ import { MarkdownText } from '@/components/thread/markdown-text';
 import remarkGfm from 'remark-gfm';
 import { findSkillMd, findSkillMdPath } from '@/lib/skill-generator/skill-files';
 import { ALLOWED_EXT_ACCEPT, ALLOWED_EXT_GROUPS } from '@/lib/skill-generator/file-types';
+import { Term } from '@/components/text/Term';
 
 const UPLOAD_GROUP_LABELS: Record<'zh' | 'en', Record<string, string>> = {
     zh: { documents: '文档', data: '数据', code: '代码', config: '配置', logs: '日志' },
@@ -1446,7 +1447,7 @@ export default function PlaygroundPage() {
                     {publishToast.msg}
                 </div>
             )}
-            <AppTopBar title={t('nav.skillGenerator')} actions={topBarActions} showDefaultActions={false} />
+            <AppTopBar title={<Term id="skill-generation" label={t('nav.skillGenerator')} />} actions={topBarActions} showDefaultActions={false} />
             <div
                 ref={containerRef}
                 className={`skill-generator-container ${showIDE ? 'ide-open' : 'ide-closed'}`}

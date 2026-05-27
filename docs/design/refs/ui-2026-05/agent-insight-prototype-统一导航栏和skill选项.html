@@ -1,0 +1,2859 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Agent Insight · 统一规范原型</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  /* ================ Design Tokens ================ */
+  :root {
+    /* Color · Brand */
+    --brand-50:  #f1f0fe;
+    --brand-100: #e3e0fc;
+    --brand-500: #6c5ce7;
+    --brand-600: #5b4bd4;
+    --brand-700: #4a3cb8;
+
+    /* Color · Neutral */
+    --bg:           #f7f7f9;
+    --surface:      #ffffff;
+    --surface-alt:  #fafafb;
+    --border:       #ececef;
+    --border-strong:#dcdce0;
+    --text-1:       #18181b;   /* primary */
+    --text-2:       #52525b;   /* secondary */
+    --text-3:       #8a8a93;   /* tertiary */
+    --text-4:       #b4b4bb;   /* disabled */
+
+    /* Color · Semantic (5 only) */
+    --neutral-bg:  #f2f2f4;  --neutral-fg:  #52525b;
+    --info-bg:     #e8f0fe;  --info-fg:     #2c5cc5;
+    --success-bg: #e4f5ec;  --success-fg:  #1e7d4a;
+    --warning-bg:  #fdf1dc;  --warning-fg:  #a06410;
+    --danger-bg:  #fce8e8;  --danger-fg:   #b42626;
+
+    /* Spacing scale */
+    --sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px;
+    --sp-4: 16px; --sp-5: 20px; --sp-6: 24px;
+    --sp-8: 32px; --sp-10: 40px;
+
+    /* Radius */
+    --r-sm: 4px;
+    --r-md: 6px;
+    --r-lg: 8px;
+    --r-xl: 12px;
+
+    /* Type */
+    --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+    /* Elevation (only used on overlay) */
+    --shadow-sm: 0 1px 2px rgba(24,24,27,0.04), 0 1px 1px rgba(24,24,27,0.03);
+    --shadow-md: 0 4px 16px rgba(24,24,27,0.08);
+
+    /* Layout */
+    --sidebar-w: 220px;
+    --header-h:  56px;
+  }
+
+  /* ================ Reset ================ */
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--text-1);
+    background: var(--bg);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  a { color: inherit; text-decoration: none; }
+  button { font-family: inherit; cursor: pointer; border: none; background: none; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: #d6d6db; border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: #b9b9c0; }
+
+  /* ================ App Shell ================ */
+  .app {
+    display: grid;
+    grid-template-columns: var(--sidebar-w) 1fr;
+    min-height: 100vh;
+  }
+
+  /* ---- Sidebar ---- */
+  .sidebar {
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    position: sticky;
+    top: 0;
+  }
+  .sidebar-brand {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    padding: var(--sp-5) var(--sp-5) var(--sp-4);
+    border-bottom: 1px solid var(--border);
+  }
+  .brand-mark {
+    width: 32px; height: 32px;
+    border-radius: var(--r-md);
+    background: linear-gradient(135deg, var(--brand-500) 0%, var(--brand-700) 100%);
+    display: grid; place-items: center;
+    color: #fff;
+    font-weight: 600;
+    font-size: 14px;
+    letter-spacing: -0.02em;
+  }
+  .brand-name {
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--text-1);
+    letter-spacing: -0.01em;
+  }
+  .brand-tag {
+    font-size: 11px;
+    color: var(--text-3);
+    margin-top: 1px;
+  }
+
+  .nav { flex: 1; padding: var(--sp-3) var(--sp-2); overflow-y: auto; }
+  .nav-group { margin-bottom: var(--sp-1); }
+  .nav-group-divider {
+    height: 1px; background: var(--border);
+    margin: var(--sp-3) var(--sp-3);
+  }
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    padding: 7px var(--sp-3);
+    border-radius: var(--r-md);
+    color: var(--text-2);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.12s, color 0.12s;
+    position: relative;
+  }
+  .nav-item:hover { background: var(--surface-alt); color: var(--text-1); }
+  .nav-item.active {
+    background: var(--brand-50);
+    color: var(--brand-700);
+  }
+  .nav-item .icon {
+    width: 16px; height: 16px;
+    flex-shrink: 0;
+    display: grid; place-items: center;
+  }
+  .nav-item .icon svg { width: 100%; height: 100%; }
+  .nav-item .chev {
+    margin-left: auto;
+    width: 12px; height: 12px;
+    color: var(--text-3);
+    transition: transform 0.15s;
+  }
+  .nav-group.open .chev { transform: rotate(90deg); }
+
+  .nav-sub {
+    overflow: hidden;
+    max-height: 0;
+    transition: max-height 0.2s ease-out;
+  }
+  .nav-group.open .nav-sub { max-height: 240px; }
+  .nav-sub-item {
+    display: block;
+    padding: 6px var(--sp-3) 6px 34px;
+    border-radius: var(--r-md);
+    color: var(--text-3);
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+  }
+  .nav-sub-item:hover { background: var(--surface-alt); color: var(--text-2); }
+  .nav-sub-item.active {
+    color: var(--brand-700);
+    font-weight: 500;
+    background: var(--brand-50);
+  }
+
+  .sidebar-footer {
+    border-top: 1px solid var(--border);
+    padding: var(--sp-3) var(--sp-4);
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+  }
+  .footer-tools {
+    display: flex; gap: var(--sp-1);
+  }
+  .icon-btn {
+    width: 28px; height: 28px;
+    border-radius: var(--r-sm);
+    display: grid; place-items: center;
+    color: var(--text-3);
+    transition: background 0.12s, color 0.12s;
+  }
+  .icon-btn:hover { background: var(--surface-alt); color: var(--text-1); }
+  .icon-btn svg { width: 16px; height: 16px; }
+
+  .avatar {
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #5b4bd4, #8d7ce8);
+    color: #fff;
+    display: grid; place-items: center;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .user-meta { flex: 1; min-width: 0; }
+  .user-email {
+    font-size: 12px;
+    color: var(--text-2);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .user-role { font-size: 11px; color: var(--text-3); }
+
+  /* ---- Main ---- */
+  .main {
+    display: flex; flex-direction: column;
+    min-width: 0;
+  }
+
+  /* ---- Header (统一) ---- */
+  .header {
+    height: var(--header-h);
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    padding: 0 var(--sp-6);
+    gap: var(--sp-4);
+    position: sticky; top: 0; z-index: 10;
+  }
+  .header-left { display: flex; align-items: center; gap: var(--sp-3); min-width: 0; flex: 1; }
+  .header-right { display: flex; align-items: center; gap: var(--sp-2); }
+
+  .sidebar-toggle {
+    width: 28px; height: 28px;
+    border-radius: var(--r-sm);
+    display: grid; place-items: center;
+    color: var(--text-2);
+    transition: background 0.12s;
+  }
+  .sidebar-toggle:hover { background: var(--surface-alt); }
+  .sidebar-toggle svg { width: 16px; height: 16px; }
+
+  .breadcrumb {
+    display: flex; align-items: center; gap: var(--sp-2);
+    font-size: 13px;
+    min-width: 0;
+  }
+  .breadcrumb-item { color: var(--text-3); cursor: pointer; transition: color 0.12s; }
+  .breadcrumb-item:hover { color: var(--text-1); }
+  .breadcrumb-item.current {
+    color: var(--text-1);
+    font-weight: 500;
+  }
+  .breadcrumb-sep {
+    color: var(--text-4);
+    font-size: 11px;
+  }
+
+  /* Header selectors (only on detail pages) */
+  .header-selector {
+    display: flex; align-items: center; gap: var(--sp-2);
+    padding: 5px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    font-size: 13px;
+    color: var(--text-1);
+    background: var(--surface);
+    cursor: pointer;
+    transition: border-color 0.12s, background 0.12s;
+  }
+  .header-selector:hover { border-color: var(--border-strong); background: var(--surface-alt); }
+  .header-selector svg { width: 12px; height: 12px; color: var(--text-3); }
+
+  /* ---- Double-row Header (for detail pages) ---- */
+  .header-wrap {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; z-index: 10;
+  }
+  .header-crumbs {
+    height: 36px;
+    display: flex; align-items: center;
+    padding: 0 var(--sp-6);
+    gap: var(--sp-2);
+    background: var(--surface-alt);
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+  }
+  .header-crumbs .breadcrumb-item { color: var(--text-3); cursor: pointer; transition: color 0.12s; }
+  .header-crumbs .breadcrumb-item:hover { color: var(--text-1); }
+  .header-crumbs .breadcrumb-item.current { color: var(--text-2); font-weight: 500; cursor: default; }
+  .header-crumbs .breadcrumb-sep { color: var(--text-4); font-size: 10px; }
+
+  .header-context {
+    height: 56px;
+    display: flex; align-items: center;
+    padding: 0 var(--sp-6);
+    gap: var(--sp-4);
+  }
+  .context-object {
+    display: flex; align-items: center; gap: var(--sp-3);
+    cursor: pointer;
+    padding: 4px 8px;
+    margin-left: -8px;
+    border-radius: var(--r-md);
+    transition: background 0.12s;
+  }
+  .context-object:hover { background: var(--surface-alt); }
+  .context-icon {
+    width: 32px; height: 32px;
+    border-radius: var(--r-md);
+    background: var(--brand-50);
+    color: var(--brand-700);
+    display: grid; place-items: center;
+    font-size: 12px;
+    font-weight: 600;
+    font-family: var(--font-mono);
+  }
+  .context-meta { line-height: 1.2; }
+  .context-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-1);
+    letter-spacing: -0.01em;
+    font-family: var(--font-mono);
+    display: flex; align-items: center; gap: 6px;
+  }
+  .context-title .chev {
+    width: 12px; height: 12px;
+    color: var(--text-3);
+  }
+  .context-sub {
+    font-size: 11px;
+    color: var(--text-3);
+    margin-top: 2px;
+    font-family: var(--font-sans);
+  }
+
+  /* ---- Phase Stepper (3 阶段进度) ---- */
+  .phase-stepper {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    padding: var(--sp-4) var(--sp-5);
+    margin-bottom: var(--sp-5);
+    position: relative;
+  }
+  .phase {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    position: relative;
+    padding: var(--sp-2) 0;
+  }
+  .phase:not(:last-child)::after {
+    content: "";
+    position: absolute;
+    right: 12px;
+    top: 50%;
+    width: 24px;
+    height: 1px;
+    background: var(--border);
+  }
+  .phase-num {
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    display: grid; place-items: center;
+    font-size: 12px;
+    font-weight: 600;
+    flex-shrink: 0;
+  }
+  .phase-num.done {
+    background: var(--success-fg);
+    color: #fff;
+  }
+  .phase-num.current {
+    background: var(--brand-600);
+    color: #fff;
+    box-shadow: 0 0 0 3px var(--brand-50);
+  }
+  .phase-num.todo {
+    background: var(--neutral-bg);
+    color: var(--text-3);
+  }
+  .phase-body { min-width: 0; }
+  .phase-step {
+    font-size: 10px;
+    color: var(--text-3);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 600;
+    margin-bottom: 2px;
+  }
+  .phase-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-1);
+    margin-bottom: 1px;
+    line-height: 1.3;
+  }
+  .phase-status {
+    font-size: 11px;
+    color: var(--text-3);
+  }
+  .phase-status.success { color: var(--success-fg); }
+  .phase-status.current { color: var(--brand-700); font-weight: 500; }
+
+  /* ---- Sub-section card ---- */
+  .subsection {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    overflow: hidden;
+    margin-bottom: var(--sp-4);
+  }
+  .subsection-head {
+    padding: var(--sp-4) var(--sp-5);
+    display: flex; align-items: center; gap: var(--sp-3);
+    border-bottom: 1px solid var(--border);
+  }
+  .subsection-num {
+    width: 24px; height: 24px;
+    border-radius: 50%;
+    background: var(--brand-50);
+    color: var(--brand-700);
+    display: grid; place-items: center;
+    font-size: 12px;
+    font-weight: 600;
+    flex-shrink: 0;
+  }
+  .subsection-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-1);
+  }
+  .subsection-desc {
+    font-size: 12px;
+    color: var(--text-3);
+    margin-top: 2px;
+  }
+  .subsection-meta {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--text-3);
+    display: flex; align-items: center; gap: var(--sp-2);
+  }
+  .subsection-meta strong { color: var(--text-1); font-weight: 600; }
+  .subsection-body { padding: var(--sp-5); }
+
+  /* ---- Source toggle ---- */
+  .source-row {
+    display: flex; align-items: center; gap: var(--sp-3);
+    padding: var(--sp-3) var(--sp-5);
+    background: var(--surface-alt);
+    border-bottom: 1px solid var(--border);
+  }
+  .source-toggle {
+    display: inline-flex;
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-md);
+    padding: 2px;
+    gap: 2px;
+  }
+  .source-toggle-item {
+    padding: 4px 12px;
+    font-size: 12px;
+    color: var(--text-2);
+    border-radius: 4px;
+    cursor: pointer;
+    display: inline-flex; align-items: center; gap: 4px;
+    transition: background 0.12s, color 0.12s;
+  }
+  .source-toggle-item.active {
+    background: var(--info-bg);
+    color: var(--info-fg);
+    font-weight: 500;
+  }
+  .source-toggle-item svg { width: 12px; height: 12px; }
+
+  /* ---- Trace list ---- */
+  .trace-search {
+    width: 100%;
+    height: 32px;
+    padding: 0 12px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-md);
+    font-size: 13px;
+    color: var(--text-1);
+    background: var(--surface);
+  }
+  .trace-search:focus {
+    outline: none;
+    border-color: var(--brand-500);
+    box-shadow: 0 0 0 3px var(--brand-50);
+  }
+  .trace-empty {
+    padding: var(--sp-10) var(--sp-5);
+    text-align: center;
+    color: var(--text-3);
+    font-size: 13px;
+  }
+
+  /* ---- A/B 配对 ---- */
+  .ab-pair {
+    display: grid;
+    grid-template-columns: 72px 1fr 1fr 1fr;
+    gap: var(--sp-4);
+    align-items: center;
+  }
+  .ab-skill-icon {
+    width: 64px; height: 64px;
+    border-radius: var(--r-lg);
+    background: linear-gradient(135deg, var(--brand-600), var(--brand-700));
+    color: #fff;
+    display: grid; place-items: center;
+    font-size: 18px;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    letter-spacing: -0.02em;
+  }
+  .ab-field {
+    display: flex; flex-direction: column;
+  }
+  .ab-field-label {
+    font-size: 11px;
+    color: var(--text-3);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 600;
+    margin-bottom: 6px;
+    display: flex; align-items: center; gap: 4px;
+  }
+  .ab-field-label .tag-a, .ab-field-label .tag-b {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 10px;
+  }
+  .ab-field-label .tag-a { background: var(--info-bg); color: var(--info-fg); }
+  .ab-field-label .tag-b { background: var(--success-bg); color: var(--success-fg); }
+  .ab-field-input {
+    height: 42px;
+    padding: 0 14px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-md);
+    font-size: 14px;
+    color: var(--text-1);
+    background: var(--surface);
+    display: flex; align-items: center; justify-content: space-between;
+    cursor: pointer;
+    transition: border-color 0.12s, background 0.12s;
+  }
+  .ab-field-input:hover { border-color: var(--brand-500); background: var(--brand-50); }
+  .ab-field-input.placeholder { color: var(--text-3); font-style: italic; }
+  .ab-field-input svg { width: 14px; height: 14px; color: var(--text-3); flex-shrink: 0; }
+
+  /* ---- Config Grid ---- */
+  .config-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: var(--sp-3);
+  }
+  .config-box {
+    background: var(--surface-alt);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    padding: var(--sp-4);
+  }
+  .config-box .lbl {
+    font-size: 11px;
+    color: var(--text-3);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 600;
+    margin-bottom: var(--sp-2);
+  }
+  .config-box .lbl .req {
+    color: var(--danger-fg);
+    margin-left: 2px;
+  }
+  .config-box .val {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-1);
+    margin-bottom: 4px;
+  }
+  .config-box .foot {
+    font-size: 11px;
+    color: var(--text-3);
+  }
+  .config-box.unset .val {
+    color: var(--text-3);
+    font-weight: 400;
+    font-style: italic;
+  }
+  .config-checkbox {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 13px;
+    color: var(--text-1);
+    margin-bottom: 4px;
+    cursor: pointer;
+  }
+  .config-checkbox input { accent-color: var(--brand-600); width: 14px; height: 14px; }
+
+  .input-source-row {
+    margin-top: var(--sp-5);
+    padding-top: var(--sp-4);
+    border-top: 1px dashed var(--border);
+  }
+  .input-source-label {
+    font-size: 12px;
+    color: var(--text-3);
+    margin-bottom: var(--sp-3);
+    display: flex; align-items: center; gap: 6px;
+  }
+  .pill-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 6px 12px;
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--r-md);
+    font-size: 12px;
+    color: var(--text-2);
+    background: transparent;
+    cursor: pointer;
+    transition: border-color 0.12s, color 0.12s, background 0.12s;
+    margin-right: var(--sp-2);
+  }
+  .pill-btn:hover {
+    border-color: var(--brand-500);
+    color: var(--brand-700);
+    background: var(--brand-50);
+  }
+
+  /* ---- Static compliance rules ---- */
+  .rule-row {
+    display: grid;
+    grid-template-columns: 180px 1fr 80px 28px;
+    gap: var(--sp-4);
+    align-items: center;
+    padding: var(--sp-4) var(--sp-5);
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+  .rule-row:last-child { border-bottom: none; }
+  .rule-row:hover { background: var(--surface-alt); }
+  .rule-name { font-size: 13px; font-weight: 600; color: var(--text-1); }
+  .rule-desc { font-size: 12px; color: var(--text-3); line-height: 1.5; }
+  .rule-status { text-align: right; }
+  .rule-chev { color: var(--text-3); display: grid; place-items: center; }
+
+  /* ---- Info banner ---- */
+  .info-banner {
+    display: flex; align-items: center; gap: var(--sp-3);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    padding: var(--sp-4) var(--sp-5);
+    margin-bottom: var(--sp-5);
+  }
+  .info-banner .ic {
+    width: 32px; height: 32px;
+    border-radius: var(--r-md);
+    background: var(--info-bg);
+    color: var(--info-fg);
+    display: grid; place-items: center;
+    flex-shrink: 0;
+  }
+  .info-banner .ic svg { width: 16px; height: 16px; }
+  .info-banner-body { flex: 1; min-width: 0; }
+  .info-banner-title { font-size: 13px; font-weight: 600; color: var(--text-1); margin-bottom: 2px; }
+  .info-banner-desc { font-size: 12px; color: var(--text-3); }
+
+  /* Page title with badge */
+  .page-title-row {
+    display: flex; align-items: center; gap: var(--sp-3);
+    margin-bottom: 4px;
+  }
+  .page-title-row .page-title { margin: 0; }
+
+  /* ================ Buttons ================ */
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    height: 32px;
+    padding: 0 12px;
+    border-radius: var(--r-md);
+    font-size: 13px;
+    font-weight: 500;
+    transition: background 0.12s, border-color 0.12s, color 0.12s;
+    white-space: nowrap;
+  }
+  .btn svg { width: 14px; height: 14px; }
+  .btn-primary {
+    background: var(--brand-600);
+    color: #fff;
+  }
+  .btn-primary:hover { background: var(--brand-700); }
+  .btn-secondary {
+    background: var(--surface);
+    color: var(--text-1);
+    border: 1px solid var(--border-strong);
+  }
+  .btn-secondary:hover { background: var(--surface-alt); border-color: #c9c9cf; }
+  .btn-ghost {
+    color: var(--text-2);
+  }
+  .btn-ghost:hover { background: var(--surface-alt); color: var(--text-1); }
+  .btn-sm { height: 28px; padding: 0 10px; font-size: 12px; }
+
+  /* ================ Badge / Tag (统一) ================ */
+  .badge {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 2px 8px;
+    border-radius: var(--r-sm);
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 18px;
+    white-space: nowrap;
+  }
+  .badge::before {
+    content: "";
+    width: 5px; height: 5px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+  .badge.no-dot::before { display: none; }
+  .badge-neutral  { background: var(--neutral-bg);  color: var(--neutral-fg); }
+  .badge-info     { background: var(--info-bg);     color: var(--info-fg); }
+  .badge-success  { background: var(--success-bg);  color: var(--success-fg); }
+  .badge-warning  { background: var(--warning-bg);  color: var(--warning-fg); }
+  .badge-danger   { background: var(--danger-bg);   color: var(--danger-fg); }
+
+  /* ================ Card (统一) ================ */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    transition: border-color 0.12s;
+  }
+  .card-hoverable:hover { border-color: var(--border-strong); }
+  .card-padded { padding: var(--sp-5); }
+  .card-header {
+    padding: var(--sp-4) var(--sp-5);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .card-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-1);
+    letter-spacing: -0.01em;
+  }
+  .card-subtitle {
+    font-size: 12px;
+    color: var(--text-3);
+    margin-top: 2px;
+  }
+  .card-body { padding: var(--sp-5); }
+
+  /* ================ Content area ================ */
+  .content {
+    padding: var(--sp-6);
+    max-width: 100%;
+  }
+  .page-title {
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--text-1);
+    letter-spacing: -0.02em;
+    margin: 0 0 4px;
+  }
+  .page-desc {
+    font-size: 13px;
+    color: var(--text-3);
+    margin: 0 0 var(--sp-6);
+  }
+
+  /* ================ KPI Card (统一) ================ */
+  .kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: var(--sp-4);
+    margin-bottom: var(--sp-6);
+  }
+  .kpi {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    padding: var(--sp-5);
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.12s, transform 0.12s;
+  }
+  .kpi:hover { border-color: var(--border-strong); }
+  .kpi.featured {
+    background: linear-gradient(135deg, var(--brand-600) 0%, var(--brand-700) 100%);
+    border-color: transparent;
+    color: #fff;
+  }
+  .kpi.featured .kpi-label { color: rgba(255,255,255,0.7); }
+  .kpi.featured .kpi-value { color: #fff; }
+  .kpi.featured .kpi-foot  { color: rgba(255,255,255,0.6); }
+  .kpi-label {
+    font-size: 12px;
+    color: var(--text-3);
+    margin-bottom: var(--sp-3);
+    font-weight: 500;
+  }
+  .kpi-value {
+    font-size: 28px;
+    font-weight: 600;
+    color: var(--text-1);
+    letter-spacing: -0.02em;
+    line-height: 1.1;
+    display: flex; align-items: baseline; gap: 4px;
+  }
+  .kpi-value .unit {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-3);
+  }
+  .kpi.featured .kpi-value .unit { color: rgba(255,255,255,0.6); }
+  .kpi-foot {
+    margin-top: var(--sp-3);
+    font-size: 12px;
+    color: var(--text-3);
+  }
+  .kpi-spark {
+    margin-top: var(--sp-3);
+    height: 20px;
+    width: 100%;
+  }
+
+  /* Filter bar */
+  .filter-bar {
+    display: flex; align-items: center; gap: var(--sp-3);
+    margin-bottom: var(--sp-5);
+    flex-wrap: wrap;
+  }
+  .filter-group {
+    display: flex; align-items: center; gap: var(--sp-2);
+  }
+  .filter-label {
+    font-size: 12px;
+    color: var(--text-3);
+  }
+  .select {
+    height: 30px;
+    padding: 0 28px 0 10px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-md);
+    background: var(--surface);
+    font-size: 13px;
+    color: var(--text-1);
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238a8a93' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+    cursor: pointer;
+  }
+  .select:hover { border-color: #c9c9cf; }
+  .meta-text {
+    font-size: 12px;
+    color: var(--text-3);
+    margin-left: auto;
+  }
+  .meta-text strong { color: var(--text-1); font-weight: 600; }
+
+  /* Trend / list */
+  .grid-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--sp-4);
+    margin-bottom: var(--sp-6);
+  }
+  .chart-area { height: 200px; width: 100%; }
+
+  /* Table */
+  .table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  .table th {
+    text-align: left;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-3);
+    padding: var(--sp-3) var(--sp-4);
+    border-bottom: 1px solid var(--border);
+    background: var(--surface-alt);
+  }
+  .table td {
+    padding: var(--sp-3) var(--sp-4);
+    border-bottom: 1px solid var(--border);
+    color: var(--text-1);
+  }
+  .table tr:last-child td { border-bottom: none; }
+  .table tr:hover td { background: var(--surface-alt); }
+
+  .agent-name { display: flex; align-items: center; gap: var(--sp-3); }
+  .agent-icon {
+    width: 28px; height: 28px;
+    border-radius: var(--r-sm);
+    background: var(--brand-50);
+    color: var(--brand-700);
+    display: grid; place-items: center;
+    font-size: 11px;
+    font-weight: 600;
+    font-family: var(--font-mono);
+  }
+
+  /* Skill cards */
+  .skills-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: var(--sp-4);
+  }
+  .skill-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    padding: var(--sp-5);
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-4);
+    transition: border-color 0.12s, transform 0.12s;
+  }
+  .skill-card:hover {
+    border-color: var(--border-strong);
+  }
+  .skill-card-header {
+    display: flex; align-items: flex-start; justify-content: space-between; gap: var(--sp-2);
+  }
+  .skill-name {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-1);
+  }
+  .skill-meta {
+    font-size: 11px;
+    color: var(--text-3);
+    margin-top: 4px;
+  }
+  .skill-version {
+    font-size: 12px;
+    color: var(--text-2);
+    padding-top: var(--sp-2);
+    border-top: 1px dashed var(--border);
+  }
+  .skill-stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--sp-3);
+    padding-top: var(--sp-3);
+    border-top: 1px solid var(--border);
+  }
+  .stat-item .stat-label {
+    font-size: 11px;
+    color: var(--text-3);
+    margin-bottom: 2px;
+  }
+  .stat-item .stat-value {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-1);
+  }
+  .stat-item .stat-foot {
+    font-size: 11px;
+    color: var(--text-3);
+    margin-top: 1px;
+  }
+  .skill-card-footer {
+    display: flex; align-items: center; justify-content: space-between;
+    padding-top: var(--sp-3);
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+  }
+  .skill-upload {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    border: 1.5px dashed var(--border-strong);
+    background: transparent;
+    color: var(--text-3);
+    gap: var(--sp-2);
+    min-height: 240px;
+    cursor: pointer;
+    transition: border-color 0.12s, color 0.12s, background 0.12s;
+  }
+  .skill-upload:hover {
+    border-color: var(--brand-500);
+    color: var(--brand-600);
+    background: var(--brand-50);
+  }
+  .skill-upload .plus {
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    border: 1.5px solid currentColor;
+    display: grid; place-items: center;
+    font-size: 20px;
+    font-weight: 300;
+  }
+
+  /* Skill 列表顶部 */
+  .list-toolbar {
+    display: flex; align-items: center; gap: var(--sp-3);
+    margin-bottom: var(--sp-5);
+    flex-wrap: wrap;
+  }
+  .search {
+    flex: 1;
+    max-width: 320px;
+    height: 32px;
+    padding: 0 12px 0 32px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-md);
+    font-size: 13px;
+    background: var(--surface)
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%238a8a93' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='8'%3E%3C/circle%3E%3Cline x1='21' y1='21' x2='16.65' y2='16.65'%3E%3C/line%3E%3C/svg%3E")
+      no-repeat 10px center;
+    color: var(--text-1);
+  }
+  .search:focus { outline: none; border-color: var(--brand-500); box-shadow: 0 0 0 3px var(--brand-50); }
+
+  .seg {
+    display: inline-flex;
+    background: var(--neutral-bg);
+    border-radius: var(--r-md);
+    padding: 3px;
+    gap: 2px;
+  }
+  .seg-item {
+    padding: 4px 12px;
+    font-size: 12px;
+    color: var(--text-2);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+  }
+  .seg-item.active {
+    background: var(--surface);
+    color: var(--text-1);
+    font-weight: 500;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+  }
+  .seg-item:hover:not(.active) { color: var(--text-1); }
+
+  .meta-pills {
+    display: flex; align-items: center; gap: var(--sp-4);
+    font-size: 12px;
+    color: var(--text-3);
+  }
+  .meta-pills strong { color: var(--text-1); font-weight: 600; }
+  .meta-pills .sep { width: 1px; height: 12px; background: var(--border); }
+
+  /* Skills 分析 specific */
+  .analysis-hero {
+    display: grid;
+    grid-template-columns: 1.1fr 1.6fr 1fr;
+    gap: var(--sp-4);
+    margin-bottom: var(--sp-5);
+  }
+  .score-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    padding: var(--sp-5);
+    position: relative;
+    overflow: hidden;
+  }
+  .score-card.warning::before {
+    content: ""; position: absolute; left: 0; top: 0; bottom: 0;
+    width: 3px; background: var(--warning-fg);
+  }
+  .score-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: var(--sp-3);
+  }
+  .score-name { font-size: 13px; font-weight: 600; color: var(--text-1); }
+  .score-value {
+    font-size: 42px;
+    font-weight: 600;
+    letter-spacing: -0.03em;
+    line-height: 1;
+    color: var(--text-1);
+    display: flex; align-items: baseline; gap: var(--sp-2);
+  }
+  .score-value .denom { font-size: 14px; color: var(--text-3); font-weight: 500; }
+  .score-bar {
+    margin-top: var(--sp-4);
+    height: 4px;
+    border-radius: 2px;
+    background: var(--neutral-bg);
+    overflow: hidden;
+    display: flex;
+  }
+  .score-bar-seg {
+    height: 100%;
+    border-right: 1px solid var(--surface);
+  }
+  .score-foot {
+    margin-top: var(--sp-2);
+    font-size: 11px;
+    color: var(--text-3);
+    display: flex; justify-content: space-between;
+  }
+
+  .diag {
+    display: flex; flex-direction: column;
+    gap: var(--sp-3);
+  }
+  .diag-row { display: flex; gap: var(--sp-3); align-items: flex-start; }
+  .diag-tag {
+    flex-shrink: 0;
+    padding: 2px 8px;
+    border-radius: var(--r-sm);
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 18px;
+  }
+  .diag-tag.q { background: var(--warning-bg); color: var(--warning-fg); }
+  .diag-tag.r { background: var(--info-bg); color: var(--info-fg); }
+  .diag-text {
+    font-size: 13px;
+    color: var(--text-1);
+    line-height: 1.6;
+  }
+  .diag-formula {
+    background: var(--surface-alt);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    padding: var(--sp-3);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-2);
+    line-height: 1.7;
+  }
+
+  .smart-run {
+    background: #18181b;
+    color: #fafafb;
+    border-radius: var(--r-lg);
+    padding: var(--sp-5);
+    display: flex; flex-direction: column; gap: var(--sp-3);
+  }
+  .smart-run-title {
+    display: flex; align-items: center; gap: var(--sp-2);
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .smart-run-title .dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: #facc15;
+  }
+  .smart-run-subtitle {
+    font-size: 11px;
+    color: rgba(255,255,255,0.55);
+  }
+  .smart-run-options { display: flex; flex-direction: column; gap: var(--sp-1); }
+  .smart-opt {
+    display: flex; align-items: center; gap: var(--sp-2);
+    padding: 6px 8px;
+    border-radius: var(--r-sm);
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+  .smart-opt:hover { background: rgba(255,255,255,0.06); }
+  .smart-opt input { width: 13px; height: 13px; accent-color: var(--brand-500); }
+  .smart-opt .opt-weight {
+    margin-left: auto;
+    font-size: 10px;
+    color: rgba(255,255,255,0.55);
+  }
+  .smart-opt .opt-status {
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    background: rgba(250,204,21,0.15);
+    color: #facc15;
+  }
+  .smart-opt .opt-status.pending {
+    background: rgba(255,255,255,0.08);
+    color: rgba(255,255,255,0.55);
+  }
+  .smart-run-foot {
+    display: flex; align-items: center; justify-content: space-between;
+    padding-top: var(--sp-3);
+    border-top: 1px solid rgba(255,255,255,0.08);
+    font-size: 11px;
+    color: rgba(255,255,255,0.55);
+  }
+  .btn-on-dark {
+    background: var(--brand-500);
+    color: #fff;
+    height: 30px;
+    padding: 0 12px;
+    border-radius: var(--r-md);
+    font-size: 12px;
+    font-weight: 500;
+    display: inline-flex; align-items: center; gap: 4px;
+  }
+  .btn-on-dark:hover { background: var(--brand-600); }
+
+  /* 4 dim cards */
+  .dim-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: var(--sp-4);
+  }
+  .dim-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    padding: var(--sp-4);
+    display: flex; flex-direction: column; gap: var(--sp-3);
+    transition: border-color 0.12s;
+  }
+  .dim-card:hover { border-color: var(--border-strong); }
+  .dim-card-head {
+    display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2);
+  }
+  .dim-title-block { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; }
+  .dim-icon {
+    width: 28px; height: 28px;
+    border-radius: var(--r-sm);
+    background: var(--brand-50);
+    color: var(--brand-700);
+    display: grid; place-items: center;
+  }
+  .dim-icon svg { width: 14px; height: 14px; }
+  .dim-title { font-size: 13px; font-weight: 600; color: var(--text-1); }
+  .dim-sub { font-size: 11px; color: var(--text-3); }
+  .dim-score {
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--text-1);
+    display: flex; align-items: baseline; gap: 4px;
+  }
+  .dim-score.muted { color: var(--text-3); }
+  .dim-score .small { font-size: 12px; color: var(--text-3); font-weight: 400; }
+  .dim-foot-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--sp-3);
+    font-size: 11px;
+  }
+  .dim-foot-grid .lbl { color: var(--text-3); margin-bottom: 2px; }
+  .dim-foot-grid .val { color: var(--text-1); font-weight: 500; }
+  .dim-action {
+    margin-top: var(--sp-2);
+    padding: 8px 12px;
+    border-radius: var(--r-md);
+    background: var(--surface-alt);
+    color: var(--brand-700);
+    font-size: 12px;
+    font-weight: 500;
+    text-align: center;
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+  .dim-action:hover { background: var(--brand-50); }
+  .dim-action.empty {
+    background: var(--warning-bg);
+    color: var(--warning-fg);
+  }
+  .dim-action.empty:hover { filter: brightness(0.96); }
+  .dim-action.success {
+    background: var(--info-bg);
+    color: var(--info-fg);
+  }
+
+  /* 触发分析 流程 */
+  .step-list { display: flex; flex-direction: column; gap: var(--sp-3); }
+  .step {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    padding: var(--sp-5);
+    display: flex;
+    align-items: center;
+    gap: var(--sp-4);
+    transition: border-color 0.12s;
+  }
+  .step:hover { border-color: var(--border-strong); }
+  .step-num {
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    background: var(--brand-50);
+    color: var(--brand-700);
+    display: grid; place-items: center;
+    font-size: 13px;
+    font-weight: 600;
+    flex-shrink: 0;
+  }
+  .step-body { flex: 1; min-width: 0; }
+  .step-title { font-size: 14px; font-weight: 600; color: var(--text-1); margin-bottom: 2px; }
+  .step-desc { font-size: 12px; color: var(--text-3); }
+  .step-status {
+    font-size: 12px;
+    color: var(--text-3);
+    display: flex; align-items: center; gap: 4px;
+  }
+  .step-status svg { width: 12px; height: 12px; }
+
+  .empty-state {
+    background: var(--surface);
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--r-lg);
+    padding: var(--sp-10) var(--sp-5);
+    text-align: center;
+  }
+  .empty-icon {
+    width: 40px; height: 40px;
+    margin: 0 auto var(--sp-3);
+    border-radius: 50%;
+    background: var(--surface-alt);
+    color: var(--text-3);
+    display: grid; place-items: center;
+  }
+  .empty-title { font-size: 13px; font-weight: 500; color: var(--text-1); margin-bottom: 4px; }
+  .empty-desc { font-size: 12px; color: var(--text-3); }
+
+  /* page swap animation */
+  .page { display: none; animation: fadeIn 0.18s ease-out; }
+  .page.active { display: block; }
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* Trend Card 内部 */
+  .trend-meta {
+    display: flex; align-items: baseline; gap: var(--sp-4);
+    padding: 0 var(--sp-5) var(--sp-3);
+    font-size: 12px;
+    color: var(--text-3);
+  }
+  .trend-meta strong { color: var(--text-1); font-weight: 600; font-size: 14px; }
+  .trend-empty {
+    display: flex; align-items: center; justify-content: center;
+    height: 200px;
+    color: var(--text-3);
+    font-size: 12px;
+    background: var(--surface-alt);
+    border-radius: 0 0 var(--r-lg) var(--r-lg);
+  }
+
+  /* Alert banner */
+  .alert {
+    display: flex; align-items: center; gap: var(--sp-3);
+    padding: var(--sp-4) var(--sp-5);
+    background: var(--success-bg);
+    border: 1px solid var(--success-fg);
+    border-color: rgba(30,125,74,0.2);
+    border-radius: var(--r-lg);
+    font-size: 13px;
+    color: var(--success-fg);
+  }
+  .alert-icon {
+    width: 20px; height: 20px;
+    border-radius: 50%;
+    background: var(--success-fg);
+    color: #fff;
+    display: grid; place-items: center;
+    flex-shrink: 0;
+  }
+  .alert-icon svg { width: 12px; height: 12px; }
+  .section-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-1);
+    margin: 0 0 var(--sp-3);
+    letter-spacing: -0.01em;
+  }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <!-- ============ SIDEBAR ============ -->
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-mark">Ai</div>
+      <div>
+        <div class="brand-name">Agent Insight</div>
+        <div class="brand-tag">by Skill-insight</div>
+      </div>
+    </div>
+
+    <nav class="nav">
+      <div class="nav-item active" data-page="overview">
+        <span class="icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>
+        </span>
+        <span>概览</span>
+      </div>
+
+      <div class="nav-item">
+        <span class="icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a8 8 0 0 1 16 0v1"/></svg>
+        </span>
+        <span>Agent 管理</span>
+      </div>
+
+      <div class="nav-group">
+        <div class="nav-item" data-toggle="observe">
+          <span class="icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
+          </span>
+          <span>运行观测</span>
+          <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+        </div>
+        <div class="nav-sub">
+          <div class="nav-sub-item">链路追踪</div>
+          <div class="nav-sub-item">智能诊断</div>
+          <div class="nav-sub-item">质量监控</div>
+        </div>
+      </div>
+
+      <div class="nav-group open">
+        <div class="nav-item" data-toggle="skills">
+          <span class="icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15 8 22 9 17 14 18 21 12 18 6 21 7 14 2 9 9 8 12 2"/></svg>
+          </span>
+          <span>Skills</span>
+          <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+        </div>
+        <div class="nav-sub">
+          <div class="nav-sub-item" data-page="skills">管理</div>
+          <div class="nav-sub-item">生成</div>
+          <div class="nav-sub-item" data-page="analysis">分析</div>
+          <div class="nav-sub-item">优化</div>
+        </div>
+      </div>
+
+      <div class="nav-group">
+        <div class="nav-item" data-toggle="eval">
+          <span class="icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+          </span>
+          <span>评测</span>
+          <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+        </div>
+        <div class="nav-sub">
+          <div class="nav-sub-item">数据集</div>
+          <div class="nav-sub-item">评估器</div>
+          <div class="nav-sub-item">执行</div>
+        </div>
+      </div>
+
+      <div class="nav-group-divider"></div>
+
+      <div class="nav-group">
+        <div class="nav-item" data-toggle="settings">
+          <span class="icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          </span>
+          <span>设置</span>
+          <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+        </div>
+        <div class="nav-sub">
+          <div class="nav-sub-item">模型</div>
+          <div class="nav-sub-item">联网搜索</div>
+          <div class="nav-sub-item">安装指导</div>
+        </div>
+      </div>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="footer-tools">
+        <button class="icon-btn" title="切换主题">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        </button>
+        <button class="icon-btn" title="切换语言">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+        </button>
+      </div>
+      <div class="avatar">N</div>
+      <div class="user-meta">
+        <div class="user-email">m10240@gmail.com</div>
+        <div class="user-role">Admin</div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ============ MAIN ============ -->
+  <main class="main">
+
+    <!-- =================== PAGE 1 · 概览 =================== -->
+    <div class="page active" data-page="overview">
+      <div class="header">
+        <div class="header-left">
+          <button class="sidebar-toggle">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+          </button>
+          <div class="breadcrumb">
+            <span class="breadcrumb-item current">概览</span>
+          </div>
+        </div>
+        <div class="header-right">
+          <span class="badge badge-success">实时数据</span>
+          <span class="meta-text" style="margin: 0;">5/23 · 15:33:02</span>
+          <button class="icon-btn" title="刷新">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+          </button>
+          <select class="select" style="height: 30px; width: 64px;">
+            <option>3s</option><option>5s</option><option>15s</option>
+          </select>
+          <button class="btn btn-secondary btn-sm">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+            暂停
+          </button>
+        </div>
+      </div>
+
+      <div class="content">
+        <div class="filter-bar">
+          <div class="filter-group">
+            <span class="filter-label">平台</span>
+            <select class="select">
+              <option>全部平台</option><option>opencode</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <span class="filter-label">Agent 类型</span>
+            <select class="select">
+              <option>用户 Agent</option><option>系统 Agent</option>
+            </select>
+          </div>
+          <div class="meta-text">
+            支持平台 <strong>opencode</strong> · 更多接入中
+          </div>
+        </div>
+
+        <h2 class="section-title">系统健康快照</h2>
+        <div class="kpi-grid">
+          <div class="kpi featured">
+            <div class="kpi-label">Agent 在线 / 总数</div>
+            <div class="kpi-value">0 <span class="unit">/ 5</span></div>
+            <div class="kpi-foot">全部正常</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">今日调用量</div>
+            <div class="kpi-value">0</div>
+            <svg class="kpi-spark" viewBox="0 0 100 20" preserveAspectRatio="none">
+              <path d="M 0 18 L 14 17 L 28 17 L 42 18 L 56 18 L 70 17 L 84 18 L 100 18" stroke="#dcdce0" stroke-width="1.5" fill="none"/>
+            </svg>
+            <div class="kpi-foot">暂无昨日数据</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">成功率 (过去 1h)</div>
+            <div class="kpi-value" style="color: var(--text-3);">—</div>
+            <svg class="kpi-spark" viewBox="0 0 100 20" preserveAspectRatio="none">
+              <path d="M 0 10 L 100 10" stroke="#dcdce0" stroke-width="1.5" fill="none" stroke-dasharray="3 3"/>
+            </svg>
+            <div class="kpi-foot">过去 1h 暂无调用</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">P95 时延 / 今日成本</div>
+            <div class="kpi-value" style="color: var(--text-3);">—</div>
+            <svg class="kpi-spark" viewBox="0 0 100 20" preserveAspectRatio="none">
+              <path d="M 0 10 L 100 10" stroke="#dcdce0" stroke-width="1.5" fill="none" stroke-dasharray="3 3"/>
+            </svg>
+            <div class="kpi-foot">暂无数据 · 预估 $0.000</div>
+          </div>
+        </div>
+
+        <h2 class="section-title">需要立即处理</h2>
+        <div class="alert" style="margin-bottom: var(--sp-6);">
+          <div class="alert-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          </div>
+          <span>暂无告警,系统运行正常</span>
+        </div>
+
+        <h2 class="section-title">7 日趋势</h2>
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-header">
+              <div>
+                <div class="card-title">调用量</div>
+              </div>
+              <span class="meta-text" style="margin: 0;">次 / 天</span>
+            </div>
+            <div class="trend-meta">
+              <span>今日 <strong>0</strong></span>
+              <span>7 日均值 <strong>0</strong></span>
+            </div>
+            <svg class="chart-area" viewBox="0 0 480 200" preserveAspectRatio="none" style="padding: 0 var(--sp-5) var(--sp-4);">
+              <defs>
+                <linearGradient id="grad1" x1="0" x2="0" y1="0" y2="1">
+                  <stop offset="0%" stop-color="#6c5ce7" stop-opacity="0.18"/>
+                  <stop offset="100%" stop-color="#6c5ce7" stop-opacity="0"/>
+                </linearGradient>
+              </defs>
+              <!-- grid -->
+              <line x1="0" y1="40" x2="480" y2="40" stroke="#ececef" stroke-dasharray="3 3"/>
+              <line x1="0" y1="90" x2="480" y2="90" stroke="#ececef" stroke-dasharray="3 3"/>
+              <line x1="0" y1="140" x2="480" y2="140" stroke="#ececef" stroke-dasharray="3 3"/>
+              <!-- baseline -->
+              <line x1="0" y1="170" x2="480" y2="170" stroke="#dcdce0"/>
+              <!-- bars (all zero shown as tiny gray markers) -->
+              <g fill="#dcdce0">
+                <rect x="20"  y="167" width="40" height="3" rx="1"/>
+                <rect x="85"  y="167" width="40" height="3" rx="1"/>
+                <rect x="150" y="167" width="40" height="3" rx="1"/>
+                <rect x="215" y="167" width="40" height="3" rx="1"/>
+                <rect x="280" y="167" width="40" height="3" rx="1"/>
+                <rect x="345" y="167" width="40" height="3" rx="1"/>
+                <rect x="410" y="167" width="40" height="3" rx="1"/>
+              </g>
+              <g fill="#8a8a93" font-size="11" font-family="Inter">
+                <text x="40"  y="190" text-anchor="middle">5/17</text>
+                <text x="105" y="190" text-anchor="middle">5/18</text>
+                <text x="170" y="190" text-anchor="middle">5/19</text>
+                <text x="235" y="190" text-anchor="middle">5/20</text>
+                <text x="300" y="190" text-anchor="middle">5/21</text>
+                <text x="365" y="190" text-anchor="middle">5/22</text>
+                <text x="430" y="190" text-anchor="middle" fill="#18181b" font-weight="600">5/23</text>
+              </g>
+            </svg>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <div>
+                <div class="card-title">成功率</div>
+              </div>
+              <span class="meta-text" style="margin: 0;">% / 天</span>
+            </div>
+            <div class="trend-meta">
+              <span>今日 <strong>—</strong></span>
+              <span>7 日最低 <strong>—</strong></span>
+            </div>
+            <div class="trend-empty">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="margin-right: 8px;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+              暂无数据
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">Agent 状态一览</div>
+            </div>
+            <div style="display: flex; align-items: center; gap: var(--sp-3);">
+              <div class="seg">
+                <div class="seg-item active">全部 <span style="color: var(--text-3);">5</span></div>
+                <div class="seg-item">运行中 <span style="color: var(--text-3);">0</span></div>
+                <div class="seg-item">异常 <span style="color: var(--text-3);">0</span></div>
+                <div class="seg-item">空闲 <span style="color: var(--text-3);">5</span></div>
+              </div>
+              <a class="btn btn-ghost btn-sm">查看全部 →</a>
+            </div>
+          </div>
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Agent</th>
+                <th>平台</th>
+                <th>状态</th>
+                <th>今日调用</th>
+                <th>成功率</th>
+                <th>P95</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+                  <div class="agent-name">
+                    <div class="agent-icon">DL</div>
+                    <div>
+                      <div style="font-weight: 500;">disk-cleanup-agent</div>
+                      <div style="font-size: 11px; color: var(--text-3);">linux-disk-cleanup · v0</div>
+                    </div>
+                  </div>
+                </td>
+                <td><span class="badge badge-neutral no-dot">opencode</span></td>
+                <td><span class="badge badge-neutral">空闲</span></td>
+                <td>0</td>
+                <td style="color: var(--text-3);">—</td>
+                <td style="color: var(--text-3);">—</td>
+              </tr>
+              <tr>
+                <td>
+                  <div class="agent-name">
+                    <div class="agent-icon">CP</div>
+                    <div>
+                      <div style="font-weight: 500;">cpu-query-agent</div>
+                      <div style="font-size: 11px; color: var(--text-3);">cpu-model-query · v0</div>
+                    </div>
+                  </div>
+                </td>
+                <td><span class="badge badge-neutral no-dot">opencode</span></td>
+                <td><span class="badge badge-neutral">空闲</span></td>
+                <td>0</td>
+                <td style="color: var(--text-3);">—</td>
+                <td style="color: var(--text-3);">—</td>
+              </tr>
+              <tr>
+                <td>
+                  <div class="agent-name">
+                    <div class="agent-icon">SV</div>
+                    <div>
+                      <div style="font-weight: 500;">flamegraph-analysis</div>
+                      <div style="font-size: 11px; color: var(--text-3);">svg-flamegraph-analysis · v0</div>
+                    </div>
+                  </div>
+                </td>
+                <td><span class="badge badge-neutral no-dot">opencode</span></td>
+                <td><span class="badge badge-neutral">空闲</span></td>
+                <td>0</td>
+                <td style="color: var(--text-3);">—</td>
+                <td style="color: var(--text-3);">—</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- =================== PAGE 2 · Skill 管理 =================== -->
+    <div class="page" data-page="skills">
+      <div class="header">
+        <div class="header-left">
+          <button class="sidebar-toggle">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+          </button>
+          <div class="breadcrumb">
+            <span class="breadcrumb-item">Skills</span>
+            <span class="breadcrumb-sep">›</span>
+            <span class="breadcrumb-item current">管理</span>
+          </div>
+        </div>
+        <div class="header-right">
+          <button class="btn btn-secondary">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>
+            同步
+          </button>
+          <button class="btn btn-primary">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            上传 Skill
+          </button>
+        </div>
+      </div>
+
+      <div class="content">
+        <div>
+          <h1 class="page-title">Skill 列表</h1>
+          <p class="page-desc">管理本地与企业 Skill</p>
+        </div>
+
+        <div class="list-toolbar">
+          <input class="search" placeholder="搜索 Skill 名称、描述..." />
+          <div class="seg">
+            <div class="seg-item active">全部</div>
+            <div class="seg-item">已激活</div>
+            <div class="seg-item">未激活</div>
+          </div>
+          <div class="meta-pills" style="margin-left: auto;">
+            <span>Skills <strong>5</strong></span>
+            <div class="sep"></div>
+            <span>运行中 <strong>0</strong></span>
+            <div class="sep"></div>
+            <span>七天内调用 <strong>0</strong></span>
+            <div class="sep"></div>
+            <span>待优化 <strong>3</strong></span>
+          </div>
+        </div>
+
+        <div class="skills-grid">
+          <!-- Card 1 -->
+          <div class="skill-card">
+            <div class="skill-card-header">
+              <div>
+                <div class="skill-name">svg-flamegraph-analysis</div>
+                <div class="skill-meta">1 个版本 · 更新于 2026/05/22</div>
+              </div>
+              <span class="badge badge-neutral">未激活</span>
+            </div>
+            <div class="skill-version">Uploaded version 0</div>
+            <div class="skill-stats">
+              <div class="stat-item">
+                <div class="stat-label">流程进度</div>
+                <div class="stat-value" style="color: var(--warning-fg);">2 / 3</div>
+                <div class="stat-foot">未优化 · 0 项问题</div>
+              </div>
+              <div class="stat-item">
+                <div class="stat-label">被引用</div>
+                <div class="stat-value">0</div>
+                <div class="stat-foot">个 Agent</div>
+              </div>
+              <div class="stat-item">
+                <div class="stat-label">七天调用</div>
+                <div class="stat-value" style="color: var(--text-3);">—</div>
+                <div class="stat-foot">无调用</div>
+              </div>
+            </div>
+            <div class="skill-card-footer">
+              <span style="color: var(--text-3);">跳到版本 <span style="color: var(--text-1); font-family: var(--font-mono);">v0</span> ·</span>
+              <div style="display: flex; gap: var(--sp-3); align-items: center;">
+                <a style="color: var(--brand-700); font-weight: 500;">全部历史 →</a>
+                <button class="btn btn-secondary btn-sm">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                  新版本
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Card 2 (clickable to analysis) -->
+          <div class="skill-card" data-target="analysis" style="cursor: pointer;">
+            <div class="skill-card-header">
+              <div>
+                <div class="skill-name">linux-disk-cleanup</div>
+                <div class="skill-meta">1 个版本 · 更新于 2026/05/20</div>
+              </div>
+              <span class="badge badge-neutral">未激活</span>
+            </div>
+            <div class="skill-version">Published from Playground (v0)</div>
+            <div class="skill-stats">
+              <div class="stat-item">
+                <div class="stat-label">流程进度</div>
+                <div class="stat-value" style="color: var(--warning-fg);">1 / 3</div>
+                <div class="stat-foot">待分析</div>
+              </div>
+              <div class="stat-item">
+                <div class="stat-label">被引用</div>
+                <div class="stat-value">0</div>
+                <div class="stat-foot">个 Agent</div>
+              </div>
+              <div class="stat-item">
+                <div class="stat-label">七天调用</div>
+                <div class="stat-value" style="color: var(--text-3);">—</div>
+                <div class="stat-foot">无调用</div>
+              </div>
+            </div>
+            <div class="skill-card-footer">
+              <span style="color: var(--text-3);">跳到版本 <span style="color: var(--text-1); font-family: var(--font-mono);">v0</span> ·</span>
+              <div style="display: flex; gap: var(--sp-3); align-items: center;">
+                <a style="color: var(--brand-700); font-weight: 500;">全部历史 →</a>
+                <button class="btn btn-secondary btn-sm">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                  新版本
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Card 3 -->
+          <div class="skill-card">
+            <div class="skill-card-header">
+              <div>
+                <div class="skill-name">cpu-model-query</div>
+                <div class="skill-meta">1 个版本 · 更新于 2026/05/08</div>
+              </div>
+              <span class="badge badge-neutral">未激活</span>
+            </div>
+            <div class="skill-version">Published from Playground (v0)</div>
+            <div class="skill-stats">
+              <div class="stat-item">
+                <div class="stat-label">流程进度</div>
+                <div class="stat-value" style="color: var(--warning-fg);">2 / 3</div>
+                <div class="stat-foot">4 项待优化</div>
+              </div>
+              <div class="stat-item">
+                <div class="stat-label">被引用</div>
+                <div class="stat-value">0</div>
+                <div class="stat-foot">个 Agent</div>
+              </div>
+              <div class="stat-item">
+                <div class="stat-label">七天调用</div>
+                <div class="stat-value" style="color: var(--text-3);">—</div>
+                <div class="stat-foot">无调用</div>
+              </div>
+            </div>
+            <div class="skill-card-footer">
+              <span style="color: var(--text-3);">跳到版本 <span style="color: var(--text-1); font-family: var(--font-mono);">v0</span> ·</span>
+              <div style="display: flex; gap: var(--sp-3); align-items: center;">
+                <a style="color: var(--brand-700); font-weight: 500;">全部历史 →</a>
+                <button class="btn btn-secondary btn-sm">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                  新版本
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Card 4 -->
+          <div class="skill-card">
+            <div class="skill-card-header">
+              <div>
+                <div class="skill-name">coffee-making-guide</div>
+                <div class="skill-meta">1 个版本 · 更新于 2026/05/08</div>
+              </div>
+              <span class="badge badge-neutral">未激活</span>
+            </div>
+            <div class="skill-version">Published from Playground (v0)</div>
+            <div class="skill-stats">
+              <div class="stat-item">
+                <div class="stat-label">流程进度</div>
+                <div class="stat-value" style="color: var(--warning-fg);">1 / 3</div>
+                <div class="stat-foot">待分析</div>
+              </div>
+              <div class="stat-item">
+                <div class="stat-label">被引用</div>
+                <div class="stat-value">0</div>
+                <div class="stat-foot">个 Agent</div>
+              </div>
+              <div class="stat-item">
+                <div class="stat-label">七天调用</div>
+                <div class="stat-value" style="color: var(--text-3);">—</div>
+                <div class="stat-foot">无调用</div>
+              </div>
+            </div>
+            <div class="skill-card-footer">
+              <span style="color: var(--text-3);">跳到版本 <span style="color: var(--text-1); font-family: var(--font-mono);">v0</span> ·</span>
+              <div style="display: flex; gap: var(--sp-3); align-items: center;">
+                <a style="color: var(--brand-700); font-weight: 500;">全部历史 →</a>
+                <button class="btn btn-secondary btn-sm">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                  新版本
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Card 5 -->
+          <div class="skill-card">
+            <div class="skill-card-header">
+              <div>
+                <div class="skill-name">disk-diagnosis-by-log</div>
+                <div class="skill-meta">1 个版本 · 更新于 2026/05/07</div>
+              </div>
+              <span class="badge badge-success">已激活</span>
+            </div>
+            <div class="skill-version">Uploaded version 0</div>
+            <div class="skill-stats">
+              <div class="stat-item">
+                <div class="stat-label">流程进度</div>
+                <div class="stat-value" style="color: var(--warning-fg);">1 / 3</div>
+                <div class="stat-foot">待分析</div>
+              </div>
+              <div class="stat-item">
+                <div class="stat-label">被引用</div>
+                <div class="stat-value">0</div>
+                <div class="stat-foot">个 Agent</div>
+              </div>
+              <div class="stat-item">
+                <div class="stat-label">七天调用</div>
+                <div class="stat-value" style="color: var(--text-3);">—</div>
+                <div class="stat-foot">无调用</div>
+              </div>
+            </div>
+            <div class="skill-card-footer">
+              <span style="color: var(--text-3);">跳到版本 <span style="color: var(--text-1); font-family: var(--font-mono);">v0</span> ·</span>
+              <div style="display: flex; gap: var(--sp-3); align-items: center;">
+                <a style="color: var(--brand-700); font-weight: 500;">全部历史 →</a>
+                <button class="btn btn-secondary btn-sm">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                  新版本
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Upload card -->
+          <div class="skill-card skill-upload">
+            <div class="plus">+</div>
+            <div style="font-size: 13px; font-weight: 500;">上传新的 Skill</div>
+            <div style="font-size: 11px;">选择本地文件夹或导入企业 Skill</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- =================== PAGE 3 · Skills 分析 =================== -->
+    <div class="page" data-page="analysis">
+      <div class="header-wrap">
+        <div class="header-crumbs">
+          <button class="sidebar-toggle" style="margin-right: 4px;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+          </button>
+          <span class="breadcrumb-item">Skills</span>
+          <span class="breadcrumb-sep">›</span>
+          <span class="breadcrumb-item current">分析</span>
+        </div>
+        <div class="header-context">
+          <div class="context-object">
+            <div class="context-icon">L</div>
+            <div class="context-meta">
+              <div class="context-title">linux-disk-cleanup
+                <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+              </div>
+              <div class="context-sub">v0 (当前) · 05-20 17:06</div>
+            </div>
+          </div>
+          <div style="flex: 1;"></div>
+          <button class="btn btn-ghost btn-sm">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            导出
+          </button>
+          <button class="btn btn-primary">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            前往 Skill 优化器
+          </button>
+        </div>
+      </div>
+
+      <div class="content">
+        <div class="analysis-hero">
+          <!-- Score card -->
+          <div class="score-card warning">
+            <div class="score-header">
+              <div>
+                <div class="score-name">综合健康分</div>
+                <div style="font-size: 11px; color: var(--text-3); margin-top: 2px;">置信加权</div>
+              </div>
+              <span class="badge badge-warning">尚未运行</span>
+            </div>
+            <div class="score-value">— <span class="denom">/ 100</span></div>
+            <div style="font-size: 11px; color: var(--text-3); margin-top: var(--sp-3);">评估覆盖度</div>
+            <div class="score-bar">
+              <div class="score-bar-seg" style="width: 25%; background: var(--warning-fg);"></div>
+              <div class="score-bar-seg" style="width: 25%; background: #c7d2fe;"></div>
+              <div class="score-bar-seg" style="width: 25%; background: var(--brand-500);"></div>
+              <div class="score-bar-seg" style="width: 25%; background: var(--brand-700);"></div>
+            </div>
+            <div class="score-foot">
+              <span>0 / 4 维 · 0%</span>
+              <span>—</span>
+            </div>
+          </div>
+
+          <!-- Diagnostic card -->
+          <div class="card card-padded" style="padding: var(--sp-4) var(--sp-5);">
+            <div style="display: flex; align-items: center; gap: var(--sp-2); margin-bottom: var(--sp-3);">
+              <span style="font-size: 13px; font-weight: 600;">一句话诊断</span>
+              <span class="badge badge-info no-dot">基础</span>
+              <span style="font-size: 11px; color: var(--text-3);">· 基础诊断</span>
+            </div>
+            <div class="diag">
+              <div class="diag-row">
+                <span class="diag-tag q">问题</span>
+                <span class="diag-text">当前仅有 <strong>0 / 4</strong> 个维度完成评测,缺少 A/B 测试、用例分析、召回分析、静态合规 结果,数据覆盖仍不完整。</span>
+              </div>
+              <div class="diag-row">
+                <span class="diag-tag r">建议</span>
+                <span class="diag-text">建议先补齐可运行维度,再判断是否需要进入 Skill 优化。</span>
+              </div>
+            </div>
+            <div class="diag-formula" style="margin-top: var(--sp-3);">
+              置信加权 · 权重 A/B 40% · 用例 30% · 触发 20% · 静态 10%(未跑维度不进分母)<br/>
+              <span style="color: var(--text-3);">score = Σ(分 × 权重) ÷ Σ(已跑权重) = —</span>
+            </div>
+          </div>
+
+          <!-- Smart run -->
+          <div class="smart-run">
+            <div class="smart-run-title">
+              <span class="dot"></span>
+              SMART RUN
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <div style="font-size: 12px;">选择要一键测试的维度</div>
+              <a style="font-size: 11px; color: rgba(255,255,255,0.55);">全不选</a>
+            </div>
+            <div class="smart-run-options">
+              <label class="smart-opt">
+                <input type="checkbox" />
+                <span>A/B 测试</span>
+                <span class="opt-weight">40%</span>
+                <span class="opt-status pending">未配置</span>
+              </label>
+              <label class="smart-opt">
+                <input type="checkbox" />
+                <span>用例分析</span>
+                <span class="opt-weight">30%</span>
+                <span class="opt-status">待分析</span>
+              </label>
+              <label class="smart-opt">
+                <input type="checkbox" />
+                <span>触发分析</span>
+                <span class="opt-weight">20%</span>
+                <span class="opt-status pending">未配置</span>
+              </label>
+              <label class="smart-opt">
+                <input type="checkbox" checked />
+                <span>静态合规</span>
+                <span class="opt-weight">10%</span>
+                <span class="opt-status">待扫描</span>
+              </label>
+            </div>
+            <div class="smart-run-foot">
+              <span>预计 5 分钟 · 已选 1 / 1 可运行项</span>
+              <button class="btn-on-dark">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                一键测试
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div style="display: flex; align-items: baseline; justify-content: space-between; margin-bottom: var(--sp-3);">
+          <h2 class="section-title" style="margin: 0;">4 维评估能力</h2>
+          <span class="meta-text" style="margin: 0;">0 / 4 已配置 · 按权重 desc 排序 · 点击卡片进入详情</span>
+        </div>
+
+        <div class="dim-grid">
+          <div class="dim-card">
+            <div class="dim-card-head">
+              <div class="dim-title-block">
+                <div class="dim-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="12" r="6"/><circle cx="15" cy="12" r="6"/></svg>
+                </div>
+                <div>
+                  <div class="dim-title">A/B 测试</div>
+                  <div class="dim-sub">无 Skill vs linux-disk-cleanup:v0</div>
+                </div>
+              </div>
+              <span class="badge badge-neutral">未配置</span>
+            </div>
+            <div class="dim-score muted">— <span class="small">/ 100</span></div>
+            <div class="dim-foot-grid">
+              <div>
+                <div class="lbl">实验版本</div>
+                <div class="val" style="font-family: var(--font-mono); font-size: 11px;">linux-disk-cleanup:v0</div>
+              </div>
+              <div>
+                <div class="lbl">影响</div>
+                <div class="val">不计入总分 (-40%)</div>
+              </div>
+            </div>
+            <div class="dim-action empty" data-target="ab">→ 前往配置 A/B 测试</div>
+          </div>
+
+          <div class="dim-card">
+            <div class="dim-card-head">
+              <div class="dim-title-block">
+                <div class="dim-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+                </div>
+                <div>
+                  <div class="dim-title">用例分析</div>
+                  <div class="dim-sub">结果分析 + 轨迹分析 双维度</div>
+                </div>
+              </div>
+              <span class="badge badge-warning">待分析</span>
+            </div>
+            <div class="dim-score muted">— <span class="small">/ 100</span></div>
+            <div class="dim-foot-grid">
+              <div>
+                <div class="lbl">已完整评测</div>
+                <div class="val">暂无 Trace</div>
+              </div>
+              <div>
+                <div class="lbl">高偏离</div>
+                <div class="val">无</div>
+              </div>
+            </div>
+            <div class="dim-action success" data-target="usecase">→ 打开评测页扫描</div>
+          </div>
+
+          <div class="dim-card">
+            <div class="dim-card-head">
+              <div class="dim-title-block">
+                <div class="dim-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                </div>
+                <div>
+                  <div class="dim-title">触发分析</div>
+                  <div class="dim-sub">触发集命中率 · opencode-live</div>
+                </div>
+              </div>
+              <span class="badge badge-neutral">未配置</span>
+            </div>
+            <div class="dim-score muted">— <span class="small">/ 100</span></div>
+            <div class="dim-foot-grid">
+              <div>
+                <div class="lbl">触发集</div>
+                <div class="val">未创建</div>
+              </div>
+              <div>
+                <div class="lbl">影响</div>
+                <div class="val">不计入总分 (-20%)</div>
+              </div>
+            </div>
+            <div class="dim-action" data-target="trigger">→ 前往配置触发集</div>
+          </div>
+
+          <div class="dim-card">
+            <div class="dim-card-head">
+              <div class="dim-title-block">
+                <div class="dim-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                </div>
+                <div>
+                  <div class="dim-title">静态合规</div>
+                  <div class="dim-sub">SKILL.md 规范打分</div>
+                </div>
+              </div>
+              <span class="badge badge-warning">待分析</span>
+            </div>
+            <div class="dim-score muted">— <span class="small">/ 100</span></div>
+            <div class="dim-foot-grid">
+              <div>
+                <div class="lbl">已评估维度</div>
+                <div class="val">尚未评估</div>
+              </div>
+              <div>
+                <div class="lbl">未评估</div>
+                <div class="val" style="color: var(--text-3);">—</div>
+              </div>
+            </div>
+            <div class="dim-action" data-target="static">⏱ 点击进入静态评估详情</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- =================== PAGE 4 · 触发分析 =================== -->
+    <div class="page" data-page="trigger">
+      <div class="header-wrap">
+        <div class="header-crumbs">
+          <button class="sidebar-toggle" style="margin-right: 4px;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+          </button>
+          <span class="breadcrumb-item" data-target="analysis">Skills</span>
+          <span class="breadcrumb-sep">›</span>
+          <span class="breadcrumb-item" data-target="analysis">分析</span>
+          <span class="breadcrumb-sep">›</span>
+          <span class="breadcrumb-item current">触发分析</span>
+        </div>
+        <div class="header-context">
+          <div class="context-object">
+            <div class="context-icon">L</div>
+            <div class="context-meta">
+              <div class="context-title">linux-disk-cleanup
+                <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+              </div>
+              <div class="context-sub">v0 (当前) · 触发分析 · opencode-live</div>
+            </div>
+          </div>
+          <div style="flex: 1;"></div>
+          <button class="btn btn-ghost btn-sm">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            deepseek · 默认
+          </button>
+          <button class="btn btn-ghost btn-sm">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+            AI 起草
+          </button>
+          <button class="btn btn-secondary btn-sm">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            上传数据集
+          </button>
+          <button class="btn btn-secondary btn-sm">保存</button>
+          <button class="btn btn-primary">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            立即评测
+          </button>
+        </div>
+      </div>
+
+      <div class="content">
+        <div class="page-title-row">
+          <h1 class="page-title">触发分析</h1>
+          <span class="badge badge-info no-dot">opencode-live</span>
+        </div>
+        <p class="page-desc">触发评价集 + opencode-live 路由评测 · 评估哪些 query 该 / 不该命中本 Skill</p>
+
+        <div class="phase-stepper">
+          <div class="phase">
+            <div class="phase-num current">1</div>
+            <div class="phase-body">
+              <div class="phase-step">STEP 1 · CONFIG</div>
+              <div class="phase-title">配置数据集</div>
+              <div class="phase-status current">尚未配置</div>
+            </div>
+          </div>
+          <div class="phase">
+            <div class="phase-num todo">2</div>
+            <div class="phase-body">
+              <div class="phase-step">STEP 2 · EXECUTION</div>
+              <div class="phase-title">运行评测</div>
+              <div class="phase-status">等待配置完成</div>
+            </div>
+          </div>
+          <div class="phase">
+            <div class="phase-num todo">3</div>
+            <div class="phase-body">
+              <div class="phase-step">STEP 3 · DECISION</div>
+              <div class="phase-title">触发分析</div>
+              <div class="phase-status">未评测</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="subsection">
+          <div class="subsection-head">
+            <div class="subsection-num">1</div>
+            <div>
+              <div class="subsection-title">数据集构建</div>
+              <div class="subsection-desc">触发评价集:哪些 query 该 / 不该命中本 Skill</div>
+            </div>
+            <div class="subsection-meta">
+              <span class="badge badge-warning">尚未配置数据集</span>
+            </div>
+          </div>
+          <div class="subsection-body">
+            <div class="input-source-label">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+              输入来源
+            </div>
+            <button class="pill-btn">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              从数据集发起
+            </button>
+            <button class="pill-btn">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+              从执行链路发起
+            </button>
+            <button class="pill-btn">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+              AI 起草
+            </button>
+          </div>
+        </div>
+
+        <div class="subsection">
+          <div class="subsection-head">
+            <div class="subsection-num">2</div>
+            <div>
+              <div class="subsection-title">评测运行</div>
+              <div class="subsection-desc">按当前数据集跑批,得出触发命中率 / 误触发率</div>
+            </div>
+            <div class="subsection-meta">
+              <span class="badge badge-neutral">尚未评测</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="subsection">
+          <div class="subsection-head">
+            <div class="subsection-num">3</div>
+            <div>
+              <div class="subsection-title">触发分析结果</div>
+              <div class="subsection-desc">触发集命中率 / 误触发率 / 边界用例</div>
+            </div>
+            <div class="subsection-meta">
+              <span class="badge badge-neutral">未评测</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="empty-state" style="margin-top: var(--sp-5);">
+          <div class="empty-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+          </div>
+          <div class="empty-title">尚未跑过评测</div>
+          <div class="empty-desc">
+            先在 <strong style="color: var(--brand-700);">① 配置</strong> 里准备好用例,再到 <strong style="color: var(--brand-700);">② 执行</strong> 点击「立即评测」开始。
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- =================== PAGE 5 · 用例分析 =================== -->
+    <div class="page" data-page="usecase">
+      <div class="header-wrap">
+        <div class="header-crumbs">
+          <button class="sidebar-toggle" style="margin-right: 4px;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+          </button>
+          <span class="breadcrumb-item" data-target="analysis">Skills</span>
+          <span class="breadcrumb-sep">›</span>
+          <span class="breadcrumb-item" data-target="analysis">分析</span>
+          <span class="breadcrumb-sep">›</span>
+          <span class="breadcrumb-item current">用例分析</span>
+        </div>
+        <div class="header-context">
+          <div class="context-object">
+            <div class="context-icon">L</div>
+            <div class="context-meta">
+              <div class="context-title">linux-disk-cleanup
+                <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+              </div>
+              <div class="context-sub">v0 (当前) · 用例分析 · LLM Judge</div>
+            </div>
+          </div>
+          <div style="flex: 1;"></div>
+          <button class="btn btn-secondary btn-sm">保存配置</button>
+          <button class="btn btn-primary">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            开始优化
+          </button>
+        </div>
+      </div>
+
+      <div class="content">
+        <div class="page-title-row">
+          <h1 class="page-title">用例分析</h1>
+          <span class="badge badge-info no-dot">LLM Judge</span>
+        </div>
+        <p class="page-desc">基于已评测 Trace 的双维度分析:结果分析 + 轨迹分析</p>
+
+        <div class="phase-stepper">
+          <div class="phase">
+            <div class="phase-num current">1</div>
+            <div class="phase-body">
+              <div class="phase-step">STEP 1 · CONFIG</div>
+              <div class="phase-title">配置用例集</div>
+              <div class="phase-status current">从 Trace 关联 0 条</div>
+            </div>
+          </div>
+          <div class="phase">
+            <div class="phase-num todo">2</div>
+            <div class="phase-body">
+              <div class="phase-step">STEP 2 · EXECUTION</div>
+              <div class="phase-title">跑用例评测</div>
+              <div class="phase-status">已评测 0 / 0</div>
+            </div>
+          </div>
+          <div class="phase">
+            <div class="phase-num todo">3</div>
+            <div class="phase-body">
+              <div class="phase-step">STEP 3 · DECISION</div>
+              <div class="phase-title">用例分析结果</div>
+              <div class="phase-status">未评测</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="subsection">
+          <div class="subsection-head">
+            <div class="subsection-num">1</div>
+            <div>
+              <div class="subsection-title">用例集</div>
+              <div class="subsection-desc">该 skill 版本关联的全部 trace(含已评测和未评测);勾选 → 到 ② 触发分析</div>
+            </div>
+            <div class="subsection-meta">
+              <span>用例来源</span>
+              <span class="badge badge-info no-dot">从 Trace</span>
+              <span>· 关联 <strong>0</strong> 条 · 已评测 <strong>0</strong></span>
+            </div>
+          </div>
+          <div class="source-row">
+            <span style="font-size: 12px; color: var(--text-3);">用例来源</span>
+            <div class="source-toggle">
+              <div class="source-toggle-item active">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+                从 Trace
+              </div>
+              <div class="source-toggle-item">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+                从数据集
+              </div>
+            </div>
+            <span class="meta-text" style="margin-left: auto;">当前 skill: <strong style="color: var(--text-1);">linux-disk-cleanup v0</strong> (顶部切换)</span>
+          </div>
+          <div class="subsection-body">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--sp-3);">
+              <div style="font-size: 13px; font-weight: 600;">该 Skill 的 Trace <span style="color: var(--text-3); font-weight: 400;">(0)</span></div>
+              <button class="icon-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="15 18 9 12 15 6"/></svg></button>
+            </div>
+            <input class="trace-search" placeholder="搜索 query 或 taskId..." />
+            <div style="display: flex; gap: var(--sp-2); margin: var(--sp-3) 0;">
+              <div class="seg-item active" style="background: var(--brand-50); color: var(--brand-700);">全部 <strong>0</strong></div>
+              <div class="seg-item">已评估</div>
+              <div class="seg-item">未评估</div>
+              <div class="seg-item">高偏离</div>
+            </div>
+            <div style="font-size: 12px; color: var(--text-3); margin-bottom: var(--sp-3);">
+              已勾选 <strong style="color: var(--text-1);">0</strong> · <a style="color: var(--brand-700);">全选本页</a> · <a style="color: var(--brand-700);">清空</a>
+            </div>
+            <div class="trace-empty">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="margin-bottom: 8px; color: var(--text-4);"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <div>暂无匹配 Trace</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="subsection">
+          <div class="subsection-head">
+            <div class="subsection-num">2</div>
+            <div>
+              <div class="subsection-title">跑用例评测</div>
+              <div class="subsection-desc">对勾选的 trace 触发结果 + 轨迹双分析;下方表只列已评测 trace,点行钻取 ③ 结果详情</div>
+            </div>
+            <div class="subsection-meta">
+              <span>已评测 <strong>0 / 0</strong></span>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="color: var(--text-3);"><polyline points="9 18 15 12 9 6"/></svg>
+            </div>
+          </div>
+        </div>
+
+        <div class="subsection">
+          <div class="subsection-head">
+            <div class="subsection-num">3</div>
+            <div>
+              <div class="subsection-title">用例分析结果</div>
+              <div class="subsection-desc">尚未评测</div>
+            </div>
+            <div class="subsection-meta">
+              <span class="badge badge-neutral">未评测</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- =================== PAGE 6 · A/B 测试 =================== -->
+    <div class="page" data-page="ab">
+      <div class="header-wrap">
+        <div class="header-crumbs">
+          <button class="sidebar-toggle" style="margin-right: 4px;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+          </button>
+          <span class="breadcrumb-item" data-target="analysis">Skills</span>
+          <span class="breadcrumb-sep">›</span>
+          <span class="breadcrumb-item" data-target="analysis">分析</span>
+          <span class="breadcrumb-sep">›</span>
+          <span class="breadcrumb-item current">A/B 测试</span>
+        </div>
+        <div class="header-context">
+          <div class="context-object">
+            <div class="context-icon">L</div>
+            <div class="context-meta">
+              <div class="context-title">linux-disk-cleanup
+                <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+              </div>
+              <div class="context-sub">v0 (当前) · A/B 测试</div>
+            </div>
+          </div>
+          <div style="flex: 1;"></div>
+          <button class="btn btn-secondary btn-sm">保存草稿</button>
+          <button class="btn btn-primary">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            运行实验
+          </button>
+        </div>
+      </div>
+
+      <div class="content">
+        <h1 class="page-title">A/B 测试</h1>
+        <p class="page-desc">对照版本 vs 实验版本,唯一变量为 Skill 是否开启</p>
+
+        <div class="ab-config">
+          <div class="ab-pair">
+            <div class="ab-skill-icon">LIN</div>
+            <div class="ab-field">
+              <div class="ab-field-label">评测 SKILL 对象</div>
+              <div class="ab-field-input">
+                <span style="font-family: var(--font-mono);">linux-disk-cleanup</span>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+              </div>
+            </div>
+            <div class="ab-field">
+              <div class="ab-field-label"><span class="tag-a">A</span> 对照版本</div>
+              <div class="ab-field-input placeholder">
+                <span>无 Skill</span>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+              </div>
+            </div>
+            <div class="ab-field">
+              <div class="ab-field-label"><span class="tag-b">B</span> 实验版本</div>
+              <div class="ab-field-input placeholder">
+                <span>无 Skill</span>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="phase-stepper">
+          <div class="phase">
+            <div class="phase-num done">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+            </div>
+            <div class="phase-body">
+              <div class="phase-step">STEP 1 · CONFIG</div>
+              <div class="phase-title">准备:配置实验参数</div>
+              <div class="phase-status success">0 样本 × 3 轮 · 0 数据集</div>
+            </div>
+          </div>
+          <div class="phase">
+            <div class="phase-num current">2</div>
+            <div class="phase-body">
+              <div class="phase-step">STEP 2 · EXECUTION</div>
+              <div class="phase-title">执行:运行 A/B 测试</div>
+              <div class="phase-status current">0 / 0 未选择样本</div>
+            </div>
+          </div>
+          <div class="phase">
+            <div class="phase-num todo">3</div>
+            <div class="phase-body">
+              <div class="phase-step">STEP 3 · DECISION</div>
+              <div class="phase-title">决策:综合判定 &amp; 上线</div>
+              <div class="phase-status">等待评估完成</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="subsection">
+          <div class="subsection-head">
+            <div class="subsection-num" style="background: var(--neutral-bg); color: var(--text-2);">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            </div>
+            <div>
+              <div class="subsection-title">实验配置</div>
+              <div class="subsection-desc">设置参数 · 唯一变量是 Skill 开 / 关</div>
+            </div>
+            <div class="subsection-meta">
+              <span class="badge badge-success">
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+                配置完成
+              </span>
+            </div>
+          </div>
+          <div class="subsection-body">
+            <div class="config-grid">
+              <div class="config-box">
+                <div class="lbl">重复轮次<span class="req">*</span></div>
+                <div class="val">3 轮</div>
+                <div class="foot">多轮运行以计算方差</div>
+              </div>
+              <div class="config-box unset">
+                <div class="lbl">数据集</div>
+                <div class="val">— 未选择 —</div>
+                <div class="foot">共 0 条样本</div>
+              </div>
+              <div class="config-box">
+                <div class="lbl">评估器</div>
+                <div class="val">Agent 任务完成度</div>
+                <div class="foot">预置或自定义评估器</div>
+              </div>
+              <div class="config-box">
+                <div class="lbl">附加选项</div>
+                <label class="config-checkbox">
+                  <input type="checkbox" checked /> 自动评测
+                </label>
+                <label class="config-checkbox">
+                  <input type="checkbox" checked /> 记录 Skill 触发详情
+                </label>
+                <div class="foot">* 自动评估后返回准确率与 Skill 是否调用</div>
+              </div>
+            </div>
+
+            <div class="input-source-row">
+              <div class="input-source-label">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                输入来源
+              </div>
+              <button class="pill-btn">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+                从数据集发起
+              </button>
+              <button class="pill-btn">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+                从执行链路发起
+              </button>
+            </div>
+
+            <div class="trace-empty" style="background: var(--surface-alt); border-radius: var(--r-md); margin-top: var(--sp-4); padding: var(--sp-8);">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="margin-bottom: 8px; color: var(--text-4);"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 3v18"/></svg>
+              <div>暂无数据用例</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- =================== PAGE 7 · 静态合规分析 =================== -->
+    <div class="page" data-page="static">
+      <div class="header-wrap">
+        <div class="header-crumbs">
+          <button class="sidebar-toggle" style="margin-right: 4px;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+          </button>
+          <span class="breadcrumb-item" data-target="analysis">Skills</span>
+          <span class="breadcrumb-sep">›</span>
+          <span class="breadcrumb-item" data-target="analysis">分析</span>
+          <span class="breadcrumb-sep">›</span>
+          <span class="breadcrumb-item current">静态合规分析</span>
+        </div>
+        <div class="header-context">
+          <div class="context-object">
+            <div class="context-icon">L</div>
+            <div class="context-meta">
+              <div class="context-title">linux-disk-cleanup
+                <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+              </div>
+              <div class="context-sub">v0 (当前) · 静态合规 · SKILL.md 文本扫描</div>
+            </div>
+          </div>
+          <div style="flex: 1;"></div>
+          <button class="btn btn-secondary btn-sm">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+            重新扫描
+          </button>
+          <button class="btn btn-primary">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            开始优化
+          </button>
+        </div>
+      </div>
+
+      <div class="content">
+        <div class="page-title-row">
+          <h1 class="page-title">静态合规分析</h1>
+          <span class="badge badge-info no-dot">Rule-based</span>
+        </div>
+        <p class="page-desc">SKILL.md 文本扫描 · 按 6 个标准维度评分</p>
+
+        <div class="info-banner">
+          <div class="ic">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          </div>
+          <div class="info-banner-body">
+            <div class="info-banner-title">当前 Skill 版本尚未扫描</div>
+            <div class="info-banner-desc">扫描会按下方 6 个标准维度评分</div>
+          </div>
+          <button class="btn btn-primary btn-sm">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            开始扫描
+          </button>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">分析标准</div>
+              <div class="card-subtitle">扫描完成后这里会出现每个标准的命中问题,点击展开查看证据 + 修复建议</div>
+            </div>
+            <span class="meta-text" style="margin: 0;">6 个维度</span>
+          </div>
+          <div>
+            <div class="rule-row">
+              <div class="rule-name">目的适配性</div>
+              <div class="rule-desc">评估 Skill 是否具有清晰的单一目的,并能让 LLM 准确识别调用时机。</div>
+              <div class="rule-status"><span class="badge badge-neutral">待扫描</span></div>
+              <div class="rule-chev"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></div>
+            </div>
+            <div class="rule-row">
+              <div class="rule-name">结构规范性</div>
+              <div class="rule-desc">评估 Skill 的元数据规范、内容组织和信息密度。</div>
+              <div class="rule-status"><span class="badge badge-neutral">待扫描</span></div>
+              <div class="rule-chev"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></div>
+            </div>
+            <div class="rule-row">
+              <div class="rule-name">指令适配性</div>
+              <div class="rule-desc">评估指令自由度是否与任务的风险等级和确定性相匹配。</div>
+              <div class="rule-status"><span class="badge badge-neutral">待扫描</span></div>
+              <div class="rule-chev"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></div>
+            </div>
+            <div class="rule-row">
+              <div class="rule-name">内容一致性</div>
+              <div class="rule-desc">评估 Skill 在术语、表达风格是否保持一致,且不依赖隐含的时效性假设。</div>
+              <div class="rule-status"><span class="badge badge-neutral">待扫描</span></div>
+              <div class="rule-chev"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></div>
+            </div>
+            <div class="rule-row">
+              <div class="rule-name">运维可靠性</div>
+              <div class="rule-desc">评估 Skill 的安全边界、灾难恢复和操作可观测性。</div>
+              <div class="rule-status"><span class="badge badge-neutral">待扫描</span></div>
+              <div class="rule-chev"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></div>
+            </div>
+            <div class="rule-row">
+              <div class="rule-name">脚本及参考文档质量</div>
+              <div class="rule-desc">评估 Skill 关联的参考实现和脚本文件,强调其独立性、健壮性与自愈能力。</div>
+              <div class="rule-status"><span class="badge badge-neutral">待扫描</span></div>
+              <div class="rule-chev"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<script>
+  // === Page Routing ===
+  function showPage(pageName) {
+    document.querySelectorAll('.page').forEach(p => {
+      p.classList.toggle('active', p.dataset.page === pageName);
+    });
+    // Update sidebar
+    document.querySelectorAll('.nav-item, .nav-sub-item').forEach(n => {
+      n.classList.remove('active');
+    });
+    const target = document.querySelector(`[data-page="${pageName}"]`);
+    if (target && target.classList.contains('nav-sub-item')) {
+      target.classList.add('active');
+      // open parent group
+      const parent = target.closest('.nav-group');
+      if (parent) parent.classList.add('open');
+    } else {
+      const sideNav = document.querySelector(`.nav-item[data-page="${pageName}"]`);
+      if (sideNav) sideNav.classList.add('active');
+    }
+    // Special: detail pages should highlight Skills > 分析
+    if (['trigger', 'usecase', 'ab', 'static'].includes(pageName)) {
+      document.querySelector('.nav-sub-item[data-page="analysis"]')?.classList.add('active');
+    }
+    window.scrollTo(0, 0);
+  }
+
+  document.addEventListener('click', e => {
+    // Nav item with data-page
+    const navTarget = e.target.closest('[data-page]');
+    if (navTarget && (navTarget.classList.contains('nav-item') || navTarget.classList.contains('nav-sub-item') || navTarget.classList.contains('skill-card'))) {
+      showPage(navTarget.dataset.page);
+      return;
+    }
+    // data-target jumping (breadcrumb / dim card actions)
+    const jumpTarget = e.target.closest('[data-target]');
+    if (jumpTarget) {
+      showPage(jumpTarget.dataset.target);
+      return;
+    }
+    // Nav group toggle (clicking parent menu without data-page)
+    const toggleEl = e.target.closest('[data-toggle]');
+    if (toggleEl) {
+      const group = toggleEl.closest('.nav-group');
+      group?.classList.toggle('open');
+    }
+    // Seg switching (within same .seg)
+    const segItem = e.target.closest('.seg-item');
+    if (segItem) {
+      const segGroup = segItem.parentElement;
+      segGroup.querySelectorAll('.seg-item').forEach(s => s.classList.remove('active'));
+      segItem.classList.add('active');
+    }
+  });
+</script>
+
+</body>
+</html>

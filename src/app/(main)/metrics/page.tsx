@@ -6,6 +6,7 @@ import EvaluatorsCenter from '@/components/EvaluatorsCenter';
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { SingleExecutionMetrics } from '@/components/eval/SingleExecutionMetrics';
 import { useLocale } from '@/lib/client/locale-context';
+import { Term } from '@/components/text/Term';
 
 export default function MetricsPage() {
   return (
@@ -24,7 +25,12 @@ function MetricsPageInner() {
     return (
       <>
         <AppTopBar
-          title={`${t('nav.evalMetrics')} · ${locale === 'zh' ? '单次执行' : 'Single execution'}`}
+          title={
+            <>
+              <Term id="evaluator" label={t('nav.evalMetrics')} />
+              {` · ${locale === 'zh' ? '单次执行' : 'Single execution'}`}
+            </>
+          }
         />
         <div style={{ flex: 1, overflowY: 'auto' }}>
           <SingleExecutionMetrics taskId={taskId} />
@@ -35,7 +41,7 @@ function MetricsPageInner() {
 
   return (
     <>
-      <AppTopBar title={t('nav.evalMetrics')} />
+      <AppTopBar title={<Term id="evaluator" label={t('nav.evalMetrics')} />} />
       <div style={{ flex: 1, overflowY: 'auto' }}>
         <EvaluatorsCenter />
       </div>
