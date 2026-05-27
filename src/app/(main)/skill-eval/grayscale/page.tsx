@@ -1218,8 +1218,12 @@ export function GrayscaleEvaluation({
             if (!sideState) return prev;
             const newRuns = (sideState.runs || []).map(r => {
                 if (r.runIndex !== runIndex) return r;
-                // 重置那一条 run, 让 backend onlyMissingEvaluation 过滤选中它
-                const next = { ...r, status: 'evaluating' as CaseStatus };
+                // 重置那一条 run, 让 backend onlyMissingEvaluation + status 过滤选中它:
+                //   - status='executed' (agent 是真成功了, "已执行待评测" 状态;
+                //     不能用 'evaluating' 因为后端 evaluateRunsWithConcurrency
+                //     filter 只接受 status in ('executed','pass'))
+                //   - 清掉 evaluatorRunId/score/etc 让 onlyMissingEvaluation 命中
+                const next = { ...r, status: 'executed' as CaseStatus };
                 delete next.evaluatorRunId;
                 delete next.evaluationResultId;
                 delete next.evaluationTraceId;
@@ -1230,7 +1234,9 @@ export function GrayscaleEvaluation({
                 next.output = '';
                 return next;
             });
-            const updatedSide = { ...sideState, runs: newRuns, status: 'evaluating' as CaseStatus };
+            // sideState 顶层 status 由 rebuildSideAggregate 重算; 这里先标
+            // 'executed' 跟新一条 run 一致, polling 后会被 backend 推到 'evaluating'
+            const updatedSide = { ...sideState, runs: newRuns, status: 'executed' as CaseStatus };
             const updated = { ...prev, [caseId]: { ...current, [side]: updatedSide } };
             resetState = updated;
             return updated;
@@ -2231,8 +2237,14 @@ export function GrayscaleEvaluation({
                                             {record.evaluationTraceId}
                                         </button>
                                     ) : (
-                                        <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'ui-monospace, monospace', color: '#888780' }}>
-                                            {record.evaluatorRunId || '—'}
+                                        // pass 但没拿到 evaluationTraceId (评测成功但 trace ID
+                                        // 还没回填, 常见于刚跑完的瞬态)。不显示生 trun_xxx 易迷惑,
+                                        // 显示 "✓ 已评测" 灰字, evaluatorRunId 作为 tooltip 留着 debug。
+                                        <span
+                                            title={record.evaluatorRunId ? `runId: ${record.evaluatorRunId}` : undefined}
+                                            style={{ color: '#888780', fontSize: 12 }}
+                                        >
+                                            ✓ {locale === 'zh' ? '已评测' : 'Evaluated'}
                                         </span>
                                     )}
                                 </div>
