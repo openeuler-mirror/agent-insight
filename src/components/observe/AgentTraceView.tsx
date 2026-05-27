@@ -1925,7 +1925,6 @@ function RepeatedMessagesBlock({
                     <ChevronRight className={cn('size-3 text-foreground-muted transition-transform', expanded && 'rotate-90')} />
                     <span className="text-xs font-semibold text-foreground">model context</span>
                     <span className="text-xs text-foreground-muted tabular-nums">{messages.length} messages</span>
-                    <span className="ml-auto text-xs text-primary">展开</span>
                 </button>
                 {expanded && (
                     <div className="border-t border-border">
