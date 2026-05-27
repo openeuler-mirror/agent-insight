@@ -1387,12 +1387,13 @@ export function GrayscaleEvaluation({
             if (!sideState) return prev;
             const newRuns = (sideState.runs || []).map(r => {
                 if (r.runIndex !== runIndex) return r;
-                // 重置那一条 run, 让 backend onlyMissingEvaluation + status 过滤选中它:
-                //   - status='executed' (agent 是真成功了, "已执行待评测" 状态;
-                //     不能用 'evaluating' 因为后端 evaluateRunsWithConcurrency
-                //     filter 只接受 status in ('executed','pass'))
-                //   - 清掉 evaluatorRunId/score/etc 让 onlyMissingEvaluation 命中
-                const next = { ...r, status: 'executed' as CaseStatus };
+                // 重置那一条 run 让 backend 重评:
+                //   - status='evaluating' UI 立刻显示「评测中」蓝色脉冲, 用户感知到 retry 已生效
+                //   - 清掉 evaluatorRunId/score/tier/output/failureType/failureDetail
+                //     让 onlyMissingEvaluation 过滤命中 (无 evaluatorRunId 也无 score)
+                //   - backend evaluateRunsWithConcurrency 配套放宽: onlyMissingEvaluation
+                //     模式下也接受 status='evaluating' (见 route.ts eligibleStatus 注释)
+                const next = { ...r, status: 'evaluating' as CaseStatus };
                 delete next.evaluatorRunId;
                 delete next.evaluationResultId;
                 delete next.evaluationTraceId;
@@ -1403,9 +1404,7 @@ export function GrayscaleEvaluation({
                 next.output = '';
                 return next;
             });
-            // sideState 顶层 status 由 rebuildSideAggregate 重算; 这里先标
-            // 'executed' 跟新一条 run 一致, polling 后会被 backend 推到 'evaluating'
-            const updatedSide = { ...sideState, runs: newRuns, status: 'executed' as CaseStatus };
+            const updatedSide = { ...sideState, runs: newRuns, status: 'evaluating' as CaseStatus };
             const updated = { ...prev, [caseId]: { ...current, [side]: updatedSide } };
             resetState = updated;
             return updated;

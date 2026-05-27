@@ -1117,7 +1117,14 @@ async function evaluateRunsWithConcurrency(args: {
                 if (args.onlyMissingEvaluation && (run.evaluatorRunId || typeof run.score === 'number')) {
                     continue;
                 }
-                if ((run.status === 'executed' || run.status === 'pass') && run.sessionId) {
+                // 默认状态白名单: executed / pass。onlyMissingEvaluation 模式下额外接受
+                // 'evaluating' —— 前端行级 retry 会先把 run 标成 evaluating 让 UI 立刻
+                // 显示"评测中"动效, 此时 evaluatorRunId/score 都被清掉了, 落进 backend
+                // 这里应当被选中重评; 不开 onlyMissing 时不接受 evaluating, 避免抢已经
+                // 在跑的 eval。
+                const eligibleStatus = run.status === 'executed' || run.status === 'pass'
+                    || (args.onlyMissingEvaluation && run.status === 'evaluating');
+                if (eligibleStatus && run.sessionId) {
                     targets.push({ caseId, side, run });
                 }
             }
