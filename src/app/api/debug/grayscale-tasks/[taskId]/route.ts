@@ -1363,6 +1363,52 @@ export async function GET(
         }
         const task = await loadTask(taskId, user);
         if (!task) return NextResponse.json({ error: 'task not found' }, { status: 404 });
+
+        // === 孤儿 in-flight 清理 ===
+        // activeRuns 是内存 map (挂 globalThis), server 重启就丢。如果 caseStates
+        // 里还有 running/pending/evaluating 但 activeRuns 没有这个 task 的条目,
+        // 那一定是上次进程跑到一半被杀的孤儿——agent / evaluator 子进程都没了,
+        // 不会再有人推进它的状态。之前依赖 reconcileFinishedExecutions 反查
+        // Execution 表回填, 但 agent 还没完成就被杀的 run 根本没写 Execution 行,
+        // 反查找不到, 永远卡在 running。
+        //
+        // 直接走跟 abort 同款的清理: pending/running/evaluating 全标 fail, 然后
+        // rebuildSideAggregate 让 top 跟 runs 一致。
+        const orphanStoreKey = `${user}:${taskId}`;
+        let orphanCleanup = false;
+        if (!activeRuns().get(orphanStoreKey) && hasAnyRunningCaseStates(task.caseStatesJson)) {
+            const cancelable: CaseStatus[] = ['running', 'evaluating', 'pending'];
+            const states = task.caseStatesJson;
+            for (const cid of Object.keys(states)) {
+                for (const side of ['a', 'b'] as Side[]) {
+                    const sideState = states[cid][side];
+                    if (!sideState) continue;
+                    let patched = false;
+                    for (const run of sideState.runs || []) {
+                        if (cancelable.includes(run.status)) {
+                            run.status = 'fail';
+                            run.failureType = 'agent_error';
+                            run.failureDetail = run.failureDetail || '服务重启中断, 请重新评测';
+                            run.output = run.output || '服务重启中断';
+                            patched = true;
+                            orphanCleanup = true;
+                        }
+                    }
+                    if (patched) {
+                        states[cid][side] = rebuildSideAggregate(
+                            sideState,
+                            sideState.runCount || sideState.runs?.length || 0,
+                        );
+                        const rebuilt = states[cid][side];
+                        if (rebuilt.status === 'running' || rebuilt.status === 'evaluating') {
+                            rebuilt.status = 'fail';
+                            rebuilt.output = rebuilt.output || '服务重启中断';
+                        }
+                    }
+                }
+            }
+        }
+
         const metricsHydrated = await hydrateExecutionMetrics(task.caseStatesJson);
         const executionsReconciled = await reconcileFinishedExecutions({
             user,
@@ -1370,7 +1416,7 @@ export async function GET(
             states: task.caseStatesJson,
         });
         const reconciled = await reconcileFinishedEvaluations(user, task.configJson, task.caseStatesJson);
-        if (metricsHydrated || executionsReconciled || reconciled) {
+        if (orphanCleanup || metricsHydrated || executionsReconciled || reconciled) {
             await persistTaskState(taskId, user, task.configJson, task.caseStatesJson);
         }
         const storeKey = `${user}:${taskId}`;
