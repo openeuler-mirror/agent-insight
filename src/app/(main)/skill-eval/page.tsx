@@ -1146,7 +1146,17 @@ function SkillAnalysisPage() {
     const staticHasResult = !!staticSummary?.latest;
     const triggerHasResult = !!triggerSummary?.latestRun;
     const grayHasResult = !!graySummary && graySummary.b.avgScore != null;
-    const grayFinalScore = graySummary?.scoring.totalScore ?? null;
+    // 跟详情页 decisionReady 严格对齐: 所有 case-side 都 executed/pass 时才显示分数,
+    // 任一 case 还有 running/evaluating/pending/fail 时跟详情页一样显示「等待评估完成」。
+    // 之前不带这判断, 卡片用全 task 聚合算分 → 跟详情页 (decisionReady 只看 active case
+    // 的 simA/simB 状态) mismatch, 用户看「卡片有分但详情页没分」困惑。
+    const grayCaseStates = (grayTaskMeta?.caseStatesJson || {}) as Record<string, { a?: { status?: string }; b?: { status?: string } }>;
+    const grayAllSidesReady = Object.keys(grayCaseStates).length > 0
+        && Object.values(grayCaseStates).every(s => {
+            const ready = (st?: { status?: string }) => st?.status === 'executed' || st?.status === 'pass';
+            return ready(s?.a) && ready(s?.b);
+        });
+    const grayFinalScore = (grayAllSidesReady ? graySummary?.scoring.totalScore : null) ?? null;
     const batchHasResult = false;
     /*
      * 用例分析（trace）卡上展示的分数 = "已评测过的 trace" 的「(结果分 + 轨迹分) / 2」的平均值。
@@ -1723,7 +1733,17 @@ function AnalysisOverview({
     const triggerHasResult = !!triggerSummary?.latestRun;
     const triggerCanTest = triggerHasSet && (triggerSummary?.itemCount ?? 0) > 0;
     const grayHasResult = !!graySummary && graySummary.b.avgScore != null;
-    const grayFinalScore = graySummary?.scoring.totalScore ?? null;
+    // 跟详情页 decisionReady 严格对齐: 所有 case-side 都 executed/pass 时才显示分数,
+    // 任一 case 还有 running/evaluating/pending/fail 时跟详情页一样显示「等待评估完成」。
+    // 之前不带这判断, 卡片用全 task 聚合算分 → 跟详情页 (decisionReady 只看 active case
+    // 的 simA/simB 状态) mismatch, 用户看「卡片有分但详情页没分」困惑。
+    const grayCaseStates = (grayTaskMeta?.caseStatesJson || {}) as Record<string, { a?: { status?: string }; b?: { status?: string } }>;
+    const grayAllSidesReady = Object.keys(grayCaseStates).length > 0
+        && Object.values(grayCaseStates).every(s => {
+            const ready = (st?: { status?: string }) => st?.status === 'executed' || st?.status === 'pass';
+            return ready(s?.a) && ready(s?.b);
+        });
+    const grayFinalScore = (grayAllSidesReady ? graySummary?.scoring.totalScore : null) ?? null;
     const grayPreparedSampleCount = (
         grayTaskMeta?.configJson?.checkedCaseIds
         ?? grayTaskMeta?.configJson?.selectedCaseIds
