@@ -1270,7 +1270,8 @@ function SkillAnalysisPage() {
                 {view === 'overview' && (
                     <SkillAnalysisHeader
                         // overview 才渲染这个大卡；其余 detail view 的 skill+version 已经移到 AppTopBar 路径里。
-                        crumbs={[{ label: 'Skills', href: '#' }, { label: 'Skills 分析' }]}
+                        // AppTopBar 已经显示 "Skills 分析"，这里再渲染面包屑就是重复——直接传空。
+                        crumbs={[]}
                         skills={skills}
                         selectedSkillId={selectedSkillId}
                         skillsLoading={skillsLoading}

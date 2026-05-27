@@ -9,11 +9,19 @@
  * 注：toolbar 由 SkillCatalogV2 内部渲染（拿得到 stats / search / filter / 上传回调），
  * 这一层只负责挂 AppTopBar + 触发上传 modal。
  */
-import { Suspense, useEffect, useState } from 'react';
+import { Suspense, useEffect, useState, type ComponentType } from 'react';
 import { AppTopBar } from '@/components/shell/AppTopBar';
-import { SkillCatalog, SkillUpload, EnterpriseSync } from '@/components/skills/SkillRegistry';
+import { SkillCatalog, SkillUpload, SkillGenerate, EnterpriseSync } from '@/components/skills/SkillRegistry';
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogHeader,
+    DialogTitle,
+} from '@/components/ui/dialog';
+import { Check, FolderUp, RefreshCw, Sparkles, type LucideIcon } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import { apiFetch } from '@/lib/client/api';
-import { X } from 'lucide-react';
 
 export default function SkillsPage() {
     return (
@@ -42,98 +50,144 @@ function SkillsPageInner() {
                 <SkillCatalog refresh={refreshKey} onUploadClick={() => setUploadOpen(true)} />
             </div>
 
-            {uploadOpen && (
-                <SkillUploadDialog
-                    isEnterpriseMode={isEnterpriseMode}
-                    onClose={() => setUploadOpen(false)}
-                    onSuccess={() => {
-                        setRefreshKey(k => k + 1);
-                        setUploadOpen(false);
-                    }}
-                />
-            )}
+            <SkillCreateDialog
+                open={uploadOpen}
+                onOpenChange={setUploadOpen}
+                isEnterpriseMode={isEnterpriseMode}
+                onSuccess={() => {
+                    setRefreshKey(k => k + 1);
+                    setUploadOpen(false);
+                }}
+            />
         </div>
     );
 }
 
-function SkillUploadDialog({
+type CreateMethod = 'upload' | 'generate' | 'sync';
+
+interface MethodSpec {
+    id: CreateMethod;
+    icon: LucideIcon;
+    title: string;
+    desc: string;
+}
+
+function SkillCreateDialog({
+    open,
+    onOpenChange,
     isEnterpriseMode,
-    onClose,
     onSuccess,
 }: {
+    open: boolean;
+    onOpenChange: (open: boolean) => void;
     isEnterpriseMode: boolean;
-    onClose: () => void;
     onSuccess: () => void;
 }) {
+    const [method, setMethod] = useState<CreateMethod>('upload');
+
+    // 每次打开重置到默认（最常用的本地上传），避免上次留下的选择影响判断
+    useEffect(() => {
+        if (open) setMethod('upload');
+    }, [open]);
+
+    const methods: MethodSpec[] = [
+        { id: 'upload', icon: FolderUp, title: '本地上传', desc: '从电脑选择 Skill 文件夹' },
+        { id: 'generate', icon: Sparkles, title: 'AI 生成', desc: '用自然语言描述需求，由 AI 生成' },
+        ...(isEnterpriseMode
+            ? [{ id: 'sync' as const, icon: RefreshCw, title: '企业同步', desc: '从企业 Skill 市场拉取' }]
+            : []),
+    ];
+
     return (
-        <div
-            style={{
-                position: 'fixed',
-                inset: 0,
-                background: 'rgba(15, 23, 42, 0.48)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                zIndex: 1000,
-                padding: 20,
-            }}
-            onClick={onClose}
-        >
-            <div
-                style={{
-                    background: 'var(--card-bg)',
-                    border: '1px solid var(--border)',
-                    borderRadius: 8,
-                    boxShadow: '0 18px 48px rgba(15, 23, 42, 0.18)',
-                    maxWidth: isEnterpriseMode ? 860 : 560,
-                    width: '100%',
-                    maxHeight: '90vh',
-                    overflow: 'hidden',
-                    position: 'relative',
-                }}
-                onClick={e => e.stopPropagation()}
-            >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, padding: '18px 20px 14px', borderBottom: '1px solid var(--border)' }}>
-                    <div>
-                        <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: 'var(--foreground)' }}>上传 Skill</h3>
-                        <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--foreground-muted)' }}>导入本地 Skill 文件夹，或在企业模式下同步团队 Skill。</p>
-                    </div>
-                    <button
-                        type="button"
-                        onClick={onClose}
-                        style={{
-                            width: 32,
-                            height: 32,
-                            display: 'grid',
-                            placeItems: 'center',
-                            background: 'var(--background-secondary)',
-                            border: 'none',
-                            borderRadius: 8,
-                            color: 'var(--foreground-secondary)',
-                            cursor: 'pointer',
-                            padding: 0,
-                            flexShrink: 0,
-                        }}
-                        aria-label="关闭"
+        <Dialog open={open} onOpenChange={onOpenChange}>
+            <DialogContent className="flex max-h-[90vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-[560px]">
+                <DialogHeader className="border-b border-border px-5 py-4">
+                    <DialogTitle>新建 Skill</DialogTitle>
+                    <DialogDescription>
+                        选择一种方式来创建新的 Skill。
+                    </DialogDescription>
+                </DialogHeader>
+
+                <div className="flex flex-col gap-4 overflow-y-auto bg-background-secondary px-5 py-4">
+                    {/* Step 1: picker */}
+                    <div
+                        role="radiogroup"
+                        aria-label="新建 Skill 的方式"
+                        className={cn(
+                            'grid gap-2',
+                            isEnterpriseMode ? 'grid-cols-3' : 'grid-cols-2',
+                        )}
                     >
-                        <X size={16} />
-                    </button>
+                        {methods.map(m => (
+                            <MethodPickerTile
+                                key={m.id}
+                                icon={m.icon}
+                                title={m.title}
+                                desc={m.desc}
+                                selected={method === m.id}
+                                onSelect={() => setMethod(m.id)}
+                            />
+                        ))}
+                    </div>
+
+                    {/* Step 2: action panel for selected method */}
+                    <div className="rounded-lg border border-border bg-card px-4 py-4">
+                        {method === 'upload' && <SkillUpload onSuccess={onSuccess} />}
+                        {method === 'generate' && (
+                            <SkillGenerate onNavigate={() => onOpenChange(false)} />
+                        )}
+                        {method === 'sync' && isEnterpriseMode && (
+                            <EnterpriseSync onSuccess={onSuccess} />
+                        )}
+                    </div>
                 </div>
-                <div
-                    style={{
-                        display: 'grid',
-                        gridTemplateColumns: isEnterpriseMode ? 'repeat(auto-fit, minmax(300px, 1fr))' : '1fr',
-                        gap: 16,
-                        padding: 20,
-                        maxHeight: 'calc(90vh - 74px)',
-                        overflowY: 'auto',
-                        background: 'var(--background)',
-                    }}
+            </DialogContent>
+        </Dialog>
+    );
+}
+
+function MethodPickerTile({
+    icon: Icon,
+    title,
+    desc,
+    selected,
+    onSelect,
+}: {
+    icon: ComponentType<{ className?: string }>;
+    title: string;
+    desc: string;
+    selected: boolean;
+    onSelect: () => void;
+}) {
+    return (
+        <button
+            type="button"
+            role="radio"
+            aria-checked={selected}
+            onClick={onSelect}
+            className={cn(
+                'group relative flex flex-col items-start gap-1.5 rounded-lg border p-3 text-left transition-colors',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                selected
+                    ? 'border-primary bg-primary-subtle ring-1 ring-primary'
+                    : 'border-border bg-card hover:border-foreground-muted',
+            )}
+        >
+            <div className="flex w-full items-center justify-between">
+                <span
+                    className={cn(
+                        'grid size-8 place-items-center rounded-md transition-colors',
+                        selected
+                            ? 'bg-primary text-primary-foreground'
+                            : 'bg-primary-subtle text-primary',
+                    )}
                 >
-                    <SkillUpload onSuccess={onSuccess} />
-                    {isEnterpriseMode && <EnterpriseSync onSuccess={onSuccess} />}
-                </div>
+                    <Icon className="size-4" />
+                </span>
+                {selected && <Check className="size-4 text-primary" />}
             </div>
-        </div>
+            <div className="text-sm font-semibold text-foreground">{title}</div>
+            <div className="text-xs text-foreground-secondary">{desc}</div>
+        </button>
     );
 }
