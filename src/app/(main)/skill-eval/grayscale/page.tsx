@@ -2043,6 +2043,30 @@ export function GrayscaleEvaluation({
                     </div>
                 ) : (
                     <div style={{ display: 'flex', flexDirection: 'column', maxHeight: 420, overflowY: 'auto' }}>
+                        {/* 表头行: 列名只显示一次, 每行不再重复 label */}
+                        <div
+                            style={{
+                                display: 'grid',
+                                gridTemplateColumns: '160px 1fr 1fr 60px',
+                                gap: 12,
+                                padding: '8px 12px',
+                                background: '#FAFAF7',
+                                borderBottom: '1px solid #E7E5E4',
+                                fontSize: 11,
+                                fontWeight: 700,
+                                color: '#5F5E5A',
+                                textTransform: 'none',
+                                letterSpacing: 0,
+                                position: 'sticky',
+                                top: 0,
+                                zIndex: 1,
+                            }}
+                        >
+                            <div>{locale === 'zh' ? 'Case ID' : 'Case ID'}</div>
+                            <div>{locale === 'zh' ? '执行 session id' : 'Execution session id'}</div>
+                            <div>{locale === 'zh' ? '评估 session id' : 'Evaluation session id'}</div>
+                            <div style={{ textAlign: 'right' }}>{locale === 'zh' ? '分数' : 'Score'}</div>
+                        </div>
                         {records.map((record, idx) => {
                             const hasExecFailure = !!record.failureType;
                             const { exec, evaluation } = deriveExecAndEval(record.status, hasExecFailure);
@@ -2052,16 +2076,21 @@ export function GrayscaleEvaluation({
                             const evalErrMsg = (!hasExecFailure && record.status === 'fail')
                                 ? (record.output || '评测失败')
                                 : '';
+                            // case id 跳转目标: /dataset/<datasetId>?case=<caseId>
+                            // datasetId 从当前 task 配置拿; DatasetItemsPage 看到 ?case=
+                            // 会滚动到对应行并短暂高亮 (下面 DatasetItemsPage 同步加这个支持)
+                            const datasetId = currentTask?.configJson?.selectedDatasetId;
+                            const caseDetailUrl = datasetId && record.caseId
+                                ? `/dataset/${encodeURIComponent(datasetId)}?case=${encodeURIComponent(record.caseId)}`
+                                : null;
                             return (
                             <div
                                 key={`${side}-${record.caseId}-${record.roundIndex}-${idx}`}
-                                style={{ display: 'grid', gridTemplateColumns: '160px 1fr 1fr 60px', gap: 12, alignItems: 'flex-start', padding: '10px 12px', borderTop: idx === 0 ? 'none' : '1px solid #F1EFE8', fontSize: 12 }}
+                                style={{ display: 'grid', gridTemplateColumns: '160px 1fr 1fr 60px', gap: 12, alignItems: 'center', padding: '10px 12px', borderTop: '1px solid #F1EFE8', fontSize: 12 }}
                             >
+                                {/* Case ID 列: 可点击, 跳到 dataset 详情对应 case */}
                                 <div
                                     style={{
-                                        color: '#5F5E5A',
-                                        fontWeight: 600,
-                                        paddingTop: 2,
                                         overflow: 'hidden',
                                         textOverflow: 'ellipsis',
                                         whiteSpace: 'nowrap',
@@ -2069,12 +2098,25 @@ export function GrayscaleEvaluation({
                                     }}
                                     title={`R${record.roundIndex || '-'} · ${record.caseId}`}
                                 >
-                                    R{record.roundIndex || '-'} · <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11 }}>{record.caseId}</span>
+                                    <span style={{ color: '#5F5E5A', fontWeight: 600, marginRight: 4 }}>R{record.roundIndex || '-'}</span>
+                                    {caseDetailUrl ? (
+                                        <a
+                                            href={caseDetailUrl}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11, color: '#185FA5', textDecoration: 'none' }}
+                                            onMouseEnter={e => (e.currentTarget.style.textDecoration = 'underline')}
+                                            onMouseLeave={e => (e.currentTarget.style.textDecoration = 'none')}
+                                        >
+                                            {record.caseId}
+                                        </a>
+                                    ) : (
+                                        <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11, color: '#5F5E5A' }}>{record.caseId}</span>
+                                    )}
                                 </div>
 
-                                {/* 执行 session id 列：根据状态显示 id button / 状态文字 / 失败 hover */}
+                                {/* 执行 session id 列 */}
                                 <div style={{ minWidth: 0 }}>
-                                    <div style={{ color: '#888780', marginBottom: 2 }}>{locale === 'zh' ? '执行 session id' : 'Execution session id'}</div>
                                     {exec.tone === 'fail' ? (
                                         <HoverTooltip
                                             trigger={<StatusText label={exec.label} tone="fail" />}
@@ -2095,11 +2137,9 @@ export function GrayscaleEvaluation({
                                     )}
                                 </div>
 
-                                {/* 评估 session id 列：同样的逻辑——状态决定显文字还是 id */}
+                                {/* 评估 session id 列 */}
                                 <div style={{ minWidth: 0 }}>
-                                    <div style={{ color: '#888780', marginBottom: 2 }}>{locale === 'zh' ? '评估 session id' : 'Evaluation session id'}</div>
                                     {!evaluation ? (
-                                        // 执行还没完成 / 执行失败时, 评测阶段还没开始
                                         <span style={{ color: '#B8B6AE' }}>—</span>
                                     ) : evaluation.tone === 'fail' ? (
                                         <HoverTooltip
@@ -2118,14 +2158,13 @@ export function GrayscaleEvaluation({
                                             {record.evaluationTraceId}
                                         </button>
                                     ) : (
-                                        // pass 但没拿到 evaluationTraceId, fallback 到 evaluatorRunId
                                         <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'ui-monospace, monospace', color: '#888780' }}>
                                             {record.evaluatorRunId || '—'}
                                         </span>
                                     )}
                                 </div>
 
-                                <div style={{ textAlign: 'right', color: accent, fontWeight: 700, fontSize: 14, paddingTop: 2 }}>
+                                <div style={{ textAlign: 'right', color: accent, fontWeight: 700, fontSize: 14 }}>
                                     {typeof record.score === 'number' ? record.score : '—'}
                                 </div>
                             </div>

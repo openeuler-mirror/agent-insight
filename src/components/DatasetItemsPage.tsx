@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiFetch } from '@/lib/client/api';
 import {
@@ -144,6 +144,11 @@ export default function DatasetItemsPage() {
   const [dataset, setDataset] = useState<AgentDataset | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  // ?case=<caseId> 入参支持: 别处(如 grayscale 执行记录 modal 的 Case ID 链接)
+  // 跳过来时滚动到对应行并短暂高亮, 让用户一眼定位。
+  const searchParams = useSearchParams();
+  const highlightCaseId = searchParams?.get('case') || '';
+  const [highlightActive, setHighlightActive] = useState(false);
   const [saving, setSaving] = useState(false);
   const [rowEditor, setRowEditor] = useState<{ mode: 'add' | 'edit'; row: DatasetCase } | null>(null);
   const [batchModalOpen, setBatchModalOpen] = useState(false);
@@ -188,6 +193,23 @@ export default function DatasetItemsPage() {
   useEffect(() => {
     void Promise.resolve().then(() => load());
   }, [load]);
+
+  // ?case=<id> 处理: dataset 加载完后滚到目标行 + 短暂高亮 (1.8s)
+  useEffect(() => {
+    if (!highlightCaseId || !dataset || dataset.cases.length === 0) return;
+    const exists = dataset.cases.some(c => c.id === highlightCaseId);
+    if (!exists) return;
+    // 用 rAF 让 DOM 渲染完再 query, 避免拿不到 node
+    const tid = setTimeout(() => {
+      const el = document.getElementById(`case-${highlightCaseId}`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        setHighlightActive(true);
+        setTimeout(() => setHighlightActive(false), 1800);
+      }
+    }, 100);
+    return () => clearTimeout(tid);
+  }, [highlightCaseId, dataset]);
 
   const persistCases = async (cases: DatasetCase[]): Promise<boolean> => {
     if (!user || !dataset) return false;
@@ -447,8 +469,18 @@ export default function DatasetItemsPage() {
                     </td>
                   </tr>
                 ) : (
-                  dataset.cases.map(row => (
-                    <tr key={row.id}>
+                  dataset.cases.map(row => {
+                    const isHighlighted = highlightActive && row.id === highlightCaseId;
+                    return (
+                    <tr
+                      key={row.id}
+                      id={`case-${row.id}`}
+                      data-case-row={row.id}
+                      style={isHighlighted ? {
+                        background: 'rgba(37,99,235,0.12)',
+                        transition: 'background 0.4s ease',
+                      } : { transition: 'background 0.4s ease' }}
+                    >
                       <td title={row.id}>
                         <span className={styles.idTag}>{shorten(row.id, 10)}</span>
                       </td>
@@ -478,7 +510,8 @@ export default function DatasetItemsPage() {
                         </button>
                       </td>
                     </tr>
-                  ))
+                    );
+                  })
                 )}
               </tbody>
             </table>
