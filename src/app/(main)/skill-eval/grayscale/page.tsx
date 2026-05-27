@@ -2185,7 +2185,15 @@ export function GrayscaleEvaluation({
         : abScoring.decision === 'insufficient'
             ? (locale === 'zh' ? `当前只有 ${abScoring.sampleSize} 个完成配对样本；N < ${DEFAULT_AB_SCORING_POLICY.minSampleSize} 不输出发布结论，请补齐样本后复测。` : `Only ${abScoring.sampleSize} paired samples are complete; add samples before making a release decision.`)
             : abScoring.decision === 'reject'
-                ? (locale === 'zh' ? `命中 hard gate：${abScoring.hardGates.map(g => g.label).join('、')}。建议先按打回类别修正后复测。` : `Hard gate hit: ${abScoring.hardGates.map(g => g.label).join(', ')}. Revise and retest first.`)
+                ? (() => {
+                    // 每条 hard gate 标出 ceiling, 让用户看清"为什么总分这么低"——
+                    // 总分 = min(rawTotal, ...所有 hard gate 的 ceiling), 取最严的。
+                    const minCeiling = Math.min(...abScoring.hardGates.map(g => g.ceiling));
+                    const gateList = abScoring.hardGates.map(g => `${g.label} (≤${g.ceiling}分)`).join('、');
+                    return locale === 'zh'
+                        ? `命中 hard gate：${gateList}。最终评分被强制不超过 ${minCeiling} 分 (取所有触发硬门槛中最严格的上限)。建议先按打回类别修正后复测。`
+                        : `Hard gate hit: ${abScoring.hardGates.map(g => `${g.label} (cap ${g.ceiling})`).join(', ')}. Total score is capped at ${minCeiling} (the strictest ceiling). Revise and retest first.`;
+                })()
                 : abScoring.decision === 'monitor-release'
                     ? (locale === 'zh' ? '可小流量监控发布，并持续观察 Token 成本、触发率和多轮一致性。' : 'Proceed with monitored rollout and watch token cost, invoke rate, and variance.')
                     : (locale === 'zh' ? '三维指标均达标，可进入全量发布，同时保留后续复测记录。' : 'All three dimensions pass; proceed to full release and keep retesting over time.');
