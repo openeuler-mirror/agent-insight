@@ -1479,6 +1479,7 @@ node scripts/publish-npm.js
 | `docs/optimization-tech.md` | 优化技术细节 |
 | `docs/plans/2026-04-28-opencode-otel-capture-design.md` | OpenCode OTel 采集设计 |
 | `docs/plans/2026-04-28-opencode-otel-capture-implementation.md` | OTel 采集实现记录 |
+| `docs/skill-ab-scoring.md` | **Skill A/B 评分体系（v2.1）** —— 能力 / 成本 / 稳定性三维公式、综合判定四道关卡、阈值表（灰度页 Card 3 数据来源） |
 | `exclude/design/skill-insight2agent-insight.md` | v2 战略文档（Skill-insight → Agent-insight） |
 | `README.md` / `README_en.md` | 用户视角 README |
 

@@ -1237,7 +1237,7 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
         comparisonMode,
     };
 
-    if (shouldRunTraceEvaluation && interactions.length === 0) {
+    if ((shouldRunTraceEvaluation || shouldRunResultEvaluation) && interactions.length === 0) {
         throw new StagedEvaluationError(
             'trace-empty',
             `taskId=${resolvedTaskId || 'N/A'} 对应的 Session 不存在或 interactions 为空`,

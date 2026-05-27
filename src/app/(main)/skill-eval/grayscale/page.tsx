@@ -6,7 +6,7 @@ import { AppTopBar } from '@/components/shell/AppTopBar';
 import { useLocale } from '@/lib/client/locale-context';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
-import { calculateAbScoring, DEFAULT_AB_SCORING_POLICY, type AbScoringResult } from '@/lib/skill-analysis/ab-scoring';
+import { calculateAbScoring, DEFAULT_AB_SCORING_POLICY, type AbScoringResult, type AbScoreBreakdown, type AbTone } from '@/lib/skill-analysis/ab-scoring';
 import '../debug.css';
 import '../skill-analysis.css';
 
@@ -290,6 +290,469 @@ function StatusText({ label, tone }: { label: string; tone: BadgeTone }) {
             {cfg.icon && <span>{cfg.icon}</span>}
             {label}
         </span>
+    );
+}
+
+// Card 3「综合判定 & 决策」的主体。设计目标：一屏内同时看到决策结论、三维分数,
+// 以及每个分数的计算路径。布局分三段:
+//   ① 决策横条—— DECISION 标签 + 决策名 + 综合分(min 短板)；中间一句话写"短板在哪 /
+//      关键证据 / 下一步动作";右侧是 [查看 Trace] [复测] 两个动作按钮。
+//   ② 维度表 ——能力/成本/稳定性三行。分数列 mono+tabular-nums,带 50/75 阈值刻度。
+//      关键证据列只罗列与判定最相关的几个数(评测均分 / ΔToken / 触发率 等)。
+//   ③ "原始数据与计算公式"折叠面板——展开后是四个 mini panel(能力/成本/稳定性/综合),
+//      每个里面 A vs B 原始值 + 公式代入式,直接覆盖"分数怎么来的"那条溯源链。
+// 公式与术语唯一对齐 docs/skill-ab-scoring.md(v2.1);UI 用到的所有数字都从 abScoring.*
+// 拿,不重新计算,避免与算法实现漂移。
+function DecisionVerdictCard({
+    decisionReady,
+    abScoring,
+    sampleSize,
+    repeatRounds,
+    recommendedSampleSize,
+    policy,
+    decisionTitle,
+    decisionAdvice,
+    onViewTrace,
+    onRerun,
+    rerunDisabled,
+    rerunBusy,
+    locale,
+    toneColor,
+    toneBg,
+}: {
+    decisionReady: boolean;
+    abScoring: AbScoringResult;
+    sampleSize: number;
+    repeatRounds: number;
+    recommendedSampleSize: number;
+    policy: typeof DEFAULT_AB_SCORING_POLICY;
+    decisionTitle: string;
+    decisionAdvice: string;
+    onViewTrace: () => void;
+    onRerun: () => void;
+    rerunDisabled: boolean;
+    rerunBusy: boolean;
+    locale: 'zh' | 'en';
+    toneColor: (tone: AbTone) => string;
+    toneBg: (tone: AbTone) => string;
+}) {
+    // 决策态: reject → 红, direct-release → 绿, monitor-release → 琥珀, insufficient → 灰
+    const decisionTone: AbTone = !decisionReady || abScoring.decision === 'insufficient'
+        ? 'gray'
+        : abScoring.decision === 'reject'
+            ? 'red'
+            : abScoring.decision === 'direct-release'
+                ? 'green'
+                : 'amber';
+    const decisionColor = toneColor(decisionTone);
+    const decisionBg = toneBg(decisionTone);
+
+    // 短板维度: 拒绝时直接看 rejectCategory; 其它时看三维 min。null 表示不出短板提示。
+    const shortDim: 'capability' | 'cost' | 'stability' | null = (() => {
+        if (!decisionReady) return null;
+        if (abScoring.rejectCategory) return abScoring.rejectCategory;
+        if (abScoring.totalScore == null) return null;
+        const s = [
+            { key: 'capability' as const, v: abScoring.capability.score },
+            { key: 'cost' as const,       v: abScoring.cost.score },
+            { key: 'stability' as const,  v: abScoring.stability.score },
+        ].filter(x => x.v != null) as Array<{ key: 'capability' | 'cost' | 'stability'; v: number }>;
+        if (s.length === 0) return null;
+        return s.sort((a, b) => a.v - b.v)[0].key;
+    })();
+    const dimLabel = (k: 'capability' | 'cost' | 'stability') => k === 'capability' ? '能力' : k === 'cost' ? '成本' : '稳定性';
+    const dimTone = (k: 'capability' | 'cost' | 'stability') =>
+        k === 'capability' ? abScoring.capability.tone
+        : k === 'cost' ? abScoring.cost.tone
+        : abScoring.stability.tone;
+
+    // 描述文本一句话写清:「短板在 X · 关键证据」+「下一步 ...」+ 样本量提示(如果不足)
+    const evidenceText: string = (() => {
+        if (!decisionReady) return '';
+        if (shortDim === 'capability') {
+            const a = abScoring.capability.avgEvalScoreA;
+            const b = abScoring.capability.avgEvalScoreB;
+            const d = abScoring.capability.deltaScore;
+            const hit = abScoring.hardGates.find(g => g.key === 'capability');
+            const pieces: string[] = [];
+            if (a != null && b != null) pieces.push(`评测均分由 ${a} → ${b}`);
+            if (d != null) pieces.push(`Δ ${d > 0 ? '+' : ''}${d}`);
+            if (hit) pieces.push(`命中 hard gate (< ${policy.capabilityRejectThreshold})`);
+            return pieces.join(', ');
+        }
+        if (shortDim === 'cost') {
+            const dToken = abScoring.cost.deltaTokenPct;
+            const dDur = abScoring.cost.deltaDurationPct;
+            const cap = abScoring.capability.score;
+            const coupling = cap == null ? 0 : cap >= policy.capabilityGoodThreshold ? policy.costCouplingBonus : cap < policy.capabilityRejectThreshold ? -policy.costCouplingPenalty : 0;
+            const pieces: string[] = [];
+            if (dToken != null) pieces.push(`ΔToken ${dToken > 0 ? '+' : ''}${dToken}%`);
+            if (dDur != null) pieces.push(`耗时 ${dDur > 0 ? '+' : ''}${dDur}%`);
+            if (coupling !== 0) pieces.push(`能力耦合 ${coupling > 0 ? '+' : ''}${coupling}`);
+            return pieces.join(', ');
+        }
+        if (shortDim === 'stability') {
+            const inv = abScoring.stability.invokeRate;
+            const v = abScoring.stability.variance;
+            const pieces: string[] = [];
+            if (inv != null) pieces.push(`触发率 ${inv}%`);
+            pieces.push(v == null ? `方差 — (R=${repeatRounds})` : `方差 ${v}`);
+            return pieces.join(', ');
+        }
+        return '';
+    })();
+    const sampleHint = decisionReady && sampleSize < recommendedSampleSize
+        ? `样本量偏少, 建议补到 N≥${recommendedSampleSize}、R≥${Math.max(policy.minRepeats, 3)}`
+        : '';
+    const nextStep: string = decisionAdvice;
+
+    // 维度行的进度条 + 阈值刻度。50 / 75 是 reject / good 边界 (能力/成本各自配置, 但
+    // 为简化 UI 统一用 50/75 作视觉刻度——和算法判定阈值差异极小, 不影响读数)。
+    const Bar = ({ value, tone }: { value: number | null; tone: AbTone }) => {
+        const v = value == null ? 0 : Math.max(0, Math.min(100, value));
+        return (
+            <div style={{ position: 'relative', height: 8, background: '#E7E5E4', borderRadius: 999, overflow: 'hidden' }}>
+                <div style={{ width: `${Math.max(2, v)}%`, height: '100%', background: toneColor(tone), borderRadius: 999 }} />
+                {/* 50 / 75 阈值刻度——细竖线落在条上方,提示"良好线 / 拒绝线" */}
+                <span style={{ position: 'absolute', left: '50%', top: 0, bottom: 0, width: 1, background: 'rgba(0,0,0,0.18)' }} />
+                <span style={{ position: 'absolute', left: '75%', top: 0, bottom: 0, width: 1, background: 'rgba(0,0,0,0.18)' }} />
+            </div>
+        );
+    };
+
+    const Score = ({ value, tone }: { value: number | null; tone: AbTone }) => (
+        <div style={{ fontFamily: 'ui-monospace, monospace', fontVariantNumeric: 'tabular-nums', textAlign: 'right', whiteSpace: 'nowrap' }}>
+            <span style={{ fontSize: 18, fontWeight: 800, color: toneColor(tone) }}>{value == null ? '—' : value}</span>
+            <span style={{ fontSize: 11, color: '#A8A29E', marginLeft: 4 }}>/ 100</span>
+        </div>
+    );
+
+    const VerdictPill = ({ tone, label }: { tone: AbTone; label: string }) => (
+        <span style={{
+            display: 'inline-block', padding: '1px 7px', borderRadius: 4,
+            fontSize: 10, fontWeight: 700, color: toneColor(tone), background: toneBg(tone),
+        }}>{label}</span>
+    );
+
+    // 维度行
+    const dimensionRows: Array<{
+        key: 'capability' | 'cost' | 'stability';
+        label: string;
+        subtitle: string;
+        score: number | null;
+        tone: AbTone;
+        verdictLabel: string;
+        evidence: React.ReactNode;
+    }> = [
+        {
+            key: 'capability',
+            label: '能力',
+            subtitle: 'Skill 让 Agent 多做成了多少事',
+            score: abScoring.capability.score,
+            tone: abScoring.capability.tone,
+            verdictLabel: abScoring.capability.label,
+            evidence: decisionReady ? (
+                <>
+                    A {abScoring.capability.avgEvalScoreA ?? '—'}
+                    <span style={{ color: '#A8A29E', margin: '0 4px' }}>→</span>
+                    B {abScoring.capability.avgEvalScoreB ?? '—'}
+                    {abScoring.capability.deltaScore != null && (
+                        <>
+                            <span style={{ color: '#A8A29E', margin: '0 8px' }}>·</span>
+                            Δscore {abScoring.capability.deltaScore > 0 ? '+' : ''}{abScoring.capability.deltaScore}
+                        </>
+                    )}
+                </>
+            ) : '—',
+        },
+        {
+            key: 'cost',
+            label: '成本',
+            subtitle: '多花了多少 token / 时间',
+            score: abScoring.cost.score,
+            tone: abScoring.cost.tone,
+            verdictLabel: abScoring.cost.label,
+            evidence: decisionReady ? (() => {
+                const dToken = abScoring.cost.deltaTokenPct;
+                const dDur = abScoring.cost.deltaDurationPct;
+                const cap = abScoring.capability.score;
+                const coupling = cap == null ? 0 : cap >= policy.capabilityGoodThreshold ? policy.costCouplingBonus : cap < policy.capabilityRejectThreshold ? -policy.costCouplingPenalty : 0;
+                return (
+                    <>
+                        ΔToken {dToken == null ? '—' : `${dToken > 0 ? '+' : ''}${dToken}%`}
+                        <span style={{ color: '#A8A29E', margin: '0 8px' }}>·</span>
+                        耗时 {dDur == null ? '—' : `${dDur > 0 ? '+' : ''}${dDur}%`}
+                        {coupling !== 0 && (
+                            <>
+                                <span style={{ color: '#A8A29E', margin: '0 8px' }}>·</span>
+                                能力耦合 {coupling > 0 ? '+' : ''}{coupling}
+                            </>
+                        )}
+                    </>
+                );
+            })() : '—',
+        },
+        {
+            key: 'stability',
+            label: '稳定性',
+            subtitle: '该触发时触发了吗, 结果稳吗',
+            score: abScoring.stability.score,
+            tone: abScoring.stability.tone,
+            verdictLabel: abScoring.stability.label,
+            evidence: decisionReady ? (
+                <>
+                    触发率 {abScoring.stability.invokeRate == null ? '—' : `${abScoring.stability.invokeRate}%`}
+                    <span style={{ color: '#A8A29E', margin: '0 8px' }}>·</span>
+                    方差 {abScoring.stability.variance == null ? `— (R=${repeatRounds})` : abScoring.stability.variance}
+                </>
+            ) : '—',
+        },
+    ];
+
+    return (
+        <>
+            {/* ① 决策横条 ──────────────────────────────────────────── */}
+            <div style={{
+                border: `1px solid ${decisionTone === 'gray' ? '#E7E5E4' : decisionColor}`,
+                background: decisionBg,
+                borderRadius: 10,
+                padding: '14px 18px',
+                display: 'grid',
+                gridTemplateColumns: 'minmax(170px, auto) 1fr auto',
+                gap: 18,
+                alignItems: 'center',
+            }}>
+                {/* 左：决策名 + 综合分 */}
+                <div style={{ borderRight: '1px solid rgba(0,0,0,0.08)', paddingRight: 16 }}>
+                    <div style={{ fontSize: 10, color: '#888780', fontFamily: 'ui-monospace, monospace', fontWeight: 700, letterSpacing: 1.5 }}>DECISION</div>
+                    <div style={{ fontSize: 26, fontWeight: 800, color: decisionColor, lineHeight: 1.05, marginTop: 2 }}>
+                        {decisionTitle}
+                    </div>
+                    <div style={{ fontSize: 11, color: '#5F5E5A', marginTop: 4, fontFamily: 'ui-monospace, monospace', fontVariantNumeric: 'tabular-nums' }}>
+                        综合 <span style={{ fontWeight: 700, color: decisionColor }}>{decisionReady && abScoring.totalScore != null ? abScoring.totalScore : '—'}</span> / 100
+                    </div>
+                </div>
+
+                {/* 中：短板原因 + 下一步建议 + 样本量提示 */}
+                <div style={{ fontSize: 13, lineHeight: 1.65, color: '#374151' }}>
+                    {shortDim && evidenceText && (
+                        <div>
+                            <span style={{ color: '#5F5E5A' }}>短板在 </span>
+                            <span style={{ display: 'inline-block', padding: '1px 7px', borderRadius: 4, fontSize: 11, fontWeight: 700, color: toneColor(dimTone(shortDim)), background: toneBg(dimTone(shortDim)) }}>{dimLabel(shortDim)}</span>
+                            <span style={{ color: '#5F5E5A' }}> · </span>
+                            <span>{evidenceText}</span>
+                        </div>
+                    )}
+                    <div style={{ marginTop: shortDim && evidenceText ? 4 : 0, color: '#5F5E5A' }}>
+                        <span style={{ color: '#1F2937', fontWeight: 700 }}>下一步</span>
+                        <span style={{ color: '#A8A29E', margin: '0 6px' }}>·</span>
+                        <span>{nextStep}</span>
+                        {sampleHint && (
+                            <>
+                                <span style={{ color: '#A8A29E', margin: '0 6px' }}>;</span>
+                                <span style={{ color: '#BA7517' }}>{sampleHint}</span>
+                            </>
+                        )}
+                    </div>
+                </div>
+
+                {/* 右：动作按钮 */}
+                <div style={{ display: 'flex', gap: 8 }}>
+                    <button
+                        onClick={onViewTrace}
+                        style={{
+                            padding: '7px 14px', borderRadius: 6, border: '1px solid #D6D3D1',
+                            background: 'white', color: '#1F2937', fontSize: 12, fontWeight: 600,
+                            cursor: 'pointer', whiteSpace: 'nowrap',
+                        }}
+                    >{locale === 'zh' ? '查看 Trace' : 'View Trace'}</button>
+                    <button
+                        onClick={onRerun}
+                        disabled={rerunDisabled}
+                        style={{
+                            padding: '7px 14px', borderRadius: 6, border: 'none',
+                            background: rerunDisabled ? '#A8A29E' : '#1C1917', color: 'white',
+                            fontSize: 12, fontWeight: 700,
+                            cursor: rerunDisabled ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap',
+                            opacity: rerunDisabled && !rerunBusy ? 0.6 : 1,
+                        }}
+                    >{rerunBusy ? (locale === 'zh' ? '执行中' : 'Running') : (locale === 'zh' ? '复测' : 'Rerun')}</button>
+                </div>
+            </div>
+
+            {/* ② 维度表 ──────────────────────────────────────────── */}
+            <div style={{ border: '1px solid #E7E5E4', borderRadius: 10, overflow: 'hidden', background: 'white' }}>
+                {/* 表头 */}
+                <div style={{
+                    display: 'grid', gridTemplateColumns: 'minmax(220px, 1.6fr) 90px minmax(180px, 2fr) minmax(220px, 1.8fr)',
+                    gap: 16, padding: '8px 16px',
+                    background: '#FAFAF7', borderBottom: '1px solid #E7E5E4',
+                    fontSize: 10, color: '#888780', fontFamily: 'ui-monospace, monospace', fontWeight: 700, letterSpacing: 1,
+                }}>
+                    <div>维度</div>
+                    <div style={{ textAlign: 'right' }}>分数</div>
+                    <div style={{ position: 'relative' }}>
+                        0 <span style={{ position: 'absolute', left: '50%', transform: 'translateX(-50%)' }}>· 50 ·</span>
+                        <span style={{ position: 'absolute', left: '75%', transform: 'translateX(-50%)' }}>75</span>
+                        <span style={{ float: 'right' }}>100</span>
+                    </div>
+                    <div>关键证据</div>
+                </div>
+                {/* 行 */}
+                {dimensionRows.map(row => (
+                    <div key={row.key} style={{
+                        display: 'grid', gridTemplateColumns: 'minmax(220px, 1.6fr) 90px minmax(180px, 2fr) minmax(220px, 1.8fr)',
+                        gap: 16, padding: '12px 16px',
+                        borderBottom: '1px solid #F5F4EE', alignItems: 'center',
+                    }}>
+                        <div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <span style={{ fontSize: 14, fontWeight: 700, color: '#1F2937' }}>{row.label}</span>
+                                <VerdictPill tone={row.tone} label={row.verdictLabel} />
+                            </div>
+                            <div style={{ fontSize: 11, color: '#888780', marginTop: 2 }}>{row.subtitle}</div>
+                        </div>
+                        <Score value={row.score} tone={row.tone} />
+                        <Bar value={row.score} tone={row.tone} />
+                        <div style={{ fontSize: 12, color: '#374151', fontFamily: 'ui-monospace, monospace', fontVariantNumeric: 'tabular-nums', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {row.evidence}
+                        </div>
+                    </div>
+                ))}
+            </div>
+
+            {/* ③ 原始数据与计算公式（折叠） ──────────────────────── */}
+            <details style={{ border: '1px solid #E7E5E4', borderRadius: 10, overflow: 'hidden', background: 'white' }} open={!decisionReady ? false : abScoring.decision === 'reject'}>
+                <summary style={{
+                    cursor: 'pointer', padding: '10px 16px',
+                    display: 'flex', alignItems: 'center', gap: 8,
+                    background: '#FAFAF7', borderBottom: '1px solid #E7E5E4',
+                    fontSize: 12, fontWeight: 700, color: '#374151', userSelect: 'none', listStyle: 'none',
+                }}>
+                    <span style={{ color: '#A8A29E', fontFamily: 'ui-monospace, monospace', fontSize: 11 }}>▸</span>
+                    <span>原始数据与计算公式</span>
+                    <span style={{ flex: 1 }} />
+                    <span style={{ color: '#A8A29E', fontFamily: 'ui-monospace, monospace', fontSize: 11, fontWeight: 400 }}>
+                        min(capability, cost, stability)
+                    </span>
+                </summary>
+                <div style={{ padding: 16, display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12 }}>
+                    <RawSubCard
+                        label="能力" tag="capability" tone={abScoring.capability.tone}
+                        rows={[
+                            { k: '评测均分', a: abScoring.capability.avgEvalScoreA, b: abScoring.capability.avgEvalScoreB, aFmt: v => v == null ? '—' : String(v), bFmt: v => v == null ? '—' : String(v) },
+                            { k: '通过率', a: abScoring.capability.passRateA, b: abScoring.capability.passRateB, aFmt: v => v == null ? '—' : `${v}%`, bFmt: v => v == null ? '—' : `${v}%` },
+                        ]}
+                        delta={{ label: 'Δscore', value: abScoring.capability.deltaScore == null ? '—' : `${abScoring.capability.deltaScore > 0 ? '+' : ''}${abScoring.capability.deltaScore}` }}
+                        breakdown={abScoring.capability.breakdown}
+                        dataQualityIssue={abScoring.capability.dataQualityIssue}
+                        toneColor={toneColor} toneBg={toneBg}
+                    />
+                    <RawSubCard
+                        label="成本" tag="cost" tone={abScoring.cost.tone}
+                        rows={[
+                            { k: 'Token', a: abScoring.cost.avgTokensA, b: abScoring.cost.avgTokensB, aFmt: v => v == null ? '—' : v.toLocaleString(), bFmt: v => v == null ? '—' : v.toLocaleString() },
+                            { k: '耗时', a: abScoring.cost.avgDurationA, b: abScoring.cost.avgDurationB, aFmt: v => v == null ? '—' : `${v}s`, bFmt: v => v == null ? '—' : `${v}s` },
+                            { k: '步数', a: abScoring.cost.avgStepsA, b: abScoring.cost.avgStepsB, aFmt: v => v == null ? '—' : String(v), bFmt: v => v == null ? '—' : String(v) },
+                        ]}
+                        delta={{ label: 'ΔToken', value: abScoring.cost.deltaTokenPct == null ? '—' : `${abScoring.cost.deltaTokenPct > 0 ? '+' : ''}${abScoring.cost.deltaTokenPct}%` }}
+                        breakdown={abScoring.cost.breakdown}
+                        dataQualityIssue={abScoring.cost.dataQualityIssue}
+                        toneColor={toneColor} toneBg={toneBg}
+                    />
+                    <RawSubCard
+                        label="稳定性" tag="stability" tone={abScoring.stability.tone}
+                        rows={[
+                            { k: '触发率', a: null, b: abScoring.stability.invokeRate, aFmt: () => '—', bFmt: v => v == null ? '—' : `${v}%`, oneSide: true },
+                            { k: '方差', a: null, b: abScoring.stability.variance, aFmt: () => '—', bFmt: v => v == null ? `— (R=${repeatRounds})` : String(v), oneSide: true },
+                        ]}
+                        delta={null}
+                        breakdown={abScoring.stability.breakdown}
+                        dataQualityIssue={abScoring.stability.dataQualityIssue}
+                        toneColor={toneColor} toneBg={toneBg}
+                    />
+                    <RawSubCard
+                        label="综合 (短板原则)" tag="verdict" tone={decisionTone}
+                        rows={[]}
+                        delta={null}
+                        breakdown={abScoring.totalScoreBreakdown}
+                        dataQualityIssue={abScoring.hardGates.length > 0 ? `命中 hard gate：${abScoring.hardGates.map(g => g.label).join('、')}` : undefined}
+                        toneColor={toneColor} toneBg={toneBg}
+                    />
+                </div>
+            </details>
+
+            {/* 样本量 + 策略版本 footer——一行小字,便于历史回放与算法对账 */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 10, color: '#A8A29E', fontFamily: 'ui-monospace, monospace', paddingTop: 2 }}>
+                <span>SAMPLE N={sampleSize}{recommendedSampleSize ? ` / 推荐 ≥${recommendedSampleSize}` : ''} · 重复 {repeatRounds} 轮 · 置信度 {abScoring.confidence === 'high' ? '高' : abScoring.confidence === 'medium' ? '中' : '低'}</span>
+                <span>策略：{abScoring.policyVersion}</span>
+            </div>
+        </>
+    );
+}
+
+// 折叠面板里的 mini sub-card,统一展示一个维度的「原始 A/B 值 → 主指标 Δ → 公式代入」三件套。
+// rows 是 A vs B 的并排列表; delta 是该维度的主指标变化(能力 Δscore / 成本 ΔToken),
+// 没有就传 null; breakdown 直接复用算法侧出的 AbScoreBreakdown,formula + steps 写进
+// mono 代码块,让用户一眼看出"分数怎么从原始数据算出来的"。
+function RawSubCard({
+    label, tag, tone, rows, delta, breakdown, dataQualityIssue, toneColor, toneBg,
+}: {
+    label: string;
+    tag: string;
+    tone: AbTone;
+    rows: Array<{
+        k: string;
+        a: number | null;
+        b: number | null;
+        aFmt: (v: number | null) => string;
+        bFmt: (v: number | null) => string;
+        oneSide?: boolean;
+    }>;
+    delta: { label: string; value: string } | null;
+    breakdown: AbScoreBreakdown;
+    dataQualityIssue?: string;
+    toneColor: (tone: AbTone) => string;
+    toneBg: (tone: AbTone) => string;
+}) {
+    return (
+        <div style={{ border: '1px solid #E7E5E4', borderRadius: 8, background: '#FAFAF7', overflow: 'hidden' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', background: 'white', borderBottom: '1px solid #E7E5E4' }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: '#1F2937' }}>{label}</span>
+                <span style={{ fontSize: 10, color: toneColor(tone), background: toneBg(tone), padding: '1px 7px', borderRadius: 4, fontFamily: 'ui-monospace, monospace', fontWeight: 700, letterSpacing: 0.5 }}>{tag}</span>
+            </div>
+            <div style={{ padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {rows.map(row => (
+                    <div key={row.k} style={{ display: 'grid', gridTemplateColumns: '64px 1fr 1fr', gap: 8, alignItems: 'baseline', fontSize: 12 }}>
+                        <span style={{ color: '#5F5E5A' }}>{row.k}</span>
+                        <span style={{ fontFamily: 'ui-monospace, monospace', fontVariantNumeric: 'tabular-nums', color: '#374151', textAlign: 'right' }}>
+                            {row.oneSide ? '' : <><span style={{ color: '#A8A29E', marginRight: 6 }}>A</span>{row.aFmt(row.a)}</>}
+                        </span>
+                        <span style={{ fontFamily: 'ui-monospace, monospace', fontVariantNumeric: 'tabular-nums', color: '#374151', textAlign: 'right' }}>
+                            <span style={{ color: '#A8A29E', marginRight: 6 }}>B</span>{row.bFmt(row.b)}
+                        </span>
+                    </div>
+                ))}
+                {delta && (
+                    <div style={{ display: 'grid', gridTemplateColumns: '64px 1fr', gap: 8, alignItems: 'baseline', fontSize: 12, marginTop: 2, paddingTop: 6, borderTop: '1px dashed #E7E5E4' }}>
+                        <span style={{ color: '#5F5E5A' }}>{delta.label}</span>
+                        <span style={{ fontFamily: 'ui-monospace, monospace', fontVariantNumeric: 'tabular-nums', fontWeight: 700, color: toneColor(tone), textAlign: 'right' }}>{delta.value}</span>
+                    </div>
+                )}
+                {/* 公式代入式: 直接复用算法 breakdown.steps,把"分数怎么来的"摆在用户面前 */}
+                <pre style={{
+                    margin: '8px 0 0', padding: '8px 10px',
+                    background: 'white', border: '1px solid #E7E5E4', borderRadius: 4,
+                    fontFamily: 'ui-monospace, monospace', fontVariantNumeric: 'tabular-nums',
+                    fontSize: 10.5, lineHeight: 1.65, color: '#374151',
+                    whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                }}>{breakdown.steps.join('\n')}</pre>
+                {dataQualityIssue && (
+                    <div style={{ fontSize: 11, color: '#BA7517', marginTop: 2 }}>{dataQualityIssue}</div>
+                )}
+                <div style={{ fontSize: 10, color: '#A8A29E', fontFamily: 'ui-monospace, monospace', textAlign: 'right' }}>{breakdown.reference}</div>
+            </div>
+        </div>
     );
 }
 
@@ -3107,125 +3570,24 @@ export function GrayscaleEvaluation({
                         </div>
                     </div>
 
-                    <div className="v2-stage-card-body" style={{ padding: '24px 28px', display: 'flex', flexDirection: 'column', gap: 20 }}>
-                        <div style={{ border: '2px solid #BA7517', background: 'linear-gradient(135deg, #FFF7D6 0%, #FFFFFF 58%)', borderRadius: 12, padding: 24 }}>
-                            <div style={{ display: 'flex', gap: 18, alignItems: 'center', marginBottom: 18 }}>
-                                <div style={{ width: 56, height: 56, borderRadius: '50%', background: '#BA7517', boxShadow: '0 0 0 8px rgba(186,117,23,0.14)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: 24 }}>●</div>
-                                <div>
-                                    <div style={{ fontSize: 11, color: '#888780', fontFamily: 'ui-monospace, monospace', fontWeight: 700, letterSpacing: 1 }}>综合结论 · DECISION</div>
-                                    <div style={{ fontSize: 24, fontWeight: 800, color: '#111827', marginTop: 4 }}>
-                                        {decisionTitle}
-                                        <span style={{ fontSize: 14, color: '#5F5E5A', fontWeight: 600, marginLeft: 12 }}>{decisionSubtitle}</span>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12 }}>
-                                {[
-                                    { icon: '📊', name: '能力 · CAPABILITY', value: decisionReady ? `${fmtPct(abScoring.capability.deltaPp, 'pp')} · ${fmtScore(abScoring.capability.score)}分` : '—', color: toneColor(abScoring.capability.tone), bg: toneBg(abScoring.capability.tone), dot: toneColor(abScoring.capability.tone) },
-                                    { icon: '💰', name: '成本 · COST', value: decisionReady ? `${fmtPct(abScoring.cost.deltaTokenPct)} Token · ${fmtScore(abScoring.cost.score)}分` : '—', color: toneColor(abScoring.cost.tone), bg: toneBg(abScoring.cost.tone), dot: toneColor(abScoring.cost.tone) },
-                                    { icon: '🎯', name: '稳定性 · STABILITY', value: decisionReady ? `触发率 ${fmtRate(abScoring.stability.invokeRate)} · ${fmtScore(abScoring.stability.score)}分` : '—', color: toneColor(abScoring.stability.tone), bg: toneBg(abScoring.stability.tone), dot: toneColor(abScoring.stability.tone) },
-                                ].map(item => (
-                                    <div key={item.name} style={{ background: 'white', border: '1px solid rgba(0,0,0,0.12)', borderRadius: 8, padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
-                                        <div style={{ width: 38, height: 38, borderRadius: 8, background: item.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>{item.icon}</div>
-                                        <div style={{ flex: 1, minWidth: 0 }}>
-                                            <div style={{ fontSize: 10, color: '#888780', fontFamily: 'ui-monospace, monospace', fontWeight: 700, letterSpacing: 1 }}>{item.name}</div>
-                                            <div style={{ fontSize: 16, fontWeight: 800, color: item.color, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.value}</div>
-                                        </div>
-                                        <div style={{ width: 9, height: 9, borderRadius: '50%', background: item.dot }} />
-                                    </div>
-                                ))}
-                            </div>
-
-                            <div style={{ display: 'flex', gap: 12, alignItems: 'center', background: 'white', border: '1px solid rgba(0,0,0,0.1)', padding: '12px 16px', borderRadius: 8, marginTop: 16 }}>
-                                <span style={{ background: '#1C1917', color: 'white', padding: '6px 10px', borderRadius: 4, fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap' }}>下一步建议</span>
-                                <span style={{ fontSize: 14, color: '#2C2C2A', lineHeight: 1.55 }}>{decisionAdvice}</span>
-                            </div>
-                        </div>
-
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                            <div style={{ border: '1px solid rgba(0,0,0,0.1)', background: '#FAFAF7', borderRadius: 12, padding: 20 }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                                        <span style={{ width: 34, height: 34, borderRadius: 8, background: '#E1F5EE', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>📊</span>
-                                        <div style={{ fontSize: 16, fontWeight: 800 }}>能力 <span style={{ color: '#A8A29E', fontFamily: 'ui-monospace, monospace', fontSize: 12 }}>这个 skill 让 agent 多做成了多少事?</span></div>
-                                    </div>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, fontWeight: 800 }}>{decisionReady ? fmtPct(abScoring.capability.deltaPp, 'pp') : '—'} <span style={{ background: toneBg(abScoring.capability.tone), color: toneColor(abScoring.capability.tone), borderRadius: 6, padding: '4px 10px', fontSize: 12 }}>● {abScoring.capability.label}</span></div>
-                                </div>
-                                {[
-                                    { label: '通过率', a: `${abScoring.capability.passRateA ?? '—'}%`, b: `${abScoring.capability.passRateB ?? '—'}%`, aw: abScoring.capability.passRateA ?? 0, bw: abScoring.capability.passRateB ?? 0, delta: decisionReady ? fmtPct(abScoring.capability.deltaPp, 'pp') : '—' },
-                                    { label: '能力分', a: '—', b: fmtScore(abScoring.capability.score), aw: 0, bw: abScoring.capability.score ?? 0, delta: abScoring.capability.label },
-                                ].map(row => (
-                                    <div key={row.label} style={{ display: 'grid', gridTemplateColumns: '150px 1fr 90px 80px', gap: 14, alignItems: 'center', marginTop: 14 }}>
-                                        <div style={{ fontSize: 14, fontWeight: 700, color: '#5F5E5A' }}>{row.label}</div>
-                                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}><span style={{ width: 14, color: '#EA580C', fontWeight: 800 }}>A</span><div style={{ flex: 1, height: 6, background: '#E7E5E4', borderRadius: 999 }}><div style={{ width: `${Math.max(2, row.aw)}%`, height: '100%', background: '#EA580C', borderRadius: 999 }} /></div></div>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}><span style={{ width: 14, color: '#16A34A', fontWeight: 800 }}>B</span><div style={{ flex: 1, height: 6, background: '#E7E5E4', borderRadius: 999 }}><div style={{ width: `${Math.max(2, row.bw)}%`, height: '100%', background: '#16A34A', borderRadius: 999 }} /></div></div>
-                                        </div>
-                                        <div style={{ fontSize: 13, color: '#5F5E5A', lineHeight: 1.9 }}>{row.a}<br />{row.b}</div>
-                                        <div style={{ color: toneColor(abScoring.capability.tone), fontWeight: 800 }}>{row.delta}</div>
-                                    </div>
-                                ))}
-                                {abScoring.capability.dataQualityIssue && (
-                                    <div style={{ color: '#BA7517', fontSize: 12, marginTop: 12 }}>{abScoring.capability.dataQualityIssue}</div>
-                                )}
-                            </div>
-
-                            <div style={{ border: '1px solid rgba(0,0,0,0.1)', background: '#FAFAF7', borderRadius: 12, padding: 20 }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                                        <span style={{ width: 34, height: 34, borderRadius: 8, background: '#FAEEDA', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>💰</span>
-                                        <div style={{ fontSize: 16, fontWeight: 800 }}>成本 <span style={{ color: '#A8A29E', fontFamily: 'ui-monospace, monospace', fontSize: 12 }}>多花了多少 token / 时间?</span></div>
-                                    </div>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, fontWeight: 800 }}>{fmtPct(abScoring.cost.deltaTokenPct)} Token · {fmtPct(abScoring.cost.deltaDurationPct)} 耗时 <span style={{ background: toneBg(abScoring.cost.tone), color: toneColor(abScoring.cost.tone), borderRadius: 6, padding: '4px 10px', fontSize: 12 }}>● {abScoring.cost.label}</span></div>
-                                </div>
-                                {[
-                                    { label: 'Token 消耗', a: abScoring.cost.avgTokensA == null ? '—' : String(abScoring.cost.avgTokensA), b: abScoring.cost.avgTokensB == null ? '—' : String(abScoring.cost.avgTokensB), aw: abScoring.cost.avgTokensA ?? 0, bw: abScoring.cost.avgTokensB ?? 0, delta: fmtPct(abScoring.cost.deltaTokenPct), warn: abScoring.cost.tone !== 'green' },
-                                    { label: '响应耗时', a: abScoring.cost.avgDurationA == null ? '—' : `${abScoring.cost.avgDurationA}s`, b: abScoring.cost.avgDurationB == null ? '—' : `${abScoring.cost.avgDurationB}s`, aw: abScoring.cost.avgDurationA ?? 0, bw: abScoring.cost.avgDurationB ?? 0, delta: fmtPct(abScoring.cost.deltaDurationPct), warn: false },
-                                    { label: '执行步数', a: abScoring.cost.avgStepsA == null ? '—' : String(abScoring.cost.avgStepsA), b: abScoring.cost.avgStepsB == null ? '—' : String(abScoring.cost.avgStepsB), aw: abScoring.cost.avgStepsA ?? 0, bw: abScoring.cost.avgStepsB ?? 0, delta: fmtPct(abScoring.cost.deltaStepsPct), warn: false },
-                                ].map(row => {
-                                    const max = Math.max(Number(row.aw) || 1, Number(row.bw) || 1);
-                                    return (
-                                        <div key={row.label} style={{ display: 'grid', gridTemplateColumns: '150px 1fr 90px 80px', gap: 14, alignItems: 'center', marginTop: 14 }}>
-                                            <div style={{ fontSize: 14, fontWeight: 700, color: '#5F5E5A' }}>{row.label}</div>
-                                            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                                                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}><span style={{ width: 14, color: '#EA580C', fontWeight: 800 }}>A</span><div style={{ flex: 1, height: 6, background: '#E7E5E4', borderRadius: 999 }}><div style={{ width: `${Math.max(4, Math.round((Number(row.aw) || 0) / max * 100))}%`, height: '100%', background: '#EA580C', borderRadius: 999 }} /></div></div>
-                                                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}><span style={{ width: 14, color: '#16A34A', fontWeight: 800 }}>B</span><div style={{ flex: 1, height: 6, background: '#E7E5E4', borderRadius: 999 }}><div style={{ width: `${Math.max(4, Math.round((Number(row.bw) || 0) / max * 100))}%`, height: '100%', background: row.warn ? '#DC2626' : '#16A34A', borderRadius: 999 }} /></div></div>
-                                            </div>
-                                            <div style={{ fontSize: 13, color: '#5F5E5A', lineHeight: 1.9 }}>{row.a}<br />{row.b}</div>
-                                            <div style={{ color: row.warn ? toneColor(abScoring.cost.tone) : '#BA7517', fontWeight: 800 }}>{row.delta}</div>
-                                        </div>
-                                    );
-                                })}
-                                {abScoring.cost.dataQualityIssue && (
-                                    <div style={{ color: '#BA7517', fontSize: 12, marginTop: 12 }}>{abScoring.cost.dataQualityIssue}</div>
-                                )}
-                            </div>
-
-                            <div style={{ border: '1px solid rgba(0,0,0,0.1)', background: '#FAFAF7', borderRadius: 12, padding: 20 }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                                        <span style={{ width: 34, height: 34, borderRadius: 8, background: '#E1F5EE', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>🎯</span>
-                                        <div style={{ fontSize: 16, fontWeight: 800 }}>稳定性 <span style={{ color: '#A8A29E', fontFamily: 'ui-monospace, monospace', fontSize: 12 }}>该触发的时候触发了吗?结果稳吗?</span></div>
-                                    </div>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, fontWeight: 800 }}>触发率 {fmtRate(abScoring.stability.invokeRate)} · 方差 {abScoring.stability.variance ?? '—'} <span style={{ background: toneBg(abScoring.stability.tone), color: toneColor(abScoring.stability.tone), borderRadius: 6, padding: '4px 10px', fontSize: 12 }}>● {abScoring.stability.label}</span></div>
-                                </div>
-                                {[
-                                    { label: 'Skill 触发率', value: fmtRate(abScoring.stability.invokeRate), width: abScoring.stability.invokeRate ?? 0 },
-                                    { label: '多轮一致性', value: abScoring.stability.variance == null ? '方差不可计算' : `方差 ${abScoring.stability.variance}`, width: abScoring.stability.varianceScore ?? 0 },
-                                ].map(row => (
-                                    <div key={row.label} style={{ display: 'grid', gridTemplateColumns: '150px 1fr 110px 20px', gap: 14, alignItems: 'center', marginTop: 14 }}>
-                                        <div style={{ fontSize: 14, fontWeight: 700, color: '#5F5E5A' }}>{row.label}</div>
-                                        <div style={{ height: 7, background: '#E7E5E4', borderRadius: 999 }}><div style={{ width: `${Math.max(3, row.width)}%`, height: '100%', background: '#16A34A', borderRadius: 999 }} /></div>
-                                        <div style={{ color: toneColor(abScoring.stability.tone), fontWeight: 800, textAlign: 'right' }}>{row.value}</div>
-                                        <div style={{ width: 12, height: 12, borderRadius: '50%', background: toneColor(abScoring.stability.tone) }} />
-                                    </div>
-                                ))}
-                                {abScoring.stability.dataQualityIssue && (
-                                    <div style={{ color: '#BA7517', fontSize: 12, marginTop: 12 }}>{abScoring.stability.dataQualityIssue}</div>
-                                )}
-                            </div>
-                        </div>
+                    <div className="v2-stage-card-body" style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 16 }}>
+                        <DecisionVerdictCard
+                            decisionReady={decisionReady}
+                            abScoring={abScoring}
+                            sampleSize={abScoring.sampleSize}
+                            repeatRounds={abScoring.repeatRounds}
+                            recommendedSampleSize={DEFAULT_AB_SCORING_POLICY.recommendedSampleSize}
+                            policy={DEFAULT_AB_SCORING_POLICY}
+                            decisionTitle={decisionTitle}
+                            decisionAdvice={decisionAdvice}
+                            onViewTrace={() => setRecordModal({ title: locale === 'zh' ? 'B 实验组执行记录' : 'B Experiment Records', side: 'b' })}
+                            onRerun={runComparisonForCheckedCases}
+                            rerunDisabled={runButtonDisabled}
+                            rerunBusy={runButtonBusy}
+                            locale={locale}
+                            toneColor={toneColor}
+                            toneBg={toneBg}
+                        />
                     </div>
                 </div>
 
