@@ -32,6 +32,18 @@ export interface ToolCall {
     trace_split_parallel_task?: boolean;
 }
 
+/** Structured part of an opencode message — preserved verbatim by the uploader
+ *  so downstream can distinguish text / reasoning / tool / patch / step-* / compaction. */
+export interface InteractionPart {
+    type: string;
+    id?: string;
+    text?: string;
+    tool?: string;
+    callID?: string;
+    state?: { status?: string; input?: unknown; output?: unknown; [k: string]: unknown };
+    [k: string]: unknown;
+}
+
 export interface RawInteraction {
     role: InteractionRole;
     content?: string;
@@ -59,6 +71,14 @@ export interface RawInteraction {
     finish_reason?: string;
     stop_reason?: string;
     latency?: number;
+    // OpenCode-specific message metadata (added by uploader on top of the wire payload):
+    //   mode === 'compaction' + summary === true  →  compaction-summary message
+    //   parts: [{ type: 'compaction' }]            →  compaction-trigger user message
+    mode?: string;
+    summary?: boolean;
+    finish?: string;
+    variant?: string | null;
+    parts?: InteractionPart[];
 }
 
 export type CallKind = 'llm' | 'tool' | 'skill' | 'task' | 'user';
@@ -130,6 +150,10 @@ export interface AgentNode {
     parallelCallCount?: number;
     /** System prompts attached to this agent (collected from role="system" interactions) */
     systemPrompts?: SystemPromptEntry[];
+    /** Compaction boundaries inside this slice, chronological. LLM calls whose
+     *  interactionIndex is greater than `compactions[k].interactionIndex` saw
+     *  the summary of compaction k (and not the original prior context). */
+    compactions?: CompactionBoundary[];
 }
 
 export interface SystemPromptEntry {
@@ -138,6 +162,31 @@ export interface SystemPromptEntry {
     length?: number;
     modelID?: string;
     providerID?: string;
+}
+
+/** A point in the interaction stream where opencode replaced prior context with
+ *  a synthetic summary message. LLM calls *after* this index in the same node
+ *  saw the summary instead of the original prior messages.
+ *
+ *  Detection signal: assistant/subagent message with `mode === 'compaction'`
+ *  AND `summary === true`. The immediately preceding user/opencode message
+ *  that carries a `parts[].type === 'compaction'` marker is the trigger; it
+ *  carries no semantic content and is excluded from the node entirely. */
+export interface CompactionBoundary {
+    /** Index of the compaction-summary message in the original interactions array. */
+    interactionIndex: number;
+    /** Concatenated text of all text-parts on the summary message — what the model now sees. */
+    summaryText: string;
+    /** Concatenated reasoning-part text — the planning the compaction model did. */
+    reasoningText?: string;
+    /** Model used to produce the compaction (often different from the agent's main model). */
+    modelID?: string;
+    providerID?: string;
+    /** When the compaction happened. */
+    startedAt?: number;
+    completedAt?: number;
+    /** Token cost of the compaction itself. */
+    usage?: InteractionUsage;
 }
 
 /**
@@ -301,17 +350,21 @@ export function buildAgentCallTree(interactions: RawInteraction[]): AgentNode | 
         // Defensive: still no host → fall back to root
         if (!host) host = root;
 
-        // Record this interaction on host
-        host.interactionIndices.push(idx);
-        host.stats.interactions++;
-        if (host.agentName === 'Agent' && agentName) host.agentName = agentName;
+        // Compaction trigger: an opencode/user/subagent message whose entire
+        // payload is just a `parts: [{type:'compaction'}]` marker. It has no
+        // semantic content for any LLM call — drop it from the node entirely
+        // so the timeline doesn't show an empty turn.
+        if (isCompactionTrigger(it)) {
+            continue;
+        }
 
+        // Time + token aggregation always runs (compaction has real cost the
+        // user paid for, and we want the node's startedAt/endedAt to span it).
         const startedAt = interactionStartedAt(it);
         const completedAt = interactionCompletedAt(it) ?? startedAt;
         if (startedAt != null && (!host.startedAt || startedAt < host.startedAt)) host.startedAt = startedAt;
         if (completedAt != null && (!host.endedAt || completedAt > host.endedAt)) host.endedAt = completedAt;
 
-        // Token aggregation
         const u = it.usage;
         if (u) {
             host.stats.inputTokens += u.input || 0;
@@ -321,6 +374,33 @@ export function buildAgentCallTree(interactions: RawInteraction[]): AgentNode | 
             host.stats.reasoningTokens += u.reasoning || 0;
             host.stats.totalTokens += u.total || 0;
         }
+
+        // Compaction summary: attach as boundary metadata, then bail before
+        // we add it to interactionIndices / events / stats.interactions.
+        // Compaction is a system action, not an agent step — we don't want it
+        // showing up in the timeline or skewing per-node interaction counts.
+        // The Input (Prompt) panel reads `node.compactions` directly to fold
+        // prior context behind the summary.
+        if (isCompactionSummary(it)) {
+            const boundary: CompactionBoundary = {
+                interactionIndex: idx,
+                summaryText: extractPartsText(it.parts, 'text'),
+                reasoningText: extractPartsText(it.parts, 'reasoning') || undefined,
+                modelID: it.modelID,
+                providerID: it.providerID,
+                startedAt,
+                completedAt,
+                usage: it.usage,
+            };
+            if (!host.compactions) host.compactions = [];
+            host.compactions.push(boundary);
+            continue;
+        }
+
+        // Record this interaction on host (regular path)
+        host.interactionIndices.push(idx);
+        host.stats.interactions++;
+        if (host.agentName === 'Agent' && agentName) host.agentName = agentName;
 
         // Convert this interaction into events
         const events = interactionToEvents(it, idx);
@@ -560,6 +640,39 @@ function dedupeToolCalls(calls: ToolCall[]): ToolCall[] {
         }
     }
     return out;
+}
+
+/** True when this interaction is the user-side "trigger" that asks opencode to
+ *  start a compaction turn. Shape: role in {user,opencode,subagent}, no text
+ *  content, parts contains exactly one entry whose type is 'compaction'. */
+function isCompactionTrigger(it: RawInteraction): boolean {
+    if (it.role !== 'user' && it.role !== 'opencode' && it.role !== 'subagent') return false;
+    if ((it.content || '').trim()) return false;
+    const parts = it.parts;
+    if (!Array.isArray(parts) || parts.length === 0) return false;
+    // All parts must be compaction markers (typically just one, but be lenient).
+    return parts.every((p) => (p?.type || '').toLowerCase() === 'compaction');
+}
+
+/** True when this interaction is the assistant/subagent-side compaction result
+ *  message — the synthetic message that replaces prior context for subsequent
+ *  LLM calls in the same session. Signal: `mode === 'compaction'` AND
+ *  `summary === true`. Either alone is enough in opencode's current shape, but
+ *  we require both to be conservative. */
+function isCompactionSummary(it: RawInteraction): boolean {
+    return it.mode === 'compaction' && it.summary === true;
+}
+
+/** Concatenate the text of all parts of a given type, in order. */
+function extractPartsText(parts: InteractionPart[] | undefined, partType: string): string {
+    if (!Array.isArray(parts) || parts.length === 0) return '';
+    const buf: string[] = [];
+    for (const p of parts) {
+        if ((p?.type || '').toLowerCase() !== partType) continue;
+        const t = typeof p?.text === 'string' ? p.text : '';
+        if (t) buf.push(t);
+    }
+    return buf.join('');
 }
 
 export function inferSubagentType(it: RawInteraction): string | null {

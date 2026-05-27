@@ -8,6 +8,7 @@ import {
   normalizeDatasetKind,
   normalizeTags,
   normalizeCases,
+  prepareDatasetCasesForPersistence,
   validateCasesForKind,
   type AgentDatasetRecord,
 } from '@/server/agent_datasets_storage';
@@ -53,14 +54,18 @@ export async function POST(request: Request) {
     }
 
     const datasetKind = normalizeDatasetKind(body.datasetKind);
-    const cases = normalizeCases(body.cases);
-    const validationErrors = validateCasesForKind(cases, datasetKind);
+    const normalizedCases = normalizeCases(body.cases);
+    const validationErrors = validateCasesForKind(normalizedCases, datasetKind);
     if (validationErrors.length > 0) {
       return NextResponse.json(
         { error: validationErrors[0].message, details: validationErrors },
         { status: 400 },
       );
     }
+    const { cases, warnings } = await prepareDatasetCasesForPersistence({
+      nextCases: normalizedCases,
+      user,
+    });
 
     const now = new Date().toISOString();
     const dataset: AgentDatasetRecord = {
@@ -79,7 +84,7 @@ export async function POST(request: Request) {
 
     await createAgentDatasetRecord(dataset);
 
-    return NextResponse.json({ success: true, dataset });
+    return NextResponse.json({ success: true, dataset, warnings });
   } catch (error) {
     console.error('agent-datasets POST error:', error);
     return NextResponse.json({ error: 'failed to create dataset' }, { status: 500 });
@@ -107,12 +112,12 @@ export async function PATCH(request: Request) {
 
     const nextDatasetKind =
       body.datasetKind !== undefined ? normalizeDatasetKind(body.datasetKind) : current.datasetKind;
-    const nextCases = body.cases !== undefined ? normalizeCases(body.cases) : current.cases;
+    const inputCases = body.cases !== undefined ? normalizeCases(body.cases) : current.cases;
 
     // datasetKind 或 cases 任一变化时都要重新校验：
     // 比如把已有 ideal_output 数据集改成 trajectory，原 case 可能没有 trajectory 字段。
     if (body.cases !== undefined || body.datasetKind !== undefined) {
-      const validationErrors = validateCasesForKind(nextCases, nextDatasetKind);
+      const validationErrors = validateCasesForKind(inputCases, nextDatasetKind);
       if (validationErrors.length > 0) {
         return NextResponse.json(
           { error: validationErrors[0].message, details: validationErrors },
@@ -121,6 +126,15 @@ export async function PATCH(request: Request) {
       }
     }
 
+    const preparedCasesResult =
+      body.cases !== undefined
+        ? await prepareDatasetCasesForPersistence({
+            nextCases: inputCases,
+            previousCases: current.cases,
+            user,
+          })
+        : { cases: current.cases, warnings: [] };
+
     const updated: AgentDatasetRecord = {
       ...current,
       name: nextName,
@@ -128,7 +142,7 @@ export async function PATCH(request: Request) {
       targetAgent: body.targetAgent !== undefined ? String(body.targetAgent || '').trim() : current.targetAgent,
       targetSkill: body.targetSkill !== undefined ? String(body.targetSkill || '').trim() : current.targetSkill,
       tags: body.tags !== undefined ? normalizeTags(body.tags) : current.tags,
-      cases: nextCases,
+      cases: preparedCasesResult.cases,
       datasetKind: nextDatasetKind,
       updatedAt: new Date().toISOString(),
     };
@@ -137,7 +151,7 @@ export async function PATCH(request: Request) {
     if (!ok) {
       return NextResponse.json({ error: 'dataset not found' }, { status: 404 });
     }
-    return NextResponse.json({ success: true, dataset: updated });
+    return NextResponse.json({ success: true, dataset: updated, warnings: preparedCasesResult.warnings });
   } catch (error) {
     console.error('agent-datasets PATCH error:', error);
     return NextResponse.json({ error: 'failed to update dataset' }, { status: 500 });

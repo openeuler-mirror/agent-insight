@@ -3,7 +3,8 @@ import {
     type SendPromptPayload,
     type ChatHandlers,
 } from '@/lib/engine/skill-generation/opencode-agent-cli/opencode-client';
-import { ensureOpencodeServer } from '@/lib/engine/skill-generation/opencode-agent-cli/opencode-manager';
+import { runWithEphemeralOpencodeServer } from '@/lib/engine/skill-generation/opencode-agent-cli/opencode-manager';
+import { withBackgroundOpencodeSlot } from '@/lib/engine/general-agent/concurrency-limiter';
 import { buildEvaluatorPermissions } from '@/lib/engine/general-agent/workspace';
 import { getActiveConfig, type ModelConfig } from '@/lib/storage/server-config';
 import {
@@ -11,17 +12,19 @@ import {
     loadServerModelForUser,
     normalizeProviderID,
 } from '@/lib/engine/general-agent/server-model-config';
-import { generateRootCauseExtractionPrompt } from '@/prompts/config-extraction-prompt';
-import { ChatOpenAI } from '@langchain/openai';
-import { HumanMessage } from '@langchain/core/messages';
 import { tagOpencodeSession } from '@/lib/internal-agent-tag';
 import { findSystemAgentDefinition, getSystemAgentId } from '@/lib/system-agents';
+import { type RootCauseItem } from '@/lib/dataset-case-root-causes';
+import { recordEvaluatorExecution } from './evaluator-execution-recorder';
+import { extractRootCausesFromExpected } from './root-cause-extractor';
 import { parseLooseJson } from './task-completion-json';
 
 export interface TaskCompletionEvalInput {
     caseInput: string;
     expectedOutput: string;
     actualOutput: string;
+    precomputedRootCauses?: RootCauseItem[];
+    precomputedRootCauseSource?: 'dataset-cache' | 'none';
 }
 
 export interface TaskCompletionEvalOutput {
@@ -31,23 +34,18 @@ export interface TaskCompletionEvalOutput {
     rawAnalysis?: Record<string, unknown>;
 }
 
-interface RootCauseItem {
-    content: string;
-    weight: number;
-}
-
 const TASK_COMPLETION_EVALUATOR_NAME = 'task-completion-evaluator';
-const KEY_POINTS_CHECKER_NAME = 'key-points-checker';
 const OPENCODE_FALLBACK_AGENT_NAME = 'build';
 
 const COORDINATOR_SYSTEM_PROMPT = `你是「Agent 任务完成度」评估器。你会收到用户输入、预期结果、实际输出，以及从标准答案中提取的关键观点。
 
 【必须遵循的工作流程】
-1. 不要直接给最终结论；先把关键观点原样转交给子代理 key-points-checker，检查每个关键观点是否被实际输出覆盖。
-2. 综合预期结果、实际输出、关键观点覆盖情况，判断任务完成度。
-3. 原因 reason 只写总体判断，不要把每个关键观点逐条塞进 reason。
-4. 把关键观点覆盖情况放进独立字段 key_point_findings，供前端单独展示。
-5. 只输出严格 JSON，不要输出 Markdown 或额外解释：
+1. 你必须自己逐条检查每个关键观点是否被实际输出覆盖，不要跳过任何一条。
+2. 禁止派发、调用或生成任何 subagent / task；本次评测只能由你这个主评估器独立完成。
+3. 综合预期结果、实际输出、关键观点覆盖情况，判断任务完成度。
+4. 原因 reason 只写总体判断，不要把每个关键观点逐条塞进 reason。
+5. 把关键观点覆盖情况放进独立字段 key_point_findings，供前端单独展示。
+6. 只输出严格 JSON，不要输出 Markdown 或额外解释：
 
 {
   "score": 0.86,
@@ -72,10 +70,7 @@ const COORDINATOR_SYSTEM_PROMPT = `你是「Agent 任务完成度」评估器。
       "improvement_suggestion": "在 SKILL.md 哪段加什么约束（仅 is_skill_attributable=true 时填）"
     }
   ],
-  "key_point_summary": "中文总结关键观点整体覆盖情况",
-  "raw_subagent_outputs": {
-    "key_points": {}
-  }
+  "key_point_summary": "中文总结关键观点整体覆盖情况"
 }
 
 【评分标准】
@@ -101,28 +96,6 @@ key_point_findings 只覆盖"应有但缺失"的维度。还有 4 类 result 问
 
 每条 result_issue 也要标 is_skill_attributable + 给出 improvement_suggestion；is_skill_attributable=false 的（纯模型能力问题）下游不进 skill 优化点。
 没有这类问题就给空数组。
-`;
-
-const KEY_POINTS_CHECKER_PROMPT = `你是关键观点覆盖检查子代理。请对照“关键观点列表”和“实际输出”，判断每个关键观点是否被覆盖。
-
-只输出严格 JSON：
-{
-  "covered_points": [
-    {
-      "content": "...",
-      "covered": true,
-      "severity": "low|medium|high",
-      "explanation": "...",
-      "is_skill_attributable": false,
-      "improvement_suggestion": "仅当 covered=false 且归因到 SKILL 时填"
-    }
-  ],
-  "summary": "中文总结"
-}
-
-字段语义：
-- is_skill_attributable：未覆盖的关键观点是否由 SKILL 写得不清楚导致。覆盖了的项（covered=true）可省略此字段。
-- improvement_suggestion：仅当 covered=false && is_skill_attributable=true 时填，写"在 SKILL.md 哪段加什么"，到小节级。
 `;
 
 function clampTaskScore(value: unknown): number {
@@ -151,47 +124,34 @@ function isTaskCompletionPayload(parsed: Record<string, unknown>): boolean {
     if (typeof parsed.score !== 'undefined') return true;
     if (typeof parsed.is_correct !== 'undefined') return true;
     if (Array.isArray(parsed.key_point_findings)) return true;
-    if (parsed.raw_subagent_outputs && typeof parsed.raw_subagent_outputs === 'object') return true;
+    if (Array.isArray(parsed.result_issues)) return true;
     return false;
 }
 
-async function makeDirectModel(user?: string | null) {
-    const config = await getActiveConfig(user);
-    if (!config) return null;
-    return new ChatOpenAI({
-        apiKey: config.apiKey || 'no-api-key',
-        model: config.model || 'deepseek-chat',
-        configuration: {
-            baseURL: config.baseUrl || 'https://api.deepseek.com',
-        },
-        temperature: 0.1,
-    });
-}
-
-async function extractRootCausesFromExpected(
-    caseInput: string,
-    expectedOutput: string,
+async function resolveRootCauses(
+    input: TaskCompletionEvalInput,
     user?: string | null,
-): Promise<RootCauseItem[]> {
-    if (!String(expectedOutput || '').trim()) return [];
-    const model = await makeDirectModel(user);
-    if (!model) return [];
-    const response = await model.invoke([
-        new HumanMessage(generateRootCauseExtractionPrompt(caseInput || 'Task completion', expectedOutput)),
-    ]);
-    const content = typeof response.content === 'string'
-        ? response.content
-        : JSON.stringify(response.content);
-    const parsed = parseLooseJson(content);
-    const rawItems = Array.isArray(parsed?.root_causes) ? parsed.root_causes : [];
-    return rawItems
-        .map(item => item && typeof item === 'object' ? item as Record<string, unknown> : null)
-        .filter((item): item is Record<string, unknown> => Boolean(item))
-        .map(item => ({
-            content: String(item.content || '').trim(),
-            weight: typeof item.weight === 'number' ? item.weight : 1,
-        }))
-        .filter(item => item.content);
+): Promise<{ rootCauses: RootCauseItem[]; source: 'dataset-cache' | 'live-extract' | 'none' }> {
+    if (input.precomputedRootCauseSource === 'none') {
+        return { rootCauses: [], source: 'none' };
+    }
+    if (input.precomputedRootCauseSource === 'dataset-cache') {
+        return {
+            rootCauses: Array.isArray(input.precomputedRootCauses) ? input.precomputedRootCauses : [],
+            source: 'dataset-cache',
+        };
+    }
+    if (!String(input.expectedOutput || '').trim()) {
+        return { rootCauses: [], source: 'none' };
+    }
+    try {
+        return {
+            rootCauses: await extractRootCausesFromExpected(input.caseInput, input.expectedOutput, user),
+            source: 'live-extract',
+        };
+    } catch {
+        return { rootCauses: [], source: 'none' };
+    }
 }
 
 function buildUserMessage(input: TaskCompletionEvalInput, rootCauses: RootCauseItem[]): string {
@@ -210,7 +170,7 @@ function buildUserMessage(input: TaskCompletionEvalInput, rootCauses: RootCauseI
         '',
         `## 关键观点\n${keyPointsText}`,
         '',
-        '请先让 key-points-checker 检查关键观点覆盖情况，再综合判断任务完成度。',
+        '请你自行逐条检查关键观点覆盖情况，并在不派发任何子代理的前提下完成整个任务完成度评测。',
     ].join('\n');
 }
 
@@ -228,8 +188,6 @@ function normalizeOutput(parsed: Record<string, unknown>): TaskCompletionEvalOut
             ...parsed,
             key_point_findings: Array.isArray(parsed.key_point_findings)
                 ? parsed.key_point_findings
-                : parsed.raw_subagent_outputs && typeof parsed.raw_subagent_outputs === 'object' && Array.isArray((parsed.raw_subagent_outputs as Record<string, unknown>).key_point_findings)
-                ? (parsed.raw_subagent_outputs as Record<string, unknown>).key_point_findings
                 : [],
         },
     };
@@ -238,14 +196,21 @@ function normalizeOutput(parsed: Record<string, unknown>): TaskCompletionEvalOut
 export async function evaluateTaskCompletionViaOpencode(
     input: TaskCompletionEvalInput,
     user?: string | null,
+    skillName?: string | null,    // 透传给 limiter,让"后台分析任务"按 skill 严格过滤
+    skillVersion?: number | null, // skill 版本号,展示用
 ): Promise<TaskCompletionEvalOutput> {
-    const rootCauses = await extractRootCausesFromExpected(input.caseInput, input.expectedOutput, user);
+  return withBackgroundOpencodeSlot(async () => {
+   return runWithEphemeralOpencodeServer({ user: user || undefined, verbose: false, isolateHome: true }, async (serverUrl) => {
+    const { rootCauses, source: rootCauseSource } = await resolveRootCauses(input, user);
     const config = await getActiveConfig(user);
     if (!config) {
         return {
             isCorrect: false,
             score: 0,
             reason: '请先在模型配置中激活一个评测模型，才能执行结果评测。',
+            rawAnalysis: {
+                root_cause_source: rootCauseSource,
+            },
         };
     }
 
@@ -271,6 +236,8 @@ export async function evaluateTaskCompletionViaOpencode(
     let fullText = '';
     let runtimeError: Error | null = null;
     let evaluatorSessionId = '';
+    let unexpectedSubagent: string | null = null;
+    let insight: AgentInsight | null = null;
     const handlers: ChatHandlers = {
         onText: (e) => {
             fullText += e.delta;
@@ -279,13 +246,14 @@ export async function evaluateTaskCompletionViaOpencode(
             runtimeError = e;
         },
         onSubagent: (e) => {
-            console.log(`[opencode-task-completion] subagent ${e.agent}: phase=${e.phase}`);
+            unexpectedSubagent = e.agent || e.sessionID || 'unknown-subagent';
+            console.warn(`[opencode-task-completion] unexpected subagent spawned: ${unexpectedSubagent}`);
         },
     };
 
     try {
-        const serverUrl = await ensureOpencodeServer({ user: user || undefined, verbose: false });
-        const insight = new AgentInsight({
+        // serverUrl 由外层 runWithEphemeralOpencodeServer 注入 —— per-task 新进程,跑完自动杀
+        insight = new AgentInsight({
             baseURL: serverUrl,
             logLevel: 'warn',
         });
@@ -319,6 +287,17 @@ export async function evaluateTaskCompletionViaOpencode(
         });
         fullText = result.text || fullText;
 
+        await recordEvaluatorExecution(insight, {
+            taskId: sessionId,
+            agentName: TASK_COMPLETION_EVALUATOR_NAME,
+            user,
+            query: input.caseInput,
+        });
+
+        if (unexpectedSubagent) {
+            throw new Error(`任务完成度评估器不允许派发子代理，但实际派发了：${unexpectedSubagent}`);
+        }
+
         const parsed = parseLooseJson(fullText);
         if (parsed && isTaskCompletionPayload(parsed)) {
             const normalized = normalizeOutput(parsed);
@@ -327,11 +306,32 @@ export async function evaluateTaskCompletionViaOpencode(
                 rawAnalysis: {
                     ...(normalized.rawAnalysis || {}),
                     evaluatorSessionId,
+                    root_cause_source: rootCauseSource,
                 },
             };
         }
     } catch (e) {
         runtimeError = e instanceof Error ? e : new Error(String(e));
+    }
+
+    if (evaluatorSessionId && insight) {
+        try {
+            await recordEvaluatorExecution(insight, {
+                taskId: evaluatorSessionId,
+                agentName: TASK_COMPLETION_EVALUATOR_NAME,
+                user,
+                query: input.caseInput,
+            });
+        } catch (persistError) {
+            console.warn(
+                '[opencode-task-completion] failed to persist evaluator execution:',
+                (persistError as Error)?.message || persistError,
+            );
+        }
+    }
+
+    if (unexpectedSubagent) {
+        throw runtimeError || new Error(`任务完成度评估器不允许派发子代理，但实际派发了：${unexpectedSubagent}`);
     }
 
     const salvaged = tryNormalizeFromTexts(
@@ -344,12 +344,25 @@ export async function evaluateTaskCompletionViaOpencode(
             rawAnalysis: {
                 ...(salvaged.rawAnalysis || {}),
                 evaluatorSessionId: evaluatorSessionId || undefined,
+                root_cause_source: rootCauseSource,
             },
         };
     }
 
     const detail = runtimeError?.message || `Agent 输出前 800 字符：${fullText.slice(0, 800)}`;
     throw new Error(`任务完成度评估器未产出有效 JSON。opencode 评测失败：${detail}`);
+   });
+  }, {
+    taskType: 'task-completion-eval',
+    user: user ?? undefined,
+    skill: skillName ?? undefined,
+    skillVersion: skillVersion ?? null,
+    label: `task-completion: ${(input.caseInput || '').slice(0, 40)}`,
+    // silent: 只占 slot 限流, 不写 task record 到 dashboard。
+    // 用户视角下"用例分析评测"是一个 row-level 任务(由 runOneEvaluation 注册 displayOnly),
+    // 这里的 task-completion 是它内部的一个步骤, 不再单独显示。
+    silent: true,
+  });
 }
 
 export const TASK_COMPLETION_EVALUATOR_AGENTS = [
@@ -365,26 +378,10 @@ export const TASK_COMPLETION_EVALUATOR_AGENTS = [
         successRate: '—',
         todayCalls: '—',
         lastExecutedAt: new Date().toISOString(),
-        description: 'Agent 任务完成度评估器 — 基于 opencode 评估最终输出是否完成用户目标，并结合关键观点覆盖情况给分',
-    },
-    {
-        id: KEY_POINTS_CHECKER_NAME,
-        name: KEY_POINTS_CHECKER_NAME,
-        ownership: 'system' as const,
-        layer: 'subagent' as const,
-        platform: 'opencode' as const,
-        version: 'v1.0',
-        framework: 'opencode',
-        status: 'running' as const,
-        successRate: '—',
-        todayCalls: '—',
-        lastExecutedAt: new Date().toISOString(),
-        parentAgent: TASK_COMPLETION_EVALUATOR_NAME,
-        description: '关键观点覆盖检查子代理 — 评估实际输出是否覆盖标准答案中的关键观点',
+        description: 'Agent 任务完成度评估器 — 基于 opencode 评估最终输出是否完成用户目标，并由主评估器直接完成关键观点覆盖检查',
     },
 ];
 
 export const TASK_COMPLETION_EVALUATOR_PROMPTS = {
     coordinator: COORDINATOR_SYSTEM_PROMPT,
-    keyPointsChecker: KEY_POINTS_CHECKER_PROMPT,
 };

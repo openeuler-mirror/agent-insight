@@ -43,13 +43,101 @@ async function persistJob(jobId: string, user: string, job: Omit<DebugJob, 'star
   }
 }
 
+/**
+ * 把 grayscale A/B job 的最终结果直接落到对应 GrayscaleTask.caseStatesJson 上。
+ *
+ * 为什么要在后端做：之前 A/B 是「前端 setInterval 轮询 → 前端把 completed 状态
+ * 写回 caseStatesJson」。问题是浏览器一旦关掉/网断/tab 后台被节流, 这条路径就断了,
+ * 后端任务跑完也没人把 caseStatesJson 从 'running' 推到 'executed', UI 下次进来
+ * 永远卡在 "执行中"。
+ *
+ * 现在: runGeneralAgent .then/.catch 主动写库, 浏览器在不在线都能正确落库。
+ * 前端的 polling/local 写入保持不变作为 belt-and-suspenders, 反正 patchLatestRun
+ * 是 idempotent 的, 重复写出相同终态没副作用。
+ *
+ * 注: 后端这里只需要 "patch latest run" 语义——前端在 runCaseSide 入口已经 push
+ * 了一条 {status:'running'} 占位 run 并 PATCH 到 DB, 后端只是把最末尾那条推到
+ * 终态。如果出现 runs[] 是空的极端情况(前端 PATCH 还没落或者全空), 兜底逻辑会
+ * 现造一条。
+ */
+type CaseSideJson = {
+  status?: string;
+  jobId?: string;
+  output?: string;
+  score?: number;
+  sessionId?: string;
+  timeCost?: string;
+  tokenUsage?: number;
+  evaluatorRunId?: string;
+  runs?: Array<Record<string, unknown>>;
+  [k: string]: unknown;
+};
+
+function applyPatchToLatestRun(side: CaseSideJson | undefined, patch: Record<string, unknown>): CaseSideJson {
+  const base: CaseSideJson = side ?? { status: 'pending' };
+  const runs = Array.isArray(base.runs) ? base.runs.slice() : [];
+  if (runs.length > 0) {
+    runs[runs.length - 1] = { ...runs[runs.length - 1], ...patch };
+  } else {
+    runs.push({ runIndex: 1, roundIndex: 1, ...patch });
+  }
+  return {
+    ...base,
+    // side 顶层字段镜像最新 run, 跟前端 patchLatestRun 行为一致
+    status: (patch.status as string) ?? base.status,
+    jobId: (patch.jobId as string) ?? base.jobId,
+    output: (patch.output as string) ?? base.output,
+    score: (patch.score as number) ?? base.score,
+    sessionId: (patch.sessionId as string) ?? base.sessionId,
+    timeCost: (patch.timeCost as string) ?? base.timeCost,
+    tokenUsage: (patch.tokenUsage as number) ?? base.tokenUsage,
+    evaluatorRunId: (patch.evaluatorRunId as string) ?? base.evaluatorRunId,
+    runs,
+  };
+}
+
+async function patchGrayscaleTaskCaseSide(
+  taskId: string,
+  caseId: string,
+  side: 'a' | 'b',
+  patch: Record<string, unknown>,
+) {
+  try {
+    const task = await (prisma as any).grayscaleTask.findUnique({
+      where: { id: taskId },
+      select: { id: true, caseStatesJson: true },
+    });
+    if (!task) {
+      console.warn(`[DEBUG_EXECUTE] GrayscaleTask ${taskId} not found, skip caseStates patch`);
+      return;
+    }
+    let parsed: Record<string, { a?: CaseSideJson; b?: CaseSideJson }> = {};
+    try { parsed = task.caseStatesJson ? JSON.parse(task.caseStatesJson) : {}; } catch { parsed = {}; }
+    const current = parsed[caseId] || {};
+    const updatedSide = applyPatchToLatestRun(current[side], patch);
+    parsed[caseId] = { ...current, [side]: updatedSide };
+    await (prisma as any).grayscaleTask.update({
+      where: { id: taskId },
+      data: { caseStatesJson: JSON.stringify(parsed) },
+    });
+  } catch (e) {
+    console.error(`[DEBUG_EXECUTE] Failed to patch GrayscaleTask ${taskId} case ${caseId}/${side}:`, e);
+  }
+}
+
 
 /**
  * POST /api/debug/execute
  *
  * Fire-and-forget: starts a runGeneralAgent call in background, returns {jobId} immediately.
  *
- * Body: { user, query, skill?, skillVersion? }
+ * Body: {
+ *   user, query, skill?, skillVersion?,
+ *   // 可选: A/B 灰度模式专用——传了这三个就让后端在 job 完成/失败时直接把结果
+ *   // 写回 GrayscaleTask.caseStatesJson 对应 case 的对应 side, 不再依赖前端
+ *   // 必须开着浏览器轮询才能落库。详见 patchGrayscaleTaskCaseSide 注释。
+ *   grayscaleTaskId?, caseId?, side?
+ * }
  */
 export async function POST(request: Request) {
   const body = await request.json().catch(() => ({}));
@@ -62,6 +150,12 @@ export async function POST(request: Request) {
   const jobId = makeJobId();
   const store = getJobStore();
   const startedAt = Date.now();
+
+  // 解析 grayscale 写回参数 (三个必须同时存在才写回, 否则跳过)
+  const grayscaleTaskId = typeof body.grayscaleTaskId === 'string' && body.grayscaleTaskId.trim() ? body.grayscaleTaskId.trim() : null;
+  const grayCaseId = typeof body.caseId === 'string' && body.caseId.trim() ? body.caseId.trim() : null;
+  const graySide = body.side === 'a' || body.side === 'b' ? body.side as 'a' | 'b' : null;
+  const shouldWriteBackToGrayscale = !!(grayscaleTaskId && grayCaseId && graySide);
 
   store.set(jobId, { status: 'running', startedAt });
 
@@ -115,11 +209,29 @@ export async function POST(request: Request) {
       };
       store.set(jobId, completed);
       persistJob(jobId, user, { status: 'completed', output: completed.output, timeCost: completed.timeCost, tokenUsage: completed.tokenUsage, sessionId: completed.sessionId });
+      if (shouldWriteBackToGrayscale) {
+        // 注: 不 await, 避免 promise 链阻塞 next 个调用; 内部已有 try/catch + console.error
+        void patchGrayscaleTaskCaseSide(grayscaleTaskId, grayCaseId, graySide, {
+          status: 'executed',
+          jobId,
+          output: completed.output,
+          timeCost: completed.timeCost,
+          tokenUsage: completed.tokenUsage,
+          sessionId: completed.sessionId,
+        });
+      }
     })
     .catch((err) => {
       const errMsg = err instanceof Error ? err.message : String(err);
       store.set(jobId, { status: 'failed', startedAt, error: errMsg });
       persistJob(jobId, user, { status: 'failed', error: errMsg });
+      if (shouldWriteBackToGrayscale) {
+        void patchGrayscaleTaskCaseSide(grayscaleTaskId, grayCaseId, graySide, {
+          status: 'fail',
+          jobId,
+          output: errMsg,
+        });
+      }
     });
 
   return NextResponse.json({ jobId });

@@ -10,7 +10,7 @@ import {
   type QuestionAskEvent,
   type SendPromptPayload,
 } from '@/lib/engine/skill-generation/opencode-agent-cli/opencode-client';
-import { ensureOpencodeServer } from '@/lib/engine/skill-generation/opencode-agent-cli/opencode-manager';
+import { ensureOpencodeServer, runWithEphemeralOpencodeServer } from '@/lib/engine/skill-generation/opencode-agent-cli/opencode-manager';
 
 import { resolveSkill, skillToSystemPrompt } from './skill-resolver';
 import { loadServerModelForUser } from './server-model-config';
@@ -162,6 +162,35 @@ export interface RunGeneralAgentInput {
   handlers?: ChatHandlers;
   chatOptions?: ChatOptions;
   timeoutMs?: number;
+  /**
+   * true: 这次调用起一个**独立** opencode 进程,跑完立刻杀 (per-task ephemeral)。
+   *   避免跨任务 server 内存级软污染 (plugin 全局缓存 / provider runtime cache /
+   *   server 启动时凝固的 skill / 自定义 agent 等)。代价:每次冷启 ~5-10s。
+   * false / 默认: per-user 复用长驻 server (cachedClients + ensureOpencodeServer)。
+   *   响应快,适合用户实时对话 (skill-generator-bridge 等)。
+   *
+   * 后台批量任务 (评测 / A·B 灰度) 都该传 true,保证每次都拿最新 skill;
+   * 用户实时对话保持默认,避免冷启延迟拖累交互体验。
+   */
+  ephemeralServer?: boolean;
+  /**
+   * 传了之后, agent run 完成后内部立刻把这次 opencode session 的真实 messages
+   * (client.listMessages) 规范化后写一行 Execution 到 DB (走 saveExecutionRecord)。
+   * agentName 字段就是这里传的字符串。
+   *
+   * 解决的问题: 之前 grayscale A/B 等后台任务依赖 opencode 子进程的 OTEL exporter
+   * 上报到 /api/ingest/otel/v1/traces 才产生 Execution 行。但 spawn 时没注入
+   * OTEL env, exporter silent drop, 永远没 Execution 行——modal 里点 session id
+   * 跳 /trace?taskId=X, trace page 查 DB 空数组, fallback 渲染 list 主页, 体验上
+   * 像"跳转挂了"。
+   *
+   * 不传时跳过, 沿用旧行为 (依赖 plugin / OTEL 上报)。caller 是 user 实时对话
+   * (skill-generator 等) 时不需要主动写 Execution——plugin 会处理。
+   *
+   * 复用同事 821236e 引入的 recordEvaluatorExecution 模式 (拿 client.listMessages
+   * 的真实 messages, 不是只填顶层字段), trace 详情页能看到完整 trajectory + tool calls。
+   */
+  recordTraceAs?: string;
 }
 
 export interface RunGeneralAgentResult {
@@ -204,9 +233,35 @@ export async function runGeneralAgent(
   const query = String(input.query || '').trim();
   if (!query) throw new Error('query is required');
 
-  // Per-user client: 每个 user 对应一个独立 opencode-server 实例（apiKey 隔离）。
+  // ephemeral 模式: 起独立 opencode 进程,跑完自动杀。后台批量任务用这条路保证拿最新 skill。
+  // 不能复用 cachedClients (会污染下次 shared 模式), 直接 new AgentInsight 用临时 baseURL。
+  // 默认开 isolateHome: 后台任务都不该看 user HOME 下的 skill (避免污染);
+  // 被测的 skill 通过 workspace 的 .opencode/skills/ 由 deploySkillToWorkspace 注入。
+  if (input.ephemeralServer) {
+    ensureDispatcher();
+    return runWithEphemeralOpencodeServer({ user, verbose: false, isolateHome: true }, async (baseURL) => {
+      const ephemeralClient = new AgentInsight({
+        baseURL,
+        timeout: 180_000,
+        maxRetries: 2,
+        logLevel: (process.env.OPENCODE_LOG_LEVEL as any) || 'warn',
+      });
+      return runGeneralAgentWithClient(input, user, query, ephemeralClient);
+    });
+  }
+
+  // 默认/shared 模式: Per-user 复用长驻 opencode-server (apiKey 隔离)。
   // 单机 dev 单 user 等同 singleton；多 user 同时跑评估/skill-generator 各起一份。
   const client = await getClient(user);
+  return runGeneralAgentWithClient(input, user, query, client);
+}
+
+async function runGeneralAgentWithClient(
+  input: RunGeneralAgentInput,
+  user: string,
+  query: string,
+  client: AgentInsight,
+): Promise<RunGeneralAgentResult> {
 
   // ── Workspace 先行确定（skill 部署依赖 workspaceDir，需要在 skill 处理前就 ensure）──
   ensureUserWorkspace(user);
@@ -393,6 +448,23 @@ export async function runGeneralAgent(
     textLen: result.text.length,
     stats: result.stats,
   });
+
+  // 可选: 主动把这次 session 写一行 Execution——给 grayscale 等 caller 用
+  // (它们不依赖 plugin/OTEL 上报)。复用同事 recordEvaluatorExecution helper
+  // (会拉 client.listMessages 拿真实 messages, 写完整 trajectory 而非顶层片段)。
+  if (input.recordTraceAs) {
+    try {
+      const { recordEvaluatorExecution } = await import('@/lib/engine/evaluation/evaluator-execution-recorder');
+      await recordEvaluatorExecution(client, {
+        taskId: sessionId,
+        agentName: input.recordTraceAs,
+        user: input.user,
+        query: input.query,
+      });
+    } catch (err) {
+      console.warn(`[general-agent] recordTraceAs failed for session ${sessionId}:`, (err as Error)?.message || err);
+    }
+  }
 
   return {
     sessionId,

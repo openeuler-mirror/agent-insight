@@ -1,4 +1,8 @@
 import { safeUUID } from './safe-uuid';
+import type {
+  DatasetCaseRootCauseMeta,
+  RootCauseItem,
+} from './dataset-case-root-causes';
 
 export type DatasetKind = 'ideal_output' | 'trajectory';
 
@@ -14,6 +18,10 @@ export interface DatasetCase {
   trajectory: string;
   /** 默认 'user'；存量数据无此字段时按 'user' 兜底。 */
   source?: DatasetCaseSource;
+  /** 隐藏缓存字段：预先从 expectedOutput 提取出的关键观点。 */
+  rootCauses?: RootCauseItem[];
+  /** 隐藏缓存元信息：用于判断缓存是否可复用。 */
+  rootCauseMeta?: DatasetCaseRootCauseMeta;
 }
 
 export interface AgentDataset {

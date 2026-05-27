@@ -1,17 +1,20 @@
 import { NextResponse } from 'next/server';
 import { db, prismaRaw as prisma } from '@/lib/storage/prisma';
 import { findAgentDataset, readAllAgentDatasets, type AgentDatasetRecord, type DatasetCase } from '@/server/agent_datasets_storage';
+import { canReuseRootCauseCache, type RootCauseItem } from '@/lib/dataset-case-root-causes';
 import {
     evaluateTrajectoryViaOpencode,
     TrajectoryEvalConfigError,
     type TrajectoryEvalInput,
 } from '@/lib/engine/evaluation/opencode-trajectory-evaluator';
 import { evaluateTaskCompletionViaOpencode } from '@/lib/engine/evaluation/opencode-task-completion-evaluator';
+import { startOrReplace as startEvalTask, finish as finishEvalTask } from '@/lib/evaluation-task-manager';
 import { deriveAndPersistOptPoints } from '@/lib/engine/evaluation/derive-skill-opt-points';
 import {
     analyzeDynamicOnly,
     extractKeyActionsFromFlow,
     mergeKeyActionsFromMultipleSkills,
+    parseSkillFlow,
     type ExtractedKeyAction,
     type ParsedFlowResult,
 } from '@/lib/engine/observability/flow-parser';
@@ -271,11 +274,17 @@ async function evaluateTaskCompletionAgainstExpected(
     caseInput: string,
     expectedOutput: string,
     actualOutput: string,
+    precomputedRootCauses?: RootCauseItem[],
+    precomputedRootCauseSource?: 'dataset-cache' | 'none',
     user?: string | null,
+    skillName?: string | null,
+    skillVersion?: number | null,
 ): Promise<ResultJudgment> {
     const result = await evaluateTaskCompletionViaOpencode(
-        { caseInput, expectedOutput, actualOutput },
+        { caseInput, expectedOutput, actualOutput, precomputedRootCauses, precomputedRootCauseSource },
         user,
+        skillName,
+        skillVersion,
     );
     return {
         isCorrect: result.isCorrect,
@@ -300,12 +309,9 @@ async function persistResultJudgment(
     const raw = judgment.rawAnalysis && typeof judgment.rawAnalysis === 'object'
         ? judgment.rawAnalysis as {
             key_point_findings?: unknown;
-            raw_subagent_outputs?: { key_points?: { covered_points?: unknown } };
         }
         : null;
-    const findings =
-        raw?.key_point_findings
-        ?? raw?.raw_subagent_outputs?.key_points?.covered_points;
+    const findings = raw?.key_point_findings;
     const isStructuredReady = typeof judgment.score === 'number'
         && Number.isFinite(judgment.score)
         && Boolean(String(judgment.reason || '').trim())
@@ -437,9 +443,35 @@ async function buildSkillKeyActionComparison(
             continue;
         }
 
-        const parsedFlow = await db.findParsedFlow(skillRecord.id, resolvedVersion, user || null);
+        let parsedFlow = await db.findParsedFlow(skillRecord.id, resolvedVersion, user || null);
         if (!parsedFlow?.flowJson) {
-            missingParsedFlowSkills.push(target.skill);
+            // 没解析过——之前直接报错让用户去 UI 手动触发, UX 太差; 现在直接在这里
+            // 拉取 SKILL.md 内容 + 调 parseSkillFlow 同步解析一次。成功就用新结果继续,
+            // 失败 (LLM 没配 / SKILL.md 缺失 / 解析错误) 再 fallback 到原来的 missing 报错,
+            // 错误信息里带上根因方便排查。
+            const versionRow = await db.findSkillVersion(skillRecord.id, resolvedVersion);
+            const skillContent = versionRow?.content;
+            if (!skillContent || !skillContent.trim()) {
+                console.warn(`[trajectory-eval] auto-parse skill flow skipped: SkillVersion ${skillRecord.id}/v${resolvedVersion} 内容为空`);
+                missingParsedFlowSkills.push(target.skill);
+                continue;
+            }
+            console.log(`[trajectory-eval] auto-parsing skill flow for ${target.skill} v${resolvedVersion}...`);
+            const t0 = Date.now();
+            const parseResult = await parseSkillFlow(skillContent, skillRecord.id, resolvedVersion, user || null);
+            const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+            if (!parseResult.success) {
+                console.warn(`[trajectory-eval] auto-parse skill flow failed for ${target.skill} v${resolvedVersion} (${elapsed}s): ${parseResult.error || 'unknown'}`);
+                missingParsedFlowSkills.push(target.skill);
+                continue;
+            }
+            console.log(`[trajectory-eval] auto-parsed skill flow for ${target.skill} v${resolvedVersion} in ${elapsed}s`);
+            parsedFlow = await db.findParsedFlow(skillRecord.id, resolvedVersion, user || null);
+            if (!parsedFlow?.flowJson) {
+                // parseSkillFlow 说成功了但 DB 里没落 → 数据写库失败, 罕见。
+                console.warn(`[trajectory-eval] auto-parse reported success but DB has no flowJson for ${target.skill} v${resolvedVersion}`);
+                missingParsedFlowSkills.push(target.skill);
+            }
         }
     }
 
@@ -832,6 +864,16 @@ class StagedEvaluationError extends Error {
 
 /** 包装 evaluateTrajectory + 加超时；分阶段抛错便于 UI 显示根因 */
 async function runOneEvaluation(user: string, id: string): Promise<void> {
+ // 注册到 evaluation-task-manager 的 activeTasks 内存表 —— 让 GET /api/observe/data 的
+ // is_evaluating 字段在轮询时对这条 trace 返 true,前端"已评测历史"列表立刻显示"评测中",
+ // 不会再卡在老评测结果不刷新。
+ // (之前 bug: runOneEvaluation 只改 DB.status='running',没注册内存表,前端 isActive()
+ //  查内存表始终 false → trace 状态不刷新。)
+ // 在最早能拿到 taskId 的时机就 startOrReplace, 保证用户点"再次评测"后下次轮询(3s 内)
+ // 就能看到状态变化。
+ let registeredTaskId: string | null = null;
+ let registeredRunId: string | null = null;
+ try {
     // ---- 0. 标 running ----
     await prisma.trajectoryEvalResult.update({
         where: { id },
@@ -841,6 +883,34 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
     // ---- 1. 加载行 + case + interactions ----
     const row = await prisma.trajectoryEvalResult.findUnique({ where: { id } });
     if (!row) throw new StagedEvaluationError('lookup', `result row ${id} disappeared`);
+    // 注册 isActive: 必须在 row 加载后才有 taskId, 但要尽早调以缩短"用户点评测" → "isActive=true"的窗口
+    if (row.taskId) {
+        registeredTaskId = row.taskId;
+        const r = startEvalTask(user, row.taskId, 'rejudge');
+        registeredRunId = r.runId;
+    }
+    // 反查关联的 execution 拿到 skill + skillVersion,后面传给 evaluator → limiter,
+    // 让"后台分析任务"面板能按 skill 严格过滤。row 自己没存 skill 字段, 要通过 execution 关联。
+    // 关键: 大部分 row 的 executionId 是 null (历史数据/ingest 路径没回填),所以必须 fallback
+    // 用 row.taskId 反查 execution.taskId; 实测 99% 的 row 通过 taskId 都能找到对应 execution。
+    let linkedExecution: { skill: string | null; skillVersion: number | null } | null = null;
+    if (row.executionId) {
+        linkedExecution = await prisma.execution.findUnique({
+            where: { id: row.executionId },
+            select: { skill: true, skillVersion: true },
+        }).catch(() => null);
+    }
+    if (!linkedExecution && row.taskId) {
+        linkedExecution = await prisma.execution.findFirst({
+            where: { taskId: row.taskId },
+            orderBy: { timestamp: 'desc' },
+            select: { skill: true, skillVersion: true },
+        }).catch(() => null);
+    }
+    const evalSkillName: string | null = linkedExecution?.skill || null;
+    const evalSkillVersion: number | null = typeof linkedExecution?.skillVersion === 'number'
+        ? linkedExecution.skillVersion
+        : null;
     const evaluatorMeta = readSelectedEvaluatorMeta(row.rawAnalysisJson);
     const taskMeta = extractTrajectoryTaskMeta(row.rawAnalysisJson, row.createdAt);
     const shouldRunTraceEvaluation = evaluatorMeta.selectedEvaluators.includes(TRACE_EVALUATOR_ID);
@@ -917,7 +987,15 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
             }
         }
     }
-    let caseEntry: { id?: string; input: string; expectedOutput: string; trajectory: string; evaluationFocus: string } | null = null;
+    let caseEntry: {
+        id?: string;
+        input: string;
+        expectedOutput: string;
+        trajectory: string;
+        evaluationFocus: string;
+        rootCauses?: RootCauseItem[];
+        rootCauseMeta?: DatasetCase['rootCauseMeta'];
+    } | null = null;
     // 记录 case 匹配的来源信息——给结果分析 UI 展示"这条 trace 是用哪条 case 比对的"
     // matchKind 取值：
     //   'explicit-pair' 用户显式传 datasetId+caseId
@@ -1017,7 +1095,7 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
             // LLM 调用失败)仍然抛错——那不是"没数据集",是真的有问题。
             if (e instanceof StagedEvaluationError && e.stage === 'no-evaluable-case' && !shouldRunResultEvaluation) {
                 console.warn(`[trajectory/run] no matching dataset, falling back to empty case: ${e.message}`);
-                caseEntry = { input: traceQuery, expectedOutput: '', trajectory: '', evaluationFocus: '' };
+                caseEntry = { input: traceQuery, expectedOutput: '', trajectory: '', evaluationFocus: '', rootCauses: [] };
                 matchKind = 'fallback';
             } else if (e instanceof StagedEvaluationError) {
                 throw e;
@@ -1053,11 +1131,11 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
                 );
             }
         } else {
-            caseEntry = { input: traceQuery, expectedOutput: '', trajectory: '', evaluationFocus: '' };
+            caseEntry = { input: traceQuery, expectedOutput: '', trajectory: '', evaluationFocus: '', rootCauses: [] };
         }
     } else {
         // 无数据集：用空参考，依赖 skill key actions 和纯轨迹质量评估
-        caseEntry = { input: traceQuery, expectedOutput: '', trajectory: '', evaluationFocus: '' };
+        caseEntry = { input: traceQuery, expectedOutput: '', trajectory: '', evaluationFocus: '', rootCauses: [] };
     }
 
     if (shouldRunResultEvaluation && !normalizeMatchText(caseEntry.expectedOutput)) {
@@ -1073,6 +1151,17 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
         );
     }
 
+    const cachedRootCausesUsable = Boolean(
+        caseEntry?.rootCauseMeta
+        && canReuseRootCauseCache(caseEntry.expectedOutput, caseEntry.rootCauseMeta),
+    );
+    const precomputedRootCauses = cachedRootCausesUsable && caseEntry?.rootCauseMeta?.status === 'ready'
+        ? caseEntry.rootCauses || []
+        : undefined;
+    const precomputedRootCauseSource = cachedRootCausesUsable
+        ? (caseEntry?.rootCauseMeta?.status === 'empty' ? 'none' : caseEntry?.rootCauseMeta?.status === 'ready' ? 'dataset-cache' : undefined)
+        : undefined;
+
     const taskInputForEvaluation = traceQuery || caseEntry.input || '';
     const caseSnapshot = {
         id: caseEntry.id || row.caseId || '',
@@ -1083,6 +1172,8 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
         expectedOutput: caseEntry.expectedOutput,
         trajectory: caseEntry.trajectory,
         evaluationFocus: caseEntry.evaluationFocus,
+        rootCauseCacheStatus: caseEntry.rootCauseMeta?.status || null,
+        rootCauseCacheUpdatedAt: caseEntry.rootCauseMeta?.updatedAt || null,
         // dataset 上下文——给"匹配的 Case"区块展示用
         datasetId: matchedDatasetMeta?.id || row.datasetId || '',
         datasetName: matchedDatasetMeta?.name || '',
@@ -1231,7 +1322,11 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
                         caseEntry.input,
                         caseEntry.expectedOutput,
                         resultActualOutput,
+                        precomputedRootCauses,
+                        precomputedRootCauseSource,
                         user,
+                        evalSkillName,
+                        evalSkillVersion,
                     );
                     resultEvaluationRawAnalysis = {
                         ...(resultJudgment.rawAnalysis || {}),
@@ -1311,7 +1406,7 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
                     expectedOutput: needsCustomReferenceOutput ? caseEntry!.expectedOutput : '',
                     actualOutput: actualOutputForCustom,
                     traceText: traceTextForCustom,
-                }).catch(e => ({
+                }, evalSkillName, evalSkillVersion).catch(e => ({
                     evaluatorId,
                     evaluatorName: evaluatorId,
                     score: null as number | null,
@@ -1390,7 +1485,7 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
     let out: Awaited<ReturnType<typeof evaluateTrajectoryViaOpencode>>;
     try {
         out = await Promise.race([
-            evaluateTrajectoryViaOpencode(input, user),
+            evaluateTrajectoryViaOpencode(input, user, evalSkillName, evalSkillVersion),
             new Promise<never>((_, reject) =>
                 setTimeout(
                     () => reject(new StagedEvaluationError('timeout', `单条评测超过 ${PER_RESULT_TIMEOUT_MS / 1000}s 未完成`)),
@@ -1439,6 +1534,16 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
     }
 
     await derivePointsAfterDone(user, id, execution);
+ } finally {
+    // 无论成功 / 失败 / throw,都从 activeTasks 摘掉这条注册,让 isActive() 返 false,
+    // 前端轮询拿到 is_evaluating=false → trace 状态更新为最新分数 / 失败信息。
+    if (registeredTaskId && registeredRunId) {
+        try { finishEvalTask(user, registeredTaskId, registeredRunId); }
+        catch (e) {
+            console.warn(`[trajectory-eval] finishEvalTask failed user=${user} task=${registeredTaskId}: ${(e as Error)?.message}`);
+        }
+    }
+ }
 }
 
 /**

@@ -22,7 +22,8 @@ import type { SkillSpec } from '@/lib/engine/skill-generation/types';
 import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import { createLogger } from '@/lib/logger';
 import { AgentInsight, type ToolCallEvent } from '@/lib/engine/skill-generation/opencode-agent-cli/opencode-client';
-import { ensureOpencodeServer } from '@/lib/engine/skill-generation/opencode-agent-cli/opencode-manager';
+import { runWithEphemeralOpencodeServer } from '@/lib/engine/skill-generation/opencode-agent-cli/opencode-manager';
+import { withBackgroundOpencodeSlot } from '@/lib/engine/general-agent/concurrency-limiter';
 import {
   loadServerModelForUser,
   inferProviderFromBaseUrl,
@@ -637,6 +638,8 @@ async function materializeUserSkillsToOpencode(
 export async function runTriggerEvalLive(
   args: RunTriggerEvalLiveArgs,
 ): Promise<RunTriggerEvalLiveResult> {
+ return withBackgroundOpencodeSlot(async () => {
+  return runWithEphemeralOpencodeServer({ user: args.user, verbose: false, isolateHome: true }, async (baseURL) => {
   const {
     triggerSet,
     skillName,
@@ -677,8 +680,8 @@ export async function runTriggerEvalLive(
     skillVersion != null ? { name: skillName, version: skillVersion } : undefined,
   );
 
-  // 1. 起 opencode server
-  const baseURL = await ensureOpencodeServer({ user });
+  // 1. opencode server: baseURL 由外层 runWithEphemeralOpencodeServer 注入 ——
+  //    per-task 新进程,跑完自动杀,保证每次都拿最新 skill
   const client = new AgentInsight({
     baseURL,
     timeout: Math.max(timeoutMs + 5000, 60_000),
@@ -796,4 +799,12 @@ export async function runTriggerEvalLive(
   });
 
   return { items, passRate, truePositiveRate, falsePositiveRate };
+  });
+ }, {
+   taskType: 'trigger-eval',
+   user: args.user,
+   label: `trigger-eval: ${args.skillName}${args.skillVersion ? ` v${args.skillVersion}` : ''}`,
+   skill: args.skillName,
+   skillVersion: args.skillVersion ?? null,
+ });
 }

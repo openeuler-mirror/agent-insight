@@ -77,6 +77,12 @@ interface ActiveGrayscaleRun {
     runId: string;
     status: 'running' | 'evaluating';
     startedAt: number;
+    /**
+     * 任务级 AbortController, 用户点「终止」按钮时调用 .abort() 让所有 in-flight
+     * 子任务尽快收尾。signal 会传给 runGeneralAgent.chatOptions.signal, opencode
+     * 检测到 abort 立即返回; runWithConcurrency 的 worker 循环也会检查并 bail。
+     */
+    abortController?: AbortController;
 }
 
 interface GrayscaleTaskRow {
@@ -182,6 +188,17 @@ declare global {
 
 const NONE_VERSION_ID = '__NONE__';
 const STALE_EVALUATION_MS = 15 * 60 * 1000;
+// 本次 next.js server 进程的启动时间。TrajectoryEvalResult.updatedAt 早于此
+// 时间但还停在 pending/running 的, 必然是上一个 server 生命周期遗留的孤儿
+// (eval 进程跟着 server 一起挂了, 永远不会再 progress)。reconcile 用这条
+// 规则比 STALE_EVALUATION_MS=15min 的纯时间阈值更快地恢复, 用户重启后不需要
+// 等 15 分钟看到状态自然修复。globalThis 兜一层避免 dev 热更新 module 重载
+// 把启动时间也重置 (热更不算真重启, 老 eval 可能还在跑)。
+const SERVER_START_TIME: number = (() => {
+    const g = globalThis as { __grayscaleServerStartTime?: number };
+    if (!g.__grayscaleServerStartTime) g.__grayscaleServerStartTime = Date.now();
+    return g.__grayscaleServerStartTime;
+})();
 const MAX_EXECUTION_RETRIES = 2;
 const MAX_EVALUATION_RETRIES = 2;
 const GRAYSCALE_AGENT_TIMEOUT_MS = Number(process.env.GRAYSCALE_AGENT_TIMEOUT_MS) || 3 * 60 * 1000;
@@ -715,18 +732,27 @@ async function reconcileFinishedEvaluations(user: string, config: GrayscaleConfi
     });
     if (rows.length === 0) return false;
 
-    const staleRows = rows.filter(row => {
-        if (row.status !== 'pending' && row.status !== 'running') return false;
+    const staleRows: Array<{ row: typeof rows[number]; reason: string }> = [];
+    for (const row of rows) {
+        if (row.status !== 'pending' && row.status !== 'running') continue;
         const updatedAt = row.updatedAt instanceof Date ? row.updatedAt.getTime() : 0;
-        return updatedAt > 0 && Date.now() - updatedAt > STALE_EVALUATION_MS;
-    });
+        if (updatedAt <= 0) continue;
+        // 区分两种 stale 原因, 让 errorMessage 更易读 (用户看 modal hover 气泡就懂):
+        //   - 15min 无更新 → 真卡死, 评估器进程还在但 hang 住
+        //   - 早于 SERVER_START_TIME → server 重启遗弃, 评估器进程已经没了
+        if (Date.now() - updatedAt > STALE_EVALUATION_MS) {
+            staleRows.push({ row, reason: `评测超时(>${Math.round(STALE_EVALUATION_MS / 60000)}min 无进展)` });
+        } else if (updatedAt < SERVER_START_TIME) {
+            staleRows.push({ row, reason: '服务重启中断, 请重新评测' });
+        }
+    }
     if (staleRows.length > 0) {
-        for (const row of staleRows) {
+        for (const { row, reason } of staleRows) {
             if (row.evaluatorRunId) {
-                await markEvaluatorRunFailed(user, row.evaluatorRunId, 'evaluation stale timeout').catch(() => {});
+                await markEvaluatorRunFailed(user, row.evaluatorRunId, reason).catch(() => {});
             }
             row.status = 'failed';
-            row.errorMessage = row.errorMessage || 'evaluation stale timeout';
+            row.errorMessage = row.errorMessage || reason;
         }
     }
 
@@ -776,10 +802,13 @@ async function reconcileFinishedEvaluations(user: string, config: GrayscaleConfi
     return changed;
 }
 
-async function runWithConcurrency<T>(items: T[], concurrency: number, worker: (item: T) => Promise<void>) {
+async function runWithConcurrency<T>(items: T[], concurrency: number, worker: (item: T) => Promise<void>, signal?: AbortSignal) {
     const queue = [...items];
     const workers = Array.from({ length: Math.max(1, Math.min(concurrency, items.length || 1)) }, async () => {
         while (queue.length > 0) {
+            // signal 是任务级 abortController.signal, 用户点「终止」时 fires。
+            // 这里早退一次 → 不再 dispatch 新 work, 已 in-flight 的等其自己结束。
+            if (signal?.aborted) return;
             const item = queue.shift();
             if (!item) return;
             await worker(item);
@@ -801,6 +830,8 @@ async function executeSingleAgentRun(args: {
     totalRunsPerSide: number;
     version: ResolvedVersion;
     target: ExecutionTarget;
+    /** 任务级 abort 信号: 用户点终止时, 这里桥接到本次 chat 的 abortController, 让 opencode chat 提前返回。 */
+    parentSignal?: AbortSignal;
 }) {
     const { target } = args;
     const state = args.states[target.caseId];
@@ -829,6 +860,15 @@ async function executeSingleAgentRun(args: {
     const toolCalls: string[] = [];
     let lastToolSummary = '';
     const abortController = new AbortController();
+    // 监听任务级终止信号——用户在 UI 点「终止」按钮触发的 abort 通过这里传到本次 chat
+    if (args.parentSignal) {
+        if (args.parentSignal.aborted) {
+            abortController.abort();
+        } else {
+            const onParentAbort = () => abortController.abort();
+            args.parentSignal.addEventListener('abort', onParentAbort, { once: true });
+        }
+    }
     let didTimeout = false;
     let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
     try {
@@ -839,6 +879,7 @@ async function executeSingleAgentRun(args: {
                 reject(new GrayscaleAgentTimeoutError(`agent_timeout: exceeded ${Math.round(GRAYSCALE_AGENT_TIMEOUT_MS / 1000)}s${lastToolSummary ? `; last_tool=${lastToolSummary}` : ''}`));
             }, GRAYSCALE_AGENT_TIMEOUT_MS);
         });
+        const grayAgentName = args.version ? 'grayscale-skill-agent' : 'grayscale-baseline-agent';
         const agentPromise = runGeneralAgent({
             user: args.user,
             query: args.caseMap.get(target.caseId)!.input,
@@ -846,7 +887,13 @@ async function executeSingleAgentRun(args: {
             skillVersion: args.version?.version,
             system: buildGrayscaleExecutionSystem(args.version),
             interactionPolicy: 'auto-deny',
-            systemAgentName: args.version ? 'grayscale-skill-agent' : 'grayscale-baseline-agent',
+            systemAgentName: grayAgentName,
+            // 后台批量任务: 每次起独立 opencode 进程,跑完杀,保证拿最新 skill 内容
+            ephemeralServer: true,
+            // 让 runGeneralAgent 跑完后内部 listMessages + saveExecutionRecord 写 Execution 行。
+            // 不依赖 plugin/OTEL 上报, 避免新 grayscale session 在 DB 里查不到 → trace 详情跳转空跳。
+            // 复用同事 821236e 引入的 recordEvaluatorExecution helper, 写入真实 trajectory。
+            recordTraceAs: grayAgentName,
             sessionTitle: `grayscale ${target.side.toUpperCase()} r${target.roundIndex} · ${args.user} · ${args.taskId}`,
             workspaceTag: `grayscale-${args.taskId}-${target.side}-${target.caseId}-r${target.roundIndex}`,
             timeoutMs: GRAYSCALE_AGENT_TIMEOUT_MS,
@@ -883,6 +930,8 @@ async function executeSingleAgentRun(args: {
         run.toolCallCount = result.stats?.toolCallCount || toolCalls.length;
         run.toolCalls = Array.from(new Set(toolCalls)).slice(0, 8);
         markRunCompleted(run);
+        // Execution 行的写库已经由 runGeneralAgent 里的 recordTraceAs 选项处理
+        // (上面调用时传了 grayAgentName)。不在这里重复写。
     } catch (err) {
         const classified = classifyAgentRunError(err);
         run.status = 'fail';
@@ -1057,6 +1106,7 @@ async function evaluateRunsWithConcurrency(args: {
     caseIds: string[];
     evaluatorId?: string;
     onlyMissingEvaluation?: boolean;
+    parentSignal?: AbortSignal;
 }) {
     const targets: EvaluationTarget[] = [];
     for (const caseId of args.caseIds) {
@@ -1081,15 +1131,47 @@ async function evaluateRunsWithConcurrency(args: {
     // 也就是说全局后台 opencode 总并发上限就是 5, agent + evaluator 一起算。
     const runEvaluationBatch = async (batch: EvaluationTarget[]) => {
         await runWithConcurrency(batch, concurrency, async target => {
+            if (args.parentSignal?.aborted) {
+                target.run.status = 'fail';
+                target.run.output = '用户终止';
+                markRunCompleted(target.run);
+                return;
+            }
             const beforeRunId = target.run.evaluatorRunId;
-            await withBackgroundOpencodeSlot(
-                () => evaluateSingleRunTarget({ ...args, target }),
-                { label: `eval-${target.side}-${target.caseId}` },
-            );
+            try {
+                await withBackgroundOpencodeSlot(
+                    () => evaluateSingleRunTarget({ ...args, target }),
+                    {
+                        taskType: 'grayscale-eval',
+                        user: args.user,
+                        label: `eval-${target.side}-${target.caseId}`,
+                        // displayOnly: 这层是 orchestration 只发 HTTP 给 /api/eval/trajectory/run,
+                        // 内部 trajectory + task-completion 各自再走 withBackgroundOpencodeSlot
+                        // 占自己的 slot。如果外层也占 slot, 1 个 case 2 个 side 就要 2(外) +
+                        // 4(2 side × 2 evaluator) = 6 个 slot, 超过默认 max=5, 用户会看到
+                        // "1 评测中 + 1 排队中" 的奇怪现象。displayOnly=true 表示 dashboard
+                        // 上仍能看到这个任务条目, 但不实际占 slot, 杜绝外/内双重计数。
+                        displayOnly: true,
+                        signal: args.parentSignal,
+                        // TODO: evaluateRunsWithConcurrency 当前从 args.config.skillId 索引,这一层
+                        // 拿不到具体 versionA/B 的 skillName/version。后续 refactor 让 caller 把
+                        // versionA/B 显式传进 args 后再补齐 skill 透传。当前 grayscale-eval 任务
+                        // 在 dashboard 按 skill 过滤时会看不见,需要在"显示所有"模式才能看到。
+                    },
+                );
+            } catch (err) {
+                if (args.parentSignal?.aborted || (err as Error)?.name === 'AbortError') {
+                    target.run.status = 'fail';
+                    target.run.output = '用户终止';
+                    markRunCompleted(target.run);
+                    return;
+                }
+                throw err;
+            }
             if (target.run.evaluatorRunId && target.run.evaluatorRunId !== beforeRunId) {
                 evaluatorRunIds.push(target.run.evaluatorRunId);
             }
-        });
+        }, args.parentSignal);
     };
 
     await runEvaluationBatch(targets);
@@ -1173,39 +1255,84 @@ async function runGrayscaleTask(args: {
     // 内层每个 work item 进 withBackgroundOpencodeSlot 排队,跟全局 5 个 opencode 后台任务
     // 上限对齐——A/B 一把 200 个 work 也只会有 5 个真在跑 opencode,其余在信号量队列等。
     // 这样不管 user 把 agentMaxConcurrency / repeatRounds 调多大,内存也不会失控。
+    // 任务级 AbortSignal——activeRuns().get(storeKey)?.abortController 在 POST start
+    // 时创建, action='abort' 时 fire。下面 runWithConcurrency / executeSingleAgentRun
+    // 都监听它, 用户点终止后所有 in-flight 都尽快退出。
+    const taskSignal = activeRuns().get(storeKey)?.abortController?.signal;
+    const markRunAborted = (item: ExecutionTarget) => {
+        item.run.status = 'fail';
+        item.run.failureType = 'agent_error';
+        item.run.failureDetail = '用户终止';
+        item.run.output = item.run.output || '用户终止';
+        markRunCompleted(item.run);
+        states[item.caseId][item.side] = rebuildSideAggregate(states[item.caseId][item.side], totalRunsPerSide);
+    };
     const runExecutionBatch = async (batch: ExecutionTarget[]) => {
         await runWithConcurrency(batch, concurrency, async item => {
+            if (taskSignal?.aborted) {
+                markRunAborted(item);
+                return;
+            }
             const version = item.side === 'a' ? versionA : versionB;
-            await withBackgroundOpencodeSlot(
-                () => executeSingleAgentRun({
-                    taskId,
-                    user,
-                    config,
-                    states,
-                    caseMap,
-                    totalRunsPerSide,
-                    version,
-                    target: item,
-                }),
-                { label: `grayscale-${item.side}-${item.caseId}-r${item.roundIndex}` },
-            );
-        });
+            try {
+                await withBackgroundOpencodeSlot(
+                    () => executeSingleAgentRun({
+                        taskId,
+                        user,
+                        config,
+                        states,
+                        caseMap,
+                        totalRunsPerSide,
+                        version,
+                        target: item,
+                        parentSignal: taskSignal,
+                    }),
+                    {
+                        taskType: 'grayscale-ab',
+                        user,
+                        label: `grayscale-${item.side}-${item.caseId}-r${item.roundIndex}`,
+                        skill: version?.skillName,
+                        skillVersion: version?.version ?? null,
+                        signal: taskSignal,
+                    },
+                );
+            } catch (err) {
+                // 排队中被 abort: semaphore.acquire 抛 AbortError → 标 fail, 不抛
+                if (taskSignal?.aborted || (err as Error)?.name === 'AbortError') {
+                    markRunAborted(item);
+                    return;
+                }
+                throw err;
+            }
+        }, taskSignal);
     };
 
     await runExecutionBatch(work);
     for (let retry = 1; retry <= MAX_EXECUTION_RETRIES; retry++) {
-        const failedWork = work.filter(item => item.run.status === 'fail');
+        if (taskSignal?.aborted) break;
+        // 只对 agent_error 重试 (大概率 transient: network glitch / opencode crash 等)。
+        // agent_timeout / permission_blocked / question_blocked 是确定性失败, 重试
+        // 不会改变结果, 反而让 UI 经历 fail → running → fail 的闪烁循环, 用户疑惑。
+        const failedWork = work.filter(item =>
+            item.run.status === 'fail' && item.run.failureType === 'agent_error'
+        );
         if (failedWork.length === 0) break;
         await runExecutionBatch(failedWork);
     }
 
-    if (config.autoEval !== false) {
-        activeRuns().set(storeKey, { taskId, runId: activeRuns().get(storeKey)?.runId || '', status: 'evaluating', startedAt: Date.now() });
-        await evaluateRunsWithConcurrency({ taskId, user, origin, config, states, caseIds, evaluatorId });
+    if (config.autoEval !== false && !taskSignal?.aborted) {
+        activeRuns().set(storeKey, {
+            taskId,
+            runId: activeRuns().get(storeKey)?.runId || '',
+            status: 'evaluating',
+            startedAt: Date.now(),
+            abortController: activeRuns().get(storeKey)?.abortController,
+        });
+        await evaluateRunsWithConcurrency({ taskId, user, origin, config, states, caseIds, evaluatorId, parentSignal: taskSignal });
     }
 }
 
-async function evaluateExistingTask(args: { taskId: string; user: string; origin: string; caseIds: string[]; evaluatorId?: string }) {
+async function evaluateExistingTask(args: { taskId: string; user: string; origin: string; caseIds: string[]; evaluatorId?: string; onlyMissingEvaluation?: boolean }) {
     const task = await loadTask(args.taskId, args.user);
     if (!task) throw new Error('task not found');
     validateTaskSkillBinding(task);
@@ -1220,6 +1347,9 @@ async function evaluateExistingTask(args: { taskId: string; user: string; origin
         states,
         caseIds,
         evaluatorId: args.evaluatorId,
+        // 透传给 evaluateRunsWithConcurrency, true 时只选 evaluatorRunId/score 都没的 run,
+        // 避免行级 retry 误评同 case 已 pass 的其他 run。
+        onlyMissingEvaluation: args.onlyMissingEvaluation,
     });
     if (!evaluatorRunId) throw new Error('no executed agent sessions to evaluate');
 }
@@ -1236,6 +1366,52 @@ export async function GET(
         }
         const task = await loadTask(taskId, user);
         if (!task) return NextResponse.json({ error: 'task not found' }, { status: 404 });
+
+        // === 孤儿 in-flight 清理 ===
+        // activeRuns 是内存 map (挂 globalThis), server 重启就丢。如果 caseStates
+        // 里还有 running/pending/evaluating 但 activeRuns 没有这个 task 的条目,
+        // 那一定是上次进程跑到一半被杀的孤儿——agent / evaluator 子进程都没了,
+        // 不会再有人推进它的状态。之前依赖 reconcileFinishedExecutions 反查
+        // Execution 表回填, 但 agent 还没完成就被杀的 run 根本没写 Execution 行,
+        // 反查找不到, 永远卡在 running。
+        //
+        // 直接走跟 abort 同款的清理: pending/running/evaluating 全标 fail, 然后
+        // rebuildSideAggregate 让 top 跟 runs 一致。
+        const orphanStoreKey = `${user}:${taskId}`;
+        let orphanCleanup = false;
+        if (!activeRuns().get(orphanStoreKey) && hasAnyRunningCaseStates(task.caseStatesJson)) {
+            const cancelable: CaseStatus[] = ['running', 'evaluating', 'pending'];
+            const states = task.caseStatesJson;
+            for (const cid of Object.keys(states)) {
+                for (const side of ['a', 'b'] as Side[]) {
+                    const sideState = states[cid][side];
+                    if (!sideState) continue;
+                    let patched = false;
+                    for (const run of sideState.runs || []) {
+                        if (cancelable.includes(run.status)) {
+                            run.status = 'fail';
+                            run.failureType = 'agent_error';
+                            run.failureDetail = run.failureDetail || '服务重启中断, 请重新评测';
+                            run.output = run.output || '服务重启中断';
+                            patched = true;
+                            orphanCleanup = true;
+                        }
+                    }
+                    if (patched) {
+                        states[cid][side] = rebuildSideAggregate(
+                            sideState,
+                            sideState.runCount || sideState.runs?.length || 0,
+                        );
+                        const rebuilt = states[cid][side];
+                        if (rebuilt.status === 'running' || rebuilt.status === 'evaluating') {
+                            rebuilt.status = 'fail';
+                            rebuilt.output = rebuilt.output || '服务重启中断';
+                        }
+                    }
+                }
+            }
+        }
+
         const metricsHydrated = await hydrateExecutionMetrics(task.caseStatesJson);
         const executionsReconciled = await reconcileFinishedExecutions({
             user,
@@ -1243,7 +1419,7 @@ export async function GET(
             states: task.caseStatesJson,
         });
         const reconciled = await reconcileFinishedEvaluations(user, task.configJson, task.caseStatesJson);
-        if (metricsHydrated || executionsReconciled || reconciled) {
+        if (orphanCleanup || metricsHydrated || executionsReconciled || reconciled) {
             await persistTaskState(taskId, user, task.configJson, task.caseStatesJson);
         }
         const storeKey = `${user}:${taskId}`;
@@ -1296,6 +1472,9 @@ export async function POST(
         const agentMaxConcurrency = typeof body.agentMaxConcurrency === 'number' && Number.isFinite(body.agentMaxConcurrency)
             ? Math.max(1, Math.floor(body.agentMaxConcurrency))
             : undefined;
+        // 行级 retry 用: true 时 backend 只评估 evaluatorRunId/score 都没有的 run,
+        // 避免把同 case 已 pass 的其他 run 也重评一遍。
+        const onlyMissingEvaluation = body.onlyMissingEvaluation === true;
         if (!user || !taskId) {
             return NextResponse.json({ error: 'user and taskId are required' }, { status: 400 });
         }
@@ -1303,6 +1482,75 @@ export async function POST(
             return NextResponse.json({ error: 'caseIds are required' }, { status: 400 });
         }
         const storeKey = `${user}:${taskId}`;
+        // === action: abort —— 用户点「终止」按钮 ===
+        if (action === 'abort') {
+            // 双场景:
+            //   A. activeRuns 里有 → 任务真在跑, abort signal + 清 DB + 删 active
+            //   B. activeRuns 里没有 → server 重启等原因丢了 in-memory state, 但
+            //      caseStatesJson 还卡在 running/evaluating (孤儿状态)。前端 UI 因为
+            //      hasRunningStates 还显示「执行中」, 用户点终止 → 必须也能清掉这些
+            //      孤儿, 否则用户被永久锁死。之前直接返回 404, 反而堵了用户唯一的
+            //      自救入口。
+            const active = activeRuns().get(storeKey);
+            if (active) {
+                try { active.abortController?.abort(); } catch { /* already aborted */ }
+            }
+            // 不管 active 在不在, 都 patch DB 把 in-flight 状态推到 fail。
+            // 包括 pending——pending 在 rebuildSideAggregate 里被算作 running 同类
+            // (line 502: runs.some(r => status==='running' || status==='pending')),
+            // 所以哪怕把 running/evaluating 都标了 fail, pending 没动 → rebuild 算出
+            // top='running', 用户看 UI 仍然是「执行中」, abort 失效。
+            let patchedCount = 0;
+            const cancelable: CaseStatus[] = ['running', 'evaluating', 'pending'];
+            try {
+                const taskRow = await loadTask(taskId, user);
+                if (taskRow) {
+                    const states = taskRow.caseStatesJson || {};
+                    for (const cid of Object.keys(states)) {
+                        for (const side of ['a', 'b'] as Side[]) {
+                            const sideState = states[cid][side];
+                            if (!sideState) continue;
+                            for (const run of sideState.runs || []) {
+                                if (cancelable.includes(run.status)) {
+                                    run.status = 'fail';
+                                    run.failureType = 'agent_error';
+                                    run.failureDetail = '用户终止';
+                                    run.output = run.output || '用户终止';
+                                    patchedCount++;
+                                }
+                            }
+                            // 主动 rebuild: 让 sideState.status 跟 runs[] 严格一致
+                            // (按上面 patch 完后, 所有 run 要么是 fail/pass/executed 等
+                            // 终态, rebuild 算出来必然不是 'running')
+                            states[cid][side] = rebuildSideAggregate(
+                                sideState,
+                                sideState.runCount || sideState.runs?.length || 0,
+                            );
+                            // 兜底: 万一 rebuild 仍然算成 running/evaluating (例如所有
+                            // run 都是 pass 但 totalRuns 比 runs 长度多), 强行推到 fail
+                            const rebuilt = states[cid][side];
+                            if (rebuilt.status === 'running' || rebuilt.status === 'evaluating') {
+                                rebuilt.status = 'fail';
+                                rebuilt.output = rebuilt.output || '用户终止';
+                            }
+                        }
+                    }
+                    if (patchedCount > 0) {
+                        await persistTaskState(taskId, user, taskRow.configJson, states);
+                    }
+                }
+            } catch (e) {
+                console.warn('[GRAYSCALE_TASKS_ABORT] persist fail patch failed:', e);
+            }
+            if (active) activeRuns().delete(storeKey);
+            return NextResponse.json({
+                ok: true,
+                aborted: true,
+                hadActiveRun: !!active,
+                patchedCount,
+            });
+        }
+
         if (activeRuns().has(storeKey)) {
             return NextResponse.json({ error: 'task is already running' }, { status: 409 });
         }
@@ -1315,10 +1563,17 @@ export async function POST(
         }
         const origin = req.nextUrl.origin;
         const runId = `gray_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-        activeRuns().set(storeKey, { taskId, runId, status: action === 'evaluate' ? 'evaluating' : 'running', startedAt: Date.now() });
+        const abortController = new AbortController();
+        activeRuns().set(storeKey, {
+            taskId,
+            runId,
+            status: action === 'evaluate' ? 'evaluating' : 'running',
+            startedAt: Date.now(),
+            abortController,
+        });
 
         const job = action === 'evaluate'
-            ? evaluateExistingTask({ taskId, user, origin, caseIds, evaluatorId })
+            ? evaluateExistingTask({ taskId, user, origin, caseIds, evaluatorId, onlyMissingEvaluation })
             : runGrayscaleTask({ taskId, user, origin, caseIds, evaluatorId, agentMaxConcurrency });
 
         void job

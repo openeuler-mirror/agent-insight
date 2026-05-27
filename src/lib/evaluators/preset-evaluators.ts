@@ -16,12 +16,12 @@ export const presetEvaluators: EvaluatorCard[] = [
     mappedMetrics: ['目标达成', '步骤完整', '答案可用'],
     status: 'ready',
     runtimeHref: '/eval/trajectory',
-    runtimeNote: 'opencode-task-completion-evaluator.ts (opencode agent + 1 subagent)',
+    runtimeNote: 'opencode-task-completion-evaluator.ts (single opencode agent)',
   },
   {
     id: 'preset-agent-trace-quality',
     name: 'Agent 轨迹质量',
-    description: '评估 Agent 内部执行轨迹是否准确、稳定，关注规划、调用和中间结果。基于 opencode 多 subagent 协作（completeness / tool-choice / attribution + 规则工具 detect_redundancy）。',
+    description: '评估 Agent 内部执行轨迹是否准确、稳定，关注规划、调用和中间结果。基于 opencode 单主评估器完成 completeness / tool-choice / attribution 判断，并结合规则冗余检测。',
     evaluatorType: 'LLM',
     source: 'preset',
     targetTypes: ['轨迹'],
@@ -33,6 +33,6 @@ export const presetEvaluators: EvaluatorCard[] = [
     mappedMetrics: ['轨迹准确性', '推理连续性', '异常处理'],
     status: 'ready',
     runtimeHref: '/eval/trajectory',
-    runtimeNote: 'opencode-trajectory-evaluator.ts (opencode agent + 3 subagents)',
+    runtimeNote: 'opencode-trajectory-evaluator.ts (single opencode agent)',
   },
 ];

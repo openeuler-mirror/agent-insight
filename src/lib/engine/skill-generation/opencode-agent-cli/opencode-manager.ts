@@ -18,6 +18,8 @@ type SingleServer = {
   /** Hash of the model config (apiKey/baseURL/providerID/modelID) used to spawn this
    *  instance. 用于检测用户在 UI 改了 apiKey 后判断是否需要重启实例。 */
   configHash: string
+  /** spawn 时间戳 (ms)。dashboard 用来算 uptime,排查长时间未活动的卡死实例。 */
+  startedAt: number
 }
 
 // ── 模块状态 ─────────────────────────────────────────────────────────
@@ -470,6 +472,91 @@ async function buildIsolatedOpencodeConfig(user: string): Promise<{
   }
 }
 
+/**
+ * 给 spawn 出来的 opencode 子进程准备一个"干净"的 HOME 目录,屏蔽 user 全局 skill。
+ *
+ * opencode 启动时会扫 6 个路径加载 skill 到 available_skills 注入到 LLM 上下文:
+ *   ~/.config/opencode/skills/   ← XDG_CONFIG_HOME 控制 (已被 prepareIsolatedXdgConfigHome 隔)
+ *   ~/.claude/skills/             ← HOME 控制 ★
+ *   ~/.agents/skills/             ← HOME 控制 ★
+ *   <cwd>/.opencode/skills/       ← cwd (chat payload directory) 控制
+ *   <cwd>/.claude/skills/         ← 同上
+ *   <cwd>/.agents/skills/         ← 同上
+ *
+ * 本函数处理 ★ 两条 HOME-relative 路径。spawn 时把 HOME 改到隔离目录,这两个目录就空了。
+ * 项目级路径 (<cwd>/...) 由 caller 通过 chat payload 的 directory 字段 + skill-workspace-deployer
+ * 按需 deploy 控制 (workspace 里只放本次需要的 skill)。
+ *
+ * 隔离 HOME 目录结构:
+ *   <project>/data/.opencode-runtime/<slug>/isolated-home-<key>/
+ *   ├── .opencode/
+ *   │   ├── plugins/Witty-Skill-Insight.ts → symlink (trace 上报,如 user HOME 下存在)
+ *   │   └── skills/                            (空 - opencode 扫不到)
+ *   ├── .claude/skills/                        (空)
+ *   └── .agents/skills/                        (空)
+ *
+ * 配合 spawn 时的 env:
+ *   HOME            = <隔离 home>            ← 屏蔽 ~/.claude/skills + ~/.agents/skills
+ *   XDG_CONFIG_HOME = <xdgRoot>              ← 屏蔽 ~/.config/opencode/skills (已有)
+ *
+ * 返回 cleanup,caller 在 try/finally 调用清理临时目录。
+ *
+ * 设计取舍:
+ *   - 用 symlink 而非 copy plugin: 改 plugin 内容立即生效,且零 IO。symlink 跨 OS:
+ *     mac/linux 支持,windows 不支持 (但生产部署 linux,dev mac, 不踩坑)。
+ *   - cleanup 异步,失败不抛 (避免遮蔽 fn 真错误)。
+ *   - 短时残留: 进程崩了 cleanup 没跑会留临时目录。可定期清理,或重启时 prune。
+ */
+export async function prepareIsolatedHome(
+  user: string,
+  opts?: { key?: string },
+): Promise<{ isolatedHome: string; cleanup: () => Promise<void> }> {
+  const slug = userToSlug(user)
+  const key = opts?.key || `eph-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  const root = path.join(process.cwd(), 'data', '.opencode-runtime', slug, `isolated-home-${key}`)
+
+  // 创建 4 个空目录, 确保 opencode 扫到的 user skill 列表是空
+  // (即使空目录 opencode 扫也 OK, 没有 SKILL.md 就算 0 个 skill)
+  fs.mkdirSync(path.join(root, '.opencode', 'plugins'), { recursive: true })
+  fs.mkdirSync(path.join(root, '.opencode', 'skills'), { recursive: true })
+  fs.mkdirSync(path.join(root, '.claude', 'skills'), { recursive: true })
+  fs.mkdirSync(path.join(root, '.agents', 'skills'), { recursive: true })
+
+  // Symlink user 真实的 trace 上报 plugin (~/.opencode/plugins/Witty-Skill-Insight.ts)
+  // 到隔离 HOME 下的 .opencode/plugins/, 保留 trace 上报链路。
+  // user HOME 下没装 plugin 时不报错, evaluator session 不会被上报 (用户 / 业务方
+  // 默认可接受 — evaluator 是内部细节, 看不看到都不影响主流程)。
+  const realPlugin = path.join(os.homedir(), '.opencode', 'plugins', 'Witty-Skill-Insight.ts')
+  if (fs.existsSync(realPlugin)) {
+    const linkTarget = path.join(root, '.opencode', 'plugins', 'Witty-Skill-Insight.ts')
+    try {
+      // 已存在 (重入或残留) 先删
+      try { fs.unlinkSync(linkTarget) } catch { /* ok */ }
+      fs.symlinkSync(realPlugin, linkTarget)
+    } catch (e) {
+      // 不支持 symlink (如 win) 或权限问题 -> fallback 复制
+      try {
+        fs.copyFileSync(realPlugin, linkTarget)
+      } catch (copyErr) {
+        console.warn(`[isolated-home] attach plugin failed (symlink+copy 都失败): ${(copyErr as Error)?.message}`)
+      }
+    }
+  } else {
+    console.log(`[isolated-home] real plugin not at ${realPlugin}, evaluator session 不会被 trace 上报 (符合预期)`)
+  }
+
+  return {
+    isolatedHome: root,
+    cleanup: async () => {
+      try {
+        fs.rmSync(root, { recursive: true, force: true })
+      } catch (e) {
+        console.warn(`[isolated-home] cleanup failed for ${root}: ${(e as Error)?.message}`)
+      }
+    },
+  }
+}
+
 async function prepareIsolatedXdgConfigHome(user: string): Promise<{
   xdgRoot: string
   configHash: string
@@ -628,9 +715,17 @@ async function startServerForUser(
   opts: {
     /** 是否把 opencode 的 stdout/stderr 转发到当前进程 stderr,默认 false。 */
     verbose?: boolean
+    /**
+     * 覆盖 spawn 时的 HOME 环境变量, 用于 evaluator 等场景隔离 user HOME 下的 skill
+     * (~/.claude/skills/ + ~/.agents/skills/)。caller 通过 prepareIsolatedHome 准备
+     * 一个空 HOME 目录, 把绝对路径传进来。
+     *
+     * 不传 = 用 process.env.HOME (默认行为, ensureOpencodeServer 复用路径用)。
+     */
+    homeOverride?: string
   },
 ): Promise<SingleServer> {
-  const { verbose = false } = opts
+  const { verbose = false, homeOverride } = opts
   const port = await getOpenPort()
   const binary = resolveOpencodeBinary()
   const { xdgRoot, configHash: baseConfigHash } = await prepareIsolatedXdgConfigHome(user)
@@ -665,6 +760,9 @@ async function startServerForUser(
         OPENCODE_PORT: String(port),
         // 屏蔽用户全局 ~/.config/opencode/ 下的配置/插件。详见 prepareIsolatedXdgConfigHome 注释。
         XDG_CONFIG_HOME: xdgRoot,
+        // 隔离模式下覆盖 HOME, opencode 扫 ~/.claude/skills + ~/.agents/skills 时看到空
+        // (详见 prepareIsolatedHome 注释)。
+        ...(homeOverride ? { HOME: homeOverride } : {}),
         // 强制让 plugin 上报到本机 + 归属触发 user (详见 buildPluginUploadEnvOverride 注释)
         ...pluginUploadEnv,
       },
@@ -679,6 +777,14 @@ async function startServerForUser(
     proc.stderr?.on('data', (b: Buffer) =>
       process.stderr.write(`[opencode:${user}] ${b.toString()}`),
     )
+  } else {
+    // 即使不转发日志也必须消费 pipe，否则父进程不读 → ~64KB pipe buffer 撑满 →
+    // opencode 真二进制 (Go) 内部 write(2) syscall 被 OS 阻塞 → 整个 server 进程冻死，
+    // 现象就是"跑一段时间 opencode 卡死、HTTP/SSE 全不响应"。.resume() 把数据丢到
+    // 黑洞，buffer 始终空，不会回压。stdio:'ignore' 不行——必须 'pipe' 才能继承 plugin
+    // 上报相关的 stdin/stdout 协议；只是不能让它 piped 后没人读。
+    proc.stdout?.resume()
+    proc.stderr?.resume()
   }
 
   // 关键:server 进程崩了或主动退出后,清空 map 中对应条目，下次请求会自动 respawn。
@@ -710,6 +816,7 @@ async function startServerForUser(
     baseUrl: `http://127.0.0.1:${port}`,
     user,
     configHash,
+    startedAt: Date.now(),
   }
 }
 
@@ -861,4 +968,101 @@ export function getServerUrl(user?: string): string | null {
 /** 调试用：当前活跃实例数。 */
 export function getActiveServerCount(): number {
   return state.servers.size
+}
+
+/**
+ * Per-task ephemeral opencode 进程: 每次 spawn 独立实例 → 跑 fn → finally 杀。
+ *
+ * 跟 ensureOpencodeServer 的区别:
+ *   - ensureOpencodeServer: per-user 长驻复用,启动时凝固 skill / 自定义 agent / plugin /
+ *     provider config —— 用户编辑这些东西后,旧实例不会自动 reload,需要手动重启。
+ *   - runWithEphemeralOpencodeServer: per-call 新启进程,fn 跑完立即 SIGTERM (→ 5s SIGKILL 兜底)。
+ *     保证每个后台任务都用最新 skill,杜绝跨 task 的软污染 (plugin 全局状态 / provider 缓存等)。
+ *
+ * 代价:
+ *   - 冷启动 +3-10s / 任务 (spawn + plugin 加载 + healthcheck)
+ *   - 内存峰值 ~50-100MB × 并发任务数 (默认上限 5,所以 ~250-500MB)
+ *
+ * 适用场景: 后台评测 / A·B 灰度等"对正确性比对时延敏感"的任务。用户实时对话 (如
+ * skill-generator-bridge) 仍走 ensureOpencodeServer 复用,因为用户在等回复,冷启动延迟
+ * 会让用户体验恶化。
+ *
+ * 注意: 这里**不进 state.servers map** —— ephemeral 实例不被任何代码持有引用,杀完即弃。
+ * 因此 dashboard "opencode 实例" 列表大部分时间是空的 (短暂任务峰值时才会一闪而过)。
+ */
+export async function runWithEphemeralOpencodeServer<T>(
+  opts: {
+    user?: string
+    verbose?: boolean
+    /**
+     * true: 启用 HOME 隔离, opencode 看不到 user HOME 下的 skill (~/.claude/skills/ +
+     *       ~/.agents/skills/) 和插件 (~/.opencode/plugins/ 除 Witty-Skill-Insight 外)。
+     *       但 Witty-Skill-Insight.ts plugin 会自动 symlink 到隔离 HOME, trace 上报链路保留。
+     *       用于后台评测 (evaluator / grayscale / trigger) 等"内部任务",避免被 user skill 污染。
+     * false (默认): 用 process.env.HOME, opencode 能看到 user 所有 skill / plugin。
+     *               用于"用户实时对话"等需要看到 user skill 的场景 (skill-generator 等)。
+     */
+    isolateHome?: boolean
+  },
+  fn: (serverUrl: string) => Promise<T>,
+): Promise<T> {
+  const userKey = opts.user || ANONYMOUS_USER_KEY
+  const verbose = opts.verbose ?? false
+  // 准备隔离 HOME (如启用), 拿 cleanup 在 finally 里调
+  let homeCleanup: (() => Promise<void>) | null = null
+  let homeOverride: string | undefined = undefined
+  if (opts.isolateHome) {
+    const { isolatedHome, cleanup } = await prepareIsolatedHome(userKey)
+    homeOverride = isolatedHome
+    homeCleanup = cleanup
+  }
+  // 注意: 直接调内部 startServerForUser 不走 cache, 也不写 state.servers。
+  // 多个 ephemeral 调用并发时各自起独立进程,互不复用,自然隔离。
+  const inst = await startServerForUser(userKey, { verbose, homeOverride })
+  try {
+    return await fn(inst.baseUrl)
+  } finally {
+    try {
+      await terminateOpencodeProcess(inst.process, `ephemeral cleanup for ${userKey}`)
+    } catch (cleanupErr) {
+      // cleanup 失败不应该掩盖 fn 的真错误,只 warn 不抛
+      console.warn(
+        `[opencode] ephemeral cleanup for ${userKey} failed:`,
+        cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr),
+      )
+    }
+    // 隔离 HOME 临时目录在 server 死透之后清, 避免 server 还在引用文件被 unlink
+    if (homeCleanup) {
+      await homeCleanup()
+    }
+  }
+}
+
+/**
+ * Dashboard / debug 用：当前所有活跃 opencode 实例的快照。不会暴露 ChildProcess 句柄,
+ * 只导出可序列化的可观测字段:user、PID、port、startedAt、uptime、是否已 exit。
+ *
+ * 注意: 后台任务从 v0.7 起走 runWithEphemeralOpencodeServer 模式 (per-task spawn-and-kill),
+ * 不进 state.servers map; 这里只列出 ensureOpencodeServer 复用模式下持有的实例 (典型场景:
+ * skill-generator-bridge 的用户实时对话)。大部分时间这个列表是空的。
+ */
+export function getOpencodeServersSnapshot(): Array<{
+  user: string
+  pid: number | null
+  port: number
+  baseUrl: string
+  startedAt: number
+  uptimeMs: number
+  exitCode: number | null
+}> {
+  const now = Date.now()
+  return Array.from(state.servers.entries()).map(([userKey, srv]) => ({
+    user: userKey,
+    pid: srv.process.pid ?? null,
+    port: srv.port,
+    baseUrl: srv.baseUrl,
+    startedAt: srv.startedAt,
+    uptimeMs: Math.max(0, now - srv.startedAt),
+    exitCode: srv.process.exitCode,
+  }))
 }

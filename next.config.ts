@@ -1,9 +1,15 @@
 import type { NextConfig } from "next";
+import path from "path";
 
 const nextConfig: NextConfig = {
   basePath: process.env.NEXT_PUBLIC_URL_PREFIX || '',
   output: 'standalone',
   serverExternalPackages: ["node-fetch", "pg"],
+  // 显式锁定 workspace root，避免 Next.js 在多 lockfile 时选错根
+  // （家目录如果也存在 package-lock.json 会被误识别为 monorepo 根）。
+  turbopack: {
+    root: path.resolve('.'),
+  },
   experimental: {
       serverActions: {
           allowedOrigins: ["*"] //
