@@ -131,6 +131,7 @@ export default function SkillEvalTriggerPage() {
   const [selectedSetId, setSelectedSetId] = useState<string | null>(null);
   const [datasetVersionsOpen, setDatasetVersionsOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [uploadFormatDialogOpen, setUploadFormatDialogOpen] = useState(false);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
 
   // 三段式 section 折叠态。固定默认：① ② 折叠 / ③ 展开——不再根据数据状态自动改写
@@ -576,9 +577,9 @@ export default function SkillEvalTriggerPage() {
               </button>
               <button
                 className="sa-btn"
-                onClick={() => uploadInputRef.current?.click()}
+                onClick={() => setUploadFormatDialogOpen(true)}
                 disabled={uploading}
-                title="上传 JSON 文件：[{ query, shouldTrigger, rationale? }, ...]"
+                title="查看数据集 JSON 格式要求，然后选择文件"
               >
                 {uploading ? '上传中...' : '上传数据集'}
               </button>
@@ -761,6 +762,16 @@ export default function SkillEvalTriggerPage() {
           )}
         </SectionShell>
       </main>
+
+      {uploadFormatDialogOpen && (
+        <UploadFormatDialog
+          onCancel={() => setUploadFormatDialogOpen(false)}
+          onPickFile={() => {
+            setUploadFormatDialogOpen(false);
+            uploadInputRef.current?.click();
+          }}
+        />
+      )}
 
       {runDialogOpen && (
         <RunDialog
@@ -1798,3 +1809,114 @@ function TriggerRunHistoryPanel({
   );
 }
 
+
+// =========================================================================
+// 上传数据集格式说明对话框
+// =========================================================================
+function UploadFormatDialog({
+  onCancel,
+  onPickFile,
+}: {
+  onCancel: () => void;
+  onPickFile: () => void;
+}) {
+  const example = `[
+  { "query": "帮我写一段排序", "shouldTrigger": true,  "rationale": "可选：为什么应触发" },
+  { "query": "今天天气怎么样", "shouldTrigger": false }
+]`;
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0,0,0,0.4)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 100,
+      }}
+      onClick={onCancel}
+    >
+      <div
+        style={{
+          background: 'var(--bg, #fff)',
+          padding: 24,
+          borderRadius: 8,
+          minWidth: 520,
+          maxWidth: 640,
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        <h3 style={{ margin: '0 0 12px', fontSize: 16 }}>上传数据集 · 格式要求</h3>
+
+        <div
+          style={{
+            margin: '0 0 12px',
+            padding: '10px 12px',
+            background: '#eef2ff',
+            border: '1px solid #c7d2fe',
+            borderRadius: 6,
+            fontSize: 12,
+            color: '#3730a3',
+          }}
+        >
+          仅支持 <code>.json</code> 文件；上传成功后会作为新版本追加到当前数据集。
+        </div>
+
+        <div style={{ fontSize: 13, marginBottom: 8, color: '#374151' }}>
+          <strong>顶层结构</strong>（两种等价写法都接受）：
+        </div>
+        <ul style={{ margin: '0 0 12px 20px', fontSize: 13, color: '#374151', lineHeight: 1.7 }}>
+          <li>直接是一个数组 <code>[...]</code></li>
+          <li>或者包一层：<code>{'{ "items": [...] }'}</code></li>
+        </ul>
+
+        <div style={{ fontSize: 13, marginBottom: 8, color: '#374151' }}>
+          <strong>每项字段</strong>：
+        </div>
+        <ul style={{ margin: '0 0 12px 20px', fontSize: 13, color: '#374151', lineHeight: 1.7 }}>
+          <li>
+            <code>query</code> · string · <span style={{ color: '#b91c1c' }}>必填</span>，非空 —— 用户问句
+          </li>
+          <li>
+            <code>shouldTrigger</code> · boolean · <span style={{ color: '#b91c1c' }}>必填</span> —— 期望该 skill 是否被触发
+          </li>
+          <li>
+            <code>rationale</code> · string · 可选 —— 标注说明
+          </li>
+          <li>
+            <code>id</code> · string · 可选 —— 不传则自动生成
+          </li>
+        </ul>
+
+        <div style={{ fontSize: 13, marginBottom: 6, color: '#374151' }}>
+          <strong>示例</strong>：
+        </div>
+        <pre
+          style={{
+            margin: '0 0 16px',
+            padding: '10px 12px',
+            background: '#f9fafb',
+            border: '1px solid #e5e7eb',
+            borderRadius: 6,
+            fontSize: 12,
+            lineHeight: 1.5,
+            overflow: 'auto',
+            maxHeight: 180,
+          }}
+        >
+          {example}
+        </pre>
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button className="sa-btn" onClick={onCancel}>
+            取消
+          </button>
+          <button className="sa-btn sa-btn-primary" onClick={onPickFile}>
+            选择文件…
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
