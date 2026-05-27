@@ -1923,7 +1923,7 @@ function RepeatedMessagesBlock({
                     className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left hover:bg-background-tertiary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                     <ChevronRight className={cn('size-3 text-foreground-muted transition-transform', expanded && 'rotate-90')} />
-                    <span className="text-xs font-semibold text-foreground">repeated context</span>
+                    <span className="text-xs font-semibold text-foreground">model context</span>
                     <span className="text-xs text-foreground-muted tabular-nums">{messages.length} messages</span>
                     <span className="ml-auto text-xs text-primary">展开</span>
                 </button>
@@ -1945,7 +1945,7 @@ function RepeatedMessagesBlock({
                 )}
             </div>
             {showModal && (
-                <ContentModal title={`${modalTitle} — repeated context`} raw={raw} onClose={() => setShowModal(false)} />
+                <ContentModal title={`${modalTitle} — model context`} raw={raw} onClose={() => setShowModal(false)} />
             )}
         </>
     );
@@ -1975,7 +1975,7 @@ function HierarchicalSpanSnapshot({
             <SectionTitle>
                 Trace / Span Snapshot
                 <span className="ml-2 text-xs font-normal text-foreground-muted">
-                    input.messages {snapshot.inputMessages.length}
+                    input {snapshot.inputMessages.length}
                 </span>
             </SectionTitle>
             <div className="overflow-hidden rounded-md border border-border bg-card">
@@ -1989,51 +1989,55 @@ function HierarchicalSpanSnapshot({
                     </span>
                 </div>
 
-                <div className="border-b border-border">
-                    <div className="flex items-center gap-2 px-2.5 py-1.5">
-                        <span className="text-xs font-semibold text-foreground">input.messages</span>
-                        <span className="text-xs text-foreground-muted tabular-nums">{snapshot.inputMessages.length}</span>
-                        {snapshot.repeatedPrefixCount > 0 && (
-                            <span className="rounded-sm border border-border bg-background-secondary px-1.5 py-0.5 text-xs text-foreground-muted">
-                                folded {snapshot.repeatedPrefixCount}
-                            </span>
-                        )}
-                    </div>
-                    {repeatedMessages.length > 0 && (
-                        <RepeatedMessagesBlock messages={repeatedMessages} modalTitle={`${title} — input.messages`} />
-                    )}
-                    {freshMessages.length > 0 ? (
-                        freshMessages.map((message, index) => (
-                            <SnapshotMessageRow
-                                key={`${message.role}-${message.position}-${index}`}
-                                message={message}
-                                defaultExpanded={index === freshMessages.length - 1}
-                                modalTitle={`${title} — input #${message.position}`}
-                            />
-                        ))
-                    ) : repeatedMessages.length === 0 ? (
-                        <div className="border-t border-border px-3 py-2 text-xs text-foreground-muted">
-                            No input messages captured for this span.
+                <div className="border-t border-border bg-background-tertiary p-2">
+                    <div className="overflow-hidden rounded-md border border-border bg-card">
+                        <div className="flex items-center gap-2 px-2.5 py-1.5">
+                            <span className="text-xs font-semibold text-foreground">input</span>
+                            <span className="text-xs text-foreground-muted tabular-nums">{snapshot.inputMessages.length}</span>
+                            {snapshot.repeatedPrefixCount > 0 && (
+                                <span className="rounded-sm border border-border bg-background-secondary px-1.5 py-0.5 text-xs text-foreground-muted">
+                                    folded {snapshot.repeatedPrefixCount}
+                                </span>
+                            )}
                         </div>
-                    ) : null}
+                        {repeatedMessages.length > 0 && (
+                            <RepeatedMessagesBlock messages={repeatedMessages} modalTitle={`${title} — input`} />
+                        )}
+                        {freshMessages.length > 0 ? (
+                            freshMessages.map((message, index) => (
+                                <SnapshotMessageRow
+                                    key={`${message.role}-${message.position}-${index}`}
+                                    message={message}
+                                    defaultExpanded={index === freshMessages.length - 1}
+                                    modalTitle={`${title} — input #${message.position}`}
+                                />
+                            ))
+                        ) : repeatedMessages.length === 0 ? (
+                            <div className="border-t border-border px-3 py-2 text-xs text-foreground-muted">
+                                No input messages captured for this span.
+                            </div>
+                        ) : null}
+                    </div>
                 </div>
 
-                <div>
-                    <div className="flex items-center gap-2 px-2.5 py-1.5">
-                        <span className="text-xs font-semibold text-foreground">output.messages</span>
-                        <span className="text-xs text-foreground-muted tabular-nums">{output ? 1 : 0}</span>
-                    </div>
-                    {output ? (
-                        <SnapshotMessageRow
-                            message={{ role: 'assistant', content: output, source: 'history', position: 1 }}
-                            defaultExpanded
-                            modalTitle={`${title} — output`}
-                        />
-                    ) : (
-                        <div className="border-t border-border px-3 py-2 text-xs text-foreground-muted">
-                            No text output captured.
+                <div className="border-t border-border bg-background-tertiary p-2">
+                    <div className="overflow-hidden rounded-md border border-border bg-card">
+                        <div className="flex items-center gap-2 px-2.5 py-1.5">
+                            <span className="text-xs font-semibold text-foreground">output</span>
+                            <span className="text-xs text-foreground-muted tabular-nums">{output ? 1 : 0}</span>
                         </div>
-                    )}
+                        {output ? (
+                            <SnapshotMessageRow
+                                message={{ role: 'assistant', content: output, source: 'history', position: 1 }}
+                                defaultExpanded
+                                modalTitle={`${title} — output`}
+                            />
+                        ) : (
+                            <div className="border-t border-border px-3 py-2 text-xs text-foreground-muted">
+                                No text output captured.
+                            </div>
+                        )}
+                    </div>
                 </div>
             </div>
         </div>
