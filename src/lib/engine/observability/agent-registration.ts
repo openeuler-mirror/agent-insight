@@ -1,3 +1,5 @@
+import { isEvaluatorAgentName } from '@/lib/evaluator-agent';
+
 type InteractionLike = Record<string, any>;
 
 export interface ObservedAgentRegistration {
@@ -51,4 +53,16 @@ export function extractObservedAgentRegistrations(
 
 export function extractObservedAgentNames(interactions: InteractionLike[] | null | undefined): string[] {
     return extractObservedAgentRegistrations(interactions).map(agent => agent.name);
+}
+
+export function getPrimaryObservedAgentName(
+    interactions: InteractionLike[] | null | undefined,
+    primaryAgentName?: string | null,
+): string {
+    const registrations = extractObservedAgentRegistrations(interactions, primaryAgentName);
+    const primary = registrations.find(agent =>
+        agent.agentType === 'main' && !isEvaluatorAgentName(agent.name),
+    );
+    if (primary) return primary.name;
+    return registrations.find(agent => !isEvaluatorAgentName(agent.name))?.name || '';
 }

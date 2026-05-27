@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { prismaRaw as prisma } from '@/lib/storage/prisma';
 import { extractTrajectoryTaskMeta } from '@/lib/eval/trajectory-task-meta';
-import { isEvaluatorAgentName } from '@/lib/evaluator-agent';
+import { getPrimaryObservedAgentName } from '@/lib/engine/observability/agent-registration';
 
 export const dynamic = 'force-dynamic';
 
@@ -133,9 +133,7 @@ export async function GET(request: Request) {
             try {
                 const interactions = JSON.parse(session.interactions);
                 if (!Array.isArray(interactions)) continue;
-                const agent = interactions
-                    .map((item: { agent?: unknown }) => String(item.agent || '').trim())
-                    .find(name => name && !isEvaluatorAgentName(name));
+                const agent = getPrimaryObservedAgentName(interactions);
                 if (agent) executionAgentByKey.set(session.taskId, agent);
             } catch {
                 /* ignore malformed session interactions */
