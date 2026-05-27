@@ -460,6 +460,8 @@ async function runGeneralAgentWithClient(
         agentName: input.recordTraceAs,
         user: input.user,
         query: input.query,
+        skill: skillMeta?.name ?? input.skill,
+        skillVersion: skillMeta?.version ?? input.skillVersion,
       });
     } catch (err) {
       console.warn(`[general-agent] recordTraceAs failed for session ${sessionId}:`, (err as Error)?.message || err);

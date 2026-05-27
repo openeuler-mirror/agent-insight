@@ -479,6 +479,12 @@ function hasAnyRunningCaseStates(states: CaseStates): boolean {
     ));
 }
 
+function isRecoverableInterruptedRun(run: RunResult): boolean {
+    if (run.status !== 'fail' || run.sessionId) return false;
+    const detail = `${run.failureDetail || ''}\n${run.output || ''}`;
+    return run.failureType === 'agent_error' && /服务重启中断|server .*restart|restarted/i.test(detail);
+}
+
 function getAutoEvaluationBacklogCaseIds(states: CaseStates): string[] {
     return Object.entries(states)
         .filter(([, state]) => (
@@ -645,7 +651,8 @@ async function reconcileFinishedExecutions(args: {
         for (const side of ['a', 'b'] as Side[]) {
             const version = side === 'a' ? versionA : versionB;
             for (const run of state[side].runs || []) {
-                if (run.status !== 'running' || run.sessionId) continue;
+                if (run.sessionId) continue;
+                if (run.status !== 'running' && !isRecoverableInterruptedRun(run)) continue;
                 pendingTargets.push({ caseId, side, run, query, version });
             }
         }
@@ -1374,13 +1381,20 @@ export async function GET(
         const task = await loadTask(taskId, user);
         if (!task) return NextResponse.json({ error: 'task not found' }, { status: 404 });
 
+        const metricsHydrated = await hydrateExecutionMetrics(task.caseStatesJson);
+        const executionsReconciled = await reconcileFinishedExecutions({
+            user,
+            config: task.configJson,
+            states: task.caseStatesJson,
+        });
+        const reconciled = await reconcileFinishedEvaluations(user, task.configJson, task.caseStatesJson);
+
         // === 孤儿 in-flight 清理 ===
         // activeRuns 是内存 map (挂 globalThis), server 重启就丢。如果 caseStates
         // 里还有 running/pending/evaluating 但 activeRuns 没有这个 task 的条目,
         // 那一定是上次进程跑到一半被杀的孤儿——agent / evaluator 子进程都没了,
-        // 不会再有人推进它的状态。之前依赖 reconcileFinishedExecutions 反查
-        // Execution 表回填, 但 agent 还没完成就被杀的 run 根本没写 Execution 行,
-        // 反查找不到, 永远卡在 running。
+        // 不会再有人推进它的状态。先走上面的 reconcileFinishedExecutions 反查
+        // Execution 表回填; 只有仍未被回填的 in-flight run 才能判作真正孤儿。
         //
         // 直接走跟 abort 同款的清理: pending/running/evaluating 全标 fail, 然后
         // rebuildSideAggregate 让 top 跟 runs 一致。
@@ -1419,13 +1433,6 @@ export async function GET(
             }
         }
 
-        const metricsHydrated = await hydrateExecutionMetrics(task.caseStatesJson);
-        const executionsReconciled = await reconcileFinishedExecutions({
-            user,
-            config: task.configJson,
-            states: task.caseStatesJson,
-        });
-        const reconciled = await reconcileFinishedEvaluations(user, task.configJson, task.caseStatesJson);
         if (orphanCleanup || metricsHydrated || executionsReconciled || reconciled) {
             await persistTaskState(taskId, user, task.configJson, task.caseStatesJson);
         }
