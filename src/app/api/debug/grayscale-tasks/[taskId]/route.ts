@@ -1570,7 +1570,22 @@ export async function POST(
             });
         }
 
-        if (activeRuns().has(storeKey)) {
+        // 行级 retry-eval 路径 (action='evaluate' + onlyMissingEvaluation=true)
+        // 跳过 single-instance 守门, 允许多个 retry 并行——只针对 frontend retryEvaluation
+        // 这种"用户点了 N 条失败 case 的 retry, 期望并行重评"的场景。
+        //
+        // 安全性论证: onlyMissingEvaluation=true 时, backend evaluateRunsWithConcurrency
+        // 只选 evaluatorRunId/score 都没的 run; 每条 retry 走 retryEvaluation 时 frontend
+        // 已经清掉了那条 run 的 evaluatorRunId/score, 不同 retry 改的是不同 run。
+        //
+        // RACE 风险 (已知, 不修): persistTaskState 写整个 caseStatesJson 而非 patch 单 run,
+        // 两个 retry 并行时存在 lost-update 风险 (call1 在 T=0 loadTask 拿快照 S1,
+        // call2 在 T=0.1 loadTask 拿快照 S2; call1 在 T=10s persistTaskState(S1.R2=pass),
+        // call2 在 T=10.5s persistTaskState(S2.R3=pass) → S1 的 R2 更新被 S2 覆盖丢)。
+        // 实际频率应该低 (用户点几个 retry, 间隔通常够 backend 串行写); 如出现问题再加
+        // per-run 原子 persist (read-merge-write)。
+        const isParallelRetryEval = action === 'evaluate' && onlyMissingEvaluation;
+        if (activeRuns().has(storeKey) && !isParallelRetryEval) {
             return NextResponse.json({ error: 'task is already running' }, { status: 409 });
         }
         const task = await loadTask(taskId, user);
@@ -1583,7 +1598,9 @@ export async function POST(
         const origin = req.nextUrl.origin;
         const runId = `gray_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
         const abortController = new AbortController();
-        activeRuns().set(storeKey, {
+        // 并行 retry-eval 不占 activeRuns 主槽位 (否则后续 retry 也会被 guard 拒),
+        // 但保留 abortController; 主路径正常占 activeRuns。
+        if (!isParallelRetryEval) activeRuns().set(storeKey, {
             taskId,
             runId,
             status: action === 'evaluate' ? 'evaluating' : 'running',
@@ -1614,7 +1631,8 @@ export async function POST(
                 }
             })
             .finally(() => {
-                activeRuns().delete(storeKey);
+                // 并行 retry-eval 没占主槽, 也不删它 (别的 retry-eval 可能还在跑)
+                if (!isParallelRetryEval) activeRuns().delete(storeKey);
             });
 
         return NextResponse.json({ ok: true, runId });
