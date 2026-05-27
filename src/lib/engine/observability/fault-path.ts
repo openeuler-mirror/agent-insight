@@ -153,7 +153,7 @@ export function buildFaultPathSteps(input: any[], locale = 'zh'): FaultPathStep[
                         if (!it || it.role === 'system') continue;
                         const content = typeof it.content === 'string'
                             ? it.content
-                            : JSON.stringify(it.content, null, 2);
+                            : stringifyPreview(it.content, 2000);
                         if (!content.trim()) continue;
                         if (it.role === 'user' || it.role === 'opencode') {
                             parts.push(`[User]\n${truncateText(content, 2000)}`);
