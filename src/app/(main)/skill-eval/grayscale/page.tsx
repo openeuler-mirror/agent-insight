@@ -1190,6 +1190,74 @@ export function GrayscaleEvaluation({
         }, 3000);
     };
 
+    /**
+     * 行级评测重试: 严格只 retry 用户点击的那一条 fail run, 不动 case 内其他 run。
+     *
+     * 步骤:
+     *   1) 找到 (caseId, side, runIndex) 那条 run, reset 它的状态:
+     *      status='evaluating' (UI 立刻看到 spinner), 清掉 evaluatorRunId/score/
+     *      tier/output/failureType/failureDetail (让 backend 把它当"未评测"重选)
+     *   2) PATCH caseStatesJson 落库
+     *   3) POST action='evaluate' + onlyMissingEvaluation:true → backend 只选
+     *      没 evaluatorRunId 也没 score 的 run, 现在只有刚 reset 的这一条匹配, 其他
+     *      已 pass run 因为有 score / evaluatorRunId 被 skip, 不会被误评
+     *   4) pollCurrentTask 跟进, evaluator 完成时 reconcileFinishedEvaluations
+     *      正常推到 pass/fail
+     */
+    const retryEvaluation = async (caseId: string, side: 'a' | 'b', runIndex: number) => {
+        if (!currentTask) return;
+        let resetState: Record<string, { a: PerVersionState; b: PerVersionState }> | null = null;
+        setCaseStates(prev => {
+            const current = prev[caseId];
+            if (!current) return prev;
+            const sideState = current[side];
+            if (!sideState) return prev;
+            const newRuns = (sideState.runs || []).map(r => {
+                if (r.runIndex !== runIndex) return r;
+                // 重置那一条 run, 让 backend onlyMissingEvaluation 过滤选中它
+                const next = { ...r, status: 'evaluating' as CaseStatus };
+                delete next.evaluatorRunId;
+                delete next.evaluationResultId;
+                delete next.evaluationTraceId;
+                delete next.score;
+                delete next.tier;
+                delete next.failureType;
+                delete next.failureDetail;
+                next.output = '';
+                return next;
+            });
+            const updatedSide = { ...sideState, runs: newRuns, status: 'evaluating' as CaseStatus };
+            const updated = { ...prev, [caseId]: { ...current, [side]: updatedSide } };
+            resetState = updated;
+            return updated;
+        });
+        if (!resetState) return;
+        // PATCH 让 server 看到 reset 后的状态 (status='evaluating', 字段已清)
+        await persistTaskUpdate(currentTask.id, currentConfigRef.current, resetState);
+        // 调用 backend 行级 retry
+        try {
+            const res = await apiFetch(`/api/debug/grayscale-tasks/${currentTask.id}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    user: user || 'debug-user',
+                    action: 'evaluate',
+                    caseIds: [caseId],
+                    evaluatorId: selectedEvaluatorId,
+                    onlyMissingEvaluation: true,
+                }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                alert(data.error || (locale === 'zh' ? '评测重试失败' : 'Retry evaluation failed'));
+                return;
+            }
+            pollCurrentTask(currentTask.id);
+        } catch (err) {
+            alert(String(err));
+        }
+    };
+
     // Evaluate single side
     const evaluateCaseSide = async (caseId: string, side: 'a' | 'b', execState: PerVersionState) => {
         if (currentTask) {
@@ -2189,15 +2257,13 @@ export function GrayscaleEvaluation({
                                                 : (locale === 'zh' ? '评测失败 → 只重新评测 (复用现有 session)' : 'Retry evaluation only')}
                                             onClick={() => {
                                                 // 执行失败 → 重跑 agent (会 push 新 run, 自动 autoEval)
-                                                // 评测失败 → 只重评 (走 action='evaluate' POST, 复用现有 sessionId)
+                                                // 评测失败 → 行级 retryEvaluation: reset 这一条 run 状态
+                                                //           + onlyMissingEvaluation=true 让 backend 只评这一条,
+                                                //           不会误评同 case 已 pass 的其他 run。
                                                 if (hasExecFailure) {
                                                     void runCaseSide(record.caseId, side);
                                                 } else {
-                                                    // 拿当前 side state (含 sessionId) 传给 evaluator
-                                                    const sideState = caseStates[record.caseId]?.[side];
-                                                    if (sideState) {
-                                                        void evaluateCaseSide(record.caseId, side, sideState);
-                                                    }
+                                                    void retryEvaluation(record.caseId, side, record.roundIndex || 1);
                                                 }
                                             }}
                                         >

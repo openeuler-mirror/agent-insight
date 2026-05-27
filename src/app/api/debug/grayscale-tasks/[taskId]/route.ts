@@ -1332,7 +1332,7 @@ async function runGrayscaleTask(args: {
     }
 }
 
-async function evaluateExistingTask(args: { taskId: string; user: string; origin: string; caseIds: string[]; evaluatorId?: string }) {
+async function evaluateExistingTask(args: { taskId: string; user: string; origin: string; caseIds: string[]; evaluatorId?: string; onlyMissingEvaluation?: boolean }) {
     const task = await loadTask(args.taskId, args.user);
     if (!task) throw new Error('task not found');
     validateTaskSkillBinding(task);
@@ -1347,6 +1347,9 @@ async function evaluateExistingTask(args: { taskId: string; user: string; origin
         states,
         caseIds,
         evaluatorId: args.evaluatorId,
+        // 透传给 evaluateRunsWithConcurrency, true 时只选 evaluatorRunId/score 都没的 run,
+        // 避免行级 retry 误评同 case 已 pass 的其他 run。
+        onlyMissingEvaluation: args.onlyMissingEvaluation,
     });
     if (!evaluatorRunId) throw new Error('no executed agent sessions to evaluate');
 }
@@ -1469,6 +1472,9 @@ export async function POST(
         const agentMaxConcurrency = typeof body.agentMaxConcurrency === 'number' && Number.isFinite(body.agentMaxConcurrency)
             ? Math.max(1, Math.floor(body.agentMaxConcurrency))
             : undefined;
+        // 行级 retry 用: true 时 backend 只评估 evaluatorRunId/score 都没有的 run,
+        // 避免把同 case 已 pass 的其他 run 也重评一遍。
+        const onlyMissingEvaluation = body.onlyMissingEvaluation === true;
         if (!user || !taskId) {
             return NextResponse.json({ error: 'user and taskId are required' }, { status: 400 });
         }
@@ -1567,7 +1573,7 @@ export async function POST(
         });
 
         const job = action === 'evaluate'
-            ? evaluateExistingTask({ taskId, user, origin, caseIds, evaluatorId })
+            ? evaluateExistingTask({ taskId, user, origin, caseIds, evaluatorId, onlyMissingEvaluation })
             : runGrayscaleTask({ taskId, user, origin, caseIds, evaluatorId, agentMaxConcurrency });
 
         void job
