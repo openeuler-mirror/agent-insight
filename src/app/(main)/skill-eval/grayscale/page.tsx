@@ -1195,6 +1195,175 @@ export function GrayscaleEvaluation({
     };
 
     /**
+     * 行级执行重试: 原地覆盖指定 runIndex 的 run, 不 push 新行。
+     *
+     * 跟 runCaseSide (重跑整个 case-side, append 新 run) 不同, 这里是"再试这一行"
+     * 语义——用户在 modal 里看到某一行执行失败, 想再跑一次, 同一行覆盖结果。
+     *
+     * 步骤:
+     *   1) 找到 (caseId, side, runIndex) 那条 run, reset 它的状态为 'running',
+     *      清掉 sessionId/output/score/eval 相关字段, 保留 runIndex/roundIndex
+     *   2) PATCH caseStatesJson 落库
+     *   3) POST /api/debug/execute (不带 grayscaleTaskId/caseId/side, 避免 backend
+     *      recordTraceAs 走老的 append 路径), 等 jobId
+     *   4) 轮询 /api/debug/execute/{jobId}, completion 时按 runIndex 找到对应 run
+     *      原地更新结果字段; autoEval=true 时自动触发该 run 的 evaluate
+     */
+    const retryExecution = async (caseId: string, side: 'a' | 'b', runIndex: number) => {
+        if (!currentTask) return;
+        const targetCase = allCases.find(c => c.id === caseId);
+        const query = targetCase?.input || '';
+        if (!query.trim()) return;
+        const versionId = side === 'a' ? versionAId : versionBId;
+        const isNone = versionId === NONE_VERSION_ID;
+        const version = isNone ? null : versions.find(v => v.id === versionId);
+        const selectedSkill = skills.find(s => s.id === selectedSkillId);
+
+        // 1) 原地 reset 那一条 run
+        const resetRunByIndex = (sideState: PerVersionState | undefined): PerVersionState => {
+            const base: PerVersionState = sideState ?? { status: 'pending' };
+            const runs = (base.runs ?? []).map(r => {
+                if (r.runIndex !== runIndex) return r;
+                const next = { ...r, status: 'running' as CaseStatus };
+                delete next.sessionId;
+                delete next.evaluatorRunId;
+                delete next.evaluationResultId;
+                delete next.evaluationTraceId;
+                delete next.score;
+                delete next.tier;
+                delete next.failureType;
+                delete next.failureDetail;
+                delete next.timeCost;
+                delete next.tokenUsage;
+                delete next.skillTriggered;
+                delete next.toolCallCount;
+                delete next.toolCalls;
+                next.output = '';
+                return next;
+            });
+            return { ...base, status: 'running', runs };
+        };
+        let nextStates: Record<string, { a: PerVersionState; b: PerVersionState }> | null = null;
+        setCaseStates(prev => {
+            const current = prev[caseId];
+            if (!current) return prev;
+            const updated = { ...prev, [caseId]: { ...current, [side]: resetRunByIndex(current[side]) } };
+            nextStates = updated;
+            return updated;
+        });
+        if (!nextStates) return;
+        await persistTaskUpdate(currentTask.id, currentConfigRef.current, nextStates);
+
+        // 2) POST /api/debug/execute (不传 grayscaleTaskId, 避免 backend 重复写库)
+        let jobId: string;
+        try {
+            const res = await apiFetch('/api/debug/execute', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    user: user || 'debug-user',
+                    query,
+                    skill: isNone ? undefined : selectedSkill?.name,
+                    skillVersion: (isNone || !version) ? undefined : Number(version.version),
+                    mode: 'grayscale',
+                }),
+            });
+            const data = await res.json();
+            if (!res.ok || !data.jobId) {
+                setCaseStates(prev => {
+                    const current = prev[caseId];
+                    if (!current) return prev;
+                    const sideState = current[side];
+                    if (!sideState) return prev;
+                    const runs = (sideState.runs ?? []).map(r =>
+                        r.runIndex === runIndex
+                            ? { ...r, status: 'fail' as CaseStatus, output: data.error || 'dispatch failed' }
+                            : r
+                    );
+                    return { ...prev, [caseId]: { ...current, [side]: { ...sideState, runs } } };
+                });
+                return;
+            }
+            jobId = data.jobId;
+        } catch (err) {
+            setCaseStates(prev => {
+                const current = prev[caseId];
+                if (!current) return prev;
+                const sideState = current[side];
+                if (!sideState) return prev;
+                const runs = (sideState.runs ?? []).map(r =>
+                    r.runIndex === runIndex
+                        ? { ...r, status: 'fail' as CaseStatus, output: String(err) }
+                        : r
+                );
+                return { ...prev, [caseId]: { ...current, [side]: { ...sideState, runs } } };
+            });
+            return;
+        }
+
+        // 3) 轮询 job, completion 时按 runIndex 原地更新
+        const poll = async (): Promise<boolean | null> => {
+            try {
+                const res = await apiFetch(`/api/debug/execute/${jobId}`);
+                const data = await res.json();
+                if (data.status === 'completed') {
+                    setCaseStates(prev => {
+                        const current = prev[caseId];
+                        if (!current) return prev;
+                        const sideState = current[side];
+                        if (!sideState) return prev;
+                        const runs = (sideState.runs ?? []).map(r => r.runIndex === runIndex ? {
+                            ...r,
+                            status: 'executed' as CaseStatus,
+                            jobId,
+                            output: data.output ?? '',
+                            timeCost: data.timeCost,
+                            tokenUsage: data.tokenUsage ?? 0,
+                            sessionId: data.sessionId,
+                            skillTriggered: !!version,
+                        } : r);
+                        const updated = { ...prev, [caseId]: { ...current, [side]: { ...sideState, runs } } };
+                        persistCaseStates(updated);
+                        // autoEval: 跑完自动评估这一行 (走 retryEvaluation 同款行级路径)
+                        if (autoEval) void retryEvaluation(caseId, side, runIndex);
+                        return updated;
+                    });
+                    return true;
+                } else if (data.status === 'failed' || data.error) {
+                    setCaseStates(prev => {
+                        const current = prev[caseId];
+                        if (!current) return prev;
+                        const sideState = current[side];
+                        if (!sideState) return prev;
+                        const runs = (sideState.runs ?? []).map(r => r.runIndex === runIndex ? {
+                            ...r,
+                            status: 'fail' as CaseStatus,
+                            jobId,
+                            output: data.error || 'agent failed',
+                            failureType: 'agent_error',
+                            failureDetail: data.error || 'agent failed',
+                        } : r);
+                        const updated = { ...prev, [caseId]: { ...current, [side]: { ...sideState, runs } } };
+                        persistCaseStates(updated);
+                        return updated;
+                    });
+                    return false;
+                }
+                return null;
+            } catch { return null; }
+        };
+        const pollKey = `retry_exec_${caseId}_${side}_${runIndex}`;
+        if (activePollsRef.current[pollKey]) clearInterval(activePollsRef.current[pollKey]);
+        activePollsRef.current[pollKey] = setInterval(async () => {
+            const done = await poll();
+            if (done !== null) {
+                clearInterval(activePollsRef.current[pollKey]);
+                delete activePollsRef.current[pollKey];
+            }
+        }, 3000);
+    };
+
+    /**
      * 行级评测重试: 严格只 retry 用户点击的那一条 fail run, 不动 case 内其他 run。
      *
      * 步骤:
@@ -2272,14 +2441,17 @@ export function GrayscaleEvaluation({
                                                 ? (locale === 'zh' ? '执行失败 → 从执行重试 (会自动评测)' : 'Retry from execution (auto-evaluate)')
                                                 : (locale === 'zh' ? '评测失败 → 只重新评测 (复用现有 session)' : 'Retry evaluation only')}
                                             onClick={() => {
-                                                // 执行失败 → 重跑 agent (会 push 新 run, 自动 autoEval)
-                                                // 评测失败 → 行级 retryEvaluation: reset 这一条 run 状态
-                                                //           + onlyMissingEvaluation=true 让 backend 只评这一条,
-                                                //           不会误评同 case 已 pass 的其他 run。
+                                                // 都走行级"原地覆盖"路径——retry 是「再试这一行」语义,
+                                                // 不该多出一条新记录。
+                                                //   执行失败 → retryExecution: reset 这一条 run, 重跑 agent,
+                                                //              autoEval 时自动接 retryEvaluation
+                                                //   评测失败 → retryEvaluation: reset 这一条 run 评测状态,
+                                                //              backend onlyMissingEvaluation 只评这一条
+                                                const ri = record.roundIndex || 1;
                                                 if (hasExecFailure) {
-                                                    void runCaseSide(record.caseId, side);
+                                                    void retryExecution(record.caseId, side, ri);
                                                 } else {
-                                                    void retryEvaluation(record.caseId, side, record.roundIndex || 1);
+                                                    void retryEvaluation(record.caseId, side, ri);
                                                 }
                                             }}
                                         >
