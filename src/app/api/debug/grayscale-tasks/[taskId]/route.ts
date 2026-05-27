@@ -502,11 +502,16 @@ function getAutoEvaluationBacklogCaseIds(states: CaseStates): string[] {
 
 function rebuildSideAggregate(state: PerVersionState, totalRuns: number): PerVersionState {
     const runs = state.runs || [];
-    const finished = runs.filter(r => r.status === 'executed' || r.status === 'pass');
-    const failed = runs.filter(r => r.status === 'fail');
-    const evaluating = runs.some(r => r.status === 'evaluating');
-    const running = runs.some(r => r.status === 'running' || r.status === 'pending');
-    const scored = runs.filter(r => typeof r.score === 'number');
+    const expectedRuns = Math.max(0, Number(totalRuns) || 0);
+    const aggregateRuns = expectedRuns > 0 && runs.length > expectedRuns
+        ? runs.slice(-expectedRuns)
+        : runs;
+    const effectiveTotalRuns = expectedRuns || aggregateRuns.length;
+    const finished = aggregateRuns.filter(r => r.status === 'executed' || r.status === 'pass');
+    const failed = aggregateRuns.filter(r => r.status === 'fail');
+    const evaluating = aggregateRuns.some(r => r.status === 'evaluating');
+    const running = aggregateRuns.some(r => r.status === 'running' || r.status === 'pending');
+    const scored = aggregateRuns.filter(r => typeof r.score === 'number');
     const seconds = finished
         .map(r => typeof r.timeCost === 'string' ? Number.parseFloat(r.timeCost) : 0)
         .filter(n => Number.isFinite(n));
@@ -523,9 +528,9 @@ function rebuildSideAggregate(state: PerVersionState, totalRuns: number): PerVer
     const toolCalls = Array.from(new Set(finished.flatMap(r => r.toolCalls || []))).slice(0, 8);
 
     let status: CaseStatus = 'pending';
-    if (failed.length === totalRuns && totalRuns > 0) status = 'fail';
-    else if (scored.length === totalRuns && totalRuns > 0) status = 'pass';
-    else if (finished.length + failed.length === totalRuns && totalRuns > 0) status = 'executed';
+    if (scored.length >= effectiveTotalRuns && effectiveTotalRuns > 0) status = 'pass';
+    else if (failed.length >= effectiveTotalRuns && effectiveTotalRuns > 0) status = 'fail';
+    else if (finished.length + failed.length >= effectiveTotalRuns && effectiveTotalRuns > 0) status = 'executed';
     else if (evaluating) status = 'evaluating';
     else if (running || finished.length > 0) status = 'running';
 
