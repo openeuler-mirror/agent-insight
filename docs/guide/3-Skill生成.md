@@ -7,7 +7,7 @@
 
 ## 1. 功能说明
 
-Skill-insight 的生成功能不是简单地将文档转换为 Skill，而是采用"去冗余、合相似、抽模式"的方法，从大量相似的案例文档中提炼出标准化、可复用的 Skill。
+Agent-insight 的生成功能不是简单地将文档转换为 Skill，而是采用"去冗余、合相似、抽模式"的方法，从大量相似的案例文档中提炼出标准化、可复用的 Skill。
 
 具体来说：
 
@@ -25,7 +25,7 @@ Skill-insight 的生成功能不是简单地将文档转换为 Skill，而是采
 
 ### 2.1 给 Agent 注入生成能力
 
-在 Agent 的工作终端中执行以下命令，安装 Skill-insight Meta-Skill：
+在 Agent 的工作终端中执行以下命令，安装 Agent-insight Meta-Skill：
 
 ```bash
 npx skills add https://gitcode.com/openeuler/witty-skill-insight.git
@@ -67,7 +67,7 @@ npx skills add https://gitcode.com/openeuler/witty-skill-insight.git
 
 > 根据这些案例文档：`<目录或文件列表>` 生成 Skill，并尽量合并相似内容，避免重复 Skill。
 
-这是 Skill-insight 生成能力的核心优势——不是逐文档生成，而是跨文档聚合提炼。
+这是 Agent-insight 生成能力的核心优势——不是逐文档生成，而是跨文档聚合提炼。
 
 ### 3.4 生成后自动验证
 
