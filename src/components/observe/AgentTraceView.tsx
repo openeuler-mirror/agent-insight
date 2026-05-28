@@ -105,6 +105,22 @@ interface TraceSkillUsage {
     status: 'managed' | 'unregistered';
 }
 
+interface PromptSnapshotMessage {
+    role: string;
+    content: string;
+    source: 'system' | 'compaction' | 'history';
+    position: number;
+}
+
+interface LlmPromptSnapshot {
+    inputMessages: PromptSnapshotMessage[];
+    repeatedPrefixCount: number;
+    activeCompaction: NonNullable<AgentNode['compactions']>[number] | null;
+    foldedOriginalRaw: string | null;
+    foldedOriginalCount: number;
+    llmOrdinal: number;
+}
+
 // Selection key: 'a:{nodeId}' for agents, 'e:{nodeId}:{evIdx}' for events
 const agentKey = (id: string) => `a:${id}`;
 const eventKey = (nodeId: string, idx: number) => `e:${nodeId}:${idx}`;
@@ -1672,6 +1688,361 @@ function RoleSection({ role, label, raw, modalTitle }: { role: string; label: st
     );
 }
 
+function normalizePromptRole(role: string | undefined): string {
+    if (role === 'opencode') return 'user';
+    if (role === 'subagent') return 'assistant';
+    return role || 'unknown';
+}
+
+function summarizePromptArgs(raw: unknown): string {
+    if (raw == null) return '';
+    try {
+        const obj = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        if (obj && typeof obj === 'object') {
+            const r = obj as Record<string, unknown>;
+            for (const k of ['path', 'file_path', 'pattern', 'command', 'description', 'query', 'url']) {
+                const v = r[k];
+                if (typeof v === 'string' && v.trim()) return `${k}: ${v.length > 60 ? v.slice(0, 60) + '...' : v}`;
+            }
+            const keys = Object.keys(r);
+            if (keys.length) return keys.slice(0, 3).join(',') + (keys.length > 3 ? '...' : '');
+        }
+        return '';
+    } catch {
+        const s = typeof raw === 'string' ? raw : '';
+        return s.length > 60 ? `${s.slice(0, 60)}...` : s;
+    }
+}
+
+function interactionToPromptText(m: RawInteraction): string {
+    const text = typeof m.content === 'string' ? m.content : '';
+    if (text.trim()) return text;
+
+    const blocks: string[] = [];
+    if (Array.isArray(m.parts)) {
+        const reasoning = m.parts
+            .filter(p => (p?.type || '').toLowerCase() === 'reasoning')
+            .map(p => (typeof p.text === 'string' ? p.text.trim() : ''))
+            .filter(Boolean)
+            .join('\n\n');
+        if (reasoning) blocks.push(`[reasoning]\n${reasoning}`);
+    }
+    if (Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
+        const lines = m.tool_calls.map(tc => {
+            const name = tc.function?.name || tc.name || 'tool';
+            const args = tc.function?.arguments ?? tc.arguments;
+            const argSummary = summarizePromptArgs(args);
+            return argSummary ? `-> ${name}(${argSummary})` : `-> ${name}()`;
+        });
+        blocks.push(`[tool calls x ${m.tool_calls.length}]\n${lines.join('\n')}`);
+    }
+    if (typeof m.content !== 'string' && m.content != null) {
+        blocks.push(JSON.stringify(m.content, null, 2));
+    }
+    return blocks.join('\n\n');
+}
+
+function buildInputMessagesForLlmIndex(node: AgentNode, interactions: RawInteraction[], eventIdx: number): {
+    inputMessages: PromptSnapshotMessage[];
+    activeCompaction: NonNullable<AgentNode['compactions']>[number] | null;
+    foldedOriginalRaw: string | null;
+    foldedOriginalCount: number;
+} {
+    const boundaries = node.compactions || [];
+    const cutoff = boundaries.length
+        ? [...boundaries].filter(c => c.interactionIndex < eventIdx).pop()
+        : undefined;
+    const cutoffIdx = cutoff ? cutoff.interactionIndex : -1;
+
+    const verbatimNodeIndices = new Set(
+        node.interactionIndices.filter(i => i > cutoffIdx && i < eventIdx),
+    );
+    const verbatimMessages = interactions.filter((_, i) => verbatimNodeIndices.has(i));
+    const foldedIndices = cutoff ? node.interactionIndices.filter(i => i < cutoffIdx) : [];
+    const foldedMessages = foldedIndices.map(i => interactions[i]).filter(Boolean);
+
+    const sep = '\n\n---\n\n';
+    const inputMessages: PromptSnapshotMessage[] = [];
+    let position = 0;
+
+    for (const sp of node.systemPrompts || []) {
+        if (!sp.text?.trim()) continue;
+        inputMessages.push({
+            role: 'system',
+            content: sp.text,
+            source: 'system',
+            position: ++position,
+        });
+    }
+
+    if (cutoff?.summaryText?.trim()) {
+        inputMessages.push({
+            role: 'compaction',
+            content: cutoff.summaryText,
+            source: 'compaction',
+            position: ++position,
+        });
+    }
+
+    for (const m of verbatimMessages) {
+        if (m.role === 'system') continue;
+        inputMessages.push({
+            role: normalizePromptRole(m.role),
+            content: interactionToPromptText(m),
+            source: 'history',
+            position: ++position,
+        });
+    }
+
+    const foldedOriginalRaw = foldedMessages
+        .map(m => `[${normalizePromptRole(m.role)}] ${interactionToPromptText(m)}`)
+        .join(sep);
+
+    return {
+        inputMessages,
+        activeCompaction: cutoff || null,
+        foldedOriginalRaw: foldedOriginalRaw || null,
+        foldedOriginalCount: foldedMessages.length,
+    };
+}
+
+function countRepeatedPromptPrefix(prev: PromptSnapshotMessage[], current: PromptSnapshotMessage[]): number {
+    let count = 0;
+    const max = Math.min(prev.length, current.length);
+    while (count < max) {
+        if (prev[count].role !== current[count].role) break;
+        if ((prev[count].content || '').trim() !== (current[count].content || '').trim()) break;
+        count++;
+    }
+    return count;
+}
+
+function buildLlmPromptSnapshot(event: AgentEvent, node: AgentNode, interactions: RawInteraction[]): LlmPromptSnapshot {
+    const eventIdx = event.interactionIndex;
+    const current = buildInputMessagesForLlmIndex(node, interactions, eventIdx);
+    const previousLlmEvents = node.events
+        .filter(ev => ev.kind === 'llm' && ev.interactionIndex < eventIdx)
+        .sort((a, b) => a.interactionIndex - b.interactionIndex);
+    const prevEvent = previousLlmEvents[previousLlmEvents.length - 1];
+    const prevMessages = prevEvent
+        ? buildInputMessagesForLlmIndex(node, interactions, prevEvent.interactionIndex).inputMessages
+        : [];
+
+    return {
+        ...current,
+        repeatedPrefixCount: prevMessages.length > 0
+            ? countRepeatedPromptPrefix(prevMessages, current.inputMessages)
+            : 0,
+        llmOrdinal: previousLlmEvents.length + 1,
+    };
+}
+
+function SnapshotMessageRow({
+    message,
+    defaultExpanded,
+    modalTitle,
+}: {
+    message: PromptSnapshotMessage;
+    defaultExpanded?: boolean;
+    modalTitle: string;
+}) {
+    const [expanded, setExpanded] = useState(!!defaultExpanded);
+    const [showModal, setShowModal] = useState(false);
+    const trimmed = (message.content || '').trim();
+    const firstLine = trimmed.split(/\n/).find(l => l.trim()) || '';
+    const isLong = trimmed.length > PREVIEW_CHARS;
+    const roleLabel = message.role === 'compaction' ? 'summary' : message.role;
+    const roleClasses = message.role === 'compaction'
+        ? 'border-warning-border bg-warning-subtle text-warning'
+        : message.role === 'system'
+            ? KIND_META.llm.chip
+            : message.role === 'assistant'
+                ? KIND_META.agent.chip
+                : message.role === 'user'
+                    ? KIND_META.user.chip
+                    : 'border-border bg-background-secondary text-foreground-muted';
+
+    return (
+        <>
+            <div className="border-t border-border first:border-t-0 bg-card">
+                <button
+                    type="button"
+                    onClick={() => trimmed && setExpanded(v => !v)}
+                    className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left hover:bg-background-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                    <span className={cn('inline-flex min-w-[70px] justify-center rounded-sm border px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider', roleClasses)}>
+                        {roleLabel}
+                    </span>
+                    <span className="text-xs text-foreground-muted font-mono tabular-nums">#{message.position}</span>
+                    <span className="flex-1 min-w-0 truncate text-xs text-foreground-muted">
+                        {trimmed ? firstLine : '(empty)'}
+                    </span>
+                    {trimmed && <ChevronRight className={cn('size-3 text-foreground-muted transition-transform', expanded && 'rotate-90')} />}
+                </button>
+                {expanded && trimmed && (
+                    <div className="border-t border-border bg-background-tertiary">
+                        <div className="max-h-[280px] overflow-auto px-3 py-2 text-xs leading-6 text-foreground whitespace-pre-wrap break-words">
+                            {trimmed}
+                        </div>
+                        {isLong && (
+                            <div className="border-t border-border px-3 py-1.5 text-right">
+                                <Button variant="ghost" size="sm" onClick={() => setShowModal(true)} className="h-6 px-2 text-xs">
+                                    查看全部
+                                </Button>
+                            </div>
+                        )}
+                    </div>
+                )}
+            </div>
+            {showModal && (
+                <ContentModal title={modalTitle} raw={trimmed} onClose={() => setShowModal(false)} />
+            )}
+        </>
+    );
+}
+
+function RepeatedMessagesBlock({
+    messages,
+    modalTitle,
+}: {
+    messages: PromptSnapshotMessage[];
+    modalTitle: string;
+}) {
+    const [expanded, setExpanded] = useState(false);
+    const [showModal, setShowModal] = useState(false);
+    const raw = messages
+        .map(m => `#${m.position} [${m.role}]\n${m.content}`)
+        .join('\n\n---\n\n');
+
+    return (
+        <>
+            <div className="border-t border-border first:border-t-0 bg-background-secondary">
+                <button
+                    type="button"
+                    onClick={() => setExpanded(v => !v)}
+                    className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left hover:bg-background-tertiary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                    <ChevronRight className={cn('size-3 text-foreground-muted transition-transform', expanded && 'rotate-90')} />
+                    <span className="text-xs font-semibold text-foreground">model context</span>
+                    <span className="text-xs text-foreground-muted tabular-nums">{messages.length} messages</span>
+                </button>
+                {expanded && (
+                    <div className="border-t border-border">
+                        {messages.map((message, index) => (
+                            <SnapshotMessageRow
+                                key={`${message.role}-${message.position}-${index}`}
+                                message={message}
+                                modalTitle={`${modalTitle} — repeated #${message.position}`}
+                            />
+                        ))}
+                        <div className="border-t border-border px-3 py-1.5 text-right">
+                            <Button variant="ghost" size="sm" onClick={() => setShowModal(true)} className="h-6 px-2 text-xs">
+                                查看合并文本
+                            </Button>
+                        </div>
+                    </div>
+                )}
+            </div>
+            {showModal && (
+                <ContentModal title={`${modalTitle} — model context`} raw={raw} onClose={() => setShowModal(false)} />
+            )}
+        </>
+    );
+}
+
+function HierarchicalSpanSnapshot({
+    title,
+    node,
+    event,
+    snapshot,
+    responseText,
+}: {
+    title: string;
+    node: AgentNode;
+    event: AgentEvent;
+    snapshot: LlmPromptSnapshot;
+    responseText: string;
+}) {
+    const repeatedMessages = snapshot.inputMessages.slice(0, snapshot.repeatedPrefixCount);
+    const freshMessages = snapshot.inputMessages.slice(snapshot.repeatedPrefixCount);
+    const spanId = `llm_call_${snapshot.llmOrdinal}`;
+    const threadId = node.sessionId || 'TOP';
+    const output = responseText || '';
+
+    return (
+        <div>
+            <SectionTitle>
+                Trace / Span Snapshot
+                <span className="ml-2 text-xs font-normal text-foreground-muted">
+                    input {snapshot.inputMessages.length}
+                </span>
+            </SectionTitle>
+            <div className="overflow-hidden rounded-md border border-border bg-card">
+                <div className="flex flex-wrap items-center gap-2 border-b border-border bg-background-secondary px-2.5 py-2">
+                    <KindBadge kind="llm" />
+                    <span className="text-sm font-semibold text-foreground">{spanId}</span>
+                    <span className="text-xs text-foreground-muted">thread_id</span>
+                    <span className="rounded-sm border border-border bg-card px-1.5 py-0.5 font-mono text-xs text-foreground">{threadId}</span>
+                    <span className="ml-auto text-xs text-foreground-muted">
+                        event #{event.interactionIndex}
+                    </span>
+                </div>
+
+                <div className="border-t border-border bg-background-tertiary p-2">
+                    <div className="overflow-hidden rounded-md border border-border bg-card">
+                        <div className="flex items-center gap-2 px-2.5 py-1.5">
+                            <span className="text-xs font-semibold text-foreground">input</span>
+                            <span className="text-xs text-foreground-muted tabular-nums">{snapshot.inputMessages.length}</span>
+                            {snapshot.repeatedPrefixCount > 0 && (
+                                <span className="rounded-sm border border-border bg-background-secondary px-1.5 py-0.5 text-xs text-foreground-muted">
+                                    folded {snapshot.repeatedPrefixCount}
+                                </span>
+                            )}
+                        </div>
+                        {repeatedMessages.length > 0 && (
+                            <RepeatedMessagesBlock messages={repeatedMessages} modalTitle={`${title} — input`} />
+                        )}
+                        {freshMessages.length > 0 ? (
+                            freshMessages.map((message, index) => (
+                                <SnapshotMessageRow
+                                    key={`${message.role}-${message.position}-${index}`}
+                                    message={message}
+                                    defaultExpanded={index === freshMessages.length - 1}
+                                    modalTitle={`${title} — input #${message.position}`}
+                                />
+                            ))
+                        ) : repeatedMessages.length === 0 ? (
+                            <div className="border-t border-border px-3 py-2 text-xs text-foreground-muted">
+                                No input messages captured for this span.
+                            </div>
+                        ) : null}
+                    </div>
+                </div>
+
+                <div className="border-t border-border bg-background-tertiary p-2">
+                    <div className="overflow-hidden rounded-md border border-border bg-card">
+                        <div className="flex items-center gap-2 px-2.5 py-1.5">
+                            <span className="text-xs font-semibold text-foreground">output</span>
+                            <span className="text-xs text-foreground-muted tabular-nums">{output ? 1 : 0}</span>
+                        </div>
+                        {output ? (
+                            <SnapshotMessageRow
+                                message={{ role: 'assistant', content: output, source: 'history', position: 1 }}
+                                defaultExpanded
+                                modalTitle={`${title} — output`}
+                            />
+                        ) : (
+                            <div className="border-t border-border px-3 py-2 text-xs text-foreground-muted">
+                                No text output captured.
+                            </div>
+                        )}
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}
+
 // ─── EventDetailPanel (right panel – event selected) ─────────────────────────
 function EventDetailPanel({ event, node, interactions }: { event: AgentEvent; node: AgentNode; interactions: RawInteraction[] }) {
     const km = KIND_META[event.kind] ?? KIND_META.tool;
@@ -1786,132 +2157,10 @@ function LLMEventBody({ event, responseText, interactions, node }: {
         return n !== 'task' && n !== 'skill';
     });
 
-    // Build chronological per-turn views for the Input (Prompt) panel.
-    // If a context compaction happened in this node before the current LLM
-    // event, the messages before the compaction were replaced (from the
-    // model's perspective) by the compaction summary. We:
-    //   - filter "prior verbatim turns" to those strictly AFTER the most
-    //     recent compaction boundary, so the per-turn list only contains
-    //     what the model still sees verbatim;
-    //   - expose the active compaction (summary text + the now-folded
-    //     original messages) so the UI can render a "Compacted History"
-    //     section between System and the turn list.
-    const { systemRaw, priorTurns, activeCompaction, foldedOriginalRaw, foldedOriginalCount } = useMemo(() => {
-        const eventIdx = event.interactionIndex;
-
-        // Most recent compaction boundary before this event in this node.
-        const boundaries = node.compactions || [];
-        const cutoff = boundaries.length
-            ? [...boundaries].filter(c => c.interactionIndex < eventIdx).pop()
-            : undefined;
-        const cutoffIdx = cutoff ? cutoff.interactionIndex : -1;
-
-        // Indices that the panel renders verbatim: post-cutoff, pre-event.
-        const verbatimNodeIndices = new Set(
-            node.interactionIndices.filter(i => i > cutoffIdx && i < eventIdx),
-        );
-        const verbatimMessages = interactions.filter((_, i) => verbatimNodeIndices.has(i));
-
-        // Indices folded by the compaction (everything in the node that came
-        // before the boundary). We keep them off the per-turn render path;
-        // users can still drill in via the "view original" toggle.
-        const foldedIndices = cutoff
-            ? node.interactionIndices.filter(i => i < cutoffIdx)
-            : [];
-        const foldedMessages = foldedIndices.map(i => interactions[i]).filter(Boolean);
-
-        const systemPrompts = node.systemPrompts || [];
-        const systemParts: string[] = systemPrompts.map(sp => sp.text);
-        const sep = '\n\n---\n\n';
-
-        // When an assistant message has no text content, it usually means this
-        // turn was a "pure tool-calling step" — the model emitted reasoning +
-        // tool calls but no user-facing prose. Empty-rendering those is bad UX
-        // (a wall of "(无文本内容)" rows). Synthesize a readable description
-        // from tool_calls / reasoning parts so each turn carries real signal.
-        const summarizeArgs = (raw: unknown): string => {
-            if (raw == null) return '';
-            try {
-                const obj = typeof raw === 'string' ? JSON.parse(raw) : raw;
-                if (obj && typeof obj === 'object') {
-                    const r = obj as Record<string, unknown>;
-                    // Prefer human-friendly keys when present.
-                    for (const k of ['path', 'file_path', 'pattern', 'command', 'description', 'query', 'url']) {
-                        const v = r[k];
-                        if (typeof v === 'string' && v.trim()) return `${k}: ${v.length > 60 ? v.slice(0, 60) + '…' : v}`;
-                    }
-                    const keys = Object.keys(r);
-                    if (keys.length) return keys.slice(0, 3).join(',') + (keys.length > 3 ? '…' : '');
-                }
-                return '';
-            } catch {
-                const s = typeof raw === 'string' ? raw : '';
-                return s.length > 60 ? s.slice(0, 60) + '…' : s;
-            }
-        };
-        const messageToText = (m: RawInteraction): string => {
-            const text = typeof m.content === 'string' ? m.content : '';
-            if (text.trim()) return text;
-            // Empty text — fall back to tool-call / reasoning summary.
-            const blocks: string[] = [];
-            if (Array.isArray(m.parts)) {
-                const reasoning = m.parts
-                    .filter(p => (p?.type || '').toLowerCase() === 'reasoning')
-                    .map(p => (typeof p.text === 'string' ? p.text.trim() : ''))
-                    .filter(Boolean)
-                    .join('\n\n');
-                if (reasoning) blocks.push(`[reasoning]\n${reasoning}`);
-            }
-            if (Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
-                const lines = m.tool_calls.map(tc => {
-                    const name = tc.function?.name || tc.name || 'tool';
-                    const args = tc.function?.arguments ?? tc.arguments;
-                    const argSum = summarizeArgs(args);
-                    return argSum ? `→ ${name}(${argSum})` : `→ ${name}()`;
-                });
-                blocks.push(`[tool calls × ${m.tool_calls.length}]\n${lines.join('\n')}`);
-            }
-            if (typeof m.content !== 'string' && m.content != null) {
-                blocks.push(JSON.stringify(m.content, null, 2));
-            }
-            return blocks.join('\n\n');
-        };
-        const normalizeRole = (role: string | undefined) =>
-            role === 'opencode' ? 'user' :
-            role === 'subagent' ? 'assistant' :
-            (role || 'unknown');
-
-        // Walk verbatimMessages in chronological order; produce one card per
-        // message, dropping role==='system' (those are already shown above).
-        // The very last verbatim message is usually the user turn that
-        // triggered this LLM call — we default-expand that one so the most
-        // relevant context is visible at a glance.
-        const turns: { role: string; content: string; position: number; isMostRecent: boolean }[] = [];
-        let position = 0;
-        for (let i = 0; i < verbatimMessages.length; i++) {
-            const m = verbatimMessages[i];
-            if (m.role === 'system') continue;
-            position += 1;
-            turns.push({
-                role: normalizeRole(m.role),
-                content: messageToText(m),
-                position,
-                isMostRecent: i === verbatimMessages.length - 1,
-            });
-        }
-
-        const foldedRendered = foldedMessages
-            .map(m => `[${normalizeRole(m.role)}] ${messageToText(m)}`)
-            .join(sep);
-
-        return {
-            systemRaw:    systemParts.length > 0    ? systemParts.join(sep)    : null,
-            priorTurns:   turns,
-            activeCompaction: cutoff || null,
-            foldedOriginalRaw: foldedRendered || null,
-            foldedOriginalCount: foldedMessages.length,
-        };
-    }, [event.interactionIndex, interactions, node]);
+    const snapshot = useMemo(
+        () => buildLlmPromptSnapshot(event, node, interactions),
+        [event, node, interactions],
+    );
 
     const title = event.name || event.summary?.split('\n')[0]?.slice(0, 60) || 'LLM';
 
@@ -1974,56 +2223,22 @@ function LLMEventBody({ event, responseText, interactions, node }: {
                 </div>
             )}
 
-            {/* Input — System + [Compacted History] + chronological turn list */}
-            {(systemRaw || priorTurns.length > 0 || activeCompaction) && (
-                <div>
-                    <SectionTitle>
-                        Input (Prompt)
-                        {priorTurns.length > 0 && (
-                            <span style={{ marginLeft: '0.5rem', fontSize: '0.625rem', fontWeight: 400, color: 'var(--foreground-muted)' }}>
-                                · {priorTurns.length} turn{priorTurns.length === 1 ? '' : 's'}
-                            </span>
-                        )}
-                    </SectionTitle>
-                    <div style={{
-                        border: '1px solid var(--border)',
-                        borderRadius: 7,
-                        overflow: 'hidden',
-                    }}>
-                        {systemRaw && (
-                            <RoleSection role="system" label="System" raw={systemRaw} modalTitle={`${title} — System`} />
-                        )}
-                        {activeCompaction && (
-                            <CompactionSection
-                                summaryRaw={activeCompaction.summaryText || ''}
-                                foldedOriginalRaw={foldedOriginalRaw}
-                                foldedCount={foldedOriginalCount}
-                                modelLabel={activeCompaction.modelID || activeCompaction.providerID}
-                                summaryUsage={activeCompaction.usage}
-                                modalTitleBase={title}
-                            />
-                        )}
-                        {priorTurns.map((turn, i) => (
-                            <TurnPreviewRow
-                                key={`${turn.role}-${turn.position}-${i}`}
-                                role={turn.role}
-                                content={turn.content}
-                                position={turn.position}
-                                defaultExpanded={turn.isMostRecent}
-                                modalTitle={`${title} — ${turn.role} #${turn.position}`}
-                            />
-                        ))}
-                    </div>
-                </div>
-            )}
-
-            {/* Output — compact preview */}
-            <CompactSection
-                label="Output"
-                raw={responseText || null}
-                modalTitle={`${title} — Output`}
-                emptyText={toolCallsTriggered.length > 0 ? '(无文本输出 — 仅工具调用)' : undefined}
+            <HierarchicalSpanSnapshot
+                title={title}
+                node={node}
+                event={event}
+                snapshot={snapshot}
+                responseText={responseText}
             />
+
+            {snapshot.activeCompaction && snapshot.foldedOriginalRaw && snapshot.foldedOriginalCount > 0 && (
+                <CompactSection
+                    label={`Compaction Folded Originals (${snapshot.foldedOriginalCount})`}
+                    raw={snapshot.foldedOriginalRaw}
+                    modalTitle={`${title} — Compaction Folded Originals`}
+                    emptyText="(empty)"
+                />
+            )}
 
             {/* Tool calls triggered — compact chip list */}
             {toolCallsTriggered.length > 0 && (

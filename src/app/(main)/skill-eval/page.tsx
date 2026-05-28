@@ -8,7 +8,7 @@ import { AppTopBar } from '@/components/shell/AppTopBar';
 import { SkillAnalysisHeader } from './_components/SkillAnalysisHeader';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
-import { isInternalSystemAgentTrace } from '@/lib/system-agent-names';
+import { isInternalSystemAgentTrace, shouldHideFromCaseAnalysis, classifyTraceSource } from '@/lib/system-agent-names';
 import { parseSkillAttributionFromRow } from '@/lib/engine/evaluation/skill-attribution';
 import {
     buildFallbackDiagnosis,
@@ -18,6 +18,7 @@ import {
     type SkillDiagnosisSnapshot,
 } from '@/lib/skill-analysis/diagnosis';
 import { calculateAbScoring, type AbScoringResult } from '@/lib/skill-analysis/ab-scoring';
+import { NewEvaluationBatchDialog, type NewBatchCreated } from '@/components/eval/NewEvaluationBatchDialog';
 import { formatPValueLabel, welchTTestPValue } from '@/lib/skill-analysis/ab-significance';
 import { BatchEvaluation } from './_batch/page';
 import { GrayscaleEvaluation } from './grayscale/page';
@@ -692,6 +693,45 @@ function SkillAnalysisPage() {
     const [selectedTraceId, setSelectedTraceId] = useState(searchParams.get('taskId') || '');
     const [smartRunBusy, setSmartRunBusy] = useState(false);
 
+    // 评测任务关联 (trace 模式专用 —— dataset 模式由 BatchEvaluation 自己维护)。
+    // 持久化用 localStorage 按 (user, skillId, version) 维度 key, 因为 SkillAnalysisPage 没有
+    // 单独的 task 实体承载这一关联 (BatchEvalTask 只跟 dataset 模式相关)。
+    // 跨设备不同步是 known limitation, 后续如果接入跨设备 task 表可以迁移。
+    const [newBatchDialogOpen, setNewBatchDialogOpen] = useState(false);
+    const [traceEvaluationBatchId, setTraceEvaluationBatchId] = useState('');
+    const [traceEvaluationBatchTitle, setTraceEvaluationBatchTitle] = useState('');
+    const [traceEvaluationBatchEvaluators, setTraceEvaluationBatchEvaluators] = useState<string[]>([]);
+    const traceEvalBatchStorageKey = useMemo(() => {
+        if (!user || !selectedSkillId) return '';
+        return `skill-eval:trace-eval-batch:${user}:${selectedSkillId}:v${selectedVersion ?? 'all'}`;
+    }, [user, selectedSkillId, selectedVersion]);
+    // 初始化: 进入 / 切换 skill+version 时从 localStorage 恢复关联
+    useEffect(() => {
+        if (!traceEvalBatchStorageKey) {
+            setTraceEvaluationBatchId('');
+            setTraceEvaluationBatchTitle('');
+            setTraceEvaluationBatchEvaluators([]);
+            return;
+        }
+        try {
+            const raw = localStorage.getItem(traceEvalBatchStorageKey);
+            if (!raw) {
+                setTraceEvaluationBatchId('');
+                setTraceEvaluationBatchTitle('');
+                setTraceEvaluationBatchEvaluators([]);
+                return;
+            }
+            const parsed = JSON.parse(raw) as { id?: string; title?: string; evaluators?: string[] };
+            setTraceEvaluationBatchId(parsed?.id || '');
+            setTraceEvaluationBatchTitle(parsed?.title || '');
+            setTraceEvaluationBatchEvaluators(Array.isArray(parsed?.evaluators) ? parsed.evaluators : []);
+        } catch {
+            setTraceEvaluationBatchId('');
+            setTraceEvaluationBatchTitle('');
+            setTraceEvaluationBatchEvaluators([]);
+        }
+    }, [traceEvalBatchStorageKey]);
+
     const selectedSkill = useMemo(
         () => skills.find(s => s.id === selectedSkillId) || null,
         [skills, selectedSkillId],
@@ -817,10 +857,9 @@ function SkillAnalysisPage() {
             if (!Array.isArray(data)) return [];
             return data
                 .filter((trace: TraceRecord) => traceReferencesSkill(trace, selectedSkill.name, selectedVersion))
-                // 排除系统内部任务: skill-trigger-analyzer / grayscale-* / 各评测器 等。
-                // 这些 trace 是平台自己跑的(触发分析 / A/B / 任务完成度评测), 不是真实用户
-                // 调用产生, 展示在"用例分析"里会误导用户对这个 skill 真实使用情况的判断。
-                .filter((trace: TraceRecord) => !isInternalSystemAgentTrace(trace.agentName || trace.agent))
+                // 排除"跟用例分析语义无关"的系统 agent (平台辅助 + 评测器), 但**保留** A/B 灰度 trace
+                // 让用户能复用 A/B 已跑过的 trace 评测。每行 UI 加来源徽章 (A/B / 用例分析 / 真实) 区分。
+                .filter((trace: TraceRecord) => !shouldHideFromCaseAnalysis(trace.agentName || trace.agent))
                 .slice(0, 200);
         };
         try {
@@ -1005,6 +1044,25 @@ function SkillAnalysisPage() {
      *   - 轨迹分析：N 次 POST /api/observe/executions/{id}/analyze-match 并发扇出
      *   - Promise.allSettled 隔离：任一失败不阻断其它
      */
+    // 「新增评测任务」对话框 onCreated: 设 React state + 写 localStorage 立刻持久化,
+    // 让 trace 模式下"评测任务"关联跨刷新保留。后续 trajectory/run 调用透传 traceEvaluationBatchId
+    // 让评测 append 到同一批次, 不再每次新建。
+    const handleTraceEvalBatchCreated = useCallback((result: NewBatchCreated) => {
+        setNewBatchDialogOpen(false);
+        setTraceEvaluationBatchId(result.evaluatorRunId);
+        setTraceEvaluationBatchTitle(result.taskTitle);
+        setTraceEvaluationBatchEvaluators(result.selectedEvaluators);
+        if (traceEvalBatchStorageKey) {
+            try {
+                localStorage.setItem(traceEvalBatchStorageKey, JSON.stringify({
+                    id: result.evaluatorRunId,
+                    title: result.taskTitle,
+                    evaluators: result.selectedEvaluators,
+                }));
+            } catch {/* localStorage quota 异常时仍以 state 持有, 不阻塞主流程 */}
+        }
+    }, [traceEvalBatchStorageKey]);
+
     const runBatchTraceAnalysis = useCallback(async (taskIds: string[]): Promise<{
         resultErrors: string[];                                    // 结果评测整体失败（一次入队全失败）
         trajectoryErrors: Map<string, string>;                     // 每条 trace 各自的 trajectory 失败原因
@@ -1014,14 +1072,18 @@ function SkillAnalysisPage() {
         // resultRun 是一次入队多条，要么整体成功要么整体失败；trajRun 是逐条独立扇出，
         // 每条都可能有自己的失败原因（如 skill 缺 mermaid 那种 per-trace 的前提缺失）。
         const resultRun = (async () => {
+            // 透传评测任务关联: 用户在配置区关联了批次时走 append 模式, 不再每次新建批次。
+            // 关联后不传 evaluators (后端用批次原配置), 没关联时沿用老逻辑。
+            const body: Record<string, unknown> = { user, taskIds };
+            if (traceEvaluationBatchId) {
+                body.evaluatorRunId = traceEvaluationBatchId;
+            } else {
+                body.evaluators = ['preset-agent-task-completion'];
+            }
             const res = await apiFetch('/api/eval/trajectory/run', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    user,
-                    taskIds,
-                    evaluators: ['preset-agent-task-completion'],
-                }),
+                body: JSON.stringify(body),
             });
             if (!res.ok) {
                 const data = await res.json().catch(() => ({}));
@@ -1148,7 +1210,17 @@ function SkillAnalysisPage() {
     const staticHasResult = !!staticSummary?.latest;
     const triggerHasResult = !!triggerSummary?.latestRun;
     const grayHasResult = !!graySummary && graySummary.b.avgScore != null;
-    const grayFinalScore = graySummary?.scoring.totalScore ?? null;
+    // 跟详情页 decisionReady 严格对齐: 所有 case-side 都 executed/pass 时才显示分数,
+    // 任一 case 还有 running/evaluating/pending/fail 时跟详情页一样显示「等待评估完成」。
+    // 之前不带这判断, 卡片用全 task 聚合算分 → 跟详情页 (decisionReady 只看 active case
+    // 的 simA/simB 状态) mismatch, 用户看「卡片有分但详情页没分」困惑。
+    const grayCaseStates = (grayTaskMeta?.caseStatesJson || {}) as Record<string, { a?: { status?: string }; b?: { status?: string } }>;
+    const grayAllSidesReady = Object.keys(grayCaseStates).length > 0
+        && Object.values(grayCaseStates).every(s => {
+            const ready = (st?: { status?: string }) => st?.status === 'executed' || st?.status === 'pass';
+            return ready(s?.a) && ready(s?.b);
+        });
+    const grayFinalScore = (grayAllSidesReady ? graySummary?.scoring.totalScore : null) ?? null;
     const batchHasResult = false;
     /*
      * 用例分析（trace）卡上展示的分数 = "已评测过的 trace" 的「(结果分 + 轨迹分) / 2」的平均值。
@@ -1348,6 +1420,9 @@ function SkillAnalysisPage() {
                         onReload={reloadTraces}
                         onOptimize={() => router.push(optimizeHref)}
                         onBatchAnalyze={runBatchTraceAnalysis}
+                        traceEvaluationBatchId={traceEvaluationBatchId}
+                        traceEvaluationBatchTitle={traceEvaluationBatchTitle}
+                        onOpenEvalBatchDialog={() => setNewBatchDialogOpen(true)}
                     />
                 )}
 
@@ -1460,6 +1535,16 @@ function SkillAnalysisPage() {
 
                 {/* view === 'batch' EmbeddedDebugPanel 分支已删 */}
             </main>
+
+            {/* 新增评测任务对话框 (trace 模式 ① actions 按钮触发, dataset 模式 BatchEvaluation 自己挂另一个 dialog).
+                跨视图浮窗, 跟 main 同级避免被 sa-detail overflow 截掉。 */}
+            <NewEvaluationBatchDialog
+                open={newBatchDialogOpen}
+                user={user || ''}
+                defaultTitle={traceEvaluationBatchTitle || (selectedSkill ? `${selectedSkill.name} trace 评测` : undefined)}
+                onClose={() => setNewBatchDialogOpen(false)}
+                onCreated={handleTraceEvalBatchCreated}
+            />
         </div>
     );
 }
@@ -1720,7 +1805,17 @@ function AnalysisOverview({
     const triggerHasResult = !!triggerSummary?.latestRun;
     const triggerCanTest = triggerHasSet && (triggerSummary?.itemCount ?? 0) > 0;
     const grayHasResult = !!graySummary && graySummary.b.avgScore != null;
-    const grayFinalScore = graySummary?.scoring.totalScore ?? null;
+    // 跟详情页 decisionReady 严格对齐: 所有 case-side 都 executed/pass 时才显示分数,
+    // 任一 case 还有 running/evaluating/pending/fail 时跟详情页一样显示「等待评估完成」。
+    // 之前不带这判断, 卡片用全 task 聚合算分 → 跟详情页 (decisionReady 只看 active case
+    // 的 simA/simB 状态) mismatch, 用户看「卡片有分但详情页没分」困惑。
+    const grayCaseStates = (grayTaskMeta?.caseStatesJson || {}) as Record<string, { a?: { status?: string }; b?: { status?: string } }>;
+    const grayAllSidesReady = Object.keys(grayCaseStates).length > 0
+        && Object.values(grayCaseStates).every(s => {
+            const ready = (st?: { status?: string }) => st?.status === 'executed' || st?.status === 'pass';
+            return ready(s?.a) && ready(s?.b);
+        });
+    const grayFinalScore = (grayAllSidesReady ? graySummary?.scoring.totalScore : null) ?? null;
     const grayPreparedSampleCount = (
         grayTaskMeta?.configJson?.checkedCaseIds
         ?? grayTaskMeta?.configJson?.selectedCaseIds
@@ -2840,12 +2935,20 @@ function TraceDeviationPanel({
     onReload,
     onOptimize,
     onBatchAnalyze,
+    traceEvaluationBatchId,
+    traceEvaluationBatchTitle,
+    onOpenEvalBatchDialog,
 }: {
     skill: SkillOption | null;
     version: number | null;
     user: string | null;
     traces: TraceRecord[];
     loading: boolean;
+    /** 评测批次关联 (trace 模式 ① actions 显示); 父组件 SkillAnalysisPage 维护 state + localStorage 持久化 */
+    traceEvaluationBatchId?: string;
+    traceEvaluationBatchTitle?: string;
+    /** 点击 "+ 新增评测任务" / "切换/新建" 按钮触发的 callback, 由父组件打开 NewEvaluationBatchDialog */
+    onOpenEvalBatchDialog?: () => void;
     prefillTraceId: string;
     selectedTraceId: string;
     onSelectedTraceChange: (id: string) => void;
@@ -3597,7 +3700,7 @@ function TraceDeviationPanel({
             <SectionShell
                 num={1}
                 variant="config"
-                title="配置 · 用例集"
+                title="配置"
                 desc="该 skill 版本关联的全部 trace（含已评测和未评测）；勾选 → 到 ② 触发分析"
                 open={caseConfigOpen}
                 onToggle={() => setCaseConfigOpen(o => !o)}
@@ -3608,6 +3711,55 @@ function TraceDeviationPanel({
                         <span>· 关联 <code>{traces.length}</code> 条</span>
                         <span>· 已评测 <code>{fullyEvaluated.length}</code></span>
                     </>
+                }
+                // trace 模式评测任务关联: 跟 dataset 模式 BatchEvaluation 的 ① actions 一致样式。
+                // 已关联时显示紫色徽章 + "切换/新建"; 未关联时只有"+ 新增评测任务"按钮。
+                // state 走 traceEvaluationBatchId / 持久化在 localStorage (SkillAnalysisPage 维护)。
+                actions={
+                    traceEvaluationBatchId ? (
+                        <>
+                            <span
+                                title={`评测执行批次 ID: ${traceEvaluationBatchId}`}
+                                style={{
+                                    display: 'inline-flex', alignItems: 'center', gap: 5,
+                                    padding: '3px 9px',
+                                    background: '#F5E8FF',
+                                    border: '1px solid rgba(126,34,206,.2)',
+                                    borderRadius: 99,
+                                    fontSize: 11.5, fontWeight: 600, color: '#7E22CE',
+                                    maxWidth: 240, overflow: 'hidden',
+                                    textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                }}
+                            >
+                                📋 {traceEvaluationBatchTitle || traceEvaluationBatchId.slice(0, 8)}
+                            </span>
+                            <button
+                                type="button"
+                                onClick={() => onOpenEvalBatchDialog?.()}
+                                style={{
+                                    padding: '4px 9px',
+                                    background: '#fff', border: '1px solid #D4D4D8',
+                                    borderRadius: 5, fontSize: 11.5, fontWeight: 500,
+                                    color: '#52525B', cursor: 'pointer',
+                                }}
+                            >
+                                切换 / 新建
+                            </button>
+                        </>
+                    ) : (
+                        <button
+                            type="button"
+                            onClick={() => onOpenEvalBatchDialog?.()}
+                            style={{
+                                padding: '5px 12px',
+                                background: '#4F46E5', border: '1px solid #4F46E5',
+                                color: '#fff', borderRadius: 5,
+                                fontSize: 11.5, fontWeight: 600, cursor: 'pointer',
+                            }}
+                        >
+                            + 新增评测任务
+                        </button>
+                    )
                 }
             >
                 {/* source-mode 切换 chip：放在 ① 配置块内（用户要求） */}
@@ -3776,7 +3928,32 @@ function TraceDeviationPanel({
                                         {evaluated ? '✓' : '○'}
                                     </span>
                                     <span className="sa-trace-text">
-                                        <span className="sa-trace-id">{id}<small>{formatShortDate(trace.timestamp)}</small></span>
+                                        <span className="sa-trace-id">
+                                            {id}
+                                            {/* 来源徽章: A/B 灰度 vs 用例分析 vs 真实用户调用 */}
+                                            {(() => {
+                                                const source = classifyTraceSource(trace.agentName || trace.agent);
+                                                if (source === 'ab') {
+                                                    return (
+                                                        <span
+                                                            title="来自 A/B 测试 (grayscale-skill-agent / grayscale-baseline-agent)"
+                                                            style={{ marginLeft: 6, padding: '1px 6px', background: 'rgba(29,158,117,.1)', color: '#1D9E75', border: '1px solid rgba(29,158,117,.3)', borderRadius: 99, fontSize: 10, fontWeight: 600 }}
+                                                        >🔀 A/B</span>
+                                                    );
+                                                }
+                                                if (source === 'batch') {
+                                                    return (
+                                                        <span
+                                                            title="来自用例分析「从数据集」(skill-debug-executor / batch-eval-agent)"
+                                                            style={{ marginLeft: 6, padding: '1px 6px', background: 'rgba(24,95,165,.1)', color: '#185FA5', border: '1px solid rgba(24,95,165,.3)', borderRadius: 99, fontSize: 10, fontWeight: 600 }}
+                                                        >📊 用例分析</span>
+                                                    );
+                                                }
+                                                // real: 真实用户调用 (默认不加徽章, 让 A/B / batch 那两个特殊来源突出)
+                                                return null;
+                                            })()}
+                                            <small>{formatShortDate(trace.timestamp)}</small>
+                                        </span>
                                         <span className="sa-trace-query">{trace.query || '无输入内容'}</span>
                                         <span className="sa-trace-sub">
                                             {trace.framework || 'Unknown'}
@@ -3901,7 +4078,9 @@ function TraceDeviationPanel({
                         还没触发过评测。在 ① 配置块勾选 trace → 点上方"分析"按钮。
                     </div>
                 ) : (
-                    <div style={{ border: '1px solid var(--ev-line)', borderRadius: 8, overflow: 'hidden' }}>
+                    /* 最多同时显示约 10 行评测记录, 超出滚动。单行 ~42px + thead 40px ≈ 460px。
+                       table thead 不 sticky (太复杂), 滚动时跟着 body 一起滚, 一般够用。 */
+                    <div style={{ border: '1px solid var(--ev-line)', borderRadius: 8, overflow: 'auto', maxHeight: 460 }}>
                         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                             <thead>
                                 <tr style={{ background: '#fafafa', borderBottom: '1px solid var(--ev-line)' }}>

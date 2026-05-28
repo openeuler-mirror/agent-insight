@@ -5,7 +5,7 @@
 > 项目简介：Agent Skill 评估与观测平台 —— 量化评估 Skills 在 Agent 上的实际运行效果。
 > 技术栈：Next.js (App Router) + Prisma + TypeScript + Tailwind。
 
----
+***
 
 ## 1. 分支与 PR 流程
 
@@ -14,13 +14,13 @@
 - **fork remote** —— 个人 fork，日常 push 目标。形如 `<your-username>/agent-insight`。
 - **team remote** —— 团队合并管理仓 `gyctl/witty-skill-insight`，主合并分支 **`new_src`**。`master` 由 `new_src` 周期性合入。
 
-> ⚠️ remote 名因人而异。常见配置是 `origin` = fork、`upstream` = team，但直接 clone 团队仓的人可能反过来。**第一次操作前跑 `git remote -v` 确认实际名称**，下文一律用"fork remote / team remote"指代角色。
+> ⚠️ remote 名因人而异。常见配置是 `origin` = fork、`upstream` = team，但直接 clone 团队仓的人可能反过来。**第一次操作前跑** **`git remote -v`** **确认实际名称**，下文一律用"fork remote / team remote"指代角色。必须和用户确定好是否需要拉远端代码仓，以及确认代码仓名称后再执行自动拉代码、自动提pr的操作。
 
 **默认流程**：
 
 1. 从 team remote 的 `new_src` 起新分支（或基于它 rebase）。
 2. 推到 fork remote 的 `<feature-branch>`。
-3. 提 PR（gitcode 称 MR），target = **team remote (`gyctl/witty-skill-insight`) 的 `new_src`**。
+3. 提 PR（gitcode 称 MR），target = **team remote (`gyctl/witty-skill-insight`) 的** **`new_src`**。
 
 **禁止**：
 
@@ -38,11 +38,11 @@
 
 ## 3. Commit + Push（gitcode 提示）
 
-仓库托管在 **gitcode**，不是 GitHub —— **不要用 `gh`**。
+仓库托管在 **gitcode**，不是 GitHub —— **不要用** **`gh`**。
 
 push 前先 `git remote -v` 确认 fork remote 的实际名（不要假设是 `origin`），然后 `git push -u <fork-remote> <branch>`。输出里会有 MR 创建链接，连同建议的 PR 标题/描述转发给用户。
 
-⚠️ gitcode MR 页面默认 target 是个人 fork 的 master，**必须手动改成 team remote (`gyctl/witty-skill-insight`) 的 `new_src`** —— 回复里要提醒用户这一步。
+⚠️ gitcode MR 页面默认 target 是个人 fork 的 master，**必须手动改成 team remote (`gyctl/witty-skill-insight`) 的** **`new_src`** —— 回复里要提醒用户这一步。
 
 ## 4. 何时先聊一下再动手
 
@@ -53,7 +53,7 @@ push 前先 `git remote -v` 确认 fork remote 的实际名（不要假设是 `o
 
 小改动（bug fix、文案、单文件局部调整）直接动手，事后说明即可。
 
-**大改动落地后，同步更新 [docs/PROJECT.md](docs/PROJECT.md)**（架构 / 模块边界 / 关键术语 / 数据模型变化）—— 这是最权威的内部文档，不要让它过期。
+**大改动落地后，同步更新** **[docs/PROJECT.md](docs/PROJECT.md)**（架构 / 模块边界 / 关键术语 / 数据模型变化）—— 这是最权威的内部文档，不要让它过期。
 
 ## 5. 改动验证
 
@@ -130,6 +130,6 @@ push 前先 `git remote -v` 确认 fork remote 的实际名（不要假设是 `o
 
 读取、跑测试、本地 dev、改 src 下的代码都可以自由进行。
 
----
+***
 
 如发现本文档与实际开发流程不一致，**改文档** 比"默默偏离"好。改完在 PR 描述里说明即可。

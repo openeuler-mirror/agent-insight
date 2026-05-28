@@ -1524,7 +1524,10 @@
 }
 
 .sa-trace-list-body {
-  max-height: 720px;
+  /* 最多同时显示约 5 行 trace, 超出滚动。
+     单行高度 ≈ padding(20px) + border(1px) + 三行内容(~50px) ≈ 76px → 5 行 ≈ 380px,
+     留一点余量到 400px 让"半行剪切"提示用户后面还有内容可以滚动。 */
+  max-height: 400px;
   overflow: auto;
 }
 

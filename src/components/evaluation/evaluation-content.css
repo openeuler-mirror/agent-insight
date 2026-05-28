@@ -561,6 +561,9 @@
 
 .ev-section-head {
     width: 100%;
+    /* 默认 4 列 num | title | summary | chev (保持老 caller 视觉不变)。
+       传了 actions 时, SectionShell 通过 inline gridTemplateColumns 覆盖成 5 列 (插入 actions)。
+       这样老 caller 不会因为多一格 grid column 多出一个 14px gap。 */
     display: grid;
     grid-template-columns: 36px 1fr auto 14px;
     align-items: center;
@@ -573,6 +576,10 @@
     font: inherit;
     color: var(--ev-fg);
     text-align: left;
+}
+.ev-section-head:focus-visible {
+    outline: 2px solid var(--ev-info);
+    outline-offset: -2px;
 }
 
 .ev-section.open .ev-section-head {

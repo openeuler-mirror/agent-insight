@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { runGeneralAgent } from '@/lib/engine/general-agent';
+import { withBackgroundOpencodeSlot } from '@/lib/engine/general-agent/concurrency-limiter';
 import { getUserSettings, type ModelConfig as ServerModelConfig } from '@/lib/storage/server-config';
 import { inferProviderFromBaseUrl } from '@/lib/engine/general-agent/server-model-config';
 import {
@@ -544,35 +545,46 @@ async function streamSkillGeneratorOpencodeImpl(
   // 之前只在 chat() 返回后赋值（line 577 附近的 result.workspaceDir），onTool 期间永远是空。
   workspaceDirRef = workspaceDir;
 
+  // 前台 skill-generator 交互式: displayOnly=true, 仅 dashboard 可见, 不占 5-slot 配额。
+  // 用户在 web UI 上生成 skill 的过程, 不能被后台 A/B 批量任务卡住。
+  const slotMeta = {
+    taskType: 'skill-generator' as const,
+    user,
+    label: `skill-generator · ${threadId.slice(0, 12)}`,
+    displayOnly: true,
+  };
   let result;
   try {
     console.log('[skill-generator-bridge] calling runGeneralAgent...');
-    result = await runGeneralAgent({
-      user,
-      query: message,
-      sessionId: cachedSessionId,
-      // 关键：用 threadId 锁定稳定的 workspace 目录，让多轮对话共享同一份文件
-      workspaceTag: threadId,
-      sessionTitle: `skill-generator · ${threadId.slice(0, 12)}`,
-      system: skillGeneratorSystemPrompt,
-      // chat 流空闲超过 30s 自动结束。skill-generator 场景下 agent 写完文件 + 说完话就该收尾，
-      // opencode 偶发的"残留 keepalive 事件"会让默认 60s idle 一直触发不到，前端干等 240s+。
-      chatOptions: {
-        idleTimeoutMs: 30_000,
-        // R1 这种 thinking 模型 + 多轮 LLM 调用（agent 加载多个 skill 后写文件）容易超 5min；
-        // 实际 close 由 opencode-client 内部 idleTimer (30s, heartbeat reset) +
-        // onAssistantMessage(completed) + onSession(idle) 控制，streamTimeout 是死亡兜底。
-        streamTimeoutMs: 15 * 60 * 1000,
-        signal: chatAbortController.signal,
-      },
-      // 内部 agent 标签：让 plugin 上报的 trace 在 /api/ingest/upload 那边能正确归属。
-      // skill 标签由 SYSTEM_AGENTS 中该 Agent 的 traceSkill 字段提供，这里不传 skill 字段
-      // （传了会触发 runner 的 DB skill 加载，与文件式 system prompt 冲突）。
-      systemAgentName: SKILL_GENERATOR_AGENT_NAME,
-      interactionPolicy: 'auto-allow',
-      ...(modelOverride ? { model: modelOverride } : {}),
-      handlers,
-    });
+    result = await withBackgroundOpencodeSlot(
+      () => runGeneralAgent({
+        user,
+        query: message,
+        sessionId: cachedSessionId,
+        // 关键：用 threadId 锁定稳定的 workspace 目录，让多轮对话共享同一份文件
+        workspaceTag: threadId,
+        sessionTitle: `skill-generator · ${threadId.slice(0, 12)}`,
+        system: skillGeneratorSystemPrompt,
+        // chat 流空闲超过 30s 自动结束。skill-generator 场景下 agent 写完文件 + 说完话就该收尾，
+        // opencode 偶发的"残留 keepalive 事件"会让默认 60s idle 一直触发不到，前端干等 240s+。
+        chatOptions: {
+          idleTimeoutMs: 30_000,
+          // R1 这种 thinking 模型 + 多轮 LLM 调用（agent 加载多个 skill 后写文件）容易超 5min；
+          // 实际 close 由 opencode-client 内部 idleTimer (30s, heartbeat reset) +
+          // onAssistantMessage(completed) + onSession(idle) 控制，streamTimeout 是死亡兜底。
+          streamTimeoutMs: 15 * 60 * 1000,
+          signal: chatAbortController.signal,
+        },
+        // 内部 agent 标签：让 plugin 上报的 trace 在 /api/ingest/upload 那边能正确归属。
+        // skill 标签由 SYSTEM_AGENTS 中该 Agent 的 traceSkill 字段提供，这里不传 skill 字段
+        // （传了会触发 runner 的 DB skill 加载，与文件式 system prompt 冲突）。
+        systemAgentName: SKILL_GENERATOR_AGENT_NAME,
+        interactionPolicy: 'auto-allow',
+        ...(modelOverride ? { model: modelOverride } : {}),
+        handlers,
+      }),
+      slotMeta,
+    );
   } catch (err) {
     // 复用的 session 可能在 opencode 端失效（server 重启 / 主动 abort），换一个 session 重跑一次
     const msg = err instanceof Error ? err.message : String(err);
@@ -580,16 +592,19 @@ async function streamSkillGeneratorOpencodeImpl(
     if (cachedSessionId && /session/i.test(msg)) {
       console.log('[skill-generator-bridge] retrying without cachedSessionId...');
       await clearOpencodeSessionId(threadId);
-      result = await runGeneralAgent({
-        user,
-        query: message,
-        workspaceTag: threadId,
-        sessionTitle: `skill-generator · ${threadId.slice(0, 12)}`,
-        system: skillGeneratorSystemPrompt,
-        interactionPolicy: 'auto-allow',
-        ...(modelOverride ? { model: modelOverride } : {}),
-        handlers,
-      });
+      result = await withBackgroundOpencodeSlot(
+        () => runGeneralAgent({
+          user,
+          query: message,
+          workspaceTag: threadId,
+          sessionTitle: `skill-generator · ${threadId.slice(0, 12)}`,
+          system: skillGeneratorSystemPrompt,
+          interactionPolicy: 'auto-allow',
+          ...(modelOverride ? { model: modelOverride } : {}),
+          handlers,
+        }),
+        slotMeta,
+      );
     } else {
       throw err;
     }
@@ -618,22 +633,25 @@ async function streamSkillGeneratorOpencodeImpl(
     announcedTools.clear();
     vfsAccum = {};
     filesChangedThisTurn = false;
-    result = await runGeneralAgent({
-      user,
-      query: message,
-      workspaceTag: threadId,
-      sessionTitle: `skill-generator · ${threadId.slice(0, 12)}`,
-      system: skillGeneratorSystemPrompt,
-      systemAgentName: SKILL_GENERATOR_AGENT_NAME,
-      interactionPolicy: 'auto-allow',
-      chatOptions: {
-        idleTimeoutMs: 30_000,
-        streamTimeoutMs: 15 * 60 * 1000,
-        signal: chatAbortController.signal,
-      },
-      ...(modelOverride ? { model: modelOverride } : {}),
-      handlers,
-    });
+    result = await withBackgroundOpencodeSlot(
+      () => runGeneralAgent({
+        user,
+        query: message,
+        workspaceTag: threadId,
+        sessionTitle: `skill-generator · ${threadId.slice(0, 12)}`,
+        system: skillGeneratorSystemPrompt,
+        systemAgentName: SKILL_GENERATOR_AGENT_NAME,
+        interactionPolicy: 'auto-allow',
+        chatOptions: {
+          idleTimeoutMs: 30_000,
+          streamTimeoutMs: 15 * 60 * 1000,
+          signal: chatAbortController.signal,
+        },
+        ...(modelOverride ? { model: modelOverride } : {}),
+        handlers,
+      }),
+      slotMeta,
+    );
   }
 
   // 合并解决：保留同事加的 runGeneralAgent done 调试日志（方便排查 agent 跑完但

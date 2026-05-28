@@ -30,6 +30,7 @@ import {
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { AppTopBar } from '@/components/shell/AppTopBar';
+import { AgentDebugCard } from '@/components/observe/AgentDebugCard';
 import { useAuth } from '@/lib/auth/auth-context';
 import { useLocale } from '@/lib/client/locale-context';
 import { apiFetch } from '@/lib/client/api';
@@ -627,6 +628,11 @@ function FaultDetailView({ execution, locale, user, onBack }: { execution: Execu
     const traceNodes = useMemo(() => buildFaultPath(execution, session?.interactions || [], locale, diagnosticItems), [execution, session?.interactions, locale, diagnosticItems]);
     const faultSummary = useMemo(() => summarizeFaultPath(traceNodes, execution), [traceNodes, execution]);
     const skillCount = (execution.invoked_skills?.length ?? 0) || (execution.skills?.length ?? 0) || (execution.skill ? 1 : 0);
+    const agentDebugSuggested = useMemo(() => {
+        return (execution.failures?.length || 0) > 0
+            || (execution.tool_call_error_count || 0) > 0
+            || (execution.answer_score != null && execution.answer_score < 1 && Boolean(execution.judgment_reason));
+    }, [execution]);
 
     const { roots: treeRoots, nodeMap: treeNodeMap } = useMemo(() => flatToTree(traceNodes), [traceNodes]);
 
@@ -1074,6 +1080,13 @@ function FaultDetailView({ execution, locale, user, onBack }: { execution: Execu
 
                     {/* Chat scroll */}
                     <div ref={chatScrollRef} style={{ flex: 1, overflowY: 'auto', padding: '20px 24px 16px', minHeight: 0 }}>
+                        <AgentDebugCard
+                            executionId={taskId}
+                            user={user || ''}
+                            locale={locale}
+                            suggested={agentDebugSuggested}
+                            onNodeRefClick={scrollToNode}
+                        />
                         <InitialDiagnosisBubble execution={execution} locale={locale} faultKinds={displayFaultKinds} diagnosticItems={diagnosticItems} traceNodes={traceNodes} onFaultSelect={handleFaultSelect} />
                         {messages.map(msg => <ChatBubble key={msg.id} message={msg} onNodeRefClick={scrollToNode} locale={locale} nodeMap={treeNodeMap} />)}
                         {messages.length === 0 && (

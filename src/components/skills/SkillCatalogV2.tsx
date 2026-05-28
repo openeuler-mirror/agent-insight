@@ -418,12 +418,7 @@ function StatusBadge({ active, calls7d }: { active: boolean; calls7d: number }) 
             </span>
         );
     }
-    return (
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 500, background: 'var(--sk-elevated)', color: 'var(--sk-fg2)' }}>
-            <span style={{ width: 6, height: 6, borderRadius: 999, background: 'var(--sk-fg3)' }} />
-            未激活
-        </span>
-    );
+    return null
 }
 
 function Sparkline({ data, color = 'var(--sk-success)', width = 100, height = 32 }: { data?: number[]; color?: string; width?: number; height?: number }) {

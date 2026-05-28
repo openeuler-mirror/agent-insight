@@ -12,6 +12,11 @@ import { useLocale } from '@/lib/client/locale-context';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
 import { calculateAbScoring, DEFAULT_AB_SCORING_POLICY, type AbScoringResult, type AbScoreBreakdown, type AbTone } from '@/lib/skill-analysis/ab-scoring';
+import {
+    buildGrayscaleTraceCase,
+    findLatestRunnableRunIndex,
+} from '@/lib/skill-analysis/grayscale-utils';
+import { NewEvaluationBatchDialog, type NewBatchCreated } from '@/components/eval/NewEvaluationBatchDialog';
 import '../debug.css';
 import '../skill-analysis.css';
 import './hifi.css';
@@ -44,7 +49,21 @@ interface TraceRecord {
     timestamp?: string;
     timeCost?: string;
     framework?: string;
+    dataset_id?: string;
+    dataset_name?: string;
 }
+
+type EvaluationCaseItem = {
+    id: string;
+    input: string;
+    datasetName: string;
+    datasetId: string;
+    sourceType?: 'dataset' | 'trace';
+    sourceExecutionSessionId?: string;
+    sourceUploadId?: string;
+    sourceDatasetId?: string;
+    sourceDatasetName?: string;
+};
 
 interface GrayscaleTask {
     id: string;
@@ -77,6 +96,14 @@ interface GrayscaleTask {
         traceTimeRange?: '1d' | '3d' | '7d';
         selectedTraceAId?: string;
         selectedTraceBId?: string;
+        // 关联到「评测执行」页的批次 ID (evaluatorRunId)。任务级配置: 用户通过
+        // 配置卡顶部「+ 新增评测任务」对话框创建一个空批次后, 把 ID 写回这里。
+        // 后续启动评测时 (action='start' / 'evaluate' / retry-eval) 透传给
+        // /api/eval/trajectory/run 作 evaluatorRunId append, 让所有评测落到同一批次。
+        evaluationBatchId?: string;
+        // 同步存批次的可读名 + 评估器列表 (冗余存储, 用于 UI 显示, 避免每次查 /eval 接口)
+        evaluationBatchTitle?: string;
+        evaluationBatchEvaluators?: string[];
     };
     caseStatesJson?: Record<string, { a: PerVersionState; b: PerVersionState }>;
     activeRun?: {
@@ -837,46 +864,9 @@ function deriveExecAndEval(
 }
 
 // ──────────────── caseStates side-state 修改助手 ────────────────
-// 历史 bug：runCaseSide / evaluateCaseSide 在每次 setCaseStates 时
-// 直接用 `[side]: { status: 'running' }` 这种方式整段替换 side state，
-// 导致 runs[] 历史被擦光、执行记录 modal 表面无变化。下面两个 helper 把
-// 「保留 runs[] + 顶层字段同步最新 run」的逻辑统一封一遍，所有 setCaseStates
-// 改动一律走这里：
-//
-//   - appendNewRunningRun(side)：用户点「重跑」时调用。在 runs[] 末尾 push
-//     一条 {status: 'running'} 占位 run，并把 side 顶层 status 切到 'running'。
-//     records modal 就能立刻看到新一行 "running"。
-//
-//   - patchLatestRun(side, patch)：跑完 / 评测完 / 失败时调用。把 runs[] 最后
-//     一条 run merge patch 字段，同时把 side 顶层的镜像字段(status/score/jobId
-//     /sessionId/...)也同步过去，避免顶层和 runs 末尾分裂。
-
-function appendNewRunningRun(side: PerVersionState | undefined): PerVersionState {
-    const base: PerVersionState = side ?? { status: 'pending' };
-    const prevRuns = base.runs ?? [];
-    const nextIndex = prevRuns.length + 1;
-    const newRun: RunResult = {
-        status: 'running',
-        runIndex: nextIndex,
-        roundIndex: nextIndex,
-    };
-    return {
-        ...base,
-        status: 'running',
-        // 顶层 score/output/jobId/sessionId 等先清掉，避免上一轮的残留干扰
-        // 卡片汇总位置（顶层字段被当作"最新 run 的镜像"）。runs[] 里的旧值
-        // 仍然完整保留在 modal 里可见。
-        score: undefined,
-        output: undefined,
-        jobId: undefined,
-        sessionId: undefined,
-        timeCost: undefined,
-        tokenUsage: undefined,
-        evaluatorRunId: undefined,
-        tier: undefined,
-        runs: [...prevRuns, newRun],
-    };
-}
+// patchLatestRun(side, patch)：跑完 / 评测完 / 失败时调用。把 runs[] 最后
+// 一条 run merge patch 字段，同时把 side 顶层的镜像字段(status/score/jobId
+// /sessionId/...)也同步过去，避免顶层和 runs 末尾分裂。
 
 function patchLatestRun(side: PerVersionState | undefined, patch: Partial<RunResult>): PerVersionState {
     const base: PerVersionState = side ?? { status: 'pending' };
@@ -885,8 +875,7 @@ function patchLatestRun(side: PerVersionState | undefined, patch: Partial<RunRes
     if (runs.length > 0) {
         updatedRuns = runs.map((r, i) => (i === runs.length - 1 ? { ...r, ...patch } : r));
     } else {
-        // 极少见兜底：runs[] 为空（比如调用方没先走 appendNewRunningRun）。
-        // 现造一条 run 把 patch 装进去，避免 patch 字段被静默吞掉。
+        // 极少见兜底：runs[] 为空时现造一条 run 把 patch 装进去，避免 patch 字段被静默吞掉。
         updatedRuns = [{
             runIndex: 1,
             roundIndex: 1,
@@ -910,11 +899,10 @@ function patchLatestRun(side: PerVersionState | undefined, patch: Partial<RunRes
     };
 }
 
-// 跟 polling tick 的 setCaseStates(nextStates) 配合：如果本地某 case-side 正处于
-// 「比 server 多了一条 in-flight running run」的状态（用户刚点了重跑还没回写到 DB
-// 或者写完了但 server 那条记录还没进 caseStatesJson），polling 直接覆盖会把那条
-// running run 抹掉。这里做 case-side 级别的 reconcile：只要本地 runs 长度 ≥ 远端
-// 且本地末尾是非 finished 状态，就保留本地不动；否则采用远端。
+// 跟 polling tick 的 setCaseStates(nextStates) 配合：如果本地某 case-side 有
+// 比 server 更新的 in-flight 状态，polling 直接覆盖会把那条 running run 抹掉。
+// 这里做 case-side 级别的 reconcile：只要本地 runs 长度 ≥ 远端且本地末尾是
+// 非 finished 状态，就保留本地不动；否则采用远端。
 function mergeServerCaseStates(
     local: Record<string, { a: PerVersionState; b: PerVersionState }>,
     remote: Record<string, { a: PerVersionState; b: PerVersionState }>,
@@ -926,10 +914,8 @@ function mergeServerCaseStates(
         const lRuns = l.runs ?? [];
         const rRuns = r.runs ?? [];
         const lLatest = lRuns[lRuns.length - 1];
-        // 唯一保留本地的场景: 用户刚点过「重跑」, runCaseSide 已经 push 了一条新
-        // running 占位 + 发 PATCH, 但 PATCH 还没落库, polling tick 拿到的是旧
-        // caseStatesJson(没新这条 run)。这时本地 runs[] 比远端多, 且末尾是
-        // in-flight, 必须保留本地不被擦。
+        // 保留本地比远端更多的 in-flight run，避免 polling tick 用旧 caseStatesJson
+        // 把刚产生的本地进行中状态擦回去。
         if (lRuns.length > rRuns.length && lLatest && !FINISHED.includes(lLatest.status)) {
             return l;
         }
@@ -1134,10 +1120,53 @@ export function GrayscaleEvaluation({
     // Modals
     const [showSkillModal, setShowSkillModal] = useState(false);
 
+    // 「新增评测任务」对话框开关。点确认后通过 onCreated 把新批次 ID 写回当前 task config,
+    // 启动评测时透传给 /api/eval/trajectory/run append 落到同一批次。
+    const [newBatchDialogOpen, setNewBatchDialogOpen] = useState(false);
+
+    // 评测任务关联: 跟 selectedEvaluatorId 等同级用 React state 管理 (不依赖 currentConfigRef
+    // 的 ref-only 模式)。这样 applyTaskToState 加载任务时能正确恢复, useEffect 重设 ref 时
+    // 能稳定包含进去, 不会被擦掉 (历史 bug: 首版用了 ref+spread 模式, 任何 state 变化触发
+    // useEffect 重设 ref 时会丢 evaluationBatch* 字段, 下一次 PATCH 字段丢光)。
+    const [evaluationBatchId, setEvaluationBatchId] = useState('');
+    const [evaluationBatchTitle, setEvaluationBatchTitle] = useState('');
+    const [evaluationBatchEvaluators, setEvaluationBatchEvaluators] = useState<string[]>([]);
+
     // Multi-case states
     const [caseStates, setCaseStates] = useState<Record<string, { a: PerVersionState; b: PerVersionState }>>({});
     const [checkedCaseIds, setCheckedCaseIds] = useState<string[]>([]);
     const [isTaskRunInFlight, setIsTaskRunInFlight] = useState(false);
+    // 行级 retry 在飞集合: key 形如 `${caseId}::${side}::${runIndex}`。
+    // 双写: state 给 UI 渲染时正常反应性, ref 在 click handler 里同步判重
+    // (防止 React state 还没 commit 时的快速双击)。两者都指向同一个 Set 实例:
+    // mark*/clear* 函数会同时更新 ref 和 state, 它们永不分歧。
+    // 自动清理: useEffect watch caseStates, run 走到 terminal (pass/fail) 时清掉,
+    // 让按钮恢复可点。顶部「终止」按钮成功后一次性 clearAllRetriesInFlight, 干预所有 in-flight。
+    const [inFlightRetries, setInFlightRetries] = useState<Set<string>>(() => new Set());
+    const inFlightRetriesRef = useRef<Set<string>>(inFlightRetries);
+    const retryKey = (caseId: string, side: 'a' | 'b', runIndex: number) =>
+        `${caseId}::${side}::${runIndex}`;
+    const markRetryInFlight = (key: string) => {
+        if (inFlightRetriesRef.current.has(key)) return false;
+        const next = new Set(inFlightRetriesRef.current);
+        next.add(key);
+        inFlightRetriesRef.current = next;
+        setInFlightRetries(next);
+        return true;
+    };
+    const markRetryDone = (key: string) => {
+        if (!inFlightRetriesRef.current.has(key)) return;
+        const next = new Set(inFlightRetriesRef.current);
+        next.delete(key);
+        inFlightRetriesRef.current = next;
+        setInFlightRetries(next);
+    };
+    const clearAllRetriesInFlight = () => {
+        if (inFlightRetriesRef.current.size === 0) return;
+        const next = new Set<string>();
+        inFlightRetriesRef.current = next;
+        setInFlightRetries(next);
+    };
     const [lastRunConfigSignature, setLastRunConfigSignature] = useState('');
     const [searchQuery, setSearchQuery] = useState('');
     const [filterTab, setFilterTab] = useState<'all' | 'pending' | 'executed' | 'evaluated'>('all');
@@ -1173,6 +1202,10 @@ export function GrayscaleEvaluation({
         setIsTaskRunInFlight(false);
         isTaskRunInFlightRef.current = false;
         setLastRunConfigSignature('');
+        // 新任务草稿: 清空评测批次关联 (老任务的批次跟新任务无关)
+        setEvaluationBatchId('');
+        setEvaluationBatchTitle('');
+        setEvaluationBatchEvaluators([]);
         pendingVersionsRef.current = null;
         setIsEditingTask(true);
     };
@@ -1213,6 +1246,10 @@ export function GrayscaleEvaluation({
         setTraceTimeRange(cfg.traceTimeRange || '7d');
         setSelectedTraceAId(cfg.selectedTraceAId || '');
         setSelectedTraceBId(cfg.selectedTraceBId || '');
+        // 评测批次关联 (从 DB 恢复, 修 "再次进入 A/B 看不到上次评测任务" 问题)
+        setEvaluationBatchId(cfg.evaluationBatchId || '');
+        setEvaluationBatchTitle(cfg.evaluationBatchTitle || '');
+        setEvaluationBatchEvaluators(Array.isArray(cfg.evaluationBatchEvaluators) ? cfg.evaluationBatchEvaluators : []);
         if (cfg.versionAId || cfg.versionBId) {
             pendingVersionsRef.current = { versionAId: cfg.versionAId, versionBId: cfg.versionBId };
         } else {
@@ -1287,12 +1324,38 @@ export function GrayscaleEvaluation({
     useEffect(() => { currentTaskRef.current = currentTask; }, [currentTask]);
     const caseStatesRef = useRef(caseStates);
     useEffect(() => { caseStatesRef.current = caseStates; }, [caseStates]);
+
+    // 当 caseStates 里某条 run 走到 terminal (pass/fail) 时, 把它从 in-flight 集合移除,
+    // 让重试按钮重新可点 (终态可能仍是 fail, 此时按钮应再次显示为"可重试")。
+    // 不把 'executed' 当 terminal —— retryExecution autoEval=true 时, 短暂 executed 后会
+    // 马上变 evaluating, 这窗口里清掉会让按钮闪一次"可重试"误导用户。改成执行成功且
+    // autoEval=false 的清理走 retryExecution 内部显式 markRetryDone。
+    useEffect(() => {
+        if (inFlightRetriesRef.current.size === 0) return;
+        const next = new Set(inFlightRetriesRef.current);
+        let mutated = false;
+        for (const key of Array.from(next)) {
+            const [caseId, sideStr, runIndexStr] = key.split('::');
+            const runIndex = Number(runIndexStr);
+            const sideState = caseStates[caseId]?.[sideStr as 'a' | 'b'];
+            const run = (sideState?.runs || []).find(r => r.runIndex === runIndex);
+            if (!run) continue;
+            if (run.status === 'pass' || run.status === 'fail') {
+                next.delete(key);
+                mutated = true;
+            }
+        }
+        if (mutated) {
+            inFlightRetriesRef.current = next;
+            setInFlightRetries(next);
+        }
+    }, [caseStates]);
     const isTaskRunInFlightRef = useRef(isTaskRunInFlight);
     useEffect(() => { isTaskRunInFlightRef.current = isTaskRunInFlight; }, [isTaskRunInFlight]);
-    const currentConfigRef = useRef({ skillId: selectedSkillId, versionAId, versionBId, sourceMode, selectedDatasetId, selectedCaseId, selectedCaseIds: checkedCaseIds, checkedCaseIds, taskDescription: taskDescInput, linkedDatasetIds, traceTimeRange, selectedTraceAId, selectedTraceBId, repeatRounds, agentMaxConcurrency, autoEval, recordTriggerDetails, evaluatorId: selectedEvaluatorId });
+    const currentConfigRef = useRef({ skillId: selectedSkillId, versionAId, versionBId, sourceMode, selectedDatasetId, selectedCaseId, selectedCaseIds: checkedCaseIds, checkedCaseIds, taskDescription: taskDescInput, linkedDatasetIds, traceTimeRange, selectedTraceAId, selectedTraceBId, repeatRounds, agentMaxConcurrency, autoEval, recordTriggerDetails, evaluatorId: selectedEvaluatorId, evaluationBatchId, evaluationBatchTitle, evaluationBatchEvaluators });
     useEffect(() => {
-        currentConfigRef.current = { skillId: selectedSkillId, versionAId, versionBId, sourceMode, selectedDatasetId, selectedCaseId, selectedCaseIds: checkedCaseIds, checkedCaseIds, taskDescription: taskDescInput, linkedDatasetIds, traceTimeRange, selectedTraceAId, selectedTraceBId, repeatRounds, agentMaxConcurrency, autoEval, recordTriggerDetails, evaluatorId: selectedEvaluatorId };
-    }, [selectedSkillId, versionAId, versionBId, sourceMode, selectedDatasetId, selectedCaseId, checkedCaseIds, taskDescInput, linkedDatasetIds, traceTimeRange, selectedTraceAId, selectedTraceBId, repeatRounds, agentMaxConcurrency, autoEval, recordTriggerDetails, selectedEvaluatorId]);
+        currentConfigRef.current = { skillId: selectedSkillId, versionAId, versionBId, sourceMode, selectedDatasetId, selectedCaseId, selectedCaseIds: checkedCaseIds, checkedCaseIds, taskDescription: taskDescInput, linkedDatasetIds, traceTimeRange, selectedTraceAId, selectedTraceBId, repeatRounds, agentMaxConcurrency, autoEval, recordTriggerDetails, evaluatorId: selectedEvaluatorId, evaluationBatchId, evaluationBatchTitle, evaluationBatchEvaluators };
+    }, [selectedSkillId, versionAId, versionBId, sourceMode, selectedDatasetId, selectedCaseId, checkedCaseIds, taskDescInput, linkedDatasetIds, traceTimeRange, selectedTraceAId, selectedTraceBId, repeatRounds, agentMaxConcurrency, autoEval, recordTriggerDetails, selectedEvaluatorId, evaluationBatchId, evaluationBatchTitle, evaluationBatchEvaluators]);
 
     const currentRunConfigSignature = useMemo(() => buildRunConfigSignature({
         skillId: selectedSkillId,
@@ -1349,6 +1412,30 @@ export function GrayscaleEvaluation({
     const persistCaseStates = useCallback((updatedStates: Record<string, { a: PerVersionState; b: PerVersionState }>) => {
         if (!currentTaskRef.current) return;
         persistTaskUpdate(currentTaskRef.current.id, currentConfigRef.current, updatedStates);
+    }, [persistTaskUpdate]);
+
+    // 「新增评测任务」对话框 onCreated: 把后端返回的 evaluatorRunId / title / evaluators
+    // 设为 React state (currentConfigRef useEffect 会自动同步进 ref, 后续所有 persist 都带这些字段);
+    // 同时立刻调一次 persistTaskUpdate 把新字段落库, 避免要等下一次 state 变化才同步。
+    const handleEvalBatchCreated = useCallback((result: NewBatchCreated) => {
+        setNewBatchDialogOpen(false);
+        const task = currentTaskRef.current;
+        if (!task) return;
+        setEvaluationBatchId(result.evaluatorRunId);
+        setEvaluationBatchTitle(result.taskTitle);
+        setEvaluationBatchEvaluators(result.selectedEvaluators);
+        // 立刻 patch 一次 (不等 useEffect): nextConfig 显式带新字段, 不依赖 ref。
+        const nextConfig = {
+            ...currentConfigRef.current,
+            evaluationBatchId: result.evaluatorRunId,
+            evaluationBatchTitle: result.taskTitle,
+            evaluationBatchEvaluators: result.selectedEvaluators,
+        };
+        persistTaskUpdate(task.id, nextConfig, undefined);
+        setCurrentTask(prev => prev ? {
+            ...prev,
+            configJson: { ...(prev.configJson || {}), ...nextConfig },
+        } : prev);
     }, [persistTaskUpdate]);
 
     const createTaskForBinding = useCallback(async (skillId: string, boundVersionBId: string, taskName?: string) => {
@@ -1521,32 +1608,73 @@ export function GrayscaleEvaluation({
         if (versionBId !== matchedVersion.id) setVersionBId(matchedVersion.id);
     }, [parentSkillVersion, versionBId, versions]);
 
-    // Execute single side
-    const runCaseSide = async (caseId: string, side: 'a' | 'b') => {
+    /**
+     * 行级执行重试: 原地覆盖指定 runIndex 的 run, 不 push 新行。
+     *
+     * 这是执行记录 modal 里的"再试这一行"语义——用户看到某一行执行失败,
+     * 想再跑一次, 同一行覆盖结果。
+     *
+     * 步骤:
+     *   1) 找到 (caseId, side, runIndex) 那条 run, reset 它的状态为 'running',
+     *      清掉 sessionId/output/score/eval 相关字段, 保留 runIndex/roundIndex
+     *   2) PATCH caseStatesJson 落库
+     *   3) POST /api/debug/execute 等 jobId
+     *   4) 轮询 /api/debug/execute/{jobId}, completion 时按 runIndex 找到对应 run
+     *      原地更新结果字段; autoEval=true 时自动触发该 run 的 evaluate
+     */
+    const retryExecution = async (caseId: string, side: 'a' | 'b', runIndex: number) => {
+        if (!currentTask) return;
+        // 同步抢占 in-flight 锁: 双击 / 在飞期间再次点击直接 return, 防止重复 dispatch。
+        // markRetryInFlight 返回 false 表示已经在飞中。配 ref 在 React commit 前同步生效。
+        const flightKey = retryKey(caseId, side, runIndex);
+        if (!markRetryInFlight(flightKey)) return;
         const targetCase = allCases.find(c => c.id === caseId);
         const query = targetCase?.input || '';
-        if (!query.trim()) return;
-
+        if (!query.trim()) { markRetryDone(flightKey); return; }
         const versionId = side === 'a' ? versionAId : versionBId;
         const isNone = versionId === NONE_VERSION_ID;
         const version = isNone ? null : versions.find(v => v.id === versionId);
         const selectedSkill = skills.find(s => s.id === selectedSkillId);
 
-        // 1) 入口：往 runs[] push 一条 running 占位，让执行记录 modal 立刻
-        //    看到「新一行 running」，同时把 side 顶层 status 切到 running。
+        // 1) 原地 reset 那一条 run
+        const resetRunByIndex = (sideState: PerVersionState | undefined): PerVersionState => {
+            const base: PerVersionState = sideState ?? { status: 'pending' };
+            const runs = (base.runs ?? []).map(r => {
+                if (r.runIndex !== runIndex) return r;
+                const next = { ...r, status: 'running' as CaseStatus };
+                delete next.sessionId;
+                delete next.evaluatorRunId;
+                delete next.evaluationResultId;
+                delete next.evaluationTraceId;
+                delete next.score;
+                delete next.tier;
+                delete next.failureType;
+                delete next.failureDetail;
+                delete next.timeCost;
+                delete next.tokenUsage;
+                delete next.skillTriggered;
+                delete next.toolCallCount;
+                delete next.toolCalls;
+                next.output = '';
+                return next;
+            });
+            return { ...base, status: 'running', runs };
+        };
+        let nextStates: Record<string, { a: PerVersionState; b: PerVersionState }> | null = null;
         setCaseStates(prev => {
-            const current = prev[caseId] || { a: { status: 'pending' }, b: { status: 'pending' } };
-            const updated = {
-                ...prev,
-                [caseId]: {
-                    ...current,
-                    [side]: appendNewRunningRun(current[side]),
-                }
-            };
-            persistCaseStates(updated);
+            const current = prev[caseId];
+            if (!current) return prev;
+            const updated = { ...prev, [caseId]: { ...current, [side]: resetRunByIndex(current[side]) } };
+            nextStates = updated;
             return updated;
         });
+        if (!nextStates) { markRetryDone(flightKey); return; }
+        await persistTaskUpdate(currentTask.id, currentConfigRef.current, nextStates);
 
+        // 2) POST /api/debug/execute (不传 grayscaleTaskId, 避免 backend 重复写库)
+        // baseline (isNone=true) retry 时 skill 字段为空, 但 trace 在逻辑上跟对照的
+        // 被测 skill 配对 —— 传 tagSkill 让 backend 把 trace.skill 字段填成
+        // selectedSkill?.name (本任务被测 skill), "从 Trace"视图按 skill 过滤能搜到。
         let jobId: string;
         try {
             const res = await apiFetch('/api/debug/execute', {
@@ -1557,118 +1685,110 @@ export function GrayscaleEvaluation({
                     query,
                     skill: isNone ? undefined : selectedSkill?.name,
                     skillVersion: (isNone || !version) ? undefined : Number(version.version),
+                    // baseline 没 skill 加载, 用 selectedSkill?.name 当 trace 归属标签;
+                    // skill-agent 那侧已经 skill 字段填上了, tagSkill 即使也传也是冗余无害。
+                    tagSkill: selectedSkill?.name,
                     mode: 'grayscale',
-                    // 把任务归属传给后端: 关掉浏览器/网断时, 后端 .then/.catch 会自己
-                    // 把 caseStatesJson 的对应 side 从 running 推到 executed/fail。
-                    // 不传或缺任一字段则跳过, 退化为旧的「前端独占写库」行为(兼容其它调用点)。
-                    grayscaleTaskId: currentTask?.id,
-                    caseId,
-                    side,
                 }),
             });
             const data = await res.json();
             if (!res.ok || !data.jobId) {
-                // dispatch 失败：把刚刚 push 的占位 run 标 fail
                 setCaseStates(prev => {
-                    const current = prev[caseId] || { a: { status: 'pending' }, b: { status: 'pending' } };
-                    const updated = {
-                        ...prev,
-                        [caseId]: {
-                            ...current,
-                            [side]: patchLatestRun(current[side], { status: 'fail', output: data.error || 'dispatch failed' }),
-                        }
-                    };
-                    persistCaseStates(updated);
-                    return updated;
+                    const current = prev[caseId];
+                    if (!current) return prev;
+                    const sideState = current[side];
+                    if (!sideState) return prev;
+                    const runs = (sideState.runs ?? []).map(r =>
+                        r.runIndex === runIndex
+                            ? { ...r, status: 'fail' as CaseStatus, output: data.error || 'dispatch failed' }
+                            : r
+                    );
+                    return { ...prev, [caseId]: { ...current, [side]: { ...sideState, runs } } };
                 });
+                markRetryDone(flightKey);
                 return;
             }
             jobId = data.jobId;
         } catch (err) {
             setCaseStates(prev => {
-                const current = prev[caseId] || { a: { status: 'pending' }, b: { status: 'pending' } };
-                const updated = {
-                    ...prev,
-                    [caseId]: {
-                        ...current,
-                        [side]: patchLatestRun(current[side], { status: 'fail', output: String(err) }),
-                    }
-                };
-                persistCaseStates(updated);
-                return updated;
+                const current = prev[caseId];
+                if (!current) return prev;
+                const sideState = current[side];
+                if (!sideState) return prev;
+                const runs = (sideState.runs ?? []).map(r =>
+                    r.runIndex === runIndex
+                        ? { ...r, status: 'fail' as CaseStatus, output: String(err) }
+                        : r
+                );
+                return { ...prev, [caseId]: { ...current, [side]: { ...sideState, runs } } };
             });
+            markRetryDone(flightKey);
             return;
         }
 
-        // 2) dispatch 成功：把 jobId 装到刚 push 的占位 run 上
-        setCaseStates(prev => {
-            const current = prev[caseId] || { a: { status: 'pending' }, b: { status: 'pending' } };
-            const updated = {
-                ...prev,
-                [caseId]: {
-                    ...current,
-                    [side]: patchLatestRun(current[side], { status: 'running', jobId }),
-                }
-            };
-            persistCaseStates(updated);
-            return updated;
-        });
-
-        const poll = async () => {
+        // 3) 轮询 job, completion 时按 runIndex 原地更新
+        const poll = async (): Promise<boolean | null> => {
             try {
                 const res = await apiFetch(`/api/debug/execute/${jobId}`);
                 const data = await res.json();
                 if (data.status === 'completed') {
-                    const runPatch: Partial<RunResult> = {
-                        status: 'executed',
-                        jobId,
-                        output: data.output ?? '',
-                        timeCost: data.timeCost,
-                        tokenUsage: data.tokenUsage ?? 0,
-                        sessionId: data.sessionId,
-                    };
-                    let executedState: PerVersionState | null = null;
                     setCaseStates(prev => {
-                        const current = prev[caseId] || { a: { status: 'pending' }, b: { status: 'pending' } };
-                        const nextSide = patchLatestRun(current[side], runPatch);
-                        executedState = nextSide;
-                        const updated = {
-                            ...prev,
-                            [caseId]: {
-                                ...current,
-                                [side]: nextSide,
-                            }
-                        };
+                        const current = prev[caseId];
+                        if (!current) return prev;
+                        const sideState = current[side];
+                        if (!sideState) return prev;
+                        const runs = (sideState.runs ?? []).map(r => r.runIndex === runIndex ? {
+                            ...r,
+                            status: 'executed' as CaseStatus,
+                            jobId,
+                            output: data.output ?? '',
+                            timeCost: data.timeCost,
+                            tokenUsage: data.tokenUsage ?? 0,
+                            sessionId: data.sessionId,
+                            skillTriggered: !!version,
+                        } : r);
+                        const updated = { ...prev, [caseId]: { ...current, [side]: { ...sideState, runs } } };
                         persistCaseStates(updated);
+                        // autoEval: 跑完自动评估这一行 (走 retryEvaluation 同款行级路径)。
+                        // in-flight 锁不在这里释放, 让 retryEvaluation 继承同一把锁
+                        // 直至评测出结果, 否则按钮会在 executed → evaluating 切换瞬间
+                        // 闪一下"可重试"误导用户。
+                        if (autoEval) {
+                            void retryEvaluation(caseId, side, runIndex);
+                        } else {
+                            // 用户关掉了 autoEval, 执行成功就到此为止, 把锁释放掉
+                            markRetryDone(flightKey);
+                        }
                         return updated;
                     });
-                    // autoEval 时把执行完整的最新 side state 喂给 evaluator
-                    if (autoEval && executedState) {
-                        evaluateCaseSide(caseId, side, executedState);
-                    }
                     return true;
-                } else if (data.status === 'failed' || !data.status || data.error) {
+                } else if (data.status === 'failed' || data.error) {
                     setCaseStates(prev => {
-                        const current = prev[caseId] || { a: { status: 'pending' }, b: { status: 'pending' } };
-                        const updated = {
-                            ...prev,
-                            [caseId]: {
-                                ...current,
-                                [side]: patchLatestRun(current[side], { status: 'fail', jobId, output: data.error || 'agent failed' }),
-                            }
-                        };
+                        const current = prev[caseId];
+                        if (!current) return prev;
+                        const sideState = current[side];
+                        if (!sideState) return prev;
+                        const runs = (sideState.runs ?? []).map(r => r.runIndex === runIndex ? {
+                            ...r,
+                            status: 'fail' as CaseStatus,
+                            jobId,
+                            output: data.error || 'agent failed',
+                            failureType: 'agent_error',
+                            failureDetail: data.error || 'agent failed',
+                        } : r);
+                        const updated = { ...prev, [caseId]: { ...current, [side]: { ...sideState, runs } } };
                         persistCaseStates(updated);
                         return updated;
                     });
+                    // run 状态进入 fail, 上面 useEffect 会自动 clear in-flight, 但显式
+                    // 再调一次保险, 防止 setCaseStates 还没 commit 就有人再次点 retry
+                    markRetryDone(flightKey);
                     return false;
                 }
                 return null;
-            } catch {
-                return null;
-            }
+            } catch { return null; }
         };
-
-        const pollKey = `${caseId}_${side}`;
+        const pollKey = `retry_exec_${caseId}_${side}_${runIndex}`;
         if (activePollsRef.current[pollKey]) clearInterval(activePollsRef.current[pollKey]);
         activePollsRef.current[pollKey] = setInterval(async () => {
             const done = await poll();
@@ -1695,6 +1815,15 @@ export function GrayscaleEvaluation({
      */
     const retryEvaluation = async (caseId: string, side: 'a' | 'b', runIndex: number) => {
         if (!currentTask) return;
+        // 抢 in-flight 锁 (双击保护)。markRetryInFlight 是 idempotent:
+        // - 用户直接点"评测失败重试" → 新增 lock
+        // - retryExecution autoEval 链式调过来 → lock 已存在, markRetryInFlight 返回
+        //   false 但我们继续往下走 (不是双击, 是同一把锁延续)。所以区分: 调用方传 None
+        //   即"作为独立入口" — 已在飞中直接 return; 链式入口由上游保证只调一次。
+        // 这里采取最简单策略: 总是 markRetryInFlight, 已存在就当作 idempotent, 继续往下
+        // 走。配 useEffect terminal-clear 保证 pass/fail 时一次释放。
+        const flightKey = retryKey(caseId, side, runIndex);
+        markRetryInFlight(flightKey);
         let resetState: Record<string, { a: PerVersionState; b: PerVersionState }> | null = null;
         setCaseStates(prev => {
             const current = prev[caseId];
@@ -1703,7 +1832,12 @@ export function GrayscaleEvaluation({
             if (!sideState) return prev;
             const newRuns = (sideState.runs || []).map(r => {
                 if (r.runIndex !== runIndex) return r;
-                // 重置那一条 run, 让 backend onlyMissingEvaluation 过滤选中它
+                // 重置那一条 run 让 backend 重评:
+                //   - status='evaluating' UI 立刻显示「评测中」蓝色脉冲, 用户感知到 retry 已生效
+                //   - 清掉 evaluatorRunId/score/tier/output/failureType/failureDetail
+                //     让 onlyMissingEvaluation 过滤命中 (无 evaluatorRunId 也无 score)
+                //   - backend evaluateRunsWithConcurrency 配套放宽: onlyMissingEvaluation
+                //     模式下也接受 status='evaluating' (见 route.ts eligibleStatus 注释)
                 const next = { ...r, status: 'evaluating' as CaseStatus };
                 delete next.evaluatorRunId;
                 delete next.evaluationResultId;
@@ -1720,7 +1854,7 @@ export function GrayscaleEvaluation({
             resetState = updated;
             return updated;
         });
-        if (!resetState) return;
+        if (!resetState) { markRetryDone(flightKey); return; }
         // PATCH 让 server 看到 reset 后的状态 (status='evaluating', 字段已清)
         await persistTaskUpdate(currentTask.id, currentConfigRef.current, resetState);
         // 调用 backend 行级 retry
@@ -1739,11 +1873,15 @@ export function GrayscaleEvaluation({
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
                 alert(data.error || (locale === 'zh' ? '评测重试失败' : 'Retry evaluation failed'));
+                markRetryDone(flightKey);
                 return;
             }
+            // 成功 dispatch: 锁继续持有, 由 pollCurrentTask 的 caseStates 更新
+            // 触发 useEffect terminal-clear 在 pass/fail 时自动释放。
             pollCurrentTask(currentTask.id);
         } catch (err) {
             alert(String(err));
+            markRetryDone(flightKey);
         }
     };
 
@@ -1778,27 +1916,12 @@ export function GrayscaleEvaluation({
     // Evaluate single side
     const evaluateCaseSide = async (caseId: string, side: 'a' | 'b', execState: PerVersionState) => {
         if (currentTask) {
-            try {
-                const res = await apiFetch(`/api/debug/grayscale-tasks/${currentTask.id}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        user: user || 'debug-user',
-                        action: 'evaluate',
-                        caseIds: checkedCaseIds.length > 0 ? checkedCaseIds : [caseId],
-                        evaluatorId: selectedEvaluatorId,
-                    }),
-                });
-                const data = await res.json().catch(() => ({}));
-                if (!res.ok) {
-                    alert(data.error || (locale === 'zh' ? '评测提交失败' : 'Evaluation failed to start'));
-                    return;
-                }
-                pollCurrentTask(currentTask.id);
-            } catch (err) {
-                alert(String(err));
+            const sideState = caseStatesRef.current[caseId]?.[side];
+            const latestRunIndex = findLatestRunnableRunIndex(sideState?.runs);
+            if (latestRunIndex != null) {
+                await retryEvaluation(caseId, side, latestRunIndex);
+                return;
             }
-            return;
         }
         const sessionId = execState.sessionId;
         if (!sessionId) return;
@@ -1929,13 +2052,6 @@ export function GrayscaleEvaluation({
         }, 2000);
     };
 
-    const runCaseBoth = async (caseId: string) => {
-        await Promise.all([
-            runCaseSide(caseId, 'a'),
-            runCaseSide(caseId, 'b')
-        ]);
-    };
-
     const hasRunningStates = hasRunningCaseStates;
 
     const pollCurrentTask = useCallback((taskId: string) => {
@@ -1953,9 +2069,8 @@ export function GrayscaleEvaluation({
                     return;
                 }
                 const nextStates = data.caseStatesJson || {};
-                // Polling 不要无脑覆盖本地：用户刚点过「重跑」可能还有 in-flight
-                // 占位 run 在本地等 PATCH 落库；mergeServerCaseStates 会按
-                // case-side 粒度保留本地更新的 in-flight 状态，避免被擦回老值。
+                // Polling 不要无脑覆盖本地：mergeServerCaseStates 会按 case-side
+                // 粒度保留本地更新的 in-flight 状态，避免被擦回老值。
                 setCaseStates(prev => mergeServerCaseStates(prev, nextStates));
                 setCurrentTask(prev => prev ? { ...prev, ...data } : data);
                 if (!data.activeRun && !hasRunningStates(nextStates) && !(data.configJson?.autoEval !== false && hasPendingAutoEvaluationCaseStates(nextStates))) {
@@ -1996,6 +2111,10 @@ export function GrayscaleEvaluation({
                 alert((locale === 'zh' ? '终止失败: ' : 'Abort failed: ') + (data.error || res.status));
                 return;
             }
+            // 顶部「终止」干预所有 in-flight retry: 一次性释放 retry 锁集合, 让按钮立刻
+            // 可点。backend 把所有 running/evaluating 推到 fail 后, useEffect terminal-clear
+            // 本来也会清, 但这里显式 clear 让 UI 立即响应不等下一 polling tick。
+            clearAllRetriesInFlight();
             // 强制刷一次, 不等下一 polling tick
             pollCurrentTask(currentTask.id);
         } catch (err) {
@@ -2181,16 +2300,17 @@ export function GrayscaleEvaluation({
 
     // Unified case list
     const activeLinkedDatasetIds = linkedDatasetIds.length > 0 ? linkedDatasetIds : (selectedDatasetId ? [selectedDatasetId] : []);
-    const allCases = sourceMode === 'dataset'
+    const allCases: EvaluationCaseItem[] = sourceMode === 'dataset'
         ? datasets
             .filter(ds => activeLinkedDatasetIds.includes(ds.id))
-            .flatMap(ds => (ds.cases || []).map((c: any) => ({ ...c, datasetName: ds.name, datasetId: ds.id })))
-        : traceRecords.map((r, idx) => ({
-            id: r.upload_id || r.task_id || `trace_${idx}`,
-            input: r.query || r.task_id || '',
-            datasetName: 'Traces',
-            datasetId: 'traces',
-        }));
+            .flatMap(ds => (ds.cases || []).map((c: any) => ({
+                ...c,
+                datasetName: ds.name,
+                datasetId: ds.id,
+                sourceType: 'dataset' as const,
+            })))
+        : traceRecords.map((r, idx) => buildGrayscaleTraceCase(r, idx));
+    const caseLookup = useMemo(() => new Map(allCases.map(item => [item.id, item])), [allCases]);
 
     // Auto-prune checkedCaseIds: 切换 sourceMode / 时间窗 / 数据集后, 原来勾选
     // 的 ID 在新的 allCases 里可能找不到了（dataset case id ≠ trace upload_id,
@@ -2327,7 +2447,6 @@ export function GrayscaleEvaluation({
                 score: undefined as number | undefined,
                 triggerRate: '—',
                 toolCall: '—',
-                accuracy: '—',
                 sessionId: '',
                 output: ''
             };
@@ -2381,7 +2500,6 @@ export function GrayscaleEvaluation({
                 score: undefined as number | undefined,
                 triggerRate: '—',
                 toolCall: '—',
-                accuracy: '—',
                 sessionId: '',
                 output: ''
             };
@@ -2396,7 +2514,6 @@ export function GrayscaleEvaluation({
                 score: undefined as number | undefined,
                 triggerRate: '—',
                 toolCall: '—',
-                accuracy: '—',
                 sessionId: '',
                 output: ''
             };
@@ -2411,7 +2528,6 @@ export function GrayscaleEvaluation({
                 score: undefined as number | undefined,
                 triggerRate: '—',
                 toolCall: '—',
-                accuracy: '—',
                 sessionId: '',
                 output: ''
             };
@@ -2451,8 +2567,6 @@ export function GrayscaleEvaluation({
         const toolNames = Array.from(new Set(terminalStates.flatMap(s => s.toolCalls || []))).slice(0, 3);
         const totalToolCalls = terminalStates.reduce((sum, s) => sum + (s.toolCallCount || 0), 0);
         const toolCall = toolNames.length > 0 ? `${toolNames.join(', ')} · ${totalToolCalls}` : (totalToolCalls > 0 ? `${totalToolCalls} calls` : '无');
-        const correctCount = terminalStates.filter(s => typeof s.score === 'number' && s.score >= 80).length;
-        const accuracy = scoredCount > 0 ? `${correctCount}/${scoredCount} 正确` : '—';
 
         return {
             status: 'executed' as CaseStatus,
@@ -2462,7 +2576,6 @@ export function GrayscaleEvaluation({
             score: avgScore,
             triggerRate,
             toolCall,
-            accuracy,
             sessionId: terminalStates[0]?.sessionId || '',
             output: terminalStates[0]?.output || 'Success'
         };
@@ -2546,7 +2659,15 @@ export function GrayscaleEvaluation({
         : abScoring.decision === 'insufficient'
             ? (locale === 'zh' ? `当前只有 ${abScoring.sampleSize} 个完成配对样本；N < ${DEFAULT_AB_SCORING_POLICY.minSampleSize} 不输出发布结论，请补齐样本后复测。` : `Only ${abScoring.sampleSize} paired samples are complete; add samples before making a release decision.`)
             : abScoring.decision === 'reject'
-                ? (locale === 'zh' ? `命中 hard gate：${abScoring.hardGates.map(g => g.label).join('、')}。建议先按打回类别修正后复测。` : `Hard gate hit: ${abScoring.hardGates.map(g => g.label).join(', ')}. Revise and retest first.`)
+                ? (() => {
+                    // 每条 hard gate 标出 ceiling, 让用户看清"为什么总分这么低"——
+                    // 总分 = min(rawTotal, ...所有 hard gate 的 ceiling), 取最严的。
+                    const minCeiling = Math.min(...abScoring.hardGates.map(g => g.ceiling));
+                    const gateList = abScoring.hardGates.map(g => `${g.label} (≤${g.ceiling}分)`).join('、');
+                    return locale === 'zh'
+                        ? `命中 hard gate：${gateList}。最终评分被强制不超过 ${minCeiling} 分 (取所有触发硬门槛中最严格的上限)。建议先按打回类别修正后复测。`
+                        : `Hard gate hit: ${abScoring.hardGates.map(g => `${g.label} (cap ${g.ceiling})`).join(', ')}. Total score is capped at ${minCeiling} (the strictest ceiling). Revise and retest first.`;
+                })()
                 : abScoring.decision === 'monitor-release'
                     ? (locale === 'zh' ? '可小流量监控发布，并持续观察 Token 成本、触发率和多轮一致性。' : 'Proceed with monitored rollout and watch token cost, invoke rate, and variance.')
                     : (locale === 'zh' ? '三维指标均达标，可进入全量发布，同时保留后续复测记录。' : 'All three dimensions pass; proceed to full release and keep retesting over time.');
@@ -2654,7 +2775,7 @@ export function GrayscaleEvaluation({
                         <div
                             style={{
                                 display: 'grid',
-                                gridTemplateColumns: '160px 1fr 1fr 60px 70px',
+                                gridTemplateColumns: '140px 1fr 1fr 90px 60px 70px',
                                 gap: 12,
                                 padding: '8px 12px',
                                 background: '#FAFAF7',
@@ -2672,6 +2793,7 @@ export function GrayscaleEvaluation({
                             <div>{locale === 'zh' ? 'Case ID' : 'Case ID'}</div>
                             <div>{locale === 'zh' ? '执行 session id' : 'Execution session id'}</div>
                             <div>{locale === 'zh' ? '评估 session id' : 'Evaluation session id'}</div>
+                            <div>{locale === 'zh' ? '评测结果' : 'Eval result'}</div>
                             <div style={{ textAlign: 'right' }}>{locale === 'zh' ? '分数' : 'Score'}</div>
                             <div style={{ textAlign: 'right' }}>{locale === 'zh' ? '操作' : 'Action'}</div>
                         </div>
@@ -2684,17 +2806,26 @@ export function GrayscaleEvaluation({
                             const evalErrMsg = (!hasExecFailure && record.status === 'fail')
                                 ? (record.output || '评测失败')
                                 : '';
-                            // case id 跳转目标: /dataset/<datasetId>?case=<caseId>
-                            // datasetId 从当前 task 配置拿; DatasetItemsPage 看到 ?case=
-                            // 会滚动到对应行并短暂高亮 (下面 DatasetItemsPage 同步加这个支持)
-                            const datasetId = currentTask?.configJson?.selectedDatasetId;
-                            const caseDetailUrl = datasetId && record.caseId
-                                ? `/dataset/${encodeURIComponent(datasetId)}?case=${encodeURIComponent(record.caseId)}`
-                                : null;
+                            const caseItem = caseLookup.get(record.caseId);
+                            const datasetId = caseItem?.datasetId || currentTask?.configJson?.selectedDatasetId;
+                            const caseDetailUrl = caseItem?.sourceType === 'trace'
+                                ? (caseItem.sourceExecutionSessionId
+                                    ? `/trace?taskId=${encodeURIComponent(caseItem.sourceExecutionSessionId)}`
+                                    : null)
+                                : (datasetId && record.caseId
+                                    ? `/dataset/${encodeURIComponent(datasetId)}?case=${encodeURIComponent(record.caseId)}`
+                                    : null);
+                            const caseDetailTitle = caseItem?.sourceType === 'trace'
+                                ? [
+                                    caseItem.sourceDatasetName ? `dataset: ${caseItem.sourceDatasetName}` : '',
+                                    caseItem.sourceUploadId ? `upload: ${caseItem.sourceUploadId}` : '',
+                                    caseItem.sourceExecutionSessionId ? `execution: ${caseItem.sourceExecutionSessionId}` : '',
+                                ].filter(Boolean).join(' | ')
+                                : `R${record.roundIndex || '-'} · ${record.caseId}`;
                             return (
                             <div
                                 key={`${side}-${record.caseId}-${record.roundIndex}-${idx}`}
-                                style={{ display: 'grid', gridTemplateColumns: '160px 1fr 1fr 60px 70px', gap: 12, alignItems: 'center', padding: '10px 12px', borderTop: '1px solid #F1EFE8', fontSize: 12 }}
+                                style={{ display: 'grid', gridTemplateColumns: '140px 1fr 1fr 90px 60px 70px', gap: 12, alignItems: 'center', padding: '10px 12px', borderTop: '1px solid #F1EFE8', fontSize: 12 }}
                             >
                                 {/* Case ID 列: 可点击, 跳到 dataset 详情对应 case */}
                                 <div
@@ -2704,7 +2835,7 @@ export function GrayscaleEvaluation({
                                         whiteSpace: 'nowrap',
                                         minWidth: 0,
                                     }}
-                                    title={`R${record.roundIndex || '-'} · ${record.caseId}`}
+                                    title={caseDetailTitle}
                                 >
                                     <span style={{ color: '#5F5E5A', fontWeight: 600, marginRight: 4 }}>R{record.roundIndex || '-'}</span>
                                     {caseDetailUrl ? (
@@ -2766,9 +2897,44 @@ export function GrayscaleEvaluation({
                                             {record.evaluationTraceId}
                                         </button>
                                     ) : (
-                                        <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'ui-monospace, monospace', color: '#888780' }}>
-                                            {record.evaluatorRunId || '—'}
+                                        // pass 但没拿到 evaluationTraceId (评测成功但 trace ID
+                                        // 还没回填, 常见于刚跑完的瞬态)。不显示生 trun_xxx 易迷惑,
+                                        // 显示 "✓ 已评测" 灰字, evaluatorRunId 作为 tooltip 留着 debug。
+                                        <span
+                                            title={record.evaluatorRunId ? `runId: ${record.evaluatorRunId}` : undefined}
+                                            style={{ color: '#888780', fontSize: 12 }}
+                                        >
+                                            ✓ {locale === 'zh' ? '已评测' : 'Evaluated'}
                                         </span>
+                                    )}
+                                </div>
+
+                                {/* 评测结果列: 有 evaluatorRunId 就显示为可点击按钮跳到 /eval/run/<runId>
+                                    (评测批次详情页, 显示该批次下所有 trace + 分数 + 评估器维度细节)。
+                                    没有 evaluatorRunId 时 (执行失败 / 还没启动评测) 显示 "—"。
+                                    target=_blank 避免离开当前 A/B 任务页, 用户可以来回切。 */}
+                                <div>
+                                    {record.evaluatorRunId ? (
+                                        <button
+                                            className="v2-action-btn"
+                                            style={{
+                                                fontSize: 11,
+                                                padding: '3px 8px',
+                                                background: '#EEF2FF',
+                                                color: '#4F46E5',
+                                                border: '1px solid rgba(79,70,229,.25)',
+                                                borderRadius: 4,
+                                                cursor: 'pointer',
+                                                fontWeight: 600,
+                                                whiteSpace: 'nowrap',
+                                            }}
+                                            title={`跳转到评测批次 ${record.evaluatorRunId} 详情`}
+                                            onClick={() => window.open(`/eval/run/${encodeURIComponent(record.evaluatorRunId)}`, '_blank')}
+                                        >
+                                            📋 {locale === 'zh' ? '查看' : 'View'}
+                                        </button>
+                                    ) : (
+                                        <span style={{ color: '#B8B6AE', fontSize: 11 }}>—</span>
                                     )}
                                 </div>
 
@@ -2776,41 +2942,79 @@ export function GrayscaleEvaluation({
                                     {typeof record.score === 'number' ? record.score : '—'}
                                 </div>
 
-                                {/* 操作列: 失败行才显示重试按钮 */}
+                                {/* 操作列: 失败行才显示重试按钮; in-flight 时显示"重试中"灰按钮 */}
                                 <div style={{ textAlign: 'right' }}>
-                                    {exec.tone === 'fail' || (evaluation && evaluation.tone === 'fail') ? (
-                                        <button
-                                            className="v2-action-btn"
-                                            style={{
-                                                fontSize: 11,
-                                                padding: '4px 8px',
-                                                background: '#1C1917',
-                                                color: 'white',
-                                                border: 'none',
-                                                borderRadius: 4,
-                                                cursor: 'pointer',
-                                                whiteSpace: 'nowrap',
-                                            }}
-                                            title={hasExecFailure
-                                                ? (locale === 'zh' ? '执行失败 → 从执行重试 (会自动评测)' : 'Retry from execution (auto-evaluate)')
-                                                : (locale === 'zh' ? '评测失败 → 只重新评测 (复用现有 session)' : 'Retry evaluation only')}
-                                            onClick={() => {
-                                                // 执行失败 → 重跑 agent (会 push 新 run, 自动 autoEval)
-                                                // 评测失败 → 行级 retryEvaluation: reset 这一条 run 状态
-                                                //           + onlyMissingEvaluation=true 让 backend 只评这一条,
-                                                //           不会误评同 case 已 pass 的其他 run。
-                                                if (hasExecFailure) {
-                                                    void runCaseSide(record.caseId, side);
-                                                } else {
-                                                    void retryEvaluation(record.caseId, side, record.roundIndex || 1);
-                                                }
-                                            }}
-                                        >
-                                            🔁 {locale === 'zh' ? '重试' : 'Retry'}
-                                        </button>
-                                    ) : (
-                                        <span style={{ color: '#B8B6AE', fontSize: 11 }}>—</span>
-                                    )}
+                                    {(() => {
+                                        const ri = record.roundIndex || 1;
+                                        const flightKey = retryKey(record.caseId, side, ri);
+                                        // 读 state 而不是 ref —— 让 React 自己跟踪依赖, retry 状态变化
+                                        // 立刻触发 re-render 切换 "重试中" 按钮显示。click handler 那边
+                                        // 还要靠 inFlightRetriesRef 同步判重防止 React commit 前的双击。
+                                        const isInFlight = inFlightRetries.has(flightKey);
+                                        const isFailRow = exec.tone === 'fail' || (evaluation && evaluation.tone === 'fail');
+                                        if (isInFlight) {
+                                            return (
+                                                <button
+                                                    className="v2-action-btn"
+                                                    disabled
+                                                    style={{
+                                                        fontSize: 11,
+                                                        padding: '4px 8px',
+                                                        background: '#E7E5E4',
+                                                        color: '#78716C',
+                                                        border: 'none',
+                                                        borderRadius: 4,
+                                                        cursor: 'not-allowed',
+                                                        whiteSpace: 'nowrap',
+                                                        opacity: 0.85,
+                                                    }}
+                                                    title={locale === 'zh'
+                                                        ? '重试进行中, 请等待结果。如需打断, 点击顶部「终止」按钮。'
+                                                        : 'Retry in progress; wait for result or use top Abort button to interrupt.'}
+                                                >
+                                                    ⏳ {locale === 'zh' ? '重试中' : 'Retrying'}
+                                                </button>
+                                            );
+                                        }
+                                        if (!isFailRow) {
+                                            return <span style={{ color: '#B8B6AE', fontSize: 11 }}>—</span>;
+                                        }
+                                        return (
+                                            <button
+                                                className="v2-action-btn"
+                                                style={{
+                                                    fontSize: 11,
+                                                    padding: '4px 8px',
+                                                    background: '#1C1917',
+                                                    color: 'white',
+                                                    border: 'none',
+                                                    borderRadius: 4,
+                                                    cursor: 'pointer',
+                                                    whiteSpace: 'nowrap',
+                                                }}
+                                                title={hasExecFailure
+                                                    ? (locale === 'zh' ? '执行失败 → 从执行重试 (会自动评测)' : 'Retry from execution (auto-evaluate)')
+                                                    : (locale === 'zh' ? '评测失败 → 只重新评测 (复用现有 session)' : 'Retry evaluation only')}
+                                                onClick={() => {
+                                                    // 都走行级"原地覆盖"路径——retry 是「再试这一行」语义,
+                                                    // 不该多出一条新记录。
+                                                    //   执行失败 → retryExecution: reset 这一条 run, 重跑 agent,
+                                                    //              autoEval 时自动接 retryEvaluation
+                                                    //   评测失败 → retryEvaluation: reset 这一条 run 评测状态,
+                                                    //              backend onlyMissingEvaluation 只评这一条
+                                                    // 双击保护: retryExecution / retryEvaluation 内部用
+                                                    // inFlightRetriesRef.add 同步抢锁, 已 in-flight 直接 return。
+                                                    if (hasExecFailure) {
+                                                        void retryExecution(record.caseId, side, ri);
+                                                    } else {
+                                                        void retryEvaluation(record.caseId, side, ri);
+                                                    }
+                                                }}
+                                            >
+                                                🔁 {locale === 'zh' ? '重试' : 'Retry'}
+                                            </button>
+                                        );
+                                    })()}
                                 </div>
                             </div>
                             );
@@ -3419,6 +3623,15 @@ export function GrayscaleEvaluation({
                                             <div style={{ fontSize: 13, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                                 {c.input}
                                             </div>
+                                            {c.sourceType === 'trace' && (
+                                                <div style={{ marginTop: 4, fontSize: 11, color: '#78716C', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                    {[
+                                                        c.sourceDatasetName ? `dataset ${c.sourceDatasetName}` : '',
+                                                        c.sourceUploadId ? `upload ${c.sourceUploadId}` : '',
+                                                        c.sourceExecutionSessionId ? `exec ${c.sourceExecutionSessionId}` : '',
+                                                    ].filter(Boolean).join(' · ')}
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
                                 );
@@ -3534,7 +3747,7 @@ export function GrayscaleEvaluation({
                             </div>
                             <div className="v2-stage-card-subtitle">
                                 {locale === 'zh'
-                                    ? `对照组 (${getVersionLabel(versions.find(v => v.id === versionAId) || versionAId)}) vs 实验组 (${getVersionLabel(versions.find(v => v.id === versionBId) || versionBId)}) · 暴露每次执行的过程数据`
+                                    ? `对照组 (${getVersionLabel(versions.find(v => v.id === versionAId) || versionAId)}) vs 实验组 (${getVersionLabel(versions.find(v => v.id === versionBId) || versionBId)}) · 每次执行的过程数据`
                                     : `Control (${getVersionLabel(versions.find(v => v.id === versionAId) || versionAId)}) vs Experiment (${getVersionLabel(versions.find(v => v.id === versionBId) || versionBId)}) · Exposing raw execution steps`}
                             </div>
                         </div>
@@ -3555,7 +3768,7 @@ export function GrayscaleEvaluation({
                                 <div className="v2-col-header">
                                     <div className="v2-col-tag a">A</div>
                                     <div className="v2-col-name-block">
-                                        <div className="v2-col-name">{locale === 'zh' ? '对照组: 基础 Agent' : 'Control Group'}</div>
+                                        <div className="v2-col-name">{locale === 'zh' ? '对照组' : 'Control Group'}</div>
                                         <div className="v2-col-variant-line">
                                             <span className={`v2-skill-state ${versionAId === NONE_VERSION_ID ? 'off' : 'on'} ab-skill-state`}>
                                                 Skill: {versionAId === NONE_VERSION_ID
@@ -4205,6 +4418,15 @@ export function GrayscaleEvaluation({
                     </div>
                 </div>
             )}
+
+            {/* 新增评测任务对话框 (跨视图浮窗, 跟其他 modal 同级渲染) */}
+            <NewEvaluationBatchDialog
+                open={newBatchDialogOpen}
+                user={user || ''}
+                defaultTitle={currentTask?.taskName}
+                onClose={() => setNewBatchDialogOpen(false)}
+                onCreated={handleEvalBatchCreated}
+            />
 
             {/* Output preview modal */}
             {outputModal && (

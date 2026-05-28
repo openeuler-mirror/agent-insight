@@ -24,6 +24,7 @@ export function SectionShell({
     title,
     desc,
     summary,
+    actions,
     open,
     onToggle,
     children,
@@ -33,21 +34,56 @@ export function SectionShell({
     title: string;
     desc: string;
     summary: ReactNode;
+    /**
+     * 右侧操作区, 紧贴 summary 之后 chev 之前。常见用法: 配置卡放「+ 新增评测任务」/
+     * 结果卡放「导出」等。点击需要 e.stopPropagation() 避免触发 head onToggle 折叠。
+     * 不传时不渲染容器, 不影响原布局。
+     */
+    actions?: ReactNode;
     open: boolean;
     onToggle: () => void;
     children: ReactNode;
 }) {
+    // head 用 div + role="button" 代替 <button>: 因为 actions slot 可能放交互式
+    // 按钮 (例如「新增评测任务」), <button> 嵌套 <button> 在 HTML 里非法 → React
+    // hydration warn "<button> cannot be a descendant of <button>"。
+    // 保留键盘 a11y: Enter/Space 触发 onToggle。actions 区点击 stopPropagation
+    // 防止冒泡到外层 div 触发折叠。
+    const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            onToggle();
+        }
+    };
     return (
         <section className={`ev-section ev-section-${variant} ${open ? 'open' : ''}`}>
-            <button type="button" className="ev-section-head" onClick={onToggle}>
+            <div
+                role="button"
+                tabIndex={0}
+                className="ev-section-head"
+                onClick={onToggle}
+                onKeyDown={handleKeyDown}
+                // 传了 actions 时插入 actions 列, 不传时维持 CSS 默认 4 列布局, 不影响老 caller。
+                style={actions ? { gridTemplateColumns: '36px 1fr auto auto 14px' } : undefined}
+            >
                 <span className="ev-section-num">{num}</span>
                 <span className="ev-section-title">
                     <b>{title}</b>
                     <small>{desc}</small>
                 </span>
                 <span className="ev-section-summary">{summary}</span>
+                {actions && (
+                    <span
+                        className="ev-section-actions"
+                        onClick={e => e.stopPropagation()}
+                        onKeyDown={e => e.stopPropagation()}
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginLeft: 8 }}
+                    >
+                        {actions}
+                    </span>
+                )}
                 <span className="ev-section-chev">›</span>
-            </button>
+            </div>
             {open && <div className="ev-section-body">{children}</div>}
         </section>
     );

@@ -177,7 +177,7 @@ witty-skill-insight/
 
 ## 四、数据模型
 
-Prisma schema 定义了 **27 张表**（`prisma/schema.prisma`）。下表只列与本节业务高度相关的核心表，其余（`PlaygroundSession/Message`、`SkillOptSession/Message/Iteration`、`CustomEvaluatorList`、`DebugHistory`、`BatchEvalTask`、`GrayscaleTask`、`DebugJobResult`、`TrajectoryEvalResult`、`RegisteredAgent`、`FaultDiagnosisSession/Message`）按所属模块单独维护。
+Prisma schema 定义了 **28 张表**（`prisma/schema.prisma`）。下表只列与本节业务高度相关的核心表，其余（`PlaygroundSession/Message`、`SkillOptSession/Message/Iteration`、`CustomEvaluatorList`、`DebugHistory`、`BatchEvalTask`、`GrayscaleTask`、`DebugJobResult`、`TrajectoryEvalResult`、`RegisteredAgent`、`FaultDiagnosisSession/Message`）按所属模块单独维护。
 
 | 表 | 用途 | 关键字段 |
 |---|---|---|
@@ -197,6 +197,7 @@ Prisma schema 定义了 **27 张表**（`prisma/schema.prisma`）。下表只列
 | `ParsedFlow` | Skill 流程解析缓存 | skillId+version, flowJson, mermaidCode |
 | `ExecutionMatch` | 执行 vs 静态流程匹配 | executionId, mode, matchJson（含完整 trace 展示用 matches / skippedExpectedSteps / alignment）, staticMermaid, dynamicMermaid, analysisText |
 | `UserGuideState` | 用户引导状态 | user, currentStep, completedSteps (JSON), skippedSteps |
+| `AgentDebugReport` | **AgentDebug 原方案式认知根因报告** | executionId (unique), interactionsHash, status, reportJson（stepRecords / phase1Grid / rootCause / stats；`candidateWindows` 兼容保留但当前为空）；用于 `/fault` 智能诊断对话流 |
 
 `Execution.interactions` 存了多 Agent trace 原始数据，关键字段：`role`, `agent`, `subagent_name`, `subagent_session_id`, `tool_calls[]`, `usage`, `timeInfo`。
 
@@ -357,7 +358,7 @@ PATCH 把指定 SkillIssue 列表的 `resolvedAt = now` + `resolvedRunId = threa
 | `/skill-debug/grayscale` | `app/(main)/skill-debug/grayscale/page.tsx` | **A/B测试** —— 新建 `GrayscaleTask` 时强绑定一个 Skill + B 实验版本（同用户同 Skill 名称 + 版本号唯一，已保存任务不可改绑），选择 A/B Skill 版本（A 可为无 Skill）、数据集样本、重复轮次、Agent 最大并发数与评估器；后台按“样本 × A/B × 轮次”调度 `runGeneralAgent`，执行阶段受 `agentMaxConcurrency` 限流，全部执行记录完成后再用同一并发上限触发 trajectory 评估器，全部评估完成后再聚合耗时、token、Skill 触发、工具调用、准确率与平均评分 |
 | `/skill-release` | `app/(main)/skill-release/page.tsx` | **发布管理**（占位）—— 审批 / 灰度 / 回滚 |
 | `/trace` | `app/(main)/trace/page.tsx` | **链路观测** —— 4 个指标卡 + 执行记录表（带筛选/分页）+ 点击行打开右侧 Drawer 查看多 Agent 调用树；行内提供「指标」「调测」一键跳转 |
-| `/fault` | `app/(main)/fault/page.tsx` | **故障定位** —— 失败用例列表（按状态/类型筛选）+ 跳转到 details 页查看流程偏离 |
+| `/fault` | `app/(main)/fault/page.tsx` | **故障定位** —— 失败用例列表（按状态/类型筛选）+ 详情页内展示原始错误、效果偏差与 AgentDebug 四维诊断对话流；支持诊断对话追问 |
 | `/dataset` | `app/(main)/dataset/page.tsx` | **评测集** —— 列表（`AgentDatasetCenter`）：搜索、新建、行内「详情 / 录入数据 / 删除」；**点击行**进入 `/dataset/[id]` |
 | `/dataset/[id]` | `app/(main)/dataset/[id]/page.tsx` | **数据项录入** —— `DatasetItemsPage`：维护该评测集下 cases（与 `AgentEvalDataset.casesJson` 同步） |
 | `/metrics` | `app/(main)/metrics/page.tsx` | **评估器 / 指标** —— 默认 `EvaluatorsCenter`（评估器与观测数据联动）；带 `?taskId=xxx` 时为单次执行 `SingleExecutionMetrics` |
@@ -457,6 +458,22 @@ PATCH 把指定 SkillIssue 列表的 `resolvedAt = now` + `resolvedRunId = threa
 - **`opencode-derived-metrics.ts`** — 从 OpenCode session 派生 token / latency / cache 等
 - **`session-interactions-merge.ts`** — 多源 interaction 合并去重
 - **`subagent-inference.ts`** — 从 task tool call 推断 subagent_name / subagent_session_id
+
+#### `engine/agent-debug/` — AgentDebug Skill 化认知根因诊断
+- **`trace-adapter.ts`** — 将真实 `Session.interactions` 中不同形态的 tool call 归一为 `DebugTurn[]`，保留 direct `tool_calls`、top-level `toolCalls` 与 `responseMessage.tool_calls`
+- **`runner.ts`** — 只负责准备 execution 摘要、全量归一化 step 摘要、trace bundle 与 `.agent-insight/agent-debug-input.json`，再调用 `fault-diagnosis-agent` 使用 `agent-debug-diagnosis` skill；不内置四模块 detector 逻辑，诊断 agent 会自行执行 skill 下脚本
+- **`json.ts`** — 解析智能诊断 Agent 返回的 JSON 报告
+- **`report-store.ts`** — `AgentDebugReport` 读写与 dev 环境建表兜底
+
+#### `skills/agent-debug-diagnosis/` — 智能诊断 Agent 的 AgentDebug Skill
+- **`SKILL.md`** — 中文诊断入口与强约束，要求先执行 `scripts/agentdebug_static.py`，语义补充后再执行 `scripts/agentdebug_validate.py`，最终输出严格中文 JSON
+- **`references/01-input-and-extraction.md`** — 输入契约、Step 定义、Memory / Reflection / Planning / Action / System 抽取算法
+- **`references/02-error-taxonomy.md`** — AgentDebug 模块错误定义、Phase 1 detector 规则、误报边界
+- **`references/03-phase-analysis.md`** — Phase 0/1/2 执行协议、根因选择准则、典型案例
+- **`references/04-output-schema.md`** — `stepRecords`、`phase1Grid`、`issues`、`rootCause`、`humanSummary` 严格输出 schema
+- **`scripts/agentdebug_static.py`** — v0.4 风格静态拆分与规则检测：Action/System 确定性提取，Memory/Reflection/Planning 规则候选，Phase 0 与静态 Phase 1
+- **`scripts/agentdebug_validate.py`** — 最终报告校验：schema、枚举、中文字段、空模块容错
+- **`scripts/agentdebug_common.py`** — 共享词表、正则与 JSON 工具
 
 #### `engine/evaluation/` — 评测引擎 (模块二)
 - **`judge.ts`** — LLM-as-Judge 主流程：`judgeAnswer()`, `analyzeFailures()`, `extractSkillsFromClaudeSession()`, `normalizeInteractions()`

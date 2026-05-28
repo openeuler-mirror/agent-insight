@@ -7,7 +7,10 @@ import {
     TrajectoryEvalConfigError,
     type TrajectoryEvalInput,
 } from '@/lib/engine/evaluation/opencode-trajectory-evaluator';
-import { evaluateTaskCompletionViaOpencode } from '@/lib/engine/evaluation/opencode-task-completion-evaluator';
+import {
+    evaluateTaskCompletionViaOpencode,
+    type TaskCompletionEvalInput,
+} from '@/lib/engine/evaluation/opencode-task-completion-evaluator';
 import { startOrReplace as startEvalTask, finish as finishEvalTask } from '@/lib/evaluation-task-manager';
 import { deriveAndPersistOptPoints } from '@/lib/engine/evaluation/derive-skill-opt-points';
 import {
@@ -36,6 +39,16 @@ import {
     type SkillKeyActionComparisonResult,
 } from '@/lib/engine/evaluation/skill-attribution';
 import { getRootSkillFromInteractions } from '@/lib/engine/observability/skill-scope';
+import {
+    autoWatchAgentNamesMatch,
+    mergeWatchedAgentIntoRawAnalysis,
+    normalizeAutoWatchAgent,
+    normalizeAutoWatchEnabledAt,
+    resolveSingleTrajectoryCandidateAgent,
+    resolveWatchedAgentForRunRows,
+    type AutoWatchRunRowLike,
+} from '@/lib/engine/evaluation/trajectory-auto-watch-helper';
+import { isEvaluatorAgentName } from '@/lib/evaluator-agent';
 
 export const dynamic = 'force-dynamic';
 
@@ -124,6 +137,7 @@ interface SelectedEvaluatorMeta {
     selectedEvaluatorNames: string[];
     autoWatch?: boolean;
     watchedAgent?: string;
+    autoWatchEnabledAt?: string;
 }
 
 function normalizeOptionalVersion(value: unknown): number | null {
@@ -180,7 +194,12 @@ function normalizeSelectedEvaluators(value: unknown): string[] {
 
 function buildSelectedEvaluatorMeta(
     selectedEvaluators: string[],
-    options: { autoWatch?: boolean; watchedAgent?: string; customNameResolver?: (id: string) => string | undefined } = {},
+    options: {
+        autoWatch?: boolean;
+        watchedAgent?: string;
+        autoWatchEnabledAt?: string;
+        customNameResolver?: (id: string) => string | undefined;
+    } = {},
 ): SelectedEvaluatorMeta {
     const resolveName = (id: string): string => {
         const preset = EVALUATOR_LABELS[id];
@@ -194,6 +213,7 @@ function buildSelectedEvaluatorMeta(
         selectedEvaluatorNames: selectedEvaluators.map(resolveName),
         ...(options.autoWatch ? { autoWatch: true } : {}),
         ...(options.watchedAgent ? { watchedAgent: options.watchedAgent } : {}),
+        ...(options.autoWatch && options.autoWatchEnabledAt ? { autoWatchEnabledAt: options.autoWatchEnabledAt } : {}),
     };
 }
 
@@ -207,6 +227,7 @@ function readSelectedEvaluatorMeta(rawAnalysisJson: string | null | undefined): 
     const watchedAgent = typeof parsed?.watchedAgent === 'string'
         ? parsed.watchedAgent.trim()
         : '';
+    const autoWatchEnabledAt = normalizeAutoWatchEnabledAt(parsed?.autoWatchEnabledAt);
     if (selectedEvaluators.length > 0) {
         if (selectedEvaluatorNames.length === selectedEvaluators.length) {
             return {
@@ -214,11 +235,12 @@ function readSelectedEvaluatorMeta(rawAnalysisJson: string | null | undefined): 
                 selectedEvaluatorNames,
                 ...(autoWatch ? { autoWatch: true } : {}),
                 ...(watchedAgent ? { watchedAgent } : {}),
+                ...(autoWatch && autoWatchEnabledAt ? { autoWatchEnabledAt } : {}),
             };
         }
-        return buildSelectedEvaluatorMeta(selectedEvaluators, { autoWatch, watchedAgent });
+        return buildSelectedEvaluatorMeta(selectedEvaluators, { autoWatch, watchedAgent, autoWatchEnabledAt });
     }
-    return buildSelectedEvaluatorMeta([TRACE_EVALUATOR_ID], { autoWatch, watchedAgent });
+    return buildSelectedEvaluatorMeta([TRACE_EVALUATOR_ID], { autoWatch, watchedAgent, autoWatchEnabledAt });
 }
 
 function readSelectedEvaluatorMetaStrict(rawAnalysisJson: string | null | undefined): SelectedEvaluatorMeta | null {
@@ -232,15 +254,17 @@ function readSelectedEvaluatorMetaStrict(rawAnalysisJson: string | null | undefi
     const watchedAgent = typeof parsed?.watchedAgent === 'string'
         ? parsed.watchedAgent.trim()
         : '';
+    const autoWatchEnabledAt = normalizeAutoWatchEnabledAt(parsed?.autoWatchEnabledAt);
     if (selectedEvaluatorNames.length === selectedEvaluators.length) {
         return {
             selectedEvaluators,
             selectedEvaluatorNames,
             ...(autoWatch ? { autoWatch: true } : {}),
             ...(watchedAgent ? { watchedAgent } : {}),
+            ...(autoWatch && autoWatchEnabledAt ? { autoWatchEnabledAt } : {}),
         };
     }
-    return buildSelectedEvaluatorMeta(selectedEvaluators, { autoWatch, watchedAgent });
+    return buildSelectedEvaluatorMeta(selectedEvaluators, { autoWatch, watchedAgent, autoWatchEnabledAt });
 }
 
 function mergeRawAnalysisMeta(
@@ -253,14 +277,19 @@ function mergeRawAnalysisMeta(
         selectedEvaluators: meta.selectedEvaluators,
         selectedEvaluatorNames: meta.selectedEvaluatorNames,
         watchedAgent: meta.watchedAgent || '',
+        autoWatchEnabledAt: meta.autoWatchEnabledAt || '',
     };
     if (meta.autoWatch) {
         next.autoWatch = true;
     } else {
         delete next.autoWatch;
+        delete next.autoWatchEnabledAt;
     }
     if (!meta.watchedAgent) {
         delete next.watchedAgent;
+    }
+    if (!meta.autoWatchEnabledAt) {
+        delete next.autoWatchEnabledAt;
     }
     return JSON.stringify(next);
 }
@@ -276,12 +305,22 @@ async function evaluateTaskCompletionAgainstExpected(
     actualOutput: string,
     precomputedRootCauses?: RootCauseItem[],
     precomputedRootCauseSource?: 'dataset-cache' | 'none',
+    traceSummaryText?: string,
+    skillContext?: TaskCompletionEvalInput['skillContext'],
     user?: string | null,
     skillName?: string | null,
     skillVersion?: number | null,
 ): Promise<ResultJudgment> {
     const result = await evaluateTaskCompletionViaOpencode(
-        { caseInput, expectedOutput, actualOutput, precomputedRootCauses, precomputedRootCauseSource },
+        {
+            caseInput,
+            expectedOutput,
+            actualOutput,
+            precomputedRootCauses,
+            precomputedRootCauseSource,
+            traceSummaryText,
+            skillContext,
+        },
         user,
         skillName,
         skillVersion,
@@ -356,6 +395,41 @@ function getPrimaryExecutionSkillTargets(
         skill: normalized,
         version: rootSkill?.version ?? normalizeOptionalVersion(execution?.skillVersion),
     }];
+}
+
+async function loadTaskCompletionSkillContext(
+    execution: ExecutionLike | null | undefined,
+    interactions: unknown,
+    user?: string | null,
+): Promise<TaskCompletionEvalInput['skillContext'] | undefined> {
+    const targets = getPrimaryExecutionSkillTargets(execution, interactions);
+    if (targets.length === 0) return undefined;
+
+    const invokedSkills: NonNullable<NonNullable<TaskCompletionEvalInput['skillContext']>['invokedSkills']> = [];
+    for (const target of targets) {
+        const skillRecord = await db.findSkill(target.skill, user || null);
+        if (!skillRecord?.id) {
+            invokedSkills.push({ name: target.skill, version: target.version });
+            continue;
+        }
+
+        const fullSkill = await db.findSkillById(skillRecord.id);
+        const resolvedVersion = target.version
+            ?? fullSkill?.activeVersion
+            ?? fullSkill?.versions?.[0]?.version
+            ?? null;
+        const versionRow = resolvedVersion != null
+            ? await db.findSkillVersion(skillRecord.id, resolvedVersion).catch(() => null)
+            : null;
+        const content = String(versionRow?.content || '').trim();
+        invokedSkills.push({
+            name: target.skill,
+            version: resolvedVersion,
+            content: content ? content.slice(0, 12_000) : undefined,
+        });
+    }
+
+    return invokedSkills.length > 0 ? { invokedSkills } : undefined;
 }
 
 async function extractSkillKeyActionsFromTargets(targets: SkillTarget[], user?: string | null): Promise<ExtractedKeyAction[]> {
@@ -587,9 +661,19 @@ export async function POST(request: Request) {
             requestedEvaluators,
         );
         const requestedAutoWatch = body.autoWatch === true;
-        const requestedWatchedAgent = String(body.watchedAgent || body.agent || '').trim();
+        const requestedWatchedAgent = normalizeAutoWatchAgent(body.watchedAgent || body.agent || '');
+        let resolvedWatchedAgent = requestedWatchedAgent;
+        const requestNowIso = new Date().toISOString();
+        // placeholderOnly: 用于"新建评测批次"语义——前端先创建一个空批次拿到 evaluatorRunId,
+        // 后续 A/B 测试/用例分析的所有评测都 append 到此 ID。跟 autoWatch (自动观测某 agent 新 trace)
+        // 走相同的 watchPlaceholder 数据库分支但语义不同; rawAnalysisJson 加 placeholderOnly=true
+        // 让前端 /eval 页可识别此批次是用户主动创建的"空批次"而不是 autoWatch 待跑。
+        const requestedPlaceholderOnly = body.placeholderOnly === true;
 
         if (!user) return NextResponse.json({ error: 'user is required' }, { status: 400 });
+        if (requestedAutoWatch && requestedWatchedAgent && isEvaluatorAgentName(requestedWatchedAgent)) {
+            return NextResponse.json({ error: 'autoWatch requires a non-evaluator execution agent' }, { status: 400 });
+        }
 
         // 自建评估器需要真存在于该用户的 CustomEvaluatorList 才能放行；找不到的 ID 直接拒绝，
         // 避免后台 runner 反复抛"未找到自建评估器"。
@@ -626,7 +710,7 @@ export async function POST(request: Request) {
             finalEvaluators.length > 0 ? finalEvaluators : [TRACE_EVALUATOR_ID],
             {
                 autoWatch: requestedAutoWatch,
-                watchedAgent: requestedWatchedAgent,
+                watchedAgent: resolvedWatchedAgent,
                 customNameResolver: id => customNameMap.get(id),
             },
         );
@@ -658,6 +742,8 @@ export async function POST(request: Request) {
         });
 
         let existingRunTaskIds = new Set<string>();
+        let existingRunWatchedAgent = '';
+        let existingRunAutoWatchEnabledAt = '';
         if (appendRunId) {
             const existingRows = await prisma.trajectoryEvalResult.findMany({
                 where: { user, evaluatorRunId: appendRunId },
@@ -674,18 +760,71 @@ export async function POST(request: Request) {
             evaluatorMeta = finalEvaluators.length > 0
                 ? buildSelectedEvaluatorMeta(finalEvaluators, {
                     autoWatch: requestedAutoWatch,
-                    watchedAgent: requestedWatchedAgent,
+                    watchedAgent: resolvedWatchedAgent,
                     customNameResolver: id => customNameMap.get(id),
                 })
                 : latestExplicitMeta || readSelectedEvaluatorMeta(first.rawAnalysisJson);
             taskMeta = extractTrajectoryTaskMeta(first.rawAnalysisJson, first.createdAt);
             datasetId = datasetId || first.datasetId || '';
+            existingRunWatchedAgent = normalizeAutoWatchAgent(
+                latestExplicitMeta?.watchedAgent
+                || await resolveWatchedAgentForRunRows(user, existingRows as AutoWatchRunRowLike[]),
+            );
+            existingRunAutoWatchEnabledAt = normalizeAutoWatchEnabledAt(latestExplicitMeta?.autoWatchEnabledAt);
             existingRunTaskIds = new Set(
                 existingRows
                     .map(row => row.taskId || row.executionId || '')
                     .filter(Boolean),
             );
         }
+
+        if (requestedAutoWatch && taskIds.length > 0) {
+            const resolution = await resolveSingleTrajectoryCandidateAgent(user, taskIds);
+            if (resolution.missingTaskIds.length > 0) {
+                return NextResponse.json(
+                    {
+                        error: `autoWatch only accepts traces that appear in 发起新评测: ${resolution.missingTaskIds.join(', ')}`,
+                    },
+                    { status: 400 },
+                );
+            }
+            if (!resolution.agent) {
+                return NextResponse.json(
+                    {
+                        error: `autoWatch requires a single execution agent, got: ${resolution.distinctAgents.join(', ') || 'none'}`,
+                    },
+                    { status: 400 },
+                );
+            }
+            if (existingRunWatchedAgent && !autoWatchAgentNamesMatch(existingRunWatchedAgent, resolution.agent)) {
+                return NextResponse.json(
+                    {
+                        error: `autoWatch agent mismatch: run watches ${existingRunWatchedAgent}, new traces belong to ${resolution.agent}`,
+                    },
+                    { status: 400 },
+                );
+            }
+            resolvedWatchedAgent = resolution.agent;
+        } else if (requestedAutoWatch && !appendRunId && !resolvedWatchedAgent) {
+            return NextResponse.json(
+                { error: 'watchedAgent is required when starting autoWatch without seed traces' },
+                { status: 400 },
+            );
+        } else if (requestedAutoWatch && existingRunWatchedAgent) {
+            resolvedWatchedAgent = existingRunWatchedAgent;
+        }
+
+        evaluatorMeta = buildSelectedEvaluatorMeta(
+            finalEvaluators.length > 0 ? finalEvaluators : evaluatorMeta.selectedEvaluators,
+            {
+                autoWatch: requestedAutoWatch,
+                watchedAgent: requestedAutoWatch ? resolvedWatchedAgent : '',
+                autoWatchEnabledAt: requestedAutoWatch
+                    ? (appendRunId ? existingRunAutoWatchEnabledAt || requestNowIso : requestNowIso)
+                    : '',
+                customNameResolver: id => customNameMap.get(id),
+            },
+        );
 
         const evaluatorRunId = appendRunId || generateRunId();
         const created: { id: string; caseId: string; executionId?: string; taskId?: string }[] = [];
@@ -712,7 +851,7 @@ export async function POST(request: Request) {
                 });
                 created.push({ id: row.id, caseId: '', taskId });
             }
-        } else if (requestedAutoWatch && !appendRunId) {
+        } else if ((requestedAutoWatch || requestedPlaceholderOnly) && !appendRunId) {
             if (datasetId) {
                 const dataset = await findAgentDataset(user, datasetId);
                 if (!dataset) {
@@ -725,6 +864,9 @@ export async function POST(request: Request) {
                     );
                 }
             }
+            // placeholderOnly=true 是"用户主动新建空批次"语义, autoWatch=true 是"自动观测某 agent 新 trace 自动评测"。
+            // 两者底层都走 watchPlaceholder 行 (taskId=null/caseId=''), 但 rawAnalysisJson 加额外标记
+            // 让 /eval 页能区分: placeholderOnly → 显示"待评测 · 来自任务管理"; autoWatch → "自动观测中"。
             const row = await prisma.trajectoryEvalResult.create({
                 data: {
                     user,
@@ -734,7 +876,12 @@ export async function POST(request: Request) {
                     executionId: null,
                     taskId: null,
                     status: 'pending',
-                    rawAnalysisJson: JSON.stringify({ ...evaluatorMeta, taskMeta, watchPlaceholder: true }),
+                    rawAnalysisJson: JSON.stringify({
+                        ...evaluatorMeta,
+                        taskMeta,
+                        watchPlaceholder: true,
+                        ...(requestedPlaceholderOnly ? { placeholderOnly: true } : {}),
+                    }),
                 },
             });
             created.push({ id: row.id, caseId: '' });
@@ -772,7 +919,7 @@ export async function POST(request: Request) {
                 created.push({ id: row.id, caseId, executionId, taskId });
             }
         } else {
-            return NextResponse.json({ error: 'provide taskIds or datasetId + pairs' }, { status: 400 });
+            return NextResponse.json({ error: 'provide taskIds, datasetId+pairs, or placeholderOnly:true' }, { status: 400 });
         }
 
         if (created.length === 0) {
@@ -823,16 +970,30 @@ export async function PATCH(request: Request) {
         }
 
         const baseMeta = readSelectedEvaluatorMeta(rows[0].rawAnalysisJson);
+        const persistedWatchedAgent = normalizeAutoWatchAgent(baseMeta.watchedAgent);
+        const inferredWatchedAgent = persistedWatchedAgent && !isEvaluatorAgentName(persistedWatchedAgent)
+            ? persistedWatchedAgent
+            : await resolveWatchedAgentForRunRows(user, rows as AutoWatchRunRowLike[]);
+        if (autoWatch && !inferredWatchedAgent) {
+            return NextResponse.json(
+                { error: 'autoWatch requires existing traces from a single non-evaluator execution agent' },
+                { status: 400 },
+            );
+        }
         const nextMeta = buildSelectedEvaluatorMeta(baseMeta.selectedEvaluators, {
             autoWatch,
-            watchedAgent: baseMeta.watchedAgent,
+            watchedAgent: inferredWatchedAgent,
+            autoWatchEnabledAt: autoWatch ? new Date().toISOString() : '',
         });
 
         await prisma.$transaction(
             rows.map(row => prisma.trajectoryEvalResult.update({
                 where: { id: row.id },
                 data: {
-                    rawAnalysisJson: mergeRawAnalysisMeta(row.rawAnalysisJson, nextMeta),
+                    rawAnalysisJson: mergeWatchedAgentIntoRawAnalysis(
+                        mergeRawAnalysisMeta(row.rawAnalysisJson, nextMeta),
+                        nextMeta.watchedAgent || '',
+                    ),
                 },
             })),
         );
@@ -1324,6 +1485,10 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
                         resultActualOutput,
                         precomputedRootCauses,
                         precomputedRootCauseSource,
+                        interactions.length > 0
+                            ? formatTraceForLLM(summarizeTrace(interactions, { maxSteps: 80, maxTextLen: 400 }))
+                            : '',
+                        await loadTaskCompletionSkillContext(execution, interactions, user),
                         user,
                         evalSkillName,
                         evalSkillVersion,

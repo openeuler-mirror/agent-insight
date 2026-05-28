@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { runGeneralAgent } from '@/lib/engine/general-agent';
+import { withBackgroundOpencodeSlot } from '@/lib/engine/general-agent/concurrency-limiter';
 
 export const dynamic = 'force-dynamic';
 // 单次任务最多 5 分钟，避免 Next.js 默认超时把流截断。
@@ -59,21 +60,32 @@ export async function POST(request: Request) {
       );
     }
 
-    const result = await runGeneralAgent({
-      user,
-      query,
-      skill: typeof body.skill === 'string' && body.skill.trim() ? body.skill.trim() : undefined,
-      skillVersion: typeof body.skillVersion === 'number' ? body.skillVersion : undefined,
-      system: typeof body.system === 'string' && body.system.trim() ? body.system : undefined,
-      sessionId: typeof body.sessionId === 'string' && body.sessionId.trim() ? body.sessionId : undefined,
-      sessionTitle: typeof body.sessionTitle === 'string' ? body.sessionTitle : undefined,
-      agent: typeof body.agent === 'string' && body.agent.trim() ? body.agent : undefined,
-      model: body.model && typeof body.model === 'object' ? body.model : undefined,
-      modelOptions:
-        body.modelOptions && typeof body.modelOptions === 'object' ? body.modelOptions : undefined,
-      interactionPolicy: policy as 'auto-allow' | 'auto-deny' | undefined,
-      timeoutMs: typeof body.timeoutMs === 'number' ? body.timeoutMs : undefined,
-    });
+    // 前台同步接口: displayOnly=true, 仅 dashboard 可见, 不占 5-slot 配额。
+    // 物理保护交给 opencode 后端自身。
+    const result = await withBackgroundOpencodeSlot(
+      () => runGeneralAgent({
+        user,
+        query,
+        skill: typeof body.skill === 'string' && body.skill.trim() ? body.skill.trim() : undefined,
+        skillVersion: typeof body.skillVersion === 'number' ? body.skillVersion : undefined,
+        system: typeof body.system === 'string' && body.system.trim() ? body.system : undefined,
+        sessionId: typeof body.sessionId === 'string' && body.sessionId.trim() ? body.sessionId : undefined,
+        sessionTitle: typeof body.sessionTitle === 'string' ? body.sessionTitle : undefined,
+        agent: typeof body.agent === 'string' && body.agent.trim() ? body.agent : undefined,
+        model: body.model && typeof body.model === 'object' ? body.model : undefined,
+        modelOptions:
+          body.modelOptions && typeof body.modelOptions === 'object' ? body.modelOptions : undefined,
+        interactionPolicy: policy as 'auto-allow' | 'auto-deny' | undefined,
+        timeoutMs: typeof body.timeoutMs === 'number' ? body.timeoutMs : undefined,
+      }),
+      {
+        taskType: 'agent-run',
+        user,
+        label: `agent-run · ${user}`,
+        skill: typeof body.skill === 'string' && body.skill.trim() ? body.skill.trim() : undefined,
+        displayOnly: true,
+      },
+    );
 
     return NextResponse.json({
       success: true,
