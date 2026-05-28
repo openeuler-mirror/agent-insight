@@ -3286,7 +3286,7 @@ export function SkillCatalogV2({ refresh, onUploadClick }: { refresh: number; on
                         <line x1="12" y1="5" x2="12" y2="19" />
                         <line x1="5" y1="12" x2="19" y2="12" />
                     </svg>
-                    上传 Skill
+                    新建 Skill
                 </button>
             </div>
 
@@ -3316,8 +3316,8 @@ export function SkillCatalogV2({ refresh, onUploadClick }: { refresh: number; on
                         }}
                     >
                         <div style={{ width: 40, height: 40, borderRadius: 999, border: '1px dashed var(--sk-border-s)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>+</div>
-                        <div style={{ fontSize: 12, fontWeight: 500 }}>上传新的 Skill</div>
-                        <div style={{ fontSize: 10 }}>选择本地文件夹或导入企业 Skill</div>
+                        <div style={{ fontSize: 12, fontWeight: 500 }}>新建 Skill</div>
+                        <div style={{ fontSize: 10 }}>上传本地文件夹或由 AI 生成</div>
                     </button>
                     {filtered.length === 0 && !loading && (
                         <div style={{ gridColumn: '1 / -1', padding: 40, textAlign: 'center', color: 'var(--sk-fg3)', fontSize: 12 }}>

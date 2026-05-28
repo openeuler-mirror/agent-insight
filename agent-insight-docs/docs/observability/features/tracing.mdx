@@ -1,0 +1,125 @@
+---
+title: 链路追踪
+description: 完整可视化 Agent 执行轨迹 — 多 Agent / 多步骤调用树
+sidebar: observability
+---
+
+# 链路追踪（Tracing）
+
+## 是什么
+
+把 Agent 一次完整执行（含子 Agent、tool calls、LLM 调用、retries）的所有 interaction 串成一棵**可下钻的调用树**，平台 UI 在 **链路观测** 页面右侧 Drawer 渲染。底层是 `Session.interactions[]` JSON 数组，经 [`src/lib/engine/observability/agent-trace.ts`](https://github.com/your-org/agent-insight/blob/main/src/lib/engine/observability/agent-trace.ts) 解析成树。
+
+## 它解决什么问题
+
+Agent 是个"黑盒"：用户问一句话，Agent 调了 3 个子 Agent + 5 个工具，最后回个答案。出问题时不知道是哪一步坏的。Tracing 把这个过程**展开**：
+
+| 没 Tracing | 有 Tracing |
+|---|---|
+| 失败了不知道哪步 | 调用树定位到 step N |
+| 不知道为什么调了某 tool | 看完整 prompt/response |
+| 不知道为啥这么慢 | 每步 latency 一目了然 |
+| 多 Agent 协作完全不可见 | 父 Agent → 子 Agent 树形展开 |
+
+## 怎么用
+
+### 通过 UI
+
+进入 **链路观测**：
+
+- 顶部 4 张 KPI 卡（执行总数 / 成功率 / 平均耗时 / 平均 token）
+- 中间执行记录表（按时间倒序，支持按 user / framework / skill / query 过滤）
+- 点击任一行 → 右侧 Drawer 显示 **多 Agent 调用树**
+
+<!-- TODO 截图：复用 agent-insight/docs/images/trace.png 与 execution_detail.png — 链路追踪列表 + 右侧调用树 -->
+
+调用树左侧是层级（父 Agent → 子 Agent → tool call），右侧是详情面板（prompt / response / usage / timeInfo）。
+
+### 通过 SDK
+
+```python
+from agent_insight import AgentInsight, observe
+
+AgentInsight.init(api_key="ai_xxx", host="http://localhost:3000")
+
+@observe()
+def my_agent(query: str) -> str:
+    # 嵌套调用自动建立父子关系
+    intermediate = sub_agent(query)
+    return finalize(intermediate)
+
+@observe()
+def sub_agent(query: str) -> str:
+    return "..."
+```
+
+```typescript
+import { AgentInsight, observe } from "@agent-insight/sdk";
+
+AgentInsight.init({ apiKey: "ai_xxx", host: "http://localhost:3000" });
+
+const myAgent = observe(async (query: string) => {
+  const intermediate = await subAgent(query);
+  return finalize(intermediate);
+});
+```
+
+### 通过 REST API
+
+```bash
+# 查执行记录列表
+curl "http://localhost:3000/api/observe/data?user=demo@163.com" \
+  -H "x-witty-api-key: $API_KEY"
+
+# 查单条会话的完整 interaction 数组
+curl "http://localhost:3000/api/observe/session?taskId=task_xxx" \
+  -H "x-witty-api-key: $API_KEY"
+# → { taskId, query, user, startTime, interactions: [...] }
+```
+
+## 关键参数
+
+| 字段 | 含义 |
+|---|---|
+| `taskId` | 全局唯一 trace ID，外键贯穿全平台 |
+| `interactions[]` | 扁平化的 interaction 序列 |
+| `interactions[].agent` | 当前 Agent 名 |
+| `interactions[].subagent_name` | 子 Agent 名（如果有） |
+| `interactions[].subagent_session_id` | 子 Agent 自己的 sessionId（递归引用） |
+| `interactions[].tool_calls[]` | 这一步的 tool call 列表 |
+| `interactions[].usage` | `{prompt_tokens, completion_tokens}` |
+| `interactions[].timeInfo` | `{start, end, duration_ms}` |
+
+## 最佳实践
+
+- **`taskId` 在客户端生成**：UUID v4 即可，平台用它做主键
+- **嵌套 `@observe()` 自动建立树**：不需要手动 link parent
+- **不要把 PII 写到 metadata**：先 [脱敏](./pii-masking) 再上报
+- **大附件走单独 Upload**：图片 / 音频用 multipart 走 `/api/ingest/parse-document`
+
+## 常见问题
+
+<details>
+<summary>多 Agent 调用树是怎么还原的？</summary>
+
+平台从 `interaction.tool_calls` 里识别 `task` / `subagent_*` 字段（OpenCode 原生约定），结合 OTel span 的 `parent_id` 还原层级。算法在 [`src/lib/engine/observability/subagent-inference.ts`](https://github.com/your-org/agent-insight/blob/main/src/lib/engine/observability/subagent-inference.ts)。
+</details>
+
+<details>
+<summary>能查跨主机的分布式 trace 吗？</summary>
+
+可以。平台用 `taskId` 串全链路。多机调用时，子调用要在 SDK init 时透传 `parent_task_id`（或走 OTel `traceparent`），详见 [Trace IDs](./trace-ids)。
+</details>
+
+<details>
+<summary>Trace 数据保留多久？</summary>
+
+默认无限期保留（SQLite 本地）。生产部署建议接 OpenGauss 或 ClickHouse + 配 retention policy，详见 [Self-Hosting · Storage](../../self-hosting/overview)。
+</details>
+
+## 相关文档
+
+- [Data Model](../data-model) — Session / interaction / Execution 字段
+- [Sessions](./sessions) — 多轮对话归组
+- [Multi-Modal](./multi-modal) — 含图像/音频的 Trace
+- [Trace IDs](./trace-ids) — 跨服务 trace ID 传递

@@ -1,0 +1,133 @@
+---
+title: Observability · Data Model
+description: Execution / Session / interaction / Agent Trace 的字段与关系
+sidebar: observability
+---
+
+# Data Model
+
+理解 Observability 的数据模型是用好 Agent Insight 的前提 —— 你接下来在 SDK / API / UI 里看到的所有概念，都是这张表的引申。
+
+## 概念关系图
+
+```
+                                ┌────────────┐
+                                │    User    │
+                                │ apiKey, ...│
+                                └─────┬──────┘
+                                      │ 1:N
+                ┌─────────────────────┴──────────────────────┐
+                │                                            │
+                ▼                                            ▼
+        ┌──────────────────┐                       ┌──────────────────┐
+        │     Session      │  1:1（同 taskId）      │    Execution     │
+        │  (原始 trace)     │ ◀────────────────────▶│ (统计快照 + 评分)  │
+        │                  │                       │                  │
+        │  taskId (unique) │                       │  taskId (unique) │
+        │  query           │                       │  query           │
+        │  interactions[]  │                       │  framework, model│
+        │  model           │                       │  tokens, latency │
+        │  label           │                       │  cost            │
+        └────────┬─────────┘                       │  isAnswerCorrect │
+                 │                                 │  answerScore     │
+                 │ 内嵌 JSON                       │  failures (JSON) │
+                 ▼                                 │  invokedSkills   │
+        ┌───────────────────────┐                  │  skillIssues     │
+        │ interaction[]         │                  └─────────┬────────┘
+        │  role                 │                            │
+        │  agent                │                            │ 1:N
+        │  subagent_name        │                            ▼
+        │  subagent_session_id  │             ┌──────────────────────────┐
+        │  tool_calls[]         │             │     Evaluation           │
+        │  usage (tokens)       │             │ type ∈ {static, dynamic} │
+        │  timeInfo             │             │ 评估结果（含扣分项）        │
+        └───────────────────────┘             └──────────────────────────┘
+```
+
+## 核心概念
+
+### Session
+
+会话原始数据，是 Trace 的「源」。一个 `Session` 对应一次完整的 Agent 调用（可能跨多轮对话、多个 Agent）。
+
+**关键字段**（`prisma/schema.prisma → Session`）：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `taskId` | string (unique) | 全局唯一 ID，**外键贯穿全平台** |
+| `query` | text | 初始用户输入 |
+| `interactions` | JSON | **核心**：扁平化的多 Agent 调用序列 |
+| `model` | string | 主 Agent 用的模型 |
+| `label` | string | 业务标签（用户自打） |
+
+### interaction
+
+`Session.interactions[]` 里的每一项，按时间顺序排列。一次 LLM 请求、一次 tool call、一次子 Agent handoff 都是一条 interaction。
+
+| 字段 | 含义 |
+|---|---|
+| `role` | `user` / `assistant` / `tool` / `system` |
+| `agent` | 当前 Agent 名（如 `claude-main` / `subagent-coder`） |
+| `subagent_name` | 如果是子 Agent 调用，子 Agent 名 |
+| `subagent_session_id` | 子 Agent 自己的 sessionId（递归引用 Session 表） |
+| `tool_calls[]` | 这一步触发的工具调用列表 |
+| `usage` | `{prompt_tokens, completion_tokens, ...}` |
+| `timeInfo` | `{start, end, duration_ms}` |
+
+> 解析与树形重建逻辑在 [`src/lib/engine/observability/agent-trace.ts`](https://github.com/your-org/agent-insight/blob/main/src/lib/engine/observability/agent-trace.ts)。
+
+### Execution
+
+「评测视角」的 Trace —— 一次执行的统计快照与评分结果。`Execution.taskId` 与 `Session.taskId` 1:1 对应。
+
+| 字段 | 含义 |
+|---|---|
+| `taskId` | 外键到 Session |
+| `query` | 初始输入（同 Session.query） |
+| `framework` | `opencode` / `claude-code` / `langchain` / ... |
+| `model` / `tokens` / `latency` / `cost` | 统计指标 |
+| `isAnswerCorrect` | 评测器判断的对错 |
+| `answerScore` | LLM-as-Judge 给的分数 |
+| `failures` | JSON：扣分项数组 |
+| `invokedSkills` | JSON：实际触发的 Skill 列表 |
+| `skillRecallRate` | Skill 召回率（实际 / 预期） |
+
+### Agent Trace（派生视图）
+
+由 `Session.interactions[]` 经 `agent-trace.ts` 重建成的调用树 —— 不是表，是渲染结果。展示时按 `agent` 字段分层、按 `subagent_session_id` 递归下钻。
+
+## 数据流转
+
+```
+SDK / 插件 / OTel
+       │
+       ▼
+POST /api/ingest/upload   ←──  数据采集层（Layer 1）
+       │
+       ▼
+data-service.ts           ←──  存储层（Layer 2）
+       │ saveExecutionRecord()
+       ▼
+Prisma: Session + Execution
+       │
+       ▼
+GET /api/observe/data     ←──  观测引擎（Layer 3）
+GET /api/observe/session
+       │
+       ▼
+Web UI: 链路观测 + Drawer  ←──  UI 层（Layer 4）
+```
+
+详见 [Architecture · Data Flow](../architecture/data-flow)。
+
+## 与其他模块共享的概念
+
+- **`taskId`** — 跨 Observability / Evaluation / Skills 三个模块的主键
+- **`invokedSkills`** — Skills 模块的统计入口
+- **`failures`** — Evaluation 模块的扣分项写入处
+
+## 相关文档
+
+- [Get Started](./get-started) — 跑出第一条 Trace
+- [Tracing Feature](./features/tracing) — 链路追踪详解
+- [Evaluation Core Concepts](../evaluation/core-concepts) — Evaluation 怎么读这张表

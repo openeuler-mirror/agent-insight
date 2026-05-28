@@ -1,0 +1,220 @@
+---
+title: Observability · Troubleshooting
+description: Observability 常见问题排查
+sidebar: observability
+---
+
+# Troubleshooting · Observability
+
+按高频度排序的常见问题与排查清单。一条都不解决再看页底社区入口。
+
+---
+
+## 1. SDK 装了但 Trace 不出现在 UI 里
+
+**症状**：调用 Agent 跑通了，但 **链路观测** 列表里看不到。
+
+**排查步骤**
+
+```bash
+# 1. 平台进程是否在跑
+curl http://localhost:3000/api/health
+# 期望：{ status: "ok" }
+
+# 2. API Key 是否正确
+curl http://localhost:3000/api/auth/apikey -X POST \
+  -d '{"username":"demo@163.com"}'
+# 期望：{ apiKey, username }
+
+# 3. 手动上报一条试试
+curl -X POST http://localhost:3000/api/ingest/upload \
+  -H "x-witty-api-key: $API_KEY" \
+  -d '{"task_id":"test_001","user":"demo@163.com","framework":"custom","query":"hello","interactions":[],"timestamp":"2026-05-28T10:00:00Z"}'
+# 期望：{ success: true }
+
+# 4. 查 UI 刷新前的最新数据
+curl "http://localhost:3000/api/observe/data?user=demo@163.com" -H "x-witty-api-key: $API_KEY"
+```
+
+**常见原因**
+
+- ❌ `host` 写错了（http vs https / 端口）
+- ❌ API Key 用了别的 user 的
+- ❌ SDK 退出前没 flush（进程刚启动就退出）
+- ❌ 采样率太低（`sampling_rate=0.01`）
+- ❌ 异步队列还没 flush（等 5 秒或主动 `flush()`）
+
+---
+
+## 2. 多 Agent 调用树不正确 / 层级丢失
+
+**症状**：明明有子 Agent 调用，但 UI 显示成扁平 interaction 列表。
+
+**排查步骤**
+
+```bash
+# 拉原始 session 数据
+curl "http://localhost:3000/api/observe/session?taskId=task_xxx" \
+  -H "x-witty-api-key: $API_KEY" | jq '.interactions[] | {agent, subagent_name, subagent_session_id}'
+```
+
+检查 `subagent_name` 与 `subagent_session_id` 是不是有值。如果没有，说明上报时没带这俩字段。
+
+**修复**
+
+- OpenCode 用户：升级 plugin 版本，老版本可能不带 subagent 字段
+- 自研 SDK：在子 Agent 调用上报前显式设 `parent_task_id`
+- OTel：确认 `parent_span_id` 正确
+
+详见 [Trace IDs](./features/trace-ids)。
+
+---
+
+## 3. token 数对不上 LLM provider 账单
+
+**症状**：平台显示 1000 token，LLM 后台显示 1150 token。
+
+**常见原因**
+
+- ✅ **正常**：差 5-10% 是预期的（cache token 计算口径 / system prompt 是否计入差异）
+- ❌ 你的 LLM SDK 不返回 `usage` 字段（旧版本）
+- ❌ Tool call 的 system prompt 没计入
+- ❌ 重试调用的 token 平台计了但 provider 没计
+
+**修复**
+
+- 升级 LLM SDK 到最新
+- 平台不重复计重试的 token（如果你的业务有重试，看清楚是谁在重试）
+- 详见 [Token & Cost Tracking](./features/token-cost-tracking)
+
+---
+
+## 4. 平台启动失败 / 端口被占用
+
+**症状**：`bash scripts/restart_dev.sh` 报 `EADDRINUSE :3000`。
+
+**排查**
+
+```bash
+# Linux / macOS
+lsof -ti:3000
+
+# 找到进程，确认能否安全 kill
+ps -p <PID>
+kill <PID>
+
+# 然后重启
+bash scripts/restart_dev.sh
+```
+
+---
+
+## 5. 上报触发 429 频率限制
+
+**症状**：客户端 SDK 日志出现 `429 Too Many Requests`，部分 Trace 丢失。
+
+**修复**
+
+- SDK 侧：调小 `batch_size`、调大 `flush_interval_ms`（错峰）
+- 平台侧：调高 `upload-throttle.ts` 中单 user QPS 上限（详见 [Self-Hosting](../self-hosting/overview)）
+- 长期：高 QPS 用户应该用 [Sampling](./features/sampling) 降量
+
+---
+
+## 6. 评估器跑不出来 / 一直 pending
+
+**症状**：触发 `POST /api/eval/rejudge` 后 `Evaluation.status` 永远 pending。
+
+**排查**
+
+```bash
+# 1. 平台模型配置是否激活
+curl "http://localhost:3000/api/eval/settings?user=demo@163.com" \
+  -H "x-witty-api-key: $API_KEY"
+# 期望：返回 {apiKey, baseUrl, model, provider} 都有值
+
+# 2. 测试模型连接
+curl -X POST http://localhost:3000/api/eval/settings/test \
+  -H "x-witty-api-key: $API_KEY" \
+  -d '{}'
+# 期望：{ success: true, message }
+
+# 3. 看平台 server.log
+tail -200 server.log | grep -i "evaluation\|judge\|error"
+```
+
+**常见原因**
+
+- ❌ LLM 配置错（API Key 过期 / 配额耗尽）
+- ❌ 模型不支持 long-context（trace 太长喂不进去）
+- ❌ 评估 prompt 出错（罕见，看 server.log）
+
+---
+
+## 7. UI 刷新慢 / 列表加载卡
+
+**症状**：链路观测页打开 10 秒以上。
+
+**常见原因**
+
+- 数据量过大（>10 万条 Execution）+ SQLite 性能瓶颈
+- 没建索引（默认 schema 已经建了，但自定义部署可能漏）
+
+**修复**
+
+- 切换到 OpenGauss 或 PostgreSQL（详见 [Self-Hosting · Storage](../self-hosting/overview)）
+- 减少保留时间，定期清旧数据
+- 启用前端虚拟滚动（v2 规划）
+
+---
+
+## 8. WSL / Windows 路径问题
+
+**症状**：在 Windows 用 WSL 跑平台，但 host 机访问不到 `localhost:3000`。
+
+**修复**
+
+WSL 2 网络隔离，需要从 Windows 用 WSL 的 IP 访问：
+
+```powershell
+wsl hostname -I
+# → 172.29.209.207
+```
+
+然后 Windows 浏览器访问 `http://172.29.209.207:3000`。
+
+---
+
+## 9. 数据库锁 / Prisma 报错
+
+**症状**：SQLite "database is locked"。
+
+**修复**
+
+```bash
+# 1. 别同时跑多个 dev server
+ps aux | grep next
+
+# 2. 关掉 sqlite browser / DBeaver 这种工具
+
+# 3. 实在不行重启
+bash scripts/restart_dev.sh
+
+# 4. 高并发场景换 OpenGauss（详见 Self-Hosting）
+```
+
+---
+
+## 还是没解决？
+
+- 看 [GitHub Discussions](https://github.com/your-org/agent-insight/discussions) 搜你的关键词
+- 提 [Issue](https://atomgit.com/openeuler/witty-diagnosis-agent/issues)（gitcode 托管）
+- 加 Discord 群直接问
+- 邮件 <intelligence@openeuler.org>
+
+**报问题时附上**
+
+- 平台 server.log 最后 200 行
+- 复现步骤（最小可复现 case）
+- 你的 SDK 版本 + Node / Python 版本
+- 当前 `package.json` 或 `pyproject.toml` 关键依赖版本

@@ -1,0 +1,265 @@
+---
+title: Custom Evaluators
+description: 用代码实现自定义评分逻辑 — 规则 / 外部 API / 复合评估器
+sidebar: evaluation
+---
+
+# Custom Evaluators
+
+## 是什么
+
+平台内置 [LLM-as-Judge](./llm-as-a-judge) 和 Trajectory Evaluator 覆盖大多数场景，但你也可以**写代码实现自定义评估逻辑**。任何"输入 Trace → 输出分数 + 扣分项" 的函数都可以挂为 Custom Evaluator。
+
+底层落到 `CustomEvaluatorList` 表（PROJECT.md §4），每条评估器一行注册。
+
+## 它解决什么问题
+
+LLM 评估器不擅长 / 不适合的场景：
+
+| 场景 | LLM-as-Judge | Custom |
+|---|---|---|
+| 数学题：答案对不对 | 不准 | 直接 `eval(answer) == expected` |
+| JSON 格式合规 | 主观 | JSON schema 校验 |
+| 字符串完全匹配 | 浪费 LLM | `expected.strip() == actual.strip()` |
+| 调外部 API 验证 | 不能 | 调任意服务 |
+| 业务规则（"必须包含品牌名"） | 不稳定 | 正则 / NLP 工具 |
+| LLM 不擅长的领域（化学公式 / 数学） | 不准 | 用领域工具 |
+
+## 怎么用
+
+### 编写 Evaluator
+
+Custom Evaluator 本质是一个 JS / TS 函数：
+
+```typescript
+// my-evaluator.ts
+import type { Evaluator, EvaluationInput, EvaluationResult } from "@agent-insight/sdk";
+
+export const exactMatchEvaluator: Evaluator = {
+  id: "exact-match",
+  name: "Exact Match",
+  description: "字符串完全匹配（trim 后）",
+
+  async run(input: EvaluationInput): Promise<EvaluationResult> {
+    const { query, standardAnswer, actualAnswer } = input;
+    const matched = standardAnswer.trim() === actualAnswer.trim();
+
+    return {
+      score: matched ? 1.0 : 0.0,
+      isCorrect: matched,
+      judgment_reason: matched ? "完全匹配" : "字符串不匹配",
+      is_skill_attributable: !matched,
+      improvement_suggestion: matched ? "" : "Skill 的输出格式与 standardAnswer 不一致",
+    };
+  },
+};
+```
+
+### 注册 Evaluator
+
+```bash
+curl -X POST http://localhost:3000/api/eval/evaluators \
+  -H "x-witty-api-key: $API_KEY" \
+  -d '{
+    "user": "demo@163.com",
+    "name": "Exact Match",
+    "type": "custom",
+    "code": "<JS source code or path>",
+    "schema": { ... }
+  }'
+```
+
+或者把 `.ts` 文件放到 [`src/lib/engine/evaluation/evaluators/`](https://github.com/your-org/agent-insight/tree/main/src/lib/engine/evaluation) 目录（自部署），重启后自动注册。
+
+### 在评测任务里选用
+
+UI：**评测任务 → 选评估器 → Custom 列表里找你的**。
+
+## 内置 Custom Evaluator 模板
+
+平台提供几个常见模板，复制改改就能用：
+
+| 模板 | 用途 |
+|---|---|
+| `exact-match` | 字符串完全匹配 |
+| `regex-match` | 正则匹配 |
+| `json-schema` | JSON schema 校验 |
+| `contains-keywords` | 必须包含某些关键词 |
+| `length-range` | 长度在某区间 |
+| `numeric-tolerance` | 数值答案 ± epsilon |
+| `external-api` | 调外部 API 评估 |
+| `composite` | 组合多个 evaluator |
+
+源码在 [`src/lib/engine/evaluation/evaluators/templates/`](https://github.com/your-org/agent-insight/tree/main/src/lib/engine/evaluation)（v2 规划）。
+
+## 输入 / 输出 schema
+
+### 输入
+
+```typescript
+interface EvaluationInput {
+  taskId: string;
+  query: string;
+  standardAnswer?: string;
+  actualAnswer: string;
+  interactions: Interaction[];      // 完整 Trace
+  keyActions?: string[];
+  rootCauses?: RootCause[];
+  metadata?: Record<string, any>;
+}
+```
+
+### 输出
+
+```typescript
+interface EvaluationResult {
+  score: number;                    // 0-1
+  isCorrect: boolean;
+  judgment_reason: string;          // 必填，给人看
+  is_skill_attributable: boolean;   // 是否归因到 Skill
+  improvement_suggestion?: string;
+
+  // 可选细分
+  l2Scores?: Record<string, number>;
+  rootCauseMatches?: Array<{ rootCauseLabel: string; matched: boolean }>;
+  keyActionCoverage?: Array<{ keyAction: string; covered: boolean }>;
+  skillIssues?: SkillIssue[];       // 自定义扣分项
+}
+```
+
+## 实战例子
+
+### 例 1 · 数学题精确匹配
+
+```typescript
+export const mathEvaluator: Evaluator = {
+  id: "math-exact",
+  name: "Math Answer",
+  async run({ standardAnswer, actualAnswer }) {
+    const extractNumber = (s: string) => parseFloat(s.match(/-?\d+\.?\d*/)?.[0] ?? "NaN");
+    const expected = extractNumber(standardAnswer);
+    const actual = extractNumber(actualAnswer);
+    const matched = Math.abs(expected - actual) < 0.01;
+
+    return {
+      score: matched ? 1 : 0,
+      isCorrect: matched,
+      judgment_reason: matched
+        ? `数值匹配：${actual}`
+        : `期望 ${expected}，实际 ${actual}`,
+      is_skill_attributable: !matched,
+    };
+  },
+};
+```
+
+### 例 2 · JSON Schema 校验
+
+```typescript
+import Ajv from "ajv";
+
+const ajv = new Ajv();
+
+export const jsonSchemaEvaluator = (schema: object): Evaluator => ({
+  id: `json-schema-${hash(schema)}`,
+  name: "JSON Schema",
+  async run({ actualAnswer }) {
+    try {
+      const parsed = JSON.parse(actualAnswer);
+      const validate = ajv.compile(schema);
+      const valid = validate(parsed);
+      return {
+        score: valid ? 1 : 0,
+        isCorrect: valid,
+        judgment_reason: valid ? "schema 通过" : JSON.stringify(validate.errors),
+        is_skill_attributable: !valid,
+      };
+    } catch (e) {
+      return {
+        score: 0,
+        isCorrect: false,
+        judgment_reason: `JSON 解析失败：${e.message}`,
+        is_skill_attributable: true,
+      };
+    }
+  },
+});
+```
+
+### 例 3 · 调外部 API
+
+```typescript
+export const moderationEvaluator: Evaluator = {
+  id: "moderation",
+  name: "Content Moderation",
+  async run({ actualAnswer }) {
+    const resp = await fetch("https://api.openai.com/v1/moderations", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+      body: JSON.stringify({ input: actualAnswer }),
+    });
+    const data = await resp.json();
+    const flagged = data.results[0].flagged;
+    return {
+      score: flagged ? 0 : 1,
+      isCorrect: !flagged,
+      judgment_reason: flagged
+        ? `内容违规：${Object.keys(data.results[0].categories).join(", ")}`
+        : "合规",
+      is_skill_attributable: false,    // 模型问题不是 Skill 问题
+    };
+  },
+};
+```
+
+## 最佳实践
+
+- **判断 `is_skill_attributable` 时谨慎**：模型本身能力问题不要算到 Skill 头上
+- **写好 `judgment_reason`**：debug 时全靠它
+- **写单测**：custom evaluator 也是代码，跑单测保证逻辑对
+- **错误处理**：外部 API 挂了要降级（返回 score=0 + 标错），不要让评估器整体崩
+- **版本化 evaluator**：评估器升级会让历史分数不可比，写 `generator='my-eval@1.2'` 区分
+
+## 常见问题
+
+<details>
+<summary>Custom Evaluator 跑得有 LLM-as-Judge 慢吗？</summary>
+
+通常**快得多**。LLM-as-Judge 每条 3-10 秒，Custom（纯函数）通常 < 100ms。所以 high-volume 场景优先用 Custom。
+</details>
+
+<details>
+<summary>Custom 和 LLM-as-Judge 能组合吗？</summary>
+
+可以。用 `composite` 模板：
+
+```typescript
+export const compositeEvaluator: Evaluator = {
+  id: "composite-v1",
+  async run(input) {
+    const [json, llm] = await Promise.all([
+      jsonSchemaEvaluator(schema).run(input),
+      llmAsJudgeEvaluator.run(input),
+    ]);
+    return {
+      score: 0.5 * json.score + 0.5 * llm.score,
+      isCorrect: json.isCorrect && llm.isCorrect,
+      judgment_reason: `JSON: ${json.judgment_reason}; LLM: ${llm.judgment_reason}`,
+      is_skill_attributable: json.is_skill_attributable || llm.is_skill_attributable,
+    };
+  },
+};
+```
+</details>
+
+<details>
+<summary>Python 写 Evaluator 行吗？</summary>
+
+当前平台是 Next.js（TypeScript），Evaluator 默认 JS/TS。Python evaluator 走 HTTP 兜底 —— 部署成 service，平台调 `external-api` 模板。原生 Python evaluator 在 v2 规划。
+</details>
+
+## 相关文档
+
+- [LLM-as-a-Judge](./llm-as-a-judge) — 互补
+- [Core Concepts](../core-concepts) — Evaluator 在数据模型里的位置
+- [Custom Evaluators 源码模板](https://github.com/your-org/agent-insight/tree/main/src/lib/engine/evaluation)

@@ -1275,20 +1275,13 @@ function SkillAnalysisPage() {
         setPrefillTraceId('');
     }, []);
 
-    // overview 直接用 plain title；gray 走自家的 GrayscaleEvaluation 内嵌选择器，
-    // 这里不再插一组 inline picker 避免双倍 skill 选择控件；其余 detail views（trace / static / batch）
-    // 都把 skill+version 选择内嵌到路径里，下方不再渲染 sa-selector-hifi 大卡。
+    // overview 直接用 plain title；其余 detail views（含 gray / trace / static / batch）
+    // 都把 skill+version 选择内嵌到路径里，让 AppTopBar 与下方任务卡构成"同一平面"的
+    // 详情对象头（patterns.md §A.5.3 detail-object 的轻量等价）。
+    // gray 视图同步隐藏 gh-skill-summary 里的 Skill 选择器，避免双倍控件。
     const title = view === 'overview'
         ? 'Skills 分析'
-        : view === 'gray'
-            ? (
-                <span className="sa-top-title">
-                    <button onClick={() => setView('overview')}>Skills 分析</button>
-                    <span>/</span>
-                    <b>{viewTitle(view)}</b>
-                </span>
-            )
-            : (
+        : (
                 <span className="sa-top-title">
                     <button onClick={() => setView('overview')}>Skills 分析</button>
                     <span>/</span>
@@ -1342,7 +1335,8 @@ function SkillAnalysisPage() {
                 {view === 'overview' && (
                     <SkillAnalysisHeader
                         // overview 才渲染这个大卡；其余 detail view 的 skill+version 已经移到 AppTopBar 路径里。
-                        crumbs={[{ label: 'Skills', href: '#' }, { label: 'Skills 分析' }]}
+                        // AppTopBar 已经显示 "Skills 分析"，这里再渲染面包屑就是重复——直接传空。
+                        crumbs={[]}
                         skills={skills}
                         selectedSkillId={selectedSkillId}
                         skillsLoading={skillsLoading}
@@ -1458,6 +1452,7 @@ function SkillAnalysisPage() {
                         renderHeader="none"
                     >
                         <GrayscaleEvaluation
+                            hifi
                             newTaskTrigger={grayNewTaskTrigger}
                             historyPanelTrigger={grayHistoryTrigger}
                             pageTitle="A/B测试"

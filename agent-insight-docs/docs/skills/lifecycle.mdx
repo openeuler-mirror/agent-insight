@@ -1,0 +1,152 @@
+---
+title: Skill Lifecycle
+description: 完整 6 阶段生命周期闭环：生成 → 管理 → 分析 → 优化 → 发布 → 监控
+sidebar: skills
+---
+
+# Skill Lifecycle
+
+Agent Insight 把 Skill 当工程资产管理，因此它有完整的生命周期 —— 不是"写好 Prompt 就上线"，而是"生成 → 管理 → 分析 → 优化 → 发布 → 监控"六阶段闭环。每一阶段都对应平台一组功能与一组数据。
+
+## 闭环全图
+
+```
+                    ┌─────────────────┐
+                    │  ① 生成          │
+                    │  Generation     │
+                    │                 │
+                    │ • From prompt   │
+                    │ • From examples │
+                    │ • From description│
+                    │ • From traces   │
+                    └────────┬────────┘
+                             │ 产出 SKILL.md 草稿
+                             ▼
+                    ┌─────────────────┐
+                    │  ② 管理          │
+                    │  Management     │
+                    │                 │
+                    │ • 版本控制       │
+                    │ • Schema 校验    │
+                    │ • 状态流转       │
+                    │ • 灰度发布       │
+                    │ • 权限控制       │
+                    └────────┬────────┘
+                             │ Skill v1 进入待评
+                             ▼
+                    ┌─────────────────┐
+                    │  ③ 分析 ★        │
+                    │  Analysis       │
+                    │                 │
+                    │ • 静态合规扫描   │
+                    │ • 召回率评测     │
+                    │ • 三步法 A/B    │
+                    │ • 失败下钻       │
+                    │ • 多变体对战     │
+                    └────────┬────────┘
+                             │ 发现 SkillIssue[] 优化点
+                             ▼
+                    ┌─────────────────┐
+                    │  ④ 优化          │
+                    │  Optimization   │
+                    │                 │
+                    │ • 自动改写       │
+                    │ • 参数搜索       │
+                    │ • 模型替换       │
+                    │ • 多目标优化     │
+                    └────────┬────────┘
+                             │ 产出 v2 / v3 / ...
+                             ▼
+                    ┌─────────────────┐
+                    │  ⑤ 发布          │
+                    │  Release        │
+                    │                 │
+                    │ • 灰度推送       │
+                    │ • 同步到 Agent 主机│
+                    │ • 回滚            │
+                    └────────┬────────┘
+                             │ 上线生产
+                             ▼
+                    ┌─────────────────┐
+                    │  ⑥ 监控          │
+                    │  Monitoring     │
+                    │                 │
+                    │ • 在线评估       │
+                    │ • 回归检测       │
+                    │ • 质量告警       │
+                    └────────┬────────┘
+                             │ 发现劣化 → 回到 ③
+                             └──────────┐
+                                        ▼
+                              （进入下一轮迭代）
+```
+
+## 阶段对照表
+
+| # | 阶段 | 主要表 | 平台位置 | 详细文档 |
+|---|---|---|---|---|
+| ① | 生成 | `Skill`, `SkillVersion` | Skills 生成 | [generation](./generation/overview) |
+| ② | 管理 | `Skill`, `SkillVersion`, `ParsedFlow` | Skills 资产 | [management](./management/overview) |
+| ③ | 分析 | `Evaluation`, `SkillIssue`, `GrayscaleTask`, `SkillTriggerEvalSet/Run` | Skills 分析 | [analysis](./analysis/overview) |
+| ④ | 优化 | `SkillVersion` (新版本) | Skills 优化 | [optimization](./optimization/overview) |
+| ⑤ | 发布 | `Skill.activeVersion`, `Skill.isUploaded` | 发布管理 | [management/canary-release](./management/canary-release) |
+| ⑥ | 监控 | `Execution`, `Evaluation`（online） | 链路观测 + 质量监控 | [observability/features/quality-monitoring](../observability/features/quality-monitoring) |
+
+## 一个真实闭环示例
+
+以 `pdf-extractor` 这个 Skill 为例（出自平台 mock 数据）：
+
+1. **生成**：用 `From Description` 提交"提取 PDF 关键信息"，LLM 产出 v1 草稿
+2. **管理**：v1 进入 `draft` 状态，未上线
+3. **分析**：跑静态合规 → 发现 3 条 high severity（缺 `name` frontmatter / description 太短 / 工具列表混乱）；跑召回评测 → truePositiveRate = 60%（偏低）
+4. **优化**：选中 high severity 项，LLM 重写 → 产出 v2，触发条件更清晰
+5. **A/B**：v1 vs v2，能力分 +18、成本分 -3、稳定性分 +12 → 综合判定 `direct-release`
+6. **发布**：`POST /api/ingest/sync/opencode` 推送 v2 到所有 Agent 主机，旧版本保留 7 天
+7. **监控**：上线后在线评估，每条 PDF 用例自动评分，分数低于阈值告警
+
+整个流程在平台 UI 内完成，所有中间产物（草稿、扫描结果、A/B 报告、优化历史）都留痕，可追溯。
+
+## 数据如何随阶段流转
+
+```
+[生成] new Skill row + SkillVersion(v=1, content="...")
+   ↓
+[管理] Skill.activeVersion = 1, isUploaded = false
+   ↓
+[分析] 
+   - Evaluation(type='static', skillId, version=1) → N SkillIssue
+   - GrayscaleTask(skillId, skillVersion=1, configJson={A: none, B: v1})
+   - 跑完 GrayscaleTask → caseStatesJson 填满 → 出 A/B 分数
+   ↓
+[优化]
+   - 选 SkillIssue[] 调 LLM 改写 → 新 SkillVersion(v=2)
+   - 把改完的 issue 标 resolvedAt
+   ↓
+[发布]
+   - Skill.activeVersion = 2
+   - POST /api/ingest/sync/opencode → Skill.isUploaded = true
+   ↓
+[监控]
+   - 生产 Trace 上报 → Execution.invokedSkills 包含 pdf-extractor@2
+   - 在线评估器异步评分 → Evaluation(type='dynamic', executionId, version=2)
+   - 评分回退 → 告警 → 回到分析阶段
+```
+
+## 各阶段对应 API
+
+| 阶段 | 主要 API |
+|---|---|
+| 生成 | `POST /api/skills/generate` |
+| 管理 | `POST /api/skills/[id]/versions`、`GET /api/skills`、`DELETE /api/skills` |
+| 分析 | `POST /api/debug/grayscale-tasks`、`GET /api/skills/by-name/:name/optimization-points`、`POST /api/skill-eval/trigger/:name/run` |
+| 优化 | `POST /api/skills/[id]/optimize`（内部用 si-optimizer） |
+| 发布 | `POST /api/ingest/sync/opencode`、`GET /api/skills/[id]/versions/[v]/download` |
+| 监控 | `GET /api/observe/data?skill=...`、`POST /api/eval/rejudge` |
+
+详见 [API Reference](../api-and-data-platform/endpoints/README)。
+
+## 相关文档
+
+- [Data Model](./data-model) — 每个阶段涉及的表字段
+- [Get Started](./get-started) — 完整跑一遍闭环
+- [Analysis Overview](./analysis/overview) — 第三阶段（最关键）

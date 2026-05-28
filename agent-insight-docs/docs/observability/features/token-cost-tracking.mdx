@@ -1,0 +1,154 @@
+---
+title: Token & 成本追踪
+description: 按维度统计 Token 与费用 — Skill / 模型 / user / 时间
+sidebar: observability
+---
+
+# Token & 成本追踪
+
+## 是什么
+
+每条 Trace 都自动归集 token 与费用：
+
+- `Execution.tokens` —— 总 token（含 prompt + completion + cache）
+- `Execution.cost` —— 折算成美元的费用（按 LLM provider 单价表）
+- 派生指标 —— `tokens_per_step` / `cost_per_query` / `cost_per_skill_per_day`
+
+底层实现：`src/lib/engine/observability/opencode-derived-metrics.ts` 从 `interactions[].usage` 累加。
+
+## 它解决什么问题
+
+LLM 是付费的，没 token 追踪 = 月底账单爆雷。Token 追踪解决三类问题：
+
+| 问题 | 没追踪 | 有追踪 |
+|---|---|---|
+| 这个月烧了多少钱？ | 看 LLM provider 账单 | UI 仪表盘直接看 |
+| 哪个 Skill 最烧钱？ | 不知道 | 按 Skill 维度排序 |
+| 升级 Skill 后 token 翻了 50% 没人知道 | 直到账单到 | A/B 报告里直接显示 Δ |
+| 谁的用户最烧 | 凭感觉 | 按 user 维度 group by |
+
+## 怎么用
+
+### 通过 UI
+
+进入 **链路观测** 顶部 KPI 卡看总览：
+
+- 平均 token / 平均 cost
+- 按 framework / Skill 维度过滤后实时更新
+
+进入 **评估器 / 指标** 看明细：
+
+- token 直方图（按 Skill 分布）
+- cost 时间序列
+- top consumers（最贵的 Skill / user / query）
+
+<!-- TODO 截图：复用 agent-insight/docs/images/metrics_comparison.png — Metrics 页 token / cost 卡 -->
+
+### 通过 SDK
+
+```python
+from agent_insight import AgentInsight, observe
+
+@observe()
+def my_agent(query: str) -> str:
+    # token 自动从 LLM SDK 的 usage 字段抽取
+    return llm.call(query)
+
+# 查询当前 Trace 的统计
+stats = AgentInsight.get_task_stats(task_id)
+# → { framework, model, tokens, latency, cost, ... }
+```
+
+### 通过 REST API
+
+```bash
+# 单个 Trace 的统计
+curl "http://localhost:3000/api/observe/task-stats?taskId=task_xxx" \
+  -H "x-witty-api-key: $API_KEY"
+# → { found: true, framework, model, tokens, latency, cost, ... }
+
+# 批量过滤 + 排序
+curl "http://localhost:3000/api/observe/data?user=demo@163.com&skill=pdf-extractor" \
+  -H "x-witty-api-key: $API_KEY"
+# → Execution[]，每个含 tokens / cost 字段
+```
+
+## 关键字段
+
+来自 `Execution` 表：
+
+| 字段 | 单位 | 含义 |
+|---|---|---|
+| `tokens` | int | 总 token（prompt + completion） |
+| `cost` | float (USD) | 费用，按 model + provider 计算 |
+| `latency` | ms | 端到端耗时 |
+| `model` | string | 主 Agent 用的模型 |
+| `framework` | string | Agent 框架 |
+
+派生指标（来自 `opencode-derived-metrics.ts`）：
+
+| 派生指标 | 公式 |
+|---|---|
+| `prompt_tokens` / `completion_tokens` | 从 `interactions[].usage` 累加 |
+| `cache_read_tokens` / `cache_write_tokens` | Anthropic prompt caching 字段 |
+| `tokens_per_step` | tokens / interaction count |
+| `cost_per_query` | cost / 1（query 数）|
+| `effective_cost` | cost - cache savings |
+
+## 成本计算
+
+平台内置 LLM provider 单价表（按 model 维护）：
+
+```typescript
+const pricing = {
+  "claude-sonnet-4": { input: 3.0, output: 15.0 },   // per 1M token, USD
+  "claude-haiku-4": { input: 0.25, output: 1.25 },
+  "gpt-4o": { input: 2.5, output: 10.0 },
+  "gpt-4o-mini": { input: 0.15, output: 0.6 },
+  "deepseek-chat": { input: 0.14, output: 0.28 },
+  "qwen-72b": { input: 0.5, output: 1.5 },
+  // ...
+};
+```
+
+如果你用的模型不在内置表里，可以自定义（[Self-Hosting · Custom Models](../../self-hosting/overview)）。
+
+## 最佳实践
+
+- **每天看 token 趋势** —— 突然飙升要立刻定位
+- **按 Skill 分摊** —— Pareto 法则：通常 20% Skill 烧 80% token
+- **关注 cache 命中率** —— Anthropic prompt caching 命中能省 90% input 成本
+- **monitor LLM 价格变动** —— provider 涨价 / 降价时更新内置表
+- **优化前定 baseline** —— 优化后才能算 ROI（不只看 token，看 token/effectiveness）
+
+## 常见问题
+
+<details>
+<summary>token 数和 LLM provider 后台的对得上吗？</summary>
+
+理论上完全一致，因为平台从 LLM SDK 的 `usage` 字段直接读。**实际**有少量差异，原因：
+1. 部分 SDK 不返回 cached_tokens 细分
+2. 重试调用是否计数取决于业务实现
+3. Tool call 的 system prompt 部分有时未计入
+
+通常差异 < 5%。
+</details>
+
+<details>
+<summary>能算"如果换成更便宜的模型省多少"吗？</summary>
+
+[Model Swap](../../skills/optimization/model-swap) 跑 A/B 后直接给数字。也可以走 [API](../../api-and-data-platform/endpoints/README)：拿现有 trace 的 `tokens` 字段重新按新单价表算。
+</details>
+
+<details>
+<summary>预算告警支持吗？</summary>
+
+[Quality Monitoring](./quality-monitoring) 支持按 `cost` 字段配阈值告警。日 / 周 / 月预算超额会自动触发。
+</details>
+
+## 相关文档
+
+- [Latency Analysis](./latency-analysis) — 另一个核心指标
+- [Quality Monitoring](./quality-monitoring) — token 告警配置
+- [Model Swap](../../skills/optimization/model-swap) — 用 token 数据决策换模型
+- [Metrics Overview](../../metrics/overview) — 指标看板

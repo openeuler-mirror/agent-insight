@@ -1,0 +1,148 @@
+---
+title: 质量监控
+description: ★ 关键指标告警与质量趋势（Agent Insight 差异化能力）
+sidebar: observability
+---
+
+# 质量监控（Quality Monitoring）
+
+## 是什么
+
+把 Trace 关键指标（成功率 / answerScore / latency / cost / SkillIssue 频次）连续监控起来，**指标退化时主动告警**。它的差异在于：不只看技术指标（CPU / 内存），而是看**业务指标**（答得对不对 / 用户体验好不好）。
+
+底层依赖：
+- 持续聚合 `Execution.isAnswerCorrect` / `answerScore` / `latency` / `tokens`
+- [Intelligent Diagnosis](./intelligent-diagnosis) 产出的 `SkillIssue` 时间序列
+- 阈值规则 + 渠道通知
+
+> 这是 Agent Insight 与 Langfuse 的关键差异之一 —— Langfuse 是被动 Metrics + 告警，Agent Insight 是"主动质量监控"。
+
+## 它解决什么问题
+
+| 没质量监控 | 有质量监控 |
+|---|---|
+| 上线后 answerScore 跌了一周才被发现 | 跌 5 分立刻告警 |
+| 凭感觉评估"用户最近抱怨多" | 实时 NPS / score 曲线 |
+| 灰度发布看不到回退 | 自动检测新版本回退 |
+| 不知道什么时候 retrain | 关键指标曲线驱动 |
+
+## 怎么用
+
+### 通过 UI
+
+进入 **质量监控** 页面（`/quality` —— PROJECT.md §5.1 标注为占位，**v2 主要交付**）：
+
+<!-- TODO 截图：新拍。质量监控页：左侧告警规则列表，右侧关键指标时间序列图。 -->
+
+预期内容：
+
+- **核心指标曲线**：成功率 / answerScore / latency P95 / cost / failure rate
+- **告警规则**：阈值 / 同环比 / 持续时间
+- **告警历史**：触发时间 / 持续 / 影响范围
+
+### 当前可用方案
+
+v2 真正上线前，可以组合现有能力：
+
+1. **手动设阈值** —— 在 `/metrics` 看指标，超阈值通过其他工具（Datadog / Grafana）告警
+2. **打通 [Webhooks](../../api-and-data-platform/webhooks)** —— 让 Agent Insight 推送事件到 Slack / 钉钉
+3. **接 Prometheus** —— 平台暴露 `/metrics` 端点（v2），Prometheus 拉走配 Alertmanager
+
+### 通过 REST API（v2 规划）
+
+```bash
+# 创建告警规则
+curl -X POST http://localhost:3000/api/quality/rules \
+  -H "x-witty-api-key: $API_KEY" \
+  -d '{
+    "name": "pdf-extractor score drop",
+    "skillName": "pdf-extractor",
+    "metric": "answerScore",
+    "aggregation": "mean_5m",
+    "threshold": 0.7,
+    "comparison": "below",
+    "duration": "10m",
+    "notify": ["slack://team-skills", "email://oncall@example.com"]
+  }'
+
+# 列告警历史
+curl http://localhost:3000/api/quality/alerts?since=2026-05-01
+```
+
+## 推荐的监控指标
+
+| 指标 | 阈值建议 | 告警动作 |
+|---|---|---|
+| `answerScore` 5 分钟均值 | < 0.7 持续 10 分钟 | P2：通知 Skill owner |
+| `isAnswerCorrect` 5 分钟成功率 | < 80% 持续 10 分钟 | P1：通知值班 |
+| `latency` P95 | > 10 秒 | P2：通知 owner |
+| `cost` 单 query | 超过预算 + 50% | P3：日志记录 |
+| `SkillIssue` 高频新涌现 | 新 dedupKey 在 1 小时内出现 ≥ 10 次 | P2：通知 |
+| 灰度版本 vs 老版本 | 新版本 score 比老版本低 5 分以上 | P1：触发自动回滚（v2） |
+
+## 关键参数（v2）
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `metric` | string | 监控的指标名 |
+| `aggregation` | enum | `mean_5m` / `p95_5m` / `count_5m` / ... |
+| `threshold` | number | 触发阈值 |
+| `comparison` | enum | `above` / `below` / `rapid_change` |
+| `duration` | string | 持续多久才告警（避免抖动） |
+| `notify[]` | string[] | 通知渠道 URI |
+| `scope` | object | 限定 Skill / user / env 范围 |
+
+## 与智能诊断的关系
+
+```
+                ┌──────────────────────┐
+                │  Intelligent         │
+                │  Diagnosis           │  对每条 Trace 跑诊断
+                │                      │  产出 SkillIssue
+                └──────────┬───────────┘
+                           │
+                           │ 时序聚合
+                           ▼
+                ┌──────────────────────┐
+                │  Quality Monitoring  │  对 SkillIssue + 指标
+                │                      │  做时序监控
+                │                      │  超阈值告警
+                └──────────────────────┘
+```
+
+智能诊断是"对单条 Trace 看怎么了"，质量监控是"对一段时间的指标趋势看怎么了"。两者互补。
+
+## 最佳实践
+
+- **告警分级** —— P1 / P2 / P3 走不同渠道（电话 / Slack / 日志）
+- **设 duration 避免抖动** —— 持续 5-10 分钟才告警，单点波动忽略
+- **回归 vs 退化区分** —— 灰度新版本退化 vs 长期慢性退化处理方式不同
+- **告警 owner 责任明确** —— 每条规则有 owner，不要"团队全员告警"
+- **季度 review 告警** —— 没触发过的规则删掉，频繁误报的规则调阈值
+
+## 常见问题
+
+<details>
+<summary>当前版本有告警功能吗？</summary>
+
+当前版本 `/quality` 页面占位（PROJECT.md §5.1）。Quality Gate / 告警是 v2 主要交付。当前替代：用 Prometheus 拉 Agent Insight 数据 + Alertmanager 告警。
+</details>
+
+<details>
+<summary>告警会自动停止吗？</summary>
+
+v2 规划支持：指标恢复阈值以上 10 分钟后自动 close 告警。当前需要手动 ack。
+</details>
+
+<details>
+<summary>能基于 SkillIssue 数量告警吗？</summary>
+
+可以，配 `metric=skill_issue_count`，按 dedupKey 维度告警。详见 [Intelligent Diagnosis](./intelligent-diagnosis)。
+</details>
+
+## 相关文档
+
+- [Intelligent Diagnosis](./intelligent-diagnosis) — 数据源
+- [Metrics Overview](../../metrics/overview) — 指标看板
+- [Webhooks](../../api-and-data-platform/webhooks) — 通知渠道
+- [Integrations · Prometheus](../../integrations/observability/prometheus) — 接外部告警

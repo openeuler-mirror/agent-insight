@@ -1,0 +1,112 @@
+---
+title: 从 Trace 反推
+description: 用平台历史调用记录抽取可复用 Skill
+sidebar: skills
+---
+
+# From Traces
+
+## 是什么
+
+从平台已有的 Trace（`Execution` + `Session.interactions`）里**反推出"反复出现的调用模式"**，把它沉淀为可复用的 Skill。这是 Agent Insight 独有的"经验沉淀闭环" —— 平台知道你的 Agent 实际跑过什么，能挖出值得 Skill 化的模式。
+
+底层用 [`src/lib/engine/evaluation/judge.ts → extractSkillsFromSession()`](https://github.com/your-org/agent-insight/blob/main/src/lib/engine/evaluation/judge.ts) 提取 Trace 里的"Skill 候选片段"。
+
+## 它解决什么问题
+
+让"经验"从隐式（在每个工程师脑子里）变成显式（在平台 Skill 库里）：
+
+| 没 Trace 反推 | 有 Trace 反推 |
+|---|---|
+| 工程师反复写相似 prompt 解决类似问题 | 平台发现"这套调用每天发生 50 次"提示沉淀 |
+| 优秀的处理流程随对话烟消云散 | 把成功 trace 抽成 Skill |
+| 新人不知道哪些场景有最佳实践 | Skill 库就是组织的"经验冷库" |
+
+## 怎么用
+
+### 通过 UI
+
+进入 **Skills 生成 → 从 Trace 反推**，平台展示推荐的 Trace 列表（按"反复出现 + 成功 + 多步骤"打分排序）。
+
+<!-- TODO 截图：新拍。Skills 生成 → From Traces 模式，左侧是 Trace 推荐列表，右侧是预览 + 反推的 SKILL.md。 -->
+
+选 1-5 条相关 Trace → 平台抽出共同步骤、工具调用、关键决策点 → LLM 归纳成 Skill 草稿。
+
+### 通过 REST API
+
+```bash
+# 列出可反推的 Trace 候选
+curl "http://localhost:3000/api/skills/trace-candidates?user=demo@163.com&minScore=80" \
+  -H "x-witty-api-key: $API_KEY"
+
+# 从指定 Trace 反推
+curl -X POST http://localhost:3000/api/skills/generate \
+  -H "x-witty-api-key: $API_KEY" \
+  -d '{
+    "mode": "from-traces",
+    "traceIds": ["task_xxx_1", "task_xxx_2", "task_xxx_3"],
+    "suggestedName": "incident-investigation",
+    "user": "demo@163.com"
+  }'
+```
+
+## 候选 Trace 怎么挑
+
+平台按以下信号给 Trace 打分（分数高 = 更适合反推）：
+
+| 信号 | 权重 | 说明 |
+|---|---|---|
+| `isAnswerCorrect = true` | +20 | 成功的 Trace 才值得复用 |
+| `answerScore ≥ 0.8` | +15 | 高分 Trace 优先 |
+| 步骤数 ≥ 4 | +10 | 太少的步骤不值得 Skill 化 |
+| 跨多个 tool call | +10 | 多工具协同的更值得抽象 |
+| 与历史 query 语义重复 | +20 | 反复出现 → 高频场景 |
+| 已挂在 Skill 上 | −30 | 已经有 Skill 的不重复挖 |
+
+## 关键参数
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `traceIds[]` | string[] | ✅ | 1-10 个 Execution.taskId |
+| `suggestedName` | string | ❌ | 建议 Skill name |
+| `abstractionLevel` | `'low' \| 'medium' \| 'high'` | ❌ | 抽象程度 |
+| `includeFailureLessons` | bool | ❌ | 是否一并把这些 Trace 的失败教训写入 references/（默认 false） |
+
+`abstractionLevel`：
+
+- `low` — 几乎照搬 Trace 步骤
+- `medium` — 抽象公共结构，保留具体工具调用（默认）
+- `high` — 抽象到原则级别，让 LLM 自行决策具体步骤
+
+## 最佳实践
+
+- **挑 3-5 条相似但不重复的 Trace** —— 都是同一个场景的不同表现
+- **选成功 Trace** —— 用失败 Trace 反推会把错误模式固化
+- **生成后立刻跑 A/B** —— 原 Trace（无 Skill）vs 反推 Skill，看抽象有没有真的提升
+- **加 `includeFailureLessons=true`** —— 平台会把这条 Trace 走过的弯路写进 references/troubleshooting.md，避免后人重蹈
+
+## 常见问题
+
+<details>
+<summary>为什么平台不自动反推 Skill？</summary>
+
+抽象需要业务判断。平台只能根据信号告诉你"这些 Trace 像是有公共模式"，但具体抽出的 Skill 是否对业务有价值，需要人来定。
+</details>
+
+<details>
+<summary>Trace 反推会泄漏数据吗？</summary>
+
+`Execution.query` 与 `Session.interactions` 都是原文，反推时这些会进 LLM 上下文。如果有敏感场景，先做 PII 脱敏（`/api/eval/config/backfill-routing` 类似）。
+</details>
+
+<details>
+<summary>反推一次能挖多少 Skill？</summary>
+
+一次只产一个 Skill。如果你的 Trace 候选有多个不同场景的高分 cluster，建议**分多次反推**，每次只挑同一 cluster 的 Trace。
+</details>
+
+## 相关文档
+
+- [Generation Overview](./overview)
+- [From Examples](./from-examples) — 与之对照（外部样本 vs 平台 Trace）
+- [Failure Drilldown](../analysis/failure-drilldown) — 失败 Trace 怎么用

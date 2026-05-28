@@ -1,0 +1,63 @@
+---
+title: Get Started — Start Tracing
+description: 5 分钟让你的 Agent 跑出第一条 Trace
+sidebar: get-started
+---
+
+# Start Tracing
+
+本页让你在 5 分钟内把第一条 Agent 调用链路上报到 Agent Insight，并在「链路观测」页面看到它。
+
+适用场景：你已经有了一个用 OpenCode / Claude Code / LangChain 等框架跑起来的 Agent，想给它加上观测。
+
+## 前置条件
+
+- [ ] Agent Insight 服务已启动（[Self-Hosting Quickstart](../self-hosting/overview) 一键 Docker 起服务）
+- [ ] 浏览器可以打开看板（默认 `http://localhost:3000`）
+- [ ] 已在「平台配置 → 模型注册」配好至少一个 LLM 模型（用于后续评测，不上报 Trace 不强制）
+
+## 步骤一：注册并取 API Key
+
+任意邮箱（如 `demo@163.com`）登录看板，自动生成 API Key。在 **平台配置 → 安装指导** 页面就能复制。
+
+<!-- TODO 截图：复用 agent-insight/docs/images/guide-apikey.png — 安装指导页 API Key 复制按钮 -->
+
+## 步骤二：在 Agent 主机上跑一行命令
+
+我们提供了自动化安装脚本，会根据你选择的 Agent 框架（OpenCode / Claude Code / OpenClaw）注入对应的采集插件或日志旁路 watcher。
+
+```bash
+# Linux / macOS
+curl -sSf "http://<your-host>:3000/api/ingest/setup" | bash
+
+# Windows PowerShell
+iwr "http://<your-host>:3000/api/ingest/setup/auto?apiKey=ai_xxx" | iex
+```
+
+脚本会提示你选择框架、粘贴 API Key，然后给出 Usage 命令示例。
+
+<!-- TODO 截图：复用 agent-insight/docs/images/guide-framework.png — 选择 Agent 框架 -->
+
+## 步骤三：跑一次 Agent
+
+按提示执行 Usage 命令，比如：
+
+```bash
+opencode run 'hello'
+```
+
+OpenCode 完成后，采集插件会把整条 trace（含多 Agent 子调用、tool calls、token / latency）上报到平台。
+
+> 想直接用 SDK？看 [Observability SDK · Python](../observability/sdk/python) 或 [TypeScript](../observability/sdk/typescript)。
+
+## 步骤四：在 UI 中查看
+
+打开看板的 **链路观测** 页面，你应该能看到刚才那条记录。点击行即可打开右侧 Drawer 查看多 Agent 调用树。
+
+<!-- TODO 截图：复用 agent-insight/docs/images/trace.png — 链路追踪列表页 -->
+
+## 下一步
+
+- [Observability Data Model](../observability/data-model) — 理解 Execution / Session / interaction 概念
+- [Setup Evaluation](./setup-evaluation) — 给这条 Trace 加上自动评分
+- [Manage Skills](./manage-skills) — 把执行中用到的 Skill 沉淀下来

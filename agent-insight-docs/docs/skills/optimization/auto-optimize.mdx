@@ -1,0 +1,189 @@
+---
+title: 启动自动优化
+description: 多轮迭代自动优化 Skill — iterative-optimizer 核心入口
+sidebar: skills
+---
+
+# Auto Optimize
+
+## 是什么
+
+设个目标分（如 0.9），平台自动跑 **「执行任务 → 收集结果 → 优化 Skill → 再执行」** 的迭代循环，直到达成目标或达到最大轮数。背后是 [`skills/iterative-optimizer/`](https://github.com/your-org/agent-insight/blob/main/skills/iterative-optimizer/SKILL.md) 这个 Skill。
+
+底层 PR / 文档：[`docs/auto-iterative-optimization.md`](https://github.com/your-org/agent-insight/blob/main/docs/auto-iterative-optimization.md)。
+
+## 它解决什么问题
+
+让 Skill 优化从"人在循环"升级为"人在监督"：
+
+| 手动优化 | Auto Optimize |
+|---|---|
+| 跑评估 → 看结果 → 改 SKILL → 再跑评估 ... | 一条命令跑完整轮 |
+| 平均 3-5 轮才能到 0.9 | 内置短路逻辑（连续两轮没提升停止） |
+| 容易跑偏方向 | 优化目标 + 评估分锁定 |
+| 多人协作互相覆盖 | 每轮自动 snapshot 版本 |
+
+## 怎么用
+
+### 方式 A：通过 OpenCode 命令（最简单）
+
+在 OpenCode 终端：
+
+```
+帮我迭代优化 /user/work/.opencode/skills/openeuler-docker-fault 这个 skill，
+目标是准确率达到 0.9 以上，最多跑 5 轮
+```
+
+`iterative-optimizer` 自动识别"迭代优化 / 自动优化 skill / 循环优化 / 多轮优化"等关键词，引导你完成：
+
+1. 解析需求，提取 Skill 路径、目标分、最大轮数
+2. 补齐缺失配置（测试任务描述）
+3. 自动执行迭代循环
+4. 输出最终优化报告
+
+### 方式 B：通过配置文件
+
+复制 [`skills/iterative-optimizer/examples/iter-config-template.yaml`](https://github.com/your-org/agent-insight/blob/main/skills/iterative-optimizer/examples/iter-config-template.yaml) 到工作目录，命名为 `iter-config.yaml`，填好后：
+
+```
+帮我迭代优化 <skill 路径>
+```
+
+### 通过 UI
+
+进入 **Skills 优化 → 选 Skill → 自动迭代**：
+
+<!-- TODO 截图：新拍。Skills 优化页 → 自动迭代配置面板（目标分 + 最大轮数 + 故障注入）。 -->
+
+平台后台调度 `iterative-optimizer`，实时展示每轮状态。
+
+## 配置文件结构
+
+```yaml
+framework: opencode                      # 测试框架（当前仅支持 opencode）
+
+skill:
+  name: openeuler-docker-fault
+  path: /user/work/.opencode/skills/openeuler-docker-fault
+
+optimization:
+  score_threshold: 0.9                   # 目标分（0-1）
+  goal: 提升故障排查准确率                  # 可选，文字描述
+  max_rounds: 5                          # 最大轮数
+
+# 可选：故障注入
+fault_injection:
+  inject: docker stop container
+  cleanup: docker start container
+
+tasks:
+  query: |
+    请排查容器无法启动的问题，给出 root cause 和修复建议
+
+# 可选：多轮交互预设
+interactions:
+  - scenario: 用户确认继续
+    trigger: 是否继续|是否确认
+    response: 确认继续
+  - scenario: 提供错误日志路径
+    trigger: 日志路径|错误日志
+    response: /var/log/error.log
+```
+
+字段说明详见 [`docs/auto-iterative-optimization.md`](https://github.com/your-org/agent-insight/blob/main/docs/auto-iterative-optimization.md) §配置文件详解。
+
+## 关键参数
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `skill.name` | string | ✅ | Skill 名称 |
+| `skill.path` | string | ✅ | 本地路径 |
+| `optimization.score_threshold` | float | ✅ | 目标分数（0-1） |
+| `optimization.max_rounds` | int | ✅ | 最大轮数 |
+| `optimization.goal` | string | ❌ | 文字描述目标 |
+| `model` | string | ❌ | 模型名（如 `deepseek/deepseek-chat`） |
+| `fault_injection.inject` / `cleanup` | string | ❌ | 故障注入命令 |
+| `tasks.query` | string | ✅ | 测试任务描述 |
+| `interactions[]` | object[] | ❌ | 多轮交互预设 |
+
+## 迭代流程
+
+```
+                ┌─────────────────────────┐
+                │  Round N 开始            │
+                └────────────┬────────────┘
+                             ▼
+                ┌─────────────────────────┐
+                │  1. 故障注入（可选）       │
+                │  inject 命令              │
+                └────────────┬────────────┘
+                             ▼
+                ┌─────────────────────────┐
+                │  2. 执行任务              │
+                │  opencode run tasks.query│
+                └────────────┬────────────┘
+                             ▼
+                ┌─────────────────────────┐
+                │  3. 评估                  │
+                │  调用评测模型打分          │
+                └────────────┬────────────┘
+                             ▼
+              ┌──── 分数 ≥ score_threshold ─→ 结束（达标）
+              │
+              ├──── N ≥ max_rounds ───────→ 结束（轮数耗尽）
+              │
+              └──── 否则 ↓
+                ┌─────────────────────────┐
+                │  4. snapshot SkillVersion │
+                │  备份当前版本             │
+                └────────────┬────────────┘
+                             ▼
+                ┌─────────────────────────┐
+                │  5. 优化（局部修补）       │
+                │  按评估结果改 SKILL.md    │
+                └────────────┬────────────┘
+                             ▼
+                ┌─────────────────────────┐
+                │  6. cleanup（可选）       │
+                └────────────┬────────────┘
+                             ▼
+                    Round N+1（回到顶）
+```
+
+## 最佳实践
+
+- **`score_threshold` 不要设太高** —— 0.9 比较合理，0.95+ 可能永远到不了
+- **`max_rounds` 5 起步** —— 太少改不动，太多浪费 token
+- **加 `goal` 文字描述** —— LLM 优化时有方向感
+- **生产 Skill 别直接跑无监督迭代** —— 在 sandbox 跑完 review 再发布
+- **每轮 snapshot 不要删** —— 万一连续优化跑偏，可以回到任意中间版本
+
+## 常见问题
+
+<details>
+<summary>迭代跑了 5 轮分数还在涨可以继续吗？</summary>
+
+可以。手动调高 `max_rounds` 再跑一次。也可以让 iterative-optimizer 自动续跑（v2 规划）。
+</details>
+
+<details>
+<summary>每轮都没提升怎么办？</summary>
+
+`iterative-optimizer` 内置短路逻辑：连续两轮分数都没涨就停止。这通常意味着：
+1. 当前 LLM 能力到顶（换 Claude Sonnet 4 试试）
+2. 数据集本身有歧义（部分 case 标准答案就是错的）
+3. Skill 已经触到天花板（业务上要换思路）
+</details>
+
+<details>
+<summary>能并发跑多个 Skill 的 Auto Optimize 吗？</summary>
+
+可以，互不干扰。但同一台机器并发跑 Auto Optimize 会撞 LLM rate limit，建议串行或者用不同 model 配置。
+</details>
+
+## 相关文档
+
+- [Optimization Overview](./overview) — 优化的整体设计
+- [`docs/auto-iterative-optimization.md`](https://github.com/your-org/agent-insight/blob/main/docs/auto-iterative-optimization.md) — 完整使用指南
+- [`docs/optimization-tech.md`](https://github.com/your-org/agent-insight/blob/main/docs/optimization-tech.md) — 优化技术权威文档
+- [Auto Prompt Optimization](./auto-prompt-optimization) — Prompt 算法层优化

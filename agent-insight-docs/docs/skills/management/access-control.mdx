@@ -1,0 +1,144 @@
+---
+title: 权限与访问控制
+description: 多用户隔离 + 跨用户共享 + 企业模式
+sidebar: skills
+---
+
+# 权限与访问控制（Access Control）
+
+## 是什么
+
+Agent Insight 是多用户平台。每个 Skill 都有归属用户（`Skill.user`）+ 可见性（`Skill.visibility`）。本页讲清楚谁能看到、谁能改、企业模式下的组织/团队怎么生效。
+
+## 它解决什么问题
+
+让团队协作时不会"互相踩"，又能在必要时共享 Skill 资产：
+
+| 场景 | 没权限控制 | 有权限控制 |
+|---|---|---|
+| 同事改了我的 Skill | 撞车 | `visibility=private`，只有归属者能改 |
+| 想把好 Skill 分享给团队 | 复制粘贴 | `visibility=shared` + fork 机制 |
+| 离职员工的 Skill 怎么办 | 资产丢失 | admin 可转交归属 |
+| 企业不同 BU 的 Skill 隔离 | 看到对方业务 | 企业模式按组织隔离 |
+
+## 权限模型
+
+```
+┌──────────────────────┐
+│      User / API Key  │
+│   demo@163.com       │
+└──────────┬───────────┘
+           │ 归属
+           ▼
+   ┌──────────────────┐
+   │      Skill       │
+   │  user (FK)       │  ◀── 单一归属（不可多人）
+   │  visibility:     │
+   │    'private'  ←─── 只有 user 可见 / 可改
+   │    'shared'   ←─── 平台所有 user 可读，fork 后归 fork 者
+   └──────────────────┘
+```
+
+不同用户隔离的所有表：
+
+- `Skill.user` / `SkillVersion`（跟 Skill 走）
+- `Execution.user` / `Session.user`
+- `AgentEvalDataset.user`
+- `SkillTriggerEvalSet.user` / `SkillTriggerEvalRun.user`
+- `GrayscaleTask.user`
+- `UserSettings.user`
+
+## 怎么用
+
+### 通过 UI
+
+进入 **Skills 资产 → 选 Skill → 设置**，可改 `visibility`：
+
+| visibility | 谁能读 | 谁能改 | 谁能 fork |
+|---|---|---|---|
+| `private`（默认） | 只有 owner | 只有 owner | 不可 fork |
+| `shared` | 全平台 user | 只有 owner | 任何 user |
+
+<!-- TODO 截图：新拍。Skill 详情页 → 设置 → visibility 切换。 -->
+
+### Fork 共享 Skill
+
+进入 **Skills 资产 → 浏览共享库 → 选 Skill → Fork**，平台会复制一份 SkillVersion content 到当前用户名下，归属转移。
+
+### 通过 REST API
+
+```bash
+# 改可见性
+curl -X PATCH http://localhost:3000/api/skills/{id} \
+  -H "x-witty-api-key: $API_KEY" \
+  -d '{"visibility": "shared", "user": "demo@163.com"}'
+
+# fork 一个共享 Skill
+curl -X POST http://localhost:3000/api/skills/{id}/fork \
+  -H "x-witty-api-key: $API_KEY" \
+  -d '{"forkAsName": "pdf-extractor-mine", "user": "alice@163.com"}'
+```
+
+## 企业模式
+
+企业部署下，平台对接组织系统（`/api/auth/organization`），用户登录后自动获取：
+
+- `username` —— 企业账号
+- `displayName` —— 真实姓名
+- `apiKey` —— 平台 API Key
+- 默认组织 + 团队（v2 规划）
+
+```bash
+# 企业模式入口
+GET /api/auth/organization
+# Header: Cookie（企业系统的）
+# 响应 → { username, displayName, apiKey }
+```
+
+企业模式下还可以通过 `Config.parseStatus` 的"check_org" 检查当前部署是否已切换企业认证：
+
+```bash
+curl http://localhost:3000/api/eval/config/status?check_org=true
+# 响应 → { org_mode: true, org_login_redirect_url: "..." }
+```
+
+详见 [Administration · SSO](../../administration/sso)。
+
+## 触发评价集的特殊权限
+
+`SkillTriggerEvalSet` 表唯一约束 `(user, skillName)` —— **每个用户对每个 Skill 维护自己的触发评价集**。即使 Skill 是 shared 的，触发评价集仍按 user 隔离。
+
+原因：触发评测是 user × skill × opencode 项目配置 三元组的事情，不同用户的 opencode 配置不同，评价集不能跨 user 共用。
+
+## 最佳实践
+
+- **个人项目用 `private`**
+- **团队最佳实践用 `shared`** —— 但要写清楚 description 别让 fork 者一头雾水
+- **fork 后立即 bump 版本** —— fork 内容跟原 Skill 完全相同，先动一下证明你 own 了它
+- **企业模式下别在 SKILL.md 写密钥** —— 共享后所有人都能读
+
+## 常见问题
+
+<details>
+<summary>能多人共同编辑同一个 Skill 吗？</summary>
+
+当前版本不支持。`Skill.user` 是单一归属字段。多人协作的最佳实践是：一个团队账号持有 Skill，团队成员通过这个账号 API Key 协作。v2 规划支持组织/团队级共有。
+</details>
+
+<details>
+<summary>fork 后原 Skill 改了，fork 版本会自动更新吗？</summary>
+
+不会。fork 是一次性 snapshot，之后两个 Skill 各自演进。如果需要同步原 Skill 的更新，要手动 diff + merge。
+</details>
+
+<details>
+<summary>API Key 泄漏了怎么办？</summary>
+
+`POST /api/auth/apikey` 重新生成（同 username 会替换旧 key）。旧 key 立即失效。被泄漏期间的 Trace 数据已归到该 user 名下，需要手动审计 + 删除。
+</details>
+
+## 相关文档
+
+- [Administration · RBAC](../../administration/rbac) — 角色权限（企业模式）
+- [Administration · SSO](../../administration/sso) — 单点登录
+- [API · Authentication](../../api-and-data-platform/authentication) — API Key 管理

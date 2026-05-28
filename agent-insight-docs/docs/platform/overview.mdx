@@ -1,0 +1,118 @@
+---
+title: Platform Overview
+description: 平台基础能力 — Workspace、Agent 管理、模型注册、接入配置
+sidebar: platform
+---
+
+# Platform Overview
+
+Platform 是 Agent Insight 的"基础设施"层 —— 你在使用 Observability / Evaluation / Skills 三大产品之前，需要先在 Platform 上把 **Workspace、Agent、模型、接入** 配齐。这些能力对应看板左侧栏的「Agent Workspace」与「平台配置」两个分组。
+
+简单说：**Platform 解决"我是谁、我在哪里、我用什么模型、我怎么把数据打进来"。**
+
+## 核心能力一览
+
+| 功能 | 一句话 | 文档 |
+|---|---|---|
+| **Workspace Dashboard** | 跨产品的整体概览，4 张指标卡 + 入口跳转 | [workspace-dashboard](./workspace-dashboard) |
+| **Agent 管理** | Agent 注册、版本、关联 Skill | [agent-management](./agent-management) |
+| **模型注册** | LLM Provider + API Key + 默认模型设置 | [agent-management#模型注册](./agent-management) |
+| **接入配置** | 安装指导、渠道注册、Webhook、健康检查 | (待补) |
+
+> 截图左侧栏「概览 / Agent 管理 / 模型注册 / 联网搜索 / 安装指导」这几个能力都属于 Platform 模块。
+
+## 平台四个真实子页（含具体功能）
+
+### 1. 模型配置（`/modelconfig`）
+
+三个子页共享 `src/components/ModelConfigManager.tsx`（`mode='full' | 'keys' | 'defaults'`）：
+
+| 路由 | 功能 |
+|---|---|
+| `/modelconfig/registry` | 全功能 CRUD：新增 / 编辑 / 激活 / 删除模型 |
+| `/modelconfig/keys` | API Key 视角：掩码 + 显示/隐藏 + 复制 |
+| `/modelconfig/defaults` | 默认模型设置（评测 / 优化） |
+
+<!-- TODO 截图：复用 agent-insight/docs/images/model-view.png — 模型注册主页 -->
+
+### 2. 接入配置（`/accessconfig`）
+
+| 路由 | 功能 | 状态 |
+|---|---|---|
+| `/accessconfig/install` | **安装指导** —— 客户端安装命令（Linux/macOS + Windows）+ API Key 一键复制 | ✅ 完整 |
+| `/accessconfig/channels` | 渠道注册（钉钉 / 企微 / Slack / IM / API） | 🟡 占位 |
+| `/accessconfig/webhooks` | Webhook 路由（签名校验、路由规则、重试限流） | 🟡 占位 |
+| `/accessconfig/health` | 健康检查（连通性、延迟、可用性历史） | 🟡 占位 |
+
+<!-- TODO 截图：复用 agent-insight/docs/images/guide-apikey.png — 安装指导页 -->
+
+### 3. Agent Workspace（一级折叠分组）
+
+| 路由 | 功能 |
+|---|---|
+| `/agents` | Agent 管理（占位）—— Agent 注册、版本、关联 Skill |
+| `/skills` | Skills 管理 —— 资产卡片、版本切换 |
+| `/skill-history` | Skill 执行历史 |
+| `/playground` | Playground（占位） —— 在线编辑/运行 Skill |
+| `/skill-debug` | 调测分析 —— 带 `?taskId=xxx` 查 Skill 诊断 |
+| `/skill-debug/grayscale` | A/B 测试（详见 [skills/analysis/ab-testing](../skills/analysis/ab-testing)） |
+| `/skill-release` | 发布管理（占位） —— 审批 / 灰度 / 回滚 |
+
+### 4. 观测与评测入口
+
+| 路由 | 功能 |
+|---|---|
+| `/trace` | 链路观测 |
+| `/fault` | 故障定位 —— 失败用例列表 |
+| `/dataset` + `/dataset/[id]` | 评测集 / 数据项录入 |
+| `/metrics` | 评估器 / 指标 |
+| `/eval` | 评测任务 |
+| `/memory` | 记忆评估（占位） |
+| `/quality` | 质量监控（占位） |
+| `/security` | 安全设计（占位） |
+
+## 快速开始
+
+→ [Start Tracing](../get-started/start-tracing) — Platform 配置 + 第一条 Trace
+
+## 与其他模块的关系
+
+```
+                    ┌──────────────┐
+                    │   Platform   │ ← 你在这里
+                    │  (基础设施)   │
+                    └───────┬──────┘
+                            │ 提供
+        ┌───────────────────┼───────────────────┐
+        │                   │                   │
+        ▼                   ▼                   ▼
+  User / Tenant         Model Config        Ingest API
+  权限隔离              评估/优化用 LLM     SDK / OTel 入口
+        │                   │                   │
+        └───────────────────┴───────────────────┘
+                            │
+                            ▼
+                  全平台所有功能依赖
+```
+
+Platform 是其他所有模块的运行前提 —— 没配模型，评估器跑不起来；没装采集端，Trace 进不来。
+
+## FAQ
+
+<details>
+<summary>必须先在「模型注册」配模型才能用平台吗？</summary>
+
+链路观测（只看 Trace）不需要；但只要涉及 LLM 调用的能力（Skill 生成、评估器、智能诊断、自动优化）都需要至少一个激活的模型配置。
+</details>
+
+<details>
+<summary>支持哪些 LLM Provider？</summary>
+
+内置支持：OpenAI、Anthropic、Google、DeepSeek、Qwen、Ollama，以及任何 OpenAI 兼容协议的自定义 endpoint。详见 [Integrations · LLM Providers](../integrations/overview)。
+</details>
+
+<details>
+<summary>多租户怎么隔离？</summary>
+
+每个 user 有独立的 API Key + 数据归属字段（`Skill.user` / `Execution.user` / `AgentEvalDataset.user`）。企业模式下还接组织系统 `/api/auth/organization`。详见 [Administration · Organizations & Teams](../administration/organizations-teams)。
+</details>

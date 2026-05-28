@@ -1,0 +1,173 @@
+---
+title: Step 3 · DECISION
+description: A/B 测试三步法 · 第三步：综合判定与发布决策
+sidebar: skills
+---
+
+# Step 3 · DECISION
+
+## 是什么
+
+三步法的收官：把 Step 2 跑出来的所有 cell 数据汇总，按 **能力 / 成本 / 稳定性** 三个 0-100 分维度评分，用**短板原则** `min(三分)` 取最低分作为综合分，再映射到 4 种发布决策之一。
+
+算法版本：`agent-skill-scoring-v2.1`（源码 [`src/lib/skill-analysis/ab-scoring.ts`](https://github.com/your-org/agent-insight/blob/main/src/lib/skill-analysis/ab-scoring.ts)）。
+
+## 它解决什么问题
+
+加权平均最大的问题是**短板会被掩盖**：
+
+> 能力分 95 + 成本分 30 + 稳定性分 80 → 加权平均 ≈ 70（看起来挺好）
+
+但实际意味着"贵到离谱"，应该被打回。短板原则 `min(95, 30, 80) = 30` 直接命中"成本拒绝"，让发布决策可信。
+
+## 怎么用
+
+### 通过 UI
+
+Step 2 跑完，Card 3「综合判定 & 决策」自动渲染 4 张卡：
+
+<!-- TODO 截图：新拍。三步法第三步 DECISION（src/app/(main)/skill-eval/grayscale/page.tsx Card 3），覆盖：能力卡 / 成本卡 / 稳定性卡 / 综合判定卡 + 每张卡的 breakdown 公式。 -->
+
+每张维度卡包含：
+- 分数 + 判定 tone（绿 / 琥珀 / 红 / 灰）
+- breakdown 公式（带实参的计算过程，供下钻审计）
+- 引用本文档对应小节
+
+综合判定卡显示：
+- 决策（direct-release / monitor-release / reject / insufficient）
+- 拒绝原因（`rejectCategory`：能力 / 成本 / 稳定性，命中哪一个先）
+- 改进建议（按决策映射）
+
+### 通过 REST API
+
+```bash
+# 拉取任务详情 + 评分结果
+curl http://localhost:3000/api/debug/grayscale-tasks/{id} \
+  -H "x-witty-api-key: $API_KEY"
+# 响应字段：
+# {
+#   scoring: {
+#     version: "agent-skill-scoring-v2.1",
+#     capabilityScore: 81.5,
+#     costScore: 65,
+#     stabilityScore: 72,
+#     totalScore: 65,
+#     decision: "monitor-release",
+#     rejectCategory: null,
+#     hardGates: [],
+#     dataQualityIssue: null,
+#     breakdown: {
+#       capability: { formula: "...", steps: [...], reference: "ab-scoring §3.1" },
+#       cost: { ... },
+#       stability: { ... }
+#     }
+#   }
+# }
+```
+
+## 评分算法
+
+完整算法详见 [A/B Testing · 评分算法](./ab-testing#评分算法)。
+
+### 四道关卡（顺序执行）
+
+```
+第一关：N < minSampleSize         → 'insufficient'（样本不足）
+第二关：任一维度低于拒绝阈值        → 'reject'
+                                      • capability < 50 → reject(能力)
+                                      • cost       < 40 → reject(成本)
+                                      • stability  < 50 → reject(稳定性)
+第三关：三个维度都 ≥ 75            → 'direct-release'（直接发布）
+第四关：其他                       → 'monitor-release'（监控发布）
+```
+
+`rejectCategory` 记录第一个命中的拒绝项，前端用于显示具体打回原因与建议。
+
+### 决策映射
+
+| 决策 | 含义 | 建议文案 |
+|---|---|---|
+| `direct-release` | 三维全达标（≥ 75 / 70 / 70） | 进入全量发布，保留后续复测记录 |
+| `monitor-release` | 至少一维在警告带 | 小流量监控发布，持续观察短板维度 |
+| `reject` | 至少一维低于拒绝线 | 按 `rejectCategory` 修正后复测 |
+| `insufficient` | 样本不足 | 补齐到 `recommendedSampleSize` 再复测 |
+
+## 关键参数（可覆盖的阈值）
+
+所有阈值都暴露在 `DEFAULT_AB_SCORING_POLICY` 中，可在调用 `calculateAbScoring` 时通过 `options.policy` 覆盖：
+
+| 配置项 | 默认 | 说明 |
+|---|---|---|
+| `capabilityScoreSlope` | 2.5 | Δscore 每 +1 对应能力分变化 |
+| `capabilityGoodThreshold` / `capabilityRejectThreshold` | 75 / 50 | 能力分判定带 |
+| `costGoodPct` / `costWarningPct` / `costRejectPct` | 20 / 100 / 200 | Δtoken 转 base_cost 拐点（百分比） |
+| `costCouplingBonus` / `costCouplingPenalty` | +15 / −20 | 能力耦合加扣分 |
+| `costGoodThreshold` / `costRejectThreshold` | 70 / 40 | 成本分判定带 |
+| `varianceMax` | 0.25 | 二项分布方差上限 |
+| `stabilityGoodThreshold` / `stabilityRejectThreshold` | 70 / 50 | 稳定性分判定带 |
+| `minSampleSize` | 1（生产推荐 5） | 出综合结论的最小样本量 |
+| `recommendedSampleSize` | 20 | 推荐样本量 |
+| `minRepeats` | 1（生产推荐 3） | 计算方差的最小重复次数 |
+
+> 阈值变更需同步 `version` 字段，便于历史回放与策略对比。
+
+## 边界与异常
+
+| 情况 | 处理 |
+|---|---|
+| A、B 评测均分都 < 5 分 | `dataQualityIssue = '数据集太难'`，不出能力结论 |
+| A、B 评测均分都 > 95 分 | `dataQualityIssue = '数据集太简单'`，不出能力结论 |
+| A 平均 token 缺失或 = 0 | 成本分 null，不出成本结论 |
+| 重复轮次 < 2 | 按 `variance = 0`，UI 标注"方差不可计算" |
+| B 组样本为 0 | invokeRate null，稳定性分 null |
+| `skillTriggered` 字段缺失 | 视为 false，标到 `dataQualityIssue` |
+
+## 计算明细（breakdown 字段）
+
+每个分数的 `breakdown` 字段会随评分一起返回，UI 在维度卡底部渲染：
+
+```
+能力分计算
+  avgEvalA = mean([62, 65, 70]) = 65.7
+  avgEvalB = mean([75, 80, 80]) = 78.3
+  Δscore   = 78.3 − 65.7 = 12.6
+  score    = clamp(50 + 12.6 × 2.5, 0, 100) = 81.5
+  参考：ab-scoring §3.1
+```
+
+UI 风格：`font-mono` + `tabular-nums`，数字右对齐，颜色与判定 tone 一致。
+
+## 最佳实践
+
+- **看综合判定先看 `rejectCategory`** —— 它告诉你具体卡在哪一维
+- **breakdown 是审计入口** —— 老板问"这个分怎么算的"，直接展开 breakdown
+- **`policyVersion` 一定记** —— 阈值会随平台升级调整，历史报告按它对应的算法版本渲染
+- **不要拿 v2.1 报告和 v2.2 报告横向比** —— 算法不同，分数语义不同
+
+## 常见问题
+
+<details>
+<summary>综合分 65 是 monitor-release 还是 reject？</summary>
+
+看 `min(三分)` 落在哪个判定带。如果 65 = `min(75, 65, 70)`，三个分别看：能力 75（好）、成本 65（在 [40, 70] 警告带）、稳定 70（在边界）。整体 monitor-release，rejectCategory 为 null。
+</details>
+
+<details>
+<summary>能不能改成加权平均？</summary>
+
+源码层面可以，但强烈不推荐。v2.2 用过加权平均 + hard gate ceiling，复杂度高、可解释性差，最终换成了短板原则。详见 [`docs/skill-ab-scoring.md`](https://github.com/your-org/agent-insight/blob/main/docs/skill-ab-scoring.md) 附录。
+</details>
+
+<details>
+<summary>`insufficient` 时应该补多少样本？</summary>
+
+补到 `recommendedSampleSize`（默认 20），同时确保 `repeatRounds ≥ minRepeats`（推荐 3）。这样 60+ 个 cell 跑下来，方差与置信度都够。
+</details>
+
+## 相关文档
+
+- [A/B Testing](./ab-testing) — 完整算法说明
+- [Step 1 · CONFIG](./step1-config) — 配实验
+- [Step 2 · EXECUTION](./step2-execution) — 跑实验
+- [Failure Drilldown](./failure-drilldown) — `reject` 后的归因
+- [`docs/skill-ab-scoring.md`](https://github.com/your-org/agent-insight/blob/main/docs/skill-ab-scoring.md) — 算法权威文档

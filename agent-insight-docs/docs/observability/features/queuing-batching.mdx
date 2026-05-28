@@ -1,0 +1,146 @@
+---
+title: 队列与批量上报
+description: 异步零延迟上报机制
+sidebar: observability
+---
+
+# 队列与批量上报（Queuing & Batching）
+
+## 是什么
+
+Agent Insight SDK 不会让上报阻塞 Agent 主链路 —— **所有上报走异步队列**，在后台累积一段时间或攒到一定数量后批量发送，并发上限受 [`upload-throttle.ts`](https://github.com/your-org/agent-insight/blob/main/src/lib/ingest/upload-throttle.ts) 控制。
+
+设计目标："对 Agent 性能零额外影响 + 网络抖动不丢数据 + 平台高峰削峰"。
+
+## 它解决什么问题
+
+幼稚实现的两个问题：
+
+| 同步上报 | 零批量 |
+|---|---|
+| Agent 调用每秒慢 50-200ms（上报阻塞主线程） | 1000 QPS → 1000 个 HTTP 请求/秒，平台压力大 |
+| 网络挂了 Agent 也跟着挂 | 重试逻辑分散 |
+| 上报顺序与 trace 顺序耦合 | 单点失败连锁反应 |
+
+队列 + 批量让上报与业务解耦：
+
+| 没异步队列 | 有 |
+|---|---|
+| Agent 跑 4500ms → 实际感受 4700ms | 4500ms（上报背景跑） |
+| 网络中断丢数据 | 重试 + 本地缓冲 |
+| 平台瞬时被打爆 | 平滑到匀速 |
+
+## 怎么用
+
+### 客户端配置
+
+```python
+from agent_insight import AgentInsight
+
+AgentInsight.init(
+    api_key="ai_xxx",
+    queue_size=1000,            # 队列容量（条数）
+    flush_interval_ms=5000,     # 5 秒批量发一次
+    batch_size=50,              # 或攒到 50 条发
+    max_retries=3,
+    retry_backoff_ms=[1000, 3000, 10000],
+)
+```
+
+```typescript
+AgentInsight.init({
+  apiKey: "ai_xxx",
+  queueSize: 1000,
+  flushIntervalMs: 5000,
+  batchSize: 50,
+  maxRetries: 3,
+  retryBackoffMs: [1000, 3000, 10000],
+});
+```
+
+### 优雅退出
+
+进程退出时主动 flush 队列，避免丢数据：
+
+```python
+import atexit
+atexit.register(lambda: AgentInsight.flush(timeout_ms=5000))
+```
+
+```typescript
+process.on("SIGTERM", async () => {
+  await AgentInsight.flush({ timeoutMs: 5000 });
+  process.exit(0);
+});
+```
+
+### 监控队列健康
+
+```python
+metrics = AgentInsight.get_queue_metrics()
+# → { queued: 23, sent: 1500, failed: 2, retries_pending: 0 }
+```
+
+## 关键参数
+
+| 参数 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `queue_size` | int | 1000 | 队列容量（条数） |
+| `flush_interval_ms` | int | 5000 | 周期性 flush（毫秒） |
+| `batch_size` | int | 50 | 单批最大条数 |
+| `max_retries` | int | 3 | 失败重试次数 |
+| `retry_backoff_ms` | int[] | `[1000, 3000, 10000]` | 指数退避数组 |
+| `drop_when_full` | bool | false | 队列满时是丢弃还是阻塞 |
+
+## 服务端节流
+
+平台侧 [`upload-throttle.ts`](https://github.com/your-org/agent-insight/blob/main/src/lib/ingest/upload-throttle.ts) 控制单个 user 的写入 QPS：
+
+```
+默认配置：
+- 单 user 写入 QPS: 100/sec
+- 突发：允许瞬时 500/sec
+- 超限：返回 429 + Retry-After
+```
+
+[`upload-analysis-debouncer.ts`](https://github.com/your-org/agent-insight/blob/main/src/lib/ingest/upload-analysis-debouncer.ts) 进一步把重复的"评估触发"合并 —— 同一 Skill 的 Trace 30 秒内多次上报，只触发一次评估。
+
+## 最佳实践
+
+- **生产用大队列** —— `queue_size=10000`，避免突发流量丢
+- **flush_interval 设短一些** —— 5 秒上限好，长 staging 数据丢失风险高
+- **进程退出一定 flush** —— k8s SIGTERM 给 30 秒，5 秒 flush 够了
+- **failed > 0 要告警** —— 上报失败通常是 API Key / 网络问题
+- **drop_when_full=false 慎用** —— 阻塞主线程会让 Agent 卡死，宁可丢数据也要保业务
+
+## 常见问题
+
+<details>
+<summary>队列满了数据会丢吗？</summary>
+
+取决于 `drop_when_full`。默认 false（阻塞），等队列消化；true 则丢弃最旧的。生产强烈建议 true（保业务可用）。
+</details>
+
+<details>
+<summary>批量上报失败如何重试？</summary>
+
+按 `retry_backoff_ms` 数组指数退避。3 次失败后写入本地 dead-letter（路径 `data/dlq/<timestamp>.json`），告警提醒人工处理。
+</details>
+
+<details>
+<summary>批量内某条失败会怎样？</summary>
+
+`POST /api/ingest/upload` 单 task_id 维度处理，单条 JSON 错不影响其他。服务端返回 207 Multi-Status，客户端按 task_id 重试失败的。
+</details>
+
+<details>
+<summary>多进程 / 多线程怎么处理？</summary>
+
+SDK 在进程内单例，每个进程有独立队列。多线程共享同一队列（线程安全）。如果是多机部署，每台机各自上报，平台按 task_id unique 自动去重。
+</details>
+
+## 相关文档
+
+- [Sampling](./sampling) — 减少上报量
+- [Self-Hosting · Performance](../../self-hosting/overview) — 服务端调优
+- [Architecture · Data Flow](../../architecture/data-flow) — 完整数据流

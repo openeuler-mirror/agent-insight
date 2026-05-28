@@ -1,0 +1,193 @@
+---
+title: OpenTelemetry
+description: OTel 集成 — 兼容 OTLP / GenAI 语义约定
+sidebar: observability
+---
+
+# OpenTelemetry
+
+## 是什么
+
+Agent Insight 实现了 OTLP（OpenTelemetry Protocol）HTTP 接收端点，**兼容标准 OTel SDK**。已经在用 OTel 的项目把 exporter 指过来即可，不用换 SDK。
+
+同时遵循 [OTel GenAI Semantic Conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/) —— Agent 调用 / LLM 请求 / tool call 都按官方约定的 span name 与 attribute 字段，跨观测体系互通。
+
+## 它解决什么问题
+
+| 没 OTel 兼容 | 有 |
+|---|---|
+| 已有 OTel 栈要换 SDK | 直接对接 |
+| 跨观测体系数据孤立 | OTel 是行业标准 |
+| 自研框架接不进去 | OTel SDK 50+ 语言 |
+| 不知道未来怎么演进 | 跟着 OTel 标准走 |
+
+## 接收端点
+
+```
+POST /api/ingest/otel/v1/traces
+POST /api/ingest/otel/v1/logs
+POST /api/ingest/otel/v1/metrics
+```
+
+都接受 OTLP JSON 格式（[OTLP HTTP spec](https://opentelemetry.io/docs/specs/otlp/#otlphttp)），Header 用 `x-witty-api-key`。
+
+## 怎么用
+
+### Python · OTel SDK 直连
+
+```python
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+
+# 配 exporter 指向 Agent Insight
+exporter = OTLPSpanExporter(
+    endpoint="http://localhost:3000/api/ingest/otel/v1/traces",
+    headers={"x-witty-api-key": "ai_xxx"},
+)
+provider = TracerProvider()
+provider.add_span_processor(BatchSpanProcessor(exporter))
+trace.set_tracer_provider(provider)
+
+tracer = trace.get_tracer("my-agent")
+
+# 标准 OTel API
+with tracer.start_as_current_span("my-agent-run") as span:
+    span.set_attribute("gen_ai.system", "anthropic")
+    span.set_attribute("gen_ai.request.model", "claude-sonnet-4")
+    # ... Agent 逻辑
+    span.set_attribute("gen_ai.usage.input_tokens", 150)
+    span.set_attribute("gen_ai.usage.output_tokens", 50)
+```
+
+### 环境变量配置（更简单）
+
+```bash
+export OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:3000/api/ingest/otel"
+export OTEL_EXPORTER_OTLP_HEADERS="x-witty-api-key=ai_xxx"
+export OTEL_EXPORTER_OTLP_PROTOCOL="http/json"
+
+# 用 auto-instrumentation 跑你的 Agent
+opentelemetry-instrument python my_agent.py
+```
+
+### TypeScript · OTel Node SDK
+
+```typescript
+import { NodeSDK } from "@opentelemetry/sdk-node";
+import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
+
+const sdk = new NodeSDK({
+  traceExporter: new OTLPTraceExporter({
+    url: "http://localhost:3000/api/ingest/otel/v1/traces",
+    headers: { "x-witty-api-key": "ai_xxx" },
+  }),
+});
+
+sdk.start();
+```
+
+### 本地 OTel Collector
+
+如果想用 Collector 中转：
+
+```yaml
+# otel-collector-config.yaml
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+exporters:
+  otlphttp/agent_insight:
+    endpoint: "http://localhost:3000/api/ingest/otel"
+    headers:
+      x-witty-api-key: "ai_xxx"
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [otlphttp/agent_insight]
+```
+
+平台还提供了一个本地 collector `tools/otel-local-collector.mjs`（PROJECT.md §3）用于开发场景。
+
+## GenAI 语义约定支持
+
+平台识别并自动映射以下 OTel GenAI 标准 attribute：
+
+| OTel attribute | Agent Insight 字段 |
+|---|---|
+| `gen_ai.system` | `interaction.metadata.provider`（`anthropic` / `openai`） |
+| `gen_ai.request.model` | `interaction.metadata.model` |
+| `gen_ai.usage.input_tokens` | `usage.prompt_tokens` |
+| `gen_ai.usage.output_tokens` | `usage.completion_tokens` |
+| `gen_ai.response.finish_reasons` | `interaction.metadata.finish_reason` |
+| `gen_ai.operation.name` | `interaction.role` / step name |
+| `gen_ai.prompt.{i}.role` / `.content` | `interaction.role` / `interaction.content` |
+| `gen_ai.completion.{i}.content` | `interaction.content` |
+
+完整映射：[`src/lib/engine/observability/agent-trace.ts`](https://github.com/your-org/agent-insight/blob/main/src/lib/engine/observability/agent-trace.ts)。
+
+## trace_id 映射
+
+OTel `trace_id`（32 hex char）→ Agent Insight `taskId`：
+
+```
+otel_trace_id = "4bf92f3577b34da6a3ce929d0e0e4736"
+              ↓
+taskId        = "task_4bf92f3577b34da6a3ce929d0e0e4736"
+```
+
+平台同时保留原 `trace_id` 在 `metadata.otel_trace_id`，便于反查到上游 OTel 系统。详见 [Trace IDs](../features/trace-ids)。
+
+## 关键参数
+
+OTLP 端点支持的 query / header 参数：
+
+| 参数 | 类型 | 说明 |
+|---|---|---|
+| Header `x-witty-api-key` | string | 平台 API Key |
+| Header `Content-Type` | string | `application/json` 或 `application/x-protobuf` |
+| Body | OTLP JSON | 标准格式 |
+
+## 最佳实践
+
+- **优先用现成 OTel SDK** —— 不要自己实现 OTLP 编码
+- **打 GenAI attribute** —— 不打 `gen_ai.*` 平台只能当普通 trace 用
+- **batch span processor** —— 不要单 span 上报
+- **配 sampling** —— OTel SDK 内置 ParentBased + TraceIdRatio
+- **collector 中转适合多目的地** —— 同时发 Agent Insight + Datadog + Jaeger
+
+## 常见问题
+
+<details>
+<summary>OTel 和 Agent Insight SDK 能同时用吗？</summary>
+
+不建议。两套上报机制重复，会产生重复数据。建议二选一：
+- 已有 OTel 栈 → 用 OTel（指向 Agent Insight 端点）
+- 全新接入 → 用 Agent Insight SDK
+</details>
+
+<details>
+<summary>支持 OTLP/gRPC 吗？</summary>
+
+当前只支持 HTTP/JSON。gRPC 支持在 v2 规划。OTel SDK 配 `OTEL_EXPORTER_OTLP_PROTOCOL=http/json` 强制 HTTP。
+</details>
+
+<details>
+<summary>OTel logs / metrics 怎么用？</summary>
+
+`/api/ingest/otel/v1/logs` 与 `/api/ingest/otel/v1/metrics` 端点已经实现，但平台 UI 当前只展示 traces。logs / metrics 会进 DB，可以通过 API 查询。Full UI 集成在 v2 规划。
+</details>
+
+## 相关文档
+
+- [Trace IDs](../features/trace-ids) — trace_id 映射
+- [Integrations · OpenTelemetry](../../integrations/observability/opentelemetry) — 更多对接姿势
+- [Integrations · Grafana](../../integrations/observability/grafana)
+- [Integrations · Datadog](../../integrations/observability/datadog)
+- [Architecture · ADR 002 · Why OTel](../../architecture/adr/002-why-otel)

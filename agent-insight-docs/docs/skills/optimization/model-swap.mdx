@@ -1,0 +1,131 @@
+---
+title: 模型替换
+description: 在保证质量的前提下切换更便宜 / 更快的模型
+sidebar: skills
+---
+
+# Model Swap
+
+## 是什么
+
+让 Skill 跑同样的任务，但把底层 LLM 从 Claude Sonnet 4 换成 DeepSeek（或 Qwen / 自部署小模型），用 A/B 验证质量是否能持平 + 成本能降多少。
+
+> Skill 本身是 LLM-无关的（SKILL.md 是纯 Markdown），所以理论上任何 LLM 都能跑。Model Swap 解决"实测起来是否真能持平质量"的问题。
+
+## 它解决什么问题
+
+LLM 价格 / 速度差异巨大（Claude Sonnet 4 ≈ 10× DeepSeek），但质量差异在很多场景**不到 10%**。一刀切用最贵的模型 = 浪费成本：
+
+| 没 Model Swap | 有 Model Swap |
+|---|---|
+| 所有 Skill 都用最贵模型 | 简单 Skill 用便宜模型，复杂 Skill 用强模型 |
+| 切模型靠拍脑袋 | A/B 数据驱动决策 |
+| 切完不敢上线（怕回退） | 三维评分 + 短板原则把关 |
+
+## 怎么用
+
+### 通过 UI
+
+进入 **Skills 优化 → 选 Skill → 模型替换**：
+
+<!-- TODO 截图：新拍。模型替换面板：左侧选"目标模型"，右侧 A/B 历史。 -->
+
+平台基于现有 [A/B Testing](../analysis/ab-testing) 跑：
+
+- A 组 = 当前 Skill + 现有模型
+- B 组 = 同一 Skill + 待评估模型
+- 数据集 + 评估器一致
+
+得出能力分 / 成本分 / 稳定性分。看综合判定决定是否切换。
+
+### 通过 REST API
+
+```bash
+# 创建 Model Swap 任务（底层是 GrayscaleTask）
+curl -X POST http://localhost:3000/api/debug/grayscale-tasks \
+  -H "x-witty-api-key: $API_KEY" \
+  -d '{
+    "user": "demo@163.com",
+    "skillId": "skill_xxx",
+    "skillName": "pdf-extractor",
+    "skillVersion": 2,
+    "skillVersionId": "ver_v2_id",
+    "taskName": "swap claude-sonnet-4 → deepseek-chat",
+    "configJson": {
+      "skillId": "skill_xxx",
+      "versionAId": "ver_v2_id",
+      "versionBId": "ver_v2_id",
+      "modelConfigA": "claude-sonnet-4-id",
+      "modelConfigB": "deepseek-chat-id",
+      "selectedDatasetId": "ds_xxx",
+      "repeatRounds": 3,
+      "evaluatorId": "evaluator_llm_judge"
+    }
+  }'
+```
+
+注意 A/B 任务里 `versionAId == versionBId` —— Skill 内容相同，**唯一变量是模型**。
+
+## 决策矩阵
+
+跑完 A/B 看结果：
+
+| 能力分 | 成本分 | 稳定性 | 决策 |
+|---|---|---|---|
+| 持平（Δ ≤ -2） | 显著提升（≥ +30） | 持平 | **直接切换** |
+| 持平 | 提升 | 略降（-5 内） | **监控切换** |
+| 略降（-2 ~ -10） | 大幅提升（≥ +50） | 持平 | **业务可接受时切换** |
+| 显著降（< -10） | 任意 | 任意 | **不要切** |
+
+## 关键参数
+
+| 参数 | 说明 |
+|---|---|
+| `modelConfigA` | 当前模型配置 ID |
+| `modelConfigB` | 待评估模型配置 ID |
+| `selectedDatasetId` | 评测集 |
+| `evaluatorId` | 评估器 |
+| `repeatRounds` | 建议 ≥ 3，方差才能算 |
+
+## 常见替换路径
+
+| 从 → 到 | 典型成本降幅 | 适用 |
+|---|---|---|
+| Claude Sonnet 4 → Claude Haiku | -85% | 简单分类 / 摘要 / 路由 |
+| Claude Sonnet 4 → DeepSeek Chat | -95% | 中等复杂度，结构化输出 |
+| Claude Sonnet 4 → Qwen 72B（自部署） | -98%（不含部署成本） | 高频简单任务 |
+| GPT-4 → GPT-4 Turbo | -50% | 通用场景 |
+| GPT-4 → GPT-4o-mini | -90% | 低难度任务 |
+
+## 最佳实践
+
+- **同一种 Skill 类型批量评估** —— 跑 5-10 个相似 Skill 的 swap，找出"通用切换规律"
+- **降级有阶梯** —— 别从 Claude Sonnet 4 一步跳到 Qwen 7B，中间试试 Haiku / 14B
+- **保留模型选择字段** —— 在 SkillVersion 里加 `recommendedModel` 字段，文档化决策
+- **季度复跑** —— LLM 模型在升级，半年前的结论可能已经过时
+
+## 常见问题
+
+<details>
+<summary>能让 Skill 自适应选模型吗？</summary>
+
+平台支持给每个 Skill 配 `recommendedModel`，Agent 框架（OpenCode / Claude Code）启动时按这个字段调用对应模型。但**运行时动态切**（如根据 query 难度选）需要业务层路由，平台不内置。
+</details>
+
+<details>
+<summary>自部署模型怎么接入？</summary>
+
+只要兼容 OpenAI API 协议，在 **模型注册** 里配 `baseUrl` 指向你的部署即可。详见 [Self-Hosting · Custom Models](../../self-hosting/overview)。
+</details>
+
+<details>
+<summary>不同模型的 temperature 范围不同怎么办？</summary>
+
+部分 Provider 不支持某些参数（如 OpenAI 不支持 `top_k`）。平台在调用时会自动过滤不兼容字段，但建议你在 SkillVersion 里只用通用参数（temperature / top_p / max_tokens）。
+</details>
+
+## 相关文档
+
+- [A/B Testing](../analysis/ab-testing) — 底层评测机制
+- [Parameter Search](./parameter-search) — 不换模型只调参
+- [Platform · 模型注册](../../platform/overview) — 注册新模型

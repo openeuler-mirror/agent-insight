@@ -1,0 +1,105 @@
+---
+title: 状态流转
+description: Skill 版本的状态机 — draft / staged / active / deprecated
+sidebar: skills
+---
+
+# 状态流转（Lifecycle States）
+
+## 是什么
+
+每个 `SkillVersion` 都处于一个状态中，状态机控制"哪个版本能被 Agent 真实加载、哪个能被 A/B、哪个被冻结"。Agent Insight 用 4 个状态描述完整的生命周期：
+
+```
+   ┌─────────┐    Schema 通过   ┌──────────┐    A/B 通过    ┌─────────┐
+   │  draft  │ ──────────────▶  │  staged  │ ────────────▶ │ active  │
+   └─────────┘                  └──────────┘                └────┬────┘
+                                                                 │
+                                                                 │ 出新版本
+                                                                 ▼
+                                                            ┌──────────┐
+                                                            │deprecated│
+                                                            └──────────┘
+```
+
+## 它解决什么问题
+
+让"哪个版本是当前在线的"变成可查询、可控制的字段，而不是隐含在部署脚本里。
+
+## 四个状态语义
+
+| 状态 | 含义 | 能被 Agent 加载？ | 能 A/B？ | 能改？ |
+|---|---|---|---|---|
+| **`draft`** | 草稿，Schema 没过 | ❌ | ❌ | ✅ |
+| **`staged`** | 通过 Schema，等待评测 | ❌（生产）/ ✅（测试） | ✅ | ❌ |
+| **`active`** | 当前在线版本 | ✅ | ✅（作为对照） | ❌ |
+| **`deprecated`** | 已被新版本替代 | ❌ | ❌ | ❌ |
+
+> 当前实现：用 `Skill.activeVersion` 一个字段做"指针"，`activeVersion == version` 的就是 `active`，其他都是 `staged` 或 `deprecated`。完整状态字段在 v2 规划里独立成列。
+
+## 转移规则
+
+```
+draft → staged       静态合规扫描通过（无 high severity）
+staged → active      A/B 测试通过 OR 用户手动激活
+active → deprecated  另一个版本被设为 active（自动转）
+任意 → 任意          用户带 reason 手动改（API 路径，需 admin 权限）
+```
+
+## 怎么用
+
+### 通过 UI
+
+进入 **Skills 资产 → 选 Skill → 版本列表**，每行右侧显示当前状态与可执行操作：
+
+<!-- TODO 截图：新拍。版本列表，每行展示 draft/staged/active/deprecated badge + 可执行操作。 -->
+
+### 通过 REST API
+
+```bash
+# 切换 active 版本（最常用）
+curl -X PATCH http://localhost:3000/api/skills/{id} \
+  -H "x-witty-api-key: $API_KEY" \
+  -d '{"activeVersion": 2, "user": "demo@163.com"}'
+
+# 查所有版本状态
+curl http://localhost:3000/api/skills/{id}/versions
+# → [
+#     { "version": 1, "state": "deprecated", "deprecatedAt": "..." },
+#     { "version": 2, "state": "active",     "activatedAt": "..." },
+#     { "version": 3, "state": "staged" }
+#   ]
+```
+
+## 最佳实践
+
+- **draft 阶段先静态合规** —— 没过合规的 Skill 上线 = 灾难
+- **staged 必须跑 A/B** —— 直接从 staged 跳 active 等于跳过质检
+- **deprecate 保留至少 30 天** —— 历史 Trace 还在引用，不要立刻硬删
+- **active 切换 = 版本回滚** —— 没出新版本但回到老版本，也是合理操作
+
+## 常见问题
+
+<details>
+<summary>能跳过 staged 直接 active 吗？</summary>
+
+能（API 允许），但不推荐。staged 是用来跑 A/B / 召回评测的"准生产"阶段，跳过 = 没有质检。
+</details>
+
+<details>
+<summary>deprecated 的版本还能切回 active 吗？</summary>
+
+能。状态机不是单向的，回滚到 deprecated 版本是合法操作（变回 active）。
+</details>
+
+<details>
+<summary>多个用户共享同一个 Skill 时，状态怎么算？</summary>
+
+状态在 `Skill`（user 维度）粒度。同一份 SKILL.md 内容被两个用户 fork 后，是两个独立 Skill 行，状态独立。
+</details>
+
+## 相关文档
+
+- [Versioning](./versioning) — 版本号机制
+- [Canary Release](./canary-release) — 灰度发布（active + staged 并存的流量分配）
+- [Skills Analysis](../analysis/overview) — staged → active 之前的质检

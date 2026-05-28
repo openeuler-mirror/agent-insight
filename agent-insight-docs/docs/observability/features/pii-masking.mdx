@@ -1,0 +1,161 @@
+---
+title: PII 脱敏
+description: 上报前自动屏蔽身份证 / 手机 / 邮箱等敏感信息
+sidebar: observability
+---
+
+# PII 脱敏
+
+## 是什么
+
+在 Trace 上报到平台**之前**，先对 query / interaction / metadata / 附件等字段做敏感信息检测与脱敏，把身份证号、手机号、邮箱、银行卡号等替换成 placeholder（`<ID>` / `<PHONE>` / `<EMAIL>`）。
+
+平台支持三层脱敏：
+
+| 层 | 触发时机 | 适合 |
+|---|---|---|
+| **客户端 SDK** | Agent 内调 LLM 前 | 数据不离开你的进程 |
+| **网关层** | 客户端 → 平台之间的代理 | 已有 PII 网关时复用 |
+| **服务端** | 平台收到后入库前 | 兜底（不推荐当唯一防线） |
+
+> 安全设计文档：[Security & Guardrails · PII Masking](../../security-and-guardrails/pii-masking)。
+
+## 它解决什么问题
+
+LLM Agent 经常处理用户信息，原始 query 可能含 PII：
+
+```
+原 query: "我叫张三，身份证 110101199001011234，手机 13800138000，
+          我的银行卡 6228480402564890018 被冻结了"
+```
+
+直接上报到平台 =
+
+- 平台 DB 里裸存 PII
+- 评测 LLM 调用时 PII 进 prompt → LLM provider 看到
+- 团队 review trace 时所有人看到
+
+PII 脱敏让上报数据**去敏感化**，但保留语义结构。
+
+## 怎么用
+
+### 客户端 SDK 脱敏
+
+```python
+from agent_insight import AgentInsight, PIIMasker
+
+masker = PIIMasker(
+    rules=[
+        {"pattern": r"\b\d{17}[\dXx]\b", "replace": "<ID_CARD>"},
+        {"pattern": r"\b1[3-9]\d{9}\b",  "replace": "<PHONE>"},
+        {"pattern": r"\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\b", "replace": "<EMAIL>"},
+        {"pattern": r"\b\d{16,19}\b", "replace": "<CARD_NUMBER>"},
+    ],
+    apply_to=["query", "interactions[].content", "metadata"],
+)
+
+AgentInsight.init(api_key="ai_xxx", pii_masker=masker)
+```
+
+```typescript
+import { AgentInsight, PIIMasker } from "@agent-insight/sdk";
+
+const masker = new PIIMasker({
+  rules: [
+    { pattern: /\b\d{17}[\dXx]\b/g,  replace: "<ID_CARD>" },
+    { pattern: /\b1[3-9]\d{9}\b/g,   replace: "<PHONE>" },
+    { pattern: /\b[\w.%+-]+@[\w.-]+\b/g, replace: "<EMAIL>" },
+  ],
+  applyTo: ["query", "interactions[].content"],
+});
+
+AgentInsight.init({ apiKey: "ai_xxx", piiMasker: masker });
+```
+
+### 内置规则集
+
+平台自带几个常用规则集，可一键启用：
+
+```python
+AgentInsight.init(
+    api_key="ai_xxx",
+    pii_rules=["china_phone", "china_id", "email", "credit_card", "ipv4"],
+)
+```
+
+完整规则集见 [`docs/security/pii-rules.md`](https://github.com/your-org/agent-insight/blob/main/docs/security/pii-rules.md)（v2 规划）。
+
+### 服务端兜底脱敏
+
+平台环境变量配兜底脱敏：
+
+```bash
+# .env
+PII_MASKING_ENABLED=true
+PII_MASKING_RULES=china_phone,email,credit_card
+PII_MASKING_FAIL_OPEN=false  # 检测失败时是放行还是拒绝
+```
+
+服务端在 [`/api/ingest/upload`](https://github.com/your-org/agent-insight/blob/main/src/app/api/ingest/upload/route.ts) 收到 payload 后，先跑脱敏再入库。
+
+## 关键参数
+
+| 参数 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `rules[]` | object[] | — | 自定义规则数组 |
+| `apply_to[]` | string[] | 全字段 | 限定脱敏字段 |
+| `pii_rules` | string[] | — | 启用的内置规则集 |
+| `mask_attachments` | bool | true | 是否对附件 OCR 文本脱敏 |
+| `fail_open` | bool | false | 规则报错时放行还是拒绝 |
+
+## 内置规则集
+
+| 规则集 | 覆盖 |
+|---|---|
+| `china_phone` | 11 位手机号 |
+| `china_id` | 18 位身份证 |
+| `china_bank_card` | 16-19 位银行卡 |
+| `email` | 标准邮箱 |
+| `credit_card` | Visa / MasterCard / 通用 16 位 |
+| `ipv4` | IPv4 地址 |
+| `ipv6` | IPv6 地址 |
+| `aws_key` | AWS Access Key ID + Secret |
+| `private_key` | PEM 私钥块 |
+| `jwt` | JWT token |
+
+## 最佳实践
+
+- **客户端脱敏优先** —— PII 不离开你的进程是最安全的
+- **fail_open=false 默认** —— 规则报错就拒绝上报，宁可丢数据也别泄密
+- **保留语义结构** —— 用 `<PHONE>` 而不是删掉，LLM 重新跑评估时仍能识别"这里原本是手机号"
+- **多层防线** —— 客户端 + 服务端兜底，单点失效不致命
+- **定期 review 脱敏样本** —— 每周抽查 100 条 Trace 看是否真脱了
+
+## 常见问题
+
+<details>
+<summary>脱敏会破坏 Trace 的可调试性吗？</summary>
+
+会一些。`<ID_CARD>` 看不到原值，复盘失败用例时不知道身份证号是哪个。**但这是必要代价**。如果需要原值，业务侧自己维护"PII → Trace" 的反查（在 Agent Insight 之外）。
+</details>
+
+<details>
+<summary>正则匹配会有误伤吗？</summary>
+
+会。比如 17 位订单号可能被身份证规则匹中。建议：
+1. 用更精确的规则（带前后文 anchor）
+2. 在 `apply_to` 限定具体字段（不要全字段扫）
+3. 定期 review 误伤样本
+</details>
+
+<details>
+<summary>能用 NER 模型代替正则吗？</summary>
+
+可以。SDK 允许自定义 `mask_fn(text) → masked_text`，可以接 spaCy / Hugging Face NER 模型。但 NER 模型推理慢，会拖慢上报。混合策略最好：正则做 fast path，NER 兜底。
+</details>
+
+## 相关文档
+
+- [Security & Guardrails · PII Masking](../../security-and-guardrails/pii-masking) — 完整安全设计
+- [Security & Guardrails · Data Handling](../../security-and-guardrails/data-handling)
+- [Compliance](../../security-and-guardrails/compliance) — GDPR / HIPAA 等合规

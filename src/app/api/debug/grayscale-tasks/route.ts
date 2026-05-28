@@ -99,6 +99,14 @@ function safeParse(value: string | null | undefined): JsonRecord {
     }
 }
 
+function withDefaultConfig(config: JsonRecord): JsonRecord {
+    return {
+        ...config,
+        autoEval: true,
+        recordTriggerDetails: true,
+    };
+}
+
 type BoundSkill = { id: string; name: string };
 type BoundVersion = { id: string; version: number };
 
@@ -134,7 +142,7 @@ export async function GET(req: NextRequest) {
             take: 50,
         });
         const parsed = tasks.map((t) => {
-            const configJson = safeParse(t.configJson);
+            const configJson = withDefaultConfig(safeParse(t.configJson));
             const caseStatesJson = safeParse(t.caseStatesJson);
             const storeKey = `${user}:${t.id}`;
             const activeRun = activeRuns().get(storeKey) || null;
@@ -205,13 +213,19 @@ export async function POST(req: NextRequest) {
                 skillVersion: version.version,
                 skillVersionId: version.id,
                 taskName: taskName.trim(),
-                configJson: JSON.stringify({ skillId: skill.id, versionAId: '__NONE__', versionBId: version.id }),
+                configJson: JSON.stringify({
+                    skillId: skill.id,
+                    versionAId: '__NONE__',
+                    versionBId: version.id,
+                    autoEval: true,
+                    recordTriggerDetails: true,
+                }),
             },
         });
         return NextResponse.json({
             ...task,
             configJson: {
-                ...safeParse(task.configJson),
+                ...withDefaultConfig(safeParse(task.configJson)),
                 skillId: task.skillId,
                 versionBId: task.skillVersionId,
             },

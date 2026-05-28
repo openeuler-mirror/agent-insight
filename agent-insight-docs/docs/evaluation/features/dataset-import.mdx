@@ -1,0 +1,202 @@
+---
+title: Dataset Import
+description: 从 Trace / CSV / JSONL / PDF 文档导入评测集
+sidebar: evaluation
+---
+
+# Dataset Import
+
+## 是什么
+
+把外部数据源（CSV、JSONL、PDF/Markdown 文档、历史 Trace）一键转成 `AgentEvalDataset` 的 cases。平台自动用 LLM 抽取 `standardAnswer` / `keyActions` / `rootCauses`，省得手工录入。
+
+底层入口：
+
+- `POST /api/eval/config/create`（支持 multipart 上传 PDF / Markdown，自动 LLM 抽取）
+- `POST /api/agent-datasets`（批量 JSON 导入）
+- `POST /api/eval/config/reparse`（重新解析已有 case）
+
+## 它解决什么问题
+
+手工录 case 是评测的最大瓶颈：
+
+| 手工录 | 批量导入 |
+|---|---|
+| 1 个 case 1-5 分钟 | 100 个 case 几秒 |
+| 容易漏字段 | LLM 自动抽 standardAnswer / keyActions |
+| 不知道哪些场景值得评 | 直接挑成功 Trace 重放 |
+| 维护成本高 | reparse 一键重抽 |
+
+## 三种导入路径
+
+### 路径 A · 从 Trace 重放
+
+把过去 N 天调用过 Skill 的真实 Trace 抽出来当 case：
+
+```bash
+curl -X POST http://localhost:3000/api/agent-datasets/import-from-traces \
+  -H "x-witty-api-key: $API_KEY" \
+  -d '{
+    "user": "demo@163.com",
+    "datasetName": "production-replay-2026q1",
+    "traceQuery": {
+      "skill": "pdf-extractor",
+      "timeRange": "7d",
+      "minAnswerScore": 0.8
+    },
+    "extractFields": ["query", "standardAnswer", "keyActions"]
+  }'
+```
+
+适合：**生产数据回归** —— 拿真实成功用例当基准，保证新版本不退化。
+
+### 路径 B · 从文档抽取
+
+支持 PDF / Markdown / TXT，平台用 [`scripts/parse_doc.py`](https://github.com/your-org/agent-insight/blob/main/skills/skill-generator/scripts/parse_doc.py) 解析为文本，再用 LLM 抽 case：
+
+```bash
+curl -X POST http://localhost:3000/api/eval/config/create \
+  -H "x-witty-api-key: $API_KEY" \
+  -F "document=@./fault-cases.pdf" \
+  -F "user=demo@163.com" \
+  -F "skill=fault-diagnosis" \
+  -F "datasetType=combined"
+# 响应 → { id, query, dataset_type, skill, parse_status: "pending" }
+```
+
+`parse_status` 异步走：`pending` → `parsed` → 完成。轮询：
+
+```bash
+curl "http://localhost:3000/api/eval/config/status?id={config_id}"
+```
+
+适合：**已有故障案例集 / 操作手册** 转成评测集。
+
+### 路径 C · 批量 JSON / CSV
+
+把数据准备成 JSON 直接 POST：
+
+```bash
+curl -X POST http://localhost:3000/api/agent-datasets \
+  -H "x-witty-api-key: $API_KEY" \
+  -d @./cases.json
+```
+
+CSV 先转 JSON 再上：
+
+```python
+import csv, json, requests
+
+cases = []
+with open("cases.csv") as f:
+    reader = csv.DictReader(f)
+    for row in reader:
+        cases.append({
+            "id": row["id"],
+            "query": row["query"],
+            "standardAnswer": row["answer"],
+            "keyActions": row["actions"].split("|"),
+        })
+
+requests.post(
+    "http://localhost:3000/api/agent-datasets",
+    headers={"x-witty-api-key": "ai_xxx"},
+    json={"user": "demo@163.com", "name": "ds_csv_import", "cases": cases}
+)
+```
+
+## 关键参数
+
+### `/api/eval/config/create`
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `query` | string | ✅ | 用户输入 |
+| `standardAnswer` | string | ❌ | 期望回答（不传则 LLM 抽） |
+| `expectedSkills` | string[] | ❌ | 期望触发的 Skill 列表 |
+| `document` | file | ❌ | PDF / MD / TXT 上传 |
+| `datasetType` | enum | ✅ | `combined` / `routing` / `outcome` |
+
+### `/api/eval/config/reparse`
+
+让平台重新跑 LLM 抽取（业务规则改了 / 模型升级了）：
+
+```bash
+curl -X POST http://localhost:3000/api/eval/config/reparse \
+  -H "x-witty-api-key: $API_KEY" \
+  -d '{"id": "case_xxx", "user": "demo@163.com"}'
+```
+
+### `/api/eval/config/backfill-routing`
+
+对路由类数据集批量补语义路由签名：
+
+```bash
+curl -X POST http://localhost:3000/api/eval/config/backfill-routing \
+  -H "x-witty-api-key: $API_KEY" \
+  -d '{"user": "demo@163.com", "limit": 100, "concurrency": 5}'
+```
+
+## 异步抽取流程
+
+PDF / Markdown 导入是异步的：
+
+```
+1. POST /api/eval/config/create + document=@file.pdf
+   ↓ 返回 { id, parse_status: "pending" }
+
+2. 后台
+   ↓ parse_doc.py 抽文本
+   ↓ LLM 抽 standardAnswer / keyActions / rootCauses
+   ↓ 写入 Config.parseStatus = "parsed"
+
+3. 前端轮询 GET /api/eval/config/status?id=xxx
+   ↓ parse_status 变 "parsed" → 数据可用
+```
+
+UI 上录入页会显示抽取进度（typically 5-30 秒）。
+
+## 最佳实践
+
+- **从 Trace 重放是最强 ROI** —— 真实数据 + 自动 ground truth
+- **document 路径配 model_config_id** —— 长文档抽取要好模型（Claude Sonnet 4 起步）
+- **批量导入分批** —— 1000+ case 一次 POST 容易超时，按 100 一批
+- **跑完 reparse 验证** —— 抽完别立即用，先看几条质量
+- **路由数据集走 backfill-routing** —— 单独的 `/api/eval/config/backfill-routing` 批量补签名
+
+## 常见问题
+
+<details>
+<summary>导入失败怎么排查？</summary>
+
+按错误码：
+- 400 → JSON 格式错（漏字段 / 类型不对）
+- 409 → 数据集 name 撞了
+- 500 → 看 server.log（通常是 LLM 抽取失败）
+
+PDF 抽取异常通常是 `parse_doc.py` 依赖缺失，确认 `uv pip install -r skills/skill-generator/scripts/requirements.txt`。
+</details>
+
+<details>
+<summary>LLM 抽出来的 standardAnswer 不对怎么办？</summary>
+
+走 reparse 重抽：
+
+```bash
+curl -X POST /api/eval/config/reparse -d '{"id": "case_xxx"}'
+```
+
+或者在 UI 上手动编辑（数据项录入页直接覆盖）。
+</details>
+
+<details>
+<summary>CSV / JSONL 有官方 importer 吗？</summary>
+
+当前没有命令行 importer，用 Python / Node 自己跑（示例见上文 "路径 C"）。社区里有第三方 importer，详见 [GitHub Discussions](https://github.com/your-org/agent-insight/discussions)。
+</details>
+
+## 相关文档
+
+- [Datasets](./datasets) — 数据集管理
+- [Skills · From Traces](../../skills/generation/from-traces) — 相似的 Trace 反推机制
+- [Core Concepts](../core-concepts)
