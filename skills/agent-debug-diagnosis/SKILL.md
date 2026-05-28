@@ -69,7 +69,8 @@ python3 .agent-debug-diagnosis/scripts/agentdebug_validate.py \
 - 最终回答只能是一个 JSON 对象，不能有 Markdown 代码块，不能有额外解释。
 - 所有自然语言报告字段必须用中文；枚举值保留英文。
 - Action 必须来自真实工具调用或明确动作标签，不能由 LLM 编造。
-- 用户可见的 `step` 编号必须使用输入中的 `traceStepIndex`，与原始故障类报告保持一致；内部连续诊断序号只能放在 `diagnosticStep`。
+- 用户界面永远关联左侧真实 trace 节点；不要把内部诊断 step/turn 当作用户可见位置。
+- `phase1Grid`、`issues`、`rootCause`、`cascadingChain` 必须尽量携带 `anchorId`、`traceStepIndex`、`traceNodeLabel`、`traceNodeKind`。`diagnosticStep` 仅供内部排查，不能写进自然语言摘要。
 - 不使用候选窗口，不要只分析局部 trace；必须对输入文件里的全部 step 执行拆分和 Phase 1 检测。
 - System 是外部环境证据，不属于四个认知模块，但可以参与根因归因。
 - Memory、Reflection、Planning、Action 都允许留白。

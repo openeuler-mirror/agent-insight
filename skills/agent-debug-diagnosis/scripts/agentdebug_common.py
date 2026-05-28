@@ -80,9 +80,14 @@ def phase1_cell(
     reasoning: str,
     confidence: float,
     anchor_id: Optional[str] = None,
+    diagnostic_step: Optional[int] = None,
+    trace_step_index: Optional[int] = None,
+    trace_node_label: Optional[str] = None,
+    trace_node_kind: Optional[str] = None,
 ) -> Dict[str, Any]:
+    node_index = trace_step_index or step
     item: Dict[str, Any] = {
-        "step": step,
+        "step": node_index,
         "module": module,
         "errorDetected": True,
         "errorType": error_type,
@@ -90,15 +95,22 @@ def phase1_cell(
         "evidence": truncate(evidence, 900),
         "reasoning": truncate(reasoning, 900),
         "confidence": round(max(0.0, min(1.0, float(confidence))), 2),
+        "traceStepIndex": node_index,
     }
+    if diagnostic_step:
+        item["diagnosticStep"] = diagnostic_step
     if anchor_id:
         item["anchorId"] = anchor_id
+    if trace_node_label:
+        item["traceNodeLabel"] = trace_node_label
+    if trace_node_kind:
+        item["traceNodeKind"] = trace_node_kind
     return item
 
 
 def issue_from_cell(cell: Dict[str, Any]) -> Dict[str, Any]:
-    return {
-        "id": f"S{cell.get('step')}-{cell.get('module')}-{cell.get('errorType')}",
+    item = {
+        "id": f"N{cell.get('traceStepIndex') or cell.get('step')}-{cell.get('module')}-{cell.get('errorType')}",
         "step": cell.get("step"),
         "module": cell.get("module"),
         "errorType": cell.get("errorType"),
@@ -106,8 +118,11 @@ def issue_from_cell(cell: Dict[str, Any]) -> Dict[str, Any]:
         "evidence": cell.get("evidence", ""),
         "reasoning": cell.get("reasoning", ""),
         "confidence": cell.get("confidence", 0.5),
-        **({"anchorId": cell["anchorId"]} if cell.get("anchorId") else {}),
     }
+    for key in ("anchorId", "diagnosticStep", "traceStepIndex", "traceNodeLabel", "traceNodeKind"):
+        if cell.get(key):
+            item[key] = cell[key]
+    return item
 
 
 def tool_command(tool: Dict[str, Any]) -> str:
@@ -148,4 +163,3 @@ def has_dangerous_command(tools: Iterable[Dict[str, Any]]) -> Optional[Dict[str,
 def split_sentences(value: str) -> List[str]:
     raw = re.split(r"(?<=[。！？.!?])\s+|\n+", value or "")
     return [x.strip() for x in raw if x and x.strip()]
-

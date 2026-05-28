@@ -30,10 +30,11 @@ import {
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { AppTopBar } from '@/components/shell/AppTopBar';
-import { AgentDebugCard } from '@/components/observe/AgentDebugCard';
+import { AgentDebugCard, type TraceExplicitError } from '@/components/observe/AgentDebugCard';
 import { useAuth } from '@/lib/auth/auth-context';
 import { useLocale } from '@/lib/client/locale-context';
 import { apiFetch } from '@/lib/client/api';
+import { ExpandableText } from '@/components/text/ExpandableText';
 import { Term } from '@/components/text/Term';
 import { formatDuration, type AgentEvent, type RawInteraction } from '@/lib/engine/observability/agent-trace';
 import { buildFaultPathSteps, type FailureTraceAnchor } from '@/lib/engine/observability/fault-path';
@@ -103,7 +104,7 @@ interface SessionData {
     error?: string;
 }
 
-type FaultKind = 'original' | 'deviation';
+type FaultKind = 'original';
 type TraceStatus = 'ok' | 'error' | 'skipped' | 'running';
 
 interface TraceNodeItem {
@@ -625,6 +626,7 @@ function FaultDetailView({ execution, locale, user, onBack }: { execution: Execu
     // ── Computed ──
     const faultKinds = useMemo(() => classifyFaultKinds(execution), [execution]);
     const diagnosticItems = useMemo(() => buildDiagnosticItems(execution, locale), [execution, locale]);
+    const traceExplicitErrors = useMemo(() => buildTraceExplicitErrors(diagnosticItems), [diagnosticItems]);
     const traceNodes = useMemo(() => buildFaultPath(execution, session?.interactions || [], locale, diagnosticItems), [execution, session?.interactions, locale, diagnosticItems]);
     const faultSummary = useMemo(() => summarizeFaultPath(traceNodes, execution), [traceNodes, execution]);
     const skillCount = (execution.invoked_skills?.length ?? 0) || (execution.skills?.length ?? 0) || (execution.skill ? 1 : 0);
@@ -646,12 +648,6 @@ function FaultDetailView({ execution, locale, user, onBack }: { execution: Execu
         const f = mentionFilter.toLowerCase();
         return traceNodes.filter(n => !f || n.name.toLowerCase().includes(f) || (n.kind || '').includes(f));
     }, [traceNodes, mentionFilter]);
-
-    // Only show deviation fault badge when original errors also exist
-    const displayFaultKinds = useMemo(() =>
-        faultKinds.includes('original') ? faultKinds : faultKinds.filter(k => k !== 'deviation'),
-        [faultKinds],
-    );
 
     // ── Actions ──
     const quoteNode = useCallback((node: TraceNodeItem) => {
@@ -818,7 +814,7 @@ function FaultDetailView({ execution, locale, user, onBack }: { execution: Execu
                         {(execution.agentName || execution.agent) && (
                             <span style={{ fontSize: 12, color: 'var(--foreground-muted)', fontWeight: 600 }}>· {execution.agentName || execution.agent}</span>
                         )}
-                        {displayFaultKinds.map(k => <FaultKindBadge key={k} kind={k} locale={locale} />)}
+                        {faultKinds.map(k => <FaultKindBadge key={k} locale={locale} />)}
                     </div>
                 </div>
                 <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 0 }}>
@@ -973,7 +969,7 @@ function FaultDetailView({ execution, locale, user, onBack }: { execution: Execu
                             <div style={{ fontSize: 10.5, color: 'var(--foreground-muted)', letterSpacing: '.06em', textTransform: 'uppercase', marginTop: 1 }}>FAULT-DIAGNOSIS-AGENT</div>
                         </div>
                         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                            {diagnosticItems.length > 0 && <FaultFilterPill active label={locale === 'zh' ? '故障条目已载入' : 'Faults loaded'} count={diagnosticItems.length} />}
+                            {diagnosticItems.length > 0 && <FaultFilterPill active label={locale === 'zh' ? '明确报错已载入' : 'Trace errors loaded'} count={diagnosticItems.length} />}
                             <FaultFilterPill label={locale === 'zh' ? `${skillCount} Skill` : `${skillCount} skills`} />
                             <div style={{ width: 1, height: 16, background: 'var(--border)', flexShrink: 0 }} />
                             <button
@@ -1085,9 +1081,9 @@ function FaultDetailView({ execution, locale, user, onBack }: { execution: Execu
                             user={user || ''}
                             locale={locale}
                             suggested={agentDebugSuggested}
+                            traceExplicitErrors={traceExplicitErrors}
                             onNodeRefClick={scrollToNode}
                         />
-                        <InitialDiagnosisBubble execution={execution} locale={locale} faultKinds={displayFaultKinds} diagnosticItems={diagnosticItems} traceNodes={traceNodes} onFaultSelect={handleFaultSelect} />
                         {messages.map(msg => <ChatBubble key={msg.id} message={msg} onNodeRefClick={scrollToNode} locale={locale} nodeMap={treeNodeMap} />)}
                         {messages.length === 0 && (
                             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', margin: '8px 0 0 40px' }}>
@@ -1181,152 +1177,6 @@ function FaultDetailView({ execution, locale, user, onBack }: { execution: Execu
     );
 }
 
-function InitialDiagnosisBubble({
-    execution,
-    locale,
-    faultKinds,
-    diagnosticItems,
-    traceNodes,
-    onFaultSelect,
-}: {
-    execution: Execution;
-    locale: string;
-    faultKinds: FaultKind[];
-    diagnosticItems: DiagnosticItem[];
-    traceNodes: TraceNodeItem[];
-    onFaultSelect: (ref: number) => void;
-}) {
-    const originalItems = diagnosticItems.filter(item => item.diagnostic_kind === 'original');
-    const deviationItems = diagnosticItems.filter(item => item.diagnostic_kind === 'deviation');
-    return (
-        <div style={{ display: 'flex', gap: 10, marginBottom: 14 }}>
-            <Avatar role="assistant" />
-            <div style={{ maxWidth: 820 }}>
-                <MessageMeta label="Insight AI" />
-                <div style={bubbleStyle('assistant')}>
-                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
-                        {faultKinds.map(kind => <FaultKindBadge key={kind} kind={kind} locale={locale} />)}
-                    </div>
-                    <div style={{ fontSize: 13, color: 'var(--foreground)', lineHeight: 1.65 }}>
-                        {locale === 'zh'
-                            ? '已从当前记录载入异常详情。下面是已有评测和链路数据的结构化摘要，这一步未额外调用 Agent。'
-                            : 'Loaded anomaly details from this record. This summary uses existing data only and did not call an agent.'}
-                    </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8, marginTop: 12 }}>
-                        <InlineFact label={locale === 'zh' ? '答案评分' : 'Score'} value={execution.answer_score == null ? '-' : String(execution.answer_score)} />
-                        <InlineFact label={locale === 'zh' ? 'Token' : 'Tokens'} value={execution.tokens?.toLocaleString() || '-'} />
-                        <InlineFact label={locale === 'zh' ? '耗时' : 'Duration'} value={fmtSec(toDisplayLatencyMs(execution.latency || 0, execution.framework))} />
-                    </div>
-
-                    {originalItems.length > 0 && (
-                        <div style={diagnosisBoxStyle('error')}>
-                            <div style={diagnosisTitleStyle}>
-                                <AlertTriangle size={14} />
-                                {locale === 'zh' ? `原始错误类故障 (${originalItems.length})` : `Original errors (${originalItems.length})`}
-                            </div>
-                            {originalItems.map((f, index) => (
-                                <div key={index} style={{ paddingTop: index ? 10 : 0, marginTop: index ? 10 : 0, borderTop: index ? '1px solid var(--border)' : 'none' }}>
-                                    {(() => {
-                                        const faultRef = index + 1;
-                                        const node = traceNodes.find(n => n.faultRefs?.includes(faultRef));
-                                        return (
-                                            <>
-                                                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => onFaultSelect(faultRef)}
-                                                        style={{
-                                                            border: '1px solid var(--error-subtle-border)',
-                                                            background: 'var(--error-subtle)',
-                                                            color: 'var(--error)',
-                                                            borderRadius: 999,
-                                                            padding: '2px 7px',
-                                                            fontSize: 10.5,
-                                                            fontWeight: 750,
-                                                            cursor: 'pointer',
-                                                        }}
-                                                    >
-                                                        #{faultRef}
-                                                    </button>
-                                                    <div style={{ fontWeight: 650, color: 'var(--error)' }}>{f.failure_type || (locale === 'zh' ? '执行异常' : 'Execution error')}</div>
-                                                </div>
-                                                {node ? (
-                                                    <div style={{ marginTop: 6, display: 'grid', gap: 4 }}>
-                                                        <div style={{ fontWeight: 650, color: 'var(--primary)' }}>
-                                                            {locale === 'zh' ? '发生步骤：' : 'Step: '}
-                                                            {locale === 'zh' ? `第${node.step}步 · ${node.name}` : `Step ${node.step} · ${node.name}`}
-                                                        </div>
-                                                        <div style={mutedLineStyle}>
-                                                            {locale === 'zh' ? '节点摘要：' : 'Node: '}
-                                                            {node.meta || '-'}
-                                                        </div>
-                                                        {node.tag && (
-                                                            <div style={mutedLineStyle}>
-                                                                {locale === 'zh' ? '故障标记：' : 'Fault marker: '}
-                                                                <span style={{ color: 'var(--error)', fontWeight: 700 }}>{node.tag}</span>
-                                                            </div>
-                                                        )}
-                                                        {node.matchReason && (
-                                                            <div style={mutedLineStyle}>
-                                                                {locale === 'zh' ? '匹配依据：' : 'Matched by: '}
-                                                                {node.matchReason}
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                ) : f.step ? (
-                                                    <div style={{ marginTop: 3, fontWeight: 600, color: 'var(--primary)' }}>
-                                                        {locale === 'zh' ? '原始定位：' : 'Original step: '}{f.step}
-                                                    </div>
-                                                ) : null}
-                                            </>
-                                        );
-                                    })()}
-                                    <div style={{ marginTop: 3 }}>{f.description || '-'}</div>
-                                    {f.context && <div style={mutedLineStyle}>{locale === 'zh' ? '原报错：' : 'Original error: '}{f.context}</div>}
-                                    {f.diagnostic_source === 'ingest' && (
-                                        <div style={mutedLineStyle}>{locale === 'zh' ? '来源：上传/采集阶段自带的工具错误计数' : 'Source: uploaded trace tool error count'}</div>
-                                    )}
-                                    {f.recovery && <div style={{ ...mutedLineStyle, color: 'var(--success)' }}>{locale === 'zh' ? '建议：' : 'Recovery: '}{f.recovery}</div>}
-                                </div>
-                            ))}
-                        </div>
-                    )}
-
-                    {deviationItems.length > 0 && (
-                        <div style={diagnosisBoxStyle('deviation')}>
-                            <div style={diagnosisTitleStyle}>
-                                <AlertTriangle size={14} />
-                                {locale === 'zh' ? `效果偏差类故障 (${deviationItems.length})` : `Deviation faults (${deviationItems.length})`}
-                            </div>
-                            {deviationItems.map((item, index) => (
-                                <div key={index} style={{ paddingTop: index ? 10 : 0, marginTop: index ? 10 : 0, borderTop: index ? '1px solid var(--border)' : 'none' }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                                        <span style={{
-                                            border: '1px solid var(--primary-subtle-border)',
-                                            background: 'var(--primary-subtle)',
-                                            color: 'var(--primary)',
-                                            borderRadius: 999,
-                                            padding: '2px 7px',
-                                            fontSize: 10.5,
-                                            fontWeight: 750,
-                                        }}>
-                                            #{originalItems.length + index + 1}
-                                        </span>
-                                        <div style={{ fontWeight: 650, color: 'var(--primary)' }}>{item.failure_type}</div>
-                                    </div>
-                                    <div style={{ marginTop: 3 }}>{item.description}</div>
-                                    {item.context && <div style={mutedLineStyle}>{locale === 'zh' ? '原报错：' : 'Original error: '}{item.context}</div>}
-                                    {item.recovery && <div style={{ ...mutedLineStyle, color: 'var(--success)' }}>{locale === 'zh' ? '建议：' : 'Recovery: '}{item.recovery}</div>}
-                                </div>
-                            ))}
-                        </div>
-                    )}
-                </div>
-            </div>
-        </div>
-    );
-}
-
 function ChatBubble({
     message,
     onNodeRefClick,
@@ -1405,24 +1255,23 @@ function buildDiagnosticItems(execution: Execution, locale: string): DiagnosticI
         });
     }
 
-    const deviations: DiagnosticItem[] = [];
-    if (execution.is_answer_correct === false) {
-        deviations.push({
-            failure_type: locale === 'zh' ? '效果偏差' : 'Outcome deviation',
-            description: locale === 'zh'
-                ? '最终答案未通过评测或未设置评测数据，属于无明显执行报错但结果偏离预期的故障。'
-                : 'The final answer failed evaluation, indicating an outcome deviation without a required runtime error.',
-            context: execution.judgment_reason || (execution.answer_score == null ? '' : `score=${execution.answer_score}`),
-            recovery: locale === 'zh'
-                ? '建议结合评测理由、标准答案和 Skill 执行路径判断是 Skill 定义问题、路由问题还是回答生成问题。'
-                : 'Review the evaluation reason, expected answer, and skill path to separate skill definition, routing, and generation issues.',
-            diagnostic_kind: 'deviation',
-            diagnostic_source: 'evaluation',
-            synthetic: true,
-        });
-    }
+    return original;
+}
 
-    return [...original, ...deviations];
+function buildTraceExplicitErrors(items: DiagnosticItem[]): TraceExplicitError[] {
+    return items
+        .filter(item => item.diagnostic_kind === 'original')
+        .map((item, index) => ({
+            id: item.trace_anchor?.step_id || item.anchor_step_id || `trace-explicit-error-${index + 1}`,
+            title: item.failure_type || 'Trace error',
+            description: item.description,
+            context: item.context || item.attribution_reason || item.step,
+            recovery: item.recovery,
+            anchorId: item.trace_anchor?.step_id || item.anchor_step_id,
+            traceStepIndex: item.trace_anchor?.step_index,
+            traceNodeLabel: item.trace_anchor?.display_name,
+            traceNodeKind: item.trace_anchor?.kind,
+        }));
 }
 
 function isToolErrorCovered(items: DiagnosticItem[]): boolean {
@@ -2089,9 +1938,6 @@ function classifyFaultKinds(execution: Execution): FaultKind[] {
     if ((execution.failures?.length || 0) > 0 || (execution.tool_call_error_count || 0) > 0) {
         kinds.push('original');
     }
-    if (execution.is_answer_correct === false) {
-        kinds.push('deviation');
-    }
     return kinds;
 }
 
@@ -2151,8 +1997,7 @@ async function consumeSse(response: Response, handlers: { text?: (data: any) => 
     }
 }
 
-function FaultKindBadge({ kind, locale }: { kind: FaultKind; locale: string }) {
-    const isDeviation = kind === 'deviation';
+function FaultKindBadge({ locale }: { locale: string }) {
     return (
         <span
             style={{
@@ -2163,15 +2008,13 @@ function FaultKindBadge({ kind, locale }: { kind: FaultKind; locale: string }) {
                 borderRadius: 999,
                 fontSize: 10.5,
                 fontWeight: 650,
-                background: isDeviation ? 'var(--primary-subtle)' : 'var(--error-subtle)',
-                color: isDeviation ? 'var(--primary)' : 'var(--error)',
-                border: `1px solid ${isDeviation ? 'var(--primary-subtle-border)' : 'var(--error-subtle-border)'}`,
+                background: 'var(--error-subtle)',
+                color: 'var(--error)',
+                border: '1px solid var(--error-subtle-border)',
             }}
         >
             <span style={{ width: 6, height: 6, borderRadius: 999, background: 'currentColor' }} />
-            {isDeviation
-                ? (locale === 'zh' ? '效果偏差类故障' : 'Deviation fault')
-                : (locale === 'zh' ? '原始错误类故障' : 'Original error')}
+            {locale === 'zh' ? 'Trace 明确报错' : 'Trace error'}
         </span>
     );
 }
@@ -2529,36 +2372,6 @@ function safeTime(value?: string): string {
     if (!value) return '-';
     const date = new Date(value);
     return Number.isNaN(date.getTime()) ? '-' : date.toLocaleTimeString();
-}
-
-const mutedLineStyle = {
-    marginTop: 6,
-    fontSize: 11.5,
-    color: 'var(--foreground-muted)',
-    lineHeight: 1.55,
-} as const;
-
-const diagnosisTitleStyle = {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 6,
-    fontSize: 12,
-    fontWeight: 750,
-    marginBottom: 8,
-} as const;
-
-function diagnosisBoxStyle(kind: 'error' | 'deviation') {
-    const isError = kind === 'error';
-    return {
-        marginTop: 12,
-        padding: '10px 11px',
-        borderRadius: 8,
-        border: `1px solid ${isError ? 'var(--error-subtle-border)' : 'var(--primary-subtle-border)'}`,
-        background: isError ? 'var(--error-subtle)' : 'var(--primary-subtle)',
-        color: 'var(--foreground)',
-        fontSize: 12,
-        lineHeight: 1.6,
-    } as const;
 }
 
 function bubbleStyle(role: 'assistant' | 'user') {
