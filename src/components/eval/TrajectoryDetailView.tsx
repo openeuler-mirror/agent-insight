@@ -319,13 +319,14 @@ function deriveResultEvaluationPayload(
     const findings = directFindings.length > 0 ? directFindings : fallbackFindings;
     const hasStructuredFindings = Array.isArray(directFindingsRaw) || Array.isArray(fallbackFindingsRaw);
 
+    const errorMessage = typeof root?.resultEvaluationError === 'string' ? root.resultEvaluationError.trim() : '';
     const scoreCandidates = [
         typeof root?.resultEvaluation?.score === 'number' ? root.resultEvaluation.score : null,
         typeof root?.score === 'number' ? root.score : null,
-        execution?.answer_score,
-        typeof parsedFromReason?.score === 'number' ? parsedFromReason.score : null,
     ];
-    const score = scoreCandidates.find((item): item is number => typeof item === 'number' && !Number.isNaN(item)) ?? null;
+    const score = errorMessage
+        ? null
+        : scoreCandidates.find((item): item is number => typeof item === 'number' && !Number.isNaN(item)) ?? null;
 
     const reasonCandidates = [
         typeof root?.resultEvaluation?.reason === 'string' ? root.resultEvaluation.reason : '',
@@ -336,7 +337,6 @@ function deriveResultEvaluationPayload(
         typeof parsedFromReason?.reason === 'string' ? parsedFromReason.reason : '',
     ];
     const reason = stripEmbeddedKeyPoints(String(reasonCandidates.find(item => String(item || '').trim()) || ''));
-    const errorMessage = typeof root?.resultEvaluationError === 'string' ? root.resultEvaluationError.trim() : '';
     const actualOutput = String(
         typeof root?.resultActualOutput === 'string' ? root.resultActualOutput : '',
     ).trim();
@@ -438,6 +438,7 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
     const params = useSearchParams();
     const datasetId = params?.get('datasetId') || '';
     const runId = params?.get('runId') || '';
+    const resultId = params?.get('resultId') || '';
     const autoWatchOnly = params?.get('autoWatchOnly') === '1' || params?.get('autoWatchOnly') === 'true';
 
     const [exec, setExec] = useState<ExecutionRecord | null>(null);
@@ -476,6 +477,15 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
         let stopped = false;
         const tick = async () => {
             try {
+                if (resultId) {
+                    const det = await apiFetch(
+                        `/api/eval/trajectory/results/${encodeURIComponent(resultId)}?user=${encodeURIComponent(user)}`,
+                    ).then(r => r.json()).catch(() => null);
+                    if (!stopped) {
+                        setResult(det || null);
+                    }
+                    return;
+                }
                 const qs = new URLSearchParams({
                     user,
                     taskId: traceId,
@@ -513,7 +523,7 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
             stopped = true;
             clearInterval(t);
         };
-    }, [user, traceId, datasetId, runId]);
+    }, [user, traceId, datasetId, runId, resultId]);
 
     const effectiveDatasetId = datasetId || result?.datasetId || '';
 
@@ -590,11 +600,18 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
         if (!isEvaluationTerminal(result?.status)) return null;
         if (noEvaluableCase) return null;
         const traj = hasTraceEvaluation ? result?.trajectoryScore : null;
-        const r = hasResultEvaluation ? exec?.answer_score : null;
+        const r = hasResultEvaluation
+            ? (resultEvaluationSummary.score ?? null)
+            : null;
         const c = hasCustomEvaluation ? customEvaluationScore : null;
+
+        if (hasTraceEvaluation && (traj == null || !Number.isFinite(traj))) return null;
+        if (hasResultEvaluation && (r == null || !Number.isFinite(r))) return null;
+        if (hasCustomEvaluation && (c == null || !Number.isFinite(c))) return null;
+
         const parts = [traj, r, c].filter((item): item is number => typeof item === 'number' && Number.isFinite(item));
         return parts.length > 0 ? parts.reduce((a, b) => a + b, 0) / parts.length : null;
-    }, [result, exec, noEvaluableCase, hasTraceEvaluation, hasResultEvaluation, hasCustomEvaluation, customEvaluationScore]);
+    }, [result, noEvaluableCase, hasTraceEvaluation, hasResultEvaluation, hasCustomEvaluation, customEvaluationScore, resultEvaluationSummary.score]);
 
     const overallText =
         noEvaluableCase
@@ -942,6 +959,7 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
                                         const qs: string[] = [];
                                         if (runId) qs.push(`runId=${encodeURIComponent(runId)}`);
                                         if (effectiveDatasetId) qs.push(`datasetId=${encodeURIComponent(effectiveDatasetId)}`);
+                                        if (resultId) qs.push(`resultId=${encodeURIComponent(resultId)}`);
                                         if (autoWatchOnly) qs.push('autoWatchOnly=1');
                                         const suffix = qs.length > 0 ? `?${qs.join('&')}` : '';
                                         router.push(`/eval/trajectory/${encodeURIComponent(traceId)}/trace${suffix}`);
