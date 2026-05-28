@@ -11,6 +11,7 @@ import {
     buildGrayscaleTraceCase,
     findLatestRunnableRunIndex,
 } from '@/lib/skill-analysis/grayscale-utils';
+import { NewEvaluationBatchDialog, type NewBatchCreated } from '@/components/eval/NewEvaluationBatchDialog';
 import '../debug.css';
 import '../skill-analysis.css';
 
@@ -89,6 +90,14 @@ interface GrayscaleTask {
         traceTimeRange?: '1d' | '3d' | '7d';
         selectedTraceAId?: string;
         selectedTraceBId?: string;
+        // 关联到「评测执行」页的批次 ID (evaluatorRunId)。任务级配置: 用户通过
+        // 配置卡顶部「+ 新增评测任务」对话框创建一个空批次后, 把 ID 写回这里。
+        // 后续启动评测时 (action='start' / 'evaluate' / retry-eval) 透传给
+        // /api/eval/trajectory/run 作 evaluatorRunId append, 让所有评测落到同一批次。
+        evaluationBatchId?: string;
+        // 同步存批次的可读名 + 评估器列表 (冗余存储, 用于 UI 显示, 避免每次查 /eval 接口)
+        evaluationBatchTitle?: string;
+        evaluationBatchEvaluators?: string[];
     };
     caseStatesJson?: Record<string, { a: PerVersionState; b: PerVersionState }>;
     activeRun?: {
@@ -625,10 +634,53 @@ export function GrayscaleEvaluation({
     // Modals
     const [showSkillModal, setShowSkillModal] = useState(false);
 
+    // 「新增评测任务」对话框开关。点确认后通过 onCreated 把新批次 ID 写回当前 task config,
+    // 启动评测时透传给 /api/eval/trajectory/run append 落到同一批次。
+    const [newBatchDialogOpen, setNewBatchDialogOpen] = useState(false);
+
+    // 评测任务关联: 跟 selectedEvaluatorId 等同级用 React state 管理 (不依赖 currentConfigRef
+    // 的 ref-only 模式)。这样 applyTaskToState 加载任务时能正确恢复, useEffect 重设 ref 时
+    // 能稳定包含进去, 不会被擦掉 (历史 bug: 首版用了 ref+spread 模式, 任何 state 变化触发
+    // useEffect 重设 ref 时会丢 evaluationBatch* 字段, 下一次 PATCH 字段丢光)。
+    const [evaluationBatchId, setEvaluationBatchId] = useState('');
+    const [evaluationBatchTitle, setEvaluationBatchTitle] = useState('');
+    const [evaluationBatchEvaluators, setEvaluationBatchEvaluators] = useState<string[]>([]);
+
     // Multi-case states
     const [caseStates, setCaseStates] = useState<Record<string, { a: PerVersionState; b: PerVersionState }>>({});
     const [checkedCaseIds, setCheckedCaseIds] = useState<string[]>([]);
     const [isTaskRunInFlight, setIsTaskRunInFlight] = useState(false);
+    // 行级 retry 在飞集合: key 形如 `${caseId}::${side}::${runIndex}`。
+    // 双写: state 给 UI 渲染时正常反应性, ref 在 click handler 里同步判重
+    // (防止 React state 还没 commit 时的快速双击)。两者都指向同一个 Set 实例:
+    // mark*/clear* 函数会同时更新 ref 和 state, 它们永不分歧。
+    // 自动清理: useEffect watch caseStates, run 走到 terminal (pass/fail) 时清掉,
+    // 让按钮恢复可点。顶部「终止」按钮成功后一次性 clearAllRetriesInFlight, 干预所有 in-flight。
+    const [inFlightRetries, setInFlightRetries] = useState<Set<string>>(() => new Set());
+    const inFlightRetriesRef = useRef<Set<string>>(inFlightRetries);
+    const retryKey = (caseId: string, side: 'a' | 'b', runIndex: number) =>
+        `${caseId}::${side}::${runIndex}`;
+    const markRetryInFlight = (key: string) => {
+        if (inFlightRetriesRef.current.has(key)) return false;
+        const next = new Set(inFlightRetriesRef.current);
+        next.add(key);
+        inFlightRetriesRef.current = next;
+        setInFlightRetries(next);
+        return true;
+    };
+    const markRetryDone = (key: string) => {
+        if (!inFlightRetriesRef.current.has(key)) return;
+        const next = new Set(inFlightRetriesRef.current);
+        next.delete(key);
+        inFlightRetriesRef.current = next;
+        setInFlightRetries(next);
+    };
+    const clearAllRetriesInFlight = () => {
+        if (inFlightRetriesRef.current.size === 0) return;
+        const next = new Set<string>();
+        inFlightRetriesRef.current = next;
+        setInFlightRetries(next);
+    };
     const [lastRunConfigSignature, setLastRunConfigSignature] = useState('');
     const [searchQuery, setSearchQuery] = useState('');
     const [filterTab, setFilterTab] = useState<'all' | 'pending' | 'executed' | 'evaluated'>('all');
@@ -663,6 +715,10 @@ export function GrayscaleEvaluation({
         setIsTaskRunInFlight(false);
         isTaskRunInFlightRef.current = false;
         setLastRunConfigSignature('');
+        // 新任务草稿: 清空评测批次关联 (老任务的批次跟新任务无关)
+        setEvaluationBatchId('');
+        setEvaluationBatchTitle('');
+        setEvaluationBatchEvaluators([]);
         pendingVersionsRef.current = null;
         setIsEditingTask(true);
     };
@@ -705,6 +761,10 @@ export function GrayscaleEvaluation({
         setTraceTimeRange(cfg.traceTimeRange || '7d');
         setSelectedTraceAId(cfg.selectedTraceAId || '');
         setSelectedTraceBId(cfg.selectedTraceBId || '');
+        // 评测批次关联 (从 DB 恢复, 修 "再次进入 A/B 看不到上次评测任务" 问题)
+        setEvaluationBatchId(cfg.evaluationBatchId || '');
+        setEvaluationBatchTitle(cfg.evaluationBatchTitle || '');
+        setEvaluationBatchEvaluators(Array.isArray(cfg.evaluationBatchEvaluators) ? cfg.evaluationBatchEvaluators : []);
         if (cfg.versionAId || cfg.versionBId) {
             pendingVersionsRef.current = { versionAId: cfg.versionAId, versionBId: cfg.versionBId };
         } else {
@@ -779,12 +839,38 @@ export function GrayscaleEvaluation({
     useEffect(() => { currentTaskRef.current = currentTask; }, [currentTask]);
     const caseStatesRef = useRef(caseStates);
     useEffect(() => { caseStatesRef.current = caseStates; }, [caseStates]);
+
+    // 当 caseStates 里某条 run 走到 terminal (pass/fail) 时, 把它从 in-flight 集合移除,
+    // 让重试按钮重新可点 (终态可能仍是 fail, 此时按钮应再次显示为"可重试")。
+    // 不把 'executed' 当 terminal —— retryExecution autoEval=true 时, 短暂 executed 后会
+    // 马上变 evaluating, 这窗口里清掉会让按钮闪一次"可重试"误导用户。改成执行成功且
+    // autoEval=false 的清理走 retryExecution 内部显式 markRetryDone。
+    useEffect(() => {
+        if (inFlightRetriesRef.current.size === 0) return;
+        const next = new Set(inFlightRetriesRef.current);
+        let mutated = false;
+        for (const key of Array.from(next)) {
+            const [caseId, sideStr, runIndexStr] = key.split('::');
+            const runIndex = Number(runIndexStr);
+            const sideState = caseStates[caseId]?.[sideStr as 'a' | 'b'];
+            const run = (sideState?.runs || []).find(r => r.runIndex === runIndex);
+            if (!run) continue;
+            if (run.status === 'pass' || run.status === 'fail') {
+                next.delete(key);
+                mutated = true;
+            }
+        }
+        if (mutated) {
+            inFlightRetriesRef.current = next;
+            setInFlightRetries(next);
+        }
+    }, [caseStates]);
     const isTaskRunInFlightRef = useRef(isTaskRunInFlight);
     useEffect(() => { isTaskRunInFlightRef.current = isTaskRunInFlight; }, [isTaskRunInFlight]);
-    const currentConfigRef = useRef({ skillId: selectedSkillId, versionAId, versionBId, sourceMode, selectedDatasetId, selectedCaseId, selectedCaseIds: checkedCaseIds, checkedCaseIds, taskDescription: taskDescInput, linkedDatasetIds, traceTimeRange, selectedTraceAId, selectedTraceBId, repeatRounds, agentMaxConcurrency, autoEval, recordTriggerDetails, evaluatorId: selectedEvaluatorId });
+    const currentConfigRef = useRef({ skillId: selectedSkillId, versionAId, versionBId, sourceMode, selectedDatasetId, selectedCaseId, selectedCaseIds: checkedCaseIds, checkedCaseIds, taskDescription: taskDescInput, linkedDatasetIds, traceTimeRange, selectedTraceAId, selectedTraceBId, repeatRounds, agentMaxConcurrency, autoEval, recordTriggerDetails, evaluatorId: selectedEvaluatorId, evaluationBatchId, evaluationBatchTitle, evaluationBatchEvaluators });
     useEffect(() => {
-        currentConfigRef.current = { skillId: selectedSkillId, versionAId, versionBId, sourceMode, selectedDatasetId, selectedCaseId, selectedCaseIds: checkedCaseIds, checkedCaseIds, taskDescription: taskDescInput, linkedDatasetIds, traceTimeRange, selectedTraceAId, selectedTraceBId, repeatRounds, agentMaxConcurrency, autoEval, recordTriggerDetails, evaluatorId: selectedEvaluatorId };
-    }, [selectedSkillId, versionAId, versionBId, sourceMode, selectedDatasetId, selectedCaseId, checkedCaseIds, taskDescInput, linkedDatasetIds, traceTimeRange, selectedTraceAId, selectedTraceBId, repeatRounds, agentMaxConcurrency, autoEval, recordTriggerDetails, selectedEvaluatorId]);
+        currentConfigRef.current = { skillId: selectedSkillId, versionAId, versionBId, sourceMode, selectedDatasetId, selectedCaseId, selectedCaseIds: checkedCaseIds, checkedCaseIds, taskDescription: taskDescInput, linkedDatasetIds, traceTimeRange, selectedTraceAId, selectedTraceBId, repeatRounds, agentMaxConcurrency, autoEval, recordTriggerDetails, evaluatorId: selectedEvaluatorId, evaluationBatchId, evaluationBatchTitle, evaluationBatchEvaluators };
+    }, [selectedSkillId, versionAId, versionBId, sourceMode, selectedDatasetId, selectedCaseId, checkedCaseIds, taskDescInput, linkedDatasetIds, traceTimeRange, selectedTraceAId, selectedTraceBId, repeatRounds, agentMaxConcurrency, autoEval, recordTriggerDetails, selectedEvaluatorId, evaluationBatchId, evaluationBatchTitle, evaluationBatchEvaluators]);
 
     const currentRunConfigSignature = useMemo(() => buildRunConfigSignature({
         skillId: selectedSkillId,
@@ -841,6 +927,30 @@ export function GrayscaleEvaluation({
     const persistCaseStates = useCallback((updatedStates: Record<string, { a: PerVersionState; b: PerVersionState }>) => {
         if (!currentTaskRef.current) return;
         persistTaskUpdate(currentTaskRef.current.id, currentConfigRef.current, updatedStates);
+    }, [persistTaskUpdate]);
+
+    // 「新增评测任务」对话框 onCreated: 把后端返回的 evaluatorRunId / title / evaluators
+    // 设为 React state (currentConfigRef useEffect 会自动同步进 ref, 后续所有 persist 都带这些字段);
+    // 同时立刻调一次 persistTaskUpdate 把新字段落库, 避免要等下一次 state 变化才同步。
+    const handleEvalBatchCreated = useCallback((result: NewBatchCreated) => {
+        setNewBatchDialogOpen(false);
+        const task = currentTaskRef.current;
+        if (!task) return;
+        setEvaluationBatchId(result.evaluatorRunId);
+        setEvaluationBatchTitle(result.taskTitle);
+        setEvaluationBatchEvaluators(result.selectedEvaluators);
+        // 立刻 patch 一次 (不等 useEffect): nextConfig 显式带新字段, 不依赖 ref。
+        const nextConfig = {
+            ...currentConfigRef.current,
+            evaluationBatchId: result.evaluatorRunId,
+            evaluationBatchTitle: result.taskTitle,
+            evaluationBatchEvaluators: result.selectedEvaluators,
+        };
+        persistTaskUpdate(task.id, nextConfig, undefined);
+        setCurrentTask(prev => prev ? {
+            ...prev,
+            configJson: { ...(prev.configJson || {}), ...nextConfig },
+        } : prev);
     }, [persistTaskUpdate]);
 
     const createTaskForBinding = useCallback(async (skillId: string, boundVersionBId: string, taskName?: string) => {
@@ -1029,9 +1139,13 @@ export function GrayscaleEvaluation({
      */
     const retryExecution = async (caseId: string, side: 'a' | 'b', runIndex: number) => {
         if (!currentTask) return;
+        // 同步抢占 in-flight 锁: 双击 / 在飞期间再次点击直接 return, 防止重复 dispatch。
+        // markRetryInFlight 返回 false 表示已经在飞中。配 ref 在 React commit 前同步生效。
+        const flightKey = retryKey(caseId, side, runIndex);
+        if (!markRetryInFlight(flightKey)) return;
         const targetCase = allCases.find(c => c.id === caseId);
         const query = targetCase?.input || '';
-        if (!query.trim()) return;
+        if (!query.trim()) { markRetryDone(flightKey); return; }
         const versionId = side === 'a' ? versionAId : versionBId;
         const isNone = versionId === NONE_VERSION_ID;
         const version = isNone ? null : versions.find(v => v.id === versionId);
@@ -1069,10 +1183,13 @@ export function GrayscaleEvaluation({
             nextStates = updated;
             return updated;
         });
-        if (!nextStates) return;
+        if (!nextStates) { markRetryDone(flightKey); return; }
         await persistTaskUpdate(currentTask.id, currentConfigRef.current, nextStates);
 
-        // 2) POST /api/debug/execute
+        // 2) POST /api/debug/execute (不传 grayscaleTaskId, 避免 backend 重复写库)
+        // baseline (isNone=true) retry 时 skill 字段为空, 但 trace 在逻辑上跟对照的
+        // 被测 skill 配对 —— 传 tagSkill 让 backend 把 trace.skill 字段填成
+        // selectedSkill?.name (本任务被测 skill), "从 Trace"视图按 skill 过滤能搜到。
         let jobId: string;
         try {
             const res = await apiFetch('/api/debug/execute', {
@@ -1083,6 +1200,9 @@ export function GrayscaleEvaluation({
                     query,
                     skill: isNone ? undefined : selectedSkill?.name,
                     skillVersion: (isNone || !version) ? undefined : Number(version.version),
+                    // baseline 没 skill 加载, 用 selectedSkill?.name 当 trace 归属标签;
+                    // skill-agent 那侧已经 skill 字段填上了, tagSkill 即使也传也是冗余无害。
+                    tagSkill: selectedSkill?.name,
                     mode: 'grayscale',
                 }),
             });
@@ -1100,6 +1220,7 @@ export function GrayscaleEvaluation({
                     );
                     return { ...prev, [caseId]: { ...current, [side]: { ...sideState, runs } } };
                 });
+                markRetryDone(flightKey);
                 return;
             }
             jobId = data.jobId;
@@ -1116,6 +1237,7 @@ export function GrayscaleEvaluation({
                 );
                 return { ...prev, [caseId]: { ...current, [side]: { ...sideState, runs } } };
             });
+            markRetryDone(flightKey);
             return;
         }
 
@@ -1142,8 +1264,16 @@ export function GrayscaleEvaluation({
                         } : r);
                         const updated = { ...prev, [caseId]: { ...current, [side]: { ...sideState, runs } } };
                         persistCaseStates(updated);
-                        // autoEval: 跑完自动评估这一行 (走 retryEvaluation 同款行级路径)
-                        if (autoEval) void retryEvaluation(caseId, side, runIndex);
+                        // autoEval: 跑完自动评估这一行 (走 retryEvaluation 同款行级路径)。
+                        // in-flight 锁不在这里释放, 让 retryEvaluation 继承同一把锁
+                        // 直至评测出结果, 否则按钮会在 executed → evaluating 切换瞬间
+                        // 闪一下"可重试"误导用户。
+                        if (autoEval) {
+                            void retryEvaluation(caseId, side, runIndex);
+                        } else {
+                            // 用户关掉了 autoEval, 执行成功就到此为止, 把锁释放掉
+                            markRetryDone(flightKey);
+                        }
                         return updated;
                     });
                     return true;
@@ -1165,6 +1295,9 @@ export function GrayscaleEvaluation({
                         persistCaseStates(updated);
                         return updated;
                     });
+                    // run 状态进入 fail, 上面 useEffect 会自动 clear in-flight, 但显式
+                    // 再调一次保险, 防止 setCaseStates 还没 commit 就有人再次点 retry
+                    markRetryDone(flightKey);
                     return false;
                 }
                 return null;
@@ -1197,6 +1330,15 @@ export function GrayscaleEvaluation({
      */
     const retryEvaluation = async (caseId: string, side: 'a' | 'b', runIndex: number) => {
         if (!currentTask) return;
+        // 抢 in-flight 锁 (双击保护)。markRetryInFlight 是 idempotent:
+        // - 用户直接点"评测失败重试" → 新增 lock
+        // - retryExecution autoEval 链式调过来 → lock 已存在, markRetryInFlight 返回
+        //   false 但我们继续往下走 (不是双击, 是同一把锁延续)。所以区分: 调用方传 None
+        //   即"作为独立入口" — 已在飞中直接 return; 链式入口由上游保证只调一次。
+        // 这里采取最简单策略: 总是 markRetryInFlight, 已存在就当作 idempotent, 继续往下
+        // 走。配 useEffect terminal-clear 保证 pass/fail 时一次释放。
+        const flightKey = retryKey(caseId, side, runIndex);
+        markRetryInFlight(flightKey);
         let resetState: Record<string, { a: PerVersionState; b: PerVersionState }> | null = null;
         setCaseStates(prev => {
             const current = prev[caseId];
@@ -1227,7 +1369,7 @@ export function GrayscaleEvaluation({
             resetState = updated;
             return updated;
         });
-        if (!resetState) return;
+        if (!resetState) { markRetryDone(flightKey); return; }
         // PATCH 让 server 看到 reset 后的状态 (status='evaluating', 字段已清)
         await persistTaskUpdate(currentTask.id, currentConfigRef.current, resetState);
         // 调用 backend 行级 retry
@@ -1246,11 +1388,15 @@ export function GrayscaleEvaluation({
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
                 alert(data.error || (locale === 'zh' ? '评测重试失败' : 'Retry evaluation failed'));
+                markRetryDone(flightKey);
                 return;
             }
+            // 成功 dispatch: 锁继续持有, 由 pollCurrentTask 的 caseStates 更新
+            // 触发 useEffect terminal-clear 在 pass/fail 时自动释放。
             pollCurrentTask(currentTask.id);
         } catch (err) {
             alert(String(err));
+            markRetryDone(flightKey);
         }
     };
 
@@ -1452,6 +1598,10 @@ export function GrayscaleEvaluation({
                 alert((locale === 'zh' ? '终止失败: ' : 'Abort failed: ') + (data.error || res.status));
                 return;
             }
+            // 顶部「终止」干预所有 in-flight retry: 一次性释放 retry 锁集合, 让按钮立刻
+            // 可点。backend 把所有 running/evaluating 推到 fail 后, useEffect terminal-clear
+            // 本来也会清, 但这里显式 clear 让 UI 立即响应不等下一 polling tick。
+            clearAllRetriesInFlight();
             // 强制刷一次, 不等下一 polling tick
             pollCurrentTask(currentTask.id);
         } catch (err) {
@@ -2090,7 +2240,7 @@ export function GrayscaleEvaluation({
                         <div
                             style={{
                                 display: 'grid',
-                                gridTemplateColumns: '160px 1fr 1fr 60px 70px',
+                                gridTemplateColumns: '140px 1fr 1fr 90px 60px 70px',
                                 gap: 12,
                                 padding: '8px 12px',
                                 background: '#FAFAF7',
@@ -2108,6 +2258,7 @@ export function GrayscaleEvaluation({
                             <div>{locale === 'zh' ? 'Case ID' : 'Case ID'}</div>
                             <div>{locale === 'zh' ? '执行 session id' : 'Execution session id'}</div>
                             <div>{locale === 'zh' ? '评估 session id' : 'Evaluation session id'}</div>
+                            <div>{locale === 'zh' ? '评测结果' : 'Eval result'}</div>
                             <div style={{ textAlign: 'right' }}>{locale === 'zh' ? '分数' : 'Score'}</div>
                             <div style={{ textAlign: 'right' }}>{locale === 'zh' ? '操作' : 'Action'}</div>
                         </div>
@@ -2139,7 +2290,7 @@ export function GrayscaleEvaluation({
                             return (
                             <div
                                 key={`${side}-${record.caseId}-${record.roundIndex}-${idx}`}
-                                style={{ display: 'grid', gridTemplateColumns: '160px 1fr 1fr 60px 70px', gap: 12, alignItems: 'center', padding: '10px 12px', borderTop: '1px solid #F1EFE8', fontSize: 12 }}
+                                style={{ display: 'grid', gridTemplateColumns: '140px 1fr 1fr 90px 60px 70px', gap: 12, alignItems: 'center', padding: '10px 12px', borderTop: '1px solid #F1EFE8', fontSize: 12 }}
                             >
                                 {/* Case ID 列: 可点击, 跳到 dataset 详情对应 case */}
                                 <div
@@ -2223,48 +2374,112 @@ export function GrayscaleEvaluation({
                                     )}
                                 </div>
 
-                                <div style={{ textAlign: 'right', color: accent, fontWeight: 700, fontSize: 14 }}>
-                                    {typeof record.score === 'number' ? record.score : '—'}
-                                </div>
-
-                                {/* 操作列: 失败行才显示重试按钮 */}
-                                <div style={{ textAlign: 'right' }}>
-                                    {exec.tone === 'fail' || (evaluation && evaluation.tone === 'fail') ? (
+                                {/* 评测结果列: 有 evaluatorRunId 就显示为可点击按钮跳到 /eval/run/<runId>
+                                    (评测批次详情页, 显示该批次下所有 trace + 分数 + 评估器维度细节)。
+                                    没有 evaluatorRunId 时 (执行失败 / 还没启动评测) 显示 "—"。
+                                    target=_blank 避免离开当前 A/B 任务页, 用户可以来回切。 */}
+                                <div>
+                                    {record.evaluatorRunId ? (
                                         <button
                                             className="v2-action-btn"
                                             style={{
                                                 fontSize: 11,
-                                                padding: '4px 8px',
-                                                background: '#1C1917',
-                                                color: 'white',
-                                                border: 'none',
+                                                padding: '3px 8px',
+                                                background: '#EEF2FF',
+                                                color: '#4F46E5',
+                                                border: '1px solid rgba(79,70,229,.25)',
                                                 borderRadius: 4,
                                                 cursor: 'pointer',
+                                                fontWeight: 600,
                                                 whiteSpace: 'nowrap',
                                             }}
-                                            title={hasExecFailure
-                                                ? (locale === 'zh' ? '执行失败 → 从执行重试 (会自动评测)' : 'Retry from execution (auto-evaluate)')
-                                                : (locale === 'zh' ? '评测失败 → 只重新评测 (复用现有 session)' : 'Retry evaluation only')}
-                                            onClick={() => {
-                                                // 都走行级"原地覆盖"路径——retry 是「再试这一行」语义,
-                                                // 不该多出一条新记录。
-                                                //   执行失败 → retryExecution: reset 这一条 run, 重跑 agent,
-                                                //              autoEval 时自动接 retryEvaluation
-                                                //   评测失败 → retryEvaluation: reset 这一条 run 评测状态,
-                                                //              backend onlyMissingEvaluation 只评这一条
-                                                const ri = record.roundIndex || 1;
-                                                if (hasExecFailure) {
-                                                    void retryExecution(record.caseId, side, ri);
-                                                } else {
-                                                    void retryEvaluation(record.caseId, side, ri);
-                                                }
-                                            }}
+                                            title={`跳转到评测批次 ${record.evaluatorRunId} 详情`}
+                                            onClick={() => window.open(`/eval/run/${encodeURIComponent(record.evaluatorRunId)}`, '_blank')}
                                         >
-                                            🔁 {locale === 'zh' ? '重试' : 'Retry'}
+                                            📋 {locale === 'zh' ? '查看' : 'View'}
                                         </button>
                                     ) : (
                                         <span style={{ color: '#B8B6AE', fontSize: 11 }}>—</span>
                                     )}
+                                </div>
+
+                                <div style={{ textAlign: 'right', color: accent, fontWeight: 700, fontSize: 14 }}>
+                                    {typeof record.score === 'number' ? record.score : '—'}
+                                </div>
+
+                                {/* 操作列: 失败行才显示重试按钮; in-flight 时显示"重试中"灰按钮 */}
+                                <div style={{ textAlign: 'right' }}>
+                                    {(() => {
+                                        const ri = record.roundIndex || 1;
+                                        const flightKey = retryKey(record.caseId, side, ri);
+                                        // 读 state 而不是 ref —— 让 React 自己跟踪依赖, retry 状态变化
+                                        // 立刻触发 re-render 切换 "重试中" 按钮显示。click handler 那边
+                                        // 还要靠 inFlightRetriesRef 同步判重防止 React commit 前的双击。
+                                        const isInFlight = inFlightRetries.has(flightKey);
+                                        const isFailRow = exec.tone === 'fail' || (evaluation && evaluation.tone === 'fail');
+                                        if (isInFlight) {
+                                            return (
+                                                <button
+                                                    className="v2-action-btn"
+                                                    disabled
+                                                    style={{
+                                                        fontSize: 11,
+                                                        padding: '4px 8px',
+                                                        background: '#E7E5E4',
+                                                        color: '#78716C',
+                                                        border: 'none',
+                                                        borderRadius: 4,
+                                                        cursor: 'not-allowed',
+                                                        whiteSpace: 'nowrap',
+                                                        opacity: 0.85,
+                                                    }}
+                                                    title={locale === 'zh'
+                                                        ? '重试进行中, 请等待结果。如需打断, 点击顶部「终止」按钮。'
+                                                        : 'Retry in progress; wait for result or use top Abort button to interrupt.'}
+                                                >
+                                                    ⏳ {locale === 'zh' ? '重试中' : 'Retrying'}
+                                                </button>
+                                            );
+                                        }
+                                        if (!isFailRow) {
+                                            return <span style={{ color: '#B8B6AE', fontSize: 11 }}>—</span>;
+                                        }
+                                        return (
+                                            <button
+                                                className="v2-action-btn"
+                                                style={{
+                                                    fontSize: 11,
+                                                    padding: '4px 8px',
+                                                    background: '#1C1917',
+                                                    color: 'white',
+                                                    border: 'none',
+                                                    borderRadius: 4,
+                                                    cursor: 'pointer',
+                                                    whiteSpace: 'nowrap',
+                                                }}
+                                                title={hasExecFailure
+                                                    ? (locale === 'zh' ? '执行失败 → 从执行重试 (会自动评测)' : 'Retry from execution (auto-evaluate)')
+                                                    : (locale === 'zh' ? '评测失败 → 只重新评测 (复用现有 session)' : 'Retry evaluation only')}
+                                                onClick={() => {
+                                                    // 都走行级"原地覆盖"路径——retry 是「再试这一行」语义,
+                                                    // 不该多出一条新记录。
+                                                    //   执行失败 → retryExecution: reset 这一条 run, 重跑 agent,
+                                                    //              autoEval 时自动接 retryEvaluation
+                                                    //   评测失败 → retryEvaluation: reset 这一条 run 评测状态,
+                                                    //              backend onlyMissingEvaluation 只评这一条
+                                                    // 双击保护: retryExecution / retryEvaluation 内部用
+                                                    // inFlightRetriesRef.add 同步抢锁, 已 in-flight 直接 return。
+                                                    if (hasExecFailure) {
+                                                        void retryExecution(record.caseId, side, ri);
+                                                    } else {
+                                                        void retryEvaluation(record.caseId, side, ri);
+                                                    }
+                                                }}
+                                            >
+                                                🔁 {locale === 'zh' ? '重试' : 'Retry'}
+                                            </button>
+                                        );
+                                    })()}
                                 </div>
                             </div>
                             );
@@ -2509,6 +2724,78 @@ export function GrayscaleEvaluation({
                                 </span>
                             </div>
                             <div className="v2-stage-card-subtitle">{locale === 'zh' ? '设置参数 · 唯一变量是 Skill 开/关' : 'Set up parameters · The only variable is Skill On/Off'}</div>
+                        </div>
+                        {/* 右侧: 关联评测任务 (评测执行批次) 状态 + 新增按钮。已关联时显示紫色徽章 +
+                            「切换」按钮重新弹对话框换批次; 未关联时只有「+ 新增评测任务」入口。
+                            点击后弹出 NewEvaluationBatchDialog, 创建成功通过 handleEvalBatchCreated 写回 config。 */}
+                        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                            {currentTask?.configJson?.evaluationBatchId ? (
+                                <>
+                                    <div
+                                        title={`评测执行批次 ID: ${currentTask.configJson.evaluationBatchId}`}
+                                        style={{
+                                            display: 'flex', alignItems: 'center', gap: 6,
+                                            padding: '5px 10px',
+                                            background: '#F5E8FF',
+                                            border: '1px solid rgba(126,34,206,.2)',
+                                            borderRadius: 6,
+                                            fontSize: 12,
+                                            color: '#7E22CE',
+                                            fontWeight: 500,
+                                            maxWidth: 360,
+                                        }}
+                                    >
+                                        <span>📋</span>
+                                        <span style={{
+                                            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                        }}>
+                                            评测任务: <b>{currentTask.configJson.evaluationBatchTitle || currentTask.configJson.evaluationBatchId.slice(0, 8)}</b>
+                                        </span>
+                                        {Array.isArray(currentTask.configJson.evaluationBatchEvaluators) && currentTask.configJson.evaluationBatchEvaluators.length > 0 && (
+                                            <span style={{ color: '#A855F7', fontSize: 11, fontWeight: 400 }}>
+                                                · {currentTask.configJson.evaluationBatchEvaluators.length} 评估器
+                                            </span>
+                                        )}
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={() => setNewBatchDialogOpen(true)}
+                                        title={locale === 'zh' ? '切换或新建评测任务' : 'Switch or create another'}
+                                        style={{
+                                            padding: '5px 10px',
+                                            background: '#fff',
+                                            border: '1px solid #D4D4D8',
+                                            borderRadius: 6,
+                                            fontSize: 12,
+                                            color: '#52525B',
+                                            cursor: 'pointer',
+                                            fontWeight: 500,
+                                        }}
+                                    >
+                                        {locale === 'zh' ? '切换 / 新建' : 'Switch / new'}
+                                    </button>
+                                </>
+                            ) : (
+                                <button
+                                    type="button"
+                                    onClick={() => setNewBatchDialogOpen(true)}
+                                    disabled={!currentTask}
+                                    title={!currentTask ? '请先选择或创建一个 A/B 任务' : ''}
+                                    style={{
+                                        padding: '6px 12px',
+                                        background: currentTask ? '#4F46E5' : '#C7C3F0',
+                                        border: '1px solid ' + (currentTask ? '#4F46E5' : '#C7C3F0'),
+                                        borderRadius: 6,
+                                        fontSize: 12,
+                                        color: '#fff',
+                                        cursor: currentTask ? 'pointer' : 'not-allowed',
+                                        fontWeight: 600,
+                                        display: 'inline-flex', alignItems: 'center', gap: 4,
+                                    }}
+                                >
+                                    + {locale === 'zh' ? '新增评测任务' : 'New eval task'}
+                                </button>
+                            )}
                         </div>
                     </div>
                     <div className="v2-stage-card-body">
@@ -3311,6 +3598,15 @@ export function GrayscaleEvaluation({
                     </div>
                 </div>
             )}
+
+            {/* 新增评测任务对话框 (跨视图浮窗, 跟其他 modal 同级渲染) */}
+            <NewEvaluationBatchDialog
+                open={newBatchDialogOpen}
+                user={user || ''}
+                defaultTitle={currentTask?.taskName}
+                onClose={() => setNewBatchDialogOpen(false)}
+                onCreated={handleEvalBatchCreated}
+            />
 
             {/* Output preview modal */}
             {outputModal && (

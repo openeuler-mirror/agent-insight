@@ -24,6 +24,11 @@ interface GrayscaleConfig {
     recordTriggerDetails?: boolean;
     evaluatorId?: string;
     latestResultAt?: string;
+    // 关联到「评测执行」页的批次 ID (evaluatorRunId)。前端通过「+ 新增评测任务」对话框创建,
+    // 后续启动评测时透传给 /api/eval/trajectory/run 作 evaluatorRunId append (下一步迭代)。
+    evaluationBatchId?: string;
+    evaluationBatchTitle?: string;
+    evaluationBatchEvaluators?: string[];
 }
 
 interface RunResult {
@@ -841,6 +846,12 @@ async function executeSingleAgentRun(args: {
     caseMap: Map<string, DatasetCase>;
     totalRunsPerSide: number;
     version: ResolvedVersion;
+    /**
+     * 对照 skill 名: A/B 任务里"另一侧"的 skill, 用于 baseline 那一侧 (args.version=null)
+     * 在 trace 上挂个 skill 标签, 让"从 Trace"按 skill 过滤能搜到。caller 传两边 skillName
+     * 任一非空即可, 优先 B 侧。args.version 非 null 时不用此参数。
+     */
+    referenceSkillName?: string | null;
     target: ExecutionTarget;
     /** 任务级 abort 信号: 用户点终止时, 这里桥接到本次 chat 的 abortController, 让 opencode chat 提前返回。 */
     parentSignal?: AbortSignal;
@@ -897,6 +908,10 @@ async function executeSingleAgentRun(args: {
             query: args.caseMap.get(target.caseId)!.input,
             skill: args.version?.skillName,
             skillVersion: args.version?.version,
+            // baseline 那侧不加载 skill, 但 trace 在逻辑上跟 B 侧被测 skill 配对——
+            // tagSkill 让"从 Trace"按 skill 过滤能搜到这条 baseline trace。
+            // skill-agent 那侧 args.version?.skillName 已经走 input.skill 路径, tagSkill 自然 fallback。
+            tagSkill: args.version?.skillName ?? (args.referenceSkillName ?? undefined),
             system: buildGrayscaleExecutionSystem(args.version),
             interactionPolicy: 'auto-deny',
             systemAgentName: grayAgentName,
@@ -963,15 +978,28 @@ async function executeSingleAgentRun(args: {
 }
 
 async function startSingleEvaluation(origin: string, user: string, config: GrayscaleConfig, pair: { caseId: string; taskId: string }, evaluatorId?: string) {
+    // 透传评测任务关联: 用户在 A/B 配置卡通过「+ 新增评测任务」对话框创建了批次,
+    // 此 ID 存在 config.evaluationBatchId。这里走 append 模式让 trace 落到同一批次,
+    // 而不是每次启动评测都新建一个 evaluatorRunId (修 "2 case × 3 round 拆成 6 个批次" 问题)。
+    //
+    // evaluator 字段:
+    //   - 关联了批次: 不传, 让后端继承批次创建时配置的 selectedEvaluators (多评估器)。
+    //     这是用户在「新增评测任务」对话框里多选的评估器列表, 应该统一应用。
+    //   - 没关联批次: 沿用老逻辑, 传单 evaluator 让后端新建批次 (向后兼容)。
+    const body: Record<string, unknown> = {
+        user,
+        datasetId: config.selectedDatasetId,
+        pairs: [pair],
+    };
+    if (config.evaluationBatchId) {
+        body.evaluatorRunId = config.evaluationBatchId;
+    } else {
+        body.evaluator = evaluatorId || config.evaluatorId || 'preset-agent-task-completion';
+    }
     const res = await fetch(`${origin}/api/eval/trajectory/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            user,
-            datasetId: config.selectedDatasetId,
-            pairs: [pair],
-            evaluator: evaluatorId || config.evaluatorId || 'preset-agent-task-completion',
-        }),
+        body: JSON.stringify(body),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok || !data.evaluatorRunId) {
@@ -1293,6 +1321,9 @@ async function runGrayscaleTask(args: {
                 return;
             }
             const version = item.side === 'a' ? versionA : versionB;
+            // baseline 侧 (version=null) 取另一侧的 skillName 作为 trace 标签;
+            // 两侧都不是 None 时取本侧, 走 input.skill 路径, referenceSkillName 自然不参与。
+            const referenceSkillName = versionB?.skillName || versionA?.skillName || null;
             try {
                 await withBackgroundOpencodeSlot(
                     () => executeSingleAgentRun({
@@ -1303,6 +1334,7 @@ async function runGrayscaleTask(args: {
                         caseMap,
                         totalRunsPerSide,
                         version,
+                        referenceSkillName,
                         target: item,
                         parentSignal: taskSignal,
                     }),

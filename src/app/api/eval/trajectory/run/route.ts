@@ -664,6 +664,11 @@ export async function POST(request: Request) {
         const requestedWatchedAgent = normalizeAutoWatchAgent(body.watchedAgent || body.agent || '');
         let resolvedWatchedAgent = requestedWatchedAgent;
         const requestNowIso = new Date().toISOString();
+        // placeholderOnly: 用于"新建评测批次"语义——前端先创建一个空批次拿到 evaluatorRunId,
+        // 后续 A/B 测试/用例分析的所有评测都 append 到此 ID。跟 autoWatch (自动观测某 agent 新 trace)
+        // 走相同的 watchPlaceholder 数据库分支但语义不同; rawAnalysisJson 加 placeholderOnly=true
+        // 让前端 /eval 页可识别此批次是用户主动创建的"空批次"而不是 autoWatch 待跑。
+        const requestedPlaceholderOnly = body.placeholderOnly === true;
 
         if (!user) return NextResponse.json({ error: 'user is required' }, { status: 400 });
         if (requestedAutoWatch && requestedWatchedAgent && isEvaluatorAgentName(requestedWatchedAgent)) {
@@ -846,7 +851,7 @@ export async function POST(request: Request) {
                 });
                 created.push({ id: row.id, caseId: '', taskId });
             }
-        } else if (requestedAutoWatch && !appendRunId) {
+        } else if ((requestedAutoWatch || requestedPlaceholderOnly) && !appendRunId) {
             if (datasetId) {
                 const dataset = await findAgentDataset(user, datasetId);
                 if (!dataset) {
@@ -859,6 +864,9 @@ export async function POST(request: Request) {
                     );
                 }
             }
+            // placeholderOnly=true 是"用户主动新建空批次"语义, autoWatch=true 是"自动观测某 agent 新 trace 自动评测"。
+            // 两者底层都走 watchPlaceholder 行 (taskId=null/caseId=''), 但 rawAnalysisJson 加额外标记
+            // 让 /eval 页能区分: placeholderOnly → 显示"待评测 · 来自任务管理"; autoWatch → "自动观测中"。
             const row = await prisma.trajectoryEvalResult.create({
                 data: {
                     user,
@@ -868,7 +876,12 @@ export async function POST(request: Request) {
                     executionId: null,
                     taskId: null,
                     status: 'pending',
-                    rawAnalysisJson: JSON.stringify({ ...evaluatorMeta, taskMeta, watchPlaceholder: true }),
+                    rawAnalysisJson: JSON.stringify({
+                        ...evaluatorMeta,
+                        taskMeta,
+                        watchPlaceholder: true,
+                        ...(requestedPlaceholderOnly ? { placeholderOnly: true } : {}),
+                    }),
                 },
             });
             created.push({ id: row.id, caseId: '' });
@@ -906,7 +919,7 @@ export async function POST(request: Request) {
                 created.push({ id: row.id, caseId, executionId, taskId });
             }
         } else {
-            return NextResponse.json({ error: 'provide taskIds or datasetId + pairs' }, { status: 400 });
+            return NextResponse.json({ error: 'provide taskIds, datasetId+pairs, or placeholderOnly:true' }, { status: 400 });
         }
 
         if (created.length === 0) {

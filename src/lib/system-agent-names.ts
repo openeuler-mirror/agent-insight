@@ -39,3 +39,43 @@ export function isInternalSystemAgentTrace(agentName: string | null | undefined)
   if (!agentName) return false;
   return SYSTEM_AGENT_NAME_SET.has(agentName.trim());
 }
+
+/**
+ * "用例分析-从 Trace" 模式应该隐藏哪些 agent 的 trace?
+ *
+ * 跟 isInternalSystemAgentTrace 区别: 这个排除集合**不含** grayscale-* (A/B 灰度),
+ * 让 A/B 跑过的 trace 也能在用例分析里看到 (用户可以复用 A/B 的 trace 跑评测)。
+ * 真正要隐藏的: 平台辅助 + 各评测器 (它们的 trace 跟"用例分析"语义无关)。
+ *
+ * 调用方需要进一步加来源徽章 (A/B / 用例分析 / 真实), 帮用户区分。
+ */
+const HIDDEN_FROM_CASE_ANALYSIS = new Set<string>([
+  'skill-generator-agent',
+  'fault-diagnosis-agent',
+  'skill-optimizer-chat',
+  'trace-quality-evaluator',
+  'task-completion-evaluator',
+  'skill-trigger-analyzer',
+]);
+
+export function shouldHideFromCaseAnalysis(agentName: string | null | undefined): boolean {
+  if (!agentName) return false;
+  return HIDDEN_FROM_CASE_ANALYSIS.has(agentName.trim());
+}
+
+/**
+ * 根据 trace agentName 推 trace 来源标签 (给用例分析"从 Trace"行徽章用)。
+ *   - 'ab': A/B 灰度对照 (grayscale-skill-agent / grayscale-baseline-agent)
+ *   - 'batch': 用例分析"从数据集"的执行器 (skill-debug-executor / batch-eval-agent)
+ *   - 'real': 用户真实调用 (其他所有非系统 agent)
+ *   - 'system': 平台辅助 / 评测器 (HIDDEN_FROM_CASE_ANALYSIS 命中, 实际不会展示, 兜底)
+ */
+export type TraceSource = 'ab' | 'batch' | 'real' | 'system';
+export function classifyTraceSource(agentName: string | null | undefined): TraceSource {
+  if (!agentName) return 'real';
+  const a = agentName.trim();
+  if (a === 'grayscale-skill-agent' || a === 'grayscale-baseline-agent') return 'ab';
+  if (a === 'skill-debug-executor' || a === 'batch-eval-agent') return 'batch';
+  if (HIDDEN_FROM_CASE_ANALYSIS.has(a)) return 'system';
+  return 'real';
+}

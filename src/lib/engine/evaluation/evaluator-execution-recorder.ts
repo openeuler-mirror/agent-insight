@@ -10,7 +10,13 @@ interface RecordEvaluatorExecutionInput {
   user?: string | null;
   query?: string | null;
   framework?: string | null;
+  /**
+   * 写入 Execution.skill 字段, 让"从 Trace"按 skill 过滤能搜到。caller (runner.ts) 解析:
+   *   优先 input.skill (运行时加载的真实 skill) > input.tagSkill (baseline 等的归属标签)。
+   * 不传时保留 saveExecutionRecord 自己的 skill 推断逻辑 (从 plugin 上报 / sessionId 反查等)。
+   */
   skill?: string | null;
+  /** 写入 Execution.skillVersion 字段 (跟 skill 配对, 不传时同样让 saveExecutionRecord 自己推断) */
   skillVersion?: number | null;
 }
 
@@ -223,6 +229,8 @@ export async function recordEvaluatorExecution(
     user: input.user ?? null,
     agent: agentName,
     agentName,
+    // caller (runner.ts) 给 baseline / grayscale-skill-agent 这些后台 agent 主动填 skill,
+    // 让"从 Trace"按 skill 过滤能搜到。不传时让 saveExecutionRecord 自己推断。
     skill: input.skill ?? undefined,
     skill_version: input.skillVersion ?? undefined,
     interactions,

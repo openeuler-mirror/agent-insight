@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { runGeneralAgent } from '@/lib/engine/general-agent';
+import { withBackgroundOpencodeSlot } from '@/lib/engine/general-agent/concurrency-limiter';
 import { getUserSettings, type ModelConfig as ServerModelConfig } from '@/lib/storage/server-config';
 import { inferProviderFromBaseUrl, normalizeProviderID } from '@/lib/engine/general-agent/server-model-config';
 import { ensureSessionWorkspace, ensureUserWorkspace } from '@/lib/engine/general-agent/workspace';
@@ -274,25 +275,38 @@ async function streamSkillOptOpencodeImpl(
   const cachedSessionId = threadSessionMap.get(threadId);
   console.log('[skill-opt-bridge] cachedSessionId:', cachedSessionId || '(none)');
 
+  // 前台 skill-opt 交互式: displayOnly=true, 仅 dashboard 可见, 不占 5-slot 配额。
+  // skill-opt 是用户在 web 端编辑 skill 时实时跑的, 不能被后台 A/B 批量卡住。
+  const slotMeta = {
+    taskType: 'skill-opt' as const,
+    user,
+    label: `skill-opt · ${skillName} v${baseVersion}`,
+    skill: skillName,
+    skillVersion: baseVersion,
+    displayOnly: true,
+  };
   let result;
   try {
-    result = await runGeneralAgent({
-      user,
-      query: composeUserQuery(checkedIssues, userFeedback),
-      sessionId: cachedSessionId,
-      workspaceTag: threadId,
-      sessionTitle: `skill-opt · ${skillName} v${baseVersion} · ${threadId.slice(0, 8)}`,
-      system: systemPrompt,
-      chatOptions: {
-        idleTimeoutMs: 30_000,
-        streamTimeoutMs: 15 * 60 * 1000,
-        signal: chatAbortController.signal,
-      },
-      systemAgentName: SKILL_OPT_AGENT_NAME,
-      interactionPolicy: 'auto-allow',
-      ...(modelOverride ? { model: modelOverride } : {}),
-      handlers,
-    });
+    result = await withBackgroundOpencodeSlot(
+      () => runGeneralAgent({
+        user,
+        query: composeUserQuery(checkedIssues, userFeedback),
+        sessionId: cachedSessionId,
+        workspaceTag: threadId,
+        sessionTitle: `skill-opt · ${skillName} v${baseVersion} · ${threadId.slice(0, 8)}`,
+        system: systemPrompt,
+        chatOptions: {
+          idleTimeoutMs: 30_000,
+          streamTimeoutMs: 15 * 60 * 1000,
+          signal: chatAbortController.signal,
+        },
+        systemAgentName: SKILL_OPT_AGENT_NAME,
+        interactionPolicy: 'auto-allow',
+        ...(modelOverride ? { model: modelOverride } : {}),
+        handlers,
+      }),
+      slotMeta,
+    );
   } catch (err) {
     // 复用 session 失效时换新 session 重试一次（与 skill-generator 一致的兜底）
     const msg = err instanceof Error ? err.message : String(err);
@@ -300,16 +314,19 @@ async function streamSkillOptOpencodeImpl(
     if (cachedSessionId && /session/i.test(msg)) {
       threadSessionMap.delete(threadId);
       console.log('[skill-opt-bridge] retrying without cachedSessionId...');
-      result = await runGeneralAgent({
-        user,
-        query: composeUserQuery(checkedIssues, userFeedback),
-        workspaceTag: threadId,
-        sessionTitle: `skill-opt · ${skillName} v${baseVersion} · ${threadId.slice(0, 8)}`,
-        system: systemPrompt,
-        interactionPolicy: 'auto-allow',
-        ...(modelOverride ? { model: modelOverride } : {}),
-        handlers,
-      });
+      result = await withBackgroundOpencodeSlot(
+        () => runGeneralAgent({
+          user,
+          query: composeUserQuery(checkedIssues, userFeedback),
+          workspaceTag: threadId,
+          sessionTitle: `skill-opt · ${skillName} v${baseVersion} · ${threadId.slice(0, 8)}`,
+          system: systemPrompt,
+          interactionPolicy: 'auto-allow',
+          ...(modelOverride ? { model: modelOverride } : {}),
+          handlers,
+        }),
+        slotMeta,
+      );
     } else {
       throw err;
     }

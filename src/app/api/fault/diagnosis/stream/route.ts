@@ -1,4 +1,5 @@
 import { runGeneralAgent } from '@/lib/engine/general-agent';
+import { withBackgroundOpencodeSlot } from '@/lib/engine/general-agent/concurrency-limiter';
 import type { ChatHandlers } from '@/lib/engine/skill-generation/opencode-agent-cli/opencode-client';
 import { ensureSessionWorkspace } from '@/lib/engine/general-agent/workspace';
 import { ensureTraceBundle } from '@/lib/engine/observability/trace-bundle';
@@ -233,20 +234,29 @@ export async function POST(request: Request) {
           }),
       };
 
-      runGeneralAgent({
-        user,
-        query,
-        system: SYSTEM_PROMPT,
-        sessionId,
-        workspaceTag,
-        sessionTitle: executionId ? `fault-diagnosis · ${executionId}` : 'fault-diagnosis',
-        systemAgentName: 'fault-diagnosis-agent',
-        interactionPolicy: 'auto-deny',
-        agent: 'plan',
-        handlers,
-        timeoutMs: typeof body.timeoutMs === 'number' ? body.timeoutMs : 5 * 60 * 1000,
-        modelOptions: { temperature: 0.2, maxTokens: 2400 },
-      })
+      // 前台故障诊断 SSE: displayOnly=true, 仅 dashboard 可见, 不占 5-slot 配额。
+      void withBackgroundOpencodeSlot(
+        () => runGeneralAgent({
+          user,
+          query,
+          system: SYSTEM_PROMPT,
+          sessionId,
+          workspaceTag,
+          sessionTitle: executionId ? `fault-diagnosis · ${executionId}` : 'fault-diagnosis',
+          systemAgentName: 'fault-diagnosis-agent',
+          interactionPolicy: 'auto-deny',
+          agent: 'plan',
+          handlers,
+          timeoutMs: typeof body.timeoutMs === 'number' ? body.timeoutMs : 5 * 60 * 1000,
+          modelOptions: { temperature: 0.2, maxTokens: 2400 },
+        }),
+        {
+          taskType: 'fault-diagnosis',
+          user,
+          label: executionId ? `fault-diagnosis · ${executionId}` : `fault-diagnosis · ${user}`,
+          displayOnly: true,
+        },
+      )
         .then(async (result) => {
           await faultDb.faultDiagnosisMessage.create({
             data: {
