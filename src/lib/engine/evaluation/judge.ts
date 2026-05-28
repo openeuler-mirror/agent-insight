@@ -32,6 +32,11 @@ export {
 } from '@/lib/shared/interaction-utils';
 
 const LOG_FILE = path.join(process.cwd(), 'data', 'model_debug.jsonl');
+const EVALUATION_LLM_OPTIONS = {
+    temperature: 0,
+    top_p: 1,
+    seed: 42,
+} as const;
 
 function appendLog(stage: string, input: any, output: any) {
   try {
@@ -134,6 +139,7 @@ export async function judgeAnswer(
                 {
                     messages: [{ role: "user", content: rcPrompt }],
                     model: model,
+                    ...EVALUATION_LLM_OPTIONS,
                 },
                 options
             ),
@@ -169,6 +175,7 @@ export async function judgeAnswer(
                 {
                     messages: [{ role: "user", content: kaPrompt }],
                     model: model,
+                    ...EVALUATION_LLM_OPTIONS,
                 },
                 options
             ),
@@ -488,6 +495,7 @@ export async function analyzeEvaluationItems(
                     {
                         messages: [{ role: "user", content: prompt }],
                         model: model,
+                        ...EVALUATION_LLM_OPTIONS,
                     },
                     options
                 ),
@@ -597,6 +605,7 @@ export async function analyzeFailures(
                 {
                     messages: [{ role: "user", content: prompt }],
                     model: model,
+                    ...EVALUATION_LLM_OPTIONS,
                 },
                 options
             ),
@@ -1071,7 +1080,7 @@ export async function analyzeSession(input: any[], user?: string | null): Promis
                      {
                          messages: [{ role: "user", content: prompt }],
                          model: model,
-                         temperature: 0.1
+                         ...EVALUATION_LLM_OPTIONS,
                      },
                      options
                  ),

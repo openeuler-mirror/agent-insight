@@ -387,7 +387,11 @@ function makeDirectModel(config: ModelConfig) {
         configuration: {
             baseURL: config.baseUrl || 'https://api.deepseek.com',
         },
-        temperature: 0.1,
+        temperature: 0,
+        topP: 1,
+        modelKwargs: {
+            seed: 42,
+        },
     });
 }
 
@@ -486,6 +490,11 @@ export async function evaluateTrajectoryViaOpencode(
             modelID,
             apiKey: activeModel?.apiKey || config.apiKey,
             baseURL: activeModel?.baseURL || config.baseUrl,
+        },
+        modelOptions: {
+            temperature: 0,
+            top_p: 1,
+            seed: 42,
         },
         system: COORDINATOR_SYSTEM_PROMPT,
         permission: permissions,

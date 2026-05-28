@@ -509,6 +509,8 @@ async function invokeJson(client: OpenAI, model: string, prompt: string): Promis
   const response = await client.chat.completions.create({
     model,
     temperature: 0,
+    top_p: 1,
+    seed: 42,
     messages: [{ role: 'user', content: prompt }],
   });
   return response.choices?.[0]?.message?.content?.trim() || '';

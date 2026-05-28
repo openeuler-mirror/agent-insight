@@ -261,7 +261,9 @@ ${JSON.stringify(candidates.slice(0, 20), null, 2)}`;
     const response = await clientInfo.client.chat.completions.create({
       model: clientInfo.model,
       messages: [{ role: 'user', content: prompt }],
-      temperature: 0.1,
+      temperature: 0,
+      top_p: 1,
+      seed: 42,
     });
     const text = response.choices[0]?.message?.content || '';
     const parsed = parseJsonLoose(text);
