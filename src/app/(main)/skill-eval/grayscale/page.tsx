@@ -7,7 +7,7 @@ import { StatusBadge } from '@/components/feedback/StatusBadge';
 import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
 import { MetricValue } from '@/components/text/MetricValue';
-import { History, Play, Square, ExternalLink } from 'lucide-react';
+import { History, Play, ExternalLink } from 'lucide-react';
 import { useLocale } from '@/lib/client/locale-context';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
@@ -329,7 +329,7 @@ function StatusText({ label, tone }: { label: string; tone: BadgeTone }) {
 // Card 3「综合判定 & 决策」的主体。设计目标：一屏内同时看到决策结论、三维分数,
 // 以及每个分数的计算路径。布局分三段:
 //   ① 决策横条—— DECISION 标签 + 决策名 + 综合分(min 短板)；中间一句话写"短板在哪 /
-//      关键证据 / 下一步动作";右侧是 [查看 Trace] [复测] 两个动作按钮。
+//      关键证据 / 下一步动作";右侧保留 [查看 Trace]。
 //   ② 维度表 ——能力/成本/稳定性三行。分数列 mono+tabular-nums,带 50/75 阈值刻度。
 //      关键证据列只罗列与判定最相关的几个数(评测均分 / ΔToken / 触发率 等)。
 //   ③ "原始数据与计算公式"折叠面板——展开后是四个 mini panel(能力/成本/稳定性/综合),
@@ -346,9 +346,6 @@ function DecisionVerdictCard({
     decisionTitle,
     decisionAdvice,
     onViewTrace,
-    onRerun,
-    rerunDisabled,
-    rerunBusy,
     locale,
     toneColor,
     toneBg,
@@ -362,9 +359,6 @@ function DecisionVerdictCard({
     decisionTitle: string;
     decisionAdvice: string;
     onViewTrace: () => void;
-    onRerun: () => void;
-    rerunDisabled: boolean;
-    rerunBusy: boolean;
     locale: 'zh' | 'en';
     toneColor: (tone: AbTone) => string;
     toneBg: (tone: AbTone) => string;
@@ -599,17 +593,6 @@ function DecisionVerdictCard({
                             cursor: 'pointer', whiteSpace: 'nowrap',
                         }}
                     >{locale === 'zh' ? '查看 Trace' : 'View Trace'}</button>
-                    <button
-                        onClick={onRerun}
-                        disabled={rerunDisabled}
-                        style={{
-                            padding: '7px 14px', borderRadius: 6, border: 'none',
-                            background: rerunDisabled ? '#A8A29E' : '#1C1917', color: 'white',
-                            fontSize: 12, fontWeight: 700,
-                            cursor: rerunDisabled ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap',
-                            opacity: rerunDisabled && !rerunBusy ? 0.6 : 1,
-                        }}
-                    >{rerunBusy ? (locale === 'zh' ? '执行中' : 'Running') : (locale === 'zh' ? '复测' : 'Rerun')}</button>
                 </div>
             </div>
 
@@ -2447,6 +2430,7 @@ export function GrayscaleEvaluation({
                 score: undefined as number | undefined,
                 triggerRate: '—',
                 toolCall: '—',
+                accuracy: '—',
                 sessionId: '',
                 output: ''
             };
@@ -2478,6 +2462,32 @@ export function GrayscaleEvaluation({
         const terminalStates = allRuns.filter(s => s.status === 'pass' || s.status === 'fail');
         const executedCount = completedStates.length;
         const completedCount = terminalStates.length;
+        const executionMetricStates = completedStates.filter(s => Boolean(s.sessionId) || typeof s.timeCost === 'string' || typeof s.tokenUsage === 'number');
+        const executionAvgTime = (() => {
+            const seconds = executionMetricStates
+                .map(s => typeof s.timeCost === 'string' ? parseFloat(s.timeCost) : 0)
+                .filter(n => Number.isFinite(n) && n > 0);
+            return seconds.length > 0
+                ? `${(seconds.reduce((sum, n) => sum + n, 0) / seconds.length).toFixed(1)}s`
+                : '—';
+        })();
+        const executionAvgTokens = (() => {
+            const tokened = executionMetricStates.filter(s => typeof s.tokenUsage === 'number' && (s.tokenUsage || 0) > 0);
+            return tokened.length > 0
+                ? Math.round(tokened.reduce((sum, s) => sum + (s.tokenUsage || 0), 0) / tokened.length)
+                : undefined;
+        })();
+        const executionSessionId = executionMetricStates.find(s => s.sessionId)?.sessionId || '';
+        const executionOutput = executionMetricStates.find(s => s.output)?.output || '';
+        const executionTriggerCount = executionMetricStates.filter(s => s.skillTriggered).length;
+        const executionTriggerRate = executionMetricStates.length > 0
+            ? `${executionTriggerCount}/${executionMetricStates.length} (${Math.round(executionTriggerCount / executionMetricStates.length * 100)}%)`
+            : '—';
+        const executionToolNames = Array.from(new Set(executionMetricStates.flatMap(s => s.toolCalls || []))).slice(0, 3);
+        const executionToolCount = executionMetricStates.reduce((sum, s) => sum + (s.toolCallCount || 0), 0);
+        const executionToolCall = executionToolNames.length > 0
+            ? `${executionToolNames.join(', ')} · ${executionToolCount}`
+            : (executionToolCount > 0 ? `${executionToolCount} calls` : '无');
 
         // Determine Overall State
         let overallStatus: 'pending' | 'running' | 'evaluating' | 'completed' = 'pending';
@@ -2500,6 +2510,7 @@ export function GrayscaleEvaluation({
                 score: undefined as number | undefined,
                 triggerRate: '—',
                 toolCall: '—',
+                accuracy: '—',
                 sessionId: '',
                 output: ''
             };
@@ -2514,6 +2525,7 @@ export function GrayscaleEvaluation({
                 score: undefined as number | undefined,
                 triggerRate: '—',
                 toolCall: '—',
+                accuracy: '—',
                 sessionId: '',
                 output: ''
             };
@@ -2523,13 +2535,14 @@ export function GrayscaleEvaluation({
             return {
                 status: 'evaluating' as CaseStatus,
                 runsCompleted: locale === 'zh' ? `${completedCount}/${totalCount} 评估中` : `${completedCount}/${totalCount} Evaluating`,
-                timeCost: '—',
-                tokenUsage: undefined as number | undefined,
+                timeCost: executionAvgTime,
+                tokenUsage: executionAvgTokens,
                 score: undefined as number | undefined,
-                triggerRate: '—',
-                toolCall: '—',
-                sessionId: '',
-                output: ''
+                triggerRate: executionTriggerRate,
+                toolCall: executionToolCall,
+                accuracy: '—',
+                sessionId: executionSessionId,
+                output: executionOutput
             };
         }
 
@@ -2576,6 +2589,7 @@ export function GrayscaleEvaluation({
             score: avgScore,
             triggerRate,
             toolCall,
+            accuracy: avgScore == null ? '—' : `${avgScore}`,
             sessionId: terminalStates[0]?.sessionId || '',
             output: terminalStates[0]?.output || 'Success'
         };
@@ -3679,17 +3693,16 @@ export function GrayscaleEvaluation({
                             >
                                 <Play /> {runButtonLabel}
                             </Button>
-                            {/* 终止按钮: 仅 busy 时显示, 让用户能干涉死锁在执行中的任务 */}
-                            {runButtonBusy && (
-                                <Button
-                                    variant="destructive"
-                                    size="default"
-                                    onClick={abortCurrentRun}
-                                    title={locale === 'zh' ? '终止当前 A/B 测试' : 'Abort current A/B test'}
-                                >
-                                    <Square /> {locale === 'zh' ? '终止' : 'Abort'}
-                                </Button>
-                            )}
+                            <button
+                                type="button"
+                                className="ab-stop-run-btn"
+                                onClick={abortCurrentRun}
+                                aria-label={locale === 'zh' ? '终止' : 'Abort'}
+                                title={locale === 'zh' ? '终止当前 A/B 测试' : 'Abort current A/B test'}
+                                disabled={!runButtonBusy}
+                            >
+                                <span>{locale === 'zh' ? '终止' : 'Abort'}</span>
+                            </button>
                             <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, fontWeight: 700, color: 'var(--foreground)' }}>
                                 <span>{locale === 'zh' ? 'Agent 最大并发数' : 'Max agent concurrency'}</span>
                                 <select
@@ -3855,9 +3868,6 @@ export function GrayscaleEvaluation({
                                       <Button variant="ghost" size="sm" onClick={() => setRecordModal({ title: locale === 'zh' ? 'A 对照组执行记录' : 'A Control Records', side: 'a' })}>
                                           <ExternalLink /> {locale === 'zh' ? '执行记录' : 'Records'}
                                       </Button>
-                                      <Button variant="ghost" size="sm" onClick={() => runCaseSide(selectedCaseId, 'a')}>
-                                          <Play /> {locale === 'zh' ? '重跑' : 'Re-run'}
-                                      </Button>
                                       <Button variant="default" size="sm" onClick={() => evaluateCaseSide(selectedCaseId, 'a', simA)}>
                                           {locale === 'zh' ? '✓ 评测' : 'Evaluate'}
                                       </Button>
@@ -3961,9 +3971,6 @@ export function GrayscaleEvaluation({
                                 <div className="v2-col-actions" style={{ background: 'var(--background-secondary)', borderTop: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px' }}>
                                     <Button variant="ghost" size="sm" onClick={() => setRecordModal({ title: locale === 'zh' ? 'B 实验组执行记录' : 'B Experiment Records', side: 'b' })}>
                                         <ExternalLink /> {locale === 'zh' ? '执行记录' : 'Records'}
-                                    </Button>
-                                    <Button variant="ghost" size="sm" onClick={() => runCaseSide(selectedCaseId, 'b')}>
-                                        <Play /> {locale === 'zh' ? '重跑' : 'Re-run'}
                                     </Button>
                                     <Button variant="default" size="sm" onClick={() => evaluateCaseSide(selectedCaseId, 'b', simB)}>
                                         {locale === 'zh' ? '✓ 评测' : 'Evaluate'}
@@ -4315,9 +4322,6 @@ export function GrayscaleEvaluation({
                                 decisionTitle={decisionTitle}
                                 decisionAdvice={decisionAdvice}
                                 onViewTrace={() => setRecordModal({ title: locale === 'zh' ? 'B 实验组执行记录' : 'B Experiment Records', side: 'b' })}
-                                onRerun={runComparisonForCheckedCases}
-                                rerunDisabled={runButtonDisabled}
-                                rerunBusy={runButtonBusy}
                                 locale={locale}
                                 toneColor={toneColor}
                                 toneBg={toneBg}
