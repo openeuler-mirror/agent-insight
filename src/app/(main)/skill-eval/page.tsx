@@ -3684,7 +3684,7 @@ function TraceDeviationPanel({
             <SectionShell
                 num={1}
                 variant="config"
-                title="配置 · 用例集"
+                title="配置"
                 desc="该 skill 版本关联的全部 trace（含已评测和未评测）；勾选 → 到 ② 触发分析"
                 open={caseConfigOpen}
                 onToggle={() => setCaseConfigOpen(o => !o)}
