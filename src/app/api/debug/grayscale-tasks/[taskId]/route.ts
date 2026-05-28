@@ -138,6 +138,8 @@ interface TrajectoryApiResult {
     rawAnalysis?: unknown;
 }
 
+type TrajectoryResultStatus = 'pending' | 'running' | 'done' | 'failed' | string;
+
 interface ExecutionMetricRow {
     taskId?: string | null;
     query?: string | null;
@@ -167,7 +169,7 @@ interface GrayscalePrisma {
     trajectoryEvalResult: {
         findMany(args: { where: { user?: string; evaluatorRunId: { in: string[] } } }): Promise<TrajectoryResultRow[]>;
         updateMany(args: {
-            where: { user?: string; evaluatorRunId: string; status?: { in: string[] } };
+            where: { user?: string; evaluatorRunId?: string; id?: { in: string[] }; status?: { in: string[] }; taskId?: { in: string[] } };
             data: { status: string; errorMessage?: string };
         }): Promise<{ count: number }>;
     };
@@ -521,24 +523,30 @@ function rebuildSideAggregate(state: PerVersionState, totalRuns: number): PerVer
         : runs;
     const effectiveTotalRuns = expectedRuns || aggregateRuns.length;
     const finished = aggregateRuns.filter(r => r.status === 'executed' || r.status === 'pass');
+    const executionFinished = aggregateRuns.filter(r => (
+        r.status === 'executed'
+        || r.status === 'evaluating'
+        || r.status === 'pass'
+        || (r.status === 'fail' && Boolean(r.sessionId))
+    ));
     const failed = aggregateRuns.filter(r => r.status === 'fail');
     const evaluating = aggregateRuns.some(r => r.status === 'evaluating');
     const running = aggregateRuns.some(r => r.status === 'running' || r.status === 'pending');
     const scored = aggregateRuns.filter(r => typeof r.score === 'number');
-    const seconds = finished
+    const seconds = executionFinished
         .map(r => typeof r.timeCost === 'string' ? Number.parseFloat(r.timeCost) : 0)
-        .filter(n => Number.isFinite(n));
+        .filter(n => Number.isFinite(n) && n > 0);
     const avgSeconds = seconds.length > 0 ? seconds.reduce((a, b) => a + b, 0) / seconds.length : 0;
-    const tokenRuns = finished.filter(r => typeof r.tokenUsage === 'number');
+    const tokenRuns = executionFinished.filter(r => typeof r.tokenUsage === 'number');
     const avgTokens = tokenRuns.length > 0
         ? Math.round(tokenRuns.reduce((sum, r) => sum + (r.tokenUsage || 0), 0) / tokenRuns.length)
         : 0;
     const avgScore = scored.length > 0
         ? Math.round(scored.reduce((sum, r) => sum + (r.score || 0), 0) / scored.length)
         : undefined;
-    const traceIds = finished.map(r => r.sessionId).filter(Boolean) as string[];
-    const toolCallCount = finished.reduce((sum, r) => sum + (r.toolCallCount || 0), 0);
-    const toolCalls = Array.from(new Set(finished.flatMap(r => r.toolCalls || []))).slice(0, 8);
+    const traceIds = executionFinished.map(r => r.sessionId).filter(Boolean) as string[];
+    const toolCallCount = executionFinished.reduce((sum, r) => sum + (r.toolCallCount || 0), 0);
+    const toolCalls = Array.from(new Set(executionFinished.flatMap(r => r.toolCalls || []))).slice(0, 8);
 
     let status: CaseStatus = 'pending';
     if (scored.length >= effectiveTotalRuns && effectiveTotalRuns > 0) status = 'pass';
@@ -552,14 +560,14 @@ function rebuildSideAggregate(state: PerVersionState, totalRuns: number): PerVer
         status,
         runs,
         runCount: totalRuns,
-        timeCost: finished.length > 0 ? `${avgSeconds.toFixed(1)}s` : undefined,
+        timeCost: seconds.length > 0 ? `${avgSeconds.toFixed(1)}s` : undefined,
         tokenUsage: avgTokens || undefined,
-        output: [...finished].reverse()[0]?.output || state.output,
+        output: [...executionFinished].reverse()[0]?.output || state.output,
         sessionId: traceIds[0] || state.sessionId,
         traceIds,
         score: avgScore,
         tier: avgScore == null ? undefined : scoreTier(avgScore),
-        skillTriggered: finished.some(r => r.skillTriggered),
+        skillTriggered: executionFinished.some(r => r.skillTriggered),
         toolCallCount,
         toolCalls,
     };
@@ -773,8 +781,10 @@ async function reconcileFinishedEvaluations(user: string, config: GrayscaleConfi
     }
     if (staleRows.length > 0) {
         for (const { row, reason } of staleRows) {
-            if (row.evaluatorRunId) {
-                await markEvaluatorRunFailed(user, row.evaluatorRunId, reason).catch(() => {});
+            if (row.evaluatorRunId && row.taskId) {
+                await markEvaluatorTasksFailed(user, row.evaluatorRunId, [row.taskId], reason).catch(() => {});
+            } else if (row.id) {
+                await markEvaluatorRowsFailed(user, [row.id], reason).catch(() => {});
             }
             row.status = 'failed';
             row.errorMessage = row.errorMessage || reason;
@@ -1030,6 +1040,42 @@ async function markEvaluatorRunFailed(user: string, evaluatorRunId: string, erro
     });
 }
 
+async function markEvaluatorTasksFailed(user: string, evaluatorRunId: string, taskIds: string[], errorMessage: string) {
+    const scopedTaskIds = Array.from(new Set(taskIds.map(id => id.trim()).filter(Boolean)));
+    if (scopedTaskIds.length === 0) {
+        await markEvaluatorRunFailed(user, evaluatorRunId, errorMessage);
+        return;
+    }
+    await (prisma as unknown as GrayscalePrisma).trajectoryEvalResult.updateMany({
+        where: {
+            user,
+            evaluatorRunId,
+            taskId: { in: scopedTaskIds },
+            status: { in: ['pending', 'running'] },
+        },
+        data: {
+            status: 'failed',
+            errorMessage,
+        },
+    });
+}
+
+async function markEvaluatorRowsFailed(user: string, rowIds: string[], errorMessage: string) {
+    const scopedRowIds = Array.from(new Set(rowIds.map(id => id.trim()).filter(Boolean)));
+    if (scopedRowIds.length === 0) return;
+    await (prisma as unknown as GrayscalePrisma).trajectoryEvalResult.updateMany({
+        where: {
+            user,
+            id: { in: scopedRowIds },
+            status: { in: ['pending', 'running'] },
+        },
+        data: {
+            status: 'failed',
+            errorMessage,
+        },
+    });
+}
+
 function markStateRunsFailed(states: CaseStates, evaluatorRunId: string | undefined, errorMessage: string) {
     if (!evaluatorRunId) return;
     for (const state of Object.values(states)) {
@@ -1084,12 +1130,12 @@ async function evaluateSingleRunTarget(args: {
         args.states[target.caseId][target.side].evaluatorRunId = evaluatorRunId;
         await persistTaskState(args.taskId, args.user, args.config, args.states);
 
-        await waitAndApplyEvaluation(args.origin, args.user, evaluatorRunId, args.states);
+        await waitAndApplyEvaluation(args.origin, args.user, evaluatorRunId, args.states, [target.run.sessionId!]);
         await hydrateExecutionMetrics(args.states);
     } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         if (evaluatorRunId) {
-            await markEvaluatorRunFailed(args.user, evaluatorRunId, message).catch(() => {});
+            await markEvaluatorTasksFailed(args.user, evaluatorRunId, target.run.sessionId ? [target.run.sessionId] : [], message).catch(() => {});
         }
         target.run.status = 'fail';
         target.run.output = message;
@@ -1103,16 +1149,24 @@ async function evaluateSingleRunTarget(args: {
     await persistTaskState(args.taskId, args.user, args.config, args.states);
 }
 
-async function waitAndApplyEvaluation(origin: string, user: string, evaluatorRunId: string, states: CaseStates) {
+function isTerminalTrajectoryStatus(status: TrajectoryResultStatus | undefined): boolean {
+    return status === 'done' || status === 'failed';
+}
+
+async function waitAndApplyEvaluation(origin: string, user: string, evaluatorRunId: string, states: CaseStates, targetTaskIds: string[]) {
     const timeoutMessage = 'evaluation timed out';
+    const targetTaskIdSet = new Set(targetTaskIds.map(id => id.trim()).filter(Boolean));
     for (let i = 0; i < 180; i++) {
         const res = await fetch(`${origin}/api/eval/trajectory/results?user=${encodeURIComponent(user)}&runId=${encodeURIComponent(evaluatorRunId)}&limit=500`);
         const data = await res.json().catch(() => ({}));
         const body = data as { results?: TrajectoryApiResult[] };
         const results = Array.isArray(body.results) ? body.results : [];
+        const relevantResults = targetTaskIdSet.size > 0
+            ? results.filter(result => Boolean(result.taskId && targetTaskIdSet.has(result.taskId)))
+            : results.filter(result => Boolean(result.taskId));
         if (results.length > 0) {
             for (const result of results) {
-                if (result.status !== 'done' && result.status !== 'failed') continue;
+                if (!isTerminalTrajectoryStatus(result.status)) continue;
                 for (const state of Object.values(states)) {
                     for (const side of ['a', 'b'] as Side[]) {
                         for (const run of state[side].runs || []) {
@@ -1137,11 +1191,29 @@ async function waitAndApplyEvaluation(origin: string, user: string, evaluatorRun
                 }
             }
         }
-        if (results.length > 0 && results.every(r => r.status === 'done' || r.status === 'failed')) return;
+        if (relevantResults.length > 0 && relevantResults.every(r => isTerminalTrajectoryStatus(r.status))) return;
         await new Promise(resolve => setTimeout(resolve, 2000));
     }
-    await markEvaluatorRunFailed(user, evaluatorRunId, timeoutMessage);
-    markStateRunsFailed(states, evaluatorRunId, timeoutMessage);
+    await markEvaluatorTasksFailed(user, evaluatorRunId, Array.from(targetTaskIdSet), timeoutMessage);
+    if (targetTaskIdSet.size > 0) {
+        for (const state of Object.values(states)) {
+            for (const side of ['a', 'b'] as Side[]) {
+                let changed = false;
+                for (const run of state[side].runs || []) {
+                    if (!run.sessionId || !targetTaskIdSet.has(run.sessionId)) continue;
+                    if (run.status !== 'evaluating' && run.status !== 'running') continue;
+                    run.status = 'fail';
+                    run.output = timeoutMessage;
+                    changed = true;
+                }
+                if (changed) {
+                    state[side] = rebuildSideAggregate(state[side], state[side].runCount || state[side].runs?.length || 0);
+                }
+            }
+        }
+    } else {
+        markStateRunsFailed(states, evaluatorRunId, timeoutMessage);
+    }
     throw new Error(timeoutMessage);
 }
 

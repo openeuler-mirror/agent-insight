@@ -1123,6 +1123,13 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
             }
         }
     }
+    if (interactions.length === 0 && (traceQuery || fallbackFinalResult)) {
+        const timestamp = new Date().toISOString();
+        interactions = [
+            ...(traceQuery ? [{ role: 'user', content: traceQuery, timestamp }] : []),
+            ...(fallbackFinalResult ? [{ role: 'assistant', content: fallbackFinalResult, timestamp }] : []),
+        ] as TrajectoryEvalInput['actualInteractions'];
+    }
     let caseEntry: {
         id?: string;
         input: string;
