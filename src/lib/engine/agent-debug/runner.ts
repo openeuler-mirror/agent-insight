@@ -190,6 +190,9 @@ function normalizeTriage(value: unknown): AgentDebugTriage {
       errorType: stringField(fatalRaw, 'errorType', 'fatal'),
       toolName: optionalStringField(fatalRaw, 'toolName'),
       affectedSteps: numberArrayField(fatalRaw, 'affectedSteps'),
+      affectedTraceStepIndexes: numberArrayField(fatalRaw, 'affectedTraceStepIndexes'),
+      traceNodeLabel: optionalStringField(fatalRaw, 'traceNodeLabel'),
+      traceNodeKind: optionalStringField(fatalRaw, 'traceNodeKind'),
       summary: stringField(fatalRaw, 'summary', ''),
       recommendation: stringField(fatalRaw, 'recommendation', ''),
       rawErrorEvidence: stringField(fatalRaw, 'rawErrorEvidence', ''),
@@ -245,6 +248,7 @@ function buildAgentQuery(args: {
     '- Memory / Reflection / Planning / Action 都允许留白；空模块不是错误。',
     '- Action 必须基于真实 tool call；不要从 Action 失败倒推 Planning 一定错误。',
     '- 不使用候选窗口；必须基于输入文件中的全部 turns 运行拆分、静态检测和 Phase 1 分析。',
+    '- 用户界面只展示左侧真实 trace 节点；所有 issue/root/cascade 必须尽量带 anchorId、traceStepIndex、traceNodeLabel。',
     '- 如果归一化 Step 摘要证据不足，可读取 Trace 资料包里的 manifest/index/nodes。',
     '',
     '## 执行记录',
@@ -309,6 +313,8 @@ function turnToPromptRecord(turn: DebugTurn) {
   return {
     step: turn.turnIndex,
     traceStepIndex: turn.traceStepIndex,
+    traceNodeLabel: turn.traceNodeLabel,
+    traceNodeKind: turn.traceNodeKind,
     sourceInteractionIndex: turn.sourceInteractionIndex,
     role: turn.role,
     agentName: turn.agentName,
@@ -323,6 +329,8 @@ function turnToPromptRecord(turn: DebugTurn) {
       rawError: tool.rawError,
       anchorId: tool.anchorId,
       traceStepIndex: tool.traceStepIndex,
+      traceNodeLabel: tool.traceNodeLabel,
+      traceNodeKind: tool.traceNodeKind,
     })),
     anchorIds: turn.anchorIds,
   };
@@ -332,8 +340,12 @@ function normalizeStepRecords(value: unknown, turns: DebugTurn[]): AgentDebugSte
   if (!Array.isArray(value)) {
     return turns.map(turn => ({
       step: turn.traceStepIndex || turn.turnIndex,
+      diagnosticStep: turn.turnIndex,
+      traceStepIndex: turn.traceStepIndex,
+      traceNodeLabel: turn.traceNodeLabel,
+      traceNodeKind: turn.traceNodeKind,
       sourceInteractionIndex: turn.sourceInteractionIndex,
-      title: `Step ${turn.traceStepIndex || turn.turnIndex}`,
+      title: turn.traceNodeLabel || `Trace node ${turn.traceStepIndex || turn.turnIndex}`,
       inputContext: turn.requestContextPreview || '',
       agentOutput: [turn.reasoningText, turn.text].filter(Boolean).join('\n\n'),
       environmentResponse: '',
@@ -342,17 +354,22 @@ function normalizeStepRecords(value: unknown, turns: DebugTurn[]): AgentDebugSte
     }));
   }
   return value
-    .map((item, index) => item && typeof item === 'object' ? item as Record<string, unknown> : null)
+    .map((item, _index) => item && typeof item === 'object' ? item as Record<string, unknown> : null)
     .filter((item): item is Record<string, unknown> => Boolean(item))
     .map((item, index) => {
       const step = Math.max(1, Math.round(numberField(item, 'step', index + 1)));
+      const traceStepIndex = optionalNumberField(item, 'traceStepIndex') ?? step;
       const modules = item.modules && typeof item.modules === 'object'
         ? item.modules as Record<string, unknown>
         : {};
       return {
         step,
+        diagnosticStep: optionalNumberField(item, 'diagnosticStep'),
+        traceStepIndex,
+        traceNodeLabel: optionalStringField(item, 'traceNodeLabel'),
+        traceNodeKind: optionalStringField(item, 'traceNodeKind'),
         sourceInteractionIndex: Math.max(0, Math.round(numberField(item, 'sourceInteractionIndex', step - 1))),
-        title: stringField(item, 'title', `Step ${step}`),
+        title: stringField(item, 'title', optionalStringField(item, 'traceNodeLabel') || `Trace node ${traceStepIndex}`),
         inputContext: stringField(item, 'inputContext', ''),
         agentOutput: stringField(item, 'agentOutput', ''),
         environmentResponse: stringField(item, 'environmentResponse', ''),
@@ -374,11 +391,17 @@ function normalizePhase1Grid(value: unknown): AgentDebugPhase1Cell[] {
   for (const raw of value) {
     if (!raw || typeof raw !== 'object') continue;
     const item = raw as Record<string, unknown>;
-    const module = normalizeModule(stringField(item, 'module', 'unknown'));
-    if (module === 'unknown') continue;
+    const mod = normalizeModule(stringField(item, 'module', 'unknown'));
+    if (mod === 'unknown') continue;
+    const step = Math.max(1, Math.round(numberField(item, 'step', 1)));
+    const traceStepIndex = optionalNumberField(item, 'traceStepIndex') ?? step;
     cells.push({
-      step: Math.max(1, Math.round(numberField(item, 'step', 1))),
-      module,
+      step,
+      diagnosticStep: optionalNumberField(item, 'diagnosticStep'),
+      traceStepIndex,
+      traceNodeLabel: optionalStringField(item, 'traceNodeLabel'),
+      traceNodeKind: optionalStringField(item, 'traceNodeKind'),
+      module: mod,
       errorDetected: Boolean(item.errorDetected),
       errorType: stringField(item, 'errorType', 'no_error'),
       severity: normalizeSeverity(stringField(item, 'severity', 'medium')),
@@ -395,8 +418,12 @@ function normalizeIssues(value: unknown, phase1Grid: AgentDebugPhase1Cell[]): Ag
   const fromGrid = phase1Grid
     .filter(cell => cell.errorDetected)
     .map(cell => ({
-      id: `S${cell.step}-${cell.module}-${cell.errorType}`,
+      id: `N${cell.traceStepIndex || cell.step}-${cell.module}-${cell.errorType}`,
       step: cell.step,
+      diagnosticStep: cell.diagnosticStep,
+      traceStepIndex: cell.traceStepIndex,
+      traceNodeLabel: cell.traceNodeLabel,
+      traceNodeKind: cell.traceNodeKind,
       module: cell.module,
       errorType: cell.errorType,
       severity: cell.severity,
@@ -412,6 +439,10 @@ function normalizeIssues(value: unknown, phase1Grid: AgentDebugPhase1Cell[]): Ag
     .map((item, index) => ({
       id: stringField(item, 'id', `issue-${index + 1}`),
       step: Math.max(1, Math.round(numberField(item, 'step', 1))),
+      diagnosticStep: optionalNumberField(item, 'diagnosticStep'),
+      traceStepIndex: optionalNumberField(item, 'traceStepIndex') ?? Math.max(1, Math.round(numberField(item, 'step', 1))),
+      traceNodeLabel: optionalStringField(item, 'traceNodeLabel'),
+      traceNodeKind: optionalStringField(item, 'traceNodeKind'),
       module: normalizeModule(stringField(item, 'module', 'unknown')),
       errorType: stringField(item, 'errorType', 'others'),
       severity: normalizeSeverity(stringField(item, 'severity', 'medium')),
@@ -428,22 +459,34 @@ function normalizeRootCause(value: unknown): AgentDebugRootCause | null {
   const item = value as Record<string, unknown>;
   const rawStep = item.criticalStep;
   const criticalStep = typeof rawStep === 'number' && Number.isFinite(rawStep) ? Math.max(1, Math.round(rawStep)) : null;
+  const criticalTraceStepIndex = optionalNumberField(item, 'criticalTraceStepIndex') ?? criticalStep;
   const chain = Array.isArray(item.cascadingChain)
     ? item.cascadingChain
       .map(entry => entry && typeof entry === 'object' ? entry as Record<string, unknown> : null)
       .filter((entry): entry is Record<string, unknown> => Boolean(entry))
       .slice(0, 8)
-      .map(entry => ({
-        step: Math.max(1, Math.round(numberField(entry, 'step', criticalStep || 1))),
-        module: normalizeModule(stringField(entry, 'module', 'unknown')),
-        errorType: stringField(entry, 'errorType', stringField(item, 'criticalErrorType', 'others')),
-        consequence: stringField(entry, 'consequence', ''),
-        anchorId: optionalStringField(entry, 'anchorId'),
-      }))
+      .map(entry => {
+        const step = Math.max(1, Math.round(numberField(entry, 'step', criticalStep || 1)));
+        return {
+          step,
+          diagnosticStep: optionalNumberField(entry, 'diagnosticStep'),
+          traceStepIndex: optionalNumberField(entry, 'traceStepIndex') ?? step,
+          traceNodeLabel: optionalStringField(entry, 'traceNodeLabel'),
+          traceNodeKind: optionalStringField(entry, 'traceNodeKind'),
+          module: normalizeModule(stringField(entry, 'module', 'unknown')),
+          errorType: stringField(entry, 'errorType', stringField(item, 'criticalErrorType', 'others')),
+          consequence: stringField(entry, 'consequence', ''),
+          anchorId: optionalStringField(entry, 'anchorId'),
+        };
+      })
       .filter(entry => entry.module !== 'unknown')
     : [];
   return {
     criticalStep,
+    criticalTraceStepIndex,
+    criticalTraceNodeLabel: optionalStringField(item, 'criticalTraceNodeLabel'),
+    criticalTraceNodeKind: optionalStringField(item, 'criticalTraceNodeKind'),
+    criticalAnchorId: optionalStringField(item, 'criticalAnchorId') || optionalStringField(item, 'anchorId'),
     criticalModule: normalizeModule(stringField(item, 'criticalModule', 'unknown')),
     criticalErrorType: stringField(item, 'criticalErrorType', 'others'),
     summary: stringField(item, 'summary', ''),
@@ -490,6 +533,11 @@ function normalizeSeverity(value: string): AgentDebugSeverity {
 function optionalStringField(obj: Record<string, unknown>, key: string): string | undefined {
   const value = obj[key];
   return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function optionalNumberField(obj: Record<string, unknown>, key: string): number | undefined {
+  const value = obj[key];
+  return typeof value === 'number' && Number.isFinite(value) ? Math.max(1, Math.round(value)) : undefined;
 }
 
 function stringArrayField(obj: Record<string, unknown>, key: string): string[] {

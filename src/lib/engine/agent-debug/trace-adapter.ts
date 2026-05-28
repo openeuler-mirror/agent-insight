@@ -8,6 +8,7 @@ type AnchorInfo = {
   id: string;
   kind: string;
   stepIndex: number;
+  label: string;
   toolCallId?: string;
 };
 
@@ -32,6 +33,7 @@ export function buildDebugTurns(interactions: unknown[]): DebugTurn[] {
       id: step.id,
       kind: step.kind,
       stepIndex: step.stepIndex,
+      label: [step.name, step.meta].filter(Boolean).join(' · '),
       toolCallId: step.toolCallId,
     });
     anchorInfosByInteraction.set(step.interactionIndex, list);
@@ -62,6 +64,7 @@ export function buildDebugTurns(interactions: unknown[]): DebugTurn[] {
     );
     const anchorInfos = anchorInfosByInteraction.get(index) || [];
     const toolCalls = collectToolCalls(item, responseMessage, anchorInfos);
+    const turnAnchor = resolveTurnAnchor(anchorInfos);
     if (!text.trim() && !reasoningText.trim() && toolCalls.length === 0) return;
 
     turns.push({
@@ -76,7 +79,9 @@ export function buildDebugTurns(interactions: unknown[]): DebugTurn[] {
       startedAt: toMsTimestamp(asRecord(item.timeInfo)?.created) ?? toMsTimestamp(item.timestamp),
       completedAt: toMsTimestamp(asRecord(item.timeInfo)?.completed),
       anchorIds: anchorInfos.map(anchor => anchor.id),
-      traceStepIndex: resolveTurnTraceStep(anchorInfos),
+      traceStepIndex: turnAnchor?.stepIndex,
+      traceNodeLabel: turnAnchor?.label,
+      traceNodeKind: turnAnchor?.kind,
     });
   });
   return turns;
@@ -100,6 +105,7 @@ function collectToolCalls(item: AnyRecord, responseMessage: AnyRecord | null, an
     const key = id ? `id:${id}` : `sig:${name}:${stableStringify(args)}:${index}`;
     if (seen.has(key)) return;
     seen.add(key);
+    const toolAnchor = resolveToolAnchor(anchorInfos, index, id);
     out.push({
       id,
       name,
@@ -108,8 +114,10 @@ function collectToolCalls(item: AnyRecord, responseMessage: AnyRecord | null, an
       status: inferToolStatus(name, call, output, rawError),
       startedAt: toMsTimestamp(asRecord(call.timing)?.started_at) ?? toMsTimestamp(call.startedAt),
       completedAt: toMsTimestamp(asRecord(call.timing)?.completed_at) ?? toMsTimestamp(call.completedAt),
-      anchorId: resolveToolAnchor(anchorInfos, index, id)?.id,
-      traceStepIndex: resolveToolAnchor(anchorInfos, index, id)?.stepIndex,
+      anchorId: toolAnchor?.id,
+      traceStepIndex: toolAnchor?.stepIndex,
+      traceNodeLabel: toolAnchor?.label,
+      traceNodeKind: toolAnchor?.kind,
       rawError: rawError || undefined,
     });
   });
@@ -125,12 +133,12 @@ function resolveToolAnchor(anchorInfos: AnchorInfo[], localToolIndex: number, to
   return executableAnchors[localToolIndex] || executableAnchors[0] || anchorInfos[0];
 }
 
-function resolveTurnTraceStep(anchorInfos: AnchorInfo[]): number | undefined {
+function resolveTurnAnchor(anchorInfos: AnchorInfo[]): AnchorInfo | undefined {
   return (
     anchorInfos.find(anchor => anchor.kind === 'llm') ||
     anchorInfos.find(anchor => anchor.kind === 'agent') ||
     anchorInfos[0]
-  )?.stepIndex;
+  );
 }
 
 function normalizeAssistantRole(role: string): DebugTurn['role'] | null {
