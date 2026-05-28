@@ -1628,7 +1628,7 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
                 errorMessage: null,
             },
         });
-        await derivePointsAfterDone(user, id, execution);
+        await derivePointsAfterDone(user, id, execution, interactions);
         return;
     }
 
@@ -1698,7 +1698,7 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
         throw new StagedEvaluationError('persist', `写入评测结果失败: ${(e as Error).message}`, e);
     }
 
-    await derivePointsAfterDone(user, id, execution);
+    await derivePointsAfterDone(user, id, execution, interactions);
  } finally {
     // 无论成功 / 失败 / throw,都从 activeTasks 摘掉这条注册,让 isActive() 返 false,
     // 前端轮询拿到 is_evaluating=false → trace 状态更新为最新分数 / 失败信息。
@@ -1719,6 +1719,7 @@ async function derivePointsAfterDone(
     user: string,
     rowId: string,
     execution: { invokedSkills?: string | null; skill?: string | null; skills?: string | null; skillVersion?: number | null } | null,
+    interactions?: unknown,
 ): Promise<void> {
     try {
         const row = await prisma.trajectoryEvalResult.findUnique({
@@ -1734,7 +1735,7 @@ async function derivePointsAfterDone(
             },
         });
         if (!row) return;
-        const skills = getPrimaryExecutionSkillTargets(execution).map(t => ({ name: t.skill, version: t.version }));
+        const skills = getPrimaryExecutionSkillTargets(execution, interactions).map(t => ({ name: t.skill, version: t.version }));
         if (skills.length === 0) return;
         const written = await deriveAndPersistOptPoints({
             user,

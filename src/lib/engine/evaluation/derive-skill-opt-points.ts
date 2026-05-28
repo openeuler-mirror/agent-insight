@@ -49,10 +49,34 @@ interface RawKeyPointFinding {
   covered?: boolean;
   severity?: string;
   explanation?: string;
+  missing_reason?: string;
+  attribution_reason?: string;
+  evidence?: {
+    actual?: string;
+    expected?: string;
+  };
+  trace_root_cause?: {
+    failure_reason?: string;
+    related_steps?: Array<{
+      step_index?: number;
+      stepIndex?: number;
+      kind?: string;
+      name?: string;
+      evidence?: string;
+    }>;
+  };
   is_skill_attributable?: boolean;
   isSkillAttributable?: boolean;
   improvement_suggestion?: string;
   improvementSuggestion?: string;
+}
+
+interface RawKeyPointTraceStep {
+  step_index?: number;
+  stepIndex?: number;
+  kind?: string;
+  name?: string;
+  evidence?: string;
 }
 
 interface RawToolChoiceFinding {
@@ -162,7 +186,7 @@ export async function deriveAndPersistOptPoints(args: DeriveOptPointsArgs): Prom
         severity: issue.severity,
         summary: issue.summary,
         evidence: issue.evidence || null,
-        reasoning: null,
+        reasoning: issue.reasoning || null,
         suggestedFix: issue.improvementSuggestion || null,
         ruleId: null,
         dimension: null,
@@ -185,6 +209,7 @@ interface DerivedIssue {
   category: string;
   summary: string;
   evidence: string;
+  reasoning?: string;
   /** 评估器给出的"在 SKILL.md 哪段加什么"具体改进建议；可空 */
   improvementSuggestion?: string;
 }
@@ -243,31 +268,36 @@ function extractDeviationIssues(
 function extractKeyPointIssues(
   row: Pick<TrajectoryEvalResult, 'rawAnalysisJson'>,
 ): DerivedIssue[] {
-  const raw = parseJsonObject(row.rawAnalysisJson);
-  if (!raw) return [];
-  // 兼容两种位置：rawAnalysis.resultEvaluation.key_point_findings 或 rawAnalysis.key_point_findings
-  const direct = arrayOrEmpty<RawKeyPointFinding>(raw.key_point_findings);
-  const nested = arrayOrEmpty<RawKeyPointFinding>(
-    raw.resultEvaluation && typeof raw.resultEvaluation === 'object'
-      ? (raw.resultEvaluation as Record<string, unknown>).key_point_findings
-      : undefined,
-  );
-  const findings = direct.length > 0 ? direct : nested;
+  const findings = extractRawKeyPointFindings(row.rawAnalysisJson);
   const out: DerivedIssue[] = [];
   for (const f of findings) {
     if (f.covered === true) continue;
     if (resolveSkillAttributable(f.is_skill_attributable, f.isSkillAttributable) === false) continue;
-    const summary = String(f.content || '').trim();
+    const summary = String(f.content || f.missing_reason || '').trim();
     if (!summary) continue;
+    const evidence = buildKeyPointIssueEvidence(f);
+    const reasoning = String(f.attribution_reason || '').trim() || undefined;
     out.push({
       severity: normalizeSeverity(f.severity),
       category: '关键观点遗漏',
       summary,
-      evidence: String(f.explanation || '').trim(),
+      evidence,
+      reasoning,
       improvementSuggestion: pickSuggestion(f.improvement_suggestion, f.improvementSuggestion),
     });
   }
   return out;
+}
+
+export function extractKeyPointIssuesFromRawAnalysis(rawAnalysisJson: string | null | undefined): Array<{
+  severity: Severity;
+  category: string;
+  summary: string;
+  evidence: string;
+  reasoning?: string;
+  improvementSuggestion?: string;
+}> {
+  return extractKeyPointIssues({ rawAnalysisJson: rawAnalysisJson ?? null });
 }
 
 function extractToolChoiceIssues(
@@ -405,4 +435,57 @@ function parseJsonArray<T>(s: string | null | undefined): T[] {
 
 function arrayOrEmpty<T>(v: unknown): T[] {
   return Array.isArray(v) ? (v as T[]) : [];
+}
+
+function extractRawKeyPointFindings(rawAnalysisJson: string | null | undefined): RawKeyPointFinding[] {
+  const raw = parseJsonObject(rawAnalysisJson);
+  if (!raw) return [];
+  const direct = arrayOrEmpty<RawKeyPointFinding>(raw.key_point_findings);
+  const nested = arrayOrEmpty<RawKeyPointFinding>(
+    raw.resultEvaluation && typeof raw.resultEvaluation === 'object'
+      ? (raw.resultEvaluation as Record<string, unknown>).key_point_findings
+      : undefined,
+  );
+  return direct.length > 0 ? direct : nested;
+}
+
+function buildKeyPointIssueEvidence(f: RawKeyPointFinding): string {
+  const traceRootCause = f.trace_root_cause && typeof f.trace_root_cause === 'object'
+    ? f.trace_root_cause
+    : undefined;
+  const relatedSteps = arrayOrEmpty<RawKeyPointTraceStep>(
+    traceRootCause?.related_steps,
+  );
+
+  return compactTextBlocks([
+    prefixLabel('结果分析', f.explanation),
+    prefixLabel('缺失原因', f.missing_reason),
+    prefixLabel('实际输出', f.evidence?.actual),
+    prefixLabel('预期输出', f.evidence?.expected),
+    prefixLabel('过程根因', traceRootCause?.failure_reason),
+    prefixLabel('相关步骤', formatRelatedSteps(relatedSteps)),
+    prefixLabel('Skill归因', f.attribution_reason),
+  ]);
+}
+
+function formatRelatedSteps(steps: RawKeyPointTraceStep[]): string {
+  if (steps.length === 0) return '';
+  return steps.map(step => {
+    const idx = typeof step.step_index === 'number' ? step.step_index : step.stepIndex;
+    return [
+      idx != null ? `#${idx}` : '',
+      step.kind || '',
+      step.name || '',
+      step.evidence || '',
+    ].filter(Boolean).join(' · ');
+  }).join(' | ');
+}
+
+function prefixLabel(label: string, value: unknown): string {
+  const text = String(value || '').trim();
+  return text ? `${label}：${text}` : '';
+}
+
+function compactTextBlocks(parts: string[]): string {
+  return parts.filter(Boolean).join('\n');
 }
