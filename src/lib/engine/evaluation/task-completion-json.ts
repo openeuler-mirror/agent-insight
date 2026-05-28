@@ -69,12 +69,9 @@ function repairUnescapedQuotesInJsonStrings(candidate: string): string {
     return repaired;
 }
 
-export function parseLooseJson(text: string): Record<string, unknown> | null {
-    const trimmed = text.trim();
-    const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
-    const candidate = fenced ? fenced[1] : trimmed;
-    const parsed = parseJsonObject(candidate);
-    if (parsed) return parsed;
+function parseFromCandidate(candidate: string): Record<string, unknown> | null {
+    const direct = parseJsonObject(candidate);
+    if (direct) return direct;
 
     const first = candidate.indexOf('{');
     const last = candidate.lastIndexOf('}');
@@ -90,6 +87,26 @@ export function parseLooseJson(text: string): Record<string, unknown> | null {
                 _json_repaired: true,
             };
         }
+    }
+
+    return null;
+}
+
+export function parseLooseJson(text: string): Record<string, unknown> | null {
+    const trimmed = text.trim();
+    const direct = parseFromCandidate(trimmed);
+    if (direct) return direct;
+
+    const jsonFenceMatches = Array.from(trimmed.matchAll(/```json\s*([\s\S]*?)\s*```/gi));
+    for (const match of jsonFenceMatches) {
+        const parsed = parseFromCandidate(match[1] || '');
+        if (parsed) return parsed;
+    }
+
+    const genericFenceMatches = Array.from(trimmed.matchAll(/```(?:[^\n`]*)\n([\s\S]*?)\s*```/g));
+    for (const match of genericFenceMatches) {
+        const parsed = parseFromCandidate(match[1] || '');
+        if (parsed) return parsed;
     }
 
     return null;
