@@ -688,7 +688,7 @@ def run_optimizer(
                 except ValueError as e:
                     skill_logger.warning(str(e))
                     skill_logger.warning(
-                        "Skill Insight 配置不可用，降级为 static 模式。"
+                        "Agent Insight 配置不可用，降级为 static 模式。"
                     )
                     optimized_genome, diagnoses = optimizer.optimize_static(skill_file)
                 else:
@@ -707,7 +707,7 @@ def run_optimizer(
                 except ValueError as e:
                     skill_logger.warning(str(e))
                     skill_logger.warning(
-                        "Skill Insight 配置不可用，降级为 static 模式。"
+                        "Agent Insight 配置不可用，降级为 static 模式。"
                     )
                     optimized_genome, diagnoses = optimizer.optimize_static(skill_file)
                 else:

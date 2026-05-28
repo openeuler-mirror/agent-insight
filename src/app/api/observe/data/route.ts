@@ -102,7 +102,7 @@ function isPidAlive(pid: number): boolean {
 
 function getOpencodeSpoolDir(): string {
     return process.env.SKILL_INSIGHT_OPENCODE_SPOOL_DIR
-        || path.join(os.homedir(), '.skill-insight', 'otel_data', 'opencode');
+        || path.join(os.homedir(), fs.existsSync(path.join(os.homedir(), '.agent-insight')) ? '.agent-insight' : '.skill-insight', 'otel_data', 'opencode');
 }
 
 function getOpencodeTelemetryIndex(): Map<string, { hasShutdown: boolean; pids: Set<number> }> {

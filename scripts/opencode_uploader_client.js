@@ -2,8 +2,8 @@ import http from "node:http"
 import https from "node:https"
 import fs from "node:fs"
 import path from "node:path"
-import os from "node:os"
 import { URL } from "node:url"
+import { getExistingInsightDir, getInsightEnvCandidates, getPreferredInsightDir } from "./insight-paths.js"
 
 function parseDotEnvText(text) {
   const out = {}
@@ -24,8 +24,8 @@ function parseDotEnvText(text) {
 function loadSkillInsightEnv() {
   const env = { ...process.env }
   try {
-    const file = path.join(os.homedir(), ".skill-insight", ".env")
-    if (fs.existsSync(file)) {
+    for (const file of getInsightEnvCandidates()) {
+      if (!fs.existsSync(file)) continue
       const txt = fs.readFileSync(file, "utf8")
       const parsed = parseDotEnvText(txt)
       for (const [k, v] of Object.entries(parsed)) {
@@ -71,7 +71,7 @@ function safeJsonParse(line) {
 }
 
 function loadDeletedSessionIds(env) {
-  const file = env.SKILL_INSIGHT_OPENCODE_DELETED_SESSIONS || path.join(os.homedir(), ".skill-insight", "opencode_deleted_sessions.json")
+  const file = env.SKILL_INSIGHT_OPENCODE_DELETED_SESSIONS || path.join(getExistingInsightDir(), "opencode_deleted_sessions.json")
   try {
     if (!fs.existsSync(file)) return new Set()
     const parsed = JSON.parse(fs.readFileSync(file, "utf8"))
@@ -793,8 +793,8 @@ async function main() {
   const host = env.SKILL_INSIGHT_HOST
   if (!apiKey || !host) process.exit(0)
 
-  const spoolDir = env.SKILL_INSIGHT_OPENCODE_SPOOL_DIR || path.join(os.homedir(), ".skill-insight", "otel_data", "opencode")
-  const checkpointFile = path.join(os.homedir(), ".skill-insight", "opencode_uploader_checkpoint.json")
+  const spoolDir = env.SKILL_INSIGHT_OPENCODE_SPOOL_DIR || path.join(getExistingInsightDir(), "otel_data", "opencode")
+  const checkpointFile = path.join(getPreferredInsightDir(), "opencode_uploader_checkpoint.json")
   const retentionDays = env.SKILL_INSIGHT_RETENTION_DAYS || "10"
   const deletedSessionIds = loadDeletedSessionIds(env)
 
@@ -907,7 +907,7 @@ if (process.env.SKILL_INSIGHT_UPLOADER_NO_MAIN !== "1") {
   main().catch((err) => {
     // 不能 silent exit——之前 spread 大数组爆栈导致整条 trace 链路停摆几小时，
     // 日志里只有 plugin 写的 kickUploader 头，看不到任何 uploader 自身报错。
-    // stderr 会被 plugin 那边 dup 到 ~/.skill-insight/logs/opencode_uploader.log，
+    // stderr 会被 plugin 那边 dup 到 ~/.agent-insight/logs/opencode_uploader.log，
     // 失败也好让运维一眼看到。仍然 exit(0)：失败的 batch 下次轮询继续，无需 retry。
     try {
       const msg = err && err.stack ? err.stack : String(err)

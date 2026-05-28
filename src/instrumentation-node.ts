@@ -45,7 +45,11 @@ export async function setupNodeRuntime(): Promise<void> {
   // 一直没归宿。常态下 plugin 的 kickUploader 在每次 opencode event 都会触发一次
   // 一次性 uploader 进程，所以这里只补"启动空窗期"。
   try {
-    const uploader = path.join(os.homedir(), '.skill-insight', 'opencode_uploader_client.js');
+    const uploader = path.join(
+      os.homedir(),
+      fs.existsSync(path.join(os.homedir(), '.agent-insight')) ? '.agent-insight' : '.skill-insight',
+      'opencode_uploader_client.js',
+    );
     if (fs.existsSync(uploader)) {
       const child = spawn(process.execPath, [uploader], {
         detached: true,

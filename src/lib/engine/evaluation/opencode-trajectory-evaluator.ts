@@ -64,7 +64,7 @@ type JsonRecord = Record<string, unknown>;
 const EVALUATOR_AGENT_NAME = 'trace-quality-evaluator';
 const OPENCODE_FALLBACK_AGENT_NAME = 'build';
 
-const COORDINATOR_SYSTEM_PROMPT = `你是 Skill Insight 的「轨迹质量评估器」。你会收到一个 (case + actual_trace + reference_trajectory) 三元组，必要时还会带 reference_key_actions 与 actual_extracted_steps，以及已由规则代码计算好的冗余检测结果。
+const COORDINATOR_SYSTEM_PROMPT = `你是 Agent Insight 的「轨迹质量评估器」。你会收到一个 (case + actual_trace + reference_trajectory) 三元组，必要时还会带 reference_key_actions 与 actual_extracted_steps，以及已由规则代码计算好的冗余检测结果。
 
 请按下面 5 个步骤完成内部分析，但最终只输出 JSON。不要输出步骤过程、Markdown、解释性前言或额外文本。
 

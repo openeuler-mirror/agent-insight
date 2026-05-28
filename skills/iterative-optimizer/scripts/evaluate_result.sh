@@ -43,7 +43,11 @@ fi
 # 加载 Insight 平台配置
 # ============================================================================
 
-ENV_FILE="$HOME/.skill-insight/.env"
+if [[ -f "$HOME/.agent-insight/.env" ]]; then
+    ENV_FILE="$HOME/.agent-insight/.env"
+else
+    ENV_FILE="$HOME/.skill-insight/.env"
+fi
 
 if [[ ! -f "$ENV_FILE" ]]; then
     echo "[evaluate] 错误: 环境配置文件不存在: $ENV_FILE"

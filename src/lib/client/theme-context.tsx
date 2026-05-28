@@ -11,13 +11,15 @@ interface ThemeContextType {
 }
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
+const STORAGE_KEY = 'agent-insight-theme';
+const LEGACY_STORAGE_KEY = 'skill-insight-theme';
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
     const [theme, setTheme] = useState<Theme>('light');
     const [mounted, setMounted] = useState(false);
 
     useEffect(() => {
-        const savedTheme = localStorage.getItem('skill-insight-theme') as Theme;
+        const savedTheme = (localStorage.getItem(STORAGE_KEY) || localStorage.getItem(LEGACY_STORAGE_KEY)) as Theme;
         if (savedTheme === 'dark' || savedTheme === 'light') {
             setTheme(savedTheme);
         }
@@ -26,7 +28,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
     useEffect(() => {
         if (mounted) {
-            localStorage.setItem('skill-insight-theme', theme);
+            localStorage.setItem(STORAGE_KEY, theme);
+            localStorage.removeItem(LEGACY_STORAGE_KEY);
             document.documentElement.setAttribute('data-theme', theme);
         }
     }, [theme, mounted]);

@@ -1,11 +1,11 @@
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import type { ClaudeOtelAppendResult, ClaudeOtelEvent } from './types';
+import { getExistingInsightDir } from '@/lib/agent-insight-paths';
 
 export function getClaudeOtelSpoolDir(): string {
   return process.env.SKILL_INSIGHT_CLAUDE_OTEL_SPOOL_DIR ||
-    path.join(os.homedir(), '.skill-insight', 'otel_data', 'claude');
+    path.join(getExistingInsightDir(), 'otel_data', 'claude');
 }
 
 function dayString(date = new Date()): string {
@@ -67,4 +67,3 @@ export function readClaudeOtelEventsForSession(sessionId: string, spoolDir = get
   }
   return events;
 }
-

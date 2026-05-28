@@ -539,7 +539,7 @@ def _sync_skill_to_inner_dir(skill_dir: Path, inner_dir: Path, skill_name: str):
 
 
 def _archive_old_skill(skill_name: str, opencode_skills_dir: Path) -> Optional[Path]:
-    """Archive an old skill from .opencode/skills/ to ~/.skill-insight/skill-history/.
+    """Archive an old skill from .opencode/skills/ to ~/.agent-insight/skill-history/.
 
     Handles name collisions by appending timestamp and optional index suffix.
 
@@ -553,7 +553,7 @@ def _archive_old_skill(skill_name: str, opencode_skills_dir: Path) -> Optional[P
     if not old_skill_dir.exists():
         return None
 
-    history_base = Path.home() / ".skill-insight" / "skill-history"
+    history_base = GLOBAL_CONFIG_DIR / "skill-history"
     history_base.mkdir(parents=True, exist_ok=True)
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -720,9 +720,9 @@ def run_optimizer(
                 except ValueError as e:
                     logger.warning(str(e))
                     print("\n" + "=" * 60)
-                    print("⚠️ Skill Insight 平台配置不可用，无法获取执行日志。")
-                    print("动态优化需要执行日志中的优化建议，请先配置 Skill Insight 平台。")
-                    print("配置方式：在 ~/.skill-insight/.env 中设置 SKILL_INSIGHT_HOST 和 SKILL_INSIGHT_API_KEY")
+                    print("⚠️ Agent Insight 平台配置不可用，无法获取执行日志。")
+                    print("动态优化需要执行日志中的优化建议，请先配置 Agent Insight 平台。")
+                    print("配置方式：在 ~/.agent-insight/.env 中设置 SKILL_INSIGHT_HOST 和 SKILL_INSIGHT_API_KEY")
                     print("=" * 60)
                     continue
 
@@ -767,9 +767,9 @@ def run_optimizer(
                     report_items = get_skill_logs(skill=initial_genome.name, limit=3)
                 except ValueError as e:
                     logger.warning(str(e))
-                    logger.warning("Skill Insight 配置不可用，降级为 static 模式。")
+                    logger.warning("Agent Insight 配置不可用，降级为 static 模式。")
                     print("\n" + "=" * 60)
-                    print("⚠️ Skill Insight 平台配置不可用，降级为静态优化模式。")
+                    print("⚠️ Agent Insight 平台配置不可用，降级为静态优化模式。")
                     print("=" * 60)
                     optimized_genome, diagnoses = optimizer.optimize_static(skill_file)
                 else:

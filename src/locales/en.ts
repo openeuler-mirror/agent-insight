@@ -558,7 +558,7 @@ export const en = {
 
   guide: {
     welcome: {
-      title: 'Welcome to Skill-insight',
+      title: 'Welcome to Agent-insight',
       content: 'This is the Agent Skill Evaluation, Analysis & Optimization platform. We will guide you through key configurations to help you get started quickly.',
     },
     evalConfig: {

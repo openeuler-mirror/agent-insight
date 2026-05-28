@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# Skill-insight One-Click Setup
+# Agent-insight One-Click Setup
 # =============================================================================
 
 apt-get update
@@ -14,7 +14,7 @@ nvm install 22
 npm -v
 
 
-SKILL_INSIGHT_CONFIG_FILE="$HOME/.skill-insight/.env"
+SKILL_INSIGHT_CONFIG_FILE="$HOME/.agent-insight/.env"
 EXISTING_KEY=""
 EXISTING_HOST=""
 if [ -f "$SKILL_INSIGHT_CONFIG_FILE" ]; then
@@ -29,11 +29,11 @@ echo "CURRENT skilhost $SKILL_INSIGHT_HOST"
 echo "CURRENT ex_host $EXISTING_HOST"
 echo "CURRENT base url $SKILL_INSIGHT_BASE_URL"
 
-echo "🚀 Fetching Skill-insight telemetry components from $SKILL_INSIGHT_BASE_URL..."
+echo "🚀 Fetching Agent-insight telemetry components from $SKILL_INSIGHT_BASE_URL..."
 
 # 1. Setup Directories
-mkdir -p "$HOME/.skill-insight"
-mkdir -p "$HOME/.skill-insight/logs"
+mkdir -p "$HOME/.agent-insight"
+mkdir -p "$HOME/.agent-insight/logs"
 mkdir -p "$HOME/.opencode/plugins"
 mkdir -p "$HOME/.opencode/skills"
 mkdir -p "$HOME/.claude/projects"
@@ -49,7 +49,7 @@ if [ "$INSTALL_OPENCODE" = "true" ]; then
     curl -sSf "$SKILL_INSIGHT_BASE_URL/api/setup/opencode" -o "$HOME/.opencode/plugins/Witty-Skill-Insight.ts"
 fi
 
-# 4. Configure ~/.skill-insight/.env
+# 4. Configure ~/.agent-insight/.env
 
 # -- API Key Logic --
 FINAL_KEY="$EXISTING_KEY"
@@ -74,7 +74,7 @@ echo "✅ Configuration updated at $SKILL_INSIGHT_CONFIG_FILE"
 
 # 10. Final Summary
 echo ""
-echo "🌟 Skill-Insight Telemetry: READY"
+echo "🌟 Agent-Insight Telemetry: READY"
 echo "------------------------------------------------"
 echo "Installed Components:"
 if [ "$INSTALL_OPENCODE" = "true" ]; then echo "  ✅ OpenCode Plugin: ~/.opencode/plugins/Witty-Skill-Insight.ts"; fi

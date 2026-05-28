@@ -73,11 +73,10 @@ async function createAdminUser(port) {
           try {
             const result = JSON.parse(data)
             if (result.apiKey) {
-              const skillInsightDir = path.join(os.homedir(), '.skill-insight')
-              if (!fs.existsSync(skillInsightDir)) {
-                fs.mkdirSync(skillInsightDir, { recursive: true })
+              if (!fs.existsSync(dataRoot)) {
+                fs.mkdirSync(dataRoot, { recursive: true })
               }
-              const keyFilePath = path.join(skillInsightDir, '.admin_api_key')
+              const keyFilePath = path.join(dataRoot, '.admin_api_key')
               fs.writeFileSync(keyFilePath, result.apiKey, 'utf8')
               console.log('✓ Admin user created successfully')
               console.log(`  API Key saved to: ${keyFilePath}`)
@@ -126,7 +125,7 @@ async function run(options) {
   const port = getPort(options)
   const dataRoot = getDataRoot()
 
-  console.log('=== Starting Skill-Insight Service ===\n')
+  console.log('=== Starting Agent-Insight Service ===\n')
 
   ensureEnvFile()
   ensureDataDirectory()

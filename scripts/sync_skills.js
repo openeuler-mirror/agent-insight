@@ -1,11 +1,11 @@
 "use strict";
 /**
- * Skill-Insight Skill Synchronizer
+ * Agent-Insight Skill Synchronizer
  *
  * Fetches configured skills from Dashboard and installs them locally.
  * Usage: node sync_skills.js [--check-only] [--agent <name>]
  *
- * Requires: ~/.skill-insight/.env configuration
+ * Requires: ~/.agent-insight/.env configuration
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -55,8 +55,8 @@ const AGENTS_DIR_MAP = {
 function loadConfiguration() {
     let config = {};
     try {
-        const envPath = path.join(os.homedir(), '.skill-insight', '.env');
-        if (fs.existsSync(envPath)) {
+        for (const envPath of [path.join(os.homedir(), '.agent-insight', '.env'), path.join(os.homedir(), '.skill-insight', '.env')]) {
+            if (!fs.existsSync(envPath)) continue;
             const content = fs.readFileSync(envPath, 'utf8');
             content.split('\n').forEach(line => {
                 const match = line.match(/^\s*([\w_]+)\s*=\s*(.*)?\s*$/);

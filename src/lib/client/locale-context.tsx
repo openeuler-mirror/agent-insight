@@ -12,7 +12,8 @@ interface LocaleContextType {
 
 const LocaleContext = createContext<LocaleContextType | undefined>(undefined);
 
-const STORAGE_KEY = 'skill-insight-locale';
+const STORAGE_KEY = 'agent-insight-locale';
+const LEGACY_STORAGE_KEY = 'skill-insight-locale';
 
 function getNestedValue(obj: TranslationDict, path: string): string | undefined {
     const keys = path.split('.');
@@ -37,7 +38,7 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
     const [mounted, setMounted] = useState(false);
 
     useEffect(() => {
-        const saved = localStorage.getItem(STORAGE_KEY) as Locale;
+        const saved = (localStorage.getItem(STORAGE_KEY) || localStorage.getItem(LEGACY_STORAGE_KEY)) as Locale;
         if (saved === 'en' || saved === 'zh') {
             setLocaleState(saved);
         }
@@ -47,6 +48,7 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
     useEffect(() => {
         if (mounted) {
             localStorage.setItem(STORAGE_KEY, locale);
+            localStorage.removeItem(LEGACY_STORAGE_KEY);
         }
     }, [locale, mounted]);
 
