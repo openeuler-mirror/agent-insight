@@ -29,7 +29,7 @@ function parseOptions(args) {
 
 function showHelp() {
   console.log(`
-Skill-insight CLI
+Agent-insight CLI
 
 Usage:
   skill-insight <command> [options]
@@ -57,12 +57,12 @@ Examples:
 
 function showCommandHelp(command) {
   const helps = {
-    start: 'Start the skill-insight service\n\nOptions:\n  --port, -p <port>  Specify port (default: 3000)',
-    stop: 'Stop the skill-insight service\n\nOptions:\n  --port, -p <port>  Specify port (default: 3000)',
-    restart: 'Restart the skill-insight service\n\nOptions:\n  --port, -p <port>  Specify port (default: 3000)',
-    status: 'Show skill-insight service status\n\nOptions:\n  --port, -p <port>  Specify port (default: 3000)',
-    logs: 'Show skill-insight service logs',
-    install: 'One-click install skill-insight\n\nThis command will:\n  1. npm install @witty-ai/skill-insight\n  2. Start the service\n  3. Create admin user and get API Key\n  4. Install telemetry plugins\n  5. Add skill to your agent'
+    start: 'Start the Agent-insight service\n\nOptions:\n  --port, -p <port>  Specify port (default: 3000)',
+    stop: 'Stop the Agent-insight service\n\nOptions:\n  --port, -p <port>  Specify port (default: 3000)',
+    restart: 'Restart the Agent-insight service\n\nOptions:\n  --port, -p <port>  Specify port (default: 3000)',
+    status: 'Show Agent-insight service status\n\nOptions:\n  --port, -p <port>  Specify port (default: 3000)',
+    logs: 'Show Agent-insight service logs',
+    install: 'One-click install Agent-insight\n\nThis command will:\n  1. npm install @witty-ai/skill-insight\n  2. Start the service\n  3. Create admin user and get API Key\n  4. Install telemetry plugins\n  5. Add skill to your agent'
   }
   console.log(`\nskill-insight ${command}\n\n${helps[command] || ''}`)
 }

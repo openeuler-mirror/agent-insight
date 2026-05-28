@@ -15,7 +15,7 @@
 > **Agent Insight ——「让 Agent 的运行过程可被凝视」。**
 
 - 品牌名：**Agent Insight**（中文不译；正文中可写"Agent Insight 平台"）。
-- 副标 / Powered-by：**by Skill-insight**（与 sidebar 当前文案保持一致，详见 [`AppSidebar.tsx:230`](../../src/components/shell/AppSidebar.tsx)）。
+- 副标 / Powered-by：**by Agent-insight**（与 sidebar 当前文案保持一致，详见 [`AppSidebar.tsx:230`](../../src/components/shell/AppSidebar.tsx)）。
 - 视觉气质：冷静、高密度、强信号、可凝视（与 `foundations.md` §0 一致）。
 
 ---

@@ -28,7 +28,7 @@
 ```
 
 - 🆕 **不再有独立 AppTopBar 行**（v2.1 起废弃）。"sidebar-toggle / 面包屑 / 主操作 / 实时集群"全部并入 **PageHeader** 一行（见 §A.5）。原 AppTopBar 承载的全局项重新分配：
-  - Brand（Logo + "Agent Insight · by Skill-insight"）→ **Sidebar 顶部**（一直可见，无论滚到第几屏）。
+  - Brand（Logo + "Agent Insight · by Agent-insight"）→ **Sidebar 顶部**（一直可见，无论滚到第几屏）。
   - 全局搜索 Cmd+K → 全局键盘快捷键 + Sidebar 底部辅助入口（不再常驻顶部 input）。
   - 主题切换 / 语言切换 / 用户菜单 → **Sidebar 底部** Footer 区。
   - **理由**：解决 v1.x "顶栏 + 页面 header" 两条沉重横向线 + Brand 与"我现在在哪一页"竞争注意力的问题；并对齐 Linear / Vercel / Stripe Dashboard 的当代实践。**正式参考**：[`refs/ui-2026-05/agent-insight-prototype-统一导航栏和skill选项.html`](./refs/ui-2026-05/agent-insight-prototype-统一导航栏和skill选项.html)。

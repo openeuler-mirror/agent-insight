@@ -4,41 +4,59 @@ const path = require('path')
 const http = require('http')
 const os = require('os')
 
+function getPreferredHomeDataRoot() {
+  return path.join(os.homedir(), '.agent-insight')
+}
+
+function getLegacyHomeDataRoot() {
+  return path.join(os.homedir(), '.skill-insight')
+}
+
+function getExistingHomeDataRoot() {
+  const preferred = getPreferredHomeDataRoot()
+  const legacy = getLegacyHomeDataRoot()
+  if (fs.existsSync(preferred)) return preferred
+  if (fs.existsSync(legacy)) return legacy
+  return preferred
+}
+
 function getDataRoot() {
   if (process.env.SKILL_INSIGHT_DATA_DIR) {
     return process.env.SKILL_INSIGHT_DATA_DIR
   }
   if (__dirname.includes('node_modules')) {
-    return path.join(os.homedir(), '.skill-insight')
+    return getExistingHomeDataRoot()
   }
   return path.resolve(__dirname, '..')
 }
 
 function migrateDataIfNeeded() {
-  const newDataRoot = path.join(os.homedir(), '.skill-insight')
+  const newDataRoot = getPreferredHomeDataRoot()
   const newDbPath = path.join(newDataRoot, 'data', 'witty_insight.db')
+  const legacyDbPath = path.join(getLegacyHomeDataRoot(), 'data', 'witty_insight.db')
   const oldDbPath = path.resolve(__dirname, '../data/witty_insight.db')
 
   const newExists = fs.existsSync(newDbPath)
+  const legacyExists = fs.existsSync(legacyDbPath)
   const oldExists = fs.existsSync(oldDbPath)
 
-  if (newExists && oldExists) {
+  if (newExists && (oldExists || legacyExists)) {
     console.log('Database already exists at new location, skipping migration')
     return
   }
 
-  if (newExists && !oldExists) {
+  if (newExists && !oldExists && !legacyExists) {
     console.log('Using existing database at ' + newDbPath)
     return
   }
 
-  if (!newExists && oldExists) {
-    console.log('Migrating database to new location...')
+  if (!newExists && (oldExists || legacyExists)) {
+    console.log('Migrating database to agent-insight directory...')
     const newDataPath = path.join(newDataRoot, 'data')
     if (!fs.existsSync(newDataPath)) {
       fs.mkdirSync(newDataPath, { recursive: true })
     }
-    fs.copyFileSync(oldDbPath, newDbPath)
+    fs.copyFileSync(legacyExists ? legacyDbPath : oldDbPath, newDbPath)
     console.log('✓ Database migrated to ' + newDbPath)
 
     return
@@ -220,6 +238,9 @@ function findAvailablePort(startPort = 3000, maxAttempts = 100) {
 }
 
 module.exports = {
+  getPreferredHomeDataRoot,
+  getLegacyHomeDataRoot,
+  getExistingHomeDataRoot,
   findPidOnPort,
   killProcess,
   getPort,

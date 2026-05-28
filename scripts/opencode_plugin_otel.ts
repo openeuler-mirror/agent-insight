@@ -1,7 +1,7 @@
 const fs = require("fs")
 const path = require("path")
-const os = require("os")
 const crypto = require("crypto")
+const { getExistingInsightDir, getInsightEnvCandidates, getPreferredInsightDir } = require("./insight-paths.js")
 
 function sha256Hex(text: any): string {
   try {
@@ -78,8 +78,8 @@ function parseDotEnvText(text: any): Record<string, string> {
 function loadSkillInsightEnv(): Record<string, string | undefined> {
   const env = { ...process.env }
   try {
-    const file = path.join(os.homedir(), ".skill-insight", ".env")
-    if (fs.existsSync(file)) {
+    for (const file of getInsightEnvCandidates()) {
+      if (!fs.existsSync(file)) continue
       const txt = fs.readFileSync(file, "utf8")
       const parsed = parseDotEnvText(txt)
       for (const [k, v] of Object.entries(parsed)) {
@@ -206,18 +206,18 @@ export default async function WittySkillInsightOtelPlugin() {
   if (!enabled) return {}
 
   const apiKey = env.SKILL_INSIGHT_API_KEY
-  const spoolDir = env.SKILL_INSIGHT_OPENCODE_SPOOL_DIR || path.join(os.homedir(), ".skill-insight", "otel_data", "opencode")
+  const spoolDir = env.SKILL_INSIGHT_OPENCODE_SPOOL_DIR || path.join(getExistingInsightDir(), "otel_data", "opencode")
   const maxToolIo = asInt(env.SKILL_INSIGHT_MAX_TOOL_IO, 4000)
   const maxEventString = asInt(env.SKILL_INSIGHT_MAX_EVENT_STRING, 20000)
   const outFile = buildOutFile(spoolDir)
   const writer = createWriter(outFile)
 
-  const uploaderPath = env.SKILL_INSIGHT_OPENCODE_UPLOADER || path.join(os.homedir(), ".skill-insight", "opencode_uploader_client.js")
+  const uploaderPath = env.SKILL_INSIGHT_OPENCODE_UPLOADER || path.join(getExistingInsightDir(), "opencode_uploader_client.js")
   const uploaderCooldownMs = asInt(env.SKILL_INSIGHT_OPENCODE_UPLOAD_COOLDOWN_MS, 15000)
   const lastUploadKickBySession = new Map<string, number>()
   const activeSessionIds = new Set<string>()
 
-  const logDir = path.join(os.homedir(), ".skill-insight", "logs")
+  const logDir = path.join(getPreferredInsightDir(), "logs")
   const uploaderLogPath = path.join(logDir, "opencode_uploader.log")
 
   // Pick a runtime that can execute a plain .js file. Opencode bundles bun, so

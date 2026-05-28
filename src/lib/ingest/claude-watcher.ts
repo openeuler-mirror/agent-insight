@@ -5,6 +5,7 @@ import path from 'path';
 import { ClaudeParser } from '@/lib/engine/observability/claude-parser';
 import { saveExecutionRecord } from '@/lib/storage/data-service';
 import { db } from '@/lib/storage/prisma';
+import { getInsightEnvCandidates } from '@/lib/agent-insight-paths';
 
 export class ClaudeLogWatcher {
   private parser: ClaudeParser;
@@ -74,8 +75,8 @@ export class ClaudeLogWatcher {
 
   private async getSkillInsightUserFromEnv(): Promise<string | undefined> {
     try {
-      const envPath = path.join(os.homedir(), '.skill-insight', '.env');
-      if (fs.existsSync(envPath)) {
+      for (const envPath of getInsightEnvCandidates()) {
+        if (!fs.existsSync(envPath)) continue;
         const content = fs.readFileSync(envPath, 'utf-8');
         const match = content.match(/SKILL_INSIGHT_API_KEY=(.*)/);
         if (match && match[1]) {
@@ -85,7 +86,7 @@ export class ClaudeLogWatcher {
         }
       }
     } catch (e) {
-      console.error('[ClaudeWatcher] Error reading skill-insight env:', e);
+      console.error('[ClaudeWatcher] Error reading agent-insight env:', e);
     }
     return undefined;
   }

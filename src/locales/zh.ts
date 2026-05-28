@@ -558,7 +558,7 @@ export const zh = {
 
   guide: {
     welcome: {
-      title: '欢迎使用 Skill-insight',
+      title: '欢迎使用 Agent-insight',
       content: '这是智能体技能评估、分析与优化平台。接下来将引导您完成关键配置，帮助您快速上手使用。',
     },
     evalConfig: {

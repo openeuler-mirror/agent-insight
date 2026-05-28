@@ -44,7 +44,7 @@ def _get_base_url():
 
     if not base_ip:
         raise ValueError(
-            f"\n❌ Error: Cannot resolve Skill Insight API IP.\n"
+            f"\n❌ Error: Cannot resolve Agent Insight API IP.\n"
             f"'SKILL_INSIGHT_HOST' environment variable is not set.\n"
             f"This is required for Dynamic/Hybrid modes to fetch historical execution logs."
         )

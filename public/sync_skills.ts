@@ -1,10 +1,10 @@
 /**
- * Witty-Skill-Insight Skill Synchronizer
+ * Witty-Agent-Insight Skill Synchronizer
  * 
  * Fetches configured skills from Dashboard and installs them locally.
  * Usage: node sync_skills.js [--check-only] [--agent <name>]
  * 
- * Requires: ~/.skill-insight/.env or ~/.witty/.env configuration
+ * Requires: ~/.agent-insight/.env or ~/.witty/.env configuration
  */
 
 import { execSync } from 'child_process';
@@ -29,9 +29,10 @@ interface Config {
 function loadConfiguration(): Config {
     let config: Record<string, string> = {};
     try {
-        const envPath = path.join(os.homedir(), '.skill-insight', '.env');
+        const envPath = path.join(os.homedir(), '.agent-insight', '.env');
         const legacyEnvPath = path.join(os.homedir(), '.witty', '.env');
-        const selectedEnvPath = fs.existsSync(envPath) ? envPath : legacyEnvPath;
+        const oldEnvPath = path.join(os.homedir(), '.skill-insight', '.env');
+        const selectedEnvPath = fs.existsSync(envPath) ? envPath : (fs.existsSync(oldEnvPath) ? oldEnvPath : legacyEnvPath);
         
         if (fs.existsSync(selectedEnvPath)) {
             const content = fs.readFileSync(selectedEnvPath, 'utf8');

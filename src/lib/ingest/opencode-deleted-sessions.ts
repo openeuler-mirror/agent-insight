@@ -1,8 +1,8 @@
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
+import { getExistingInsightDir, getPreferredInsightDir } from '@/lib/agent-insight-paths';
 
-const DEFAULT_TOMBSTONE_FILE = path.join(os.homedir(), '.skill-insight', 'opencode_deleted_sessions.json');
+const DEFAULT_TOMBSTONE_FILE = path.join(getExistingInsightDir(), 'opencode_deleted_sessions.json');
 
 function tombstoneFilePath(): string {
   return process.env.SKILL_INSIGHT_OPENCODE_DELETED_SESSIONS || DEFAULT_TOMBSTONE_FILE;
@@ -40,7 +40,7 @@ export function addDeletedOpencodeSessionIds(sessionIds: unknown[]): number {
   for (const id of incoming) merged.add(id);
   if (merged.size === before) return 0;
 
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.mkdirSync(path.dirname(filePath || path.join(getPreferredInsightDir(), 'placeholder')), { recursive: true });
   fs.writeFileSync(
     filePath,
     JSON.stringify({ sessionIds: Array.from(merged).sort(), updatedAt: new Date().toISOString() }, null, 2),

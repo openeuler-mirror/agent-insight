@@ -10,7 +10,7 @@ async function run(options) {
   try {
     const port = getPort(options)
     
-    console.log(`=== Skill-Insight Service Status ===\n`)
+    console.log(`=== Agent-Insight Service Status ===\n`)
     
     const pid = findPidOnPort(port)
     

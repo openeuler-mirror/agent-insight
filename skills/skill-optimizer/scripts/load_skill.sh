@@ -15,7 +15,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --old   Absolute path to the old skill directory to be replaced"
             echo ""
             echo "This script:"
-            echo "  1. Archives the old skill to ~/.skill-insight/skill-history/ with timestamp suffix"
+            echo "  1. Archives the old skill to ~/.agent-insight/skill-history/ with timestamp suffix"
             echo "  2. Copies the optimized skill to the old skill's location"
             exit 0
             ;;
@@ -44,7 +44,11 @@ if [ ! -d "$OLD_SKILL_DIR" ]; then
     exit 1
 fi
 
-HISTORY_DIR="$HOME/.skill-insight/skill-history"
+if [ -d "$HOME/.agent-insight" ] || [ ! -d "$HOME/.skill-insight" ]; then
+    HISTORY_DIR="$HOME/.agent-insight/skill-history"
+else
+    HISTORY_DIR="$HOME/.skill-insight/skill-history"
+fi
 mkdir -p "$HISTORY_DIR"
 
 SKILL_NAME=$(basename "$OLD_SKILL_DIR")

@@ -7,7 +7,7 @@
 
 ## 1. 功能说明
 
-传统的 Skill 优化主要依赖"任务结果是否正确"这一信号，缺少执行过程数据的支撑，只能做浅层调整。Skill-insight 的优化方式不同——它基于评测环节采集到的全链路执行数据（每一步操作、工具调用、流程偏差等），自动定位 Skill 中的具体缺陷，进行针对性修补。
+传统的 Skill 优化主要依赖"任务结果是否正确"这一信号，缺少执行过程数据的支撑，只能做浅层调整。Agent-insight 的优化方式不同——它基于评测环节采集到的全链路执行数据（每一步操作、工具调用、流程偏差等），自动定位 Skill 中的具体缺陷，进行针对性修补。
 
 典型场景包括：环境漂移、依赖缺失、参数不匹配、缺少备份/回滚步骤、逻辑漏洞等。你不需要手动修改脚本，只需在 Agent 终端中用自然语言描述优化需求，就能完成定位、修补和重试。
 
@@ -19,13 +19,13 @@
 
 ### 2.1 前置准备 - 给 Agent 注入优化能力
 
-在 Agent 的工作终端中执行以下命令，安装 Skill-insight Meta-Skill：
+在 Agent 的工作终端中执行以下命令，安装 Agent-insight Meta-Skill：
 
 ```bash
 npx skills add https://gitcode.com/openeuler/witty-skill-insight.git
 ```
 
-根据指引，选择安装skill-optimizer、skill-sync，并选择合适的集成框架（如Opencode）。完成后，Agent 就可以通过自然语言调用 Skill 优化能力，并且将优化后的Skill同步到Skill-insight平台管理起来。
+根据指引，选择安装skill-optimizer、skill-sync，并选择合适的集成框架（如Opencode）。完成后，Agent 就可以通过自然语言调用 Skill 优化能力，并且将优化后的 Skill 同步到 Agent-insight 平台管理起来。
 
 ### 2.2 基本用法
 

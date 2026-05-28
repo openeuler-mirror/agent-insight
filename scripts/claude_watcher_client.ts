@@ -253,8 +253,8 @@ class ClaudeParser {
 function loadSkillInsightConfig(): { apiKey: string; host: string } {
     const config: { apiKey: string; host: string } = { apiKey: '', host: '' };
     try {
-        const envPath = path.join(os.homedir(), '.skill-insight', '.env');
-        if (fs.existsSync(envPath)) {
+        for (const envPath of [path.join(os.homedir(), '.agent-insight', '.env'), path.join(os.homedir(), '.skill-insight', '.env')]) {
+            if (!fs.existsSync(envPath)) continue;
             const content = fs.readFileSync(envPath, 'utf-8');
             const apiKeyMatch = content.match(/SKILL_INSIGHT_API_KEY=(.*)/);
             const hostMatch = content.match(/SKILL_INSIGHT_HOST=(.*)/);
@@ -266,7 +266,7 @@ function loadSkillInsightConfig(): { apiKey: string; host: string } {
             }
         }
     } catch (e) {
-        console.error('[ClaudeWatcher] Error reading skill-insight config:', e);
+        console.error('[ClaudeWatcher] Error reading agent-insight config:', e);
     }
     return config;
 }
