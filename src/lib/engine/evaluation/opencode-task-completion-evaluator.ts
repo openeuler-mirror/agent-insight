@@ -17,6 +17,7 @@ import { findSystemAgentDefinition, getSystemAgentId } from '@/lib/system-agents
 import { type RootCauseItem } from '@/lib/dataset-case-root-causes';
 import { recordEvaluatorExecution } from './evaluator-execution-recorder';
 import { extractRootCausesFromExpected } from './root-cause-extractor';
+import { deriveTaskCompletionScoreFromFindings } from './task-completion-scoring';
 import { parseLooseJson } from './task-completion-json';
 
 export interface TaskCompletionEvalInput {
@@ -62,6 +63,7 @@ const COORDINATOR_SYSTEM_PROMPT = `你是「Agent 任务完成度 + 关键观点
   "key_point_findings": [
     {
       "content": "...",
+      "score": 0.85,
       "covered": true,
       "coverage_status": "covered|partial|missing|wrong",
       "severity": "low|medium|high",
@@ -92,34 +94,35 @@ const COORDINATOR_SYSTEM_PROMPT = `你是「Agent 任务完成度 + 关键观点
   "key_point_summary": "中文总结关键观点整体覆盖情况"
 }
 
-【评分标准】
-- 1.0: 完全完成任务，且关键结论覆盖充分。
-- 0.5: 基本完成任务，但表达不清、遗漏部分关键观点，或存在次要偏差。
-- 0.0: 没有完成任务，或实际输出与预期结果明显不符。
-- 允许输出 0.0～1.0 之间的连续分数，但必须以上述 1.0 / 0.5 / 0.0 为主要锚点，按完成度与关键观点覆盖度细化。
+【评分规则】
+- 每条关键观点都必须输出显式 score，范围 0.0～1.0，可连续取值。
+- 顶层 score 只作为参考输出；系统会按 key_point_findings[].score 做等权平均，重算最终任务完成度分数。
+- 不要隐含权重；每个关键观点的权重完全相同。
 
 【内部分析步骤】
 你必须按以下步骤进行内部分析，但不要输出完整 Chain-of-Thought：
 Step 1. 对比 expectedOutput 与 actualOutput，判断整体任务完成度。
 Step 2. 对每条关键观点，判断 actualOutput 是否覆盖。
-Step 3. 如果 covered=true，给出 coverage_reason，并在 evidence.actual 中摘录实际输出中的覆盖依据。
-Step 4. 如果 covered=false 或 coverage_status 不为 covered，说明最终输出缺了什么或错了什么。
-Step 5. 查看 Trace Summary，判断问题发生阶段：
+Step 3. 对每条关键观点给出显式 score（0.0～1.0），要求与 coverage_status、证据、解释保持一致。
+Step 4. 如果 covered=true，给出 coverage_reason，并在 evidence.actual 中摘录实际输出中的覆盖依据。
+Step 5. 如果 covered=false 或 coverage_status 不为 covered，说明最终输出缺了什么或错了什么。
+Step 6. 查看 Trace Summary，判断问题发生阶段：
 - evidence_collection：证据收集不足，如没读到关键文件、关键区域、关键日志。
 - tool_usage：工具选择、参数、顺序或补救策略有问题。
 - reasoning：trace 中已有证据，但推理归纳错了。
 - final_answer：trace 中已有正确分析，但最终输出漏写或组织错误。
 - model_or_environment：主要来自模型能力、外部环境、工具失败等，难以通过 Skill 修复。
 - unknown：压缩轨迹中没有足够证据定位。
-Step 6. 如果存在 Skill 上下文，判断 is_skill_attributable：
+Step 7. 如果存在 Skill 上下文，判断 is_skill_attributable：
 - true：修改 SKILL.md 的规则、流程、检查清单、输出约束或反例约束，可以降低复现概率。
 - false：问题主要不是 Skill 文档能解决的，比如模型随机失误、工具环境失败、用户输入不可解。
-Step 7. 给出简短、可落地的 improvement_suggestion。必须具体到"在 SKILL.md 增加/修改什么约束"，不要写空泛建议。
+Step 8. 给出简短、可落地的 improvement_suggestion。必须具体到"在 SKILL.md 增加/修改什么约束"，不要写空泛建议。
 
 【重要约束】
 - 不要输出 result_issues。
 - 不要编造 trace 证据。Trace Summary 中找不到证据时，related_steps 为空，failure_stage 使用 "unknown"。
 - 每条关键观点都必须输出一条 key_point_findings。
+- 每条关键观点都必须输出显式 score，范围 0.0～1.0。
 - covered=true 的关键观点必须给 coverage_reason。
 - covered=false / partial / wrong 的关键观点必须给 missing_reason、trace_root_cause.failure_stage、trace_root_cause.failure_reason。
 `;
@@ -182,7 +185,7 @@ async function resolveRootCauses(
 
 function buildUserMessage(input: TaskCompletionEvalInput, rootCauses: RootCauseItem[]): string {
     const keyPointsText = rootCauses.length > 0
-        ? rootCauses.map((item, index) => `${index + 1}. ${item.content}（权重 ${item.weight}）`).join('\n')
+        ? rootCauses.map((item, index) => `${index + 1}. ${item.content}`).join('\n')
         : '（未提取到关键观点，可仅按任务完成度评判）';
     const skillContextText = formatSkillContext(input.skillContext);
 
@@ -215,11 +218,11 @@ function formatSkillContext(skillContext: TaskCompletionEvalInput['skillContext'
 }
 
 function normalizeOutput(parsed: Record<string, unknown>): TaskCompletionEvalOutput {
-    const score = clampTaskScore(parsed.score);
-    const isCorrect = typeof parsed.is_correct === 'boolean'
-        ? parsed.is_correct
-        : score >= 1;
+    const scoreSummary = deriveTaskCompletionScoreFromFindings(parsed.key_point_findings);
+    const score = scoreSummary.score;
+    const isCorrect = score >= 0.8;
     const reason = String(parsed.reason || '').trim() || '任务完成度评测已完成，但未返回理由。';
+    const llmReportedScore = typeof parsed.score === 'undefined' ? undefined : clampTaskScore(parsed.score);
     const { result_issues: _ignoredResultIssues, resultIssues: _ignoredResultIssuesCamel, ...rest } = parsed;
     return {
         isCorrect,
@@ -227,9 +230,14 @@ function normalizeOutput(parsed: Record<string, unknown>): TaskCompletionEvalOut
         reason,
         rawAnalysis: {
             ...rest,
-            key_point_findings: Array.isArray(parsed.key_point_findings)
-                ? parsed.key_point_findings
-                : [],
+            score,
+            is_correct: isCorrect,
+            llm_reported_score: llmReportedScore,
+            score_computation: {
+                method: 'equal_weight_average',
+                item_count: scoreSummary.itemCount,
+            },
+            key_point_findings: scoreSummary.findings,
         },
     };
 }
@@ -266,6 +274,11 @@ export async function evaluateTaskCompletionViaOpencode(
             modelID,
             apiKey: activeModel?.apiKey || config.apiKey,
             baseURL: activeModel?.baseURL || config.baseUrl,
+        },
+        modelOptions: {
+            temperature: 0,
+            top_p: 1,
+            seed: 42,
         },
         system: COORDINATOR_SYSTEM_PROMPT,
         // 用统一的评测器权限基线：read/bash/webfetch 显式 allow + question/plan_* deny + 写允许 /tmp/*。

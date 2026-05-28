@@ -71,6 +71,7 @@ interface TrajectoryDeviation {
 
 interface ResultEvaluationFinding {
     content: string;
+    score?: number | null;
     covered?: boolean;
     coverageStatus?: 'covered' | 'partial' | 'missing' | 'wrong';
     severity?: 'low' | 'medium' | 'high';
@@ -173,6 +174,7 @@ function normalizeFindings(rawFindings: unknown): ResultEvaluationFinding[] {
             const isSkillAttr = item.is_skill_attributable ?? item.isSkillAttributable;
             return {
                 content: String(item.content || '').trim(),
+                score: typeof item.score === 'number' && Number.isFinite(item.score) ? item.score : null,
                 covered: typeof item.covered === 'boolean' ? item.covered : undefined,
                 coverageStatus: isCoverageStatus(coverageStatusRaw) ? coverageStatusRaw : undefined,
                 severity: item.severity === 'high' || item.severity === 'medium' || item.severity === 'low'
@@ -1127,6 +1129,7 @@ function KeyPointFindingCard({ item, fallbackTitle }: { item: ResultEvaluationFi
         : severity === 'high' || status === 'wrong' ? COLORS.dangerSubtle
         : severity === 'medium' || status === 'partial' ? COLORS.warningSubtle
         : COLORS.bgSoft;
+    const scoreText = item.score == null ? '--' : `(${fmtScore10(item.score)}/10)`;
     const hasTrace = Boolean(item.traceRootCause?.failureReason || item.traceRootCause?.failureStage || item.traceRootCause?.relatedSteps?.length);
     const hasSkillSuggestion = item.isSkillAttributable !== false && Boolean(item.improvementSuggestion);
     const hasAttribution = typeof item.isSkillAttributable === 'boolean' || item.attributionReason || item.improvementSuggestion;
@@ -1142,9 +1145,20 @@ function KeyPointFindingCard({ item, fallbackTitle }: { item: ResultEvaluationFi
                 <span style={{ fontSize: 12, fontWeight: 650, color: COLORS.textSecondary, lineHeight: 1.45 }}>
                     {item.content || fallbackTitle}
                 </span>
-                <span style={{ ...badgeStyle(bg, tone, true), fontSize: 9, flexShrink: 0 }}>
-                    {coverageStatusLabel(status)}
-                </span>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, flexShrink: 0 }}>
+                    <span style={{
+                        fontSize: 10,
+                        lineHeight: 1,
+                        fontWeight: 700,
+                        color: tone,
+                        fontVariantNumeric: 'tabular-nums',
+                    }}>
+                        {scoreText}
+                    </span>
+                    <span style={{ ...badgeStyle(bg, tone, true), fontSize: 9 }}>
+                        {coverageStatusLabel(status)}
+                    </span>
+                </div>
             </div>
 
             {item.explanation && (
