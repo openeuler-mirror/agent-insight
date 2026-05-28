@@ -1,0 +1,138 @@
+---
+title: Step 2 · EXECUTION
+description: A/B 测试三步法 · 第二步：执行与评估调度
+sidebar: skills
+---
+
+# Step 2 · EXECUTION
+
+## 是什么
+
+第二步：把 Step 1 定义的"样本 × A/B × 轮次"矩阵真正跑起来。平台会先**并发调度 Agent 执行**（受 `agentMaxConcurrency` 限流），全部 Agent 跑完后再**用同一并发上限触发评估器**，所有结果实时落到 `GrayscaleTask.caseStatesJson`。
+
+## 它解决什么问题
+
+A/B 测试的执行有三个挑战：
+
+1. **大规模并发** —— 10 条 case × 2 (A/B) × 3 轮 = 60 个 cell，全跑完要几十分钟
+2. **失败隔离** —— 一个 cell 失败不能拖垮整个任务
+3. **资源公平** —— Agent 执行和 LLM 评估都吃 token，不能一窝蜂打爆模型 quota
+
+EXECUTION 用矩阵化调度 + 并发上限 + 失败状态机解决：每个 cell 独立标 `running/passed/failed/error`，整体任务总是可恢复。
+
+## 怎么用
+
+### 通过 UI
+
+Step 1 保存后点 **开始执行**，进入实时矩阵视图：
+
+<!-- TODO 截图：新拍。三步法第二步 EXECUTION 矩阵（src/app/(main)/skill-eval/grayscale/page.tsx Card 2），覆盖：进度条 + 矩阵 + 每个 cell 状态。 -->
+
+矩阵的每一行 = 一个 case，每行有 `A.r1 / A.r2 / A.r3 / B.r1 / B.r2 / B.r3` 6 个 cell（按 repeatRounds=3 计）。
+
+cell 状态：
+- 🔘 `pending` — 还没轮到
+- 🔵 `running` — Agent 正在跑
+- 🟢 `passed` — 跑通且评测通过
+- 🔴 `failed` — 跑通但评测失败
+- ⚠️ `error` — Agent 调用出错（网络 / LLM 限流 / 异常）
+
+点击任意 cell 可以查看该次执行的完整 Trace + 评估器输出。
+
+### 通过 REST API
+
+```bash
+# 启动执行
+curl -X POST http://localhost:3000/api/debug/grayscale-tasks/{id}/run \
+  -H "x-witty-api-key: $API_KEY"
+
+# 轮询任务状态
+curl http://localhost:3000/api/debug/grayscale-tasks/{id} \
+  -H "x-witty-api-key: $API_KEY"
+# → { id, activeRun: { status: 'running' | 'evaluating' | null }, caseStatesJson: { ... } }
+
+# 单独触发评测（autoEval=false 时）
+curl -X POST http://localhost:3000/api/debug/grayscale-tasks/{id}/evaluate \
+  -H "x-witty-api-key: $API_KEY"
+
+# 中止任务
+curl -X POST http://localhost:3000/api/debug/grayscale-tasks/{id}/stop \
+  -H "x-witty-api-key: $API_KEY"
+```
+
+### 两阶段调度
+
+```
+                ┌─────────────────────────┐
+                │  Phase 1: Agent Execute │
+                │                         │
+                │  受 agentMaxConcurrency │
+                │  限流，60 cell 一波波   │
+                │  跑完                    │
+                └────────────┬────────────┘
+                             │ 全部 done 后才进入下一阶段
+                             ▼
+                ┌─────────────────────────┐
+                │  Phase 2: Evaluator     │
+                │                         │
+                │  同样并发上限，按 cell  │
+                │  调 evaluator (LLM)     │
+                └────────────┬────────────┘
+                             │ 评估全部完成
+                             ▼
+                ┌─────────────────────────┐
+                │  Aggregate              │
+                │                         │
+                │  按 A/B 分组算 mean,   │
+                │  variance, invokeRate   │
+                └─────────────────────────┘
+```
+
+源码：`src/app/api/debug/grayscale-tasks/[id]/run/route.ts`。
+
+## 关键参数
+
+| 参数 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `agentMaxConcurrency` | int | 5 | Agent 调用并发，影响两个阶段 |
+| `autoEval` | bool | true | 阶段 1 完成是否自动进阶段 2 |
+| `recordTriggerDetails` | bool | false | 是否落 tool call / skill 触发明细 |
+
+并发上限同时控制 Agent 执行和评估器调用 —— 一个用户的 quota 是共享的。
+
+## 最佳实践
+
+- **先小批量验证**：第一次跑用 1 条 case × 1 轮 试通流程，再放开规模
+- **观察 LLM 限流**：如果看到大量 cell `error`，先把 `agentMaxConcurrency` 降到 2-3
+- **失败的 cell 别立刻重跑**：先看错误原因（LLM 限流 vs 真 bug），盲目重试可能掩盖问题
+- **跑大数据集前估算成本**：60 cell × ~2k token/cell = 120k token，按你的 LLM 单价乘一下
+
+## 常见问题
+
+<details>
+<summary>cell 永远停在 running 怎么办？</summary>
+
+通常是底层 Agent 进程挂了但没退出。可以：
+1. 调 `POST /api/debug/grayscale-tasks/{id}/stop` 中止任务
+2. 检查 `data/sessions/<taskId>` 目录里有没有该 cell 的 session 文件
+3. 重启 `bash scripts/restart_dev.sh`（不影响数据）
+4. 任务恢复后会自动把 `running` 状态的 cell 重新调度
+</details>
+
+<details>
+<summary>能并行跑多个 A/B 任务吗？</summary>
+
+可以，任务彼此独立。但 `agentMaxConcurrency` 是每任务的，多任务并行会叠加。如果一共开 3 个任务、每个并发 5，总共会有 15 个 Agent 并发，可能撞 LLM rate limit。
+</details>
+
+<details>
+<summary>评估器超时了怎么办？</summary>
+
+每个评估器 cell 默认超时 30 秒，超时记为 `error`。可以在 Step 1 配置时调整 `evaluatorTimeoutMs`（即将支持）。
+</details>
+
+## 相关文档
+
+- [Step 1 · CONFIG](./step1-config) — 配实验
+- [Step 3 · DECISION](./step3-decision) — 看结果
+- [Failure Drilldown](./failure-drilldown) — failed cell 归因

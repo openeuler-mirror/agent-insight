@@ -1,0 +1,83 @@
+---
+title: Skills · Get Started
+description: 10 分钟生成第一个 Skill 并跑通分析
+sidebar: skills
+---
+
+# Get Started · Skills
+
+本页让你：用 AI 生成一个 Skill → 发布 v1 → 做静态合规检查 → 跑一次 A/B 测试。约 15-20 分钟。
+
+## 前置条件
+
+- [ ] Agent Insight 服务已启动
+- [ ] 已在「模型注册」配好至少一个 LLM
+- [ ] 想体验完整闭环：已有一个评测集（参考 [Setup Evaluation](../get-started/setup-evaluation)）
+
+## 步骤一：用 AI 生成 Skill
+
+进入 **Skills 生成**，提交需求描述。例如：
+
+> 创建一个 Skill，当用户请求查看系统信息时，自动执行 shell 脚本收集当前系统的关键信息（操作系统、CPU、内存、磁盘、网络等），以 Markdown 报告呈现给用户。
+
+平台用 LLM 产出 `SKILL.md` 草稿（含 frontmatter、触发条件、关键行动、示例对话）。
+
+<!-- TODO 截图：复用 agent-insight/docs/images/skill-gen.png — Skill 生成对话框 -->
+
+```bash
+# 也可以走 API 直接生成
+curl -X POST http://localhost:3000/api/skills/generate \
+  -H "x-witty-api-key: $API_KEY" \
+  -d '{"description": "创建一个 Skill...", "user": "demo@163.com"}'
+```
+
+## 步骤二：保存并发布 v1
+
+点击 **保存并发布**，平台在 `Skill / SkillVersion` 两张表分别建一行。`SkillVersion.version = 1` 自动激活。
+
+```bash
+GET /api/skills?user=demo@163.com
+# → [{ id, name, activeVersion: 1, versions: [{version: 1, content: "..."}] }]
+```
+
+## 步骤三：跑静态合规检查
+
+进入 **Skills 分析**，选刚生成的 Skill，点 **静态合规 → 重新扫描**。后台跑规则引擎 + LLM 5D 评估（Role / Structure / ...），输出 `SkillIssue[]`。
+
+<!-- TODO 截图：复用 agent-insight/docs/images/skill-analyse-static.png — 静态合规扫描结果列表 -->
+
+每条 Issue 携带 `severity` + `summary` + `evidence` + `suggestedFix`，可直接驱动优化。
+
+## 步骤四：跑一次 A/B 测试
+
+进入 **Skills 分析 → A/B 测试 → 新建任务**，配置：
+
+- A 组：无 Skill（对照）
+- B 组：刚生成的 v1
+- 数据集：选你已经维护好的评测集
+- 重复轮次：3
+- 评估器：LLM-as-Judge
+
+点击开始执行。完整三步法详见 [Run A/B Test](../get-started/run-ab-test)。
+
+<!-- TODO 截图：新拍。三步法 A/B 测试报告（src/app/(main)/skill-eval/grayscale 的 Card 3）。 -->
+
+## 步骤五：基于结果优化
+
+A/B 报告显示能力分较低，意味着 v1 不够好。进入 **Skills 优化**，平台会拉出该 Skill 的所有 `SkillIssue`，让你选择改进方向：
+
+<!-- TODO 截图：复用 agent-insight/docs/images/skill-optimization.png — Skill 优化页 -->
+
+选定后点 **开始优化**，LLM 根据 `SkillIssue.suggestedFix` 改写 `SKILL.md`。完成后 **发布为 v2**。
+
+<!-- TODO 截图：复用 agent-insight/docs/images/skill-optimization-result.png — 优化结果对比 -->
+
+## 步骤六：v1 vs v2 再来一次 A/B
+
+回到 A/B 测试，这次 A=v1、B=v2，看分数是不是真的涨了。如果短板分（min(能力, 成本, 稳定性)）过线，就是 `direct-release`，可以放心发布。
+
+## 下一步
+
+- [Skill Lifecycle](./lifecycle) — 完整 6 阶段闭环
+- [Data Model](./data-model) — Skill / SkillVersion / Evaluation 的字段
+- [Optimization Overview](./optimization/overview) — 自动优化的更多打法

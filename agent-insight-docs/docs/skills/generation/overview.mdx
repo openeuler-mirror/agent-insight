@@ -1,0 +1,122 @@
+---
+title: Skills Generation
+description: Skills 生成总览 — AI 辅助产出 Skill 初稿的四条路径
+sidebar: skills
+---
+
+# Skills Generation
+
+## 是什么
+
+Generation 子模块解决一个问题：**怎么从 0 → 1 写出一个符合规范的 Skill**。Agent Insight 内置 `skill-generator`，根据用户提供的输入类型走 4 条不同路径，最终都产出符合 Agent Skills 开放标准（[agentskills.io](https://agentskills.io/)）的 `SKILL.md` + 可选 `scripts/` + `references/`。
+
+底层实现：[`skills/skill-generator/`](https://github.com/your-org/agent-insight/blob/main/skills/skill-generator/SKILL.md) 这个 Skill 本身就是生成器，由平台调度 LLM 跑出来。
+
+## 它解决什么问题
+
+写一个**结构正确**的 Skill 比想象的难：
+
+- frontmatter 字段写错 → OpenCode 加载失败
+- description 写太泛 → 召回率低
+- scripts/ 与 references/ 混在 SKILL.md 里 → 渐进式加载失效
+- 没遵守"渐进式披露 (Progressive Disclosure)" → token 浪费
+
+Generation 把这些**结构约束**封装到生成器 Prompt 里，让用户专注于"我要做什么"，不用记 schema。
+
+## 四条生成路径
+
+| 入口 | 适合 | 文档 |
+|---|---|---|
+| **From Description** | 用自然语言描述需求 | [from-description](./from-description) |
+| **From Prompt** | 已经有一段散 Prompt 要"升级"为 Skill | [from-prompt](./from-prompt) |
+| **From Examples** | 有几对 input/output 样本 | [from-examples](./from-examples) |
+| **From Traces** | 用历史 Trace 反推可复用 Skill | [from-traces](./from-traces) |
+
+## 怎么用
+
+### 通过 UI
+
+进入 **Skills 生成**，选输入类型，按提示提交内容：
+
+<!-- TODO 截图：复用 agent-insight/docs/images/skill-gen.png — Skills 生成对话框 -->
+
+平台后台调 LLM 跑出来后给你预览，可以来回改几轮，满意后点 **保存并发布** 落库为 v1。
+
+### 通过 REST API
+
+```bash
+# 从描述生成
+curl -X POST http://localhost:3000/api/skills/generate \
+  -H "x-witty-api-key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "mode": "from-description",
+    "description": "创建一个 Skill，当用户请求查看系统信息时...",
+    "user": "demo@163.com"
+  }'
+```
+
+完整 endpoint 见 [API Reference](../../api-and-data-platform/endpoints/README)。
+
+## 生成原理
+
+每条路径走的是同一套 Skill Generator 流水线，差异在第二步「场景识别」：
+
+```
+1. 文档预处理（PDF/MD 解析）
+   ↓
+2. 场景识别（故障诊断 / 通用 / RAG / ...）
+   ↓
+3. 加载规范 + 场景模块（references/scenarios/<scene>.md）
+   ↓
+4. LLM 按模板产出 SKILL.md 草稿
+   ↓
+5. 自检：frontmatter 完整？description 够具体？allowed-tools 写了？
+   ↓
+6. 返回草稿供用户预览
+```
+
+源码：[`skills/skill-generator/SKILL.md`](https://github.com/your-org/agent-insight/blob/main/skills/skill-generator/SKILL.md)。
+
+## 关键参数
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `mode` | string | ✅ | `'from-description'` / `'from-prompt'` / `'from-examples'` / `'from-traces'` |
+| `description` / `prompt` / `examples[]` / `traceIds[]` | — | ✅ | 与 mode 对应的输入 |
+| `targetCategory` | string | ❌ | 提示 LLM 走哪个场景模块（故障诊断 / RAG / 通用） |
+| `referenceDocuments` | string[] | ❌ | PDF / MD / URL 列表，作为额外参考 |
+| `modelConfigId` | string | ❌ | 指定生成器用哪个 LLM 配置（默认 active） |
+
+## 最佳实践
+
+- **能用 AI 生成就不要手写** —— 生成器 Prompt 已经把结构约束都封装好了
+- **描述写细一点** —— 给 LLM 一句话 vs 五句话，产出差异巨大
+- **生成后必做静态合规** —— 即使 LLM 自检通过，正式扫描可能还会出问题
+- **生成与发布分离** —— 生成给个草稿，先 review 再发布
+
+## 常见问题
+
+<details>
+<summary>生成的 Skill 必须用 LLM 才能跑吗？</summary>
+
+`SKILL.md` 文本本身只是 Markdown，但实际运行时 Agent 框架（OpenCode / Claude Code）会用 LLM 决策。如果你想用纯规则代替 LLM，可以把核心逻辑写到 `scripts/` 里，让 SKILL.md 只做调度。
+</details>
+
+<details>
+<summary>不同 mode 产出的 Skill 质量差吗？</summary>
+
+**From Description** > **From Prompt** > **From Examples** ≈ **From Traces**（生成后还要人工调）。原因：自然语言描述给 LLM 留的发挥空间最大，能产出结构最规整的版本；样本和 Trace 反推容易产出"贴样本而不抽象"的过拟合版本。
+</details>
+
+<details>
+<summary>能多轮迭代生成吗？</summary>
+
+可以。在生成预览界面继续聊（"再加一个 frontmatter 字段"、"description 改简单些"），LLM 会基于历史轮次迭代修改。
+</details>
+
+## 相关文档
+
+- [From Description](./from-description) · 主流入口
+- [Create Skill](../management/create-skill) · 生成后如何发布
+- [Schemas](../management/schemas) · 生成结果的 schema 约束

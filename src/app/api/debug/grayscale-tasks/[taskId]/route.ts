@@ -26,6 +26,14 @@ interface GrayscaleConfig {
     latestResultAt?: string;
 }
 
+function withDefaultConfig(config: GrayscaleConfig): GrayscaleConfig {
+    return {
+        ...config,
+        autoEval: true,
+        recordTriggerDetails: true,
+    };
+}
+
 interface RunResult {
     status: CaseStatus;
     jobId?: string;
@@ -404,7 +412,7 @@ function pickExecutionTokenUsage(row: ExecutionMetricRow): number | null {
 async function loadTask(taskId: string, user: string) {
     const task = await (prisma as unknown as GrayscalePrisma).grayscaleTask.findFirst({ where: { id: taskId, user } });
     if (!task) return null;
-    const configJson = safeParse<GrayscaleConfig>(task.configJson, {});
+    const configJson = withDefaultConfig(safeParse<GrayscaleConfig>(task.configJson, {}));
     if (!configJson.skillId && task.skillId) configJson.skillId = task.skillId;
     if (!configJson.versionBId && task.skillVersionId) configJson.versionBId = task.skillVersionId;
     return {
@@ -418,7 +426,7 @@ async function persistTaskState(taskId: string, user: string, config: GrayscaleC
     await (prisma as unknown as GrayscalePrisma).grayscaleTask.updateMany({
         where: { id: taskId, user },
         data: {
-            configJson: JSON.stringify(config),
+            configJson: JSON.stringify(withDefaultConfig(config)),
             caseStatesJson: JSON.stringify(states),
         },
     });
@@ -1626,7 +1634,7 @@ export async function PATCH(
 
         if (configJson !== undefined) {
             const nextConfig = configJson && typeof configJson === 'object' && !Array.isArray(configJson)
-                ? { ...(configJson as GrayscaleConfig) }
+                ? withDefaultConfig({ ...(configJson as GrayscaleConfig) })
                 : {};
             const nextSkillId = String(nextConfig.skillId || '').trim();
             if (nextSkillId && nextSkillId !== existing.skillId) {
@@ -1659,7 +1667,7 @@ export async function PATCH(
         return NextResponse.json({
             ...updated,
             configJson: {
-                ...JSON.parse(updated.configJson || '{}'),
+                ...withDefaultConfig(JSON.parse(updated.configJson || '{}')),
                 skillId: updated.skillId,
                 versionBId: updated.skillVersionId,
             },

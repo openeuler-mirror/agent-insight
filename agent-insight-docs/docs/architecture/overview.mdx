@@ -1,0 +1,143 @@
+---
+title: Architecture Overview
+description: 整体架构 — 四层结构、技术栈、数据流
+sidebar: architecture
+---
+
+# Architecture Overview
+
+Agent Insight 的代码按 **采集 → 存储 → 引擎 → UI** 四层架构组织。这一页给你一张从 SDK 到看板的完整视图 —— 适合贡献者、自部署运维、想做深度集成的高级用户。
+
+> 内部权威文档：[`docs/Agent_Insight_Design_Document.md`](https://github.com/your-org/agent-insight/blob/main/docs/Agent_Insight_Design_Document.md) §3.1。
+
+## 四层架构
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  Layer 4 · UI                                                       │
+│                                                                     │
+│  Next.js App Router · React 19 · TypeScript · Tailwind             │
+│  src/app/(main)/* · src/components/* · src/lib/client/*            │
+└─────────────────────────────┬───────────────────────────────────────┘
+                              │ HTTP / WebSocket
+┌─────────────────────────────▼───────────────────────────────────────┐
+│  Layer 3 · Engine                                                   │
+│                                                                     │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────────┐  │
+│  │Observability │  │  Evaluation  │  │  Skills                  │  │
+│  │              │  │              │  │                          │  │
+│  │ agent-trace  │  │ judge.ts     │  │ skill-service            │  │
+│  │ flow-parser  │  │ evaluators   │  │ skill-benchmark-generator│  │
+│  │ derived-     │  │ derive-skill-│  │ skill-sync-service       │  │
+│  │ metrics      │  │ opt-points   │  │ ab-scoring               │  │
+│  └──────────────┘  └──────────────┘  └──────────────────────────┘  │
+└─────────────────────────────┬───────────────────────────────────────┘
+                              │ Prisma ORM
+┌─────────────────────────────▼───────────────────────────────────────┐
+│  Layer 2 · Storage                                                  │
+│                                                                     │
+│  Prisma + SQLite (默认) / OpenGauss (可选)                           │
+│  27 张表：Skill / SkillVersion / Execution / Session /              │
+│           Evaluation / SkillIssue / GrayscaleTask /                 │
+│           AgentEvalDataset / SkillTriggerEvalSet+Run / ...          │
+└─────────────────────────────▲───────────────────────────────────────┘
+                              │ 上报 / 写入
+┌─────────────────────────────┴───────────────────────────────────────┐
+│  Layer 1 · Ingest                                                   │
+│                                                                     │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌────────────────────┐  │
+│  │ Native Plugins  │  │  Log Watchers   │  │  OTel / SDK / REST │  │
+│  │ • OpenCode      │  │ • Claude Code   │  │ • Python SDK       │  │
+│  └─────────────────┘  │ • OpenClaw      │  │ • TypeScript SDK   │  │
+│                       └─────────────────┘  │ • OTLP HTTP        │  │
+│                                            └────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────┘
+                              ▲
+                              │ HTTP
+              ┌───────────────┴────────────────┐
+              │  Agent 框架（OpenCode /        │
+              │   Claude Code / OpenClaw /     │
+              │   LangChain / 自研...）         │
+              └────────────────────────────────┘
+```
+
+## 各层职责与代码位置
+
+| 层 | 职责 | 主要代码 |
+|---|---|---|
+| **L1 Ingest** | 数据采集与上报 | `src/lib/ingest/` · `scripts/opencode_plugin.ts` · `scripts/claude_watcher_client.ts` · `src/app/api/ingest/*` |
+| **L2 Storage** | 持久化、DB 抽象 | `src/lib/storage/` · `prisma/schema.prisma` |
+| **L3 Engine** | 观测 / 评测 / Skills 业务逻辑 | `src/lib/engine/observability/` · `src/lib/engine/evaluation/` · `src/lib/engine/skills/` · `src/lib/skill-analysis/` |
+| **L4 UI** | Web 看板 | `src/app/(main)/*` · `src/components/*` |
+
+## 技术栈
+
+| 类别 | 选型 |
+|---|---|
+| Web 框架 | Next.js 16 + React 19 + TypeScript（App Router） |
+| ORM / DB | Prisma 5.22 + SQLite（默认）/ OpenGauss（可选） |
+| 图表 / 流程 | Recharts · Mermaid |
+| LLM SDK | OpenAI SDK（兼容 Claude / DeepSeek / Qwen / 自定义 endpoint） |
+| 采集 | OpenCode 原生 Plugin · Claude Code 日志旁路 · OTel GenAI |
+| 部署 | Docker Compose / Kubernetes |
+
+## 数据流
+
+```
+Agent 框架（OpenCode / Claude Code / ...）
+       │
+       │ ① 采集端注入（plugin 或 watcher）
+       ▼
+[L1] POST /api/ingest/upload  /  /api/ingest/otel/v1/traces
+       │
+       │ ② normalizeInteractions() / extractSkillsFromSession()
+       ▼
+[L2] Prisma: Session.interactions + Execution（含统计指标）
+       │
+       │ ③ 评测引擎按需触发（autoEval 或 用户点 Run）
+       ▼
+[L3]  • judgeAnswer() / analyzeFailures()
+      • LLM-as-Judge / Trajectory Evaluator / Routing Evaluator
+      • derive-skill-opt-points() 生成 SkillIssue[]
+       │
+       │ ④ 结果回写
+       ▼
+[L2] Evaluation + SkillIssue
+       │
+       │ ⑤ 聚合层
+       ▼
+[L3] aggregateSkillIssues() / prevalence 抬升
+       │
+       │ ⑥ Next.js Server Components / Client Fetch
+       ▼
+[L4] 链路观测页 / 评测页 / Skill 分析页 / A/B 测试页
+```
+
+详见 [Architecture · Data Flow](./data-flow)。
+
+## 核心架构决策（ADR 索引）
+
+| 决策 | 文档 |
+|---|---|
+| 为什么用 OpenTelemetry GenAI 语义？ | [ADR 002 · Why OTel](./adr/002-why-otel) |
+| 为什么用 ClickHouse（v2 规划）？ | [ADR 001 · Why ClickHouse](./adr/001-why-clickhouse) |
+| 为什么 Skill 用 `name` 不用 `id` 做对外 key？ | [PROJECT.md §7](https://github.com/your-org/agent-insight/blob/main/AGENTS.md#7-项目内部约定) |
+| 为什么静态评估和动态评估统一到一张表？ | [Skills · Data Model](../skills/data-model) §两条核心 invariant |
+| 为什么 A/B 评分用短板原则不用加权平均？ | [Step 3 · DECISION](../skills/analysis/step3-decision) |
+
+完整 ADR 目录：[`architecture/adr/`](./adr/README)。
+
+## 演进路径
+
+| 版本 | 范围 |
+|---|---|
+| **v1 (Skill-insight)** | 聚焦 Skill 的生成-评测-优化闭环 |
+| **v2 (Agent-insight)** | 扩展到 Agent 与多 Agent 协同观测，整体 IA 重构 |
+
+## 相关文档
+
+- [System Design](./system-design) — 各层细节
+- [Storage Design](./storage-design) — Prisma schema 全表
+- [Data Flow](./data-flow) — 从 SDK 到 UI 的完整链路
+- [Performance](./performance) — 性能指标与优化
+- [`docs/PROJECT.md`](https://github.com/your-org/agent-insight/blob/main/docs/PROJECT.md) — 内部权威文档（1491 行）

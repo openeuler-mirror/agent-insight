@@ -1,0 +1,137 @@
+---
+title: Tags
+description: 自定义标签维度 — 给 Trace 打业务标签
+sidebar: observability
+---
+
+# Tags
+
+## 是什么
+
+`Tags` 是自由文本标签，给 Trace 打上业务维度的分类（如 `region:cn`、`scenario:onboarding`、`priority:high`）。比 user / framework / skill 等结构化字段更灵活，适合事后探索性分析。
+
+底层字段：`Execution.label`（单一字符串）+ `metadata.tags[]`（数组，自定义）。
+
+## 它解决什么问题
+
+平台内置维度（user / framework / skill）有限。业务上想看的角度可能：
+
+- 按地域：`region:cn`
+- 按功能：`scenario:refund`
+- 按客户级别：`tier:enterprise`
+- 按实验组：`experiment:exp-2026-q1`
+
+固定 schema 都覆盖不全。Tags 是逃生通道：业务想看什么就打什么。
+
+## 怎么用
+
+### 通过 UI
+
+链路观测页支持按 `label` 字段过滤。`metadata.tags[]` 在 Drawer 详情里展示，列表过滤待 v2。
+
+<!-- TODO 截图：新拍。Trace 列表 + tag 过滤侧栏（可多选）。 -->
+
+### 通过 SDK
+
+```python
+from agent_insight import AgentInsight, observe
+
+@observe()
+def my_agent(query: str, region: str) -> str:
+    AgentInsight.set_label("customer-support")
+    AgentInsight.add_tags(["region:" + region, "scenario:refund"])
+    return answer
+```
+
+```typescript
+import { AgentInsight, observe } from "@agent-insight/sdk";
+
+const myAgent = observe(async (query: string, region: string) => {
+  AgentInsight.setLabel("customer-support");
+  AgentInsight.addTags([`region:${region}`, "scenario:refund"]);
+  return answer;
+});
+```
+
+### 通过 REST API
+
+```bash
+# 上报时带 label + tags
+curl -X POST http://localhost:3000/api/ingest/upload \
+  -H "x-witty-api-key: $API_KEY" \
+  -d '{
+    "task_id": "task_xxx",
+    "label": "customer-support",
+    "metadata": { "tags": ["region:cn", "scenario:refund", "tier:enterprise"] },
+    ...
+  }'
+
+# 修改已上报 Trace 的 label
+curl -X PATCH http://localhost:3000/api/observe/data \
+  -H "x-witty-api-key: $API_KEY" \
+  -d '{"task_id": "task_xxx", "label": "high-priority"}'
+```
+
+## 关键参数
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `label` | string | 单一标签，列表过滤效率最高 |
+| `metadata.tags[]` | string[] | 多标签，自由扩展 |
+| `metadata` 任意 key | any | 完全自由的业务元数据 |
+
+## label vs tags vs metadata 怎么选
+
+| 字段 | 适合 | 例子 |
+|---|---|---|
+| `label` | 单一主分类，**经常用来过滤列表** | `customer-support` / `internal-test` |
+| `metadata.tags[]` | 多个交叉维度 | `region:cn`、`scenario:refund` |
+| `metadata.*` | 任意结构化数据 | `{"order_id": "ORD-123"}` |
+
+## 命名约定
+
+为了让 tag 能聚合，推荐用 `{key}:{value}` 格式：
+
+```
+✅ region:cn       region:us       region:eu
+✅ scenario:refund scenario:order  scenario:complain
+✅ tier:enterprise tier:pro        tier:free
+
+❌ cn              us              eu              # 没法分维度过滤
+❌ refund          order           complain
+```
+
+按这套规则，UI 可以按 `key` 自动聚合出"region 有多少种取值"。
+
+## 最佳实践
+
+- **label 写一个核心分类**，tags[] 写交叉维度
+- **不要把 PII 写进 tags** —— Tags 是公开维度，user_id / email 这种放 `metadata.user_metadata`
+- **tag 数量控制在 5 以内** —— 多了过滤性能差、UI 也乱
+- **建立组织级 tag 规范** —— 提前定义好哪些 tag key 可用（region / scenario / tier / experiment），避免 100 个工程师写 100 种命名
+
+## 常见问题
+
+<details>
+<summary>tag 有大小写敏感吗？</summary>
+
+是。`region:CN` 和 `region:cn` 是两个不同 tag。建议团队约定全小写。
+</details>
+
+<details>
+<summary>能给 Trace 加上后再加 tags 吗？</summary>
+
+可以。`PATCH /api/observe/data` 接口支持改 `label`。`metadata.tags[]` 的修改需要前端 / SDK 拉出来 merge 再写回（v2 规划提供原子 add/remove）。
+</details>
+
+<details>
+<summary>tags 数量有限制吗？</summary>
+
+单个 Trace 没硬限制，但建议 ≤ 5 个；超过会让 Drawer UI 显示过长。如果业务确实需要大量元数据，用 `metadata` 自由 key 而不是 `tags[]`。
+</details>
+
+## 相关文档
+
+- [Sessions](./sessions)
+- [Users](./users) — 另一种归组维度
+- [Environments](./environments) — 按 dev/staging/prod 的特殊 tag

@@ -1,0 +1,149 @@
+---
+title: 智能诊断
+description: ★ 主动发现失败模式 — Agent Insight 差异化能力
+sidebar: observability
+---
+
+# 智能诊断（Intelligent Diagnosis）
+
+## 是什么
+
+平台对 Trace 自动跑诊断，**主动发现**而不是等你查的失败模式：
+
+- 路径偏离（Trace 走了非预期步骤）
+- 关键动作缺失（应该做的没做）
+- 工具选择错误（用错工具或没用工具）
+- 结果格式 / 表达 / 事实问题
+
+底层把多个评估器（trajectory / key_point / tool_choice / result_issue）的输出经 [`derive-skill-opt-points.ts`](https://github.com/your-org/agent-insight/blob/main/src/lib/engine/evaluation/derive-skill-opt-points.ts) 转成结构化 `SkillIssue` + 反馈到 Skills 优化。
+
+> 这是 Agent Insight 区别于 Langfuse / LangSmith 的标志能力 —— Langfuse 只有"被动告警"，Agent Insight 有"主动诊断"。
+
+## 它解决什么问题
+
+| 被动监控 | 主动诊断 |
+|---|---|
+| 等用户反馈"Agent 答错了" | 平台自动发现"30% Trace 走了同一种弯路" |
+| 失败原因要人去分析 | 平台自动归类为 4 大类 |
+| 不知道根因 | LLM 给出 reasoning + suggestedFix |
+| 优化没数据驱动 | SkillIssue 直接驱动优化器 |
+
+## 怎么用
+
+### 通过 UI
+
+平台后台对每条 Trace 跑诊断（[`/api/eval/trajectory/run`](https://github.com/your-org/agent-insight/blob/main/src/app/api/eval/trajectory/run/route.ts) 路径自动调用，含 result-only 与 full-trace 两条路径）：
+
+- **链路观测列表**：失败 Trace 行显示 `failures: N` 角标
+- **Trace Drawer**：底部"智能诊断"区列出该 Trace 的所有 `SkillIssue`
+- **Skill 优化页**：跨 Trace 聚合的全量 SkillIssue，按 severity + prevalence 排序
+
+<!-- TODO 截图：复用 agent-insight/docs/images/best_practice_detail_v0.png 与 best_practice_detail_v1.png — 智能诊断 / 失败模式归类 -->
+
+### 通过 REST API
+
+```bash
+# 单 Trace 触发诊断（通常自动跑，手动 force 时用）
+curl -X POST http://localhost:3000/api/eval/rejudge \
+  -H "x-witty-api-key: $API_KEY" \
+  -d '{"task_id": "task_xxx", "currentUser": "demo@163.com"}'
+
+# 拉某 Skill 全量诊断结果
+curl "http://localhost:3000/api/skills/by-name/{name}/optimization-points?user=demo@163.com" \
+  -H "x-witty-api-key: $API_KEY"
+# → OptIssue[]，按 severity + prevalence 排序
+```
+
+## 4 大诊断类别
+
+| 类别 | 抽取自 | 例子 |
+|---|---|---|
+| **路径偏离** | `deviation_steps[]` | 该跑 lscpu，实际跑了 lspci |
+| **关键动作缺失** | `key_point_findings[]` (covered=false) | 没做"验证文件存在"步骤 |
+| **工具选择问题** | `tool_choice_findings[]` | 用 bash 不如用 read tool |
+| **结果质量问题** | `result_issues[]` (按 kind 分) | 格式偏差 / 多余内容 / 事实错误 / 表达问题 |
+
+`kind → category` 映射在 [`derive-skill-opt-points.ts`](https://github.com/your-org/agent-insight/blob/main/src/lib/engine/evaluation/derive-skill-opt-points.ts) 的 `RESULT_ISSUE_KIND_TO_CATEGORY`：
+
+- `format` → 格式偏差
+- `extra_content` → 多余内容
+- `verbosity` → 表达问题
+- `incorrect_fact` → 事实错误
+- `other` → 结果问题
+
+## 关键过滤逻辑
+
+不是所有评估器输出都会落到 `SkillIssue`：
+
+```
+评估器输出
+   ├── is_skill_attributable=false → 跳过（改 Skill 解决不了）
+   ├── severity=low → 跳过（噪声大）
+   └── 否则 → 落库 SkillIssue
+```
+
+`is_skill_attributable` 是评估器自判 —— 如果问题是"模型本身能力不足"或"query 本身不可解"，这种问题改 SKILL.md 也解决不了，不应该污染 Skill 的优化列表。
+
+## 智能诊断 vs 单纯告警
+
+| 维度 | 告警 | 智能诊断 |
+|---|---|---|
+| 触发 | 阈值打破 | 持续运行 |
+| 输出 | "出问题了" | "出问题了 + 这是哪类问题 + 这样改" |
+| 数据 | metric | 结构化 SkillIssue |
+| 用途 | 通知 | 驱动优化闭环 |
+
+## 关键参数
+
+| 字段 | 含义 |
+|---|---|
+| `failures[]` | 写到 `Execution.failures` 的高层失败摘要 |
+| `SkillIssue.summary` | 单条诊断的一句话描述 |
+| `SkillIssue.evidence` | 从 Trace 摘的具体证据 |
+| `SkillIssue.reasoning` | LLM 解释为何扣分 |
+| `SkillIssue.suggestedFix` | 自动生成的修复建议 |
+| `SkillIssue.dedupKey` | 跨 Trace 同类问题聚合键 |
+
+## 最佳实践
+
+- **每天扫一次诊断 Dashboard** —— 看是否有新涌现的失败模式
+- **关注 prevalence ≥ 5 的 issue** —— 频繁出现 = 系统性问题
+- **优先修 high severity** —— 改 1 个 high 通常胜过修 10 个 low
+- **resolvedAt 用起来** —— 修完一定标记，避免下次又出现
+- **不要全信 LLM 的 suggestedFix** —— LLM 建议是 starting point，最终决策还是人
+
+## 常见问题
+
+<details>
+<summary>诊断为什么有时不出结果？</summary>
+
+可能的原因：
+1. 评估器还没跑（autoEval=false 时要手动 trigger）
+2. 评估器自判 `is_skill_attributable=false` 跳过了
+3. 评估器自判 severity=low 跳过了
+4. 平台 LLM 配置错（模型 quota / 网络问题）
+
+检查 `Evaluation.status` 字段排查。
+</details>
+
+<details>
+<summary>诊断准吗？会不会误判？</summary>
+
+会。诊断本质是 LLM-as-Judge + 规则混合，不是 100% 准。建议：
+1. 看 `prevalence` —— 偶发的可能是误判，频繁的才是真问题
+2. 与失败用例的实际表现对照
+3. 持续标 resolvedAt 给平台反馈
+</details>
+
+<details>
+<summary>诊断耗 token 吗？</summary>
+
+是。每条 Trace 跑全套评估器 = 1-3 次 LLM 调用。高 QPS 场景配 [Sampling](./sampling)，只对 sampled 的 Trace 跑诊断。
+</details>
+
+## 相关文档
+
+- [Quality Monitoring](./quality-monitoring) —— 诊断结果驱动的告警
+- [Failure Drilldown](../../skills/analysis/failure-drilldown) —— 在 Skills 模块的下钻视角
+- [Skill 优化](../../skills/optimization/overview) —— 诊断结果如何驱动优化
+- [`docs/PROJECT.md` §4.1](https://github.com/your-org/agent-insight/blob/main/docs/PROJECT.md) — 完整设计

@@ -1,0 +1,120 @@
+---
+title: 创建 Skill
+description: 通过 UI / API / 文件导入新建 Skill
+sidebar: skills
+---
+
+# 创建 Skill
+
+## 是什么
+
+把一个 Skill 资产（含 `SKILL.md` + 可选 `scripts/` + 可选 `references/`）注册到 Agent Insight，生成 v1。平台支持三种创建方式：**AI 生成**、**手写上传**、**从已有 Skill fork**。
+
+## 它解决什么问题
+
+不同来源的 Skill 都需要变成"平台里的一行" 才能被分析 / 评测 / 优化。本页讲怎么从这三种来源进平台。
+
+## 怎么用
+
+### 通过 UI · AI 生成（推荐）
+
+进入 **Skills 生成**，提供需求描述、文档（PDF/MD）或已有 Prompt。详见 [Generation · From Description](../generation/from-description)。
+
+<!-- TODO 截图：复用 agent-insight/docs/images/skill-gen.png — Skills 生成对话框 -->
+
+生成后点击 **保存并发布**，平台自动建 `Skill` 行 + `SkillVersion(v=1)`。
+
+### 通过 UI · 手写上传
+
+进入 **Skills 资产 → 新建 Skill**，粘贴 `SKILL.md` 文本 或者上传 ZIP（含 SKILL.md + scripts/）。
+
+<!-- TODO 截图：复用 agent-insight/docs/images/dashboard_skill_upload.png — Skill 手动上传弹窗 -->
+
+### 通过 REST API
+
+```bash
+# 创建 Skill（带 v1 内容）
+curl -X POST http://localhost:3000/api/skills \
+  -H "x-witty-api-key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "pdf-extractor",
+    "category": "document",
+    "visibility": "private",
+    "user": "demo@163.com",
+    "content": "---\nname: pdf-extractor\ndescription: 从 PDF 提取关键信息\n---\n\n# PDF Extractor\n..."
+  }'
+# 响应 → { id, name, activeVersion: 1, versions: [{ version: 1, content: "..." }] }
+```
+
+后续在已有 Skill 上加版本：
+
+```bash
+curl -X POST http://localhost:3000/api/skills/{id}/versions \
+  -H "x-witty-api-key: $API_KEY" \
+  -d '{"content": "...", "changeLog": "fix typo", "user": "demo@163.com"}'
+```
+
+## SKILL.md 最小结构
+
+```yaml
+---
+name: pdf-extractor                   # 必填，必须等于目录名
+description: |                        # 必填，OpenCode 选 Skill 的依据
+  从 PDF 提取关键信息：作者 / 标题 / 摘要 / 关键章节。
+  当用户上传 PDF 并问"这个文档说了什么"、"帮我总结"时使用。
+allowed-tools: ["read", "bash"]       # 可选，限制可调用工具
+---
+
+# PDF Extractor
+
+详细的执行指令、关键步骤、示例对话...
+```
+
+`name` + `description` 是 OpenCode 渐进式加载机制的"开关"，必须写好。完整模板参见 [`skills/skill-generator/references/skill-template.md`](https://github.com/your-org/agent-insight/blob/main/skills/skill-generator/references/skill-template.md)。
+
+## 关键参数
+
+| 字段 | 必填 | 说明 |
+|---|---|---|
+| `name` | ✅ | 对外 key，URL 路径用 |
+| `content` | ✅ | 完整 `SKILL.md` 文本（含 frontmatter） |
+| `user` | ✅ | 归属用户（API Key 推断） |
+| `category` | ❌ | 分类 tag，用于资产页筛选 |
+| `visibility` | ❌ | `private`（默认）/ `shared` |
+| `changeLog` | ❌ | v1 时通常留空，后续版本必填 |
+
+## 最佳实践
+
+- **name 用 kebab-case** —— `pdf-extractor` 而非 `PDFExtractor`
+- **description 写够 3 句话** —— 太短 OpenCode 召回不准；详见 [Skill Triggers · 召回率分析](../analysis/overview)
+- **frontmatter 必须有 `name` + `description`** —— 缺这俩是静态合规 high severity 错
+- **第一次创建用 AI 生成** —— 比手写快 5-10 倍，结构也对
+- **不要在 v1 就堆功能** —— 先小而精的版本上线跑 A/B，再渐进迭代
+
+## 常见问题
+
+<details>
+<summary>name 撞了怎么办？</summary>
+
+`(user, name)` 联合唯一。同一用户下重名会 409 Conflict；不同用户互不影响。
+</details>
+
+<details>
+<summary>能不能直接从本地目录上传？</summary>
+
+可以打包成 ZIP 走「手写上传」入口。也可以走 [Skill Sync 服务](./deployment) 反向同步：`POST /api/ingest/sync/opencode` 把本机 `.opencode/skills/<name>/` 推回平台。
+</details>
+
+<details>
+<summary>v1 创建后能改 name 吗？</summary>
+
+能，但**会断 URL**（前端路由用 name）。同时所有历史 Trace 里的 `Execution.skill` 字段不会自动更新，导致召回分析关联断裂。除非必须，否则**用 deprecate + 重建** 而不是 rename。
+</details>
+
+## 相关文档
+
+- [Versioning](./versioning) — 后续怎么发新版本
+- [Schemas](./schemas) — SKILL.md 完整 schema
+- [Generation · From Description](../generation/from-description) — AI 生成入口
+- [API Reference](../../api-and-data-platform/endpoints/README) — POST /api/skills

@@ -1,0 +1,125 @@
+---
+title: Step 1 · CONFIG
+description: A/B 测试三步法 · 第一步：配置实验
+sidebar: skills
+---
+
+# Step 1 · CONFIG
+
+## 是什么
+
+A/B 测试三步法的第一步：定义实验的所有变量 —— **A 组 / B 组分别是什么、用哪个数据集、跑几轮、用哪个评估器、并发多少**。配置一旦保存就强绑定，保证后续可回放、不可篡改。
+
+## 它解决什么问题
+
+让 A/B 实验"可复现"。如果配置不严格，跑出来的分数没法横向比较：
+
+- A 用 v0、B 用 v1，但数据集都不一样 → 没意义
+- 同一份配置今天跑 1 轮、明天跑 5 轮 → 方差不可比
+- 评估器中途换了 → 分数不在同一量纲
+
+CONFIG 强制把所有变量写死到 `GrayscaleTask.configJson`，并在保存后**不可改绑**。
+
+## 怎么用
+
+### 通过 UI
+
+进入 **Skills 分析 → A/B 测试 → 新建任务**，按从上到下顺序填：
+
+<!-- TODO 截图：新拍。三步法第一步 CONFIG Card（src/app/(main)/skill-eval/grayscale/page.tsx Card 1），覆盖：Skill 选择 + 版本 + 数据集 + 评估器 + 重复轮次。 -->
+
+| 区段 | 字段 | 说明 |
+|---|---|---|
+| **Skill 绑定** | `skillId` + `versionAId` / `versionBId` | A 可为"无 Skill"（不挂任何 Skill），B 必须是具体版本 |
+| **数据来源** | `sourceMode: 'dataset' \| 'trace'` | 从评测集出 case，还是从历史 Trace 重放 |
+| **数据集 / Trace 范围** | `selectedDatasetId` + `selectedCaseIds` 或 `traceTimeRange` | 选具体跑哪些 case |
+| **重复轮次** | `repeatRounds` | 每条 case 跑几轮，默认 1，推荐 3 |
+| **并发** | `agentMaxConcurrency` | Agent 调用并发上限，默认 5 |
+| **评估器** | `evaluatorId` | LLM-as-Judge / Trajectory / Custom |
+| **自动评测** | `autoEval` | 执行完是否自动跑评估器 |
+| **记录明细** | `recordTriggerDetails` | 是否落每次 tool call / skill 触发明细（占空间） |
+
+### 通过 REST API
+
+```bash
+curl -X POST http://localhost:3000/api/debug/grayscale-tasks \
+  -H "x-witty-api-key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user": "demo@163.com",
+    "skillId": "skill_xxx",
+    "skillName": "pdf-extractor",
+    "skillVersion": 2,
+    "skillVersionId": "ver_v2_id",
+    "taskName": "pdf-extractor v1 vs v2",
+    "configJson": {
+      "skillId": "skill_xxx",
+      "versionAId": "ver_v1_id",
+      "versionBId": "ver_v2_id",
+      "sourceMode": "dataset",
+      "selectedDatasetId": "ds_xxx",
+      "selectedCaseIds": ["case_1", "case_2", "case_3"],
+      "repeatRounds": 3,
+      "agentMaxConcurrency": 5,
+      "evaluatorId": "evaluator_llm_judge",
+      "autoEval": true,
+      "recordTriggerDetails": true
+    }
+  }'
+```
+
+## 关键参数
+
+| 参数 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `versionAId` | `string \| null` | `null` | A 组（对照），`null` = 不挂 Skill |
+| `versionBId` | `string` | — | B 组（实验），**必填** |
+| `sourceMode` | `'dataset' \| 'trace'` | `'dataset'` | 数据来源模式 |
+| `selectedDatasetId` | `string` | — | `sourceMode=dataset` 时必填 |
+| `selectedCaseIds` | `string[]` | 全部 | 不传则跑整个数据集 |
+| `repeatRounds` | `int` | 1 | 推荐 3（方差才能算） |
+| `agentMaxConcurrency` | `int` | 5 | Agent 并发上限 |
+| `evaluatorId` | `string` | — | 评估器 |
+| `autoEval` | `bool` | `true` | 自动跑评估 |
+| `recordTriggerDetails` | `bool` | `false` | 详细日志 |
+| `traceTimeRange` | `'1d' \| '3d' \| '7d'` | — | `sourceMode=trace` 时有效 |
+
+## 最佳实践
+
+- **A 组的"无 Skill"对照很重要**：只有有对照才能算 Δscore；如果两边都是 Skill 版本，能力分反映的是 v2-v1 增量
+- **数据集 cases 至少 5 条**：少于 5 条样本不足，决策不可信
+- **`repeatRounds` 至少 3**：方差需要至少 3 个样本点
+- **`agentMaxConcurrency` 别拉太高**：默认 5 已经够用，太高会触发 LLM 提供商的 rate limit
+- **保存前 review 一遍**：因为保存后不可改绑
+
+## 常见问题
+
+<details>
+<summary>A 组可以是无 Skill 吗？</summary>
+
+可以。`versionAId = null` 表示 A 组不挂任何 Skill，只用基础 Agent 跑。这是测试"加了 Skill 到底有没有用"的标准做法。
+</details>
+
+<details>
+<summary>能跑 3 个以上版本对战吗？</summary>
+
+A/B 测试本身只支持 A vs B 两个。要做 3 个以上变体看 [Multi-Variant](./multi-variant)。
+</details>
+
+<details>
+<summary>保存后能改 `repeatRounds` 吗？</summary>
+
+不能改 `skillId` / `versionBId` 的强绑定字段，但 `repeatRounds` / `agentMaxConcurrency` 等运行时参数还可以在任务未执行前修改。任务一旦进入 EXECUTION 阶段，所有 configJson 字段都锁死。
+</details>
+
+<details>
+<summary>从 Trace 重放是什么意思？</summary>
+
+`sourceMode='trace'` 时，平台不读评测集，而是把过去 N 天内调用了同一个 Skill 的真实 Trace 的 `query` 抽出来当 case 重新跑。适合"生产数据驱动" 的回归测试。
+</details>
+
+## 相关文档
+
+- [Step 2 · EXECUTION](./step2-execution) — 配完点跑
+- [Step 3 · DECISION](./step3-decision) — 跑完看分
+- [Data Model · GrayscaleTask.configJson](../data-model) — 完整字段定义

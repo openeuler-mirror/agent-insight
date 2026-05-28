@@ -1,0 +1,83 @@
+---
+title: Evaluation Overview
+description: 评测中心 — 数据集、评估器、批量执行、回归监控
+sidebar: evaluation
+---
+
+# Evaluation Overview
+
+Evaluation 是 Agent Insight 的「评得准」层，把"Agent / Skill 跑得对不对、好不好"从凭感觉变成有数据。它由三块组成：**评测集**（标准答案的载体）、**评估器**（打分的逻辑）、**评测任务**（把前两者跑起来）。
+
+支持两种打分模式：**离线**（对已有 Trace 跑评估）和 **在线**（生产流量按规则触发评估），二者共用同一套评估器实现。
+
+## 核心能力一览
+
+| 功能 | 一句话 | 文档 |
+|---|---|---|
+| **评测集** | 维护用例（query + 期望输出 + 关键动作 + 根因） | [datasets](./features/datasets) |
+| **数据集导入** | CSV / JSON / Hugging Face 一键导入 | [dataset-import](./features/dataset-import) |
+| **离线评测** | 对历史 Trace 批量跑评估器 | [offline-evaluation](./features/offline-evaluation) |
+| **在线评测** | 生产流量按规则触发评估 | [online-evaluation](./features/online-evaluation) |
+| **LLM-as-Judge** | 用 LLM 给开放问题打分 + 给 judgment_reason | [llm-as-a-judge](./evaluation-methods/llm-as-a-judge) |
+| **人工标注** | 标注队列 + 多人协作 | [human-annotation](./evaluation-methods/human-annotation) |
+| **自定义评估器** | 写 JS 函数挂为评估器 | [custom-evaluators](./evaluation-methods/custom-evaluators) |
+| **实验对比** | 不同实验得分横向对比 | [experiments](./features/experiments) · [score-comparison](./features/score-comparison) |
+| **回归检测** | 新版本评分回退自动告警 | [regression-detection](./features/regression-detection) |
+| **标注队列** | 把疑难用例派给标注人员 | [annotation-queues](./features/annotation-queues) |
+
+## 快速开始
+
+→ [Get Started](./get-started) · 10 分钟跑通一次评测
+
+## 核心概念
+
+→ [Core Concepts](./core-concepts) · Dataset / Evaluator / Experiment / Score 的关系
+
+## 与其他模块的关系
+
+```
+   ┌─────────────────┐                ┌─────────────────┐
+   │  Observability  │  提供 Trace ──▶│   Evaluation    │ ← 你在这里
+   │  (原始数据)      │                │  (对 Trace 打分) │
+   └─────────────────┘                └────────┬────────┘
+                                               │
+                                               │ 评分回写
+                                               ▼
+                                       ┌─────────────────┐
+                                       │     Skills      │
+                                       │ (按 Skill 维度  │
+                                       │  挖出扣分项)     │
+                                       └─────────────────┘
+```
+
+Evaluation 既写回 `Execution.failures / answerScore / isAnswerCorrect`，也作为 Skills 模块「优化点」（`SkillIssue`）的数据来源 —— 评估器的 `is_skill_attributable=true` 输出会自动落到对应 Skill 的优化点列表。
+
+## 视频演示
+
+<!-- TODO 视频：1-2 分钟评测中心演示。新录。覆盖：建数据集 → 选评估器 → 跑任务 → 看分数下钻。 -->
+
+## FAQ
+
+<details>
+<summary>评测必须用 LLM-as-Judge 吗？能不能纯规则？</summary>
+
+不必。Agent Insight 支持三类评估器：
+
+1. **LLM-as-Judge** — 适合开放问题、主观打分
+2. **Trajectory Evaluator** — 评估轨迹偏离 + 关键动作覆盖（规则 + LLM 混合）
+3. **Custom Evaluator** — 自己写 JS，纯规则、字符串匹配、外部 API 都行
+
+详见 [Evaluation Methods](./evaluation-methods/llm-as-a-judge)。
+</details>
+
+<details>
+<summary>评测集和"触发评价集"是同一个东西吗？</summary>
+
+不是。**评测集**（`AgentEvalDataset`）服务的是「Agent / Skill 跑得对不对」；**触发评价集**（`SkillTriggerEvalSet`）服务的是「Skill 的 description 在 OpenCode session 里能不能被正确触发」。后者完全是另一套模型，详见 [Skills 模块 → 触发评价集](../skills/management/access-control)。
+</details>
+
+<details>
+<summary>同一条 Trace 可以被多次评估吗？</summary>
+
+可以。`Evaluation` 表与 `Execution` 是 1:N 关系，每次重评都生成一行新的 `Evaluation`（重评懒删除）。同一条 Trace 不同时期 / 不同 generator 的评估结果都会保留，便于回放。
+</details>

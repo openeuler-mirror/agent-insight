@@ -1,0 +1,142 @@
+---
+title: 部署与同步
+description: 把 Skill 推送到 Agent 主机的 ~/.opencode/skills/
+sidebar: skills
+---
+
+# 部署与同步（Deployment）
+
+## 是什么
+
+Skill 在平台里 active 不代表 Agent 能用 —— OpenCode / Claude Code 启动时只扫本机 `~/.opencode/skills/` 目录。**Deployment 解决"平台里的 Skill 如何到达 Agent 主机"** —— 一键 Sync API 把指定版本物化到 Agent 本机的标准发现路径。
+
+底层实现：[`src/lib/engine/skills/skill-sync-service.ts`](https://github.com/your-org/agent-insight/blob/main/src/lib/engine/skills/skill-sync-service.ts) + [`scripts/opencode_uploader_client.js`](https://github.com/your-org/agent-insight/blob/main/scripts/opencode_uploader_client.js)。
+
+## 它解决什么问题
+
+| 场景 | 没 Deployment | 有 Deployment |
+|---|---|---|
+| Skill 发布要部署到 10 台机器 | 写 ansible 脚本 | `curl POST /api/ingest/sync/opencode` 循环 |
+| 多个版本并存 | 自己改文件名 | sync 写到 `~/.opencode/skills/<name>/` 单一规范路径 |
+| Agent 启动时找不到 Skill | 路径写错 | 平台保证写到 OpenCode 标准发现路径 |
+| 失败需要回滚 | scp 旧文件 | 改 `activeVersion` + sync 一次 |
+
+## 怎么用
+
+### 通过 UI
+
+进入 **Skills 资产 → 选 Skill → 推送**，平台显示当前 sync 状态（`isUploaded: true/false`）+ 可选目标主机列表。
+
+<!-- TODO 截图：新拍。Skill 详情页右上角"推送"按钮 + 推送状态指示。 -->
+
+### 通过 REST API · 推送单个 Skill
+
+```bash
+curl -X POST http://localhost:3000/api/ingest/sync/opencode \
+  -H "x-witty-api-key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "skillId": "skill_xxx",
+    "version": 2,
+    "user": "demo@163.com"
+  }'
+# 响应 → { success: true, targetDir: "/home/user/.opencode/skills/pdf-extractor" }
+```
+
+### 通过 REST API · 列出待同步清单
+
+```bash
+curl "http://localhost:3000/api/ingest/sync/manifest?user=demo@163.com" \
+  -H "x-witty-api-key: $API_KEY"
+# 响应 → {
+#   "skills": [
+#     { "id": "skill_xxx", "name": "pdf-extractor", "version": 2, "downloadUrl": "..." }
+#   ]
+# }
+```
+
+installer 用此 endpoint 批量拉取。
+
+### 通过 Agent 主机的客户端
+
+平台为每种 Agent 框架提供本机同步客户端，安装后定时拉清单：
+
+```bash
+# 装本机同步客户端（OpenCode）
+curl -sSf "http://<your-host>:3000/api/ingest/setup/opencode-uploader" | node
+
+# 客户端运行后会：
+# 1. 调 /api/ingest/sync/manifest 拿清单
+# 2. 对比本地 .opencode/skills/ 内容 diff
+# 3. 下载新版本 ZIP 并解压
+# 4. 把过期版本备份到 .opencode/skills/_backup/
+```
+
+## 目标目录结构
+
+Sync 后 Agent 主机的目录长这样：
+
+```
+~/.opencode/skills/
+├── pdf-extractor/                # 与 Skill.name 一致
+│   ├── SKILL.md
+│   ├── scripts/
+│   │   └── parse.py
+│   └── references/
+│       └── pdf-format.md
+├── chart-renderer/
+│   └── SKILL.md
+└── _backup/                      # sync 客户端备份历史版本
+    └── pdf-extractor.v1.zip
+```
+
+## 关键参数
+
+| 参数 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `skillId` | string | — | 要 sync 的 Skill |
+| `version` | int | activeVersion | 默认 sync 平台当前 active 版本 |
+| `user` | string | — | 用户隔离 |
+| `targetDir` | string | `~/.opencode/skills/<name>` | 通常不改 |
+
+## 同步成功后会怎样
+
+1. `Skill.isUploaded = true` 标记
+2. 平台资产页该 Skill 卡片显示"已部署"角标
+3. Agent 主机 OpenCode 启动时扫到该 Skill，按 description 召回
+
+## 最佳实践
+
+- **active 切换后立即重新 sync** —— 否则 Agent 主机还是老版本
+- **生产环境用 opencode-uploader 客户端守护** —— 不要每次手动 `curl POST`
+- **删除 Skill 前先 unsync** —— 否则 Agent 主机会留垃圾目录
+- **sync 前看一眼 _backup 大小** —— 默认保留 7 天，定期清理
+
+## 常见问题
+
+<details>
+<summary>Agent 主机和平台不在同一网段怎么办？</summary>
+
+只要 Agent 主机能反向访问平台 host 即可。同步客户端从 Agent 主机主动拉，不需要平台主动推。
+</details>
+
+<details>
+<summary>能同时部署多个版本吗？</summary>
+
+OpenCode 标准发现路径是 `<name>/SKILL.md`，一个 name 只能对应一个版本。如果需要灰度并存，看 [Canary Release](./canary-release)。
+</details>
+
+<details>
+<summary>sync 失败怎么排查？</summary>
+
+1. 检查 API Key 是否正确 + 是否过期
+2. 检查 Agent 主机磁盘空间
+3. 检查 `~/.opencode/skills/` 是否有写权限
+4. 看 `data/sessions/` 下的 sync log（uploader 客户端会落日志）
+</details>
+
+## 相关文档
+
+- [Canary Release](./canary-release) — 多版本灰度
+- [Access Control](./access-control) — 跨用户共享 Skill
+- [Integrations · OpenCode](../../integrations/frameworks/openai-agents-sdk) — OpenCode 端配置

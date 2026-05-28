@@ -1,0 +1,136 @@
+---
+title: 多模态数据
+description: 图像 / 音频 / PDF / 文件附件的 Trace 观测
+sidebar: observability
+---
+
+# 多模态数据
+
+## 是什么
+
+支持 Agent 处理图像、音频、PDF、文件附件等多模态输入时的 Trace 观测。平台把附件单独存储（不放 interactions JSON 里），UI 上能直接预览。
+
+底层入口：[`POST /api/ingest/parse-document`](https://github.com/your-org/agent-insight/blob/main/src/app/api/ingest/parse-document/route.ts)（multipart/form-data 上传），后端用 `scripts/parse_doc.py` 解析为文本片段挂到 Trace 上。
+
+## 它解决什么问题
+
+LLM Agent 越来越多 vision / audio 能力。Observability 不能只记文字：
+
+- 用户上传一张错误截图，Agent 分析后给答案 → 需要看那张图才能复盘
+- PDF 提取任务 → 看提取结果对不对，得能预览 PDF
+- 音频转写 → 听一下音频
+
+如果只记文字，复盘场景缺关键证据。
+
+## 怎么用
+
+### 通过 UI
+
+Drawer 详情里有附件 tab：图像直接预览、音频带播放控件、PDF 内嵌 iframe。
+
+<!-- TODO 截图：新拍。Trace Drawer 附件 tab，展示图像 + PDF 预览。 -->
+
+### 通过 SDK
+
+```python
+from agent_insight import AgentInsight, observe
+
+@observe()
+def analyze_screenshot(image_path: str) -> str:
+    # 上传附件挂到当前 Trace
+    AgentInsight.attach_file(image_path, kind="image")
+    # ... Agent 用 vision LLM 处理
+    return result
+```
+
+```typescript
+import { AgentInsight, observe } from "@agent-insight/sdk";
+
+const analyzeScreenshot = observe(async (imagePath: string) => {
+  await AgentInsight.attachFile(imagePath, { kind: "image" });
+  return result;
+});
+```
+
+### 通过 REST API
+
+```bash
+# 把附件挂到现有 Trace
+curl -X POST http://localhost:3000/api/ingest/parse-document \
+  -H "x-witty-api-key: $API_KEY" \
+  -F "document=@./screenshot.png" \
+  -F "task_id=task_xxx" \
+  -F "kind=image"
+# 响应 → { content: "...", attachment_id, preview_url }
+```
+
+`/api/ingest/parse-document` 同时返回**解析后的文本**（OCR / PDF text extract），可以塞进后续 LLM prompt。
+
+## 支持的附件类型
+
+| Kind | 格式 | 上传后处理 | 平台展示 |
+|---|---|---|---|
+| `image` | png / jpg / webp | 直接存 + 可选 OCR | inline 缩略图 + 全屏预览 |
+| `pdf` | pdf | 文本抽取 → 挂在 interaction | iframe 内嵌 |
+| `audio` | mp3 / wav / m4a | 可选转写（v2 规划） | inline 播放控件 |
+| `document` | md / txt / docx | 文本抽取 | 文本展开 |
+| `other` | 任意 | 仅存原文件 | 下载链接 |
+
+## 关键参数
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `task_id` | string | ✅ | 关联到哪个 Trace |
+| `document` | file | ✅ | multipart 上传 |
+| `kind` | enum | ❌ | 附件类型，平台不传会自动 sniff |
+| `metadata` | object | ❌ | 附件级元数据（标题 / 来源 URL） |
+
+## 存储说明
+
+附件**不放进 `Session.interactions[]`** —— 那是 JSON，附件二进制不适合 inline。平台单独存：
+
+```
+data/
+├── attachments/
+│   ├── task_xxx_attach_1.png
+│   ├── task_xxx_attach_2.pdf
+│   └── ...
+└── sqlite.db
+```
+
+`Session.interactions[]` 里只存附件的 metadata（path / url / kind / parsed_text），UI 渲染时按 path 拉文件。
+
+> 生产环境建议把 `data/attachments/` 接 S3 / OSS / minio，避免本地磁盘爆炸。详见 [Self-Hosting · Storage](../../self-hosting/overview)。
+
+## 最佳实践
+
+- **大附件先压缩** —— 4K 截图 30MB 上传太大，先 resize 到 1080p
+- **PDF 优先走文本抽取** —— 把 parsed_text 喂给 LLM 比把整个 PDF 当 vision 输入便宜得多
+- **PII 敏感的附件先脱敏** —— 截图里有用户身份证 / 银行卡号要先打码
+- **不要把附件当 LLM 上下文反复传** —— 一次抽取后用 parsed_text，省 token
+
+## 常见问题
+
+<details>
+<summary>支持多大的附件？</summary>
+
+平台默认限 50 MB。可以在 [Self-Hosting](../../self-hosting/overview) 配 `MAX_UPLOAD_SIZE` 调整。
+</details>
+
+<details>
+<summary>附件保留多久？</summary>
+
+默认与 Trace 同生命周期。如果磁盘紧张，可以配 retention policy 让旧附件先过期（v2 规划）。
+</details>
+
+<details>
+<summary>能直接给 LLM 喂图像 URL 吗？</summary>
+
+可以。SDK 把附件存到平台后会返回一个内部 URL，可以塞给支持 vision 的 LLM（如 Claude 4 / GPT-4V）。但跨网络访问要 LLM 能访问到 Agent Insight host。
+</details>
+
+## 相关文档
+
+- [Tracing](./tracing)
+- [Self-Hosting · Storage](../../self-hosting/overview) — 附件存储后端
+- [PII Masking](./pii-masking) — 附件中的敏感信息处理

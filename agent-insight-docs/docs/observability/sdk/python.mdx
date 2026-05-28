@@ -1,0 +1,237 @@
+---
+title: Python SDK
+description: Python SDK 安装、初始化、装饰器 API
+sidebar: observability
+---
+
+# Python SDK
+
+## 是什么
+
+Agent Insight 的 Python 官方 SDK，提供两套 API：
+
+- **装饰器** `@observe()` —— 最少代码侵入，自动建立调用树
+- **显式 API** `AgentInsight.init / .log_event / .flush` —— 精细控制
+
+底层走 HTTP `POST /api/ingest/upload`，异步队列上报。
+
+## 它解决什么问题
+
+不用 SDK 也能用平台（OpenCode plugin / Claude Code watcher / OTel 都行），但 SDK 是**最省心**的方式：
+
+| 不用 SDK | 用 SDK |
+|---|---|
+| 自己 build interaction JSON | 装饰器自动 |
+| 自己处理重试 / 队列 / 批量 | 内置 |
+| 自己管 trace_id 关联 | 嵌套调用自动建树 |
+| 不同 LLM provider 输出格式不同要适配 | SDK 抽象统一 |
+
+## 安装
+
+```bash
+pip install agent-insight
+```
+
+最低 Python 版本：3.9+。
+
+## 怎么用
+
+### 最小可运行
+
+```python
+from agent_insight import AgentInsight, observe
+
+AgentInsight.init(api_key="ai_xxx", host="http://localhost:3000")
+
+@observe()
+def my_agent(query: str) -> str:
+    # 调用你的 LLM
+    response = anthropic.messages.create(
+        model="claude-sonnet-4",
+        messages=[{"role": "user", "content": query}],
+    )
+    return response.content[0].text
+
+answer = my_agent("hello")
+# 一条 Trace 自动上报
+```
+
+### 嵌套调用自动建树
+
+```python
+@observe(name="main-agent")
+def main_agent(query: str) -> str:
+    intermediate = sub_agent_a(query)
+    final = sub_agent_b(intermediate)
+    return final
+
+@observe(name="sub-agent-a")
+def sub_agent_a(q): ...
+
+@observe(name="sub-agent-b")
+def sub_agent_b(q): ...
+```
+
+调用 `main_agent("hello")` 会产生一棵 3 层调用树，平台自动还原层级。
+
+### 自定义 metadata
+
+```python
+@observe(metadata={"experiment": "exp-q1"})
+def my_agent(query: str, user_id: str) -> str:
+    AgentInsight.set_user(user_id)
+    AgentInsight.add_tags(["region:cn", "tier:enterprise"])
+    AgentInsight.set_label("customer-support")
+    return answer
+```
+
+### 手动 log event（不用装饰器）
+
+```python
+task_id = AgentInsight.start_session(query="hello", user="u_xxx")
+
+# 跑自己的 Agent 逻辑
+result = run_my_agent("hello")
+
+# 记一个工具调用事件
+AgentInsight.log_event(
+    role="tool",
+    tool_name="bash",
+    input="lscpu",
+    output="...",
+    duration_ms=120,
+)
+
+# 结束 session
+AgentInsight.end_session(answer=result)
+```
+
+### 异步函数
+
+```python
+@observe()
+async def my_async_agent(query: str) -> str:
+    return await llm.acomplete(query)
+```
+
+### 优雅退出
+
+```python
+import atexit
+atexit.register(lambda: AgentInsight.flush(timeout_ms=5000))
+```
+
+## 关键 API
+
+### `AgentInsight.init(...)`
+
+| 参数 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `api_key` | string | — | 平台 API Key |
+| `host` | string | `http://localhost:3000` | 平台地址 |
+| `task_id` | string | auto | 显式 trace ID |
+| `default_metadata` | dict | `{}` | 每条 Trace 都带的 metadata |
+| `queue_size` | int | 1000 | 队列容量 |
+| `flush_interval_ms` | int | 5000 | 批量发送间隔 |
+| `sampling_rate` | float | 1.0 | 采样率 |
+| `pii_masker` | PIIMasker | None | 脱敏配置 |
+
+### `@observe(...)` 装饰器
+
+| 参数 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `name` | string | 函数名 | Trace 内的步骤名 |
+| `metadata` | dict | `{}` | 步骤级 metadata |
+| `capture_input` | bool | true | 是否记录入参 |
+| `capture_output` | bool | true | 是否记录返回值 |
+
+### 运行时 API
+
+| 方法 | 用途 |
+|---|---|
+| `AgentInsight.set_user(user_id)` | 设置终端用户 |
+| `AgentInsight.set_label(label)` | 设置主标签 |
+| `AgentInsight.add_tags(tags)` | 加 tag |
+| `AgentInsight.attach_file(path, kind)` | 挂附件 |
+| `AgentInsight.log_event(...)` | 手动 log |
+| `AgentInsight.flush(timeout_ms)` | 主动 flush 队列 |
+| `AgentInsight.get_task_stats(task_id)` | 查统计 |
+
+## 与主流 LLM SDK 的集成
+
+### Anthropic
+
+```python
+from agent_insight import AgentInsight, observe
+from anthropic import Anthropic
+
+AgentInsight.init(api_key="ai_xxx")
+client = Anthropic()
+
+@observe()
+def my_agent(query: str) -> str:
+    msg = client.messages.create(
+        model="claude-sonnet-4",
+        messages=[{"role": "user", "content": query}],
+    )
+    # usage 字段自动被 SDK 捕获写到 interactions
+    return msg.content[0].text
+```
+
+### OpenAI
+
+```python
+from openai import OpenAI
+client = OpenAI()
+
+@observe()
+def my_agent(query: str) -> str:
+    resp = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": query}],
+    )
+    return resp.choices[0].message.content
+```
+
+> 当前版本 SDK 自动捕获主流 LLM provider 的 `usage` 字段。详见 [Integrations · LLM Providers](../../integrations/overview)。
+
+## 最佳实践
+
+- **`AgentInsight.init` 只调一次** —— 在程序启动时
+- **嵌套用装饰器** —— 不要手动管 parent_task_id，让 SDK 处理
+- **生产配 default_metadata** —— `environment` / `service` 这种固定字段
+- **PII 在 SDK 层脱敏** —— 别等数据到平台
+- **进程退出 flush** —— 否则队列里的数据丢
+
+## 常见问题
+
+<details>
+<summary>SDK 装了但 Trace 不出现？</summary>
+
+按顺序排查：
+1. `api_key` 是否对（先 `curl /api/auth/apikey` 确认）
+2. `host` 是否能访问（curl host）
+3. SDK 版本（`pip show agent-insight`）
+4. 异步队列是否 flush 了（程序退出前调 `AgentInsight.flush()`）
+
+详见 [Troubleshooting](../troubleshooting)。
+</details>
+
+<details>
+<summary>SDK 影响 Agent 性能吗？</summary>
+
+理论上零阻塞（异步队列）。实测每次 `@observe` 装饰增加约 0.5 ms 开销（JSON 序列化 + 入队）。对人类感知无影响。
+</details>
+
+<details>
+<summary>开发模式怎么不上报？</summary>
+
+`AgentInsight.init(disabled=True)` 完全禁用上报。或者用 `sampling_rate=0` 也行（但 metric 仍记录）。
+</details>
+
+## 相关文档
+
+- [TypeScript SDK](./typescript) — TS 等价 API
+- [REST API](./rest-api) — 直接 HTTP
+- [OpenTelemetry](./opentelemetry) — OTel 兼容
+- [Get Started](../get-started)

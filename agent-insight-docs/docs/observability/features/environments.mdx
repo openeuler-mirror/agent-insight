@@ -1,0 +1,136 @@
+---
+title: Environments
+description: dev / staging / prod 环境隔离
+sidebar: observability
+---
+
+# Environments
+
+## 是什么
+
+把 Trace 按"环境"标签隔离（开发 / 预发 / 生产），让你看生产指标不受测试数据污染、调试时也能在开发环境随便造数据。
+
+平台用 `framework` + `metadata.environment` 双字段实现：
+
+- **`framework`** —— 标识 Agent 框架（`opencode` / `claude-code` / `langchain` / ...）
+- **`metadata.environment`** —— 自定义环境标签（`dev` / `staging` / `prod`）
+
+## 它解决什么问题
+
+数据混在一起的坏处：
+
+- 生产指标被开发期测试数据稀释（看着失败率 50%，实际生产只有 5%）
+- 在生产环境调试 PII 数据风险高
+- A/B 测试结果掺杂噪声
+
+环境隔离是把数据分桶。
+
+## 怎么用
+
+### 通过 UI
+
+列表过滤栏支持按 `framework` 过滤，按 `metadata.environment` 过滤在 v2 规划。当前可用替代：建立**多个 user 账号**（如 `demo-dev@163.com` / `demo-prod@163.com`），通过 user 维度隔离环境。
+
+<!-- TODO 截图：新拍。链路观测页 framework 过滤 + environment metadata 显示。 -->
+
+### 通过 SDK
+
+```python
+import os
+from agent_insight import AgentInsight, observe
+
+AgentInsight.init(
+    api_key=os.environ["AGENT_INSIGHT_API_KEY"],
+    host=os.environ["AGENT_INSIGHT_HOST"],
+    default_metadata={
+        "environment": os.environ.get("APP_ENV", "dev"),  # dev / staging / prod
+    },
+)
+```
+
+```typescript
+import { AgentInsight } from "@agent-insight/sdk";
+
+AgentInsight.init({
+  apiKey: process.env.AGENT_INSIGHT_API_KEY!,
+  host: process.env.AGENT_INSIGHT_HOST!,
+  defaultMetadata: {
+    environment: process.env.APP_ENV ?? "dev",
+  },
+});
+```
+
+### 通过 REST API
+
+```bash
+curl -X POST http://localhost:3000/api/ingest/upload \
+  -H "x-witty-api-key: $API_KEY" \
+  -d '{
+    "task_id": "task_xxx",
+    "framework": "opencode",
+    "metadata": { "environment": "prod", "region": "cn" },
+    ...
+  }'
+```
+
+## 推荐的环境划分
+
+| 环境 | metadata.environment | 用途 |
+|---|---|---|
+| 本地开发 | `dev` | 工程师本机调试 |
+| 预发 | `staging` | 上线前最后一道关 |
+| 灰度 | `canary` | 生产 5% 流量 |
+| 生产 | `prod` | 全量生产 |
+
+环境间数据隔离方式：
+
+| 方式 | 实现 | 优点 | 缺点 |
+|---|---|---|---|
+| **同账号 + metadata** | `default_metadata.environment` | 简单 | 列表过滤不直接，得点 Drawer 看 |
+| **多账号** | 每环境一个 API Key | 隔离彻底 | 跨环境对比要拉两次 |
+| **多 Agent Insight 实例** | 每环境一套服务 | 最干净 | 运维成本高 |
+
+中等规模团队推荐"多账号 + metadata 双保险"。
+
+## 关键参数
+
+| 参数 | 类型 | 说明 |
+|---|---|---|
+| `framework` | string | Agent 框架，与环境正交 |
+| `metadata.environment` | string | 环境标签 |
+| `default_metadata` | object | SDK 初始化时设的默认 metadata，每条 Trace 都会带 |
+
+## 最佳实践
+
+- **从 ENV 读，别硬编码** —— `APP_ENV=prod` 部署时由 deployer 注入
+- **default_metadata 是 SDK 层的必填项** —— init 时漏掉就完了，所有 Trace 都没 env 标签
+- **生产 + 开发不要共用同一 API Key** —— 数据混了清不出来
+- **质量监控告警按环境分** —— prod 告警短信，dev 告警进 Slack 静音频道
+
+## 常见问题
+
+<details>
+<summary>能在 UI 上一键切换 environment 视图吗？</summary>
+
+当前版本：通过 URL `?env=prod` 过滤是 v2 规划。目前的替代是多个 user 账号隔离。
+</details>
+
+<details>
+<summary>不同 environment 的 Skill 互通吗？</summary>
+
+通的。Skill 表没有 environment 字段。如果你想 dev 用一份 Skill，prod 用另一份，建议：
+1. 命名带后缀（`pdf-extractor-dev` / `pdf-extractor-prod`）
+2. 或者用版本号区分（v1 = 实验，v2+ = 生产）
+</details>
+
+<details>
+<summary>environment 写错了能改吗？</summary>
+
+`metadata` 是 JSON 字段，理论上能 PATCH 修。但平台只暴露了 `label / query` 的 PATCH API，深 metadata 修改要走 admin 或 v2 规划。
+</details>
+
+## 相关文档
+
+- [Tags](./tags) — 更通用的标签维度
+- [Quality Monitoring](./quality-monitoring) — 按环境分告警
+- [Self-Hosting](../../self-hosting/overview) — 多实例部署

@@ -1,0 +1,135 @@
+---
+title: Repetitions
+description: 重复运行计算方差 — 让 A/B 结果可信
+sidebar: skills
+---
+
+# Repetitions（重复轮次）
+
+## 是什么
+
+A/B 测试的"每条 case 重复跑几遍"。`GrayscaleTask.configJson.repeatRounds` 字段控制 —— 默认 1，推荐 3+。重复轮次让平台能算 **方差**（variance），方差又是 [Step 3 · DECISION](./step3-decision) 稳定性分的核心输入：
+
+```
+stability_score = invokeRate × 100 × (1 − variance / 0.25)
+```
+
+`repeatRounds = 1` 时方差不可算，平台会按 `variance = 0` 处理并在 UI 标注"方差不可计算，仅供参考"。
+
+## 它解决什么问题
+
+LLM 调用本身有 **随机性** —— 同一 query 跑两次输出可能不一样。如果只跑 1 轮：
+
+- 这一次 B 比 A 高 5 分 → 不一定真的高，可能下一次又翻过来
+- 看不到稳定性差异 —— `temperature=0.0` 与 `temperature=1.0` 单轮结果可能差不多，多轮才能暴露后者的高方差
+- 决策不可信 —— 老板问"这个结论靠谱吗"，答不上来
+
+3+ 轮起步是让 A/B 结论"经得起复盘"的最低门槛。
+
+## 怎么用
+
+### 通过 UI
+
+进入 **A/B 测试 → Step 1 · CONFIG**，找到 `repeatRounds`：
+
+<!-- TODO 截图：新拍。CONFIG 面板的 repeatRounds 字段（src/app/(main)/skill-eval/grayscale/page.tsx Card 1）。 -->
+
+推荐值：
+
+| 场景 | repeatRounds | 原因 |
+|---|---|---|
+| 调试 / 第一次跑 | 1 | 快速验证流程 |
+| 严肃决策（正常情况） | 3 | 方差能算，但成本不爆 |
+| 不稳定 Skill 调优 | 5 | 高方差需要更多采样 |
+| 学术发表 | 10+ | 严格统计意义 |
+
+### 通过 REST API
+
+```bash
+curl -X POST http://localhost:3000/api/debug/grayscale-tasks \
+  -H "x-witty-api-key: $API_KEY" \
+  -d '{
+    "user": "demo@163.com",
+    "skillId": "skill_xxx",
+    ...
+    "configJson": {
+      ...,
+      "repeatRounds": 3
+    }
+  }'
+```
+
+## 算法细节
+
+A/B 评分体系 §5（[`docs/skill-ab-scoring.md`](https://github.com/your-org/agent-insight/blob/main/docs/skill-ab-scoring.md)）的稳定性计算依赖：
+
+```
+对每个 case：
+  isPassed[round_1, round_2, round_3] = [1, 1, 0]    # 二项分布
+  per_case_variance = var([1, 1, 0])
+
+variance = mean(per_case_variance for all cases)
+
+stability_score = invokeRate × 100 × (1 − variance / 0.25)
+```
+
+二项分布方差上限是 0.25（p=0.5 时），所以 `1 - var/0.25` 是 0-1 的"一致性系数"。
+
+### 实际例子
+
+```
+case_1: [pass, pass, pass]  → variance = 0
+case_2: [pass, fail, pass]  → variance = 0.22
+case_3: [pass, pass, fail]  → variance = 0.22
+
+mean variance = (0 + 0.22 + 0.22) / 3 = 0.15
+invokeRate = 1.0（全程触发）
+
+stability_score = 1.0 × 100 × (1 − 0.15/0.25) = 40
+```
+
+40 分对应**稳定性拒绝**（阈值 50）—— Skill 跑了但不稳定，需要降 temperature 或加约束。
+
+## 关键参数
+
+| 参数 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `repeatRounds` | int | 1 | 每条 case 重复跑次数 |
+| `minRepeats` | int (policy) | 1（生产推荐 3） | 计算方差的最小重复次数 |
+| `agentMaxConcurrency` | int | 5 | 并发上限（含 repeat） |
+
+总执行次数 = N_cases × 2 (A/B) × repeatRounds，跑前估一下成本。
+
+## 最佳实践
+
+- **重要决策 ≥ 3 轮** —— 不跑方差 = 决策不可信
+- **temperature ≠ 0 时多跑几轮** —— 高 temperature 方差大，要更多采样
+- **同一 case 同一轮的 `seed` 固定** —— 平台默认按 `(caseId, round, side)` 生成 seed，保证可复现
+- **轮次别太多** —— 10+ 收益边际递减，token 翻倍
+
+## 常见问题
+
+<details>
+<summary>repeatRounds=1 也能跑 A/B 吗？</summary>
+
+能。但稳定性分不可信（按 variance=0 算），UI 会标注"方差不可计算"。决策时不要太依赖稳定性维度。
+</details>
+
+<details>
+<summary>不同 case 用不同的 repeatRounds 行吗？</summary>
+
+当前不支持。`repeatRounds` 是任务级参数，所有 case 统一。如果有少数高方差 case 想多跑几轮，把它们抽出来跑独立任务。
+</details>
+
+<details>
+<summary>repeatRounds 增大会让结果"更准"吗？</summary>
+
+不会让结果"更准"，而是让结果**更可信**（降低估计误差）。如果 Skill 本身有 bug，跑 10 轮还是有 bug；但 3 轮的均值方差比 1 轮的均值方差小很多。
+</details>
+
+## 相关文档
+
+- [A/B Testing](./ab-testing) — 完整算法
+- [Step 1 · CONFIG](./step1-config) — 在哪里设
+- [Step 3 · DECISION](./step3-decision) — 方差如何进稳定性分
+- [`docs/skill-ab-scoring.md`](https://github.com/your-org/agent-insight/blob/main/docs/skill-ab-scoring.md) §5 — 稳定性分公式

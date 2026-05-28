@@ -1,0 +1,142 @@
+---
+title: 多目标优化
+description: 同时优化质量 / 成本 / 延迟 / 稳定性
+sidebar: skills
+---
+
+# Multi-Objective Optimization
+
+## 是什么
+
+单目标优化（只追求评分高）经常会让其他指标变差 —— 评分上涨 5 分但 token 翻倍。多目标优化把 **质量、成本、延迟、稳定性** 当作平等权重的目标，输出 **Pareto 前沿**（没有任何一组解能在所有维度都更好）让你按业务取舍。
+
+底层正好对应 A/B 评分体系的三个维度（能力 / 成本 / 稳定性，详见 [`docs/skill-ab-scoring.md`](https://github.com/your-org/agent-insight/blob/main/docs/skill-ab-scoring.md)），所以 Multi-Objective 与 A/B 评测自然契合。
+
+## 它解决什么问题
+
+避免"为了刷分牺牲一切"：
+
+| 单目标 | 多目标 |
+|---|---|
+| 评分 +5 但 token 翻倍 | 评分 +3 + token 仅 +20% |
+| 拟合到测试集做样子 | 多维度交叉验证 |
+| 一刀切给"最优解" | 给 Pareto 前沿让业务选 |
+| 不知道取舍代价 | 量化"每涨 1 分质量花多少 token" |
+
+## 怎么用
+
+### 通过 UI（v2 规划）
+
+进入 **Skills 优化 → 选 Skill → 多目标优化**：
+
+| 目标 | 默认权重 | 评测来源 |
+|---|---|---|
+| **质量** | 0.4 | `answerScore` / 评估器分数 |
+| **成本** | 0.3 | `tokens` × 单价 |
+| **延迟** | 0.2 | `latency` P95 |
+| **稳定性** | 0.1 | 多轮方差 |
+
+平台生成多组候选 Skill 版本 + 多组参数组合，每组在所有维度评分，输出 **Pareto 前沿可视化**：
+
+<!-- TODO 截图：新拍。多目标优化 Pareto 前沿图（X = 质量分，Y = 成本分，每个点是一个候选，前沿用线连起来）。 -->
+
+### 通过 REST API（v2 规划）
+
+```bash
+curl -X POST http://localhost:3000/api/skills/by-name/{name}/multi-objective \
+  -H "x-witty-api-key: $API_KEY" \
+  -d '{
+    "user": "demo@163.com",
+    "objectives": {
+      "quality": { "weight": 0.4, "evaluatorId": "evaluator_llm_judge" },
+      "cost":    { "weight": 0.3, "metric": "tokens" },
+      "latency": { "weight": 0.2, "metric": "latency_p95" },
+      "stability": { "weight": 0.1, "metric": "variance" }
+    },
+    "candidateCount": 10,
+    "datasetId": "ds_xxx"
+  }'
+# 响应 → {
+#   pareto: [
+#     { id: "cand_1", quality: 85, cost: 90, latency: 80, stability: 75 },
+#     { id: "cand_2", quality: 90, cost: 60, latency: 70, stability: 80 },
+#     ...
+#   ],
+#   recommended: "cand_2"
+# }
+```
+
+## 当前版本怎么做
+
+v2 真正上线前，可以手动组合现有能力：
+
+1. 跑 [Parameter Search](./parameter-search) 出多组候选
+2. 用 [A/B Testing](../analysis/ab-testing) 跑每组候选 → 拿到三维评分（能力 / 成本 / 稳定性）
+3. 手动画 Pareto 前沿（散点图）选业务偏好的那一组
+
+A/B 评分体系（短板原则 `min(三分)`）本身就是一种**保守的多目标决策**：宁可三个都中等也不要一个满分一个垃圾。
+
+## 关键参数（v2）
+
+| 参数 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `objectives` | object | — | 各目标的权重与评测来源 |
+| `candidateCount` | int | 10 | 生成多少候选 |
+| `paretoMode` | bool | true | 输出 Pareto 前沿（vs 单一推荐） |
+| `datasetId` | string | — | 评测集 |
+| `concurrency` | int | 3 | 并发评估 |
+
+## Pareto 前沿是什么
+
+```
+质量分
+ 100 ┤        ╭ cand_3 (90, 50)         ← 高质量、贵
+     │       ╱
+  80 ┤      ╭ cand_2 (80, 80)           ← 平衡
+     │     ╱
+  60 ┤    ╭ cand_1 (60, 95)             ← 便宜
+     │   ╱
+  40 ┤  ╭ cand_0 (40, 30)               ← 既差又贵（不在前沿）
+     │
+     └────────────────────────────────→ 成本分
+       0    20    40    60    80    100
+```
+
+cand_0 被其他点全面碾压（cand_1 在两个维度都更好），不在前沿。其他三个候选互相不可比，需要业务取舍。
+
+## 最佳实践
+
+- **先看业务约束** —— 有"必须 ≤ 500 token" 的硬约束，先 filter 再做多目标
+- **权重不要拍脑袋** —— 与产品 / 财务对齐"每涨 1 分质量值多少钱"
+- **Pareto 前沿不会自动给最优** —— 它给的是 "都合理" 的解集，最终要人来选
+- **业务路径多 = 多个 Pareto 前沿** —— 大客户走高质量分支、小客户走低成本分支
+
+## 常见问题
+
+<details>
+<summary>能否完全自动决策？</summary>
+
+可以走 A/B 评分体系的短板原则（`min(三分)`），平台直接给 release / monitor / reject。但失去了 Pareto 前沿的可解释性。
+</details>
+
+<details>
+<summary>权重怎么定？</summary>
+
+经验值：质量 0.4 / 成本 0.3 / 延迟 0.2 / 稳定 0.1。但**实际值要看业务**：
+- C 端实时场景：延迟 → 0.4
+- 批处理：成本 → 0.5
+- 客服 / 法律：质量 → 0.6
+</details>
+
+<details>
+<summary>能加自定义目标吗？</summary>
+
+v2 规划支持自定义 `objective`（你写个评估函数）。当前版本只支持内置的 4 个目标。
+</details>
+
+## 相关文档
+
+- [Auto Optimize](./auto-optimize) — 单目标循环
+- [Parameter Search](./parameter-search) — 提供候选输入
+- [`docs/skill-ab-scoring.md`](https://github.com/your-org/agent-insight/blob/main/docs/skill-ab-scoring.md) — 短板原则的设计
+- [A/B Testing · Step 3 DECISION](../analysis/step3-decision) — 当前生产的多维评分

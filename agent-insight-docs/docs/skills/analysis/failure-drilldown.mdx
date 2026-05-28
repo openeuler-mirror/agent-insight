@@ -1,0 +1,161 @@
+---
+title: Failure Drill-down
+description: 失败用例下钻 — 从扣分到具体步骤的归因
+sidebar: skills
+---
+
+# Failure Drilldown
+
+## 是什么
+
+A/B 测试或评测跑出来一堆失败用例（`Execution.isAnswerCorrect = false` 或 `answerScore < threshold`）时，平台允许你层层下钻定位：失败的是哪类 query → 卡在哪步 → 是哪个 Skill 的哪条 SkillIssue 引起。
+
+底层依赖 [`src/lib/engine/evaluation/derive-skill-opt-points.ts`](https://github.com/your-org/agent-insight/blob/main/src/lib/engine/evaluation/derive-skill-opt-points.ts) 把评估器输出转成结构化的 4 类 `SkillIssue`：
+
+| category 来源 | 抽取自 |
+|---|---|
+| `路径偏离` | `deviation_steps[]` |
+| `关键动作缺失` | `key_point_findings[]`（仅 `covered=false`） |
+| `工具选择问题` | `tool_choice_findings[]` |
+| `格式偏差` / `多余内容` / `表达问题` / `事实错误` / `结果问题` | `result_issues[]` |
+
+## 它解决什么问题
+
+不下钻时只能看见"失败了 30%"，但不知道：
+
+- 这 30% 是同一种错还是 5 种错混在一起？
+- 是 Skill 没触发？触发了但选错工具？跑出来格式不对？
+- 改哪个版本能解决最多？
+
+下钻让你从"失败率"具体到"应该改 SKILL.md 第 47 行"。
+
+## 怎么用
+
+### 通过 UI
+
+A/B 任务跑完，在 **Step 3 · DECISION** 下方的"失败用例归因"区域：
+
+<!-- TODO 截图：新拍。失败下钻面板：左侧分类柱状图（路径偏离/关键动作缺失/...），右侧具体 SkillIssue 列表 + 跳转入口。 -->
+
+层级：
+
+```
+失败用例 30% (15/50)
+   │
+   ├── 路径偏离 8 例 (53%)
+   │     ├── case_3: 漏掉"验证文件存在" 步骤
+   │     ├── case_7: 把 lscpu 跑成了 lspci
+   │     └── ...
+   │
+   ├── 关键动作缺失 4 例 (27%)
+   │     └── ...
+   │
+   ├── 工具选择问题 2 例 (13%)
+   │     └── ...
+   │
+   └── 结果格式错 1 例 (7%)
+         └── ...
+```
+
+每条 SkillIssue 可以点进去：
+
+- 看 `evidence`（原始 Trace 片段）
+- 看 `reasoning`（LLM 解释为什么扣分）
+- 看 `suggestedFix`（LLM 给的改进建议）
+- 一键跳转到 **Skills 优化** 修这条 issue
+
+### 通过 REST API
+
+```bash
+# 拉某个 Skill 的全部优化点（含 prevalence）
+curl "http://localhost:3000/api/skills/by-name/{name}/optimization-points?user=demo@163.com&version=2" \
+  -H "x-witty-api-key: $API_KEY"
+# 响应 → OptIssue[]，按 severity 降序
+
+# 单个 Evaluation 详情
+curl http://localhost:3000/api/eval/evaluation/{evaluationId}
+# → { type, executionId, l2ScoresJson, ranAt, skillIssues: [...] }
+
+# 单条 Trace 的所有 SkillIssue
+curl http://localhost:3000/api/observe/executions/{executionId}/skill-issues
+```
+
+## SkillIssue 数据结构
+
+每条优化点带的字段（来自 [Data Model](../data-model)）：
+
+| 字段 | 含义 | 示例 |
+|---|---|---|
+| `severity` | 严重度（high/medium/low） | `high` |
+| `summary` | 一句话描述 | "缺少验证文件存在的关键动作" |
+| `evidence` | 原始 Trace 证据 | "step 3 直接 `rm` 文件而未检查" |
+| `reasoning` | LLM 扣分理由 | "标准答案要求先验证..." |
+| `suggestedFix` | LLM 改进建议 | "在 SKILL.md 步骤 3 前加 `[ -f ${file} ] \|\| return` 校验" |
+| `dedupKey` | 跨 evaluation 聚合键 | `tool_choice:rm_without_check` |
+| `prevalenceCount` | 同类问题在响应范围内被检出次数 | 8 |
+
+### `prevalence` 抬升
+
+聚合时按 `dedupKey` 算 `prevalenceCount`，**在 3 / 5 / 10 三档自动抬升一级 severity**：
+
+- `prevalenceCount ≥ 3` → +1 级
+- `prevalenceCount ≥ 5` → +2 级
+- `prevalenceCount ≥ 10` → +3 级（封顶 high）
+
+逻辑在 [`src/lib/engine/skill-issues/prevalence.ts`](https://github.com/your-org/agent-insight/blob/main/src/lib/engine/skill-issues/prevalence.ts)。
+
+意味着"频繁的小问题"比"偶发的大问题"更优先修。
+
+## 关键参数
+
+| 参数 | 用途 |
+|---|---|
+| `severity` | 排序 + 颜色 |
+| `dedupKey` | 聚合同类问题 |
+| `is_skill_attributable` | 评估器自判是否归因到 Skill（false 时不会写入 SkillIssue） |
+| `resolvedAt` | 优化后标记已解决，下次列表不再出现 |
+
+## 关键过滤逻辑
+
+`derive-skill-opt-points.ts` 写 SkillIssue 时遵守：
+
+1. `is_skill_attributable=false` → **跳过**（评估器判断"这问题改 SKILL.md 也解决不了"，例如"模型本身能力不足"、"query 本身不可解"）
+2. `severity = low` → **跳过**（噪声大）
+3. `dedupKey` 与已 resolved 的 SkillIssue 相同 → **跳过**
+
+确保失败下钻列表里的每条都"可修 + 值得修"。
+
+## 最佳实践
+
+- **先看分类柱状图** —— 哪类问题占失败比例最大，优先攻克
+- **再按 prevalence 排序** —— 同分类下高频问题优先
+- **同 `dedupKey` 一次性修** —— 一条 issue 修了，所有同 key 的失败 case 都会改善
+- **resolvedAt 用起来** —— 修完一定标记，否则下次报告又出现一长串"已知问题"
+- **`is_skill_attributable=false` 的 case 别忽略** —— 它们可能要换模型 / 重写 query，不是 Skill 层面的问题
+
+## 常见问题
+
+<details>
+<summary>下钻能找到具体 SKILL.md 的哪一行吗？</summary>
+
+`evidence` 字段记录原始 Trace 片段；`suggestedFix` 会引用 SKILL.md 的步骤号或段落。完全精确到行号需要 LLM 高强度抽取，当前版本是"步骤级"精度。
+</details>
+
+<details>
+<summary>多个评估器跑出来的 SkillIssue 怎么去重？</summary>
+
+按 `dedupKey` 去重。两个评估器对同一个失败给出相似 issue 时，`dedupKey` 通常相同（static 用 ruleId，dynamic 用 hash6 of content+explanation），自动聚合到一条。
+</details>
+
+<details>
+<summary>修完 issue 怎么验证真的解决了？</summary>
+
+`PATCH /api/skills/by-name/:name/optimization-points/resolve` 接口标记完成 + 拿到 threadId。下次 A/B 测试如果同 dedupKey 不再出现，说明真解决；如果又出来，提示用户 reopen issue。
+</details>
+
+## 相关文档
+
+- [Analysis Overview](./overview) — 失败下钻在分析里的位置
+- [Step 3 · DECISION](./step3-decision) — DECISION 卡下方的失败归因区
+- [Data Model · SkillIssue](../data-model) — 字段定义
+- [Skills 优化](../optimization/overview) — 修完一条 issue

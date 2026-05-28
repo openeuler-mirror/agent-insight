@@ -1,0 +1,167 @@
+---
+title: Datasets
+description: 评测数据集管理 — AgentEvalDataset 的 CRUD 与最佳实践
+sidebar: evaluation
+---
+
+# Datasets
+
+## 是什么
+
+数据集是"标准答案"的载体。每个数据集是一行 `AgentEvalDataset`，里面装着 `casesJson[]`，每条 case 含 `{query, standardAnswer, keyActions[], rootCauses[]}`。评估器对这些 case 跑评分时拿数据集作为对照基准。
+
+底层表：`AgentEvalDataset`（PROJECT.md §4）。落库支持 Prisma 主路径（SQLite/OpenGauss）+ 非 Prisma 时回退到 `data/agent_datasets.json`。
+
+## 它解决什么问题
+
+没有数据集，评估就是凭感觉打分。数据集让评测可重现、可对比、可量化：
+
+| 没数据集 | 有数据集 |
+|---|---|
+| 每次评测随机选 case | 固定 case 跨版本对比 |
+| 不知道"对的答案"是什么 | `standardAnswer` 明确写死 |
+| 评估器各打各的分 | 共享同一基准 |
+| 不知道覆盖率 | 看 case 数 + 场景分布 |
+
+## 怎么用
+
+### 通过 UI
+
+进入 **评测中心 → 评测集 → 新建**：
+
+<!-- TODO 截图：复用 agent-insight/docs/images/pr113-dataset-key-actions.png — 评测集详情页 + 数据项录入（含 key actions 字段） -->
+
+最少填三个字段：
+
+| 字段 | 取值 | 何时用 |
+|---|---|---|
+| `name` | 业务命名 | `customer-support-v1` |
+| `datasetKind` | `ideal_output` / `trajectory` | 结果导向 vs 过程导向 |
+| `targetSkill` | Skill name 或留空 | 评测哪个 Skill / 通用 agent |
+
+然后进入 **数据项录入** 页（`/dataset/[id]`）维护具体 cases。
+
+### 通过 REST API
+
+```bash
+# 列出当前用户的所有数据集
+curl "http://localhost:3000/api/agent-datasets?user=demo@163.com" \
+  -H "x-witty-api-key: $API_KEY"
+
+# 新建数据集
+curl -X POST http://localhost:3000/api/agent-datasets \
+  -H "x-witty-api-key: $API_KEY" \
+  -d '{
+    "user": "demo@163.com",
+    "name": "customer-support-v1",
+    "description": "客服 Agent 的标准回答",
+    "targetSkill": "pdf-extractor",
+    "datasetKind": "ideal_output",
+    "tags": ["region:cn", "tier:enterprise"],
+    "cases": [
+      {
+        "id": "case_001",
+        "query": "我想退款",
+        "standardAnswer": "好的，我帮您查询订单状态...",
+        "keyActions": ["查询订单状态", "调用退款 API"],
+        "rootCauses": [{"label": "未识别退款意图", "weight": 0.6}],
+        "source": "user"
+      }
+    ]
+  }'
+
+# 拉单条数据集
+curl http://localhost:3000/api/agent-datasets/{id}?user=demo@163.com \
+  -H "x-witty-api-key: $API_KEY"
+
+# 更新（元数据或整表 cases）
+curl -X PATCH http://localhost:3000/api/agent-datasets \
+  -H "x-witty-api-key: $API_KEY" \
+  -d '{"user": "demo@163.com", "id": "ds_xxx", "name": "new-name"}'
+
+# 删除
+curl -X DELETE "http://localhost:3000/api/agent-datasets/{id}?user=demo@163.com" \
+  -H "x-witty-api-key: $API_KEY"
+```
+
+## case 结构
+
+`AgentEvalDataset.casesJson[]` 每条最小结构：
+
+```json
+{
+  "id": "case_001",
+  "query": "我想退款",
+  "standardAnswer": "好的，我帮您查询订单状态...",
+  "keyActions": ["查询订单状态", "调用退款 API"],
+  "rootCauses": [
+    {"label": "未识别退款意图", "weight": 0.6}
+  ],
+  "source": "user"
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `id` | string | ✅ | case 唯一 ID（数据集内唯一） |
+| `query` | string | ✅ | 用户输入 |
+| `standardAnswer` | string | ❌ | 期望回答（`datasetKind=ideal_output` 时必填） |
+| `keyActions[]` | string[] | ❌ | 应该走的关键步骤（trajectory 评估用） |
+| `rootCauses[]` | object[] | ❌ | 失败时该归到哪些 root cause + 权重 |
+| `source` | enum | ❌ | `'user'` / `'skill-gen-draft'` |
+| `rootCauseMeta` | object | ❌ | 隐藏缓存字段（平台预提取） |
+
+## datasetKind 选哪个
+
+| datasetKind | 评估什么 | 适合 |
+|---|---|---|
+| `ideal_output` | 最终答案 = standardAnswer 吗？ | 结果导向：摘要 / 翻译 / 分类 |
+| `trajectory` | 走的步骤覆盖了 keyActions 吗？ | 过程导向：故障诊断 / 多步骤 Agent |
+
+两者**不冲突**：一个数据集可以同时支持两种评估器（评估器各取所需）。但通常建议一个数据集只聚焦一种 kind。
+
+## 关键参数
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `name` | string | 业务命名，唯一性 (user, name) |
+| `description` | string | 数据集说明 |
+| `targetSkill` | string? | 服务于哪个 Skill；空 = 通用 |
+| `tagsJson` | string[] | 标签 |
+| `casesJson` | object[] | 用例数组 |
+| `datasetKind` | enum | `ideal_output` / `trajectory` |
+| `createdAt` / `updatedAt` | datetime | 自动维护 |
+
+## 最佳实践
+
+- **case 数 ≥ 20 起步** —— 少于 20 条统计意义弱
+- **覆盖度比数量重要** —— 5 个典型 + 5 个边界 + 5 个负向 > 50 条同质 case
+- **每条 case 都写 keyActions** —— trajectory 评估器与 [Failure Drilldown](../../skills/analysis/failure-drilldown) 都依赖它
+- **rootCauses 留缓存** —— 第一次 LLM 抽完会缓存到 rootCauseMeta，省后续 token
+- **数据集版本化** —— 命名带版本号 `v1` / `v2`，改完留旧版本做回归
+
+## 常见问题
+
+<details>
+<summary>数据集和触发评价集是同一个东西吗？</summary>
+
+**不是**。数据集（`AgentEvalDataset`）评测"Agent / Skill 跑得对不对"；触发评价集（`SkillTriggerEvalSet`）评测"Skill 的 description 能不能被 OpenCode 正确触发"。两者数据模型完全不同。详见 [Skills · Access Control](../../skills/management/access-control) 的特殊权限说明。
+</details>
+
+<details>
+<summary>case 能从历史 Trace 自动生成吗？</summary>
+
+可以。[Dataset Import](./dataset-import) 支持从 Trace 提取 case，详见该文档。也可以走 Skill 生成时附带 draft：`source: 'skill-gen-draft'`。
+</details>
+
+<details>
+<summary>数据集的 cases 修改后历史评测会重跑吗？</summary>
+
+不会自动重跑。修改 cases 只影响**新的**评测。如果想用新 cases 重新对比，手动 trigger `POST /api/eval/rejudge` 或在评测任务里选择新数据集重跑。
+</details>
+
+## 相关文档
+
+- [Core Concepts](../core-concepts) — Dataset / Evaluator / Experiment / Score 全貌
+- [Dataset Import](./dataset-import) — 从 CSV / Trace 导入
+- [Failure Drilldown](../../skills/analysis/failure-drilldown) — keyActions / rootCauses 怎么用

@@ -1,0 +1,175 @@
+---
+title: LLM-as-a-Judge
+description: 用大模型当评分裁判 — judgeAnswer / analyzeFailures 等核心实现
+sidebar: evaluation
+---
+
+# LLM-as-a-Judge
+
+## 是什么
+
+让一个 LLM **作为裁判**给另一个 LLM Agent 的输出打分。Agent Insight 内置 LLM-as-Judge 是默认评估器，覆盖绝大多数评测场景。
+
+核心实现：[`src/lib/engine/evaluation/judge.ts`](https://github.com/your-org/agent-insight/blob/main/src/lib/engine/evaluation/judge.ts) 的几个主函数：
+
+| 函数 | 用途 |
+|---|---|
+| `judgeAnswer()` | 给单条 Trace 打分，输出 `{score, judgment_reason, is_skill_attributable, improvement_suggestion}` |
+| `analyzeFailures()` | 对失败 case 抽取 root cause / key action |
+| `extractSkillsFromSession()` | 从 Trace 反推用了哪些 Skill |
+| `normalizeInteractions()` | 把不同 framework 的 interactions 归一化 |
+
+## 它解决什么问题
+
+| 场景 | 没 LLM-as-Judge | 有 |
+|---|---|---|
+| 开放问题打分 | 没法 | LLM 凭语义比对 |
+| 摘要 / 翻译 / 改写 | 字符串相似度太粗 | LLM 给细粒度评分 |
+| Trace 路径偏离 | 看不出来 | LLM 解释为什么偏离 |
+| 失败归因 | 全靠人 | LLM 自动抽 root cause |
+
+## 怎么用
+
+### 通过 UI
+
+进入 **评估器 / 指标 → 选 LLM-as-Judge** 作为评测任务的评估器，跑 [Offline](../features/offline-evaluation) 或自动 [Online](../features/online-evaluation) 评测。
+
+<!-- TODO 截图：复用 agent-insight/docs/images/best_practice_detail_v0.png 与 best_practice_detail_v1.png — LLM-as-Judge 给的 judgment_reason 与失败归因 -->
+
+### 通过 REST API
+
+```bash
+# 单条 Trace 触发 LLM-as-Judge
+curl -X POST http://localhost:3000/api/eval/rejudge \
+  -H "x-witty-api-key: $API_KEY" \
+  -d '{"task_id": "task_xxx", "currentUser": "demo@163.com"}'
+# 响应：{ success: true, record: { ..., answerScore, failures: [...] } }
+```
+
+### 直接调 `judgeAnswer`（自部署）
+
+```typescript
+import { judgeAnswer } from "@/lib/engine/evaluation/judge";
+
+const result = await judgeAnswer({
+  query: "我想退款",
+  standardAnswer: "好的，我帮您查询...",
+  actualAnswer: agent.output,
+  keyActions: ["查询订单状态", "调用退款 API"],
+  rootCauses: [{ label: "未识别意图", weight: 0.6 }],
+  modelConfig: { provider: "anthropic", model: "claude-sonnet-4", apiKey: "..." },
+});
+
+// result.score ∈ [0, 1]
+// result.judgment_reason 是 LLM 给的扣分理由
+// result.is_skill_attributable: bool
+// result.improvement_suggestion: string
+```
+
+## 输出 schema
+
+```typescript
+{
+  score: number;                       // 0-1 总分
+  isCorrect: boolean;                  // 派生自 score >= 0.6
+  judgment_reason: string;             // LLM 解释
+  is_skill_attributable: boolean;      // 评估器自判：改 Skill 能不能解决
+  improvement_suggestion: string;      // LLM 给的 fix 建议
+  l2Scores?: {                         // 可选 5D 评估
+    role: number;                      // 1-5
+    structure: number;
+    instruction: number;
+    consistency: number;
+    risk: number;
+    quality: number;
+  };
+  rootCauseMatches: [                  // 命中了哪些 root cause
+    { rootCauseLabel: "未识别意图", matched: true }
+  ];
+  keyActionCoverage: [                 // key action 覆盖情况
+    { keyAction: "查询订单状态", covered: true }
+  ];
+}
+```
+
+写到：
+
+- `Execution.answerScore` ← `score`
+- `Execution.isAnswerCorrect` ← `isCorrect`
+- `Execution.failures[]` ← failed key action / root cause 派生
+- `Evaluation.l2ScoresJson` ← `l2Scores`（可选）
+- `SkillIssue` ← `is_skill_attributable=true` 且 severity > low 的项
+
+## 关键参数
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `query` | string | ✅ | 用户输入 |
+| `standardAnswer` | string | ✅ | 期望回答 |
+| `actualAnswer` | string | ✅ | Agent 实际输出 |
+| `keyActions[]` | string[] | ❌ | 期望走的关键步骤 |
+| `rootCauses[]` | object[] | ❌ | 失败时该归到哪些 root cause |
+| `modelConfig` | object | ✅ | 评估 LLM 的 provider + model + apiKey |
+| `temperature` | float | 0.2 | 评估 LLM 温度（建议低） |
+
+## 5D 评估
+
+可选的细粒度评分（写到 `Evaluation.l2ScoresJson`）：
+
+| 维度 | 含义 |
+|---|---|
+| **Role** | Agent 是否扮演了正确角色 |
+| **Structure** | 输出结构是否符合期望（格式 / 段落） |
+| **Instruction** | 是否遵循指令 |
+| **Consistency** | 内部逻辑是否自洽 |
+| **Risk** | 是否有风险输出（违规 / 错误事实） |
+| **Quality** | 整体质量 |
+
+5D 让"为啥扣分"更可解释，比单一总分有用得多。
+
+## 最佳实践
+
+- **评估器用强模型**：Claude Sonnet 4 / GPT-4 是好选择；评估器是质检员，便宜模型容易瞎评
+- **temperature 设低**：建议 0.0-0.3，让评估稳定可复现
+- **standardAnswer 写细**：太泛的 standardAnswer，LLM 评分会"摸鱼"判 pass
+- **同 prompt 跑多轮取平均**：高方差时 1 次评分不可信
+- **校验评估器准不准**：先标 50 条人工 ground truth，看 LLM-as-Judge 命中率
+
+## 常见问题
+
+<details>
+<summary>LLM-as-Judge 会有 bias 吗？</summary>
+
+会。已知偏差：
+- **位置偏差**：先看到的内容打分倾向高
+- **冗长偏差**：长答案倾向被认为质量高（虽然不一定）
+- **自我偏好**：用 Claude 评 Claude 输出，分数普遍高
+- **格式偏差**：markdown 格式输出比纯文本天然高分
+
+缓解：让 LLM 解释扣分理由（`judgment_reason`），review 时能看出 bias。
+</details>
+
+<details>
+<summary>评估器自己的输出怎么验证？</summary>
+
+定期跑 **inter-rater reliability** 评估：
+1. 同一 batch case 用 LLM-as-Judge 评一次
+2. 让人工标一次
+3. 算两者相关系数（Cohen's kappa 等）
+4. < 0.6 = 评估器不可靠，要调整
+
+详见 [Human Annotation](./human-annotation)。
+</details>
+
+<details>
+<summary>失败 case 评了一遍能再评吗？</summary>
+
+可以。`Evaluation` 表是 1:N，每次评都新增（重评懒删除）。但要意识到每次评花 token，不要 abuse。
+</details>
+
+## 相关文档
+
+- [Custom Evaluators](./custom-evaluators) — 自定义逻辑
+- [Human Annotation](./human-annotation) — 人工兜底
+- [Failure Drilldown](../../skills/analysis/failure-drilldown) — 评分如何落到优化点
+- [`src/lib/engine/evaluation/judge.ts`](https://github.com/your-org/agent-insight/blob/main/src/lib/engine/evaluation/judge.ts) — 源码

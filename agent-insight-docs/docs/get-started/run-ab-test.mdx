@@ -1,0 +1,62 @@
+---
+title: Get Started — Run A/B Test
+description: 15 分钟跑通三步法 A/B 测试
+sidebar: get-started
+---
+
+# Run A/B Test
+
+A/B 测试是 Agent Insight 的招牌能力 —— 把同一个 Agent 在「Skill 关闭 / 开启」或「Skill v1 / v2」两种条件下跑同一批用例，自动按 **能力 / 成本 / 稳定性** 三个维度评分，给出发布决策。
+
+本页带你跑完三步：**Config → Execution → Decision**。
+
+## 前置条件
+
+- [ ] 已有至少 1 个 Skill 且发布了 1 个版本（参考 [Manage Skills](./manage-skills)）
+- [ ] 已有 1 个评测集，含 ≥ 5 条用例（参考 [Setup Evaluation](./setup-evaluation)）
+- [ ] 已配好评测 LLM
+
+## 步骤一：CONFIG
+
+进入 **Skills 分析 → A/B 测试 → 新建任务**，填配置：
+
+| 配置项 | 说明 | 推荐值 |
+|---|---|---|
+| `skillId` + `versionAId` / `versionBId` | A 组（对照）/ B 组（实验）的 Skill 版本；A 可为无 Skill | A=无 Skill，B=v1 |
+| `selectedDatasetId` + `selectedCaseIds` | 数据集与具体用例 | 5-20 条 |
+| `repeatRounds` | 每条用例重复跑几轮（计算方差用） | 3 |
+| `agentMaxConcurrency` | Agent 并发上限 | 5 |
+| `evaluatorId` | 选哪个评估器打分 | LLM-as-Judge |
+
+详见 [Step 1 · CONFIG](../skills/analysis/step1-config)。
+
+<!-- TODO 截图：新拍。三步法第一步配置面板（src/app/(main)/skill-eval/grayscale/page.tsx Card 1）。 -->
+
+## 步骤二：EXECUTION
+
+点击 **开始执行**。后端按「样本 × A/B × 轮次」生成任务矩阵，调度 `runGeneralAgent`，并发上限受 `agentMaxConcurrency` 限制。
+
+页面会实时展示每个 cell 的状态（running / pass / fail / error），全部 Agent 执行完后再用同一并发上限触发评估器。
+
+详见 [Step 2 · EXECUTION](../skills/analysis/step2-execution)。
+
+<!-- TODO 截图：新拍。三步法第二步矩阵实时刷新视图。 -->
+
+## 步骤三：DECISION
+
+执行 + 评估都完成后，Card 3「综合判定 & 决策」自动出 4 张卡：
+
+1. **能力分** — `clamp(50 + Δscore × 2.5, 0, 100)`，越高说明 B 比 A 越有用
+2. **成本分** — 基于 token 增量 + 能力分耦合调整
+3. **稳定性分** — `invokeRate × 100 × (1 − var / 0.25)`
+4. **综合判定** — 取三者最低分（短板原则），映射到 `direct-release` / `monitor-release` / `reject` / `insufficient`
+
+完整算法见 [A/B Scoring 算法](../skills/analysis/ab-testing#评分算法) 或源码 [`src/lib/skill-analysis/ab-scoring.ts`](https://github.com/your-org/agent-insight/blob/main/src/lib/skill-analysis/ab-scoring.ts)。
+
+<!-- TODO 截图：新拍。三步法第三步「能力/成本/稳定性 + 综合判定」结论卡。 -->
+
+## 下一步
+
+- [A/B Testing 详解](../skills/analysis/ab-testing) — 完整算法与边界条件
+- [Multi-Variant Testing](../skills/analysis/multi-variant) — 3+ 个变体的对战
+- [Failure Drilldown](../skills/analysis/failure-drilldown) — 失败用例归因

@@ -1,0 +1,130 @@
+---
+title: Score Comparison
+description: 多次实验得分对比 — 横向 / 趋势 / 差异下钻
+sidebar: evaluation
+---
+
+# Score Comparison
+
+## 是什么
+
+把多次 [Experiment](./experiments)（或 [A/B Test](../../skills/analysis/ab-testing) 历史）的分数放一起对比 —— 横向并列 / 时序趋势 / 单 case 差异下钻。让"这次跑得比上次好吗"从感觉变成数据。
+
+## 它解决什么问题
+
+| 不对比 | 对比 |
+|---|---|
+| 这次跑 0.85 算高吗？ | 与历史中位数比，看相对位置 |
+| 不知道哪条 case 退化了 | case-by-case diff |
+| 团队报告靠人写 | 报告页直接 export |
+| 灰度发布没有 baseline | 自动比 baseline |
+
+## 怎么用
+
+### 通过 UI
+
+进入 **评测中心 → Experiment 列表 → 多选 → 对比**：
+
+<!-- TODO 截图：新拍。Score Comparison 页面：左侧 Experiment 多选列表，右侧分数对比图 + case-by-case 差异表。 -->
+
+提供三种视图：
+
+| 视图 | 内容 |
+|---|---|
+| **横向对比** | 选 2-N 个 Experiment，每个一列，行是 metric / case |
+| **时序趋势** | 选同一 datasetId + evaluatorId 的历史 Experiment，画 score 时间线 |
+| **case 差异** | 选 2 个 Experiment，case-by-case diff（哪些涨了 / 跌了 / 持平） |
+
+### 通过 REST API
+
+```bash
+# 横向对比 N 个 Experiment
+curl -X POST http://localhost:3000/api/eval/experiments/compare \
+  -H "x-witty-api-key: $API_KEY" \
+  -d '{
+    "experimentIds": ["exp_1", "exp_2", "exp_3"],
+    "groupBy": "case"
+  }'
+# → { rows: [{ case_id, scores: [exp_1: 0.8, exp_2: 0.85, exp_3: 0.9] }, ...] }
+
+# 单 case 在历史 Experiment 中的得分时序
+curl "http://localhost:3000/api/eval/case-history?caseId=case_xxx&datasetId=ds_xxx"
+```
+
+## 关键指标对比
+
+| 指标 | 含义 | 怎么看 |
+|---|---|---|
+| **mean score** | 整体平均分 | 趋势是否向上 |
+| **median score** | 中位数 | 不被极端值拉偏 |
+| **pass rate** | 通过率（score ≥ threshold） | 业务接受程度 |
+| **failure breakdown** | 失败 case 按类别归类 | 失败模式分布 |
+| **case diff count** | 跨 Experiment "新涨/新跌" 的 case 数 | 增量变化 |
+
+## 单 case 差异下钻
+
+最有价值的视图是 **case-by-case diff**：
+
+```
+case_001  Exp_1: 0.6 → Exp_2: 0.9  📈 +0.3 涨幅 → 看 trace
+case_002  Exp_1: 0.9 → Exp_2: 0.5  📉 -0.4 退化 → 看 trace
+case_003  Exp_1: 0.7 → Exp_2: 0.7  ➖ 持平
+...
+```
+
+点 "看 trace" 跳到 [Failure Drilldown](../../skills/analysis/failure-drilldown)，看具体 Trace 的差异。
+
+## 关键参数
+
+| 参数 | 类型 | 说明 |
+|---|---|---|
+| `experimentIds[]` | string[] | 要对比的 Experiment（2-10 个） |
+| `groupBy` | enum | `case` / `evaluator_metric` / `time` |
+| `metric` | string | 主要对比指标（默认 mean score） |
+| `caseSubset` | string[] | 只看部分 case |
+
+## 限制：可比性
+
+跨 Experiment 对比**只在满足条件时有意义**：
+
+| 必须相同 | 原因 |
+|---|---|
+| `datasetId` | 分母变了，分数没可比性 |
+| `evaluatorId` | 评分尺度不同 |
+| 评估器版本 (`generator`) | 算法升级会改变分数 |
+
+平台会自动检测，不兼容的 Experiment 对比时给警告。
+
+## 最佳实践
+
+- **每次大改后跑一次 baseline + 改后** —— 不要拿不同时期对比
+- **关注 case-level 差异**，不要只看 mean —— mean 不变可能掩盖"一半涨 一半跌"
+- **保留 ≥ 3 个历史 Experiment** —— 单点对比方差大，3 个起步看趋势
+- **report 用 export** —— 不要截图（不可机器可读）
+- **差异大的 case 单独提优化点** —— 涨跌都值得分析
+
+## 常见问题
+
+<details>
+<summary>能对比 A/B Test 和普通 Experiment 吗？</summary>
+
+技术上能（底层都是 `Evaluation` 表），但**语义不一致** —— A/B 是"两个版本互比"，Experiment 是"绝对评分"。强行对比要小心解读。
+</details>
+
+<details>
+<summary>跨 datasetId 能对比吗？</summary>
+
+不能。同 case 不同数据集就是不同 case（id 可能同但内容不同）。对比前先确认 datasetId 一致。
+</details>
+
+<details>
+<summary>对比结果能 share 出去吗？</summary>
+
+当前 UI 上有 share link 按钮（PROJECT.md §5.1 未提及，v2 规划落地）。当前替代：拉 API 数据自己渲染 / export CSV。
+</details>
+
+## 相关文档
+
+- [Experiments](./experiments) — Experiment 的创建与跑
+- [Regression Detection](./regression-detection) — 跨实验的自动退化告警
+- [A/B Testing · Experiment History](../../skills/analysis/experiment-history) — A/B 视角的历史

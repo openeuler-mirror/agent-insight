@@ -1,0 +1,157 @@
+---
+title: 版本管理
+description: Skill 版本号策略、changeLog、回滚、对比
+sidebar: skills
+---
+
+# 版本管理
+
+## 是什么
+
+Agent Insight 用 `SkillVersion` 表为每个 Skill 维护**整数自增版本号**（`version: 1, 2, 3...`）和可选的**语义化版本**（`semanticVersion: v1.2.3`）。版本是**只增不删**的快照，回滚靠改 `Skill.activeVersion` 指针，不是真的删历史。
+
+## 它解决什么问题
+
+让 Skill 升级"可回放、可对比、可回滚"：
+
+| 场景 | 没版本管理 | 有版本管理 |
+|---|---|---|
+| 改坏了想回滚 | git revert + 重新部署 | 一行 SQL 改 activeVersion |
+| 看 v1 v2 改了啥 | 翻 commit | UI 直接 diff content |
+| 三个月后回看为什么这么改 | 记不清 | `changeLog` 字段 |
+| 多个版本同时在线（灰度） | 起两个进程 | `Skill.activeVersion` + 路由策略 |
+
+## 怎么用
+
+### 通过 UI
+
+进入 **Skills 资产 → 选 Skill → 版本列表**，能：
+
+- 看所有版本（整数 + semanticVersion）
+- 任意切换 active 版本（一键回滚）
+- 双版本 diff（左右对比 SKILL.md）
+- 单版本下载 ZIP
+
+<!-- TODO 截图：复用 agent-insight/docs/images/skill_versioning.png — Skill 版本列表 + diff 视图 -->
+
+### 通过 REST API
+
+```bash
+# 列版本
+curl http://localhost:3000/api/skills/{id}/versions
+
+# 看单个版本
+curl http://localhost:3000/api/skills/{id}/versions/{version}
+
+# 新建版本
+curl -X POST http://localhost:3000/api/skills/{id}/versions \
+  -H "x-witty-api-key: $API_KEY" \
+  -d '{
+    "content": "---\nname: ...\n---\n\n...",
+    "changeLog": "改进 description；新增 references/troubleshooting.md",
+    "user": "demo@163.com"
+  }'
+
+# 切换 active 版本（回滚）
+curl -X PATCH http://localhost:3000/api/skills/{id} \
+  -H "x-witty-api-key: $API_KEY" \
+  -d '{"activeVersion": 1, "user": "demo@163.com"}'
+
+# 删版本（不可删最后一个）
+curl -X DELETE http://localhost:3000/api/skills/{id}/versions/{version} \
+  -H "x-witty-api-key: $API_KEY"
+```
+
+## 版本号策略
+
+平台用两个版本字段：
+
+| 字段 | 类型 | 必填 | 用途 |
+|---|---|---|---|
+| `version` | int | 自动 | 单调递增主键，平台内部用 |
+| `semanticVersion` | string | 可选 | 语义化版本（`v1.2.3`），可读 |
+
+推荐：
+
+- **`static` / `dynamic` 自动优化** 产出**主版本**（v1 → v2 → v3）
+- **`feedback` 用户反馈** 在小迭代下产出**小版本**（v1.1 → v1.2），Accept 后才晋升主版本
+- **重大重构**（description 改、frontmatter 改）一定 bump 主版本
+
+> 算法 / 自优化产出版本号的规则见 [Optimization · Auto Optimize](../optimization/auto-optimize)。
+
+## changeLog 怎么写
+
+不要写"更新"或"修改一些东西"。**告诉未来的自己改了什么、为什么**：
+
+```diff
++ 优化 description，添加"OOM"、"内存泄漏"两个触发词
++ scripts/check_memory.sh 兼容 openEuler 22.03 LTS
+- 删掉过时的 references/legacy-syscall.md
+```
+
+```diff
+- 修改一下
+```
+
+## 回滚
+
+```bash
+# UI 路径：Skills 资产 → 版本列表 → 任选历史版本 → 设为 active
+# API 路径：
+curl -X PATCH http://localhost:3000/api/skills/{id} \
+  -H "x-witty-api-key: $API_KEY" \
+  -d '{"activeVersion": 1}'
+```
+
+回滚 = 改指针，不是删历史。回滚后旧版本仍在表里，再切回去也可以。
+
+> 如果 Agent 主机上已经同步过新版本，回滚 active 后还需要 **重新 sync** 到主机：[Deployment](./deployment)。
+
+## 关键参数
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `version` | int | 整数版本号（自增、不可改） |
+| `semanticVersion` | string? | 语义版本可选 |
+| `content` | text | 完整 SKILL.md |
+| `changeLog` | text? | 本次变更说明 |
+| `enterpriseSkillId` | string? | 与企业 Skill 库的映射 ID（同步用） |
+
+## 最佳实践
+
+- **永不删历史**：除非空间真的爆，否则保留所有版本
+- **小步快跑**：每次只改一件事，方便 A/B 归因
+- **回滚后立即记录**：在 changeLog 写清楚为什么回滚，下次别再踩同样的坑
+- **大版本附完整 A/B 报告**：每个新主版本上线前都要有 A/B 数据支撑
+
+## 常见问题
+
+<details>
+<summary>能不能跳号？比如直接发 v5？</summary>
+
+不能。`version` 字段是平台自增的，跳号会导致前端排序混乱。如果你想表达"重大版本"，用 `semanticVersion` 字段（`v5.0.0`）。
+</details>
+
+<details>
+<summary>已经发布过的版本能改 content 吗？</summary>
+
+API 层面允许（`PATCH /api/skills/{id}/versions/{v}`），但**强烈不建议**。已发布版本的 content 是 Trace 归因的"事实证据"，改了之后历史评测都不可信。
+</details>
+
+<details>
+<summary>怎么对比两个版本？</summary>
+
+UI 上选两个版本进入 diff 视图（左右双栏）。也可以拉 content 自己 diff：
+
+```bash
+curl http://localhost:3000/api/skills/{id}/versions/1 | jq -r .content > v1.md
+curl http://localhost:3000/api/skills/{id}/versions/2 | jq -r .content > v2.md
+diff v1.md v2.md
+```
+</details>
+
+## 相关文档
+
+- [Lifecycle States](./lifecycle-states) — 版本与状态机的关系
+- [Canary Release](./canary-release) — 多版本并存 + 流量灰度
+- [Auto Optimize](../optimization/auto-optimize) — 自动产新版本
