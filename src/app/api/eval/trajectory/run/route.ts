@@ -7,7 +7,10 @@ import {
     TrajectoryEvalConfigError,
     type TrajectoryEvalInput,
 } from '@/lib/engine/evaluation/opencode-trajectory-evaluator';
-import { evaluateTaskCompletionViaOpencode } from '@/lib/engine/evaluation/opencode-task-completion-evaluator';
+import {
+    evaluateTaskCompletionViaOpencode,
+    type TaskCompletionEvalInput,
+} from '@/lib/engine/evaluation/opencode-task-completion-evaluator';
 import { startOrReplace as startEvalTask, finish as finishEvalTask } from '@/lib/evaluation-task-manager';
 import { deriveAndPersistOptPoints } from '@/lib/engine/evaluation/derive-skill-opt-points';
 import {
@@ -302,12 +305,22 @@ async function evaluateTaskCompletionAgainstExpected(
     actualOutput: string,
     precomputedRootCauses?: RootCauseItem[],
     precomputedRootCauseSource?: 'dataset-cache' | 'none',
+    traceSummaryText?: string,
+    skillContext?: TaskCompletionEvalInput['skillContext'],
     user?: string | null,
     skillName?: string | null,
     skillVersion?: number | null,
 ): Promise<ResultJudgment> {
     const result = await evaluateTaskCompletionViaOpencode(
-        { caseInput, expectedOutput, actualOutput, precomputedRootCauses, precomputedRootCauseSource },
+        {
+            caseInput,
+            expectedOutput,
+            actualOutput,
+            precomputedRootCauses,
+            precomputedRootCauseSource,
+            traceSummaryText,
+            skillContext,
+        },
         user,
         skillName,
         skillVersion,
@@ -382,6 +395,41 @@ function getPrimaryExecutionSkillTargets(
         skill: normalized,
         version: rootSkill?.version ?? normalizeOptionalVersion(execution?.skillVersion),
     }];
+}
+
+async function loadTaskCompletionSkillContext(
+    execution: ExecutionLike | null | undefined,
+    interactions: unknown,
+    user?: string | null,
+): Promise<TaskCompletionEvalInput['skillContext'] | undefined> {
+    const targets = getPrimaryExecutionSkillTargets(execution, interactions);
+    if (targets.length === 0) return undefined;
+
+    const invokedSkills: NonNullable<NonNullable<TaskCompletionEvalInput['skillContext']>['invokedSkills']> = [];
+    for (const target of targets) {
+        const skillRecord = await db.findSkill(target.skill, user || null);
+        if (!skillRecord?.id) {
+            invokedSkills.push({ name: target.skill, version: target.version });
+            continue;
+        }
+
+        const fullSkill = await db.findSkillById(skillRecord.id);
+        const resolvedVersion = target.version
+            ?? fullSkill?.activeVersion
+            ?? fullSkill?.versions?.[0]?.version
+            ?? null;
+        const versionRow = resolvedVersion != null
+            ? await db.findSkillVersion(skillRecord.id, resolvedVersion).catch(() => null)
+            : null;
+        const content = String(versionRow?.content || '').trim();
+        invokedSkills.push({
+            name: target.skill,
+            version: resolvedVersion,
+            content: content ? content.slice(0, 12_000) : undefined,
+        });
+    }
+
+    return invokedSkills.length > 0 ? { invokedSkills } : undefined;
 }
 
 async function extractSkillKeyActionsFromTargets(targets: SkillTarget[], user?: string | null): Promise<ExtractedKeyAction[]> {
@@ -1424,6 +1472,10 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
                         resultActualOutput,
                         precomputedRootCauses,
                         precomputedRootCauseSource,
+                        interactions.length > 0
+                            ? formatTraceForLLM(summarizeTrace(interactions, { maxSteps: 80, maxTextLen: 400 }))
+                            : '',
+                        await loadTaskCompletionSkillContext(execution, interactions, user),
                         user,
                         evalSkillName,
                         evalSkillVersion,

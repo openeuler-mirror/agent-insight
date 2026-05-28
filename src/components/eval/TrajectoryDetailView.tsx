@@ -72,8 +72,28 @@ interface TrajectoryDeviation {
 interface ResultEvaluationFinding {
     content: string;
     covered?: boolean;
+    coverageStatus?: 'covered' | 'partial' | 'missing' | 'wrong';
     severity?: 'low' | 'medium' | 'high';
     explanation?: string;
+    coverageReason?: string;
+    missingReason?: string;
+    evidence?: {
+        actual?: string;
+        expected?: string;
+    };
+    traceRootCause?: {
+        failureStage?: 'evidence_collection' | 'tool_usage' | 'reasoning' | 'final_answer' | 'model_or_environment' | 'unknown';
+        failureReason?: string;
+        relatedSteps?: Array<{
+            stepIndex?: number;
+            kind?: string;
+            name?: string;
+            evidence?: string;
+        }>;
+    };
+    isSkillAttributable?: boolean;
+    attributionReason?: string;
+    improvementSuggestion?: string;
 }
 
 interface ResultEvaluationSummary {
@@ -140,15 +160,65 @@ function normalizeFindings(rawFindings: unknown): ResultEvaluationFinding[] {
     return (Array.isArray(rawFindings) ? rawFindings : [])
         .map(item => item && typeof item === 'object' ? item as Record<string, unknown> : null)
         .filter((item): item is Record<string, unknown> => Boolean(item))
-        .map(item => ({
-            content: String(item.content || '').trim(),
-            covered: typeof item.covered === 'boolean' ? item.covered : undefined,
-            severity: item.severity === 'high' || item.severity === 'medium' || item.severity === 'low'
-                ? (item.severity as 'low' | 'medium' | 'high')
-                : undefined,
-            explanation: String(item.explanation || '').trim(),
-        }))
+        .map(item => {
+            const evidence = asRecord(item.evidence);
+            const traceRootCause = asRecord(item.trace_root_cause ?? item.traceRootCause);
+            const relatedStepsRaw = Array.isArray(traceRootCause.related_steps)
+                ? traceRootCause.related_steps
+                : Array.isArray(traceRootCause.relatedSteps)
+                ? traceRootCause.relatedSteps
+                : [];
+            const coverageStatusRaw = String(item.coverage_status ?? item.coverageStatus ?? '').trim();
+            const failureStageRaw = String(traceRootCause.failure_stage ?? traceRootCause.failureStage ?? '').trim();
+            const isSkillAttr = item.is_skill_attributable ?? item.isSkillAttributable;
+            return {
+                content: String(item.content || '').trim(),
+                covered: typeof item.covered === 'boolean' ? item.covered : undefined,
+                coverageStatus: isCoverageStatus(coverageStatusRaw) ? coverageStatusRaw : undefined,
+                severity: item.severity === 'high' || item.severity === 'medium' || item.severity === 'low'
+                    ? (item.severity as 'low' | 'medium' | 'high')
+                    : undefined,
+                explanation: String(item.explanation || '').trim(),
+                coverageReason: String(item.coverage_reason ?? item.coverageReason ?? '').trim(),
+                missingReason: String(item.missing_reason ?? item.missingReason ?? '').trim(),
+                evidence: {
+                    actual: String(evidence.actual || '').trim(),
+                    expected: String(evidence.expected || '').trim(),
+                },
+                traceRootCause: {
+                    failureStage: isFailureStage(failureStageRaw) ? failureStageRaw : undefined,
+                    failureReason: String(traceRootCause.failure_reason ?? traceRootCause.failureReason ?? '').trim(),
+                    relatedSteps: relatedStepsRaw
+                        .map(step => asRecord(step))
+                        .map(step => ({
+                            stepIndex: typeof (step.step_index ?? step.stepIndex) === 'number'
+                                ? (step.step_index ?? step.stepIndex) as number
+                                : undefined,
+                            kind: String(step.kind || '').trim(),
+                            name: String(step.name || '').trim(),
+                            evidence: String(step.evidence || '').trim(),
+                        }))
+                        .filter(step => step.stepIndex != null || step.kind || step.name || step.evidence),
+                },
+                isSkillAttributable: typeof isSkillAttr === 'boolean' ? isSkillAttr : undefined,
+                attributionReason: String(item.attribution_reason ?? item.attributionReason ?? '').trim(),
+                improvementSuggestion: String(item.improvement_suggestion ?? item.improvementSuggestion ?? '').trim(),
+            };
+        })
         .filter(item => item.content || item.explanation);
+}
+
+function isCoverageStatus(value: string): value is NonNullable<ResultEvaluationFinding['coverageStatus']> {
+    return value === 'covered' || value === 'partial' || value === 'missing' || value === 'wrong';
+}
+
+function isFailureStage(value: string): value is NonNullable<NonNullable<ResultEvaluationFinding['traceRootCause']>['failureStage']> {
+    return value === 'evidence_collection'
+        || value === 'tool_usage'
+        || value === 'reasoning'
+        || value === 'final_answer'
+        || value === 'model_or_environment'
+        || value === 'unknown';
 }
 
 function stripEmbeddedKeyPoints(reason: string): string {
@@ -506,6 +576,9 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
         : noEvaluableCase
         ? cleanNoEvaluableCaseMessage(result?.errorMessage)
         : '');
+    const groundTruthEmptyHint = !hasResultEvaluation && !groundTruthValue.trim()
+        ? '未选择 Agent 任务完成度评估器，本次不展示预期结果。'
+        : '';
     const groundTruthLabel = caseSnapshot?.expectedOutput?.trim()
         ? '预期结果 (Ground Truth · 来自本次评测快照)'
         : caseEntry
@@ -669,6 +742,7 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
                         <FieldBlock
                             label={groundTruthLabel}
                             value={groundTruthValue}
+                            emptyHint={groundTruthEmptyHint}
                         />
                         <FieldBlock
                             label="任务输出"
@@ -736,28 +810,9 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
                                     <div style={{ marginTop: 12 }}>
                                         <div style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 6 }}>关键观点评测</div>
                                         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                                            {resultEvaluationFindings.map((item, index) => {
-                                                const severity = item.severity || (item.covered ? 'low' : 'high');
-                                                const tone =
-                                                    severity === 'high' ? COLORS.danger : severity === 'medium' ? COLORS.warning : COLORS.success;
-                                                const bg =
-                                                    severity === 'high' ? COLORS.dangerSubtle : severity === 'medium' ? COLORS.warningSubtle : COLORS.successSubtle;
-                                                return (
-                                                    <div key={index} style={{ padding: '8px 10px', border: `1px solid ${COLORS.border}`, borderRadius: 5, background: '#fff' }}>
-                                                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
-                                                            <span style={{ fontSize: 11, fontWeight: 600, color: COLORS.textSecondary }}>
-                                                                {item.content || `关键观点 #${index + 1}`}
-                                                            </span>
-                                                            <span style={{ ...badgeStyle(bg, tone, true), fontSize: 9 }}>
-                                                                {item.covered ? '已覆盖' : '未覆盖'}
-                                                            </span>
-                                                        </div>
-                                                        <div style={{ fontSize: 11, color: COLORS.textSecondary, lineHeight: 1.55 }}>
-                                                            {item.explanation || '未返回额外说明'}
-                                                        </div>
-                                                    </div>
-                                                );
-                                            })}
+                                            {resultEvaluationFindings.map((item, index) => (
+                                                <KeyPointFindingCard key={index} item={item} fallbackTitle={`关键观点 #${index + 1}`} />
+                                            ))}
                                         </div>
                                     </div>
                                 )}
@@ -1002,7 +1057,8 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
 
 // ──────────── 工具组件 ────────────
 
-function FieldBlock({ label, value }: { label: string; value: string }) {
+function FieldBlock({ label, value, emptyHint }: { label: string; value: string; emptyHint?: string }) {
+    const hasValue = Boolean(value.trim());
     return (
         <div style={{ marginBottom: 12 }}>
             <div style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 4 }}>{label}</div>
@@ -1016,10 +1072,12 @@ function FieldBlock({ label, value }: { label: string; value: string }) {
                 wordBreak: 'break-word',
                 maxHeight: 160,
                 overflow: 'auto',
-                color: COLORS.textSecondary,
-                minHeight: 18,
+                color: hasValue ? COLORS.textSecondary : COLORS.textMuted,
+                minHeight: hasValue ? 18 : 44,
+                display: 'flex',
+                alignItems: hasValue ? 'initial' : 'center',
             }}>
-                {value}
+                {hasValue ? value : (emptyHint || '')}
             </div>
         </div>
     );
@@ -1036,6 +1094,209 @@ function ScoreLine({ label, value, tone }: { label: string; value: string; tone:
             <span style={badgeStyle(bg, color, true)}>{value}</span>
         </div>
     );
+}
+
+function KeyPointFindingCard({ item, fallbackTitle }: { item: ResultEvaluationFinding; fallbackTitle: string }) {
+    const status = item.coverageStatus || (item.covered ? 'covered' : 'missing');
+    const severity = item.severity || (status === 'covered' ? 'low' : 'high');
+    const tone =
+        status === 'covered' ? COLORS.success
+        : severity === 'high' || status === 'wrong' ? COLORS.danger
+        : severity === 'medium' || status === 'partial' ? COLORS.warning
+        : COLORS.textMuted;
+    const bg =
+        status === 'covered' ? COLORS.successSubtle
+        : severity === 'high' || status === 'wrong' ? COLORS.dangerSubtle
+        : severity === 'medium' || status === 'partial' ? COLORS.warningSubtle
+        : COLORS.bgSoft;
+    const hasTrace = Boolean(item.traceRootCause?.failureReason || item.traceRootCause?.failureStage || item.traceRootCause?.relatedSteps?.length);
+    const hasSkillSuggestion = item.isSkillAttributable !== false && Boolean(item.improvementSuggestion);
+    const hasAttribution = typeof item.isSkillAttributable === 'boolean' || item.attributionReason || item.improvementSuggestion;
+
+    return (
+        <div style={{
+            padding: '10px 12px',
+            border: `1px solid ${COLORS.border}`,
+            borderRadius: 6,
+            background: status === 'covered' ? '#fff' : bg,
+        }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start', marginBottom: 6 }}>
+                <span style={{ fontSize: 12, fontWeight: 650, color: COLORS.textSecondary, lineHeight: 1.45 }}>
+                    {item.content || fallbackTitle}
+                </span>
+                <span style={{ ...badgeStyle(bg, tone, true), fontSize: 9, flexShrink: 0 }}>
+                    {coverageStatusLabel(status)}
+                </span>
+            </div>
+
+            {item.explanation && (
+                <div style={{ fontSize: 11.5, color: COLORS.textSecondary, lineHeight: 1.55, marginBottom: 6 }}>
+                    {item.explanation}
+                </div>
+            )}
+
+            <div style={{ display: 'grid', gap: 6 }}>
+                {item.coverageReason && (
+                    <FindingDetailBlock label="覆盖依据" value={item.coverageReason} tone="success" />
+                )}
+                {item.missingReason && (
+                    <FindingDetailBlock label="缺失原因" value={item.missingReason} tone="warning" />
+                )}
+                {(item.evidence?.actual || item.evidence?.expected) && (
+                    <FindingEvidenceBlock evidence={item.evidence} />
+                )}
+                {hasTrace && (
+                    <TraceRootCauseBlock rootCause={item.traceRootCause} />
+                )}
+                {hasAttribution && (
+                    <SkillAttributionBlock
+                        isSkillAttributable={item.isSkillAttributable}
+                        attributionReason={item.attributionReason}
+                        improvementSuggestion={hasSkillSuggestion ? item.improvementSuggestion : ''}
+                    />
+                )}
+            </div>
+        </div>
+    );
+}
+
+function FindingDetailBlock({ label, value, tone }: { label: string; value: string; tone: 'success' | 'warning' }) {
+    return (
+        <div style={{
+            fontSize: 11,
+            lineHeight: 1.55,
+            color: COLORS.textSecondary,
+            padding: '6px 8px',
+            background: tone === 'success' ? COLORS.successSubtle : '#fff',
+            borderLeft: `2px solid ${tone === 'success' ? COLORS.success : COLORS.warning}`,
+            borderRadius: 3,
+        }}>
+            <span style={{ fontWeight: 650, color: tone === 'success' ? COLORS.success : COLORS.warning, marginRight: 6 }}>{label}</span>
+            {value}
+        </div>
+    );
+}
+
+function FindingEvidenceBlock({ evidence }: { evidence?: ResultEvaluationFinding['evidence'] }) {
+    const rows = [
+        { label: '实际输出片段', value: evidence?.actual || '' },
+        { label: '预期结果片段', value: evidence?.expected || '' },
+    ].filter(row => row.value.trim());
+    if (rows.length === 0) return null;
+    return (
+        <div style={{ border: `1px solid ${COLORS.borderSoft}`, borderRadius: 4, background: '#fff', overflow: 'hidden' }}>
+            {rows.map((row, index) => (
+                <div key={row.label} style={{
+                    padding: '6px 8px',
+                    borderTop: index === 0 ? 'none' : `1px solid ${COLORS.borderSoft}`,
+                }}>
+                    <div style={{ fontSize: 10.5, color: COLORS.textMuted, marginBottom: 3 }}>{row.label}</div>
+                    <div style={{ fontSize: 11, color: COLORS.textSecondary, lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>{row.value}</div>
+                </div>
+            ))}
+        </div>
+    );
+}
+
+function TraceRootCauseBlock({ rootCause }: { rootCause?: ResultEvaluationFinding['traceRootCause'] }) {
+    const steps = rootCause?.relatedSteps || [];
+    return (
+        <div style={{
+            padding: '6px 8px',
+            background: '#fff',
+            border: `1px solid ${COLORS.borderSoft}`,
+            borderRadius: 4,
+        }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
+                <span style={{ fontSize: 11, fontWeight: 650, color: COLORS.textSecondary }}>执行过程原因</span>
+                {rootCause?.failureStage && (
+                    <span style={badgeStyle(COLORS.bgSoft, COLORS.textMuted, true)}>
+                        {failureStageLabel(rootCause.failureStage)}
+                    </span>
+                )}
+            </div>
+            {rootCause?.failureReason && (
+                <div style={{ fontSize: 11, color: COLORS.textSecondary, lineHeight: 1.55, marginBottom: steps.length ? 6 : 0 }}>
+                    {rootCause.failureReason}
+                </div>
+            )}
+            {steps.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {steps.map((step, index) => (
+                        <div key={index} style={{
+                            fontSize: 10.5,
+                            color: COLORS.textMuted,
+                            lineHeight: 1.45,
+                            padding: '4px 6px',
+                            background: COLORS.bgSoft,
+                            borderRadius: 3,
+                        }}>
+                            <span style={{ fontWeight: 650, color: COLORS.textSecondary }}>
+                                {step.stepIndex != null ? `步骤 #${step.stepIndex}` : `相关步骤 ${index + 1}`}
+                                {step.kind ? ` · ${step.kind}` : ''}
+                                {step.name ? ` (${step.name})` : ''}
+                            </span>
+                            {step.evidence ? `：${step.evidence}` : ''}
+                        </div>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+}
+
+function SkillAttributionBlock({
+    isSkillAttributable,
+    attributionReason,
+    improvementSuggestion,
+}: {
+    isSkillAttributable?: boolean;
+    attributionReason?: string;
+    improvementSuggestion?: string;
+}) {
+    return (
+        <div style={{
+            fontSize: 11,
+            lineHeight: 1.55,
+            color: COLORS.textSecondary,
+            padding: '6px 8px',
+            background: isSkillAttributable === false ? COLORS.bgSoft : '#f0f7f4',
+            borderLeft: `2px solid ${isSkillAttributable === false ? COLORS.textDisabled : COLORS.success}`,
+            borderRadius: 3,
+        }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: attributionReason || improvementSuggestion ? 3 : 0 }}>
+                <span style={{ fontWeight: 650, color: isSkillAttributable === false ? COLORS.textMuted : COLORS.success }}>
+                    {isSkillAttributable === false ? '非 Skill 问题' : 'Skill 归因'}
+                </span>
+            </div>
+            {attributionReason && <div>{attributionReason}</div>}
+            {improvementSuggestion && (
+                <div style={{ marginTop: attributionReason ? 3 : 0 }}>
+                    <span style={{ fontWeight: 650, color: COLORS.success, marginRight: 6 }}>改进建议</span>
+                    {improvementSuggestion}
+                </div>
+            )}
+        </div>
+    );
+}
+
+function coverageStatusLabel(status: NonNullable<ResultEvaluationFinding['coverageStatus']>): string {
+    if (status === 'covered') return '已覆盖';
+    if (status === 'partial') return '部分覆盖';
+    if (status === 'wrong') return '错误覆盖';
+    return '未覆盖';
+}
+
+function failureStageLabel(stage: NonNullable<NonNullable<ResultEvaluationFinding['traceRootCause']>['failureStage']>): string {
+    const labels: Record<NonNullable<NonNullable<ResultEvaluationFinding['traceRootCause']>['failureStage']>, string> = {
+        evidence_collection: '证据收集',
+        tool_usage: '工具使用',
+        reasoning: '推理归纳',
+        final_answer: '最终输出',
+        model_or_environment: '模型/环境',
+        unknown: '无法定位',
+    };
+    return labels[stage] || stage;
 }
 
 function SummaryPill({ label, value, mono }: { label: string; value: string; mono?: boolean }) {

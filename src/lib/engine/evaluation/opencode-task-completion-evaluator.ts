@@ -25,6 +25,14 @@ export interface TaskCompletionEvalInput {
     actualOutput: string;
     precomputedRootCauses?: RootCauseItem[];
     precomputedRootCauseSource?: 'dataset-cache' | 'none';
+    traceSummaryText?: string;
+    skillContext?: {
+        invokedSkills?: Array<{
+            name: string;
+            version?: number | null;
+            content?: string;
+        }>;
+    };
 }
 
 export interface TaskCompletionEvalOutput {
@@ -37,14 +45,14 @@ export interface TaskCompletionEvalOutput {
 const TASK_COMPLETION_EVALUATOR_NAME = 'task-completion-evaluator';
 const OPENCODE_FALLBACK_AGENT_NAME = 'build';
 
-const COORDINATOR_SYSTEM_PROMPT = `你是「Agent 任务完成度」评估器。你会收到用户输入、预期结果、实际输出，以及从标准答案中提取的关键观点。
+const COORDINATOR_SYSTEM_PROMPT = `你是「Agent 任务完成度 + 关键观点根因分析」评估器。你会收到用户输入、预期结果、实际输出、从标准答案中提取的关键观点、压缩执行轨迹 Trace Summary，以及可选的 Skill 上下文。
 
 【必须遵循的工作流程】
 1. 你必须自己逐条检查每个关键观点是否被实际输出覆盖，不要跳过任何一条。
 2. 禁止派发、调用或生成任何 subagent / task；本次评测只能由你这个主评估器独立完成。
 3. 综合预期结果、实际输出、关键观点覆盖情况，判断任务完成度。
 4. 原因 reason 只写总体判断，不要把每个关键观点逐条塞进 reason。
-5. 把关键观点覆盖情况放进独立字段 key_point_findings，供前端单独展示。
+5. 把关键观点覆盖情况、覆盖依据、未覆盖根因放进独立字段 key_point_findings，供前端单独展示。
 6. 只输出严格 JSON，不要输出 Markdown 或额外解释：
 
 {
@@ -55,19 +63,30 @@ const COORDINATOR_SYSTEM_PROMPT = `你是「Agent 任务完成度」评估器。
     {
       "content": "...",
       "covered": true,
+      "coverage_status": "covered|partial|missing|wrong",
       "severity": "low|medium|high",
       "explanation": "...",
+      "coverage_reason": "covered=true 时说明实际输出如何覆盖该观点；否则为空",
+      "missing_reason": "未覆盖/部分覆盖/错误覆盖时说明最终输出缺了什么或错了什么；否则为空",
+      "evidence": {
+        "actual": "实际输出中的相关片段，没有则为空",
+        "expected": "预期结果中的相关片段，没有则为空"
+      },
+      "trace_root_cause": {
+        "failure_stage": "evidence_collection|tool_usage|reasoning|final_answer|model_or_environment|unknown",
+        "failure_reason": "结合压缩轨迹说明问题发生原因；无证据时说明无法定位",
+        "related_steps": [
+          {
+            "step_index": 5,
+            "kind": "tool",
+            "name": "read",
+            "evidence": "该步骤与问题相关的简短证据"
+          }
+        ]
+      },
       "is_skill_attributable": false,
-      "improvement_suggestion": "仅当 covered=false 且 is_skill_attributable=true 时填，写到 SKILL.md 具体小节级"
-    }
-  ],
-  "result_issues": [
-    {
-      "kind": "format|extra_content|verbosity|incorrect_fact|other",
-      "summary": "一句话描述问题（不要复述整个产物）",
-      "severity": "low|medium|high",
-      "is_skill_attributable": true,
-      "improvement_suggestion": "在 SKILL.md 哪段加什么约束（仅 is_skill_attributable=true 时填）"
+      "attribution_reason": "为什么这个问题可/不可通过修改 Skill 降低复现概率",
+      "improvement_suggestion": "仅当 is_skill_attributable=true 时填，写到 SKILL.md 具体小节级"
     }
   ],
   "key_point_summary": "中文总结关键观点整体覆盖情况"
@@ -79,23 +98,30 @@ const COORDINATOR_SYSTEM_PROMPT = `你是「Agent 任务完成度」评估器。
 - 0.0: 没有完成任务，或实际输出与预期结果明显不符。
 - 允许输出 0.0～1.0 之间的连续分数，但必须以上述 1.0 / 0.5 / 0.0 为主要锚点，按完成度与关键观点覆盖度细化。
 
-【关于 key_point_findings 的 is_skill_attributable / improvement_suggestion 字段（仅未覆盖时关注）】
-- is_skill_attributable：若该关键观点缺失，是否由"SKILL.md 没明确要求"导致。
-  · true  → SKILL 缺规则/示例/输出约束，下游 skill-opt 会拿它去改 SKILL
-  · false → 跟 SKILL 无关（如纯模型输出能力不足、prompt 工程问题），不进 skill 优化点
-- improvement_suggestion：仅当 covered=false && is_skill_attributable=true 时填，写"在 SKILL.md 哪段加什么约束"，到小节级。
-- covered=true 的项可以省略这两个字段。
+【内部分析步骤】
+你必须按以下步骤进行内部分析，但不要输出完整 Chain-of-Thought：
+Step 1. 对比 expectedOutput 与 actualOutput，判断整体任务完成度。
+Step 2. 对每条关键观点，判断 actualOutput 是否覆盖。
+Step 3. 如果 covered=true，给出 coverage_reason，并在 evidence.actual 中摘录实际输出中的覆盖依据。
+Step 4. 如果 covered=false 或 coverage_status 不为 covered，说明最终输出缺了什么或错了什么。
+Step 5. 查看 Trace Summary，判断问题发生阶段：
+- evidence_collection：证据收集不足，如没读到关键文件、关键区域、关键日志。
+- tool_usage：工具选择、参数、顺序或补救策略有问题。
+- reasoning：trace 中已有证据，但推理归纳错了。
+- final_answer：trace 中已有正确分析，但最终输出漏写或组织错误。
+- model_or_environment：主要来自模型能力、外部环境、工具失败等，难以通过 Skill 修复。
+- unknown：压缩轨迹中没有足够证据定位。
+Step 6. 如果存在 Skill 上下文，判断 is_skill_attributable：
+- true：修改 SKILL.md 的规则、流程、检查清单、输出约束或反例约束，可以降低复现概率。
+- false：问题主要不是 Skill 文档能解决的，比如模型随机失误、工具环境失败、用户输入不可解。
+Step 7. 给出简短、可落地的 improvement_suggestion。必须具体到"在 SKILL.md 增加/修改什么约束"，不要写空泛建议。
 
-【关于 result_issues 数组（key_point_findings 之外的结果质量问题）】
-key_point_findings 只覆盖"应有但缺失"的维度。还有 4 类 result 问题需要单独提取到 result_issues：
-- kind="format"        → 输出格式不规范（缺章节、字段顺序乱、Markdown 层级错）
-- kind="extra_content" → 含明显多余/无关内容（reasoning 塞进 final_result、调试日志、自我补充的免责声明）
-- kind="verbosity"     → 表达啰嗦不简洁（同一信息反复重复、冗长前言、无必要寒暄）
-- kind="incorrect_fact"→ 数值/事实错误（与预期结果数值/术语不符）
-- kind="other"         → 上述无法归类但确实是 skill 应规避的问题
-
-每条 result_issue 也要标 is_skill_attributable + 给出 improvement_suggestion；is_skill_attributable=false 的（纯模型能力问题）下游不进 skill 优化点。
-没有这类问题就给空数组。
+【重要约束】
+- 不要输出 result_issues。
+- 不要编造 trace 证据。Trace Summary 中找不到证据时，related_steps 为空，failure_stage 使用 "unknown"。
+- 每条关键观点都必须输出一条 key_point_findings。
+- covered=true 的关键观点必须给 coverage_reason。
+- covered=false / partial / wrong 的关键观点必须给 missing_reason、trace_root_cause.failure_stage、trace_root_cause.failure_reason。
 `;
 
 function clampTaskScore(value: unknown): number {
@@ -158,6 +184,7 @@ function buildUserMessage(input: TaskCompletionEvalInput, rootCauses: RootCauseI
     const keyPointsText = rootCauses.length > 0
         ? rootCauses.map((item, index) => `${index + 1}. ${item.content}（权重 ${item.weight}）`).join('\n')
         : '（未提取到关键观点，可仅按任务完成度评判）';
+    const skillContextText = formatSkillContext(input.skillContext);
 
     return [
         '# Agent 任务完成度评测输入',
@@ -170,8 +197,21 @@ function buildUserMessage(input: TaskCompletionEvalInput, rootCauses: RootCauseI
         '',
         `## 关键观点\n${keyPointsText}`,
         '',
-        '请你自行逐条检查关键观点覆盖情况，并在不派发任何子代理的前提下完成整个任务完成度评测。',
+        `## 压缩执行轨迹\n${input.traceSummaryText?.trim() || '（无可用轨迹）'}`,
+        '',
+        `## Skill 上下文\n${skillContextText}`,
+        '',
+        '请你自行逐条检查关键观点覆盖情况，并在不派发任何子代理的前提下完成任务完成度评测和关键观点根因分析。',
     ].join('\n');
+}
+
+function formatSkillContext(skillContext: TaskCompletionEvalInput['skillContext']): string {
+    const skills = Array.isArray(skillContext?.invokedSkills) ? skillContext.invokedSkills : [];
+    if (skills.length === 0) return '（无）';
+    return skills.map((skill, index) => [
+        `### Skill ${index + 1}: ${skill.name}${skill.version != null ? ` v${skill.version}` : ''}`,
+        skill.content?.trim() || '（无 SKILL.md 内容）',
+    ].join('\n')).join('\n\n');
 }
 
 function normalizeOutput(parsed: Record<string, unknown>): TaskCompletionEvalOutput {
@@ -180,12 +220,13 @@ function normalizeOutput(parsed: Record<string, unknown>): TaskCompletionEvalOut
         ? parsed.is_correct
         : score >= 1;
     const reason = String(parsed.reason || '').trim() || '任务完成度评测已完成，但未返回理由。';
+    const { result_issues: _ignoredResultIssues, resultIssues: _ignoredResultIssuesCamel, ...rest } = parsed;
     return {
         isCorrect,
         score,
         reason,
         rawAnalysis: {
-            ...parsed,
+            ...rest,
             key_point_findings: Array.isArray(parsed.key_point_findings)
                 ? parsed.key_point_findings
                 : [],
