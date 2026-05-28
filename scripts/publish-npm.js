@@ -3,6 +3,7 @@
 const { execSync } = require('child_process')
 const fs = require('fs')
 const path = require('path')
+const { ensureStandalonePackage } = require('./prepare-npm-package.js')
 
 function runCommand(command, description, ignoreFailure = false) {
   console.log(`\n${description}...`)
@@ -93,48 +94,10 @@ function addPrerelease(version, prereleaseType) {
 
 function setupStandalone() {
   console.log('\nSetting up standalone environment...')
-  
+
   const packageRoot = process.cwd()
-  const standaloneDir = path.join(packageRoot, '.next', 'standalone')
-  
-  if (!fs.existsSync(standaloneDir)) {
-    console.log('⚠️  Standalone directory not found, skipping setup')
-    return
-  }
-  
-  const staticDir = path.join(packageRoot, '.next', 'static')
-  const standaloneStaticDir = path.join(standaloneDir, '.next', 'static')
-  
-  if (fs.existsSync(staticDir) && !fs.existsSync(standaloneStaticDir)) {
-    fs.mkdirSync(path.dirname(standaloneStaticDir), { recursive: true })
-    execSync(`cp -r "${staticDir}" "${path.dirname(standaloneStaticDir)}/"`, { stdio: 'inherit' })
-    console.log('✓ Static files copied to standalone')
-  }
-  
-  const publicDir = path.join(packageRoot, 'public')
-  const standalonePublicDir = path.join(standaloneDir, 'public')
-  
-  if (fs.existsSync(publicDir) && !fs.existsSync(standalonePublicDir)) {
-    execSync(`cp -r "${publicDir}" "${standaloneDir}/"`, { stdio: 'inherit' })
-    console.log('✓ Public files copied to standalone')
-  }
-  
-  const scriptsDir = path.join(packageRoot, 'scripts')
-  const standaloneScriptsDir = path.join(standaloneDir, 'scripts')
-  
-  if (fs.existsSync(scriptsDir) && !fs.existsSync(standaloneScriptsDir)) {
-    execSync(`cp -r "${scriptsDir}" "${standaloneDir}/"`, { stdio: 'inherit' })
-    console.log('✓ Scripts files copied to standalone')
-  }
-  
-  const prismaDir = path.join(packageRoot, 'prisma')
-  const standalonePrismaDir = path.join(standaloneDir, 'prisma')
-  
-  if (fs.existsSync(prismaDir) && !fs.existsSync(standalonePrismaDir)) {
-    execSync(`cp -r "${prismaDir}" "${standaloneDir}/"`, { stdio: 'inherit' })
-    console.log('✓ Prisma files copied to standalone')
-  }
-  
+  const standaloneDir = ensureStandalonePackage(packageRoot)
+
   const dirsToRemove = ['docs', 'data', 'src', 'skills']
   const filesToRemove = ['README.md', '.env', 'server.log', 'tsconfig.tsbuildinfo', 'package-lock.json']
   

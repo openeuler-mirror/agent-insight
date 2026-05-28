@@ -20,6 +20,7 @@
     "postinstall": "node scripts/postinstall.js",
     "dev": "next dev -p 3000",
     "build": "next build",
+    "prepack": "npm run build && node scripts/prepare-npm-package.js",
     "start": "next start -p 3000",
     "lint": "eslint",
     "test": "node --import tsx --test \"test/**/*.test.ts\"",
