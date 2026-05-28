@@ -560,31 +560,32 @@ export default function SkillOptimizePage() {
             if (!found) return;
             turns[found.idx] = { ...found.turn, blocks };
         };
-        // 在 agent turn 的 blocks 末尾追加；若末尾已经是同一类 block 且需要合并（text），直接累加 delta
-        const appendOrCoalesceBlock = (turns: ChatTurn[], block: AgentBlock) => {
-            const found = findAgentTurn(turns);
-            if (!found) return;
-            const blocks = [...found.turn.blocks];
-            const last = blocks[blocks.length - 1];
+        // agent turn 的 blocks 本地权威副本：所有 SSE 事件先同步改它，再 syncChat 反映进 React state。
+        // 收尾抠 summary（extractTailText）直接读它——绕开"靠 setChat 回调同步读最新 state"那条路径：
+        // 那条路径依赖 React 的 eager-state 计算，而 fiber 上一旦有 pending 更新（这里收尾前刚调过
+        // setOptimizedIssueIds / setCheckedIssueIds）React 就不会同步跑 updater，导致 summary 永远读成
+        // 空、落到「agent 未输出总结」兜底。
+        const localBlocks: AgentBlock[] = [];
+        const syncChat = () => patchChat(turns => updateAgentTurn(turns, [...localBlocks]));
+        // 在末尾追加；若末尾已是同类 text block 则累加 delta（合并连续文本）
+        const appendOrCoalesceBlock = (block: AgentBlock) => {
+            const last = localBlocks[localBlocks.length - 1];
             if (block.kind === 'text' && last?.kind === 'text') {
-                blocks[blocks.length - 1] = { ...last, text: last.text + block.text };
+                localBlocks[localBlocks.length - 1] = { ...last, text: last.text + block.text };
             } else {
-                blocks.push(block);
+                localBlocks.push(block);
             }
-            updateAgentTurn(turns, blocks);
+            syncChat();
         };
         // 找现有的 thinking/tool block 更新；找不到就 push
-        const upsertBlock = (turns: ChatTurn[], blockId: string, kind: AgentBlock['kind'], updater: (existing: AgentBlock | null) => AgentBlock) => {
-            const found = findAgentTurn(turns);
-            if (!found) return;
-            const blocks = [...found.turn.blocks];
-            const idx = blocks.findIndex(b => b.kind === kind && b.id === blockId);
+        const upsertBlock = (blockId: string, kind: AgentBlock['kind'], updater: (existing: AgentBlock | null) => AgentBlock) => {
+            const idx = localBlocks.findIndex(b => b.kind === kind && b.id === blockId);
             if (idx === -1) {
-                blocks.push(updater(null));
+                localBlocks.push(updater(null));
             } else {
-                blocks[idx] = updater(blocks[idx]);
+                localBlocks[idx] = updater(localBlocks[idx]);
             }
-            updateAgentTurn(turns, blocks);
+            syncChat();
         };
 
         // 3) 收尾时用：done 拿到的最终 vfs_patch files，构造一份 iteration push 进列表
@@ -652,75 +653,65 @@ export default function SkillOptimizePage() {
                     if (data.mode === 'text') {
                         agentDidWork = true;
                         const delta = String(data.payload ?? '');
-                        patchChat(turns => {
-                            appendOrCoalesceBlock(turns, {
-                                kind: 'text', id: safeUUID(), text: delta,
-                            });
-                        });
+                        appendOrCoalesceBlock({ kind: 'text', id: safeUUID(), text: delta });
                         await yieldFrame();
                     } else if (data.mode === 'thinking') {
                         const { id, delta, done: tDone } = data.payload || {};
                         if (!id) continue;
-                        patchChat(turns => {
-                            upsertBlock(turns, id, 'thinking', existing => {
-                                if (!existing || existing.kind !== 'thinking') {
-                                    return { kind: 'thinking', id, text: delta || '', done: !!tDone };
-                                }
-                                return {
-                                    ...existing,
-                                    text: existing.text + (delta || ''),
-                                    done: tDone ? true : existing.done,
-                                };
-                            });
+                        upsertBlock(id, 'thinking', existing => {
+                            if (!existing || existing.kind !== 'thinking') {
+                                return { kind: 'thinking', id, text: delta || '', done: !!tDone };
+                            }
+                            return {
+                                ...existing,
+                                text: existing.text + (delta || ''),
+                                done: tDone ? true : existing.done,
+                            };
                         });
                         await yieldFrame();
                     } else if (data.mode === 'tool_call') {
                         agentDidWork = true;
                         const { id, name, args, status } = data.payload || {};
                         if (!id) continue;
-                        patchChat(turns => {
-                            upsertBlock(turns, id, 'tool', existing => {
-                                if (!existing || existing.kind !== 'tool') {
-                                    return {
-                                        kind: 'tool', id,
-                                        name: String(name || 'tool'),
-                                        args,
-                                        status: (status === 'ok' || status === 'error') ? status : 'running',
-                                    };
-                                }
-                                // 重复 tool_call 事件 = bridge 在 delta phase 推送 input 增长。
-                                // 必须更新 args（todowrite 这类大 args 工具靠它才能拼出完整 todos 数组）。
-                                // 不要回退状态：已经 ok/error 不被新来的 'running' 覆盖。
+                        upsertBlock(id, 'tool', existing => {
+                            if (!existing || existing.kind !== 'tool') {
                                 return {
-                                    ...existing,
-                                    args: args ?? existing.args,
-                                    name: existing.name || String(name || 'tool'),
-                                    status: existing.status === 'running' && (status === 'ok' || status === 'error')
-                                        ? status
-                                        : existing.status,
+                                    kind: 'tool', id,
+                                    name: String(name || 'tool'),
+                                    args,
+                                    status: (status === 'ok' || status === 'error') ? status : 'running',
                                 };
-                            });
+                            }
+                            // 重复 tool_call 事件 = bridge 在 delta phase 推送 input 增长。
+                            // 必须更新 args（todowrite 这类大 args 工具靠它才能拼出完整 todos 数组）。
+                            // 不要回退状态：已经 ok/error 不被新来的 'running' 覆盖。
+                            return {
+                                ...existing,
+                                args: args ?? existing.args,
+                                name: existing.name || String(name || 'tool'),
+                                status: existing.status === 'running' && (status === 'ok' || status === 'error')
+                                    ? status
+                                    : existing.status,
+                            };
                         });
                     } else if (data.mode === 'tool_result') {
                         const { id, status, summary, error } = data.payload || {};
                         if (!id) continue;
-                        patchChat(turns => {
-                            upsertBlock(turns, id, 'tool', existing => {
-                                if (!existing || existing.kind !== 'tool') {
-                                    // 罕见：result 先于 call 到（无序流）；占位一个 ok
-                                    return {
-                                        kind: 'tool', id, name: 'tool',
-                                        status: status === 'error' ? 'error' : 'ok',
-                                        summary, error,
-                                    };
-                                }
+                        upsertBlock(id, 'tool', existing => {
+                            if (!existing || existing.kind !== 'tool') {
+                                // 罕见：result 先于 call 到（无序流）；占位一个 ok
                                 return {
-                                    ...existing,
+                                    kind: 'tool', id, name: 'tool',
                                     status: status === 'error' ? 'error' : 'ok',
-                                    summary: summary ?? existing.summary,
-                                    error: error ?? existing.error,
+                                    summary, error,
                                 };
-                            });
+                            }
+                            return {
+                                ...existing,
+                                status: status === 'error' ? 'error' : 'ok',
+                                summary: summary ?? existing.summary,
+                                error: error ?? existing.error,
+                            };
                         });
                     } else if (data.mode === 'vfs_patch') {
                         if (data.payload?.files) {
@@ -731,14 +722,9 @@ export default function SkillOptimizePage() {
                     } else if (data.mode === 'error') {
                         streamErrored = true;
                         const errText = typeof data.payload === 'string' ? data.payload : JSON.stringify(data.payload);
-                        patchChat(turns => {
-                            // error 也作为 block 进 agent turn（保持顺序），找不到 turn 就降级为顶级用户级错误
-                            const found = findAgentTurn(turns);
-                            const errBlock: AgentBlock = { kind: 'error', id: safeUUID(), text: errText };
-                            if (found) {
-                                turns[found.idx] = { ...found.turn, blocks: [...found.turn.blocks, errBlock] };
-                            }
-                        });
+                        // error 也作为 block 进 agent turn（保持顺序）
+                        localBlocks.push({ kind: 'error', id: safeUUID(), text: errText });
+                        syncChat();
                     }
                 }
             }
@@ -802,27 +788,20 @@ export default function SkillOptimizePage() {
             // prompt 要求 agent 在 Step 3 收尾时输出"## 修改总结"开头的结构化 markdown，所以这段
             // 内容直接就是优化报告的主体。failed 兜底：如果 agent 完全没说话，用启发式短语。
             //
-            // 通过 setChat callback 读最新 chat 状态——闭包里的 chat 变量是 startOptimize 启动时的
-            // 旧值；SSE 流改了 N 次 state 后 React 还没把新值同步回闭包。
-            let agentSummary = '';
-            setChat(currentChat => {
-                const turn = currentChat.find(t => t.kind === 'agent' && t.id === agentTurnId);
-                if (turn && turn.kind === 'agent') {
-                    agentSummary = extractTailText(turn.blocks);
-                    // 调试日志：在 DevTools console 看 agent 实际产出的 block 形态，
-                    // 帮诊断"summary 抠不到"是因为 agent 没说 / 说在了别处 / marker 不匹配
-                    if (!agentSummary) {
-                        console.warn('[skill-opt] no agent summary extracted. blocks:',
-                            turn.blocks.map(b => ({
-                                kind: b.kind,
-                                preview: b.kind === 'text' || b.kind === 'thinking' || b.kind === 'error'
-                                    ? (b.text || '').slice(0, 100)
-                                    : (b.kind === 'tool' ? `${b.name}(${JSON.stringify(b.args).slice(0, 60)})` : '?'),
-                            })));
-                    }
-                }
-                return currentChat;  // 不改变 state，纯读
-            });
+            // 直接读本地权威副本 localBlocks（流式过程中同步累积），不再靠 setChat 回调读 React state——
+            // 那条路径在 fiber 有 pending 更新时不会同步执行 updater，会把 summary 误判成空。
+            const agentSummary = extractTailText(localBlocks);
+            if (!agentSummary) {
+                // 调试日志：在 DevTools console 看 agent 实际产出的 block 形态，
+                // 帮诊断"summary 抠不到"是因为 agent 没说 / 说在了别处 / marker 不匹配
+                console.warn('[skill-opt] no agent summary extracted. blocks:',
+                    localBlocks.map(b => ({
+                        kind: b.kind,
+                        preview: b.kind === 'text' || b.kind === 'thinking' || b.kind === 'error'
+                            ? (b.text || '').slice(0, 100)
+                            : (b.kind === 'tool' ? `${b.name}(${JSON.stringify(b.args).slice(0, 60)})` : '?'),
+                    })));
+            }
 
             const draftNum = iterations.length + 1;
             const draft: OptimizationIteration = {
