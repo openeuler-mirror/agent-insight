@@ -1426,6 +1426,9 @@ function SkillAnalysisPage() {
                         onReload={reloadTraces}
                         onOptimize={() => router.push(optimizeHref)}
                         onBatchAnalyze={runBatchTraceAnalysis}
+                        traceEvaluationBatchId={traceEvaluationBatchId}
+                        traceEvaluationBatchTitle={traceEvaluationBatchTitle}
+                        onOpenEvalBatchDialog={() => setNewBatchDialogOpen(true)}
                     />
                 )}
 
@@ -1537,6 +1540,16 @@ function SkillAnalysisPage() {
 
                 {/* view === 'batch' EmbeddedDebugPanel 分支已删 */}
             </main>
+
+            {/* 新增评测任务对话框 (trace 模式 ① actions 按钮触发, dataset 模式 BatchEvaluation 自己挂另一个 dialog).
+                跨视图浮窗, 跟 main 同级避免被 sa-detail overflow 截掉。 */}
+            <NewEvaluationBatchDialog
+                open={newBatchDialogOpen}
+                user={user || ''}
+                defaultTitle={traceEvaluationBatchTitle || (selectedSkill ? `${selectedSkill.name} trace 评测` : undefined)}
+                onClose={() => setNewBatchDialogOpen(false)}
+                onCreated={handleTraceEvalBatchCreated}
+            />
         </div>
     );
 }
@@ -2927,12 +2940,20 @@ function TraceDeviationPanel({
     onReload,
     onOptimize,
     onBatchAnalyze,
+    traceEvaluationBatchId,
+    traceEvaluationBatchTitle,
+    onOpenEvalBatchDialog,
 }: {
     skill: SkillOption | null;
     version: number | null;
     user: string | null;
     traces: TraceRecord[];
     loading: boolean;
+    /** 评测批次关联 (trace 模式 ① actions 显示); 父组件 SkillAnalysisPage 维护 state + localStorage 持久化 */
+    traceEvaluationBatchId?: string;
+    traceEvaluationBatchTitle?: string;
+    /** 点击 "+ 新增评测任务" / "切换/新建" 按钮触发的 callback, 由父组件打开 NewEvaluationBatchDialog */
+    onOpenEvalBatchDialog?: () => void;
     prefillTraceId: string;
     selectedTraceId: string;
     onSelectedTraceChange: (id: string) => void;
@@ -3695,6 +3716,55 @@ function TraceDeviationPanel({
                         <span>· 关联 <code>{traces.length}</code> 条</span>
                         <span>· 已评测 <code>{fullyEvaluated.length}</code></span>
                     </>
+                }
+                // trace 模式评测任务关联: 跟 dataset 模式 BatchEvaluation 的 ① actions 一致样式。
+                // 已关联时显示紫色徽章 + "切换/新建"; 未关联时只有"+ 新增评测任务"按钮。
+                // state 走 traceEvaluationBatchId / 持久化在 localStorage (SkillAnalysisPage 维护)。
+                actions={
+                    traceEvaluationBatchId ? (
+                        <>
+                            <span
+                                title={`评测执行批次 ID: ${traceEvaluationBatchId}`}
+                                style={{
+                                    display: 'inline-flex', alignItems: 'center', gap: 5,
+                                    padding: '3px 9px',
+                                    background: '#F5E8FF',
+                                    border: '1px solid rgba(126,34,206,.2)',
+                                    borderRadius: 99,
+                                    fontSize: 11.5, fontWeight: 600, color: '#7E22CE',
+                                    maxWidth: 240, overflow: 'hidden',
+                                    textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                }}
+                            >
+                                📋 {traceEvaluationBatchTitle || traceEvaluationBatchId.slice(0, 8)}
+                            </span>
+                            <button
+                                type="button"
+                                onClick={() => onOpenEvalBatchDialog?.()}
+                                style={{
+                                    padding: '4px 9px',
+                                    background: '#fff', border: '1px solid #D4D4D8',
+                                    borderRadius: 5, fontSize: 11.5, fontWeight: 500,
+                                    color: '#52525B', cursor: 'pointer',
+                                }}
+                            >
+                                切换 / 新建
+                            </button>
+                        </>
+                    ) : (
+                        <button
+                            type="button"
+                            onClick={() => onOpenEvalBatchDialog?.()}
+                            style={{
+                                padding: '5px 12px',
+                                background: '#4F46E5', border: '1px solid #4F46E5',
+                                color: '#fff', borderRadius: 5,
+                                fontSize: 11.5, fontWeight: 600, cursor: 'pointer',
+                            }}
+                        >
+                            + 新增评测任务
+                        </button>
+                    )
                 }
             >
                 {/* source-mode 切换 chip：放在 ① 配置块内（用户要求） */}

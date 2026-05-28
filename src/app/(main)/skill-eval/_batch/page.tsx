@@ -1423,88 +1423,59 @@ export function BatchEvaluation({
             >
             {topConfigSlot}
             {/* Task Strip */}
-            <div className="task-strip">
-                <div className="task-strip-top">
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                        <div className="task-strip-eyebrow">{locale === 'zh' ? '当前评测任务' : 'CURRENT EVAL TASK'}</div>
-                        {isEditingTask ? (
-                            <div className="task-inline-edit" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 6 }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                    <input
-                                        className="task-inline-input"
-                                        value={taskNameInput}
-                                        onChange={e => setTaskNameInput(e.target.value)}
-                                        onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) handleSaveTask(); if (e.key === 'Escape' && currentTask) { setIsEditingTask(false); setTaskNameInput(''); } }}
-                                        placeholder={locale === 'zh' ? '请输入评测名称…' : 'Enter task name…'}
-                                        autoFocus
-                                    />
-                                    <button className="d-btn sm primary" onClick={handleSaveTask} disabled={!taskNameInput.trim() || isCreatingTask}>
-                                        {isCreatingTask ? (locale === 'zh' ? '保存中…' : 'Saving…') : (locale === 'zh' ? '保存' : 'Save')}
-                                    </button>
-                                    {currentTask && (
-                                        <button className="d-btn sm" onClick={() => { setIsEditingTask(false); setTaskNameInput(''); }}>
-                                            {locale === 'zh' ? '取消' : 'Cancel'}
-                                        </button>
-                                    )}
-                                </div>
-                                <input
-                                    className="task-inline-input"
-                                    style={{ fontSize: 12, fontWeight: 400 }}
-                                    value={taskDescInput}
-                                    onChange={e => setTaskDescInput(e.target.value)}
-                                    placeholder={locale === 'zh' ? '任务描述（可选）…' : 'Task description (optional)…'}
-                                />
-                            </div>
-                        ) : (
-                            <div>
-                                <div className="task-strip-title">
-                                    {currentTask?.taskName}
-                                    <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--ink-3)' }}>
-                                        {currentTask && new Date(currentTask.createdAt).toLocaleString(locale === 'zh' ? 'zh-CN' : 'en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
-                                    </span>
-                                </div>
-                                {isEditingDesc ? (
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
-                                        <input
-                                            className="task-inline-input"
-                                            style={{ fontSize: 12, fontWeight: 400 }}
-                                            value={taskDescInput}
-                                            onChange={e => setTaskDescInput(e.target.value)}
-                                            onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) handleSaveDesc(); if (e.key === 'Escape') { setIsEditingDesc(false); setTaskDescInput(currentTask?.configJson?.taskDescription || ''); } }}
-                                            placeholder={locale === 'zh' ? '描述这个评测任务的目标…' : 'Describe the goal of this task…'}
-                                            autoFocus
-                                        />
-                                        <button className="d-btn sm primary" onClick={handleSaveDesc}>{locale === 'zh' ? '确定' : 'OK'}</button>
-                                        <button className="d-btn sm" onClick={() => { setIsEditingDesc(false); setTaskDescInput(currentTask?.configJson?.taskDescription || ''); }}>{locale === 'zh' ? '取消' : 'Cancel'}</button>
-                                    </div>
-                                ) : taskDescInput ? (
-                                    <div className="task-strip-desc" onClick={() => setIsEditingDesc(true)} style={{ cursor: 'text' }}>{taskDescInput}</div>
-                                ) : currentTask && (
-                                    <div className="task-strip-desc task-strip-desc-placeholder" onClick={() => setIsEditingDesc(true)}>
-                                        {locale === 'zh' ? '+ 添加任务描述' : '+ Add description'}
-                                    </div>
-                                )}
-                            </div>
+            {/* 调试任务 (BatchEvalTask) 紧凑行 —— 原 task-strip 大卡片下线, 改成跟 A/B 一致的
+                "任务名 + 历史 + 新建" 一行 chip 样式。BatchEvalTask 跟"评测任务关联"(evaluationBatchId)
+                是两个概念: 前者是用例分析自己的 task 实体 (存 dataset/skill/caseStates),
+                后者在 ① actions 的紫色"评测任务"徽章。
+                isEditingTask=true (首次无 task / 点新建) 时显示 inline 输入框。 */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0 10px', fontSize: 12.5, flexWrap: 'wrap' }}>
+                {isEditingTask ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1 }}>
+                        <input
+                            className="task-inline-input"
+                            value={taskNameInput}
+                            onChange={e => setTaskNameInput(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) handleSaveTask(); if (e.key === 'Escape' && currentTask) { setIsEditingTask(false); setTaskNameInput(''); } }}
+                            placeholder={locale === 'zh' ? '请输入调试任务名称…' : 'Enter task name…'}
+                            autoFocus
+                            style={{ maxWidth: 280 }}
+                        />
+                        <button className="d-btn sm primary" onClick={handleSaveTask} disabled={!taskNameInput.trim() || isCreatingTask}>
+                            {isCreatingTask ? (locale === 'zh' ? '保存中…' : 'Saving…') : (locale === 'zh' ? '保存' : 'Save')}
+                        </button>
+                        {currentTask && (
+                            <button className="d-btn sm" onClick={() => { setIsEditingTask(false); setTaskNameInput(''); }}>
+                                {locale === 'zh' ? '取消' : 'Cancel'}
+                            </button>
                         )}
                     </div>
-                    <button
-                        className="d-btn sm"
-                        onClick={() => setShowHistoryDrawer(true)}
-                        title={locale === 'zh' ? '查看历史评测任务' : 'View history'}
-                    >
-                        <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
-                            <circle cx="5.5" cy="5.5" r="4.5" stroke="currentColor" strokeWidth="1.4"/>
-                            <path d="M5.5 3v2.5l1.8 1.8" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
-                        </svg>
-                        {locale === 'zh' ? '历史任务' : 'History'}
-                    </button>
-                    <button className="d-btn sm primary" onClick={handleNewTask}>
-                        <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-                            <path d="M5 1v8M1 5h8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-                        </svg>
-                        {locale === 'zh' ? '新建评测' : 'New Task'}
-                    </button>
-                </div>
+                ) : (
+                    <>
+                        <span style={{ color: 'var(--ink-3)' }}>{locale === 'zh' ? '调试任务:' : 'Debug task:'}</span>
+                        <b style={{ color: 'var(--ink-1, #18181B)', maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {currentTask?.taskName || '—'}
+                        </b>
+                        <button
+                            className="d-btn sm"
+                            onClick={() => setShowHistoryDrawer(true)}
+                            title={locale === 'zh' ? '切换历史调试任务' : 'Switch task'}
+                            style={{ padding: '2px 8px' }}
+                        >
+                            <svg width="10" height="10" viewBox="0 0 11 11" fill="none" style={{ marginRight: 3 }}>
+                                <circle cx="5.5" cy="5.5" r="4.5" stroke="currentColor" strokeWidth="1.4"/>
+                                <path d="M5.5 3v2.5l1.8 1.8" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+                            </svg>
+                            {locale === 'zh' ? '历史' : 'History'}
+                        </button>
+                        <button
+                            className="d-btn sm"
+                            onClick={handleNewTask}
+                            style={{ padding: '2px 8px' }}
+                        >
+                            + {locale === 'zh' ? '新建' : 'New'}
+                        </button>
+                    </>
+                )}
             </div>
 
             {/* Config Bar */}
