@@ -483,6 +483,7 @@ async function runGeneralAgentWithClient(
         // 从 Trace 视图按 skill 过滤能搜到。
         skill: skillMeta?.name ?? input.skill ?? input.tagSkill,
         skillVersion: skillMeta?.version ?? input.skillVersion,
+        fallbackOutput: result.text,
       });
     } catch (err) {
       console.warn(`[general-agent] recordTraceAs failed for session ${sessionId}:`, (err as Error)?.message || err);

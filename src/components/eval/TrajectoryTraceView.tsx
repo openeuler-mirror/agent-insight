@@ -27,6 +27,7 @@ export default function TrajectoryTraceView({ traceId }: { traceId: string }) {
     const params = useSearchParams();
     const runId = params?.get('runId') || '';
     const datasetId = params?.get('datasetId') || '';
+    const resultId = params?.get('resultId') || '';
     const autoWatchOnly = params?.get('autoWatchOnly') === '1' || params?.get('autoWatchOnly') === 'true';
 
     const [interactions, setInteractions] = useState<any[] | null>(null);
@@ -80,6 +81,7 @@ export default function TrajectoryTraceView({ traceId }: { traceId: string }) {
         const qs: string[] = [];
         if (runId) qs.push(`runId=${encodeURIComponent(runId)}`);
         if (datasetId) qs.push(`datasetId=${encodeURIComponent(datasetId)}`);
+        if (resultId) qs.push(`resultId=${encodeURIComponent(resultId)}`);
         if (autoWatchOnly) qs.push('autoWatchOnly=1');
         const suffix = qs.length > 0 ? `?${qs.join('&')}` : '';
         router.push(`/eval/trajectory/${encodeURIComponent(traceId)}${suffix}`);

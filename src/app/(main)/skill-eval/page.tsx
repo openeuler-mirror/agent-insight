@@ -5,7 +5,6 @@
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { AppTopBar } from '@/components/shell/AppTopBar';
-import { SkillAnalysisHeader } from './_components/SkillAnalysisHeader';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
 import { isInternalSystemAgentTrace, shouldHideFromCaseAnalysis, classifyTraceSource } from '@/lib/system-agent-names';
@@ -1366,52 +1365,57 @@ function SkillAnalysisPage() {
         setPrefillTraceId('');
     }, []);
 
-    // overview 直接用 plain title；其余 detail views（含 gray / trace / static / batch）
-    // 都把 skill+version 选择内嵌到路径里，让 AppTopBar 与下方任务卡构成"同一平面"的
-    // 详情对象头（patterns.md §A.5.3 detail-object 的轻量等价）。
-    // gray 视图同步隐藏 gh-skill-summary 里的 Skill 选择器，避免双倍控件。
-    const title = view === 'overview'
-        ? 'Skills 分析'
-        : (
-                <span className="sa-top-title">
+    // skill + version 统一并入 AppTopBar，让 overview 与 detail views 共用同一导航头。
+    const title = (
+        <span className="sa-top-title">
+            {view === 'overview' ? (
+                <span>Skills 分析</span>
+            ) : (
+                <>
                     <button onClick={() => setView('overview')}>Skills 分析</button>
                     <span>/</span>
                     <b>{viewTitle(view)}</b>
-                    <span className="sa-top-dot">·</span>
-                    <select
-                        className="sa-top-select"
-                        value={selectedSkillId}
-                        onChange={e => {
-                            const next = skills.find(s => s.id === e.target.value);
-                            setSelectedSkillId(e.target.value);
-                            setSelectedVersion(next ? resolveSkillVersion(next) : null);
-                        }}
-                        disabled={skillsLoading}
-                        aria-label="切换 Skill"
-                    >
-                        {skills.length === 0 && <option value="">暂无 Skill</option>}
-                        {skills.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                    </select>
-                    <select
-                        className="sa-top-select sa-top-select-version"
-                        value={selectedVersion ?? ''}
-                        onChange={e => setSelectedVersion(Number(e.target.value))}
-                        disabled={!selectedSkill}
-                        aria-label="切换版本"
-                    >
-                        {sortedVersions.length === 0 && selectedSkill && (
-                            <option value={selectedSkill.activeVersion ?? selectedSkill.version ?? 0}>
-                                v{selectedSkill.activeVersion ?? selectedSkill.version ?? 0}
-                            </option>
-                        )}
-                        {sortedVersions.map(v => (
-                            <option key={v.version} value={v.version}>
-                                v{v.version}{v.version === selectedSkill?.activeVersion ? '（当前）' : ''}
-                            </option>
-                        ))}
-                    </select>
-                </span>
-            );
+                </>
+            )}
+            <span className="sa-top-dot">·</span>
+            <select
+                className="sa-top-select"
+                value={selectedSkillId}
+                onChange={e => {
+                    const next = skills.find(s => s.id === e.target.value);
+                    setSelectedSkillId(e.target.value);
+                    setSelectedVersion(next ? resolveSkillVersion(next) : null);
+                    setView('overview');
+                }}
+                disabled={skillsLoading}
+                aria-label="切换 Skill"
+            >
+                {skills.length === 0 && <option value="">暂无 Skill</option>}
+                {skills.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+            <select
+                className="sa-top-select sa-top-select-version"
+                value={selectedVersion ?? ''}
+                onChange={e => {
+                    setSelectedVersion(Number(e.target.value));
+                    setView('overview');
+                }}
+                disabled={!selectedSkill}
+                aria-label="切换版本"
+            >
+                {sortedVersions.length === 0 && selectedSkill && (
+                    <option value={selectedSkill.activeVersion ?? selectedSkill.version ?? 0}>
+                        v{selectedSkill.activeVersion ?? selectedSkill.version ?? 0}
+                    </option>
+                )}
+                {sortedVersions.map(v => (
+                    <option key={v.version} value={v.version}>
+                        v{v.version}{v.version === selectedSkill?.activeVersion ? '（当前）' : ''}
+                    </option>
+                ))}
+            </select>
+        </span>
+    );
 
     return (
         <div className="sa-root">
@@ -1423,43 +1427,6 @@ function SkillAnalysisPage() {
             <main className="sa-main">
                 {/* view === 'batch' DetailHeader 分支已删——'batch' 视图整体下线，
                     BatchEvaluation 现作为 trace 模式 ① 配置块"从数据集"子流程的内核 */}
-                {view === 'overview' && (
-                    <SkillAnalysisHeader
-                        // overview 才渲染这个大卡；其余 detail view 的 skill+version 已经移到 AppTopBar 路径里。
-                        // AppTopBar 已经显示 "Skills 分析"，这里再渲染面包屑就是重复——直接传空。
-                        crumbs={[]}
-                        skills={skills}
-                        selectedSkillId={selectedSkillId}
-                        skillsLoading={skillsLoading}
-                        onSelectSkill={(id) => {
-                            const next = skills.find(s => s.id === id);
-                            setSelectedSkillId(id);
-                            setSelectedVersion(next ? resolveSkillVersion(next) : null);
-                            setView('overview');
-                        }}
-                        monogram={getSkillMonogram(selectedSkill?.name)}
-                        versions={
-                            sortedVersions.length > 0
-                                ? sortedVersions.map(v => ({
-                                      version: v.version,
-                                      isActive: v.version === selectedSkill?.activeVersion,
-                                      label: `v${v.version}${v.version === selectedSkill?.activeVersion ? '（当前）' : ''}${v.createdAt ? ` · ${formatShortDate(v.createdAt)}` : ''}`,
-                                  }))
-                                : selectedSkill
-                                ? [{
-                                      version: selectedSkill.activeVersion ?? selectedSkill.version ?? 0,
-                                      label: `v${selectedSkill.activeVersion ?? selectedSkill.version ?? 0}`,
-                                  }]
-                                : []
-                        }
-                        selectedVersion={selectedVersion}
-                        onSelectVersion={(v) => {
-                            setSelectedVersion(v);
-                            setView('overview');
-                        }}
-                    />
-                )}
-
                 {view === 'overview' && (
                   <>
                     <AnalysisOverview
@@ -2564,7 +2531,7 @@ function AnalysisOverview({
                     <div className="sa-cta-list">
                         <label
                             className={`sa-cta-row${!staticCanTest ? ' disabled' : ''}`}
-                            title={staticCanTest ? '可触发详情页“重新扫描”' : '需先选择 Skill 与版本'}
+                            title={staticCanTest ? '可触发详情页“重新分析”' : '需先选择 Skill 与版本'}
                         >
                             <input type="checkbox" checked={selectedRunKeys.includes('static')} onChange={() => toggleRunKey('static')} disabled={!staticCanTest} />
                             <span className="dot" style={{ '--cdot': 'var(--sa-purple)' } as React.CSSProperties}></span>
@@ -2969,21 +2936,6 @@ function AnalysisOverview({
                                 <div className="sa-card-stat">
                                     <div className="sa-card-stat-label">稳定性</div>
                                     <div className="sa-card-stat-val">{graySummary?.scoring.stability.invokeRate == null ? '—' : `${graySummary.scoring.stability.invokeRate}% 触发`}</div>
-                                </div>
-                            </div>
-
-                            <div className="sa-card-stats">
-                                <div className="sa-card-stat">
-                                    <div className="sa-card-stat-label">对比版本</div>
-                                    <div className="sa-card-stat-val">{grayPairLabel}</div>
-                                </div>
-                                <div className="sa-card-stat">
-                                    <div className="sa-card-stat-label">样本</div>
-                                    <div className="sa-card-stat-val">{graySummary ? `${graySampleLabel} · ${grayRunLabel}` : '待选择样本'}</div>
-                                </div>
-                                <div className="sa-card-stat">
-                                    <div className="sa-card-stat-label">显著性</div>
-                                    <div className="sa-card-stat-val">{grayPValueLabel}</div>
                                 </div>
                             </div>
 
@@ -5608,7 +5560,7 @@ function StaticCompliancePanel({
                 metaSlot={metaSlot}
                 onBack={onBack}
                 onPrimary={runStaticEval}
-                primaryLabel={running ? '扫描中...' : '重新扫描'}
+                primaryLabel={running ? '分析中...' : '重新分析'}
                 onOptimize={onOptimize}
             />
 
@@ -6707,14 +6659,6 @@ function iconFor(kind: 'trace' | 'static' | 'gray' | 'batch') {
         batch: '☷',
     };
     return icons[kind];
-}
-
-function getSkillMonogram(name?: string | null) {
-    const cleaned = (name || '').trim();
-    if (!cleaned) return 'SK';
-    const ascii = cleaned.replace(/[^a-zA-Z0-9]/g, '');
-    if (ascii.length >= 2) return ascii.slice(0, 2).toUpperCase();
-    return cleaned.slice(0, 2).toUpperCase();
 }
 
 function viewTitle(view: AnalysisView) {

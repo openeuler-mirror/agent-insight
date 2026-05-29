@@ -23,6 +23,7 @@ import {
 } from '@/lib/engine/observability/flow-parser';
 import { extractRealUserInput, findBestSemanticCaseMatch } from '@/lib/engine/evaluation/semantic-dataset-match';
 import { extractTaskResultArtifact } from '@/lib/engine/evaluation/result-artifact-extractor';
+import { parseLooseJson } from '@/lib/engine/evaluation/task-completion-json';
 import {
     extractTrajectoryTaskMeta,
     normalizeTrajectoryTaskMeta,
@@ -147,32 +148,6 @@ function normalizeOptionalVersion(value: unknown): number | null {
         return Number.isFinite(parsed) ? parsed : null;
     }
     return null;
-}
-
-function parseLooseJson(text: string): Record<string, unknown> | null {
-    const trimmed = text.trim();
-    const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
-    const candidate = fenced ? fenced[1] : trimmed;
-    try {
-        const parsed = JSON.parse(candidate);
-        return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-            ? parsed as Record<string, unknown>
-            : null;
-    } catch {
-        const first = candidate.indexOf('{');
-        const last = candidate.lastIndexOf('}');
-        if (first !== -1 && last !== -1 && last > first) {
-            try {
-                const parsed = JSON.parse(candidate.slice(first, last + 1));
-                return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-                    ? parsed as Record<string, unknown>
-                    : null;
-            } catch {
-                return null;
-            }
-        }
-        return null;
-    }
 }
 
 function normalizeSelectedEvaluators(value: unknown): string[] {
@@ -1167,6 +1142,13 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
                 throw new StagedEvaluationError('trace-parse', `Session.interactions JSON 解析失败: ${(e as Error).message}`, e);
             }
         }
+    }
+    if (interactions.length === 0 && (traceQuery || fallbackFinalResult)) {
+        const timestamp = new Date().toISOString();
+        interactions = [
+            ...(traceQuery ? [{ role: 'user', content: traceQuery, timestamp }] : []),
+            ...(fallbackFinalResult ? [{ role: 'assistant', content: fallbackFinalResult, timestamp }] : []),
+        ] as TrajectoryEvalInput['actualInteractions'];
     }
     let caseEntry: {
         id?: string;

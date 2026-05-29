@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { buildAgentCallTree } from '@/lib/engine/observability/agent-trace';
-import { normalizeEvaluatorExecutionInteractions } from '@/lib/engine/evaluation/evaluator-execution-recorder';
+import {
+  ensureEvaluatorExecutionInteractions,
+  normalizeEvaluatorExecutionInteractions,
+} from '@/lib/engine/evaluation/evaluator-execution-recorder';
 
 test('normalizes evaluator raw messages into trace interactions', () => {
   const rawMessages = [
@@ -65,4 +68,36 @@ test('ignores non-opencode records during normalization', () => {
     undefined,
   ] as any[]);
   assert.deepEqual(interactions, []);
+});
+
+test('falls back to query and final output when opencode messages are empty', () => {
+  const interactions = ensureEvaluatorExecutionInteractions([], {
+    taskId: 'ses_empty',
+    agentName: 'grayscale-baseline-agent',
+    user: 'tester',
+    query: 'diagnose high cpu',
+    fallbackOutput: 'top process is rg',
+  });
+
+  assert.equal(interactions.length, 2);
+  assert.equal(interactions[0]?.role, 'user');
+  assert.equal(interactions[0]?.content, 'diagnose high cpu');
+  assert.equal(interactions[1]?.role, 'assistant');
+  assert.equal(interactions[1]?.content, 'top process is rg');
+  assert.equal(interactions[1]?.agent, 'grayscale-baseline-agent');
+});
+
+test('appends fallback output when messages lack assistant content', () => {
+  const interactions = ensureEvaluatorExecutionInteractions([
+    { role: 'user', content: 'diagnose high cpu' },
+  ], {
+    taskId: 'ses_user_only',
+    agentName: 'grayscale-baseline-agent',
+    query: 'diagnose high cpu',
+    fallbackOutput: 'answer from chat result',
+  });
+
+  assert.equal(interactions.length, 2);
+  assert.equal(interactions[1]?.role, 'assistant');
+  assert.equal(interactions[1]?.content, 'answer from chat result');
 });

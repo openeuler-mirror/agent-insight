@@ -7,32 +7,36 @@
 后端会提供 `.agent-insight/agent-debug-input.json`，结构如下：
 
 - `execution`：执行记录，包含任务、失败摘要、评分和评测原因。
-- `turns`：归一化后的 assistant/subagent/opencode step。
+- `turns`：归一化后的 assistant/subagent/opencode 可见 turn。
 - `traceBundle`：长文本 trace 资料包路径。
 
 `turns` 是主事实源。trace bundle 只在证据缺失或需要确认锚点时读取。
 
-## Step 定义
+## 内部记录与左侧节点
 
-一个 AgentDebug step 等于一个归一化的 assistant/subagent/opencode turn。每个 step 输出一个 `stepRecord`：
+一个 `stepRecord` 等于一个归一化的 assistant/subagent/opencode 可见 turn，用于认知拆分。它不是左侧执行链路里的每一个 atomic node。左侧执行链路可能把用户输入、模型调用、工具调用、Skill 调用都拆成独立节点；一个可见 turn 可能包含多个工具节点。
 
-- `step`：归一化 step 编号。
-- `step`：对外展示必须使用原始 fault-path 的 `step_index`；不要使用 AgentDebug 自己的连续诊断序号。
-- `diagnosticStep`：可选，表示 AgentDebug 内部连续诊断序号，仅用于调试，不用于 UI 主展示。
+每个 `stepRecord` 输出：
+
+- `step`：兼容字段，优先填左侧 trace 节点编号。
+- `diagnosticStep`：AgentDebug 内部连续诊断序号，仅用于调试，不用于 UI 主展示。
+- `traceStepIndex`：左侧执行链路节点编号，用户界面和跳转文案以它为准。
+- `traceNodeLabel`：左侧节点标题，例如 `模型调用 · OpenAI`、`工具调用 · bash tree ...`。
+- `traceNodeKind`：左侧节点类型，例如 `llm`、`tool`、`skill`、`task`、`agent`。
 - `sourceInteractionIndex`：原始 interaction 下标。
-- `title`：通常是 `Step <n>`。
+- `title`：可使用 `traceNodeLabel`。
 - `inputContext`：当前 step 可见输入或历史摘要。
 - `agentOutput`：reasoningText 与 text 的可见输出拼接。
 - `environmentResponse`：工具或环境返回的最短有用证据。
 - `anchorId`：可定位到 trace 的锚点。
 - `modules`：Memory、Reflection、Planning、Action、System。
 
-编号规则：
+定位规则：
 
-- 如果 turn 或 tool call 提供 `traceStepIndex`，所有报告中的 `step` 必须使用它。
-- Action 类问题优先使用具体工具调用的 `traceStepIndex`。
-- Planning/Memory/Reflection 类问题使用当前 LLM/assistant turn 的 `traceStepIndex`。
-- 不要在用户可见字段里混用 `Step 12` 与原始故障的 `第40步` 两套编号。
+- Action/System 类问题优先使用具体工具调用的 `anchorId`、`traceStepIndex`、`traceNodeLabel`。
+- Planning/Memory/Reflection 类问题使用当前 LLM/assistant turn 的 `anchorId`、`traceStepIndex`、`traceNodeLabel`。
+- `rootCause` 和 `cascadingChain` 必须保留同样的左侧节点定位字段，方便 UI 跳转。
+- 不要在自然语言字段里写“诊断 Step 2”“Turn 2”这类内部编号；如需说明位置，写“左侧节点 #n”或直接依赖结构化字段。
 
 ## 拆分优先级
 
@@ -74,7 +78,7 @@ Memory 表示 Agent 回忆或依赖过去信息：
 - 引用过去读过的文件、路径、日志、报错、修改。
 - 使用“之前、刚才、上一步、根据刚才输出”等表达。
 
-Step 1 默认 Memory 留白，除非明确引用 trace 前已有历史。
+首个记录默认 Memory 留白，除非明确引用 trace 前已有历史。
 
 ## Reflection 拆分
 
@@ -85,7 +89,7 @@ Reflection 表示 Agent 对先前动作结果、当前进度或任务状态的�
 - 判断当前进度。
 - 修正先前认知。
 
-Step 1 默认 Reflection 留白，除非明确评价 trace 前已有上下文。
+首个记录默认 Reflection 留白，除非明确评价 trace 前已有上下文。
 
 ## Planning 拆分
 
@@ -118,6 +122,6 @@ Planning 表示 Agent 对下一步的计划、策略、todo 或工具意图：
 
 ## 全量分析要求
 
-不要使用候选窗口裁剪 trace。脚本和智能诊断 agent 必须对输入文件中的全部 `turns` 建立 `stepRecords`，并对全部 step 做 Phase 1 检测。
+不要使用候选窗口裁剪 trace。脚本和智能诊断 agent 必须对输入文件中的全部 `turns` 建立 `stepRecords`，并对全部记录做 Phase 1 检测。
 
 原始故障类报告中的 failures 只能作为任务背景和最终对照，不应限制分析范围，也不应决定根因。

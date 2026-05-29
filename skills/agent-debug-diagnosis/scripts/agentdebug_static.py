@@ -69,6 +69,8 @@ def build_step_records(turns: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     for index, turn in enumerate(turns):
         source_step = int(turn.get("step") or turn.get("turnIndex") or index + 1)
         trace_step = int(turn.get("traceStepIndex") or source_step)
+        trace_label = text(turn.get("traceNodeLabel"), 160) or f"节点 #{trace_step}"
+        trace_kind = text(turn.get("traceNodeKind"), 80) or "llm"
         reasoning = text(turn.get("reasoningText"), 6000)
         visible = text(turn.get("text"), 6000)
         agent_output = "\n\n".join(part for part in [reasoning, visible] if part)
@@ -85,8 +87,11 @@ def build_step_records(turns: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             {
                 "step": trace_step,
                 "diagnosticStep": source_step,
+                "traceStepIndex": trace_step,
+                "traceNodeLabel": trace_label,
+                "traceNodeKind": trace_kind,
                 "sourceInteractionIndex": int(turn.get("sourceInteractionIndex") or max(0, source_step - 1)),
-                "title": f"Step {trace_step}",
+                "title": trace_label,
                 "inputContext": truncate(text(turn.get("inputContext") or turn.get("requestContextPreview"), 1200), 1200),
                 "agentOutput": truncate(agent_output, 4000),
                 "environmentResponse": truncate(env, 1600),
@@ -182,6 +187,34 @@ def first_anchor(turn: Dict[str, Any], tools: List[Dict[str, Any]]) -> Optional[
     return str(anchors[0]) if anchors else None
 
 
+def record_location(record: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "diagnostic_step": int(record.get("diagnosticStep") or record.get("step") or 1),
+        "trace_step_index": int(record.get("traceStepIndex") or record.get("step") or 1),
+        "trace_node_label": text(record.get("traceNodeLabel"), 160) or text(record.get("title"), 160),
+        "trace_node_kind": text(record.get("traceNodeKind"), 80) or "llm",
+    }
+
+
+def tool_location(tool: Dict[str, Any], record: Dict[str, Any]) -> Dict[str, Any]:
+    fallback = record_location(record)
+    trace_step = int(tool.get("traceStepIndex") or fallback["trace_step_index"])
+    return {
+        "diagnostic_step": fallback["diagnostic_step"],
+        "trace_step_index": trace_step,
+        "trace_node_label": text(tool.get("traceNodeLabel"), 160) or format_tool_label(tool, trace_step),
+        "trace_node_kind": text(tool.get("traceNodeKind"), 80) or "tool",
+    }
+
+
+def format_tool_label(tool: Dict[str, Any], trace_step: int) -> str:
+    name = text(tool.get("name"), 80) or "tool"
+    command = tool_command(tool)
+    if command:
+        return f"{name} {truncate(command, 96)}"
+    return f"{name} 节点 #{trace_step}"
+
+
 def run_static_detectors(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     cells: List[Dict[str, Any]] = []
     call_counter: Counter[str] = Counter()
@@ -193,11 +226,12 @@ def run_static_detectors(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         reflection = record["modules"]["reflection"]["content"]
         system_content = record["modules"]["system"]["content"]
         anchor = record.get("anchorId")
+        location = record_location(record)
 
-        cells.extend(detect_action(step, tools, call_counter, anchor))
-        cells.extend(detect_system(resolve_system_step(step, tools), system_content, anchor))
-        cells.extend(detect_planning(step, planning, tools, anchor))
-        cells.extend(detect_reflection(step, reflection, previous_record(records, step), anchor))
+        cells.extend(detect_action(record, tools, call_counter, anchor))
+        cells.extend(detect_system(resolve_system_location(record, tools), system_content, anchor))
+        cells.extend(detect_planning(step, planning, tools, anchor, location))
+        cells.extend(detect_reflection(step, reflection, previous_record(records, step), anchor, location))
 
         for tool in tools:
             call_counter[f"{tool.get('name')}::{compact_json(tool.get('args'), 400)}"] += 1
@@ -229,29 +263,31 @@ def parse_tools_from_action(record: Dict[str, Any]) -> List[Dict[str, Any]]:
     return tools
 
 
-def resolve_system_step(step: int, tools: List[Dict[str, Any]]) -> int:
+def resolve_system_location(record: Dict[str, Any], tools: List[Dict[str, Any]]) -> Dict[str, Any]:
     for tool in tools:
         status = text(tool.get("status"), 80)
         evidence = tool_output(tool) or text(tool.get("output"), 1000)
         name = text(tool.get("name"), 100)
         if status == "error" or (is_shell_like(name) and FAILURE_RE.search(evidence)):
-            return int(tool.get("traceStepIndex") or step)
-    return step
+            return tool_location(tool, record)
+    return record_location(record)
 
 
-def detect_action(step: int, tools: List[Dict[str, Any]], call_counter: Counter[str], anchor: Optional[str]) -> List[Dict[str, Any]]:
+def detect_action(record: Dict[str, Any], tools: List[Dict[str, Any]], call_counter: Counter[str], anchor: Optional[str]) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
+    step = int(record.get("step") or 1)
     for tool in tools:
         name = text(tool.get("name"), 100)
         evidence = tool_output(tool) or text(tool.get("output"), 1000)
         command = tool_command(tool)
         status = text(tool.get("status"), 80)
         display_step = int(tool.get("traceStepIndex") or step)
+        location = tool_location(tool, record)
 
         if status == "error" or (is_shell_like(name) and FAILURE_RE.search(evidence)):
             error_type, reason, severity = classify_action_error(evidence, command)
             out.append(
-                phase1_cell(display_step, "action", error_type, severity, evidence or command, reason, 0.88, text(tool.get("anchorId"), 120) or anchor)
+                phase1_cell(display_step, "action", error_type, severity, evidence or command, reason, 0.88, text(tool.get("anchorId"), 120) or anchor, **location)
             )
 
         if has_dangerous_command([tool]):
@@ -265,6 +301,7 @@ def detect_action(step: int, tools: List[Dict[str, Any]], call_counter: Counter[
                     "动作包含高风险破坏性命令，必须要求人工确认或使用受控替代方案。",
                     0.96,
                     text(tool.get("anchorId"), 120) or anchor,
+                    **location,
                 )
             )
 
@@ -280,6 +317,7 @@ def detect_action(step: int, tools: List[Dict[str, Any]], call_counter: Counter[
                     "五步窗口内出现第三次及以上相同工具调用，可能是无效重复尝试。",
                     0.78,
                     text(tool.get("anchorId"), 120) or anchor,
+                    **location,
                 )
             )
     return out
@@ -298,9 +336,10 @@ def classify_action_error(evidence: str, command: str) -> Tuple[str, str, str]:
     return "parameter_error", "工具调用返回明确失败信号，需要结合上下文复核参数、路径或工具选择。", "medium"
 
 
-def detect_system(step: int, system_content: str, anchor: Optional[str]) -> List[Dict[str, Any]]:
+def detect_system(location: Dict[str, Any], system_content: str, anchor: Optional[str]) -> List[Dict[str, Any]]:
     if not system_content:
         return []
+    step = int(location.get("trace_step_index") or 1)
     value = system_content.lower()
     if "contextoverflow" in value or "context_overflow" in value:
         error_type, severity = "context_overflow", "high"
@@ -322,11 +361,12 @@ def detect_system(step: int, system_content: str, anchor: Optional[str]) -> List
             "这是工具、运行环境或模型限制层面的外部证据，供根因归因时参考。",
             0.9,
             anchor,
+            **location,
         )
     ]
 
 
-def detect_planning(step: int, planning: str, tools: List[Dict[str, Any]], anchor: Optional[str]) -> List[Dict[str, Any]]:
+def detect_planning(step: int, planning: str, tools: List[Dict[str, Any]], anchor: Optional[str], location: Dict[str, Any]) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     dangerous_tool = has_dangerous_command(tools)
     if dangerous_tool:
@@ -340,6 +380,7 @@ def detect_planning(step: int, planning: str, tools: List[Dict[str, Any]], ancho
                 "计划或同 step 动作包含破坏性操作，缺少人工确认会造成高风险。",
                 0.9,
                 anchor,
+                **location,
             )
         )
     if not planning and any(is_write_action(tool) for tool in tools):
@@ -353,6 +394,7 @@ def detect_planning(step: int, planning: str, tools: List[Dict[str, Any]], ancho
                 "按当前容错规则，空 Planning 本身不是错误；只有写操作缺少计划时才作为规划风险。",
                 0.74,
                 anchor,
+                **location,
             )
         )
     if planning and tools:
@@ -368,6 +410,7 @@ def detect_planning(step: int, planning: str, tools: List[Dict[str, Any]], ancho
                     "计划目标与实际动作出现明显不一致，可能导致轨迹偏离。",
                     0.78,
                     anchor,
+                    **location,
                 )
             )
     return out
@@ -387,6 +430,7 @@ def detect_reflection(
     reflection: str,
     prev: Optional[Dict[str, Any]],
     anchor: Optional[str],
+    location: Dict[str, Any],
 ) -> List[Dict[str, Any]]:
     if not reflection or not prev:
         return []
@@ -402,6 +446,7 @@ def detect_reflection(
                 f"上一步环境返回包含失败信号：{truncate(prev_env, 500)}；当前反思却声称成功。",
                 0.86,
                 anchor,
+                **location,
             )
         ]
     return []
@@ -429,6 +474,7 @@ def run_phase0_triage(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     for error_type, hits in system_errors.items():
         if len(hits) >= 2:
             steps = [int(r["step"]) for r in hits]
+            first_location = record_location(hits[0])
             return {
                 "category": "tool_systemic",
                 "shortCircuited": True,
@@ -436,6 +482,9 @@ def run_phase0_triage(records: List[Dict[str, Any]]) -> Dict[str, Any]:
                     "errorType": f"tool_systemic.{error_type}",
                     "toolName": None,
                     "affectedSteps": steps,
+                    "affectedTraceStepIndexes": steps,
+                    "traceNodeLabel": first_location.get("trace_node_label"),
+                    "traceNodeKind": first_location.get("trace_node_kind"),
                     "summary": f"系统层错误 {error_type} 连续出现，任务可能尚未进入有效认知诊断阶段。",
                     "recommendation": "优先检查工具、认证、模型上下文或运行环境配置，再重新运行任务。",
                     "rawErrorEvidence": truncate(hits[0]["modules"]["system"]["content"], 900),

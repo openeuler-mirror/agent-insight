@@ -2,8 +2,31 @@ import http from "node:http"
 import https from "node:https"
 import fs from "node:fs"
 import path from "node:path"
+import os from "node:os"
 import { URL } from "node:url"
-import { getExistingInsightDir, getInsightEnvCandidates, getPreferredInsightDir } from "./insight-paths.js"
+
+function getPreferredInsightDir() {
+  return path.join(os.homedir(), ".agent-insight")
+}
+
+function getLegacyInsightDir() {
+  return path.join(os.homedir(), ".skill-insight")
+}
+
+function getExistingInsightDir() {
+  const preferred = getPreferredInsightDir()
+  const legacy = getLegacyInsightDir()
+  if (fs.existsSync(preferred)) return preferred
+  if (fs.existsSync(legacy)) return legacy
+  return preferred
+}
+
+function getInsightEnvCandidates() {
+  return [
+    path.join(getPreferredInsightDir(), ".env"),
+    path.join(getLegacyInsightDir(), ".env"),
+  ]
+}
 
 function parseDotEnvText(text) {
   const out = {}
@@ -34,6 +57,24 @@ function loadSkillInsightEnv() {
     }
   } catch {}
   return env
+}
+
+function nowIso() {
+  return new Date().toISOString()
+}
+
+function safeMkdirp(dir) {
+  try {
+    fs.mkdirSync(dir, { recursive: true })
+  } catch {}
+}
+
+function appendUploaderLog(message) {
+  try {
+    const file = path.join(getPreferredInsightDir(), "logs", "opencode_uploader.log")
+    safeMkdirp(path.dirname(file))
+    fs.appendFileSync(file, `[${nowIso()}] ${message}\n`)
+  } catch {}
 }
 
 function toMsTimestamp(v) {
@@ -345,19 +386,31 @@ function postJson(host, apiKey, payload) {
     const body = Buffer.from(JSON.stringify(payload))
     const options = getRequestOptions(targetUrl, apiKey, body.length)
     const reqModule = targetUrl.protocol === "https:" ? https : http
+    appendUploaderLog(
+      `postJson.request host=${targetUrl.origin} path=${options.path} task_id=${payload?.task_id || "(none)"} bodyBytes=${body.length}`,
+    )
 
     const req = reqModule.request(options, (res) => {
       let resBody = ""
       res.on("data", (chunk) => {
         resBody += chunk
       })
-      res.on("end", () => resolve({ ok: res.statusCode >= 200 && res.statusCode < 300, status: res.statusCode, body: resBody }))
+      res.on("end", () => {
+        appendUploaderLog(
+          `postJson.response task_id=${payload?.task_id || "(none)"} status=${res.statusCode || 0} ok=${res.statusCode >= 200 && res.statusCode < 300 ? "1" : "0"} body=${String(resBody || "").slice(0, 1000) || "(empty)"}`,
+        )
+        resolve({ ok: res.statusCode >= 200 && res.statusCode < 300, status: res.statusCode, body: resBody })
+      })
     })
-    req.on("error", (err) => resolve({ ok: false, status: 0, body: err.message }))
+    req.on("error", (err) => {
+      appendUploaderLog(`postJson.error task_id=${payload?.task_id || "(none)"} error=${err.message}`)
+      resolve({ ok: false, status: 0, body: err.message })
+    })
     req.setTimeout(15000, () => {
       try {
         req.destroy()
       } catch {}
+      appendUploaderLog(`postJson.timeout task_id=${payload?.task_id || "(none)"}`)
       resolve({ ok: false, status: 0, body: "timeout" })
     })
     req.end(body)
@@ -791,12 +844,21 @@ async function main() {
   const env = loadSkillInsightEnv()
   const apiKey = env.SKILL_INSIGHT_API_KEY
   const host = env.SKILL_INSIGHT_HOST
-  if (!apiKey || !host) process.exit(0)
+  appendUploaderLog(
+    `main.start host=${host || "(missing)"} apiKeyPresent=${apiKey ? "yes" : "no"} force=${process.env.SKILL_INSIGHT_UPLOADER_FORCE === "1" ? "1" : "0"}`,
+  )
+  if (!apiKey || !host) {
+    appendUploaderLog(`main.skip missingConfig hostPresent=${host ? "yes" : "no"} apiKeyPresent=${apiKey ? "yes" : "no"}`)
+    process.exit(0)
+  }
 
   const spoolDir = env.SKILL_INSIGHT_OPENCODE_SPOOL_DIR || path.join(getExistingInsightDir(), "otel_data", "opencode")
   const checkpointFile = path.join(getPreferredInsightDir(), "opencode_uploader_checkpoint.json")
   const retentionDays = env.SKILL_INSIGHT_RETENTION_DAYS || "10"
   const deletedSessionIds = loadDeletedSessionIds(env)
+  appendUploaderLog(
+    `main.config spoolDir=${spoolDir} checkpoint=${checkpointFile} retentionDays=${retentionDays} deletedSessions=${deletedSessionIds.size}`,
+  )
 
   cleanupOldFiles(spoolDir, retentionDays)
 
@@ -808,10 +870,14 @@ async function main() {
   const newestMtime = newestSpoolMtime(spoolDir)
   const lastScanMtime = ckpt.__lastScanMtime || 0
   if (newestMtime > 0 && newestMtime <= lastScanMtime && process.env.SKILL_INSIGHT_UPLOADER_FORCE !== "1") {
+    appendUploaderLog(
+      `main.fastSkip newestMtime=${newestMtime} lastScanMtime=${lastScanMtime} spoolDir=${spoolDir}`,
+    )
     process.exit(0)
   }
 
   const files = listJsonlFiles(spoolDir)
+  appendUploaderLog(`main.scan files=${files.length} newestMtime=${newestMtime} lastScanMtime=${lastScanMtime}`)
 
   // 注意：用 push.apply 或 spread (...readJsonl(f)) 在大文件下会触发
   // "Maximum call stack size exceeded"——args 数量受调用栈限制。
@@ -819,8 +885,10 @@ async function main() {
   const allRecords = []
   for (const f of files) {
     const records = readJsonl(f)
+    appendUploaderLog(`main.read file=${f} records=${records.length}`)
     for (const r of records) allRecords.push(r)
   }
+  appendUploaderLog(`main.records total=${allRecords.length}`)
 
   const state = buildState(allRecords)
 
@@ -828,11 +896,18 @@ async function main() {
   for (const sid of state.sessions.keys()) {
     if (!state.sessionParent.get(sid)) roots.push(sid)
   }
+  appendUploaderLog(`main.sessions total=${state.sessions.size} roots=${roots.length}`)
 
   for (const rootSid of roots) {
-    if (deletedSessionIds.has(rootSid)) continue
+    if (deletedSessionIds.has(rootSid)) {
+      appendUploaderLog(`session.skip deleted task_id=${rootSid}`)
+      continue
+    }
     const interactions = mergeGraph(state, rootSid)
-    if (!interactions.length) continue
+    if (!interactions.length) {
+      appendUploaderLog(`session.skip emptyInteractions task_id=${rootSid}`)
+      continue
+    }
     const query = interactions.find((m) => m.role === "user" && m.content)?.content || `OpenCode Session ${rootSid}`
     const derived = deriveFields(interactions)
 
@@ -876,12 +951,23 @@ async function main() {
     }
     const lastAssistant = String(payload.final_result || "")
     const sig = `${interactions.length}|${lastAssistant.length}|${lastTs}|${payload.opencode_cli_completed ? 1 : 0}`
-    if (ckpt[rootSid] && ckpt[rootSid] === sig) continue
+    appendUploaderLog(
+      `session.prepare task_id=${rootSid} interactions=${interactions.length} query=${String(query).slice(0, 120).replace(/\s+/g, " ")} cliCompleted=${payload.opencode_cli_completed ? "1" : "0"} sig=${sig}`,
+    )
+    if (ckpt[rootSid] && ckpt[rootSid] === sig) {
+      appendUploaderLog(`session.skip checkpoint task_id=${rootSid} sig=${sig}`)
+      continue
+    }
 
     const res = await postJson(host, apiKey, payload)
     if (res.ok) {
       ckpt[rootSid] = sig
       saveCheckpoint(checkpointFile, ckpt)
+      appendUploaderLog(`session.uploaded task_id=${rootSid} status=${res.status} sig=${sig}`)
+    } else {
+      appendUploaderLog(
+        `session.uploadFailed task_id=${rootSid} status=${res.status} body=${String(res.body || "").slice(0, 1000) || "(empty)"}`,
+      )
     }
   }
 
@@ -890,6 +976,7 @@ async function main() {
   if (newestMtime > 0) {
     ckpt.__lastScanMtime = newestMtime
     saveCheckpoint(checkpointFile, ckpt)
+    appendUploaderLog(`main.checkpointUpdated lastScanMtime=${newestMtime}`)
   }
 }
 
@@ -911,6 +998,7 @@ if (process.env.SKILL_INSIGHT_UPLOADER_NO_MAIN !== "1") {
     // 失败也好让运维一眼看到。仍然 exit(0)：失败的 batch 下次轮询继续，无需 retry。
     try {
       const msg = err && err.stack ? err.stack : String(err)
+      appendUploaderLog(`main.error ${msg}`)
       process.stderr.write(`[uploader main err] ${msg}\n`)
     } catch {}
     process.exit(0)

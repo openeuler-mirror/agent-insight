@@ -177,6 +177,10 @@ export async function GET(request: Request) {
                         const resultScore = hasSelectedEvaluator(raw, 'preset-agent-task-completion')
                             ? pickResultEvaluationScore(row.rawAnalysisJson)
                             : null;
+                        const hasTraceEvaluator = hasSelectedEvaluator(raw, 'preset-agent-trace-quality');
+                        const hasResultEvaluator = hasSelectedEvaluator(raw, 'preset-agent-task-completion');
+                        if (hasTraceEvaluator && (typeof traceScore !== 'number' || Number.isNaN(traceScore))) return null;
+                        if (hasResultEvaluator && (typeof resultScore !== 'number' || Number.isNaN(resultScore))) return null;
                         if (typeof traceScore === 'number' && typeof resultScore === 'number') return (traceScore + resultScore) / 2;
                         return traceScore ?? resultScore ?? null;
                     })

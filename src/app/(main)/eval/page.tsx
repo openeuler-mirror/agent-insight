@@ -215,17 +215,28 @@ function deriveCustomEvaluationScore(result: TrajectoryResult): number | null {
     return scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
 }
 
-function getDisplayScore(result: TrajectoryResult, exec?: ExecutionRecord): number | null {
+function getDisplayScore(result: TrajectoryResult): number | null {
     if (!isEvaluationTerminal(result.status) || getEffectiveStatus(result) !== 'done' || isNoEvaluableCase(result)) return null;
     const traceScore = hasSelectedEvaluator(result, 'preset-agent-trace-quality') ? result.trajectoryScore : null;
     const answerScore = hasSelectedEvaluator(result, 'preset-agent-task-completion')
-        ? exec?.answer_score ?? result.resultEvaluationScore ?? null
+        ? result.resultEvaluationScore ?? null
         : null;
     const derivedCustomScore = deriveCustomEvaluationScore(result);
     const hasCustom = Array.isArray(result.selectedEvaluators)
         ? result.selectedEvaluators.some(id => id.startsWith('custom-'))
         : derivedCustomScore != null;
     const customScore = hasCustom ? derivedCustomScore : null;
+
+    if (hasSelectedEvaluator(result, 'preset-agent-trace-quality') && (traceScore == null || !Number.isFinite(traceScore))) {
+        return null;
+    }
+    if (hasSelectedEvaluator(result, 'preset-agent-task-completion') && (answerScore == null || !Number.isFinite(answerScore))) {
+        return null;
+    }
+    if (hasCustom && (customScore == null || !Number.isFinite(customScore))) {
+        return null;
+    }
+
     const parts = [traceScore, answerScore, customScore]
         .filter((score): score is number => typeof score === 'number' && Number.isFinite(score));
     return parts.length > 0 ? parts.reduce((a, b) => a + b, 0) / parts.length : null;
@@ -1044,7 +1055,7 @@ function RunPanel({
                             const traceId = r.taskId || r.executionId || '';
                             const exec = recordMap.get(traceId);
                             const clickable = !!traceId;
-                            const displayScore = getDisplayScore(r, exec);
+                            const displayScore = getDisplayScore(r);
                             return (
                                 <tr
                                     key={r.id}
@@ -1054,6 +1065,7 @@ function RunPanel({
                                         const qs = new URLSearchParams({
                                             runId: run.runId,
                                             datasetId: r.datasetId,
+                                            resultId: r.id,
                                         });
                                         if (autoWatchOnly) qs.set('autoWatchOnly', '1');
                                         router.push(`/eval/trajectory/${encodeURIComponent(traceId)}?${qs.toString()}`);

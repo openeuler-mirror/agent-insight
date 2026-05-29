@@ -79,6 +79,7 @@ def validate_step_records(records: Any, errors: List[str], warnings: List[str]) 
         if not isinstance(modules, dict):
             errors.append(f"stepRecords[{idx}] 缺少 modules。")
             continue
+        validate_trace_location(record, f"stepRecords[{idx}]", warnings)
         for module in MODULES:
             item = modules.get(module)
             if not isinstance(item, dict):
@@ -89,7 +90,7 @@ def validate_step_records(records: Any, errors: List[str], warnings: List[str]) 
             if not isinstance(item.get("content", ""), str):
                 errors.append(f"stepRecords[{idx}].modules.{module}.content 必须是字符串。")
             if module in {"memory", "reflection"} and idx == 1 and item.get("content"):
-                warnings.append(f"Step 1 的 {module} 有内容，请确认是否确实引用了 trace 前历史。")
+                warnings.append(f"首个记录的 {module} 有内容，请确认是否确实引用了 trace 前历史。")
 
 
 def validate_phase1(cells: Any, errors: List[str], warnings: List[str]) -> None:
@@ -110,6 +111,8 @@ def validate_phase1(cells: Any, errors: List[str], warnings: List[str]) -> None:
             warnings.append(f"phase1Grid[{idx}] errorDetected=false 时建议使用 no_error。")
         if module in {"memory", "reflection", "planning", "action"} and not cell.get("evidence"):
             warnings.append(f"phase1Grid[{idx}] 缺少证据，前端解释性会变差。")
+        if cell.get("errorDetected") is not False:
+            validate_trace_location(cell, f"phase1Grid[{idx}]", warnings)
 
 
 def validate_root_cause(root: Any, errors: List[str], warnings: List[str]) -> None:
@@ -125,6 +128,27 @@ def validate_root_cause(root: Any, errors: List[str], warnings: List[str]) -> No
         warnings.append("rootCause 缺少 evidence，用户难以理解根因依据。")
     if not root.get("summary"):
         errors.append("rootCause.summary 不能为空。")
+    if root.get("criticalModule") != "unknown":
+        if not root.get("criticalTraceStepIndex"):
+            warnings.append("rootCause 缺少 criticalTraceStepIndex，前端只能使用兼容字段定位。")
+        if not root.get("criticalTraceNodeLabel"):
+            warnings.append("rootCause 缺少 criticalTraceNodeLabel，前端节点解释性会变差。")
+        if not root.get("criticalAnchorId") and not root.get("anchorId"):
+            warnings.append("rootCause 缺少 criticalAnchorId/anchorId，无法直接跳到左侧节点。")
+    chain = root.get("cascadingChain")
+    if isinstance(chain, list):
+        for idx, item in enumerate(chain, start=1):
+            if isinstance(item, dict):
+                validate_trace_location(item, f"rootCause.cascadingChain[{idx}]", warnings)
+
+
+def validate_trace_location(item: Dict[str, Any], path: str, warnings: List[str]) -> None:
+    if not item.get("anchorId") and not item.get("criticalAnchorId"):
+        warnings.append(f"{path} 缺少 anchorId，跳转左侧节点可能不可用。")
+    if not item.get("traceStepIndex") and not item.get("criticalTraceStepIndex"):
+        warnings.append(f"{path} 缺少 traceStepIndex，前端只能使用兼容编号。")
+    if not item.get("traceNodeLabel") and not item.get("criticalTraceNodeLabel"):
+        warnings.append(f"{path} 缺少 traceNodeLabel，前端节点标签会变弱。")
 
 
 def scan_language(value: Any, warnings: List[str], path: str = "$") -> None:
@@ -152,4 +176,3 @@ def looks_like_untranslated_english(value: str) -> bool:
 
 if __name__ == "__main__":
     main()
-

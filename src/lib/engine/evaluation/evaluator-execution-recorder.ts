@@ -18,6 +18,8 @@ interface RecordEvaluatorExecutionInput {
   skill?: string | null;
   /** 写入 Execution.skillVersion 字段 (跟 skill 配对, 不传时同样让 saveExecutionRecord 自己推断) */
   skillVersion?: number | null;
+  /** Fallback assistant output used when opencode has no persisted messages yet. */
+  fallbackOutput?: string | null;
 }
 
 interface OpencodeTokenUsage {
@@ -210,6 +212,47 @@ function inferTimestampFromInteractions(interactions: EvaluatorTraceInteraction[
   return firstCreated ? new Date(firstCreated) : new Date();
 }
 
+function buildFallbackInteractions(input: RecordEvaluatorExecutionInput): EvaluatorTraceInteraction[] {
+  const now = new Date().toISOString();
+  const query = String(input.query || '').trim();
+  const output = String(input.fallbackOutput || '').trim();
+  const interactions: EvaluatorTraceInteraction[] = [];
+  if (query) {
+    interactions.push({
+      role: 'user',
+      content: query,
+      timestamp: now,
+    });
+  }
+  if (output) {
+    interactions.push({
+      role: 'assistant',
+      content: output,
+      timestamp: now,
+      agent: String(input.agentName || '').trim() || undefined,
+    });
+  }
+  return interactions;
+}
+
+export function ensureEvaluatorExecutionInteractions(
+  interactions: EvaluatorTraceInteraction[],
+  input: RecordEvaluatorExecutionInput,
+): EvaluatorTraceInteraction[] {
+  const hasAssistantContent = interactions.some(item =>
+    item.role === 'assistant'
+    && typeof item.content === 'string'
+    && item.content.trim().length > 0,
+  );
+  const fallback = buildFallbackInteractions(input);
+
+  if (interactions.length === 0) return fallback;
+  if (hasAssistantContent || !String(input.fallbackOutput || '').trim()) return interactions;
+
+  const assistantFallback = fallback.find(item => item.role === 'assistant');
+  return assistantFallback ? [...interactions, assistantFallback] : interactions;
+}
+
 export async function recordEvaluatorExecution(
   client: MessageListClientLike,
   input: RecordEvaluatorExecutionInput,
@@ -219,7 +262,10 @@ export async function recordEvaluatorExecution(
   if (!taskId || !agentName) return 0;
 
   const rawMessages = await client.listMessages(taskId);
-  const interactions = normalizeEvaluatorExecutionInteractions(Array.isArray(rawMessages) ? rawMessages : []);
+  const interactions = ensureEvaluatorExecutionInteractions(
+    normalizeEvaluatorExecutionInteractions(Array.isArray(rawMessages) ? rawMessages : []),
+    input,
+  );
 
   await saveExecutionRecord({
     task_id: taskId,
@@ -229,6 +275,7 @@ export async function recordEvaluatorExecution(
     user: input.user ?? null,
     agent: agentName,
     agentName,
+    final_result: String(input.fallbackOutput || '').trim() || undefined,
     // caller (runner.ts) 给 baseline / grayscale-skill-agent 这些后台 agent 主动填 skill,
     // 让"从 Trace"按 skill 过滤能搜到。不传时让 saveExecutionRecord 自己推断。
     skill: input.skill ?? undefined,

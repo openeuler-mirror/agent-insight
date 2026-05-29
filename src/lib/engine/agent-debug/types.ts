@@ -12,6 +12,8 @@ export interface DebugToolCall {
   completedAt?: number;
   anchorId?: string;
   traceStepIndex?: number;
+  traceNodeLabel?: string;
+  traceNodeKind?: string;
   rawError?: string;
 }
 
@@ -28,6 +30,15 @@ export interface DebugTurn {
   completedAt?: number;
   anchorIds: string[];
   traceStepIndex?: number;
+  traceNodeLabel?: string;
+  traceNodeKind?: string;
+}
+
+export interface AgentDebugTraceLocation {
+  diagnosticStep?: number;
+  traceStepIndex?: number;
+  traceNodeLabel?: string;
+  traceNodeKind?: string;
 }
 
 export interface AgentDebugCandidateWindow {
@@ -40,7 +51,7 @@ export interface AgentDebugCandidateWindow {
   anchorId?: string;
 }
 
-export interface AgentDebugIssue {
+export interface AgentDebugIssue extends AgentDebugTraceLocation {
   id: string;
   step: number;
   module: AgentDebugModule;
@@ -55,11 +66,15 @@ export interface AgentDebugIssue {
 
 export interface AgentDebugRootCause {
   criticalStep: number | null;
+  criticalTraceStepIndex?: number | null;
+  criticalTraceNodeLabel?: string;
+  criticalTraceNodeKind?: string;
+  criticalAnchorId?: string;
   criticalModule: AgentDebugModule;
   criticalErrorType: string;
   summary: string;
   evidence: string;
-  cascadingChain: Array<{
+  cascadingChain: Array<AgentDebugTraceLocation & {
     step: number;
     module: AgentDebugModule;
     errorType: string;
@@ -77,6 +92,9 @@ export interface AgentDebugTriage {
     errorType: string;
     toolName?: string;
     affectedSteps: number[];
+    affectedTraceStepIndexes?: number[];
+    traceNodeLabel?: string;
+    traceNodeKind?: string;
     summary: string;
     recommendation: string;
     rawErrorEvidence: string;
@@ -95,7 +113,7 @@ export interface AgentDebugModuleOutput {
   source: 'tag' | 'llm' | 'raw_tool' | 'implicit' | 'system';
 }
 
-export interface AgentDebugStepRecord {
+export interface AgentDebugStepRecord extends AgentDebugTraceLocation {
   step: number;
   sourceInteractionIndex: number;
   title: string;
@@ -112,7 +130,7 @@ export interface AgentDebugStepRecord {
   };
 }
 
-export interface AgentDebugPhase1Cell {
+export interface AgentDebugPhase1Cell extends AgentDebugTraceLocation {
   step: number;
   module: Exclude<AgentDebugModule, 'unknown'>;
   errorDetected: boolean;

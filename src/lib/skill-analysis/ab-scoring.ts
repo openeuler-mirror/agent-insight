@@ -91,7 +91,7 @@ export interface AbScoringResult {
   allowRelease: boolean;
   rejectCategory: 'capability' | 'cost' | 'stability' | null;
   // 命中的拒绝项列表（可能多于一个），第一个对应 rejectCategory。
-  hardGates: Array<{ key: 'capability' | 'cost' | 'stability'; label: string }>;
+  hardGates: Array<{ key: 'capability' | 'cost' | 'stability'; label: string; ceiling: number }>;
   capability: {
     // 评测器百分制平均分（0-100），新口径主指标。
     avgEvalScoreA: number | null;
@@ -474,13 +474,13 @@ export function calculateAbScoring(
   // 四道关卡: 样本不足 → 拒绝 → 全好 → 监控发布
   const hardGates: AbScoringResult['hardGates'] = [];
   if (sCapability != null && sCapability < policy.capabilityRejectThreshold) {
-    hardGates.push({ key: 'capability', label: `能力分 ${fmt(sCapability)} < ${policy.capabilityRejectThreshold}` });
+    hardGates.push({ key: 'capability', label: `能力分 ${fmt(sCapability)} < ${policy.capabilityRejectThreshold}`, ceiling: policy.capabilityRejectThreshold });
   }
   if (sCost != null && sCost < policy.costRejectThreshold) {
-    hardGates.push({ key: 'cost', label: `成本分 ${fmt(sCost)} < ${policy.costRejectThreshold}` });
+    hardGates.push({ key: 'cost', label: `成本分 ${fmt(sCost)} < ${policy.costRejectThreshold}`, ceiling: policy.costRejectThreshold });
   }
   if (sStability != null && sStability < policy.stabilityRejectThreshold) {
-    hardGates.push({ key: 'stability', label: `稳定性分 ${fmt(sStability)} < ${policy.stabilityRejectThreshold}` });
+    hardGates.push({ key: 'stability', label: `稳定性分 ${fmt(sStability)} < ${policy.stabilityRejectThreshold}`, ceiling: policy.stabilityRejectThreshold });
   }
   const rejectCategory: AbScoringResult['rejectCategory'] = hardGates[0]?.key ?? null;
 

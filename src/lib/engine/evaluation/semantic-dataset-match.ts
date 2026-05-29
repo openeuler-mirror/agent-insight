@@ -266,6 +266,8 @@ export async function extractRealUserInput(
     const response = await client.chat.completions.create({
       model,
       temperature: 0,
+      top_p: 1,
+      seed: 42,
       messages: [{ role: 'user', content: buildExtractionPrompt(fallback.normalized_input) }],
     });
 
@@ -304,6 +306,8 @@ async function matchBatchWithLlm(
     const response = await client.chat.completions.create({
       model,
       temperature: 0,
+      top_p: 1,
+      seed: 42,
       messages: [{
         role: 'user',
         content: buildBatchMatchPrompt(

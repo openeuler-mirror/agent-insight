@@ -14,7 +14,11 @@ async function makeDirectModel(user?: string | null) {
     configuration: {
       baseURL: config.baseUrl || 'https://api.deepseek.com',
     },
-    temperature: 0.1,
+    temperature: 0,
+    topP: 1,
+    modelKwargs: {
+      seed: 42,
+    },
   });
 }
 
