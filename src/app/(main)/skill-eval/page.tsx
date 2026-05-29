@@ -1397,8 +1397,8 @@ function SkillAnalysisPage() {
                 className="sa-top-select sa-top-select-version"
                 value={selectedVersion ?? ''}
                 onChange={e => {
+                    // 切版本时留在当前视图(用例分析/A-B/静态等), 不再强制跳回 overview —— 方便跨版本对比。
                     setSelectedVersion(Number(e.target.value));
-                    setView('overview');
                 }}
                 disabled={!selectedSkill}
                 aria-label="切换版本"
