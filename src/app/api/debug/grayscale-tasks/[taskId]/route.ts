@@ -1016,10 +1016,10 @@ async function executeSingleAgentRun(args: {
             query: args.caseMap.get(target.caseId)!.input,
             skill: args.version?.skillName,
             skillVersion: args.version?.version,
-            // baseline 那侧不加载 skill, 但 trace 在逻辑上跟 B 侧被测 skill 配对——
-            // tagSkill 让"从 Trace"按 skill 过滤能搜到这条 baseline trace。
-            // skill-agent 那侧 args.version?.skillName 已经走 input.skill 路径, tagSkill 自然 fallback。
-            tagSkill: args.version?.skillName ?? (args.referenceSkillName ?? undefined),
+            // 每组按"实际使用情况"绑定 trace 的 skill：本侧用了某 skill 版本就标该版本, 无 skill(baseline)
+            // 就不标任何 skill。不再回退到 referenceSkillName(B 侧 skill)——否则无 skill 的对照组 trace 会被
+            // 错绑到 B 的 skill, 在用例分析按 skill 筛选时和 B 一起冒出来 (期望只出真正用了该 skill 的 trace)。
+            tagSkill: args.version?.skillName ?? undefined,
             system: buildGrayscaleExecutionSystem(args.version),
             interactionPolicy: 'auto-deny',
             systemAgentName: grayAgentName,
@@ -1073,7 +1073,8 @@ async function executeSingleAgentRun(args: {
             query: args.caseMap.get(target.caseId)!.input,
             output: result.output || '',
             agentName: grayAgentName,
-            skill: args.version?.skillName ?? (args.referenceSkillName ?? undefined),
+            // 同上: 按本侧实际使用绑定, 无 skill(baseline)不绑, 不回退到 B 侧 skill。
+            skill: args.version?.skillName ?? undefined,
             skillVersion: args.version?.version,
         });
     } catch (err) {
