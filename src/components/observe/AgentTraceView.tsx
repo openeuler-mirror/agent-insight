@@ -1,7 +1,7 @@
 'use client';
 
 import React, { ReactNode, useEffect, useMemo, useState } from 'react';
-import { Check, ChevronDown, ChevronRight, Copy as CopyIcon, Search as SearchIcon, X as XIcon, AlertTriangle as AlertIcon, SlidersHorizontal as FiltersIcon } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, Copy as CopyIcon, Search as SearchIcon, X as XIcon, AlertTriangle as AlertIcon, SlidersHorizontal as FiltersIcon, Brain as BrainIcon, MessageSquare as MessageIcon, Wrench as WrenchIcon } from 'lucide-react';
 import { parseAsString, useQueryState } from 'nuqs';
 import { toast } from 'sonner';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -108,6 +108,17 @@ interface TraceSkillUsage {
 interface PromptSnapshotMessage {
     role: string;
     content: string;
+    /** Assistant chain-of-thought ("thinking"), rendered as a collapsible
+     *  "Thought for Ns" disclosure inside the assistant message — same turn,
+     *  not a sibling message. */
+    reasoning?: string;
+    /** Reasoning token count for this turn (shown in the thinking summary line). */
+    reasoningTokens?: number;
+    /** Human duration label for this turn (e.g. "27.5s") — drives "Thought for Ns". */
+    reasoningDurationLabel?: string;
+    /** Tool calls made on this turn + their results, shown as a list with each
+     *  result foldable (the tool_result the model received as context). */
+    toolCalls?: { name: string; args: string; output: string }[];
     source: 'system' | 'compaction' | 'history';
     position: number;
 }
@@ -1742,6 +1753,51 @@ function interactionToPromptText(m: RawInteraction): string {
     return blocks.join('\n\n');
 }
 
+/** Reasoning ("thinking") text of an assistant turn. OpenCode keeps the model's
+ *  chain-of-thought in `reasoning` parts, separate from the visible `text` parts
+ *  that become `content`. A tool-only turn often has empty content but non-empty
+ *  reasoning — that reasoning is the "think" the timeline should surface. */
+function extractReasoningText(it?: RawInteraction): string {
+    if (!it || !Array.isArray(it.parts)) return '';
+    return it.parts
+        .filter(p => (p?.type || '').toLowerCase() === 'reasoning')
+        .map(p => (typeof p.text === 'string' ? p.text.trim() : ''))
+        .filter(Boolean)
+        .join('\n\n');
+}
+
+/** Visible text content of a message for the prompt snapshot — NOT reasoning
+ *  (carried separately as the thinking block) and NOT tool calls (carried
+ *  separately as a structured list with foldable results). */
+function interactionContentText(m: RawInteraction): string {
+    const text = typeof m.content === 'string' ? m.content : '';
+    if (text.trim()) return text;
+    if (typeof m.content !== 'string' && m.content != null) return JSON.stringify(m.content, null, 2);
+    return '';
+}
+
+/** Tool calls of a turn + their results, for the prompt snapshot. OpenCode keeps
+ *  the result on the same assistant message (`tool_calls[].output`); in Messages
+ *  API terms this is the tool_result the next call receives as context. */
+function extractToolCalls(m: RawInteraction): { name: string; args: string; output: string }[] {
+    if (!Array.isArray(m.tool_calls) || m.tool_calls.length === 0) return [];
+    // task (sub-agent spawn) and skill are surfaced as their own tree events, so
+    // exclude them from the message's plain tool-call badges.
+    return m.tool_calls
+        .filter(tc => {
+            const n = tc.function?.name || tc.name || '';
+            return n !== 'task' && n !== 'skill';
+        })
+        .map(tc => {
+            const name = tc.function?.name || tc.name || 'tool';
+            const argStr = tc.function?.arguments ?? tc.arguments;
+            const args = typeof argStr === 'string' ? argStr : (argStr != null ? JSON.stringify(argStr) : '');
+            const outRaw = tc.output ?? tc.result;
+            const output = outRaw == null ? '' : (typeof outRaw === 'string' ? outRaw : JSON.stringify(outRaw, null, 2));
+            return { name, args, output };
+        });
+}
+
 function buildInputMessagesForLlmIndex(node: AgentNode, interactions: RawInteraction[], eventIdx: number): {
     inputMessages: PromptSnapshotMessage[];
     activeCompaction: NonNullable<AgentNode['compactions']>[number] | null;
@@ -1786,9 +1842,19 @@ function buildInputMessagesForLlmIndex(node: AgentNode, interactions: RawInterac
 
     for (const m of verbatimMessages) {
         if (m.role === 'system') continue;
+        const calls = extractToolCalls(m);
+        // Thinking is resent to the model only for the active tool-use turn the
+        // current call continues from (Anthropic requires the signed thinking
+        // block back during a tool-use cycle). We attach reasoning only to
+        // tool-use turns; whether it actually shows is decided per section:
+        // Current input keeps it (the active continuation), History strips it.
+        const hasTools = calls.length > 0;
         inputMessages.push({
             role: normalizePromptRole(m.role),
-            content: interactionToPromptText(m),
+            content: interactionContentText(m),
+            reasoning: hasTools ? extractReasoningText(m) : undefined,
+            reasoningTokens: hasTools ? m.usage?.reasoning : undefined,
+            toolCalls: calls,
             source: 'history',
             position: ++position,
         });
@@ -1837,6 +1903,155 @@ function buildLlmPromptSnapshot(event: AgentEvent, node: AgentNode, interactions
     };
 }
 
+/** A collapsed disclosure bar rendered INSIDE a message: a single clickable
+ *  summary line (icon + label + meta + chevron) that expands to the full text.
+ *  Used for both the assistant's "Thought for Ns" (reasoning) and "Response"
+ *  (content) blocks so they read as content-blocks of one message — matching
+ *  the Anthropic/OpenAI convention, not separate messages. */
+function DisclosureBar({ icon, label, sub, meta, text, tone = 'normal', defaultOpen, modalTitle }: {
+    icon: ReactNode;
+    label: string;
+    /** Optional muted secondary text after the label (e.g. tool args), truncated. */
+    sub?: string;
+    meta?: string;
+    text: string;
+    /** 'muted' dims the body (reasoning); 'normal' keeps full contrast (content). */
+    tone?: 'normal' | 'muted';
+    defaultOpen?: boolean;
+    modalTitle: string;
+}) {
+    const [open, setOpen] = useState(!!defaultOpen);
+    const [showModal, setShowModal] = useState(false);
+    const trimmed = text.trim();
+    if (!trimmed) return null;
+    const isLong = trimmed.length > PREVIEW_CHARS;
+
+    return (
+        <div className="border-b border-border last:border-b-0">
+            <button
+                type="button"
+                onClick={() => setOpen(v => !v)}
+                className="w-full flex items-center gap-2 px-3 py-2 text-left text-foreground-secondary hover:bg-background-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+                {icon}
+                <span className="text-xs font-semibold shrink-0">{label}</span>
+                {sub && <span className="min-w-0 flex-1 truncate font-mono text-[11px] font-normal text-foreground-muted">{sub}</span>}
+                {meta && <span className={cn('text-[10px] text-foreground-muted tabular-nums shrink-0', !sub && 'ml-auto')}>{meta}</span>}
+                <ChevronDown className={cn('size-3.5 text-foreground-muted transition-transform shrink-0', !meta && !sub && 'ml-auto', open && 'rotate-180')} />
+            </button>
+            {open && (
+                <div className="bg-transparent">
+                    {/* L5 "Block content" — indented further under its block header; bg
+                     *  is transparent so it inherits the expanded message's tint. */}
+                    <div className={cn('max-h-[260px] overflow-auto py-2 pl-10 pr-3 text-xs leading-6 whitespace-pre-wrap break-words', tone === 'muted' ? 'text-foreground-secondary' : 'text-foreground')}>
+                        {trimmed}
+                    </div>
+                    {isLong && (
+                        <div className="border-t border-border px-3 py-1.5 text-right">
+                            <Button variant="ghost" size="sm" onClick={() => setShowModal(true)} className="h-6 px-2 text-xs">
+                                查看全部
+                            </Button>
+                        </div>
+                    )}
+                </div>
+            )}
+            {showModal && (
+                <ContentModal title={modalTitle} raw={trimmed} onClose={() => setShowModal(false)} />
+            )}
+        </div>
+    );
+}
+
+/** Reasoning ("thinking") block of an assistant turn, styled as a collapsed
+ *  "Thought for Ns" disclosure (ChatGPT / o1 convention): content stays
+ *  primary, the chain-of-thought is one click away. */
+function ThinkingBlock({ text, tokens, durationLabel, modalTitle }: {
+    text: string;
+    /** Reasoning token count, if known — shown in the summary line. */
+    tokens?: number;
+    /** e.g. "27.5s" — when present the line reads "Thought for 27.5s". */
+    durationLabel?: string;
+    modalTitle: string;
+}) {
+    const trimmed = text.trim();
+    if (!trimmed) return null;
+    const summaryLabel = durationLabel ? `Thought for ${durationLabel}` : 'Thought process';
+    const meta = [
+        tokens && tokens > 0 ? `${formatTokens(tokens)} tokens` : '',
+        `${trimmed.length.toLocaleString()} chars`,
+    ].filter(Boolean).join(' · ');
+    return (
+        <DisclosureBar
+            icon={<BrainIcon className="size-3.5 text-primary shrink-0" aria-hidden />}
+            label={summaryLabel}
+            meta={meta}
+            text={text}
+            tone="muted"
+            modalTitle={modalTitle}
+        />
+    );
+}
+
+/** A single tool call shown as a badge (matching the span-type tool chip). Click
+ *  opens its input + result in a modal. */
+function ToolBadge({ call, modalTitle }: {
+    call: NonNullable<PromptSnapshotMessage['toolCalls']>[number];
+    modalTitle: string;
+}) {
+    const [open, setOpen] = useState(false);
+    const raw = [
+        `Input:\n${(call.args || '').trim() || '(none)'}`,
+        `Output:\n${(call.output || '').trim() || '(no result captured)'}`,
+    ].join('\n\n———\n\n');
+    return (
+        <>
+            <button
+                type="button"
+                onClick={() => setOpen(true)}
+                title={summarizePromptArgs(call.args) || call.name}
+                className={cn(
+                    'inline-flex items-center text-xs font-semibold px-2 py-0.5 rounded-sm border cursor-pointer hover:opacity-80',
+                    KIND_META.tool.chip,
+                )}
+            >
+                {call.name}
+            </button>
+            {open && <ContentModal title={`${modalTitle} — ${call.name}`} raw={raw} onClose={() => setOpen(false)} />}
+        </>
+    );
+}
+
+/** "Tool calls" as ONE collapsible bar at the same level as Thought / Response.
+ *  Expanding reveals the individual tool calls as badges (click a badge for its
+ *  input + result). */
+function ToolCallList({ calls, modalTitle }: {
+    calls: NonNullable<PromptSnapshotMessage['toolCalls']>;
+    modalTitle: string;
+}) {
+    const [open, setOpen] = useState(false);
+    return (
+        <div className="border-b border-border last:border-b-0">
+            <button
+                type="button"
+                onClick={() => setOpen(v => !v)}
+                className="w-full flex items-center gap-2 px-3 py-2 text-left text-foreground-secondary hover:bg-background-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+                <WrenchIcon className="size-3.5 text-foreground-muted shrink-0" aria-hidden />
+                <span className="text-xs font-semibold">Tool calls</span>
+                <span className="ml-auto text-[10px] text-foreground-muted tabular-nums shrink-0">{calls.length}</span>
+                <ChevronDown className={cn('size-3.5 text-foreground-muted transition-transform shrink-0', open && 'rotate-180')} />
+            </button>
+            {open && (
+                <div className="flex flex-wrap gap-1 bg-transparent py-2 pl-10 pr-3">
+                    {calls.map((c, i) => (
+                        <ToolBadge key={i} call={c} modalTitle={modalTitle} />
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+}
+
 function SnapshotMessageRow({
     message,
     defaultExpanded,
@@ -1846,11 +2061,25 @@ function SnapshotMessageRow({
     defaultExpanded?: boolean;
     modalTitle: string;
 }) {
+    const trimmed = (message.content || '').trim();
+    const reasoning = (message.reasoning || '').trim();
+    const toolCalls = message.toolCalls || [];
+    const hasToolCalls = toolCalls.length > 0;
+    const hasBody = !!(trimmed || reasoning || hasToolCalls);
     const [expanded, setExpanded] = useState(!!defaultExpanded);
     const [showModal, setShowModal] = useState(false);
-    const trimmed = (message.content || '').trim();
-    const firstLine = trimmed.split(/\n/).find(l => l.trim()) || '';
+    // Preview the content if present, else the thinking, else the tool calls —
+    // never blank when the turn did something (a tool-only turn has empty content).
+    const previewSource = trimmed || reasoning
+        || (hasToolCalls ? `${toolCalls.length} 个工具调用: ${toolCalls.slice(0, 3).map(c => c.name).join(', ')}` : '');
+    const firstLine = previewSource.split(/\n/).find(l => l.trim()) || '';
     const isLong = trimmed.length > PREVIEW_CHARS;
+    // Assistant turns render content as a "Response" disclosure bar matching the
+    // "Thought" bar; system/user messages keep their plain inline content.
+    const isAssistant = message.role === 'assistant';
+    // When the row opens by default (current-turn output / latest context turn),
+    // open the Response bar too so the answer is visible without an extra click.
+    const responseDefaultOpen = !!defaultExpanded;
     const roleLabel = message.role === 'compaction' ? 'summary' : message.role;
     const roleClasses = message.role === 'compaction'
         ? 'border-warning-border bg-warning-subtle text-warning'
@@ -1864,33 +2093,72 @@ function SnapshotMessageRow({
 
     return (
         <>
-            <div className="border-t border-border first:border-t-0 bg-card">
+            {/* L3 "Message" — highlighted (tinted bg + left accent) while expanded so its parts read as a unit */}
+            <div className={cn('border-t border-border first:border-t-0', expanded ? 'bg-primary/[0.08] border-l-2 border-l-primary' : 'bg-card')}>
                 <button
                     type="button"
-                    onClick={() => trimmed && setExpanded(v => !v)}
-                    className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left hover:bg-background-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    onClick={() => hasBody && setExpanded(v => !v)}
+                    className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left hover:bg-amber-400/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                     <span className={cn('inline-flex min-w-[70px] justify-center rounded-sm border px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider', roleClasses)}>
                         {roleLabel}
                     </span>
                     <span className="text-xs text-foreground-muted font-mono tabular-nums">#{message.position}</span>
                     <span className="flex-1 min-w-0 truncate text-xs text-foreground-muted">
-                        {trimmed ? firstLine : '(empty)'}
+                        {hasBody ? firstLine : '(empty)'}
                     </span>
-                    {trimmed && <ChevronRight className={cn('size-3 text-foreground-muted transition-transform', expanded && 'rotate-90')} />}
+                    {reasoning && (
+                        <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold text-primary shrink-0" title="包含思考过程">
+                            <BrainIcon className="size-3" aria-hidden />
+                        </span>
+                    )}
+                    {hasBody && <ChevronRight className={cn('size-3 text-foreground-muted transition-transform', expanded && 'rotate-90')} />}
                 </button>
-                {expanded && trimmed && (
-                    <div className="border-t border-border bg-background-tertiary">
-                        <div className="max-h-[280px] overflow-auto px-3 py-2 text-xs leading-6 text-foreground whitespace-pre-wrap break-words">
-                            {trimmed}
-                        </div>
-                        {isLong && (
-                            <div className="border-t border-border px-3 py-1.5 text-right">
-                                <Button variant="ghost" size="sm" onClick={() => setShowModal(true)} className="h-6 px-2 text-xs">
-                                    查看全部
-                                </Button>
-                            </div>
+                {/* L4 "Block"s (Thought / Response / Tool calls) — indented under the message */}
+                {expanded && hasBody && (
+                    <div className="border-t border-border bg-transparent pl-3">
+                        {reasoning && (
+                            <ThinkingBlock
+                                text={reasoning}
+                                tokens={message.reasoningTokens}
+                                durationLabel={message.reasoningDurationLabel}
+                                modalTitle={`${modalTitle} — thinking`}
+                            />
                         )}
+                        {trimmed ? (
+                            isAssistant ? (
+                                <DisclosureBar
+                                    icon={<MessageIcon className="size-3.5 text-foreground-muted shrink-0" aria-hidden />}
+                                    label="Response"
+                                    meta={`${trimmed.length.toLocaleString()} chars`}
+                                    text={trimmed}
+                                    tone="normal"
+                                    defaultOpen={responseDefaultOpen}
+                                    modalTitle={`${modalTitle} — response`}
+                                />
+                            ) : (
+                                <>
+                                    <div className="border-t border-border first:border-t-0 max-h-[280px] overflow-auto px-3 py-2 text-xs leading-6 text-foreground whitespace-pre-wrap break-words">
+                                        {trimmed}
+                                    </div>
+                                    {isLong && (
+                                        <div className="border-t border-border px-3 py-1.5 text-right">
+                                            <Button variant="ghost" size="sm" onClick={() => setShowModal(true)} className="h-6 px-2 text-xs">
+                                                查看全部
+                                            </Button>
+                                        </div>
+                                    )}
+                                </>
+                            )
+                        ) : null}
+                        {hasToolCalls && (
+                            <ToolCallList calls={toolCalls} modalTitle={modalTitle} />
+                        )}
+                        {!trimmed && !hasToolCalls && reasoning ? (
+                            <div className="border-t border-border px-3 py-2 text-xs text-foreground-muted">
+                                仅有思考，无可见正文（纯工具调用轮）
+                            </div>
+                        ) : null}
                     </div>
                 )}
             </div>
@@ -1901,14 +2169,25 @@ function SnapshotMessageRow({
     );
 }
 
-function RepeatedMessagesBlock({
+/** L2 "Group" — a collapsible group of messages, used for "History" and "Current
+ *  input" inside the Input section. History is collapsed by default; Current input
+ *  opens by default (and expands its latest message). */
+function FoldedMessagesBlock({
     messages,
     modalTitle,
+    label = 'History',
+    subtitle,
+    defaultOpen = false,
+    expandLast = false,
 }: {
     messages: PromptSnapshotMessage[];
     modalTitle: string;
+    label?: string;
+    subtitle?: string;
+    defaultOpen?: boolean;
+    expandLast?: boolean;
 }) {
-    const [expanded, setExpanded] = useState(false);
+    const [expanded, setExpanded] = useState(defaultOpen);
     const [showModal, setShowModal] = useState(false);
     const raw = messages
         .map(m => `#${m.position} [${m.role}]\n${m.content}`)
@@ -1920,19 +2199,21 @@ function RepeatedMessagesBlock({
                 <button
                     type="button"
                     onClick={() => setExpanded(v => !v)}
-                    className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left hover:bg-background-tertiary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    className="w-full flex items-center gap-2 px-2 py-2 text-left hover:bg-background-tertiary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
-                    <ChevronRight className={cn('size-3 text-foreground-muted transition-transform', expanded && 'rotate-90')} />
-                    <span className="text-xs font-semibold text-foreground">model context</span>
+                    <span className="text-sm font-semibold text-foreground">{label}</span>
                     <span className="text-xs text-foreground-muted tabular-nums">{messages.length} messages</span>
+                    {subtitle && <span className="text-[10px] text-foreground-muted">{subtitle}</span>}
+                    <ChevronRight className={cn('ml-auto size-4 text-foreground-muted transition-transform shrink-0', expanded && 'rotate-90')} />
                 </button>
                 {expanded && (
-                    <div className="border-t border-border">
+                    <div className="border-t border-border bg-card">
                         {messages.map((message, index) => (
                             <SnapshotMessageRow
                                 key={`${message.role}-${message.position}-${index}`}
                                 message={message}
-                                modalTitle={`${modalTitle} — repeated #${message.position}`}
+                                defaultExpanded={expandLast && index === messages.length - 1}
+                                modalTitle={`${modalTitle} — #${message.position}`}
                             />
                         ))}
                         <div className="border-t border-border px-3 py-1.5 text-right">
@@ -1944,9 +2225,42 @@ function RepeatedMessagesBlock({
                 )}
             </div>
             {showModal && (
-                <ContentModal title={`${modalTitle} — model context`} raw={raw} onClose={() => setShowModal(false)} />
+                <ContentModal title={`${modalTitle} — ${label}`} raw={raw} onClose={() => setShowModal(false)} />
             )}
         </>
+    );
+}
+
+/** L1 "Section" (Input / Output) — flat "Trace / Span Snapshot" heading style: a
+ *  SectionTitle-style label (uppercase, muted) that toggles, with the content in a
+ *  light bordered box below — no card header bar. */
+function SnapshotSection({ label, count, subtitle, defaultOpen = true, children }: {
+    label: string;
+    count?: number;
+    subtitle?: string;
+    defaultOpen?: boolean;
+    children: ReactNode;
+}) {
+    const [open, setOpen] = useState(defaultOpen);
+    return (
+        <div>
+            <button
+                type="button"
+                onClick={() => setOpen(v => !v)}
+                className="mb-1.5 flex w-full items-center gap-1.5 text-left text-foreground-muted hover:text-foreground focus-visible:outline-none"
+            >
+                <span className="text-[0.625rem] font-semibold uppercase tracking-[0.06em]">{label}</span>
+                {count != null && <span className="text-[0.625rem] tabular-nums">{count}</span>}
+                {/* chevron hugs the label (not pushed to the far right) */}
+                <ChevronRight className={cn('size-3 transition-transform shrink-0', open && 'rotate-90')} />
+                {subtitle && <span className="ml-1 text-[0.625rem] normal-case">{subtitle}</span>}
+            </button>
+            {open && (
+                <div className="overflow-hidden rounded-md border border-border bg-card">
+                    {children}
+                </div>
+            )}
+        </div>
     );
 }
 
@@ -1963,82 +2277,114 @@ function HierarchicalSpanSnapshot({
     snapshot: LlmPromptSnapshot;
     responseText: string;
 }) {
-    const repeatedMessages = snapshot.inputMessages.slice(0, snapshot.repeatedPrefixCount);
-    const freshMessages = snapshot.inputMessages.slice(snapshot.repeatedPrefixCount);
+    // Split the input messages into the semantic sections of a Messages-API call:
+    //   System          — the system prompt(s)
+    //   History         — prior turns unchanged since the previous LLM call (the
+    //                     stable prefix; ≈ what hits the provider's prefix cache,
+    //                     though that's a billing optimization, not this grouping)
+    //   Current input   — what's new this turn (the latest user msg / tool_result)
+    const repeated = snapshot.inputMessages.slice(0, snapshot.repeatedPrefixCount);
+    const fresh = snapshot.inputMessages.slice(snapshot.repeatedPrefixCount);
+    const systemMessages = snapshot.inputMessages.filter(m => m.role === 'system');
+    // History is older context — strip thinking (a prior turn's thinking is not
+    // resent). Current input keeps it (the active tool-use turn being continued).
+    const historyMessages = repeated
+        .filter(m => m.role !== 'system')
+        .map(m => ({ ...m, reasoning: undefined, reasoningTokens: undefined }));
+    const currentInput = fresh.filter(m => m.role !== 'system');
+    // System lives inside History now (it's part of the stable prefix the model
+    // re-receives every call), so History = system prompt(s) + prior turns.
+    const historyAndSystem = [...systemMessages, ...historyMessages];
+    const inputCount = historyAndSystem.length + currentInput.length;
     const spanId = `llm_call_${snapshot.llmOrdinal}`;
     const threadId = node.sessionId || 'TOP';
-    const output = responseText || '';
+
+    // An LLM turn has two content blocks: the model's reasoning ("thinking") and
+    // its visible response ("content"). OpenCode carries reasoning in `reasoning`
+    // parts and content in `text` parts. Following the Anthropic/OpenAI
+    // convention, both belong to ONE assistant message — thinking renders as a
+    // collapsible block inside it, not as a separate message.
+    const reasoningText = extractReasoningText(event.interaction);
+    const visibleContent = (event.interaction?.content || '').trim()
+        ? (event.interaction!.content as string)
+        : '';
+    // Don't let content fall back to reasoning (responseText/summary does):
+    // reasoning has its own block, and a tool-only turn genuinely produced no
+    // visible text. Fall back to responseText only when there's no reasoning to
+    // show (covers frameworks that don't emit structured reasoning parts).
+    const assistantContent = visibleContent || (reasoningText ? '' : (responseText || ''));
+    const outputToolCalls = extractToolCalls(event.interaction);
+    const hasOutput = !!(assistantContent || reasoningText || outputToolCalls.length);
+    const reasoningTokens = event.usage?.reasoning;
+    const reasoningDurationLabel = (event.startedAt != null && event.completedAt != null && event.completedAt > event.startedAt)
+        ? formatDuration(event.completedAt - event.startedAt)
+        : undefined;
 
     return (
-        <div>
-            <SectionTitle>
-                Trace / Span Snapshot
-                <span className="ml-2 text-xs font-normal text-foreground-muted">
-                    input {snapshot.inputMessages.length}
-                </span>
-            </SectionTitle>
-            <div className="overflow-hidden rounded-md border border-border bg-card">
-                <div className="flex flex-wrap items-center gap-2 border-b border-border bg-background-secondary px-2.5 py-2">
+        <div className="flex flex-col gap-3">
+            {/* span identity */}
+            <div>
+                <SectionTitle>Trace / Span Snapshot</SectionTitle>
+                <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-background-secondary px-2.5 py-2">
                     <KindBadge kind="llm" />
                     <span className="text-sm font-semibold text-foreground">{spanId}</span>
                     <span className="text-xs text-foreground-muted">thread_id</span>
                     <span className="rounded-sm border border-border bg-card px-1.5 py-0.5 font-mono text-xs text-foreground">{threadId}</span>
-                    <span className="ml-auto text-xs text-foreground-muted">
-                        event #{event.interactionIndex}
-                    </span>
-                </div>
-
-                <div className="border-t border-border bg-background-tertiary p-2">
-                    <div className="overflow-hidden rounded-md border border-border bg-card">
-                        <div className="flex items-center gap-2 px-2.5 py-1.5">
-                            <span className="text-xs font-semibold text-foreground">input</span>
-                            <span className="text-xs text-foreground-muted tabular-nums">{snapshot.inputMessages.length}</span>
-                            {snapshot.repeatedPrefixCount > 0 && (
-                                <span className="rounded-sm border border-border bg-background-secondary px-1.5 py-0.5 text-xs text-foreground-muted">
-                                    folded {snapshot.repeatedPrefixCount}
-                                </span>
-                            )}
-                        </div>
-                        {repeatedMessages.length > 0 && (
-                            <RepeatedMessagesBlock messages={repeatedMessages} modalTitle={`${title} — input`} />
-                        )}
-                        {freshMessages.length > 0 ? (
-                            freshMessages.map((message, index) => (
-                                <SnapshotMessageRow
-                                    key={`${message.role}-${message.position}-${index}`}
-                                    message={message}
-                                    defaultExpanded={index === freshMessages.length - 1}
-                                    modalTitle={`${title} — input #${message.position}`}
-                                />
-                            ))
-                        ) : repeatedMessages.length === 0 ? (
-                            <div className="border-t border-border px-3 py-2 text-xs text-foreground-muted">
-                                No input messages captured for this span.
-                            </div>
-                        ) : null}
-                    </div>
-                </div>
-
-                <div className="border-t border-border bg-background-tertiary p-2">
-                    <div className="overflow-hidden rounded-md border border-border bg-card">
-                        <div className="flex items-center gap-2 px-2.5 py-1.5">
-                            <span className="text-xs font-semibold text-foreground">output</span>
-                            <span className="text-xs text-foreground-muted tabular-nums">{output ? 1 : 0}</span>
-                        </div>
-                        {output ? (
-                            <SnapshotMessageRow
-                                message={{ role: 'assistant', content: output, source: 'history', position: 1 }}
-                                defaultExpanded
-                                modalTitle={`${title} — output`}
-                            />
-                        ) : (
-                            <div className="border-t border-border px-3 py-2 text-xs text-foreground-muted">
-                                No text output captured.
-                            </div>
-                        )}
-                    </div>
+                    <span className="ml-auto text-xs text-foreground-muted">event #{event.interactionIndex}</span>
                 </div>
             </div>
+
+            {/* INPUT — two collapsible groups: History (system + prior turns) and Current input */}
+            <SnapshotSection label="Input" count={inputCount} defaultOpen>
+                {historyAndSystem.length > 0 && (
+                    <FoldedMessagesBlock
+                        messages={historyAndSystem}
+                        label="History"
+                        subtitle="system + 历史上下文 · 已折叠"
+                        modalTitle={`${title} — history`}
+                    />
+                )}
+                {currentInput.length > 0 ? (
+                    <FoldedMessagesBlock
+                        messages={currentInput}
+                        label="Current input"
+                        subtitle="本轮新增"
+                        modalTitle={`${title} — current input`}
+                        defaultOpen
+                    />
+                ) : (
+                    <div className="border-t border-border first:border-t-0 px-3 py-2 text-xs text-foreground-muted">
+                        {historyAndSystem.length
+                            ? '本轮无新增输入（上下文与上次相同）'
+                            : 'No input messages captured for this span.'}
+                    </div>
+                )}
+            </SnapshotSection>
+
+            {/* OUTPUT — collapsible peer */}
+            <SnapshotSection label="Output" count={hasOutput ? 1 : 0} defaultOpen>
+                {hasOutput ? (
+                    <SnapshotMessageRow
+                        message={{
+                            role: 'assistant',
+                            content: assistantContent,
+                            reasoning: reasoningText,
+                            reasoningTokens,
+                            reasoningDurationLabel,
+                            // Tool calls are part of the assistant's response (tool_use
+                            // blocks), so they belong in Output — same rendering as input.
+                            toolCalls: outputToolCalls,
+                            source: 'history',
+                            position: 1,
+                        }}
+                        modalTitle={`${title} — output`}
+                    />
+                ) : (
+                    <div className="px-3 py-2 text-xs text-foreground-muted">
+                        No text output captured.
+                    </div>
+                )}
+            </SnapshotSection>
         </div>
     );
 }
@@ -2152,11 +2498,6 @@ function LLMEventBody({ event, responseText, interactions, node }: {
     const hasParams = modelId || provider || temperature != null || maxTokens != null
         || topP != null || freqPenalty != null || presPenalty != null || hasUsage || finishReason || callLatencyMs != null;
 
-    const toolCallsTriggered = (it.tool_calls || []).filter(tc => {
-        const n = tc.function?.name || tc.name || '';
-        return n !== 'task' && n !== 'skill';
-    });
-
     const snapshot = useMemo(
         () => buildLlmPromptSnapshot(event, node, interactions),
         [event, node, interactions],
@@ -2240,31 +2581,6 @@ function LLMEventBody({ event, responseText, interactions, node }: {
                 />
             )}
 
-            {/* Tool calls triggered — compact chip list */}
-            {toolCallsTriggered.length > 0 && (
-                <div>
-                    <SectionTitle>Tool calls ({toolCallsTriggered.length})</SectionTitle>
-                    <div className="flex flex-wrap gap-1">
-                        {toolCallsTriggered.slice(0, 12).map((tc, i) => {
-                            const name = tc.function?.name || tc.name || 'unknown';
-                            return (
-                                <span
-                                    key={i}
-                                    className={cn(
-                                        'inline-flex items-center text-xs font-semibold px-2 py-0.5 rounded-sm border',
-                                        KIND_META.tool.chip,
-                                    )}
-                                >
-                                    {name}
-                                </span>
-                            );
-                        })}
-                        {toolCallsTriggered.length > 12 && (
-                            <span className="text-xs text-foreground-muted self-center">+{toolCallsTriggered.length - 12}</span>
-                        )}
-                    </div>
-                </div>
-            )}
         </>
     );
 }
