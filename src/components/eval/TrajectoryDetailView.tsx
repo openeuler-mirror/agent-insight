@@ -20,6 +20,7 @@ import { apiFetch } from '@/lib/client/api';
 import { useAuth } from '@/lib/auth/auth-context';
 import { EvaluatorFindingsView } from './EvaluatorFindingsView';
 import { TraceAlignmentPanel, type TraceAlignmentPanelProps } from './TraceAlignmentPanel';
+import { Term } from '@/components/text/Term';
 import { parseSkillAttributionFromRow } from '@/lib/engine/evaluation/skill-attribution';
 
 interface DatasetCase {
@@ -1248,9 +1249,9 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
                                     if (dims.completeness == null && dims.toolChoice == null && dims.redundancy == null) return null;
                                     return (
                                         <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 8, marginBottom: 12 }}>
-                                            <DimensionCard label="完整性" weight={0.45} score={dims.completeness} findings={findings.completeness} />
-                                            <DimensionCard label="工具选择" weight={0.35} score={dims.toolChoice} findings={findings.toolChoice} />
-                                            <DimensionCard label="冗余" weight={0.20} score={dims.redundancy} findings={findings.redundancy} />
+                                            <DimensionCard label="完整性" termId="traj-completeness" weight={0.45} score={dims.completeness} findings={findings.completeness} />
+                                            <DimensionCard label="工具选择" termId="traj-tool-choice" weight={0.35} score={dims.toolChoice} findings={findings.toolChoice} />
+                                            <DimensionCard label="冗余" termId="traj-redundancy" weight={0.20} score={dims.redundancy} findings={findings.redundancy} />
                                         </div>
                                     );
                                 })()}
@@ -1930,12 +1931,15 @@ function DimensionCard({
     score,
     findings,
     weight,
+    termId,
 }: {
     label: string;
     score: number | null | undefined;
     findings?: { type: 'high' | 'medium' | 'low' | 'info'; text: string }[];
     /** 该维度在加权轨迹分中的权重（0-1）；提供时在标签后展示「权重 xx%」。 */
     weight?: number;
+    /** glossary 条目 id；提供时在标签后加一个 i 角标，hover 展示"评测什么能力 + 怎么算分"。 */
+    termId?: string;
 }) {
     const [expanded, setExpanded] = useState(false);
     const hasScore = typeof score === 'number' && Number.isFinite(score);
@@ -1954,20 +1958,15 @@ function DimensionCard({
             flexDirection: 'column',
             gap: 6,
         }}>
-            <button
-                type="button"
+            <div
+                role={hasFindings ? 'button' : undefined}
                 onClick={() => hasFindings && setExpanded(v => !v)}
-                disabled={!hasFindings}
                 style={{
                     display: 'flex',
                     justifyContent: 'space-between',
                     alignItems: 'baseline',
-                    background: 'transparent',
-                    border: 'none',
-                    padding: 0,
                     cursor: hasFindings ? 'pointer' : 'default',
                     width: '100%',
-                    textAlign: 'left',
                 }}
                 aria-expanded={expanded}
             >
@@ -1982,6 +1981,12 @@ function DimensionCard({
                         }}>›</span>
                     ) : null}
                     {label}
+                    {termId ? (
+                        // i 角标：hover 展示"评测什么能力 + 怎么算分"。stopPropagation 防止点角标误触展开。
+                        <span onClick={e => e.stopPropagation()} style={{ display: 'inline-flex', alignItems: 'center' }}>
+                            <Term id={termId} render="compact" />
+                        </span>
+                    ) : null}
                     {typeof weight === 'number' ? (
                         <span style={{ color: COLORS.textDisabled, fontSize: 10, fontWeight: 400 }}>
                             权重 {Math.round(weight * 100)}%
@@ -1997,7 +2002,7 @@ function DimensionCard({
                     <span style={{ fontSize: 14, fontWeight: 600, color: tone }}>{fmtScore10(score)}</span>
                     <span style={{ fontSize: 9, color: COLORS.textDisabled, marginLeft: 2 }}>/10</span>
                 </span>
-            </button>
+            </div>
             <div style={{ height: 3, background: bg, borderRadius: 2, overflow: 'hidden' }}>
                 <div style={{ width: `${barWidth}%`, height: '100%', background: tone }} />
             </div>
