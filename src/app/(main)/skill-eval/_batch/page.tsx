@@ -2142,16 +2142,18 @@ export function BatchEvaluation({
                                 : status === 'pass' ? 'done'
                                 : status === 'fail' ? 'failed'
                                 : 'pending';
+                            const meta = st?.sessionId ? evalResultsMap.get(st.sessionId) : undefined;
                             return {
                                 id: c.id,
-                                caseLabel: String(c.input || c.id).slice(0, 40),
+                                caseLabel: String(c.input || c.id),
                                 caseTitle: c.input || c.id,
                                 executionTraceId: st?.sessionId || undefined,
-                                evaluationTraceId: st?.sessionId ? evalResultsMap.get(st.sessionId)?.evaluationTraceId : undefined,
+                                evaluationTraceId: meta?.evaluationTraceId,
                                 evaluatorRunId: st?.evaluatorRunId || evaluationBatchId || undefined,
-                                datasetId: c.datasetId || undefined,
+                                datasetId: c.datasetId || meta?.datasetId || undefined,
                                 status: compStatus,
-                                score: st?.score ?? null,
+                                resultScore: meta?.resultScore ?? null,
+                                trajScore: meta?.trajScore ?? null,
                                 errorMsg: st?.output || undefined,
                             } as EvalRecordRow;
                         })}
