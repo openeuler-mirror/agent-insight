@@ -109,6 +109,7 @@ export function ExecutionRecordsTable({
     title,
     emptyHint,
     onRetry,
+    onDelete,
     onRowClick,
 }: {
     records: EvalRecordRow[];
@@ -117,11 +118,16 @@ export function ExecutionRecordsTable({
     emptyHint?: string;
     /** 行级重试回调; 不传则不显示重试按钮 */
     onRetry?: (record: EvalRecordRow) => void;
+    /** 行级删除回调; 不传则不显示删除按钮。进行中(评测中/执行中/排队中)的行会禁用删除。 */
+    onDelete?: (record: EvalRecordRow) => void;
     /** 点击行(非链接/按钮区)回调, 用于在本页钻取结果详情; 不传则行不可点 */
     onRowClick?: (record: EvalRecordRow) => void;
 }) {
     const zh = locale === 'zh';
-    const cols = '0.9fr 1fr 1fr 78px 62px 52px 52px' + (onRetry ? ' 50px' : '');
+    const hasActions = !!onRetry || !!onDelete;
+    // 操作列容纳 重试 + 删除 两个按钮, 宽度按是否两者都在调整。
+    const actionColWidth = onRetry && onDelete ? ' 92px' : hasActions ? ' 50px' : '';
+    const cols = '0.9fr 1fr 1fr 78px 62px 52px 52px' + actionColWidth;
     return (
         <div style={{ border: '1px solid #E7E5E4', borderRadius: 8, overflow: 'hidden', background: '#fff' }}>
             <style>{'@keyframes erspin{to{transform:rotate(360deg)}}'}</style>
@@ -151,7 +157,7 @@ export function ExecutionRecordsTable({
                         <div>{zh ? '评测结果' : 'Result'}</div>
                         <div style={{ textAlign: 'right' }}>{zh ? '结果分' : 'Result'}</div>
                         <div style={{ textAlign: 'right' }}>{zh ? '轨迹分' : 'Traj'}</div>
-                        {onRetry && <div style={{ textAlign: 'right' }}>{zh ? '操作' : 'Action'}</div>}
+                        {hasActions && <div style={{ textAlign: 'right' }}>{zh ? '操作' : 'Action'}</div>}
                     </div>
                     {records.map(rec => {
                         const { tone, label } = statusToneLabel(rec.status, locale);
@@ -242,20 +248,37 @@ export function ExecutionRecordsTable({
                                     {typeof rec.trajScore === 'number' ? Math.round(rec.trajScore) : '—'}
                                 </div>
 
-                                {/* 重试 —— 无论评测与否/成功失败都提供 (重新发起评测) */}
-                                {onRetry && (
-                                    <div style={{ textAlign: 'right' }}>
-                                        <button
-                                            className="v2-action-btn"
-                                            style={{ fontSize: 11, padding: '3px 8px', border: '1px solid #D4D4D8', background: '#fff', borderRadius: 4, cursor: tone === 'running' ? 'not-allowed' : 'pointer', color: tone === 'running' ? '#B8B6AE' : '#52525B', opacity: tone === 'running' ? 0.6 : 1 }}
-                                            disabled={tone === 'running'}
-                                            title={tone === 'running' ? (zh ? '评测/执行进行中…' : 'In progress…') : (zh ? '重新评测这条' : 'Re-evaluate')}
-                                            onClick={e => { e.stopPropagation(); if (tone !== 'running') onRetry(rec); }}
-                                        >
-                                            {zh ? '重试' : 'Retry'}
-                                        </button>
-                                    </div>
-                                )}
+                                {/* 操作：重试(无论成功失败都可) + 删除(进行中禁用) */}
+                                {hasActions && (() => {
+                                    // 进行中(评测中/执行中=running, 排队中=pending) 不允许删除, 避免删掉正在写盘的记录。
+                                    const inProgress = tone === 'running' || tone === 'pending';
+                                    return (
+                                        <div style={{ textAlign: 'right', display: 'inline-flex', gap: 4, justifyContent: 'flex-end' }}>
+                                            {onRetry && (
+                                                <button
+                                                    className="v2-action-btn"
+                                                    style={{ fontSize: 11, padding: '3px 8px', border: '1px solid #D4D4D8', background: '#fff', borderRadius: 4, cursor: tone === 'running' ? 'not-allowed' : 'pointer', color: tone === 'running' ? '#B8B6AE' : '#52525B', opacity: tone === 'running' ? 0.6 : 1 }}
+                                                    disabled={tone === 'running'}
+                                                    title={tone === 'running' ? (zh ? '评测/执行进行中…' : 'In progress…') : (zh ? '重新评测这条' : 'Re-evaluate')}
+                                                    onClick={e => { e.stopPropagation(); if (tone !== 'running') onRetry(rec); }}
+                                                >
+                                                    {zh ? '重试' : 'Retry'}
+                                                </button>
+                                            )}
+                                            {onDelete && (
+                                                <button
+                                                    className="v2-action-btn"
+                                                    style={{ fontSize: 11, padding: '3px 8px', border: '1px solid ' + (inProgress ? '#E7E5E4' : '#F0C5C5'), background: '#fff', borderRadius: 4, cursor: inProgress ? 'not-allowed' : 'pointer', color: inProgress ? '#B8B6AE' : '#DC2626', opacity: inProgress ? 0.6 : 1 }}
+                                                    disabled={inProgress}
+                                                    title={inProgress ? (zh ? '评测/执行进行中，无法删除' : 'In progress, cannot delete') : (zh ? '从评测执行列表删除这条' : 'Delete this record')}
+                                                    onClick={e => { e.stopPropagation(); if (!inProgress) onDelete(rec); }}
+                                                >
+                                                    {zh ? '删除' : 'Delete'}
+                                                </button>
+                                            )}
+                                        </div>
+                                    );
+                                })()}
                             </div>
                         );
                     })}

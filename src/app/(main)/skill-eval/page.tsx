@@ -3063,6 +3063,29 @@ function TraceDeviationPanel({
     // 后端进行中的评测，把对应 taskId 补回这个 Map——刷新页面后"评测中"徽章不消失。
     const [triggeredTaskIds, setTriggeredTaskIds] = useState<Map<string, number>>(new Map());
 
+    // 用户在「评测执行」里删除的 trace（taskId）→ 从列表隐藏。后端会一并删掉该 trace 在当前评测任务
+    // 下的 TrajectoryEvalResult 行；但 trace 的 Execution.answer_score / matchJson 仍保留（非破坏性），
+    // 所以这里用 localStorage 记一份"已从评测视图删除"的集合，避免刷新后又凭分数被显示出来。
+    const deletedTracesStorageKey = useMemo(
+        () => (user && skill?.name ? `eval-deleted-traces:${user}:${skill.name}:${version ?? 'all'}` : ''),
+        [user, skill?.name, version],
+    );
+    const [deletedTaskIds, setDeletedTaskIds] = useState<Set<string>>(new Set());
+    useEffect(() => {
+        if (!deletedTracesStorageKey) { setDeletedTaskIds(new Set()); return; }
+        try {
+            const raw = localStorage.getItem(deletedTracesStorageKey);
+            const arr = raw ? JSON.parse(raw) : [];
+            setDeletedTaskIds(new Set(Array.isArray(arr) ? arr.map(String) : []));
+        } catch { setDeletedTaskIds(new Set()); }
+    }, [deletedTracesStorageKey]);
+    const persistDeletedTaskIds = useCallback((next: Set<string>) => {
+        setDeletedTaskIds(next);
+        if (deletedTracesStorageKey) {
+            try { localStorage.setItem(deletedTracesStorageKey, JSON.stringify(Array.from(next))); } catch {/* ignore */}
+        }
+    }, [deletedTracesStorageKey]);
+
     // 自动清理 triggeredTaskIds: 当 trace 的后端 is_evaluating 变成 false (评测真的结束了),
     // 把这条 taskId 从 Map 移除,让 getTraceEvalStatus 不再返回 'pending',UI 自然切回 'done' 或
     // 显示新的分数。否则"已评测的 trace 重新评测后" Map 残留 → 永久卡在"评测中"。
@@ -3754,7 +3777,8 @@ function TraceDeviationPanel({
     // 用户明确要求"无论成功失败都要列出来",所以这里跟 getTraceEvalStatus 解耦,
     // 走"any history" 的口径,避免漏掉 backend 落了 row 但前端 state 算不出非-idle 的 case。
     const displayedTraces = scoredTraces.filter(s =>
-        getTraceEvalStatus(s) !== 'idle' || evaluatedTaskIds.has(s.id)
+        !deletedTaskIds.has(s.id)
+        && (getTraceEvalStatus(s) !== 'idle' || evaluatedTaskIds.has(s.id))
     );
     const fullyEvaluated = scoredTraces.filter(s => s.resultScore != null && s.trajScore != null);
     const avgResult = fullyEvaluated.length === 0 ? null
@@ -4201,6 +4225,31 @@ function TraceDeviationPanel({
                                     return next;
                                 });
                             }
+                        }
+                    }}
+                    onDelete={async rec => {
+                        const id = rec.id;
+                        if (typeof window !== 'undefined' && !window.confirm('确定从「评测执行」列表删除这条记录吗？\n该 trace 在当前评测任务下的评测结果会被删除（trace 本身保留，可重新评测）。')) return;
+                        try {
+                            if (user) {
+                                const res = await apiFetch('/api/eval/trajectory/results', {
+                                    method: 'DELETE',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ user, taskId: id, runId: traceEvaluationBatchId || undefined }),
+                                });
+                                if (!res.ok) {
+                                    const data = await res.json().catch(() => ({}));
+                                    alert('删除失败：' + (data?.error || `HTTP ${res.status}`));
+                                    return;
+                                }
+                            }
+                            // 前端隐藏 + 持久化，并从各状态集合移除，避免轮询/恢复又把它显示回来。
+                            const next = new Set(deletedTaskIds); next.add(id); persistDeletedTaskIds(next);
+                            setTriggeredTaskIds(prev => { if (!prev.has(id)) return prev; const m = new Map(prev); m.delete(id); return m; });
+                            setFailedTaskIds(prev => { if (!prev.has(id)) return prev; const m = new Map(prev); m.delete(id); return m; });
+                            setEvaluatedTaskIds(prev => { if (!prev.has(id)) return prev; const ss = new Set(prev); ss.delete(id); return ss; });
+                        } catch (e) {
+                            alert('删除失败：' + (e instanceof Error ? e.message : String(e)));
                         }
                     }}
                     records={displayedTraces.map(s => {

@@ -42,6 +42,53 @@ function pickCustomEvaluationScore(rawAnalysisJson: string | null | undefined): 
     return typeof value === 'number' && !Number.isNaN(value) ? value : null;
 }
 
+/**
+ * 删除评测记录：从「评测执行」列表移除一条记录。
+ * 入参 { user, taskId, runId?, resultId? }：
+ *  - resultId 指定 → 精确删该行；
+ *  - 否则按 user + taskId (+ evaluatorRunId=runId) 删该 trace 在该评测任务下的全部记录。
+ * 安全约束：若命中行里有 running / pending（评测/执行进行中），整体拒绝删除（409）。
+ */
+export async function DELETE(request: Request) {
+    try {
+        const { searchParams } = new URL(request.url);
+        let body: Record<string, unknown> = {};
+        try { body = await request.json(); } catch { /* 允许走 query 参数 */ }
+        const pick = (k: string) => String((body[k] as string) ?? searchParams.get(k) ?? '').trim();
+        const user = pick('user');
+        const taskId = pick('taskId');
+        const runId = pick('runId');
+        const resultId = pick('resultId');
+        if (!user) return NextResponse.json({ error: 'user is required' }, { status: 400 });
+        if (!resultId && !taskId) {
+            return NextResponse.json({ error: 'taskId or resultId is required' }, { status: 400 });
+        }
+
+        const where: Record<string, unknown> = { user };
+        if (resultId) where.id = resultId;
+        else {
+            where.taskId = taskId;
+            if (runId) where.evaluatorRunId = runId;
+        }
+
+        const rows = await prisma.trajectoryEvalResult.findMany({
+            where,
+            select: { id: true, status: true },
+        });
+        if (rows.length === 0) return NextResponse.json({ deleted: 0 });
+        if (rows.some(r => r.status === 'running' || r.status === 'pending')) {
+            return NextResponse.json(
+                { error: '评测/执行进行中，无法删除；请等待完成或先中止后再删除。' },
+                { status: 409 },
+            );
+        }
+        const res = await prisma.trajectoryEvalResult.deleteMany({ where });
+        return NextResponse.json({ deleted: res.count });
+    } catch (e) {
+        return NextResponse.json({ error: (e as Error)?.message || '删除失败' }, { status: 500 });
+    }
+}
+
 export async function GET(request: Request) {
     try {
         const { searchParams } = new URL(request.url);
