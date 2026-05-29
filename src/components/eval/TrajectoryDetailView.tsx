@@ -736,6 +736,8 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string>('');
     const [activeAnalysisTab, setActiveAnalysisTab] = useState<'result' | 'trajectory' | 'custom'>('result');
+    // 执行轨迹对齐面板默认折叠（放在轨迹评测最后，按需展开看详细对齐时序图）。
+    const [alignmentOpen, setAlignmentOpen] = useState(false);
 
     // Execution（轮询，结果评测字段可能在轨迹评测过程中被补写）
     useEffect(() => {
@@ -1255,18 +1257,6 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
 
                                 <TrajectoryCapBanner rawAnalysis={result.rawAnalysis} trajectoryScore={result.trajectoryScore} />
 
-                                {/* 执行轨迹对齐 · Skill 预期标注（从 用例分析 ③ 分析结果 迁移而来）。
-                                    以实际执行为主，直接标注偏离与缺失步骤；数据来自 analyze-match。 */}
-                                {alignmentPanelProps && (
-                                    <div style={{ marginTop: 14 }}>
-                                        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 6 }}>
-                                            <span style={{ fontSize: 12.5, fontWeight: 600, color: COLORS.text }}>执行轨迹对齐 · Skill 预期标注</span>
-                                            <span style={{ fontSize: 11, color: COLORS.textMuted }}>以实际执行为主，直接标注偏离与缺失步骤</span>
-                                        </div>
-                                        <TraceAlignmentPanel {...alignmentPanelProps} />
-                                    </div>
-                                )}
-
                                 {/* 轨迹 tab 只保留过程向的 Skill 归因问题：
                                     - deviation_steps     -> 路径偏离
                                     - tool_choice_findings -> 工具选择
@@ -1344,6 +1334,32 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
                                         </div>
                                     )}
                                 </div>
+
+                                {/* 执行轨迹对齐 · Skill 预期标注 —— 放在轨迹评测最后，默认折叠，
+                                    点击展开看详细的对齐时序图 / 缺失·偏离标注；数据来自 analyze-match。 */}
+                                {alignmentPanelProps && (
+                                    <div style={{ marginTop: 14 }}>
+                                        <button
+                                            type="button"
+                                            onClick={() => setAlignmentOpen(o => !o)}
+                                            style={{
+                                                display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+                                                background: COLORS.bgSoft, border: `1px solid ${COLORS.border}`,
+                                                borderRadius: 6, padding: '8px 12px', cursor: 'pointer', textAlign: 'left',
+                                            }}
+                                            aria-expanded={alignmentOpen}
+                                        >
+                                            <span style={{ fontSize: 11, color: COLORS.textDisabled, transition: 'transform 0.15s', transform: alignmentOpen ? 'rotate(90deg)' : 'none' }}>▶</span>
+                                            <span style={{ fontSize: 12.5, fontWeight: 600, color: COLORS.text }}>执行轨迹对齐 · Skill 预期标注</span>
+                                            <span style={{ fontSize: 11, color: COLORS.textMuted }}>以实际执行为主，直接标注偏离与缺失步骤</span>
+                                        </button>
+                                        {alignmentOpen && (
+                                            <div style={{ marginTop: 8 }}>
+                                                <TraceAlignmentPanel {...alignmentPanelProps} />
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
 
                                 {/* 重新跑归因评估按钮 —— 用户在详情页看到结果过时/不完整时可以就地重新触发，
                                     避免必须回 batch 列表才能重跑（对应方案 A：保留单条 trace 重新归因入口）。 */}
