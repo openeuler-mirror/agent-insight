@@ -1,10 +1,10 @@
-# Agent-Insight
+# Agent Insight
 
 **让每一个 Agent 都可被观测、可被评估、可自我进化。**
 
-## 为什么需要 Agent-Insight？
+## 为什么需要 Agent Insight？
 
-随着 Agent 在各行业的落地，开发者面临三大痛点：Agent 运行过程如同黑盒，难以定位问题根因；Skill 质量参差不齐，缺少体系化的评测与迭代手段；Agent 经验无法沉淀复用，每次优化都从零开始。Agent-Insight 正是为解决这些问题而生——它是一个框架无关的 Agent Insight 工程底座，让运行在 OpenCode、Claude Code、LangChain、OpenClaw 等任意框架上的 Agent 都能被持续观测、系统评测和自主优化。
+随着 Agent 在各行业的落地，开发者面临三大痛点：Agent 运行过程如同黑盒，难以定位问题根因；Skill 质量参差不齐，缺少体系化的评测与迭代手段；Agent 经验无法沉淀复用，每次优化都从零开始。Agent-Insight 正是为解决这些问题而生——它是一个框架无关的Agent可观测与自进化工程底座，让运行在 OpenCode、Claude Code、LangChain、OpenClaw 等任意框架上的 Agent 都能被持续观测、系统评测和自主优化。
 
 ## 架构
 
@@ -13,7 +13,7 @@
 ## 核心能力
 
 - **Agent观测与自进化**：围绕运行数据采集 → 链路跟踪 → 评测分析 → 经验沉淀 → 辅助决策，构建 Agent 全生命周期的数据飞轮，将运行数据转化为实时决策能力，持续提升 Agent 运行效能。
-- **Skill 开发与自进化**：围绕 Skill 生成 → 调试 → 观测 → 评估 → 优化，构建全生命周期能力闭环，将 Skill 打造为可持续进化的工程资产，提升开发效率与运行效能。
+- **Skill 开发与自进化**：围绕 Skill 生成 → 观测 → 评测 → 优化 → 版本管理，构建全生命周期能力闭环，将 Skill 打造为可持续进化的工程资产，提升开发效率与运行效能。
 
 ---
 
@@ -48,15 +48,6 @@ npx @witty-ai/agen-insight install
 git clone https://gitcode.com/openeuler/witty-agent-insight.git
 cd witty-agent-insight
 npm install
-
-# 开发模式
-bash scripts/restart_dev.sh
-
-# 生产模式
-bash scripts/restart.sh
-
-# 配置数据上报路径
-curl -sSf http://<IP>:<PORT>/api/setup | bash
 ```
 
 #### 启动服务
@@ -64,16 +55,17 @@ curl -sSf http://<IP>:<PORT>/api/setup | bash
 ```bash
 cd witty-agent-insight
 
-# 开发模式
+# 启动命令（二选一）
+# 开发模式：支持本地代码变更实时热加载，无需重启服务
 bash scripts/restart_dev.sh
 
-# 生产模式
+# 产模式：标准正式服务启动模式
 bash scripts/restart.sh
 ```
 
 #### 访问看板
 
-浏览器打开 `http://localhost:3000`，使用任意邮箱登录即可，例如 `demo@163.com`。
+浏览器访问 `http://{your host ip}:3000`，使用任意邮箱登录即可，例如 `demo@163.com`。
 <img src="docs/images/login.png" alt="登陆" />
 
 ### 安装客户端
@@ -88,7 +80,7 @@ bash scripts/restart.sh
 curl -sSf "http://172.29.209.207:3000/api/ingest/setup" | bash
 ```
 
-3. 选择 Agent 运行时。
+3. 选择 Agent 框架。
    
    <img src="docs/images/guide-framework.png" alt="安装指导"  />
 
@@ -115,9 +107,11 @@ opencode run 'hello'
 ### 注册模型
 
 1. 进入 **模型注册**，单击 **注册首个模型**。
+   
    <img src="docs/images/model-view.png" alt="注册模型" />
 
 2. 选择模型供应商。
+   
    <img src="docs/images/model-provider.png" alt="选择模型供应商" />
 
 3. 配置 API 密钥，单击 **测试连接并保存**。
@@ -134,9 +128,10 @@ opencode run 'hello'
 
 2. 单击 **保存并发布**。
 
-### 分析 Skill
+### 评测 Skill
 
-1. 进入 **Skills 分析**，单击 **静态合规**。
+1. 进入 **Skills 评测**，单击 **静态合规**。
+   
    <img src="docs/images/skill-analyse.png" alt="分析Skill" />
 
 2. 单击 **重新扫描**，查看分析结果。
