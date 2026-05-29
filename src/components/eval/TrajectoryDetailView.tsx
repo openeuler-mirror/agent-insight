@@ -2026,6 +2026,28 @@ function asRecord(value: unknown): Record<string, unknown> {
         : {};
 }
 
+/**
+ * 维度明细里的 step 项可能是字符串(评估器常这么输出)，也可能是对象。
+ * 统一抽成 { text, severity, idx, name }，避免 string 项被当对象读 .description
+ * 而显示成「(未给描述)」。对象时按多字段兜底取文案。
+ */
+function extractStepInfo(raw: unknown): {
+    text: string;
+    severity: unknown;
+    idx: unknown;
+    name: unknown;
+} {
+    if (typeof raw === 'string') {
+        return { text: raw.trim(), severity: undefined, idx: undefined, name: undefined };
+    }
+    const m = asRecord(raw);
+    const text = String(
+        m.description ?? m.desc ?? m.issue ?? m.step ?? m.action
+        ?? m.detail ?? m.text ?? m.reason ?? m.note ?? m.name ?? '',
+    ).trim();
+    return { text, severity: m.severity, idx: m.step_index ?? m.stepIndex, name: m.name };
+}
+
 function deriveDimensionFindings(rawAnalysis: unknown): {
     completeness: { type: 'high' | 'medium' | 'low' | 'info'; text: string }[];
     toolChoice: { type: 'high' | 'medium' | 'low' | 'info'; text: string }[];
@@ -2045,13 +2067,12 @@ function deriveDimensionFindings(rawAnalysis: unknown): {
     const completeness: { type: ReturnType<typeof sev>; text: string }[] = [];
     const cmpt = asRecord(details.completeness);
     for (const raw of (Array.isArray(cmpt.missing_steps) ? cmpt.missing_steps : [])) {
-        const m = asRecord(raw);
-        completeness.push({ type: sev(m.severity), text: `缺失：${m.description || '(未给描述)'}` });
+        const { text, severity } = extractStepInfo(raw);
+        completeness.push({ type: sev(severity), text: `缺失：${text || '(未给描述)'}` });
     }
     for (const raw of (Array.isArray(cmpt.extra_steps) ? cmpt.extra_steps : [])) {
-        const m = asRecord(raw);
-        const idx = m.step_index ?? m.stepIndex;
-        completeness.push({ type: sev(m.severity), text: `多余${idx != null ? `（#${idx}）` : ''}：${m.description || '(未给描述)'}` });
+        const { text, severity, idx } = extractStepInfo(raw);
+        completeness.push({ type: sev(severity), text: `多余${idx != null ? `（#${idx}）` : ''}：${text || '(未给描述)'}` });
     }
     if (completeness.length === 0 && cmpt.explanation) {
         completeness.push({ type: 'info', text: String(cmpt.explanation) });
@@ -2060,10 +2081,9 @@ function deriveDimensionFindings(rawAnalysis: unknown): {
     const toolChoice: { type: ReturnType<typeof sev>; text: string }[] = [];
     const tc = asRecord(details.tool_choice ?? details.toolChoice);
     for (const raw of (Array.isArray(tc.problematic_steps) ? tc.problematic_steps : [])) {
-        const m = asRecord(raw);
-        const idx = m.step_index ?? m.stepIndex;
-        const name = m.name ? ` ${m.name}` : '';
-        toolChoice.push({ type: sev(m.severity), text: `#${idx ?? '?'}${name}：${m.issue || '(未给原因)'}` });
+        const { text, severity, idx, name } = extractStepInfo(raw);
+        const nm = name ? ` ${name}` : '';
+        toolChoice.push({ type: sev(severity), text: `#${idx ?? '?'}${nm}：${text || '(未给原因)'}` });
     }
     if (toolChoice.length === 0 && tc.explanation) {
         toolChoice.push({ type: 'info', text: String(tc.explanation) });
