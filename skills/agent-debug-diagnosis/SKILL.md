@@ -71,6 +71,8 @@ python3 .agent-debug-diagnosis/scripts/agentdebug_validate.py \
 - Action 必须来自真实工具调用或明确动作标签，不能由 LLM 编造。
 - 用户界面永远关联左侧真实 trace 节点；不要把内部诊断 step/turn 当作用户可见位置。
 - `phase1Grid`、`issues`、`rootCause`、`cascadingChain` 必须尽量携带 `anchorId`、`traceStepIndex`、`traceNodeLabel`、`traceNodeKind`。`diagnosticStep` 仅供内部排查，不能写进自然语言摘要。
+- 用户可见自然语言里默认使用“关键发现”“潜在问题”“过程风险”，不要把已恢复或未造成任务失败的问题写成“根因”。只有 trace 明确失败且该问题直接导致失败时，才可以使用“根因”。
+- `rootCause.summary` 只写 1-2 句结论；原始报错、命令、节点、重复模式和长推理放入 `evidence`、`cascadingChain` 或 `correctionGuidance`，不要堆在 summary 里。
 - 不使用候选窗口，不要只分析局部 trace；必须对输入文件里的全部 step 执行拆分和 Phase 1 检测。
 - System 是外部环境证据，不属于四个认知模块，但可以参与根因归因。
 - Memory、Reflection、Planning、Action 都允许留白。
@@ -91,7 +93,7 @@ python3 .agent-debug-diagnosis/scripts/agentdebug_validate.py \
    - Planning：检查违反约束、不可能动作、低效计划、计划和动作不一致。
    - Action：脚本已覆盖大多数静态错误；只在必要时补充 `tool_misuse`。
 6. 合并脚本发现和语义发现，形成 Phase 1 错误网格。
-7. 执行 Phase 2：从 Phase 1 网格中选择最早、最能解释后续级联的根因。
+7. 执行 Phase 2：从 Phase 1 网格中选择最值得用户关注的关键发现；如果任务确实失败，再说明其失败根因。
 8. 写入 `.agent-insight/agent-debug-final.json` 并运行校验脚本。
 9. 返回校验后的最终 JSON。
 

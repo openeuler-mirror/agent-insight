@@ -21,6 +21,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { StatusBadge } from '@/components/feedback/StatusBadge';
 import { ExpandableText } from '@/components/text/ExpandableText';
+import { TermPopover } from '@/components/text/TermPopover';
 import { apiFetch } from '@/lib/client/api';
 import type { AgentDebugModule, AgentDebugPhase1Cell, AgentDebugReportPayload, AgentDebugRootCause, AgentDebugTraceLocation } from '@/lib/engine/agent-debug/types';
 
@@ -62,6 +63,33 @@ const MODULES: Array<{ key: AgentDebugModule; zh: string; en: string }> = [
   { key: 'action', zh: '行动', en: 'Action' },
   { key: 'system', zh: '系统', en: 'System' },
 ];
+
+const MODULE_HELP: Record<string, { zh: string; en: string }> = {
+  memory: {
+    zh: '检查 Agent 是否错误引用历史信息、遗漏用户前文约束，或把不存在的上下文当成事实。',
+    en: 'Checks whether the agent misused prior context, forgot user constraints, or relied on nonexistent history.',
+  },
+  reflection: {
+    zh: '检查 Agent 是否误读工具结果、错误判断成功/失败，或过早认为任务已经完成。',
+    en: 'Checks whether the agent misread tool results, misjudged progress, or claimed success too early.',
+  },
+  planning: {
+    zh: '检查计划是否忽略环境约束、选择不可行路径，或与后续动作明显不一致。',
+    en: 'Checks whether the plan ignored constraints, chose infeasible steps, or diverged from later actions.',
+  },
+  action: {
+    zh: '检查真实工具调用、命令、路径、参数和动作执行结果是否存在明确问题。',
+    en: 'Checks real tool calls, commands, paths, parameters, and action results for concrete issues.',
+  },
+  system: {
+    zh: '检查工具、运行环境、模型限制、权限、超时等外部系统层异常。',
+    en: 'Checks tool, runtime, model-limit, permission, timeout, and other external system errors.',
+  },
+  traceExplicit: {
+    zh: '展示当前 trace 原始数据中已经记录的明确报错事实；它不参与智能诊断推理。',
+    en: 'Shows explicit raw errors already recorded in this trace; it does not participate in diagnosis reasoning.',
+  },
+};
 
 const MODULE_ICONS: Record<string, typeof Clock> = {
   memory: Clock,
@@ -250,10 +278,12 @@ function ReportView({ report, zh, traceExplicitErrors, onNodeRefClick, onRerun }
 }) {
   const root = report.rootCause;
   const visiblePhase1Grid = useMemo(() => filterVisiblePhase1Cells(report.phase1Grid || [], root), [report.phase1Grid, root]);
-  const hiddenIssueCount = Math.max(0, (report.phase1Grid || []).filter(cell => cell.errorDetected).length - visiblePhase1Grid.length);
+  const otherPhase1Grid = useMemo(() => filterOtherPhase1Cells(report.phase1Grid || [], root), [report.phase1Grid, root]);
+  const hiddenIssueCount = otherPhase1Grid.length;
   const [moduleSectionExpanded, setModuleSectionExpanded] = useState(false);
   const [findingDetailsExpanded, setFindingDetailsExpanded] = useState(false);
   const cascadingChain = useMemo(() => visibleCascade(root), [root]);
+  const findingNarrative = useMemo(() => splitFindingSummary(root?.summary || ''), [root?.summary]);
   const visibleIssueCount = visiblePhase1Grid.length;
 
   if (report.skippedReason) {
@@ -311,7 +341,7 @@ function ReportView({ report, zh, traceExplicitErrors, onNodeRefClick, onRerun }
                 expandLabel={zh ? '展开完整结论' : 'Show full conclusion'}
                 collapseLabel={zh ? '收起结论' : 'Collapse conclusion'}
               >
-                {sanitizeReportText(root.summary)}
+                {sanitizeConclusionText(findingNarrative.conclusion)}
               </ExpandableText>
             </div>
 
@@ -326,6 +356,19 @@ function ReportView({ report, zh, traceExplicitErrors, onNodeRefClick, onRerun }
                   <section>
                     <div className="mb-1.5 text-[10.5px] font-bold tracking-wider text-foreground-muted">{zh ? '关键证据' : 'Key evidence'}</div>
                     <p className="rounded-md border border-border bg-background-secondary p-2 font-mono text-[11.5px] leading-5 text-foreground-muted">{sanitizeReportText(root.evidence)}</p>
+                  </section>
+                )}
+                {findingNarrative.details && (
+                  <section>
+                    <div className="mb-1.5 text-[10.5px] font-bold tracking-wider text-foreground-muted">{zh ? '分析说明' : 'Analysis notes'}</div>
+                    <ExpandableText
+                      maxLines={4}
+                      className="text-[12px] leading-6 text-foreground-muted"
+                      expandLabel={zh ? '展开完整说明' : 'Show full notes'}
+                      collapseLabel={zh ? '收起说明' : 'Collapse notes'}
+                    >
+                      {sanitizeReportText(findingNarrative.details)}
+                    </ExpandableText>
                   </section>
                 )}
                 {cascadingChain.length > 0 && (
@@ -397,12 +440,17 @@ function ReportView({ report, zh, traceExplicitErrors, onNodeRefClick, onRerun }
                 onNodeRefClick={onNodeRefClick}
               />
             </div>
+            <OtherFindingsSection
+              cells={otherPhase1Grid}
+              zh={zh}
+              onNodeRefClick={onNodeRefClick}
+            />
 
             <div className="rounded-lg border border-border bg-background-secondary p-3 text-xs text-foreground-muted">
               {hiddenIssueCount > 0
                 ? (zh
-                  ? `当前仅展示根因链路相关问题；${hiddenIssueCount} 个已恢复或旁支问题未展示 · 分析 ${report.stats.stepCount} 个执行片段`
-                  : `Showing root-chain issues only; ${hiddenIssueCount} recovered or side issues hidden · ${report.stats.stepCount} execution slices`)
+                  ? `当前仅展示关键发现相关问题；${hiddenIssueCount} 个已恢复或旁支问题未展示 · 分析 ${report.stats.stepCount} 个执行片段`
+                  : `Showing key-finding issues only; ${hiddenIssueCount} recovered or side issues hidden · ${report.stats.stepCount} execution slices`)
                 : (zh
                   ? `Phase 1 展示 ${visiblePhase1Grid.length} 个问题 · 分析 ${report.stats.stepCount} 个执行片段`
                   : `${visiblePhase1Grid.length} issues shown · ${report.stats.stepCount} execution slices`)}
@@ -430,7 +478,10 @@ function TraceExplicitErrorCard({ errors, zh, onNodeRefClick }: {
             <AlertTriangle className="size-3.5" />
           </div>
           <div>
-            <div className="text-sm font-bold text-foreground">{zh ? 'Trace 明确报错' : 'Trace Errors'}</div>
+            <ModuleTitle
+              title={zh ? 'Trace 明确报错' : 'Trace Errors'}
+              help={zh ? MODULE_HELP.traceExplicit.zh : MODULE_HELP.traceExplicit.en}
+            />
             <div className="text-[11px] text-foreground-muted">{zh ? '来自当前记录的原始故障事实' : 'Raw fault facts from this trace'}</div>
           </div>
         </div>
@@ -570,6 +621,84 @@ function ModulePreview() {
   );
 }
 
+function ModuleTitle({ title, help }: { title: string; help: string }) {
+  return (
+    <div className="flex items-center gap-1 text-sm font-bold text-foreground">
+      <span>{title}</span>
+      <TermPopover term={title} tag="fault" body={help} side="top" align="center">
+        <span className="sr-only">{title}</span>
+      </TermPopover>
+    </div>
+  );
+}
+
+function OtherFindingsSection({ cells, zh, onNodeRefClick }: {
+  cells: AgentDebugPhase1Cell[];
+  zh: boolean;
+  onNodeRefClick?: (nodeId: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const orderedCells = useMemo(() => orderModuleCells(cells, null), [cells]);
+  if (orderedCells.length === 0) return null;
+
+  return (
+    <div className="rounded-lg border border-border bg-background-secondary p-3">
+      <button
+        type="button"
+        aria-expanded={expanded}
+        onClick={() => setExpanded(value => !value)}
+        className="flex w-full items-center gap-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+      >
+        <span className="text-[12px] font-bold text-foreground">{zh ? '其他发现' : 'Other findings'}</span>
+        <StatusBadge status="warning" label={`${orderedCells.length}`} />
+        <span className="min-w-0 flex-1 text-[11.5px] text-foreground-muted">
+          {zh ? '已恢复或旁支问题，不作为上方关键诊断发现' : 'Recovered or side issues, not the key finding above'}
+        </span>
+        {expanded ? <ChevronDown className="size-3.5 shrink-0 text-foreground-muted" /> : <ChevronRight className="size-3.5 shrink-0 text-foreground-muted" />}
+      </button>
+
+      {expanded && (
+        <div className="mt-3 space-y-2 border-t border-border pt-3">
+          {orderedCells.map(cell => (
+            <div key={`${locationKey(cell)}-${cell.module}-${cell.errorType}-${cell.anchorId || ''}`} className="rounded-md border border-border bg-card px-2.5 py-2">
+              <div className="mb-1 flex flex-wrap items-center gap-1.5">
+                <span className="rounded bg-background-secondary px-1.5 py-0.5 font-mono text-[10.5px] font-semibold text-primary">{formatTraceLocation(cell, zh)}</span>
+                <StatusBadge status={cell.severity === 'high' ? 'error' : 'warning'} label={formatModule(cell.module, zh)} />
+                <StatusBadge status={cell.severity === 'high' ? 'error' : 'warning'} label={formatErrorType(cell.errorType, zh)} />
+                <span className="rounded bg-background-secondary px-1.5 py-0.5 text-[10.5px] font-semibold text-foreground-muted">{zh ? '旁支/已恢复' : 'Side/recovered'}</span>
+              </div>
+              <ExpandableText
+                maxLines={4}
+                className="text-[11.5px] leading-5 text-foreground-muted"
+                expandLabel={zh ? '展开完整原因' : 'Show full reason'}
+                collapseLabel={zh ? '收起原因' : 'Collapse reason'}
+              >
+                {cell.reasoning || cell.evidence}
+              </ExpandableText>
+              {cell.evidence && cell.reasoning && (
+                <ExpandableText
+                  maxLines={3}
+                  className="mt-1.5 font-mono text-[10.5px] leading-5 text-foreground-muted"
+                  expandLabel={zh ? '展开证据原文' : 'Show evidence'}
+                  collapseLabel={zh ? '收起证据原文' : 'Collapse evidence'}
+                >
+                  {cell.evidence}
+                </ExpandableText>
+              )}
+              {cell.anchorId && onNodeRefClick && (
+                <Button className="mt-1.5 h-6 px-0 text-[11px]" variant="link" size="sm" onClick={() => onNodeRefClick(cell.anchorId!)}>
+                  {zh ? '跳到左侧节点' : 'View trace node'}
+                  <ChevronRight className="size-3" />
+                </Button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ModuleFindingCard({ module, count, zh, root, cells, onNodeRefClick }: {
   module: { key: AgentDebugModule; zh: string; en: string };
   count: number;
@@ -591,7 +720,10 @@ function ModuleFindingCard({ module, count, zh, root, cells, onNodeRefClick }: {
             <Icon className="size-3.5" />
           </div>
           <div>
-            <div className="text-sm font-bold text-foreground">{module.en}</div>
+            <ModuleTitle
+              title={module.en}
+              help={(zh ? MODULE_HELP[module.key]?.zh : MODULE_HELP[module.key]?.en) || module.key}
+            />
             <div className="text-[11px] text-foreground-muted">{zh ? module.zh : module.key}</div>
           </div>
         </div>
@@ -619,7 +751,7 @@ function ModuleFindingCard({ module, count, zh, root, cells, onNodeRefClick }: {
                 <span className="rounded bg-card px-1.5 py-0.5 font-mono text-[10.5px] font-semibold text-primary">{formatTraceLocation(cell, zh)}</span>
                 <StatusBadge status={cell.severity === 'high' ? 'error' : 'warning'} label={formatErrorType(cell.errorType, zh)} />
                 {isRootCell(root, cell) && (
-                  <span className="rounded bg-error-subtle px-1.5 py-0.5 text-[10.5px] font-semibold text-error">{zh ? '根因相关' : 'Root cause'}</span>
+                  <span className="rounded bg-error-subtle px-1.5 py-0.5 text-[10.5px] font-semibold text-error">{zh ? '关键发现相关' : 'Key finding'}</span>
                 )}
               </div>
               <ExpandableText
@@ -707,6 +839,22 @@ function filterVisiblePhase1Cells(cells: AgentDebugPhase1Cell[], root: AgentDebu
   const detected = cells.filter(cell => cell.errorDetected);
   if (!root) return detected;
 
+  const visibleKeys = visibleIssueKeys(root);
+
+  const filtered = detected.filter(cell => visibleKeys.has(moduleStepKey(locationIndex(cell), cell.module)));
+  return filtered.length > 0 ? filtered : detected;
+}
+
+function filterOtherPhase1Cells(cells: AgentDebugPhase1Cell[], root: AgentDebugRootCause | null): AgentDebugPhase1Cell[] {
+  const detected = cells.filter(cell => cell.errorDetected);
+  if (!root) return [];
+  const visibleKeys = visibleIssueKeys(root);
+  const visibleCells = detected.filter(cell => visibleKeys.has(moduleStepKey(locationIndex(cell), cell.module)));
+  if (visibleCells.length === 0) return [];
+  return detected.filter(cell => !visibleKeys.has(moduleStepKey(locationIndex(cell), cell.module)));
+}
+
+function visibleIssueKeys(root: AgentDebugRootCause): Set<string> {
   const visibleKeys = new Set<string>();
   if (root.criticalModule !== 'unknown') {
     visibleKeys.add(moduleStepKey(locationIndex(rootTraceLocation(root)), root.criticalModule));
@@ -714,9 +862,7 @@ function filterVisiblePhase1Cells(cells: AgentDebugPhase1Cell[], root: AgentDebu
   for (const item of visibleCascade(root)) {
     visibleKeys.add(moduleStepKey(locationIndex(item), item.module));
   }
-
-  const filtered = detected.filter(cell => visibleKeys.has(moduleStepKey(locationIndex(cell), cell.module)));
-  return filtered.length > 0 ? filtered : detected;
+  return visibleKeys;
 }
 
 function moduleStepKey(index: number | null, module: AgentDebugModule): string {
@@ -793,6 +939,29 @@ function sanitizeReportText(value: string): string {
     .replace(/第\s*\d+\s*步\s*[（(]\s*左侧节点\s*#(\d+)\s*[）)]/g, '左侧节点 #$1')
     .replace(/步骤\s*\d+/g, '相关节点')
     .replace(/第\s*\d+\s*步/g, '相关节点');
+}
+
+function sanitizeConclusionText(value: string): string {
+  return sanitizeReportText(value)
+    .replace(/根本原因/g, '关键发现')
+    .replace(/根因为/g, '关键发现是')
+    .replace(/根因是/g, '关键发现是')
+    .replace(/作为根因/g, '作为关键发现')
+    .replace(/根因/g, '关键发现');
+}
+
+function splitFindingSummary(value: string): { conclusion: string; details: string } {
+  const sentences = splitSentences(value);
+  if (sentences.length <= 2) return { conclusion: value, details: '' };
+  return {
+    conclusion: sentences.slice(0, 2).join(''),
+    details: sentences.slice(2).join(''),
+  };
+}
+
+function splitSentences(value: string): string[] {
+  const matches = (value || '').trim().match(/[^。！？.!?]+[。！？.!?]?/g);
+  return matches?.map(item => item.trim()).filter(Boolean) || [];
 }
 
 function formatDuration(ms: number, zh: boolean): string {
