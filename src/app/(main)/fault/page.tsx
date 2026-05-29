@@ -31,6 +31,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { AgentDebugCard, type TraceExplicitError } from '@/components/observe/AgentDebugCard';
+import { StatusBadge } from '@/components/feedback/StatusBadge';
 import { useAuth } from '@/lib/auth/auth-context';
 import { useLocale } from '@/lib/client/locale-context';
 import { apiFetch } from '@/lib/client/api';
@@ -554,7 +555,7 @@ function FaultPageContent() {
                                         <tr style={{ background: 'var(--background-secondary)', textAlign: 'left' }}>
                                             <Th width={120}>Trace ID</Th>
                                             <Th width={120}>Agent</Th>
-                                            <Th width={90}>{locale === 'zh' ? '执行状态' : 'Status'}</Th>
+                                            <Th width={110}>{locale === 'zh' ? '执行异常' : 'Anomaly'}</Th>
                                             <Th>{locale === 'zh' ? '任务内容' : 'Task'}</Th>
                                             <Th width={160}>{locale === 'zh' ? '故障摘要' : 'Summary'}</Th>
                                             <Th width={170}>{locale === 'zh' ? '执行时间' : 'Time'}</Th>
@@ -1088,8 +1089,8 @@ function FaultDetailView({ execution, locale, user, onBack }: { execution: Execu
                         {messages.length === 0 && (
                             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', margin: '8px 0 0 40px' }}>
                                 {[
-                                    locale === 'zh' ? '这个故障最可能的根因是什么？' : 'What is the most likely root cause?',
-                                    locale === 'zh' ? '给我一个修复方案' : 'Suggest a fix',
+                                    locale === 'zh' ? '从 Agent / Skill 执行链路角度分析，这次故障最可能的根因是什么？' : 'From the Agent / Skill execution-chain perspective, what is the most likely root cause of this failure?',
+                                    locale === 'zh' ? '给我一个用于优化 Agent / Skill / 工具链路的修复方案。' : 'Give me a fix plan for optimizing the Agent / Skill / tool chain.',
                                     locale === 'zh' ? '定位耗时最长的节点' : 'Find the slowest node',
                                 ].map(text => (
                                     <button key={text} type="button" className="ai-btn-s" style={{ fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 5 }} onClick={() => { setInput(text); composerRef.current?.focus(); }}>
@@ -2199,7 +2200,6 @@ function FaultRow({ execution: e, onClick, locale }: { execution: Execution; onC
     const skillCount = (e.invoked_skills?.length ?? 0) || (e.skills?.length ?? 0) || (e.skill ? 1 : 0);
     const isMultiAgent = (e.invoked_skills?.length ?? 0) > 1 || (e.skills?.length ?? 0) > 1;
     const hasAnomaly = (e.failures && e.failures.length > 0) || (e.tool_call_error_count || 0) > 0;
-    const status = e.is_evaluating ? 'running' : hasAnomaly ? 'failed' : 'success';
 
     return (
         <tr
@@ -2223,16 +2223,12 @@ function FaultRow({ execution: e, onClick, locale }: { execution: Execution; onC
                 </span>
             </Td>
             <Td>
-                {status === 'running' ? (
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: 'var(--primary)', fontWeight: 600, fontSize: 11 }}>
-                        <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--primary)', animation: 'pulse 1.5s infinite' }} />
-                        {locale === 'zh' ? '执行中' : 'Running'}
-                    </span>
-                ) : status === 'failed' ? (
-                    <span style={{ color: 'var(--error)', fontWeight: 600, fontSize: 11 }}>{locale === 'zh' ? '失败' : 'Failed'}</span>
-                ) : (
-                    <span style={{ color: 'var(--success)', fontWeight: 600, fontSize: 11 }}>{locale === 'zh' ? '成功' : 'Success'}</span>
-                )}
+                <StatusBadge
+                    status={hasAnomaly ? 'error' : 'success'}
+                    label={hasAnomaly
+                        ? (locale === 'zh' ? '是' : 'Yes')
+                        : (locale === 'zh' ? '否' : 'No')}
+                />
             </Td>
             <Td truncate>
                 <span title={e.query} style={{ color: 'var(--foreground)' }}>
