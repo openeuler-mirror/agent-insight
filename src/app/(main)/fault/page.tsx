@@ -807,10 +807,10 @@ function FaultDetailView({ execution, locale, user, onBack }: { execution: Execu
                     {locale === 'zh' ? '返回' : 'Back'}
                 </button>
                 <div style={{ width: 1, height: 16, background: 'var(--border)', flexShrink: 0 }} />
-                <div>
+                <div style={{ minWidth: 0, flex: '1 1 360px' }}>
                     <div style={{ fontSize: 9, color: 'var(--foreground-muted)', letterSpacing: '.12em', textTransform: 'uppercase', marginBottom: 2, fontWeight: 700 }}>EXECUTION SESSION</div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <span style={{ fontSize: 13, fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--foreground)' }}>{shortId(taskId)}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', minWidth: 0 }}>
+                        <span style={{ fontSize: 13, fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--foreground)', overflowWrap: 'anywhere' }}>{taskId || '-'}</span>
                         {(execution.agentName || execution.agent) && (
                             <span style={{ fontSize: 12, color: 'var(--foreground-muted)', fontWeight: 600 }}>· {execution.agentName || execution.agent}</span>
                         )}
@@ -2362,10 +2362,6 @@ function stringifyShort(value: unknown): string {
     } catch {
         return String(value).slice(0, 500);
     }
-}
-
-function shortId(value: string): string {
-    return value ? value.slice(0, 22) : '-';
 }
 
 function safeTime(value?: string): string {
