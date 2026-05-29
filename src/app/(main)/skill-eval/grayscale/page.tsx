@@ -1106,6 +1106,9 @@ export function GrayscaleEvaluation({
     // 「新增评测任务」对话框开关。点确认后通过 onCreated 把新批次 ID 写回当前 task config,
     // 启动评测时透传给 /api/eval/trajectory/run append 落到同一批次。
     const [newBatchDialogOpen, setNewBatchDialogOpen] = useState(false);
+    // 用户显式点「新建任务」后, 进入未保存草稿态; 在再次保存/选历史前, 不要被
+    // parentSkillId + versionBId 的自动绑定逻辑立刻把旧任务重新套回来。
+    const [isFreshTaskDraft, setIsFreshTaskDraft] = useState(false);
 
     // 评测任务关联: 跟 selectedEvaluatorId 等同级用 React state 管理 (不依赖 currentConfigRef
     // 的 ref-only 模式)。这样 applyTaskToState 加载任务时能正确恢复, useEffect 重设 ref 时
@@ -1210,6 +1213,7 @@ export function GrayscaleEvaluation({
 
     const applyTaskToState = (task: GrayscaleTask) => {
         setCurrentTask(task);
+        setIsFreshTaskDraft(false);
         setIsEditingTask(false);
         setTaskNameInput('');
         const cfg = task.configJson || {};
@@ -1446,6 +1450,7 @@ export function GrayscaleEvaluation({
 
     useEffect(() => {
         if (!parentSkillId || !versionBId || versionBId === NONE_VERSION_ID) return;
+        if (isFreshTaskDraft) return;
         const current = currentTaskRef.current;
         if (current && taskMatchesBinding(current, parentSkillId, versionBId, parentSkillVersion)) return;
         const existing = taskHistory.find(task => taskMatchesBinding(task, parentSkillId, versionBId, parentSkillVersion));
@@ -1461,7 +1466,7 @@ export function GrayscaleEvaluation({
             .catch(() => {});
         return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [parentSkillId, parentSkillVersion, versionBId, taskHistory, createTaskForBinding]);
+    }, [parentSkillId, parentSkillVersion, versionBId, taskHistory, createTaskForBinding, isFreshTaskDraft]);
 
     // Automatically persist core config changes to database when they change
     useEffect(() => {
@@ -1896,6 +1901,17 @@ export function GrayscaleEvaluation({
         return () => window.cancelAnimationFrame(frame);
     }, [isEditingTask]);
 
+    const runCaseSide = async (caseId: string, side: 'a' | 'b') => {
+        if (!currentTask) return;
+        const sideState = caseStatesRef.current[caseId]?.[side];
+        const latestRunIndex = findLatestRunnableRunIndex(sideState?.runs);
+        if (latestRunIndex == null) {
+            alert(locale === 'zh' ? '当前侧暂无可重跑的执行记录。' : 'No execution record is available to rerun for this side.');
+            return;
+        }
+        await retryExecution(caseId, side, latestRunIndex);
+    };
+
     // Evaluate single side
     const evaluateCaseSide = async (caseId: string, side: 'a' | 'b', execState: PerVersionState) => {
         if (currentTask) {
@@ -2212,6 +2228,7 @@ export function GrayscaleEvaluation({
                 delete activePollsRef.current[key];
             }
         });
+        setIsFreshTaskDraft(true);
         resetToNewTaskDraft(parentSkillId || selectedSkillId);
     };
 
@@ -2508,9 +2525,9 @@ export function GrayscaleEvaluation({
                 timeCost: '—',
                 tokenUsage: undefined as number | undefined,
                 score: undefined as number | undefined,
+                accuracy: '—',
                 triggerRate: '—',
                 toolCall: '—',
-                accuracy: '—',
                 sessionId: '',
                 output: ''
             };
@@ -2523,9 +2540,9 @@ export function GrayscaleEvaluation({
                 timeCost: '—',
                 tokenUsage: undefined as number | undefined,
                 score: undefined as number | undefined,
+                accuracy: '—',
                 triggerRate: '—',
                 toolCall: '—',
-                accuracy: '—',
                 sessionId: '',
                 output: ''
             };
@@ -2587,9 +2604,9 @@ export function GrayscaleEvaluation({
             timeCost: avgTime,
             tokenUsage: avgTokens || undefined,
             score: avgScore,
+            accuracy: avgScore != null ? `${avgScore}%` : '—',
             triggerRate,
             toolCall,
-            accuracy: avgScore == null ? '—' : `${avgScore}`,
             sessionId: terminalStates[0]?.sessionId || '',
             output: terminalStates[0]?.output || 'Success'
         };
@@ -2674,13 +2691,10 @@ export function GrayscaleEvaluation({
             ? (locale === 'zh' ? `当前只有 ${abScoring.sampleSize} 个完成配对样本；N < ${DEFAULT_AB_SCORING_POLICY.minSampleSize} 不输出发布结论，请补齐样本后复测。` : `Only ${abScoring.sampleSize} paired samples are complete; add samples before making a release decision.`)
             : abScoring.decision === 'reject'
                 ? (() => {
-                    // 每条 hard gate 标出 ceiling, 让用户看清"为什么总分这么低"——
-                    // 总分 = min(rawTotal, ...所有 hard gate 的 ceiling), 取最严的。
-                    const minCeiling = Math.min(...abScoring.hardGates.map(g => g.ceiling));
-                    const gateList = abScoring.hardGates.map(g => `${g.label} (≤${g.ceiling}分)`).join('、');
+                    const gateList = abScoring.hardGates.map(g => g.label).join('、');
                     return locale === 'zh'
-                        ? `命中 hard gate：${gateList}。最终评分被强制不超过 ${minCeiling} 分 (取所有触发硬门槛中最严格的上限)。建议先按打回类别修正后复测。`
-                        : `Hard gate hit: ${abScoring.hardGates.map(g => `${g.label} (cap ${g.ceiling})`).join(', ')}. Total score is capped at ${minCeiling} (the strictest ceiling). Revise and retest first.`;
+                        ? `命中 hard gate：${gateList}。至少一个维度已低于拒绝阈值，因此当前结论为打回。建议先按打回类别修正后复测。`
+                        : `Hard gate hit: ${abScoring.hardGates.map(g => g.label).join(', ')}. At least one dimension is below the reject threshold, so the current decision is reject. Revise and retest first.`;
                 })()
                 : abScoring.decision === 'monitor-release'
                     ? (locale === 'zh' ? '可小流量监控发布，并持续观察 Token 成本、触发率和多轮一致性。' : 'Proceed with monitored rollout and watch token cost, invoke rate, and variance.')

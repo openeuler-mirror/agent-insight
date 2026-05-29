@@ -1,7 +1,30 @@
 const fs = require("fs")
 const path = require("path")
+const os = require("os")
 const crypto = require("crypto")
-const { getExistingInsightDir, getInsightEnvCandidates, getPreferredInsightDir } = require("./insight-paths.js")
+
+function getPreferredInsightDir() {
+  return path.join(os.homedir(), ".agent-insight")
+}
+
+function getLegacyInsightDir() {
+  return path.join(os.homedir(), ".skill-insight")
+}
+
+function getExistingInsightDir() {
+  const preferred = getPreferredInsightDir()
+  const legacy = getLegacyInsightDir()
+  if (fs.existsSync(preferred)) return preferred
+  if (fs.existsSync(legacy)) return legacy
+  return preferred
+}
+
+function getInsightEnvCandidates() {
+  return [
+    path.join(getPreferredInsightDir(), ".env"),
+    path.join(getLegacyInsightDir(), ".env"),
+  ]
+}
 
 function sha256Hex(text: any): string {
   try {
@@ -56,6 +79,13 @@ function nowIso() {
 function safeMkdirp(dir: string): void {
   try {
     fs.mkdirSync(dir, { recursive: true })
+  } catch {}
+}
+
+function appendLogLine(file: string, message: string): void {
+  try {
+    safeMkdirp(path.dirname(file))
+    fs.appendFileSync(file, `[${nowIso()}] ${message}\n`)
   } catch {}
 }
 
@@ -218,6 +248,7 @@ export default async function WittySkillInsightOtelPlugin() {
   const activeSessionIds = new Set<string>()
 
   const logDir = path.join(getPreferredInsightDir(), "logs")
+  const pluginLogPath = path.join(logDir, "opencode_plugin.log")
   const uploaderLogPath = path.join(logDir, "opencode_uploader.log")
 
   // Pick a runtime that can execute a plain .js file. Opencode bundles bun, so
@@ -246,13 +277,35 @@ export default async function WittySkillInsightOtelPlugin() {
     ? { cmd: bunPath, argsPrefix: ["run"] }
     : { cmd: process.execPath || "node", argsPrefix: ["run"] }
 
-  const kickUploader = (sessionID: string, force = false): void => {
+  appendLogLine(
+    pluginLogPath,
+    `plugin.init enabled=${enabled} spoolDir=${spoolDir} uploaderPath=${uploaderPath} runtime=${runtime.cmd} argsPrefix=${runtime.argsPrefix.join(" ")} host=${env.SKILL_INSIGHT_HOST || "(missing)"} apiKeyPresent=${apiKey ? "yes" : "no"}`,
+  )
+
+  const kickUploader = (sessionID: string, force = false, reason = "unspecified"): void => {
     try {
-      if (!fs.existsSync(uploaderPath)) return
+      if (!fs.existsSync(uploaderPath)) {
+        appendLogLine(
+          pluginLogPath,
+          `kickUploader.skip reason=${reason} sessionID=${sessionID || "(none)"} uploaderMissing=${uploaderPath}`,
+        )
+        return
+      }
       const now = Date.now()
       const prev = lastUploadKickBySession.get(sessionID || "") || 0
-      if (!force && now - prev < uploaderCooldownMs) return
+      const sinceLast = prev > 0 ? now - prev : -1
+      if (!force && sinceLast >= 0 && sinceLast < uploaderCooldownMs) {
+        appendLogLine(
+          pluginLogPath,
+          `kickUploader.throttled reason=${reason} sessionID=${sessionID || "(none)"} sinceLastMs=${sinceLast} cooldownMs=${uploaderCooldownMs}`,
+        )
+        return
+      }
       lastUploadKickBySession.set(sessionID || "", now)
+      appendLogLine(
+        pluginLogPath,
+        `kickUploader.start reason=${reason} sessionID=${sessionID || "(none)"} force=${force ? "1" : "0"} runtime=${runtime.cmd} args=${[...runtime.argsPrefix, uploaderPath].join(" ")}`,
+      )
 
       try {
         fs.mkdirSync(logDir, { recursive: true })
@@ -276,13 +329,28 @@ export default async function WittySkillInsightOtelPlugin() {
         },
       })
       child.unref()
+      appendLogLine(
+        pluginLogPath,
+        `kickUploader.spawned reason=${reason} sessionID=${sessionID || "(none)"} childPid=${child.pid || "(unknown)"}`,
+      )
       // The fd is dup'd to the child by spawn(); safe to close here.
       if (logFd >= 0) { try { fs.closeSync(logFd) } catch {} }
-    } catch {}
+    } catch (error) {
+      appendLogLine(
+        pluginLogPath,
+        `kickUploader.error reason=${reason} sessionID=${sessionID || "(none)"} error=${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
   }
 
   const markSessionComplete = async (sessionID: string, completedAt: string): Promise<void> => {
-    if (!sessionID || !apiKey || !env.SKILL_INSIGHT_HOST) return
+    if (!sessionID || !apiKey || !env.SKILL_INSIGHT_HOST) {
+      appendLogLine(
+        pluginLogPath,
+        `sessionComplete.skip sessionID=${sessionID || "(none)"} hostPresent=${env.SKILL_INSIGHT_HOST ? "yes" : "no"} apiKeyPresent=${apiKey ? "yes" : "no"}`,
+      )
+      return
+    }
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 3000)
     try {
@@ -290,7 +358,8 @@ export default async function WittySkillInsightOtelPlugin() {
       const url = base.endsWith("/api")
         ? `${base}/ingest/opencode/session-complete`
         : `${base}/api/ingest/opencode/session-complete`
-      await fetch(url, {
+      appendLogLine(pluginLogPath, `sessionComplete.request sessionID=${sessionID} url=${url} completedAt=${completedAt}`)
+      const res = await fetch(url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -302,7 +371,19 @@ export default async function WittySkillInsightOtelPlugin() {
         }),
         signal: controller.signal,
       })
-    } catch {
+      let body = ""
+      try {
+        body = truncateString(await res.text(), 1000)
+      } catch {}
+      appendLogLine(
+        pluginLogPath,
+        `sessionComplete.response sessionID=${sessionID} status=${res.status} ok=${res.ok ? "1" : "0"} body=${body || "(empty)"}`,
+      )
+    } catch (error) {
+      appendLogLine(
+        pluginLogPath,
+        `sessionComplete.error sessionID=${sessionID} error=${error instanceof Error ? error.message : String(error)}`,
+      )
     } finally {
       clearTimeout(timeout)
     }
@@ -323,6 +404,7 @@ export default async function WittySkillInsightOtelPlugin() {
   const shutdown = async () => {
     const endedAt = nowIso()
     const sessions = Array.from(activeSessionIds)
+    appendLogLine(pluginLogPath, `plugin.shutdown.start sessionCount=${sessions.length} endedAt=${endedAt}`)
     try {
       for (const sessionID of sessions) {
         fs.appendFileSync(outFile, JSON.stringify({
@@ -338,11 +420,16 @@ export default async function WittySkillInsightOtelPlugin() {
     try {
       if (sessions.length > 0) {
         await Promise.all(sessions.map((sessionID) => markSessionComplete(sessionID, endedAt)))
-        for (const sessionID of sessions) kickUploader(sessionID, true)
+        for (const sessionID of sessions) kickUploader(sessionID, true, "shutdown")
       } else {
-        kickUploader("", true)
+        kickUploader("", true, "shutdown-empty-session")
       }
-    } catch {}
+    } catch (error) {
+      appendLogLine(
+        pluginLogPath,
+        `plugin.shutdown.error error=${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
   }
   try {
     process.once("beforeExit", shutdown)
@@ -351,8 +438,13 @@ export default async function WittySkillInsightOtelPlugin() {
   } catch {}
 
   try {
-    kickUploader("")
-  } catch {}
+    kickUploader("", false, "plugin-init")
+  } catch (error) {
+    appendLogLine(
+      pluginLogPath,
+      `plugin.initKick.error error=${error instanceof Error ? error.message : String(error)}`,
+    )
+  }
 
   const safeEventPayload = (payload: any): any => {
     const redacted = redactJson(payload)
@@ -441,7 +533,12 @@ export default async function WittySkillInsightOtelPlugin() {
           ).toLowerCase()
           const isIdle = type === "session.idle" || (type === "session.updated" && status === "idle")
           if (isIdle) {
-            kickUploader(sessionID ? String(sessionID) : "")
+            const sid = sessionID ? String(sessionID) : ""
+            appendLogLine(
+              pluginLogPath,
+              `event.idle type=${type} status=${status || "(none)"} sessionID=${sid || "(none)"}`,
+            )
+            kickUploader(sid, false, `event:${type}`)
           }
         } catch {}
 
