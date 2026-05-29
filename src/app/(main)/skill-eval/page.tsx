@@ -4262,6 +4262,8 @@ function TraceDeviationPanel({
                             caseTitle: s.query || s.id,
                             executionTraceId: s.id,
                             evaluationTraceId: meta?.evaluationTraceId,
+                            resultEvalTraceId: meta?.resultEvalTraceId,
+                            trajEvalTraceId: meta?.trajEvalTraceId,
                             datasetId: meta?.datasetId,
                             evaluatorRunId: traceEvaluationBatchId || undefined,
                             status: compStatus,

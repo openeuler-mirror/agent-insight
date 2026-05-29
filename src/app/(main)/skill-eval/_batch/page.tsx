@@ -2189,6 +2189,8 @@ export function BatchEvaluation({
                                 caseTitle: c.input || c.id,
                                 executionTraceId: st?.sessionId || undefined,
                                 evaluationTraceId: meta?.evaluationTraceId,
+                                resultEvalTraceId: meta?.resultEvalTraceId,
+                                trajEvalTraceId: meta?.trajEvalTraceId,
                                 evaluatorRunId: st?.evaluatorRunId || evaluationBatchId || undefined,
                                 datasetId: c.datasetId || meta?.datasetId || undefined,
                                 status: compStatus,
