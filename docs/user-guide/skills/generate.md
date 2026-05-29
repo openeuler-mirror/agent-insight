@@ -18,11 +18,7 @@ Skills 生成是 Agent Insight 在「Skills 能力」中的核心生产模块，
 
 完整链路通常为：**生成 -> 评测 -> 优化 -> 入库 -> 复用**。
 
-<img
-  src="../../images/skills/generator.png"
-  alt="Skills 生成功能示意图"
-  style={{ width: '100%', maxWidth: '960px' }}
-/>
+![Skills 生成功能示意图](../../images/skills/generator.png)
 
 ## 核心能力
 

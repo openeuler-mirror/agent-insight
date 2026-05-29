@@ -12,9 +12,8 @@ description: "评估器管理、创建流程与功能说明"
 - **预置评估器**：平台内置的标准评分模板，适合快速发起评测。
 - **自建评估器**：基于 **Prompt · System** 与可选 **User Prompt** 自定义评分逻辑，适合沉淀业务专用标准。
 
-<Note>
-  评估器的使用通常分为两个阶段：**先选择或创建评估器，再在评测执行中调用评估器**。没有评估器时，系统只能记录执行结果；配置评估器后，系统才会产出可比较的 **分数** 与 **原因**。
-</Note>
+> **Note**
+> 评估器的使用通常分为两个阶段：**先选择或创建评估器，再在评测执行中调用评估器**。没有评估器时，系统只能记录执行结果；配置评估器后，系统才会产出可比较的 **分数** 与 **原因**。
 
 ## 评估器承担的职责
 
@@ -55,9 +54,8 @@ description: "评估器管理、创建流程与功能说明"
 12. 确认系统返回 **自建评估器** 列表。
 13. 点击目标评估器上的 **前往评测执行** 进入后续流程。
 
-<Tip>
-  **Prompt · System** 当前仅支持四个变量：`{{input}}`、`{{output}}`、`{{reference_output}}`、`{{trajectory}}`。超出该范围的占位符不会生效，并会触发输入校验错误。
-</Tip>
+> **Tip**
+> **Prompt · System** 当前仅支持四个变量：`{{input}}`、`{{output}}`、`{{reference_output}}`、`{{trajectory}}`。超出该范围的占位符不会生效，并会触发输入校验错误。
 
 ## 打开评估器
 
@@ -84,11 +82,7 @@ description: "评估器管理、创建流程与功能说明"
 7. 查看右侧评估器卡片。
 8. 点击卡片底部 **前往评测执行**，进入执行入口。
 
-<img
-  src="../../images/agent/evaluation/eval_evaluator_inside.png"
-  alt="评估器管理页"
-  style={{ width: '100%', maxWidth: '1280px' }}
-/>
+![评估器管理页](../../images/agent/evaluation/eval_evaluator_inside.png)
 
 ### 页面功能
 
@@ -146,11 +140,7 @@ description: "评估器管理、创建流程与功能说明"
 11. 确认系统返回列表。
 12. 确认新评估器出现在 **自建评估器** 列表中。
 
-<img
-  src="../../images/agent/evaluation/eval_evaluator_llm.png"
-  alt="新建评估器页面"
-  style={{ width: '100%', maxWidth: '1100px' }}
-/>
+![新建评估器页面](../../images/agent/evaluation/eval_evaluator_llm.png)
 
 ### 页面功能
 
@@ -175,9 +165,8 @@ description: "评估器管理、创建流程与功能说明"
 - **score**：0.0 到 1.0 的数值型分数。
 - **reason**：对评分依据的文本化说明。
 
-<Warning>
-  **名称** 与 **Prompt · System** 为必填项。缺少任一字段时，系统会直接阻止创建流程继续进行。
-</Warning>
+> **Warning**
+> **名称** 与 **Prompt · System** 为必填项。缺少任一字段时，系统会直接阻止创建流程继续进行。
 
 ## 设计与维护建议
 

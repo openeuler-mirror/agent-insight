@@ -12,9 +12,8 @@ description: "创建、导入与版本化管理离线评测所需的样本数据
 - **理想输出评测集**：输出可与标准答案直接比对的场景（问答、翻译、抽取、分类等）。
 - **轨迹评测集**：需要评估 Agent 执行过程的场景，在输入与预期输出之外额外记录运行轨迹。
 
-<Note>
-  评测数据集的创建分为两个阶段：**先定义评测集，再维护数据项**。系统保存评测集定义后会自动进入「数据项」页，你可在此继续录入样例。
-</Note>
+> **Note**
+> 评测数据集的创建分为两个阶段：**先定义评测集，再维护数据项**。系统保存评测集定义后会自动进入「数据项」页，你可在此继续录入样例。
 
 ## 创建流程概览
 
@@ -47,11 +46,7 @@ description: "创建、导入与版本化管理离线评测所需的样本数据
 1. 在左侧导航中打开 **评测中心**。
 2. 点击 **评测数据集**。
 
-<img
-  src="../../images/agent/evaluation/eval_dataset_review.png"
-  alt="评测数据集管理页"
-  style={{ width: '100%', maxWidth: '1280px' }}
-/>
+![评测数据集管理页](../../images/agent/evaluation/eval_dataset_review.png)
 
 ### 页面功能
 
@@ -87,11 +82,7 @@ description: "创建、导入与版本化管理离线评测所需的样本数据
 6. 点击 **保存评测集**。
 7. 确认页面跳转至新评测集的 **数据项** 页。
 
-<img
-  src="../../images/agent/evaluation/eval_dataset_new.png"
-  alt="新建评测集页面"
-  style={{ width: '100%', maxWidth: '1100px' }}
-/>
+![新建评测集页面](../../images/agent/evaluation/eval_dataset_new.png)
 
 ### 页面功能
 
@@ -102,9 +93,8 @@ description: "创建、导入与版本化管理离线评测所需的样本数据
 - **默认数据项**：预览保存后可录入的数据结构，便于在创建前确认字段，避免事后返工。
 - **保存评测集**：保存当前定义并进入数据录入流程。
 
-<Warning>
-  **理想输出评测集** 的每条数据项都应包含 **预期输出**。缺少预期结果时，结果评测无法形成稳定的对比基线，评分将失去可解释性。
-</Warning>
+> **Warning**
+> **理想输出评测集** 的每条数据项都应包含 **预期输出**。缺少预期结果时，结果评测无法形成稳定的对比基线，评分将失去可解释性。
 
 ## 维护数据项
 
@@ -130,11 +120,7 @@ description: "创建、导入与版本化管理离线评测所需的样本数据
 6. 点击 **删除** 移除无效或过期数据项。
 7. 点击 **刷新** 同步最新数据项列表。
 
-<img
-  src="../../images/agent/evaluation/eval_dataset_item.png"
-  alt="评测集数据项管理页"
-  style={{ width: '100%', maxWidth: '1280px' }}
-/>
+![评测集数据项管理页](../../images/agent/evaluation/eval_dataset_item.png)
 
 ### 页面功能
 
@@ -169,11 +155,7 @@ description: "创建、导入与版本化管理离线评测所需的样本数据
 5. 点击 **开始导入**。
 6. 确认弹窗关闭，且列表中的数据项数量增加。
 
-<img
-  src="../../images/agent/evaluation/eval_dataset_upload.png"
-  alt="批量导入测试用例弹窗"
-  style={{ width: '100%', maxWidth: '820px' }}
-/>
+![批量导入测试用例弹窗](../../images/agent/evaluation/eval_dataset_upload.png)
 
 ### 导入格式示例
 
@@ -214,9 +196,8 @@ input,expected_output
 - **开始导入**：解析输入内容并合并到当前评测集。
 - **取消**：关闭弹窗，不写入任何数据。
 
-<Tip>
-  批量导入默认识别 `input` 与 `expected_output`，并兼容 `output`、`reference_output` 等别名；轨迹评测集额外识别 `trajectory`、`trace` 与 `agent_trace`。字段对应关系详见下方「数据项字段说明」。
-</Tip>
+> **Tip**
+> 批量导入默认识别 `input` 与 `expected_output`，并兼容 `output`、`reference_output` 等别名；轨迹评测集额外识别 `trajectory`、`trace` 与 `agent_trace`。字段对应关系详见下方「数据项字段说明」。
 
 ## 数据项字段说明
 

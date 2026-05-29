@@ -7,10 +7,9 @@ description: "查看 Skill 列表、创建 Skill 与管理版本"
 
 Skills 管理页是 Skill 资产的统一入口，用于查看当前 Workspace 下的 Skill、创建新 Skill、进入详情、管理版本，并衔接后续分析与优化流程。
 
-<Note>
-  Skills 管理页承担 Skill 资产展示、入口组织与版本管理职责。
-  相关操作通常从该页面开始，包括新建 Skill、查看详情、核对激活版本，以及进入分析与优化流程。
-</Note>
+> **Note**
+> Skills 管理页承担 Skill 资产展示、入口组织与版本管理职责。
+> 相关操作通常从该页面开始，包括新建 Skill、查看详情、核对激活版本，以及进入分析与优化流程。
 
 ## 核心能力
 
@@ -35,12 +34,7 @@ Skills 管理的常见使用流程如下：
 - **Skill 卡片**：展示名称、版本数量、更新时间、来源或状态等摘要信息
 - **新建入口**：点击右上角按钮创建新的 Skill
 
-<img
-  src="../../images/skills/list.png"
-  alt="Skills 管理列表与新建入口示意图"
-  style={{ width: '100%', maxWidth: '960px' }}
-/>
-
+![Skills 管理列表与新建入口示意图](../../images/skills/list.png)
 
 该区域用于完成 Skill 定位、状态判断与后续操作入口选择。
 
@@ -88,12 +82,7 @@ Skills 管理的常见使用流程如下：
 
 该区域主要用于形成对当前 Skill 生命周期状态的整体判断。
 
-<img
-  src="../../images/skills/overview.png"
-  alt="Skill 详情概览示意图"
-  style={{ width: '100%', maxWidth: '960px' }}
-/>
-
+![Skill 详情概览示意图](../../images/skills/overview.png)
 
 ### 3. 内容
 
@@ -115,11 +104,7 @@ Skills 管理的常见使用流程如下：
 - 每个版本的基础说明与状态
 - 对比差异、切换激活版本或删除旧版本
 
-<img
-  src="../../images/skills/version.png"
-  alt="Skill 详情版本管理示意图"
-  style={{ width: '100%', maxWidth: '960px' }}
-/>
+![Skill 详情版本管理示意图](../../images/skills/version.png)
 
 当 Skill 经过多轮生成与优化后，版本页是判断当前应使用版本的关键入口。
 
@@ -139,11 +124,7 @@ Skill 往往不止一个版本，但同一时刻通常只有一个“当前激�
 
 在仅查看文件内容而未核对激活状态时，容易误判当前系统实际使用的版本。
 
-<img
-  src="../../images/skills/skill_run.png"
-  alt="Skill 详情运行记录示意图"
-  style={{ width: '100%', maxWidth: '960px' }}
-/>
+![Skill 详情运行记录示意图](../../images/skills/skill_run.png)
 
 ## 适用场景
 

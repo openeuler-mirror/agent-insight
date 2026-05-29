@@ -10,20 +10,15 @@ Skills 评测总览用于对指定 Skill 版本执行结构化评测，并汇总
 - 创建评测任务
 - 汇总评测结果
 
-<Note>
-  Skills 评测总览以证据为中心组织结论。
-  页面中的分数、状态、诊断和维度卡片共同构成评测结论，不能仅凭单一分数判断 Skill 质量。
-</Note>
+> **Note**
+> Skills 评测总览以证据为中心组织结论。
+> 页面中的分数、状态、诊断和维度卡片共同构成评测结论，不能仅凭单一分数判断 Skill 质量。
 
 ## 页面总览
 
 下图展示 Skills 评测总览页的核心区域，包括综合健康分、诊断区、**SMART RUN** 与四个维度卡片。
 
-<img
-  src="../../../images/skills/evaluation/evaluation_summary.png"
-  alt="Skills 评测总览页示意图，包含综合健康分、诊断区、SMART RUN 和四个评测维度卡片"
-  style={{ width: '100%', maxWidth: '960px' }}
-/>
+![Skills 评测总览页示意图，包含综合健康分、诊断区、SMART RUN 和四个评测维度卡片](../../../images/skills/evaluation/evaluation_summary.png)
 
 图中各区域的职责如下：
 

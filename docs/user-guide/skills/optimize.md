@@ -9,10 +9,9 @@ Skills 优化是 Agent Insight 在「Skills 能力」中的闭环改进模块，
 
 它不是从零重新写一个 Skill，而是基于现有版本、结合观测证据、通过自动化优化 Agent 完成一次可追踪、可评审、可发布的迭代。
 
-<Note>
-  优化适合放在分析之后，而不是替代分析。
-  先看到真实问题，再决定改什么，通常比“凭感觉重写一遍”更稳定。
-</Note>
+> **Note**
+> 优化适合放在分析之后，而不是替代分析。
+> 先看到真实问题，再决定改什么，通常比“凭感觉重写一遍”更稳定。
 
 - **适用对象**：Agent 运维、Prompt 工程师、平台管理员
 - **模块路径**：`Skills 能力 -> Skills 优化`
@@ -21,11 +20,7 @@ Skills 优化是 Agent Insight 在「Skills 能力」中的闭环改进模块，
 
 `运行观测 -> 质量监控 / 智能诊断 -> Skills 优化 -> 新版本发布 -> 再观测`
 
-<img
-  src="../../images/skills/optimize.png"
-  alt="Skills 优化页面示意图"
-  style={{ width: '100%', maxWidth: '960px' }}
-/>
+![Skills 优化页面示意图](../../images/skills/optimize.png)
 
 ## 模块定位
 

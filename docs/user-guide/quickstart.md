@@ -13,10 +13,9 @@ description: "登录看板、注册模型、创建 Agent、完成接入，并在
 - 一份可用的模型配置
 - 一条真实上报并可查看详情的 Trace
 
-<Note>
-  本页更贴近当前项目的真实使用流程，默认你已经部署好了 Agent Insight 服务端，
-  并可以访问看板地址，例如 `http://localhost:3000` 或你的自托管域名。
-</Note>
+> **Note**
+> 本页更贴近当前项目的真实使用流程，默认你已经部署好了 Agent Insight 服务端，
+> 并可以访问看板地址，例如 `http://localhost:3000` 或你的自托管域名。
 
 ## 前置条件
 
@@ -39,10 +38,9 @@ description: "登录看板、注册模型、创建 Agent、完成接入，并在
 5. 触发一次真实执行
 6. 在 **链路追踪** 中确认第一条 Trace
 
-<Tip>
-  如果你是开发者，且希望直接在代码里手工埋点，可以直接查看文末的
-  “可选：通过 SDK 直接接入” 一节。
-</Tip>
+> **Tip**
+> 如果你是开发者，且希望直接在代码里手工埋点，可以直接查看文末的
+> “可选：通过 SDK 直接接入” 一节。
 
 ---
 
@@ -50,12 +48,8 @@ description: "登录看板、注册模型、创建 Agent、完成接入，并在
 
 1. 打开你的 Agent Insight 看板地址。
 
-   <img
-     src="../images/home.png"
-     alt="Agent Insight 看板首页"
-     style={{ width: '100%', maxWidth: '960px' }}
-   />
-   
+   ![Agent Insight 看板首页](../images/home.png)
+
 2. 完成登录，进入默认 Workspace。
 3. 确认左侧导航中可以看到以下模块：
    - **Agent 管理**
@@ -64,10 +58,9 @@ description: "登录看板、注册模型、创建 Agent、完成接入，并在
    - **Skills 能力**
    - **配置**
 
-<Tip>
-  如果你同时维护开发、预发和生产环境，建议为不同环境分别创建独立 Agent，
-  后续看 Trace 和做评测时会更清晰。
-</Tip>
+> **Tip**
+> 如果你同时维护开发、预发和生产环境，建议为不同环境分别创建独立 Agent，
+> 后续看 Trace 和做评测时会更清晰。
 
 ---
 
@@ -80,18 +73,12 @@ description: "登录看板、注册模型、创建 Agent、完成接入，并在
 3. 填入 API Key 与必要的 Endpoint
 4. 点击 **测试连接并保存**
 
-   <img
-     src="../images/llm.png"
-     alt="Agent Insight 模型注册页面"
-     style={{ width: '100%', maxWidth: '960px' }}
-   />
-
+   ![Agent Insight 模型注册页面](../images/llm.png)
 
 完成后，你的 Workspace 就具备了后续执行生成、诊断、评测等能力所需的模型依赖。
 
-<Warning>
-  如果模型连接失败，先不要继续后续步骤。很多分析、评测和 Skill 流程都依赖模型可用。
-</Warning>
+> **Warning**
+> 如果模型连接失败，先不要继续后续步骤。很多分析、评测和 Skill 流程都依赖模型可用。
 
 ---
 
@@ -104,11 +91,7 @@ description: "登录看板、注册模型、创建 Agent、完成接入，并在
 3. 根据页面提示填写信息
 4. 保存后进入 Agent 详情页
 
-   <img
-     src="../images/agent_signup.png"
-     alt="Agent 注册弹窗"
-     style={{ width: '100%', maxWidth: '960px' }}
-   />
+   ![Agent 注册弹窗](../images/agent_signup.png)
 
 注册agent是把客户端实际使用的 Agent 注册到平台。只有注册后的 Agent，平台才会展示它的执行数据。
 Agent 名称要和客户端中的实际名称一致，例如 `opencode` 默认的agent是 `plan` 和 `build`。
@@ -124,23 +107,14 @@ Agent 名称要和客户端中的实际名称一致，例如 `opencode` 默认�
 1. 选择当前环境对应的安装方式，例如 **Linux / macOS** 或 **Windows (PowerShell)**
 2. 复制页面生成的安装命令
 
-   <img
-     src="../images/install_guide.png"
-     alt="安装指导页面"
-     style={{ width: '100%', maxWidth: '960px' }}
-   />
+   ![安装指导页面](../images/install_guide.png)
 
 3. 在 Agent 所在机器上执行该命令
 4. 使用右侧显示的 API Key 和接入信息完成配置
 
    下面以 `opencode` 作为客户端为例：
 
-   <img
-     src="../images/install_client.png"
-     alt="以 opencode 为例的客户端安装输出"
-     style={{ width: '100%', maxWidth: '960px' }}
-   />
-
+   ![以 opencode 为例的客户端安装输出](../images/install_client.png)
 
 安装命令会自动写入当前平台地址和 API Key，比手动配置更直接。
 
@@ -155,19 +129,11 @@ Agent 名称要和客户端中的实际名称一致，例如 `opencode` 默认�
 
    下面以 `opencode` 为例：
 
-   <img
-     src="../images/opencode_example.png"
-     alt="opencode 请求示例"
-     style={{ width: '100%', maxWidth: '960px' }}
-   />
+   ![opencode 请求示例](../images/opencode_example.png)
 
 2. 回到平台，进入 **运行观测 → 链路追踪**，确认是否出现新的 Trace。
 
-   <img
-     src="../images/example_trace.png"
-     alt="链路追踪中的 Trace 示例"
-     style={{ width: '100%', maxWidth: '960px' }}
-   />
+   ![链路追踪中的 Trace 示例](../images/example_trace.png)
 
 验证时优先确认这些信息：
 
@@ -180,16 +146,15 @@ Agent 名称要和客户端中的实际名称一致，例如 `opencode` 默认�
 
 确认生成 Trace 后，你就已经完成了平台配置、Agent 注册和接入验证。
 
-<Warning>
-  如果 30 秒后仍然看不到数据，按下面顺序排查：
-
-  1. 先查看客户端日志文件 `~/.agent-insight/logs/opencode_uploader.log`
-  2. 确认客户端到服务端的网络是否通顺
-  3. 是否选中了正确的 Workspace
-  4. Agent 使用的 API Key / 配置是否来自当前 Agent
-
-  仍无法解决时，可继续参考 [常见问题](./faq)。
-</Warning>
+> **Warning**
+> 如果 30 秒后仍然看不到数据，按下面顺序排查：
+>
+> 1. 先查看客户端日志文件 `~/.agent-insight/logs/opencode_uploader.log`
+> 2. 确认客户端到服务端的网络是否通顺
+> 3. 是否选中了正确的 Workspace
+> 4. Agent 使用的 API Key / 配置是否来自当前 Agent
+>
+> 仍无法解决时，可继续参考 [常见问题](./faq)。
 
 ## 继续阅读
 

@@ -7,10 +7,9 @@ description: "Agent、Trace、Skill、Evaluator 等核心概念"
 
 理解这些概念后，你会更容易读懂 Agent Insight 的页面结构、指标口径和工作流。
 
-<Note>
-  Agent Insight 同时覆盖线上观测、离线评测和 Skills 管理，因此同一个对象会在多个模块中出现。
-  本页的目标是帮你先建立统一语义，再去看具体页面。
-</Note>
+> **Note**
+> Agent Insight 同时覆盖线上观测、离线评测和 Skills 管理，因此同一个对象会在多个模块中出现。
+> 本页的目标是帮你先建立统一语义，再去看具体页面。
 
 ## 一张图理解关系
 
@@ -24,10 +23,9 @@ description: "Agent、Trace、Skill、Evaluator 等核心概念"
 6. 评测时由 **评估器** 对结果或轨迹打分
 7. 稳定经验可以沉淀为 **Skill**，再被 Agent 在后续执行中调用
 
-<Tip>
-  如果你只记一句话，可以记成：
-  **Agent 产生 Trace，Trace 暴露问题，评测量化问题，Skill 沉淀解法。**
-</Tip>
+> **Tip**
+> 如果你只记一句话，可以记成：
+> **Agent 产生 Trace，Trace 暴露问题，评测量化问题，Skill 沉淀解法。**
 
 ## Agent 与 Workspace
 

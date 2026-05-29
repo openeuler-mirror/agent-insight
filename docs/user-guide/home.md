@@ -5,15 +5,13 @@ description: "面向智能体应用的可观测、评测与 Skills 优化平台"
 
 # Agent Insight
 
-<img className="block dark:hidden h-12" src="/brand/logo-horizontal-light.svg" alt="Agent Insight" />
-<img className="hidden dark:block h-12" src="/brand/logo-horizontal-dark.svg" alt="Agent Insight" />
+![Agent Insight](/brand/logo-horizontal-light.svg)
 
 让每一个 Agent 都可被观测、可被评估、可自我进化。
 
-<Note>
-  Agent Insight 是一个面向 Agent 全生命周期的工程平台，围绕
-  **运行观测、评测分析、Skills 管理与优化** 建立统一工作台。
-</Note>
+> **Note**
+> Agent Insight 是一个面向 Agent 全生命周期的工程平台，围绕
+> **运行观测、评测分析、Skills 管理与优化** 建立统一工作台。
 
 ## 你可以用它做什么
 
@@ -38,11 +36,10 @@ Agent Insight 的用户工作流可以理解为 4 个连续阶段：
 4. **让 Skills 进入迭代周期**
    把 Skills 放进从开发、运行，到评测和优化的闭环里，让 Skills 越用越好。
 
-<Tip>
-  如果你是第一次使用，建议按
-  <a href="./quickstart">5 分钟上手</a> → <a href="./concepts">核心概念</a> →
-  目标模块文档 的顺序阅读。
-</Tip>
+> **Tip**
+> 如果你是第一次使用，建议按
+> [5 分钟上手](./quickstart) → [核心概念](./concepts) →
+> 目标模块文档 的顺序阅读。
 
 ## 主要模块
 

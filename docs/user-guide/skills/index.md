@@ -7,10 +7,9 @@ description: "Skills 全生命周期管理"
 
 Skills 是 Agent Insight 中最有代表性的能力之一。你可以把它理解为一类可被 Agent 调用、可版本化、可分析、可优化的能力资产。
 
-<Note>
-  在 Agent Insight 里，Skill 不只是 Prompt 片段，而是围绕
-  `SKILL.md`、脚本、参考资料、评测结果和版本发布构成的完整工程对象。
-</Note>
+> **Note**
+> 在 Agent Insight 里，Skill 不只是 Prompt 片段，而是围绕
+> `SKILL.md`、脚本、参考资料、评测结果和版本发布构成的完整工程对象。
 
 ## Skills 适合解决什么问题
 
@@ -42,10 +41,9 @@ Skills 是 Agent Insight 中最有代表性的能力之一。你可以把它理�
 4. **优化**
    基于问题和结果反馈，迭代出新的 Skill 版本。
 
-<Tip>
-  如果你想把平台里的 Skills 能力快速用起来，最推荐的顺序是：
-  先看总览页，再按“管理 → 生成 → 分析 → 优化”逐步使用。
-</Tip>
+> **Tip**
+> 如果你想把平台里的 Skills 能力快速用起来，最推荐的顺序是：
+> 先看总览页，再按“管理 → 生成 → 分析 → 优化”逐步使用。
 
 ## Skills 模块有哪些页面
 
