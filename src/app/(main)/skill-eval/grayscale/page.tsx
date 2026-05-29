@@ -1913,6 +1913,14 @@ export function GrayscaleEvaluation({
         return () => window.cancelAnimationFrame(frame);
     }, [isEditingTask]);
 
+    // 重跑单个 case 的某一侧 (A/B): 把该侧已有的所有 run 重新执行一遍 (复用 retryExecution)。
+    // 没有 run 记录时按 runIndex=1 跑一条。
+    const runCaseSide = (caseId: string, side: 'a' | 'b') => {
+        const runs = caseStatesRef.current[caseId]?.[side]?.runs;
+        const indices = (runs && runs.length > 0) ? runs.map(r => r.runIndex) : [1];
+        indices.forEach(idx => { void retryExecution(caseId, side, idx); });
+    };
+
     // Evaluate single side
     const evaluateCaseSide = async (caseId: string, side: 'a' | 'b', execState: PerVersionState) => {
         if (currentTask) {
@@ -2447,6 +2455,7 @@ export function GrayscaleEvaluation({
                 score: undefined as number | undefined,
                 triggerRate: '—',
                 toolCall: '—',
+                accuracy: '—',
                 sessionId: '',
                 output: ''
             };
@@ -2500,6 +2509,7 @@ export function GrayscaleEvaluation({
                 score: undefined as number | undefined,
                 triggerRate: '—',
                 toolCall: '—',
+                accuracy: '—',
                 sessionId: '',
                 output: ''
             };
@@ -2514,6 +2524,7 @@ export function GrayscaleEvaluation({
                 score: undefined as number | undefined,
                 triggerRate: '—',
                 toolCall: '—',
+                accuracy: '—',
                 sessionId: '',
                 output: ''
             };
@@ -2528,6 +2539,7 @@ export function GrayscaleEvaluation({
                 score: undefined as number | undefined,
                 triggerRate: '—',
                 toolCall: '—',
+                accuracy: '—',
                 sessionId: '',
                 output: ''
             };
@@ -2567,6 +2579,11 @@ export function GrayscaleEvaluation({
         const toolNames = Array.from(new Set(terminalStates.flatMap(s => s.toolCalls || []))).slice(0, 3);
         const totalToolCalls = terminalStates.reduce((sum, s) => sum + (s.toolCallCount || 0), 0);
         const toolCall = toolNames.length > 0 ? `${toolNames.join(', ')} · ${totalToolCalls}` : (totalToolCalls > 0 ? `${totalToolCalls} calls` : '无');
+        // 答案准确性 = 通过率 (pass / 已完成)，与"平均评分"互补，体现有多少条达标。
+        const passCount = terminalStates.filter(s => s.status === 'pass').length;
+        const accuracy = completedCount > 0
+            ? `${passCount}/${completedCount} (${Math.round(passCount / completedCount * 100)}%)`
+            : '—';
 
         return {
             status: 'executed' as CaseStatus,
@@ -2576,6 +2593,7 @@ export function GrayscaleEvaluation({
             score: avgScore,
             triggerRate,
             toolCall,
+            accuracy,
             sessionId: terminalStates[0]?.sessionId || '',
             output: terminalStates[0]?.output || 'Success'
         };
@@ -2660,13 +2678,12 @@ export function GrayscaleEvaluation({
             ? (locale === 'zh' ? `当前只有 ${abScoring.sampleSize} 个完成配对样本；N < ${DEFAULT_AB_SCORING_POLICY.minSampleSize} 不输出发布结论，请补齐样本后复测。` : `Only ${abScoring.sampleSize} paired samples are complete; add samples before making a release decision.`)
             : abScoring.decision === 'reject'
                 ? (() => {
-                    // 每条 hard gate 标出 ceiling, 让用户看清"为什么总分这么低"——
-                    // 总分 = min(rawTotal, ...所有 hard gate 的 ceiling), 取最严的。
-                    const minCeiling = Math.min(...abScoring.hardGates.map(g => g.ceiling));
-                    const gateList = abScoring.hardGates.map(g => `${g.label} (≤${g.ceiling}分)`).join('、');
+                    // 命中 hard gate（某维度低于 reject 阈值）。综合分按短板原则 = min(三维)，
+                    // 即被最低的那一维拉到该分值。把命中的门槛标签列出来，让用户看清"被哪一维打回"。
+                    const gateList = abScoring.hardGates.map(g => g.label).join('、');
                     return locale === 'zh'
-                        ? `命中 hard gate：${gateList}。最终评分被强制不超过 ${minCeiling} 分 (取所有触发硬门槛中最严格的上限)。建议先按打回类别修正后复测。`
-                        : `Hard gate hit: ${abScoring.hardGates.map(g => `${g.label} (cap ${g.ceiling})`).join(', ')}. Total score is capped at ${minCeiling} (the strictest ceiling). Revise and retest first.`;
+                        ? `命中 hard gate：${gateList}。按短板原则，综合分取三维最低 = ${fmtScore(abScoring.totalScore)} 分。建议先按打回类别修正后复测。`
+                        : `Hard gate hit: ${abScoring.hardGates.map(g => g.label).join(', ')}. Total = min of the three dimensions = ${fmtScore(abScoring.totalScore)}. Revise and retest first.`;
                 })()
                 : abScoring.decision === 'monitor-release'
                     ? (locale === 'zh' ? '可小流量监控发布，并持续观察 Token 成本、触发率和多轮一致性。' : 'Proceed with monitored rollout and watch token cost, invoke rate, and variance.')
@@ -4424,6 +4441,7 @@ export function GrayscaleEvaluation({
                 open={newBatchDialogOpen}
                 user={user || ''}
                 defaultTitle={currentTask?.taskName}
+                evaluators={selectedEvaluatorId ? [selectedEvaluatorId] : []}
                 onClose={() => setNewBatchDialogOpen(false)}
                 onCreated={handleEvalBatchCreated}
             />
