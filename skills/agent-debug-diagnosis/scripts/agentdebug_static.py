@@ -31,6 +31,17 @@ REFLECTION_RE = re.compile(r"(失败|错误|异常|通过|成功|说明|可见|�
 PLANNING_RE = re.compile(r"(接下来|下一步|我会|我先|先|然后|计划|准备|需要|todo|to-do|let me|next|I will)", re.I)
 SUCCESS_RE = re.compile(r"(成功|通过|完成|没问题|可以提交|passed|success|done)", re.I)
 FAILURE_RE = re.compile(r"(failed|failure|error|exception|traceback|assertionerror|npm err|失败|错误|异常|command not found|no such file)", re.I)
+AUTH_FAILURE_RE = re.compile(
+    r"("
+    r"\b(?:http\s*)?401\b(?:\s+unauthorized)?"
+    r"|unauthorized"
+    r"|auth(?:entication)?(?:error| failed| failure| required| denied)"
+    r"|(?:invalid|expired|missing)\s+(?:api[_ -]?key|token|credential)"
+    r"|(?:api[_ -]?key|token|credential)\s+(?:invalid|expired|missing|denied)"
+    r")",
+    re.I,
+)
+CONTEXT_OVERFLOW_RE = re.compile(r"(contextoverflow|context_overflow|context length exceeded|context window exceeded)", re.I)
 
 
 def main() -> None:
@@ -341,9 +352,9 @@ def detect_system(location: Dict[str, Any], system_content: str, anchor: Optiona
         return []
     step = int(location.get("trace_step_index") or 1)
     value = system_content.lower()
-    if "contextoverflow" in value or "context_overflow" in value:
+    if is_context_overflow(value):
         error_type, severity = "context_overflow", "high"
-    elif "auth" in value or "unauthorized" in value or "401" in value:
+    elif is_auth_failure(value):
         error_type, severity = "auth_failure", "high"
     elif "timeout" in value or "step_timeout" in value:
         error_type, severity = "step_timeout", "low"
@@ -466,32 +477,34 @@ def run_phase0_triage(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         if not content:
             continue
         lower = content.lower()
-        if "auth" in lower or "unauthorized" in lower or "401" in lower:
+        if is_auth_failure(lower):
             system_errors["auth_failure"].append(record)
-        elif "contextoverflow" in lower or "context_overflow" in lower:
+        elif is_context_overflow(lower):
             system_errors["context_overflow"].append(record)
 
     for error_type, hits in system_errors.items():
         if len(hits) >= 2:
             steps = [int(r["step"]) for r in hits]
+            sorted_steps = sorted(steps)
             first_location = record_location(hits[0])
+            summary = systemic_summary(error_type, sorted_steps)
             return {
                 "category": "tool_systemic",
-                "shortCircuited": True,
+                "shortCircuited": False,
                 "fatalDiagnosis": {
                     "errorType": f"tool_systemic.{error_type}",
                     "toolName": None,
-                    "affectedSteps": steps,
-                    "affectedTraceStepIndexes": steps,
+                    "affectedSteps": sorted_steps,
+                    "affectedTraceStepIndexes": sorted_steps,
                     "traceNodeLabel": first_location.get("trace_node_label"),
                     "traceNodeKind": first_location.get("trace_node_kind"),
-                    "summary": f"系统层错误 {error_type} 连续出现，任务可能尚未进入有效认知诊断阶段。",
-                    "recommendation": "优先检查工具、认证、模型上下文或运行环境配置，再重新运行任务。",
+                    "summary": summary,
+                    "recommendation": "这是静态预检提示，不会跳过后续认知诊断。请结合关键发现、模块卡片和原始节点判断它是否真的是阻断性环境问题。",
                     "rawErrorEvidence": truncate(hits[0]["modules"]["system"]["content"], 900),
                     "anchorId": hits[0].get("anchorId"),
                 },
                 "prefilterHints": {"forceFullSteps": []},
-                "notes": [],
+                "notes": [summary],
             }
 
     force_steps = [
@@ -504,8 +517,26 @@ def run_phase0_triage(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         "shortCircuited": False,
         "fatalDiagnosis": None,
         "prefilterHints": {"forceFullSteps": force_steps[:6]},
-        "notes": ["脚本已完成 Phase 0；未发现需要短路的系统性致命故障。"],
+        "notes": ["脚本已完成 Phase 0 系统风险预检；未发现明确阻断后续认知诊断的系统性风险。"],
     }
+
+
+def is_auth_failure(value: str) -> bool:
+    return bool(AUTH_FAILURE_RE.search(value or ""))
+
+
+def is_context_overflow(value: str) -> bool:
+    return bool(CONTEXT_OVERFLOW_RE.search(value or ""))
+
+
+def systemic_summary(error_type: str, steps: List[int]) -> str:
+    nodes = "、".join(f"#{step}" for step in steps[:6])
+    more = "等" if len(steps) > 6 else ""
+    if error_type == "auth_failure":
+        return f"静态预检在左侧节点 {nodes}{more} 发现疑似认证/权限失败信号。该信号只作为系统风险提示，仍需继续结合工具状态、输出上下文和认知模块判断是否真的阻断了任务。"
+    if error_type == "context_overflow":
+        return f"静态预检在左侧节点 {nodes}{more} 发现疑似上下文溢出或输出长度限制信号。该信号只作为系统风险提示，后续仍需完成完整认知诊断。"
+    return f"静态预检在左侧节点 {nodes}{more} 发现疑似系统性错误 {error_type}。该信号只作为风险提示，后续仍需完成完整认知诊断。"
 
 
 if __name__ == "__main__":

@@ -1002,7 +1002,7 @@ function formatTriageCategory(category: string, zh: boolean) {
   if (category === 'infra') return '基础设施级失败';
   if (category === 'tool_systemic') return '工具系统性失败';
   if (category === 'early_fatal') return '早期不可恢复失败';
-  return '未短路';
+  return '正常预检';
 }
 
 function formatErrorType(errorType: string, zh: boolean) {

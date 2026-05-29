@@ -135,8 +135,8 @@ test('agent-debug skill defines Chinese script-driven protocol and schema', () =
   assert.match(skill, /agentdebug_static\.py/);
   assert.match(skill, /agentdebug_validate\.py/);
   assert.match(skill, /所有自然语言报告字段必须用中文/);
-  assert.match(phase, /Phase 0：致命故障预检/);
-  assert.match(phase, /不要短路的情况/);
+  assert.match(phase, /Phase 0：系统风险预检/);
+  assert.match(phase, /不是最终结论/);
   assert.match(schema, /"triage"/);
   assert.match(schema, /shortCircuited=true/);
   assert.match(schema, /所有自然语言字段必须用中文/);

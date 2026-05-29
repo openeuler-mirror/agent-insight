@@ -86,8 +86,8 @@ python3 .agent-debug-diagnosis/scripts/agentdebug_validate.py \
 1. 读取输入文件路径、skill 挂载目录、静态输出路径和最终报告路径。
 2. 读取上述四份 references，确认拆分、词表、Phase 1、Phase 2 和输出协议。
 3. 运行 `agentdebug_static.py`，拿到静态 `stepRecords`、`triage`、`phase1Grid` 和 `issues`。
-4. 如果 `triage.shortCircuited=true`，只做简短中文说明，构造系统性根因报告，不要补造四模块问题。
-5. 如果没有短路，基于静态结果补充语义判断：
+4. 读取 `triage` 作为 Phase 0 静态预检提示。即使静态预检命中了系统性风险，也必须继续完整执行四模块语义判断和 Phase 2；不要因为静态命中直接跳过认知诊断。
+5. 基于静态结果补充语义判断：
    - Memory：检查幻觉、召回失败、过度简化、遗忘用户约束。
    - Reflection：检查误读工具结果、假成功声明、漏掉测试失败、过早完成。
    - Planning：检查违反约束、不可能动作、低效计划、计划和动作不一致。
