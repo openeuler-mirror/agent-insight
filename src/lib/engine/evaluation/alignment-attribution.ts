@@ -128,9 +128,9 @@ export async function persistAlignmentAttribution(
     comparisonMode: 'alignment',
     skillAttribution: {
       state: 'ok',
-      message: candidates.length > 0
-        ? `基于轨迹对齐 alignment 派生 ${candidates.length} 条归因候选`
-        : '轨迹对齐未发现需要归因的偏离',
+      // 有候选时不再显示"派生 N 条归因候选"这句计数提示（与下方实际归因问题/改进建议重复，措辞也偏术语）。
+      // 无候选时保留一句直白说明，告诉用户这条 trace 没发现需要归因的偏离。
+      message: candidates.length > 0 ? '' : '轨迹对齐未发现需要归因的偏离',
     },
     alignmentAttribution: {
       source: 'alignment',
