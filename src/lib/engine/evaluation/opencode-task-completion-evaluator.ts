@@ -219,7 +219,9 @@ function formatSkillContext(skillContext: TaskCompletionEvalInput['skillContext'
 
 function normalizeOutput(parsed: Record<string, unknown>): TaskCompletionEvalOutput {
     const scoreSummary = deriveTaskCompletionScoreFromFindings(parsed.key_point_findings);
-    const score = scoreSummary.score;
+    // deriveTaskCompletionScoreFromFindings 类型上 score 为 number|null, 但实现里 findings 为空会直接 throw,
+    // 非空时必返回 clamp 过的数字 —— 实际不会到 null。?? 0 仅为满足类型 + 万一为 null 时按 0 分(不达标)兜底。
+    const score = scoreSummary.score ?? 0;
     const isCorrect = score >= 0.8;
     const reason = String(parsed.reason || '').trim() || '任务完成度评测已完成，但未返回理由。';
     const llmReportedScore = typeof parsed.score === 'undefined' ? undefined : clampTaskScore(parsed.score);

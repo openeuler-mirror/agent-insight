@@ -193,7 +193,7 @@
 
 ## rootCause
 
-没有明确根因时使用 `null`。有根因时结构如下：
+字段名 `rootCause` 为历史兼容。用户可见语义是“关键诊断发现”：没有明确关键发现时使用 `null`。当 trace 明确失败时，它可以表示失败根因；当 trace 最终完成或问题已恢复时，它应表示潜在问题或过程风险，不能在自然语言里写成“根因”。
 
 ```json
 {
@@ -204,7 +204,7 @@
   "criticalAnchorId": "event:n1:3",
   "criticalModule": "planning",
   "criticalErrorType": "constraint_ignorance",
-  "summary": "中文根因说明",
+  "summary": "中文关键发现结论，1-2 句",
   "evidence": "中文关键证据",
   "cascadingChain": [
     {
@@ -229,7 +229,9 @@
 - `criticalModule` 必须是允许模块之一。
 - 不要选择留白模块。
 - 不要选择首个记录的 Memory/Reflection，除非它明确引用 trace 前历史。
-- `summary` 要解释为什么它是根因，而不是复述错误类型。
+- `summary` 最多 1-2 句，只讲“发现了什么、为什么值得关注”；不要堆原始报错、命令、节点列表、重复模式和长推理。
+- `summary` 默认使用“关键发现”“潜在问题”“过程风险”等表达。只有 trace 明确失败且该问题直接导致失败时，才可以使用“根因”。
+- `evidence` 放短而具体的事实证据，例如命令、报错、工具输出、节点引用。
 - `correctionGuidance` 面向 agent、prompt、工具约束或 skill 设计者。
 - `criticalTraceStepIndex`、`criticalTraceNodeLabel`、`criticalAnchorId` 必须尽量填写；`criticalStep` 只保留兼容。
 - `cascadingChain` 中每个节点必须尽量填写 `anchorId`、`traceStepIndex`、`traceNodeLabel`、`traceNodeKind`。
@@ -243,4 +245,4 @@
 - 简短因果解释。
 - 简短修复方向。
 
-如果没有根因，说明未发现足够证据，并给出下一步建议。
+如果没有关键发现，说明未发现足够证据，并给出下一步建议。

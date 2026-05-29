@@ -10,7 +10,7 @@ import { bumpSeverityByPrevalence, type Severity } from './prevalence';
 export interface IssueWithPrevalence {
   id: string;
   evaluationId: string;
-  source: 'static' | 'dynamic' | 'feedback';
+  source: 'static' | 'dynamic' | 'feedback' | 'trigger';
   skillId: string;
   version: number;
   user: string | null;
@@ -28,13 +28,13 @@ export interface IssueWithPrevalence {
   createdAt: Date;
   prevalenceCount: number;          // 派生：同 dedupKey 在响应范围内被检出几次
   // 用于 API 层合成 source 跳转链接（OptIssue.source.url）
-  evaluationType: 'static' | 'dynamic' | null;
+  evaluationType: 'static' | 'dynamic' | 'trigger' | null;
   executionTaskId: string | null;
   evaluationRunId: string | null;
 }
 
 export interface AggregateStats {
-  bySource: { static: number; dynamic: number; feedback: number };
+  bySource: { static: number; dynamic: number; feedback: number; trigger: number };
   bySeverity: { high: number; medium: number; low: number };
   totalEvaluationsScanned: number;
 }
@@ -114,7 +114,7 @@ export async function aggregateSkillIssues(args: AggregateInput): Promise<Aggreg
     issues.push({
       id: rep.id,
       evaluationId: rep.evaluationId,
-      source: rep.source as 'static' | 'dynamic' | 'feedback',
+      source: rep.source as 'static' | 'dynamic' | 'feedback' | 'trigger',
       skillId: rep.skillId,
       version: rep.version,
       user: rep.user,
@@ -133,7 +133,7 @@ export async function aggregateSkillIssues(args: AggregateInput): Promise<Aggreg
       resolvedRunId: rep.resolvedRunId ?? null,
       createdAt: rep.createdAt,
       prevalenceCount: count,
-      evaluationType: (rep.Evaluation?.type as 'static' | 'dynamic') ?? null,
+      evaluationType: (rep.Evaluation?.type as 'static' | 'dynamic' | 'trigger') ?? null,
       executionTaskId: rep.Evaluation?.Execution?.taskId ?? null,
       evaluationRunId: rep.Evaluation?.runId ?? null,
     });
@@ -149,7 +149,7 @@ export async function aggregateSkillIssues(args: AggregateInput): Promise<Aggreg
 
   // stats
   const stats: AggregateStats = {
-    bySource: { static: 0, dynamic: 0, feedback: 0 },
+    bySource: { static: 0, dynamic: 0, feedback: 0, trigger: 0 },
     bySeverity: { high: 0, medium: 0, low: 0 },
     totalEvaluationsScanned: evalIds.size,
   };

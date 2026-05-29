@@ -21,6 +21,11 @@ import { NewEvaluationBatchDialog, type NewBatchCreated } from '@/components/eva
 import { formatPValueLabel, welchTTestPValue } from '@/lib/skill-analysis/ab-significance';
 import { BatchEvaluation } from './_batch/page';
 import { GrayscaleEvaluation } from './grayscale/page';
+import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
+import { ConfigMultiSelect } from '@/components/skills/ConfigMultiSelect';
+import { ExecutionRecordsTable, type EvalRecordRow } from '@/components/eval/ExecutionRecordsTable';
+import { EvalTaskPicker } from '@/components/eval/EvalTaskPicker';
+import { useBatchEvalResults } from '@/components/eval/useBatchEvalResults';
 import {
     EvaluationContent,
     SectionShell,
@@ -700,6 +705,74 @@ function SkillAnalysisPage() {
     const [traceEvaluationBatchId, setTraceEvaluationBatchId] = useState('');
     const [traceEvaluationBatchTitle, setTraceEvaluationBatchTitle] = useState('');
     const [traceEvaluationBatchEvaluators, setTraceEvaluationBatchEvaluators] = useState<string[]>([]);
+
+    // 用例分析 AB 式配置区: 共享的「数据集多选」+「评估器多选」。
+    // 数据集作为评测参考集 (后端按 datasetIds 收窄 trace↔case 匹配)，评估器多选决定开始评测时调用哪些评估器。
+    // Phase 1 仅 trace 模式消费这套选择; dataset 模式后续并入。
+    const [caseDatasets, setCaseDatasets] = useState<Array<{ id: string; name: string; cases?: unknown[] }>>([]);
+    const [caseUserEvaluators, setCaseUserEvaluators] = useState<Array<{ id: string; name: string }>>([]);
+    const [caseDatasetIds, setCaseDatasetIds] = useState<string[]>([]);
+    const [caseEvaluatorIds, setCaseEvaluatorIds] = useState<string[]>(
+        () => presetEvaluators.filter(e => e.status === 'ready').map(e => e.id),
+    );
+    useEffect(() => {
+        if (!user) { setCaseDatasets([]); setCaseUserEvaluators([]); return; }
+        Promise.all([
+            apiFetch(`/api/agent-datasets?user=${encodeURIComponent(user)}`).then(r => r.json()).catch(() => []),
+            apiFetch(`/api/user-evaluators?user=${encodeURIComponent(user)}`).then(r => r.json()).catch(() => []),
+        ]).then(([ds, ev]) => {
+            if (Array.isArray(ds)) setCaseDatasets(ds.map((d: any) => ({ id: d.id, name: d.name, cases: d.cases })));
+            if (Array.isArray(ev)) setCaseUserEvaluators(ev.map((e: any) => ({ id: e.id, name: e.name })));
+        }).catch(() => {});
+    }, [user]);
+
+    // 评测任务(批次)列表 —— 供配置区"选历史评测任务"。trace / dataset 共用同一份。
+    const [caseEvalTasks, setCaseEvalTasks] = useState<Array<{ runId: string; taskTitle?: string; traceCount?: number; doneCount?: number; runningCount?: number; createdAt?: string }>>([]);
+    const reloadEvalTasks = useCallback(async () => {
+        if (!user) { setCaseEvalTasks([]); return; }
+        try {
+            const res = await apiFetch(`/api/eval/trajectory/runs?user=${encodeURIComponent(user)}&limit=50`);
+            const data = await res.json();
+            if (Array.isArray(data?.runs)) {
+                setCaseEvalTasks(data.runs.map((r: any) => ({
+                    runId: r.runId, taskTitle: r.taskTitle, traceCount: r.traceCount,
+                    doneCount: r.doneCount, runningCount: r.runningCount, createdAt: r.createdAt,
+                })));
+            }
+        } catch {/* 列表加载失败不阻塞主流程 */}
+    }, [user]);
+    useEffect(() => { reloadEvalTasks(); }, [reloadEvalTasks]);
+
+    // 持久化「数据集 + 评估器」选择 (按 user+skill+版本), 刷新页面不丢。
+    const caseConfigStorageKey = useMemo(() => {
+        if (!user || !selectedSkillId) return '';
+        return `skill-eval:case-config:${user}:${selectedSkillId}:v${selectedVersion ?? 'all'}`;
+    }, [user, selectedSkillId, selectedVersion]);
+    // 恢复 (只读): 切 skill/版本 或刷新时从 localStorage 取回上次选择。
+    useEffect(() => {
+        if (!caseConfigStorageKey) return;
+        try {
+            const raw = localStorage.getItem(caseConfigStorageKey);
+            if (!raw) return;
+            const parsed = JSON.parse(raw) as { datasetIds?: string[]; evaluatorIds?: string[] };
+            if (Array.isArray(parsed?.datasetIds)) setCaseDatasetIds(parsed.datasetIds);
+            if (Array.isArray(parsed?.evaluatorIds) && parsed.evaluatorIds.length > 0) setCaseEvaluatorIds(parsed.evaluatorIds);
+        } catch {/* localStorage 异常忽略 */}
+    }, [caseConfigStorageKey]);
+    // 保存只在用户改动时触发 (走 handler), 避免挂载时用初始空值覆盖已存的选择。
+    const handleCaseDatasetIdsChange = useCallback((ids: string[]) => {
+        setCaseDatasetIds(ids);
+        if (caseConfigStorageKey) {
+            try { localStorage.setItem(caseConfigStorageKey, JSON.stringify({ datasetIds: ids, evaluatorIds: caseEvaluatorIds })); } catch {/* ignore */}
+        }
+    }, [caseConfigStorageKey, caseEvaluatorIds]);
+    const handleCaseEvaluatorIdsChange = useCallback((ids: string[]) => {
+        setCaseEvaluatorIds(ids);
+        if (caseConfigStorageKey) {
+            try { localStorage.setItem(caseConfigStorageKey, JSON.stringify({ datasetIds: caseDatasetIds, evaluatorIds: ids })); } catch {/* ignore */}
+        }
+    }, [caseConfigStorageKey, caseDatasetIds]);
+
     const traceEvalBatchStorageKey = useMemo(() => {
         if (!user || !selectedSkillId) return '';
         return `skill-eval:trace-eval-batch:${user}:${selectedSkillId}:v${selectedVersion ?? 'all'}`;
@@ -1060,6 +1133,21 @@ function SkillAnalysisPage() {
                 }));
             } catch {/* localStorage quota 异常时仍以 state 持有, 不阻塞主流程 */}
         }
+        reloadEvalTasks();
+    }, [traceEvalBatchStorageKey, reloadEvalTasks]);
+
+    // 选一个已有评测任务 (评测执行批次) 关联到当前 trace 分析。
+    const handleSelectTraceEvalBatch = useCallback((opt: { runId: string; taskTitle?: string }) => {
+        setTraceEvaluationBatchId(opt.runId);
+        setTraceEvaluationBatchTitle(opt.taskTitle || '');
+        setTraceEvaluationBatchEvaluators([]);
+        if (traceEvalBatchStorageKey) {
+            try {
+                localStorage.setItem(traceEvalBatchStorageKey, JSON.stringify({
+                    id: opt.runId, title: opt.taskTitle || '', evaluators: [],
+                }));
+            } catch {/* ignore */}
+        }
     }, [traceEvalBatchStorageKey]);
 
     const runBatchTraceAnalysis = useCallback(async (taskIds: string[]): Promise<{
@@ -1074,10 +1162,13 @@ function SkillAnalysisPage() {
             // 透传评测任务关联: 用户在配置区关联了批次时走 append 模式, 不再每次新建批次。
             // 关联后不传 evaluators (后端用批次原配置), 没关联时沿用老逻辑。
             const body: Record<string, unknown> = { user, taskIds };
+            // 数据集作参考集: 收窄后端 trace↔case 匹配范围 (空 = 沿用全量 auto-match)。
+            if (caseDatasetIds.length > 0) body.datasetIds = caseDatasetIds;
             if (traceEvaluationBatchId) {
                 body.evaluatorRunId = traceEvaluationBatchId;
             } else {
-                body.evaluators = ['preset-agent-task-completion'];
+                // 评估器多选决定本次评测调用哪些评估器; 未选时兜底任务完成度。
+                body.evaluators = caseEvaluatorIds.length > 0 ? caseEvaluatorIds : ['preset-agent-task-completion'];
             }
             const res = await apiFetch('/api/eval/trajectory/run', {
                 method: 'POST',
@@ -1128,7 +1219,7 @@ function SkillAnalysisPage() {
         // trace 列表，状态徽章会实时切换 pending→done。
         await reloadTraces({ retries: 30, retryDelayMs: 3000 });
         return { resultErrors, trajectoryErrors };
-    }, [user, reloadTraces]);
+    }, [user, reloadTraces, traceEvaluationBatchId, caseEvaluatorIds, caseDatasetIds]);
 
     /* 拉最近一次灰度任务，做出 Skills 价值评估摘要喂给概览页的灰度卡。
        用 caseStatesJson.{a,b} 直接算 score/time/token/passRate，逻辑与
@@ -1390,6 +1481,17 @@ function SkillAnalysisPage() {
                         traceEvaluationBatchId={traceEvaluationBatchId}
                         traceEvaluationBatchTitle={traceEvaluationBatchTitle}
                         onOpenEvalBatchDialog={() => setNewBatchDialogOpen(true)}
+                        evalTaskOptions={caseEvalTasks}
+                        onSelectEvalBatch={handleSelectTraceEvalBatch}
+                        datasets={caseDatasets}
+                        selectedDatasetIds={caseDatasetIds}
+                        onSelectedDatasetIdsChange={handleCaseDatasetIdsChange}
+                        evaluatorOptions={[
+                            ...presetEvaluators.filter(e => e.status === 'ready').map(e => ({ id: e.id, name: e.name })),
+                            ...caseUserEvaluators,
+                        ]}
+                        selectedEvaluatorIds={caseEvaluatorIds}
+                        onSelectedEvaluatorIdsChange={handleCaseEvaluatorIdsChange}
                     />
                 )}
 
@@ -1509,6 +1611,7 @@ function SkillAnalysisPage() {
                 open={newBatchDialogOpen}
                 user={user || ''}
                 defaultTitle={traceEvaluationBatchTitle || (selectedSkill ? `${selectedSkill.name} trace 评测` : undefined)}
+                evaluators={caseEvaluatorIds}
                 onClose={() => setNewBatchDialogOpen(false)}
                 onCreated={handleTraceEvalBatchCreated}
             />
@@ -2428,7 +2531,7 @@ function AnalysisOverview({
                     <div className="sa-cta-list">
                         <label
                             className={`sa-cta-row${!staticCanTest ? ' disabled' : ''}`}
-                            title={staticCanTest ? '可触发详情页“重新扫描”' : '需先选择 Skill 与版本'}
+                            title={staticCanTest ? '可触发详情页“重新分析”' : '需先选择 Skill 与版本'}
                         >
                             <input type="checkbox" checked={selectedRunKeys.includes('static')} onChange={() => toggleRunKey('static')} disabled={!staticCanTest} />
                             <span className="dot" style={{ '--cdot': 'var(--sa-purple)' } as React.CSSProperties}></span>
@@ -2890,17 +2993,36 @@ function TraceDeviationPanel({
     traceEvaluationBatchId,
     traceEvaluationBatchTitle,
     onOpenEvalBatchDialog,
+    evalTaskOptions,
+    onSelectEvalBatch,
+    datasets,
+    selectedDatasetIds,
+    onSelectedDatasetIdsChange,
+    evaluatorOptions,
+    selectedEvaluatorIds,
+    onSelectedEvaluatorIdsChange,
 }: {
     skill: SkillOption | null;
     version: number | null;
     user: string | null;
     traces: TraceRecord[];
     loading: boolean;
+    /** AB 式配置区共享选择: 数据集(参考集) + 评估器, 父组件 SkillAnalysisPage 持有 state */
+    datasets?: Array<{ id: string; name: string; cases?: unknown[] }>;
+    selectedDatasetIds?: string[];
+    onSelectedDatasetIdsChange?: (ids: string[]) => void;
+    evaluatorOptions?: Array<{ id: string; name: string }>;
+    selectedEvaluatorIds?: string[];
+    onSelectedEvaluatorIdsChange?: (ids: string[]) => void;
     /** 评测批次关联 (trace 模式 ① actions 显示); 父组件 SkillAnalysisPage 维护 state + localStorage 持久化 */
     traceEvaluationBatchId?: string;
     traceEvaluationBatchTitle?: string;
     /** 点击 "+ 新增评测任务" / "切换/新建" 按钮触发的 callback, 由父组件打开 NewEvaluationBatchDialog */
     onOpenEvalBatchDialog?: () => void;
+    /** 已有评测任务(批次)列表, 供"选历史" */
+    evalTaskOptions?: Array<{ runId: string; taskTitle?: string; traceCount?: number; doneCount?: number; runningCount?: number; createdAt?: string }>;
+    /** 选中一个已有评测任务 */
+    onSelectEvalBatch?: (opt: { runId: string; taskTitle?: string }) => void;
     prefillTraceId: string;
     selectedTraceId: string;
     onSelectedTraceChange: (id: string) => void;
@@ -2924,6 +3046,8 @@ function TraceDeviationPanel({
     const [caseConfigOpen, setCaseConfigOpen] = useState(true);
     const [caseExecOpen, setCaseExecOpen] = useState(false);
     const [caseResultOpen, setCaseResultOpen] = useState(true);
+    // 拉当前评测任务的结果, 给 ② 表每行补"评估 Trace / datasetId"(displayedTraces 里没有)。5s 轮询接异步落库。
+    const traceEvalResultsMap = useBatchEvalResults(user, traceEvaluationBatchId, 5000);
 
     // 已触发评测的 trace id → 触发时间戳。runBothAnalyses 调用时填，让 ② 执行块的
     // 列表能区分"正在评测中"（已触发但分数还没回来）vs"已评测"（双分都就绪）。
@@ -3504,9 +3628,48 @@ function TraceDeviationPanel({
             <span style={{ fontSize: 11, color: '#71717a' }}>
                 {caseSourceMode === 'trace'
                     ? `当前 skill: ${skill?.name || '未选'}${version != null ? ` v${version}` : ''}（顶部切换）`
-                    : '数据集 / 评测器 / 历史任务 见下方'}
+                    : '数据集 / 评测器 见上方'}
             </span>
         </div>
+    );
+
+    // 共享配置: 数据集(参考集) + 评估器 下拉多选。trace 模式渲染在 ① body；dataset 模式经
+    // BatchEvaluation 的 topConfigSlot 注入到它的 ① body 顶部——两模式同一位置、同一份选择。
+    const sharedConfigBar = (
+        <div style={{ border: '1px solid #e5e7eb', borderRadius: 6, padding: '10px 12px', marginBottom: 12, background: '#fff', display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <ConfigMultiSelect
+                label="数据集"
+                placeholder="选择参考数据集（可多选）"
+                emptyHint="暂无数据集（可在数据集中心创建）"
+                accent="#2563eb"
+                options={(datasets || []).map(d => ({ id: d.id, name: d.name, meta: `${Array.isArray(d.cases) ? d.cases.length : 0} 例` }))}
+                selectedIds={selectedDatasetIds || []}
+                onChange={ids => onSelectedDatasetIdsChange?.(ids)}
+            />
+            <ConfigMultiSelect
+                label="评估器"
+                placeholder="选择评估器（可多选）"
+                emptyHint="暂无评估器"
+                accent="#7E22CE"
+                options={(evaluatorOptions || []).map(e => ({ id: e.id, name: e.name }))}
+                selectedIds={selectedEvaluatorIds || []}
+                onChange={ids => onSelectedEvaluatorIdsChange?.(ids)}
+            />
+            <div style={{ fontSize: 11, color: '#a1a1aa' }}>
+                数据集作为评测参考集（按 query 匹配 case 取预期结果）；评估器多选决定「开始分析」时调用哪些评估器。
+            </div>
+        </div>
+    );
+
+    // 评测任务选择器 (建新 + 选历史)。trace 模式放 ① actions；dataset 模式经 headerActions 注入。两模式共用同一 evaluatorRunId。
+    const evalTaskPickerNode = (
+        <EvalTaskPicker
+            tasks={evalTaskOptions || []}
+            selectedRunId={traceEvaluationBatchId}
+            selectedTitle={traceEvaluationBatchTitle}
+            onSelect={opt => onSelectEvalBatch?.(opt)}
+            onCreateNew={() => onOpenEvalBatchDialog?.()}
+        />
     );
 
     /* ─────────────────────────────────────────────────────
@@ -3667,53 +3830,10 @@ function TraceDeviationPanel({
                 // trace 模式评测任务关联: 跟 dataset 模式 BatchEvaluation 的 ① actions 一致样式。
                 // 已关联时显示紫色徽章 + "切换/新建"; 未关联时只有"+ 新增评测任务"按钮。
                 // state 走 traceEvaluationBatchId / 持久化在 localStorage (SkillAnalysisPage 维护)。
-                actions={
-                    traceEvaluationBatchId ? (
-                        <>
-                            <span
-                                title={`评测执行批次 ID: ${traceEvaluationBatchId}`}
-                                style={{
-                                    display: 'inline-flex', alignItems: 'center', gap: 5,
-                                    padding: '3px 9px',
-                                    background: '#F5E8FF',
-                                    border: '1px solid rgba(126,34,206,.2)',
-                                    borderRadius: 99,
-                                    fontSize: 11.5, fontWeight: 600, color: '#7E22CE',
-                                    maxWidth: 240, overflow: 'hidden',
-                                    textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                                }}
-                            >
-                                📋 {traceEvaluationBatchTitle || traceEvaluationBatchId.slice(0, 8)}
-                            </span>
-                            <button
-                                type="button"
-                                onClick={() => onOpenEvalBatchDialog?.()}
-                                style={{
-                                    padding: '4px 9px',
-                                    background: '#fff', border: '1px solid #D4D4D8',
-                                    borderRadius: 5, fontSize: 11.5, fontWeight: 500,
-                                    color: '#52525B', cursor: 'pointer',
-                                }}
-                            >
-                                切换 / 新建
-                            </button>
-                        </>
-                    ) : (
-                        <button
-                            type="button"
-                            onClick={() => onOpenEvalBatchDialog?.()}
-                            style={{
-                                padding: '5px 12px',
-                                background: '#4F46E5', border: '1px solid #4F46E5',
-                                color: '#fff', borderRadius: 5,
-                                fontSize: 11.5, fontWeight: 600, cursor: 'pointer',
-                            }}
-                        >
-                            + 新增评测任务
-                        </button>
-                    )
-                }
+                actions={evalTaskPickerNode}
             >
+                {/* AB 式配置: 数据集(参考集) + 评估器 下拉多选 —— 放在 source 切换之上 (用户要求) */}
+                {sharedConfigBar}
                 {/* source-mode 切换 chip：放在 ① 配置块内（用户要求） */}
                 {sourceModeToggle}
                 {/* trace 列表 */}
@@ -3930,6 +4050,28 @@ function TraceDeviationPanel({
                     </div>
                 </aside>
             </div>
+                {/* 统一「开始评测」按钮 —— 放在 ① 配置末尾 (跟 A/B 一致)。trace 模式: 直接评测勾选的 trace。 */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--ev-line)' }}>
+                    <button
+                        type="button"
+                        onClick={runBothAnalyses}
+                        disabled={primaryDisabled}
+                        style={{
+                            padding: '9px 22px',
+                            background: primaryDisabled ? 'var(--ev-line-strong)' : 'var(--ev-info)',
+                            color: '#fff', border: 'none', borderRadius: 6,
+                            fontSize: 14, fontWeight: 700,
+                            cursor: primaryDisabled ? 'not-allowed' : 'pointer',
+                            opacity: primaryDisabled ? 0.6 : 1,
+                        }}
+                        title={primaryDisabled ? '请先在上方勾选 trace（且 trace 有主 skill）' : '对勾选的 trace 直接开始评测'}
+                    >
+                        {bothRunning ? '评测中…' : checkedTraceIds.size > 0 ? `▶ 开始评测（${checkedTraceIds.size} 条）` : '▶ 开始评测'}
+                    </button>
+                    <span style={{ fontSize: 11, color: 'var(--ev-muted)' }}>
+                        勾选 trace 后开始评测；进度见 ② 评测执行
+                    </span>
+                </div>
             </SectionShell>
             )}{/* /trace mode ① */}
 
@@ -3939,19 +4081,30 @@ function TraceDeviationPanel({
                 带进来——否则 .d-btn.primary 的 background: var(--ink) 解析为空，按钮"看不见"。 */}
             {caseSourceMode === 'dataset' && (
                 <div className="debug-root" style={{ background: 'transparent' }}>
-                    <BatchEvaluation newTaskTrigger={0} historyPanelTrigger={0} topConfigSlot={sourceModeToggle} />
+                    <BatchEvaluation
+                        newTaskTrigger={0}
+                        historyPanelTrigger={0}
+                        controlled
+                        topConfigSlot={<>{sharedConfigBar}{sourceModeToggle}</>}
+                        headerActions={evalTaskPickerNode}
+                        controlledDatasetIds={selectedDatasetIds}
+                        controlledEvaluatorIds={selectedEvaluatorIds}
+                        controlledEvalBatchId={traceEvaluationBatchId}
+                        controlledEvalBatchTitle={traceEvaluationBatchTitle}
+                        controlledSkillId={skill?.id}
+                    />
                 </div>
             )}
 
             {/* trace 模式：② + ③ */}
             {caseSourceMode === 'trace' && (<>
 
-            {/* ─────────── ② 执行 · 跑用例评测 ─────────── */}
+            {/* ─────────── ② 评测执行 ─────────── */}
             <SectionShell
                 num={2}
                 variant="exec"
-                title="执行 · 跑用例评测"
-                desc="对勾选的 trace 触发结果 + 轨迹双分析；下方表只列已评测 trace，点行钻取 ③ 结果详情"
+                title="评测执行"
+                desc="对勾选的 trace 触发结果 + 轨迹双分析；实时展示评测进度，下方表列已评测 trace，点行钻取 ③ 结果详情"
                 open={caseExecOpen}
                 onToggle={() => setCaseExecOpen(o => !o)}
                 summary={
@@ -3993,183 +4146,51 @@ function TraceDeviationPanel({
                     </>
                 }
             >
-                {/* 顶部动作区：原 DetailHeader 右上角"分析当前 Trace"按钮移到这里 */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', background: '#fafafa', border: '1px solid var(--ev-line)', borderRadius: 8 }}>
-                    <button
-                        type="button"
-                        onClick={runBothAnalyses}
-                        disabled={primaryDisabled}
-                        style={{
-                            padding: '7px 16px',
-                            background: primaryDisabled ? 'var(--ev-line-strong)' : 'var(--ev-info)',
-                            color: '#fff',
-                            border: 'none',
-                            borderRadius: 6,
-                            fontSize: 13,
-                            fontWeight: 600,
-                            cursor: primaryDisabled ? 'not-allowed' : 'pointer',
-                            opacity: primaryDisabled ? 0.6 : 1,
-                        }}
-                        title={primaryDisabled ? '需选 trace 且 trace 有主 skill' : '一键并行启动结果 + 轨迹双分析'}
-                    >
-                        {bothRunning ? '分析中…'
-                            : checkedTraceIds.size > 0 ? `分析选中 ${checkedTraceIds.size} 条`
-                            : '分析当前 Trace'}
-                    </button>
-                    <span style={{ fontSize: 11, color: 'var(--ev-muted)' }}>
-                        在 ① 配置块勾选 trace 后回到此触发批量分析
-                    </span>
-                </div>
-
-                {/* trace 评测列表 —— 含已评测 + 本会话触发还在评测中的；每行带状态徽章。
-                    pending 状态：用户刚点"分析"，后台 queue 跑（concurrency=3，每条 10-30s）。
-                    上方 runBatchTraceAnalysis 的 poll 拉长到 90s 后会自动刷新 traces，
-                    一旦双分数就绪 → 自动从 pending 切到 done。 */}
-                {displayedTraces.length === 0 ? (
-                    <div style={{ padding: '24px 20px', textAlign: 'center', color: 'var(--ev-muted)', fontSize: 13, background: '#fafafa', border: '1px dashed var(--ev-line)', borderRadius: 8 }}>
-                        还没触发过评测。在 ① 配置块勾选 trace → 点上方"分析"按钮。
-                    </div>
-                ) : (
-                    /* 最多同时显示约 10 行评测记录, 超出滚动。单行 ~42px + thead 40px ≈ 460px。
-                       table thead 不 sticky (太复杂), 滚动时跟着 body 一起滚, 一般够用。 */
-                    <div style={{ border: '1px solid var(--ev-line)', borderRadius: 8, overflow: 'auto', maxHeight: 460 }}>
-                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                            <thead>
-                                <tr style={{ background: '#fafafa', borderBottom: '1px solid var(--ev-line)' }}>
-                                    <th style={{ padding: '8px 12px', textAlign: 'left', fontSize: 11, color: 'var(--ev-muted)', fontWeight: 600, width: 90 }}>状态</th>
-                                    <th style={{ padding: '8px 12px', textAlign: 'left', fontSize: 11, color: 'var(--ev-muted)', fontWeight: 600 }}>Trace · query</th>
-                                    <th
-                                        style={{ padding: '8px 12px', textAlign: 'right', fontSize: 11, color: 'var(--ev-muted)', fontWeight: 600, width: 70, cursor: 'help' }}
-                                        title="该 trace 的结果评测最新分（满分 100）。想看跨 trace 均值看 ③ Hero。"
-                                    >结果</th>
-                                    <th
-                                        style={{ padding: '8px 12px', textAlign: 'right', fontSize: 11, color: 'var(--ev-muted)', fontWeight: 600, width: 70, cursor: 'help' }}
-                                        title="该 trace 的轨迹评测最新分（满分 100）。想看跨 trace 均值看 ③ Hero。"
-                                    >轨迹</th>
-                                    <th
-                                        style={{ padding: '8px 12px', textAlign: 'right', fontSize: 11, color: 'var(--ev-muted)', fontWeight: 600, width: 70, cursor: 'help' }}
-                                        title="(结果 + 轨迹) / 2，该 trace 自己的均分。跟 ③ Hero 的'总评分'不一样——后者是跨多个 trace 的聚合。"
-                                    >均分</th>
-                                    <th style={{ padding: '8px 12px', textAlign: 'center', fontSize: 11, color: 'var(--ev-muted)', fontWeight: 600, width: 60 }}>查看</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {displayedTraces.map(s => {
-                                    const status = getTraceEvalStatus(s);
-                                    const r = s.resultScore;
-                                    const j = s.trajScore;
-                                    const avg = (r != null && j != null) ? Math.round((r + j) / 2) : null;
-                                    const scoreColor = (n: number | null) => n == null ? 'var(--ev-muted)'
-                                        : n >= 80 ? 'var(--ev-success)'
-                                        : n >= 60 ? 'var(--ev-warning)'
-                                        : 'var(--ev-error)';
-                                    const isSelected = selectedTraceId === s.id;
-                                    // done 和 partial 都可点开看详情(至少有一边的分数和分析);
-                                    // pending/failed 没有可看的分析详情,不可点
-                                    const clickable = status === 'done' || status === 'partial';
-                                    const failErr = status === 'failed' ? failedTaskIds.get(s.id) : null;
-                                    // 部分评测的情况:也可能有 partial err(只是其中一边失败,另一边成功)。
-                                    // 拉出来在行内提示"为什么轨迹评测/结果评测没跑通"。
-                                    const partialErr = status === 'partial' ? failedTaskIds.get(s.id) : null;
-                                    // 推断 partial 缺哪一边: 没分数的那边就是缺失的
-                                    const partialMissingSide =
-                                        status === 'partial'
-                                            ? (s.resultScore == null ? '结果评测' : s.trajScore == null ? '轨迹评测' : null)
-                                            : null;
-                                    return (
-                                        <tr
-                                            key={s.id}
-                                            onClick={() => {
-                                                if (!clickable) return;
-                                                onSelectedTraceChange(s.id);
-                                                setCaseDetailExpanded(true);
-                                                setCaseResultOpen(true);
-                                            }}
-                                            style={{
-                                                cursor: clickable ? 'pointer' : 'default',
-                                                background: isSelected ? 'var(--ev-info-soft)' : 'transparent',
-                                                borderBottom: '1px solid #f4f4f5',
-                                                opacity: status === 'pending' ? 0.85 : 1,
-                                            }}
-                                            title={
-                                                status === 'pending' ? '评测进行中——后台 queue 跑，平均每条 10-30s。等双分就绪自动切到"已评测"，可点击查看'
-                                                : status === 'failed' ? `评测失败：${failErr}`
-                                                : status === 'partial' ? '部分评测——只有一边的分数（另一边评测器没跑成功）。可点击查看已有分析'
-                                                : ''
-                                            }
-                                        >
-                                            <td style={{ padding: '10px 12px' }}>
-                                                {status === 'done' ? (
-                                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 99, background: 'var(--ev-success-soft, rgba(22,163,74,.1))', color: 'var(--ev-success)' }}>
-                                                        ✓ 已评测
-                                                    </span>
-                                                ) : status === 'pending' ? (
-                                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 99, background: 'rgba(37,99,235,.1)', color: 'var(--ev-info)' }}>
-                                                        <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: 'currentColor', animation: 'pulse 1.5s ease-in-out infinite' }} />
-                                                        评测中
-                                                    </span>
-                                                ) : status === 'partial' ? (
-                                                    <span
-                                                        style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 99, background: 'var(--ev-warning-soft, rgba(217,119,6,.1))', color: 'var(--ev-warning)', cursor: partialErr ? 'help' : 'default' }}
-                                                        title={
-                                                            partialErr
-                                                                ? `部分评测 - 缺 ${partialMissingSide}:\n${partialErr}\n\n常见原因: skill 内容缺 mermaid 流程图, 后端无法解析关键步骤; 或 skill 未生成 ParsedFlow。`
-                                                                : `部分评测 - 缺 ${partialMissingSide}。点开仍可看到已完成那边的分析。`
-                                                        }
-                                                    >
-                                                        ◐ 部分评测
-                                                    </span>
-                                                ) : (
-                                                    <span
-                                                        style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 99, background: 'var(--ev-error-soft, rgba(220,38,38,.1))', color: 'var(--ev-error)', cursor: 'help' }}
-                                                        title={`后端评测器调用失败:\n${failErr || '未知错误'}\n\n常见原因: 模型 API key 失效 / 配额不足。去 /modelconfig 检查激活的模型配置。`}
-                                                    >
-                                                        ⚠ 评测失败
-                                                    </span>
-                                                )}
-                                            </td>
-                                            <td style={{ padding: '10px 12px', maxWidth: 420, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                                {isSelected && <span style={{ color: 'var(--ev-info)', marginRight: 4 }}>›</span>}
-                                                {s.query}
-                                                <span style={{ marginLeft: 8, fontSize: 10, color: 'var(--ev-muted)', fontFamily: 'monospace' }}>{s.id.slice(0, 8)}</span>
-                                                {/* 评测失败时,把错误信息平铺一行,鼠标用户不依赖 hover 也能看到原因 */}
-                                                {status === 'failed' && failErr && (
-                                                    <div style={{ marginTop: 4, fontSize: 11, color: 'var(--ev-error)', whiteSpace: 'normal', lineHeight: 1.4 }}>
-                                                        {failErr.length > 200 ? failErr.slice(0, 200) + '…' : failErr}
-                                                    </div>
-                                                )}
-                                                {/* 部分评测:把缺失那边的原因也平铺出来,用户立刻知道"轨迹评测为什么没跑成"。
-                                                    不显原始 stack/api err,显简短的"缺什么"——具体长错误走 hover。 */}
-                                                {status === 'partial' && partialMissingSide && (
-                                                    <div style={{ marginTop: 4, fontSize: 11, color: 'var(--ev-warning)', whiteSpace: 'normal', lineHeight: 1.4, display: 'flex', alignItems: 'flex-start', gap: 4 }}>
-                                                        <Info style={{ width: 14, height: 14, flexShrink: 0, marginTop: 1 }} aria-hidden />
-                                                        <span>
-                                                            缺 <b>{partialMissingSide}</b>
-                                                            {partialErr && ': ' + (partialErr.length > 150 ? partialErr.slice(0, 150) + '…' : partialErr)}
-                                                        </span>
-                                                    </div>
-                                                )}
-                                            </td>
-                                            <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 700, color: scoreColor(r) }}>{r ?? '—'}</td>
-                                            <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 700, color: scoreColor(j) }}>{j ?? '—'}</td>
-                                            <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 800, color: scoreColor(avg) }}>{avg ?? '—'}</td>
-                                            <td style={{ padding: '10px 12px', textAlign: 'center', color: clickable ? 'var(--ev-info)' : 'var(--ev-muted)', fontSize: 12 }}>
-                                                {clickable ? '↓' : '…'}
-                                            </td>
-                                        </tr>
-                                    );
-                                })}
-                            </tbody>
-                        </table>
-                    </div>
-                )}
+                {/* 评测执行记录表 (A/B 同款三列形态, 共享 ExecutionRecordsTable):
+                    执行 session id → 链路追踪 (/trace) · 评测状态/进度 · 评测结果 → 评测任务详情 (/eval/run)。
+                    点行钻取本页 ③ 结果详情。数据由 displayedTraces 映射, runBatchTraceAnalysis 的轮询会刷新状态。
+                    「开始评测」按钮已统一到 ① 配置块末尾。 */}
+                <ExecutionRecordsTable
+                    emptyHint={'还没触发过评测。在 ① 配置块勾选 trace → 点末尾「开始评测」。'}
+                    onRowClick={rec => {
+                        const t = displayedTraces.find(x => x.id === rec.id);
+                        if (!t) return;
+                        const st = getTraceEvalStatus(t);
+                        if (st === 'done' || st === 'partial') {
+                            onSelectedTraceChange(rec.id);
+                            setCaseDetailExpanded(true);
+                            setCaseResultOpen(true);
+                        }
+                    }}
+                    onRetry={rec => { onBatchAnalyze?.([rec.id]); }}
+                    records={displayedTraces.map(s => {
+                        const st = getTraceEvalStatus(s);
+                        const r = s.resultScore;
+                        const j = s.trajScore;
+                        const avg = (r != null && j != null) ? Math.round((r + j) / 2) : (r ?? j ?? null);
+                        const compStatus = st === 'done' ? 'done' : st === 'failed' ? 'failed' : st === 'partial' ? 'partial' : 'running';
+                        const meta = traceEvalResultsMap.get(s.id);
+                        return {
+                            id: s.id,
+                            caseLabel: s.id.slice(0, 12),
+                            caseTitle: s.query,
+                            executionTraceId: s.id,
+                            evaluationTraceId: meta?.evaluationTraceId,
+                            datasetId: meta?.datasetId,
+                            evaluatorRunId: traceEvaluationBatchId || undefined,
+                            status: compStatus,
+                            score: avg,
+                            errorMsg: failedTaskIds.get(s.id) || undefined,
+                        } as EvalRecordRow;
+                    })}
+                />
             </SectionShell>
 
             {/* ─────────── ③ 结果 · 用例分析（仅 trace 模式） ─────────── */}
             <SectionShell
                 num={3}
                 variant="result"
-                title="结果 · 用例分析"
+                title="分析结果"
                 desc={fullyEvaluated.length > 0
                     ? `已评测 ${fullyEvaluated.length} / ${traces.length} trace · 结果 + 轨迹 双维度`
                     : '尚未评测'}
@@ -5539,7 +5560,7 @@ function StaticCompliancePanel({
                 metaSlot={metaSlot}
                 onBack={onBack}
                 onPrimary={runStaticEval}
-                primaryLabel={running ? '扫描中...' : '重新扫描'}
+                primaryLabel={running ? '分析中...' : '重新分析'}
                 onOptimize={onOptimize}
             />
 

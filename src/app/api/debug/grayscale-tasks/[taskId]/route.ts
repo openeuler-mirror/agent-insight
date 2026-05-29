@@ -3,6 +3,7 @@ import { prisma } from '@/lib/storage/prisma';
 import { runGeneralAgent } from '@/lib/engine/general-agent';
 import { withBackgroundOpencodeSlot } from '@/lib/engine/general-agent/concurrency-limiter';
 import { findAgentDataset, type DatasetCase } from '@/server/agent_datasets_storage';
+import { saveExecutionRecord } from '@/lib/storage/data-service';
 
 export const dynamic = 'force-dynamic';
 
@@ -315,10 +316,92 @@ function pickEvaluationTraceIdFromRaw(rawAnalysis: unknown): string {
     return '';
 }
 
+function getResultEvaluation(rawAnalysisJson: string | null | undefined): Record<string, unknown> | null {
+    const raw = safeParse<Record<string, unknown> | null>(rawAnalysisJson, null);
+    if (!raw || typeof raw !== 'object') return null;
+    return raw.resultEvaluation && typeof raw.resultEvaluation === 'object'
+        ? raw.resultEvaluation as Record<string, unknown>
+        : null;
+}
+
+function pickResultEvaluationError(rawAnalysisJson: string | null | undefined): string {
+    const raw = safeParse<Record<string, unknown> | null>(rawAnalysisJson, null);
+    const value = raw && typeof raw === 'object' ? raw.resultEvaluationError : null;
+    return typeof value === 'string' ? value.trim() : '';
+}
+
+function selectedEvaluators(rawAnalysisJson: string | null | undefined): string[] {
+    const raw = safeParse<Record<string, unknown> | null>(rawAnalysisJson, null);
+    const value = raw && typeof raw === 'object' ? raw.selectedEvaluators : null;
+    return Array.isArray(value)
+        ? value.map(item => String(item || '').trim()).filter(Boolean)
+        : [];
+}
+
+function isIncompleteDoneEvaluation(row: TrajectoryResultRow): string {
+    if (row.status !== 'done') return '';
+    const evaluators = selectedEvaluators(row.rawAnalysisJson);
+    const requiresEvaluatorTrace = evaluators.some(id => (
+        id === 'preset-agent-task-completion'
+        || id === 'preset-agent-trace-quality'
+        || id === 'trace-quality-evaluator'
+    ));
+    const hasScore = typeof row.trajectoryScore === 'number'
+        || pickEvaluationResultScore(row.rawAnalysisJson) != null
+        || pickCustomEvaluationScore(row.rawAnalysisJson) != null;
+    const hasResultEvaluation = Boolean(getResultEvaluation(row.rawAnalysisJson));
+    const hasEvaluationTrace = Boolean(pickEvaluationTraceId(row.rawAnalysisJson));
+    if (requiresEvaluatorTrace && !hasEvaluationTrace) {
+        const detail = pickResultEvaluationError(row.rawAnalysisJson);
+        return detail || '评测完成记录缺少评测 session id';
+    }
+    if (hasScore && (hasResultEvaluation || hasEvaluationTrace)) return '';
+
+    const detail = pickResultEvaluationError(row.rawAnalysisJson);
+    return detail || '评测完成记录缺少评测输出或评测 session id';
+}
+
 function truncateForRunLog(value: unknown, maxLength = 240): string {
     const text = typeof value === 'string' ? value : JSON.stringify(value ?? '');
     if (!text) return '';
     return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
+}
+
+async function persistGrayscaleFallbackTrace(args: {
+    sessionId: string;
+    user: string;
+    query: string;
+    output: string;
+    agentName: string;
+    skill?: string;
+    skillVersion?: number | null;
+}) {
+    const query = args.query.trim();
+    const output = args.output.trim();
+    if (!args.sessionId || (!query && !output)) return;
+    const timestamp = new Date().toISOString();
+    await saveExecutionRecord({
+        task_id: args.sessionId,
+        upload_id: args.sessionId,
+        query: query || undefined,
+        framework: 'opencode',
+        user: args.user,
+        agent: args.agentName,
+        agentName: args.agentName,
+        final_result: output || undefined,
+        skill: args.skill,
+        skill_version: args.skillVersion ?? undefined,
+        interactions: [
+            ...(query ? [{ role: 'user', content: query, timestamp }] : []),
+            ...(output ? [{ role: 'assistant', content: output, timestamp, agent: args.agentName }] : []),
+        ],
+        skip_evaluation: true,
+        skip_internal_judgment: true,
+        failures: [],
+        skill_issues: [],
+        force_query_update: true,
+        opencode_cli_completed: true,
+    });
 }
 
 function buildGrayscaleExecutionSystem(version: ResolvedVersion): string {
@@ -767,6 +850,11 @@ async function reconcileFinishedEvaluations(user: string, config: GrayscaleConfi
 
     const staleRows: Array<{ row: typeof rows[number]; reason: string }> = [];
     for (const row of rows) {
+        const incompleteDoneReason = isIncompleteDoneEvaluation(row);
+        if (incompleteDoneReason) {
+            staleRows.push({ row, reason: incompleteDoneReason });
+            continue;
+        }
         if (row.status !== 'pending' && row.status !== 'running') continue;
         const updatedAt = row.updatedAt instanceof Date ? row.updatedAt.getTime() : 0;
         if (updatedAt <= 0) continue;
@@ -781,7 +869,9 @@ async function reconcileFinishedEvaluations(user: string, config: GrayscaleConfi
     }
     if (staleRows.length > 0) {
         for (const { row, reason } of staleRows) {
-            if (row.evaluatorRunId && row.taskId) {
+            if (row.status === 'done' && row.id) {
+                await markEvaluatorRowsFailedForce(user, [row.id], reason).catch(() => {});
+            } else if (row.evaluatorRunId && row.taskId) {
                 await markEvaluatorTasksFailed(user, row.evaluatorRunId, [row.taskId], reason).catch(() => {});
             } else if (row.id) {
                 await markEvaluatorRowsFailed(user, [row.id], reason).catch(() => {});
@@ -975,8 +1065,17 @@ async function executeSingleAgentRun(args: {
         run.toolCallCount = result.stats?.toolCallCount || toolCalls.length;
         run.toolCalls = Array.from(new Set(toolCalls)).slice(0, 8);
         markRunCompleted(run);
-        // Execution 行的写库已经由 runGeneralAgent 里的 recordTraceAs 选项处理
-        // (上面调用时传了 grayAgentName)。不在这里重复写。
+        // runGeneralAgent 会尽量写入真实 opencode messages。这里再写一份 query/output
+        // fallback，防止 ephemeral server 的 listMessages 返回空数组时 trace 详情页空白。
+        await persistGrayscaleFallbackTrace({
+            sessionId: result.sessionId,
+            user: args.user,
+            query: args.caseMap.get(target.caseId)!.input,
+            output: result.output || '',
+            agentName: grayAgentName,
+            skill: args.version?.skillName ?? (args.referenceSkillName ?? undefined),
+            skillVersion: args.version?.version,
+        });
     } catch (err) {
         const classified = classifyAgentRunError(err);
         run.status = 'fail';
@@ -1068,6 +1167,21 @@ async function markEvaluatorRowsFailed(user: string, rowIds: string[], errorMess
             user,
             id: { in: scopedRowIds },
             status: { in: ['pending', 'running'] },
+        },
+        data: {
+            status: 'failed',
+            errorMessage,
+        },
+    });
+}
+
+async function markEvaluatorRowsFailedForce(user: string, rowIds: string[], errorMessage: string) {
+    const scopedRowIds = Array.from(new Set(rowIds.map(id => id.trim()).filter(Boolean)));
+    if (scopedRowIds.length === 0) return;
+    await (prisma as unknown as GrayscalePrisma).trajectoryEvalResult.updateMany({
+        where: {
+            user,
+            id: { in: scopedRowIds },
         },
         data: {
             status: 'failed',

@@ -2447,7 +2447,6 @@ export function GrayscaleEvaluation({
                 score: undefined as number | undefined,
                 triggerRate: '—',
                 toolCall: '—',
-                accuracy: '—',
                 sessionId: '',
                 output: ''
             };
@@ -4442,6 +4441,7 @@ export function GrayscaleEvaluation({
                 open={newBatchDialogOpen}
                 user={user || ''}
                 defaultTitle={currentTask?.taskName}
+                evaluators={selectedEvaluatorId ? [selectedEvaluatorId] : []}
                 onClose={() => setNewBatchDialogOpen(false)}
                 onCreated={handleEvalBatchCreated}
             />

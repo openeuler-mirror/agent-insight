@@ -7,6 +7,7 @@ import {
 } from '@/server/skill_trigger_eval_storage';
 import { runTriggerEvalLive } from '@/lib/engine/skill-generation/evaluator/runners/triggerEval';
 import { prismaRaw } from '@/lib/storage/prisma';
+import { deriveAndPersistTriggerOptPoints } from '@/lib/engine/evaluation/derive-trigger-opt-points';
 
 export const dynamic = 'force-dynamic';
 
@@ -81,17 +82,23 @@ export async function POST(
     }
     const requestedVersionRaw = body.skillVersion;
     let targetSkillVersion: number;
+    // 评测后给 skill-opt 拼 description 优化 prompt 用——必须取 targetSkillVersion 对应版本的
+    // content，跟实际被测版本一致；否则会出现「测 v2 但 prompt 里塞 v3 的 description」的错配。
+    let targetSkillContent: string;
     if (requestedVersionRaw === undefined || requestedVersionRaw === null) {
       targetSkillVersion = skill.versions[0].version;
+      targetSkillContent = skill.versions[0].content;
     } else {
       const n = Number(requestedVersionRaw);
-      if (!Number.isFinite(n) || !skill.versions.some(v => v.version === n)) {
+      const match = skill.versions.find(v => v.version === n);
+      if (!Number.isFinite(n) || !match) {
         return NextResponse.json(
           { error: `skillVersion ${requestedVersionRaw} not found for ${decodedSkillName}` },
           { status: 404 },
         );
       }
       targetSkillVersion = n;
+      targetSkillContent = match.content;
     }
 
     // 3. 参数化
@@ -139,6 +146,31 @@ export async function POST(
         durationMs,
         status: 'done',
       });
+
+      // 派生 skill-opt 可优化点（写入 Evaluation + SkillIssue）。失败不阻断主流程——评测
+      // 本身已经 done 了，派生只是锦上添花；DB 不可用 / matter() parse 失败这类不应该让
+      // 用户看到 500。失败时仅 warn 留痕方便排障。
+      try {
+        await deriveAndPersistTriggerOptPoints({
+          user,
+          skillName: decodedSkillName,
+          skillVersion: targetSkillVersion,
+          triggerRunId: run.id,
+          skillVersionContent: targetSkillContent,
+          results: result.items,
+          passRate: result.passRate,
+          truePositiveRate: result.truePositiveRate,
+          falsePositiveRate: result.falsePositiveRate,
+          runsPerQuery,
+          triggerThreshold,
+        });
+      } catch (deriveErr) {
+        console.warn(
+          '[trigger-eval/run] deriveAndPersistTriggerOptPoints failed:',
+          deriveErr instanceof Error ? deriveErr.message : String(deriveErr),
+        );
+      }
+
       return NextResponse.json({ success: true, run: finalized });
     } catch (runErr) {
       const durationMs = Date.now() - startedAt;
