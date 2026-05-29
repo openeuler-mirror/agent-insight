@@ -69,7 +69,7 @@ export async function GET(
     });
 
     // 3) 映射成 OptIssue（前端 _mock.ts 同构）
-    const issues = result.issues.map(toOptIssue);
+    const issues = result.issues.map(it => toOptIssue(it, name));
 
     return NextResponse.json({
       skill: name,
@@ -104,9 +104,10 @@ interface OptIssue {
   createdAt: string;
 }
 
-function toOptIssue(it: IssueWithPrevalence): OptIssue {
-  // Evaluation.type ('static'|'dynamic') → OptIssue.source.kind ('static'|'trace')
+function toOptIssue(it: IssueWithPrevalence, skillName: string): OptIssue {
+  // Evaluation.type ('static'|'dynamic'|'trigger') → OptIssue.source.kind
   // 当前没接 fault/log 来源；feedback 收口到 V2，先映射成 'log' 占位（前端 UI 已支持）。
+  // trigger 暂复用 'log' kind——前端 UI 已支持渲染该 kind；label 用「触发评测」+ 短 runId。
   let kind: 'trace' | 'fault' | 'log' | 'static';
   let label: string;
   let url: string | undefined;
@@ -115,6 +116,14 @@ function toOptIssue(it: IssueWithPrevalence): OptIssue {
     kind = 'static';
     label = '静态评估';
     url = `/evaluation/${it.evaluationId}`;
+  } else if (it.source === 'trigger' || it.evaluationType === 'trigger') {
+    kind = 'log';
+    label = it.evaluationRunId ? `触发评测 ${it.evaluationRunId.slice(0, 8)}` : '触发评测';
+    // evaluationRunId 这里存的是 SkillTriggerEvalRun.id（见 derive-trigger-opt-points.ts），
+    // 前端 trigger 页可按 runId query 跳到对应历史记录。
+    if (it.evaluationRunId) {
+      url = `/skill-eval/trigger/${encodeURIComponent(skillName)}?runId=${encodeURIComponent(it.evaluationRunId)}`;
+    }
   } else if (it.source === 'dynamic' || it.evaluationType === 'dynamic') {
     kind = 'trace';
     if (it.executionTaskId) {
@@ -144,6 +153,7 @@ function toOptIssue(it: IssueWithPrevalence): OptIssue {
 
 function categoryFromSource(it: IssueWithPrevalence): string {
   if (it.source === 'static' || it.evaluationType === 'static') return '静态扫描';
+  if (it.source === 'trigger' || it.evaluationType === 'trigger') return '触发评测';
   return '其它';
 }
 

@@ -118,7 +118,7 @@ model Execution {
 /// 详细设计见 docs/plans/2026-05-08-skill-opt-issues-api-design.md
 model Evaluation {
   id            String   @id @default(cuid())
-  type          String   // 'static' | 'dynamic'
+  type          String   // 'static' | 'dynamic' | 'trigger'
 
   // 评估目标
   skillId       String
@@ -163,7 +163,7 @@ model SkillIssue {
   Evaluation    Evaluation @relation(fields: [evaluationId], references: [id], onDelete: Cascade)
 
   // denormalized：避免热路径 join Evaluation
-  source        String   // 'static' | 'dynamic' | 'feedback'
+  source        String   // 'static' | 'dynamic' | 'feedback' | 'trigger'
   skillId       String
   version       Int
   user          String?
