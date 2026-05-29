@@ -2474,11 +2474,14 @@ export function GrayscaleEvaluation({
         const globalExecutionPending = allSideRuns.length > 0 && globalExecutedCount < globalExpectedRuns;
         const executingCount = allRuns.filter(s => s.status === 'running').length;
         const evaluatingCount = allRuns.filter(s => s.status === 'evaluating').length;
+        const failedCount = allRuns.filter(s => s.status === 'fail').length;
         const completedStates = allRuns.filter(s => s.status === 'executed' || s.status === 'evaluating' || s.status === 'pass' || s.status === 'fail');
         const terminalStates = allRuns.filter(s => s.status === 'pass' || s.status === 'fail');
         const executedCount = completedStates.length;
         const completedCount = terminalStates.length;
-        const executionMetricStates = completedStates.filter(s => Boolean(s.sessionId) || typeof s.timeCost === 'string' || typeof s.tokenUsage === 'number');
+        const successfulExecutionStates = completedStates.filter(s => s.status !== 'fail');
+        const successCount = successfulExecutionStates.length;
+        const executionMetricStates = successfulExecutionStates.filter(s => Boolean(s.sessionId) || typeof s.timeCost === 'string' || typeof s.tokenUsage === 'number');
         const executionAvgTime = (() => {
             const seconds = executionMetricStates
                 .map(s => typeof s.timeCost === 'string' ? parseFloat(s.timeCost) : 0)
@@ -2506,9 +2509,11 @@ export function GrayscaleEvaluation({
             : (executionToolCount > 0 ? `${executionToolCount} calls` : '无');
 
         // Determine Overall State
-        let overallStatus: 'pending' | 'running' | 'evaluating' | 'completed' = 'pending';
+        let overallStatus: 'pending' | 'running' | 'evaluating' | 'failed' | 'completed' = 'pending';
         if (allRuns.length === 0) {
             overallStatus = 'pending';
+        } else if (failedCount > 0) {
+            overallStatus = 'failed';
         } else if (globalExecutionPending || executingCount > 0 || executedCount < totalCount) {
             overallStatus = 'running';
         } else if (completedCount === totalCount && totalCount > 0) {
@@ -2551,6 +2556,23 @@ export function GrayscaleEvaluation({
             return {
                 status: 'evaluating' as CaseStatus,
                 runsCompleted: locale === 'zh' ? `${completedCount}/${totalCount} 评估中` : `${completedCount}/${totalCount} Evaluating`,
+                timeCost: executionAvgTime,
+                tokenUsage: executionAvgTokens,
+                score: undefined as number | undefined,
+                triggerRate: executionTriggerRate,
+                toolCall: executionToolCall,
+                accuracy: '—',
+                sessionId: executionSessionId,
+                output: executionOutput
+            };
+        }
+
+        if (overallStatus === 'failed') {
+            return {
+                status: 'fail' as CaseStatus,
+                runsCompleted: locale === 'zh'
+                    ? `${successCount}/${totalCount} 执行完成 · ${failedCount} 失败`
+                    : `${successCount}/${totalCount} completed · ${failedCount} failed`,
                 timeCost: executionAvgTime,
                 tokenUsage: executionAvgTokens,
                 score: undefined as number | undefined,
@@ -2617,6 +2639,8 @@ export function GrayscaleEvaluation({
     const isCompletedB = simB.status === 'executed' || simB.status === 'pass';
     const isEvaluatingA = simA.status === 'evaluating';
     const isEvaluatingB = simB.status === 'evaluating';
+    const isFailedA = simA.status === 'fail';
+    const isFailedB = simB.status === 'fail';
     const taskHasActiveRun = Boolean(currentTask?.activeRun);
     const hasPendingAutoEvaluation = autoEval && hasPendingAutoEvaluationCaseStates(caseStates);
     const runButtonBusy = isTaskRunInFlight || taskHasActiveRun || hasRunningStates(caseStates) || hasPendingAutoEvaluation;
@@ -3140,9 +3164,6 @@ export function GrayscaleEvaluation({
         ],
         [NONE_VERSION_ID, locale, versions],
     );
-    const experimentVersionLabel = versionBId === NONE_VERSION_ID
-        ? (locale === 'zh' ? '未绑定实验版本' : 'Experiment version not bound')
-        : getVersionLabel(versionB || versionBId);
     const controlVersionHint = versionAId === NONE_VERSION_ID
         ? (locale === 'zh' ? '默认对照组不加载 Skill，也可选择同 Skill 的历史版本' : 'Control runs without Skill by default; a previous version is optional')
         : `${locale === 'zh' ? '对照组加载' : 'Control loads'} ${selectedSkill?.name || 'Skill'} ${getVersionLabel(versionA || versionAId)}`;
@@ -3594,16 +3615,6 @@ export function GrayscaleEvaluation({
                                 <span className="v2-config-item-hint">{controlVersionHint}</span>
                             </div>
 
-                            <div className="v2-config-item v2-config-item--compact">
-                                <span className="v2-config-item-label">{locale === 'zh' ? '实验组 Skill 版本' : 'Experiment Skill version'}</span>
-                                <div className="v2-config-select v2-config-static" aria-label={locale === 'zh' ? '实验组 Skill 版本' : 'Experiment Skill version'}>
-                                    {experimentVersionLabel}
-                                </div>
-                                <span className="v2-config-item-hint">
-                                    {locale === 'zh' ? '由 Skill 分析页当前版本决定，不在 A/B 配置中改动' : 'Owned by the current Skill analysis version, not this A/B config'}
-                                </span>
-                            </div>
-
                         </div>
 
                         {/* Separator line */}
@@ -3847,12 +3858,14 @@ export function GrayscaleEvaluation({
                                     <StatusBadge
                                         status={
                                             isCompletedA ? 'success'
+                                            : isFailedA ? 'error'
                                             : isEvaluatingA ? 'running'
                                             : simA.status === 'running' ? 'running'
                                             : 'pending'
                                         }
                                         label={
                                             isCompletedA ? (locale === 'zh' ? '完成' : 'Done')
+                                            : isFailedA ? (locale === 'zh' ? '失败' : 'Failed')
                                             : isEvaluatingA ? (locale === 'zh' ? '评估中' : 'Evaluating')
                                             : simA.status === 'running' ? (locale === 'zh' ? '执行中' : 'Running')
                                             : (locale === 'zh' ? '未执行' : 'Pending')
@@ -3866,6 +3879,12 @@ export function GrayscaleEvaluation({
                                                 <div className="v2-result-icon success" style={{ color: 'var(--success)', background: 'var(--success-subtle)', width: 44, height: 44, fontSize: 20 }}>✓</div>
                                                 <div className="v2-result-text" style={{ fontSize: 14 }}>{simA.runsCompleted}</div>
                                                 <div className="v2-result-sub">平均耗时 {simA.timeCost} · {displayedRepeatRounds}轮重复</div>
+                                            </>
+                                        ) : isFailedA ? (
+                                            <>
+                                                <div className="v2-result-icon" style={{ color: 'var(--error)', background: 'var(--error-subtle)', width: 44, height: 44, fontSize: 20 }}>!</div>
+                                                <div className="v2-result-text" style={{ fontSize: 14 }}>{simA.runsCompleted}</div>
+                                                <div className="v2-result-sub">{locale === 'zh' ? '存在未完整执行的记录' : 'Some runs did not finish'}</div>
                                             </>
                                         ) : simA.status === 'running' ? (
                                             <>
@@ -3951,12 +3970,14 @@ export function GrayscaleEvaluation({
                                     <StatusBadge
                                         status={
                                             isCompletedB ? 'success'
+                                            : isFailedB ? 'error'
                                             : isEvaluatingB ? 'running'
                                             : simB.status === 'running' ? 'running'
                                             : 'pending'
                                         }
                                         label={
                                             isCompletedB ? (locale === 'zh' ? '完成' : 'Done')
+                                            : isFailedB ? (locale === 'zh' ? '失败' : 'Failed')
                                             : isEvaluatingB ? (locale === 'zh' ? '评估中' : 'Evaluating')
                                             : simB.status === 'running' ? (locale === 'zh' ? '执行中' : 'Running')
                                             : (locale === 'zh' ? '未执行' : 'Pending')
@@ -3970,6 +3991,12 @@ export function GrayscaleEvaluation({
                                                 <div className="v2-result-icon success" style={{ color: 'var(--success)', background: 'var(--success-subtle)', width: 44, height: 44, fontSize: 20 }}>✓</div>
                                                 <div className="v2-result-text" style={{ fontSize: 14 }}>{simB.runsCompleted}</div>
                                                 <div className="v2-result-sub">平均耗时 {simB.timeCost} · {displayedRepeatRounds}轮重复</div>
+                                            </>
+                                        ) : isFailedB ? (
+                                            <>
+                                                <div className="v2-result-icon" style={{ color: 'var(--error)', background: 'var(--error-subtle)', width: 44, height: 44, fontSize: 20 }}>!</div>
+                                                <div className="v2-result-text" style={{ fontSize: 14 }}>{simB.runsCompleted}</div>
+                                                <div className="v2-result-sub">{locale === 'zh' ? '存在未完整执行的记录' : 'Some runs did not finish'}</div>
                                             </>
                                         ) : simB.status === 'running' ? (
                                             <>
