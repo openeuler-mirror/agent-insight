@@ -4165,21 +4165,19 @@ function TraceDeviationPanel({
                     onRetry={rec => { onBatchAnalyze?.([rec.id]); }}
                     records={displayedTraces.map(s => {
                         const st = getTraceEvalStatus(s);
-                        const r = s.resultScore;
-                        const j = s.trajScore;
-                        const avg = (r != null && j != null) ? Math.round((r + j) / 2) : (r ?? j ?? null);
                         const compStatus = st === 'done' ? 'done' : st === 'failed' ? 'failed' : st === 'partial' ? 'partial' : 'running';
                         const meta = traceEvalResultsMap.get(s.id);
                         return {
                             id: s.id,
-                            caseLabel: s.id.slice(0, 12),
-                            caseTitle: s.query,
+                            caseLabel: s.query || s.id.slice(0, 12),
+                            caseTitle: s.query || s.id,
                             executionTraceId: s.id,
                             evaluationTraceId: meta?.evaluationTraceId,
                             datasetId: meta?.datasetId,
                             evaluatorRunId: traceEvaluationBatchId || undefined,
                             status: compStatus,
-                            score: avg,
+                            resultScore: s.resultScore,
+                            trajScore: s.trajScore,
                             errorMsg: failedTaskIds.get(s.id) || undefined,
                         } as EvalRecordRow;
                     })}

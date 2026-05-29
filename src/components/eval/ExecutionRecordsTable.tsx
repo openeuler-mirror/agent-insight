@@ -17,9 +17,9 @@ import React from 'react';
 export interface EvalRecordRow {
     /** 唯一 key (通常 = TrajectoryEvalResult.id) */
     id: string;
-    /** 用例/trace 短标识 (taskId / caseId) */
+    /** 用例内容 (query / case input) —— 第一列展示, 让用户一眼认出是哪个用例 */
     caseLabel: string;
-    /** hover 文案 (query / 来源信息) */
+    /** hover 文案 (完整 query / 来源信息) */
     caseTitle?: string;
     /** 被评测的 trace task_id —— 跳链路追踪。数据集来源的记录, 这里是执行生成的那条 trace。 */
     executionTraceId?: string;
@@ -31,10 +31,18 @@ export interface EvalRecordRow {
     datasetId?: string;
     /** pending=排队中 running/evaluating=评测中 done=已评测 failed=失败 */
     status: string;
-    /** 综合分 (0-100) */
-    score?: number | null;
+    /** 结果分 (任务完成度评估器, 0-100) */
+    resultScore?: number | null;
+    /** 轨迹分 (轨迹质量 / 轨迹对齐, 0-100) */
+    trajScore?: number | null;
     /** 失败时的错误信息, 失败态 hover 展示 */
     errorMsg?: string;
+}
+
+/** 0-100 分 → 颜色: ≥80 绿 / ≥60 橙 / 其余红 / null 灰 */
+function scoreColor(n: number | null | undefined): string {
+    if (typeof n !== 'number') return '#B8B6AE';
+    return n >= 80 ? '#16A34A' : n >= 60 ? '#D97706' : '#DC2626';
 }
 
 type Tone = 'pending' | 'running' | 'done' | 'fail' | 'partial';
@@ -113,7 +121,7 @@ export function ExecutionRecordsTable({
     onRowClick?: (record: EvalRecordRow) => void;
 }) {
     const zh = locale === 'zh';
-    const cols = '0.9fr 1.1fr 1.1fr 88px 76px 52px' + (onRetry ? ' 52px' : '');
+    const cols = '0.9fr 1fr 1fr 78px 62px 52px 52px' + (onRetry ? ' 50px' : '');
     return (
         <div style={{ border: '1px solid #E7E5E4', borderRadius: 8, overflow: 'hidden', background: '#fff' }}>
             <style>{'@keyframes erspin{to{transform:rotate(360deg)}}'}</style>
@@ -136,12 +144,13 @@ export function ExecutionRecordsTable({
                         fontSize: 11, fontWeight: 700, color: '#5F5E5A',
                         position: 'sticky', top: 0, zIndex: 1,
                     }}>
-                        <div>{zh ? '用例 / 来源' : 'Case / Source'}</div>
+                        <div>{zh ? '用例' : 'Case'}</div>
                         <div>{zh ? '执行 Trace' : 'Execution trace'}</div>
                         <div>{zh ? '评估 Trace' : 'Eval trace'}</div>
                         <div>{zh ? '状态' : 'Status'}</div>
                         <div>{zh ? '评测结果' : 'Result'}</div>
-                        <div style={{ textAlign: 'right' }}>{zh ? '分数' : 'Score'}</div>
+                        <div style={{ textAlign: 'right' }}>{zh ? '结果分' : 'Result'}</div>
+                        <div style={{ textAlign: 'right' }}>{zh ? '轨迹分' : 'Traj'}</div>
                         {onRetry && <div style={{ textAlign: 'right' }}>{zh ? '操作' : 'Action'}</div>}
                     </div>
                     {records.map(rec => {
@@ -156,9 +165,9 @@ export function ExecutionRecordsTable({
                                     cursor: onRowClick ? 'pointer' : 'default',
                                 }}
                             >
-                                {/* 用例 / 来源 */}
+                                {/* 用例 (query / case input) —— 让用户一眼认出是哪个用例 */}
                                 <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }} title={rec.caseTitle || rec.caseLabel}>
-                                    <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11, color: '#5F5E5A' }}>{rec.caseLabel}</span>
+                                    <span style={{ fontSize: 12, color: '#2C2C2A' }}>{rec.caseLabel || '—'}</span>
                                 </div>
 
                                 {/* 执行 session id → 链路追踪 */}
@@ -223,23 +232,28 @@ export function ExecutionRecordsTable({
                                     })()}
                                 </div>
 
-                                {/* 分数 */}
-                                <div style={{ textAlign: 'right', fontWeight: 700, color: typeof rec.score === 'number' ? '#2C2C2A' : '#B8B6AE' }}>
-                                    {typeof rec.score === 'number' ? Math.round(rec.score) : '—'}
+                                {/* 结果分 */}
+                                <div style={{ textAlign: 'right', fontWeight: 700, fontFamily: 'ui-monospace, monospace', color: scoreColor(rec.resultScore) }}>
+                                    {typeof rec.resultScore === 'number' ? Math.round(rec.resultScore) : '—'}
                                 </div>
 
-                                {/* 重试 */}
+                                {/* 轨迹分 */}
+                                <div style={{ textAlign: 'right', fontWeight: 700, fontFamily: 'ui-monospace, monospace', color: scoreColor(rec.trajScore) }}>
+                                    {typeof rec.trajScore === 'number' ? Math.round(rec.trajScore) : '—'}
+                                </div>
+
+                                {/* 重试 —— 无论评测与否/成功失败都提供 (重新发起评测) */}
                                 {onRetry && (
                                     <div style={{ textAlign: 'right' }}>
-                                        {(tone === 'fail') ? (
-                                            <button
-                                                className="v2-action-btn"
-                                                style={{ fontSize: 11, padding: '3px 8px', border: '1px solid #D4D4D8', background: '#fff', borderRadius: 4, cursor: 'pointer', color: '#52525B' }}
-                                                onClick={e => { e.stopPropagation(); onRetry(rec); }}
-                                            >
-                                                {zh ? '重试' : 'Retry'}
-                                            </button>
-                                        ) : <span style={{ color: '#B8B6AE', fontSize: 11 }}>—</span>}
+                                        <button
+                                            className="v2-action-btn"
+                                            style={{ fontSize: 11, padding: '3px 8px', border: '1px solid #D4D4D8', background: '#fff', borderRadius: 4, cursor: tone === 'running' ? 'not-allowed' : 'pointer', color: tone === 'running' ? '#B8B6AE' : '#52525B', opacity: tone === 'running' ? 0.6 : 1 }}
+                                            disabled={tone === 'running'}
+                                            title={tone === 'running' ? (zh ? '评测/执行进行中…' : 'In progress…') : (zh ? '重新评测这条' : 'Re-evaluate')}
+                                            onClick={e => { e.stopPropagation(); if (tone !== 'running') onRetry(rec); }}
+                                        >
+                                            {zh ? '重试' : 'Retry'}
+                                        </button>
                                     </div>
                                 )}
                             </div>

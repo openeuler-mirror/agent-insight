@@ -8,7 +8,10 @@ export interface BatchEvalResultMeta {
     evaluationTraceId?: string;
     datasetId?: string;
     status?: string;
-    score?: number | null;
+    /** 结果分 (任务完成度评估器), 已 ×100 转 0-100 */
+    resultScore?: number | null;
+    /** 轨迹分 (轨迹质量评估器), 已 ×100 转 0-100 */
+    trajScore?: number | null;
 }
 
 /**
@@ -45,7 +48,9 @@ export function useBatchEvalResults(
                         evaluationTraceId: evalTrace || undefined,
                         datasetId: r.datasetId || undefined,
                         status: r.status,
-                        score: typeof r.trajectoryScore === 'number' ? r.trajectoryScore : null,
+                        // trajectoryScore / resultEvaluationScore 后端为 0-1, 这里 ×100 转 0-100 与 trace 模式口径一致。
+                        resultScore: typeof r.resultEvaluationScore === 'number' ? Math.round(r.resultEvaluationScore * 100) : null,
+                        trajScore: typeof r.trajectoryScore === 'number' ? Math.round(r.trajectoryScore * 100) : null,
                     });
                 }
                 if (!cancelled) setMap(m);
