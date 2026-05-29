@@ -82,7 +82,9 @@ description: "评估器管理、创建流程与功能说明"
 7. 查看右侧评估器卡片。
 8. 点击卡片底部 **前往评测执行**，进入执行入口。
 
-![评估器管理页](../../images/agent/evaluation/eval_evaluator_inside.png)
+<p align="center">
+  <img src="../../images/agent/evaluation/eval_evaluator_inside.png" alt="评估器管理页" style="width: 100%; max-width: 920px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+</p>
 
 ### 页面功能
 
@@ -140,7 +142,9 @@ description: "评估器管理、创建流程与功能说明"
 11. 确认系统返回列表。
 12. 确认新评估器出现在 **自建评估器** 列表中。
 
-![新建评估器页面](../../images/agent/evaluation/eval_evaluator_llm.png)
+<p align="center">
+  <img src="../../images/agent/evaluation/eval_evaluator_llm.png" alt="新建评估器页面" style="width: 100%; max-width: 920px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+</p>
 
 ### 页面功能
 

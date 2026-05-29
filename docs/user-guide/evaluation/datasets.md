@@ -46,7 +46,9 @@ description: "创建、导入与版本化管理离线评测所需的样本数据
 1. 在左侧导航中打开 **评测中心**。
 2. 点击 **评测数据集**。
 
-![评测数据集管理页](../../images/agent/evaluation/eval_dataset_review.png)
+<p align="center">
+  <img src="../../images/agent/evaluation/eval_dataset_review.png" alt="评测数据集管理页" style="width: 100%; max-width: 1040px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+</p>
 
 ### 页面功能
 
@@ -82,7 +84,9 @@ description: "创建、导入与版本化管理离线评测所需的样本数据
 6. 点击 **保存评测集**。
 7. 确认页面跳转至新评测集的 **数据项** 页。
 
-![新建评测集页面](../../images/agent/evaluation/eval_dataset_new.png)
+<p align="center">
+  <img src="../../images/agent/evaluation/eval_dataset_new.png" alt="新建评测集页面" style="width: 100%; max-width: 920px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+</p>
 
 ### 页面功能
 
@@ -120,7 +124,9 @@ description: "创建、导入与版本化管理离线评测所需的样本数据
 6. 点击 **删除** 移除无效或过期数据项。
 7. 点击 **刷新** 同步最新数据项列表。
 
-![评测集数据项管理页](../../images/agent/evaluation/eval_dataset_item.png)
+<p align="center">
+  <img src="../../images/agent/evaluation/eval_dataset_item.png" alt="评测集数据项管理页" style="width: 100%; max-width: 920px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+</p>
 
 ### 页面功能
 
@@ -155,7 +161,9 @@ description: "创建、导入与版本化管理离线评测所需的样本数据
 5. 点击 **开始导入**。
 6. 确认弹窗关闭，且列表中的数据项数量增加。
 
-![批量导入测试用例弹窗](../../images/agent/evaluation/eval_dataset_upload.png)
+<p align="center">
+  <img src="../../images/agent/evaluation/eval_dataset_upload.png" alt="批量导入测试用例弹窗" style="width: 100%; max-width: 860px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+</p>
 
 ### 导入格式示例
 

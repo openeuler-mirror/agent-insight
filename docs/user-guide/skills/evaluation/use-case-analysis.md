@@ -52,7 +52,9 @@ description: "Skill 用例分析的操作流程、页面功能与结果解读"
 
 下图展示用例分析页在完成一轮评测后的典型界面。页面按 **① 配置 → ② 评测执行 → ③ 分析结果** 三段串行组织。
 
-![用例分析页面示意图，包含配置区、开始评测按钮、评测执行区与分析结果区，总评分、通过率、未通过、通过和分场景结果](../../../images/skills/evaluation/evaluation_case_result.png)
+<p align="center">
+  <img src="../../../images/skills/evaluation/evaluation_case_result.png" alt="用例分析页面示意图，包含配置区、开始评测按钮、评测执行区与分析结果区，总评分、通过率、未通过、通过和分场景结果" style="width: 100%; max-width: 920px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+</p>
 
 图中各区域的职责如下：
 

@@ -21,7 +21,9 @@ description: "面向智能体应用的可观测、评测与 Skills 优化平台"
 - 建立评测数据集、配置评估器、批量运行离线评测
 - 把 Skill 当成版本化资产，完成生成、分析、A/B 测试和优化迭代
 
-![Agent Insight 首页概览](../images/home.png)
+<p align="center">
+  <img src="../images/home.png" alt="Agent Insight 首页概览" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+</p>
 
 ## 平台结构
 

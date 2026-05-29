@@ -21,7 +21,9 @@ description: "查看、筛选并分析一次执行的完整 Trace"
 
 列表页承担“发现样本”和“缩小范围”两类工作，适合先从大量执行记录中筛出值得进入详情的 Trace。
 
-![链路追踪列表页示意图](../../images/agent/observability/trace_list.png)
+<p align="center">
+  <img src="../../images/agent/observability/trace_list.png" alt="链路追踪列表页示意图" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+</p>
 
 上图展示了链路追踪列表页的典型结构：顶部是聚合指标，指标下方是筛选区，中间是执行记录表格，右侧操作列用于继续进入评测、分析或详情页。
 
@@ -82,7 +84,9 @@ description: "查看、筛选并分析一次执行的完整 Trace"
 
 详情页承担“还原过程”和“定位原因”两类工作，适合对单条 Trace 做完整复盘。
 
-![链路追踪详情页示意图](../../images/agent/observability/trace_overview.png)
+<p align="center">
+  <img src="../../images/agent/observability/trace_overview.png" alt="链路追踪详情页示意图" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+</p>
 
 上图展示了详情页的典型结构：顶部是 Trace 摘要与统计指标，中部按标签页聚合不同调用维度，左侧是 Span 列表，中央是时间轴，右侧是当前选中节点的摘要信息。
 
