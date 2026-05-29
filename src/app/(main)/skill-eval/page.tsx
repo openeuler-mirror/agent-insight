@@ -1369,10 +1369,10 @@ function SkillAnalysisPage() {
     const title = (
         <span className="sa-top-title">
             {view === 'overview' ? (
-                <span>Skills 分析</span>
+                <span>Skills 评测</span>
             ) : (
                 <>
-                    <button onClick={() => setView('overview')}>Skills 分析</button>
+                    <button onClick={() => setView('overview')}>Skills 评测</button>
                     <span>/</span>
                     <b>{viewTitle(view)}</b>
                 </>
@@ -5761,7 +5761,7 @@ function DetailHeader({
     return (
         <header className="sa-detail-head">
             {/* sa-back-line（"← 返回综合分析 / <view>"）原本在这里，已删——
-               顶部 AppTopBar 的"Skills 分析"已是可点击回 overview 的入口，
+               顶部 AppTopBar 的"Skills 评测"已是可点击回 overview 的入口，
                这里再放一行重复且与最顶路径冲突。onBack 仍由 props 收着，
                以备未来其它入口（比如键盘快捷键）使用。 */}
             <div className="sa-detail-hero">

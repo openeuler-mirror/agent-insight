@@ -1389,7 +1389,7 @@ function TabOverview({
                         hasAnalysisHealth && analysisHealthPct < 80
                             ? (
                                 <>
-                                    综合健康分偏低，建议进入 Skills 分析页定位具体维度{issuesTotal > 0 ? <>；静态评估检出 <strong>{issuesTotal}</strong> 条问题</> : null}
+                                    综合健康分偏低，建议进入 Skills 评测页定位具体维度{issuesTotal > 0 ? <>；静态评估检出 <strong>{issuesTotal}</strong> 条问题</> : null}
                                 </>
                               )
                             : undefined

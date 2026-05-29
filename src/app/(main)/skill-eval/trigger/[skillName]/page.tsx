@@ -545,7 +545,7 @@ export default function SkillEvalTriggerPage() {
               if (selectedVersion != null) qs.set('version', String(selectedVersion));
               router.push(`/skill-eval?${qs.toString()}`);
             }}>
-              Skills 分析
+              Skills 评测
             </button>
             <span>/</span>
             <b>触发分析</b>
