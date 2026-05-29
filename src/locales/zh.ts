@@ -84,7 +84,7 @@ export const zh = {
     skillsManage: 'Skills Hub',
     skillHistory: 'Skill 执行历史',
     skillGenerator: 'Skills 生成',
-    skillEval: 'Skillls 评测',
+    skillEval: 'Skills 评测',
     skillOpt: 'Skills 优化',
     skillRelease: '发布管理',
     optapi: '自优化 API',
