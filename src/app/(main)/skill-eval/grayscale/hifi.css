@@ -698,6 +698,16 @@
     color: inherit !important;
 }
 
+.gray-hifi .v2-config-static {
+    display: inline-flex !important;
+    align-items: center !important;
+    overflow: hidden !important;
+    white-space: nowrap !important;
+    text-overflow: ellipsis !important;
+    cursor: default !important;
+    color: var(--gh-ink-3) !important;
+}
+
 .gray-hifi .v2-config-item--compact > .v2-config-select:hover,
 .gray-hifi .v2-config-item--compact > .v2-config-select:focus-visible {
     background: var(--gh-bg-elev) !important;
