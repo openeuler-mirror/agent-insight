@@ -1610,10 +1610,18 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
         const customAvg = customEvaluatorScores.length > 0
             ? customEvaluatorScores.reduce((a, b) => a + b, 0) / customEvaluatorScores.length
             : null;
+        const resultEvaluatorSessionId = typeof resultEvaluationRawAnalysis?.evaluatorSessionId === 'string'
+            ? resultEvaluationRawAnalysis.evaluatorSessionId.trim()
+            : '';
+        const resultEvaluationMissing = shouldRunResultEvaluation && (!resultEvaluationRawAnalysis || !resultEvaluatorSessionId);
+        const finalStatus = resultEvaluationMissing ? 'failed' : 'done';
+        const finalErrorMessage = resultEvaluationMissing
+            ? (resultEvaluationError || '结果评测未产出有效结果或评测 session')
+            : null;
         await prisma.trajectoryEvalResult.update({
             where: { id },
             data: {
-                status: 'done',
+                status: finalStatus,
                 trajectoryScore: null,
                 dimensionScoresJson: null,
                 deviationStepsJson: JSON.stringify([]),
@@ -1629,10 +1637,12 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
                     customVariableNeeds: Array.from(requestedCustomVars),
                     customEvaluationScore: customAvg,
                 }),
-                errorMessage: null,
+                errorMessage: finalErrorMessage,
             },
         });
-        await derivePointsAfterDone(user, id, execution, interactions);
+        if (finalStatus === 'done') {
+            await derivePointsAfterDone(user, id, execution, interactions);
+        }
         return;
     }
 
