@@ -48,6 +48,7 @@ import {
     type TrajectoryEvalOutput,
     type TrajectoryDimensionScores,
     type TrajectoryDeviationStep,
+    aggregateTrajectoryScore,
 } from './trajectory-evaluator';
 
 export class TrajectoryEvalConfigError extends Error {
@@ -66,7 +67,12 @@ const OPENCODE_FALLBACK_AGENT_NAME = 'build';
 
 const COORDINATOR_SYSTEM_PROMPT = `你是 Agent Insight 的「轨迹质量评估器」。你会收到一个 (case + actual_trace + reference_trajectory) 三元组，必要时还会带 reference_key_actions 与 actual_extracted_steps，以及已由规则代码计算好的冗余检测结果。
 
-请按下面 5 个步骤完成内部分析，但最终只输出 JSON。不要输出步骤过程、Markdown、解释性前言或额外文本。
+请按下面的步骤完成内部分析，但最终只输出 JSON。不要输出步骤过程、Markdown、解释性前言或额外文本。
+
+【你的职责边界 —— 非常重要】
+- 你只负责给出 3 个维度的【单项分】(completeness / tool_choice / redundancy) 和一份带 severity 的【偏差清单】(deviation_steps)。
+- 你【不要】计算、不要输出最终 trajectory_score —— 最终轨迹分的加权与"严重度封顶"由系统代码统一计算，你算了也会被忽略。
+- 你的任务是把每一处偏差识别准、severity 标准，因为 severity 会直接决定是否触发封顶。
 
 【比较模式】
 - 当 comparison_mode = trajectory 时：按 reference_trajectory 和 actual_trace 做常规轨迹对比。
@@ -79,46 +85,48 @@ const COORDINATOR_SYSTEM_PROMPT = `你是 Agent Insight 的「轨迹质量评估
 - \`dimension_scores.completeness\` 必须等于 \`dimension_details.completeness.score\`。
 - \`dimension_scores.tool_choice\` 必须等于 \`dimension_details.tool_choice.score\`。
 - \`dimension_scores.redundancy\` 必须等于输入规则结果里的 \`redundancy_score\`。
-- \`dimension_scores.attribution\` 必须等于 \`dimension_details.attribution.attribution_score\`。
-- \`trajectory_score\` 必须按公式计算，可四舍五入到 3 位小数。
 
-【内部分析步骤】
-Step 1：冗余分析
-- 直接采用输入中已计算好的 redundancy_score。
-- 把规则检测结果摘要写入 \`dimension_details.redundancy\`。
+【三个维度的打分细则 —— 必须在 dimension_details 里写清算法依据】
+维度 1 · 完整性 completeness（覆盖率 − 顺序惩罚）
+- coverage = 实际命中的参考关键步骤数 ÷ 参考关键步骤总数。
+- order_penalty：参考中有明确先后依赖、实际却乱序的，每处关键顺序错扣 0.10、非关键顺序错扣 0.05，上限 0.30。
+- score = clamp01(coverage − order_penalty)。
+- 在 dimension_details.completeness 里写明 coverage、order_penalty、missing_steps（应有但未执行）、extra_steps（多余/明显绕路）、explanation。
 
-Step 2：完整性分析
-- comparison_mode = trajectory 时，对比 reference_trajectory 与 actual_trace。
-- comparison_mode = skill_key_actions 时，优先对比 reference_key_actions 与 actual_extracted_steps。
-- 列出 missing_steps（应有但未执行）和 extra_steps（多余或明显绕路）。
-- 给出 completeness 评分。
+维度 2 · 工具选择 tool_choice（逐步打分求平均）
+- 对 actual_trace 里每个 tool/skill 调用打一个 0~1 的小分：选对工具且参数与时机都合理 = 1.0；调用时机不当 = 0.7；参数有误 = 0.5；选错工具/用了破坏性或无关工具 = 0.0。
+- score = 所有调用小分的平均；无调用时给 1.0。
+- 在 dimension_details.tool_choice.problematic_steps 里逐条写 {step_index, name, issue, penalty(=1−小分), severity}，并在 explanation 里说明平均算法。
 
-Step 3：工具选择分析
-- 逐步检查 actual_trace 中每个 tool / skill 调用。
-- 判断工具选择、参数、调用时机是否合理。
-- 列出 problematic_steps。
-- 给出 tool_choice 评分。
+维度 3 · 冗余 redundancy（直接采用规则分）
+- 直接采用输入中已计算好的 redundancy_score，把规则检测结果摘要写入 dimension_details.redundancy。
 
-Step 4：根因定位与 Skill 归因
-- 综合完整性与工具选择发现，定位最关键的偏离步骤；没有显著偏离时 root_cause_step 为 null。
+【偏差清单 deviation_steps 与 severity 判级 —— 直接决定封顶】
+对每一处偏差产出一条记录，并标注 severity 与 factor：
+- factor 取值：completeness | tool_choice | redundancy | error_recovery | grounding | other。
+  · error_recovery：执行中出现报错/失败后，是否得到恰当恢复（重试、换路径、报告并停止）。
+  · grounding：行动是否建立在真实读取/验证到的信息上，而非臆测、幻觉或未经核实的假设。
+- severity 判级标准（务必严格，会影响封顶）：
+  · high = 关键步骤缺失 / 方向性错误 / 不可逆后果：漏掉强制性 key action、用错工具或执行破坏性操作、基于幻觉或未验证信息采取关键行动、出现阻塞性错误却始终未恢复。
+  · medium = 明显绕路 / 次优：多余步骤、参数小错、可恢复但笨拙的错误处理、非关键步骤顺序错乱。
+  · low = 轻微 / 风格层面，不影响最终结果。
 - 对每个 deviation_step 判断 is_skill_attributable：
   · true：如果在 SKILL.md 增加明确规则、示例或前置约束，能显著降低这个错误复现概率。
   · false：偏差主要来自 agent 自身推理、模型能力、外部环境或一次性执行波动。
 - 仅当 is_skill_attributable=true 时，给出具体到 SKILL.md 小节级别的 improvement_suggestion。
-- attribution 评分只表示根因是否明确、证据是否充分；不要把它当作 Skill 可归因比例。
 
-Step 5：聚合输出
-- trajectory_score = 0.35 * completeness + 0.30 * tool_choice + 0.15 * redundancy + 0.20 * attribution。
-- 只输出下面 schema 对应的严格 JSON：
+【根因定位（不计分，仅展示）】
+- 综合上述发现，定位最关键的偏离步骤写入 root_cause_step；没有显著偏离时为 null。
+- 在 dimension_details.attribution 里写 {root_cause_step, reasoning, error_recovery_findings, grounding_findings}。
+
+【最终输出】只输出下面 schema 对应的严格 JSON（不含 trajectory_score）：
 
 \`\`\`json
 {
-  "trajectory_score": 0.0,
   "dimension_scores": {
     "completeness": 0.0,
     "tool_choice": 0.0,
-    "redundancy": 0.0,
-    "attribution": 0.0
+    "redundancy": 0.0
   },
   "deviation_steps": [
     {
@@ -127,12 +135,13 @@ Step 5：聚合输出
       "name": "bash",
       "deviation": "...",
       "severity": "low|medium|high",
+      "factor": "tool_choice|completeness|redundancy|error_recovery|grounding|other",
       "is_skill_attributable": true,
       "improvement_suggestion": "在 SKILL.md 的 X 章节明确：执行 bash 前先 ..."
     }
   ],
   "root_cause_step": "step#5: bash",
-  "reason_text": "(中文 markdown 综述, 200-400 字)",
+  "reason_text": "(中文 markdown 综述, 200-400 字；说明三个维度各自的得分依据，并指出哪些偏差可能触发封顶)",
   "dimension_details": {
     "redundancy": {
       "consecutive_same_runs": [],
@@ -143,19 +152,22 @@ Step 5：聚合输出
     },
     "completeness": {
       "score": 0.85,
+      "coverage": 0.9,
+      "order_penalty": 0.05,
       "missing_steps": [],
       "extra_steps": [],
-      "explanation": "..."
+      "explanation": "coverage=0.9，1 处非关键顺序错 order_penalty=0.05，score=0.85"
     },
     "tool_choice": {
       "score": 0.78,
       "problematic_steps": [],
-      "explanation": "..."
+      "explanation": "5 次调用平均：..."
     },
     "attribution": {
       "root_cause_step": "step#5: bash",
       "reasoning": "...",
-      "attribution_score": 1.0
+      "error_recovery_findings": [],
+      "grounding_findings": []
     }
   }
 }
@@ -163,7 +175,8 @@ Step 5：聚合输出
 
 【关于 dimension_details 字段】
 - redundancy 放规则检测结果摘要。
-- completeness / tool_choice / attribution 分别放 3 个维度的结构化分析，供前端与 skill-opt 直接消费。
+- completeness / tool_choice 放各自的结构化打分依据（含 coverage / order_penalty / 逐步小分），供前端与 skill-opt 直接消费。
+- attribution 放根因与 error_recovery / grounding 发现，仅供展示，不计入分数。
 
 只输出严格 JSON。`;
 
@@ -322,6 +335,17 @@ function normalizeSeverity(v: unknown): 'low' | 'medium' | 'high' {
     return 'medium';
 }
 
+function normalizeFactor(v: unknown): TrajectoryDeviationStep['factor'] {
+    const s = String(v || '').toLowerCase().replace(/[\s-]+/g, '_');
+    if (s === 'completeness') return 'completeness';
+    if (s === 'tool_choice' || s === 'toolchoice') return 'tool_choice';
+    if (s === 'redundancy') return 'redundancy';
+    if (s === 'error_recovery' || s === 'errorrecovery') return 'error_recovery';
+    if (s === 'grounding') return 'grounding';
+    if (s) return 'other';
+    return undefined;
+}
+
 function asRecord(value: unknown): JsonRecord {
     return value && typeof value === 'object' && !Array.isArray(value)
         ? value as JsonRecord
@@ -335,18 +359,10 @@ function normalizeOutput(parsedInput: unknown): TrajectoryEvalOutput {
         completeness: clamp01(toNumber(dim.completeness)),
         toolChoice: clamp01(toNumber(dim.tool_choice ?? dim.toolChoice)),
         redundancy: clamp01(toNumber(dim.redundancy)),
-        attribution: clamp01(toNumber(dim.attribution)),
     };
-
-    const trajectoryScoreRaw = toNumber(parsed.trajectory_score ?? parsed.trajectoryScore);
-    const trajectoryScore = Number.isFinite(trajectoryScoreRaw)
-        ? clamp01(trajectoryScoreRaw)
-        : clamp01(
-              0.35 * dimensionScores.completeness +
-                  0.3 * dimensionScores.toolChoice +
-                  0.15 * dimensionScores.redundancy +
-                  0.2 * dimensionScores.attribution,
-          );
+    // attribution 不再计入加权分；若 LLM 仍输出则保留用于展示历史口径，否则不带。
+    const attribRaw = toNumber(dim.attribution);
+    if (Number.isFinite(attribRaw)) dimensionScores.attribution = clamp01(attribRaw);
 
     const deviationsRaw = parsed.deviation_steps || parsed.deviationSteps || [];
     const deviationSteps: TrajectoryDeviationStep[] = Array.isArray(deviationsRaw)
@@ -364,19 +380,27 @@ function normalizeOutput(parsedInput: unknown): TrajectoryEvalOutput {
                       name: d.name ? String(d.name) : undefined,
                       deviation: String(d.deviation || d.description || ''),
                       severity: normalizeSeverity(d.severity),
+                      factor: normalizeFactor(d.factor),
                       isSkillAttributable: skillAttr === false ? false : true,
                       improvementSuggestion: suggestion || undefined,
                   };
               })
         : [];
 
+    // 轨迹分一律由代码侧聚合层计算（加权 0.45/0.35/0.20 + 严重度封顶），
+    // 不再信任 LLM 自算的 trajectory_score —— 即使 LLM 输出了也忽略。
+    const { trajectoryScore, rawWeightedScore, cap } = aggregateTrajectoryScore(dimensionScores, deviationSteps);
+
     return {
         trajectoryScore,
+        rawWeightedScore,
+        cap,
         dimensionScores,
         deviationSteps,
         rootCauseStep: (typeof parsed.root_cause_step === 'string' ? parsed.root_cause_step : (typeof parsed.rootCauseStep === 'string' ? parsed.rootCauseStep : undefined)),
         reasonText: String(parsed.reason_text || parsed.reasonText || ''),
-        rawAnalysis: parsed,
+        // score_aggregation 落进 rawAnalysis，前端可据此展示封顶解释与封顶前后分数。
+        rawAnalysis: { ...parsed, score_aggregation: cap },
     };
 }
 
@@ -411,7 +435,7 @@ async function evaluateTrajectoryDirect(
         : JSON.stringify(response.content);
     const parsed = parseJsonLoose(content);
     const parsedRecord = asRecord(parsed);
-    if (typeof (parsedRecord.trajectory_score ?? parsedRecord.trajectoryScore) === 'undefined') {
+    if (typeof (parsedRecord.dimension_scores ?? parsedRecord.dimensionScores) === 'undefined') {
         throw new Error(`直接 LLM 评测未产出有效 JSON。模型输出前 800 字符：${content.slice(0, 800)}`);
     }
     return normalizeOutput(parsedRecord);
@@ -438,11 +462,24 @@ function parseJsonLoose(s: string): unknown | null {
 }
 
 function extractFinalResultFromText(fullText: string): unknown | null {
+    // v2：LLM 不再输出 trajectory_score，改以 dimension_scores 为有效 JSON 的判据。
+    // 兼容旧输出：trajectory_score 仍可识别，但其值会被聚合层忽略。
+    const hasEvalKeys = (rec: JsonRecord): boolean =>
+        typeof rec.dimension_scores !== 'undefined'
+        || typeof rec.dimensionScores !== 'undefined'
+        || typeof rec.trajectory_score !== 'undefined';
+
     const jsonBlockMatch = fullText.match(/```json\s*([\s\S]*?)\s*```/);
     if (jsonBlockMatch) {
         const parsed = parseJsonLoose(jsonBlockMatch[1]);
         const parsedRecord = asRecord(parsed);
-        if (typeof parsedRecord.trajectory_score !== 'undefined') return parsedRecord;
+        if (hasEvalKeys(parsedRecord)) return parsedRecord;
+    }
+
+    const dimMatch = fullText.match(/\{[\s\S]*"dimension_scores"[\s\S]*\}/);
+    if (dimMatch) {
+        const parsed = parseJsonLoose(dimMatch[0]);
+        if (parsed) return parsed;
     }
 
     const trajectoryMatch = fullText.match(/\{[\s\S]*"trajectory_score"[\s\S]*\}/);

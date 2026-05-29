@@ -59,7 +59,8 @@ interface DimensionScores {
     completeness: number;
     toolChoice: number;
     redundancy: number;
-    attribution: number;
+    /** 归因维度（v2 起不计入加权轨迹分，仅历史数据可能携带）。 */
+    attribution?: number;
 }
 
 interface TrajectoryDeviation {
@@ -1188,13 +1189,14 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
                                     const findings = deriveDimensionFindings(result.rawAnalysis);
                                     return (
                                         <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 8, marginBottom: 12 }}>
-                                            <DimensionCard label="完整性" score={result.dimensionScores.completeness} findings={findings.completeness} />
-                                            <DimensionCard label="工具选择" score={result.dimensionScores.toolChoice} findings={findings.toolChoice} />
-                                            <DimensionCard label="冗余" score={result.dimensionScores.redundancy} findings={findings.redundancy} />
-                                            <DimensionCard label="归因" score={result.dimensionScores.attribution} findings={findings.attribution} />
+                                            <DimensionCard label="完整性" weight={0.45} score={result.dimensionScores.completeness} findings={findings.completeness} />
+                                            <DimensionCard label="工具选择" weight={0.35} score={result.dimensionScores.toolChoice} findings={findings.toolChoice} />
+                                            <DimensionCard label="冗余" weight={0.20} score={result.dimensionScores.redundancy} findings={findings.redundancy} />
                                         </div>
                                     );
                                 })()}
+
+                                <TrajectoryCapBanner rawAnalysis={result.rawAnalysis} trajectoryScore={result.trajectoryScore} />
 
                                 {/* 轨迹 tab 只保留过程向的 Skill 归因问题：
                                     - deviation_steps     -> 路径偏离
@@ -1842,10 +1844,13 @@ function DimensionCard({
     label,
     score,
     findings,
+    weight,
 }: {
     label: string;
     score: number;
     findings?: { type: 'high' | 'medium' | 'low' | 'info'; text: string }[];
+    /** 该维度在加权轨迹分中的权重（0-1）；提供时在标签后展示「权重 xx%」。 */
+    weight?: number;
 }) {
     const [expanded, setExpanded] = useState(false);
     const tone = score >= 0.8 ? COLORS.success : score >= 0.5 ? COLORS.warning : COLORS.danger;
@@ -1890,6 +1895,11 @@ function DimensionCard({
                         }}>›</span>
                     ) : null}
                     {label}
+                    {typeof weight === 'number' ? (
+                        <span style={{ color: COLORS.textDisabled, fontSize: 10, fontWeight: 400 }}>
+                            权重 {Math.round(weight * 100)}%
+                        </span>
+                    ) : null}
                     {hasFindings ? (
                         <span style={{ color: COLORS.textDisabled, fontSize: 10, fontWeight: 400 }}>
                             ({findingCount})
@@ -1942,7 +1952,72 @@ function DimensionCard({
 }
 
 /**
- * 把 rawAnalysis.dimension_details 派生成 4 张卡片各自的 findings 列表。
+ * 严重度封顶说明条。读取 rawAnalysis.score_aggregation（评估器代码侧聚合层产出）：
+ *  - 展示「加权分 → 最终分」以及是否触发封顶 / 封顶原因 / high·medium 偏差计数。
+ *  - 旧评测数据没有 score_aggregation → 不渲染，安全降级。
+ */
+function TrajectoryCapBanner({
+    rawAnalysis,
+    trajectoryScore,
+}: {
+    rawAnalysis: unknown;
+    trajectoryScore: number | null;
+}) {
+    const agg = asRecord(asRecord(rawAnalysis).score_aggregation ?? asRecord(rawAnalysis).scoreAggregation);
+    if (Object.keys(agg).length === 0) return null;
+
+    const rawWeighted = typeof agg.rawWeightedScore === 'number' ? agg.rawWeightedScore : null;
+    const finalScore = typeof agg.finalScore === 'number'
+        ? agg.finalScore
+        : (typeof trajectoryScore === 'number' ? trajectoryScore : null);
+    const ceiling = typeof agg.ceiling === 'number' ? agg.ceiling : null;
+    const triggered = agg.triggered === true;
+    const effective = agg.effective === true;
+    const highCount = typeof agg.highCount === 'number' ? agg.highCount : 0;
+    const mediumCount = typeof agg.mediumCount === 'number' ? agg.mediumCount : 0;
+    const reason = typeof agg.reason === 'string' ? agg.reason : '';
+
+    const accent = effective ? COLORS.danger : triggered ? COLORS.warning : COLORS.success;
+    const bg = effective ? COLORS.dangerSubtle : triggered ? COLORS.warningSubtle : COLORS.successSubtle;
+
+    return (
+        <div style={{
+            border: `1px solid ${COLORS.border}`,
+            borderLeft: `3px solid ${accent}`,
+            borderRadius: 6,
+            background: bg,
+            padding: '10px 12px',
+            marginBottom: 12,
+            fontSize: 12,
+            lineHeight: 1.6,
+            color: COLORS.textSecondary,
+        }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                <span style={{ fontWeight: 600, color: accent }}>
+                    {effective ? '已封顶' : triggered ? '触发封顶规则（未压低）' : '未封顶'}
+                </span>
+                <span style={{ flex: 1 }} />
+                <span style={{ fontSize: 11, color: COLORS.textMuted }}>
+                    加权分 {rawWeighted != null ? fmtScore10(rawWeighted) : '--'}
+                    {' → '}
+                    <b style={{ color: accent }}>{finalScore != null ? fmtScore10(finalScore) : '--'}</b>
+                    {' / 10'}
+                    {ceiling != null ? `（上限 ${fmtScore10(ceiling)}）` : ''}
+                </span>
+            </div>
+            <div style={{ fontSize: 11.5, color: COLORS.textSecondary }}>
+                {reason || '无封顶：无 high 偏差且 medium 偏差少于 3 个。'}
+            </div>
+            <div style={{ marginTop: 4, fontSize: 10.5, color: COLORS.textMuted }}>
+                偏差严重度：high {highCount} · medium {mediumCount}
+                {' · 规则：≥1 个 high → 封顶 4.0；无 high 但 ≥3 个 medium → 封顶 6.5'}
+            </div>
+        </div>
+    );
+}
+
+/**
+ * 把 rawAnalysis.dimension_details 派生成各维度卡片的 findings 列表。
  * 任何字段缺失都安全降级为空数组。
  */
 function asRecord(value: unknown): Record<string, unknown> {
