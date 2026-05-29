@@ -92,6 +92,7 @@ const COORDINATOR_SYSTEM_PROMPT = `你是 Agent Insight 的「轨迹质量评估
 - order_penalty：参考中有明确先后依赖、实际却乱序的，每处关键顺序错扣 0.10、非关键顺序错扣 0.05，上限 0.30。
 - score = clamp01(coverage − order_penalty)。
 - 在 dimension_details.completeness 里写明 coverage、order_penalty、missing_steps（应有但未执行）、extra_steps（多余/明显绕路）、explanation。
+- missing_steps / extra_steps 每一项都必须是对象 {"description": "...", "severity": "high|medium|low"}（extra_steps 另可带 "step_index"），禁止用纯字符串，否则前端无法展示明细。
 
 维度 2 · 工具选择 tool_choice（逐步打分求平均）
 - 对 actual_trace 里每个 tool/skill 调用打一个 0~1 的小分：选对工具且参数与时机都合理 = 1.0；调用时机不当 = 0.7；参数有误 = 0.5；选错工具/用了破坏性或无关工具 = 0.0。
@@ -154,13 +155,13 @@ const COORDINATOR_SYSTEM_PROMPT = `你是 Agent Insight 的「轨迹质量评估
       "score": 0.85,
       "coverage": 0.9,
       "order_penalty": 0.05,
-      "missing_steps": [],
-      "extra_steps": [],
+      "missing_steps": [ { "description": "参考要求先 grep 关键字再分析，实际跳过了", "severity": "high" } ],
+      "extra_steps": [ { "step_index": 5, "description": "多调用一次 ls", "severity": "low" } ],
       "explanation": "coverage=0.9，1 处非关键顺序错 order_penalty=0.05，score=0.85"
     },
     "tool_choice": {
       "score": 0.78,
-      "problematic_steps": [],
+      "problematic_steps": [ { "step_index": 3, "name": "bash", "issue": "本该用 grep 却用 ls", "penalty": 0.5, "severity": "medium" } ],
       "explanation": "5 次调用平均：..."
     },
     "attribution": {
