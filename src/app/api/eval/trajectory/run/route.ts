@@ -1788,9 +1788,10 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
         const customAvg = customEvaluatorScores.length > 0
             ? customEvaluatorScores.reduce((a, b) => a + b, 0) / customEvaluatorScores.length
             : null;
-        const resultEvaluatorSessionId = typeof resultEvaluationRawAnalysis?.evaluatorSessionId === 'string'
-            ? resultEvaluationRawAnalysis.evaluatorSessionId.trim()
-            : '';
+        // resultEvaluationRawAnalysis 仅在上方 async 闭包内赋值, TS 控制流到这里把它收窄成 null,
+        // 直接 ?.evaluatorSessionId 会让访问类型变 never → next build 报错。先按声明类型取值再判类型。
+        const resultEvalSid = (resultEvaluationRawAnalysis as Record<string, unknown> | null)?.evaluatorSessionId;
+        const resultEvaluatorSessionId = typeof resultEvalSid === 'string' ? resultEvalSid.trim() : '';
         const resultEvaluationMissing = shouldRunResultEvaluation && (!resultEvaluationRawAnalysis || !resultEvaluatorSessionId);
         const finalStatus = resultEvaluationMissing ? 'failed' : 'done';
         const finalErrorMessage = resultEvaluationMissing
