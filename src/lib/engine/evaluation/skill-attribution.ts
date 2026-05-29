@@ -7,7 +7,13 @@
  */
 
 export type SkillKeyActionComparisonResult =
-    | { status: 'ok'; referenceKeyActionsText: string; actualExtractedStepsText: string }
+    | {
+        status: 'ok';
+        referenceKeyActionsText: string;
+        actualExtractedStepsText: string;
+        referenceKeyActions?: unknown[];
+        actualExtractedSteps?: unknown[];
+    }
     | { status: 'no-skill-targets' }
     | { status: 'missing-skill'; missingSkills: string[] }
     | { status: 'missing-parsed-flow'; missingSkills: string[] }

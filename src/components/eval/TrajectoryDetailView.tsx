@@ -19,6 +19,7 @@ import remarkGfm from 'remark-gfm';
 import { apiFetch } from '@/lib/client/api';
 import { useAuth } from '@/lib/auth/auth-context';
 import { EvaluatorFindingsView } from './EvaluatorFindingsView';
+import { parseSkillAttributionFromRow } from '@/lib/engine/evaluation/skill-attribution';
 
 interface DatasetCase {
     id: string;
@@ -62,11 +63,13 @@ interface DimensionScores {
 }
 
 interface TrajectoryDeviation {
-    stepIndex: number;
+    stepIndex?: number;
     kind: string;
     name?: string;
     deviation: string;
     severity: 'low' | 'medium' | 'high';
+    improvementSuggestion?: string;
+    isSkillAttributable?: boolean;
 }
 
 interface ResultEvaluationFinding {
@@ -109,6 +112,14 @@ interface ResultEvaluationPayload {
     hasStructuredFindings: boolean;
     errorMessage: string;
     actualOutput: string;
+    retryState: {
+        attemptCount: number;
+        maxAttempts: number;
+        retrying: boolean;
+        exhausted: boolean;
+        nextRetryAt?: string;
+        lastError?: string;
+    } | null;
 }
 
 interface CustomEvaluationItem {
@@ -128,6 +139,48 @@ interface CaseSnapshot {
     expectedOutput?: string;
     trajectory?: string;
     evaluationFocus?: string;
+}
+
+interface ReferenceKeyAction {
+    id?: string;
+    content?: string;
+    weight?: number;
+    controlFlowType?: 'required' | 'conditional' | 'loop' | 'optional' | 'handoff';
+    condition?: string;
+    branchLabel?: string;
+    loopCondition?: string;
+    expectedMinCount?: number;
+    expectedMaxCount?: number;
+    skillSource?: string;
+    groupId?: string;
+}
+
+interface ActualExtractedStep {
+    uiStepIndex?: number;
+    name?: string;
+    description?: string;
+    dialogStartIndex?: number;
+    dialogEndIndex?: number;
+    type?: 'action' | 'decision' | 'output';
+}
+
+interface SkillKeyActionComparisonPayload {
+    referenceKeyActionsText: string;
+    actualExtractedStepsText: string;
+    referenceKeyActions: ReferenceKeyAction[];
+    actualExtractedSteps: ActualExtractedStep[];
+}
+
+type KeyActionCoverage = 'covered' | 'partial' | 'missing';
+
+interface SkillKeyActionCard {
+    action: ReferenceKeyAction;
+    analysis: string;
+    suggestion: string;
+    coverage: KeyActionCoverage;
+    matchedStep?: ActualExtractedStep;
+    matchedStepIndex?: number;
+    severity?: 'high' | 'medium' | 'low';
 }
 
 function parseLooseJsonText(text: string): Record<string, unknown> | null {
@@ -235,6 +288,7 @@ interface TrajectoryResult {
     evaluatorRunId: string;
     selectedEvaluators?: string[];
     selectedEvaluatorNames?: string[];
+    comparisonMode?: 'trajectory' | 'skill_key_actions';
     taskTitle?: string;
     taskDescription?: string;
     datasetId: string;
@@ -300,6 +354,14 @@ function deriveResultEvaluationPayload(
                 key_point_summary?: unknown;
                 key_point_findings?: unknown;
             };
+            resultEvaluationRetry?: {
+                attemptCount?: unknown;
+                maxAttempts?: unknown;
+                retrying?: unknown;
+                exhausted?: unknown;
+                nextRetryAt?: unknown;
+                lastError?: unknown;
+            };
             resultEvaluationError?: unknown;
             resultActualOutput?: unknown;
             score?: unknown;
@@ -342,8 +404,23 @@ function deriveResultEvaluationPayload(
     const actualOutput = String(
         typeof root?.resultActualOutput === 'string' ? root.resultActualOutput : '',
     ).trim();
+    const retryRaw = root?.resultEvaluationRetry;
+    const retryState = retryRaw && typeof retryRaw === 'object'
+        ? {
+            attemptCount: typeof retryRaw.attemptCount === 'number' ? retryRaw.attemptCount : 0,
+            maxAttempts: typeof retryRaw.maxAttempts === 'number' ? retryRaw.maxAttempts : 0,
+            retrying: retryRaw.retrying === true,
+            exhausted: retryRaw.exhausted === true,
+            ...(typeof retryRaw.nextRetryAt === 'string' && retryRaw.nextRetryAt.trim()
+                ? { nextRetryAt: retryRaw.nextRetryAt.trim() }
+                : {}),
+            ...(typeof retryRaw.lastError === 'string' && retryRaw.lastError.trim()
+                ? { lastError: retryRaw.lastError.trim() }
+                : {}),
+        }
+        : null;
 
-    return { score, reason, findings, hasStructuredFindings, errorMessage, actualOutput };
+    return { score, reason, findings, hasStructuredFindings, errorMessage, actualOutput, retryState };
 }
 
 function isResultEvaluationReady(payload: ResultEvaluationPayload, hasResultEvaluation: boolean): boolean {
@@ -423,6 +500,203 @@ function deriveCaseSnapshot(rawAnalysis: unknown): CaseSnapshot | null {
     return snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot)
         ? snapshot as CaseSnapshot
         : null;
+}
+
+function deriveSkillKeyActionComparison(rawAnalysis: unknown): SkillKeyActionComparisonPayload | null {
+    const root = rawAnalysis && typeof rawAnalysis === 'object'
+        ? rawAnalysis as { skillKeyActionComparison?: unknown }
+        : null;
+    const payload = root?.skillKeyActionComparison;
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+    const record = payload as Record<string, unknown>;
+    const referenceKeyActions = Array.isArray(record.referenceKeyActions)
+        ? record.referenceKeyActions
+            .filter(item => item && typeof item === 'object' && !Array.isArray(item))
+            .map(item => item as ReferenceKeyAction)
+        : [];
+    const actualExtractedSteps = Array.isArray(record.actualExtractedSteps)
+        ? record.actualExtractedSteps
+            .filter(item => item && typeof item === 'object' && !Array.isArray(item))
+            .map(item => item as ActualExtractedStep)
+        : [];
+
+    return {
+        referenceKeyActionsText: String(record.referenceKeyActionsText || '').trim(),
+        actualExtractedStepsText: String(record.actualExtractedStepsText || '').trim(),
+        referenceKeyActions,
+        actualExtractedSteps,
+    };
+}
+
+function normalizeComparisonText(text: string): string {
+    return text
+        .toLowerCase()
+        .replace(/[`~!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?，。！？；：（）【】《》、\s]+/g, '');
+}
+
+function createBigrams(text: string): Set<string> {
+    const normalized = normalizeComparisonText(text);
+    if (!normalized) return new Set();
+    if (normalized.length === 1) return new Set([normalized]);
+    const grams = new Set<string>();
+    for (let index = 0; index < normalized.length - 1; index += 1) {
+        grams.add(normalized.slice(index, index + 2));
+    }
+    return grams;
+}
+
+function scoreTextSimilarity(left: string, right: string): number {
+    const leftGrams = createBigrams(left);
+    const rightGrams = createBigrams(right);
+    if (leftGrams.size === 0 || rightGrams.size === 0) return 0;
+
+    let intersection = 0;
+    for (const gram of leftGrams) {
+        if (rightGrams.has(gram)) intersection += 1;
+    }
+    const union = new Set([...leftGrams, ...rightGrams]).size;
+    return union > 0 ? intersection / union : 0;
+}
+
+function formatTraceStepRef(step: ActualExtractedStep, fallbackIndex: number): string {
+    if (typeof step.uiStepIndex === 'number') return `步骤 ${step.uiStepIndex}`;
+    return `提取步骤 ${fallbackIndex + 1}`;
+}
+
+function buildDefaultSkillSuggestion(action: ReferenceKeyAction, coverage: KeyActionCoverage): string {
+    const skillSource = action.skillSource ? `${action.skillSource} SKILL.md` : 'SKILL.md';
+    const flowHint = action.controlFlowType === 'conditional' && action.branchLabel
+        ? `，并明确仅在“${action.branchLabel}”分支命中时执行`
+        : action.controlFlowType === 'loop' && action.loopCondition
+        ? `，并补充循环触发条件“${action.loopCondition}”`
+        : '';
+
+    if (coverage === 'covered') {
+        return `在 ${skillSource} 中继续把“${action.content || '该关键动作'}”写成显式步骤${flowHint}，并保留完成判定，避免 agent 在相邻步骤间跳步。`;
+    }
+    if (coverage === 'partial') {
+        return `在 ${skillSource} 中把“${action.content || '该关键动作'}”补成更强的过程约束${flowHint}，明确推荐工具、完成信号和禁止跳步条件。`;
+    }
+    return `在 ${skillSource} 中把“${action.content || '该关键动作'}”标记为必须执行的核心步骤${flowHint}，写清操作方式和完成标准，避免 trace 直接跳过。`;
+}
+
+function deriveSkillKeyActionCards(
+    comparison: SkillKeyActionComparisonPayload | null,
+    deviationSteps: TrajectoryDeviation[] | null | undefined,
+): SkillKeyActionCard[] {
+    if (!comparison || comparison.referenceKeyActions.length === 0) return [];
+
+    const actions = comparison.referenceKeyActions;
+    const actualSteps = comparison.actualExtractedSteps;
+    const attributableDeviations = (deviationSteps || []).filter(step => step.isSkillAttributable !== false);
+    const cards: SkillKeyActionCard[] = [];
+    let nextStepCursor = 0;
+
+    const findRelatedDeviation = (
+        action: ReferenceKeyAction,
+        matchedStep: ActualExtractedStep | undefined,
+        matchedStepIndex: number | undefined,
+    ): TrajectoryDeviation | undefined => {
+        const actionText = action.content || '';
+        let best: { item: TrajectoryDeviation; score: number } | null = null;
+        for (const deviation of attributableDeviations) {
+            let score = 0;
+            if (
+                matchedStep
+                && typeof matchedStep.uiStepIndex === 'number'
+                && typeof deviation.stepIndex === 'number'
+            ) {
+                const distance = Math.abs(deviation.stepIndex - matchedStep.uiStepIndex);
+                if (distance <= 1) score += 1.1;
+                else if (distance <= 3) score += 0.6;
+            } else if (
+                typeof matchedStepIndex === 'number'
+                && typeof deviation.stepIndex === 'number'
+            ) {
+                const distance = Math.abs(deviation.stepIndex - (matchedStepIndex + 1));
+                if (distance <= 1) score += 0.4;
+            }
+
+            score += scoreTextSimilarity(
+                actionText,
+                [deviation.name, deviation.deviation, deviation.improvementSuggestion].filter(Boolean).join(' '),
+            );
+
+            if (!best || score > best.score) {
+                best = { item: deviation, score };
+            }
+        }
+        return best && best.score >= 0.22 ? best.item : undefined;
+    };
+
+    actions.forEach((action, actionIndex) => {
+        const actionText = action.content || '';
+        let bestMatch: { step: ActualExtractedStep; index: number; lexical: number; final: number } | null = null;
+
+        for (let stepIndex = nextStepCursor; stepIndex < actualSteps.length; stepIndex += 1) {
+            const step = actualSteps[stepIndex];
+            const stepText = [step.name, step.description].filter(Boolean).join(' ');
+            const lexical = scoreTextSimilarity(actionText, stepText);
+            const orderAlignment = 1 - Math.abs(
+                (actionIndex + 1) / Math.max(actions.length, 1)
+                - (stepIndex + 1) / Math.max(actualSteps.length, 1),
+            );
+            const final = lexical * 0.72 + orderAlignment * 0.28;
+
+            if (!bestMatch || final > bestMatch.final) {
+                bestMatch = { step, index: stepIndex, lexical, final };
+            }
+        }
+
+        let matchedStep: ActualExtractedStep | undefined;
+        let matchedStepIndex: number | undefined;
+        let coverage: KeyActionCoverage = 'missing';
+
+        if (bestMatch && bestMatch.lexical >= 0.34) {
+            matchedStep = bestMatch.step;
+            matchedStepIndex = bestMatch.index;
+            coverage = bestMatch.lexical >= 0.56 ? 'covered' : 'partial';
+        } else if (nextStepCursor < actualSteps.length) {
+            matchedStep = actualSteps[nextStepCursor];
+            matchedStepIndex = nextStepCursor;
+            coverage = 'partial';
+        }
+
+        if (typeof matchedStepIndex === 'number') {
+            nextStepCursor = matchedStepIndex + 1;
+        }
+
+        const relatedDeviation = findRelatedDeviation(action, matchedStep, matchedStepIndex);
+        let analysis = '';
+        if (matchedStep && typeof matchedStepIndex === 'number') {
+            const stepTitle = matchedStep.name || matchedStep.description || '未命名步骤';
+            const stepRef = formatTraceStepRef(matchedStep, matchedStepIndex);
+            analysis = coverage === 'covered'
+                ? `Trace 在${stepRef}执行了“${stepTitle}”，与这个关键动作基本对齐。`
+                : `Trace 在${stepRef}执行了“${stepTitle}”，但和这个关键动作只部分对齐，过程约束还不够明确。`;
+            if (matchedStep.description && matchedStep.description !== matchedStep.name) {
+                analysis += ` 实际表现：${matchedStep.description}`;
+            }
+        } else {
+            analysis = 'Trace 中没有找到与这个关键动作直接对应的步骤，当前流程很可能跳过了这个必做动作。';
+        }
+
+        if (relatedDeviation?.deviation) {
+            analysis += ` 评估器识别到：${relatedDeviation.deviation}`;
+        }
+
+        cards.push({
+            action,
+            analysis,
+            suggestion: relatedDeviation?.improvementSuggestion || buildDefaultSkillSuggestion(action, coverage),
+            coverage,
+            matchedStep,
+            matchedStepIndex,
+            severity: relatedDeviation?.severity,
+        });
+    });
+
+    return cards;
 }
 
 function deriveResultEvaluationSummary(
@@ -576,6 +850,18 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
     const caseSnapshot = useMemo(
         () => deriveCaseSnapshot(result?.rawAnalysis),
         [result?.rawAnalysis],
+    );
+    const skillAttribution = useMemo(
+        () => parseSkillAttributionFromRow(result),
+        [result],
+    );
+    const skillKeyActionComparison = useMemo(
+        () => deriveSkillKeyActionComparison(result?.rawAnalysis),
+        [result?.rawAnalysis],
+    );
+    const skillKeyActionCards = useMemo(
+        () => deriveSkillKeyActionCards(skillKeyActionComparison, result?.deviationSteps),
+        [skillKeyActionComparison, result?.deviationSteps],
     );
     const taskInputValue = caseSnapshot?.taskInput?.trim()
         || caseSnapshot?.input?.trim()
@@ -910,40 +1196,82 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
                                     );
                                 })()}
 
-                                {result.deviationSteps && result.deviationSteps.length > 0 && (
-                                    <div>
-                                        <div style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 6 }}>偏离步骤</div>
-                                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                                            {result.deviationSteps.map((d, i) => {
-                                                const tone =
-                                                    d.severity === 'high' ? COLORS.danger : d.severity === 'medium' ? COLORS.warning : COLORS.textMuted;
-                                                const bg =
-                                                    d.severity === 'high' ? COLORS.dangerSubtle : d.severity === 'medium' ? COLORS.warningSubtle : COLORS.bgSoft;
-                                                return (
-                                                    <div key={i} style={{ padding: '6px 8px', border: `1px solid ${COLORS.border}`, borderRadius: 5, background: '#fff' }}>
-                                                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
-                                                            <span style={{ fontSize: 11, fontWeight: 600 }}>
-                                                                步骤 #{d.stepIndex} · {d.kind}{d.name ? ` (${d.name})` : ''}
-                                                            </span>
-                                                            <span style={{ ...badgeStyle(bg, tone, true), fontSize: 9 }}>{d.severity}</span>
-                                                        </div>
-                                                        <div style={{ fontSize: 11, color: COLORS.textSecondary, lineHeight: 1.5 }}>{d.deviation}</div>
-                                                    </div>
-                                                );
-                                            })}
-                                        </div>
-                                    </div>
-                                )}
-
-                                {/* 评估器识别的 4 类 Skill 归因问题（路径偏离 / 关键动作 / 工具选择 / 结果问题，
-                                    每条带 is_skill_attributable 徽章 + improvement_suggestion）。
-                                    从原 skill-eval 页 TrajectoryEvaluatorFindings 抽过来，让 batch 评测入口
-                                    点"评测结果"就能直接看到——不用再跳走到旧的轨迹分析视图。 */}
+                                {/* 轨迹 tab 只保留过程向的 Skill 归因问题：
+                                    - deviation_steps     -> 路径偏离
+                                    - tool_choice_findings -> 工具选择
+                                   结果评测的 key_point_findings / result_issues 留在结果评测 tab 展示，
+                                   同时删除与路径偏离重复的原始“偏离步骤”区块。 */}
                                 <div style={{ marginTop: 14 }}>
                                     <div style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 6 }}>
                                         评估器识别的 Skill 归因问题
                                     </div>
-                                    <EvaluatorFindingsView row={result} />
+                                    <EvaluatorFindingsView
+                                        row={result}
+                                        allowedKinds={['deviation', 'tool_choice']}
+                                    />
+                                </div>
+
+                                <div style={{ marginTop: 14 }}>
+                                    <div style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 6 }}>
+                                        Skill 关键动作对比
+                                    </div>
+                                    {skillAttribution?.state === 'ok' && skillKeyActionComparison ? (
+                                        <div className="efv-root">
+                                            <div className="efv-summary">
+                                                <span>
+                                                    基于 <b>{skillKeyActionComparison.referenceKeyActions.length}</b> 个关键动作与 <b>{skillKeyActionComparison.actualExtractedSteps.length}</b> 个 Trace 提取步骤做过程对比
+                                                </span>
+                                                <span className="efv-summary-sep">·</span>
+                                                <span>
+                                                    比较模式：{result?.comparisonMode === 'skill_key_actions' ? 'Skill 关键动作' : '轨迹参考'}
+                                                </span>
+                                                {skillAttribution ? (
+                                                    <>
+                                                        <span className="efv-summary-sep">·</span>
+                                                        <span>
+                                                            Skill 归因：{skillAttribution.state === 'ok'
+                                                                ? '已启用'
+                                                                : skillAttribution.state === 'degraded'
+                                                                ? '降级'
+                                                                : '不适用'}
+                                                        </span>
+                                                    </>
+                                                ) : null}
+                                            </div>
+                                            <div className="efv-group">
+                                                <div className="efv-group-head">
+                                                    关键动作
+                                                    <span className="efv-group-count">{skillKeyActionCards.length}</span>
+                                                </div>
+                                                {skillKeyActionCards.map((card, index) => (
+                                                    <div
+                                                        key={`${card.action.id || card.action.content || index}`}
+                                                        className={`efv-card${card.severity ? ` sev-${card.severity}` : card.coverage === 'missing' ? ' sev-high' : card.coverage === 'partial' ? ' sev-medium' : ''}`}
+                                                    >
+                                                        <div className="efv-card-head">
+                                                            <span className="efv-title">
+                                                                {card.action.content || `关键动作 ${index + 1}`}
+                                                            </span>
+                                                            <span className={`efv-pill${card.coverage === 'missing' ? ' err' : card.coverage === 'partial' ? ' warn' : ''}`}>
+                                                                {card.coverage === 'covered' ? '已覆盖' : card.coverage === 'partial' ? '部分覆盖' : '未覆盖'}
+                                                            </span>
+                                                        </div>
+                                                        <div className="efv-desc">
+                                                            {card.analysis}
+                                                        </div>
+                                                        <div className="efv-suggestion">
+                                                            <span className="efv-suggestion-label">改进建议</span>
+                                                            {card.suggestion}
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <div className="efv-empty">
+                                            {skillAttribution?.message || '当前记录没有可展示的 Skill 关键动作对比。'}
+                                        </div>
+                                    )}
                                 </div>
 
                                 {/* 重新跑归因评估按钮 —— 用户在详情页看到结果过时/不完整时可以就地重新触发，
