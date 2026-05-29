@@ -560,7 +560,7 @@ async function buildSkillKeyActionComparison(
 async function findMatchingDatasetCaseForTrace(
     user: string,
     traceQuery: string,
-    options: { requireExpectedOutput?: boolean; includeAllDatasetKinds?: boolean } = {},
+    options: { requireExpectedOutput?: boolean; includeAllDatasetKinds?: boolean; allowedDatasetIds?: string[] } = {},
 ): Promise<MatchedDatasetCase> {
     const normalizedTraceInput = normalizeMatchText(traceQuery);
     if (!normalizedTraceInput) {
@@ -572,8 +572,13 @@ async function findMatchingDatasetCaseForTrace(
 
     const requireExpectedOutput = options.requireExpectedOutput === true;
     const includeAllDatasetKinds = options.includeAllDatasetKinds === true;
+    // allowedDatasetIds 非空 → 把匹配范围收窄到用户在配置区显式选的数据集 (参考集); 空 → 沿用全量 auto-match。
+    const allowedDatasetIds = Array.isArray(options.allowedDatasetIds)
+        ? options.allowedDatasetIds.map(id => String(id).trim()).filter(Boolean)
+        : [];
     const datasets = (await readAllAgentDatasets())
         .filter(dataset => dataset.user === user)
+        .filter(dataset => allowedDatasetIds.length === 0 || allowedDatasetIds.includes(dataset.id))
         .filter(dataset => includeAllDatasetKinds || requireExpectedOutput || dataset.datasetKind === 'trajectory');
 
     if (datasets.length === 0) {
@@ -710,6 +715,10 @@ export async function POST(request: Request) {
             ? body.taskIds.map((t: unknown) => String(t).trim()).filter(Boolean)
             : [];
         let datasetId = String(body.datasetId || '').trim();
+        // datasetIds: taskIds 模式下用户在用例分析配置区选的参考数据集; 收窄后台 trace↔case 自动匹配范围。
+        const allowedDatasetIds: string[] = Array.isArray(body.datasetIds)
+            ? body.datasetIds.map((d: unknown) => String(d).trim()).filter(Boolean)
+            : [];
         const pairs = Array.isArray(body.pairs) ? (body.pairs as RunPair[]) : [];
         let taskMeta = normalizeTrajectoryTaskMeta({
             title: body.taskTitle,
@@ -821,7 +830,11 @@ export async function POST(request: Request) {
                         executionId: null,
                         taskId,
                         status: 'pending',
-                        rawAnalysisJson: JSON.stringify({ ...evaluatorMeta, taskMeta }),
+                        rawAnalysisJson: JSON.stringify({
+                            ...evaluatorMeta,
+                            taskMeta,
+                            ...(allowedDatasetIds.length > 0 ? { allowedDatasetIds } : {}),
+                        }),
                     },
                 });
                 created.push({ id: row.id, caseId: '', taskId });
@@ -1094,6 +1107,13 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
     const extractedTraceInput = await extractRealUserInput(rawTraceQuery, user);
     const traceQuery = extractedTraceInput.normalized_input.trim() || rawTraceQuery;
     const fallbackFinalResult = String(execution?.finalResult || '').trim();
+    // 用户在用例分析配置区选的参考数据集 (创建 row 时写入 rawAnalysisJson)；收窄下面的 trace↔case 自动匹配。
+    const rowAllowedDatasetIds = (() => {
+        const parsed = safeParseRecord(row.rawAnalysisJson) as { allowedDatasetIds?: unknown };
+        return Array.isArray(parsed?.allowedDatasetIds)
+            ? parsed.allowedDatasetIds.map(v => String(v).trim()).filter(Boolean)
+            : [];
+    })();
 
     await prisma.trajectoryEvalResult.update({
         where: { id },
@@ -1217,6 +1237,7 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
         try {
             const matched = await findMatchingDatasetCaseForTrace(user, traceQuery, {
                 requireExpectedOutput: shouldRunResultEvaluation,
+                allowedDatasetIds: rowAllowedDatasetIds,
             });
             caseEntry = matched.caseEntry;
             matchedDatasetMeta = { id: matched.dataset.id, name: matched.dataset.name };
@@ -1254,6 +1275,7 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
                 const matched = await findMatchingDatasetCaseForTrace(user, traceQuery, {
                     requireExpectedOutput: true,
                     includeAllDatasetKinds: true,
+                    allowedDatasetIds: rowAllowedDatasetIds,
                 });
                 caseEntry = matched.caseEntry;
                 matchedDatasetMeta = { id: matched.dataset.id, name: matched.dataset.name };

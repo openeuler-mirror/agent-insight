@@ -38,6 +38,8 @@ interface Props {
     /** 可选: 父组件可预填任务名 (例如 "灰度评测 2026-05-27-09" 一键复用) */
     defaultTitle?: string;
     defaultDescription?: string;
+    /** 配置区已选的评估器 id 列表。新建评测任务直接用这批评估器, 对话框内不再重复让用户选。 */
+    evaluators?: string[];
 }
 
 interface EvaluatorOption {
@@ -71,23 +73,20 @@ export function NewEvaluationBatchDialog({
     onCreated,
     defaultTitle,
     defaultDescription,
+    evaluators,
 }: Props) {
     const [title, setTitle] = useState('');
     const [desc, setDesc] = useState('');
-    // 默认勾选两个预置评估器 —— 跟原有"启动评测"默认行为对齐 (用户最常用)
-    const [selectedIds, setSelectedIds] = useState<Set<string>>(
-        () => new Set(READY_PRESETS.map(e => e.id)),
-    );
+    // 自建评估器列表: 仅用于把传入的 evaluator id 解析成名字做只读展示 (不再让用户在此勾选)。
     const [customEvaluators, setCustomEvaluators] = useState<EvaluatorOption[]>([]);
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState('');
 
-    // open 时 reset 表单 + 拉用户自建评估器列表
+    // open 时 reset 表单 + 拉用户自建评估器列表 (解析名字用)
     useEffect(() => {
         if (!open) return;
         setTitle(defaultTitle ?? '');
         setDesc(defaultDescription ?? '');
-        setSelectedIds(new Set(READY_PRESETS.map(e => e.id)));
         setError('');
         setSubmitting(false);
         if (!user) return;
@@ -107,24 +106,21 @@ export function NewEvaluationBatchDialog({
                     );
                 }
             })
-            .catch(() => {/* 自建评估器拉取失败不阻塞主流程, 还是能用预置 */});
+            .catch(() => {/* 自建评估器拉取失败不阻塞主流程 */});
     }, [open, user, defaultTitle, defaultDescription]);
 
     if (!open) return null;
 
-    const allOptions = [...READY_PRESETS, ...customEvaluators];
-
-    const toggle = (id: string) =>
-        setSelectedIds(prev => {
-            const next = new Set(prev);
-            if (next.has(id)) next.delete(id);
-            else next.add(id);
-            return next;
-        });
+    // 评估器来自配置区 (props.evaluators), 对话框内不再选择。解析名字做只读展示。
+    const nameById = new Map<string, string>([
+        ...READY_PRESETS.map(e => [e.id, e.name] as [string, string]),
+        ...customEvaluators.map(e => [e.id, e.name] as [string, string]),
+    ]);
+    const finalIds = (evaluators || []).filter(Boolean);
+    const finalNames = finalIds.map(id => nameById.get(id) || id);
 
     const trimmedTitle = title.trim();
     const finalTitle = trimmedTitle || defaultTaskTitle();
-    const finalIds = Array.from(selectedIds);
 
     const canSubmit = finalIds.length > 0 && finalIds.length <= 5 && !submitting;
 
@@ -259,108 +255,40 @@ export function NewEvaluationBatchDialog({
                         />
                     </div>
 
-                    {/* 评估器多选 */}
+                    {/* 评估器 (只读): 来自配置区的多选, 此处不再重复选择 */}
                     <div style={{ marginBottom: 10 }}>
                         <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#18181B', marginBottom: 5 }}>
-                            评估器 <span style={{ color: '#B91C1C', marginLeft: 2 }}>*</span>
+                            评估器
                             <span style={{ fontWeight: 400, color: '#71717A', fontSize: 11, marginLeft: 6 }}>
-                                (多选 · 至少 1 个最多 5 个 · 创建后不可改)
+                                (取自上方配置, 共 {finalNames.length} 个)
                             </span>
                         </label>
-                        <div
-                            style={{
-                                border: '1px solid #D4D4D8', borderRadius: 7,
-                                overflow: 'hidden', maxHeight: 260, overflowY: 'auto',
-                            }}
-                        >
-                            {/* 预置 */}
-                            {READY_PRESETS.map((ev, i) => {
-                                const checked = selectedIds.has(ev.id);
-                                return (
-                                    <label
-                                        key={ev.id}
+                        {finalNames.length > 0 ? (
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                                {finalNames.map((name, i) => (
+                                    <span
+                                        key={`${name}_${i}`}
                                         style={{
-                                            display: 'flex', gap: 9,
-                                            padding: '9px 11px',
-                                            cursor: 'pointer',
-                                            borderBottom: i < READY_PRESETS.length - 1 || customEvaluators.length > 0 ? '1px solid #E4E4E7' : 'none',
-                                            background: checked ? 'rgba(79,70,229,.04)' : 'transparent',
+                                            padding: '3px 9px', borderRadius: 99,
+                                            background: '#EEF2FF', color: '#4F46E5',
+                                            fontSize: 11.5, fontWeight: 600,
+                                            border: '1px solid rgba(79,70,229,.2)',
                                         }}
                                     >
-                                        <input
-                                            type="checkbox"
-                                            checked={checked}
-                                            onChange={() => toggle(ev.id)}
-                                            style={{ marginTop: 3, accentColor: '#4F46E5' }}
-                                        />
-                                        <div style={{ flex: 1, minWidth: 0 }}>
-                                            <div style={{ fontSize: 12.5, fontWeight: 500, color: '#18181B', display: 'flex', alignItems: 'center', gap: 7 }}>
-                                                {ev.name}
-                                                <span style={{ fontSize: 10, padding: '1px 5px', borderRadius: 3, fontWeight: 600, background: '#EEF2FF', color: '#4F46E5' }}>
-                                                    预置
-                                                </span>
-                                            </div>
-                                            {ev.description && (
-                                                <div style={{ fontSize: 11, color: '#71717A', marginTop: 2, lineHeight: 1.5 }}>
-                                                    {ev.description}
-                                                </div>
-                                            )}
-                                        </div>
-                                    </label>
-                                );
-                            })}
-
-                            {customEvaluators.length > 0 && (
-                                <div
-                                    style={{
-                                        padding: '5px 11px',
-                                        fontSize: 10, color: '#71717A',
-                                        background: '#F4F4F5',
-                                        fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px',
-                                    }}
-                                >
-                                    用户自建
-                                </div>
-                            )}
-                            {customEvaluators.map((ev, i) => {
-                                const checked = selectedIds.has(ev.id);
-                                return (
-                                    <label
-                                        key={ev.id}
-                                        style={{
-                                            display: 'flex', gap: 9,
-                                            padding: '9px 11px',
-                                            cursor: 'pointer',
-                                            borderBottom: i < customEvaluators.length - 1 ? '1px solid #E4E4E7' : 'none',
-                                            background: checked ? 'rgba(79,70,229,.04)' : 'transparent',
-                                        }}
-                                    >
-                                        <input
-                                            type="checkbox"
-                                            checked={checked}
-                                            onChange={() => toggle(ev.id)}
-                                            style={{ marginTop: 3, accentColor: '#4F46E5' }}
-                                        />
-                                        <div style={{ flex: 1, minWidth: 0 }}>
-                                            <div style={{ fontSize: 12.5, fontWeight: 500, color: '#18181B', display: 'flex', alignItems: 'center', gap: 7 }}>
-                                                {ev.name}
-                                                <span style={{ fontSize: 10, padding: '1px 5px', borderRadius: 3, fontWeight: 600, background: '#F0FDF4', color: '#15803D' }}>
-                                                    自建
-                                                </span>
-                                            </div>
-                                            {ev.description && (
-                                                <div style={{ fontSize: 11, color: '#71717A', marginTop: 2, lineHeight: 1.5 }}>
-                                                    {ev.description}
-                                                </div>
-                                            )}
-                                        </div>
-                                    </label>
-                                );
-                            })}
-                        </div>
+                                        {name}
+                                    </span>
+                                ))}
+                            </div>
+                        ) : (
+                            <div style={{
+                                padding: '8px 11px', background: '#FEF2F2', color: '#B91C1C',
+                                border: '1px solid #FECACA', borderRadius: 6, fontSize: 12,
+                            }}>
+                                配置区未选择评估器, 请先在上方「评估器」下拉里勾选至少 1 个。
+                            </div>
+                        )}
                         <div style={{ fontSize: 11, color: '#71717A', marginTop: 5, lineHeight: 1.5 }}>
-                            ⓘ 任务下所有 A/B 测试 / 用例分析的评测都会用这些评估器跑。
-                            <b style={{ color: '#B45309' }}> 创建后无法修改</b>; 想换评估器需新建任务。
+                            ⓘ 任务下所有评测都会用这些评估器跑。想改评估器请在上方配置区调整。
                         </div>
                     </div>
 

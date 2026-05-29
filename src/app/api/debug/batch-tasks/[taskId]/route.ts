@@ -40,6 +40,8 @@ interface BatchEvalConfig {
     versionId?: string;
     sourceMode?: 'dataset' | 'trace';
     evaluatorId?: string;
+    /** 评估器多选 (AB 式配置): 启动评测时透传给 trajectory/run 的 evaluators 数组, 优先于单选 evaluatorId。 */
+    evaluators?: string[];
     agentMaxConcurrency?: number;
     autoEval?: boolean;
     /** 评测任务关联: 用户在配置区「+ 新增评测任务」创建的批次, 启动评测时透传 append 模式。 */
@@ -388,6 +390,8 @@ async function runOneBatchCase(
             };
             if (config.evaluationBatchId) {
                 evalBody.evaluatorRunId = config.evaluationBatchId;
+            } else if (Array.isArray(config.evaluators) && config.evaluators.length > 0) {
+                evalBody.evaluators = config.evaluators;
             } else {
                 evalBody.evaluator = config.evaluatorId || 'preset-agent-task-completion';
             }
