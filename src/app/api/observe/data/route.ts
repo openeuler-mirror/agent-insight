@@ -329,19 +329,22 @@ export async function GET(request: Request) {
     const recordTaskIdsForEvalLookup = Array.from(new Set(
         data.map(r => r.task_id || r.upload_id || '').filter(Boolean)
     ));
-    const lastEvalByTaskId = new Map<string, { status: string; errorMessage: string | null }>();
+    const lastEvalByTaskId = new Map<string, { status: string; errorMessage: string | null; trajectoryScore: number | null }>();
     if (user && recordTaskIdsForEvalLookup.length > 0) {
         try {
             const recentEvalRows = await prisma.trajectoryEvalResult.findMany({
                 where: { user, taskId: { in: recordTaskIdsForEvalLookup } },
                 orderBy: { createdAt: 'desc' },
-                select: { taskId: true, status: true, errorMessage: true },
+                // 方案A: 带上 trajectoryScore（已是代码侧聚合层算出的统一轨迹分），让 trace 行/列表/概览
+                // 直接显示统一口径，而不是只读 matchJson.overallScore(对齐覆盖率 = completeness 单维)。
+                select: { taskId: true, status: true, errorMessage: true, trajectoryScore: true },
             });
             for (const row of recentEvalRows) {
                 if (row.taskId && !lastEvalByTaskId.has(row.taskId)) {
                     lastEvalByTaskId.set(row.taskId, {
                         status: row.status,
                         errorMessage: row.errorMessage,
+                        trajectoryScore: typeof row.trajectoryScore === 'number' ? row.trajectoryScore : null,
                     });
                 }
             }
@@ -356,12 +359,17 @@ export async function GET(request: Request) {
         const lastEval = recordTaskId ? lastEvalByTaskId.get(recordTaskId) : null;
         const last_eval_status = lastEval?.status ?? null;
         const last_eval_error = lastEval?.errorMessage ?? null;
+        // 方案A: 统一轨迹分（聚合层产出）。前端 getTraceFlowScore/ScoredTrace 优先读它，
+        // 没有(未评测/纯对齐)再回退 matchJson.overallScore。
+        const trajectory_score = lastEval?.trajectoryScore ?? null;
         if (skipAutoEvalReady) {
             return {
                 ...record,
                 is_evaluating,
                 last_eval_status,
                 last_eval_error,
+                trajectory_score,
+                trajectoryScore: trajectory_score,
             };
         }
         const readiness = await getAutoEvalReadiness(record, new URL(request.url).origin);
@@ -370,6 +378,8 @@ export async function GET(request: Request) {
             is_evaluating,
             last_eval_status,
             last_eval_error,
+            trajectory_score,
+            trajectoryScore: trajectory_score,
             auto_eval_ready: readiness.autoEvalReady,
             autoEvalReady: readiness.autoEvalReady,
             auto_eval_wait_reason: readiness.autoEvalWaitReason,

@@ -104,7 +104,9 @@ interface TraceRecord {
      * 用例分析列表用这个字段过滤掉系统内部 trace（详见 isInternalSystemAgentTrace）。 */
     agent?: string | null;
     agentName?: string | null;
-    trajectoryScore?: number;
+    trajectoryScore?: number | null;
+    /** 方案A: 后端聚合层算出的统一轨迹分(0-1)，来源最近一次 TrajectoryEvalResult.trajectoryScore。 */
+    trajectory_score?: number | null;
     /** 结果分析（任务完成度评估器）评分，0-1，来源 Execution.answerScore */
     answer_score?: number | null;
     answerScore?: number | null;
@@ -1158,7 +1160,13 @@ function SkillAnalysisPage() {
         if (!user || taskIds.length === 0) return empty;
         // resultRun 是一次入队多条，要么整体成功要么整体失败；trajRun 是逐条独立扇出，
         // 每条都可能有自己的失败原因（如 skill 缺 mermaid 那种 per-trace 的前提缺失）。
-        const resultRun = (async () => {
+        //
+        // 方案A 顺序约定（重要）：先跑「评测」(trajectory/run，写 tool_choice/redundancy 单项分)，
+        // 完成后再跑「analyze-match」。这样 analyze-match 的 persistAlignmentAttribution 作为最后写入者，
+        // 能读到评测器写好的 tool_choice/redundancy，用 alignment 覆盖率当 completeness 走代码侧聚合层
+        // 算出统一轨迹分（0.45/0.35/0.20 + 封顶）。两者并发时会因 last-write-wins 互相覆盖、口径不稳。
+        const resultErrors: string[] = [];
+        try {
             // 透传评测任务关联: 用户在配置区关联了批次时走 append 模式, 不再每次新建批次。
             // 关联后不传 evaluators (后端用批次原配置), 没关联时沿用老逻辑。
             const body: Record<string, unknown> = { user, taskIds };
@@ -1179,8 +1187,11 @@ function SkillAnalysisPage() {
                 const data = await res.json().catch(() => ({}));
                 throw new Error(data?.error || `结果评估入队失败 (HTTP ${res.status})`);
             }
-        })();
-        // 改写：每个 trajectory 任务跑完单独 catch,把错误信息按 taskId 记下来,
+        } catch (e) {
+            resultErrors.push(String(e instanceof Error ? e.message : e));
+        }
+        // 评测入队完成后再跑 analyze-match（轨迹对齐 + Skill 归因 + 统一轨迹分聚合）。
+        // 每个 trajectory 任务跑完单独 catch,把错误信息按 taskId 记下来,
         // 之前 throw + Promise.allSettled 只能拿到错误文本但丢失了对应的 taskId,
         // 导致前端没法精确告诉用户"哪条 trace 的轨迹评测因为什么没跑成"。
         const trajectoryErrors = new Map<string, string>();
@@ -1200,13 +1211,6 @@ function SkillAnalysisPage() {
                 trajectoryErrors.set(id, e instanceof Error ? e.message : '网络/解析错误');
             }
         })());
-        const resultErrors: string[] = [];
-        const resultSettled = await Promise.allSettled([resultRun]);
-        for (const s of resultSettled) {
-            if (s.status === 'rejected') {
-                resultErrors.push(String(s.reason instanceof Error ? s.reason.message : s.reason));
-            }
-        }
         await Promise.all(trajRuns);
         if (resultErrors.length > 0 || trajectoryErrors.size > 0) {
             console.warn('[skill-eval] batch analyze partial failures:', { resultErrors, trajectoryErrors });
@@ -3504,7 +3508,13 @@ function TraceDeviationPanel({
         }
         return map;
     }, [parsedMatch]);
-    const score = typeof summary.overallScore === 'number'
+    // 方案A: ③ 深度视图的「轨迹分」也统一成聚合分——优先选中 trace 的 trajectoryScore（聚合层产出），
+    // 没有再回退 alignment 覆盖率(summary.overallScore / getTraceFlowScore)。
+    const aggTrajSelected = typeof selectedTrace?.trajectory_score === 'number' ? selectedTrace.trajectory_score
+        : typeof selectedTrace?.trajectoryScore === 'number' ? selectedTrace.trajectoryScore : null;
+    const score = aggTrajSelected != null
+        ? Math.round(aggTrajSelected * 100)
+        : typeof summary.overallScore === 'number'
         ? Math.round(summary.overallScore * 100)
         : selectedTrace ? (getTraceFlowScore(selectedTrace) == null ? null : Math.round(getTraceFlowScore(selectedTrace)! * 100)) : null;
 
@@ -3697,7 +3707,12 @@ function TraceDeviationPanel({
         const r = rRaw == null ? null
             : rRaw <= 1 ? Math.round(rRaw * 100)  // 0-1 normalized
             : Math.round(rRaw);                    // 防御性：已经是 0-100 的兼容
-        const j = getTraceFlowScore(t);
+        // 方案A: 轨迹分统一口径——优先用后端聚合层算出的 trajectoryScore（0.45 完整性 + 0.35 工具
+        // + 0.20 冗余, 再封顶, 其中 完整性=对齐覆盖率），没有(未评测/纯对齐旧数据)再回退 getTraceFlowScore
+        // (matchJson.overallScore = 对齐覆盖率单维)。两者都是 0-1。
+        const aggTraj = typeof t.trajectory_score === 'number' ? t.trajectory_score
+            : typeof t.trajectoryScore === 'number' ? t.trajectoryScore : null;
+        const j = aggTraj != null ? aggTraj : getTraceFlowScore(t);
         return {
             trace: t,
             id: getTraceId(t),
