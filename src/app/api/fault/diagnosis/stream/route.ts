@@ -6,6 +6,9 @@ import { ensureTraceBundle } from '@/lib/engine/observability/trace-bundle';
 import { inferSubagentNamesFromInteractions } from '@/lib/engine/observability/subagent-inference';
 import { normalizeClaudeCodeInteractionsForStorage } from '@/lib/shared/interaction-content';
 import { db, prismaRaw } from '@/lib/storage/prisma';
+import { findAgentDebugReport, parseReportPayload } from '@/lib/engine/agent-debug/report-store';
+import { hashInteractions } from '@/lib/engine/agent-debug/trace-adapter';
+import type { AgentDebugReportPayload } from '@/lib/engine/agent-debug/types';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 600;
@@ -44,9 +47,9 @@ const faultDb = prismaRaw as unknown as FaultDiagnosisStore;
 const SYSTEM_PROMPT = `你是 Agent Insight 的故障定位诊断助手，运行在基于 OpenCode 的通用 Agent 框架中。
 
 职责：
-1. 基于用户提供的执行记录、异常详情、评测结论、历史对话和 trace 资料包回答追问。
+1. 基于用户提供的执行记录、异常详情、评测结论、AgentDebug 四维认知诊断、历史对话和 trace 资料包回答追问。
 2. 区分两类故障：原始错误类故障（接口、工具、权限、运行时、环境、链路中断等）与效果偏差类故障（无明显报错但输出、路由、Skill 调用、最终答案偏离预期）。
-3. 回答要直接、可操作，优先给出根因假设、证据、影响范围、下一步验证和修复建议。
+3. 回答要直接、可操作，优先给出针对 Agent / Skill / 工具链路的根因假设、证据、影响范围、下一步验证和修复建议；除非用户明确要求，不要把回答变成原始案例任务的解法。
 
 节点引用格式（重要）：
 - 当你需要引用 trace-index.json 中的具体执行节点时，必须使用格式：@[nodeId:nodeLabel]
@@ -59,10 +62,11 @@ trace 资料包读取规则：
 - 先读取 manifest.json 和 trace-index.json 理解整体链路。
 - 不要一次性读取 artifacts 目录下的大文件；只有需要验证某个节点证据时，才读取对应 nodeFile 或 artifactPath。
 - nodeFile 中的 input/output 如带 artifactPath，说明正文较长，应按需读取该 artifact。
-- 回答必须优先基于执行记录、trace-index、相关节点文件和历史对话，证据不足时说明缺口。
+- 回答必须优先基于执行记录、AgentDebug 上游诊断、trace-index、相关节点文件和历史对话，证据不足时说明缺口。
 
 约束：
 - 不要重新声明自己已经完成了自动诊断；首屏异常详情由前端静态展示，当前对话只处理用户追问。
+- 如果提供了 AgentDebug 上游诊断，必须把它视为重要参考；若你不同意其结论，必须说明冲突证据。
 - 如果证据不足，明确说"当前证据不足"，然后列出需要补充的日志或字段。
 - 不要编造不存在的接口、文件路径、日志行或配置项。
 - 默认用中文回答，除非用户明确要求其他语言。`;
@@ -91,6 +95,91 @@ function formatConversationHistory(messages: Array<{ role: string; content: stri
     })
     .join('\n\n---\n\n');
   return compactText(text, max);
+}
+
+function summarizeAgentDebugReport(report: AgentDebugReportPayload, hashState: string) {
+  const root = report.rootCause;
+  const detectedCells = (report.phase1Grid || [])
+    .filter((cell) => cell.errorDetected)
+    .slice(0, 12)
+    .map((cell) => ({
+      step: cell.step,
+      traceStepIndex: cell.traceStepIndex,
+      traceNodeLabel: cell.traceNodeLabel,
+      module: cell.module,
+      errorType: cell.errorType,
+      severity: cell.severity,
+      evidence: cell.evidence,
+      reasoning: cell.reasoning,
+      confidence: cell.confidence,
+    }));
+
+  return {
+    available: true,
+    hashState,
+    generator: report.generator,
+    generatedAt: report.generatedAt,
+    modelLabel: report.modelLabel ?? null,
+    skippedReason: report.skippedReason,
+    triage: report.triage
+      ? {
+          category: report.triage.category,
+          shortCircuited: report.triage.shortCircuited,
+          fatalDiagnosis: report.triage.fatalDiagnosis
+            ? {
+                errorType: report.triage.fatalDiagnosis.errorType,
+                toolName: report.triage.fatalDiagnosis.toolName,
+                affectedSteps: report.triage.fatalDiagnosis.affectedSteps,
+                affectedTraceStepIndexes: report.triage.fatalDiagnosis.affectedTraceStepIndexes,
+                traceNodeLabel: report.triage.fatalDiagnosis.traceNodeLabel,
+                summary: report.triage.fatalDiagnosis.summary,
+                recommendation: report.triage.fatalDiagnosis.recommendation,
+                rawErrorEvidence: report.triage.fatalDiagnosis.rawErrorEvidence,
+              }
+            : null,
+          notes: report.triage.notes,
+        }
+      : null,
+    rootCause: root
+      ? {
+          criticalStep: root.criticalStep,
+          criticalTraceStepIndex: root.criticalTraceStepIndex,
+          criticalTraceNodeLabel: root.criticalTraceNodeLabel,
+          criticalTraceNodeKind: root.criticalTraceNodeKind,
+          criticalModule: root.criticalModule,
+          criticalErrorType: root.criticalErrorType,
+          summary: root.summary,
+          evidence: root.evidence,
+          cascadingChain: root.cascadingChain,
+          correctionGuidance: root.correctionGuidance,
+          confidence: root.confidence,
+        }
+      : null,
+    detectedCells,
+    stats: report.stats,
+  };
+}
+
+async function formatAgentDebugContext(executionId: string, interactions: unknown[]): Promise<string> {
+  const row = await findAgentDebugReport(executionId).catch(() => null);
+  if (!row) {
+    return 'AgentDebug 四维认知诊断尚未运行或没有缓存结果。';
+  }
+  if (row.status === 'running') {
+    return 'AgentDebug 四维认知诊断正在运行，当前追问暂时没有可用结果。';
+  }
+  if (row.status === 'failed') {
+    return `AgentDebug 四维认知诊断运行失败：${row.errorMessage || '未知错误'}`;
+  }
+  const report = parseReportPayload(row);
+  if (!report) {
+    return 'AgentDebug 四维认知诊断存在缓存记录，但 reportJson 为空或解析失败。';
+  }
+  const currentHash = hashInteractions(interactions);
+  const hashState = row.interactionsHash === currentHash
+    ? '匹配当前 trace interactions'
+    : '注意：缓存诊断的 interactionsHash 与当前 trace interactions 不一致，可能是旧诊断结果；仅作参考。';
+  return compactJson(summarizeAgentDebugReport(report, hashState), 10_000);
 }
 
 function parseInteractionsFromSession(session: StoredTraceSession | null, framework?: string): unknown[] {
@@ -155,12 +244,16 @@ export async function POST(request: Request) {
   const interactions = parseInteractionsFromSession(traceSession, framework);
   const traceBundle = ensureTraceBundle({ workspaceDir, executionId, interactions });
   const executionBrief = compactJson(body.executionBrief, 14_000);
+  const agentDebugContext = await formatAgentDebugContext(executionId, interactions);
   const conversationHistory = formatConversationHistory(previousMessages);
   const query = [
     '下面是用户当前打开的故障记录上下文，请只基于这些证据和后续用户问题作答。',
     '',
     '## 执行记录',
     executionBrief,
+    '',
+    '## AgentDebug 四维认知诊断（上游分析结果）',
+    agentDebugContext,
     '',
     '## 历史对话上下文',
     conversationHistory,
