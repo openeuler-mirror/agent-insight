@@ -35,6 +35,11 @@ export interface EvaluatorFindingsRowLike {
     rawAnalysis?: unknown;
 }
 
+interface EvaluatorFindingsViewProps {
+    row: EvaluatorFindingsRowLike;
+    allowedKinds?: EvaluatorFinding['kind'][];
+}
+
 function pickAttr(obj: Record<string, unknown>, snakeKey: string, camelKey: string): unknown {
     if (snakeKey in obj && obj[snakeKey] !== undefined) return obj[snakeKey];
     if (camelKey in obj && obj[camelKey] !== undefined) return obj[camelKey];
@@ -141,8 +146,10 @@ const FINDING_KIND_LABEL: Record<EvaluatorFinding['kind'], string> = {
     result_issue: '结果问题',
 };
 
-export function EvaluatorFindingsView({ row }: { row: EvaluatorFindingsRowLike }) {
-    const findings = extractFindings(row);
+export function EvaluatorFindingsView({ row, allowedKinds }: EvaluatorFindingsViewProps) {
+    const findings = extractFindings(row).filter(f =>
+        !allowedKinds || allowedKinds.includes(f.kind),
+    );
     if (findings.length === 0) {
         return (
             <div className="efv-empty">
