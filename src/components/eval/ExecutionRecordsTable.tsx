@@ -133,31 +133,34 @@ export function ExecutionRecordsTable({
     // 操作列容纳 重试 + 删除 两个按钮, 宽度按是否两者都在调整。
     const actionColWidth = onRetry && onDelete ? 92 : hasActions ? 50 : 0;
 
-    // 前 3 列（用例 / 执行 Trace / 评估 Trace）支持拖拽调宽，px。持久化到 localStorage（全表共享一套，体验一致）。
-    const COL_STORAGE_KEY = 'eval-exec-table-cols-v1';
-    const DEFAULT_COLW = { caseW: 170, execW: 210, evalW: 220 };
-    const [colW, setColW] = React.useState(DEFAULT_COLW);
+    // 前 3 列（用例 / 执行 Trace / 评估 Trace）支持拖拽调宽。
+    // 初始用 fr 弹性铺满容器（避免右侧大片空白），用户拖动后该列才固定成 px。
+    // 持久化到 localStorage（全表共享一套，体验一致）；null = 未自定义，走弹性。
+    type ColKey = 'caseW' | 'execW' | 'evalW';
+    const COL_STORAGE_KEY = 'eval-exec-table-cols-v2';
+    const FLEX_COL: Record<ColKey, string> = { caseW: '1.1fr', execW: '1.4fr', evalW: '1.6fr' };
+    const MIN_FLEX: Record<ColKey, number> = { caseW: 120, execW: 150, evalW: 160 };
+    const [colW, setColW] = React.useState<Record<ColKey, number | null>>({ caseW: null, execW: null, evalW: null });
     React.useEffect(() => {
         try {
             const raw = localStorage.getItem(COL_STORAGE_KEY);
             if (raw) {
                 const p = JSON.parse(raw);
                 if (p && typeof p === 'object') {
-                    setColW({
-                        caseW: Number(p.caseW) || DEFAULT_COLW.caseW,
-                        execW: Number(p.execW) || DEFAULT_COLW.execW,
-                        evalW: Number(p.evalW) || DEFAULT_COLW.evalW,
-                    });
+                    const numOrNull = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null);
+                    setColW({ caseW: numOrNull(p.caseW), execW: numOrNull(p.execW), evalW: numOrNull(p.evalW) });
                 }
             }
         } catch {/* ignore */}
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
-    const startResize = (key: 'caseW' | 'execW' | 'evalW') => (e: React.MouseEvent) => {
+    const startResize = (key: ColKey) => (e: React.MouseEvent) => {
         e.preventDefault();
         e.stopPropagation();
+        // 起始宽度取表头单元格当前实际像素宽（无论原来是 fr 还是 px），保证拖拽连续不跳变。
+        const cell = (e.currentTarget as HTMLElement).parentElement;
+        const startW = cell?.offsetWidth ?? colW[key] ?? MIN_FLEX[key];
         const startX = e.clientX;
-        const startW = colW[key];
         const onMove = (ev: MouseEvent) => {
             const w = Math.max(80, startW + (ev.clientX - startX));
             setColW(prev => ({ ...prev, [key]: w }));
@@ -173,12 +176,14 @@ export function ExecutionRecordsTable({
         document.body.style.cursor = 'col-resize';
     };
 
+    const colDef = (k: ColKey) => (colW[k] != null ? `${colW[k]}px` : FLEX_COL[k]);
     const fixedColsPx = [78, 62, 52, 52, ...(actionColWidth ? [actionColWidth] : [])];
-    const cols = [`${colW.caseW}px`, `${colW.execW}px`, `${colW.evalW}px`, ...fixedColsPx.map(n => `${n}px`)].join(' ');
+    const cols = [colDef('caseW'), colDef('execW'), colDef('evalW'), ...fixedColsPx.map(n => `${n}px`)].join(' ');
     const colCount = 3 + fixedColsPx.length;
     const GAP = 12;
-    // grid 内容总宽 = 各列 px 之和 + 列间 gap + 行左右内边距(12*2)，用作 minWidth 让窄屏可横向滚动。
-    const totalWidth = colW.caseW + colW.execW + colW.evalW
+    // minWidth = 各列宽(px列用实值, 弹性列用其最小宽) + 列间 gap + 行左右内边距(12*2)。
+    // 弹性列时容器更宽则 fr 铺满(无空白)，更窄则按 minWidth 触发横向滚动而非压垮。
+    const minWidth = (colW.caseW ?? MIN_FLEX.caseW) + (colW.execW ?? MIN_FLEX.execW) + (colW.evalW ?? MIN_FLEX.evalW)
         + fixedColsPx.reduce((a, b) => a + b, 0)
         + (colCount - 1) * GAP + 24;
 
@@ -214,7 +219,7 @@ export function ExecutionRecordsTable({
                         display: 'grid', gridTemplateColumns: cols, gap: GAP, padding: '8px 12px',
                         background: '#FAFAF7', borderBottom: '1px solid #E7E5E4',
                         fontSize: 11, fontWeight: 700, color: '#5F5E5A',
-                        position: 'sticky', top: 0, zIndex: 1, minWidth: totalWidth,
+                        position: 'sticky', top: 0, zIndex: 1, minWidth,
                     }}>
                         <div style={thStyle}>{zh ? '用例' : 'Case'}{resizeHandle('caseW')}</div>
                         <div style={thStyle}>{zh ? '执行 Trace' : 'Execution trace'}{resizeHandle('execW')}</div>
@@ -223,7 +228,7 @@ export function ExecutionRecordsTable({
                         <div>{zh ? '评测结果' : 'Result'}</div>
                         <div style={{ textAlign: 'right' }}>{zh ? '结果分' : 'Result'}</div>
                         <div style={{ textAlign: 'right' }}>{zh ? '轨迹分' : 'Traj'}</div>
-                        {hasActions && <div style={{ textAlign: 'right' }}>{zh ? '操作' : 'Action'}</div>}
+                        {hasActions && <div style={{ textAlign: 'center' }}>{zh ? '操作' : 'Action'}</div>}
                     </div>
                     {records.map(rec => {
                         const { tone, label } = statusToneLabel(rec.status, locale);
@@ -234,7 +239,7 @@ export function ExecutionRecordsTable({
                                 style={{
                                     display: 'grid', gridTemplateColumns: cols, gap: GAP, alignItems: 'center',
                                     padding: '10px 12px', borderTop: '1px solid #F1EFE8', fontSize: 12,
-                                    cursor: onRowClick ? 'pointer' : 'default', minWidth: totalWidth,
+                                    cursor: onRowClick ? 'pointer' : 'default', minWidth,
                                 }}
                             >
                                 {/* 用例 (query / case input) —— 让用户一眼认出是哪个用例 */}
@@ -327,7 +332,7 @@ export function ExecutionRecordsTable({
                                     // 进行中(评测中/执行中=running, 排队中=pending) 不允许删除, 避免删掉正在写盘的记录。
                                     const inProgress = tone === 'running' || tone === 'pending';
                                     return (
-                                        <div style={{ textAlign: 'right', display: 'inline-flex', gap: 4, justifyContent: 'flex-end' }}>
+                                        <div style={{ display: 'flex', gap: 4, justifyContent: 'center' }}>
                                             {onRetry && (
                                                 <button
                                                     className="v2-action-btn"
