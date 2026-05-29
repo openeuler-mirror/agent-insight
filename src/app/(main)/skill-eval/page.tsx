@@ -4162,7 +4162,32 @@ function TraceDeviationPanel({
                             setCaseResultOpen(true);
                         }
                     }}
-                    onRetry={rec => { onBatchAnalyze?.([rec.id]); }}
+                    onRetry={async rec => {
+                        const id = rec.id;
+                        // 立刻给反馈：把这条标记为"已触发"——getTraceEvalStatus 读 triggeredTaskIds
+                        // 返回 'pending'，行状态徽章随即切到「评测中」(spinner) 且重试按钮置灰，
+                        // 不必等后端 is_evaluating 回报或手动刷新。和 ① 配置块「开始评测」同款。
+                        setTriggeredTaskIds(prev => { const next = new Map(prev); next.set(id, Date.now()); return next; });
+                        // 重试即重来：清掉旧失败标记，别再挂着扰乱状态。
+                        setFailedTaskIds(prev => { if (!prev.has(id)) return prev; const next = new Map(prev); next.delete(id); return next; });
+                        if (!onBatchAnalyze) return;
+                        // onBatchAnalyze 内部已做 30×3s 轮询 reloadTraces，分数会随轮询实时回填。
+                        const failures = await onBatchAnalyze([id]);
+                        if (failures) {
+                            const trajErr = failures.trajectoryErrors?.get(id);
+                            const resultErrAll = (failures.resultErrors || []).join('\n');
+                            if (trajErr || resultErrAll) {
+                                setFailedTaskIds(prev => {
+                                    const next = new Map(prev);
+                                    const parts: string[] = [];
+                                    if (resultErrAll) parts.push(`结果评测：${resultErrAll}`);
+                                    if (trajErr) parts.push(`轨迹评测：${trajErr}`);
+                                    if (parts.length > 0) next.set(id, parts.join('\n'));
+                                    return next;
+                                });
+                            }
+                        }
+                    }}
                     records={displayedTraces.map(s => {
                         const st = getTraceEvalStatus(s);
                         const compStatus = st === 'done' ? 'done' : st === 'failed' ? 'failed' : st === 'partial' ? 'partial' : 'running';

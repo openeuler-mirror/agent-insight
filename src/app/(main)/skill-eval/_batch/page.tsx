@@ -1240,6 +1240,12 @@ export function BatchEvaluation({
      */
     const retryCase = async (caseId: string, evaluateOnly: boolean) => {
         if (!currentTask) return;
+        // 立刻给反馈：把这条 case 标记为进行中(执行/评测)，状态徽章随即切「执行中/评测中」
+        // 并置灰重试按钮，不必等首个轮询 tick(3s)或手动刷新。output 清掉旧错误。
+        setCaseStates(prev => ({
+            ...prev,
+            [caseId]: { ...(prev[caseId] || { status: 'pending' as CaseStatus }), status: evaluateOnly ? 'evaluating' : 'running', output: undefined },
+        }));
         try {
             const res = await apiFetch(`/api/debug/batch-tasks/${currentTask.id}`, {
                 method: 'POST',
@@ -1252,14 +1258,25 @@ export function BatchEvaluation({
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
-                alert((locale === 'zh' ? '重试失败: ' : 'Retry failed: ') + (data.error || res.status));
+                // 入队失败：把乐观置上的"进行中"回退成 fail，并带上错误，避免行卡在「评测中」。
+                const msg = String(data.error || res.status);
+                setCaseStates(prev => ({
+                    ...prev,
+                    [caseId]: { ...(prev[caseId] || { status: 'pending' as CaseStatus }), status: 'fail', output: msg },
+                }));
+                alert((locale === 'zh' ? '重试失败: ' : 'Retry failed: ') + msg);
                 return;
             }
             // 启动 polling 跟踪该 case 的状态变化 (复用主轮询机制, 自动停止条件: terminal)
             setBatchStartInFlight(true);
             startBatchPolling();
         } catch (err) {
-            alert(String(err));
+            const msg = String(err);
+            setCaseStates(prev => ({
+                ...prev,
+                [caseId]: { ...(prev[caseId] || { status: 'pending' as CaseStatus }), status: 'fail', output: msg },
+            }));
+            alert(msg);
         }
     };
 
