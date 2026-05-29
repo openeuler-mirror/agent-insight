@@ -91,7 +91,8 @@ interface DimensionScores {
     completeness: number;
     toolChoice: number;
     redundancy: number;
-    attribution: number;
+    /** 归因维度（v2 起不计入加权轨迹分，仅历史数据可能携带）。 */
+    attribution?: number;
 }
 
 interface TrajectoryDeviation {

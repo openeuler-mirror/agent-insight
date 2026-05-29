@@ -1240,6 +1240,12 @@ export function BatchEvaluation({
      */
     const retryCase = async (caseId: string, evaluateOnly: boolean) => {
         if (!currentTask) return;
+        // 立刻给反馈：把这条 case 标记为进行中(执行/评测)，状态徽章随即切「执行中/评测中」
+        // 并置灰重试按钮，不必等首个轮询 tick(3s)或手动刷新。output 清掉旧错误。
+        setCaseStates(prev => ({
+            ...prev,
+            [caseId]: { ...(prev[caseId] || { status: 'pending' as CaseStatus }), status: evaluateOnly ? 'evaluating' : 'running', output: undefined },
+        }));
         try {
             const res = await apiFetch(`/api/debug/batch-tasks/${currentTask.id}`, {
                 method: 'POST',
@@ -1252,14 +1258,25 @@ export function BatchEvaluation({
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
-                alert((locale === 'zh' ? '重试失败: ' : 'Retry failed: ') + (data.error || res.status));
+                // 入队失败：把乐观置上的"进行中"回退成 fail，并带上错误，避免行卡在「评测中」。
+                const msg = String(data.error || res.status);
+                setCaseStates(prev => ({
+                    ...prev,
+                    [caseId]: { ...(prev[caseId] || { status: 'pending' as CaseStatus }), status: 'fail', output: msg },
+                }));
+                alert((locale === 'zh' ? '重试失败: ' : 'Retry failed: ') + msg);
                 return;
             }
             // 启动 polling 跟踪该 case 的状态变化 (复用主轮询机制, 自动停止条件: terminal)
             setBatchStartInFlight(true);
             startBatchPolling();
         } catch (err) {
-            alert(String(err));
+            const msg = String(err);
+            setCaseStates(prev => ({
+                ...prev,
+                [caseId]: { ...(prev[caseId] || { status: 'pending' as CaseStatus }), status: 'fail', output: msg },
+            }));
+            alert(msg);
         }
     };
 
@@ -2125,6 +2142,29 @@ export function BatchEvaluation({
                     locale={locale}
                     emptyHint={'还没启动评测。在 ① 配置块勾选 case → 点「▶ 启动」。'}
                     onRetry={rec => retryCase(rec.id, false)}
+                    onDelete={async rec => {
+                        const stt = caseStates[rec.id]?.status;
+                        if (stt === 'running' || stt === 'executed' || stt === 'evaluating') {
+                            alert(locale === 'zh' ? '评测/执行进行中，无法删除' : 'In progress, cannot delete');
+                            return;
+                        }
+                        if (typeof window !== 'undefined' && !window.confirm(locale === 'zh'
+                            ? '确定从「评测执行」列表删除这条 case 记录吗？（仅移除本次执行记录，数据集 case 本身保留）'
+                            : 'Delete this case record from the execution list?')) return;
+                        // 移除该 case 状态并持久化（复用 PUT 覆写 caseStatesJson），避免轮询又把它显示回来。
+                        const next = { ...caseStates };
+                        delete next[rec.id];
+                        setCaseStates(next);
+                        if (currentTask) {
+                            try {
+                                await apiFetch(`/api/debug/batch-tasks/${currentTask.id}`, {
+                                    method: 'PUT',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ user: user || 'debug-user', caseStatesJson: next }),
+                                });
+                            } catch { /* 本地已移除，持久化失败下次轮询会恢复，可接受 */ }
+                        }
+                    }}
                     onRowClick={() => {
                         setResultSecOpen(true);
                         requestAnimationFrame(() => {
@@ -2149,6 +2189,8 @@ export function BatchEvaluation({
                                 caseTitle: c.input || c.id,
                                 executionTraceId: st?.sessionId || undefined,
                                 evaluationTraceId: meta?.evaluationTraceId,
+                                resultEvalTraceId: meta?.resultEvalTraceId,
+                                trajEvalTraceId: meta?.trajEvalTraceId,
                                 evaluatorRunId: st?.evaluatorRunId || evaluationBatchId || undefined,
                                 datasetId: c.datasetId || meta?.datasetId || undefined,
                                 status: compStatus,

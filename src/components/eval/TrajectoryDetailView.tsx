@@ -19,6 +19,8 @@ import remarkGfm from 'remark-gfm';
 import { apiFetch } from '@/lib/client/api';
 import { useAuth } from '@/lib/auth/auth-context';
 import { EvaluatorFindingsView } from './EvaluatorFindingsView';
+import { TraceAlignmentPanel, type TraceAlignmentPanelProps } from './TraceAlignmentPanel';
+import { Term } from '@/components/text/Term';
 import { parseSkillAttributionFromRow } from '@/lib/engine/evaluation/skill-attribution';
 
 interface DatasetCase {
@@ -59,7 +61,8 @@ interface DimensionScores {
     completeness: number;
     toolChoice: number;
     redundancy: number;
-    attribution: number;
+    /** 归因维度（v2 起不计入加权轨迹分，仅历史数据可能携带）。 */
+    attribution?: number;
 }
 
 interface TrajectoryDeviation {
@@ -181,6 +184,17 @@ interface SkillKeyActionCard {
     matchedStep?: ActualExtractedStep;
     matchedStepIndex?: number;
     severity?: 'high' | 'medium' | 'low';
+}
+
+/** 宽松解析 JSON 字符串，返回对象或数组原值（解析失败 / 空串返回 null）。 */
+function safeJsonParseLoose(s: string | null | undefined): Record<string, unknown> | unknown[] | null {
+    if (!s || typeof s !== 'string') return null;
+    try {
+        const parsed = JSON.parse(s);
+        return parsed && typeof parsed === 'object' ? parsed : null;
+    } catch {
+        return null;
+    }
 }
 
 function parseLooseJsonText(text: string): Record<string, unknown> | null {
@@ -723,6 +737,8 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string>('');
     const [activeAnalysisTab, setActiveAnalysisTab] = useState<'result' | 'trajectory' | 'custom'>('result');
+    // 执行轨迹对齐面板默认折叠（放在轨迹评测最后，按需展开看详细对齐时序图）。
+    const [alignmentOpen, setAlignmentOpen] = useState(false);
 
     // Execution（轮询，结果评测字段可能在轨迹评测过程中被补写）
     useEffect(() => {
@@ -800,6 +816,46 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
             clearInterval(t);
         };
     }, [user, traceId, datasetId, runId, resultId]);
+
+    // analyze-match 数据（执行轨迹对齐 · Skill 预期标注 面板用）。原在 用例分析 ③ 分析结果，
+    // 现迁移到这里（评测执行 → 轨迹评测）。GET 拿已存的对齐结果，没有则面板自然空着。
+    const [matchData, setMatchData] = useState<{ matchJson?: string; flowJson?: string; extractedSteps?: string; dynamicMermaid?: string } | null>(null);
+    useEffect(() => {
+        if (!user || !traceId) return;
+        let stopped = false;
+        apiFetch(`/api/observe/executions/${encodeURIComponent(traceId)}/analyze-match`)
+            .then(r => (r.ok ? r.json() : null))
+            .then(d => { if (!stopped && d && typeof d === 'object') setMatchData(d); })
+            .catch(() => undefined);
+        return () => { stopped = true; };
+    }, [user, traceId]);
+
+    const alignmentPanelProps = useMemo<TraceAlignmentPanelProps | null>(() => {
+        const parsedRaw = safeJsonParseLoose(matchData?.matchJson);
+        if (!parsedRaw || Array.isArray(parsedRaw)) return null;
+        const parsedMatch = parsedRaw as Record<string, unknown>;
+        const parsedFlow = safeJsonParseLoose(matchData?.flowJson);
+        const extractedRaw = safeJsonParseLoose(matchData?.extractedSteps);
+        const problemSteps = Array.isArray(parsedMatch.problemSteps) ? parsedMatch.problemSteps : [];
+        const problemByStepKey = new Map<string, Record<string, unknown>>();
+        for (const raw of problemSteps) {
+            const p = asRecord(raw);
+            if (p.stepIndex != null) problemByStepKey.set(`actual:${p.stepIndex}`, p);
+            if (p.stepName) problemByStepKey.set(`name:${String(p.stepName)}`, p);
+        }
+        const flowSteps = !Array.isArray(parsedFlow) && Array.isArray((parsedFlow as Record<string, unknown> | null)?.steps)
+            ? (parsedFlow as { steps: unknown[] }).steps
+            : [];
+        return {
+            matches: Array.isArray(parsedMatch.matches) ? parsedMatch.matches : [],
+            skippedExpectedSteps: Array.isArray(parsedMatch.skippedExpectedSteps) ? parsedMatch.skippedExpectedSteps : [],
+            problemByStepKey,
+            flowSteps,
+            extractedSteps: Array.isArray(extractedRaw) ? extractedRaw : [],
+            alignment: parsedMatch.alignment,
+            mermaidCode: matchData?.dynamicMermaid,
+        } as unknown as TraceAlignmentPanelProps;
+    }, [matchData]);
 
     const effectiveDatasetId = datasetId || result?.datasetId || '';
 
@@ -1184,17 +1240,23 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
                                     </div>
                                 </div>
 
-                                {result.dimensionScores && (() => {
+                                {(() => {
                                     const findings = deriveDimensionFindings(result.rawAnalysis);
+                                    // trace 模式下 analyze-match 会把 dimensionScoresJson 覆写成 {alignment, attribution}，
+                                    // 三维分只剩在 rawAnalysis.dimension_details.<dim>.score。这里两处都读：
+                                    // 优先 dimensionScores 列，缺失则回退 dimension_details，避免分数空白。
+                                    const dims = resolveDimensionScores(result.dimensionScores, result.rawAnalysis);
+                                    if (dims.completeness == null && dims.toolChoice == null && dims.redundancy == null) return null;
                                     return (
                                         <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 8, marginBottom: 12 }}>
-                                            <DimensionCard label="完整性" score={result.dimensionScores.completeness} findings={findings.completeness} />
-                                            <DimensionCard label="工具选择" score={result.dimensionScores.toolChoice} findings={findings.toolChoice} />
-                                            <DimensionCard label="冗余" score={result.dimensionScores.redundancy} findings={findings.redundancy} />
-                                            <DimensionCard label="归因" score={result.dimensionScores.attribution} findings={findings.attribution} />
+                                            <DimensionCard label="完整性" termId="traj-completeness" weight={0.45} score={dims.completeness} findings={findings.completeness} />
+                                            <DimensionCard label="工具选择" termId="traj-tool-choice" weight={0.35} score={dims.toolChoice} findings={findings.toolChoice} />
+                                            <DimensionCard label="冗余" termId="traj-redundancy" weight={0.20} score={dims.redundancy} findings={findings.redundancy} />
                                         </div>
                                     );
                                 })()}
+
+                                <TrajectoryCapBanner rawAnalysis={result.rawAnalysis} trajectoryScore={result.trajectoryScore} />
 
                                 {/* 轨迹 tab 只保留过程向的 Skill 归因问题：
                                     - deviation_steps     -> 路径偏离
@@ -1273,6 +1335,32 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
                                         </div>
                                     )}
                                 </div>
+
+                                {/* 执行轨迹对齐 · Skill 预期标注 —— 放在轨迹评测最后，默认折叠，
+                                    点击展开看详细的对齐时序图 / 缺失·偏离标注；数据来自 analyze-match。 */}
+                                {alignmentPanelProps && (
+                                    <div style={{ marginTop: 14 }}>
+                                        <button
+                                            type="button"
+                                            onClick={() => setAlignmentOpen(o => !o)}
+                                            style={{
+                                                display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+                                                background: COLORS.bgSoft, border: `1px solid ${COLORS.border}`,
+                                                borderRadius: 6, padding: '8px 12px', cursor: 'pointer', textAlign: 'left',
+                                            }}
+                                            aria-expanded={alignmentOpen}
+                                        >
+                                            <span style={{ fontSize: 11, color: COLORS.textDisabled, transition: 'transform 0.15s', transform: alignmentOpen ? 'rotate(90deg)' : 'none' }}>▶</span>
+                                            <span style={{ fontSize: 12.5, fontWeight: 600, color: COLORS.text }}>执行轨迹对齐 · Skill 预期标注</span>
+                                            <span style={{ fontSize: 11, color: COLORS.textMuted }}>以实际执行为主，直接标注偏离与缺失步骤</span>
+                                        </button>
+                                        {alignmentOpen && (
+                                            <div style={{ marginTop: 8 }}>
+                                                <TraceAlignmentPanel {...alignmentPanelProps} />
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
 
                                 {/* 重新跑归因评估按钮 —— 用户在详情页看到结果过时/不完整时可以就地重新触发，
                                     避免必须回 batch 列表才能重跑（对应方案 A：保留单条 trace 重新归因入口）。 */}
@@ -1842,14 +1930,22 @@ function DimensionCard({
     label,
     score,
     findings,
+    weight,
+    termId,
 }: {
     label: string;
-    score: number;
+    score: number | null | undefined;
     findings?: { type: 'high' | 'medium' | 'low' | 'info'; text: string }[];
+    /** 该维度在加权轨迹分中的权重（0-1）；提供时在标签后展示「权重 xx%」。 */
+    weight?: number;
+    /** glossary 条目 id；提供时在标签后加一个 i 角标，hover 展示"评测什么能力 + 怎么算分"。 */
+    termId?: string;
 }) {
     const [expanded, setExpanded] = useState(false);
-    const tone = score >= 0.8 ? COLORS.success : score >= 0.5 ? COLORS.warning : COLORS.danger;
-    const bg = score >= 0.8 ? COLORS.successSubtle : score >= 0.5 ? COLORS.warningSubtle : COLORS.dangerSubtle;
+    const hasScore = typeof score === 'number' && Number.isFinite(score);
+    const tone = !hasScore ? COLORS.textMuted : score >= 0.8 ? COLORS.success : score >= 0.5 ? COLORS.warning : COLORS.danger;
+    const bg = !hasScore ? COLORS.bgSoft : score >= 0.8 ? COLORS.successSubtle : score >= 0.5 ? COLORS.warningSubtle : COLORS.dangerSubtle;
+    const barWidth = hasScore ? Math.round(score * 100) : 0;
     const findingCount = findings?.length || 0;
     const hasFindings = findingCount > 0;
     return (
@@ -1862,20 +1958,15 @@ function DimensionCard({
             flexDirection: 'column',
             gap: 6,
         }}>
-            <button
-                type="button"
+            <div
+                role={hasFindings ? 'button' : undefined}
                 onClick={() => hasFindings && setExpanded(v => !v)}
-                disabled={!hasFindings}
                 style={{
                     display: 'flex',
                     justifyContent: 'space-between',
                     alignItems: 'baseline',
-                    background: 'transparent',
-                    border: 'none',
-                    padding: 0,
                     cursor: hasFindings ? 'pointer' : 'default',
                     width: '100%',
-                    textAlign: 'left',
                 }}
                 aria-expanded={expanded}
             >
@@ -1890,6 +1981,17 @@ function DimensionCard({
                         }}>›</span>
                     ) : null}
                     {label}
+                    {termId ? (
+                        // i 角标：hover 展示"评测什么能力 + 怎么算分"。stopPropagation 防止点角标误触展开。
+                        <span onClick={e => e.stopPropagation()} style={{ display: 'inline-flex', alignItems: 'center' }}>
+                            <Term id={termId} render="compact" />
+                        </span>
+                    ) : null}
+                    {typeof weight === 'number' ? (
+                        <span style={{ color: COLORS.textDisabled, fontSize: 10, fontWeight: 400 }}>
+                            权重 {Math.round(weight * 100)}%
+                        </span>
+                    ) : null}
                     {hasFindings ? (
                         <span style={{ color: COLORS.textDisabled, fontSize: 10, fontWeight: 400 }}>
                             ({findingCount})
@@ -1900,9 +2002,9 @@ function DimensionCard({
                     <span style={{ fontSize: 14, fontWeight: 600, color: tone }}>{fmtScore10(score)}</span>
                     <span style={{ fontSize: 9, color: COLORS.textDisabled, marginLeft: 2 }}>/10</span>
                 </span>
-            </button>
+            </div>
             <div style={{ height: 3, background: bg, borderRadius: 2, overflow: 'hidden' }}>
-                <div style={{ width: `${Math.round(score * 100)}%`, height: '100%', background: tone }} />
+                <div style={{ width: `${barWidth}%`, height: '100%', background: tone }} />
             </div>
             {expanded && hasFindings ? (
                 <ul style={{
@@ -1942,13 +2044,133 @@ function DimensionCard({
 }
 
 /**
- * 把 rawAnalysis.dimension_details 派生成 4 张卡片各自的 findings 列表。
+ * 严重度封顶说明条。读取 rawAnalysis.score_aggregation（评估器代码侧聚合层产出）：
+ *  - 展示「加权分 → 最终分」以及是否触发封顶 / 封顶原因 / high·medium 偏差计数。
+ *  - 旧评测数据没有 score_aggregation → 不渲染，安全降级。
+ */
+function TrajectoryCapBanner({
+    rawAnalysis,
+    trajectoryScore,
+}: {
+    rawAnalysis: unknown;
+    trajectoryScore: number | null;
+}) {
+    const agg = asRecord(asRecord(rawAnalysis).score_aggregation ?? asRecord(rawAnalysis).scoreAggregation);
+    if (Object.keys(agg).length === 0) return null;
+
+    const rawWeighted = typeof agg.rawWeightedScore === 'number' ? agg.rawWeightedScore : null;
+    const finalScore = typeof agg.finalScore === 'number'
+        ? agg.finalScore
+        : (typeof trajectoryScore === 'number' ? trajectoryScore : null);
+    const ceiling = typeof agg.ceiling === 'number' ? agg.ceiling : null;
+    const triggered = agg.triggered === true;
+    const effective = agg.effective === true;
+    const highCount = typeof agg.highCount === 'number' ? agg.highCount : 0;
+    const mediumCount = typeof agg.mediumCount === 'number' ? agg.mediumCount : 0;
+    const reason = typeof agg.reason === 'string' ? agg.reason : '';
+
+    const accent = effective ? COLORS.danger : triggered ? COLORS.warning : COLORS.success;
+    const bg = effective ? COLORS.dangerSubtle : triggered ? COLORS.warningSubtle : COLORS.successSubtle;
+
+    return (
+        <div style={{
+            border: `1px solid ${COLORS.border}`,
+            borderLeft: `3px solid ${accent}`,
+            borderRadius: 6,
+            background: bg,
+            padding: '10px 12px',
+            marginBottom: 12,
+            fontSize: 12,
+            lineHeight: 1.6,
+            color: COLORS.textSecondary,
+        }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                <span style={{ fontWeight: 600, color: accent }}>
+                    {effective ? '已封顶' : triggered ? '触发封顶规则（未压低）' : '未封顶'}
+                </span>
+                <span style={{ flex: 1 }} />
+                <span style={{ fontSize: 11, color: COLORS.textMuted }}>
+                    加权分 {rawWeighted != null ? fmtScore10(rawWeighted) : '--'}
+                    {' → '}
+                    <b style={{ color: accent }}>{finalScore != null ? fmtScore10(finalScore) : '--'}</b>
+                    {' / 10'}
+                    {ceiling != null ? `（上限 ${fmtScore10(ceiling)}）` : ''}
+                </span>
+            </div>
+            <div style={{ fontSize: 11.5, color: COLORS.textSecondary }}>
+                {reason || '无封顶：无 high 偏差且 medium 偏差少于 3 个。'}
+            </div>
+            <div style={{ marginTop: 4, fontSize: 10.5, color: COLORS.textMuted }}>
+                偏差严重度：high {highCount} · medium {mediumCount}
+                {' · 规则：≥1 个 high → 封顶 4.0；无 high 但 ≥3 个 medium → 封顶 6.5'}
+            </div>
+        </div>
+    );
+}
+
+/**
+ * 把 rawAnalysis.dimension_details 派生成各维度卡片的 findings 列表。
  * 任何字段缺失都安全降级为空数组。
  */
 function asRecord(value: unknown): Record<string, unknown> {
     return value && typeof value === 'object' && !Array.isArray(value)
         ? value as Record<string, unknown>
         : {};
+}
+
+/**
+ * 维度明细里的 step 项可能是字符串(评估器常这么输出)，也可能是对象。
+ * 统一抽成 { text, severity, idx, name }，避免 string 项被当对象读 .description
+ * 而显示成「(未给描述)」。对象时按多字段兜底取文案。
+ */
+function extractStepInfo(raw: unknown): {
+    text: string;
+    severity: unknown;
+    idx: unknown;
+    name: unknown;
+} {
+    if (typeof raw === 'string') {
+        return { text: raw.trim(), severity: undefined, idx: undefined, name: undefined };
+    }
+    const m = asRecord(raw);
+    const text = String(
+        m.description ?? m.desc ?? m.issue ?? m.step ?? m.action
+        ?? m.detail ?? m.text ?? m.reason ?? m.note ?? m.name ?? '',
+    ).trim();
+    return { text, severity: m.severity, idx: m.step_index ?? m.stepIndex, name: m.name };
+}
+
+/**
+ * 解析三维分（completeness / toolChoice / redundancy），返回 number 或 null。
+ * 取值优先级：dimensionScores 列 → rawAnalysis.dimension_details.<dim>.score。
+ * 这样 trace 模式下被 analyze-match 覆写成 {alignment, attribution} 的行，
+ * 也能从评估器原始输出里把三维分捞回来展示，不再空白。
+ */
+function resolveDimensionScores(
+    dimensionScores: DimensionScores | null | undefined,
+    rawAnalysis: unknown,
+): { completeness: number | null; toolChoice: number | null; redundancy: number | null } {
+    const root = asRecord(rawAnalysis);
+    const rawDimScores = asRecord(root.dimension_scores ?? root.dimensionScores);
+    const details = asRecord(root.dimension_details ?? root.dimensionDetails);
+    const num = (v: unknown): number | null => {
+        const n = typeof v === 'number' ? v : Number(v);
+        return Number.isFinite(n) ? n : null;
+    };
+    // 取值优先级：dimensionScores 列 → rawAnalysis.dimension_scores → dimension_details.<dim>.score(冗余用 redundancy_score)。
+    const pick = (colVal: number | undefined, rawKey: string, detailKey: string, detailScoreKey = 'score'): number | null => {
+        const fromCol = num(colVal);
+        if (fromCol != null) return fromCol;
+        const fromRaw = num(rawDimScores[rawKey] ?? rawDimScores[detailKey]);
+        if (fromRaw != null) return fromRaw;
+        const d = asRecord(details[detailKey]);
+        return num(d[detailScoreKey] ?? d.score);
+    };
+    return {
+        completeness: pick(dimensionScores?.completeness, 'completeness', 'completeness'),
+        toolChoice: pick(dimensionScores?.toolChoice, 'tool_choice', 'tool_choice'),
+        redundancy: pick(dimensionScores?.redundancy, 'redundancy', 'redundancy', 'redundancy_score'),
+    };
 }
 
 function deriveDimensionFindings(rawAnalysis: unknown): {
@@ -1970,13 +2192,12 @@ function deriveDimensionFindings(rawAnalysis: unknown): {
     const completeness: { type: ReturnType<typeof sev>; text: string }[] = [];
     const cmpt = asRecord(details.completeness);
     for (const raw of (Array.isArray(cmpt.missing_steps) ? cmpt.missing_steps : [])) {
-        const m = asRecord(raw);
-        completeness.push({ type: sev(m.severity), text: `缺失：${m.description || '(未给描述)'}` });
+        const { text, severity } = extractStepInfo(raw);
+        completeness.push({ type: sev(severity), text: `缺失：${text || '(未给描述)'}` });
     }
     for (const raw of (Array.isArray(cmpt.extra_steps) ? cmpt.extra_steps : [])) {
-        const m = asRecord(raw);
-        const idx = m.step_index ?? m.stepIndex;
-        completeness.push({ type: sev(m.severity), text: `多余${idx != null ? `（#${idx}）` : ''}：${m.description || '(未给描述)'}` });
+        const { text, severity, idx } = extractStepInfo(raw);
+        completeness.push({ type: sev(severity), text: `多余${idx != null ? `（#${idx}）` : ''}：${text || '(未给描述)'}` });
     }
     if (completeness.length === 0 && cmpt.explanation) {
         completeness.push({ type: 'info', text: String(cmpt.explanation) });
@@ -1985,10 +2206,9 @@ function deriveDimensionFindings(rawAnalysis: unknown): {
     const toolChoice: { type: ReturnType<typeof sev>; text: string }[] = [];
     const tc = asRecord(details.tool_choice ?? details.toolChoice);
     for (const raw of (Array.isArray(tc.problematic_steps) ? tc.problematic_steps : [])) {
-        const m = asRecord(raw);
-        const idx = m.step_index ?? m.stepIndex;
-        const name = m.name ? ` ${m.name}` : '';
-        toolChoice.push({ type: sev(m.severity), text: `#${idx ?? '?'}${name}：${m.issue || '(未给原因)'}` });
+        const { text, severity, idx, name } = extractStepInfo(raw);
+        const nm = name ? ` ${name}` : '';
+        toolChoice.push({ type: sev(severity), text: `#${idx ?? '?'}${nm}：${text || '(未给原因)'}` });
     }
     if (toolChoice.length === 0 && tc.explanation) {
         toolChoice.push({ type: 'info', text: String(tc.explanation) });

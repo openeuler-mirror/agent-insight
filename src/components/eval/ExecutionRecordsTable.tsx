@@ -23,8 +23,13 @@ export interface EvalRecordRow {
     caseTitle?: string;
     /** 被评测的 trace task_id —— 跳链路追踪。数据集来源的记录, 这里是执行生成的那条 trace。 */
     executionTraceId?: string;
-    /** 评估器自己跑出来的 trace (评估 session id) —— 跳链路追踪看评测器怎么判的 */
+    /** 评估器自己跑出来的 trace (评估 session id) —— 跳链路追踪看评测器怎么判的。
+     * 兼容旧用法：未拆分时的单条评估 trace（= 轨迹评估器优先）。 */
     evaluationTraceId?: string;
+    /** 结果评估器(任务完成度) 的评估 session —— 「结果分」怎么判的 */
+    resultEvalTraceId?: string;
+    /** 轨迹评估器(轨迹质量) 的评估 session —— 「轨迹分」怎么判的 */
+    trajEvalTraceId?: string;
     /** 评测任务批次 id —— 用于拼"评测结果详情"链接 (/eval/trajectory/<trace>?runId=<id>) */
     evaluatorRunId?: string;
     /** 评测参考数据集 id —— 拼结果详情链接的 datasetId (可选, 不传则详情页自行解析) */
@@ -109,6 +114,7 @@ export function ExecutionRecordsTable({
     title,
     emptyHint,
     onRetry,
+    onDelete,
     onRowClick,
 }: {
     records: EvalRecordRow[];
@@ -117,11 +123,82 @@ export function ExecutionRecordsTable({
     emptyHint?: string;
     /** 行级重试回调; 不传则不显示重试按钮 */
     onRetry?: (record: EvalRecordRow) => void;
+    /** 行级删除回调; 不传则不显示删除按钮。进行中(评测中/执行中/排队中)的行会禁用删除。 */
+    onDelete?: (record: EvalRecordRow) => void;
     /** 点击行(非链接/按钮区)回调, 用于在本页钻取结果详情; 不传则行不可点 */
     onRowClick?: (record: EvalRecordRow) => void;
 }) {
     const zh = locale === 'zh';
-    const cols = '0.9fr 1fr 1fr 78px 62px 52px 52px' + (onRetry ? ' 50px' : '');
+    const hasActions = !!onRetry || !!onDelete;
+    // 操作列容纳 重试 + 删除 两个按钮, 宽度按是否两者都在调整。
+    const actionColWidth = onRetry && onDelete ? 92 : hasActions ? 50 : 0;
+
+    // 前 3 列（用例 / 执行 Trace / 评估 Trace）支持拖拽调宽。
+    // 初始用 fr 弹性铺满容器（避免右侧大片空白），用户拖动后该列才固定成 px。
+    // 持久化到 localStorage（全表共享一套，体验一致）；null = 未自定义，走弹性。
+    type ColKey = 'caseW' | 'execW' | 'evalW';
+    const COL_STORAGE_KEY = 'eval-exec-table-cols-v2';
+    const FLEX_COL: Record<ColKey, string> = { caseW: '1.1fr', execW: '1.4fr', evalW: '1.6fr' };
+    const MIN_FLEX: Record<ColKey, number> = { caseW: 120, execW: 150, evalW: 160 };
+    const [colW, setColW] = React.useState<Record<ColKey, number | null>>({ caseW: null, execW: null, evalW: null });
+    React.useEffect(() => {
+        try {
+            const raw = localStorage.getItem(COL_STORAGE_KEY);
+            if (raw) {
+                const p = JSON.parse(raw);
+                if (p && typeof p === 'object') {
+                    const numOrNull = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null);
+                    setColW({ caseW: numOrNull(p.caseW), execW: numOrNull(p.execW), evalW: numOrNull(p.evalW) });
+                }
+            }
+        } catch {/* ignore */}
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+    const startResize = (key: ColKey) => (e: React.MouseEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        // 起始宽度取表头单元格当前实际像素宽（无论原来是 fr 还是 px），保证拖拽连续不跳变。
+        const cell = (e.currentTarget as HTMLElement).parentElement;
+        const startW = cell?.offsetWidth ?? colW[key] ?? MIN_FLEX[key];
+        const startX = e.clientX;
+        const onMove = (ev: MouseEvent) => {
+            const w = Math.max(80, startW + (ev.clientX - startX));
+            setColW(prev => ({ ...prev, [key]: w }));
+        };
+        const onUp = () => {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            document.body.style.cursor = '';
+            setColW(prev => { try { localStorage.setItem(COL_STORAGE_KEY, JSON.stringify(prev)); } catch {/* ignore */} return prev; });
+        };
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+        document.body.style.cursor = 'col-resize';
+    };
+
+    const colDef = (k: ColKey) => (colW[k] != null ? `${colW[k]}px` : FLEX_COL[k]);
+    const fixedColsPx = [78, 62, 52, 52, ...(actionColWidth ? [actionColWidth] : [])];
+    const cols = [colDef('caseW'), colDef('execW'), colDef('evalW'), ...fixedColsPx.map(n => `${n}px`)].join(' ');
+    const colCount = 3 + fixedColsPx.length;
+    const GAP = 12;
+    // minWidth = 各列宽(px列用实值, 弹性列用其最小宽) + 列间 gap + 行左右内边距(12*2)。
+    // 弹性列时容器更宽则 fr 铺满(无空白)，更窄则按 minWidth 触发横向滚动而非压垮。
+    const minWidth = (colW.caseW ?? MIN_FLEX.caseW) + (colW.execW ?? MIN_FLEX.execW) + (colW.evalW ?? MIN_FLEX.evalW)
+        + fixedColsPx.reduce((a, b) => a + b, 0)
+        + (colCount - 1) * GAP + 24;
+
+    // 拖拽手柄：覆盖列右缘的一条可抓区，hover 显示竖线提示。
+    const resizeHandle = (key: 'caseW' | 'execW' | 'evalW') => (
+        <span
+            onMouseDown={startResize(key)}
+            onClick={e => e.stopPropagation()}
+            title={zh ? '拖拽调整列宽' : 'Drag to resize'}
+            style={{ position: 'absolute', top: 0, right: -6, width: 12, height: '100%', cursor: 'col-resize', zIndex: 3, display: 'flex', justifyContent: 'center' }}
+        >
+            <span style={{ width: 2, height: '60%', alignSelf: 'center', background: '#D4D4D8', borderRadius: 1 }} />
+        </span>
+    );
+    const thStyle: React.CSSProperties = { position: 'relative', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
     return (
         <div style={{ border: '1px solid #E7E5E4', borderRadius: 8, overflow: 'hidden', background: '#fff' }}>
             <style>{'@keyframes erspin{to{transform:rotate(360deg)}}'}</style>
@@ -136,22 +213,22 @@ export function ExecutionRecordsTable({
                     {emptyHint || (zh ? '暂无评测记录' : 'No evaluation records yet')}
                 </div>
             ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', maxHeight: 460, overflowY: 'auto' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', maxHeight: 460, overflowY: 'auto', overflowX: 'auto' }}>
                     {/* 表头 */}
                     <div style={{
-                        display: 'grid', gridTemplateColumns: cols, gap: 12, padding: '8px 12px',
+                        display: 'grid', gridTemplateColumns: cols, gap: GAP, padding: '8px 12px',
                         background: '#FAFAF7', borderBottom: '1px solid #E7E5E4',
                         fontSize: 11, fontWeight: 700, color: '#5F5E5A',
-                        position: 'sticky', top: 0, zIndex: 1,
+                        position: 'sticky', top: 0, zIndex: 1, minWidth,
                     }}>
-                        <div>{zh ? '用例' : 'Case'}</div>
-                        <div>{zh ? '执行 Trace' : 'Execution trace'}</div>
-                        <div>{zh ? '评估 Trace' : 'Eval trace'}</div>
+                        <div style={thStyle}>{zh ? '用例' : 'Case'}{resizeHandle('caseW')}</div>
+                        <div style={thStyle}>{zh ? '执行 Trace' : 'Execution trace'}{resizeHandle('execW')}</div>
+                        <div style={thStyle}>{zh ? '评估 Trace' : 'Eval trace'}{resizeHandle('evalW')}</div>
                         <div>{zh ? '状态' : 'Status'}</div>
                         <div>{zh ? '评测结果' : 'Result'}</div>
                         <div style={{ textAlign: 'right' }}>{zh ? '结果分' : 'Result'}</div>
                         <div style={{ textAlign: 'right' }}>{zh ? '轨迹分' : 'Traj'}</div>
-                        {onRetry && <div style={{ textAlign: 'right' }}>{zh ? '操作' : 'Action'}</div>}
+                        {hasActions && <div style={{ textAlign: 'center' }}>{zh ? '操作' : 'Action'}</div>}
                     </div>
                     {records.map(rec => {
                         const { tone, label } = statusToneLabel(rec.status, locale);
@@ -160,9 +237,9 @@ export function ExecutionRecordsTable({
                                 key={rec.id}
                                 onClick={onRowClick ? () => onRowClick(rec) : undefined}
                                 style={{
-                                    display: 'grid', gridTemplateColumns: cols, gap: 12, alignItems: 'center',
+                                    display: 'grid', gridTemplateColumns: cols, gap: GAP, alignItems: 'center',
                                     padding: '10px 12px', borderTop: '1px solid #F1EFE8', fontSize: 12,
-                                    cursor: onRowClick ? 'pointer' : 'default',
+                                    cursor: onRowClick ? 'pointer' : 'default', minWidth,
                                 }}
                             >
                                 {/* 用例 (query / case input) —— 让用户一眼认出是哪个用例 */}
@@ -188,22 +265,30 @@ export function ExecutionRecordsTable({
                                     )}
                                 </div>
 
-                                {/* 评估 Trace → 评估器轨迹链路追踪 */}
-                                <div style={{ minWidth: 0 }}>
-                                    {rec.evaluationTraceId ? (
-                                        <button
-                                            className="v2-action-btn"
-                                            style={{ maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'ui-monospace, monospace', fontSize: 11, color: '#7E22CE', background: 'transparent', border: 'none', cursor: 'pointer', padding: 0, textAlign: 'left' }}
-                                            title={zh ? '查看评估器轨迹（评测怎么判的）' : 'View evaluator trace'}
-                                            onClick={e => { e.stopPropagation(); window.open(`/trace?taskId=${encodeURIComponent(rec.evaluationTraceId!)}`, '_blank'); }}
-                                            onMouseEnter={e => (e.currentTarget.style.textDecoration = 'underline')}
-                                            onMouseLeave={e => (e.currentTarget.style.textDecoration = 'none')}
-                                        >
-                                            🔎 {rec.evaluationTraceId}
-                                        </button>
-                                    ) : (
-                                        <span style={{ color: '#B8B6AE' }}>—</span>
-                                    )}
+                                {/* 评估 Trace → 评估器轨迹链路追踪。结果分 / 轨迹分 各有一条评估器 session,
+                                    这里分别给「结果」「轨迹」两条链接; 旧数据没拆分时回退单条「评估」。 */}
+                                <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                                    {(() => {
+                                        const links: { label: string; id: string; color: string }[] = [];
+                                        if (rec.trajEvalTraceId) links.push({ label: zh ? '轨迹' : 'Traj', id: rec.trajEvalTraceId, color: '#7E22CE' });
+                                        if (rec.resultEvalTraceId) links.push({ label: zh ? '结果' : 'Result', id: rec.resultEvalTraceId, color: '#185FA5' });
+                                        if (links.length === 0 && rec.evaluationTraceId) links.push({ label: zh ? '评估' : 'Eval', id: rec.evaluationTraceId, color: '#7E22CE' });
+                                        if (links.length === 0) return <span style={{ color: '#B8B6AE' }}>—</span>;
+                                        return links.map(l => (
+                                            <button
+                                                key={l.label}
+                                                className="v2-action-btn"
+                                                style={{ display: 'flex', alignItems: 'center', gap: 4, maxWidth: '100%', overflow: 'hidden', background: 'transparent', border: 'none', cursor: 'pointer', padding: 0, textAlign: 'left' }}
+                                                title={zh ? `查看${l.label}评估器轨迹（评测怎么判的）` : `View ${l.label} evaluator trace`}
+                                                onClick={e => { e.stopPropagation(); window.open(`/trace?taskId=${encodeURIComponent(l.id)}`, '_blank'); }}
+                                                onMouseEnter={e => (e.currentTarget.style.textDecoration = 'underline')}
+                                                onMouseLeave={e => (e.currentTarget.style.textDecoration = 'none')}
+                                            >
+                                                <span style={{ flexShrink: 0, fontSize: 9.5, fontWeight: 700, color: l.color, background: l.color + '14', borderRadius: 3, padding: '0 4px', lineHeight: '15px' }}>{l.label}</span>
+                                                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'ui-monospace, monospace', fontSize: 11, color: l.color }}>{l.id}</span>
+                                            </button>
+                                        ));
+                                    })()}
                                 </div>
 
                                 {/* 评测状态 */}
@@ -242,20 +327,37 @@ export function ExecutionRecordsTable({
                                     {typeof rec.trajScore === 'number' ? Math.round(rec.trajScore) : '—'}
                                 </div>
 
-                                {/* 重试 —— 无论评测与否/成功失败都提供 (重新发起评测) */}
-                                {onRetry && (
-                                    <div style={{ textAlign: 'right' }}>
-                                        <button
-                                            className="v2-action-btn"
-                                            style={{ fontSize: 11, padding: '3px 8px', border: '1px solid #D4D4D8', background: '#fff', borderRadius: 4, cursor: tone === 'running' ? 'not-allowed' : 'pointer', color: tone === 'running' ? '#B8B6AE' : '#52525B', opacity: tone === 'running' ? 0.6 : 1 }}
-                                            disabled={tone === 'running'}
-                                            title={tone === 'running' ? (zh ? '评测/执行进行中…' : 'In progress…') : (zh ? '重新评测这条' : 'Re-evaluate')}
-                                            onClick={e => { e.stopPropagation(); if (tone !== 'running') onRetry(rec); }}
-                                        >
-                                            {zh ? '重试' : 'Retry'}
-                                        </button>
-                                    </div>
-                                )}
+                                {/* 操作：重试(无论成功失败都可) + 删除(进行中禁用) */}
+                                {hasActions && (() => {
+                                    // 进行中(评测中/执行中=running, 排队中=pending) 不允许删除, 避免删掉正在写盘的记录。
+                                    const inProgress = tone === 'running' || tone === 'pending';
+                                    return (
+                                        <div style={{ display: 'flex', gap: 4, justifyContent: 'center' }}>
+                                            {onRetry && (
+                                                <button
+                                                    className="v2-action-btn"
+                                                    style={{ fontSize: 11, padding: '3px 8px', border: '1px solid #D4D4D8', background: '#fff', borderRadius: 4, cursor: tone === 'running' ? 'not-allowed' : 'pointer', color: tone === 'running' ? '#B8B6AE' : '#52525B', opacity: tone === 'running' ? 0.6 : 1 }}
+                                                    disabled={tone === 'running'}
+                                                    title={tone === 'running' ? (zh ? '评测/执行进行中…' : 'In progress…') : (zh ? '重新评测这条' : 'Re-evaluate')}
+                                                    onClick={e => { e.stopPropagation(); if (tone !== 'running') onRetry(rec); }}
+                                                >
+                                                    {zh ? '重试' : 'Retry'}
+                                                </button>
+                                            )}
+                                            {onDelete && (
+                                                <button
+                                                    className="v2-action-btn"
+                                                    style={{ fontSize: 11, padding: '3px 8px', border: '1px solid ' + (inProgress ? '#E7E5E4' : '#F0C5C5'), background: '#fff', borderRadius: 4, cursor: inProgress ? 'not-allowed' : 'pointer', color: inProgress ? '#B8B6AE' : '#DC2626', opacity: inProgress ? 0.6 : 1 }}
+                                                    disabled={inProgress}
+                                                    title={inProgress ? (zh ? '评测/执行进行中，无法删除' : 'In progress, cannot delete') : (zh ? '从评测执行列表删除这条' : 'Delete this record')}
+                                                    onClick={e => { e.stopPropagation(); if (!inProgress) onDelete(rec); }}
+                                                >
+                                                    {zh ? '删除' : 'Delete'}
+                                                </button>
+                                            )}
+                                        </div>
+                                    );
+                                })()}
                             </div>
                         );
                     })}

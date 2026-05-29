@@ -104,7 +104,9 @@ interface TraceRecord {
      * 用例分析列表用这个字段过滤掉系统内部 trace（详见 isInternalSystemAgentTrace）。 */
     agent?: string | null;
     agentName?: string | null;
-    trajectoryScore?: number;
+    trajectoryScore?: number | null;
+    /** 方案A: 后端聚合层算出的统一轨迹分(0-1)，来源最近一次 TrajectoryEvalResult.trajectoryScore。 */
+    trajectory_score?: number | null;
     /** 结果分析（任务完成度评估器）评分，0-1，来源 Execution.answerScore */
     answer_score?: number | null;
     answerScore?: number | null;
@@ -1158,7 +1160,13 @@ function SkillAnalysisPage() {
         if (!user || taskIds.length === 0) return empty;
         // resultRun 是一次入队多条，要么整体成功要么整体失败；trajRun 是逐条独立扇出，
         // 每条都可能有自己的失败原因（如 skill 缺 mermaid 那种 per-trace 的前提缺失）。
-        const resultRun = (async () => {
+        //
+        // 方案A 顺序约定（重要）：先跑「评测」(trajectory/run，写 tool_choice/redundancy 单项分)，
+        // 完成后再跑「analyze-match」。这样 analyze-match 的 persistAlignmentAttribution 作为最后写入者，
+        // 能读到评测器写好的 tool_choice/redundancy，用 alignment 覆盖率当 completeness 走代码侧聚合层
+        // 算出统一轨迹分（0.45/0.35/0.20 + 封顶）。两者并发时会因 last-write-wins 互相覆盖、口径不稳。
+        const resultErrors: string[] = [];
+        try {
             // 透传评测任务关联: 用户在配置区关联了批次时走 append 模式, 不再每次新建批次。
             // 关联后不传 evaluators (后端用批次原配置), 没关联时沿用老逻辑。
             const body: Record<string, unknown> = { user, taskIds };
@@ -1179,8 +1187,11 @@ function SkillAnalysisPage() {
                 const data = await res.json().catch(() => ({}));
                 throw new Error(data?.error || `结果评估入队失败 (HTTP ${res.status})`);
             }
-        })();
-        // 改写：每个 trajectory 任务跑完单独 catch,把错误信息按 taskId 记下来,
+        } catch (e) {
+            resultErrors.push(String(e instanceof Error ? e.message : e));
+        }
+        // 评测入队完成后再跑 analyze-match（轨迹对齐 + Skill 归因 + 统一轨迹分聚合）。
+        // 每个 trajectory 任务跑完单独 catch,把错误信息按 taskId 记下来,
         // 之前 throw + Promise.allSettled 只能拿到错误文本但丢失了对应的 taskId,
         // 导致前端没法精确告诉用户"哪条 trace 的轨迹评测因为什么没跑成"。
         const trajectoryErrors = new Map<string, string>();
@@ -1200,13 +1211,6 @@ function SkillAnalysisPage() {
                 trajectoryErrors.set(id, e instanceof Error ? e.message : '网络/解析错误');
             }
         })());
-        const resultErrors: string[] = [];
-        const resultSettled = await Promise.allSettled([resultRun]);
-        for (const s of resultSettled) {
-            if (s.status === 'rejected') {
-                resultErrors.push(String(s.reason instanceof Error ? s.reason.message : s.reason));
-            }
-        }
         await Promise.all(trajRuns);
         if (resultErrors.length > 0 || trajectoryErrors.size > 0) {
             console.warn('[skill-eval] batch analyze partial failures:', { resultErrors, trajectoryErrors });
@@ -3059,6 +3063,29 @@ function TraceDeviationPanel({
     // 后端进行中的评测，把对应 taskId 补回这个 Map——刷新页面后"评测中"徽章不消失。
     const [triggeredTaskIds, setTriggeredTaskIds] = useState<Map<string, number>>(new Map());
 
+    // 用户在「评测执行」里删除的 trace（taskId）→ 从列表隐藏。后端会一并删掉该 trace 在当前评测任务
+    // 下的 TrajectoryEvalResult 行；但 trace 的 Execution.answer_score / matchJson 仍保留（非破坏性），
+    // 所以这里用 localStorage 记一份"已从评测视图删除"的集合，避免刷新后又凭分数被显示出来。
+    const deletedTracesStorageKey = useMemo(
+        () => (user && skill?.name ? `eval-deleted-traces:${user}:${skill.name}:${version ?? 'all'}` : ''),
+        [user, skill?.name, version],
+    );
+    const [deletedTaskIds, setDeletedTaskIds] = useState<Set<string>>(new Set());
+    useEffect(() => {
+        if (!deletedTracesStorageKey) { setDeletedTaskIds(new Set()); return; }
+        try {
+            const raw = localStorage.getItem(deletedTracesStorageKey);
+            const arr = raw ? JSON.parse(raw) : [];
+            setDeletedTaskIds(new Set(Array.isArray(arr) ? arr.map(String) : []));
+        } catch { setDeletedTaskIds(new Set()); }
+    }, [deletedTracesStorageKey]);
+    const persistDeletedTaskIds = useCallback((next: Set<string>) => {
+        setDeletedTaskIds(next);
+        if (deletedTracesStorageKey) {
+            try { localStorage.setItem(deletedTracesStorageKey, JSON.stringify(Array.from(next))); } catch {/* ignore */}
+        }
+    }, [deletedTracesStorageKey]);
+
     // 自动清理 triggeredTaskIds: 当 trace 的后端 is_evaluating 变成 false (评测真的结束了),
     // 把这条 taskId 从 Map 移除,让 getTraceEvalStatus 不再返回 'pending',UI 自然切回 'done' 或
     // 显示新的分数。否则"已评测的 trace 重新评测后" Map 残留 → 永久卡在"评测中"。
@@ -3504,7 +3531,13 @@ function TraceDeviationPanel({
         }
         return map;
     }, [parsedMatch]);
-    const score = typeof summary.overallScore === 'number'
+    // 方案A: ③ 深度视图的「轨迹分」也统一成聚合分——优先选中 trace 的 trajectoryScore（聚合层产出），
+    // 没有再回退 alignment 覆盖率(summary.overallScore / getTraceFlowScore)。
+    const aggTrajSelected = typeof selectedTrace?.trajectory_score === 'number' ? selectedTrace.trajectory_score
+        : typeof selectedTrace?.trajectoryScore === 'number' ? selectedTrace.trajectoryScore : null;
+    const score = aggTrajSelected != null
+        ? Math.round(aggTrajSelected * 100)
+        : typeof summary.overallScore === 'number'
         ? Math.round(summary.overallScore * 100)
         : selectedTrace ? (getTraceFlowScore(selectedTrace) == null ? null : Math.round(getTraceFlowScore(selectedTrace)! * 100)) : null;
 
@@ -3697,7 +3730,12 @@ function TraceDeviationPanel({
         const r = rRaw == null ? null
             : rRaw <= 1 ? Math.round(rRaw * 100)  // 0-1 normalized
             : Math.round(rRaw);                    // 防御性：已经是 0-100 的兼容
-        const j = getTraceFlowScore(t);
+        // 方案A: 轨迹分统一口径——优先用后端聚合层算出的 trajectoryScore（0.45 完整性 + 0.35 工具
+        // + 0.20 冗余, 再封顶, 其中 完整性=对齐覆盖率），没有(未评测/纯对齐旧数据)再回退 getTraceFlowScore
+        // (matchJson.overallScore = 对齐覆盖率单维)。两者都是 0-1。
+        const aggTraj = typeof t.trajectory_score === 'number' ? t.trajectory_score
+            : typeof t.trajectoryScore === 'number' ? t.trajectoryScore : null;
+        const j = aggTraj != null ? aggTraj : getTraceFlowScore(t);
         return {
             trace: t,
             id: getTraceId(t),
@@ -3739,7 +3777,8 @@ function TraceDeviationPanel({
     // 用户明确要求"无论成功失败都要列出来",所以这里跟 getTraceEvalStatus 解耦,
     // 走"any history" 的口径,避免漏掉 backend 落了 row 但前端 state 算不出非-idle 的 case。
     const displayedTraces = scoredTraces.filter(s =>
-        getTraceEvalStatus(s) !== 'idle' || evaluatedTaskIds.has(s.id)
+        !deletedTaskIds.has(s.id)
+        && (getTraceEvalStatus(s) !== 'idle' || evaluatedTaskIds.has(s.id))
     );
     const fullyEvaluated = scoredTraces.filter(s => s.resultScore != null && s.trajScore != null);
     const avgResult = fullyEvaluated.length === 0 ? null
@@ -4162,7 +4201,57 @@ function TraceDeviationPanel({
                             setCaseResultOpen(true);
                         }
                     }}
-                    onRetry={rec => { onBatchAnalyze?.([rec.id]); }}
+                    onRetry={async rec => {
+                        const id = rec.id;
+                        // 立刻给反馈：把这条标记为"已触发"——getTraceEvalStatus 读 triggeredTaskIds
+                        // 返回 'pending'，行状态徽章随即切到「评测中」(spinner) 且重试按钮置灰，
+                        // 不必等后端 is_evaluating 回报或手动刷新。和 ① 配置块「开始评测」同款。
+                        setTriggeredTaskIds(prev => { const next = new Map(prev); next.set(id, Date.now()); return next; });
+                        // 重试即重来：清掉旧失败标记，别再挂着扰乱状态。
+                        setFailedTaskIds(prev => { if (!prev.has(id)) return prev; const next = new Map(prev); next.delete(id); return next; });
+                        if (!onBatchAnalyze) return;
+                        // onBatchAnalyze 内部已做 30×3s 轮询 reloadTraces，分数会随轮询实时回填。
+                        const failures = await onBatchAnalyze([id]);
+                        if (failures) {
+                            const trajErr = failures.trajectoryErrors?.get(id);
+                            const resultErrAll = (failures.resultErrors || []).join('\n');
+                            if (trajErr || resultErrAll) {
+                                setFailedTaskIds(prev => {
+                                    const next = new Map(prev);
+                                    const parts: string[] = [];
+                                    if (resultErrAll) parts.push(`结果评测：${resultErrAll}`);
+                                    if (trajErr) parts.push(`轨迹评测：${trajErr}`);
+                                    if (parts.length > 0) next.set(id, parts.join('\n'));
+                                    return next;
+                                });
+                            }
+                        }
+                    }}
+                    onDelete={async rec => {
+                        const id = rec.id;
+                        if (typeof window !== 'undefined' && !window.confirm('确定从「评测执行」列表删除这条记录吗？\n该 trace 在当前评测任务下的评测结果会被删除（trace 本身保留，可重新评测）。')) return;
+                        try {
+                            if (user) {
+                                const res = await apiFetch('/api/eval/trajectory/results', {
+                                    method: 'DELETE',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ user, taskId: id, runId: traceEvaluationBatchId || undefined }),
+                                });
+                                if (!res.ok) {
+                                    const data = await res.json().catch(() => ({}));
+                                    alert('删除失败：' + (data?.error || `HTTP ${res.status}`));
+                                    return;
+                                }
+                            }
+                            // 前端隐藏 + 持久化，并从各状态集合移除，避免轮询/恢复又把它显示回来。
+                            const next = new Set(deletedTaskIds); next.add(id); persistDeletedTaskIds(next);
+                            setTriggeredTaskIds(prev => { if (!prev.has(id)) return prev; const m = new Map(prev); m.delete(id); return m; });
+                            setFailedTaskIds(prev => { if (!prev.has(id)) return prev; const m = new Map(prev); m.delete(id); return m; });
+                            setEvaluatedTaskIds(prev => { if (!prev.has(id)) return prev; const ss = new Set(prev); ss.delete(id); return ss; });
+                        } catch (e) {
+                            alert('删除失败：' + (e instanceof Error ? e.message : String(e)));
+                        }
+                    }}
                     records={displayedTraces.map(s => {
                         const st = getTraceEvalStatus(s);
                         const compStatus = st === 'done' ? 'done' : st === 'failed' ? 'failed' : st === 'partial' ? 'partial' : 'running';
@@ -4173,6 +4262,8 @@ function TraceDeviationPanel({
                             caseTitle: s.query || s.id,
                             executionTraceId: s.id,
                             evaluationTraceId: meta?.evaluationTraceId,
+                            resultEvalTraceId: meta?.resultEvalTraceId,
+                            trajEvalTraceId: meta?.trajEvalTraceId,
                             datasetId: meta?.datasetId,
                             evaluatorRunId: traceEvaluationBatchId || undefined,
                             status: compStatus,
@@ -4434,21 +4525,8 @@ function TraceDeviationPanel({
                                         </div>
                                     </section>
 
-                                    <section className="sa-standards-wrap">
-                                        <div className="sa-wrap-head">
-                                            <h3>执行轨迹对齐 · Skill 预期标注</h3>
-                                            <span style={{ color: 'var(--sa-muted)', fontSize: 12 }}>以实际执行为主，直接标注偏离与缺失步骤</span>
-                                        </div>
-                                        <TraceAlignmentPanel
-                                            matches={matches}
-                                            skippedExpectedSteps={skippedExpectedSteps}
-                                            problemByStepKey={problemByStepKey}
-                                            flowSteps={parsedFlow?.steps || []}
-                                            extractedSteps={extractedSteps}
-                                            alignment={parsedMatch?.alignment}
-                                            mermaidCode={matchData.dynamicMermaid}
-                                        />
-                                    </section>
+                                    {/* 「执行轨迹对齐 · Skill 预期标注」面板已迁移到 评测执行 → 轨迹评测
+                                        (TrajectoryDetailView)。这里不再重复展示，避免两处口径分裂。 */}
 
                                     {/* ───── Skill 归因分析（由 alignment 派生） ─────
                                         这是进入 skill-opt 优化输入的诊断结果，事实源与上方流程对齐一致 */}
@@ -5983,636 +6061,6 @@ function TrajectoryMatchGroup({
                 </div>
             )}
         </article>
-    );
-}
-
-function FlowBox({ title, subtitle, code }: { title: string; subtitle?: string; code?: string }) {
-    return (
-        <div className="sa-flow-box">
-            <h4>{title}{subtitle && <small>{subtitle}</small>}</h4>
-            <div className="sa-mermaid-wrap">
-                {code ? <MermaidRenderer code={code} /> : <span>暂无流程图</span>}
-            </div>
-        </div>
-    );
-}
-
-type AlignmentStatus = 'matched' | 'partial' | 'unexpected' | 'delegated' | 'non_business' | 'skipped';
-
-interface AlignmentNode {
-    key: string;
-    kind: 'actual' | 'skipped';
-    status: AlignmentStatus;
-    actualStepIndex?: number;
-    actualAction?: string;
-    expectedStepId?: string;
-    expectedStepName?: string;
-    expectedIndex?: number;
-    reason?: string;
-    problem?: string;
-    suggestion?: string;
-    extracted?: ExtractedTraceStep;
-    violation?: AlignmentViolation;
-    skillSpanLabels?: string[];
-    evidenceInteractionIndexes?: number[];
-}
-
-const ALIGNMENT_STATUS_LABEL: Record<AlignmentStatus, string> = {
-    matched: '符合预期',
-    partial: '部分偏离',
-    unexpected: '非预期调用',
-    delegated: '子 Skill',
-    non_business: '过渡操作',
-    skipped: 'Skill 步骤缺失',
-};
-
-function TraceAlignmentPanel({
-    matches,
-    skippedExpectedSteps,
-    problemByStepKey,
-    flowSteps,
-    extractedSteps,
-    alignment,
-    mermaidCode,
-}: {
-    matches: StepMatch[];
-    skippedExpectedSteps: SkippedExpectedStep[];
-    problemByStepKey: Map<string, ProblemStep>;
-    flowSteps: FlowStep[];
-    extractedSteps: ExtractedTraceStep[];
-    alignment?: TraceSkillAlignment;
-    mermaidCode?: string;
-}) {
-    const nodes = useMemo(
-        () => alignment && Array.isArray(alignment.mappings) && alignment.mappings.length > 0
-            ? buildAlignmentNodesFromStructuredAlignment(alignment, problemByStepKey, flowSteps, extractedSteps)
-            : buildAlignmentNodes(matches, skippedExpectedSteps, problemByStepKey, flowSteps, extractedSteps),
-        [alignment, matches, skippedExpectedSteps, problemByStepKey, flowSteps, extractedSteps],
-    );
-    const [selectedKey, setSelectedKey] = useState<string | null>(null);
-    const [showRawFlow, setShowRawFlow] = useState(false);
-    const selectedNode = nodes.find(node => node.key === selectedKey)
-        || nodes.find(node => node.status !== 'matched' && node.status !== 'delegated' && node.status !== 'non_business')
-        || nodes[0]
-        || null;
-
-    const counts = useMemo(() => ({
-        matched: nodes.filter(node => node.kind === 'actual' && node.status === 'matched').length,
-        partial: nodes.filter(node => node.kind === 'actual' && node.status === 'partial').length,
-        unexpected: nodes.filter(node => node.kind === 'actual' && node.status === 'unexpected').length,
-        delegated: nodes.filter(node => node.kind === 'actual' && node.status === 'delegated').length,
-        nonBusiness: nodes.filter(node => node.kind === 'actual' && node.status === 'non_business').length,
-        skipped: nodes.filter(node => node.kind === 'skipped').length,
-        actualTotal: nodes.filter(node => node.kind === 'actual').length,
-    }), [nodes]);
-    const skillSpans = Array.isArray(alignment?.skillSpans)
-        ? [...alignment.skillSpans].sort((a, b) => {
-            if (a.trigger === 'primary' && b.trigger !== 'primary') return -1;
-            if (a.trigger !== 'primary' && b.trigger === 'primary') return 1;
-            return a.startActualStepIndex - b.startActualStepIndex;
-        })
-        : [];
-    if (nodes.length === 0) {
-        return (
-            <div className="sa-alignment-empty">
-                暂无可对齐步骤。可以点击右上角重试，生成实际执行步骤与 Skill 预期的匹配结果。
-            </div>
-        );
-    }
-
-    return (
-        <div className="sa-alignment">
-            <div className="sa-alignment-summary" aria-label="轨迹诊断摘要">
-                <div className="sa-alignment-summary-main">
-                    <b>{counts.actualTotal}</b>
-                    <span>个实际步骤</span>
-                </div>
-                <div className="sa-alignment-metrics">
-                    <AlignmentMetric status="matched" value={counts.matched} label="符合预期" />
-                    <AlignmentMetric status="partial" value={counts.partial} label="部分偏离" />
-                    <AlignmentMetric status="unexpected" value={counts.unexpected} label="非预期调用" />
-                    <AlignmentMetric status="delegated" value={counts.delegated} label="子 Skill" />
-                    <AlignmentMetric status="non_business" value={counts.nonBusiness} label="过渡操作" />
-                    <AlignmentMetric status="skipped" value={counts.skipped} label="缺失步骤" />
-                </div>
-            </div>
-
-            <div className="sa-alignment-body">
-                <div className="sa-alignment-timeline" aria-label="执行轨迹对齐图">
-                    {skillSpans.length > 0 && (
-                        <div className="sa-align-span-summary">
-                            {skillSpans.map((span, index) => (
-                                <span key={`${span.skillName}-${index}`}>
-                                    {formatSkillSpanLabel(span)}
-                                    <small>步骤 #{span.startActualStepIndex} - #{span.endActualStepIndex}</small>
-                                </span>
-                            ))}
-                        </div>
-                    )}
-                    {nodes.map((node, index) => (
-                        <TraceAlignmentNode
-                            key={node.key}
-                            node={node}
-                            position={index + 1}
-                            selected={selectedNode?.key === node.key}
-                            onSelect={() => setSelectedKey(node.key)}
-                        />
-                    ))}
-                </div>
-                <AlignmentDetail node={selectedNode} />
-            </div>
-
-            {mermaidCode && (
-                <div className="sa-alignment-raw">
-                    <button className="sa-mini-action" onClick={() => setShowRawFlow(v => !v)}>
-                        {showRawFlow ? '收起原始流程图' : '查看原始流程图'}
-                    </button>
-                    {showRawFlow && (
-                        <div className="sa-flow-grid single">
-                            <FlowBox title="原始流程图" subtitle="保留用于排查与回退" code={mermaidCode} />
-                        </div>
-                    )}
-                </div>
-            )}
-        </div>
-    );
-}
-
-function AlignmentMetric({ status, value, label }: { status: AlignmentStatus; value: number; label: string }) {
-    return (
-        <div className={`sa-alignment-metric ${status}`}>
-            <b>{value}</b>
-            <span>{label}</span>
-        </div>
-    );
-}
-
-function TraceAlignmentNode({
-    node,
-    position,
-    selected,
-    onSelect,
-}: {
-    node: AlignmentNode;
-    position: number;
-    selected: boolean;
-    onSelect: () => void;
-}) {
-    const title = node.kind === 'skipped'
-        ? node.expectedStepName || '未执行的 Skill 步骤'
-        : node.actualAction || `实际步骤 #${node.actualStepIndex ?? position}`;
-    const subtitle = node.kind === 'skipped'
-        ? 'Skill 规定了该步骤，但实际轨迹没有覆盖'
-        : node.status === 'delegated' && node.skillSpanLabels?.length
-            ? `子 Skill：${node.skillSpanLabels.join('、')}，不参与主 Skill 内容匹配`
-            : node.status === 'non_business'
-            ? '上下文收集或流程衔接动作，不参与主 Skill 业务评分'
-            : node.expectedStepName
-            ? `对齐 Skill：${node.expectedStepName}`
-            : '未匹配到 Skill 预期步骤';
-    return (
-        <button className={`sa-align-node ${node.status} ${selected ? 'selected' : ''}`} onClick={onSelect}>
-            <span className="sa-align-rail">
-                <span className="sa-align-dot">{statusGlyph(node.status)}</span>
-            </span>
-            <span className="sa-align-card">
-                <span className="sa-align-card-head">
-                    <span className="sa-align-index">
-                        {node.kind === 'skipped' ? 'Skill' : `#${node.actualStepIndex ?? position}`}
-                    </span>
-                    <span className={`sa-align-status ${node.status}`}>{ALIGNMENT_STATUS_LABEL[node.status]}</span>
-                    {node.skillSpanLabels?.map((label, index) => (
-                        <span key={`${label}-${index}`} className="sa-align-skill-chip">{label}</span>
-                    ))}
-                </span>
-                <b>{title}</b>
-                <small>{subtitle}</small>
-                {node.problem && <em>{node.problem}</em>}
-            </span>
-        </button>
-    );
-}
-
-function AlignmentDetail({ node }: { node: AlignmentNode | null }) {
-    if (!node) {
-        return (
-            <aside className="sa-align-detail">
-                <b>步骤详情</b>
-                <p>选择左侧步骤查看实际行为、Skill 预期和偏离建议。</p>
-            </aside>
-        );
-    }
-
-    return (
-        <aside className={`sa-align-detail ${node.status}`}>
-            <div className="sa-align-detail-head">
-                <span className={`sa-align-status ${node.status}`}>{ALIGNMENT_STATUS_LABEL[node.status]}</span>
-                <b>{node.kind === 'skipped' ? node.expectedStepName : node.actualAction}</b>
-            </div>
-            <dl>
-                {node.actualStepIndex != null && (
-                    <>
-                        <dt>实际位置</dt>
-                        <dd>Trace 步骤 #{node.actualStepIndex}</dd>
-                    </>
-                )}
-                {node.expectedStepName && (
-                    <>
-                        <dt>Skill 预期</dt>
-                        <dd>{node.expectedStepName}</dd>
-                    </>
-                )}
-                {node.extracted?.description && (
-                    <>
-                        <dt>实际描述</dt>
-                        <dd>{node.extracted.description}</dd>
-                    </>
-                )}
-                {node.skillSpanLabels && node.skillSpanLabels.length > 0 && (
-                    <>
-                        <dt>Skill 区间</dt>
-                        <dd>{node.skillSpanLabels.join('、')}</dd>
-                    </>
-                )}
-                {node.problem && (
-                    <>
-                        <dt>偏离问题</dt>
-                        <dd>{node.problem}</dd>
-                    </>
-                )}
-                {node.suggestion && (
-                    <>
-                        <dt>建议</dt>
-                        <dd>{node.suggestion}</dd>
-                    </>
-                )}
-                {node.evidenceInteractionIndexes && node.evidenceInteractionIndexes.length > 0 && (
-                    <>
-                        <dt>证据位置</dt>
-                        <dd>Trace 步骤 #{node.evidenceInteractionIndexes.join(', #')}</dd>
-                    </>
-                )}
-            </dl>
-        </aside>
-    );
-}
-
-function buildAlignmentNodesFromStructuredAlignment(
-    alignment: TraceSkillAlignment,
-    problemByStepKey: Map<string, ProblemStep>,
-    flowSteps: FlowStep[],
-    extractedSteps: ExtractedTraceStep[],
-): AlignmentNode[] {
-    const mappings = Array.isArray(alignment.mappings) ? alignment.mappings : [];
-    const actualSteps = Array.isArray(alignment.actualSteps) ? alignment.actualSteps : [];
-    const skipped = Array.isArray(alignment.skippedExpectedSteps) ? alignment.skippedExpectedSteps : [];
-    const violations = Array.isArray(alignment.violations) ? alignment.violations : [];
-    const spans = Array.isArray(alignment.skillSpans) ? alignment.skillSpans : [];
-    const expectedIndexById = new Map(flowSteps.map((step, index) => [step.id, index]));
-    const actualByIndex = new Map(actualSteps.map(step => [step.index, step]));
-
-    const nodes: AlignmentNode[] = mappings
-        .slice()
-        .sort((a, b) => a.actualStepIndex - b.actualStepIndex)
-        .map((mapping, index) => {
-            const actual = actualByIndex.get(mapping.actualStepIndex);
-            const violation = findViolationForMapping(violations, mapping);
-            const fallbackProblem = problemByStepKey.get(`actual:${mapping.actualStepIndex}`)
-                || problemByStepKey.get(`name:${mapping.expectedStepName || ''}`)
-                || problemByStepKey.get(`name:${actual?.action || ''}`);
-            const extracted = actual
-                ? {
-                    name: actual.action,
-                    description: actual.description,
-                    dialogStartIndex: actual.dialogStartIndex,
-                    dialogEndIndex: actual.dialogEndIndex,
-                    type: actual.type,
-                }
-                : findExtractedStep(extractedSteps, mapping.actualStepIndex);
-            return {
-                key: `alignment-actual-${mapping.actualStepIndex}-${index}`,
-                kind: 'actual',
-                status: mapping.status,
-                actualStepIndex: mapping.actualStepIndex,
-                actualAction: actual?.action || `实际步骤 #${mapping.actualStepIndex}`,
-                expectedStepId: mapping.expectedStepId,
-                expectedStepName: mapping.expectedStepName,
-                expectedIndex: mapping.expectedStepId ? expectedIndexById.get(mapping.expectedStepId) : undefined,
-                reason: mapping.reason,
-                problem: violation?.problem || fallbackProblem?.problem,
-                suggestion: violation?.suggestion || fallbackProblem?.suggestion,
-                extracted,
-                violation,
-                skillSpanLabels: spans
-                    .filter(span => span.trigger !== 'primary' && mapping.actualStepIndex >= span.startActualStepIndex && mapping.actualStepIndex <= span.endActualStepIndex)
-                    .map(formatSkillSpanLabel)
-                    .filter((label, labelIndex, labels) => labels.indexOf(label) === labelIndex),
-                evidenceInteractionIndexes: violation?.evidenceInteractionIndexes,
-            };
-        });
-
-    const skippedNodes = skipped
-        .slice()
-        .sort((a, b) => (expectedIndexById.get(a.expectedStepId) ?? Number.MAX_SAFE_INTEGER) - (expectedIndexById.get(b.expectedStepId) ?? Number.MAX_SAFE_INTEGER))
-        .map((step, index): AlignmentNode => {
-            const violation = violations.find(v => v.kind === 'skipped' && (v.expectedStepId === step.expectedStepId || v.expectedStepName === step.expectedStepName));
-            const fallbackProblem = problemByStepKey.get(`name:${step.expectedStepName}`);
-            return {
-                key: `alignment-skipped-${step.expectedStepId}-${index}`,
-                kind: 'skipped',
-                status: 'skipped',
-                expectedStepId: step.expectedStepId,
-                expectedStepName: step.expectedStepName,
-                expectedIndex: expectedIndexById.get(step.expectedStepId),
-                problem: violation?.problem || fallbackProblem?.problem,
-                suggestion: violation?.suggestion || fallbackProblem?.suggestion,
-                violation,
-                evidenceInteractionIndexes: violation?.evidenceInteractionIndexes,
-            };
-        });
-
-    return insertSkippedNodes(nodes, skippedNodes);
-}
-
-function buildAlignmentNodes(
-    matches: StepMatch[],
-    skippedExpectedSteps: SkippedExpectedStep[],
-    problemByStepKey: Map<string, ProblemStep>,
-    flowSteps: FlowStep[],
-    extractedSteps: ExtractedTraceStep[],
-): AlignmentNode[] {
-    const expectedIndexById = new Map(flowSteps.map((step, index) => [step.id, index]));
-    const actualNodes: AlignmentNode[] = matches
-        .filter(match => match.matchStatus !== 'skipped')
-        .slice()
-        .sort((a, b) => (a.actualStepIndex ?? 0) - (b.actualStepIndex ?? 0))
-        .map((match, index) => {
-            const actualStepIndex = match.actualStepIndex ?? index;
-            const problem = problemByStepKey.get(`actual:${match.actualStepIndex}`)
-                || problemByStepKey.get(`name:${match.expectedStepName || ''}`)
-                || problemByStepKey.get(`name:${match.actualAction}`);
-            return {
-                key: `actual-${actualStepIndex}-${index}`,
-                kind: 'actual',
-                status: match.matchStatus,
-                actualStepIndex,
-                actualAction: match.actualAction,
-                expectedStepId: match.expectedStepId,
-                expectedStepName: match.expectedStepName,
-                expectedIndex: match.expectedStepId ? expectedIndexById.get(match.expectedStepId) : undefined,
-                reason: match.matchReason,
-                problem: problem?.problem,
-                suggestion: problem?.suggestion,
-                extracted: findExtractedStep(extractedSteps, actualStepIndex),
-            };
-        });
-
-    const skippedNodes = skippedExpectedSteps
-        .slice()
-        .sort((a, b) => (expectedIndexById.get(a.expectedStepId) ?? Number.MAX_SAFE_INTEGER) - (expectedIndexById.get(b.expectedStepId) ?? Number.MAX_SAFE_INTEGER))
-        .map((step, index): AlignmentNode => {
-            const problem = problemByStepKey.get(`name:${step.expectedStepName}`);
-            return {
-                key: `skipped-${step.expectedStepId}-${index}`,
-                kind: 'skipped',
-                status: 'skipped',
-                expectedStepId: step.expectedStepId,
-                expectedStepName: step.expectedStepName,
-                expectedIndex: expectedIndexById.get(step.expectedStepId),
-                problem: problem?.problem,
-                suggestion: problem?.suggestion,
-            };
-        });
-
-    return insertSkippedNodes(actualNodes, skippedNodes);
-}
-
-function insertSkippedNodes(actualNodes: AlignmentNode[], skippedNodes: AlignmentNode[]) {
-    const nodes: AlignmentNode[] = [...actualNodes];
-    for (const skipped of skippedNodes) {
-        if (skipped.expectedIndex == null) {
-            nodes.push(skipped);
-            continue;
-        }
-        const insertBefore = nodes.findIndex(node => node.expectedIndex != null && node.expectedIndex > skipped.expectedIndex!);
-        if (insertBefore >= 0) {
-            nodes.splice(insertBefore, 0, skipped);
-            continue;
-        }
-        let insertAfter = -1;
-        nodes.forEach((node, index) => {
-            if (node.expectedIndex != null && node.expectedIndex <= skipped.expectedIndex!) insertAfter = index;
-        });
-        nodes.splice(insertAfter + 1, 0, skipped);
-    }
-
-    return nodes;
-}
-
-function findViolationForMapping(violations: AlignmentViolation[], mapping: AlignmentMapping) {
-    return violations.find(violation => {
-        if (violation.actualStepIndex != null && violation.actualStepIndex === mapping.actualStepIndex) return true;
-        if (violation.expectedStepId && violation.expectedStepId === mapping.expectedStepId) return true;
-        return !!violation.expectedStepName && violation.expectedStepName === mapping.expectedStepName;
-    });
-}
-
-function formatSkillSpanLabel(span: AlignmentSkillSpan) {
-    return span.version != null ? `${span.skillName} v${span.version}` : span.skillName;
-}
-
-function findExtractedStep(extractedSteps: ExtractedTraceStep[], actualStepIndex: number) {
-    const byUiIndex = extractedSteps.find(step => step.uiStepIndex === actualStepIndex);
-    if (byUiIndex) return byUiIndex;
-    return extractedSteps.find(step => {
-        const start = step.dialogStartIndex;
-        const end = step.dialogEndIndex;
-        return typeof start === 'number' && typeof end === 'number' && start <= actualStepIndex && end >= actualStepIndex;
-    });
-}
-
-function statusGlyph(status: AlignmentStatus) {
-    if (status === 'matched') return '✓';
-    if (status === 'partial') return '!';
-    if (status === 'unexpected') return '×';
-    if (status === 'delegated') return 'S';
-    if (status === 'non_business') return '~';
-    return '−';
-}
-
-function MermaidRenderer({ code }: { code: string }) {
-    const [svg, setSvg] = useState('');
-    const [error, setError] = useState('');
-    const [scale, setScale] = useState(1);
-    const [baseSize, setBaseSize] = useState<{ width: number; height: number } | null>(null);
-    const [fullscreen, setFullscreen] = useState(false);
-    const [renderId] = useState(() => `sa-mermaid-${Math.random().toString(36).slice(2)}`);
-    const viewportRef = useRef<HTMLDivElement | null>(null);
-    const fullscreenViewportRef = useRef<HTMLDivElement | null>(null);
-    const contentRef = useRef<HTMLDivElement | null>(null);
-    const fullscreenContentRef = useRef<HTMLDivElement | null>(null);
-    const userAdjustedZoomRef = useRef(false);
-
-    useEffect(() => {
-        let cancelled = false;
-        setSvg('');
-        setError('');
-        setScale(1);
-        setBaseSize(null);
-        userAdjustedZoomRef.current = false;
-        import('mermaid')
-            .then(mod => {
-                const mermaid = mod.default;
-                mermaid.initialize({
-                    startOnLoad: false,
-                    theme: 'base',
-                    themeVariables: {
-                        primaryColor: '#ffffff',
-                        primaryTextColor: '#18181b',
-                        primaryBorderColor: '#d4d4d8',
-                        lineColor: '#71717a',
-                        fontFamily: 'system-ui, -apple-system, sans-serif',
-                        fontSize: '12px',
-                    },
-                    flowchart: { curve: 'basis', padding: 8, nodeSpacing: 18, rankSpacing: 18 },
-                });
-                return mermaid.render(`${renderId}-${Date.now()}`, code);
-            })
-            .then(({ svg }) => {
-                if (!cancelled) setSvg(svg);
-            })
-            .catch(() => {
-                if (!cancelled) setError('流程图渲染失败');
-            });
-        return () => { cancelled = true; };
-    }, [code]);
-
-    const clampScale = useCallback((value: number) => Math.max(0.35, Math.min(2.5, value)), []);
-
-    const fitScaleFor = useCallback((target: HTMLDivElement | null, width: number) => {
-        if (!target || width <= 0) return 1;
-        const available = Math.max(160, target.clientWidth - 24);
-        return clampScale(available / width);
-    }, [clampScale]);
-
-    const measureSvg = useCallback((root: HTMLDivElement | null) => {
-        const svgEl = root?.querySelector('svg');
-        if (!svgEl) return null;
-        const viewBox = svgEl.getAttribute('viewBox')?.split(/\s+/).map(Number);
-        const width = viewBox && viewBox.length === 4 && Number.isFinite(viewBox[2])
-            ? viewBox[2]
-            : svgEl.getBoundingClientRect().width;
-        const height = viewBox && viewBox.length === 4 && Number.isFinite(viewBox[3])
-            ? viewBox[3]
-            : svgEl.getBoundingClientRect().height;
-        if (width <= 0 || height <= 0) return null;
-        return { width, height };
-    }, []);
-
-    useEffect(() => {
-        if (!svg) return;
-        const frame = window.requestAnimationFrame(() => {
-            const activeContent = fullscreen ? fullscreenContentRef.current : contentRef.current;
-            const activeViewport = fullscreen ? fullscreenViewportRef.current : viewportRef.current;
-            const measured = measureSvg(activeContent);
-            if (!measured) return;
-            setBaseSize(measured);
-            if (!userAdjustedZoomRef.current) {
-                setScale(fitScaleFor(activeViewport, measured.width));
-            }
-        });
-        return () => window.cancelAnimationFrame(frame);
-    }, [fitScaleFor, fullscreen, measureSvg, svg]);
-
-    useEffect(() => {
-        if (!baseSize || !svg || userAdjustedZoomRef.current) return;
-        const target = fullscreen ? fullscreenViewportRef.current : viewportRef.current;
-        if (!target || typeof ResizeObserver === 'undefined') return;
-        const observer = new ResizeObserver(() => {
-            if (!userAdjustedZoomRef.current) {
-                setScale(fitScaleFor(target, baseSize.width));
-            }
-        });
-        observer.observe(target);
-        return () => observer.disconnect();
-    }, [baseSize, fitScaleFor, fullscreen, svg]);
-
-    useEffect(() => {
-        if (!fullscreen) return;
-        const onKeyDown = (event: KeyboardEvent) => {
-            if (event.key === 'Escape') setFullscreen(false);
-        };
-        window.addEventListener('keydown', onKeyDown);
-        return () => window.removeEventListener('keydown', onKeyDown);
-    }, [fullscreen]);
-
-    const setZoom = useCallback((next: number) => {
-        userAdjustedZoomRef.current = true;
-        setScale(clampScale(Math.round(next * 100) / 100));
-    }, [clampScale]);
-
-    const fitWidth = useCallback((target: HTMLDivElement | null) => {
-        if (!target || !baseSize?.width) return;
-        userAdjustedZoomRef.current = true;
-        setScale(fitScaleFor(target, baseSize.width));
-    }, [baseSize, fitScaleFor]);
-
-    const renderControls = (targetRef: React.RefObject<HTMLDivElement | null>, isFullscreen = false) => (
-        <div className="sa-mermaid-tools" aria-label="流程图查看器工具栏">
-            <button onClick={() => setZoom(scale - 0.1)} title="缩小">-</button>
-            <button onClick={() => setZoom(scale + 0.1)} title="放大">+</button>
-            <button onClick={() => setZoom(1)} title="恢复 100%">100%</button>
-            <button onClick={() => fitWidth(targetRef.current)} title="适应宽度">适应宽度</button>
-            {!isFullscreen && <button onClick={() => setFullscreen(true)} title="全屏查看">全屏</button>}
-            <span>{Math.round(scale * 100)}%</span>
-        </div>
-    );
-
-    const renderViewport = (
-        targetRef: React.RefObject<HTMLDivElement | null>,
-        targetContentRef: React.RefObject<HTMLDivElement | null>,
-        isFullscreen = false,
-    ) => (
-        <>
-            {renderControls(targetRef, isFullscreen)}
-            <div className={`sa-mermaid-viewport ${isFullscreen ? 'fullscreen' : ''}`} ref={targetRef}>
-                <div
-                    className="sa-mermaid-stage"
-                    style={{
-                        width: baseSize ? `${baseSize.width * scale}px` : undefined,
-                        height: baseSize ? `${baseSize.height * scale}px` : undefined,
-                    }}
-                >
-                    <div
-                        ref={targetContentRef}
-                        className="sa-mermaid"
-                        style={{
-                            width: baseSize ? `${baseSize.width}px` : undefined,
-                            height: baseSize ? `${baseSize.height}px` : undefined,
-                            transform: `scale(${scale})`,
-                        }}
-                        dangerouslySetInnerHTML={{ __html: svg }}
-                    />
-                </div>
-            </div>
-        </>
-    );
-
-    if (error) return <span>{error}</span>;
-    if (!svg) return <span>正在渲染流程图...</span>;
-    return (
-        <>
-            {renderViewport(viewportRef, contentRef)}
-            {fullscreen && (
-                <div className="sa-mermaid-fullscreen" role="dialog" aria-modal="true" aria-label="流程图全屏查看器">
-                    <div className="sa-mermaid-fullscreen-head">
-                        <b>流程图查看器</b>
-                        <button onClick={() => setFullscreen(false)}>关闭</button>
-                    </div>
-                    {renderViewport(fullscreenViewportRef, fullscreenContentRef, true)}
-                </div>
-            )}
-        </>
     );
 }
 

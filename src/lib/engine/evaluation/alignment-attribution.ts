@@ -3,6 +3,7 @@ import { getProxyConfig } from '@/lib/ingest/proxy-config';
 import { getActiveConfig } from '@/lib/storage/server-config';
 import { prismaRaw as prisma } from '@/lib/storage/prisma';
 import { deriveAndPersistOptPoints } from '@/lib/engine/evaluation/derive-skill-opt-points';
+import { aggregateTrajectoryScore, type TrajectoryDeviationStep } from '@/lib/engine/evaluation/trajectory-evaluator';
 import type {
   ExecutionMatchResult,
   TraceSkillAlignment,
@@ -101,6 +102,25 @@ export async function persistAlignmentAttribution(
     arrayOrEmpty<string>(existingRaw?.selectedEvaluatorNames),
     ['Alignment Skill 归因'],
   );
+  // ── 方案A：统一轨迹分口径 ──────────────────────────────────────────────
+  // 若该行已被轨迹质量评估器写入了 tool_choice / redundancy 单项分（existingRaw.dimension_scores），
+  // 则把 alignment 覆盖率作为 completeness，走代码侧聚合层算统一轨迹分（0.45/0.35/0.20 + 严重度封顶），
+  // 与 dataset 模式同一口径；否则（纯轨迹分析模式，没跑评估器）保持 alignment 即轨迹分（旧行为）。
+  const llmDims = readLlmToolRedundancy(existingRaw);
+  let trajectoryScore: number | null = score;
+  let dimensionScoresPayload: Record<string, unknown> = {
+    alignment: score,
+    attribution: candidates.length === 0 ? 1 : null,
+  };
+  let scoreAggregation: ReturnType<typeof aggregateTrajectoryScore>['cap'] | null = null;
+  if (typeof score === 'number' && llmDims) {
+    const dims = { completeness: score, toolChoice: llmDims.toolChoice, redundancy: llmDims.redundancy };
+    const agg = aggregateTrajectoryScore(dims, deviationSteps as unknown as TrajectoryDeviationStep[]);
+    trajectoryScore = agg.trajectoryScore;
+    dimensionScoresPayload = dims;
+    scoreAggregation = agg.cap;
+  }
+
   const rawAnalysis = {
     ...existingRaw,
     selectedEvaluators,
@@ -108,9 +128,9 @@ export async function persistAlignmentAttribution(
     comparisonMode: 'alignment',
     skillAttribution: {
       state: 'ok',
-      message: candidates.length > 0
-        ? `基于轨迹对齐 alignment 派生 ${candidates.length} 条归因候选`
-        : '轨迹对齐未发现需要归因的偏离',
+      // 有候选时不再显示"派生 N 条归因候选"这句计数提示（与下方实际归因问题/改进建议重复，措辞也偏术语）。
+      // 无候选时保留一句直白说明，告诉用户这条 trace 没发现需要归因的偏离。
+      message: candidates.length > 0 ? '' : '轨迹对齐未发现需要归因的偏离',
     },
     alignmentAttribution: {
       source: 'alignment',
@@ -120,16 +140,24 @@ export async function persistAlignmentAttribution(
       findings: deviationSteps,
     },
     deviation_steps: deviationSteps,
+    // 方案A：把 completeness 标成对齐覆盖率，并落 score_aggregation 给前端展示封顶。
+    ...(scoreAggregation
+      ? {
+          score_aggregation: scoreAggregation,
+          dimension_scores: {
+            ...(existingRaw && typeof existingRaw === 'object' ? (existingRaw as Record<string, unknown>).dimension_scores as object : {}),
+            completeness: score,
+          },
+          completeness_source: 'analyze-match-alignment',
+        }
+      : {}),
   };
 
   const data = {
     status: 'done',
     errorMessage: null,
-    trajectoryScore: score,
-    dimensionScoresJson: JSON.stringify({
-      alignment: score,
-      attribution: candidates.length === 0 ? 1 : null,
-    }),
+    trajectoryScore,
+    dimensionScoresJson: JSON.stringify(dimensionScoresPayload),
     deviationStepsJson: JSON.stringify(deviationSteps),
     rootCauseStep: rootCauseFromCandidates(deviationSteps),
     reasonText: candidates.length > 0
@@ -361,6 +389,20 @@ function parseJsonLoose(text: string): Record<string, unknown> | null {
 
 function arrayOrEmpty<T>(value: unknown): T[] {
   return Array.isArray(value) ? value as T[] : [];
+}
+
+/**
+ * 从该行已有 rawAnalysis 里读出轨迹质量评估器写的 tool_choice / redundancy 单项分。
+ * 只有两者都是有限数字才返回（说明评估器确实跑过），否则返回 null → 回退到 alignment 即轨迹分。
+ */
+function readLlmToolRedundancy(raw: Record<string, unknown> | null | undefined): { toolChoice: number; redundancy: number } | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const ds = (raw.dimension_scores ?? (raw as Record<string, unknown>).dimensionScores) as Record<string, unknown> | undefined;
+  if (!ds || typeof ds !== 'object') return null;
+  const tc = Number(ds.tool_choice ?? (ds as Record<string, unknown>).toolChoice);
+  const rd = Number(ds.redundancy);
+  if (!Number.isFinite(tc) || !Number.isFinite(rd)) return null;
+  return { toolChoice: tc, redundancy: rd };
 }
 
 function mergeStrings(a: string[], b: string[]): string[] {

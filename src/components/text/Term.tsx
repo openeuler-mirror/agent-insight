@@ -58,7 +58,9 @@ export function Term({
       badgeTone={badgeTone}
       className={className}
     >
-      {render === 'compact' ? null : <span>{display}</span>}
+      {/* compact = 只显示 i 角标：传空 fragment（而非 null），避免 TermPopover 的
+          `children ?? term` 回退把术语名又印一遍（会和外部已有的标签重复）。 */}
+      {render === 'compact' ? <></> : <span>{display}</span>}
     </TermPopover>
   );
 }
