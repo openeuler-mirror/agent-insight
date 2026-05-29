@@ -36,11 +36,12 @@
 - `tool_systemic`
 - `early_fatal`
 
-短路规则：
+预检规则：
 
-- 如果 `shortCircuited=true`，`phase1Grid` 和 `issues` 为空数组。
-- 如果 `shortCircuited=true`，仍然返回 `rootCause`，通常是 `system`。
-- 如果 `shortCircuited=false`，继续正常认知诊断。
+- `triage.fatalDiagnosis` 表示静态预检命中的系统风险，不等于最终关键发现。
+- 静态预检命中后也必须继续正常认知诊断，`phase1Grid` 和 `issues` 仍应包含后续 Phase 1 的完整发现。
+- 只有输入 trace 完全无法解析、诊断脚本自身失败、或没有足够数据继续分析时，才允许 `shortCircuited=true`。
+- 若 `shortCircuited=true`，必须在 `fatalDiagnosis.summary` 中清楚说明“为什么无法继续分析”，不能只写泛化句子。
 
 示例：
 

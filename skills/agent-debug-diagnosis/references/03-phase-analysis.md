@@ -2,24 +2,26 @@
 
 本文定义完整诊断阶段。脚本负责确定性阶段，智能诊断 agent 负责语义补充与根因归因。
 
-## Phase 0：致命故障预检
+## Phase 0：系统风险预检
 
-Phase 0 的目标是判断本次执行是否在有效认知过程展开前就被系统性问题打断。
+Phase 0 的目标是提前标记可能影响诊断的系统风险，而不是决定是否跳过后续认知诊断。
 
-短路条件示例：
+系统风险示例：
 
-- 连续认证失败，例如多个 step 出现 401、Unauthorized、AuthError。
+- 连续认证失败，例如多个 step 出现 `HTTP 401`、`401 Unauthorized`、`Unauthorized`、`AuthError`、`authentication failed`。
 - 上下文溢出或输出长度限制导致后续步骤无法继续。
 - 同一基础工具连续系统性不可用，且不是 Agent 参数误用。
 - 任务很早就被用户或系统取消。
 
-不要短路的情况：
+不要直接判为系统风险的情况：
 
 - `tree: command not found` 这类命令选择问题，通常属于 Action 或 Planning。
 - `No such file` 这类路径问题，通常属于 Action 或 Memory/Planning 的下游。
+- 普通业务日志、文件名、路径、日期里出现的 `401` 字符串，例如 `20260401`，不是 HTTP 401。
+- 被诊断对象日志里的 `HTTP login failed` 等业务事件，不等于诊断工具自己的认证失败。
 - 单次工具失败后 Agent 仍有机会修正。
 
-脚本会先输出 `triage`。如果 `triage.shortCircuited=true`，不要补造 Memory/Reflection/Planning/Action 问题，直接生成系统性根因报告。
+脚本会先输出 `triage`。`triage.fatalDiagnosis` 是静态预检提示，不是最终结论。即使命中了系统性风险，也必须继续完整执行 Memory、Reflection、Planning、Action、System 的 Phase 1 检测和 Phase 2 关键发现归因。
 
 ## Phase 1：模块级检测
 
