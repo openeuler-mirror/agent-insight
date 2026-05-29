@@ -977,7 +977,7 @@ function GrayscalePageInner() {
             <PageHeader
                 variant="management"
                 breadcrumbs={[
-                    { label: locale === 'zh' ? 'Skills 分析' : 'Skills Analysis', href: '/skill-eval' },
+                    { label: locale === 'zh' ? 'Skills 评测' : 'Skill Evaluation', href: '/skill-eval' },
                     { label: locale === 'zh' ? '调测分析' : 'Debug & Analysis' },
                 ]}
                 title={locale === 'zh' ? 'A/B 测试' : 'A/B Test'}

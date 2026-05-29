@@ -84,7 +84,7 @@ export const en = {
     skillsManage: 'Skill Management',
     skillHistory: 'Skill History',
     skillGenerator: 'Skill Generation',
-    skillEval: 'Skill Analysis',
+    skillEval: 'Skill Evaluation',
     skillOpt: 'Skill Optimization',
     skillRelease: 'Release',
     optapi: 'Self-Optimize API',
