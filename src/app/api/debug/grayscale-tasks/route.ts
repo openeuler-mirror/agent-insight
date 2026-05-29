@@ -109,6 +109,7 @@ function withDefaultConfig(config: JsonRecord): JsonRecord {
 
 type BoundSkill = { id: string; name: string };
 type BoundVersion = { id: string; version: number };
+const NONE_VERSION_ID = '__NONE__';
 
 async function findBoundSkill(skillId: string, user: string) {
     return (prisma as unknown as GrayscalePrisma).skill.findFirst({
@@ -173,6 +174,8 @@ export async function POST(req: NextRequest) {
         const { user, taskName } = body;
         const skillId = String(body.skillId || '').trim();
         const versionBId = String(body.versionBId || '').trim();
+        const rawVersionAId = String(body.versionAId || '').trim();
+        const versionAId = rawVersionAId || NONE_VERSION_ID;
 
         if (!user || !taskName?.trim() || !skillId || !versionBId) {
             return NextResponse.json({ error: 'user, taskName, skillId and versionBId are required' }, { status: 400 });
@@ -185,6 +188,12 @@ export async function POST(req: NextRequest) {
         const version = await findBoundVersion(skill.id, versionBId);
         if (!version) {
             return NextResponse.json({ error: 'skill version not found' }, { status: 404 });
+        }
+        if (versionAId !== NONE_VERSION_ID) {
+            const controlVersion = await findBoundVersion(skill.id, versionAId);
+            if (!controlVersion) {
+                return NextResponse.json({ error: 'control skill version not found' }, { status: 404 });
+            }
         }
 
         const existing = await (prisma as unknown as GrayscalePrisma).grayscaleTask.findFirst({
@@ -215,7 +224,7 @@ export async function POST(req: NextRequest) {
                 taskName: taskName.trim(),
                 configJson: JSON.stringify({
                     skillId: skill.id,
-                    versionAId: '__NONE__',
+                    versionAId,
                     versionBId: version.id,
                     autoEval: true,
                     recordTriggerDetails: true,

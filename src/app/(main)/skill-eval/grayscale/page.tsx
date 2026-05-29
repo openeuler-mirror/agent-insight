@@ -1431,7 +1431,7 @@ export function GrayscaleEvaluation({
         const res = await apiFetch('/api/debug/grayscale-tasks', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ user, taskName: name, skillId, versionBId: boundVersionBId }),
+            body: JSON.stringify({ user, taskName: name, skillId, versionAId, versionBId: boundVersionBId }),
         });
         if (res.ok) {
             const newTask = await res.json();
@@ -1446,7 +1446,7 @@ export function GrayscaleEvaluation({
             }
         }
         return null;
-    }, [user, taskNameInput]);
+    }, [user, taskNameInput, versionAId]);
 
     useEffect(() => {
         if (!parentSkillId || !versionBId || versionBId === NONE_VERSION_ID) return;
@@ -2636,7 +2636,8 @@ export function GrayscaleEvaluation({
             ? (locale === 'zh' ? '重新执行' : 'Run Again')
             : (locale === 'zh' ? '开始执行' : 'Start Execution');
     const decisionReady = isCompletedA && isCompletedB;
-    const configReady = !runButtonBusy && Boolean(selectedEvaluatorId) && (
+    const experimentVersionReady = Boolean(selectedSkillId && versionBId && versionBId !== NONE_VERSION_ID);
+    const configReady = !runButtonBusy && experimentVersionReady && Boolean(selectedEvaluatorId) && (
         sourceMode === 'dataset'
             ? Boolean(selectedDatasetId) && selectedSampleCount > 0
             : Boolean(selectedTraceAId || selectedTraceBId || traceRecords.length > 0)
@@ -3132,6 +3133,19 @@ export function GrayscaleEvaluation({
         ],
         [userEvaluators],
     );
+    const controlVersionOptions = useMemo(
+        () => [
+            { value: NONE_VERSION_ID, label: locale === 'zh' ? '无 Skill' : 'No Skill' },
+            ...versions.map(v => ({ value: v.id, label: `v${v.semanticVersion || v.version}` })),
+        ],
+        [NONE_VERSION_ID, locale, versions],
+    );
+    const experimentVersionLabel = versionBId === NONE_VERSION_ID
+        ? (locale === 'zh' ? '未绑定实验版本' : 'Experiment version not bound')
+        : getVersionLabel(versionB || versionBId);
+    const controlVersionHint = versionAId === NONE_VERSION_ID
+        ? (locale === 'zh' ? '默认对照组不加载 Skill，也可选择同 Skill 的历史版本' : 'Control runs without Skill by default; a previous version is optional')
+        : `${locale === 'zh' ? '对照组加载' : 'Control loads'} ${selectedSkill?.name || 'Skill'} ${getVersionLabel(versionA || versionAId)}`;
     const repeatRoundsHint = repeatRounds > 1
         ? (locale === 'zh' ? '多轮运行可观察波动和稳定性' : 'Multiple rounds reveal variance and stability')
         : (locale === 'zh' ? '单轮适合快速试跑与校验配置' : 'One round is best for quick validation');
@@ -3485,7 +3499,7 @@ export function GrayscaleEvaluation({
                                     {configPillLabel}
                                 </span>
                             </div>
-                            <div className="v2-stage-card-subtitle">{locale === 'zh' ? '设置参数 · 唯一变量是 Skill 开/关' : 'Set up parameters · The only variable is Skill On/Off'}</div>
+                            <div className="v2-stage-card-subtitle">{locale === 'zh' ? '设置参数 · 实验版本由 Skill 分析决定，对照版本由本配置决定' : 'Set up parameters · Experiment version comes from Skill analysis, control version from this config'}</div>
                         </div>
                         {hifi && (
                             <button
@@ -3561,6 +3575,33 @@ export function GrayscaleEvaluation({
                                     className="v2-config-select"
                                 />
                                 <span className="v2-config-item-hint">{evaluatorHint}</span>
+                            </div>
+
+                            <div className="v2-config-item v2-config-item--compact">
+                                <span className="v2-config-item-label">{locale === 'zh' ? '对照组 Skill 版本' : 'Control Skill version'}</span>
+                                <Select
+                                    aria-label={locale === 'zh' ? '选择对照组 Skill 版本' : 'Select control Skill version'}
+                                    value={versionAId || NONE_VERSION_ID}
+                                    onChange={v => {
+                                        setVersionAId(v);
+                                        if (currentTask) persistTaskUpdate(currentTask.id, { ...currentConfigRef.current, versionAId: v });
+                                    }}
+                                    options={controlVersionOptions}
+                                    active={Boolean(versionAId && versionAId !== NONE_VERSION_ID)}
+                                    size="sm"
+                                    className="v2-config-select"
+                                />
+                                <span className="v2-config-item-hint">{controlVersionHint}</span>
+                            </div>
+
+                            <div className="v2-config-item v2-config-item--compact">
+                                <span className="v2-config-item-label">{locale === 'zh' ? '实验组 Skill 版本' : 'Experiment Skill version'}</span>
+                                <div className="v2-config-select v2-config-static" aria-label={locale === 'zh' ? '实验组 Skill 版本' : 'Experiment Skill version'}>
+                                    {experimentVersionLabel}
+                                </div>
+                                <span className="v2-config-item-hint">
+                                    {locale === 'zh' ? '由 Skill 分析页当前版本决定，不在 A/B 配置中改动' : 'Owned by the current Skill analysis version, not this A/B config'}
+                                </span>
                             </div>
 
                         </div>
