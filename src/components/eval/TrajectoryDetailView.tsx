@@ -19,6 +19,7 @@ import remarkGfm from 'remark-gfm';
 import { apiFetch } from '@/lib/client/api';
 import { useAuth } from '@/lib/auth/auth-context';
 import { EvaluatorFindingsView } from './EvaluatorFindingsView';
+import { TraceAlignmentPanel, type TraceAlignmentPanelProps } from './TraceAlignmentPanel';
 import { parseSkillAttributionFromRow } from '@/lib/engine/evaluation/skill-attribution';
 
 interface DatasetCase {
@@ -182,6 +183,17 @@ interface SkillKeyActionCard {
     matchedStep?: ActualExtractedStep;
     matchedStepIndex?: number;
     severity?: 'high' | 'medium' | 'low';
+}
+
+/** 宽松解析 JSON 字符串，返回对象或数组原值（解析失败 / 空串返回 null）。 */
+function safeJsonParseLoose(s: string | null | undefined): Record<string, unknown> | unknown[] | null {
+    if (!s || typeof s !== 'string') return null;
+    try {
+        const parsed = JSON.parse(s);
+        return parsed && typeof parsed === 'object' ? parsed : null;
+    } catch {
+        return null;
+    }
 }
 
 function parseLooseJsonText(text: string): Record<string, unknown> | null {
@@ -802,6 +814,46 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
         };
     }, [user, traceId, datasetId, runId, resultId]);
 
+    // analyze-match 数据（执行轨迹对齐 · Skill 预期标注 面板用）。原在 用例分析 ③ 分析结果，
+    // 现迁移到这里（评测执行 → 轨迹评测）。GET 拿已存的对齐结果，没有则面板自然空着。
+    const [matchData, setMatchData] = useState<{ matchJson?: string; flowJson?: string; extractedSteps?: string; dynamicMermaid?: string } | null>(null);
+    useEffect(() => {
+        if (!user || !traceId) return;
+        let stopped = false;
+        apiFetch(`/api/observe/executions/${encodeURIComponent(traceId)}/analyze-match`)
+            .then(r => (r.ok ? r.json() : null))
+            .then(d => { if (!stopped && d && typeof d === 'object') setMatchData(d); })
+            .catch(() => undefined);
+        return () => { stopped = true; };
+    }, [user, traceId]);
+
+    const alignmentPanelProps = useMemo<TraceAlignmentPanelProps | null>(() => {
+        const parsedRaw = safeJsonParseLoose(matchData?.matchJson);
+        if (!parsedRaw || Array.isArray(parsedRaw)) return null;
+        const parsedMatch = parsedRaw as Record<string, unknown>;
+        const parsedFlow = safeJsonParseLoose(matchData?.flowJson);
+        const extractedRaw = safeJsonParseLoose(matchData?.extractedSteps);
+        const problemSteps = Array.isArray(parsedMatch.problemSteps) ? parsedMatch.problemSteps : [];
+        const problemByStepKey = new Map<string, Record<string, unknown>>();
+        for (const raw of problemSteps) {
+            const p = asRecord(raw);
+            if (p.stepIndex != null) problemByStepKey.set(`actual:${p.stepIndex}`, p);
+            if (p.stepName) problemByStepKey.set(`name:${String(p.stepName)}`, p);
+        }
+        const flowSteps = !Array.isArray(parsedFlow) && Array.isArray((parsedFlow as Record<string, unknown> | null)?.steps)
+            ? (parsedFlow as { steps: unknown[] }).steps
+            : [];
+        return {
+            matches: Array.isArray(parsedMatch.matches) ? parsedMatch.matches : [],
+            skippedExpectedSteps: Array.isArray(parsedMatch.skippedExpectedSteps) ? parsedMatch.skippedExpectedSteps : [],
+            problemByStepKey,
+            flowSteps,
+            extractedSteps: Array.isArray(extractedRaw) ? extractedRaw : [],
+            alignment: parsedMatch.alignment,
+            mermaidCode: matchData?.dynamicMermaid,
+        } as unknown as TraceAlignmentPanelProps;
+    }, [matchData]);
+
     const effectiveDatasetId = datasetId || result?.datasetId || '';
 
     // Dataset（用于查 case）
@@ -1202,6 +1254,18 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
                                 })()}
 
                                 <TrajectoryCapBanner rawAnalysis={result.rawAnalysis} trajectoryScore={result.trajectoryScore} />
+
+                                {/* 执行轨迹对齐 · Skill 预期标注（从 用例分析 ③ 分析结果 迁移而来）。
+                                    以实际执行为主，直接标注偏离与缺失步骤；数据来自 analyze-match。 */}
+                                {alignmentPanelProps && (
+                                    <div style={{ marginTop: 14 }}>
+                                        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 6 }}>
+                                            <span style={{ fontSize: 12.5, fontWeight: 600, color: COLORS.text }}>执行轨迹对齐 · Skill 预期标注</span>
+                                            <span style={{ fontSize: 11, color: COLORS.textMuted }}>以实际执行为主，直接标注偏离与缺失步骤</span>
+                                        </div>
+                                        <TraceAlignmentPanel {...alignmentPanelProps} />
+                                    </div>
+                                )}
 
                                 {/* 轨迹 tab 只保留过程向的 Skill 归因问题：
                                     - deviation_steps     -> 路径偏离
