@@ -1185,13 +1185,18 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
                                     </div>
                                 </div>
 
-                                {result.dimensionScores && (() => {
+                                {(() => {
                                     const findings = deriveDimensionFindings(result.rawAnalysis);
+                                    // trace 模式下 analyze-match 会把 dimensionScoresJson 覆写成 {alignment, attribution}，
+                                    // 三维分只剩在 rawAnalysis.dimension_details.<dim>.score。这里两处都读：
+                                    // 优先 dimensionScores 列，缺失则回退 dimension_details，避免分数空白。
+                                    const dims = resolveDimensionScores(result.dimensionScores, result.rawAnalysis);
+                                    if (dims.completeness == null && dims.toolChoice == null && dims.redundancy == null) return null;
                                     return (
                                         <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 8, marginBottom: 12 }}>
-                                            <DimensionCard label="完整性" weight={0.45} score={result.dimensionScores.completeness} findings={findings.completeness} />
-                                            <DimensionCard label="工具选择" weight={0.35} score={result.dimensionScores.toolChoice} findings={findings.toolChoice} />
-                                            <DimensionCard label="冗余" weight={0.20} score={result.dimensionScores.redundancy} findings={findings.redundancy} />
+                                            <DimensionCard label="完整性" weight={0.45} score={dims.completeness} findings={findings.completeness} />
+                                            <DimensionCard label="工具选择" weight={0.35} score={dims.toolChoice} findings={findings.toolChoice} />
+                                            <DimensionCard label="冗余" weight={0.20} score={dims.redundancy} findings={findings.redundancy} />
                                         </div>
                                     );
                                 })()}
@@ -1847,14 +1852,16 @@ function DimensionCard({
     weight,
 }: {
     label: string;
-    score: number;
+    score: number | null | undefined;
     findings?: { type: 'high' | 'medium' | 'low' | 'info'; text: string }[];
     /** 该维度在加权轨迹分中的权重（0-1）；提供时在标签后展示「权重 xx%」。 */
     weight?: number;
 }) {
     const [expanded, setExpanded] = useState(false);
-    const tone = score >= 0.8 ? COLORS.success : score >= 0.5 ? COLORS.warning : COLORS.danger;
-    const bg = score >= 0.8 ? COLORS.successSubtle : score >= 0.5 ? COLORS.warningSubtle : COLORS.dangerSubtle;
+    const hasScore = typeof score === 'number' && Number.isFinite(score);
+    const tone = !hasScore ? COLORS.textMuted : score >= 0.8 ? COLORS.success : score >= 0.5 ? COLORS.warning : COLORS.danger;
+    const bg = !hasScore ? COLORS.bgSoft : score >= 0.8 ? COLORS.successSubtle : score >= 0.5 ? COLORS.warningSubtle : COLORS.dangerSubtle;
+    const barWidth = hasScore ? Math.round(score * 100) : 0;
     const findingCount = findings?.length || 0;
     const hasFindings = findingCount > 0;
     return (
@@ -1912,7 +1919,7 @@ function DimensionCard({
                 </span>
             </button>
             <div style={{ height: 3, background: bg, borderRadius: 2, overflow: 'hidden' }}>
-                <div style={{ width: `${Math.round(score * 100)}%`, height: '100%', background: tone }} />
+                <div style={{ width: `${barWidth}%`, height: '100%', background: tone }} />
             </div>
             {expanded && hasFindings ? (
                 <ul style={{
@@ -2046,6 +2053,39 @@ function extractStepInfo(raw: unknown): {
         ?? m.detail ?? m.text ?? m.reason ?? m.note ?? m.name ?? '',
     ).trim();
     return { text, severity: m.severity, idx: m.step_index ?? m.stepIndex, name: m.name };
+}
+
+/**
+ * 解析三维分（completeness / toolChoice / redundancy），返回 number 或 null。
+ * 取值优先级：dimensionScores 列 → rawAnalysis.dimension_details.<dim>.score。
+ * 这样 trace 模式下被 analyze-match 覆写成 {alignment, attribution} 的行，
+ * 也能从评估器原始输出里把三维分捞回来展示，不再空白。
+ */
+function resolveDimensionScores(
+    dimensionScores: DimensionScores | null | undefined,
+    rawAnalysis: unknown,
+): { completeness: number | null; toolChoice: number | null; redundancy: number | null } {
+    const root = asRecord(rawAnalysis);
+    const rawDimScores = asRecord(root.dimension_scores ?? root.dimensionScores);
+    const details = asRecord(root.dimension_details ?? root.dimensionDetails);
+    const num = (v: unknown): number | null => {
+        const n = typeof v === 'number' ? v : Number(v);
+        return Number.isFinite(n) ? n : null;
+    };
+    // 取值优先级：dimensionScores 列 → rawAnalysis.dimension_scores → dimension_details.<dim>.score(冗余用 redundancy_score)。
+    const pick = (colVal: number | undefined, rawKey: string, detailKey: string, detailScoreKey = 'score'): number | null => {
+        const fromCol = num(colVal);
+        if (fromCol != null) return fromCol;
+        const fromRaw = num(rawDimScores[rawKey] ?? rawDimScores[detailKey]);
+        if (fromRaw != null) return fromRaw;
+        const d = asRecord(details[detailKey]);
+        return num(d[detailScoreKey] ?? d.score);
+    };
+    return {
+        completeness: pick(dimensionScores?.completeness, 'completeness', 'completeness'),
+        toolChoice: pick(dimensionScores?.toolChoice, 'tool_choice', 'tool_choice'),
+        redundancy: pick(dimensionScores?.redundancy, 'redundancy', 'redundancy', 'redundancy_score'),
+    };
 }
 
 function deriveDimensionFindings(rawAnalysis: unknown): {
