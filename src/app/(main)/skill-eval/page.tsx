@@ -2461,7 +2461,7 @@ function AnalysisOverview({
                     <div className="sa-cta-list">
                         <label
                             className={`sa-cta-row${!staticCanTest ? ' disabled' : ''}`}
-                            title={staticCanTest ? '可触发详情页“重新扫描”' : '需先选择 Skill 与版本'}
+                            title={staticCanTest ? '可触发详情页“重新分析”' : '需先选择 Skill 与版本'}
                         >
                             <input type="checkbox" checked={selectedRunKeys.includes('static')} onChange={() => toggleRunKey('static')} disabled={!staticCanTest} />
                             <span className="dot" style={{ '--cdot': 'var(--sa-purple)' } as React.CSSProperties}></span>
@@ -5587,7 +5587,7 @@ function StaticCompliancePanel({
                 metaSlot={metaSlot}
                 onBack={onBack}
                 onPrimary={runStaticEval}
-                primaryLabel={running ? '扫描中...' : '重新扫描'}
+                primaryLabel={running ? '分析中...' : '重新分析'}
                 onOptimize={onOptimize}
             />
 
