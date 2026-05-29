@@ -4,7 +4,7 @@ export interface TaskCompletionKeyPointFindingLike {
 }
 
 export interface TaskCompletionScoreSummary {
-  score: number | null;
+  score: number;
   itemCount: number;
   findings: Record<string, unknown>[];
 }
