@@ -4,8 +4,13 @@ import { useEffect, useState } from 'react';
 import { apiFetch } from '@/lib/client/api';
 
 export interface BatchEvalResultMeta {
-    /** 评估器自己跑出来的那条 trace (评估 session id) —— 跳链路追踪看评测器怎么判的 */
+    /** 评估器自己跑出来的那条 trace (评估 session id) —— 跳链路追踪看评测器怎么判的。
+     * 兼容旧用法：= 轨迹评估器 session（优先），无则结果评估器 session。 */
     evaluationTraceId?: string;
+    /** 结果评估器(任务完成度) 的评估 session —— 「结果分」怎么判的 */
+    resultEvalTraceId?: string;
+    /** 轨迹评估器(轨迹质量) 的评估 session —— 「轨迹分」怎么判的 */
+    trajEvalTraceId?: string;
     datasetId?: string;
     status?: string;
     /** 结果分 (任务完成度评估器), 已 ×100 转 0-100 */
@@ -39,13 +44,16 @@ export function useBatchEvalResults(
                     if (!key) continue;
                     const raw = (r.rawAnalysis && typeof r.rawAnalysis === 'object') ? r.rawAnalysis : {};
                     const resultEvaluation = (raw.resultEvaluation && typeof raw.resultEvaluation === 'object') ? raw.resultEvaluation : {};
-                    const evalTrace = (typeof raw.evaluatorSessionId === 'string' && raw.evaluatorSessionId.trim())
-                        ? raw.evaluatorSessionId.trim()
-                        : (typeof resultEvaluation.evaluatorSessionId === 'string' && resultEvaluation.evaluatorSessionId.trim())
-                            ? resultEvaluation.evaluatorSessionId.trim()
-                            : '';
+                    // raw.evaluatorSessionId = 轨迹质量评估器 session；resultEvaluation.evaluatorSessionId = 结果评估器 session。
+                    const trajEvalTraceId = (typeof raw.evaluatorSessionId === 'string' && raw.evaluatorSessionId.trim())
+                        ? raw.evaluatorSessionId.trim() : '';
+                    const resultEvalTraceId = (typeof resultEvaluation.evaluatorSessionId === 'string' && resultEvaluation.evaluatorSessionId.trim())
+                        ? resultEvaluation.evaluatorSessionId.trim() : '';
+                    const evalTrace = trajEvalTraceId || resultEvalTraceId || '';
                     m.set(String(key), {
                         evaluationTraceId: evalTrace || undefined,
+                        resultEvalTraceId: resultEvalTraceId || undefined,
+                        trajEvalTraceId: trajEvalTraceId || undefined,
                         datasetId: r.datasetId || undefined,
                         status: r.status,
                         // trajectoryScore / resultEvaluationScore 后端为 0-1, 这里 ×100 转 0-100 与 trace 模式口径一致。
