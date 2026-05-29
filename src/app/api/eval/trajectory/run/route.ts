@@ -67,6 +67,8 @@ const SUPPORTED_TRAJECTORY_EVALUATORS = new Set([
 
 const TRACE_EVALUATOR_ID = 'preset-agent-trace-quality';
 const TASK_COMPLETION_EVALUATOR_ID = 'preset-agent-task-completion';
+const MAX_RESULT_EVALUATION_ATTEMPTS = 5;
+const RESULT_EVALUATION_RETRY_DELAYS_MS = [1500, 3000, 5000, 8000];
 const EVALUATOR_LABELS: Record<string, string> = {
     [TRACE_EVALUATOR_ID]: 'Agent 轨迹质量',
     [TASK_COMPLETION_EVALUATOR_ID]: 'Agent 任务完成度',
@@ -102,6 +104,7 @@ interface SkillTarget {
 }
 
 interface ExtractedTraceStep {
+    uiStepIndex?: number;
     name?: string;
     description?: string;
     dialogStartIndex?: number;
@@ -131,6 +134,16 @@ interface ResultJudgment {
 interface MatchedDatasetCase {
     dataset: AgentDatasetRecord;
     caseEntry: DatasetCase;
+}
+
+interface ResultEvaluationRetryState {
+    attemptCount: number;
+    maxAttempts: number;
+    retrying: boolean;
+    exhausted: boolean;
+    lastAttemptAt: string;
+    nextRetryAt?: string;
+    lastError?: string;
 }
 
 interface SelectedEvaluatorMeta {
@@ -315,6 +328,74 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, error: Err
     ]);
 }
 
+function getResultEvaluationRetryDelayMs(attemptCount: number): number {
+    return RESULT_EVALUATION_RETRY_DELAYS_MS[Math.max(0, attemptCount - 1)]
+        ?? RESULT_EVALUATION_RETRY_DELAYS_MS[RESULT_EVALUATION_RETRY_DELAYS_MS.length - 1]
+        ?? 8000;
+}
+
+function buildResultEvaluationRetryState(
+    attemptCount: number,
+    options: {
+        retrying: boolean;
+        exhausted: boolean;
+        lastError?: string;
+        delayMs?: number;
+        now?: Date;
+    },
+): ResultEvaluationRetryState {
+    const now = options.now ?? new Date();
+    return {
+        attemptCount,
+        maxAttempts: MAX_RESULT_EVALUATION_ATTEMPTS,
+        retrying: options.retrying,
+        exhausted: options.exhausted,
+        lastAttemptAt: now.toISOString(),
+        ...(options.lastError ? { lastError: options.lastError } : {}),
+        ...(options.retrying && options.delayMs
+            ? { nextRetryAt: new Date(now.getTime() + options.delayMs).toISOString() }
+            : {}),
+    };
+}
+
+function readResultEvaluationAttemptCount(rawAnalysisJson: string | null | undefined): number {
+    const parsed = safeParseRecord(rawAnalysisJson);
+    const retry = parsed.resultEvaluationRetry;
+    if (!retry || typeof retry !== 'object') return 0;
+    const value = (retry as { attemptCount?: unknown }).attemptCount;
+    return typeof value === 'number' && Number.isFinite(value) && value > 0
+        ? Math.floor(value)
+        : 0;
+}
+
+function isRetryableResultEvaluationFailure(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error || '');
+    if (!message.trim()) return false;
+    if (message.includes(NO_EVALUABLE_CASE_PREFIX)) return false;
+    if (message.includes('缺少预期结果')) return false;
+    if (message.includes('expectedOutput')) return false;
+    if (message.includes('trace 没有实际输入')) return false;
+    if (message.includes('Session.interactions JSON 解析失败')) return false;
+    if (message.includes('Session 不存在或 interactions 为空')) return false;
+    if (message.includes('读取数据集失败')) return false;
+    if (message.includes('未匹配到可评测 case')) return false;
+    if (message.includes('评估数据集不存在')) return false;
+    if (message.includes('写入评测结果失败')) return false;
+    if (message.includes('结果输出提取失败')) return false;
+    return true;
+}
+
+function scheduleResultEvaluationRetry(user: string, id: string, delayMs: number, attemptCount: number): void {
+    setTimeout(() => {
+        runOneEvaluation(user, id).catch(err => {
+            console.error(
+                `[trajectory-eval] scheduled result retry failed row=${id} attempt=${attemptCount + 1}/${MAX_RESULT_EVALUATION_ATTEMPTS}:`,
+                err,
+            );
+        });
+    }, delayMs);
+}
+
 async function persistResultJudgment(
     execution: ExecutionLike | null | undefined,
     resolvedTaskId: string | null | undefined,
@@ -457,10 +538,11 @@ function formatActualExtractedSteps(steps: ExtractedTraceStep[]): string {
     if (steps.length === 0) return '';
     return steps.map((step, index) => {
         const desc = normalizeMatchText(step.description || '');
+        const uiStep = typeof step.uiStepIndex === 'number' ? ` [step=${step.uiStepIndex}]` : '';
         const range = step.dialogStartIndex != null && step.dialogEndIndex != null
             ? ` [dialog=${step.dialogStartIndex}-${step.dialogEndIndex}]`
             : '';
-        return `${index + 1}. ${step.name || desc || '未命名步骤'}${step.type ? ` [${step.type}]` : ''}${range}${desc && desc !== step.name ? ` - ${desc}` : ''}`;
+        return `${index + 1}. ${step.name || desc || '未命名步骤'}${step.type ? ` [${step.type}]` : ''}${uiStep}${range}${desc && desc !== step.name ? ` - ${desc}` : ''}`;
     }).join('\n');
 }
 
@@ -554,6 +636,8 @@ async function buildSkillKeyActionComparison(
         status: 'ok',
         referenceKeyActionsText: formatReferenceKeyActions(keyActions),
         actualExtractedStepsText: formatActualExtractedSteps(normalizedSteps),
+        referenceKeyActions: keyActions,
+        actualExtractedSteps: normalizedSteps,
     };
 }
 
@@ -1068,6 +1152,9 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
     const hasCustomEvaluators = customEvaluatorIds.length > 0;
     let resultEvaluationRawAnalysis: Record<string, unknown> | null = null;
     let resultEvaluationError: string | null = null;
+    let resultEvaluationRetryState: ResultEvaluationRetryState | null = null;
+    let scheduledResultRetryDelayMs: number | null = null;
+    let scheduledResultRetryAttemptCount = 0;
     let resultArtifactExtractionRawAnalysis: Record<string, unknown> | null = null;
     let resultActualOutput = '';
     let customEvaluationsRawAnalysis: Record<string, unknown> | null = null;
@@ -1400,6 +1487,14 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
         caseSnapshot,
         skillAttribution: skillAttributionStatus,
         comparisonMode,
+        skillKeyActionComparison: keyActionComparison.status === 'ok'
+            ? {
+                referenceKeyActionsText: keyActionComparison.referenceKeyActionsText,
+                actualExtractedStepsText: keyActionComparison.actualExtractedStepsText,
+                referenceKeyActions: keyActionComparison.referenceKeyActions ?? [],
+                actualExtractedSteps: keyActionComparison.actualExtractedSteps ?? [],
+            }
+            : null,
     };
 
     if ((shouldRunTraceEvaluation || shouldRunResultEvaluation) && interactions.length === 0) {
@@ -1444,6 +1539,16 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
     }
 
     if (shouldRunResultEvaluation) {
+        const taskCompletionSkillContext = await loadTaskCompletionSkillContext(execution, interactions, user);
+        const traceSummaryForResultEvaluation = interactions.length > 0
+            ? formatTraceForLLM(summarizeTrace(interactions, { maxSteps: 80, maxTextLen: 400 }))
+            : '';
+        const attempt = Math.min(
+            readResultEvaluationAttemptCount(row.rawAnalysisJson) + 1,
+            MAX_RESULT_EVALUATION_ATTEMPTS,
+        );
+        const attemptStartedAt = new Date();
+
         try {
             await withTimeout((async () => {
                 const artifactExtraction = await extractTaskResultArtifact({
@@ -1458,6 +1563,12 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
 
                 if (!resultActualOutput) {
                     resultEvaluationError = `结果输出提取失败：${artifactExtraction.reason}`;
+                    resultEvaluationRetryState = buildResultEvaluationRetryState(attempt, {
+                        retrying: false,
+                        exhausted: true,
+                        lastError: resultEvaluationError,
+                        now: attemptStartedAt,
+                    });
                     await prisma.trajectoryEvalResult.update({
                         where: { id },
                         data: {
@@ -1467,68 +1578,135 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
                                 resultActualOutput: '',
                                 resultEvaluation: null,
                                 resultEvaluationError,
+                                resultEvaluationRetry: resultEvaluationRetryState,
                             }),
                         },
                     });
-                } else {
-                    await prisma.trajectoryEvalResult.update({
-                        where: { id },
-                        data: {
-                            rawAnalysisJson: JSON.stringify({
-                                ...baseRawAnalysisMeta,
-                                resultArtifactExtraction: resultArtifactExtractionRawAnalysis,
-                                resultActualOutput,
-                                resultEvaluation: null,
-                                resultEvaluationError: null,
-                            }),
-                        },
-                    });
-                    const resultJudgment = await evaluateTaskCompletionAgainstExpected(
-                        caseEntry.input,
-                        caseEntry.expectedOutput,
-                        resultActualOutput,
-                        precomputedRootCauses,
-                        precomputedRootCauseSource,
-                        interactions.length > 0
-                            ? formatTraceForLLM(summarizeTrace(interactions, { maxSteps: 80, maxTextLen: 400 }))
-                            : '',
-                        await loadTaskCompletionSkillContext(execution, interactions, user),
-                        user,
-                        evalSkillName,
-                        evalSkillVersion,
-                    );
-                    resultEvaluationRawAnalysis = {
-                        ...(resultJudgment.rawAnalysis || {}),
-                        result_artifact_extraction: {
-                            status: artifactExtraction.rawAnalysis?.fallback ? 'fallback_final_result' : artifactExtraction.status,
-                            confidence: artifactExtraction.confidence,
-                            reason: artifactExtraction.reason,
-                            source_refs: artifactExtraction.sourceRefs,
-                            fallback_source: artifactExtraction.rawAnalysis?.fallback ? 'execution.finalResult' : null,
-                        },
-                    };
-                    await persistResultJudgment(execution, resolvedTaskId, resultJudgment);
-                    await prisma.trajectoryEvalResult.update({
-                        where: { id },
-                        data: {
-                            rawAnalysisJson: JSON.stringify({
-                                ...baseRawAnalysisMeta,
-                                resultArtifactExtraction: resultArtifactExtractionRawAnalysis,
-                                resultActualOutput,
-                                resultEvaluation: resultEvaluationRawAnalysis,
-                                resultEvaluationError: null,
-                            }),
-                        },
-                    });
+                    return;
                 }
+
+                resultEvaluationRetryState = buildResultEvaluationRetryState(attempt, {
+                    retrying: false,
+                    exhausted: false,
+                    now: attemptStartedAt,
+                });
+                await prisma.trajectoryEvalResult.update({
+                    where: { id },
+                    data: {
+                        rawAnalysisJson: JSON.stringify({
+                            ...baseRawAnalysisMeta,
+                            resultArtifactExtraction: resultArtifactExtractionRawAnalysis,
+                            resultActualOutput,
+                            resultEvaluation: null,
+                            resultEvaluationError: null,
+                            resultEvaluationRetry: resultEvaluationRetryState,
+                        }),
+                    },
+                });
+                const resultJudgment = await evaluateTaskCompletionAgainstExpected(
+                    caseEntry.input,
+                    caseEntry.expectedOutput,
+                    resultActualOutput,
+                    precomputedRootCauses,
+                    precomputedRootCauseSource,
+                    traceSummaryForResultEvaluation,
+                    taskCompletionSkillContext,
+                    user,
+                    evalSkillName,
+                    evalSkillVersion,
+                );
+                resultEvaluationRawAnalysis = {
+                    ...(resultJudgment.rawAnalysis || {}),
+                    result_artifact_extraction: {
+                        status: artifactExtraction.rawAnalysis?.fallback ? 'fallback_final_result' : artifactExtraction.status,
+                        confidence: artifactExtraction.confidence,
+                        reason: artifactExtraction.reason,
+                        source_refs: artifactExtraction.sourceRefs,
+                        fallback_source: artifactExtraction.rawAnalysis?.fallback ? 'execution.finalResult' : null,
+                    },
+                };
+                await persistResultJudgment(execution, resolvedTaskId, resultJudgment);
+                resultEvaluationRetryState = buildResultEvaluationRetryState(attempt, {
+                    retrying: false,
+                    exhausted: false,
+                    now: attemptStartedAt,
+                });
+                await prisma.trajectoryEvalResult.update({
+                    where: { id },
+                    data: {
+                        rawAnalysisJson: JSON.stringify({
+                            ...baseRawAnalysisMeta,
+                            resultArtifactExtraction: resultArtifactExtractionRawAnalysis,
+                            resultActualOutput,
+                            resultEvaluation: resultEvaluationRawAnalysis,
+                            resultEvaluationError: null,
+                            resultEvaluationRetry: resultEvaluationRetryState,
+                        }),
+                    },
+                });
+                resultEvaluationError = null;
             })(), PER_RESULT_TIMEOUT_MS, new StagedEvaluationError(
                 'result-timeout',
                 `结果评测超过 ${PER_RESULT_TIMEOUT_MS / 1000}s 未完成`,
             ));
         } catch (e) {
-            console.warn('[trajectory-eval] result-based evaluation failed:', e);
-            resultEvaluationError = `结果评测失败：${(e as Error).message || String(e)}`;
+            console.warn(`[trajectory-eval] result-based evaluation attempt ${attempt}/${MAX_RESULT_EVALUATION_ATTEMPTS} failed:`, e);
+            const detail = (e as Error).message || String(e);
+            const canRetryLater = attempt < MAX_RESULT_EVALUATION_ATTEMPTS && isRetryableResultEvaluationFailure(e);
+
+            if (canRetryLater) {
+                scheduledResultRetryDelayMs = getResultEvaluationRetryDelayMs(attempt);
+                scheduledResultRetryAttemptCount = attempt;
+                resultEvaluationRetryState = buildResultEvaluationRetryState(attempt, {
+                    retrying: true,
+                    exhausted: false,
+                    lastError: detail,
+                    delayMs: scheduledResultRetryDelayMs,
+                    now: attemptStartedAt,
+                });
+                await prisma.trajectoryEvalResult.update({
+                    where: { id },
+                    data: {
+                        status: 'running',
+                        errorMessage: null,
+                        rawAnalysisJson: JSON.stringify({
+                            ...baseRawAnalysisMeta,
+                            resultArtifactExtraction: resultArtifactExtractionRawAnalysis,
+                            resultActualOutput,
+                            resultEvaluation: null,
+                            resultEvaluationError: null,
+                            resultEvaluationRetry: resultEvaluationRetryState,
+                        }),
+                    },
+                });
+            } else {
+                resultEvaluationError = `结果评测失败：${detail}`;
+                resultEvaluationRetryState = buildResultEvaluationRetryState(attempt, {
+                    retrying: false,
+                    exhausted: true,
+                    lastError: detail,
+                    now: attemptStartedAt,
+                });
+                await prisma.trajectoryEvalResult.update({
+                    where: { id },
+                    data: {
+                        rawAnalysisJson: JSON.stringify({
+                            ...baseRawAnalysisMeta,
+                            resultArtifactExtraction: resultArtifactExtractionRawAnalysis,
+                            resultActualOutput,
+                            resultEvaluation: resultEvaluationRawAnalysis,
+                            resultEvaluationError,
+                            resultEvaluationRetry: resultEvaluationRetryState,
+                        }),
+                    },
+                });
+            }
         }
+    }
+
+    if (scheduledResultRetryDelayMs != null) {
+        scheduleResultEvaluationRetry(user, id, scheduledResultRetryDelayMs, scheduledResultRetryAttemptCount);
+        return;
     }
 
     // ---- 1.5 自建评估器（custom-* IDs）----
@@ -1633,6 +1811,7 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
                     resultActualOutput,
                     resultEvaluation: resultEvaluationRawAnalysis,
                     resultEvaluationError,
+                    resultEvaluationRetry: resultEvaluationRetryState,
                     customEvaluations: customEvaluationsRawAnalysis,
                     customVariableNeeds: Array.from(requestedCustomVars),
                     customEvaluationScore: customAvg,
@@ -1689,6 +1868,7 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
             resultActualOutput,
             resultEvaluation: resultEvaluationRawAnalysis,
             resultEvaluationError,
+            resultEvaluationRetry: resultEvaluationRetryState,
             customEvaluations: customEvaluationsRawAnalysis,
             customVariableNeeds: Array.from(requestedCustomVars),
             customEvaluationScore: customEvaluatorScores.length > 0
