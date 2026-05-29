@@ -1106,6 +1106,9 @@ export function GrayscaleEvaluation({
     // 「新增评测任务」对话框开关。点确认后通过 onCreated 把新批次 ID 写回当前 task config,
     // 启动评测时透传给 /api/eval/trajectory/run append 落到同一批次。
     const [newBatchDialogOpen, setNewBatchDialogOpen] = useState(false);
+    // 用户显式点「新建任务」后, 进入未保存草稿态; 在再次保存/选历史前, 不要被
+    // parentSkillId + versionBId 的自动绑定逻辑立刻把旧任务重新套回来。
+    const [isFreshTaskDraft, setIsFreshTaskDraft] = useState(false);
 
     // 评测任务关联: 跟 selectedEvaluatorId 等同级用 React state 管理 (不依赖 currentConfigRef
     // 的 ref-only 模式)。这样 applyTaskToState 加载任务时能正确恢复, useEffect 重设 ref 时
@@ -1210,6 +1213,7 @@ export function GrayscaleEvaluation({
 
     const applyTaskToState = (task: GrayscaleTask) => {
         setCurrentTask(task);
+        setIsFreshTaskDraft(false);
         setIsEditingTask(false);
         setTaskNameInput('');
         const cfg = task.configJson || {};
@@ -1446,6 +1450,7 @@ export function GrayscaleEvaluation({
 
     useEffect(() => {
         if (!parentSkillId || !versionBId || versionBId === NONE_VERSION_ID) return;
+        if (isFreshTaskDraft) return;
         const current = currentTaskRef.current;
         if (current && taskMatchesBinding(current, parentSkillId, versionBId, parentSkillVersion)) return;
         const existing = taskHistory.find(task => taskMatchesBinding(task, parentSkillId, versionBId, parentSkillVersion));
@@ -1461,7 +1466,7 @@ export function GrayscaleEvaluation({
             .catch(() => {});
         return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [parentSkillId, parentSkillVersion, versionBId, taskHistory, createTaskForBinding]);
+    }, [parentSkillId, parentSkillVersion, versionBId, taskHistory, createTaskForBinding, isFreshTaskDraft]);
 
     // Automatically persist core config changes to database when they change
     useEffect(() => {
@@ -2223,6 +2228,7 @@ export function GrayscaleEvaluation({
                 delete activePollsRef.current[key];
             }
         });
+        setIsFreshTaskDraft(true);
         resetToNewTaskDraft(parentSkillId || selectedSkillId);
     };
 
