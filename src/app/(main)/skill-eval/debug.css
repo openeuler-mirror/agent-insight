@@ -3318,6 +3318,11 @@
   font-size: 14px; font-weight: 600; color: var(--ink);
   font-family: inherit; cursor: pointer; outline: none;
 }
+.v2-config-static {
+  display: inline-flex; align-items: center; width: 100%;
+  min-height: 32px; overflow: hidden; white-space: nowrap;
+  text-overflow: ellipsis; cursor: default;
+}
 .v2-config-item-hint { font-size: 11px; color: var(--ink-4); margin-top: 4px; }
 .v2-config-checkbox-row {
   display: flex; align-items: center; gap: 8px;
