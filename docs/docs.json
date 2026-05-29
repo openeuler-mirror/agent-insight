@@ -56,7 +56,16 @@
               "user-guide/skills/index",
               "user-guide/skills/manage",
               "user-guide/skills/generate",
-              "user-guide/skills/analyze",
+              {
+                "group": "Skills 评测",
+                "pages": [
+                  "user-guide/skills/evaluation/overview",
+                  "user-guide/skills/evaluation/static-compliance",
+                  "user-guide/skills/evaluation/trigger-analysis",
+                  "user-guide/skills/evaluation/use-case-analysis",
+                  "user-guide/skills/evaluation/ab-test"
+                ]
+              },
               "user-guide/skills/optimize"
             ]
           },
