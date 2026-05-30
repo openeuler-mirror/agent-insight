@@ -1471,9 +1471,21 @@ export function BatchEvaluation({
         .map(c => caseStates[c.id])
         .filter((s): s is CaseState => s != null && (s.status === 'pass' || s.status === 'fail'));
     const scoredStates = evaluatedCaseStates.filter(s => typeof s.score === 'number');
-    const avgScore = scoredStates.length > 0
-        ? Math.round(scoredStates.reduce((sum, s) => sum + (s.score || 0), 0) / scoredStates.length)
+    // ③ 平均分口径：绑定当前「评测任务」(evaluationBatchId) 的有效评测记录，与 source 无关——
+    // 与 用例分析 trace 模式同源(同一 evaluatorRunId)、同算法((结果分+轨迹分)/2 的平均)，
+    // 保证在「从Trace / 从数据集」之间切换时这个分数不变。没关联任务时回退本地 case 综合分。
+    const batchValidPairs = evaluationBatchId
+        ? (Array.from(evalResultsMap.values())
+            .map(m => ({ r: m.resultScore, t: m.trajScore }))
+            .filter((p): p is { r: number; t: number } => typeof p.r === 'number' && typeof p.t === 'number'))
         : null;
+    const avgScore = batchValidPairs
+        ? (batchValidPairs.length > 0
+            ? Math.round(batchValidPairs.reduce((sum, p) => sum + (p.r + p.t) / 2, 0) / batchValidPairs.length)
+            : null)
+        : (scoredStates.length > 0
+            ? Math.round(scoredStates.reduce((sum, s) => sum + (s.score || 0), 0) / scoredStates.length)
+            : null);
     const scoreColorKlass: 'good' | 'warn' | 'bad' = avgScore == null
         ? 'warn'
         : avgScore >= 80 ? 'good' : avgScore >= 60 ? 'warn' : 'bad';

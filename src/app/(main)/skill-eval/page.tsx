@@ -3790,16 +3790,27 @@ function TraceDeviationPanel({
     const fullyEvaluated = scoredTraces.filter(s =>
         !deletedTaskIds.has(s.id) && s.resultScore != null && s.trajScore != null,
     );
-    const avgResult = fullyEvaluated.length === 0 ? null
-        : Math.round(fullyEvaluated.reduce((sum, s) => sum + (s.resultScore || 0), 0) / fullyEvaluated.length);
-    const avgTraj = fullyEvaluated.length === 0 ? null
-        : Math.round(fullyEvaluated.reduce((sum, s) => sum + (s.trajScore || 0), 0) / fullyEvaluated.length);
+    // ③ 结果区口径：绑定当前「评测任务」(evaluatorRunId) 的有效评测记录，与 source(从Trace/从数据集)
+    // 无关——切换 source 不应改变这个平均。有关联任务时用 traceEvalResultsMap(该任务全部记录, 已 ×100)；
+    // 没关联任务时回退本地 scoredTraces(fullyEvaluated)。X=有效记录(双分都在), Y=任务总记录数。
+    const caseResultPairs: { resultScore: number | null; trajScore: number | null }[] = traceEvaluationBatchId
+        ? Array.from(traceEvalResultsMap.entries())
+            .filter(([id]) => !deletedTaskIds.has(id))
+            .map(([, m]) => ({ resultScore: m.resultScore ?? null, trajScore: m.trajScore ?? null }))
+        : fullyEvaluated.map(s => ({ resultScore: s.resultScore, trajScore: s.trajScore }));
+    const validResultPairs = caseResultPairs.filter(p => typeof p.resultScore === 'number' && typeof p.trajScore === 'number') as { resultScore: number; trajScore: number }[];
+    const evalDoneCount = validResultPairs.length;
+    const evalTotalCount = traceEvaluationBatchId ? caseResultPairs.length : traces.length;
+    const avgResult = evalDoneCount === 0 ? null
+        : Math.round(validResultPairs.reduce((sum, p) => sum + p.resultScore, 0) / evalDoneCount);
+    const avgTraj = evalDoneCount === 0 ? null
+        : Math.round(validResultPairs.reduce((sum, p) => sum + p.trajScore, 0) / evalDoneCount);
     const avgOverall = avgResult == null || avgTraj == null ? null : Math.round((avgResult + avgTraj) / 2);
     const overallScoreKlass: 'good' | 'warn' | 'bad' = avgOverall == null
         ? 'warn'
         : avgOverall >= 80 ? 'good' : avgOverall >= 60 ? 'warn' : 'bad';
-    const passCount = fullyEvaluated.filter(s => ((s.resultScore || 0) + (s.trajScore || 0)) / 2 >= 60).length;
-    const passRatePct = fullyEvaluated.length === 0 ? 0 : Math.round((passCount / fullyEvaluated.length) * 100);
+    const passCount = validResultPairs.filter(p => (p.resultScore + p.trajScore) / 2 >= 60).length;
+    const passRatePct = evalDoneCount === 0 ? 0 : Math.round((passCount / evalDoneCount) * 100);
 
     // 为 dual-tab 各自生成 FindingGroup（未通过 / 通过 / 待评测），每条 IssueCard 的 dimension
     // 字段用 traceId 编码——FindingsGrouped 当前没暴露 onClick，所以"点 case → 切换 selectedTrace"
@@ -3872,7 +3883,7 @@ function TraceDeviationPanel({
                         <span>用例来源</span>
                         <code>从 Trace</code>
                         <span>· 关联 <code>{traces.length}</code> 条</span>
-                        <span>· 已评测 <code>{fullyEvaluated.length}</code></span>
+                        <span>· 已评测 <code>{evalDoneCount}</code></span>
                     </>
                 }
                 // trace 模式评测任务关联: 跟 dataset 模式 BatchEvaluation 的 ① actions 一致样式。
@@ -4158,7 +4169,7 @@ function TraceDeviationPanel({
                 summary={
                     <>
                         <span>已评测</span>
-                        <code>{fullyEvaluated.length} / {traces.length}</code>
+                        <code>{evalDoneCount} / {evalTotalCount}</code>
                         {avgOverall != null && (
                             <span>· 平均评分 <b style={{ color: overallScoreKlass === 'good' ? 'var(--ev-success)' : overallScoreKlass === 'bad' ? 'var(--ev-error)' : 'var(--ev-warning)' }}>{avgOverall} 分</b></span>
                         )}
@@ -4289,8 +4300,8 @@ function TraceDeviationPanel({
                 num={3}
                 variant="result"
                 title="分析结果"
-                desc={fullyEvaluated.length > 0
-                    ? `已评测 ${fullyEvaluated.length} / ${traces.length} trace · 结果 + 轨迹 双维度`
+                desc={evalDoneCount > 0
+                    ? `已评测 ${evalDoneCount} / ${evalTotalCount} · 结果 + 轨迹 双维度`
                     : '尚未评测'}
                 open={caseResultOpen}
                 onToggle={() => setCaseResultOpen(o => !o)}
@@ -4299,7 +4310,7 @@ function TraceDeviationPanel({
                         <>
                             <span>总评分</span>
                             <code className={`score-${overallScoreKlass}`}>{avgOverall} 分</code>
-                            <span>· 通过 <b>{passCount}</b> / <b>{fullyEvaluated.length}</b></span>
+                            <span>· 通过 <b>{passCount}</b> / <b>{evalDoneCount}</b></span>
                         </>
                     ) : (
                         <span style={{ color: 'var(--ev-muted)' }}>未评测</span>
@@ -4314,9 +4325,9 @@ function TraceDeviationPanel({
                             <span className="ev-hero-unit">分</span>
                         </div>
                         <div className="ev-hero-label">
-                            总评分 · 结果 + 轨迹 平均 · 已评测 {fullyEvaluated.length} / {traces.length} trace
+                            总评分 · 结果 + 轨迹 平均 · 已评测 {evalDoneCount} / {evalTotalCount}
                             <span style={{ display: 'block', fontSize: 11, color: 'var(--ev-muted)', fontWeight: 400, marginTop: 2 }}>
-                                跨已评测 trace 聚合 · 不随 ② 选中切换变化
+                                跨当前评测任务的有效评测聚合 · 不随 source(从Trace/从数据集) 切换变化
                             </span>
                         </div>
                     </div>
@@ -4336,16 +4347,16 @@ function TraceDeviationPanel({
                             <div className="ev-hero-sub-hint">执行路径是否合理</div>
                         </div>
                         <div className="ev-hero-sub-item">
-                            <div className={`ev-hero-sub-num ${fullyEvaluated.length === 0 ? '' : passRatePct >= 80 ? 'good' : passRatePct < 50 ? 'bad' : ''}`}>
-                                {fullyEvaluated.length === 0 ? '--' : `${passRatePct}%`}
+                            <div className={`ev-hero-sub-num ${evalDoneCount === 0 ? '' : passRatePct >= 80 ? 'good' : passRatePct < 50 ? 'bad' : ''}`}>
+                                {evalDoneCount === 0 ? '--' : `${passRatePct}%`}
                             </div>
                             <div className="ev-hero-sub-label">通过率</div>
                             <div className="ev-hero-sub-hint">已评测中达标</div>
                         </div>
                         <div className="ev-hero-sub-item">
-                            <div className="ev-hero-sub-num">{fullyEvaluated.length} / {traces.length}</div>
+                            <div className="ev-hero-sub-num">{evalDoneCount} / {evalTotalCount}</div>
                             <div className="ev-hero-sub-label">评测进度</div>
-                            <div className="ev-hero-sub-hint">{traces.length - fullyEvaluated.length} 条待评测</div>
+                            <div className="ev-hero-sub-hint">{Math.max(0, evalTotalCount - evalDoneCount)} 条待评测</div>
                         </div>
                     </div>
                 </div>
