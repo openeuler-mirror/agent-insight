@@ -86,6 +86,7 @@ interface GrayscaleTask {
         autoEval?: boolean;
         recordTriggerDetails?: boolean;
         evaluatorId?: string;
+        latestResultAt?: string;
         query?: string;
         selectedDatasetId?: string;
         selectedCaseId?: string;
@@ -157,6 +158,7 @@ interface RunResult {
     // 失败区分, retry 时也要清掉防止下次显示残留错误
     failureType?: string;
     failureDetail?: string;
+    completedAt?: string;
 }
 
 function scoreTierFromComposite(score: number): ScoreTier {
@@ -1210,6 +1212,42 @@ export function GrayscaleEvaluation({
         if (versionNumber != null) return Number(task.skillVersion) === Number(versionNumber);
         return true;
     };
+    const getTaskRunTime = (task: GrayscaleTask) => {
+        const rawLatest = task.configJson?.latestResultAt;
+        const latest = typeof rawLatest === 'string' ? Date.parse(rawLatest) : 0;
+        if (Number.isFinite(latest) && latest > 0) return latest;
+        const stateRunTimes = Object.values(task.caseStatesJson || {}).flatMap(pair =>
+            (['a', 'b'] as const).flatMap(side =>
+                (pair?.[side]?.runs || []).map(run =>
+                    typeof run.completedAt === 'string' ? Date.parse(run.completedAt) : 0
+                )
+            )
+        ).filter(time => Number.isFinite(time) && time > 0);
+        if (stateRunTimes.length > 0) return Math.max(...stateRunTimes);
+        return Date.parse(task.createdAt || '') || 0;
+    };
+    const hasTaskRunHistory = (task: GrayscaleTask) => Object.values(task.caseStatesJson || {}).some(pair =>
+        (['a', 'b'] as const).some(side => {
+            const state = pair?.[side];
+            return Boolean(state && (state.status !== 'pending' || (state.runs?.length || 0) > 0));
+        })
+    );
+    const pickLatestTaskForBinding = (
+        tasks: GrayscaleTask[],
+        skillId: string,
+        versionId?: string,
+        versionNumber?: number | null,
+    ) => {
+        const matched = tasks.filter(task => taskMatchesBinding(task, skillId, versionId, versionNumber));
+        if (matched.length === 0) return undefined;
+        return matched.sort((a, b) => {
+            const activeDelta = Number(Boolean(b.activeRun)) - Number(Boolean(a.activeRun));
+            if (activeDelta !== 0) return activeDelta;
+            const historyDelta = Number(hasTaskRunHistory(b)) - Number(hasTaskRunHistory(a));
+            if (historyDelta !== 0) return historyDelta;
+            return getTaskRunTime(b) - getTaskRunTime(a);
+        })[0];
+    };
 
     const applyTaskToState = (task: GrayscaleTask) => {
         setCurrentTask(task);
@@ -1288,8 +1326,8 @@ export function GrayscaleEvaluation({
                 if (Array.isArray(data) && data.length > 0) {
                     setTaskHistory(data);
                     const task = parentSkillId
-                        ? data.find((item: GrayscaleTask) => taskMatchesBinding(item, parentSkillId, undefined, parentSkillVersion)) as GrayscaleTask | undefined
-                        : data[0] as GrayscaleTask | undefined;
+                        ? pickLatestTaskForBinding(data as GrayscaleTask[], parentSkillId, undefined, parentSkillVersion)
+                        : [...(data as GrayscaleTask[])].sort((a, b) => getTaskRunTime(b) - getTaskRunTime(a))[0];
                     if (task) {
                         applyTaskToState(task);
                     } else if (parentSkillId) {
@@ -1453,7 +1491,7 @@ export function GrayscaleEvaluation({
         if (isFreshTaskDraft) return;
         const current = currentTaskRef.current;
         if (current && taskMatchesBinding(current, parentSkillId, versionBId, parentSkillVersion)) return;
-        const existing = taskHistory.find(task => taskMatchesBinding(task, parentSkillId, versionBId, parentSkillVersion));
+        const existing = pickLatestTaskForBinding(taskHistory, parentSkillId, versionBId, parentSkillVersion);
         if (existing) {
             applyTaskToState(existing);
             return;
@@ -2677,8 +2715,8 @@ export function GrayscaleEvaluation({
         : (locale === 'zh' ? '配置中' : 'Configuring');
     const derivedHifiCollapsed = {
         config: configReady || runButtonBusy || hasExecutionHistory,
-        exec: hasExecutionHistory ? true : !executionStageActive,
-        result: !hasExecutionHistory,
+        exec: runButtonBusy ? false : (hasExecutionHistory ? true : !executionStageActive),
+        result: runButtonBusy || !hasExecutionHistory,
     };
     const scoringCaseIds = displayedResultCaseIds.length > 0
         ? displayedResultCaseIds
@@ -3167,6 +3205,14 @@ export function GrayscaleEvaluation({
     const controlVersionHint = versionAId === NONE_VERSION_ID
         ? (locale === 'zh' ? '默认对照组不加载 Skill，也可选择同 Skill 的历史版本' : 'Control runs without Skill by default; a previous version is optional')
         : `${locale === 'zh' ? '对照组加载' : 'Control loads'} ${selectedSkill?.name || 'Skill'} ${getVersionLabel(versionA || versionAId)}`;
+    const getAbAgentName = (versionId: string) => versionId === NONE_VERSION_ID
+        ? 'grayscale-baseline-agent'
+        : 'grayscale-skill-agent';
+    const getAbAgentLabel = (versionId: string) => versionId === NONE_VERSION_ID
+        ? (locale === 'zh' ? '基线 Agent' : 'Baseline Agent')
+        : (locale === 'zh' ? 'Skill Agent' : 'Skill Agent');
+    const getAbAgentHint = (versionId: string) => `${getAbAgentLabel(versionId)} · ${getAbAgentName(versionId)}`;
+    const agentHintA = getAbAgentHint(versionAId || NONE_VERSION_ID);
     const repeatRoundsHint = repeatRounds > 1
         ? (locale === 'zh' ? '多轮运行可观察波动和稳定性' : 'Multiple rounds reveal variance and stability')
         : (locale === 'zh' ? '单轮适合快速试跑与校验配置' : 'One round is best for quick validation');
@@ -3613,6 +3659,7 @@ export function GrayscaleEvaluation({
                                     className="v2-config-select"
                                 />
                                 <span className="v2-config-item-hint">{controlVersionHint}</span>
+                                <span className="v2-config-item-hint ab-agent-hint">{agentHintA}</span>
                             </div>
 
                         </div>
@@ -3846,12 +3893,15 @@ export function GrayscaleEvaluation({
                                 <div className="v2-col-header">
                                     <div className="v2-col-tag a">A</div>
                                     <div className="v2-col-name-block">
-                                        <div className="v2-col-name">{locale === 'zh' ? '对照组' : 'Control Group'}</div>
+                                        <div className="v2-col-name">{locale === 'zh' ? `对照组: ${getAbAgentLabel(versionAId || NONE_VERSION_ID)}` : `Control: ${getAbAgentLabel(versionAId || NONE_VERSION_ID)}`}</div>
                                         <div className="v2-col-variant-line">
                                             <span className={`v2-skill-state ${versionAId === NONE_VERSION_ID ? 'off' : 'on'} ab-skill-state`}>
                                                 Skill: {versionAId === NONE_VERSION_ID
                                                     ? (locale === 'zh' ? '无 Skill' : 'No Skill')
                                                     : `${selectedSkill?.name || 'cpu-model-query'} ${getVersionLabel(versions.find(v => v.id === versionAId) || versionAId)}`}
+                                            </span>
+                                            <span className="ab-agent-state" title={getAbAgentName(versionAId || NONE_VERSION_ID)}>
+                                                Agent: {getAbAgentName(versionAId || NONE_VERSION_ID)}
                                             </span>
                                         </div>
                                     </div>
@@ -3958,12 +4008,15 @@ export function GrayscaleEvaluation({
                                 <div className="v2-col-header">
                                     <div className="v2-col-tag b">B</div>
                                     <div className="v2-col-name-block">
-                                        <div className="v2-col-name">{locale === 'zh' ? '实验组: 基础 Agent' : 'Experiment Group'}</div>
+                                        <div className="v2-col-name">{locale === 'zh' ? `实验组: ${getAbAgentLabel(versionBId || NONE_VERSION_ID)}` : `Experiment: ${getAbAgentLabel(versionBId || NONE_VERSION_ID)}`}</div>
                                         <div className="v2-col-variant-line">
                                             <span className={`v2-skill-state ${versionBId === NONE_VERSION_ID ? 'off' : 'on'} ab-skill-state`}>
                                                 Skill: {versionBId === NONE_VERSION_ID
                                                     ? (locale === 'zh' ? '无 Skill' : 'No Skill')
                                                     : `${selectedSkill?.name || 'cpu-model-query'} ${getVersionLabel(versions.find(v => v.id === versionBId) || versionBId)}`}
+                                            </span>
+                                            <span className="ab-agent-state" title={getAbAgentName(versionBId || NONE_VERSION_ID)}>
+                                                Agent: {getAbAgentName(versionBId || NONE_VERSION_ID)}
                                             </span>
                                         </div>
                                     </div>

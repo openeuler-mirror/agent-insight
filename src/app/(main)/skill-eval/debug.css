@@ -4159,6 +4159,73 @@
 
 .ab-skill-state { padding: 2px 6px; border-radius: 3px; font-weight: 600; }
 .ab-skill-state.off { background: var(--background-secondary); color: var(--foreground-muted); }
+.ab-agent-state {
+  display: inline-flex;
+  align-items: center;
+  max-width: 220px;
+  min-width: 0;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: var(--background-secondary);
+  color: var(--foreground-muted);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ab-agent-hint {
+  font-family: var(--mono-v2);
+  color: var(--foreground-secondary) !important;
+}
+.v2-compare-col.ab-col-a,
+.v2-compare-col.ab-col-b {
+  display: flex;
+  flex-direction: column;
+  min-height: 520px;
+}
+.v2-compare-col.ab-col-a .v2-col-header,
+.v2-compare-col.ab-col-b .v2-col-header {
+  min-height: 92px;
+  align-items: flex-start;
+}
+.v2-compare-col.ab-col-a .v2-col-name-block,
+.v2-compare-col.ab-col-b .v2-col-name-block {
+  min-width: 0;
+}
+.v2-compare-col.ab-col-a .v2-col-variant-line,
+.v2-compare-col.ab-col-b .v2-col-variant-line {
+  min-height: 44px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+.v2-compare-col.ab-col-a .v2-col-body,
+.v2-compare-col.ab-col-b .v2-col-body {
+  flex: 1;
+}
+.v2-compare-col.ab-col-a .v2-exec-result,
+.v2-compare-col.ab-col-b .v2-exec-result {
+  min-height: 176px;
+  justify-content: center;
+}
+.v2-compare-col.ab-col-a .v2-result-text,
+.v2-compare-col.ab-col-b .v2-result-text,
+.v2-compare-col.ab-col-a .v2-result-sub,
+.v2-compare-col.ab-col-b .v2-result-sub {
+  min-height: 20px;
+  text-align: center;
+}
+.v2-compare-col.ab-col-a .v2-process-row,
+.v2-compare-col.ab-col-b .v2-process-row {
+  min-height: 38px;
+}
+.v2-compare-col.ab-col-a .v2-metric-row,
+.v2-compare-col.ab-col-b .v2-metric-row {
+  min-height: 92px;
+}
+.v2-compare-col.ab-col-a .v2-col-actions,
+.v2-compare-col.ab-col-b .v2-col-actions {
+  min-height: 54px;
+}
 
 .v2-result-icon.ab-icon-running { background: var(--primary-subtle); color: var(--primary); }
 .v2-result-icon.ab-icon-eval { background: var(--primary-subtle); color: var(--primary); }
