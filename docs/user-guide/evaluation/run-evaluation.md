@@ -102,7 +102,9 @@ description: "发起单次或批量评测，监控运行状态，并按结果评
 
 **结果评测**判断 Agent 的最终输出与预期结果的匹配程度，回答「结果是否覆盖了关键要求」。适用于发布前回归、版本对比和样本级复核。
 
-![结果评测详情页，展示分数、覆盖依据、缺失原因、执行过程原因和 Skill 改进建议](../../images/agent/evaluation/eval_run_result_info.png)
+<p align="center">
+  <img src="../../images/agent/evaluation/eval_run_result_info.png" alt="结果评测详情页，展示分数、覆盖依据、缺失原因、执行过程原因和 Skill 改进建议" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+</p>
 
 ### 卡片字段说明
 
@@ -141,7 +143,9 @@ description: "发起单次或批量评测，监控运行状态，并按结果评
 
 **链路评测**判断 Agent 的执行轨迹(Trace)是否稳定、合理、可复现，回答「过程是否值得复用」。对于多步 Agent，这一视角通常比单纯的总分更适合定位系统性缺陷。
 
-![链路评测详情页，展示轨迹总结、完整性、工具选择、冗余、归因、偏离步骤和改进建议](../../images/agent/evaluation/eval_run_trace_info.png)
+<p align="center">
+  <img src="../../images/agent/evaluation/eval_run_trace_info.png" alt="链路评测详情页，展示轨迹总结、完整性、工具选择、冗余、归因、偏离步骤和改进建议" style="width: 100%; max-width: 920px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+</p>
 
 ### 一个核心前提
 

@@ -20,7 +20,9 @@ Skills 优化是 Agent Insight 在「Skills 能力」中的闭环改进模块，
 
 `运行观测 -> 质量监控 / 智能诊断 -> Skills 优化 -> 新版本发布 -> 再观测`
 
-![Skills 优化页面示意图](../../images/skills/optimize.png)
+<p align="center">
+  <img src="../../images/skills/optimize.png" alt="Skills 优化页面示意图" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+</p>
 
 ## 模块定位
 

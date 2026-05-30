@@ -18,7 +18,9 @@ Skills 评测总览用于对指定 Skill 版本执行结构化评测，并汇总
 
 下图展示 Skills 评测总览页的核心区域，包括综合健康分、诊断区、**SMART RUN** 与四个维度卡片。
 
-![Skills 评测总览页示意图，包含综合健康分、诊断区、SMART RUN 和四个评测维度卡片](../../../images/skills/evaluation/evaluation_summary.png)
+<p align="center">
+  <img src="../../../images/skills/evaluation/evaluation_summary.png" alt="Skills 评测总览页示意图，包含综合健康分、诊断区、SMART RUN 和四个评测维度卡片" style="width: 100%; max-width: 1040px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+</p>
 
 图中各区域的职责如下：
 

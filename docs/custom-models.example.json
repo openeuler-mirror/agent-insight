@@ -1,0 +1,21 @@
+{
+  "_readme": [
+    "Custom model configuration: pricing, context window, and more.",
+    "Copy this file to the project root as 'custom-models.json' and edit to your needs.",
+    "",
+    "- Keys are model name prefixes (e.g. 'glm-4' matches 'glm-4.7')",
+    "- All prices are in USD per million tokens",
+    "- inputTokenPrice and outputTokenPrice are required for cost estimation",
+    "- cacheReadInputTokenPrice is optional (defaults to 10% of inputTokenPrice)",
+    "- cacheCreationInputTokenPrice is optional (defaults to 125% of inputTokenPrice)",
+    "- contextWindow is optional (max tokens for context window % metric)",
+    "- Entries here override built-in pricing/context window for the same model prefix",
+    "- Changes take effect on next page load (no restart needed)"
+  ],
+  "glm-4.7": {
+    "inputTokenPrice": 0.6,
+    "outputTokenPrice": 0.11,
+    "cacheReadInputTokenPrice": 0,
+    "contextWindow": 200000
+  }
+}
