@@ -761,33 +761,28 @@ function SkillAnalysisPage() {
         [skills, selectedSkillId],
     );
 
+    // 关联评测任务的版本一致性（非破坏式）：若已关联任务(其评测的 trace 属于另一个版本)与当前查看版本
+    // 明确不一致，则在"展示/取数"层把它当作未关联，避免在 v0 看到 v1 任务的数据。
+    // 注意：不清 state、不删 localStorage —— 每个版本的关联仍各自按槽位持久化，切版本不会互相影响
+    //（之前用 effect 删 localStorage 会和"切版本恢复"竞态，误删刚切到的版本里已选好的任务）。
+    const effectiveTraceEvaluationBatchId = useMemo(() => {
+        if (!traceEvaluationBatchId || selectedVersion == null) return traceEvaluationBatchId;
+        const associated = caseEvalTasks.find(t => t.runId === traceEvaluationBatchId);
+        if (associated && typeof associated.skillVersion === 'number' && associated.skillVersion !== selectedVersion) return '';
+        return traceEvaluationBatchId;
+    }, [traceEvaluationBatchId, caseEvalTasks, selectedVersion]);
+
     // 历史评测任务按当前 skill + 版本过滤：任务的 skill/版本来自其 trace 关联 execution（runs 接口聚合主导值）。
-    // 当前已关联的任务始终保留；选「全部版本」(selectedVersion==null) 时只按 skill 名筛；任务版本解析不到时不因版本误杀。
+    // 当前有效关联的任务始终保留；选「全部版本」(selectedVersion==null) 时只按 skill 名筛；任务版本解析不到时不因版本误杀。
     const caseEvalTasksForSkill = useMemo(() => {
         const skillName = selectedSkill?.name;
         if (!skillName) return caseEvalTasks;
         return caseEvalTasks.filter(t =>
-            t.runId === traceEvaluationBatchId
+            t.runId === effectiveTraceEvaluationBatchId
             || (t.skillName === skillName
                 && (selectedVersion == null || t.skillVersion == null || t.skillVersion === selectedVersion)),
         );
-    }, [caseEvalTasks, selectedSkill?.name, selectedVersion, traceEvaluationBatchId]);
-
-    // 关联评测任务的版本一致性校验：若当前已关联的任务(其评测的 trace 属于另一个版本)与正在查看的
-    // 版本不一致，清掉该关联(state + 当前版本的 localStorage 槽位)，避免在 v0 看到 v1 任务的数据。
-    // 仅当能确定任务版本(skillVersion 为数字)且与 selectedVersion 明确不同时才清，版本未知不动以免误清。
-    useEffect(() => {
-        if (!traceEvaluationBatchId || selectedVersion == null) return;
-        const associated = caseEvalTasks.find(t => t.runId === traceEvaluationBatchId);
-        if (associated && typeof associated.skillVersion === 'number' && associated.skillVersion !== selectedVersion) {
-            setTraceEvaluationBatchId('');
-            setTraceEvaluationBatchTitle('');
-            setTraceEvaluationBatchEvaluators([]);
-            if (traceEvalBatchStorageKey) {
-                try { localStorage.removeItem(traceEvalBatchStorageKey); } catch {/* ignore */}
-            }
-        }
-    }, [traceEvaluationBatchId, caseEvalTasks, selectedVersion, traceEvalBatchStorageKey]);
+    }, [caseEvalTasks, selectedSkill?.name, selectedVersion, effectiveTraceEvaluationBatchId]);
 
     const sortedVersions = useMemo(() => {
         const versions = selectedSkill?.versions || [];
@@ -1420,7 +1415,7 @@ function SkillAnalysisPage() {
                         user={user}
                         selectedSkill={selectedSkill}
                         selectedVersion={selectedVersion}
-                        traceEvaluationBatchId={traceEvaluationBatchId}
+                        traceEvaluationBatchId={effectiveTraceEvaluationBatchId}
                         traceEvaluationBatchTitle={traceEvaluationBatchTitle}
                         health={health}
                         standards={standards}
@@ -1467,7 +1462,7 @@ function SkillAnalysisPage() {
                         onReload={reloadTraces}
                         onOptimize={() => router.push(optimizeHref)}
                         onBatchAnalyze={runBatchTraceAnalysis}
-                        traceEvaluationBatchId={traceEvaluationBatchId}
+                        traceEvaluationBatchId={effectiveTraceEvaluationBatchId}
                         traceEvaluationBatchTitle={traceEvaluationBatchTitle}
                         onOpenEvalBatchDialog={() => setNewBatchDialogOpen(true)}
                         evalTaskOptions={caseEvalTasksForSkill}
