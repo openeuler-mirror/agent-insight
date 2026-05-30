@@ -203,9 +203,18 @@ export default function SkillOptimizePage() {
         const setter = kind === 'left' ? setLeftWidth : setRightWidth;
         const cssVar = kind === 'left' ? '--skopt-left-w' : '--skopt-right-w';
         const min = 200;
-        const max = 800;
         const root = document.documentElement;
         const container = rootRef.current;
+        // 动态上限：不再死卡 800px（宽屏上拖不开）。拖到底也要给中间 chat 留出
+        // MIDDLE_MIN 的最小宽度，其余空间都让给被拖动的那一列。
+        const MIDDLE_MIN = 360;
+        const RESIZER_W = 6;
+        const containerW = container?.clientWidth ?? window.innerWidth;
+        // 左侧 resizer 常驻；右侧 resizer 仅在预览打开时存在。
+        const resizers = RESIZER_W * (diffOpen ? 2 : 1);
+        // 对侧固定列当前占用的宽度（拖 left 时对侧是 right，反之亦然）。
+        const otherWidth = kind === 'left' ? (diffOpen ? rightWidth : 0) : leftWidth;
+        const max = Math.max(min, containerW - otherWidth - MIDDLE_MIN - resizers);
 
         document.body.style.cursor = 'col-resize';
         document.body.style.userSelect = 'none';
