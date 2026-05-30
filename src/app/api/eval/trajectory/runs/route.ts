@@ -57,6 +57,80 @@ function getEvaluatorName(rows: Array<{ rawAnalysisJson?: string | null }>): str
     return names.length > 0 ? names.join('、') : 'Agent 轨迹质量';
 }
 
+export async function DELETE(request: Request) {
+    try {
+        const { searchParams } = new URL(request.url);
+        let body: Record<string, unknown> = {};
+        try { body = await request.json(); } catch { /* allow query params fallback */ }
+        const pick = (k: string) => String((body[k] as string) ?? searchParams.get(k) ?? '').trim();
+        const user = pick('user');
+        const runId = pick('runId');
+
+        if (!user) return NextResponse.json({ error: 'user is required' }, { status: 400 });
+        if (!runId) return NextResponse.json({ error: 'runId is required' }, { status: 400 });
+
+        const rows = await prisma.trajectoryEvalResult.findMany({
+            where: { user, evaluatorRunId: runId },
+            select: { id: true, status: true },
+        });
+        if (rows.length === 0) {
+            return NextResponse.json({ deletedResults: 0, deletedEvaluations: 0, deletedSkillIssues: 0 });
+        }
+        if (rows.some(row => row.status === 'pending' || row.status === 'running')) {
+            return NextResponse.json(
+                { error: '评测进行中，暂时不能删除该批次；请等待完成后再删除。' },
+                { status: 409 },
+            );
+        }
+
+        const evaluationIds = await prisma.evaluation.findMany({
+            where: {
+                user,
+                type: 'dynamic',
+                runId,
+            },
+            select: { id: true },
+        });
+        const skillIssueCount = evaluationIds.length > 0
+            ? await prisma.skillIssue.count({
+                where: {
+                    evaluationId: {
+                        in: evaluationIds.map(item => item.id),
+                    },
+                },
+            })
+            : 0;
+
+        const [deletedEvaluations, deletedResults] = await prisma.$transaction([
+            prisma.evaluation.deleteMany({
+                where: {
+                    user,
+                    type: 'dynamic',
+                    runId,
+                },
+            }),
+            prisma.trajectoryEvalResult.deleteMany({
+                where: {
+                    user,
+                    evaluatorRunId: runId,
+                },
+            }),
+        ]);
+
+        return NextResponse.json({
+            deletedResults: deletedResults.count,
+            deletedEvaluations: deletedEvaluations.count,
+            deletedSkillIssues: skillIssueCount,
+        });
+    } catch (error: unknown) {
+        console.error('trajectory/runs DELETE error:', error);
+        return NextResponse.json(
+            { error: error instanceof Error ? error.message : 'failed to delete run' },
+            { status: 500 },
+        );
+    }
+}
+
 export async function GET(request: Request) {
     try {
         const { searchParams } = new URL(request.url);
