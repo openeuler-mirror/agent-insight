@@ -176,55 +176,7 @@ bash scripts/restart.sh
 
 ## 📚 文档
 
-详细使用指南见 [`docs/guide`](docs/guide/) 目录。
-
----
-
-## 🎨 品牌标识
-
-Agent-Insight 的 Logo 由一段 **trace 路径**（节点 + 连线，象征 Agent 执行步骤）与一个 **放大镜**（聚焦于其中一个节点）组成，呼应产品理念：**让 Agent 运行的每一步都被看见、被审视**。
-
-- **Teal（青）** — 信任、技术、数据
-- **Amber（琥珀）** — 洞察的瞬间、聚焦的高光
-
-### Logo 资产
-
-所有矢量资源位于 [`public/brand/`](public/brand/)，按场景选用：
-
-| 文件 | 适用场景 |
-|------|----------|
-| [`logo-horizontal-light.svg`](public/brand/logo-horizontal-light.svg) | 浅色背景的站点头部、邮件、文档 |
-| [`logo-horizontal-dark.svg`](public/brand/logo-horizontal-dark.svg) | 深色模式、深色物料 |
-| [`mark-only.svg`](public/brand/mark-only.svg) | 独立符号、社交头像、不需要文字时 |
-| [`favicon.svg`](public/brand/favicon.svg) | 浏览器标签，16/32/48px — 极简变体 |
-| [`app-icon.svg`](public/brand/app-icon.svg) | iOS / macOS / PWA 应用图标，256×256 带圆角容器 |
-
-### 配色
-
-| Token | Hex | 用途 |
-|-------|-----|------|
-| Primary teal | `#0F766E` | Logo 主体、品牌主色、浅色模式 CTA |
-| Teal · dark | `#5EEAD4` | 深色模式下的 Logo 与强调色 |
-| Accent amber | `#F59E0B` | 放大镜高光、聚焦 / 注意状态 |
-| Amber · dark | `#FBBF24` | 深色模式下的强调色 |
-| Ink | `#1A1A1A` | 正文、浅色背景下的 "Insight" 字样 |
-| Canvas | `#FAFAF7` | 偏暖的米白背景 |
-| Dark canvas | `#0F0F14` | 深色模式背景 |
-
-### 字体
-
-- **Logo / UI**：Inter（"Agent" 用 700，"Insight" 用 300）
-- **代码、日志、链路**：JetBrains Mono 400
-
-### 使用规则
-
-- **Favicon 最小尺寸**：16px（使用简化的 `favicon.svg`，不要缩放完整 logo）
-- **完整横版锁定最小宽度**：120px；更小尺寸请改用 `mark-only.svg`
-- **留白**：四周保留至少一个节点高度（小尺寸下约 4px）的安全间距
-
-> 完整规范见 [`public/brand/README.md`](public/brand/README.md)。
-
----
+详细使用指南见 [`docs/user-guide`](docs/user-guide/) 目录。
 
 ## 🤝 如何贡献
 
