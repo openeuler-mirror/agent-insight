@@ -3130,7 +3130,6 @@ function TraceDeviationPanel({
     const [matchData, setMatchData] = useState<MatchData | null>(null);
     const [matchLoading, setMatchLoading] = useState(false);
     const [analyzing, setAnalyzing] = useState(false);
-    const [traceListCollapsed, setTraceListCollapsed] = useState(false);
     const [error, setError] = useState('');
 
     /* ─────────────────────────────────────────────────────
@@ -3777,14 +3776,19 @@ function TraceDeviationPanel({
         if (s.resultScore != null || s.trajScore != null) return 'partial';
         return 'idle';
     };
-    // ② 执行块要列的 trace：四类——已评测 / 部分评测 / 评测中 / 评测失败,
-    // 外加任何曾经在后端跑过评测的 taskId(evaluatedTaskIds 来自 recovery)。
-    // 用户明确要求"无论成功失败都要列出来",所以这里跟 getTraceEvalStatus 解耦,
-    // 走"any history" 的口径,避免漏掉 backend 落了 row 但前端 state 算不出非-idle 的 case。
-    const displayedTraces = scoredTraces.filter(s =>
-        !deletedTaskIds.has(s.id)
-        && (getTraceEvalStatus(s) !== 'idle' || evaluatedTaskIds.has(s.id))
-    );
+    // ② 评测执行 列表口径：
+    //   - 关联了「评测任务」时：只列该任务(evaluatorRunId)的记录(traceEvalResultsMap) + 本次会话刚触发/失败的，
+    //     使列表与上方"已评测 X/Y"、③ 总评分(都绑定该任务)一致；且每行都在任务里 → 都有评估 Trace。
+    //     之前 recovery 拉的是全量结果(所有任务, limit 200)塞进 evaluatedTaskIds，导致列表显示几十条历史
+    //     "已评测"(其它任务、无评估ID)，与 4/6 这种任务内统计对不上。
+    //   - 未关联任务时：沿用 status / 历史口径(无论成功失败都列出)。
+    const displayedTraces = scoredTraces.filter(s => {
+        if (deletedTaskIds.has(s.id)) return false;
+        if (traceEvaluationBatchId) {
+            return traceEvalResultsMap.has(s.id) || triggeredTaskIds.has(s.id) || failedTaskIds.has(s.id);
+        }
+        return getTraceEvalStatus(s) !== 'idle' || evaluatedTaskIds.has(s.id);
+    });
     // 排除已在「评测执行」里删除的记录(deletedTaskIds)，否则删除后上方"已评测 X/Y · 平均评分"
     // 仍按旧集合统计、不随删除变化。与 displayedTraces 同口径。
     const fullyEvaluated = scoredTraces.filter(s =>
@@ -3896,29 +3900,11 @@ function TraceDeviationPanel({
                 {/* source-mode 切换 chip：放在 ① 配置块内（用户要求） */}
                 {sourceModeToggle}
                 {/* trace 列表 */}
-            <div className={`sa-trace-picker ${traceListCollapsed ? 'collapsed' : ''}`} style={{ display: 'block' }}>
+            <div className="sa-trace-picker" style={{ display: 'block' }}>
                 <aside className="sa-trace-list" aria-label="该 Skill 的 Trace" style={{ width: '100%', maxWidth: 'none' }}>
-                    {traceListCollapsed ? (
-                        <button
-                            className="sa-trace-collapse collapsed"
-                            onClick={() => setTraceListCollapsed(false)}
-                            aria-label="展开 Trace 列表"
-                        >
-                            <span>›</span>
-                            <b>Trace</b>
-                            <small>{traces.length}</small>
-                        </button>
-                    ) : null}
                     <div className="sa-trace-list-head">
                         <div className="sa-trace-list-title">
                             <h3>该 Skill 的 Trace <small>({traces.length})</small></h3>
-                            <button
-                                className="sa-trace-collapse"
-                                onClick={() => setTraceListCollapsed(true)}
-                                aria-label="收起 Trace 列表"
-                            >
-                                ‹
-                            </button>
                         </div>
                         <input value={query} onChange={e => setQuery(e.target.value)} placeholder="搜索 query 或 taskId..." />
                         <div className="sa-tabs">
