@@ -1149,12 +1149,15 @@ export function BatchEvaluation({
             alert(locale === 'zh' ? '请先在上方「评测任务」新建或选择一个评测任务' : 'Create/select an eval task first');
             return;
         }
+        // 可启动 = 未跑(无状态/pending) 或 已失败(fail，含「已终止」)——失败的允许重跑。
+        // 后端 startBatchTaskInBackground 会先把选中 case 重置为 pending 再跑，所以重跑 fail 是安全的。
+        // 进行中(running/evaluating/executed)与已通过(pass)不重复启动。
         const toRun = selectedCaseIds.filter(id => {
             const s = caseStates[id]?.status;
-            return !s || s === 'pending';
+            return !s || s === 'pending' || s === 'fail';
         });
         if (toRun.length === 0) {
-            alert(locale === 'zh' ? '没有待启动的 case (已勾选的都已在跑 / 已完成)' : 'No cases to start');
+            alert(locale === 'zh' ? '没有待启动的 case (已勾选的都在跑 / 已通过)' : 'No cases to start');
             return;
         }
         setBatchStartInFlight(true);
