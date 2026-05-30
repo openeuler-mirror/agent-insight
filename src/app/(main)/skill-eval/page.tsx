@@ -1274,14 +1274,14 @@ function SkillAnalysisPage() {
      * 用例分析（trace）卡上展示的分数 = "已评测过的 trace" 的「(结果分 + 轨迹分) / 2」的平均值。
      * 关键约束：每条 trace 只有结果分 + 轨迹分都在时才参与；只跑了一边的不算"已评测"。
      *   - 结果分：trace.answer_score（Execution.answerScore，task-completion 评估器写）
-     *   - 轨迹分：getTraceFlowScore(trace)（flow-parser analyze-match overallScore）
+     *   - 轨迹分：getEffectiveTrajScore(trace)（优先方案A聚合分 trajectoryScore，回退 analyze-match 覆盖率）
      * 跟单 trace 详情页 Hero 的口径不一样（详情页只看 LLM 单分），但卡片这层要求双分都备齐
      * 才算"完整评测"，避免被半评测的 trace 拉偏。
      */
     const traceCombinedScores = traces.reduce<{ sum: number; count: number }>((acc, t) => {
         const result = typeof t.answer_score === 'number' ? t.answer_score
             : typeof t.answerScore === 'number' ? t.answerScore : null;
-        const traj = getTraceFlowScore(t);
+        const traj = getEffectiveTrajScore(t);
         if (result != null && traj != null) {
             acc.sum += (result + traj) / 2;
             acc.count += 1;
@@ -1770,7 +1770,7 @@ function AnalysisOverview({
     const traceCardAgg = traces.reduce<{ sum: number; count: number }>((acc, t) => {
         const result = typeof t.answer_score === 'number' ? t.answer_score
             : typeof t.answerScore === 'number' ? t.answerScore : null;
-        const traj = getTraceFlowScore(t);
+        const traj = getEffectiveTrajScore(t);
         if (result != null && traj != null) {
             acc.sum += (result + traj) / 2;
             acc.count += 1;
@@ -1782,7 +1782,7 @@ function AnalysisOverview({
     const traceLatestUpdatedAt = traces.reduce<string | null>((latest, t) => {
         const result = typeof t.answer_score === 'number' ? t.answer_score
             : typeof t.answerScore === 'number' ? t.answerScore : null;
-        const traj = getTraceFlowScore(t);
+        const traj = getEffectiveTrajScore(t);
         if (result == null || traj == null) return latest;
         const candidate = t.execution_match?.matchedAt || t.timestamp || null;
         if (!candidate) return latest;
@@ -1958,7 +1958,7 @@ function AnalysisOverview({
         const traceAgg = tracesData.reduce<{ sum: number; count: number }>((acc, t) => {
             const result = typeof t.answer_score === 'number' ? t.answer_score
                 : typeof t.answerScore === 'number' ? t.answerScore : null;
-            const traj = getTraceFlowScore(t);
+            const traj = getEffectiveTrajScore(t);
             if (result != null && traj != null) {
                 acc.sum += (result + traj) / 2;
                 acc.count += 1;
@@ -3337,7 +3337,8 @@ function TraceDeviationPanel({
         ? Array.from(checkedTraceIds)
         : (selectedTraceId ? [selectedTraceId] : []);
     const runBothAnalyses = async () => {
-        if (bothRunning || targetTraceIds.length === 0) return;
+        // 必须先关联评测任务才能评测——否则后端每次会新建一个孤立任务、结果归属混乱。
+        if (bothRunning || targetTraceIds.length === 0 || !traceEvaluationBatchId) return;
         // 立刻记录"已触发"——② 执行块的状态徽章靠这个区分 pending/idle
         const triggerTs = Date.now();
         setTriggeredTaskIds(prev => {
@@ -3391,18 +3392,21 @@ function TraceDeviationPanel({
     const primaryLabel = bothRunning ? '分析中…'
         : checkedTraceIds.size > 0 ? `分析选中 ${checkedTraceIds.size} 条 Trace`
         : '分析当前 Trace';
-    const primaryDisabled = bothRunning || targetTraceIds.length === 0 || (checkedTraceIds.size === 0 && !primarySkill?.name);
+    const primaryDisabled = bothRunning || targetTraceIds.length === 0 || (checkedTraceIds.size === 0 && !primarySkill?.name) || !traceEvaluationBatchId;
 
-    // 「用例来源」toggle —— 两种模式都用同一份 JSX；trace 模式渲染在 trace 的 ① body 里，
-    // dataset 模式通过 BatchEvaluation 的 topConfigSlot prop 注入到 BE 的 ① body 顶部。
-    // 视觉上"toggle 始终在 ① 配置块里"，两边对称。
+    // 「添加评测对象」入口 —— 评测对象始终是 Trace，这里选的是 Trace 的来路（添加方式），不是两种评测模式：
+    //   · 选已有 Trace：直接挑现成执行记录评测
+    //   · 用数据集生成：先执行 case 生成 Trace，再评测
+    // 两种方式都把 Trace 的评测加入「当前评测任务」，统一在下方「② 评测执行」展示。
+    // 两边 JSX 同一份：trace 模式渲染在 trace 的 ① body；dataset 模式经 BatchEvaluation 的 topConfigSlot 注入。
     const sourceModeToggle = (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', background: '#fafafa', border: '1px solid #e5e7eb', borderRadius: 6, marginBottom: 14 }}>
-            <span style={{ fontSize: 11, fontWeight: 700, color: '#52525b', textTransform: 'uppercase', letterSpacing: '0.04em' }}>用例来源</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', background: '#fafafa', border: '1px solid #e5e7eb', borderRadius: 6, marginBottom: 14, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: '#52525b' }}>添加评测对象（Trace）</span>
             <div style={{ display: 'inline-flex', background: '#fff', borderRadius: 5, padding: 3, gap: 2, border: '1px solid #e5e7eb' }}>
                 <button
                     type="button"
                     onClick={() => setCaseSourceMode('trace')}
+                    title="直接挑选现成的执行记录(Trace)来评测"
                     style={{
                         border: 0,
                         padding: '4px 12px',
@@ -3413,10 +3417,11 @@ function TraceDeviationPanel({
                         fontWeight: 600,
                         cursor: 'pointer',
                     }}
-                >📊 从 Trace</button>
+                >📊 选已有 Trace</button>
                 <button
                     type="button"
                     onClick={() => setCaseSourceMode('dataset')}
+                    title="用数据集 case 执行 skill 生成新 Trace，再评测（比「选已有」多一步生成）"
                     style={{
                         border: 0,
                         padding: '4px 12px',
@@ -3427,13 +3432,11 @@ function TraceDeviationPanel({
                         fontWeight: 600,
                         cursor: 'pointer',
                     }}
-                >🗄 从数据集</button>
+                >🗄 用数据集生成</button>
             </div>
             <span style={{ flex: 1 }} />
             <span style={{ fontSize: 11, color: '#71717a' }}>
-                {caseSourceMode === 'trace'
-                    ? `当前 skill: ${skill?.name || '未选'}${version != null ? ` v${version}` : ''}（顶部切换）`
-                    : '数据集 / 评测器 见上方'}
+                两种方式都把 Trace 评测加入当前评测任务，统一在下方「② 评测执行」展示
             </span>
         </div>
     );
@@ -3544,25 +3547,45 @@ function TraceDeviationPanel({
         if (s.resultScore != null || s.trajScore != null) return 'partial';
         return 'idle';
     };
-    // ② 执行块要列的 trace：四类——已评测 / 部分评测 / 评测中 / 评测失败,
-    // 外加任何曾经在后端跑过评测的 taskId(evaluatedTaskIds 来自 recovery)。
-    // 用户明确要求"无论成功失败都要列出来",所以这里跟 getTraceEvalStatus 解耦,
-    // 走"any history" 的口径,避免漏掉 backend 落了 row 但前端 state 算不出非-idle 的 case。
-    const displayedTraces = scoredTraces.filter(s =>
-        !deletedTaskIds.has(s.id)
-        && (getTraceEvalStatus(s) !== 'idle' || evaluatedTaskIds.has(s.id))
+    // ② 评测执行 列表口径：
+    //   - 关联了「评测任务」时：只列该任务(evaluatorRunId)的记录(traceEvalResultsMap) + 本次会话刚触发/失败的，
+    //     使列表与上方"已评测 X/Y"、③ 总评分(都绑定该任务)一致；且每行都在任务里 → 都有评估 Trace。
+    //     之前 recovery 拉的是全量结果(所有任务, limit 200)塞进 evaluatedTaskIds，导致列表显示几十条历史
+    //     "已评测"(其它任务、无评估ID)，与 4/6 这种任务内统计对不上。
+    //   - 未关联任务时：沿用 status / 历史口径(无论成功失败都列出)。
+    const displayedTraces = scoredTraces.filter(s => {
+        if (deletedTaskIds.has(s.id)) return false;
+        if (traceEvaluationBatchId) {
+            return traceEvalResultsMap.has(s.id) || triggeredTaskIds.has(s.id) || failedTaskIds.has(s.id);
+        }
+        return getTraceEvalStatus(s) !== 'idle' || evaluatedTaskIds.has(s.id);
+    });
+    // 排除已在「评测执行」里删除的记录(deletedTaskIds)，否则删除后上方"已评测 X/Y · 平均评分"
+    // 仍按旧集合统计、不随删除变化。与 displayedTraces 同口径。
+    const fullyEvaluated = scoredTraces.filter(s =>
+        !deletedTaskIds.has(s.id) && s.resultScore != null && s.trajScore != null,
     );
-    const fullyEvaluated = scoredTraces.filter(s => s.resultScore != null && s.trajScore != null);
-    const avgResult = fullyEvaluated.length === 0 ? null
-        : Math.round(fullyEvaluated.reduce((sum, s) => sum + (s.resultScore || 0), 0) / fullyEvaluated.length);
-    const avgTraj = fullyEvaluated.length === 0 ? null
-        : Math.round(fullyEvaluated.reduce((sum, s) => sum + (s.trajScore || 0), 0) / fullyEvaluated.length);
+    // ③ 结果区口径：绑定当前「评测任务」(evaluatorRunId) 的有效评测记录，与 source(从Trace/从数据集)
+    // 无关——切换 source 不应改变这个平均。有关联任务时用 traceEvalResultsMap(该任务全部记录, 已 ×100)；
+    // 没关联任务时回退本地 scoredTraces(fullyEvaluated)。X=有效记录(双分都在), Y=任务总记录数。
+    const caseResultPairs: { resultScore: number | null; trajScore: number | null }[] = traceEvaluationBatchId
+        ? Array.from(traceEvalResultsMap.entries())
+            .filter(([id]) => !deletedTaskIds.has(id))
+            .map(([, m]) => ({ resultScore: m.resultScore ?? null, trajScore: m.trajScore ?? null }))
+        : fullyEvaluated.map(s => ({ resultScore: s.resultScore, trajScore: s.trajScore }));
+    const validResultPairs = caseResultPairs.filter(p => typeof p.resultScore === 'number' && typeof p.trajScore === 'number') as { resultScore: number; trajScore: number }[];
+    const evalDoneCount = validResultPairs.length;
+    const evalTotalCount = traceEvaluationBatchId ? caseResultPairs.length : traces.length;
+    const avgResult = evalDoneCount === 0 ? null
+        : Math.round(validResultPairs.reduce((sum, p) => sum + p.resultScore, 0) / evalDoneCount);
+    const avgTraj = evalDoneCount === 0 ? null
+        : Math.round(validResultPairs.reduce((sum, p) => sum + p.trajScore, 0) / evalDoneCount);
     const avgOverall = avgResult == null || avgTraj == null ? null : Math.round((avgResult + avgTraj) / 2);
     const overallScoreKlass: 'good' | 'warn' | 'bad' = avgOverall == null
         ? 'warn'
         : avgOverall >= 80 ? 'good' : avgOverall >= 60 ? 'warn' : 'bad';
-    const passCount = fullyEvaluated.filter(s => ((s.resultScore || 0) + (s.trajScore || 0)) / 2 >= 60).length;
-    const passRatePct = fullyEvaluated.length === 0 ? 0 : Math.round((passCount / fullyEvaluated.length) * 100);
+    const passCount = validResultPairs.filter(p => (p.resultScore + p.trajScore) / 2 >= 60).length;
+    const passRatePct = evalDoneCount === 0 ? 0 : Math.round((passCount / evalDoneCount) * 100);
 
     // 为 dual-tab 各自生成 FindingGroup（未通过 / 通过 / 待评测），每条 IssueCard 的 dimension
     // 字段用 traceId 编码——FindingsGrouped 当前没暴露 onClick，所以"点 case → 切换 selectedTrace"
@@ -3635,7 +3658,7 @@ function TraceDeviationPanel({
                         <span>用例来源</span>
                         <code>从 Trace</code>
                         <span>· 关联 <code>{traces.length}</code> 条</span>
-                        <span>· 已评测 <code>{fullyEvaluated.length}</code></span>
+                        <span>· 已评测 <code>{evalDoneCount}</code></span>
                     </>
                 }
                 // trace 模式评测任务关联: 跟 dataset 模式 BatchEvaluation 的 ① actions 一致样式。
@@ -3648,29 +3671,11 @@ function TraceDeviationPanel({
                 {/* source-mode 切换 chip：放在 ① 配置块内（用户要求） */}
                 {sourceModeToggle}
                 {/* trace 列表 */}
-            <div className={`sa-trace-picker ${traceListCollapsed ? 'collapsed' : ''}`} style={{ display: 'block' }}>
+            <div className="sa-trace-picker" style={{ display: 'block' }}>
                 <aside className="sa-trace-list" aria-label="该 Skill 的 Trace" style={{ width: '100%', maxWidth: 'none' }}>
-                    {traceListCollapsed ? (
-                        <button
-                            className="sa-trace-collapse collapsed"
-                            onClick={() => setTraceListCollapsed(false)}
-                            aria-label="展开 Trace 列表"
-                        >
-                            <span>›</span>
-                            <b>Trace</b>
-                            <small>{traces.length}</small>
-                        </button>
-                    ) : null}
                     <div className="sa-trace-list-head">
                         <div className="sa-trace-list-title">
                             <h3>该 Skill 的 Trace <small>({traces.length})</small></h3>
-                            <button
-                                className="sa-trace-collapse"
-                                onClick={() => setTraceListCollapsed(true)}
-                                aria-label="收起 Trace 列表"
-                            >
-                                ‹
-                            </button>
                         </div>
                         <input value={query} onChange={e => setQuery(e.target.value)} placeholder="搜索 query 或 taskId..." />
                         <div className="sa-tabs">
@@ -3875,12 +3880,14 @@ function TraceDeviationPanel({
                             cursor: primaryDisabled ? 'not-allowed' : 'pointer',
                             opacity: primaryDisabled ? 0.6 : 1,
                         }}
-                        title={primaryDisabled ? '请先在上方勾选 trace（且 trace 有主 skill）' : '对勾选的 trace 直接开始评测'}
+                        title={!traceEvaluationBatchId ? '请先在上方"评测任务"里新建或选择一个评测任务' : primaryDisabled ? '请先在上方勾选 trace（且 trace 有主 skill）' : '对勾选的 trace 直接开始评测'}
                     >
                         {bothRunning ? '评测中…' : checkedTraceIds.size > 0 ? `▶ 开始评测（${checkedTraceIds.size} 条）` : '▶ 开始评测'}
                     </button>
-                    <span style={{ fontSize: 11, color: 'var(--ev-muted)' }}>
-                        勾选 trace 后开始评测；进度见 ② 评测执行
+                    <span style={{ fontSize: 11, color: !traceEvaluationBatchId ? 'var(--ev-warning)' : 'var(--ev-muted)' }}>
+                        {!traceEvaluationBatchId
+                            ? '请先在上方「评测任务」新建或选择一个任务，再开始评测'
+                            : '勾选 trace 后开始评测；进度见 ② 评测执行'}
                     </span>
                 </div>
             </SectionShell>
@@ -3896,6 +3903,7 @@ function TraceDeviationPanel({
                         newTaskTrigger={0}
                         historyPanelTrigger={0}
                         controlled
+                        hideExecAndResult
                         topConfigSlot={<>{sharedConfigBar}{sourceModeToggle}</>}
                         headerActions={evalTaskPickerNode}
                         controlledDatasetIds={selectedDatasetIds}
@@ -3907,8 +3915,10 @@ function TraceDeviationPanel({
                 </div>
             )}
 
-            {/* trace 模式：② + ③ */}
-            {caseSourceMode === 'trace' && (<>
+            {/* ② 评测执行 + ③ 分析结果：两种 source 下统一渲染（绑定当前评测任务，与 source 无关）。
+               「从数据集」只是多了一步产生 Trace；产生后的 Trace 评测同样落到当前评测任务，统一在这里展示。
+               dataset 模式下 BatchEvaluation 用 hideExecAndResult 只渲染 ① 配置，②/③ 由这里统一出。 */}
+            {(<>
 
             {/* ─────────── ② 评测执行 ─────────── */}
             <SectionShell
@@ -3921,7 +3931,7 @@ function TraceDeviationPanel({
                 summary={
                     <>
                         <span>已评测</span>
-                        <code>{fullyEvaluated.length} / {traces.length}</code>
+                        <code>{evalDoneCount} / {evalTotalCount}</code>
                         {avgOverall != null && (
                             <span>· 平均评分 <b style={{ color: overallScoreKlass === 'good' ? 'var(--ev-success)' : overallScoreKlass === 'bad' ? 'var(--ev-error)' : 'var(--ev-warning)' }}>{avgOverall} 分</b></span>
                         )}
@@ -4051,8 +4061,8 @@ function TraceDeviationPanel({
                 num={3}
                 variant="result"
                 title="分析结果"
-                desc={fullyEvaluated.length > 0
-                    ? `已评测 ${fullyEvaluated.length} / ${traces.length} trace · 结果 + 轨迹 双维度`
+                desc={evalDoneCount > 0
+                    ? `已评测 ${evalDoneCount} / ${evalTotalCount} · 结果 + 轨迹 双维度`
                     : '尚未评测'}
                 open={caseResultOpen}
                 onToggle={() => setCaseResultOpen(o => !o)}
@@ -4061,7 +4071,7 @@ function TraceDeviationPanel({
                         <>
                             <span>总评分</span>
                             <code className={`score-${overallScoreKlass}`}>{avgOverall} 分</code>
-                            <span>· 通过 <b>{passCount}</b> / <b>{fullyEvaluated.length}</b></span>
+                            <span>· 通过 <b>{passCount}</b> / <b>{evalDoneCount}</b></span>
                         </>
                     ) : (
                         <span style={{ color: 'var(--ev-muted)' }}>未评测</span>
@@ -4076,9 +4086,9 @@ function TraceDeviationPanel({
                             <span className="ev-hero-unit">分</span>
                         </div>
                         <div className="ev-hero-label">
-                            总评分 · 结果 + 轨迹 平均 · 已评测 {fullyEvaluated.length} / {traces.length} trace
+                            总评分 · 结果 + 轨迹 平均 · 已评测 {evalDoneCount} / {evalTotalCount}
                             <span style={{ display: 'block', fontSize: 11, color: 'var(--ev-muted)', fontWeight: 400, marginTop: 2 }}>
-                                跨已评测 trace 聚合 · 不随 ② 选中切换变化
+                                跨当前评测任务的有效评测聚合 · 不随 source(从Trace/从数据集) 切换变化
                             </span>
                         </div>
                     </div>
@@ -4098,22 +4108,22 @@ function TraceDeviationPanel({
                             <div className="ev-hero-sub-hint">执行路径是否合理</div>
                         </div>
                         <div className="ev-hero-sub-item">
-                            <div className={`ev-hero-sub-num ${fullyEvaluated.length === 0 ? '' : passRatePct >= 80 ? 'good' : passRatePct < 50 ? 'bad' : ''}`}>
-                                {fullyEvaluated.length === 0 ? '--' : `${passRatePct}%`}
+                            <div className={`ev-hero-sub-num ${evalDoneCount === 0 ? '' : passRatePct >= 80 ? 'good' : passRatePct < 50 ? 'bad' : ''}`}>
+                                {evalDoneCount === 0 ? '--' : `${passRatePct}%`}
                             </div>
                             <div className="ev-hero-sub-label">通过率</div>
                             <div className="ev-hero-sub-hint">已评测中达标</div>
                         </div>
                         <div className="ev-hero-sub-item">
-                            <div className="ev-hero-sub-num">{fullyEvaluated.length} / {traces.length}</div>
+                            <div className="ev-hero-sub-num">{evalDoneCount} / {evalTotalCount}</div>
                             <div className="ev-hero-sub-label">评测进度</div>
-                            <div className="ev-hero-sub-hint">{traces.length - fullyEvaluated.length} 条待评测</div>
+                            <div className="ev-hero-sub-hint">{Math.max(0, evalTotalCount - evalDoneCount)} 条待评测</div>
                         </div>
                     </div>
                 </div>
 
             </SectionShell>{/* /③ 结果 */}
-            </>)}{/* /trace mode (②+③) */}
+            </>)}{/* /② 评测执行 + ③ 分析结果 (统一, 与 source 无关) */}
         </section>
     );
 }
@@ -4819,6 +4829,17 @@ function getTraceFlowScore(trace: TraceRecord): number | null {
     const total = scoringMatches.length + skipped.length;
     if (total === 0) return null;
     return scoringMatches.filter(match => match.matchStatus === 'matched').length / total;
+}
+
+/**
+ * 一条 trace 的"轨迹分"(0-1) 统一口径：优先用后端聚合层算出的 trajectoryScore（方案A：
+ * 0.45 完整性 + 0.35 工具 + 0.20 冗余, 再封顶），没有(未评测/旧数据)再回退 analyze-match
+ * 对齐覆盖率 getTraceFlowScore。所有"卡片/概览/健康分/诊断"聚合都走它，避免与 ③ 详情口径分裂。
+ */
+function getEffectiveTrajScore(trace: TraceRecord): number | null {
+    if (typeof trace.trajectory_score === 'number') return trace.trajectory_score;
+    if (typeof trace.trajectoryScore === 'number') return trace.trajectoryScore;
+    return getTraceFlowScore(trace);
 }
 
 function getTraceId(trace: TraceRecord) {

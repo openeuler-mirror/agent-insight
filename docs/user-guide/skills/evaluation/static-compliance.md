@@ -19,7 +19,9 @@ description: "Skill 静态合规分析的创建流程、页面功能与结果解
 
 下图展示静态合规分析结果页的核心区域，包括顶部筛选区、评估元数据、总分区、雷达图、问题统计、结论摘要与底部 **分析标准** 明细。
 
-![静态合规分析结果页示意图，包含技能与版本筛选、评估元数据、静态合规总分、雷达图、问题统计、结论摘要和分析标准明细](../../../images/skills/evaluation/static-compliance.png)
+<p align="center">
+  <img src="../../../images/skills/evaluation/static-compliance.png" alt="静态合规分析结果页示意图，包含技能与版本筛选、评估元数据、静态合规总分、雷达图、问题统计、结论摘要和分析标准明细" style="width: 100%; max-width: 920px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+</p>
 
 ## 功能定位
 

@@ -212,15 +212,11 @@ fi
 
 echo "Starting server in DEVELOPMENT mode (npm run dev)..."
 
-# Ensure environment variables are exported for the Node process
 set -a
 if [ -f .env ]; then
   source .env
 fi
 set +a
-
-# Debug: Print DB_HOST to confirm it's visible
-echo "DB_HOST for server: $DB_HOST"
 
 nohup npm run dev > server.log 2>&1 &
 NEW_PID=$!

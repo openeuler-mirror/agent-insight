@@ -31,7 +31,9 @@ description: "基于 Trace 证据的异常归因与诊断结果解读"
 - 模块级诊断卡片
 - 明确报错卡片
 
-![智能诊断页面初始分析视图](../../images/agent/diagnosis/begin.png)
+<p align="center">
+  <img src="../../images/agent/diagnosis/begin.png" alt="智能诊断页面初始分析视图" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+</p>
 
 上图展示了智能诊断刚进入分析阶段时的页面形态：左侧是当前 Execution Trace 的节点列表，顶部是执行摘要与链路状态，中部首先给出 `AgentDebug` 的分层诊断视图，将问题拆解到 `Memory`、`Reflection`、`Planning`、`Action`、`System` 五个诊断维度，为后续根因收敛建立分析框架。
 
@@ -71,7 +73,9 @@ description: "基于 Trace 证据的异常归因与诊断结果解读"
 
 结论以结构化卡片而非原始日志的形式呈现，因而更适合用于问题归档、跨团队协作与修复追踪。
 
-![智能诊断结果卡片视图](../../images/agent/diagnosis/result.png)
+<p align="center">
+  <img src="../../images/agent/diagnosis/result.png" alt="智能诊断结果卡片视图" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+</p>
 
 上图展示了诊断进入结果输出阶段后的典型界面。页面会将问题压缩为可复用的结构化结论，包括：
 

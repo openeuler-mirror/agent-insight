@@ -54,7 +54,9 @@ A/B 测试承担“用对照实验验证真实收益、识别短板维度、形�
 
 下图展示 A/B 测试页在完成一次对照实验后的典型结果界面。页面整体按 **配置 → 运行 · A/B 评测 → 测评结果** 三段结构推进。
 
-![A/B 测试页面示意图，包含对照组与实验组执行结果、测评结果、能力成本稳定性三维评分、综合分、查看 Trace、复测和原始数据与计算公式](../../../images/skills/evaluation/ab-test.png)
+<p align="center">
+  <img src="../../../images/skills/evaluation/ab-test.png" alt="A/B 测试页面示意图，包含对照组与实验组执行结果、测评结果、能力成本稳定性三维评分、综合分、查看 Trace、复测和原始数据与计算公式" style="width: 100%; max-width: 920px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+</p>
 
 图中各区域的职责如下：
 

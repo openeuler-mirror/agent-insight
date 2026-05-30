@@ -15,7 +15,9 @@ description: "Skill 触发分析的创建流程、页面功能与结果解读"
 
 下图展示触发分析页的核心区域，包括顶部信息与操作区、**配置 · 数据集构建**、**执行 · 评测运行** 与 **结果 · 触发分析**。
 
-![触发分析页面示意图，包含顶部信息与操作区、配置数据集构建、执行评测运行、结果触发分析、总评分、TPR、FPR、平均延迟和分场景结果](../../../images/skills/evaluation/trigger-analysis.png)
+<p align="center">
+  <img src="../../../images/skills/evaluation/trigger-analysis.png" alt="触发分析页面示意图，包含顶部信息与操作区、配置数据集构建、执行评测运行、结果触发分析、总评分、TPR、FPR、平均延迟和分场景结果" style="width: 100%; max-width: 920px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
+</p>
 
 ## 功能定位
 
