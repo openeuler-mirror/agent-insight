@@ -156,7 +156,7 @@ bash scripts/restart.sh
 
 ### 分析 Skill
 
-1. 进入 **Skills 分析**，单击 **静态合规**。
+1. 进入 **Skills 评测**，单击 **静态合规**。
    <p align="center"><img src="docs/images/skill-analyse.png" alt="分析 Skill" /></p>
 
 2. 单击 **重新扫描**，查看分析结果。
