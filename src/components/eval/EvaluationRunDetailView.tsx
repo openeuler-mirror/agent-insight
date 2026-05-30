@@ -10,6 +10,7 @@ import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiFetch } from '@/lib/client/api';
 import { useAuth } from '@/lib/auth/auth-context';
+import { fmtPercentScore } from '@/lib/eval/score-format';
 
 interface TrajectoryDimensionScores {
     completeness: number;
@@ -162,11 +163,6 @@ function getStatusLabel(r: TrajectoryResult): string {
 
 function getStatusColor(r: TrajectoryResult): string {
     return isNoEvaluableCase(r) ? COLORS.warning : STATUS_COLOR[getEffectiveStatus(r)];
-}
-
-function fmtScore10(n: number | null | undefined): string {
-    if (n == null || Number.isNaN(n)) return '--';
-    return (n * 10).toFixed(1);
 }
 
 function fmtTime(s?: string | null): string {
@@ -324,7 +320,7 @@ export default function EvaluationRunDetailView({ runId }: { runId: string }) {
                     }
                 />
                 <Stat label="平均分"
-                    value={summary.avg != null ? `${fmtScore10(summary.avg)} / 10` : '--'}
+                    value={summary.avg != null ? `${fmtPercentScore(summary.avg)} / 100` : '--'}
                     valueColor={summary.avg != null
                         ? (summary.avg >= 0.8 ? COLORS.success : summary.avg >= 0.5 ? COLORS.warning : COLORS.danger)
                         : COLORS.textDisabled}
@@ -402,7 +398,7 @@ export default function EvaluationRunDetailView({ runId }: { runId: string }) {
                                         </span>
                                     </td>
                                     <td style={{ ...tdStyle('right'), color: getDisplayScore(r, exec) != null ? COLORS.primary : COLORS.textDisabled, fontWeight: 600 }}>
-                                        {getDisplayScore(r, exec) != null ? `${fmtScore10(getDisplayScore(r, exec))} 分` : '--'}
+                                        {getDisplayScore(r, exec) != null ? `${fmtPercentScore(getDisplayScore(r, exec))} 分` : '--'}
                                     </td>
                                     <td style={{ ...tdStyle('left'), maxWidth: 170, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.rootCauseStep || ''}>
                                         {r.rootCauseStep || '—'}

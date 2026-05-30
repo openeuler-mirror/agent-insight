@@ -22,6 +22,7 @@ import { EvaluatorFindingsView } from './EvaluatorFindingsView';
 import { TraceAlignmentPanel, type TraceAlignmentPanelProps } from './TraceAlignmentPanel';
 import { Term } from '@/components/text/Term';
 import { parseSkillAttributionFromRow } from '@/lib/engine/evaluation/skill-attribution';
+import { fmtPercentScore } from '@/lib/eval/score-format';
 
 interface DatasetCase {
     id: string;
@@ -342,11 +343,6 @@ const COLORS = {
 
 const POLL_MS = 3000;
 const NO_EVALUABLE_CASE_PREFIX = '[no-evaluable-case]';
-
-function fmtScore10(n: number | null | undefined): string {
-    if (n === null || n === undefined || Number.isNaN(n)) return '--';
-    return (n * 10).toFixed(1);
-}
 
 function isNoEvaluableCase(r?: Pick<TrajectoryResult, 'status' | 'errorMessage'> | null): boolean {
     return Boolean(r?.status === 'failed' && r.errorMessage?.includes(NO_EVALUABLE_CASE_PREFIX));
@@ -1060,7 +1056,7 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
                         <>
                             <span style={{ flex: 1 }} />
                             <span style={{ fontWeight: 700, color: COLORS.success, fontSize: 18 }}>
-                                {fmtScore10(composite)} <span style={{ fontSize: 11, color: COLORS.textMuted, fontWeight: 400 }}>/ 10</span>
+                                {fmtPercentScore(composite)} <span style={{ fontSize: 11, color: COLORS.textMuted, fontWeight: 400 }}>/ 100</span>
                             </span>
                         </>
                     )}
@@ -1139,7 +1135,7 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
                             <>
                                 <ScoreLine
                                     label="任务完成度得分"
-                                    value={resultEvaluationSummary.score == null ? '--' : `${fmtScore10(resultEvaluationSummary.score)} / 10`}
+                                    value={resultEvaluationSummary.score == null ? '--' : `${fmtPercentScore(resultEvaluationSummary.score)} / 100`}
                                     tone={
                                         resultEvaluationSummary.score == null
                                             ? 'muted'
@@ -1453,7 +1449,7 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
                                                     display: 'inline-flex',
                                                     alignItems: 'center',
                                                 }}>
-                                                    分数 {item.score == null ? '--' : `${fmtScore10(item.score)} / 10`}
+                                                    分数 {item.score == null ? '--' : `${fmtPercentScore(item.score)} / 100`}
                                                 </span>
                                             </div>
                                             {item.error ? (
@@ -1545,7 +1541,7 @@ function KeyPointFindingCard({ item, fallbackTitle }: { item: ResultEvaluationFi
         : severity === 'high' || status === 'wrong' ? COLORS.dangerSubtle
         : severity === 'medium' || status === 'partial' ? COLORS.warningSubtle
         : COLORS.bgSoft;
-    const scoreText = item.score == null ? '--' : `(${fmtScore10(item.score)}/10)`;
+    const scoreText = item.score == null ? '--' : `(${fmtPercentScore(item.score)}/100)`;
     const hasTrace = Boolean(item.traceRootCause?.failureReason || item.traceRootCause?.failureStage || item.traceRootCause?.relatedSteps?.length);
     const hasSkillSuggestion = item.isSkillAttributable !== false && Boolean(item.improvementSuggestion);
     const hasAttribution = typeof item.isSkillAttributable === 'boolean' || item.attributionReason || item.improvementSuggestion;
@@ -1999,8 +1995,8 @@ function DimensionCard({
                     ) : null}
                 </span>
                 <span>
-                    <span style={{ fontSize: 14, fontWeight: 600, color: tone }}>{fmtScore10(score)}</span>
-                    <span style={{ fontSize: 9, color: COLORS.textDisabled, marginLeft: 2 }}>/10</span>
+                    <span style={{ fontSize: 14, fontWeight: 600, color: tone }}>{fmtPercentScore(score)}</span>
+                    <span style={{ fontSize: 9, color: COLORS.textDisabled, marginLeft: 2 }}>/100</span>
                 </span>
             </div>
             <div style={{ height: 3, background: bg, borderRadius: 2, overflow: 'hidden' }}>
@@ -2090,11 +2086,11 @@ function TrajectoryCapBanner({
                 </span>
                 <span style={{ flex: 1 }} />
                 <span style={{ fontSize: 11, color: COLORS.textMuted }}>
-                    加权分 {rawWeighted != null ? fmtScore10(rawWeighted) : '--'}
+                    加权分 {rawWeighted != null ? fmtPercentScore(rawWeighted) : '--'}
                     {' → '}
-                    <b style={{ color: accent }}>{finalScore != null ? fmtScore10(finalScore) : '--'}</b>
-                    {' / 10'}
-                    {ceiling != null ? `（上限 ${fmtScore10(ceiling)}）` : ''}
+                    <b style={{ color: accent }}>{finalScore != null ? fmtPercentScore(finalScore) : '--'}</b>
+                    {' / 100'}
+                    {ceiling != null ? `（上限 ${fmtPercentScore(ceiling)}）` : ''}
                 </span>
             </div>
             <div style={{ fontSize: 11.5, color: COLORS.textSecondary }}>
@@ -2102,7 +2098,7 @@ function TrajectoryCapBanner({
             </div>
             <div style={{ marginTop: 4, fontSize: 10.5, color: COLORS.textMuted }}>
                 偏差严重度：high {highCount} · medium {mediumCount}
-                {' · 规则：≥1 个 high → 封顶 4.0；无 high 但 ≥3 个 medium → 封顶 6.5'}
+                {' · 规则：≥1 个 high → 封顶 40.0；无 high 但 ≥3 个 medium → 封顶 65.0'}
             </div>
         </div>
     );
