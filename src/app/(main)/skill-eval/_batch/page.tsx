@@ -175,6 +175,7 @@ export function BatchEvaluation({
     controlledEvalBatchTitle,
     controlledSkillId,
     controlledVersionId,
+    hideExecAndResult,
 }: {
     newTaskTrigger: number;
     historyPanelTrigger: number;
@@ -192,6 +193,9 @@ export function BatchEvaluation({
     controlledEvalBatchTitle?: string;
     controlledSkillId?: string;
     controlledVersionId?: string;
+    /** 受控模式下隐藏 BE 自带的 ② 评测执行 / ③ 分析结果——由父页(用例分析)统一渲染一份
+        (绑定评测任务、与 source 无关)，BE 这里只出 ① 配置(产生 Trace 的入口)。 */
+    hideExecAndResult?: boolean;
 }) {
     const { locale } = useLocale();
     const { user } = useAuth();
@@ -2139,6 +2143,8 @@ export function BatchEvaluation({
             )}
             </SectionShell>{/* /① 配置（已并入 case 表） */}
 
+            {/* 受控模式(用例分析)下隐藏 BE 自带的 ②/③——父页统一渲染一份(绑定评测任务、与 source 无关)。 */}
+            {!hideExecAndResult && (<>
             {/* ─────────── ② 评测执行（A/B 同款三列表, 点行钻取 ③） ─────────── */}
             <SectionShell
                 num={2}
@@ -2256,6 +2262,7 @@ export function BatchEvaluation({
                     onDrillTrace={sessionId => router.push(`/eval/trajectory/${sessionId}`)}
                 />
             </SectionShell>{/* /③ 结果 */}
+            </>)}{/* /受控模式隐藏 BE 自带 ②/③ */}
 
             {/* Dataset Modal */}
             {showDatasetModal && (
