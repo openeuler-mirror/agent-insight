@@ -1026,8 +1026,15 @@ export async function readRecords(
     // Sessions must be fetched BEFORE building the ownership map: an execution's effective
     // agent name may come from session.interactions when `r.agentName` is empty, and ownership
     // is keyed on that resolved name.
+    // 性能：只加载本次列表用到的 session（filtered 去重后的 taskId），不要把用户的全部历史
+    // session（每行含大段 interactions 文本）整表拉进内存。sessionMap 也只按 filtered 记录访问。
+    const neededSessionTaskIds = Array.from(new Set(
+        filtered.map((r: any) => r.taskId).filter(Boolean) as string[],
+    ));
     const [sessions, configsData] = await Promise.all([
-        db.findSessions({ user: user || undefined }),
+        neededSessionTaskIds.length > 0
+            ? db.findSessions({ user: user || undefined, taskId: { in: neededSessionTaskIds } })
+            : Promise.resolve([] as any[]),
         (async () => {
             const configCache = new Map<string, Promise<ConfigItem[]>>();
             const getConfigsForEvaluationUser = (evaluationUser?: string | null) => {
@@ -1045,6 +1052,23 @@ export async function readRecords(
     sessions.forEach((s: any) => {
         if (s.taskId) sessionMap.set(s.taskId, s);
     });
+    // 每个 session 的 interactions 只解析一次：之前在"取 agent 名"和"取 invokedSkills"两处各
+    // JSON.parse 一遍同一段 interactions，对长 trace 是双倍解析开销。这里 memoize 一次。
+    const parsedInteractionsCache = new Map<string, any[] | null>();
+    const getParsedInteractions = (taskId: string | null | undefined): any[] | null => {
+        if (!taskId) return null;
+        if (parsedInteractionsCache.has(taskId)) return parsedInteractionsCache.get(taskId) ?? null;
+        const session = sessionMap.get(taskId);
+        let arr: any[] | null = null;
+        if (session?.interactions) {
+            try {
+                const p = JSON.parse(session.interactions);
+                if (Array.isArray(p)) arr = p;
+            } catch { /* ignore */ }
+        }
+        parsedInteractionsCache.set(taskId, arr);
+        return arr;
+    };
 
     // For each record, pre-extract session-derived agent names + the effective agent name
     // used for both display and ownership lookup. Mirrors the frontend's
@@ -1059,16 +1083,13 @@ export async function readRecords(
     filtered.forEach((r: any) => {
         const taskId = r.taskId || r.id;
         const sessionAgents: string[] = [];
-        const session = r.taskId ? sessionMap.get(r.taskId) : null;
-        if (session?.interactions) {
-            try {
-                const interactions = JSON.parse(session.interactions);
-                if (Array.isArray(interactions)) {
-                    const agentSet = new Set<string>();
-                    extractObservedAgentNames(interactions).forEach(name => agentSet.add(name));
-                    sessionAgents.push(...agentSet);
-                }
-            } catch { /* ignore */ }
+        // 解析结果走 memoize 缓存（与下方 invokedSkills 提取共用，每个 session 只 parse 一次）。
+        // 注意：agents 字段对外暴露(含多 agent / 子 agent 列表)，不能因 agentName 已存在就跳过解析。
+        const interactions = getParsedInteractions(r.taskId);
+        if (interactions) {
+            const agentSet = new Set<string>();
+            extractObservedAgentNames(interactions).forEach(name => agentSet.add(name));
+            sessionAgents.push(...agentSet);
         }
         recordAgentsByTaskId.set(taskId, sessionAgents);
         recordEffectiveAgent.set(taskId, resolveEffectiveAgentName(r.agentName, sessionAgents));
@@ -1155,15 +1176,10 @@ export async function readRecords(
         const effectiveAgentName = recordEffectiveAgent.get(taskKey) || '';
         let invokedSkillsFromSession: InvokedSkill[] | null = null;
         let rootSkillFromSession: InvokedSkill | null = null;
-        const session = r.taskId ? sessionMap.get(r.taskId) : null;
-        if (session?.interactions) {
-            try {
-                const interactions = JSON.parse(session.interactions);
-                if (Array.isArray(interactions)) {
-                    invokedSkillsFromSession = extractInvokedSkillsFromSessionInteractions(r.framework, interactions);
-                    rootSkillFromSession = getRootSkillFromInteractions(interactions);
-                }
-            } catch { /* ignore */ }
+        const sessionInteractions = getParsedInteractions(r.taskId);
+        if (sessionInteractions) {
+            invokedSkillsFromSession = extractInvokedSkillsFromSessionInteractions(r.framework, sessionInteractions);
+            rootSkillFromSession = getRootSkillFromInteractions(sessionInteractions);
         }
         // 懒回填：Execution.skillVersion 为空但 skill 名命中 DB → 回写 activeVersion。
         // 在 in-memory r 上即时更新（让下方 normalizedRecord 拿到值），同时 fire-and-forget

@@ -175,6 +175,7 @@ export function BatchEvaluation({
     controlledEvalBatchTitle,
     controlledSkillId,
     controlledVersionId,
+    hideExecAndResult,
 }: {
     newTaskTrigger: number;
     historyPanelTrigger: number;
@@ -192,6 +193,9 @@ export function BatchEvaluation({
     controlledEvalBatchTitle?: string;
     controlledSkillId?: string;
     controlledVersionId?: string;
+    /** 受控模式下隐藏 BE 自带的 ② 评测执行 / ③ 分析结果——由父页(用例分析)统一渲染一份
+        (绑定评测任务、与 source 无关)，BE 这里只出 ① 配置(产生 Trace 的入口)。 */
+    hideExecAndResult?: boolean;
 }) {
     const { locale } = useLocale();
     const { user } = useAuth();
@@ -1140,6 +1144,11 @@ export function BatchEvaluation({
      */
     const bulkStartUnified = async () => {
         if (!currentTask || batchStartInFlight) return;
+        // 必须先关联评测任务才能评测——否则结果归属混乱(后端会新建孤立任务)。
+        if (!evaluationBatchId) {
+            alert(locale === 'zh' ? '请先在上方「评测任务」新建或选择一个评测任务' : 'Create/select an eval task first');
+            return;
+        }
         const toRun = selectedCaseIds.filter(id => {
             const s = caseStates[id]?.status;
             return !s || s === 'pending';
@@ -1471,9 +1480,21 @@ export function BatchEvaluation({
         .map(c => caseStates[c.id])
         .filter((s): s is CaseState => s != null && (s.status === 'pass' || s.status === 'fail'));
     const scoredStates = evaluatedCaseStates.filter(s => typeof s.score === 'number');
-    const avgScore = scoredStates.length > 0
-        ? Math.round(scoredStates.reduce((sum, s) => sum + (s.score || 0), 0) / scoredStates.length)
+    // ③ 平均分口径：绑定当前「评测任务」(evaluationBatchId) 的有效评测记录，与 source 无关——
+    // 与 用例分析 trace 模式同源(同一 evaluatorRunId)、同算法((结果分+轨迹分)/2 的平均)，
+    // 保证在「从Trace / 从数据集」之间切换时这个分数不变。没关联任务时回退本地 case 综合分。
+    const batchValidPairs = evaluationBatchId
+        ? (Array.from(evalResultsMap.values())
+            .map(m => ({ r: m.resultScore, t: m.trajScore }))
+            .filter((p): p is { r: number; t: number } => typeof p.r === 'number' && typeof p.t === 'number'))
         : null;
+    const avgScore = batchValidPairs
+        ? (batchValidPairs.length > 0
+            ? Math.round(batchValidPairs.reduce((sum, p) => sum + (p.r + p.t) / 2, 0) / batchValidPairs.length)
+            : null)
+        : (scoredStates.length > 0
+            ? Math.round(scoredStates.reduce((sum, s) => sum + (s.score || 0), 0) / scoredStates.length)
+            : null);
     const scoreColorKlass: 'good' | 'warn' | 'bad' = avgScore == null
         ? 'warn'
         : avgScore >= 80 ? 'good' : avgScore >= 60 ? 'warn' : 'bad';
@@ -2074,15 +2095,15 @@ export function BatchEvaluation({
                 <button
                     type="button"
                     onClick={bulkStartUnified}
-                    disabled={batchStartInFlight || selectedCaseIds.length === 0 || !currentTask}
+                    disabled={batchStartInFlight || selectedCaseIds.length === 0 || !currentTask || !evaluationBatchId}
                     style={{
                         padding: '9px 22px',
-                        background: (batchStartInFlight || selectedCaseIds.length === 0 || !currentTask) ? '#A5A0E4' : '#4F46E5',
+                        background: (batchStartInFlight || selectedCaseIds.length === 0 || !currentTask || !evaluationBatchId) ? '#A5A0E4' : '#4F46E5',
                         color: '#fff', border: 'none', borderRadius: 6,
                         fontSize: 14, fontWeight: 700,
-                        cursor: (batchStartInFlight || selectedCaseIds.length === 0 || !currentTask) ? 'not-allowed' : 'pointer',
+                        cursor: (batchStartInFlight || selectedCaseIds.length === 0 || !currentTask || !evaluationBatchId) ? 'not-allowed' : 'pointer',
                     }}
-                    title={selectedCaseIds.length === 0 ? '请先在上方勾选 case' : '先执行选中 case 生成 Trace, 再开始评测'}
+                    title={!evaluationBatchId ? '请先在上方"评测任务"里新建或选择一个评测任务' : selectedCaseIds.length === 0 ? '请先在上方勾选 case' : '先执行选中 case 生成 Trace, 再开始评测'}
                 >
                     {batchStartInFlight
                         ? (locale === 'zh' ? '评测中…' : 'Evaluating…')
@@ -2099,8 +2120,10 @@ export function BatchEvaluation({
                         ⏹ {locale === 'zh' ? '终止' : 'Abort'}
                     </button>
                 )}
-                <span style={{ fontSize: 11, color: 'var(--ink-3, #a1a1aa)' }}>
-                    {locale === 'zh' ? '勾选 case 后开始评测：先执行生成 Trace 再评测；进度见 ② 评测执行' : 'Select cases → execute to generate traces → evaluate; progress in ②'}
+                <span style={{ fontSize: 11, color: !evaluationBatchId ? '#D97706' : 'var(--ink-3, #a1a1aa)' }}>
+                    {!evaluationBatchId
+                        ? (locale === 'zh' ? '请先在上方「评测任务」新建或选择一个任务，再开始评测' : 'Create/select an eval task above first')
+                        : (locale === 'zh' ? '勾选 case 后开始评测：先执行生成 Trace 再评测；进度见 ② 评测执行' : 'Select cases → execute to generate traces → evaluate; progress in ②')}
                 </span>
                 {batchStartInFlight && (() => {
                     const ids = Object.keys(caseStates);
@@ -2120,6 +2143,8 @@ export function BatchEvaluation({
             )}
             </SectionShell>{/* /① 配置（已并入 case 表） */}
 
+            {/* 受控模式(用例分析)下隐藏 BE 自带的 ②/③——父页统一渲染一份(绑定评测任务、与 source 无关)。 */}
+            {!hideExecAndResult && (<>
             {/* ─────────── ② 评测执行（A/B 同款三列表, 点行钻取 ③） ─────────── */}
             <SectionShell
                 num={2}
@@ -2237,6 +2262,7 @@ export function BatchEvaluation({
                     onDrillTrace={sessionId => router.push(`/eval/trajectory/${sessionId}`)}
                 />
             </SectionShell>{/* /③ 结果 */}
+            </>)}{/* /受控模式隐藏 BE 自带 ②/③ */}
 
             {/* Dataset Modal */}
             {showDatasetModal && (
