@@ -1057,9 +1057,10 @@ class OpenGaussAdapter implements DatabaseAdapter {
 }
 
 export function getDatabaseAdapter(): DatabaseAdapter {
-    console.log('[DatabaseAdapter] DB_HOST:', process.env.DB_HOST);
+    const shouldLog = process.env.DEBUG_DB_ADAPTER === '1';
+    if (shouldLog) console.log('[DatabaseAdapter] DB_HOST:', Boolean(process.env.DB_HOST));
     if (process.env.DB_HOST) {
-        console.log('[DatabaseAdapter] Using OpenGauss Adapter');
+        if (shouldLog) console.log('[DatabaseAdapter] Using OpenGauss Adapter');
         return new OpenGaussAdapter({
             host: process.env.DB_HOST,
             port: parseInt(process.env.DB_PORT || '5432'),
@@ -1069,7 +1070,7 @@ export function getDatabaseAdapter(): DatabaseAdapter {
         });
     }
 
-    console.log('[DatabaseAdapter] Using Prisma Adapter');
+    if (shouldLog) console.log('[DatabaseAdapter] Using Prisma Adapter');
     const globalForPrisma = global as unknown as { prisma: PrismaClient };
     const prismaClient = globalForPrisma.prisma || new PrismaClient();
     if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prismaClient;
