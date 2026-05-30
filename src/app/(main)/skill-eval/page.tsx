@@ -4133,6 +4133,7 @@ function TraceDeviationPanel({
                         newTaskTrigger={0}
                         historyPanelTrigger={0}
                         controlled
+                        hideExecAndResult
                         topConfigSlot={<>{sharedConfigBar}{sourceModeToggle}</>}
                         headerActions={evalTaskPickerNode}
                         controlledDatasetIds={selectedDatasetIds}
@@ -4144,8 +4145,10 @@ function TraceDeviationPanel({
                 </div>
             )}
 
-            {/* trace 模式：② + ③ */}
-            {caseSourceMode === 'trace' && (<>
+            {/* ② 评测执行 + ③ 分析结果：两种 source 下统一渲染（绑定当前评测任务，与 source 无关）。
+               「从数据集」只是多了一步产生 Trace；产生后的 Trace 评测同样落到当前评测任务，统一在这里展示。
+               dataset 模式下 BatchEvaluation 用 hideExecAndResult 只渲染 ① 配置，②/③ 由这里统一出。 */}
+            {(<>
 
             {/* ─────────── ② 评测执行 ─────────── */}
             <SectionShell
@@ -4613,7 +4616,7 @@ function TraceDeviationPanel({
                 </div>
                 )}
             </SectionShell>{/* /③ 结果 */}
-            </>)}{/* /trace mode (②+③) */}
+            </>)}{/* /② 评测执行 + ③ 分析结果 (统一, 与 source 无关) */}
         </section>
     );
 }
