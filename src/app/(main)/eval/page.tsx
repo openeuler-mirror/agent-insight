@@ -14,10 +14,14 @@
  */
 import { Suspense, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { Trash2 } from 'lucide-react';
+import { toast } from 'sonner';
 import { apiFetch } from '@/lib/client/api';
 import { useAuth } from '@/lib/auth/auth-context';
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { useLocale } from '@/lib/client/locale-context';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { fmtPercentScore } from '@/lib/eval/score-format';
 import {
     getPrimaryExecutionAgentName,
     isEvaluatorTraceRecord,
@@ -154,11 +158,6 @@ function getStatusColor(r: TrajectoryResult): string {
     return isNoEvaluableCase(r) ? COLORS.warning : STATUS_COLOR[getEffectiveStatus(r)];
 }
 
-function fmtScore10(n: number | null | undefined): string {
-    if (n == null || Number.isNaN(n)) return '--';
-    return (n * 10).toFixed(1);
-}
-
 function fmtTime(s?: string | null): string {
     if (!s) return '--';
     try { return new Date(s).toLocaleString('zh-CN', { hour12: false }); } catch { return s; }
@@ -261,6 +260,8 @@ function EvalPageContent() {
     const [error, setError] = useState<string>('');
     const [historyOpen, setHistoryOpen] = useState(false);
     const [autoWatchOnly, setAutoWatchOnly] = useState(requestedAutoWatchOnly);
+    const [pendingDeleteRun, setPendingDeleteRun] = useState<RunSummary | null>(null);
+    const [deletingRunId, setDeletingRunId] = useState<string | null>(null);
     const historySentinelRef = useRef<HTMLDivElement | null>(null);
     const historyListRef = useRef<HTMLDivElement | null>(null);
     const restoredHistoryStateRef = useRef(false);
@@ -413,6 +414,12 @@ function EvalPageContent() {
     }, [selectedRunId, user]);
 
     useEffect(() => {
+        if (selectedRunId) return;
+        setResults([]);
+        setRecords([]);
+    }, [selectedRunId]);
+
+    useEffect(() => {
         const node = historySentinelRef.current;
         if (!node || !user || !historyHasMore || historyLoadingMore) return;
         const observer = new IntersectionObserver(entries => {
@@ -462,6 +469,49 @@ function EvalPageContent() {
         () => results.filter(r => !r.watchPlaceholder),
         [results],
     );
+
+    const deleteRun = async () => {
+        if (!user || !pendingDeleteRun) return;
+        const targetRun = pendingDeleteRun;
+        setDeletingRunId(targetRun.runId);
+        try {
+            const res = await apiFetch('/api/eval/trajectory/runs', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    user,
+                    runId: targetRun.runId,
+                }),
+            });
+            const data = await res.json();
+            if (!res.ok) {
+                throw new Error(data?.error || res.statusText);
+            }
+
+            const currentIndex = runSummaries.findIndex(run => run.runId === targetRun.runId);
+            const nextRuns = runSummaries.filter(run => run.runId !== targetRun.runId);
+            const nextSelectedRunId = selectedRunId === targetRun.runId
+                ? nextRuns[currentIndex]?.runId || nextRuns[currentIndex - 1]?.runId || nextRuns[0]?.runId || null
+                : selectedRunId;
+
+            setRunSummaries(nextRuns);
+
+            if (selectedRunId === targetRun.runId) {
+                setSelectedRunId(nextSelectedRunId);
+                setResults([]);
+                setRecords([]);
+            }
+
+            setPendingDeleteRun(null);
+            setError('');
+            toast.success(`已删除评测批次「${targetRun.taskTitle}」`);
+        } catch (e: unknown) {
+            toast.error(`删除失败：${e instanceof Error ? e.message : String(e)}`);
+            throw e;
+        } finally {
+            setDeletingRunId(null);
+        }
+    };
 
     const topBarActions = (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -531,6 +581,9 @@ function EvalPageContent() {
                             error={error}
                             autoWatchOnly={autoWatchOnly}
                             onBeforeOpenTrace={saveHistoryStateForReturn}
+                            onDeleteRun={() => setPendingDeleteRun(selectedRun)}
+                            deleteDisabled={selectedRun.runningCount > 0 || deletingRunId === selectedRun.runId}
+                            deleting={deletingRunId === selectedRun.runId}
                         />
                     ) : null}
                 </main>
@@ -603,6 +656,9 @@ function EvalPageContent() {
                                     run={run}
                                     active={run.runId === selectedRunId}
                                     onClick={() => setSelectedRunId(run.runId)}
+                                    onDelete={() => setPendingDeleteRun(run)}
+                                    deleteDisabled={run.runningCount > 0 || deletingRunId === run.runId}
+                                    deleting={deletingRunId === run.runId}
                                 />
                             ))
                         )}
@@ -615,6 +671,21 @@ function EvalPageContent() {
                     </div>
                 </aside>
             </div>
+            <ConfirmDialog
+                open={Boolean(pendingDeleteRun)}
+                onOpenChange={(open) => {
+                    if (!open && deletingRunId) return;
+                    if (!open) setPendingDeleteRun(null);
+                }}
+                title="删除这次评测执行？"
+                description={pendingDeleteRun
+                    ? `会删除该批次下的评测结果和由本批次派生的优化点数据，原始 trace 会保留，可稍后重新评测。任务：${pendingDeleteRun.taskTitle}`
+                    : undefined}
+                confirmText="删除批次"
+                cancelText="取消"
+                tone="danger"
+                onConfirm={deleteRun}
+            />
         </>
     );
 }
@@ -642,6 +713,9 @@ function RunPanel({
     error,
     autoWatchOnly,
     onBeforeOpenTrace,
+    onDeleteRun,
+    deleteDisabled,
+    deleting,
 }: {
     run: RunSummary;
     results: TrajectoryResult[];
@@ -652,6 +726,9 @@ function RunPanel({
     error: string;
     autoWatchOnly: boolean;
     onBeforeOpenTrace: (runId: string) => void;
+    onDeleteRun: () => void;
+    deleteDisabled: boolean;
+    deleting: boolean;
 }) {
     const [addOpen, setAddOpen] = useState(false);
     const [selectedAddTraceIds, setSelectedAddTraceIds] = useState<Set<string>>(new Set());
@@ -796,6 +873,34 @@ function RunPanel({
                 )}
                 <span style={{ fontSize: 12, color: COLORS.textMuted }}>任务已同步到历史卡片与详情页</span>
                 <div style={{ flex: 1 }} />
+                <button
+                    type="button"
+                    aria-label={`删除评测批次 ${run.taskTitle}`}
+                    title={
+                        deleting
+                            ? '删除中...'
+                            : deleteDisabled
+                                ? '评测进行中，暂时不能删除'
+                                : '删除该评测批次'
+                    }
+                    disabled={deleteDisabled}
+                    onClick={onDeleteRun}
+                    style={{
+                        width: 28,
+                        height: 28,
+                        borderRadius: 8,
+                        border: `1px solid ${deleteDisabled ? COLORS.border : '#F1D1D1'}`,
+                        background: deleting ? COLORS.dangerSubtle : '#fff',
+                        color: deleteDisabled ? COLORS.textDisabled : COLORS.danger,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        cursor: deleteDisabled ? 'not-allowed' : 'pointer',
+                        opacity: deleteDisabled ? 0.6 : 1,
+                    }}
+                >
+                    <Trash2 size={14} strokeWidth={2.1} />
+                </button>
                 <span style={{ fontSize: 11, color: COLORS.textMuted }}>发起时间：{fmtTime(run.createdAt)}</span>
             </div>
 
@@ -887,7 +992,7 @@ function RunPanel({
                     />
                     <Stat
                         label="平均分"
-                        value={run.avgScore != null ? `${fmtScore10(run.avgScore)} / 10` : '--'}
+                        value={run.avgScore != null ? `${fmtPercentScore(run.avgScore)} / 100` : '--'}
                         valueColor={
                             run.avgScore != null
                                 ? run.avgScore >= 0.8
@@ -1106,7 +1211,7 @@ function RunPanel({
                                         </span>
                                     </td>
                                     <td style={{ ...tdStyle('left'), minWidth: 92, color: displayScore != null ? COLORS.primary : COLORS.textDisabled, fontWeight: 600 }}>
-                                        {displayScore != null ? `${fmtScore10(displayScore)} 分` : '--'}
+                                        {displayScore != null ? `${fmtPercentScore(displayScore)} 分` : '--'}
                                     </td>
                                     <td style={{ ...tdStyle('left'), color: COLORS.textMuted }}>{fmtTime(r.createdAt)}</td>
                                 </tr>
@@ -1122,8 +1227,22 @@ function RunPanel({
 /* ============================================================
  * 右栏：历史批次 sidebar item
  * ============================================================ */
-function RunSidebarItem({ run, active, onClick }: { run: RunSummary; active: boolean; onClick: () => void }) {
-    const totalScore = run.avgScore != null ? `${fmtScore10(run.avgScore)} / 10` : '—';
+function RunSidebarItem({
+    run,
+    active,
+    onClick,
+    onDelete,
+    deleteDisabled,
+    deleting,
+}: {
+    run: RunSummary;
+    active: boolean;
+    onClick: () => void;
+    onDelete: () => void;
+    deleteDisabled: boolean;
+    deleting: boolean;
+}) {
+    const totalScore = run.avgScore != null ? `${fmtPercentScore(run.avgScore)} / 100` : '—';
     return (
         <div
             onClick={onClick}
@@ -1139,10 +1258,45 @@ function RunSidebarItem({ run, active, onClick }: { run: RunSummary; active: boo
             onMouseLeave={e => { if (!active) e.currentTarget.style.borderColor = COLORS.border; }}
         >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                <span style={{ fontSize: 12.5, fontWeight: 600, color: COLORS.text }} title={run.taskTitle}>
-                    {run.taskTitle}
-                </span>
-                <span style={{ fontSize: 11, color: COLORS.textMuted }}>{fmtRelTime(run.createdAt)}</span>
+                <div style={{ minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, flex: 1 }}>
+                    <span style={{ fontSize: 12.5, fontWeight: 600, color: COLORS.text, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={run.taskTitle}>
+                        {run.taskTitle}
+                    </span>
+                    <button
+                        type="button"
+                        aria-label={`删除评测批次 ${run.taskTitle}`}
+                        title={
+                            deleting
+                                ? '删除中...'
+                                : deleteDisabled
+                                    ? '评测进行中，暂时不能删除'
+                                    : '删除该评测批次'
+                        }
+                        disabled={deleteDisabled}
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            if (deleteDisabled) return;
+                            onDelete();
+                        }}
+                        style={{
+                            flexShrink: 0,
+                            width: 22,
+                            height: 22,
+                            borderRadius: 6,
+                            border: 'none',
+                            background: deleting ? COLORS.dangerSubtle : 'transparent',
+                            color: deleteDisabled ? COLORS.textDisabled : COLORS.textMuted,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            cursor: deleteDisabled ? 'not-allowed' : 'pointer',
+                            opacity: deleteDisabled ? 0.5 : 0.9,
+                        }}
+                    >
+                        <Trash2 size={13} strokeWidth={2.1} />
+                    </button>
+                </div>
+                <span style={{ fontSize: 11, color: COLORS.textMuted, flexShrink: 0 }}>{fmtRelTime(run.createdAt)}</span>
             </div>
             {run.autoWatch && (
                 <div style={{ marginBottom: 8 }}>
