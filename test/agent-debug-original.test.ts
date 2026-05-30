@@ -175,3 +175,14 @@ test('agent-debug no longer uses candidate windows for analysis', () => {
   assert.match(skill, /不使用候选窗口/);
   assert.equal(fs.existsSync(path.join(process.cwd(), 'src', 'lib', 'engine', 'agent-debug', 'candidates.ts')), false);
 });
+
+test('fault detail exposes AgentDebug diagnosis for every trace', () => {
+  const page = fs.readFileSync(path.join(process.cwd(), 'src', 'app', '(main)', 'fault', 'page.tsx'), 'utf-8');
+  const card = fs.readFileSync(path.join(process.cwd(), 'src', 'components', 'observe', 'AgentDebugCard.tsx'), 'utf-8');
+
+  assert.doesNotMatch(page, /agentDebugSuggested/);
+  assert.doesNotMatch(card, /suggested:\s*boolean/);
+  assert.doesNotMatch(card, /!suggested && !report/);
+  assert.doesNotMatch(page, /Insight AI/);
+  assert.doesNotMatch(card, /Insight AI/);
+});
