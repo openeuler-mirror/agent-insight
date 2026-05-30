@@ -183,12 +183,15 @@ export async function POST(
         // action='abort': 任务级终止, 触发 abortController 让 in-flight runOneBatchCase 退出
         if (action === 'abort') {
             const entry = batchActiveRuns.get(taskId);
-            if (!entry) {
-                return NextResponse.json({ ok: true, note: 'no active run' });
+            if (entry) {
+                entry.abortController.abort();
+                batchActiveRuns.delete(taskId);
             }
-            entry.abortController.abort();
-            batchActiveRuns.delete(taskId);
-            return NextResponse.json({ ok: true, abortedAt: Date.now() });
+            // 无论内存里是否有在跑的 run, 都把数据库里非终态(running/evaluating/executed)的 case
+            // 重置为失败「已终止」: 服务重启后内存登记表(batchActiveRuns)清空, 旧 run 遗留的"执行中"
+            // case 没人收尾, 之前 abort 直接 return "no active run" → 看似无效且一直卡着。
+            const reset = await resetStuckCases(taskId, user);
+            return NextResponse.json({ ok: true, abortedAt: Date.now(), hadActiveRun: !!entry, reset });
         }
         // action='retry-execute' / 'retry-evaluate': 行级重试, 重置单个 case 状态后重跑
         if (action === 'retry-execute' || action === 'retry-evaluate') {
@@ -505,6 +508,31 @@ async function persistStates(taskId: string, user: string, states: Record<string
         where: { id: taskId, user },
         data: { caseStatesJson: JSON.stringify(states) },
     });
+}
+
+/**
+ * 把任务里非终态(running/evaluating/executed)的 case 重置为失败「已终止」。
+ * 用于「终止」: 服务重启后内存 batchActiveRuns 已清空, 这些 case 实际并没有在跑(僵死状态),
+ * 需要在数据库里收尾, 否则 UI 永远显示"执行中"且挡住后续启动。pending(未启动)不动。
+ * 返回被重置的条数。
+ */
+async function resetStuckCases(taskId: string, user: string): Promise<number> {
+    const task = await (prisma as unknown as { batchEvalTask: { findFirst: (a: unknown) => Promise<BatchEvalTaskRow | null> } }).batchEvalTask.findFirst({
+        where: { id: taskId, user },
+    });
+    if (!task) return 0;
+    let states: Record<string, BatchCaseState>;
+    try { states = JSON.parse(task.caseStatesJson || '{}'); } catch { return 0; }
+    let n = 0;
+    for (const key of Object.keys(states)) {
+        const s = states[key];
+        if (s && (s.status === 'running' || s.status === 'evaluating' || s.status === 'executed')) {
+            states[key] = { ...s, status: 'fail', error: '已手动终止', completedAt: Date.now() };
+            n += 1;
+        }
+    }
+    if (n > 0) await persistStates(taskId, user, states);
+    return n;
 }
 
 /**

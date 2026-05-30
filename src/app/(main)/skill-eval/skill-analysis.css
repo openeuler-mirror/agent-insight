@@ -2944,19 +2944,6 @@
   border-color: var(--line) !important;
 }
 
-/* 「从数据集」用例表限高：约 5 行后滚动，避免用例多时把 ① 配置块撑得过高，
-   与「从 Trace」的 .sa-trace-list-body（max-height:400px）保持一致的体验。
-   表头 sticky 固定，滚动时仍可见列名。 */
-.sa-embedded-debug .work-table-wrapper {
-  max-height: 300px;
-  overflow-y: auto;
-}
-.sa-embedded-debug .work-table thead th {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-}
-
 .sa-embedded-debug .d-modal {
   border-radius: 10px;
   box-shadow: var(--shadow-lg);
