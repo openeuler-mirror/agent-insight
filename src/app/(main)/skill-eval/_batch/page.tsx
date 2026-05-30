@@ -1140,6 +1140,11 @@ export function BatchEvaluation({
      */
     const bulkStartUnified = async () => {
         if (!currentTask || batchStartInFlight) return;
+        // 必须先关联评测任务才能评测——否则结果归属混乱(后端会新建孤立任务)。
+        if (!evaluationBatchId) {
+            alert(locale === 'zh' ? '请先在上方「评测任务」新建或选择一个评测任务' : 'Create/select an eval task first');
+            return;
+        }
         const toRun = selectedCaseIds.filter(id => {
             const s = caseStates[id]?.status;
             return !s || s === 'pending';
@@ -2086,15 +2091,15 @@ export function BatchEvaluation({
                 <button
                     type="button"
                     onClick={bulkStartUnified}
-                    disabled={batchStartInFlight || selectedCaseIds.length === 0 || !currentTask}
+                    disabled={batchStartInFlight || selectedCaseIds.length === 0 || !currentTask || !evaluationBatchId}
                     style={{
                         padding: '9px 22px',
-                        background: (batchStartInFlight || selectedCaseIds.length === 0 || !currentTask) ? '#A5A0E4' : '#4F46E5',
+                        background: (batchStartInFlight || selectedCaseIds.length === 0 || !currentTask || !evaluationBatchId) ? '#A5A0E4' : '#4F46E5',
                         color: '#fff', border: 'none', borderRadius: 6,
                         fontSize: 14, fontWeight: 700,
-                        cursor: (batchStartInFlight || selectedCaseIds.length === 0 || !currentTask) ? 'not-allowed' : 'pointer',
+                        cursor: (batchStartInFlight || selectedCaseIds.length === 0 || !currentTask || !evaluationBatchId) ? 'not-allowed' : 'pointer',
                     }}
-                    title={selectedCaseIds.length === 0 ? '请先在上方勾选 case' : '先执行选中 case 生成 Trace, 再开始评测'}
+                    title={!evaluationBatchId ? '请先在上方"评测任务"里新建或选择一个评测任务' : selectedCaseIds.length === 0 ? '请先在上方勾选 case' : '先执行选中 case 生成 Trace, 再开始评测'}
                 >
                     {batchStartInFlight
                         ? (locale === 'zh' ? '评测中…' : 'Evaluating…')
@@ -2111,8 +2116,10 @@ export function BatchEvaluation({
                         ⏹ {locale === 'zh' ? '终止' : 'Abort'}
                     </button>
                 )}
-                <span style={{ fontSize: 11, color: 'var(--ink-3, #a1a1aa)' }}>
-                    {locale === 'zh' ? '勾选 case 后开始评测：先执行生成 Trace 再评测；进度见 ② 评测执行' : 'Select cases → execute to generate traces → evaluate; progress in ②'}
+                <span style={{ fontSize: 11, color: !evaluationBatchId ? '#D97706' : 'var(--ink-3, #a1a1aa)' }}>
+                    {!evaluationBatchId
+                        ? (locale === 'zh' ? '请先在上方「评测任务」新建或选择一个任务，再开始评测' : 'Create/select an eval task above first')
+                        : (locale === 'zh' ? '勾选 case 后开始评测：先执行生成 Trace 再评测；进度见 ② 评测执行' : 'Select cases → execute to generate traces → evaluate; progress in ②')}
                 </span>
                 {batchStartInFlight && (() => {
                     const ids = Object.keys(caseStates);
