@@ -773,6 +773,22 @@ function SkillAnalysisPage() {
         );
     }, [caseEvalTasks, selectedSkill?.name, selectedVersion, traceEvaluationBatchId]);
 
+    // 关联评测任务的版本一致性校验：若当前已关联的任务(其评测的 trace 属于另一个版本)与正在查看的
+    // 版本不一致，清掉该关联(state + 当前版本的 localStorage 槽位)，避免在 v0 看到 v1 任务的数据。
+    // 仅当能确定任务版本(skillVersion 为数字)且与 selectedVersion 明确不同时才清，版本未知不动以免误清。
+    useEffect(() => {
+        if (!traceEvaluationBatchId || selectedVersion == null) return;
+        const associated = caseEvalTasks.find(t => t.runId === traceEvaluationBatchId);
+        if (associated && typeof associated.skillVersion === 'number' && associated.skillVersion !== selectedVersion) {
+            setTraceEvaluationBatchId('');
+            setTraceEvaluationBatchTitle('');
+            setTraceEvaluationBatchEvaluators([]);
+            if (traceEvalBatchStorageKey) {
+                try { localStorage.removeItem(traceEvalBatchStorageKey); } catch {/* ignore */}
+            }
+        }
+    }, [traceEvaluationBatchId, caseEvalTasks, selectedVersion, traceEvalBatchStorageKey]);
+
     const sortedVersions = useMemo(() => {
         const versions = selectedSkill?.versions || [];
         return [...versions].sort((a, b) => b.version - a.version);
