@@ -917,6 +917,11 @@ function SkillAnalysisPage() {
         const params = new URLSearchParams({
             user,
             includeEvaluations: '0',
+            // 性能：跳过 auto-eval readiness 计算。该计算会对每条 trace 加载整段 Session +
+            // 解析 interactions JSON（最多 200 条并发），是 /api/observe/data 的主要耗时来源；
+            // 而用例分析列表只用已落库的分数(answer_score / trajectoryScore / matchJson)，
+            // 既不消费 readiness 字段、也不依赖 auto-watch，跳过后分数能立刻返回。
+            skipAutoEvalReady: '1',
         });
         const retries = options?.retries ?? 0;
         const retryDelayMs = options?.retryDelayMs ?? 800;
