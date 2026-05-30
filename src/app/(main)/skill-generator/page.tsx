@@ -1843,7 +1843,7 @@ export default function PlaygroundPage() {
                                         </button>
                                     )}
                                     <button className="btn-download" onClick={() => currentSessionId && triggerSkillDownload(currentSessionId, currentSkillName)}>{locale === 'zh' ? '下载' : 'Download'}</button>
-                                    <button className="btn-publish" onClick={handlePublish} disabled={isPublishing || !currentSessionId}>
+                                    <button className="btn-publish" onClick={handlePublish} disabled={isPublishing || !currentSessionId || isLoading || !hasGeneratedFiles}>
                                         {isPublishing ? (locale === 'zh' ? '发布中…' : 'Publishing…') : (locale === 'zh' ? '保存并发布' : 'Publish')}
                                     </button>
                                     <button className="btn-close-ide" onClick={() => setShowIDE(false)}>
