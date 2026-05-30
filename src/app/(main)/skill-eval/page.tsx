@@ -3569,7 +3569,8 @@ function TraceDeviationPanel({
         ? Array.from(checkedTraceIds)
         : (selectedTraceId ? [selectedTraceId] : []);
     const runBothAnalyses = async () => {
-        if (bothRunning || targetTraceIds.length === 0) return;
+        // 必须先关联评测任务才能评测——否则后端每次会新建一个孤立任务、结果归属混乱。
+        if (bothRunning || targetTraceIds.length === 0 || !traceEvaluationBatchId) return;
         // 立刻记录"已触发"——② 执行块的状态徽章靠这个区分 pending/idle
         const triggerTs = Date.now();
         setTriggeredTaskIds(prev => {
@@ -3623,7 +3624,7 @@ function TraceDeviationPanel({
     const primaryLabel = bothRunning ? '分析中…'
         : checkedTraceIds.size > 0 ? `分析选中 ${checkedTraceIds.size} 条 Trace`
         : '分析当前 Trace';
-    const primaryDisabled = bothRunning || targetTraceIds.length === 0 || (checkedTraceIds.size === 0 && !primarySkill?.name);
+    const primaryDisabled = bothRunning || targetTraceIds.length === 0 || (checkedTraceIds.size === 0 && !primarySkill?.name) || !traceEvaluationBatchId;
 
     // 「用例来源」toggle —— 两种模式都用同一份 JSX；trace 模式渲染在 trace 的 ① body 里，
     // dataset 模式通过 BatchEvaluation 的 topConfigSlot prop 注入到 BE 的 ① body 顶部。
@@ -4109,12 +4110,14 @@ function TraceDeviationPanel({
                             cursor: primaryDisabled ? 'not-allowed' : 'pointer',
                             opacity: primaryDisabled ? 0.6 : 1,
                         }}
-                        title={primaryDisabled ? '请先在上方勾选 trace（且 trace 有主 skill）' : '对勾选的 trace 直接开始评测'}
+                        title={!traceEvaluationBatchId ? '请先在上方"评测任务"里新建或选择一个评测任务' : primaryDisabled ? '请先在上方勾选 trace（且 trace 有主 skill）' : '对勾选的 trace 直接开始评测'}
                     >
                         {bothRunning ? '评测中…' : checkedTraceIds.size > 0 ? `▶ 开始评测（${checkedTraceIds.size} 条）` : '▶ 开始评测'}
                     </button>
-                    <span style={{ fontSize: 11, color: 'var(--ev-muted)' }}>
-                        勾选 trace 后开始评测；进度见 ② 评测执行
+                    <span style={{ fontSize: 11, color: !traceEvaluationBatchId ? 'var(--ev-warning)' : 'var(--ev-muted)' }}>
+                        {!traceEvaluationBatchId
+                            ? '请先在上方「评测任务」新建或选择一个任务，再开始评测'
+                            : '勾选 trace 后开始评测；进度见 ② 评测执行'}
                     </span>
                 </div>
             </SectionShell>
