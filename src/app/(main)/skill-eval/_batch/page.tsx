@@ -1222,8 +1222,14 @@ export function BatchEvaluation({
      * 任务级终止: 调 POST action='abort', 后端 abortController.abort() 让所有 in-flight case 退出。
      * 已完成的 case 不受影响, in-flight 的会标记 fail+error="用户终止"。
      */
+    // 是否存在"未执行完成"的 case（运行中 / 待评测 / 评测中）——用来在页面刷新后(batchStartInFlight 丢失)
+    // 仍能显示并点击「终止」，清掉后端卡住的任务级运行锁(batchActiveRuns)。
+    const hasInFlightCase = Object.values(caseStates).some(
+        s => s?.status === 'running' || s?.status === 'evaluating' || s?.status === 'executed',
+    );
     const bulkAbortUnified = async () => {
-        if (!currentTask || !batchStartInFlight) return;
+        // 放宽守卫：只要本次会话在跑(batchStartInFlight) 或 后端存在未完成 case，都允许终止。
+        if (!currentTask || (!batchStartInFlight && !hasInFlightCase)) return;
         if (!window.confirm(locale === 'zh' ? '确定终止当前批量执行? 已 in-flight 的 case 会标记为「用户终止」失败' : 'Abort current batch run?')) return;
         try {
             const res = await apiFetch(`/api/debug/batch-tasks/${currentTask.id}`, {
@@ -1826,6 +1832,25 @@ export function BatchEvaluation({
                         )}
                     </div>
                     <div className="table-toolbar-right">
+                        {/* 终止按钮：本次会话在跑、或后端存在未完成 case 时都显示可点。
+                            受控(用例分析「从数据集」)布局下上方 bulk-actions 工具栏被隐藏，
+                            这里是唯一能终止/清掉卡住运行锁的入口。 */}
+                        {sourceMode === 'dataset' && (batchStartInFlight || hasInFlightCase) && (
+                            <button
+                                type="button"
+                                onClick={bulkAbortUnified}
+                                title={locale === 'zh' ? '终止当前批量执行，并清除卡住的运行状态/锁' : 'Abort current run and clear stuck running lock'}
+                                style={{
+                                    padding: '4px 10px',
+                                    background: '#fff', border: '1px solid #DC2626',
+                                    borderRadius: 5, fontSize: 12, fontWeight: 600,
+                                    color: '#DC2626', cursor: 'pointer',
+                                    display: 'inline-flex', alignItems: 'center', gap: 4,
+                                }}
+                            >
+                                ⏹ {locale === 'zh' ? '终止' : 'Abort'}
+                            </button>
+                        )}
                         {sourceMode === 'dataset' && (
                             <div className="filter-group">
                                 <button className={`filter-btn ${filterStatus === 'all' ? 'active' : ''}`} onClick={() => setFilterStatus('all')}>
