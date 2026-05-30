@@ -1325,14 +1325,14 @@ function SkillAnalysisPage() {
      * 用例分析（trace）卡上展示的分数 = "已评测过的 trace" 的「(结果分 + 轨迹分) / 2」的平均值。
      * 关键约束：每条 trace 只有结果分 + 轨迹分都在时才参与；只跑了一边的不算"已评测"。
      *   - 结果分：trace.answer_score（Execution.answerScore，task-completion 评估器写）
-     *   - 轨迹分：getTraceFlowScore(trace)（flow-parser analyze-match overallScore）
+     *   - 轨迹分：getEffectiveTrajScore(trace)（优先方案A聚合分 trajectoryScore，回退 analyze-match 覆盖率）
      * 跟单 trace 详情页 Hero 的口径不一样（详情页只看 LLM 单分），但卡片这层要求双分都备齐
      * 才算"完整评测"，避免被半评测的 trace 拉偏。
      */
     const traceCombinedScores = traces.reduce<{ sum: number; count: number }>((acc, t) => {
         const result = typeof t.answer_score === 'number' ? t.answer_score
             : typeof t.answerScore === 'number' ? t.answerScore : null;
-        const traj = getTraceFlowScore(t);
+        const traj = getEffectiveTrajScore(t);
         if (result != null && traj != null) {
             acc.sum += (result + traj) / 2;
             acc.count += 1;
@@ -1821,7 +1821,7 @@ function AnalysisOverview({
     const traceCardAgg = traces.reduce<{ sum: number; count: number }>((acc, t) => {
         const result = typeof t.answer_score === 'number' ? t.answer_score
             : typeof t.answerScore === 'number' ? t.answerScore : null;
-        const traj = getTraceFlowScore(t);
+        const traj = getEffectiveTrajScore(t);
         if (result != null && traj != null) {
             acc.sum += (result + traj) / 2;
             acc.count += 1;
@@ -1833,7 +1833,7 @@ function AnalysisOverview({
     const traceLatestUpdatedAt = traces.reduce<string | null>((latest, t) => {
         const result = typeof t.answer_score === 'number' ? t.answer_score
             : typeof t.answerScore === 'number' ? t.answerScore : null;
-        const traj = getTraceFlowScore(t);
+        const traj = getEffectiveTrajScore(t);
         if (result == null || traj == null) return latest;
         const candidate = t.execution_match?.matchedAt || t.timestamp || null;
         if (!candidate) return latest;
@@ -2009,7 +2009,7 @@ function AnalysisOverview({
         const traceAgg = tracesData.reduce<{ sum: number; count: number }>((acc, t) => {
             const result = typeof t.answer_score === 'number' ? t.answer_score
                 : typeof t.answerScore === 'number' ? t.answerScore : null;
-            const traj = getTraceFlowScore(t);
+            const traj = getEffectiveTrajScore(t);
             if (result != null && traj != null) {
                 acc.sum += (result + traj) / 2;
                 acc.count += 1;
@@ -3785,7 +3785,11 @@ function TraceDeviationPanel({
         !deletedTaskIds.has(s.id)
         && (getTraceEvalStatus(s) !== 'idle' || evaluatedTaskIds.has(s.id))
     );
-    const fullyEvaluated = scoredTraces.filter(s => s.resultScore != null && s.trajScore != null);
+    // 排除已在「评测执行」里删除的记录(deletedTaskIds)，否则删除后上方"已评测 X/Y · 平均评分"
+    // 仍按旧集合统计、不随删除变化。与 displayedTraces 同口径。
+    const fullyEvaluated = scoredTraces.filter(s =>
+        !deletedTaskIds.has(s.id) && s.resultScore != null && s.trajScore != null,
+    );
     const avgResult = fullyEvaluated.length === 0 ? null
         : Math.round(fullyEvaluated.reduce((sum, s) => sum + (s.resultScore || 0), 0) / fullyEvaluated.length);
     const avgTraj = fullyEvaluated.length === 0 ? null
@@ -6260,6 +6264,17 @@ function getTraceFlowScore(trace: TraceRecord): number | null {
     const total = scoringMatches.length + skipped.length;
     if (total === 0) return null;
     return scoringMatches.filter(match => match.matchStatus === 'matched').length / total;
+}
+
+/**
+ * 一条 trace 的"轨迹分"(0-1) 统一口径：优先用后端聚合层算出的 trajectoryScore（方案A：
+ * 0.45 完整性 + 0.35 工具 + 0.20 冗余, 再封顶），没有(未评测/旧数据)再回退 analyze-match
+ * 对齐覆盖率 getTraceFlowScore。所有"卡片/概览/健康分/诊断"聚合都走它，避免与 ③ 详情口径分裂。
+ */
+function getEffectiveTrajScore(trace: TraceRecord): number | null {
+    if (typeof trace.trajectory_score === 'number') return trace.trajectory_score;
+    if (typeof trace.trajectoryScore === 'number') return trace.trajectoryScore;
+    return getTraceFlowScore(trace);
 }
 
 function getTraceId(trace: TraceRecord) {
