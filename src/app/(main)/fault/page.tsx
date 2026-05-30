@@ -631,11 +631,6 @@ function FaultDetailView({ execution, locale, user, onBack }: { execution: Execu
     const traceNodes = useMemo(() => buildFaultPath(execution, session?.interactions || [], locale, diagnosticItems), [execution, session?.interactions, locale, diagnosticItems]);
     const faultSummary = useMemo(() => summarizeFaultPath(traceNodes, execution), [traceNodes, execution]);
     const skillCount = (execution.invoked_skills?.length ?? 0) || (execution.skills?.length ?? 0) || (execution.skill ? 1 : 0);
-    const agentDebugSuggested = useMemo(() => {
-        return (execution.failures?.length || 0) > 0
-            || (execution.tool_call_error_count || 0) > 0
-            || (execution.answer_score != null && execution.answer_score < 1 && Boolean(execution.judgment_reason));
-    }, [execution]);
 
     const { roots: treeRoots, nodeMap: treeNodeMap } = useMemo(() => flatToTree(traceNodes), [traceNodes]);
 
@@ -965,7 +960,7 @@ function FaultDetailView({ execution, locale, user, onBack }: { execution: Execu
                         </div>
                         <div style={{ flex: 1 }}>
                             <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: '-0.01em', color: 'var(--foreground)' }}>
-                                {locale === 'zh' ? 'Insight AI · 智能诊断' : 'Insight AI · Diagnosis'}
+                                {locale === 'zh' ? '智能诊断' : 'Diagnosis'}
                             </div>
                             <div style={{ fontSize: 10.5, color: 'var(--foreground-muted)', letterSpacing: '.06em', textTransform: 'uppercase', marginTop: 1 }}>FAULT-DIAGNOSIS-AGENT</div>
                         </div>
@@ -1081,7 +1076,6 @@ function FaultDetailView({ execution, locale, user, onBack }: { execution: Execu
                             executionId={taskId}
                             user={user || ''}
                             locale={locale}
-                            suggested={agentDebugSuggested}
                             traceExplicitErrors={traceExplicitErrors}
                             onNodeRefClick={scrollToNode}
                         />
@@ -1194,7 +1188,7 @@ function ChatBubble({
         <div style={{ display: 'flex', gap: 10, marginBottom: 14, justifyContent: isUser ? 'flex-end' : 'flex-start' }}>
             {!isUser && <Avatar role="assistant" />}
             <div style={{ maxWidth: 820, minWidth: 0 }}>
-                <MessageMeta label={isUser ? (locale === 'zh' ? '你' : 'You') : 'Insight AI'} align={isUser ? 'right' : 'left'} />
+                {isUser && <MessageMeta label={locale === 'zh' ? '你' : 'You'} align="right" />}
                 <div style={bubbleStyle(message.role)}>
                     {message.pending && !message.content ? (
                         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, color: 'var(--foreground-muted)' }}>
