@@ -3626,16 +3626,19 @@ function TraceDeviationPanel({
         : '分析当前 Trace';
     const primaryDisabled = bothRunning || targetTraceIds.length === 0 || (checkedTraceIds.size === 0 && !primarySkill?.name) || !traceEvaluationBatchId;
 
-    // 「用例来源」toggle —— 两种模式都用同一份 JSX；trace 模式渲染在 trace 的 ① body 里，
-    // dataset 模式通过 BatchEvaluation 的 topConfigSlot prop 注入到 BE 的 ① body 顶部。
-    // 视觉上"toggle 始终在 ① 配置块里"，两边对称。
+    // 「添加评测对象」入口 —— 评测对象始终是 Trace，这里选的是 Trace 的来路（添加方式），不是两种评测模式：
+    //   · 选已有 Trace：直接挑现成执行记录评测
+    //   · 用数据集生成：先执行 case 生成 Trace，再评测
+    // 两种方式都把 Trace 的评测加入「当前评测任务」，统一在下方「② 评测执行」展示。
+    // 两边 JSX 同一份：trace 模式渲染在 trace 的 ① body；dataset 模式经 BatchEvaluation 的 topConfigSlot 注入。
     const sourceModeToggle = (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', background: '#fafafa', border: '1px solid #e5e7eb', borderRadius: 6, marginBottom: 14 }}>
-            <span style={{ fontSize: 11, fontWeight: 700, color: '#52525b', textTransform: 'uppercase', letterSpacing: '0.04em' }}>用例来源</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', background: '#fafafa', border: '1px solid #e5e7eb', borderRadius: 6, marginBottom: 14, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: '#52525b' }}>添加评测对象（Trace）</span>
             <div style={{ display: 'inline-flex', background: '#fff', borderRadius: 5, padding: 3, gap: 2, border: '1px solid #e5e7eb' }}>
                 <button
                     type="button"
                     onClick={() => setCaseSourceMode('trace')}
+                    title="直接挑选现成的执行记录(Trace)来评测"
                     style={{
                         border: 0,
                         padding: '4px 12px',
@@ -3646,10 +3649,11 @@ function TraceDeviationPanel({
                         fontWeight: 600,
                         cursor: 'pointer',
                     }}
-                >📊 从 Trace</button>
+                >📊 选已有 Trace</button>
                 <button
                     type="button"
                     onClick={() => setCaseSourceMode('dataset')}
+                    title="用数据集 case 执行 skill 生成新 Trace，再评测（比「选已有」多一步生成）"
                     style={{
                         border: 0,
                         padding: '4px 12px',
@@ -3660,13 +3664,11 @@ function TraceDeviationPanel({
                         fontWeight: 600,
                         cursor: 'pointer',
                     }}
-                >🗄 从数据集</button>
+                >🗄 用数据集生成</button>
             </div>
             <span style={{ flex: 1 }} />
             <span style={{ fontSize: 11, color: '#71717a' }}>
-                {caseSourceMode === 'trace'
-                    ? `当前 skill: ${skill?.name || '未选'}${version != null ? ` v${version}` : ''}（顶部切换）`
-                    : '数据集 / 评测器 见上方'}
+                两种方式都把 Trace 评测加入当前评测任务，统一在下方「② 评测执行」展示
             </span>
         </div>
     );
