@@ -29,7 +29,6 @@ interface AgentDebugCardProps {
   executionId: string;
   user: string;
   locale: string;
-  suggested: boolean;
   traceExplicitErrors?: TraceExplicitError[];
   onNodeRefClick?: (nodeId: string) => void;
 }
@@ -131,7 +130,7 @@ const ERROR_TYPE_LABEL_ZH: Record<string, string> = {
   no_error: '未发现问题',
 };
 
-export function AgentDebugCard({ executionId, user, locale, suggested, traceExplicitErrors = [], onNodeRefClick }: AgentDebugCardProps) {
+export function AgentDebugCard({ executionId, user, locale, traceExplicitErrors = [], onNodeRefClick }: AgentDebugCardProps) {
   const zh = locale === 'zh';
   const [loading, setLoading] = useState(false);
   const [report, setReport] = useState<AgentDebugReportPayload | null>(null);
@@ -172,8 +171,6 @@ export function AgentDebugCard({ executionId, user, locale, suggested, traceExpl
       setLoading(false);
     }
   }
-
-  if (!suggested && !report && !error && !loading) return null;
 
   return (
     <div className="mb-6 space-y-4">
@@ -815,10 +812,7 @@ function AssistantArticle({ children, meta }: { children: ReactNode; meta?: stri
         <Sparkles className="size-4" />
       </div>
       <div className="min-w-0 flex-1">
-        <div className="mb-1.5 flex items-center gap-2">
-          <span className="text-[12.5px] font-bold text-foreground">Insight AI</span>
-          {meta && <span className="text-[11px] text-foreground-muted">{meta}</span>}
-        </div>
+        {meta && <div className="mb-1.5 text-[11px] text-foreground-muted">{meta}</div>}
         <div className="max-w-[860px]">{children}</div>
       </div>
     </article>
