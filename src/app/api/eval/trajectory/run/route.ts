@@ -546,6 +546,33 @@ function formatActualExtractedSteps(steps: ExtractedTraceStep[]): string {
     }).join('\n');
 }
 
+async function loadActualExtractedTraceSteps(
+    resolvedTaskId: string | null | undefined,
+    user?: string | null,
+): Promise<{ status: 'ok'; steps: ExtractedTraceStep[]; text: string } | { status: 'dynamic-analysis-failed' | 'no-extracted-steps' }> {
+    if (!resolvedTaskId) return { status: 'no-extracted-steps' };
+    const executionMatch = await db.findExecutionMatch(resolvedTaskId);
+    const extractedSteps = executionMatch?.extractedSteps
+        ? JSON.parse(executionMatch.extractedSteps)
+        : [];
+    let normalizedSteps = Array.isArray(extractedSteps) ? extractedSteps as ExtractedTraceStep[] : [];
+    if (normalizedSteps.length === 0) {
+        const dynamicResult = await analyzeDynamicOnly(resolvedTaskId, user);
+        if (!dynamicResult.success) return { status: 'dynamic-analysis-failed' };
+        const refreshedExecutionMatch = await db.findExecutionMatch(resolvedTaskId);
+        const refreshedExtractedSteps = refreshedExecutionMatch?.extractedSteps
+            ? JSON.parse(refreshedExecutionMatch.extractedSteps)
+            : [];
+        normalizedSteps = Array.isArray(refreshedExtractedSteps) ? refreshedExtractedSteps as ExtractedTraceStep[] : [];
+    }
+    if (normalizedSteps.length === 0) return { status: 'no-extracted-steps' };
+    return {
+        status: 'ok',
+        steps: normalizedSteps,
+        text: formatActualExtractedSteps(normalizedSteps),
+    };
+}
+
 async function buildSkillKeyActionComparison(
     execution: ExecutionLike | null | undefined,
     resolvedTaskId: string | null | undefined,
@@ -613,21 +640,8 @@ async function buildSkillKeyActionComparison(
         return { status: 'missing-parsed-flow', missingSkills: missingParsedFlowSkills };
     }
 
-    const executionMatch = await db.findExecutionMatch(resolvedTaskId);
-    const extractedSteps = executionMatch?.extractedSteps
-        ? JSON.parse(executionMatch.extractedSteps)
-        : [];
-    let normalizedSteps = Array.isArray(extractedSteps) ? extractedSteps as ExtractedTraceStep[] : [];
-    if (normalizedSteps.length === 0) {
-        const dynamicResult = await analyzeDynamicOnly(resolvedTaskId, user);
-        if (!dynamicResult.success) return { status: 'dynamic-analysis-failed' };
-        const refreshedExecutionMatch = await db.findExecutionMatch(resolvedTaskId);
-        const refreshedExtractedSteps = refreshedExecutionMatch?.extractedSteps
-            ? JSON.parse(refreshedExecutionMatch.extractedSteps)
-            : [];
-        normalizedSteps = Array.isArray(refreshedExtractedSteps) ? refreshedExtractedSteps as ExtractedTraceStep[] : [];
-    }
-    if (normalizedSteps.length === 0) return { status: 'no-extracted-steps' };
+    const actualTrace = await loadActualExtractedTraceSteps(resolvedTaskId, user);
+    if (actualTrace.status !== 'ok') return { status: actualTrace.status };
 
     const keyActions = await extractSkillKeyActionsFromTargets(skillTargets, user);
     if (keyActions.length === 0) return { status: 'no-key-actions' };
@@ -635,9 +649,9 @@ async function buildSkillKeyActionComparison(
     return {
         status: 'ok',
         referenceKeyActionsText: formatReferenceKeyActions(keyActions),
-        actualExtractedStepsText: formatActualExtractedSteps(normalizedSteps),
+        actualExtractedStepsText: actualTrace.text,
         referenceKeyActions: keyActions,
-        actualExtractedSteps: normalizedSteps,
+        actualExtractedSteps: actualTrace.steps,
     };
 }
 
@@ -1437,9 +1451,10 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
     let comparisonMode: TrajectoryEvalInput['comparisonMode'] = 'trajectory';
     let referenceKeyActionsText = '';
     let actualExtractedStepsText = '';
+    let referenceKeyActionsForEval: unknown[] = [];
+    let actualExtractedStepsForEval: unknown[] = [];
     let evaluationFocus = caseEntry.evaluationFocus;
     const referenceTrajectory = caseEntry.trajectory;
-    const hasReferenceTrajectory = !!normalizeMatchText(caseEntry.trajectory);
     const keyActionComparison = await buildSkillKeyActionComparison(
         execution,
         resolvedTaskId,
@@ -1448,35 +1463,31 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
     );
     const skillAttributionStatus = buildSkillAttributionStatus(keyActionComparison);
 
-    // missing-skill / missing-parsed-flow 是真的"用户配置不完整"的错——如果连
-    // reference trajectory 都没有，评估就跑不动，必须抛错让用户去补 skill 解析。
-    // 但如果已经有 reference trajectory，evaluator 还能在 trajectory 模式下产分，
-    // 没必要因 skill 归因失败而整条评测作废——把降级状态写进 rawAnalysisJson 即可。
-    if (!hasReferenceTrajectory) {
-        if (keyActionComparison.status === 'missing-skill') {
-            throw new StagedEvaluationError(
-                'no-evaluable-case',
-                `${NO_EVALUABLE_CASE_PREFIX} trace 使用了 skill，但在 Skills 管理中未找到同名 skill：${keyActionComparison.missingSkills.join('、')}`,
-            );
-        }
-        if (keyActionComparison.status === 'missing-parsed-flow') {
-            throw new StagedEvaluationError(
-                'no-evaluable-case',
-                `${NO_EVALUABLE_CASE_PREFIX} trace 使用的 skill 缺少可用于提取关键步骤的已解析流程：${keyActionComparison.missingSkills.join('、')}`,
-            );
-        }
-    }
     if (keyActionComparison.status === 'ok') {
         comparisonMode = 'skill_key_actions';
         referenceKeyActionsText = keyActionComparison.referenceKeyActionsText;
         actualExtractedStepsText = keyActionComparison.actualExtractedStepsText;
+        referenceKeyActionsForEval = keyActionComparison.referenceKeyActions ?? [];
+        actualExtractedStepsForEval = keyActionComparison.actualExtractedSteps ?? [];
         evaluationFocus = [
             normalizeMatchText(caseEntry.evaluationFocus),
-            '优先比较技能自动提取的参考关键步骤与 trace 自动提取的实际关键步骤，再结合实际 trace 判断工具选择与根因。',
+            '逐条比较 Skill 自动提取的关键动作与 trace 自动提取的扁平化实际步骤，并直接生成每个关键动作的 Skill 改进建议。',
         ].filter(Boolean).join(' ');
-        // 不再清空 referenceTrajectory——同时有 case trajectory 和 skill key actions
-        // 时，evaluator 可以兼用两者（COORDINATOR_SYSTEM_PROMPT 在 skill_key_actions
-        // 模式下也会引用 actual_trace + reference）。
+    } else if (shouldRunTraceEvaluation) {
+        const actualTrace = await loadActualExtractedTraceSteps(resolvedTaskId, user);
+        if (actualTrace.status !== 'ok') {
+            throw new StagedEvaluationError(
+                'no-evaluable-case',
+                `${NO_EVALUABLE_CASE_PREFIX} ${skillAttributionStatus.message || '当前 trace 无法提取可评测步骤'}`,
+            );
+        }
+        comparisonMode = 'trace_only';
+        actualExtractedStepsText = actualTrace.text;
+        actualExtractedStepsForEval = actualTrace.steps;
+        evaluationFocus = [
+            normalizeMatchText(caseEntry.evaluationFocus),
+            '当前 trace 未获得可用 Skill 关键动作；不评估完整性，不生成 Skill 关键动作建议，仅评估工具选择与冗余。',
+        ].filter(Boolean).join(' ');
     }
 
     // skillAttribution + comparisonMode 写进 baseRawAnalysisMeta 后所有 evaluator
@@ -1833,6 +1844,9 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
         referenceTrajectory,
         referenceKeyActionsText,
         actualExtractedStepsText,
+        referenceKeyActions: referenceKeyActionsForEval,
+        actualExtractedSteps: actualExtractedStepsForEval,
+        skillContext: await loadTaskCompletionSkillContext(execution, interactions, user),
         comparisonMode,
         evaluationFocus,
         actualInteractions: interactions,

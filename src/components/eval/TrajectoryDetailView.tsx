@@ -14,15 +14,12 @@
  */
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import { apiFetch } from '@/lib/client/api';
 import { useAuth } from '@/lib/auth/auth-context';
-import { EvaluatorFindingsView } from './EvaluatorFindingsView';
-import { TraceAlignmentPanel, type TraceAlignmentPanelProps } from './TraceAlignmentPanel';
 import { Term } from '@/components/text/Term';
 import { parseSkillAttributionFromRow } from '@/lib/engine/evaluation/skill-attribution';
 import { fmtPercentScore } from '@/lib/eval/score-format';
+import './evaluator-findings-view.css';
 
 interface DatasetCase {
     id: string;
@@ -59,7 +56,7 @@ interface ExecutionRecord {
 }
 
 interface DimensionScores {
-    completeness: number;
+    completeness: number | null;
     toolChoice: number;
     redundancy: number;
     /** 归因维度（v2 起不计入加权轨迹分，仅历史数据可能携带）。 */
@@ -175,7 +172,7 @@ interface SkillKeyActionComparisonPayload {
     actualExtractedSteps: ActualExtractedStep[];
 }
 
-type KeyActionCoverage = 'covered' | 'partial' | 'missing';
+type KeyActionCoverage = 'covered' | 'partial' | 'missing' | 'not_applicable';
 
 interface SkillKeyActionCard {
     action: ReferenceKeyAction;
@@ -187,15 +184,21 @@ interface SkillKeyActionCard {
     severity?: 'high' | 'medium' | 'low';
 }
 
-/** 宽松解析 JSON 字符串，返回对象或数组原值（解析失败 / 空串返回 null）。 */
-function safeJsonParseLoose(s: string | null | undefined): Record<string, unknown> | unknown[] | null {
-    if (!s || typeof s !== 'string') return null;
-    try {
-        const parsed = JSON.parse(s);
-        return parsed && typeof parsed === 'object' ? parsed : null;
-    } catch {
-        return null;
-    }
+interface LlmKeyActionResult {
+    actionId: string;
+    actionContent: string;
+    coverage: KeyActionCoverage;
+    severity?: 'high' | 'medium' | 'low';
+    matchedTraceSteps: number[];
+    traceComparisonAnalysis: string;
+    hasSkillImprovement: boolean;
+    skillImprovementSuggestion: string;
+    confidence?: number;
+}
+
+interface TrajectoryReasonLine {
+    label: string;
+    body: string;
 }
 
 function parseLooseJsonText(text: string): Record<string, unknown> | null {
@@ -303,7 +306,7 @@ interface TrajectoryResult {
     evaluatorRunId: string;
     selectedEvaluators?: string[];
     selectedEvaluatorNames?: string[];
-    comparisonMode?: 'trajectory' | 'skill_key_actions';
+    comparisonMode?: 'trajectory' | 'skill_key_actions' | 'trace_only';
     taskTitle?: string;
     taskDescription?: string;
     datasetId: string;
@@ -590,6 +593,68 @@ function buildDefaultSkillSuggestion(action: ReferenceKeyAction, coverage: KeyAc
     return `在 ${skillSource} 中把“${action.content || '该关键动作'}”标记为必须执行的核心步骤${flowHint}，写清操作方式和完成标准，避免 trace 直接跳过。`;
 }
 
+function normalizeKeyActionCoverage(value: unknown): LlmKeyActionResult['coverage'] {
+    const raw = String(value || '').trim();
+    if (raw === 'covered' || raw === 'partial' || raw === 'missing' || raw === 'not_applicable') return raw;
+    return 'missing';
+}
+
+function parseLlmKeyActionResults(rawAnalysis: unknown): LlmKeyActionResult[] {
+    const root = rawAnalysis && typeof rawAnalysis === 'object' && !Array.isArray(rawAnalysis)
+        ? rawAnalysis as Record<string, unknown>
+        : null;
+    if (!root) return [];
+    const direct = Array.isArray(root.keyActionResults)
+        ? root.keyActionResults
+        : Array.isArray(root.key_action_results)
+        ? root.key_action_results
+        : [];
+
+    return direct
+        .map(item => item && typeof item === 'object' && !Array.isArray(item) ? item as Record<string, unknown> : null)
+        .filter((item): item is Record<string, unknown> => Boolean(item))
+        .map(item => {
+            const steps = Array.isArray(item.matchedTraceSteps)
+                ? item.matchedTraceSteps
+                : Array.isArray(item.matched_trace_steps)
+                ? item.matched_trace_steps
+                : [];
+            const rawSeverity = String(item.severity || '');
+            const severity: LlmKeyActionResult['severity'] = rawSeverity === 'high' || rawSeverity === 'medium' || rawSeverity === 'low'
+                ? rawSeverity
+                : undefined;
+            return {
+                actionId: String(item.actionId ?? item.action_id ?? '').trim(),
+                actionContent: String(item.actionContent ?? item.action_content ?? '').trim(),
+                coverage: normalizeKeyActionCoverage(item.coverage),
+                severity,
+                matchedTraceSteps: steps
+                    .map(step => typeof step === 'number' ? step : Number(step))
+                    .filter(step => Number.isFinite(step)),
+                traceComparisonAnalysis: String(item.traceComparisonAnalysis ?? item.trace_comparison_analysis ?? '').trim(),
+                hasSkillImprovement: (item.hasSkillImprovement ?? item.has_skill_improvement) === true,
+                skillImprovementSuggestion: String(item.skillImprovementSuggestion ?? item.skill_improvement_suggestion ?? '').trim(),
+                confidence: typeof item.confidence === 'number' && Number.isFinite(item.confidence)
+                    ? item.confidence
+                    : undefined,
+            };
+        })
+        .filter(item => item.actionId || item.actionContent || item.traceComparisonAnalysis);
+}
+
+function deriveSkillKeyActionCardsFromLlm(rawAnalysis: unknown): SkillKeyActionCard[] {
+    return parseLlmKeyActionResults(rawAnalysis).map((item, index) => ({
+        action: {
+            id: item.actionId,
+            content: item.actionContent || `关键动作 ${index + 1}`,
+        },
+        analysis: item.traceComparisonAnalysis || '评估器未返回该关键动作的 trace 对比分析。',
+        suggestion: item.skillImprovementSuggestion || '路径已覆盖该动作，无 Skill 改进点',
+        coverage: item.coverage,
+        severity: item.severity,
+    }));
+}
+
 function deriveSkillKeyActionCards(
     comparison: SkillKeyActionComparisonPayload | null,
     deviationSteps: TrajectoryDeviation[] | null | undefined,
@@ -718,6 +783,54 @@ function deriveResultEvaluationSummary(
     };
 }
 
+function formatTrajectoryReasonText(text: string | null | undefined): TrajectoryReasonLine[] {
+    const raw = String(text || '').trim();
+    if (!raw) return [];
+    const normalized = raw
+        .replace(/\s*(完整性(?:[（(]|[:：]))/g, '\n$1')
+        .replace(/。?\s*(工具选择[（(])/g, '\n$1')
+        .replace(/。?\s*(冗余[（(])/g, '\n$1')
+        .replace(/。?\s*(可能触发封顶的偏差[:：]?)/g, '\n$1')
+        .replace(/\n{2,}/g, '\n')
+        .trim();
+
+    const lines = normalized
+        .split('\n')
+        .map(line => line.trim())
+        .map(line => line.replace(/^[-*]\s+/, '').trim())
+        .filter(Boolean);
+
+    return lines
+        .map(line => {
+            const match = line.match(/^(完整性(?:[（(][^）)]*[）)]|[:：])|工具选择[（(][^）)]*[）)]|冗余[（(][^）)]*[）)]|可能触发封顶的偏差)\s*[:：]?\s*(.*)$/);
+            if (!match) {
+                return { label: '', body: line };
+            }
+            return {
+                label: match[1].replace(/[:：]$/, ''),
+                body: match[2] || '',
+            };
+        });
+}
+
+function TrajectoryReasonBlock({ text }: { text: string | null | undefined }) {
+    const lines = formatTrajectoryReasonText(text);
+    if (lines.length === 0) {
+        return <span style={{ color: COLORS.textDisabled }}>(无 reasonText)</span>;
+    }
+    return (
+        <ul>
+            {lines.map((line, index) => (
+                <li key={`${line.label || 'line'}-${index}`}>
+                    {line.label ? <strong>{line.label}</strong> : null}
+                    {line.label && line.body ? '：' : null}
+                    {line.body}
+                </li>
+            ))}
+        </ul>
+    );
+}
+
 export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
     const { user } = useAuth();
     const router = useRouter();
@@ -733,9 +846,6 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string>('');
     const [activeAnalysisTab, setActiveAnalysisTab] = useState<'result' | 'trajectory' | 'custom'>('result');
-    // 执行轨迹对齐面板默认折叠（放在轨迹评测最后，按需展开看详细对齐时序图）。
-    const [alignmentOpen, setAlignmentOpen] = useState(false);
-
     // Execution（轮询，结果评测字段可能在轨迹评测过程中被补写）
     useEffect(() => {
         if (!user || !traceId) return;
@@ -813,46 +923,6 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
         };
     }, [user, traceId, datasetId, runId, resultId]);
 
-    // analyze-match 数据（执行轨迹对齐 · Skill 预期标注 面板用）。原在 用例分析 ③ 分析结果，
-    // 现迁移到这里（评测执行 → 轨迹评测）。GET 拿已存的对齐结果，没有则面板自然空着。
-    const [matchData, setMatchData] = useState<{ matchJson?: string; flowJson?: string; extractedSteps?: string; dynamicMermaid?: string } | null>(null);
-    useEffect(() => {
-        if (!user || !traceId) return;
-        let stopped = false;
-        apiFetch(`/api/observe/executions/${encodeURIComponent(traceId)}/analyze-match`)
-            .then(r => (r.ok ? r.json() : null))
-            .then(d => { if (!stopped && d && typeof d === 'object') setMatchData(d); })
-            .catch(() => undefined);
-        return () => { stopped = true; };
-    }, [user, traceId]);
-
-    const alignmentPanelProps = useMemo<TraceAlignmentPanelProps | null>(() => {
-        const parsedRaw = safeJsonParseLoose(matchData?.matchJson);
-        if (!parsedRaw || Array.isArray(parsedRaw)) return null;
-        const parsedMatch = parsedRaw as Record<string, unknown>;
-        const parsedFlow = safeJsonParseLoose(matchData?.flowJson);
-        const extractedRaw = safeJsonParseLoose(matchData?.extractedSteps);
-        const problemSteps = Array.isArray(parsedMatch.problemSteps) ? parsedMatch.problemSteps : [];
-        const problemByStepKey = new Map<string, Record<string, unknown>>();
-        for (const raw of problemSteps) {
-            const p = asRecord(raw);
-            if (p.stepIndex != null) problemByStepKey.set(`actual:${p.stepIndex}`, p);
-            if (p.stepName) problemByStepKey.set(`name:${String(p.stepName)}`, p);
-        }
-        const flowSteps = !Array.isArray(parsedFlow) && Array.isArray((parsedFlow as Record<string, unknown> | null)?.steps)
-            ? (parsedFlow as { steps: unknown[] }).steps
-            : [];
-        return {
-            matches: Array.isArray(parsedMatch.matches) ? parsedMatch.matches : [],
-            skippedExpectedSteps: Array.isArray(parsedMatch.skippedExpectedSteps) ? parsedMatch.skippedExpectedSteps : [],
-            problemByStepKey,
-            flowSteps,
-            extractedSteps: Array.isArray(extractedRaw) ? extractedRaw : [],
-            alignment: parsedMatch.alignment,
-            mermaidCode: matchData?.dynamicMermaid,
-        } as unknown as TraceAlignmentPanelProps;
-    }, [matchData]);
-
     const effectiveDatasetId = datasetId || result?.datasetId || '';
 
     // Dataset（用于查 case）
@@ -912,9 +982,18 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
         [result?.rawAnalysis],
     );
     const skillKeyActionCards = useMemo(
-        () => deriveSkillKeyActionCards(skillKeyActionComparison, result?.deviationSteps),
-        [skillKeyActionComparison, result?.deviationSteps],
+        () => {
+            const llmCards = deriveSkillKeyActionCardsFromLlm(result?.rawAnalysis);
+            return llmCards.length > 0
+                ? llmCards
+                : deriveSkillKeyActionCards(skillKeyActionComparison, result?.deviationSteps);
+        },
+        [result?.rawAnalysis, skillKeyActionComparison, result?.deviationSteps],
     );
+    const isTraceOnlyTrajectory = result?.comparisonMode === 'trace_only'
+        || asRecord(result?.rawAnalysis).comparisonMode === 'trace_only'
+        || asRecord(result?.rawAnalysis).comparison_mode === 'trace_only';
+    const shouldShowSkillKeyActions = !isTraceOnlyTrajectory && skillKeyActionCards.length > 0;
     const taskInputValue = caseSnapshot?.taskInput?.trim()
         || caseSnapshot?.input?.trim()
         || (isEvaluationTerminal(result?.status) ? '(未提取到任务输入)' : '任务输入提取中…');
@@ -961,8 +1040,8 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
             : composite >= 0.8
             ? '该执行在结果与过程两个维度均表现良好'
             : composite >= 0.5
-            ? '该执行结果基本可用，但过程存在偏离参考路径的问题'
-            : '该执行偏离参考较大，建议优先排查';
+            ? '该执行结果基本可用，但部分关键动作覆盖不足'
+            : '该执行关键动作覆盖不足，建议优先排查';
 
     if (loading && !exec && !result) {
         return <div style={{ padding: 24 }}>加载中...</div>;
@@ -1226,62 +1305,41 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
                                             overflow: 'auto',
                                         }}
                                     >
-                                        {result.reasonText ? (
-                                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                                {result.reasonText}
-                                            </ReactMarkdown>
-                                        ) : (
-                                            <span style={{ color: COLORS.textDisabled }}>(无 reasonText)</span>
-                                        )}
+                                        <TrajectoryReasonBlock text={result.reasonText} />
                                     </div>
                                 </div>
 
                                 {(() => {
                                     const findings = deriveDimensionFindings(result.rawAnalysis);
-                                    // trace 模式下 analyze-match 会把 dimensionScoresJson 覆写成 {alignment, attribution}，
-                                    // 三维分只剩在 rawAnalysis.dimension_details.<dim>.score。这里两处都读：
-                                    // 优先 dimensionScores 列，缺失则回退 dimension_details，避免分数空白。
                                     const dims = resolveDimensionScores(result.dimensionScores, result.rawAnalysis);
                                     if (dims.completeness == null && dims.toolChoice == null && dims.redundancy == null) return null;
                                     return (
                                         <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 8, marginBottom: 12 }}>
-                                            <DimensionCard label="完整性" termId="traj-completeness" weight={0.45} score={dims.completeness} findings={findings.completeness} />
-                                            <DimensionCard label="工具选择" termId="traj-tool-choice" weight={0.35} score={dims.toolChoice} findings={findings.toolChoice} />
-                                            <DimensionCard label="冗余" termId="traj-redundancy" weight={0.20} score={dims.redundancy} findings={findings.redundancy} />
+                                            <DimensionCard label="完整性" termId="traj-completeness" weight={isTraceOnlyTrajectory ? undefined : 0.45} score={isTraceOnlyTrajectory ? null : dims.completeness} findings={findings.completeness} notScored={isTraceOnlyTrajectory} />
+                                            <DimensionCard label="工具选择" termId="traj-tool-choice" weight={isTraceOnlyTrajectory ? 0.6364 : 0.35} score={dims.toolChoice} findings={findings.toolChoice} />
+                                            <DimensionCard label="冗余" termId="traj-redundancy" weight={isTraceOnlyTrajectory ? 0.3636 : 0.20} score={dims.redundancy} findings={findings.redundancy} />
                                         </div>
                                     );
                                 })()}
 
-                                <TrajectoryCapBanner rawAnalysis={result.rawAnalysis} trajectoryScore={result.trajectoryScore} />
+                                {!isTraceOnlyTrajectory ? (
+                                    <TrajectoryCapBanner rawAnalysis={result.rawAnalysis} trajectoryScore={result.trajectoryScore} />
+                                ) : null}
 
-                                {/* 轨迹 tab 只保留过程向的 Skill 归因问题：
-                                    - deviation_steps     -> 路径偏离
-                                    - tool_choice_findings -> 工具选择
-                                   结果评测的 key_point_findings / result_issues 留在结果评测 tab 展示，
-                                   同时删除与路径偏离重复的原始“偏离步骤”区块。 */}
+                                {shouldShowSkillKeyActions ? (
                                 <div style={{ marginTop: 14 }}>
                                     <div style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 6 }}>
-                                        评估器识别的 Skill 归因问题
+                                        Skill 关键动作
                                     </div>
-                                    <EvaluatorFindingsView
-                                        row={result}
-                                        allowedKinds={['deviation', 'tool_choice']}
-                                    />
-                                </div>
-
-                                <div style={{ marginTop: 14 }}>
-                                    <div style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 6 }}>
-                                        Skill 关键动作对比
-                                    </div>
-                                    {skillAttribution?.state === 'ok' && skillKeyActionComparison ? (
+                                    {(
                                         <div className="efv-root">
                                             <div className="efv-summary">
                                                 <span>
-                                                    基于 <b>{skillKeyActionComparison.referenceKeyActions.length}</b> 个关键动作与 <b>{skillKeyActionComparison.actualExtractedSteps.length}</b> 个 Trace 提取步骤做过程对比
+                                                    评估器逐条分析 <b>{skillKeyActionCards.length}</b> 个关键动作
                                                 </span>
                                                 <span className="efv-summary-sep">·</span>
                                                 <span>
-                                                    比较模式：{result?.comparisonMode === 'skill_key_actions' ? 'Skill 关键动作' : '轨迹参考'}
+                                                    分数：{result.trajectoryScore == null ? '—' : `${fmtPercentScore(result.trajectoryScore)} / 100`}
                                                 </span>
                                                 {skillAttribution ? (
                                                     <>
@@ -1311,7 +1369,7 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
                                                                 {card.action.content || `关键动作 ${index + 1}`}
                                                             </span>
                                                             <span className={`efv-pill${card.coverage === 'missing' ? ' err' : card.coverage === 'partial' ? ' warn' : ''}`}>
-                                                                {card.coverage === 'covered' ? '已覆盖' : card.coverage === 'partial' ? '部分覆盖' : '未覆盖'}
+                                                                {card.coverage === 'covered' ? '已覆盖' : card.coverage === 'partial' ? '部分覆盖' : card.coverage === 'not_applicable' ? '不适用' : '未覆盖'}
                                                             </span>
                                                         </div>
                                                         <div className="efv-desc">
@@ -1325,38 +1383,9 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
                                                 ))}
                                             </div>
                                         </div>
-                                    ) : (
-                                        <div className="efv-empty">
-                                            {skillAttribution?.message || '当前记录没有可展示的 Skill 关键动作对比。'}
-                                        </div>
                                     )}
                                 </div>
-
-                                {/* 执行轨迹对齐 · Skill 预期标注 —— 放在轨迹评测最后，默认折叠，
-                                    点击展开看详细的对齐时序图 / 缺失·偏离标注；数据来自 analyze-match。 */}
-                                {alignmentPanelProps && (
-                                    <div style={{ marginTop: 14 }}>
-                                        <button
-                                            type="button"
-                                            onClick={() => setAlignmentOpen(o => !o)}
-                                            style={{
-                                                display: 'flex', alignItems: 'center', gap: 8, width: '100%',
-                                                background: COLORS.bgSoft, border: `1px solid ${COLORS.border}`,
-                                                borderRadius: 6, padding: '8px 12px', cursor: 'pointer', textAlign: 'left',
-                                            }}
-                                            aria-expanded={alignmentOpen}
-                                        >
-                                            <span style={{ fontSize: 11, color: COLORS.textDisabled, transition: 'transform 0.15s', transform: alignmentOpen ? 'rotate(90deg)' : 'none' }}>▶</span>
-                                            <span style={{ fontSize: 12.5, fontWeight: 600, color: COLORS.text }}>执行轨迹对齐 · Skill 预期标注</span>
-                                            <span style={{ fontSize: 11, color: COLORS.textMuted }}>以实际执行为主，直接标注偏离与缺失步骤</span>
-                                        </button>
-                                        {alignmentOpen && (
-                                            <div style={{ marginTop: 8 }}>
-                                                <TraceAlignmentPanel {...alignmentPanelProps} />
-                                            </div>
-                                        )}
-                                    </div>
-                                )}
+                                ) : null}
 
                                 {/* 重新跑归因评估按钮 —— 用户在详情页看到结果过时/不完整时可以就地重新触发，
                                     避免必须回 batch 列表才能重跑（对应方案 A：保留单条 trace 重新归因入口）。 */}
@@ -1919,26 +1948,23 @@ function AnalysisTabButton({
     );
 }
 
-/**
- * 维度卡片：分数 + 进度条；点击头部展开看 subagent 具体发现（默认折叠）
- */
 function DimensionCard({
     label,
     score,
     findings,
     weight,
     termId,
+    notScored,
 }: {
     label: string;
     score: number | null | undefined;
     findings?: { type: 'high' | 'medium' | 'low' | 'info'; text: string }[];
-    /** 该维度在加权轨迹分中的权重（0-1）；提供时在标签后展示「权重 xx%」。 */
     weight?: number;
-    /** glossary 条目 id；提供时在标签后加一个 i 角标，hover 展示"评测什么能力 + 怎么算分"。 */
     termId?: string;
+    notScored?: boolean;
 }) {
     const [expanded, setExpanded] = useState(false);
-    const hasScore = typeof score === 'number' && Number.isFinite(score);
+    const hasScore = !notScored && typeof score === 'number' && Number.isFinite(score);
     const tone = !hasScore ? COLORS.textMuted : score >= 0.8 ? COLORS.success : score >= 0.5 ? COLORS.warning : COLORS.danger;
     const bg = !hasScore ? COLORS.bgSoft : score >= 0.8 ? COLORS.successSubtle : score >= 0.5 ? COLORS.warningSubtle : COLORS.dangerSubtle;
     const barWidth = hasScore ? Math.round(score * 100) : 0;
@@ -1978,12 +2004,15 @@ function DimensionCard({
                     ) : null}
                     {label}
                     {termId ? (
-                        // i 角标：hover 展示"评测什么能力 + 怎么算分"。stopPropagation 防止点角标误触展开。
                         <span onClick={e => e.stopPropagation()} style={{ display: 'inline-flex', alignItems: 'center' }}>
                             <Term id={termId} render="compact" />
                         </span>
                     ) : null}
-                    {typeof weight === 'number' ? (
+                    {notScored ? (
+                        <span style={{ color: COLORS.textDisabled, fontSize: 10, fontWeight: 400 }}>
+                            不计分
+                        </span>
+                    ) : typeof weight === 'number' ? (
                         <span style={{ color: COLORS.textDisabled, fontSize: 10, fontWeight: 400 }}>
                             权重 {Math.round(weight * 100)}%
                         </span>
@@ -1995,8 +2024,14 @@ function DimensionCard({
                     ) : null}
                 </span>
                 <span>
-                    <span style={{ fontSize: 14, fontWeight: 600, color: tone }}>{fmtPercentScore(score)}</span>
-                    <span style={{ fontSize: 9, color: COLORS.textDisabled, marginLeft: 2 }}>/100</span>
+                    {notScored ? (
+                        <span style={{ fontSize: 12, fontWeight: 600, color: tone }}>N/A</span>
+                    ) : (
+                        <>
+                            <span style={{ fontSize: 14, fontWeight: 600, color: tone }}>{fmtPercentScore(score)}</span>
+                            <span style={{ fontSize: 9, color: COLORS.textDisabled, marginLeft: 2 }}>/100</span>
+                        </>
+                    )}
                 </span>
             </div>
             <div style={{ height: 3, background: bg, borderRadius: 2, overflow: 'hidden' }}>
@@ -2039,11 +2074,6 @@ function DimensionCard({
     );
 }
 
-/**
- * 严重度封顶说明条。读取 rawAnalysis.score_aggregation（评估器代码侧聚合层产出）：
- *  - 展示「加权分 → 最终分」以及是否触发封顶 / 封顶原因 / high·medium 偏差计数。
- *  - 旧评测数据没有 score_aggregation → 不渲染，安全降级。
- */
 function TrajectoryCapBanner({
     rawAnalysis,
     trajectoryScore,
@@ -2053,6 +2083,7 @@ function TrajectoryCapBanner({
 }) {
     const agg = asRecord(asRecord(rawAnalysis).score_aggregation ?? asRecord(rawAnalysis).scoreAggregation);
     if (Object.keys(agg).length === 0) return null;
+    if (agg.mode === 'trace_only') return null;
 
     const rawWeighted = typeof agg.rawWeightedScore === 'number' ? agg.rawWeightedScore : null;
     const finalScore = typeof agg.finalScore === 'number'
@@ -2097,28 +2128,19 @@ function TrajectoryCapBanner({
                 {reason || '无封顶：无 high 偏差且 medium 偏差少于 3 个。'}
             </div>
             <div style={{ marginTop: 4, fontSize: 10.5, color: COLORS.textMuted }}>
-                偏差严重度：high {highCount} · medium {mediumCount}
+                严重度：high {highCount} · medium {mediumCount}
                 {' · 规则：≥1 个 high → 封顶 40.0；无 high 但 ≥3 个 medium → 封顶 65.0'}
             </div>
         </div>
     );
 }
 
-/**
- * 把 rawAnalysis.dimension_details 派生成各维度卡片的 findings 列表。
- * 任何字段缺失都安全降级为空数组。
- */
 function asRecord(value: unknown): Record<string, unknown> {
     return value && typeof value === 'object' && !Array.isArray(value)
         ? value as Record<string, unknown>
         : {};
 }
 
-/**
- * 维度明细里的 step 项可能是字符串(评估器常这么输出)，也可能是对象。
- * 统一抽成 { text, severity, idx, name }，避免 string 项被当对象读 .description
- * 而显示成「(未给描述)」。对象时按多字段兜底取文案。
- */
 function extractStepInfo(raw: unknown): {
     text: string;
     severity: unknown;
@@ -2136,12 +2158,6 @@ function extractStepInfo(raw: unknown): {
     return { text, severity: m.severity, idx: m.step_index ?? m.stepIndex, name: m.name };
 }
 
-/**
- * 解析三维分（completeness / toolChoice / redundancy），返回 number 或 null。
- * 取值优先级：dimensionScores 列 → rawAnalysis.dimension_details.<dim>.score。
- * 这样 trace 模式下被 analyze-match 覆写成 {alignment, attribution} 的行，
- * 也能从评估器原始输出里把三维分捞回来展示，不再空白。
- */
 function resolveDimensionScores(
     dimensionScores: DimensionScores | null | undefined,
     rawAnalysis: unknown,
@@ -2150,11 +2166,11 @@ function resolveDimensionScores(
     const rawDimScores = asRecord(root.dimension_scores ?? root.dimensionScores);
     const details = asRecord(root.dimension_details ?? root.dimensionDetails);
     const num = (v: unknown): number | null => {
+        if (v == null) return null;
         const n = typeof v === 'number' ? v : Number(v);
         return Number.isFinite(n) ? n : null;
     };
-    // 取值优先级：dimensionScores 列 → rawAnalysis.dimension_scores → dimension_details.<dim>.score(冗余用 redundancy_score)。
-    const pick = (colVal: number | undefined, rawKey: string, detailKey: string, detailScoreKey = 'score'): number | null => {
+    const pick = (colVal: number | null | undefined, rawKey: string, detailKey: string, detailScoreKey = 'score'): number | null => {
         const fromCol = num(colVal);
         if (fromCol != null) return fromCol;
         const fromRaw = num(rawDimScores[rawKey] ?? rawDimScores[detailKey]);
@@ -2173,7 +2189,6 @@ function deriveDimensionFindings(rawAnalysis: unknown): {
     completeness: { type: 'high' | 'medium' | 'low' | 'info'; text: string }[];
     toolChoice: { type: 'high' | 'medium' | 'low' | 'info'; text: string }[];
     redundancy: { type: 'high' | 'medium' | 'low' | 'info'; text: string }[];
-    attribution: { type: 'high' | 'medium' | 'low' | 'info'; text: string }[];
 } {
     const root = asRecord(rawAnalysis);
     const details = asRecord(root.dimension_details ?? root.dimensionDetails);
@@ -2224,26 +2239,11 @@ function deriveDimensionFindings(rawAnalysis: unknown): {
         const r = asRecord(raw);
         redundancy.push({ type: 'medium', text: `高频调用：${r.call || '?'} 共 ${r.count ?? '?'} 次` });
     }
-    if (redundancy.length === 0) {
-        const totalToolCalls = typeof rd.total_tool_calls === 'number' ? rd.total_tool_calls : 0;
-        const totalSkillCalls = typeof rd.total_skill_calls === 'number' ? rd.total_skill_calls : 0;
-        const tot = totalToolCalls + totalSkillCalls;
-        redundancy.push({ type: 'info', text: `无连续重复 / 高频调用（共 ${tot} 次工具/Skill 调用）` });
+    if (redundancy.length === 0 && rd.explanation) {
+        redundancy.push({ type: 'info', text: String(rd.explanation) });
     }
 
-    const attribution: { type: ReturnType<typeof sev>; text: string }[] = [];
-    const at = asRecord(details.attribution);
-    if (at.root_cause_step) {
-        attribution.push({ type: 'high', text: `根因：${at.root_cause_step}` });
-    }
-    if (at.reasoning) {
-        attribution.push({ type: 'info', text: String(at.reasoning) });
-    }
-    if (attribution.length === 0) {
-        attribution.push({ type: 'info', text: '归因子代理未输出明确根因' });
-    }
-
-    return { completeness, toolChoice, redundancy, attribution };
+    return { completeness, toolChoice, redundancy };
 }
 
 function badgeStyle(bg: string, color: string, small?: boolean): CSSProperties {
