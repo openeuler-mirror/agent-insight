@@ -1165,7 +1165,7 @@ export function GrayscaleEvaluation({
 
     const defaultTaskName = () => {
         const now = new Date();
-        return `灰度测评 ${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}`;
+        return `A/B测试 ${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}`;
     };
     const taskTitlePlaceholder = locale === 'zh' ? '点击命名任务…' : 'Name this task…';
 
