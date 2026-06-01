@@ -2864,10 +2864,6 @@ function AnalysisOverview({
                             <div className="sa-card-stat-label" title="当前评测任务下结果分 + 轨迹分双双就绪的记录数；只跑一边的不计入">已评测用例</div>
                             <div className="sa-card-stat-val">{!hasEvalTask ? '未选择评测任务' : `${cardEvalDone} / ${cardEvalTotal}`}</div>
                         </div>
-                        <div className="sa-card-stat">
-                            <div className="sa-card-stat-label">高偏离</div>
-                            <div className="sa-card-stat-val">{highDeviation > 0 ? `${highDeviation} 条` : '无'}</div>
-                        </div>
                     </div>
 
                     {traceCanTest ? (
@@ -3599,6 +3595,14 @@ function TraceDeviationPanel({
         if (s.resultScore != null || s.trajScore != null) return 'partial';
         return 'idle';
     };
+    // ② 表行/表头徽章统一口径：关联了评测任务时用本任务 meta 的分数判状态(与"已评测 X/Y"一致)，
+    // 否则用 trace 自带的 answer_score / trajScore。避免徽章按 trace 旧分算 done、而行按任务分显示
+    // 部分评测的撕裂。
+    const getDisplayedTraceStatus = (s: ScoredTrace): EvalStatus => {
+        if (!traceEvaluationBatchId) return getTraceEvalStatus(s);
+        const meta = traceEvalResultsMap.get(s.id);
+        return getTraceEvalStatus({ ...s, resultScore: meta?.resultScore ?? null, trajScore: meta?.trajScore ?? null });
+    };
     // ② 评测执行 列表口径：
     //   - 关联了「评测任务」时：只列该任务(evaluatorRunId)的记录(traceEvalResultsMap) + 本次会话刚触发/失败的，
     //     使列表与上方"已评测 X/Y"、③ 总评分(都绑定该任务)一致；且每行都在任务里 → 都有评估 Trace。
@@ -3993,7 +3997,7 @@ function TraceDeviationPanel({
                             之前 refresh 后 ② 折叠用户完全感知不到后台 in-flight 评测 / 静默失败,
                             以为评测丢了。 */}
                         {(() => {
-                            const pendingCount = displayedTraces.filter(s => getTraceEvalStatus(s) === 'pending').length;
+                            const pendingCount = displayedTraces.filter(s => getDisplayedTraceStatus(s) === 'pending').length;
                             return pendingCount > 0 ? (
                                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: 'var(--ev-info)', fontWeight: 600 }}>
                                     · <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: 'currentColor', animation: 'pulse 1.5s ease-in-out infinite' }} />
@@ -4002,7 +4006,7 @@ function TraceDeviationPanel({
                             ) : null;
                         })()}
                         {(() => {
-                            const partialCount = displayedTraces.filter(s => getTraceEvalStatus(s) === 'partial').length;
+                            const partialCount = displayedTraces.filter(s => getDisplayedTraceStatus(s) === 'partial').length;
                             return partialCount > 0 ? (
                                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: 'var(--ev-warning)', fontWeight: 600 }} title="只跑成功了一边（result 或 trajectory）。展开 ② 点行查看已有分析。">
                                     · ◐ 部分评测 <b>{partialCount}</b> 条
@@ -4010,7 +4014,7 @@ function TraceDeviationPanel({
                             ) : null;
                         })()}
                         {(() => {
-                            const failedCount = displayedTraces.filter(s => getTraceEvalStatus(s) === 'failed').length;
+                            const failedCount = displayedTraces.filter(s => getDisplayedTraceStatus(s) === 'failed').length;
                             return failedCount > 0 ? (
                                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: 'var(--ev-error)', fontWeight: 600 }} title="后端 LLM 评测调用挂了——常见原因：API key 失效 / 模型配额不足 / 网络。展开 ② 看每条具体错误。">
                                     · ⚠ 评测失败 <b>{failedCount}</b> 条
@@ -4088,8 +4092,15 @@ function TraceDeviationPanel({
                         }
                     }}
                     records={displayedTraces.map(s => {
-                        const st = getTraceEvalStatus(s);
                         const meta = traceEvalResultsMap.get(s.id);
+                        // 关联了评测任务时，结果分/轨迹分/状态都以「本任务」记录(meta)为准——与上方
+                        // "已评测 X/Y"、③ 总评分同口径。trace 自带的 answer_score / trajectory_score 是
+                        // “最近一次已知分”，可能来自别的评测任务或本任务结果评测失败前的旧值（失败时
+                        // trajectory/run 不回写 answerScore，旧分留存），会与 4/5 计数打架，故有任务时不用它。
+                        const taskScoped = !!traceEvaluationBatchId;
+                        const rScore = taskScoped ? (meta?.resultScore ?? null) : s.resultScore;
+                        const jScore = taskScoped ? (meta?.trajScore ?? null) : s.trajScore;
+                        const st = getDisplayedTraceStatus(s);
                         let compStatus: string = st === 'done' ? 'done' : st === 'failed' ? 'failed' : st === 'partial' ? 'partial' : 'running';
                         let errorMsg = failedTaskIds.get(s.id) || undefined;
                         // 任务里这条结果行本身失败 → 显示失败（否则没分数会停在"评测中"）。
@@ -4112,8 +4123,8 @@ function TraceDeviationPanel({
                             datasetId: meta?.datasetId,
                             evaluatorRunId: traceEvaluationBatchId || undefined,
                             status: compStatus,
-                            resultScore: s.resultScore,
-                            trajScore: s.trajScore,
+                            resultScore: rScore,
+                            trajScore: jScore,
                             errorMsg,
                         } as EvalRecordRow;
                     })}
