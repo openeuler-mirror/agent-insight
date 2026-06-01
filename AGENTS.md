@@ -57,12 +57,12 @@ push 前先 `git remote -v` 确认 fork remote 的实际名（不要假设是 `o
 
 ## 5. 改动验证
 
-完工前两步都要做：
+完工前默认先跑测试：
 
 1. **跑测试**：`npm run test`（执行 `test/**/*.test.ts`）。
-2. **跑 dev 并验证 UI**：`bash scripts/restart_dev.sh` 起 dev server，走一遍 golden path + 至少一个边界 case。
-   - 如果 agent 自带浏览器自动化能力（Claude Code 的 `preview_*` MCP、Cursor browser MCP 等），优先自己跑完，附截图/快照/console 错误给用户。
-   - 没有此能力时，明确告诉用户"未在浏览器中验证"，不要默认声称成功 —— 让用户决定是否自己点一下。
+2. **询问是否需要跑 dev 并验证 UI**：不要默认执行 `bash scripts/restart_dev.sh`。先询问用户是否需要启动 dev server 并走一遍 golden path + 至少一个边界 case；仅在用户确认后执行。
+   - 如果 agent 自带浏览器自动化能力（Claude Code 的 `preview_*` MCP、Cursor browser MCP 等），用户确认后优先自己跑完，附截图/快照/console 错误给用户。
+   - 未执行浏览器验证时，明确告诉用户"未在浏览器中验证"，不要默认声称成功。
 
 类型检查 / lint 验证的是代码正确性，不是功能正确性。
 

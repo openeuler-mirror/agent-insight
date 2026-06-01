@@ -16,10 +16,13 @@
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
 import { STATIC_EVAL_STANDARDS } from '@/components/evaluation';
+import { Button } from '@/components/ui/button';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
 import { diffLines } from 'diff';
+import { Trash2 } from 'lucide-react';
 import {
     Background,
     BackgroundVariant,
@@ -538,10 +541,12 @@ function SkillCard({
     skill,
     onOpen,
     onUploadSuccess,
+    onDelete,
 }: {
     skill: SkillListItem;
     onOpen: (tab?: string) => void;
     onUploadSuccess?: () => void;
+    onDelete: () => void;
 }) {
     const { user } = useAuth();
     const active = skill.activeVersion ?? 0;
@@ -722,6 +727,20 @@ function SkillCard({
                         </>
                     )}
                 </button>
+                <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-[22px] px-2 text-[11px] text-error hover:bg-error-subtle hover:text-error"
+                    title={`删除 Skill「${skill.name}」`}
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        onDelete();
+                    }}
+                >
+                    <Trash2 className="size-3" />
+                    删除
+                </Button>
                 <input
                     ref={fileInputRef}
                     type="file"
@@ -3151,6 +3170,7 @@ export function SkillCatalogV2({ refresh, onUploadClick }: { refresh: number; on
     const [selected, setSelected] = useState<SkillListItem | null>(null);
     const [search, setSearch] = useState('');
     const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
+    const [pendingDelete, setPendingDelete] = useState<SkillListItem | null>(null);
 
     // 从 trace 详情、Dashboard 等地跳过来时,URL 带 ?openSkillId=...&openVersion=N
     // SkillLink 用这个协议把 trace 上报的版本带过来,这里读出来后下面 useEffect 自动开对应 drawer。
@@ -3170,6 +3190,26 @@ export function SkillCatalogV2({ refresh, onUploadClick }: { refresh: number; on
             })
             .catch(() => setSkills([]))
             .finally(() => setLoading(false));
+    };
+
+    const deleteSkill = async () => {
+        if (!pendingDelete) return;
+        try {
+            const userQuery = user ? `&user=${encodeURIComponent(user)}` : '';
+            const res = await apiFetch(`/api/skills?id=${encodeURIComponent(pendingDelete.id)}${userQuery}`, {
+                method: 'DELETE',
+            });
+            const result = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                toast.error(`删除失败：${result.error || `HTTP ${res.status}`}`);
+                return;
+            }
+            toast.success(`已删除 Skill「${pendingDelete.name}」`);
+            setPendingDelete(null);
+            fetchSkills();
+        } catch (err) {
+            toast.error(`删除失败：${err instanceof Error ? err.message : String(err)}`);
+        }
     };
 
     useEffect(() => { fetchSkills(); /* eslint-disable-next-line */ }, [refresh, user]);
@@ -3301,6 +3341,7 @@ export function SkillCatalogV2({ refresh, onUploadClick }: { refresh: number; on
                             skill={skill}
                             onOpen={() => setSelected(skill)}
                             onUploadSuccess={fetchSkills}
+                            onDelete={() => setPendingDelete(skill)}
                         />
                     ))}
                     <button
@@ -3351,6 +3392,16 @@ export function SkillCatalogV2({ refresh, onUploadClick }: { refresh: number; on
                     onChanged={fetchSkills}
                 />
             )}
+            <ConfirmDialog
+                open={Boolean(pendingDelete)}
+                onOpenChange={(open) => !open && setPendingDelete(null)}
+                tone="danger"
+                title="删除这个 Skill？"
+                description={pendingDelete ? `将永久删除「${pendingDelete.name}」及其全部版本，无法恢复。` : undefined}
+                confirmText="删除 Skill"
+                cancelText="取消"
+                onConfirm={deleteSkill}
+            />
         </div>
     );
 }
