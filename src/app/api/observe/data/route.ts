@@ -1,4 +1,4 @@
-import { readRecords, saveExecutionRecord } from '@/lib/storage/data-service';
+import { listObservedAgentNames, listObservedTraceIds, readRecordPage, readRecords, saveExecutionRecord } from '@/lib/storage/data-service';
 import { db, prismaRaw as prisma } from '@/lib/storage/prisma';
 import { NextResponse } from 'next/server';
 import { isActive } from '@/lib/evaluation-task-manager';
@@ -59,6 +59,12 @@ function getAutoEvalStableMs(): number {
     return Number.isFinite(configured) && configured >= 0
         ? configured
         : DEFAULT_AUTO_EVAL_TRACE_STABLE_MS;
+}
+
+function parsePositiveInt(value: string | null, fallback: number): number {
+    const parsed = Number.parseInt(String(value || ''), 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+    return parsed;
 }
 
 function parseInteractionList(raw: unknown): TimestampCarrier[] {
@@ -274,6 +280,11 @@ export async function GET(request: Request) {
         .slice(0, 200);
     const framework = searchParams.get('framework') || undefined;
     const skill = searchParams.get('skill') || undefined;
+    const agentName = searchParams.get('agentName') || undefined;
+    const summary = searchParams.get('summary') || undefined;
+    const paginated = searchParams.get('paginated') === '1' || searchParams.get('paginated') === 'true';
+    const page = parsePositiveInt(searchParams.get('page'), 1);
+    const pageSize = Math.min(parsePositiveInt(searchParams.get('pageSize'), 20), 100);
     const includeEvaluationsParam = searchParams.get('includeEvaluations');
     const skipAutoEvalReady = searchParams.get('skipAutoEvalReady') === '1'
         || searchParams.get('skipAutoEvalReady') === 'true';
@@ -306,21 +317,33 @@ export async function GET(request: Request) {
         }]);
     }
 
-    const data = await readRecords(
-      user,
-      {
+    if (summary === 'agents') {
+        const agents = await listObservedAgentNames(user);
+        return NextResponse.json({ agents });
+    }
+    if (summary === 'traceIds') {
+        const traceIds = await listObservedTraceIds(user, agentName);
+        return NextResponse.json({ traceIds });
+    }
+
+    const recordFilters = {
         query,
         taskId,
         taskIds: taskIds.length > 0 ? taskIds : undefined,
+        agentName,
         framework,
         skill,
         skillVersion,
         includeSubagents,
         onlySubagents,
         parentExecutionId,
-      },
-      { attachEvaluations }
-    );
+    };
+    const pageResult = paginated
+        ? await readRecordPage(user, recordFilters, { attachEvaluations, page, pageSize })
+        : null;
+    const data = pageResult
+        ? pageResult.records
+        : await readRecords(user, recordFilters, { attachEvaluations });
     
     // 批量查每条 trace 的最近一次 TrajectoryEvalResult.status, 让前端 trace 行能反映"上次评测
     // 跑成功 / 失败"。之前 trace 行 status 只看 resultScore/trajScore + 前端内存 failedTaskIds
@@ -390,6 +413,14 @@ export async function GET(request: Request) {
     
     if (enrichedData.length > 0) {
         console.log(`[Data-API] 📤 Sending ${enrichedData.length} records. Top record skills: ${JSON.stringify(enrichedData[0].skills)}, is_evaluating: ${enrichedData[0].is_evaluating}`);
+    }
+    if (pageResult) {
+        return NextResponse.json({
+            records: enrichedData,
+            total: pageResult.total,
+            page,
+            pageSize,
+        });
     }
     return NextResponse.json(enrichedData);
   } catch (error) {

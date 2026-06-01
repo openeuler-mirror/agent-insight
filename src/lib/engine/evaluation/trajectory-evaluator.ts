@@ -35,7 +35,10 @@ export interface TrajectoryEvalInput {
     referenceTrajectory?: string;
     referenceKeyActionsText?: string;
     actualExtractedStepsText?: string;
-    comparisonMode?: 'trajectory' | 'skill_key_actions';
+    referenceKeyActions?: unknown[];
+    actualExtractedSteps?: unknown[];
+    skillContext?: unknown;
+    comparisonMode?: 'trajectory' | 'skill_key_actions' | 'trace_only';
     evaluationFocus?: string;
 
     actualInteractions: any[];
@@ -44,7 +47,7 @@ export interface TrajectoryEvalInput {
 }
 
 export interface TrajectoryDimensionScores {
-    completeness: number;
+    completeness: number | null;
     toolChoice: number;
     redundancy: number;
     /**
@@ -81,10 +84,25 @@ export interface TrajectoryDeviationStep {
     improvementSuggestion?: string;
 }
 
+export interface KeyActionTraceAnalysisResult {
+    actionId: string;
+    actionContent: string;
+    coverage: 'covered' | 'partial' | 'missing' | 'not_applicable';
+    severity: 'low' | 'medium' | 'high';
+    matchedTraceSteps: number[];
+    traceComparisonAnalysis: string;
+    hasSkillImprovement: boolean;
+    skillImprovementSuggestion: string;
+    skillIssueSummary?: string;
+    skillIssueEvidence?: string;
+    confidence?: number;
+}
+
 export interface TrajectoryEvalOutput {
     trajectoryScore: number;
     dimensionScores: TrajectoryDimensionScores;
     deviationSteps: TrajectoryDeviationStep[];
+    keyActionResults?: KeyActionTraceAnalysisResult[];
     rootCauseStep?: string;
     reasonText: string;
     /** 封顶前的纯加权分（completeness/tool_choice/redundancy 加权和）。 */
@@ -107,6 +125,8 @@ export const TRAJECTORY_WEIGHTS = {
 } as const;
 
 export interface TrajectoryCapInfo {
+    /** 聚合口径：有 Skill 时使用三维加权；无 Skill 时只使用工具选择和冗余。 */
+    mode?: 'skill_key_actions' | 'trace_only' | 'trajectory';
     /** 是否触发了封顶规则（high≥1 或 medium≥3）。 */
     triggered: boolean;
     /** 触发后是否真的把分数压低了（rawWeighted 本就低于上限时为 false）。 */
@@ -136,10 +156,10 @@ export interface TrajectoryCapInfo {
  *   - 否则不封顶。
  */
 export function aggregateTrajectoryScore(
-    dims: { completeness: number; toolChoice: number; redundancy: number },
+    dims: { completeness: number | null | undefined; toolChoice: number; redundancy: number },
     deviations: TrajectoryDeviationStep[],
 ): { trajectoryScore: number; rawWeightedScore: number; cap: TrajectoryCapInfo } {
-    const c = clamp01(dims.completeness);
+    const c = clamp01(typeof dims.completeness === 'number' ? dims.completeness : 0);
     const t = clamp01(dims.toolChoice);
     const r = clamp01(dims.redundancy);
     const weighted =
@@ -171,6 +191,7 @@ export function aggregateTrajectoryScore(
         trajectoryScore: clamp01(finalScore),
         rawWeightedScore,
         cap: {
+            mode: 'trajectory',
             triggered: ceiling != null,
             effective,
             ceiling,

@@ -20,14 +20,13 @@ import { apiFetch } from '@/lib/client/api';
 import { useAuth } from '@/lib/auth/auth-context';
 import { fmtPercentScore } from '@/lib/eval/score-format';
 import {
-    getPrimaryExecutionAgentName,
     isEvaluatorAgent,
-    isEvaluatorTraceRecord,
 } from '@/lib/evaluator-agent';
 import {
     buildDefaultTrajectoryTaskTitle,
     normalizeTrajectoryTaskMeta,
 } from '@/lib/eval/trajectory-task-meta';
+import { Pagination } from '@/components/ui/pagination';
 
 interface DatasetCase {
     id: string;
@@ -134,6 +133,7 @@ interface TrajectoryResult {
 const POLL_MS = 3000;
 const NO_EVALUABLE_CASE_PREFIX = '[no-evaluable-case]';
 const TASK_DRAFT_STORAGE_KEY = 'trajectory-eval-task-draft';
+const TRACE_PAGE_SIZE = 20;
 
 import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
 
@@ -258,10 +258,14 @@ export default function TrajectoryEvalCenter() {
     const [selectedAgent, setSelectedAgent] = useState<string>('');
     const [evaluatorToAdd, setEvaluatorToAdd] = useState<string>('');
     const [selectedDatasetId, setSelectedDatasetId] = useState<string>('');
-    const [records, setRecords] = useState<ExecutionRecord[]>([]);
+    const [observedAgentNames, setObservedAgentNames] = useState<string[]>([]);
+    const [agentRecords, setAgentRecords] = useState<ExecutionRecord[]>([]);
+    const [agentRecordsTotal, setAgentRecordsTotal] = useState(0);
+    const [recordsPage, setRecordsPage] = useState(1);
+    const [recordsLoading, setRecordsLoading] = useState(false);
+    const [selectingAllTraces, setSelectingAllTraces] = useState(false);
     const [results, setResults] = useState<TrajectoryResult[]>([]);
     const [selectedTraceIds, setSelectedTraceIds] = useState<Set<string>>(new Set());
-    const [defaultsAppliedFor, setDefaultsAppliedFor] = useState<string>('');
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string>('');
     const [info, setInfo] = useState<string>('');
@@ -519,15 +523,15 @@ export default function TrajectoryEvalCenter() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [user]);
 
-    // 2. 执行记录
+    // 2. 已观测的执行 Agent（轻量摘要）
     useEffect(() => {
         if (!user) return;
-        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}`)
+        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&summary=agents`)
             .then(r => r.json())
-            .then((data: ExecutionRecord[]) => {
-                setRecords(Array.isArray(data) ? data : []);
+            .then((data: { agents?: string[] }) => {
+                setObservedAgentNames(Array.isArray(data?.agents) ? data.agents : []);
             })
-            .catch(e => setError(`加载执行记录失败：${e?.message || e}`))
+            .catch(e => setError(`加载执行 Agent 失败：${e?.message || e}`))
             .finally(() => setLoading(false));
     }, [user]);
 
@@ -559,6 +563,29 @@ export default function TrajectoryEvalCenter() {
         setResults(Array.isArray(data?.results) ? data.results : []);
     }, [user]);
 
+    const refreshAgentRecords = useCallback(async (agentName: string, page: number) => {
+        if (!user || !agentName) {
+            setAgentRecords([]);
+            setAgentRecordsTotal(0);
+            return;
+        }
+        setRecordsLoading(true);
+        try {
+            const res = await apiFetch(
+                `/api/observe/data?user=${encodeURIComponent(user)}&paginated=1&includeEvaluations=0&agentName=${encodeURIComponent(agentName)}&page=${page}&pageSize=${TRACE_PAGE_SIZE}`,
+            );
+            const data = await res.json();
+            setAgentRecords(Array.isArray(data?.records) ? data.records : []);
+            setAgentRecordsTotal(typeof data?.total === 'number' ? data.total : 0);
+        } catch (e: any) {
+            setError(`加载执行记录失败：${e?.message || e}`);
+            setAgentRecords([]);
+            setAgentRecordsTotal(0);
+        } finally {
+            setRecordsLoading(false);
+        }
+    }, [user]);
+
     // 执行 Agent 列表（排除评估器 agent，按 name 去重）
     // `build` 是 opencode runtime 默认/内部 agent，不作为业务执行 Agent 展示。
     const agentOptions = useMemo(() => {
@@ -572,9 +599,7 @@ export default function TrajectoryEvalCenter() {
             .filter(a => !isEvaluatorAgent(a))
             .filter(a => !customEvaluatorNames.has(a.name))
             .map(a => a.name);
-        const observed = records
-            .filter(r => !isEvaluatorTraceRecord(r))
-            .map(getPrimaryExecutionAgentName)
+        const observed = observedAgentNames
             .filter((name): name is string => Boolean(name) && !customEvaluatorNames.has(name));
         const seen = new Set<string>();
         return [...registered, ...observed]
@@ -584,7 +609,7 @@ export default function TrajectoryEvalCenter() {
                 return true;
             })
             .sort();
-    }, [combinedAgents, customEvaluatorOptions, records]);
+    }, [combinedAgents, customEvaluatorOptions, observedAgentNames]);
 
     const evaluatorOptions = useMemo(() => {
         const merged = [...RUNTIME_EVALUATORS, ...customEvaluatorOptions];
@@ -621,48 +646,20 @@ export default function TrajectoryEvalCenter() {
         return m;
     }, [results]);
 
-    // 按 Agent 过滤后的 trace 列表：
-    // - agentName / agent：执行记录主表字段，表示业务执行 Agent
-    // - agents：仅在主字段缺失时兜底；排除 opencode 内部 build 和评估器 agent
-    const agentRecords = useMemo(() => {
-        return records
-            .filter(r => Boolean(r.task_id || r.upload_id))
-            .filter(r => !isEvaluatorTraceRecord(r))
-            .filter(r => {
-                if (!selectedAgent) return true;
-                return getPrimaryExecutionAgentName(r) === selectedAgent;
-            })
-            .sort((a, b) => {
-                const at = a.timestamp ? new Date(a.timestamp).getTime() : 0;
-                const bt = b.timestamp ? new Date(b.timestamp).getTime() : 0;
-                return bt - at;
-            })
-            .slice(0, 80);
-    }, [records, selectedAgent]);
-
-    // 切 Agent 时清空选择
+    // 切 Agent 时清空选择并回到第一页
     useEffect(() => {
         setSelectedTraceIds(new Set());
-        setDefaultsAppliedFor('');
+        setRecordsPage(1);
     }, [selectedAgent]);
 
-    // 默认勾选：未评测 / 评测失败 的行（hifi 默认 checkbox 行为）
-    // fingerprint 防止每次轮询都重置 user 已经手动调整过的状态
     useEffect(() => {
-        if (agentRecords.length === 0) return;
-        const fingerprint = `${selectedAgent}::${agentRecords.map(r => r.task_id).join(',')}`;
-        if (defaultsAppliedFor === fingerprint) return;
-        setDefaultsAppliedFor(fingerprint);
-        const next = new Set<string>();
-        for (const rec of agentRecords) {
-            const traceId = rec.task_id || '';
-            if (!traceId) continue;
-            const r = latestResultByTraceId.get(traceId);
-            // 未评测 / 失败 → 默认勾选；已评测（done/running/pending）不勾
-            if (!r || getEffectiveStatus(r) === 'failed') next.add(traceId);
+        if (!selectedAgent) {
+            setAgentRecords([]);
+            setAgentRecordsTotal(0);
+            return;
         }
-        setSelectedTraceIds(next);
-    }, [agentRecords, latestResultByTraceId, selectedAgent, defaultsAppliedFor]);
+        void refreshAgentRecords(selectedAgent, recordsPage);
+    }, [recordsPage, refreshAgentRecords, selectedAgent]);
 
     function toggleRow(traceId: string) {
         setSelectedTraceIds(prev => {
@@ -683,14 +680,42 @@ export default function TrajectoryEvalCenter() {
         setSelectedEvaluators(prev => prev.filter(id => id !== evaluatorId));
     }
     function toggleSelectAll() {
-        const allSelected = agentRecords.every(r => r.task_id && selectedTraceIds.has(r.task_id));
-        if (allSelected) {
-            setSelectedTraceIds(new Set());
-        } else {
-            const next = new Set<string>();
-            for (const r of agentRecords) if (r.task_id) next.add(r.task_id);
-            setSelectedTraceIds(next);
+        const visibleTraceIds = agentRecords
+            .map(record => record.task_id || '')
+            .filter(Boolean);
+        const allSelected = visibleTraceIds.length > 0 && visibleTraceIds.every(traceId => selectedTraceIds.has(traceId));
+        setSelectedTraceIds(prev => {
+            const next = new Set(prev);
+            if (allSelected) {
+                visibleTraceIds.forEach(traceId => next.delete(traceId));
+            } else {
+                visibleTraceIds.forEach(traceId => next.add(traceId));
+            }
+            return next;
+        });
+    }
+    async function handleSelectAllTraces() {
+        if (!user || !selectedAgent) return;
+        setSelectingAllTraces(true);
+        setError('');
+        try {
+            const res = await apiFetch(
+                `/api/observe/data?user=${encodeURIComponent(user)}&summary=traceIds&agentName=${encodeURIComponent(selectedAgent)}`,
+            );
+            const data = await res.json();
+            const traceIds = Array.isArray(data?.traceIds)
+                ? data.traceIds.filter((item: unknown): item is string => typeof item === 'string' && item.trim().length > 0)
+                : [];
+            setSelectedTraceIds(new Set(traceIds));
+            setInfo(traceIds.length > 0 ? `已全选 ${traceIds.length} 条 trace` : '当前 Agent 没有可选 trace');
+        } catch (e: any) {
+            setError(`全选失败：${e?.message || e}`);
+        } finally {
+            setSelectingAllTraces(false);
         }
+    }
+    function handleClearSelectedTraces() {
+        setSelectedTraceIds(new Set());
     }
 
     function handleSaveTaskDraft() {
@@ -727,12 +752,7 @@ export default function TrajectoryEvalCenter() {
         const taskMeta = normalizeTrajectoryTaskMeta({ title: taskTitle, description: taskDescription });
 
         // 收集选中的 traceId 列表，无需数据集配对；接口字段仍沿用 taskIds 契约。
-        const traceIds: string[] = [];
-        for (const rec of agentRecords) {
-            if (rec.task_id && selectedTraceIds.has(rec.task_id)) {
-                traceIds.push(rec.task_id);
-            }
-        }
+        const traceIds = Array.from(selectedTraceIds);
 
         if (traceIds.length === 0) {
             setError('没有可评测的执行记录');
@@ -1162,121 +1182,156 @@ export default function TrajectoryEvalCenter() {
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 8 }}>
                     <div style={{ fontSize: 13, fontWeight: 600 }}>执行记录清单</div>
                     <div style={{ fontSize: 11, color: COLORS.textMuted }}>
-                        {selectedAgent ? <>当前 Agent <code style={{ color: COLORS.primary }}>{selectedAgent}</code> 共 {agentRecords.length} 条 trace</> : '请先选 Agent'}
+                        {selectedAgent
+                            ? <>当前 Agent <code style={{ color: COLORS.primary }}>{selectedAgent}</code> 共 {agentRecordsTotal} 条 trace，20 条/页</>
+                            : '请先选 Agent'}
+                    </div>
+                    <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <button
+                            type="button"
+                            onClick={handleSelectAllTraces}
+                            disabled={!selectedAgent || selectingAllTraces || agentRecordsTotal === 0}
+                            style={btnSecondaryStyle(!selectedAgent || selectingAllTraces || agentRecordsTotal === 0)}
+                        >
+                            {selectingAllTraces ? '全选中…' : `全选全部 (${agentRecordsTotal})`}
+                        </button>
+                        <button
+                            type="button"
+                            onClick={handleClearSelectedTraces}
+                            disabled={selectedTraceIds.size === 0}
+                            style={btnGhostStyle(selectedTraceIds.size === 0)}
+                        >
+                            清空选择
+                        </button>
                     </div>
                 </div>
                 <div style={{ border: `1px solid ${COLORS.border}`, borderRadius: 9, overflow: 'hidden', background: '#fff' }}>
-                    {agentRecords.length === 0 ? (
+                    {recordsLoading ? (
+                        <div style={{ padding: 24, textAlign: 'center', color: COLORS.textMuted, fontSize: 12 }}>
+                            正在加载执行记录...
+                        </div>
+                    ) : agentRecords.length === 0 ? (
                         <div style={{ padding: 24, textAlign: 'center', color: COLORS.textMuted, fontSize: 12 }}>
                             该 Agent 没有可评测的执行记录。
                         </div>
                     ) : (
-                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                            <thead>
-                                <tr style={{ background: COLORS.bgSoft, borderBottom: `1px solid ${COLORS.border}` }}>
-                                    <th style={thStyle(36)}>
-                                        <input
-                                            type="checkbox"
-                                            checked={
-                                                agentRecords.length > 0 &&
-                                                agentRecords.every(r => r.task_id && selectedTraceIds.has(r.task_id))
-                                            }
-                                            onChange={toggleSelectAll}
-                                        />
-                                    </th>
-                                    <th style={thStyle(170, 'left')}>TRACE ID</th>
-                                    <th style={thStyle(undefined, 'left')}>Trace 实际输入</th>
-                                    <th style={thStyle(undefined, 'left')}>Trace 实际输出</th>
-                                    <th style={thStyle(80, 'center')}>评测状态</th>
-                                    <th style={thStyle(76, 'right')}>得分</th>
-                                    <th style={thStyle(80, 'left')}>评测器</th>
-                                    <th style={thStyle(60, 'right')}>耗时</th>
-                                    <th style={thStyle(80, 'center')}></th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {agentRecords.map(rec => {
-                                    const traceId = rec.task_id || '';
-                                    const r = latestResultByTraceId.get(traceId);
-                                    const checked = selectedTraceIds.has(traceId);
-                                    const displayScore = r
-                                        && isEvaluationTerminal(r.status)
-                                        ? (() => {
-                                            const hasTrace = hasSelectedEvaluator(r, 'preset-agent-trace-quality');
-                                            const hasResult = hasSelectedEvaluator(r, 'preset-agent-task-completion');
-                                            const hasCustom = Array.isArray(r.selectedEvaluators)
-                                                ? r.selectedEvaluators.some(id => id.startsWith('custom-'))
-                                                : typeof r.customEvaluationScore === 'number';
-                                            const traceScore = hasTrace ? r.trajectoryScore : null;
-                                            const resultScore = hasResult
-                                                ? (typeof r.resultEvaluationScore === 'number' ? r.resultEvaluationScore : (rec.answer_score ?? null))
-                                                : null;
-                                            const customScore = hasCustom ? (r.customEvaluationScore ?? null) : null;
-                                            const parts = [traceScore, resultScore, customScore]
-                                                .filter((item): item is number => typeof item === 'number' && Number.isFinite(item));
-                                            if (parts.length === 0) return null;
-                                            return parts.reduce((a, b) => a + b, 0) / parts.length;
-                                        })()
-                                        : null;
-                                    return (
-                                        <tr
-                                            key={traceId}
-                                            style={{
-                                                borderBottom: `1px solid ${COLORS.borderSoft}`,
-                                                background: checked ? '#F8F7FE' : 'transparent',
-                                                cursor: 'pointer',
-                                            }}
-                                            onClick={() => gotoDetail(traceId)}
-                                        >
-                                            <td style={tdStyle('center')} onClick={e => e.stopPropagation()}>
-                                                <input
-                                                    type="checkbox"
-                                                    checked={checked}
-                                                    onChange={() => toggleRow(traceId)}
-                                                />
-                                            </td>
-                                            <td style={{ ...tdStyle('left'), fontFamily: 'monospace', color: COLORS.textSecondary, whiteSpace: 'nowrap' }} title={traceId}>
-                                                {formatTraceIdPreview(traceId)}
-                                            </td>
-                                            <td style={{ ...tdStyle('left'), maxWidth: 280 }}>
-                                                <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={rec.query || ''}>
-                                                    {rec.query || '—'}
-                                                </div>
-                                            </td>
-                                            <td style={{ ...tdStyle('left'), maxWidth: 280 }}>
-                                                <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={rec.final_result || ''}>
-                                                    {rec.final_result || '—'}
-                                                </div>
-                                                <div style={{ fontSize: 10, color: COLORS.textDisabled, marginTop: 2 }}>
-                                                    {rec.framework || ''} · {rec.model || ''} · {fmtRelTime(rec.timestamp)}
-                                                </div>
-                                            </td>
-                                            <td style={tdStyle('center')}>
-                                                {r ? (
-                                                    <span style={{ color: getStatusColor(r), fontWeight: 600, fontSize: 11 }} title={r.errorMessage || r.resultEvaluationError || ''}>
-                                                        {getStatusLabel(r)}
+                        <>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                                <thead>
+                                    <tr style={{ background: COLORS.bgSoft, borderBottom: `1px solid ${COLORS.border}` }}>
+                                        <th style={thStyle(36)}>
+                                            <input
+                                                type="checkbox"
+                                                checked={
+                                                    agentRecords.length > 0 &&
+                                                    agentRecords.every(r => r.task_id && selectedTraceIds.has(r.task_id))
+                                                }
+                                                onChange={toggleSelectAll}
+                                            />
+                                        </th>
+                                        <th style={thStyle(170, 'left')}>TRACE ID</th>
+                                        <th style={thStyle(undefined, 'left')}>Trace 实际输入</th>
+                                        <th style={thStyle(undefined, 'left')}>Trace 实际输出</th>
+                                        <th style={thStyle(80, 'center')}>评测状态</th>
+                                        <th style={thStyle(76, 'right')}>得分</th>
+                                        <th style={thStyle(80, 'left')}>评测器</th>
+                                        <th style={thStyle(60, 'right')}>耗时</th>
+                                        <th style={thStyle(80, 'center')}></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {agentRecords.map(rec => {
+                                        const traceId = rec.task_id || '';
+                                        const r = latestResultByTraceId.get(traceId);
+                                        const checked = selectedTraceIds.has(traceId);
+                                        const displayScore = r
+                                            && isEvaluationTerminal(r.status)
+                                            ? (() => {
+                                                const hasTrace = hasSelectedEvaluator(r, 'preset-agent-trace-quality');
+                                                const hasResult = hasSelectedEvaluator(r, 'preset-agent-task-completion');
+                                                const hasCustom = Array.isArray(r.selectedEvaluators)
+                                                    ? r.selectedEvaluators.some(id => id.startsWith('custom-'))
+                                                    : typeof r.customEvaluationScore === 'number';
+                                                const traceScore = hasTrace ? r.trajectoryScore : null;
+                                                const resultScore = hasResult
+                                                    ? (typeof r.resultEvaluationScore === 'number' ? r.resultEvaluationScore : (rec.answer_score ?? null))
+                                                    : null;
+                                                const customScore = hasCustom ? (r.customEvaluationScore ?? null) : null;
+                                                const parts = [traceScore, resultScore, customScore]
+                                                    .filter((item): item is number => typeof item === 'number' && Number.isFinite(item));
+                                                if (parts.length === 0) return null;
+                                                return parts.reduce((a, b) => a + b, 0) / parts.length;
+                                            })()
+                                            : null;
+                                        return (
+                                            <tr
+                                                key={traceId}
+                                                style={{
+                                                    borderBottom: `1px solid ${COLORS.borderSoft}`,
+                                                    background: checked ? '#F8F7FE' : 'transparent',
+                                                    cursor: 'pointer',
+                                                }}
+                                                onClick={() => gotoDetail(traceId)}
+                                            >
+                                                <td style={tdStyle('center')} onClick={e => e.stopPropagation()}>
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={checked}
+                                                        onChange={() => toggleRow(traceId)}
+                                                    />
+                                                </td>
+                                                <td style={{ ...tdStyle('left'), fontFamily: 'monospace', color: COLORS.textSecondary, whiteSpace: 'nowrap' }} title={traceId}>
+                                                    {formatTraceIdPreview(traceId)}
+                                                </td>
+                                                <td style={{ ...tdStyle('left'), maxWidth: 280 }}>
+                                                    <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={rec.query || ''}>
+                                                        {rec.query || '—'}
+                                                    </div>
+                                                </td>
+                                                <td style={{ ...tdStyle('left'), maxWidth: 280 }}>
+                                                    <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={rec.final_result || ''}>
+                                                        {rec.final_result || '—'}
+                                                    </div>
+                                                    <div style={{ fontSize: 10, color: COLORS.textDisabled, marginTop: 2 }}>
+                                                        {rec.framework || ''} · {rec.model || ''} · {fmtRelTime(rec.timestamp)}
+                                                    </div>
+                                                </td>
+                                                <td style={tdStyle('center')}>
+                                                    {r ? (
+                                                        <span style={{ color: getStatusColor(r), fontWeight: 600, fontSize: 11 }} title={r.errorMessage || r.resultEvaluationError || ''}>
+                                                            {getStatusLabel(r)}
+                                                        </span>
+                                                    ) : (
+                                                        <span style={{ color: COLORS.textDisabled }}>待评测</span>
+                                                    )}
+                                                </td>
+                                                <td style={{ ...tdStyle('right'), color: displayScore != null ? COLORS.primary : COLORS.textDisabled, fontWeight: 600, whiteSpace: 'nowrap' }}>
+                                                    {displayScore != null ? `${fmtPercentScore(displayScore)} 分` : '--'}
+                                                </td>
+                                                <td style={tdStyle('left')}>
+                                                    <span style={{ color: r ? COLORS.textSecondary : COLORS.textDisabled }}>
+                                                        {r ? getSelectedEvaluatorNames(r) : '—'}
                                                     </span>
-                                                ) : (
-                                                    <span style={{ color: COLORS.textDisabled }}>待评测</span>
-                                                )}
-                                            </td>
-                                            <td style={{ ...tdStyle('right'), color: displayScore != null ? COLORS.primary : COLORS.textDisabled, fontWeight: 600, whiteSpace: 'nowrap' }}>
-                                                {displayScore != null ? `${fmtPercentScore(displayScore)} 分` : '--'}
-                                            </td>
-                                            <td style={tdStyle('left')}>
-                                                <span style={{ color: r ? COLORS.textSecondary : COLORS.textDisabled }}>
-                                                    {r ? getSelectedEvaluatorNames(r) : '—'}
-                                                </span>
-                                            </td>
-                                            <td style={{ ...tdStyle('right'), color: COLORS.textMuted }}>{fmtLatency(rec.latency)}</td>
-                                            <td style={tdStyle('center')} onClick={e => e.stopPropagation()}>
-                                                <button onClick={() => gotoDetail(traceId)} style={btnSmallStyle()}>详情</button>
-                                            </td>
-                                        </tr>
-                                    );
-                                })}
-                            </tbody>
-                        </table>
+                                                </td>
+                                                <td style={{ ...tdStyle('right'), color: COLORS.textMuted }}>{fmtLatency(rec.latency)}</td>
+                                                <td style={tdStyle('center')} onClick={e => e.stopPropagation()}>
+                                                    <button onClick={() => gotoDetail(traceId)} style={btnSmallStyle()}>详情</button>
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                            <div style={{ padding: '10px 12px', borderTop: `1px solid ${COLORS.borderSoft}` }}>
+                                <Pagination
+                                    page={recordsPage}
+                                    pageSize={TRACE_PAGE_SIZE}
+                                    total={agentRecordsTotal}
+                                    onPageChange={setRecordsPage}
+                                    summary={(start, end, total) => `${start}-${end} / ${total}`}
+                                />
+                            </div>
+                        </>
                     )}
                 </div>
             </div>
@@ -1331,6 +1386,19 @@ function btnSecondaryStyle(disabled?: boolean): CSSProperties {
         background: disabled ? COLORS.bgSoft : '#fff',
         color: disabled ? COLORS.textDisabled : COLORS.primary,
         border: `1px solid ${disabled ? COLORS.border : COLORS.primary}`,
+        borderRadius: 6,
+        fontSize: 12,
+        fontWeight: 500,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+    };
+}
+
+function btnGhostStyle(disabled?: boolean): CSSProperties {
+    return {
+        padding: '6px 14px',
+        background: 'transparent',
+        color: disabled ? COLORS.textDisabled : COLORS.textSecondary,
+        border: `1px solid ${COLORS.border}`,
         borderRadius: 6,
         fontSize: 12,
         fontWeight: 500,
