@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # =============================================================================
-# Skill-Insight Official Setup Script (Fixed Path Logic)
+# Agent-Insight Official Setup Script (Fixed Path Logic)
 # 
 # Installs native telemetry hooks for Claude Code and OpenCode.
 # =============================================================================
@@ -18,7 +18,7 @@ fi
 SCRIPTS_DIR="$( cd -- "$( dirname -- "$SELF_PATH" )" &> /dev/null && pwd )"
 PROJECT_ROOT="$( dirname "$SCRIPTS_DIR" )"
 
-echo "🚀 Starting Skill-Insight Telemetry Setup..."
+echo "🚀 Starting Agent-Insight Telemetry Setup..."
 echo "📂 Project Root: $PROJECT_ROOT"
 
 # --- 1. Load Configurations ---
@@ -74,8 +74,8 @@ NODE
         fi
     fi
 
-    # --- 2.1 Setup Skill-Insight Config (~/.skill-insight/.env) ---
-    SKILL_INSIGHT_CONFIG_DIR="$HOME/.skill-insight"
+    # --- 2.1 Setup Agent-Insight Config (~/.agent-insight/.env) ---
+    SKILL_INSIGHT_CONFIG_DIR="$HOME/.agent-insight"
     SKILL_INSIGHT_CONFIG_FILE="$SKILL_INSIGHT_CONFIG_DIR/.env"
     mkdir -p "$SKILL_INSIGHT_CONFIG_DIR"
 
@@ -143,7 +143,7 @@ NODE
     echo "✅ Configuration updated (Other settings preserved)."
 
     # NEW: Register Sync Hook into .zshrc / .bashrc
-    SYNC_SCRIPT="$HOME/.skill-insight/sync_skills.js"
+    SYNC_SCRIPT="$HOME/.agent-insight/sync_skills.js"
     if [ -f "$SYNC_SCRIPT" ]; then
         SHELL_RC="$HOME/.zshrc"
         [ -f "$HOME/.bashrc" ] && SHELL_RC="$HOME/.bashrc"
@@ -151,7 +151,7 @@ NODE
         # Add aliases if not present
         if ! grep -q "witty_sync_wrapper" "$SHELL_RC"; then
             echo "" >> "$SHELL_RC"
-            echo "# Skill-Insight Auto-Sync" >> "$SHELL_RC"
+            echo "# Agent-Insight Auto-Sync" >> "$SHELL_RC"
             echo "alias opencode='node $SYNC_SCRIPT --agent opencode && opencode'" >> "$SHELL_RC"
             echo "alias claude='node $SYNC_SCRIPT --agent claude && claude'" >> "$SHELL_RC"
             echo "✅ Auto-sync aliases added to $SHELL_RC"
@@ -196,7 +196,7 @@ unset DEEPSEEK_BASE_URL
 unset OPENAI_BASE_URL
 
 echo ""
-echo "🌟 Skill-Insight Telemetry: READY"
+echo "🌟 Agent-Insight Telemetry: READY"
 echo "------------------------------------------------"
 echo "To test, run: opencode run 'hello'"
 echo ""

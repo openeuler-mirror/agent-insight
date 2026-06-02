@@ -509,31 +509,43 @@ function interactionToEvents(it: RawInteraction, idx: number): AgentEvent[] {
         });
     }
 
+    // Every assistant/subagent/opencode turn IS one LLM call, even when it only
+    // emitted tool calls and no visible text. In opencode such tool-only turns
+    // carry their chain-of-thought in `reasoning` parts while `content` (built
+    // from `text` parts only) is empty — so fall back to the reasoning text for
+    // the event summary. Without this, tool-only turns produce no llm event, the
+    // tool calls orphan-attach to an earlier turn, and the LLM steps disappear
+    // from the timeline entirely.
+    const isAssistantLike = it.role === 'assistant' || it.role === 'subagent' || it.role === 'opencode';
+    const llmSummary = (it.content || '').trim() ? (it.content as string) : extractPartsText(it.parts, 'reasoning');
+
     if (calls.length === 0) {
-        // Pure LLM/text response with no tool calls — emit an llm event if there's content
-        if ((it.role === 'assistant' || it.role === 'subagent' || it.role === 'opencode') && (it.content || '').trim()) {
+        // Pure LLM response with no tool calls — emit an llm event if it produced
+        // any output (visible text or just reasoning).
+        if (isAssistantLike && llmSummary.trim()) {
             out.push({
                 kind: 'llm',
                 interaction: it,
                 interactionIndex: idx,
                 startedAt: baseTs,
                 completedAt,
-                summary: it.content || '',
+                summary: llmSummary,
                 usage: it.usage,
             });
         }
         return out;
     }
 
-    // First, if there's textual reasoning content alongside tool calls, emit it as llm
-    if ((it.content || '').trim()) {
+    // Assistant turn that called tools: emit the LLM step (its reasoning/text)
+    // before the tool events so they nest under it in the timeline tree.
+    if (isAssistantLike) {
         out.push({
             kind: 'llm',
             interaction: it,
             interactionIndex: idx,
             startedAt: baseTs,
             completedAt,
-            summary: it.content || '',
+            summary: llmSummary,
             usage: it.usage,
         });
     }

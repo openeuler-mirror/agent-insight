@@ -81,10 +81,10 @@ export const zh = {
     memory: '记忆评估',
     security: '安全设计',
     fault: '智能诊断',
-    skillsManage: 'Skills 管理',
+    skillsManage: 'Skills Hub',
     skillHistory: 'Skill 执行历史',
     skillGenerator: 'Skills 生成',
-    skillEval: 'Skills 分析',
+    skillEval: 'Skills 评测',
     skillOpt: 'Skills 优化',
     skillRelease: '发布管理',
     optapi: '自优化 API',
@@ -500,8 +500,8 @@ export const zh = {
     uploadError: '上传出错',
     noSkill: '无 skill',
     uploadSkill: '上传 skill',
-    uploadTitle: '上传 Skill',
-    uploadDescription: '选择包含 SKILL.md 的文件夹。',
+    uploadTitle: '本地上传',
+    uploadDescription: '从你的电脑选择 Skill 文件夹',
     uploadNote1: '注意: 请上传整个文件夹',
     uploadNote2: '重要: 文件夹名称不得包含中文字符。',
     selectFolder: '选择文件夹',
@@ -558,7 +558,7 @@ export const zh = {
 
   guide: {
     welcome: {
-      title: '欢迎使用 Skill-insight',
+      title: '欢迎使用 Agent-insight',
       content: '这是智能体技能评估、分析与优化平台。接下来将引导您完成关键配置，帮助您快速上手使用。',
     },
     evalConfig: {

@@ -1,6 +1,5 @@
 'use client';
 
-import { useState } from 'react';
 import './evaluation-content.css';
 import {
     STATIC_EVAL_STANDARDS,
@@ -85,13 +84,14 @@ export function EvaluationContent({
                 histogram={detail.histogram}
                 totalIssues={detail.issues.length}
                 hasL2Scores={hasL2Scores}
+                l2ErrorMessage={e.errorMessage}
             />
             <FindingsGrouped
                 groups={findingGroups}
                 otherItems={otherItems}
                 hasScores={hasL2Scores}
                 otherTitle="其它静态扫描问题"
-                otherDesc="未匹配到上述 6 个标准维度的检查项（通常来自 L1 linter 或自定义规则）。"
+                otherDesc="未归入上述 6 个标准维度的其它检查项。"
             />
         </div>
     );
@@ -117,7 +117,7 @@ function EvaluationOverallScoreHero({ score }: { score: number | null }) {
                     </div>
                 </div>
                 <span style={{ fontSize: 12, color: 'var(--sa-muted)', maxWidth: 280, textAlign: 'right', lineHeight: 1.55 }}>
-                    各维度"贡献分"之和 · 未评估维度不计入
+                    各维度“贡献分”之和 · 未评估维度不计入
                 </span>
             </div>
         </section>
@@ -181,12 +181,14 @@ function DimensionScoresCard({
     histogram,
     totalIssues,
     hasL2Scores,
+    l2ErrorMessage,
 }: {
     grouped: GroupedStandard[];
     comments?: { meta?: string; code?: string };
     histogram: Record<Severity, number>;
     totalIssues: number;
     hasL2Scores: boolean;
+    l2ErrorMessage?: string | null;
 }) {
     // 总分 = 已评估维度的均分 ×20（百分比化），未评估的不进分母。
     // 跟之前"满分项/已评估项"口径换掉：均值更直观，单项不及格不会把总分腰斩。
@@ -218,7 +220,7 @@ function DimensionScoresCard({
                         <div className="ev-radar-empty">
                             {hasL2Scores
                                 ? `仅 ${evaluatedDims.length} 个维度被评估，无法绘制雷达图`
-                                : 'L2 维度评分缺失（仅运行了 L1 linter）'}
+                                : (l2ErrorMessage || '维度评分暂未生成，可点击「重新分析」重试')}
                         </div>
                     )}
                 </div>

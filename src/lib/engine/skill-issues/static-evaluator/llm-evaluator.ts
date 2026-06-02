@@ -49,7 +49,7 @@ function normalizeSeverity(raw: unknown, fallback: Severity): Severity {
   return fallback;
 }
 
-function tryParseJson(text: string): any {
+function tryParseJson(text: string): unknown {
   let s = (text || '').trim();
   const fenced = s.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
   if (fenced) s = fenced[1].trim();
@@ -86,6 +86,24 @@ async function callLlm(
   }
 }
 
+// 调用 + 解析，若拿不到任何维度评分（空 content / 非法 JSON / 缺 detailed_evaluation）
+// 则重试一次。推理类模型（如 deepseek-reasoner）偶发返回空或截断输出，重试基本能恢复。
+async function callAndParse(
+  client: OpenAI,
+  model: string,
+  prompt: string,
+  defaultDimensionName: string,
+): Promise<{ comment: string; dims: ParsedDim[] }> {
+  let last: { comment: string; dims: ParsedDim[] } = { comment: '', dims: [] };
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const raw = await callLlm(client, model, prompt);
+    const parsed = parseDimensions(raw, defaultDimensionName);
+    last = parsed;
+    if (parsed.dims.some((d) => d.score > 0)) return parsed;
+  }
+  return last;
+}
+
 interface ParsedDim {
   dimension: string;
   score: number;
@@ -102,29 +120,33 @@ function parseDimensions(raw: string, defaultDimensionName: string): {
   comment: string;
   dims: ParsedDim[];
 } {
-  let parsed: any;
+  let parsed: unknown;
   try {
     parsed = tryParseJson(raw);
-  } catch (e) {
+  } catch {
     return { comment: '', dims: [] };
   }
-  const comment = typeof parsed?.overall_comment === 'string' ? parsed.overall_comment : '';
-  const detail = Array.isArray(parsed?.detailed_evaluation) ? parsed.detailed_evaluation : [];
-  const dims: ParsedDim[] = detail.map((d: any) => ({
-    dimension: typeof d?.dimension === 'string' ? d.dimension : defaultDimensionName,
-    score: Number(d?.score) || 0,
-    justification: typeof d?.justification === 'string' ? d.justification : '',
-    issues: Array.isArray(d?.issues)
-      ? d.issues
-          .filter((i: any) => typeof i?.summary === 'string' && i.summary.trim())
-          .map((i: any) => ({
-            summary: String(i.summary),
-            severity: typeof i?.severity === 'string' ? i.severity : undefined,
-            evidence: typeof i?.evidence === 'string' ? i.evidence : undefined,
-            suggestedFix: typeof i?.suggestedFix === 'string' ? i.suggestedFix : undefined,
-          }))
-      : [],
-  }));
+  const root = (parsed ?? {}) as Record<string, unknown>;
+  const comment = typeof root.overall_comment === 'string' ? root.overall_comment : '';
+  const detail = Array.isArray(root.detailed_evaluation) ? root.detailed_evaluation : [];
+  const dims: ParsedDim[] = detail.map((entry: unknown) => {
+    const d = (entry ?? {}) as Record<string, unknown>;
+    const rawIssues = Array.isArray(d.issues) ? d.issues : [];
+    return {
+      dimension: typeof d.dimension === 'string' ? d.dimension : defaultDimensionName,
+      score: Number(d.score) || 0,
+      justification: typeof d.justification === 'string' ? d.justification : '',
+      issues: rawIssues
+        .map((ri: unknown) => (ri ?? {}) as Record<string, unknown>)
+        .filter((i) => typeof i.summary === 'string' && i.summary.trim())
+        .map((i) => ({
+          summary: String(i.summary),
+          severity: typeof i.severity === 'string' ? i.severity : undefined,
+          evidence: typeof i.evidence === 'string' ? i.evidence : undefined,
+          suggestedFix: typeof i.suggestedFix === 'string' ? i.suggestedFix : undefined,
+        })),
+    };
+  });
   return { comment, dims };
 }
 
@@ -192,14 +214,13 @@ export async function runLlmStaticEvaluation(args: {
     const client = new OpenAI({
       apiKey: config.apiKey || 'no-api-key-required',
       baseURL: config.baseUrl || 'https://api.deepseek.com',
-      fetch: customFetch as any,
+      fetch: customFetch as typeof fetch | undefined,
     });
     const model = config.model || 'deepseek-chat';
 
     // 阶段 1：SKILL.md 五维评估
     const metaPrompt = PROMPT_SKILL_META.replace('${content}', args.skillContent);
-    const metaRaw = await callLlm(client, model, metaPrompt);
-    const metaParsed = parseDimensions(metaRaw, 'SKILL.md');
+    const metaParsed = await callAndParse(client, model, metaPrompt, 'SKILL.md');
     overallComments.meta = metaParsed.comment;
     for (const d of metaParsed.dims) {
       if (d.score) dimensionScores[d.dimension] = d.score;
@@ -209,13 +230,25 @@ export async function runLlmStaticEvaluation(args: {
     // 阶段 2：参考实现 / 脚本质量（仅在有内容时跑）
     if (args.bundleContent.trim()) {
       const codePrompt = PROMPT_CODE_QUALITY.replace('${content}', args.bundleContent);
-      const codeRaw = await callLlm(client, model, codePrompt);
-      const codeParsed = parseDimensions(codeRaw, '脚本及参考文档质量');
+      const codeParsed = await callAndParse(client, model, codePrompt, '脚本及参考文档质量');
       overallComments.code = codeParsed.comment;
       for (const d of codeParsed.dims) {
         if (d.score) dimensionScores[d.dimension] = d.score;
       }
       issues.push(...dimsToIssues(codeParsed.dims, 'code'));
+    }
+
+    // 重试后仍拿不到任何维度评分：判定 L2 失败并给出用户可读原因，
+    // 而不是静默地以 ok 收尾（那样会在前端显示"维度评分缺失"的内部文案）。
+    if (Object.keys(dimensionScores).length === 0) {
+      return {
+        ok: false,
+        errorMessage: '评估模型未返回可解析的维度评分（已自动重试 1 次）。请稍后点击「重新分析」重试，或在「配置」页更换评估模型。',
+        durationMs: Date.now() - startedAt,
+        dimensionScores,
+        overallComments,
+        issues,
+      };
     }
 
     return {
@@ -225,8 +258,10 @@ export async function runLlmStaticEvaluation(args: {
       overallComments,
       issues,
     };
-  } catch (e: any) {
-    const msg = e?.name === 'AbortError' ? `LLM 调用超时（${TIMEOUT_MS}ms）` : String(e?.message || e);
+  } catch (e) {
+    const msg = e instanceof Error && e.name === 'AbortError'
+      ? `LLM 调用超时（${TIMEOUT_MS}ms）`
+      : (e instanceof Error ? e.message : String(e));
     return {
       ok: false,
       errorMessage: msg,

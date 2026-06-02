@@ -3,6 +3,7 @@ import { prisma } from '@/lib/storage/prisma';
 import { runGeneralAgent } from '@/lib/engine/general-agent';
 import { withBackgroundOpencodeSlot } from '@/lib/engine/general-agent/concurrency-limiter';
 import { findAgentDataset, type DatasetCase } from '@/server/agent_datasets_storage';
+import { saveExecutionRecord } from '@/lib/storage/data-service';
 
 export const dynamic = 'force-dynamic';
 
@@ -24,6 +25,19 @@ interface GrayscaleConfig {
     recordTriggerDetails?: boolean;
     evaluatorId?: string;
     latestResultAt?: string;
+    // 关联到「评测执行」页的批次 ID (evaluatorRunId)。前端通过「+ 新增评测任务」对话框创建,
+    // 后续启动评测时透传给 /api/eval/trajectory/run 作 evaluatorRunId append (下一步迭代)。
+    evaluationBatchId?: string;
+    evaluationBatchTitle?: string;
+    evaluationBatchEvaluators?: string[];
+}
+
+function withDefaultConfig(config: GrayscaleConfig): GrayscaleConfig {
+    return {
+        ...config,
+        autoEval: true,
+        recordTriggerDetails: true,
+    };
 }
 
 interface RunResult {
@@ -125,6 +139,8 @@ interface TrajectoryApiResult {
     rawAnalysis?: unknown;
 }
 
+type TrajectoryResultStatus = 'pending' | 'running' | 'done' | 'failed' | string;
+
 interface ExecutionMetricRow {
     taskId?: string | null;
     query?: string | null;
@@ -154,7 +170,7 @@ interface GrayscalePrisma {
     trajectoryEvalResult: {
         findMany(args: { where: { user?: string; evaluatorRunId: { in: string[] } } }): Promise<TrajectoryResultRow[]>;
         updateMany(args: {
-            where: { user?: string; evaluatorRunId: string; status?: { in: string[] } };
+            where: { user?: string; evaluatorRunId?: string; id?: { in: string[] }; status?: { in: string[] }; taskId?: { in: string[] } };
             data: { status: string; errorMessage?: string };
         }): Promise<{ count: number }>;
     };
@@ -300,10 +316,92 @@ function pickEvaluationTraceIdFromRaw(rawAnalysis: unknown): string {
     return '';
 }
 
+function getResultEvaluation(rawAnalysisJson: string | null | undefined): Record<string, unknown> | null {
+    const raw = safeParse<Record<string, unknown> | null>(rawAnalysisJson, null);
+    if (!raw || typeof raw !== 'object') return null;
+    return raw.resultEvaluation && typeof raw.resultEvaluation === 'object'
+        ? raw.resultEvaluation as Record<string, unknown>
+        : null;
+}
+
+function pickResultEvaluationError(rawAnalysisJson: string | null | undefined): string {
+    const raw = safeParse<Record<string, unknown> | null>(rawAnalysisJson, null);
+    const value = raw && typeof raw === 'object' ? raw.resultEvaluationError : null;
+    return typeof value === 'string' ? value.trim() : '';
+}
+
+function selectedEvaluators(rawAnalysisJson: string | null | undefined): string[] {
+    const raw = safeParse<Record<string, unknown> | null>(rawAnalysisJson, null);
+    const value = raw && typeof raw === 'object' ? raw.selectedEvaluators : null;
+    return Array.isArray(value)
+        ? value.map(item => String(item || '').trim()).filter(Boolean)
+        : [];
+}
+
+function isIncompleteDoneEvaluation(row: TrajectoryResultRow): string {
+    if (row.status !== 'done') return '';
+    const evaluators = selectedEvaluators(row.rawAnalysisJson);
+    const requiresEvaluatorTrace = evaluators.some(id => (
+        id === 'preset-agent-task-completion'
+        || id === 'preset-agent-trace-quality'
+        || id === 'trace-quality-evaluator'
+    ));
+    const hasScore = typeof row.trajectoryScore === 'number'
+        || pickEvaluationResultScore(row.rawAnalysisJson) != null
+        || pickCustomEvaluationScore(row.rawAnalysisJson) != null;
+    const hasResultEvaluation = Boolean(getResultEvaluation(row.rawAnalysisJson));
+    const hasEvaluationTrace = Boolean(pickEvaluationTraceId(row.rawAnalysisJson));
+    if (requiresEvaluatorTrace && !hasEvaluationTrace) {
+        const detail = pickResultEvaluationError(row.rawAnalysisJson);
+        return detail || '评测完成记录缺少评测 session id';
+    }
+    if (hasScore && (hasResultEvaluation || hasEvaluationTrace)) return '';
+
+    const detail = pickResultEvaluationError(row.rawAnalysisJson);
+    return detail || '评测完成记录缺少评测输出或评测 session id';
+}
+
 function truncateForRunLog(value: unknown, maxLength = 240): string {
     const text = typeof value === 'string' ? value : JSON.stringify(value ?? '');
     if (!text) return '';
     return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
+}
+
+async function persistGrayscaleFallbackTrace(args: {
+    sessionId: string;
+    user: string;
+    query: string;
+    output: string;
+    agentName: string;
+    skill?: string;
+    skillVersion?: number | null;
+}) {
+    const query = args.query.trim();
+    const output = args.output.trim();
+    if (!args.sessionId || (!query && !output)) return;
+    const timestamp = new Date().toISOString();
+    await saveExecutionRecord({
+        task_id: args.sessionId,
+        upload_id: args.sessionId,
+        query: query || undefined,
+        framework: 'opencode',
+        user: args.user,
+        agent: args.agentName,
+        agentName: args.agentName,
+        final_result: output || undefined,
+        skill: args.skill,
+        skill_version: args.skillVersion ?? undefined,
+        interactions: [
+            ...(query ? [{ role: 'user', content: query, timestamp }] : []),
+            ...(output ? [{ role: 'assistant', content: output, timestamp, agent: args.agentName }] : []),
+        ],
+        skip_evaluation: true,
+        skip_internal_judgment: true,
+        failures: [],
+        skill_issues: [],
+        force_query_update: true,
+        opencode_cli_completed: true,
+    });
 }
 
 function buildGrayscaleExecutionSystem(version: ResolvedVersion): string {
@@ -404,7 +502,7 @@ function pickExecutionTokenUsage(row: ExecutionMetricRow): number | null {
 async function loadTask(taskId: string, user: string) {
     const task = await (prisma as unknown as GrayscalePrisma).grayscaleTask.findFirst({ where: { id: taskId, user } });
     if (!task) return null;
-    const configJson = safeParse<GrayscaleConfig>(task.configJson, {});
+    const configJson = withDefaultConfig(safeParse<GrayscaleConfig>(task.configJson, {}));
     if (!configJson.skillId && task.skillId) configJson.skillId = task.skillId;
     if (!configJson.versionBId && task.skillVersionId) configJson.versionBId = task.skillVersionId;
     return {
@@ -418,7 +516,7 @@ async function persistTaskState(taskId: string, user: string, config: GrayscaleC
     await (prisma as unknown as GrayscalePrisma).grayscaleTask.updateMany({
         where: { id: taskId, user },
         data: {
-            configJson: JSON.stringify(config),
+            configJson: JSON.stringify(withDefaultConfig(config)),
             caseStatesJson: JSON.stringify(states),
         },
     });
@@ -479,6 +577,12 @@ function hasAnyRunningCaseStates(states: CaseStates): boolean {
     ));
 }
 
+function isRecoverableInterruptedRun(run: RunResult): boolean {
+    if (run.status !== 'fail' || run.sessionId) return false;
+    const detail = `${run.failureDetail || ''}\n${run.output || ''}`;
+    return run.failureType === 'agent_error' && /服务重启中断|server .*restart|restarted/i.test(detail);
+}
+
 function getAutoEvaluationBacklogCaseIds(states: CaseStates): string[] {
     return Object.entries(states)
         .filter(([, state]) => (
@@ -496,30 +600,41 @@ function getAutoEvaluationBacklogCaseIds(states: CaseStates): string[] {
 
 function rebuildSideAggregate(state: PerVersionState, totalRuns: number): PerVersionState {
     const runs = state.runs || [];
-    const finished = runs.filter(r => r.status === 'executed' || r.status === 'pass');
-    const failed = runs.filter(r => r.status === 'fail');
-    const evaluating = runs.some(r => r.status === 'evaluating');
-    const running = runs.some(r => r.status === 'running' || r.status === 'pending');
-    const scored = runs.filter(r => typeof r.score === 'number');
-    const seconds = finished
+    const expectedRuns = Math.max(0, Number(totalRuns) || 0);
+    const aggregateRuns = expectedRuns > 0 && runs.length > expectedRuns
+        ? runs.slice(-expectedRuns)
+        : runs;
+    const effectiveTotalRuns = expectedRuns || aggregateRuns.length;
+    const finished = aggregateRuns.filter(r => r.status === 'executed' || r.status === 'pass');
+    const executionFinished = aggregateRuns.filter(r => (
+        r.status === 'executed'
+        || r.status === 'evaluating'
+        || r.status === 'pass'
+        || (r.status === 'fail' && Boolean(r.sessionId))
+    ));
+    const failed = aggregateRuns.filter(r => r.status === 'fail');
+    const evaluating = aggregateRuns.some(r => r.status === 'evaluating');
+    const running = aggregateRuns.some(r => r.status === 'running' || r.status === 'pending');
+    const scored = aggregateRuns.filter(r => typeof r.score === 'number');
+    const seconds = executionFinished
         .map(r => typeof r.timeCost === 'string' ? Number.parseFloat(r.timeCost) : 0)
-        .filter(n => Number.isFinite(n));
+        .filter(n => Number.isFinite(n) && n > 0);
     const avgSeconds = seconds.length > 0 ? seconds.reduce((a, b) => a + b, 0) / seconds.length : 0;
-    const tokenRuns = finished.filter(r => typeof r.tokenUsage === 'number');
+    const tokenRuns = executionFinished.filter(r => typeof r.tokenUsage === 'number');
     const avgTokens = tokenRuns.length > 0
         ? Math.round(tokenRuns.reduce((sum, r) => sum + (r.tokenUsage || 0), 0) / tokenRuns.length)
         : 0;
     const avgScore = scored.length > 0
         ? Math.round(scored.reduce((sum, r) => sum + (r.score || 0), 0) / scored.length)
         : undefined;
-    const traceIds = finished.map(r => r.sessionId).filter(Boolean) as string[];
-    const toolCallCount = finished.reduce((sum, r) => sum + (r.toolCallCount || 0), 0);
-    const toolCalls = Array.from(new Set(finished.flatMap(r => r.toolCalls || []))).slice(0, 8);
+    const traceIds = executionFinished.map(r => r.sessionId).filter(Boolean) as string[];
+    const toolCallCount = executionFinished.reduce((sum, r) => sum + (r.toolCallCount || 0), 0);
+    const toolCalls = Array.from(new Set(executionFinished.flatMap(r => r.toolCalls || []))).slice(0, 8);
 
     let status: CaseStatus = 'pending';
-    if (failed.length === totalRuns && totalRuns > 0) status = 'fail';
-    else if (scored.length === totalRuns && totalRuns > 0) status = 'pass';
-    else if (finished.length + failed.length === totalRuns && totalRuns > 0) status = 'executed';
+    if (scored.length >= effectiveTotalRuns && effectiveTotalRuns > 0) status = 'pass';
+    else if (failed.length >= effectiveTotalRuns && effectiveTotalRuns > 0) status = 'fail';
+    else if (finished.length + failed.length >= effectiveTotalRuns && effectiveTotalRuns > 0) status = 'executed';
     else if (evaluating) status = 'evaluating';
     else if (running || finished.length > 0) status = 'running';
 
@@ -528,14 +643,14 @@ function rebuildSideAggregate(state: PerVersionState, totalRuns: number): PerVer
         status,
         runs,
         runCount: totalRuns,
-        timeCost: finished.length > 0 ? `${avgSeconds.toFixed(1)}s` : undefined,
+        timeCost: seconds.length > 0 ? `${avgSeconds.toFixed(1)}s` : undefined,
         tokenUsage: avgTokens || undefined,
-        output: [...finished].reverse()[0]?.output || state.output,
+        output: [...executionFinished].reverse()[0]?.output || state.output,
         sessionId: traceIds[0] || state.sessionId,
         traceIds,
         score: avgScore,
         tier: avgScore == null ? undefined : scoreTier(avgScore),
-        skillTriggered: finished.some(r => r.skillTriggered),
+        skillTriggered: executionFinished.some(r => r.skillTriggered),
         toolCallCount,
         toolCalls,
     };
@@ -645,7 +760,8 @@ async function reconcileFinishedExecutions(args: {
         for (const side of ['a', 'b'] as Side[]) {
             const version = side === 'a' ? versionA : versionB;
             for (const run of state[side].runs || []) {
-                if (run.status !== 'running' || run.sessionId) continue;
+                if (run.sessionId) continue;
+                if (run.status !== 'running' && !isRecoverableInterruptedRun(run)) continue;
                 pendingTargets.push({ caseId, side, run, query, version });
             }
         }
@@ -734,6 +850,11 @@ async function reconcileFinishedEvaluations(user: string, config: GrayscaleConfi
 
     const staleRows: Array<{ row: typeof rows[number]; reason: string }> = [];
     for (const row of rows) {
+        const incompleteDoneReason = isIncompleteDoneEvaluation(row);
+        if (incompleteDoneReason) {
+            staleRows.push({ row, reason: incompleteDoneReason });
+            continue;
+        }
         if (row.status !== 'pending' && row.status !== 'running') continue;
         const updatedAt = row.updatedAt instanceof Date ? row.updatedAt.getTime() : 0;
         if (updatedAt <= 0) continue;
@@ -748,8 +869,12 @@ async function reconcileFinishedEvaluations(user: string, config: GrayscaleConfi
     }
     if (staleRows.length > 0) {
         for (const { row, reason } of staleRows) {
-            if (row.evaluatorRunId) {
-                await markEvaluatorRunFailed(user, row.evaluatorRunId, reason).catch(() => {});
+            if (row.status === 'done' && row.id) {
+                await markEvaluatorRowsFailedForce(user, [row.id], reason).catch(() => {});
+            } else if (row.evaluatorRunId && row.taskId) {
+                await markEvaluatorTasksFailed(user, row.evaluatorRunId, [row.taskId], reason).catch(() => {});
+            } else if (row.id) {
+                await markEvaluatorRowsFailed(user, [row.id], reason).catch(() => {});
             }
             row.status = 'failed';
             row.errorMessage = row.errorMessage || reason;
@@ -829,6 +954,12 @@ async function executeSingleAgentRun(args: {
     caseMap: Map<string, DatasetCase>;
     totalRunsPerSide: number;
     version: ResolvedVersion;
+    /**
+     * 对照 skill 名: A/B 任务里"另一侧"的 skill, 用于 baseline 那一侧 (args.version=null)
+     * 在 trace 上挂个 skill 标签, 让"从 Trace"按 skill 过滤能搜到。caller 传两边 skillName
+     * 任一非空即可, 优先 B 侧。args.version 非 null 时不用此参数。
+     */
+    referenceSkillName?: string | null;
     target: ExecutionTarget;
     /** 任务级 abort 信号: 用户点终止时, 这里桥接到本次 chat 的 abortController, 让 opencode chat 提前返回。 */
     parentSignal?: AbortSignal;
@@ -885,6 +1016,10 @@ async function executeSingleAgentRun(args: {
             query: args.caseMap.get(target.caseId)!.input,
             skill: args.version?.skillName,
             skillVersion: args.version?.version,
+            // 每组按"实际使用情况"绑定 trace 的 skill：本侧用了某 skill 版本就标该版本, 无 skill(baseline)
+            // 就不标任何 skill。不再回退到 referenceSkillName(B 侧 skill)——否则无 skill 的对照组 trace 会被
+            // 错绑到 B 的 skill, 在用例分析按 skill 筛选时和 B 一起冒出来 (期望只出真正用了该 skill 的 trace)。
+            tagSkill: args.version?.skillName ?? undefined,
             system: buildGrayscaleExecutionSystem(args.version),
             interactionPolicy: 'auto-deny',
             systemAgentName: grayAgentName,
@@ -930,8 +1065,18 @@ async function executeSingleAgentRun(args: {
         run.toolCallCount = result.stats?.toolCallCount || toolCalls.length;
         run.toolCalls = Array.from(new Set(toolCalls)).slice(0, 8);
         markRunCompleted(run);
-        // Execution 行的写库已经由 runGeneralAgent 里的 recordTraceAs 选项处理
-        // (上面调用时传了 grayAgentName)。不在这里重复写。
+        // runGeneralAgent 会尽量写入真实 opencode messages。这里再写一份 query/output
+        // fallback，防止 ephemeral server 的 listMessages 返回空数组时 trace 详情页空白。
+        await persistGrayscaleFallbackTrace({
+            sessionId: result.sessionId,
+            user: args.user,
+            query: args.caseMap.get(target.caseId)!.input,
+            output: result.output || '',
+            agentName: grayAgentName,
+            // 同上: 按本侧实际使用绑定, 无 skill(baseline)不绑, 不回退到 B 侧 skill。
+            skill: args.version?.skillName ?? undefined,
+            skillVersion: args.version?.version,
+        });
     } catch (err) {
         const classified = classifyAgentRunError(err);
         run.status = 'fail';
@@ -951,15 +1096,28 @@ async function executeSingleAgentRun(args: {
 }
 
 async function startSingleEvaluation(origin: string, user: string, config: GrayscaleConfig, pair: { caseId: string; taskId: string }, evaluatorId?: string) {
+    // 透传评测任务关联: 用户在 A/B 配置卡通过「+ 新增评测任务」对话框创建了批次,
+    // 此 ID 存在 config.evaluationBatchId。这里走 append 模式让 trace 落到同一批次,
+    // 而不是每次启动评测都新建一个 evaluatorRunId (修 "2 case × 3 round 拆成 6 个批次" 问题)。
+    //
+    // evaluator 字段:
+    //   - 关联了批次: 不传, 让后端继承批次创建时配置的 selectedEvaluators (多评估器)。
+    //     这是用户在「新增评测任务」对话框里多选的评估器列表, 应该统一应用。
+    //   - 没关联批次: 沿用老逻辑, 传单 evaluator 让后端新建批次 (向后兼容)。
+    const body: Record<string, unknown> = {
+        user,
+        datasetId: config.selectedDatasetId,
+        pairs: [pair],
+    };
+    if (config.evaluationBatchId) {
+        body.evaluatorRunId = config.evaluationBatchId;
+    } else {
+        body.evaluator = evaluatorId || config.evaluatorId || 'preset-agent-task-completion';
+    }
     const res = await fetch(`${origin}/api/eval/trajectory/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            user,
-            datasetId: config.selectedDatasetId,
-            pairs: [pair],
-            evaluator: evaluatorId || config.evaluatorId || 'preset-agent-task-completion',
-        }),
+        body: JSON.stringify(body),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok || !data.evaluatorRunId) {
@@ -974,6 +1132,57 @@ async function markEvaluatorRunFailed(user: string, evaluatorRunId: string, erro
             user,
             evaluatorRunId,
             status: { in: ['pending', 'running'] },
+        },
+        data: {
+            status: 'failed',
+            errorMessage,
+        },
+    });
+}
+
+async function markEvaluatorTasksFailed(user: string, evaluatorRunId: string, taskIds: string[], errorMessage: string) {
+    const scopedTaskIds = Array.from(new Set(taskIds.map(id => id.trim()).filter(Boolean)));
+    if (scopedTaskIds.length === 0) {
+        await markEvaluatorRunFailed(user, evaluatorRunId, errorMessage);
+        return;
+    }
+    await (prisma as unknown as GrayscalePrisma).trajectoryEvalResult.updateMany({
+        where: {
+            user,
+            evaluatorRunId,
+            taskId: { in: scopedTaskIds },
+            status: { in: ['pending', 'running'] },
+        },
+        data: {
+            status: 'failed',
+            errorMessage,
+        },
+    });
+}
+
+async function markEvaluatorRowsFailed(user: string, rowIds: string[], errorMessage: string) {
+    const scopedRowIds = Array.from(new Set(rowIds.map(id => id.trim()).filter(Boolean)));
+    if (scopedRowIds.length === 0) return;
+    await (prisma as unknown as GrayscalePrisma).trajectoryEvalResult.updateMany({
+        where: {
+            user,
+            id: { in: scopedRowIds },
+            status: { in: ['pending', 'running'] },
+        },
+        data: {
+            status: 'failed',
+            errorMessage,
+        },
+    });
+}
+
+async function markEvaluatorRowsFailedForce(user: string, rowIds: string[], errorMessage: string) {
+    const scopedRowIds = Array.from(new Set(rowIds.map(id => id.trim()).filter(Boolean)));
+    if (scopedRowIds.length === 0) return;
+    await (prisma as unknown as GrayscalePrisma).trajectoryEvalResult.updateMany({
+        where: {
+            user,
+            id: { in: scopedRowIds },
         },
         data: {
             status: 'failed',
@@ -1036,12 +1245,12 @@ async function evaluateSingleRunTarget(args: {
         args.states[target.caseId][target.side].evaluatorRunId = evaluatorRunId;
         await persistTaskState(args.taskId, args.user, args.config, args.states);
 
-        await waitAndApplyEvaluation(args.origin, args.user, evaluatorRunId, args.states);
+        await waitAndApplyEvaluation(args.origin, args.user, evaluatorRunId, args.states, [target.run.sessionId!]);
         await hydrateExecutionMetrics(args.states);
     } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         if (evaluatorRunId) {
-            await markEvaluatorRunFailed(args.user, evaluatorRunId, message).catch(() => {});
+            await markEvaluatorTasksFailed(args.user, evaluatorRunId, target.run.sessionId ? [target.run.sessionId] : [], message).catch(() => {});
         }
         target.run.status = 'fail';
         target.run.output = message;
@@ -1055,16 +1264,24 @@ async function evaluateSingleRunTarget(args: {
     await persistTaskState(args.taskId, args.user, args.config, args.states);
 }
 
-async function waitAndApplyEvaluation(origin: string, user: string, evaluatorRunId: string, states: CaseStates) {
+function isTerminalTrajectoryStatus(status: TrajectoryResultStatus | undefined): boolean {
+    return status === 'done' || status === 'failed';
+}
+
+async function waitAndApplyEvaluation(origin: string, user: string, evaluatorRunId: string, states: CaseStates, targetTaskIds: string[]) {
     const timeoutMessage = 'evaluation timed out';
+    const targetTaskIdSet = new Set(targetTaskIds.map(id => id.trim()).filter(Boolean));
     for (let i = 0; i < 180; i++) {
         const res = await fetch(`${origin}/api/eval/trajectory/results?user=${encodeURIComponent(user)}&runId=${encodeURIComponent(evaluatorRunId)}&limit=500`);
         const data = await res.json().catch(() => ({}));
         const body = data as { results?: TrajectoryApiResult[] };
         const results = Array.isArray(body.results) ? body.results : [];
+        const relevantResults = targetTaskIdSet.size > 0
+            ? results.filter(result => Boolean(result.taskId && targetTaskIdSet.has(result.taskId)))
+            : results.filter(result => Boolean(result.taskId));
         if (results.length > 0) {
             for (const result of results) {
-                if (result.status !== 'done' && result.status !== 'failed') continue;
+                if (!isTerminalTrajectoryStatus(result.status)) continue;
                 for (const state of Object.values(states)) {
                     for (const side of ['a', 'b'] as Side[]) {
                         for (const run of state[side].runs || []) {
@@ -1089,11 +1306,29 @@ async function waitAndApplyEvaluation(origin: string, user: string, evaluatorRun
                 }
             }
         }
-        if (results.length > 0 && results.every(r => r.status === 'done' || r.status === 'failed')) return;
+        if (relevantResults.length > 0 && relevantResults.every(r => isTerminalTrajectoryStatus(r.status))) return;
         await new Promise(resolve => setTimeout(resolve, 2000));
     }
-    await markEvaluatorRunFailed(user, evaluatorRunId, timeoutMessage);
-    markStateRunsFailed(states, evaluatorRunId, timeoutMessage);
+    await markEvaluatorTasksFailed(user, evaluatorRunId, Array.from(targetTaskIdSet), timeoutMessage);
+    if (targetTaskIdSet.size > 0) {
+        for (const state of Object.values(states)) {
+            for (const side of ['a', 'b'] as Side[]) {
+                let changed = false;
+                for (const run of state[side].runs || []) {
+                    if (!run.sessionId || !targetTaskIdSet.has(run.sessionId)) continue;
+                    if (run.status !== 'evaluating' && run.status !== 'running') continue;
+                    run.status = 'fail';
+                    run.output = timeoutMessage;
+                    changed = true;
+                }
+                if (changed) {
+                    state[side] = rebuildSideAggregate(state[side], state[side].runCount || state[side].runs?.length || 0);
+                }
+            }
+        }
+    } else {
+        markStateRunsFailed(states, evaluatorRunId, timeoutMessage);
+    }
     throw new Error(timeoutMessage);
 }
 
@@ -1117,7 +1352,14 @@ async function evaluateRunsWithConcurrency(args: {
                 if (args.onlyMissingEvaluation && (run.evaluatorRunId || typeof run.score === 'number')) {
                     continue;
                 }
-                if ((run.status === 'executed' || run.status === 'pass') && run.sessionId) {
+                // 默认状态白名单: executed / pass。onlyMissingEvaluation 模式下额外接受
+                // 'evaluating' —— 前端行级 retry 会先把 run 标成 evaluating 让 UI 立刻
+                // 显示"评测中"动效, 此时 evaluatorRunId/score 都被清掉了, 落进 backend
+                // 这里应当被选中重评; 不开 onlyMissing 时不接受 evaluating, 避免抢已经
+                // 在跑的 eval。
+                const eligibleStatus = run.status === 'executed' || run.status === 'pass'
+                    || (args.onlyMissingEvaluation && run.status === 'evaluating');
+                if (eligibleStatus && run.sessionId) {
                     targets.push({ caseId, side, run });
                 }
             }
@@ -1274,6 +1516,9 @@ async function runGrayscaleTask(args: {
                 return;
             }
             const version = item.side === 'a' ? versionA : versionB;
+            // baseline 侧 (version=null) 取另一侧的 skillName 作为 trace 标签;
+            // 两侧都不是 None 时取本侧, 走 input.skill 路径, referenceSkillName 自然不参与。
+            const referenceSkillName = versionB?.skillName || versionA?.skillName || null;
             try {
                 await withBackgroundOpencodeSlot(
                     () => executeSingleAgentRun({
@@ -1284,6 +1529,7 @@ async function runGrayscaleTask(args: {
                         caseMap,
                         totalRunsPerSide,
                         version,
+                        referenceSkillName,
                         target: item,
                         parentSignal: taskSignal,
                     }),
@@ -1367,13 +1613,20 @@ export async function GET(
         const task = await loadTask(taskId, user);
         if (!task) return NextResponse.json({ error: 'task not found' }, { status: 404 });
 
+        const metricsHydrated = await hydrateExecutionMetrics(task.caseStatesJson);
+        const executionsReconciled = await reconcileFinishedExecutions({
+            user,
+            config: task.configJson,
+            states: task.caseStatesJson,
+        });
+        const reconciled = await reconcileFinishedEvaluations(user, task.configJson, task.caseStatesJson);
+
         // === 孤儿 in-flight 清理 ===
         // activeRuns 是内存 map (挂 globalThis), server 重启就丢。如果 caseStates
         // 里还有 running/pending/evaluating 但 activeRuns 没有这个 task 的条目,
         // 那一定是上次进程跑到一半被杀的孤儿——agent / evaluator 子进程都没了,
-        // 不会再有人推进它的状态。之前依赖 reconcileFinishedExecutions 反查
-        // Execution 表回填, 但 agent 还没完成就被杀的 run 根本没写 Execution 行,
-        // 反查找不到, 永远卡在 running。
+        // 不会再有人推进它的状态。先走上面的 reconcileFinishedExecutions 反查
+        // Execution 表回填; 只有仍未被回填的 in-flight run 才能判作真正孤儿。
         //
         // 直接走跟 abort 同款的清理: pending/running/evaluating 全标 fail, 然后
         // rebuildSideAggregate 让 top 跟 runs 一致。
@@ -1412,13 +1665,6 @@ export async function GET(
             }
         }
 
-        const metricsHydrated = await hydrateExecutionMetrics(task.caseStatesJson);
-        const executionsReconciled = await reconcileFinishedExecutions({
-            user,
-            config: task.configJson,
-            states: task.caseStatesJson,
-        });
-        const reconciled = await reconcileFinishedEvaluations(user, task.configJson, task.caseStatesJson);
         if (orphanCleanup || metricsHydrated || executionsReconciled || reconciled) {
             await persistTaskState(taskId, user, task.configJson, task.caseStatesJson);
         }
@@ -1551,7 +1797,22 @@ export async function POST(
             });
         }
 
-        if (activeRuns().has(storeKey)) {
+        // 行级 retry-eval 路径 (action='evaluate' + onlyMissingEvaluation=true)
+        // 跳过 single-instance 守门, 允许多个 retry 并行——只针对 frontend retryEvaluation
+        // 这种"用户点了 N 条失败 case 的 retry, 期望并行重评"的场景。
+        //
+        // 安全性论证: onlyMissingEvaluation=true 时, backend evaluateRunsWithConcurrency
+        // 只选 evaluatorRunId/score 都没的 run; 每条 retry 走 retryEvaluation 时 frontend
+        // 已经清掉了那条 run 的 evaluatorRunId/score, 不同 retry 改的是不同 run。
+        //
+        // RACE 风险 (已知, 不修): persistTaskState 写整个 caseStatesJson 而非 patch 单 run,
+        // 两个 retry 并行时存在 lost-update 风险 (call1 在 T=0 loadTask 拿快照 S1,
+        // call2 在 T=0.1 loadTask 拿快照 S2; call1 在 T=10s persistTaskState(S1.R2=pass),
+        // call2 在 T=10.5s persistTaskState(S2.R3=pass) → S1 的 R2 更新被 S2 覆盖丢)。
+        // 实际频率应该低 (用户点几个 retry, 间隔通常够 backend 串行写); 如出现问题再加
+        // per-run 原子 persist (read-merge-write)。
+        const isParallelRetryEval = action === 'evaluate' && onlyMissingEvaluation;
+        if (activeRuns().has(storeKey) && !isParallelRetryEval) {
             return NextResponse.json({ error: 'task is already running' }, { status: 409 });
         }
         const task = await loadTask(taskId, user);
@@ -1564,7 +1825,9 @@ export async function POST(
         const origin = req.nextUrl.origin;
         const runId = `gray_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
         const abortController = new AbortController();
-        activeRuns().set(storeKey, {
+        // 并行 retry-eval 不占 activeRuns 主槽位 (否则后续 retry 也会被 guard 拒),
+        // 但保留 abortController; 主路径正常占 activeRuns。
+        if (!isParallelRetryEval) activeRuns().set(storeKey, {
             taskId,
             runId,
             status: action === 'evaluate' ? 'evaluating' : 'running',
@@ -1595,7 +1858,8 @@ export async function POST(
                 }
             })
             .finally(() => {
-                activeRuns().delete(storeKey);
+                // 并行 retry-eval 没占主槽, 也不删它 (别的 retry-eval 可能还在跑)
+                if (!isParallelRetryEval) activeRuns().delete(storeKey);
             });
 
         return NextResponse.json({ ok: true, runId });
@@ -1626,7 +1890,7 @@ export async function PATCH(
 
         if (configJson !== undefined) {
             const nextConfig = configJson && typeof configJson === 'object' && !Array.isArray(configJson)
-                ? { ...(configJson as GrayscaleConfig) }
+                ? withDefaultConfig({ ...(configJson as GrayscaleConfig) })
                 : {};
             const nextSkillId = String(nextConfig.skillId || '').trim();
             if (nextSkillId && nextSkillId !== existing.skillId) {
@@ -1659,7 +1923,7 @@ export async function PATCH(
         return NextResponse.json({
             ...updated,
             configJson: {
-                ...JSON.parse(updated.configJson || '{}'),
+                ...withDefaultConfig(JSON.parse(updated.configJson || '{}')),
                 skillId: updated.skillId,
                 versionBId: updated.skillVersionId,
             },

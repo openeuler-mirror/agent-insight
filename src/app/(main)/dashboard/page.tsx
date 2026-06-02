@@ -475,10 +475,10 @@ function LineChart({ data }: { data: TrendRow[] }) {
 
     return (
         <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
-            {refLines.map(v => {
+            {refLines.map((v, idx) => {
                 const y = H - ((v - minV) / range) * H;
                 return (
-                    <g key={v}>
+                    <g key={`${v}-${idx}`}>
                         <line x1={0} y1={y} x2={W} y2={y} stroke="var(--border)" strokeWidth={0.6} strokeDasharray="4 3" />
                         <text x={2} y={y - 3} fontSize={8} fill="var(--foreground-muted)">{v}%</text>
                     </g>

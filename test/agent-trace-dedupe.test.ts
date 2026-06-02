@@ -45,6 +45,44 @@ test("agent trace: duplicate tool calls with the same id render once", () => {
   assert.equal(tree!.stats.taskCalls, 1)
 })
 
+test("agent trace: tool-only assistant turn (empty content) still emits an llm event from reasoning", () => {
+  // In opencode a tool-calling turn carries its chain-of-thought in `reasoning`
+  // parts while `content` (text parts only) is empty. Each such turn is one LLM
+  // call and must surface as an llm event so the timeline shows the LLM step and
+  // the tool call nests under it.
+  const tree = buildAgentCallTree([
+    { role: "user", content: "go", timestamp: 1 },
+    {
+      role: "assistant",
+      content: "",
+      timestamp: 2,
+      parts: [
+        { type: "reasoning", text: "I should read the file first." },
+        { type: "tool", tool: "read", callID: "c1", state: { status: "success" } },
+      ],
+      tool_calls: [
+        {
+          id: "c1",
+          type: "function",
+          function: { name: "read", arguments: JSON.stringify({ file_path: "a.ts" }) },
+          state: "success",
+        },
+      ],
+    },
+    { role: "assistant", content: "done", timestamp: 3 },
+  ] as any)
+
+  assert.ok(tree)
+  const llm = tree!.events.filter((e) => e.kind === "llm")
+  const tool = tree!.events.filter((e) => e.kind === "tool")
+  // One llm per assistant turn (reasoning-only + final text) and one tool call.
+  assert.equal(llm.length, 2)
+  assert.equal(tool.length, 1)
+  assert.equal(tree!.stats.llmCalls, 2)
+  // The reasoning text becomes the llm event summary when content is empty.
+  assert.equal(llm[0].summary, "I should read the file first.")
+})
+
 test("agent trace: ISO timestamps produce finite durations", () => {
   const tree = buildAgentCallTree([
     {

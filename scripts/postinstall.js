@@ -14,7 +14,7 @@ const {
 
 const PACKAGE_ROOT = path.resolve(__dirname, '..')
 
-console.log('=== Skill-Insight Post-Install Initialization ===\n')
+console.log('=== Agent-Insight Post-Install Initialization ===\n')
 
 try {
   migrateDataIfNeeded()

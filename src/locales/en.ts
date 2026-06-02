@@ -84,7 +84,7 @@ export const en = {
     skillsManage: 'Skill Management',
     skillHistory: 'Skill History',
     skillGenerator: 'Skill Generation',
-    skillEval: 'Skill Analysis',
+    skillEval: 'Skill Evaluation',
     skillOpt: 'Skill Optimization',
     skillRelease: 'Release',
     optapi: 'Self-Optimize API',
@@ -500,8 +500,8 @@ export const en = {
     uploadError: 'Upload error',
     noSkill: 'No skills',
     uploadSkill: 'Upload skill',
-    uploadTitle: 'Upload Skill',
-    uploadDescription: 'Select a folder containing SKILL.md.',
+    uploadTitle: 'Local upload',
+    uploadDescription: 'Select a Skill folder from your computer',
     uploadNote1: 'Note: Please upload the entire folder',
     uploadNote2: 'Important: Folder name must not contain Chinese characters.',
     selectFolder: 'Select Folder',
@@ -558,7 +558,7 @@ export const en = {
 
   guide: {
     welcome: {
-      title: 'Welcome to Skill-insight',
+      title: 'Welcome to Agent-insight',
       content: 'This is the Agent Skill Evaluation, Analysis & Optimization platform. We will guide you through key configurations to help you get started quickly.',
     },
     evalConfig: {

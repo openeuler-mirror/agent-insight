@@ -14,9 +14,10 @@ function ensureDir(dirPath) {
 function loadConfiguration() {
     let config = {};
     try {
-        const envPath = path.join(os.homedir(), '.skill-insight', '.env');
+        const envPath = path.join(os.homedir(), '.agent-insight', '.env');
         const legacyEnvPath = path.join(os.homedir(), '.witty', '.env');
-        const selectedEnvPath = fs.existsSync(envPath) ? envPath : legacyEnvPath;
+        const oldEnvPath = path.join(os.homedir(), '.skill-insight', '.env');
+        const selectedEnvPath = fs.existsSync(envPath) ? envPath : (fs.existsSync(oldEnvPath) ? oldEnvPath : legacyEnvPath);
         if (fs.existsSync(selectedEnvPath)) {
             const content = fs.readFileSync(selectedEnvPath, 'utf8');
             content.split('\n').forEach(line => {
@@ -105,8 +106,8 @@ async function main() {
 
     const { host, apiKey } = loadConfiguration();
     if (!host) {
-        console.error('⚠️  Error: Skill Insight Host is not configured.');
-        console.error('Please configure SKILL_INSIGHT_HOST in ~/.skill-insight/.env');
+        console.error('⚠️  Error: Agent Insight Host is not configured.');
+        console.error('Please configure SKILL_INSIGHT_HOST in ~/.agent-insight/.env');
         process.exit(1);
     }
 

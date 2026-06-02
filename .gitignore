@@ -96,3 +96,6 @@ exclude/
 *.iml
 .agents
 .codex
+
+# local docs backup
+docs_backup/

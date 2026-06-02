@@ -2391,9 +2391,16 @@
     transition: background 0.15s ease, box-shadow 0.15s ease;
 }
 
-.btn-publish:hover {
+.btn-publish:not(:disabled):hover {
     background: #4f46e5;
     box-shadow: 0 2px 8px rgba(88, 80, 236, 0.3);
+}
+
+.btn-publish:disabled {
+    background: #c7c9d9;
+    color: #f3f4f6;
+    cursor: not-allowed;
+    box-shadow: none;
 }
 
 .btn-download {

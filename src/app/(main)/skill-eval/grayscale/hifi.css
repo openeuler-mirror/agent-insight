@@ -1,0 +1,1640 @@
+/* ============================================================
+ * Hi-fi shell for `/skill-eval?view=gray` (Phase 1).
+ *
+ * Only loaded when GrayscaleEvaluation receives `hifi={true}` —
+ * which today happens only from the `view=gray` branch in
+ * src/app/(main)/skill-eval/page.tsx. All selectors are scoped
+ * under `.gray-hifi` so that the standalone `/skill-eval/grayscale`
+ * route (which uses the same component without `hifi`) is unaffected.
+ *
+ * Reference: D:/00470753/chrome_data/agent-insight-unified (3).html
+ * — page #1 "A/B 测试". This file lifts ONLY the task-row,
+ * status-pill, collapsible-card-chev tokens. The stepper / 3 cards
+ * already exist as `.v2-stepper` / `.v2-stage-card.*`; we layer
+ * collapse behavior on top of them rather than re-implementing.
+ * ============================================================ */
+
+.gray-hifi {
+    --gh-bg: #FAFAF7;
+    --gh-bg-elev: #FFFFFF;
+    --gh-bg-soft: #F4F4EE;
+    --gh-line: #E8E6DF;
+    --gh-line-strong: #D6D3C8;
+    --gh-ink-1: #1A1A1A;
+    --gh-ink-2: #4A4A48;
+    --gh-ink-3: #8A8A85;
+    --gh-ink-4: #B8B6AE;
+    --gh-brand: #5B47E0;
+    --gh-brand-soft: #EEEBFB;
+    --gh-brand-ink: #2E1F8A;
+    --gh-st-done: #2E7D5B;
+    --gh-st-done-soft: #E3F1E9;
+    --gh-st-warn: #C77A1A;
+    --gh-st-warn-soft: #FBF0DC;
+    --gh-st-fail: #B73838;
+    --gh-st-fail-soft: #FBE6E6;
+    --gh-font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+
+/* ------------------------------------------------------------
+ * Task row — sits above the existing v2-stepper.
+ * Two lines: (1) #num + editable title + status pill + cat;
+ *            (2) meta items (left) + action buttons (right).
+ * ------------------------------------------------------------ */
+.gray-hifi .gh-task-row {
+    background: var(--gh-bg-elev);
+    border: 1px solid var(--gh-line);
+    border-radius: 12px;
+    padding: 14px 18px;
+    margin-bottom: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    box-shadow: 0 1px 2px rgba(20, 20, 20, .04);
+}
+
+.gray-hifi .gh-task-title-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+    flex-wrap: wrap;
+}
+
+.gray-hifi .gh-task-title,
+.gray-hifi .gh-task-title-trigger {
+    flex: 1;
+    min-width: 220px;
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: -.3px;
+    color: var(--gh-ink-1);
+    padding: 4px 8px;
+    margin-left: -8px;
+    border-radius: 5px;
+    border: 1px solid transparent;
+    background: transparent;
+    font-family: inherit;
+    text-align: left;
+}
+
+.gray-hifi .gh-task-title {
+    outline: none;
+}
+
+.gray-hifi .gh-task-title-trigger {
+    cursor: pointer;
+    appearance: none;
+    outline: none;
+}
+
+.gray-hifi .gh-task-title:hover,
+.gray-hifi .gh-task-title-trigger:hover {
+    background: var(--gh-bg-soft);
+    border-color: var(--gh-line);
+}
+
+.gray-hifi .gh-task-title:focus,
+.gray-hifi .gh-task-title-trigger:focus-visible {
+    background: var(--gh-bg-elev);
+    border-color: var(--gh-brand);
+    box-shadow: 0 0 0 3px var(--gh-brand-soft);
+}
+
+.gray-hifi .gh-task-title-trigger.is-placeholder {
+    color: var(--gh-ink-3);
+    font-weight: 600;
+}
+
+.gray-hifi .gh-task-state {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 11px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+    background: var(--gh-bg-soft);
+    color: var(--gh-ink-3);
+}
+
+.gray-hifi .gh-task-state::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+}
+
+.gray-hifi .gh-task-state.is-running {
+    background: var(--gh-brand-soft);
+    color: var(--gh-brand-ink);
+}
+
+.gray-hifi .gh-task-state.is-running::before {
+    animation: gh-pulse 1.4s ease-in-out infinite;
+}
+
+.gray-hifi .gh-task-state.is-done {
+    background: var(--gh-st-done-soft);
+    color: var(--gh-st-done);
+}
+
+.gray-hifi .gh-task-state.is-reject {
+    background: var(--gh-st-fail-soft);
+    color: var(--gh-st-fail);
+}
+
+.gray-hifi .gh-task-state.is-warn {
+    background: var(--gh-st-warn-soft);
+    color: var(--gh-st-warn);
+}
+
+@keyframes gh-pulse {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50%      { transform: scale(1.5); opacity: .6; }
+}
+
+.gray-hifi .gh-task-cat {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 11px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+    background: var(--gh-brand-soft);
+    color: var(--gh-brand-ink);
+}
+
+.gray-hifi .gh-task-cat::before {
+    content: "✦";
+    font-size: 11px;
+}
+
+.gray-hifi .gh-task-info-row {
+    display: flex;
+    align-items: center;
+    gap: 22px;
+    min-width: 0;
+    flex-wrap: wrap;
+}
+
+.gray-hifi .gh-task-meta {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    color: var(--gh-ink-3);
+    font-size: 12px;
+    flex: 1;
+    min-width: 0;
+    flex-wrap: wrap;
+}
+
+.gray-hifi .gh-task-meta-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+}
+
+.gray-hifi .gh-task-meta-item .ico {
+    font-size: 11px;
+    color: var(--gh-ink-4);
+}
+
+.gray-hifi .gh-task-meta-item b {
+    color: var(--gh-ink-1);
+    font-weight: 600;
+    font-family: var(--gh-font-mono);
+}
+
+.gray-hifi .gh-task-meta-item.is-link {
+    cursor: pointer;
+    color: var(--gh-ink-2);
+    background: transparent;
+    border: 0;
+    padding: 0;
+    font: inherit;
+}
+
+.gray-hifi .gh-task-meta-item.is-link:hover {
+    color: var(--gh-brand);
+}
+
+.gray-hifi .gh-task-meta-item.is-link::after {
+    content: "›";
+    margin-left: 2px;
+    color: var(--gh-ink-4);
+    font-size: 14px;
+}
+
+.gray-hifi .gh-task-meta-item.is-link:hover::after {
+    color: var(--gh-brand);
+}
+
+.gray-hifi .gh-task-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.gray-hifi .gh-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    font: inherit;
+    font-size: 12px;
+    line-height: 1.2;
+    border-radius: 6px;
+    border: 1px solid var(--gh-line-strong);
+    background: var(--gh-bg-elev);
+    color: var(--gh-ink-1);
+    cursor: pointer;
+    transition: background .15s ease, border-color .15s ease, color .15s ease;
+    white-space: nowrap;
+}
+
+.gray-hifi .gh-btn:hover {
+    background: var(--gh-bg-soft);
+    border-color: var(--gh-ink-3);
+}
+
+.gray-hifi .gh-btn[disabled] {
+    opacity: .45;
+    cursor: not-allowed;
+}
+
+.gray-hifi .gh-btn.is-primary {
+    background: var(--gh-brand);
+    color: #fff;
+    border-color: var(--gh-brand);
+}
+
+.gray-hifi .gh-btn.is-primary:hover {
+    background: var(--gh-brand-ink);
+    border-color: var(--gh-brand-ink);
+}
+
+/* ------------------------------------------------------------
+ * Collapsible card overlay for the existing v2-stage-card.
+ * We don't replace the cards — we add:
+ *   • a chev button at the far right of the header,
+ *   • a clickable header that toggles a `data-collapsed` flag,
+ *   • a rule that hides the body when collapsed.
+ * The existing inner content (config grid / A/B compare / decision)
+ * is untouched.
+ * ------------------------------------------------------------ */
+.gray-hifi .v2-stage-card[data-collapsible="1"] > .v2-stage-card-header {
+    cursor: pointer;
+    user-select: none;
+}
+
+.gray-hifi .gh-card-chev {
+    margin-left: auto;
+    width: 26px;
+    height: 26px;
+    border-radius: 6px;
+    display: inline-grid;
+    place-items: center;
+    color: var(--gh-ink-3);
+    background: transparent;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: transform .25s cubic-bezier(.4, 0, .2, 1),
+                background .15s ease,
+                color .15s ease,
+                border-color .15s ease;
+    flex-shrink: 0;
+}
+
+.gray-hifi .gh-card-chev::before {
+    content: "";
+    width: 7px;
+    height: 7px;
+    border-right: 1.5px solid currentColor;
+    border-bottom: 1.5px solid currentColor;
+    transform: rotate(45deg);
+    margin-top: -2px;
+}
+
+.gray-hifi .v2-stage-card[data-collapsible="1"] > .v2-stage-card-header:hover .gh-card-chev {
+    background: var(--gh-bg-elev);
+    color: var(--gh-ink-1);
+    border-color: var(--gh-line);
+}
+
+.gray-hifi .v2-stage-card[data-collapsed="1"] .gh-card-chev {
+    transform: rotate(-90deg);
+}
+
+/* Card body collapse — animate max-height + opacity. The cards
+ * use `.v2-stage-card-body`; in CARD 3 there's also a yellow note
+ * row between the header and the body that should collapse with
+ * the body. To catch it without naming a class on every site, we
+ * collapse every direct child of the card *after* the header. */
+.gray-hifi .v2-stage-card[data-collapsed="1"] > *:not(.v2-stage-card-header) {
+    max-height: 0;
+    min-height: 0;
+    display: none !important;
+    opacity: 0;
+    overflow: hidden;
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+    padding: 0 !important;
+    border-top-width: 0 !important;
+    border-bottom-width: 0 !important;
+    pointer-events: none;
+    transition: max-height .28s cubic-bezier(.4, 0, .2, 1),
+                opacity .18s ease,
+                padding .22s ease;
+}
+
+.gray-hifi .v2-stage-card[data-collapsible="1"]:not([data-collapsed="1"]) > *:not(.v2-stage-card-header) {
+    max-height: 6000px;
+    opacity: 1;
+    transition: max-height .35s cubic-bezier(.4, 0, .2, 1),
+                opacity .25s ease;
+}
+
+/* When collapsed, fade the bottom border of the header so the
+ * card reads as a single resting line instead of an empty box. */
+.gray-hifi .v2-stage-card[data-collapsed="1"] > .v2-stage-card-header {
+    border-bottom-color: transparent !important;
+    border-radius: inherit !important;
+    margin: 0 !important;
+}
+
+.gray-hifi .v2-stage-card[data-collapsed="1"] {
+    padding-bottom: 0 !important;
+}
+
+.gray-hifi .v2-stage-card {
+    border-left: 0 !important;
+}
+
+.gray-hifi .v2-stage-card > .v2-stage-card-header::before {
+    display: none !important;
+}
+
+/* ============================================================
+ * Density pass — match the reference prototype's compactness.
+ * All declarations below use `!important` because they override
+ * inline styles set on existing v2-stage-card / v2-stepper /
+ * skill-summary nodes (the original component ships a lot of
+ * style={...}). Scoped to `.gray-hifi`, so these only fire when
+ * the hi-fi shell is active.
+ * ============================================================ */
+
+/* Outer wrapper: tighten the top padding so the task-row sits
+ * close to the page chrome. The original component uses
+ * `padding: '24px 28px 12px 28px'` on its first child div. */
+.gray-hifi.ab-page-v2 {
+    padding-bottom: 24px !important;
+}
+
+.gray-hifi.ab-page-v2 > div:first-child {
+    padding: 0 28px 16px 28px !important;
+}
+
+/* "Same plane" merger — AppTopBar (breadcrumb) and the gh-task-row read as one
+ * continuous header block (patterns.md §A.5.3 detail-object equivalent).
+ * Kills the inherited top padding so the sticky row starts exactly at the
+ * scroll container edge, and normalizes horizontal gutters to 24px so the
+ * row width matches AppTopBar's `px-6` geometry. */
+.sa-main:has(.gray-hifi.ab-page-v2) {
+    padding-top: 0 !important;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+}
+.sa-embedded-debug:has(.gray-hifi.ab-page-v2),
+.sa-embedded-debug:has(.gray-hifi.ab-page-v2) .sa-embedded-shell-body {
+    padding: 0 !important;
+    background: transparent !important;
+}
+
+/* Task-row: sticky shelf pinned to the top of .sa-main (the scroll
+ * container) so the task name / status / action buttons stay visible
+ * while the page scrolls. The AppTopBar lives outside .sa-main, so
+ * `top: 0` lands the row flush against the AppTopBar's bottom edge.
+ *
+ * Visual language follows AppTopBar (white bg-card, hairline border,
+ * subtle drop shadow for layering). Negative side margins of -24px
+ * cancel the wrapper gutter so the bar reaches the same left/right edge
+ * as AppTopBar without changing the content width below it. */
+.gray-hifi .gh-task-row {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: var(--gh-bg-elev);
+    border: 0;
+    border-radius: 0;
+    border-bottom: 1px solid var(--gh-line);
+    box-shadow: 0 6px 12px -8px rgba(20, 20, 20, .08);
+    margin: 0 -28px 16px;
+    padding: 12px 16px;
+    gap: 6px;
+}
+
+.gray-hifi .gh-task-title {
+    font-size: 18px;
+    padding: 3px 6px;
+    margin-left: -6px;
+}
+
+.gray-hifi .gh-task-state,
+.gray-hifi .gh-task-cat {
+    padding: 2px 9px;
+    font-size: 11px;
+}
+
+.gray-hifi .gh-task-info-row {
+    gap: 14px;
+}
+
+.gray-hifi .gh-task-meta {
+    gap: 14px;
+    font-size: 12px;
+}
+
+.gray-hifi .gh-btn {
+    padding: 5px 10px;
+    font-size: 12px;
+}
+
+/* Skill-summary white card: shrink to a slim inline row.
+ * Hidden? No — the version selectors live here, and there's no
+ * other place to change A/B versions yet. Just make it small. */
+.gray-hifi .gh-skill-summary {
+    padding: 8px 14px !important;
+    margin-bottom: 10px !important;
+    border-radius: 8px !important;
+    box-shadow: none !important;
+    gap: 12px !important;
+    border-color: var(--gh-line) !important;
+}
+
+.gray-hifi .gh-skill-summary > div:first-child {
+    gap: 10px !important;
+}
+
+/* Shrink the chunky 44px LIN logo box. */
+.gray-hifi .gh-skill-summary > div:first-child > div:first-child {
+    width: 28px !important;
+    height: 28px !important;
+    border-radius: 6px !important;
+    font-size: 11px !important;
+}
+
+/* Tighter version selector groups: smaller label + select. */
+.gray-hifi .gh-skill-summary select {
+    height: 28px !important;
+    padding: 3px 10px !important;
+    font-size: 12px !important;
+}
+
+.gray-hifi .gh-skill-summary span[style*="text-transform"] {
+    font-size: 11px !important;
+}
+
+/* v2-stepper: compress the 3-step header strip. */
+.gray-hifi .v2-stepper {
+    padding: 8px 12px !important;
+    border-radius: 10px !important;
+    gap: 0 !important;
+    background: var(--gh-bg-elev) !important;
+    border-color: var(--gh-line) !important;
+    box-shadow: none !important;
+    margin-bottom: 4px !important;
+}
+
+.gray-hifi .v2-step {
+    padding: 4px 10px !important;
+    gap: 8px !important;
+}
+
+.gray-hifi .v2-step-circle {
+    width: 22px !important;
+    height: 22px !important;
+    min-width: 22px !important;
+    font-size: 11px !important;
+    border-width: 1.5px !important;
+}
+
+.gray-hifi .v2-step-info {
+    gap: 0 !important;
+}
+
+.gray-hifi .v2-step-label {
+    font-size: 11px !important;
+    letter-spacing: .08em !important;
+    line-height: 1.3 !important;
+}
+
+.gray-hifi .v2-step-name {
+    font-size: 12px !important;
+    font-weight: 700 !important;
+    line-height: 1.3 !important;
+}
+
+.gray-hifi .v2-step-meta {
+    font-size: 11px !important;
+    line-height: 1.3 !important;
+}
+
+/* Main content rhythm: one 16px grid gap between every display box. */
+.gray-hifi.ab-page-v2 > div:nth-child(2) {
+    padding: 0 28px !important;
+    gap: 16px !important;
+}
+
+/* v2-stage-card: tighter header. Title + subtitle on one row. */
+.gray-hifi .v2-stage-card {
+    border-radius: 10px !important;
+    overflow: hidden !important;
+    margin-bottom: 0 !important;
+}
+
+.gray-hifi .v2-stage-card-header {
+    padding: 10px 16px !important;
+    min-height: 0 !important;
+    gap: 12px !important;
+    align-items: center !important;
+    border-bottom: 0 !important;
+}
+
+.gray-hifi .v2-stage-num-badge {
+    width: 24px !important;
+    height: 24px !important;
+    min-width: 24px !important;
+    border-radius: 6px !important;
+    font-size: 11px !important;
+    padding: 0 !important;
+}
+
+.gray-hifi .v2-stage-title-block {
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: baseline !important;
+    gap: 10px !important;
+    min-width: 0 !important;
+    flex: 1 !important;
+}
+
+.gray-hifi .v2-stage-card-title {
+    font-size: 14px !important;
+    font-weight: 700 !important;
+    line-height: 1.35 !important;
+    flex-shrink: 0 !important;
+}
+
+/* CARD 3's title is a flex layout with the "Ready/Waiting" pill
+ * inside — preserve that by NOT shrinking it. */
+.gray-hifi .v2-stage-card.s3 .v2-stage-card-title {
+    flex: 1 !important;
+}
+
+.gray-hifi .v2-stage-card-subtitle {
+    font-size: 11px !important;
+    color: var(--gh-ink-3) !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    line-height: 1.35 !important;
+}
+
+/* The inline pill inside the title ("✓ 配置完成" etc.) — keep it
+ * compact and on the same baseline. */
+.gray-hifi .v2-stage-pill {
+    font-size: 11px !important;
+    padding: 1px 7px !important;
+}
+
+/* Tighter card body — 14px instead of the 18~24 the originals use. */
+.gray-hifi .v2-stage-card-body {
+    padding: 8px 14px 14px !important;
+}
+
+.gray-hifi .v2-config-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+    gap: 14px !important;
+    align-items: stretch !important;
+}
+
+.gray-hifi .v2-config-item {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 10px !important;
+    min-width: 0 !important;
+    padding: 14px !important;
+    border-radius: 12px !important;
+    background: var(--gh-bg-soft) !important;
+    border-color: var(--gh-line) !important;
+}
+
+.gray-hifi .v2-config-item--compact {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
+    justify-content: flex-start !important;
+    gap: 8px !important;
+    padding: 12px !important;
+    border: 1px solid var(--gh-line) !important;
+    border-radius: 10px !important;
+    background: var(--gh-bg-soft) !important;
+    box-shadow: none !important;
+}
+
+.gray-hifi .v2-config-item--wide {
+    grid-column: 1 / -1 !important;
+}
+
+.gray-hifi .v2-config-item-label {
+    margin-bottom: 0 !important;
+    font-size: 11px !important;
+    letter-spacing: 0 !important;
+    color: var(--gh-ink-3) !important;
+    line-height: 1.4 !important;
+}
+
+.gray-hifi .v2-config-item--compact > .v2-config-item-label {
+    font-weight: 500 !important;
+}
+
+.gray-hifi .v2-config-item-control {
+    min-width: 0 !important;
+}
+
+.gray-hifi .v2-config-select {
+    width: 100% !important;
+    height: 32px !important;
+    justify-content: space-between !important;
+    border-radius: 7px !important;
+    background: var(--gh-bg-elev) !important;
+    border-color: var(--gh-line) !important;
+    padding-inline: 10px !important;
+    color: var(--gh-ink-2) !important;
+    font-size: 12px !important;
+    font-weight: 400 !important;
+}
+
+.gray-hifi .v2-config-item--compact > .v2-config-select {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    background: var(--gh-bg-elev) !important;
+    border-color: var(--gh-line) !important;
+    color: var(--gh-ink-2) !important;
+}
+
+.gray-hifi .v2-config-select > span {
+    font-weight: 400 !important;
+}
+
+.gray-hifi .v2-config-select > .truncate {
+    color: inherit !important;
+}
+
+.gray-hifi .v2-config-static {
+    display: inline-flex !important;
+    align-items: center !important;
+    overflow: hidden !important;
+    white-space: nowrap !important;
+    text-overflow: ellipsis !important;
+    cursor: default !important;
+    color: var(--gh-ink-3) !important;
+}
+
+.gray-hifi .v2-config-item--compact > .v2-config-select:hover,
+.gray-hifi .v2-config-item--compact > .v2-config-select:focus-visible {
+    background: var(--gh-bg-elev) !important;
+    border-color: var(--gh-line-strong) !important;
+}
+
+.gray-hifi .v2-config-item-hint {
+    margin-top: 0 !important;
+    font-size: 11px !important;
+    line-height: 1.45 !important;
+    color: var(--gh-ink-3) !important;
+    max-width: 28ch !important;
+}
+
+.gray-hifi .v2-config-item--compact > .v2-config-item-hint {
+    min-height: 32px !important;
+}
+
+.gray-hifi .v2-config-toggle-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.gray-hifi .v2-config-toggle {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--gh-line);
+    background: var(--gh-bg-elev);
+    cursor: pointer;
+}
+
+.gray-hifi .v2-config-toggle-main {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.gray-hifi .v2-config-toggle-title {
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1.35;
+    color: var(--gh-ink-1);
+}
+
+.gray-hifi .v2-config-toggle-desc {
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--gh-ink-3);
+}
+
+@media (max-width: 1100px) {
+    .gray-hifi .v2-config-grid,
+    .gray-hifi .v2-config-toggle-list {
+        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    }
+}
+
+@media (max-width: 920px) {
+    .gray-hifi .v2-config-grid,
+    .gray-hifi .v2-config-toggle-list {
+        grid-template-columns: 1fr !important;
+    }
+
+    .gray-hifi .v2-config-item--compact {
+        gap: 6px !important;
+    }
+
+    .gray-hifi .v2-config-item--compact > .v2-config-select {
+        width: 100% !important;
+        max-width: none !important;
+    }
+}
+
+/* ============================================================
+ * Round-2 surgery — match reference more closely.
+ *   • The original v2-stepper is hidden; a hi-fi `.gh-stepper`
+ *     takes its place (rendered conditionally on `hifi` in JSX).
+ *   • The white skill-summary card flattens to an unframed strip
+ *     (background/border/shadow/LIN logo/labels all dropped).
+ *   • Card heads truly inline title + subtitle on one baseline.
+ * ============================================================ */
+
+/* ── Hi-fi stepper ──────────────────────────────────────────── */
+.gray-hifi .v2-stepper {
+    display: none !important;
+}
+
+.gray-hifi .gh-stepper {
+    --gh-done-pct: 0%;
+    position: relative;
+    margin: 0;
+    padding: 8px 6px;
+    background: var(--gh-bg-elev);
+    border: 1px solid var(--gh-line);
+    border-radius: 10px;
+}
+
+.gray-hifi .gh-stepper-row {
+    display: grid;
+    /* 1.5fr for the origin column (it carries the longer subtitle);
+     * the three step columns each take 1fr. */
+    grid-template-columns: 1.5fr repeat(3, 1fr);
+    align-items: center;
+    position: relative;
+    column-gap: 0;
+}
+
+/* Connector line a) origin circle → step 1 circle — always gray. */
+.gray-hifi .gh-stepper-row::before {
+    display: none;
+}
+
+/* Connector line b) step 1 circle → step 3 circle — fills based on done-pct. */
+.gray-hifi .gh-stepper-row::after {
+    content: "";
+    position: absolute;
+    left: calc((100% - 28px) * (1.5 / 4.5) + 16px);
+    width: calc((100% - 28px) * (2 / 4.5));
+    top: 50%;
+    height: 1.5px;
+    background: linear-gradient(
+        90deg,
+        var(--gh-st-done) 0%,
+        var(--gh-st-done) var(--gh-done-pct),
+        var(--gh-line-strong) var(--gh-done-pct)
+    );
+    z-index: 0;
+    transform: translateY(-1px);
+}
+
+.gray-hifi .gh-step {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 4px 12px 4px 6px;
+    position: relative;
+    z-index: 1;
+    min-width: 0;
+}
+
+.gray-hifi .gh-step-circle {
+    width: 22px;
+    height: 22px;
+    min-width: 22px;
+    border-radius: 50%;
+    background: var(--gh-bg-elev);
+    border: 1.5px solid var(--gh-line-strong);
+    color: var(--gh-ink-3);
+    display: inline-grid;
+    place-items: center;
+    font-family: var(--gh-font-mono);
+    font-size: 11px;
+    font-weight: 700;
+    box-shadow: 0 0 0 3px var(--gh-bg-elev);
+    flex-shrink: 0;
+    transition: background .2s ease, color .2s ease, border-color .2s ease;
+}
+
+.gray-hifi .gh-step.is-active .gh-step-circle {
+    background: var(--gh-brand);
+    border-color: var(--gh-brand);
+    color: #fff;
+}
+
+
+.gray-hifi .gh-step.is-done .gh-step-circle {
+    background: var(--gh-st-done);
+    border-color: var(--gh-st-done);
+    color: #fff;
+    font-size: 0;
+}
+
+.gray-hifi .gh-step.is-done .gh-step-circle::before {
+    content: "✓";
+    font-family: system-ui, sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.gray-hifi .gh-step-origin .gh-step-circle {
+    width: 24px;
+    height: 24px;
+    background: var(--gh-ink-1);
+    border-color: var(--gh-ink-1);
+    color: #fff;
+}
+
+.gray-hifi .gh-step-origin {
+    padding-right: 18px;
+    margin-right: 6px;
+}
+
+.gray-hifi .gh-step-origin::after {
+    content: "";
+    position: absolute;
+    right: 0;
+    top: 4px;
+    bottom: 4px;
+    width: 1.5px;
+    background: var(--gh-line-strong);
+    border-radius: 999px;
+}
+
+.gray-hifi .gh-step-origin .gh-step-circle::before {
+    content: "▶";
+    font-size: 11px;
+    margin-left: 1px;
+}
+
+.gray-hifi .gh-step-body {
+    min-width: 0;
+    line-height: 1.3;
+    background: var(--gh-bg-elev);
+    padding-right: 4px;
+}
+
+.gray-hifi .gh-step-name {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--gh-ink-2);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.gray-hifi .gh-step.is-active .gh-step-name {
+    color: var(--gh-brand-ink);
+}
+
+.gray-hifi .gh-step-origin .gh-step-name {
+    color: var(--gh-ink-1);
+    font-size: 14px;
+}
+
+.gray-hifi .gh-step-sub {
+    font-size: 11px;
+    color: var(--gh-ink-3);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* ── White skill-summary card → unframed strip ──────────────── */
+.gray-hifi .gh-skill-summary {
+    background: transparent !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    margin: 0 0 8px !important;
+    border-radius: 0 !important;
+    justify-content: flex-start !important;
+    gap: 0 !important;
+}
+
+/* The card has two children: a left container (LIN logo + 3 select groups
+ * inside a sub-flex) and... actually only one. So target the first child. */
+.gray-hifi .gh-skill-summary > div:first-child {
+    gap: 16px !important;
+    flex-wrap: wrap;
+}
+
+/* Hide the LIN monogram tile — the breadcrumb in AppTopBar already
+ * communicates which skill is being analyzed. */
+.gray-hifi .gh-skill-summary > div:first-child > div:first-child {
+    display: none !important;
+}
+
+/* The inner container holding the 3 select groups */
+.gray-hifi .gh-skill-summary > div:first-child > div:nth-child(2) > div {
+    gap: 12px !important;
+}
+
+/* Drop the small uppercase mini-labels above each select; the select
+ * value itself carries enough meaning. */
+.gray-hifi .gh-skill-summary span[style*="text-transform"] {
+    display: none !important;
+}
+
+/* Each select group is a column flex (label + select). After hiding the
+ * label, slim the select itself and turn it into a chip-like control. */
+.gray-hifi .gh-skill-summary select {
+    height: 26px !important;
+    min-width: 0 !important;
+    padding: 2px 22px 2px 10px !important;
+    font-size: 11px !important;
+    font-weight: 600 !important;
+    background-color: var(--gh-bg-soft) !important;
+    border: 1px solid var(--gh-line) !important;
+    border-radius: 5px !important;
+    color: var(--gh-ink-1) !important;
+}
+
+/* Prefix each select with a tiny "Skill / A / B" tag for affordance,
+ * since labels are hidden. The three columns sit in document order:
+ * 1st = Skill, 2nd = A version, 3rd = B version. */
+.gray-hifi .gh-skill-summary > div:first-child > div:nth-child(2) > div::before {
+    font-family: var(--gh-font-mono);
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--gh-ink-3);
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    margin-right: 6px;
+    align-self: center;
+}
+
+/* Skill selector (1st column) is now in AppTopBar (page.tsx detail-views title cluster).
+ * Hide it here to avoid double-skill pickers — only A/B version selectors remain. */
+.gray-hifi .gh-skill-summary > div:first-child > div:nth-child(2) > div:nth-child(1) {
+    display: none !important;
+}
+
+.gray-hifi .gh-skill-summary > div:first-child > div:nth-child(2) > div:nth-child(2)::before {
+    content: "A";
+    color: var(--gh-ink-2);
+}
+
+.gray-hifi .gh-skill-summary > div:first-child > div:nth-child(2) > div:nth-child(3)::before {
+    content: "B";
+    color: var(--gh-brand-ink);
+}
+
+/* Realign the inner column-flex to row so the prefix sits next to the select. */
+.gray-hifi .gh-skill-summary > div:first-child > div:nth-child(2) > div {
+    flex-direction: row !important;
+    align-items: center !important;
+}
+
+/* ── Card head: title + subtitle truly on one baseline ──────── */
+/* Earlier rule got partly eaten because some card titles use inline
+ * style={ display:'flex' } (CARD 3). We re-pin the layout. */
+.gray-hifi .v2-stage-title-block {
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: baseline !important;
+    gap: 8px !important;
+    flex: 1 !important;
+    min-width: 0 !important;
+}
+
+.gray-hifi .v2-stage-card-title {
+    display: inline-flex !important;
+    align-items: baseline !important;
+    gap: 6px !important;
+    flex: 0 0 auto !important;
+    max-width: max-content !important;
+    width: auto !important;
+    justify-content: flex-start !important;
+}
+
+.gray-hifi .v2-stage-card.s3 .v2-stage-card-title {
+    flex: 0 1 auto !important;
+    max-width: max-content !important;
+    width: auto !important;
+}
+
+.gray-hifi .v2-stage-card-subtitle {
+    flex: 0 1 auto !important;
+    max-width: min(72ch, 100%) !important;
+    min-width: 0 !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+}
+
+/* ============================================================
+ * Round-3 — CARD 3 hi-fi verdict.
+ *   result-context · DECISION card · 3 dim rows · raw-data folder.
+ * Everything below assumes `abScoring.{capability,cost,stability}`
+ * has already populated `score`, `tone`, `label`, etc.
+ * ============================================================ */
+
+.gray-hifi .gh-verdict-block {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    font-family: inherit;
+}
+
+.gray-hifi .gh-verdict-empty {
+    padding: 18px;
+    border: 1px dashed var(--gh-line-strong);
+    border-radius: 8px;
+    background: var(--gh-bg-soft);
+    text-align: center;
+    color: var(--gh-ink-3);
+}
+
+.gray-hifi .gh-verdict-empty-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--gh-ink-2);
+    margin-bottom: 4px;
+}
+
+.gray-hifi .gh-verdict-empty-sub {
+    font-size: 12px;
+}
+
+/* ── ① result-context ───────────────────────────────────────── */
+.gray-hifi .gh-rc {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    font-size: 12px;
+}
+
+.gray-hifi .gh-rc-skill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--gh-font-sans);
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.5;
+    color: var(--gh-ink-1);
+}
+
+.gray-hifi .gh-rc-ver {
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: var(--gh-bg-soft);
+    color: var(--gh-ink-2);
+    font-family: var(--gh-font-mono);
+    font-size: 11px;
+    font-weight: 500;
+}
+
+.gray-hifi .gh-rc-sep {
+    color: var(--gh-ink-4);
+}
+
+.gray-hifi .gh-rc-ab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--gh-ink-2);
+}
+
+.gray-hifi .gh-rc-tag {
+    font-family: var(--gh-font-mono);
+    font-size: 11px;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 4px;
+    color: #fff;
+}
+
+.gray-hifi .gh-rc-tag.a { background: var(--gh-ink-2); }
+.gray-hifi .gh-rc-tag.b { background: var(--gh-brand); }
+
+.gray-hifi .gh-rc-vs {
+    color: var(--gh-ink-3);
+    font-size: 11px;
+    padding: 0 4px;
+}
+
+.gray-hifi .gh-rc-policy {
+    margin-left: auto;
+    font-family: var(--gh-font-mono);
+    color: var(--gh-ink-3);
+    font-size: 11px;
+}
+
+/* ── ② DECISION card ────────────────────────────────────────── */
+.gray-hifi .gh-decision {
+    position: relative;
+    display: grid;
+    grid-template-columns: 130px 1fr auto;
+    gap: 18px;
+    border: 1px solid var(--gh-line);
+    border-radius: 10px;
+    background: var(--gh-bg-elev);
+    overflow: hidden;
+}
+
+/* left edge color bar, conveying the decision tone at a glance */
+.gray-hifi .gh-decision::before {
+    content: "";
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 4px;
+}
+
+.gray-hifi .gh-decision.reject::before { background: var(--gh-st-fail); }
+.gray-hifi .gh-decision.pass::before   { background: var(--gh-st-done); }
+.gray-hifi .gh-decision.warn::before   { background: var(--gh-st-warn); }
+.gray-hifi .gh-decision.idle::before   { background: var(--gh-line-strong); }
+
+.gray-hifi .gh-decision-verdict {
+    padding: 16px 14px 16px 18px;
+    border-right: 1px solid var(--gh-line);
+    background: linear-gradient(180deg, rgba(0, 0, 0, .015), transparent);
+    display: flex;
+    align-items: center;
+}
+
+.gray-hifi .gh-decision-score {
+    font-size: 12px;
+    color: var(--gh-ink-2);
+}
+
+.gray-hifi .gh-decision.reject .gh-decision-score b { color: var(--gh-st-fail); }
+.gray-hifi .gh-decision.pass   .gh-decision-score b { color: var(--gh-st-done); }
+.gray-hifi .gh-decision.warn   .gh-decision-score b { color: var(--gh-st-warn); }
+.gray-hifi .gh-decision.idle   .gh-decision-score b { color: var(--gh-ink-1); }
+
+.gray-hifi .gh-decision-score b {
+    font-family: var(--gh-font-mono);
+    font-size: 30px;
+    line-height: 1;
+    font-weight: 700;
+}
+
+.gray-hifi .gh-decision-body {
+    padding: 14px 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+.gray-hifi .gh-decision-headline {
+    font-size: 14px;
+    color: var(--gh-ink-1);
+    line-height: 1.55;
+}
+
+.gray-hifi .gh-decision-headline .hl {
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-weight: 700;
+    background: var(--gh-st-warn-soft);
+    color: var(--gh-st-warn);
+    font-size: 12px;
+    margin: 0 2px;
+}
+
+.gray-hifi .gh-decision-headline .num {
+    font-family: var(--gh-font-mono);
+    font-weight: 600;
+}
+
+.gray-hifi .gh-decision-next {
+    font-size: 12px;
+    color: var(--gh-ink-3);
+    line-height: 1.55;
+}
+
+.gray-hifi .gh-decision-next b {
+    color: var(--gh-ink-2);
+    font-weight: 600;
+}
+
+.gray-hifi .gh-decision-actions {
+    padding: 14px 14px 14px 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.gray-hifi .gh-btn.is-dark {
+    background: var(--gh-ink-1);
+    color: #fff;
+    border-color: var(--gh-ink-1);
+}
+
+.gray-hifi .gh-btn.is-dark:hover {
+    background: #000;
+    border-color: #000;
+}
+
+/* ── ③ dim rows ─────────────────────────────────────────────── */
+.gray-hifi .gh-dims {
+    border: 1px solid var(--gh-line);
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+.gray-hifi .gh-dims-row {
+    display: grid;
+    grid-template-columns: 200px 88px 1fr 220px;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 14px;
+    background: var(--gh-bg-elev);
+    border-bottom: 1px solid var(--gh-line);
+    font-size: 12px;
+}
+
+.gray-hifi .gh-dims-row:last-child { border-bottom: 0; }
+
+.gray-hifi .gh-dims-row.gh-dims-head {
+    background: var(--gh-bg-soft);
+    padding: 6px 14px;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--gh-ink-3);
+    text-transform: uppercase;
+    letter-spacing: .08em;
+}
+
+.gray-hifi .gh-dim-name-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+}
+
+.gray-hifi .gh-dim-name-row {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+}
+
+.gray-hifi .gh-dim-name {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--gh-ink-1);
+}
+
+.gray-hifi .gh-dim-pill {
+    font-size: 11px;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: var(--gh-bg-soft);
+    color: var(--gh-ink-3);
+    white-space: nowrap;
+}
+
+.gray-hifi .gh-dim-pill.good { background: var(--gh-st-done-soft); color: var(--gh-st-done); }
+.gray-hifi .gh-dim-pill.warn { background: var(--gh-st-warn-soft); color: var(--gh-st-warn); }
+.gray-hifi .gh-dim-pill.fail { background: var(--gh-st-fail-soft); color: var(--gh-st-fail); }
+
+.gray-hifi .gh-dim-desc {
+    font-size: 11px;
+    color: var(--gh-ink-3);
+}
+
+.gray-hifi .gh-dim-score {
+    font-family: var(--gh-font-mono);
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: -.5px;
+    color: var(--gh-ink-2);
+}
+
+.gray-hifi .gh-dim-score.good { color: var(--gh-st-done); }
+.gray-hifi .gh-dim-score.warn { color: var(--gh-st-warn); }
+.gray-hifi .gh-dim-score.fail { color: var(--gh-st-fail); }
+
+.gray-hifi .gh-dim-outof {
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--gh-ink-3);
+    margin-left: 2px;
+}
+
+.gray-hifi .gh-dim-bar-cell {
+    display: flex;
+    align-items: center;
+    height: 18px;
+}
+
+.gray-hifi .gh-dim-bar-track {
+    width: 100%;
+    height: 5px;
+    background: var(--gh-bg-soft);
+    border-radius: 3px;
+    position: relative;
+    overflow: visible;
+}
+
+.gray-hifi .gh-dim-bar-track::before,
+.gray-hifi .gh-dim-bar-track::after {
+    content: "";
+    position: absolute;
+    top: -2px;
+    bottom: -2px;
+    width: 1px;
+    background: var(--gh-line-strong);
+}
+
+.gray-hifi .gh-dim-bar-track::before { left: 50%; }
+.gray-hifi .gh-dim-bar-track::after  { left: 75%; }
+
+.gray-hifi .gh-dim-bar-fill {
+    height: 100%;
+    border-radius: 3px;
+    background: var(--gh-ink-3);
+    transition: width .3s ease;
+}
+
+.gray-hifi .gh-dim-bar-fill.good { background: var(--gh-st-done); }
+.gray-hifi .gh-dim-bar-fill.warn { background: var(--gh-st-warn); }
+.gray-hifi .gh-dim-bar-fill.fail { background: var(--gh-st-fail); }
+
+.gray-hifi .gh-dim-evidence {
+    font-size: 11px;
+    color: var(--gh-ink-3);
+    line-height: 1.5;
+    font-family: var(--gh-font-sans);
+}
+
+.gray-hifi .gh-dim-evidence .row {
+    display: block;
+}
+
+.gray-hifi .gh-dim-evidence .num {
+    font-family: var(--gh-font-mono);
+    color: var(--gh-ink-1);
+    font-weight: 600;
+}
+
+.gray-hifi .gh-dim-evidence .arrow {
+    color: var(--gh-ink-4);
+    margin: 0 4px;
+}
+
+.gray-hifi .gh-dim-evidence .delta {
+    font-family: var(--gh-font-mono);
+    font-weight: 700;
+}
+
+.gray-hifi .gh-dim-evidence .delta.up   { color: var(--gh-st-done); }
+.gray-hifi .gh-dim-evidence .delta.down { color: var(--gh-st-fail); }
+
+/* ── ④ raw-data accordion ───────────────────────────────────── */
+.gray-hifi .gh-raw {
+    border: 1px solid var(--gh-line);
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+.gray-hifi .gh-raw-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 14px;
+    background: var(--gh-bg-soft);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--gh-ink-1);
+    cursor: pointer;
+    user-select: none;
+    border: 0;
+    width: 100%;
+    text-align: left;
+    font-family: inherit;
+}
+
+.gray-hifi .gh-raw-head:hover { background: var(--gh-bg-elev); }
+
+.gray-hifi .gh-raw-chev {
+    width: 7px;
+    height: 7px;
+    border-right: 1.5px solid var(--gh-ink-3);
+    border-bottom: 1.5px solid var(--gh-ink-3);
+    transform: rotate(45deg);
+    transition: transform .25s ease;
+    margin-right: 4px;
+    margin-top: -2px;
+}
+
+.gray-hifi .gh-raw.is-collapsed .gh-raw-chev {
+    transform: rotate(-45deg);
+}
+
+.gray-hifi .gh-raw-formula {
+    margin-left: auto;
+    font-family: var(--gh-font-mono);
+    font-size: 11px;
+    color: var(--gh-ink-3);
+    font-weight: 500;
+}
+
+.gray-hifi .gh-raw-body {
+    padding: 14px;
+    background: var(--gh-bg-elev);
+    overflow: hidden;
+    max-height: 1200px;
+    opacity: 1;
+    transition: max-height .3s ease, opacity .2s ease, padding .25s ease;
+}
+
+.gray-hifi .gh-raw.is-collapsed .gh-raw-body {
+    max-height: 0;
+    opacity: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+}
+
+.gray-hifi .gh-raw-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+
+.gray-hifi .gh-raw-card {
+    border: 1px solid var(--gh-line);
+    border-radius: 6px;
+    padding: 12px 14px;
+    background: var(--gh-bg);
+}
+
+.gray-hifi .gh-raw-card-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 8px;
+}
+
+.gray-hifi .gh-raw-card-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--gh-ink-1);
+}
+
+.gray-hifi .gh-raw-card-tag {
+    font-family: var(--gh-font-mono);
+    font-size: 11px;
+    color: var(--gh-ink-3);
+    font-weight: 600;
+}
+
+.gray-hifi .gh-raw-card .kv {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    gap: 14px;
+    padding: 3px 0;
+    font-size: 12px;
+    border-bottom: 1px dashed var(--gh-line);
+}
+
+.gray-hifi .gh-raw-card .kv:last-of-type { border-bottom: 0; }
+
+.gray-hifi .gh-raw-card .kv .k {
+    color: var(--gh-ink-3);
+    text-decoration: underline;
+    text-decoration-style: dotted;
+}
+
+.gray-hifi .gh-raw-card .kv .a,
+.gray-hifi .gh-raw-card .kv .b {
+    font-family: var(--gh-font-mono);
+    font-weight: 600;
+    color: var(--gh-ink-1);
+    min-width: 56px;
+    text-align: right;
+}
+
+.gray-hifi .gh-raw-card .kv .a::before {
+    content: "A ";
+    color: var(--gh-ink-3);
+    font-weight: 500;
+    font-family: inherit;
+}
+
+.gray-hifi .gh-raw-card .kv .b::before {
+    content: "B ";
+    color: var(--gh-brand);
+    font-weight: 500;
+    font-family: inherit;
+}
+
+.gray-hifi .gh-raw-card .delta {
+    margin-top: 6px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 3px 0;
+    font-size: 12px;
+}
+
+.gray-hifi .gh-raw-card .delta .k {
+    color: var(--gh-ink-3);
+    text-decoration: underline;
+    text-decoration-style: dotted;
+}
+
+.gray-hifi .gh-raw-card .delta .v {
+    font-family: var(--gh-font-mono);
+    font-weight: 700;
+    font-size: 12px;
+}
+
+.gray-hifi .gh-raw-card .delta .v.down { color: var(--gh-st-fail); }
+.gray-hifi .gh-raw-card .delta .v.up   { color: var(--gh-st-done); }
+.gray-hifi .gh-raw-card .delta .v.warn { color: var(--gh-st-warn); }
+
+.gray-hifi .gh-raw-card .formula {
+    margin-top: 8px;
+    padding: 7px 10px;
+    background: var(--gh-bg-soft);
+    border-radius: 4px;
+    font-family: var(--gh-font-mono);
+    font-size: 11px;
+    color: var(--gh-ink-2);
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+/* The yellow N/R note row sits between v2-stage-card-header and v2-stage-card-body
+ * on CARD 3. The original `padding: '12px 24px'` is too tall for the new compact
+ * pass — slim it down here. */
+.gray-hifi .v2-stage-card.s3 > div[style*="FEF3C7"] {
+    padding: 6px 14px !important;
+    font-size: 11px !important;
+}
+
+.gray-hifi .v2-stage-card.s3 > div[style*="FEF3C7"] > div:first-child {
+    font-size: 12px !important;
+}
+
+.gray-hifi .v2-stage-card.s3 > div[style*="FEF3C7"] > div:last-child {
+    padding: 3px 8px !important;
+    font-size: 11px !important;
+}

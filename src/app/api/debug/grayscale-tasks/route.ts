@@ -99,8 +99,17 @@ function safeParse(value: string | null | undefined): JsonRecord {
     }
 }
 
+function withDefaultConfig(config: JsonRecord): JsonRecord {
+    return {
+        ...config,
+        autoEval: true,
+        recordTriggerDetails: true,
+    };
+}
+
 type BoundSkill = { id: string; name: string };
 type BoundVersion = { id: string; version: number };
+const NONE_VERSION_ID = '__NONE__';
 
 async function findBoundSkill(skillId: string, user: string) {
     return (prisma as unknown as GrayscalePrisma).skill.findFirst({
@@ -134,7 +143,7 @@ export async function GET(req: NextRequest) {
             take: 50,
         });
         const parsed = tasks.map((t) => {
-            const configJson = safeParse(t.configJson);
+            const configJson = withDefaultConfig(safeParse(t.configJson));
             const caseStatesJson = safeParse(t.caseStatesJson);
             const storeKey = `${user}:${t.id}`;
             const activeRun = activeRuns().get(storeKey) || null;
@@ -165,6 +174,8 @@ export async function POST(req: NextRequest) {
         const { user, taskName } = body;
         const skillId = String(body.skillId || '').trim();
         const versionBId = String(body.versionBId || '').trim();
+        const rawVersionAId = String(body.versionAId || '').trim();
+        const versionAId = rawVersionAId || NONE_VERSION_ID;
 
         if (!user || !taskName?.trim() || !skillId || !versionBId) {
             return NextResponse.json({ error: 'user, taskName, skillId and versionBId are required' }, { status: 400 });
@@ -177,6 +188,12 @@ export async function POST(req: NextRequest) {
         const version = await findBoundVersion(skill.id, versionBId);
         if (!version) {
             return NextResponse.json({ error: 'skill version not found' }, { status: 404 });
+        }
+        if (versionAId !== NONE_VERSION_ID) {
+            const controlVersion = await findBoundVersion(skill.id, versionAId);
+            if (!controlVersion) {
+                return NextResponse.json({ error: 'control skill version not found' }, { status: 404 });
+            }
         }
 
         const existing = await (prisma as unknown as GrayscalePrisma).grayscaleTask.findFirst({
@@ -205,13 +222,19 @@ export async function POST(req: NextRequest) {
                 skillVersion: version.version,
                 skillVersionId: version.id,
                 taskName: taskName.trim(),
-                configJson: JSON.stringify({ skillId: skill.id, versionAId: '__NONE__', versionBId: version.id }),
+                configJson: JSON.stringify({
+                    skillId: skill.id,
+                    versionAId,
+                    versionBId: version.id,
+                    autoEval: true,
+                    recordTriggerDetails: true,
+                }),
             },
         });
         return NextResponse.json({
             ...task,
             configJson: {
-                ...safeParse(task.configJson),
+                ...withDefaultConfig(safeParse(task.configJson)),
                 skillId: task.skillId,
                 versionBId: task.skillVersionId,
             },

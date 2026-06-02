@@ -1498,7 +1498,7 @@ function DetailPage() {
                         onMouseOver={(e) => e.currentTarget.style.color = 'var(--primary-hover)'}
                         onMouseOut={(e) => e.currentTarget.style.color = 'var(--primary)'}
                     >
-                        Skill-insight
+                        Agent-insight
                     </span>
                     <span style={{ flexShrink: 0, color: 'var(--border-dark)' }}>|</span>
                     <span style={{ color: 'var(--foreground-secondary)', overflow: 'hidden', textOverflow: 'ellipsis' }}>

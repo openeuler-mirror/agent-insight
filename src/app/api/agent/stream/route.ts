@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { runGeneralAgent } from '@/lib/engine/general-agent';
+import { withBackgroundOpencodeSlot } from '@/lib/engine/general-agent/concurrency-limiter';
 import { awaitInteraction, cancelStream } from '@/lib/engine/general-agent/pending-requests';
 import type { ChatHandlers } from '@/lib/engine/skill-generation/opencode-agent-cli/opencode-client';
 
@@ -154,22 +155,35 @@ export async function POST(request: Request) {
         },
       };
 
-      runGeneralAgent({
-        user,
-        query,
-        skill: typeof body.skill === 'string' && body.skill.trim() ? body.skill.trim() : undefined,
-        skillVersion: typeof body.skillVersion === 'number' ? body.skillVersion : undefined,
-        system: typeof body.system === 'string' && body.system.trim() ? body.system : undefined,
-        sessionId: typeof body.sessionId === 'string' && body.sessionId.trim() ? body.sessionId : undefined,
-        sessionTitle: typeof body.sessionTitle === 'string' ? body.sessionTitle : undefined,
-        agent: typeof body.agent === 'string' && body.agent.trim() ? body.agent : undefined,
-        model: body.model && typeof body.model === 'object' ? body.model : undefined,
-        modelOptions:
-          body.modelOptions && typeof body.modelOptions === 'object' ? body.modelOptions : undefined,
-        interactionPolicy: 'manual',
-        handlers,
-        timeoutMs: typeof body.timeoutMs === 'number' ? body.timeoutMs : undefined,
-      })
+      // 前台交互式 SSE: displayOnly=true 让这条 opencode 调用在 dashboard "后台任务"
+      // 列表里可见(方便排查"现在 opencode 有谁在跑"), 但不占 5-slot 信号量配额——
+      // 否则 A/B 批量任务跑满 5 slot 时, 用户点聊天会被卡住等队列。
+      // 物理保护层让 opencode 后端自身的拒绝/超时处理, 这里不做额外排队。
+      void withBackgroundOpencodeSlot(
+        () => runGeneralAgent({
+          user,
+          query,
+          skill: typeof body.skill === 'string' && body.skill.trim() ? body.skill.trim() : undefined,
+          skillVersion: typeof body.skillVersion === 'number' ? body.skillVersion : undefined,
+          system: typeof body.system === 'string' && body.system.trim() ? body.system : undefined,
+          sessionId: typeof body.sessionId === 'string' && body.sessionId.trim() ? body.sessionId : undefined,
+          sessionTitle: typeof body.sessionTitle === 'string' ? body.sessionTitle : undefined,
+          agent: typeof body.agent === 'string' && body.agent.trim() ? body.agent : undefined,
+          model: body.model && typeof body.model === 'object' ? body.model : undefined,
+          modelOptions:
+            body.modelOptions && typeof body.modelOptions === 'object' ? body.modelOptions : undefined,
+          interactionPolicy: 'manual',
+          handlers,
+          timeoutMs: typeof body.timeoutMs === 'number' ? body.timeoutMs : undefined,
+        }),
+        {
+          taskType: 'agent-stream',
+          user,
+          label: `agent-stream · ${user}`,
+          skill: typeof body.skill === 'string' && body.skill.trim() ? body.skill.trim() : undefined,
+          displayOnly: true,
+        },
+      )
         .then((result) => {
           send('done', {
             sessionId: result.sessionId,

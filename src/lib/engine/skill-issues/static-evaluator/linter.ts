@@ -57,8 +57,13 @@ export function lintSkillContent(content: string): LinterDiagnosis[] {
 
   let parsed: { data: Record<string, unknown>; raw: string } | null = null;
   try {
-    const m = matter(content);
-    if (!m.matter || m.matter.trim() === '') {
+    // 传一个空 options 对象以绕过 gray-matter 的模块级缓存：命中缓存时它返回
+    // `Object.assign({}, cached)`，只拷贝可枚举属性，会丢掉非枚举的 `matter`/`orig`。
+    // 于是同一段内容第 2 次解析起 `m.matter` 变 undefined，误报 frontmatter_missing。
+    // 用 `m.data`（可枚举，缓存命中也在）判定是否存在 frontmatter。
+    const m = matter(content, {});
+    const data = (m.data || {}) as Record<string, unknown>;
+    if (Object.keys(data).length === 0) {
       out.push({
         ruleId: 'frontmatter_missing',
         severity: 'high',
@@ -69,15 +74,15 @@ export function lintSkillContent(content: string): LinterDiagnosis[] {
         suggestedFix: '在文件开头添加：\n```\n---\nname: <kebab-case-name>\ndescription: <第三人称描述>\n---\n```',
       });
     } else {
-      parsed = { data: (m.data || {}) as Record<string, unknown>, raw: m.matter };
+      parsed = { data, raw: m.matter || '' };
     }
-  } catch (e: any) {
+  } catch (e) {
     out.push({
       ruleId: 'frontmatter_invalid_yaml',
       severity: 'high',
       dimension: 'structure',
       summary: 'YAML frontmatter 语法错误',
-      evidence: String(e?.message || e),
+      evidence: e instanceof Error ? e.message : String(e),
       reasoning: 'YAML 解析失败，框架将无法读取 name/description。',
       suggestedFix: '修正 YAML 语法（缩进、引号、冒号空格）。',
     });

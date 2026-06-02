@@ -418,12 +418,7 @@ function StatusBadge({ active, calls7d }: { active: boolean; calls7d: number }) 
             </span>
         );
     }
-    return (
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 500, background: 'var(--sk-elevated)', color: 'var(--sk-fg2)' }}>
-            <span style={{ width: 6, height: 6, borderRadius: 999, background: 'var(--sk-fg3)' }} />
-            未激活
-        </span>
-    );
+    return null
 }
 
 function Sparkline({ data, color = 'var(--sk-success)', width = 100, height = 32 }: { data?: number[]; color?: string; width?: number; height?: number }) {
@@ -1394,7 +1389,7 @@ function TabOverview({
                         hasAnalysisHealth && analysisHealthPct < 80
                             ? (
                                 <>
-                                    综合健康分偏低，建议进入 Skills 分析页定位具体维度{issuesTotal > 0 ? <>；静态评估检出 <strong>{issuesTotal}</strong> 条问题</> : null}
+                                    综合健康分偏低，建议进入 Skills 评测页定位具体维度{issuesTotal > 0 ? <>；静态评估检出 <strong>{issuesTotal}</strong> 条问题</> : null}
                                 </>
                               )
                             : undefined
@@ -3291,7 +3286,7 @@ export function SkillCatalogV2({ refresh, onUploadClick }: { refresh: number; on
                         <line x1="12" y1="5" x2="12" y2="19" />
                         <line x1="5" y1="12" x2="19" y2="12" />
                     </svg>
-                    上传 Skill
+                    新建 Skill
                 </button>
             </div>
 
@@ -3321,8 +3316,8 @@ export function SkillCatalogV2({ refresh, onUploadClick }: { refresh: number; on
                         }}
                     >
                         <div style={{ width: 40, height: 40, borderRadius: 999, border: '1px dashed var(--sk-border-s)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>+</div>
-                        <div style={{ fontSize: 12, fontWeight: 500 }}>上传新的 Skill</div>
-                        <div style={{ fontSize: 10 }}>选择本地文件夹或导入企业 Skill</div>
+                        <div style={{ fontSize: 12, fontWeight: 500 }}>新建 Skill</div>
+                        <div style={{ fontSize: 10 }}>上传本地文件夹或由 AI 生成</div>
                     </button>
                     {filtered.length === 0 && !loading && (
                         <div style={{ gridColumn: '1 / -1', padding: 40, textAlign: 'center', color: 'var(--sk-fg3)', fontSize: 12 }}>

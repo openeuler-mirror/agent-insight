@@ -6,6 +6,11 @@ import { useLocale } from '@/lib/client/locale-context';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
 import { SectionShell, FindingsGrouped } from '@/components/evaluation';
+import { NewEvaluationBatchDialog, type NewBatchCreated } from '@/components/eval/NewEvaluationBatchDialog';
+import { ConfigMultiSelect } from '@/components/skills/ConfigMultiSelect';
+import { EvalTaskPicker } from '@/components/eval/EvalTaskPicker';
+import { ExecutionRecordsTable, type EvalRecordRow } from '@/components/eval/ExecutionRecordsTable';
+import { useBatchEvalResults } from '@/components/eval/useBatchEvalResults';
 import type { FindingItem, FindingGroup } from '@/components/evaluation';
 import '@/components/evaluation/evaluation-content.css';
 import '../debug.css';
@@ -111,9 +116,17 @@ interface BatchEvalTask {
         taskDescription?: string;
         sourceMode?: 'dataset' | 'trace';
         evaluatorId?: string;
+        // 评估器多选 (AB 式配置)。dataset 模式启动评测时透传给后端 trajectory/run 的 evaluators。
+        evaluators?: string[];
         traceSkillId?: string;
         traceTimeRange?: '1d' | '3d' | '7d';
         traceDatasetId?: string;
+        // 关联到「评测执行」页的批次 ID (evaluatorRunId)。任务级配置: 用户通过
+        // 配置区顶部「+ 新增评测任务」对话框创建一个空批次后, 把 ID 写回这里。
+        // 后续启动评测时透传给 /api/eval/trajectory/run 作 evaluatorRunId append。
+        evaluationBatchId?: string;
+        evaluationBatchTitle?: string;
+        evaluationBatchEvaluators?: string[];
     };
     caseStatesJson?: Record<string, CaseState>;
     traceEvalStatesJson?: Record<string, TraceEvalStateInfo>;
@@ -154,12 +167,35 @@ export function BatchEvaluation({
     newTaskTrigger,
     historyPanelTrigger,
     topConfigSlot,
+    headerActions,
+    controlled,
+    controlledDatasetIds,
+    controlledEvaluatorIds,
+    controlledEvalBatchId,
+    controlledEvalBatchTitle,
+    controlledSkillId,
+    controlledVersionId,
+    hideExecAndResult,
 }: {
     newTaskTrigger: number;
     historyPanelTrigger: number;
     /** 可选 slot：渲染在 ① 配置 body 顶部（task-strip 之前）。
         用例分析页 dataset 模式下注入"用例来源 toggle"——让 source 切换在 ① 配置里，与 trace 模式对称。 */
     topConfigSlot?: React.ReactNode;
+    /** 受控模式: 父页(用例分析)统一布局把 ① actions(评测任务选择器) 注入这里, 隐藏 BE 自带的。 */
+    headerActions?: React.ReactNode;
+    /** 受控模式开关: true 时 BE 隐藏自己的「调试任务 strip / 数据集·评估器下拉 / 评测任务选择器」,
+        改为单向同步父页传入的 controlled* 值; 任务无则静默 auto-create。 */
+    controlled?: boolean;
+    controlledDatasetIds?: string[];
+    controlledEvaluatorIds?: string[];
+    controlledEvalBatchId?: string;
+    controlledEvalBatchTitle?: string;
+    controlledSkillId?: string;
+    controlledVersionId?: string;
+    /** 受控模式下隐藏 BE 自带的 ② 评测执行 / ③ 分析结果——由父页(用例分析)统一渲染一份
+        (绑定评测任务、与 source 无关)，BE 这里只出 ① 配置(产生 Trace 的入口)。 */
+    hideExecAndResult?: boolean;
 }) {
     const { locale } = useLocale();
     const { user } = useAuth();
@@ -185,10 +221,66 @@ export function BatchEvaluation({
     const [selectedSkillId, setSelectedSkillId] = useState('');
     const [selectedVersionId, setSelectedVersionId] = useState('');
 
+    // 「新增评测任务」对话框开关。提交后通过 handleEvalBatchCreated 把 evaluatorRunId
+    // 写到 currentTask.configJson.evaluationBatchId, 启动评测时透传给后端 append 到批次。
+    const [newBatchDialogOpen, setNewBatchDialogOpen] = useState(false);
+
+    // 「▶ 启动」按钮 in-flight 锁: 防止重复点击。完成 (所有选中 case terminal) 或超时释放。
+    const [batchStartInFlight, setBatchStartInFlight] = useState(false);
+    // 启动后的轮询 timer: 拿后端最新 caseStatesJson 写到本地 React state, 状态徽章实时更新。
+    const batchPollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    // selectedCaseIds 的 ref 镜像, 给 polling tick 在 setInterval 闭包里读最新值。
+    const selectedCaseIdsRef = useRef<string[]>([]);
+
+    // 评测任务关联: React state (不靠 ref 模式), 同 A/B 修复模式。
+    const [evaluationBatchId, setEvaluationBatchId] = useState('');
+    const [evaluationBatchTitle, setEvaluationBatchTitle] = useState('');
+    const [evaluationBatchEvaluators, setEvaluationBatchEvaluators] = useState<string[]>([]);
+
     // Evaluator
     const [userEvaluators, setUserEvaluators] = useState<Array<{id: string; name: string}>>([]);
     const [selectedEvaluatorId, setSelectedEvaluatorId] = useState('preset-agent-trace-quality');
+    // 评估器多选 (AB 式配置): 默认勾选全部预置 ready 评估器; 与 selectedEvaluatorId(老单选) 并存,
+    // 启动评测时以这个数组为准 (透传 evaluators)。
+    const [selectedEvaluatorIds, setSelectedEvaluatorIds] = useState<string[]>(
+        () => BUILT_IN_EVALUATORS.map(e => e.id),
+    );
     const [showEvalDropdown, setShowEvalDropdown] = useState(false);
+
+    // 评测任务(批次)列表 —— 供"选历史评测任务" (EvalTaskPicker)。
+    const [evalTasks, setEvalTasks] = useState<Array<{ runId: string; taskTitle?: string; traceCount?: number; doneCount?: number; runningCount?: number; createdAt?: string }>>([]);
+    const reloadEvalTasks = useCallback(async () => {
+        if (!user) { setEvalTasks([]); return; }
+        try {
+            const res = await apiFetch(`/api/eval/trajectory/runs?user=${encodeURIComponent(user)}&limit=50`);
+            const data = await res.json();
+            if (Array.isArray(data?.runs)) {
+                setEvalTasks(data.runs.map((r: any) => ({
+                    runId: r.runId, taskTitle: r.taskTitle, traceCount: r.traceCount,
+                    doneCount: r.doneCount, runningCount: r.runningCount, createdAt: r.createdAt,
+                })));
+            }
+        } catch {/* 列表加载失败不阻塞主流程 */}
+    }, [user]);
+    useEffect(() => { reloadEvalTasks(); }, [reloadEvalTasks]);
+
+    // 受控同步: 父页(用例分析统一布局)的选择单向同步进 BE 内部 state,
+    // 这样 allCases / 启动 / 自动持久化等既有逻辑无需改动就跟随父页。
+    useEffect(() => { if (controlled && controlledDatasetIds !== undefined) setSelectedDatasetIds(controlledDatasetIds); }, [controlled, controlledDatasetIds]);
+    useEffect(() => { if (controlled && controlledEvaluatorIds !== undefined) setSelectedEvaluatorIds(controlledEvaluatorIds); }, [controlled, controlledEvaluatorIds]);
+    useEffect(() => {
+        if (!controlled) return;
+        if (controlledEvalBatchId !== undefined) setEvaluationBatchId(controlledEvalBatchId);
+        if (controlledEvalBatchTitle !== undefined) setEvaluationBatchTitle(controlledEvalBatchTitle);
+    }, [controlled, controlledEvalBatchId, controlledEvalBatchTitle]);
+    useEffect(() => {
+        if (!controlled) return;
+        if (controlledSkillId !== undefined) setSelectedSkillId(controlledSkillId);
+        if (controlledVersionId !== undefined) setSelectedVersionId(controlledVersionId);
+    }, [controlled, controlledSkillId, controlledVersionId]);
+
+    // 拉当前评测任务结果, 给 ② 表每行补"评估 Trace"(caseStates 里只有执行 trace sessionId)。
+    const evalResultsMap = useBatchEvalResults(user, evaluationBatchId || undefined, 5000);
 
     // Source mode: 'dataset' (existing flow) | 'trace' (evaluate from real executions)
     const [sourceMode, setSourceMode] = useState<'dataset' | 'trace'>('dataset');
@@ -229,6 +321,12 @@ export function BatchEvaluation({
     const [filterStatus, setFilterStatus] = useState<'all' | 'pending' | 'executed' | 'evaluated' | 'failed'>('all');
     const [searchQuery, setSearchQuery] = useState('');
     const [selectedCaseIds, setSelectedCaseIds] = useState<string[]>([]);
+    // 同步 ref, 给 polling tick 闭包用 (避免每次都重新创建 interval)
+    useEffect(() => { selectedCaseIdsRef.current = selectedCaseIds; }, [selectedCaseIds]);
+    // 组件卸载时清理 polling timer 避免内存泄漏
+    useEffect(() => () => {
+        if (batchPollTimerRef.current) clearInterval(batchPollTimerRef.current);
+    }, []);
 
     // Case execution states
     const [caseStates, setCaseStates] = useState<Record<string, CaseState>>({});
@@ -259,18 +357,35 @@ export function BatchEvaluation({
                     setCurrentTask(latest);
                     // Restore persisted config and case states for the most recent task
                     const cfg = latest.configJson || {};
-                    setSelectedDatasetIds(cfg.datasetIds || []);
-                    if (cfg.versionId) pendingVersionIdRef.current = cfg.versionId;
-                    setSelectedSkillId(cfg.skillId || '');
-                    setSelectedVersionId(cfg.versionId || '');
+                    // 受控模式(用例分析统一布局)下, 选择(数据集/评估器/skill/评测任务)由父页统一持有,
+                    // 这里不从 task config 回填, 避免和父页 sharedConfigBar 双源冲突。仅恢复执行态(caseStates)。
+                    if (!controlled) {
+                        setSelectedDatasetIds(cfg.datasetIds || []);
+                        if (cfg.versionId) pendingVersionIdRef.current = cfg.versionId;
+                        setSelectedSkillId(cfg.skillId || '');
+                        setSelectedVersionId(cfg.versionId || '');
+                        if (cfg.sourceMode) setSourceMode(cfg.sourceMode);
+                        if (cfg.evaluatorId) setSelectedEvaluatorId(cfg.evaluatorId);
+                        if (Array.isArray(cfg.evaluators) && cfg.evaluators.length > 0) setSelectedEvaluatorIds(cfg.evaluators);
+                        if (cfg.traceSkillId) setTraceSkillId(cfg.traceSkillId);
+                        if (cfg.traceTimeRange) setTraceTimeRange(cfg.traceTimeRange);
+                        if (cfg.traceDatasetId) setTraceDatasetId(cfg.traceDatasetId);
+                        // 评测批次关联 (修 "再次进入看不到上次评测任务" 问题)
+                        setEvaluationBatchId(cfg.evaluationBatchId || '');
+                        setEvaluationBatchTitle(cfg.evaluationBatchTitle || '');
+                        setEvaluationBatchEvaluators(Array.isArray(cfg.evaluationBatchEvaluators) ? cfg.evaluationBatchEvaluators : []);
+                    }
                     setTaskDescInput(cfg.taskDescription || '');
-                    if (cfg.sourceMode) setSourceMode(cfg.sourceMode);
-                    if (cfg.evaluatorId) setSelectedEvaluatorId(cfg.evaluatorId);
-                    if (cfg.traceSkillId) setTraceSkillId(cfg.traceSkillId);
-                    if (cfg.traceTimeRange) setTraceTimeRange(cfg.traceTimeRange);
-                    if (cfg.traceDatasetId) setTraceDatasetId(cfg.traceDatasetId);
                     setCaseStates(latest.caseStatesJson || {});
                     setTraceEvalStates(latest.traceEvalStatesJson || {});
+                } else if (controlled) {
+                    // 受控模式(用例分析统一布局)无历史任务 → 静默 auto-create, 不弹"调试任务"输入条。
+                    apiFetch('/api/debug/batch-tasks', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ user, taskName: defaultTaskName() }),
+                    }).then(r => r.ok ? r.json() : null)
+                      .then(t => { if (t?.id) { setCurrentTask(t); setTaskHistory([t]); setIsEditingTask(false); } })
+                      .catch(() => {});
                 } else {
                     // No history — enter editing mode with default name
                     setTaskNameInput(defaultTaskName());
@@ -278,10 +393,12 @@ export function BatchEvaluation({
                 }
             })
             .catch(() => {
+                if (controlled) return; // 受控模式下不弹输入条
                 setTaskNameInput(defaultTaskName());
                 setIsEditingTask(true);
             });
-    }, [user]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [user, controlled]);
 
     const persistTaskUpdate = useCallback(async (
         taskId: string,
@@ -292,9 +409,14 @@ export function BatchEvaluation({
             taskDescription?: string;
             sourceMode?: 'dataset' | 'trace';
             evaluatorId?: string;
+            evaluators?: string[];
             traceSkillId?: string;
             traceTimeRange?: '1d' | '3d' | '7d';
             traceDatasetId?: string;
+            // 跟 BatchEvalTask.configJson 同步, 用户创建评测任务后写入
+            evaluationBatchId?: string;
+            evaluationBatchTitle?: string;
+            evaluationBatchEvaluators?: string[];
         },
         caseStatesUpdate?: Record<string, CaseState>,
         traceEvalStatesUpdate?: Record<string, TraceEvalStateInfo>
@@ -312,6 +434,68 @@ export function BatchEvaluation({
             });
         } catch {}
     }, [user]);
+
+    // 「新增评测任务」对话框 onCreated: 设 React state (currentConfigRef useEffect 同步进 ref);
+    // 立刻 persist 一次显式带新字段, 不等下一次 state 变化才同步。
+    const handleEvalBatchCreated = useCallback((result: NewBatchCreated) => {
+        setNewBatchDialogOpen(false);
+        const task = currentTaskRef.current;
+        if (!task) return;
+        setEvaluationBatchId(result.evaluatorRunId);
+        setEvaluationBatchTitle(result.taskTitle);
+        setEvaluationBatchEvaluators(result.selectedEvaluators);
+        const baseConfig = task.configJson || {};
+        const nextConfig = {
+            datasetIds: baseConfig.datasetIds || [],
+            skillId: baseConfig.skillId || '',
+            versionId: baseConfig.versionId || '',
+            taskDescription: baseConfig.taskDescription,
+            sourceMode: baseConfig.sourceMode,
+            evaluatorId: baseConfig.evaluatorId,
+            traceSkillId: baseConfig.traceSkillId,
+            traceTimeRange: baseConfig.traceTimeRange,
+            traceDatasetId: baseConfig.traceDatasetId,
+            evaluators: baseConfig.evaluators ?? selectedEvaluatorIds,
+            evaluationBatchId: result.evaluatorRunId,
+            evaluationBatchTitle: result.taskTitle,
+            evaluationBatchEvaluators: result.selectedEvaluators,
+        };
+        persistTaskUpdate(task.id, nextConfig);
+        setCurrentTask(prev => prev ? {
+            ...prev,
+            configJson: { ...(prev.configJson || {}), ...nextConfig },
+        } : prev);
+        reloadEvalTasks();
+    }, [persistTaskUpdate, selectedEvaluatorIds, reloadEvalTasks]);
+
+    // 选一个已有评测任务(批次)关联到当前数据集任务。跟 handleEvalBatchCreated 同样持久化路径。
+    const handleSelectEvalBatch = useCallback((opt: { runId: string; taskTitle?: string }) => {
+        const task = currentTaskRef.current;
+        if (!task) return;
+        setEvaluationBatchId(opt.runId);
+        setEvaluationBatchTitle(opt.taskTitle || '');
+        const baseConfig = task.configJson || {};
+        const nextConfig = {
+            datasetIds: baseConfig.datasetIds || [],
+            skillId: baseConfig.skillId || '',
+            versionId: baseConfig.versionId || '',
+            taskDescription: baseConfig.taskDescription,
+            sourceMode: baseConfig.sourceMode,
+            evaluatorId: baseConfig.evaluatorId,
+            evaluators: baseConfig.evaluators ?? selectedEvaluatorIds,
+            traceSkillId: baseConfig.traceSkillId,
+            traceTimeRange: baseConfig.traceTimeRange,
+            traceDatasetId: baseConfig.traceDatasetId,
+            evaluationBatchId: opt.runId,
+            evaluationBatchTitle: opt.taskTitle || '',
+            evaluationBatchEvaluators: baseConfig.evaluationBatchEvaluators,
+        };
+        persistTaskUpdate(task.id, nextConfig);
+        setCurrentTask(prev => prev ? {
+            ...prev,
+            configJson: { ...(prev.configJson || {}), ...nextConfig },
+        } : prev);
+    }, [persistTaskUpdate, selectedEvaluatorIds]);
 
     const handleSaveTask = async () => {
         if (!taskNameInput.trim() || !user) return;
@@ -352,6 +536,10 @@ export function BatchEvaluation({
         setTaskDescInput('');
         setIsEditingTask(true);
         setShowHistoryDropdown(false);
+        // 新任务草稿: 清空评测批次关联 (老任务的批次跟新任务无关)
+        setEvaluationBatchId('');
+        setEvaluationBatchTitle('');
+        setEvaluationBatchEvaluators([]);
     };
 
     // Trigger new task creation when parent's button is clicked
@@ -394,9 +582,14 @@ export function BatchEvaluation({
         setTaskDescInput(cfg.taskDescription || '');
         setSourceMode(cfg.sourceMode || 'dataset');
         setSelectedEvaluatorId(cfg.evaluatorId || 'preset-agent-trace-quality');
+        setSelectedEvaluatorIds(Array.isArray(cfg.evaluators) && cfg.evaluators.length > 0 ? cfg.evaluators : BUILT_IN_EVALUATORS.map(e => e.id));
         setTraceSkillId(cfg.traceSkillId || '');
         setTraceTimeRange(cfg.traceTimeRange || '7d');
         setTraceDatasetId(cfg.traceDatasetId || '');
+        // 评测批次关联 (从切换的任务恢复)
+        setEvaluationBatchId(cfg.evaluationBatchId || '');
+        setEvaluationBatchTitle(cfg.evaluationBatchTitle || '');
+        setEvaluationBatchEvaluators(Array.isArray(cfg.evaluationBatchEvaluators) ? cfg.evaluationBatchEvaluators : []);
         setCaseStates(t.caseStatesJson || {});
         setTraceEvalStates(t.traceEvalStatesJson || {});
     };
@@ -598,9 +791,13 @@ export function BatchEvaluation({
         taskDescription: taskDescInput,
         sourceMode,
         evaluatorId: selectedEvaluatorId,
+        evaluators: selectedEvaluatorIds,
         traceSkillId,
         traceTimeRange,
         traceDatasetId,
+        evaluationBatchId,
+        evaluationBatchTitle,
+        evaluationBatchEvaluators,
     });
     useEffect(() => {
         currentConfigRef.current = {
@@ -610,11 +807,15 @@ export function BatchEvaluation({
             taskDescription: taskDescInput,
             sourceMode,
             evaluatorId: selectedEvaluatorId,
+            evaluators: selectedEvaluatorIds,
             traceSkillId,
             traceTimeRange,
             traceDatasetId,
+            evaluationBatchId,
+            evaluationBatchTitle,
+            evaluationBatchEvaluators,
         };
-    }, [selectedDatasetIds, selectedSkillId, selectedVersionId, taskDescInput, sourceMode, selectedEvaluatorId, traceSkillId, traceTimeRange, traceDatasetId]);
+    }, [selectedDatasetIds, selectedSkillId, selectedVersionId, taskDescInput, sourceMode, selectedEvaluatorId, selectedEvaluatorIds, traceSkillId, traceTimeRange, traceDatasetId, evaluationBatchId, evaluationBatchTitle, evaluationBatchEvaluators]);
 
     // Auto-persist config to DB whenever user changes key settings (debounced 800 ms).
     // Skips during initial load by checking that currentTask is already set.
@@ -629,7 +830,7 @@ export function BatchEvaluation({
             if (configPersistTimerRef.current) clearTimeout(configPersistTimerRef.current);
         };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [sourceMode, selectedEvaluatorId, traceSkillId, traceTimeRange, traceDatasetId, selectedDatasetIds, selectedSkillId, selectedVersionId, currentTask?.id, user]);
+    }, [sourceMode, selectedEvaluatorId, selectedEvaluatorIds, traceSkillId, traceTimeRange, traceDatasetId, selectedDatasetIds, selectedSkillId, selectedVersionId, currentTask?.id, user]);
 
     // Persist case states — uses ref so poll closures always see the latest task
     const persistCaseStateUpdate = useCallback((updatedStates: Record<string, CaseState>) => {
@@ -836,15 +1037,23 @@ export function BatchEvaluation({
 
         let evaluatorRunId: string;
         try {
+            // 透传评测任务关联: 用户在「配置」section 关联了批次时, 走 append 模式让 trace
+            // 落到同一批次, 不再新建 (修 "拆成多个批次" 问题, 用例分析侧)。
+            // 关联了批次时不传 evaluator, 后端继承批次原 selectedEvaluators (多评估器)。
+            const body: Record<string, unknown> = {
+                user: user || 'debug-user',
+                datasetId,
+                pairs: [{ caseId, taskId: sessionId }],
+            };
+            if (evaluationBatchId) {
+                body.evaluatorRunId = evaluationBatchId;
+            } else {
+                body.evaluator = selectedEvaluatorId;
+            }
             const res = await apiFetch('/api/eval/trajectory/run', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    user: user || 'debug-user',
-                    datasetId,
-                    pairs: [{ caseId, taskId: sessionId }],
-                    evaluator: selectedEvaluatorId,
-                }),
+                body: JSON.stringify(body),
             });
             const data = await res.json();
             if (!res.ok || !data.evaluatorRunId) {
@@ -927,6 +1136,213 @@ export function BatchEvaluation({
         await Promise.all(toEval.map(evaluateCase));
     };
 
+    /**
+     * 「▶ 启动」一键执行 + 自动评测 (Phase 1 重构后跟 A/B 测试一致体验)。
+     * 调 POST /api/debug/batch-tasks/[id] action='start', 后端走 withBackgroundOpencodeSlot 限流
+     * + 自动接评测 + 透传 evaluationBatchId append 到批次。前端启动后开 polling 拿 caseStatesJson
+     * 实时刷新状态徽章 (pending → running → executed → evaluating → pass/fail)。
+     */
+    const bulkStartUnified = async () => {
+        if (!currentTask || batchStartInFlight) return;
+        // 必须先关联评测任务才能评测——否则结果归属混乱(后端会新建孤立任务)。
+        if (!evaluationBatchId) {
+            alert(locale === 'zh' ? '请先在上方「评测任务」新建或选择一个评测任务' : 'Create/select an eval task first');
+            return;
+        }
+        // 可启动 = 未跑(无状态/pending) 或 已失败(fail，含「已终止」)——失败的允许重跑。
+        // 后端 startBatchTaskInBackground 会先把选中 case 重置为 pending 再跑，所以重跑 fail 是安全的。
+        // 进行中(running/evaluating/executed)与已通过(pass)不重复启动。
+        const toRun = selectedCaseIds.filter(id => {
+            const s = caseStates[id]?.status;
+            return !s || s === 'pending' || s === 'fail';
+        });
+        if (toRun.length === 0) {
+            alert(locale === 'zh' ? '没有待启动的 case (已勾选的都在跑 / 已通过)' : 'No cases to start');
+            return;
+        }
+        setBatchStartInFlight(true);
+        try {
+            // 先把当前配置(含 evaluators 多选)立刻落库, 避免 800ms 防抖未触发就启动 → 后端读到旧 evaluators。
+            await persistTaskUpdate(currentTask.id, currentConfigRef.current);
+            const res = await apiFetch(`/api/debug/batch-tasks/${currentTask.id}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    user: user || 'debug-user',
+                    action: 'start',
+                    caseIds: toRun,
+                }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || !data.ok) {
+                setBatchStartInFlight(false);
+                alert((locale === 'zh' ? '启动失败: ' : 'Start failed: ') + (data.error || res.status));
+                return;
+            }
+            // 立刻开 polling, 状态机变化自动反映到 UI
+            startBatchPolling();
+        } catch (err) {
+            setBatchStartInFlight(false);
+            alert(String(err));
+        }
+    };
+
+    /**
+     * Trace 模式一键启动评测: 调 POST action='evaluate' with caseIds=已选 trace task_ids.
+     * 跟 dataset 模式 bulkStartUnified 流程一致, 只是跳过执行直接评测。
+     */
+    const bulkStartTraceEval = async () => {
+        if (!currentTask || batchStartInFlight) return;
+        if (selectedTraceIds.length === 0) {
+            alert(locale === 'zh' ? '请先勾选要评测的 trace' : 'Select traces first');
+            return;
+        }
+        setBatchStartInFlight(true);
+        try {
+            const res = await apiFetch(`/api/debug/batch-tasks/${currentTask.id}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    user: user || 'debug-user',
+                    action: 'evaluate',
+                    caseIds: selectedTraceIds, // trace.task_id 列表
+                }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || !data.ok) {
+                setBatchStartInFlight(false);
+                alert((locale === 'zh' ? '启动失败: ' : 'Start failed: ') + (data.error || res.status));
+                return;
+            }
+            startBatchPolling();
+        } catch (err) {
+            setBatchStartInFlight(false);
+            alert(String(err));
+        }
+    };
+
+    /**
+     * 任务级终止: 调 POST action='abort', 后端 abortController.abort() 让所有 in-flight case 退出。
+     * 已完成的 case 不受影响, in-flight 的会标记 fail+error="用户终止"。
+     */
+    // 是否存在"未执行完成"的 case（运行中 / 待评测 / 评测中）——用来在页面刷新后(batchStartInFlight 丢失)
+    // 仍能显示并点击「终止」，清掉后端卡住的任务级运行锁(batchActiveRuns)。
+    const hasInFlightCase = Object.values(caseStates).some(
+        s => s?.status === 'running' || s?.status === 'evaluating' || s?.status === 'executed',
+    );
+    const bulkAbortUnified = async () => {
+        // 放宽守卫：只要本次会话在跑(batchStartInFlight) 或 后端存在未完成 case，都允许终止。
+        if (!currentTask || (!batchStartInFlight && !hasInFlightCase)) return;
+        if (!window.confirm(locale === 'zh' ? '确定终止当前批量执行? 已 in-flight 的 case 会标记为「用户终止」失败' : 'Abort current batch run?')) return;
+        try {
+            const res = await apiFetch(`/api/debug/batch-tasks/${currentTask.id}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user: user || 'debug-user', action: 'abort' }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                alert((locale === 'zh' ? '终止失败: ' : 'Abort failed: ') + (data.error || res.status));
+                return;
+            }
+            // polling 下一轮就能看到所有 case 进入 fail/pass 状态, 自动释放 in-flight 锁
+        } catch (err) {
+            alert(String(err));
+        }
+    };
+
+    /**
+     * 行级重试: 执行失败 → action='retry-execute' (重跑 agent+评测)
+     *           评测失败 → action='retry-evaluate' (复用 sessionId, 只重评)
+     * 启动 polling 跟主流程一样, 拿后端最新 caseStates 自动更新徽章/分数。
+     */
+    const retryCase = async (caseId: string, evaluateOnly: boolean) => {
+        if (!currentTask) return;
+        // 立刻给反馈：把这条 case 标记为进行中(执行/评测)，状态徽章随即切「执行中/评测中」
+        // 并置灰重试按钮，不必等首个轮询 tick(3s)或手动刷新。output 清掉旧错误。
+        setCaseStates(prev => ({
+            ...prev,
+            [caseId]: { ...(prev[caseId] || { status: 'pending' as CaseStatus }), status: evaluateOnly ? 'evaluating' : 'running', output: undefined },
+        }));
+        try {
+            const res = await apiFetch(`/api/debug/batch-tasks/${currentTask.id}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    user: user || 'debug-user',
+                    action: evaluateOnly ? 'retry-evaluate' : 'retry-execute',
+                    caseIds: [caseId],
+                }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                // 入队失败：把乐观置上的"进行中"回退成 fail，并带上错误，避免行卡在「评测中」。
+                const msg = String(data.error || res.status);
+                setCaseStates(prev => ({
+                    ...prev,
+                    [caseId]: { ...(prev[caseId] || { status: 'pending' as CaseStatus }), status: 'fail', output: msg },
+                }));
+                alert((locale === 'zh' ? '重试失败: ' : 'Retry failed: ') + msg);
+                return;
+            }
+            // 启动 polling 跟踪该 case 的状态变化 (复用主轮询机制, 自动停止条件: terminal)
+            setBatchStartInFlight(true);
+            startBatchPolling();
+        } catch (err) {
+            const msg = String(err);
+            setCaseStates(prev => ({
+                ...prev,
+                [caseId]: { ...(prev[caseId] || { status: 'pending' as CaseStatus }), status: 'fail', output: msg },
+            }));
+            alert(msg);
+        }
+    };
+
+    /**
+     * 启动后轮询任务最新 caseStatesJson, 写到本地 React state 触发徽章更新。
+     * 每 3s 轮询, 检测到所有选中 case 都进入 terminal (pass/fail) 状态停止 + 释放 in-flight 锁。
+     * 30 分钟兜底超时 (大数据集多 case 评测可能很久, 但 3min 远不够)。
+     */
+    const startBatchPolling = () => {
+        if (!currentTask) return;
+        if (batchPollTimerRef.current) clearInterval(batchPollTimerRef.current);
+        let ticks = 0;
+        const TICK_INTERVAL = 3_000;
+        const MAX_TICKS = 600; // 30min
+        const tick = async () => {
+            ticks++;
+            try {
+                const res = await apiFetch(`/api/debug/batch-tasks/${currentTask.id}?user=${encodeURIComponent(user || '')}`);
+                const data = await res.json().catch(() => ({}));
+                if (data?.caseStatesJson && typeof data.caseStatesJson === 'object') {
+                    const nextStates = data.caseStatesJson as Record<string, CaseState>;
+                    setCaseStates(nextStates);
+                    // terminal 检测: 选中的所有 case 都 pass/fail 即停止
+                    const watched = selectedCaseIdsRef.current.length > 0
+                        ? selectedCaseIdsRef.current
+                        : Object.keys(nextStates);
+                    const allTerminal = watched.every(id => {
+                        const s = nextStates[id]?.status;
+                        return s === 'pass' || s === 'fail';
+                    });
+                    if (allTerminal) {
+                        if (batchPollTimerRef.current) clearInterval(batchPollTimerRef.current);
+                        batchPollTimerRef.current = null;
+                        setBatchStartInFlight(false);
+                        return;
+                    }
+                }
+            } catch {/* polling 网络错忽略, 下次再试 */}
+            if (ticks >= MAX_TICKS) {
+                if (batchPollTimerRef.current) clearInterval(batchPollTimerRef.current);
+                batchPollTimerRef.current = null;
+                setBatchStartInFlight(false);
+            }
+        };
+        void tick();
+        batchPollTimerRef.current = setInterval(tick, TICK_INTERVAL);
+    };
+
     // Evaluate a single trace record (trace mode)
     const evaluateTrace = async (record: TraceRecord) => {
         const taskId = record.task_id;
@@ -946,15 +1362,21 @@ export function BatchEvaluation({
 
         let evaluatorRunId: string;
         try {
+            // 透传评测任务关联: 同上面 dataset 模式逻辑, Trace 模式也支持 append 到批次。
+            const body: Record<string, unknown> = {
+                user: user || 'debug-user',
+                datasetId: traceDatasetId,
+                taskIds: [taskId],
+            };
+            if (evaluationBatchId) {
+                body.evaluatorRunId = evaluationBatchId;
+            } else {
+                body.evaluator = selectedEvaluatorId;
+            }
             const res = await apiFetch('/api/eval/trajectory/run', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    user: user || 'debug-user',
-                    datasetId: traceDatasetId,
-                    taskIds: [taskId],
-                    evaluator: selectedEvaluatorId,
-                }),
+                body: JSON.stringify(body),
             });
             const data = await res.json();
             if (!res.ok || !data.evaluatorRunId) {
@@ -1067,20 +1489,32 @@ export function BatchEvaluation({
         .map(c => caseStates[c.id])
         .filter((s): s is CaseState => s != null && (s.status === 'pass' || s.status === 'fail'));
     const scoredStates = evaluatedCaseStates.filter(s => typeof s.score === 'number');
-    const avgScore = scoredStates.length > 0
-        ? Math.round(scoredStates.reduce((sum, s) => sum + (s.score || 0), 0) / scoredStates.length)
+    // ③ 平均分口径：绑定当前「评测任务」(evaluationBatchId) 的有效评测记录，与 source 无关——
+    // 与 用例分析 trace 模式同源(同一 evaluatorRunId)、同算法((结果分+轨迹分)/2 的平均)，
+    // 保证在「从Trace / 从数据集」之间切换时这个分数不变。没关联任务时回退本地 case 综合分。
+    const batchValidPairs = evaluationBatchId
+        ? (Array.from(evalResultsMap.values())
+            .map(m => ({ r: m.resultScore, t: m.trajScore }))
+            .filter((p): p is { r: number; t: number } => typeof p.r === 'number' && typeof p.t === 'number'))
         : null;
+    const avgScore = batchValidPairs
+        ? (batchValidPairs.length > 0
+            ? Math.round(batchValidPairs.reduce((sum, p) => sum + (p.r + p.t) / 2, 0) / batchValidPairs.length)
+            : null)
+        : (scoredStates.length > 0
+            ? Math.round(scoredStates.reduce((sum, s) => sum + (s.score || 0), 0) / scoredStates.length)
+            : null);
     const scoreColorKlass: 'good' | 'warn' | 'bad' = avgScore == null
         ? 'warn'
         : avgScore >= 80 ? 'good' : avgScore >= 60 ? 'warn' : 'bad';
 
     return (
         <>
-            {/* ─────────── ① 配置 · 评测任务 ─────────── */}
+            {/* ─────────── ① 配置 ─────────── */}
             <SectionShell
                 num={1}
                 variant="config"
-                title="配置 · 用例集 + 任务参数"
+                title="配置"
                 desc="任务管理 + 数据集 / Skill / 评测器 + 全部用例列表（含未执行 / 已评测）"
                 open={configSecOpen}
                 onToggle={() => setConfigSecOpen(o => !o)}
@@ -1093,94 +1527,92 @@ export function BatchEvaluation({
                         <span>· 共 <b>{totalCount}</b> 用例</span>
                     </>
                 }
+                /* 「配置」section head 右侧操作区: 用户视角"评测任务"按钮放这里, 跟标题同行,
+                    不论 dataset / trace 子模式都常驻可见。已关联时显示紫色徽章 + 切换;
+                    未关联且任务已确认时显示「+ 新增评测任务」紫色按钮; 任务未确认时按钮禁用。 */
+                actions={
+                    controlled ? headerActions
+                    : (currentTask && !isEditingTask) ? (
+                        <EvalTaskPicker
+                            locale={locale}
+                            tasks={evalTasks}
+                            selectedRunId={evaluationBatchId}
+                            selectedTitle={evaluationBatchTitle}
+                            onSelect={handleSelectEvalBatch}
+                            onCreateNew={() => setNewBatchDialogOpen(true)}
+                        />
+                    ) : (
+                        <span
+                            title={locale === 'zh' ? '请先保存评测任务名称' : 'Save task name first'}
+                            style={{ padding: '5px 12px', background: '#F4F4F5', border: '1px solid #E4E4E7', color: '#A1A1AA', borderRadius: 5, fontSize: 11.5, fontWeight: 600 }}
+                        >
+                            📋 {locale === 'zh' ? '请先保存任务' : 'Save task first'}
+                        </span>
+                    )
+                }
             >
             {topConfigSlot}
             {/* Task Strip */}
-            <div className="task-strip">
-                <div className="task-strip-top">
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                        <div className="task-strip-eyebrow">{locale === 'zh' ? '当前评测任务' : 'CURRENT EVAL TASK'}</div>
-                        {isEditingTask ? (
-                            <div className="task-inline-edit" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 6 }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                    <input
-                                        className="task-inline-input"
-                                        value={taskNameInput}
-                                        onChange={e => setTaskNameInput(e.target.value)}
-                                        onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) handleSaveTask(); if (e.key === 'Escape' && currentTask) { setIsEditingTask(false); setTaskNameInput(''); } }}
-                                        placeholder={locale === 'zh' ? '请输入评测名称…' : 'Enter task name…'}
-                                        autoFocus
-                                    />
-                                    <button className="d-btn sm primary" onClick={handleSaveTask} disabled={!taskNameInput.trim() || isCreatingTask}>
-                                        {isCreatingTask ? (locale === 'zh' ? '保存中…' : 'Saving…') : (locale === 'zh' ? '保存' : 'Save')}
-                                    </button>
-                                    {currentTask && (
-                                        <button className="d-btn sm" onClick={() => { setIsEditingTask(false); setTaskNameInput(''); }}>
-                                            {locale === 'zh' ? '取消' : 'Cancel'}
-                                        </button>
-                                    )}
-                                </div>
-                                <input
-                                    className="task-inline-input"
-                                    style={{ fontSize: 12, fontWeight: 400 }}
-                                    value={taskDescInput}
-                                    onChange={e => setTaskDescInput(e.target.value)}
-                                    placeholder={locale === 'zh' ? '任务描述（可选）…' : 'Task description (optional)…'}
-                                />
-                            </div>
-                        ) : (
-                            <div>
-                                <div className="task-strip-title">
-                                    {currentTask?.taskName}
-                                    <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--ink-3)' }}>
-                                        {currentTask && new Date(currentTask.createdAt).toLocaleString(locale === 'zh' ? 'zh-CN' : 'en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
-                                    </span>
-                                </div>
-                                {isEditingDesc ? (
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
-                                        <input
-                                            className="task-inline-input"
-                                            style={{ fontSize: 12, fontWeight: 400 }}
-                                            value={taskDescInput}
-                                            onChange={e => setTaskDescInput(e.target.value)}
-                                            onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) handleSaveDesc(); if (e.key === 'Escape') { setIsEditingDesc(false); setTaskDescInput(currentTask?.configJson?.taskDescription || ''); } }}
-                                            placeholder={locale === 'zh' ? '描述这个评测任务的目标…' : 'Describe the goal of this task…'}
-                                            autoFocus
-                                        />
-                                        <button className="d-btn sm primary" onClick={handleSaveDesc}>{locale === 'zh' ? '确定' : 'OK'}</button>
-                                        <button className="d-btn sm" onClick={() => { setIsEditingDesc(false); setTaskDescInput(currentTask?.configJson?.taskDescription || ''); }}>{locale === 'zh' ? '取消' : 'Cancel'}</button>
-                                    </div>
-                                ) : taskDescInput ? (
-                                    <div className="task-strip-desc" onClick={() => setIsEditingDesc(true)} style={{ cursor: 'text' }}>{taskDescInput}</div>
-                                ) : currentTask && (
-                                    <div className="task-strip-desc task-strip-desc-placeholder" onClick={() => setIsEditingDesc(true)}>
-                                        {locale === 'zh' ? '+ 添加任务描述' : '+ Add description'}
-                                    </div>
-                                )}
-                            </div>
+            {/* 调试任务 (BatchEvalTask) 紧凑行 —— 原 task-strip 大卡片下线, 改成跟 A/B 一致的
+                "任务名 + 历史 + 新建" 一行 chip 样式。BatchEvalTask 跟"评测任务关联"(evaluationBatchId)
+                是两个概念: 前者是用例分析自己的 task 实体 (存 dataset/skill/caseStates),
+                后者在 ① actions 的紫色"评测任务"徽章。
+                isEditingTask=true (首次无 task / 点新建) 时显示 inline 输入框。
+                受控模式(用例分析统一布局)下整条 strip 隐藏——任务由父页评测任务选择器统一管理 + 静默 auto-create。 */}
+            {!controlled && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0 10px', fontSize: 12.5, flexWrap: 'wrap' }}>
+                {isEditingTask ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1 }}>
+                        <input
+                            className="task-inline-input"
+                            value={taskNameInput}
+                            onChange={e => setTaskNameInput(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) handleSaveTask(); if (e.key === 'Escape' && currentTask) { setIsEditingTask(false); setTaskNameInput(''); } }}
+                            placeholder={locale === 'zh' ? '请输入调试任务名称…' : 'Enter task name…'}
+                            autoFocus
+                            style={{ maxWidth: 280 }}
+                        />
+                        <button className="d-btn sm primary" onClick={handleSaveTask} disabled={!taskNameInput.trim() || isCreatingTask}>
+                            {isCreatingTask ? (locale === 'zh' ? '保存中…' : 'Saving…') : (locale === 'zh' ? '保存' : 'Save')}
+                        </button>
+                        {currentTask && (
+                            <button className="d-btn sm" onClick={() => { setIsEditingTask(false); setTaskNameInput(''); }}>
+                                {locale === 'zh' ? '取消' : 'Cancel'}
+                            </button>
                         )}
                     </div>
-                    <button
-                        className="d-btn sm"
-                        onClick={() => setShowHistoryDrawer(true)}
-                        title={locale === 'zh' ? '查看历史评测任务' : 'View history'}
-                    >
-                        <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
-                            <circle cx="5.5" cy="5.5" r="4.5" stroke="currentColor" strokeWidth="1.4"/>
-                            <path d="M5.5 3v2.5l1.8 1.8" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
-                        </svg>
-                        {locale === 'zh' ? '历史任务' : 'History'}
-                    </button>
-                    <button className="d-btn sm primary" onClick={handleNewTask}>
-                        <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-                            <path d="M5 1v8M1 5h8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-                        </svg>
-                        {locale === 'zh' ? '新建评测' : 'New Task'}
-                    </button>
-                </div>
+                ) : (
+                    <>
+                        <span style={{ color: 'var(--ink-3)' }}>{locale === 'zh' ? '调试任务:' : 'Debug task:'}</span>
+                        <b style={{ color: 'var(--ink-1, #18181B)', maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {currentTask?.taskName || '—'}
+                        </b>
+                        <button
+                            className="d-btn sm"
+                            onClick={() => setShowHistoryDrawer(true)}
+                            title={locale === 'zh' ? '切换历史调试任务' : 'Switch task'}
+                            style={{ padding: '2px 8px' }}
+                        >
+                            <svg width="10" height="10" viewBox="0 0 11 11" fill="none" style={{ marginRight: 3 }}>
+                                <circle cx="5.5" cy="5.5" r="4.5" stroke="currentColor" strokeWidth="1.4"/>
+                                <path d="M5.5 3v2.5l1.8 1.8" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+                            </svg>
+                            {locale === 'zh' ? '历史' : 'History'}
+                        </button>
+                        <button
+                            className="d-btn sm"
+                            onClick={handleNewTask}
+                            style={{ padding: '2px 8px' }}
+                        >
+                            + {locale === 'zh' ? '新建' : 'New'}
+                        </button>
+                    </>
+                )}
             </div>
+            )}
 
-            {/* Config Bar */}
+            {/* Config Bar —— 受控(用例分析统一布局)下隐藏: 数据集/评估器下拉已移到 ① 顶部 sharedConfigBar, 总用例统计条也去掉。 */}
+            {!controlled && (
             <div className={`config-bar ${!taskConfirmed ? 'config-bar-locked' : ''}`}>
                 {!taskConfirmed && (
                     <div className="config-bar-lock-tip" style={{ cursor: 'default' }}>
@@ -1196,158 +1628,40 @@ export function BatchEvaluation({
                     选择，BE 再有一个是重复。BE 内部 sourceMode state 仍保留，默认 'dataset'，因为
                     BE 现在只在外层 dataset 模式下被嵌入；trace 模式走 TraceDeviationPanel 自己的流程。 */}
 
-                {/* Dataset mode filters */}
-                {sourceMode === 'dataset' && (<>
-                    <div className="config-bar-section">
-                        <span className="config-bar-label">{locale === 'zh' ? '数据集' : 'Dataset'}</span>
-                        {selectedDatasetIds.map(id => {
-                            const ds = datasets.find(d => d.id === id);
-                            if (!ds) return null;
-                            return (
-                                <div key={id} className="config-chip filled" role="button" tabIndex={0} onClick={() => taskConfirmed && setShowDatasetModal(true)}>
-                                    <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
-                                        <ellipse cx="5.5" cy="2.5" rx="3.5" ry="1.5" stroke="currentColor" strokeWidth="1.2"/>
-                                        <path d="M2 2.5v6c0 .8 1.6 1.5 3.5 1.5s3.5-.7 3.5-1.5v-6" stroke="currentColor" strokeWidth="1.2"/>
-                                    </svg>
-                                    <span>{ds.name}</span>
-                                    <span className="config-chip-meta">{ds.cases?.length || 0} {locale === 'zh' ? '条' : 'cases'}</span>
-                                    <button
-                                        className="config-chip-remove"
-                                        onClick={e => { e.stopPropagation(); setSelectedDatasetIds(prev => prev.filter(i => i !== id)); }}
-                                    >×</button>
-                                </div>
-                            );
-                        })}
-                        {selectedDatasetIds.length === 0 && (
-                            <button
-                                className={`config-chip add ${!taskConfirmed ? 'config-chip-disabled' : ''}`}
-                                onClick={() => taskConfirmed ? setShowDatasetModal(true) : undefined}
-                            >
-                                <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
-                                    <path d="M5.5 1v9M1 5.5h9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-                                </svg>
-                                {locale === 'zh' ? '添加数据集' : 'Add Dataset'}
-                            </button>
-                        )}
+                {/* Dataset mode: 数据集(参考集) + 评估器 下拉多选。受控模式下隐藏——父页 sharedConfigBar 已在 ① 顶部统一展示。 */}
+                {!controlled && sourceMode === 'dataset' && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, flex: 1, minWidth: 0 }}>
+                        <ConfigMultiSelect
+                            label={locale === 'zh' ? '数据集' : 'Dataset'}
+                            placeholder={locale === 'zh' ? '选择数据集（可多选）' : 'Select datasets'}
+                            emptyHint={locale === 'zh' ? '暂无数据集（可在数据集中心创建）' : 'No datasets'}
+                            accent="#2563eb"
+                            disabled={!taskConfirmed}
+                            options={datasets.map((d: any) => ({ id: d.id, name: d.name, meta: `${d.cases?.length || 0} ${locale === 'zh' ? '例' : 'cases'}` }))}
+                            selectedIds={selectedDatasetIds}
+                            onChange={ids => setSelectedDatasetIds(ids)}
+                        />
+                        <ConfigMultiSelect
+                            label={locale === 'zh' ? '评估器' : 'Evaluators'}
+                            placeholder={locale === 'zh' ? '选择评估器（可多选）' : 'Select evaluators'}
+                            emptyHint={locale === 'zh' ? '暂无评估器' : 'No evaluators'}
+                            accent="#7E22CE"
+                            disabled={!taskConfirmed}
+                            options={[...BUILT_IN_EVALUATORS, ...userEvaluators].map(e => ({ id: e.id, name: e.name }))}
+                            selectedIds={selectedEvaluatorIds}
+                            onChange={ids => setSelectedEvaluatorIds(ids)}
+                        />
                     </div>
+                )}
 
-                    <div className="config-bar-divider" />
-
-                    <div className="config-bar-section">
-                        <span className="config-bar-label">Skill</span>
-                        {selectedSkill ? (
-                            <button className="config-chip filled" onClick={() => taskConfirmed && setShowSkillModal(true)}>
-                                <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
-                                    <rect x="1.5" y="6" width="2" height="4" stroke="currentColor" strokeWidth="1.2"/>
-                                    <rect x="4.5" y="4" width="2" height="6" stroke="currentColor" strokeWidth="1.2"/>
-                                    <rect x="7.5" y="2" width="2" height="8" stroke="currentColor" strokeWidth="1.2"/>
-                                </svg>
-                                <span>{selectedSkill.name}</span>
-                                <span className="config-chip-meta">{selectedVersion?.semanticVersion || `v${selectedVersion?.version || '?'}`}</span>
-                            </button>
-                        ) : (
-                            <button
-                                className={`config-chip add ${!taskConfirmed ? 'config-chip-disabled' : ''}`}
-                                onClick={() => taskConfirmed ? setShowSkillModal(true) : undefined}
-                            >
-                                <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
-                                    <path d="M5.5 1v9M1 5.5h9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-                                </svg>
-                                {locale === 'zh' ? '选择 Skill & 版本' : 'Select Skill & Version'}
-                            </button>
-                        )}
-                    </div>
-
-                    <div className="config-bar-divider" />
-                </>)}
-
-                {/* Trace mode filters */}
-                {sourceMode === 'trace' && (<>
-                    <div className="config-bar-section">
-                        <span className="config-bar-label">Skill</span>
-                        {traceSkillId ? (
-                            <div className="config-chip filled" role="button" tabIndex={0} onClick={() => taskConfirmed && setShowTraceSkillModal(true)}>
-                                <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
-                                    <rect x="1.5" y="6" width="2" height="4" stroke="currentColor" strokeWidth="1.2"/>
-                                    <rect x="4.5" y="4" width="2" height="6" stroke="currentColor" strokeWidth="1.2"/>
-                                    <rect x="7.5" y="2" width="2" height="8" stroke="currentColor" strokeWidth="1.2"/>
-                                </svg>
-                                <span>{skills.find(s => s.id === traceSkillId)?.name}</span>
-                                <button className="config-chip-remove" onClick={e => { e.stopPropagation(); setTraceSkillId(''); }}>×</button>
-                            </div>
-                        ) : (
-                            <button
-                                className={`config-chip add ${!taskConfirmed ? 'config-chip-disabled' : ''}`}
-                                onClick={() => taskConfirmed ? setShowTraceSkillModal(true) : undefined}
-                            >
-                                <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
-                                    <path d="M5.5 1v9M1 5.5h9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-                                </svg>
-                                {locale === 'zh' ? '选择 Skill' : 'Select Skill'}
-                            </button>
-                        )}
-                    </div>
-
-                    <div className="config-bar-divider" />
-                </>)}
-
-                {/* Evaluator (shared between both modes) */}
-                <div className="config-bar-section" style={{ position: 'relative' }}>
-                    <span className="config-bar-label">{locale === 'zh' ? '评估器' : 'Evaluator'}</span>
-                    <button
-                        ref={evalChipRef}
-                        className={`config-chip filled ${!taskConfirmed ? 'config-chip-disabled' : ''}`}
-                        onClick={() => {
-                            if (!taskConfirmed) return;
-                            const rect = evalChipRef.current?.getBoundingClientRect();
-                            if (rect) setEvalDropdownPos({ top: rect.bottom + 6, left: rect.left });
-                            setShowEvalDropdown(v => !v);
-                        }}
-                    >
-                        <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
-                            <path d="M1.5 5L4 7.5 8.5 2.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
-                        </svg>
-                        <span>{[...BUILT_IN_EVALUATORS, ...userEvaluators].find(e => e.id === selectedEvaluatorId)?.name || (selectedEvaluatorId === 'trace-quality-evaluator' ? '轨迹质量评估器（旧版）' : selectedEvaluatorId)}</span>
-                        <svg width="8" height="8" viewBox="0 0 8 8" fill="none">
-                            <path d="M1 2.5l3 3 3-3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
-                        </svg>
-                    </button>
-                    {showEvalDropdown && (
-                        <>
-                            <div style={{ position: 'fixed', inset: 0, zIndex: 49 }} onClick={() => setShowEvalDropdown(false)} />
-                            <div className="task-history-dropdown" style={{ minWidth: 200, position: 'fixed', top: evalDropdownPos.top, left: evalDropdownPos.left, right: 'auto' }}>
-                                {[...BUILT_IN_EVALUATORS, ...userEvaluators].map(ev => (
-                                    <div
-                                        key={ev.id}
-                                        className={`task-history-item ${selectedEvaluatorId === ev.id ? 'active' : ''}`}
-                                        onClick={() => { setSelectedEvaluatorId(ev.id); setShowEvalDropdown(false); }}
-                                    >
-                                        <span className="task-history-name">{ev.name}</span>
-                                    </div>
-                                ))}
-                                <div style={{ borderTop: '1px solid var(--line)', paddingTop: 4, marginTop: 4 }}>
-                                    <div
-                                        className="task-history-item"
-                                        onClick={() => { setShowEvalDropdown(false); router.push('/metrics'); }}
-                                        style={{ color: 'var(--accent)' }}
-                                    >
-                                        <svg width="10" height="10" viewBox="0 0 10 10" fill="none" style={{ marginRight: 4 }}>
-                                            <path d="M5 1v8M1 5h8" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
-                                        </svg>
-                                        {locale === 'zh' ? '创建评估器' : 'Create Evaluator'}
-                                    </div>
-                                </div>
-                            </div>
-                        </>
-                    )}
-                </div>
+                {/* Skill 段 / Skill 段 (trace 模式) / 评估器单选段 - 已下线
+                    Skill+版本 在顶部 breadcrumb 已显示, 评估器统一在"评测任务关联"弹框里多选,
+                    避免上下两份配置重复。state (selectedSkill / selectedEvaluatorId / traceSkillId)
+                    保留, 由"评测任务"对话框 / 兼容老路径继续读写。 */}
 
                 </div>{/* /config-bar-filters */}
-                <div className="config-bar-summary">
-                    <span className="config-bar-summary-num">{sourceMode === 'trace' ? traceRecords.length : allCases.length}</span>
-                    <span className="config-bar-summary-label">{locale === 'zh' ? '总用例' : 'Cases'}</span>
-                </div>
             </div>
+            )}
 
             {/* Work Table Card —— 全部用例列表（含未执行 / 运行中 / 已评测）。
                 与 trace 模式架构对齐：case 列表归入 ① 配置块，方便用户先确认要评的范围。 */}
@@ -1383,39 +1697,163 @@ export function BatchEvaluation({
                                     : (locale === 'zh' ? `共 ${traceRecords.length} 条执行链路` : `${traceRecords.length} traces`))
                             }
                         </span>
-                        {sourceMode === 'dataset' && selectedCaseIds.length > 0 && (
+                        {/* 受控(用例分析统一布局)下, 启动按钮统一到 ① 配置末尾的「开始评测」; 这里的工具栏动作隐藏。 */}
+                        {!controlled && sourceMode === 'dataset' && selectedCaseIds.length > 0 && (
                             <div className="bulk-actions">
                                 <div className="bulk-divider" />
+                                {/* 「▶ 启动」紫色按钮: Phase 1 重构后的一键启动, 跟 A/B 测试体验一致。
+                                    调 POST /api/debug/batch-tasks/[id] action='start', 后端走 withBackgroundOpencodeSlot
+                                    限流 + 自动接评测 + 透传 evaluationBatchId append 到批次。
+                                    需要已关联评测任务 (evaluationBatchId) 才显示, 否则用户不知道评测结果归到哪。 */}
+                                {currentTask?.configJson?.evaluationBatchId && (
+                                    <>
+                                        <button
+                                            type="button"
+                                            onClick={bulkStartUnified}
+                                            disabled={batchStartInFlight}
+                                            title={locale === 'zh' ? '一键启动: 执行 + 自动评测, append 到当前评测任务' : 'One-click: execute + auto-eval, append to linked task'}
+                                            style={{
+                                                padding: '4px 10px',
+                                                background: batchStartInFlight ? '#A5A0E4' : '#4F46E5',
+                                                border: '1px solid ' + (batchStartInFlight ? '#A5A0E4' : '#4F46E5'),
+                                                borderRadius: 5,
+                                                fontSize: 12, fontWeight: 600,
+                                                color: '#fff',
+                                                cursor: batchStartInFlight ? 'not-allowed' : 'pointer',
+                                                display: 'inline-flex', alignItems: 'center', gap: 4,
+                                            }}
+                                        >
+                                            <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
+                                                <path d="M2.5 1.5l5.5 3.5-5.5 3.5V1.5z"/>
+                                            </svg>
+                                            {batchStartInFlight
+                                                ? (locale === 'zh' ? '启动中...' : 'Starting...')
+                                                : (locale === 'zh' ? '▶ 启动' : '▶ Start')}
+                                        </button>
+                                        {batchStartInFlight && (
+                                            <button
+                                                type="button"
+                                                onClick={bulkAbortUnified}
+                                                title={locale === 'zh' ? '终止当前批量执行' : 'Abort current run'}
+                                                style={{
+                                                    padding: '4px 10px',
+                                                    background: '#fff', border: '1px solid #DC2626',
+                                                    borderRadius: 5, fontSize: 12, fontWeight: 600,
+                                                    color: '#DC2626', cursor: 'pointer',
+                                                }}
+                                            >
+                                                ⏹ {locale === 'zh' ? '终止' : 'Abort'}
+                                            </button>
+                                        )}
+                                        {/* 进度状态条: in-flight 时显示总数/通过/失败/进行中 */}
+                                        {batchStartInFlight && (() => {
+                                            const ids = Object.keys(caseStates);
+                                            const pass = ids.filter(id => caseStates[id]?.status === 'pass').length;
+                                            const fail = ids.filter(id => caseStates[id]?.status === 'fail').length;
+                                            const running = ids.filter(id => {
+                                                const s = caseStates[id]?.status;
+                                                return s === 'running' || s === 'evaluating' || s === 'executed';
+                                            }).length;
+                                            return (
+                                                <span style={{ fontSize: 11.5, color: 'var(--ink-2)', display: 'inline-flex', alignItems: 'center', gap: 8, marginLeft: 4 }}>
+                                                    <span>共 <b>{ids.length}</b></span>
+                                                    <span style={{ color: 'var(--success)' }}>✓ {pass}</span>
+                                                    {fail > 0 && <span style={{ color: 'var(--danger)' }}>✗ {fail}</span>}
+                                                    {running > 0 && <span style={{ color: '#2563EB' }}>⏳ {running}</span>}
+                                                </span>
+                                            );
+                                        })()}
+                                    </>
+                                )}
                                 <button className="d-btn sm dark" onClick={bulkExecute}>
                                     <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
                                         <path d="M2.5 1.5l5.5 3.5-5.5 3.5V1.5z" fill="currentColor"/>
                                     </svg>
-                                    {locale === 'zh' ? '批量执行' : 'Batch Execute'}
+                                    {locale === 'zh' ? '批量执行 (旧)' : 'Batch Execute (legacy)'}
                                 </button>
                                 <button className="d-btn sm" onClick={bulkEvaluate}>
                                     <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
                                         <path d="M1.5 5L4 7.5 8.5 2.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
                                     </svg>
-                                    {locale === 'zh' ? '批量评测' : 'Batch Evaluate'}
+                                    {locale === 'zh' ? '批量评测 (旧)' : 'Batch Evaluate (legacy)'}
                                 </button>
                             </div>
                         )}
                         {sourceMode === 'trace' && selectedTraceIds.length > 0 && (
                             <div className="bulk-actions">
                                 <div className="bulk-divider" />
+                                {/* Trace 模式一键启动: 调 POST action='evaluate' (跳过执行, 直接评测) */}
+                                {currentTask?.configJson?.evaluationBatchId && (
+                                    <button
+                                        type="button"
+                                        onClick={bulkStartTraceEval}
+                                        disabled={batchStartInFlight}
+                                        title={locale === 'zh' ? '一键启动: 评测已选 trace, append 到当前评测任务' : 'One-click: evaluate selected traces'}
+                                        style={{
+                                            padding: '4px 10px',
+                                            background: batchStartInFlight ? '#A5A0E4' : '#4F46E5',
+                                            border: '1px solid ' + (batchStartInFlight ? '#A5A0E4' : '#4F46E5'),
+                                            borderRadius: 5,
+                                            fontSize: 12, fontWeight: 600,
+                                            color: '#fff',
+                                            cursor: batchStartInFlight ? 'not-allowed' : 'pointer',
+                                            display: 'inline-flex', alignItems: 'center', gap: 4,
+                                        }}
+                                    >
+                                        <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                                            <path d="M1.5 5L4 7.5 8.5 2.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+                                        </svg>
+                                        {batchStartInFlight
+                                            ? (locale === 'zh' ? '启动中...' : 'Starting...')
+                                            : (locale === 'zh' ? '▶ 启动评测' : '▶ Start Eval')}
+                                    </button>
+                                )}
+                                {batchStartInFlight && (
+                                    <button
+                                        type="button"
+                                        onClick={bulkAbortUnified}
+                                        style={{
+                                            padding: '4px 10px',
+                                            background: '#fff', border: '1px solid #DC2626',
+                                            borderRadius: 5, fontSize: 12, fontWeight: 600,
+                                            color: '#DC2626', cursor: 'pointer',
+                                        }}
+                                    >
+                                        ⏹ {locale === 'zh' ? '终止' : 'Abort'}
+                                    </button>
+                                )}
                                 <button
-                                    className="d-btn sm dark"
+                                    className="d-btn sm"
                                     onClick={bulkEvaluateTraces}
                                 >
                                     <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
                                         <path d="M1.5 5L4 7.5 8.5 2.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
                                     </svg>
-                                    {locale === 'zh' ? '批量评测' : 'Batch Evaluate'}
+                                    {locale === 'zh' ? '批量评测 (旧)' : 'Batch Evaluate (legacy)'}
                                 </button>
                             </div>
                         )}
                     </div>
                     <div className="table-toolbar-right">
+                        {/* 终止按钮：本次会话在跑、或后端存在未完成 case 时都显示可点。
+                            受控(用例分析「从数据集」)布局下上方 bulk-actions 工具栏被隐藏，
+                            这里是唯一能终止/清掉卡住运行锁的入口。 */}
+                        {sourceMode === 'dataset' && (batchStartInFlight || hasInFlightCase) && (
+                            <button
+                                type="button"
+                                onClick={bulkAbortUnified}
+                                title={locale === 'zh' ? '终止当前批量执行，并清除卡住的运行状态/锁' : 'Abort current run and clear stuck running lock'}
+                                style={{
+                                    padding: '4px 10px',
+                                    background: '#fff', border: '1px solid #DC2626',
+                                    borderRadius: 5, fontSize: 12, fontWeight: 600,
+                                    color: '#DC2626', cursor: 'pointer',
+                                    display: 'inline-flex', alignItems: 'center', gap: 4,
+                                }}
+                            >
+                                ⏹ {locale === 'zh' ? '终止' : 'Abort'}
+                            </button>
+                        )}
                         {sourceMode === 'dataset' && (
                             <div className="filter-group">
                                 <button className={`filter-btn ${filterStatus === 'all' ? 'active' : ''}`} onClick={() => setFilterStatus('all')}>
@@ -1457,19 +1895,18 @@ export function BatchEvaluation({
                                 <th>{locale === 'zh' ? (sourceMode === 'trace' ? '用户输入 / Trace' : '测试用例') : (sourceMode === 'trace' ? 'Input / Trace' : 'Test Case')}</th>
                                 <th style={{ width: 110 }}>{locale === 'zh' ? (sourceMode === 'trace' ? '来源 Skill' : '数据集') : (sourceMode === 'trace' ? 'Skill' : 'Dataset')}</th>
                                 {sourceMode === 'dataset' && <th style={{ width: 100 }}>{locale === 'zh' ? '状态' : 'Status'}</th>}
-                                {sourceMode === 'dataset' && <th style={{ width: 150 }}>{locale === 'zh' ? '执行' : 'Execute'}</th>}
-                                {sourceMode === 'trace' && <th style={{ width: 100 }}>{locale === 'zh' ? '执行结果' : 'Result'}</th>}
-                                <th style={{ width: 110 }}>{locale === 'zh' ? '评测' : 'Evaluate'}</th>
+                                {/* 评测分数列 (后端 waitAndApplyBatchEvaluation 回写, 0-100 整数) */}
+                                <th style={{ width: 70 }}>{locale === 'zh' ? '分数' : 'Score'}</th>
                                 {sourceMode === 'trace' && <th style={{ width: 70 }}>{locale === 'zh' ? '耗时' : 'Time'}</th>}
-                                <th style={{ width: 50 }}></th>
+                                <th style={{ width: 80 }}>{locale === 'zh' ? 'Trace' : 'Trace'}</th>
                             </tr>
                         </thead>
                         <tbody>
                             {/* Trace mode rows */}
                             {sourceMode === 'trace' && (traceLoading ? (
-                                <tr><td colSpan={7}><div className="d-empty"><span className="spinner" style={{ width: 16, height: 16, borderWidth: 2 }} />{locale === 'zh' ? ' 加载中…' : ' Loading…'}</div></td></tr>
+                                <tr><td colSpan={6}><div className="d-empty"><span className="spinner" style={{ width: 16, height: 16, borderWidth: 2 }} />{locale === 'zh' ? ' 加载中…' : ' Loading…'}</div></td></tr>
                             ) : traceRecords.length === 0 ? (
-                                <tr><td colSpan={7}><div className="d-empty"><div className="d-empty-icon"><svg width="18" height="18" viewBox="0 0 18 18" fill="none"><polyline points="17 9 13 9 10.5 15 7 3 4.5 9 1 9" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg></div>{locale === 'zh' ? (traceSkillId ? '该 Skill 在所选时间内暂无执行链路' : '请在上方选择 Skill 以加载执行链路') : (traceSkillId ? 'No traces found for this Skill in the selected time range' : 'Select a Skill above to load its execution traces')}</div></td></tr>
+                                <tr><td colSpan={6}><div className="d-empty"><div className="d-empty-icon"><svg width="18" height="18" viewBox="0 0 18 18" fill="none"><polyline points="17 9 13 9 10.5 15 7 3 4.5 9 1 9" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg></div>{locale === 'zh' ? (traceSkillId ? '该 Skill 在所选时间内暂无执行链路' : '请在上方选择 Skill 以加载执行链路') : (traceSkillId ? 'No traces found for this Skill in the selected time range' : 'Select a Skill above to load its execution traces')}</div></td></tr>
                             ) : traceRecords.filter(r => !searchQuery || r.query?.toLowerCase().includes(searchQuery.toLowerCase())).map((record, idx) => {
                                 const key = record.upload_id || record.task_id || `trace_${idx}`;
                                 const evalState = traceEvalStates[key];
@@ -1502,35 +1939,34 @@ export function BatchEvaluation({
                                                 ? skillNames.map(n => <span key={n} className="tag tag-blue" style={{ fontSize: 10, marginRight: 2 }}>{n.slice(0, 12)}</span>)
                                                 : <span style={{ color: 'var(--ink-4)', fontSize: 11 }}>—</span>}
                                         </td>
-                                        <td><span className="row-status executed">{locale === 'zh' ? '● 已完成' : '● Done'}</span></td>
-                                        <td>
-                                            {isDone ? (
-                                                <button className="row-action-btn done" onClick={() => record.task_id && router.push(`/eval/trajectory/${encodeURIComponent(record.task_id)}`)}>
-                                                    <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M1 5h5.5M5.5 3l2.5 2-2.5 2" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                                                    {locale === 'zh' ? `结果 · ${evalState?.score ?? ''}` : `Result · ${evalState?.score ?? ''}`}
-                                                </button>
-                                            ) : isEvaluating ? (
-                                                <button className="row-action-btn loading" disabled><span className="spinner" />{locale === 'zh' ? '评测中' : 'Eval…'}</button>
-                                            ) : isFail ? (
-                                                <button className="row-action-btn" style={{ color: 'var(--danger)' }} onClick={() => evaluateTrace(record)}>
-                                                    <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M8 4.5a3.5 3.5 0 11-3.5-3.5c.97 0 1.85.39 2.48 1.02L8 3.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/><path d="M8 1.5v2H6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                                                    {locale === 'zh' ? '重试' : 'Retry'}
-                                                </button>
-                                            ) : (
-                                                <button
-                                                    className="row-action-btn primary"
-                                                    onClick={() => evaluateTrace(record)}
-                                                >
-                                                    <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M1.5 5L4 7.5 8.5 2.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                                                    {locale === 'zh' ? '发起评测' : 'Evaluate'}
-                                                </button>
-                                            )}
+                                        {/* 分数列 (trace 模式): 从 evalState.score 读 (旧路径) 或 caseStates[trace.task_id].score 读 (新路径) */}
+                                        <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 600 }}>
+                                            {(() => {
+                                                const traceScore = typeof evalState?.score === 'number' ? evalState.score
+                                                    : typeof caseStates[record.task_id || '']?.score === 'number' ? caseStates[record.task_id || ''].score
+                                                    : null;
+                                                return typeof traceScore === 'number' ? (
+                                                    <span style={{
+                                                        color: traceScore >= 80 ? 'var(--success)'
+                                                            : traceScore >= 60 ? 'var(--warn, #D97706)'
+                                                            : 'var(--danger)',
+                                                    }}>{traceScore}</span>
+                                                ) : <span style={{ color: 'var(--ink-4, #B8B6AE)' }}>—</span>;
+                                            })()}
                                         </td>
+                                        {/* 「执行结果」「评测」按钮列已下线 —— 配置区只展示静态信息,
+                                            行级操作 (启动/重试/查看评测结果) 后续在 ② 执行块和 /eval 评测执行里完成。 */}
                                         <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11.5, color: 'var(--ink-2)' }}>
                                             {record.timeCost || '—'}
                                         </td>
                                         <td>
-                                            <button className="row-more" onClick={() => record.task_id && router.push(`/trace?taskId=${encodeURIComponent(record.task_id)}`)}>→</button>
+                                            <button
+                                                className="row-more"
+                                                title={locale === 'zh' ? '查看 Trace' : 'View trace'}
+                                                onClick={() => record.task_id && router.push(`/trace?taskId=${encodeURIComponent(record.task_id)}`)}
+                                            >
+                                                →
+                                            </button>
                                         </td>
                                     </tr>
                                 );
@@ -1538,7 +1974,7 @@ export function BatchEvaluation({
                             {/* Dataset mode rows */}
                             {sourceMode === 'dataset' && (filteredCases.length === 0 ? (
                                 <tr>
-                                    <td colSpan={8}>
+                                    <td colSpan={6}>
                                         <div className="d-empty">
                                             <div className="d-empty-icon">
                                                 <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
@@ -1599,110 +2035,32 @@ export function BatchEvaluation({
                                                 {getStatusLabel(isRunning ? 'running' : status)}
                                             </span>
                                         </td>
-                                        <td>
-                                            {isRunning ? (
-                                                <button className="row-action-btn loading" disabled>
-                                                    <span className="spinner" />
-                                                    {locale === 'zh' ? '执行中' : 'Running'}
-                                                </button>
-                                            ) : canReExecute || isEvaluating ? (
-                                                <div style={{ display: 'inline-flex', gap: 4 }}>
-                                                    <button
-                                                        className={`row-action-btn ${isEvaluating ? 'disabled' : ''}`}
-                                                        disabled={isEvaluating}
-                                                        title={isEvaluating ? (locale === 'zh' ? '评测进行中，无法重新执行' : 'Evaluation in progress') : undefined}
-                                                        onClick={() => !isEvaluating && executeCase(c.id)}
-                                                    >
-                                                        <svg width="9" height="9" viewBox="0 0 9 9" fill="none">
-                                                            <path d="M8 4.5a3.5 3.5 0 11-3.5-3.5c.97 0 1.85.39 2.48 1.02L8 3.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
-                                                            <path d="M8 1.5v2H6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
-                                                        </svg>
-                                                        {locale === 'zh' ? '重新执行' : 'Re-run'}
-                                                    </button>
-                                                    <button
-                                                        className="row-action-btn done"
-                                                        onClick={() => state?.sessionId && router.push(`/trace?taskId=${encodeURIComponent(state.sessionId)}`)}
-                                                        disabled={!state?.sessionId}
-                                                        title={state?.sessionId ? 'Trace' : (locale === 'zh' ? '暂无 Trace' : 'No trace yet')}
-                                                    >
-                                                        <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-                                                            <path d="M1 5h5.5M5.5 3l2.5 2-2.5 2" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
-                                                        </svg>
-                                                        Trace
-                                                    </button>
-                                                </div>
-                                            ) : (
-                                                <button
-                                                    className={`row-action-btn ${canExecute ? 'primary' : 'disabled'}`}
-                                                    disabled={!canExecute}
-                                                    onClick={() => canExecute && executeCase(c.id)}
-                                                >
-                                                    <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-                                                        <path d="M2.5 1.5l5.5 3.5-5.5 3.5V1.5z" fill="currentColor"/>
-                                                    </svg>
-                                                    {locale === 'zh' ? '执行' : 'Execute'}
-                                                </button>
-                                            )}
+                                        {/* 分数列: 后端 waitAndApplyBatchEvaluation 回写; pass 时显示数字, 其它显示 — */}
+                                        <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 600 }}>
+                                            {typeof state?.score === 'number' ? (
+                                                <span style={{
+                                                    color: state.score >= 80 ? 'var(--success)'
+                                                        : state.score >= 60 ? 'var(--warn, #D97706)'
+                                                        : 'var(--danger)',
+                                                }}>{state.score}</span>
+                                            ) : <span style={{ color: 'var(--ink-4, #B8B6AE)' }}>—</span>}
                                         </td>
+                                        {/* 「执行」「评测」「⋯」按钮列已下线 —— 配置区只展示静态信息。
+                                            行级操作 (重新执行/重新评测/查看评测结果) 后续在 ② 执行块或 /eval 评测执行里完成;
+                                            relevant handlers (executeCase / evaluateCase / retryCase) 仍保留代码不删,
+                                            供后续 ② 执行块复用。 */}
                                         <td>
-                                            {isEvaluating ? (
-                                                <button className="row-action-btn loading" disabled>
-                                                    <span className="spinner" />
-                                                    {locale === 'zh' ? '评测中' : 'Eval…'}
-                                                </button>
-                                            ) : isPass ? (
+                                            {state?.sessionId ? (
                                                 <button
-                                                    className="row-action-btn done"
-                                                    title={locale === 'zh' ? '查看评测结果' : 'View eval result'}
-                                                    onClick={() => state?.sessionId && router.push(`/eval/trajectory/${encodeURIComponent(state.sessionId)}`)}
+                                                    className="row-more"
+                                                    title={locale === 'zh' ? '查看 Trace' : 'View trace'}
+                                                    onClick={() => router.push(`/trace?taskId=${encodeURIComponent(state.sessionId!)}`)}
                                                 >
-                                                    <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-                                                        <path d="M1 5h5.5M5.5 3l2.5 2-2.5 2" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
-                                                    </svg>
-                                                    {locale === 'zh' ? '评测结果' : 'Eval Result'}
+                                                    →
                                                 </button>
-                                            ) : isFail && state?.sessionId ? (
-                                                <div style={{ display: 'inline-flex', gap: 4 }}>
-                                                    <button
-                                                        className="row-action-btn"
-                                                        style={{ color: 'var(--danger)' }}
-                                                        title={locale === 'zh' ? `使用「${[...BUILT_IN_EVALUATORS, ...userEvaluators].find(e => e.id === selectedEvaluatorId)?.name || (selectedEvaluatorId === 'trace-quality-evaluator' ? '轨迹质量评估器（旧版）' : selectedEvaluatorId)}」重新评测` : `Re-evaluate with ${selectedEvaluatorId}`}
-                                                        onClick={() => evaluateCase(c.id)}
-                                                    >
-                                                        <svg width="9" height="9" viewBox="0 0 9 9" fill="none">
-                                                            <path d="M8 4.5a3.5 3.5 0 11-3.5-3.5c.97 0 1.85.39 2.48 1.02L8 3.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
-                                                            <path d="M8 1.5v2H6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
-                                                        </svg>
-                                                        {locale === 'zh' ? '重新评测' : 'Re-eval'}
-                                                    </button>
-                                                    {state?.score !== undefined && (
-                                                        <button
-                                                            className="row-action-btn done"
-                                                            title={locale === 'zh' ? '查看评测结果' : 'View eval result'}
-                                                            onClick={() => router.push(`/eval/trajectory/${encodeURIComponent(state.sessionId!)}`)}
-                                                        >
-                                                            <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-                                                                <path d="M1 5h5.5M5.5 3l2.5 2-2.5 2" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
-                                                            </svg>
-                                                            {locale === 'zh' ? '结果' : 'Result'}
-                                                        </button>
-                                                    )}
-                                                </div>
                                             ) : (
-                                                <button
-                                                    className={`row-action-btn ${canEvaluate ? 'primary' : 'disabled'}`}
-                                                    disabled={!canEvaluate}
-                                                    onClick={() => canEvaluate && evaluateCase(c.id)}
-                                                >
-                                                    <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-                                                        <path d="M1.5 5L4 7.5 8.5 2.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
-                                                    </svg>
-                                                    {locale === 'zh' ? '评测' : 'Evaluate'}
-                                                </button>
+                                                <span style={{ color: 'var(--ink-4, #B8B6AE)', fontSize: 11 }}>—</span>
                                             )}
-                                        </td>
-                                        <td>
-                                            <button className="row-more">⋯</button>
                                         </td>
                                     </tr>
                                 );
@@ -1758,14 +2116,69 @@ export function BatchEvaluation({
                     })()}
                 </div>
             </div>
+            {/* 统一「开始评测」按钮 —— ① 配置末尾 (跟 A/B / trace 模式一致)。
+                dataset 模式: 对勾选的 case 先执行生成 Trace, 再开始评测; append 到当前评测任务。 */}
+            {controlled && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--ev-line, #e5e7eb)', flexWrap: 'wrap' }}>
+                <button
+                    type="button"
+                    onClick={bulkStartUnified}
+                    disabled={batchStartInFlight || selectedCaseIds.length === 0 || !currentTask || !evaluationBatchId}
+                    style={{
+                        padding: '9px 22px',
+                        background: (batchStartInFlight || selectedCaseIds.length === 0 || !currentTask || !evaluationBatchId) ? '#A5A0E4' : '#4F46E5',
+                        color: '#fff', border: 'none', borderRadius: 6,
+                        fontSize: 14, fontWeight: 700,
+                        cursor: (batchStartInFlight || selectedCaseIds.length === 0 || !currentTask || !evaluationBatchId) ? 'not-allowed' : 'pointer',
+                    }}
+                    title={!evaluationBatchId ? '请先在上方"评测任务"里新建或选择一个评测任务' : selectedCaseIds.length === 0 ? '请先在上方勾选 case' : '先执行选中 case 生成 Trace, 再开始评测'}
+                >
+                    {batchStartInFlight
+                        ? (locale === 'zh' ? '评测中…' : 'Evaluating…')
+                        : selectedCaseIds.length > 0
+                            ? `▶ ${locale === 'zh' ? '开始评测' : 'Start eval'}（${selectedCaseIds.length}）`
+                            : `▶ ${locale === 'zh' ? '开始评测' : 'Start eval'}`}
+                </button>
+                {batchStartInFlight && (
+                    <button
+                        type="button"
+                        onClick={bulkAbortUnified}
+                        style={{ padding: '7px 14px', background: '#fff', border: '1px solid #DC2626', borderRadius: 6, fontSize: 12.5, fontWeight: 600, color: '#DC2626', cursor: 'pointer' }}
+                    >
+                        ⏹ {locale === 'zh' ? '终止' : 'Abort'}
+                    </button>
+                )}
+                <span style={{ fontSize: 11, color: !evaluationBatchId ? '#D97706' : 'var(--ink-3, #a1a1aa)' }}>
+                    {!evaluationBatchId
+                        ? (locale === 'zh' ? '请先在上方「评测任务」新建或选择一个任务，再开始评测' : 'Create/select an eval task above first')
+                        : (locale === 'zh' ? '勾选 case 后开始评测：先执行生成 Trace 再评测；进度见 ② 评测执行' : 'Select cases → execute to generate traces → evaluate; progress in ②')}
+                </span>
+                {batchStartInFlight && (() => {
+                    const ids = Object.keys(caseStates);
+                    const pass = ids.filter(id => caseStates[id]?.status === 'pass').length;
+                    const fail = ids.filter(id => caseStates[id]?.status === 'fail').length;
+                    const running = ids.filter(id => { const s = caseStates[id]?.status; return s === 'running' || s === 'evaluating' || s === 'executed'; }).length;
+                    return (
+                        <span style={{ fontSize: 11.5, color: 'var(--ink-2)', display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                            <span>共 <b>{ids.length}</b></span>
+                            <span style={{ color: 'var(--success)' }}>✓ {pass}</span>
+                            {fail > 0 && <span style={{ color: 'var(--danger)' }}>✗ {fail}</span>}
+                            {running > 0 && <span style={{ color: '#2563EB' }}>⏳ {running}</span>}
+                        </span>
+                    );
+                })()}
+            </div>
+            )}
             </SectionShell>{/* /① 配置（已并入 case 表） */}
 
-            {/* ─────────── ② 执行 · 跑评测（已评测 case 紧凑表，点行钻取 ③） ─────────── */}
+            {/* 受控模式(用例分析)下隐藏 BE 自带的 ②/③——父页统一渲染一份(绑定评测任务、与 source 无关)。 */}
+            {!hideExecAndResult && (<>
+            {/* ─────────── ② 评测执行（A/B 同款三列表, 点行钻取 ③） ─────────── */}
             <SectionShell
                 num={2}
                 variant="exec"
-                title="执行 · 跑评测"
-                desc="只列已评测 case（结果状态 pass / fail）；点行钻取 ③ 看完整分析"
+                title="评测执行"
+                desc="已启动的 case：执行 session id 跳链路追踪、评测结果跳评测任务详情；实时进度，点行钻取 ③"
                 open={execSecOpen}
                 onToggle={() => setExecSecOpen(o => !o)}
                 summary={
@@ -1778,73 +2191,75 @@ export function BatchEvaluation({
                     </>
                 }
             >
-                {evaluatedCount === 0 ? (
-                    <div style={{ padding: '24px 20px', textAlign: 'center', color: 'var(--ev-muted)', fontSize: 13, background: '#fafafa', border: '1px dashed var(--ev-line)', borderRadius: 8 }}>
-                        还没有 case 跑过评测。在 ① 配置块上方的 work-table 里点「批量执行」/「批量评测」。
-                    </div>
-                ) : (
-                    <div style={{ border: '1px solid var(--ev-line)', borderRadius: 8, overflow: 'hidden' }}>
-                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                            <thead>
-                                <tr style={{ background: '#fafafa', borderBottom: '1px solid var(--ev-line)' }}>
-                                    <th style={{ padding: '8px 12px', textAlign: 'left', fontSize: 11, color: 'var(--ev-muted)', fontWeight: 600 }}>Case · query</th>
-                                    <th style={{ padding: '8px 12px', textAlign: 'right', fontSize: 11, color: 'var(--ev-muted)', fontWeight: 600, width: 70 }}>评分</th>
-                                    <th style={{ padding: '8px 12px', textAlign: 'left', fontSize: 11, color: 'var(--ev-muted)', fontWeight: 600, width: 70 }}>结果</th>
-                                    <th style={{ padding: '8px 12px', textAlign: 'center', fontSize: 11, color: 'var(--ev-muted)', fontWeight: 600, width: 60 }}>查看</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {allCases.filter(c => {
-                                    const s = caseStates[c.id]?.status;
-                                    return s === 'pass' || s === 'fail';
-                                }).map(c => {
-                                    const st = caseStates[c.id];
-                                    const score = st?.score ?? null;
-                                    const isPass = st?.status === 'pass';
-                                    const scoreColor = score == null ? 'var(--ev-muted)'
-                                        : score >= 80 ? 'var(--ev-success)'
-                                        : score >= 60 ? 'var(--ev-warning)'
-                                        : 'var(--ev-error)';
-                                    return (
-                                        <tr
-                                            key={c.id}
-                                            onClick={() => {
-                                                // 跳到 ③ 结果块；BatchResultBlock 内部依据 caseStates 拿到该 case
-                                                setResultSecOpen(true);
-                                                // 主动 scroll
-                                                requestAnimationFrame(() => {
-                                                    document.querySelector('[data-result-section]')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                                                });
-                                            }}
-                                            style={{ cursor: 'pointer', borderBottom: '1px solid #f4f4f5' }}
-                                            title="点行回到 ③ 结果块查看 Hero + 分组 case 详情"
-                                        >
-                                            <td style={{ padding: '10px 12px', maxWidth: 420, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                                {c.input || c.id}
-                                            </td>
-                                            <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 700, color: scoreColor }}>
-                                                {score ?? '—'}
-                                            </td>
-                                            <td style={{ padding: '10px 12px' }}>
-                                                <span style={{ padding: '2px 8px', borderRadius: 3, fontSize: 11, fontWeight: 700, background: isPass ? 'var(--ev-success-soft)' : 'var(--ev-error-soft)', color: isPass ? 'var(--ev-success)' : 'var(--ev-error)' }}>
-                                                    {isPass ? '✓ pass' : '✗ fail'}
-                                                </span>
-                                            </td>
-                                            <td style={{ padding: '10px 12px', textAlign: 'center', color: 'var(--ev-info)', fontSize: 12 }}>↓</td>
-                                        </tr>
-                                    );
-                                })}
-                            </tbody>
-                        </table>
-                    </div>
-                )}
+                <ExecutionRecordsTable
+                    locale={locale}
+                    emptyHint={'还没启动评测。在 ① 配置块勾选 case → 点「▶ 启动」。'}
+                    onRetry={rec => retryCase(rec.id, false)}
+                    onDelete={async rec => {
+                        const stt = caseStates[rec.id]?.status;
+                        if (stt === 'running' || stt === 'executed' || stt === 'evaluating') {
+                            alert(locale === 'zh' ? '评测/执行进行中，无法删除' : 'In progress, cannot delete');
+                            return;
+                        }
+                        if (typeof window !== 'undefined' && !window.confirm(locale === 'zh'
+                            ? '确定从「评测执行」列表删除这条 case 记录吗？（仅移除本次执行记录，数据集 case 本身保留）'
+                            : 'Delete this case record from the execution list?')) return;
+                        // 移除该 case 状态并持久化（复用 PUT 覆写 caseStatesJson），避免轮询又把它显示回来。
+                        const next = { ...caseStates };
+                        delete next[rec.id];
+                        setCaseStates(next);
+                        if (currentTask) {
+                            try {
+                                await apiFetch(`/api/debug/batch-tasks/${currentTask.id}`, {
+                                    method: 'PUT',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ user: user || 'debug-user', caseStatesJson: next }),
+                                });
+                            } catch { /* 本地已移除，持久化失败下次轮询会恢复，可接受 */ }
+                        }
+                    }}
+                    onRowClick={() => {
+                        setResultSecOpen(true);
+                        requestAnimationFrame(() => {
+                            document.querySelector('[data-result-section]')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        });
+                    }}
+                    records={allCases
+                        .filter(c => { const st = caseStates[c.id]?.status; return st && st !== 'pending'; })
+                        .map(c => {
+                            const st = caseStates[c.id];
+                            const status = st?.status;
+                            const compStatus = status === 'running' ? 'executing'
+                                : status === 'executed' ? 'evaluating'
+                                : status === 'evaluating' ? 'evaluating'
+                                : status === 'pass' ? 'done'
+                                : status === 'fail' ? 'failed'
+                                : 'pending';
+                            const meta = st?.sessionId ? evalResultsMap.get(st.sessionId) : undefined;
+                            return {
+                                id: c.id,
+                                caseLabel: String(c.input || c.id),
+                                caseTitle: c.input || c.id,
+                                executionTraceId: st?.sessionId || undefined,
+                                evaluationTraceId: meta?.evaluationTraceId,
+                                resultEvalTraceId: meta?.resultEvalTraceId,
+                                trajEvalTraceId: meta?.trajEvalTraceId,
+                                evaluatorRunId: st?.evaluatorRunId || evaluationBatchId || undefined,
+                                datasetId: c.datasetId || meta?.datasetId || undefined,
+                                status: compStatus,
+                                resultScore: meta?.resultScore ?? null,
+                                trajScore: meta?.trajScore ?? null,
+                                errorMsg: st?.output || undefined,
+                            } as EvalRecordRow;
+                        })}
+                />
             </SectionShell>{/* /② 执行 */}
 
             {/* ─────────── ③ 结果 · 用例分析 ─────────── */}
             <SectionShell
                 num={3}
                 variant="result"
-                title="结果 · 用例分析"
+                title="分析结果"
                 desc={evaluatedCount > 0
                     ? `已评测 ${evaluatedCount} / ${allCases.length} 用例 · 当前任务 ${currentTask?.taskName || ''}`
                     : '尚未评测'}
@@ -1875,6 +2290,7 @@ export function BatchEvaluation({
                     onDrillTrace={sessionId => router.push(`/eval/trajectory/${sessionId}`)}
                 />
             </SectionShell>{/* /③ 结果 */}
+            </>)}{/* /受控模式隐藏 BE 自带 ②/③ */}
 
             {/* Dataset Modal */}
             {showDatasetModal && (
@@ -2116,6 +2532,16 @@ export function BatchEvaluation({
                     </div>
                 </>
             )}
+
+            {/* 新增评测任务对话框 (跨 section 浮窗) */}
+            <NewEvaluationBatchDialog
+                open={newBatchDialogOpen}
+                user={user || ''}
+                defaultTitle={currentTask?.taskName}
+                evaluators={selectedEvaluatorIds}
+                onClose={() => setNewBatchDialogOpen(false)}
+                onCreated={handleEvalBatchCreated}
+            />
         </>
     );
 }

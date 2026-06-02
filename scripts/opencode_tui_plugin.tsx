@@ -2,9 +2,9 @@
 /** @jsxImportSource @opentui/solid */
 import { Show, createEffect, createMemo, createSignal } from "solid-js"
 import fs from "fs"
-import os from "os"
 import path from "path"
 import { spawn } from "child_process"
+import { getExistingInsightDir, getInsightEnvCandidates } from "./insight-paths.js"
 
 function parseBool(input: unknown, defaultValue: boolean) {
   if (input === undefined || input === null) return defaultValue
@@ -18,8 +18,8 @@ function parseBool(input: unknown, defaultValue: boolean) {
 function loadSkillInsightConfig() {
   const config: Record<string, string> = {}
   try {
-    const envPath = path.join(os.homedir(), ".skill-insight", ".env")
-    if (fs.existsSync(envPath)) {
+    for (const envPath of getInsightEnvCandidates()) {
+      if (!fs.existsSync(envPath)) continue
       const content = fs.readFileSync(envPath, "utf8")
       for (const line of content.split("\n")) {
         const match = line.match(/^\s*([\w_]+)\s*=\s*(.*)?\s*$/)
@@ -145,7 +145,7 @@ function StatsFooter(props: {
   })
 
   const title = createMemo(() => {
-    return "Skill Insight"
+    return "Agent Insight"
   })
 
   return (
@@ -161,10 +161,10 @@ function StatsFooter(props: {
           gap={0}
         >
           <text fg={theme().text}>
-            <b>Skill Insight</b>
+            <b>Agent Insight</b>
           </text>
           <text fg={theme().textMuted}>未配置 SKILL_INSIGHT_HOST</text>
-          <text fg={theme().textMuted}>请在 ~/.skill-insight/.env 设置 SKILL_INSIGHT_HOST</text>
+          <text fg={theme().textMuted}>请在 {path.join(getExistingInsightDir(), ".env")} 设置 SKILL_INSIGHT_HOST</text>
         </box>
       </Show>
       <Show when={entry()}>
@@ -212,7 +212,7 @@ function StatsFooter(props: {
         )}
       </Show>
       <Show when={!entry()}>
-        <text fg={theme().textMuted}>Skill Insight：暂无任务统计</text>
+        <text fg={theme().textMuted}>Agent Insight：暂无任务统计</text>
       </Show>
     </box>
   )
@@ -295,7 +295,7 @@ const tui = async (api: any) => {
 
     if (!sessionId || typeof sessionId !== "string") return
     if (!sessionId.startsWith("ses")) return
-    api.kv.set("skill_insight_latest_session_id", sessionId)
+    api.kv.set("agent_insight_latest_session_id", sessionId)
     ensure(sessionId, { force: true })
   })
 }

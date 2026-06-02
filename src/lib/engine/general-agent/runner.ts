@@ -129,6 +129,20 @@ export interface RunGeneralAgentInput {
   query: string;
   skill?: string;
   skillVersion?: number;
+  /**
+   * 纯 trace 归属标签——agent **不会**真去加载这个 skill (区别于 input.skill: 后者
+   * 会触发 deploySkillToWorkspace 部署 SKILL.md)。仅写入 internal-agent-tag.skill +
+   * recordEvaluatorExecution 时填入 Execution.skill, 让"从 Trace"按 skill 过滤
+   * 能搜到这条 trace。
+   *
+   * 典型场景: A/B 灰度的 baseline 侧 (grayscale-baseline-agent) 故意不加载 skill,
+   * 但 trace 在逻辑上跟 B 侧被测 skill 配对, 应该归属到那个 skill。
+   * 用例分析卡的 mode='batch' 也可以传, 但通常用户已经选了 input.skill, 不需要 tagSkill。
+   *
+   * 优先级 (写入 internal-agent-tag.skill 时):
+   *   def?.traceSkill (SYSTEM_AGENTS 静态绑定) > input.skill > input.tagSkill
+   */
+  tagSkill?: string;
   system?: string;
   sessionId?: string;
   /**
@@ -324,9 +338,13 @@ async function runGeneralAgentWithClient(
     tagOpencodeSession(sessionId, {
       agentName: input.systemAgentName,
       agentId,
-      // skill 标签来自 SYSTEM_AGENTS 中的 traceSkill 声明（不是运行时 input.skill，
-      // 后者是 DB-loaded skill 的语义，可能与文件式 system prompt 不一致）。
-      skill: def?.traceSkill,
+      // skill 标签优先级:
+      //   1. def?.traceSkill — SYSTEM_AGENTS 静态绑定的内置 skill (skill-generator-agent
+      //      → 'skill-generator' 等); 跟 file-based system prompt 配对, 最权威。
+      //   2. input.skill — 运行时实际加载部署的用户 skill (A/B grayscale-skill-agent / 用例分析
+      //      mode='batch' 等场景), 让"从 Trace"按 skill 过滤能搜到这条 trace。
+      //   3. input.tagSkill — 纯标签兜底, 给 baseline (不加载 skill 但归属某 skill 对照) 用。
+      skill: def?.traceSkill || input.skill || input.tagSkill,
       displayQuery: query,
       user,
     });
@@ -460,6 +478,12 @@ async function runGeneralAgentWithClient(
         agentName: input.recordTraceAs,
         user: input.user,
         query: input.query,
+        // 跟 tagOpencodeSession 同一份 skill 解析逻辑, 让 plugin 上报路径和
+        // 主动写库路径填出来的 skill 字段一致——baseline 那侧也能归到对照 skill 下,
+        // 从 Trace 视图按 skill 过滤能搜到。
+        skill: skillMeta?.name ?? input.skill ?? input.tagSkill,
+        skillVersion: skillMeta?.version ?? input.skillVersion,
+        fallbackOutput: result.text,
       });
     } catch (err) {
       console.warn(`[general-agent] recordTraceAs failed for session ${sessionId}:`, (err as Error)?.message || err);

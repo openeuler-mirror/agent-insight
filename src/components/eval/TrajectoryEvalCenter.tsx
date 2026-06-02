@@ -18,6 +18,7 @@ import {
 import { useRouter, useSearchParams } from 'next/navigation';
 import { apiFetch } from '@/lib/client/api';
 import { useAuth } from '@/lib/auth/auth-context';
+import { fmtPercentScore } from '@/lib/eval/score-format';
 import {
     getPrimaryExecutionAgentName,
     isEvaluatorAgent,
@@ -91,7 +92,8 @@ interface DimensionScores {
     completeness: number;
     toolChoice: number;
     redundancy: number;
-    attribution: number;
+    /** 归因维度（v2 起不计入加权轨迹分，仅历史数据可能携带）。 */
+    attribution?: number;
 }
 
 interface TrajectoryDeviation {
@@ -184,11 +186,6 @@ function getStatusLabel(r: TrajectoryResult): string {
 
 function getStatusColor(r: TrajectoryResult): string {
     return isNoEvaluableCase(r) ? COLORS.warning : STATUS_COLOR[getEffectiveStatus(r)];
-}
-
-function fmtScore10(n: number | null | undefined): string {
-    if (n === null || n === undefined || Number.isNaN(n)) return '--';
-    return (n * 10).toFixed(1);
 }
 
 function fmtRelTime(s?: string | null): string {
@@ -1191,7 +1188,7 @@ export default function TrajectoryEvalCenter() {
                                     <th style={thStyle(undefined, 'left')}>Trace 实际输入</th>
                                     <th style={thStyle(undefined, 'left')}>Trace 实际输出</th>
                                     <th style={thStyle(80, 'center')}>评测状态</th>
-                                    <th style={thStyle(60, 'right')}>得分</th>
+                                    <th style={thStyle(76, 'right')}>得分</th>
                                     <th style={thStyle(80, 'left')}>评测器</th>
                                     <th style={thStyle(60, 'right')}>耗时</th>
                                     <th style={thStyle(80, 'center')}></th>
@@ -1263,8 +1260,8 @@ export default function TrajectoryEvalCenter() {
                                                     <span style={{ color: COLORS.textDisabled }}>待评测</span>
                                                 )}
                                             </td>
-                                            <td style={{ ...tdStyle('right'), color: displayScore != null ? COLORS.primary : COLORS.textDisabled, fontWeight: 600 }}>
-                                                {displayScore != null ? `${fmtScore10(displayScore)} 分` : '--'}
+                                            <td style={{ ...tdStyle('right'), color: displayScore != null ? COLORS.primary : COLORS.textDisabled, fontWeight: 600, whiteSpace: 'nowrap' }}>
+                                                {displayScore != null ? `${fmtPercentScore(displayScore)} 分` : '--'}
                                             </td>
                                             <td style={tdStyle('left')}>
                                                 <span style={{ color: r ? COLORS.textSecondary : COLORS.textDisabled }}>

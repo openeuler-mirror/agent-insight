@@ -8,6 +8,14 @@ const os = require('os')
 
 const { sleep, isPortListening, findAvailablePort } = require('./utils.js')
 
+function getPreferredHomeDataRoot() {
+  return path.join(os.homedir(), '.agent-insight')
+}
+
+function getLegacyHomeDataRoot() {
+  return path.join(os.homedir(), '.skill-insight')
+}
+
 async function runCommand(command, options = {}) {
   return new Promise((resolve, reject) => {
     const [cmd, ...args] = command.split(' ')
@@ -127,7 +135,7 @@ async function run(options = {}) {
   if (isNaN(nodeMajor) || nodeMajor < 20) {
     console.log('\n')
     console.log('❌ Error: Node.js version ' + nodeVersion + ' is not supported.')
-    console.log('   Skill-insight requires Node.js 20 or higher.')
+    console.log('   Agent-insight requires Node.js 20 or higher.')
     console.log('   Please upgrade your Node.js version: https://nodejs.org/')
     console.log('\n')
     process.exit(1)
@@ -139,7 +147,7 @@ async function run(options = {}) {
   console.log('\n')
   console.log('╔════════════════════════════════════════════════════════════╗')
   console.log('║                                                            ║')
-  console.log('║             🚀 Skill-insight 一键部署 🚀                ║')
+  console.log('║             🚀 Agent-insight 一键部署 🚀                ║')
   console.log('║                                                            ║')
   console.log('╚════════════════════════════════════════════════════════════╝')
   console.log('')
@@ -148,13 +156,14 @@ async function run(options = {}) {
 
   try {
     const oldDbPath = path.join(process.cwd(), 'node_modules', '@witty-ai', 'skill-insight', 'data', 'witty_insight.db')
-    const newDbDir = path.join(os.homedir(), '.skill-insight', 'data')
+    const newDbDir = path.join(getPreferredHomeDataRoot(), 'data')
     const newDbPath = path.join(newDbDir, 'witty_insight.db')
+    const legacyDbPath = path.join(getLegacyHomeDataRoot(), 'data', 'witty_insight.db')
 
-    if (fs.existsSync(oldDbPath) && !fs.existsSync(newDbPath)) {
-      console.log('   ⚠️ 检测到 node_modules 中存在旧版数据，正在执行迁移...')
+    if (!fs.existsSync(newDbPath) && (fs.existsSync(oldDbPath) || fs.existsSync(legacyDbPath))) {
+      console.log('   ⚠️ 检测到旧版数据，正在迁移到 ~/.agent-insight/data ...')
       if (!fs.existsSync(newDbDir)) fs.mkdirSync(newDbDir, { recursive: true })
-      fs.copyFileSync(oldDbPath, newDbPath)
+      fs.copyFileSync(fs.existsSync(legacyDbPath) ? legacyDbPath : oldDbPath, newDbPath)
       console.log('   ✅ 旧版数据已成功迁移至安全目录')
     }
   } catch (e) {
@@ -177,7 +186,7 @@ async function run(options = {}) {
 
   console.log('🔧 【步骤 2/5】启动服务...')
   try {
-    const logPath = path.join(os.homedir(), '.skill-insight', 'install.log')
+    const logPath = path.join(getPreferredHomeDataRoot(), 'install.log')
     const logDir = path.dirname(logPath)
     if (!fs.existsSync(logDir)) {
       fs.mkdirSync(logDir, { recursive: true })
@@ -220,7 +229,7 @@ async function run(options = {}) {
 
     const scriptContent = await callAutoSetup(port, apiKey)
     const isWindows = process.platform === 'win32'
-    const scriptDir = path.join(os.homedir(), '.skill-insight')
+    const scriptDir = getPreferredHomeDataRoot()
 
     fs.mkdirSync(scriptDir, { recursive: true })
 

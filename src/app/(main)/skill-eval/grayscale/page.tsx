@@ -2,13 +2,24 @@
 
 import React, { useState, useEffect, Suspense, useCallback, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import { AppTopBar } from '@/components/shell/AppTopBar';
+import { PageHeader } from '@/components/shell/PageHeader';
+import { StatusBadge } from '@/components/feedback/StatusBadge';
+import { Button } from '@/components/ui/button';
+import { Select } from '@/components/ui/select';
+import { MetricValue } from '@/components/text/MetricValue';
+import { History, Play, ExternalLink } from 'lucide-react';
 import { useLocale } from '@/lib/client/locale-context';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
-import { calculateAbScoring, DEFAULT_AB_SCORING_POLICY, type AbScoringResult } from '@/lib/skill-analysis/ab-scoring';
+import { calculateAbScoring, DEFAULT_AB_SCORING_POLICY, type AbScoringResult, type AbScoreBreakdown, type AbTone } from '@/lib/skill-analysis/ab-scoring';
+import {
+    buildGrayscaleTraceCase,
+    findLatestRunnableRunIndex,
+} from '@/lib/skill-analysis/grayscale-utils';
+import { NewEvaluationBatchDialog, type NewBatchCreated } from '@/components/eval/NewEvaluationBatchDialog';
 import '../debug.css';
 import '../skill-analysis.css';
+import './hifi.css';
 
 export default function GrayscalePage() {
     return (
@@ -38,7 +49,21 @@ interface TraceRecord {
     timestamp?: string;
     timeCost?: string;
     framework?: string;
+    dataset_id?: string;
+    dataset_name?: string;
 }
+
+type EvaluationCaseItem = {
+    id: string;
+    input: string;
+    datasetName: string;
+    datasetId: string;
+    sourceType?: 'dataset' | 'trace';
+    sourceExecutionSessionId?: string;
+    sourceUploadId?: string;
+    sourceDatasetId?: string;
+    sourceDatasetName?: string;
+};
 
 interface GrayscaleTask {
     id: string;
@@ -61,6 +86,7 @@ interface GrayscaleTask {
         autoEval?: boolean;
         recordTriggerDetails?: boolean;
         evaluatorId?: string;
+        latestResultAt?: string;
         query?: string;
         selectedDatasetId?: string;
         selectedCaseId?: string;
@@ -71,6 +97,14 @@ interface GrayscaleTask {
         traceTimeRange?: '1d' | '3d' | '7d';
         selectedTraceAId?: string;
         selectedTraceBId?: string;
+        // 关联到「评测执行」页的批次 ID (evaluatorRunId)。任务级配置: 用户通过
+        // 配置卡顶部「+ 新增评测任务」对话框创建一个空批次后, 把 ID 写回这里。
+        // 后续启动评测时 (action='start' / 'evaluate' / retry-eval) 透传给
+        // /api/eval/trajectory/run 作 evaluatorRunId append, 让所有评测落到同一批次。
+        evaluationBatchId?: string;
+        // 同步存批次的可读名 + 评估器列表 (冗余存储, 用于 UI 显示, 避免每次查 /eval 接口)
+        evaluationBatchTitle?: string;
+        evaluationBatchEvaluators?: string[];
     };
     caseStatesJson?: Record<string, { a: PerVersionState; b: PerVersionState }>;
     activeRun?: {
@@ -124,6 +158,7 @@ interface RunResult {
     // 失败区分, retry 时也要清掉防止下次显示残留错误
     failureType?: string;
     failureDetail?: string;
+    completedAt?: string;
 }
 
 function scoreTierFromComposite(score: number): ScoreTier {
@@ -293,6 +328,452 @@ function StatusText({ label, tone }: { label: string; tone: BadgeTone }) {
     );
 }
 
+// Card 3「综合判定 & 决策」的主体。设计目标：一屏内同时看到决策结论、三维分数,
+// 以及每个分数的计算路径。布局分三段:
+//   ① 决策横条—— DECISION 标签 + 决策名 + 综合分(min 短板)；中间一句话写"短板在哪 /
+//      关键证据 / 下一步动作";右侧保留 [查看 Trace]。
+//   ② 维度表 ——能力/成本/稳定性三行。分数列 mono+tabular-nums,带 50/75 阈值刻度。
+//      关键证据列只罗列与判定最相关的几个数(评测均分 / ΔToken / 触发率 等)。
+//   ③ "原始数据与计算公式"折叠面板——展开后是四个 mini panel(能力/成本/稳定性/综合),
+//      每个里面 A vs B 原始值 + 公式代入式,直接覆盖"分数怎么来的"那条溯源链。
+// 公式与术语唯一对齐 docs/skill-ab-scoring.md(v2.1);UI 用到的所有数字都从 abScoring.*
+// 拿,不重新计算,避免与算法实现漂移。
+function DecisionVerdictCard({
+    decisionReady,
+    abScoring,
+    sampleSize,
+    repeatRounds,
+    recommendedSampleSize,
+    policy,
+    decisionTitle,
+    decisionAdvice,
+    onViewTrace,
+    locale,
+    toneColor,
+    toneBg,
+}: {
+    decisionReady: boolean;
+    abScoring: AbScoringResult;
+    sampleSize: number;
+    repeatRounds: number;
+    recommendedSampleSize: number;
+    policy: typeof DEFAULT_AB_SCORING_POLICY;
+    decisionTitle: string;
+    decisionAdvice: string;
+    onViewTrace: () => void;
+    locale: 'zh' | 'en';
+    toneColor: (tone: AbTone) => string;
+    toneBg: (tone: AbTone) => string;
+}) {
+    // 决策态: reject → 红, direct-release → 绿, monitor-release → 琥珀, insufficient → 灰
+    const decisionTone: AbTone = !decisionReady || abScoring.decision === 'insufficient'
+        ? 'gray'
+        : abScoring.decision === 'reject'
+            ? 'red'
+            : abScoring.decision === 'direct-release'
+                ? 'green'
+                : 'amber';
+    const decisionColor = toneColor(decisionTone);
+    const decisionBg = toneBg(decisionTone);
+
+    // 短板维度: 拒绝时直接看 rejectCategory; 其它时看三维 min。null 表示不出短板提示。
+    const shortDim: 'capability' | 'cost' | 'stability' | null = (() => {
+        if (!decisionReady) return null;
+        if (abScoring.rejectCategory) return abScoring.rejectCategory;
+        if (abScoring.totalScore == null) return null;
+        const s = [
+            { key: 'capability' as const, v: abScoring.capability.score },
+            { key: 'cost' as const,       v: abScoring.cost.score },
+            { key: 'stability' as const,  v: abScoring.stability.score },
+        ].filter(x => x.v != null) as Array<{ key: 'capability' | 'cost' | 'stability'; v: number }>;
+        if (s.length === 0) return null;
+        return s.sort((a, b) => a.v - b.v)[0].key;
+    })();
+    const dimLabel = (k: 'capability' | 'cost' | 'stability') => k === 'capability' ? '能力' : k === 'cost' ? '成本' : '稳定性';
+    const dimTone = (k: 'capability' | 'cost' | 'stability') =>
+        k === 'capability' ? abScoring.capability.tone
+        : k === 'cost' ? abScoring.cost.tone
+        : abScoring.stability.tone;
+
+    // 描述文本一句话写清:「短板在 X · 关键证据」+「下一步 ...」+ 样本量提示(如果不足)
+    const evidenceText: string = (() => {
+        if (!decisionReady) return '';
+        if (shortDim === 'capability') {
+            const a = abScoring.capability.avgEvalScoreA;
+            const b = abScoring.capability.avgEvalScoreB;
+            const d = abScoring.capability.deltaScore;
+            const hit = abScoring.hardGates.find(g => g.key === 'capability');
+            const pieces: string[] = [];
+            if (a != null && b != null) pieces.push(`评测均分由 ${a} → ${b}`);
+            if (d != null) pieces.push(`Δ ${d > 0 ? '+' : ''}${d}`);
+            if (hit) pieces.push(`命中 hard gate (< ${policy.capabilityRejectThreshold})`);
+            return pieces.join(', ');
+        }
+        if (shortDim === 'cost') {
+            const dToken = abScoring.cost.deltaTokenPct;
+            const dDur = abScoring.cost.deltaDurationPct;
+            const cap = abScoring.capability.score;
+            const coupling = cap == null ? 0 : cap >= policy.capabilityGoodThreshold ? policy.costCouplingBonus : cap < policy.capabilityRejectThreshold ? -policy.costCouplingPenalty : 0;
+            const pieces: string[] = [];
+            if (dToken != null) pieces.push(`ΔToken ${dToken > 0 ? '+' : ''}${dToken}%`);
+            if (dDur != null) pieces.push(`耗时 ${dDur > 0 ? '+' : ''}${dDur}%`);
+            if (coupling !== 0) pieces.push(`能力耦合 ${coupling > 0 ? '+' : ''}${coupling}`);
+            return pieces.join(', ');
+        }
+        if (shortDim === 'stability') {
+            const inv = abScoring.stability.invokeRate;
+            const v = abScoring.stability.variance;
+            const pieces: string[] = [];
+            if (inv != null) pieces.push(`触发率 ${inv}%`);
+            pieces.push(v == null ? `方差 — (R=${repeatRounds})` : `方差 ${v}`);
+            return pieces.join(', ');
+        }
+        return '';
+    })();
+    const sampleHint = decisionReady && sampleSize < recommendedSampleSize
+        ? `样本量偏少, 建议补到 N≥${recommendedSampleSize}、R≥${Math.max(policy.minRepeats, 3)}`
+        : '';
+    const nextStep: string = decisionAdvice;
+
+    // 维度行的进度条 + 阈值刻度。50 / 75 是 reject / good 边界 (能力/成本各自配置, 但
+    // 为简化 UI 统一用 50/75 作视觉刻度——和算法判定阈值差异极小, 不影响读数)。
+    const Bar = ({ value, tone }: { value: number | null; tone: AbTone }) => {
+        const v = value == null ? 0 : Math.max(0, Math.min(100, value));
+        return (
+            <div style={{ position: 'relative', height: 8, background: '#E7E5E4', borderRadius: 999, overflow: 'hidden' }}>
+                <div style={{ width: `${Math.max(2, v)}%`, height: '100%', background: toneColor(tone), borderRadius: 999 }} />
+                {/* 50 / 75 阈值刻度——细竖线落在条上方,提示"良好线 / 拒绝线" */}
+                <span style={{ position: 'absolute', left: '50%', top: 0, bottom: 0, width: 1, background: 'rgba(0,0,0,0.18)' }} />
+                <span style={{ position: 'absolute', left: '75%', top: 0, bottom: 0, width: 1, background: 'rgba(0,0,0,0.18)' }} />
+            </div>
+        );
+    };
+
+    const Score = ({ value, tone }: { value: number | null; tone: AbTone }) => (
+        <div style={{ fontFamily: 'ui-monospace, monospace', fontVariantNumeric: 'tabular-nums', textAlign: 'right', whiteSpace: 'nowrap' }}>
+            <span style={{ fontSize: 18, fontWeight: 800, color: toneColor(tone) }}>{value == null ? '—' : value}</span>
+            <span style={{ fontSize: 11, color: '#A8A29E', marginLeft: 4 }}>/ 100</span>
+        </div>
+    );
+
+    const VerdictPill = ({ tone, label }: { tone: AbTone; label: string }) => (
+        <span style={{
+            display: 'inline-block', padding: '1px 7px', borderRadius: 4,
+            fontSize: 10, fontWeight: 700, color: toneColor(tone), background: toneBg(tone),
+        }}>{label}</span>
+    );
+
+    // 维度行
+    const dimensionRows: Array<{
+        key: 'capability' | 'cost' | 'stability';
+        label: string;
+        subtitle: string;
+        score: number | null;
+        tone: AbTone;
+        verdictLabel: string;
+        evidence: React.ReactNode;
+    }> = [
+        {
+            key: 'capability',
+            label: '能力',
+            subtitle: 'Skill 让 Agent 多做成了多少事',
+            score: abScoring.capability.score,
+            tone: abScoring.capability.tone,
+            verdictLabel: abScoring.capability.label,
+            evidence: decisionReady ? (
+                <>
+                    A {abScoring.capability.avgEvalScoreA ?? '—'}
+                    <span style={{ color: '#A8A29E', margin: '0 4px' }}>→</span>
+                    B {abScoring.capability.avgEvalScoreB ?? '—'}
+                    {abScoring.capability.deltaScore != null && (
+                        <>
+                            <span style={{ color: '#A8A29E', margin: '0 8px' }}>·</span>
+                            Δscore {abScoring.capability.deltaScore > 0 ? '+' : ''}{abScoring.capability.deltaScore}
+                        </>
+                    )}
+                </>
+            ) : '—',
+        },
+        {
+            key: 'cost',
+            label: '成本',
+            subtitle: '多花了多少 token / 时间',
+            score: abScoring.cost.score,
+            tone: abScoring.cost.tone,
+            verdictLabel: abScoring.cost.label,
+            evidence: decisionReady ? (() => {
+                const dToken = abScoring.cost.deltaTokenPct;
+                const dDur = abScoring.cost.deltaDurationPct;
+                const cap = abScoring.capability.score;
+                const coupling = cap == null ? 0 : cap >= policy.capabilityGoodThreshold ? policy.costCouplingBonus : cap < policy.capabilityRejectThreshold ? -policy.costCouplingPenalty : 0;
+                return (
+                    <>
+                        ΔToken {dToken == null ? '—' : `${dToken > 0 ? '+' : ''}${dToken}%`}
+                        <span style={{ color: '#A8A29E', margin: '0 8px' }}>·</span>
+                        耗时 {dDur == null ? '—' : `${dDur > 0 ? '+' : ''}${dDur}%`}
+                        {coupling !== 0 && (
+                            <>
+                                <span style={{ color: '#A8A29E', margin: '0 8px' }}>·</span>
+                                能力耦合 {coupling > 0 ? '+' : ''}{coupling}
+                            </>
+                        )}
+                    </>
+                );
+            })() : '—',
+        },
+        {
+            key: 'stability',
+            label: '稳定性',
+            subtitle: '该触发时触发了吗, 结果稳吗',
+            score: abScoring.stability.score,
+            tone: abScoring.stability.tone,
+            verdictLabel: abScoring.stability.label,
+            evidence: decisionReady ? (
+                <>
+                    触发率 {abScoring.stability.invokeRate == null ? '—' : `${abScoring.stability.invokeRate}%`}
+                    <span style={{ color: '#A8A29E', margin: '0 8px' }}>·</span>
+                    方差 {abScoring.stability.variance == null ? `— (R=${repeatRounds})` : abScoring.stability.variance}
+                </>
+            ) : '—',
+        },
+    ];
+
+    return (
+        <>
+            {/* ① 决策横条 ──────────────────────────────────────────── */}
+            <div style={{
+                border: `1px solid ${decisionTone === 'gray' ? '#E7E5E4' : decisionColor}`,
+                background: decisionBg,
+                borderRadius: 10,
+                padding: '14px 18px',
+                display: 'grid',
+                gridTemplateColumns: 'minmax(170px, auto) 1fr auto',
+                gap: 18,
+                alignItems: 'center',
+            }}>
+                {/* 左：决策名 + 综合分 */}
+                <div style={{ borderRight: '1px solid rgba(0,0,0,0.08)', paddingRight: 16 }}>
+                    <div style={{ fontSize: 10, color: '#888780', fontFamily: 'ui-monospace, monospace', fontWeight: 700, letterSpacing: 1.5 }}>DECISION</div>
+                    <div style={{ fontSize: 26, fontWeight: 800, color: decisionColor, lineHeight: 1.05, marginTop: 2 }}>
+                        {decisionTitle}
+                    </div>
+                    <div style={{ fontSize: 11, color: '#5F5E5A', marginTop: 4, fontFamily: 'ui-monospace, monospace', fontVariantNumeric: 'tabular-nums' }}>
+                        综合 <span style={{ fontWeight: 700, color: decisionColor }}>{decisionReady && abScoring.totalScore != null ? abScoring.totalScore : '—'}</span> / 100
+                    </div>
+                </div>
+
+                {/* 中：短板原因 + 下一步建议 + 样本量提示 */}
+                <div style={{ fontSize: 13, lineHeight: 1.65, color: '#374151' }}>
+                    {shortDim && evidenceText && (
+                        <div>
+                            <span style={{ color: '#5F5E5A' }}>短板在 </span>
+                            <span style={{ display: 'inline-block', padding: '1px 7px', borderRadius: 4, fontSize: 11, fontWeight: 700, color: toneColor(dimTone(shortDim)), background: toneBg(dimTone(shortDim)) }}>{dimLabel(shortDim)}</span>
+                            <span style={{ color: '#5F5E5A' }}> · </span>
+                            <span>{evidenceText}</span>
+                        </div>
+                    )}
+                    <div style={{ marginTop: shortDim && evidenceText ? 4 : 0, color: '#5F5E5A' }}>
+                        <span style={{ color: '#1F2937', fontWeight: 700 }}>下一步</span>
+                        <span style={{ color: '#A8A29E', margin: '0 6px' }}>·</span>
+                        <span>{nextStep}</span>
+                        {sampleHint && (
+                            <>
+                                <span style={{ color: '#A8A29E', margin: '0 6px' }}>;</span>
+                                <span style={{ color: '#BA7517' }}>{sampleHint}</span>
+                            </>
+                        )}
+                    </div>
+                </div>
+
+                {/* 右：动作按钮 */}
+                <div style={{ display: 'flex', gap: 8 }}>
+                    <button
+                        onClick={onViewTrace}
+                        style={{
+                            padding: '7px 14px', borderRadius: 6, border: '1px solid #D6D3D1',
+                            background: 'white', color: '#1F2937', fontSize: 12, fontWeight: 600,
+                            cursor: 'pointer', whiteSpace: 'nowrap',
+                        }}
+                    >{locale === 'zh' ? '查看 Trace' : 'View Trace'}</button>
+                </div>
+            </div>
+
+            {/* ② 维度表 ──────────────────────────────────────────── */}
+            <div style={{ border: '1px solid #E7E5E4', borderRadius: 10, overflow: 'hidden', background: 'white' }}>
+                {/* 表头 */}
+                <div style={{
+                    display: 'grid', gridTemplateColumns: 'minmax(220px, 1.6fr) 90px minmax(180px, 2fr) minmax(220px, 1.8fr)',
+                    gap: 16, padding: '8px 16px',
+                    background: '#FAFAF7', borderBottom: '1px solid #E7E5E4',
+                    fontSize: 10, color: '#888780', fontFamily: 'ui-monospace, monospace', fontWeight: 700, letterSpacing: 1,
+                }}>
+                    <div>维度</div>
+                    <div style={{ textAlign: 'right' }}>分数</div>
+                    <div style={{ position: 'relative' }}>
+                        0 <span style={{ position: 'absolute', left: '50%', transform: 'translateX(-50%)' }}>· 50 ·</span>
+                        <span style={{ position: 'absolute', left: '75%', transform: 'translateX(-50%)' }}>75</span>
+                        <span style={{ float: 'right' }}>100</span>
+                    </div>
+                    <div>关键证据</div>
+                </div>
+                {/* 行 */}
+                {dimensionRows.map(row => (
+                    <div key={row.key} style={{
+                        display: 'grid', gridTemplateColumns: 'minmax(220px, 1.6fr) 90px minmax(180px, 2fr) minmax(220px, 1.8fr)',
+                        gap: 16, padding: '12px 16px',
+                        borderBottom: '1px solid #F5F4EE', alignItems: 'center',
+                    }}>
+                        <div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <span style={{ fontSize: 14, fontWeight: 700, color: '#1F2937' }}>{row.label}</span>
+                                <VerdictPill tone={row.tone} label={row.verdictLabel} />
+                            </div>
+                            <div style={{ fontSize: 11, color: '#888780', marginTop: 2 }}>{row.subtitle}</div>
+                        </div>
+                        <Score value={row.score} tone={row.tone} />
+                        <Bar value={row.score} tone={row.tone} />
+                        <div style={{ fontSize: 12, color: '#374151', fontFamily: 'ui-monospace, monospace', fontVariantNumeric: 'tabular-nums', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {row.evidence}
+                        </div>
+                    </div>
+                ))}
+            </div>
+
+            {/* ③ 原始数据与计算公式（折叠） ──────────────────────── */}
+            <details style={{ border: '1px solid #E7E5E4', borderRadius: 10, overflow: 'hidden', background: 'white' }} open={!decisionReady ? false : abScoring.decision === 'reject'}>
+                <summary style={{
+                    cursor: 'pointer', padding: '10px 16px',
+                    display: 'flex', alignItems: 'center', gap: 8,
+                    background: '#FAFAF7', borderBottom: '1px solid #E7E5E4',
+                    fontSize: 12, fontWeight: 700, color: '#374151', userSelect: 'none', listStyle: 'none',
+                }}>
+                    <span style={{ color: '#A8A29E', fontFamily: 'ui-monospace, monospace', fontSize: 11 }}>▸</span>
+                    <span>原始数据与计算公式</span>
+                    <span style={{ flex: 1 }} />
+                    <span style={{ color: '#A8A29E', fontFamily: 'ui-monospace, monospace', fontSize: 11, fontWeight: 400 }}>
+                        min(capability, cost, stability)
+                    </span>
+                </summary>
+                <div style={{ padding: 16, display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12 }}>
+                    <RawSubCard
+                        label="能力" tag="capability" tone={abScoring.capability.tone}
+                        rows={[
+                            { k: '评测均分', a: abScoring.capability.avgEvalScoreA, b: abScoring.capability.avgEvalScoreB, aFmt: v => v == null ? '—' : String(v), bFmt: v => v == null ? '—' : String(v) },
+                            { k: '通过率', a: abScoring.capability.passRateA, b: abScoring.capability.passRateB, aFmt: v => v == null ? '—' : `${v}%`, bFmt: v => v == null ? '—' : `${v}%` },
+                        ]}
+                        delta={{ label: 'Δscore', value: abScoring.capability.deltaScore == null ? '—' : `${abScoring.capability.deltaScore > 0 ? '+' : ''}${abScoring.capability.deltaScore}` }}
+                        breakdown={abScoring.capability.breakdown}
+                        dataQualityIssue={abScoring.capability.dataQualityIssue}
+                        toneColor={toneColor} toneBg={toneBg}
+                    />
+                    <RawSubCard
+                        label="成本" tag="cost" tone={abScoring.cost.tone}
+                        rows={[
+                            { k: 'Token', a: abScoring.cost.avgTokensA, b: abScoring.cost.avgTokensB, aFmt: v => v == null ? '—' : v.toLocaleString(), bFmt: v => v == null ? '—' : v.toLocaleString() },
+                            { k: '耗时', a: abScoring.cost.avgDurationA, b: abScoring.cost.avgDurationB, aFmt: v => v == null ? '—' : `${v}s`, bFmt: v => v == null ? '—' : `${v}s` },
+                            { k: '步数', a: abScoring.cost.avgStepsA, b: abScoring.cost.avgStepsB, aFmt: v => v == null ? '—' : String(v), bFmt: v => v == null ? '—' : String(v) },
+                        ]}
+                        delta={{ label: 'ΔToken', value: abScoring.cost.deltaTokenPct == null ? '—' : `${abScoring.cost.deltaTokenPct > 0 ? '+' : ''}${abScoring.cost.deltaTokenPct}%` }}
+                        breakdown={abScoring.cost.breakdown}
+                        dataQualityIssue={abScoring.cost.dataQualityIssue}
+                        toneColor={toneColor} toneBg={toneBg}
+                    />
+                    <RawSubCard
+                        label="稳定性" tag="stability" tone={abScoring.stability.tone}
+                        rows={[
+                            { k: '触发率', a: null, b: abScoring.stability.invokeRate, aFmt: () => '—', bFmt: v => v == null ? '—' : `${v}%`, oneSide: true },
+                            { k: '方差', a: null, b: abScoring.stability.variance, aFmt: () => '—', bFmt: v => v == null ? `— (R=${repeatRounds})` : String(v), oneSide: true },
+                        ]}
+                        delta={null}
+                        breakdown={abScoring.stability.breakdown}
+                        dataQualityIssue={abScoring.stability.dataQualityIssue}
+                        toneColor={toneColor} toneBg={toneBg}
+                    />
+                    <RawSubCard
+                        label="综合 (短板原则)" tag="verdict" tone={decisionTone}
+                        rows={[]}
+                        delta={null}
+                        breakdown={abScoring.totalScoreBreakdown}
+                        dataQualityIssue={abScoring.hardGates.length > 0 ? `命中 hard gate：${abScoring.hardGates.map(g => g.label).join('、')}` : undefined}
+                        toneColor={toneColor} toneBg={toneBg}
+                    />
+                </div>
+            </details>
+
+            {/* 样本量 + 策略版本 footer——一行小字,便于历史回放与算法对账 */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 10, color: '#A8A29E', fontFamily: 'ui-monospace, monospace', paddingTop: 2 }}>
+                <span>SAMPLE N={sampleSize}{recommendedSampleSize ? ` / 推荐 ≥${recommendedSampleSize}` : ''} · 重复 {repeatRounds} 轮 · 置信度 {abScoring.confidence === 'high' ? '高' : abScoring.confidence === 'medium' ? '中' : '低'}</span>
+                <span>策略：{abScoring.policyVersion}</span>
+            </div>
+        </>
+    );
+}
+
+// 折叠面板里的 mini sub-card,统一展示一个维度的「原始 A/B 值 → 主指标 Δ → 公式代入」三件套。
+// rows 是 A vs B 的并排列表; delta 是该维度的主指标变化(能力 Δscore / 成本 ΔToken),
+// 没有就传 null; breakdown 直接复用算法侧出的 AbScoreBreakdown,formula + steps 写进
+// mono 代码块,让用户一眼看出"分数怎么从原始数据算出来的"。
+function RawSubCard({
+    label, tag, tone, rows, delta, breakdown, dataQualityIssue, toneColor, toneBg,
+}: {
+    label: string;
+    tag: string;
+    tone: AbTone;
+    rows: Array<{
+        k: string;
+        a: number | null;
+        b: number | null;
+        aFmt: (v: number | null) => string;
+        bFmt: (v: number | null) => string;
+        oneSide?: boolean;
+    }>;
+    delta: { label: string; value: string } | null;
+    breakdown: AbScoreBreakdown;
+    dataQualityIssue?: string;
+    toneColor: (tone: AbTone) => string;
+    toneBg: (tone: AbTone) => string;
+}) {
+    return (
+        <div style={{ border: '1px solid #E7E5E4', borderRadius: 8, background: '#FAFAF7', overflow: 'hidden' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', background: 'white', borderBottom: '1px solid #E7E5E4' }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: '#1F2937' }}>{label}</span>
+                <span style={{ fontSize: 10, color: toneColor(tone), background: toneBg(tone), padding: '1px 7px', borderRadius: 4, fontFamily: 'ui-monospace, monospace', fontWeight: 700, letterSpacing: 0.5 }}>{tag}</span>
+            </div>
+            <div style={{ padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {rows.map(row => (
+                    <div key={row.k} style={{ display: 'grid', gridTemplateColumns: '64px 1fr 1fr', gap: 8, alignItems: 'baseline', fontSize: 12 }}>
+                        <span style={{ color: '#5F5E5A' }}>{row.k}</span>
+                        <span style={{ fontFamily: 'ui-monospace, monospace', fontVariantNumeric: 'tabular-nums', color: '#374151', textAlign: 'right' }}>
+                            {row.oneSide ? '' : <><span style={{ color: '#A8A29E', marginRight: 6 }}>A</span>{row.aFmt(row.a)}</>}
+                        </span>
+                        <span style={{ fontFamily: 'ui-monospace, monospace', fontVariantNumeric: 'tabular-nums', color: '#374151', textAlign: 'right' }}>
+                            <span style={{ color: '#A8A29E', marginRight: 6 }}>B</span>{row.bFmt(row.b)}
+                        </span>
+                    </div>
+                ))}
+                {delta && (
+                    <div style={{ display: 'grid', gridTemplateColumns: '64px 1fr', gap: 8, alignItems: 'baseline', fontSize: 12, marginTop: 2, paddingTop: 6, borderTop: '1px dashed #E7E5E4' }}>
+                        <span style={{ color: '#5F5E5A' }}>{delta.label}</span>
+                        <span style={{ fontFamily: 'ui-monospace, monospace', fontVariantNumeric: 'tabular-nums', fontWeight: 700, color: toneColor(tone), textAlign: 'right' }}>{delta.value}</span>
+                    </div>
+                )}
+                {/* 公式代入式: 直接复用算法 breakdown.steps,把"分数怎么来的"摆在用户面前 */}
+                <pre style={{
+                    margin: '8px 0 0', padding: '8px 10px',
+                    background: 'white', border: '1px solid #E7E5E4', borderRadius: 4,
+                    fontFamily: 'ui-monospace, monospace', fontVariantNumeric: 'tabular-nums',
+                    fontSize: 10.5, lineHeight: 1.65, color: '#374151',
+                    whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                }}>{breakdown.steps.join('\n')}</pre>
+                {dataQualityIssue && (
+                    <div style={{ fontSize: 11, color: '#BA7517', marginTop: 2 }}>{dataQualityIssue}</div>
+                )}
+                <div style={{ fontSize: 10, color: '#A8A29E', fontFamily: 'ui-monospace, monospace', textAlign: 'right' }}>{breakdown.reference}</div>
+            </div>
+        </div>
+    );
+}
+
 function ToneBadge({ label, tone, prefix, title }: { label: string; tone: BadgeTone; prefix?: string; title?: string }) {
     const cfg = BADGE_TONE[tone];
     return (
@@ -368,46 +849,9 @@ function deriveExecAndEval(
 }
 
 // ──────────────── caseStates side-state 修改助手 ────────────────
-// 历史 bug：runCaseSide / evaluateCaseSide 在每次 setCaseStates 时
-// 直接用 `[side]: { status: 'running' }` 这种方式整段替换 side state，
-// 导致 runs[] 历史被擦光、执行记录 modal 表面无变化。下面两个 helper 把
-// 「保留 runs[] + 顶层字段同步最新 run」的逻辑统一封一遍，所有 setCaseStates
-// 改动一律走这里：
-//
-//   - appendNewRunningRun(side)：用户点「重跑」时调用。在 runs[] 末尾 push
-//     一条 {status: 'running'} 占位 run，并把 side 顶层 status 切到 'running'。
-//     records modal 就能立刻看到新一行 "running"。
-//
-//   - patchLatestRun(side, patch)：跑完 / 评测完 / 失败时调用。把 runs[] 最后
-//     一条 run merge patch 字段，同时把 side 顶层的镜像字段(status/score/jobId
-//     /sessionId/...)也同步过去，避免顶层和 runs 末尾分裂。
-
-function appendNewRunningRun(side: PerVersionState | undefined): PerVersionState {
-    const base: PerVersionState = side ?? { status: 'pending' };
-    const prevRuns = base.runs ?? [];
-    const nextIndex = prevRuns.length + 1;
-    const newRun: RunResult = {
-        status: 'running',
-        runIndex: nextIndex,
-        roundIndex: nextIndex,
-    };
-    return {
-        ...base,
-        status: 'running',
-        // 顶层 score/output/jobId/sessionId 等先清掉，避免上一轮的残留干扰
-        // 卡片汇总位置（顶层字段被当作"最新 run 的镜像"）。runs[] 里的旧值
-        // 仍然完整保留在 modal 里可见。
-        score: undefined,
-        output: undefined,
-        jobId: undefined,
-        sessionId: undefined,
-        timeCost: undefined,
-        tokenUsage: undefined,
-        evaluatorRunId: undefined,
-        tier: undefined,
-        runs: [...prevRuns, newRun],
-    };
-}
+// patchLatestRun(side, patch)：跑完 / 评测完 / 失败时调用。把 runs[] 最后
+// 一条 run merge patch 字段，同时把 side 顶层的镜像字段(status/score/jobId
+// /sessionId/...)也同步过去，避免顶层和 runs 末尾分裂。
 
 function patchLatestRun(side: PerVersionState | undefined, patch: Partial<RunResult>): PerVersionState {
     const base: PerVersionState = side ?? { status: 'pending' };
@@ -416,8 +860,7 @@ function patchLatestRun(side: PerVersionState | undefined, patch: Partial<RunRes
     if (runs.length > 0) {
         updatedRuns = runs.map((r, i) => (i === runs.length - 1 ? { ...r, ...patch } : r));
     } else {
-        // 极少见兜底：runs[] 为空（比如调用方没先走 appendNewRunningRun）。
-        // 现造一条 run 把 patch 装进去，避免 patch 字段被静默吞掉。
+        // 极少见兜底：runs[] 为空时现造一条 run 把 patch 装进去，避免 patch 字段被静默吞掉。
         updatedRuns = [{
             runIndex: 1,
             roundIndex: 1,
@@ -441,11 +884,10 @@ function patchLatestRun(side: PerVersionState | undefined, patch: Partial<RunRes
     };
 }
 
-// 跟 polling tick 的 setCaseStates(nextStates) 配合：如果本地某 case-side 正处于
-// 「比 server 多了一条 in-flight running run」的状态（用户刚点了重跑还没回写到 DB
-// 或者写完了但 server 那条记录还没进 caseStatesJson），polling 直接覆盖会把那条
-// running run 抹掉。这里做 case-side 级别的 reconcile：只要本地 runs 长度 ≥ 远端
-// 且本地末尾是非 finished 状态，就保留本地不动；否则采用远端。
+// 跟 polling tick 的 setCaseStates(nextStates) 配合：如果本地某 case-side 有
+// 比 server 更新的 in-flight 状态，polling 直接覆盖会把那条 running run 抹掉。
+// 这里做 case-side 级别的 reconcile：只要本地 runs 长度 ≥ 远端且本地末尾是
+// 非 finished 状态，就保留本地不动；否则采用远端。
 function mergeServerCaseStates(
     local: Record<string, { a: PerVersionState; b: PerVersionState }>,
     remote: Record<string, { a: PerVersionState; b: PerVersionState }>,
@@ -457,10 +899,8 @@ function mergeServerCaseStates(
         const lRuns = l.runs ?? [];
         const rRuns = r.runs ?? [];
         const lLatest = lRuns[lRuns.length - 1];
-        // 唯一保留本地的场景: 用户刚点过「重跑」, runCaseSide 已经 push 了一条新
-        // running 占位 + 发 PATCH, 但 PATCH 还没落库, polling tick 拿到的是旧
-        // caseStatesJson(没新这条 run)。这时本地 runs[] 比远端多, 且末尾是
-        // in-flight, 必须保留本地不被擦。
+        // 保留本地比远端更多的 in-flight run，避免 polling tick 用旧 caseStatesJson
+        // 把刚产生的本地进行中状态擦回去。
         if (lRuns.length > rRuns.length && lLatest && !FINISHED.includes(lLatest.status)) {
             return l;
         }
@@ -536,25 +976,20 @@ function GrayscalePageInner() {
 
     return (
         <div className="debug-root">
-            <AppTopBar
-                title={locale === 'zh' ? '调测分析' : 'Debug & Analysis'}
-                showDefaultActions={false}
+            <PageHeader
+                variant="management"
+                breadcrumbs={[
+                    { label: locale === 'zh' ? 'Skills 评测' : 'Skill Evaluation', href: '/skill-eval' },
+                    { label: locale === 'zh' ? '调测分析' : 'Debug & Analysis' },
+                ]}
+                title={locale === 'zh' ? 'A/B 测试' : 'A/B Test'}
+                secondaryAction={{
+                    label: locale === 'zh' ? '历史任务' : 'History',
+                    icon: History,
+                    onClick: () => setHistoryPanelTrigger(c => c + 1),
+                }}
             />
-            <div className="d-page-tabs" style={{ marginBottom: 0 }}>
-                <div className="d-page-tab active" onClick={() => {}}>
-                    {locale === 'zh' ? 'AB测评' : 'A/B Eval'}
-                </div>
-                {/* "用例测评" tab 删——/skill-eval/batch 路由下线（已整合进 /skill-eval 用例分析卡）。
-                    要从此页跳过去走 router.push('/skill-eval?view=trace') 或顶部 Skills 分析 → 用例分析 */}
-                <button
-                    className="d-btn sm d-page-tabs-action"
-                    onClick={() => setHistoryPanelTrigger(c => c + 1)}
-                >
-                    <HistoryIcon />
-                    {locale === 'zh' ? '历史任务' : 'History'}
-                </button>
-            </div>
-            <div className="d-layout" style={{ background: '#F5F4EE' }}>
+            <div className="d-layout" style={{ background: 'var(--background-secondary)' }}>
                 <div className="d-main-area" ref={mainAreaRef} style={{ padding: 0 }}>
                     <GrayscaleEvaluation newTaskTrigger={newTaskTrigger} historyPanelTrigger={historyPanelTrigger} />
                 </div>
@@ -574,6 +1009,7 @@ export function GrayscaleEvaluation({
     parentSkillId,
     parentSkillVersion,
     skillSelectorSlot,
+    hifi = false,
 }: {
     newTaskTrigger: number;
     historyPanelTrigger: number;
@@ -585,6 +1021,8 @@ export function GrayscaleEvaluation({
     parentSkillId?: string;
     parentSkillVersion?: number | null;
     skillSelectorSlot?: React.ReactNode;
+    /** Phase 1 hi-fi shell — task-row on top + 3 collapsible cards. Loaded only via `?view=gray`. */
+    hifi?: boolean;
 }) {
     const { locale } = useLocale();
     const { user } = useAuth();
@@ -597,6 +1035,7 @@ export function GrayscaleEvaluation({
     const [taskNameInput, setTaskNameInput] = useState('');
     const [taskDescInput, setTaskDescInput] = useState('');
     const [isCreatingTask, setIsCreatingTask] = useState(false);
+    const taskTitleInputRef = useRef<HTMLInputElement | null>(null);
 
     // Data
     const [datasets, setDatasets] = useState<any[]>([]);
@@ -616,8 +1055,8 @@ export function GrayscaleEvaluation({
     // Numbers
     const [repeatRounds, setRepeatRounds] = useState<number>(1);
     const [agentMaxConcurrency, setAgentMaxConcurrency] = useState<number>(4);
-    const [autoEval, setAutoEval] = useState<boolean>(true);
-    const [recordTriggerDetails, setRecordTriggerDetails] = useState<boolean>(true);
+    const autoEval = true;
+    const recordTriggerDetails = true;
 
     // Output preview modal
     const [outputModal, setOutputModal] = useState<{ title: string; content: string } | null>(null);
@@ -645,13 +1084,77 @@ export function GrayscaleEvaluation({
     // History drawer
     const [showHistoryDrawer, setShowHistoryDrawer] = useState(false);
 
+    // Hi-fi shell collapse state (Phase 1, ?view=gray only — see hifi prop).
+    // Defaults are derived from the current step status so the user lands on
+    // the most relevant stage: config -> exec -> result.
+    const [hifiCollapsed, setHifiCollapsed] = useState<{ config: boolean; exec: boolean; result: boolean }>({
+        config: false,
+        exec: false,
+        result: false,
+    });
+    const [hasManualHifiCollapseOverride, setHasManualHifiCollapseOverride] = useState(false);
+    const toggleHifiCard = useCallback((key: 'config' | 'exec' | 'result') => {
+        setHasManualHifiCollapseOverride(true);
+        setHifiCollapsed(prev => ({ ...prev, [key]: !prev[key] }));
+    }, []);
+    // Hi-fi verdict-card raw data accordion (the 2×2 formula grid under
+    // the three dim rows). Default collapsed; users open it when they want
+    // to inspect the calculation.
+    const [hifiRawOpen, setHifiRawOpen] = useState(false);
+
     // Modals
     const [showSkillModal, setShowSkillModal] = useState(false);
+
+    // 「新增评测任务」对话框开关。点确认后通过 onCreated 把新批次 ID 写回当前 task config,
+    // 启动评测时透传给 /api/eval/trajectory/run append 落到同一批次。
+    const [newBatchDialogOpen, setNewBatchDialogOpen] = useState(false);
+    // 用户显式点「新建任务」后, 进入未保存草稿态; 在再次保存/选历史前, 不要被
+    // parentSkillId + versionBId 的自动绑定逻辑立刻把旧任务重新套回来。
+    const [isFreshTaskDraft, setIsFreshTaskDraft] = useState(false);
+
+    // 评测任务关联: 跟 selectedEvaluatorId 等同级用 React state 管理 (不依赖 currentConfigRef
+    // 的 ref-only 模式)。这样 applyTaskToState 加载任务时能正确恢复, useEffect 重设 ref 时
+    // 能稳定包含进去, 不会被擦掉 (历史 bug: 首版用了 ref+spread 模式, 任何 state 变化触发
+    // useEffect 重设 ref 时会丢 evaluationBatch* 字段, 下一次 PATCH 字段丢光)。
+    const [evaluationBatchId, setEvaluationBatchId] = useState('');
+    const [evaluationBatchTitle, setEvaluationBatchTitle] = useState('');
+    const [evaluationBatchEvaluators, setEvaluationBatchEvaluators] = useState<string[]>([]);
 
     // Multi-case states
     const [caseStates, setCaseStates] = useState<Record<string, { a: PerVersionState; b: PerVersionState }>>({});
     const [checkedCaseIds, setCheckedCaseIds] = useState<string[]>([]);
     const [isTaskRunInFlight, setIsTaskRunInFlight] = useState(false);
+    // 行级 retry 在飞集合: key 形如 `${caseId}::${side}::${runIndex}`。
+    // 双写: state 给 UI 渲染时正常反应性, ref 在 click handler 里同步判重
+    // (防止 React state 还没 commit 时的快速双击)。两者都指向同一个 Set 实例:
+    // mark*/clear* 函数会同时更新 ref 和 state, 它们永不分歧。
+    // 自动清理: useEffect watch caseStates, run 走到 terminal (pass/fail) 时清掉,
+    // 让按钮恢复可点。顶部「终止」按钮成功后一次性 clearAllRetriesInFlight, 干预所有 in-flight。
+    const [inFlightRetries, setInFlightRetries] = useState<Set<string>>(() => new Set());
+    const inFlightRetriesRef = useRef<Set<string>>(inFlightRetries);
+    const retryKey = (caseId: string, side: 'a' | 'b', runIndex: number) =>
+        `${caseId}::${side}::${runIndex}`;
+    const markRetryInFlight = (key: string) => {
+        if (inFlightRetriesRef.current.has(key)) return false;
+        const next = new Set(inFlightRetriesRef.current);
+        next.add(key);
+        inFlightRetriesRef.current = next;
+        setInFlightRetries(next);
+        return true;
+    };
+    const markRetryDone = (key: string) => {
+        if (!inFlightRetriesRef.current.has(key)) return;
+        const next = new Set(inFlightRetriesRef.current);
+        next.delete(key);
+        inFlightRetriesRef.current = next;
+        setInFlightRetries(next);
+    };
+    const clearAllRetriesInFlight = () => {
+        if (inFlightRetriesRef.current.size === 0) return;
+        const next = new Set<string>();
+        inFlightRetriesRef.current = next;
+        setInFlightRetries(next);
+    };
     const [lastRunConfigSignature, setLastRunConfigSignature] = useState('');
     const [searchQuery, setSearchQuery] = useState('');
     const [filterTab, setFilterTab] = useState<'all' | 'pending' | 'executed' | 'evaluated'>('all');
@@ -664,6 +1167,7 @@ export function GrayscaleEvaluation({
         const now = new Date();
         return `灰度测评 ${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}`;
     };
+    const taskTitlePlaceholder = locale === 'zh' ? '点击命名任务…' : 'Name this task…';
 
     const resetToNewTaskDraft = (skillId: string) => {
         setCurrentTask(null);
@@ -686,6 +1190,10 @@ export function GrayscaleEvaluation({
         setIsTaskRunInFlight(false);
         isTaskRunInFlightRef.current = false;
         setLastRunConfigSignature('');
+        // 新任务草稿: 清空评测批次关联 (老任务的批次跟新任务无关)
+        setEvaluationBatchId('');
+        setEvaluationBatchTitle('');
+        setEvaluationBatchEvaluators([]);
         pendingVersionsRef.current = null;
         setIsEditingTask(true);
     };
@@ -704,9 +1212,46 @@ export function GrayscaleEvaluation({
         if (versionNumber != null) return Number(task.skillVersion) === Number(versionNumber);
         return true;
     };
+    const getTaskRunTime = (task: GrayscaleTask) => {
+        const rawLatest = task.configJson?.latestResultAt;
+        const latest = typeof rawLatest === 'string' ? Date.parse(rawLatest) : 0;
+        if (Number.isFinite(latest) && latest > 0) return latest;
+        const stateRunTimes = Object.values(task.caseStatesJson || {}).flatMap(pair =>
+            (['a', 'b'] as const).flatMap(side =>
+                (pair?.[side]?.runs || []).map(run =>
+                    typeof run.completedAt === 'string' ? Date.parse(run.completedAt) : 0
+                )
+            )
+        ).filter(time => Number.isFinite(time) && time > 0);
+        if (stateRunTimes.length > 0) return Math.max(...stateRunTimes);
+        return Date.parse(task.createdAt || '') || 0;
+    };
+    const hasTaskRunHistory = (task: GrayscaleTask) => Object.values(task.caseStatesJson || {}).some(pair =>
+        (['a', 'b'] as const).some(side => {
+            const state = pair?.[side];
+            return Boolean(state && (state.status !== 'pending' || (state.runs?.length || 0) > 0));
+        })
+    );
+    const pickLatestTaskForBinding = (
+        tasks: GrayscaleTask[],
+        skillId: string,
+        versionId?: string,
+        versionNumber?: number | null,
+    ) => {
+        const matched = tasks.filter(task => taskMatchesBinding(task, skillId, versionId, versionNumber));
+        if (matched.length === 0) return undefined;
+        return matched.sort((a, b) => {
+            const activeDelta = Number(Boolean(b.activeRun)) - Number(Boolean(a.activeRun));
+            if (activeDelta !== 0) return activeDelta;
+            const historyDelta = Number(hasTaskRunHistory(b)) - Number(hasTaskRunHistory(a));
+            if (historyDelta !== 0) return historyDelta;
+            return getTaskRunTime(b) - getTaskRunTime(a);
+        })[0];
+    };
 
     const applyTaskToState = (task: GrayscaleTask) => {
         setCurrentTask(task);
+        setIsFreshTaskDraft(false);
         setIsEditingTask(false);
         setTaskNameInput('');
         const cfg = task.configJson || {};
@@ -715,8 +1260,6 @@ export function GrayscaleEvaluation({
         setSourceMode((cfg.sourceMode === 'trace' ? 'trace' : 'dataset'));
         setRepeatRounds(cfg.repeatRounds || 1);
         setAgentMaxConcurrency(cfg.agentMaxConcurrency || 4);
-        setAutoEval(cfg.autoEval !== false);
-        setRecordTriggerDetails(cfg.recordTriggerDetails !== false);
         setSelectedEvaluatorId(cfg.evaluatorId || 'preset-agent-task-completion');
         setTaskDescInput(cfg.taskDescription || '');
         setSelectedDatasetId(cfg.selectedDatasetId || '');
@@ -728,6 +1271,10 @@ export function GrayscaleEvaluation({
         setTraceTimeRange(cfg.traceTimeRange || '7d');
         setSelectedTraceAId(cfg.selectedTraceAId || '');
         setSelectedTraceBId(cfg.selectedTraceBId || '');
+        // 评测批次关联 (从 DB 恢复, 修 "再次进入 A/B 看不到上次评测任务" 问题)
+        setEvaluationBatchId(cfg.evaluationBatchId || '');
+        setEvaluationBatchTitle(cfg.evaluationBatchTitle || '');
+        setEvaluationBatchEvaluators(Array.isArray(cfg.evaluationBatchEvaluators) ? cfg.evaluationBatchEvaluators : []);
         if (cfg.versionAId || cfg.versionBId) {
             pendingVersionsRef.current = { versionAId: cfg.versionAId, versionBId: cfg.versionBId };
         } else {
@@ -748,7 +1295,7 @@ export function GrayscaleEvaluation({
         }
         setCaseStates(parsedStates);
         caseStatesRef.current = parsedStates;
-        setIsTaskRunInFlight(Boolean(task.activeRun) || hasRunningCaseStates(parsedStates) || (cfg.autoEval !== false && hasPendingAutoEvaluationCaseStates(parsedStates)));
+        setIsTaskRunInFlight(Boolean(task.activeRun) || hasRunningCaseStates(parsedStates) || hasPendingAutoEvaluationCaseStates(parsedStates));
         setLastRunConfigSignature(Object.keys(parsedStates).length > 0
             ? buildRunConfigSignature({
                 skillId: boundSkillId,
@@ -761,8 +1308,8 @@ export function GrayscaleEvaluation({
                 selectedTraceBId: cfg.selectedTraceBId || '',
                 repeatRounds: cfg.repeatRounds || 1,
                 agentMaxConcurrency: cfg.agentMaxConcurrency || 4,
-                autoEval: cfg.autoEval !== false,
-                recordTriggerDetails: cfg.recordTriggerDetails !== false,
+                autoEval: true,
+                recordTriggerDetails: true,
                 evaluatorId: cfg.evaluatorId || 'preset-agent-task-completion',
                 caseIds: Object.keys(parsedStates),
             })
@@ -779,8 +1326,8 @@ export function GrayscaleEvaluation({
                 if (Array.isArray(data) && data.length > 0) {
                     setTaskHistory(data);
                     const task = parentSkillId
-                        ? data.find((item: GrayscaleTask) => taskMatchesBinding(item, parentSkillId, undefined, parentSkillVersion)) as GrayscaleTask | undefined
-                        : data[0] as GrayscaleTask | undefined;
+                        ? pickLatestTaskForBinding(data as GrayscaleTask[], parentSkillId, undefined, parentSkillVersion)
+                        : [...(data as GrayscaleTask[])].sort((a, b) => getTaskRunTime(b) - getTaskRunTime(a))[0];
                     if (task) {
                         applyTaskToState(task);
                     } else if (parentSkillId) {
@@ -802,12 +1349,38 @@ export function GrayscaleEvaluation({
     useEffect(() => { currentTaskRef.current = currentTask; }, [currentTask]);
     const caseStatesRef = useRef(caseStates);
     useEffect(() => { caseStatesRef.current = caseStates; }, [caseStates]);
+
+    // 当 caseStates 里某条 run 走到 terminal (pass/fail) 时, 把它从 in-flight 集合移除,
+    // 让重试按钮重新可点 (终态可能仍是 fail, 此时按钮应再次显示为"可重试")。
+    // 不把 'executed' 当 terminal —— retryExecution autoEval=true 时, 短暂 executed 后会
+    // 马上变 evaluating, 这窗口里清掉会让按钮闪一次"可重试"误导用户。改成执行成功且
+    // autoEval=false 的清理走 retryExecution 内部显式 markRetryDone。
+    useEffect(() => {
+        if (inFlightRetriesRef.current.size === 0) return;
+        const next = new Set(inFlightRetriesRef.current);
+        let mutated = false;
+        for (const key of Array.from(next)) {
+            const [caseId, sideStr, runIndexStr] = key.split('::');
+            const runIndex = Number(runIndexStr);
+            const sideState = caseStates[caseId]?.[sideStr as 'a' | 'b'];
+            const run = (sideState?.runs || []).find(r => r.runIndex === runIndex);
+            if (!run) continue;
+            if (run.status === 'pass' || run.status === 'fail') {
+                next.delete(key);
+                mutated = true;
+            }
+        }
+        if (mutated) {
+            inFlightRetriesRef.current = next;
+            setInFlightRetries(next);
+        }
+    }, [caseStates]);
     const isTaskRunInFlightRef = useRef(isTaskRunInFlight);
     useEffect(() => { isTaskRunInFlightRef.current = isTaskRunInFlight; }, [isTaskRunInFlight]);
-    const currentConfigRef = useRef({ skillId: selectedSkillId, versionAId, versionBId, sourceMode, selectedDatasetId, selectedCaseId, selectedCaseIds: checkedCaseIds, checkedCaseIds, taskDescription: taskDescInput, linkedDatasetIds, traceTimeRange, selectedTraceAId, selectedTraceBId, repeatRounds, agentMaxConcurrency, autoEval, recordTriggerDetails, evaluatorId: selectedEvaluatorId });
+    const currentConfigRef = useRef({ skillId: selectedSkillId, versionAId, versionBId, sourceMode, selectedDatasetId, selectedCaseId, selectedCaseIds: checkedCaseIds, checkedCaseIds, taskDescription: taskDescInput, linkedDatasetIds, traceTimeRange, selectedTraceAId, selectedTraceBId, repeatRounds, agentMaxConcurrency, autoEval, recordTriggerDetails, evaluatorId: selectedEvaluatorId, evaluationBatchId, evaluationBatchTitle, evaluationBatchEvaluators });
     useEffect(() => {
-        currentConfigRef.current = { skillId: selectedSkillId, versionAId, versionBId, sourceMode, selectedDatasetId, selectedCaseId, selectedCaseIds: checkedCaseIds, checkedCaseIds, taskDescription: taskDescInput, linkedDatasetIds, traceTimeRange, selectedTraceAId, selectedTraceBId, repeatRounds, agentMaxConcurrency, autoEval, recordTriggerDetails, evaluatorId: selectedEvaluatorId };
-    }, [selectedSkillId, versionAId, versionBId, sourceMode, selectedDatasetId, selectedCaseId, checkedCaseIds, taskDescInput, linkedDatasetIds, traceTimeRange, selectedTraceAId, selectedTraceBId, repeatRounds, agentMaxConcurrency, autoEval, recordTriggerDetails, selectedEvaluatorId]);
+        currentConfigRef.current = { skillId: selectedSkillId, versionAId, versionBId, sourceMode, selectedDatasetId, selectedCaseId, selectedCaseIds: checkedCaseIds, checkedCaseIds, taskDescription: taskDescInput, linkedDatasetIds, traceTimeRange, selectedTraceAId, selectedTraceBId, repeatRounds, agentMaxConcurrency, autoEval, recordTriggerDetails, evaluatorId: selectedEvaluatorId, evaluationBatchId, evaluationBatchTitle, evaluationBatchEvaluators };
+    }, [selectedSkillId, versionAId, versionBId, sourceMode, selectedDatasetId, selectedCaseId, checkedCaseIds, taskDescInput, linkedDatasetIds, traceTimeRange, selectedTraceAId, selectedTraceBId, repeatRounds, agentMaxConcurrency, autoEval, recordTriggerDetails, selectedEvaluatorId, evaluationBatchId, evaluationBatchTitle, evaluationBatchEvaluators]);
 
     const currentRunConfigSignature = useMemo(() => buildRunConfigSignature({
         skillId: selectedSkillId,
@@ -866,13 +1439,37 @@ export function GrayscaleEvaluation({
         persistTaskUpdate(currentTaskRef.current.id, currentConfigRef.current, updatedStates);
     }, [persistTaskUpdate]);
 
+    // 「新增评测任务」对话框 onCreated: 把后端返回的 evaluatorRunId / title / evaluators
+    // 设为 React state (currentConfigRef useEffect 会自动同步进 ref, 后续所有 persist 都带这些字段);
+    // 同时立刻调一次 persistTaskUpdate 把新字段落库, 避免要等下一次 state 变化才同步。
+    const handleEvalBatchCreated = useCallback((result: NewBatchCreated) => {
+        setNewBatchDialogOpen(false);
+        const task = currentTaskRef.current;
+        if (!task) return;
+        setEvaluationBatchId(result.evaluatorRunId);
+        setEvaluationBatchTitle(result.taskTitle);
+        setEvaluationBatchEvaluators(result.selectedEvaluators);
+        // 立刻 patch 一次 (不等 useEffect): nextConfig 显式带新字段, 不依赖 ref。
+        const nextConfig = {
+            ...currentConfigRef.current,
+            evaluationBatchId: result.evaluatorRunId,
+            evaluationBatchTitle: result.taskTitle,
+            evaluationBatchEvaluators: result.selectedEvaluators,
+        };
+        persistTaskUpdate(task.id, nextConfig, undefined);
+        setCurrentTask(prev => prev ? {
+            ...prev,
+            configJson: { ...(prev.configJson || {}), ...nextConfig },
+        } : prev);
+    }, [persistTaskUpdate]);
+
     const createTaskForBinding = useCallback(async (skillId: string, boundVersionBId: string, taskName?: string) => {
         if (!user || !skillId || !boundVersionBId || boundVersionBId === NONE_VERSION_ID) return null;
         const name = (taskName || taskNameInput || defaultTaskName()).trim();
         const res = await apiFetch('/api/debug/grayscale-tasks', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ user, taskName: name, skillId, versionBId: boundVersionBId }),
+            body: JSON.stringify({ user, taskName: name, skillId, versionAId, versionBId: boundVersionBId }),
         });
         if (res.ok) {
             const newTask = await res.json();
@@ -887,13 +1484,14 @@ export function GrayscaleEvaluation({
             }
         }
         return null;
-    }, [user, taskNameInput]);
+    }, [user, taskNameInput, versionAId]);
 
     useEffect(() => {
         if (!parentSkillId || !versionBId || versionBId === NONE_VERSION_ID) return;
+        if (isFreshTaskDraft) return;
         const current = currentTaskRef.current;
         if (current && taskMatchesBinding(current, parentSkillId, versionBId, parentSkillVersion)) return;
-        const existing = taskHistory.find(task => taskMatchesBinding(task, parentSkillId, versionBId, parentSkillVersion));
+        const existing = pickLatestTaskForBinding(taskHistory, parentSkillId, versionBId, parentSkillVersion);
         if (existing) {
             applyTaskToState(existing);
             return;
@@ -906,7 +1504,7 @@ export function GrayscaleEvaluation({
             .catch(() => {});
         return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [parentSkillId, parentSkillVersion, versionBId, taskHistory, createTaskForBinding]);
+    }, [parentSkillId, parentSkillVersion, versionBId, taskHistory, createTaskForBinding, isFreshTaskDraft]);
 
     // Automatically persist core config changes to database when they change
     useEffect(() => {
@@ -1036,32 +1634,73 @@ export function GrayscaleEvaluation({
         if (versionBId !== matchedVersion.id) setVersionBId(matchedVersion.id);
     }, [parentSkillVersion, versionBId, versions]);
 
-    // Execute single side
-    const runCaseSide = async (caseId: string, side: 'a' | 'b') => {
+    /**
+     * 行级执行重试: 原地覆盖指定 runIndex 的 run, 不 push 新行。
+     *
+     * 这是执行记录 modal 里的"再试这一行"语义——用户看到某一行执行失败,
+     * 想再跑一次, 同一行覆盖结果。
+     *
+     * 步骤:
+     *   1) 找到 (caseId, side, runIndex) 那条 run, reset 它的状态为 'running',
+     *      清掉 sessionId/output/score/eval 相关字段, 保留 runIndex/roundIndex
+     *   2) PATCH caseStatesJson 落库
+     *   3) POST /api/debug/execute 等 jobId
+     *   4) 轮询 /api/debug/execute/{jobId}, completion 时按 runIndex 找到对应 run
+     *      原地更新结果字段; autoEval=true 时自动触发该 run 的 evaluate
+     */
+    const retryExecution = async (caseId: string, side: 'a' | 'b', runIndex: number) => {
+        if (!currentTask) return;
+        // 同步抢占 in-flight 锁: 双击 / 在飞期间再次点击直接 return, 防止重复 dispatch。
+        // markRetryInFlight 返回 false 表示已经在飞中。配 ref 在 React commit 前同步生效。
+        const flightKey = retryKey(caseId, side, runIndex);
+        if (!markRetryInFlight(flightKey)) return;
         const targetCase = allCases.find(c => c.id === caseId);
         const query = targetCase?.input || '';
-        if (!query.trim()) return;
-
+        if (!query.trim()) { markRetryDone(flightKey); return; }
         const versionId = side === 'a' ? versionAId : versionBId;
         const isNone = versionId === NONE_VERSION_ID;
         const version = isNone ? null : versions.find(v => v.id === versionId);
         const selectedSkill = skills.find(s => s.id === selectedSkillId);
 
-        // 1) 入口：往 runs[] push 一条 running 占位，让执行记录 modal 立刻
-        //    看到「新一行 running」，同时把 side 顶层 status 切到 running。
+        // 1) 原地 reset 那一条 run
+        const resetRunByIndex = (sideState: PerVersionState | undefined): PerVersionState => {
+            const base: PerVersionState = sideState ?? { status: 'pending' };
+            const runs = (base.runs ?? []).map(r => {
+                if (r.runIndex !== runIndex) return r;
+                const next = { ...r, status: 'running' as CaseStatus };
+                delete next.sessionId;
+                delete next.evaluatorRunId;
+                delete next.evaluationResultId;
+                delete next.evaluationTraceId;
+                delete next.score;
+                delete next.tier;
+                delete next.failureType;
+                delete next.failureDetail;
+                delete next.timeCost;
+                delete next.tokenUsage;
+                delete next.skillTriggered;
+                delete next.toolCallCount;
+                delete next.toolCalls;
+                next.output = '';
+                return next;
+            });
+            return { ...base, status: 'running', runs };
+        };
+        let nextStates: Record<string, { a: PerVersionState; b: PerVersionState }> | null = null;
         setCaseStates(prev => {
-            const current = prev[caseId] || { a: { status: 'pending' }, b: { status: 'pending' } };
-            const updated = {
-                ...prev,
-                [caseId]: {
-                    ...current,
-                    [side]: appendNewRunningRun(current[side]),
-                }
-            };
-            persistCaseStates(updated);
+            const current = prev[caseId];
+            if (!current) return prev;
+            const updated = { ...prev, [caseId]: { ...current, [side]: resetRunByIndex(current[side]) } };
+            nextStates = updated;
             return updated;
         });
+        if (!nextStates) { markRetryDone(flightKey); return; }
+        await persistTaskUpdate(currentTask.id, currentConfigRef.current, nextStates);
 
+        // 2) POST /api/debug/execute (不传 grayscaleTaskId, 避免 backend 重复写库)
+        // baseline (isNone=true) retry 时 skill 字段为空, 但 trace 在逻辑上跟对照的
+        // 被测 skill 配对 —— 传 tagSkill 让 backend 把 trace.skill 字段填成
+        // selectedSkill?.name (本任务被测 skill), "从 Trace"视图按 skill 过滤能搜到。
         let jobId: string;
         try {
             const res = await apiFetch('/api/debug/execute', {
@@ -1072,118 +1711,110 @@ export function GrayscaleEvaluation({
                     query,
                     skill: isNone ? undefined : selectedSkill?.name,
                     skillVersion: (isNone || !version) ? undefined : Number(version.version),
+                    // baseline 没 skill 加载, 用 selectedSkill?.name 当 trace 归属标签;
+                    // skill-agent 那侧已经 skill 字段填上了, tagSkill 即使也传也是冗余无害。
+                    tagSkill: selectedSkill?.name,
                     mode: 'grayscale',
-                    // 把任务归属传给后端: 关掉浏览器/网断时, 后端 .then/.catch 会自己
-                    // 把 caseStatesJson 的对应 side 从 running 推到 executed/fail。
-                    // 不传或缺任一字段则跳过, 退化为旧的「前端独占写库」行为(兼容其它调用点)。
-                    grayscaleTaskId: currentTask?.id,
-                    caseId,
-                    side,
                 }),
             });
             const data = await res.json();
             if (!res.ok || !data.jobId) {
-                // dispatch 失败：把刚刚 push 的占位 run 标 fail
                 setCaseStates(prev => {
-                    const current = prev[caseId] || { a: { status: 'pending' }, b: { status: 'pending' } };
-                    const updated = {
-                        ...prev,
-                        [caseId]: {
-                            ...current,
-                            [side]: patchLatestRun(current[side], { status: 'fail', output: data.error || 'dispatch failed' }),
-                        }
-                    };
-                    persistCaseStates(updated);
-                    return updated;
+                    const current = prev[caseId];
+                    if (!current) return prev;
+                    const sideState = current[side];
+                    if (!sideState) return prev;
+                    const runs = (sideState.runs ?? []).map(r =>
+                        r.runIndex === runIndex
+                            ? { ...r, status: 'fail' as CaseStatus, output: data.error || 'dispatch failed' }
+                            : r
+                    );
+                    return { ...prev, [caseId]: { ...current, [side]: { ...sideState, runs } } };
                 });
+                markRetryDone(flightKey);
                 return;
             }
             jobId = data.jobId;
         } catch (err) {
             setCaseStates(prev => {
-                const current = prev[caseId] || { a: { status: 'pending' }, b: { status: 'pending' } };
-                const updated = {
-                    ...prev,
-                    [caseId]: {
-                        ...current,
-                        [side]: patchLatestRun(current[side], { status: 'fail', output: String(err) }),
-                    }
-                };
-                persistCaseStates(updated);
-                return updated;
+                const current = prev[caseId];
+                if (!current) return prev;
+                const sideState = current[side];
+                if (!sideState) return prev;
+                const runs = (sideState.runs ?? []).map(r =>
+                    r.runIndex === runIndex
+                        ? { ...r, status: 'fail' as CaseStatus, output: String(err) }
+                        : r
+                );
+                return { ...prev, [caseId]: { ...current, [side]: { ...sideState, runs } } };
             });
+            markRetryDone(flightKey);
             return;
         }
 
-        // 2) dispatch 成功：把 jobId 装到刚 push 的占位 run 上
-        setCaseStates(prev => {
-            const current = prev[caseId] || { a: { status: 'pending' }, b: { status: 'pending' } };
-            const updated = {
-                ...prev,
-                [caseId]: {
-                    ...current,
-                    [side]: patchLatestRun(current[side], { status: 'running', jobId }),
-                }
-            };
-            persistCaseStates(updated);
-            return updated;
-        });
-
-        const poll = async () => {
+        // 3) 轮询 job, completion 时按 runIndex 原地更新
+        const poll = async (): Promise<boolean | null> => {
             try {
                 const res = await apiFetch(`/api/debug/execute/${jobId}`);
                 const data = await res.json();
                 if (data.status === 'completed') {
-                    const runPatch: Partial<RunResult> = {
-                        status: 'executed',
-                        jobId,
-                        output: data.output ?? '',
-                        timeCost: data.timeCost,
-                        tokenUsage: data.tokenUsage ?? 0,
-                        sessionId: data.sessionId,
-                    };
-                    let executedState: PerVersionState | null = null;
                     setCaseStates(prev => {
-                        const current = prev[caseId] || { a: { status: 'pending' }, b: { status: 'pending' } };
-                        const nextSide = patchLatestRun(current[side], runPatch);
-                        executedState = nextSide;
-                        const updated = {
-                            ...prev,
-                            [caseId]: {
-                                ...current,
-                                [side]: nextSide,
-                            }
-                        };
+                        const current = prev[caseId];
+                        if (!current) return prev;
+                        const sideState = current[side];
+                        if (!sideState) return prev;
+                        const runs = (sideState.runs ?? []).map(r => r.runIndex === runIndex ? {
+                            ...r,
+                            status: 'executed' as CaseStatus,
+                            jobId,
+                            output: data.output ?? '',
+                            timeCost: data.timeCost,
+                            tokenUsage: data.tokenUsage ?? 0,
+                            sessionId: data.sessionId,
+                            skillTriggered: !!version,
+                        } : r);
+                        const updated = { ...prev, [caseId]: { ...current, [side]: { ...sideState, runs } } };
                         persistCaseStates(updated);
+                        // autoEval: 跑完自动评估这一行 (走 retryEvaluation 同款行级路径)。
+                        // in-flight 锁不在这里释放, 让 retryEvaluation 继承同一把锁
+                        // 直至评测出结果, 否则按钮会在 executed → evaluating 切换瞬间
+                        // 闪一下"可重试"误导用户。
+                        if (autoEval) {
+                            void retryEvaluation(caseId, side, runIndex);
+                        } else {
+                            // 用户关掉了 autoEval, 执行成功就到此为止, 把锁释放掉
+                            markRetryDone(flightKey);
+                        }
                         return updated;
                     });
-                    // autoEval 时把执行完整的最新 side state 喂给 evaluator
-                    if (autoEval && executedState) {
-                        evaluateCaseSide(caseId, side, executedState);
-                    }
                     return true;
-                } else if (data.status === 'failed' || !data.status || data.error) {
+                } else if (data.status === 'failed' || data.error) {
                     setCaseStates(prev => {
-                        const current = prev[caseId] || { a: { status: 'pending' }, b: { status: 'pending' } };
-                        const updated = {
-                            ...prev,
-                            [caseId]: {
-                                ...current,
-                                [side]: patchLatestRun(current[side], { status: 'fail', jobId, output: data.error || 'agent failed' }),
-                            }
-                        };
+                        const current = prev[caseId];
+                        if (!current) return prev;
+                        const sideState = current[side];
+                        if (!sideState) return prev;
+                        const runs = (sideState.runs ?? []).map(r => r.runIndex === runIndex ? {
+                            ...r,
+                            status: 'fail' as CaseStatus,
+                            jobId,
+                            output: data.error || 'agent failed',
+                            failureType: 'agent_error',
+                            failureDetail: data.error || 'agent failed',
+                        } : r);
+                        const updated = { ...prev, [caseId]: { ...current, [side]: { ...sideState, runs } } };
                         persistCaseStates(updated);
                         return updated;
                     });
+                    // run 状态进入 fail, 上面 useEffect 会自动 clear in-flight, 但显式
+                    // 再调一次保险, 防止 setCaseStates 还没 commit 就有人再次点 retry
+                    markRetryDone(flightKey);
                     return false;
                 }
                 return null;
-            } catch {
-                return null;
-            }
+            } catch { return null; }
         };
-
-        const pollKey = `${caseId}_${side}`;
+        const pollKey = `retry_exec_${caseId}_${side}_${runIndex}`;
         if (activePollsRef.current[pollKey]) clearInterval(activePollsRef.current[pollKey]);
         activePollsRef.current[pollKey] = setInterval(async () => {
             const done = await poll();
@@ -1210,6 +1841,15 @@ export function GrayscaleEvaluation({
      */
     const retryEvaluation = async (caseId: string, side: 'a' | 'b', runIndex: number) => {
         if (!currentTask) return;
+        // 抢 in-flight 锁 (双击保护)。markRetryInFlight 是 idempotent:
+        // - 用户直接点"评测失败重试" → 新增 lock
+        // - retryExecution autoEval 链式调过来 → lock 已存在, markRetryInFlight 返回
+        //   false 但我们继续往下走 (不是双击, 是同一把锁延续)。所以区分: 调用方传 None
+        //   即"作为独立入口" — 已在飞中直接 return; 链式入口由上游保证只调一次。
+        // 这里采取最简单策略: 总是 markRetryInFlight, 已存在就当作 idempotent, 继续往下
+        // 走。配 useEffect terminal-clear 保证 pass/fail 时一次释放。
+        const flightKey = retryKey(caseId, side, runIndex);
+        markRetryInFlight(flightKey);
         let resetState: Record<string, { a: PerVersionState; b: PerVersionState }> | null = null;
         setCaseStates(prev => {
             const current = prev[caseId];
@@ -1218,7 +1858,12 @@ export function GrayscaleEvaluation({
             if (!sideState) return prev;
             const newRuns = (sideState.runs || []).map(r => {
                 if (r.runIndex !== runIndex) return r;
-                // 重置那一条 run, 让 backend onlyMissingEvaluation 过滤选中它
+                // 重置那一条 run 让 backend 重评:
+                //   - status='evaluating' UI 立刻显示「评测中」蓝色脉冲, 用户感知到 retry 已生效
+                //   - 清掉 evaluatorRunId/score/tier/output/failureType/failureDetail
+                //     让 onlyMissingEvaluation 过滤命中 (无 evaluatorRunId 也无 score)
+                //   - backend evaluateRunsWithConcurrency 配套放宽: onlyMissingEvaluation
+                //     模式下也接受 status='evaluating' (见 route.ts eligibleStatus 注释)
                 const next = { ...r, status: 'evaluating' as CaseStatus };
                 delete next.evaluatorRunId;
                 delete next.evaluationResultId;
@@ -1235,7 +1880,7 @@ export function GrayscaleEvaluation({
             resetState = updated;
             return updated;
         });
-        if (!resetState) return;
+        if (!resetState) { markRetryDone(flightKey); return; }
         // PATCH 让 server 看到 reset 后的状态 (status='evaluating', 字段已清)
         await persistTaskUpdate(currentTask.id, currentConfigRef.current, resetState);
         // 调用 backend 行级 retry
@@ -1254,38 +1899,66 @@ export function GrayscaleEvaluation({
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
                 alert(data.error || (locale === 'zh' ? '评测重试失败' : 'Retry evaluation failed'));
+                markRetryDone(flightKey);
                 return;
             }
+            // 成功 dispatch: 锁继续持有, 由 pollCurrentTask 的 caseStates 更新
+            // 触发 useEffect terminal-clear 在 pass/fail 时自动释放。
             pollCurrentTask(currentTask.id);
         } catch (err) {
             alert(String(err));
+            markRetryDone(flightKey);
         }
+    };
+
+    const resolvedTaskName = (taskNameInput.trim() || currentTask?.taskName?.trim() || defaultTaskName()).trim();
+    const taskTitleDisplay = resolvedTaskName || taskTitlePlaceholder;
+    const taskTitleIsPlaceholder = !resolvedTaskName;
+
+    const beginTaskTitleEdit = useCallback(() => {
+        setTaskNameInput(prev => prev || currentTask?.taskName || '');
+        setIsEditingTask(true);
+    }, [currentTask?.taskName]);
+
+    const finishTaskTitleEdit = useCallback(() => {
+        const trimmed = taskNameInput.trim();
+        if (trimmed) {
+            setTaskNameInput(trimmed);
+        } else if (currentTask?.taskName) {
+            setTaskNameInput(currentTask.taskName);
+        }
+        setIsEditingTask(false);
+    }, [currentTask?.taskName, taskNameInput]);
+
+    useEffect(() => {
+        if (!isEditingTask) return;
+        const frame = window.requestAnimationFrame(() => {
+            taskTitleInputRef.current?.focus();
+            taskTitleInputRef.current?.select();
+        });
+        return () => window.cancelAnimationFrame(frame);
+    }, [isEditingTask]);
+
+    const runCaseSide = async (caseId: string, side: 'a' | 'b') => {
+        if (!currentTask) return;
+        const sideState = caseStatesRef.current[caseId]?.[side];
+        const latestRunIndex = findLatestRunnableRunIndex(sideState?.runs);
+        if (latestRunIndex == null) {
+            alert(locale === 'zh' ? '当前侧暂无可重跑的执行记录。' : 'No execution record is available to rerun for this side.');
+            return;
+        }
+        await retryExecution(caseId, side, latestRunIndex);
     };
 
     // Evaluate single side
     const evaluateCaseSide = async (caseId: string, side: 'a' | 'b', execState: PerVersionState) => {
         if (currentTask) {
-            try {
-                const res = await apiFetch(`/api/debug/grayscale-tasks/${currentTask.id}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        user: user || 'debug-user',
-                        action: 'evaluate',
-                        caseIds: checkedCaseIds.length > 0 ? checkedCaseIds : [caseId],
-                        evaluatorId: selectedEvaluatorId,
-                    }),
-                });
-                const data = await res.json().catch(() => ({}));
-                if (!res.ok) {
-                    alert(data.error || (locale === 'zh' ? '评测提交失败' : 'Evaluation failed to start'));
-                    return;
-                }
-                pollCurrentTask(currentTask.id);
-            } catch (err) {
-                alert(String(err));
+            const sideState = caseStatesRef.current[caseId]?.[side];
+            const latestRunIndex = findLatestRunnableRunIndex(sideState?.runs);
+            if (latestRunIndex != null) {
+                await retryEvaluation(caseId, side, latestRunIndex);
+                return;
             }
-            return;
         }
         const sessionId = execState.sessionId;
         if (!sessionId) return;
@@ -1416,13 +2089,6 @@ export function GrayscaleEvaluation({
         }, 2000);
     };
 
-    const runCaseBoth = async (caseId: string) => {
-        await Promise.all([
-            runCaseSide(caseId, 'a'),
-            runCaseSide(caseId, 'b')
-        ]);
-    };
-
     const hasRunningStates = hasRunningCaseStates;
 
     const pollCurrentTask = useCallback((taskId: string) => {
@@ -1440,9 +2106,8 @@ export function GrayscaleEvaluation({
                     return;
                 }
                 const nextStates = data.caseStatesJson || {};
-                // Polling 不要无脑覆盖本地：用户刚点过「重跑」可能还有 in-flight
-                // 占位 run 在本地等 PATCH 落库；mergeServerCaseStates 会按
-                // case-side 粒度保留本地更新的 in-flight 状态，避免被擦回老值。
+                // Polling 不要无脑覆盖本地：mergeServerCaseStates 会按 case-side
+                // 粒度保留本地更新的 in-flight 状态，避免被擦回老值。
                 setCaseStates(prev => mergeServerCaseStates(prev, nextStates));
                 setCurrentTask(prev => prev ? { ...prev, ...data } : data);
                 if (!data.activeRun && !hasRunningStates(nextStates) && !(data.configJson?.autoEval !== false && hasPendingAutoEvaluationCaseStates(nextStates))) {
@@ -1483,6 +2148,10 @@ export function GrayscaleEvaluation({
                 alert((locale === 'zh' ? '终止失败: ' : 'Abort failed: ') + (data.error || res.status));
                 return;
             }
+            // 顶部「终止」干预所有 in-flight retry: 一次性释放 retry 锁集合, 让按钮立刻
+            // 可点。backend 把所有 running/evaluating 推到 fail 后, useEffect terminal-clear
+            // 本来也会清, 但这里显式 clear 让 UI 立即响应不等下一 polling tick。
+            clearAllRetriesInFlight();
             // 强制刷一次, 不等下一 polling tick
             pollCurrentTask(currentTask.id);
         } catch (err) {
@@ -1548,7 +2217,7 @@ export function GrayscaleEvaluation({
 
     // Task CRUD
     const handleSaveTask = async () => {
-        if (!taskNameInput.trim() || !user || !selectedSkillId || !versionBId || versionBId === NONE_VERSION_ID) return;
+        if (!resolvedTaskName || !user || !selectedSkillId || !versionBId || versionBId === NONE_VERSION_ID) return;
         setIsCreatingTask(true);
         try {
             if (currentTask) {
@@ -1556,7 +2225,7 @@ export function GrayscaleEvaluation({
                 const res = await apiFetch(`/api/debug/grayscale-tasks/${currentTask.id}`, {
                     method: 'PATCH',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ user, taskName: taskNameInput.trim(), configJson: nextConfig }),
+                    body: JSON.stringify({ user, taskName: resolvedTaskName, configJson: nextConfig }),
                 });
                 if (res.ok) {
                     const updated = await res.json();
@@ -1564,7 +2233,7 @@ export function GrayscaleEvaluation({
                     setTaskHistory(prev => prev.map(t => t.id === updated.id ? updated : t));
                 }
             } else {
-                const newTask = await createTaskForBinding(selectedSkillId, versionBId, taskNameInput.trim());
+                const newTask = await createTaskForBinding(selectedSkillId, versionBId, resolvedTaskName);
                 if (newTask) {
                     const nextConfig = {
                         ...currentConfigRef.current,
@@ -1584,7 +2253,10 @@ export function GrayscaleEvaluation({
                 }
             }
         } catch {}
-        finally { setIsCreatingTask(false); }
+        finally {
+            setIsEditingTask(false);
+            setIsCreatingTask(false);
+        }
     };
 
     const handleNewTask = () => {
@@ -1594,6 +2266,7 @@ export function GrayscaleEvaluation({
                 delete activePollsRef.current[key];
             }
         });
+        setIsFreshTaskDraft(true);
         resetToNewTaskDraft(parentSkillId || selectedSkillId);
     };
 
@@ -1665,16 +2338,17 @@ export function GrayscaleEvaluation({
 
     // Unified case list
     const activeLinkedDatasetIds = linkedDatasetIds.length > 0 ? linkedDatasetIds : (selectedDatasetId ? [selectedDatasetId] : []);
-    const allCases = sourceMode === 'dataset'
+    const allCases: EvaluationCaseItem[] = sourceMode === 'dataset'
         ? datasets
             .filter(ds => activeLinkedDatasetIds.includes(ds.id))
-            .flatMap(ds => (ds.cases || []).map((c: any) => ({ ...c, datasetName: ds.name, datasetId: ds.id })))
-        : traceRecords.map((r, idx) => ({
-            id: r.upload_id || r.task_id || `trace_${idx}`,
-            input: r.query || r.task_id || '',
-            datasetName: 'Traces',
-            datasetId: 'traces',
-        }));
+            .flatMap(ds => (ds.cases || []).map((c: any) => ({
+                ...c,
+                datasetName: ds.name,
+                datasetId: ds.id,
+                sourceType: 'dataset' as const,
+            })))
+        : traceRecords.map((r, idx) => buildGrayscaleTraceCase(r, idx));
+    const caseLookup = useMemo(() => new Map(allCases.map(item => [item.id, item])), [allCases]);
 
     // Auto-prune checkedCaseIds: 切换 sourceMode / 时间窗 / 数据集后, 原来勾选
     // 的 ID 在新的 allCases 里可能找不到了（dataset case id ≠ trace upload_id,
@@ -1811,7 +2485,6 @@ export function GrayscaleEvaluation({
                 score: undefined as number | undefined,
                 triggerRate: '—',
                 toolCall: '—',
-                accuracy: '—',
                 sessionId: '',
                 output: ''
             };
@@ -1839,15 +2512,46 @@ export function GrayscaleEvaluation({
         const globalExecutionPending = allSideRuns.length > 0 && globalExecutedCount < globalExpectedRuns;
         const executingCount = allRuns.filter(s => s.status === 'running').length;
         const evaluatingCount = allRuns.filter(s => s.status === 'evaluating').length;
+        const failedCount = allRuns.filter(s => s.status === 'fail').length;
         const completedStates = allRuns.filter(s => s.status === 'executed' || s.status === 'evaluating' || s.status === 'pass' || s.status === 'fail');
         const terminalStates = allRuns.filter(s => s.status === 'pass' || s.status === 'fail');
         const executedCount = completedStates.length;
         const completedCount = terminalStates.length;
+        const successfulExecutionStates = completedStates.filter(s => s.status !== 'fail');
+        const successCount = successfulExecutionStates.length;
+        const executionMetricStates = successfulExecutionStates.filter(s => Boolean(s.sessionId) || typeof s.timeCost === 'string' || typeof s.tokenUsage === 'number');
+        const executionAvgTime = (() => {
+            const seconds = executionMetricStates
+                .map(s => typeof s.timeCost === 'string' ? parseFloat(s.timeCost) : 0)
+                .filter(n => Number.isFinite(n) && n > 0);
+            return seconds.length > 0
+                ? `${(seconds.reduce((sum, n) => sum + n, 0) / seconds.length).toFixed(1)}s`
+                : '—';
+        })();
+        const executionAvgTokens = (() => {
+            const tokened = executionMetricStates.filter(s => typeof s.tokenUsage === 'number' && (s.tokenUsage || 0) > 0);
+            return tokened.length > 0
+                ? Math.round(tokened.reduce((sum, s) => sum + (s.tokenUsage || 0), 0) / tokened.length)
+                : undefined;
+        })();
+        const executionSessionId = executionMetricStates.find(s => s.sessionId)?.sessionId || '';
+        const executionOutput = executionMetricStates.find(s => s.output)?.output || '';
+        const executionTriggerCount = executionMetricStates.filter(s => s.skillTriggered).length;
+        const executionTriggerRate = executionMetricStates.length > 0
+            ? `${executionTriggerCount}/${executionMetricStates.length} (${Math.round(executionTriggerCount / executionMetricStates.length * 100)}%)`
+            : '—';
+        const executionToolNames = Array.from(new Set(executionMetricStates.flatMap(s => s.toolCalls || []))).slice(0, 3);
+        const executionToolCount = executionMetricStates.reduce((sum, s) => sum + (s.toolCallCount || 0), 0);
+        const executionToolCall = executionToolNames.length > 0
+            ? `${executionToolNames.join(', ')} · ${executionToolCount}`
+            : (executionToolCount > 0 ? `${executionToolCount} calls` : '无');
 
         // Determine Overall State
-        let overallStatus: 'pending' | 'running' | 'evaluating' | 'completed' = 'pending';
+        let overallStatus: 'pending' | 'running' | 'evaluating' | 'failed' | 'completed' = 'pending';
         if (allRuns.length === 0) {
             overallStatus = 'pending';
+        } else if (failedCount > 0) {
+            overallStatus = 'failed';
         } else if (globalExecutionPending || executingCount > 0 || executedCount < totalCount) {
             overallStatus = 'running';
         } else if (completedCount === totalCount && totalCount > 0) {
@@ -1863,9 +2567,9 @@ export function GrayscaleEvaluation({
                 timeCost: '—',
                 tokenUsage: undefined as number | undefined,
                 score: undefined as number | undefined,
+                accuracy: '—',
                 triggerRate: '—',
                 toolCall: '—',
-                accuracy: '—',
                 sessionId: '',
                 output: ''
             };
@@ -1878,9 +2582,9 @@ export function GrayscaleEvaluation({
                 timeCost: '—',
                 tokenUsage: undefined as number | undefined,
                 score: undefined as number | undefined,
+                accuracy: '—',
                 triggerRate: '—',
                 toolCall: '—',
-                accuracy: '—',
                 sessionId: '',
                 output: ''
             };
@@ -1890,14 +2594,31 @@ export function GrayscaleEvaluation({
             return {
                 status: 'evaluating' as CaseStatus,
                 runsCompleted: locale === 'zh' ? `${completedCount}/${totalCount} 评估中` : `${completedCount}/${totalCount} Evaluating`,
-                timeCost: '—',
-                tokenUsage: undefined as number | undefined,
+                timeCost: executionAvgTime,
+                tokenUsage: executionAvgTokens,
                 score: undefined as number | undefined,
-                triggerRate: '—',
-                toolCall: '—',
+                triggerRate: executionTriggerRate,
+                toolCall: executionToolCall,
                 accuracy: '—',
-                sessionId: '',
-                output: ''
+                sessionId: executionSessionId,
+                output: executionOutput
+            };
+        }
+
+        if (overallStatus === 'failed') {
+            return {
+                status: 'fail' as CaseStatus,
+                runsCompleted: locale === 'zh'
+                    ? `${successCount}/${totalCount} 执行完成 · ${failedCount} 失败`
+                    : `${successCount}/${totalCount} completed · ${failedCount} failed`,
+                timeCost: executionAvgTime,
+                tokenUsage: executionAvgTokens,
+                score: undefined as number | undefined,
+                triggerRate: executionTriggerRate,
+                toolCall: executionToolCall,
+                accuracy: '—',
+                sessionId: executionSessionId,
+                output: executionOutput
             };
         }
 
@@ -1935,8 +2656,6 @@ export function GrayscaleEvaluation({
         const toolNames = Array.from(new Set(terminalStates.flatMap(s => s.toolCalls || []))).slice(0, 3);
         const totalToolCalls = terminalStates.reduce((sum, s) => sum + (s.toolCallCount || 0), 0);
         const toolCall = toolNames.length > 0 ? `${toolNames.join(', ')} · ${totalToolCalls}` : (totalToolCalls > 0 ? `${totalToolCalls} calls` : '无');
-        const correctCount = terminalStates.filter(s => typeof s.score === 'number' && s.score >= 80).length;
-        const accuracy = scoredCount > 0 ? `${correctCount}/${scoredCount} 正确` : '—';
 
         return {
             status: 'executed' as CaseStatus,
@@ -1944,9 +2663,9 @@ export function GrayscaleEvaluation({
             timeCost: avgTime,
             tokenUsage: avgTokens || undefined,
             score: avgScore,
+            accuracy: avgScore != null ? `${avgScore}%` : '—',
             triggerRate,
             toolCall,
-            accuracy,
             sessionId: terminalStates[0]?.sessionId || '',
             output: terminalStates[0]?.output || 'Success'
         };
@@ -1958,6 +2677,8 @@ export function GrayscaleEvaluation({
     const isCompletedB = simB.status === 'executed' || simB.status === 'pass';
     const isEvaluatingA = simA.status === 'evaluating';
     const isEvaluatingB = simB.status === 'evaluating';
+    const isFailedA = simA.status === 'fail';
+    const isFailedB = simB.status === 'fail';
     const taskHasActiveRun = Boolean(currentTask?.activeRun);
     const hasPendingAutoEvaluation = autoEval && hasPendingAutoEvaluationCaseStates(caseStates);
     const runButtonBusy = isTaskRunInFlight || taskHasActiveRun || hasRunningStates(caseStates) || hasPendingAutoEvaluation;
@@ -1977,6 +2698,26 @@ export function GrayscaleEvaluation({
             ? (locale === 'zh' ? '重新执行' : 'Run Again')
             : (locale === 'zh' ? '开始执行' : 'Start Execution');
     const decisionReady = isCompletedA && isCompletedB;
+    const experimentVersionReady = Boolean(selectedSkillId && versionBId && versionBId !== NONE_VERSION_ID);
+    const configReady = !runButtonBusy && experimentVersionReady && Boolean(selectedEvaluatorId) && (
+        sourceMode === 'dataset'
+            ? Boolean(selectedDatasetId) && selectedSampleCount > 0
+            : Boolean(selectedTraceAId || selectedTraceBId || traceRecords.length > 0)
+    );
+    const hasExecutionHistory = currentConfigHasRunResult
+        || lastRunCaseIds.length > 0
+        || countExecuted > 0
+        || countEvaluated > 0
+        || decisionReady;
+    const executionStageActive = runButtonBusy || (!hasExecutionHistory && configReady);
+    const configPillLabel = configReady
+        ? (locale === 'zh' ? '✓ 配置完成' : 'Configured')
+        : (locale === 'zh' ? '配置中' : 'Configuring');
+    const derivedHifiCollapsed = {
+        config: configReady || runButtonBusy || hasExecutionHistory,
+        exec: runButtonBusy ? false : (hasExecutionHistory ? true : !executionStageActive),
+        result: runButtonBusy || !hasExecutionHistory,
+    };
     const scoringCaseIds = displayedResultCaseIds.length > 0
         ? displayedResultCaseIds
         : checkedCaseIds.length > 0
@@ -2002,16 +2743,21 @@ export function GrayscaleEvaluation({
         ? (locale === 'zh' ? '等待评估完成' : 'Waiting for evaluation')
         : abScoring.decisionLabel;
     const decisionSubtitle = !decisionReady
-        ? (locale === 'zh' ? '全部执行和评估完成后生成上线建议' : 'Launch advice appears after all runs and evaluations finish')
+        ? (locale === 'zh' ? '待评分' : 'Pending score')
         : abScoring.totalScore == null
-            ? (locale === 'zh' ? `样本 ${abScoring.sampleSize}/${DEFAULT_AB_SCORING_POLICY.minSampleSize}，暂不输出总分` : `Sample ${abScoring.sampleSize}/${DEFAULT_AB_SCORING_POLICY.minSampleSize}, no total score yet`)
-            : (locale === 'zh' ? `${abScoring.gradeLabel} · ${abScoring.totalScore}/100` : `${abScoring.gradeLabel} · ${abScoring.totalScore}/100`);
+            ? (locale === 'zh' ? '— 分' : '— pts')
+            : (locale === 'zh' ? `${abScoring.totalScore} 分` : `${abScoring.totalScore} pts`);
     const decisionAdvice = !decisionReady
         ? (locale === 'zh' ? '等待所有执行记录评估完成后，再查看综合判定和上线动作。' : 'Wait for all execution records to finish evaluation before taking a release action.')
         : abScoring.decision === 'insufficient'
             ? (locale === 'zh' ? `当前只有 ${abScoring.sampleSize} 个完成配对样本；N < ${DEFAULT_AB_SCORING_POLICY.minSampleSize} 不输出发布结论，请补齐样本后复测。` : `Only ${abScoring.sampleSize} paired samples are complete; add samples before making a release decision.`)
             : abScoring.decision === 'reject'
-                ? (locale === 'zh' ? `命中 hard gate：${abScoring.hardGates.map(g => g.label).join('、')}。建议先按打回类别修正后复测。` : `Hard gate hit: ${abScoring.hardGates.map(g => g.label).join(', ')}. Revise and retest first.`)
+                ? (() => {
+                    const gateList = abScoring.hardGates.map(g => g.label).join('、');
+                    return locale === 'zh'
+                        ? `命中 hard gate：${gateList}。至少一个维度已低于拒绝阈值，因此当前结论为打回。建议先按打回类别修正后复测。`
+                        : `Hard gate hit: ${abScoring.hardGates.map(g => g.label).join(', ')}. At least one dimension is below the reject threshold, so the current decision is reject. Revise and retest first.`;
+                })()
                 : abScoring.decision === 'monitor-release'
                     ? (locale === 'zh' ? '可小流量监控发布，并持续观察 Token 成本、触发率和多轮一致性。' : 'Proceed with monitored rollout and watch token cost, invoke rate, and variance.')
                     : (locale === 'zh' ? '三维指标均达标，可进入全量发布，同时保留后续复测记录。' : 'All three dimensions pass; proceed to full release and keep retesting over time.');
@@ -2119,7 +2865,7 @@ export function GrayscaleEvaluation({
                         <div
                             style={{
                                 display: 'grid',
-                                gridTemplateColumns: '160px 1fr 1fr 60px 70px',
+                                gridTemplateColumns: '140px 1fr 1fr 90px 60px 70px',
                                 gap: 12,
                                 padding: '8px 12px',
                                 background: '#FAFAF7',
@@ -2137,6 +2883,7 @@ export function GrayscaleEvaluation({
                             <div>{locale === 'zh' ? 'Case ID' : 'Case ID'}</div>
                             <div>{locale === 'zh' ? '执行 session id' : 'Execution session id'}</div>
                             <div>{locale === 'zh' ? '评估 session id' : 'Evaluation session id'}</div>
+                            <div>{locale === 'zh' ? '评测结果' : 'Eval result'}</div>
                             <div style={{ textAlign: 'right' }}>{locale === 'zh' ? '分数' : 'Score'}</div>
                             <div style={{ textAlign: 'right' }}>{locale === 'zh' ? '操作' : 'Action'}</div>
                         </div>
@@ -2149,17 +2896,26 @@ export function GrayscaleEvaluation({
                             const evalErrMsg = (!hasExecFailure && record.status === 'fail')
                                 ? (record.output || '评测失败')
                                 : '';
-                            // case id 跳转目标: /dataset/<datasetId>?case=<caseId>
-                            // datasetId 从当前 task 配置拿; DatasetItemsPage 看到 ?case=
-                            // 会滚动到对应行并短暂高亮 (下面 DatasetItemsPage 同步加这个支持)
-                            const datasetId = currentTask?.configJson?.selectedDatasetId;
-                            const caseDetailUrl = datasetId && record.caseId
-                                ? `/dataset/${encodeURIComponent(datasetId)}?case=${encodeURIComponent(record.caseId)}`
-                                : null;
+                            const caseItem = caseLookup.get(record.caseId);
+                            const datasetId = caseItem?.datasetId || currentTask?.configJson?.selectedDatasetId;
+                            const caseDetailUrl = caseItem?.sourceType === 'trace'
+                                ? (caseItem.sourceExecutionSessionId
+                                    ? `/trace?taskId=${encodeURIComponent(caseItem.sourceExecutionSessionId)}`
+                                    : null)
+                                : (datasetId && record.caseId
+                                    ? `/dataset/${encodeURIComponent(datasetId)}?case=${encodeURIComponent(record.caseId)}`
+                                    : null);
+                            const caseDetailTitle = caseItem?.sourceType === 'trace'
+                                ? [
+                                    caseItem.sourceDatasetName ? `dataset: ${caseItem.sourceDatasetName}` : '',
+                                    caseItem.sourceUploadId ? `upload: ${caseItem.sourceUploadId}` : '',
+                                    caseItem.sourceExecutionSessionId ? `execution: ${caseItem.sourceExecutionSessionId}` : '',
+                                ].filter(Boolean).join(' | ')
+                                : `R${record.roundIndex || '-'} · ${record.caseId}`;
                             return (
                             <div
                                 key={`${side}-${record.caseId}-${record.roundIndex}-${idx}`}
-                                style={{ display: 'grid', gridTemplateColumns: '160px 1fr 1fr 60px 70px', gap: 12, alignItems: 'center', padding: '10px 12px', borderTop: '1px solid #F1EFE8', fontSize: 12 }}
+                                style={{ display: 'grid', gridTemplateColumns: '140px 1fr 1fr 90px 60px 70px', gap: 12, alignItems: 'center', padding: '10px 12px', borderTop: '1px solid #F1EFE8', fontSize: 12 }}
                             >
                                 {/* Case ID 列: 可点击, 跳到 dataset 详情对应 case */}
                                 <div
@@ -2169,7 +2925,7 @@ export function GrayscaleEvaluation({
                                         whiteSpace: 'nowrap',
                                         minWidth: 0,
                                     }}
-                                    title={`R${record.roundIndex || '-'} · ${record.caseId}`}
+                                    title={caseDetailTitle}
                                 >
                                     <span style={{ color: '#5F5E5A', fontWeight: 600, marginRight: 4 }}>R{record.roundIndex || '-'}</span>
                                     {caseDetailUrl ? (
@@ -2231,9 +2987,44 @@ export function GrayscaleEvaluation({
                                             {record.evaluationTraceId}
                                         </button>
                                     ) : (
-                                        <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'ui-monospace, monospace', color: '#888780' }}>
-                                            {record.evaluatorRunId || '—'}
+                                        // pass 但没拿到 evaluationTraceId (评测成功但 trace ID
+                                        // 还没回填, 常见于刚跑完的瞬态)。不显示生 trun_xxx 易迷惑,
+                                        // 显示 "✓ 已评测" 灰字, evaluatorRunId 作为 tooltip 留着 debug。
+                                        <span
+                                            title={record.evaluatorRunId ? `runId: ${record.evaluatorRunId}` : undefined}
+                                            style={{ color: '#888780', fontSize: 12 }}
+                                        >
+                                            ✓ {locale === 'zh' ? '已评测' : 'Evaluated'}
                                         </span>
+                                    )}
+                                </div>
+
+                                {/* 评测结果列: 有 evaluatorRunId 就显示为可点击按钮跳到 /eval/run/<runId>
+                                    (评测批次详情页, 显示该批次下所有 trace + 分数 + 评估器维度细节)。
+                                    没有 evaluatorRunId 时 (执行失败 / 还没启动评测) 显示 "—"。
+                                    target=_blank 避免离开当前 A/B 任务页, 用户可以来回切。 */}
+                                <div>
+                                    {record.evaluatorRunId ? (
+                                        <button
+                                            className="v2-action-btn"
+                                            style={{
+                                                fontSize: 11,
+                                                padding: '3px 8px',
+                                                background: '#EEF2FF',
+                                                color: '#4F46E5',
+                                                border: '1px solid rgba(79,70,229,.25)',
+                                                borderRadius: 4,
+                                                cursor: 'pointer',
+                                                fontWeight: 600,
+                                                whiteSpace: 'nowrap',
+                                            }}
+                                            title={`跳转到评测批次 ${record.evaluatorRunId} 详情`}
+                                            onClick={() => window.open(`/eval/run/${encodeURIComponent(record.evaluatorRunId)}`, '_blank')}
+                                        >
+                                            📋 {locale === 'zh' ? '查看' : 'View'}
+                                        </button>
+                                    ) : (
+                                        <span style={{ color: '#B8B6AE', fontSize: 11 }}>—</span>
                                     )}
                                 </div>
 
@@ -2241,41 +3032,79 @@ export function GrayscaleEvaluation({
                                     {typeof record.score === 'number' ? record.score : '—'}
                                 </div>
 
-                                {/* 操作列: 失败行才显示重试按钮 */}
+                                {/* 操作列: 失败行才显示重试按钮; in-flight 时显示"重试中"灰按钮 */}
                                 <div style={{ textAlign: 'right' }}>
-                                    {exec.tone === 'fail' || (evaluation && evaluation.tone === 'fail') ? (
-                                        <button
-                                            className="v2-action-btn"
-                                            style={{
-                                                fontSize: 11,
-                                                padding: '4px 8px',
-                                                background: '#1C1917',
-                                                color: 'white',
-                                                border: 'none',
-                                                borderRadius: 4,
-                                                cursor: 'pointer',
-                                                whiteSpace: 'nowrap',
-                                            }}
-                                            title={hasExecFailure
-                                                ? (locale === 'zh' ? '执行失败 → 从执行重试 (会自动评测)' : 'Retry from execution (auto-evaluate)')
-                                                : (locale === 'zh' ? '评测失败 → 只重新评测 (复用现有 session)' : 'Retry evaluation only')}
-                                            onClick={() => {
-                                                // 执行失败 → 重跑 agent (会 push 新 run, 自动 autoEval)
-                                                // 评测失败 → 行级 retryEvaluation: reset 这一条 run 状态
-                                                //           + onlyMissingEvaluation=true 让 backend 只评这一条,
-                                                //           不会误评同 case 已 pass 的其他 run。
-                                                if (hasExecFailure) {
-                                                    void runCaseSide(record.caseId, side);
-                                                } else {
-                                                    void retryEvaluation(record.caseId, side, record.roundIndex || 1);
-                                                }
-                                            }}
-                                        >
-                                            🔁 {locale === 'zh' ? '重试' : 'Retry'}
-                                        </button>
-                                    ) : (
-                                        <span style={{ color: '#B8B6AE', fontSize: 11 }}>—</span>
-                                    )}
+                                    {(() => {
+                                        const ri = record.roundIndex || 1;
+                                        const flightKey = retryKey(record.caseId, side, ri);
+                                        // 读 state 而不是 ref —— 让 React 自己跟踪依赖, retry 状态变化
+                                        // 立刻触发 re-render 切换 "重试中" 按钮显示。click handler 那边
+                                        // 还要靠 inFlightRetriesRef 同步判重防止 React commit 前的双击。
+                                        const isInFlight = inFlightRetries.has(flightKey);
+                                        const isFailRow = exec.tone === 'fail' || (evaluation && evaluation.tone === 'fail');
+                                        if (isInFlight) {
+                                            return (
+                                                <button
+                                                    className="v2-action-btn"
+                                                    disabled
+                                                    style={{
+                                                        fontSize: 11,
+                                                        padding: '4px 8px',
+                                                        background: '#E7E5E4',
+                                                        color: '#78716C',
+                                                        border: 'none',
+                                                        borderRadius: 4,
+                                                        cursor: 'not-allowed',
+                                                        whiteSpace: 'nowrap',
+                                                        opacity: 0.85,
+                                                    }}
+                                                    title={locale === 'zh'
+                                                        ? '重试进行中, 请等待结果。如需打断, 点击顶部「终止」按钮。'
+                                                        : 'Retry in progress; wait for result or use top Abort button to interrupt.'}
+                                                >
+                                                    ⏳ {locale === 'zh' ? '重试中' : 'Retrying'}
+                                                </button>
+                                            );
+                                        }
+                                        if (!isFailRow) {
+                                            return <span style={{ color: '#B8B6AE', fontSize: 11 }}>—</span>;
+                                        }
+                                        return (
+                                            <button
+                                                className="v2-action-btn"
+                                                style={{
+                                                    fontSize: 11,
+                                                    padding: '4px 8px',
+                                                    background: '#1C1917',
+                                                    color: 'white',
+                                                    border: 'none',
+                                                    borderRadius: 4,
+                                                    cursor: 'pointer',
+                                                    whiteSpace: 'nowrap',
+                                                }}
+                                                title={hasExecFailure
+                                                    ? (locale === 'zh' ? '执行失败 → 从执行重试 (会自动评测)' : 'Retry from execution (auto-evaluate)')
+                                                    : (locale === 'zh' ? '评测失败 → 只重新评测 (复用现有 session)' : 'Retry evaluation only')}
+                                                onClick={() => {
+                                                    // 都走行级"原地覆盖"路径——retry 是「再试这一行」语义,
+                                                    // 不该多出一条新记录。
+                                                    //   执行失败 → retryExecution: reset 这一条 run, 重跑 agent,
+                                                    //              autoEval 时自动接 retryEvaluation
+                                                    //   评测失败 → retryEvaluation: reset 这一条 run 评测状态,
+                                                    //              backend onlyMissingEvaluation 只评这一条
+                                                    // 双击保护: retryExecution / retryEvaluation 内部用
+                                                    // inFlightRetriesRef.add 同步抢锁, 已 in-flight 直接 return。
+                                                    if (hasExecFailure) {
+                                                        void retryExecution(record.caseId, side, ri);
+                                                    } else {
+                                                        void retryEvaluation(record.caseId, side, ri);
+                                                    }
+                                                }}
+                                            >
+                                                🔁 {locale === 'zh' ? '重试' : 'Retry'}
+                                            </button>
+                                        );
+                                    })()}
                                 </div>
                             </div>
                             );
@@ -2300,10 +3129,173 @@ export function GrayscaleEvaluation({
         return 'pending';
     };
 
+    // ── Hi-fi task-row derived values (only meaningful when `hifi` is true).
+    // Kept tight: a single state mapping + a couple of formatted strings.
+    // The status pill uses the same decision/decisionReady the verdict card uses,
+    // so the two never disagree.
+    const hifiTimeLabel = currentTask?.createdAt
+        ? new Date(currentTask.createdAt).toLocaleString(locale === 'zh' ? 'zh-CN' : 'en-US', {
+            month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+        })
+        : (locale === 'zh' ? '未保存' : 'Unsaved');
+    let hifiStateClass = '';
+    let hifiStateLabel: string = locale === 'zh' ? '草稿' : 'Draft';
+    if (isTaskRunInFlight) {
+        hifiStateClass = 'is-running';
+        hifiStateLabel = locale === 'zh' ? '运行中' : 'Running';
+    } else if (decisionReady) {
+        if (abScoring.decision === 'direct-release') {
+            hifiStateClass = 'is-done';
+            hifiStateLabel = locale === 'zh' ? '已通过' : 'Pass';
+        } else if (abScoring.decision === 'reject') {
+            hifiStateClass = 'is-reject';
+            hifiStateLabel = locale === 'zh' ? '打回' : 'Reject';
+        } else if (abScoring.decision === 'insufficient') {
+            hifiStateClass = 'is-warn';
+            hifiStateLabel = locale === 'zh' ? '样本不足' : 'Insufficient';
+        } else {
+            hifiStateClass = 'is-warn';
+            hifiStateLabel = locale === 'zh' ? '需关注' : 'Review';
+        }
+    } else if (currentTask) {
+        hifiStateLabel = locale === 'zh' ? '待执行' : 'Pending';
+    }
+    const selectedDataset = datasets.find(d => d.id === selectedDatasetId);
+    const selectedEvaluatorIsBuiltIn = BUILT_IN_EVALUATORS.some(ev => ev.id === selectedEvaluatorId);
+    useEffect(() => {
+        if (!hifi || hasManualHifiCollapseOverride) return;
+        setHifiCollapsed(prev => (
+            prev.config === derivedHifiCollapsed.config
+            && prev.exec === derivedHifiCollapsed.exec
+            && prev.result === derivedHifiCollapsed.result
+        ) ? prev : derivedHifiCollapsed);
+    }, [derivedHifiCollapsed, hasManualHifiCollapseOverride, hifi]);
+    useEffect(() => {
+        if (!hifi) return;
+        setHasManualHifiCollapseOverride(false);
+    }, [currentTask?.id, hifi]);
+    const repeatRoundOptions = useMemo(() => ([
+        { value: '1', label: locale === 'zh' ? '1 轮' : '1 round' },
+        { value: '2', label: locale === 'zh' ? '2 轮' : '2 rounds' },
+        { value: '3', label: locale === 'zh' ? '3 轮' : '3 rounds' },
+        { value: '5', label: locale === 'zh' ? '5 轮' : '5 rounds' },
+        { value: '10', label: locale === 'zh' ? '10 轮' : '10 rounds' },
+    ]), [locale]);
+    const datasetSelectOptions = useMemo(
+        () => [
+            { value: '', label: locale === 'zh' ? '请选择数据集' : 'Select a dataset' },
+            ...datasets.map(ds => ({ value: ds.id, label: ds.name })),
+        ],
+        [datasets, locale],
+    );
+    const evaluatorSelectOptions = useMemo(
+        () => [
+            ...BUILT_IN_EVALUATORS.map(ev => ({ value: ev.id, label: ev.name })),
+            ...userEvaluators.map(ev => ({ value: ev.id, label: ev.name })),
+        ],
+        [userEvaluators],
+    );
+    const controlVersionOptions = useMemo(
+        () => [
+            { value: NONE_VERSION_ID, label: locale === 'zh' ? '无 Skill' : 'No Skill' },
+            ...versions.map(v => ({ value: v.id, label: `v${v.semanticVersion || v.version}` })),
+        ],
+        [NONE_VERSION_ID, locale, versions],
+    );
+    const controlVersionHint = versionAId === NONE_VERSION_ID
+        ? (locale === 'zh' ? '默认对照组不加载 Skill，也可选择同 Skill 的历史版本' : 'Control runs without Skill by default; a previous version is optional')
+        : `${locale === 'zh' ? '对照组加载' : 'Control loads'} ${selectedSkill?.name || 'Skill'} ${getVersionLabel(versionA || versionAId)}`;
+    const getAbAgentName = (versionId: string) => versionId === NONE_VERSION_ID
+        ? 'grayscale-baseline-agent'
+        : 'grayscale-skill-agent';
+    const getAbAgentLabel = (versionId: string) => versionId === NONE_VERSION_ID
+        ? (locale === 'zh' ? '基线 Agent' : 'Baseline Agent')
+        : (locale === 'zh' ? 'Skill Agent' : 'Skill Agent');
+    const getAbAgentHint = (versionId: string) => `${getAbAgentLabel(versionId)} · ${getAbAgentName(versionId)}`;
+    const agentHintA = getAbAgentHint(versionAId || NONE_VERSION_ID);
+    const repeatRoundsHint = repeatRounds > 1
+        ? (locale === 'zh' ? '多轮运行可观察波动和稳定性' : 'Multiple rounds reveal variance and stability')
+        : (locale === 'zh' ? '单轮适合快速试跑与校验配置' : 'One round is best for quick validation');
+    const datasetHint = selectedDatasetId
+        ? `${locale === 'zh' ? '当前数据集共' : 'Selected dataset has'} ${selectedDataset?.cases?.length || 0} ${locale === 'zh' ? '条样本' : 'cases'}`
+        : (locale === 'zh' ? '先选择数据集，再勾选要执行的样本' : 'Choose a dataset before selecting cases');
+    const evaluatorHint = selectedEvaluatorIsBuiltIn
+        ? (locale === 'zh' ? '使用预置评估器，适合直接开始评测' : 'Built-in evaluator for a quick start')
+        : (locale === 'zh' ? '使用自定义评估器，适合特定业务规则' : 'Custom evaluator for domain-specific scoring');
+
     return (
-        <div className="ab-page-v2" style={{ paddingBottom: 60 }}>
+        <div className={`ab-page-v2${hifi ? ' gray-hifi' : ''}`} style={{ paddingBottom: 60 }}>
             {/* Stepper & Header Block */}
             <div style={{ padding: '24px 28px 12px 28px' }}>
+                {hifi && (
+                    <div className="gh-task-row">
+                        <div className="gh-task-title-row">
+                            {isEditingTask ? (
+                                <input
+                                    ref={taskTitleInputRef}
+                                    className="gh-task-title"
+                                    value={taskNameInput}
+                                    onChange={e => setTaskNameInput(e.target.value)}
+                                    onBlur={finishTaskTitleEdit}
+                                    onKeyDown={e => {
+                                        if (e.key === 'Enter') {
+                                            e.preventDefault();
+                                            finishTaskTitleEdit();
+                                        } else if (e.key === 'Escape') {
+                                            e.preventDefault();
+                                            setTaskNameInput(currentTask?.taskName || '');
+                                            setIsEditingTask(false);
+                                        }
+                                    }}
+                                    placeholder={taskTitlePlaceholder}
+                                    spellCheck={false}
+                                    aria-label={locale === 'zh' ? '任务名称' : 'Task name'}
+                                />
+                            ) : (
+                                <button
+                                    type="button"
+                                    className={`gh-task-title-trigger${taskTitleIsPlaceholder ? ' is-placeholder' : ''}`}
+                                    onClick={beginTaskTitleEdit}
+                                    aria-label={locale === 'zh' ? '编辑任务名称' : 'Edit task name'}
+                                >
+                                    {taskTitleDisplay}
+                                </button>
+                            )}
+                            <span className={`gh-task-state ${hifiStateClass}`}>{hifiStateLabel}</span>
+                            <span className="gh-task-cat">A/B Compare</span>
+                        </div>
+                        <div className="gh-task-info-row">
+                            <div className="gh-task-meta">
+                                <span className="gh-task-meta-item">
+                                    <span className="ico">⏱</span>{hifiTimeLabel}
+                                </span>
+                            </div>
+                            <div className="gh-task-actions">
+                                <button type="button" className="gh-btn" onClick={handleNewTask}>
+                                    + {locale === 'zh' ? '新建任务' : 'New Task'}
+                                </button>
+                                <button
+                                    type="button"
+                                    className="gh-btn"
+                                    onClick={() => setShowHistoryDrawer(true)}
+                                >
+                                    {locale === 'zh' ? '历史任务' : 'History'}
+                                </button>
+                                <button type="button" className="gh-btn" onClick={handleSaveTask}>
+                                    {locale === 'zh' ? '保存配置' : 'Save'}
+                                </button>
+                                <button
+                                    type="button"
+                                    className="gh-btn is-primary"
+                                    onClick={runComparisonForCheckedCases}
+                                    disabled={runButtonDisabled}
+                                >
+                                    ▶ {locale === 'zh' ? '复测' : 'Re-run'}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
                 {!onBack && (
                     <div className="sa-back-line" style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '0 0 16px 0' }}>
                         <button
@@ -2319,7 +3311,7 @@ export function GrayscaleEvaluation({
                 )}
 
                 {/* Active Skill Summary White Card */}
-                <div style={{
+                <div className="gh-skill-summary" style={{
                     background: 'white',
                     borderRadius: 12,
                     padding: '20px 24px',
@@ -2456,18 +3448,64 @@ export function GrayscaleEvaluation({
                     </div>
                 </div>
 
-                {/* Progress Stepper */}
-                <div 
-                    className="v2-stepper" 
-                    style={{ 
-                        position: 'sticky', 
-                        top: 16, 
-                        zIndex: 40, 
-                        background: 'rgba(255, 255, 255, 0.95)', 
-                        backdropFilter: 'blur(8px)',
-                        border: '1px solid rgba(0,0,0,0.08)', 
+                {hifi && (() => {
+                    // Hi-fi stepper — single connected line with an origin pill on the left.
+                    // Fills the connector based on how many steps are 'done'; an 'active' step
+                    // does not advance the line further (it pulses on its own circle).
+                    const stepStatuses = [getStepStatus(1), getStepStatus(2), getStepStatus(3)] as const;
+                    const doneCount = stepStatuses.filter(s => s === 'done').length;
+                    const ghDonePct = doneCount === 0 ? 0 : doneCount >= 2 ? 100 : 50;
+                    const stepNames = locale === 'zh'
+                        ? ['配置', '运行 · A/B 评测', '测评结果']
+                        : ['Config · Cases', 'Run · A/B Eval', 'Result · Analysis'];
+                    const stepMetas = [stepConfigMeta, stepExecutionMeta, stepDecisionMeta];
+                    return (
+                        <div
+                            className="gh-stepper"
+                            style={{ ['--gh-done-pct' as string]: `${ghDonePct}%` } as React.CSSProperties}
+                        >
+                            <div className="gh-stepper-row">
+                                <div className="gh-step gh-step-origin">
+                                    <div className="gh-step-circle" />
+                                    <div className="gh-step-body">
+                                        <div className="gh-step-name">
+                                            {locale === 'zh' ? 'A/B 测试' : 'A/B Testing'}
+                                        </div>
+                                        <div className="gh-step-sub">
+                                            {locale === 'zh' ? '启用 vs 未启用 Skill 的差异对照' : 'Skill on vs off comparison'}
+                                        </div>
+                                    </div>
+                                </div>
+                                {([1, 2, 3] as const).map(n => {
+                                    const status = stepStatuses[n - 1];
+                                    const cls = status === 'done' ? 'is-done' : status === 'active' ? 'is-active' : 'is-idle';
+                                    return (
+                                        <div key={n} className={`gh-step ${cls}`}>
+                                            <div className="gh-step-circle">
+                                                {status === 'done' ? null : <span>{n}</span>}
+                                            </div>
+                                            <div className="gh-step-body">
+                                                <div className="gh-step-name">{stepNames[n - 1]}</div>
+                                                <div className="gh-step-sub">{stepMetas[n - 1]}</div>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    );
+                })()}
+
+                {/* Progress Stepper — design: foundations.md §P.2 (no backdrop-blur outside AppTopBar), tokens only. */}
+                <div
+                    className="v2-stepper"
+                    style={{
+                        position: 'sticky',
+                        top: 16,
+                        zIndex: 40,
+                        background: 'var(--card-bg)',
+                        border: '1px solid var(--border)',
                         borderRadius: 12,
-                        boxShadow: '0 4px 16px rgba(0,0,0,0.06)'
                     }}
                 >
                     <div className={`v2-step ${getStepStatus(1)}`}>
@@ -2477,7 +3515,7 @@ export function GrayscaleEvaluation({
                         <div className="v2-step-info">
                             <span className="v2-step-label">STEP 1 · CONFIG</span>
                             <span className="v2-step-name">{locale === 'zh' ? '准备: 配置实验参数' : 'Config params'}</span>
-                            <span className="v2-step-meta" style={{ color: '#1D9E75' }}>{stepConfigMeta}</span>
+                            <span className="v2-step-meta" style={{ color: 'var(--success)' }}>{stepConfigMeta}</span>
                         </div>
                     </div>
                     <div className={`v2-step ${getStepStatus(2)}`}>
@@ -2487,7 +3525,7 @@ export function GrayscaleEvaluation({
                         <div className="v2-step-info">
                             <span className="v2-step-label">STEP 2 · EXECUTION</span>
                             <span className="v2-step-name">{locale === 'zh' ? '执行: 运行 A/B 测试' : 'Run A/B Testing'}</span>
-                            <span className="v2-step-meta" style={{ color: '#1D9E75' }}>{stepExecutionMeta}</span>
+                            <span className="v2-step-meta" style={{ color: 'var(--success)' }}>{stepExecutionMeta}</span>
                         </div>
                     </div>
                     <div className={`v2-step ${getStepStatus(3)}`}>
@@ -2497,7 +3535,7 @@ export function GrayscaleEvaluation({
                         <div className="v2-step-info">
                             <span className="v2-step-label">STEP 3 · DECISION</span>
                             <span className="v2-step-name">{locale === 'zh' ? '决策: 综合判定 & 上线' : 'Decision verdict'}</span>
-                            <span className="v2-step-meta" style={{ color: '#185FA5', fontWeight: 600 }}>{stepDecisionMeta}</span>
+                            <span className="v2-step-meta" style={{ color: 'var(--primary)', fontWeight: 600 }}>{stepDecisionMeta}</span>
                         </div>
                     </div>
                 </div>
@@ -2507,141 +3545,123 @@ export function GrayscaleEvaluation({
             <div style={{ padding: '0 28px', display: 'flex', flexDirection: 'column', gap: 16 }}>
 
                 {/* CARD 1: 实验配置 */}
-                <div className="v2-stage-card config" style={{ background: 'white', border: '0.5px solid rgba(0,0,0,0.08)' }}>
-                    <div className="v2-stage-card-header" style={{ borderBottom: '0.5px solid rgba(0,0,0,0.08)' }}>
+                <div
+                    className="v2-stage-card config"
+                    style={{ background: 'white', border: '0.5px solid rgba(0,0,0,0.08)' }}
+                    data-collapsible={hifi ? '1' : undefined}
+                    data-collapsed={hifi ? (hifiCollapsed.config ? '1' : '0') : undefined}
+                >
+                    <div
+                        className="v2-stage-card-header"
+                        style={{ borderBottom: '0.5px solid rgba(0,0,0,0.08)' }}
+                        onClick={hifi ? () => toggleHifiCard('config') : undefined}
+                    >
                         <div className="v2-stage-num-badge">
                             <GearIcon />
                         </div>
                         <div className="v2-stage-title-block">
                             <div className="v2-stage-card-title">
-                                {locale === 'zh' ? '实验配置' : 'Experiment Config'}
-                                <span className="v2-stage-pill done" style={{ background: '#E1F5EE', color: '#0F6E56', fontSize: 11, padding: '2px 8px', borderRadius: 4 }}>
-                                    ✓ 配置完成
+                                {locale === 'zh' ? '配置' : 'Config'}
+                                <span className={`v2-stage-pill ${configReady ? 'done' : 'pending'}`} style={{ background: configReady ? '#E1F5EE' : '#F5F4EE', color: configReady ? '#0F6E56' : '#5F5E5A', fontSize: 11, padding: '2px 8px', borderRadius: 4 }}>
+                                    {configPillLabel}
                                 </span>
                             </div>
-                            <div className="v2-stage-card-subtitle">{locale === 'zh' ? '设置参数 · 唯一变量是 Skill 开/关' : 'Set up parameters · The only variable is Skill On/Off'}</div>
+                            <div className="v2-stage-card-subtitle">{locale === 'zh' ? '设置参数 · 实验版本由 Skill 分析决定，对照版本由本配置决定' : 'Set up parameters · Experiment version comes from Skill analysis, control version from this config'}</div>
                         </div>
+                        {hifi && (
+                            <button
+                                type="button"
+                                className="gh-card-chev"
+                                aria-label={hifiCollapsed.config ? (locale === 'zh' ? '展开' : 'Expand') : (locale === 'zh' ? '折叠' : 'Collapse')}
+                                onClick={e => { e.stopPropagation(); toggleHifiCard('config'); }}
+                            />
+                        )}
                     </div>
                     <div className="v2-stage-card-body">
                         <div className="v2-config-grid">
-                            <div className="v2-config-item">
-                                <span className="v2-callout-new">NEW</span>
-                                <div className="v2-config-item-label">
+                            <div className="v2-config-item v2-config-item--compact">
+                                <span className="v2-config-item-label">
                                     {locale === 'zh' ? '重复轮次' : 'Repeat rounds'} <span className="req">*</span>
-                                </div>
-                                <div className="v2-config-item-control">
-                                    <select
-                                        value={repeatRounds}
-                                        onChange={e => {
-                                            const v = Number(e.target.value);
-                                            setRepeatRounds(v);
-                                            if (currentTask) persistTaskUpdate(currentTask.id, { ...currentConfigRef.current, repeatRounds: v });
-                                        }}
-                                        style={{ fontSize: 14, fontWeight: 600, height: 28, cursor: 'pointer' }}
-                                    >
-                                        {[1, 2, 3, 5, 10].map(n => (
-                                            <option key={n} value={n}>{n} 轮</option>
-                                        ))}
-                                    </select>
-                                </div>
-                                <div className="v2-config-item-hint">{locale === 'zh' ? '多轮运行以计算方差' : 'Multiple rounds to calculate variance'}</div>
+                                </span>
+                                <Select
+                                    aria-label={locale === 'zh' ? '选择重复轮次' : 'Select repeat rounds'}
+                                    value={String(repeatRounds)}
+                                    onChange={value => {
+                                        const v = Number(value);
+                                        setRepeatRounds(v);
+                                        if (currentTask) persistTaskUpdate(currentTask.id, { ...currentConfigRef.current, repeatRounds: v });
+                                    }}
+                                    options={repeatRoundOptions}
+                                    active={repeatRounds > 1}
+                                    size="sm"
+                                    className="v2-config-select"
+                                />
+                                <span className="v2-config-item-hint">{repeatRoundsHint}</span>
                             </div>
 
-                            <div className="v2-config-item">
-                                <div className="v2-config-item-label">{locale === 'zh' ? '数据集' : 'Dataset'}</div>
-                                <div className="v2-config-item-control">
-                                    <select
-                                        value={selectedDatasetId}
-                                        onChange={e => {
-                                            const val = e.target.value;
-                                            setSelectedDatasetId(val);
-                                            setLinkedDatasetIds(val ? [val] : []);
-                                            setCheckedCaseIds([]);
+                            <div className="v2-config-item v2-config-item--compact">
+                                <span className="v2-config-item-label">{locale === 'zh' ? '数据集' : 'Dataset'}</span>
+                                <Select
+                                    aria-label={locale === 'zh' ? '选择数据集' : 'Select dataset'}
+                                    value={selectedDatasetId}
+                                    onChange={val => {
+                                        setSelectedDatasetId(val);
+                                        setLinkedDatasetIds(val ? [val] : []);
+                                        setCheckedCaseIds([]);
 
-                                            if (currentTask) {
-                                                persistTaskUpdate(currentTask.id, {
-                                                    ...currentConfigRef.current,
-                                                    selectedDatasetId: val,
-                                                    linkedDatasetIds: val ? [val] : [],
-                                                    selectedCaseIds: [],
-                                                    selectedCaseId: ''
-                                                });
-                                            }
-                                        }}
-                                        style={{ fontSize: 13, fontWeight: 600, height: 28, cursor: 'pointer' }}
-                                    >
-                                        <option value="">{locale === 'zh' ? '-- 未选择 --' : '-- None --'}</option>
-                                        {datasets.map(ds => (
-                                            <option key={ds.id} value={ds.id}>{ds.name}</option>
-                                        ))}
-                                    </select>
-                                </div>
-                                <div className="v2-config-item-hint">
-                                    {selectedDatasetId ? `${locale === 'zh' ? '共' : 'Total'} ${datasets.find(d => d.id === selectedDatasetId)?.cases?.length || 0} ${locale === 'zh' ? '条样本' : 'cases'}` : '共 0 条样本'}
-                                </div>
+                                        if (currentTask) {
+                                            persistTaskUpdate(currentTask.id, {
+                                                ...currentConfigRef.current,
+                                                selectedDatasetId: val,
+                                                linkedDatasetIds: val ? [val] : [],
+                                                selectedCaseIds: [],
+                                                selectedCaseId: ''
+                                            });
+                                        }
+                                    }}
+                                    options={datasetSelectOptions}
+                                    active={Boolean(selectedDatasetId)}
+                                    size="sm"
+                                    className="v2-config-select"
+                                />
+                                <span className="v2-config-item-hint">{datasetHint}</span>
                             </div>
 
-                            <div className="v2-config-item">
-                                <div className="v2-config-item-label">{locale === 'zh' ? '评估器' : 'Evaluator'}</div>
-                                <div className="v2-config-item-control">
-                                    <select
-                                        value={selectedEvaluatorId}
-                                        onChange={e => {
-                                            const v = e.target.value;
-                                            setSelectedEvaluatorId(v);
-                                            if (currentTask) persistTaskUpdate(currentTask.id, { ...currentConfigRef.current, evaluatorId: v });
-                                        }}
-                                        style={{ fontSize: 13, fontWeight: 600, height: 28, cursor: 'pointer' }}
-                                    >
-                                        <optgroup label={locale === 'zh' ? '预置评估器' : 'Built-in Evaluators'}>
-                                            {BUILT_IN_EVALUATORS.map(ev => (
-                                                <option key={ev.id} value={ev.id}>{ev.name}</option>
-                                            ))}
-                                        </optgroup>
-                                        {userEvaluators.length > 0 && (
-                                            <optgroup label={locale === 'zh' ? '自定义评估器' : 'Custom Evaluators'}>
-                                                {userEvaluators.map(ev => (
-                                                    <option key={ev.id} value={ev.id}>{ev.name}</option>
-                                                ))}
-                                            </optgroup>
-                                        )}
-                                    </select>
-                                </div>
-                                <div className="v2-config-item-hint">{locale === 'zh' ? '预置或自定义评估器' : 'Preset or custom evaluator'}</div>
+                            <div className="v2-config-item v2-config-item--compact">
+                                <span className="v2-config-item-label">{locale === 'zh' ? '评估器' : 'Evaluator'}</span>
+                                <Select
+                                    aria-label={locale === 'zh' ? '选择评估器' : 'Select evaluator'}
+                                    value={selectedEvaluatorId}
+                                    onChange={v => {
+                                        setSelectedEvaluatorId(v);
+                                        if (currentTask) persistTaskUpdate(currentTask.id, { ...currentConfigRef.current, evaluatorId: v });
+                                    }}
+                                    options={evaluatorSelectOptions}
+                                    active={Boolean(selectedEvaluatorId)}
+                                    size="sm"
+                                    className="v2-config-select"
+                                />
+                                <span className="v2-config-item-hint">{evaluatorHint}</span>
                             </div>
 
-                            <div className="v2-config-item">
-                                <div className="v2-config-item-label">{locale === 'zh' ? '附加选项' : 'Additional Options'}</div>
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
-                                    <label className="v2-config-checkbox-row">
-                                        <input
-                                            type="checkbox"
-                                            checked={autoEval}
-                                            onChange={e => {
-                                                const v = e.target.checked;
-                                                setAutoEval(v);
-                                                if (currentTask) persistTaskUpdate(currentTask.id, { ...currentConfigRef.current, autoEval: v });
-                                            }}
-                                        />
-                                        <span>{locale === 'zh' ? '自动评测' : 'Auto-evaluate'}</span>
-                                    </label>
-                                    <label className="v2-config-checkbox-row" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                        <input
-                                            type="checkbox"
-                                            checked={recordTriggerDetails}
-                                            onChange={e => {
-                                                const v = e.target.checked;
-                                                setRecordTriggerDetails(v);
-                                                if (currentTask) persistTaskUpdate(currentTask.id, { ...currentConfigRef.current, recordTriggerDetails: v });
-                                            }}
-                                        />
-                                        <span>{locale === 'zh' ? '记录 Skill 触发详情' : 'Record Skill triggers'}</span>
-                                    </label>
-                                </div>
-                                <div className="v2-config-item-hint" style={{ marginTop: 4, color: '#0F6E56', fontWeight: 500 }}>
-                                    {locale === 'zh' ? '* 自动评估后返回准确评分与 Skill 是否调用' : '* Auto-evaluate on finish with scores & triggers'}
-                                </div>
+                            <div className="v2-config-item v2-config-item--compact">
+                                <span className="v2-config-item-label">{locale === 'zh' ? '对照组 Skill 版本' : 'Control Skill version'}</span>
+                                <Select
+                                    aria-label={locale === 'zh' ? '选择对照组 Skill 版本' : 'Select control Skill version'}
+                                    value={versionAId || NONE_VERSION_ID}
+                                    onChange={v => {
+                                        setVersionAId(v);
+                                        if (currentTask) persistTaskUpdate(currentTask.id, { ...currentConfigRef.current, versionAId: v });
+                                    }}
+                                    options={controlVersionOptions}
+                                    active={Boolean(versionAId && versionAId !== NONE_VERSION_ID)}
+                                    size="sm"
+                                    className="v2-config-select"
+                                />
+                                <span className="v2-config-item-hint">{controlVersionHint}</span>
+                                <span className="v2-config-item-hint ab-agent-hint">{agentHintA}</span>
                             </div>
+
                         </div>
 
                         {/* Separator line */}
@@ -2729,6 +3749,15 @@ export function GrayscaleEvaluation({
                                             <div style={{ fontSize: 13, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                                 {c.input}
                                             </div>
+                                            {c.sourceType === 'trace' && (
+                                                <div style={{ marginTop: 4, fontSize: 11, color: '#78716C', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                    {[
+                                                        c.sourceDatasetName ? `dataset ${c.sourceDatasetName}` : '',
+                                                        c.sourceUploadId ? `upload ${c.sourceUploadId}` : '',
+                                                        c.sourceExecutionSessionId ? `exec ${c.sourceExecutionSessionId}` : '',
+                                                    ].filter(Boolean).join(' · ')}
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
                                 );
@@ -2767,52 +3796,26 @@ export function GrayscaleEvaluation({
                             </span>
                         </div>
 
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginTop: 14, paddingTop: 14, borderTop: '0.5px solid rgba(0,0,0,0.08)' }}>
-                            <button
-                                className="v2-btn-run-big"
-                                style={{
-                                    padding: '10px 24px',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: 8,
-                                    background: runButtonBusy ? '#A8A29E' : '#1C1917',
-                                    borderRadius: 8,
-                                    height: 38,
-                                    fontSize: 13,
-                                    color: 'white',
-                                    border: 'none',
-                                    cursor: runButtonDisabled ? 'not-allowed' : 'pointer',
-                                    opacity: runButtonDisabled && !runButtonBusy ? 0.6 : 1,
-                                }}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--border)' }}>
+                            <Button
+                                variant="default"
+                                size="default"
                                 onClick={runComparisonForCheckedCases}
                                 disabled={runButtonDisabled}
                             >
-                                <PlayIcon /> {runButtonLabel}
+                                <Play /> {runButtonLabel}
+                            </Button>
+                            <button
+                                type="button"
+                                className="ab-stop-run-btn"
+                                onClick={abortCurrentRun}
+                                aria-label={locale === 'zh' ? '终止' : 'Abort'}
+                                title={locale === 'zh' ? '终止当前 A/B 测试' : 'Abort current A/B test'}
+                                disabled={!runButtonBusy}
+                            >
+                                <span>{locale === 'zh' ? '终止' : 'Abort'}</span>
                             </button>
-                            {/* 终止按钮: 仅 busy 时显示, 让用户能干涉死锁在执行中的任务 */}
-                            {runButtonBusy && (
-                                <button
-                                    onClick={abortCurrentRun}
-                                    title={locale === 'zh' ? '终止当前 A/B 测试' : 'Abort current A/B test'}
-                                    style={{
-                                        padding: '10px 18px',
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: 6,
-                                        background: '#FEE2E2',
-                                        color: '#B91C1C',
-                                        border: '1px solid #FCA5A5',
-                                        borderRadius: 8,
-                                        height: 38,
-                                        fontSize: 13,
-                                        fontWeight: 700,
-                                        cursor: 'pointer',
-                                    }}
-                                >
-                                    ⏹ {locale === 'zh' ? '终止' : 'Abort'}
-                                </button>
-                            )}
-                            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, fontWeight: 700, color: '#2C2C2A' }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, fontWeight: 700, color: 'var(--foreground)' }}>
                                 <span>{locale === 'zh' ? 'Agent 最大并发数' : 'Max agent concurrency'}</span>
                                 <select
                                     value={agentMaxConcurrency}
@@ -2821,14 +3824,14 @@ export function GrayscaleEvaluation({
                                         setAgentMaxConcurrency(v);
                                         if (currentTask) persistTaskUpdate(currentTask.id, { ...currentConfigRef.current, agentMaxConcurrency: v });
                                     }}
-                                    style={{ height: 32, minWidth: 72, border: '1px solid #D6D3D1', borderRadius: 6, padding: '0 8px', fontSize: 13, fontWeight: 700, cursor: 'pointer', background: 'white' }}
+                                    style={{ height: 32, minWidth: 72, border: '1px solid var(--border-dark)', borderRadius: 6, padding: '0 8px', fontSize: 13, fontWeight: 700, cursor: 'pointer', background: 'var(--card-bg)', color: 'var(--foreground)' }}
                                 >
                                     {[1, 2, 4, 8, 16, 32].map(n => (
                                         <option key={n} value={n}>{n}</option>
                                     ))}
                                 </select>
                             </label>
-                            <div style={{ fontSize: 12, color: '#5F5E5A', lineHeight: 1.4 }}>
+                            <div style={{ fontSize: 12, color: 'var(--foreground-secondary)', lineHeight: 1.4 }}>
                                 {locale === 'zh'
                                     ? `当前配置：${selectedSampleCount} 样本 * 2 组 * ${repeatRounds} 轮 = ${selectedSampleCount * 2 * repeatRounds} 次执行 | 最大并发：${agentMaxConcurrency}`
                                     : `Current Config: ${selectedSampleCount} samples * 2 groups * ${repeatRounds} rounds = ${selectedSampleCount * 2 * repeatRounds} runs | Max concurrency: ${agentMaxConcurrency}`}
@@ -2839,19 +3842,27 @@ export function GrayscaleEvaluation({
                 </div>
 
                 {/* CARD 2: 执行对照 (Comparison Columns Panel - Full Width) */}
-                <div className="v2-stage-card s1" style={{ background: 'white', border: '0.5px solid rgba(0,0,0,0.08)', marginBottom: 0 }}>
-                    <div className="v2-stage-card-header" style={{ borderBottom: '0.5px solid rgba(0,0,0,0.08)' }}>
-                        <div className="v2-stage-num-badge" style={{ 
-                            background: '#185FA5', 
-                            color: 'white', 
-                            flexDirection: 'column', 
-                            lineHeight: 1.1,
-                            padding: '4px 0',
-                            justifyContent: 'center',
-                            alignItems: 'center'
-                        }}>
-                            <span style={{ fontSize: 9, fontWeight: 800, opacity: 0.9, letterSpacing: '0.5px' }}>STEP</span>
-                            <span style={{ fontSize: 18, fontWeight: 800 }}>1</span>
+                <div
+                    className="v2-stage-card s1"
+                    style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', marginBottom: 0 }}
+                    data-collapsible={hifi ? '1' : undefined}
+                    data-collapsed={hifi ? (hifiCollapsed.exec ? '1' : '0') : undefined}
+                >
+                    <div
+                        className="v2-stage-card-header"
+                        style={{ borderBottom: '1px solid var(--border)' }}
+                        onClick={hifi ? () => toggleHifiCard('exec') : undefined}
+                    >
+                        <div
+                            className="v2-stage-num-badge"
+                            style={{
+                                background: 'var(--primary)',
+                                color: 'var(--primary-foreground)',
+                                justifyContent: 'center',
+                                alignItems: 'center'
+                            }}
+                        >
+                            <PlayIcon />
                         </div>
                         <div className="v2-stage-title-block">
                             <div className="v2-stage-card-title">
@@ -2861,64 +3872,85 @@ export function GrayscaleEvaluation({
                             </div>
                             <div className="v2-stage-card-subtitle">
                                 {locale === 'zh'
-                                    ? `对照组 (${getVersionLabel(versions.find(v => v.id === versionAId) || versionAId)}) vs 实验组 (${getVersionLabel(versions.find(v => v.id === versionBId) || versionBId)}) · 暴露每次执行的过程数据`
+                                    ? `对照组 (${getVersionLabel(versions.find(v => v.id === versionAId) || versionAId)}) vs 实验组 (${getVersionLabel(versions.find(v => v.id === versionBId) || versionBId)}) · 每次执行的过程数据`
                                     : `Control (${getVersionLabel(versions.find(v => v.id === versionAId) || versionAId)}) vs Experiment (${getVersionLabel(versions.find(v => v.id === versionBId) || versionBId)}) · Exposing raw execution steps`}
                             </div>
                         </div>
+                        {hifi && (
+                            <button
+                                type="button"
+                                className="gh-card-chev"
+                                aria-label={hifiCollapsed.exec ? (locale === 'zh' ? '展开' : 'Expand') : (locale === 'zh' ? '折叠' : 'Collapse')}
+                                onClick={e => { e.stopPropagation(); toggleHifiCard('exec'); }}
+                            />
+                        )}
                     </div>
                     <div className="v2-stage-card-body" style={{ padding: 18 }}>
                         <div className="v2-compare-grid" style={{ gridTemplateColumns: '1fr 20px 1fr' }}>
                             
-                            {/* Baseline Column (A) */}
-                            <div className="v2-compare-col baseline" style={{ borderTopColor: '#BA7517' }}>
-                                <div className="v2-col-header" style={{ background: '#FAFAF7', borderBottom: '0.5px solid rgba(0,0,0,0.08)' }}>
-                                    <div className="v2-col-tag a" style={{ background: '#BA7517' }}>A</div>
+                            {/* Baseline Column (A) — design: Sky palette (slot 2, foundations.md §B.6.1). */}
+                            <div className="v2-compare-col baseline ab-col-a">
+                                <div className="v2-col-header">
+                                    <div className="v2-col-tag a">A</div>
                                     <div className="v2-col-name-block">
-                                        <div className="v2-col-name">{locale === 'zh' ? '对照组: 基础 Agent' : 'Control Group'}</div>
+                                        <div className="v2-col-name">{locale === 'zh' ? `对照组: ${getAbAgentLabel(versionAId || NONE_VERSION_ID)}` : `Control: ${getAbAgentLabel(versionAId || NONE_VERSION_ID)}`}</div>
                                         <div className="v2-col-variant-line">
-                                            <span className={`v2-skill-state ${versionAId === NONE_VERSION_ID ? 'off' : 'on'}`} style={versionAId === NONE_VERSION_ID ? {} : { background: '#FEF3C7', color: '#BA7517' }}>
-                                                Skill: {versionAId === NONE_VERSION_ID 
-                                                    ? (locale === 'zh' ? '无 Skill' : 'No Skill') 
+                                            <span className={`v2-skill-state ${versionAId === NONE_VERSION_ID ? 'off' : 'on'} ab-skill-state`}>
+                                                Skill: {versionAId === NONE_VERSION_ID
+                                                    ? (locale === 'zh' ? '无 Skill' : 'No Skill')
                                                     : `${selectedSkill?.name || 'cpu-model-query'} ${getVersionLabel(versions.find(v => v.id === versionAId) || versionAId)}`}
+                                            </span>
+                                            <span className="ab-agent-state" title={getAbAgentName(versionAId || NONE_VERSION_ID)}>
+                                                Agent: {getAbAgentName(versionAId || NONE_VERSION_ID)}
                                             </span>
                                         </div>
                                     </div>
-                                    <div className={`v2-col-status ${simA.status}`} style={{ 
-                                        background: isCompletedA ? '#FDF6E2' : isEvaluatingA ? '#F5E8FF' : simA.status === 'running' ? '#E0F2FE' : '#F3F4F6',
-                                        color: isCompletedA ? '#BA7517' : isEvaluatingA ? '#7E22CE' : simA.status === 'running' ? '#0369A1' : '#6B7280'
-                                    }}>
-                                        {isCompletedA 
-                                            ? (locale === 'zh' ? '✓ 完成' : '✓ Done')
-                                            : isEvaluatingA
-                                                ? (locale === 'zh' ? '◌ 评估中' : 'Evaluating')
-                                            : simA.status === 'running'
-                                                ? (locale === 'zh' ? '⚡ 执行中' : 'Running')
-                                                : (locale === 'zh' ? '⏳ 未执行' : 'Pending')}
-                                    </div>
+                                    <StatusBadge
+                                        status={
+                                            isCompletedA ? 'success'
+                                            : isFailedA ? 'error'
+                                            : isEvaluatingA ? 'running'
+                                            : simA.status === 'running' ? 'running'
+                                            : 'pending'
+                                        }
+                                        label={
+                                            isCompletedA ? (locale === 'zh' ? '完成' : 'Done')
+                                            : isFailedA ? (locale === 'zh' ? '失败' : 'Failed')
+                                            : isEvaluatingA ? (locale === 'zh' ? '评估中' : 'Evaluating')
+                                            : simA.status === 'running' ? (locale === 'zh' ? '执行中' : 'Running')
+                                            : (locale === 'zh' ? '未执行' : 'Pending')
+                                        }
+                                    />
                                 </div>
                                 <div className="v2-col-body" style={{ padding: 16 }}>
                                     <div className="v2-exec-result" style={{ paddingBottom: 12 }}>
                                         {isCompletedA ? (
                                             <>
-                                                <div className="v2-result-icon success" style={{ color: '#BA7517', background: '#FDF6E2', width: 44, height: 44, fontSize: 20 }}>✓</div>
+                                                <div className="v2-result-icon success" style={{ color: 'var(--success)', background: 'var(--success-subtle)', width: 44, height: 44, fontSize: 20 }}>✓</div>
                                                 <div className="v2-result-text" style={{ fontSize: 14 }}>{simA.runsCompleted}</div>
                                                 <div className="v2-result-sub">平均耗时 {simA.timeCost} · {displayedRepeatRounds}轮重复</div>
                                             </>
+                                        ) : isFailedA ? (
+                                            <>
+                                                <div className="v2-result-icon" style={{ color: 'var(--error)', background: 'var(--error-subtle)', width: 44, height: 44, fontSize: 20 }}>!</div>
+                                                <div className="v2-result-text" style={{ fontSize: 14 }}>{simA.runsCompleted}</div>
+                                                <div className="v2-result-sub">{locale === 'zh' ? '存在未完整执行的记录' : 'Some runs did not finish'}</div>
+                                            </>
                                         ) : simA.status === 'running' ? (
                                             <>
-                                                <div className="v2-result-icon success" style={{ color: '#0369A1', background: '#E0F2FE', width: 44, height: 44, fontSize: 20 }}>⚡</div>
+                                                <div className="v2-result-icon ab-icon-running" style={{ width: 44, height: 44, fontSize: 20 }}>⚡</div>
                                                 <div className="v2-result-text" style={{ fontSize: 14 }}>{simA.runsCompleted}</div>
                                                 <div className="v2-result-sub">{locale === 'zh' ? '执行记录生成中...' : 'Generating execution records...'}</div>
                                             </>
                                         ) : isEvaluatingA ? (
                                             <>
-                                                <div className="v2-result-icon success" style={{ color: '#7E22CE', background: '#F5E8FF', width: 44, height: 44, fontSize: 20 }}>◌</div>
+                                                <div className="v2-result-icon ab-icon-eval" style={{ width: 44, height: 44, fontSize: 20 }}>◌</div>
                                                 <div className="v2-result-text" style={{ fontSize: 14 }}>{simA.runsCompleted}</div>
                                                 <div className="v2-result-sub">{locale === 'zh' ? '评估记录生成中...' : 'Generating evaluation records...'}</div>
                                             </>
                                         ) : (
                                             <>
-                                                <div className="v2-result-icon success" style={{ color: '#9CA3AF', background: '#F3F4F6', width: 44, height: 44, fontSize: 20 }}>⏳</div>
+                                                <div className="v2-result-icon ab-icon-pending" style={{ width: 44, height: 44, fontSize: 20 }}>⏳</div>
                                                 <div className="v2-result-text" style={{ fontSize: 14 }}>{simA.runsCompleted}</div>
                                                 <div className="v2-result-sub">{locale === 'zh' ? '等待执行评测' : 'Awaiting execution'}</div>
                                             </>
@@ -2928,43 +3960,40 @@ export function GrayscaleEvaluation({
                                     <div className="v2-process-data">
                                         <div className="v2-process-row">
                                             <span className="v2-process-label">{locale === 'zh' ? 'Skill 触发' : 'Skill triggers'}</span>
-                                            <span className="v2-process-value" style={{ color: '#888780' }}>{simA.triggerRate}</span>
+                                            <span className="v2-process-value text-foreground-muted">{simA.triggerRate}</span>
                                         </div>
                                         <div className="v2-process-row">
                                             <span className="v2-process-label">{locale === 'zh' ? '工具调用' : 'Tool calls'}</span>
-                                            <span className="v2-process-value" style={{
-                                                background: '#F1EFE8',
-                                                padding: '2px 6px',
-                                                borderRadius: 4,
-                                                fontFamily: 'ui-monospace, monospace',
-                                                fontSize: 11
-                                            }}>{simA.toolCall}</span>
+                                            <span className="v2-process-value font-mono text-[11px] bg-background-secondary rounded px-1.5 py-0.5">{simA.toolCall}</span>
                                         </div>
                                         <div className="v2-process-row">
                                             <span className="v2-process-label">{locale === 'zh' ? '答案准确性' : 'Accuracy'}</span>
-                                            <span className="v2-process-value" style={{ color: '#dc2626', fontWeight: 700 }}>{simA.accuracy}</span>
+                                            <span className="v2-process-value text-[var(--error)] font-bold">{simA.accuracy}</span>
                                         </div>
                                     </div>
 
                                     <div className="v2-metric-row" style={{ borderRadius: 8, overflow: 'hidden', marginTop: 12 }}>
                                         <div className="v2-metric-cell">
                                             <div className="label">{locale === 'zh' ? '耗时' : 'Cost'}</div>
-                                            <div className="value">{simA.timeCost}</div>
+                                            <div className="value"><MetricValue value={simA.timeCost} size="md" /></div>
                                         </div>
                                         <div className="v2-metric-cell">
                                             <div className="label">TOKEN</div>
-                                            <div className="value">{simA.tokenUsage}</div>
+                                            <div className="value"><MetricValue value={simA.tokenUsage} format="compact" size="md" /></div>
                                         </div>
-                                        <div className="v2-metric-cell text-center" style={{ background: typeof simA.score === 'number' ? '#FDF6E2' : '#FAFAF7' }}>
-                                            <div className="label" style={{ color: typeof simA.score === 'number' ? '#BA7517' : '#888780' }}>{locale === 'zh' ? '评分' : 'Score'}</div>
-                                            <div className="value" style={{ color: '#BA7517' }}>{typeof simA.score === 'number' ? simA.score : '—'}</div>
+                                        <div className={`v2-metric-cell text-center ${typeof simA.score === 'number' ? 'ab-score-highlight' : ''}`}>
+                                            <div className="label">{locale === 'zh' ? '评分' : 'Score'}</div>
+                                            <div className="value"><MetricValue value={typeof simA.score === 'number' ? simA.score : null} size="md" tone={typeof simA.score === 'number' ? 'default' : 'muted'} /></div>
                                         </div>
                                     </div>
                                   </div>
-                                  <div className="v2-col-actions" style={{ background: '#FAFAF7', borderTop: '0.5px solid rgba(0,0,0,0.08)' }}>
-                                      <button className="v2-action-btn" onClick={() => setRecordModal({ title: locale === 'zh' ? 'A 对照组执行记录' : 'A Control Records', side: 'a' })}>{locale === 'zh' ? '↗ 执行记录' : 'Records'}</button>
-                                      <button className="v2-action-btn" onClick={() => runCaseSide(selectedCaseId, 'a')}>{locale === 'zh' ? '▶ 重跑' : 'Re-run'}</button>
-                                      <button className="v2-action-btn primary" style={{ background: '#2C2C2A', color: 'white' }} onClick={() => evaluateCaseSide(selectedCaseId, 'a', simA)}>{locale === 'zh' ? '✓ 评测' : 'Evaluate'}</button>
+                                  <div className="v2-col-actions" style={{ background: 'var(--background-secondary)', borderTop: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px' }}>
+                                      <Button variant="ghost" size="sm" onClick={() => setRecordModal({ title: locale === 'zh' ? 'A 对照组执行记录' : 'A Control Records', side: 'a' })}>
+                                          <ExternalLink /> {locale === 'zh' ? '执行记录' : 'Records'}
+                                      </Button>
+                                      <Button variant="default" size="sm" onClick={() => evaluateCaseSide(selectedCaseId, 'a', simA)}>
+                                          {locale === 'zh' ? '✓ 评测' : 'Evaluate'}
+                                      </Button>
                                       <span className="v2-trace-id">{simA.sessionId}</span>
                                   </div>
                             </div>
@@ -2974,56 +4003,69 @@ export function GrayscaleEvaluation({
                                 <span>VS</span>
                             </div>
 
-                            {/* Candidate Column (B) */}
-                            <div className="v2-compare-col candidate" style={{ borderTopColor: '#1D9E75' }}>
-                                <div className="v2-col-header" style={{ background: '#E6F1FB', borderBottom: '0.5px solid rgba(0,0,0,0.08)' }}>
-                                    <div className="v2-col-tag b" style={{ background: '#1D9E75' }}>B</div>
+                            {/* Candidate Column (B) — design: Violet palette (slot 6, foundations.md §B.6.1). */}
+                            <div className="v2-compare-col candidate ab-col-b">
+                                <div className="v2-col-header">
+                                    <div className="v2-col-tag b">B</div>
                                     <div className="v2-col-name-block">
-                                        <div className="v2-col-name" style={{ color: '#0C447C' }}>{locale === 'zh' ? '实验组: 基础 Agent' : 'Experiment Group'}</div>
+                                        <div className="v2-col-name">{locale === 'zh' ? `实验组: ${getAbAgentLabel(versionBId || NONE_VERSION_ID)}` : `Experiment: ${getAbAgentLabel(versionBId || NONE_VERSION_ID)}`}</div>
                                         <div className="v2-col-variant-line">
-                                            <span className={`v2-skill-state ${versionBId === NONE_VERSION_ID ? 'off' : 'on'}`} style={versionBId === NONE_VERSION_ID ? {} : { background: '#D1FAE5', color: '#065F46' }}>
-                                                Skill: {versionBId === NONE_VERSION_ID 
-                                                    ? (locale === 'zh' ? '无 Skill' : 'No Skill') 
+                                            <span className={`v2-skill-state ${versionBId === NONE_VERSION_ID ? 'off' : 'on'} ab-skill-state`}>
+                                                Skill: {versionBId === NONE_VERSION_ID
+                                                    ? (locale === 'zh' ? '无 Skill' : 'No Skill')
                                                     : `${selectedSkill?.name || 'cpu-model-query'} ${getVersionLabel(versions.find(v => v.id === versionBId) || versionBId)}`}
+                                            </span>
+                                            <span className="ab-agent-state" title={getAbAgentName(versionBId || NONE_VERSION_ID)}>
+                                                Agent: {getAbAgentName(versionBId || NONE_VERSION_ID)}
                                             </span>
                                         </div>
                                     </div>
-                                    <div className={`v2-col-status ${simB.status}`} style={{ 
-                                        background: isCompletedB ? '#D1FAE5' : isEvaluatingB ? '#F5E8FF' : simB.status === 'running' ? '#E0F2FE' : '#F3F4F6',
-                                        color: isCompletedB ? '#065F46' : isEvaluatingB ? '#7E22CE' : simB.status === 'running' ? '#0369A1' : '#6B7280'
-                                    }}>
-                                        {isCompletedB 
-                                            ? (locale === 'zh' ? '✓ 完成' : '✓ Done')
-                                            : isEvaluatingB
-                                                ? (locale === 'zh' ? '◌ 评估中' : 'Evaluating')
-                                            : simB.status === 'running'
-                                                ? (locale === 'zh' ? '⚡ 执行中' : 'Running')
-                                                : (locale === 'zh' ? '⏳ 未执行' : 'Pending')}
-                                    </div>
+                                    <StatusBadge
+                                        status={
+                                            isCompletedB ? 'success'
+                                            : isFailedB ? 'error'
+                                            : isEvaluatingB ? 'running'
+                                            : simB.status === 'running' ? 'running'
+                                            : 'pending'
+                                        }
+                                        label={
+                                            isCompletedB ? (locale === 'zh' ? '完成' : 'Done')
+                                            : isFailedB ? (locale === 'zh' ? '失败' : 'Failed')
+                                            : isEvaluatingB ? (locale === 'zh' ? '评估中' : 'Evaluating')
+                                            : simB.status === 'running' ? (locale === 'zh' ? '执行中' : 'Running')
+                                            : (locale === 'zh' ? '未执行' : 'Pending')
+                                        }
+                                    />
                                 </div>
                                 <div className="v2-col-body" style={{ padding: 16 }}>
                                     <div className="v2-exec-result" style={{ paddingBottom: 12 }}>
                                         {isCompletedB ? (
                                             <>
-                                                <div className="v2-result-icon success" style={{ color: '#1D9E75', background: '#E1F5EE', width: 44, height: 44, fontSize: 20 }}>✓</div>
+                                                <div className="v2-result-icon success" style={{ color: 'var(--success)', background: 'var(--success-subtle)', width: 44, height: 44, fontSize: 20 }}>✓</div>
                                                 <div className="v2-result-text" style={{ fontSize: 14 }}>{simB.runsCompleted}</div>
                                                 <div className="v2-result-sub">平均耗时 {simB.timeCost} · {displayedRepeatRounds}轮重复</div>
                                             </>
+                                        ) : isFailedB ? (
+                                            <>
+                                                <div className="v2-result-icon" style={{ color: 'var(--error)', background: 'var(--error-subtle)', width: 44, height: 44, fontSize: 20 }}>!</div>
+                                                <div className="v2-result-text" style={{ fontSize: 14 }}>{simB.runsCompleted}</div>
+                                                <div className="v2-result-sub">{locale === 'zh' ? '存在未完整执行的记录' : 'Some runs did not finish'}</div>
+                                            </>
                                         ) : simB.status === 'running' ? (
                                             <>
-                                                <div className="v2-result-icon success" style={{ color: '#0369A1', background: '#E0F2FE', width: 44, height: 44, fontSize: 20 }}>⚡</div>
+                                                <div className="v2-result-icon ab-icon-running" style={{ width: 44, height: 44, fontSize: 20 }}>⚡</div>
                                                 <div className="v2-result-text" style={{ fontSize: 14 }}>{simB.runsCompleted}</div>
                                                 <div className="v2-result-sub">{locale === 'zh' ? '执行记录生成中...' : 'Generating execution records...'}</div>
                                             </>
                                         ) : isEvaluatingB ? (
                                             <>
-                                                <div className="v2-result-icon success" style={{ color: '#7E22CE', background: '#F5E8FF', width: 44, height: 44, fontSize: 20 }}>◌</div>
+                                                <div className="v2-result-icon ab-icon-eval" style={{ width: 44, height: 44, fontSize: 20 }}>◌</div>
                                                 <div className="v2-result-text" style={{ fontSize: 14 }}>{simB.runsCompleted}</div>
                                                 <div className="v2-result-sub">{locale === 'zh' ? '评估记录生成中...' : 'Generating evaluation records...'}</div>
                                             </>
                                         ) : (
                                             <>
-                                                <div className="v2-result-icon success" style={{ color: '#9CA3AF', background: '#F3F4F6', width: 44, height: 44, fontSize: 20 }}>⏳</div>
+                                                <div className="v2-result-icon ab-icon-pending" style={{ width: 44, height: 44, fontSize: 20 }}>⏳</div>
                                                 <div className="v2-result-text" style={{ fontSize: 14 }}>{simB.runsCompleted}</div>
                                                 <div className="v2-result-sub">{locale === 'zh' ? '等待执行评测' : 'Awaiting execution'}</div>
                                             </>
@@ -3033,43 +4075,40 @@ export function GrayscaleEvaluation({
                                     <div className="v2-process-data">
                                         <div className="v2-process-row">
                                             <span className="v2-process-label">{locale === 'zh' ? 'Skill 触发' : 'Skill triggers'}</span>
-                                            <span className="v2-process-value" style={{ color: '#1D9E75', fontWeight: 700 }}>{simB.triggerRate}</span>
+                                            <span className="v2-process-value text-[var(--success)] font-bold">{simB.triggerRate}</span>
                                         </div>
                                         <div className="v2-process-row">
                                             <span className="v2-process-label">{locale === 'zh' ? '工具调用' : 'Tool calls'}</span>
-                                            <span className="v2-process-value" style={{
-                                                background: '#F1EFE8',
-                                                padding: '2px 6px',
-                                                borderRadius: 4,
-                                                fontFamily: 'ui-monospace, monospace',
-                                                fontSize: 11
-                                            }}>{simB.toolCall}</span>
+                                            <span className="v2-process-value font-mono text-[11px] bg-background-secondary rounded px-1.5 py-0.5">{simB.toolCall}</span>
                                         </div>
                                         <div className="v2-process-row">
                                             <span className="v2-process-label">{locale === 'zh' ? '答案准确性' : 'Accuracy'}</span>
-                                            <span className="v2-process-value" style={{ color: '#1D9E75', fontWeight: 700 }}>{simB.accuracy}</span>
+                                            <span className="v2-process-value text-[var(--success)] font-bold">{simB.accuracy}</span>
                                         </div>
                                     </div>
 
                                     <div className="v2-metric-row" style={{ borderRadius: 8, overflow: 'hidden', marginTop: 12 }}>
                                         <div className="v2-metric-cell">
                                             <div className="label">{locale === 'zh' ? '耗时' : 'Cost'}</div>
-                                            <div className="value">{simB.timeCost}</div>
+                                            <div className="value"><MetricValue value={simB.timeCost} size="md" /></div>
                                         </div>
                                         <div className="v2-metric-cell">
                                             <div className="label">TOKEN</div>
-                                            <div className="value">{simB.tokenUsage}</div>
+                                            <div className="value"><MetricValue value={simB.tokenUsage} format="compact" size="md" /></div>
                                         </div>
-                                        <div className="v2-metric-cell text-center" style={{ background: typeof simB.score === 'number' ? '#E1F5EE' : '#FAFAF7' }}>
-                                            <div className="label" style={{ color: typeof simB.score === 'number' ? '#0F6E56' : '#888780' }}>{locale === 'zh' ? '评分' : 'Score'}</div>
-                                            <div className="value" style={{ color: '#1D9E75' }}>{typeof simB.score === 'number' ? simB.score : '—'}</div>
+                                        <div className={`v2-metric-cell text-center ${typeof simB.score === 'number' ? 'ab-score-highlight' : ''}`}>
+                                            <div className="label">{locale === 'zh' ? '评分' : 'Score'}</div>
+                                            <div className="value"><MetricValue value={typeof simB.score === 'number' ? simB.score : null} size="md" tone={typeof simB.score === 'number' ? 'success' : 'muted'} /></div>
                                         </div>
                                     </div>
                                 </div>
-                                <div className="v2-col-actions" style={{ background: '#FAFAF7', borderTop: '0.5px solid rgba(0,0,0,0.08)' }}>
-                                    <button className="v2-action-btn" onClick={() => setRecordModal({ title: locale === 'zh' ? 'B 实验组执行记录' : 'B Experiment Records', side: 'b' })}>{locale === 'zh' ? '↗ 执行记录' : 'Records'}</button>
-                                    <button className="v2-action-btn" onClick={() => runCaseSide(selectedCaseId, 'b')}>{locale === 'zh' ? '▶ 重跑' : 'Re-run'}</button>
-                                    <button className="v2-action-btn primary" style={{ background: '#2C2C2A', color: 'white' }} onClick={() => evaluateCaseSide(selectedCaseId, 'b', simB)}>{locale === 'zh' ? '✓ 评测' : 'Evaluate'}</button>
+                                <div className="v2-col-actions" style={{ background: 'var(--background-secondary)', borderTop: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px' }}>
+                                    <Button variant="ghost" size="sm" onClick={() => setRecordModal({ title: locale === 'zh' ? 'B 实验组执行记录' : 'B Experiment Records', side: 'b' })}>
+                                        <ExternalLink /> {locale === 'zh' ? '执行记录' : 'Records'}
+                                    </Button>
+                                    <Button variant="default" size="sm" onClick={() => evaluateCaseSide(selectedCaseId, 'b', simB)}>
+                                        {locale === 'zh' ? '✓ 评测' : 'Evaluate'}
+                                    </Button>
                                     <span className="v2-trace-id">{simB.sessionId}</span>
                                 </div>
                             </div>
@@ -3079,153 +4118,349 @@ export function GrayscaleEvaluation({
                 </div>
 
                 {/* CARD 3: STEP 2 综合判定 & 决策 */}
-                <div className="v2-stage-card s3" style={{ background: 'white', border: '0.5px solid rgba(0,0,0,0.08)', marginBottom: 0, borderLeft: '4px solid #BA7517' }}>
-                    <div className="v2-stage-card-header" style={{ borderBottom: '0.5px solid rgba(0,0,0,0.08)' }}>
-                        <div className="v2-stage-num-badge" style={{ background: '#BA7517', color: 'white', flexDirection: 'column', lineHeight: 1.1, padding: '4px 0', justifyContent: 'center', alignItems: 'center' }}>
-                            <span style={{ fontSize: 9, fontWeight: 800, opacity: 0.9, letterSpacing: '0.5px' }}>STEP</span>
-                            <span style={{ fontSize: 18, fontWeight: 800 }}>2</span>
+                <div
+                    className="v2-stage-card s3"
+                    style={{ background: 'white', border: '0.5px solid rgba(0,0,0,0.08)', marginBottom: 0, borderLeft: '4px solid #BA7517' }}
+                    data-collapsible={hifi ? '1' : undefined}
+                    data-collapsed={hifi ? (hifiCollapsed.result ? '1' : '0') : undefined}
+                >
+                    <div
+                        className="v2-stage-card-header"
+                        style={{ borderBottom: '0.5px solid rgba(0,0,0,0.08)' }}
+                        onClick={hifi ? () => toggleHifiCard('result') : undefined}
+                    >
+                        <div
+                            className="v2-stage-num-badge"
+                            style={{
+                                background: '#BA7517',
+                                color: 'white',
+                                justifyContent: 'center',
+                                alignItems: 'center'
+                            }}
+                        >
+                            <TrophyIcon />
                         </div>
                         <div className="v2-stage-title-block">
                             <div className="v2-stage-card-title" style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
-                                <span>{locale === 'zh' ? '综合判定 & 决策' : 'Verdict & Decision'}</span>
+                                <span>{locale === 'zh' ? '测评结果' : 'Evaluation Result'}</span>
                                 <span className="v2-stage-pill active" style={{ background: decisionReady ? '#E1F5EE' : '#FAEEDA', color: decisionReady ? '#0F6E56' : '#854F0B', fontSize: 11 }}>
                                     {decisionReady ? (locale === 'zh' ? '✓ 可决策' : 'Ready') : (locale === 'zh' ? '⚡ 等待决策' : 'Waiting')}
                                 </span>
                             </div>
-                            <div className="v2-stage-card-subtitle">
-                                {locale === 'zh' ? '基于「能力 · 成本 · 稳定性」三维框架，给出明确的上线建议' : 'A release recommendation based on capability, cost, and stability'}
-                            </div>
+                            <div className="v2-stage-card-subtitle">{decisionSubtitle}</div>
                         </div>
+                        {hifi && (
+                            <button
+                                type="button"
+                                className="gh-card-chev"
+                                aria-label={hifiCollapsed.result ? (locale === 'zh' ? '展开' : 'Expand') : (locale === 'zh' ? '折叠' : 'Collapse')}
+                                onClick={e => { e.stopPropagation(); toggleHifiCard('result'); }}
+                            />
+                        )}
                     </div>
 
-                    <div style={{ background: '#FEF3C7', borderBottom: '0.5px solid #FDE68A', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 24px' }}>
-                        <div style={{ color: '#854F0B', display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 700 }}>
-                            💡 Skills 价值评估:A · {versionAId === NONE_VERSION_ID ? (locale === 'zh' ? '无 Skill(对照)' : 'No Skill control') : `${selectedSkill?.name || 'skill'} ${getVersionLabel(versions.find(v => v.id === versionAId) || versionAId)}(对照)`} vs B · {versionBId === NONE_VERSION_ID ? (locale === 'zh' ? '无 Skill(实验)' : 'No Skill experiment') : `${selectedSkill?.name || 'skill'} ${getVersionLabel(versions.find(v => v.id === versionBId) || versionBId)}(实验)`}
-                        </div>
-                        <div style={{ color: '#854F0B', border: '1px solid #BA7517', fontSize: 11, padding: '6px 12px', borderRadius: 4, background: 'white', fontFamily: 'ui-monospace, monospace', fontWeight: 700 }}>
-                            SAMPLE N={abScoring.sampleSize} · 重复 {abScoring.repeatRounds} 轮 · 置信度: {abScoring.confidence === 'high' ? '高' : abScoring.confidence === 'medium' ? '中' : '低'}
-                        </div>
-                    </div>
-
-                    <div className="v2-stage-card-body" style={{ padding: '24px 28px', display: 'flex', flexDirection: 'column', gap: 20 }}>
-                        <div style={{ border: '2px solid #BA7517', background: 'linear-gradient(135deg, #FFF7D6 0%, #FFFFFF 58%)', borderRadius: 12, padding: 24 }}>
-                            <div style={{ display: 'flex', gap: 18, alignItems: 'center', marginBottom: 18 }}>
-                                <div style={{ width: 56, height: 56, borderRadius: '50%', background: '#BA7517', boxShadow: '0 0 0 8px rgba(186,117,23,0.14)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: 24 }}>●</div>
-                                <div>
-                                    <div style={{ fontSize: 11, color: '#888780', fontFamily: 'ui-monospace, monospace', fontWeight: 700, letterSpacing: 1 }}>综合结论 · DECISION</div>
-                                    <div style={{ fontSize: 24, fontWeight: 800, color: '#111827', marginTop: 4 }}>
-                                        {decisionTitle}
-                                        <span style={{ fontSize: 14, color: '#5F5E5A', fontWeight: 600, marginLeft: 12 }}>{decisionSubtitle}</span>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12 }}>
-                                {[
-                                    { icon: '📊', name: '能力 · CAPABILITY', value: decisionReady ? `${fmtPct(abScoring.capability.deltaPp, 'pp')} · ${fmtScore(abScoring.capability.score)}分` : '—', color: toneColor(abScoring.capability.tone), bg: toneBg(abScoring.capability.tone), dot: toneColor(abScoring.capability.tone) },
-                                    { icon: '💰', name: '成本 · COST', value: decisionReady ? `${fmtPct(abScoring.cost.deltaTokenPct)} Token · ${fmtScore(abScoring.cost.score)}分` : '—', color: toneColor(abScoring.cost.tone), bg: toneBg(abScoring.cost.tone), dot: toneColor(abScoring.cost.tone) },
-                                    { icon: '🎯', name: '稳定性 · STABILITY', value: decisionReady ? `触发率 ${fmtRate(abScoring.stability.invokeRate)} · ${fmtScore(abScoring.stability.score)}分` : '—', color: toneColor(abScoring.stability.tone), bg: toneBg(abScoring.stability.tone), dot: toneColor(abScoring.stability.tone) },
-                                ].map(item => (
-                                    <div key={item.name} style={{ background: 'white', border: '1px solid rgba(0,0,0,0.12)', borderRadius: 8, padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
-                                        <div style={{ width: 38, height: 38, borderRadius: 8, background: item.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>{item.icon}</div>
-                                        <div style={{ flex: 1, minWidth: 0 }}>
-                                            <div style={{ fontSize: 10, color: '#888780', fontFamily: 'ui-monospace, monospace', fontWeight: 700, letterSpacing: 1 }}>{item.name}</div>
-                                            <div style={{ fontSize: 16, fontWeight: 800, color: item.color, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.value}</div>
+                    <div className="v2-stage-card-body" style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 16 }}>
+                        {hifi ? (() => {
+                            // Hi-fi verdict block. Layout mirrors the prototype:
+                            //   ① result-context line (skill + A/B + policy version)
+                            //   ② DECISION card (大字判决 + 综合短板分 + headline + 下一步 + 操作)
+                            //   ③ 3 维度行（能力/成本/稳定性 · 分数 · 进度条 · 关键证据）
+                            //   ④ 原始数据折叠区（4 张公式 mini-card）
+                            // All numerics come straight from `abScoring.*` — no
+                            // recalculation, no formatting that the lib hasn't already done.
+                            const toneClass = (t: AbTone): string =>
+                                t === 'green' ? 'good' : t === 'amber' ? 'warn' : t === 'red' ? 'fail' : 'idle';
+                            const decClass =
+                                abScoring.decision === 'direct-release' ? 'pass'
+                                : abScoring.decision === 'reject' ? 'reject'
+                                : abScoring.decision === 'monitor-release' ? 'warn'
+                                : 'idle';
+                            const fmt = (n: number | null | undefined, digits = 1): string =>
+                                typeof n === 'number' && Number.isFinite(n) ? n.toFixed(digits).replace(/\.0$/, '') : '—';
+                            const fmtPct = (n: number | null | undefined, digits = 1): string =>
+                                typeof n === 'number' && Number.isFinite(n)
+                                    ? (n >= 0 ? '+' : '') + n.toFixed(digits).replace(/\.0$/, '') + '%'
+                                    : '—';
+                            const signed = (n: number | null | undefined, digits = 1): string =>
+                                typeof n === 'number' && Number.isFinite(n)
+                                    ? (n > 0 ? '+' : '') + n.toFixed(digits).replace(/\.0$/, '')
+                                    : '—';
+                            const bVerObj = versions.find(v => v.id === versionBId);
+                            const skillVerLabel = bVerObj ? `v${bVerObj.semanticVersion || bVerObj.version}` : '';
+                            const aLabel = versionAId === NONE_VERSION_ID
+                                ? (locale === 'zh' ? '无 Skill' : 'No Skill')
+                                : `v${getVersionLabel(versions.find(v => v.id === versionAId) || versionAId)}`;
+                            const bLabel = versionBId === NONE_VERSION_ID
+                                ? (locale === 'zh' ? '无 Skill' : 'No Skill')
+                                : (locale === 'zh' ? '开 Skill' : 'With Skill');
+                            const cap = abScoring.capability;
+                            const cost = abScoring.cost;
+                            const sta = abScoring.stability;
+                            if (!decisionReady) {
+                                return (
+                                    <div className="gh-verdict-empty">
+                                        <div className="gh-verdict-empty-title">
+                                            ⚡ {locale === 'zh' ? '等待评分' : 'Waiting for scoring'}
                                         </div>
-                                        <div style={{ width: 9, height: 9, borderRadius: '50%', background: item.dot }} />
-                                    </div>
-                                ))}
-                            </div>
-
-                            <div style={{ display: 'flex', gap: 12, alignItems: 'center', background: 'white', border: '1px solid rgba(0,0,0,0.1)', padding: '12px 16px', borderRadius: 8, marginTop: 16 }}>
-                                <span style={{ background: '#1C1917', color: 'white', padding: '6px 10px', borderRadius: 4, fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap' }}>下一步建议</span>
-                                <span style={{ fontSize: 14, color: '#2C2C2A', lineHeight: 1.55 }}>{decisionAdvice}</span>
-                            </div>
-                        </div>
-
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                            <div style={{ border: '1px solid rgba(0,0,0,0.1)', background: '#FAFAF7', borderRadius: 12, padding: 20 }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                                        <span style={{ width: 34, height: 34, borderRadius: 8, background: '#E1F5EE', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>📊</span>
-                                        <div style={{ fontSize: 16, fontWeight: 800 }}>能力 <span style={{ color: '#A8A29E', fontFamily: 'ui-monospace, monospace', fontSize: 12 }}>这个 skill 让 agent 多做成了多少事?</span></div>
-                                    </div>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, fontWeight: 800 }}>{decisionReady ? fmtPct(abScoring.capability.deltaPp, 'pp') : '—'} <span style={{ background: toneBg(abScoring.capability.tone), color: toneColor(abScoring.capability.tone), borderRadius: 6, padding: '4px 10px', fontSize: 12 }}>● {abScoring.capability.label}</span></div>
-                                </div>
-                                {[
-                                    { label: '通过率', a: `${abScoring.capability.passRateA ?? '—'}%`, b: `${abScoring.capability.passRateB ?? '—'}%`, aw: abScoring.capability.passRateA ?? 0, bw: abScoring.capability.passRateB ?? 0, delta: decisionReady ? fmtPct(abScoring.capability.deltaPp, 'pp') : '—' },
-                                    { label: '能力分', a: '—', b: fmtScore(abScoring.capability.score), aw: 0, bw: abScoring.capability.score ?? 0, delta: abScoring.capability.label },
-                                ].map(row => (
-                                    <div key={row.label} style={{ display: 'grid', gridTemplateColumns: '150px 1fr 90px 80px', gap: 14, alignItems: 'center', marginTop: 14 }}>
-                                        <div style={{ fontSize: 14, fontWeight: 700, color: '#5F5E5A' }}>{row.label}</div>
-                                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}><span style={{ width: 14, color: '#EA580C', fontWeight: 800 }}>A</span><div style={{ flex: 1, height: 6, background: '#E7E5E4', borderRadius: 999 }}><div style={{ width: `${Math.max(2, row.aw)}%`, height: '100%', background: '#EA580C', borderRadius: 999 }} /></div></div>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}><span style={{ width: 14, color: '#16A34A', fontWeight: 800 }}>B</span><div style={{ flex: 1, height: 6, background: '#E7E5E4', borderRadius: 999 }}><div style={{ width: `${Math.max(2, row.bw)}%`, height: '100%', background: '#16A34A', borderRadius: 999 }} /></div></div>
+                                        <div className="gh-verdict-empty-sub">
+                                            {locale === 'zh'
+                                                ? `已收集 ${abScoring.sampleSize} 条 · 等待 A/B 两侧执行 + 评测全部完成`
+                                                : `Collected ${abScoring.sampleSize} so far · waiting for both sides to finish`}
                                         </div>
-                                        <div style={{ fontSize: 13, color: '#5F5E5A', lineHeight: 1.9 }}>{row.a}<br />{row.b}</div>
-                                        <div style={{ color: toneColor(abScoring.capability.tone), fontWeight: 800 }}>{row.delta}</div>
                                     </div>
-                                ))}
-                                {abScoring.capability.dataQualityIssue && (
-                                    <div style={{ color: '#BA7517', fontSize: 12, marginTop: 12 }}>{abScoring.capability.dataQualityIssue}</div>
-                                )}
-                            </div>
+                                );
+                            }
+                            const dims = [
+                                {
+                                    key: 'capability' as const,
+                                    label: locale === 'zh' ? '能力' : 'Capability',
+                                    desc: locale === 'zh' ? 'Skill 让 Agent 多做成了多少事' : "How much the skill lifts the agent",
+                                    data: cap,
+                                },
+                                {
+                                    key: 'cost' as const,
+                                    label: locale === 'zh' ? '成本' : 'Cost',
+                                    desc: locale === 'zh' ? '多花了多少 token / 时间' : 'Extra tokens / time spent',
+                                    data: cost,
+                                },
+                                {
+                                    key: 'stability' as const,
+                                    label: locale === 'zh' ? '稳定性' : 'Stability',
+                                    desc: locale === 'zh' ? '该触发时触发了吗，结果稳吗' : 'Triggers correctly + stable output',
+                                    data: sta,
+                                },
+                            ];
+                            return (
+                                <div className="gh-verdict-block">
+                                    {/* ① context */}
+                                    <div className="gh-rc">
+                                        <span className="gh-rc-skill">
+                                            {selectedSkill?.name || '—'}
+                                            {skillVerLabel && <span className="gh-rc-ver">{skillVerLabel}</span>}
+                                        </span>
+                                        <span className="gh-rc-sep">·</span>
+                                        <span className="gh-rc-ab">
+                                            <span className="gh-rc-tag a">A</span>{aLabel}
+                                            <span className="gh-rc-vs">{locale === 'zh' ? '对比' : 'vs'}</span>
+                                            <span className="gh-rc-tag b">B</span>{bLabel}
+                                        </span>
+                                        <span className="gh-rc-policy">{abScoring.policyVersion}</span>
+                                    </div>
 
-                            <div style={{ border: '1px solid rgba(0,0,0,0.1)', background: '#FAFAF7', borderRadius: 12, padding: 20 }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                                        <span style={{ width: 34, height: 34, borderRadius: 8, background: '#FAEEDA', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>💰</span>
-                                        <div style={{ fontSize: 16, fontWeight: 800 }}>成本 <span style={{ color: '#A8A29E', fontFamily: 'ui-monospace, monospace', fontSize: 12 }}>多花了多少 token / 时间?</span></div>
-                                    </div>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, fontWeight: 800 }}>{fmtPct(abScoring.cost.deltaTokenPct)} Token · {fmtPct(abScoring.cost.deltaDurationPct)} 耗时 <span style={{ background: toneBg(abScoring.cost.tone), color: toneColor(abScoring.cost.tone), borderRadius: 6, padding: '4px 10px', fontSize: 12 }}>● {abScoring.cost.label}</span></div>
-                                </div>
-                                {[
-                                    { label: 'Token 消耗', a: abScoring.cost.avgTokensA == null ? '—' : String(abScoring.cost.avgTokensA), b: abScoring.cost.avgTokensB == null ? '—' : String(abScoring.cost.avgTokensB), aw: abScoring.cost.avgTokensA ?? 0, bw: abScoring.cost.avgTokensB ?? 0, delta: fmtPct(abScoring.cost.deltaTokenPct), warn: abScoring.cost.tone !== 'green' },
-                                    { label: '响应耗时', a: abScoring.cost.avgDurationA == null ? '—' : `${abScoring.cost.avgDurationA}s`, b: abScoring.cost.avgDurationB == null ? '—' : `${abScoring.cost.avgDurationB}s`, aw: abScoring.cost.avgDurationA ?? 0, bw: abScoring.cost.avgDurationB ?? 0, delta: fmtPct(abScoring.cost.deltaDurationPct), warn: false },
-                                    { label: '执行步数', a: abScoring.cost.avgStepsA == null ? '—' : String(abScoring.cost.avgStepsA), b: abScoring.cost.avgStepsB == null ? '—' : String(abScoring.cost.avgStepsB), aw: abScoring.cost.avgStepsA ?? 0, bw: abScoring.cost.avgStepsB ?? 0, delta: fmtPct(abScoring.cost.deltaStepsPct), warn: false },
-                                ].map(row => {
-                                    const max = Math.max(Number(row.aw) || 1, Number(row.bw) || 1);
-                                    return (
-                                        <div key={row.label} style={{ display: 'grid', gridTemplateColumns: '150px 1fr 90px 80px', gap: 14, alignItems: 'center', marginTop: 14 }}>
-                                            <div style={{ fontSize: 14, fontWeight: 700, color: '#5F5E5A' }}>{row.label}</div>
-                                            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                                                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}><span style={{ width: 14, color: '#EA580C', fontWeight: 800 }}>A</span><div style={{ flex: 1, height: 6, background: '#E7E5E4', borderRadius: 999 }}><div style={{ width: `${Math.max(4, Math.round((Number(row.aw) || 0) / max * 100))}%`, height: '100%', background: '#EA580C', borderRadius: 999 }} /></div></div>
-                                                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}><span style={{ width: 14, color: '#16A34A', fontWeight: 800 }}>B</span><div style={{ flex: 1, height: 6, background: '#E7E5E4', borderRadius: 999 }}><div style={{ width: `${Math.max(4, Math.round((Number(row.bw) || 0) / max * 100))}%`, height: '100%', background: row.warn ? '#DC2626' : '#16A34A', borderRadius: 999 }} /></div></div>
+                                    {/* ② DECISION card */}
+                                    <div className={`gh-decision ${decClass}`}>
+                                        <div className="gh-decision-verdict">
+                                            <div className="gh-decision-score">
+                                                {locale === 'zh' ? '综合' : 'Total'}{' '}
+                                                <b>{fmt(abScoring.totalScore, 1)}</b> / 100
                                             </div>
-                                            <div style={{ fontSize: 13, color: '#5F5E5A', lineHeight: 1.9 }}>{row.a}<br />{row.b}</div>
-                                            <div style={{ color: row.warn ? toneColor(abScoring.cost.tone) : '#BA7517', fontWeight: 800 }}>{row.delta}</div>
                                         </div>
-                                    );
-                                })}
-                                {abScoring.cost.dataQualityIssue && (
-                                    <div style={{ color: '#BA7517', fontSize: 12, marginTop: 12 }}>{abScoring.cost.dataQualityIssue}</div>
-                                )}
-                            </div>
+                                        <div className="gh-decision-body">
+                                            <div className="gh-decision-headline">
+                                                {abScoring.rejectCategory ? (
+                                                    <>
+                                                        {locale === 'zh' ? '短板在 ' : 'Bottleneck: '}
+                                                        <span className="hl">
+                                                            {abScoring.rejectCategory === 'capability' ? (locale === 'zh' ? '能力' : 'Capability')
+                                                            : abScoring.rejectCategory === 'cost' ? (locale === 'zh' ? '成本' : 'Cost')
+                                                            : (locale === 'zh' ? '稳定性' : 'Stability')}
+                                                        </span>
+                                                        {abScoring.rejectCategory === 'capability' && (
+                                                            <>
+                                                                {locale === 'zh' ? '：评测均分由 ' : ' — eval avg '}
+                                                                <span className="num">{fmt(cap.avgEvalScoreA, 1)} → {fmt(cap.avgEvalScoreB, 1)}</span>
+                                                                {locale === 'zh' ? '（Δ ' : ' (Δ '}
+                                                                <span className="num">{signed(cap.deltaScore, 1)}</span>
+                                                                {locale === 'zh' ? '）' : ')'}
+                                                            </>
+                                                        )}
+                                                        {abScoring.rejectCategory === 'cost' && (
+                                                            <>
+                                                                {locale === 'zh' ? '：ΔToken ' : ' — ΔToken '}
+                                                                <span className="num">{fmtPct(cost.deltaTokenPct, 1)}</span>
+                                                                {locale === 'zh' ? '，耗时 ' : ', duration '}
+                                                                <span className="num">{fmtPct(cost.deltaDurationPct, 1)}</span>
+                                                            </>
+                                                        )}
+                                                        {abScoring.rejectCategory === 'stability' && (
+                                                            <>
+                                                                {locale === 'zh' ? '：触发率 ' : ' — invoke '}
+                                                                <span className="num">{fmt(sta.invokeRate, 0)}%</span>
+                                                            </>
+                                                        )}
+                                                    </>
+                                                ) : (
+                                                    <span>
+                                                        {locale === 'zh'
+                                                            ? `全维通过 · 综合 ${fmt(abScoring.totalScore, 1)} / 100`
+                                                            : `All dims pass · total ${fmt(abScoring.totalScore, 1)} / 100`}
+                                                    </span>
+                                                )}
+                                            </div>
+                                            {decisionAdvice && (
+                                                <div className="gh-decision-next">
+                                                    <b>{locale === 'zh' ? '下一步' : 'Next'}</b> · {decisionAdvice}
+                                                </div>
+                                            )}
+                                        </div>
+                                        <div className="gh-decision-actions">
+                                            <button
+                                                type="button"
+                                                className="gh-btn"
+                                                onClick={() => setRecordModal({ title: locale === 'zh' ? 'B 实验组执行记录' : 'B Experiment Records', side: 'b' })}
+                                            >
+                                                {locale === 'zh' ? '查看 Trace' : 'View Trace'}
+                                            </button>
+                                            <button
+                                                type="button"
+                                                className="gh-btn is-dark"
+                                                onClick={runComparisonForCheckedCases}
+                                                disabled={runButtonDisabled}
+                                            >
+                                                {runButtonBusy ? (locale === 'zh' ? '执行中…' : 'Running…') : `▶ ${locale === 'zh' ? '复测' : 'Re-run'}`}
+                                            </button>
+                                        </div>
+                                    </div>
 
-                            <div style={{ border: '1px solid rgba(0,0,0,0.1)', background: '#FAFAF7', borderRadius: 12, padding: 20 }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                                        <span style={{ width: 34, height: 34, borderRadius: 8, background: '#E1F5EE', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>🎯</span>
-                                        <div style={{ fontSize: 16, fontWeight: 800 }}>稳定性 <span style={{ color: '#A8A29E', fontFamily: 'ui-monospace, monospace', fontSize: 12 }}>该触发的时候触发了吗?结果稳吗?</span></div>
+                                    {/* ③ dims-table */}
+                                    <div className="gh-dims">
+                                        <div className="gh-dims-row gh-dims-head">
+                                            <div>{locale === 'zh' ? '维度' : 'DIM'}</div>
+                                            <div>{locale === 'zh' ? '分数' : 'SCORE'}</div>
+                                            <div>0 · 50 · 75 · 100</div>
+                                            <div>{locale === 'zh' ? '关键证据' : 'EVIDENCE'}</div>
+                                        </div>
+                                        {dims.map(d => {
+                                            const cls = toneClass(d.data.tone);
+                                            const scoreNum = typeof d.data.score === 'number' ? d.data.score : null;
+                                            return (
+                                                <div key={d.key} className="gh-dims-row">
+                                                    <div className="gh-dim-name-cell">
+                                                        <div className="gh-dim-name-row">
+                                                            <span className="gh-dim-name">{d.label}</span>
+                                                            <span className={`gh-dim-pill ${cls}`}>
+                                                                {locale === 'zh' && d.data.label === '拒绝' ? '高风险' : d.data.label}
+                                                            </span>
+                                                        </div>
+                                                        <span className="gh-dim-desc">{d.desc}</span>
+                                                    </div>
+                                                    <div className={`gh-dim-score ${cls}`}>
+                                                        {scoreNum == null ? '—' : fmt(scoreNum, 1)}
+                                                        <span className="gh-dim-outof">/ 100</span>
+                                                    </div>
+                                                    <div className="gh-dim-bar-cell">
+                                                        <div className="gh-dim-bar-track">
+                                                            <div
+                                                                className={`gh-dim-bar-fill ${cls}`}
+                                                                style={{ width: `${Math.max(0, Math.min(100, scoreNum ?? 0))}%` }}
+                                                            />
+                                                        </div>
+                                                    </div>
+                                                    <div className="gh-dim-evidence">
+                                                        {d.key === 'capability' && (
+                                                            <>
+                                                                <span className="row">A <span className="num">{fmt(cap.avgEvalScoreA, 1)}</span> <span className="arrow">→</span> B <span className="num">{fmt(cap.avgEvalScoreB, 1)}</span></span>
+                                                                <span className="row">{locale === 'zh' ? '评分变化' : 'Δscore'} <span className={`delta ${(cap.deltaScore ?? 0) >= 0 ? 'up' : 'down'}`}>{signed(cap.deltaScore, 1)}</span></span>
+                                                            </>
+                                                        )}
+                                                        {d.key === 'cost' && (
+                                                            <>
+                                                                <span className="row">ΔToken <span className={`delta ${(cost.deltaTokenPct ?? 0) <= 0 ? 'up' : 'down'}`}>{fmtPct(cost.deltaTokenPct, 1)}</span> · {locale === 'zh' ? '耗时' : 'Duration'} <span className={`delta ${(cost.deltaDurationPct ?? 0) <= 0 ? 'up' : 'down'}`}>{fmtPct(cost.deltaDurationPct, 1)}</span></span>
+                                                                {typeof cost.baseCost === 'number' && typeof cost.score === 'number' && (
+                                                                    <span className="row">{locale === 'zh' ? '能力耦合' : 'Capability coupling'} <span className={`delta ${(cost.score - cost.baseCost) >= 0 ? 'up' : 'down'}`}>{signed(cost.score - cost.baseCost, 0)}</span></span>
+                                                                )}
+                                                            </>
+                                                        )}
+                                                        {d.key === 'stability' && (
+                                                            <>
+                                                                <span className="row">{locale === 'zh' ? '触发率' : 'Invoke'} <span className="num">{fmt(sta.invokeRate, 0)}%</span></span>
+                                                                <span className="row">{locale === 'zh' ? '方差' : 'Variance'} {sta.varianceComputable ? <span className="num">{fmt(sta.variance, 2)}</span> : <>— (R={abScoring.repeatRounds})</>}</span>
+                                                            </>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
                                     </div>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, fontWeight: 800 }}>触发率 {fmtRate(abScoring.stability.invokeRate)} · 方差 {abScoring.stability.variance ?? '—'} <span style={{ background: toneBg(abScoring.stability.tone), color: toneColor(abScoring.stability.tone), borderRadius: 6, padding: '4px 10px', fontSize: 12 }}>● {abScoring.stability.label}</span></div>
+
+                                    {/* ④ raw data accordion */}
+                                    <div className={`gh-raw${hifiRawOpen ? '' : ' is-collapsed'}`}>
+                                        <button
+                                            type="button"
+                                            className="gh-raw-head"
+                                            onClick={() => setHifiRawOpen(v => !v)}
+                                        >
+                                            <span className="gh-raw-chev" />
+                                            <span>{locale === 'zh' ? '原始数据与计算公式' : 'Raw data & formulas'}</span>
+                                            <span className="gh-raw-formula">min(capability, cost, stability)</span>
+                                        </button>
+                                        <div className="gh-raw-body">
+                                            <div className="gh-raw-grid">
+                                                <div className="gh-raw-card">
+                                                    <div className="gh-raw-card-head">
+                                                        <span className="gh-raw-card-title">{locale === 'zh' ? '能力' : 'Capability'}</span>
+                                                        <span className="gh-raw-card-tag">capability</span>
+                                                    </div>
+                                                    <div className="kv"><span className="k">{locale === 'zh' ? '评测均分' : 'Eval avg'}</span><span className="a">{fmt(cap.avgEvalScoreA, 1)}</span><span className="b">{fmt(cap.avgEvalScoreB, 1)}</span></div>
+                                                    <div className="kv"><span className="k">{locale === 'zh' ? '通过率' : 'Pass rate'}</span><span className="a">{fmt(cap.passRateA, 1)}%</span><span className="b">{fmt(cap.passRateB, 1)}%</span></div>
+                                                    <div className="delta"><span className="k">{locale === 'zh' ? '评分变化' : 'Δscore'}</span><span className={`v ${(cap.deltaScore ?? 0) >= 0 ? 'up' : 'down'}`}>{signed(cap.deltaScore, 1)}</span></div>
+                                                    {cap.breakdown?.formula && <div className="formula">{cap.breakdown.formula}</div>}
+                                                </div>
+                                                <div className="gh-raw-card">
+                                                    <div className="gh-raw-card-head">
+                                                        <span className="gh-raw-card-title">{locale === 'zh' ? '成本' : 'Cost'}</span>
+                                                        <span className="gh-raw-card-tag">cost</span>
+                                                    </div>
+                                                    <div className="kv"><span className="k">Token</span><span className="a">{fmt(cost.avgTokensA, 0)}</span><span className="b">{fmt(cost.avgTokensB, 0)}</span></div>
+                                                    <div className="kv"><span className="k">{locale === 'zh' ? '耗时' : 'Duration'}(s)</span><span className="a">{fmt(cost.avgDurationA, 1)}</span><span className="b">{fmt(cost.avgDurationB, 1)}</span></div>
+                                                    <div className="kv"><span className="k">{locale === 'zh' ? '步数' : 'Steps'}</span><span className="a">{fmt(cost.avgStepsA, 1)}</span><span className="b">{fmt(cost.avgStepsB, 1)}</span></div>
+                                                    <div className="delta"><span className="k">ΔToken</span><span className={`v ${(cost.deltaTokenPct ?? 0) <= 0 ? 'up' : 'down'}`}>{fmtPct(cost.deltaTokenPct, 1)}</span></div>
+                                                    {cost.breakdown?.formula && <div className="formula">{cost.breakdown.formula}</div>}
+                                                </div>
+                                                <div className="gh-raw-card">
+                                                    <div className="gh-raw-card-head">
+                                                        <span className="gh-raw-card-title">{locale === 'zh' ? '稳定性' : 'Stability'}</span>
+                                                        <span className="gh-raw-card-tag">stability</span>
+                                                    </div>
+                                                    <div className="kv"><span className="k">{locale === 'zh' ? '触发率' : 'Invoke rate'}</span><span className="a">—</span><span className="b">{fmt(sta.invokeRate, 0)}%</span></div>
+                                                    <div className="kv"><span className="k">{locale === 'zh' ? '方差' : 'Variance'}</span><span className="a">—</span><span className="b">{sta.varianceComputable ? fmt(sta.variance, 3) : `— (R=${abScoring.repeatRounds})`}</span></div>
+                                                    {sta.dataQualityIssue && <div className="delta"><span className="k">{locale === 'zh' ? '告警' : 'Warning'}</span><span className="v warn">{sta.dataQualityIssue}</span></div>}
+                                                    {sta.breakdown?.formula && <div className="formula">{sta.breakdown.formula}</div>}
+                                                </div>
+                                                <div className="gh-raw-card">
+                                                    <div className="gh-raw-card-head">
+                                                        <span className="gh-raw-card-title">{locale === 'zh' ? '综合（短板原则）' : 'Verdict (min)'}</span>
+                                                        <span className="gh-raw-card-tag">verdict</span>
+                                                    </div>
+                                                    <div className="kv"><span className="k">capability</span><span className="b" style={{ color: 'var(--gh-st-fail)' }}>{fmt(cap.score, 1)}</span></div>
+                                                    <div className="kv"><span className="k">cost</span><span className="b" style={{ color: 'var(--gh-st-warn)' }}>{fmt(cost.score, 1)}</span></div>
+                                                    <div className="kv"><span className="k">stability</span><span className="b" style={{ color: 'var(--gh-st-done)' }}>{fmt(sta.score, 1)}</span></div>
+                                                    {abScoring.hardGates.length > 0 && (
+                                                        <div className="delta"><span className="k">{locale === 'zh' ? '命中 hard gate' : 'Hard gates'}</span><span className="v down">{abScoring.hardGates.map(g => g.label).join('、')}</span></div>
+                                                    )}
+                                                    <div className="formula">verdict = min(capability, cost, stability) = {fmt(abScoring.totalScore, 1)} → {abScoring.gradeLabel || abScoring.grade}</div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
                                 </div>
-                                {[
-                                    { label: 'Skill 触发率', value: fmtRate(abScoring.stability.invokeRate), width: abScoring.stability.invokeRate ?? 0 },
-                                    { label: '多轮一致性', value: abScoring.stability.variance == null ? '方差不可计算' : `方差 ${abScoring.stability.variance}`, width: abScoring.stability.varianceScore ?? 0 },
-                                ].map(row => (
-                                    <div key={row.label} style={{ display: 'grid', gridTemplateColumns: '150px 1fr 110px 20px', gap: 14, alignItems: 'center', marginTop: 14 }}>
-                                        <div style={{ fontSize: 14, fontWeight: 700, color: '#5F5E5A' }}>{row.label}</div>
-                                        <div style={{ height: 7, background: '#E7E5E4', borderRadius: 999 }}><div style={{ width: `${Math.max(3, row.width)}%`, height: '100%', background: '#16A34A', borderRadius: 999 }} /></div>
-                                        <div style={{ color: toneColor(abScoring.stability.tone), fontWeight: 800, textAlign: 'right' }}>{row.value}</div>
-                                        <div style={{ width: 12, height: 12, borderRadius: '50%', background: toneColor(abScoring.stability.tone) }} />
-                                    </div>
-                                ))}
-                                {abScoring.stability.dataQualityIssue && (
-                                    <div style={{ color: '#BA7517', fontSize: 12, marginTop: 12 }}>{abScoring.stability.dataQualityIssue}</div>
-                                )}
-                            </div>
-                        </div>
+                            );
+                        })() : (
+                            <DecisionVerdictCard
+                                decisionReady={decisionReady}
+                                abScoring={abScoring}
+                                sampleSize={abScoring.sampleSize}
+                                repeatRounds={abScoring.repeatRounds}
+                                recommendedSampleSize={DEFAULT_AB_SCORING_POLICY.recommendedSampleSize}
+                                policy={DEFAULT_AB_SCORING_POLICY}
+                                decisionTitle={decisionTitle}
+                                decisionAdvice={decisionAdvice}
+                                onViewTrace={() => setRecordModal({ title: locale === 'zh' ? 'B 实验组执行记录' : 'B Experiment Records', side: 'b' })}
+                                locale={locale}
+                                toneColor={toneColor}
+                                toneBg={toneBg}
+                            />
+                        )}
                     </div>
                 </div>
 
@@ -3321,6 +4556,16 @@ export function GrayscaleEvaluation({
                     </div>
                 </div>
             )}
+
+            {/* 新增评测任务对话框 (跨视图浮窗, 跟其他 modal 同级渲染) */}
+            <NewEvaluationBatchDialog
+                open={newBatchDialogOpen}
+                user={user || ''}
+                defaultTitle={currentTask?.taskName}
+                evaluators={selectedEvaluatorId ? [selectedEvaluatorId] : []}
+                onClose={() => setNewBatchDialogOpen(false)}
+                onCreated={handleEvalBatchCreated}
+            />
 
             {/* Output preview modal */}
             {outputModal && (

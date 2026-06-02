@@ -7,7 +7,10 @@ import {
     TrajectoryEvalConfigError,
     type TrajectoryEvalInput,
 } from '@/lib/engine/evaluation/opencode-trajectory-evaluator';
-import { evaluateTaskCompletionViaOpencode } from '@/lib/engine/evaluation/opencode-task-completion-evaluator';
+import {
+    evaluateTaskCompletionViaOpencode,
+    type TaskCompletionEvalInput,
+} from '@/lib/engine/evaluation/opencode-task-completion-evaluator';
 import { startOrReplace as startEvalTask, finish as finishEvalTask } from '@/lib/evaluation-task-manager';
 import { deriveAndPersistOptPoints } from '@/lib/engine/evaluation/derive-skill-opt-points';
 import {
@@ -20,6 +23,7 @@ import {
 } from '@/lib/engine/observability/flow-parser';
 import { extractRealUserInput, findBestSemanticCaseMatch } from '@/lib/engine/evaluation/semantic-dataset-match';
 import { extractTaskResultArtifact } from '@/lib/engine/evaluation/result-artifact-extractor';
+import { parseLooseJson } from '@/lib/engine/evaluation/task-completion-json';
 import {
     extractTrajectoryTaskMeta,
     normalizeTrajectoryTaskMeta,
@@ -36,6 +40,16 @@ import {
     type SkillKeyActionComparisonResult,
 } from '@/lib/engine/evaluation/skill-attribution';
 import { getRootSkillFromInteractions } from '@/lib/engine/observability/skill-scope';
+import {
+    autoWatchAgentNamesMatch,
+    mergeWatchedAgentIntoRawAnalysis,
+    normalizeAutoWatchAgent,
+    normalizeAutoWatchEnabledAt,
+    resolveSingleTrajectoryCandidateAgent,
+    resolveWatchedAgentForRunRows,
+    type AutoWatchRunRowLike,
+} from '@/lib/engine/evaluation/trajectory-auto-watch-helper';
+import { isEvaluatorAgentName } from '@/lib/evaluator-agent';
 
 export const dynamic = 'force-dynamic';
 
@@ -53,6 +67,8 @@ const SUPPORTED_TRAJECTORY_EVALUATORS = new Set([
 
 const TRACE_EVALUATOR_ID = 'preset-agent-trace-quality';
 const TASK_COMPLETION_EVALUATOR_ID = 'preset-agent-task-completion';
+const MAX_RESULT_EVALUATION_ATTEMPTS = 5;
+const RESULT_EVALUATION_RETRY_DELAYS_MS = [1500, 3000, 5000, 8000];
 const EVALUATOR_LABELS: Record<string, string> = {
     [TRACE_EVALUATOR_ID]: 'Agent 轨迹质量',
     [TASK_COMPLETION_EVALUATOR_ID]: 'Agent 任务完成度',
@@ -88,6 +104,7 @@ interface SkillTarget {
 }
 
 interface ExtractedTraceStep {
+    uiStepIndex?: number;
     name?: string;
     description?: string;
     dialogStartIndex?: number;
@@ -119,11 +136,22 @@ interface MatchedDatasetCase {
     caseEntry: DatasetCase;
 }
 
+interface ResultEvaluationRetryState {
+    attemptCount: number;
+    maxAttempts: number;
+    retrying: boolean;
+    exhausted: boolean;
+    lastAttemptAt: string;
+    nextRetryAt?: string;
+    lastError?: string;
+}
+
 interface SelectedEvaluatorMeta {
     selectedEvaluators: string[];
     selectedEvaluatorNames: string[];
     autoWatch?: boolean;
     watchedAgent?: string;
+    autoWatchEnabledAt?: string;
 }
 
 function normalizeOptionalVersion(value: unknown): number | null {
@@ -133,32 +161,6 @@ function normalizeOptionalVersion(value: unknown): number | null {
         return Number.isFinite(parsed) ? parsed : null;
     }
     return null;
-}
-
-function parseLooseJson(text: string): Record<string, unknown> | null {
-    const trimmed = text.trim();
-    const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
-    const candidate = fenced ? fenced[1] : trimmed;
-    try {
-        const parsed = JSON.parse(candidate);
-        return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-            ? parsed as Record<string, unknown>
-            : null;
-    } catch {
-        const first = candidate.indexOf('{');
-        const last = candidate.lastIndexOf('}');
-        if (first !== -1 && last !== -1 && last > first) {
-            try {
-                const parsed = JSON.parse(candidate.slice(first, last + 1));
-                return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-                    ? parsed as Record<string, unknown>
-                    : null;
-            } catch {
-                return null;
-            }
-        }
-        return null;
-    }
 }
 
 function normalizeSelectedEvaluators(value: unknown): string[] {
@@ -180,7 +182,12 @@ function normalizeSelectedEvaluators(value: unknown): string[] {
 
 function buildSelectedEvaluatorMeta(
     selectedEvaluators: string[],
-    options: { autoWatch?: boolean; watchedAgent?: string; customNameResolver?: (id: string) => string | undefined } = {},
+    options: {
+        autoWatch?: boolean;
+        watchedAgent?: string;
+        autoWatchEnabledAt?: string;
+        customNameResolver?: (id: string) => string | undefined;
+    } = {},
 ): SelectedEvaluatorMeta {
     const resolveName = (id: string): string => {
         const preset = EVALUATOR_LABELS[id];
@@ -194,6 +201,7 @@ function buildSelectedEvaluatorMeta(
         selectedEvaluatorNames: selectedEvaluators.map(resolveName),
         ...(options.autoWatch ? { autoWatch: true } : {}),
         ...(options.watchedAgent ? { watchedAgent: options.watchedAgent } : {}),
+        ...(options.autoWatch && options.autoWatchEnabledAt ? { autoWatchEnabledAt: options.autoWatchEnabledAt } : {}),
     };
 }
 
@@ -207,6 +215,7 @@ function readSelectedEvaluatorMeta(rawAnalysisJson: string | null | undefined): 
     const watchedAgent = typeof parsed?.watchedAgent === 'string'
         ? parsed.watchedAgent.trim()
         : '';
+    const autoWatchEnabledAt = normalizeAutoWatchEnabledAt(parsed?.autoWatchEnabledAt);
     if (selectedEvaluators.length > 0) {
         if (selectedEvaluatorNames.length === selectedEvaluators.length) {
             return {
@@ -214,11 +223,12 @@ function readSelectedEvaluatorMeta(rawAnalysisJson: string | null | undefined): 
                 selectedEvaluatorNames,
                 ...(autoWatch ? { autoWatch: true } : {}),
                 ...(watchedAgent ? { watchedAgent } : {}),
+                ...(autoWatch && autoWatchEnabledAt ? { autoWatchEnabledAt } : {}),
             };
         }
-        return buildSelectedEvaluatorMeta(selectedEvaluators, { autoWatch, watchedAgent });
+        return buildSelectedEvaluatorMeta(selectedEvaluators, { autoWatch, watchedAgent, autoWatchEnabledAt });
     }
-    return buildSelectedEvaluatorMeta([TRACE_EVALUATOR_ID], { autoWatch, watchedAgent });
+    return buildSelectedEvaluatorMeta([TRACE_EVALUATOR_ID], { autoWatch, watchedAgent, autoWatchEnabledAt });
 }
 
 function readSelectedEvaluatorMetaStrict(rawAnalysisJson: string | null | undefined): SelectedEvaluatorMeta | null {
@@ -232,15 +242,17 @@ function readSelectedEvaluatorMetaStrict(rawAnalysisJson: string | null | undefi
     const watchedAgent = typeof parsed?.watchedAgent === 'string'
         ? parsed.watchedAgent.trim()
         : '';
+    const autoWatchEnabledAt = normalizeAutoWatchEnabledAt(parsed?.autoWatchEnabledAt);
     if (selectedEvaluatorNames.length === selectedEvaluators.length) {
         return {
             selectedEvaluators,
             selectedEvaluatorNames,
             ...(autoWatch ? { autoWatch: true } : {}),
             ...(watchedAgent ? { watchedAgent } : {}),
+            ...(autoWatch && autoWatchEnabledAt ? { autoWatchEnabledAt } : {}),
         };
     }
-    return buildSelectedEvaluatorMeta(selectedEvaluators, { autoWatch, watchedAgent });
+    return buildSelectedEvaluatorMeta(selectedEvaluators, { autoWatch, watchedAgent, autoWatchEnabledAt });
 }
 
 function mergeRawAnalysisMeta(
@@ -253,14 +265,19 @@ function mergeRawAnalysisMeta(
         selectedEvaluators: meta.selectedEvaluators,
         selectedEvaluatorNames: meta.selectedEvaluatorNames,
         watchedAgent: meta.watchedAgent || '',
+        autoWatchEnabledAt: meta.autoWatchEnabledAt || '',
     };
     if (meta.autoWatch) {
         next.autoWatch = true;
     } else {
         delete next.autoWatch;
+        delete next.autoWatchEnabledAt;
     }
     if (!meta.watchedAgent) {
         delete next.watchedAgent;
+    }
+    if (!meta.autoWatchEnabledAt) {
+        delete next.autoWatchEnabledAt;
     }
     return JSON.stringify(next);
 }
@@ -276,12 +293,22 @@ async function evaluateTaskCompletionAgainstExpected(
     actualOutput: string,
     precomputedRootCauses?: RootCauseItem[],
     precomputedRootCauseSource?: 'dataset-cache' | 'none',
+    traceSummaryText?: string,
+    skillContext?: TaskCompletionEvalInput['skillContext'],
     user?: string | null,
     skillName?: string | null,
     skillVersion?: number | null,
 ): Promise<ResultJudgment> {
     const result = await evaluateTaskCompletionViaOpencode(
-        { caseInput, expectedOutput, actualOutput, precomputedRootCauses, precomputedRootCauseSource },
+        {
+            caseInput,
+            expectedOutput,
+            actualOutput,
+            precomputedRootCauses,
+            precomputedRootCauseSource,
+            traceSummaryText,
+            skillContext,
+        },
         user,
         skillName,
         skillVersion,
@@ -299,6 +326,74 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, error: Err
         promise,
         new Promise<never>((_, reject) => setTimeout(() => reject(error), timeoutMs)),
     ]);
+}
+
+function getResultEvaluationRetryDelayMs(attemptCount: number): number {
+    return RESULT_EVALUATION_RETRY_DELAYS_MS[Math.max(0, attemptCount - 1)]
+        ?? RESULT_EVALUATION_RETRY_DELAYS_MS[RESULT_EVALUATION_RETRY_DELAYS_MS.length - 1]
+        ?? 8000;
+}
+
+function buildResultEvaluationRetryState(
+    attemptCount: number,
+    options: {
+        retrying: boolean;
+        exhausted: boolean;
+        lastError?: string;
+        delayMs?: number;
+        now?: Date;
+    },
+): ResultEvaluationRetryState {
+    const now = options.now ?? new Date();
+    return {
+        attemptCount,
+        maxAttempts: MAX_RESULT_EVALUATION_ATTEMPTS,
+        retrying: options.retrying,
+        exhausted: options.exhausted,
+        lastAttemptAt: now.toISOString(),
+        ...(options.lastError ? { lastError: options.lastError } : {}),
+        ...(options.retrying && options.delayMs
+            ? { nextRetryAt: new Date(now.getTime() + options.delayMs).toISOString() }
+            : {}),
+    };
+}
+
+function readResultEvaluationAttemptCount(rawAnalysisJson: string | null | undefined): number {
+    const parsed = safeParseRecord(rawAnalysisJson);
+    const retry = parsed.resultEvaluationRetry;
+    if (!retry || typeof retry !== 'object') return 0;
+    const value = (retry as { attemptCount?: unknown }).attemptCount;
+    return typeof value === 'number' && Number.isFinite(value) && value > 0
+        ? Math.floor(value)
+        : 0;
+}
+
+function isRetryableResultEvaluationFailure(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error || '');
+    if (!message.trim()) return false;
+    if (message.includes(NO_EVALUABLE_CASE_PREFIX)) return false;
+    if (message.includes('缺少预期结果')) return false;
+    if (message.includes('expectedOutput')) return false;
+    if (message.includes('trace 没有实际输入')) return false;
+    if (message.includes('Session.interactions JSON 解析失败')) return false;
+    if (message.includes('Session 不存在或 interactions 为空')) return false;
+    if (message.includes('读取数据集失败')) return false;
+    if (message.includes('未匹配到可评测 case')) return false;
+    if (message.includes('评估数据集不存在')) return false;
+    if (message.includes('写入评测结果失败')) return false;
+    if (message.includes('结果输出提取失败')) return false;
+    return true;
+}
+
+function scheduleResultEvaluationRetry(user: string, id: string, delayMs: number, attemptCount: number): void {
+    setTimeout(() => {
+        runOneEvaluation(user, id).catch(err => {
+            console.error(
+                `[trajectory-eval] scheduled result retry failed row=${id} attempt=${attemptCount + 1}/${MAX_RESULT_EVALUATION_ATTEMPTS}:`,
+                err,
+            );
+        });
+    }, delayMs);
 }
 
 async function persistResultJudgment(
@@ -358,6 +453,41 @@ function getPrimaryExecutionSkillTargets(
     }];
 }
 
+async function loadTaskCompletionSkillContext(
+    execution: ExecutionLike | null | undefined,
+    interactions: unknown,
+    user?: string | null,
+): Promise<TaskCompletionEvalInput['skillContext'] | undefined> {
+    const targets = getPrimaryExecutionSkillTargets(execution, interactions);
+    if (targets.length === 0) return undefined;
+
+    const invokedSkills: NonNullable<NonNullable<TaskCompletionEvalInput['skillContext']>['invokedSkills']> = [];
+    for (const target of targets) {
+        const skillRecord = await db.findSkill(target.skill, user || null);
+        if (!skillRecord?.id) {
+            invokedSkills.push({ name: target.skill, version: target.version });
+            continue;
+        }
+
+        const fullSkill = await db.findSkillById(skillRecord.id);
+        const resolvedVersion = target.version
+            ?? fullSkill?.activeVersion
+            ?? fullSkill?.versions?.[0]?.version
+            ?? null;
+        const versionRow = resolvedVersion != null
+            ? await db.findSkillVersion(skillRecord.id, resolvedVersion).catch(() => null)
+            : null;
+        const content = String(versionRow?.content || '').trim();
+        invokedSkills.push({
+            name: target.skill,
+            version: resolvedVersion,
+            content: content ? content.slice(0, 12_000) : undefined,
+        });
+    }
+
+    return invokedSkills.length > 0 ? { invokedSkills } : undefined;
+}
+
 async function extractSkillKeyActionsFromTargets(targets: SkillTarget[], user?: string | null): Promise<ExtractedKeyAction[]> {
     const allActions: { name: string; actions: ExtractedKeyAction[] }[] = [];
 
@@ -408,10 +538,11 @@ function formatActualExtractedSteps(steps: ExtractedTraceStep[]): string {
     if (steps.length === 0) return '';
     return steps.map((step, index) => {
         const desc = normalizeMatchText(step.description || '');
+        const uiStep = typeof step.uiStepIndex === 'number' ? ` [step=${step.uiStepIndex}]` : '';
         const range = step.dialogStartIndex != null && step.dialogEndIndex != null
             ? ` [dialog=${step.dialogStartIndex}-${step.dialogEndIndex}]`
             : '';
-        return `${index + 1}. ${step.name || desc || '未命名步骤'}${step.type ? ` [${step.type}]` : ''}${range}${desc && desc !== step.name ? ` - ${desc}` : ''}`;
+        return `${index + 1}. ${step.name || desc || '未命名步骤'}${step.type ? ` [${step.type}]` : ''}${uiStep}${range}${desc && desc !== step.name ? ` - ${desc}` : ''}`;
     }).join('\n');
 }
 
@@ -505,13 +636,15 @@ async function buildSkillKeyActionComparison(
         status: 'ok',
         referenceKeyActionsText: formatReferenceKeyActions(keyActions),
         actualExtractedStepsText: formatActualExtractedSteps(normalizedSteps),
+        referenceKeyActions: keyActions,
+        actualExtractedSteps: normalizedSteps,
     };
 }
 
 async function findMatchingDatasetCaseForTrace(
     user: string,
     traceQuery: string,
-    options: { requireExpectedOutput?: boolean; includeAllDatasetKinds?: boolean } = {},
+    options: { requireExpectedOutput?: boolean; includeAllDatasetKinds?: boolean; allowedDatasetIds?: string[] } = {},
 ): Promise<MatchedDatasetCase> {
     const normalizedTraceInput = normalizeMatchText(traceQuery);
     if (!normalizedTraceInput) {
@@ -523,8 +656,13 @@ async function findMatchingDatasetCaseForTrace(
 
     const requireExpectedOutput = options.requireExpectedOutput === true;
     const includeAllDatasetKinds = options.includeAllDatasetKinds === true;
+    // allowedDatasetIds 非空 → 把匹配范围收窄到用户在配置区显式选的数据集 (参考集); 空 → 沿用全量 auto-match。
+    const allowedDatasetIds = Array.isArray(options.allowedDatasetIds)
+        ? options.allowedDatasetIds.map(id => String(id).trim()).filter(Boolean)
+        : [];
     const datasets = (await readAllAgentDatasets())
         .filter(dataset => dataset.user === user)
+        .filter(dataset => allowedDatasetIds.length === 0 || allowedDatasetIds.includes(dataset.id))
         .filter(dataset => includeAllDatasetKinds || requireExpectedOutput || dataset.datasetKind === 'trajectory');
 
     if (datasets.length === 0) {
@@ -587,9 +725,19 @@ export async function POST(request: Request) {
             requestedEvaluators,
         );
         const requestedAutoWatch = body.autoWatch === true;
-        const requestedWatchedAgent = String(body.watchedAgent || body.agent || '').trim();
+        const requestedWatchedAgent = normalizeAutoWatchAgent(body.watchedAgent || body.agent || '');
+        let resolvedWatchedAgent = requestedWatchedAgent;
+        const requestNowIso = new Date().toISOString();
+        // placeholderOnly: 用于"新建评测批次"语义——前端先创建一个空批次拿到 evaluatorRunId,
+        // 后续 A/B 测试/用例分析的所有评测都 append 到此 ID。跟 autoWatch (自动观测某 agent 新 trace)
+        // 走相同的 watchPlaceholder 数据库分支但语义不同; rawAnalysisJson 加 placeholderOnly=true
+        // 让前端 /eval 页可识别此批次是用户主动创建的"空批次"而不是 autoWatch 待跑。
+        const requestedPlaceholderOnly = body.placeholderOnly === true;
 
         if (!user) return NextResponse.json({ error: 'user is required' }, { status: 400 });
+        if (requestedAutoWatch && requestedWatchedAgent && isEvaluatorAgentName(requestedWatchedAgent)) {
+            return NextResponse.json({ error: 'autoWatch requires a non-evaluator execution agent' }, { status: 400 });
+        }
 
         // 自建评估器需要真存在于该用户的 CustomEvaluatorList 才能放行；找不到的 ID 直接拒绝，
         // 避免后台 runner 反复抛"未找到自建评估器"。
@@ -626,7 +774,7 @@ export async function POST(request: Request) {
             finalEvaluators.length > 0 ? finalEvaluators : [TRACE_EVALUATOR_ID],
             {
                 autoWatch: requestedAutoWatch,
-                watchedAgent: requestedWatchedAgent,
+                watchedAgent: resolvedWatchedAgent,
                 customNameResolver: id => customNameMap.get(id),
             },
         );
@@ -651,6 +799,10 @@ export async function POST(request: Request) {
             ? body.taskIds.map((t: unknown) => String(t).trim()).filter(Boolean)
             : [];
         let datasetId = String(body.datasetId || '').trim();
+        // datasetIds: taskIds 模式下用户在用例分析配置区选的参考数据集; 收窄后台 trace↔case 自动匹配范围。
+        const allowedDatasetIds: string[] = Array.isArray(body.datasetIds)
+            ? body.datasetIds.map((d: unknown) => String(d).trim()).filter(Boolean)
+            : [];
         const pairs = Array.isArray(body.pairs) ? (body.pairs as RunPair[]) : [];
         let taskMeta = normalizeTrajectoryTaskMeta({
             title: body.taskTitle,
@@ -658,6 +810,8 @@ export async function POST(request: Request) {
         });
 
         let existingRunTaskIds = new Set<string>();
+        let existingRunWatchedAgent = '';
+        let existingRunAutoWatchEnabledAt = '';
         if (appendRunId) {
             const existingRows = await prisma.trajectoryEvalResult.findMany({
                 where: { user, evaluatorRunId: appendRunId },
@@ -674,18 +828,71 @@ export async function POST(request: Request) {
             evaluatorMeta = finalEvaluators.length > 0
                 ? buildSelectedEvaluatorMeta(finalEvaluators, {
                     autoWatch: requestedAutoWatch,
-                    watchedAgent: requestedWatchedAgent,
+                    watchedAgent: resolvedWatchedAgent,
                     customNameResolver: id => customNameMap.get(id),
                 })
                 : latestExplicitMeta || readSelectedEvaluatorMeta(first.rawAnalysisJson);
             taskMeta = extractTrajectoryTaskMeta(first.rawAnalysisJson, first.createdAt);
             datasetId = datasetId || first.datasetId || '';
+            existingRunWatchedAgent = normalizeAutoWatchAgent(
+                latestExplicitMeta?.watchedAgent
+                || await resolveWatchedAgentForRunRows(user, existingRows as AutoWatchRunRowLike[]),
+            );
+            existingRunAutoWatchEnabledAt = normalizeAutoWatchEnabledAt(latestExplicitMeta?.autoWatchEnabledAt);
             existingRunTaskIds = new Set(
                 existingRows
                     .map(row => row.taskId || row.executionId || '')
                     .filter(Boolean),
             );
         }
+
+        if (requestedAutoWatch && taskIds.length > 0) {
+            const resolution = await resolveSingleTrajectoryCandidateAgent(user, taskIds);
+            if (resolution.missingTaskIds.length > 0) {
+                return NextResponse.json(
+                    {
+                        error: `autoWatch only accepts traces that appear in 发起新评测: ${resolution.missingTaskIds.join(', ')}`,
+                    },
+                    { status: 400 },
+                );
+            }
+            if (!resolution.agent) {
+                return NextResponse.json(
+                    {
+                        error: `autoWatch requires a single execution agent, got: ${resolution.distinctAgents.join(', ') || 'none'}`,
+                    },
+                    { status: 400 },
+                );
+            }
+            if (existingRunWatchedAgent && !autoWatchAgentNamesMatch(existingRunWatchedAgent, resolution.agent)) {
+                return NextResponse.json(
+                    {
+                        error: `autoWatch agent mismatch: run watches ${existingRunWatchedAgent}, new traces belong to ${resolution.agent}`,
+                    },
+                    { status: 400 },
+                );
+            }
+            resolvedWatchedAgent = resolution.agent;
+        } else if (requestedAutoWatch && !appendRunId && !resolvedWatchedAgent) {
+            return NextResponse.json(
+                { error: 'watchedAgent is required when starting autoWatch without seed traces' },
+                { status: 400 },
+            );
+        } else if (requestedAutoWatch && existingRunWatchedAgent) {
+            resolvedWatchedAgent = existingRunWatchedAgent;
+        }
+
+        evaluatorMeta = buildSelectedEvaluatorMeta(
+            finalEvaluators.length > 0 ? finalEvaluators : evaluatorMeta.selectedEvaluators,
+            {
+                autoWatch: requestedAutoWatch,
+                watchedAgent: requestedAutoWatch ? resolvedWatchedAgent : '',
+                autoWatchEnabledAt: requestedAutoWatch
+                    ? (appendRunId ? existingRunAutoWatchEnabledAt || requestNowIso : requestNowIso)
+                    : '',
+                customNameResolver: id => customNameMap.get(id),
+            },
+        );
 
         const evaluatorRunId = appendRunId || generateRunId();
         const created: { id: string; caseId: string; executionId?: string; taskId?: string }[] = [];
@@ -707,12 +914,16 @@ export async function POST(request: Request) {
                         executionId: null,
                         taskId,
                         status: 'pending',
-                        rawAnalysisJson: JSON.stringify({ ...evaluatorMeta, taskMeta }),
+                        rawAnalysisJson: JSON.stringify({
+                            ...evaluatorMeta,
+                            taskMeta,
+                            ...(allowedDatasetIds.length > 0 ? { allowedDatasetIds } : {}),
+                        }),
                     },
                 });
                 created.push({ id: row.id, caseId: '', taskId });
             }
-        } else if (requestedAutoWatch && !appendRunId) {
+        } else if ((requestedAutoWatch || requestedPlaceholderOnly) && !appendRunId) {
             if (datasetId) {
                 const dataset = await findAgentDataset(user, datasetId);
                 if (!dataset) {
@@ -725,6 +936,9 @@ export async function POST(request: Request) {
                     );
                 }
             }
+            // placeholderOnly=true 是"用户主动新建空批次"语义, autoWatch=true 是"自动观测某 agent 新 trace 自动评测"。
+            // 两者底层都走 watchPlaceholder 行 (taskId=null/caseId=''), 但 rawAnalysisJson 加额外标记
+            // 让 /eval 页能区分: placeholderOnly → 显示"待评测 · 来自任务管理"; autoWatch → "自动观测中"。
             const row = await prisma.trajectoryEvalResult.create({
                 data: {
                     user,
@@ -734,7 +948,12 @@ export async function POST(request: Request) {
                     executionId: null,
                     taskId: null,
                     status: 'pending',
-                    rawAnalysisJson: JSON.stringify({ ...evaluatorMeta, taskMeta, watchPlaceholder: true }),
+                    rawAnalysisJson: JSON.stringify({
+                        ...evaluatorMeta,
+                        taskMeta,
+                        watchPlaceholder: true,
+                        ...(requestedPlaceholderOnly ? { placeholderOnly: true } : {}),
+                    }),
                 },
             });
             created.push({ id: row.id, caseId: '' });
@@ -772,7 +991,7 @@ export async function POST(request: Request) {
                 created.push({ id: row.id, caseId, executionId, taskId });
             }
         } else {
-            return NextResponse.json({ error: 'provide taskIds or datasetId + pairs' }, { status: 400 });
+            return NextResponse.json({ error: 'provide taskIds, datasetId+pairs, or placeholderOnly:true' }, { status: 400 });
         }
 
         if (created.length === 0) {
@@ -823,16 +1042,30 @@ export async function PATCH(request: Request) {
         }
 
         const baseMeta = readSelectedEvaluatorMeta(rows[0].rawAnalysisJson);
+        const persistedWatchedAgent = normalizeAutoWatchAgent(baseMeta.watchedAgent);
+        const inferredWatchedAgent = persistedWatchedAgent && !isEvaluatorAgentName(persistedWatchedAgent)
+            ? persistedWatchedAgent
+            : await resolveWatchedAgentForRunRows(user, rows as AutoWatchRunRowLike[]);
+        if (autoWatch && !inferredWatchedAgent) {
+            return NextResponse.json(
+                { error: 'autoWatch requires existing traces from a single non-evaluator execution agent' },
+                { status: 400 },
+            );
+        }
         const nextMeta = buildSelectedEvaluatorMeta(baseMeta.selectedEvaluators, {
             autoWatch,
-            watchedAgent: baseMeta.watchedAgent,
+            watchedAgent: inferredWatchedAgent,
+            autoWatchEnabledAt: autoWatch ? new Date().toISOString() : '',
         });
 
         await prisma.$transaction(
             rows.map(row => prisma.trajectoryEvalResult.update({
                 where: { id: row.id },
                 data: {
-                    rawAnalysisJson: mergeRawAnalysisMeta(row.rawAnalysisJson, nextMeta),
+                    rawAnalysisJson: mergeWatchedAgentIntoRawAnalysis(
+                        mergeRawAnalysisMeta(row.rawAnalysisJson, nextMeta),
+                        nextMeta.watchedAgent || '',
+                    ),
                 },
             })),
         );
@@ -919,6 +1152,9 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
     const hasCustomEvaluators = customEvaluatorIds.length > 0;
     let resultEvaluationRawAnalysis: Record<string, unknown> | null = null;
     let resultEvaluationError: string | null = null;
+    let resultEvaluationRetryState: ResultEvaluationRetryState | null = null;
+    let scheduledResultRetryDelayMs: number | null = null;
+    let scheduledResultRetryAttemptCount = 0;
     let resultArtifactExtractionRawAnalysis: Record<string, unknown> | null = null;
     let resultActualOutput = '';
     let customEvaluationsRawAnalysis: Record<string, unknown> | null = null;
@@ -958,6 +1194,13 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
     const extractedTraceInput = await extractRealUserInput(rawTraceQuery, user);
     const traceQuery = extractedTraceInput.normalized_input.trim() || rawTraceQuery;
     const fallbackFinalResult = String(execution?.finalResult || '').trim();
+    // 用户在用例分析配置区选的参考数据集 (创建 row 时写入 rawAnalysisJson)；收窄下面的 trace↔case 自动匹配。
+    const rowAllowedDatasetIds = (() => {
+        const parsed = safeParseRecord(row.rawAnalysisJson) as { allowedDatasetIds?: unknown };
+        return Array.isArray(parsed?.allowedDatasetIds)
+            ? parsed.allowedDatasetIds.map(v => String(v).trim()).filter(Boolean)
+            : [];
+    })();
 
     await prisma.trajectoryEvalResult.update({
         where: { id },
@@ -986,6 +1229,13 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
                 throw new StagedEvaluationError('trace-parse', `Session.interactions JSON 解析失败: ${(e as Error).message}`, e);
             }
         }
+    }
+    if (interactions.length === 0 && (traceQuery || fallbackFinalResult)) {
+        const timestamp = new Date().toISOString();
+        interactions = [
+            ...(traceQuery ? [{ role: 'user', content: traceQuery, timestamp }] : []),
+            ...(fallbackFinalResult ? [{ role: 'assistant', content: fallbackFinalResult, timestamp }] : []),
+        ] as TrajectoryEvalInput['actualInteractions'];
     }
     let caseEntry: {
         id?: string;
@@ -1074,6 +1324,7 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
         try {
             const matched = await findMatchingDatasetCaseForTrace(user, traceQuery, {
                 requireExpectedOutput: shouldRunResultEvaluation,
+                allowedDatasetIds: rowAllowedDatasetIds,
             });
             caseEntry = matched.caseEntry;
             matchedDatasetMeta = { id: matched.dataset.id, name: matched.dataset.name };
@@ -1111,6 +1362,7 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
                 const matched = await findMatchingDatasetCaseForTrace(user, traceQuery, {
                     requireExpectedOutput: true,
                     includeAllDatasetKinds: true,
+                    allowedDatasetIds: rowAllowedDatasetIds,
                 });
                 caseEntry = matched.caseEntry;
                 matchedDatasetMeta = { id: matched.dataset.id, name: matched.dataset.name };
@@ -1235,9 +1487,17 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
         caseSnapshot,
         skillAttribution: skillAttributionStatus,
         comparisonMode,
+        skillKeyActionComparison: keyActionComparison.status === 'ok'
+            ? {
+                referenceKeyActionsText: keyActionComparison.referenceKeyActionsText,
+                actualExtractedStepsText: keyActionComparison.actualExtractedStepsText,
+                referenceKeyActions: keyActionComparison.referenceKeyActions ?? [],
+                actualExtractedSteps: keyActionComparison.actualExtractedSteps ?? [],
+            }
+            : null,
     };
 
-    if (shouldRunTraceEvaluation && interactions.length === 0) {
+    if ((shouldRunTraceEvaluation || shouldRunResultEvaluation) && interactions.length === 0) {
         throw new StagedEvaluationError(
             'trace-empty',
             `taskId=${resolvedTaskId || 'N/A'} 对应的 Session 不存在或 interactions 为空`,
@@ -1279,6 +1539,16 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
     }
 
     if (shouldRunResultEvaluation) {
+        const taskCompletionSkillContext = await loadTaskCompletionSkillContext(execution, interactions, user);
+        const traceSummaryForResultEvaluation = interactions.length > 0
+            ? formatTraceForLLM(summarizeTrace(interactions, { maxSteps: 80, maxTextLen: 400 }))
+            : '';
+        const attempt = Math.min(
+            readResultEvaluationAttemptCount(row.rawAnalysisJson) + 1,
+            MAX_RESULT_EVALUATION_ATTEMPTS,
+        );
+        const attemptStartedAt = new Date();
+
         try {
             await withTimeout((async () => {
                 const artifactExtraction = await extractTaskResultArtifact({
@@ -1293,6 +1563,12 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
 
                 if (!resultActualOutput) {
                     resultEvaluationError = `结果输出提取失败：${artifactExtraction.reason}`;
+                    resultEvaluationRetryState = buildResultEvaluationRetryState(attempt, {
+                        retrying: false,
+                        exhausted: true,
+                        lastError: resultEvaluationError,
+                        now: attemptStartedAt,
+                    });
                     await prisma.trajectoryEvalResult.update({
                         where: { id },
                         data: {
@@ -1302,64 +1578,135 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
                                 resultActualOutput: '',
                                 resultEvaluation: null,
                                 resultEvaluationError,
+                                resultEvaluationRetry: resultEvaluationRetryState,
                             }),
                         },
                     });
-                } else {
-                    await prisma.trajectoryEvalResult.update({
-                        where: { id },
-                        data: {
-                            rawAnalysisJson: JSON.stringify({
-                                ...baseRawAnalysisMeta,
-                                resultArtifactExtraction: resultArtifactExtractionRawAnalysis,
-                                resultActualOutput,
-                                resultEvaluation: null,
-                                resultEvaluationError: null,
-                            }),
-                        },
-                    });
-                    const resultJudgment = await evaluateTaskCompletionAgainstExpected(
-                        caseEntry.input,
-                        caseEntry.expectedOutput,
-                        resultActualOutput,
-                        precomputedRootCauses,
-                        precomputedRootCauseSource,
-                        user,
-                        evalSkillName,
-                        evalSkillVersion,
-                    );
-                    resultEvaluationRawAnalysis = {
-                        ...(resultJudgment.rawAnalysis || {}),
-                        result_artifact_extraction: {
-                            status: artifactExtraction.rawAnalysis?.fallback ? 'fallback_final_result' : artifactExtraction.status,
-                            confidence: artifactExtraction.confidence,
-                            reason: artifactExtraction.reason,
-                            source_refs: artifactExtraction.sourceRefs,
-                            fallback_source: artifactExtraction.rawAnalysis?.fallback ? 'execution.finalResult' : null,
-                        },
-                    };
-                    await persistResultJudgment(execution, resolvedTaskId, resultJudgment);
-                    await prisma.trajectoryEvalResult.update({
-                        where: { id },
-                        data: {
-                            rawAnalysisJson: JSON.stringify({
-                                ...baseRawAnalysisMeta,
-                                resultArtifactExtraction: resultArtifactExtractionRawAnalysis,
-                                resultActualOutput,
-                                resultEvaluation: resultEvaluationRawAnalysis,
-                                resultEvaluationError: null,
-                            }),
-                        },
-                    });
+                    return;
                 }
+
+                resultEvaluationRetryState = buildResultEvaluationRetryState(attempt, {
+                    retrying: false,
+                    exhausted: false,
+                    now: attemptStartedAt,
+                });
+                await prisma.trajectoryEvalResult.update({
+                    where: { id },
+                    data: {
+                        rawAnalysisJson: JSON.stringify({
+                            ...baseRawAnalysisMeta,
+                            resultArtifactExtraction: resultArtifactExtractionRawAnalysis,
+                            resultActualOutput,
+                            resultEvaluation: null,
+                            resultEvaluationError: null,
+                            resultEvaluationRetry: resultEvaluationRetryState,
+                        }),
+                    },
+                });
+                const resultJudgment = await evaluateTaskCompletionAgainstExpected(
+                    caseEntry.input,
+                    caseEntry.expectedOutput,
+                    resultActualOutput,
+                    precomputedRootCauses,
+                    precomputedRootCauseSource,
+                    traceSummaryForResultEvaluation,
+                    taskCompletionSkillContext,
+                    user,
+                    evalSkillName,
+                    evalSkillVersion,
+                );
+                resultEvaluationRawAnalysis = {
+                    ...(resultJudgment.rawAnalysis || {}),
+                    result_artifact_extraction: {
+                        status: artifactExtraction.rawAnalysis?.fallback ? 'fallback_final_result' : artifactExtraction.status,
+                        confidence: artifactExtraction.confidence,
+                        reason: artifactExtraction.reason,
+                        source_refs: artifactExtraction.sourceRefs,
+                        fallback_source: artifactExtraction.rawAnalysis?.fallback ? 'execution.finalResult' : null,
+                    },
+                };
+                await persistResultJudgment(execution, resolvedTaskId, resultJudgment);
+                resultEvaluationRetryState = buildResultEvaluationRetryState(attempt, {
+                    retrying: false,
+                    exhausted: false,
+                    now: attemptStartedAt,
+                });
+                await prisma.trajectoryEvalResult.update({
+                    where: { id },
+                    data: {
+                        rawAnalysisJson: JSON.stringify({
+                            ...baseRawAnalysisMeta,
+                            resultArtifactExtraction: resultArtifactExtractionRawAnalysis,
+                            resultActualOutput,
+                            resultEvaluation: resultEvaluationRawAnalysis,
+                            resultEvaluationError: null,
+                            resultEvaluationRetry: resultEvaluationRetryState,
+                        }),
+                    },
+                });
+                resultEvaluationError = null;
             })(), PER_RESULT_TIMEOUT_MS, new StagedEvaluationError(
                 'result-timeout',
                 `结果评测超过 ${PER_RESULT_TIMEOUT_MS / 1000}s 未完成`,
             ));
         } catch (e) {
-            console.warn('[trajectory-eval] result-based evaluation failed:', e);
-            resultEvaluationError = `结果评测失败：${(e as Error).message || String(e)}`;
+            console.warn(`[trajectory-eval] result-based evaluation attempt ${attempt}/${MAX_RESULT_EVALUATION_ATTEMPTS} failed:`, e);
+            const detail = (e as Error).message || String(e);
+            const canRetryLater = attempt < MAX_RESULT_EVALUATION_ATTEMPTS && isRetryableResultEvaluationFailure(e);
+
+            if (canRetryLater) {
+                scheduledResultRetryDelayMs = getResultEvaluationRetryDelayMs(attempt);
+                scheduledResultRetryAttemptCount = attempt;
+                resultEvaluationRetryState = buildResultEvaluationRetryState(attempt, {
+                    retrying: true,
+                    exhausted: false,
+                    lastError: detail,
+                    delayMs: scheduledResultRetryDelayMs,
+                    now: attemptStartedAt,
+                });
+                await prisma.trajectoryEvalResult.update({
+                    where: { id },
+                    data: {
+                        status: 'running',
+                        errorMessage: null,
+                        rawAnalysisJson: JSON.stringify({
+                            ...baseRawAnalysisMeta,
+                            resultArtifactExtraction: resultArtifactExtractionRawAnalysis,
+                            resultActualOutput,
+                            resultEvaluation: null,
+                            resultEvaluationError: null,
+                            resultEvaluationRetry: resultEvaluationRetryState,
+                        }),
+                    },
+                });
+            } else {
+                resultEvaluationError = `结果评测失败：${detail}`;
+                resultEvaluationRetryState = buildResultEvaluationRetryState(attempt, {
+                    retrying: false,
+                    exhausted: true,
+                    lastError: detail,
+                    now: attemptStartedAt,
+                });
+                await prisma.trajectoryEvalResult.update({
+                    where: { id },
+                    data: {
+                        rawAnalysisJson: JSON.stringify({
+                            ...baseRawAnalysisMeta,
+                            resultArtifactExtraction: resultArtifactExtractionRawAnalysis,
+                            resultActualOutput,
+                            resultEvaluation: resultEvaluationRawAnalysis,
+                            resultEvaluationError,
+                            resultEvaluationRetry: resultEvaluationRetryState,
+                        }),
+                    },
+                });
+            }
         }
+    }
+
+    if (scheduledResultRetryDelayMs != null) {
+        scheduleResultEvaluationRetry(user, id, scheduledResultRetryDelayMs, scheduledResultRetryAttemptCount);
+        return;
     }
 
     // ---- 1.5 自建评估器（custom-* IDs）----
@@ -1441,10 +1788,19 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
         const customAvg = customEvaluatorScores.length > 0
             ? customEvaluatorScores.reduce((a, b) => a + b, 0) / customEvaluatorScores.length
             : null;
+        // resultEvaluationRawAnalysis 仅在上方 async 闭包内赋值, TS 控制流到这里把它收窄成 null,
+        // 直接 ?.evaluatorSessionId 会让访问类型变 never → next build 报错。先按声明类型取值再判类型。
+        const resultEvalSid = (resultEvaluationRawAnalysis as Record<string, unknown> | null)?.evaluatorSessionId;
+        const resultEvaluatorSessionId = typeof resultEvalSid === 'string' ? resultEvalSid.trim() : '';
+        const resultEvaluationMissing = shouldRunResultEvaluation && (!resultEvaluationRawAnalysis || !resultEvaluatorSessionId);
+        const finalStatus = resultEvaluationMissing ? 'failed' : 'done';
+        const finalErrorMessage = resultEvaluationMissing
+            ? (resultEvaluationError || '结果评测未产出有效结果或评测 session')
+            : null;
         await prisma.trajectoryEvalResult.update({
             where: { id },
             data: {
-                status: 'done',
+                status: finalStatus,
                 trajectoryScore: null,
                 dimensionScoresJson: null,
                 deviationStepsJson: JSON.stringify([]),
@@ -1456,14 +1812,17 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
                     resultActualOutput,
                     resultEvaluation: resultEvaluationRawAnalysis,
                     resultEvaluationError,
+                    resultEvaluationRetry: resultEvaluationRetryState,
                     customEvaluations: customEvaluationsRawAnalysis,
                     customVariableNeeds: Array.from(requestedCustomVars),
                     customEvaluationScore: customAvg,
                 }),
-                errorMessage: null,
+                errorMessage: finalErrorMessage,
             },
         });
-        await derivePointsAfterDone(user, id, execution);
+        if (finalStatus === 'done') {
+            await derivePointsAfterDone(user, id, execution, interactions);
+        }
         return;
     }
 
@@ -1510,6 +1869,7 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
             resultActualOutput,
             resultEvaluation: resultEvaluationRawAnalysis,
             resultEvaluationError,
+            resultEvaluationRetry: resultEvaluationRetryState,
             customEvaluations: customEvaluationsRawAnalysis,
             customVariableNeeds: Array.from(requestedCustomVars),
             customEvaluationScore: customEvaluatorScores.length > 0
@@ -1533,7 +1893,7 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
         throw new StagedEvaluationError('persist', `写入评测结果失败: ${(e as Error).message}`, e);
     }
 
-    await derivePointsAfterDone(user, id, execution);
+    await derivePointsAfterDone(user, id, execution, interactions);
  } finally {
     // 无论成功 / 失败 / throw,都从 activeTasks 摘掉这条注册,让 isActive() 返 false,
     // 前端轮询拿到 is_evaluating=false → trace 状态更新为最新分数 / 失败信息。
@@ -1554,6 +1914,7 @@ async function derivePointsAfterDone(
     user: string,
     rowId: string,
     execution: { invokedSkills?: string | null; skill?: string | null; skills?: string | null; skillVersion?: number | null } | null,
+    interactions?: unknown,
 ): Promise<void> {
     try {
         const row = await prisma.trajectoryEvalResult.findUnique({
@@ -1569,7 +1930,7 @@ async function derivePointsAfterDone(
             },
         });
         if (!row) return;
-        const skills = getPrimaryExecutionSkillTargets(execution).map(t => ({ name: t.skill, version: t.version }));
+        const skills = getPrimaryExecutionSkillTargets(execution, interactions).map(t => ({ name: t.skill, version: t.version }));
         if (skills.length === 0) return;
         const written = await deriveAndPersistOptPoints({
             user,

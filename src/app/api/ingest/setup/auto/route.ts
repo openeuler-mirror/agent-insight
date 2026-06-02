@@ -49,19 +49,19 @@ export async function GET(request: Request) {
 function generateBashScript(baseUrl: string, hostParam: string, apiKey: string): NextResponse {
     const script = `#!/bin/bash
 # =============================================================================
-# Skill-insight Auto Setup (Non-Interactive)
+# Agent-insight Auto Setup (Non-Interactive)
 # =============================================================================
 
 SKILL_INSIGHT_HOST="${hostParam}"
 SKILL_INSIGHT_BASE_URL="${baseUrl}"
 SKILL_INSIGHT_API_KEY="${apiKey}"
 
-echo "🚀 Fetching Skill-insight telemetry components from $SKILL_INSIGHT_BASE_URL..."
+echo "🚀 Fetching Agent-insight telemetry components from $SKILL_INSIGHT_BASE_URL..."
 
 # 0. Check Node.js version
 if ! command -v node &> /dev/null; then
     echo "❌ Error: Node.js is not installed."
-    echo "   Skill-insight requires Node.js 20 or higher."
+    echo "   Agent-insight requires Node.js 20 or higher."
     echo "   Please install Node.js: https://nodejs.org/"
     exit 1
 fi
@@ -70,15 +70,15 @@ NODE_VERSION=$(node -v 2>/dev/null | sed "s/v//")
 NODE_MAJOR=$(echo "$NODE_VERSION" | cut -d. -f1)
 if [ "$NODE_MAJOR" -lt 20 ]; then
     echo "❌ Error: Node.js version $NODE_VERSION is not supported."
-    echo "   Skill-insight requires Node.js 20 or higher."
+    echo "   Agent-insight requires Node.js 20 or higher."
     echo "   Please upgrade your Node.js version: https://nodejs.org/"
     exit 1
 fi
 echo "✅ Node.js version: $NODE_VERSION"
 
 # 1. Setup Directories
-mkdir -p "$HOME/.skill-insight"
-mkdir -p "$HOME/.skill-insight/logs"
+mkdir -p "$HOME/.agent-insight"
+mkdir -p "$HOME/.agent-insight/logs"
 mkdir -p "$HOME/.opencode/plugins"
 mkdir -p "$HOME/.opencode/skills"
 mkdir -p "$HOME/.claude/projects"
@@ -89,11 +89,11 @@ echo "📂 Created necessary directories"
 # 2. Interactive Framework Selection with inquirer
 echo ""
 
-SELECTOR_SCRIPT="$HOME/.skill-insight/framework_selector.mjs"
-SELECTOR_RESULT="$HOME/.skill-insight/.selector_result"
+SELECTOR_SCRIPT="$HOME/.agent-insight/framework_selector.mjs"
+SELECTOR_RESULT="$HOME/.agent-insight/.selector_result"
 
 # Install inquirer and tsx if not already installed
-cd "$HOME/.skill-insight"
+cd "$HOME/.agent-insight"
 if [ ! -d "node_modules/inquirer" ] || [ ! -d "node_modules/tsx" ]; then
     echo "📦 Installing dependencies for interactive selection..."
     npm install inquirer tsx --save 2>/dev/null
@@ -113,7 +113,7 @@ async function select() {
     console.log('');
     console.log('\\x1b[36m%s\\x1b[0m', '╔══════════════════════════════════════════════════════════╗');
     console.log('\\x1b[36m%s\\x1b[0m', '║                                                          ║');
-    console.log('\\x1b[1m\\x1b[36m%s\\x1b[0m', '║                 ✨ Skill-insight ✨                      ║');
+    console.log('\\x1b[1m\\x1b[36m%s\\x1b[0m', '║                 ✨ Agent-insight ✨                      ║');
     console.log('\\x1b[36m%s\\x1b[0m', '║                                                          ║');
     console.log('\\x1b[36m%s\\x1b[0m', '╚══════════════════════════════════════════════════════════╝');
     console.log('');
@@ -148,7 +148,7 @@ async function select() {
     }
 
     // Write result to file for bash to read
-    const resultFile = process.env.SELECTOR_RESULT_FILE || process.env.HOME + '/.skill-insight/.selector_result';
+    const resultFile = process.env.SELECTOR_RESULT_FILE || process.env.HOME + '/.agent-insight/.selector_result';
     fs.writeFileSync(resultFile, selected.join(','));
 }
 
@@ -161,7 +161,7 @@ SELECTOR_EOF
 # Run the selector interactively from /dev/tty
 # Export the result file path so the selector knows where to write
 export SELECTOR_RESULT_FILE="$SELECTOR_RESULT"
-cd "$HOME/.skill-insight" && ./node_modules/.bin/tsx "$SELECTOR_SCRIPT" < /dev/tty
+cd "$HOME/.agent-insight" && ./node_modules/.bin/tsx "$SELECTOR_SCRIPT" < /dev/tty
 
 # Read the selection result from file
 if [ -f "$SELECTOR_RESULT" ]; then
@@ -203,7 +203,7 @@ if [ "$INSTALL_OPENCODE" = "true" ]; then
     curl -sSf "$SKILL_INSIGHT_BASE_URL/api/setup/opencode" -o "$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.ts"
     cp "$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.ts" "$HOME/.opencode/plugins/Witty-Skill-Insight.ts" 2>/dev/null || true
     echo "⏬ Downloading OpenCode Uploader..."
-    curl -sSf "$SKILL_INSIGHT_BASE_URL/api/setup/opencode-uploader" -o "$HOME/.skill-insight/opencode_uploader_client.js"
+    curl -sSf "$SKILL_INSIGHT_BASE_URL/api/setup/opencode-uploader" -o "$HOME/.agent-insight/opencode_uploader_client.js"
     echo "⏬ Installing OpenCode commands..."
     mkdir -p "$OPENCODE_CONFIG_DIR/commands"
     curl -sSf "$SKILL_INSIGHT_BASE_URL/api/setup/opencode-commands/si-optimizer" -o "$OPENCODE_CONFIG_DIR/commands/si-optimizer.md"
@@ -243,11 +243,11 @@ fi
 
 if [ "$INSTALL_OPENCLAW" = "true" ]; then
     echo "⏬ Downloading OpenClaw Watcher..."
-    curl -sSf "$SKILL_INSIGHT_BASE_URL/api/setup/openclaw-watcher" -o "$HOME/.skill-insight/openclaw_watcher_client.ts"
+    curl -sSf "$SKILL_INSIGHT_BASE_URL/api/setup/openclaw-watcher" -o "$HOME/.agent-insight/openclaw_watcher_client.ts"
 fi
 
-# 4. Configure ~/.skill-insight/.env (Auto mode - no interaction)
-SKILL_INSIGHT_CONFIG_FILE="$HOME/.skill-insight/.env"
+# 4. Configure ~/.agent-insight/.env (Auto mode - no interaction)
+SKILL_INSIGHT_CONFIG_FILE="$HOME/.agent-insight/.env"
 FINAL_SHOW_TASK_STATS="true"
 if [ -f "$SKILL_INSIGHT_CONFIG_FILE" ]; then
   EXISTING_SHOW_TASK_STATS=$(grep '^SKILL_INSIGHT_SHOW_TASK_STATS=' "$SKILL_INSIGHT_CONFIG_FILE" | head -n 1 | cut -d'=' -f2-)
@@ -268,9 +268,9 @@ echo "SKILL_INSIGHT_API_KEY=$SKILL_INSIGHT_API_KEY" >> "$SKILL_INSIGHT_CONFIG_FI
 echo "SKILL_INSIGHT_SHOW_TASK_STATS=$FINAL_SHOW_TASK_STATS" >> "$SKILL_INSIGHT_CONFIG_FILE"
 echo "SKILL_INSIGHT_RETENTION_DAYS=10" >> "$SKILL_INSIGHT_CONFIG_FILE"
 echo "SKILL_INSIGHT_OPENCODE_OTEL_ENABLE=true" >> "$SKILL_INSIGHT_CONFIG_FILE"
-echo "SKILL_INSIGHT_OPENCODE_SPOOL_DIR=$HOME/.skill-insight/otel_data/opencode" >> "$SKILL_INSIGHT_CONFIG_FILE"
-echo "SKILL_INSIGHT_OPENCODE_UPLOADER=$HOME/.skill-insight/opencode_uploader_client.js" >> "$SKILL_INSIGHT_CONFIG_FILE"
-echo "SKILL_INSIGHT_CLAUDE_OTEL_SPOOL_DIR=$HOME/.skill-insight/otel_data/claude" >> "$SKILL_INSIGHT_CONFIG_FILE"
+echo "SKILL_INSIGHT_OPENCODE_SPOOL_DIR=$HOME/.agent-insight/otel_data/opencode" >> "$SKILL_INSIGHT_CONFIG_FILE"
+echo "SKILL_INSIGHT_OPENCODE_UPLOADER=$HOME/.agent-insight/opencode_uploader_client.js" >> "$SKILL_INSIGHT_CONFIG_FILE"
+echo "SKILL_INSIGHT_CLAUDE_OTEL_SPOOL_DIR=$HOME/.agent-insight/otel_data/claude" >> "$SKILL_INSIGHT_CONFIG_FILE"
 echo "SKILL_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES=1" >> "$SKILL_INSIGHT_CONFIG_FILE"
 echo "SKILL_INSIGHT_MAX_TOOL_IO=4000" >> "$SKILL_INSIGHT_CONFIG_FILE"
 echo "SKILL_INSIGHT_MAX_EVENT_STRING=20000" >> "$SKILL_INSIGHT_CONFIG_FILE"
@@ -284,9 +284,9 @@ if [ "$INSTALL_OPENCLAW" = "true" ]; then
     echo ""
     echo "📦 Installing watcher dependencies..."
     if command -v npm &> /dev/null; then
-      cd "$HOME/.skill-insight"
+      cd "$HOME/.agent-insight"
       if [ ! -f "package.json" ]; then
-        echo '{"name": "skill-insight-watcher", "version": "1.0.0", "type": "module", "dependencies": {}}' > package.json
+        echo '{"name": "agent-insight-watcher", "version": "1.0.0", "type": "module", "dependencies": {}}' > package.json
       fi
       npm install chokidar --save 2>/dev/null
       echo "✅ Dependencies installed"
@@ -297,14 +297,14 @@ fi
 
 # 6.5 Configure Claude Code official OTel logs
 if [ "$INSTALL_CLAUDE" = "true" ]; then
-    cat > "$HOME/.skill-insight/claude_otel_env.sh" << 'CLAUDE_OTEL_EOF'
-# Skill-Insight Claude Code OpenTelemetry integration
+    cat > "$HOME/.agent-insight/claude_otel_env.sh" << 'CLAUDE_OTEL_EOF'
+# Agent-Insight Claude Code OpenTelemetry integration
 unalias claude 2>/dev/null || true
 
 _skill_insight_claude_load_env() {
-  if [ -f "$HOME/.skill-insight/.env" ]; then
+  if [ -f "$HOME/.agent-insight/.env" ]; then
     set -a
-    . "$HOME/.skill-insight/.env"
+    . "$HOME/.agent-insight/.env"
     set +a
   fi
 }
@@ -331,13 +331,13 @@ CLAUDE_OTEL_EOF
     [ -f "$HOME/.bashrc" ] && SHELL_RC="$HOME/.bashrc"
     if [ -f "$SHELL_RC" ] && ! grep -q "claude_otel_env.sh" "$SHELL_RC"; then
         echo "" >> "$SHELL_RC"
-        echo "# Skill-Insight Claude Code OTel" >> "$SHELL_RC"
-        echo "source \\"$HOME/.skill-insight/claude_otel_env.sh\\"" >> "$SHELL_RC"
+        echo "# Agent-Insight Claude Code OTel" >> "$SHELL_RC"
+        echo "source \\"$HOME/.agent-insight/claude_otel_env.sh\\"" >> "$SHELL_RC"
     fi
-    echo "✅ Claude Code OTel env installed at $HOME/.skill-insight/claude_otel_env.sh"
-    echo "   Restart your terminal or run: source $HOME/.skill-insight/claude_otel_env.sh"
+    echo "✅ Claude Code OTel env installed at $HOME/.agent-insight/claude_otel_env.sh"
+    echo "   Restart your terminal or run: source $HOME/.agent-insight/claude_otel_env.sh"
     pkill -f "claude_watcher_client.ts" 2>/dev/null || true
-    rm -f "$HOME/.skill-insight/claude_watcher_client.ts" "$HOME/.skill-insight/start_claude_watcher.sh" "$HOME/.skill-insight/stop_claude_watcher.sh" "$HOME/.skill-insight/claude_watcher.pid"
+    rm -f "$HOME/.agent-insight/claude_watcher_client.ts" "$HOME/.agent-insight/start_claude_watcher.sh" "$HOME/.agent-insight/stop_claude_watcher.sh" "$HOME/.agent-insight/claude_watcher.pid"
     echo "🧹 Removed legacy Claude session-file watcher if it was installed."
 fi
 
@@ -353,57 +353,57 @@ if [ "$NEEDS_WATCHER_SCRIPTS" = "true" ]; then
 
     # OpenClaw Watcher Start Script
     if [ "$INSTALL_OPENCLAW" = "true" ]; then
-        cat > "$HOME/.skill-insight/start_openclaw_watcher.sh" << 'WATCHER_EOF'
+        cat > "$HOME/.agent-insight/start_openclaw_watcher.sh" << 'WATCHER_EOF'
 #!/bin/bash
 # Stop existing watcher if running
 pkill -f "openclaw_watcher_client.ts" 2>/dev/null
 
 # Start watcher in background
-cd "$HOME/.skill-insight" && nohup npx -y tsx "$HOME/.skill-insight/openclaw_watcher_client.ts" > "$HOME/.skill-insight/logs/openclaw_watcher.log" 2>&1 &
-echo $! > "$HOME/.skill-insight/openclaw_watcher.pid"
-echo "OpenClaw watcher started with PID $(cat $HOME/.skill-insight/openclaw_watcher.pid)"
+cd "$HOME/.agent-insight" && nohup npx -y tsx "$HOME/.agent-insight/openclaw_watcher_client.ts" > "$HOME/.agent-insight/logs/openclaw_watcher.log" 2>&1 &
+echo $! > "$HOME/.agent-insight/openclaw_watcher.pid"
+echo "OpenClaw watcher started with PID $(cat $HOME/.agent-insight/openclaw_watcher.pid)"
 WATCHER_EOF
-        chmod +x "$HOME/.skill-insight/start_openclaw_watcher.sh"
+        chmod +x "$HOME/.agent-insight/start_openclaw_watcher.sh"
         echo "✅ OpenClaw watcher start script created"
 
         # OpenClaw Watcher Stop Script
-        cat > "$HOME/.skill-insight/stop_openclaw_watcher.sh" << 'STOP_OPENCLAW_EOF'
+        cat > "$HOME/.agent-insight/stop_openclaw_watcher.sh" << 'STOP_OPENCLAW_EOF'
 #!/bin/bash
 echo "Stopping OpenClaw watcher..."
 pkill -f "openclaw_watcher_client.ts" 2>/dev/null
-rm -f "$HOME/.skill-insight/openclaw_watcher.pid"
+rm -f "$HOME/.agent-insight/openclaw_watcher.pid"
 echo "OpenClaw watcher stopped"
 STOP_OPENCLAW_EOF
-        chmod +x "$HOME/.skill-insight/stop_openclaw_watcher.sh"
+        chmod +x "$HOME/.agent-insight/stop_openclaw_watcher.sh"
         echo "✅ OpenClaw watcher stop script created"
     fi
 
     # Combined Start Script - Dynamic generation
-    cat > "$HOME/.skill-insight/start_watchers.sh" << 'WATCHER_HEADER'
+    cat > "$HOME/.agent-insight/start_watchers.sh" << 'WATCHER_HEADER'
 #!/bin/bash
-echo "Starting Skill-Insight watchers..."
+echo "Starting Agent-Insight watchers..."
 WATCHER_HEADER
 
     if [ "$INSTALL_OPENCLAW" = "true" ]; then
-        echo '"$HOME/.skill-insight/start_openclaw_watcher.sh"' >> "$HOME/.skill-insight/start_watchers.sh"
+        echo '"$HOME/.agent-insight/start_openclaw_watcher.sh"' >> "$HOME/.agent-insight/start_watchers.sh"
     fi
 
-    echo 'echo "All watchers started!"' >> "$HOME/.skill-insight/start_watchers.sh"
-    chmod +x "$HOME/.skill-insight/start_watchers.sh"
+    echo 'echo "All watchers started!"' >> "$HOME/.agent-insight/start_watchers.sh"
+    chmod +x "$HOME/.agent-insight/start_watchers.sh"
     echo "✅ Combined start script created"
 
     # Combined Stop Script - Dynamic generation
-    cat > "$HOME/.skill-insight/stop_watchers.sh" << 'STOP_HEADER'
+    cat > "$HOME/.agent-insight/stop_watchers.sh" << 'STOP_HEADER'
 #!/bin/bash
-echo "Stopping Skill-Insight watchers..."
+echo "Stopping Agent-Insight watchers..."
 STOP_HEADER
 
     if [ "$INSTALL_OPENCLAW" = "true" ]; then
-        echo '"$HOME/.skill-insight/stop_openclaw_watcher.sh"' >> "$HOME/.skill-insight/stop_watchers.sh"
+        echo '"$HOME/.agent-insight/stop_openclaw_watcher.sh"' >> "$HOME/.agent-insight/stop_watchers.sh"
     fi
 
-    echo 'echo "All watchers stopped!"' >> "$HOME/.skill-insight/stop_watchers.sh"
-    chmod +x "$HOME/.skill-insight/stop_watchers.sh"
+    echo 'echo "All watchers stopped!"' >> "$HOME/.agent-insight/stop_watchers.sh"
+    chmod +x "$HOME/.agent-insight/stop_watchers.sh"
     echo "✅ Combined stop script created"
 fi
 
@@ -412,7 +412,7 @@ if [ "$NEEDS_WATCHER_SCRIPTS" = "true" ]; then
     echo ""
     echo "🚀 Starting telemetry watchers..."
     if command -v npx &> /dev/null; then
-        "$HOME/.skill-insight/start_watchers.sh"
+        "$HOME/.agent-insight/start_watchers.sh"
     else
         echo "⚠️  Node.js (npx) not found. Skipping watcher startup."
     fi
@@ -420,7 +420,7 @@ fi
 
 # 10. Final Summary
 echo ""
-echo "🌟 Skill-Insight Telemetry: READY"
+echo "🌟 Agent-Insight Telemetry: READY"
 echo "------------------------------------------------"
 echo "Installed Components:"
 if [ "$INSTALL_OPENCODE" = "true" ]; then
@@ -428,22 +428,22 @@ if [ "$INSTALL_OPENCODE" = "true" ]; then
     echo "  ✅ OpenCode Command: ~/.config/opencode/commands/si-optimizer.md"
 fi
 if [ "$INSTALL_CLAUDE" = "true" ]; then
-    echo "  ✅ Claude Code OTel: ~/.skill-insight/claude_otel_env.sh"
+    echo "  ✅ Claude Code OTel: ~/.agent-insight/claude_otel_env.sh"
 fi
 if [ "$INSTALL_OPENCLAW" = "true" ]; then
-    echo "  ✅ OpenClaw Watcher: ~/.skill-insight/openclaw_watcher_client.ts"
+    echo "  ✅ OpenClaw Watcher: ~/.agent-insight/openclaw_watcher_client.ts"
 fi
 
 if [ "$NEEDS_WATCHER_SCRIPTS" = "true" ]; then
     echo ""
     echo "Watcher Management:"
-    echo "  Start all:    ~/.skill-insight/start_watchers.sh"
-    echo "  Stop all:     ~/.skill-insight/stop_watchers.sh"
+    echo "  Start all:    ~/.agent-insight/start_watchers.sh"
+    echo "  Stop all:     ~/.agent-insight/stop_watchers.sh"
     if [ "$INSTALL_OPENCLAW" = "true" ]; then
-        echo "  Start OpenClaw: ~/.skill-insight/start_openclaw_watcher.sh"
-        echo "  Stop OpenClaw:  ~/.skill-insight/stop_openclaw_watcher.sh"
+        echo "  Start OpenClaw: ~/.agent-insight/start_openclaw_watcher.sh"
+        echo "  Stop OpenClaw:  ~/.agent-insight/stop_openclaw_watcher.sh"
     fi
-    echo "  Logs:         ~/.skill-insight/logs/"
+    echo "  Logs:         ~/.agent-insight/logs/"
 fi
 
 echo ""

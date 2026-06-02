@@ -61,6 +61,7 @@ export async function POST(req: NextRequest) {
           category: typeof it.category === 'string' ? it.category : undefined,
           summary: String(it.summary),
           evidence: typeof it.evidence === 'string' ? it.evidence : undefined,
+          improvementSuggestion: typeof it.improvementSuggestion === 'string' ? it.improvementSuggestion : undefined,
         }))
     : [];
 

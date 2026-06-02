@@ -5,11 +5,9 @@
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { AppTopBar } from '@/components/shell/AppTopBar';
-import { SkillAnalysisHeader } from './_components/SkillAnalysisHeader';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
-import { isInternalSystemAgentTrace } from '@/lib/system-agent-names';
-import { parseSkillAttributionFromRow } from '@/lib/engine/evaluation/skill-attribution';
+import { isInternalSystemAgentTrace, shouldHideFromCaseAnalysis, classifyTraceSource } from '@/lib/system-agent-names';
 import {
     buildFallbackDiagnosis,
     type DiagnosisDimensionKey,
@@ -18,9 +16,15 @@ import {
     type SkillDiagnosisSnapshot,
 } from '@/lib/skill-analysis/diagnosis';
 import { calculateAbScoring, type AbScoringResult } from '@/lib/skill-analysis/ab-scoring';
+import { NewEvaluationBatchDialog, type NewBatchCreated } from '@/components/eval/NewEvaluationBatchDialog';
 import { formatPValueLabel, welchTTestPValue } from '@/lib/skill-analysis/ab-significance';
 import { BatchEvaluation } from './_batch/page';
 import { GrayscaleEvaluation } from './grayscale/page';
+import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
+import { ConfigMultiSelect } from '@/components/skills/ConfigMultiSelect';
+import { ExecutionRecordsTable, type EvalRecordRow } from '@/components/eval/ExecutionRecordsTable';
+import { EvalTaskPicker } from '@/components/eval/EvalTaskPicker';
+import { useBatchEvalResults } from '@/components/eval/useBatchEvalResults';
 import {
     EvaluationContent,
     SectionShell,
@@ -99,7 +103,9 @@ interface TraceRecord {
      * 用例分析列表用这个字段过滤掉系统内部 trace（详见 isInternalSystemAgentTrace）。 */
     agent?: string | null;
     agentName?: string | null;
-    trajectoryScore?: number;
+    trajectoryScore?: number | null;
+    /** 方案A: 后端聚合层算出的统一轨迹分(0-1)，来源最近一次 TrajectoryEvalResult.trajectoryScore。 */
+    trajectory_score?: number | null;
     /** 结果分析（任务完成度评估器）评分，0-1，来源 Execution.answerScore */
     answer_score?: number | null;
     answerScore?: number | null;
@@ -508,19 +514,6 @@ interface FlowStep {
     type?: 'action' | 'decision' | 'output';
 }
 
-interface ParsedFlowPayload {
-    steps?: FlowStep[];
-}
-
-interface ExtractedTraceStep {
-    uiStepIndex?: number;
-    name?: string;
-    description?: string;
-    dialogStartIndex?: number;
-    dialogEndIndex?: number;
-    type?: 'action' | 'decision' | 'output';
-}
-
 interface AlignmentActualStep {
     index: number;
     action: string;
@@ -578,23 +571,6 @@ interface ExecutionMatchPayload {
     alignment?: TraceSkillAlignment;
 }
 
-interface MatchData {
-    analyzed: boolean;
-    mode?: 'compare' | 'dynamic';
-    matchJson?: string;
-    staticMermaid?: string;
-    dynamicMermaid?: string;
-    flowJson?: string;
-    extractedSteps?: string;
-    analysisText?: string;
-    interactionCount?: number;
-    currentInteractionCount?: number;
-    hasUpdate?: boolean;
-    matchedAt?: string;
-    usedSkillName?: string;
-    usedSkillVersion?: number;
-}
-
 /* /api/eval/trajectory/results 返回的单行结构（精简）
  *
  * 注意：list 端点不返回原始 JSON 字符串字段；它把 rawAnalysisJson 解析后整体放在
@@ -615,26 +591,6 @@ interface TrajectoryEvalRow {
     reasonText?: string | null;
     createdAt?: string;
     updatedAt?: string;
-}
-
-/* 评估器 4 类 finding 的统一展示结构 */
-interface EvaluatorFinding {
-    kind: 'deviation' | 'key_point' | 'tool_choice' | 'result_issue';
-    title: string;           // 单行标题
-    description?: string;    // 详细描述
-    severity?: 'high' | 'medium' | 'low';
-    stepIndex?: number;
-    isSkillAttributable?: boolean;
-    improvementSuggestion?: string;
-    // 仅 key_point 用：是否被覆盖
-    covered?: boolean;
-}
-
-/* 符合项（per-trace 视图里的"做对了什么"） */
-interface MatchingItem {
-    kind: 'key_point_covered' | 'step_matched';
-    title: string;           // 单行标题
-    evidence?: string;       // 命中证据（实际执行片段 / explanation）
 }
 
 const LOOKBACK_DAYS = 30;
@@ -692,10 +648,141 @@ function SkillAnalysisPage() {
     const [selectedTraceId, setSelectedTraceId] = useState(searchParams.get('taskId') || '');
     const [smartRunBusy, setSmartRunBusy] = useState(false);
 
+    // 评测任务关联 (trace 模式专用 —— dataset 模式由 BatchEvaluation 自己维护)。
+    // 持久化用 localStorage 按 (user, skillId, version) 维度 key, 因为 SkillAnalysisPage 没有
+    // 单独的 task 实体承载这一关联 (BatchEvalTask 只跟 dataset 模式相关)。
+    // 跨设备不同步是 known limitation, 后续如果接入跨设备 task 表可以迁移。
+    const [newBatchDialogOpen, setNewBatchDialogOpen] = useState(false);
+    const [traceEvaluationBatchId, setTraceEvaluationBatchId] = useState('');
+    const [traceEvaluationBatchTitle, setTraceEvaluationBatchTitle] = useState('');
+    const [traceEvaluationBatchEvaluators, setTraceEvaluationBatchEvaluators] = useState<string[]>([]);
+
+    // 用例分析 AB 式配置区: 共享的「数据集多选」+「评估器多选」。
+    // 数据集作为评测参考集 (后端按 datasetIds 收窄 trace↔case 匹配)，评估器多选决定开始评测时调用哪些评估器。
+    // Phase 1 仅 trace 模式消费这套选择; dataset 模式后续并入。
+    const [caseDatasets, setCaseDatasets] = useState<Array<{ id: string; name: string; cases?: unknown[] }>>([]);
+    const [caseUserEvaluators, setCaseUserEvaluators] = useState<Array<{ id: string; name: string }>>([]);
+    const [caseDatasetIds, setCaseDatasetIds] = useState<string[]>([]);
+    const [caseEvaluatorIds, setCaseEvaluatorIds] = useState<string[]>(
+        () => presetEvaluators.filter(e => e.status === 'ready').map(e => e.id),
+    );
+    useEffect(() => {
+        if (!user) { setCaseDatasets([]); setCaseUserEvaluators([]); return; }
+        Promise.all([
+            apiFetch(`/api/agent-datasets?user=${encodeURIComponent(user)}`).then(r => r.json()).catch(() => []),
+            apiFetch(`/api/user-evaluators?user=${encodeURIComponent(user)}`).then(r => r.json()).catch(() => []),
+        ]).then(([ds, ev]) => {
+            if (Array.isArray(ds)) setCaseDatasets(ds.map((d: any) => ({ id: d.id, name: d.name, cases: d.cases })));
+            if (Array.isArray(ev)) setCaseUserEvaluators(ev.map((e: any) => ({ id: e.id, name: e.name })));
+        }).catch(() => {});
+    }, [user]);
+
+    // 评测任务(批次)列表 —— 供配置区"选历史评测任务"。trace / dataset 共用同一份。
+    const [caseEvalTasks, setCaseEvalTasks] = useState<Array<{ runId: string; taskTitle?: string; traceCount?: number; doneCount?: number; runningCount?: number; createdAt?: string; skillName?: string; skillVersion?: number | null }>>([]);
+    const reloadEvalTasks = useCallback(async () => {
+        if (!user) { setCaseEvalTasks([]); return; }
+        try {
+            const res = await apiFetch(`/api/eval/trajectory/runs?user=${encodeURIComponent(user)}&limit=50`);
+            const data = await res.json();
+            if (Array.isArray(data?.runs)) {
+                setCaseEvalTasks(data.runs.map((r: any) => ({
+                    runId: r.runId, taskTitle: r.taskTitle, traceCount: r.traceCount,
+                    doneCount: r.doneCount, runningCount: r.runningCount, createdAt: r.createdAt,
+                    skillName: r.skillName, skillVersion: r.skillVersion,
+                })));
+            }
+        } catch {/* 列表加载失败不阻塞主流程 */}
+    }, [user]);
+    useEffect(() => { reloadEvalTasks(); }, [reloadEvalTasks]);
+
+    // 持久化「数据集 + 评估器」选择 (按 user+skill+版本), 刷新页面不丢。
+    const caseConfigStorageKey = useMemo(() => {
+        if (!user || !selectedSkillId) return '';
+        return `skill-eval:case-config:${user}:${selectedSkillId}:v${selectedVersion ?? 'all'}`;
+    }, [user, selectedSkillId, selectedVersion]);
+    // 恢复 (只读): 切 skill/版本 或刷新时从 localStorage 取回上次选择。
+    useEffect(() => {
+        if (!caseConfigStorageKey) return;
+        try {
+            const raw = localStorage.getItem(caseConfigStorageKey);
+            if (!raw) return;
+            const parsed = JSON.parse(raw) as { datasetIds?: string[]; evaluatorIds?: string[] };
+            if (Array.isArray(parsed?.datasetIds)) setCaseDatasetIds(parsed.datasetIds);
+            if (Array.isArray(parsed?.evaluatorIds) && parsed.evaluatorIds.length > 0) setCaseEvaluatorIds(parsed.evaluatorIds);
+        } catch {/* localStorage 异常忽略 */}
+    }, [caseConfigStorageKey]);
+    // 保存只在用户改动时触发 (走 handler), 避免挂载时用初始空值覆盖已存的选择。
+    const handleCaseDatasetIdsChange = useCallback((ids: string[]) => {
+        setCaseDatasetIds(ids);
+        if (caseConfigStorageKey) {
+            try { localStorage.setItem(caseConfigStorageKey, JSON.stringify({ datasetIds: ids, evaluatorIds: caseEvaluatorIds })); } catch {/* ignore */}
+        }
+    }, [caseConfigStorageKey, caseEvaluatorIds]);
+    const handleCaseEvaluatorIdsChange = useCallback((ids: string[]) => {
+        setCaseEvaluatorIds(ids);
+        if (caseConfigStorageKey) {
+            try { localStorage.setItem(caseConfigStorageKey, JSON.stringify({ datasetIds: caseDatasetIds, evaluatorIds: ids })); } catch {/* ignore */}
+        }
+    }, [caseConfigStorageKey, caseDatasetIds]);
+
+    const traceEvalBatchStorageKey = useMemo(() => {
+        if (!user || !selectedSkillId) return '';
+        return `skill-eval:trace-eval-batch:${user}:${selectedSkillId}:v${selectedVersion ?? 'all'}`;
+    }, [user, selectedSkillId, selectedVersion]);
+    // 初始化: 进入 / 切换 skill+version 时从 localStorage 恢复关联
+    useEffect(() => {
+        if (!traceEvalBatchStorageKey) {
+            setTraceEvaluationBatchId('');
+            setTraceEvaluationBatchTitle('');
+            setTraceEvaluationBatchEvaluators([]);
+            return;
+        }
+        try {
+            const raw = localStorage.getItem(traceEvalBatchStorageKey);
+            if (!raw) {
+                setTraceEvaluationBatchId('');
+                setTraceEvaluationBatchTitle('');
+                setTraceEvaluationBatchEvaluators([]);
+                return;
+            }
+            const parsed = JSON.parse(raw) as { id?: string; title?: string; evaluators?: string[] };
+            setTraceEvaluationBatchId(parsed?.id || '');
+            setTraceEvaluationBatchTitle(parsed?.title || '');
+            setTraceEvaluationBatchEvaluators(Array.isArray(parsed?.evaluators) ? parsed.evaluators : []);
+        } catch {
+            setTraceEvaluationBatchId('');
+            setTraceEvaluationBatchTitle('');
+            setTraceEvaluationBatchEvaluators([]);
+        }
+    }, [traceEvalBatchStorageKey]);
+
     const selectedSkill = useMemo(
         () => skills.find(s => s.id === selectedSkillId) || null,
         [skills, selectedSkillId],
     );
+
+    // 关联评测任务的版本一致性（非破坏式）：若已关联任务(其评测的 trace 属于另一个版本)与当前查看版本
+    // 明确不一致，则在"展示/取数"层把它当作未关联，避免在 v0 看到 v1 任务的数据。
+    // 注意：不清 state、不删 localStorage —— 每个版本的关联仍各自按槽位持久化，切版本不会互相影响
+    //（之前用 effect 删 localStorage 会和"切版本恢复"竞态，误删刚切到的版本里已选好的任务）。
+    const effectiveTraceEvaluationBatchId = useMemo(() => {
+        if (!traceEvaluationBatchId || selectedVersion == null) return traceEvaluationBatchId;
+        const associated = caseEvalTasks.find(t => t.runId === traceEvaluationBatchId);
+        if (associated && typeof associated.skillVersion === 'number' && associated.skillVersion !== selectedVersion) return '';
+        return traceEvaluationBatchId;
+    }, [traceEvaluationBatchId, caseEvalTasks, selectedVersion]);
+
+    // 历史评测任务按当前 skill + 版本过滤：任务的 skill/版本来自其 trace 关联 execution（runs 接口聚合主导值）。
+    // 当前有效关联的任务始终保留；选「全部版本」(selectedVersion==null) 时只按 skill 名筛；任务版本解析不到时不因版本误杀。
+    const caseEvalTasksForSkill = useMemo(() => {
+        const skillName = selectedSkill?.name;
+        if (!skillName) return caseEvalTasks;
+        return caseEvalTasks.filter(t =>
+            t.runId === effectiveTraceEvaluationBatchId
+            || (t.skillName === skillName
+                && (selectedVersion == null || t.skillVersion == null || t.skillVersion === selectedVersion)),
+        );
+    }, [caseEvalTasks, selectedSkill?.name, selectedVersion, effectiveTraceEvaluationBatchId]);
 
     const sortedVersions = useMemo(() => {
         const versions = selectedSkill?.versions || [];
@@ -803,6 +890,11 @@ function SkillAnalysisPage() {
         const params = new URLSearchParams({
             user,
             includeEvaluations: '0',
+            // 性能：跳过 auto-eval readiness 计算。该计算会对每条 trace 加载整段 Session +
+            // 解析 interactions JSON（最多 200 条并发），是 /api/observe/data 的主要耗时来源；
+            // 而用例分析列表只用已落库的分数(answer_score / trajectoryScore / matchJson)，
+            // 既不消费 readiness 字段、也不依赖 auto-watch，跳过后分数能立刻返回。
+            skipAutoEvalReady: '1',
         });
         const retries = options?.retries ?? 0;
         const retryDelayMs = options?.retryDelayMs ?? 800;
@@ -817,10 +909,9 @@ function SkillAnalysisPage() {
             if (!Array.isArray(data)) return [];
             return data
                 .filter((trace: TraceRecord) => traceReferencesSkill(trace, selectedSkill.name, selectedVersion))
-                // 排除系统内部任务: skill-trigger-analyzer / grayscale-* / 各评测器 等。
-                // 这些 trace 是平台自己跑的(触发分析 / A/B / 任务完成度评测), 不是真实用户
-                // 调用产生, 展示在"用例分析"里会误导用户对这个 skill 真实使用情况的判断。
-                .filter((trace: TraceRecord) => !isInternalSystemAgentTrace(trace.agentName || trace.agent))
+                // 排除"跟用例分析语义无关"的系统 agent (平台辅助 + 评测器), 但**保留** A/B 灰度 trace
+                // 让用户能复用 A/B 已跑过的 trace 评测。每行 UI 加来源徽章 (A/B / 用例分析 / 真实) 区分。
+                .filter((trace: TraceRecord) => !shouldHideFromCaseAnalysis(trace.agentName || trace.agent))
                 .slice(0, 200);
         };
         try {
@@ -1005,6 +1096,40 @@ function SkillAnalysisPage() {
      *   - 轨迹分析：N 次 POST /api/observe/executions/{id}/analyze-match 并发扇出
      *   - Promise.allSettled 隔离：任一失败不阻断其它
      */
+    // 「新增评测任务」对话框 onCreated: 设 React state + 写 localStorage 立刻持久化,
+    // 让 trace 模式下"评测任务"关联跨刷新保留。后续 trajectory/run 调用透传 traceEvaluationBatchId
+    // 让评测 append 到同一批次, 不再每次新建。
+    const handleTraceEvalBatchCreated = useCallback((result: NewBatchCreated) => {
+        setNewBatchDialogOpen(false);
+        setTraceEvaluationBatchId(result.evaluatorRunId);
+        setTraceEvaluationBatchTitle(result.taskTitle);
+        setTraceEvaluationBatchEvaluators(result.selectedEvaluators);
+        if (traceEvalBatchStorageKey) {
+            try {
+                localStorage.setItem(traceEvalBatchStorageKey, JSON.stringify({
+                    id: result.evaluatorRunId,
+                    title: result.taskTitle,
+                    evaluators: result.selectedEvaluators,
+                }));
+            } catch {/* localStorage quota 异常时仍以 state 持有, 不阻塞主流程 */}
+        }
+        reloadEvalTasks();
+    }, [traceEvalBatchStorageKey, reloadEvalTasks]);
+
+    // 选一个已有评测任务 (评测执行批次) 关联到当前 trace 分析。
+    const handleSelectTraceEvalBatch = useCallback((opt: { runId: string; taskTitle?: string }) => {
+        setTraceEvaluationBatchId(opt.runId);
+        setTraceEvaluationBatchTitle(opt.taskTitle || '');
+        setTraceEvaluationBatchEvaluators([]);
+        if (traceEvalBatchStorageKey) {
+            try {
+                localStorage.setItem(traceEvalBatchStorageKey, JSON.stringify({
+                    id: opt.runId, title: opt.taskTitle || '', evaluators: [],
+                }));
+            } catch {/* ignore */}
+        }
+    }, [traceEvalBatchStorageKey]);
+
     const runBatchTraceAnalysis = useCallback(async (taskIds: string[]): Promise<{
         resultErrors: string[];                                    // 结果评测整体失败（一次入队全失败）
         trajectoryErrors: Map<string, string>;                     // 每条 trace 各自的 trajectory 失败原因
@@ -1013,22 +1138,38 @@ function SkillAnalysisPage() {
         if (!user || taskIds.length === 0) return empty;
         // resultRun 是一次入队多条，要么整体成功要么整体失败；trajRun 是逐条独立扇出，
         // 每条都可能有自己的失败原因（如 skill 缺 mermaid 那种 per-trace 的前提缺失）。
-        const resultRun = (async () => {
+        //
+        // 方案A 顺序约定（重要）：先跑「评测」(trajectory/run，写 tool_choice/redundancy 单项分)，
+        // 完成后再跑「analyze-match」。这样 analyze-match 的 persistAlignmentAttribution 作为最后写入者，
+        // 能读到评测器写好的 tool_choice/redundancy，用 alignment 覆盖率当 completeness 走代码侧聚合层
+        // 算出统一轨迹分（0.45/0.35/0.20 + 封顶）。两者并发时会因 last-write-wins 互相覆盖、口径不稳。
+        const resultErrors: string[] = [];
+        try {
+            // 透传评测任务关联: 用户在配置区关联了批次时走 append 模式, 不再每次新建批次。
+            // 关联后不传 evaluators (后端用批次原配置), 没关联时沿用老逻辑。
+            const body: Record<string, unknown> = { user, taskIds };
+            // 数据集作参考集: 收窄后端 trace↔case 匹配范围 (空 = 沿用全量 auto-match)。
+            if (caseDatasetIds.length > 0) body.datasetIds = caseDatasetIds;
+            if (traceEvaluationBatchId) {
+                body.evaluatorRunId = traceEvaluationBatchId;
+            } else {
+                // 评估器多选决定本次评测调用哪些评估器; 未选时兜底任务完成度。
+                body.evaluators = caseEvaluatorIds.length > 0 ? caseEvaluatorIds : ['preset-agent-task-completion'];
+            }
             const res = await apiFetch('/api/eval/trajectory/run', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    user,
-                    taskIds,
-                    evaluators: ['preset-agent-task-completion'],
-                }),
+                body: JSON.stringify(body),
             });
             if (!res.ok) {
                 const data = await res.json().catch(() => ({}));
                 throw new Error(data?.error || `结果评估入队失败 (HTTP ${res.status})`);
             }
-        })();
-        // 改写：每个 trajectory 任务跑完单独 catch,把错误信息按 taskId 记下来,
+        } catch (e) {
+            resultErrors.push(String(e instanceof Error ? e.message : e));
+        }
+        // 评测入队完成后再跑 analyze-match（轨迹对齐 + Skill 归因 + 统一轨迹分聚合）。
+        // 每个 trajectory 任务跑完单独 catch,把错误信息按 taskId 记下来,
         // 之前 throw + Promise.allSettled 只能拿到错误文本但丢失了对应的 taskId,
         // 导致前端没法精确告诉用户"哪条 trace 的轨迹评测因为什么没跑成"。
         const trajectoryErrors = new Map<string, string>();
@@ -1048,13 +1189,6 @@ function SkillAnalysisPage() {
                 trajectoryErrors.set(id, e instanceof Error ? e.message : '网络/解析错误');
             }
         })());
-        const resultErrors: string[] = [];
-        const resultSettled = await Promise.allSettled([resultRun]);
-        for (const s of resultSettled) {
-            if (s.status === 'rejected') {
-                resultErrors.push(String(s.reason instanceof Error ? s.reason.message : s.reason));
-            }
-        }
         await Promise.all(trajRuns);
         if (resultErrors.length > 0 || trajectoryErrors.size > 0) {
             console.warn('[skill-eval] batch analyze partial failures:', { resultErrors, trajectoryErrors });
@@ -1067,7 +1201,7 @@ function SkillAnalysisPage() {
         // trace 列表，状态徽章会实时切换 pending→done。
         await reloadTraces({ retries: 30, retryDelayMs: 3000 });
         return { resultErrors, trajectoryErrors };
-    }, [user, reloadTraces]);
+    }, [user, reloadTraces, traceEvaluationBatchId, caseEvaluatorIds, caseDatasetIds]);
 
     /* 拉最近一次灰度任务，做出 Skills 价值评估摘要喂给概览页的灰度卡。
        用 caseStatesJson.{a,b} 直接算 score/time/token/passRate，逻辑与
@@ -1148,20 +1282,30 @@ function SkillAnalysisPage() {
     const staticHasResult = !!staticSummary?.latest;
     const triggerHasResult = !!triggerSummary?.latestRun;
     const grayHasResult = !!graySummary && graySummary.b.avgScore != null;
-    const grayFinalScore = graySummary?.scoring.totalScore ?? null;
+    // 跟详情页 decisionReady 严格对齐: 所有 case-side 都 executed/pass 时才显示分数,
+    // 任一 case 还有 running/evaluating/pending/fail 时跟详情页一样显示「等待评估完成」。
+    // 之前不带这判断, 卡片用全 task 聚合算分 → 跟详情页 (decisionReady 只看 active case
+    // 的 simA/simB 状态) mismatch, 用户看「卡片有分但详情页没分」困惑。
+    const grayCaseStates = (grayTaskMeta?.caseStatesJson || {}) as Record<string, { a?: { status?: string }; b?: { status?: string } }>;
+    const grayAllSidesReady = Object.keys(grayCaseStates).length > 0
+        && Object.values(grayCaseStates).every(s => {
+            const ready = (st?: { status?: string }) => st?.status === 'executed' || st?.status === 'pass';
+            return ready(s?.a) && ready(s?.b);
+        });
+    const grayFinalScore = (grayAllSidesReady ? graySummary?.scoring.totalScore : null) ?? null;
     const batchHasResult = false;
     /*
      * 用例分析（trace）卡上展示的分数 = "已评测过的 trace" 的「(结果分 + 轨迹分) / 2」的平均值。
      * 关键约束：每条 trace 只有结果分 + 轨迹分都在时才参与；只跑了一边的不算"已评测"。
      *   - 结果分：trace.answer_score（Execution.answerScore，task-completion 评估器写）
-     *   - 轨迹分：getTraceFlowScore(trace)（flow-parser analyze-match overallScore）
+     *   - 轨迹分：getEffectiveTrajScore(trace)（优先方案A聚合分 trajectoryScore，回退 analyze-match 覆盖率）
      * 跟单 trace 详情页 Hero 的口径不一样（详情页只看 LLM 单分），但卡片这层要求双分都备齐
      * 才算"完整评测"，避免被半评测的 trace 拉偏。
      */
     const traceCombinedScores = traces.reduce<{ sum: number; count: number }>((acc, t) => {
         const result = typeof t.answer_score === 'number' ? t.answer_score
             : typeof t.answerScore === 'number' ? t.answerScore : null;
-        const traj = getTraceFlowScore(t);
+        const traj = getEffectiveTrajScore(t);
         if (result != null && traj != null) {
             acc.sum += (result + traj) / 2;
             acc.count += 1;
@@ -1203,59 +1347,57 @@ function SkillAnalysisPage() {
         setPrefillTraceId('');
     }, []);
 
-    // overview 直接用 plain title；gray 走自家的 GrayscaleEvaluation 内嵌选择器，
-    // 这里不再插一组 inline picker 避免双倍 skill 选择控件；其余 detail views（trace / static / batch）
-    // 都把 skill+version 选择内嵌到路径里，下方不再渲染 sa-selector-hifi 大卡。
-    const title = view === 'overview'
-        ? 'Skills 分析'
-        : view === 'gray'
-            ? (
-                <span className="sa-top-title">
-                    <button onClick={() => setView('overview')}>Skills 分析</button>
+    // skill + version 统一并入 AppTopBar，让 overview 与 detail views 共用同一导航头。
+    const title = (
+        <span className="sa-top-title">
+            {view === 'overview' ? (
+                <span>Skills 评测</span>
+            ) : (
+                <>
+                    <button onClick={() => setView('overview')}>Skills 评测</button>
                     <span>/</span>
                     <b>{viewTitle(view)}</b>
-                </span>
-            )
-            : (
-                <span className="sa-top-title">
-                    <button onClick={() => setView('overview')}>Skills 分析</button>
-                    <span>/</span>
-                    <b>{viewTitle(view)}</b>
-                    <span className="sa-top-dot">·</span>
-                    <select
-                        className="sa-top-select"
-                        value={selectedSkillId}
-                        onChange={e => {
-                            const next = skills.find(s => s.id === e.target.value);
-                            setSelectedSkillId(e.target.value);
-                            setSelectedVersion(next ? resolveSkillVersion(next) : null);
-                        }}
-                        disabled={skillsLoading}
-                        aria-label="切换 Skill"
-                    >
-                        {skills.length === 0 && <option value="">暂无 Skill</option>}
-                        {skills.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                    </select>
-                    <select
-                        className="sa-top-select sa-top-select-version"
-                        value={selectedVersion ?? ''}
-                        onChange={e => setSelectedVersion(Number(e.target.value))}
-                        disabled={!selectedSkill}
-                        aria-label="切换版本"
-                    >
-                        {sortedVersions.length === 0 && selectedSkill && (
-                            <option value={selectedSkill.activeVersion ?? selectedSkill.version ?? 0}>
-                                v{selectedSkill.activeVersion ?? selectedSkill.version ?? 0}
-                            </option>
-                        )}
-                        {sortedVersions.map(v => (
-                            <option key={v.version} value={v.version}>
-                                v{v.version}{v.version === selectedSkill?.activeVersion ? '（当前）' : ''}
-                            </option>
-                        ))}
-                    </select>
-                </span>
-            );
+                </>
+            )}
+            <span className="sa-top-dot">·</span>
+            <select
+                className="sa-top-select"
+                value={selectedSkillId}
+                onChange={e => {
+                    const next = skills.find(s => s.id === e.target.value);
+                    setSelectedSkillId(e.target.value);
+                    setSelectedVersion(next ? resolveSkillVersion(next) : null);
+                    setView('overview');
+                }}
+                disabled={skillsLoading}
+                aria-label="切换 Skill"
+            >
+                {skills.length === 0 && <option value="">暂无 Skill</option>}
+                {skills.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+            <select
+                className="sa-top-select sa-top-select-version"
+                value={selectedVersion ?? ''}
+                onChange={e => {
+                    // 切版本时留在当前视图(用例分析/A-B/静态等), 不再强制跳回 overview —— 方便跨版本对比。
+                    setSelectedVersion(Number(e.target.value));
+                }}
+                disabled={!selectedSkill}
+                aria-label="切换版本"
+            >
+                {sortedVersions.length === 0 && selectedSkill && (
+                    <option value={selectedSkill.activeVersion ?? selectedSkill.version ?? 0}>
+                        v{selectedSkill.activeVersion ?? selectedSkill.version ?? 0}
+                    </option>
+                )}
+                {sortedVersions.map(v => (
+                    <option key={v.version} value={v.version}>
+                        v{v.version}{v.version === selectedSkill?.activeVersion ? '（当前）' : ''}
+                    </option>
+                ))}
+            </select>
+        </span>
+    );
 
     return (
         <div className="sa-root">
@@ -1268,47 +1410,13 @@ function SkillAnalysisPage() {
                 {/* view === 'batch' DetailHeader 分支已删——'batch' 视图整体下线，
                     BatchEvaluation 现作为 trace 模式 ① 配置块"从数据集"子流程的内核 */}
                 {view === 'overview' && (
-                    <SkillAnalysisHeader
-                        // overview 才渲染这个大卡；其余 detail view 的 skill+version 已经移到 AppTopBar 路径里。
-                        crumbs={[{ label: 'Skills', href: '#' }, { label: 'Skills 分析' }]}
-                        skills={skills}
-                        selectedSkillId={selectedSkillId}
-                        skillsLoading={skillsLoading}
-                        onSelectSkill={(id) => {
-                            const next = skills.find(s => s.id === id);
-                            setSelectedSkillId(id);
-                            setSelectedVersion(next ? resolveSkillVersion(next) : null);
-                            setView('overview');
-                        }}
-                        monogram={getSkillMonogram(selectedSkill?.name)}
-                        versions={
-                            sortedVersions.length > 0
-                                ? sortedVersions.map(v => ({
-                                      version: v.version,
-                                      isActive: v.version === selectedSkill?.activeVersion,
-                                      label: `v${v.version}${v.version === selectedSkill?.activeVersion ? '（当前）' : ''}${v.createdAt ? ` · ${formatShortDate(v.createdAt)}` : ''}`,
-                                  }))
-                                : selectedSkill
-                                ? [{
-                                      version: selectedSkill.activeVersion ?? selectedSkill.version ?? 0,
-                                      label: `v${selectedSkill.activeVersion ?? selectedSkill.version ?? 0}`,
-                                  }]
-                                : []
-                        }
-                        selectedVersion={selectedVersion}
-                        onSelectVersion={(v) => {
-                            setSelectedVersion(v);
-                            setView('overview');
-                        }}
-                    />
-                )}
-
-                {view === 'overview' && (
                   <>
                     <AnalysisOverview
                         user={user}
                         selectedSkill={selectedSkill}
                         selectedVersion={selectedVersion}
+                        traceEvaluationBatchId={effectiveTraceEvaluationBatchId}
+                        traceEvaluationBatchTitle={traceEvaluationBatchTitle}
                         health={health}
                         standards={standards}
                         traces={traces}
@@ -1354,6 +1462,20 @@ function SkillAnalysisPage() {
                         onReload={reloadTraces}
                         onOptimize={() => router.push(optimizeHref)}
                         onBatchAnalyze={runBatchTraceAnalysis}
+                        traceEvaluationBatchId={effectiveTraceEvaluationBatchId}
+                        traceEvaluationBatchTitle={traceEvaluationBatchTitle}
+                        onOpenEvalBatchDialog={() => setNewBatchDialogOpen(true)}
+                        evalTaskOptions={caseEvalTasksForSkill}
+                        onSelectEvalBatch={handleSelectTraceEvalBatch}
+                        datasets={caseDatasets}
+                        selectedDatasetIds={caseDatasetIds}
+                        onSelectedDatasetIdsChange={handleCaseDatasetIdsChange}
+                        evaluatorOptions={[
+                            ...presetEvaluators.filter(e => e.status === 'ready').map(e => ({ id: e.id, name: e.name })),
+                            ...caseUserEvaluators,
+                        ]}
+                        selectedEvaluatorIds={caseEvaluatorIds}
+                        onSelectedEvaluatorIdsChange={handleCaseEvaluatorIdsChange}
                     />
                 )}
 
@@ -1383,6 +1505,7 @@ function SkillAnalysisPage() {
                         renderHeader="none"
                     >
                         <GrayscaleEvaluation
+                            hifi
                             newTaskTrigger={grayNewTaskTrigger}
                             historyPanelTrigger={grayHistoryTrigger}
                             pageTitle="A/B测试"
@@ -1465,6 +1588,17 @@ function SkillAnalysisPage() {
 
                 {/* view === 'batch' EmbeddedDebugPanel 分支已删 */}
             </main>
+
+            {/* 新增评测任务对话框 (trace 模式 ① actions 按钮触发, dataset 模式 BatchEvaluation 自己挂另一个 dialog).
+                跨视图浮窗, 跟 main 同级避免被 sa-detail overflow 截掉。 */}
+            <NewEvaluationBatchDialog
+                open={newBatchDialogOpen}
+                user={user || ''}
+                defaultTitle={traceEvaluationBatchTitle || (selectedSkill ? `${selectedSkill.name} trace 评测` : undefined)}
+                evaluators={caseEvaluatorIds}
+                onClose={() => setNewBatchDialogOpen(false)}
+                onCreated={handleTraceEvalBatchCreated}
+            />
         </div>
     );
 }
@@ -1577,6 +1711,8 @@ function AnalysisOverview({
     user,
     selectedSkill,
     selectedVersion,
+    traceEvaluationBatchId,
+    traceEvaluationBatchTitle,
     health,
     standards,
     traces,
@@ -1604,6 +1740,8 @@ function AnalysisOverview({
     user: string | null;
     selectedSkill: SkillOption | null;
     selectedVersion: number | null;
+    traceEvaluationBatchId?: string;
+    traceEvaluationBatchTitle?: string;
     health: number | null;
     standards: { total: number; passed: number };
     traces: TraceRecord[];
@@ -1662,7 +1800,7 @@ function AnalysisOverview({
     const traceCardAgg = traces.reduce<{ sum: number; count: number }>((acc, t) => {
         const result = typeof t.answer_score === 'number' ? t.answer_score
             : typeof t.answerScore === 'number' ? t.answerScore : null;
-        const traj = getTraceFlowScore(t);
+        const traj = getEffectiveTrajScore(t);
         if (result != null && traj != null) {
             acc.sum += (result + traj) / 2;
             acc.count += 1;
@@ -1671,10 +1809,22 @@ function AnalysisOverview({
     }, { sum: 0, count: 0 });
     const fullyEvaluatedCount = traceCardAgg.count;
     const traceCardHasResult = fullyEvaluatedCount > 0;
+    // 用例分析卡片口径：绑定当前关联的「评测任务」(traceEvaluationBatchId)，
+    // 分数/用例数只统计该任务下的评测记录——与详情页 ③ 总评分同口径，
+    // 而非该 skill 版本全部 trace 的平均。未关联任务时卡片提示先去关联。
+    const hasEvalTask = !!traceEvaluationBatchId;
+    const cardEvalResultsMap = useBatchEvalResults(user, traceEvaluationBatchId, 5000);
+    const cardEvalMetas = hasEvalTask ? Array.from(cardEvalResultsMap.values()) : [];
+    const cardEvalValid = cardEvalMetas.filter(m => typeof m.resultScore === 'number' && typeof m.trajScore === 'number') as { resultScore: number; trajScore: number }[];
+    const cardEvalDone = cardEvalValid.length;
+    const cardEvalTotal = cardEvalMetas.length;
+    const cardEvalScore = cardEvalDone === 0 ? null
+        : Math.round(cardEvalValid.reduce((sum, m) => sum + (m.resultScore + m.trajScore) / 2, 0) / cardEvalDone);
+    const cardEvalStatus = !hasEvalTask ? '未关联' : cardEvalScore == null ? '待评测' : cardEvalScore >= 60 ? '正常' : '需关注';
     const traceLatestUpdatedAt = traces.reduce<string | null>((latest, t) => {
         const result = typeof t.answer_score === 'number' ? t.answer_score
             : typeof t.answerScore === 'number' ? t.answerScore : null;
-        const traj = getTraceFlowScore(t);
+        const traj = getEffectiveTrajScore(t);
         if (result == null || traj == null) return latest;
         const candidate = t.execution_match?.matchedAt || t.timestamp || null;
         if (!candidate) return latest;
@@ -1710,9 +1860,6 @@ function AnalysisOverview({
     const traceHasCompleteCardData = traces.length > 0 && fullyEvaluatedCount === traces.length;
     const tracePrimarySkill = selectedTrace ? getTracePrimarySkill(selectedTrace) : null;
     const traceCanTest = !!selectedTraceId && !!tracePrimarySkill?.name;
-    const traceCardScoreValue = traceCardHasResult
-        ? Math.round((traceCardAgg.sum / fullyEvaluatedCount) * 100)
-        : null;
 
     /* ─────────────────────────────────────────────────────────
        综合诊断三栏的业务计算
@@ -1725,7 +1872,17 @@ function AnalysisOverview({
     const triggerHasResult = !!triggerSummary?.latestRun;
     const triggerCanTest = triggerHasSet && (triggerSummary?.itemCount ?? 0) > 0;
     const grayHasResult = !!graySummary && graySummary.b.avgScore != null;
-    const grayFinalScore = graySummary?.scoring.totalScore ?? null;
+    // 跟详情页 decisionReady 严格对齐: 所有 case-side 都 executed/pass 时才显示分数,
+    // 任一 case 还有 running/evaluating/pending/fail 时跟详情页一样显示「等待评估完成」。
+    // 之前不带这判断, 卡片用全 task 聚合算分 → 跟详情页 (decisionReady 只看 active case
+    // 的 simA/simB 状态) mismatch, 用户看「卡片有分但详情页没分」困惑。
+    const grayCaseStates = (grayTaskMeta?.caseStatesJson || {}) as Record<string, { a?: { status?: string }; b?: { status?: string } }>;
+    const grayAllSidesReady = Object.keys(grayCaseStates).length > 0
+        && Object.values(grayCaseStates).every(s => {
+            const ready = (st?: { status?: string }) => st?.status === 'executed' || st?.status === 'pass';
+            return ready(s?.a) && ready(s?.b);
+        });
+    const grayFinalScore = (grayAllSidesReady ? graySummary?.scoring.totalScore : null) ?? null;
     const grayPreparedSampleCount = (
         grayTaskMeta?.configJson?.checkedCaseIds
         ?? grayTaskMeta?.configJson?.selectedCaseIds
@@ -1840,7 +1997,7 @@ function AnalysisOverview({
         const traceAgg = tracesData.reduce<{ sum: number; count: number }>((acc, t) => {
             const result = typeof t.answer_score === 'number' ? t.answer_score
                 : typeof t.answerScore === 'number' ? t.answerScore : null;
-            const traj = getTraceFlowScore(t);
+            const traj = getEffectiveTrajScore(t);
             if (result != null && traj != null) {
                 acc.sum += (result + traj) / 2;
                 acc.count += 1;
@@ -2371,7 +2528,7 @@ function AnalysisOverview({
                     <div className="sa-cta-list">
                         <label
                             className={`sa-cta-row${!staticCanTest ? ' disabled' : ''}`}
-                            title={staticCanTest ? '可触发详情页“重新扫描”' : '需先选择 Skill 与版本'}
+                            title={staticCanTest ? '可触发详情页“重新分析”' : '需先选择 Skill 与版本'}
                         >
                             <input type="checkbox" checked={selectedRunKeys.includes('static')} onChange={() => toggleRunKey('static')} disabled={!staticCanTest} />
                             <span className="dot" style={{ '--cdot': 'var(--sa-purple)' } as React.CSSProperties}></span>
@@ -2688,22 +2845,24 @@ function AnalysisOverview({
                         </span>
                         <div className="sa-card-title">
                             <span className="t-row">用例分析</span>
-                            <small>做的怎么样？结果&amp;轨迹分析</small>
+                            <small title={hasEvalTask ? (traceEvaluationBatchTitle || '未命名评测任务') : undefined}>
+                                {hasEvalTask ? `评测任务：${traceEvaluationBatchTitle || '未命名任务'}` : '做的怎么样？结果 & 轨迹分析'}
+                            </small>
                         </div>
-                        <span className={`sa-card-status ${traceCardStatus === '正常' ? 'ok' : traceCardStatus === '需关注' ? 'warn' : 'neutral'}`}>
-                            {traceCardStatus}
+                        <span className={`sa-card-status ${cardEvalStatus === '正常' ? 'ok' : cardEvalStatus === '需关注' ? 'warn' : 'neutral'}`}>
+                            {cardEvalStatus}
                         </span>
                     </div>
 
                     <div className="sa-card-score">
-                        <span className="sa-card-score-num">{traceCardScoreValue ?? '--'}</span>
-                        <span className="sa-card-score-unit">{traceCardScoreValue == null ? '待分析' : '/ 100'}</span>
+                        <span className="sa-card-score-num">{hasEvalTask ? (cardEvalScore ?? '--') : '--'}</span>
+                        <span className="sa-card-score-unit">{!hasEvalTask ? '未选择评测任务' : cardEvalScore == null ? '待评测' : '/ 100'}</span>
                     </div>
 
                     <div className="sa-card-stats">
                         <div className="sa-card-stat">
-                            <div className="sa-card-stat-label" title="结果分 + 轨迹分双双就绪的 trace 数；只跑一边的不计入">已完整评测</div>
-                            <div className="sa-card-stat-val">{traces.length === 0 ? '暂无 Trace' : `${fullyEvaluatedCount} / ${traces.length}`}</div>
+                            <div className="sa-card-stat-label" title="当前评测任务下结果分 + 轨迹分双双就绪的记录数；只跑一边的不计入">已评测用例</div>
+                            <div className="sa-card-stat-val">{!hasEvalTask ? '未选择评测任务' : `${cardEvalDone} / ${cardEvalTotal}`}</div>
                         </div>
                         <div className="sa-card-stat">
                             <div className="sa-card-stat-label">高偏离</div>
@@ -2756,12 +2915,9 @@ function AnalysisOverview({
 
                     {grayHasResult ? (
                         <>
-                            <div className="sa-card-score" style={{ alignItems: 'baseline', gap: 8, marginTop: 18 }}>
-                                <span style={{ fontSize: 12, fontWeight: 800, color: 'var(--sa-muted)', alignSelf: 'flex-start', marginTop: 12 }}>最终评分</span>
-                                <span style={{ fontSize: 62, lineHeight: 1, fontWeight: 900, color: 'var(--sa-warning)' }}>
-                                    {graySummary?.scoring.totalScore ?? '--'}
-                                </span>
-                                <span style={{ fontSize: 24, fontWeight: 800, color: 'var(--sa-muted)' }}>/100</span>
+                            <div className="sa-card-score">
+                                <span className="sa-card-score-num">{graySummary?.scoring.totalScore ?? '--'}</span>
+                                <span className="sa-card-score-unit">/ 100</span>
                             </div>
 
                             <div className="sa-card-stats">
@@ -2776,21 +2932,6 @@ function AnalysisOverview({
                                 <div className="sa-card-stat">
                                     <div className="sa-card-stat-label">稳定性</div>
                                     <div className="sa-card-stat-val">{graySummary?.scoring.stability.invokeRate == null ? '—' : `${graySummary.scoring.stability.invokeRate}% 触发`}</div>
-                                </div>
-                            </div>
-
-                            <div className="sa-card-stats">
-                                <div className="sa-card-stat">
-                                    <div className="sa-card-stat-label">对比版本</div>
-                                    <div className="sa-card-stat-val">{grayPairLabel}</div>
-                                </div>
-                                <div className="sa-card-stat">
-                                    <div className="sa-card-stat-label">样本</div>
-                                    <div className="sa-card-stat-val">{graySummary ? `${graySampleLabel} · ${grayRunLabel}` : '待选择样本'}</div>
-                                </div>
-                                <div className="sa-card-stat">
-                                    <div className="sa-card-stat-label">显著性</div>
-                                    <div className="sa-card-stat-val">{grayPValueLabel}</div>
                                 </div>
                             </div>
 
@@ -2845,12 +2986,39 @@ function TraceDeviationPanel({
     onReload,
     onOptimize,
     onBatchAnalyze,
+    traceEvaluationBatchId,
+    traceEvaluationBatchTitle,
+    onOpenEvalBatchDialog,
+    evalTaskOptions,
+    onSelectEvalBatch,
+    datasets,
+    selectedDatasetIds,
+    onSelectedDatasetIdsChange,
+    evaluatorOptions,
+    selectedEvaluatorIds,
+    onSelectedEvaluatorIdsChange,
 }: {
     skill: SkillOption | null;
     version: number | null;
     user: string | null;
     traces: TraceRecord[];
     loading: boolean;
+    /** AB 式配置区共享选择: 数据集(参考集) + 评估器, 父组件 SkillAnalysisPage 持有 state */
+    datasets?: Array<{ id: string; name: string; cases?: unknown[] }>;
+    selectedDatasetIds?: string[];
+    onSelectedDatasetIdsChange?: (ids: string[]) => void;
+    evaluatorOptions?: Array<{ id: string; name: string }>;
+    selectedEvaluatorIds?: string[];
+    onSelectedEvaluatorIdsChange?: (ids: string[]) => void;
+    /** 评测批次关联 (trace 模式 ① actions 显示); 父组件 SkillAnalysisPage 维护 state + localStorage 持久化 */
+    traceEvaluationBatchId?: string;
+    traceEvaluationBatchTitle?: string;
+    /** 点击 "+ 新增评测任务" / "切换/新建" 按钮触发的 callback, 由父组件打开 NewEvaluationBatchDialog */
+    onOpenEvalBatchDialog?: () => void;
+    /** 已有评测任务(批次)列表, 供"选历史" */
+    evalTaskOptions?: Array<{ runId: string; taskTitle?: string; traceCount?: number; doneCount?: number; runningCount?: number; createdAt?: string }>;
+    /** 选中一个已有评测任务 */
+    onSelectEvalBatch?: (opt: { runId: string; taskTitle?: string }) => void;
     prefillTraceId: string;
     selectedTraceId: string;
     onSelectedTraceChange: (id: string) => void;
@@ -2867,13 +3035,14 @@ function TraceDeviationPanel({
     const [query, setQuery] = useState('');
     const [tab, setTab] = useState<'all' | 'analyzed' | 'pending' | 'deviation'>('all');
     // 用例分析 = [结果分析 | 轨迹分析] 双 tab；默认进结果分析（用户关心"做对了没"）
-    const [detailTab, setDetailTab] = useState<'result' | 'trajectory'>('result');
 
     // 三段式 section 折叠态：① 默认展开（source toggle 在 ① body 顶部，需立刻可见），
     // ② 默认折叠，③ 默认展开。
     const [caseConfigOpen, setCaseConfigOpen] = useState(true);
     const [caseExecOpen, setCaseExecOpen] = useState(false);
     const [caseResultOpen, setCaseResultOpen] = useState(true);
+    // 拉当前评测任务的结果, 给 ② 表每行补"评估 Trace / datasetId"(displayedTraces 里没有)。5s 轮询接异步落库。
+    const traceEvalResultsMap = useBatchEvalResults(user, traceEvaluationBatchId, 5000);
 
     // 已触发评测的 trace id → 触发时间戳。runBothAnalyses 调用时填，让 ② 执行块的
     // 列表能区分"正在评测中"（已触发但分数还没回来）vs"已评测"（双分都就绪）。
@@ -2884,6 +3053,29 @@ function TraceDeviationPanel({
     // （status: pending/running）。下方 useEffect 会在 mount + traces 变化时扫一遍
     // 后端进行中的评测，把对应 taskId 补回这个 Map——刷新页面后"评测中"徽章不消失。
     const [triggeredTaskIds, setTriggeredTaskIds] = useState<Map<string, number>>(new Map());
+
+    // 用户在「评测执行」里删除的 trace（taskId）→ 从列表隐藏。后端会一并删掉该 trace 在当前评测任务
+    // 下的 TrajectoryEvalResult 行；但 trace 的 Execution.answer_score / matchJson 仍保留（非破坏性），
+    // 所以这里用 localStorage 记一份"已从评测视图删除"的集合，避免刷新后又凭分数被显示出来。
+    const deletedTracesStorageKey = useMemo(
+        () => (user && skill?.name ? `eval-deleted-traces:${user}:${skill.name}:${version ?? 'all'}` : ''),
+        [user, skill?.name, version],
+    );
+    const [deletedTaskIds, setDeletedTaskIds] = useState<Set<string>>(new Set());
+    useEffect(() => {
+        if (!deletedTracesStorageKey) { setDeletedTaskIds(new Set()); return; }
+        try {
+            const raw = localStorage.getItem(deletedTracesStorageKey);
+            const arr = raw ? JSON.parse(raw) : [];
+            setDeletedTaskIds(new Set(Array.isArray(arr) ? arr.map(String) : []));
+        } catch { setDeletedTaskIds(new Set()); }
+    }, [deletedTracesStorageKey]);
+    const persistDeletedTaskIds = useCallback((next: Set<string>) => {
+        setDeletedTaskIds(next);
+        if (deletedTracesStorageKey) {
+            try { localStorage.setItem(deletedTracesStorageKey, JSON.stringify(Array.from(next))); } catch {/* ignore */}
+        }
+    }, [deletedTracesStorageKey]);
 
     // 自动清理 triggeredTaskIds: 当 trace 的后端 is_evaluating 变成 false (评测真的结束了),
     // 把这条 taskId 从 Map 移除,让 getTraceEvalStatus 不再返回 'pending',UI 自然切回 'done' 或
@@ -2916,27 +3108,23 @@ function TraceDeviationPanel({
     // 之前用 displayedTraces = filter(status !== 'idle'),依赖双分 + triggeredTaskIds + failedTaskIds,
     // 漏掉了"部分成功"（如 result=0.48 / traj=null）和"老评测记录"（refresh 后内存丢)。
     const [evaluatedTaskIds, setEvaluatedTaskIds] = useState<Set<string>>(new Set());
+    // 本次会话里点过「开始评测」提交的 trace id（含勾选批量）。与 triggeredTaskIds 不同：
+    // 它不会在 is_evaluating 变 false 时被清掉。用来保证"选了 N 条就一直显示 N 条"——
+    // 即使某条后端没产出结果行(未匹配 case / 未引用 skill 等)，也留在 ② 列表里标"未产出"，
+    // 不再静默消失。skill/version 切换时 panel remount 会随 key 一起重置。
+    const [submittedTaskIds, setSubmittedTaskIds] = useState<Set<string>>(new Set());
     // 用例来源模式：'trace' 用已有 Trace 评测 / 'dataset' 用数据集发起评测（v1 走跳转，phase 2 集成）
     const [caseSourceMode, setCaseSourceMode] = useState<'trace' | 'dataset'>('trace');
-    // ③ 结果块"选中 trace 完整深度视图"默认折叠——避免页面一进来就铺满 Mermaid + Skill 归因等
-    // 长内容，让用户主动点开"分析细节"才看。和 mockup 行为一致。
-    const [caseDetailExpanded, setCaseDetailExpanded] = useState(false);
-    const [matchData, setMatchData] = useState<MatchData | null>(null);
-    const [matchLoading, setMatchLoading] = useState(false);
-    const [analyzing, setAnalyzing] = useState(false);
     const [traceListCollapsed, setTraceListCollapsed] = useState(false);
-    const [error, setError] = useState('');
 
     /* ─────────────────────────────────────────────────────
        Skill 归因状态
        轨迹分析的 alignment 是唯一事实源；归因区只读取 analyze-match 基于
        alignment 派生出的 finding（is_skill_attributable + improvement_suggestion），
-       并写入 SkillIssue 表喂给 skill-opt。
+       并写入 SkillIssue 表喂给 skill-opt。trajectoryEval 仅用于门控顶部按钮的
+       运行态（评测进行中禁用），不再在本页渲染评估明细。
        ───────────────────────────────────────────────────── */
     const [trajectoryEval, setTrajectoryEval] = useState<TrajectoryEvalRow | null>(null);
-    const [trajEvalLoading, setTrajEvalLoading] = useState(false);
-    const [trajEvalStarting, setTrajEvalStarting] = useState(false);
-    const [trajEvalError, setTrajEvalError] = useState('');
     const trajEvalPollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     /* 批量分析：左侧 trace 列表支持勾选；顶部「分析当前 Trace」按钮在有勾选时
        一键并行启动选中的全部 trace（结果分析 + 轨迹分析），相互不阻塞失败。 */
@@ -2949,12 +3137,6 @@ function TraceDeviationPanel({
             return next;
         });
     };
-    /* 评估器运行时长（秒）—— 给用户一个"还在跑"的反馈，结合下方 4 个子任务的
-       indeterminate progress 一起呈现。基于 trajectoryEval.createdAt + 当前时间算。 */
-    const [trajEvalElapsed, setTrajEvalElapsed] = useState(0);
-    /* 归因模型由平台默认（user settings 的 active config）决定,不在本面板暴露
-       切换入口——避免误导用户"切了影响所有评估"。要换默认模型去 /modelconfig。 */
-    const scoreFormulaTitle = '计算公式：匹配度 =（完全匹配步骤数 + 委派子 Skill 步骤数 + 部分匹配步骤数 × 0.5 - 非预期步骤数 × 0.2）÷（参与评分的实际步骤数 + 缺失步骤数）。过渡操作不参与分子和分母，结果限制在 0% 到 100%。';
 
     const filtered = useMemo(() => {
         const q = query.trim().toLowerCase();
@@ -3006,28 +3188,7 @@ function TraceDeviationPanel({
         [selectedTraceId, traces],
     );
     const primarySkill = selectedTrace ? getTracePrimarySkill(selectedTrace) : null;
-    const graphTargetName = matchData?.usedSkillName || primarySkill?.name || skill?.name || null;
     const actionUsesPrimarySkill = !!skill?.name && !!primarySkill?.name && primarySkill.name !== skill.name;
-    const graphTargetDiffers = !!skill?.name && !!graphTargetName && graphTargetName !== skill.name;
-
-    const fetchMatch = useCallback(() => {
-        if (!selectedTraceId) {
-            setMatchData(null);
-            return;
-        }
-        setMatchLoading(true);
-        setError('');
-        setMatchData(null);
-        apiFetch(`/api/observe/executions/${encodeURIComponent(selectedTraceId)}/analyze-match`)
-            .then(r => r.json())
-            .then(data => setMatchData(data))
-            .catch(e => setError(e instanceof Error ? e.message : '读取分析结果失败'))
-            .finally(() => setMatchLoading(false));
-    }, [selectedTraceId]);
-
-    useEffect(() => {
-        fetchMatch();
-    }, [fetchMatch]);
 
     /* ── 轨迹评估器：拉最新结果 ── */
     const fetchTrajectoryEval = useCallback(async () => {
@@ -3035,8 +3196,6 @@ function TraceDeviationPanel({
             setTrajectoryEval(null);
             return null;
         }
-        setTrajEvalLoading(true);
-        setTrajEvalError('');
         try {
             const res = await apiFetch(
                 `/api/eval/trajectory/results?user=${encodeURIComponent(user)}&taskId=${encodeURIComponent(selectedTraceId)}&limit=1`,
@@ -3045,11 +3204,8 @@ function TraceDeviationPanel({
             const latest = (Array.isArray(data?.results) ? data.results : [])[0] as TrajectoryEvalRow | undefined;
             setTrajectoryEval(latest || null);
             return latest || null;
-        } catch (e) {
-            setTrajEvalError(e instanceof Error ? e.message : '读取评估结果失败');
+        } catch {
             return null;
-        } finally {
-            setTrajEvalLoading(false);
         }
     }, [selectedTraceId, user]);
 
@@ -3196,40 +3352,6 @@ function TraceDeviationPanel({
         }, 5000);
     }, [fetchTrajectoryEval]);
 
-    /**
-     * 只跑「任务完成度评估器」(preset-agent-task-completion)——结果分析专用入口。
-     * 跟轨迹分析解耦：用户在结果分析 tab 点开始分析时调这个，
-     * 不会触发 alignment 归因，也不会去解析 flow 流程图。
-     *
-     * 评估结果落回同一张 TrajectoryEvalResult 表，rawAnalysisJson.resultEvaluation
-     * 字段包含 score + key_point_findings + result_issues —— 结果分析 UI 直接读这些。
-     */
-    const startResultEval = async () => {
-        if (!selectedTraceId || !user) return;
-        setTrajEvalStarting(true);
-        setTrajEvalError('');
-        try {
-            const res = await apiFetch('/api/eval/trajectory/run', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    user,
-                    taskIds: [selectedTraceId],
-                    evaluators: ['preset-agent-task-completion'],
-                }),
-            });
-            const data = await res.json();
-            if (!res.ok || !data.success) {
-                throw new Error(data.error || '启动结果评估失败');
-            }
-            await fetchTrajectoryEval();
-            scheduleTrajectoryPoll();
-        } catch (e) {
-            setTrajEvalError(e instanceof Error ? e.message : '启动结果评估失败');
-        } finally {
-            setTrajEvalStarting(false);
-        }
-    };
 
     // trajectoryEval 拉到时如果是 pending/running 状态，自动开轮询
     useEffect(() => {
@@ -3244,107 +3366,7 @@ function TraceDeviationPanel({
         };
     }, [trajectoryEval, scheduleTrajectoryPoll]);
 
-    /* ── 评估器运行计时（用于进度展示） ── */
-    useEffect(() => {
-        if (trajectoryEval?.status !== 'pending' && trajectoryEval?.status !== 'running') {
-            setTrajEvalElapsed(0);
-            return;
-        }
-        const startTs = trajectoryEval?.createdAt
-            ? new Date(trajectoryEval.createdAt).getTime()
-            : Date.now();
-        const tick = () => setTrajEvalElapsed(Math.max(0, Math.floor((Date.now() - startTs) / 1000)));
-        tick();
-        const id = setInterval(tick, 1000);
-        return () => clearInterval(id);
-    }, [trajectoryEval?.status, trajectoryEval?.createdAt]);
-
-    const runAnalyze = async (): Promise<boolean> => {
-        if (!selectedTraceId) return false;
-        if (!primarySkill?.name) {
-            setError('当前 Trace 的外层主 Agent 未加载 Skill，无法进行主 Skill 流程对齐分析。');
-            return false;
-        }
-        setAnalyzing(true);
-        setError('');
-        try {
-            const res = await apiFetch(`/api/observe/executions/${encodeURIComponent(selectedTraceId)}/analyze-match`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ user, mode: 'compare' }),
-            });
-            const result = await res.json();
-            if (!res.ok || !result.success) throw new Error(result.error || '分析失败');
-            setMatchData({
-                analyzed: true,
-                mode: 'compare',
-                matchJson: result.match ? JSON.stringify(result.match) : undefined,
-                staticMermaid: result.staticMermaid,
-                dynamicMermaid: result.dynamicMermaid,
-                flowJson: result.flowJson,
-                extractedSteps: result.extractedSteps,
-                interactionCount: result.interactionCount,
-                matchedAt: new Date().toISOString(),
-                usedSkillName: result.usedSkillName,
-                usedSkillVersion: result.usedSkillVersion,
-            });
-            await fetchTrajectoryEval();
-            onReload();
-            return true;
-        } catch (e) {
-            setError(e instanceof Error ? e.message : '分析失败');
-            return false;
-        } finally {
-            setAnalyzing(false);
-        }
-    };
-
-    const retryTraceAnalysis = async () => {
-        if (analyzing || trajEvalStarting || trajectoryEval?.status === 'pending' || trajectoryEval?.status === 'running') return;
-        const analyzeOk = await runAnalyze();
-        if (!analyzeOk) return;
-        await fetchTrajectoryEval();
-    };
-
-    const parsedMatch = useMemo(
-        () => safeJsonParse<ExecutionMatchPayload>(matchData?.matchJson),
-        [matchData?.matchJson],
-    );
-    const summary: MatchSummary = parsedMatch?.summary || {};
-    const matches: StepMatch[] = Array.isArray(parsedMatch?.matches) ? parsedMatch.matches : [];
-    const skippedExpectedSteps: SkippedExpectedStep[] = Array.isArray(parsedMatch?.skippedExpectedSteps) ? parsedMatch.skippedExpectedSteps : [];
-    const parsedFlow = useMemo(
-        () => safeJsonParse<ParsedFlowPayload>(matchData?.flowJson),
-        [matchData?.flowJson],
-    );
-    const extractedSteps = useMemo(() => {
-        const parsed = safeJsonParse<ExtractedTraceStep[]>(matchData?.extractedSteps);
-        return Array.isArray(parsed) ? parsed : [];
-    }, [matchData?.extractedSteps]);
-    const problemByStepKey = useMemo(() => {
-        const map = new Map<string, ProblemStep>();
-        const problemSteps: ProblemStep[] = Array.isArray(parsedMatch?.problemSteps) ? parsedMatch.problemSteps : [];
-        for (const problem of problemSteps) {
-            if (problem.stepIndex != null) map.set(`actual:${problem.stepIndex}`, problem);
-            if (problem.stepName) map.set(`name:${problem.stepName}`, problem);
-        }
-        return map;
-    }, [parsedMatch]);
-    const score = typeof summary.overallScore === 'number'
-        ? Math.round(summary.overallScore * 100)
-        : selectedTrace ? (getTraceFlowScore(selectedTrace) == null ? null : Math.round(getTraceFlowScore(selectedTrace)! * 100)) : null;
-
-    const isResultTab = detailTab === 'result';
-
-    /*
-     * 顶部主按钮：一键并行启动「结果分析 + 轨迹分析」两条链路。
-     * 使用 Promise.allSettled —— 任一边失败不阻断另一边：
-     *   - 结果分析：preset-agent-task-completion 评估器（独立 LLM 调用）
-     *   - 轨迹分析：analyze-match 生成 alignment，并由 alignment 派生 Skill 归因
-     * Tab 内部仍保留各自的"运行/重试"按钮（结果分析空态 + 关键观点判定头 + TraceAlignmentPanel）
-     * 供"单边重跑"场景使用，跟顶部按钮职责分明。
-     */
-    const bothRunning = batchRunning || trajEvalStarting || analyzing
+    const bothRunning = batchRunning
         || trajectoryEval?.status === 'pending' || trajectoryEval?.status === 'running';
     /*
      * 主按钮点击：批量并行启动「结果分析 + 轨迹分析」
@@ -3358,12 +3380,19 @@ function TraceDeviationPanel({
         ? Array.from(checkedTraceIds)
         : (selectedTraceId ? [selectedTraceId] : []);
     const runBothAnalyses = async () => {
-        if (bothRunning || targetTraceIds.length === 0) return;
+        // 必须先关联评测任务才能评测——否则后端每次会新建一个孤立任务、结果归属混乱。
+        if (bothRunning || targetTraceIds.length === 0 || !traceEvaluationBatchId) return;
         // 立刻记录"已触发"——② 执行块的状态徽章靠这个区分 pending/idle
         const triggerTs = Date.now();
         setTriggeredTaskIds(prev => {
             const next = new Map(prev);
             for (const id of targetTraceIds) next.set(id, triggerTs);
+            return next;
+        });
+        // 同步记进"本次会话已提交"集合（不被 is_evaluating 清理）——保证选了几条就一直列几条。
+        setSubmittedTaskIds(prev => {
+            const next = new Set(prev);
+            for (const id of targetTraceIds) next.add(id);
             return next;
         });
         // 清空这批 trace 的 failed 标记——用户重新触发就是想重试,旧错误别再挂着扰乱状态。
@@ -3412,18 +3441,21 @@ function TraceDeviationPanel({
     const primaryLabel = bothRunning ? '分析中…'
         : checkedTraceIds.size > 0 ? `分析选中 ${checkedTraceIds.size} 条 Trace`
         : '分析当前 Trace';
-    const primaryDisabled = bothRunning || targetTraceIds.length === 0 || (checkedTraceIds.size === 0 && !primarySkill?.name);
+    const primaryDisabled = bothRunning || targetTraceIds.length === 0 || (checkedTraceIds.size === 0 && !primarySkill?.name) || !traceEvaluationBatchId;
 
-    // 「用例来源」toggle —— 两种模式都用同一份 JSX；trace 模式渲染在 trace 的 ① body 里，
-    // dataset 模式通过 BatchEvaluation 的 topConfigSlot prop 注入到 BE 的 ① body 顶部。
-    // 视觉上"toggle 始终在 ① 配置块里"，两边对称。
+    // 「添加评测对象」入口 —— 评测对象始终是 Trace，这里选的是 Trace 的来路（添加方式），不是两种评测模式：
+    //   · 选已有 Trace：直接挑现成执行记录评测
+    //   · 用数据集生成：先执行 case 生成 Trace，再评测
+    // 两种方式都把 Trace 的评测加入「当前评测任务」，统一在下方「② 评测执行」展示。
+    // 两边 JSX 同一份：trace 模式渲染在 trace 的 ① body；dataset 模式经 BatchEvaluation 的 topConfigSlot 注入。
     const sourceModeToggle = (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', background: '#fafafa', border: '1px solid #e5e7eb', borderRadius: 6, marginBottom: 14 }}>
-            <span style={{ fontSize: 11, fontWeight: 700, color: '#52525b', textTransform: 'uppercase', letterSpacing: '0.04em' }}>用例来源</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', background: '#fafafa', border: '1px solid #e5e7eb', borderRadius: 6, marginBottom: 14, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: '#52525b' }}>添加评测对象（Trace）</span>
             <div style={{ display: 'inline-flex', background: '#fff', borderRadius: 5, padding: 3, gap: 2, border: '1px solid #e5e7eb' }}>
                 <button
                     type="button"
                     onClick={() => setCaseSourceMode('trace')}
+                    title="直接挑选现成的执行记录(Trace)来评测"
                     style={{
                         border: 0,
                         padding: '4px 12px',
@@ -3434,10 +3466,11 @@ function TraceDeviationPanel({
                         fontWeight: 600,
                         cursor: 'pointer',
                     }}
-                >📊 从 Trace</button>
+                >📊 选已有 Trace</button>
                 <button
                     type="button"
                     onClick={() => setCaseSourceMode('dataset')}
+                    title="用数据集 case 执行 skill 生成新 Trace，再评测（比「选已有」多一步生成）"
                     style={{
                         border: 0,
                         padding: '4px 12px',
@@ -3448,15 +3481,52 @@ function TraceDeviationPanel({
                         fontWeight: 600,
                         cursor: 'pointer',
                     }}
-                >🗄 从数据集</button>
+                >🗄 用数据集生成</button>
             </div>
             <span style={{ flex: 1 }} />
             <span style={{ fontSize: 11, color: '#71717a' }}>
-                {caseSourceMode === 'trace'
-                    ? `当前 skill: ${skill?.name || '未选'}${version != null ? ` v${version}` : ''}（顶部切换）`
-                    : '数据集 / 评测器 / 历史任务 见下方'}
+                两种方式都把 Trace 评测加入当前评测任务，统一在下方「② 评测执行」展示
             </span>
         </div>
+    );
+
+    // 共享配置: 数据集(参考集) + 评估器 下拉多选。trace 模式渲染在 ① body；dataset 模式经
+    // BatchEvaluation 的 topConfigSlot 注入到它的 ① body 顶部——两模式同一位置、同一份选择。
+    const sharedConfigBar = (
+        <div style={{ border: '1px solid #e5e7eb', borderRadius: 6, padding: '10px 12px', marginBottom: 12, background: '#fff', display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <ConfigMultiSelect
+                label="数据集"
+                placeholder="选择参考数据集（可多选）"
+                emptyHint="暂无数据集（可在数据集中心创建）"
+                accent="#2563eb"
+                options={(datasets || []).map(d => ({ id: d.id, name: d.name, meta: `${Array.isArray(d.cases) ? d.cases.length : 0} 例` }))}
+                selectedIds={selectedDatasetIds || []}
+                onChange={ids => onSelectedDatasetIdsChange?.(ids)}
+            />
+            <ConfigMultiSelect
+                label="评估器"
+                placeholder="选择评估器（可多选）"
+                emptyHint="暂无评估器"
+                accent="#7E22CE"
+                options={(evaluatorOptions || []).map(e => ({ id: e.id, name: e.name }))}
+                selectedIds={selectedEvaluatorIds || []}
+                onChange={ids => onSelectedEvaluatorIdsChange?.(ids)}
+            />
+            <div style={{ fontSize: 11, color: '#a1a1aa' }}>
+                数据集作为评测参考集（按 query 匹配 case 取预期结果）；评估器多选决定「开始分析」时调用哪些评估器。
+            </div>
+        </div>
+    );
+
+    // 评测任务选择器 (建新 + 选历史)。trace 模式放 ① actions；dataset 模式经 headerActions 注入。两模式共用同一 evaluatorRunId。
+    const evalTaskPickerNode = (
+        <EvalTaskPicker
+            tasks={evalTaskOptions || []}
+            selectedRunId={traceEvaluationBatchId}
+            selectedTitle={traceEvaluationBatchTitle}
+            onSelect={opt => onSelectEvalBatch?.(opt)}
+            onCreateNew={() => onOpenEvalBatchDialog?.()}
+        />
     );
 
     /* ─────────────────────────────────────────────────────
@@ -3484,7 +3554,12 @@ function TraceDeviationPanel({
         const r = rRaw == null ? null
             : rRaw <= 1 ? Math.round(rRaw * 100)  // 0-1 normalized
             : Math.round(rRaw);                    // 防御性：已经是 0-100 的兼容
-        const j = getTraceFlowScore(t);
+        // 方案A: 轨迹分统一口径——优先用后端聚合层算出的 trajectoryScore（0.45 完整性 + 0.35 工具
+        // + 0.20 冗余, 再封顶, 其中 完整性=对齐覆盖率），没有(未评测/纯对齐旧数据)再回退 getTraceFlowScore
+        // (matchJson.overallScore = 对齐覆盖率单维)。两者都是 0-1。
+        const aggTraj = typeof t.trajectory_score === 'number' ? t.trajectory_score
+            : typeof t.trajectoryScore === 'number' ? t.trajectoryScore : null;
+        const j = aggTraj != null ? aggTraj : getTraceFlowScore(t);
         return {
             trace: t,
             id: getTraceId(t),
@@ -3521,24 +3596,47 @@ function TraceDeviationPanel({
         if (s.resultScore != null || s.trajScore != null) return 'partial';
         return 'idle';
     };
-    // ② 执行块要列的 trace：四类——已评测 / 部分评测 / 评测中 / 评测失败,
-    // 外加任何曾经在后端跑过评测的 taskId(evaluatedTaskIds 来自 recovery)。
-    // 用户明确要求"无论成功失败都要列出来",所以这里跟 getTraceEvalStatus 解耦,
-    // 走"any history" 的口径,避免漏掉 backend 落了 row 但前端 state 算不出非-idle 的 case。
-    const displayedTraces = scoredTraces.filter(s =>
-        getTraceEvalStatus(s) !== 'idle' || evaluatedTaskIds.has(s.id)
+    // ② 评测执行 列表口径：
+    //   - 关联了「评测任务」时：只列该任务(evaluatorRunId)的记录(traceEvalResultsMap) + 本次会话刚触发/失败的，
+    //     使列表与上方"已评测 X/Y"、③ 总评分(都绑定该任务)一致；且每行都在任务里 → 都有评估 Trace。
+    //     之前 recovery 拉的是全量结果(所有任务, limit 200)塞进 evaluatedTaskIds，导致列表显示几十条历史
+    //     "已评测"(其它任务、无评估ID)，与 4/6 这种任务内统计对不上。
+    //   - 未关联任务时：沿用 status / 历史口径(无论成功失败都列出)。
+    const displayedTraces = scoredTraces.filter(s => {
+        if (deletedTaskIds.has(s.id)) return false;
+        if (traceEvaluationBatchId) {
+            // submittedTaskIds 兜底：本次提交过的 trace 即使后端没产出结果行也保留在列表里，
+            // 由下方 records 映射标成"未产出/失败"，不再静默消失。
+            return traceEvalResultsMap.has(s.id) || triggeredTaskIds.has(s.id) || failedTaskIds.has(s.id) || submittedTaskIds.has(s.id);
+        }
+        return getTraceEvalStatus(s) !== 'idle' || evaluatedTaskIds.has(s.id);
+    });
+    // 排除已在「评测执行」里删除的记录(deletedTaskIds)，否则删除后上方"已评测 X/Y · 平均评分"
+    // 仍按旧集合统计、不随删除变化。与 displayedTraces 同口径。
+    const fullyEvaluated = scoredTraces.filter(s =>
+        !deletedTaskIds.has(s.id) && s.resultScore != null && s.trajScore != null,
     );
-    const fullyEvaluated = scoredTraces.filter(s => s.resultScore != null && s.trajScore != null);
-    const avgResult = fullyEvaluated.length === 0 ? null
-        : Math.round(fullyEvaluated.reduce((sum, s) => sum + (s.resultScore || 0), 0) / fullyEvaluated.length);
-    const avgTraj = fullyEvaluated.length === 0 ? null
-        : Math.round(fullyEvaluated.reduce((sum, s) => sum + (s.trajScore || 0), 0) / fullyEvaluated.length);
+    // ③ 结果区口径：绑定当前「评测任务」(evaluatorRunId) 的有效评测记录，与 source(从Trace/从数据集)
+    // 无关——切换 source 不应改变这个平均。有关联任务时用 traceEvalResultsMap(该任务全部记录, 已 ×100)；
+    // 没关联任务时回退本地 scoredTraces(fullyEvaluated)。X=有效记录(双分都在), Y=任务总记录数。
+    const caseResultPairs: { resultScore: number | null; trajScore: number | null }[] = traceEvaluationBatchId
+        ? Array.from(traceEvalResultsMap.entries())
+            .filter(([id]) => !deletedTaskIds.has(id))
+            .map(([, m]) => ({ resultScore: m.resultScore ?? null, trajScore: m.trajScore ?? null }))
+        : fullyEvaluated.map(s => ({ resultScore: s.resultScore, trajScore: s.trajScore }));
+    const validResultPairs = caseResultPairs.filter(p => typeof p.resultScore === 'number' && typeof p.trajScore === 'number') as { resultScore: number; trajScore: number }[];
+    const evalDoneCount = validResultPairs.length;
+    const evalTotalCount = traceEvaluationBatchId ? caseResultPairs.length : traces.length;
+    const avgResult = evalDoneCount === 0 ? null
+        : Math.round(validResultPairs.reduce((sum, p) => sum + p.resultScore, 0) / evalDoneCount);
+    const avgTraj = evalDoneCount === 0 ? null
+        : Math.round(validResultPairs.reduce((sum, p) => sum + p.trajScore, 0) / evalDoneCount);
     const avgOverall = avgResult == null || avgTraj == null ? null : Math.round((avgResult + avgTraj) / 2);
     const overallScoreKlass: 'good' | 'warn' | 'bad' = avgOverall == null
         ? 'warn'
         : avgOverall >= 80 ? 'good' : avgOverall >= 60 ? 'warn' : 'bad';
-    const passCount = fullyEvaluated.filter(s => ((s.resultScore || 0) + (s.trajScore || 0)) / 2 >= 60).length;
-    const passRatePct = fullyEvaluated.length === 0 ? 0 : Math.round((passCount / fullyEvaluated.length) * 100);
+    const passCount = validResultPairs.filter(p => (p.resultScore + p.trajScore) / 2 >= 60).length;
+    const passRatePct = evalDoneCount === 0 ? 0 : Math.round((passCount / evalDoneCount) * 100);
 
     // 为 dual-tab 各自生成 FindingGroup（未通过 / 通过 / 待评测），每条 IssueCard 的 dimension
     // 字段用 traceId 编码——FindingsGrouped 当前没暴露 onClick，所以"点 case → 切换 selectedTrace"
@@ -3585,7 +3683,7 @@ function TraceDeviationPanel({
         <section className="sa-detail">
             <DetailHeader
                 title="用例分析"
-                subtitle={`${skill?.name || '未选择 Skill'}${version != null ? ` · v${version}` : ''} · ${isResultTab ? '当前：结果分析' : '当前：轨迹分析'}`}
+                subtitle={`${skill?.name || '未选择 Skill'}${version != null ? ` · v${version}` : ''}`}
                 badge="LLM Judge"
                 onBack={onBack}
                 onOptimize={onOptimize}
@@ -3602,7 +3700,7 @@ function TraceDeviationPanel({
             <SectionShell
                 num={1}
                 variant="config"
-                title="配置 · 用例集"
+                title="配置"
                 desc="该 skill 版本关联的全部 trace（含已评测和未评测）；勾选 → 到 ② 触发分析"
                 open={caseConfigOpen}
                 onToggle={() => setCaseConfigOpen(o => !o)}
@@ -3611,36 +3709,24 @@ function TraceDeviationPanel({
                         <span>用例来源</span>
                         <code>从 Trace</code>
                         <span>· 关联 <code>{traces.length}</code> 条</span>
-                        <span>· 已评测 <code>{fullyEvaluated.length}</code></span>
+                        <span>· 已评测 <code>{evalDoneCount}</code></span>
                     </>
                 }
+                // trace 模式评测任务关联: 跟 dataset 模式 BatchEvaluation 的 ① actions 一致样式。
+                // 已关联时显示紫色徽章 + "切换/新建"; 未关联时只有"+ 新增评测任务"按钮。
+                // state 走 traceEvaluationBatchId / 持久化在 localStorage (SkillAnalysisPage 维护)。
+                actions={evalTaskPickerNode}
             >
+                {/* AB 式配置: 数据集(参考集) + 评估器 下拉多选 —— 放在 source 切换之上 (用户要求) */}
+                {sharedConfigBar}
                 {/* source-mode 切换 chip：放在 ① 配置块内（用户要求） */}
                 {sourceModeToggle}
                 {/* trace 列表 */}
-            <div className={`sa-trace-picker ${traceListCollapsed ? 'collapsed' : ''}`} style={{ display: 'block' }}>
+            <div className="sa-trace-picker" style={{ display: 'block' }}>
                 <aside className="sa-trace-list" aria-label="该 Skill 的 Trace" style={{ width: '100%', maxWidth: 'none' }}>
-                    {traceListCollapsed ? (
-                        <button
-                            className="sa-trace-collapse collapsed"
-                            onClick={() => setTraceListCollapsed(false)}
-                            aria-label="展开 Trace 列表"
-                        >
-                            <span>›</span>
-                            <b>Trace</b>
-                            <small>{traces.length}</small>
-                        </button>
-                    ) : null}
                     <div className="sa-trace-list-head">
                         <div className="sa-trace-list-title">
                             <h3>该 Skill 的 Trace <small>({traces.length})</small></h3>
-                            <button
-                                className="sa-trace-collapse"
-                                onClick={() => setTraceListCollapsed(true)}
-                                aria-label="收起 Trace 列表"
-                            >
-                                ‹
-                            </button>
                         </div>
                         <input value={query} onChange={e => setQuery(e.target.value)} placeholder="搜索 query 或 taskId..." />
                         <div className="sa-tabs">
@@ -3781,7 +3867,32 @@ function TraceDeviationPanel({
                                         {evaluated ? '✓' : '○'}
                                     </span>
                                     <span className="sa-trace-text">
-                                        <span className="sa-trace-id">{id}<small>{formatShortDate(trace.timestamp)}</small></span>
+                                        <span className="sa-trace-id">
+                                            {id}
+                                            {/* 来源徽章: A/B 灰度 vs 用例分析 vs 真实用户调用 */}
+                                            {(() => {
+                                                const source = classifyTraceSource(trace.agentName || trace.agent);
+                                                if (source === 'ab') {
+                                                    return (
+                                                        <span
+                                                            title="来自 A/B 测试 (grayscale-skill-agent / grayscale-baseline-agent)"
+                                                            style={{ marginLeft: 6, padding: '1px 6px', background: 'rgba(29,158,117,.1)', color: '#1D9E75', border: '1px solid rgba(29,158,117,.3)', borderRadius: 99, fontSize: 10, fontWeight: 600 }}
+                                                        >🔀 A/B</span>
+                                                    );
+                                                }
+                                                if (source === 'batch') {
+                                                    return (
+                                                        <span
+                                                            title="来自用例分析「从数据集」(skill-debug-executor / batch-eval-agent)"
+                                                            style={{ marginLeft: 6, padding: '1px 6px', background: 'rgba(24,95,165,.1)', color: '#185FA5', border: '1px solid rgba(24,95,165,.3)', borderRadius: 99, fontSize: 10, fontWeight: 600 }}
+                                                        >📊 用例分析</span>
+                                                    );
+                                                }
+                                                // real: 真实用户调用 (默认不加徽章, 让 A/B / batch 那两个特殊来源突出)
+                                                return null;
+                                            })()}
+                                            <small>{formatShortDate(trace.timestamp)}</small>
+                                        </span>
                                         <span className="sa-trace-query">{trace.query || '无输入内容'}</span>
                                         <span className="sa-trace-sub">
                                             {trace.framework || 'Unknown'}
@@ -3806,6 +3917,30 @@ function TraceDeviationPanel({
                     </div>
                 </aside>
             </div>
+                {/* 统一「开始评测」按钮 —— 放在 ① 配置末尾 (跟 A/B 一致)。trace 模式: 直接评测勾选的 trace。 */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--ev-line)' }}>
+                    <button
+                        type="button"
+                        onClick={runBothAnalyses}
+                        disabled={primaryDisabled}
+                        style={{
+                            padding: '9px 22px',
+                            background: primaryDisabled ? 'var(--ev-line-strong)' : 'var(--ev-info)',
+                            color: '#fff', border: 'none', borderRadius: 6,
+                            fontSize: 14, fontWeight: 700,
+                            cursor: primaryDisabled ? 'not-allowed' : 'pointer',
+                            opacity: primaryDisabled ? 0.6 : 1,
+                        }}
+                        title={!traceEvaluationBatchId ? '请先在上方"评测任务"里新建或选择一个评测任务' : primaryDisabled ? '请先在上方勾选 trace（且 trace 有主 skill）' : '对勾选的 trace 直接开始评测'}
+                    >
+                        {bothRunning ? '评测中…' : checkedTraceIds.size > 0 ? `▶ 开始评测（${checkedTraceIds.size} 条）` : '▶ 开始评测'}
+                    </button>
+                    <span style={{ fontSize: 11, color: !traceEvaluationBatchId ? 'var(--ev-warning)' : 'var(--ev-muted)' }}>
+                        {!traceEvaluationBatchId
+                            ? '请先在上方「评测任务」新建或选择一个任务，再开始评测'
+                            : '勾选 trace 后开始评测；进度见 ② 评测执行'}
+                    </span>
+                </div>
             </SectionShell>
             )}{/* /trace mode ① */}
 
@@ -3815,25 +3950,39 @@ function TraceDeviationPanel({
                 带进来——否则 .d-btn.primary 的 background: var(--ink) 解析为空，按钮"看不见"。 */}
             {caseSourceMode === 'dataset' && (
                 <div className="debug-root" style={{ background: 'transparent' }}>
-                    <BatchEvaluation newTaskTrigger={0} historyPanelTrigger={0} topConfigSlot={sourceModeToggle} />
+                    <BatchEvaluation
+                        newTaskTrigger={0}
+                        historyPanelTrigger={0}
+                        controlled
+                        hideExecAndResult
+                        topConfigSlot={<>{sharedConfigBar}{sourceModeToggle}</>}
+                        headerActions={evalTaskPickerNode}
+                        controlledDatasetIds={selectedDatasetIds}
+                        controlledEvaluatorIds={selectedEvaluatorIds}
+                        controlledEvalBatchId={traceEvaluationBatchId}
+                        controlledEvalBatchTitle={traceEvaluationBatchTitle}
+                        controlledSkillId={skill?.id}
+                    />
                 </div>
             )}
 
-            {/* trace 模式：② + ③ */}
-            {caseSourceMode === 'trace' && (<>
+            {/* ② 评测执行 + ③ 分析结果：两种 source 下统一渲染（绑定当前评测任务，与 source 无关）。
+               「从数据集」只是多了一步产生 Trace；产生后的 Trace 评测同样落到当前评测任务，统一在这里展示。
+               dataset 模式下 BatchEvaluation 用 hideExecAndResult 只渲染 ① 配置，②/③ 由这里统一出。 */}
+            {(<>
 
-            {/* ─────────── ② 执行 · 跑用例评测 ─────────── */}
+            {/* ─────────── ② 评测执行 ─────────── */}
             <SectionShell
                 num={2}
                 variant="exec"
-                title="执行 · 跑用例评测"
-                desc="对勾选的 trace 触发结果 + 轨迹双分析；下方表只列已评测 trace，点行钻取 ③ 结果详情"
+                title="评测执行"
+                desc="对勾选的 trace 触发结果 + 轨迹双分析；实时展示评测进度，下方表列已评测 trace，点「评测结果」列查看逐条评测详情"
                 open={caseExecOpen}
                 onToggle={() => setCaseExecOpen(o => !o)}
                 summary={
                     <>
                         <span>已评测</span>
-                        <code>{fullyEvaluated.length} / {traces.length}</code>
+                        <code>{evalDoneCount} / {evalTotalCount}</code>
                         {avgOverall != null && (
                             <span>· 平均评分 <b style={{ color: overallScoreKlass === 'good' ? 'var(--ev-success)' : overallScoreKlass === 'bad' ? 'var(--ev-error)' : 'var(--ev-warning)' }}>{avgOverall} 分</b></span>
                         )}
@@ -3869,183 +4018,112 @@ function TraceDeviationPanel({
                     </>
                 }
             >
-                {/* 顶部动作区：原 DetailHeader 右上角"分析当前 Trace"按钮移到这里 */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', background: '#fafafa', border: '1px solid var(--ev-line)', borderRadius: 8 }}>
-                    <button
-                        type="button"
-                        onClick={runBothAnalyses}
-                        disabled={primaryDisabled}
-                        style={{
-                            padding: '7px 16px',
-                            background: primaryDisabled ? 'var(--ev-line-strong)' : 'var(--ev-info)',
-                            color: '#fff',
-                            border: 'none',
-                            borderRadius: 6,
-                            fontSize: 13,
-                            fontWeight: 600,
-                            cursor: primaryDisabled ? 'not-allowed' : 'pointer',
-                            opacity: primaryDisabled ? 0.6 : 1,
-                        }}
-                        title={primaryDisabled ? '需选 trace 且 trace 有主 skill' : '一键并行启动结果 + 轨迹双分析'}
-                    >
-                        {bothRunning ? '分析中…'
-                            : checkedTraceIds.size > 0 ? `分析选中 ${checkedTraceIds.size} 条`
-                            : '分析当前 Trace'}
-                    </button>
-                    <span style={{ fontSize: 11, color: 'var(--ev-muted)' }}>
-                        在 ① 配置块勾选 trace 后回到此触发批量分析
-                    </span>
-                </div>
-
-                {/* trace 评测列表 —— 含已评测 + 本会话触发还在评测中的；每行带状态徽章。
-                    pending 状态：用户刚点"分析"，后台 queue 跑（concurrency=3，每条 10-30s）。
-                    上方 runBatchTraceAnalysis 的 poll 拉长到 90s 后会自动刷新 traces，
-                    一旦双分数就绪 → 自动从 pending 切到 done。 */}
-                {displayedTraces.length === 0 ? (
-                    <div style={{ padding: '24px 20px', textAlign: 'center', color: 'var(--ev-muted)', fontSize: 13, background: '#fafafa', border: '1px dashed var(--ev-line)', borderRadius: 8 }}>
-                        还没触发过评测。在 ① 配置块勾选 trace → 点上方"分析"按钮。
-                    </div>
-                ) : (
-                    <div style={{ border: '1px solid var(--ev-line)', borderRadius: 8, overflow: 'hidden' }}>
-                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                            <thead>
-                                <tr style={{ background: '#fafafa', borderBottom: '1px solid var(--ev-line)' }}>
-                                    <th style={{ padding: '8px 12px', textAlign: 'left', fontSize: 11, color: 'var(--ev-muted)', fontWeight: 600, width: 90 }}>状态</th>
-                                    <th style={{ padding: '8px 12px', textAlign: 'left', fontSize: 11, color: 'var(--ev-muted)', fontWeight: 600 }}>Trace · query</th>
-                                    <th
-                                        style={{ padding: '8px 12px', textAlign: 'right', fontSize: 11, color: 'var(--ev-muted)', fontWeight: 600, width: 70, cursor: 'help' }}
-                                        title="该 trace 的结果评测最新分（满分 100）。想看跨 trace 均值看 ③ Hero。"
-                                    >结果</th>
-                                    <th
-                                        style={{ padding: '8px 12px', textAlign: 'right', fontSize: 11, color: 'var(--ev-muted)', fontWeight: 600, width: 70, cursor: 'help' }}
-                                        title="该 trace 的轨迹评测最新分（满分 100）。想看跨 trace 均值看 ③ Hero。"
-                                    >轨迹</th>
-                                    <th
-                                        style={{ padding: '8px 12px', textAlign: 'right', fontSize: 11, color: 'var(--ev-muted)', fontWeight: 600, width: 70, cursor: 'help' }}
-                                        title="(结果 + 轨迹) / 2，该 trace 自己的均分。跟 ③ Hero 的'总评分'不一样——后者是跨多个 trace 的聚合。"
-                                    >均分</th>
-                                    <th style={{ padding: '8px 12px', textAlign: 'center', fontSize: 11, color: 'var(--ev-muted)', fontWeight: 600, width: 60 }}>查看</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {displayedTraces.map(s => {
-                                    const status = getTraceEvalStatus(s);
-                                    const r = s.resultScore;
-                                    const j = s.trajScore;
-                                    const avg = (r != null && j != null) ? Math.round((r + j) / 2) : null;
-                                    const scoreColor = (n: number | null) => n == null ? 'var(--ev-muted)'
-                                        : n >= 80 ? 'var(--ev-success)'
-                                        : n >= 60 ? 'var(--ev-warning)'
-                                        : 'var(--ev-error)';
-                                    const isSelected = selectedTraceId === s.id;
-                                    // done 和 partial 都可点开看详情(至少有一边的分数和分析);
-                                    // pending/failed 没有可看的分析详情,不可点
-                                    const clickable = status === 'done' || status === 'partial';
-                                    const failErr = status === 'failed' ? failedTaskIds.get(s.id) : null;
-                                    // 部分评测的情况:也可能有 partial err(只是其中一边失败,另一边成功)。
-                                    // 拉出来在行内提示"为什么轨迹评测/结果评测没跑通"。
-                                    const partialErr = status === 'partial' ? failedTaskIds.get(s.id) : null;
-                                    // 推断 partial 缺哪一边: 没分数的那边就是缺失的
-                                    const partialMissingSide =
-                                        status === 'partial'
-                                            ? (s.resultScore == null ? '结果评测' : s.trajScore == null ? '轨迹评测' : null)
-                                            : null;
-                                    return (
-                                        <tr
-                                            key={s.id}
-                                            onClick={() => {
-                                                if (!clickable) return;
-                                                onSelectedTraceChange(s.id);
-                                                setCaseDetailExpanded(true);
-                                                setCaseResultOpen(true);
-                                            }}
-                                            style={{
-                                                cursor: clickable ? 'pointer' : 'default',
-                                                background: isSelected ? 'var(--ev-info-soft)' : 'transparent',
-                                                borderBottom: '1px solid #f4f4f5',
-                                                opacity: status === 'pending' ? 0.85 : 1,
-                                            }}
-                                            title={
-                                                status === 'pending' ? '评测进行中——后台 queue 跑，平均每条 10-30s。等双分就绪自动切到"已评测"，可点击查看'
-                                                : status === 'failed' ? `评测失败：${failErr}`
-                                                : status === 'partial' ? '部分评测——只有一边的分数（另一边评测器没跑成功）。可点击查看已有分析'
-                                                : ''
-                                            }
-                                        >
-                                            <td style={{ padding: '10px 12px' }}>
-                                                {status === 'done' ? (
-                                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 99, background: 'var(--ev-success-soft, rgba(22,163,74,.1))', color: 'var(--ev-success)' }}>
-                                                        ✓ 已评测
-                                                    </span>
-                                                ) : status === 'pending' ? (
-                                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 99, background: 'rgba(37,99,235,.1)', color: 'var(--ev-info)' }}>
-                                                        <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: 'currentColor', animation: 'pulse 1.5s ease-in-out infinite' }} />
-                                                        评测中
-                                                    </span>
-                                                ) : status === 'partial' ? (
-                                                    <span
-                                                        style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 99, background: 'var(--ev-warning-soft, rgba(217,119,6,.1))', color: 'var(--ev-warning)', cursor: partialErr ? 'help' : 'default' }}
-                                                        title={
-                                                            partialErr
-                                                                ? `部分评测 - 缺 ${partialMissingSide}:\n${partialErr}\n\n常见原因: skill 内容缺 mermaid 流程图, 后端无法解析关键步骤; 或 skill 未生成 ParsedFlow。`
-                                                                : `部分评测 - 缺 ${partialMissingSide}。点开仍可看到已完成那边的分析。`
-                                                        }
-                                                    >
-                                                        ◐ 部分评测
-                                                    </span>
-                                                ) : (
-                                                    <span
-                                                        style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 99, background: 'var(--ev-error-soft, rgba(220,38,38,.1))', color: 'var(--ev-error)', cursor: 'help' }}
-                                                        title={`后端评测器调用失败:\n${failErr || '未知错误'}\n\n常见原因: 模型 API key 失效 / 配额不足。去 /modelconfig 检查激活的模型配置。`}
-                                                    >
-                                                        ⚠ 评测失败
-                                                    </span>
-                                                )}
-                                            </td>
-                                            <td style={{ padding: '10px 12px', maxWidth: 420, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                                {isSelected && <span style={{ color: 'var(--ev-info)', marginRight: 4 }}>›</span>}
-                                                {s.query}
-                                                <span style={{ marginLeft: 8, fontSize: 10, color: 'var(--ev-muted)', fontFamily: 'monospace' }}>{s.id.slice(0, 8)}</span>
-                                                {/* 评测失败时,把错误信息平铺一行,鼠标用户不依赖 hover 也能看到原因 */}
-                                                {status === 'failed' && failErr && (
-                                                    <div style={{ marginTop: 4, fontSize: 11, color: 'var(--ev-error)', whiteSpace: 'normal', lineHeight: 1.4 }}>
-                                                        {failErr.length > 200 ? failErr.slice(0, 200) + '…' : failErr}
-                                                    </div>
-                                                )}
-                                                {/* 部分评测:把缺失那边的原因也平铺出来,用户立刻知道"轨迹评测为什么没跑成"。
-                                                    不显原始 stack/api err,显简短的"缺什么"——具体长错误走 hover。 */}
-                                                {status === 'partial' && partialMissingSide && (
-                                                    <div style={{ marginTop: 4, fontSize: 11, color: 'var(--ev-warning)', whiteSpace: 'normal', lineHeight: 1.4, display: 'flex', alignItems: 'flex-start', gap: 4 }}>
-                                                        <Info style={{ width: 14, height: 14, flexShrink: 0, marginTop: 1 }} aria-hidden />
-                                                        <span>
-                                                            缺 <b>{partialMissingSide}</b>
-                                                            {partialErr && ': ' + (partialErr.length > 150 ? partialErr.slice(0, 150) + '…' : partialErr)}
-                                                        </span>
-                                                    </div>
-                                                )}
-                                            </td>
-                                            <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 700, color: scoreColor(r) }}>{r ?? '—'}</td>
-                                            <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 700, color: scoreColor(j) }}>{j ?? '—'}</td>
-                                            <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 800, color: scoreColor(avg) }}>{avg ?? '—'}</td>
-                                            <td style={{ padding: '10px 12px', textAlign: 'center', color: clickable ? 'var(--ev-info)' : 'var(--ev-muted)', fontSize: 12 }}>
-                                                {clickable ? '↓' : '…'}
-                                            </td>
-                                        </tr>
-                                    );
-                                })}
-                            </tbody>
-                        </table>
-                    </div>
-                )}
+                {/* 评测执行记录表 (A/B 同款三列形态, 共享 ExecutionRecordsTable):
+                    执行 session id → 链路追踪 (/trace) · 评测状态/进度 · 评测结果 → 逐条评测详情 (/eval/trajectory)。
+                    数据由 displayedTraces 映射, runBatchTraceAnalysis 的轮询会刷新状态。
+                    「开始评测」按钮已统一到 ① 配置块末尾。 */}
+                <ExecutionRecordsTable
+                    emptyHint={'还没触发过评测。在 ① 配置块勾选 trace → 点末尾「开始评测」。'}
+                    onRowClick={rec => {
+                        const t = displayedTraces.find(x => x.id === rec.id);
+                        if (!t) return;
+                        const st = getTraceEvalStatus(t);
+                        if (st === 'done' || st === 'partial') {
+                            onSelectedTraceChange(rec.id);
+                            setCaseResultOpen(true);
+                        }
+                    }}
+                    onRetry={async rec => {
+                        const id = rec.id;
+                        // 立刻给反馈：把这条标记为"已触发"——getTraceEvalStatus 读 triggeredTaskIds
+                        // 返回 'pending'，行状态徽章随即切到「评测中」(spinner) 且重试按钮置灰，
+                        // 不必等后端 is_evaluating 回报或手动刷新。和 ① 配置块「开始评测」同款。
+                        setTriggeredTaskIds(prev => { const next = new Map(prev); next.set(id, Date.now()); return next; });
+                        // 重试即重来：清掉旧失败标记，别再挂着扰乱状态。
+                        setFailedTaskIds(prev => { if (!prev.has(id)) return prev; const next = new Map(prev); next.delete(id); return next; });
+                        if (!onBatchAnalyze) return;
+                        // onBatchAnalyze 内部已做 30×3s 轮询 reloadTraces，分数会随轮询实时回填。
+                        const failures = await onBatchAnalyze([id]);
+                        if (failures) {
+                            const trajErr = failures.trajectoryErrors?.get(id);
+                            const resultErrAll = (failures.resultErrors || []).join('\n');
+                            if (trajErr || resultErrAll) {
+                                setFailedTaskIds(prev => {
+                                    const next = new Map(prev);
+                                    const parts: string[] = [];
+                                    if (resultErrAll) parts.push(`结果评测：${resultErrAll}`);
+                                    if (trajErr) parts.push(`轨迹评测：${trajErr}`);
+                                    if (parts.length > 0) next.set(id, parts.join('\n'));
+                                    return next;
+                                });
+                            }
+                        }
+                    }}
+                    onDelete={async rec => {
+                        const id = rec.id;
+                        if (typeof window !== 'undefined' && !window.confirm('确定从「评测执行」列表删除这条记录吗？\n该 trace 在当前评测任务下的评测结果会被删除（trace 本身保留，可重新评测）。')) return;
+                        try {
+                            if (user) {
+                                const res = await apiFetch('/api/eval/trajectory/results', {
+                                    method: 'DELETE',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ user, taskId: id, runId: traceEvaluationBatchId || undefined }),
+                                });
+                                if (!res.ok) {
+                                    const data = await res.json().catch(() => ({}));
+                                    alert('删除失败：' + (data?.error || `HTTP ${res.status}`));
+                                    return;
+                                }
+                            }
+                            // 前端隐藏 + 持久化，并从各状态集合移除，避免轮询/恢复又把它显示回来。
+                            const next = new Set(deletedTaskIds); next.add(id); persistDeletedTaskIds(next);
+                            setTriggeredTaskIds(prev => { if (!prev.has(id)) return prev; const m = new Map(prev); m.delete(id); return m; });
+                            setFailedTaskIds(prev => { if (!prev.has(id)) return prev; const m = new Map(prev); m.delete(id); return m; });
+                            setEvaluatedTaskIds(prev => { if (!prev.has(id)) return prev; const ss = new Set(prev); ss.delete(id); return ss; });
+                        } catch (e) {
+                            alert('删除失败：' + (e instanceof Error ? e.message : String(e)));
+                        }
+                    }}
+                    records={displayedTraces.map(s => {
+                        const st = getTraceEvalStatus(s);
+                        const meta = traceEvalResultsMap.get(s.id);
+                        let compStatus: string = st === 'done' ? 'done' : st === 'failed' ? 'failed' : st === 'partial' ? 'partial' : 'running';
+                        let errorMsg = failedTaskIds.get(s.id) || undefined;
+                        // 任务里这条结果行本身失败 → 显示失败（否则没分数会停在"评测中"）。
+                        if (meta?.status === 'failed' && compStatus !== 'done') {
+                            compStatus = 'failed';
+                        }
+                        // 提交过、已结束(不在触发中)、任务里既没结果行也没分数 → 标"未产出"，避免静默丢条。
+                        if (st === 'idle' && !meta && submittedTaskIds.has(s.id) && !triggeredTaskIds.has(s.id)) {
+                            compStatus = 'failed';
+                            errorMsg = errorMsg || '未在本次评测任务产出评测结果（可能该 trace 未匹配到 case 或未引用当前 skill）';
+                        }
+                        return {
+                            id: s.id,
+                            caseLabel: s.query || s.id.slice(0, 12),
+                            caseTitle: s.query || s.id,
+                            executionTraceId: s.id,
+                            evaluationTraceId: meta?.evaluationTraceId,
+                            resultEvalTraceId: meta?.resultEvalTraceId,
+                            trajEvalTraceId: meta?.trajEvalTraceId,
+                            datasetId: meta?.datasetId,
+                            evaluatorRunId: traceEvaluationBatchId || undefined,
+                            status: compStatus,
+                            resultScore: s.resultScore,
+                            trajScore: s.trajScore,
+                            errorMsg,
+                        } as EvalRecordRow;
+                    })}
+                />
             </SectionShell>
 
             {/* ─────────── ③ 结果 · 用例分析（仅 trace 模式） ─────────── */}
             <SectionShell
                 num={3}
                 variant="result"
-                title="结果 · 用例分析"
-                desc={fullyEvaluated.length > 0
-                    ? `已评测 ${fullyEvaluated.length} / ${traces.length} trace · 结果 + 轨迹 双维度`
+                title="分析结果"
+                desc={evalDoneCount > 0
+                    ? `已评测 ${evalDoneCount} / ${evalTotalCount} · 结果 + 轨迹 双维度`
                     : '尚未评测'}
                 open={caseResultOpen}
                 onToggle={() => setCaseResultOpen(o => !o)}
@@ -4054,7 +4132,7 @@ function TraceDeviationPanel({
                         <>
                             <span>总评分</span>
                             <code className={`score-${overallScoreKlass}`}>{avgOverall} 分</code>
-                            <span>· 通过 <b>{passCount}</b> / <b>{fullyEvaluated.length}</b></span>
+                            <span>· 通过 <b>{passCount}</b> / <b>{evalDoneCount}</b></span>
                         </>
                     ) : (
                         <span style={{ color: 'var(--ev-muted)' }}>未评测</span>
@@ -4069,9 +4147,9 @@ function TraceDeviationPanel({
                             <span className="ev-hero-unit">分</span>
                         </div>
                         <div className="ev-hero-label">
-                            总评分 · 结果 + 轨迹 平均 · 已评测 {fullyEvaluated.length} / {traces.length} trace
+                            总评分 · 结果 + 轨迹 平均 · 已评测 {evalDoneCount} / {evalTotalCount}
                             <span style={{ display: 'block', fontSize: 11, color: 'var(--ev-muted)', fontWeight: 400, marginTop: 2 }}>
-                                跨已评测 trace 聚合 · 不随 ② 选中切换变化
+                                跨当前评测任务的有效评测聚合 · 不随 source(从Trace/从数据集) 切换变化
                             </span>
                         </div>
                     </div>
@@ -4091,1243 +4169,23 @@ function TraceDeviationPanel({
                             <div className="ev-hero-sub-hint">执行路径是否合理</div>
                         </div>
                         <div className="ev-hero-sub-item">
-                            <div className={`ev-hero-sub-num ${fullyEvaluated.length === 0 ? '' : passRatePct >= 80 ? 'good' : passRatePct < 50 ? 'bad' : ''}`}>
-                                {fullyEvaluated.length === 0 ? '--' : `${passRatePct}%`}
+                            <div className={`ev-hero-sub-num ${evalDoneCount === 0 ? '' : passRatePct >= 80 ? 'good' : passRatePct < 50 ? 'bad' : ''}`}>
+                                {evalDoneCount === 0 ? '--' : `${passRatePct}%`}
                             </div>
                             <div className="ev-hero-sub-label">通过率</div>
                             <div className="ev-hero-sub-hint">已评测中达标</div>
                         </div>
                         <div className="ev-hero-sub-item">
-                            <div className="ev-hero-sub-num">{fullyEvaluated.length} / {traces.length}</div>
+                            <div className="ev-hero-sub-num">{evalDoneCount} / {evalTotalCount}</div>
                             <div className="ev-hero-sub-label">评测进度</div>
-                            <div className="ev-hero-sub-hint">{traces.length - fullyEvaluated.length} 条待评测</div>
+                            <div className="ev-hero-sub-hint">{Math.max(0, evalTotalCount - evalDoneCount)} 条待评测</div>
                         </div>
                     </div>
                 </div>
 
-                {/* 提升到 section 级的 dual-tab —— 同时控制下方 Findings + 选中 trace 的深度视图 */}
-                <div className="sa-detail-tabs" role="tablist" style={{ display: 'flex', gap: 0, borderBottom: '1px solid var(--sa-border)', marginBottom: 0 }}>
-                    <button
-                        role="tab"
-                        aria-selected={detailTab === 'result'}
-                        className={`sa-detail-tab${detailTab === 'result' ? ' active' : ''}`}
-                        onClick={() => setDetailTab('result')}
-                        style={{
-                            padding: '8px 16px',
-                            background: detailTab === 'result' ? 'var(--sa-bg)' : 'transparent',
-                            border: 'none',
-                            borderBottom: detailTab === 'result' ? '2px solid var(--sa-primary)' : '2px solid transparent',
-                            color: detailTab === 'result' ? 'var(--sa-primary)' : 'var(--sa-secondary)',
-                            fontSize: 13,
-                            fontWeight: detailTab === 'result' ? 700 : 500,
-                            cursor: 'pointer',
-                        }}
-                    >
-                        📋 结果分析{avgResult != null ? ` · ${avgResult} 分` : ''}
-                    </button>
-                    <button
-                        role="tab"
-                        aria-selected={detailTab === 'trajectory'}
-                        className={`sa-detail-tab${detailTab === 'trajectory' ? ' active' : ''}`}
-                        onClick={() => setDetailTab('trajectory')}
-                        style={{
-                            padding: '8px 16px',
-                            background: detailTab === 'trajectory' ? 'var(--sa-bg)' : 'transparent',
-                            border: 'none',
-                            borderBottom: detailTab === 'trajectory' ? '2px solid var(--sa-primary)' : '2px solid transparent',
-                            color: detailTab === 'trajectory' ? 'var(--sa-primary)' : 'var(--sa-secondary)',
-                            fontSize: 13,
-                            fontWeight: detailTab === 'trajectory' ? 700 : 500,
-                            cursor: 'pointer',
-                        }}
-                    >
-                        🧭 轨迹分析{avgTraj != null ? ` · ${avgTraj} 分` : ''}
-                    </button>
-                </div>
-
-                {/* per-trace 符合项 + 扣分项 视图（替换旧 FindingsGrouped 按 case 状态分组） */}
-                <CaseAnalysisItemsView
-                    selectedTrace={selectedTrace}
-                    selectedTraceId={selectedTraceId}
-                    tab={detailTab}
-                    trajectoryEval={trajectoryEval}
-                    matchData={matchData}
-                    resultScore={(() => {
-                        const s = scoredTraces.find(s => s.id === selectedTraceId);
-                        return s?.resultScore ?? null;
-                    })()}
-                    trajScore={(() => {
-                        const s = scoredTraces.find(s => s.id === selectedTraceId);
-                        return s?.trajScore ?? null;
-                    })()}
-                />
-
-                {/* "选中 trace 的完整深度视图" —— 默认折叠（避免 Mermaid + Skill 归因等长内容
-                    一进来就把页面铺满）。用户主动展开才看，与 mockup 行为一致。 */}
-                <button
-                    type="button"
-                    onClick={() => setCaseDetailExpanded(v => !v)}
-                    style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 10,
-                        padding: '12px 16px',
-                        background: caseDetailExpanded ? 'var(--ev-info-soft)' : '#fafafa',
-                        border: `1px ${caseDetailExpanded ? 'solid' : 'dashed'} ${caseDetailExpanded ? 'var(--ev-info)' : 'var(--ev-line)'}`,
-                        borderRadius: 8,
-                        cursor: 'pointer',
-                        fontSize: 13,
-                        fontWeight: 600,
-                        color: caseDetailExpanded ? 'var(--ev-info)' : 'var(--ev-fg2)',
-                        textAlign: 'left',
-                    }}
-                    title="展开 / 收起选中 trace 的完整分析（含 Mermaid 流程图 + Skill 归因）"
-                >
-                    <span style={{ fontSize: 16, transform: caseDetailExpanded ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform .2s' }}>›</span>
-                    <span style={{ flex: 1 }}>
-                        {caseDetailExpanded ? '收起分析细节' : '展开分析细节'}
-                        {selectedTrace ? (
-                            <span style={{ marginLeft: 8, fontWeight: 400, color: 'var(--ev-muted)', fontSize: 12 }}>
-                                · 当前选中 <code style={{ background: 'rgba(0,0,0,.05)', padding: '1px 6px', borderRadius: 3, fontFamily: 'monospace', fontSize: 11 }}>{selectedTraceId.slice(0, 12)}…</code>
-                            </span>
-                        ) : (
-                            <span style={{ marginLeft: 8, fontWeight: 400, color: 'var(--ev-muted)', fontSize: 12 }}>· 未选中 trace（先到 ② 执行块挑一条）</span>
-                        )}
-                    </span>
-                    <span style={{ fontSize: 11, color: 'var(--ev-muted)', fontWeight: 400 }}>
-                        {caseDetailExpanded ? '含 Mermaid 流程图 + Skill 归因' : '含完整 ResultAnalysisSection / TraceAlignmentPanel / 4 类 evaluator findings'}
-                    </span>
-                </button>
-                {caseDetailExpanded && (
-                <div className="sa-trace-detail" aria-label="Trace 分析详情" style={{ width: '100%', maxWidth: 'none' }}>
-                    {!selectedTrace && (
-                        <EmptyState title="请选择 Trace" text="左侧选择一条执行链路后，这里会显示 Skill 标准流程和实际执行流程的对比。" />
-                    )}
-                    {selectedTrace && (
-                        <>
-                            <div className="sa-trace-summary">
-                                <div>
-                                    <div className="sa-code-line">
-                                        {selectedTraceId}
-                                        {matchData?.analyzed
-                                            ? <span className="sa-pill primary">已分析</span>
-                                            : <span className="sa-pill">待分析</span>}
-                                    </div>
-                                    <h3>{selectedTrace.query || '无输入内容'}</h3>
-                                    <p>
-                                        框架 <b>{selectedTrace.framework || 'Unknown'}</b>
-                                        {selectedTrace.model ? <> · Model <b>{selectedTrace.model}</b></> : null}
-                                        {selectedTrace.timestamp ? <> · 运行于 <b>{formatDateTime(selectedTrace.timestamp)}</b></> : null}
-                                    </p>
-                                    {graphTargetDiffers && (
-                                        <div className="sa-scope-note">
-                                            当前只支持分析外层主 Agent 的主 Skill；子 Agent 内部 Skill 仅作为来源展示，不作为本页主 Skill 对齐目标。
-                                        </div>
-                                    )}
-                                </div>
-                            </div>
-
-                            {error && <div className="sa-alert">{error}</div>}
-
-                            {/* dual-tab 已提到 ③ section level，这里只渲染当前 tab 的完整内容 */}
-
-                            {detailTab === 'result' && (
-                                <ResultAnalysisSection
-                                    trajectoryEval={trajectoryEval}
-                                    trajEvalLoading={trajEvalLoading}
-                                    trajEvalError={trajEvalError}
-                                    onStartEval={startResultEval}
-                                    starting={trajEvalStarting}
-                                />
-                            )}
-
-                            {detailTab === 'trajectory' && (
-                                <>
-                                    {matchLoading && <EmptyState title="正在读取分析结果" text="如果这条 Trace 尚未分析，稍后可点击按钮发起 Skill 对比。" compact />}
-                                    {!matchLoading && (!matchData?.analyzed || (!matchData.staticMermaid && !matchData.dynamicMermaid && !matchData.matchJson)) && (
-                                        <EmptyState
-                                            title="这条 Trace 还未做轨迹分析"
-                                            text={primarySkill?.name
-                                                ? '点击后会基于外层主 Agent 的主 Skill 做流程图对齐；Skill 归因会从同一份 alignment 自动派生。'
-                                                : '当前 Trace 的外层主 Agent 未加载 Skill，无法进行流程图对齐分析。'}
-                                            actionLabel={primarySkill?.name ? (analyzing ? '分析中...' : '运行流程图比对') : undefined}
-                                            onAction={primarySkill?.name ? runAnalyze : undefined}
-                                        />
-                                    )}
-                                    {!matchLoading && matchData?.analyzed && (matchData.staticMermaid || matchData.dynamicMermaid || matchData.matchJson) && (
-                                    <>
-                                    {/* ───── 单 Trace 轨迹分数 Hero ─────
-                                         与结果分析 Hero 同款风格：大字号分数置顶，无副指标。
-                                         分数 = flow-parser overallScore（匹配度公式见 scoreFormulaTitle）。 */}
-                                    <section className="sa-standards-wrap" style={{ marginBottom: 12 }}>
-                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, padding: '16px 18px' }}>
-                                            <div>
-                                                <div style={{ fontSize: 11, color: 'var(--sa-muted)', letterSpacing: '0.04em', textTransform: 'uppercase', fontWeight: 700, marginBottom: 4 }}>
-                                                    轨迹分析评分
-                                                    <span style={{ marginLeft: 6, textTransform: 'none', letterSpacing: 0, fontWeight: 500, color: 'var(--sa-muted)', fontSize: 10 }} title={scoreFormulaTitle}>· 流程图匹配度公式</span>
-                                                </div>
-                                                <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-                                                    <b style={{
-                                                        fontSize: 44, fontWeight: 800, lineHeight: 1, letterSpacing: '-1.5px',
-                                                        color: score == null ? 'var(--sa-muted)'
-                                                            : score >= 80 ? 'var(--sa-success)'
-                                                            : score >= 50 ? 'var(--sa-warning)'
-                                                            : 'var(--sa-danger)',
-                                                    }}>
-                                                        {score == null ? '--' : score}
-                                                    </b>
-                                                    <span style={{ fontSize: 14, color: 'var(--sa-muted)', fontWeight: 600 }}>/ 100</span>
-                                                </div>
-                                            </div>
-                                            <button
-                                                className="sa-mini-action"
-                                                onClick={retryTraceAnalysis}
-                                                disabled={analyzing || trajEvalStarting || matchLoading || !selectedTraceId || trajectoryEval?.status === 'pending' || trajectoryEval?.status === 'running'}
-                                            >
-                                                {analyzing || trajEvalStarting ? '重试中...' : '重试'}
-                                            </button>
-                                        </div>
-                                    </section>
-
-                                    <section className="sa-standards-wrap">
-                                        <div className="sa-wrap-head">
-                                            <h3>执行轨迹对齐 · Skill 预期标注</h3>
-                                            <span style={{ color: 'var(--sa-muted)', fontSize: 12 }}>以实际执行为主，直接标注偏离与缺失步骤</span>
-                                        </div>
-                                        <TraceAlignmentPanel
-                                            matches={matches}
-                                            skippedExpectedSteps={skippedExpectedSteps}
-                                            problemByStepKey={problemByStepKey}
-                                            flowSteps={parsedFlow?.steps || []}
-                                            extractedSteps={extractedSteps}
-                                            alignment={parsedMatch?.alignment}
-                                            mermaidCode={matchData.dynamicMermaid}
-                                        />
-                                    </section>
-
-                                    {/* ───── Skill 归因分析（由 alignment 派生） ─────
-                                        这是进入 skill-opt 优化输入的诊断结果，事实源与上方流程对齐一致 */}
-                                    <section className="sa-standards-wrap">
-                                        <div className="sa-wrap-head">
-                                            <h3>Skill 归因分析</h3>
-                                        </div>
-                                        <div style={{ padding: '14px 16px' }}>
-                                            {/* 归因调用的 LLM 模型走 user settings 的 active config(平台默认),
-                                                这里不暴露切换入口,避免误导"切了影响所有评估"。
-                                                要换默认模型去 /modelconfig。 */}
-                                            {trajEvalError && <div className="sa-alert" style={{ marginBottom: 10 }}>{trajEvalError}</div>}
-
-                                            {!trajectoryEval && !trajEvalLoading && (
-                                                <div className="sa-dx-eval-empty">
-                                                    <p style={{ margin: '0 0 6px', color: 'var(--sa-text)', fontWeight: 500 }}>
-                                                        这条 Trace 还没经过<b>Skill 归因分析</b>
-                                                    </p>
-                                                    <p style={{ margin: 0, fontSize: 12.5, color: 'var(--sa-secondary)' }}>
-                                                        点击上方「重试」会刷新执行轨迹对齐，并基于同一份 <b>alignment</b> 派生归因候选；
-                                                        LLM 只补充是否可归因到主 Skill、原因和修复建议,
-                                                        可归因的自动写入 SkillIssue 表喂给 skill-opt 对话。
-                                                        <b>无需评测集</b>;上方&ldquo;流程对比&rdquo;就是唯一事实源。
-                                                    </p>
-                                                </div>
-                                            )}
-                                            {trajEvalLoading && !trajectoryEval && (
-                                                <div className="sa-dx-eval-empty">读取归因结果中…</div>
-                                            )}
-
-                                            {trajectoryEval && (trajectoryEval.status === 'pending' || trajectoryEval.status === 'running') && (
-                                                <div className="sa-dx-eval-progress">
-                                                    <div className="sa-dx-eval-progress-head">
-                                                        <span className="sa-dx-eval-progress-title">
-                                                            归因生成{trajectoryEval.status === 'pending' ? '已入队，准备启动…' : '正在执行…'}
-                                                        </span>
-                                                        <span className="sa-dx-eval-progress-meta">
-                                                            已用 <b>{trajEvalElapsed}s</b>
-                                                        </span>
-                                                    </div>
-                                                    <div className="sa-dx-eval-progress-bar">
-                                                        <div className="sa-dx-eval-progress-bar-fill" />
-                                                    </div>
-                                                    <ul className="sa-dx-eval-tasks">
-                                                        <li><span className="dot running" />读取 alignment · 复用轨迹分析的唯一事实源</li>
-                                                        <li><span className="dot running" />派生候选 · violations / skippedExpectedSteps / out_of_scope</li>
-                                                        <li><span className="dot running" />补充建议 · 仅判断是否归因到 Skill 与修复方式</li>
-                                                    </ul>
-                                                    <div className="sa-dx-eval-progress-foot">
-                                                        基于 alignment 做 Skill 归因 · 无需重复步骤抽取/流程对齐 · 结果会自动写入 SkillIssue 喂给 skill-opt
-                                                    </div>
-                                                </div>
-                                            )}
-
-                                            {trajectoryEval?.status === 'failed' && (
-                                                <div className="sa-alert">
-                                                    归因失败：{trajectoryEval.errorMessage || '未知错误'}
-                                                </div>
-                                            )}
-                                            {(trajectoryEval?.status === 'done' || trajectoryEval?.status === 'failed') && (
-                                                <SkillAttributionBadge row={trajectoryEval} />
-                                            )}
-                                            {trajectoryEval?.status === 'done' && (
-                                                <TrajectoryEvaluatorFindings row={trajectoryEval} />
-                                            )}
-                                        </div>
-                                    </section>
-                                    </>
-                                    )}
-
-                                </>
-                            )}
-                        </>
-                    )}
-                </div>
-                )}
             </SectionShell>{/* /③ 结果 */}
-            </>)}{/* /trace mode (②+③) */}
+            </>)}{/* /② 评测执行 + ③ 分析结果 (统一, 与 source 无关) */}
         </section>
-    );
-}
-
-/* ─────────────────────────────────────────────────────────────────
-   评估器深度分析组件
-   传入 TrajectoryEvalRow，按 4 类 finding 渲染:
-     deviation_steps    → 路径偏离
-     key_point_findings → 关键动作（covered=false 的）
-     tool_choice_findings → 工具选择
-     result_issues      → 结果问题（4 子类:format/extra/verbosity/incorrect_fact）
-   每条带 is_skill_attributable 徽章 + improvement_suggestion。
-   ───────────────────────────────────────────────────────────────── */
-function pickAttr(obj: Record<string, unknown>, snakeKey: string, camelKey: string): unknown {
-    if (snakeKey in obj && obj[snakeKey] !== undefined) return obj[snakeKey];
-    if (camelKey in obj && obj[camelKey] !== undefined) return obj[camelKey];
-    return undefined;
-}
-
-function extractFindings(row: TrajectoryEvalRow): EvaluatorFinding[] {
-    const out: EvaluatorFinding[] = [];
-
-    // 1) deviation_steps（API 已解析为 row.deviationSteps 数组）
-    const dev: Record<string, unknown>[] = Array.isArray(row.deviationSteps)
-        ? (row.deviationSteps as Record<string, unknown>[])
-        : [];
-    for (const d of dev) {
-        const isAttr = pickAttr(d, 'is_skill_attributable', 'isSkillAttributable');
-        const suggestion = pickAttr(d, 'improvement_suggestion', 'improvementSuggestion');
-        out.push({
-            kind: 'deviation',
-            title: String(d.name ?? d.kind ?? '路径偏离') + (d.stepIndex != null ? ` · 步骤 ${d.stepIndex}` : ''),
-            description: typeof d.deviation === 'string' ? d.deviation : undefined,
-            severity: typeof d.severity === 'string' ? d.severity as EvaluatorFinding['severity'] : undefined,
-            stepIndex: typeof d.stepIndex === 'number' ? d.stepIndex : undefined,
-            isSkillAttributable: typeof isAttr === 'boolean' ? isAttr : true,
-            improvementSuggestion: typeof suggestion === 'string' ? suggestion : undefined,
-        });
-    }
-
-    // API list 端点返回的是已解析的 rawAnalysis 对象（不是原始 JSON 字符串）。
-    const raw = row.rawAnalysis ?? null;
-    const findFromRaw = (key: string): Record<string, unknown>[] => {
-        if (!raw) return [];
-        const direct = raw[key];
-        if (Array.isArray(direct)) return direct as Record<string, unknown>[];
-        const resultEval = raw.resultEvaluation;
-        if (resultEval && typeof resultEval === 'object' && Array.isArray((resultEval as Record<string, unknown>)[key])) {
-            return (resultEval as Record<string, unknown>)[key] as Record<string, unknown>[];
-        }
-        return [];
-    };
-
-    // 2) key_point_findings 仅展示 covered=false 的
-    for (const f of findFromRaw('key_point_findings')) {
-        const covered = pickAttr(f, 'covered', 'covered');
-        if (covered === true) continue; // 已覆盖的不展示（不是问题）
-        const isAttr = pickAttr(f, 'is_skill_attributable', 'isSkillAttributable');
-        const suggestion = pickAttr(f, 'improvement_suggestion', 'improvementSuggestion');
-        out.push({
-            kind: 'key_point',
-            title: `关键动作未覆盖：${String(f.content ?? '未命名要点')}`,
-            description: typeof f.explanation === 'string' ? f.explanation : undefined,
-            severity: typeof f.severity === 'string' ? f.severity as EvaluatorFinding['severity'] : undefined,
-            covered: false,
-            isSkillAttributable: typeof isAttr === 'boolean' ? isAttr : true,
-            improvementSuggestion: typeof suggestion === 'string' ? suggestion : undefined,
-        });
-    }
-
-    // 3) tool_choice_findings
-    for (const f of findFromRaw('tool_choice_findings')) {
-        const isAttr = pickAttr(f, 'is_skill_attributable', 'isSkillAttributable');
-        const suggestion = pickAttr(f, 'improvement_suggestion', 'improvementSuggestion');
-        out.push({
-            kind: 'tool_choice',
-            title: `工具选择问题：${String(f.tool ?? f.issue ?? '工具调用')}` + (f.step_index != null || f.stepIndex != null ? ` · 步骤 ${f.step_index ?? f.stepIndex}` : ''),
-            description: typeof f.reason === 'string' ? f.reason : (typeof f.issue === 'string' ? f.issue : undefined),
-            severity: typeof f.severity === 'string' ? f.severity as EvaluatorFinding['severity'] : undefined,
-            stepIndex: typeof f.step_index === 'number' ? f.step_index as number : (typeof f.stepIndex === 'number' ? f.stepIndex as number : undefined),
-            isSkillAttributable: typeof isAttr === 'boolean' ? isAttr : true,
-            improvementSuggestion: typeof suggestion === 'string' ? suggestion : undefined,
-        });
-    }
-
-    // 4) result_issues（任务完成度评估器的输出）
-    const RESULT_KIND_LABEL: Record<string, string> = {
-        format: '格式偏差',
-        extra_content: '多余内容',
-        verbosity: '表达问题',
-        incorrect_fact: '事实错误',
-        other: '结果问题',
-    };
-    for (const f of findFromRaw('result_issues')) {
-        const isAttr = pickAttr(f, 'is_skill_attributable', 'isSkillAttributable');
-        const suggestion = pickAttr(f, 'improvement_suggestion', 'improvementSuggestion');
-        const subKind = typeof f.kind === 'string' ? f.kind : 'other';
-        out.push({
-            kind: 'result_issue',
-            title: `${RESULT_KIND_LABEL[subKind] || subKind}：${String(f.summary ?? '未命名问题')}`,
-            severity: typeof f.severity === 'string' ? f.severity as EvaluatorFinding['severity'] : undefined,
-            isSkillAttributable: typeof isAttr === 'boolean' ? isAttr : true,
-            improvementSuggestion: typeof suggestion === 'string' ? suggestion : undefined,
-        });
-    }
-
-    return out;
-}
-
-const FINDING_KIND_LABEL: Record<EvaluatorFinding['kind'], string> = {
-    deviation: '路径偏离',
-    key_point: '关键动作',
-    tool_choice: '工具选择',
-    result_issue: '结果问题',
-};
-
-/* ─────────────────────────────────────────────────────────────────
-   per-trace 符合项 / 扣分项 抽取
-   - 结果分析 tab：从 trajectoryEval.rawAnalysis 抽
-       符合项 = key_point_findings 里 covered=true 的
-       扣分项 = key_point_findings 里 covered=false + result_issues
-   - 轨迹分析 tab：从 trajectoryEval.rawAnalysis + matchData 抽
-       符合项 = matchData.matches（命中的 flow 步骤）
-       扣分项 = deviation_steps + tool_choice_findings
-   返回的 deductions 复用 EvaluatorFinding 结构，已经带 severity / evidence。
-   ───────────────────────────────────────────────────────────────── */
-function extractCoveredKeyPoints(row: TrajectoryEvalRow | null): MatchingItem[] {
-    if (!row) return [];
-    const raw = row.rawAnalysis ?? null;
-    if (!raw) return [];
-    const direct = raw.key_point_findings;
-    const fromResult = (raw.resultEvaluation && typeof raw.resultEvaluation === 'object')
-        ? (raw.resultEvaluation as Record<string, unknown>).key_point_findings
-        : null;
-    const list = Array.isArray(direct) ? direct
-        : Array.isArray(fromResult) ? fromResult : [];
-    const out: MatchingItem[] = [];
-    for (const f of list as Record<string, unknown>[]) {
-        if (f.covered !== true) continue;
-        out.push({
-            kind: 'key_point_covered',
-            title: String(f.content ?? '未命名关键点'),
-            evidence: typeof f.explanation === 'string' ? f.explanation : undefined,
-        });
-    }
-    return out;
-}
-
-function extractMatchedSteps(matchData: MatchData | null): MatchingItem[] {
-    if (!matchData?.matchJson) return [];
-    try {
-        const parsed = JSON.parse(matchData.matchJson) as Record<string, unknown>;
-        const matches = Array.isArray(parsed.matches) ? parsed.matches : [];
-        return (matches as Record<string, unknown>[])
-            .filter(m => m.matched !== false)  // 只要命中的
-            .map((m, i) => ({
-                kind: 'step_matched' as const,
-                title: `步骤 ${typeof m.stepIndex === 'number' ? m.stepIndex + 1 : i + 1}：${String(m.stepName ?? m.expectedName ?? m.name ?? '未命名步骤')}`,
-                evidence: typeof m.actualStep === 'string' ? `实际执行：${m.actualStep}`
-                    : typeof m.evidence === 'string' ? m.evidence
-                    : undefined,
-            }));
-    } catch {
-        return [];
-    }
-}
-
-/** 按 dual-tab 维度抽取本 trace 的符合项 + 扣分项 */
-function extractItemsForTab(
-    row: TrajectoryEvalRow | null,
-    matchData: MatchData | null,
-    tab: 'result' | 'trajectory',
-): { matching: MatchingItem[]; deductions: EvaluatorFinding[] } {
-    if (!row && !matchData) return { matching: [], deductions: [] };
-    const allDeductions = row ? extractFindings(row) : [];
-    if (tab === 'result') {
-        return {
-            matching: extractCoveredKeyPoints(row),
-            deductions: allDeductions.filter(f => f.kind === 'key_point' || f.kind === 'result_issue'),
-        };
-    } else {
-        return {
-            matching: extractMatchedSteps(matchData),
-            deductions: allDeductions.filter(f => f.kind === 'deviation' || f.kind === 'tool_choice'),
-        };
-    }
-}
-
-/** per-trace 符合项 / 扣分项 视图组件 —— 替代旧的 FindingsGrouped (按 trace 状态分组) */
-function CaseAnalysisItemsView({
-    selectedTrace,
-    selectedTraceId,
-    tab,
-    trajectoryEval,
-    matchData,
-    resultScore,
-    trajScore,
-}: {
-    selectedTrace: TraceRecord | null;
-    selectedTraceId: string;
-    tab: 'result' | 'trajectory';
-    trajectoryEval: TrajectoryEvalRow | null;
-    matchData: MatchData | null;
-    resultScore: number | null;
-    trajScore: number | null;
-}) {
-    if (!selectedTrace) {
-        return (
-            <div className="recall-empty" style={{ marginTop: 12 }}>
-                <b>在 ② 执行块挑一条 trace 看分析细节</b>
-                <div style={{ marginTop: 6, fontSize: 12 }}>每条 trace 都会按当前 tab（结果 / 轨迹）展开符合项 + 扣分项</div>
-            </div>
-        );
-    }
-    const { matching, deductions } = extractItemsForTab(trajectoryEval, matchData, tab);
-    const score = tab === 'result' ? resultScore : trajScore;
-    const scoreColor = score == null ? 'var(--ev-muted)'
-        : score >= 80 ? 'var(--ev-success)'
-        : score >= 60 ? 'var(--ev-warning)'
-        : 'var(--ev-error)';
-    const sevColor = (s?: string) => s === 'high' ? 'var(--ev-error)'
-        : s === 'medium' ? 'var(--ev-warning)'
-        : 'var(--ev-muted)';
-    return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14, marginTop: 12 }}>
-            {/* 选中 trace 头部 */}
-            <div style={{ padding: '10px 14px', background: '#fafafa', border: '1px solid var(--ev-line)', borderRadius: 8, display: 'flex', alignItems: 'center', gap: 10 }}>
-                <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--ev-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>当前 trace</span>
-                <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: 'var(--ev-fg)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {selectedTrace.query || '(无 query)'}
-                </span>
-                <code style={{ fontFamily: 'monospace', fontSize: 10, color: 'var(--ev-muted)', background: 'rgba(0,0,0,.04)', padding: '1px 6px', borderRadius: 3 }}>
-                    {selectedTraceId.slice(0, 12)}
-                </code>
-                <span style={{ fontFamily: 'monospace', fontSize: 16, fontWeight: 800, color: scoreColor }}>
-                    {score ?? '--'} 分
-                </span>
-            </div>
-
-            {/* 符合项 */}
-            <div style={{ border: '1px solid rgba(22,163,74,0.2)', borderRadius: 8, overflow: 'hidden', background: 'rgba(22,163,74,0.03)' }}>
-                <div style={{ padding: '8px 14px', borderBottom: '1px solid rgba(22,163,74,0.15)', background: 'rgba(22,163,74,0.08)', display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ color: 'var(--ev-success)', fontSize: 14, fontWeight: 800 }}>✓ 符合项</span>
-                    <span style={{ fontSize: 11, color: 'var(--ev-muted)' }}>共 {matching.length} 条 · {tab === 'result' ? '关键观点已覆盖' : '流程步骤命中'}</span>
-                </div>
-                {matching.length === 0 ? (
-                    <div style={{ padding: '16px 14px', textAlign: 'center', fontSize: 12, color: 'var(--ev-muted)' }}>
-                        暂无符合项{tab === 'result' ? '——所有关键观点都没覆盖' : '——所有 SKILL.md flow 步骤都没命中'}
-                    </div>
-                ) : (
-                    <div style={{ display: 'flex', flexDirection: 'column' }}>
-                        {matching.map((m, i) => (
-                            <div key={i} style={{ padding: '10px 14px', borderBottom: i === matching.length - 1 ? 0 : '1px solid rgba(22,163,74,0.1)', display: 'flex', flexDirection: 'column', gap: 4 }}>
-                                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--ev-fg)', display: 'flex', alignItems: 'center', gap: 6 }}>
-                                    <span style={{ color: 'var(--ev-success)' }}>✓</span>
-                                    <span>{m.title}</span>
-                                </div>
-                                {m.evidence && (
-                                    <div style={{ fontSize: 12, color: 'var(--ev-fg2)', paddingLeft: 16 }}>
-                                        <span style={{ color: 'var(--ev-muted)', marginRight: 4 }}>证据：</span>
-                                        {m.evidence}
-                                    </div>
-                                )}
-                            </div>
-                        ))}
-                    </div>
-                )}
-            </div>
-
-            {/* 扣分项 */}
-            <div style={{ border: '1px solid rgba(220,38,38,0.2)', borderRadius: 8, overflow: 'hidden', background: 'rgba(220,38,38,0.03)' }}>
-                <div style={{ padding: '8px 14px', borderBottom: '1px solid rgba(220,38,38,0.15)', background: 'rgba(220,38,38,0.08)', display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ color: 'var(--ev-error)', fontSize: 14, fontWeight: 800 }}>✗ 扣分项</span>
-                    <span style={{ fontSize: 11, color: 'var(--ev-muted)' }}>共 {deductions.length} 条 · {tab === 'result' ? '输出未达预期' : '执行偏离 SKILL.md flow'}</span>
-                </div>
-                {deductions.length === 0 ? (
-                    <div style={{ padding: '16px 14px', textAlign: 'center', fontSize: 12, color: 'var(--ev-muted)' }}>
-                        无扣分项 ✓ 这条 trace 在「{tab === 'result' ? '结果' : '轨迹'}」维度全部达标
-                    </div>
-                ) : (
-                    <div style={{ display: 'flex', flexDirection: 'column' }}>
-                        {deductions.map((d, i) => (
-                            <div key={i} style={{ padding: '10px 14px', borderBottom: i === deductions.length - 1 ? 0 : '1px solid rgba(220,38,38,0.1)', display: 'flex', flexDirection: 'column', gap: 4 }}>
-                                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--ev-fg)', display: 'flex', alignItems: 'center', gap: 6 }}>
-                                    <span style={{ color: 'var(--ev-error)' }}>✗</span>
-                                    <span style={{ flex: 1 }}>{d.title}</span>
-                                    {d.severity && (
-                                        <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 3, color: '#fff', background: sevColor(d.severity) }}>
-                                            {d.severity.toUpperCase()}
-                                        </span>
-                                    )}
-                                </div>
-                                {d.description && (
-                                    <div style={{ fontSize: 12, color: 'var(--ev-fg2)', paddingLeft: 16 }}>
-                                        <span style={{ color: 'var(--ev-muted)', marginRight: 4 }}>证据：</span>
-                                        {d.description}
-                                    </div>
-                                )}
-                                {d.improvementSuggestion && (
-                                    <div style={{ fontSize: 12, color: 'var(--ev-info)', paddingLeft: 16 }}>
-                                        <span style={{ color: 'var(--ev-muted)', marginRight: 4 }}>建议：</span>
-                                        {d.improvementSuggestion}
-                                    </div>
-                                )}
-                            </div>
-                        ))}
-                    </div>
-                )}
-            </div>
-        </div>
-    );
-}
-
-/* ─────────────────────────────────────────────────────────────────
-   结果分析 section
-   展示：测试集 case 的「预期结果」与 Trace 提取出的「实际输出」并列对比，
-   下方列出 result_issues / key_point_findings 两类 skill 归因。
-   数据来源：trajectoryEval.rawAnalysis（由 /api/eval/trajectory/run 跑
-   preset-agent-task-completion 写入；result_artifact_extractor 抽实际输出，
-   task-completion 评估器对比 → result_issues + key_point_findings）。
-   ───────────────────────────────────────────────────────────────── */
-function ResultAnalysisSection({
-    trajectoryEval,
-    trajEvalLoading,
-    trajEvalError,
-    onStartEval,
-    starting,
-}: {
-    trajectoryEval: TrajectoryEvalRow | null;
-    trajEvalLoading: boolean;
-    trajEvalError: string;
-    /** 触发任务完成度评估（preset-agent-task-completion）；空态时按钮调它 */
-    onStartEval?: () => void | Promise<void>;
-    /** 评估器是否正在启动；按钮 disabled 用 */
-    starting?: boolean;
-}) {
-    const raw = trajectoryEval?.rawAnalysis ?? null;
-    const root = (raw && typeof raw === 'object' && !Array.isArray(raw))
-        ? (raw as Record<string, unknown>)
-        : null;
-
-    // 抽预期 / 实际：caseSnapshot.expectedOutput vs resultActualOutput
-    const caseSnapshot = root?.caseSnapshot && typeof root.caseSnapshot === 'object'
-        ? root.caseSnapshot as Record<string, unknown>
-        : null;
-    const expectedOutput = typeof caseSnapshot?.expectedOutput === 'string'
-        ? caseSnapshot.expectedOutput
-        : '';
-    const actualOutput = typeof root?.resultActualOutput === 'string'
-        ? root.resultActualOutput as string
-        : '';
-    // 匹配上下文——dataset 名、case id、case input、匹配方式（exact/semantic/auto/...）
-    const matchedCaseId = typeof caseSnapshot?.id === 'string' ? caseSnapshot.id : '';
-    const matchedCaseInput = typeof caseSnapshot?.input === 'string' ? caseSnapshot.input : '';
-    const matchedDatasetId = typeof caseSnapshot?.datasetId === 'string' ? caseSnapshot.datasetId : '';
-    const matchedDatasetName = typeof caseSnapshot?.datasetName === 'string' ? caseSnapshot.datasetName : '';
-    const matchKindRaw = typeof caseSnapshot?.matchKind === 'string' ? caseSnapshot.matchKind : '';
-    const MATCH_KIND_META: Record<string, { label: string; color: string }> = {
-        'explicit-pair': { label: '用户显式指定',     color: 'var(--sa-primary)' },
-        'exact-input':   { label: '输入文本完全一致', color: 'var(--sa-success)' },
-        'semantic':      { label: '语义匹配',          color: 'var(--sa-warning)' },
-        'auto-match':    { label: '自动匹配',          color: 'var(--sa-warning)' },
-        'fallback':      { label: '降级（无 case）',   color: 'var(--sa-muted)' },
-        'no-dataset':    { label: '无数据集',          color: 'var(--sa-muted)' },
-    };
-    const matchKindMeta = MATCH_KIND_META[matchKindRaw] || { label: matchKindRaw || '未知', color: 'var(--sa-muted)' };
-
-    // 抽 result evaluation 的核心字段（score / reason / 两类 finding）
-    const resultEval = root?.resultEvaluation && typeof root.resultEvaluation === 'object'
-        ? root.resultEvaluation as Record<string, unknown>
-        : null;
-    const score = typeof resultEval?.score === 'number' ? resultEval.score
-        : typeof root?.score === 'number' ? (root.score as number)
-        : null;
-    const reason = typeof resultEval?.reason === 'string' ? resultEval.reason
-        : typeof root?.reason === 'string' ? (root.reason as string)
-        : '';
-
-    // findings 既可能在顶层也可能在 resultEvaluation 下
-    function readFindings(key: string): Record<string, unknown>[] {
-        if (!root) return [];
-        const top = root[key];
-        if (Array.isArray(top)) return top as Record<string, unknown>[];
-        const nested = resultEval?.[key];
-        if (Array.isArray(nested)) return nested as Record<string, unknown>[];
-        return [];
-    }
-    const keyPointFindings = readFindings('key_point_findings');
-    const resultIssues = readFindings('result_issues');
-
-    const hasResultData = !!resultEval || keyPointFindings.length > 0 || resultIssues.length > 0 || !!actualOutput;
-
-    // 加载 / 错误 / 空态
-    if (trajEvalLoading && !trajectoryEval) {
-        return <div className="sa-dx-eval-empty">读取结果分析中…</div>;
-    }
-    if (trajEvalError) {
-        return <div className="sa-alert">{trajEvalError}</div>;
-    }
-    if (!trajectoryEval) {
-        return (
-            <div className="sa-dx-eval-empty">
-                <p style={{ margin: '0 0 6px', color: 'var(--sa-text)', fontWeight: 500 }}>
-                    这条 Trace 还没经过<b>结果分析</b>
-                </p>
-                <p style={{ margin: 0, fontSize: 12.5, color: 'var(--sa-secondary)' }}>
-                    点击下方按钮（或顶部「运行结果评估」）让任务完成度评估器跑一遍——
-                    它会把测试集 case 的预期输出与 Trace 实际输出对比，产 key_point_findings + result_issues，
-                    带 is_skill_attributable 徽章自动写入 skill-opt。
-                </p>
-                {onStartEval && (
-                    <button
-                        className="sa-mini-action"
-                        style={{ marginTop: 12 }}
-                        onClick={() => { void onStartEval(); }}
-                        disabled={!!starting}
-                    >
-                        {starting ? '结果评估启动中…' : '运行结果评估'}
-                    </button>
-                )}
-            </div>
-        );
-    }
-    if (trajectoryEval.status === 'failed') {
-        return (
-            <div className="sa-alert">
-                评估失败：{trajectoryEval.errorMessage || '未知错误'}
-            </div>
-        );
-    }
-    if (trajectoryEval.status === 'pending' || trajectoryEval.status === 'running') {
-        return (
-            <div className="sa-dx-eval-empty">
-                评估进行中…（每 3s 自动刷新）
-            </div>
-        );
-    }
-    if (!hasResultData) {
-        return (
-            <div className="sa-dx-eval-empty">
-                <p style={{ margin: '0 0 6px', color: 'var(--sa-text)', fontWeight: 500 }}>
-                    本次评估未产出结果分析数据
-                </p>
-                <p style={{ margin: 0, fontSize: 12.5, color: 'var(--sa-secondary)' }}>
-                    通常是没匹配到测试集 case（任务完成度评估器需要 case.expectedOutput 当对照）。
-                    要拿结果分析数据，建议先在「测试集」里给这条 query 准备一条带预期结果的 case，
-                    然后从「用例覆盖」/「灰度对照」入口跑评测。
-                </p>
-            </div>
-        );
-    }
-
-    // 顶部 hero：单 trace 结果评分大数。只显示唯一权威分数（LLM 任务完成度），
-    // 不再罗列"加权覆盖率/加权和"等中间变量——表底已有"覆盖 N/M 条"作为表格自身统计。
-    const heroScorePct = score != null ? Math.round(score * 100) : null;
-    const heroScoreColor = heroScorePct == null ? 'var(--sa-muted)'
-        : heroScorePct >= 80 ? 'var(--sa-success)'
-        : heroScorePct >= 50 ? 'var(--sa-warning)'
-        : 'var(--sa-danger)';
-
-    return (
-        <>
-            {/* ───── 单 Trace 结果分数 Hero ─────
-                 唯一权威分数置顶，省去理解成本。表底显示覆盖统计。 */}
-            <section className="sa-standards-wrap" style={{ marginBottom: 12 }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, padding: '16px 18px' }}>
-                    <div>
-                        <div style={{ fontSize: 11, color: 'var(--sa-muted)', letterSpacing: '0.04em', textTransform: 'uppercase', fontWeight: 700, marginBottom: 4 }}>
-                            结果分析评分
-                        </div>
-                        <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-                            <b style={{ fontSize: 44, fontWeight: 800, lineHeight: 1, color: heroScoreColor, letterSpacing: '-1.5px' }}>
-                                {heroScorePct ?? '--'}
-                            </b>
-                            <span style={{ fontSize: 14, color: 'var(--sa-muted)', fontWeight: 600 }}>/ 100</span>
-                        </div>
-                    </div>
-                    {trajectoryEval?.updatedAt && (
-                        <span style={{ fontSize: 12, color: 'var(--sa-muted)' }}>
-                            评估于 {new Date(trajectoryEval.updatedAt).toLocaleString()}
-                        </span>
-                    )}
-                </div>
-            </section>
-
-            {/* ───── 匹配的 Case ─────
-                 让用户清楚知道"这一次评估用的是哪条 case"。dataset 名 + caseId + caseInput +
-                 匹配方式（用户指定 / 完全匹配 / 语义匹配 / 自动匹配 / 降级）。 */}
-            <section className="sa-standards-wrap">
-                <div className="sa-wrap-head">
-                    <h3>匹配的 Case</h3>
-                    <span style={{ color: matchKindMeta.color, fontSize: 12, fontWeight: 600 }}>
-                        匹配方式：{matchKindMeta.label}
-                    </span>
-                </div>
-                <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10, fontSize: 12 }}>
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
-                        <span style={{ color: 'var(--sa-muted)', minWidth: 80 }}>数据集</span>
-                        <span style={{ color: 'var(--sa-text)' }}>
-                            {matchedDatasetName || matchedDatasetId || <span style={{ color: 'var(--sa-muted)' }}>—</span>}
-                            {matchedCaseId && <span style={{ color: 'var(--sa-muted)', marginLeft: 6, fontFamily: 'var(--font-mono)' }}>· case#{matchedCaseId.slice(0, 8)}</span>}
-                        </span>
-                    </div>
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-                        <span style={{ color: 'var(--sa-muted)', minWidth: 80, paddingTop: 2 }}>Case 输入</span>
-                        <span style={{ color: 'var(--sa-text)', whiteSpace: 'pre-wrap', flex: 1 }}>
-                            {matchedCaseInput || <span style={{ color: 'var(--sa-muted)' }}>—</span>}
-                        </span>
-                    </div>
-                </div>
-            </section>
-
-            {/* ───── 预期 vs 实际输出对比 ───── */}
-            <section className="sa-standards-wrap">
-                <div className="sa-wrap-head">
-                    <h3>预期 vs 实际输出</h3>
-                </div>
-                <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
-                    <div style={{ border: '1px solid var(--sa-line)', borderRadius: 6, background: '#fff' }}>
-                        <div style={{ padding: '8px 12px', background: '#f5f4f0', borderBottom: '1px solid var(--sa-line)', fontSize: 12, fontWeight: 600 }}>
-                            预期结果 (该 case 标准答案)
-                        </div>
-                        <div style={{ padding: 12, fontSize: 12, lineHeight: 1.6, color: 'var(--sa-text)', whiteSpace: 'pre-wrap', maxHeight: 240, overflow: 'auto' }}>
-                            {expectedOutput || <span style={{ color: 'var(--sa-muted)' }}>（未匹配到测试集 case 或 case 未填 expectedOutput）</span>}
-                        </div>
-                    </div>
-                    <div style={{ border: '1px solid var(--sa-line)', borderRadius: 6, background: '#fff' }}>
-                        <div style={{ padding: '8px 12px', background: '#f5f4f0', borderBottom: '1px solid var(--sa-line)', fontSize: 12, fontWeight: 600 }}>
-                            实际输出 (从 Trace 抽取)
-                        </div>
-                        <div style={{ padding: 12, fontSize: 12, lineHeight: 1.6, color: 'var(--sa-text)', whiteSpace: 'pre-wrap', maxHeight: 240, overflow: 'auto' }}>
-                            {actualOutput || <span style={{ color: 'var(--sa-muted)' }}>（result_artifact_extractor 未从 Trace 抽出输出）</span>}
-                        </div>
-                    </div>
-                </div>
-            </section>
-
-            {/* ───── 评估器综述 ───── 只在 reason 非空时显示 */}
-            {reason && (
-                <section className="sa-standards-wrap">
-                    <div className="sa-wrap-head">
-                        <h3>评估器综述</h3>
-                        <span>LLM-as-Judge</span>
-                    </div>
-                    <div style={{ padding: '14px 16px', fontSize: 12, lineHeight: 1.7, color: 'var(--sa-secondary)' }}>
-                        {reason}
-                    </div>
-                </section>
-            )}
-
-            {/* ───── 关键观点判定表 + 总分汇总行 ───── */}
-            <section className="sa-standards-wrap">
-                <div className="sa-wrap-head">
-                    <h3>关键观点判定</h3>
-                    <div className="sa-wrap-actions">
-                        <span style={{ color: 'var(--sa-muted)', fontSize: 12 }}>
-                            从 case 预期答案抽取 · 列出全部观点（含已覆盖）
-                        </span>
-                        {onStartEval && (
-                            <button
-                                className="sa-mini-action"
-                                onClick={() => { void onStartEval(); }}
-                                disabled={!!starting}
-                            >
-                                {starting ? '重新评估中…' : '重新评估'}
-                            </button>
-                        )}
-                    </div>
-                </div>
-                <div style={{ padding: '14px 16px' }}>
-                    <KeyPointsJudgementTable
-                        keyPointFindings={keyPointFindings}
-                    />
-                </div>
-            </section>
-
-            {/* ───── 其他结果质量问题（result_issues：格式 / 多余 / 冗余 / 事实错误） ─────
-                 与"关键观点判定"独立——这里是 LLM 在覆盖度之外另发现的质量问题。 */}
-            {resultIssues.length > 0 && (
-                <section className="sa-standards-wrap">
-                    <div className="sa-wrap-head">
-                        <h3>其他结果质量问题</h3>
-                        <span style={{ color: 'var(--sa-muted)', fontSize: 12 }}>
-                            评估器额外识别 · 可归因项写入 skill-opt
-                        </span>
-                    </div>
-                    <div style={{ padding: '14px 16px' }}>
-                        <ResultFindingsList
-                            keyPointFindings={[]}
-                            resultIssues={resultIssues}
-                        />
-                    </div>
-                </section>
-            )}
-        </>
-    );
-}
-
-/**
- * 关键观点判定表。
- *
- * 列：序号 / 观点 / 权重 / 实际是否符合 / skill 归因 / 优化建议
- * 末行：覆盖统计 (覆盖 N / M 条)。最终评分在顶部 Hero，不再在表底重复显示。
- */
-function KeyPointsJudgementTable({
-    keyPointFindings,
-}: {
-    keyPointFindings: Record<string, unknown>[];
-}) {
-    // 统一抽字段（兼容 snake_case 和 camelCase）
-    type Row = {
-        content: string;
-        covered: boolean;
-        weight: number;
-        isSkillAttributable: boolean | null;
-        improvementSuggestion: string;
-        explanation: string;
-        severity: string;
-    };
-    const rows: Row[] = keyPointFindings.map(f => {
-        const isAttr = pickAttr(f, 'is_skill_attributable', 'isSkillAttributable');
-        const suggestion = pickAttr(f, 'improvement_suggestion', 'improvementSuggestion');
-        const weight = typeof f.weight === 'number' ? f.weight
-            : typeof f.weight === 'string' ? Number(f.weight) || 1
-            : 1;
-        return {
-            content: String(f.content ?? '').trim() || '（未命名观点）',
-            covered: f.covered === true,
-            weight: Number.isFinite(weight) && weight > 0 ? weight : 1,
-            isSkillAttributable: typeof isAttr === 'boolean' ? isAttr : null,
-            improvementSuggestion: typeof suggestion === 'string' ? suggestion : '',
-            explanation: typeof f.explanation === 'string' ? f.explanation : '',
-            severity: typeof f.severity === 'string' ? f.severity : '',
-        };
-    });
-
-    const coveredCount = rows.filter(r => r.covered).length;
-
-    if (rows.length === 0) {
-        return <div style={{ color: 'var(--sa-muted)', fontSize: 12 }}>未抽取到任何关键观点。</div>;
-    }
-
-    return (
-        <div style={{ border: '1px solid var(--sa-line)', borderRadius: 6, overflow: 'hidden', background: '#fff' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                <thead>
-                    <tr style={{ background: '#f5f4f0', textAlign: 'left' }}>
-                        <th style={{ padding: '8px 10px', fontWeight: 600, width: 40 }}>#</th>
-                        <th style={{ padding: '8px 10px', fontWeight: 600 }}>关键观点</th>
-                        <th style={{ padding: '8px 10px', fontWeight: 600, width: 60, textAlign: 'center' }}>权重</th>
-                        <th style={{ padding: '8px 10px', fontWeight: 600, width: 80, textAlign: 'center' }}>实际</th>
-                        <th style={{ padding: '8px 10px', fontWeight: 600, width: 110, textAlign: 'center' }}>Skill 归因</th>
-                        <th style={{ padding: '8px 10px', fontWeight: 600 }}>优化建议</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {rows.map((r, i) => (
-                        <tr key={i} style={{ borderTop: '1px solid var(--sa-line)', verticalAlign: 'top' }}>
-                            <td style={{ padding: '10px', color: 'var(--sa-muted)' }}>{i + 1}</td>
-                            <td style={{ padding: '10px', lineHeight: 1.55 }}>
-                                <div style={{ color: 'var(--sa-text)' }}>{r.content}</div>
-                                {r.explanation && (
-                                    <div style={{ color: 'var(--sa-muted)', fontSize: 11, marginTop: 4 }}>{r.explanation}</div>
-                                )}
-                            </td>
-                            <td style={{ padding: '10px', textAlign: 'center', fontVariant: 'tabular-nums' }}>{r.weight.toFixed(1)}</td>
-                            <td style={{ padding: '10px', textAlign: 'center' }}>
-                                {r.covered ? (
-                                    <span style={{ color: 'var(--sa-success)', fontWeight: 600 }}>✓ 符合</span>
-                                ) : (
-                                    <span style={{ color: 'var(--sa-danger)', fontWeight: 600 }}>✗ 缺失</span>
-                                )}
-                            </td>
-                            <td style={{ padding: '10px', textAlign: 'center' }}>
-                                {r.covered ? (
-                                    <span style={{ color: 'var(--sa-muted)' }}>—</span>
-                                ) : r.isSkillAttributable === true ? (
-                                    <span style={{ color: 'var(--sa-primary)', fontWeight: 600 }}>✓ 可优化</span>
-                                ) : r.isSkillAttributable === false ? (
-                                    <span style={{ color: 'var(--sa-muted)' }}>非 Skill 问题</span>
-                                ) : (
-                                    <span style={{ color: 'var(--sa-muted)' }}>—</span>
-                                )}
-                            </td>
-                            <td style={{ padding: '10px', color: 'var(--sa-secondary)', lineHeight: 1.55 }}>
-                                {r.covered ? (
-                                    <span style={{ color: 'var(--sa-muted)' }}>—</span>
-                                ) : r.improvementSuggestion ? (
-                                    r.improvementSuggestion
-                                ) : r.isSkillAttributable === false ? (
-                                    <span style={{ color: 'var(--sa-muted)' }}>—</span>
-                                ) : (
-                                    <span style={{ color: 'var(--sa-muted)' }}>评估器未给出建议</span>
-                                )}
-                            </td>
-                        </tr>
-                    ))}
-                </tbody>
-                <tfoot>
-                    <tr style={{ borderTop: '1px solid var(--sa-line)', background: '#fafaf6' }}>
-                        <td colSpan={6} style={{ padding: '10px 14px', fontSize: 12, color: 'var(--sa-secondary)' }}>
-                            共 <b style={{ color: 'var(--sa-text)' }}>{rows.length}</b> 条关键观点，覆盖 <b style={{ color: 'var(--sa-text)' }}>{coveredCount}</b> 条。
-                            最终评分见顶部「结果分析评分」。
-                        </td>
-                    </tr>
-                </tfoot>
-            </table>
-        </div>
-    );
-}
-
-/**
- * 结果分析 - 把 key_point_findings + result_issues 两组渲染成与 TrajectoryEvaluatorFindings
- * 同款卡片视图（共用 .sa-dx-eval-* 样式 + is_skill_attributable 徽章 + improvement_suggestion）。
- * 只关心结果维度——deviation_steps / tool_choice_findings 等放在「轨迹分析」tab。
- */
-function ResultFindingsList({
-    keyPointFindings,
-    resultIssues,
-}: {
-    keyPointFindings: Record<string, unknown>[];
-    resultIssues: Record<string, unknown>[];
-}) {
-    const findings: EvaluatorFinding[] = [];
-
-    // key_point_findings：只展示 covered=false 的
-    for (const f of keyPointFindings) {
-        const covered = pickAttr(f, 'covered', 'covered');
-        if (covered === true) continue;
-        const isAttr = pickAttr(f, 'is_skill_attributable', 'isSkillAttributable');
-        const suggestion = pickAttr(f, 'improvement_suggestion', 'improvementSuggestion');
-        findings.push({
-            kind: 'key_point',
-            title: `关键动作未覆盖：${String(f.content ?? '未命名要点')}`,
-            description: typeof f.explanation === 'string' ? f.explanation : undefined,
-            severity: typeof f.severity === 'string' ? f.severity as EvaluatorFinding['severity'] : undefined,
-            covered: false,
-            isSkillAttributable: typeof isAttr === 'boolean' ? isAttr : true,
-            improvementSuggestion: typeof suggestion === 'string' ? suggestion : undefined,
-        });
-    }
-
-    // result_issues：4 子类
-    const RESULT_KIND_LABEL: Record<string, string> = {
-        format: '格式偏差',
-        extra_content: '多余内容',
-        verbosity: '表达问题',
-        incorrect_fact: '事实错误',
-        other: '结果问题',
-    };
-    for (const f of resultIssues) {
-        const isAttr = pickAttr(f, 'is_skill_attributable', 'isSkillAttributable');
-        const suggestion = pickAttr(f, 'improvement_suggestion', 'improvementSuggestion');
-        const subKind = typeof f.kind === 'string' ? f.kind : 'other';
-        findings.push({
-            kind: 'result_issue',
-            title: `${RESULT_KIND_LABEL[subKind] || subKind}：${String(f.summary ?? '未命名问题')}`,
-            severity: typeof f.severity === 'string' ? f.severity as EvaluatorFinding['severity'] : undefined,
-            isSkillAttributable: typeof isAttr === 'boolean' ? isAttr : true,
-            improvementSuggestion: typeof suggestion === 'string' ? suggestion : undefined,
-        });
-    }
-
-    if (findings.length === 0) {
-        return (
-            <div className="sa-dx-eval-empty">
-                ✓ 评估器未识别出结果层面可归因到 Skill 的问题
-            </div>
-        );
-    }
-
-    const grouped: Record<EvaluatorFinding['kind'], EvaluatorFinding[]> = {
-        deviation: [], key_point: [], tool_choice: [], result_issue: [],
-    };
-    for (const f of findings) grouped[f.kind].push(f);
-
-    const totalAttrCount = findings.filter(f => f.isSkillAttributable !== false).length;
-    const nonAttrCount = findings.length - totalAttrCount;
-
-    return (
-        <div className="sa-dx-eval-findings">
-            <div className="sa-dx-eval-summary">
-                <span>评估器识别出 <b>{findings.length}</b> 条结果问题</span>
-                <span className="sa-dx-eval-summary-sep">·</span>
-                <span><b style={{ color: 'var(--sa-warning)' }}>{totalAttrCount}</b> 条可归因到 Skill</span>
-                {nonAttrCount > 0 && (
-                    <>
-                        <span className="sa-dx-eval-summary-sep">·</span>
-                        <span style={{ color: 'var(--sa-muted)' }}>{nonAttrCount} 条非 Skill 问题</span>
-                    </>
-                )}
-            </div>
-            {(['key_point', 'result_issue'] as EvaluatorFinding['kind'][]).map(kind => {
-                const items = grouped[kind];
-                if (items.length === 0) return null;
-                return (
-                    <div key={kind} className="sa-dx-eval-group">
-                        <div className="sa-dx-eval-group-head">
-                            {FINDING_KIND_LABEL[kind]}
-                            <span className="sa-dx-eval-group-count">{items.length}</span>
-                        </div>
-                        {items.map((f, i) => (
-                            <div key={i} className={`sa-dx-eval-card${f.severity ? ' sev-' + f.severity : ''}${f.isSkillAttributable === false ? ' non-attr' : ''}`}>
-                                <div className="sa-dx-eval-card-head">
-                                    <span className="sa-dx-eval-title">{f.title}</span>
-                                    {f.severity && <span className={`sa-pill ${f.severity === 'high' ? 'err' : f.severity === 'medium' ? 'warn' : ''}`}>{f.severity}</span>}
-                                    {f.isSkillAttributable === false && (
-                                        <span className="sa-pill" title="评估器判定此问题不能通过修改 SKILL.md 解决,不会进入 skill-opt">
-                                            非 Skill 问题
-                                        </span>
-                                    )}
-                                </div>
-                                {f.description && <div className="sa-dx-eval-desc">{f.description}</div>}
-                                {f.improvementSuggestion && f.isSkillAttributable !== false && (
-                                    <div className="sa-dx-eval-suggestion">
-                                        <span className="sa-dx-eval-suggestion-label">改进建议</span>
-                                        {f.improvementSuggestion}
-                                    </div>
-                                )}
-                            </div>
-                        ))}
-                    </div>
-                );
-            })}
-        </div>
-    );
-}
-
-// 显示"skill 归因"链路是否完整跑通——三步 (extract skill key actions / extract
-// trace steps / compare) 任一步失败都用 degraded 显示；trace 本来没绑 skill 时
-// 用 not-applicable（用户无需处理）。前几版静默吞掉，没法 debug，所以补这个。
-function SkillAttributionBadge({ row }: { row: TrajectoryEvalRow }) {
-    const attr = parseSkillAttributionFromRow(row);
-    if (!attr || !attr.state) return null;
-
-    const STATE_META: Record<string, { label: string; icon: string; color: string; bg: string }> = {
-        ok: {
-            label: 'Skill 归因：完整',
-            icon: '✓',
-            color: '#0ea672',
-            bg: 'rgba(14, 166, 114, 0.10)',
-        },
-        degraded: {
-            label: 'Skill 归因：已降级',
-            icon: '⚠',
-            color: '#b45309',
-            bg: 'rgba(245, 158, 11, 0.10)',
-        },
-        'not-applicable': {
-            label: 'Skill 归因：不适用',
-            icon: '○',
-            color: 'var(--sa-muted)',
-            bg: 'rgba(120, 120, 120, 0.08)',
-        },
-    };
-    const meta = STATE_META[attr.state] || STATE_META.degraded;
-
-    return (
-        <div
-            style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                padding: '8px 12px',
-                margin: '0 0 10px',
-                borderRadius: 6,
-                background: meta.bg,
-                color: meta.color,
-                fontSize: 12,
-                lineHeight: 1.5,
-            }}
-            title={attr.message || ''}
-        >
-            <span style={{ fontWeight: 700 }}>{meta.icon}</span>
-            <span style={{ fontWeight: 600 }}>{meta.label}</span>
-            {attr.message && (
-                <span style={{ color: 'var(--sa-muted)', fontWeight: 400 }}>· {attr.message}</span>
-            )}
-        </div>
-    );
-}
-
-function TrajectoryEvaluatorFindings({ row }: { row: TrajectoryEvalRow }) {
-    const findings = extractFindings(row);
-    if (findings.length === 0) {
-        return (
-            <div className="sa-dx-eval-empty">
-                ✓ 评估器未识别出可归因到 Skill 的问题（这条 Trace 流程合规）
-            </div>
-        );
-    }
-    // 按 kind 分组
-    const grouped: Record<EvaluatorFinding['kind'], EvaluatorFinding[]> = {
-        deviation: [], key_point: [], tool_choice: [], result_issue: [],
-    };
-    for (const f of findings) grouped[f.kind].push(f);
-
-    const totalAttrCount = findings.filter(f => f.isSkillAttributable !== false).length;
-    const nonAttrCount = findings.length - totalAttrCount;
-
-    return (
-        <div className="sa-dx-eval-findings">
-            <div className="sa-dx-eval-summary">
-                <span>评估器识别出 <b>{findings.length}</b> 条问题</span>
-                <span className="sa-dx-eval-summary-sep">·</span>
-                <span><b style={{ color: 'var(--sa-warning)' }}>{totalAttrCount}</b> 条可归因到 Skill</span>
-                {nonAttrCount > 0 && (
-                    <>
-                        <span className="sa-dx-eval-summary-sep">·</span>
-                        <span style={{ color: 'var(--sa-muted)' }}>{nonAttrCount} 条 model/工具问题（不进优化）</span>
-                    </>
-                )}
-            </div>
-            {(Object.keys(grouped) as EvaluatorFinding['kind'][]).map(kind => {
-                const items = grouped[kind];
-                if (items.length === 0) return null;
-                return (
-                    <div key={kind} className="sa-dx-eval-group">
-                        <div className="sa-dx-eval-group-head">
-                            {FINDING_KIND_LABEL[kind]}
-                            <span className="sa-dx-eval-group-count">{items.length}</span>
-                        </div>
-                        {items.map((f, i) => (
-                            <div key={i} className={`sa-dx-eval-card${f.severity ? ' sev-' + f.severity : ''}${f.isSkillAttributable === false ? ' non-attr' : ''}`}>
-                                <div className="sa-dx-eval-card-head">
-                                    <span className="sa-dx-eval-title">{f.title}</span>
-                                    {f.severity && <span className={`sa-pill ${f.severity === 'high' ? 'err' : f.severity === 'medium' ? 'warn' : ''}`}>{f.severity}</span>}
-                                    {f.isSkillAttributable === false && (
-                                        <span className="sa-pill" title="评估器判定此问题不能通过修改 SKILL.md 解决,不会进入 skill-opt">
-                                            非 Skill 问题
-                                        </span>
-                                    )}
-                                </div>
-                                {f.description && <div className="sa-dx-eval-desc">{f.description}</div>}
-                                {f.improvementSuggestion && f.isSkillAttributable !== false && (
-                                    <div className="sa-dx-eval-suggestion">
-                                        <span className="sa-dx-eval-suggestion-label">改进建议</span>
-                                        {f.improvementSuggestion}
-                                    </div>
-                                )}
-                            </div>
-                        ))}
-                    </div>
-                );
-            })}
-        </div>
     );
 }
 
@@ -5413,7 +4271,7 @@ function StaticCompliancePanel({
                 metaSlot={metaSlot}
                 onBack={onBack}
                 onPrimary={runStaticEval}
-                primaryLabel={running ? '扫描中...' : '重新扫描'}
+                primaryLabel={running ? '分析中...' : '重新分析'}
                 onOptimize={onOptimize}
             />
 
@@ -5616,7 +4474,7 @@ function DetailHeader({
     return (
         <header className="sa-detail-head">
             {/* sa-back-line（"← 返回综合分析 / <view>"）原本在这里，已删——
-               顶部 AppTopBar 的"Skills 分析"已是可点击回 overview 的入口，
+               顶部 AppTopBar 的"Skills 评测"已是可点击回 overview 的入口，
                这里再放一行重复且与最顶路径冲突。onBack 仍由 props 收着，
                以备未来其它入口（比如键盘快捷键）使用。 */}
             <div className="sa-detail-hero">
@@ -5841,636 +4699,6 @@ function TrajectoryMatchGroup({
     );
 }
 
-function FlowBox({ title, subtitle, code }: { title: string; subtitle?: string; code?: string }) {
-    return (
-        <div className="sa-flow-box">
-            <h4>{title}{subtitle && <small>{subtitle}</small>}</h4>
-            <div className="sa-mermaid-wrap">
-                {code ? <MermaidRenderer code={code} /> : <span>暂无流程图</span>}
-            </div>
-        </div>
-    );
-}
-
-type AlignmentStatus = 'matched' | 'partial' | 'unexpected' | 'delegated' | 'non_business' | 'skipped';
-
-interface AlignmentNode {
-    key: string;
-    kind: 'actual' | 'skipped';
-    status: AlignmentStatus;
-    actualStepIndex?: number;
-    actualAction?: string;
-    expectedStepId?: string;
-    expectedStepName?: string;
-    expectedIndex?: number;
-    reason?: string;
-    problem?: string;
-    suggestion?: string;
-    extracted?: ExtractedTraceStep;
-    violation?: AlignmentViolation;
-    skillSpanLabels?: string[];
-    evidenceInteractionIndexes?: number[];
-}
-
-const ALIGNMENT_STATUS_LABEL: Record<AlignmentStatus, string> = {
-    matched: '符合预期',
-    partial: '部分偏离',
-    unexpected: '非预期调用',
-    delegated: '子 Skill',
-    non_business: '过渡操作',
-    skipped: 'Skill 步骤缺失',
-};
-
-function TraceAlignmentPanel({
-    matches,
-    skippedExpectedSteps,
-    problemByStepKey,
-    flowSteps,
-    extractedSteps,
-    alignment,
-    mermaidCode,
-}: {
-    matches: StepMatch[];
-    skippedExpectedSteps: SkippedExpectedStep[];
-    problemByStepKey: Map<string, ProblemStep>;
-    flowSteps: FlowStep[];
-    extractedSteps: ExtractedTraceStep[];
-    alignment?: TraceSkillAlignment;
-    mermaidCode?: string;
-}) {
-    const nodes = useMemo(
-        () => alignment && Array.isArray(alignment.mappings) && alignment.mappings.length > 0
-            ? buildAlignmentNodesFromStructuredAlignment(alignment, problemByStepKey, flowSteps, extractedSteps)
-            : buildAlignmentNodes(matches, skippedExpectedSteps, problemByStepKey, flowSteps, extractedSteps),
-        [alignment, matches, skippedExpectedSteps, problemByStepKey, flowSteps, extractedSteps],
-    );
-    const [selectedKey, setSelectedKey] = useState<string | null>(null);
-    const [showRawFlow, setShowRawFlow] = useState(false);
-    const selectedNode = nodes.find(node => node.key === selectedKey)
-        || nodes.find(node => node.status !== 'matched' && node.status !== 'delegated' && node.status !== 'non_business')
-        || nodes[0]
-        || null;
-
-    const counts = useMemo(() => ({
-        matched: nodes.filter(node => node.kind === 'actual' && node.status === 'matched').length,
-        partial: nodes.filter(node => node.kind === 'actual' && node.status === 'partial').length,
-        unexpected: nodes.filter(node => node.kind === 'actual' && node.status === 'unexpected').length,
-        delegated: nodes.filter(node => node.kind === 'actual' && node.status === 'delegated').length,
-        nonBusiness: nodes.filter(node => node.kind === 'actual' && node.status === 'non_business').length,
-        skipped: nodes.filter(node => node.kind === 'skipped').length,
-        actualTotal: nodes.filter(node => node.kind === 'actual').length,
-    }), [nodes]);
-    const skillSpans = Array.isArray(alignment?.skillSpans)
-        ? [...alignment.skillSpans].sort((a, b) => {
-            if (a.trigger === 'primary' && b.trigger !== 'primary') return -1;
-            if (a.trigger !== 'primary' && b.trigger === 'primary') return 1;
-            return a.startActualStepIndex - b.startActualStepIndex;
-        })
-        : [];
-    if (nodes.length === 0) {
-        return (
-            <div className="sa-alignment-empty">
-                暂无可对齐步骤。可以点击右上角重试，生成实际执行步骤与 Skill 预期的匹配结果。
-            </div>
-        );
-    }
-
-    return (
-        <div className="sa-alignment">
-            <div className="sa-alignment-summary" aria-label="轨迹诊断摘要">
-                <div className="sa-alignment-summary-main">
-                    <b>{counts.actualTotal}</b>
-                    <span>个实际步骤</span>
-                </div>
-                <div className="sa-alignment-metrics">
-                    <AlignmentMetric status="matched" value={counts.matched} label="符合预期" />
-                    <AlignmentMetric status="partial" value={counts.partial} label="部分偏离" />
-                    <AlignmentMetric status="unexpected" value={counts.unexpected} label="非预期调用" />
-                    <AlignmentMetric status="delegated" value={counts.delegated} label="子 Skill" />
-                    <AlignmentMetric status="non_business" value={counts.nonBusiness} label="过渡操作" />
-                    <AlignmentMetric status="skipped" value={counts.skipped} label="缺失步骤" />
-                </div>
-            </div>
-
-            <div className="sa-alignment-body">
-                <div className="sa-alignment-timeline" aria-label="执行轨迹对齐图">
-                    {skillSpans.length > 0 && (
-                        <div className="sa-align-span-summary">
-                            {skillSpans.map((span, index) => (
-                                <span key={`${span.skillName}-${index}`}>
-                                    {formatSkillSpanLabel(span)}
-                                    <small>步骤 #{span.startActualStepIndex} - #{span.endActualStepIndex}</small>
-                                </span>
-                            ))}
-                        </div>
-                    )}
-                    {nodes.map((node, index) => (
-                        <TraceAlignmentNode
-                            key={node.key}
-                            node={node}
-                            position={index + 1}
-                            selected={selectedNode?.key === node.key}
-                            onSelect={() => setSelectedKey(node.key)}
-                        />
-                    ))}
-                </div>
-                <AlignmentDetail node={selectedNode} />
-            </div>
-
-            {mermaidCode && (
-                <div className="sa-alignment-raw">
-                    <button className="sa-mini-action" onClick={() => setShowRawFlow(v => !v)}>
-                        {showRawFlow ? '收起原始流程图' : '查看原始流程图'}
-                    </button>
-                    {showRawFlow && (
-                        <div className="sa-flow-grid single">
-                            <FlowBox title="原始流程图" subtitle="保留用于排查与回退" code={mermaidCode} />
-                        </div>
-                    )}
-                </div>
-            )}
-        </div>
-    );
-}
-
-function AlignmentMetric({ status, value, label }: { status: AlignmentStatus; value: number; label: string }) {
-    return (
-        <div className={`sa-alignment-metric ${status}`}>
-            <b>{value}</b>
-            <span>{label}</span>
-        </div>
-    );
-}
-
-function TraceAlignmentNode({
-    node,
-    position,
-    selected,
-    onSelect,
-}: {
-    node: AlignmentNode;
-    position: number;
-    selected: boolean;
-    onSelect: () => void;
-}) {
-    const title = node.kind === 'skipped'
-        ? node.expectedStepName || '未执行的 Skill 步骤'
-        : node.actualAction || `实际步骤 #${node.actualStepIndex ?? position}`;
-    const subtitle = node.kind === 'skipped'
-        ? 'Skill 规定了该步骤，但实际轨迹没有覆盖'
-        : node.status === 'delegated' && node.skillSpanLabels?.length
-            ? `子 Skill：${node.skillSpanLabels.join('、')}，不参与主 Skill 内容匹配`
-            : node.status === 'non_business'
-            ? '上下文收集或流程衔接动作，不参与主 Skill 业务评分'
-            : node.expectedStepName
-            ? `对齐 Skill：${node.expectedStepName}`
-            : '未匹配到 Skill 预期步骤';
-    return (
-        <button className={`sa-align-node ${node.status} ${selected ? 'selected' : ''}`} onClick={onSelect}>
-            <span className="sa-align-rail">
-                <span className="sa-align-dot">{statusGlyph(node.status)}</span>
-            </span>
-            <span className="sa-align-card">
-                <span className="sa-align-card-head">
-                    <span className="sa-align-index">
-                        {node.kind === 'skipped' ? 'Skill' : `#${node.actualStepIndex ?? position}`}
-                    </span>
-                    <span className={`sa-align-status ${node.status}`}>{ALIGNMENT_STATUS_LABEL[node.status]}</span>
-                    {node.skillSpanLabels?.map((label, index) => (
-                        <span key={`${label}-${index}`} className="sa-align-skill-chip">{label}</span>
-                    ))}
-                </span>
-                <b>{title}</b>
-                <small>{subtitle}</small>
-                {node.problem && <em>{node.problem}</em>}
-            </span>
-        </button>
-    );
-}
-
-function AlignmentDetail({ node }: { node: AlignmentNode | null }) {
-    if (!node) {
-        return (
-            <aside className="sa-align-detail">
-                <b>步骤详情</b>
-                <p>选择左侧步骤查看实际行为、Skill 预期和偏离建议。</p>
-            </aside>
-        );
-    }
-
-    return (
-        <aside className={`sa-align-detail ${node.status}`}>
-            <div className="sa-align-detail-head">
-                <span className={`sa-align-status ${node.status}`}>{ALIGNMENT_STATUS_LABEL[node.status]}</span>
-                <b>{node.kind === 'skipped' ? node.expectedStepName : node.actualAction}</b>
-            </div>
-            <dl>
-                {node.actualStepIndex != null && (
-                    <>
-                        <dt>实际位置</dt>
-                        <dd>Trace 步骤 #{node.actualStepIndex}</dd>
-                    </>
-                )}
-                {node.expectedStepName && (
-                    <>
-                        <dt>Skill 预期</dt>
-                        <dd>{node.expectedStepName}</dd>
-                    </>
-                )}
-                {node.extracted?.description && (
-                    <>
-                        <dt>实际描述</dt>
-                        <dd>{node.extracted.description}</dd>
-                    </>
-                )}
-                {node.skillSpanLabels && node.skillSpanLabels.length > 0 && (
-                    <>
-                        <dt>Skill 区间</dt>
-                        <dd>{node.skillSpanLabels.join('、')}</dd>
-                    </>
-                )}
-                {node.problem && (
-                    <>
-                        <dt>偏离问题</dt>
-                        <dd>{node.problem}</dd>
-                    </>
-                )}
-                {node.suggestion && (
-                    <>
-                        <dt>建议</dt>
-                        <dd>{node.suggestion}</dd>
-                    </>
-                )}
-                {node.evidenceInteractionIndexes && node.evidenceInteractionIndexes.length > 0 && (
-                    <>
-                        <dt>证据位置</dt>
-                        <dd>Trace 步骤 #{node.evidenceInteractionIndexes.join(', #')}</dd>
-                    </>
-                )}
-            </dl>
-        </aside>
-    );
-}
-
-function buildAlignmentNodesFromStructuredAlignment(
-    alignment: TraceSkillAlignment,
-    problemByStepKey: Map<string, ProblemStep>,
-    flowSteps: FlowStep[],
-    extractedSteps: ExtractedTraceStep[],
-): AlignmentNode[] {
-    const mappings = Array.isArray(alignment.mappings) ? alignment.mappings : [];
-    const actualSteps = Array.isArray(alignment.actualSteps) ? alignment.actualSteps : [];
-    const skipped = Array.isArray(alignment.skippedExpectedSteps) ? alignment.skippedExpectedSteps : [];
-    const violations = Array.isArray(alignment.violations) ? alignment.violations : [];
-    const spans = Array.isArray(alignment.skillSpans) ? alignment.skillSpans : [];
-    const expectedIndexById = new Map(flowSteps.map((step, index) => [step.id, index]));
-    const actualByIndex = new Map(actualSteps.map(step => [step.index, step]));
-
-    const nodes: AlignmentNode[] = mappings
-        .slice()
-        .sort((a, b) => a.actualStepIndex - b.actualStepIndex)
-        .map((mapping, index) => {
-            const actual = actualByIndex.get(mapping.actualStepIndex);
-            const violation = findViolationForMapping(violations, mapping);
-            const fallbackProblem = problemByStepKey.get(`actual:${mapping.actualStepIndex}`)
-                || problemByStepKey.get(`name:${mapping.expectedStepName || ''}`)
-                || problemByStepKey.get(`name:${actual?.action || ''}`);
-            const extracted = actual
-                ? {
-                    name: actual.action,
-                    description: actual.description,
-                    dialogStartIndex: actual.dialogStartIndex,
-                    dialogEndIndex: actual.dialogEndIndex,
-                    type: actual.type,
-                }
-                : findExtractedStep(extractedSteps, mapping.actualStepIndex);
-            return {
-                key: `alignment-actual-${mapping.actualStepIndex}-${index}`,
-                kind: 'actual',
-                status: mapping.status,
-                actualStepIndex: mapping.actualStepIndex,
-                actualAction: actual?.action || `实际步骤 #${mapping.actualStepIndex}`,
-                expectedStepId: mapping.expectedStepId,
-                expectedStepName: mapping.expectedStepName,
-                expectedIndex: mapping.expectedStepId ? expectedIndexById.get(mapping.expectedStepId) : undefined,
-                reason: mapping.reason,
-                problem: violation?.problem || fallbackProblem?.problem,
-                suggestion: violation?.suggestion || fallbackProblem?.suggestion,
-                extracted,
-                violation,
-                skillSpanLabels: spans
-                    .filter(span => span.trigger !== 'primary' && mapping.actualStepIndex >= span.startActualStepIndex && mapping.actualStepIndex <= span.endActualStepIndex)
-                    .map(formatSkillSpanLabel)
-                    .filter((label, labelIndex, labels) => labels.indexOf(label) === labelIndex),
-                evidenceInteractionIndexes: violation?.evidenceInteractionIndexes,
-            };
-        });
-
-    const skippedNodes = skipped
-        .slice()
-        .sort((a, b) => (expectedIndexById.get(a.expectedStepId) ?? Number.MAX_SAFE_INTEGER) - (expectedIndexById.get(b.expectedStepId) ?? Number.MAX_SAFE_INTEGER))
-        .map((step, index): AlignmentNode => {
-            const violation = violations.find(v => v.kind === 'skipped' && (v.expectedStepId === step.expectedStepId || v.expectedStepName === step.expectedStepName));
-            const fallbackProblem = problemByStepKey.get(`name:${step.expectedStepName}`);
-            return {
-                key: `alignment-skipped-${step.expectedStepId}-${index}`,
-                kind: 'skipped',
-                status: 'skipped',
-                expectedStepId: step.expectedStepId,
-                expectedStepName: step.expectedStepName,
-                expectedIndex: expectedIndexById.get(step.expectedStepId),
-                problem: violation?.problem || fallbackProblem?.problem,
-                suggestion: violation?.suggestion || fallbackProblem?.suggestion,
-                violation,
-                evidenceInteractionIndexes: violation?.evidenceInteractionIndexes,
-            };
-        });
-
-    return insertSkippedNodes(nodes, skippedNodes);
-}
-
-function buildAlignmentNodes(
-    matches: StepMatch[],
-    skippedExpectedSteps: SkippedExpectedStep[],
-    problemByStepKey: Map<string, ProblemStep>,
-    flowSteps: FlowStep[],
-    extractedSteps: ExtractedTraceStep[],
-): AlignmentNode[] {
-    const expectedIndexById = new Map(flowSteps.map((step, index) => [step.id, index]));
-    const actualNodes: AlignmentNode[] = matches
-        .filter(match => match.matchStatus !== 'skipped')
-        .slice()
-        .sort((a, b) => (a.actualStepIndex ?? 0) - (b.actualStepIndex ?? 0))
-        .map((match, index) => {
-            const actualStepIndex = match.actualStepIndex ?? index;
-            const problem = problemByStepKey.get(`actual:${match.actualStepIndex}`)
-                || problemByStepKey.get(`name:${match.expectedStepName || ''}`)
-                || problemByStepKey.get(`name:${match.actualAction}`);
-            return {
-                key: `actual-${actualStepIndex}-${index}`,
-                kind: 'actual',
-                status: match.matchStatus,
-                actualStepIndex,
-                actualAction: match.actualAction,
-                expectedStepId: match.expectedStepId,
-                expectedStepName: match.expectedStepName,
-                expectedIndex: match.expectedStepId ? expectedIndexById.get(match.expectedStepId) : undefined,
-                reason: match.matchReason,
-                problem: problem?.problem,
-                suggestion: problem?.suggestion,
-                extracted: findExtractedStep(extractedSteps, actualStepIndex),
-            };
-        });
-
-    const skippedNodes = skippedExpectedSteps
-        .slice()
-        .sort((a, b) => (expectedIndexById.get(a.expectedStepId) ?? Number.MAX_SAFE_INTEGER) - (expectedIndexById.get(b.expectedStepId) ?? Number.MAX_SAFE_INTEGER))
-        .map((step, index): AlignmentNode => {
-            const problem = problemByStepKey.get(`name:${step.expectedStepName}`);
-            return {
-                key: `skipped-${step.expectedStepId}-${index}`,
-                kind: 'skipped',
-                status: 'skipped',
-                expectedStepId: step.expectedStepId,
-                expectedStepName: step.expectedStepName,
-                expectedIndex: expectedIndexById.get(step.expectedStepId),
-                problem: problem?.problem,
-                suggestion: problem?.suggestion,
-            };
-        });
-
-    return insertSkippedNodes(actualNodes, skippedNodes);
-}
-
-function insertSkippedNodes(actualNodes: AlignmentNode[], skippedNodes: AlignmentNode[]) {
-    const nodes: AlignmentNode[] = [...actualNodes];
-    for (const skipped of skippedNodes) {
-        if (skipped.expectedIndex == null) {
-            nodes.push(skipped);
-            continue;
-        }
-        const insertBefore = nodes.findIndex(node => node.expectedIndex != null && node.expectedIndex > skipped.expectedIndex!);
-        if (insertBefore >= 0) {
-            nodes.splice(insertBefore, 0, skipped);
-            continue;
-        }
-        let insertAfter = -1;
-        nodes.forEach((node, index) => {
-            if (node.expectedIndex != null && node.expectedIndex <= skipped.expectedIndex!) insertAfter = index;
-        });
-        nodes.splice(insertAfter + 1, 0, skipped);
-    }
-
-    return nodes;
-}
-
-function findViolationForMapping(violations: AlignmentViolation[], mapping: AlignmentMapping) {
-    return violations.find(violation => {
-        if (violation.actualStepIndex != null && violation.actualStepIndex === mapping.actualStepIndex) return true;
-        if (violation.expectedStepId && violation.expectedStepId === mapping.expectedStepId) return true;
-        return !!violation.expectedStepName && violation.expectedStepName === mapping.expectedStepName;
-    });
-}
-
-function formatSkillSpanLabel(span: AlignmentSkillSpan) {
-    return span.version != null ? `${span.skillName} v${span.version}` : span.skillName;
-}
-
-function findExtractedStep(extractedSteps: ExtractedTraceStep[], actualStepIndex: number) {
-    const byUiIndex = extractedSteps.find(step => step.uiStepIndex === actualStepIndex);
-    if (byUiIndex) return byUiIndex;
-    return extractedSteps.find(step => {
-        const start = step.dialogStartIndex;
-        const end = step.dialogEndIndex;
-        return typeof start === 'number' && typeof end === 'number' && start <= actualStepIndex && end >= actualStepIndex;
-    });
-}
-
-function statusGlyph(status: AlignmentStatus) {
-    if (status === 'matched') return '✓';
-    if (status === 'partial') return '!';
-    if (status === 'unexpected') return '×';
-    if (status === 'delegated') return 'S';
-    if (status === 'non_business') return '~';
-    return '−';
-}
-
-function MermaidRenderer({ code }: { code: string }) {
-    const [svg, setSvg] = useState('');
-    const [error, setError] = useState('');
-    const [scale, setScale] = useState(1);
-    const [baseSize, setBaseSize] = useState<{ width: number; height: number } | null>(null);
-    const [fullscreen, setFullscreen] = useState(false);
-    const [renderId] = useState(() => `sa-mermaid-${Math.random().toString(36).slice(2)}`);
-    const viewportRef = useRef<HTMLDivElement | null>(null);
-    const fullscreenViewportRef = useRef<HTMLDivElement | null>(null);
-    const contentRef = useRef<HTMLDivElement | null>(null);
-    const fullscreenContentRef = useRef<HTMLDivElement | null>(null);
-    const userAdjustedZoomRef = useRef(false);
-
-    useEffect(() => {
-        let cancelled = false;
-        setSvg('');
-        setError('');
-        setScale(1);
-        setBaseSize(null);
-        userAdjustedZoomRef.current = false;
-        import('mermaid')
-            .then(mod => {
-                const mermaid = mod.default;
-                mermaid.initialize({
-                    startOnLoad: false,
-                    theme: 'base',
-                    themeVariables: {
-                        primaryColor: '#ffffff',
-                        primaryTextColor: '#18181b',
-                        primaryBorderColor: '#d4d4d8',
-                        lineColor: '#71717a',
-                        fontFamily: 'system-ui, -apple-system, sans-serif',
-                        fontSize: '12px',
-                    },
-                    flowchart: { curve: 'basis', padding: 8, nodeSpacing: 18, rankSpacing: 18 },
-                });
-                return mermaid.render(`${renderId}-${Date.now()}`, code);
-            })
-            .then(({ svg }) => {
-                if (!cancelled) setSvg(svg);
-            })
-            .catch(() => {
-                if (!cancelled) setError('流程图渲染失败');
-            });
-        return () => { cancelled = true; };
-    }, [code]);
-
-    const clampScale = useCallback((value: number) => Math.max(0.35, Math.min(2.5, value)), []);
-
-    const fitScaleFor = useCallback((target: HTMLDivElement | null, width: number) => {
-        if (!target || width <= 0) return 1;
-        const available = Math.max(160, target.clientWidth - 24);
-        return clampScale(available / width);
-    }, [clampScale]);
-
-    const measureSvg = useCallback((root: HTMLDivElement | null) => {
-        const svgEl = root?.querySelector('svg');
-        if (!svgEl) return null;
-        const viewBox = svgEl.getAttribute('viewBox')?.split(/\s+/).map(Number);
-        const width = viewBox && viewBox.length === 4 && Number.isFinite(viewBox[2])
-            ? viewBox[2]
-            : svgEl.getBoundingClientRect().width;
-        const height = viewBox && viewBox.length === 4 && Number.isFinite(viewBox[3])
-            ? viewBox[3]
-            : svgEl.getBoundingClientRect().height;
-        if (width <= 0 || height <= 0) return null;
-        return { width, height };
-    }, []);
-
-    useEffect(() => {
-        if (!svg) return;
-        const frame = window.requestAnimationFrame(() => {
-            const activeContent = fullscreen ? fullscreenContentRef.current : contentRef.current;
-            const activeViewport = fullscreen ? fullscreenViewportRef.current : viewportRef.current;
-            const measured = measureSvg(activeContent);
-            if (!measured) return;
-            setBaseSize(measured);
-            if (!userAdjustedZoomRef.current) {
-                setScale(fitScaleFor(activeViewport, measured.width));
-            }
-        });
-        return () => window.cancelAnimationFrame(frame);
-    }, [fitScaleFor, fullscreen, measureSvg, svg]);
-
-    useEffect(() => {
-        if (!baseSize || !svg || userAdjustedZoomRef.current) return;
-        const target = fullscreen ? fullscreenViewportRef.current : viewportRef.current;
-        if (!target || typeof ResizeObserver === 'undefined') return;
-        const observer = new ResizeObserver(() => {
-            if (!userAdjustedZoomRef.current) {
-                setScale(fitScaleFor(target, baseSize.width));
-            }
-        });
-        observer.observe(target);
-        return () => observer.disconnect();
-    }, [baseSize, fitScaleFor, fullscreen, svg]);
-
-    useEffect(() => {
-        if (!fullscreen) return;
-        const onKeyDown = (event: KeyboardEvent) => {
-            if (event.key === 'Escape') setFullscreen(false);
-        };
-        window.addEventListener('keydown', onKeyDown);
-        return () => window.removeEventListener('keydown', onKeyDown);
-    }, [fullscreen]);
-
-    const setZoom = useCallback((next: number) => {
-        userAdjustedZoomRef.current = true;
-        setScale(clampScale(Math.round(next * 100) / 100));
-    }, [clampScale]);
-
-    const fitWidth = useCallback((target: HTMLDivElement | null) => {
-        if (!target || !baseSize?.width) return;
-        userAdjustedZoomRef.current = true;
-        setScale(fitScaleFor(target, baseSize.width));
-    }, [baseSize, fitScaleFor]);
-
-    const renderControls = (targetRef: React.RefObject<HTMLDivElement | null>, isFullscreen = false) => (
-        <div className="sa-mermaid-tools" aria-label="流程图查看器工具栏">
-            <button onClick={() => setZoom(scale - 0.1)} title="缩小">-</button>
-            <button onClick={() => setZoom(scale + 0.1)} title="放大">+</button>
-            <button onClick={() => setZoom(1)} title="恢复 100%">100%</button>
-            <button onClick={() => fitWidth(targetRef.current)} title="适应宽度">适应宽度</button>
-            {!isFullscreen && <button onClick={() => setFullscreen(true)} title="全屏查看">全屏</button>}
-            <span>{Math.round(scale * 100)}%</span>
-        </div>
-    );
-
-    const renderViewport = (
-        targetRef: React.RefObject<HTMLDivElement | null>,
-        targetContentRef: React.RefObject<HTMLDivElement | null>,
-        isFullscreen = false,
-    ) => (
-        <>
-            {renderControls(targetRef, isFullscreen)}
-            <div className={`sa-mermaid-viewport ${isFullscreen ? 'fullscreen' : ''}`} ref={targetRef}>
-                <div
-                    className="sa-mermaid-stage"
-                    style={{
-                        width: baseSize ? `${baseSize.width * scale}px` : undefined,
-                        height: baseSize ? `${baseSize.height * scale}px` : undefined,
-                    }}
-                >
-                    <div
-                        ref={targetContentRef}
-                        className="sa-mermaid"
-                        style={{
-                            width: baseSize ? `${baseSize.width}px` : undefined,
-                            height: baseSize ? `${baseSize.height}px` : undefined,
-                            transform: `scale(${scale})`,
-                        }}
-                        dangerouslySetInnerHTML={{ __html: svg }}
-                    />
-                </div>
-            </div>
-        </>
-    );
-
-    if (error) return <span>{error}</span>;
-    if (!svg) return <span>正在渲染流程图...</span>;
-    return (
-        <>
-            {renderViewport(viewportRef, contentRef)}
-            {fullscreen && (
-                <div className="sa-mermaid-fullscreen" role="dialog" aria-modal="true" aria-label="流程图全屏查看器">
-                    <div className="sa-mermaid-fullscreen-head">
-                        <b>流程图查看器</b>
-                        <button onClick={() => setFullscreen(false)}>关闭</button>
-                    </div>
-                    {renderViewport(fullscreenViewportRef, fullscreenContentRef, true)}
-                </div>
-            )}
-        </>
-    );
-}
-
 function Donut({ value }: { value: number | null }) {
     const safe = value == null ? 0 : Math.max(0, Math.min(100, value));
     return (
@@ -6512,14 +4740,6 @@ function iconFor(kind: 'trace' | 'static' | 'gray' | 'batch') {
         batch: '☷',
     };
     return icons[kind];
-}
-
-function getSkillMonogram(name?: string | null) {
-    const cleaned = (name || '').trim();
-    if (!cleaned) return 'SK';
-    const ascii = cleaned.replace(/[^a-zA-Z0-9]/g, '');
-    if (ascii.length >= 2) return ascii.slice(0, 2).toUpperCase();
-    return cleaned.slice(0, 2).toUpperCase();
 }
 
 function viewTitle(view: AnalysisView) {
@@ -6670,6 +4890,17 @@ function getTraceFlowScore(trace: TraceRecord): number | null {
     const total = scoringMatches.length + skipped.length;
     if (total === 0) return null;
     return scoringMatches.filter(match => match.matchStatus === 'matched').length / total;
+}
+
+/**
+ * 一条 trace 的"轨迹分"(0-1) 统一口径：优先用后端聚合层算出的 trajectoryScore（方案A：
+ * 0.45 完整性 + 0.35 工具 + 0.20 冗余, 再封顶），没有(未评测/旧数据)再回退 analyze-match
+ * 对齐覆盖率 getTraceFlowScore。所有"卡片/概览/健康分/诊断"聚合都走它，避免与 ③ 详情口径分裂。
+ */
+function getEffectiveTrajScore(trace: TraceRecord): number | null {
+    if (typeof trace.trajectory_score === 'number') return trace.trajectory_score;
+    if (typeof trace.trajectoryScore === 'number') return trace.trajectoryScore;
+    return getTraceFlowScore(trace);
 }
 
 function getTraceId(trace: TraceRecord) {

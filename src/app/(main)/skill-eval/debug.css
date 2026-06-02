@@ -641,6 +641,10 @@
 /* ==================== MAIN WORK TABLE ==================== */
 .work-table-wrapper {
   overflow-x: auto;
+  /* 用例表限高：约 5 行后滚动，避免用例多时把 ① 配置块撑得过高，
+     与「从 Trace」的 .sa-trace-list-body（max-height:400px）保持一致。 */
+  max-height: 400px;
+  overflow-y: auto;
 }
 .work-table {
   width: 100%;
@@ -659,6 +663,10 @@
   text-transform: uppercase;
   letter-spacing: 0.06em;
   font-weight: 600;
+  /* 限高滚动时表头吸顶，列名始终可见。 */
+  position: sticky;
+  top: 0;
+  z-index: 1;
 }
 .work-table tbody td {
   padding: 11px 12px;
@@ -3178,14 +3186,13 @@
   --blue-v2: #2563eb;
   --blue-soft-v2: #eff6ff;
   --mono-v2: 'JetBrains Mono', ui-monospace, monospace;
-  --sans-v2: 'Noto Sans SC', -apple-system, sans-serif;
 }
 
 /* ── Stepper ── */
 .v2-stepper {
   background: var(--bg-elev);
   border: 1px solid var(--line);
-  border-radius: 14px;
+  border-radius: 10px;
   padding: 20px 32px;
   margin-bottom: 16px;
   display: flex;
@@ -3193,7 +3200,6 @@
   position: sticky;
   top: 0;
   z-index: 100;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
 }
 .v2-step {
   display: flex;
@@ -3208,7 +3214,7 @@
   border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
   font-family: var(--mono-v2);
-  font-weight: 700; font-size: 15px;
+  font-weight: 700; font-size: 14px;
   border: 2px solid var(--line-strong);
   background: var(--bg-elev);
   color: var(--ink-4);
@@ -3249,7 +3255,7 @@
 .v2-stage-card {
   margin-bottom: 16px;
   background: var(--bg-elev);
-  border-radius: 16px;
+  border-radius: 10px;
   overflow: hidden;
   border: 1px solid var(--line);
   position: relative;
@@ -3265,18 +3271,18 @@
   top: 0; left: 0; bottom: 0; width: 5px;
 }
 .v2-stage-num-badge {
-  width: 44px; height: 44px; border-radius: 12px;
+  width: 44px; height: 44px; border-radius: 8px;
   display: flex; align-items: center; justify-content: center;
-  font-family: var(--mono-v2); font-weight: 700; font-size: 16px;
+  font-family: var(--mono-v2); font-weight: 700; font-size: 14px;
 }
 .v2-stage-title-block { flex: 1; }
 .v2-stage-card-title {
   font-size: 20px; font-weight: 700; letter-spacing: -0.3px;
   display: flex; align-items: center; gap: 10px;
 }
-.v2-stage-card-subtitle { font-size: 13px; color: var(--ink-2); margin-top: 2px; }
+.v2-stage-card-subtitle { font-size: 12px; color: var(--ink-2); margin-top: 2px; }
 .v2-stage-pill {
-  font-family: var(--mono-v2); font-size: 10px;
+  font-family: var(--mono-v2); font-size: 11px;
   padding: 4px 10px; border-radius: 20px;
   letter-spacing: 0.5px; font-weight: 600;
 }
@@ -3284,17 +3290,14 @@
 .v2-stage-pill.active { background: var(--blue-soft-v2); color: var(--blue-v2); }
 .v2-stage-pill.pending { background: var(--bg-soft); color: var(--ink-4); }
 
-/* Config stage */
-.v2-stage-card.config .v2-stage-card-header::before { background: var(--stage-config); }
-.v2-stage-card.config .v2-stage-num-badge { background: var(--stage-config-soft); color: var(--stage-config); border: 1.5px solid var(--line-strong); }
-/* Stage 1 - blue */
-.v2-stage-card.s1 .v2-stage-card-header { background: linear-gradient(135deg, var(--stage-1-soft) 0%, white 50%); }
-.v2-stage-card.s1 .v2-stage-card-header::before { background: var(--stage-1); }
-.v2-stage-card.s1 .v2-stage-num-badge { background: var(--stage-1); color: white; }
-/* Stage 3 - amber */
-.v2-stage-card.s3 .v2-stage-card-header { background: linear-gradient(135deg, var(--stage-3-soft) 0%, white 50%); }
-.v2-stage-card.s3 .v2-stage-card-header::before { background: var(--stage-3); }
-.v2-stage-card.s3 .v2-stage-num-badge { background: var(--stage-3); color: white; }
+/* Stage cards — grayscale per foundations.md §0.1 rule 2 (color = semantic, not stage identity)
+ * and §B.6 red line (amber/red reserved for warning/error, never as type color).
+ * Stage identity is carried by the badge number; chrome stays neutral. */
+.v2-stage-card .v2-stage-card-header::before { background: var(--line-strong); }
+.v2-stage-card .v2-stage-num-badge { background: var(--bg-soft); color: var(--ink); border: 1px solid var(--line-strong); }
+/* Config stage: subtle primary-subtle to mark "you are here" without gradient */
+.v2-stage-card.config .v2-stage-card-header::before { background: var(--sa-primary); }
+.v2-stage-card.config .v2-stage-num-badge { background: var(--sa-primary-soft); color: var(--sa-primary); border-color: var(--sa-primary-line); }
 
 .v2-stage-card-body { padding: 24px 28px; }
 
@@ -3323,16 +3326,21 @@
   font-size: 14px; font-weight: 600; color: var(--ink);
   font-family: inherit; cursor: pointer; outline: none;
 }
+.v2-config-static {
+  display: inline-flex; align-items: center; width: 100%;
+  min-height: 32px; overflow: hidden; white-space: nowrap;
+  text-overflow: ellipsis; cursor: default;
+}
 .v2-config-item-hint { font-size: 11px; color: var(--ink-4); margin-top: 4px; }
 .v2-config-checkbox-row {
   display: flex; align-items: center; gap: 8px;
-  cursor: pointer; font-size: 13px; font-weight: 500;
+  cursor: pointer; font-size: 12px; font-weight: 500;
 }
 .v2-config-checkbox-row input { cursor: pointer; width: 16px; height: 16px; }
 .v2-callout-new {
   position: absolute; top: -8px; right: 10px;
-  font-family: var(--mono-v2); font-size: 9px;
-  color: white; background: var(--stage-1);
+  font-family: var(--mono-v2); font-size: 11px;
+  color: white; background: var(--sa-primary);
   padding: 2px 6px; border-radius: 3px;
   letter-spacing: 0.5px; font-weight: 600;
 }
@@ -3345,14 +3353,48 @@
 }
 .v2-btn-run-big {
   background: var(--ink); color: white; border: none;
-  padding: 14px 32px; border-radius: 10px;
-  font-weight: 600; font-size: 15px; cursor: pointer;
+  padding: 14px 32px; border-radius: 8px;
+  font-weight: 600; font-size: 14px; cursor: pointer;
   font-family: inherit; display: flex; align-items: center; gap: 10px;
-  transition: all 0.15s;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+  transition: background 0.15s;
 }
-.v2-btn-run-big:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
+.v2-btn-run-big:hover:not(:disabled) { background: var(--ink-2); }
 .v2-btn-run-big:disabled { opacity: 0.45; cursor: not-allowed; }
+.ab-stop-run-btn {
+  height: 38px !important;
+  min-width: 96px !important;
+  padding: 0 24px !important;
+  border-radius: 8px !important;
+  border: 1px solid #b91c1c !important;
+  background: #ef4444 !important;
+  color: #111 !important;
+  font-size: 13px !important;
+  font-weight: 900 !important;
+  line-height: 38px !important;
+  cursor: pointer !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  flex: 0 0 auto !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.18) !important;
+}
+.ab-stop-run-btn span {
+  display: inline !important;
+  color: #111 !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+}
+.ab-stop-run-btn:hover {
+  background: #dc2626 !important;
+}
+.ab-stop-run-btn:disabled {
+  background: #ef4444 !important;
+  color: #111 !important;
+  cursor: not-allowed !important;
+  opacity: 0.55 !important;
+}
 .v2-config-summary {
   font-size: 12px; color: var(--ink-2);
   font-family: var(--mono-v2); display: flex; gap: 14px;
@@ -4105,3 +4147,107 @@
 }
 .ab-page-v2 .winner-indicator .ti { font-size: 12px; }
 
+/* ─────────────────────────────────────────────────────────────────────────
+ * A/B columns — recolored per docs/design/foundations.md §B.6.1 chart palette.
+ * A (control)  = Sky    (slot 2) — cool, distinct from primary
+ * B (experiment) = Violet (slot 6) — AI/model semantic
+ * Replaces previous amber (warning-reserved) / blue (running-reserved) usage.
+ * ───────────────────────────────────────────────────────────────────────── */
+.v2-compare-col.ab-col-a { border-top: 4px solid var(--ab-a, #0EA5E9); }
+.v2-compare-col.ab-col-a .v2-col-header { background: var(--ab-a-subtle, #F0F9FF); border-bottom: 1px solid var(--border); }
+.v2-compare-col.ab-col-a .v2-col-tag.a { background: var(--ab-a, #0EA5E9); color: #fff; }
+.v2-compare-col.ab-col-a .v2-col-name { color: var(--foreground); }
+.v2-compare-col.ab-col-a .ab-skill-state.on { background: var(--ab-a-subtle, #F0F9FF); color: var(--ab-a-strong, #0369A1); }
+
+.v2-compare-col.ab-col-b { border-top: 4px solid var(--ab-b, #8B5CF6); box-shadow: 0 0 0 1px var(--ab-b-subtle, #F5F3FF); }
+.v2-compare-col.ab-col-b .v2-col-header { background: var(--ab-b-subtle, #F5F3FF); border-bottom: 1px solid var(--border); }
+.v2-compare-col.ab-col-b .v2-col-tag.b { background: var(--ab-b, #8B5CF6); color: #fff; }
+.v2-compare-col.ab-col-b .v2-col-name { color: var(--foreground); }
+.v2-compare-col.ab-col-b .ab-skill-state.on { background: var(--ab-b-subtle, #F5F3FF); color: var(--ab-b-strong, #6D28D9); }
+
+.ab-skill-state { padding: 2px 6px; border-radius: 3px; font-weight: 600; }
+.ab-skill-state.off { background: var(--background-secondary); color: var(--foreground-muted); }
+.ab-agent-state {
+  display: inline-flex;
+  align-items: center;
+  max-width: 220px;
+  min-width: 0;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: var(--background-secondary);
+  color: var(--foreground-muted);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ab-agent-hint {
+  font-family: var(--mono-v2);
+  color: var(--foreground-secondary) !important;
+}
+.v2-compare-col.ab-col-a,
+.v2-compare-col.ab-col-b {
+  display: flex;
+  flex-direction: column;
+  min-height: 520px;
+}
+.v2-compare-col.ab-col-a .v2-col-header,
+.v2-compare-col.ab-col-b .v2-col-header {
+  min-height: 92px;
+  align-items: flex-start;
+}
+.v2-compare-col.ab-col-a .v2-col-name-block,
+.v2-compare-col.ab-col-b .v2-col-name-block {
+  min-width: 0;
+}
+.v2-compare-col.ab-col-a .v2-col-variant-line,
+.v2-compare-col.ab-col-b .v2-col-variant-line {
+  min-height: 44px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+.v2-compare-col.ab-col-a .v2-col-body,
+.v2-compare-col.ab-col-b .v2-col-body {
+  flex: 1;
+}
+.v2-compare-col.ab-col-a .v2-exec-result,
+.v2-compare-col.ab-col-b .v2-exec-result {
+  min-height: 176px;
+  justify-content: center;
+}
+.v2-compare-col.ab-col-a .v2-result-text,
+.v2-compare-col.ab-col-b .v2-result-text,
+.v2-compare-col.ab-col-a .v2-result-sub,
+.v2-compare-col.ab-col-b .v2-result-sub {
+  min-height: 20px;
+  text-align: center;
+}
+.v2-compare-col.ab-col-a .v2-process-row,
+.v2-compare-col.ab-col-b .v2-process-row {
+  min-height: 38px;
+}
+.v2-compare-col.ab-col-a .v2-metric-row,
+.v2-compare-col.ab-col-b .v2-metric-row {
+  min-height: 92px;
+}
+.v2-compare-col.ab-col-a .v2-col-actions,
+.v2-compare-col.ab-col-b .v2-col-actions {
+  min-height: 54px;
+}
+
+.v2-result-icon.ab-icon-running { background: var(--primary-subtle); color: var(--primary); }
+.v2-result-icon.ab-icon-eval { background: var(--primary-subtle); color: var(--primary); }
+.v2-result-icon.ab-icon-pending { background: var(--background-secondary); color: var(--foreground-muted); }
+
+.v2-metric-cell.ab-score-highlight { background: var(--primary-subtle); }
+.v2-metric-cell.ab-score-highlight .label { color: var(--primary); font-weight: 600; }
+
+[data-theme='dark'] .v2-compare-col.ab-col-a { border-top-color: #38BDF8; }
+[data-theme='dark'] .v2-compare-col.ab-col-a .v2-col-header { background: rgba(56, 189, 248, 0.08); }
+[data-theme='dark'] .v2-compare-col.ab-col-a .v2-col-tag.a { background: #38BDF8; color: #0C1F2E; }
+[data-theme='dark'] .v2-compare-col.ab-col-a .ab-skill-state.on { background: rgba(56, 189, 248, 0.12); color: #7DD3FC; }
+
+[data-theme='dark'] .v2-compare-col.ab-col-b { border-top-color: #A78BFA; }
+[data-theme='dark'] .v2-compare-col.ab-col-b .v2-col-header { background: rgba(167, 139, 250, 0.08); }
+[data-theme='dark'] .v2-compare-col.ab-col-b .v2-col-tag.b { background: #A78BFA; color: #1F1B33; }
+[data-theme='dark'] .v2-compare-col.ab-col-b .ab-skill-state.on { background: rgba(167, 139, 250, 0.12); color: #C4B5FD; }

@@ -131,6 +131,9 @@ export default function SkillEvalTriggerPage() {
   const [selectedSetId, setSelectedSetId] = useState<string | null>(null);
   const [datasetVersionsOpen, setDatasetVersionsOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [uploadFormatDialogOpen, setUploadFormatDialogOpen] = useState(false);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const [importing, setImporting] = useState(false);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
 
   // 三段式 section 折叠态。固定默认：① ② 折叠 / ③ 展开——不再根据数据状态自动改写
@@ -419,6 +422,96 @@ export default function SkillEvalTriggerPage() {
     }
   }, [user, skillName, reload]);
 
+  // 从评测中心的「评测数据集」导入 query 当正例。
+  // mode='new-version'：和上传走同一条 /upload 接口，新建版本。
+  // mode='append'：往当前编辑器里的 set 末尾追加（用户还需手动「保存」才落库）。
+  // 任一模式都按 query 字符串去重——不重复添加已有的 query。
+  const onImportFromDataset = useCallback(
+    async (queries: Array<{ query: string; rationale?: string }>, mode: 'append' | 'new-version') => {
+      if (!user) return;
+      const existingQueries = new Set((set?.items ?? []).map(i => i.query.trim()).filter(Boolean));
+      const seen = new Set<string>();
+      const dedupedNew: Array<{ query: string; rationale?: string }> = [];
+      for (const q of queries) {
+        const trimmed = q.query.trim();
+        if (!trimmed) continue;
+        if (existingQueries.has(trimmed)) continue;
+        if (seen.has(trimmed)) continue;
+        seen.add(trimmed);
+        dedupedNew.push({ query: trimmed, rationale: q.rationale });
+      }
+      const skipped = queries.length - dedupedNew.length;
+      if (dedupedNew.length === 0) {
+        setErrorMsg(`没有可导入的新 query —— ${queries.length} 条全部已存在或为空`);
+        setImportDialogOpen(false);
+        return;
+      }
+
+      setImporting(true);
+      setErrorMsg(null);
+      try {
+        if (mode === 'new-version') {
+          // 走 upload —— 后端 normalizeItems 校验后新建一个 user-upload 版本。
+          const items = dedupedNew.map(q => ({
+            query: q.query,
+            shouldTrigger: true,
+            rationale: q.rationale,
+          }));
+          const res = await apiFetch(`/api/skill-eval/trigger/${encodeURIComponent(skillName)}/upload`, {
+            method: 'POST',
+            body: JSON.stringify({ user, items, note: '从评测数据集导入' }),
+          });
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({}));
+            throw new Error(body.error || `import failed: ${res.status}`);
+          }
+          const data = await res.json();
+          setSelectedSetId(null);
+          setSet(data.set);
+          void reload();
+        } else {
+          // append —— 仅更新本地 state；用户随后点「保存」才入库。
+          setSet(prev => {
+            const base: TriggerSet = prev ?? {
+              id: '',
+              skillName,
+              version: 1,
+              versionSource: 'manual',
+              versionNote: null,
+              description: '',
+              items: [],
+              status: 'ready',
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            };
+            return {
+              ...base,
+              items: [
+                ...base.items,
+                ...dedupedNew.map(q => ({
+                  id: uuid(),
+                  query: q.query,
+                  shouldTrigger: true,
+                  rationale: q.rationale,
+                  source: 'user-added' as TriggerItemSource,
+                })),
+              ],
+            };
+          });
+        }
+        setImportDialogOpen(false);
+        if (skipped > 0) {
+          setErrorMsg(`导入 ${dedupedNew.length} 条，跳过 ${skipped} 条已存在/重复的 query`);
+        }
+      } catch (err) {
+        setErrorMsg((err as Error)?.message ?? '导入失败');
+      } finally {
+        setImporting(false);
+      }
+    },
+    [user, skillName, set, reload],
+  );
+
   // 拆成正例 / 反例两列
   const positiveItems = useMemo(() => set?.items.filter(i => i.shouldTrigger) ?? [], [set]);
   const negativeItems = useMemo(() => set?.items.filter(i => !i.shouldTrigger) ?? [], [set]);
@@ -452,7 +545,7 @@ export default function SkillEvalTriggerPage() {
               if (selectedVersion != null) qs.set('version', String(selectedVersion));
               router.push(`/skill-eval?${qs.toString()}`);
             }}>
-              Skills 分析
+              Skills 评测
             </button>
             <span>/</span>
             <b>触发分析</b>
@@ -576,11 +669,19 @@ export default function SkillEvalTriggerPage() {
               </button>
               <button
                 className="sa-btn"
-                onClick={() => uploadInputRef.current?.click()}
+                onClick={() => setUploadFormatDialogOpen(true)}
                 disabled={uploading}
-                title="上传 JSON 文件：[{ query, shouldTrigger, rationale? }, ...]"
+                title="查看数据集 JSON 格式要求，然后选择文件"
               >
                 {uploading ? '上传中...' : '上传数据集'}
+              </button>
+              <button
+                className="sa-btn"
+                onClick={() => setImportDialogOpen(true)}
+                disabled={importing}
+                title="从「评测中心 → 评测数据集」选一个，把它的 query 当正例（应触发）导入"
+              >
+                {importing ? '导入中...' : '从评测集导入'}
               </button>
               <input
                 ref={uploadInputRef}
@@ -761,6 +862,26 @@ export default function SkillEvalTriggerPage() {
           )}
         </SectionShell>
       </main>
+
+      {uploadFormatDialogOpen && (
+        <UploadFormatDialog
+          onCancel={() => setUploadFormatDialogOpen(false)}
+          onPickFile={() => {
+            setUploadFormatDialogOpen(false);
+            uploadInputRef.current?.click();
+          }}
+        />
+      )}
+
+      {importDialogOpen && user && (
+        <ImportFromDatasetDialog
+          user={user}
+          skillName={skillName}
+          importing={importing}
+          onCancel={() => setImportDialogOpen(false)}
+          onImport={onImportFromDataset}
+        />
+      )}
 
       {runDialogOpen && (
         <RunDialog
@@ -1798,3 +1919,406 @@ function TriggerRunHistoryPanel({
   );
 }
 
+
+// =========================================================================
+// 上传数据集格式说明对话框
+// =========================================================================
+function UploadFormatDialog({
+  onCancel,
+  onPickFile,
+}: {
+  onCancel: () => void;
+  onPickFile: () => void;
+}) {
+  const example = `[
+  { "query": "帮我写一段排序", "shouldTrigger": true,  "rationale": "可选：为什么应触发" },
+  { "query": "今天天气怎么样", "shouldTrigger": false }
+]`;
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0,0,0,0.4)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 100,
+      }}
+      onClick={onCancel}
+    >
+      <div
+        style={{
+          background: 'var(--bg, #fff)',
+          padding: 24,
+          borderRadius: 8,
+          minWidth: 520,
+          maxWidth: 640,
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        <h3 style={{ margin: '0 0 12px', fontSize: 16 }}>上传数据集 · 格式要求</h3>
+
+        <div
+          style={{
+            margin: '0 0 12px',
+            padding: '10px 12px',
+            background: '#eef2ff',
+            border: '1px solid #c7d2fe',
+            borderRadius: 6,
+            fontSize: 12,
+            color: '#3730a3',
+          }}
+        >
+          仅支持 <code>.json</code> 文件；上传成功后会作为新版本追加到当前数据集。
+        </div>
+
+        <div style={{ fontSize: 13, marginBottom: 8, color: '#374151' }}>
+          <strong>顶层结构</strong>（两种等价写法都接受）：
+        </div>
+        <ul style={{ margin: '0 0 12px 20px', fontSize: 13, color: '#374151', lineHeight: 1.7 }}>
+          <li>直接是一个数组 <code>[...]</code></li>
+          <li>或者包一层：<code>{'{ "items": [...] }'}</code></li>
+        </ul>
+
+        <div style={{ fontSize: 13, marginBottom: 8, color: '#374151' }}>
+          <strong>每项字段</strong>：
+        </div>
+        <ul style={{ margin: '0 0 12px 20px', fontSize: 13, color: '#374151', lineHeight: 1.7 }}>
+          <li>
+            <code>query</code> · string · <span style={{ color: '#b91c1c' }}>必填</span>，非空 —— 用户问句
+          </li>
+          <li>
+            <code>shouldTrigger</code> · boolean · <span style={{ color: '#b91c1c' }}>必填</span> —— 期望该 skill 是否被触发
+          </li>
+          <li>
+            <code>rationale</code> · string · 可选 —— 标注说明
+          </li>
+          <li>
+            <code>id</code> · string · 可选 —— 不传则自动生成
+          </li>
+        </ul>
+
+        <div style={{ fontSize: 13, marginBottom: 6, color: '#374151' }}>
+          <strong>示例</strong>：
+        </div>
+        <pre
+          style={{
+            margin: '0 0 16px',
+            padding: '10px 12px',
+            background: '#f9fafb',
+            border: '1px solid #e5e7eb',
+            borderRadius: 6,
+            fontSize: 12,
+            lineHeight: 1.5,
+            overflow: 'auto',
+            maxHeight: 180,
+          }}
+        >
+          {example}
+        </pre>
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button className="sa-btn" onClick={onCancel}>
+            取消
+          </button>
+          <button className="sa-btn sa-btn-primary" onClick={onPickFile}>
+            选择文件…
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// =========================================================================
+// 从评测中心 → 评测数据集导入对话框
+// =========================================================================
+interface AgentDatasetCaseLite {
+  id: string;
+  input: string;
+  evaluationFocus?: string;
+}
+interface AgentDatasetLite {
+  id: string;
+  name: string;
+  description: string;
+  targetSkill: string;
+  datasetKind: string;
+  cases: AgentDatasetCaseLite[];
+  updatedAt: string;
+}
+
+function ImportFromDatasetDialog({
+  user,
+  skillName,
+  importing,
+  onCancel,
+  onImport,
+}: {
+  user: string;
+  skillName: string;
+  importing: boolean;
+  onCancel: () => void;
+  onImport: (
+    queries: Array<{ query: string; rationale?: string }>,
+    mode: 'append' | 'new-version',
+  ) => void | Promise<void>;
+}) {
+  const [datasets, setDatasets] = useState<AgentDatasetLite[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [onlyThisSkill, setOnlyThisSkill] = useState(true);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [mode, setMode] = useState<'append' | 'new-version'>('new-version');
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        setLoading(true);
+        setLoadError(null);
+        const res = await apiFetch(`/api/agent-datasets?user=${encodeURIComponent(user)}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = (await res.json()) as AgentDatasetLite[];
+        if (!cancelled) setDatasets(Array.isArray(data) ? data : []);
+      } catch (err) {
+        if (!cancelled) setLoadError((err as Error)?.message ?? '加载失败');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
+
+  const filtered = useMemo(() => {
+    if (!onlyThisSkill) return datasets;
+    return datasets.filter(d => !d.targetSkill || d.targetSkill === skillName);
+  }, [datasets, onlyThisSkill, skillName]);
+
+  const selected = useMemo(
+    () => filtered.find(d => d.id === selectedId) ?? null,
+    [filtered, selectedId],
+  );
+
+  // 当 filter 切换导致原选中数据集被过滤掉，清空选择避免悬空。
+  useEffect(() => {
+    if (selectedId && !filtered.some(d => d.id === selectedId)) {
+      setSelectedId(null);
+    }
+  }, [filtered, selectedId]);
+
+  const importableCount = useMemo(() => {
+    if (!selected) return 0;
+    return selected.cases.filter(c => (c.input ?? '').trim().length > 0).length;
+  }, [selected]);
+
+  const handleImport = () => {
+    if (!selected) return;
+    const queries = selected.cases
+      .map(c => ({ query: (c.input ?? '').trim(), rationale: c.evaluationFocus?.trim() || undefined }))
+      .filter(q => q.query);
+    void onImport(queries, mode);
+  };
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0,0,0,0.4)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 100,
+      }}
+      onClick={() => !importing && onCancel()}
+    >
+      <div
+        style={{
+          background: 'var(--bg, #fff)',
+          padding: 24,
+          borderRadius: 8,
+          width: 680,
+          maxHeight: '80vh',
+          display: 'flex',
+          flexDirection: 'column',
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        <h3 style={{ margin: '0 0 8px', fontSize: 16 }}>从评测数据集导入</h3>
+        <div
+          style={{
+            margin: '0 0 12px',
+            padding: '8px 12px',
+            background: '#eef2ff',
+            border: '1px solid #c7d2fe',
+            borderRadius: 6,
+            fontSize: 12,
+            color: '#3730a3',
+            lineHeight: 1.5,
+          }}
+        >
+          所选数据集的每条 <code>input</code> 会作为 <strong>正例（应触发）</strong> 导入；<code>evaluationFocus</code> 用作 rationale。已存在的 query 自动跳过。
+        </div>
+
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10, fontSize: 13 }}>
+          <input
+            type="checkbox"
+            checked={onlyThisSkill}
+            onChange={e => setOnlyThisSkill(e.target.checked)}
+          />
+          <span>仅本 skill（包含未绑定的通用数据集）</span>
+        </label>
+
+        <div style={{ display: 'flex', gap: 12, flex: 1, minHeight: 0, marginBottom: 12 }}>
+          {/* 左：数据集列表 */}
+          <div
+            style={{
+              flex: '0 0 280px',
+              border: '1px solid #e5e7eb',
+              borderRadius: 6,
+              overflow: 'auto',
+              background: '#fff',
+            }}
+          >
+            {loading ? (
+              <div style={{ padding: 16, fontSize: 13, color: '#6b7280' }}>加载中...</div>
+            ) : loadError ? (
+              <div style={{ padding: 16, fontSize: 13, color: '#b91c1c' }}>{loadError}</div>
+            ) : filtered.length === 0 ? (
+              <div style={{ padding: 16, fontSize: 13, color: '#6b7280' }}>
+                {onlyThisSkill ? '没有匹配本 skill 的数据集。试试关掉「仅本 skill」。' : '没有可用的评测数据集。'}
+              </div>
+            ) : (
+              <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+                {filtered.map(d => {
+                  const isSel = d.id === selectedId;
+                  return (
+                    <li key={d.id}>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedId(d.id)}
+                        style={{
+                          display: 'block',
+                          width: '100%',
+                          textAlign: 'left',
+                          padding: '10px 12px',
+                          background: isSel ? '#eef2ff' : 'transparent',
+                          border: 'none',
+                          borderBottom: '1px solid #f3f4f6',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <div style={{ fontSize: 13, fontWeight: 500, color: '#111827' }}>{d.name || '(未命名)'}</div>
+                        <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>
+                          {d.cases.length} 条 · {d.targetSkill ? `挂在 ${d.targetSkill}` : '通用'}
+                        </div>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+
+          {/* 右：预览 */}
+          <div
+            style={{
+              flex: 1,
+              minWidth: 0,
+              border: '1px solid #e5e7eb',
+              borderRadius: 6,
+              overflow: 'auto',
+              padding: 12,
+              background: '#fafafa',
+            }}
+          >
+            {!selected ? (
+              <div style={{ fontSize: 13, color: '#9ca3af', textAlign: 'center', marginTop: 40 }}>
+                左侧选一个数据集查看预览
+              </div>
+            ) : (
+              <>
+                <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 8 }}>
+                  共 {selected.cases.length} 条 · 非空 query <strong>{importableCount}</strong> 条将被导入
+                </div>
+                {selected.cases.slice(0, 8).map((c, idx) => (
+                  <div
+                    key={c.id || idx}
+                    style={{
+                      fontSize: 12,
+                      padding: '6px 8px',
+                      marginBottom: 4,
+                      background: '#fff',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: 4,
+                      color: '#374151',
+                      whiteSpace: 'pre-wrap',
+                      wordBreak: 'break-word',
+                    }}
+                  >
+                    {(c.input ?? '').slice(0, 200) || <em style={{ color: '#9ca3af' }}>(空)</em>}
+                  </div>
+                ))}
+                {selected.cases.length > 8 && (
+                  <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 4 }}>
+                    …还有 {selected.cases.length - 8} 条未显示
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* 模式 + 操作 */}
+        <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: 12 }}>
+          <div style={{ fontSize: 13, marginBottom: 8, color: '#374151' }}>
+            <strong>导入方式</strong>
+          </div>
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, marginBottom: 6, fontSize: 13, cursor: 'pointer' }}>
+            <input
+              type="radio"
+              name="import-mode"
+              checked={mode === 'new-version'}
+              onChange={() => setMode('new-version')}
+              style={{ marginTop: 3 }}
+            />
+            <span>
+              <strong>新建一个版本</strong>
+              <span style={{ color: '#6b7280' }}> · 直接落库，作为新版本提交</span>
+            </span>
+          </label>
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, marginBottom: 12, fontSize: 13, cursor: 'pointer' }}>
+            <input
+              type="radio"
+              name="import-mode"
+              checked={mode === 'append'}
+              onChange={() => setMode('append')}
+              style={{ marginTop: 3 }}
+            />
+            <span>
+              <strong>合并到当前版本</strong>
+              <span style={{ color: '#6b7280' }}> · 加到编辑器里，需要再点「保存」才入库</span>
+            </span>
+          </label>
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+            <button className="sa-btn" onClick={onCancel} disabled={importing}>
+              取消
+            </button>
+            <button
+              className="sa-btn sa-btn-primary"
+              onClick={handleImport}
+              disabled={importing || !selected || importableCount === 0}
+            >
+              {importing ? '导入中...' : `导入 ${importableCount} 条`}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
