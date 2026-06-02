@@ -183,6 +183,18 @@ test('fault detail exposes AgentDebug diagnosis for every trace', () => {
   assert.doesNotMatch(page, /agentDebugSuggested/);
   assert.doesNotMatch(card, /suggested:\s*boolean/);
   assert.doesNotMatch(card, /!suggested && !report/);
+  assert.match(page, /buildTraceExplicitErrors\(diagnosticItems, traceNodes\)/);
+  assert.match(page, /const matchedNode = findBestFaultNode\(nodes, item\)\?\.node/);
+  assert.match(page, /matchedNode\?\.id \|\| item\.trace_anchor\?\.step_id \|\| item\.anchor_step_id/);
   assert.doesNotMatch(page, /Insight AI/);
   assert.doesNotMatch(card, /Insight AI/);
+  assert.doesNotMatch(page, /FaultKindBadge/);
+  assert.doesNotMatch(card, /TraceExplicitErrorCard/);
+  assert.doesNotMatch(card, /TraceExplicitErrorsSection/);
+  assert.doesNotMatch(card, /原始 Trace 报错/);
+  assert.match(card, /traceExplicitErrors=\{item\.key === 'system' \? traceExplicitErrors : \[\]\}/);
+  assert.match(card, /const visibleIssueCount = visiblePhase1Grid\.length \+ traceExplicitErrors\.length/);
+  assert.match(card, /const totalCount = count \+ orderedTraceErrors\.length/);
+  assert.match(card, /\{totalCount > 0 && !expanded && \(/);
+  assert.match(card, /查看问题详情/);
 });

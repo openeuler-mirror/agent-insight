@@ -84,10 +84,6 @@ const MODULE_HELP: Record<string, { zh: string; en: string }> = {
     zh: '检查工具、运行环境、模型限制、权限、超时等外部系统层异常。',
     en: 'Checks tool, runtime, model-limit, permission, timeout, and other external system errors.',
   },
-  traceExplicit: {
-    zh: '展示当前 trace 原始数据中已经记录的明确报错事实；它不参与智能诊断推理。',
-    en: 'Shows explicit raw errors already recorded in this trace; it does not participate in diagnosis reasoning.',
-  },
 };
 
 const MODULE_ICONS: Record<string, typeof Clock> = {
@@ -281,7 +277,7 @@ function ReportView({ report, zh, traceExplicitErrors, onNodeRefClick, onRerun }
   const [findingDetailsExpanded, setFindingDetailsExpanded] = useState(false);
   const cascadingChain = useMemo(() => visibleCascade(root), [root]);
   const findingNarrative = useMemo(() => splitFindingSummary(root?.summary || ''), [root?.summary]);
-  const visibleIssueCount = visiblePhase1Grid.length;
+  const visibleIssueCount = visiblePhase1Grid.length + traceExplicitErrors.length;
 
   if (report.skippedReason) {
     return (
@@ -407,7 +403,7 @@ function ReportView({ report, zh, traceExplicitErrors, onNodeRefClick, onRerun }
           onClick={() => setModuleSectionExpanded(value => !value)}
           className="flex w-full items-center gap-2 px-3 py-3 text-left text-[11.5px] font-bold tracking-[0.14em] text-foreground-muted outline-none hover:bg-background-secondary focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
         >
-          <span>{zh ? '认知与系统模块发现' : 'COGNITIVE & SYSTEM FINDINGS'}</span>
+          <span>{zh ? '模块级诊断结果' : 'MODULE-LEVEL DIAGNOSIS RESULTS'}</span>
           <span className="h-px min-w-4 flex-1 bg-border" />
           <span className="normal-case tracking-normal">
             {zh
@@ -428,14 +424,10 @@ function ReportView({ report, zh, traceExplicitErrors, onNodeRefClick, onRerun }
                   zh={zh}
                   root={root}
                   cells={visiblePhase1Grid.filter(cell => cell.module === item.key)}
+                  traceExplicitErrors={item.key === 'system' ? traceExplicitErrors : []}
                   onNodeRefClick={onNodeRefClick}
                 />
               ))}
-              <TraceExplicitErrorCard
-                errors={traceExplicitErrors}
-                zh={zh}
-                onNodeRefClick={onNodeRefClick}
-              />
             </div>
             <OtherFindingsSection
               cells={otherPhase1Grid}
@@ -449,98 +441,12 @@ function ReportView({ report, zh, traceExplicitErrors, onNodeRefClick, onRerun }
                   ? `当前仅展示关键发现相关问题；${hiddenIssueCount} 个已恢复或旁支问题未展示 · 分析 ${report.stats.stepCount} 个执行片段`
                   : `Showing key-finding issues only; ${hiddenIssueCount} recovered or side issues hidden · ${report.stats.stepCount} execution slices`)
                 : (zh
-                  ? `Phase 1 展示 ${visiblePhase1Grid.length} 个问题 · 分析 ${report.stats.stepCount} 个执行片段`
-                  : `${visiblePhase1Grid.length} issues shown · ${report.stats.stepCount} execution slices`)}
+                  ? `Phase 1 展示 ${visibleIssueCount} 个问题 · 分析 ${report.stats.stepCount} 个执行片段`
+                  : `${visibleIssueCount} issues shown · ${report.stats.stepCount} execution slices`)}
             </div>
           </div>
         )}
       </div>
-    </div>
-  );
-}
-
-function TraceExplicitErrorCard({ errors, zh, onNodeRefClick }: {
-  errors: TraceExplicitError[];
-  zh: boolean;
-  onNodeRefClick?: (nodeId: string) => void;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const orderedErrors = useMemo(() => [...errors].sort((a, b) => (a.traceStepIndex ?? Number.MAX_SAFE_INTEGER) - (b.traceStepIndex ?? Number.MAX_SAFE_INTEGER)), [errors]);
-  const primary = orderedErrors[0];
-  return (
-    <div className="rounded-lg border border-card-border bg-card p-3 shadow-sm">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <div className="flex size-7 items-center justify-center rounded-lg border border-border bg-background-secondary text-primary">
-            <AlertTriangle className="size-3.5" />
-          </div>
-          <div>
-            <ModuleTitle
-              title={zh ? 'Trace 明确报错' : 'Trace Errors'}
-              help={zh ? MODULE_HELP.traceExplicit.zh : MODULE_HELP.traceExplicit.en}
-            />
-            <div className="text-[11px] text-foreground-muted">{zh ? '来自当前记录的原始故障事实' : 'Raw fault facts from this trace'}</div>
-          </div>
-        </div>
-        <StatusBadge status={orderedErrors.length > 0 ? 'warning' : 'success'} label={orderedErrors.length > 0 ? `${orderedErrors.length}` : 'OK'} />
-      </div>
-      <ExpandableText
-        maxLines={3}
-        className="mt-3 text-[12.5px] leading-6 text-foreground-muted"
-        expandLabel={zh ? '展开完整摘要' : 'Show full summary'}
-        collapseLabel={zh ? '收起摘要' : 'Collapse summary'}
-      >
-        {primary
-          ? `${primary.title}: ${primary.description || primary.context || (zh ? '当前 trace 已记录明确报错。' : 'This trace includes an explicit error.')}`
-          : (zh ? '未检测到当前记录中的明确原始报错。' : 'No explicit raw error found in this trace.')}
-      </ExpandableText>
-      {orderedErrors.length > 0 && !expanded && (
-        <Button className="mt-2 h-7 px-0 text-[11.5px]" variant="link" size="sm" onClick={() => setExpanded(true)}>
-          {zh ? `查看全部 ${orderedErrors.length} 条报错` : `Show all ${orderedErrors.length} errors`}
-          <ChevronDown className="size-3" />
-        </Button>
-      )}
-      {expanded && (
-        <div className="mt-3 space-y-2 border-t border-border pt-3">
-          {orderedErrors.map(error => (
-            <div key={error.id} className="rounded-md border border-border bg-background-secondary px-2.5 py-2">
-              <div className="mb-1 flex flex-wrap items-center gap-1.5">
-                <span className="rounded bg-card px-1.5 py-0.5 font-mono text-[10.5px] font-semibold text-primary">{formatTraceLocation(error, zh)}</span>
-                <StatusBadge status="warning" label={error.title} />
-              </div>
-              {(error.description || error.context) && (
-                <ExpandableText
-                  maxLines={4}
-                  className="text-[11.5px] leading-5 text-foreground-muted"
-                  expandLabel={zh ? '展开详情' : 'Show details'}
-                  collapseLabel={zh ? '收起详情' : 'Collapse details'}
-                >
-                  {[error.description, error.context].filter(Boolean).join('\n')}
-                </ExpandableText>
-              )}
-              {error.recovery && (
-                <ExpandableText
-                  maxLines={3}
-                  className="mt-1.5 text-[11px] leading-5 text-foreground-muted"
-                  expandLabel={zh ? '展开建议' : 'Show guidance'}
-                  collapseLabel={zh ? '收起建议' : 'Collapse guidance'}
-                >
-                  {error.recovery}
-                </ExpandableText>
-              )}
-              {error.anchorId && onNodeRefClick && (
-                <Button className="mt-1.5 h-6 px-0 text-[11px]" variant="link" size="sm" onClick={() => onNodeRefClick(error.anchorId!)}>
-                  {zh ? '跳到左侧节点' : 'View trace node'}
-                  <ChevronRight className="size-3" />
-                </Button>
-              )}
-            </div>
-          ))}
-          <Button className="h-7 px-0 text-[11.5px]" variant="link" size="sm" onClick={() => setExpanded(false)}>
-            {zh ? '收起报错列表' : 'Collapse errors'}
-          </Button>
-        </div>
-      )}
     </div>
   );
 }
@@ -696,19 +602,22 @@ function OtherFindingsSection({ cells, zh, onNodeRefClick }: {
   );
 }
 
-function ModuleFindingCard({ module, count, zh, root, cells, onNodeRefClick }: {
+function ModuleFindingCard({ module, count, zh, root, cells, traceExplicitErrors = [], onNodeRefClick }: {
   module: { key: AgentDebugModule; zh: string; en: string };
   count: number;
   zh: boolean;
   root: AgentDebugRootCause | null;
   cells: AgentDebugPhase1Cell[];
+  traceExplicitErrors?: TraceExplicitError[];
   onNodeRefClick?: (nodeId: string) => void;
 }) {
   const Icon = MODULE_ICONS[module.key] || Eye;
   const [expanded, setExpanded] = useState(false);
   const orderedCells = useMemo(() => orderModuleCells(cells, root), [cells, root]);
+  const orderedTraceErrors = useMemo(() => [...traceExplicitErrors].sort((a, b) => (a.traceStepIndex ?? Number.MAX_SAFE_INTEGER) - (b.traceStepIndex ?? Number.MAX_SAFE_INTEGER)), [traceExplicitErrors]);
   const primary = orderedCells[0];
-  const extraCount = Math.max(0, count - 1);
+  const primaryTraceError = orderedTraceErrors[0];
+  const totalCount = count + orderedTraceErrors.length;
   return (
     <div className="rounded-lg border border-card-border bg-card p-3 shadow-sm">
       <div className="flex items-start justify-between gap-3">
@@ -724,7 +633,7 @@ function ModuleFindingCard({ module, count, zh, root, cells, onNodeRefClick }: {
             <div className="text-[11px] text-foreground-muted">{zh ? module.zh : module.key}</div>
           </div>
         </div>
-        <StatusBadge status={count > 0 ? 'warning' : 'success'} label={count > 0 ? `${count}` : 'OK'} />
+        <StatusBadge status={totalCount > 0 ? 'warning' : 'success'} label={totalCount > 0 ? `${totalCount}` : 'OK'} />
       </div>
       <ExpandableText
         maxLines={3}
@@ -732,11 +641,17 @@ function ModuleFindingCard({ module, count, zh, root, cells, onNodeRefClick }: {
         expandLabel={zh ? '展开完整摘要' : 'Show full summary'}
         collapseLabel={zh ? '收起摘要' : 'Collapse summary'}
       >
-        {primary ? `${formatErrorType(primary.errorType, zh)}: ${primary.reasoning || primary.evidence}` : (zh ? '未检测到该模块的明确问题。' : 'No clear issue detected in this module.')}
+        {primary
+          ? `${formatErrorType(primary.errorType, zh)}: ${primary.reasoning || primary.evidence}`
+          : primaryTraceError
+            ? `${primaryTraceError.title}: ${primaryTraceError.description || primaryTraceError.context || (zh ? '当前 trace 已记录明确报错。' : 'This trace includes an explicit error.')}`
+            : (zh ? '未检测到该模块的明确问题。' : 'No clear issue detected in this module.')}
       </ExpandableText>
-      {extraCount > 0 && !expanded && (
+      {totalCount > 0 && !expanded && (
         <Button className="mt-2 h-7 px-0 text-[11.5px]" variant="link" size="sm" onClick={() => setExpanded(true)}>
-          {zh ? `查看全部 ${count} 个问题` : `Show all ${count} issues`}
+          {totalCount === 1
+            ? (zh ? '查看问题详情' : 'Show issue details')
+            : (zh ? `查看全部 ${totalCount} 个问题` : `Show all ${totalCount} issues`)}
           <ChevronDown className="size-3" />
         </Button>
       )}
@@ -771,6 +686,40 @@ function ModuleFindingCard({ module, count, zh, root, cells, onNodeRefClick }: {
               )}
               {cell.anchorId && onNodeRefClick && (
                 <Button className="mt-1.5 h-6 px-0 text-[11px]" variant="link" size="sm" onClick={() => onNodeRefClick(cell.anchorId!)}>
+                  {zh ? '跳到左侧节点' : 'View trace node'}
+                  <ChevronRight className="size-3" />
+                </Button>
+              )}
+            </div>
+          ))}
+          {orderedTraceErrors.map(error => (
+            <div key={error.id} className="rounded-md border border-border bg-background-secondary px-2.5 py-2">
+              <div className="mb-1 flex flex-wrap items-center gap-1.5">
+                <span className="rounded bg-card px-1.5 py-0.5 font-mono text-[10.5px] font-semibold text-primary">{formatTraceLocation(error, zh)}</span>
+                <StatusBadge status="warning" label={error.title} />
+              </div>
+              {(error.description || error.context) && (
+                <ExpandableText
+                  maxLines={4}
+                  className="text-[11.5px] leading-5 text-foreground-muted"
+                  expandLabel={zh ? '展开详情' : 'Show details'}
+                  collapseLabel={zh ? '收起详情' : 'Collapse details'}
+                >
+                  {[error.description, error.context].filter(Boolean).join('\n')}
+                </ExpandableText>
+              )}
+              {error.recovery && (
+                <ExpandableText
+                  maxLines={3}
+                  className="mt-1.5 text-[11px] leading-5 text-foreground-muted"
+                  expandLabel={zh ? '展开建议' : 'Show guidance'}
+                  collapseLabel={zh ? '收起建议' : 'Collapse guidance'}
+                >
+                  {error.recovery}
+                </ExpandableText>
+              )}
+              {error.anchorId && onNodeRefClick && (
+                <Button className="mt-1.5 h-6 px-0 text-[11px]" variant="link" size="sm" onClick={() => onNodeRefClick(error.anchorId!)}>
                   {zh ? '跳到左侧节点' : 'View trace node'}
                   <ChevronRight className="size-3" />
                 </Button>
