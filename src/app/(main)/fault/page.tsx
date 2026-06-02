@@ -625,10 +625,9 @@ function FaultDetailView({ execution, locale, user, onBack }: { execution: Execu
     const [selectedNode, setSelectedNode] = useState<TreeTraceNode | null>(null);
 
     // ── Computed ──
-    const faultKinds = useMemo(() => classifyFaultKinds(execution), [execution]);
     const diagnosticItems = useMemo(() => buildDiagnosticItems(execution, locale), [execution, locale]);
-    const traceExplicitErrors = useMemo(() => buildTraceExplicitErrors(diagnosticItems), [diagnosticItems]);
     const traceNodes = useMemo(() => buildFaultPath(execution, session?.interactions || [], locale, diagnosticItems), [execution, session?.interactions, locale, diagnosticItems]);
+    const traceExplicitErrors = useMemo(() => buildTraceExplicitErrors(diagnosticItems, traceNodes), [diagnosticItems, traceNodes]);
     const faultSummary = useMemo(() => summarizeFaultPath(traceNodes, execution), [traceNodes, execution]);
     const skillCount = (execution.invoked_skills?.length ?? 0) || (execution.skills?.length ?? 0) || (execution.skill ? 1 : 0);
 
@@ -810,7 +809,6 @@ function FaultDetailView({ execution, locale, user, onBack }: { execution: Execu
                         {(execution.agentName || execution.agent) && (
                             <span style={{ fontSize: 12, color: 'var(--foreground-muted)', fontWeight: 600 }}>· {execution.agentName || execution.agent}</span>
                         )}
-                        {faultKinds.map(k => <FaultKindBadge key={k} locale={locale} />)}
                     </div>
                 </div>
                 <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 0 }}>
@@ -1253,20 +1251,24 @@ function buildDiagnosticItems(execution: Execution, locale: string): DiagnosticI
     return original;
 }
 
-function buildTraceExplicitErrors(items: DiagnosticItem[]): TraceExplicitError[] {
+function buildTraceExplicitErrors(items: DiagnosticItem[], nodes: TraceNodeItem[]): TraceExplicitError[] {
     return items
         .filter(item => item.diagnostic_kind === 'original')
-        .map((item, index) => ({
-            id: item.trace_anchor?.step_id || item.anchor_step_id || `trace-explicit-error-${index + 1}`,
-            title: item.failure_type || 'Trace error',
-            description: item.description,
-            context: item.context || item.attribution_reason || item.step,
-            recovery: item.recovery,
-            anchorId: item.trace_anchor?.step_id || item.anchor_step_id,
-            traceStepIndex: item.trace_anchor?.step_index,
-            traceNodeLabel: item.trace_anchor?.display_name,
-            traceNodeKind: item.trace_anchor?.kind,
-        }));
+        .map((item, index) => {
+            const matchedNode = findBestFaultNode(nodes, item)?.node;
+            const anchorId = matchedNode?.id || item.trace_anchor?.step_id || item.anchor_step_id;
+            return {
+                id: anchorId || `trace-explicit-error-${index + 1}`,
+                title: item.failure_type || 'Trace error',
+                description: item.description,
+                context: item.context || item.attribution_reason || item.step,
+                recovery: item.recovery,
+                anchorId,
+                traceStepIndex: matchedNode?.step ?? item.trace_anchor?.step_index,
+                traceNodeLabel: [matchedNode?.name, matchedNode?.meta].filter(Boolean).join(' · ') || item.trace_anchor?.display_name,
+                traceNodeKind: matchedNode?.kind || item.trace_anchor?.kind,
+            };
+        });
 }
 
 function isToolErrorCovered(items: DiagnosticItem[]): boolean {
@@ -1928,14 +1930,6 @@ function ChatMarkdown({ content, onNodeRefClick, nodeMap }: {
     );
 }
 
-function classifyFaultKinds(execution: Execution): FaultKind[] {
-    const kinds: FaultKind[] = [];
-    if ((execution.failures?.length || 0) > 0 || (execution.tool_call_error_count || 0) > 0) {
-        kinds.push('original');
-    }
-    return kinds;
-}
-
 function buildExecutionBrief(execution: Execution) {
     return {
         task_id: execution.task_id,
@@ -1990,28 +1984,6 @@ async function consumeSse(response: Response, handlers: { text?: (data: any) => 
             if (event === 'error') handlers.error?.(data);
         }
     }
-}
-
-function FaultKindBadge({ locale }: { locale: string }) {
-    return (
-        <span
-            style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 5,
-                padding: '3px 8px',
-                borderRadius: 999,
-                fontSize: 10.5,
-                fontWeight: 650,
-                background: 'var(--error-subtle)',
-                color: 'var(--error)',
-                border: '1px solid var(--error-subtle-border)',
-            }}
-        >
-            <span style={{ width: 6, height: 6, borderRadius: 999, background: 'currentColor' }} />
-            {locale === 'zh' ? 'Trace 明确报错' : 'Trace error'}
-        </span>
-    );
 }
 
 function FaultFilterPill({ label, count, active }: { label: string; count?: number; active?: boolean }) {

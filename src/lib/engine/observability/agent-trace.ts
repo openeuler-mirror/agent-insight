@@ -9,6 +9,8 @@
  * 上层 UI 组件（AgentTraceView）无需感知。
  */
 
+import { stringifyClaudeContent } from '@/lib/shared/interaction-content';
+
 export type InteractionRole = 'user' | 'assistant' | 'opencode' | 'subagent' | string;
 
 export interface InteractionUsage {
@@ -276,7 +278,7 @@ export function buildAgentCallTree(interactions: RawInteraction[]): AgentNode | 
         // buffer is drained when the node is born.
         if (it.role === 'system') {
             const entry: SystemPromptEntry = {
-                text: it.content || '',
+                text: stringifyClaudeContent(it.content),
                 sha256: (it as any).system_prompt_sha256,
                 length: (it as any).system_prompt_length,
                 modelID: (it as any).system_prompt_modelID,
@@ -494,18 +496,19 @@ function interactionToEvents(it: RawInteraction, idx: number): AgentEvent[] {
     const out: AgentEvent[] = [];
     const baseTs = interactionStartedAt(it);
     const completedAt = interactionCompletedAt(it);
+    const contentText = stringifyClaudeContent(it.content);
 
     const calls = dedupeToolCalls(it.tool_calls || []);
 
     // user message → user event
-    if (it.role === 'user' && (it.content || '').trim()) {
+    if (it.role === 'user' && contentText.trim()) {
         out.push({
             kind: 'user',
             interaction: it,
             interactionIndex: idx,
             startedAt: baseTs,
             completedAt,
-            summary: it.content || '',
+            summary: contentText,
         });
     }
 
@@ -517,7 +520,7 @@ function interactionToEvents(it: RawInteraction, idx: number): AgentEvent[] {
     // tool calls orphan-attach to an earlier turn, and the LLM steps disappear
     // from the timeline entirely.
     const isAssistantLike = it.role === 'assistant' || it.role === 'subagent' || it.role === 'opencode';
-    const llmSummary = (it.content || '').trim() ? (it.content as string) : extractPartsText(it.parts, 'reasoning');
+    const llmSummary = contentText.trim() ? contentText : extractPartsText(it.parts, 'reasoning');
 
     if (calls.length === 0) {
         // Pure LLM response with no tool calls — emit an llm event if it produced
@@ -659,7 +662,7 @@ function dedupeToolCalls(calls: ToolCall[]): ToolCall[] {
  *  content, parts contains exactly one entry whose type is 'compaction'. */
 function isCompactionTrigger(it: RawInteraction): boolean {
     if (it.role !== 'user' && it.role !== 'opencode' && it.role !== 'subagent') return false;
-    if ((it.content || '').trim()) return false;
+    if (stringifyClaudeContent(it.content).trim()) return false;
     const parts = it.parts;
     if (!Array.isArray(parts) || parts.length === 0) return false;
     // All parts must be compaction markers (typically just one, but be lenient).
