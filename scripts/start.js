@@ -50,7 +50,7 @@ function loadEnvFile(envPath) {
 
 let spawnedProc = null
 
-async function createAdminUser(port) {
+async function createAdminUser(port, dataRoot) {
   return new Promise((resolve) => {
     const postData = JSON.stringify({ username: 'admin' })
 
@@ -135,7 +135,7 @@ async function run(options) {
   if (existingPid) {
     console.log(`⚠️  Port ${port} is already in use by PID: ${existingPid}`)
     console.log('Please stop the existing service first or use a different port.')
-    console.log(`\nTo stop: npx @witty-ai/skill-insight stop --port ${port}`)
+    console.log(`\nTo stop: npx agent-insight stop --port ${port}`)
     process.exit(1)
   }
 
@@ -278,7 +278,7 @@ async function run(options) {
       console.log(`  Port: ${port}`)
       console.log(`  Log: ${logPath}`)
       console.log(`  URL: http://localhost:${port}`)
-      await createAdminUser(port)
+      await createAdminUser(port, dataRoot)
       return
     }
   }

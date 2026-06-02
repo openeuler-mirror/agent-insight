@@ -32,7 +32,7 @@ function showHelp() {
 Agent-insight CLI
 
 Usage:
-  skill-insight <command> [options]
+  agent-insight <command> [options]
 
 Commands:
   start [--port <port>]    Start the service (default port: 3000)
@@ -47,11 +47,11 @@ Options:
   --help, -h              Show help
 
 Examples:
-  skill-insight start
-  skill-insight start --port 3001
-  skill-insight restart --port 3001
-  skill-insight status
-  skill-insight stop
+  agent-insight start
+  agent-insight start --port 3001
+  agent-insight restart --port 3001
+  agent-insight status
+  agent-insight stop
   `)
 }
 
@@ -62,9 +62,9 @@ function showCommandHelp(command) {
     restart: 'Restart the Agent-insight service\n\nOptions:\n  --port, -p <port>  Specify port (default: 3000)',
     status: 'Show Agent-insight service status\n\nOptions:\n  --port, -p <port>  Specify port (default: 3000)',
     logs: 'Show Agent-insight service logs',
-    install: 'One-click install Agent-insight\n\nThis command will:\n  1. npm install @witty-ai/skill-insight\n  2. Start the service\n  3. Create admin user and get API Key\n  4. Install telemetry plugins\n  5. Add skill to your agent'
+    install: 'One-click install Agent-insight\n\nThis command will:\n  1. npm install agent-insight\n  2. Start the service\n  3. Create admin user and get API Key\n  4. Install telemetry plugins\n  5. Add skill to your agent'
   }
-  console.log(`\nskill-insight ${command}\n\n${helps[command] || ''}`)
+  console.log(`\nagent-insight ${command}\n\n${helps[command] || ''}`)
 }
 
 const args = process.argv.slice(2)

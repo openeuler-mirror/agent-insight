@@ -1,11 +1,11 @@
 {
-  "name": "@witty-ai/skill-insight",
-  "version": "0.7.0-beta",
+  "name": "agent-insight",
+  "version": "0.1.0-beta",
   "description": "Agent Skill 评估与观测平台 — 量化评估 Skills 在 Agent 上的实际运行效果",
   "license": "MIT",
   "private": false,
   "bin": {
-    "skill-insight": "./bin/cli.js"
+    "agent-insight": "./bin/cli.js"
   },
   "files": [
     "bin/",
@@ -20,7 +20,7 @@
     "postinstall": "node scripts/postinstall.js",
     "dev": "next dev -p 3000",
     "build": "next build",
-    "prepack": "npm run build && node scripts/prepare-npm-package.js",
+    "prepack": "node scripts/prepare-npm-package.js",
     "start": "next start -p 3000",
     "lint": "eslint",
     "test": "node --import tsx --test \"test/**/*.test.ts\"",
@@ -133,6 +133,6 @@
     "tailwindcss": "^4.2.4",
     "tailwindcss-animate": "^1.0.7",
     "tsx": "^4.20.5",
-    "typescript": "^5"
+    "typescript": "5.9.3"
   }
 }
