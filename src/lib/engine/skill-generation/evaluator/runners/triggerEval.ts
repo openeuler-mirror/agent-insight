@@ -136,6 +136,11 @@ export interface RunTriggerEvalLiveArgs {
   timeoutMs?: number;
   /** 并发跑几条 query。 */
   concurrency?: number;
+  /**
+   * 外部中止信号。用户在前端点「终止」时 abort：runPool 停止领新任务，在跑的 evalOne
+   * 把 in-flight chat 一起 abort；随后 runTriggerEvalLive 抛 AbortError，由调用方 finalize 成 cancelled。
+   */
+  signal?: AbortSignal;
 }
 
 export interface RunTriggerEvalLiveResult {
@@ -208,10 +213,18 @@ async function evalOne(
     sessionTitle: string;
     user: string;
     agentId: string | null;
+    /** 外部中止信号（用户点终止）。abort 时把本条 in-flight chat 一起 abort。 */
+    externalSignal?: AbortSignal;
   },
 ): Promise<SingleRunOutcome> {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), args.timeoutMs);
+  // 外部终止：把本条 query 的 AbortController 一起 abort，让 in-flight chat 立刻停（省 token）。
+  const onExternalAbort = () => ac.abort();
+  if (args.externalSignal) {
+    if (args.externalSignal.aborted) ac.abort();
+    else args.externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+  }
   const startedAt = Date.now();
   let triggered = false;
   let competingSkill: string | undefined;
@@ -340,6 +353,7 @@ async function evalOne(
     }
   } finally {
     clearTimeout(timer);
+    args.externalSignal?.removeEventListener('abort', onExternalAbort);
     // 不等 finish，直接 close session 释放资源
     if (sessionId) {
       client.deleteSession(sessionId).catch(() => {});
@@ -360,16 +374,19 @@ async function runPool<T, R>(
   tasks: T[],
   concurrency: number,
   worker: (task: T, idx: number) => Promise<R>,
+  signal?: AbortSignal,
 ): Promise<R[]> {
   const results: R[] = new Array(tasks.length);
   let cursor = 0;
   const launch = async () => {
     while (true) {
+      // 用户终止：不再领新任务（在跑的那批由 evalOne 内部 abort 自行收尾）。
+      if (signal?.aborted) return;
       const i = cursor++;
       if (i >= tasks.length) return;
       try {
         results[i] = await worker(tasks[i], i);
-      } catch (err) {
+      } catch {
         // worker 已经 try/catch，这里不应该到；fallback 给空对象避免 hole
         results[i] = undefined as unknown as R;
       }
@@ -679,7 +696,18 @@ export async function runTriggerEvalLive(
     triggerThreshold = 0.5,
     timeoutMs = 30_000,
     concurrency = 5,
+    signal,
   } = args;
+
+  // 终止可能在物化 / 起 server 之前就到——尽早退出，别白干活。
+  const throwIfAborted = () => {
+    if (signal?.aborted) {
+      const e = new Error('trigger eval cancelled by user');
+      e.name = 'AbortError';
+      throw e;
+    }
+  };
+  throwIfAborted();
 
   if (!user) {
     throw new Error('runTriggerEvalLive: user is required (从 /modelconfig 拉模型 + opencode 实例都要用)');
@@ -751,6 +779,7 @@ export async function runTriggerEvalLive(
       sessionTitle,
       user,
       agentId: triggerAgentId,
+      externalSignal: signal,
     });
     outcomes[task.itemIdx].push(outcome);
     if (outcome.competingSkill) {
@@ -759,7 +788,11 @@ export async function runTriggerEvalLive(
       competingMap.set(task.itemIdx, m);
     }
     return outcome;
-  });
+  }, signal);
+
+  // 用户终止：pool 已停止领新任务、在跑的也 abort 收尾了。这里抛出去，让调用方把这条
+  // run finalize 成 cancelled（而不是把残缺结果当 done 落库）。
+  throwIfAborted();
 
   // 3.5 systemic-error 早退：如果所有 run 都因为 opencode 报错根本没问到模型
   // （例如 agent 名拼错、apiKey 失效、provider 拒绝、模型不存在等），
