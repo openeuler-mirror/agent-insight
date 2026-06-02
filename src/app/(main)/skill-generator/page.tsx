@@ -1275,7 +1275,7 @@ export default function PlaygroundPage() {
                 const isNew = data.isNewSkill;
                 const msg = locale === 'zh'
                     ? isNew
-                        ? `已发布到 Skills 管理（v${versionNum}）`
+                        ? `已发布到 Skills Hub（v${versionNum}）`
                         : `已更新 ${data.skill?.name}，新版本 v${versionNum}`
                     : isNew
                         ? `Published to Skills (v${versionNum})`
