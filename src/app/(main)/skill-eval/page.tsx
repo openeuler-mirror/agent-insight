@@ -725,6 +725,20 @@ function SkillAnalysisPage() {
         }
     }, [caseConfigStorageKey, caseDatasetIds]);
 
+    // 现存数据集列表变化(刷新/删除数据集)时, 把已不存在的数据集 id 从选择中剔除并回写 localStorage——
+    // 保证下发给后端的 datasetIds 始终是"当前真实存在"的子集; 否则被删数据集的幽灵 id(localStorage 残留)
+    // 会随配置传到后端, 命中 "dataset not found" 导致启动失败。
+    useEffect(() => {
+        if (caseDatasets.length === 0) return; // 列表尚未加载完成时不剪枝, 避免把有效选择误清空
+        const existing = new Set(caseDatasets.map(d => d.id));
+        const pruned = caseDatasetIds.filter(id => existing.has(id));
+        if (pruned.length === caseDatasetIds.length) return; // 没有幽灵 id, 无需改动
+        setCaseDatasetIds(pruned);
+        if (caseConfigStorageKey) {
+            try { localStorage.setItem(caseConfigStorageKey, JSON.stringify({ datasetIds: pruned, evaluatorIds: caseEvaluatorIds })); } catch {/* ignore */}
+        }
+    }, [caseDatasets, caseDatasetIds, caseConfigStorageKey, caseEvaluatorIds]);
+
     const traceEvalBatchStorageKey = useMemo(() => {
         if (!user || !selectedSkillId) return '';
         return `skill-eval:trace-eval-batch:${user}:${selectedSkillId}:v${selectedVersion ?? 'all'}`;

@@ -18,6 +18,7 @@
             "pages": [
               "user-guide/home",
               "user-guide/quickstart",
+              "user-guide/example-walkthrough",
               "user-guide/concepts",
               "user-guide/faq"
             ]
