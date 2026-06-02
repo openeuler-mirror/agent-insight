@@ -2911,12 +2911,9 @@ function AnalysisOverview({
 
                     {grayHasResult ? (
                         <>
-                            <div className="sa-card-score" style={{ alignItems: 'baseline', gap: 8, marginTop: 18 }}>
-                                <span style={{ fontSize: 12, fontWeight: 800, color: 'var(--sa-muted)', alignSelf: 'flex-start', marginTop: 12 }}>最终评分</span>
-                                <span style={{ fontSize: 62, lineHeight: 1, fontWeight: 900, color: 'var(--sa-warning)' }}>
-                                    {graySummary?.scoring.totalScore ?? '--'}
-                                </span>
-                                <span style={{ fontSize: 24, fontWeight: 800, color: 'var(--sa-muted)' }}>/100</span>
+                            <div className="sa-card-score">
+                                <span className="sa-card-score-num">{graySummary?.scoring.totalScore ?? '--'}</span>
+                                <span className="sa-card-score-unit">/ 100</span>
                             </div>
 
                             <div className="sa-card-stats">
