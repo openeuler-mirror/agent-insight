@@ -99,3 +99,6 @@ exclude/
 
 # local docs backup
 docs_backup/
+
+# npm pack output (build artifact, never commit)
+*.tgz
