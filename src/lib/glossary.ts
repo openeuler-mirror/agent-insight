@@ -306,7 +306,7 @@ const GLOSSARY = {
     body: '多维度评分加权后的最终结论与建议。',
   },
 
-  // ===== §8 Skill 管理 =====
+  // ===== §8 Skills Hub =====
   'skill': {
     name: 'Skill',
     tag: 'skill',

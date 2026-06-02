@@ -81,7 +81,7 @@ export const en = {
     memory: 'Memory',
     security: 'Security',
     fault: 'Diagnosis',
-    skillsManage: 'Skill Management',
+    skillsManage: 'Skills Hub',
     skillHistory: 'Skill History',
     skillGenerator: 'Skill Generation',
     skillEval: 'Skill Evaluation',
