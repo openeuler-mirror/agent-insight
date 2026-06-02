@@ -59,7 +59,7 @@ export async function GET(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
     }
 
-    // 2) 聚合
+    // 2) 聚合：优化点统一来自评测模块写入的 SkillIssue 表。
     const result = await aggregateSkillIssues({
       prisma: prismaRaw as any,
       skillId: skill.id,
@@ -75,7 +75,7 @@ export async function GET(
       skill: name,
       version: version ?? null,
       generatedAt: new Date().toISOString(),
-      generator: 'skill-issues@0.1.0',
+      generator: 'skill-issues@0.2.0',
       issues,
       stats: result.stats,
     });
@@ -94,6 +94,8 @@ interface OptIssue {
   category: string;
   summary: string;
   evidence?: string;
+  reasoning?: string;
+  dedupKey?: string;
   improvementSuggestion?: string;
   source?: {
     kind: 'trace' | 'fault' | 'log' | 'static';
@@ -125,9 +127,15 @@ function toOptIssue(it: IssueWithPrevalence, skillName: string): OptIssue {
       url = `/skill-eval/trigger/${encodeURIComponent(skillName)}?runId=${encodeURIComponent(it.evaluationRunId)}`;
     }
   } else if (it.source === 'dynamic' || it.evaluationType === 'dynamic') {
-    kind = 'trace';
+    if (it.ruleId === 'failure') {
+      kind = 'fault';
+      label = it.executionTaskId ? `执行故障 ${shortTaskId(it.executionTaskId)}` : '执行故障';
+    } else {
+      kind = 'trace';
+      label = it.ruleId === 'metric' ? '执行指标' : '动态评估';
+    }
     if (it.executionTaskId) {
-      label = shortTaskId(it.executionTaskId);
+      label = it.ruleId === 'skillIssue' ? shortTaskId(it.executionTaskId) : label;
       url = `/trace?taskId=${encodeURIComponent(it.executionTaskId)}`;
     } else {
       label = it.evaluationRunId ? it.evaluationRunId.slice(0, 8) : '动态评估';
@@ -144,6 +152,8 @@ function toOptIssue(it: IssueWithPrevalence, skillName: string): OptIssue {
     category: it.category || categoryFromSource(it),
     summary: it.summary,
     evidence: it.evidence ?? undefined,
+    reasoning: it.reasoning ?? undefined,
+    dedupKey: it.dedupKey,
     improvementSuggestion: it.suggestedFix ?? undefined,
     source: { kind, label, url },
     occurrence: it.prevalenceCount,
@@ -154,6 +164,8 @@ function toOptIssue(it: IssueWithPrevalence, skillName: string): OptIssue {
 function categoryFromSource(it: IssueWithPrevalence): string {
   if (it.source === 'static' || it.evaluationType === 'static') return '静态扫描';
   if (it.source === 'trigger' || it.evaluationType === 'trigger') return '触发评测';
+  if (it.ruleId === 'failure') return '执行故障';
+  if (it.ruleId === 'metric') return '执行指标';
   return '其它';
 }
 
