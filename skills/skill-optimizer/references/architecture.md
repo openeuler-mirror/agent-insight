@@ -26,7 +26,7 @@
 ## 优化模式
 
 - **static**：L1 + L2，适合初次创建或无运行日志时。
-- **dynamic**：L3，需要 Skill Insight 平台历史运行日志。
+- **dynamic**：L3，需要 Agent Insight 平台历史运行日志。
 - **hybrid**：L1 + L2 + L3，先静态后动态，合并所有诊断结果。
 - **feedback**：L4，专门针对专家给出的直接反馈指令进行强制优化调整。
 

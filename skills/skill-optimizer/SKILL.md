@@ -16,7 +16,7 @@ DiagnosticMutator 可修改目标 Skill 目录下的 `SKILL.md` 及辅助文件�
 | 模式         | 含义                            | 适用场景             |
 | :--------- | :---------------------------- | :--------------- |
 | `static`   | 框架自动诊断（L1 静态合规 + L2 LLM 五维评估） | 用户无具体反馈，希望全面体检   |
-| `dynamic`  | 基于 Skill Insight 运行日志优化       | 有历史运行记录，想修复实际问题  |
+| `dynamic`  | 基于 Agent Insight 运行日志优化       | 有历史运行记录，想修复实际问题  |
 | `trace`    | 基于运行时 trace 结晶优化              | 有 trace 数据，想针对性优化   |
 | `feedback` | 纯用户反馈驱动，不跑框架评估                | 用户有明确修改意见        |
 
@@ -77,7 +77,7 @@ Agent: 收到！在开始优化前想先确认，你想怎么优化这个 Skill�
 | a + b + c | `static` → `dynamic` → `feedback` 顺序编排 | 先跑静态诊断，再根据运行日志优化，再根据反馈调整            |
 | a + b + c + d | `static` → `trace` → `dynamic` → `feedback` 顺序编排 | 先跑静态优化，再根据 trace 优化，再根据运行日志优化，再根据反馈调整 |
 
-- 当涉及 c（运行日志）时：确认 Skill Insight 平台可用（`~/.skill-insight/.env` 或环境变量中有配置 `SKILL_INSIGHT_HOST` 和 `SKILL_INSIGHT_API_KEY`），不可用则提前告知用户并降级。
+- 当涉及 c（运行日志）时：确认 Agent Insight 平台可用（`~/.agent-insight/.env` 或环境变量中有配置 `SKILL_INSIGHT_HOST` 和 `SKILL_INSIGHT_API_KEY`），不可用则提前告知用户并降级。
 - 当涉及 d（trace 数据）时：确认 trace 数据来源可用（本地 trace 文件、Foundry traces 或其他 trace 数据源），不可用则提前告知用户并降级。
 
 **意图已明确时跳过问答**：
@@ -149,7 +149,7 @@ Options: "获取 DeepSeek 的 api_key", "获取符合 OpenAI 规范的 LLM 的 b
 
 | 检查项 | 不通过时的行为 |
 | :--- | :--- |
-| Skill Insight 平台不可用 | **停止**，提示用户配置平台连接 |
+| Agent Insight 平台不可用 | **停止**，提示用户配置平台连接 |
 | 未获取到执行日志（空列表） | **停止**，提示用户先运行 Skill 产生日志，或改用 `static` 模式 |
 | 日志中 `skill_issues` 无 `improvement_suggestion` | **停止**，提示用户改用 `static` 模式 |
 
@@ -252,7 +252,7 @@ Options: "是，加载到 .opencode/skills 目录", "否，保持当前位置"
 ```
 
 脚本会自动完成：
-1. 将旧 Skill 归档到 `~/.skill-insight/skill-history/<skill-name>-<timestamp>`（重名自动追加序号）
+1. 将旧 Skill 归档到 `~/.agent-insight/skill-history/<skill-name>-<timestamp>`（重名自动追加序号）
 2. 将优化后的 Skill 复制到旧 Skill 的原位置
 3. 提示用户重启 opencode 生效
 
@@ -272,7 +272,7 @@ ls .opencode/skills/skill-sync/SKILL.md 2>/dev/null || ls skills/skill-sync/SKIL
 **5.2 如果 skill-sync 可用，主动询问**：
 
 ```
-Question: "检测到 skill-sync 技能可用。是否将优化后的 Skill 上传到 Skill Insight 平台？"
+Question: "检测到 skill-sync 技能可用。是否将优化后的 Skill 上传到 Agent Insight 平台？"
 Options: "是，上传到 Insight 平台", "否，仅保存在本地"
 ```
 
@@ -321,7 +321,7 @@ node <skill-sync-path>/scripts/push.js <优化后的skill绝对路径>
 ## 主要脚本 (Scripts)
 
 - `scripts/opt.sh`: 核心入口脚本。负责环境初始化、执行不同模式的优化操作（`optimize`）、接受优化结果（`accept`）以及版本回滚（`revert`）。
-- `scripts/load_skill.sh`: Skill 加载脚本。归档旧 Skill 到 `~/.skill-insight/skill-history/` 并将优化后的 Skill 复制到指定位置。参数：`--new <优化后skill路径> --old <旧skill路径>`。
+- `scripts/load_skill.sh`: Skill 加载脚本。归档旧 Skill 到 `~/.agent-insight/skill-history/` 并将优化后的 Skill 复制到指定位置。参数：`--new <优化后skill路径> --old <旧skill路径>`。
 - `scripts/diff_viewer.py`: Diff 可视化工具。用于在浏览器中直观对比优化前后的版本差异，支持按快照目录或指定新旧目录进行比对。
 - `scripts/model_config_detector.py`: 环境准备脚本。自动检测并提取当前环境的大模型配置，生成 `.env` 文件。
 - `scripts/test_model_connectivity.py`: 连通性测试脚本。用于检查大模型 API 是否可用，确保后续优化流程能够正常调用 LLM。

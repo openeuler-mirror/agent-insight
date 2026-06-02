@@ -16,7 +16,7 @@
 在**仓库根目录**安装依赖（本目录不再单独维护 `package.json`）：
 
 ```bash
-cd /path/to/witty-skill-insight
+cd /path/to/agent-insight
 pnpm install
 
 # 配置模型（可复制示例后再编辑）

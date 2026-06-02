@@ -7,7 +7,7 @@ Benchmarking platform for evaluating AI skill effectiveness. Runs tasks via [Har
 - Python >= 3.12
 - [uv](https://docs.astral.sh/uv/) (package manager)
 - Docker (to run tasks via Harbor)
-- Running [Witty Skill Insight](../README.md) instance on `localhost:3000`
+- Running [Agent Insight](../README.md) instance on `localhost:3000`
 
 ## Configuration model
 
@@ -32,7 +32,7 @@ Benchmarking platform for evaluating AI skill effectiveness. Runs tasks via [Har
 End-to-end minimal run from a clean checkout:
 
 ```bash
-# 1. Start Witty Skill Insight (from the project root, one level up)
+# 1. Start Agent Insight (from the project root, one level up)
 cd ..
 bash scripts/restart_dev.sh         # serves on http://localhost:3000
 

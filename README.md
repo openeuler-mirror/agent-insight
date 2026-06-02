@@ -14,7 +14,7 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License" /></a>
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/node-%3E%3D20.0.0-43853d.svg" alt="Node" /></a>
-  <a href="https://gitcode.com/openeuler/witty-agent-insight"><img src="https://img.shields.io/badge/repo-gitcode-1f7ae0.svg" alt="Repo" /></a>
+  <a href="https://gitcode.com/openeuler/agent-insight"><img src="https://img.shields.io/badge/repo-gitcode-1f7ae0.svg" alt="Repo" /></a>
   <a href="mailto:intelligence@openeuler.org"><img src="https://img.shields.io/badge/contact-intelligence%40openeuler.org-orange.svg" alt="Contact" /></a>
 </p>
 
@@ -59,14 +59,14 @@
 **一键安装**
 
 ```bash
-npx @witty-ai/agen-insight install
+npx agent-insight install
 ```
 
 **源码安装**
 
 ```bash
-git clone https://gitcode.com/openeuler/witty-agent-insight.git
-cd witty-agent-insight
+git clone https://gitcode.com/openeuler/agent-insight.git
+cd agent-insight
 npm install
 
 # 开发模式
@@ -82,7 +82,7 @@ curl -sSf http://<IP>:<PORT>/api/setup | bash
 **启动服务**
 
 ```bash
-cd witty-agent-insight
+cd agent-insight
 
 # 开发模式
 bash scripts/restart_dev.sh
