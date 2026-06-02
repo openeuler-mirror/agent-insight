@@ -32,8 +32,9 @@
 ## 退役注意事项（孤儿依赖）
 
 - 删除本组件后，仅被它使用的 `src/lib/client/guide-config.ts`（新手引导步骤配置，
-  原本就被 Dashboard 内的 `false && …` 关掉、从未渲染）理论上也成了孤儿；本次**未**一并删除，
-  按需后续清理。
+  原本就被 Dashboard 内的 `false && …` 关掉、从未渲染）也成了孤儿，**已在同一 PR 一并删除**
+  （全仓零引用）。注：它只是单向 import 了 `UserGuide` 的 `GuideStep` 类型；活着的 onboarding
+  系统（`UserGuide.tsx` / `use-user-guide.ts` / `/api/guide`）不依赖它，不受影响。
 - `src/components/skills/SkillRegistry.tsx` **必须保留** —— 它导出的 `SkillCatalog` 等仍被
   `/skills`（Skills Hub）页面使用，只是不再被本 Dashboard 渲染。其内部 `catalog` 子 tab 文案
   （`nav.catalog`）随本组件退役一起退出可见范围。
