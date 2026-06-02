@@ -10,7 +10,7 @@
 
 推荐使用 `uv run python scripts/model_config_detector.py` 自动检测并写入。
 
-## Skill Insight 平台（仅 dynamic/hybrid 模式需要）
+## Agent Insight 平台（仅 dynamic/hybrid 模式需要）
 
 优化器自动从 `~/.agent-insight/.env` 读取 `SKILL_INSIGHT_HOST` 和 `SKILL_INSIGHT_API_KEY`，无需在本技能下重复配置。静态模式不检查此配置。
 

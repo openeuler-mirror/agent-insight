@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://gitcode.com/openeuler/agent-insight">
-    <strong style="font-size: 2em;">Skill-insight</strong>
+    <strong style="font-size: 2em;">Agent Insight</strong>
   </a>
 </p>
 <p align="center">Transform Agent Skills from "usable" to "excellent" — a full lifecycle platform for Skill generation, evaluation, and optimization based on execution data</p>
@@ -14,11 +14,11 @@
   <a href="README_en.md">English</a>
 </p>
 
-[![Skill-insight Dashboard](docs/images/dashboard_main.png)](https://gitcode.com/openeuler/agent-insight)
+[![Agent Insight Dashboard](docs/images/dashboard_main.png)](https://gitcode.com/openeuler/agent-insight)
 
 ---
 
-## Why Skill-insight
+## Why Agent Insight
 
 Skills are becoming a key enabler for Agent adoption, but three common problems arise in practice:
 
@@ -26,7 +26,7 @@ Skills are becoming a key enabler for Agent adoption, but three common problems 
 - **Execution process invisible**: Evaluation only checks "task completion" — even correct results may skip critical steps, hiding risks
 - **Optimization by guesswork**: Without execution data, improvement relies on trial-and-error based on outcomes, unable to pinpoint bottlenecks
 
-Skill-insight is designed to solve these problems.
+Agent Insight is designed to solve these problems.
 
 ## Core Features
 
@@ -109,7 +109,7 @@ implementation details.
 
 The following example uses OpenCode to demonstrate the complete Generate → Evaluate → Optimize workflow.
 
-**Prerequisites**: Skill-insight platform and OpenCode installed.
+**Prerequisites**: Agent Insight platform and OpenCode installed.
 
 ### Step 1: Install Skill Toolkit
 
@@ -135,7 +135,7 @@ My locally deployed Docker application sometimes hangs. Use the relevant skill t
 
 ### Step 4: View Results
 
-After task completion, click **View Details** in the Skill Insight card on the top-right of OpenCode terminal to jump to the platform and view execution details.
+After task completion, click **View Details** in the Agent Insight card on the top-right of OpenCode terminal to jump to the platform and view execution details.
 
 ### Step 5: Deep Evaluation (optional)
 

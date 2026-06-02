@@ -16,7 +16,7 @@ DiagnosticMutator 可修改目标 Skill 目录下的 `SKILL.md` 及辅助文件�
 | 模式         | 含义                            | 适用场景             |
 | :--------- | :---------------------------- | :--------------- |
 | `static`   | 框架自动诊断（L1 静态合规 + L2 LLM 五维评估） | 用户无具体反馈，希望全面体检   |
-| `dynamic`  | 基于 Skill Insight 运行日志优化       | 有历史运行记录，想修复实际问题  |
+| `dynamic`  | 基于 Agent Insight 运行日志优化       | 有历史运行记录，想修复实际问题  |
 | `trace`    | 基于运行时 trace 结晶优化              | 有 trace 数据，想针对性优化   |
 | `feedback` | 纯用户反馈驱动，不跑框架评估                | 用户有明确修改意见        |
 
@@ -77,7 +77,7 @@ Agent: 收到！在开始优化前想先确认，你想怎么优化这个 Skill�
 | a + b + c | `static` → `dynamic` → `feedback` 顺序编排 | 先跑静态诊断，再根据运行日志优化，再根据反馈调整            |
 | a + b + c + d | `static` → `trace` → `dynamic` → `feedback` 顺序编排 | 先跑静态优化，再根据 trace 优化，再根据运行日志优化，再根据反馈调整 |
 
-- 当涉及 c（运行日志）时：确认 Skill Insight 平台可用（`~/.agent-insight/.env` 或环境变量中有配置 `SKILL_INSIGHT_HOST` 和 `SKILL_INSIGHT_API_KEY`），不可用则提前告知用户并降级。
+- 当涉及 c（运行日志）时：确认 Agent Insight 平台可用（`~/.agent-insight/.env` 或环境变量中有配置 `SKILL_INSIGHT_HOST` 和 `SKILL_INSIGHT_API_KEY`），不可用则提前告知用户并降级。
 - 当涉及 d（trace 数据）时：确认 trace 数据来源可用（本地 trace 文件、Foundry traces 或其他 trace 数据源），不可用则提前告知用户并降级。
 
 **意图已明确时跳过问答**：
@@ -149,7 +149,7 @@ Options: "获取 DeepSeek 的 api_key", "获取符合 OpenAI 规范的 LLM 的 b
 
 | 检查项 | 不通过时的行为 |
 | :--- | :--- |
-| Skill Insight 平台不可用 | **停止**，提示用户配置平台连接 |
+| Agent Insight 平台不可用 | **停止**，提示用户配置平台连接 |
 | 未获取到执行日志（空列表） | **停止**，提示用户先运行 Skill 产生日志，或改用 `static` 模式 |
 | 日志中 `skill_issues` 无 `improvement_suggestion` | **停止**，提示用户改用 `static` 模式 |
 
@@ -272,7 +272,7 @@ ls .opencode/skills/skill-sync/SKILL.md 2>/dev/null || ls skills/skill-sync/SKIL
 **5.2 如果 skill-sync 可用，主动询问**：
 
 ```
-Question: "检测到 skill-sync 技能可用。是否将优化后的 Skill 上传到 Skill Insight 平台？"
+Question: "检测到 skill-sync 技能可用。是否将优化后的 Skill 上传到 Agent Insight 平台？"
 Options: "是，上传到 Insight 平台", "否，仅保存在本地"
 ```
 
