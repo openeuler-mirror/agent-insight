@@ -8,6 +8,7 @@ import {
 import { runTriggerEvalLive } from '@/lib/engine/skill-generation/evaluator/runners/triggerEval';
 import { prismaRaw } from '@/lib/storage/prisma';
 import { deriveAndPersistTriggerOptPoints } from '@/lib/engine/evaluation/derive-trigger-opt-points';
+import { ensureSessionWorkspace } from '@/lib/engine/general-agent/workspace';
 
 export const dynamic = 'force-dynamic';
 
@@ -108,6 +109,16 @@ export async function POST(
     const concurrency = Math.max(1, Math.min(10, Number(body.concurrency ?? 5)));
     const modelConfigId = body.modelConfigId ? String(body.modelConfigId).trim() : undefined;
 
+    // 3.5 每次评测切一个 repo 之外、本次专属的干净 workspace。
+    //     以前这里传 process.cwd()（共享的 repo checkout），所有 user / 所有 run 共用同一个
+    //     .opencode/skills/，物化又只写不清——别的 user 的近义 skill 残留会抢路由，把目标 skill
+    //     的触发率压成 0。改用 ensureSessionWorkspace（跟 general-agent 评测同款隔离原语）后，
+    //     每个 run 一个独立目录，materialize 只往里放本 user 当下的 skill。
+    const workspaceRoot = ensureSessionWorkspace(
+      user,
+      `trigger-eval-${decodedSkillName}-v${targetSkillVersion}-${Date.now()}`,
+    );
+
     // 4. 起 run 记录（modelId 字段存为人类可读的 modelConfigId 标识，便于排障）
     const run = await createTriggerEvalRun({
       user,
@@ -118,7 +129,7 @@ export async function POST(
       triggerThreshold,
       timeoutMs,
       modelId: modelConfigId ?? null,
-      workspaceRoot: process.cwd(),
+      workspaceRoot,
     });
 
     // 5. 跑评测
@@ -128,7 +139,7 @@ export async function POST(
         triggerSet: set,
         skillName: decodedSkillName,
         skillVersion: targetSkillVersion,
-        workspaceRoot: process.cwd(),
+        workspaceRoot,
         user,
         modelConfigId,
         runsPerQuery,
