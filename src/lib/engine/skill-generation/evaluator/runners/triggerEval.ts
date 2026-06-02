@@ -14,7 +14,7 @@
  *      给"用户在分析页点复测"场景用；旧路径维持不变避免破坏 supervisor 流水线。
  *      v2 把生成 pipeline 也切到 live 模式时再统一。
  */
-import { readFileSync, existsSync, mkdirSync, lstatSync, unlinkSync, writeFileSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync, lstatSync, unlinkSync, writeFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import matter from 'gray-matter';
 import { createModel, type ModelOptions } from '@/lib/engine/skill-generation/shared/model';
@@ -504,6 +504,21 @@ function shortUuid(): string {
 }
 
 /**
+ * 物化时只保留 frontmatter（name + description），body 换成一行占位。
+ * 触发评测测的是「路由会不会挑中这个 skill」，而 opencode 的路由只看 frontmatter 的
+ * name + description（渐进式披露：body 要等 skill 被 load 之后才进上下文）。裁掉 body 也省
+ * token——模型若（误）加载某个 skill，不会把整篇 playbook + scripts 拉进上下文。
+ * description 必须原样保留（它就是被测的路由信号），所以只裁 body、不动 frontmatter。
+ */
+function stubSkillBodyForRouting(content: string): string {
+  // 匹配开头的 YAML frontmatter 块：`---\n …(缩进内容)… \n---\n`。闭合 `---` 锚定行首且整行
+  // 只有 `---`；folded scalar 里的续行是缩进的，不会误命中。匹配不到（异常 skill）保守原样返回。
+  const m = content.match(/^---\r?\n[\s\S]*?\r?\n---[ \t]*\r?\n?/);
+  if (!m) return content;
+  return `${m[0]}\n<!-- body omitted for trigger-eval: routing only uses the frontmatter description -->\n`;
+}
+
+/**
  * 把 user 在 DB 里的所有 skill 物化到 <workspaceRoot>/.opencode/skills/，让 opencode
  * 通过它的标准发现路径（.opencode/skills/<name>/SKILL.md）找到所有 user 注册的 skill。
  *
@@ -557,6 +572,18 @@ async function materializeUserSkillsToOpencode(
     /* ignore */
   }
 
+  // 清场：删掉目录里已有的 skill 子目录。即便 workspace 现在是 per-run 独立目录（本应是空的），
+  // 这一步也兜住「同一 tag 被复用」「目录意外残留」等情况——确保参与路由竞争的只有本 user 当下
+  // 的 skill，不会混进上一轮 run / 其它 user 的近义 skill 把目标 skill 触发率压成 0（历史 bug：
+  // 物化进共享 process.cwd()/.opencode/skills 且从不清空）。
+  try {
+    for (const entry of readdirSync(skillsDir)) {
+      rmSync(join(skillsDir, entry), { recursive: true, force: true });
+    }
+  } catch {
+    /* 目录不存在或为空，忽略 */
+  }
+
   // 拉 user 的全部 skill + 各自的 latest version。若 targetSkillPin 命中本 skill
   // 则在下面单独拉指定版本的 content 覆盖；其它 skill 仍走 latest。
   const skills = await prismaRaw.skill.findMany({
@@ -607,7 +634,8 @@ async function materializeUserSkillsToOpencode(
     const targetDir = join(skillsDir, name);
     try {
       mkdirSync(targetDir, { recursive: true });
-      writeFileSync(join(targetDir, 'SKILL.md'), content, 'utf-8');
+      // 只物化 frontmatter（name + description）——路由判断只看它；body 用占位替掉省 token。
+      writeFileSync(join(targetDir, 'SKILL.md'), stubSkillBodyForRouting(content), 'utf-8');
       writtenNames.push(name);
     } catch (err) {
       logger.warn('Failed to materialize skill', {
