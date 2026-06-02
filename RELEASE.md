@@ -1,20 +1,25 @@
 # agent-insight 发布指南（团队维护者版）
 
 > 本文给被授权的维护者，说明如何把 `agent-insight` 打包并发布到 npm。
-> 一条命令即可：**`node scripts/publish-npm.js --version <版本> --tag latest`**
+> 默认流程：**先 `--dry-run` 打包 → 本机验证 → 再发布同一个 tarball**（`npm publish` 不可逆，验证别跳过）。
 
 ---
 
 ## 0. TL;DR（已配好 token 的老手）
 
+**默认是「先验证、再发布」三步**（详见 §4）：
+
 ```bash
-# 在项目根目录
-node scripts/publish-npm.js --version 0.1.0-beta --tag latest
+# 1) 构建 + 打包，但不发布 → 产出 agent-insight-<版本>.tgz
+node scripts/publish-npm.js --version 0.1.0-beta --dry-run
+
+# 2) 本机装这个 tarball 冒烟验证（必做）：起服务 → 首页 200/307 → 关服务
+
+# 3) 验证通过后，发布「刚测过的同一个 tarball」
+npm publish ./agent-insight-0.1.0-beta.tgz --tag latest --registry https://registry.npmjs.org/
 ```
 
-脚本会自动：升版本号 → `npm ci` → `npm run build` → 组装/裁剪 standalone → `npm pack` → 校验 npm 认证 → 发布到官方源。
-
-发布前想先验证不真发，加 `--dry-run`（见 §4）。
+> 嫌麻烦也可以一把梭：`node scripts/publish-npm.js --version 0.1.0-beta --tag latest`（脚本自动 build+pack 再发）。但这样**跳过了本机验证、且发的不是你测过的那个产物**，仅建议小改动 / 很有把握时用。
 
 ---
 
@@ -73,42 +78,58 @@ node scripts/publish-npm.js [options]
 
 ---
 
-## 4. 发布前先 dry-run（推荐）
+## 4. 标准发布流程（构建 → 验证 → 发布 → 复验）
+
+> `npm publish` 基本不可逆（72 小时后自己删不掉），所以**本机验证是必经步骤，不是可选项**。
+
+### 第 1 步：构建 + 打包（不发布）
 
 ```bash
 node scripts/publish-npm.js --version 0.1.0-beta --dry-run
 ```
 
-会完整 build + 打包但**不上传**，产出 `agent-insight-<版本>.tgz`。检查：
+完整 `npm ci` + build + 组装裁剪 standalone + `npm pack`，产出 `agent-insight-<版本>.tgz`，**不上传**。
 
+### 第 2 步：本机验证（必做）
+
+**包内容自查：**
 ```bash
-# 看体积（正常约 30~35MB）
-ls -lh agent-insight-*.tgz
-
-# 确认本地/临时目录没被打进去（应都为 0）
-tar -tzf agent-insight-*.tgz | grep -c 'standalone/exclude/'
-tar -tzf agent-insight-*.tgz | grep -c 'standalone/data/'
+ls -lh agent-insight-*.tgz                                    # 体积正常约 30~35MB
+tar -tzf agent-insight-*.tgz | grep -c 'standalone/exclude/'  # 应为 0
+tar -tzf agent-insight-*.tgz | grep -c 'standalone/data/'     # 应为 0
 ```
 
-想在本机真装一遍验证：
+**装这个 tarball 跑一遍冒烟测试：**
 ```bash
-mkdir /tmp/ai && cd /tmp/ai && npm init -y
-npm install /路径/agent-insight-<版本>.tgz
-npx agent-insight start          # 开 http://localhost:3000
+mkdir -p /tmp/ai-verify && cd /tmp/ai-verify && npm init -y
+npm install /绝对路径/agent-insight-<版本>.tgz                # 触发 postinstall（prisma/sharp 自愈）
+npx agent-insight start --port 3000                          # 起服务
+curl -s -o /dev/null -w '%{http_code}\n' http://localhost:3000/   # 期望 200 或 307
+npx agent-insight stop --port 3000                          # 关服务
+cd - && rm -rf /tmp/ai-verify
 ```
 
----
+**最小通过标准（全绿才发布）：**
+- [ ] `npm install` 无报错（sharp / prisma 跨平台自愈 OK）
+- [ ] 服务起得来、首页返回 200/307、`~/.agent-insight/.admin_api_key` 已生成
+- [ ] 包体积 ~30MB，`exclude/`、`data/` 计数为 0
+- [ ]（跨平台发布时）在另一个 OS（mac / linux / windows）重复装一遍验证
 
-## 5. 正式发布
+### 第 3 步：发布「你刚测过的同一个 tarball」（推荐）
 
 ```bash
-node scripts/publish-npm.js --version 0.1.0-beta --tag latest
+npm publish ./agent-insight-<版本>.tgz --tag latest --registry https://registry.npmjs.org/
 ```
 
-发布成功后验证：
+直接发第 1 步产出、第 2 步验证过的那个文件——**「测的」和「发的」零偏差**，不会重新 build 出另一个产物。
+
+> 备选：`node scripts/publish-npm.js --version <版本> --tag latest` 也能发，但它会**重新 build 一遍**，发出去的不是你刚测的那个 tarball（构建虽确定，严格说不是同一产物）。
+
+### 第 4 步：发布后线上复验
+
 ```bash
 npm view agent-insight version dist-tags --registry https://registry.npmjs.org/
-npx agent-insight@0.1.0-beta start
+npx agent-insight@<版本> start    # 从 npm 真实拉取再跑一遍
 ```
 
 ---
@@ -121,7 +142,7 @@ npx agent-insight@0.1.0-beta start
 | `npm ci` 报 `ENOTEMPTY: rmdir ...node_modules` | npm 清理旧依赖偶发问题。先 `rm -rf node_modules` 再重跑脚本 |
 | `You cannot publish over the previously published versions` | 该版本号已发过，npm 版本不可变。**改用更高版本号** |
 | 发布卡在国内镜像 / 403 | 脚本已钉死 `--registry https://registry.npmjs.org/`，无需改全局；若仍异常，确认 `~/.npmrc` 没把 registry 覆盖成只读镜像 |
-| 预发布版本发不上 `latest` | 脚本已自动对 `latest` 也显式带 `--tag`，正常即可。手动发请用 `npm publish --tag latest` |
+| 预发布版本发不上 `latest` | npm 拒绝把预发布版静默发到 latest。脚本已自动显式带 `--tag`；**手动发 tarball 也要带全**：`npm publish ./agent-insight-<版本>.tgz --tag latest --registry https://registry.npmjs.org/` |
 | 想撤销刚发的版本 | **72 小时内**可删：`npm unpublish agent-insight@<版本> --registry https://registry.npmjs.org/`；超 72h 自己删不了（联系 npm support）。**迭代请 bump 版本号，别靠删** |
 
 ---
