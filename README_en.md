@@ -1,12 +1,12 @@
 <p align="center">
-  <a href="https://gitcode.com/openeuler/witty-skill-insight">
+  <a href="https://gitcode.com/openeuler/agent-insight">
     <strong style="font-size: 2em;">Skill-insight</strong>
   </a>
 </p>
 <p align="center">Transform Agent Skills from "usable" to "excellent" — a full lifecycle platform for Skill generation, evaluation, and optimization based on execution data</p>
 <p align="center">
-  <a href="https://www.npmjs.com/package/@witty-ai/skill-insight"><img alt="npm" src="https://img.shields.io/npm/v/@witty-ai/skill-insight?style=flat-square" /></a>
-  <a href="https://gitcode.com/openeuler/witty-skill-insight/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/npm/l/@witty-ai/skill-insight?style=flat-square" /></a>
+  <a href="https://www.npmjs.com/package/agent-insight"><img alt="npm" src="https://img.shields.io/npm/v/agent-insight?style=flat-square" /></a>
+  <a href="https://gitcode.com/openeuler/agent-insight/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/npm/l/agent-insight?style=flat-square" /></a>
 </p>
 
 <p align="center">
@@ -14,7 +14,7 @@
   <a href="README_en.md">English</a>
 </p>
 
-[![Skill-insight Dashboard](docs/images/dashboard_main.png)](https://gitcode.com/openeuler/witty-skill-insight)
+[![Skill-insight Dashboard](docs/images/dashboard_main.png)](https://gitcode.com/openeuler/agent-insight)
 
 ---
 
@@ -61,10 +61,10 @@ Skill-insight is designed to solve these problems.
 
 ```bash
 # One-line install
-npx @witty-ai/skill-insight install
+npx agent-insight install
 
 # Package manager
-npm i -g @witty-ai/skill-insight
+npm i -g agent-insight
 ```
 
 > [!TIP]
@@ -73,8 +73,8 @@ npm i -g @witty-ai/skill-insight
 ### Install from Source
 
 ```bash
-git clone https://gitcode.com/openeuler/witty-skill-insight.git
-cd witty-skill-insight
+git clone https://gitcode.com/openeuler/agent-insight.git
+cd agent-insight
 npm install
 
 # Development mode
@@ -114,7 +114,7 @@ The following example uses OpenCode to demonstrate the complete Generate → Eva
 ### Step 1: Install Skill Toolkit
 
 ```bash
-npx skills add https://gitcode.com/openeuler/witty-skill-insight.git
+npx skills add https://gitcode.com/openeuler/agent-insight.git
 ```
 
 ### Step 2: Generate Skill
@@ -164,4 +164,4 @@ Before contributing code, please sign the [CLA](https://clasign.osinfra.cn/sign/
 
 ---
 
-**Join the Community** [Issue](https://atomgit.com/openeuler/witty-skill-insight/issues) | <intelligence@openeuler.org>
+**Join the Community** [Issue](https://atomgit.com/openeuler/agent-insight/issues) | <intelligence@openeuler.org>
