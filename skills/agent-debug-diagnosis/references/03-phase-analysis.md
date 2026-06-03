@@ -112,7 +112,7 @@ System 完全由事实映射，不需要 LLM 推断：
 
 ## Phase 2：关键发现归因
 
-Phase 2 只选择一个最值得用户关注的关键发现。若 trace 明确失败，关键发现可以是失败根因；若 trace 最终完成或问题已恢复，关键发现应表述为潜在问题或过程风险，不要写成“根因”。输入包括：
+Phase 2 从 Phase 1 原子问题中聚合一组最值得用户关注的 `findings`。若 trace 明确失败，第一条 finding 可以是失败根因；若 trace 最终完成或问题已恢复，finding 应表述为潜在问题、过程风险或恢复成本，不要写成“根因”。`rootCause` 字段仅作为 `findings[0]` 的历史兼容投影。输入包括：
 
 - Phase 1 错误网格。
 - 完整 step 时间线。
@@ -121,15 +121,31 @@ Phase 2 只选择一个最值得用户关注的关键发现。若 trace 明确�
 
 判定原则：
 
-1. 找最早的、修复后最可能改善轨迹质量的错误。
-2. 找因，不找果；后续级联错误通常不是关键发现本身。
+1. 找最早的、修复后最可能改善轨迹质量的错误，作为某条 finding 的 `root`。
+2. 找因，不找果；后续级联错误通常作为同一 finding 的 `downstream`，不要重复提升成另一条 finding。
 3. 前 1-2 个记录多为探索，除非有明确高置信错误，否则谨慎作为关键发现。
 4. Action/System 可以是关键发现，但不要因此自动给 Planning 背锅。
 5. 如果证据不足，宁可降低置信度，也不要编造级联链路。
-6. `summary` 最多 1-2 句，只讲发现了什么、为什么重要；原始报错、命令、节点、重复模式和长推理放到 `evidence`、`cascadingChain` 或 `correctionGuidance`。
+6. `summary` 最多 1-2 句，只讲发现了什么、为什么重要；原始报错、命令、节点、重复模式和长推理放到 `evidence`、`issueRefs` 对应 issue 或 `correctionGuidance`。
+
+提升为 `finding` 的条件：
+
+- 直接导致最终失败或结果偏差。
+- 问题没有恢复，或者恢复代价明显。
+- 造成额外轮次、额外工具调用、额外成本或明显延迟。
+- 违反硬约束、安全约束、schema 约束或关键用户约束。
+- 重复出现，具备明确优化价值。
+
+保留为普通 `issue` 的条件：
+
+- 已自动修复，且没有影响最终结果。
+- 正常探索过程中的低影响问题。
+- 只是另一个 finding 的下游症状。
+- 低置信度、低严重度、无明确结果影响的提示。
 
 输出必须包含：
 
+- `findings`
 - `criticalStep`
 - `criticalModule`
 - `criticalErrorType`
@@ -144,4 +160,6 @@ Phase 2 只选择一个最值得用户关注的关键发现。若 trace 明确�
 - 脚本 issues 与 LLM issues 去重，去重键为 `step + module + errorType`。
 - 对同一事实，保留证据更具体、置信度更高的一条。
 - `issues` 必须是 `phase1Grid` 中 `errorDetected=true` 的扁平子集。
-- `rootCause` 字段名为历史兼容；其内容必须来自 `phase1Grid` 中实际存在的错误，不能选择空模块。用户可见文案优先使用“关键发现”。
+- 每条 `finding` 必须来自实际存在的 `issues`，并通过 `issueRefs` 标记 `root`、`contributing` 或 `downstream`。
+- 每条 `finding` 必须恰好有一个 `root` issue；同一个 issue 默认只能归属一个 owning finding，不能被多个 finding 同时声明为 root。
+- `rootCause` 字段名为历史兼容；其内容必须与 `findings[0]` 语义一致，不能选择空模块。用户可见文案优先使用“关键发现”。

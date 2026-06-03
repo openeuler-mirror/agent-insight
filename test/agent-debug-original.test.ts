@@ -142,6 +142,26 @@ test('agent-debug skill defines Chinese script-driven protocol and schema', () =
   assert.match(schema, /所有自然语言字段必须用中文/);
 });
 
+test('agent-debug supports multi finding protocol and blocks eval pollution', () => {
+  const skill = fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf-8');
+  const phase = fs.readFileSync(path.join(skillDir, 'references/03-phase-analysis.md'), 'utf-8');
+  const schema = fs.readFileSync(path.join(skillDir, 'references/04-output-schema.md'), 'utf-8');
+  const validator = fs.readFileSync(path.join(skillDir, 'scripts', 'agentdebug_validate.py'), 'utf-8');
+  const runner = fs.readFileSync(path.join(process.cwd(), 'src', 'lib', 'engine', 'agent-debug', 'runner.ts'), 'utf-8');
+
+  assert.match(skill, /`findings`/);
+  assert.match(phase, /issueRefs/);
+  assert.match(schema, /"findings"/);
+  assert.match(schema, /"role": "root"/);
+  assert.match(validator, /validate_findings/);
+  assert.match(validator, /role=root/);
+  assert.match(runner, /normalizeFindings/);
+  assert.match(runner, /schemaVersion:\s*2/);
+  assert.doesNotMatch(runner, /answerScore/);
+  assert.doesNotMatch(runner, /judgmentReason/);
+  assert.doesNotMatch(runner, /parseFailures/);
+});
+
 test('agent-debug skill bundles deterministic static scripts', () => {
   const staticScript = fs.readFileSync(path.join(skillDir, 'scripts', 'agentdebug_static.py'), 'utf-8');
   const validateScript = fs.readFileSync(path.join(skillDir, 'scripts', 'agentdebug_validate.py'), 'utf-8');

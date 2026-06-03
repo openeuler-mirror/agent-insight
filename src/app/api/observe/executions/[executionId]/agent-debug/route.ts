@@ -11,34 +11,17 @@ import {
   upsertRunningAgentDebugReport,
 } from '@/lib/engine/agent-debug/report-store';
 import { hashInteractions } from '@/lib/engine/agent-debug/trace-adapter';
-import { inferSubagentNamesFromInteractions } from '@/lib/engine/observability/subagent-inference';
-import { normalizeClaudeCodeInteractionsForStorage } from '@/lib/shared/interaction-content';
-import { db } from '@/lib/storage/prisma';
+import { resolveAgentDebugExecution } from '@/lib/engine/agent-debug/execution-resolver';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 600;
-
-interface ExecutionRecord {
-  id: string;
-  taskId?: string | null;
-  framework?: string | null;
-  failures?: string | null;
-  answerScore?: number | null;
-  judgmentReason?: string | null;
-  user?: string | null;
-  query?: string | null;
-}
-
-interface SessionRecord {
-  interactions?: string | unknown[] | null;
-}
 
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ executionId: string }> },
 ) {
   const { executionId } = await params;
-  const resolved = await resolveExecution(executionId);
+  const resolved = await resolveAgentDebugExecution(executionId);
   if (!resolved) return NextResponse.json({ report: null, row: null });
   const row = await findAgentDebugReport(resolved.execution.id);
   const report = row?.generator === AGENT_DEBUG_GENERATOR ? parseReportPayload(row) : null;
@@ -54,7 +37,7 @@ export async function POST(
 ) {
   const { executionId } = await params;
   const body = await request.json().catch(() => ({})) as { user?: string; force?: boolean };
-  const resolved = await resolveExecution(executionId);
+  const resolved = await resolveAgentDebugExecution(executionId);
   if (!resolved) {
     return NextResponse.json({ error: 'Execution not found' }, { status: 404 });
   }
@@ -67,6 +50,9 @@ export async function POST(
   const interactionsHash = hashInteractions(interactions);
   const existing = await findAgentDebugReport(execution.id);
   const existingPayload = parseReportPayload(existing);
+  const savedSkillsAnalysis = existing?.interactionsHash === interactionsHash
+    ? existingPayload?.skillsAnalysis || null
+    : null;
   if (!body.force && existing?.status === 'done' && existing.generator === AGENT_DEBUG_GENERATOR && existing.interactionsHash === interactionsHash && existingPayload) {
     return NextResponse.json({ report: existingPayload, row: summarizeRow(existing), cached: true });
   }
@@ -81,7 +67,7 @@ export async function POST(
   });
 
   try {
-    const report = await runAgentDebugDiagnosis({ execution, interactions, user });
+    const report = await runAgentDebugDiagnosis({ execution, interactions, user, skillsAnalysis: savedSkillsAnalysis });
     const row = await markAgentDebugReportDone({ executionId: execution.id, report });
     return NextResponse.json({ report, row: summarizeRow(row), cached: false });
   } catch (error) {
@@ -96,40 +82,10 @@ export async function DELETE(
   { params }: { params: Promise<{ executionId: string }> },
 ) {
   const { executionId } = await params;
-  const resolved = await resolveExecution(executionId);
+  const resolved = await resolveAgentDebugExecution(executionId);
   if (!resolved) return NextResponse.json({ ok: true });
   await deleteAgentDebugReport(resolved.execution.id);
   return NextResponse.json({ ok: true });
-}
-
-async function resolveExecution(inputId: string): Promise<{ execution: ExecutionRecord; interactions: unknown[] } | null> {
-  const byId = await db.findExecutionById(inputId).catch(() => null) as ExecutionRecord | null;
-  let execution = byId;
-  if (!execution) {
-    const rows = await db.findExecutions({ taskId: inputId }, { timestamp: 'desc' }).catch(() => []) as ExecutionRecord[];
-    execution = rows[0] || null;
-  }
-  if (!execution?.id) return null;
-
-  const sessionKey = execution.taskId || inputId;
-  const session = await db.findSessionByTaskId(sessionKey).catch(() => null) as SessionRecord | null;
-  let interactions = parseInteractions(session?.interactions);
-  if (execution.framework === 'claudecode') {
-    interactions = normalizeClaudeCodeInteractionsForStorage(interactions as Parameters<typeof normalizeClaudeCodeInteractionsForStorage>[0]);
-  }
-  interactions = inferSubagentNamesFromInteractions(interactions as Parameters<typeof inferSubagentNamesFromInteractions>[0]);
-  return { execution, interactions };
-}
-
-function parseInteractions(value: SessionRecord['interactions']): unknown[] {
-  if (Array.isArray(value)) return value;
-  if (!value || typeof value !== 'string') return [];
-  try {
-    const parsed = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
 }
 
 function summarizeRow(row: Awaited<ReturnType<typeof findAgentDebugReport>>) {
