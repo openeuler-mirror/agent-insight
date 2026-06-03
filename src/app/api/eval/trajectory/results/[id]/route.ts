@@ -57,9 +57,11 @@ export async function GET(
             return NextResponse.json({ error: 'not found' }, { status: 404 });
         }
         const taskMeta = extractTrajectoryTaskMeta(row.rawAnalysisJson, row.createdAt);
+        const rawAnalysis = safeParse(row.rawAnalysisJson, null) as Record<string, unknown> | null;
+        const rawMeta = (rawAnalysis || {}) as { selectedEvaluators?: string[]; selectedEvaluatorNames?: string[] };
 
         return NextResponse.json({
-            ...(safeParse(row.rawAnalysisJson, {}) as { selectedEvaluators?: string[]; selectedEvaluatorNames?: string[] }),
+            ...rawMeta,
             taskTitle: taskMeta.title,
             taskDescription: taskMeta.description,
             id: row.id,
@@ -78,7 +80,8 @@ export async function GET(
             resultEvaluationScore: pickResultEvaluationScore(row.rawAnalysisJson),
             customEvaluationScore: pickCustomEvaluationScore(row.rawAnalysisJson),
             customEvaluations: pickCustomEvaluations(row.rawAnalysisJson),
-            rawAnalysis: safeParse(row.rawAnalysisJson, null),
+            diagnostic: rawAnalysis?.diagnostic ?? null,
+            rawAnalysis,
             createdAt: row.createdAt.toISOString(),
             updatedAt: row.updatedAt.toISOString(),
         });
