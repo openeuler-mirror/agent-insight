@@ -19,6 +19,11 @@ import { useAuth } from '@/lib/auth/auth-context';
 import { Term } from '@/components/text/Term';
 import { parseSkillAttributionFromRow } from '@/lib/engine/evaluation/skill-attribution';
 import { fmtPercentScore } from '@/lib/eval/score-format';
+import {
+    getTrajectoryOverallConclusion,
+    isTrajectoryEvaluationTerminal,
+    parseTrajectoryDiagnostic,
+} from '@/lib/eval/trajectory-diagnostic';
 import './evaluator-findings-view.css';
 
 interface DatasetCase {
@@ -315,13 +320,16 @@ interface TrajectoryResult {
     taskId: string | null;
     status: 'pending' | 'running' | 'done' | 'failed';
     errorMessage: string | null;
+    resultEvaluationError?: string | null;
     trajectoryScore: number | null;
+    resultEvaluationScore?: number | null;
     dimensionScores: DimensionScores | null;
     deviationSteps: TrajectoryDeviation[];
     rootCauseStep: string | null;
     reasonText: string | null;
     customEvaluationScore?: number | null;
     customEvaluations?: CustomEvaluationItem[];
+    diagnostic?: unknown;
     rawAnalysis?: unknown;
     createdAt: string;
 }
@@ -968,6 +976,18 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
     const resultEvaluationFindings = resultEvaluationPayload.findings;
     const resultEvaluationReady = isResultEvaluationReady(resultEvaluationPayload, hasResultEvaluation);
     const resultEvaluationFailed = hasResultEvaluationFailed(resultEvaluationPayload);
+    const evaluationDiagnostic = useMemo(
+        () => parseTrajectoryDiagnostic(result),
+        [result],
+    );
+    const terminalDiagnosticText = useMemo(() => {
+        if (!result || !isTrajectoryEvaluationTerminal(result.status) || !evaluationDiagnostic) return '';
+        return [
+            evaluationDiagnostic.userMessage,
+            evaluationDiagnostic.reason ? `具体原因：${evaluationDiagnostic.reason}` : '',
+            evaluationDiagnostic.nextAction ? `下一步建议：${evaluationDiagnostic.nextAction}` : '',
+        ].filter(Boolean).join('\n');
+    }, [evaluationDiagnostic, result]);
     const isMatchingCase = Boolean(result && !caseEntry && !isEvaluationTerminal(result.status));
     const caseSnapshot = useMemo(
         () => deriveCaseSnapshot(result?.rawAnalysis),
@@ -1032,16 +1052,10 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
         return parts.length > 0 ? parts.reduce((a, b) => a + b, 0) / parts.length : null;
     }, [result, noEvaluableCase, hasTraceEvaluation, hasResultEvaluation, hasCustomEvaluation, customEvaluationScore, resultEvaluationSummary.score]);
 
-    const overallText =
-        noEvaluableCase
-            ? cleanNoEvaluableCaseMessage(result?.errorMessage)
-            : composite == null
-            ? '该执行尚未评测'
-            : composite >= 0.8
-            ? '该执行在结果与过程两个维度均表现良好'
-            : composite >= 0.5
-            ? '该执行结果基本可用，但部分关键动作覆盖不足'
-            : '该执行关键动作覆盖不足，建议优先排查';
+    const overallText = getTrajectoryOverallConclusion(result, {
+        composite,
+        fallbackRootCauseStep: result?.rootCauseStep,
+    });
 
     if (loading && !exec && !result) {
         return <div style={{ padding: 24 }}>加载中...</div>;
@@ -1140,7 +1154,7 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
                         </>
                     )}
                 </div>
-                <div style={{ fontSize: 12, color: COLORS.textSecondary, lineHeight: 1.6 }}>
+                <div style={{ fontSize: 12, color: COLORS.textSecondary, lineHeight: 1.6, whiteSpace: 'pre-line' }}>
                     {overallText}
                     {result?.rootCauseStep ? (
                         <>
@@ -1189,6 +1203,20 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
                             <div style={{ color: COLORS.textMuted, fontSize: 12, paddingTop: 8 }}>
                                 本次未选择 Agent 任务完成度评估器。
                             </div>
+                        ) : terminalDiagnosticText ? (
+                            <div style={{
+                                color: COLORS.danger,
+                                fontSize: 12,
+                                padding: 10,
+                                marginTop: 8,
+                                background: COLORS.dangerSubtle,
+                                border: `1px solid ${COLORS.border}`,
+                                borderRadius: 6,
+                                lineHeight: 1.6,
+                                whiteSpace: 'pre-line',
+                            }}>
+                                {terminalDiagnosticText}
+                            </div>
                         ) : resultEvaluationFailed ? (
                             <div style={{
                                 color: COLORS.danger,
@@ -1202,13 +1230,15 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
                             }}>
                                 {resultEvaluationPayload.errorMessage}
                             </div>
-                        ) : !resultEvaluationReady ? (
-                            <div style={{ color: COLORS.textMuted, fontSize: 12, paddingTop: 8 }}>
-                                结果评测进行中…任务完成度得分、原因、关键观点会在结果评估器产出完整结果后一起显示。
-                            </div>
                         ) : noEvaluableCase ? (
                             <div style={{ color: COLORS.textMuted, fontSize: 12, paddingTop: 8 }}>
                                 {cleanNoEvaluableCaseMessage(result?.errorMessage)}
+                            </div>
+                        ) : !resultEvaluationReady ? (
+                            <div style={{ color: COLORS.textMuted, fontSize: 12, paddingTop: 8 }}>
+                                {result && isTrajectoryEvaluationTerminal(result.status)
+                                    ? '结果评测未产出完整结构化结果。'
+                                    : '结果评测进行中…任务完成度得分、原因、关键观点会在结果评估器产出完整结果后一起显示。'}
                             </div>
                         ) : (
                             <>

@@ -296,10 +296,10 @@ async function matchBatchWithLlm(
   normalizedInput: string,
   candidates: Array<{ id: string; query: string }>,
   user?: string | null
-): Promise<{ id?: string; confidence: number; reason: string }> {
+): Promise<{ id?: string; confidence: number; reason: string; error?: string }> {
   const { client, model } = await getLlmClient(user);
   if (!client || !model || candidates.length === 0) {
-    return { confidence: 0, reason: 'LLM matcher unavailable' };
+    return { confidence: 0, reason: 'LLM matcher unavailable', error: 'LLM matcher unavailable' };
   }
 
   try {
@@ -322,13 +322,13 @@ async function matchBatchWithLlm(
 
     const content = response.choices?.[0]?.message?.content?.trim();
     if (!content) {
-      return { confidence: 0, reason: 'Empty LLM batch match response' };
+      return { confidence: 0, reason: 'Empty LLM batch match response', error: 'Empty LLM batch match response' };
     }
 
     const parsed = batchMatchSchema.parse(parseJsonPayload(content));
     const config = candidates.find(candidate => candidate.id === parsed.best_case_id);
     if (!config) {
-      return { confidence: 0, reason: 'LLM returned unknown case id' };
+      return { confidence: 0, reason: 'LLM returned unknown case id', error: 'LLM returned unknown case id' };
     }
 
     return {
@@ -338,7 +338,8 @@ async function matchBatchWithLlm(
     };
   } catch (error) {
     console.warn('[SemanticMatch] Failed to compare candidate batch:', error);
-    return { confidence: 0, reason: 'LLM batch match failed' };
+    const message = (error as Error)?.message || String(error);
+    return { confidence: 0, reason: 'LLM batch match failed', error: message };
   }
 }
 
@@ -497,6 +498,7 @@ export async function findBestSemanticCaseMatch(
   const batchResults = await Promise.all(
     batches.map(batch => matchBatchWithLlm(normalizedInput, batch, options?.user))
   );
+  const batchErrors = batchResults.map(result => result.error).filter((error): error is string => Boolean(error));
 
   const best = batchResults.reduce<{ id?: string; confidence: number; reason: string }>(
     (currentBest, current) => {
@@ -521,6 +523,9 @@ export async function findBestSemanticCaseMatch(
       extractReason: extracted.reason,
       matchReason: best.reason || 'Best semantic confidence below threshold',
       matchedBy: 'none',
+      ...(batchErrors.length === batchResults.length && batchErrors.length > 0
+        ? { error: batchErrors.join('; ') }
+        : {}),
     };
   }
 

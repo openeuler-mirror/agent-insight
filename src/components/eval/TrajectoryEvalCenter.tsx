@@ -20,6 +20,11 @@ import { apiFetch } from '@/lib/client/api';
 import { useAuth } from '@/lib/auth/auth-context';
 import { fmtPercentScore } from '@/lib/eval/score-format';
 import {
+    getTrajectoryStatusLabel,
+    getTrajectoryStatusTitle,
+    getTrajectoryStatusTone,
+} from '@/lib/eval/trajectory-diagnostic';
+import {
     isEvaluatorAgent,
 } from '@/lib/evaluator-agent';
 import {
@@ -126,11 +131,12 @@ interface TrajectoryResult {
     reasonText: string | null;
     resultEvaluationScore?: number | null;
     customEvaluationScore?: number | null;
+    diagnostic?: unknown;
+    rawAnalysis?: unknown;
     createdAt: string;
 }
 
 const POLL_MS = 3000;
-const NO_EVALUABLE_CASE_PREFIX = '[no-evaluable-case]';
 const TASK_DRAFT_STORAGE_KEY = 'trajectory-eval-task-draft';
 const TRACE_PAGE_SIZE = 20;
 
@@ -157,13 +163,6 @@ const COLORS = {
     textDisabled: '#A1A1AA',
 };
 
-const STATUS_LABEL: Record<TrajectoryResult['status'], string> = {
-    pending: '待评测',
-    running: '评测中',
-    done: '已评测',
-    failed: '评测失败',
-};
-
 const STATUS_COLOR: Record<TrajectoryResult['status'], string> = {
     pending: COLORS.textDisabled,
     running: '#1677ff',
@@ -171,20 +170,17 @@ const STATUS_COLOR: Record<TrajectoryResult['status'], string> = {
     failed: COLORS.danger,
 };
 
-function getEffectiveStatus(r: TrajectoryResult): TrajectoryResult['status'] {
-    return r.status === 'done' && r.resultEvaluationError ? 'failed' : r.status;
-}
-
-function isNoEvaluableCase(r?: Pick<TrajectoryResult, 'status' | 'errorMessage' | 'resultEvaluationError'> | null): boolean {
-    return Boolean(r?.status === 'failed' && r.errorMessage?.includes(NO_EVALUABLE_CASE_PREFIX));
-}
-
 function getStatusLabel(r: TrajectoryResult): string {
-    return isNoEvaluableCase(r) ? '无可评测case' : STATUS_LABEL[getEffectiveStatus(r)];
+    return getTrajectoryStatusLabel(r);
 }
 
 function getStatusColor(r: TrajectoryResult): string {
-    return isNoEvaluableCase(r) ? COLORS.warning : STATUS_COLOR[getEffectiveStatus(r)];
+    const tone = getTrajectoryStatusTone(r);
+    if (tone === 'warning') return COLORS.warning;
+    if (tone === 'danger') return COLORS.danger;
+    if (tone === 'running') return STATUS_COLOR.running;
+    if (tone === 'success') return COLORS.success;
+    return COLORS.textDisabled;
 }
 
 function fmtRelTime(s?: string | null): string {
@@ -1284,7 +1280,7 @@ export default function TrajectoryEvalCenter() {
                                                 </td>
                                                 <td style={tdStyle('center')}>
                                                     {r ? (
-                                                        <span style={{ color: getStatusColor(r), fontWeight: 600, fontSize: 11 }} title={r.errorMessage || r.resultEvaluationError || ''}>
+                                                        <span style={{ color: getStatusColor(r), fontWeight: 600, fontSize: 11 }} title={getTrajectoryStatusTitle(r)}>
                                                             {getStatusLabel(r)}
                                                         </span>
                                                     ) : (

@@ -11,6 +11,13 @@ import { useRouter } from 'next/navigation';
 import { apiFetch } from '@/lib/client/api';
 import { useAuth } from '@/lib/auth/auth-context';
 import { fmtPercentScore } from '@/lib/eval/score-format';
+import {
+    getTrajectoryDisplayStatus,
+    getTrajectoryStatusLabel,
+    getTrajectoryStatusTitle,
+    getTrajectoryStatusTone,
+    isTrajectoryEvaluationTerminal,
+} from '@/lib/eval/trajectory-diagnostic';
 
 interface TrajectoryDimensionScores {
     completeness: number;
@@ -38,6 +45,8 @@ interface TrajectoryResult {
     resultEvaluationScore?: number | null;
     customEvaluationScore?: number | null;
     customEvaluations?: unknown;
+    diagnostic?: unknown;
+    rawAnalysis?: unknown;
     dimensionScores: TrajectoryDimensionScores | null;
     rootCauseStep: string | null;
     createdAt: string;
@@ -78,20 +87,12 @@ const COLORS = {
 
 const POLL_MS = 3000;
 const EVALUATOR_KEYWORDS = ['evaluator', 'checker', 'judge', 'locator', 'assessor', 'grader', '评估器'];
-const NO_EVALUABLE_CASE_PREFIX = '[no-evaluable-case]';
 
 function isEvaluatorAgentName(name?: string | null): boolean {
     const n = String(name || '').trim();
     if (!n) return true;
     return EVALUATOR_KEYWORDS.some(kw => n.toLowerCase().includes(kw));
 }
-
-const STATUS_LABEL: Record<TrajectoryResult['status'], string> = {
-    pending: '待评测',
-    running: '评测中',
-    done: '已评测',
-    failed: '评测失败',
-};
 
 const STATUS_COLOR: Record<TrajectoryResult['status'], string> = {
     pending: COLORS.textDisabled,
@@ -113,14 +114,6 @@ function hasSelectedEvaluator(r: TrajectoryResult, evaluatorId: string): boolean
     return selected.includes(evaluatorId);
 }
 
-function isEvaluationTerminal(status?: TrajectoryResult['status'] | null): boolean {
-    return status === 'done' || status === 'failed';
-}
-
-function getEffectiveStatus(r: TrajectoryResult): TrajectoryResult['status'] {
-    return r.status === 'done' && r.resultEvaluationError ? 'failed' : r.status;
-}
-
 function deriveCustomEvaluationScore(result: TrajectoryResult): number | null {
     if (typeof result.customEvaluationScore === 'number' && Number.isFinite(result.customEvaluationScore)) {
         return result.customEvaluationScore;
@@ -137,7 +130,7 @@ function deriveCustomEvaluationScore(result: TrajectoryResult): number | null {
 }
 
 function getDisplayScore(result: TrajectoryResult, exec?: ExecutionRecord): number | null {
-    if (!isEvaluationTerminal(result.status) || getEffectiveStatus(result) !== 'done' || isNoEvaluableCase(result)) return null;
+    if (!isTrajectoryEvaluationTerminal(result.status) || getTrajectoryDisplayStatus(result) !== 'done') return null;
     const traceScore = hasSelectedEvaluator(result, 'preset-agent-trace-quality') ? result.trajectoryScore : null;
     const answerScore = hasSelectedEvaluator(result, 'preset-agent-task-completion')
         ? result.resultEvaluationScore ?? exec?.answer_score ?? null
@@ -153,16 +146,17 @@ function getDisplayScore(result: TrajectoryResult, exec?: ExecutionRecord): numb
     return parts.reduce((a, b) => a + b, 0) / parts.length;
 }
 
-function isNoEvaluableCase(r?: Pick<TrajectoryResult, 'status' | 'errorMessage' | 'resultEvaluationError'> | null): boolean {
-    return Boolean(r?.status === 'failed' && r.errorMessage?.includes(NO_EVALUABLE_CASE_PREFIX));
-}
-
 function getStatusLabel(r: TrajectoryResult): string {
-    return isNoEvaluableCase(r) ? '无可评测case' : STATUS_LABEL[getEffectiveStatus(r)];
+    return getTrajectoryStatusLabel(r);
 }
 
 function getStatusColor(r: TrajectoryResult): string {
-    return isNoEvaluableCase(r) ? COLORS.warning : STATUS_COLOR[getEffectiveStatus(r)];
+    const tone = getTrajectoryStatusTone(r);
+    if (tone === 'warning') return COLORS.warning;
+    if (tone === 'danger') return COLORS.danger;
+    if (tone === 'running') return STATUS_COLOR.running;
+    if (tone === 'success') return COLORS.success;
+    return COLORS.textDisabled;
 }
 
 function fmtTime(s?: string | null): string {
@@ -256,9 +250,12 @@ export default function EvaluationRunDetailView({ runId }: { runId: string }) {
     }
 
     const summary = useMemo(() => {
-        const done = results.filter(r => getEffectiveStatus(r) === 'done').length;
+        const done = results.filter(r => getTrajectoryDisplayStatus(r) === 'done').length;
         const running = results.filter(r => r.status === 'pending' || r.status === 'running').length;
-        const failed = results.filter(r => getEffectiveStatus(r) === 'failed').length;
+        const failed = results.filter(r => {
+            const displayStatus = getTrajectoryDisplayStatus(r);
+            return displayStatus === 'failed' || displayStatus === 'partial_failed';
+        }).length;
         const scores = results
             .map(r => getDisplayScore(r, execMap.get(r.taskId || r.executionId || '')))
             .filter((s): s is number => typeof s === 'number');
@@ -408,7 +405,7 @@ export default function EvaluationRunDetailView({ runId }: { runId: string }) {
                                         )}
                                     </td>
                                     <td style={tdStyle('center')}>
-                                        <span style={{ color: getStatusColor(r), fontWeight: 600, fontSize: 11 }} title={r.errorMessage || r.resultEvaluationError || ''}>
+                                        <span style={{ color: getStatusColor(r), fontWeight: 600, fontSize: 11 }} title={getTrajectoryStatusTitle(r)}>
                                             {getStatusLabel(r)}
                                         </span>
                                     </td>
