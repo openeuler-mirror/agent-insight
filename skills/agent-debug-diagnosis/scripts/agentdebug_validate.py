@@ -26,6 +26,7 @@ NATURAL_KEYS = {
     "humanSummary",
     "recommendation",
     "rawErrorEvidence",
+    "resolutionEvidence",
 }
 
 
@@ -49,6 +50,8 @@ def main() -> None:
 
     validate_step_records(report.get("stepRecords", []), errors, warnings)
     validate_phase1(report.get("phase1Grid", []), errors, warnings)
+    validate_issues(report.get("issues", []), errors, warnings)
+    validate_findings(report.get("findings"), report.get("issues", []), errors, warnings)
     validate_root_cause(report.get("rootCause"), errors, warnings)
     scan_language(report, warnings)
 
@@ -113,6 +116,98 @@ def validate_phase1(cells: Any, errors: List[str], warnings: List[str]) -> None:
             warnings.append(f"phase1Grid[{idx}] 缺少证据，前端解释性会变差。")
         if cell.get("errorDetected") is not False:
             validate_trace_location(cell, f"phase1Grid[{idx}]", warnings)
+
+
+def validate_issues(issues: Any, errors: List[str], warnings: List[str]) -> None:
+    if not isinstance(issues, list):
+        return
+    seen_keys: set[str] = set()
+    for idx, issue in enumerate(issues, start=1):
+        if not isinstance(issue, dict):
+            errors.append(f"issues[{idx}] 必须是对象。")
+            continue
+        if not issue.get("id"):
+            errors.append(f"issues[{idx}] 缺少 id。")
+        module = issue.get("module")
+        if module not in MODULES and module != "others":
+            errors.append(f"issues[{idx}].module 非法：{module}")
+        if issue.get("severity") not in SEVERITIES:
+            errors.append(f"issues[{idx}].severity 非法：{issue.get('severity')}")
+        resolution = issue.get("resolution")
+        if resolution is not None and resolution not in {"unresolved", "recovered", "non_blocking"}:
+            errors.append(f"issues[{idx}].resolution 非法：{resolution}")
+        if not issue.get("errorType"):
+            errors.append(f"issues[{idx}] 缺少 errorType。")
+        key = f"{issue.get('traceStepIndex') or issue.get('step')}:{module}:{issue.get('errorType')}"
+        if key in seen_keys:
+            warnings.append(f"issues[{idx}] 与前面的 issue 重复：{key}")
+        seen_keys.add(key)
+        validate_trace_location(issue, f"issues[{idx}]", warnings)
+
+
+def validate_findings(findings: Any, issues: Any, errors: List[str], warnings: List[str]) -> None:
+    if findings is None:
+        warnings.append("缺少 findings；将使用 rootCause 兼容展示，无法稳定展示多条关键发现。")
+        return
+    if not isinstance(findings, list):
+        errors.append("findings 必须是数组。")
+        return
+
+    issue_ids = {
+        str(issue.get("id"))
+        for issue in issues
+        if isinstance(issue, dict) and issue.get("id")
+    } if isinstance(issues, list) else set()
+    root_issue_owners: Dict[str, str] = {}
+    allowed_impacts = {"result_blocking", "quality_degrading", "recovered_cost", "risk"}
+    allowed_roles = {"root", "contributing", "downstream"}
+
+    for idx, finding in enumerate(findings, start=1):
+        if not isinstance(finding, dict):
+            errors.append(f"findings[{idx}] 必须是对象。")
+            continue
+        finding_id = str(finding.get("id") or f"finding-{idx}")
+        for key in ("id", "summary", "evidence", "correctionGuidance"):
+            if not finding.get(key):
+                errors.append(f"findings[{idx}] 缺少 {key}。")
+        if finding.get("severity") not in SEVERITIES:
+            errors.append(f"findings[{idx}].severity 非法：{finding.get('severity')}")
+        if finding.get("impact") not in allowed_impacts:
+            errors.append(f"findings[{idx}].impact 非法：{finding.get('impact')}")
+        confidence = finding.get("confidence")
+        if not isinstance(confidence, (int, float)) or not 0 <= float(confidence) <= 1:
+            errors.append(f"findings[{idx}].confidence 必须是 0-1 数字。")
+
+        refs = finding.get("issueRefs")
+        if not isinstance(refs, list) or not refs:
+            errors.append(f"findings[{idx}].issueRefs 必须是非空数组。")
+            continue
+
+        seen_refs: set[str] = set()
+        root_refs: List[str] = []
+        for ref_idx, ref in enumerate(refs, start=1):
+            if not isinstance(ref, dict):
+                errors.append(f"findings[{idx}].issueRefs[{ref_idx}] 必须是对象。")
+                continue
+            issue_id = str(ref.get("issueId") or "")
+            role = ref.get("role")
+            if not issue_id:
+                errors.append(f"findings[{idx}].issueRefs[{ref_idx}] 缺少 issueId。")
+            elif issue_ids and issue_id not in issue_ids:
+                errors.append(f"findings[{idx}].issueRefs[{ref_idx}].issueId 不存在：{issue_id}")
+            if issue_id in seen_refs:
+                errors.append(f"findings[{idx}] 重复引用 issue：{issue_id}")
+            seen_refs.add(issue_id)
+            if role not in allowed_roles:
+                errors.append(f"findings[{idx}].issueRefs[{ref_idx}].role 非法：{role}")
+            if role == "root":
+                root_refs.append(issue_id)
+                owner = root_issue_owners.get(issue_id)
+                if owner and owner != finding_id:
+                    errors.append(f"issue {issue_id} 被多个 finding 声明为 root：{owner}, {finding_id}")
+                root_issue_owners[issue_id] = finding_id
+        if len(root_refs) != 1:
+            errors.append(f"findings[{idx}] 必须恰好有一个 role=root 的 issueRef。")
 
 
 def validate_root_cause(root: Any, errors: List[str], warnings: List[str]) -> None:
