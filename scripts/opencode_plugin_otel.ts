@@ -232,18 +232,18 @@ function extractTextFromParts(parts: any): string {
 
 export default async function WittySkillInsightOtelPlugin() {
   const env = loadSkillInsightEnv()
-  const enabled = asBool(env.SKILL_INSIGHT_OPENCODE_OTEL_ENABLE ?? env.OPENCODE_MIN_CAPTURE_ENABLE ?? "true")
+  const enabled = asBool(env.AGENT_INSIGHT_OPENCODE_OTEL_ENABLE ?? env.OPENCODE_MIN_CAPTURE_ENABLE ?? "true")
   if (!enabled) return {}
 
-  const apiKey = env.SKILL_INSIGHT_API_KEY
-  const spoolDir = env.SKILL_INSIGHT_OPENCODE_SPOOL_DIR || path.join(getExistingInsightDir(), "otel_data", "opencode")
-  const maxToolIo = asInt(env.SKILL_INSIGHT_MAX_TOOL_IO, 4000)
-  const maxEventString = asInt(env.SKILL_INSIGHT_MAX_EVENT_STRING, 20000)
+  const apiKey = env.AGENT_INSIGHT_API_KEY
+  const spoolDir = env.AGENT_INSIGHT_OPENCODE_SPOOL_DIR || path.join(getExistingInsightDir(), "otel_data", "opencode")
+  const maxToolIo = asInt(env.AGENT_INSIGHT_MAX_TOOL_IO, 4000)
+  const maxEventString = asInt(env.AGENT_INSIGHT_MAX_EVENT_STRING, 20000)
   const outFile = buildOutFile(spoolDir)
   const writer = createWriter(outFile)
 
-  const uploaderPath = env.SKILL_INSIGHT_OPENCODE_UPLOADER || path.join(getExistingInsightDir(), "opencode_uploader_client.js")
-  const uploaderCooldownMs = asInt(env.SKILL_INSIGHT_OPENCODE_UPLOAD_COOLDOWN_MS, 15000)
+  const uploaderPath = env.AGENT_INSIGHT_OPENCODE_UPLOADER || path.join(getExistingInsightDir(), "opencode_uploader_client.js")
+  const uploaderCooldownMs = asInt(env.AGENT_INSIGHT_OPENCODE_UPLOAD_COOLDOWN_MS, 15000)
   const lastUploadKickBySession = new Map<string, number>()
   const activeSessionIds = new Set<string>()
 
@@ -279,7 +279,7 @@ export default async function WittySkillInsightOtelPlugin() {
 
   appendLogLine(
     pluginLogPath,
-    `plugin.init enabled=${enabled} spoolDir=${spoolDir} uploaderPath=${uploaderPath} runtime=${runtime.cmd} argsPrefix=${runtime.argsPrefix.join(" ")} host=${env.SKILL_INSIGHT_HOST || "(missing)"} apiKeyPresent=${apiKey ? "yes" : "no"}`,
+    `plugin.init enabled=${enabled} spoolDir=${spoolDir} uploaderPath=${uploaderPath} runtime=${runtime.cmd} argsPrefix=${runtime.argsPrefix.join(" ")} host=${env.AGENT_INSIGHT_HOST || "(missing)"} apiKeyPresent=${apiKey ? "yes" : "no"}`,
   )
 
   const kickUploader = (sessionID: string, force = false, reason = "unspecified"): void => {
@@ -325,7 +325,7 @@ export default async function WittySkillInsightOtelPlugin() {
         windowsHide: true,
         env: {
           ...process.env,
-          ...(force ? { SKILL_INSIGHT_UPLOADER_FORCE: "1" } : {}),
+          ...(force ? { AGENT_INSIGHT_UPLOADER_FORCE: "1" } : {}),
         },
       })
       child.unref()
@@ -344,17 +344,17 @@ export default async function WittySkillInsightOtelPlugin() {
   }
 
   const markSessionComplete = async (sessionID: string, completedAt: string): Promise<void> => {
-    if (!sessionID || !apiKey || !env.SKILL_INSIGHT_HOST) {
+    if (!sessionID || !apiKey || !env.AGENT_INSIGHT_HOST) {
       appendLogLine(
         pluginLogPath,
-        `sessionComplete.skip sessionID=${sessionID || "(none)"} hostPresent=${env.SKILL_INSIGHT_HOST ? "yes" : "no"} apiKeyPresent=${apiKey ? "yes" : "no"}`,
+        `sessionComplete.skip sessionID=${sessionID || "(none)"} hostPresent=${env.AGENT_INSIGHT_HOST ? "yes" : "no"} apiKeyPresent=${apiKey ? "yes" : "no"}`,
       )
       return
     }
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 3000)
     try {
-      const base = String(env.SKILL_INSIGHT_HOST).replace(/\/+$/, "")
+      const base = String(env.AGENT_INSIGHT_HOST).replace(/\/+$/, "")
       const url = base.endsWith("/api")
         ? `${base}/ingest/opencode/session-complete`
         : `${base}/api/ingest/opencode/session-complete`

@@ -125,9 +125,9 @@ export default function AccessInstallPage() {
                     <div style={introRow}>
                         <p style={descText}>
                             {isZh ? (
-                                <>在终端中执行下面对应操作系统的<b style={descStrong}>一行命令</b>,即可把客户端接入平台并自动配置 <code style={inlineCode}>SKILL_INSIGHT_HOST</code> 与 <code style={inlineCode}>SKILL_INSIGHT_API_KEY</code>。</>
+                                <>在终端中执行下面对应操作系统的<b style={descStrong}>一行命令</b>,即可把客户端接入平台并自动配置 <code style={inlineCode}>AGENT_INSIGHT_HOST</code> 与 <code style={inlineCode}>AGENT_INSIGHT_API_KEY</code>。</>
                             ) : (
-                                <>Run the matching <b style={descStrong}>one-liner</b> in your terminal to install the client. It auto-configures <code style={inlineCode}>SKILL_INSIGHT_HOST</code> and <code style={inlineCode}>SKILL_INSIGHT_API_KEY</code>.</>
+                                <>Run the matching <b style={descStrong}>one-liner</b> in your terminal to install the client. It auto-configures <code style={inlineCode}>AGENT_INSIGHT_HOST</code> and <code style={inlineCode}>AGENT_INSIGHT_API_KEY</code>.</>
                             )}
                         </p>
                     </div>

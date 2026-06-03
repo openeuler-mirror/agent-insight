@@ -30,8 +30,8 @@ function loadConfiguration() {
     } catch (e) {}
     
     return {
-        apiKey: config['SKILL_INSIGHT_API_KEY'] || config['WITTY_INSIGHT_API_KEY'] || process.env.SKILL_INSIGHT_API_KEY || process.env.WITTY_INSIGHT_API_KEY,
-        host: config['SKILL_INSIGHT_HOST'] || config['WITTY_INSIGHT_HOST'] || process.env.SKILL_INSIGHT_HOST || process.env.WITTY_INSIGHT_HOST
+        apiKey: config['AGENT_INSIGHT_API_KEY'] || config['WITTY_INSIGHT_API_KEY'] || process.env.AGENT_INSIGHT_API_KEY || process.env.WITTY_INSIGHT_API_KEY,
+        host: config['AGENT_INSIGHT_HOST'] || config['WITTY_INSIGHT_HOST'] || process.env.AGENT_INSIGHT_HOST || process.env.WITTY_INSIGHT_HOST
     };
 }
 
@@ -107,7 +107,7 @@ async function main() {
     const { host, apiKey } = loadConfiguration();
     if (!host) {
         console.error('⚠️  Error: Agent Insight Host is not configured.');
-        console.error('Please configure SKILL_INSIGHT_HOST in ~/.agent-insight/.env');
+        console.error('Please configure AGENT_INSIGHT_HOST in ~/.agent-insight/.env');
         process.exit(1);
     }
 

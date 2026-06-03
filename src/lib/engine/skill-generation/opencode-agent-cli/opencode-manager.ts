@@ -670,7 +670,7 @@ async function terminateOpencodeProcess(
 /**
  * 给本次 spawn 的 opencode 子进程拼出"上报目标"的 env 覆盖。
  *
- * 解决的问题: opencode plugin (Witty-Skill-Insight.ts) 用 SKILL_INSIGHT_HOST / SKILL_INSIGHT_API_KEY
+ * 解决的问题: opencode plugin (Witty-Skill-Insight.ts) 用 AGENT_INSIGHT_HOST / AGENT_INSIGHT_API_KEY
  * 决定数据上报到哪台 server / 归到哪个 user。这两个值的解析顺序是 process.env > ~/.skill-insight/.env。
  * 用户机器上 ~/.skill-insight/.env 通常装着远端服务器地址 + 用户自己的 api key
  * (适用于他们手动跑 opencode CLI 时把数据传到远端 dashboard 的场景)。
@@ -681,8 +681,8 @@ async function terminateOpencodeProcess(
  * 飞到了远端服务器, 本地 trace 列表完全看不到。
  *
  * 这里强制注入两个值:
- *   - SKILL_INSIGHT_HOST = http://127.0.0.1:{PORT}    本机 next.js 自身
- *   - SKILL_INSIGHT_API_KEY = 触发 user 自己的 api key 锁数据归属
+ *   - AGENT_INSIGHT_HOST = http://127.0.0.1:{PORT}    本机 next.js 自身
+ *   - AGENT_INSIGHT_API_KEY = 触发 user 自己的 api key 锁数据归属
  *
  * 用户手动跑 opencode CLI 不走这里, 仍按 ~/.skill-insight/.env 走, 行为不变。
  */
@@ -690,15 +690,15 @@ async function buildPluginUploadEnvOverride(user: string): Promise<Record<string
   const overrides: Record<string, string> = {}
   // host: 优先环境变量 (部署侧 PORT), 缺省 3000
   const localPort = process.env.PORT || process.env.NEXT_PORT || '3000'
-  overrides.SKILL_INSIGHT_HOST = `http://127.0.0.1:${localPort}`
+  overrides.AGENT_INSIGHT_HOST = `http://127.0.0.1:${localPort}`
   // api key: 查触发 user 在 DB 里登记的 apiKey, 让 plugin 上报数据时归这个 user
   try {
     const u = (await db.findUserByUsername(user)) as { apiKey?: string } | null
     if (u?.apiKey) {
-      overrides.SKILL_INSIGHT_API_KEY = u.apiKey
+      overrides.AGENT_INSIGHT_API_KEY = u.apiKey
     } else {
       console.warn(
-        `[opencode:${user}] user not in DB or has no apiKey — plugin 数据将仍按 process.env / ~/.skill-insight/.env 走, 可能归属错误`,
+        `[opencode:${user}] user not in DB or has no apiKey — plugin 数据将仍按 process.env / ~/.agent-insight/.env 走, 可能归属错误`,
       )
     }
   } catch (e) {
@@ -733,7 +733,7 @@ async function startServerForUser(
   // 把 plugin upload 用的 apiKey 也算进 hash —— user 在 UI 改 apiKey 后老实例
   // 会继续用旧 key 上报数据,被 /api/ingest/upload 401 reject,数据丢失。新 hash
   // 触发 ensureOpencodeServer 重启实例,新进程拿新 apiKey。
-  const configHash = baseConfigHash + '|upload:' + (pluginUploadEnv.SKILL_INSIGHT_API_KEY || 'no-key')
+  const configHash = baseConfigHash + '|upload:' + (pluginUploadEnv.AGENT_INSIGHT_API_KEY || 'no-key')
 
   const proc = spawn(
     binary,

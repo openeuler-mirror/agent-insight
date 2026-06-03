@@ -23,7 +23,7 @@ Benchmarking platform for evaluating AI skill effectiveness. Runs tasks via [Har
 | `MAX_PARALLEL` | Max parallel harbor tasks for steps 1 and 6 |
 | `RUNS` | Number of runs per task batch (steps 1 and 6) |
 | `<MODEL>_API_KEY` | Provider key matching `MODEL`'s prefix (e.g. `DEEPSEEK_API_KEY` for `deepseek/*`). See `scripts/check_api_keys.sh` for the mapping. |
-| `SKILL_INSIGHT_BASE_URL` | Witty service URL used by `import_skills.sh` |
+| `AGENT_INSIGHT_BASE_URL` | Witty service URL used by `import_skills.sh` |
 
 `BASE_DIR` is auto-detected from the script's location and exported before `.env` is sourced — `.env` may interpolate it (e.g. `TASKS_INIT_DIR=${BASE_DIR}/tasks_init`) but should not redefine it.
 
@@ -49,7 +49,7 @@ $EDITOR witty-integration/benchmark_tasks.yaml   # comment out tasks you don't w
 
 # 5. Configure the Witty integration credentials used inside task containers
 cp witty-integration/.env.template witty-integration/.env
-$EDITOR witty-integration/.env                   # SKILL_INSIGHT_API_KEY
+$EDITOR witty-integration/.env                   # AGENT_INSIGHT_API_KEY
 
 # 6. Prepare tasks_init/ from the selection (copies from tasks/ + injects opencode integration)
 bash witty-integration/prepare-benchmark-tasks.sh

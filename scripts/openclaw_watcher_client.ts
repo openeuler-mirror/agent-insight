@@ -227,8 +227,8 @@ function loadSkillInsightConfig(): { apiKey: string; host: string } {
         for (const envPath of [path.join(os.homedir(), '.agent-insight', '.env'), path.join(os.homedir(), '.skill-insight', '.env')]) {
             if (!fs.existsSync(envPath)) continue;
             const content = fs.readFileSync(envPath, 'utf-8');
-            const apiKeyMatch = content.match(/SKILL_INSIGHT_API_KEY=(.*)/);
-            const hostMatch = content.match(/SKILL_INSIGHT_HOST=(.*)/);
+            const apiKeyMatch = content.match(/AGENT_INSIGHT_API_KEY=(.*)/);
+            const hostMatch = content.match(/AGENT_INSIGHT_HOST=(.*)/);
             if (apiKeyMatch && apiKeyMatch[1]) {
                 config.apiKey = apiKeyMatch[1].trim();
             }
