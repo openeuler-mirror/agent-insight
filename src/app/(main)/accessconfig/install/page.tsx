@@ -73,10 +73,11 @@ export default function AccessInstallPage() {
         const h = window.location.host;
         const baseUrl = `${protocol}//${h}`;
         const setupUrl = getApiUrl('/api/ingest/setup');
-        setLinuxCmd(`curl -sSf "${baseUrl}${setupUrl}" | bash`);
-        setWindowsCmd(`irm "${baseUrl}${setupUrl}" | iex`);
+        const keyQuery = apiKey ? `?key=${encodeURIComponent(apiKey)}` : '';
+        setLinuxCmd(`curl -sSf "${baseUrl}${setupUrl}${keyQuery}" | bash`);
+        setWindowsCmd(`irm "${baseUrl}${setupUrl}${keyQuery}" | iex`);
         setHost(baseUrl);
-    }, []);
+    }, [apiKey]);
 
     const handleCopy = async (text: string, key: string) => {
         // 不弹任何提示——成功就让按钮变绿,失败也静默
@@ -124,9 +125,9 @@ export default function AccessInstallPage() {
                     <div style={introRow}>
                         <p style={descText}>
                             {isZh ? (
-                                <>在终端中执行下面对应操作系统的<b style={descStrong}>一行命令</b>,即可把客户端接入平台并自动配置 <code style={inlineCode}>SKILL_INSIGHT_HOST</code> 与 <code style={inlineCode}>SKILL_INSIGHT_API_KEY</code>。脚本运行中会提示你输入 API Key —— 从右侧面板复制粘贴即可。</>
+                                <>在终端中执行下面对应操作系统的<b style={descStrong}>一行命令</b>,即可把客户端接入平台并自动配置 <code style={inlineCode}>SKILL_INSIGHT_HOST</code> 与 <code style={inlineCode}>SKILL_INSIGHT_API_KEY</code>。</>
                             ) : (
-                                <>Run the matching <b style={descStrong}>one-liner</b> in your terminal to install the client. It auto-configures <code style={inlineCode}>SKILL_INSIGHT_HOST</code> and <code style={inlineCode}>SKILL_INSIGHT_API_KEY</code>. When the script prompts for an API key, copy it from the right panel.</>
+                                <>Run the matching <b style={descStrong}>one-liner</b> in your terminal to install the client. It auto-configures <code style={inlineCode}>SKILL_INSIGHT_HOST</code> and <code style={inlineCode}>SKILL_INSIGHT_API_KEY</code>.</>
                             )}
                         </p>
                     </div>

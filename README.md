@@ -70,13 +70,13 @@ cd agent-insight
 npm install
 
 # 开发模式
-bash scripts/restart_dev.sh
+bash scripts/develop_start.sh
 
 # 生产模式
-bash scripts/restart.sh
+bash scripts/start.sh
 
 # 配置数据上报路径
-curl -sSf http://<IP>:<PORT>/api/setup | bash
+curl -sSf "http://<IP>:<PORT>/api/setup?key=<API_KEY>" | bash
 ```
 
 **启动服务**
@@ -85,10 +85,10 @@ curl -sSf http://<IP>:<PORT>/api/setup | bash
 cd agent-insight
 
 # 开发模式
-bash scripts/restart_dev.sh
+bash scripts/develop_start.sh
 
 # 生产模式
-bash scripts/restart.sh
+bash scripts/start.sh
 ```
 
 **访问看板**
@@ -109,22 +109,19 @@ bash scripts/restart.sh
 2. 在 Agent 所在服务器执行安装命令：
 
    ```bash
-   curl -sSf "http://172.29.209.207:3000/api/ingest/setup" | bash
+   curl -sSf "http://172.29.209.207:3000/api/ingest/setup?key=<API_KEY>" | bash
    ```
 
 3. 选择 Agent 运行时。
    <p align="center"><img src="docs/images/guide-framework.png" alt="选择运行时" /></p>
 
-4. 粘贴在 **安装指导** 页面复制的 API Key。
-   <p align="center"><img src="docs/images/guide-apikey.png" alt="输入 API Key" /></p>
-
-5. 执行安装成功后提示的 Usage 命令，例如：
+4. 执行安装成功后提示的 Usage 命令，例如：
 
    ```bash
    opencode run 'hello'
    ```
 
-6. 在看板的 **链路追踪** 页面确认链路数据已生成，即表示客户端安装成功。
+5. 在看板的 **链路追踪** 页面确认链路数据已生成，即表示客户端安装成功。
    <p align="center"><img src="docs/images/trace.png" alt="链路追踪" /></p>
 
 ---

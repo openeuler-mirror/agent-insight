@@ -17,7 +17,7 @@ if [ ! -d data ]; then
   mkdir -p data
 fi
 
-echo "=== Restart Script Started ==="
+echo "=== Start Script Started ==="
 
 # Function to find PID using various tools
 find_pid_on_port() {
