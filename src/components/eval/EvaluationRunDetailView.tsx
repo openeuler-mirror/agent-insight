@@ -140,7 +140,7 @@ function getDisplayScore(result: TrajectoryResult, exec?: ExecutionRecord): numb
     if (!isEvaluationTerminal(result.status) || getEffectiveStatus(result) !== 'done' || isNoEvaluableCase(result)) return null;
     const traceScore = hasSelectedEvaluator(result, 'preset-agent-trace-quality') ? result.trajectoryScore : null;
     const answerScore = hasSelectedEvaluator(result, 'preset-agent-task-completion')
-        ? exec?.answer_score ?? result.resultEvaluationScore ?? null
+        ? result.resultEvaluationScore ?? exec?.answer_score ?? null
         : null;
     const derivedCustomScore = deriveCustomEvaluationScore(result);
     const hasCustom = Array.isArray(result.selectedEvaluators)
@@ -186,6 +186,12 @@ export default function EvaluationRunDetailView({ runId }: { runId: string }) {
     const [execMap, setExecMap] = useState<Map<string, ExecutionRecord>>(new Map());
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string>('');
+    const wantedExecIds = useMemo(
+        () => Array.from(new Set(
+            results.flatMap(r => [r.taskId, r.executionId]).filter(Boolean) as string[],
+        )),
+        [results],
+    );
 
     // 拉该 Run 的 results（轮询，因为可能 running）
     useEffect(() => {
@@ -218,23 +224,27 @@ export default function EvaluationRunDetailView({ runId }: { runId: string }) {
 
     // 拉 execution 元数据（按 traceId 批量）—— 简化为一次性拉用户全量执行记录后过滤
     useEffect(() => {
-        if (!user || results.length === 0) return;
-        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}`)
+        if (!user) return;
+        if (wantedExecIds.length === 0) return;
+        let stopped = false;
+        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&taskIds=${encodeURIComponent(wantedExecIds.join(','))}&includeEvaluations=0`)
             .then(r => r.json())
             .then((arr: ExecutionRecord[]) => {
-                if (!Array.isArray(arr)) return;
-                const wanted = new Set(
-                    results.flatMap(r => [r.taskId, r.executionId]).filter(Boolean) as string[],
-                );
+                if (stopped || !Array.isArray(arr)) return;
                 const m = new Map<string, ExecutionRecord>();
                 for (const r of arr) {
-                    if (r.task_id && wanted.has(r.task_id)) m.set(r.task_id, r);
-                    if (r.upload_id && wanted.has(r.upload_id)) m.set(r.upload_id, r);
+                    if (r.task_id) m.set(r.task_id, r);
+                    if (r.upload_id) m.set(r.upload_id, r);
                 }
                 setExecMap(m);
             })
-            .catch(() => undefined);
-    }, [user, results]);
+            .catch(() => {
+                if (!stopped) setExecMap(new Map());
+            });
+        return () => {
+            stopped = true;
+        };
+    }, [user, wantedExecIds]);
 
     function getExecutionAgent(r?: ExecutionRecord): string {
         if (!r) return '';
@@ -265,6 +275,7 @@ export default function EvaluationRunDetailView({ runId }: { runId: string }) {
             : new Date(Math.min(...results.map(r => new Date(r.createdAt).getTime()))).toISOString();
         return { total: results.length, done, running, failed, avg, startedAt, executionAgent, autoWatch };
     }, [results, execMap]);
+    const waitingForExecMeta = wantedExecIds.length > 0 && wantedExecIds.some(id => !execMap.has(id));
 
     if (loading) return <div style={{ padding: 24 }}>加载评测批次中...</div>;
 
@@ -356,7 +367,7 @@ export default function EvaluationRunDetailView({ runId }: { runId: string }) {
                                     onClick={() =>
                                         traceId &&
                                         router.push(
-                                            `/eval/trajectory/${encodeURIComponent(traceId)}?runId=${encodeURIComponent(runId)}&datasetId=${encodeURIComponent(r.datasetId)}`,
+                                            `/eval/trajectory/${encodeURIComponent(traceId)}?runId=${encodeURIComponent(runId)}&datasetId=${encodeURIComponent(r.datasetId)}&resultId=${encodeURIComponent(r.id)}`,
                                         )
                                     }
                                     style={{
@@ -374,6 +385,8 @@ export default function EvaluationRunDetailView({ runId }: { runId: string }) {
                                             <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                                 {exec.query || '(空)'}
                                             </div>
+                                        ) : waitingForExecMeta ? (
+                                            <span style={{ color: COLORS.textDisabled }}>加载中...</span>
                                         ) : (
                                             <span style={{ color: COLORS.textDisabled }}>(无 trace 输入)</span>
                                         )}
@@ -388,6 +401,8 @@ export default function EvaluationRunDetailView({ runId }: { runId: string }) {
                                                     {exec.framework} · {exec.model}
                                                 </div>
                                             </>
+                                        ) : waitingForExecMeta ? (
+                                            <span style={{ color: COLORS.textDisabled }}>加载中...</span>
                                         ) : (
                                             <span style={{ color: COLORS.textDisabled }}>(无 trace 元数据)</span>
                                         )}

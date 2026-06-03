@@ -1254,7 +1254,7 @@ export default function TrajectoryEvalCenter() {
                                                     : typeof r.customEvaluationScore === 'number';
                                                 const traceScore = hasTrace ? r.trajectoryScore : null;
                                                 const resultScore = hasResult
-                                                    ? (typeof r.resultEvaluationScore === 'number' ? r.resultEvaluationScore : (rec.answer_score ?? null))
+                                                    ? (typeof r.resultEvaluationScore === 'number' ? r.resultEvaluationScore : null)
                                                     : null;
                                                 const customScore = hasCustom ? (r.customEvaluationScore ?? null) : null;
                                                 const parts = [traceScore, resultScore, customScore]

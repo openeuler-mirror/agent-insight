@@ -16,6 +16,7 @@ interface GrayscaleConfig {
     versionAId?: string;
     versionBId?: string;
     selectedDatasetId?: string;
+    linkedDatasetIds?: string[];
     selectedCaseId?: string;
     selectedCaseIds?: string[];
     runCount?: number;
@@ -24,6 +25,7 @@ interface GrayscaleConfig {
     autoEval?: boolean;
     recordTriggerDetails?: boolean;
     evaluatorId?: string;
+    evaluators?: string[];
     latestResultAt?: string;
     // 关联到「评测执行」页的批次 ID (evaluatorRunId)。前端通过「+ 新增评测任务」对话框创建,
     // 后续启动评测时透传给 /api/eval/trajectory/run 作 evaluatorRunId append (下一步迭代)。
@@ -33,10 +35,13 @@ interface GrayscaleConfig {
 }
 
 function withDefaultConfig(config: GrayscaleConfig): GrayscaleConfig {
+    const evaluatorIds = normalizeAbEvaluators(config.evaluators || config.evaluationBatchEvaluators, config.evaluatorId);
     return {
         ...config,
         autoEval: true,
         recordTriggerDetails: true,
+        evaluatorId: evaluatorIds[0] || '',
+        evaluators: evaluatorIds,
     };
 }
 
@@ -45,6 +50,8 @@ interface RunResult {
     jobId?: string;
     evaluatorRunId?: string;
     evaluationResultId?: string;
+    evaluationClaimId?: string;
+    evaluationStartedAt?: string;
     evaluationTraceId?: string;
     timeCost?: string;
     tokenUsage?: number;
@@ -52,6 +59,7 @@ interface RunResult {
     sessionId?: string;
     score?: number;
     tier?: 'good' | 'warn' | 'poor';
+    evaluations?: RunEvaluation[];
     runIndex: number;
     roundIndex: number;
     caseId: string;
@@ -66,6 +74,31 @@ interface RunResult {
     completedAt?: string;
 }
 
+type RunEvaluationStatus = 'pending' | 'running' | 'done' | 'failed';
+
+interface RunEvaluation {
+    evaluatorId: string;
+    evaluatorName: string;
+    status: RunEvaluationStatus;
+    evaluatorRunId?: string;
+    evaluationResultId?: string;
+    evaluationTraceId?: string;
+    score?: number;
+    errorMessage?: string;
+}
+
+interface GrayscaleBinding {
+    source: 'grayscale-ab';
+    grayscaleTaskId: string;
+    caseId: string;
+    side: Side;
+    runIndex: number;
+    roundIndex: number;
+    executionTraceId: string;
+    evaluationClaimId: string;
+    evaluationAttempt: number;
+}
+
 interface PerVersionState {
     status: CaseStatus;
     jobId?: string;
@@ -76,6 +109,7 @@ interface PerVersionState {
     sessionId?: string;
     score?: number;
     tier?: 'good' | 'warn' | 'poor';
+    evaluations?: RunEvaluation[];
     runs?: RunResult[];
     runCount?: number;
     traceIds?: string[];
@@ -130,13 +164,14 @@ interface TrajectoryResultRow {
 
 interface TrajectoryApiResult {
     id?: string;
+    evaluatorRunId?: string;
     status?: string;
     taskId?: string | null;
     trajectoryScore?: number | null;
     resultEvaluationScore?: number | null;
-    customEvaluationScore?: number | null;
     errorMessage?: string | null;
     rawAnalysis?: unknown;
+    updatedAt?: string;
 }
 
 type TrajectoryResultStatus = 'pending' | 'running' | 'done' | 'failed' | string;
@@ -162,13 +197,13 @@ interface ExecutionMetricRow {
 interface GrayscalePrisma {
     grayscaleTask: {
         findFirst(args: { where: { id: string; user: string } }): Promise<GrayscaleTaskRow | null>;
-        updateMany(args: { where: { id: string; user: string }; data: Record<string, string> }): Promise<unknown>;
+        updateMany(args: { where: { id: string; user: string; caseStatesJson?: string }; data: Record<string, string> }): Promise<{ count: number }>;
     };
     skillVersion: {
         findFirst(args: { where: { id: string; skillId: string }; include: { Skill: true } }): Promise<SkillVersionRow | null>;
     };
     trajectoryEvalResult: {
-        findMany(args: { where: { user?: string; evaluatorRunId: { in: string[] } } }): Promise<TrajectoryResultRow[]>;
+        findMany(args: { where: Record<string, unknown> }): Promise<TrajectoryResultRow[]>;
         updateMany(args: {
             where: { user?: string; evaluatorRunId?: string; id?: { in: string[] }; status?: { in: string[] }; taskId?: { in: string[] } };
             data: { status: string; errorMessage?: string };
@@ -203,6 +238,13 @@ declare global {
 }
 
 const NONE_VERSION_ID = '__NONE__';
+const TASK_COMPLETION_EVALUATOR_ID = 'preset-agent-task-completion';
+const TRACE_EVALUATOR_ID = 'preset-agent-trace-quality';
+const SUPPORTED_AB_EVALUATORS = new Set([TASK_COMPLETION_EVALUATOR_ID, TRACE_EVALUATOR_ID]);
+const AB_EVALUATOR_NAMES: Record<string, string> = {
+    [TASK_COMPLETION_EVALUATOR_ID]: 'Agent 任务完成度',
+    [TRACE_EVALUATOR_ID]: 'Agent 轨迹质量',
+};
 const STALE_EVALUATION_MS = 15 * 60 * 1000;
 // 本次 next.js server 进程的启动时间。TrajectoryEvalResult.updatedAt 早于此
 // 时间但还停在 pending/running 的, 必然是上一个 server 生命周期遗留的孤儿
@@ -217,6 +259,9 @@ const SERVER_START_TIME: number = (() => {
 })();
 const MAX_EXECUTION_RETRIES = 2;
 const MAX_EVALUATION_RETRIES = 2;
+// caseStatesJson 整份回写的乐观锁重试次数。评测/执行高并发(默认 5 个 slot)时,
+// 多个 flow 各自 load→改→写整份 JSON, 不做 CAS 会 lost update; 冲突就重新 load 再算。
+const PERSIST_CAS_MAX_RETRIES = 5;
 const GRAYSCALE_AGENT_TIMEOUT_MS = Number(process.env.GRAYSCALE_AGENT_TIMEOUT_MS) || 3 * 60 * 1000;
 const GRAYSCALE_AGENT_IDLE_TIMEOUT_MS = Number(process.env.GRAYSCALE_AGENT_IDLE_TIMEOUT_MS) || 45 * 1000;
 
@@ -251,16 +296,152 @@ function safeParse<T>(value: string | null | undefined, fallback: T): T {
     }
 }
 
+function cloneJson<T>(value: T): T {
+    return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function buildEvaluationClaimId(): string {
+    return `gclaim_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function normalizeGrayscaleBinding(value: unknown): GrayscaleBinding | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const raw = value as Record<string, unknown>;
+    const source = String(raw.source || '').trim();
+    const grayscaleTaskId = String(raw.grayscaleTaskId || '').trim();
+    const caseId = String(raw.caseId || '').trim();
+    const side = String(raw.side || '').trim();
+    const executionTraceId = String(raw.executionTraceId || '').trim();
+    const evaluationClaimId = String(raw.evaluationClaimId || '').trim();
+    const runIndex = typeof raw.runIndex === 'number' && Number.isFinite(raw.runIndex)
+        ? Math.floor(raw.runIndex)
+        : Number.NaN;
+    const roundIndex = typeof raw.roundIndex === 'number' && Number.isFinite(raw.roundIndex)
+        ? Math.floor(raw.roundIndex)
+        : Number.NaN;
+    const evaluationAttempt = typeof raw.evaluationAttempt === 'number' && Number.isFinite(raw.evaluationAttempt)
+        ? Math.floor(raw.evaluationAttempt)
+        : Number.NaN;
+    if (
+        source !== 'grayscale-ab'
+        || !grayscaleTaskId
+        || !caseId
+        || (side !== 'a' && side !== 'b')
+        || !executionTraceId
+        || !evaluationClaimId
+        || !Number.isFinite(runIndex)
+        || !Number.isFinite(roundIndex)
+        || !Number.isFinite(evaluationAttempt)
+    ) {
+        return null;
+    }
+    return {
+        source: 'grayscale-ab',
+        grayscaleTaskId,
+        caseId,
+        side: side as Side,
+        runIndex,
+        roundIndex,
+        executionTraceId,
+        evaluationClaimId,
+        evaluationAttempt,
+    };
+}
+
+function readGrayscaleBindingFromRawAnalysisJson(rawAnalysisJson: string | null | undefined): GrayscaleBinding | null {
+    const raw = safeParse<Record<string, unknown> | null>(rawAnalysisJson, null);
+    return raw && typeof raw === 'object' ? normalizeGrayscaleBinding(raw.grayscaleBinding) : null;
+}
+
+function readGrayscaleBindingFromRaw(rawAnalysis: unknown): GrayscaleBinding | null {
+    return normalizeGrayscaleBinding(
+        rawAnalysis && typeof rawAnalysis === 'object' && !Array.isArray(rawAnalysis)
+            ? (rawAnalysis as Record<string, unknown>).grayscaleBinding
+            : null,
+    );
+}
+
+function matchesGrayscaleBinding(
+    binding: GrayscaleBinding | null,
+    args: {
+        taskId: string;
+        caseId: string;
+        side: Side;
+        run: Pick<RunResult, 'runIndex' | 'roundIndex' | 'sessionId' | 'evaluationClaimId'>;
+        expectedClaimId?: string;
+    },
+): boolean {
+    if (!binding) return false;
+    return binding.source === 'grayscale-ab'
+        && binding.grayscaleTaskId === args.taskId
+        && binding.caseId === args.caseId
+        && binding.side === args.side
+        && binding.runIndex === args.run.runIndex
+        && binding.roundIndex === args.run.roundIndex
+        && binding.executionTraceId === String(args.run.sessionId || '').trim()
+        && binding.evaluationClaimId === String(args.expectedClaimId || args.run.evaluationClaimId || '').trim();
+}
+
+function findRunIndex(runs: RunResult[] | undefined, target: Pick<RunResult, 'runIndex' | 'roundIndex' | 'caseId'>): number {
+    return (runs || []).findIndex(run => (
+        run.runIndex === target.runIndex
+        && run.roundIndex === target.roundIndex
+        && run.caseId === target.caseId
+    ));
+}
+
 function scoreTier(score: number): 'good' | 'warn' | 'poor' {
     return score >= 80 ? 'good' : score >= 50 ? 'warn' : 'poor';
 }
 
-function compositeScore(result: { trajectoryScore?: number | null; resultEvaluationScore?: number | null; customEvaluationScore?: number | null }): number {
-    const custom = typeof result.customEvaluationScore === 'number' ? result.customEvaluationScore : null;
-    const traj = typeof result.trajectoryScore === 'number' ? result.trajectoryScore : null;
-    const task = typeof result.resultEvaluationScore === 'number' ? result.resultEvaluationScore : null;
-    const base = custom ?? ((traj != null && task != null) ? (traj + task) / 2 : (traj ?? task ?? 0));
-    return Math.round(base * 100);
+function normalizeAbEvaluators(value: unknown, fallback?: string): string[] {
+    const raw = Array.isArray(value) ? value : value ? [value] : [];
+    const ids = Array.from(new Set(
+        raw.map(item => String(item || '').trim())
+            .map(item => item === 'trace-quality-evaluator' ? TRACE_EVALUATOR_ID : item)
+            .filter(item => SUPPORTED_AB_EVALUATORS.has(item)),
+    ));
+    if (ids.length > 0) return ids;
+    const fallbackId = fallback === 'trace-quality-evaluator' ? TRACE_EVALUATOR_ID : String(fallback || '').trim();
+    return SUPPORTED_AB_EVALUATORS.has(fallbackId) ? [fallbackId] : [];
+}
+
+function getConfiguredDatasetIds(config: GrayscaleConfig): string[] {
+    return Array.from(new Set([
+        ...(Array.isArray(config.linkedDatasetIds) ? config.linkedDatasetIds : []),
+        config.selectedDatasetId || '',
+    ].map(item => String(item || '').trim()).filter(Boolean)));
+}
+
+async function loadConfiguredCaseMap(user: string, config: GrayscaleConfig): Promise<Map<string, { datasetId: string; caseEntry: DatasetCase }>> {
+    const datasetIds = getConfiguredDatasetIds(config);
+    const caseMap = new Map<string, { datasetId: string; caseEntry: DatasetCase }>();
+    for (const datasetId of datasetIds) {
+        const dataset = await findAgentDataset(user, datasetId).catch(() => null);
+        if (!dataset) continue;
+        for (const caseEntry of dataset.cases) {
+            if (!caseMap.has(caseEntry.id)) {
+                caseMap.set(caseEntry.id, { datasetId: dataset.id, caseEntry });
+            }
+        }
+    }
+    return caseMap;
+}
+
+function aggregateEvaluationScore(evaluations: RunEvaluation[] | undefined): number | undefined {
+    const scores = (evaluations || [])
+        .filter(item => item.status === 'done' && typeof item.score === 'number' && Number.isFinite(item.score))
+        .map(item => item.score as number);
+    if (scores.length === 0) return undefined;
+    return Math.round(scores.reduce((sum, score) => sum + score, 0) / scores.length);
+}
+
+function getFailedOrMissingEvaluatorIds(run: RunResult, evaluatorIds: string[]): string[] {
+    const existing = new Map((run.evaluations || []).map(item => [item.evaluatorId, item]));
+    return evaluatorIds.filter(id => {
+        const item = existing.get(id);
+        return !item || item.status === 'failed' || item.status === 'pending';
+    });
 }
 
 function pickNumber(value: unknown): number | null {
@@ -274,12 +455,6 @@ function pickEvaluationResultScore(rawAnalysisJson: string | null | undefined): 
         ? raw.resultEvaluation as Record<string, unknown>
         : null;
     return pickNumber(resultEvaluation?.score) ?? pickNumber(raw.score);
-}
-
-function pickCustomEvaluationScore(rawAnalysisJson: string | null | undefined): number | null {
-    const raw = safeParse<Record<string, unknown> | null>(rawAnalysisJson, null);
-    if (!raw || typeof raw !== 'object') return null;
-    return pickNumber(raw.customEvaluationScore);
 }
 
 function pickEvaluationTraceId(rawAnalysisJson: string | null | undefined): string {
@@ -298,22 +473,77 @@ function pickEvaluationTraceId(rawAnalysisJson: string | null | undefined): stri
     return '';
 }
 
-function pickEvaluationTraceIdFromRaw(rawAnalysis: unknown): string {
-    const raw = rawAnalysis && typeof rawAnalysis === 'object' && !Array.isArray(rawAnalysis)
-        ? rawAnalysis as Record<string, unknown>
-        : null;
-    if (!raw) return '';
-    const resultEvaluation = raw.resultEvaluation && typeof raw.resultEvaluation === 'object'
-        ? raw.resultEvaluation as Record<string, unknown>
-        : null;
-    const candidates = [
-        raw.evaluatorSessionId,
-        resultEvaluation?.evaluatorSessionId,
-    ];
-    for (const candidate of candidates) {
-        if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
+function pickTraceEvaluationTraceId(rawAnalysisJson: string | null | undefined): string {
+    const raw = safeParse<Record<string, unknown> | null>(rawAnalysisJson, null);
+    if (!raw || typeof raw !== 'object') return '';
+    const candidate = raw.evaluatorSessionId;
+    return typeof candidate === 'string' && candidate.trim() ? candidate.trim() : '';
+}
+
+function buildRunEvaluationsFromRow(row: TrajectoryResultRow, requestedEvaluatorIds?: string[]): RunEvaluation[] {
+    const selected = normalizeAbEvaluators(
+        requestedEvaluatorIds && requestedEvaluatorIds.length > 0
+            ? requestedEvaluatorIds
+            : selectedEvaluators(row.rawAnalysisJson),
+    );
+    const resultScore = pickEvaluationResultScore(row.rawAnalysisJson);
+    const resultError = pickResultEvaluationError(row.rawAnalysisJson);
+    const resultTraceId = pickEvaluationTraceId(row.rawAnalysisJson);
+    const traceScore = typeof row.trajectoryScore === 'number' ? row.trajectoryScore : null;
+    const traceTraceId = pickTraceEvaluationTraceId(row.rawAnalysisJson);
+    return selected.map(evaluatorId => {
+        if (row.status === 'pending' || row.status === 'running') {
+            return {
+                evaluatorId,
+                evaluatorName: AB_EVALUATOR_NAMES[evaluatorId] || evaluatorId,
+                status: row.status === 'running' ? 'running' : 'pending',
+                evaluatorRunId: row.evaluatorRunId,
+                evaluationResultId: row.id,
+            };
+        }
+        if (evaluatorId === TASK_COMPLETION_EVALUATOR_ID) {
+            const score = typeof resultScore === 'number' ? Math.round(resultScore * 100) : undefined;
+            const failed = row.status === 'failed' || typeof score !== 'number';
+            return {
+                evaluatorId,
+                evaluatorName: AB_EVALUATOR_NAMES[evaluatorId],
+                status: failed ? 'failed' : 'done',
+                evaluatorRunId: row.evaluatorRunId,
+                evaluationResultId: row.id,
+                evaluationTraceId: resultTraceId || undefined,
+                score,
+                errorMessage: failed ? (resultError || row.errorMessage || '任务完成度评测失败') : undefined,
+            };
+        }
+        const score = typeof traceScore === 'number' ? Math.round(traceScore * 100) : undefined;
+        const failed = row.status === 'failed' || typeof score !== 'number';
+        return {
+            evaluatorId,
+            evaluatorName: AB_EVALUATOR_NAMES[evaluatorId] || evaluatorId,
+            status: failed ? 'failed' : 'done',
+            evaluatorRunId: row.evaluatorRunId,
+            evaluationResultId: row.id,
+            evaluationTraceId: traceTraceId || undefined,
+            score,
+            errorMessage: failed ? (row.errorMessage || '轨迹质量评测失败') : undefined,
+        };
+    });
+}
+
+function isNewerTrajectoryRow(candidate: TrajectoryResultRow, current: TrajectoryResultRow | undefined): boolean {
+    if (!current) return true;
+    const candidateTime = candidate.updatedAt instanceof Date ? candidate.updatedAt.getTime() : 0;
+    const currentTime = current.updatedAt instanceof Date ? current.updatedAt.getTime() : 0;
+    return candidateTime >= currentTime;
+}
+
+function mergeRunEvaluations(existing: RunEvaluation[] | undefined, incoming: RunEvaluation[]): RunEvaluation[] {
+    const byId = new Map<string, RunEvaluation>();
+    for (const item of existing || []) {
+        if (SUPPORTED_AB_EVALUATORS.has(item.evaluatorId)) byId.set(item.evaluatorId, item);
     }
-    return '';
+    for (const item of incoming) byId.set(item.evaluatorId, item);
+    return Array.from(byId.values());
 }
 
 function getResultEvaluation(rawAnalysisJson: string | null | undefined): Record<string, unknown> | null {
@@ -348,7 +578,7 @@ function isIncompleteDoneEvaluation(row: TrajectoryResultRow): string {
     ));
     const hasScore = typeof row.trajectoryScore === 'number'
         || pickEvaluationResultScore(row.rawAnalysisJson) != null
-        || pickCustomEvaluationScore(row.rawAnalysisJson) != null;
+        || buildRunEvaluationsFromRow(row).some(item => item.status === 'done' && typeof item.score === 'number');
     const hasResultEvaluation = Boolean(getResultEvaluation(row.rawAnalysisJson));
     const hasEvaluationTrace = Boolean(pickEvaluationTraceId(row.rawAnalysisJson));
     if (requiresEvaluatorTrace && !hasEvaluationTrace) {
@@ -509,17 +739,115 @@ async function loadTask(taskId: string, user: string) {
         ...task,
         configJson,
         caseStatesJson: safeParse<CaseStates>(task.caseStatesJson, {}),
+        // 读到的原始 caseStatesJson 串, 用于整份回写时的乐观锁 compare-and-swap。
+        rawCaseStatesJson: task.caseStatesJson,
     };
 }
 
-async function persistTaskState(taskId: string, user: string, config: GrayscaleConfig, states: CaseStates) {
-    await (prisma as unknown as GrayscalePrisma).grayscaleTask.updateMany({
-        where: { id: taskId, user },
+/**
+ * 整份回写 caseStatesJson。传 expectedCaseStatesJson 时走乐观锁: 仅当库里的
+ * caseStatesJson 仍等于我们读到的快照才写入, 否则返回 false(说明期间有别的
+ * writer 改过, 我们这份是基于旧快照算的, 不能覆盖)。不传则无条件写(向后兼容)。
+ */
+async function persistTaskState(
+    taskId: string,
+    user: string,
+    config: GrayscaleConfig,
+    states: CaseStates,
+    expectedCaseStatesJson?: string,
+): Promise<boolean> {
+    const res = await (prisma as unknown as GrayscalePrisma).grayscaleTask.updateMany({
+        where: {
+            id: taskId,
+            user,
+            ...(expectedCaseStatesJson != null ? { caseStatesJson: expectedCaseStatesJson } : {}),
+        },
         data: {
             configJson: JSON.stringify(withDefaultConfig(config)),
             caseStatesJson: JSON.stringify(states),
         },
     });
+    return res.count > 0;
+}
+
+/** 构造 GET 响应: 去掉仅供内部乐观锁用的 rawCaseStatesJson, 不外泄到前端 payload。 */
+function respondTask(
+    task: NonNullable<Awaited<ReturnType<typeof loadTask>>>,
+    activeRun: ActiveGrayscaleRun | null,
+) {
+    const { rawCaseStatesJson, ...rest } = task;
+    void rawCaseStatesJson;
+    return NextResponse.json({ ...rest, activeRun });
+}
+
+async function persistRunStatePatch(args: {
+    taskId: string;
+    user: string;
+    config: GrayscaleConfig;
+    states: CaseStates;
+    caseId: string;
+    side: Side;
+    nextRun: RunResult;
+    expectedEvaluationClaimId?: string;
+    sidePatch?: Partial<PerVersionState>;
+    touchLatestResultAt?: boolean;
+}): Promise<boolean> {
+    ensureCaseState(args.states, args.caseId);
+    const localSide = args.states[args.caseId][args.side];
+    const localIndex = findRunIndex(localSide.runs, args.nextRun);
+    if (localIndex >= 0) {
+        localSide.runs![localIndex] = cloneJson(args.nextRun);
+    }
+    if (args.sidePatch) Object.assign(localSide, args.sidePatch);
+    args.states[args.caseId][args.side] = rebuildSideAggregate(
+        localSide,
+        localSide.runCount || localSide.runs?.length || 0,
+    );
+
+    // 乐观锁 + 重试: 每次都重新 load 一份最新快照, 把本次 nextRun 合并进去, 再以
+    // 读到的原始 JSON 串做 CAS 写入。若期间别的并发 flow 改了同一 task(CAS 落空),
+    // 就重新 load 再算一遍, 直到写成功或重试用尽 —— 杜绝"后写覆盖前写"的 lost update。
+    for (let attempt = 0; attempt < PERSIST_CAS_MAX_RETRIES; attempt++) {
+        const latestTask = await loadTask(args.taskId, args.user);
+        if (!latestTask) return false;
+        ensureCaseState(latestTask.caseStatesJson, args.caseId);
+        const latestSide = latestTask.caseStatesJson[args.caseId][args.side];
+        const latestIndex = findRunIndex(latestSide.runs, args.nextRun);
+        if (latestIndex < 0) return false;
+
+        const currentRun = latestSide.runs![latestIndex];
+        if (
+            args.expectedEvaluationClaimId
+            && currentRun.evaluationClaimId
+            && currentRun.evaluationClaimId !== args.expectedEvaluationClaimId
+        ) {
+            args.states[args.caseId][args.side] = cloneJson(latestTask.caseStatesJson[args.caseId][args.side]);
+            return false;
+        }
+
+        latestSide.runs![latestIndex] = cloneJson(args.nextRun);
+        if (args.sidePatch) Object.assign(latestSide, args.sidePatch);
+        latestTask.caseStatesJson[args.caseId][args.side] = rebuildSideAggregate(
+            latestSide,
+            latestSide.runCount || latestSide.runs?.length || 0,
+        );
+        if (args.touchLatestResultAt) markLatestGrayResultAt(latestTask.configJson);
+        const written = await persistTaskState(
+            args.taskId,
+            args.user,
+            latestTask.configJson,
+            latestTask.caseStatesJson,
+            latestTask.rawCaseStatesJson,
+        );
+        if (written) {
+            // 把刚落库的权威结果同步回内存共享对象, 让 caller 继续用最新值。
+            args.states[args.caseId][args.side] = cloneJson(latestTask.caseStatesJson[args.caseId][args.side]);
+            return true;
+        }
+        // CAS 落空, 退避一小下再重试(带递增 jitter, 避免 hot loop)。
+        await new Promise(resolve => setTimeout(resolve, 15 + attempt * 20));
+    }
+    return false;
 }
 
 function markLatestGrayResultAt(config: GrayscaleConfig) {
@@ -528,6 +856,40 @@ function markLatestGrayResultAt(config: GrayscaleConfig) {
 
 function markRunCompleted(run: RunResult, completedAt = new Date().toISOString()) {
     run.completedAt = completedAt;
+}
+
+function applyTrajectoryRowToRun(run: RunResult, row: TrajectoryResultRow, fallbackEvaluatorRunId?: string) {
+    const nextEvaluations = mergeRunEvaluations(run.evaluations, buildRunEvaluationsFromRow(row));
+    const nextScore = aggregateEvaluationScore(nextEvaluations);
+    const hasFailedEvaluation = nextEvaluations.some(item => item.status === 'failed');
+    const hasRunningEvaluation = nextEvaluations.some(item => item.status === 'pending' || item.status === 'running');
+    run.evaluatorRunId = row.evaluatorRunId || fallbackEvaluatorRunId || run.evaluatorRunId;
+    run.evaluationResultId = row.id || run.evaluationResultId;
+    run.evaluationTraceId = pickEvaluationTraceId(row.rawAnalysisJson) || pickTraceEvaluationTraceId(row.rawAnalysisJson) || run.evaluationTraceId;
+    run.evaluations = nextEvaluations;
+    run.status = hasRunningEvaluation
+        ? 'evaluating'
+        : hasFailedEvaluation
+            ? 'fail'
+            : typeof nextScore === 'number'
+                ? 'pass'
+                : 'fail';
+    if (typeof nextScore === 'number') {
+        run.score = nextScore;
+        run.tier = scoreTier(nextScore);
+    } else {
+        delete run.score;
+        delete run.tier;
+    }
+    if (run.status === 'fail') {
+        run.output = row.errorMessage
+            || nextEvaluations.find(item => item.status === 'failed')?.errorMessage
+            || run.output
+            || '评测失败';
+    }
+    if (row.status === 'done' || row.status === 'failed') {
+        markRunCompleted(run, row.updatedAt instanceof Date ? row.updatedAt.toISOString() : undefined);
+    }
 }
 
 function validateTaskSkillBinding(task: Awaited<ReturnType<typeof loadTask>>) {
@@ -738,15 +1100,12 @@ async function reconcileFinishedExecutions(args: {
     config: GrayscaleConfig;
     states: CaseStates;
 }): Promise<boolean> {
-    const datasetId = String(args.config.selectedDatasetId || '');
-    if (!datasetId) return false;
-    const dataset = await findAgentDataset(args.user, datasetId).catch(() => null);
-    if (!dataset) return false;
+    const caseConfigMap = await loadConfiguredCaseMap(args.user, args.config);
+    if (caseConfigMap.size === 0) return false;
 
     const pendingTargets: Array<{ caseId: string; side: Side; run: RunResult; query: string; version: ResolvedVersion }> = [];
     const versionA = await resolveVersion(args.config.skillId, args.config.versionAId);
     const versionB = await resolveVersion(args.config.skillId, args.config.versionBId);
-    const caseMap = new Map<string, DatasetCase>(dataset.cases.map(c => [c.id, c]));
     const claimedSessionIds = new Set(
         Object.values(args.states)
             .flatMap(state => (['a', 'b'] as Side[]).flatMap(side => state[side].runs || []))
@@ -755,7 +1114,7 @@ async function reconcileFinishedExecutions(args: {
     );
 
     for (const [caseId, state] of Object.entries(args.states)) {
-        const query = normalizeText(caseMap.get(caseId)?.input);
+        const query = normalizeText(caseConfigMap.get(caseId)?.caseEntry.input);
         if (!query) continue;
         for (const side of ['a', 'b'] as Side[]) {
             const version = side === 'a' ? versionA : versionB;
@@ -832,7 +1191,7 @@ async function reconcileFinishedExecutions(args: {
     return changed;
 }
 
-async function reconcileFinishedEvaluations(user: string, config: GrayscaleConfig, states: CaseStates): Promise<boolean> {
+async function reconcileFinishedEvaluations(taskId: string, user: string, config: GrayscaleConfig, states: CaseStates): Promise<boolean> {
     const evaluatorRunIds = Array.from(new Set(
         Object.values(states)
             .flatMap(state => (['a', 'b'] as Side[]).flatMap(side => [
@@ -841,10 +1200,22 @@ async function reconcileFinishedEvaluations(user: string, config: GrayscaleConfi
             ]))
             .filter((id): id is string => Boolean(id)),
     ));
-    if (evaluatorRunIds.length === 0) return false;
+    const evaluationResultIds = Array.from(new Set(
+        Object.values(states)
+            .flatMap(state => (['a', 'b'] as Side[]).flatMap(side =>
+                (state[side].runs || []).map(run => run.evaluationResultId),
+            ))
+            .filter((id): id is string => Boolean(id)),
+    ));
+    if (evaluatorRunIds.length === 0 && evaluationResultIds.length === 0) return false;
 
+    const rowSelectors: Record<string, unknown>[] = [];
+    if (evaluatorRunIds.length > 0) rowSelectors.push({ evaluatorRunId: { in: evaluatorRunIds } });
+    if (evaluationResultIds.length > 0) rowSelectors.push({ id: { in: evaluationResultIds } });
     const rows = await (prisma as unknown as GrayscalePrisma).trajectoryEvalResult.findMany({
-        where: { user, evaluatorRunId: { in: evaluatorRunIds } },
+        where: rowSelectors.length === 1
+            ? { user, ...rowSelectors[0] }
+            : { user, OR: rowSelectors },
     });
     if (rows.length === 0) return false;
 
@@ -881,9 +1252,15 @@ async function reconcileFinishedEvaluations(user: string, config: GrayscaleConfi
         }
     }
 
-    const rowsByTaskId = new Map<string, TrajectoryResultRow>();
+    const rowsById = new Map<string, TrajectoryResultRow>();
+    const rowsByClaimId = new Map<string, TrajectoryResultRow>();
     for (const row of rows) {
-        if (row.taskId) rowsByTaskId.set(row.taskId, row);
+        if (row.id) rowsById.set(row.id, row);
+        const binding = readGrayscaleBindingFromRawAnalysisJson(row.rawAnalysisJson);
+        const claimId = binding?.evaluationClaimId || '';
+        if (claimId && isNewerTrajectoryRow(row, rowsByClaimId.get(claimId))) {
+            rowsByClaimId.set(claimId, row);
+        }
     }
 
     let changed = false;
@@ -891,29 +1268,39 @@ async function reconcileFinishedEvaluations(user: string, config: GrayscaleConfi
         for (const side of ['a', 'b'] as Side[]) {
             for (const run of state[side].runs || []) {
                 if (!run.sessionId) continue;
-                const row = rowsByTaskId.get(run.sessionId);
-                if (!row || (row.status !== 'done' && row.status !== 'failed')) continue;
-
-                run.evaluatorRunId = run.evaluatorRunId || state[side].evaluatorRunId;
-                run.evaluationResultId = row.id || run.evaluationResultId;
-                run.evaluationTraceId = pickEvaluationTraceId(row.rawAnalysisJson) || run.evaluationTraceId;
-
-                if (row.status === 'done') {
-                    const score = compositeScore({
-                        trajectoryScore: row.trajectoryScore,
-                        resultEvaluationScore: pickEvaluationResultScore(row.rawAnalysisJson),
-                        customEvaluationScore: pickCustomEvaluationScore(row.rawAnalysisJson),
-                    });
-                    if (run.status !== 'pass' || run.score !== score) changed = true;
-                    run.status = 'pass';
-                    run.score = score;
-                    run.tier = scoreTier(score);
-                    markRunCompleted(run, row.updatedAt instanceof Date ? row.updatedAt.toISOString() : undefined);
-                } else {
-                    if (run.status !== 'fail') changed = true;
-                    run.status = 'fail';
-                    run.output = row.errorMessage || run.output || '评测失败';
-                    markRunCompleted(run, row.updatedAt instanceof Date ? row.updatedAt.toISOString() : undefined);
+                const row = (run.evaluationResultId ? rowsById.get(run.evaluationResultId) : undefined)
+                    || (run.evaluationClaimId ? rowsByClaimId.get(run.evaluationClaimId) : undefined);
+                if (!row) continue;
+                const binding = readGrayscaleBindingFromRawAnalysisJson(row.rawAnalysisJson);
+                if (!matchesGrayscaleBinding(binding, { taskId, caseId: run.caseId, side, run })) {
+                    continue;
+                }
+                const before = JSON.stringify({
+                    status: run.status,
+                    evaluatorRunId: run.evaluatorRunId,
+                    evaluationResultId: run.evaluationResultId,
+                    evaluationTraceId: run.evaluationTraceId,
+                    score: run.score,
+                    tier: run.tier,
+                    evaluations: run.evaluations || [],
+                    output: run.output,
+                    completedAt: run.completedAt,
+                });
+                applyTrajectoryRowToRun(run, row, state[side].evaluatorRunId);
+                if (
+                    before !== JSON.stringify({
+                        status: run.status,
+                        evaluatorRunId: run.evaluatorRunId,
+                        evaluationResultId: run.evaluationResultId,
+                        evaluationTraceId: run.evaluationTraceId,
+                        score: run.score,
+                        tier: run.tier,
+                        evaluations: run.evaluations || [],
+                        output: run.output,
+                        completedAt: run.completedAt,
+                    })
+                ) {
+                    changed = true;
                 }
             }
             const next = rebuildSideAggregate(state[side], state[side].runCount || state[side].runs?.length || 0);
@@ -944,7 +1331,7 @@ async function runWithConcurrency<T>(items: T[], concurrency: number, worker: (i
 
 type ResolvedVersion = Awaited<ReturnType<typeof resolveVersion>>;
 type ExecutionTarget = { caseId: string; side: Side; roundIndex: number; runIndex: number; run: RunResult };
-type EvaluationTarget = { caseId: string; side: Side; run: RunResult };
+type EvaluationTarget = { caseId: string; side: Side; run: RunResult; evaluatorIds?: string[] };
 
 async function executeSingleAgentRun(args: {
     taskId: string;
@@ -974,6 +1361,7 @@ async function executeSingleAgentRun(args: {
     delete run.evaluationTraceId;
     delete run.score;
     delete run.tier;
+    delete run.evaluations;
     delete run.sessionId;
     delete run.traceIds;
     delete run.tokenUsage;
@@ -1095,7 +1483,17 @@ async function executeSingleAgentRun(args: {
     }
 }
 
-async function startSingleEvaluation(origin: string, user: string, config: GrayscaleConfig, pair: { caseId: string; taskId: string }, evaluatorId?: string) {
+async function startSingleEvaluation(
+    origin: string,
+    user: string,
+    config: GrayscaleConfig,
+    pair: { caseId: string; taskId: string },
+    datasetId?: string,
+    evaluatorId?: string,
+    evaluatorIds?: string[],
+    grayscaleBinding?: GrayscaleBinding,
+    options: { appendToBatch?: boolean } = {},
+) {
     // 透传评测任务关联: 用户在 A/B 配置卡通过「+ 新增评测任务」对话框创建了批次,
     // 此 ID 存在 config.evaluationBatchId。这里走 append 模式让 trace 落到同一批次,
     // 而不是每次启动评测都新建一个 evaluatorRunId (修 "2 case × 3 round 拆成 6 个批次" 问题)。
@@ -1106,13 +1504,15 @@ async function startSingleEvaluation(origin: string, user: string, config: Grays
     //   - 没关联批次: 沿用老逻辑, 传单 evaluator 让后端新建批次 (向后兼容)。
     const body: Record<string, unknown> = {
         user,
-        datasetId: config.selectedDatasetId,
+        ...(datasetId ? { datasetId } : {}),
+        ...(getConfiguredDatasetIds(config).length > 0 ? { datasetIds: getConfiguredDatasetIds(config) } : {}),
         pairs: [pair],
+        ...(grayscaleBinding ? { grayscaleBinding } : {}),
     };
-    if (config.evaluationBatchId) {
+    if (config.evaluationBatchId && options.appendToBatch !== false) {
         body.evaluatorRunId = config.evaluationBatchId;
     } else {
-        body.evaluator = evaluatorId || config.evaluatorId || 'preset-agent-task-completion';
+        body.evaluators = normalizeAbEvaluators(evaluatorIds || config.evaluators, evaluatorId || config.evaluatorId);
     }
     const res = await fetch(`${origin}/api/eval/trajectory/run`, {
         method: 'POST',
@@ -1123,7 +1523,15 @@ async function startSingleEvaluation(origin: string, user: string, config: Grays
     if (!res.ok || !data.evaluatorRunId) {
         throw new Error(data.error || 'failed to start trajectory evaluation');
     }
-    return String(data.evaluatorRunId);
+    const created = Array.isArray(data.created) ? data.created : [];
+    const evaluationResultId = created.length > 0 ? String(created[0]?.id || '').trim() : '';
+    if (!evaluationResultId) {
+        throw new Error('failed to bind trajectory evaluation result');
+    }
+    return {
+        evaluatorRunId: String(data.evaluatorRunId),
+        evaluationResultId,
+    };
 }
 
 async function markEvaluatorRunFailed(user: string, evaluatorRunId: string, errorMessage: string) {
@@ -1191,143 +1599,268 @@ async function markEvaluatorRowsFailedForce(user: string, rowIds: string[], erro
     });
 }
 
-function markStateRunsFailed(states: CaseStates, evaluatorRunId: string | undefined, errorMessage: string) {
-    if (!evaluatorRunId) return;
-    for (const state of Object.values(states)) {
-        for (const side of ['a', 'b'] as Side[]) {
-            let changed = false;
-            for (const run of state[side].runs || []) {
-                if (run.evaluatorRunId !== evaluatorRunId) continue;
-                if (run.status !== 'evaluating' && run.status !== 'running') continue;
-                run.status = 'fail';
-                run.output = errorMessage;
-                changed = true;
-            }
-            if (changed) {
-                state[side] = rebuildSideAggregate(state[side], state[side].runCount || state[side].runs?.length || 0);
-            }
-        }
-    }
-}
-
 async function evaluateSingleRunTarget(args: {
     taskId: string;
     user: string;
     origin: string;
     config: GrayscaleConfig;
     states: CaseStates;
+    caseDatasetIdByCaseId?: Map<string, string>;
     evaluatorId?: string;
+    evaluatorIds?: string[];
+    appendToBatch?: boolean;
     target: EvaluationTarget;
 }) {
     const { target } = args;
     let evaluatorRunId: string | undefined;
+    let evaluationResultId: string | undefined;
+    const effectiveEvaluatorIds = normalizeAbEvaluators(args.evaluatorIds || args.config.evaluators, args.evaluatorId || args.config.evaluatorId);
+    const evaluationAttempt = (target.run.evaluationAttempts || 0) + 1;
+    const evaluationClaimId = buildEvaluationClaimId();
     target.run.status = 'evaluating';
-    target.run.evaluationAttempts = (target.run.evaluationAttempts || 0) + 1;
+    target.run.evaluationAttempts = evaluationAttempt;
+    target.run.evaluationClaimId = evaluationClaimId;
+    target.run.evaluationStartedAt = new Date().toISOString();
+    target.run.evaluations = mergeRunEvaluations(
+        target.run.evaluations,
+        effectiveEvaluatorIds.map(id => ({
+            evaluatorId: id,
+            evaluatorName: AB_EVALUATOR_NAMES[id] || id,
+            status: 'running',
+        })),
+    );
     delete target.run.evaluationResultId;
     delete target.run.evaluationTraceId;
     delete target.run.score;
     delete target.run.tier;
-    args.states[target.caseId][target.side] = rebuildSideAggregate(
-        args.states[target.caseId][target.side],
-        args.states[target.caseId][target.side].runCount || args.states[target.caseId][target.side].runs?.length || 0,
-    );
-    await persistTaskState(args.taskId, args.user, args.config, args.states);
+    target.run.output = undefined;
+    await persistRunStatePatch({
+        taskId: args.taskId,
+        user: args.user,
+        config: args.config,
+        states: args.states,
+        caseId: target.caseId,
+        side: target.side,
+        nextRun: target.run,
+        sidePatch: { evaluatorRunId: undefined },
+        touchLatestResultAt: true,
+    });
 
     try {
-        evaluatorRunId = await startSingleEvaluation(
+        const binding: GrayscaleBinding = {
+            source: 'grayscale-ab',
+            grayscaleTaskId: args.taskId,
+            caseId: target.caseId,
+            side: target.side,
+            runIndex: target.run.runIndex,
+            roundIndex: target.run.roundIndex,
+            executionTraceId: target.run.sessionId!,
+            evaluationClaimId,
+            evaluationAttempt,
+        };
+        const createdEvaluation = await startSingleEvaluation(
             args.origin,
             args.user,
             args.config,
             { caseId: target.caseId, taskId: target.run.sessionId! },
+            args.caseDatasetIdByCaseId?.get(target.caseId),
             args.evaluatorId,
+            effectiveEvaluatorIds,
+            binding,
+            { appendToBatch: args.appendToBatch },
         );
+        evaluatorRunId = createdEvaluation.evaluatorRunId;
+        evaluationResultId = createdEvaluation.evaluationResultId;
         target.run.evaluatorRunId = evaluatorRunId;
+        target.run.evaluationResultId = evaluationResultId;
         args.states[target.caseId][target.side].evaluatorRunId = evaluatorRunId;
-        await persistTaskState(args.taskId, args.user, args.config, args.states);
+        await persistRunStatePatch({
+            taskId: args.taskId,
+            user: args.user,
+            config: args.config,
+            states: args.states,
+            caseId: target.caseId,
+            side: target.side,
+            nextRun: target.run,
+            expectedEvaluationClaimId: evaluationClaimId,
+            sidePatch: { evaluatorRunId },
+            touchLatestResultAt: true,
+        });
 
-        await waitAndApplyEvaluation(args.origin, args.user, evaluatorRunId, args.states, [target.run.sessionId!]);
-        await hydrateExecutionMetrics(args.states);
+        const settled = await waitAndApplyEvaluationResult({
+            taskId: args.taskId,
+            user: args.user,
+            origin: args.origin,
+            states: args.states,
+            caseId: target.caseId,
+            side: target.side,
+            run: target.run,
+            evaluationResultId,
+            evaluatorRunId,
+            expectedEvaluationClaimId: evaluationClaimId,
+            config: args.config,
+        });
+        if (settled) {
+            await hydrateExecutionMetrics(args.states);
+        } else {
+            target.run.status = 'evaluating';
+            target.run.output = undefined;
+        }
     } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        if (evaluatorRunId) {
+        if (evaluationResultId) {
+            await markEvaluatorRowsFailed(args.user, [evaluationResultId], message).catch(() => {});
+        } else if (evaluatorRunId) {
             await markEvaluatorTasksFailed(args.user, evaluatorRunId, target.run.sessionId ? [target.run.sessionId] : [], message).catch(() => {});
         }
         target.run.status = 'fail';
+        target.run.evaluations = mergeRunEvaluations(
+            target.run.evaluations,
+            effectiveEvaluatorIds.map(id => ({
+                evaluatorId: id,
+                evaluatorName: AB_EVALUATOR_NAMES[id] || id,
+                status: 'failed',
+                evaluatorRunId,
+                evaluationResultId,
+                errorMessage: message,
+            })),
+        );
         target.run.output = message;
         markRunCompleted(target.run);
-        args.states[target.caseId][target.side] = rebuildSideAggregate(
-            args.states[target.caseId][target.side],
-            args.states[target.caseId][target.side].runCount || args.states[target.caseId][target.side].runs?.length || 0,
-        );
+        await persistRunStatePatch({
+            taskId: args.taskId,
+            user: args.user,
+            config: args.config,
+            states: args.states,
+            caseId: target.caseId,
+            side: target.side,
+            nextRun: target.run,
+            expectedEvaluationClaimId: evaluationClaimId,
+            sidePatch: evaluatorRunId ? { evaluatorRunId } : undefined,
+            touchLatestResultAt: true,
+        }).catch(() => {});
     }
     markLatestGrayResultAt(args.config);
-    await persistTaskState(args.taskId, args.user, args.config, args.states);
+    await persistRunStatePatch({
+        taskId: args.taskId,
+        user: args.user,
+        config: args.config,
+        states: args.states,
+        caseId: target.caseId,
+        side: target.side,
+        nextRun: target.run,
+        expectedEvaluationClaimId: evaluationClaimId,
+        sidePatch: evaluatorRunId ? { evaluatorRunId } : undefined,
+        touchLatestResultAt: true,
+    }).catch(() => {});
 }
 
 function isTerminalTrajectoryStatus(status: TrajectoryResultStatus | undefined): boolean {
     return status === 'done' || status === 'failed';
 }
 
-async function waitAndApplyEvaluation(origin: string, user: string, evaluatorRunId: string, states: CaseStates, targetTaskIds: string[]) {
+async function waitAndApplyEvaluationResult(args: {
+    taskId: string;
+    user: string;
+    origin: string;
+    config: GrayscaleConfig;
+    states: CaseStates;
+    caseId: string;
+    side: Side;
+    run: RunResult;
+    evaluationResultId: string;
+    evaluatorRunId: string;
+    expectedEvaluationClaimId: string;
+}): Promise<boolean> {
     const timeoutMessage = 'evaluation timed out';
-    const targetTaskIdSet = new Set(targetTaskIds.map(id => id.trim()).filter(Boolean));
     for (let i = 0; i < 180; i++) {
-        const res = await fetch(`${origin}/api/eval/trajectory/results?user=${encodeURIComponent(user)}&runId=${encodeURIComponent(evaluatorRunId)}&limit=500`);
-        const data = await res.json().catch(() => ({}));
-        const body = data as { results?: TrajectoryApiResult[] };
-        const results = Array.isArray(body.results) ? body.results : [];
-        const relevantResults = targetTaskIdSet.size > 0
-            ? results.filter(result => Boolean(result.taskId && targetTaskIdSet.has(result.taskId)))
-            : results.filter(result => Boolean(result.taskId));
-        if (results.length > 0) {
-            for (const result of results) {
-                if (!isTerminalTrajectoryStatus(result.status)) continue;
-                for (const state of Object.values(states)) {
-                    for (const side of ['a', 'b'] as Side[]) {
-                        for (const run of state[side].runs || []) {
-                            if (run.sessionId !== result.taskId) continue;
-                            run.evaluatorRunId = evaluatorRunId;
-                            run.evaluationResultId = result.id || run.evaluationResultId;
-                            run.evaluationTraceId = pickEvaluationTraceIdFromRaw(result.rawAnalysis) || run.evaluationTraceId;
-                            if (result.status === 'done') {
-                                const score = compositeScore(result);
-                                run.status = 'pass';
-                                run.score = score;
-                                run.tier = scoreTier(score);
-                                markRunCompleted(run);
-                            } else {
-                                run.status = 'fail';
-                                run.output = result.errorMessage || run.output || '评测失败';
-                                markRunCompleted(run);
-                            }
-                        }
-                        state[side] = rebuildSideAggregate(state[side], state[side].runCount || 0);
-                    }
-                }
+        const res = await fetch(`${args.origin}/api/eval/trajectory/results/${encodeURIComponent(args.evaluationResultId)}?user=${encodeURIComponent(args.user)}`);
+        const result = await res.json().catch(() => ({})) as TrajectoryApiResult & { error?: string };
+        if (res.ok) {
+            const binding = readGrayscaleBindingFromRaw(result.rawAnalysis);
+            if (String(result.id || '').trim() !== args.evaluationResultId) {
+                throw new Error(`evaluation result id mismatch: expected ${args.evaluationResultId}, got ${String(result.id || '').trim() || 'N/A'}`);
             }
+            if (String(result.taskId || '').trim() !== String(args.run.sessionId || '').trim()) {
+                throw new Error(`evaluation result trace mismatch: expected ${String(args.run.sessionId || '').trim() || 'N/A'}, got ${String(result.taskId || '').trim() || 'N/A'}`);
+            }
+            if (!matchesGrayscaleBinding(binding, {
+                taskId: args.taskId,
+                caseId: args.caseId,
+                side: args.side,
+                run: args.run,
+                expectedClaimId: args.expectedEvaluationClaimId,
+            })) {
+                throw new Error('evaluation result binding mismatch');
+            }
+            if (isTerminalTrajectoryStatus(result.status)) {
+                const rowLike: TrajectoryResultRow = {
+                    id: result.id,
+                    evaluatorRunId: result.evaluatorRunId || args.evaluatorRunId,
+                    status: result.status,
+                    taskId: result.taskId,
+                    trajectoryScore: result.trajectoryScore,
+                    errorMessage: result.errorMessage,
+                    rawAnalysisJson: JSON.stringify(result.rawAnalysis || {}),
+                    updatedAt: result.updatedAt ? new Date(result.updatedAt) : undefined,
+                };
+                applyTrajectoryRowToRun(args.run, rowLike, args.evaluatorRunId);
+                await persistRunStatePatch({
+                    taskId: args.taskId,
+                    user: args.user,
+                    config: args.config,
+                    states: args.states,
+                    caseId: args.caseId,
+                    side: args.side,
+                    nextRun: args.run,
+                    expectedEvaluationClaimId: args.expectedEvaluationClaimId,
+                    sidePatch: { evaluatorRunId: args.evaluatorRunId },
+                    touchLatestResultAt: true,
+                });
+                return true;
+            }
+        } else if (res.status !== 404) {
+            throw new Error(result.error || 'failed to load trajectory evaluation result');
         }
-        if (relevantResults.length > 0 && relevantResults.every(r => isTerminalTrajectoryStatus(r.status))) return;
         await new Promise(resolve => setTimeout(resolve, 2000));
     }
-    await markEvaluatorTasksFailed(user, evaluatorRunId, Array.from(targetTaskIdSet), timeoutMessage);
-    if (targetTaskIdSet.size > 0) {
-        for (const state of Object.values(states)) {
-            for (const side of ['a', 'b'] as Side[]) {
-                let changed = false;
-                for (const run of state[side].runs || []) {
-                    if (!run.sessionId || !targetTaskIdSet.has(run.sessionId)) continue;
-                    if (run.status !== 'evaluating' && run.status !== 'running') continue;
-                    run.status = 'fail';
-                    run.output = timeoutMessage;
-                    changed = true;
-                }
-                if (changed) {
-                    state[side] = rebuildSideAggregate(state[side], state[side].runCount || state[side].runs?.length || 0);
-                }
-            }
+    try {
+        const res = await fetch(`${args.origin}/api/eval/trajectory/results/${encodeURIComponent(args.evaluationResultId)}?user=${encodeURIComponent(args.user)}`);
+        const result = await res.json().catch(() => ({})) as TrajectoryApiResult & { error?: string };
+        if (res.ok && !isTerminalTrajectoryStatus(result.status)) {
+            return false;
         }
-    } else {
-        markStateRunsFailed(states, evaluatorRunId, timeoutMessage);
+    } catch {
+        // ignore: fall through to timeout failure below
+    }
+    await markEvaluatorRowsFailed(args.user, [args.evaluationResultId], timeoutMessage);
+    if (args.run.status === 'evaluating' || args.run.status === 'running') {
+        args.run.status = 'fail';
+        args.run.output = timeoutMessage;
+        args.run.evaluations = mergeRunEvaluations(
+            args.run.evaluations,
+            normalizeAbEvaluators(args.run.evaluations?.map(item => item.evaluatorId) || []).map(id => ({
+                evaluatorId: id,
+                evaluatorName: AB_EVALUATOR_NAMES[id] || id,
+                status: 'failed',
+                evaluatorRunId: args.evaluatorRunId,
+                evaluationResultId: args.evaluationResultId,
+                errorMessage: timeoutMessage,
+            })),
+        );
+        markRunCompleted(args.run);
+        await persistRunStatePatch({
+            taskId: args.taskId,
+            user: args.user,
+            config: args.config,
+            states: args.states,
+            caseId: args.caseId,
+            side: args.side,
+            nextRun: args.run,
+            expectedEvaluationClaimId: args.expectedEvaluationClaimId,
+            sidePatch: { evaluatorRunId: args.evaluatorRunId },
+            touchLatestResultAt: true,
+        }).catch(() => {});
     }
     throw new Error(timeoutMessage);
 }
@@ -1340,16 +1873,23 @@ async function evaluateRunsWithConcurrency(args: {
     states: CaseStates;
     caseIds: string[];
     evaluatorId?: string;
+    evaluatorIds?: string[];
     onlyMissingEvaluation?: boolean;
     parentSignal?: AbortSignal;
 }) {
     const targets: EvaluationTarget[] = [];
+    const configuredEvaluatorIds = normalizeAbEvaluators(args.evaluatorIds || args.config.evaluators, args.evaluatorId || args.config.evaluatorId);
+    const caseConfigMap = await loadConfiguredCaseMap(args.user, args.config);
+    const caseDatasetIdByCaseId = new Map(Array.from(caseConfigMap.entries()).map(([caseId, info]) => [caseId, info.datasetId] as const));
     for (const caseId of args.caseIds) {
         const state = args.states[caseId];
         if (!state) continue;
         for (const side of ['a', 'b'] as Side[]) {
             for (const run of state[side].runs || []) {
-                if (args.onlyMissingEvaluation && (run.evaluatorRunId || typeof run.score === 'number')) {
+                const targetEvaluatorIds = args.onlyMissingEvaluation
+                    ? getFailedOrMissingEvaluatorIds(run, configuredEvaluatorIds)
+                    : configuredEvaluatorIds;
+                if (args.onlyMissingEvaluation && targetEvaluatorIds.length === 0) {
                     continue;
                 }
                 // 默认状态白名单: executed / pass。onlyMissingEvaluation 模式下额外接受
@@ -1360,7 +1900,7 @@ async function evaluateRunsWithConcurrency(args: {
                 const eligibleStatus = run.status === 'executed' || run.status === 'pass'
                     || (args.onlyMissingEvaluation && run.status === 'evaluating');
                 if (eligibleStatus && run.sessionId) {
-                    targets.push({ caseId, side, run });
+                    targets.push({ caseId, side, run, evaluatorIds: targetEvaluatorIds });
                 }
             }
         }
@@ -1382,7 +1922,13 @@ async function evaluateRunsWithConcurrency(args: {
             const beforeRunId = target.run.evaluatorRunId;
             try {
                 await withBackgroundOpencodeSlot(
-                    () => evaluateSingleRunTarget({ ...args, target }),
+                    () => evaluateSingleRunTarget({
+                        ...args,
+                        target,
+                        caseDatasetIdByCaseId,
+                        evaluatorIds: target.evaluatorIds,
+                        appendToBatch: !args.onlyMissingEvaluation,
+                    }),
                     {
                         taskType: 'grayscale-eval',
                         user: args.user,
@@ -1418,7 +1964,13 @@ async function evaluateRunsWithConcurrency(args: {
 
     await runEvaluationBatch(targets);
     for (let retry = 1; retry <= MAX_EVALUATION_RETRIES; retry++) {
-        const failedTargets = targets.filter(target => target.run.status === 'fail' && target.run.sessionId);
+        const failedTargets = targets
+            .filter(target => target.run.status === 'fail' && target.run.sessionId)
+            .map(target => ({
+                ...target,
+                evaluatorIds: getFailedOrMissingEvaluatorIds(target.run, configuredEvaluatorIds),
+            }))
+            .filter(target => (target.evaluatorIds || []).length > 0);
         if (failedTargets.length === 0) break;
         await runEvaluationBatch(failedTargets);
     }
@@ -1431,6 +1983,7 @@ async function runGrayscaleTask(args: {
     origin: string;
     caseIds: string[];
     evaluatorId?: string;
+    evaluatorIds?: string[];
     agentMaxConcurrency?: number;
 }) {
     const { taskId, user, origin, evaluatorId } = args;
@@ -1442,21 +1995,21 @@ async function runGrayscaleTask(args: {
         ...task.configJson,
         skillId: task.skillId,
         evaluatorId: evaluatorId || task.configJson.evaluatorId,
+        evaluators: normalizeAbEvaluators(args.evaluatorIds || task.configJson.evaluators, evaluatorId || task.configJson.evaluatorId),
         agentMaxConcurrency: args.agentMaxConcurrency || task.configJson.agentMaxConcurrency,
     };
-    const datasetId = String(config.selectedDatasetId || '');
-    if (!datasetId) throw new Error('dataset is required');
-    const dataset = await findAgentDataset(user, datasetId);
-    if (!dataset) throw new Error('dataset not found');
+    const configuredDatasetIds = getConfiguredDatasetIds(config);
+    if (configuredDatasetIds.length === 0) throw new Error('dataset is required');
+    const caseConfigMap = await loadConfiguredCaseMap(user, config);
+    if (caseConfigMap.size === 0) throw new Error('dataset not found');
 
     const runCount = Math.max(1, Number(config.runCount || args.caseIds.length || 1));
     const repeatRounds = Math.max(1, Number(config.repeatRounds || 1));
     const caseIds = args.caseIds.slice(0, runCount);
     if (caseIds.length !== runCount) throw new Error(`selected case count ${caseIds.length} does not match runCount ${runCount}`);
 
-    const caseMap = new Map<string, DatasetCase>(dataset.cases.map(c => [c.id, c]));
     for (const caseId of caseIds) {
-        if (!caseMap.get(caseId)?.input?.trim()) throw new Error(`case ${caseId} not found or missing input`);
+        if (!caseConfigMap.get(caseId)?.caseEntry.input?.trim()) throw new Error(`case ${caseId} not found or missing input`);
     }
 
     const versionA = await resolveVersion(config.skillId, config.versionAId);
@@ -1526,7 +2079,7 @@ async function runGrayscaleTask(args: {
                         user,
                         config,
                         states,
-                        caseMap,
+                        caseMap: new Map(Array.from(caseConfigMap.entries()).map(([caseId, info]) => [caseId, info.caseEntry] as const)),
                         totalRunsPerSide,
                         version,
                         referenceSkillName,
@@ -1574,15 +2127,20 @@ async function runGrayscaleTask(args: {
             startedAt: Date.now(),
             abortController: activeRuns().get(storeKey)?.abortController,
         });
-        await evaluateRunsWithConcurrency({ taskId, user, origin, config, states, caseIds, evaluatorId, parentSignal: taskSignal });
+        await evaluateRunsWithConcurrency({ taskId, user, origin, config, states, caseIds, evaluatorId, evaluatorIds: config.evaluators, parentSignal: taskSignal });
     }
 }
 
-async function evaluateExistingTask(args: { taskId: string; user: string; origin: string; caseIds: string[]; evaluatorId?: string; onlyMissingEvaluation?: boolean }) {
+async function evaluateExistingTask(args: { taskId: string; user: string; origin: string; caseIds: string[]; evaluatorId?: string; evaluatorIds?: string[]; onlyMissingEvaluation?: boolean }) {
     const task = await loadTask(args.taskId, args.user);
     if (!task) throw new Error('task not found');
     validateTaskSkillBinding(task);
-    const config = { ...task.configJson, skillId: task.skillId, evaluatorId: args.evaluatorId || task.configJson.evaluatorId };
+    const config = {
+        ...task.configJson,
+        skillId: task.skillId,
+        evaluatorId: args.evaluatorId || task.configJson.evaluatorId,
+        evaluators: normalizeAbEvaluators(args.evaluatorIds || task.configJson.evaluators, args.evaluatorId || task.configJson.evaluatorId),
+    };
     const states = task.caseStatesJson || {};
     const caseIds = args.caseIds.length > 0 ? args.caseIds : Object.keys(states);
     const evaluatorRunId = await evaluateRunsWithConcurrency({
@@ -1593,6 +2151,7 @@ async function evaluateExistingTask(args: { taskId: string; user: string; origin
         states,
         caseIds,
         evaluatorId: args.evaluatorId,
+        evaluatorIds: config.evaluators,
         // 透传给 evaluateRunsWithConcurrency, true 时只选 evaluatorRunId/score 都没的 run,
         // 避免行级 retry 误评同 case 已 pass 的其他 run。
         onlyMissingEvaluation: args.onlyMissingEvaluation,
@@ -1619,7 +2178,7 @@ export async function GET(
             config: task.configJson,
             states: task.caseStatesJson,
         });
-        const reconciled = await reconcileFinishedEvaluations(user, task.configJson, task.caseStatesJson);
+        const reconciled = await reconcileFinishedEvaluations(taskId, user, task.configJson, task.caseStatesJson);
 
         // === 孤儿 in-flight 清理 ===
         // activeRuns 是内存 map (挂 globalThis), server 重启就丢。如果 caseStates
@@ -1666,7 +2225,22 @@ export async function GET(
         }
 
         if (orphanCleanup || metricsHydrated || executionsReconciled || reconciled) {
-            await persistTaskState(taskId, user, task.configJson, task.caseStatesJson);
+            // 乐观锁回写: 这次 reconcile 是基于 task 刚 load 时的快照算的。若期间评测
+            // flow 已经写了更新的状态(CAS 落空), 不能用我们这份旧快照覆盖它 —— 否则
+            // 会把刚落库的 pass 又擦回 evaluating(就是"评完又退回评估中"那个抖动)。
+            // 冲突时直接返回最新已提交状态, 不再用本轮中间态响应, 下一拍 poll 会基于
+            // 最新状态重新 reconcile。
+            const written = await persistTaskState(
+                taskId,
+                user,
+                task.configJson,
+                task.caseStatesJson,
+                task.rawCaseStatesJson,
+            );
+            if (!written) {
+                const fresh = await loadTask(taskId, user);
+                if (fresh) return respondTask(fresh, activeRuns().get(`${user}:${taskId}`) || null);
+            }
         }
         const storeKey = `${user}:${taskId}`;
         const active = activeRuns().get(storeKey);
@@ -1687,6 +2261,7 @@ export async function GET(
                     states: task.caseStatesJson,
                     caseIds: backlogCaseIds,
                     evaluatorId: task.configJson.evaluatorId,
+                    evaluatorIds: normalizeAbEvaluators(task.configJson.evaluators, task.configJson.evaluatorId),
                     onlyMissingEvaluation: true,
                 })
                     .catch(err => console.error('[GRAYSCALE_TASKS_RECOVER_EVAL] Failed:', err))
@@ -1695,7 +2270,7 @@ export async function GET(
                     });
             }
         }
-        return NextResponse.json({ ...task, activeRun: activeRuns().get(`${user}:${taskId}`) || null });
+        return respondTask(task, activeRuns().get(`${user}:${taskId}`) || null);
     } catch (err) {
         console.error('[GRAYSCALE_TASKS_GET_ONE] Failed:', err);
         return NextResponse.json({ error: 'Failed to fetch task' }, { status: 500 });
@@ -1715,6 +2290,7 @@ export async function POST(
             ? body.caseIds.map((id: unknown) => String(id || '').trim()).filter(Boolean)
             : [];
         const evaluatorId = typeof body.evaluatorId === 'string' ? body.evaluatorId.trim() : undefined;
+        const evaluatorIds = normalizeAbEvaluators(body.evaluators, evaluatorId);
         const agentMaxConcurrency = typeof body.agentMaxConcurrency === 'number' && Number.isFinite(body.agentMaxConcurrency)
             ? Math.max(1, Math.floor(body.agentMaxConcurrency))
             : undefined;
@@ -1836,8 +2412,8 @@ export async function POST(
         });
 
         const job = action === 'evaluate'
-            ? evaluateExistingTask({ taskId, user, origin, caseIds, evaluatorId, onlyMissingEvaluation })
-            : runGrayscaleTask({ taskId, user, origin, caseIds, evaluatorId, agentMaxConcurrency });
+            ? evaluateExistingTask({ taskId, user, origin, caseIds, evaluatorId, evaluatorIds, onlyMissingEvaluation })
+            : runGrayscaleTask({ taskId, user, origin, caseIds, evaluatorId, evaluatorIds, agentMaxConcurrency });
 
         void job
             .catch(async err => {
