@@ -6,15 +6,33 @@
 # Navigate to the project root directory
 cd "$(dirname "$0")/.."
 
-# Auto-initialize environment and data directory
-if [ ! -f .env ] && [ -f .env.example ]; then
-  echo "No .env found. Initializing from .env.example..."
-  cp .env.example .env
+AGENT_INSIGHT_HOME="${AGENT_INSIGHT_DATA_DIR:-$HOME/.agent-insight}"
+AGENT_INSIGHT_ENV_FILE="$AGENT_INSIGHT_HOME/.env"
+AGENT_INSIGHT_DATA_DIR="$AGENT_INSIGHT_HOME/data"
+DEFAULT_DATABASE_URL='file:../data/witty_insight.db'
+
+load_agent_insight_env() {
+  if [ -f "$AGENT_INSIGHT_ENV_FILE" ]; then
+    set -a
+    . "$AGENT_INSIGHT_ENV_FILE"
+    set +a
+  fi
+
+  if [ "${DATABASE_URL:-}" = "$DEFAULT_DATABASE_URL" ]; then
+    export DATABASE_URL="file:$AGENT_INSIGHT_DATA_DIR/witty_insight.db"
+  fi
+}
+
+# Auto-initialize unified environment and data directory
+if [ ! -f "$AGENT_INSIGHT_ENV_FILE" ] && [ -f .env.example ]; then
+  echo "No ~/.agent-insight/.env found. Initializing from .env.example..."
+  mkdir -p "$AGENT_INSIGHT_HOME"
+  cp .env.example "$AGENT_INSIGHT_ENV_FILE"
 fi
 
-if [ ! -d data ]; then
-  echo "Creating data directory..."
-  mkdir -p data
+if [ ! -d "$AGENT_INSIGHT_DATA_DIR" ]; then
+  echo "Creating data directory at $AGENT_INSIGHT_DATA_DIR..."
+  mkdir -p "$AGENT_INSIGHT_DATA_DIR"
 fi
 
 echo "=== Start Script Started ==="
@@ -46,13 +64,8 @@ find_pid_on_port() {
 PORT=3000
 echo "Checking port $PORT..."
 
-# Check for OpenGauss configuration in .env
-if [ -f .env ]; then
-  # Load .env variables safely
-  set -a
-  . .env
-  set +a
-fi
+# Check for OpenGauss configuration in ~/.agent-insight/.env
+load_agent_insight_env
 
 if [ -n "$DB_HOST" ]; then
   echo "OpenGauss configuration detected (DB_HOST=$DB_HOST)."

@@ -24,10 +24,7 @@ function getDataRoot() {
   if (process.env.AGENT_INSIGHT_DATA_DIR) {
     return process.env.AGENT_INSIGHT_DATA_DIR
   }
-  if (__dirname.includes('node_modules')) {
-    return getExistingHomeDataRoot()
-  }
-  return path.resolve(__dirname, '..')
+  return getExistingHomeDataRoot()
 }
 
 function migrateDataIfNeeded() {
@@ -186,7 +183,7 @@ function ensureEnvFile(packageRoot) {
   const envExamplePath = path.join(path.resolve(__dirname, '..'), '.env.example')
 
   if (!fs.existsSync(envPath) && fs.existsSync(envExamplePath)) {
-    console.log('No .env found. Initializing from .env.example...')
+    console.log('No ~/.agent-insight/.env found. Initializing from .env.example...')
     fs.mkdirSync(path.dirname(envPath), { recursive: true })
     fs.copyFileSync(envExamplePath, envPath)
     console.log('✓ .env file created at ' + envPath)

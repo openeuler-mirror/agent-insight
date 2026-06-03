@@ -1,6 +1,5 @@
-
-import { config } from 'dotenv';
-config();
+import { loadAgentInsightEnv } from '@/lib/env';
+loadAgentInsightEnv();
 
 import { PrismaClient } from '@prisma/client';
 import { getDatabaseAdapter, DatabaseAdapter } from '@/lib/storage/db-interface';
