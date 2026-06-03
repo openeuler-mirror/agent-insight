@@ -1225,26 +1225,9 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
                                             : 'danger'
                                     }
                                 />
-                                <div style={{ marginTop: 8 }}>
-                                    <div style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 6 }}>原因</div>
-                                    <div style={{
-                                        fontSize: 11,
-                                        padding: 10,
-                                        background: COLORS.bgSoft,
-                                        border: `1px solid ${COLORS.borderSoft}`,
-                                        borderRadius: 4,
-                                        whiteSpace: 'pre-wrap',
-                                        wordBreak: 'break-word',
-                                        maxHeight: 240,
-                                        overflow: 'auto',
-                                        color: COLORS.textSecondary,
-                                    }}>
-                                        {resultEvaluationSummary.reason || '结果评测进行中...'}
-                                    </div>
-                                </div>
                                 {resultEvaluationFindings.length > 0 && (
                                     <div style={{ marginTop: 12 }}>
-                                        <div style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 6 }}>关键观点评测</div>
+                                        <div style={{ fontSize: 11.5, color: COLORS.textMuted, marginBottom: 6 }}>任务完成度评测详情</div>
                                         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                                             {resultEvaluationFindings.map((item, index) => (
                                                 <KeyPointFindingCard key={index} item={item} fallbackTitle={`关键观点 #${index + 1}`} />
@@ -1571,9 +1554,10 @@ function KeyPointFindingCard({ item, fallbackTitle }: { item: ResultEvaluationFi
         : severity === 'medium' || status === 'partial' ? COLORS.warningSubtle
         : COLORS.bgSoft;
     const scoreText = item.score == null ? '--' : `(${fmtPercentScore(item.score)}/100)`;
-    const hasTrace = Boolean(item.traceRootCause?.failureReason || item.traceRootCause?.failureStage || item.traceRootCause?.relatedSteps?.length);
-    const hasSkillSuggestion = item.isSkillAttributable !== false && Boolean(item.improvementSuggestion);
-    const hasAttribution = typeof item.isSkillAttributable === 'boolean' || item.attributionReason || item.improvementSuggestion;
+    const isCovered = status === 'covered';
+    const resultJudgement = buildResultJudgement(item);
+    const hasTrace = !isCovered && Boolean(item.traceRootCause?.failureReason || item.traceRootCause?.failureStage || item.traceRootCause?.relatedSteps?.length);
+    const hasAttribution = !isCovered && (item.isSkillAttributable === false || item.attributionReason || item.improvementSuggestion);
 
     return (
         <div style={{
@@ -1584,9 +1568,9 @@ function KeyPointFindingCard({ item, fallbackTitle }: { item: ResultEvaluationFi
         }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start', marginBottom: 6 }}>
                 <span style={{ fontSize: 12, fontWeight: 650, color: COLORS.textSecondary, lineHeight: 1.45 }}>
-                    {item.content || fallbackTitle}
+                    关键观点：{item.content || fallbackTitle}
                 </span>
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, flexShrink: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                     <span style={{
                         fontSize: 10,
                         lineHeight: 1,
@@ -1602,22 +1586,12 @@ function KeyPointFindingCard({ item, fallbackTitle }: { item: ResultEvaluationFi
                 </div>
             </div>
 
-            {item.explanation && (
-                <div style={{ fontSize: 11.5, color: COLORS.textSecondary, lineHeight: 1.55, marginBottom: 6 }}>
-                    {item.explanation}
-                </div>
-            )}
-
             <div style={{ display: 'grid', gap: 6 }}>
-                {item.coverageReason && (
-                    <FindingDetailBlock label="覆盖依据" value={item.coverageReason} tone="success" />
-                )}
-                {item.missingReason && (
-                    <FindingDetailBlock label="缺失原因" value={item.missingReason} tone="warning" />
-                )}
-                {(item.evidence?.actual || item.evidence?.expected) && (
-                    <FindingEvidenceBlock evidence={item.evidence} />
-                )}
+                <FindingDetailBlock
+                    label="结果判断"
+                    value={resultJudgement}
+                    tone={isCovered ? 'success' : 'warning'}
+                />
                 {hasTrace && (
                     <TraceRootCauseBlock rootCause={item.traceRootCause} />
                 )}
@@ -1625,12 +1599,20 @@ function KeyPointFindingCard({ item, fallbackTitle }: { item: ResultEvaluationFi
                     <SkillAttributionBlock
                         isSkillAttributable={item.isSkillAttributable}
                         attributionReason={item.attributionReason}
-                        improvementSuggestion={hasSkillSuggestion ? item.improvementSuggestion : ''}
+                        improvementSuggestion={item.isSkillAttributable !== false ? item.improvementSuggestion : ''}
                     />
                 )}
             </div>
         </div>
     );
+}
+
+function buildResultJudgement(item: ResultEvaluationFinding): string {
+    const parts = [item.coverageReason, item.missingReason]
+        .map(part => String(part || '').trim())
+        .filter((part, index, arr) => part && arr.indexOf(part) === index);
+    if (parts.length > 0) return parts.join(' ');
+    return item.explanation || '评估器未返回结果判断。';
 }
 
 function FindingDetailBlock({ label, value, tone }: { label: string; value: string; tone: 'success' | 'warning' }) {
@@ -1650,27 +1632,6 @@ function FindingDetailBlock({ label, value, tone }: { label: string; value: stri
     );
 }
 
-function FindingEvidenceBlock({ evidence }: { evidence?: ResultEvaluationFinding['evidence'] }) {
-    const rows = [
-        { label: '实际输出片段', value: evidence?.actual || '' },
-        { label: '预期结果片段', value: evidence?.expected || '' },
-    ].filter(row => row.value.trim());
-    if (rows.length === 0) return null;
-    return (
-        <div style={{ border: `1px solid ${COLORS.borderSoft}`, borderRadius: 4, background: '#fff', overflow: 'hidden' }}>
-            {rows.map((row, index) => (
-                <div key={row.label} style={{
-                    padding: '6px 8px',
-                    borderTop: index === 0 ? 'none' : `1px solid ${COLORS.borderSoft}`,
-                }}>
-                    <div style={{ fontSize: 10.5, color: COLORS.textMuted, marginBottom: 3 }}>{row.label}</div>
-                    <div style={{ fontSize: 11, color: COLORS.textSecondary, lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>{row.value}</div>
-                </div>
-            ))}
-        </div>
-    );
-}
-
 function TraceRootCauseBlock({ rootCause }: { rootCause?: ResultEvaluationFinding['traceRootCause'] }) {
     const steps = rootCause?.relatedSteps || [];
     return (
@@ -1681,7 +1642,7 @@ function TraceRootCauseBlock({ rootCause }: { rootCause?: ResultEvaluationFindin
             borderRadius: 4,
         }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
-                <span style={{ fontSize: 11, fontWeight: 650, color: COLORS.textSecondary }}>执行过程原因</span>
+                <span style={{ fontSize: 11, fontWeight: 650, color: COLORS.textSecondary }}>问题定位</span>
                 {rootCause?.failureStage && (
                     <span style={badgeStyle(COLORS.bgSoft, COLORS.textMuted, true)}>
                         {failureStageLabel(rootCause.failureStage)}
@@ -1727,25 +1688,49 @@ function SkillAttributionBlock({
     attributionReason?: string;
     improvementSuggestion?: string;
 }) {
-    return (
-        <div style={{
-            fontSize: 11,
-            lineHeight: 1.55,
-            color: COLORS.textSecondary,
-            padding: '6px 8px',
-            background: isSkillAttributable === false ? COLORS.bgSoft : '#f0f7f4',
-            borderLeft: `2px solid ${isSkillAttributable === false ? COLORS.textDisabled : COLORS.success}`,
-            borderRadius: 3,
-        }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: attributionReason || improvementSuggestion ? 3 : 0 }}>
-                <span style={{ fontWeight: 650, color: isSkillAttributable === false ? COLORS.textMuted : COLORS.success }}>
-                    {isSkillAttributable === false ? '非 Skill 问题' : 'Skill 归因'}
-                </span>
+    if (isSkillAttributable === false) {
+        return (
+            <div style={{
+                fontSize: 11,
+                lineHeight: 1.55,
+                color: COLORS.textSecondary,
+                padding: '6px 8px',
+                background: COLORS.bgSoft,
+                borderLeft: `2px solid ${COLORS.textDisabled}`,
+                borderRadius: 3,
+            }}>
+                <span style={{ fontWeight: 650, color: COLORS.textMuted }}>非 Skill 问题</span>
             </div>
-            {attributionReason && <div>{attributionReason}</div>}
+        );
+    }
+
+    return (
+        <div style={{ display: 'grid', gap: 6 }}>
+            {attributionReason && (
+                <div style={{
+                    fontSize: 11,
+                    lineHeight: 1.55,
+                    color: COLORS.textSecondary,
+                    padding: '6px 8px',
+                    background: '#f0f7f4',
+                    borderLeft: `2px solid ${COLORS.success}`,
+                    borderRadius: 3,
+                }}>
+                    <span style={{ fontWeight: 650, color: COLORS.success, marginRight: 6 }}>Skill 归因</span>
+                    {attributionReason}
+                </div>
+            )}
             {improvementSuggestion && (
-                <div style={{ marginTop: attributionReason ? 3 : 0 }}>
-                    <span style={{ fontWeight: 650, color: COLORS.success, marginRight: 6 }}>改进建议</span>
+                <div style={{
+                    fontSize: 11,
+                    lineHeight: 1.55,
+                    color: COLORS.textSecondary,
+                    padding: '6px 8px',
+                    background: '#f0f7f4',
+                    borderLeft: `2px solid ${COLORS.success}`,
+                    borderRadius: 3,
+                }}>
+                    <span style={{ fontWeight: 650, color: COLORS.success, marginRight: 6 }}>skill改进建议</span>
                     {improvementSuggestion}
                 </div>
             )}
