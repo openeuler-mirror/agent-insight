@@ -54,7 +54,7 @@ export async function setupNodeRuntime(): Promise<void> {
       const child = spawn(process.execPath, [uploader], {
         detached: true,
         stdio: 'ignore',
-        env: { ...process.env, SKILL_INSIGHT_UPLOADER_FORCE: '1' },
+        env: { ...process.env, AGENT_INSIGHT_UPLOADER_FORCE: '1' },
       });
       child.unref();
     }

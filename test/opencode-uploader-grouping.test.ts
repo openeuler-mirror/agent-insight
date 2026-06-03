@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-process.env.SKILL_INSIGHT_UPLOADER_NO_MAIN = "1"
+process.env.AGENT_INSIGHT_UPLOADER_NO_MAIN = "1"
 
 const uploaderPromise = import("../scripts/opencode_uploader_client.js")
 

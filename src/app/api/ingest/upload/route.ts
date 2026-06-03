@@ -61,7 +61,7 @@ export async function POST(request: Request) {
           `  task_id: ${data.task_id}\n` +
           `  framework: ${data.framework || 'unknown'}\n` +
           `  payload.user (untrusted): ${data.user || '(none)'}\n` +
-          `  → 检查 .env 里 SKILL_INSIGHT_API_KEY 是否与 DB 中某个 User.apiKey 完全一致。\n` +
+          `  → 检查 .env 里 AGENT_INSIGHT_API_KEY 是否与 DB 中某个 User.apiKey 完全一致。\n` +
           `  → 修复方法 1：把 .env 改成 DB 里目标账号的 key\n` +
           `  → 修复方法 2：SQL UPDATE User SET apiKey='<.env 的 key>' WHERE username='<目标账号>';`
         );
@@ -70,7 +70,7 @@ export async function POST(request: Request) {
             error: 'Invalid API key',
             detail: 'API Key 在 User 表里没匹配。Server 拒绝接收以避免数据跑到错误账号。',
             keyPrefix: keyPrefix + '...',
-            hint: '检查 SKILL_INSIGHT_API_KEY env 与 server DB 里目标 User.apiKey 是否一致',
+            hint: '检查 AGENT_INSIGHT_API_KEY env 与 server DB 里目标 User.apiKey 是否一致',
           },
           { status: 401 },
         );
@@ -99,13 +99,13 @@ export async function POST(request: Request) {
           `  framework: ${data.framework || 'unknown'}\n` +
           `  → 之前会兜底到 DB 第一个 active user（例如 witty_insight_public@huawei.com），\n` +
           `    导致 "trace 莫名其妙跑到另一个账号"。该 fallback 已下线。\n` +
-          `  → 修复：在 client 配 SKILL_INSIGHT_API_KEY env 或在 payload 里设 user 字段。`
+          `  → 修复：在 client 配 AGENT_INSIGHT_API_KEY env 或在 payload 里设 user 字段。`
         );
         return NextResponse.json(
           {
             error: 'Missing user identity',
             detail: '上报没带 x-witty-api-key header，也没在 payload.user 写身份。Server 拒绝接收以避免数据归属错误。',
-            hint: '配 SKILL_INSIGHT_API_KEY env 后重试',
+            hint: '配 AGENT_INSIGHT_API_KEY env 后重试',
           },
           { status: 400 },
         );

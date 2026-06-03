@@ -722,7 +722,7 @@ def run_optimizer(
                     print("\n" + "=" * 60)
                     print("⚠️ Agent Insight 平台配置不可用，无法获取执行日志。")
                     print("动态优化需要执行日志中的优化建议，请先配置 Agent Insight 平台。")
-                    print("配置方式：在 ~/.agent-insight/.env 中设置 SKILL_INSIGHT_HOST 和 SKILL_INSIGHT_API_KEY")
+                    print("配置方式：在 ~/.agent-insight/.env 中设置 AGENT_INSIGHT_HOST 和 AGENT_INSIGHT_API_KEY")
                     print("=" * 60)
                     continue
 

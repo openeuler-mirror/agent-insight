@@ -29,7 +29,7 @@ if [[ -f "${SKILLBENCH_DIR}/.env" ]]; then
 fi
 
 LOG_DIR="${2:-${SKILLBENCH_DIR}/logs}"
-BASE_URL="${SKILL_INSIGHT_BASE_URL:-http://localhost:3000}"
+BASE_URL="${AGENT_INSIGHT_BASE_URL:-http://localhost:3000}"
 
 # Log file
 LOG_FILE="${LOG_DIR}/import_skills_$(date +%Y%m%d_%H%M%S).log"

@@ -52,11 +52,11 @@ function generateBashScript(baseUrl: string, hostParam: string, apiKey: string):
 # Agent-insight Auto Setup (Non-Interactive)
 # =============================================================================
 
-SKILL_INSIGHT_HOST="${hostParam}"
-SKILL_INSIGHT_BASE_URL="${baseUrl}"
-SKILL_INSIGHT_API_KEY="${apiKey}"
+AGENT_INSIGHT_HOST="${hostParam}"
+AGENT_INSIGHT_BASE_URL="${baseUrl}"
+AGENT_INSIGHT_API_KEY="${apiKey}"
 
-echo "🚀 Fetching Agent-insight telemetry components from $SKILL_INSIGHT_BASE_URL..."
+echo "🚀 Fetching Agent-insight telemetry components from $AGENT_INSIGHT_BASE_URL..."
 
 # 0. Check Node.js version
 if ! command -v node &> /dev/null; then
@@ -200,15 +200,15 @@ if [ "$INSTALL_OPENCODE" = "true" ]; then
     echo "⏬ Downloading OpenCode Plugin..."
     rm -f "$OPENCODE_CONFIG_DIR/plugins/Skill-Insight.ts" "$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.ts" 2>/dev/null || true
     rm -f "$HOME/.opencode/plugins/Skill-Insight.ts" "$HOME/.opencode/plugins/Witty-Skill-Insight.ts" 2>/dev/null || true
-    curl -sSf "$SKILL_INSIGHT_BASE_URL/api/setup/opencode" -o "$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.ts"
+    curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/opencode" -o "$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.ts"
     cp "$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.ts" "$HOME/.opencode/plugins/Witty-Skill-Insight.ts" 2>/dev/null || true
     echo "⏬ Downloading OpenCode Uploader..."
-    curl -sSf "$SKILL_INSIGHT_BASE_URL/api/setup/opencode-uploader" -o "$HOME/.agent-insight/opencode_uploader_client.js"
+    curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/opencode-uploader" -o "$HOME/.agent-insight/opencode_uploader_client.js"
     echo "⏬ Installing OpenCode commands..."
     mkdir -p "$OPENCODE_CONFIG_DIR/commands"
-    curl -sSf "$SKILL_INSIGHT_BASE_URL/api/setup/opencode-commands/si-optimizer" -o "$OPENCODE_CONFIG_DIR/commands/si-optimizer.md"
+    curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/opencode-commands/si-optimizer" -o "$OPENCODE_CONFIG_DIR/commands/si-optimizer.md"
     echo "⏬ Downloading OpenCode TUI Plugin..."
-    curl -sSf "$SKILL_INSIGHT_BASE_URL/api/setup/opencode-tui" -o "$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.tui.tsx"
+    curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/opencode-tui" -o "$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.tui.tsx"
     cp "$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.tui.tsx" "$HOME/.opencode/plugins/Witty-Skill-Insight.tui.tsx" 2>/dev/null || true
     export TUI_PLUGIN_PATH="$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.tui.tsx"
     export TUI_CONFIG_FILE="$OPENCODE_CONFIG_DIR/tui.json"
@@ -243,41 +243,41 @@ fi
 
 if [ "$INSTALL_OPENCLAW" = "true" ]; then
     echo "⏬ Downloading OpenClaw Watcher..."
-    curl -sSf "$SKILL_INSIGHT_BASE_URL/api/setup/openclaw-watcher" -o "$HOME/.agent-insight/openclaw_watcher_client.ts"
+    curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/openclaw-watcher" -o "$HOME/.agent-insight/openclaw_watcher_client.ts"
 fi
 
 # 4. Configure ~/.agent-insight/.env (Auto mode - no interaction)
-SKILL_INSIGHT_CONFIG_FILE="$HOME/.agent-insight/.env"
+AGENT_INSIGHT_CONFIG_FILE="$HOME/.agent-insight/.env"
 FINAL_SHOW_TASK_STATS="true"
-if [ -f "$SKILL_INSIGHT_CONFIG_FILE" ]; then
-  EXISTING_SHOW_TASK_STATS=$(grep '^SKILL_INSIGHT_SHOW_TASK_STATS=' "$SKILL_INSIGHT_CONFIG_FILE" | head -n 1 | cut -d'=' -f2-)
+if [ -f "$AGENT_INSIGHT_CONFIG_FILE" ]; then
+  EXISTING_SHOW_TASK_STATS=$(grep '^AGENT_INSIGHT_SHOW_TASK_STATS=' "$AGENT_INSIGHT_CONFIG_FILE" | head -n 1 | cut -d'=' -f2-)
   if [ -n "$EXISTING_SHOW_TASK_STATS" ]; then
     FINAL_SHOW_TASK_STATS="$EXISTING_SHOW_TASK_STATS"
   fi
 fi
 
 echo "⚙️  Updating configuration..."
-touch "$SKILL_INSIGHT_CONFIG_FILE"
-if [ -f "$SKILL_INSIGHT_CONFIG_FILE" ]; then
-    cp "$SKILL_INSIGHT_CONFIG_FILE" "\${SKILL_INSIGHT_CONFIG_FILE}.bak"
-    grep -v "^SKILL_INSIGHT_HOST=" "\${SKILL_INSIGHT_CONFIG_FILE}.bak" | grep -v "^SKILL_INSIGHT_API_KEY=" | grep -v "^SKILL_INSIGHT_SHOW_TASK_STATS=" | grep -v "^SKILL_INSIGHT_RETENTION_DAYS=" | grep -v "^SKILL_INSIGHT_OPENCODE_OTEL_ENABLE=" | grep -v "^SKILL_INSIGHT_OPENCODE_SPOOL_DIR=" | grep -v "^SKILL_INSIGHT_OPENCODE_UPLOADER=" | grep -v "^SKILL_INSIGHT_CLAUDE_OTEL_SPOOL_DIR=" | grep -v "^SKILL_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES=" | grep -v "^SKILL_INSIGHT_MAX_TOOL_IO=" | grep -v "^SKILL_INSIGHT_MAX_EVENT_STRING=" | grep -v "^SKILL_INSIGHT_OPENCODE_UPLOAD_COOLDOWN_MS=" > "$SKILL_INSIGHT_CONFIG_FILE"
-    rm "\${SKILL_INSIGHT_CONFIG_FILE}.bak"
+touch "$AGENT_INSIGHT_CONFIG_FILE"
+if [ -f "$AGENT_INSIGHT_CONFIG_FILE" ]; then
+    cp "$AGENT_INSIGHT_CONFIG_FILE" "\${AGENT_INSIGHT_CONFIG_FILE}.bak"
+    grep -v "^AGENT_INSIGHT_HOST=" "\${AGENT_INSIGHT_CONFIG_FILE}.bak" | grep -v "^AGENT_INSIGHT_API_KEY=" | grep -v "^AGENT_INSIGHT_SHOW_TASK_STATS=" | grep -v "^AGENT_INSIGHT_RETENTION_DAYS=" | grep -v "^AGENT_INSIGHT_OPENCODE_OTEL_ENABLE=" | grep -v "^AGENT_INSIGHT_OPENCODE_SPOOL_DIR=" | grep -v "^AGENT_INSIGHT_OPENCODE_UPLOADER=" | grep -v "^AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR=" | grep -v "^AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES=" | grep -v "^AGENT_INSIGHT_MAX_TOOL_IO=" | grep -v "^AGENT_INSIGHT_MAX_EVENT_STRING=" | grep -v "^AGENT_INSIGHT_OPENCODE_UPLOAD_COOLDOWN_MS=" > "$AGENT_INSIGHT_CONFIG_FILE"
+    rm "\${AGENT_INSIGHT_CONFIG_FILE}.bak"
 fi
-echo "SKILL_INSIGHT_HOST=$SKILL_INSIGHT_HOST" >> "$SKILL_INSIGHT_CONFIG_FILE"
-echo "SKILL_INSIGHT_API_KEY=$SKILL_INSIGHT_API_KEY" >> "$SKILL_INSIGHT_CONFIG_FILE"
-echo "SKILL_INSIGHT_SHOW_TASK_STATS=$FINAL_SHOW_TASK_STATS" >> "$SKILL_INSIGHT_CONFIG_FILE"
-echo "SKILL_INSIGHT_RETENTION_DAYS=10" >> "$SKILL_INSIGHT_CONFIG_FILE"
-echo "SKILL_INSIGHT_OPENCODE_OTEL_ENABLE=true" >> "$SKILL_INSIGHT_CONFIG_FILE"
-echo "SKILL_INSIGHT_OPENCODE_SPOOL_DIR=$HOME/.agent-insight/otel_data/opencode" >> "$SKILL_INSIGHT_CONFIG_FILE"
-echo "SKILL_INSIGHT_OPENCODE_UPLOADER=$HOME/.agent-insight/opencode_uploader_client.js" >> "$SKILL_INSIGHT_CONFIG_FILE"
-echo "SKILL_INSIGHT_CLAUDE_OTEL_SPOOL_DIR=$HOME/.agent-insight/otel_data/claude" >> "$SKILL_INSIGHT_CONFIG_FILE"
-echo "SKILL_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES=1" >> "$SKILL_INSIGHT_CONFIG_FILE"
-echo "SKILL_INSIGHT_MAX_TOOL_IO=4000" >> "$SKILL_INSIGHT_CONFIG_FILE"
-echo "SKILL_INSIGHT_MAX_EVENT_STRING=20000" >> "$SKILL_INSIGHT_CONFIG_FILE"
-echo "SKILL_INSIGHT_OPENCODE_UPLOAD_COOLDOWN_MS=15000" >> "$SKILL_INSIGHT_CONFIG_FILE"
-echo "✅ Configuration updated at $SKILL_INSIGHT_CONFIG_FILE"
-echo "   SKILL_INSIGHT_HOST=$SKILL_INSIGHT_HOST"
-echo "   SKILL_INSIGHT_API_KEY=********"
+echo "AGENT_INSIGHT_HOST=$AGENT_INSIGHT_HOST" >> "$AGENT_INSIGHT_CONFIG_FILE"
+echo "AGENT_INSIGHT_API_KEY=$AGENT_INSIGHT_API_KEY" >> "$AGENT_INSIGHT_CONFIG_FILE"
+echo "AGENT_INSIGHT_SHOW_TASK_STATS=$FINAL_SHOW_TASK_STATS" >> "$AGENT_INSIGHT_CONFIG_FILE"
+echo "AGENT_INSIGHT_RETENTION_DAYS=10" >> "$AGENT_INSIGHT_CONFIG_FILE"
+echo "AGENT_INSIGHT_OPENCODE_OTEL_ENABLE=true" >> "$AGENT_INSIGHT_CONFIG_FILE"
+echo "AGENT_INSIGHT_OPENCODE_SPOOL_DIR=$HOME/.agent-insight/otel_data/opencode" >> "$AGENT_INSIGHT_CONFIG_FILE"
+echo "AGENT_INSIGHT_OPENCODE_UPLOADER=$HOME/.agent-insight/opencode_uploader_client.js" >> "$AGENT_INSIGHT_CONFIG_FILE"
+echo "AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR=$HOME/.agent-insight/otel_data/claude" >> "$AGENT_INSIGHT_CONFIG_FILE"
+echo "AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES=1" >> "$AGENT_INSIGHT_CONFIG_FILE"
+echo "AGENT_INSIGHT_MAX_TOOL_IO=4000" >> "$AGENT_INSIGHT_CONFIG_FILE"
+echo "AGENT_INSIGHT_MAX_EVENT_STRING=20000" >> "$AGENT_INSIGHT_CONFIG_FILE"
+echo "AGENT_INSIGHT_OPENCODE_UPLOAD_COOLDOWN_MS=15000" >> "$AGENT_INSIGHT_CONFIG_FILE"
+echo "✅ Configuration updated at $AGENT_INSIGHT_CONFIG_FILE"
+echo "   AGENT_INSIGHT_HOST=$AGENT_INSIGHT_HOST"
+echo "   AGENT_INSIGHT_API_KEY=********"
 
 # 6. Install Watcher Dependencies (only if OpenClaw watcher is selected)
 if [ "$INSTALL_OPENCLAW" = "true" ]; then
@@ -311,7 +311,7 @@ _skill_insight_claude_load_env() {
 
 claude() {
   _skill_insight_claude_load_env
-  local _si_host="\${SKILL_INSIGHT_HOST:-127.0.0.1:3000}"
+  local _si_host="\${AGENT_INSIGHT_HOST:-127.0.0.1:3000}"
   case "$_si_host" in http://*|https://*) ;; *) _si_host="http://$_si_host" ;; esac
   _si_host="\${_si_host%/}"
   env \\
@@ -320,10 +320,10 @@ claude() {
     OTEL_METRICS_EXPORTER="\${OTEL_METRICS_EXPORTER:-none}" \\
     OTEL_EXPORTER_OTLP_LOGS_PROTOCOL=http/json \\
     OTEL_EXPORTER_OTLP_LOGS_ENDPOINT="$_si_host/api/ingest/otel/v1/logs" \\
-    OTEL_EXPORTER_OTLP_HEADERS="x-witty-api-key=\${SKILL_INSIGHT_API_KEY:-}" \\
+    OTEL_EXPORTER_OTLP_HEADERS="x-witty-api-key=\${AGENT_INSIGHT_API_KEY:-}" \\
     OTEL_LOG_USER_PROMPTS=1 \\
     OTEL_LOG_TOOL_DETAILS=1 \\
-    OTEL_LOG_RAW_API_BODIES="\${SKILL_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES:-1}" \\
+    OTEL_LOG_RAW_API_BODIES="\${AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES:-1}" \\
     claude "$@"
 }
 CLAUDE_OTEL_EOF
@@ -473,11 +473,11 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '# Skill-insight Auto Setup (Non-Interactive) - PowerShell',
         '# =============================================================================',
         '',
-        '$SKILL_INSIGHT_HOST = "' + hostParam + '"',
-        '$SKILL_INSIGHT_BASE_URL = "' + baseUrl + '"',
-        '$SKILL_INSIGHT_API_KEY = "' + apiKey + '"',
+        '$AGENT_INSIGHT_HOST = "' + hostParam + '"',
+        '$AGENT_INSIGHT_BASE_URL = "' + baseUrl + '"',
+        '$AGENT_INSIGHT_API_KEY = "' + apiKey + '"',
         '',
-        'Write-Host "🚀 Fetching Skill-insight telemetry components from $SKILL_INSIGHT_BASE_URL..."',
+        'Write-Host "🚀 Fetching Skill-insight telemetry components from $AGENT_INSIGHT_BASE_URL..."',
         '',
         '# 0. Check Node.js version',
         '$nodeCmd = Get-Command node -ErrorAction SilentlyContinue',
@@ -633,13 +633,13 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    Remove-Item -Path (Join-Path $opencodeConfigDir "plugins\\Witty-Skill-Insight.ts") -Force -ErrorAction SilentlyContinue',
         '    Remove-Item -Path (Join-Path $opencodePluginsDir "Skill-Insight.ts") -Force -ErrorAction SilentlyContinue',
         '    Remove-Item -Path (Join-Path $opencodePluginsDir "Witty-Skill-Insight.ts") -Force -ErrorAction SilentlyContinue',
-        '    Invoke-WebRequest -Uri "$SKILL_INSIGHT_BASE_URL/api/setup/opencode" -OutFile (Join-Path $opencodeConfigDir "plugins\\Witty-Skill-Insight.ts")',
+        '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/setup/opencode" -OutFile (Join-Path $opencodeConfigDir "plugins\\Witty-Skill-Insight.ts")',
         '    Copy-Item (Join-Path $opencodeConfigDir "plugins\\Witty-Skill-Insight.ts") (Join-Path $opencodePluginsDir "Witty-Skill-Insight.ts") -Force -ErrorAction SilentlyContinue',
         '    Write-Host "⏬ Downloading OpenCode Uploader..."',
-        '    Invoke-WebRequest -Uri "$SKILL_INSIGHT_BASE_URL/api/setup/opencode-uploader" -OutFile (Join-Path $skillInsightDir "opencode_uploader_client.js")',
+        '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/setup/opencode-uploader" -OutFile (Join-Path $skillInsightDir "opencode_uploader_client.js")',
         '    Write-Host "⏬ Downloading OpenCode TUI Plugin..."',
         '    $tuiPluginPath = Join-Path $opencodeConfigDir "plugins\\Witty-Skill-Insight.tui.tsx"',
-        '    Invoke-WebRequest -Uri "$SKILL_INSIGHT_BASE_URL/api/setup/opencode-tui" -OutFile $tuiPluginPath',
+        '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/setup/opencode-tui" -OutFile $tuiPluginPath',
         '    Copy-Item $tuiPluginPath (Join-Path $opencodePluginsDir "Witty-Skill-Insight.tui.tsx") -Force -ErrorAction SilentlyContinue',
         '    $tuiConfigFile = Join-Path $opencodeConfigDir "tui.json"',
         '    try {',
@@ -662,39 +662,39 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '',
         'if ($INSTALL_OPENCLAW) {',
         '    Write-Host "⏬ Downloading OpenClaw Watcher..."',
-        '    Invoke-WebRequest -Uri "$SKILL_INSIGHT_BASE_URL/api/setup/openclaw-watcher" -OutFile (Join-Path $skillInsightDir "openclaw_watcher_client.ts")',
+        '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/setup/openclaw-watcher" -OutFile (Join-Path $skillInsightDir "openclaw_watcher_client.ts")',
         '}',
         '',
         '# 4. Configure ~/.agent-insight/.env (Auto mode - no interaction)',
-        '$SKILL_INSIGHT_CONFIG_FILE = Join-Path $skillInsightDir ".env"',
+        '$AGENT_INSIGHT_CONFIG_FILE = Join-Path $skillInsightDir ".env"',
         '',
         'Write-Host "⚙️  Updating configuration..."',
-        'if (Test-Path $SKILL_INSIGHT_CONFIG_FILE) {',
-        '    $existingContent = Get-Content $SKILL_INSIGHT_CONFIG_FILE',
-        '    $existingShow = ($existingContent | Where-Object { $_ -match "^SKILL_INSIGHT_SHOW_TASK_STATS=" } | Select-Object -First 1)',
+        'if (Test-Path $AGENT_INSIGHT_CONFIG_FILE) {',
+        '    $existingContent = Get-Content $AGENT_INSIGHT_CONFIG_FILE',
+        '    $existingShow = ($existingContent | Where-Object { $_ -match "^AGENT_INSIGHT_SHOW_TASK_STATS=" } | Select-Object -First 1)',
         '    $showValue = "true"',
         '    if ($existingShow) { $showValue = ($existingShow -split "=", 2)[1] }',
-        '    $filteredContent = $existingContent | Where-Object { $_ -notmatch "^SKILL_INSIGHT_HOST=" -and $_ -notmatch "^SKILL_INSIGHT_API_KEY=" -and $_ -notmatch "^SKILL_INSIGHT_SHOW_TASK_STATS=" -and $_ -notmatch "^SKILL_INSIGHT_RETENTION_DAYS=" -and $_ -notmatch "^SKILL_INSIGHT_OPENCODE_OTEL_ENABLE=" -and $_ -notmatch "^SKILL_INSIGHT_OPENCODE_SPOOL_DIR=" -and $_ -notmatch "^SKILL_INSIGHT_OPENCODE_UPLOADER=" -and $_ -notmatch "^SKILL_INSIGHT_CLAUDE_OTEL_SPOOL_DIR=" -and $_ -notmatch "^SKILL_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES=" -and $_ -notmatch "^SKILL_INSIGHT_MAX_TOOL_IO=" -and $_ -notmatch "^SKILL_INSIGHT_MAX_EVENT_STRING=" -and $_ -notmatch "^SKILL_INSIGHT_OPENCODE_UPLOAD_COOLDOWN_MS=" }',
-        '    Set-Content -Path $SKILL_INSIGHT_CONFIG_FILE -Value $filteredContent',
+        '    $filteredContent = $existingContent | Where-Object { $_ -notmatch "^AGENT_INSIGHT_HOST=" -and $_ -notmatch "^AGENT_INSIGHT_API_KEY=" -and $_ -notmatch "^AGENT_INSIGHT_SHOW_TASK_STATS=" -and $_ -notmatch "^AGENT_INSIGHT_RETENTION_DAYS=" -and $_ -notmatch "^AGENT_INSIGHT_OPENCODE_OTEL_ENABLE=" -and $_ -notmatch "^AGENT_INSIGHT_OPENCODE_SPOOL_DIR=" -and $_ -notmatch "^AGENT_INSIGHT_OPENCODE_UPLOADER=" -and $_ -notmatch "^AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR=" -and $_ -notmatch "^AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES=" -and $_ -notmatch "^AGENT_INSIGHT_MAX_TOOL_IO=" -and $_ -notmatch "^AGENT_INSIGHT_MAX_EVENT_STRING=" -and $_ -notmatch "^AGENT_INSIGHT_OPENCODE_UPLOAD_COOLDOWN_MS=" }',
+        '    Set-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value $filteredContent',
         '} else {',
-        '    New-Item -ItemType File -Path $SKILL_INSIGHT_CONFIG_FILE -Force | Out-Null',
+        '    New-Item -ItemType File -Path $AGENT_INSIGHT_CONFIG_FILE -Force | Out-Null',
         '    $showValue = "true"',
         '}',
-        'Add-Content -Path $SKILL_INSIGHT_CONFIG_FILE -Value "SKILL_INSIGHT_HOST=$SKILL_INSIGHT_HOST"',
-        'Add-Content -Path $SKILL_INSIGHT_CONFIG_FILE -Value "SKILL_INSIGHT_API_KEY=$SKILL_INSIGHT_API_KEY"',
-        'Add-Content -Path $SKILL_INSIGHT_CONFIG_FILE -Value "SKILL_INSIGHT_SHOW_TASK_STATS=$showValue"',
-        'Add-Content -Path $SKILL_INSIGHT_CONFIG_FILE -Value "SKILL_INSIGHT_RETENTION_DAYS=10"',
-        'Add-Content -Path $SKILL_INSIGHT_CONFIG_FILE -Value "SKILL_INSIGHT_OPENCODE_OTEL_ENABLE=true"',
-        'Add-Content -Path $SKILL_INSIGHT_CONFIG_FILE -Value "SKILL_INSIGHT_OPENCODE_SPOOL_DIR=$skillInsightDir\\otel_data\\opencode"',
-        'Add-Content -Path $SKILL_INSIGHT_CONFIG_FILE -Value "SKILL_INSIGHT_OPENCODE_UPLOADER=$skillInsightDir\\opencode_uploader_client.js"',
-        'Add-Content -Path $SKILL_INSIGHT_CONFIG_FILE -Value "SKILL_INSIGHT_CLAUDE_OTEL_SPOOL_DIR=$skillInsightDir\\otel_data\\claude"',
-        'Add-Content -Path $SKILL_INSIGHT_CONFIG_FILE -Value "SKILL_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES=1"',
-        'Add-Content -Path $SKILL_INSIGHT_CONFIG_FILE -Value "SKILL_INSIGHT_MAX_TOOL_IO=4000"',
-        'Add-Content -Path $SKILL_INSIGHT_CONFIG_FILE -Value "SKILL_INSIGHT_MAX_EVENT_STRING=20000"',
-        'Add-Content -Path $SKILL_INSIGHT_CONFIG_FILE -Value "SKILL_INSIGHT_OPENCODE_UPLOAD_COOLDOWN_MS=15000"',
-        'Write-Host "✅ Configuration updated at $SKILL_INSIGHT_CONFIG_FILE"',
-        'Write-Host "   SKILL_INSIGHT_HOST=$SKILL_INSIGHT_HOST"',
-        'Write-Host "   SKILL_INSIGHT_API_KEY=********"',
+        'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_HOST=$AGENT_INSIGHT_HOST"',
+        'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_API_KEY=$AGENT_INSIGHT_API_KEY"',
+        'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_SHOW_TASK_STATS=$showValue"',
+        'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_RETENTION_DAYS=10"',
+        'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_OPENCODE_OTEL_ENABLE=true"',
+        'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_OPENCODE_SPOOL_DIR=$skillInsightDir\\otel_data\\opencode"',
+        'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_OPENCODE_UPLOADER=$skillInsightDir\\opencode_uploader_client.js"',
+        'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR=$skillInsightDir\\otel_data\\claude"',
+        'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES=1"',
+        'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_MAX_TOOL_IO=4000"',
+        'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_MAX_EVENT_STRING=20000"',
+        'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_OPENCODE_UPLOAD_COOLDOWN_MS=15000"',
+        'Write-Host "✅ Configuration updated at $AGENT_INSIGHT_CONFIG_FILE"',
+        'Write-Host "   AGENT_INSIGHT_HOST=$AGENT_INSIGHT_HOST"',
+        'Write-Host "   AGENT_INSIGHT_API_KEY=********"',
         '',
         '# 6. Install Watcher Dependencies (only if OpenClaw watcher is selected)',
         'if ($INSTALL_OPENCLAW) {',
@@ -722,7 +722,7 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '      if ($_ -match "^([^#=]+)=(.*)$") { [Environment]::SetEnvironmentVariable($matches[1], $matches[2], "Process") }',
         '    }',
         '  }',
-        '  $siHost = if ($env:SKILL_INSIGHT_HOST) { $env:SKILL_INSIGHT_HOST } else { "127.0.0.1:3000" }',
+        '  $siHost = if ($env:AGENT_INSIGHT_HOST) { $env:AGENT_INSIGHT_HOST } else { "127.0.0.1:3000" }',
         '  if ($siHost -notmatch "^https?://") { $siHost = "http://$siHost" }',
         '  $siHost = $siHost.TrimEnd("/")',
         '  $env:CLAUDE_CODE_ENABLE_TELEMETRY = "1"',
@@ -730,11 +730,11 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '  if (-not $env:OTEL_METRICS_EXPORTER) { $env:OTEL_METRICS_EXPORTER = "none" }',
         '  $env:OTEL_EXPORTER_OTLP_LOGS_PROTOCOL = "http/json"',
         '  $env:OTEL_EXPORTER_OTLP_LOGS_ENDPOINT = "$siHost/api/ingest/otel/v1/logs"',
-        '  $env:OTEL_EXPORTER_OTLP_HEADERS = "x-witty-api-key=$($env:SKILL_INSIGHT_API_KEY)"',
+        '  $env:OTEL_EXPORTER_OTLP_HEADERS = "x-witty-api-key=$($env:AGENT_INSIGHT_API_KEY)"',
         '  $env:OTEL_LOG_USER_PROMPTS = "1"',
         '  $env:OTEL_LOG_TOOL_DETAILS = "1"',
-        '  if (-not $env:SKILL_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES) { $env:SKILL_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES = "1" }',
-        '  $env:OTEL_LOG_RAW_API_BODIES = $env:SKILL_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES',
+        '  if (-not $env:AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES) { $env:AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES = "1" }',
+        '  $env:OTEL_LOG_RAW_API_BODIES = $env:AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES',
         '  $cmd = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue',
         '  if (-not $cmd) { throw "claude executable not found in PATH" }',
         '  & $cmd.Source @args',

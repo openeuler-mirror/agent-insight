@@ -77,7 +77,7 @@ Agent: 收到！在开始优化前想先确认，你想怎么优化这个 Skill�
 | a + b + c | `static` → `dynamic` → `feedback` 顺序编排 | 先跑静态诊断，再根据运行日志优化，再根据反馈调整            |
 | a + b + c + d | `static` → `trace` → `dynamic` → `feedback` 顺序编排 | 先跑静态优化，再根据 trace 优化，再根据运行日志优化，再根据反馈调整 |
 
-- 当涉及 c（运行日志）时：确认 Agent Insight 平台可用（`~/.agent-insight/.env` 或环境变量中有配置 `SKILL_INSIGHT_HOST` 和 `SKILL_INSIGHT_API_KEY`），不可用则提前告知用户并降级。
+- 当涉及 c（运行日志）时：确认 Agent Insight 平台可用（`~/.agent-insight/.env` 或环境变量中有配置 `AGENT_INSIGHT_HOST` 和 `AGENT_INSIGHT_API_KEY`），不可用则提前告知用户并降级。
 - 当涉及 d（trace 数据）时：确认 trace 数据来源可用（本地 trace 文件、Foundry traces 或其他 trace 数据源），不可用则提前告知用户并降级。
 
 **意图已明确时跳过问答**：

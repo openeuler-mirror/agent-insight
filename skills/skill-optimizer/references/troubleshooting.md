@@ -67,7 +67,7 @@ pip install uv
 
 处理：
 - 确认平台服务可用、必要的 host/user 配置可被读取。
-  - 通常，需要 SKILL_INSIGHT_HOST 和 SKILL_INSIGHT_API_KEY
+  - 通常，需要 AGENT_INSIGHT_HOST 和 AGENT_INSIGHT_API_KEY
   - 检查环境变量中是否包含相关配置。
   - 检查用户的 ~/.agent-insight/.env 中是否包含相关配置。
 - 若暂时无法获取日志，可先使用 static 模式完成结构化优化，再补充 dynamic。

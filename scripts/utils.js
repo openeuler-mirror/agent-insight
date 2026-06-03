@@ -21,8 +21,8 @@ function getExistingHomeDataRoot() {
 }
 
 function getDataRoot() {
-  if (process.env.SKILL_INSIGHT_DATA_DIR) {
-    return process.env.SKILL_INSIGHT_DATA_DIR
+  if (process.env.AGENT_INSIGHT_DATA_DIR) {
+    return process.env.AGENT_INSIGHT_DATA_DIR
   }
   if (__dirname.includes('node_modules')) {
     return getExistingHomeDataRoot()
