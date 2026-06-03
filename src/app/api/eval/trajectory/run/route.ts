@@ -29,6 +29,10 @@ import {
     normalizeTrajectoryTaskMeta,
 } from '@/lib/eval/trajectory-task-meta';
 import {
+    buildEvaluationDiagnostic,
+    type EvaluationDiagnostic,
+} from '@/lib/eval/trajectory-diagnostic';
+import {
     isCustomEvaluatorId,
     listCustomEvaluatorIds,
     loadCustomEvaluator,
@@ -297,6 +301,18 @@ function mergeRawAnalysisMeta(
 function safeParseRecord(text: string | null | undefined): Record<string, unknown> {
     const parsed = parseLooseJson(text || '');
     return parsed && typeof parsed === 'object' ? parsed : {};
+}
+
+function mergeDiagnosticIntoRawAnalysis(
+    rawAnalysisJson: string | null | undefined,
+    diagnostic: EvaluationDiagnostic,
+    extra: Record<string, unknown> = {},
+): string {
+    return JSON.stringify({
+        ...safeParseRecord(rawAnalysisJson),
+        ...extra,
+        diagnostic,
+    });
 }
 
 function normalizeGrayscaleBinding(value: unknown): GrayscaleBinding | null {
@@ -1177,6 +1193,63 @@ class StagedEvaluationError extends Error {
     }
 }
 
+function buildDiagnosticFromError(error: unknown): EvaluationDiagnostic {
+    const stage = error instanceof StagedEvaluationError ? error.stage : 'unknown';
+    const message = error instanceof Error ? error.message : String(error || 'unknown error');
+    const cleanMessage = message.replace(/^\[[^\]]+\]\s*/, '').replace(NO_EVALUABLE_CASE_PREFIX, '').trim();
+    const includes = (needle: string) => cleanMessage.includes(needle);
+
+    if (stage === 'trace-parse') {
+        return buildEvaluationDiagnostic('trace_parse_failed', { details: cleanMessage, reason: cleanMessage });
+    }
+    if (stage === 'trace-empty') {
+        return buildEvaluationDiagnostic('trace_data_empty', { details: cleanMessage, reason: cleanMessage });
+    }
+    if (stage === 'semantic-match-llm' || stage === 'dataset-auto-match') {
+        return buildEvaluationDiagnostic('case_match_failed', {
+            details: cleanMessage,
+            internal: {
+                stage: 'semantic_match',
+                reason: cleanMessage,
+            },
+        });
+    }
+    if (stage === 'result-artifact-timeout' || stage === 'result-timeout' || stage === 'timeout') {
+        return buildEvaluationDiagnostic('evaluator_timeout', { details: cleanMessage, reason: cleanMessage });
+    }
+    if (stage === 'persist') {
+        return buildEvaluationDiagnostic('persist_failed', { details: cleanMessage, reason: cleanMessage });
+    }
+    if (stage === 'llm-or-agent' || stage === 'config') {
+        return buildEvaluationDiagnostic('evaluator_output_invalid', { details: cleanMessage, reason: cleanMessage });
+    }
+    if (stage === 'no-evaluable-case') {
+        if (includes('没有实际输入')) {
+            return buildEvaluationDiagnostic('trace_missing_input', { details: cleanMessage, reason: cleanMessage });
+        }
+        if (includes('评估数据集不存在')) {
+            return buildEvaluationDiagnostic('dataset_missing', { details: cleanMessage, reason: cleanMessage });
+        }
+        if (includes('未找到可用于评测的数据集') || includes('未找到可用于结果评测的数据集') || includes('未找到轨迹评测数据集')) {
+            return buildEvaluationDiagnostic('dataset_empty', { details: cleanMessage, reason: cleanMessage });
+        }
+        if (includes('reference_output')) {
+            return buildEvaluationDiagnostic('custom_reference_missing', { details: cleanMessage, reason: cleanMessage });
+        }
+        if (includes('expectedOutput') || includes('预期结果')) {
+            return buildEvaluationDiagnostic('case_missing_expected_output', { details: cleanMessage, reason: cleanMessage });
+        }
+        if (includes('动态分析失败')) {
+            return buildEvaluationDiagnostic('trace_step_analysis_failed', { details: cleanMessage, reason: cleanMessage });
+        }
+        if (includes('无法提取可评测步骤') || includes('提取出实际执行步骤') || includes('无可提取执行步骤')) {
+            return buildEvaluationDiagnostic('trace_no_steps', { details: cleanMessage, reason: cleanMessage });
+        }
+        return buildEvaluationDiagnostic('case_not_matched', { details: cleanMessage, reason: cleanMessage });
+    }
+    return buildEvaluationDiagnostic('evaluator_recovered_failed', { details: cleanMessage, reason: cleanMessage });
+}
+
 /** 包装 evaluateTrajectory + 加超时；分阶段抛错便于 UI 显示根因 */
 async function runOneEvaluation(user: string, id: string): Promise<void> {
  // 注册到 evaluation-task-manager 的 activeTasks 内存表 —— 让 GET /api/observe/data 的
@@ -1240,6 +1313,7 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
     let scheduledResultRetryAttemptCount = 0;
     let resultArtifactExtractionRawAnalysis: Record<string, unknown> | null = null;
     let resultActualOutput = '';
+    let finalDiagnostic: EvaluationDiagnostic | null = null;
     let customEvaluationsRawAnalysis: Record<string, unknown> | null = null;
     const customEvaluatorScores: number[] = [];
     const customEvaluatorBundles = hasCustomEvaluators
@@ -1644,6 +1718,15 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
 
                 if (!resultActualOutput) {
                     resultEvaluationError = `结果输出提取失败：${artifactExtraction.reason}`;
+                    finalDiagnostic = buildEvaluationDiagnostic(
+                        String(artifactExtraction.reason || '').includes('没有可用于输出提取的 LLM 调用')
+                            ? 'trace_missing_output'
+                            : 'task_output_extraction_failed',
+                        {
+                            details: resultEvaluationError,
+                            reason: resultEvaluationError,
+                        },
+                    );
                     resultEvaluationRetryState = buildResultEvaluationRetryState(attempt, {
                         retrying: false,
                         exhausted: true,
@@ -1660,6 +1743,7 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
                                 resultEvaluation: null,
                                 resultEvaluationError,
                                 resultEvaluationRetry: resultEvaluationRetryState,
+                                diagnostic: finalDiagnostic,
                             }),
                         },
                     });
@@ -1671,6 +1755,7 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
                     exhausted: false,
                     now: attemptStartedAt,
                 });
+                finalDiagnostic = null;
                 await prisma.trajectoryEvalResult.update({
                     where: { id },
                     data: {
@@ -1729,6 +1814,7 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
                     },
                 });
                 resultEvaluationError = null;
+                finalDiagnostic = null;
             })(), PER_RESULT_TIMEOUT_MS, new StagedEvaluationError(
                 'result-timeout',
                 `结果评测超过 ${PER_RESULT_TIMEOUT_MS / 1000}s 未完成`,
@@ -1765,6 +1851,15 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
                 });
             } else {
                 resultEvaluationError = `结果评测失败：${detail}`;
+                finalDiagnostic = buildEvaluationDiagnostic(
+                    e instanceof StagedEvaluationError && (e.stage === 'result-timeout' || e.stage === 'result-artifact-timeout')
+                        ? 'evaluator_timeout'
+                        : 'result_evaluator_failed',
+                    {
+                        details: resultEvaluationError,
+                        reason: resultEvaluationError,
+                    },
+                );
                 resultEvaluationRetryState = buildResultEvaluationRetryState(attempt, {
                     retrying: false,
                     exhausted: true,
@@ -1781,6 +1876,7 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
                             resultEvaluation: resultEvaluationRawAnalysis,
                             resultEvaluationError,
                             resultEvaluationRetry: resultEvaluationRetryState,
+                            diagnostic: finalDiagnostic,
                         }),
                     },
                 });
@@ -1881,6 +1977,12 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
         const finalErrorMessage = resultEvaluationMissing
             ? (resultEvaluationError || '结果评测未产出有效结果或评测 session')
             : null;
+        if (resultEvaluationMissing && !finalDiagnostic) {
+            finalDiagnostic = buildEvaluationDiagnostic('result_evaluator_failed', {
+                details: finalErrorMessage || undefined,
+                reason: finalErrorMessage || undefined,
+            });
+        }
         await prisma.trajectoryEvalResult.update({
             where: { id },
             data: {
@@ -1900,6 +2002,7 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
                     customEvaluations: customEvaluationsRawAnalysis,
                     customVariableNeeds: Array.from(requestedCustomVars),
                     customEvaluationScore: customAvg,
+                    ...(finalDiagnostic ? { diagnostic: finalDiagnostic } : {}),
                 }),
                 errorMessage: finalErrorMessage,
             },
@@ -1962,6 +2065,7 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
             customEvaluationScore: customEvaluatorScores.length > 0
                 ? customEvaluatorScores.reduce((a, b) => a + b, 0) / customEvaluatorScores.length
                 : null,
+            ...(finalDiagnostic ? { diagnostic: finalDiagnostic } : {}),
         };
         await prisma.trajectoryEvalResult.update({
             where: { id },
@@ -2058,11 +2162,19 @@ export async function runEvaluations(user: string, evaluatorRunId: string, resul
                         failCount++;
                         const stage = err instanceof StagedEvaluationError ? err.stage : 'unknown';
                         const msg = err?.message || 'unknown error';
+                        const diagnostic = buildDiagnosticFromError(err);
                         console.error(`[trajectory-eval]   ✗ ${id} failed [${stage}]: ${msg}`);
+                        const existing = await prisma.trajectoryEvalResult
+                            .findUnique({ where: { id }, select: { rawAnalysisJson: true } })
+                            .catch(() => null);
                         await prisma.trajectoryEvalResult
                             .update({
                                 where: { id },
-                                data: { status: 'failed', errorMessage: msg },
+                                data: {
+                                    status: 'failed',
+                                    errorMessage: msg,
+                                    rawAnalysisJson: mergeDiagnosticIntoRawAnalysis(existing?.rawAnalysisJson, diagnostic),
+                                },
                             })
                             .catch(e2 => console.error(`[trajectory-eval] failed to mark ${id} as failed: ${e2.message}`));
                     })

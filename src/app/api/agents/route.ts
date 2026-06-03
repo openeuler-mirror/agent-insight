@@ -70,7 +70,7 @@ async function backfillObservedAgentsFromSessions(user?: string) {
             name: registration.name,
             user: agentUser,
             agentType: registration.agentType,
-            agentOwnership: 'unregistered',
+            agentOwnership: 'user',
           },
         });
       } catch {
@@ -98,7 +98,8 @@ async function backfillObservedAgentsFromSessions(user?: string) {
  */
 export async function GET(request: Request) {
   try {
-    // 每次列表请求都确保系统 Agent 已注册/更新（promote unregistered -> system）
+    // 每次列表请求都确保系统 Agent 已注册/更新（已发现的同名 Agent 会被 promote 成 system），
+    // 同时把历史遗留的 'unregistered' 记录一次性迁移成 'user'。
     await ensureAllSystemAgents();
 
     const { searchParams } = new URL(request.url);
@@ -115,13 +116,13 @@ export async function GET(request: Request) {
       orderBy: [{ agentOwnership: 'asc' }, { createdAt: 'desc' }],
     });
 
-    // 内存中去重：如果同名+同平台的 Agent 中存在 'system'，则隐藏该名下的 'unregistered'
-    // 这种情况通常发生在 Trace 先上报产生未注册记录，随后代码中加入了系统 Agent 定义。
+    // 内存中去重：如果同名+同平台的 Agent 中存在 'system'，则隐藏该名下的非系统（用户）记录。
+    // 这种情况通常发生在 Trace 先上报产生用户记录，随后代码中加入了系统 Agent 定义。
     const systemKeys = new Set(
       rows.filter((r: any) => r.agentOwnership === 'system').map((r: any) => `${r.platform}-${r.name}`)
     );
     const filteredRows = rows.filter((r: any) => {
-      if (r.agentOwnership === 'unregistered' && systemKeys.has(`${r.platform}-${r.name}`)) {
+      if (r.agentOwnership !== 'system' && systemKeys.has(`${r.platform}-${r.name}`)) {
         return false;
       }
       return true;
@@ -171,58 +172,6 @@ export async function GET(request: Request) {
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     console.error('[agents] GET error:', msg);
-    return NextResponse.json({ error: msg }, { status: 500 });
-  }
-}
-
-/**
- * 用户手工注册一个 agent（前端"注册 Agent"对话框走这条）。
- * 系统 agent 由服务启动时 instrumentation 自动注册，不走这里。
- */
-export async function POST(request: Request) {
-  try {
-    const body = await request.json().catch(() => ({}));
-    const platform = String(body?.platform || '').trim();
-    const name = String(body?.name || '').trim();
-    const description = String(body?.description || '').trim();
-    const user = body?.user ? String(body.user).trim() : null;
-
-    if (!platform || !name) {
-      return NextResponse.json(
-        { error: 'platform and name are required' },
-        { status: 400 },
-      );
-    }
-
-    const existing = await (prismaRaw as any).registeredAgent.findFirst({
-      where: { platform, name, user },
-    });
-    if (existing) {
-      // 已存在则把状态升级为 user-registered（auto-discovered → user 主动确认）
-      const updated = await (prismaRaw as any).registeredAgent.update({
-        where: { id: existing.id },
-        data: {
-          agentOwnership: existing.agentOwnership === 'system' ? 'system' : 'user',
-          ...(description ? { description } : {}),
-        },
-      });
-      return NextResponse.json({ agent: updated });
-    }
-
-    const created = await (prismaRaw as any).registeredAgent.create({
-      data: {
-        platform,
-        name,
-        user,
-        description,
-        agentType: 'main',
-        agentOwnership: 'user',
-      },
-    });
-    return NextResponse.json({ agent: created });
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
-    console.error('[agents] POST error:', msg);
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 }

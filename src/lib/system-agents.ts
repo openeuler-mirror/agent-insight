@@ -148,8 +148,8 @@ export async function ensureSystemAgent(
     }
 
     if (existing) {
-      // 如果已存在且标记为 unregistered，或者描述变了，则更新同步。
-      const needsUpdate = existing.agentOwnership === 'unregistered' || existing.description !== def.description;
+      // 如果已存在但还不是 'system'（如 Trace 先上报产生的用户记录），或者描述变了，则更新同步。
+      const needsUpdate = existing.agentOwnership !== 'system' || existing.description !== def.description;
       if (needsUpdate) {
         await (prismaRaw as any).registeredAgent.update({
           where: { id: existing.id },
@@ -161,14 +161,14 @@ export async function ensureSystemAgent(
         });
       }
 
-      // 额外的清理工作：删除可能存在的其他同名但标记为 unregistered 的记录（不同 user 产生的）
-      // 系统 Agent 应该是全局唯一的。
+      // 额外的清理工作：删除可能存在的其他同名但非系统的记录（不同 user 的 trace 上报产生的）。
+      // 系统 Agent 应该是全局唯一的，同名的用户记录其实是同一个逻辑 Agent，归并到系统行。
       try {
         await (prismaRaw as any).registeredAgent.deleteMany({
           where: {
             platform: def.platform,
             name: def.name,
-            agentOwnership: 'unregistered',
+            agentOwnership: { not: 'system' },
             id: { not: existing.id },
           },
         });
@@ -200,8 +200,25 @@ export async function ensureSystemAgent(
   }
 }
 
+/**
+ * 一次性把历史遗留的 agentOwnership='unregistered' 记录迁移成 'user'。
+ * 「未注册」类型已下线，所有被观测到的 Agent 统一归为用户 Agent。本操作幂等：迁移完成后
+ * 再次调用匹配 0 行、开销可忽略。仓库没有独立 migration 框架，故随启动 / 列表请求顺带执行。
+ */
+async function migrateLegacyUnregisteredToUser(): Promise<void> {
+  try {
+    await (prismaRaw as any).registeredAgent.updateMany({
+      where: { agentOwnership: 'unregistered' },
+      data: { agentOwnership: 'user' },
+    });
+  } catch (err) {
+    console.warn('[system-agents] migrate unregistered → user failed:', (err as Error)?.message);
+  }
+}
+
 /** 启动时一次性注册所有系统 Agent。失败的那些不阻塞别的，独立 catch。 */
 export async function ensureAllSystemAgents(): Promise<void> {
+  await migrateLegacyUnregisteredToUser();
   await Promise.all(SYSTEM_AGENTS.map((d) => ensureSystemAgent(d).catch(() => null)));
 }
 
