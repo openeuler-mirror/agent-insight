@@ -22,12 +22,18 @@ Agent，就能把核心能力完整体验一遍：**智能诊断 → Skill 生�
 
 | 资产 | 在哪看 | 说明 |
 | --- | --- | --- |
-| `~/.agent-insight/example/messages` | 你机器的本地目录 | 一份真实的 Linux `messages` 日志，包含 SSH 爆破、认证失败等安全事件。客户端执行 `curl … \| bash` 安装时自动下载放置。 |
 | **messages 日志分析（内置示例）** 数据集 | 评测中心 → **数据集** | `ideal_output` 类型，10 条用例，覆盖认证攻击 / SSH 爆破 / 登录异常等场景。 |
-| 两条示例 **Trace** | **链路追踪** | 内置 `messages-log-analyzer` Agent 调用 `linux-messages-auth-triage` Skill 对示例日志做的安全分析（一条聚焦 root SSH 爆破、一条做整体安全评估）。进入链路追踪页**默认就能看到**（它们被归到「用户 Agent」视图）。 |
+| **linux-messages-auth-triage-demo** Skill | **Skills** 列表 | 内置示例 Skill：分析 messages 日志的认证失败 / 暴力破解事件（含 references / scripts）。名字带 `-demo`，避免和你之后自己生成的 Skill 撞名。 |
+| 两条示例 **Trace** | **链路追踪** | 内置 `messages-log-analyzer` Agent 调用 `linux-messages-auth-triage-demo` Skill 对示例日志做的安全分析（一条聚焦 root SSH 爆破、一条做整体安全评估）。进入链路追踪页**默认就能看到**（它们被归到「用户 Agent」视图）。 |
+| `~/.agent-insight/example/messages` | 你机器的本地目录 | 一份真实的 Linux `messages` 日志（SSH 爆破、认证失败等）。**注意：它不是注册时就有的**，而是你执行**客户端安装命令**后才落到本地——见下方说明。 |
 
 > **Note**
-> 这套示例数据完全归你所有：你可以随时编辑或删除。**删除后不会再自动补回**——它只在你注册那一刻注入一次。
+> 上面前三项（数据集 / Skill / 两条 Trace）在你**注册那一刻**就注入到看板里了，打开即见。
+>
+> 而 `~/.agent-insight/example/messages` 这个**本地日志文件**，需要你先安装客户端才会出现：
+> 在看板 **安装指导** 页复制客户端安装命令（形如 `curl -sSf "http://<看板地址>/api/ingest/setup" | bash`，README「安装客户端」一节也有），在你的机器上执行一次即可。它在建好接入环境的同时，会把这份示例日志下载到 `~/.agent-insight/example/messages`。**想用内置数据集真正跑评测（③）时才需要它**；只是查看已生成的两条 Trace（①）则不需要。
+>
+> 这套示例数据完全归你所有：可随时编辑或删除。**删除后不会再自动补回**——它只在你注册那一刻注入一次。
 
 ---
 
@@ -54,7 +60,7 @@ Agent，就能把核心能力完整体验一遍：**智能诊断 → Skill 生�
 ## ① 智能诊断：读懂示例 Trace
 
 1. 左侧导航进入 **链路追踪**。默认筛选为「用户 Agent」，你会直接看到两条内置示例 Trace
-   （Agent 名 `messages-log-analyzer`，调用 `linux-messages-auth-triage` Skill 对
+   （Agent 名 `messages-log-analyzer`，调用内置的 `linux-messages-auth-triage-demo` Skill 对
    `~/.agent-insight/example/messages` 做的安全分析）。
 2. 点开任意一条，进入 **智能诊断** 视图。重点看：
    - **执行摘要区**：这次分析用了哪个模型、耗时、token，以及调用了哪个 Skill。
@@ -108,8 +114,12 @@ Skill 能精确识别并归类这些事件、输出准确结论：
 提交后：
 
 - **核对生成结果**：检查 `SKILL.md`、`scripts/`、`references/` 是否符合预期，命名建议为
-  `linux-messages-auth-triage`。
+  `linux-messages-auth-triage`（不带 `-demo`，这样它和内置的 `linux-messages-auth-triage-demo`
+  示例 Skill 并存、互不覆盖）。
 - **下载或发布** 该 Skill，使其可被后续评测引用。
+
+> **Tip**：如果你只想先把流程跑通、不想现在生成，也可以**跳过这一步**——内置的
+> `linux-messages-auth-triage-demo` 已经是一个可用的成品 Skill，直接拿它进入 ③ 评测即可。
 
 > 详见 [Skills 生成](/user-guide/skills/generate)（该页含一个 `linux-auth-triage` 的完整示例走查）。
 
@@ -121,7 +131,8 @@ Skill 能精确识别并归类这些事件、输出准确结论：
 
 1. 进入 **Skill 评测 → 用例分析**。
 2. 在 **① 配置** 区：
-   - 选择上一步的 Skill `linux-messages-auth-triage`；
+   - 选择 Skill：用你上一步生成的 `linux-messages-auth-triage`，或直接用内置的
+     `linux-messages-auth-triage-demo`（数据集已默认关联到它，零配置即可开跑）；
    - 数据集选择 **messages 日志分析（内置示例）**；
    - 新建或选择一个评测任务，按需勾选评估器。
 3. 在用例列表里勾选若干 case，点击 **▶ 开始评测**。平台会用所选 Skill 真实执行这些用例并自动评测。

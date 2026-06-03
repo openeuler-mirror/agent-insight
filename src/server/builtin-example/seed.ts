@@ -17,11 +17,28 @@
 import { randomUUID } from 'crypto';
 import { prisma } from '@/lib/storage/prisma';
 import { createAgentDatasetRecord, type DatasetCase, type DatasetKind } from '@/server/agent_datasets_storage';
+import fs from 'node:fs';
+import path from 'node:path';
 import fixturesRaw from './fixtures.json';
+import skillBundleRaw from './skill-bundle.json';
 
 const fixtures = fixturesRaw as {
   dataset: Record<string, unknown> & { casesJson: string };
   traces: Array<{ taskId: string; session: Record<string, unknown> | null; execution: Record<string, unknown> | null }>;
+};
+
+/** 内置 demo skill 包：SKILL.md 内容 + references/scripts 资源（path→content）。 */
+const skillBundle = skillBundleRaw as {
+  name: string;
+  category: string;
+  description: string;
+  tags: string | null;
+  visibility: string;
+  version: number;
+  changeLog: string | null;
+  content: string;
+  files: string[];
+  assets: Record<string, string>;
 };
 
 const PLATFORM = 'opencode';
@@ -57,6 +74,54 @@ function safeTags(tagsJson: unknown): string[] {
 }
 
 /**
+ * 注入内置 demo skill：Skill + SkillVersion + data/storage/skills/<id>/v<n>/ 资源。
+ * 名字带 -demo 后缀，避免与用户后续用「Skill 生成」自己产出的 skill 撞名
+ * （Skill 表是 @@unique([name, user])）。返回 skill 名。
+ */
+async function seedDemoSkill(p: any, user: string): Promise<string> {
+  const version = skillBundle.version ?? 0;
+  const skillRow = await p.skill.create({
+    data: {
+      name: skillBundle.name,
+      category: skillBundle.category || 'Other',
+      description: skillBundle.description || null,
+      tags: skillBundle.tags ?? null,
+      visibility: skillBundle.visibility || 'private',
+      author: null,
+      user,
+      activeVersion: version,
+      isUploaded: false,
+    },
+  });
+
+  // 落盘 SKILL.md + references/scripts，路径约定与 skills/publish 一致：
+  //   data/storage/skills/<skillId>/v<version>/...（assetPath 存相对路径，读取时 join(process.cwd())）。
+  const storageRel = `data/storage/skills/${skillRow.id}/v${version}`;
+  const storageAbs = path.join(process.cwd(), storageRel);
+  fs.mkdirSync(storageAbs, { recursive: true });
+  fs.writeFileSync(path.join(storageAbs, 'SKILL.md'), skillBundle.content, 'utf-8');
+  for (const [rel, content] of Object.entries(skillBundle.assets)) {
+    if (rel.includes('..') || path.isAbsolute(rel)) continue; // 防路径穿越（bundle 自产，稳妥起见）
+    const dest = path.join(storageAbs, rel);
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.writeFileSync(dest, content, 'utf-8');
+  }
+
+  await p.skillVersion.create({
+    data: {
+      skillId: skillRow.id,
+      version,
+      content: skillBundle.content,
+      assetPath: storageRel,
+      files: JSON.stringify(skillBundle.files),
+      changeLog: skillBundle.changeLog ?? null,
+    },
+  });
+
+  return skillBundle.name;
+}
+
+/**
  * 给新注册用户注入内置示例数据。best-effort：任何失败都吞掉（不阻断登录/注册）。
  * 幂等：demo agent 已存在则直接返回（不重复注入、删了也不补）。
  */
@@ -84,7 +149,15 @@ export async function seedBuiltinExampleForUser(user: string): Promise<void> {
       },
     });
 
-    // 2. 内置数据集。
+    // 1b. 内置 demo skill（两条 trace 依赖它）。失败不阻断后续（整体 best-effort）。
+    let demoSkillName = '';
+    try {
+      demoSkillName = await seedDemoSkill(p, u);
+    } catch (skillErr) {
+      console.warn(`[builtin-example] demo skill seed failed for ${u}:`, (skillErr as Error)?.message || skillErr);
+    }
+
+    // 2. 内置数据集（targetSkill 关联到 demo skill，便于在 UI 里和该 skill 联动）。
     const nowIso = new Date().toISOString();
     const cases = JSON.parse(fixtures.dataset.casesJson) as DatasetCase[];
     await createAgentDatasetRecord({
@@ -95,7 +168,7 @@ export async function seedBuiltinExampleForUser(user: string): Promise<void> {
         String(fixtures.dataset.description || '') ||
         '内置示例数据集：messages 日志安全分析（认证攻击 / SSH 爆破 / 登录异常 等场景）。',
       targetAgent: String(fixtures.dataset.targetAgent || ''),
-      targetSkill: String(fixtures.dataset.targetSkill || ''),
+      targetSkill: demoSkillName || String(fixtures.dataset.targetSkill || ''),
       tags: Array.from(new Set([...safeTags(fixtures.dataset.tagsJson), '内置示例'])),
       cases,
       datasetKind: ((fixtures.dataset.datasetKind as DatasetKind) || 'ideal_output'),
