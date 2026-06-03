@@ -180,7 +180,7 @@ if [ -z "$DB_HOST" ] && command -v sqlite3 >/dev/null 2>&1; then
           echo "     问题行 (id | user | taskName | configJson 前 200 字):"
           sqlite3 "$DB_PATH" "SELECT '    ' || id || ' | ' || user || ' | ' || taskName || ' | ' || substr(configJson, 1, 200) FROM GrayscaleTask WHERE skillId IS NULL OR skillName IS NULL OR skillVersion IS NULL OR skillVersionId IS NULL;"
           echo ""
-          echo "     处理后再跑 bash scripts/restart_dev.sh。"
+          echo "     处理后再跑 bash scripts/develop_start.sh。"
           exit 1
         fi
       fi
@@ -193,7 +193,7 @@ if ! npx prisma db push; then
   echo ""
   echo "  ⛔ prisma db push 失败 —— 数据库 schema 没同步成功。"
   echo "     直接启动 server 会让运行时撞到 schema/code 不一致（旧 client 查不到的列等）。"
-  echo "     退出脚本。修好后重新跑 bash scripts/restart_dev.sh。"
+  echo "     退出脚本。修好后重新跑 bash scripts/develop_start.sh。"
   exit 1
 fi
 
@@ -205,7 +205,7 @@ if ! npx prisma generate; then
   echo "     常见原因：node_modules 里有 root 拥有的文件（之前用 sudo npm install 过）。"
   echo "     修法："
   echo "       sudo chown -R \"\$(whoami)\":staff node_modules/.prisma node_modules/@prisma"
-  echo "       bash scripts/restart_dev.sh"
+  echo "       bash scripts/develop_start.sh"
   echo "     退出脚本。"
   exit 1
 fi

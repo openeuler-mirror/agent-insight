@@ -60,7 +60,7 @@ push 前先 `git remote -v` 确认 fork remote 的实际名（不要假设是 `o
 完工前默认先跑测试：
 
 1. **跑测试**：`npm run test`（执行 `test/**/*.test.ts`）。
-2. **询问是否需要跑 dev 并验证 UI**：不要默认执行 `bash scripts/restart_dev.sh`。先询问用户是否需要启动 dev server 并走一遍 golden path + 至少一个边界 case；仅在用户确认后执行。
+2. **询问是否需要跑 dev 并验证 UI**：不要默认执行 `bash scripts/develop_start.sh`。先询问用户是否需要启动 dev server 并走一遍 golden path + 至少一个边界 case；仅在用户确认后执行。
    - 如果 agent 自带浏览器自动化能力（Claude Code 的 `preview_*` MCP、Cursor browser MCP 等），用户确认后优先自己跑完，附截图/快照/console 错误给用户。
    - 未执行浏览器验证时，明确告诉用户"未在浏览器中验证"，不要默认声称成功。
 
@@ -110,7 +110,7 @@ push 前先 `git remote -v` 确认 fork remote 的实际名（不要假设是 `o
 - `skills/` —— 内置 Skill 定义，每个 skill 一个子目录，含 `SKILL.md`。
 - `docs/PROJECT.md` / `docs/Agent_Insight_Design_Document.md` —— 最权威的内部架构文档。
 - `features/` —— 单 feature 的设计草稿（比 plan 更轻量）。
-- `scripts/restart_dev.sh` —— 验证流程要用，不要换别的方式启 dev server。
+- `scripts/develop_start.sh` —— 验证流程要用，不要换别的方式启 dev server。
 
 ## 9. 代码风格（仅列反默认项）
 

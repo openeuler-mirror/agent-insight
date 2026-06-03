@@ -15,15 +15,24 @@ function detectPlatform(request: Request): 'windows' | 'unix' {
     return 'unix';
 }
 
-function generateBashScript(host: string, baseUrl: string): string {
+function bashDoubleQuoted(value: string): string {
+    return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$').replace(/`/g, '\\`');
+}
+
+function powerShellDoubleQuoted(value: string): string {
+    return value.replace(/`/g, '``').replace(/"/g, '`"').replace(/\$/g, '`$');
+}
+
+function generateBashScript(host: string, baseUrl: string, apiKey: string): string {
     const lines = [
         '#!/bin/bash',
         '# =============================================================================',
         '# Agent-insight One-Click Setup',
         '# =============================================================================',
         '',
-        'SKILL_INSIGHT_HOST="' + host + '"',
-        'SKILL_INSIGHT_BASE_URL="' + baseUrl + '"',
+        'SKILL_INSIGHT_HOST="' + bashDoubleQuoted(host) + '"',
+        'SKILL_INSIGHT_BASE_URL="' + bashDoubleQuoted(baseUrl) + '"',
+        'SKILL_INSIGHT_SETUP_API_KEY="' + bashDoubleQuoted(apiKey) + '"',
         'OPENCODE_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/opencode"',
         '',
         'echo "🚀 Fetching Agent-insight telemetry components from $SKILL_INSIGHT_BASE_URL..."',
@@ -53,7 +62,6 @@ function generateBashScript(host: string, baseUrl: string): string {
         'mkdir -p "$OPENCODE_CONFIG_DIR/plugins"',
         'mkdir -p "$HOME/.opencode/skills"',
         'mkdir -p "$HOME/.claude/projects"',
-        'mkdir -p "$HOME/.openclaw/agents"',
         'mkdir -p ".opencode/skills"',
         'mkdir -p "$HOME/.agent-insight/example"',
         'echo "📂 Created necessary directories"',
@@ -87,8 +95,7 @@ function generateBashScript(host: string, baseUrl: string): string {
         '',
         'const frameworks = [',
         '    { name: \'OpenCode\', value: \'opencode\' },',
-        '    { name: \'Claude Code\', value: \'claude\' },',
-        '    { name: \'OpenClaw\', value: \'openclaw\' }',
+        '    { name: \'Claude Code\', value: \'claude\' }',
         '];',
         '',
         'async function select() {',
@@ -108,6 +115,7 @@ function generateBashScript(host: string, baseUrl: string): string {
         '            name: \'frameworks\',',
         '            message: \'集成到：\',',
         '            choices: frameworks,',
+        '            default: [\'opencode\'],',
         '            pageSize: 10,',
         '            loop: false',
         '        }',
@@ -154,7 +162,6 @@ function generateBashScript(host: string, baseUrl: string): string {
         '# Set installation flags based on selection',
         'INSTALL_OPENCODE=false',
         'INSTALL_CLAUDE=false',
-        'INSTALL_OPENCLAW=false',
         '',
         'if [[ "$SELECTED_FRAMEWORKS" == *"opencode"* ]]; then',
         '    INSTALL_OPENCODE=true',
@@ -162,12 +169,9 @@ function generateBashScript(host: string, baseUrl: string): string {
         'if [[ "$SELECTED_FRAMEWORKS" == *"claude"* ]]; then',
         '    INSTALL_CLAUDE=true',
         'fi',
-        'if [[ "$SELECTED_FRAMEWORKS" == *"openclaw"* ]]; then',
-        '    INSTALL_OPENCLAW=true',
-        'fi',
         '',
         '# Exit if nothing selected',
-        'if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ]; then',
+        'if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ]; then',
         '    echo "⚠️  未选择任何框架组件，将跳过插件安装。"',
         '    echo "   继续执行配置步骤..."',
         '    echo ""',
@@ -219,11 +223,6 @@ function generateBashScript(host: string, baseUrl: string): string {
         '    echo "🛰️  Claude Code will use official OpenTelemetry logs; no session-file watcher is required."',
         'fi',
         '',
-        'if [ "$INSTALL_OPENCLAW" = "true" ]; then',
-        '    echo "⏬ Downloading OpenClaw Watcher..."',
-        '    curl -sSf "$SKILL_INSIGHT_BASE_URL/api/setup/openclaw-watcher" -o "$HOME/.agent-insight/openclaw_watcher_client.ts"',
-        'fi',
-        '',
         '# 4. Configure ~/.agent-insight/.env',
         'SKILL_INSIGHT_CONFIG_FILE="$HOME/.agent-insight/.env"',
         'EXISTING_KEY=""',
@@ -236,8 +235,10 @@ function generateBashScript(host: string, baseUrl: string): string {
         'fi',
         '',
         '# -- API Key Logic --',
-        'FINAL_KEY="$EXISTING_KEY"',
-        'if [ -n "$EXISTING_KEY" ]; then',
+        'FINAL_KEY="${SKILL_INSIGHT_SETUP_API_KEY:-$EXISTING_KEY}"',
+        'if [ -n "$SKILL_INSIGHT_SETUP_API_KEY" ]; then',
+        '    echo "🔑 Using API Key from setup URL."',
+        'elif [ -n "$EXISTING_KEY" ]; then',
         '    echo "🔑 Found existing API Key."',
         '    read -p "👉 Use existing key? (y/N, Default: y): " USE_EXISTING < /dev/tty',
         '    if [[ "$USE_EXISTING" =~ ^[Nn]$ ]]; then',
@@ -289,22 +290,6 @@ function generateBashScript(host: string, baseUrl: string): string {
         'rm "${SKILL_INSIGHT_CONFIG_FILE}.bak"',
         'echo "✅ Configuration updated at $SKILL_INSIGHT_CONFIG_FILE"',
         '',
-        '# 6. Install Watcher Dependencies',
-        'if [ "$INSTALL_OPENCLAW" = "true" ]; then',
-        '    echo ""',
-        '    echo "📦 Installing watcher dependencies..."',
-        '    if command -v npm &> /dev/null; then',
-        '      cd "$HOME/.agent-insight"',
-        '      if [ ! -f "package.json" ]; then',
-        '        echo \'{"name": "skill-insight-watcher", "version": "1.0.0", "type": "module", "dependencies": {}}\' > package.json',
-        '      fi',
-        '      npm install chokidar --save 2>/dev/null',
-        '      echo "✅ Dependencies installed"',
-        '    else',
-        '      echo "⚠️  npm not found. Skipping dependency installation."',
-        '    fi',
-        'fi',
-        '',
         '# 6.5 Configure Claude Code official OTel logs',
         'if [ "$INSTALL_CLAUDE" = "true" ]; then',
         '    cat > "$HOME/.agent-insight/claude_otel_env.sh" << \'CLAUDE_OTEL_EOF\'',
@@ -353,32 +338,13 @@ function generateBashScript(host: string, baseUrl: string): string {
         '',
         '# 7. Create Watcher Startup/Stop Scripts',
         'NEEDS_WATCHER_SCRIPTS=false',
-        'if [ "$INSTALL_OPENCLAW" = "true" ] || [ "$INSTALL_OPENCODE" = "true" ]; then',
+        'if [ "$INSTALL_OPENCODE" = "true" ]; then',
         '    NEEDS_WATCHER_SCRIPTS=true',
         'fi',
         '',
         'if [ "$NEEDS_WATCHER_SCRIPTS" = "true" ]; then',
         '    echo ""',
         '    echo "📝 Creating watcher management scripts..."',
-        '',
-        '    if [ "$INSTALL_OPENCLAW" = "true" ]; then',
-        '        cat > "$HOME/.agent-insight/start_openclaw_watcher.sh" << \'WATCHER_EOF\'',
-        '#!/bin/bash',
-        'pkill -f "openclaw_watcher_client.ts" 2>/dev/null',
-        'cd "$HOME/.agent-insight" && nohup npx -y tsx "$HOME/.agent-insight/openclaw_watcher_client.ts" > "$HOME/.agent-insight/logs/openclaw_watcher.log" 2>&1 &',
-        'echo $! > "$HOME/.agent-insight/openclaw_watcher.pid"',
-        'echo "OpenClaw watcher started with PID $(cat $HOME/.agent-insight/openclaw_watcher.pid)"',
-        'WATCHER_EOF',
-        '        chmod +x "$HOME/.agent-insight/start_openclaw_watcher.sh"',
-        '',
-        '        cat > "$HOME/.agent-insight/stop_openclaw_watcher.sh" << \'STOP_OPENCLAW_EOF\'',
-        '#!/bin/bash',
-        'pkill -f "openclaw_watcher_client.ts" 2>/dev/null',
-        'rm -f "$HOME/.agent-insight/openclaw_watcher.pid"',
-        'echo "OpenClaw watcher stopped"',
-        'STOP_OPENCLAW_EOF',
-        '        chmod +x "$HOME/.agent-insight/stop_openclaw_watcher.sh"',
-        '    fi',
         '',
         // OpenCode uploader: 5-min fallback daemon. Plugin-side kickUploader is
         // the primary trigger (low latency, fires on session.idle); this daemon
@@ -429,7 +395,6 @@ function generateBashScript(host: string, baseUrl: string): string {
         '#!/bin/bash',
         'echo "Starting Agent-Insight watchers..."',
         'WATCHER_HEADER',
-        '    if [ "$INSTALL_OPENCLAW" = "true" ]; then echo \'"$HOME/.agent-insight/start_openclaw_watcher.sh"\' >> "$HOME/.agent-insight/start_watchers.sh"; fi',
         '    if [ "$INSTALL_OPENCODE" = "true" ]; then echo \'"$HOME/.agent-insight/start_opencode_uploader.sh"\' >> "$HOME/.agent-insight/start_watchers.sh"; fi',
         '    echo \'echo "All watchers started!"\' >> "$HOME/.agent-insight/start_watchers.sh"',
         '    chmod +x "$HOME/.agent-insight/start_watchers.sh"',
@@ -438,7 +403,6 @@ function generateBashScript(host: string, baseUrl: string): string {
         '#!/bin/bash',
         'echo "Stopping Agent-Insight watchers..."',
         'STOP_HEADER',
-        '    if [ "$INSTALL_OPENCLAW" = "true" ]; then echo \'"$HOME/.agent-insight/stop_openclaw_watcher.sh"\' >> "$HOME/.agent-insight/stop_watchers.sh"; fi',
         '    if [ "$INSTALL_OPENCODE" = "true" ]; then echo \'"$HOME/.agent-insight/stop_opencode_uploader.sh"\' >> "$HOME/.agent-insight/stop_watchers.sh"; fi',
         '    echo \'echo "All watchers stopped!"\' >> "$HOME/.agent-insight/stop_watchers.sh"',
         '    chmod +x "$HOME/.agent-insight/stop_watchers.sh"',
@@ -464,7 +428,6 @@ function generateBashScript(host: string, baseUrl: string): string {
         'if [ "$INSTALL_OPENCODE" = "true" ]; then echo "  ✅ OpenCode Command: ~/.config/opencode/commands/si-optimizer.md"; fi',
         'if [ "$INSTALL_OPENCODE" = "true" ]; then echo "  ✅ OpenCode Uploader Daemon: ~/.agent-insight/opencode_uploader_client.js (5-min poll)"; fi',
         'if [ "$INSTALL_CLAUDE" = "true" ]; then echo "  ✅ Claude Code OTel: ~/.agent-insight/claude_otel_env.sh"; fi',
-        'if [ "$INSTALL_OPENCLAW" = "true" ]; then echo "  ✅ OpenClaw Watcher: ~/.agent-insight/openclaw_watcher_client.ts"; fi',
         '',
         'if [ "$NEEDS_WATCHER_SCRIPTS" = "true" ]; then',
         '    echo ""',
@@ -478,20 +441,20 @@ function generateBashScript(host: string, baseUrl: string): string {
         'echo "Usage:"',
         'if [ "$INSTALL_OPENCODE" = "true" ]; then echo "  1. Run: opencode run \'hello\'"; fi',
         'if [ "$INSTALL_CLAUDE" = "true" ]; then echo "  2. Restart terminal, then run: claude"; fi',
-        'if [ "$INSTALL_OPENCLAW" = "true" ]; then echo "  3. OpenClaw will automatically monitor and upload telemetry"; fi',
         'echo "------------------------------------------------"',
     ];
     return lines.join('\n');
 }
 
-function generatePowerShellScript(host: string, baseUrl: string): string {
+function generatePowerShellScript(host: string, baseUrl: string, apiKey: string): string {
     const lines = [
         '# =============================================================================',
         '# Agent-insight One-Click Setup (PowerShell)',
         '# =============================================================================',
         '',
-        '$SKILL_INSIGHT_HOST = "' + host + '"',
-        '$SKILL_INSIGHT_BASE_URL = "' + baseUrl + '"',
+        '$SKILL_INSIGHT_HOST = "' + powerShellDoubleQuoted(host) + '"',
+        '$SKILL_INSIGHT_BASE_URL = "' + powerShellDoubleQuoted(baseUrl) + '"',
+        '$SKILL_INSIGHT_SETUP_API_KEY = "' + powerShellDoubleQuoted(apiKey) + '"',
         '',
         'Write-Host "🚀 Fetching Agent-insight telemetry components from $SKILL_INSIGHT_BASE_URL..."',
         '',
@@ -521,7 +484,6 @@ function generatePowerShellScript(host: string, baseUrl: string): string {
         'New-Item -ItemType Directory -Force -Path "$homeDir\\.opencode\\plugins" | Out-Null',
         'New-Item -ItemType Directory -Force -Path "$homeDir\\.opencode\\skills" | Out-Null',
         'New-Item -ItemType Directory -Force -Path "$homeDir\\.claude\\projects" | Out-Null',
-        'New-Item -ItemType Directory -Force -Path "$homeDir\\.openclaw\\agents" | Out-Null',
         'New-Item -ItemType Directory -Force -Path ".opencode\\skills" | Out-Null',
         'Write-Host "📂 Created necessary directories"',
         '',
@@ -547,8 +509,7 @@ function generatePowerShellScript(host: string, baseUrl: string): string {
         '',
         'const frameworks = [',
         '    { name: \'OpenCode\', value: \'opencode\' },',
-        '    { name: \'Claude Code\', value: \'claude\' },',
-        '    { name: \'OpenClaw\', value: \'openclaw\' }',
+        '    { name: \'Claude Code\', value: \'claude\' }',
         '];',
         '',
         'async function select() {',
@@ -568,6 +529,7 @@ function generatePowerShellScript(host: string, baseUrl: string): string {
         '            name: \'frameworks\',',
         '            message: \'集成到：\',',
         '            choices: frameworks,',
+        '            default: [\'opencode\'],',
         '            pageSize: 10,',
         '            loop: false',
         '        }',
@@ -617,7 +579,6 @@ function generatePowerShellScript(host: string, baseUrl: string): string {
         '# Set installation flags based on selection',
         '$INSTALL_OPENCODE = $false',
         '$INSTALL_CLAUDE = $false',
-        '$INSTALL_OPENCLAW = $false',
         '',
         'if ($SELECTED_FRAMEWORKS -match "opencode") {',
         '    $INSTALL_OPENCODE = $true',
@@ -625,12 +586,9 @@ function generatePowerShellScript(host: string, baseUrl: string): string {
         'if ($SELECTED_FRAMEWORKS -match "claude") {',
         '    $INSTALL_CLAUDE = $true',
         '}',
-        'if ($SELECTED_FRAMEWORKS -match "openclaw") {',
-        '    $INSTALL_OPENCLAW = $true',
-        '}',
         '',
         '# Exit if nothing selected',
-        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_OPENCLAW) {',
+        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE) {',
         '    Write-Host "⚠️  未选择任何框架组件，将跳过插件安装。"',
         '    Write-Host "   继续执行配置步骤..."',
         '    Write-Host ""',
@@ -672,11 +630,6 @@ function generatePowerShellScript(host: string, baseUrl: string): string {
         '    Write-Host "🛰️  Claude Code will use official OpenTelemetry logs; no session-file watcher is required."',
         '}',
         '',
-        'if ($INSTALL_OPENCLAW) {',
-        '    Write-Host "⏬ Downloading OpenClaw Watcher..."',
-        '    Invoke-WebRequest -Uri "$SKILL_INSIGHT_BASE_URL/api/setup/openclaw-watcher" -OutFile "$homeDir\\.agent-insight\\openclaw_watcher_client.ts"',
-        '}',
-        '',
         '# 4. Configure ~/.agent-insight/.env',
         '$SKILL_INSIGHT_CONFIG_FILE = "$homeDir\\.agent-insight\\.env"',
         '$EXISTING_KEY = ""',
@@ -699,8 +652,10 @@ function generatePowerShellScript(host: string, baseUrl: string): string {
         '}',
         '',
         '# -- API Key Logic --',
-        '$FINAL_KEY = $EXISTING_KEY',
-        'if ($EXISTING_KEY) {',
+        '$FINAL_KEY = if ($SKILL_INSIGHT_SETUP_API_KEY) { $SKILL_INSIGHT_SETUP_API_KEY } else { $EXISTING_KEY }',
+        'if ($SKILL_INSIGHT_SETUP_API_KEY) {',
+        '    Write-Host "🔑 Using API Key from setup URL."',
+        '} elseif ($EXISTING_KEY) {',
         '    Write-Host "🔑 Found existing API Key."',
         '    $USE_EXISTING = Read-Host "👉 Use existing key? (y/N, Default: y)"',
         '    if ($USE_EXISTING -match \'^[Nn]$\') {',
@@ -753,22 +708,6 @@ function generatePowerShellScript(host: string, baseUrl: string): string {
         'Remove-Item "$SKILL_INSIGHT_CONFIG_FILE.bak" -Force',
         'Write-Host "✅ Configuration updated at $SKILL_INSIGHT_CONFIG_FILE"',
         '',
-        '# 6. Install Watcher Dependencies',
-        'if ($INSTALL_OPENCLAW) {',
-        '    Write-Host ""',
-        '    Write-Host "📦 Installing watcher dependencies..."',
-        '    if (Get-Command npm -ErrorAction SilentlyContinue) {',
-        '        Set-Location "$homeDir\\.agent-insight"',
-        '        if (-not (Test-Path "package.json")) {',
-        '            \'{"name": "skill-insight-watcher", "version": "1.0.0", "type": "module", "dependencies": {}}\' | Out-File -FilePath "package.json" -Encoding utf8',
-        '        }',
-        '        npm install chokidar --save 2>$null',
-        '        Write-Host "✅ Dependencies installed"',
-        '    } else {',
-        '        Write-Host "⚠️  npm not found. Skipping dependency installation."',
-        '    }',
-        '}',
-        '',
         '# 6.5 Configure Claude Code official OTel logs',
         'if ($INSTALL_CLAUDE) {',
         '    $claudeOtelScript = @\'',
@@ -816,30 +755,13 @@ function generatePowerShellScript(host: string, baseUrl: string): string {
         '',
         '# 7. Create Watcher Startup/Stop Scripts',
         '$NEEDS_WATCHER_SCRIPTS = $false',
-        'if ($INSTALL_OPENCLAW -or $INSTALL_OPENCODE) {',
+        'if ($INSTALL_OPENCODE) {',
         '    $NEEDS_WATCHER_SCRIPTS = $true',
         '}',
         '',
         'if ($NEEDS_WATCHER_SCRIPTS) {',
         '    Write-Host ""',
         '    Write-Host "📝 Creating watcher management scripts..."',
-        '',
-        '    if ($INSTALL_OPENCLAW) {',
-        '        $startScript = @\'',
-        'pkill -f "openclaw_watcher_client.ts" 2>/dev/null',
-        'Set-Location "$env:USERPROFILE\\.agent-insight"',
-        'Start-Process -FilePath "npx" -ArgumentList "-y", "tsx", "$env:USERPROFILE\\.agent-insight\\openclaw_watcher_client.ts" -RedirectStandardOutput "$env:USERPROFILE\\.agent-insight\\logs\\openclaw_watcher.log" -RedirectStandardError "$env:USERPROFILE\\.agent-insight\\logs\\openclaw_watcher_error.log" -NoNewWindow',
-        'Write-Host "OpenClaw watcher started"',
-        '\'@',
-        '        Set-Content -Path "$homeDir\\.agent-insight\\start_openclaw_watcher.ps1" -Value $startScript -Encoding UTF8',
-        '',
-        '        $stopScript = @\'',
-        'Get-Process | Where-Object { $_.CommandLine -like "*openclaw_watcher_client.ts*" } | Stop-Process -Force -ErrorAction SilentlyContinue',
-        'Remove-Item "$env:USERPROFILE\\.agent-insight\\openclaw_watcher.pid" -Force -ErrorAction SilentlyContinue',
-        'Write-Host "OpenClaw watcher stopped"',
-        '\'@',
-        '        Set-Content -Path "$homeDir\\.agent-insight\\stop_openclaw_watcher.ps1" -Value $stopScript -Encoding UTF8',
-        '    }',
         '',
         // OpenCode uploader fallback daemon (PowerShell). Polls every N seconds;
         // mtime gate inside the uploader keeps idle cycles ~5ms.
@@ -880,13 +802,11 @@ function generatePowerShellScript(host: string, baseUrl: string): string {
         '    }',
         '',
         '    $combinedStart = \'Write-Host "Starting Agent-Insight watchers..."\'',
-        '    if ($INSTALL_OPENCLAW) { $combinedStart += [char]10 + "& `"$homeDir\\.agent-insight\\start_openclaw_watcher.ps1`"" }',
         '    if ($INSTALL_OPENCODE) { $combinedStart += [char]10 + "& `"$homeDir\\.agent-insight\\start_opencode_uploader.ps1`"" }',
         '    $combinedStart += [char]10 + \'Write-Host "All watchers started!"\'',
         '    Set-Content -Path "$homeDir\\.agent-insight\\start_watchers.ps1" -Value $combinedStart -Encoding UTF8',
         '',
         '    $combinedStop = \'Write-Host "Stopping Agent-Insight watchers..."\'',
-        '    if ($INSTALL_OPENCLAW) { $combinedStop += [char]10 + "& `"$homeDir\\.agent-insight\\stop_openclaw_watcher.ps1`"" }',
         '    if ($INSTALL_OPENCODE) { $combinedStop += [char]10 + "& `"$homeDir\\.agent-insight\\stop_opencode_uploader.ps1`"" }',
         '    $combinedStop += [char]10 + \'Write-Host "All watchers stopped!"\'',
         '    Set-Content -Path "$homeDir\\.agent-insight\\stop_watchers.ps1" -Value $combinedStop -Encoding UTF8',
@@ -911,7 +831,6 @@ function generatePowerShellScript(host: string, baseUrl: string): string {
         'if ($INSTALL_OPENCODE) { Write-Host "  ✅ OpenCode Plugin: ~/.opencode/plugins/Witty-Skill-Insight.ts" }',
         'if ($INSTALL_OPENCODE) { Write-Host "  ✅ OpenCode Uploader Daemon: ~/.agent-insight/opencode_uploader_client.js (5-min poll)" }',
         'if ($INSTALL_CLAUDE) { Write-Host "  ✅ Claude Code OTel: ~/.agent-insight/claude_otel_env.ps1" }',
-        'if ($INSTALL_OPENCLAW) { Write-Host "  ✅ OpenClaw Watcher: ~/.agent-insight/openclaw_watcher_client.ts" }',
         '',
         'if ($NEEDS_WATCHER_SCRIPTS) {',
         '    Write-Host ""',
@@ -925,7 +844,6 @@ function generatePowerShellScript(host: string, baseUrl: string): string {
         'Write-Host "Usage:"',
         'if ($INSTALL_OPENCODE) { Write-Host "  1. Run: opencode run \'hello\'" }',
         'if ($INSTALL_CLAUDE) { Write-Host "  2. Restart PowerShell, then run: claude" }',
-        'if ($INSTALL_OPENCLAW) { Write-Host "  3. OpenClaw will automatically monitor and upload telemetry" }',
         'Write-Host "------------------------------------------------"',
     ];
     return lines.join('\n');
@@ -935,25 +853,24 @@ export async function GET(request: Request) {
     const host = request.headers.get('x-forwarded-host') || request.headers.get('host') || '127.0.0.1:3000';
     const protocol = request.headers.get('x-forwarded-proto') || 'https';
 
-    // Detect base path from request URL (e.g., /skill-insight/api/setup -> /skill-insight)
     const requestUrl = new URL(request.url);
-    const basePath = requestUrl.pathname.replace(/\/api\/setup\/?$/, '');
     // --- 直接读取环境变量，不再通过 pathname 截取 ---
     const urlPrefix = process.env.NEXT_PUBLIC_URL_PREFIX || '';
     const baseUrl = `${protocol}://${host}${urlPrefix}`;
     const skillInsightHost = baseUrl;
+    const apiKey = requestUrl.searchParams.get('key') || requestUrl.searchParams.get('apiKey') || '';
 
     const platform = detectPlatform(request);
 
     if (platform === 'windows') {
-        const script = generatePowerShellScript(skillInsightHost, baseUrl);
+        const script = generatePowerShellScript(skillInsightHost, baseUrl, apiKey);
         return new NextResponse(script, {
             headers: {
                 'Content-Type': 'text/plain; charset=utf-8',
             },
         });
     } else {
-        const script = generateBashScript(skillInsightHost, baseUrl);
+        const script = generateBashScript(skillInsightHost, baseUrl, apiKey);
         return new NextResponse(script, {
             headers: {
                 'Content-Type': 'text/x-shellscript',
