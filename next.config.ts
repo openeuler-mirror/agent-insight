@@ -1,5 +1,10 @@
 import type { NextConfig } from "next";
+import { config } from "dotenv";
+import os from "node:os";
 import path from "path";
+
+config({ path: path.join(process.env.AGENT_INSIGHT_DATA_DIR || path.join(os.homedir(), ".agent-insight"), ".env") });
+config();
 
 const nextConfig: NextConfig = {
   basePath: process.env.NEXT_PUBLIC_URL_PREFIX || '',

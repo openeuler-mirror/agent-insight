@@ -6,15 +6,33 @@
 # Navigate to the project root directory
 cd "$(dirname "$0")/.."
 
-# Auto-initialize environment and data directory
-if [ ! -f .env ] && [ -f .env.example ]; then
-  echo "No .env found. Initializing from .env.example..."
-  cp .env.example .env
+AGENT_INSIGHT_HOME="${AGENT_INSIGHT_DATA_DIR:-$HOME/.agent-insight}"
+AGENT_INSIGHT_ENV_FILE="$AGENT_INSIGHT_HOME/.env"
+AGENT_INSIGHT_DATA_DIR="$AGENT_INSIGHT_HOME/data"
+DEFAULT_DATABASE_URL='file:../data/witty_insight.db'
+
+load_agent_insight_env() {
+  if [ -f "$AGENT_INSIGHT_ENV_FILE" ]; then
+    set -a
+    source "$AGENT_INSIGHT_ENV_FILE"
+    set +a
+  fi
+
+  if [ "${DATABASE_URL:-}" = "$DEFAULT_DATABASE_URL" ]; then
+    export DATABASE_URL="file:$AGENT_INSIGHT_DATA_DIR/witty_insight.db"
+  fi
+}
+
+# Auto-initialize unified environment and data directory
+if [ ! -f "$AGENT_INSIGHT_ENV_FILE" ] && [ -f .env.example ]; then
+  echo "No ~/.agent-insight/.env found. Initializing from .env.example..."
+  mkdir -p "$AGENT_INSIGHT_HOME"
+  cp .env.example "$AGENT_INSIGHT_ENV_FILE"
 fi
 
-if [ ! -d data ]; then
-  echo "Creating data directory..."
-  mkdir -p data
+if [ ! -d "$AGENT_INSIGHT_DATA_DIR" ]; then
+  echo "Creating data directory at $AGENT_INSIGHT_DATA_DIR..."
+  mkdir -p "$AGENT_INSIGHT_DATA_DIR"
 fi
 
 echo "=== Restart Script (DEV MODE) Started ==="
@@ -44,13 +62,8 @@ find_pid_on_port() {
 PORT=3000
 echo "Checking port $PORT..."
 
-# Check for OpenGauss configuration in .env
-if [ -f .env ]; then
-  # Load .env variables safely
-  set -a
-  source .env
-  set +a
-fi
+# Check for OpenGauss configuration in ~/.agent-insight/.env
+load_agent_insight_env
 
 if [ -n "$DB_HOST" ]; then
   echo "OpenGauss configuration detected (DB_HOST=$DB_HOST)."
@@ -130,11 +143,10 @@ echo "Running ad-hoc SQLite column migrations..."
 # (SQLite 3.25+ 原生支持) 显式迁移，老数据原地保留。
 # 仅在使用 SQLite（无 DB_HOST，即没配 OpenGauss）时跑。
 if [ -z "$DB_HOST" ] && command -v sqlite3 >/dev/null 2>&1; then
-  # DATABASE_URL 形如 "file:../data/witty_insight.db"（相对 prisma/ 目录），
-  # 从项目根落到 data/witty_insight.db。从 .env 解析；缺省 fallback。
-  DB_PATH=$(grep -E '^DATABASE_URL=' .env 2>/dev/null | sed -E 's/^DATABASE_URL=//; s/^"//; s/"$//; s|^file:\.\./|./|; s|^file:||')
+  # 默认 DATABASE_URL 写在 ~/.agent-insight/.env；默认相对值会在加载时解析到用户数据目录。
+  DB_PATH=$(printf '%s' "${DATABASE_URL:-}" | sed -E 's/^"//; s/"$//; s|^file:||')
   if [ -z "$DB_PATH" ]; then
-    DB_PATH="data/witty_insight.db"
+    DB_PATH="$AGENT_INSIGHT_DATA_DIR/witty_insight.db"
   fi
   if [ -f "$DB_PATH" ]; then
     # 召回 → 触发：把历史 Execution.skillRecallRate 改名成 skillTriggerRate。
@@ -213,9 +225,7 @@ fi
 echo "Starting server in DEVELOPMENT mode (npm run dev)..."
 
 set -a
-if [ -f .env ]; then
-  source .env
-fi
+load_agent_insight_env
 set +a
 
 nohup npm run dev > server.log 2>&1 &
@@ -224,4 +234,15 @@ NEW_PID=$!
 echo "Server started successfully."
 echo "PID: $NEW_PID"
 echo "Log file: server.log"
+echo "Syncing admin API key to $AGENT_INSIGHT_ENV_FILE..."
+for i in {1..20}; do
+  if node scripts/sync_admin_api_key.js "$PORT" "http://localhost:$PORT"; then
+    break
+  fi
+  if [ "$i" = "20" ]; then
+    echo "⚠️  Admin API key sync failed after waiting for server startup."
+  else
+    sleep 1
+  fi
+done
 echo "-----------------------------------"
