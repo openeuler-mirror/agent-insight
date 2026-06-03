@@ -59,6 +59,18 @@ interface RunPair {
     taskId?: string;
 }
 
+interface GrayscaleBinding {
+    source: 'grayscale-ab';
+    grayscaleTaskId: string;
+    caseId: string;
+    side: 'a' | 'b';
+    runIndex: number;
+    roundIndex: number;
+    executionTraceId: string;
+    evaluationClaimId: string;
+    evaluationAttempt: number;
+}
+
 const SUPPORTED_TRAJECTORY_EVALUATORS = new Set([
     'trace-quality-evaluator',
     'preset-agent-trace-quality',
@@ -285,6 +297,55 @@ function mergeRawAnalysisMeta(
 function safeParseRecord(text: string | null | undefined): Record<string, unknown> {
     const parsed = parseLooseJson(text || '');
     return parsed && typeof parsed === 'object' ? parsed : {};
+}
+
+function normalizeGrayscaleBinding(value: unknown): GrayscaleBinding | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const raw = value as Record<string, unknown>;
+    const source = String(raw.source || '').trim();
+    const grayscaleTaskId = String(raw.grayscaleTaskId || '').trim();
+    const caseId = String(raw.caseId || '').trim();
+    const side = String(raw.side || '').trim();
+    const executionTraceId = String(raw.executionTraceId || '').trim();
+    const evaluationClaimId = String(raw.evaluationClaimId || '').trim();
+    const runIndex = typeof raw.runIndex === 'number' && Number.isFinite(raw.runIndex)
+        ? Math.floor(raw.runIndex)
+        : Number.NaN;
+    const roundIndex = typeof raw.roundIndex === 'number' && Number.isFinite(raw.roundIndex)
+        ? Math.floor(raw.roundIndex)
+        : Number.NaN;
+    const evaluationAttempt = typeof raw.evaluationAttempt === 'number' && Number.isFinite(raw.evaluationAttempt)
+        ? Math.floor(raw.evaluationAttempt)
+        : Number.NaN;
+    if (
+        source !== 'grayscale-ab'
+        || !grayscaleTaskId
+        || !caseId
+        || (side !== 'a' && side !== 'b')
+        || !executionTraceId
+        || !evaluationClaimId
+        || !Number.isFinite(runIndex)
+        || !Number.isFinite(roundIndex)
+        || !Number.isFinite(evaluationAttempt)
+    ) {
+        return null;
+    }
+    return {
+        source: 'grayscale-ab',
+        grayscaleTaskId,
+        caseId,
+        side: side as 'a' | 'b',
+        runIndex,
+        roundIndex,
+        executionTraceId,
+        evaluationClaimId,
+        evaluationAttempt,
+    };
+}
+
+function readGrayscaleBinding(rawAnalysisJson: string | null | undefined): GrayscaleBinding | null {
+    const parsed = safeParseRecord(rawAnalysisJson);
+    return normalizeGrayscaleBinding(parsed.grayscaleBinding);
 }
 
 async function evaluateTaskCompletionAgainstExpected(
@@ -732,6 +793,7 @@ export async function POST(request: Request) {
         const body = await request.json();
         const user = String(body.user || '').trim();
         const appendRunId = String(body.evaluatorRunId || body.runId || '').trim();
+        const grayscaleBinding = normalizeGrayscaleBinding(body.grayscaleBinding);
         const requestedEvaluators = Array.isArray(body.evaluators) && body.evaluators.length > 0
             ? body.evaluators
             : body.evaluator;
@@ -931,6 +993,7 @@ export async function POST(request: Request) {
                         rawAnalysisJson: JSON.stringify({
                             ...evaluatorMeta,
                             taskMeta,
+                            ...(grayscaleBinding ? { grayscaleBinding } : {}),
                             ...(allowedDatasetIds.length > 0 ? { allowedDatasetIds } : {}),
                         }),
                     },
@@ -965,6 +1028,7 @@ export async function POST(request: Request) {
                     rawAnalysisJson: JSON.stringify({
                         ...evaluatorMeta,
                         taskMeta,
+                        ...(grayscaleBinding ? { grayscaleBinding } : {}),
                         watchPlaceholder: true,
                         ...(requestedPlaceholderOnly ? { placeholderOnly: true } : {}),
                     }),
@@ -999,7 +1063,11 @@ export async function POST(request: Request) {
                         executionId: executionId || null,
                         taskId: taskId || null,
                         status: 'pending',
-                        rawAnalysisJson: JSON.stringify({ ...evaluatorMeta, taskMeta }),
+                        rawAnalysisJson: JSON.stringify({
+                            ...evaluatorMeta,
+                            taskMeta,
+                            ...(grayscaleBinding ? { grayscaleBinding } : {}),
+                        }),
                     },
                 });
                 created.push({ id: row.id, caseId, executionId, taskId });
@@ -1160,6 +1228,7 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
         : null;
     const evaluatorMeta = readSelectedEvaluatorMeta(row.rawAnalysisJson);
     const taskMeta = extractTrajectoryTaskMeta(row.rawAnalysisJson, row.createdAt);
+    const grayscaleBinding = readGrayscaleBinding(row.rawAnalysisJson);
     const shouldRunTraceEvaluation = evaluatorMeta.selectedEvaluators.includes(TRACE_EVALUATOR_ID);
     const shouldRunResultEvaluation = evaluatorMeta.selectedEvaluators.includes(TASK_COMPLETION_EVALUATOR_ID);
     const customEvaluatorIds = evaluatorMeta.selectedEvaluators.filter(isCustomEvaluatorId);
@@ -1495,6 +1564,7 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
     const baseRawAnalysisMeta = {
         ...evaluatorMeta,
         taskMeta,
+        ...(grayscaleBinding ? { grayscaleBinding } : {}),
         caseSnapshot,
         skillAttribution: skillAttributionStatus,
         comparisonMode,
@@ -1628,6 +1698,9 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
                 );
                 resultEvaluationRawAnalysis = {
                     ...(resultJudgment.rawAnalysis || {}),
+                    score: resultJudgment.score,
+                    is_correct: resultJudgment.isCorrect,
+                    reason: resultJudgment.reason,
                     result_artifact_extraction: {
                         status: artifactExtraction.rawAnalysis?.fallback ? 'fallback_final_result' : artifactExtraction.status,
                         confidence: artifactExtraction.confidence,
