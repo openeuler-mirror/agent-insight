@@ -50,17 +50,16 @@ interface AgentDataset {
 interface Agent {
     id: string;
     name: string;
-    ownership: 'system' | 'user' | 'unregistered';
+    ownership: 'system' | 'user';
     layer: 'main' | 'subagent';
     platform: 'opencode' | 'openclaw' | 'hermes';
     version: string;
     framework: string;
-    status: 'running' | 'idle' | 'unregistered';
+    status: 'running' | 'idle';
     successRate?: string;
     todayCalls: string;
     p99?: string;
     parentAgent?: string;
-    discoveryTime?: string;
     lastExecutedAt: string;
 }
 
@@ -422,19 +421,6 @@ export default function TrajectoryEvalCenter() {
             successRate: '94.1%',
             todayCalls: '128',
             lastExecutedAt: '2026-05-05T20:10:00',
-        },
-        {
-            id: 'temp-worker-42',
-            name: 'temp-worker-42',
-            ownership: 'unregistered',
-            layer: 'main',
-            platform: 'hermes',
-            version: 'N/A',
-            framework: 'N/A',
-            status: 'unregistered',
-            todayCalls: '12',
-            discoveryTime: '2026-05-06T10:02:00',
-            lastExecutedAt: '2026-05-06T10:02:00',
         },
         {
             id: 'order-executor',

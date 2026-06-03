@@ -6,11 +6,9 @@ import React, { FormEvent, useCallback, useEffect, useMemo, useRef, useState, Su
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
-    AlertTriangle,
     ArrowLeft,
     AtSign,
     Bot,
-    CheckCircle2,
     ChevronDown,
     ChevronRight,
     Clock,
@@ -25,7 +23,6 @@ import {
     Sparkles,
     UserRound,
     X,
-    XCircle,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -35,7 +32,6 @@ import { StatusBadge } from '@/components/feedback/StatusBadge';
 import { useAuth } from '@/lib/auth/auth-context';
 import { useLocale } from '@/lib/client/locale-context';
 import { apiFetch } from '@/lib/client/api';
-import { ExpandableText } from '@/components/text/ExpandableText';
 import { Term } from '@/components/text/Term';
 import { formatDuration, type AgentEvent, type RawInteraction } from '@/lib/engine/observability/agent-trace';
 import { buildFaultPathSteps, type FailureTraceAnchor } from '@/lib/engine/observability/fault-path';
@@ -202,14 +198,10 @@ function FaultPageContent() {
     const [timeFilter, setTimeFilter] = useState<TimeFilter>('all');
     const [anomalyFilter, setAnomalyFilter] = useState<'all' | 'yes' | 'no'>('yes'); // 默认筛选"是"
     const [frameworkFilter, setFrameworkFilter] = useState<string>('all');
-    const [agentFilter, setAgentFilter] = useState<string>('all');
+    // 初始 agent 过滤直接从 URL ?agent= 派生（懒初始化），避免 mount 后再 setState 触发级联渲染。
+    const [agentFilter, setAgentFilter] = useState<string>(() => searchParams?.get('agent') || 'all');
     const [skillFilter, setSkillFilter] = useState<string>('all');
     const [ownershipFilter, setOwnershipFilter] = useState<string>('user');
-
-    useEffect(() => {
-        const agent = searchParams?.get('agent');
-        if (agent) setAgentFilter(agent);
-    }, []);
 
     const handleSelectExecution = (e: Execution | null) => {
         setSelectedExecution(e);
@@ -306,7 +298,7 @@ function FaultPageContent() {
 
                 // 6. Agent 归属过滤
                 if (ownershipFilter !== 'all') {
-                    const ownership = e.agentOwnership ?? 'unregistered';
+                    const ownership = e.agentOwnership ?? 'user';
                     if (ownership !== ownershipFilter) return false;
                 }
 
@@ -380,7 +372,6 @@ function FaultPageContent() {
                                     <option value="all">{t('nav.allOwnership')}</option>
                                     <option value="user">{t('nav.userAgent')}</option>
                                     <option value="system">{t('nav.systemAgent')}</option>
-                                    <option value="unregistered">{t('nav.unregisteredAgent')}</option>
                                 </FilterChip>
 
                                 {/* ── Agent ── */}
@@ -496,7 +487,7 @@ function FaultPageContent() {
                                     </span>
                                     {ownershipFilter !== 'all' && (
                                         <ActiveFilterTag
-                                            label={`${t('nav.filterAgentOwnership')}: ${ownershipFilter === 'user' ? t('nav.userAgent') : ownershipFilter === 'system' ? t('nav.systemAgent') : t('nav.unregisteredAgent')}`}
+                                            label={`${t('nav.filterAgentOwnership')}: ${ownershipFilter === 'system' ? t('nav.systemAgent') : t('nav.userAgent')}`}
                                             onRemove={() => setOwnershipFilter('all')}
                                         />
                                     )}

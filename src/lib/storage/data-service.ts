@@ -1165,8 +1165,9 @@ async function readRecordsInternal(
     // of agent identity (platform + name). The `user` dimension is collapsed so a given agent
     // name resolves to one ownership regardless of which user's execution record we look at.
     // When multiple registrations exist for (platform, name) across users, prefer
-    // user > system > unregistered.
-    const OWNERSHIP_RANK: Record<string, number> = { user: 3, system: 2, unregistered: 1 };
+    // system > user: 一个全局注册的系统 Agent（user=null）是权威归属，即使同名还存在
+    // 各 user 的 trace 自动发现行（observe 时落库为 user），也应判定为 system。
+    const OWNERSHIP_RANK: Record<string, number> = { system: 2, user: 1 };
     const agentOwnershipMap = new Map<string, string>();
     const uniqueAgents = new Map<string, { platform: string; name: string }>();
     paged.forEach((r: any) => {
@@ -1190,7 +1191,7 @@ async function readRecordsInternal(
                     agentOwnershipMap.set(key, a.agentOwnership);
                 }
             }
-        } catch { /* graceful degradation — ownership stays 'unregistered' */ }
+        } catch { /* graceful degradation — ownership stays 'user' */ }
     }
 
     /* ─── 懒回填 Skill 版本绑定 ─────────────────────────────────────────
@@ -1284,8 +1285,8 @@ async function readRecordsInternal(
             agent: r.agentName || undefined,
             agentName: r.agentName || undefined,
             agentOwnership: (r.framework && effectiveAgentName)
-                ? (agentOwnershipMap.get(`${r.framework}::${effectiveAgentName}`) ?? 'unregistered')
-                : 'unregistered',
+                ? (agentOwnershipMap.get(`${r.framework}::${effectiveAgentName}`) ?? 'user')
+                : 'user',
             tokens: r.tokens || undefined,
             cost: (pricing && r.inputTokens != null && r.outputTokens != null)
                 ? calculateCost(r.inputTokens, r.outputTokens, pricing, r.cacheReadInputTokens ?? undefined, r.cacheCreationInputTokens ?? undefined)
@@ -1908,7 +1909,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
                             platform,
                             name: observed.name,
                             user,
-                            agentOwnership: 'unregistered',
+                            agentOwnership: 'user',
                             agentType: observed.agentType === 'main'
                                 ? (targetRecord.agentType || 'main')
                                 : 'subagent'
