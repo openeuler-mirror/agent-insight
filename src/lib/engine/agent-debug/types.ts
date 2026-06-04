@@ -170,13 +170,8 @@ export interface AgentDebugSkillsKeyActionResult {
   actionContent: string;
   coverage: 'covered' | 'partial' | 'missing' | 'not_applicable';
   severity: AgentDebugSeverity;
-  matchedTraceSteps: number[];
   traceComparisonAnalysis: string;
-  hasSkillImprovement: boolean;
   skillImprovementSuggestion: string;
-  skillIssueSummary?: string;
-  skillIssueEvidence?: string;
-  confidence?: number;
 }
 
 export interface AgentDebugSkillsAnalysis {
@@ -187,17 +182,8 @@ export interface AgentDebugSkillsAnalysis {
   interactionHash?: string;
   errorMessage?: string | null;
   reasonText?: string;
-  trajectoryScore?: number | null;
-  rawWeightedScore?: number | null;
-  dimensionScores?: {
-    completeness: number | null;
-    toolChoice: number;
-    redundancy: number;
-  } | null;
-  cap?: unknown;
   skillKeyActionComparison?: unknown;
   keyActionResults?: AgentDebugSkillsKeyActionResult[];
-  evaluatorSessionId?: string;
 }
 
 export interface AgentDebugReportPayload {
