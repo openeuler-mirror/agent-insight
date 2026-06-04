@@ -18,6 +18,7 @@
             "pages": [
               "user-guide/home",
               "user-guide/quickstart",
+              "user-guide/example-walkthrough",
               "user-guide/concepts",
               "user-guide/faq"
             ]
@@ -95,7 +96,8 @@
             "pages": [
               "developer-guide/architecture/index",
               "developer-guide/architecture/data-model",
-              "developer-guide/architecture/design-decisions"
+              "developer-guide/architecture/design-decisions",
+              "developer-guide/architecture/static-evaluator"
             ]
           },
           {

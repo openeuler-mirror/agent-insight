@@ -183,12 +183,15 @@ export async function POST(
         // action='abort': 任务级终止, 触发 abortController 让 in-flight runOneBatchCase 退出
         if (action === 'abort') {
             const entry = batchActiveRuns.get(taskId);
-            if (!entry) {
-                return NextResponse.json({ ok: true, note: 'no active run' });
+            if (entry) {
+                entry.abortController.abort();
+                batchActiveRuns.delete(taskId);
             }
-            entry.abortController.abort();
-            batchActiveRuns.delete(taskId);
-            return NextResponse.json({ ok: true, abortedAt: Date.now() });
+            // 无论内存里是否有在跑的 run, 都把数据库里非终态(running/evaluating/executed)的 case
+            // 重置为失败「已终止」: 服务重启后内存登记表(batchActiveRuns)清空, 旧 run 遗留的"执行中"
+            // case 没人收尾, 之前 abort 直接 return "no active run" → 看似无效且一直卡着。
+            const reset = await resetStuckCases(taskId, user);
+            return NextResponse.json({ ok: true, abortedAt: Date.now(), hadActiveRun: !!entry, reset });
         }
         // action='retry-execute' / 'retry-evaluate': 行级重试, 重置单个 case 状态后重跑
         if (action === 'retry-execute' || action === 'retry-evaluate') {
@@ -224,6 +227,24 @@ export async function POST(
     }
 }
 
+/**
+ * 在 config.datasetIds 指向的"仍存在"数据集里找出包含指定 caseId 的数据集 id。
+ * 多选数据集后不能再假设 case 一定属于 datasetIds[0]——评测需带上 case 真正归属的 datasetId,
+ * 否则 /api/eval/trajectory/run 在该数据集里找不到这个 case 会跳过评测。
+ */
+async function findCaseDatasetId(user: string, datasetIds: string[] | undefined, caseId: string): Promise<string | undefined> {
+    const ids = (datasetIds || []).filter(Boolean);
+    if (ids.length === 0) return undefined;
+    const rows = await (prisma as unknown as { agentEvalDataset: { findMany: (a: unknown) => Promise<Array<{ id: string; casesJson: string }>> } }).agentEvalDataset.findMany({
+        where: { id: { in: ids }, user },
+    });
+    for (const d of rows) {
+        const cases = JSON.parse(d.casesJson || '[]') as Array<{ id: string }>;
+        if (cases.some(c => c.id === caseId)) return d.id;
+    }
+    return undefined;
+}
+
 async function startBatchTaskInBackground(origin: string, taskId: string, user: string, caseIds: string[]) {
     // 1. 加载 task
     const task = await (prisma as unknown as { batchEvalTask: { findFirst: (a: unknown) => Promise<BatchEvalTaskRow | null> } }).batchEvalTask.findFirst({
@@ -250,16 +271,23 @@ async function startBatchTaskInBackground(origin: string, taskId: string, user: 
         }
     }
 
-    // 3. 加载 dataset, 选出要跑的 case
-    const datasetId = config.datasetIds?.[0];
-    if (!datasetId) throw new Error('dataset not selected in task config');
-    const dataset = await (prisma as unknown as { agentEvalDataset: { findFirst: (a: unknown) => Promise<{ casesJson: string } | null> } }).agentEvalDataset.findFirst({
-        where: { id: datasetId, user },
+    // 3. 加载 dataset(支持多选), 合并所有"仍存在"数据集的 case, 并记录每个 case 归属的 datasetId。
+    //    旧实现只取 datasetIds[0] 有两个 bug: ①首位数据集被删 → 整批 "dataset not found" 启动失败;
+    //    ②跨数据集勾选 case 时, 非首位数据集的 case 在执行(此处)与评测(autoEval 传 datasetId)两处都被静默丢弃。
+    //    case id 为全局唯一 UUID, 跨数据集合并无键冲突; 全部数据集都查不到才报错。
+    const datasetIds = (config.datasetIds || []).filter(Boolean);
+    if (datasetIds.length === 0) throw new Error('dataset not selected in task config');
+    const datasetRows = await (prisma as unknown as { agentEvalDataset: { findMany: (a: unknown) => Promise<Array<{ id: string; casesJson: string }>> } }).agentEvalDataset.findMany({
+        where: { id: { in: datasetIds }, user },
     });
-    if (!dataset) throw new Error('dataset not found');
-    const allCases = JSON.parse(dataset.casesJson || '[]') as Array<{ id: string; input?: string }>;
-    const caseMap = new Map(allCases.map(c => [c.id, c]));
-    const targets = caseIds.map(id => caseMap.get(id)).filter((c): c is { id: string; input?: string } => !!c);
+    if (datasetRows.length === 0) throw new Error('dataset not found');
+    const caseMap = new Map<string, { id: string; input?: string; datasetId: string }>();
+    for (const d of datasetRows) {
+        for (const c of JSON.parse(d.casesJson || '[]') as Array<{ id: string; input?: string }>) {
+            caseMap.set(c.id, { id: c.id, input: c.input, datasetId: d.id });
+        }
+    }
+    const targets = caseIds.map(id => caseMap.get(id)).filter((c): c is { id: string; input?: string; datasetId: string } => !!c);
     if (targets.length === 0) throw new Error('no valid cases selected');
 
     // 4. 初始化状态 pending, persist
@@ -286,7 +314,7 @@ async function runBatchTaskBackground(
     origin: string,
     taskId: string,
     user: string,
-    targets: Array<{ id: string; input?: string }>,
+    targets: Array<{ id: string; input?: string; datasetId?: string }>,
     config: BatchEvalConfig,
     states: Record<string, BatchCaseState>,
     skillName: string | undefined,
@@ -319,7 +347,7 @@ async function runOneBatchCase(
     origin: string,
     taskId: string,
     user: string,
-    c: { id: string; input?: string },
+    c: { id: string; input?: string; datasetId?: string },
     config: BatchEvalConfig,
     states: Record<string, BatchCaseState>,
     skillName: string | undefined,
@@ -342,9 +370,11 @@ async function runOneBatchCase(
                 skill: skillName,
                 skillVersion,
                 interactionPolicy: 'auto-deny',
-                systemAgentName: skillName ? 'grayscale-skill-agent' : 'grayscale-baseline-agent',
+                // 用例分析「从数据集」执行器: 记成 skill-debug-executor → classifyTraceSource 归为 'batch'(用例分析)。
+                // 旧实现误用 grayscale-* 名, 导致这些 trace 被标成 A/B 测试。skill/baseline 区分靠 skill 字段, 与名字无关。
+                systemAgentName: 'skill-debug-executor',
                 ephemeralServer: true,
-                recordTraceAs: skillName ? 'grayscale-skill-agent' : 'grayscale-baseline-agent',
+                recordTraceAs: 'skill-debug-executor',
                 sessionTitle: `batch ${user} · ${taskId} · ${c.id.slice(0, 8)}`,
                 workspaceTag: `batch-${taskId}-${c.id}`,
                 tagSkill: skillName,
@@ -385,7 +415,8 @@ async function runOneBatchCase(
         try {
             const evalBody: Record<string, unknown> = {
                 user,
-                datasetId: config.datasetIds?.[0],
+                // 多选数据集时 case 不一定属于 datasetIds[0], 用执行阶段记录的归属 datasetId, 否则评测会找不到 case。
+                datasetId: c.datasetId ?? config.datasetIds?.[0],
                 pairs: [{ caseId: c.id, taskId: sessionId }],
             };
             if (config.evaluationBatchId) {
@@ -505,6 +536,31 @@ async function persistStates(taskId: string, user: string, states: Record<string
         where: { id: taskId, user },
         data: { caseStatesJson: JSON.stringify(states) },
     });
+}
+
+/**
+ * 把任务里非终态(running/evaluating/executed)的 case 重置为失败「已终止」。
+ * 用于「终止」: 服务重启后内存 batchActiveRuns 已清空, 这些 case 实际并没有在跑(僵死状态),
+ * 需要在数据库里收尾, 否则 UI 永远显示"执行中"且挡住后续启动。pending(未启动)不动。
+ * 返回被重置的条数。
+ */
+async function resetStuckCases(taskId: string, user: string): Promise<number> {
+    const task = await (prisma as unknown as { batchEvalTask: { findFirst: (a: unknown) => Promise<BatchEvalTaskRow | null> } }).batchEvalTask.findFirst({
+        where: { id: taskId, user },
+    });
+    if (!task) return 0;
+    let states: Record<string, BatchCaseState>;
+    try { states = JSON.parse(task.caseStatesJson || '{}'); } catch { return 0; }
+    let n = 0;
+    for (const key of Object.keys(states)) {
+        const s = states[key];
+        if (s && (s.status === 'running' || s.status === 'evaluating' || s.status === 'executed')) {
+            states[key] = { ...s, status: 'fail', error: '已手动终止', completedAt: Date.now() };
+            n += 1;
+        }
+    }
+    if (n > 0) await persistStates(taskId, user, states);
+    return n;
 }
 
 /**
@@ -684,7 +740,8 @@ async function retryBatchCase(origin: string, taskId: string, user: string, case
             try {
                 const evalBody: Record<string, unknown> = {
                     user,
-                    datasetId: config.datasetIds?.[0],
+                    // 多选数据集时按 caseId 反查真正归属的 datasetId, 写死 datasetIds[0] 会导致评测找不到 case。
+                    datasetId: (await findCaseDatasetId(user, config.datasetIds, caseId)) ?? config.datasetIds?.[0],
                     pairs: [{ caseId, taskId: sessionId }],
                 };
                 if (config.evaluationBatchId) {

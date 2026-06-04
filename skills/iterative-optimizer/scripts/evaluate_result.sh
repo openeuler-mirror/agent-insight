@@ -51,7 +51,7 @@ fi
 
 if [[ ! -f "$ENV_FILE" ]]; then
     echo "[evaluate] 错误: 环境配置文件不存在: $ENV_FILE"
-    echo "请创建该文件并配置 SKILL_INSIGHT_HOST 和 SKILL_INSIGHT_API_KEY"
+    echo "请创建该文件并配置 AGENT_INSIGHT_HOST 和 AGENT_INSIGHT_API_KEY"
     exit 2
 fi
 
@@ -61,13 +61,13 @@ INSIGHT_API_KEY=""
 while IFS= read -r line || [[ -n "$line" ]]; do
     [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
 
-    if [[ "$line" =~ ^SKILL_INSIGHT_HOST=(.+)$ ]]; then
+    if [[ "$line" =~ ^AGENT_INSIGHT_HOST=(.+)$ ]]; then
         INSIGHT_HOST="${BASH_REMATCH[1]}"
         INSIGHT_HOST="${INSIGHT_HOST%\"}" ; INSIGHT_HOST="${INSIGHT_HOST#\"}"
         INSIGHT_HOST="${INSIGHT_HOST%\'}" ; INSIGHT_HOST="${INSIGHT_HOST#\'}"
     fi
 
-    if [[ "$line" =~ ^SKILL_INSIGHT_API_KEY=(.+)$ ]]; then
+    if [[ "$line" =~ ^AGENT_INSIGHT_API_KEY=(.+)$ ]]; then
         INSIGHT_API_KEY="${BASH_REMATCH[1]}"
         INSIGHT_API_KEY="${INSIGHT_API_KEY%\"}" ; INSIGHT_API_KEY="${INSIGHT_API_KEY#\"}"
         INSIGHT_API_KEY="${INSIGHT_API_KEY%\'}" ; INSIGHT_API_KEY="${INSIGHT_API_KEY#\'}"
@@ -75,12 +75,12 @@ while IFS= read -r line || [[ -n "$line" ]]; do
 done < "$ENV_FILE"
 
 if [[ -z "$INSIGHT_HOST" ]]; then
-    echo "[evaluate] 错误: $ENV_FILE 中未找到 SKILL_INSIGHT_HOST"
+    echo "[evaluate] 错误: $ENV_FILE 中未找到 AGENT_INSIGHT_HOST"
     exit 2
 fi
 
 if [[ -z "$INSIGHT_API_KEY" ]]; then
-    echo "[evaluate] 错误: $ENV_FILE 中未找到 SKILL_INSIGHT_API_KEY"
+    echo "[evaluate] 错误: $ENV_FILE 中未找到 AGENT_INSIGHT_API_KEY"
     exit 2
 fi
 

@@ -6,15 +6,33 @@
 # Navigate to the project root directory
 cd "$(dirname "$0")/.."
 
-# Auto-initialize environment and data directory
-if [ ! -f .env ] && [ -f .env.example ]; then
-  echo "No .env found. Initializing from .env.example..."
-  cp .env.example .env
+AGENT_INSIGHT_HOME="${AGENT_INSIGHT_DATA_DIR:-$HOME/.agent-insight}"
+AGENT_INSIGHT_ENV_FILE="$AGENT_INSIGHT_HOME/.env"
+AGENT_INSIGHT_DATA_DIR="$AGENT_INSIGHT_HOME/data"
+DEFAULT_DATABASE_URL='file:../data/witty_insight.db'
+
+load_agent_insight_env() {
+  if [ -f "$AGENT_INSIGHT_ENV_FILE" ]; then
+    set -a
+    source "$AGENT_INSIGHT_ENV_FILE"
+    set +a
+  fi
+
+  if [ "${DATABASE_URL:-}" = "$DEFAULT_DATABASE_URL" ]; then
+    export DATABASE_URL="file:$AGENT_INSIGHT_DATA_DIR/witty_insight.db"
+  fi
+}
+
+# Auto-initialize unified environment and data directory
+if [ ! -f "$AGENT_INSIGHT_ENV_FILE" ] && [ -f .env.example ]; then
+  echo "No ~/.agent-insight/.env found. Initializing from .env.example..."
+  mkdir -p "$AGENT_INSIGHT_HOME"
+  cp .env.example "$AGENT_INSIGHT_ENV_FILE"
 fi
 
-if [ ! -d data ]; then
-  echo "Creating data directory..."
-  mkdir -p data
+if [ ! -d "$AGENT_INSIGHT_DATA_DIR" ]; then
+  echo "Creating data directory at $AGENT_INSIGHT_DATA_DIR..."
+  mkdir -p "$AGENT_INSIGHT_DATA_DIR"
 fi
 
 echo "=== Restart Script (DEV MODE) Started ==="
@@ -44,13 +62,8 @@ find_pid_on_port() {
 PORT=3000
 echo "Checking port $PORT..."
 
-# Check for OpenGauss configuration in .env
-if [ -f .env ]; then
-  # Load .env variables safely
-  set -a
-  source .env
-  set +a
-fi
+# Check for OpenGauss configuration in ~/.agent-insight/.env
+load_agent_insight_env
 
 if [ -n "$DB_HOST" ]; then
   echo "OpenGauss configuration detected (DB_HOST=$DB_HOST)."
@@ -130,11 +143,10 @@ echo "Running ad-hoc SQLite column migrations..."
 # (SQLite 3.25+ 原生支持) 显式迁移，老数据原地保留。
 # 仅在使用 SQLite（无 DB_HOST，即没配 OpenGauss）时跑。
 if [ -z "$DB_HOST" ] && command -v sqlite3 >/dev/null 2>&1; then
-  # DATABASE_URL 形如 "file:../data/witty_insight.db"（相对 prisma/ 目录），
-  # 从项目根落到 data/witty_insight.db。从 .env 解析；缺省 fallback。
-  DB_PATH=$(grep -E '^DATABASE_URL=' .env 2>/dev/null | sed -E 's/^DATABASE_URL=//; s/^"//; s/"$//; s|^file:\.\./|./|; s|^file:||')
+  # 默认 DATABASE_URL 写在 ~/.agent-insight/.env；默认相对值会在加载时解析到用户数据目录。
+  DB_PATH=$(printf '%s' "${DATABASE_URL:-}" | sed -E 's/^"//; s/"$//; s|^file:||')
   if [ -z "$DB_PATH" ]; then
-    DB_PATH="data/witty_insight.db"
+    DB_PATH="$AGENT_INSIGHT_DATA_DIR/witty_insight.db"
   fi
   if [ -f "$DB_PATH" ]; then
     # 召回 → 触发：把历史 Execution.skillRecallRate 改名成 skillTriggerRate。
@@ -180,7 +192,7 @@ if [ -z "$DB_HOST" ] && command -v sqlite3 >/dev/null 2>&1; then
           echo "     问题行 (id | user | taskName | configJson 前 200 字):"
           sqlite3 "$DB_PATH" "SELECT '    ' || id || ' | ' || user || ' | ' || taskName || ' | ' || substr(configJson, 1, 200) FROM GrayscaleTask WHERE skillId IS NULL OR skillName IS NULL OR skillVersion IS NULL OR skillVersionId IS NULL;"
           echo ""
-          echo "     处理后再跑 bash scripts/restart_dev.sh。"
+          echo "     处理后再跑 bash scripts/develop_start.sh。"
           exit 1
         fi
       fi
@@ -193,7 +205,7 @@ if ! npx prisma db push; then
   echo ""
   echo "  ⛔ prisma db push 失败 —— 数据库 schema 没同步成功。"
   echo "     直接启动 server 会让运行时撞到 schema/code 不一致（旧 client 查不到的列等）。"
-  echo "     退出脚本。修好后重新跑 bash scripts/restart_dev.sh。"
+  echo "     退出脚本。修好后重新跑 bash scripts/develop_start.sh。"
   exit 1
 fi
 
@@ -205,7 +217,7 @@ if ! npx prisma generate; then
   echo "     常见原因：node_modules 里有 root 拥有的文件（之前用 sudo npm install 过）。"
   echo "     修法："
   echo "       sudo chown -R \"\$(whoami)\":staff node_modules/.prisma node_modules/@prisma"
-  echo "       bash scripts/restart_dev.sh"
+  echo "       bash scripts/develop_start.sh"
   echo "     退出脚本。"
   exit 1
 fi
@@ -213,9 +225,7 @@ fi
 echo "Starting server in DEVELOPMENT mode (npm run dev)..."
 
 set -a
-if [ -f .env ]; then
-  source .env
-fi
+load_agent_insight_env
 set +a
 
 nohup npm run dev > server.log 2>&1 &
@@ -224,4 +234,15 @@ NEW_PID=$!
 echo "Server started successfully."
 echo "PID: $NEW_PID"
 echo "Log file: server.log"
+echo "Syncing admin API key to $AGENT_INSIGHT_ENV_FILE..."
+for i in {1..20}; do
+  if node scripts/sync_admin_api_key.js "$PORT" "http://localhost:$PORT"; then
+    break
+  fi
+  if [ "$i" = "20" ]; then
+    echo "⚠️  Admin API key sync failed after waiting for server startup."
+  else
+    sleep 1
+  fi
+done
 echo "-----------------------------------"

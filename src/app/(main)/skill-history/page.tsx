@@ -81,7 +81,7 @@ function SkillHistoryInner() {
                         <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
                             <path d="M9 11L4 7l5-4" />
                         </svg>
-                        {locale === 'zh' ? '返回 Skills 管理' : 'Back to Skills'}
+                        {locale === 'zh' ? '返回 Skills Hub' : 'Back to Skills Hub'}
                     </button>
                     <div style={{ height: 14, width: 1, background: 'var(--border)' }} />
                     <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--foreground)' }}>

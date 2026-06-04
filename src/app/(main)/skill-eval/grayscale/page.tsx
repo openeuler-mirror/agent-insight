@@ -86,6 +86,7 @@ interface GrayscaleTask {
         autoEval?: boolean;
         recordTriggerDetails?: boolean;
         evaluatorId?: string;
+        evaluators?: string[];
         latestResultAt?: string;
         query?: string;
         selectedDatasetId?: string;
@@ -127,6 +128,7 @@ interface PerVersionState {
     sessionId?: string;
     score?: number;
     tier?: ScoreTier;
+    evaluations?: RunEvaluation[];
     runs?: RunResult[];
     runCount?: number;
     traceIds?: string[];
@@ -147,6 +149,7 @@ interface RunResult {
     sessionId?: string;
     score?: number;
     tier?: ScoreTier;
+    evaluations?: RunEvaluation[];
     runIndex: number;
     roundIndex?: number;
     caseId?: string;
@@ -161,15 +164,21 @@ interface RunResult {
     completedAt?: string;
 }
 
-function scoreTierFromComposite(score: number): ScoreTier {
-    return score >= 80 ? 'good' : score >= 50 ? 'warn' : 'poor';
+type RunEvaluationStatus = 'pending' | 'running' | 'done' | 'failed';
+
+interface RunEvaluation {
+    evaluatorId: string;
+    evaluatorName: string;
+    status: RunEvaluationStatus;
+    evaluatorRunId?: string;
+    evaluationResultId?: string;
+    evaluationTraceId?: string;
+    score?: number;
+    errorMessage?: string;
 }
 
-function compositeScore(result: { trajectoryScore?: number | null; resultEvaluationScore?: number | null }): number {
-    const traj = typeof result.trajectoryScore === 'number' ? result.trajectoryScore : null;
-    const r = typeof result.resultEvaluationScore === 'number' ? result.resultEvaluationScore : null;
-    const composite = (traj != null && r != null) ? (traj + r) / 2 : (traj ?? r ?? 0);
-    return Math.round(composite * 100);
+function scoreTierFromComposite(score: number): ScoreTier {
+    return score >= 80 ? 'good' : score >= 50 ? 'warn' : 'poor';
 }
 
 function buildRunConfigSignature(config: {
@@ -185,7 +194,7 @@ function buildRunConfigSignature(config: {
     agentMaxConcurrency: number;
     autoEval: boolean;
     recordTriggerDetails: boolean;
-    evaluatorId: string;
+    evaluatorIds: string[];
     caseIds: string[];
 }) {
     return JSON.stringify({
@@ -201,7 +210,7 @@ function buildRunConfigSignature(config: {
         agentMaxConcurrency: config.agentMaxConcurrency,
         autoEval: config.autoEval,
         recordTriggerDetails: config.recordTriggerDetails,
-        evaluatorId: config.evaluatorId,
+        evaluatorIds: [...config.evaluatorIds].sort(),
         caseIds: [...config.caseIds].sort(),
     });
 }
@@ -813,14 +822,22 @@ function ToneBadge({ label, tone, prefix, title }: { label: string; tone: BadgeT
 // 从单一 CaseStatus + failureType 推出执行阶段和评测阶段两个独立 status。
 // 区分逻辑: failureType 有值 = 执行阶段挂了 (agent_timeout / permission_blocked /
 // agent_error 等); failureType 空 + status='fail' = 执行成功但评测器失败。
-function deriveExecAndEval(
-    status: CaseStatus | string | undefined,
-    hasExecFailure: boolean,
-): { exec: { label: string; tone: BadgeTone }; evaluation: { label: string; tone: BadgeTone } | null } {
+function deriveExecAndEval(args: {
+    status: CaseStatus | string | undefined;
+    hasExecFailure: boolean;
+    evaluations?: RunEvaluation[];
+    evaluatorRunId?: string;
+}): { exec: { label: string; tone: BadgeTone }; evaluation: { label: string; tone: BadgeTone } | null } {
+    const { status, hasExecFailure, evaluations, evaluatorRunId } = args;
     const s = (status ?? 'pending') as CaseStatus;
+    const evalItems = evaluations || [];
+    const hasEvaluationStarted = Boolean(evaluatorRunId) || evalItems.length > 0;
+    const hasEvaluationRunning = evalItems.some(item => item.status === 'pending' || item.status === 'running');
+    const hasEvaluationFailed = evalItems.some(item => item.status === 'failed');
+    const hasEvaluationDone = evalItems.some(item => item.status === 'done');
     // 执行阶段
     let exec: { label: string; tone: BadgeTone };
-    if (s === 'fail' && hasExecFailure) {
+    if (s === 'fail' && hasExecFailure && !hasEvaluationStarted) {
         exec = { label: '执行失败', tone: 'fail' };
     } else if (s === 'pending') {
         exec = { label: '排队中', tone: 'pending' };
@@ -835,8 +852,14 @@ function deriveExecAndEval(
         return { exec, evaluation: null };
     }
     let evaluation: { label: string; tone: BadgeTone };
-    if (s === 'executed') {
+    if (hasEvaluationRunning) {
+        evaluation = { label: '评测中', tone: 'running' };
+    } else if (s === 'executed' && !hasEvaluationStarted) {
         evaluation = { label: '待评测', tone: 'pending' };
+    } else if (hasEvaluationDone && !hasEvaluationFailed) {
+        evaluation = { label: '已评测', tone: 'done' };
+    } else if (hasEvaluationFailed) {
+        evaluation = { label: '评测失败', tone: 'fail' };
     } else if (s === 'evaluating') {
         evaluation = { label: '评测中', tone: 'running' };
     } else if (s === 'pass') {
@@ -848,42 +871,6 @@ function deriveExecAndEval(
     return { exec, evaluation };
 }
 
-// ──────────────── caseStates side-state 修改助手 ────────────────
-// patchLatestRun(side, patch)：跑完 / 评测完 / 失败时调用。把 runs[] 最后
-// 一条 run merge patch 字段，同时把 side 顶层的镜像字段(status/score/jobId
-// /sessionId/...)也同步过去，避免顶层和 runs 末尾分裂。
-
-function patchLatestRun(side: PerVersionState | undefined, patch: Partial<RunResult>): PerVersionState {
-    const base: PerVersionState = side ?? { status: 'pending' };
-    const runs = base.runs ?? [];
-    let updatedRuns: RunResult[];
-    if (runs.length > 0) {
-        updatedRuns = runs.map((r, i) => (i === runs.length - 1 ? { ...r, ...patch } : r));
-    } else {
-        // 极少见兜底：runs[] 为空时现造一条 run 把 patch 装进去，避免 patch 字段被静默吞掉。
-        updatedRuns = [{
-            runIndex: 1,
-            roundIndex: 1,
-            status: patch.status ?? base.status ?? 'running',
-            ...patch,
-        } as RunResult];
-    }
-    return {
-        ...base,
-        // side 顶层字段镜像最新 run，UI 任何地方读 side 顶层都拿到最新 run 状态
-        status: patch.status ?? base.status,
-        jobId: patch.jobId ?? base.jobId,
-        output: patch.output ?? base.output,
-        score: patch.score ?? base.score,
-        tier: patch.tier ?? base.tier,
-        sessionId: patch.sessionId ?? base.sessionId,
-        timeCost: patch.timeCost ?? base.timeCost,
-        tokenUsage: patch.tokenUsage ?? base.tokenUsage,
-        evaluatorRunId: patch.evaluatorRunId ?? base.evaluatorRunId,
-        runs: updatedRuns,
-    };
-}
-
 // 跟 polling tick 的 setCaseStates(nextStates) 配合：如果本地某 case-side 有
 // 比 server 更新的 in-flight 状态，polling 直接覆盖会把那条 running run 抹掉。
 // 这里做 case-side 级别的 reconcile：只要本地 runs 长度 ≥ 远端且本地末尾是
@@ -893,16 +880,35 @@ function mergeServerCaseStates(
     remote: Record<string, { a: PerVersionState; b: PerVersionState }>,
 ): Record<string, { a: PerVersionState; b: PerVersionState }> {
     const FINISHED: CaseStatus[] = ['pass', 'fail', 'executed'];
+    const IN_FLIGHT: CaseStatus[] = ['pending', 'running', 'evaluating'];
     const mergeSide = (l?: PerVersionState, r?: PerVersionState): PerVersionState => {
         if (!l) return r ?? { status: 'pending' };
         if (!r) return l;
         const lRuns = l.runs ?? [];
         const rRuns = r.runs ?? [];
         const lLatest = lRuns[lRuns.length - 1];
+        const rLatest = rRuns[rRuns.length - 1];
         // 保留本地比远端更多的 in-flight run，避免 polling tick 用旧 caseStatesJson
         // 把刚产生的本地进行中状态擦回去。
         if (lRuns.length > rRuns.length && lLatest && !FINISHED.includes(lLatest.status)) {
             return l;
+        }
+        // 行级重试时，本地会先把同一 run 原地切回 evaluating/running；这时服务端上一拍
+        // 可能还在返回旧的 fail/executed。若直接覆盖，会闪一下"执行失败/评测失败"再回到成功。
+        // 对 evaluating 的 run，只有当远端也进入 evaluating 或已经到 pass，才接受远端覆盖。
+        if (
+            lLatest
+            && rLatest
+            && lRuns.length === rRuns.length
+            && lLatest.runIndex === rLatest.runIndex
+            && IN_FLIGHT.includes(lLatest.status)
+        ) {
+            if (lLatest.status === 'evaluating' && rLatest.status !== 'evaluating' && rLatest.status !== 'pass') {
+                return l;
+            }
+            if (lLatest.status === 'running' && rLatest.status === 'pending') {
+                return l;
+            }
         }
         // 其它一律采用 server——之前还有条 "本地 running/evaluating 而远端不是 →
         // keep local" 的兜底, 但 server 把状态从 evaluating 推到 pass 是正常进程,
@@ -925,6 +931,47 @@ import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
 const BUILT_IN_EVALUATORS = [
     ...presetEvaluators.filter(e => e.status === 'ready').map(e => ({ id: e.id, name: e.name }))
 ];
+const BUILT_IN_EVALUATOR_IDS = new Set(BUILT_IN_EVALUATORS.map(e => e.id));
+
+function uniqueIds(ids: Array<string | undefined | null>): string[] {
+    return Array.from(new Set(ids.map(id => String(id || '').trim()).filter(Boolean)));
+}
+
+function normalizeEvaluatorIds(ids: unknown, fallback?: string): string[] {
+    const raw = Array.isArray(ids) ? ids : ids ? [ids] : [];
+    const normalized = uniqueIds(raw.map(id => String(id || '').trim()))
+        .filter(id => BUILT_IN_EVALUATOR_IDS.has(id));
+    if (normalized.length > 0) return normalized;
+    const fallbackId = String(fallback || '').trim();
+    return fallbackId && BUILT_IN_EVALUATOR_IDS.has(fallbackId) ? [fallbackId] : [];
+}
+
+function aggregateEvaluationScore(evaluations: RunEvaluation[] | undefined): number | undefined {
+    const scores = (evaluations || [])
+        .filter(item => item.status === 'done' && typeof item.score === 'number' && Number.isFinite(item.score))
+        .map(item => item.score as number);
+    if (scores.length === 0) return undefined;
+    return Math.round(scores.reduce((sum, score) => sum + score, 0) / scores.length);
+}
+
+function pickBoundEvaluationResult(evaluations: RunEvaluation[] | undefined): RunEvaluation | undefined {
+    return (evaluations || []).find(item => (
+        Boolean(item.evaluationResultId)
+        && Boolean(item.evaluatorRunId)
+        && item.status === 'done'
+    )) || (evaluations || []).find(item => (
+        Boolean(item.evaluationResultId)
+        && Boolean(item.evaluatorRunId)
+    ));
+}
+
+function getFailedOrMissingEvaluatorIds(run: Pick<RunResult, 'evaluations'> | undefined, selectedEvaluatorIds: string[]): string[] {
+    const existing = new Map((run?.evaluations || []).map(item => [item.evaluatorId, item]));
+    return selectedEvaluatorIds.filter(id => {
+        const item = existing.get(id);
+        return !item || item.status === 'failed' || item.status === 'pending';
+    });
+}
 
 /* Custom Premium SVG Icons */
 const HistoryIcon = () => (
@@ -1050,6 +1097,7 @@ export function GrayscaleEvaluation({
     // Query input
     const [sourceMode, setSourceMode] = useState<'dataset' | 'trace'>('dataset');
     const [selectedDatasetId, setSelectedDatasetId] = useState('');
+    const [showDatasetDropdown, setShowDatasetDropdown] = useState(false);
     const [selectedCaseId, setSelectedCaseId] = useState('');
 
     // Numbers
@@ -1070,8 +1118,8 @@ export function GrayscaleEvaluation({
     const [selectedTraceBId, setSelectedTraceBId] = useState('');
 
     // Evaluator
-    const [userEvaluators, setUserEvaluators] = useState<Array<{id: string; name: string}>>([]);
-    const [selectedEvaluatorId, setSelectedEvaluatorId] = useState('preset-agent-task-completion');
+    const [selectedEvaluatorId, setSelectedEvaluatorId] = useState('');
+    const [selectedEvaluatorIds, setSelectedEvaluatorIds] = useState<string[]>([]);
     const [showEvalDropdown, setShowEvalDropdown] = useState(false);
 
     // Linked datasets
@@ -1165,7 +1213,7 @@ export function GrayscaleEvaluation({
 
     const defaultTaskName = () => {
         const now = new Date();
-        return `灰度测评 ${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}`;
+        return `A/B测试 ${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}`;
     };
     const taskTitlePlaceholder = locale === 'zh' ? '点击命名任务…' : 'Name this task…';
 
@@ -1194,6 +1242,8 @@ export function GrayscaleEvaluation({
         setEvaluationBatchId('');
         setEvaluationBatchTitle('');
         setEvaluationBatchEvaluators([]);
+        setSelectedEvaluatorId('');
+        setSelectedEvaluatorIds([]);
         pendingVersionsRef.current = null;
         setIsEditingTask(true);
     };
@@ -1260,11 +1310,14 @@ export function GrayscaleEvaluation({
         setSourceMode((cfg.sourceMode === 'trace' ? 'trace' : 'dataset'));
         setRepeatRounds(cfg.repeatRounds || 1);
         setAgentMaxConcurrency(cfg.agentMaxConcurrency || 4);
-        setSelectedEvaluatorId(cfg.evaluatorId || 'preset-agent-task-completion');
+        const evaluatorIds = normalizeEvaluatorIds(cfg.evaluators || cfg.evaluationBatchEvaluators, cfg.evaluatorId || '');
+        setSelectedEvaluatorIds(evaluatorIds);
+        setSelectedEvaluatorId(evaluatorIds[0] || '');
         setTaskDescInput(cfg.taskDescription || '');
-        setSelectedDatasetId(cfg.selectedDatasetId || '');
+        const restoredLinkedDatasetIds = Array.isArray(cfg.linkedDatasetIds) ? cfg.linkedDatasetIds : [];
+        setSelectedDatasetId(cfg.selectedDatasetId || restoredLinkedDatasetIds[0] || '');
         setSelectedCaseId(cfg.selectedCaseId || '');
-        setLinkedDatasetIds(cfg.linkedDatasetIds || []);
+        setLinkedDatasetIds(restoredLinkedDatasetIds);
         setCheckedCaseIds(Array.isArray(cfg.checkedCaseIds)
             ? cfg.checkedCaseIds
             : Array.isArray(cfg.selectedCaseIds) ? cfg.selectedCaseIds : []);
@@ -1310,7 +1363,7 @@ export function GrayscaleEvaluation({
                 agentMaxConcurrency: cfg.agentMaxConcurrency || 4,
                 autoEval: true,
                 recordTriggerDetails: true,
-                evaluatorId: cfg.evaluatorId || 'preset-agent-task-completion',
+                evaluatorIds: normalizeEvaluatorIds(cfg.evaluators || cfg.evaluationBatchEvaluators, cfg.evaluatorId || ''),
                 caseIds: Object.keys(parsedStates),
             })
             : ''
@@ -1377,10 +1430,10 @@ export function GrayscaleEvaluation({
     }, [caseStates]);
     const isTaskRunInFlightRef = useRef(isTaskRunInFlight);
     useEffect(() => { isTaskRunInFlightRef.current = isTaskRunInFlight; }, [isTaskRunInFlight]);
-    const currentConfigRef = useRef({ skillId: selectedSkillId, versionAId, versionBId, sourceMode, selectedDatasetId, selectedCaseId, selectedCaseIds: checkedCaseIds, checkedCaseIds, taskDescription: taskDescInput, linkedDatasetIds, traceTimeRange, selectedTraceAId, selectedTraceBId, repeatRounds, agentMaxConcurrency, autoEval, recordTriggerDetails, evaluatorId: selectedEvaluatorId, evaluationBatchId, evaluationBatchTitle, evaluationBatchEvaluators });
+    const currentConfigRef = useRef({ skillId: selectedSkillId, versionAId, versionBId, sourceMode, selectedDatasetId, selectedCaseId, selectedCaseIds: checkedCaseIds, checkedCaseIds, taskDescription: taskDescInput, linkedDatasetIds, traceTimeRange, selectedTraceAId, selectedTraceBId, repeatRounds, agentMaxConcurrency, autoEval, recordTriggerDetails, evaluatorId: selectedEvaluatorId, evaluators: selectedEvaluatorIds, evaluationBatchId, evaluationBatchTitle, evaluationBatchEvaluators });
     useEffect(() => {
-        currentConfigRef.current = { skillId: selectedSkillId, versionAId, versionBId, sourceMode, selectedDatasetId, selectedCaseId, selectedCaseIds: checkedCaseIds, checkedCaseIds, taskDescription: taskDescInput, linkedDatasetIds, traceTimeRange, selectedTraceAId, selectedTraceBId, repeatRounds, agentMaxConcurrency, autoEval, recordTriggerDetails, evaluatorId: selectedEvaluatorId, evaluationBatchId, evaluationBatchTitle, evaluationBatchEvaluators };
-    }, [selectedSkillId, versionAId, versionBId, sourceMode, selectedDatasetId, selectedCaseId, checkedCaseIds, taskDescInput, linkedDatasetIds, traceTimeRange, selectedTraceAId, selectedTraceBId, repeatRounds, agentMaxConcurrency, autoEval, recordTriggerDetails, selectedEvaluatorId, evaluationBatchId, evaluationBatchTitle, evaluationBatchEvaluators]);
+        currentConfigRef.current = { skillId: selectedSkillId, versionAId, versionBId, sourceMode, selectedDatasetId, selectedCaseId, selectedCaseIds: checkedCaseIds, checkedCaseIds, taskDescription: taskDescInput, linkedDatasetIds, traceTimeRange, selectedTraceAId, selectedTraceBId, repeatRounds, agentMaxConcurrency, autoEval, recordTriggerDetails, evaluatorId: selectedEvaluatorId, evaluators: selectedEvaluatorIds, evaluationBatchId, evaluationBatchTitle, evaluationBatchEvaluators };
+    }, [selectedSkillId, versionAId, versionBId, sourceMode, selectedDatasetId, selectedCaseId, checkedCaseIds, taskDescInput, linkedDatasetIds, traceTimeRange, selectedTraceAId, selectedTraceBId, repeatRounds, agentMaxConcurrency, autoEval, recordTriggerDetails, selectedEvaluatorId, selectedEvaluatorIds, evaluationBatchId, evaluationBatchTitle, evaluationBatchEvaluators]);
 
     const currentRunConfigSignature = useMemo(() => buildRunConfigSignature({
         skillId: selectedSkillId,
@@ -1395,7 +1448,7 @@ export function GrayscaleEvaluation({
         agentMaxConcurrency,
         autoEval,
         recordTriggerDetails,
-        evaluatorId: selectedEvaluatorId,
+        evaluatorIds: selectedEvaluatorIds,
         caseIds: checkedCaseIds,
     }), [
         selectedSkillId,
@@ -1410,7 +1463,7 @@ export function GrayscaleEvaluation({
         agentMaxConcurrency,
         autoEval,
         recordTriggerDetails,
-        selectedEvaluatorId,
+        selectedEvaluatorIds,
         checkedCaseIds,
     ]);
 
@@ -1463,7 +1516,14 @@ export function GrayscaleEvaluation({
         } : prev);
     }, [persistTaskUpdate]);
 
-    const createTaskForBinding = useCallback(async (skillId: string, boundVersionBId: string, taskName?: string) => {
+    // 返回 { task, existed }: existed=true 表示该 skill 版本已经有 A/B 任务(后端
+    // @@unique([user, skillName, skillVersion]) 撞约束返回 409 + existingTask), 此时
+    // task 是已存在的那一条 —— caller 需据此决定是「新建」还是「应用配置到已有任务」。
+    const createTaskForBinding = useCallback(async (
+        skillId: string,
+        boundVersionBId: string,
+        taskName?: string,
+    ): Promise<{ task: GrayscaleTask; existed: boolean } | null> => {
         if (!user || !skillId || !boundVersionBId || boundVersionBId === NONE_VERSION_ID) return null;
         const name = (taskName || taskNameInput || defaultTaskName()).trim();
         const res = await apiFetch('/api/debug/grayscale-tasks', {
@@ -1474,13 +1534,13 @@ export function GrayscaleEvaluation({
         if (res.ok) {
             const newTask = await res.json();
             setTaskHistory(prev => prev.some(t => t.id === newTask.id) ? prev : [newTask, ...prev]);
-            return newTask as GrayscaleTask;
+            return { task: newTask as GrayscaleTask, existed: false };
         }
         if (res.status === 409) {
             const data = await res.json().catch(() => ({}));
             if (data.existingTask) {
                 setTaskHistory(prev => prev.some(t => t.id === data.existingTask.id) ? prev : [data.existingTask, ...prev]);
-                return data.existingTask as GrayscaleTask;
+                return { task: data.existingTask as GrayscaleTask, existed: true };
             }
         }
         return null;
@@ -1498,8 +1558,8 @@ export function GrayscaleEvaluation({
         }
         let cancelled = false;
         createTaskForBinding(parentSkillId, versionBId)
-            .then(task => {
-                if (!cancelled && task) applyTaskToState(task);
+            .then(result => {
+                if (!cancelled && result?.task) applyTaskToState(result.task);
             })
             .catch(() => {});
         return () => { cancelled = true; };
@@ -1571,21 +1631,19 @@ export function GrayscaleEvaluation({
             .finally(() => setTraceLoading(false));
     }, [sourceMode, user, selectedSkillId, traceTimeRange, skills]);
 
-    // Fetch datasets + skills + evaluators
+    // Fetch datasets + skills. A/B 测试只使用预置评估器, 不加载自定义评估器。
     useEffect(() => {
         if (!user) return;
         Promise.all([
             apiFetch(`/api/agent-datasets?user=${encodeURIComponent(user)}`).then(r => r.json()),
             apiFetch(`/api/skills?user=${encodeURIComponent(user)}`).then(r => r.json()),
-            apiFetch(`/api/user-evaluators?user=${encodeURIComponent(user)}`).then(r => r.json()).catch(() => []),
-        ]).then(([ds, sk, ev]) => {
+        ]).then(([ds, sk]) => {
             if (Array.isArray(ds)) setDatasets(ds);
             if (Array.isArray(sk)) {
                 const skillOptions = sk.map((s: any) => ({ id: s.id, name: s.name }));
                 setSkills(skillOptions);
                 setSelectedSkillId(prev => prev || skillOptions[0]?.id || '');
             }
-            if (Array.isArray(ev)) setUserEvaluators(ev.map((e: any) => ({ id: e.id, name: e.name })));
         }).catch(() => {});
     }, [user]);
 
@@ -1674,6 +1732,7 @@ export function GrayscaleEvaluation({
                 delete next.evaluationTraceId;
                 delete next.score;
                 delete next.tier;
+                delete next.evaluations;
                 delete next.failureType;
                 delete next.failureDetail;
                 delete next.timeCost;
@@ -1681,6 +1740,7 @@ export function GrayscaleEvaluation({
                 delete next.skillTriggered;
                 delete next.toolCallCount;
                 delete next.toolCalls;
+                delete next.completedAt;
                 next.output = '';
                 return next;
             });
@@ -1839,7 +1899,7 @@ export function GrayscaleEvaluation({
      *   4) pollCurrentTask 跟进, evaluator 完成时 reconcileFinishedEvaluations
      *      正常推到 pass/fail
      */
-    const retryEvaluation = async (caseId: string, side: 'a' | 'b', runIndex: number) => {
+    const retryEvaluation = async (caseId: string, side: 'a' | 'b', runIndex: number, evaluatorIds?: string[]) => {
         if (!currentTask) return;
         // 抢 in-flight 锁 (双击保护)。markRetryInFlight 是 idempotent:
         // - 用户直接点"评测失败重试" → 新增 lock
@@ -1850,6 +1910,13 @@ export function GrayscaleEvaluation({
         // 走。配 useEffect terminal-clear 保证 pass/fail 时一次释放。
         const flightKey = retryKey(caseId, side, runIndex);
         markRetryInFlight(flightKey);
+        const targetRun = caseStatesRef.current[caseId]?.[side]?.runs?.find(r => r.runIndex === runIndex);
+        const retryEvaluatorIds = normalizeEvaluatorIds(
+            evaluatorIds && evaluatorIds.length > 0
+                ? evaluatorIds
+                : getFailedOrMissingEvaluatorIds(targetRun, selectedEvaluatorIds),
+            selectedEvaluatorId,
+        );
         let resetState: Record<string, { a: PerVersionState; b: PerVersionState }> | null = null;
         setCaseStates(prev => {
             const current = prev[caseId];
@@ -1865,13 +1932,34 @@ export function GrayscaleEvaluation({
                 //   - backend evaluateRunsWithConcurrency 配套放宽: onlyMissingEvaluation
                 //     模式下也接受 status='evaluating' (见 route.ts eligibleStatus 注释)
                 const next = { ...r, status: 'evaluating' as CaseStatus };
-                delete next.evaluatorRunId;
-                delete next.evaluationResultId;
-                delete next.evaluationTraceId;
-                delete next.score;
-                delete next.tier;
+                const nextEvaluations = (next.evaluations || []).map(item => (
+                    retryEvaluatorIds.includes(item.evaluatorId)
+                        ? { ...item, status: 'running' as RunEvaluationStatus, errorMessage: undefined }
+                        : item
+                ));
+                next.evaluations = nextEvaluations.length > 0
+                    ? nextEvaluations
+                    : retryEvaluatorIds.map(id => ({
+                        evaluatorId: id,
+                        evaluatorName: evaluatorNameById.get(id) || id,
+                        status: 'running' as RunEvaluationStatus,
+                    }));
+                if (!next.evaluations.some(item => item.status === 'done')) {
+                    delete next.evaluatorRunId;
+                    delete next.evaluationResultId;
+                    delete next.evaluationTraceId;
+                    delete next.score;
+                    delete next.tier;
+                } else {
+                    const score = aggregateEvaluationScore(next.evaluations);
+                    if (typeof score === 'number') {
+                        next.score = score;
+                        next.tier = scoreTierFromComposite(score);
+                    }
+                }
                 delete next.failureType;
                 delete next.failureDetail;
+                delete next.completedAt;
                 next.output = '';
                 return next;
             });
@@ -1893,6 +1981,7 @@ export function GrayscaleEvaluation({
                     action: 'evaluate',
                     caseIds: [caseId],
                     evaluatorId: selectedEvaluatorId,
+                    evaluators: retryEvaluatorIds,
                     onlyMissingEvaluation: true,
                 }),
             });
@@ -1950,143 +2039,30 @@ export function GrayscaleEvaluation({
         await retryExecution(caseId, side, latestRunIndex);
     };
 
-    // Evaluate single side
-    const evaluateCaseSide = async (caseId: string, side: 'a' | 'b', execState: PerVersionState) => {
-        if (currentTask) {
-            const sideState = caseStatesRef.current[caseId]?.[side];
-            const latestRunIndex = findLatestRunnableRunIndex(sideState?.runs);
-            if (latestRunIndex != null) {
-                await retryEvaluation(caseId, side, latestRunIndex);
-                return;
-            }
-        }
-        const sessionId = execState.sessionId;
-        if (!sessionId) return;
-
-        setCaseStates(prev => {
-            const current = prev[caseId] || { a: { status: 'pending' }, b: { status: 'pending' } };
-            const updated = {
-                ...prev,
-                [caseId]: {
-                    ...current,
-                    [side]: patchLatestRun(current[side], { status: 'evaluating' }),
-                }
-            };
-            persistCaseStates(updated);
-            return updated;
-        });
-
-        let evaluatorRunId: string;
-        try {
-            const res = await apiFetch('/api/eval/trajectory/run', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    user: user || 'debug-user',
-                    datasetId: selectedDatasetId || undefined,
-                    pairs: [{ caseId: caseId || sessionId, taskId: sessionId }],
-                    evaluator: selectedEvaluatorId,
-                }),
-            });
-            const data = await res.json();
-            if (!res.ok || !data.evaluatorRunId) {
-                setCaseStates(prev => {
-                    const current = prev[caseId] || { a: { status: 'pending' }, b: { status: 'pending' } };
-                    const updated = {
-                        ...prev,
-                        [caseId]: {
-                            ...current,
-                            [side]: patchLatestRun(current[side], { status: 'fail', output: data.error || '评测提交失败' }),
-                        }
-                    };
-                    persistCaseStates(updated);
-                    return updated;
-                });
-                return;
-            }
-            evaluatorRunId = data.evaluatorRunId;
-        } catch (err) {
-            setCaseStates(prev => {
-                const current = prev[caseId] || { a: { status: 'pending' }, b: { status: 'pending' } };
-                const updated = {
-                    ...prev,
-                    [caseId]: {
-                        ...current,
-                        [side]: patchLatestRun(current[side], { status: 'fail', output: String(err) }),
-                    }
-                };
-                persistCaseStates(updated);
-                return updated;
-            });
+    // Evaluate single side —— 统一走 backend reconcile 路径(retryEvaluation)。
+    // 评测结果以 evaluationResultId + grayscaleBinding 为唯一绑定键, 由 pollCurrentTask
+    // 这唯一一个写入器把状态/分数/trace reconcile 进 caseStates。
+    //
+    // 这里不再保留旧的「客户端直接 POST /api/eval/trajectory/run + 轮询
+    // /results?runId=... + results.find(caseId) + patchLatestRun + compositeScore」分支:
+    // 那条分支用 runId+caseId 非唯一匹配、写到「最后一条 run」、还用与后端不一致的算分
+    // 公式, 会和 pollCurrentTask 互相覆盖, 导致分数/状态/trace 在两拍之间跳变。
+    const evaluateCaseSide = async (caseId: string, side: 'a' | 'b') => {
+        if (!currentTask) {
+            alert(locale === 'zh'
+                ? '请先创建或加载 A/B 测试任务后再评测。'
+                : 'Create or load an A/B task before evaluating.');
             return;
         }
-
-        setCaseStates(prev => {
-            const current = prev[caseId] || { a: { status: 'pending' }, b: { status: 'pending' } };
-            const updated = {
-                ...prev,
-                [caseId]: {
-                    ...current,
-                    [side]: patchLatestRun(current[side], { status: 'evaluating', evaluatorRunId }),
-                }
-            };
-            persistCaseStates(updated);
-            return updated;
-        });
-
-        const pollEval = async () => {
-            try {
-                const res = await apiFetch(`/api/eval/trajectory/results?user=${encodeURIComponent(user || '')}&runId=${encodeURIComponent(evaluatorRunId)}`);
-                const data = await res.json();
-                const results: any[] = data.results || [];
-                const result = results.find((r: any) => r.caseId === caseId);
-                if (!result) return null;
-                if (result.status === 'done') {
-                    const score = compositeScore(result);
-                    const tier = scoreTierFromComposite(score);
-                    setCaseStates(prev => {
-                        const current = prev[caseId] || { a: { status: 'pending' }, b: { status: 'pending' } };
-                        const updated = {
-                            ...prev,
-                            [caseId]: {
-                                ...current,
-                                [side]: patchLatestRun(current[side], { status: 'pass', score, tier }),
-                            }
-                        };
-                        persistCaseStates(updated);
-                        return updated;
-                    });
-                    return true;
-                } else if (result.status === 'failed') {
-                    setCaseStates(prev => {
-                        const current = prev[caseId] || { a: { status: 'pending' }, b: { status: 'pending' } };
-                        const updated = {
-                            ...prev,
-                            [caseId]: {
-                                ...current,
-                                [side]: patchLatestRun(current[side], { status: 'fail', output: result.errorMessage || '评测失败' }),
-                            }
-                        };
-                        persistCaseStates(updated);
-                        return updated;
-                    });
-                    return false;
-                }
-                return null;
-            } catch {
-                return null;
-            }
-        };
-
-        const pollKey = `${caseId}_${side}_eval`;
-        if (activePollsRef.current[pollKey]) clearInterval(activePollsRef.current[pollKey]);
-        activePollsRef.current[pollKey] = setInterval(async () => {
-            const done = await pollEval();
-            if (done !== null) {
-                clearInterval(activePollsRef.current[pollKey]);
-                delete activePollsRef.current[pollKey];
-            }
-        }, 2000);
+        const sideState = caseStatesRef.current[caseId]?.[side];
+        const latestRunIndex = findLatestRunnableRunIndex(sideState?.runs);
+        if (latestRunIndex == null) {
+            alert(locale === 'zh'
+                ? '当前侧暂无可评测的执行记录。'
+                : 'No execution record is available to evaluate for this side.');
+            return;
+        }
+        await retryEvaluation(caseId, side, latestRunIndex);
     };
 
     const hasRunningStates = hasRunningCaseStates;
@@ -2193,6 +2169,7 @@ export function GrayscaleEvaluation({
                     action: 'start',
                     caseIds: checkedCaseIds,
                     evaluatorId: selectedEvaluatorId,
+                    evaluators: selectedEvaluatorIds,
                     agentMaxConcurrency,
                 }),
             });
@@ -2233,23 +2210,39 @@ export function GrayscaleEvaluation({
                     setTaskHistory(prev => prev.map(t => t.id === updated.id ? updated : t));
                 }
             } else {
-                const newTask = await createTaskForBinding(selectedSkillId, versionBId, resolvedTaskName);
-                if (newTask) {
+                const created = await createTaskForBinding(selectedSkillId, versionBId, resolvedTaskName);
+                if (created) {
+                    const boundTask = created.task;
+                    // 用户的新配置优先, 不能再被已存在任务的旧 configJson 覆盖 (这正是
+                    // "保存配置失效" 的直接原因)。只保留绑定字段 (skillId/versionAId/versionBId),
+                    // 其余一律用当前选择的配置。
                     const nextConfig = {
                         ...currentConfigRef.current,
-                        ...(newTask.configJson || {}),
+                        skillId: boundTask.skillId || boundTask.configJson?.skillId || selectedSkillId,
                         versionAId,
                         versionBId,
                         taskDescription: taskDescInput.trim(),
                     };
-                    const res = await apiFetch(`/api/debug/grayscale-tasks/${newTask.id}`, {
+                    const res = await apiFetch(`/api/debug/grayscale-tasks/${boundTask.id}`, {
                         method: 'PATCH',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ user, configJson: nextConfig }),
+                        // 一并写入用户起的任务名, 否则撞已有任务时会沿用旧名字, 看起来像"回到旧任务"。
+                        body: JSON.stringify({ user, taskName: resolvedTaskName, configJson: nextConfig }),
                     });
-                    const taskToApply = res.ok ? await res.json() : { ...newTask, configJson: nextConfig };
+                    const taskToApply = res.ok
+                        ? await res.json()
+                        : { ...boundTask, taskName: resolvedTaskName, configJson: nextConfig };
                     applyTaskToState(taskToApply);
-                    setTaskHistory(prev => prev.map(t => t.id === taskToApply.id ? taskToApply : t));
+                    setTaskHistory(prev => prev.some(t => t.id === taskToApply.id)
+                        ? prev.map(t => t.id === taskToApply.id ? taskToApply : t)
+                        : [taskToApply, ...prev]);
+                    // 每个 skill 版本只能有一个 A/B 任务: 撞到已有任务时不静默退回, 明确告诉用户
+                    // "已切换到该版本的现有任务并应用了你的配置"。
+                    if (created.existed) {
+                        alert(locale === 'zh'
+                            ? '该 Skill 版本已存在 A/B 任务（每个版本仅允许一个）。已切换到该任务并保存你的配置。'
+                            : 'An A/B task already exists for this skill version (one per version). Switched to it and saved your config.');
+                    }
                 }
             }
         } catch {}
@@ -2303,10 +2296,11 @@ export function GrayscaleEvaluation({
                 setDatasets(prev => [...prev, newDs]);
                 const newLinked = [...linkedDatasetIds, newDs.id];
                 setLinkedDatasetIds(newLinked);
+                setSelectedDatasetId(newLinked[0] || '');
                 setShowNewDatasetModal(false);
                 setNewDatasetName('');
                 if (currentTaskRef.current) {
-                    persistTaskUpdate(currentTaskRef.current.id, { ...currentConfigRef.current, linkedDatasetIds: newLinked });
+                    persistTaskUpdate(currentTaskRef.current.id, { ...currentConfigRef.current, selectedDatasetId: newLinked[0] || '', linkedDatasetIds: newLinked });
                 }
             }
         } catch {}
@@ -2317,17 +2311,19 @@ export function GrayscaleEvaluation({
         if (linkedDatasetIds.includes(dsId)) return;
         const newLinked = [...linkedDatasetIds, dsId];
         setLinkedDatasetIds(newLinked);
+        setSelectedDatasetId(newLinked[0] || '');
         setShowLinkDatasetDropdown(false);
         if (currentTaskRef.current) {
-            persistTaskUpdate(currentTaskRef.current.id, { ...currentConfigRef.current, linkedDatasetIds: newLinked });
+            persistTaskUpdate(currentTaskRef.current.id, { ...currentConfigRef.current, selectedDatasetId: newLinked[0] || '', linkedDatasetIds: newLinked });
         }
     };
 
     const handleUnlinkDataset = (dsId: string) => {
         const newLinked = linkedDatasetIds.filter(id => id !== dsId);
         setLinkedDatasetIds(newLinked);
+        setSelectedDatasetId(newLinked[0] || '');
         if (currentTaskRef.current) {
-            persistTaskUpdate(currentTaskRef.current.id, { ...currentConfigRef.current, linkedDatasetIds: newLinked });
+            persistTaskUpdate(currentTaskRef.current.id, { ...currentConfigRef.current, selectedDatasetId: newLinked[0] || '', linkedDatasetIds: newLinked });
         }
     };
 
@@ -2550,14 +2546,14 @@ export function GrayscaleEvaluation({
         let overallStatus: 'pending' | 'running' | 'evaluating' | 'failed' | 'completed' = 'pending';
         if (allRuns.length === 0) {
             overallStatus = 'pending';
-        } else if (failedCount > 0) {
-            overallStatus = 'failed';
         } else if (globalExecutionPending || executingCount > 0 || executedCount < totalCount) {
             overallStatus = 'running';
+        } else if (evaluatingCount > 0 || (completedCount < totalCount && executedCount === totalCount)) {
+            overallStatus = 'evaluating';
+        } else if (failedCount > 0) {
+            overallStatus = 'failed';
         } else if (completedCount === totalCount && totalCount > 0) {
             overallStatus = 'completed';
-        } else if (evaluatingCount > 0 || executedCount === totalCount) {
-            overallStatus = 'evaluating';
         }
 
         if (overallStatus === 'pending') {
@@ -2691,7 +2687,6 @@ export function GrayscaleEvaluation({
         });
     });
     const currentConfigHasRunResult = selectedCasesHaveResults && currentConfigMatchesLastRun;
-    const runButtonDisabled = checkedCaseIds.length === 0 || runButtonBusy;
     const runButtonLabel = runButtonBusy
         ? (locale === 'zh' ? '执行中' : 'Running')
         : currentConfigHasRunResult
@@ -2699,11 +2694,12 @@ export function GrayscaleEvaluation({
             : (locale === 'zh' ? '开始执行' : 'Start Execution');
     const decisionReady = isCompletedA && isCompletedB;
     const experimentVersionReady = Boolean(selectedSkillId && versionBId && versionBId !== NONE_VERSION_ID);
-    const configReady = !runButtonBusy && experimentVersionReady && Boolean(selectedEvaluatorId) && (
+    const configReady = !runButtonBusy && experimentVersionReady && selectedEvaluatorIds.length > 0 && (
         sourceMode === 'dataset'
-            ? Boolean(selectedDatasetId) && selectedSampleCount > 0
+            ? activeLinkedDatasetIds.length > 0 && selectedSampleCount > 0
             : Boolean(selectedTraceAId || selectedTraceBId || traceRecords.length > 0)
     );
+    const runButtonDisabled = !configReady;
     const hasExecutionHistory = currentConfigHasRunResult
         || lastRunCaseIds.length > 0
         || countExecuted > 0
@@ -2828,6 +2824,8 @@ export function GrayscaleEvaluation({
                 executionTraceId: run.sessionId || '',
                 evaluationTraceId: run.evaluationTraceId || '',
                 evaluatorRunId: run.evaluatorRunId || '',
+                evaluationResultId: run.evaluationResultId || '',
+                evaluations: run.evaluations || [],
                 status: run.status,
                 score: run.score,
                 // 失败相关字段一并透出, modal 显示双 badge + 错误详情用
@@ -2882,20 +2880,40 @@ export function GrayscaleEvaluation({
                         >
                             <div>{locale === 'zh' ? 'Case ID' : 'Case ID'}</div>
                             <div>{locale === 'zh' ? '执行 session id' : 'Execution session id'}</div>
-                            <div>{locale === 'zh' ? '评估 session id' : 'Evaluation session id'}</div>
+                            <div>{locale === 'zh' ? '评估器' : 'Evaluators'}</div>
                             <div>{locale === 'zh' ? '评测结果' : 'Eval result'}</div>
                             <div style={{ textAlign: 'right' }}>{locale === 'zh' ? '分数' : 'Score'}</div>
                             <div style={{ textAlign: 'right' }}>{locale === 'zh' ? '操作' : 'Action'}</div>
                         </div>
                         {records.map((record, idx) => {
                             const hasExecFailure = !!record.failureType;
-                            const { exec, evaluation } = deriveExecAndEval(record.status, hasExecFailure);
+                            const baseEvalErrMsg = !hasExecFailure && record.status === 'fail'
+                                ? (record.output || '评测失败')
+                                : '';
+                            const recordEvaluations: RunEvaluation[] = (record.evaluations && record.evaluations.length > 0)
+                                ? record.evaluations
+                                : (record.evaluatorRunId ? [{
+                                    evaluatorId: selectedEvaluatorId,
+                                    evaluatorName: evaluatorNameById.get(selectedEvaluatorId) || selectedEvaluatorId,
+                                    status: record.status === 'pass' ? 'done' : record.status === 'fail' && !hasExecFailure ? 'failed' : record.status === 'evaluating' ? 'running' : 'pending',
+                                    evaluatorRunId: record.evaluatorRunId,
+                                    evaluationTraceId: record.evaluationTraceId,
+                                    score: record.score,
+                                    errorMessage: baseEvalErrMsg,
+                                }] : []);
+                            const { exec, evaluation } = deriveExecAndEval({
+                                status: record.status,
+                                hasExecFailure,
+                                evaluations: recordEvaluations,
+                                evaluatorRunId: record.evaluatorRunId,
+                            });
                             const execErrMsg = hasExecFailure
                                 ? `[${record.failureType}] ${record.failureDetail || record.output || '执行失败'}`
                                 : '';
-                            const evalErrMsg = (!hasExecFailure && record.status === 'fail')
-                                ? (record.output || '评测失败')
+                            const evalErrMsg = (!hasExecFailure && (record.status === 'fail' || recordEvaluations.some(item => item.status === 'failed')))
+                                ? (baseEvalErrMsg || recordEvaluations.find(item => item.status === 'failed')?.errorMessage || '评测失败')
                                 : '';
+                            const failedOrMissingEvaluatorIds = getFailedOrMissingEvaluatorIds({ evaluations: recordEvaluations }, selectedEvaluatorIds);
                             const caseItem = caseLookup.get(record.caseId);
                             const datasetId = caseItem?.datasetId || currentTask?.configJson?.selectedDatasetId;
                             const caseDetailUrl = caseItem?.sourceType === 'trace'
@@ -2905,6 +2923,21 @@ export function GrayscaleEvaluation({
                                 : (datasetId && record.caseId
                                     ? `/dataset/${encodeURIComponent(datasetId)}?case=${encodeURIComponent(record.caseId)}`
                                     : null);
+                            const boundEvaluation = pickBoundEvaluationResult(recordEvaluations);
+                            const boundEvaluatorRunId = boundEvaluation?.evaluatorRunId || record.evaluatorRunId;
+                            const boundEvaluationResultId = boundEvaluation?.evaluationResultId || record.evaluationResultId;
+                            const evaluationDetailUrl = record.executionTraceId && boundEvaluatorRunId && boundEvaluationResultId
+                                ? (() => {
+                                    const qs = new URLSearchParams({
+                                        runId: boundEvaluatorRunId,
+                                        resultId: boundEvaluationResultId,
+                                    });
+                                    if (datasetId) qs.set('datasetId', datasetId);
+                                    return `/eval/trajectory/${encodeURIComponent(record.executionTraceId)}?${qs.toString()}`;
+                                })()
+                                : '';
+                            const hasScoredEvaluation = recordEvaluations.some(item => item.status === 'done' && typeof item.score === 'number')
+                                || typeof record.score === 'number';
                             const caseDetailTitle = caseItem?.sourceType === 'trace'
                                 ? [
                                     caseItem.sourceDatasetName ? `dataset: ${caseItem.sourceDatasetName}` : '',
@@ -2966,45 +2999,68 @@ export function GrayscaleEvaluation({
                                     )}
                                 </div>
 
-                                {/* 评估 session id 列 */}
+                                {/* 评估器列: 多评估器摘要 + 折叠明细。明细只展示, 不放重试按钮。 */}
                                 <div style={{ minWidth: 0 }}>
                                     {!evaluation ? (
                                         <span style={{ color: '#B8B6AE' }}>—</span>
-                                    ) : evaluation.tone === 'fail' ? (
+                                    ) : evaluation.tone === 'fail' && recordEvaluations.length === 0 ? (
                                         <HoverTooltip
                                             trigger={<StatusText label={evaluation.label} tone="fail" />}
                                             content={evalErrMsg}
                                         />
-                                    ) : evaluation.tone === 'pending' || evaluation.tone === 'running' ? (
+                                    ) : (evaluation.tone === 'pending' || evaluation.tone === 'running') && recordEvaluations.length === 0 ? (
                                         <StatusText label={evaluation.label} tone={evaluation.tone} />
-                                    ) : record.evaluationTraceId ? (
-                                        <button
-                                            className="v2-action-btn"
-                                            style={{ maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'ui-monospace, monospace' }}
-                                            onClick={() => window.open(`/trace?taskId=${encodeURIComponent(record.evaluationTraceId)}`, '_blank')}
-                                            title={record.evaluatorRunId ? `runId: ${record.evaluatorRunId}` : undefined}
-                                        >
-                                            {record.evaluationTraceId}
-                                        </button>
                                     ) : (
-                                        // pass 但没拿到 evaluationTraceId (评测成功但 trace ID
-                                        // 还没回填, 常见于刚跑完的瞬态)。不显示生 trun_xxx 易迷惑,
-                                        // 显示 "✓ 已评测" 灰字, evaluatorRunId 作为 tooltip 留着 debug。
-                                        <span
-                                            title={record.evaluatorRunId ? `runId: ${record.evaluatorRunId}` : undefined}
-                                            style={{ color: '#888780', fontSize: 12 }}
-                                        >
-                                            ✓ {locale === 'zh' ? '已评测' : 'Evaluated'}
-                                        </span>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
+                                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                                                {recordEvaluations.slice(0, 3).map(item => {
+                                                    const tone: BadgeTone = item.status === 'done' ? 'done' : item.status === 'failed' ? 'fail' : item.status === 'running' ? 'running' : 'pending';
+                                                    const shortName = item.evaluatorName.replace(/^Agent\s*/, '');
+                                                    const labelText = item.status === 'done' && typeof item.score === 'number'
+                                                        ? `${shortName} ${item.score}`
+                                                        : item.status === 'failed'
+                                                            ? `${shortName} 失败`
+                                                            : item.status === 'running'
+                                                                ? `${shortName} 中`
+                                                                : `${shortName} 待评`;
+                                                    return <ToneBadge key={item.evaluatorId} label={labelText} tone={tone} title={item.errorMessage || item.evaluationTraceId || item.evaluatorRunId} />;
+                                                })}
+                                                {recordEvaluations.length > 3 && (
+                                                    <span style={{ color: '#888780', fontSize: 11 }}>+{recordEvaluations.length - 3}</span>
+                                                )}
+                                            </div>
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: 5, fontSize: 11, color: '#5F5E5A' }}>
+                                                {recordEvaluations.map(item => {
+                                                    const tone: BadgeTone = item.status === 'done' ? 'done' : item.status === 'failed' ? 'fail' : item.status === 'running' ? 'running' : 'pending';
+                                                    return (
+                                                        <div key={`${item.evaluatorId}-${item.evaluatorRunId || ''}`} style={{ display: 'grid', gridTemplateColumns: 'minmax(96px, 1fr) minmax(80px, 1fr) 44px', gap: 6, alignItems: 'center' }}>
+                                                            <span title={item.evaluatorName} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.evaluatorName}</span>
+                                                            {item.evaluationTraceId ? (
+                                                                <button
+                                                                    className="v2-action-btn"
+                                                                    style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'ui-monospace, monospace' }}
+                                                                    onClick={() => window.open(`/trace?taskId=${encodeURIComponent(item.evaluationTraceId || '')}`, '_blank')}
+                                                                    title={item.evaluatorRunId ? `runId: ${item.evaluatorRunId}` : undefined}
+                                                                >
+                                                                    {item.evaluationTraceId}
+                                                                </button>
+                                                            ) : (
+                                                                <StatusText label={item.status === 'done' ? '已评测' : item.status === 'failed' ? '失败' : item.status === 'running' ? '评测中' : '待评'} tone={tone} />
+                                                            )}
+                                                            <span style={{ textAlign: 'right', fontWeight: 700, color: item.status === 'failed' ? '#B91C1C' : accent }}>
+                                                                {typeof item.score === 'number' ? item.score : '—'}
+                                                            </span>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
                                     )}
                                 </div>
 
-                                {/* 评测结果列: 有 evaluatorRunId 就显示为可点击按钮跳到 /eval/run/<runId>
-                                    (评测批次详情页, 显示该批次下所有 trace + 分数 + 评估器维度细节)。
-                                    没有 evaluatorRunId 时 (执行失败 / 还没启动评测) 显示 "—"。
-                                    target=_blank 避免离开当前 A/B 任务页, 用户可以来回切。 */}
+                                {/* 评测结果列: 只有绑定到明确的 TrajectoryEvalResult.id 时才允许跳转。 */}
                                 <div>
-                                    {record.evaluatorRunId ? (
+                                    {evaluationDetailUrl ? (
                                         <button
                                             className="v2-action-btn"
                                             style={{
@@ -3018,11 +3074,16 @@ export function GrayscaleEvaluation({
                                                 fontWeight: 600,
                                                 whiteSpace: 'nowrap',
                                             }}
-                                            title={`跳转到评测批次 ${record.evaluatorRunId} 详情`}
-                                            onClick={() => window.open(`/eval/run/${encodeURIComponent(record.evaluatorRunId)}`, '_blank')}
+                                            title={`跳转到单条评测详情 runId=${boundEvaluatorRunId}, trace=${record.executionTraceId}, resultId=${boundEvaluationResultId}`}
+                                            onClick={() => window.open(evaluationDetailUrl, '_blank')}
                                         >
                                             📋 {locale === 'zh' ? '查看' : 'View'}
                                         </button>
+                                    ) : record.evaluatorRunId ? (
+                                        <StatusText
+                                            label={evaluation?.tone === 'running' && !hasScoredEvaluation ? '评测中' : '结果未绑定'}
+                                            tone={evaluation?.tone === 'running' && !hasScoredEvaluation ? 'running' : 'fail'}
+                                        />
                                     ) : (
                                         <span style={{ color: '#B8B6AE', fontSize: 11 }}>—</span>
                                     )}
@@ -3042,6 +3103,7 @@ export function GrayscaleEvaluation({
                                         // 还要靠 inFlightRetriesRef 同步判重防止 React commit 前的双击。
                                         const isInFlight = inFlightRetries.has(flightKey);
                                         const isFailRow = exec.tone === 'fail' || (evaluation && evaluation.tone === 'fail');
+                                        const isEvalFailRow = !hasExecFailure && Boolean(evaluation && evaluation.tone === 'fail');
                                         if (isInFlight) {
                                             return (
                                                 <button
@@ -3084,24 +3146,16 @@ export function GrayscaleEvaluation({
                                                 }}
                                                 title={hasExecFailure
                                                     ? (locale === 'zh' ? '执行失败 → 从执行重试 (会自动评测)' : 'Retry from execution (auto-evaluate)')
-                                                    : (locale === 'zh' ? '评测失败 → 只重新评测 (复用现有 session)' : 'Retry evaluation only')}
+                                                    : (locale === 'zh' ? '评测失败 → 仅重新评失败或缺失的评估器 (复用现有 session)' : 'Retry failed or missing evaluators only')}
                                                 onClick={() => {
-                                                    // 都走行级"原地覆盖"路径——retry 是「再试这一行」语义,
-                                                    // 不该多出一条新记录。
-                                                    //   执行失败 → retryExecution: reset 这一条 run, 重跑 agent,
-                                                    //              autoEval 时自动接 retryEvaluation
-                                                    //   评测失败 → retryEvaluation: reset 这一条 run 评测状态,
-                                                    //              backend onlyMissingEvaluation 只评这一条
-                                                    // 双击保护: retryExecution / retryEvaluation 内部用
-                                                    // inFlightRetriesRef.add 同步抢锁, 已 in-flight 直接 return。
                                                     if (hasExecFailure) {
                                                         void retryExecution(record.caseId, side, ri);
                                                     } else {
-                                                        void retryEvaluation(record.caseId, side, ri);
+                                                        void retryEvaluation(record.caseId, side, ri, failedOrMissingEvaluatorIds);
                                                     }
                                                 }}
                                             >
-                                                🔁 {locale === 'zh' ? '重试' : 'Retry'}
+                                                🔁 {isEvalFailRow ? (locale === 'zh' ? '重评' : 'Re-evaluate') : (locale === 'zh' ? '重跑' : 'Rerun')}
                                             </button>
                                         );
                                     })()}
@@ -3160,8 +3214,15 @@ export function GrayscaleEvaluation({
     } else if (currentTask) {
         hifiStateLabel = locale === 'zh' ? '待执行' : 'Pending';
     }
-    const selectedDataset = datasets.find(d => d.id === selectedDatasetId);
-    const selectedEvaluatorIsBuiltIn = BUILT_IN_EVALUATORS.some(ev => ev.id === selectedEvaluatorId);
+    const allEvaluatorOptions = useMemo(
+        () => BUILT_IN_EVALUATORS,
+        [],
+    );
+    const evaluatorNameById = useMemo(
+        () => new Map(allEvaluatorOptions.map(ev => [ev.id, ev.name] as [string, string])),
+        [allEvaluatorOptions],
+    );
+    const selectedEvaluatorIsBuiltIn = selectedEvaluatorIds.every(id => BUILT_IN_EVALUATORS.some(ev => ev.id === id));
     useEffect(() => {
         if (!hifi || hasManualHifiCollapseOverride) return;
         setHifiCollapsed(prev => (
@@ -3181,20 +3242,61 @@ export function GrayscaleEvaluation({
         { value: '5', label: locale === 'zh' ? '5 轮' : '5 rounds' },
         { value: '10', label: locale === 'zh' ? '10 轮' : '10 rounds' },
     ]), [locale]);
-    const datasetSelectOptions = useMemo(
-        () => [
-            { value: '', label: locale === 'zh' ? '请选择数据集' : 'Select a dataset' },
-            ...datasets.map(ds => ({ value: ds.id, label: ds.name })),
-        ],
-        [datasets, locale],
-    );
-    const evaluatorSelectOptions = useMemo(
-        () => [
-            ...BUILT_IN_EVALUATORS.map(ev => ({ value: ev.id, label: ev.name })),
-            ...userEvaluators.map(ev => ({ value: ev.id, label: ev.name })),
-        ],
-        [userEvaluators],
-    );
+    const evaluatorSummary = selectedEvaluatorIds.length === 0
+        ? (locale === 'zh' ? '请选择评估器' : 'Select evaluators')
+        : selectedEvaluatorIds.length <= 2
+            ? selectedEvaluatorIds.map(id => evaluatorNameById.get(id) || id).join('、')
+            : `${selectedEvaluatorIds.slice(0, 2).map(id => evaluatorNameById.get(id) || id).join('、')} ${locale === 'zh' ? `等 ${selectedEvaluatorIds.length} 项` : `and ${selectedEvaluatorIds.length - 2} more`}`;
+    const setEvaluatorSelection = (ids: string[]) => {
+        const next = normalizeEvaluatorIds(ids);
+        setSelectedEvaluatorIds(next);
+        setSelectedEvaluatorId(next[0] || '');
+        if (currentTask) {
+            persistTaskUpdate(currentTask.id, {
+                ...currentConfigRef.current,
+                evaluatorId: next[0] || '',
+                evaluators: next,
+            });
+        }
+    };
+    const toggleEvaluatorSelection = (id: string) => {
+        if (!id) return;
+        const next = selectedEvaluatorIds.includes(id)
+            ? selectedEvaluatorIds.filter(item => item !== id)
+            : [...selectedEvaluatorIds, id];
+        setEvaluatorSelection(next);
+    };
+    const datasetSummary = activeLinkedDatasetIds.length === 0
+        ? (locale === 'zh' ? '请选择数据集' : 'Select datasets')
+        : activeLinkedDatasetIds.length <= 2
+            ? activeLinkedDatasetIds
+                .map(id => datasets.find(ds => ds.id === id)?.name || id)
+                .join('、')
+            : `${activeLinkedDatasetIds.slice(0, 2).map(id => datasets.find(ds => ds.id === id)?.name || id).join('、')} ${locale === 'zh' ? `等 ${activeLinkedDatasetIds.length} 项` : `and ${activeLinkedDatasetIds.length - 2} more`}`;
+    const setDatasetSelection = (ids: string[]) => {
+        const next = uniqueIds(ids);
+        const primaryDatasetId = next[0] || '';
+        setLinkedDatasetIds(next);
+        setSelectedDatasetId(primaryDatasetId);
+        setCheckedCaseIds([]);
+        if (currentTask) {
+            persistTaskUpdate(currentTask.id, {
+                ...currentConfigRef.current,
+                selectedDatasetId: primaryDatasetId,
+                linkedDatasetIds: next,
+                selectedCaseIds: [],
+                checkedCaseIds: [],
+                selectedCaseId: '',
+            });
+        }
+    };
+    const toggleDatasetSelection = (id: string) => {
+        if (!id) return;
+        const next = activeLinkedDatasetIds.includes(id)
+            ? activeLinkedDatasetIds.filter(item => item !== id)
+            : [...activeLinkedDatasetIds, id];
+        setDatasetSelection(next);
+    };
     const controlVersionOptions = useMemo(
         () => [
             { value: NONE_VERSION_ID, label: locale === 'zh' ? '无 Skill' : 'No Skill' },
@@ -3216,9 +3318,13 @@ export function GrayscaleEvaluation({
     const repeatRoundsHint = repeatRounds > 1
         ? (locale === 'zh' ? '多轮运行可观察波动和稳定性' : 'Multiple rounds reveal variance and stability')
         : (locale === 'zh' ? '单轮适合快速试跑与校验配置' : 'One round is best for quick validation');
-    const datasetHint = selectedDatasetId
-        ? `${locale === 'zh' ? '当前数据集共' : 'Selected dataset has'} ${selectedDataset?.cases?.length || 0} ${locale === 'zh' ? '条样本' : 'cases'}`
-        : (locale === 'zh' ? '先选择数据集，再勾选要执行的样本' : 'Choose a dataset before selecting cases');
+    const selectedDatasetCaseCount = activeLinkedDatasetIds.reduce((sum, id) => {
+        const dataset = datasets.find(ds => ds.id === id);
+        return sum + (Array.isArray(dataset?.cases) ? dataset.cases.length : 0);
+    }, 0);
+    const datasetHint = activeLinkedDatasetIds.length > 0
+        ? `${locale === 'zh' ? '当前共选择' : 'Selected'} ${activeLinkedDatasetIds.length} ${locale === 'zh' ? '个数据集，合计' : 'datasets with'} ${selectedDatasetCaseCount} ${locale === 'zh' ? '条样本' : 'cases'}`
+        : (locale === 'zh' ? '先选择数据集，再勾选要执行的样本' : 'Choose datasets before selecting cases');
     const evaluatorHint = selectedEvaluatorIsBuiltIn
         ? (locale === 'zh' ? '使用预置评估器，适合直接开始评测' : 'Built-in evaluator for a quick start')
         : (locale === 'zh' ? '使用自定义评估器，适合特定业务规则' : 'Custom evaluator for domain-specific scoring');
@@ -3601,46 +3707,209 @@ export function GrayscaleEvaluation({
 
                             <div className="v2-config-item v2-config-item--compact">
                                 <span className="v2-config-item-label">{locale === 'zh' ? '数据集' : 'Dataset'}</span>
-                                <Select
-                                    aria-label={locale === 'zh' ? '选择数据集' : 'Select dataset'}
-                                    value={selectedDatasetId}
-                                    onChange={val => {
-                                        setSelectedDatasetId(val);
-                                        setLinkedDatasetIds(val ? [val] : []);
-                                        setCheckedCaseIds([]);
-
-                                        if (currentTask) {
-                                            persistTaskUpdate(currentTask.id, {
-                                                ...currentConfigRef.current,
-                                                selectedDatasetId: val,
-                                                linkedDatasetIds: val ? [val] : [],
-                                                selectedCaseIds: [],
-                                                selectedCaseId: ''
-                                            });
-                                        }
-                                    }}
-                                    options={datasetSelectOptions}
-                                    active={Boolean(selectedDatasetId)}
-                                    size="sm"
-                                    className="v2-config-select"
-                                />
+                                <div style={{ position: 'relative' }}>
+                                    <button
+                                        type="button"
+                                        aria-label={locale === 'zh' ? '选择数据集' : 'Select datasets'}
+                                        className="v2-config-select"
+                                        onClick={() => setShowDatasetDropdown(open => !open)}
+                                        style={{
+                                            width: '100%',
+                                            minHeight: 34,
+                                            border: activeLinkedDatasetIds.length > 0 ? '1px solid var(--primary)' : '1px solid var(--border)',
+                                            borderRadius: 6,
+                                            background: 'var(--background)',
+                                            color: activeLinkedDatasetIds.length > 0 ? 'var(--foreground)' : 'var(--foreground-muted)',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'space-between',
+                                            gap: 8,
+                                            padding: '0 10px',
+                                            fontSize: 13,
+                                            textAlign: 'left',
+                                            cursor: 'pointer',
+                                        }}
+                                    >
+                                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                            {datasetSummary}
+                                        </span>
+                                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                                            {activeLinkedDatasetIds.length > 0 && (
+                                                <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--primary)', background: 'var(--primary-subtle)', borderRadius: 99, padding: '0 6px' }}>
+                                                    {activeLinkedDatasetIds.length}
+                                                </span>
+                                            )}
+                                            <span style={{ color: 'var(--foreground-muted)', fontSize: 11 }}>{showDatasetDropdown ? '▲' : '▼'}</span>
+                                        </span>
+                                    </button>
+                                    {showDatasetDropdown && (
+                                        <div
+                                            style={{
+                                                position: 'absolute',
+                                                top: 'calc(100% + 4px)',
+                                                left: 0,
+                                                right: 0,
+                                                zIndex: 60,
+                                                background: 'var(--background)',
+                                                border: '1px solid var(--border)',
+                                                borderRadius: 8,
+                                                boxShadow: '0 8px 24px rgba(0,0,0,.12)',
+                                                maxHeight: 240,
+                                                overflowY: 'auto',
+                                                padding: 4,
+                                            }}
+                                        >
+                                            {datasets.map(dataset => {
+                                                const checked = activeLinkedDatasetIds.includes(dataset.id);
+                                                return (
+                                                    <button
+                                                        key={dataset.id}
+                                                        type="button"
+                                                        onClick={() => toggleDatasetSelection(dataset.id)}
+                                                        style={{
+                                                            width: '100%',
+                                                            display: 'flex',
+                                                            alignItems: 'center',
+                                                            gap: 8,
+                                                            padding: '7px 9px',
+                                                            border: 'none',
+                                                            borderRadius: 5,
+                                                            background: checked ? 'var(--primary-subtle)' : 'transparent',
+                                                            color: 'var(--foreground)',
+                                                            cursor: 'pointer',
+                                                            fontSize: 12.5,
+                                                            textAlign: 'left',
+                                                        }}
+                                                    >
+                                                        <span
+                                                            style={{
+                                                                width: 15,
+                                                                height: 15,
+                                                                borderRadius: 4,
+                                                                border: checked ? '1px solid var(--primary)' : '1px solid var(--border)',
+                                                                background: checked ? 'var(--primary)' : 'var(--background)',
+                                                                color: 'var(--primary-foreground)',
+                                                                display: 'inline-flex',
+                                                                alignItems: 'center',
+                                                                justifyContent: 'center',
+                                                                fontSize: 10,
+                                                                fontWeight: 700,
+                                                                flexShrink: 0,
+                                                            }}
+                                                        >
+                                                            {checked ? '✓' : ''}
+                                                        </span>
+                                                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{dataset.name}</span>
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    )}
+                                </div>
                                 <span className="v2-config-item-hint">{datasetHint}</span>
                             </div>
 
                             <div className="v2-config-item v2-config-item--compact">
                                 <span className="v2-config-item-label">{locale === 'zh' ? '评估器' : 'Evaluator'}</span>
-                                <Select
-                                    aria-label={locale === 'zh' ? '选择评估器' : 'Select evaluator'}
-                                    value={selectedEvaluatorId}
-                                    onChange={v => {
-                                        setSelectedEvaluatorId(v);
-                                        if (currentTask) persistTaskUpdate(currentTask.id, { ...currentConfigRef.current, evaluatorId: v });
-                                    }}
-                                    options={evaluatorSelectOptions}
-                                    active={Boolean(selectedEvaluatorId)}
-                                    size="sm"
-                                    className="v2-config-select"
-                                />
+                                <div style={{ position: 'relative' }}>
+                                    <button
+                                        type="button"
+                                        aria-label={locale === 'zh' ? '选择评估器' : 'Select evaluators'}
+                                        className="v2-config-select"
+                                        onClick={() => setShowEvalDropdown(open => !open)}
+                                        style={{
+                                            width: '100%',
+                                            minHeight: 34,
+                                            border: selectedEvaluatorIds.length > 0 ? '1px solid var(--primary)' : '1px solid var(--border)',
+                                            borderRadius: 6,
+                                            background: 'var(--background)',
+                                            color: selectedEvaluatorIds.length > 0 ? 'var(--foreground)' : 'var(--foreground-muted)',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'space-between',
+                                            gap: 8,
+                                            padding: '0 10px',
+                                            fontSize: 13,
+                                            textAlign: 'left',
+                                            cursor: 'pointer',
+                                        }}
+                                    >
+                                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                            {evaluatorSummary}
+                                        </span>
+                                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                                            {selectedEvaluatorIds.length > 0 && (
+                                                <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--primary)', background: 'var(--primary-subtle)', borderRadius: 99, padding: '0 6px' }}>
+                                                    {selectedEvaluatorIds.length}
+                                                </span>
+                                            )}
+                                            <span style={{ color: 'var(--foreground-muted)', fontSize: 11 }}>{showEvalDropdown ? '▲' : '▼'}</span>
+                                        </span>
+                                    </button>
+                                    {showEvalDropdown && (
+                                        <div
+                                            style={{
+                                                position: 'absolute',
+                                                top: 'calc(100% + 4px)',
+                                                left: 0,
+                                                right: 0,
+                                                zIndex: 60,
+                                                background: 'var(--background)',
+                                                border: '1px solid var(--border)',
+                                                borderRadius: 8,
+                                                boxShadow: '0 8px 24px rgba(0,0,0,.12)',
+                                                maxHeight: 240,
+                                                overflowY: 'auto',
+                                                padding: 4,
+                                            }}
+                                        >
+                                            {allEvaluatorOptions.map(option => {
+                                                const checked = selectedEvaluatorIds.includes(option.id);
+                                                return (
+                                                    <button
+                                                        key={option.id}
+                                                        type="button"
+                                                        onClick={() => toggleEvaluatorSelection(option.id)}
+                                                        style={{
+                                                            width: '100%',
+                                                            display: 'flex',
+                                                            alignItems: 'center',
+                                                            gap: 8,
+                                                            padding: '7px 9px',
+                                                            border: 'none',
+                                                            borderRadius: 5,
+                                                            background: checked ? 'var(--primary-subtle)' : 'transparent',
+                                                            color: 'var(--foreground)',
+                                                            cursor: 'pointer',
+                                                            fontSize: 12.5,
+                                                            textAlign: 'left',
+                                                        }}
+                                                    >
+                                                        <span
+                                                            style={{
+                                                                width: 15,
+                                                                height: 15,
+                                                                borderRadius: 4,
+                                                                border: checked ? '1px solid var(--primary)' : '1px solid var(--border)',
+                                                                background: checked ? 'var(--primary)' : 'var(--background)',
+                                                                color: 'var(--primary-foreground)',
+                                                                display: 'inline-flex',
+                                                                alignItems: 'center',
+                                                                justifyContent: 'center',
+                                                                fontSize: 10,
+                                                                fontWeight: 700,
+                                                                flexShrink: 0,
+                                                            }}
+                                                        >
+                                                            {checked ? '✓' : ''}
+                                                        </span>
+                                                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{option.name}</span>
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    )}
+                                </div>
                                 <span className="v2-config-item-hint">{evaluatorHint}</span>
                             </div>
 
@@ -3991,7 +4260,7 @@ export function GrayscaleEvaluation({
                                       <Button variant="ghost" size="sm" onClick={() => setRecordModal({ title: locale === 'zh' ? 'A 对照组执行记录' : 'A Control Records', side: 'a' })}>
                                           <ExternalLink /> {locale === 'zh' ? '执行记录' : 'Records'}
                                       </Button>
-                                      <Button variant="default" size="sm" onClick={() => evaluateCaseSide(selectedCaseId, 'a', simA)}>
+                                      <Button variant="default" size="sm" onClick={() => evaluateCaseSide(selectedCaseId, 'a')}>
                                           {locale === 'zh' ? '✓ 评测' : 'Evaluate'}
                                       </Button>
                                       <span className="v2-trace-id">{simA.sessionId}</span>
@@ -4106,7 +4375,7 @@ export function GrayscaleEvaluation({
                                     <Button variant="ghost" size="sm" onClick={() => setRecordModal({ title: locale === 'zh' ? 'B 实验组执行记录' : 'B Experiment Records', side: 'b' })}>
                                         <ExternalLink /> {locale === 'zh' ? '执行记录' : 'Records'}
                                     </Button>
-                                    <Button variant="default" size="sm" onClick={() => evaluateCaseSide(selectedCaseId, 'b', simB)}>
+                                    <Button variant="default" size="sm" onClick={() => evaluateCaseSide(selectedCaseId, 'b')}>
                                         {locale === 'zh' ? '✓ 评测' : 'Evaluate'}
                                     </Button>
                                     <span className="v2-trace-id">{simB.sessionId}</span>
@@ -4562,7 +4831,7 @@ export function GrayscaleEvaluation({
                 open={newBatchDialogOpen}
                 user={user || ''}
                 defaultTitle={currentTask?.taskName}
-                evaluators={selectedEvaluatorId ? [selectedEvaluatorId] : []}
+                evaluators={selectedEvaluatorIds}
                 onClose={() => setNewBatchDialogOpen(false)}
                 onCreated={handleEvalBatchCreated}
             />

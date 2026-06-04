@@ -1275,7 +1275,7 @@ export default function PlaygroundPage() {
                 const isNew = data.isNewSkill;
                 const msg = locale === 'zh'
                     ? isNew
-                        ? `已发布到 Skills 管理（v${versionNum}）`
+                        ? `已发布到 Skills Hub（v${versionNum}）`
                         : `已更新 ${data.skill?.name}，新版本 v${versionNum}`
                     : isNew
                         ? `Published to Skills (v${versionNum})`
@@ -1843,7 +1843,7 @@ export default function PlaygroundPage() {
                                         </button>
                                     )}
                                     <button className="btn-download" onClick={() => currentSessionId && triggerSkillDownload(currentSessionId, currentSkillName)}>{locale === 'zh' ? '下载' : 'Download'}</button>
-                                    <button className="btn-publish" onClick={handlePublish} disabled={isPublishing || !currentSessionId}>
+                                    <button className="btn-publish" onClick={handlePublish} disabled={isPublishing || !currentSessionId || isLoading || !hasGeneratedFiles}>
                                         {isPublishing ? (locale === 'zh' ? '发布中…' : 'Publishing…') : (locale === 'zh' ? '保存并发布' : 'Publish')}
                                     </button>
                                     <button className="btn-close-ide" onClick={() => setShowIDE(false)}>

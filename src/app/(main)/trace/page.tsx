@@ -84,7 +84,7 @@ type TimeFilter = '1h' | '3h' | '24h' | '7d' | '30d' | 'all';
 type SortKey = 'timestamp' | 'agent' | 'status' | 'latency' | 'tokens' | 'cost';
 type SortDir = 'asc' | 'desc';
 type AnomalyFilter = 'all' | 'running' | 'success' | 'failed';
-type OwnershipFilter = 'all' | 'user' | 'system' | 'unregistered';
+type OwnershipFilter = 'all' | 'user' | 'system';
 
 const TIME_WIN_MS: Record<TimeFilter, number> = {
     '1h': 3.6e6,
@@ -403,7 +403,7 @@ function TracePageContent() {
                     if (!getInvokedSkillNames(d).includes(skillFilter)) return false;
                 }
                 if (ownershipFilter !== 'all') {
-                    const ownership = d.agentOwnership ?? 'unregistered';
+                    const ownership = d.agentOwnership ?? 'user';
                     if (ownership !== ownershipFilter) return false;
                 }
                 return true;
@@ -489,7 +489,6 @@ function TracePageContent() {
         { value: 'all', label: t('nav.allOwnership') },
         { value: 'user', label: t('nav.userAgent') },
         { value: 'system', label: t('nav.systemAgent') },
-        { value: 'unregistered', label: t('nav.unregisteredAgent') },
     ];
     const statusOptions: SelectOption[] = [
         { value: 'all', label: t('common.all') },

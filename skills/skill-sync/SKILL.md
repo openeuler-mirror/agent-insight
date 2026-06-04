@@ -43,10 +43,10 @@ node scripts/push.js <目标技能文件夹路径>
 *示例: `node scripts/push.js ../skill-generator`*
 
 **脚本特性:**
-- 工具会自动读取 `~/.skill-insight/.env` 下的 `SKILL_INSIGHT_HOST` 和 `SKILL_INSIGHT_API_KEY`。
+- 工具会自动读取 `~/.agent-insight/.env` 下的 `AGENT_INSIGHT_HOST` 和 `AGENT_INSIGHT_API_KEY`。
 - 如果检测到没有配置，或者配置文件不存在，脚本会报错并提示。
 - 【处置缺失配置】：如果你发现脚本报错没有配置，请询问用户：
-  `"检测到您尚未配置 Skill Insight 平台的连接信息。是否需要我为您生成/配置 ~/.skill-insight/.env，还是您放弃本次操作？"`
+  `"检测到您尚未配置 Agent Insight 平台的连接信息。是否需要我为您生成/配置 ~/.agent-insight/.env，还是您放弃本次操作？"`
 
 ### 2. 拉取 (Pull) 平台技能
 用于从平台上下载某个技能并在本地解压安装。

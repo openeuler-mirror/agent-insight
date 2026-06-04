@@ -14,7 +14,7 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License" /></a>
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/node-%3E%3D20.0.0-43853d.svg" alt="Node" /></a>
-  <a href="https://gitcode.com/openeuler/witty-agent-insight"><img src="https://img.shields.io/badge/repo-gitcode-1f7ae0.svg" alt="Repo" /></a>
+  <a href="https://gitcode.com/openeuler/agent-insight"><img src="https://img.shields.io/badge/repo-gitcode-1f7ae0.svg" alt="Repo" /></a>
   <a href="mailto:intelligence@openeuler.org"><img src="https://img.shields.io/badge/contact-intelligence%40openeuler.org-orange.svg" alt="Contact" /></a>
 </p>
 
@@ -59,36 +59,36 @@
 **一键安装**
 
 ```bash
-npx @witty-ai/agen-insight install
+npx agent-insight install
 ```
 
 **源码安装**
 
 ```bash
-git clone https://gitcode.com/openeuler/witty-agent-insight.git
-cd witty-agent-insight
+git clone https://gitcode.com/openeuler/agent-insight.git
+cd agent-insight
 npm install
 
 # 开发模式
-bash scripts/restart_dev.sh
+bash scripts/develop_start.sh
 
 # 生产模式
-bash scripts/restart.sh
+bash scripts/start.sh
 
 # 配置数据上报路径
-curl -sSf http://<IP>:<PORT>/api/setup | bash
+curl -sSf "http://<IP>:<PORT>/api/setup?key=<API_KEY>" | bash
 ```
 
 **启动服务**
 
 ```bash
-cd witty-agent-insight
+cd agent-insight
 
 # 开发模式
-bash scripts/restart_dev.sh
+bash scripts/develop_start.sh
 
 # 生产模式
-bash scripts/restart.sh
+bash scripts/start.sh
 ```
 
 **访问看板**
@@ -109,22 +109,19 @@ bash scripts/restart.sh
 2. 在 Agent 所在服务器执行安装命令：
 
    ```bash
-   curl -sSf "http://172.29.209.207:3000/api/ingest/setup" | bash
+   curl -sSf "http://172.29.209.207:3000/api/ingest/setup?key=<API_KEY>" | bash
    ```
 
 3. 选择 Agent 运行时。
    <p align="center"><img src="docs/images/guide-framework.png" alt="选择运行时" /></p>
 
-4. 粘贴在 **安装指导** 页面复制的 API Key。
-   <p align="center"><img src="docs/images/guide-apikey.png" alt="输入 API Key" /></p>
-
-5. 执行安装成功后提示的 Usage 命令，例如：
+4. 执行安装成功后提示的 Usage 命令，例如：
 
    ```bash
    opencode run 'hello'
    ```
 
-6. 在看板的 **链路追踪** 页面确认链路数据已生成，即表示客户端安装成功。
+5. 在看板的 **链路追踪** 页面确认链路数据已生成，即表示客户端安装成功。
    <p align="center"><img src="docs/images/trace.png" alt="链路追踪" /></p>
 
 ---
@@ -132,6 +129,8 @@ bash scripts/restart.sh
 ## 🧭 上手演练 — Skill 生成 → 评测 → 优化
 
 完整体验在 Agent-Insight 看板中完成 **Skill 生成 → 评测 → 优化** 的闭环流程。
+
+> 💡 **零配置体验**：新用户首次登录注册后，平台会自动注入一套内置示例（`messages 日志分析` 数据集 + 两条示例 Trace + 本地示例日志 `~/.agent-insight/example/messages`），无需接入真实 Agent 即可照着 [内置示例端到端走查](docs/user-guide/example-walkthrough.md) 跑通「智能诊断 → Skill 生成 → 评测 → 优化」全流程。
 
 ### 注册模型
 
@@ -156,7 +155,7 @@ bash scripts/restart.sh
 
 ### 分析 Skill
 
-1. 进入 **Skills 分析**，单击 **静态合规**。
+1. 进入 **Skills 评测**，单击 **静态合规**。
    <p align="center"><img src="docs/images/skill-analyse.png" alt="分析 Skill" /></p>
 
 2. 单击 **重新扫描**，查看分析结果。
@@ -176,7 +175,7 @@ bash scripts/restart.sh
 
 ## 📚 文档
 
-详细使用指南见 [`docs/user-guide`](docs/user-guide/) 目录。
+详细使用指南见 [`docs/user-guide`](docs/user-guide/) 目录。新用户推荐从 [内置示例端到端走查](docs/user-guide/example-walkthrough.md) 开始 —— 用注册即得的内置示例零配置跑通完整闭环。
 
 ## 🤝 如何贡献
 

@@ -32,10 +32,10 @@ function loadSkillInsightConfig() {
     }
   } catch {}
 
-  const apiKey = config["SKILL_INSIGHT_API_KEY"] || process.env.SKILL_INSIGHT_API_KEY
-  const host = config["SKILL_INSIGHT_HOST"] || process.env.SKILL_INSIGHT_HOST
+  const apiKey = config["AGENT_INSIGHT_API_KEY"] || process.env.AGENT_INSIGHT_API_KEY
+  const host = config["AGENT_INSIGHT_HOST"] || process.env.AGENT_INSIGHT_HOST
   const showTaskStats = parseBool(
-    config["SKILL_INSIGHT_SHOW_TASK_STATS"] ?? process.env.SKILL_INSIGHT_SHOW_TASK_STATS,
+    config["AGENT_INSIGHT_SHOW_TASK_STATS"] ?? process.env.AGENT_INSIGHT_SHOW_TASK_STATS,
     true,
   )
 
@@ -163,8 +163,8 @@ function StatsFooter(props: {
           <text fg={theme().text}>
             <b>Agent Insight</b>
           </text>
-          <text fg={theme().textMuted}>未配置 SKILL_INSIGHT_HOST</text>
-          <text fg={theme().textMuted}>请在 {path.join(getExistingInsightDir(), ".env")} 设置 SKILL_INSIGHT_HOST</text>
+          <text fg={theme().textMuted}>未配置 AGENT_INSIGHT_HOST</text>
+          <text fg={theme().textMuted}>请在 {path.join(getExistingInsightDir(), ".env")} 设置 AGENT_INSIGHT_HOST</text>
         </box>
       </Show>
       <Show when={entry()}>

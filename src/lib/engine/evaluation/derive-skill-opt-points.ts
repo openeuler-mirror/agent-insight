@@ -104,6 +104,25 @@ interface RawResultIssue {
   improvementSuggestion?: string;
 }
 
+interface RawKeyActionResult {
+  action_id?: string;
+  actionId?: string;
+  action_content?: string;
+  actionContent?: string;
+  coverage?: string;
+  severity?: string;
+  trace_comparison_analysis?: string;
+  traceComparisonAnalysis?: string;
+  has_skill_improvement?: boolean;
+  hasSkillImprovement?: boolean;
+  skill_improvement_suggestion?: string;
+  skillImprovementSuggestion?: string;
+  skill_issue_summary?: string;
+  skillIssueSummary?: string;
+  skill_issue_evidence?: string;
+  skillIssueEvidence?: string;
+}
+
 export interface DeriveOptPointsArgs {
   user: string;
   taskId: string | null;
@@ -121,6 +140,7 @@ export async function deriveAndPersistOptPoints(args: DeriveOptPointsArgs): Prom
   if (skills.length === 0) return 0;
 
   const issues: DerivedIssue[] = [];
+  for (const it of extractKeyActionIssues(trajectoryRow)) issues.push(it);
   for (const it of extractDeviationIssues(trajectoryRow)) issues.push(it);
   for (const it of extractKeyPointIssues(trajectoryRow)) issues.push(it);
   for (const it of extractToolChoiceIssues(trajectoryRow)) issues.push(it);
@@ -155,7 +175,7 @@ export async function deriveAndPersistOptPoints(args: DeriveOptPointsArgs): Prom
     const seenInBatch = new Set<string>();
     const batch: DerivedIssue[] = [];
     for (const issue of issues) {
-      const key = `${issue.category}::${normalizeSummary(issue.summary)}`;
+      const key = `${issue.category}::${normalizeSummary(issue.summary)}::${issue.dedupSalt || ''}`;
       if (seenInBatch.has(key)) continue;
       seenInBatch.add(key);
       batch.push(issue);
@@ -212,11 +232,13 @@ interface DerivedIssue {
   reasoning?: string;
   /** 评估器给出的"在 SKILL.md 哪段加什么"具体改进建议；可空 */
   improvementSuggestion?: string;
+  /** 用于保留逐关键动作建议，不让同文案的不同关键动作在后端被合并。 */
+  dedupSalt?: string;
 }
 
 function dedupKeyFor(issue: DerivedIssue): string {
   return createHash('sha1')
-    .update(`${issue.category}::${normalizeSummary(issue.summary)}`)
+    .update(`${issue.category}::${normalizeSummary(issue.summary)}::${issue.dedupSalt || ''}`)
     .digest('hex')
     .slice(0, 6);
 }
@@ -263,6 +285,48 @@ function extractDeviationIssues(
     });
   }
   return out;
+}
+
+function extractKeyActionIssues(
+  row: Pick<TrajectoryEvalResult, 'rawAnalysisJson'>,
+): DerivedIssue[] {
+  const raw = parseJsonObject(row.rawAnalysisJson);
+  if (!raw) return [];
+  const list = extractRawKeyActionResults(raw);
+  const out: DerivedIssue[] = [];
+  for (const item of list) {
+    if ((item.has_skill_improvement ?? item.hasSkillImprovement) !== true) continue;
+    const suggestion = pickSuggestion(item.skill_improvement_suggestion, item.skillImprovementSuggestion);
+    if (!suggestion) continue;
+    const actionId = String(item.action_id ?? item.actionId ?? '').trim();
+    const actionContent = String(item.action_content ?? item.actionContent ?? '').trim();
+    const summary = String(item.skill_issue_summary ?? item.skillIssueSummary ?? '').trim()
+      || actionContent
+      || suggestion;
+    const evidence = String(item.skill_issue_evidence ?? item.skillIssueEvidence ?? '').trim()
+      || String(item.trace_comparison_analysis ?? item.traceComparisonAnalysis ?? '').trim();
+    out.push({
+      severity: normalizeSeverity(item.severity),
+      category: '关键动作执行不足',
+      summary,
+      evidence,
+      reasoning: String(item.trace_comparison_analysis ?? item.traceComparisonAnalysis ?? '').trim() || undefined,
+      improvementSuggestion: suggestion,
+      dedupSalt: actionId || actionContent,
+    });
+  }
+  return out;
+}
+
+export function extractKeyActionIssuesFromRawAnalysis(rawAnalysisJson: string | null | undefined): Array<{
+  severity: Severity;
+  category: string;
+  summary: string;
+  evidence: string;
+  reasoning?: string;
+  improvementSuggestion?: string;
+}> {
+  return extractKeyActionIssues({ rawAnalysisJson: rawAnalysisJson ?? null });
 }
 
 function extractKeyPointIssues(
@@ -435,6 +499,12 @@ function parseJsonArray<T>(s: string | null | undefined): T[] {
 
 function arrayOrEmpty<T>(v: unknown): T[] {
   return Array.isArray(v) ? (v as T[]) : [];
+}
+
+function extractRawKeyActionResults(raw: Record<string, unknown>): RawKeyActionResult[] {
+  const direct = arrayOrEmpty<RawKeyActionResult>(raw.key_action_results);
+  const normalized = arrayOrEmpty<RawKeyActionResult>(raw.keyActionResults);
+  return direct.length > 0 ? direct : normalized;
 }
 
 function extractRawKeyPointFindings(rawAnalysisJson: string | null | undefined): RawKeyPointFinding[] {

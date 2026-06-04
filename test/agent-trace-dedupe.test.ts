@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 
 import { buildAgentCallTree } from "../src/lib/engine/observability/agent-trace"
+import { buildFaultPathSteps } from "../src/lib/engine/observability/fault-path"
 
 test("agent trace: duplicate tool calls with the same id render once", () => {
   const tree = buildAgentCallTree([
@@ -45,6 +46,17 @@ test("agent trace: duplicate tool calls with the same id render once", () => {
   assert.equal(tree!.stats.taskCalls, 1)
 })
 
+test("agent trace: content blocks are converted to text before building events", () => {
+  const tree = buildAgentCallTree([
+    { role: "user", content: [{ type: "text", text: "diagnose" }], timestamp: 1 },
+    { role: "assistant", content: [{ type: "text", text: "done" }], timestamp: 2 },
+  ] as any)
+
+  assert.ok(tree)
+  assert.equal(tree!.events[0]?.summary, "diagnose")
+  assert.equal(tree!.events[1]?.summary, "done")
+})
+
 test("agent trace: tool-only assistant turn (empty content) still emits an llm event from reasoning", () => {
   // In opencode a tool-calling turn carries its chain-of-thought in `reasoning`
   // parts while `content` (text parts only) is empty. Each such turn is one LLM
@@ -81,6 +93,29 @@ test("agent trace: tool-only assistant turn (empty content) still emits an llm e
   assert.equal(tree!.stats.llmCalls, 2)
   // The reasoning text becomes the llm event summary when content is empty.
   assert.equal(llm[0].summary, "I should read the file first.")
+})
+
+test("fault path: tool-only llm step exposes its tool-call summary as output", () => {
+  const steps = buildFaultPathSteps([
+    { role: "user", content: "go", timestamp: 1 },
+    {
+      role: "assistant",
+      content: "",
+      timestamp: 2,
+      tool_calls: [
+        {
+          id: "c1",
+          type: "function",
+          function: { name: "read", arguments: JSON.stringify({ file_path: "a.ts" }) },
+          state: "success",
+          output: "file contents",
+        },
+      ],
+    },
+  ] as any, "zh")
+
+  const llmStep = steps.find((step) => step.kind === "llm")
+  assert.equal(llmStep?.rawOutput, "1 个工具调用: read")
 })
 
 test("agent trace: ISO timestamps produce finite durations", () => {

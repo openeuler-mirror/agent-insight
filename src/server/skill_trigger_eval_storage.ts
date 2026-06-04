@@ -78,7 +78,7 @@ export interface TriggerRunResultItem {
   competingSkill?: string;
 }
 
-export type TriggerRunStatus = 'running' | 'done' | 'failed';
+export type TriggerRunStatus = 'running' | 'done' | 'failed' | 'cancelled';
 
 /** 触发评测一次跑的记录。 */
 export interface SkillTriggerEvalRunRecord {
@@ -222,7 +222,14 @@ function runRecordFromRow(row: {
   } catch {
     results = [];
   }
-  const status: TriggerRunStatus = row.status === 'done' ? 'done' : row.status === 'failed' ? 'failed' : 'running';
+  const status: TriggerRunStatus =
+    row.status === 'done'
+      ? 'done'
+      : row.status === 'failed'
+        ? 'failed'
+        : row.status === 'cancelled'
+          ? 'cancelled'
+          : 'running';
   return {
     id: row.id,
     user: row.user,
@@ -530,5 +537,56 @@ export async function findLatestDoneRun(
     },
     orderBy: { createdAt: 'desc' },
   });
+  return row ? runRecordFromRow(row) : null;
+}
+
+/** 一条 running run 超过这个时长还没 finalize，视为僵尸（多半是进程中途挂了），不再阻塞新评测。 */
+export const RUNNING_RUN_STALE_MS = 30 * 60 * 1000;
+
+/**
+ * 查 (user, skillName, skillVersion) 下是否有一条**新鲜**的 running run。
+ * 用于「同一版本已有评测在跑就别再起一个」的 409 防重入。
+ * 评测异步化后一次 POST 立刻返回，连点 / 多标签页很容易并发发起，最后 done 的那条会抢成 latest。
+ * 只认 createdAt 在 staleMs 以内的 running——更久的当作僵尸忽略，避免崩溃残留的 running 永久卡死后续评测。
+ */
+export async function findRunningRun(
+  user: string,
+  skillName: string,
+  skillVersion: number,
+  opts?: { staleMs?: number },
+): Promise<SkillTriggerEvalRunRecord | null> {
+  const prisma = requirePrisma();
+  const staleMs = opts?.staleMs ?? RUNNING_RUN_STALE_MS;
+  const freshAfter = new Date(Date.now() - staleMs);
+  const row = await prisma.skillTriggerEvalRun.findFirst({
+    where: {
+      user,
+      skillName,
+      skillVersion,
+      status: 'running',
+      createdAt: { gte: freshAfter },
+    },
+    orderBy: { createdAt: 'desc' },
+  });
+  return row ? runRecordFromRow(row) : null;
+}
+
+/**
+ * 把一条 run 标成 cancelled（用户终止）。**只在它当前还是 running 时才改**——
+ * 条件更新避免覆盖已经 done/failed 的 run（终止请求和后台 finalize 可能擦肩而过）。
+ * 返回更新后的 run；若该 run 不存在、不属于该 user、或已不是 running，则返回 null（视为无事发生）。
+ */
+export async function markRunCancelled(
+  id: string,
+  user: string,
+  errorMessage = '已手动终止',
+): Promise<SkillTriggerEvalRunRecord | null> {
+  const prisma = requirePrisma();
+  const res = await prisma.skillTriggerEvalRun.updateMany({
+    where: { id, user, status: 'running' },
+    data: { status: 'cancelled', errorMessage },
+  });
+  if (res.count === 0) return null;
+  const row = await prisma.skillTriggerEvalRun.findFirst({ where: { id, user } });
   return row ? runRecordFromRow(row) : null;
 }

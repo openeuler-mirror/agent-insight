@@ -905,6 +905,7 @@ interface ReadRecordFilters {
     query?: string;
     taskId?: string;
     taskIds?: string[];
+    agentName?: string;
     framework?: string;
     skill?: string;
     skillVersion?: number;
@@ -919,14 +920,71 @@ interface ReadRecordFilters {
 
 interface ReadRecordsOptions {
     attachEvaluations?: boolean;
+    page?: number;
+    pageSize?: number;
 }
 
-export async function readRecords(
+export async function listObservedAgentNames(user?: string): Promise<string[]> {
+    const where: any = { isSubagent: false };
+    if (user) {
+        where.OR = [
+            { user },
+            { user: null },
+        ];
+    }
+
+    const records = await db.findExecutions(where, { timestamp: 'desc' });
+    const names: string[] = [];
+    const seen = new Set<string>();
+    for (const record of records) {
+        const name = String(record?.agentName || '').trim();
+        if (!name || seen.has(name) || isEvaluatorAgentName(name)) continue;
+        seen.add(name);
+        names.push(name);
+    }
+    return names;
+}
+
+export async function listObservedTraceIds(
+    user?: string,
+    agentName?: string,
+): Promise<string[]> {
+    const where: any = { isSubagent: false };
+    if (user) {
+        where.OR = [
+            { user },
+            { user: null },
+        ];
+    }
+    if (agentName) {
+        where.agentName = agentName;
+    }
+
+    const records = await db.findExecutions(where, { timestamp: 'desc' });
+    const traceIds: string[] = [];
+    const seenTaskIds = new Set<string>();
+    for (const record of records) {
+        const taskId = String(record?.taskId || '').trim();
+        if (taskId) {
+            if (seenTaskIds.has(taskId)) continue;
+            seenTaskIds.add(taskId);
+            traceIds.push(taskId);
+            continue;
+        }
+        const uploadId = String(record?.id || '').trim();
+        if (uploadId) traceIds.push(uploadId);
+    }
+    return traceIds;
+}
+
+async function readRecordsInternal(
     user?: string,
     filters?: ReadRecordFilters,
     options?: ReadRecordsOptions
-): Promise<ExecutionRecord[]> {
+): Promise<{ records: ExecutionRecord[]; total: number }> {
     const attachEvaluations = options?.attachEvaluations ?? true;
+    const page = options?.page && Number.isFinite(options.page) ? Math.max(1, Math.trunc(options.page)) : 1;
+    const pageSize = options?.pageSize && Number.isFinite(options.pageSize) ? Math.max(1, Math.trunc(options.pageSize)) : 0;
     const where: any = {};
     if (user && !filters?.showAllUsers) {
         where.OR = [
@@ -972,6 +1030,10 @@ export async function readRecords(
         where.skillVersion = filters.skillVersion;
     }
 
+    if (filters?.agentName !== undefined) {
+        where.agentName = filters.agentName;
+    }
+
     const records = await db.findExecutions(where, { timestamp: 'desc' });
     const byTaskId = new Map<string, any[]>();
     for (const r of records) {
@@ -1009,6 +1071,10 @@ export async function readRecords(
         if (!r.taskId) return true;
         return keepIds.has(r.id);
     });
+    const total = filtered.length;
+    const paged = pageSize > 0
+        ? filtered.slice((page - 1) * pageSize, (page - 1) * pageSize + pageSize)
+        : filtered;
 
     for (const [tid, group] of byTaskId.entries()) {
         if (group.length <= 1) continue;
@@ -1080,7 +1146,7 @@ export async function readRecords(
         if (direct) return direct;
         return sessionAgents.find(n => n && !isEvaluatorAgentName(n)) || '';
     };
-    filtered.forEach((r: any) => {
+    paged.forEach((r: any) => {
         const taskId = r.taskId || r.id;
         const sessionAgents: string[] = [];
         // 解析结果走 memoize 缓存（与下方 invokedSkills 提取共用，每个 session 只 parse 一次）。
@@ -1099,11 +1165,12 @@ export async function readRecords(
     // of agent identity (platform + name). The `user` dimension is collapsed so a given agent
     // name resolves to one ownership regardless of which user's execution record we look at.
     // When multiple registrations exist for (platform, name) across users, prefer
-    // user > system > unregistered.
-    const OWNERSHIP_RANK: Record<string, number> = { user: 3, system: 2, unregistered: 1 };
+    // system > user: 一个全局注册的系统 Agent（user=null）是权威归属，即使同名还存在
+    // 各 user 的 trace 自动发现行（observe 时落库为 user），也应判定为 system。
+    const OWNERSHIP_RANK: Record<string, number> = { system: 2, user: 1 };
     const agentOwnershipMap = new Map<string, string>();
     const uniqueAgents = new Map<string, { platform: string; name: string }>();
-    filtered.forEach((r: any) => {
+    paged.forEach((r: any) => {
         const taskId = r.taskId || r.id;
         const effective = recordEffectiveAgent.get(taskId) || '';
         if (r.framework && effective) {
@@ -1124,7 +1191,7 @@ export async function readRecords(
                     agentOwnershipMap.set(key, a.agentOwnership);
                 }
             }
-        } catch { /* graceful degradation — ownership stays 'unregistered' */ }
+        } catch { /* graceful degradation — ownership stays 'user' */ }
     }
 
     /* ─── 懒回填 Skill 版本绑定 ─────────────────────────────────────────
@@ -1138,7 +1205,7 @@ export async function readRecords(
      * 单条 Execution。fire-and-forget——回填失败不影响本次返回。
      */
     const skillNamesNeedingBackfill = new Set<string>();
-    filtered.forEach((r: any) => {
+    paged.forEach((r: any) => {
         if (r.skill && (r.skillVersion == null) && !r.isSubagent) {
             skillNamesNeedingBackfill.add(String(r.skill));
         }
@@ -1163,7 +1230,7 @@ export async function readRecords(
         }
     }
 
-    return Promise.all(filtered.map(async (r: any) => {
+    const normalizedRecords = await Promise.all(paged.map(async (r: any) => {
         const model = r.model ?? null;
         const pricingResult = model ? getModelPricing(model) : null;
         const pricing = pricingResult?.pricing ?? null;
@@ -1218,8 +1285,8 @@ export async function readRecords(
             agent: r.agentName || undefined,
             agentName: r.agentName || undefined,
             agentOwnership: (r.framework && effectiveAgentName)
-                ? (agentOwnershipMap.get(`${r.framework}::${effectiveAgentName}`) ?? 'unregistered')
-                : 'unregistered',
+                ? (agentOwnershipMap.get(`${r.framework}::${effectiveAgentName}`) ?? 'user')
+                : 'user',
             tokens: r.tokens || undefined,
             cost: (pricing && r.inputTokens != null && r.outputTokens != null)
                 ? calculateCost(r.inputTokens, r.outputTokens, pricing, r.cacheReadInputTokens ?? undefined, r.cacheCreationInputTokens ?? undefined)
@@ -1301,6 +1368,24 @@ export async function readRecords(
         const configs = await configsData.getConfigsForEvaluationUser(evaluationUser);
         return attachEvaluationSnapshots(normalizedRecord, configs, evaluationUser);
     }));
+    return { records: normalizedRecords, total };
+}
+
+export async function readRecords(
+    user?: string,
+    filters?: ReadRecordFilters,
+    options?: ReadRecordsOptions
+): Promise<ExecutionRecord[]> {
+    const result = await readRecordsInternal(user, filters, options);
+    return result.records;
+}
+
+export async function readRecordPage(
+    user?: string,
+    filters?: ReadRecordFilters,
+    options?: ReadRecordsOptions
+): Promise<{ records: ExecutionRecord[]; total: number }> {
+    return readRecordsInternal(user, filters, options);
 }
 
 
@@ -1824,7 +1909,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
                             platform,
                             name: observed.name,
                             user,
-                            agentOwnership: 'unregistered',
+                            agentOwnership: 'user',
                             agentType: observed.agentType === 'main'
                                 ? (targetRecord.agentType || 'main')
                                 : 'subagent'

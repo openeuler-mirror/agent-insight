@@ -75,44 +75,44 @@ NODE
     fi
 
     # --- 2.1 Setup Agent-Insight Config (~/.agent-insight/.env) ---
-    SKILL_INSIGHT_CONFIG_DIR="$HOME/.agent-insight"
-    SKILL_INSIGHT_CONFIG_FILE="$SKILL_INSIGHT_CONFIG_DIR/.env"
-    mkdir -p "$SKILL_INSIGHT_CONFIG_DIR"
+    AGENT_INSIGHT_CONFIG_DIR="$HOME/.agent-insight"
+    AGENT_INSIGHT_CONFIG_FILE="$AGENT_INSIGHT_CONFIG_DIR/.env"
+    mkdir -p "$AGENT_INSIGHT_CONFIG_DIR"
 
     EXISTING_KEY=""
     EXISTING_HOST=""
     EXISTING_SHOW_TASK_STATS=""
-    if [ -f "$SKILL_INSIGHT_CONFIG_FILE" ]; then
+    if [ -f "$AGENT_INSIGHT_CONFIG_FILE" ]; then
         # match only UNCOMMENTED lines
-        EXISTING_KEY=$(grep '^SKILL_INSIGHT_API_KEY=' "$SKILL_INSIGHT_CONFIG_FILE" | head -n 1 | cut -d'=' -f2-)
-        EXISTING_HOST=$(grep '^SKILL_INSIGHT_HOST=' "$SKILL_INSIGHT_CONFIG_FILE" | head -n 1 | cut -d'=' -f2-)
-        EXISTING_SHOW_TASK_STATS=$(grep '^SKILL_INSIGHT_SHOW_TASK_STATS=' "$SKILL_INSIGHT_CONFIG_FILE" | head -n 1 | cut -d'=' -f2-)
+        EXISTING_KEY=$(grep '^AGENT_INSIGHT_API_KEY=' "$AGENT_INSIGHT_CONFIG_FILE" | head -n 1 | cut -d'=' -f2-)
+        EXISTING_HOST=$(grep '^AGENT_INSIGHT_HOST=' "$AGENT_INSIGHT_CONFIG_FILE" | head -n 1 | cut -d'=' -f2-)
+        EXISTING_SHOW_TASK_STATS=$(grep '^AGENT_INSIGHT_SHOW_TASK_STATS=' "$AGENT_INSIGHT_CONFIG_FILE" | head -n 1 | cut -d'=' -f2-)
     fi
 
     # API Key Selection Logic
     API_KEY=""
     if [ -n "$EXISTING_KEY" ]; then
-        echo "🔑 Found existing API Key in $SKILL_INSIGHT_CONFIG_FILE."
+        echo "🔑 Found existing API Key in $AGENT_INSIGHT_CONFIG_FILE."
         read -p "👉 Use existing key? (y/N, Default: y): " USE_EXISTING < /dev/tty
         if [[ "$USE_EXISTING" =~ ^[Nn]$ ]]; then
             read -p "👉 Please enter your NEW API Key: " API_KEY < /dev/tty
         else
             API_KEY="$EXISTING_KEY"
         fi
-    elif [ -n "$SKILL_INSIGHT_API_KEY" ]; then
-        echo "🔑 Found API Key in current environment/env file: $SKILL_INSIGHT_API_KEY"
+    elif [ -n "$AGENT_INSIGHT_API_KEY" ]; then
+        echo "🔑 Found API Key in current environment/env file: $AGENT_INSIGHT_API_KEY"
         read -p "👉 Use this key for global config? (y/N, Default: y): " USE_ENV < /dev/tty
         if [[ "$USE_ENV" =~ ^[Nn]$ ]]; then
             read -p "👉 Please enter your API Key: " API_KEY < /dev/tty
         else
-            API_KEY="$SKILL_INSIGHT_API_KEY"
+            API_KEY="$AGENT_INSIGHT_API_KEY"
         fi
     else
         read -p "👉 Please enter your API Key: " API_KEY < /dev/tty
     fi
 
     # -- Host Logic --
-    NEW_HOST="${SKILL_INSIGHT_HOST:-127.0.0.1:3000}"
+    NEW_HOST="${AGENT_INSIGHT_HOST:-127.0.0.1:3000}"
     FINAL_HOST="$NEW_HOST"
     if [ -n "$EXISTING_HOST" ] && [ "$EXISTING_HOST" != "$NEW_HOST" ]; then
         echo "🌐 Current Host in global config: $EXISTING_HOST"
@@ -132,14 +132,14 @@ NODE
         FINAL_SHOW_TASK_STATS="true"
     fi
 
-    echo "⚙️  Syncing configuration to $SKILL_INSIGHT_CONFIG_FILE..."
-    touch "$SKILL_INSIGHT_CONFIG_FILE"
-    cp "$SKILL_INSIGHT_CONFIG_FILE" "${SKILL_INSIGHT_CONFIG_FILE}.bak"
-    grep -v "^SKILL_INSIGHT_API_KEY=" "${SKILL_INSIGHT_CONFIG_FILE}.bak" | grep -v "^SKILL_INSIGHT_HOST=" | grep -v "^SKILL_INSIGHT_SHOW_TASK_STATS=" > "$SKILL_INSIGHT_CONFIG_FILE"
-    echo "SKILL_INSIGHT_API_KEY=$API_KEY" >> "$SKILL_INSIGHT_CONFIG_FILE"
-    echo "SKILL_INSIGHT_HOST=$FINAL_HOST" >> "$SKILL_INSIGHT_CONFIG_FILE"
-    echo "SKILL_INSIGHT_SHOW_TASK_STATS=$FINAL_SHOW_TASK_STATS" >> "$SKILL_INSIGHT_CONFIG_FILE"
-    rm "${SKILL_INSIGHT_CONFIG_FILE}.bak"
+    echo "⚙️  Syncing configuration to $AGENT_INSIGHT_CONFIG_FILE..."
+    touch "$AGENT_INSIGHT_CONFIG_FILE"
+    cp "$AGENT_INSIGHT_CONFIG_FILE" "${AGENT_INSIGHT_CONFIG_FILE}.bak"
+    grep -v "^AGENT_INSIGHT_API_KEY=" "${AGENT_INSIGHT_CONFIG_FILE}.bak" | grep -v "^AGENT_INSIGHT_HOST=" | grep -v "^AGENT_INSIGHT_SHOW_TASK_STATS=" > "$AGENT_INSIGHT_CONFIG_FILE"
+    echo "AGENT_INSIGHT_API_KEY=$API_KEY" >> "$AGENT_INSIGHT_CONFIG_FILE"
+    echo "AGENT_INSIGHT_HOST=$FINAL_HOST" >> "$AGENT_INSIGHT_CONFIG_FILE"
+    echo "AGENT_INSIGHT_SHOW_TASK_STATS=$FINAL_SHOW_TASK_STATS" >> "$AGENT_INSIGHT_CONFIG_FILE"
+    rm "${AGENT_INSIGHT_CONFIG_FILE}.bak"
     echo "✅ Configuration updated (Other settings preserved)."
 
     # NEW: Register Sync Hook into .zshrc / .bashrc

@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 
 import { prismaRaw } from '@/lib/storage/prisma';
-import type { AgentDebugReportPayload, AgentDebugReportRow } from './types';
+import type { AgentDebugReportPayload, AgentDebugReportRow, AgentDebugSkillsAnalysis } from './types';
 
 export async function ensureAgentDebugReportTable() {
   await prismaRaw.$executeRawUnsafe(`
@@ -118,6 +118,31 @@ export async function markAgentDebugReportFailed(args: {
 export async function deleteAgentDebugReport(executionId: string) {
   await ensureAgentDebugReportTable();
   await prismaRaw.$executeRawUnsafe(`DELETE FROM "AgentDebugReport" WHERE "executionId" = ?`, executionId);
+}
+
+export async function updateAgentDebugSkillsAnalysis(args: {
+  executionId: string;
+  skillsAnalysis: AgentDebugSkillsAnalysis;
+}) {
+  await ensureAgentDebugReportTable();
+  const row = await findAgentDebugReport(args.executionId);
+  const report = parseReportPayload(row);
+  if (!report) {
+    throw new Error('AgentDebug report is required before generating Skills analysis');
+  }
+  const next: AgentDebugReportPayload = {
+    ...report,
+    skillsAnalysis: args.skillsAnalysis,
+  };
+  await prismaRaw.$executeRawUnsafe(
+    `UPDATE "AgentDebugReport"
+     SET "reportJson" = ?, "updatedAt" = ?
+     WHERE "executionId" = ?`,
+    JSON.stringify(next),
+    new Date().toISOString(),
+    args.executionId,
+  );
+  return findAgentDebugReport(args.executionId);
 }
 
 export function parseReportPayload(row: AgentDebugReportRow | null): AgentDebugReportPayload | null {

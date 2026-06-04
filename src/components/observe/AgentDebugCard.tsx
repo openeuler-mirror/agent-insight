@@ -23,7 +23,16 @@ import { StatusBadge } from '@/components/feedback/StatusBadge';
 import { ExpandableText } from '@/components/text/ExpandableText';
 import { TermPopover } from '@/components/text/TermPopover';
 import { apiFetch } from '@/lib/client/api';
-import type { AgentDebugModule, AgentDebugPhase1Cell, AgentDebugReportPayload, AgentDebugRootCause, AgentDebugTraceLocation } from '@/lib/engine/agent-debug/types';
+import type {
+  AgentDebugFinding,
+  AgentDebugIssue,
+  AgentDebugModule,
+  AgentDebugPhase1Cell,
+  AgentDebugReportPayload,
+  AgentDebugRootCause,
+  AgentDebugSkillsAnalysis,
+  AgentDebugTraceLocation,
+} from '@/lib/engine/agent-debug/types';
 
 interface AgentDebugCardProps {
   executionId: string;
@@ -63,6 +72,8 @@ const MODULES: Array<{ key: AgentDebugModule; zh: string; en: string }> = [
   { key: 'system', zh: '系统', en: 'System' },
 ];
 
+const FINDING_MODULES = MODULES.filter(item => item.key !== 'system');
+
 const MODULE_HELP: Record<string, { zh: string; en: string }> = {
   memory: {
     zh: '检查 Agent 是否错误引用历史信息、遗漏用户前文约束，或把不存在的上下文当成事实。',
@@ -83,10 +94,6 @@ const MODULE_HELP: Record<string, { zh: string; en: string }> = {
   system: {
     zh: '检查工具、运行环境、模型限制、权限、超时等外部系统层异常。',
     en: 'Checks tool, runtime, model-limit, permission, timeout, and other external system errors.',
-  },
-  traceExplicit: {
-    zh: '展示当前 trace 原始数据中已经记录的明确报错事实；它不参与智能诊断推理。',
-    en: 'Shows explicit raw errors already recorded in this trace; it does not participate in diagnosis reasoning.',
   },
 };
 
@@ -259,21 +266,36 @@ export function AgentDebugCard({ executionId, user, locale, traceExplicitErrors 
 
       {report && !loading && (
         <AssistantArticle meta={`${zh ? '诊断完成' : 'Done'} · ${formatDuration(report.stats.durationMs, zh)} · ${zh ? '智能诊断 Agent' : 'diagnosis agent'}`}>
-          <ReportView report={report} zh={zh} traceExplicitErrors={traceExplicitErrors} onNodeRefClick={onNodeRefClick} onRerun={() => run(true)} />
+          <ReportView
+            report={report}
+            zh={zh}
+            executionId={executionId}
+            user={user}
+            traceExplicitErrors={traceExplicitErrors}
+            onNodeRefClick={onNodeRefClick}
+            onReportUpdate={setReport}
+            onRerun={() => run(true)}
+          />
         </AssistantArticle>
       )}
     </div>
   );
 }
 
-function ReportView({ report, zh, traceExplicitErrors, onNodeRefClick, onRerun }: {
+function ReportView({ report, zh, executionId, user, traceExplicitErrors, onNodeRefClick, onReportUpdate, onRerun }: {
   report: AgentDebugReportPayload;
   zh: boolean;
+  executionId: string;
+  user: string;
   traceExplicitErrors: TraceExplicitError[];
   onNodeRefClick?: (nodeId: string) => void;
+  onReportUpdate: (report: AgentDebugReportPayload) => void;
   onRerun: () => void;
 }) {
-  const root = report.rootCause;
+  const findings = useMemo(() => normalizeReportFindings(report), [report]);
+  const [expandedFindingIds, setExpandedFindingIds] = useState<Set<string>>(() => new Set(findings[0] ? [findings[0].id] : []));
+  const issueCount = report.issues.length + traceExplicitErrors.length;
+  const root = report.rootCause as AgentDebugRootCause;
   const visiblePhase1Grid = useMemo(() => filterVisiblePhase1Cells(report.phase1Grid || [], root), [report.phase1Grid, root]);
   const otherPhase1Grid = useMemo(() => filterOtherPhase1Cells(report.phase1Grid || [], root), [report.phase1Grid, root]);
   const hiddenIssueCount = otherPhase1Grid.length;
@@ -281,7 +303,11 @@ function ReportView({ report, zh, traceExplicitErrors, onNodeRefClick, onRerun }
   const [findingDetailsExpanded, setFindingDetailsExpanded] = useState(false);
   const cascadingChain = useMemo(() => visibleCascade(root), [root]);
   const findingNarrative = useMemo(() => splitFindingSummary(root?.summary || ''), [root?.summary]);
-  const visibleIssueCount = visiblePhase1Grid.length;
+  const visibleIssueCount = visiblePhase1Grid.length + traceExplicitErrors.length;
+
+  useEffect(() => {
+    setExpandedFindingIds(new Set(findings[0] ? [findings[0].id] : []));
+  }, [findings]);
 
   if (report.skippedReason) {
     return (
@@ -305,6 +331,67 @@ function ReportView({ report, zh, traceExplicitErrors, onNodeRefClick, onRerun }
       />
     );
   }
+
+  return (
+    <div className="space-y-3">
+      <div className="rounded-lg border border-card-border bg-card p-4 shadow-sm">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <div className="flex size-7 items-center justify-center rounded-lg border border-error-border bg-error-subtle text-error">
+              <AlertTriangle className="size-3.5" />
+            </div>
+            <div>
+              <div className="text-[10.5px] font-bold tracking-[0.14em] text-error">{zh ? '关键诊断发现' : 'KEY DIAGNOSTIC FINDINGS'}</div>
+              <div className="mt-0.5 text-sm font-bold tracking-tight text-foreground">
+                {findings.length > 0
+                  ? (zh ? `${findings.length} 条发现 · ${issueCount} 条证据节点` : `${findings.length} findings · ${issueCount} evidence nodes`)
+                  : (zh ? '未发现明确关键问题' : 'No clear key finding')}
+              </div>
+            </div>
+          </div>
+          <Button variant="outline" size="sm" onClick={onRerun}>
+            <RefreshCw className="size-3.5" />
+            {zh ? '重新诊断' : 'Rerun'}
+          </Button>
+        </div>
+
+        {findings.length > 0 ? (
+          <div className="space-y-2">
+            {findings.map((finding, index) => (
+              <FindingCard
+                key={finding.id}
+                finding={finding}
+                index={index}
+                report={report}
+                zh={zh}
+                expanded={expandedFindingIds.has(finding.id)}
+                traceExplicitErrors={index === 0 ? traceExplicitErrors : []}
+                onToggle={() => {
+                  setExpandedFindingIds(prev => {
+                    const next = new Set(prev);
+                    if (next.has(finding.id)) next.delete(finding.id);
+                    else next.add(finding.id);
+                    return next;
+                  });
+                }}
+                onNodeRefClick={onNodeRefClick}
+              />
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-foreground-muted">{zh ? 'Phase 1 未检测到足够明确的问题。' : 'Phase 1 did not find a clear issue.'}</p>
+        )}
+      </div>
+
+      <SkillsAnalysisSection
+        executionId={executionId}
+        user={user}
+        zh={zh}
+        analysis={report.skillsAnalysis || null}
+        onReportUpdate={onReportUpdate}
+      />
+    </div>
+  );
 
   return (
     <div className="space-y-3">
@@ -407,7 +494,7 @@ function ReportView({ report, zh, traceExplicitErrors, onNodeRefClick, onRerun }
           onClick={() => setModuleSectionExpanded(value => !value)}
           className="flex w-full items-center gap-2 px-3 py-3 text-left text-[11.5px] font-bold tracking-[0.14em] text-foreground-muted outline-none hover:bg-background-secondary focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
         >
-          <span>{zh ? '认知与系统模块发现' : 'COGNITIVE & SYSTEM FINDINGS'}</span>
+          <span>{zh ? '模块级诊断结果' : 'MODULE-LEVEL DIAGNOSIS RESULTS'}</span>
           <span className="h-px min-w-4 flex-1 bg-border" />
           <span className="normal-case tracking-normal">
             {zh
@@ -428,14 +515,10 @@ function ReportView({ report, zh, traceExplicitErrors, onNodeRefClick, onRerun }
                   zh={zh}
                   root={root}
                   cells={visiblePhase1Grid.filter(cell => cell.module === item.key)}
+                  traceExplicitErrors={item.key === 'system' ? traceExplicitErrors : []}
                   onNodeRefClick={onNodeRefClick}
                 />
               ))}
-              <TraceExplicitErrorCard
-                errors={traceExplicitErrors}
-                zh={zh}
-                onNodeRefClick={onNodeRefClick}
-              />
             </div>
             <OtherFindingsSection
               cells={otherPhase1Grid}
@@ -449,98 +532,12 @@ function ReportView({ report, zh, traceExplicitErrors, onNodeRefClick, onRerun }
                   ? `当前仅展示关键发现相关问题；${hiddenIssueCount} 个已恢复或旁支问题未展示 · 分析 ${report.stats.stepCount} 个执行片段`
                   : `Showing key-finding issues only; ${hiddenIssueCount} recovered or side issues hidden · ${report.stats.stepCount} execution slices`)
                 : (zh
-                  ? `Phase 1 展示 ${visiblePhase1Grid.length} 个问题 · 分析 ${report.stats.stepCount} 个执行片段`
-                  : `${visiblePhase1Grid.length} issues shown · ${report.stats.stepCount} execution slices`)}
+                  ? `Phase 1 展示 ${visibleIssueCount} 个问题 · 分析 ${report.stats.stepCount} 个执行片段`
+                  : `${visibleIssueCount} issues shown · ${report.stats.stepCount} execution slices`)}
             </div>
           </div>
         )}
       </div>
-    </div>
-  );
-}
-
-function TraceExplicitErrorCard({ errors, zh, onNodeRefClick }: {
-  errors: TraceExplicitError[];
-  zh: boolean;
-  onNodeRefClick?: (nodeId: string) => void;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const orderedErrors = useMemo(() => [...errors].sort((a, b) => (a.traceStepIndex ?? Number.MAX_SAFE_INTEGER) - (b.traceStepIndex ?? Number.MAX_SAFE_INTEGER)), [errors]);
-  const primary = orderedErrors[0];
-  return (
-    <div className="rounded-lg border border-card-border bg-card p-3 shadow-sm">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <div className="flex size-7 items-center justify-center rounded-lg border border-border bg-background-secondary text-primary">
-            <AlertTriangle className="size-3.5" />
-          </div>
-          <div>
-            <ModuleTitle
-              title={zh ? 'Trace 明确报错' : 'Trace Errors'}
-              help={zh ? MODULE_HELP.traceExplicit.zh : MODULE_HELP.traceExplicit.en}
-            />
-            <div className="text-[11px] text-foreground-muted">{zh ? '来自当前记录的原始故障事实' : 'Raw fault facts from this trace'}</div>
-          </div>
-        </div>
-        <StatusBadge status={orderedErrors.length > 0 ? 'warning' : 'success'} label={orderedErrors.length > 0 ? `${orderedErrors.length}` : 'OK'} />
-      </div>
-      <ExpandableText
-        maxLines={3}
-        className="mt-3 text-[12.5px] leading-6 text-foreground-muted"
-        expandLabel={zh ? '展开完整摘要' : 'Show full summary'}
-        collapseLabel={zh ? '收起摘要' : 'Collapse summary'}
-      >
-        {primary
-          ? `${primary.title}: ${primary.description || primary.context || (zh ? '当前 trace 已记录明确报错。' : 'This trace includes an explicit error.')}`
-          : (zh ? '未检测到当前记录中的明确原始报错。' : 'No explicit raw error found in this trace.')}
-      </ExpandableText>
-      {orderedErrors.length > 0 && !expanded && (
-        <Button className="mt-2 h-7 px-0 text-[11.5px]" variant="link" size="sm" onClick={() => setExpanded(true)}>
-          {zh ? `查看全部 ${orderedErrors.length} 条报错` : `Show all ${orderedErrors.length} errors`}
-          <ChevronDown className="size-3" />
-        </Button>
-      )}
-      {expanded && (
-        <div className="mt-3 space-y-2 border-t border-border pt-3">
-          {orderedErrors.map(error => (
-            <div key={error.id} className="rounded-md border border-border bg-background-secondary px-2.5 py-2">
-              <div className="mb-1 flex flex-wrap items-center gap-1.5">
-                <span className="rounded bg-card px-1.5 py-0.5 font-mono text-[10.5px] font-semibold text-primary">{formatTraceLocation(error, zh)}</span>
-                <StatusBadge status="warning" label={error.title} />
-              </div>
-              {(error.description || error.context) && (
-                <ExpandableText
-                  maxLines={4}
-                  className="text-[11.5px] leading-5 text-foreground-muted"
-                  expandLabel={zh ? '展开详情' : 'Show details'}
-                  collapseLabel={zh ? '收起详情' : 'Collapse details'}
-                >
-                  {[error.description, error.context].filter(Boolean).join('\n')}
-                </ExpandableText>
-              )}
-              {error.recovery && (
-                <ExpandableText
-                  maxLines={3}
-                  className="mt-1.5 text-[11px] leading-5 text-foreground-muted"
-                  expandLabel={zh ? '展开建议' : 'Show guidance'}
-                  collapseLabel={zh ? '收起建议' : 'Collapse guidance'}
-                >
-                  {error.recovery}
-                </ExpandableText>
-              )}
-              {error.anchorId && onNodeRefClick && (
-                <Button className="mt-1.5 h-6 px-0 text-[11px]" variant="link" size="sm" onClick={() => onNodeRefClick(error.anchorId!)}>
-                  {zh ? '跳到左侧节点' : 'View trace node'}
-                  <ChevronRight className="size-3" />
-                </Button>
-              )}
-            </div>
-          ))}
-          <Button className="h-7 px-0 text-[11.5px]" variant="link" size="sm" onClick={() => setExpanded(false)}>
-            {zh ? '收起报错列表' : 'Collapse errors'}
-          </Button>
-        </div>
-      )}
     </div>
   );
 }
@@ -629,6 +626,397 @@ function ModuleTitle({ title, help }: { title: string; help: string }) {
   );
 }
 
+function FindingCard({ finding, index, report, zh, expanded, traceExplicitErrors, onToggle, onNodeRefClick }: {
+  finding: AgentDebugFinding;
+  index: number;
+  report: AgentDebugReportPayload;
+  zh: boolean;
+  expanded: boolean;
+  traceExplicitErrors: TraceExplicitError[];
+  onToggle: () => void;
+  onNodeRefClick?: (nodeId: string) => void;
+}) {
+  const findingIssues = issuesForFinding(finding, report.issues);
+  const rootIssue = findingIssues.find(issue => finding.issueRefs.find(ref => ref.issueId === issue.id)?.role === 'root') || findingIssues[0];
+  const modules = index === 0 ? MODULES : FINDING_MODULES;
+  const conclusion = splitFindingSummary(finding.summary);
+  return (
+    <div className="rounded-lg border border-border bg-background-secondary p-3">
+      <button
+        type="button"
+        aria-expanded={expanded}
+        onClick={onToggle}
+        className="flex w-full items-start gap-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+      >
+        <div className="flex size-6 shrink-0 items-center justify-center rounded-md border border-border bg-card text-[11px] font-bold text-primary">
+          {index + 1}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="mb-1 flex flex-wrap items-center gap-1.5">
+            <StatusBadge status={finding.severity === 'high' ? 'error' : 'warning'} label={formatFindingImpact(finding.impact, zh)} />
+            {rootIssue && <StatusBadge status={finding.severity === 'high' ? 'error' : 'warning'} label={`${formatModule(rootIssue.module, zh)} · ${formatErrorType(rootIssue.errorType, zh)}`} />}
+          </div>
+          <div className="text-[13px] font-semibold leading-6 text-foreground">{sanitizeConclusionText(conclusion.conclusion || finding.summary)}</div>
+          {rootIssue && (
+            <div className="mt-0.5 text-[11px] text-foreground-muted">{formatTraceLocation(rootIssue, zh)}</div>
+          )}
+        </div>
+        {expanded ? <ChevronDown className="mt-1 size-3.5 shrink-0 text-foreground-muted" /> : <ChevronRight className="mt-1 size-3.5 shrink-0 text-foreground-muted" />}
+      </button>
+
+      {expanded && (
+        <div className="mt-3 space-y-3 border-t border-border pt-3">
+          <section>
+            <div className="mb-1 text-[10.5px] font-bold tracking-wider text-foreground-muted">{zh ? '结论' : 'Conclusion'}</div>
+            <ExpandableText
+              maxLines={3}
+              className="text-[12.5px] leading-6 text-foreground"
+              expandLabel={zh ? '展开完整结论' : 'Show full conclusion'}
+              collapseLabel={zh ? '收起结论' : 'Collapse conclusion'}
+            >
+              {sanitizeConclusionText(finding.summary)}
+            </ExpandableText>
+          </section>
+
+          <section>
+            <div className="mb-2 text-[10.5px] font-bold tracking-wider text-foreground-muted">{zh ? '证据' : 'Evidence'}</div>
+            {finding.evidence && (
+              <p className="mb-2 rounded-md border border-border bg-card p-2 font-mono text-[11.5px] leading-5 text-foreground-muted">
+                {sanitizeReportText(finding.evidence)}
+              </p>
+            )}
+            <div className="grid gap-2 md:grid-cols-2">
+              {modules.map(module => (
+                <EvidenceModuleCard
+                  key={module.key}
+                  module={module}
+                  zh={zh}
+                  globalSystem={index === 0 && module.key === 'system'}
+                  issues={module.key === 'system'
+                    ? report.issues.filter(issue => issue.module === 'system')
+                    : findingIssues.filter(issue => issue.module === module.key)}
+                  traceExplicitErrors={index === 0 && module.key === 'system' ? traceExplicitErrors : []}
+                  finding={finding}
+                  onNodeRefClick={onNodeRefClick}
+                />
+              ))}
+            </div>
+          </section>
+
+          {conclusion.details && (
+            <section>
+              <div className="mb-1 text-[10.5px] font-bold tracking-wider text-foreground-muted">{zh ? '分析说明' : 'Analysis notes'}</div>
+              <ExpandableText
+                maxLines={4}
+                className="text-[12px] leading-6 text-foreground-muted"
+                expandLabel={zh ? '展开完整说明' : 'Show full notes'}
+                collapseLabel={zh ? '收起说明' : 'Collapse notes'}
+              >
+                {sanitizeReportText(conclusion.details)}
+              </ExpandableText>
+            </section>
+          )}
+
+          <section className="rounded-lg border border-border bg-card px-3 py-2.5">
+            <div className="mb-1 text-[10.5px] font-bold tracking-wider text-foreground-muted">{zh ? '建议' : 'Guidance'}</div>
+            <div className="text-[12.5px] leading-6 text-foreground">{sanitizeReportText(finding.correctionGuidance)}</div>
+          </section>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EvidenceModuleCard({ module, zh, globalSystem, issues, traceExplicitErrors, finding, onNodeRefClick }: {
+  module: { key: AgentDebugModule; zh: string; en: string };
+  zh: boolean;
+  globalSystem: boolean;
+  issues: AgentDebugIssue[];
+  traceExplicitErrors: TraceExplicitError[];
+  finding: AgentDebugFinding;
+  onNodeRefClick?: (nodeId: string) => void;
+}) {
+  const Icon = MODULE_ICONS[module.key] || Eye;
+  const [expanded, setExpanded] = useState(false);
+  const orderedIssues = [...issues].sort((a, b) => {
+    const aRole = finding.issueRefs.find(ref => ref.issueId === a.id)?.role || 'contributing';
+    const bRole = finding.issueRefs.find(ref => ref.issueId === b.id)?.role || 'contributing';
+    const roleDelta = findingRoleRank(bRole) - findingRoleRank(aRole);
+    if (roleDelta !== 0) return roleDelta;
+    const severityDelta = severityRank(b.severity) - severityRank(a.severity);
+    if (severityDelta !== 0) return severityDelta;
+    return (locationIndex(a) ?? a.step) - (locationIndex(b) ?? b.step);
+  });
+  const orderedTraceErrors = [...traceExplicitErrors].sort((a, b) => (a.traceStepIndex ?? Number.MAX_SAFE_INTEGER) - (b.traceStepIndex ?? Number.MAX_SAFE_INTEGER));
+  const totalCount = orderedIssues.length + orderedTraceErrors.length;
+  const title = globalSystem ? (zh ? '全局 System 证据' : 'Global System Evidence') : module.en;
+  return (
+    <div className="rounded-lg border border-border bg-card p-3">
+      <button
+        type="button"
+        aria-expanded={expanded}
+        onClick={() => setExpanded(value => !value)}
+        className="flex w-full items-start justify-between gap-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+      >
+        <div className="flex items-center gap-2">
+          <div className="flex size-7 items-center justify-center rounded-lg border border-border bg-background-secondary text-primary">
+            <Icon className="size-3.5" />
+          </div>
+          <div>
+            <ModuleTitle
+              title={title}
+              help={(zh ? MODULE_HELP[module.key]?.zh : MODULE_HELP[module.key]?.en) || module.key}
+            />
+            <div className="text-[11px] text-foreground-muted">{globalSystem ? (zh ? '只在第一条关键发现展示一次' : 'Shown once in the first finding') : (zh ? module.zh : module.key)}</div>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <StatusBadge status={totalCount > 0 ? 'warning' : 'success'} label={totalCount > 0 ? `${totalCount}` : 'OK'} />
+          {expanded ? <ChevronDown className="mt-0.5 size-3.5 text-foreground-muted" /> : <ChevronRight className="mt-0.5 size-3.5 text-foreground-muted" />}
+        </div>
+      </button>
+      {expanded && (totalCount > 0 ? (
+        <div className="mt-3 max-h-72 space-y-2 overflow-y-auto pr-1">
+          {orderedIssues.map(issue => (
+            <IssueEvidenceItem key={issue.id} issue={issue} role={finding.issueRefs.find(ref => ref.issueId === issue.id)?.role} zh={zh} onNodeRefClick={onNodeRefClick} />
+          ))}
+          {orderedTraceErrors.map(error => (
+            <TraceErrorEvidenceItem key={error.id} error={error} zh={zh} onNodeRefClick={onNodeRefClick} />
+          ))}
+        </div>
+      ) : (
+        <p className="mt-3 text-[12px] leading-6 text-foreground-muted">
+          {zh ? '当前发现未关联该模块问题' : 'This finding has no issue linked to this module.'}
+        </p>
+      ))}
+    </div>
+  );
+}
+
+function IssueEvidenceItem({ issue, role, zh, onNodeRefClick }: {
+  issue: AgentDebugIssue;
+  role?: string;
+  zh: boolean;
+  onNodeRefClick?: (nodeId: string) => void;
+}) {
+  return (
+    <div className="rounded-md border border-border bg-background-secondary px-2.5 py-2">
+      <div className="mb-1 flex flex-wrap items-center gap-1.5">
+        <span className="rounded bg-card px-1.5 py-0.5 font-mono text-[10.5px] font-semibold text-primary">{formatTraceLocation(issue, zh)}</span>
+        {role && <StatusBadge status={role === 'root' ? 'error' : 'warning'} label={formatFindingRole(role, zh)} />}
+        <StatusBadge status={issue.severity === 'high' ? 'error' : 'warning'} label={formatErrorType(issue.errorType, zh)} />
+        {issue.resolution && <span className="rounded bg-card px-1.5 py-0.5 text-[10.5px] font-semibold text-foreground-muted">{formatIssueResolution(issue.resolution, zh)}</span>}
+      </div>
+      <ExpandableText
+        maxLines={4}
+        className="text-[11.5px] leading-5 text-foreground-muted"
+        expandLabel={zh ? '展开完整原因' : 'Show full reason'}
+        collapseLabel={zh ? '收起原因' : 'Collapse reason'}
+      >
+        {sanitizeReportText(issue.reasoning || issue.evidence)}
+      </ExpandableText>
+      {issue.evidence && issue.reasoning && (
+        <ExpandableText
+          maxLines={3}
+          className="mt-1.5 font-mono text-[10.5px] leading-5 text-foreground-muted"
+          expandLabel={zh ? '展开证据原文' : 'Show evidence'}
+          collapseLabel={zh ? '收起证据原文' : 'Collapse evidence'}
+        >
+          {sanitizeReportText(issue.evidence)}
+        </ExpandableText>
+      )}
+      {issue.anchorId && onNodeRefClick && (
+        <Button className="mt-1.5 h-6 px-0 text-[11px]" variant="link" size="sm" onClick={() => onNodeRefClick(issue.anchorId!)}>
+          {zh ? '跳到左侧节点' : 'View trace node'}
+          <ChevronRight className="size-3" />
+        </Button>
+      )}
+    </div>
+  );
+}
+
+function TraceErrorEvidenceItem({ error, zh, onNodeRefClick }: {
+  error: TraceExplicitError;
+  zh: boolean;
+  onNodeRefClick?: (nodeId: string) => void;
+}) {
+  return (
+    <div className="rounded-md border border-border bg-background-secondary px-2.5 py-2">
+      <div className="mb-1 flex flex-wrap items-center gap-1.5">
+        <span className="rounded bg-card px-1.5 py-0.5 font-mono text-[10.5px] font-semibold text-primary">{formatTraceLocation(error, zh)}</span>
+        <StatusBadge status="warning" label={error.title} />
+      </div>
+      {(error.description || error.context) && (
+        <ExpandableText
+          maxLines={4}
+          className="text-[11.5px] leading-5 text-foreground-muted"
+          expandLabel={zh ? '展开详情' : 'Show details'}
+          collapseLabel={zh ? '收起详情' : 'Collapse details'}
+        >
+          {[error.description, error.context].filter(Boolean).join('\n')}
+        </ExpandableText>
+      )}
+      {error.anchorId && onNodeRefClick && (
+        <Button className="mt-1.5 h-6 px-0 text-[11px]" variant="link" size="sm" onClick={() => onNodeRefClick(error.anchorId!)}>
+          {zh ? '跳到左侧节点' : 'View trace node'}
+          <ChevronRight className="size-3" />
+        </Button>
+      )}
+    </div>
+  );
+}
+
+function keyActionBadgeStatus(status: string): 'success' | 'warning' | 'error' | 'pending' {
+  const normalized = status.toLowerCase();
+  if (normalized === 'covered' || normalized === 'passed' || normalized === 'pass' || normalized === 'success') return 'success';
+  if (normalized === 'missing' || normalized === 'failed' || normalized === 'fail' || normalized === 'error') return 'error';
+  if (normalized === 'not_applicable' || normalized === 'not-applicable' || normalized === 'n/a') return 'pending';
+  return 'warning';
+}
+
+function formatKeyActionStatus(status: string, zh: boolean): string {
+  const normalized = status.toLowerCase();
+  if (!zh) return status;
+  if (normalized === 'covered' || normalized === 'passed' || normalized === 'pass' || normalized === 'success') return '\u5df2\u8986\u76d6';
+  if (normalized === 'partial' || normalized === 'partially_covered') return '\u90e8\u5206\u8986\u76d6';
+  if (normalized === 'missing' || normalized === 'failed' || normalized === 'fail' || normalized === 'error') return '\u672a\u8986\u76d6';
+  if (normalized === 'not_applicable' || normalized === 'not-applicable' || normalized === 'n/a') return '\u4e0d\u9002\u7528';
+  return status;
+}
+
+function SkillsAnalysisSection({ executionId, user, zh, analysis, onReportUpdate }: {
+  executionId: string;
+  user: string;
+  zh: boolean;
+  analysis: AgentDebugSkillsAnalysis | null;
+  onReportUpdate: (report: AgentDebugReportPayload) => void;
+}) {
+  const [generating, setGenerating] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [error, setError] = useState('');
+  const [localAnalysis, setLocalAnalysis] = useState<AgentDebugSkillsAnalysis | null>(analysis);
+
+  useEffect(() => {
+    setLocalAnalysis(analysis);
+  }, [analysis]);
+
+  const keyActions = extractSkillsKeyActions(localAnalysis as Record<string, unknown> | null);
+  const status = localAnalysis?.status || 'pending';
+  const hasUsableData = status === 'done' && keyActions.length > 0;
+  const canGenerate = !hasUsableData && status !== 'running';
+  const failed = status === 'failed';
+
+  async function generateSkillsAnalysis(force = true) {
+    if (!executionId || !user || generating) return;
+    setGenerating(true);
+    setError('');
+    try {
+      const res = await apiFetch(`/api/observe/executions/${encodeURIComponent(executionId)}/agent-debug/skills-analysis`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user, force }),
+      });
+      const data = await res.json().catch(() => ({})) as {
+        report?: AgentDebugReportPayload;
+        skillsAnalysis?: AgentDebugSkillsAnalysis;
+        error?: string;
+      };
+      if (data.report) {
+        onReportUpdate(data.report);
+        setLocalAnalysis(data.report.skillsAnalysis || data.skillsAnalysis || null);
+      } else if (data.skillsAnalysis) {
+        setLocalAnalysis(data.skillsAnalysis);
+      }
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      if (!expanded) setExpanded(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-card-border bg-card p-4 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <button
+          type="button"
+          aria-expanded={expanded}
+          onClick={() => setExpanded(value => !value)}
+          className="flex min-w-0 flex-1 items-start gap-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+        >
+          {expanded ? <ChevronDown className="mt-1 size-3.5 shrink-0 text-foreground-muted" /> : <ChevronRight className="mt-1 size-3.5 shrink-0 text-foreground-muted" />}
+          <div className="min-w-0">
+            <div className="text-[10.5px] font-bold tracking-[0.14em] text-primary">{zh ? '\u0053\u006b\u0069\u006c\u006c\u0073 \u5206\u6790' : 'SKILLS ANALYSIS'}</div>
+            <div className="mt-0.5 text-sm font-bold tracking-tight text-foreground">
+              {generating || status === 'running'
+                ? (zh ? 'Skills 分析正在生成中' : 'Generating Skills analysis')
+                : hasUsableData
+                  ? (zh ? 'AgentDebug 已保存 Skills 关键动作分析' : 'Saved AgentDebug key-action analysis')
+                  : (zh ? '当前还没有可展示的 Skills 分析' : 'No usable Skills analysis yet')}
+            </div>
+            {hasUsableData && (
+              <div className="mt-0.5 text-[11px] text-foreground-muted">
+                {zh ? `${keyActions.length} \u4e2a\u5173\u952e\u52a8\u4f5c` : `${keyActions.length} key actions`}
+              </div>
+            )}
+          </div>
+        </button>
+        {canGenerate && (
+          <Button variant="outline" size="sm" onClick={() => generateSkillsAnalysis(true)} disabled={generating}>
+            {generating ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
+            {failed || localAnalysis ? (zh ? '重新分析' : 'Re-analyze') : (zh ? '生成分析' : 'Generate')}
+          </Button>
+        )}
+      </div>
+
+      {expanded && (
+        <div className="mt-3">
+          {error && (
+            <div className="mb-3 rounded-md border border-error-border bg-error-subtle p-2 text-[12px] text-error">{error}</div>
+          )}
+
+          {hasUsableData ? (
+            keyActions.length > 0 ? (
+              <div className="space-y-2">
+                {keyActions.map((item, index) => (
+                  <div key={`${index}-${item.title}`} className="rounded-md border border-border bg-background-secondary px-2.5 py-2">
+                    <div className="mb-1 flex flex-wrap items-center gap-1.5">
+                      <StatusBadge status={keyActionBadgeStatus(item.status)} label={formatKeyActionStatus(item.status, zh) || (zh ? '\u5173\u952e\u52a8\u4f5c' : 'Key action')} />
+                      <span className="text-[12px] font-semibold text-foreground">{item.title || (zh ? `\u5173\u952e\u52a8\u4f5c ${index + 1}` : `Key action ${index + 1}`)}</span>
+                    </div>
+                    {item.description && <p className="text-[11.5px] leading-5 text-foreground-muted">{item.description}</p>}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              null
+            )
+          ) : (
+            <div className="rounded-md border border-border bg-background-secondary p-3">
+              <p className="text-[12.5px] leading-6 text-foreground-muted">
+                {generating || status === 'running'
+                  ? (zh ? 'Skills 分析正在生成中。完成后会保存到 AgentDebug 当前诊断报告里。' : 'Skills analysis is running. The result will be saved in this AgentDebug report.')
+                  : failed
+                    ? (zh ? `上次 Skills 分析失败：${localAnalysis?.errorMessage || '未知错误'}。可以重新分析。` : `Last Skills analysis failed: ${localAnalysis?.errorMessage || 'unknown error'}. You can re-analyze.`)
+                    : status === 'done'
+                      ? (zh ? '已有 AgentDebug Skills 分析结果，但没有拿到 keyActionResults。可以重新分析。' : 'Saved AgentDebug Skills analysis has no keyActionResults. You can re-analyze.')
+                      : (zh ? '当前 trace 还没有 AgentDebug 自己保存的 Skills 分析。点击生成后会只运行关键动作分析，并保存到当前诊断报告。' : 'This trace has no AgentDebug-owned Skills analysis yet. Generate it to run key-action analysis and save it in this report.')}
+              </p>
+              {canGenerate && (
+                <Button variant="outline" size="sm" className="mt-2" onClick={() => generateSkillsAnalysis(true)} disabled={generating}>
+                  {generating ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
+                  {failed || localAnalysis ? (zh ? '重新分析' : 'Re-analyze') : (zh ? '生成 Skills 分析' : 'Generate Skills analysis')}
+                </Button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function OtherFindingsSection({ cells, zh, onNodeRefClick }: {
   cells: AgentDebugPhase1Cell[];
   zh: boolean;
@@ -696,19 +1084,22 @@ function OtherFindingsSection({ cells, zh, onNodeRefClick }: {
   );
 }
 
-function ModuleFindingCard({ module, count, zh, root, cells, onNodeRefClick }: {
+function ModuleFindingCard({ module, count, zh, root, cells, traceExplicitErrors = [], onNodeRefClick }: {
   module: { key: AgentDebugModule; zh: string; en: string };
   count: number;
   zh: boolean;
   root: AgentDebugRootCause | null;
   cells: AgentDebugPhase1Cell[];
+  traceExplicitErrors?: TraceExplicitError[];
   onNodeRefClick?: (nodeId: string) => void;
 }) {
   const Icon = MODULE_ICONS[module.key] || Eye;
   const [expanded, setExpanded] = useState(false);
   const orderedCells = useMemo(() => orderModuleCells(cells, root), [cells, root]);
+  const orderedTraceErrors = useMemo(() => [...traceExplicitErrors].sort((a, b) => (a.traceStepIndex ?? Number.MAX_SAFE_INTEGER) - (b.traceStepIndex ?? Number.MAX_SAFE_INTEGER)), [traceExplicitErrors]);
   const primary = orderedCells[0];
-  const extraCount = Math.max(0, count - 1);
+  const primaryTraceError = orderedTraceErrors[0];
+  const totalCount = count + orderedTraceErrors.length;
   return (
     <div className="rounded-lg border border-card-border bg-card p-3 shadow-sm">
       <div className="flex items-start justify-between gap-3">
@@ -724,7 +1115,7 @@ function ModuleFindingCard({ module, count, zh, root, cells, onNodeRefClick }: {
             <div className="text-[11px] text-foreground-muted">{zh ? module.zh : module.key}</div>
           </div>
         </div>
-        <StatusBadge status={count > 0 ? 'warning' : 'success'} label={count > 0 ? `${count}` : 'OK'} />
+        <StatusBadge status={totalCount > 0 ? 'warning' : 'success'} label={totalCount > 0 ? `${totalCount}` : 'OK'} />
       </div>
       <ExpandableText
         maxLines={3}
@@ -732,11 +1123,17 @@ function ModuleFindingCard({ module, count, zh, root, cells, onNodeRefClick }: {
         expandLabel={zh ? '展开完整摘要' : 'Show full summary'}
         collapseLabel={zh ? '收起摘要' : 'Collapse summary'}
       >
-        {primary ? `${formatErrorType(primary.errorType, zh)}: ${primary.reasoning || primary.evidence}` : (zh ? '未检测到该模块的明确问题。' : 'No clear issue detected in this module.')}
+        {primary
+          ? `${formatErrorType(primary.errorType, zh)}: ${primary.reasoning || primary.evidence}`
+          : primaryTraceError
+            ? `${primaryTraceError.title}: ${primaryTraceError.description || primaryTraceError.context || (zh ? '当前 trace 已记录明确报错。' : 'This trace includes an explicit error.')}`
+            : (zh ? '未检测到该模块的明确问题。' : 'No clear issue detected in this module.')}
       </ExpandableText>
-      {extraCount > 0 && !expanded && (
+      {totalCount > 0 && !expanded && (
         <Button className="mt-2 h-7 px-0 text-[11.5px]" variant="link" size="sm" onClick={() => setExpanded(true)}>
-          {zh ? `查看全部 ${count} 个问题` : `Show all ${count} issues`}
+          {totalCount === 1
+            ? (zh ? '查看问题详情' : 'Show issue details')
+            : (zh ? `查看全部 ${totalCount} 个问题` : `Show all ${totalCount} issues`)}
           <ChevronDown className="size-3" />
         </Button>
       )}
@@ -771,6 +1168,40 @@ function ModuleFindingCard({ module, count, zh, root, cells, onNodeRefClick }: {
               )}
               {cell.anchorId && onNodeRefClick && (
                 <Button className="mt-1.5 h-6 px-0 text-[11px]" variant="link" size="sm" onClick={() => onNodeRefClick(cell.anchorId!)}>
+                  {zh ? '跳到左侧节点' : 'View trace node'}
+                  <ChevronRight className="size-3" />
+                </Button>
+              )}
+            </div>
+          ))}
+          {orderedTraceErrors.map(error => (
+            <div key={error.id} className="rounded-md border border-border bg-background-secondary px-2.5 py-2">
+              <div className="mb-1 flex flex-wrap items-center gap-1.5">
+                <span className="rounded bg-card px-1.5 py-0.5 font-mono text-[10.5px] font-semibold text-primary">{formatTraceLocation(error, zh)}</span>
+                <StatusBadge status="warning" label={error.title} />
+              </div>
+              {(error.description || error.context) && (
+                <ExpandableText
+                  maxLines={4}
+                  className="text-[11.5px] leading-5 text-foreground-muted"
+                  expandLabel={zh ? '展开详情' : 'Show details'}
+                  collapseLabel={zh ? '收起详情' : 'Collapse details'}
+                >
+                  {[error.description, error.context].filter(Boolean).join('\n')}
+                </ExpandableText>
+              )}
+              {error.recovery && (
+                <ExpandableText
+                  maxLines={3}
+                  className="mt-1.5 text-[11px] leading-5 text-foreground-muted"
+                  expandLabel={zh ? '展开建议' : 'Show guidance'}
+                  collapseLabel={zh ? '收起建议' : 'Collapse guidance'}
+                >
+                  {error.recovery}
+                </ExpandableText>
+              )}
+              {error.anchorId && onNodeRefClick && (
+                <Button className="mt-1.5 h-6 px-0 text-[11px]" variant="link" size="sm" onClick={() => onNodeRefClick(error.anchorId!)}>
                   {zh ? '跳到左侧节点' : 'View trace node'}
                   <ChevronRight className="size-3" />
                 </Button>
@@ -827,6 +1258,120 @@ function UserArticle({ children }: { children: ReactNode }) {
       </div>
     </article>
   );
+}
+
+function normalizeReportFindings(report: AgentDebugReportPayload): AgentDebugFinding[] {
+  if (Array.isArray(report.findings) && report.findings.length > 0) return report.findings;
+  return report.rootCause ? [findingFromRootCause(report.rootCause, report.issues)] : [];
+}
+
+function findingFromRootCause(root: AgentDebugRootCause, issues: AgentDebugIssue[]): AgentDebugFinding {
+  const issueRefs = issueRefsFromRootCause(root, issues);
+  return {
+    id: 'finding-root-cause',
+    severity: issues.find(issue => issue.id === issueRefs[0]?.issueId)?.severity || 'high',
+    impact: 'quality_degrading',
+    summary: root.summary,
+    evidence: root.evidence,
+    issueRefs,
+    correctionGuidance: root.correctionGuidance,
+    confidence: root.confidence,
+  };
+}
+
+function issueRefsFromRootCause(root: AgentDebugRootCause, issues: AgentDebugIssue[]): AgentDebugFinding['issueRefs'] {
+  const refs: AgentDebugFinding['issueRefs'] = [];
+  const rootIndex = locationIndex(rootTraceLocation(root));
+  const rootIssue = issues.find(issue =>
+    issue.module === root.criticalModule
+    && locationIndex(issue) === rootIndex
+    && issue.errorType === root.criticalErrorType
+  ) || issues.find(issue =>
+    issue.module === root.criticalModule
+    && locationIndex(issue) === rootIndex
+  );
+  if (rootIssue) refs.push({ issueId: rootIssue.id, role: 'root' });
+  for (const item of root.cascadingChain) {
+    const matched = issues.find(issue =>
+      issue.module === item.module
+      && locationIndex(issue) === locationIndex(item)
+      && issue.errorType === item.errorType
+    ) || issues.find(issue =>
+      issue.module === item.module
+      && locationIndex(issue) === locationIndex(item)
+    );
+    if (matched && !refs.some(ref => ref.issueId === matched.id)) refs.push({ issueId: matched.id, role: 'downstream' });
+  }
+  if (refs.length === 0 && issues[0]) refs.push({ issueId: issues[0].id, role: 'root' });
+  return refs;
+}
+
+function issuesForFinding(finding: AgentDebugFinding, issues: AgentDebugIssue[]): AgentDebugIssue[] {
+  const issueById = new Map(issues.map(issue => [issue.id, issue]));
+  return finding.issueRefs
+    .map(ref => issueById.get(ref.issueId))
+    .filter((issue): issue is AgentDebugIssue => Boolean(issue));
+}
+
+function findingRoleRank(role: string): number {
+  if (role === 'root') return 3;
+  if (role === 'contributing') return 2;
+  if (role === 'downstream') return 1;
+  return 0;
+}
+
+function formatFindingRole(role: string, zh: boolean): string {
+  if (role === 'root') return zh ? '根因节点' : 'Root';
+  if (role === 'downstream') return zh ? '下游影响' : 'Downstream';
+  return zh ? '相关证据' : 'Contributing';
+}
+
+function formatIssueResolution(value: string, zh: boolean): string {
+  if (value === 'recovered') return zh ? '已恢复' : 'Recovered';
+  if (value === 'non_blocking') return zh ? '未影响主流程' : 'Main flow unaffected';
+  return zh ? '未恢复' : 'Unresolved';
+}
+
+function formatFindingImpact(value: string, zh: boolean): string {
+  if (value === 'result_blocking') return zh ? '影响结果' : 'Result blocking';
+  if (value === 'recovered_cost') return zh ? '恢复成本' : 'Recovered cost';
+  if (value === 'risk') return zh ? '风险' : 'Risk';
+  return zh ? '质量下降' : 'Quality degrading';
+}
+
+function extractSkillsKeyActions(raw: Record<string, unknown> | null): Array<{ title: string; description: string; status: string }> {
+  if (!raw) return [];
+  const value = raw.keyActionResults || raw.key_action_results;
+  if (!Array.isArray(value)) return [];
+  return value
+    .map(item => item && typeof item === 'object' ? item as Record<string, unknown> : null)
+    .filter((item): item is Record<string, unknown> => Boolean(item))
+    .map(item => ({
+      title: stringValue(item.actionContent)
+        || stringValue(item.action_content)
+        || stringValue(item.actionName)
+        || stringValue(item.name)
+        || stringValue(item.title)
+        || stringValue(item.keyAction)
+        || '',
+      description: stringValue(item.traceComparisonAnalysis)
+        || stringValue(item.trace_comparison_analysis)
+        || stringValue(item.skillIssueSummary)
+        || stringValue(item.skill_issue_summary)
+        || stringValue(item.reason)
+        || stringValue(item.description)
+        || stringValue(item.evidence)
+        || '',
+      status: stringValue(item.coverage)
+        || stringValue(item.status)
+        || stringValue(item.result)
+        || stringValue(item.matchStatus)
+        || '',
+    }));
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === 'string' ? value : '';
 }
 
 function filterVisiblePhase1Cells(cells: AgentDebugPhase1Cell[], root: AgentDebugRootCause | null): AgentDebugPhase1Cell[] {

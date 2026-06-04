@@ -112,7 +112,7 @@ function safeJsonParse(line) {
 }
 
 function loadDeletedSessionIds(env) {
-  const file = env.SKILL_INSIGHT_OPENCODE_DELETED_SESSIONS || path.join(getExistingInsightDir(), "opencode_deleted_sessions.json")
+  const file = env.AGENT_INSIGHT_OPENCODE_DELETED_SESSIONS || path.join(getExistingInsightDir(), "opencode_deleted_sessions.json")
   try {
     if (!fs.existsSync(file)) return new Set()
     const parsed = JSON.parse(fs.readFileSync(file, "utf8"))
@@ -842,19 +842,19 @@ function cleanupOldFiles(spoolDir, retentionDays) {
 
 async function main() {
   const env = loadSkillInsightEnv()
-  const apiKey = env.SKILL_INSIGHT_API_KEY
-  const host = env.SKILL_INSIGHT_HOST
+  const apiKey = env.AGENT_INSIGHT_API_KEY
+  const host = env.AGENT_INSIGHT_HOST
   appendUploaderLog(
-    `main.start host=${host || "(missing)"} apiKeyPresent=${apiKey ? "yes" : "no"} force=${process.env.SKILL_INSIGHT_UPLOADER_FORCE === "1" ? "1" : "0"}`,
+    `main.start host=${host || "(missing)"} apiKeyPresent=${apiKey ? "yes" : "no"} force=${process.env.AGENT_INSIGHT_UPLOADER_FORCE === "1" ? "1" : "0"}`,
   )
   if (!apiKey || !host) {
     appendUploaderLog(`main.skip missingConfig hostPresent=${host ? "yes" : "no"} apiKeyPresent=${apiKey ? "yes" : "no"}`)
     process.exit(0)
   }
 
-  const spoolDir = env.SKILL_INSIGHT_OPENCODE_SPOOL_DIR || path.join(getExistingInsightDir(), "otel_data", "opencode")
+  const spoolDir = env.AGENT_INSIGHT_OPENCODE_SPOOL_DIR || path.join(getExistingInsightDir(), "otel_data", "opencode")
   const checkpointFile = path.join(getPreferredInsightDir(), "opencode_uploader_checkpoint.json")
-  const retentionDays = env.SKILL_INSIGHT_RETENTION_DAYS || "10"
+  const retentionDays = env.AGENT_INSIGHT_RETENTION_DAYS || "10"
   const deletedSessionIds = loadDeletedSessionIds(env)
   appendUploaderLog(
     `main.config spoolDir=${spoolDir} checkpoint=${checkpointFile} retentionDays=${retentionDays} deletedSessions=${deletedSessionIds.size}`,
@@ -869,7 +869,7 @@ async function main() {
   // cheap (~5ms) when opencode is idle. Force=1 bypasses for manual debugging.
   const newestMtime = newestSpoolMtime(spoolDir)
   const lastScanMtime = ckpt.__lastScanMtime || 0
-  if (newestMtime > 0 && newestMtime <= lastScanMtime && process.env.SKILL_INSIGHT_UPLOADER_FORCE !== "1") {
+  if (newestMtime > 0 && newestMtime <= lastScanMtime && process.env.AGENT_INSIGHT_UPLOADER_FORCE !== "1") {
     appendUploaderLog(
       `main.fastSkip newestMtime=${newestMtime} lastScanMtime=${lastScanMtime} spoolDir=${spoolDir}`,
     )
@@ -990,7 +990,7 @@ export {
   mergeGraph,
 }
 
-if (process.env.SKILL_INSIGHT_UPLOADER_NO_MAIN !== "1") {
+if (process.env.AGENT_INSIGHT_UPLOADER_NO_MAIN !== "1") {
   main().catch((err) => {
     // 不能 silent exit——之前 spread 大数组爆栈导致整条 trace 链路停摆几小时，
     // 日志里只有 plugin 写的 kickUploader 头，看不到任何 uploader 自身报错。

@@ -1,5 +1,6 @@
 
 import { db } from '@/lib/storage/prisma';
+import { seedBuiltinExampleForUser } from '@/server/builtin-example/seed';
 import crypto from 'crypto';
 import { NextResponse } from 'next/server';
 
@@ -24,6 +25,7 @@ export async function POST(request: Request) {
     let user = await db.findUserByUsername(cleanUsername);
 
     // If not found, create new user with API Key
+    let isNewUser = false;
     if (!user) {
       const apiKey = `sk-${crypto.randomBytes(16).toString('hex')}`;
       try {
@@ -31,6 +33,7 @@ export async function POST(request: Request) {
               username: cleanUsername,
               apiKey
           });
+          isNewUser = true; // 本请求真正创建了用户（竞态分支走 findUserByUsername，不算）
       } catch (e: any) {
           // Handle race condition where user might be created between findUnique and create
           // P2002 is Prisma unique constraint violation code
@@ -47,7 +50,13 @@ export async function POST(request: Request) {
         throw new Error("Failed to retrieve or create user");
     }
 
-    return NextResponse.json({ 
+    // 新用户注册：一次性注入内置示例数据（数据集 + 两条链路追踪 Trace）。
+    // best-effort，内部已吞异常，绝不阻断登录/注册。
+    if (isNewUser) {
+      await seedBuiltinExampleForUser(user.username);
+    }
+
+    return NextResponse.json({
       apiKey: user.apiKey,
       username: user.username
     });

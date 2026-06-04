@@ -78,7 +78,7 @@ export class ClaudeLogWatcher {
       for (const envPath of getInsightEnvCandidates()) {
         if (!fs.existsSync(envPath)) continue;
         const content = fs.readFileSync(envPath, 'utf-8');
-        const match = content.match(/SKILL_INSIGHT_API_KEY=(.*)/);
+        const match = content.match(/AGENT_INSIGHT_API_KEY=(.*)/);
         if (match && match[1]) {
           const apiKey = match[1].trim();
           const user = await db.findUserByApiKey(apiKey);

@@ -641,6 +641,10 @@
 /* ==================== MAIN WORK TABLE ==================== */
 .work-table-wrapper {
   overflow-x: auto;
+  /* 用例表限高：约 5 行后滚动，避免用例多时把 ① 配置块撑得过高，
+     与「从 Trace」的 .sa-trace-list-body（max-height:400px）保持一致。 */
+  max-height: 400px;
+  overflow-y: auto;
 }
 .work-table {
   width: 100%;
@@ -659,6 +663,10 @@
   text-transform: uppercase;
   letter-spacing: 0.06em;
   font-weight: 600;
+  /* 限高滚动时表头吸顶，列名始终可见。 */
+  position: sticky;
+  top: 0;
+  z-index: 1;
 }
 .work-table tbody td {
   padding: 11px 12px;

@@ -31,15 +31,10 @@ const GLOSSARY = {
     tag: 'metric',
     body: '平台内置的 Agent，用于支撑平台自身功能（如智能诊断）。',
   },
-  'unregistered-agent': {
-    name: '未注册 Agent',
-    tag: 'metric',
-    body: '已上报过数据、但尚未在"Agent 管理"中正式登记的 Agent。',
-  },
   'agent-ownership': {
     name: 'Agent 归属',
     tag: 'metric',
-    body: '标识 Agent 的来源，取值为：用户 Agent、系统 Agent、未注册 Agent。',
+    body: '标识 Agent 的来源，取值为：用户 Agent、系统 Agent。',
   },
   'main-agent': {
     name: '主 Agent',
@@ -306,7 +301,7 @@ const GLOSSARY = {
     body: '多维度评分加权后的最终结论与建议。',
   },
 
-  // ===== §8 Skill 管理 =====
+  // ===== §8 Skills Hub =====
   'skill': {
     name: 'Skill',
     tag: 'skill',

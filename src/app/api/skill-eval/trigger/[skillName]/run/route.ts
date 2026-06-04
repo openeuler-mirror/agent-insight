@@ -4,18 +4,121 @@ import {
   findTriggerEvalSetById,
   createTriggerEvalRun,
   finalizeTriggerEvalRun,
+  findRunningRun,
 } from '@/server/skill_trigger_eval_storage';
 import { runTriggerEvalLive } from '@/lib/engine/skill-generation/evaluator/runners/triggerEval';
 import { prismaRaw } from '@/lib/storage/prisma';
 import { deriveAndPersistTriggerOptPoints } from '@/lib/engine/evaluation/derive-trigger-opt-points';
+import { ensureSessionWorkspace } from '@/lib/engine/general-agent/workspace';
+import {
+  registerTriggerEvalRun,
+  unregisterTriggerEvalRun,
+} from '@/server/trigger_eval_run_registry';
 
 export const dynamic = 'force-dynamic';
 
 /**
+ * 后台跑一次触发评测：执行 runner → finalize(done/failed) → 派生 skill-opt 可优化点。
+ * 由 POST 以 fire-and-forget 方式调起，**绝不向外抛**——任何失败都落进 run 记录的
+ * status=failed + errorMessage，前端轮询 /runs 时即可看到。评测可能耗时几十秒到几分钟，
+ * 同步 await 会让请求一直挂着、用户一关页面就丢结果；改成后台跑后用户可随时离开。
+ */
+async function executeTriggerEvalRun(args: {
+  runId: string;
+  triggerSet: Parameters<typeof runTriggerEvalLive>[0]['triggerSet'];
+  skillName: string;
+  skillVersion: number;
+  skillVersionContent: string;
+  workspaceRoot: string;
+  user: string;
+  modelConfigId?: string;
+  runsPerQuery: number;
+  triggerThreshold: number;
+  timeoutMs: number;
+  concurrency: number;
+  /** 终止信号：用户点「终止」时由 cancel 路由 abort 对应 controller。 */
+  signal: AbortSignal;
+}): Promise<void> {
+  const startedAt = Date.now();
+  try {
+    const result = await runTriggerEvalLive({
+      triggerSet: args.triggerSet,
+      skillName: args.skillName,
+      skillVersion: args.skillVersion,
+      workspaceRoot: args.workspaceRoot,
+      user: args.user,
+      modelConfigId: args.modelConfigId,
+      runsPerQuery: args.runsPerQuery,
+      triggerThreshold: args.triggerThreshold,
+      timeoutMs: args.timeoutMs,
+      concurrency: args.concurrency,
+      signal: args.signal,
+    });
+    const durationMs = Date.now() - startedAt;
+    await finalizeTriggerEvalRun({
+      id: args.runId,
+      results: result.items,
+      passRate: result.passRate,
+      truePositiveRate: result.truePositiveRate,
+      falsePositiveRate: result.falsePositiveRate,
+      durationMs,
+      status: 'done',
+    });
+
+    // 派生 skill-opt 可优化点（写入 Evaluation + SkillIssue）。失败不阻断——评测本身已经 done 了，
+    // 派生只是锦上添花；DB 不可用 / matter() parse 失败这类不应该污染主结果。失败仅 warn 留痕。
+    try {
+      await deriveAndPersistTriggerOptPoints({
+        user: args.user,
+        skillName: args.skillName,
+        skillVersion: args.skillVersion,
+        triggerRunId: args.runId,
+        skillVersionContent: args.skillVersionContent,
+        results: result.items,
+        passRate: result.passRate,
+        truePositiveRate: result.truePositiveRate,
+        falsePositiveRate: result.falsePositiveRate,
+        runsPerQuery: args.runsPerQuery,
+        triggerThreshold: args.triggerThreshold,
+      });
+    } catch (deriveErr) {
+      console.warn(
+        '[trigger-eval/run] deriveAndPersistTriggerOptPoints failed:',
+        deriveErr instanceof Error ? deriveErr.message : String(deriveErr),
+      );
+    }
+  } catch (runErr) {
+    const durationMs = Date.now() - startedAt;
+    // signal.aborted 只会因用户点「终止」而置真（per-item 的命中/超时 abort 走的是 runner 内部
+    // 自己的 AbortController，不碰这个外部 signal）——所以据此区分 cancelled 与 failed。
+    const cancelled = args.signal.aborted;
+    const msg = cancelled ? '已手动终止' : runErr instanceof Error ? runErr.message : String(runErr);
+    try {
+      await finalizeTriggerEvalRun({
+        id: args.runId,
+        results: [],
+        passRate: 0,
+        truePositiveRate: 0,
+        falsePositiveRate: 0,
+        durationMs,
+        status: cancelled ? 'cancelled' : 'failed',
+        errorMessage: msg,
+      });
+    } catch (finErr) {
+      console.error('[trigger-eval/run] failed to finalize cancelled/failed run:', finErr);
+    }
+  } finally {
+    // 收尾后从内存登记表注销，避免 Map 无限增长。
+    unregisterTriggerEvalRun(args.runId);
+  }
+}
+
+/**
  * POST /api/skill-eval/trigger/<skillName>/run
  *
- * 跑一次 opencode-live 触发评测。同步等评测完成才 200——典型耗时跟 query 数 × runsPerQuery 成正比，
- * 假设 18 条 query × 1 run × 平均 5s/run × concurrency=5 ≈ 18s。前端 spinner + 实时进度即可。
+ * 起一次 opencode-live 触发评测。**异步**：建好 run 记录（status=running）后立刻 200 返回，
+ * 评测在后台 fire-and-forget 跑（典型几十秒～几分钟）。前端据返回的 run.id 轮询 /runs 拿最终结果；
+ * 用户可以关掉页面，回来照样能看到——run 落在 DB 里，跟请求生命周期解耦。
  *
  * body: {
  *   user,
@@ -101,12 +204,34 @@ export async function POST(
       targetSkillContent = match.content;
     }
 
+    // 2.5 防重入：同一 (user, skill, version) 已有新鲜的 running run，就不再起新的。
+    //     评测异步化后一次 POST 立刻返回，连点 / 多标签页极易并发发起，最后 done 的那条抢成 latest，
+    //     既浪费算力又让人困惑。这里直接把正在跑的那条连同 409 回给前端——前端据此关掉对话框、
+    //     继续轮询同一条 run 的进度即可（见 page.tsx startRun 对 409 的处理）。
+    const existingRunning = await findRunningRun(user, decodedSkillName, targetSkillVersion);
+    if (existingRunning) {
+      return NextResponse.json(
+        { error: '该版本已有一次评测正在运行，等它结束再发起', run: existingRunning },
+        { status: 409 },
+      );
+    }
+
     // 3. 参数化
     const runsPerQuery = Math.max(1, Math.min(10, Number(body.runsPerQuery ?? 1)));
     const triggerThreshold = Math.max(0, Math.min(1, Number(body.triggerThreshold ?? 0.5)));
     const timeoutMs = Math.max(5000, Math.min(120_000, Number(body.timeoutMs ?? 30_000)));
     const concurrency = Math.max(1, Math.min(10, Number(body.concurrency ?? 5)));
     const modelConfigId = body.modelConfigId ? String(body.modelConfigId).trim() : undefined;
+
+    // 3.5 每次评测切一个 repo 之外、本次专属的干净 workspace。
+    //     以前这里传 process.cwd()（共享的 repo checkout），所有 user / 所有 run 共用同一个
+    //     .opencode/skills/，物化又只写不清——别的 user 的近义 skill 残留会抢路由，把目标 skill
+    //     的触发率压成 0。改用 ensureSessionWorkspace（跟 general-agent 评测同款隔离原语）后，
+    //     每个 run 一个独立目录，materialize 只往里放本 user 当下的 skill。
+    const workspaceRoot = ensureSessionWorkspace(
+      user,
+      `trigger-eval-${decodedSkillName}-v${targetSkillVersion}-${Date.now()}`,
+    );
 
     // 4. 起 run 记录（modelId 字段存为人类可读的 modelConfigId 标识，便于排障）
     const run = await createTriggerEvalRun({
@@ -118,75 +243,35 @@ export async function POST(
       triggerThreshold,
       timeoutMs,
       modelId: modelConfigId ?? null,
-      workspaceRoot: process.cwd(),
+      workspaceRoot,
     });
 
-    // 5. 跑评测
-    const startedAt = Date.now();
-    try {
-      const result = await runTriggerEvalLive({
-        triggerSet: set,
-        skillName: decodedSkillName,
-        skillVersion: targetSkillVersion,
-        workspaceRoot: process.cwd(),
-        user,
-        modelConfigId,
-        runsPerQuery,
-        triggerThreshold,
-        timeoutMs,
-        concurrency,
-      });
-      const durationMs = Date.now() - startedAt;
-      const finalized = await finalizeTriggerEvalRun({
-        id: run.id,
-        results: result.items,
-        passRate: result.passRate,
-        truePositiveRate: result.truePositiveRate,
-        falsePositiveRate: result.falsePositiveRate,
-        durationMs,
-        status: 'done',
-      });
+    // 5. 登记一个 AbortController（供「终止」用），把它的 signal 穿进后台评测。
+    const controller = registerTriggerEvalRun(run.id);
 
-      // 派生 skill-opt 可优化点（写入 Evaluation + SkillIssue）。失败不阻断主流程——评测
-      // 本身已经 done 了，派生只是锦上添花；DB 不可用 / matter() parse 失败这类不应该让
-      // 用户看到 500。失败时仅 warn 留痕方便排障。
-      try {
-        await deriveAndPersistTriggerOptPoints({
-          user,
-          skillName: decodedSkillName,
-          skillVersion: targetSkillVersion,
-          triggerRunId: run.id,
-          skillVersionContent: targetSkillContent,
-          results: result.items,
-          passRate: result.passRate,
-          truePositiveRate: result.truePositiveRate,
-          falsePositiveRate: result.falsePositiveRate,
-          runsPerQuery,
-          triggerThreshold,
-        });
-      } catch (deriveErr) {
-        console.warn(
-          '[trigger-eval/run] deriveAndPersistTriggerOptPoints failed:',
-          deriveErr instanceof Error ? deriveErr.message : String(deriveErr),
-        );
-      }
+    // 6. 后台跑评测，不 await——立刻把 status=running 的 run 返回给前端。
+    //    评测在本进程后台 fire-and-forget 跑（与 eval/trajectory/run 同款 detached promise + .catch 兜底）；
+    //    app 是长驻 node 进程（npm start），响应返回后后台 promise 会继续跑到 finalize。
+    //    用户可以关掉页面，回来轮询 /runs 即可看到结果；中途也可调 /run/<id>/cancel 终止。
+    void executeTriggerEvalRun({
+      runId: run.id,
+      triggerSet: set,
+      skillName: decodedSkillName,
+      skillVersion: targetSkillVersion,
+      skillVersionContent: targetSkillContent,
+      workspaceRoot,
+      user,
+      modelConfigId,
+      runsPerQuery,
+      triggerThreshold,
+      timeoutMs,
+      concurrency,
+      signal: controller.signal,
+    }).catch(err => {
+      console.error('[trigger-eval/run] background run crashed:', err);
+    });
 
-      return NextResponse.json({ success: true, run: finalized });
-    } catch (runErr) {
-      const durationMs = Date.now() - startedAt;
-      const msg = runErr instanceof Error ? runErr.message : String(runErr);
-      await finalizeTriggerEvalRun({
-        id: run.id,
-        results: [],
-        passRate: 0,
-        truePositiveRate: 0,
-        falsePositiveRate: 0,
-        durationMs,
-        status: 'failed',
-        errorMessage: msg,
-      });
-      throw runErr;
-    }
+    return NextResponse.json({ success: true, run });
   } catch (error) {
     console.error('skill-eval/trigger/run POST error:', error);
     const msg = error instanceof Error ? error.message : 'failed to run trigger eval';

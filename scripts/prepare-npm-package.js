@@ -14,11 +14,28 @@ function copyDirIfMissing(sourceDir, targetDir, label) {
   return true
 }
 
+// Local/temp & non-runtime project dirs that `next build` sweeps into standalone.
+// `files` whitelist makes .npmignore unable to drop them, so we delete physically.
+// Runs on every `npm pack`/`npm publish` via the prepack hook.
+const STANDALONE_JUNK_DIRS = ['exclude', 'tests', 'test', 'skillbench', 'features', 'tools', 'docs', 'data', 'src', 'skills']
+
+function pruneStandaloneJunk(standaloneDir) {
+  for (const dir of STANDALONE_JUNK_DIRS) {
+    const target = path.join(standaloneDir, dir)
+    if (fs.existsSync(target)) {
+      fs.rmSync(target, { recursive: true, force: true })
+      console.log(`✓ Pruned ${dir}/ from standalone`)
+    }
+  }
+}
+
 function ensureStandalonePackage(packageRoot = process.cwd()) {
   const standaloneDir = path.join(packageRoot, '.next', 'standalone')
   if (!fs.existsSync(standaloneDir)) {
     throw new Error('Missing .next/standalone. Run `npm run build` before packaging.')
   }
+
+  pruneStandaloneJunk(standaloneDir)
 
   const staticDir = path.join(packageRoot, '.next', 'static')
   const standaloneStaticDir = path.join(standaloneDir, '.next', 'static')

@@ -113,14 +113,17 @@ export async function GET(request: Request) {
             take: limit,
         });
 
-        const results = rows.map(r => ({
-            ...(safeParse(r.rawAnalysisJson, {}) as {
+        const results = rows.map(r => {
+            const rawAnalysis = safeParse(r.rawAnalysisJson, null) as Record<string, unknown> | null;
+            const rawMeta = (rawAnalysis || {}) as {
                 selectedEvaluators?: string[];
                 selectedEvaluatorNames?: string[];
                 autoWatch?: boolean;
                 watchedAgent?: string;
                 watchPlaceholder?: boolean;
-            }),
+            };
+            return {
+            ...rawMeta,
             ...(() => {
                 const taskMeta = extractTrajectoryTaskMeta(r.rawAnalysisJson, r.createdAt);
                 return {
@@ -144,10 +147,12 @@ export async function GET(request: Request) {
             resultEvaluationScore: pickResultEvaluationScore(r.rawAnalysisJson),
             customEvaluationScore: pickCustomEvaluationScore(r.rawAnalysisJson),
             customEvaluations: pickCustomEvaluations(r.rawAnalysisJson),
-            rawAnalysis: safeParse(r.rawAnalysisJson, null),
+            diagnostic: rawAnalysis?.diagnostic ?? null,
+            rawAnalysis,
             createdAt: r.createdAt.toISOString(),
             updatedAt: r.updatedAt.toISOString(),
-        }));
+            };
+        });
 
         return NextResponse.json({ results });
     } catch (error: unknown) {

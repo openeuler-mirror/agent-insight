@@ -1,3 +1,53 @@
+# [已归档] Legacy Eval Dashboard（`src/components/eval/Dashboard.tsx`）
+
+> **状态：已退役 / RETIRED** — 归档于 2026-06-02。
+>
+> 本文件是旧版**单体 eval Dashboard** 组件的逐字源码归档。退役前它已是**死代码**：
+> 全仓零引用（没有任何路由或组件 `import` 它），其 `export default function Dashboard()`
+> 不被挂载到任何路由。归档随源文件删除一并创建，确保内容不丢失，便于后续模型 / 开发者统一查阅。
+> 原文件已从 `src/` 删除。
+
+## 它是什么
+
+一个约 5287 行的巨型单组件，内部用 `activeTab` 在多个 tab 间切换：
+`dashboard`(概览) / `dataset`(数据集) / `skill`(技能管理，内嵌 `SkillRegistry`) / `observe`(观测) /
+`evaluate`(评测) / `attribute`(归因) / `optimize`(优化) / `manage`(管理)。
+
+## 被什么取代
+
+被 Next.js App Router 的多页架构取代：`src/app/(main)/` 下一页一路由，外壳是
+`src/app/(main)/layout.tsx`（渲染 `<AppSidebar />` + `<main>`）。老 tab → 新路由的对应：
+
+| 老 Dashboard tab | 现在的路由 / 页面 |
+|---|---|
+| 概览 dashboard | `/dashboard`（`src/app/(main)/dashboard/page.tsx`）|
+| 技能管理 skill（内嵌 `SkillRegistry`）| `/skills`（即 **Skills Hub**）|
+| 数据集 dataset | `/dataset` |
+| 观测 observe | `/trace`（链路追踪，根路由 `/` 默认重定向到这里）|
+| 评测 evaluate | `/eval`、`/metrics` |
+| 归因 attribute | `/fault`（智能诊断）|
+| 优化 optimize | `/skill-opt` |
+| 管理 manage | `/modelconfig`、`/accessconfig` |
+
+## 退役注意事项（孤儿依赖）
+
+- 删除本组件后，仅被它使用的 `src/lib/client/guide-config.ts`（新手引导步骤配置，
+  原本就被 Dashboard 内的 `false && …` 关掉、从未渲染）也成了孤儿，**已在同一 PR 一并删除**
+  （全仓零引用）。注：它只是单向 import 了 `UserGuide` 的 `GuideStep` 类型；活着的 onboarding
+  系统（`UserGuide.tsx` / `use-user-guide.ts` / `/api/guide`）不依赖它，不受影响。
+- `src/components/skills/SkillRegistry.tsx` **必须保留** —— 它导出的 `SkillCatalog` 等仍被
+  `/skills`（Skills Hub）页面使用，只是不再被本 Dashboard 渲染。其内部 `catalog` 子 tab 文案
+  （`nav.catalog`）随本组件退役一起退出可见范围。
+
+## 作者出处
+
+随 `c289f17`（2026-02-13，"witty-skill-insight 初版代码"）的初版代码进入，主要迭代者为
+`ljnkirito`、`gyctl` 等。注意：force-update 后的 `git blame` 会把整文件算到一次性 re-add
+的提交头上，并非真实作者，溯源请以 `--follow` 历史为准。
+
+## 原始完整源码（删除前逐字快照，5287 行）
+
+````tsx
 'use client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -5285,3 +5335,5 @@ export default function Dashboard({ embedded = false, initialTab = 'dashboard' }
         </div >
     );
 }
+
+````

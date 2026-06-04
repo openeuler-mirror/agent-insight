@@ -5,7 +5,7 @@ import { getExistingInsightDir, getPreferredInsightDir } from '@/lib/agent-insig
 const DEFAULT_TOMBSTONE_FILE = path.join(getExistingInsightDir(), 'opencode_deleted_sessions.json');
 
 function tombstoneFilePath(): string {
-  return process.env.SKILL_INSIGHT_OPENCODE_DELETED_SESSIONS || DEFAULT_TOMBSTONE_FILE;
+  return process.env.AGENT_INSIGHT_OPENCODE_DELETED_SESSIONS || DEFAULT_TOMBSTONE_FILE;
 }
 
 function normalizeSessionId(value: unknown): string {
