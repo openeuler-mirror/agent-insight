@@ -27,8 +27,14 @@ const nextConfig: NextConfig = {
   },
   // 显式锁定 workspace root，避免 Next.js 在多 lockfile 时选错根
   // （家目录如果也存在 package-lock.json 会被误识别为 monorepo 根）。
+  // git worktree 场景：cwd 在 <main>/.claude/worktrees/<id>，依赖装在主仓库 node_modules，
+  // worktree 本地 node_modules 不完整——root 必须指向主仓库根，turbopack 才解析得到 next。
   turbopack: {
-    root: path.resolve('.'),
+    root: (() => {
+      const cwd = path.resolve('.');
+      const m = cwd.match(/^(.*)\/\.claude\/worktrees\/[^/]+$/);
+      return m ? m[1] : cwd;
+    })(),
   },
   experimental: {
       serverActions: {
