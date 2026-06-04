@@ -64,6 +64,16 @@ export async function setupNodeRuntime(): Promise<void> {
       fs.existsSync(path.join(os.homedir(), '.agent-insight')) ? '.agent-insight' : '.skill-insight',
       'opencode_uploader_client.js',
     );
+    // 用仓库最新版刷新部署副本: 旧副本可能读 legacy 的 SKILL_INSIGHT_API_KEY → 拿错 key 上传 401、
+    // spool 永远清不掉、uploader 啃积压跑很久 → 叠加堆爆(实测 75 个进程吃爆内存)。每次启动同步一次。
+    try {
+      const repoUploader = path.join(process.cwd(), 'scripts', 'opencode_uploader_client.js');
+      if (fs.existsSync(repoUploader) && path.resolve(repoUploader) !== path.resolve(uploader)) {
+        fs.copyFileSync(repoUploader, uploader);
+      }
+    } catch (e) {
+      console.warn('[instrumentation] refresh uploader client failed:', (e as Error)?.message);
+    }
     if (fs.existsSync(uploader)) {
       const child = spawn(process.execPath, [uploader], {
         detached: true,

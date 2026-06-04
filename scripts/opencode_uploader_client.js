@@ -876,6 +876,33 @@ async function main() {
     process.exit(0)
   }
 
+  // 单例锁: 同一时刻只允许一个 uploader 真正干活。plugin 每个 opencode event 都会 kick 一个
+  // FORCE 实例, 叠加 5min cron, 高峰能堆出几十个进程啃同一份积压、吃爆内存(实测 75 个)。
+  // 用 pid 锁文件去重: 已有存活 uploader 持锁就直接退出; 陈旧锁(pid 已死)则接管; 退出时释放自己的锁。
+  const lockFile = path.join(getPreferredInsightDir(), ".uploader.lock")
+  try {
+    const prevPid = Number((fs.readFileSync(lockFile, "utf8") || "").trim())
+    if (prevPid && prevPid !== process.pid) {
+      try {
+        process.kill(prevPid, 0) // 存活 → 让位
+        appendUploaderLog(`main.skip alreadyRunning pid=${prevPid}`)
+        process.exit(0)
+      } catch {
+        /* prevPid 已死, 锁陈旧, 接管 */
+      }
+    }
+  } catch {
+    /* 无锁文件, 继续 */
+  }
+  try { fs.writeFileSync(lockFile, String(process.pid)) } catch {}
+  process.on("exit", () => {
+    try {
+      if (Number((fs.readFileSync(lockFile, "utf8") || "").trim()) === process.pid) {
+        fs.rmSync(lockFile, { force: true })
+      }
+    } catch {}
+  })
+
   const files = listJsonlFiles(spoolDir)
   appendUploaderLog(`main.scan files=${files.length} newestMtime=${newestMtime} lastScanMtime=${lastScanMtime}`)
 
