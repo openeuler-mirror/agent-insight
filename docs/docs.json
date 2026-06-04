@@ -96,7 +96,8 @@
             "pages": [
               "developer-guide/architecture/index",
               "developer-guide/architecture/data-model",
-              "developer-guide/architecture/design-decisions"
+              "developer-guide/architecture/design-decisions",
+              "developer-guide/architecture/static-evaluator"
             ]
           },
           {

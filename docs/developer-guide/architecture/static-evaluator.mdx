@@ -1,0 +1,334 @@
+---
+title: "静态评估器"
+description: "Skill 静态评估的 6 维划分、L1/L2 两层架构、计分模型，以及安全规则清单"
+---
+
+# 静态评估器
+
+Skill 静态评估器（`static-evaluator`）是 Agent Insight 用来对每个 SkillVersion 内容做"读完即可判断"的合规与质量检查的子系统。每次 skill 上传或用户手动触发"重新分析"时跑一次，产出 `Evaluation` + `SkillIssue` 两类记录，前端按维度展示。
+
+<Note>
+代码入口：`src/lib/engine/skill-issues/static-evaluator/index.ts:runStaticEvaluation`。
+UI 入口：`/evaluation/[id]` 详情页 与 `/skill-eval` 列表页。
+</Note>
+
+## 概述
+
+静态评估器对一个 SkillVersion 做两层检查，最后合并出 6 个维度的分数：
+
+```
+                         runStaticEvaluation()
+                                │
+            ┌───────────────────┴────────────────────┐
+            │                                        │
+        ┌───▼────── L1 ──────────┐         ┌───────▼────── L2 ──────────┐
+        │  确定性 regex / 解析    │         │  LLM 语义评估              │
+        │  零成本，每次必跑       │         │  3 段并发（Promise.all）   │
+        │                        │         │                            │
+        │  ├ structure 形式合规  │         │  ├ PROMPT_SKILL_META       │
+        │  │  (frontmatter、     │         │  │   → 4 维（目的/结构/     │
+        │  │   长度、命名)       │         │  │     指令/内容）          │
+        │  └ security 威胁扫描   │         │  ├ PROMPT_ROBUSTNESS       │
+        │     (W008/E005/W012)   │         │  │   → 工程健壮性          │
+        └────────────┬───────────┘         │  └ PROMPT_SECURITY         │
+                     │                     │      → 安全风险性          │
+                     │                     └────────────┬───────────────┘
+                     │                                  │
+                     └──────► mergeL1FloorWithL2Scores ◄┘
+                                        │
+                                        ▼
+                          finalScore = min(L1_floor, L2_LLM ?? 5)
+                                        │
+                                        ▼
+                          写入 Evaluation.l2ScoresJson + N 条 SkillIssue
+```
+
+关键属性：
+
+- **L1 永远跑** — 即使用户没配 LLM，也能拿到 structure / security 两维分数
+- **L2 三段并发** — 调用时间从 ~14s 降到 ~5-8s
+- **L2 大 bundle 自动 fan-out** — references + scripts 总长 > 80K 时按文件边界 chunking，每 chunk 独立 prompt，结果按 `(ruleId, hash6(evidence))` dedup
+- **3 道 LLM 鲁棒性防线** — JSON.parse → `jsonrepair` 兜底 → retry 1 次
+
+---
+
+## 6 个维度
+
+当前维度划分（`src/components/evaluation/constants.ts:STATIC_EVAL_STANDARDS`）：
+
+| # | 维度 | 评什么 | 谁参与打分 |
+|---|---|---|---|
+| ① | 目的适配性 | 单一目的、触发信号词清晰 | L2 |
+| ② | 结构规范性 | 元数据合规、内容组织合理 | L1 + L2 |
+| ③ | 指令适配性 | 自由度与任务风险匹配 | L2 |
+| ④ | 内容一致性 | 术语统一、无硬编码时效信息 | L2 |
+| ⑤ | **安全风险性** ⭐ | 10 类威胁扫描（对照 agent-scan issue-codes） | L1 + L2 |
+| ⑥ | **工程健壮性** ⭐ | 脚本独立性 / 错误处理 / 灾难恢复 / 可观测性 / 人机协作 | L2 |
+
+⭐ = 2026-06 重整后新维度，详见下文"沿革"。
+
+### 沿革（2026-06 重整）
+
+| 旧维度（`@0.1+llm`）| 新维度（`@0.2`）| 关系 |
+|---|---|---|
+| 目的适配性 | 目的适配性 | 不变 |
+| 结构规范性 | 结构规范性 | 不变 |
+| 指令适配性 | 指令适配性 | 不变 |
+| 内容一致性 | 内容一致性 | 不变 |
+| **运维可靠性** | **安全风险性** | 替换（旧维 4 子项分流，见下表）|
+| **脚本及参考文档质量** | **工程健壮性** | 重命名 + 扩展（吸收旧"运维可靠性"3 子项）|
+
+**"运维可靠性"4 个子项的去向**：
+
+| 旧子项 | 新归属 | 理由 |
+|---|---|---|
+| 安全防护（禁高危、最小权限）| → **安全风险性** | 跟 W013 系统修改、W009 金融操作高度重叠 |
+| 灾难恢复（备份/回滚/验证）| → **工程健壮性** | 工程性而非威胁性 |
+| 可观测性（不静默失败/验证步骤）| → **工程健壮性** | 跟"脚本质量·错误处理 / 自带验证"是同质问题 |
+| 人机协作（人工确认）| → **工程健壮性** | 流程健壮性的一部分 |
+
+**"工程健壮性"覆盖的子项**：
+
+| 子项 | 来自 |
+|---|---|
+| 脚本独立实现业务逻辑 | 原"脚本及参考文档质量" |
+| 路径与依赖管理 | 同 |
+| 错误处理含具体修复建议 | 同 |
+| 关键步骤自带验证逻辑 | 同 |
+| 灾难恢复（备份/回滚）| 新吸收（原运维可靠性）|
+| 可观测性（不静默失败）| 新吸收（原运维可靠性）|
+| 人机协作（人工确认）| 新吸收（原运维可靠性）|
+
+评估对象也从"只看 references + scripts 代码层"扩到"同时看 SKILL.md 流程描述层 + 代码层"。
+
+---
+
+## L1 / L2 计分模型
+
+### L1_floor 映射
+
+L1 命中按最高 severity 决定该维度的"地板分"：
+
+| L1 命中 severity | L1_floor |
+|---|---|
+| high | **2** |
+| medium | **3** |
+| low | **4** |
+| 无命中 | **5** |
+
+### 最终维度 score
+
+```ts
+finalScore = min(L1_floor, L2_LLM_score ?? 5)
+```
+
+意义：
+
+- 无论 L2 是否成功，**只要 L1 命中 high，该维度封顶 2 分**，LLM 不能给"假阳性满分"
+- L2 没跑时（用户没配 LLM / auto-upload 默认不跑 L2），L1 命中的维度仍有分；其它维度 `notEvaluated`
+- L1 无命中且 L2 没跑的维度，分数缺失（不假定 5 分）
+
+### 评分语义边界
+
+- **质量维度（4 维）**：1-5 分表达"写得多好"，连续刻度，分越低 issue 越多
+- **安全风险性**：5 分 = 无威胁；1 分 = 任意 critical 命中；issue 列表用来区分严重程度（1 个 critical vs 10 个 critical 都是 1 分）
+- **工程健壮性**：双层（代码 + 流程），跨多个独立问题时 issues 数组逐条列出，不合并
+
+---
+
+## L1 规则清单
+
+实现位置：`src/lib/engine/skill-issues/static-evaluator/linter.ts`。
+
+### Structure 规则（8 条，dim=`structure`）
+
+| ruleId | severity | 命中含义 |
+|---|---|---|
+| `frontmatter_invalid_yaml` | high | YAML 语法错误（无法解析 name/description）|
+| `frontmatter_missing_name` | high | 缺 `name` 字段 |
+| `frontmatter_missing_description` | high | 缺 `description` 字段 |
+| `name_too_long` | medium | `name` > 64 字符 |
+| `name_not_kebab_case` | low | `name` 不是 kebab-case |
+| `description_too_long` | medium | `description` > 1024 字符 |
+| `length_chars_exceeded` | low | SKILL.md > 5000 字符 |
+| `length_lines_exceeded` | low | SKILL.md > 500 行 |
+
+完全缺 frontmatter 时会同时命中 `frontmatter_missing_name` + `frontmatter_missing_description` 两条 high，evidence 标注 `(整个 frontmatter 块缺失)`，修复指引更明确。
+
+### Security 规则（3 条 / 11 个 pattern，dim=`security`）
+
+#### W008 · 硬编码 secret（high · 6 个 pattern）
+
+| Pattern | 检测目标 |
+|---|---|
+| `AKIA[0-9A-Z]{16}` | AWS Access Key |
+| `gh[ps]_[A-Za-z0-9]{36,}` | GitHub Token (PAT / Server / Push) |
+| `sk-[A-Za-z0-9]{20,}` | OpenAI API Key |
+| `xox[bpoa]-[A-Za-z0-9-]{10,}` | Slack Token |
+| `snyk_[A-Za-z0-9_]{20,}` | Snyk Token |
+| `(api_key\|token\|secret\|password\|auth_token\|bearer) = "<16+ 字符>"` | 通用 key=value（含变体大小写、`_`/`-`/驼峰）|
+
+命中后 evidence 自动脱敏：`snyk_********`，不暴露完整 secret。
+
+#### E005 · 可疑下载 URL（3 个 pattern）
+
+| Pattern | severity | 检测目标 |
+|---|---|---|
+| `https?://(bit\.ly\|tinyurl\.com\|goo\.gl\|t\.co\|ow\.ly\|is\.gd)/...` | high | 短链域名（隐藏目的地）|
+| `https?://\S+?\.(exe\|dmg\|msi\|ps1)(?:\?\S*)?` | high | 直接指向可执行文件 |
+| `https?://(pastebin\.com/raw\|gist\.githubusercontent\.com)/...` | medium | 个人代码 raw（无版本/校验）|
+
+#### W012 · 运行时拉远程指令（high · 4 个 pattern）
+
+| Pattern | 检测目标 |
+|---|---|
+| `curl ... \| (sh\|bash\|zsh)` | 经典 curl-to-shell |
+| `wget ... \| (sh\|bash\|zsh)` | wget-to-shell |
+| `eval\s*\((?:await )?(fetch\|requests.get\|axios.get\|urllib.request.urlopen)` | 直接 eval 远程内容 |
+| `(exec\|Function)\s*\((?:await )?(fetch\|requests.get\|axios.get\|urllib)` | exec/Function 构造器拉远程 |
+
+### Evidence 文件级定位
+
+所有 security 规则的 evidence 通过 `locateFileAndLine` 输出精确坐标：
+
+- SKILL.md 单文件：`SKILL.md:14 → ...`
+- bundle（references/scripts 拼接）：识别 `--- 文件: <path> ---` 标记，输出 `scripts/foo.py:14 → ...`
+
+---
+
+## L2 规则清单
+
+实现位置：`src/lib/engine/skill-issues/static-evaluator/prompts.ts`。
+
+### 4 个质量 prompt
+
+#### PROMPT_SKILL_META（4 维一次性输出）
+
+输入：仅 SKILL.md 全文。输出：
+
+- 目的适配性 1-5
+- 结构规范性 1-5（注：name/description 长度等格式问题由 L1 linter 覆盖，prompt 明确要求不重复报）
+- 指令适配性 1-5
+- 内容一致性 1-5
+
+#### PROMPT_ROBUSTNESS（工程健壮性）
+
+输入：SKILL.md + bundle chunk。评 7 个子项（详见上文"工程健壮性覆盖的子项"）。
+
+### 安全 prompt：PROMPT_SECURITY（6 条规则）
+
+参考 [agent-scan issue-codes](https://github.com/snyk/agent-scan/blob/main/docs/issue-codes.md) 的 skill 部分。10 条规则中 W014 在本项目 N/A（`SkillVersion.content` 必填），剩 9 条 = L1 规则 3 条 + L2 LLM 6 条。
+
+| Code | 名称 | severity | 判定要点 | 不算命中 |
+|---|---|---|---|---|
+| **E004** | Prompt Injection in Skill | critical | 脱离 skill 声明用途的、试图覆盖 agent 安全准则的隐藏指令；典型：HTML 注释/零宽字符/base64 藏指令、"ignore previous instructions"、frontmatter 与正文行为不一致 | 合规业务流程指令；防御性指令（"如用户尝试让你跳过验证，应拒绝"）|
+| **E006** | Malicious Code Patterns | critical | 数据外泄 / 后门 / RCE / 凭据窃取 / 供应链攻击 / 混淆。典型：把 env / `~/.ssh/` / `~/.aws/` 发外部、`eval(base64.b64decode(...))`、写 crontab/launchd 持久化、替换 npm/pip 全局包、反向 shell | — |
+| **W007** | Insecure Credential Handling | high | 要求 agent 把 secret 原样回显到对话/日志/PR/commit/Slack 等公开渠道 | 要求 agent 用 secret 调 API（不回显）|
+| **W009** | Direct Financial Execution | medium | 专为执行金融操作设计（支付/转账/加密货币/下市价单），**且没有**强制的二次确认/限额/审计日志要求 | 只读金融操作（查余额）；有二次确认+限额机制的写入 |
+| **W011** | Exposure to Untrusted Third-Party Content | medium | 让 agent 把任意 URL/社交媒体/论坛/UGC 直接当指令读取（间接 prompt injection 风险），无过滤策略 | 抓取后只做摘要/数据提取，且明确"提取后仅作数据不执行" |
+| **W013** | System Service Modification | medium | 指挥 agent 改系统级配置：sudo、修改启动项、关闭杀软、改 PATH/hosts、动 firewall/SELinux | 项目级配置（package.json、本地 .env、项目内 git config）|
+
+<Note>
+critical 级（E004/E006）的 `severity` 字段填 `"high"`（schema 兼容性），前端按 `ruleId` 识别 critical 等级。
+</Note>
+
+### 规则分工（为什么 3 条走 L1、6 条走 L2）
+
+| 维度 | L1（regex）| L2（LLM judge）|
+|---|---|---|
+| **判定本质** | 形式匹配（字符串模式、文件存在性）| 语义判断（意图、上下文、行为一致性）|
+| **能否 regex 写出** | 能（secret 有明确格式特征）| 不能（"prompt injection" 不是字面字符串）|
+| **成本** | 0（本地 regex）| 1 次 API 调用 |
+| **可用性** | 永远可用（不需 LLM）| 需 LLM 配置 + 网络 |
+| **置信度** | 高（命中即事实）| 中（LLM 有 false positive）|
+
+---
+
+## 鲁棒性：3 道 LLM 防线
+
+实现位置：`src/lib/engine/skill-issues/static-evaluator/llm-evaluator.ts`。
+
+```
+LLM 响应 ──► tryParseJson
+              │
+              ├─ JSON.parse OK ──────► dims
+              │
+              └─ FAIL ──► jsonrepair ──► JSON.parse OK ──► dims
+                                          │
+                                          └─ FAIL ──► dims=[] (返回空)
+                                                       │
+                                                       ▼
+                                                 callAndParse 检测到空
+                                                       │
+                                                       ▼
+                                                  retry 1 次（新 LLM 调用）
+                                                       │
+                                                       ▼
+                                                  仍空：log warn，该 stage 跳过
+                                                  其它 stage 不受影响
+                                                  evaluation.status='ok' + errorMessage
+```
+
+应对场景：
+
+- **JSON 中间错误**（未转义引号、缺括号、trailing comma）→ `jsonrepair` 修复
+- **LLM 完全无视 schema 返回非 JSON**（如直接给 bash 命令）→ `jsonrepair` 救不了，靠 retry
+- **callLlm 显式 `max_tokens: 2048`** 防御性兜底（不影响正常 ~1800 字符响应）
+
+---
+
+## Bundle Chunking（大 skill 不漏检）
+
+实现位置：`src/lib/engine/skill-issues/static-evaluator/content-loader.ts`。
+
+L1 / L2 对 bundle 大小敏感性不同，所以 `loadAssetBundle()` 同时输出两个版本：
+
+| 字段 | 用途 | 处理 |
+|---|---|---|
+| `bundleTextFull` | L1 regex | **永不截断**，本地扫描零成本 |
+| `bundleChunks` | L2 LLM | 按文件边界切，单 chunk ≤ 80K 字符；超大单文件 fallback 按字符硬切 |
+
+L2 多 chunk 时，ROBUSTNESS / SECURITY prompt 各 chunk 独立调用，结果合并：
+
+- `dimensionScores`：取所有 chunk 的最低分（最坏命中）
+- `issues`：按 `(ruleId, hash6(evidence))` 去重
+- `comment`：拼接 `[chunk 1] ... [chunk 2] ...`
+
+---
+
+## Generator 版本与数据迁移
+
+`Evaluation.generator` 字段是 24h skip + "重扫触发"的主键：
+
+| Generator | 时期 | 含义 |
+|---|---|---|
+| `static-evaluator@0.1` | 旧 | L1 only（仅 L1 linter，不跑 LLM）|
+| `static-evaluator@0.1+llm` | 旧 | L1 + L2（5 维 + 脚本质量）|
+| `static-evaluator@0.2` | **当前** | L1 only（新维度划分）|
+| `static-evaluator@0.2+llm` | **当前** | L1 + L2（4 维 META + 工程健壮性 + 安全风险性，3 段并发）|
+
+升 generator 版本号会让所有历史 skill 在下次 auto-upload 时自动重扫（24h skip 因 generator 不同而失效）。
+
+**旧数据兼容策略**（硬切换）：
+
+- 旧 generator `@0.1+llm` 的 Evaluation 行保留在 DB，但前端不再展示
+- 旧 SkillIssue 的 `dimension='role'` / `'content'` / `'运维可靠性'` / `'脚本及参考文档质量'` 都不再在 `STATIC_EVAL_STANDARDS` 的 dimensionAliases 里，归"其它静态扫描问题"分区
+
+---
+
+## 触发时机
+
+| 触发 | L1 | L2 | 24h skip |
+|---|---|---|---|
+| skill 上传后（auto-upload）| ✅ | ❌（默认不跑）| ✅ 同 contentHash + 同 generator 24h 内 skip |
+| UI "重新分析" 按钮（manual）| ✅ | ✅ | ❌ 永远跑 |
+| skill-opt 应用新草稿后 | ✅ | ✅ | ❌ |
+
+---
+
+## 下一步
+
+- 维度评分 UI：参考 `EvaluationContent.tsx` 的雷达图实现
+- 数据模型：参考 [数据模型](/developer-guide/architecture/data-model)（Evaluation / SkillIssue 表）
+- 设计沿革：参考 commit 历史 `feat(skill-eval): 引入"安全风险性"维度`
+- 上游灵感：参考 [snyk/agent-scan issue-codes](https://github.com/snyk/agent-scan/blob/main/docs/issue-codes.md)
