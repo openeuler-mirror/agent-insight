@@ -1519,6 +1519,8 @@ async function startSingleEvaluation(
         ...(getConfiguredDatasetIds(config).length > 0 ? { datasetIds: getConfiguredDatasetIds(config) } : {}),
         pairs: [pair],
         ...(grayscaleBinding ? { grayscaleBinding } : {}),
+        // 让评测批次名与 A/B 任务名一致: 建批次时后端用它当批次标题(append 到已有批次时后端忽略)。
+        ...(config.evaluationBatchTitle ? { taskTitle: config.evaluationBatchTitle } : {}),
     };
     if (config.evaluationBatchId && options.appendToBatch !== false) {
         body.evaluatorRunId = config.evaluationBatchId;
@@ -2027,6 +2029,8 @@ async function runGrayscaleTask(args: {
         evaluatorId: evaluatorId || task.configJson.evaluatorId,
         evaluators: normalizeAbEvaluators(args.evaluatorIds || task.configJson.evaluators, evaluatorId || task.configJson.evaluatorId),
         agentMaxConcurrency: args.agentMaxConcurrency || task.configJson.agentMaxConcurrency,
+        // 评测批次标题默认用 A/B 任务名, 让「评测结果」里的批次跟 A/B 任务同名、好对应。
+        evaluationBatchTitle: task.configJson.evaluationBatchTitle || task.taskName,
     };
     const configuredDatasetIds = getConfiguredDatasetIds(config);
     if (configuredDatasetIds.length === 0) throw new Error('dataset is required');
@@ -2170,6 +2174,8 @@ async function evaluateExistingTask(args: { taskId: string; user: string; origin
         skillId: task.skillId,
         evaluatorId: args.evaluatorId || task.configJson.evaluatorId,
         evaluators: normalizeAbEvaluators(args.evaluatorIds || task.configJson.evaluators, args.evaluatorId || task.configJson.evaluatorId),
+        // 评测批次标题默认用 A/B 任务名(行级重评等也走同名批次)。
+        evaluationBatchTitle: task.configJson.evaluationBatchTitle || task.taskName,
     };
     const states = task.caseStatesJson || {};
     const caseIds = args.caseIds.length > 0 ? args.caseIds : Object.keys(states);
