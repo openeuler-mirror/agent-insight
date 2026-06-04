@@ -133,7 +133,7 @@ interface StaticSummary {
         // evaluation-summary API 返回的就是整段 parsed JSON：{ scores, comments }
         l2Scores?: {
             scores?: Record<string, number>;
-            comments?: { meta?: string; code?: string };
+            comments?: { meta?: string; robustness?: string; security?: string; code?: string };
         } | null;
     };
     history: Array<{

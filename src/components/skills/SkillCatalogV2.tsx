@@ -89,7 +89,7 @@ interface EvalSummary {
         severityHistogram: { high: number; medium: number; low: number };
         l2Scores?: {
             scores?: Record<string, number>;
-            comments?: { meta?: string; code?: string };
+            comments?: { meta?: string; robustness?: string; security?: string; code?: string };
         } | null;
     };
     history: Array<{ evaluationId: string; ranAt: string; status: string; issuesCount: number }>;
