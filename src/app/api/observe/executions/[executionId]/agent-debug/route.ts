@@ -67,9 +67,12 @@ export async function POST(
   });
 
   try {
-    const report = await runAgentDebugDiagnosis({ execution, interactions, user, skillsAnalysis: savedSkillsAnalysis });
-    const row = await markAgentDebugReportDone({ executionId: execution.id, report });
-    return NextResponse.json({ report, row: summarizeRow(row), cached: false });
+    const report = await runAgentDebugDiagnosis({ execution, interactions, user });
+    const reportWithSkillsAnalysis = savedSkillsAnalysis
+      ? { ...report, skillsAnalysis: savedSkillsAnalysis }
+      : report;
+    const row = await markAgentDebugReportDone({ executionId: execution.id, report: reportWithSkillsAnalysis });
+    return NextResponse.json({ report: reportWithSkillsAnalysis, row: summarizeRow(row), cached: false });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const row = await markAgentDebugReportFailed({ executionId: execution.id, errorMessage: message });

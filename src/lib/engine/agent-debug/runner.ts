@@ -19,7 +19,6 @@ import type {
   AgentDebugReportPayload,
   AgentDebugRootCause,
   AgentDebugSeverity,
-  AgentDebugSkillsAnalysis,
   AgentDebugStepRecord,
   AgentDebugTriage,
   DebugTurn,
@@ -31,7 +30,6 @@ const AGENT_DEBUG_SKILL_NAME = 'agent-debug-diagnosis';
 const FAULT_DIAGNOSIS_AGENT_NAME = 'fault-diagnosis-agent';
 const AGENT_DEBUG_STATIC_REPORT_REL_PATH = '.agent-insight/agent-debug-static.json';
 const AGENT_DEBUG_FINAL_REPORT_REL_PATH = '.agent-insight/agent-debug-final.json';
-const AGENT_DEBUG_SKILLS_ANALYSIS_REL_PATH = '.agent-insight/agent-debug-skills-analysis.json';
 
 interface ExecutionLike {
   id?: string;
@@ -45,7 +43,6 @@ export async function runAgentDebugDiagnosis(args: {
   execution: ExecutionLike;
   interactions: unknown[];
   user: string;
-  skillsAnalysis?: AgentDebugSkillsAnalysis | null;
 }): Promise<AgentDebugReportPayload> {
   const startedAt = Date.now();
   const executionId = String(args.execution.id || args.execution.taskId || '');
@@ -69,7 +66,6 @@ export async function runAgentDebugDiagnosis(args: {
       phase1Grid: [],
       stepRecords: [],
       candidateWindows,
-      ...(args.skillsAnalysis ? { skillsAnalysis: args.skillsAnalysis } : {}),
       modelLabel: FAULT_DIAGNOSIS_AGENT_NAME,
       llmPowered: true,
       stats: {
@@ -86,11 +82,6 @@ export async function runAgentDebugDiagnosis(args: {
   const workspaceTag = `agent-debug-${executionId.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 80)}`;
   const workspaceDir = ensureSessionWorkspace(args.user, workspaceTag);
   const traceBundle = ensureTraceBundle({ workspaceDir, executionId, interactions });
-  const skillsAnalysisRelPath = writeSkillsAnalysisContext({
-    workspaceDir,
-    interactionHash,
-    skillsAnalysis: args.skillsAnalysis,
-  });
   const mounted = mountFileBasedSkillResources(AGENT_DEBUG_SKILL_NAME, workspaceDir);
   const skillPrompt = loadFileBasedSkillPrompt(AGENT_DEBUG_SKILL_NAME);
   const system = buildSystemPrompt(skillPrompt, mounted.mountPoint ? `./.${AGENT_DEBUG_SKILL_NAME}/` : null);
@@ -100,7 +91,6 @@ export async function runAgentDebugDiagnosis(args: {
       executionId,
       turns,
       traceBundle,
-      skillsAnalysisRelPath,
     });
 
   const result = await runGeneralAgent({
@@ -111,7 +101,6 @@ export async function runAgentDebugDiagnosis(args: {
       turns,
       traceBundle,
       inputRelPath,
-      skillsAnalysisRelPath,
       skillMountPath: mounted.mountPoint ? `./.${AGENT_DEBUG_SKILL_NAME}` : null,
     }),
     system,
@@ -151,7 +140,6 @@ export async function runAgentDebugDiagnosis(args: {
     phase1Grid,
     stepRecords,
     candidateWindows,
-    ...(args.skillsAnalysis ? { skillsAnalysis: args.skillsAnalysis } : {}),
     modelLabel: `${FAULT_DIAGNOSIS_AGENT_NAME} + ${AGENT_DEBUG_SKILL_NAME}`,
     llmPowered: true,
     stats: {
@@ -241,7 +229,6 @@ function buildAgentQuery(args: {
   turns: DebugTurn[];
   traceBundle: ReturnType<typeof ensureTraceBundle>;
   inputRelPath: string;
-  skillsAnalysisRelPath: string | null;
   skillMountPath: string | null;
 }): string {
   const executionBrief = {
@@ -265,9 +252,7 @@ function buildAgentQuery(args: {
     '- 不使用候选窗口；必须基于输入文件中的全部 turns 运行拆分、静态检测和 Phase 1 分析。',
     '- 用户界面只展示左侧真实 trace 节点；所有 issue/root/cascade 必须尽量带 anchorId、traceStepIndex、traceNodeLabel。',
     '- 如果归一化 Step 摘要证据不足，可读取 Trace 资料包里的 manifest/index/nodes。',
-    args.skillsAnalysisRelPath
-      ? `- Saved Skills analysis context is available at ${args.skillsAnalysisRelPath}. Read it when key-action coverage, Skill process constraints, or related user questions are relevant.`
-      : '- No saved Skills analysis context is available. Do not invent key-action coverage results.',
+    '- AgentDebug 主诊断必须只基于 trace、静态检测和 AgentDebug 诊断规程；不要读取或推断 Skills 关键动作分析结果。',
     '',
     '## 执行记录',
     compactJson(executionBrief, 8000),
@@ -280,7 +265,6 @@ function buildAgentQuery(args: {
       `AgentDebug 输入文件：${args.inputRelPath}`,
       `静态分析输出文件：${AGENT_DEBUG_STATIC_REPORT_REL_PATH}`,
       `最终报告临时文件：${AGENT_DEBUG_FINAL_REPORT_REL_PATH}`,
-      `Skills analysis context: ${args.skillsAnalysisRelPath || 'none'}`,
       `Skill 挂载目录：${args.skillMountPath || `./.${AGENT_DEBUG_SKILL_NAME}`}`,
       `资料包目录：${args.traceBundle.bundleRelDir}/`,
       `manifest：${args.traceBundle.manifestRelPath}`,
@@ -298,7 +282,6 @@ function writeAgentDebugInput(args: {
   executionId: string;
   turns: DebugTurn[];
   traceBundle: ReturnType<typeof ensureTraceBundle>;
-  skillsAnalysisRelPath: string | null;
 }): string {
   const relPath = path.join('.agent-insight', 'agent-debug-input.json');
   const filePath = path.join(args.workspaceDir, relPath);
@@ -321,38 +304,6 @@ function writeAgentDebugInput(args: {
       artifactCount: args.traceBundle.artifactCount,
       reused: args.traceBundle.reused,
     },
-    skillsAnalysisContext: args.skillsAnalysisRelPath
-      ? {
-        relPath: args.skillsAnalysisRelPath,
-      }
-      : null,
-  };
-  fs.writeFileSync(filePath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
-  return relPath.split(path.sep).join('/');
-}
-
-function writeSkillsAnalysisContext(args: {
-  workspaceDir: string;
-  interactionHash: string;
-  skillsAnalysis?: AgentDebugSkillsAnalysis | null;
-}): string | null {
-  const analysis = args.skillsAnalysis;
-  if (!analysis || analysis.interactionHash !== args.interactionHash) return null;
-  const relPath = AGENT_DEBUG_SKILLS_ANALYSIS_REL_PATH;
-  const filePath = path.join(args.workspaceDir, relPath);
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const payload = {
-    schemaVersion: 1,
-    status: analysis.status,
-    source: analysis.source,
-    generatedAt: analysis.generatedAt,
-    updatedAt: analysis.updatedAt,
-    reasonText: analysis.reasonText,
-    trajectoryScore: analysis.trajectoryScore,
-    dimensionScores: analysis.dimensionScores,
-    errorMessage: analysis.errorMessage,
-    keyActionCount: analysis.keyActionResults?.length || 0,
-    keyActionResults: analysis.keyActionResults || [],
   };
   fs.writeFileSync(filePath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
   return relPath.split(path.sep).join('/');

@@ -156,7 +156,39 @@ function summarizeAgentDebugReport(report: AgentDebugReportPayload, hashState: s
         }
       : null,
     detectedCells,
+    skillsAnalysis: summarizeSkillsAnalysisForFollowUp(report),
     stats: report.stats,
+  };
+}
+
+function summarizeSkillsAnalysisForFollowUp(report: AgentDebugReportPayload) {
+  const analysis = report.skillsAnalysis;
+  if (!analysis) {
+    return { available: false };
+  }
+  const keyActionResults = Array.isArray(analysis.keyActionResults) ? analysis.keyActionResults : [];
+  const coverageCounts = keyActionResults.reduce<Record<string, number>>((acc, item) => {
+    const coverage = item.coverage || 'unknown';
+    acc[coverage] = (acc[coverage] || 0) + 1;
+    return acc;
+  }, {});
+  return {
+    available: true,
+    status: analysis.status,
+    generatedAt: analysis.generatedAt,
+    updatedAt: analysis.updatedAt,
+    errorMessage: analysis.errorMessage || null,
+    reasonText: compactText(analysis.reasonText || '', 3000),
+    coverageCounts,
+    keyActionCount: keyActionResults.length,
+    keyActions: keyActionResults.slice(0, 20).map((item) => ({
+      actionId: item.actionId,
+      actionContent: compactText(item.actionContent, 500),
+      coverage: item.coverage,
+      severity: item.severity,
+      traceComparisonAnalysis: compactText(item.traceComparisonAnalysis, 700),
+      skillImprovementSuggestion: compactText(item.skillImprovementSuggestion, 500),
+    })),
   };
 }
 

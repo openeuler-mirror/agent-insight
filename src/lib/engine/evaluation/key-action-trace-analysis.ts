@@ -272,7 +272,7 @@ export async function buildSkillKeyActionComparison(
 
 export function skillKeyActionComparisonMessage(comparison: SkillKeyActionComparisonResult): string {
   if (comparison.status === 'ok') return '';
-  if (comparison.status === 'missing-skill') return `未找到 Skill：${comparison.missingSkills?.join(', ') || 'unknown'}`;
+  if (comparison.status === 'missing-skill') return `Skills Hub 中未管理该 Skill：${comparison.missingSkills?.join(', ') || 'unknown'}，无法读取关键动作定义。`;
   if (comparison.status === 'missing-parsed-flow') return `Skill 流程尚未解析或解析失败：${comparison.missingSkills?.join(', ') || 'unknown'}`;
   if (comparison.status === 'dynamic-analysis-failed') return '无法提取 trace 实际执行步骤';
   if (comparison.status === 'no-extracted-steps') return 'trace 中没有可用于关键动作分析的实际步骤';

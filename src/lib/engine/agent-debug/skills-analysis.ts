@@ -60,19 +60,12 @@ export async function runAgentDebugSkillsAnalysis(args: {
     interactionHash: args.interactionHash,
     errorMessage: null,
     reasonText: out.reasonText,
-    trajectoryScore: out.trajectoryScore,
-    rawWeightedScore: out.rawWeightedScore ?? null,
-    dimensionScores: out.dimensionScores,
-    cap: out.cap,
     skillKeyActionComparison: {
       status: comparison.status,
       referenceKeyActionCount: comparison.referenceKeyActions.length,
       actualExtractedStepCount: comparison.actualExtractedSteps.length,
-      referenceKeyActionsText: truncate(comparison.referenceKeyActionsText, 5000),
-      actualExtractedStepsText: truncate(comparison.actualExtractedStepsText, 5000),
     },
     keyActionResults: (out.keyActionResults || []).map(normalizeKeyActionResult),
-    evaluatorSessionId: stringValue(out.rawAnalysis?.evaluatorSessionId) || undefined,
   };
 }
 
@@ -113,21 +106,7 @@ function normalizeKeyActionResult(item: AgentDebugSkillsKeyActionResult): AgentD
     actionContent: String(item.actionContent || '').trim(),
     coverage: item.coverage,
     severity: item.severity,
-    matchedTraceSteps: Array.isArray(item.matchedTraceSteps) ? item.matchedTraceSteps : [],
     traceComparisonAnalysis: String(item.traceComparisonAnalysis || '').trim(),
-    hasSkillImprovement: item.hasSkillImprovement === true,
     skillImprovementSuggestion: String(item.skillImprovementSuggestion || '').trim(),
-    skillIssueSummary: stringValue(item.skillIssueSummary) || undefined,
-    skillIssueEvidence: stringValue(item.skillIssueEvidence) || undefined,
-    confidence: typeof item.confidence === 'number' && Number.isFinite(item.confidence) ? item.confidence : undefined,
   };
 }
-
-function stringValue(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-function truncate(value: string, max: number): string {
-  return value.length > max ? `${value.slice(0, max)}…` : value;
-}
-

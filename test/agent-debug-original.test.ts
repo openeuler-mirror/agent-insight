@@ -212,9 +212,4 @@ test('fault detail exposes AgentDebug diagnosis for every trace', () => {
   assert.doesNotMatch(card, /TraceExplicitErrorCard/);
   assert.doesNotMatch(card, /TraceExplicitErrorsSection/);
   assert.doesNotMatch(card, /原始 Trace 报错/);
-  assert.match(card, /traceExplicitErrors=\{item\.key === 'system' \? traceExplicitErrors : \[\]\}/);
-  assert.match(card, /const visibleIssueCount = visiblePhase1Grid\.length \+ traceExplicitErrors\.length/);
-  assert.match(card, /const totalCount = count \+ orderedTraceErrors\.length/);
-  assert.match(card, /\{totalCount > 0 && !expanded && \(/);
-  assert.match(card, /查看问题详情/);
 });
