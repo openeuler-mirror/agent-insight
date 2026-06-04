@@ -508,7 +508,6 @@ function FatalDiagnosisCard({ report, zh, onNodeRefClick, onRerun }: {
           {zh ? '重新诊断' : 'Rerun'}
         </Button>
       </div>
-      <StatusBadge status="error" label={fatal.errorType} />
       <p className="mt-3 text-[13px] leading-7 text-foreground">{fatal.summary}</p>
       {(fatal.affectedTraceStepIndexes?.length || fatal.affectedSteps.length) > 0 && (
         <div className="mt-3 flex flex-wrap items-center gap-1.5 text-[11px] text-foreground-muted">
@@ -591,10 +590,6 @@ function FindingCard({ finding, index, report, zh, expanded, traceExplicitErrors
           {index + 1}
         </div>
         <div className="min-w-0 flex-1">
-          <div className="mb-1 flex flex-wrap items-center gap-1.5">
-            <StatusBadge status={finding.severity === 'high' ? 'error' : 'warning'} label={formatFindingImpact(finding.impact, zh)} />
-            {rootIssue && <StatusBadge status={finding.severity === 'high' ? 'error' : 'warning'} label={`${formatModule(rootIssue.module, zh)} · ${formatErrorType(rootIssue.errorType, zh)}`} />}
-          </div>
           <div className="text-[13px] font-semibold leading-6 text-foreground">{sanitizeConclusionText(conclusion.conclusion || finding.summary)}</div>
           {rootIssue && (
             <div className="mt-0.5 text-[11px] text-foreground-muted">{formatTraceLocation(rootIssue, zh)}</div>
@@ -605,18 +600,6 @@ function FindingCard({ finding, index, report, zh, expanded, traceExplicitErrors
 
       {expanded && (
         <div className="mt-3 space-y-3 border-t border-border pt-3">
-          <section>
-            <div className="mb-1 text-[10.5px] font-bold tracking-wider text-foreground-muted">{zh ? '结论' : 'Conclusion'}</div>
-            <ExpandableText
-              maxLines={3}
-              className="text-[12.5px] leading-6 text-foreground"
-              expandLabel={zh ? '展开完整结论' : 'Show full conclusion'}
-              collapseLabel={zh ? '收起结论' : 'Collapse conclusion'}
-            >
-              {sanitizeConclusionText(finding.summary)}
-            </ExpandableText>
-          </section>
-
           <section className="rounded-lg border border-border bg-card">
             <button
               type="button"
@@ -758,9 +741,6 @@ function IssueEvidenceItem({ issue, role, zh, onNodeRefClick }: {
     <div className="rounded-md border border-border bg-background-secondary px-2.5 py-2">
       <div className="mb-1 flex flex-wrap items-center gap-1.5">
         <span className="rounded bg-card px-1.5 py-0.5 font-mono text-[10.5px] font-semibold text-primary">{formatTraceLocation(issue, zh)}</span>
-        {role && <StatusBadge status={role === 'root' ? 'error' : 'warning'} label={formatFindingRole(role, zh)} />}
-        <StatusBadge status={issue.severity === 'high' ? 'error' : 'warning'} label={formatErrorType(issue.errorType, zh)} />
-        {issue.resolution && <span className="rounded bg-card px-1.5 py-0.5 text-[10.5px] font-semibold text-foreground-muted">{formatIssueResolution(issue.resolution, zh)}</span>}
       </div>
       <ExpandableText
         maxLines={4}
@@ -799,7 +779,6 @@ function TraceErrorEvidenceItem({ error, zh, onNodeRefClick }: {
     <div className="rounded-md border border-border bg-background-secondary px-2.5 py-2">
       <div className="mb-1 flex flex-wrap items-center gap-1.5">
         <span className="rounded bg-card px-1.5 py-0.5 font-mono text-[10.5px] font-semibold text-primary">{formatTraceLocation(error, zh)}</span>
-        <StatusBadge status="warning" label={error.title} />
       </div>
       {(error.description || error.context) && (
         <ExpandableText
@@ -1104,25 +1083,6 @@ function findingRoleRank(role: string): number {
   if (role === 'contributing') return 2;
   if (role === 'downstream') return 1;
   return 0;
-}
-
-function formatFindingRole(role: string, zh: boolean): string {
-  if (role === 'root') return zh ? '根因节点' : 'Root';
-  if (role === 'downstream') return zh ? '下游影响' : 'Downstream';
-  return zh ? '相关证据' : 'Contributing';
-}
-
-function formatIssueResolution(value: string, zh: boolean): string {
-  if (value === 'recovered') return zh ? '已恢复' : 'Recovered';
-  if (value === 'non_blocking') return zh ? '未影响主流程' : 'Main flow unaffected';
-  return zh ? '未恢复' : 'Unresolved';
-}
-
-function formatFindingImpact(value: string, zh: boolean): string {
-  if (value === 'result_blocking') return zh ? '影响结果' : 'Result blocking';
-  if (value === 'recovered_cost') return zh ? '补救成本' : 'Recovery cost';
-  if (value === 'risk') return zh ? '风险' : 'Risk';
-  return zh ? '质量下降' : 'Quality degrading';
 }
 
 function extractSkillsKeyActions(raw: Record<string, unknown> | null): Array<{ title: string; description: string; status: string; suggestion: string }> {
