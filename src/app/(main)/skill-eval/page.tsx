@@ -682,7 +682,10 @@ function SkillAnalysisPage() {
     const reloadEvalTasks = useCallback(async () => {
         if (!user) { setCaseEvalTasks([]); return; }
         try {
-            const res = await apiFetch(`/api/eval/trajectory/runs?user=${encodeURIComponent(user)}&limit=50`);
+            const includeRun = traceEvaluationBatchId
+                ? `&includeRunId=${encodeURIComponent(traceEvaluationBatchId)}`
+                : '';
+            const res = await apiFetch(`/api/eval/trajectory/runs?user=${encodeURIComponent(user)}&limit=50&latestByCase=1${includeRun}`);
             const data = await res.json();
             if (Array.isArray(data?.runs)) {
                 setCaseEvalTasks(data.runs.map((r: any) => ({
@@ -692,7 +695,7 @@ function SkillAnalysisPage() {
                 })));
             }
         } catch {/* 列表加载失败不阻塞主流程 */}
-    }, [user]);
+    }, [user, traceEvaluationBatchId]);
     useEffect(() => { reloadEvalTasks(); }, [reloadEvalTasks]);
 
     // 持久化「数据集 + 评估器」选择 (按 user+skill+版本), 刷新页面不丢。
@@ -782,19 +785,21 @@ function SkillAnalysisPage() {
     const effectiveTraceEvaluationBatchId = useMemo(() => {
         if (!traceEvaluationBatchId || selectedVersion == null) return traceEvaluationBatchId;
         const associated = caseEvalTasks.find(t => t.runId === traceEvaluationBatchId);
-        if (associated && typeof associated.skillVersion === 'number' && associated.skillVersion !== selectedVersion) return '';
+        if (associated && (associated.traceCount || 0) > 0) {
+            if (associated.skillName !== selectedSkill?.name || associated.skillVersion !== selectedVersion) return '';
+        }
         return traceEvaluationBatchId;
-    }, [traceEvaluationBatchId, caseEvalTasks, selectedVersion]);
+    }, [traceEvaluationBatchId, caseEvalTasks, selectedSkill?.name, selectedVersion]);
 
-    // 历史评测任务按当前 skill + 版本过滤：任务的 skill/版本来自其 trace 关联 execution（runs 接口聚合主导值）。
-    // 当前有效关联的任务始终保留；选「全部版本」(selectedVersion==null) 时只按 skill 名筛；任务版本解析不到时不因版本误杀。
+    // 历史评测任务按当前 skill + 版本过滤：空任务可作为当前版本的新容器；
+    // 已有 trace 的任务必须严格匹配当前 skill/version，避免把旧上下文继续追加进来。
     const caseEvalTasksForSkill = useMemo(() => {
         const skillName = selectedSkill?.name;
         if (!skillName) return caseEvalTasks;
         return caseEvalTasks.filter(t =>
             t.runId === effectiveTraceEvaluationBatchId
             || (t.skillName === skillName
-                && (selectedVersion == null || t.skillVersion == null || t.skillVersion === selectedVersion)),
+                && (selectedVersion == null || (t.traceCount || 0) === 0 || t.skillVersion === selectedVersion)),
         );
     }, [caseEvalTasks, selectedSkill?.name, selectedVersion, effectiveTraceEvaluationBatchId]);
 
@@ -1143,6 +1148,12 @@ function SkillAnalysisPage() {
             } catch {/* ignore */}
         }
     }, [traceEvalBatchStorageKey]);
+
+    useEffect(() => {
+        if (traceEvaluationBatchId || caseEvalTasksForSkill.length === 0) return;
+        const latest = caseEvalTasksForSkill[0];
+        handleSelectTraceEvalBatch({ runId: latest.runId, taskTitle: latest.taskTitle });
+    }, [caseEvalTasksForSkill, handleSelectTraceEvalBatch, traceEvaluationBatchId]);
 
     const runBatchTraceAnalysis = useCallback(async (taskIds: string[]): Promise<{
         resultErrors: string[];                                    // 结果评测整体失败（一次入队全失败）
@@ -3053,6 +3064,7 @@ function TraceDeviationPanel({
     const [caseResultOpen, setCaseResultOpen] = useState(true);
     // 拉当前评测任务的结果, 给 ② 表每行补"评估 Trace / datasetId"(displayedTraces 里没有)。5s 轮询接异步落库。
     const traceEvalResultsMap = useBatchEvalResults(user, traceEvaluationBatchId, 5000);
+    const [datasetExecutionRecords, setDatasetExecutionRecords] = useState<EvalRecordRow[]>([]);
 
     // 已触发评测的 trace id → 触发时间戳。runBothAnalyses 调用时填，让 ② 执行块的
     // 列表能区分"正在评测中"（已触发但分数还没回来）vs"已评测"（双分都就绪）。
@@ -3123,6 +3135,16 @@ function TraceDeviationPanel({
     // 即使某条后端没产出结果行(未匹配 case / 未引用 skill 等)，也留在 ② 列表里标"未产出"，
     // 不再静默消失。skill/version 切换时 panel remount 会随 key 一起重置。
     const [submittedTaskIds, setSubmittedTaskIds] = useState<Set<string>>(new Set());
+    const [transientEvalRunId, setTransientEvalRunId] = useState(traceEvaluationBatchId || '');
+    useEffect(() => {
+        setDatasetExecutionRecords([]);
+        setTriggeredTaskIds(new Map());
+        setFailedTaskIds(new Map());
+        setSubmittedTaskIds(new Set());
+        setEvaluatedTaskIds(new Set());
+        setTransientEvalRunId(traceEvaluationBatchId || '');
+    }, [traceEvaluationBatchId]);
+    const transientStateMatchesRun = transientEvalRunId === (traceEvaluationBatchId || '');
     // 用例来源模式：'trace' 用已有 Trace 评测 / 'dataset' 用数据集发起评测（v1 走跳转，phase 2 集成）
     const [caseSourceMode, setCaseSourceMode] = useState<'trace' | 'dataset'>('trace');
     const [traceListCollapsed, setTraceListCollapsed] = useState(false);
@@ -3251,7 +3273,10 @@ function TraceDeviationPanel({
         let cancelled = false;
         (async () => {
             try {
-                const res = await apiFetch(`/api/eval/trajectory/results?user=${encodeURIComponent(user)}&limit=200`);
+                const runScope = traceEvaluationBatchId
+                    ? `&runId=${encodeURIComponent(traceEvaluationBatchId)}&latestByCase=1`
+                    : '';
+                const res = await apiFetch(`/api/eval/trajectory/results?user=${encodeURIComponent(user)}${runScope}&limit=500`);
                 if (!res.ok) return;
                 const data = await res.json();
                 type EvalRow = {
@@ -3350,7 +3375,7 @@ function TraceDeviationPanel({
         })();
         return () => { cancelled = true; };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [user, traces.length]);
+    }, [user, traces.length, traceEvaluationBatchId]);
 
     const scheduleTrajectoryPoll = useCallback(function scheduleNextTrajectoryPoll() {
         if (trajEvalPollRef.current) clearTimeout(trajEvalPollRef.current);
@@ -3600,8 +3625,8 @@ function TraceDeviationPanel({
         // 3. done: 双分都有 (完整成功)
         // 4. partial: 只有一边分数
         // 5. idle: 完全没数据
-        if (s.isEvaluating || triggeredTaskIds.has(s.id)) return 'pending';
-        if (s.lastEvalStatus === 'failed' || failedTaskIds.has(s.id)) return 'failed';
+        if (s.isEvaluating || (transientStateMatchesRun && triggeredTaskIds.has(s.id))) return 'pending';
+        if (s.lastEvalStatus === 'failed' || (transientStateMatchesRun && failedTaskIds.has(s.id))) return 'failed';
         if (s.resultScore != null && s.trajScore != null) return 'done';
         if (s.resultScore != null || s.trajScore != null) return 'partial';
         return 'idle';
@@ -3612,7 +3637,15 @@ function TraceDeviationPanel({
     const getDisplayedTraceStatus = (s: ScoredTrace): EvalStatus => {
         if (!traceEvaluationBatchId) return getTraceEvalStatus(s);
         const meta = traceEvalResultsMap.get(s.id);
-        return getTraceEvalStatus({ ...s, resultScore: meta?.resultScore ?? null, trajScore: meta?.trajScore ?? null });
+        if (!meta) return getTraceEvalStatus(s);
+        if (meta.status === 'failed') return 'failed';
+        if (meta.status === 'pending' || meta.status === 'running') return 'pending';
+        if (meta.status === 'done') {
+            if (meta.resultScore != null && meta.trajScore != null) return 'done';
+            if (meta.resultScore != null || meta.trajScore != null) return 'partial';
+            return 'failed';
+        }
+        return getTraceEvalStatus({ ...s, resultScore: meta.resultScore ?? null, trajScore: meta.trajScore ?? null });
     };
     // ② 评测执行 列表口径：
     //   - 关联了「评测任务」时：只列该任务(evaluatorRunId)的记录(traceEvalResultsMap) + 本次会话刚触发/失败的，
@@ -3625,7 +3658,12 @@ function TraceDeviationPanel({
         if (traceEvaluationBatchId) {
             // submittedTaskIds 兜底：本次提交过的 trace 即使后端没产出结果行也保留在列表里，
             // 由下方 records 映射标成"未产出/失败"，不再静默消失。
-            return traceEvalResultsMap.has(s.id) || triggeredTaskIds.has(s.id) || failedTaskIds.has(s.id) || submittedTaskIds.has(s.id);
+            return traceEvalResultsMap.has(s.id)
+                || (transientStateMatchesRun && (
+                    triggeredTaskIds.has(s.id)
+                    || failedTaskIds.has(s.id)
+                    || submittedTaskIds.has(s.id)
+                ));
         }
         return getTraceEvalStatus(s) !== 'idle' || evaluatedTaskIds.has(s.id);
     });
@@ -3655,6 +3693,98 @@ function TraceDeviationPanel({
         : avgOverall >= 80 ? 'good' : avgOverall >= 60 ? 'warn' : 'bad';
     const passCount = validResultPairs.filter(p => (p.resultScore + p.trajScore) / 2 >= 60).length;
     const passRatePct = evalDoneCount === 0 ? 0 : Math.round((passCount / evalDoneCount) * 100);
+
+    const effectiveDatasetExecutionRecords = datasetExecutionRecords
+        .filter(record =>
+            record.evaluatorRunId === traceEvaluationBatchId
+            && (!record.executionTraceId || !deletedTaskIds.has(record.executionTraceId)),
+        )
+        .map(record => record.executionTraceId
+            && !record.resultId
+            && transientStateMatchesRun
+            && triggeredTaskIds.has(record.executionTraceId)
+            ? {
+                ...record,
+                status: 'evaluating',
+                resultId: undefined,
+                evaluationTraceId: undefined,
+                resultEvalTraceId: undefined,
+                trajEvalTraceId: undefined,
+                resultScore: null,
+                trajScore: null,
+            }
+            : record);
+    const datasetCaseIds = new Set(effectiveDatasetExecutionRecords.map(record => record.caseId).filter(Boolean));
+    const datasetTraceIds = new Set(effectiveDatasetExecutionRecords.map(record => record.executionTraceId).filter(Boolean));
+    const traceExecutionRecords: EvalRecordRow[] = displayedTraces
+        .filter(s => {
+            const meta = traceEvalResultsMap.get(s.id);
+            return !datasetTraceIds.has(s.id) && (!meta?.caseId || !datasetCaseIds.has(meta.caseId));
+        })
+        .map(s => {
+            const meta = traceEvalResultsMap.get(s.id);
+            const taskScoped = !!traceEvaluationBatchId;
+            const rScore = taskScoped ? (meta?.resultScore ?? null) : s.resultScore;
+            const jScore = taskScoped ? (meta?.trajScore ?? null) : s.trajScore;
+            const st = getDisplayedTraceStatus(s);
+            let compStatus: string = st === 'done' ? 'done' : st === 'failed' ? 'failed' : st === 'partial' ? 'partial' : 'evaluating';
+            let errorMsg = (transientStateMatchesRun ? failedTaskIds.get(s.id) : undefined) || meta?.errorMessage || undefined;
+            if (meta?.status === 'failed' && compStatus !== 'done') compStatus = 'failed';
+            if (st === 'idle'
+                && !meta
+                && transientStateMatchesRun
+                && submittedTaskIds.has(s.id)
+                && !triggeredTaskIds.has(s.id)) {
+                compStatus = 'failed';
+                errorMsg = errorMsg || '未在本次评测任务产出评测结果（可能该 trace 未匹配到 case 或未引用当前 skill）';
+            }
+            return {
+                id: s.id,
+                caseId: meta?.caseId,
+                caseLabel: s.query || s.id.slice(0, 12),
+                caseTitle: s.query || s.id,
+                executionTraceId: s.id,
+                evaluationTraceId: meta?.evaluationTraceId,
+                resultEvalTraceId: meta?.resultEvalTraceId,
+                trajEvalTraceId: meta?.trajEvalTraceId,
+                datasetId: meta?.datasetId,
+                evaluatorRunId: traceEvaluationBatchId || undefined,
+                resultId: meta?.resultId,
+                status: compStatus,
+                resultScore: rScore,
+                trajScore: jScore,
+                errorMsg,
+            };
+        });
+    const representedTraceIds = new Set([
+        ...effectiveDatasetExecutionRecords.map(record => record.executionTraceId).filter(Boolean),
+        ...traceExecutionRecords.map(record => record.executionTraceId).filter(Boolean),
+    ]);
+    const resultOnlyExecutionRecords: EvalRecordRow[] = Array.from(traceEvalResultsMap.values())
+        .filter(meta =>
+            meta.taskId
+            && !deletedTaskIds.has(meta.taskId)
+            && !representedTraceIds.has(meta.taskId)
+            && (!meta.caseId || !datasetCaseIds.has(meta.caseId)),
+        )
+        .map(meta => ({
+            id: meta.taskId!,
+            caseId: meta.caseId,
+            caseLabel: meta.caseId || meta.taskId!,
+            caseTitle: meta.caseId || meta.taskId!,
+            executionTraceId: meta.taskId,
+            evaluationTraceId: meta.evaluationTraceId,
+            resultEvalTraceId: meta.resultEvalTraceId,
+            trajEvalTraceId: meta.trajEvalTraceId,
+            evaluatorRunId: traceEvaluationBatchId || undefined,
+            resultId: meta.resultId,
+            datasetId: meta.datasetId,
+            status: meta.status === 'done' ? 'done' : meta.status === 'failed' ? 'failed' : 'evaluating',
+            resultScore: meta.resultScore ?? null,
+            trajScore: meta.trajScore ?? null,
+            errorMsg: meta.errorMessage,
+        }));
+    const executionRecords = [...effectiveDatasetExecutionRecords, ...traceExecutionRecords, ...resultOnlyExecutionRecords];
 
     // 为 dual-tab 各自生成 FindingGroup（未通过 / 通过 / 待评测），每条 IssueCard 的 dimension
     // 字段用 traceId 编码——FindingsGrouped 当前没暴露 onClick，所以"点 case → 切换 selectedTrace"
@@ -3980,6 +4110,8 @@ function TraceDeviationPanel({
                         controlledEvalBatchId={traceEvaluationBatchId}
                         controlledEvalBatchTitle={traceEvaluationBatchTitle}
                         controlledSkillId={skill?.id}
+                        controlledVersionId={skill?.versions?.find(item => item.version === version)?.id || ''}
+                        onExecutionRecordsChange={setDatasetExecutionRecords}
                     />
                 </div>
             )}
@@ -4008,16 +4140,21 @@ function TraceDeviationPanel({
                             之前 refresh 后 ② 折叠用户完全感知不到后台 in-flight 评测 / 静默失败,
                             以为评测丢了。 */}
                         {(() => {
-                            const pendingCount = displayedTraces.filter(s => getDisplayedTraceStatus(s) === 'pending').length;
+                            const pendingCount = executionRecords.filter(record =>
+                                record.status === 'pending'
+                                || record.status === 'executing'
+                                || record.status === 'executed'
+                                || record.status === 'evaluating',
+                            ).length;
                             return pendingCount > 0 ? (
                                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: 'var(--ev-info)', fontWeight: 600 }}>
                                     · <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: 'currentColor', animation: 'pulse 1.5s ease-in-out infinite' }} />
-                                    评测中 <b>{pendingCount}</b> 条
+                                    进行中 <b>{pendingCount}</b> 条
                                 </span>
                             ) : null;
                         })()}
                         {(() => {
-                            const partialCount = displayedTraces.filter(s => getDisplayedTraceStatus(s) === 'partial').length;
+                            const partialCount = executionRecords.filter(record => record.status === 'partial').length;
                             return partialCount > 0 ? (
                                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: 'var(--ev-warning)', fontWeight: 600 }} title="只跑成功了一边（result 或 trajectory）。展开 ② 点行查看已有分析。">
                                     · ◐ 部分评测 <b>{partialCount}</b> 条
@@ -4025,7 +4162,7 @@ function TraceDeviationPanel({
                             ) : null;
                         })()}
                         {(() => {
-                            const failedCount = displayedTraces.filter(s => getDisplayedTraceStatus(s) === 'failed').length;
+                            const failedCount = executionRecords.filter(record => record.status === 'failed').length;
                             return failedCount > 0 ? (
                                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: 'var(--ev-error)', fontWeight: 600 }} title="后端 LLM 评测调用挂了——常见原因：API key 失效 / 模型配额不足 / 网络。展开 ② 看每条具体错误。">
                                     · ⚠ 评测失败 <b>{failedCount}</b> 条
@@ -4043,16 +4180,17 @@ function TraceDeviationPanel({
                 <ExecutionRecordsTable
                     emptyHint={'还没触发过评测。在 ① 配置块勾选 trace → 点末尾「开始评测」。'}
                     onRowClick={rec => {
-                        const t = displayedTraces.find(x => x.id === rec.id);
+                        const t = displayedTraces.find(x => x.id === rec.executionTraceId);
                         if (!t) return;
                         const st = getTraceEvalStatus(t);
                         if (st === 'done' || st === 'partial') {
-                            onSelectedTraceChange(rec.id);
+                            onSelectedTraceChange(rec.executionTraceId!);
                             setCaseResultOpen(true);
                         }
                     }}
                     onRetry={async rec => {
-                        const id = rec.id;
+                        const id = rec.executionTraceId;
+                        if (!id) return;
                         // 立刻给反馈：把这条标记为"已触发"——getTraceEvalStatus 读 triggeredTaskIds
                         // 返回 'pending'，行状态徽章随即切到「评测中」(spinner) 且重试按钮置灰，
                         // 不必等后端 is_evaluating 回报或手动刷新。和 ① 配置块「开始评测」同款。
@@ -4078,7 +4216,8 @@ function TraceDeviationPanel({
                         }
                     }}
                     onDelete={async rec => {
-                        const id = rec.id;
+                        const id = rec.executionTraceId;
+                        if (!id) return;
                         if (typeof window !== 'undefined' && !window.confirm('确定从「评测执行」列表删除这条记录吗？\n该 trace 在当前评测任务下的评测结果会被删除（trace 本身保留，可重新评测）。')) return;
                         try {
                             if (user) {
@@ -4102,43 +4241,7 @@ function TraceDeviationPanel({
                             alert('删除失败：' + (e instanceof Error ? e.message : String(e)));
                         }
                     }}
-                    records={displayedTraces.map(s => {
-                        const meta = traceEvalResultsMap.get(s.id);
-                        // 关联了评测任务时，结果分/轨迹分/状态都以「本任务」记录(meta)为准——与上方
-                        // "已评测 X/Y"、③ 总评分同口径。trace 自带的 answer_score / trajectory_score 是
-                        // “最近一次已知分”，可能来自别的评测任务或本任务结果评测失败前的旧值（失败时
-                        // trajectory/run 不回写 answerScore，旧分留存），会与 4/5 计数打架，故有任务时不用它。
-                        const taskScoped = !!traceEvaluationBatchId;
-                        const rScore = taskScoped ? (meta?.resultScore ?? null) : s.resultScore;
-                        const jScore = taskScoped ? (meta?.trajScore ?? null) : s.trajScore;
-                        const st = getDisplayedTraceStatus(s);
-                        let compStatus: string = st === 'done' ? 'done' : st === 'failed' ? 'failed' : st === 'partial' ? 'partial' : 'running';
-                        let errorMsg = failedTaskIds.get(s.id) || undefined;
-                        // 任务里这条结果行本身失败 → 显示失败（否则没分数会停在"评测中"）。
-                        if (meta?.status === 'failed' && compStatus !== 'done') {
-                            compStatus = 'failed';
-                        }
-                        // 提交过、已结束(不在触发中)、任务里既没结果行也没分数 → 标"未产出"，避免静默丢条。
-                        if (st === 'idle' && !meta && submittedTaskIds.has(s.id) && !triggeredTaskIds.has(s.id)) {
-                            compStatus = 'failed';
-                            errorMsg = errorMsg || '未在本次评测任务产出评测结果（可能该 trace 未匹配到 case 或未引用当前 skill）';
-                        }
-                        return {
-                            id: s.id,
-                            caseLabel: s.query || s.id.slice(0, 12),
-                            caseTitle: s.query || s.id,
-                            executionTraceId: s.id,
-                            evaluationTraceId: meta?.evaluationTraceId,
-                            resultEvalTraceId: meta?.resultEvalTraceId,
-                            trajEvalTraceId: meta?.trajEvalTraceId,
-                            datasetId: meta?.datasetId,
-                            evaluatorRunId: traceEvaluationBatchId || undefined,
-                            status: compStatus,
-                            resultScore: rScore,
-                            trajScore: jScore,
-                            errorMsg,
-                        } as EvalRecordRow;
-                    })}
+                    records={executionRecords}
                 />
             </SectionShell>
 

@@ -245,6 +245,61 @@ async function findCaseDatasetId(user: string, datasetIds: string[] | undefined,
     return undefined;
 }
 
+async function resolveBatchSkillContext(user: string, config: BatchEvalConfig): Promise<{
+    skillName: string | undefined;
+    skillVersion: number | undefined;
+}> {
+    if (!config.skillId) return { skillName: undefined, skillVersion: undefined };
+
+    const skill = await (prisma as unknown as { skill: { findFirst: (a: unknown) => Promise<{ name: string } | null> } }).skill.findFirst({
+        where: { id: config.skillId, user },
+    });
+    if (!skill) throw new Error('selected skill not found');
+    if (!config.versionId) throw new Error('selected skill version is required');
+
+    const version = await (prisma as unknown as { skillVersion: { findFirst: (a: unknown) => Promise<{ version: number } | null> } }).skillVersion.findFirst({
+        where: { id: config.versionId, skillId: config.skillId },
+    });
+    if (!version) throw new Error('selected skill version not found');
+    return { skillName: skill.name, skillVersion: version.version };
+}
+
+async function assertEvaluationBatchContext(
+    user: string,
+    evaluatorRunId: string | undefined,
+    skillName: string | undefined,
+    skillVersion: number | undefined,
+) {
+    if (!evaluatorRunId) return;
+    const rows = await prisma.trajectoryEvalResult.findMany({
+        where: { user, evaluatorRunId },
+        select: { taskId: true, executionId: true },
+    }) as Array<{ taskId: string | null; executionId: string | null }>;
+    const executionKeys = Array.from(new Set(
+        rows.flatMap(row => [row.taskId, row.executionId].filter((value): value is string => Boolean(value))),
+    ));
+    if (executionKeys.length === 0) return;
+
+    const executions = await prisma.execution.findMany({
+        where: {
+            OR: [
+                { taskId: { in: executionKeys } },
+                { id: { in: executionKeys } },
+            ],
+        },
+        select: { skill: true, skillVersion: true },
+    }) as Array<{ skill: string | null; skillVersion: number | null }>;
+    const expectedName = skillName || '';
+    const expectedVersion = skillVersion ?? null;
+    const mismatched = executions.some(execution =>
+        String(execution.skill || '').trim() !== expectedName
+        || execution.skillVersion !== expectedVersion,
+    );
+    if (mismatched) {
+        throw new Error('evaluation task belongs to a different skill or version');
+    }
+}
+
 async function startBatchTaskInBackground(origin: string, taskId: string, user: string, caseIds: string[]) {
     // 1. 加载 task
     const task = await (prisma as unknown as { batchEvalTask: { findFirst: (a: unknown) => Promise<BatchEvalTaskRow | null> } }).batchEvalTask.findFirst({
@@ -254,22 +309,9 @@ async function startBatchTaskInBackground(origin: string, taskId: string, user: 
     const config: BatchEvalConfig = JSON.parse(task.configJson || '{}');
     const states: Record<string, BatchCaseState> = JSON.parse(task.caseStatesJson || '{}');
 
-    // 2. 解析 skill (用户可能不绑 skill, 即纯模型基线 -- runGeneralAgent 不传 skill 即可)
-    let skillName: string | undefined;
-    let skillVersion: number | undefined;
-    if (config.skillId) {
-        const skill = await (prisma as unknown as { skill: { findFirst: (a: unknown) => Promise<{ name: string } | null> } }).skill.findFirst({
-            where: { id: config.skillId, user },
-        });
-        skillName = skill?.name;
-        if (config.versionId && skill) {
-            // SkillVersion 表没有 user 字段 (user 通过 skillId 间接归属), 用 skillId 验证关联即可
-            const sv = await (prisma as unknown as { skillVersion: { findFirst: (a: unknown) => Promise<{ version: number } | null> } }).skillVersion.findFirst({
-                where: { id: config.versionId, skillId: config.skillId },
-            });
-            skillVersion = sv?.version;
-        }
-    }
+    // 2. 解析并校验 skill/version。绑定 skill 时不允许回落到 active version。
+    const { skillName, skillVersion } = await resolveBatchSkillContext(user, config);
+    await assertEvaluationBatchContext(user, config.evaluationBatchId, skillName, skillVersion);
 
     // 3. 加载 dataset(支持多选), 合并所有"仍存在"数据集的 case, 并记录每个 case 归属的 datasetId。
     //    旧实现只取 datasetIds[0] 有两个 bug: ①首位数据集被删 → 整批 "dataset not found" 启动失败;
@@ -293,9 +335,10 @@ async function startBatchTaskInBackground(origin: string, taskId: string, user: 
     // 4. 初始化状态 pending, persist
     for (const c of targets) {
         states[c.id] = {
-            ...(states[c.id] || {}),
             status: 'pending',
             input: c.input || '',
+            evaluatorRunId: config.evaluationBatchId,
+            startedAt: Date.now(),
         };
     }
     await persistStates(taskId, user, states);
@@ -481,7 +524,7 @@ async function waitAndApplyBatchEvaluation(
             await persistStates(taskId, user, states);
             return;
         }
-        const res = await fetch(`${origin}/api/eval/trajectory/results?user=${encodeURIComponent(user)}&runId=${encodeURIComponent(evaluatorRunId)}&limit=500`).catch(() => null);
+        const res = await fetch(`${origin}/api/eval/trajectory/results?user=${encodeURIComponent(user)}&runId=${encodeURIComponent(evaluatorRunId)}&latestByCase=1&limit=500`).catch(() => null);
         const data = res ? await res.json().catch(() => ({})) : {};
         const results = Array.isArray((data as { results?: unknown }).results) ? (data as { results: Array<Record<string, unknown>> }).results : [];
         // 找匹配本 case sessionId 的 result (评测里 taskId 字段 = agent sessionId)
@@ -704,32 +747,21 @@ async function retryBatchCase(origin: string, taskId: string, user: string, case
             status: 'evaluating',
             input: baseInput,
             sessionId: existing.sessionId,
+            evaluatorRunId: config.evaluationBatchId,
             startedAt: Date.now(),
         };
     } else {
         states[caseId] = {
             status: 'pending',
             input: baseInput,
+            evaluatorRunId: config.evaluationBatchId,
             startedAt: Date.now(),
         };
     }
     await persistStates(taskId, user, states);
 
-    // 解析 skill (跟 startBatchTaskInBackground 一样)
-    let skillName: string | undefined;
-    let skillVersion: number | undefined;
-    if (config.skillId) {
-        const skill = await (prisma as unknown as { skill: { findFirst: (a: unknown) => Promise<{ name: string } | null> } }).skill.findFirst({
-            where: { id: config.skillId, user },
-        });
-        skillName = skill?.name;
-        if (config.versionId && skill) {
-            const sv = await (prisma as unknown as { skillVersion: { findFirst: (a: unknown) => Promise<{ version: number } | null> } }).skillVersion.findFirst({
-                where: { id: config.versionId, skillId: config.skillId },
-            });
-            skillVersion = sv?.version;
-        }
-    }
+    const { skillName, skillVersion } = await resolveBatchSkillContext(user, config);
+    await assertEvaluationBatchContext(user, config.evaluationBatchId, skillName, skillVersion);
 
     // 一次性 controller, 不进 batchActiveRuns (避免跟主任务 abort 冲突)
     const abortController = new AbortController();
