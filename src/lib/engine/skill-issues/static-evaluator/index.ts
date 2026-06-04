@@ -16,13 +16,69 @@ import { createHash } from 'crypto';
 
 import { prismaRaw } from '@/lib/storage/prisma';
 import type { Severity } from '../prevalence';
-import { lintSkillContent, type LinterDiagnosis } from './linter';
+import { lintSkillContent, lintSecurity, type LinterDiagnosis } from './linter';
 import { loadAssetBundle } from './content-loader';
 import { runLlmStaticEvaluation, type LlmIssueDraft } from './llm-evaluator';
 
-export const STATIC_EVAL_GENERATOR_L1 = 'static-evaluator@0.1';
-export const STATIC_EVAL_GENERATOR_L1_L2 = 'static-evaluator@0.1+llm';
+/**
+ * Generator 版本号是 24h skip 与"重扫触发"的主键。
+ * 2026-06 升级到 @0.2：6 维重组（替换运维可靠性 → 安全风险性；脚本质量 → 工程健壮性）
+ * + L1 命中参与维度计分（L1_floor 与 L2 分数取 min）。
+ * 升版本号会让所有历史 skill 在下一次 auto-upload 时自动重扫。
+ */
+export const STATIC_EVAL_GENERATOR_L1 = 'static-evaluator@0.2';
+export const STATIC_EVAL_GENERATOR_L1_L2 = 'static-evaluator@0.2+llm';
 const SKIP_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * L1 命中转换为维度 floor 分数：
+ *   high 命中   → 2 分（最严重）
+ *   medium 命中 → 3 分
+ *   low 命中    → 4 分
+ *   无命中      → 5 分（不参与合并）
+ * 每个 L1 维度取该维度命中的最低 floor（即最严重 severity）。
+ */
+const SEVERITY_TO_FLOOR: Record<Severity, number> = {
+  high: 2,
+  medium: 3,
+  low: 4,
+};
+
+/** L1 linter 用英文枚举 dimension；这里映射回 L2 / UI 使用的中文维度名。 */
+const L1_DIMENSION_TO_L2_NAME: Record<string, string> = {
+  structure: '结构规范性',
+  security: '安全风险性',
+};
+
+/**
+ * 合并 L1 floor 和 L2 LLM 分数：
+ *  - L1 命中的维度：finalScore = min(L1_floor, L2_score ?? 5)
+ *  - L1 无命中的维度：保留 L2_score（若 L2 没跑则该维度仍为 notEvaluated）
+ *
+ * 这意味着 L2 没跑（用户没配 LLM / auto-upload 默认不跑 L2）时，
+ * 只要 L1 命中了 structure / security 规则，相应维度仍有分。
+ */
+function mergeL1FloorWithL2Scores(
+  diagnoses: LinterDiagnosis[],
+  l2Scores: Record<string, number>,
+): Record<string, number> {
+  const l1Floor: Record<string, number> = {};
+  for (const d of diagnoses) {
+    const dimName = L1_DIMENSION_TO_L2_NAME[d.dimension];
+    if (!dimName) continue;
+    const floor = SEVERITY_TO_FLOOR[d.severity];
+    if (l1Floor[dimName] === undefined || floor < l1Floor[dimName]) {
+      l1Floor[dimName] = floor;
+    }
+  }
+
+  const merged: Record<string, number> = { ...l2Scores };
+  for (const [dim, floor] of Object.entries(l1Floor)) {
+    const l2 = merged[dim];
+    merged[dim] = l2 === undefined ? floor : Math.min(l2, floor);
+  }
+  return merged;
+}
 
 export interface RunArgs {
   skillId: string;
@@ -161,8 +217,16 @@ export async function runStaticEvaluation(args: RunArgs): Promise<RunResult> {
   let llmFailureMessage: string | null = null;
 
   try {
-    // L1 — 永远跑
-    const linterDiagnoses = lintSkillContent(content);
+    // bundle 永远加载：
+    //  - L1 security regex 用 bundleTextFull（不截断、不分批，本地扫描没 token 成本）
+    //  - L2 LLM prompt 用 bundleChunks（按文件边界切分，大 bundle 自动 fan-out）
+    const bundle = loadAssetBundle(skillVersion.assetPath);
+
+    // L1 — 永远跑：structure（formal）+ security（threat regex），扫全量
+    const linterDiagnoses: LinterDiagnosis[] = [
+      ...lintSkillContent(content),
+      ...lintSecurity(content, bundle.bundleTextFull),
+    ];
     for (const d of linterDiagnoses) {
       issuesData.push(diagnosisToSkillIssueData(d, {
         evaluationId: evaluation.id,
@@ -172,22 +236,20 @@ export async function runStaticEvaluation(args: RunArgs): Promise<RunResult> {
       }));
     }
 
-    // L2 — 可选
+    let l2DimensionScores: Record<string, number> = {};
+    let l2Comments: Record<string, string | undefined> = {};
+
+    // L2 — 可选；3 stage 并发（chunking 在 runLlmStaticEvaluation 内部展开）
     if (enableL2) {
-      const bundle = loadAssetBundle(skillVersion.assetPath);
       const llm = await runLlmStaticEvaluation({
         user: args.user,
         skillContent: content,
-        bundleContent: [bundle.references, bundle.scripts].filter(Boolean).join('\n\n'),
+        bundleChunks: bundle.bundleChunks,
       });
 
       if (llm.ok) {
-        if (Object.keys(llm.dimensionScores).length > 0) {
-          l2ScoresJson = JSON.stringify({
-            scores: llm.dimensionScores,
-            comments: llm.overallComments,
-          });
-        }
+        l2DimensionScores = llm.dimensionScores;
+        l2Comments = llm.overallComments;
         for (const i of llm.issues) {
           issuesData.push(llmDraftToSkillIssueData(i, {
             evaluationId: evaluation.id,
@@ -196,9 +258,22 @@ export async function runStaticEvaluation(args: RunArgs): Promise<RunResult> {
             user: args.user,
           }));
         }
+        // 部分 stage 失败仍算 ok，但要把 errorMessage 记录到 evaluation
+        if (llm.errorMessage) {
+          llmFailureMessage = llm.errorMessage;
+        }
       } else {
         llmFailureMessage = llm.errorMessage || 'LLM 评估失败';
       }
+    }
+
+    // 合并 L1 floor 与 L2 LLM 分数。l2ScoresJson 字段名沿用，但语义已是"合并后的维度分数"。
+    const mergedScores = mergeL1FloorWithL2Scores(linterDiagnoses, l2DimensionScores);
+    if (Object.keys(mergedScores).length > 0) {
+      l2ScoresJson = JSON.stringify({
+        scores: mergedScores,
+        comments: l2Comments,
+      });
     }
 
     if (issuesData.length > 0) {
