@@ -3629,6 +3629,12 @@ function TraceDeviationPanel({
         }
         return getTraceEvalStatus(s) !== 'idle' || evaluatedTaskIds.has(s.id);
     });
+    // ② 评测执行 头部「已评测 X/Y」严格对应下面的列表(displayedTraces): 批次里若有 trace 不在
+    // scoredTraces(不属于本 skill/版本、或已从列表移除等), 会被批次全量统计算进去却不进列表 →
+    // 造成"已评测 5/5"而列表只有 4 条。头部改用列表口径, 与 ② 的 评测中/部分/失败 徽章同源。
+    // (③ 总评分仍按批次全量统计, 与 source 无关, 见下方 caseResultPairs。)
+    const listEvalTotalCount = displayedTraces.length;
+    const listEvalDoneCount = displayedTraces.filter(s => getDisplayedTraceStatus(s) === 'done').length;
     // 排除已在「评测执行」里删除的记录(deletedTaskIds)，否则删除后上方"已评测 X/Y · 平均评分"
     // 仍按旧集合统计、不随删除变化。与 displayedTraces 同口径。
     const fullyEvaluated = scoredTraces.filter(s =>
@@ -4000,7 +4006,7 @@ function TraceDeviationPanel({
                 summary={
                     <>
                         <span>已评测</span>
-                        <code>{evalDoneCount} / {evalTotalCount}</code>
+                        <code>{listEvalDoneCount} / {listEvalTotalCount}</code>
                         {avgOverall != null && (
                             <span>· 平均评分 <b style={{ color: overallScoreKlass === 'good' ? 'var(--ev-success)' : overallScoreKlass === 'bad' ? 'var(--ev-error)' : 'var(--ev-warning)' }}>{avgOverall} 分</b></span>
                         )}
