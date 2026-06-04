@@ -12,6 +12,7 @@ import { EvalTaskPicker } from '@/components/eval/EvalTaskPicker';
 import { ExecutionRecordsTable, type EvalRecordRow } from '@/components/eval/ExecutionRecordsTable';
 import { useBatchEvalResults } from '@/components/eval/useBatchEvalResults';
 import type { FindingItem, FindingGroup } from '@/components/evaluation';
+import { isBatchCaseStartable } from '@/lib/eval/batch-case-start';
 import '@/components/evaluation/evaluation-content.css';
 import '../debug.css';
 
@@ -95,13 +96,16 @@ type CaseStatus = 'pending' | 'running' | 'executed' | 'evaluating' | 'pass' | '
 
 interface CaseState {
     status: CaseStatus;
+    input?: string;
     jobId?: string;
     timeCost?: string;
     tokenUsage?: number;
     score?: number;
     output?: string;
+    error?: string;
     sessionId?: string;
     evaluatorRunId?: string;
+    startedAt?: number;
 }
 
 interface BatchEvalTask {
@@ -176,6 +180,7 @@ export function BatchEvaluation({
     controlledSkillId,
     controlledVersionId,
     hideExecAndResult,
+    onExecutionRecordsChange,
 }: {
     newTaskTrigger: number;
     historyPanelTrigger: number;
@@ -196,6 +201,8 @@ export function BatchEvaluation({
     /** 受控模式下隐藏 BE 自带的 ② 评测执行 / ③ 分析结果——由父页(用例分析)统一渲染一份
         (绑定评测任务、与 source 无关)，BE 这里只出 ① 配置(产生 Trace 的入口)。 */
     hideExecAndResult?: boolean;
+    /** 将数据集 case 的实时执行状态同步给父页统一「评测执行」区域。 */
+    onExecutionRecordsChange?: (records: EvalRecordRow[]) => void;
 }) {
     const { locale } = useLocale();
     const { user } = useAuth();
@@ -252,7 +259,7 @@ export function BatchEvaluation({
     const reloadEvalTasks = useCallback(async () => {
         if (!user) { setEvalTasks([]); return; }
         try {
-            const res = await apiFetch(`/api/eval/trajectory/runs?user=${encodeURIComponent(user)}&limit=50`);
+            const res = await apiFetch(`/api/eval/trajectory/runs?user=${encodeURIComponent(user)}&limit=50&latestByCase=1`);
             const data = await res.json();
             if (Array.isArray(data?.runs)) {
                 setEvalTasks(data.runs.map((r: any) => ({
@@ -352,11 +359,26 @@ export function BatchEvaluation({
             .then(r => r.json())
             .then(data => {
                 if (Array.isArray(data) && data.length > 0) {
-                    setTaskHistory(data);
                     const latest = data[0];
-                    setCurrentTask(latest);
                     // Restore persisted config and case states for the most recent task
                     const cfg = latest.configJson || {};
+                    const contextMismatch = controlled
+                        && ((cfg.skillId || '') !== (controlledSkillId || '')
+                            || (cfg.versionId || '') !== (controlledVersionId || ''));
+                    const effectiveLatest = contextMismatch
+                        ? {
+                            ...latest,
+                            configJson: {
+                                ...cfg,
+                                skillId: controlledSkillId || '',
+                                versionId: controlledVersionId || '',
+                            },
+                            caseStatesJson: {},
+                            traceEvalStatesJson: {},
+                        }
+                        : latest;
+                    setTaskHistory([effectiveLatest, ...data.slice(1)]);
+                    setCurrentTask(effectiveLatest);
                     // 受控模式(用例分析统一布局)下, 选择(数据集/评估器/skill/评测任务)由父页统一持有,
                     // 这里不从 task config 回填, 避免和父页 sharedConfigBar 双源冲突。仅恢复执行态(caseStates)。
                     if (!controlled) {
@@ -376,8 +398,20 @@ export function BatchEvaluation({
                         setEvaluationBatchEvaluators(Array.isArray(cfg.evaluationBatchEvaluators) ? cfg.evaluationBatchEvaluators : []);
                     }
                     setTaskDescInput(cfg.taskDescription || '');
-                    setCaseStates(latest.caseStatesJson || {});
-                    setTraceEvalStates(latest.traceEvalStatesJson || {});
+                    setCaseStates(effectiveLatest.caseStatesJson || {});
+                    setTraceEvalStates(effectiveLatest.traceEvalStatesJson || {});
+                    if (contextMismatch) {
+                        apiFetch(`/api/debug/batch-tasks/${latest.id}`, {
+                            method: 'PATCH',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                user,
+                                configJson: effectiveLatest.configJson,
+                                caseStatesJson: {},
+                                traceEvalStatesJson: {},
+                            }),
+                        }).catch(() => {});
+                    }
                 } else if (controlled) {
                     // 受控模式(用例分析统一布局)无历史任务 → 静默 auto-create, 不弹"调试任务"输入条。
                     apiFetch('/api/debug/batch-tasks', {
@@ -397,8 +431,7 @@ export function BatchEvaluation({
                 setTaskNameInput(defaultTaskName());
                 setIsEditingTask(true);
             });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [user, controlled]);
+    }, [user, controlled, controlledSkillId, controlledVersionId]);
 
     const persistTaskUpdate = useCallback(async (
         taskId: string,
@@ -615,6 +648,10 @@ export function BatchEvaluation({
             .then(data => {
                 if (Array.isArray(data)) {
                     setVersions(data);
+                    if (controlled) {
+                        setSelectedVersionId(controlledVersionId || '');
+                        return;
+                    }
                     // If restoring from history, use the saved versionId; otherwise pick current
                     const pending = pendingVersionIdRef.current;
                     if (pending && data.find((v: any) => v.id === pending)) {
@@ -627,7 +664,7 @@ export function BatchEvaluation({
                     }
                 }
             }).catch(() => {});
-    }, [user, selectedSkillId]);
+    }, [user, selectedSkillId, controlled, controlledVersionId]);
 
     // Fetch trace records when in trace mode (only after a skill is selected)
     useEffect(() => {
@@ -749,11 +786,66 @@ export function BatchEvaluation({
             return cases.map((c: any) => ({ ...c, datasetName: ds.name, datasetId: ds.id }));
         });
 
+    const knownCasesById = React.useMemo(() => {
+        const map = new Map<string, { id: string; input?: string; datasetId?: string }>();
+        for (const dataset of datasets) {
+            for (const item of dataset.cases || []) {
+                map.set(String(item.id), { ...item, datasetId: dataset.id });
+            }
+        }
+        return map;
+    }, [datasets]);
+
+    const controlledExecutionRecords = React.useMemo<EvalRecordRow[]>(() => (
+        Object.entries(caseStates)
+            .filter(([, state]) => {
+                if (!evaluationBatchId) return false;
+                if (state.evaluatorRunId === evaluationBatchId) return true;
+                return !!state.sessionId && evalResultsMap.has(state.sessionId);
+            })
+            .map(([caseId, state]) => {
+                const knownCase = knownCasesById.get(caseId);
+                const meta = state.sessionId ? evalResultsMap.get(state.sessionId) : undefined;
+                const matchingResult = meta?.taskId === state.sessionId ? meta : undefined;
+                const status = matchingResult?.status === 'done' ? 'done'
+                    : matchingResult?.status === 'failed' ? 'failed'
+                    : matchingResult?.status === 'pending' || matchingResult?.status === 'running' ? 'evaluating'
+                    : state.status === 'running' ? 'executing'
+                    : state.status === 'executed' ? 'executed'
+                    : state.status === 'evaluating' ? 'evaluating'
+                    : state.status === 'pass' ? 'done'
+                    : state.status === 'fail' ? 'failed'
+                    : 'pending';
+                return {
+                    id: `case:${caseId}`,
+                    caseId,
+                    caseLabel: state.input || knownCase?.input || caseId,
+                    caseTitle: state.input || knownCase?.input || caseId,
+                    executionTraceId: state.sessionId || undefined,
+                    evaluationTraceId: matchingResult?.evaluationTraceId,
+                    resultEvalTraceId: matchingResult?.resultEvalTraceId,
+                    trajEvalTraceId: matchingResult?.trajEvalTraceId,
+                    evaluatorRunId: state.evaluatorRunId || evaluationBatchId || undefined,
+                    resultId: matchingResult?.resultId,
+                    datasetId: knownCase?.datasetId || matchingResult?.datasetId,
+                    status,
+                    resultScore: matchingResult?.resultScore ?? null,
+                    trajScore: matchingResult?.trajScore ?? null,
+                    errorMsg: state.error || state.output || matchingResult?.errorMessage,
+                    actionsDisabled: !state.sessionId,
+                };
+            })
+    ), [caseStates, evaluationBatchId, evalResultsMap, knownCasesById]);
+
+    useEffect(() => {
+        if (controlled) onExecutionRecordsChange?.(controlledExecutionRecords);
+    }, [controlled, controlledExecutionRecords, onExecutionRecordsChange]);
+
     // Filtered cases
     const filteredCases = allCases.filter(c => {
         const state = caseStates[c.id];
         const status = state?.status || 'pending';
-        const matchFilter = filterStatus === 'all'
+        const matchFilter = controlled || filterStatus === 'all'
             || (filterStatus === 'pending' && status === 'pending')
             || (filterStatus === 'executed' && (status === 'executed' || status === 'evaluating'))
             || (filterStatus === 'evaluated' && (status === 'pass' || status === 'fail'))
@@ -1149,15 +1241,14 @@ export function BatchEvaluation({
             alert(locale === 'zh' ? '请先在上方「评测任务」新建或选择一个评测任务' : 'Create/select an eval task first');
             return;
         }
-        // 可启动 = 未跑(无状态/pending) 或 已失败(fail，含「已终止」)——失败的允许重跑。
-        // 后端 startBatchTaskInBackground 会先把选中 case 重置为 pending 再跑，所以重跑 fail 是安全的。
-        // 进行中(running/evaluating/executed)与已通过(pass)不重复启动。
-        const toRun = selectedCaseIds.filter(id => {
-            const s = caseStates[id]?.status;
-            return !s || s === 'pending' || s === 'fail';
-        });
+        if (controlled && selectedSkillId && !selectedVersionId) {
+            alert(locale === 'zh' ? '当前 Skill 版本无效，无法开始评测' : 'The selected Skill version is invalid');
+            return;
+        }
+        // 旧评测任务的 case 状态只用于历史展示，不应阻止当前评测任务重新启动。
+        const toRun = selectedCaseIds.filter(id => isBatchCaseStartable(caseStates[id], evaluationBatchId));
         if (toRun.length === 0) {
-            alert(locale === 'zh' ? '没有待启动的 case (已勾选的都在跑 / 已通过)' : 'No cases to start');
+            alert(locale === 'zh' ? '没有待启动的 case（已勾选的都在执行或评测中）' : 'No cases to start');
             return;
         }
         setBatchStartInFlight(true);
@@ -1854,7 +1945,7 @@ export function BatchEvaluation({
                                 ⏹ {locale === 'zh' ? '终止' : 'Abort'}
                             </button>
                         )}
-                        {sourceMode === 'dataset' && (
+                        {!controlled && sourceMode === 'dataset' && (
                             <div className="filter-group">
                                 <button className={`filter-btn ${filterStatus === 'all' ? 'active' : ''}`} onClick={() => setFilterStatus('all')}>
                                     {locale === 'zh' ? '全部' : 'All'} <span className="filter-count">{allCases.length}</span>
@@ -1894,11 +1985,11 @@ export function BatchEvaluation({
                                 <th style={{ width: 44 }}>#</th>
                                 <th>{locale === 'zh' ? (sourceMode === 'trace' ? '用户输入 / Trace' : '测试用例') : (sourceMode === 'trace' ? 'Input / Trace' : 'Test Case')}</th>
                                 <th style={{ width: 110 }}>{locale === 'zh' ? (sourceMode === 'trace' ? '来源 Skill' : '数据集') : (sourceMode === 'trace' ? 'Skill' : 'Dataset')}</th>
-                                {sourceMode === 'dataset' && <th style={{ width: 100 }}>{locale === 'zh' ? '状态' : 'Status'}</th>}
+                                {!controlled && sourceMode === 'dataset' && <th style={{ width: 100 }}>{locale === 'zh' ? '状态' : 'Status'}</th>}
                                 {/* 评测分数列 (后端 waitAndApplyBatchEvaluation 回写, 0-100 整数) */}
-                                <th style={{ width: 70 }}>{locale === 'zh' ? '分数' : 'Score'}</th>
+                                {!controlled && <th style={{ width: 70 }}>{locale === 'zh' ? '分数' : 'Score'}</th>}
                                 {sourceMode === 'trace' && <th style={{ width: 70 }}>{locale === 'zh' ? '耗时' : 'Time'}</th>}
-                                <th style={{ width: 80 }}>{locale === 'zh' ? 'Trace' : 'Trace'}</th>
+                                {!controlled && <th style={{ width: 80 }}>{locale === 'zh' ? 'Trace' : 'Trace'}</th>}
                             </tr>
                         </thead>
                         <tbody>
@@ -1974,7 +2065,7 @@ export function BatchEvaluation({
                             {/* Dataset mode rows */}
                             {sourceMode === 'dataset' && (filteredCases.length === 0 ? (
                                 <tr>
-                                    <td colSpan={6}>
+                                    <td colSpan={controlled ? 4 : 7}>
                                         <div className="d-empty">
                                             <div className="d-empty-icon">
                                                 <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
@@ -2003,7 +2094,7 @@ export function BatchEvaluation({
                                 const canEvaluate = isExecuted;
 
                                 return (
-                                    <tr key={c.id} className={isFail ? 'row-fail' : ''}>
+                                    <tr key={c.id} className={!controlled && isFail ? 'row-fail' : ''}>
                                         <td style={{ paddingRight: 0 }}>
                                             <label className="row-checkbox">
                                                 <input
@@ -2021,8 +2112,8 @@ export function BatchEvaluation({
                                             </div>
                                             <div className="case-cell-meta">
                                                 {c.isMock ? (locale === 'zh' ? '模拟用例' : 'Mock case') : `${c.datasetName}`}
-                                                {state?.timeCost && ` · ${state.timeCost}`}
-                                                {state?.tokenUsage && ` · ${state.tokenUsage} tok`}
+                                                {!controlled && state?.timeCost && ` · ${state.timeCost}`}
+                                                {!controlled && state?.tokenUsage && ` · ${state.tokenUsage} tok`}
                                             </div>
                                         </td>
                                         <td>
@@ -2030,13 +2121,13 @@ export function BatchEvaluation({
                                                 {c.datasetName?.slice(0, 8) || '-'}
                                             </span>
                                         </td>
-                                        <td>
+                                        {!controlled && <td>
                                             <span className={`row-status ${status}`}>
                                                 {getStatusLabel(isRunning ? 'running' : status)}
                                             </span>
-                                        </td>
+                                        </td>}
                                         {/* 分数列: 后端 waitAndApplyBatchEvaluation 回写; pass 时显示数字, 其它显示 — */}
-                                        <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 600 }}>
+                                        {!controlled && <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 600 }}>
                                             {typeof state?.score === 'number' ? (
                                                 <span style={{
                                                     color: state.score >= 80 ? 'var(--success)'
@@ -2044,12 +2135,12 @@ export function BatchEvaluation({
                                                         : 'var(--danger)',
                                                 }}>{state.score}</span>
                                             ) : <span style={{ color: 'var(--ink-4, #B8B6AE)' }}>—</span>}
-                                        </td>
+                                        </td>}
                                         {/* 「执行」「评测」「⋯」按钮列已下线 —— 配置区只展示静态信息。
                                             行级操作 (重新执行/重新评测/查看评测结果) 后续在 ② 执行块或 /eval 评测执行里完成;
                                             relevant handlers (executeCase / evaluateCase / retryCase) 仍保留代码不删,
                                             供后续 ② 执行块复用。 */}
-                                        <td>
+                                        {!controlled && <td>
                                             {state?.sessionId ? (
                                                 <button
                                                     className="row-more"
@@ -2061,7 +2152,7 @@ export function BatchEvaluation({
                                             ) : (
                                                 <span style={{ color: 'var(--ink-4, #B8B6AE)', fontSize: 11 }}>—</span>
                                             )}
-                                        </td>
+                                        </td>}
                                     </tr>
                                 );
                             }))}
@@ -2076,19 +2167,19 @@ export function BatchEvaluation({
                             <>{locale === 'zh' ? '共' : 'Total'} <b>{traceRecords.length}</b> {locale === 'zh' ? '条执行链路' : 'traces'}</>
                         ) : (
                             <>{locale === 'zh' ? '共' : 'Total'} <b>{allCases.length}</b> {locale === 'zh' ? '条用例' : 'cases'}
-                            {passCount > 0 && (
+                            {!controlled && passCount > 0 && (
                                 <span style={{ marginLeft: 10, color: 'var(--success)', fontWeight: 600 }}>
                                     {locale === 'zh' ? `通过 ${passCount}` : `Passed ${passCount}`}
                                 </span>
                             )}
-                            {failedCount > 0 && (
+                            {!controlled && failedCount > 0 && (
                                 <span style={{ marginLeft: 8, color: 'var(--danger)', fontWeight: 600 }}>
                                     {locale === 'zh' ? `失败 ${failedCount}` : `Failed ${failedCount}`}
                                 </span>
                             )}</>
                         )}
                     </div>
-                    {sourceMode === 'dataset' && (
+                    {!controlled && sourceMode === 'dataset' && (
                         <div className="table-footer-progress">
                             <span className="progress-mini-label">
                                 {locale === 'zh' ? `已评测 ${evaluatedCount} / ${allCases.length}` : `Evaluated ${evaluatedCount} / ${allCases.length}`}
@@ -2153,20 +2244,6 @@ export function BatchEvaluation({
                         ? (locale === 'zh' ? '请先在上方「评测任务」新建或选择一个任务，再开始评测' : 'Create/select an eval task above first')
                         : (locale === 'zh' ? '勾选 case 后开始评测：先执行生成 Trace 再评测；进度见 ② 评测执行' : 'Select cases → execute to generate traces → evaluate; progress in ②')}
                 </span>
-                {batchStartInFlight && (() => {
-                    const ids = Object.keys(caseStates);
-                    const pass = ids.filter(id => caseStates[id]?.status === 'pass').length;
-                    const fail = ids.filter(id => caseStates[id]?.status === 'fail').length;
-                    const running = ids.filter(id => { const s = caseStates[id]?.status; return s === 'running' || s === 'evaluating' || s === 'executed'; }).length;
-                    return (
-                        <span style={{ fontSize: 11.5, color: 'var(--ink-2)', display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                            <span>共 <b>{ids.length}</b></span>
-                            <span style={{ color: 'var(--success)' }}>✓ {pass}</span>
-                            {fail > 0 && <span style={{ color: 'var(--danger)' }}>✗ {fail}</span>}
-                            {running > 0 && <span style={{ color: '#2563EB' }}>⏳ {running}</span>}
-                        </span>
-                    );
-                })()}
             </div>
             )}
             </SectionShell>{/* /① 配置（已并入 case 表） */}
@@ -2230,12 +2307,14 @@ export function BatchEvaluation({
                             const st = caseStates[c.id];
                             const status = st?.status;
                             const compStatus = status === 'running' ? 'executing'
-                                : status === 'executed' ? 'evaluating'
+                                : status === 'executed' ? 'executed'
                                 : status === 'evaluating' ? 'evaluating'
                                 : status === 'pass' ? 'done'
                                 : status === 'fail' ? 'failed'
                                 : 'pending';
-                            const meta = st?.sessionId ? evalResultsMap.get(st.sessionId) : undefined;
+                            const meta = (status === 'pass' || status === 'fail') && st?.sessionId
+                                ? evalResultsMap.get(st.sessionId)
+                                : undefined;
                             return {
                                 id: c.id,
                                 caseLabel: String(c.input || c.id),
@@ -2245,6 +2324,7 @@ export function BatchEvaluation({
                                 resultEvalTraceId: meta?.resultEvalTraceId,
                                 trajEvalTraceId: meta?.trajEvalTraceId,
                                 evaluatorRunId: st?.evaluatorRunId || evaluationBatchId || undefined,
+                                resultId: meta?.resultId,
                                 datasetId: c.datasetId || meta?.datasetId || undefined,
                                 status: compStatus,
                                 resultScore: meta?.resultScore ?? null,
