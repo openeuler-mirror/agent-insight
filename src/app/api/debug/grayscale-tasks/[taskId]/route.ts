@@ -1390,6 +1390,8 @@ async function executeSingleAgentRun(args: {
     }
     let didTimeout = false;
     let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
+    // 持有 agentPromise 引用, 让 finally 在超时路径下也能等 ephemeral opencode 清理跑完 (见 finally 注释)。
+    let pendingAgent: Promise<unknown> | undefined;
     try {
         const timeoutPromise = new Promise<never>((_, reject) => {
             timeoutTimer = setTimeout(() => {
@@ -1434,6 +1436,7 @@ async function executeSingleAgentRun(args: {
                 },
             },
         });
+        pendingAgent = agentPromise;
         void agentPromise.catch(() => {});
         const result = await Promise.race([agentPromise, timeoutPromise]);
         if (didTimeout) {
@@ -1477,6 +1480,14 @@ async function executeSingleAgentRun(args: {
         markRunCompleted(run);
     } finally {
         if (timeoutTimer) clearTimeout(timeoutTimer);
+        // 关键(反孤儿/反泄漏): ephemeral opencode 的真正 kill 在 runGeneralAgent →
+        // runWithEphemeralOpencodeServer 的 finally 里, 只有 agentPromise settle 后才发生。
+        // 超时路径下 Promise.race 已先返回, 若不在这里等 agentPromise, 外层 withBackgroundOpencodeSlot
+        // 会在 opencode 进程被杀掉之前就释放 slot → 超时任务的 opencode 溜到 slot 之外继续活/变孤儿,
+        // 后续任务又 spawn 新的 → 堆叠。这里确保"进程清理在 slot 内完成才放行"。
+        // abort 已触发让 chat 尽快收尾; terminateOpencodeProcess 自带 30s 硬上限, 不会无限等。
+        abortController.abort();
+        if (pendingAgent) { try { await pendingAgent; } catch { /* fn 的错误已在上面 catch 里分类处理过 */ } }
         markLatestGrayResultAt(args.config);
         state[target.side] = rebuildSideAggregate(state[target.side], args.totalRunsPerSide);
         await persistTaskState(args.taskId, args.user, args.config, args.states);
@@ -1508,6 +1519,8 @@ async function startSingleEvaluation(
         ...(getConfiguredDatasetIds(config).length > 0 ? { datasetIds: getConfiguredDatasetIds(config) } : {}),
         pairs: [pair],
         ...(grayscaleBinding ? { grayscaleBinding } : {}),
+        // 让评测批次名与 A/B 任务名一致: 建批次时后端用它当批次标题(append 到已有批次时后端忽略)。
+        ...(config.evaluationBatchTitle ? { taskTitle: config.evaluationBatchTitle } : {}),
     };
     if (config.evaluationBatchId && options.appendToBatch !== false) {
         body.evaluatorRunId = config.evaluationBatchId;
@@ -1962,7 +1975,26 @@ async function evaluateRunsWithConcurrency(args: {
         }, args.parentSignal);
     };
 
-    await runEvaluationBatch(targets);
+    // 反散裂修复: 让本次评测的所有 target 落到同一个评测批次。
+    // 此前每个 target 各自 POST /api/eval/trajectory/run、各 mint 一个 evaluatorRunId
+    // (因为 config.evaluationBatchId 一直没值、append 分支是死代码 —— 那个对话框在 A/B 页打不开),
+    // 导致 "N case × M round 在「评测执行」里散裂成 N×M 个只有一条的批次"。
+    // 做法(对齐用例分析的同一批次语义): 先串行跑第一条建出批次, 把 evaluatorRunId 写进**内存中**的
+    // config(仅本次调用内共享, 故意不落库 —— 落库会让下次重跑 append 到旧批次、越积越多;
+    // 不落库则每次评测各自成一个干净批次)。其余 target 走 append 落到同一批。
+    // 每条 run 的 evaluatorRunId 已写进各自 run 状态,「评测执行」按它分组就归到一批。
+    // 仅在「全量评测(非 onlyMissing) 且尚未关联批次」时介入; onlyMissing(行级重试)维持原语义不动。
+    if (!args.onlyMissingEvaluation && !args.config.evaluationBatchId && targets.length > 1) {
+        await runEvaluationBatch([targets[0]]);
+        const seedBatchId = targets[0].run.evaluatorRunId;
+        if (seedBatchId) {
+            args.config.evaluationBatchId = seedBatchId; // 仅本次调用内共享, 不落库
+        }
+        // seedBatchId 为空(第一条建批次失败)时退回原行为: 其余各自评测, 至少不阻塞。
+        await runEvaluationBatch(targets.slice(1));
+    } else {
+        await runEvaluationBatch(targets);
+    }
     for (let retry = 1; retry <= MAX_EVALUATION_RETRIES; retry++) {
         const failedTargets = targets
             .filter(target => target.run.status === 'fail' && target.run.sessionId)
@@ -1997,6 +2029,8 @@ async function runGrayscaleTask(args: {
         evaluatorId: evaluatorId || task.configJson.evaluatorId,
         evaluators: normalizeAbEvaluators(args.evaluatorIds || task.configJson.evaluators, evaluatorId || task.configJson.evaluatorId),
         agentMaxConcurrency: args.agentMaxConcurrency || task.configJson.agentMaxConcurrency,
+        // 评测批次标题默认用 A/B 任务名, 让「评测结果」里的批次跟 A/B 任务同名、好对应。
+        evaluationBatchTitle: task.configJson.evaluationBatchTitle || task.taskName,
     };
     const configuredDatasetIds = getConfiguredDatasetIds(config);
     if (configuredDatasetIds.length === 0) throw new Error('dataset is required');
@@ -2140,6 +2174,8 @@ async function evaluateExistingTask(args: { taskId: string; user: string; origin
         skillId: task.skillId,
         evaluatorId: args.evaluatorId || task.configJson.evaluatorId,
         evaluators: normalizeAbEvaluators(args.evaluatorIds || task.configJson.evaluators, args.evaluatorId || task.configJson.evaluatorId),
+        // 评测批次标题默认用 A/B 任务名(行级重评等也走同名批次)。
+        evaluationBatchTitle: task.configJson.evaluationBatchTitle || task.taskName,
     };
     const states = task.caseStatesJson || {};
     const caseIds = args.caseIds.length > 0 ? args.caseIds : Object.keys(states);

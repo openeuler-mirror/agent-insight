@@ -3629,6 +3629,28 @@ function TraceDeviationPanel({
         }
         return getTraceEvalStatus(s) !== 'idle' || evaluatedTaskIds.has(s.id);
     });
+    // ② 评测执行 头部「已评测 X/Y」严格对应下面的列表(displayedTraces): 批次里若有 trace 不在
+    // scoredTraces(不属于本 skill/版本、或已从列表移除等), 会被批次全量统计算进去却不进列表 →
+    // 造成"已评测 5/5"而列表只有 4 条。头部改用列表口径, 与 ② 的 评测中/部分/失败 徽章同源。
+    // (③ 总评分仍按批次全量统计, 与 source 无关, 见下方 caseResultPairs。)
+    // 与 getDisplayedTraceStatus 同口径取每条显示行的分数(关联批次时用本任务 meta, 否则用 trace 自带)。
+    const listResultPairs: { resultScore: number | null; trajScore: number | null }[] = displayedTraces.map(s => {
+        if (!traceEvaluationBatchId) return { resultScore: s.resultScore, trajScore: s.trajScore };
+        const m = traceEvalResultsMap.get(s.id);
+        return { resultScore: m?.resultScore ?? null, trajScore: m?.trajScore ?? null };
+    });
+    const listValidPairs = listResultPairs.filter(
+        p => typeof p.resultScore === 'number' && typeof p.trajScore === 'number',
+    ) as { resultScore: number; trajScore: number }[];
+    const listEvalTotalCount = displayedTraces.length;
+    const listEvalDoneCount = listValidPairs.length;
+    const listAvgResult = listValidPairs.length === 0 ? null
+        : Math.round(listValidPairs.reduce((sum, p) => sum + p.resultScore, 0) / listValidPairs.length);
+    const listAvgTraj = listValidPairs.length === 0 ? null
+        : Math.round(listValidPairs.reduce((sum, p) => sum + p.trajScore, 0) / listValidPairs.length);
+    const listAvgOverall = listAvgResult == null || listAvgTraj == null ? null : Math.round((listAvgResult + listAvgTraj) / 2);
+    const listOverallScoreKlass: 'good' | 'warn' | 'bad' = listAvgOverall == null ? 'warn'
+        : listAvgOverall >= 80 ? 'good' : listAvgOverall >= 60 ? 'warn' : 'bad';
     // 排除已在「评测执行」里删除的记录(deletedTaskIds)，否则删除后上方"已评测 X/Y · 平均评分"
     // 仍按旧集合统计、不随删除变化。与 displayedTraces 同口径。
     const fullyEvaluated = scoredTraces.filter(s =>
@@ -4000,9 +4022,9 @@ function TraceDeviationPanel({
                 summary={
                     <>
                         <span>已评测</span>
-                        <code>{evalDoneCount} / {evalTotalCount}</code>
-                        {avgOverall != null && (
-                            <span>· 平均评分 <b style={{ color: overallScoreKlass === 'good' ? 'var(--ev-success)' : overallScoreKlass === 'bad' ? 'var(--ev-error)' : 'var(--ev-warning)' }}>{avgOverall} 分</b></span>
+                        <code>{listEvalDoneCount} / {listEvalTotalCount}</code>
+                        {listAvgOverall != null && (
+                            <span>· 平均评分 <b style={{ color: listOverallScoreKlass === 'good' ? 'var(--ev-success)' : listOverallScoreKlass === 'bad' ? 'var(--ev-error)' : 'var(--ev-warning)' }}>{listAvgOverall} 分</b></span>
                         )}
                         {/* 评测中 / 评测失败 徽章：折叠态下也能看到"还有 N 条在跑 / X 条失败"——
                             之前 refresh 后 ② 折叠用户完全感知不到后台 in-flight 评测 / 静默失败,
