@@ -27,7 +27,15 @@ load_agent_insight_env() {
 if [ ! -f "$AGENT_INSIGHT_ENV_FILE" ] && [ -f .env.example ]; then
   echo "No ~/.agent-insight/.env found. Initializing from .env.example..."
   mkdir -p "$AGENT_INSIGHT_HOME"
-  cp .env.example "$AGENT_INSIGHT_ENV_FILE"
+  # 生成时在文件头注明：这是当前生效的配置，由模板自动生成，改这里而不是改 .env.example
+  {
+    echo "# >>> 本文件由 scripts/start.sh 于 $(date '+%Y-%m-%d %H:%M:%S') 从 .env.example 自动生成 <<<"
+    echo "# 这是 agent-insight 当前生效的环境配置；要改配置请直接编辑本文件。"
+    echo "# 项目根目录的 .env.example 只是模板，改它不会影响已生成的本文件。"
+    echo "# 注意：AGENT_INSIGHT_HOST / AGENT_INSIGHT_API_KEY 每次启动会被 sync_admin_api_key.js 自动同步覆盖。"
+    echo "#"
+    cat .env.example
+  } > "$AGENT_INSIGHT_ENV_FILE"
 fi
 
 if [ ! -d "$AGENT_INSIGHT_DATA_DIR" ]; then

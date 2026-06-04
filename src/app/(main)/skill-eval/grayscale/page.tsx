@@ -783,42 +783,6 @@ function RawSubCard({
     );
 }
 
-function ToneBadge({ label, tone, prefix, title }: { label: string; tone: BadgeTone; prefix?: string; title?: string }) {
-    const cfg = BADGE_TONE[tone];
-    return (
-        <span
-            title={title}
-            style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 4,
-                fontSize: 11,
-                fontWeight: 700,
-                padding: '3px 8px',
-                borderRadius: 99,
-                background: cfg.bg,
-                color: cfg.fg,
-                whiteSpace: 'nowrap',
-                cursor: title ? 'help' : 'default',
-            }}
-        >
-            {cfg.pulse && (
-                <span style={{
-                    display: 'inline-block',
-                    width: 7,
-                    height: 7,
-                    borderRadius: '50%',
-                    background: 'currentColor',
-                    animation: 'pulse 1.5s ease-in-out infinite',
-                }} />
-            )}
-            {cfg.icon && <span>{cfg.icon}</span>}
-            {prefix && <span style={{ opacity: 0.7 }}>{prefix}</span>}
-            {label}
-        </span>
-    );
-}
-
 // 从单一 CaseStatus + failureType 推出执行阶段和评测阶段两个独立 status。
 // 区分逻辑: failureType 有值 = 执行阶段挂了 (agent_timeout / permission_blocked /
 // agent_error 等); failureType 空 + status='fail' = 执行成功但评测器失败。
@@ -1307,7 +1271,7 @@ export function GrayscaleEvaluation({
         const cfg = task.configJson || {};
         const boundSkillId = cfg.skillId || task.skillId || '';
         if (boundSkillId) setSelectedSkillId(boundSkillId);
-        setSourceMode((cfg.sourceMode === 'trace' ? 'trace' : 'dataset'));
+        setSourceMode('dataset'); // 「从执行链路」已下线: 历史 trace 任务加载时一律归一到 dataset, 避免卡在无出口的 trace 模式
         setRepeatRounds(cfg.repeatRounds || 1);
         setAgentMaxConcurrency(cfg.agentMaxConcurrency || 4);
         const evaluatorIds = normalizeEvaluatorIds(cfg.evaluators || cfg.evaluationBatchEvaluators, cfg.evaluatorId || '');
@@ -1354,7 +1318,7 @@ export function GrayscaleEvaluation({
                 skillId: boundSkillId,
                 versionAId: cfg.versionAId || '',
                 versionBId: cfg.versionBId || '',
-                sourceMode: cfg.sourceMode === 'trace' ? 'trace' : 'dataset',
+                sourceMode: 'dataset', // 「从执行链路」已下线: 配置归一到 dataset
                 selectedDatasetId: cfg.selectedDatasetId || '',
                 linkedDatasetIds: cfg.linkedDatasetIds || [],
                 selectedTraceAId: cfg.selectedTraceAId || '',
@@ -2253,6 +2217,19 @@ export function GrayscaleEvaluation({
     };
 
     const handleNewTask = () => {
+        // 方向A —— 每个 Skill 版本仅允许一个 A/B 任务(后端唯一键 user+skill+version 强约束)。
+        // 当前版本若已有任务(currentTask 已由 auto-bind 绑定), "新建" 无法真的多建一条:
+        // 旧逻辑会开一个空草稿、让用户配置半天, 却在保存时撞唯一键被"切回/覆盖"到现有任务
+        // —— 即用户反馈的"新建变覆盖"。这里改成名实相符: 已有任务就一次性说明规则并保留在该任务上
+        // 编辑(不开草稿、不清它的轮询); 仅当本版本确实还没有任务时, 才真正开新草稿。
+        // 仅在嵌入模式(parentSkillId 存在 → 版本被父级锁死, 新建必然撞同一版本)生效;
+        // 独立模式(无 parentSkillId)可自由换版本建多条任务, 不拦。
+        if (currentTask && parentSkillId) {
+            alert(locale === 'zh'
+                ? '每个 Skill 版本仅允许一个 A/B 任务。已为你保留当前版本的任务 —— 直接调整配置/样本后再次执行即可，无需新建。'
+                : 'Only one A/B task is allowed per skill version. Keeping this version’s existing task — adjust its config/samples and run again; no need to create a new one.');
+            return;
+        }
         Object.entries(activePollsRef.current).forEach(([key, timer]) => {
             if (key.startsWith('task_')) {
                 clearInterval(timer);
@@ -2280,6 +2257,12 @@ export function GrayscaleEvaluation({
         }
         applyTaskToState(t);
     };
+
+    // 嵌入模式(parentSkillId 存在)下, 历史抽屉只列当前 skill 的任务 —— 否则会混进别的 skill 的任务,
+    // 且点了也切不动(handleSelectHistoryTask 仅同 skill 放行)。独立模式(无 parentSkillId)不过滤。
+    const visibleTaskHistory = parentSkillId
+        ? taskHistory.filter(t => t.skillId === parentSkillId || t.configJson?.skillId === parentSkillId)
+        : taskHistory;
 
     // Dataset handlers
     const handleCreateDataset = async () => {
@@ -3012,23 +2995,8 @@ export function GrayscaleEvaluation({
                                         <StatusText label={evaluation.label} tone={evaluation.tone} />
                                     ) : (
                                         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
-                                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                                                {recordEvaluations.slice(0, 3).map(item => {
-                                                    const tone: BadgeTone = item.status === 'done' ? 'done' : item.status === 'failed' ? 'fail' : item.status === 'running' ? 'running' : 'pending';
-                                                    const shortName = item.evaluatorName.replace(/^Agent\s*/, '');
-                                                    const labelText = item.status === 'done' && typeof item.score === 'number'
-                                                        ? `${shortName} ${item.score}`
-                                                        : item.status === 'failed'
-                                                            ? `${shortName} 失败`
-                                                            : item.status === 'running'
-                                                                ? `${shortName} 中`
-                                                                : `${shortName} 待评`;
-                                                    return <ToneBadge key={item.evaluatorId} label={labelText} tone={tone} title={item.errorMessage || item.evaluationTraceId || item.evaluatorRunId} />;
-                                                })}
-                                                {recordEvaluations.length > 3 && (
-                                                    <span style={{ color: '#888780', fontSize: 11 }}>+{recordEvaluations.length - 3}</span>
-                                                )}
-                                            </div>
+                                            {/* 去重: 移除了上面一排 "任务完成度 N / 轨迹质量 N" 摘要徽章——
+                                                与下方明细行的 名称+分数 重复, 且明细已含全部评估器 + 可点击的评测 trace 链接。 */}
                                             <div style={{ display: 'flex', flexDirection: 'column', gap: 5, fontSize: 11, color: '#5F5E5A' }}>
                                                 {recordEvaluations.map(item => {
                                                     const tone: BadgeTone = item.status === 'done' ? 'done' : item.status === 'failed' ? 'fail' : item.status === 'running' ? 'running' : 'pending';
@@ -3377,9 +3345,13 @@ export function GrayscaleEvaluation({
                                 </span>
                             </div>
                             <div className="gh-task-actions">
-                                <button type="button" className="gh-btn" onClick={handleNewTask}>
-                                    + {locale === 'zh' ? '新建任务' : 'New Task'}
-                                </button>
+                                {/* 嵌入模式(parentSkillId)下隐藏「新建任务」: 一版本一任务 —— 无任务进来已自动创建、
+                                    有任务又不能再建, 此按钮无作用。独立模式(无 parentSkillId, 可换版本建多条)保留。 */}
+                                {!parentSkillId && (
+                                    <button type="button" className="gh-btn" onClick={handleNewTask}>
+                                        + {locale === 'zh' ? '新建任务' : 'New Task'}
+                                    </button>
+                                )}
                                 <button
                                     type="button"
                                     className="gh-btn"
@@ -3952,15 +3924,9 @@ export function GrayscaleEvaluation({
                             >
                                 {locale === 'zh' ? '从数据集发起' : 'From dataset'}
                             </button>
-                            <button
-                                className={`v2-tab ${sourceMode === 'trace' ? 'active' : ''}`}
-                                onClick={() => {
-                                    setSourceMode('trace');
-                                    if (currentTask) persistTaskUpdate(currentTask.id, { ...currentConfigRef.current, sourceMode: 'trace' });
-                                }}
-                            >
-                                {locale === 'zh' ? '从执行链路发起' : 'From trace'}
-                            </button>
+                            {/* 「从执行链路发起」入口已下线: 该模式后端不支持(走 action='start' 撞 dataset 校验 →
+                                静默失败), 暂时移除。trace 相关 state/effect/渲染仍在但已不可达
+                                (sourceMode 被锁死为 'dataset', 见 useState 默认值 + 加载时强制归一)。 */}
                         </div>
 
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, height: 360, overflowY: 'auto', marginBottom: 12, paddingRight: 4 }}>
@@ -4746,17 +4712,17 @@ export function GrayscaleEvaluation({
                                     <HistoryIcon />
                                     {locale === 'zh' ? '历史任务' : 'Task History'}
                                     <span style={{ fontWeight: 400, color: 'var(--ink-4)', fontSize: 11, marginLeft: 6 }}>
-                                        {taskHistory.length}{locale === 'zh' ? ' 条' : ' tasks'}
+                                        {visibleTaskHistory.length}{locale === 'zh' ? ' 条' : ' tasks'}
                                     </span>
                                 </div>
                                 <button className="d-drawer-close" onClick={() => setShowHistoryDrawer(false)}>×</button>
                             </div>
                             <div className="d-history-body">
-                                {taskHistory.length === 0 ? (
+                                {visibleTaskHistory.length === 0 ? (
                                     <div style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--ink-4)', fontSize: 12 }}>
                                         {locale === 'zh' ? '暂无历史任务' : 'No task history'}
                                     </div>
-                                ) : taskHistory.slice().reverse().map(t => (
+                                ) : visibleTaskHistory.slice().reverse().map(t => (
                                     <div
                                         key={t.id}
                                         className="d-history-item"

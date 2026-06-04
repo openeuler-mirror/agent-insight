@@ -185,7 +185,16 @@ function ensureEnvFile(packageRoot) {
   if (!fs.existsSync(envPath) && fs.existsSync(envExamplePath)) {
     console.log('No ~/.agent-insight/.env found. Initializing from .env.example...')
     fs.mkdirSync(path.dirname(envPath), { recursive: true })
-    fs.copyFileSync(envExamplePath, envPath)
+    // 生成时在文件头注明：这是当前生效的配置，由模板自动生成，改这里而不是改 .env.example
+    const header = [
+      `# >>> 本文件由 scripts/utils.js 于 ${new Date().toLocaleString('sv-SE')} 从 .env.example 自动生成 <<<`,
+      '# 这是 agent-insight 当前生效的环境配置；要改配置请直接编辑本文件。',
+      '# 项目根目录的 .env.example 只是模板，改它不会影响已生成的本文件。',
+      '# 注意：AGENT_INSIGHT_HOST / AGENT_INSIGHT_API_KEY 每次启动会被 sync_admin_api_key.js 自动同步覆盖。',
+      '#',
+      '',
+    ].join('\n')
+    fs.writeFileSync(envPath, header + fs.readFileSync(envExamplePath, 'utf8'))
     console.log('✓ .env file created at ' + envPath)
   }
 }

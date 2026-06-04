@@ -41,6 +41,20 @@ export async function setupNodeRuntime(): Promise<void> {
     );
   }
 
+  // 回收上一代 server 崩溃(SIGKILL/OOM/jetsam, 跑不了退出钩子)后遗留的 opencode 孤儿进程组。
+  // 必须在退出钩子注册之后、本进程开始 spawn opencode 之前跑一次。详见 sweepOrphanedOpencodeProcesses。
+  try {
+    const { sweepOrphanedOpencodeProcesses } = await import(
+      '@/lib/engine/skill-generation/opencode-agent-cli/opencode-manager'
+    );
+    sweepOrphanedOpencodeProcesses();
+  } catch (err) {
+    console.warn(
+      '[instrumentation] sweepOrphanedOpencodeProcesses failed:',
+      (err as Error)?.message,
+    );
+  }
+
   // 启动时跑一次 uploader：把上一轮 dev server 留下的 spool 积压清掉，避免那些 trace
   // 一直没归宿。常态下 plugin 的 kickUploader 在每次 opencode event 都会触发一次
   // 一次性 uploader 进程，所以这里只补"启动空窗期"。

@@ -27,7 +27,15 @@ load_agent_insight_env() {
 if [ ! -f "$AGENT_INSIGHT_ENV_FILE" ] && [ -f .env.example ]; then
   echo "No ~/.agent-insight/.env found. Initializing from .env.example..."
   mkdir -p "$AGENT_INSIGHT_HOME"
-  cp .env.example "$AGENT_INSIGHT_ENV_FILE"
+  # 生成时在文件头注明：这是当前生效的配置，由模板自动生成，改这里而不是改 .env.example
+  {
+    echo "# >>> 本文件由 scripts/develop_start.sh 于 $(date '+%Y-%m-%d %H:%M:%S') 从 .env.example 自动生成 <<<"
+    echo "# 这是 agent-insight 当前生效的环境配置；要改配置请直接编辑本文件。"
+    echo "# 项目根目录的 .env.example 只是模板，改它不会影响已生成的本文件。"
+    echo "# 注意：AGENT_INSIGHT_HOST / AGENT_INSIGHT_API_KEY 每次启动会被 sync_admin_api_key.js 自动同步覆盖。"
+    echo "#"
+    cat .env.example
+  } > "$AGENT_INSIGHT_ENV_FILE"
 fi
 
 if [ ! -d "$AGENT_INSIGHT_DATA_DIR" ]; then
@@ -235,13 +243,17 @@ echo "Server started successfully."
 echo "PID: $NEW_PID"
 echo "Log file: server.log"
 echo "Syncing admin API key to $AGENT_INSIGHT_ENV_FILE..."
+# Server 刚 spawn 出来时还没监听端口 / API 路由没按需编译完，前几次请求必然失败。
+# sync_admin_api_key.js 每次失败都会往 stderr 打 "⚠️ Failed to sync admin API key:"，
+# 在重试期间把它静默丢弃（2>/dev/null），否则启动日志会出现"先报错又成功"的迷惑输出。
+# 只有最后一次（第 20 次）才放行 stderr，让真正起不来时的错误原因可见，
+# 再补一行人类可读的总结。
 for i in {1..20}; do
-  if node scripts/sync_admin_api_key.js "$PORT" "http://localhost:$PORT"; then
-    break
-  fi
   if [ "$i" = "20" ]; then
+    node scripts/sync_admin_api_key.js "$PORT" "http://localhost:$PORT" && break
     echo "⚠️  Admin API key sync failed after waiting for server startup."
   else
+    node scripts/sync_admin_api_key.js "$PORT" "http://localhost:$PORT" 2>/dev/null && break
     sleep 1
   fi
 done
