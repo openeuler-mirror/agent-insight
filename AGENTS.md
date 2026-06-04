@@ -48,12 +48,16 @@ push 前先 `git remote -v` 确认 fork remote 的实际名（不要假设是 `o
 
 两个层级：
 
-- **必须写 Plan 文档**：涉及数据模型变更（Prisma schema）或新增 API 路由。落到 `docs/plans/YYYY-MM-DD-<topic>-design.md`，对齐后再动手。
+- **必须写设计文档**：涉及数据模型变更（Prisma schema）或新增 API 路由。落到 [`docs/design/<topic>/`](docs/design/)（按 `phase1 需求分析 / phase2 需求设计 / phase3 开发计划` 组织），并在 [需求清单](docs/design/README.md) 追加一行，对齐后再动手。
 - **先讲思路对齐**（不一定写文档）：实现路径有多种合理选择、跨多个模块、需要引入新抽象、或自己感到"这事不止改几行"—— 先简述方案 + 列 trade-off，等用户确认再写代码。用户也会主动说"这是大需求"作为信号。
 
 小改动（bug fix、文案、单文件局部调整）直接动手，事后说明即可。
 
-**大改动落地后，同步更新** **[docs/PROJECT.md](docs/PROJECT.md)**（架构 / 模块边界 / 关键术语 / 数据模型变化）—— 这是最权威的内部文档，不要让它过期。
+**改完功能后，必须同步刷新对应指南。** `docs/` 下有两套面向读者的文档，功能变更只要波及它们就要连带更新，别让读者读到过期信息：
+
+- 改动影响**用户能感知的东西**（新功能 / 交互或流程变化 / 新增配置项 / 概念或术语调整）→ 更新 [`docs/user-guide/`](docs/user-guide/) 对应页。
+- 改动影响**架构 / 模块 / API 与契约 / 数据流 / 扩展方式** → 更新 [`docs/developer-guide/`](docs/developer-guide/) 对应页（先看 [`INDEX.md`](docs/developer-guide/INDEX.md) 找页；该指南带 provenance commit，更新后按其 “How to update” 把 commit 顺手推到当前 HEAD）。
+- 两边都影响就两边都改。判断口径很简单：**别人照旧文档去操作 / 理解会被带偏，就必须改。**
 
 ## 5. 改动验证
 
@@ -66,35 +70,15 @@ push 前先 `git remote -v` 确认 fork remote 的实际名（不要假设是 `o
 
 类型检查 / lint 验证的是代码正确性，不是功能正确性。
 
-## 6. UI / 用户交互开发：先对齐 `docs/design`，再写代码
+## 6. 项目内部约定
 
-任何**修改前端页面、组件、交互、视觉**的改动，都必须**先**与 [`docs/design/`](docs/design/) 下的规范对齐——这是产品视觉与交互一致性的硬约束，违反直接打回。
+### 设计系统：用共享令牌，别再造局部色板
 
-**规范分布**：
+前端视觉规范见 [`docs/developer-guide/08-design-system.md`](docs/developer-guide/08-design-system.md)，机器可读令牌见 [`docs/developer-guide/design-tokens.json`](docs/developer-guide/design-tokens.json)。**唯一真源是** [`src/app/globals.css`](src/app/globals.css) 的 `:root` / `[data-theme='dark']`（中性灰阶 + 单一 indigo 主色 + 3 个语义状态色）。
 
-- [`docs/design/README.md`](docs/design/README.md) —— 15 条设计原则 + 索引。
-- [`docs/design/foundations.md`](docs/design/foundations.md) —— Token、颜色、暗黑模式、动效、可访问性。
-- [`docs/design/components.md`](docs/design/components.md) —— 强制复用组件清单 + PR 自查表。
-- [`docs/design/patterns.md`](docs/design/patterns.md) —— 6 类页面模板、长文本、表单、Wizard、键盘可达。
-- [`docs/design/ROADMAP.md`](docs/design/ROADMAP.md) —— 当前代码与规范的差距 + 排期（落地即删条目）。
-- [`src/app/globals.css`](src/app/globals.css) —— Token 的**唯一事实来源**（`:root` / `[data-theme='dark']` 双声明）。
-
-**工作流**（**先看规范 → 不满足先改规范 → 再写代码**）：
-
-1. **动手前先查**：在上述文件里搜对应组件 / 关键词（Cmd-F "Button"、"暗黑"、"长文本"…），按规范写代码。
-2. **遇到矛盾或未覆盖**：**不要在代码里"先这样做"再补文档**。先和用户对齐方案，更新 `docs/design/` 对应文件（或在 `ROADMAP.md` 登记差距），再写代码。
-3. **PR 前自查**：勾选 `docs/design/components.md` §6 + `.github/pull_request_template.md` 中的"双截图门"和"暗黑特殊核验"。
-4. **Light + Dark 两张截图**：任何 UI 改动 PR 必须同时附亮色与暗色截图，仅截一种**直接打回**。
-
-**红线（不要试探）**：
-
-- ❌ 自己写 Button / 状态徽章 / EmptyState / ErrorState / MetricValue —— 一律走 `src/components/` 下的封装。
-- ❌ 在组件里写 `#xxxxxx` / `rgba(...)` / `bg-[#...]` / `dark:` Tailwind 前缀 —— 走 token + `:root` / `[data-theme='dark']` 双模式 CSS variable。
-- ❌ 自管 `mx-auto + max-w-*` 居中页面 —— 用 `<PageContainer>`，左对齐铺满。
-- ❌ `window.alert` / `window.confirm` —— 用 `sonner` toast 或 `<ConfirmDialog>`。
-- ❌ 在 Card Header 加渐变、Hover 加发光 / 缩放 —— 全产品只有 3 处允许"视觉个性"（详见 `foundations.md` §0.2）。
-
-## 7. 项目内部约定
+- 写新样式一律引用共享令牌（`var(--foreground*)` / `--color-*` / `--radius-*` / `--primary` …），优先复用 [`ui/*`](src/components/ui) 组件与 `globals.css` 里的 `.ai-*` 工具类。
+- **不要新建** `--<feature>-*` 局部色板（历史遗留的 `--sk-*` / `--ev-*` / `--sa-*` / `--gh-*` 是设计漂移，正在收敛，别再加）。主色只用于交互态，不要拿来做装饰。
+- 改了令牌或视觉规范 → 同步 `08-design-system.md` 与 `design-tokens.json`。
 
 ### Skill 用 `name` 而非 `id` 做对外 key
 
@@ -103,22 +87,22 @@ push 前先 `git remote -v` 确认 fork remote 的实际名（不要假设是 `o
 - DB 里仍有 `id` 字段，只在内部使用。
 - 代价：skill 重命名会断 URL —— 接受这个代价，rename 本来就该是大动作。
 
-## 8. 仓库的非标准目录
+## 7. 仓库的非标准目录
 
 标准 Next.js 结构（`src/app` / `src/components` / `src/lib` / `prisma/`）按常规理解即可。下列是项目特有的：
 
 - `skills/` —— 内置 Skill 定义，每个 skill 一个子目录，含 `SKILL.md`。
-- `docs/PROJECT.md` / `docs/Agent_Insight_Design_Document.md` —— 最权威的内部架构文档。
+- `docs/developer-guide/` —— 面向开发者 / LLM 的架构与契约指南（入口 [`INDEX.md`](docs/developer-guide/INDEX.md)）；`docs/user-guide/` —— 面向使用者的操作指南；`docs/design/` —— 需求 / 设计文档（见 [需求清单](docs/design/README.md)）。
 - `features/` —— 单 feature 的设计草稿（比 plan 更轻量）。
 - `scripts/restart_dev.sh` —— 验证流程要用，不要换别的方式启 dev server。
 
-## 9. 代码风格（仅列反默认项）
+## 8. 代码风格（仅列反默认项）
 
 - **文件路径在沟通中** 用 markdown link 格式：`[name](relative/path:line)`，方便用户点击。
 - **注释默认不写**。只在 WHY 不明显时加一行（隐藏约束、反直觉的 workaround）。不要写"做了什么"或"给 X 调用方用"这种会过期的注释。
 - **不要主动创建文档文件**（`*.md` / README），除非用户明确要求。
 
-## 10. 默认禁止 / 需要确认的操作
+## 9. 默认禁止 / 需要确认的操作
 
 未经用户授权不要：
 

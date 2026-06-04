@@ -1095,7 +1095,7 @@ class StagedEvaluationError extends Error {
     }
 }
 
-/** 包装 evaluateTrajectory + 加超时；分阶段抛错便于 UI 显示根因 */
+/** 包装 evaluateTrajectoryViaOpencode + 加超时；分阶段抛错便于 UI 显示根因 */
 async function runOneEvaluation(user: string, id: string): Promise<void> {
  // 注册到 evaluation-task-manager 的 activeTasks 内存表 —— 让 GET /api/observe/data 的
  // is_evaluating 字段在轮询时对这条 trace 返 true,前端"已评测历史"列表立刻显示"评测中",
