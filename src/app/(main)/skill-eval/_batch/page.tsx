@@ -676,6 +676,7 @@ export function BatchEvaluation({
         const msPerDay = 86_400_000;
         const days = traceTimeRange === '1d' ? 1 : traceTimeRange === '3d' ? 3 : 7;
         params.set('since', String(Date.now() - days * msPerDay));
+        params.set('fields', 'light'); // 列表只用轻量列(upload_id/task_id/query/skills/timestamp/framework)
         apiFetch(`/api/observe/data?${params.toString()}`)
             .then(r => r.json())
             .then(data => { if (Array.isArray(data)) setTraceRecords(data.slice(0, 100)); })
