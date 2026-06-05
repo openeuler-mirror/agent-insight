@@ -553,6 +553,24 @@ model AgentDebugReport {
   @@index([status])
 }
 
+model AgentDebugSkillsAnalysis {
+  id               String   @id @default(cuid())
+  executionId      String   @unique
+  user             String?
+  interactionsHash String
+  status           String   @default("pending") // pending | running | done | failed
+  errorMessage     String?
+
+  analysisJson     String?
+  keyActionCount   Int      @default(0)
+
+  ranAt            DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([user, ranAt])
+  @@index([status])
+}
+
 // 注：旧 `SkillOptimizationPoint` 单表方案已废弃，统一收敛到 `Evaluation` + `SkillIssue`
 // 两表设计（详见 docs/plans/2026-05-08-skill-opt-issues-api-design.md）。
 // `SkillIssue.category` / `resolvedAt` / `resolvedRunId` + `Evaluation.runId` 把原表能力

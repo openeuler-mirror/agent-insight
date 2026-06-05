@@ -6,9 +6,14 @@ import { ensureTraceBundle } from '@/lib/engine/observability/trace-bundle';
 import { inferSubagentNamesFromInteractions } from '@/lib/engine/observability/subagent-inference';
 import { normalizeClaudeCodeInteractionsForStorage } from '@/lib/shared/interaction-content';
 import { db, prismaRaw } from '@/lib/storage/prisma';
-import { findAgentDebugReport, parseReportPayload } from '@/lib/engine/agent-debug/report-store';
+import {
+  findAgentDebugReport,
+  findAgentDebugSkillsAnalysis,
+  parseReportPayload,
+  parseSkillsAnalysisPayload,
+} from '@/lib/engine/agent-debug/report-store';
 import { hashInteractions } from '@/lib/engine/agent-debug/trace-adapter';
-import type { AgentDebugReportPayload } from '@/lib/engine/agent-debug/types';
+import type { AgentDebugReportPayload, AgentDebugSkillsAnalysis } from '@/lib/engine/agent-debug/types';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 600;
@@ -97,7 +102,7 @@ function formatConversationHistory(messages: Array<{ role: string; content: stri
   return compactText(text, max);
 }
 
-function summarizeAgentDebugReport(report: AgentDebugReportPayload, hashState: string) {
+function summarizeAgentDebugReport(report: AgentDebugReportPayload, hashState: string, skillsAnalysis: AgentDebugSkillsAnalysis | null) {
   const root = report.rootCause;
   const detectedCells = (report.phase1Grid || [])
     .filter((cell) => cell.errorDetected)
@@ -156,13 +161,12 @@ function summarizeAgentDebugReport(report: AgentDebugReportPayload, hashState: s
         }
       : null,
     detectedCells,
-    skillsAnalysis: summarizeSkillsAnalysisForFollowUp(report),
+    skillsAnalysis: summarizeSkillsAnalysisForFollowUp(skillsAnalysis),
     stats: report.stats,
   };
 }
 
-function summarizeSkillsAnalysisForFollowUp(report: AgentDebugReportPayload) {
-  const analysis = report.skillsAnalysis;
+function summarizeSkillsAnalysisForFollowUp(analysis: AgentDebugSkillsAnalysis | null) {
   if (!analysis) {
     return { available: false };
   }
@@ -193,25 +197,41 @@ function summarizeSkillsAnalysisForFollowUp(report: AgentDebugReportPayload) {
 }
 
 async function formatAgentDebugContext(executionId: string, interactions: unknown[]): Promise<string> {
+  const currentHash = hashInteractions(interactions);
+  const skillsRow = await findAgentDebugSkillsAnalysis(executionId).catch(() => null);
+  const skillsAnalysis = skillsRow?.interactionsHash === currentHash
+    ? parseSkillsAnalysisPayload(skillsRow)
+    : null;
   const row = await findAgentDebugReport(executionId).catch(() => null);
   if (!row) {
-    return 'AgentDebug 四维认知诊断尚未运行或没有缓存结果。';
+    return compactJson({
+      agentDebug: { available: false, status: 'missing', message: 'AgentDebug 四维认知诊断尚未运行或没有缓存结果。' },
+      skillsAnalysis: summarizeSkillsAnalysisForFollowUp(skillsAnalysis),
+    }, 10_000);
   }
   if (row.status === 'running') {
-    return 'AgentDebug 四维认知诊断正在运行，当前追问暂时没有可用结果。';
+    return compactJson({
+      agentDebug: { available: false, status: 'running', message: 'AgentDebug 四维认知诊断正在运行，当前追问暂时没有可用结果。' },
+      skillsAnalysis: summarizeSkillsAnalysisForFollowUp(skillsAnalysis),
+    }, 10_000);
   }
   if (row.status === 'failed') {
-    return `AgentDebug 四维认知诊断运行失败：${row.errorMessage || '未知错误'}`;
+    return compactJson({
+      agentDebug: { available: false, status: 'failed', message: `AgentDebug 四维认知诊断运行失败：${row.errorMessage || '未知错误'}` },
+      skillsAnalysis: summarizeSkillsAnalysisForFollowUp(skillsAnalysis),
+    }, 10_000);
   }
   const report = parseReportPayload(row);
   if (!report) {
-    return 'AgentDebug 四维认知诊断存在缓存记录，但 reportJson 为空或解析失败。';
+    return compactJson({
+      agentDebug: { available: false, status: 'invalid_report', message: 'AgentDebug 四维认知诊断存在缓存记录，但 reportJson 为空或解析失败。' },
+      skillsAnalysis: summarizeSkillsAnalysisForFollowUp(skillsAnalysis),
+    }, 10_000);
   }
-  const currentHash = hashInteractions(interactions);
   const hashState = row.interactionsHash === currentHash
     ? '匹配当前 trace interactions'
     : '注意：缓存诊断的 interactionsHash 与当前 trace interactions 不一致，可能是旧诊断结果；仅作参考。';
-  return compactJson(summarizeAgentDebugReport(report, hashState), 10_000);
+  return compactJson(summarizeAgentDebugReport(report, hashState, skillsAnalysis), 10_000);
 }
 
 function parseInteractionsFromSession(session: StoredTraceSession | null, framework?: string): unknown[] {

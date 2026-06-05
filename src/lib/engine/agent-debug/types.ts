@@ -229,3 +229,16 @@ export interface AgentDebugReportRow {
   ranAt: string | Date;
   updatedAt: string | Date;
 }
+
+export interface AgentDebugSkillsAnalysisRow {
+  id: string;
+  executionId: string;
+  user: string | null;
+  interactionsHash: string;
+  status: AgentDebugSkillsAnalysisStatus;
+  errorMessage: string | null;
+  analysisJson: string | null;
+  keyActionCount: number;
+  ranAt: string | Date;
+  updatedAt: string | Date;
+}
