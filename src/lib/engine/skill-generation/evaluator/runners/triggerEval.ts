@@ -43,6 +43,12 @@ import type {
   SkillTriggerEvalSetRecord,
   TriggerRunResultItem,
 } from '@/server/skill_trigger_eval_storage';
+import {
+  classifyEndReason,
+  retryOnTimeout,
+  MAX_TIMEOUT_RETRIES,
+  type TriggerEndReason,
+} from './triggerEvalRetry';
 
 const logger = createLogger('skill-generation:trigger-eval');
 
@@ -152,10 +158,14 @@ export interface RunTriggerEvalLiveResult {
 
 interface SingleRunOutcome {
   triggered: boolean;
+  /** 结束原因。聚合时据此分出"跑完/超时/出错"，前端可见。 */
+  endReason: TriggerEndReason;
   /** opencode session.error 文本；非空表示这次 run 实际没跑成（不是"没命中"，是根本没问到模型）。 */
   sessionError?: string;
   competingSkill?: string;
   latencyMs: number;
+  /** 实际尝试次数（含超时重试）。1 = 没重试。 */
+  attempts: number;
 }
 
 /**
@@ -218,7 +228,12 @@ async function evalOne(
   },
 ): Promise<SingleRunOutcome> {
   const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), args.timeoutMs);
+  // 区分超时 abort vs 命中 abort vs 外部终止：timer 触发时置 timedOut，结束时据此分类 endReason。
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    ac.abort();
+  }, args.timeoutMs);
   // 外部终止：把本条 query 的 AbortController 一起 abort，让 in-flight chat 立刻停（省 token）。
   const onExternalAbort = () => ac.abort();
   if (args.externalSignal) {
@@ -359,12 +374,36 @@ async function evalOne(
       client.deleteSession(sessionId).catch(() => {});
     }
   }
+  // endReason 判定抽到 triggerEvalRetry.classifyEndReason（纯函数，单测覆盖）。
+  // 外部终止（用户点终止）也会 abort，但那条路径上层会 throwIfAborted 抛掉、不进聚合，这里不单独分类。
   return {
     triggered,
+    endReason: classifyEndReason({ triggered, sessionError, timedOut }),
     competingSkill,
     sessionError,
     latencyMs: Date.now() - startedAt,
+    attempts: 1,
   };
+}
+
+/**
+ * 单条超时上限内跑 query；超时被掐断且没命中时自动重试，最多 MAX_TIMEOUT_RETRIES 次。
+ * 重试策略（只重试超时、外部终止即停）全在 triggerEvalRetry.retryOnTimeout 里，纯逻辑单测覆盖。
+ */
+async function evalOneWithRetry(
+  client: AgentInsight,
+  args: Parameters<typeof evalOne>[1],
+): Promise<SingleRunOutcome> {
+  return retryOnTimeout(() => evalOne(client, args), {
+    maxRetries: MAX_TIMEOUT_RETRIES,
+    isAborted: () => !!args.externalSignal?.aborted,
+    onRetry: attempt =>
+      logger.log('evalOne timed out, retrying', {
+        query: args.query.slice(0, 60),
+        attempt,
+        maxRetries: MAX_TIMEOUT_RETRIES,
+      }),
+  });
 }
 
 /**
@@ -770,7 +809,7 @@ export async function runTriggerEvalLive(
   await runPool(tasks, concurrency, async task => {
     const item = triggerSet.items[task.itemIdx];
     const sessionTitle = `trigger-eval-${shortUuid()}-${item.id.slice(0, 4)}-r${task.runIdx}`;
-    const outcome = await evalOne(client, {
+    const outcome = await evalOneWithRetry(client, {
       query: item.query,
       targetSkillName: skillName,
       modelConfig,
@@ -819,6 +858,18 @@ export async function runTriggerEvalLive(
     const pass = triggered === item.shouldTrigger;
     const latencyMsAvg =
       runsTotal > 0 ? Math.round(runs.reduce((sum, r) => sum + r.latencyMs, 0) / runsTotal) : 0;
+    // 跑完 vs 没跑完：triggered/completed = 真正产出了路由决策；timeout/error = 没跑完。
+    const runsCompleted = runs.filter(r => r.endReason === 'triggered' || r.endReason === 'completed').length;
+    const runsTimedOut = runs.filter(r => r.endReason === 'timeout').length;
+    const runsErrored = runs.filter(r => r.endReason === 'error').length;
+    // 代表性错误文本：取 errored run 里出现最多的一条（同根因下 N 条通常完全一致）。
+    let errorMessage: string | undefined;
+    const errTexts = runs.map(r => r.sessionError).filter((s): s is string => !!s);
+    if (errTexts.length > 0) {
+      const freq = new Map<string, number>();
+      for (const t of errTexts) freq.set(t, (freq.get(t) ?? 0) + 1);
+      errorMessage = [...freq.entries()].sort((a, b) => b[1] - a[1])[0][0];
+    }
     // 多次跑里出现次数最多的 competing skill
     const compMap = competingMap.get(idx);
     let competingSkill: string | undefined;
@@ -836,6 +887,10 @@ export async function runTriggerEvalLive(
       pass,
       latencyMsAvg,
       competingSkill,
+      runsCompleted,
+      runsTimedOut,
+      runsErrored,
+      errorMessage,
     };
   });
 

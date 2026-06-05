@@ -219,7 +219,9 @@ export async function POST(
     // 3. 参数化
     const runsPerQuery = Math.max(1, Math.min(10, Number(body.runsPerQuery ?? 1)));
     const triggerThreshold = Math.max(0, Math.min(1, Number(body.triggerThreshold ?? 0.5)));
-    const timeoutMs = Math.max(5000, Math.min(120_000, Number(body.timeoutMs ?? 30_000)));
+    // 单条超时上限提到 300s（默认 60s）：旧的 30s 默认在 opencode/deepseek 慢 + 多路并发下
+    // 常常掐在模型刚吐完前言、还没跑到 skill 调用就 abort，把"应触发"全压成 triggered=false。
+    const timeoutMs = Math.max(5000, Math.min(300_000, Number(body.timeoutMs ?? 60_000)));
     const concurrency = Math.max(1, Math.min(10, Number(body.concurrency ?? 5)));
     const modelConfigId = body.modelConfigId ? String(body.modelConfigId).trim() : undefined;
 
