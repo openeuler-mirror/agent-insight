@@ -3,16 +3,20 @@
  *
  * 在 /api/auth/apikey 首次创建 User 后调用 seedBuiltinExampleForUser(user)：
  *   - 1 个内置数据集「messages 日志分析（内置示例）」(ideal_output, 10 cases)
- *   - 2 条内置链路追踪 Trace (Session + Execution)，挂在一个 ownership='user' 的
+ *   - 3 条内置链路追踪 Trace (Session + Execution)，挂在一个 ownership='user' 的
  *     demo agent (messages-log-analyzer) 名下，使其落到链路追踪页默认的「用户 Agent」
  *     视图里（其他用户/系统/评测器 trace 不受影响——ownership 按 (platform,name) 解析，
- *     而这个 agent 名只被这两条 demo trace 使用）。
+ *     而这个 agent 名只被这几条 demo trace 使用）。其中 2 条为正常成功链路，
+ *     第 3 条（label 后缀 -err-v0）为同场景下的「带报错」链路：Agent 误用 skill 文档里
+ *     硬编码的 /var/log/messages（而非用户给定路径）反复 grep，触发多次工具报错并误判为
+ *     「无攻击」，专门用于演示「智能诊断 / 故障诊断」能力。
  *
  * 语义：只在「用户从未被注入过」时执行一次（标记 = demo agent 是否存在）。
  * 用户之后删掉示例数据，不会再补回来——因为本函数只在 createUser 成功（新用户）时被调一次。
  *
  * 数据来源：src/server/builtin-example/fixtures.json，由 messages 日志分析 数据集 +
- * 两条真实 messages 分析 trace 导出（见该目录 README 注释）。
+ * 两条真实 messages 分析 trace 导出，外加 1 条人工构造的「带报错」同场景 trace
+ * （见该目录 README 注释）。
  */
 import { randomUUID } from 'crypto';
 import { prisma } from '@/lib/storage/prisma';
@@ -137,7 +141,7 @@ export async function seedBuiltinExampleForUser(user: string): Promise<void> {
     });
     if (existingAgent) return;
 
-    // 1. 注册 demo agent，ownership='user' → 这两条 trace 进入「用户 Agent」默认视图。
+    // 1. 注册 demo agent，ownership='user' → 这几条 trace 进入「用户 Agent」默认视图。
     const demoAgent = await p.registeredAgent.create({
       data: {
         platform: PLATFORM,
@@ -149,7 +153,7 @@ export async function seedBuiltinExampleForUser(user: string): Promise<void> {
       },
     });
 
-    // 1b. 内置 demo skill（两条 trace 依赖它）。失败不阻断后续（整体 best-effort）。
+    // 1b. 内置 demo skill（这几条 trace 依赖它）。失败不阻断后续（整体 best-effort）。
     let demoSkillName = '';
     try {
       demoSkillName = await seedDemoSkill(p, u);
@@ -176,7 +180,7 @@ export async function seedBuiltinExampleForUser(user: string): Promise<void> {
       updatedAt: nowIso,
     });
 
-    // 3. 两条内置 Trace：Session + Execution，挂在 demo agent 名下。
+    // 3. 内置 Trace（2 条成功 + 1 条带报错，用于演示智能诊断）：Session + Execution，挂在 demo agent 名下。
     for (const t of fixtures.traces) {
       if (!t.session || !t.execution) continue;
       const s = t.session as Record<string, any>;

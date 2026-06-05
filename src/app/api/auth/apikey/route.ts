@@ -50,7 +50,7 @@ export async function POST(request: Request) {
         throw new Error("Failed to retrieve or create user");
     }
 
-    // 新用户注册：一次性注入内置示例数据（数据集 + 两条链路追踪 Trace）。
+    // 新用户注册：一次性注入内置示例数据（数据集 + 3 条链路追踪 Trace：2 成功 + 1 带报错）。
     // best-effort，内部已吞异常，绝不阻断登录/注册。
     if (isNewUser) {
       await seedBuiltinExampleForUser(user.username);
