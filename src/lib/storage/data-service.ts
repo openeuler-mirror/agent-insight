@@ -922,6 +922,12 @@ interface ReadRecordsOptions {
     attachEvaluations?: boolean;
     page?: number;
     pageSize?: number;
+    /**
+     * 轻量返回:findExecutions 排除大字段 finalResult、完全跳过 session interactions 解析、
+     * 跳过每条 execution_match、强制不附评测快照;agents 改从已持久化的子 agent 行批量还原。
+     * 把每条记录从 KB–MB 降到几百字节,根治非分页路径的 next-server 堆 OOM(仅 SQLite/Prisma 路径正确)。
+     */
+    lightweight?: boolean;
 }
 
 export async function listObservedAgentNames(user?: string): Promise<string[]> {
@@ -977,12 +983,49 @@ export async function listObservedTraceIds(
     return traceIds;
 }
 
+// 轻量列表用的 Execution 列投影:穷举 schema.prisma 的 Execution 全部标量列,仅排除大字段 finalResult
+// 与 evaluations 关系。normalizedRecord 用 `{ ...r }` 整体展开,故凡前端可能读的列都要在此列出。
+// 注意:必须只含真实列名——例如 expectedSkillVersion 不是 Execution 列(今天即恒 undefined→null),不能放入。
+// 导出供测试断言"不含 finalResult"。
+export const LIGHT_EXECUTION_SELECT: Record<string, boolean> = {
+    id: true, taskId: true, query: true, framework: true, tokens: true, cost: true, latency: true,
+    toolCallCount: true, llmCallCount: true, inputTokens: true, outputTokens: true, toolCallErrorCount: true,
+    cacheReadInputTokens: true, cacheCreationInputTokens: true, maxSingleCallTokens: true, reasoningTokens: true,
+    timestamp: true, model: true, agentName: true, agentId: true, skill: true, skills: true, invokedSkills: true,
+    isSkillCorrect: true, isAnswerCorrect: true, answerScore: true, skillScore: true, judgmentReason: true,
+    failures: true, skillIssues: true, skillVersion: true, label: true, user: true, skillTriggerRate: true,
+    parentExecutionId: true, rootExecutionId: true, agentSessionId: true, subagentType: true,
+    subagentName: true, isSubagent: true, observedAgents: true,
+    // 排除: finalResult(大字段,轻量模式的核心), evaluations(关系)
+};
+
+/**
+ * 解析 denormalized 的 observedAgents 列(JSON string[]),供轻量模式还原 agents。
+ * observedAgents 在写入时由 extractObservedAgentNames(interactions) 算好存入(见 saveExecutionRecord),
+ * 与读侧 heavy 路径同源同口径,故 light 的 agents 与 heavy 完全一致、不丢任何 agent 名(含 opencode 'build' 等)。
+ * 导出供测试。
+ */
+export function parseObservedAgents(observedAgents: string | null | undefined): string[] {
+    if (!observedAgents) return [];
+    try {
+        const arr: unknown = JSON.parse(observedAgents);
+        return Array.isArray(arr)
+            ? arr.filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+            : [];
+    } catch {
+        return [];
+    }
+}
+
 async function readRecordsInternal(
     user?: string,
     filters?: ReadRecordFilters,
     options?: ReadRecordsOptions
 ): Promise<{ records: ExecutionRecord[]; total: number }> {
-    const attachEvaluations = options?.attachEvaluations ?? true;
+    const light = options?.lightweight === true;
+    // light 强制不附评测快照(routing/outcome_evaluation 需 final_result/judge 等重上下文,与轻量语义冲突;
+    // 迁移的调用方今天也没开 includeEvaluations,故零行为变化,且连带省掉 configsData 与每条快照查询)。
+    const attachEvaluations = light ? false : (options?.attachEvaluations ?? true);
     const page = options?.page && Number.isFinite(options.page) ? Math.max(1, Math.trunc(options.page)) : 1;
     const pageSize = options?.pageSize && Number.isFinite(options.pageSize) ? Math.max(1, Math.trunc(options.pageSize)) : 0;
     const where: any = {};
@@ -1034,7 +1077,10 @@ async function readRecordsInternal(
         where.agentName = filters.agentName;
     }
 
-    const records = await db.findExecutions(where, { timestamp: 'desc' });
+    // light: 排除大字段 finalResult(及 evaluations 关系),把整表扫描的每行重量降一个量级。
+    const records = light
+        ? await db.findExecutions(where, { timestamp: 'desc' }, LIGHT_EXECUTION_SELECT)
+        : await db.findExecutions(where, { timestamp: 'desc' });
     const byTaskId = new Map<string, any[]>();
     for (const r of records) {
         const tid = r.taskId || null;
@@ -1060,9 +1106,14 @@ async function readRecordsInternal(
             const ta = new Date(a.timestamp).getTime();
             const tb = new Date(b.timestamp).getTime();
             if (tb !== ta) return tb - ta;
-            const la = String(a.finalResult || '').length;
-            const lb = String(b.finalResult || '').length;
-            return lb - la;
+            // light 模式下 finalResult 未加载,跳过长度 tiebreak;两分支都用 id 做稳定排序兜底
+            // (消除原先长度相等时的不确定性)。仅"同 taskId 多行+时间戳相同+无 canonical"才触发,极罕见。
+            if (!light) {
+                const la = String(a.finalResult || '').length;
+                const lb = String(b.finalResult || '').length;
+                if (lb !== la) return lb - la;
+            }
+            return String(a.id).localeCompare(String(b.id));
         });
         keepIds.add(sorted[0].id);
     }
@@ -1092,13 +1143,18 @@ async function readRecordsInternal(
     // Sessions must be fetched BEFORE building the ownership map: an execution's effective
     // agent name may come from session.interactions when `r.agentName` is empty, and ownership
     // is keyed on that resolved name.
-    // 性能：只加载本次列表用到的 session（filtered 去重后的 taskId），不要把用户的全部历史
-    // session（每行含大段 interactions 文本）整表拉进内存。sessionMap 也只按 filtered 记录访问。
+    // 性能：只加载本次「实际返回 / 会被解析」的那一页 session（paged 去重后的 taskId），不要把整个
+    // filtered 结果集（分页时含全历史）每行的大段 interactions 文本整表拉进内存。下游 getParsedInteractions /
+    // sessionMap 只对 paged 记录访问，给 filtered 多加载的 session 纯属占内存又没人读。
+    // 非分页时 paged === filtered，行为不变；分页(paginated=1)时 paged ≪ filtered，峰值内存降一个量级。
+    // 历史 bug：这里曾用 filtered，导致评测中心即便只取第一页也会把全历史 session 的完整 interactions
+    // 一次性读进内存，随 DB 增长把 next-server 的 V8 堆撑到 ~4GB → FATAL heap OOM 自杀。
     const neededSessionTaskIds = Array.from(new Set(
-        filtered.map((r: any) => r.taskId).filter(Boolean) as string[],
+        paged.map((r: any) => r.taskId).filter(Boolean) as string[],
     ));
     const [sessions, configsData] = await Promise.all([
-        neededSessionTaskIds.length > 0
+        // light: 完全不拉 session(interactions 是最大内存来源);agents 改从子 agent 行还原(见下)。
+        (!light && neededSessionTaskIds.length > 0)
             ? db.findSessions({ user: user || undefined, taskId: { in: neededSessionTaskIds } })
             : Promise.resolve([] as any[]),
         (async () => {
@@ -1149,13 +1205,19 @@ async function readRecordsInternal(
     paged.forEach((r: any) => {
         const taskId = r.taskId || r.id;
         const sessionAgents: string[] = [];
-        // 解析结果走 memoize 缓存（与下方 invokedSkills 提取共用，每个 session 只 parse 一次）。
-        // 注意：agents 字段对外暴露(含多 agent / 子 agent 列表)，不能因 agentName 已存在就跳过解析。
-        const interactions = getParsedInteractions(r.taskId);
-        if (interactions) {
-            const agentSet = new Set<string>();
-            extractObservedAgentNames(interactions).forEach(name => agentSet.add(name));
-            sessionAgents.push(...agentSet);
+        if (light) {
+            // light: 从写入时 denormalize 的 observedAgents 列还原 agents,不解析 interactions。
+            // 与 heavy 的 extractObservedAgentNames 同源,agents 完全一致、不丢数据(含 opencode 'build' 等)。
+            sessionAgents.push(...parseObservedAgents(r.observedAgents));
+        } else {
+            // 解析结果走 memoize 缓存（与下方 invokedSkills 提取共用，每个 session 只 parse 一次）。
+            // 注意：agents 字段对外暴露(含多 agent / 子 agent 列表)，不能因 agentName 已存在就跳过解析。
+            const interactions = getParsedInteractions(r.taskId);
+            if (interactions) {
+                const agentSet = new Set<string>();
+                extractObservedAgentNames(interactions).forEach(name => agentSet.add(name));
+                sessionAgents.push(...agentSet);
+            }
         }
         recordAgentsByTaskId.set(taskId, sessionAgents);
         recordEffectiveAgent.set(taskId, resolveEffectiveAgentName(r.agentName, sessionAgents));
@@ -1346,7 +1408,8 @@ async function readRecordsInternal(
         };
         const executionId = normalizedRecord.task_id || normalizedRecord.upload_id || '';
         let executionMatch: ExecutionRecord['execution_match'] = null;
-        if (executionId) {
+        // light: 跳过每条 execution_match 查询(仅 skill-eval 消费它,而 skill-eval 不走 light)。
+        if (!light && executionId) {
             try {
                 const match = await db.findExecutionMatch(executionId);
                 if (match) {
@@ -1926,6 +1989,12 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
         }
     }
 
+    // 写入时预解析 agents 列表并 denormalize 存入 observedAgents,供轻量列表(fields=light)直接读取,
+    // 无需加载/解析 session interactions。与读侧 extractObservedAgentNames(interactions) 同源同口径
+    // (含 opencode 'build' 等只出现在 interactions 里的 agent 名),保证 light 与 heavy 的 agents 一致、不丢数据。
+    const observedAgentsJson = Array.isArray(mergedInteractionsForSession) && mergedInteractionsForSession.length > 0
+        ? JSON.stringify(extractObservedAgentNames(mergedInteractionsForSession))
+        : null;
     await db.upsertExecution({
         where: { id: recordId },
         create: {
@@ -1964,6 +2033,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
             cacheCreationInputTokens: targetRecord.cache_creation_input_tokens,
             maxSingleCallTokens: targetRecord.max_single_call_tokens,
             reasoningTokens: targetRecord.reasoning_tokens,
+            observedAgents: observedAgentsJson,
         },
         update: {
             taskId: targetRecord.task_id,
@@ -2000,6 +2070,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
             cacheCreationInputTokens: targetRecord.cache_creation_input_tokens,
             maxSingleCallTokens: targetRecord.max_single_call_tokens,
             reasoningTokens: targetRecord.reasoning_tokens,
+            observedAgents: observedAgentsJson,
         }
     });
 
@@ -2194,6 +2265,8 @@ export async function deriveSubagentExecutions(args: DeriveSubagentArgs): Promis
             subagentType: node.subagentType ?? null,
             subagentName: node.agentName ?? null,
             isSubagent: true,
+            // 子 agent 行也 denormalize observedAgents,保证 includeSubagents 的轻量列表 agents 一致。
+            observedAgents: JSON.stringify(extractObservedAgentNames(childInteractions)),
         } as const;
 
         try {

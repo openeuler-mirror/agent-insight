@@ -283,6 +283,8 @@ export async function GET(request: Request) {
     const agentName = searchParams.get('agentName') || undefined;
     const summary = searchParams.get('summary') || undefined;
     const paginated = searchParams.get('paginated') === '1' || searchParams.get('paginated') === 'true';
+    // 轻量返回:只给 denormalized 元数据,不读 finalResult/不解析 session,根治非分页路径堆 OOM。
+    const lightweight = searchParams.get('fields') === 'light' || searchParams.get('lightweight') === '1';
     const page = parsePositiveInt(searchParams.get('page'), 1);
     const pageSize = Math.min(parsePositiveInt(searchParams.get('pageSize'), 20), 100);
     const includeEvaluationsParam = searchParams.get('includeEvaluations');
@@ -308,6 +310,9 @@ export async function GET(request: Request) {
             framework: single.framework,
             agentName: single.agentName,
             timestamp: single.timestamp,
+            // 单条查询带上 final_result:供 fault 详情在列表走 fields=light(不带 final_result)后按需回填。
+            // 单条记录,无 OOM 风险。
+            final_result: single.finalResult ?? null,
             is_subagent: single.isSubagent ?? false,
             parent_execution_id: single.parentExecutionId ?? null,
             root_execution_id: single.rootExecutionId ?? null,
@@ -339,11 +344,11 @@ export async function GET(request: Request) {
         parentExecutionId,
     };
     const pageResult = paginated
-        ? await readRecordPage(user, recordFilters, { attachEvaluations, page, pageSize })
+        ? await readRecordPage(user, recordFilters, { attachEvaluations, page, pageSize, lightweight })
         : null;
     const data = pageResult
         ? pageResult.records
-        : await readRecords(user, recordFilters, { attachEvaluations });
+        : await readRecords(user, recordFilters, { attachEvaluations, lightweight });
     
     // 批量查每条 trace 的最近一次 TrajectoryEvalResult.status, 让前端 trace 行能反映"上次评测
     // 跑成功 / 失败"。之前 trace 行 status 只看 resultScore/trajScore + 前端内存 failedTaskIds

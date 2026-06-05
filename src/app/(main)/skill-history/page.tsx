@@ -40,7 +40,7 @@ function SkillHistoryInner() {
     useEffect(() => {
         if (!user || !skillName) return;
         setLoading(true);
-        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&skill=${encodeURIComponent(skillName)}`)
+        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&skill=${encodeURIComponent(skillName)}&fields=light`)
             .then(r => r.json())
             .then((d: Execution[]) => setData(Array.isArray(d) ? d : []))
             .catch(() => setData([]))

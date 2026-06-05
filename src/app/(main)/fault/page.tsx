@@ -233,7 +233,7 @@ function FaultPageContent() {
     useEffect(() => {
         if (!user) return;
         setLoading(true);
-        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}`)
+        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&fields=light`)
             .then(r => r.json())
             .then((d: Execution[]) => {
                 const list = Array.isArray(d) ? d : [];
@@ -595,6 +595,8 @@ function FaultDetailView({ execution, locale, user, onBack }: { execution: Execu
     const [input, setInput] = useState('');
     const [agentSessionId, setAgentSessionId] = useState<string | null>(null);
     const [sending, setSending] = useState(false);
+    // 列表走 fields=light(不带 final_result),详情打开时按需单查回填,供诊断 brief 使用。
+    const [finalResult, setFinalResult] = useState<string | null>(null);
 
     // ── UI state ──
     const [pendingNodeRefs, setPendingNodeRefs] = useState<Map<string, TraceNodeItem>>(new Map());
@@ -667,8 +669,17 @@ function FaultDetailView({ execution, locale, user, onBack }: { execution: Execu
     useEffect(() => {
         setMessages([]); setInput(''); setAgentSessionId(null); setSession(null);
         setPendingNodeRefs(new Map()); setTraceSearch(''); setCollapsedNodes(new Set());
+        setFinalResult(null);
         if (!taskId) return;
         setSessionLoading(true);
+        // 列表是轻量返回(无 final_result),这里按需单查回填(单条,无 OOM 风险),供诊断 brief 用。
+        apiFetch(`/api/observe/data?executionId=${encodeURIComponent(taskId)}`)
+            .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+            .then((arr: Array<{ final_result?: string | null }>) => {
+                const fr = Array.isArray(arr) && arr[0] ? (arr[0].final_result ?? null) : null;
+                setFinalResult(fr);
+            })
+            .catch(() => {});
         apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}`)
             .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
             .then((d: SessionData) => setSession(d))
@@ -752,7 +763,7 @@ function FaultDetailView({ execution, locale, user, onBack }: { execution: Execu
             const response = await apiFetch('/api/fault/diagnosis/stream', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ user, message: fullMessage, executionId: taskId, sessionId: agentSessionId, executionBrief: buildExecutionBrief(execution) }),
+                body: JSON.stringify({ user, message: fullMessage, executionId: taskId, sessionId: agentSessionId, executionBrief: buildExecutionBrief({ ...execution, final_result: finalResult ?? execution.final_result ?? undefined }) }),
             });
             if (!response.ok || !response.body) throw new Error((await response.text().catch(() => '')) || `HTTP ${response.status}`);
             await consumeSse(response, {

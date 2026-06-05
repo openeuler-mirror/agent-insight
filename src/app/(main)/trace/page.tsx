@@ -404,7 +404,7 @@ function TracePageContent() {
             : agentScopeFilter === 'all'
                 ? '&includeSubagents=1'
                 : '';
-        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&includeEvaluations=0${scopeParam}`)
+        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&includeEvaluations=0&fields=light${scopeParam}`)
             .then(r => r.json())
             .then((d: Execution[]) => setData(Array.isArray(d) ? d : []))
             .catch(() => setData([]))
