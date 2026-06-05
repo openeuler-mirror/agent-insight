@@ -1092,10 +1092,14 @@ async function readRecordsInternal(
     // Sessions must be fetched BEFORE building the ownership map: an execution's effective
     // agent name may come from session.interactions when `r.agentName` is empty, and ownership
     // is keyed on that resolved name.
-    // 性能：只加载本次列表用到的 session（filtered 去重后的 taskId），不要把用户的全部历史
-    // session（每行含大段 interactions 文本）整表拉进内存。sessionMap 也只按 filtered 记录访问。
+    // 性能：只加载本次「实际返回 / 会被解析」的那一页 session（paged 去重后的 taskId），不要把整个
+    // filtered 结果集（分页时含全历史）每行的大段 interactions 文本整表拉进内存。下游 getParsedInteractions /
+    // sessionMap 只对 paged 记录访问，给 filtered 多加载的 session 纯属占内存又没人读。
+    // 非分页时 paged === filtered，行为不变；分页(paginated=1)时 paged ≪ filtered，峰值内存降一个量级。
+    // 历史 bug：这里曾用 filtered，导致评测中心即便只取第一页也会把全历史 session 的完整 interactions
+    // 一次性读进内存，随 DB 增长把 next-server 的 V8 堆撑到 ~4GB → FATAL heap OOM 自杀。
     const neededSessionTaskIds = Array.from(new Set(
-        filtered.map((r: any) => r.taskId).filter(Boolean) as string[],
+        paged.map((r: any) => r.taskId).filter(Boolean) as string[],
     ));
     const [sessions, configsData] = await Promise.all([
         neededSessionTaskIds.length > 0
