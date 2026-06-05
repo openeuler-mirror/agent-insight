@@ -236,7 +236,7 @@ set -a
 load_agent_insight_env
 set +a
 
-nohup npm run dev > server.log 2>&1 &
+NODE_OPTIONS="--max-old-space-size=4096" nohup npm run dev > server.log 2>&1 &
 NEW_PID=$!
 
 echo "Server started successfully."
