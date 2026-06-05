@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   AlertTriangle,
@@ -54,11 +54,13 @@ export interface TraceExplicitError {
 }
 
 interface AgentDebugResponse {
-  report: AgentDebugReportPayload | null;
+  report?: AgentDebugReportPayload | null;
   row?: {
     status?: string;
     errorMessage?: string | null;
   } | null;
+  reportId?: string;
+  status?: string;
   cached?: boolean;
   error?: string;
 }
@@ -66,6 +68,11 @@ interface AgentDebugResponse {
 interface AgentDebugSkillsAnalysisResponse {
   report?: AgentDebugReportPayload;
   skillsAnalysis?: AgentDebugSkillsAnalysis;
+  row?: {
+    status?: string;
+    errorMessage?: string | null;
+  } | null;
+  status?: string;
   cached?: boolean;
   error?: string;
 }
@@ -77,6 +84,24 @@ const MODULES: Array<{ key: AgentDebugModule; zh: string; en: string }> = [
   { key: 'action', zh: '行动', en: 'Action' },
   { key: 'system', zh: '系统', en: 'System' },
 ];
+
+const AGENT_DEBUG_POLL_MS = 3000;
+
+function agentDebugStatus(data: AgentDebugResponse): string {
+  return data.row?.status || data.status || '';
+}
+
+function isAgentDebugRunning(data: AgentDebugResponse): boolean {
+  return agentDebugStatus(data) === 'running';
+}
+
+function skillsAnalysisFromResponse(data: AgentDebugSkillsAnalysisResponse): AgentDebugSkillsAnalysis | null {
+  return data.report?.skillsAnalysis || data.skillsAnalysis || null;
+}
+
+function isSkillsAnalysisRunningResponse(data: AgentDebugSkillsAnalysisResponse): boolean {
+  return skillsAnalysisFromResponse(data)?.status === 'running' || data.status === 'running';
+}
 
 const FINDING_MODULES = MODULES.filter(item => item.key !== 'system');
 
@@ -209,6 +234,8 @@ export function AgentDebugCard({ executionId, user, locale, traceExplicitErrors 
   const [loading, setLoading] = useState(false);
   const [report, setReport] = useState<AgentDebugReportPayload | null>(null);
   const [error, setError] = useState('');
+  const observedRunningRef = useRef(false);
+  const requestedSkillsAnalysisRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     if (!executionId) return;
@@ -217,17 +244,44 @@ export function AgentDebugCard({ executionId, user, locale, traceExplicitErrors 
       .then(res => res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`)))
       .then((data: AgentDebugResponse) => {
         if (cancelled) return;
-        setReport(data.report || null);
-        setError(data.row?.errorMessage || '');
+        applyAgentDebugResponse(data);
       })
       .catch(err => {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+        if (cancelled) return;
+        setLoading(false);
+        setError(err instanceof Error ? err.message : String(err));
       });
     return () => { cancelled = true; };
   }, [executionId]);
 
+  useEffect(() => {
+    if (!executionId || !loading) return;
+    let cancelled = false;
+
+    const poll = async () => {
+      try {
+        const res = await apiFetch(`/api/observe/executions/${encodeURIComponent(executionId)}/agent-debug`);
+        const data = await res.json().catch(() => ({})) as AgentDebugResponse;
+        if (cancelled) return;
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        applyAgentDebugResponse(data);
+      } catch (err) {
+        if (cancelled) return;
+        setLoading(false);
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    };
+
+    const timer = window.setInterval(poll, AGENT_DEBUG_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [executionId, loading]);
+
   async function run(force = false) {
     if (!executionId || loading) return;
+    observedRunningRef.current = true;
     setLoading(true);
     setError('');
     try {
@@ -237,17 +291,49 @@ export function AgentDebugCard({ executionId, user, locale, traceExplicitErrors 
         body: JSON.stringify({ user, force }),
       });
       const data = await res.json().catch(() => ({})) as AgentDebugResponse;
-      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-      const nextReport = data.report || null;
-      setReport(nextReport);
-      if (nextReport) {
-        void ensureSkillsAnalysis(nextReport);
+      if (res.status === 409 && isAgentDebugRunning(data)) {
+        applyAgentDebugResponse(data);
+        return;
       }
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      applyAgentDebugResponse(data, { ensureSkillsAnalysis: true });
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
       setLoading(false);
+      setError(err instanceof Error ? err.message : String(err));
     }
+  }
+
+  function applyAgentDebugResponse(data: AgentDebugResponse, options?: { ensureSkillsAnalysis?: boolean }) {
+    const status = agentDebugStatus(data);
+    const nextReport = data.report || null;
+    if (status === 'running') {
+      observedRunningRef.current = true;
+      setReport(nextReport);
+      setError('');
+      setLoading(true);
+      return;
+    }
+
+    const shouldEnsureSkillsAnalysis = Boolean(
+      nextReport
+      && status !== 'failed'
+      && (options?.ensureSkillsAnalysis || observedRunningRef.current)
+    );
+    observedRunningRef.current = false;
+    setLoading(false);
+    setReport(nextReport);
+    setError(data.row?.errorMessage || data.error || '');
+    if (nextReport && shouldEnsureSkillsAnalysis) {
+      requestSkillsAnalysis(nextReport);
+    }
+  }
+
+  function requestSkillsAnalysis(nextReport: AgentDebugReportPayload) {
+    if (!executionId || !user || hasUsableSkillsAnalysis(nextReport.skillsAnalysis) || nextReport.skillsAnalysis?.status === 'running') return;
+    const key = nextReport.interactionHash || `${executionId}:${nextReport.stats.durationMs}`;
+    if (requestedSkillsAnalysisRef.current.has(key)) return;
+    requestedSkillsAnalysisRef.current.add(key);
+    void ensureSkillsAnalysis(nextReport);
   }
 
   async function ensureSkillsAnalysis(nextReport: AgentDebugReportPayload) {
@@ -843,6 +929,33 @@ function SkillsAnalysisSection({ executionId, user, zh, analysis, onReportUpdate
   const failed = status === 'failed';
   const attentionCount = keyActions.filter(item => item.status === 'partial' || item.status === 'missing' || item.status === 'not_applicable').length;
 
+  useEffect(() => {
+    if (!executionId || status !== 'running') return;
+    let cancelled = false;
+
+    const poll = async () => {
+      try {
+        const res = await apiFetch(`/api/observe/executions/${encodeURIComponent(executionId)}/agent-debug`);
+        const data = await res.json().catch(() => ({})) as AgentDebugResponse;
+        if (cancelled) return;
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        if (data.report) {
+          onReportUpdate(data.report);
+          setLocalAnalysis(data.report.skillsAnalysis || null);
+          if (data.report.skillsAnalysis?.status !== 'failed') setError('');
+        }
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+      }
+    };
+
+    const timer = window.setInterval(poll, AGENT_DEBUG_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [executionId, onReportUpdate, status]);
+
   async function generateSkillsAnalysis(force = true) {
     if (!executionId || !user || generating) return;
     setGenerating(true);
@@ -856,13 +969,19 @@ function SkillsAnalysisSection({ executionId, user, zh, analysis, onReportUpdate
       const data = await res.json().catch(() => ({})) as {
         report?: AgentDebugReportPayload;
         skillsAnalysis?: AgentDebugSkillsAnalysis;
+        status?: string;
         error?: string;
       };
+      if (res.status === 409 && isSkillsAnalysisRunningResponse(data)) {
+        applySkillsAnalysisResponse(data);
+        if (!expanded) setExpanded(true);
+        return;
+      }
       if (data.report) {
-        onReportUpdate(data.report);
-        setLocalAnalysis(data.report.skillsAnalysis || data.skillsAnalysis || null);
-      } else if (data.skillsAnalysis) {
-        setLocalAnalysis(data.skillsAnalysis);
+        applySkillsAnalysisResponse(data);
+      } else {
+        const nextAnalysis = skillsAnalysisFromResponse(data);
+        if (nextAnalysis) setLocalAnalysis(nextAnalysis);
       }
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       if (!expanded) setExpanded(true);
@@ -870,6 +989,21 @@ function SkillsAnalysisSection({ executionId, user, zh, analysis, onReportUpdate
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setGenerating(false);
+    }
+  }
+
+  function applySkillsAnalysisResponse(data: AgentDebugSkillsAnalysisResponse) {
+    if (data.report) {
+      onReportUpdate(data.report);
+    }
+    const nextAnalysis = skillsAnalysisFromResponse(data);
+    if (nextAnalysis) {
+      setLocalAnalysis(nextAnalysis);
+    } else if (data.report) {
+      setLocalAnalysis(null);
+    }
+    if (!data.error || isSkillsAnalysisRunningResponse(data)) {
+      setError('');
     }
   }
 
