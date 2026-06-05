@@ -170,7 +170,7 @@ if [ -n "$(find_pid_on_port $PORT)" ]; then
     exit 1
 fi
 
-nohup npm run start > server.log 2>&1 &
+NODE_OPTIONS="--max-old-space-size=4096" nohup npm run start > server.log 2>&1 &
 NEW_PID=$!
 
 echo "Server started successfully."
