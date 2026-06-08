@@ -185,7 +185,7 @@ bash scripts/start.sh
 
 如有任何疑问、建议或讨论需求，欢迎通过以下方式联系我们：
 
-- 提交 [Issue](https://atomgit.com/openeuler/witty-diagnosis-agent/issues)
+- 提交 [Issue](https://atomgit.com/openeuler/agent-insight/issues)
 - 发送邮件至 <intelligence@openeuler.org>
 
 ---
