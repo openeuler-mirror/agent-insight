@@ -70,6 +70,8 @@ const COORDINATOR_SYSTEM_PROMPT = `你是 Agent Insight 的「关键动作轨迹
 【硬性约束】
 - 禁止派发、调用或生成任何 subagent / task。
 - 只使用输入中的 actual_flat_trace_steps 作为 trace 判断依据。
+- actual_flat_trace_steps 是事件级 trace 摘要，包含 user / llm / tool / skill / task；tool、skill、task 事件本身就是覆盖证据，不能因为多个工具服务于同一业务目标就合并忽略。
+- 判断 read/bash/脚本/文件读取等行为时，必须查看 tool/skill/task 事件的 name、argsSummary、outputSummary、textContent、index/step_index。
 - comparison_mode=skill_key_actions 时，必须为 reference_key_actions 中的每个关键动作输出且只输出一条 key_action_results。
 - comparison_mode=trace_only 时，reference_key_actions 为空，必须输出 key_action_results: []，不要生成 Skill 改进建议。
 - 不要输出 deviation_steps，不要输出 path deviation 列表。
@@ -207,6 +209,7 @@ function buildKeyActionAnalysisPayload(input: TrajectoryEvalInput) {
             language: 'zh-CN',
             analyze_each_key_action_independently: true,
             only_use_actual_flat_trace_steps_as_trace_basis: true,
+            actual_trace_granularity: 'event_level_user_llm_tool_skill_task',
             do_not_generate_path_deviation_items: true,
             do_not_merge_or_dedupe_suggestions: true,
             do_not_infer_extra_key_actions: true,
