@@ -1,4 +1,5 @@
 import { getProxyConfig } from '@/lib/ingest/proxy-config';
+import { getUserSettings, isMaskedApiKey } from '@/lib/storage/server-config';
 import { NextResponse } from 'next/server';
 import { OpenAI } from "openai";
 
@@ -8,7 +9,7 @@ export async function POST(request: Request) {
         const apiKey = body.apiKey || body.evalApiKey;
         const provider = body.provider || body.evalProvider;
         const model = body.model || body.evalModel;
-        
+
         const baseUrl = body.baseUrl || body.evalBaseUrl;
         let normalizedBaseUrl = baseUrl;
         if (normalizedBaseUrl) {
@@ -17,9 +18,21 @@ export async function POST(request: Request) {
             normalizedBaseUrl = normalizedBaseUrl.replace(/\/chat\/completions\/?$/, '');
         }
 
+        // The client only holds masked keys for already-saved configs. When it
+        // tests one without re-typing the key, resolve the real key server-side
+        // from the stored config (identified by user + configId).
+        let resolvedKey = apiKey;
+        if ((!resolvedKey || isMaskedApiKey(resolvedKey)) && body.user && body.configId) {
+            const settings = await getUserSettings(body.user);
+            const stored = settings.configs.find((c) => c.id === body.configId)?.apiKey;
+            if (stored) resolvedKey = stored;
+        }
+        // Never send a mask sentinel to the provider; treat unresolved masks as empty.
+        if (isMaskedApiKey(resolvedKey)) resolvedKey = '';
+
         // Allow empty API Key for services that don't require authentication
         // Use a placeholder if not provided
-        const finalApiKey = apiKey || 'no-api-key-required';
+        const finalApiKey = resolvedKey || 'no-api-key-required';
 
         const { customFetch } = getProxyConfig();
 
