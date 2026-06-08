@@ -1,11 +1,13 @@
 
-import { getUserSettings, saveUserSettings } from '@/lib/storage/server-config';
+import { getUserSettings, saveUserSettings, maskUserSettings } from '@/lib/storage/server-config';
 import { NextResponse } from 'next/server';
 
 export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const user = searchParams.get('user');
-    return NextResponse.json(await getUserSettings(user));
+    // Mask model API keys before they reach the browser — the client only needs
+    // a masked value for rendering. Real keys never leave the server.
+    return NextResponse.json(maskUserSettings(await getUserSettings(user)));
 }
 
 export async function POST(request: Request) {

@@ -115,7 +115,7 @@ async function main() {
         process.exit(2);
     }
 
-    let user = process.argv[3];
+    let user: string | undefined = process.argv[3];
     if (!user) {
         const rows: Array<{ user: string | null }> = await (prisma as any).execution.groupBy({
             by: ['user'],

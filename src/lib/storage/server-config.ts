@@ -20,6 +20,42 @@ export interface UserSettings {
     searchApiKey?: string;
 }
 
+/**
+ * Sentinel character used to mask the middle of an API key in client-facing
+ * responses. Real keys are ASCII (alphanumeric + -/_) and never contain it, so
+ * its presence reliably marks a value as a masked placeholder — never a real key.
+ */
+const MASK_CHAR = '•';
+
+/** True if `key` is a masked placeholder (must NOT be persisted as a real key). */
+export function isMaskedApiKey(key: string | null | undefined): boolean {
+    return typeof key === 'string' && key.includes(MASK_CHAR);
+}
+
+/**
+ * Mask an API key for client rendering: keep the first/last 4 chars (enough to
+ * verify which key is configured) and replace the middle with bullets. Short
+ * keys are fully masked. Empty stays empty so "(未设置)" still renders.
+ */
+export function maskApiKey(key: string | null | undefined): string {
+    if (!key) return '';
+    if (key.length <= 8) return MASK_CHAR.repeat(8);
+    return `${key.slice(0, 4)}${MASK_CHAR.repeat(8)}${key.slice(-4)}`;
+}
+
+/**
+ * Return a copy of settings with every model config's apiKey AND the web-search
+ * apiKey masked. Use this for any client-facing response — the browser must
+ * never receive a plaintext key.
+ */
+export function maskUserSettings(settings: UserSettings): UserSettings {
+    return {
+        ...settings,
+        configs: settings.configs.map(c => ({ ...c, apiKey: maskApiKey(c.apiKey) })),
+        searchApiKey: maskApiKey(settings.searchApiKey),
+    };
+}
+
 export async function getActiveConfig(user?: string | null): Promise<ModelConfig | null> {
     const settings = await getUserSettings(user);
     if (!settings || !settings.activeConfigId) return null;
@@ -75,14 +111,28 @@ export async function getUserSettings(user?: string | null): Promise<UserSetting
 }
 
 export async function saveUserSettings(user: string, settings: UserSettings): Promise<void> {
-    const userOnlyConfigs = settings.configs.filter((c: ModelConfig) => !c.id.startsWith('default_'));
+    // The client only ever receives masked keys (see maskUserSettings), so an
+    // unchanged config round-trips back here with a masked apiKey. Restore the
+    // stored original for those, so saving never clobbers a real key with a mask.
+    const existing = await getUserSettings(user);
+    const existingKeyById = new Map(existing.configs.map(c => [c.id, c.apiKey]));
+    const restoredConfigs = settings.configs.map(c =>
+        isMaskedApiKey(c.apiKey) ? { ...c, apiKey: existingKeyById.get(c.id) ?? '' } : c
+    );
+
+    // Same protection for the web-search key: a masked value means "unchanged".
+    const restoredSearchApiKey = isMaskedApiKey(settings.searchApiKey)
+        ? (existing.searchApiKey ?? '')
+        : (settings.searchApiKey ?? '');
+
+    const userOnlyConfigs = restoredConfigs.filter((c: ModelConfig) => !c.id.startsWith('default_'));
 
     const settingsJson = JSON.stringify({
         activeConfigId: settings.activeConfigId,
         configs: userOnlyConfigs,
         autoEvaluationEnabled: settings.autoEvaluationEnabled ?? true,
         searchProvider: settings.searchProvider ?? 'none',
-        searchApiKey: settings.searchApiKey ?? '',
+        searchApiKey: restoredSearchApiKey,
     });
 
     await db.upsertUserSettings(user, settingsJson);
