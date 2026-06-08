@@ -58,6 +58,11 @@ interface RunResultItem {
   pass: boolean;
   latencyMsAvg: number;
   competingSkill?: string;
+  // 跑完/没跑完拆分（旧 run 记录没有 → optional，渲染处要兼容缺失）
+  runsCompleted?: number;
+  runsTimedOut?: number;
+  runsErrored?: number;
+  errorMessage?: string;
 }
 interface RunRecord {
   id: string;
@@ -1161,6 +1166,16 @@ function TriggerColumn({
                       <span style={{ color: '#888' }}>
                         触发 {result.runsTriggered}/{result.runsTotal}
                       </span>
+                      {result.runsTimedOut ? (
+                        <span style={{ color: '#d97706' }} title="超时被掐断、没跑到 skill 调用（已含重试后仍超时）">
+                          ⏱ 超时 {result.runsTimedOut}
+                        </span>
+                      ) : null}
+                      {result.runsErrored ? (
+                        <span style={{ color: '#ef4444' }} title={result.errorMessage || 'opencode 报错'}>
+                          ⚠ 出错 {result.runsErrored}
+                        </span>
+                      ) : null}
                       {result.competingSkill && (
                         <span style={{ color: '#a16207' }}>↳ 被 {result.competingSkill} 抢路由</span>
                       )}
@@ -1285,7 +1300,7 @@ function RunDialog({
 }) {
   const [runsPerQuery, setRunsPerQuery] = useState(1);
   const [triggerThreshold, setTriggerThreshold] = useState(0.5);
-  const [timeoutMs, setTimeoutMs] = useState(30000);
+  const [timeoutMs, setTimeoutMs] = useState(60000);
   const [concurrency, setConcurrency] = useState(5);
   const [modelConfigId, setModelConfigId] = useState<string>(activeConfigId);
   // 默认跑「用户当前在看的版本」；没有就 latest
@@ -1465,11 +1480,11 @@ function RunDialog({
               />
             </label>
             <label>
-              <div style={{ fontSize: 11, color: '#888' }}>单条超时（ms）</div>
+              <div style={{ fontSize: 11, color: '#888' }}>单条超时（ms，最高 300000）</div>
               <input
                 type="number"
                 min={5000}
-                max={120000}
+                max={300000}
                 step={1000}
                 value={timeoutMs}
                 onChange={e => setTimeoutMs(Number(e.target.value))}
@@ -1576,9 +1591,19 @@ function RecallResultBlock({
   const toItem = (r: typeof run.results[number]): FindingItem => {
     // 证据 = 本次跑的实测数据。每条 case 的触发率 / runs 数 / 抢路由情况都不同，
     // 自然就是 per-case 真证据，绝对不会"全长一样"。
+    // 没跑完拆分（超时/出错）——区分"没触发"和"根本没跑到路由决策"。旧记录无这些字段 → 兼容缺失。
+    const notRunParts: string[] = [];
+    if (r.runsTimedOut) notRunParts.push(`⏱ ${r.runsTimedOut} 次超时未跑完`);
+    if (r.runsErrored) notRunParts.push(`⚠ ${r.runsErrored} 次出错${r.errorMessage ? `：${r.errorMessage}` : ''}`);
     const triggerObs = `实际触发率 ${Math.round(r.triggerRate * 100)}%（命中 ${r.runsTriggered}/${r.runsTotal} 次${
       r.latencyMsAvg > 0 ? ` · 平均 ${Math.round(r.latencyMsAvg)}ms` : ''
-    }）${r.competingSkill ? ` · 被「${r.competingSkill}」抢路由` : ''}`;
+    }）${r.competingSkill ? ` · 被「${r.competingSkill}」抢路由` : ''}${
+      notRunParts.length > 0 ? ` · ${notRunParts.join(' · ')}` : ''
+    }`;
+    // 这条 fail 是不是"没跑完"主导（超时+出错占了多数）——若是，建议改成"提高超时/降并发重测"，
+    // 而不是误导用户去改 SKILL.md（skill 可能根本没拿到一次完整的路由机会）。
+    const notRunCount = (r.runsTimedOut ?? 0) + (r.runsErrored ?? 0);
+    const notCompletedDominated = notRunCount > 0 && notRunCount >= r.runsTotal - notRunCount;
     // 原因 = 当初这条 case 想测什么（rationale）。没有就不展示，让它退化为空——
     // 比硬塞「触发评价集标记为应该命中本 Skill」的占位句子干净。
     const rationale = rationaleMap.get(r.itemId)?.trim() || null;
@@ -1600,7 +1625,9 @@ function RecallResultBlock({
       evidence: triggerObs,
       reasoning: rationale,
       suggestedFix: r.shouldTrigger
-        ? '在 SKILL.md 加该类 query 的触发关键词或更明确的触发场景说明'
+        ? notCompletedDominated
+          ? '本条多为超时/出错没跑完（不是 skill 不触发）：提高单条超时或降低并发后重测，再判断触发质量'
+          : '在 SKILL.md 加该类 query 的触发关键词或更明确的触发场景说明'
         : '在 SKILL.md 加排除条件 / 边界说明，避免被无关 query 命中',
     };
   };
@@ -1781,6 +1808,20 @@ function ExecSummary({
   const score = Math.round(latestRun.passRate * 100);
   const klass = scoreColorClass(score);
   const modelName = modelLabelOf(latestRun.modelId);
+  // 跑完/没跑完 rollup：统计最近一次 run 里有多少 item 至少有一次没跑完（超时/出错），
+  // 以及总的超时/出错次数。直接在卡片摘要里点出来——让"应触发全挂"一眼能区分是
+  // "没跑完"还是"skill 真不触发"。旧 run 记录无这些字段时自然算 0、不显示。
+  const notRun = latestRun.results.reduce(
+    (acc, r) => {
+      acc.timedOut += r.runsTimedOut ?? 0;
+      acc.errored += r.runsErrored ?? 0;
+      return acc;
+    },
+    { timedOut: 0, errored: 0 },
+  );
+  const itemsNotFullyRun = latestRun.results.filter(
+    r => (r.runsTimedOut ?? 0) + (r.runsErrored ?? 0) > 0,
+  ).length;
   return (
     <>
       <span>已执行</span>
@@ -1789,6 +1830,12 @@ function ExecSummary({
       {modelName && <span>· {modelName}</span>}
       <span>· 最近评分</span>
       <code className={`score-${klass}`}>{score} 分</code>
+      {itemsNotFullyRun > 0 && (
+        <span style={{ color: '#d97706' }} title="没跑完 = 被超时掐断或 opencode 报错，没产出路由决策；不等于 skill 不触发">
+          · ⚠ {itemsNotFullyRun} 条没跑完（超时 {notRun.timedOut}
+          {notRun.errored ? ` · 出错 ${notRun.errored}` : ''}）
+        </span>
+      )}
     </>
   );
 }

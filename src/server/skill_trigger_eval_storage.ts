@@ -76,6 +76,18 @@ export interface TriggerRunResultItem {
    * 用户可凭此分析"被谁抢了"。
    */
   competingSkill?: string;
+  /**
+   * 跑完/没跑完拆分（旧记录没有这几个字段 → optional，前端要兼容缺失）：
+   *   runsCompleted = 真正跑到路由决策的次数（命中 或 自然跑完没触发）
+   *   runsTimedOut  = 被单条超时掐断、没跑到 skill 调用的次数（已含重试后仍超时的）
+   *   runsErrored   = opencode 报错、根本没问到模型的次数
+   * runsCompleted + runsTimedOut + runsErrored === runsTotal。
+   */
+  runsCompleted?: number;
+  runsTimedOut?: number;
+  runsErrored?: number;
+  /** errored 时的代表性错误文本（取出现最多的一条）；用于前端展示报错原因。 */
+  errorMessage?: string;
 }
 
 export type TriggerRunStatus = 'running' | 'done' | 'failed' | 'cancelled';
