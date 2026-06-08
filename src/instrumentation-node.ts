@@ -55,6 +55,30 @@ export async function setupNodeRuntime(): Promise<void> {
     );
   }
 
+  // 回收"僵尸评测行":进程崩溃/重启后,后台评测 promise 已死,但 DB 里仍是 running/pending →
+  // 前端永远显示「评测中」、运行计数不归零(连带 run 无法删除),且内存里已无 controller 故无从终止。
+  // 启动时一次性把它们标失败(重启 = 没有任何评测真的在跑),跟 opencode 孤儿回收同理。
+  try {
+    const { prismaRaw } = await import('@/lib/storage/prisma');
+    const t = await prismaRaw.trajectoryEvalResult.updateMany({
+      where: { status: { in: ['running', 'pending'] } },
+      data: { status: 'failed', errorMessage: '服务重启，评测中断（stale）' },
+    });
+    let triggerReaped = 0;
+    try {
+      const r = await prismaRaw.skillTriggerEvalRun.updateMany({
+        where: { status: 'running' },
+        data: { status: 'failed', errorMessage: '服务重启，评测中断（stale）' },
+      });
+      triggerReaped = r.count;
+    } catch { /* 该表可能尚未建/无 errorMessage 列时忽略 */ }
+    if (t.count > 0 || triggerReaped > 0) {
+      console.warn(`[instrumentation] 回收僵尸评测行: trajectory ${t.count} 条 + trigger ${triggerReaped} 条 → failed`);
+    }
+  } catch (err) {
+    console.warn('[instrumentation] stale eval reap failed:', (err as Error)?.message);
+  }
+
   // 启动时跑一次 uploader：把上一轮 dev server 留下的 spool 积压清掉，避免那些 trace
   // 一直没归宿。常态下 plugin 的 kickUploader 在每次 opencode event 都会触发一次
   // 一次性 uploader 进程，所以这里只补"启动空窗期"。
