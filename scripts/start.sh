@@ -170,7 +170,9 @@ if [ -n "$(find_pid_on_port $PORT)" ]; then
     exit 1
 fi
 
-NODE_OPTIONS="--max-old-space-size=4096" nohup npm run start > server.log 2>&1 &
+# 运行时堆上限。注意机器 ~15G、opencode 满 5 slot ~4.5G,所以不能调太高(否则系统级 OOM-kill
+# 比堆崩更难查)。6G = 在"真正的修复(评测重试不放大 + 评测行并发硬上限)"之外留点余量。
+NODE_OPTIONS="--max-old-space-size=6144" nohup npm run start > server.log 2>&1 &
 NEW_PID=$!
 
 echo "Server started successfully."
