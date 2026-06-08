@@ -111,10 +111,38 @@ model Execution {
   // 反向关系：被多少次 Evaluation 评估过（dynamic 类型，重评懒删除）
   evaluations          Evaluation[]
 
+  // 反向关系：这条 Execution（= 某一层 agent）本层实际调用的 skill（按 agent 作用域，不含子 agent）。
+  // 可索引的多对多，替代 skills/invokedSkills JSON blob 做"按 skill+version 反查 trace"与统一筛选。
+  executionSkills      ExecutionSkill[]
+
   @@index([parentExecutionId])
   @@index([rootExecutionId])
   @@index([isSubagent, timestamp])
   @@index([agentSessionId])
+}
+
+// Trace(= 单层 agent 的 Execution)↔ skill 的可索引绑定。
+//
+// 设计要点（见相关讨论）：
+//   - 作用域：每条 Execution 只绑定**该层 agent 自己显式调用**(skill/load_skill)的 skill；
+//     子 agent 的 skill 绑在子 agent 自己的 Execution 行上，不向上冒泡到父/root。
+//   - 版本：skillVersion 在写入时定格(显式带版本则用之；否则取当时 Skill.activeVersion 快照)，
+//     不随"当前活跃版本"漂移。null 表示无法解析出版本。
+//   - 快照存名:不硬 FK 到 Skill/SkillVersion(它们 onDelete: Cascade)，避免删 skill 抹掉历史 trace 绑定。
+//   - 写入侧每次 save 先按 executionId 清空再重建，保证幂等(不依赖 NULL 版本的唯一约束语义)。
+model ExecutionSkill {
+  id           String    @id @default(cuid())
+  executionId  String
+  execution    Execution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  skillName    String
+  skillVersion Int?      // 写入时定格的版本；null = 未解析出
+  isPrimary    Boolean   @default(false) // 是否为该 Execution 的"主/被评测 skill"(对齐 Execution.skill)
+  user         String?   // 跟随 trace，便于直接按 user 维度查
+  createdAt    DateTime  @default(now())
+
+  @@index([skillName, skillVersion]) // 按 skill@version 反查所有 trace（核心诉求）
+  @@index([skillName])               // 按 skill 任意版本反查
+  @@index([executionId])
 }
 
 /// 一次评估事件——静态评估和动态评估统一到这张表，按 type 区分。

@@ -1,4 +1,4 @@
-import { listObservedAgentNames, listObservedTraceIds, readRecordPage, readRecords, saveExecutionRecord } from '@/lib/storage/data-service';
+import { listObservedAgentNames, listObservedSkills, listObservedTraceIds, readRecordPage, readRecords, saveExecutionRecord } from '@/lib/storage/data-service';
 import { db, prismaRaw as prisma } from '@/lib/storage/prisma';
 import { NextResponse } from 'next/server';
 import { isActive } from '@/lib/evaluation-task-manager';
@@ -297,6 +297,13 @@ export async function GET(request: Request) {
     const skillVersionStr = searchParams.get('skillVersion');
     const skillVersion = skillVersionStr ? parseInt(skillVersionStr, 10) : undefined;
     const attachEvaluations = includeEvaluationsParam === '1' || includeEvaluationsParam === 'true';
+
+    // facet=skills：返回该 user 可见的全部 skill(name + 版本)给前端下拉用。来自 ExecutionSkill(agent 作用域,
+    // 含 sub-agent 用到的 skill),与"按 skill 服务端筛选"同源,避免下拉项随筛选结果塌缩。
+    const facet = searchParams.get('facet') || undefined;
+    if (facet === 'skills') {
+        return NextResponse.json(await listObservedSkills(user));
+    }
 
     // 直查单条 Execution（用于"返回父执行 / 派生子 Agent 跳转"等仅需 task_id + 元数据的场景）。
     // 跳过 readRecords 的 ownership / pricing / session merge / evaluation snapshots enrichment——

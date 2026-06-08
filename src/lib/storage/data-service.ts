@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { judgeAnswer } from '@/lib/engine/evaluation/judge';
-import { db, prisma } from '@/lib/storage/prisma';
+import { db, prisma, prismaRaw } from '@/lib/storage/prisma';
 import { getModelPricing, calculateCost, getModelContextWindow, DEFAULT_CACHE_READ_RATIO, DEFAULT_CACHE_CREATION_RATIO } from '@/lib/shared/model-config';
 import {
     configSupportsDatasetType,
@@ -20,7 +20,6 @@ import {
     type RoutingSemanticSignature,
 } from '@/lib/ingest/routing-signature';
 import { deriveOpencodeExecutionFields } from '@/lib/engine/observability/opencode-derived-metrics';
-import { getRootSkillFromInteractions } from '@/lib/engine/observability/skill-scope';
 import {
     extractObservedAgentNames,
     extractObservedAgentRegistrations,
@@ -29,7 +28,7 @@ import { chooseExecutionLabel } from '@/lib/engine/evaluation/label-utils';
 import { parseLabelSkillVersionBinding } from '@/lib/engine/evaluation/label-skill-binding';
 import { extractKeyActionsFromFlow, mergeKeyActionsFromMultipleSkills, type ExtractedKeyAction, type ParsedFlowResult } from '@/lib/engine/observability/flow-parser';
 import { mergeSessionInteractionsMonotonic } from '@/lib/engine/observability/session-interactions-merge';
-import { buildAgentCallTree, inferSubagentType, walkTree } from '@/lib/engine/observability/agent-trace';
+import { buildAgentCallTree, inferSubagentType, walkTree, type AgentNode } from '@/lib/engine/observability/agent-trace';
 import { isEvaluatorAgentName } from '@/lib/evaluator-agent';
 import { normalizeClaudeCodeInteractionsForStorage } from '@/lib/shared/interaction-content';
 import {
@@ -42,6 +41,124 @@ import {
 export interface InvokedSkill {
     name: string;
     version: number | null;
+}
+
+/**
+ * ExecutionSkill(可索引的 trace↔skill 绑定)在 SQLite 路径启用。
+ * OpenGauss(配了 DB_HOST)未建表/未接适配器,这里整体降级回旧的 skill 列行为,避免运行期报错。
+ */
+const EXECUTION_SKILL_ENABLED = !process.env.DB_HOST;
+
+const SKILL_NAME_PATTERN = /^[a-zA-Z0-9_\-\.]+$/;
+
+/**
+ * 从单个 AgentNode 抽取**本层 agent 自己显式调用**的 skill(kind==='skill',即 skill/load_skill;
+ * 天然排除 task() 预加载与子 agent 的事件)。用于 opencode 的逐层 agent 作用域绑定。
+ */
+export function extractExplicitSkillsFromNode(node: AgentNode): InvokedSkill[] {
+    const seen = new Set<string>();
+    const out: InvokedSkill[] = [];
+    for (const ev of node.events || []) {
+        if (ev.kind !== 'skill') continue;
+        const a = (ev.args && typeof ev.args === 'object') ? ev.args : {};
+        const rawName = a.name ?? a.skill_name ?? a.skillName ?? a.skill;
+        if (rawName == null || !String(rawName).trim()) continue;
+        const s = String(rawName).trim().replace(/^['"]+|['"]+$/g, '');
+        if (!SKILL_NAME_PATTERN.test(s) || seen.has(s)) continue;
+        seen.add(s);
+        const v = a.version != null ? Number(a.version) : null;
+        out.push({ name: s, version: v !== null && !isNaN(v) ? v : null });
+    }
+    return out;
+}
+
+/**
+ * 写入时把缺版本的 skill 定格成当时的 Skill.activeVersion 快照(只查一次)。
+ * 已带版本的原样保留;查不到的留 null。
+ */
+async function snapshotSkillVersions(skills: InvokedSkill[], user: string | null | undefined): Promise<InvokedSkill[]> {
+    const needLookup = Array.from(new Set(skills.filter(s => s.version == null).map(s => s.name)));
+    const activeMap = new Map<string, number>();
+    if (needLookup.length > 0) {
+        try {
+            const rows = await (prisma as any).skill.findMany({
+                where: { name: { in: needLookup }, ...(user ? { OR: [{ user }, { user: null }] } : {}) },
+                select: { name: true, activeVersion: true },
+            });
+            for (const r of rows) {
+                if (typeof r.activeVersion === 'number') activeMap.set(r.name, r.activeVersion);
+            }
+        } catch (e) {
+            console.warn('[Data-Service] snapshotSkillVersions lookup failed:', e);
+        }
+    }
+    return skills.map(s => s.version != null ? s : { name: s.name, version: activeMap.get(s.name) ?? null });
+}
+
+/**
+ * 幂等地把某条 Execution(= 某一层 agent)本层用到的 skill 写入 ExecutionSkill:
+ * 先按 executionId 清空再重建,不依赖 NULL 版本的唯一约束。
+ */
+async function persistExecutionSkills(
+    executionId: string,
+    skills: InvokedSkill[],
+    opts: { user?: string | null; primaryName?: string | null } = {},
+): Promise<void> {
+    if (!EXECUTION_SKILL_ENABLED || !executionId) return;
+    try {
+        await prismaRaw.executionSkill.deleteMany({ where: { executionId } });
+        if (!skills.length) return;
+        const seen = new Set<string>();
+        const data = [] as { executionId: string; skillName: string; skillVersion: number | null; isPrimary: boolean; user: string | null }[];
+        for (const s of skills) {
+            if (!s?.name) continue;
+            const key = `${s.name}@@${s.version ?? ''}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            data.push({
+                executionId,
+                skillName: s.name,
+                skillVersion: s.version ?? null,
+                isPrimary: opts.primaryName != null && s.name === opts.primaryName,
+                user: opts.user ?? null,
+            });
+        }
+        if (data.length) await prismaRaw.executionSkill.createMany({ data });
+    } catch (e) {
+        console.warn(`[Data-Service] persistExecutionSkills failed for ${executionId}:`, e);
+    }
+}
+
+/**
+ * 给定一条 Execution(= 某一层 agent)的 session interactions,算出**本层 agent 自己显式调用**的 skill。
+ *   - opencode：在该切片上重建 agent-call-tree,取其根节点(= 这一层 agent 自己)的显式 skill,剥离子 agent。
+ *     (root 行的 session 是全量;sub-agent 行的 session 是它自己的切片——两者切片的 tree 根都恰是该层 agent。)
+ *   - claude / openclaw：单 agent,既有显式抽取即本层口径。
+ */
+export function computeOwnSkills(framework: string | null | undefined, interactions: any[]): InvokedSkill[] {
+    if (!Array.isArray(interactions) || interactions.length === 0) return [];
+    if (framework === 'opencode') {
+        const tree = buildAgentCallTree(interactions as any);
+        return tree ? extractExplicitSkillsFromNode(tree) : [];
+    }
+    return extractInvokedSkillsFromSessionInteractions(framework, interactions) ?? [];
+}
+
+/**
+ * 从一条 Execution 的 session interactions 重算 agent 作用域 skill 并写入 ExecutionSkill(版本写时定格)。
+ * 供回填脚本对历史数据逐行重建;返回写入的 skill 条数。
+ */
+export async function recomputeExecutionSkills(
+    executionId: string,
+    framework: string | null | undefined,
+    interactions: any[],
+    user: string | null | undefined,
+    primaryName: string | null | undefined,
+): Promise<number> {
+    const own = computeOwnSkills(framework, interactions);
+    const snapped = await snapshotSkillVersions(own, user);
+    await persistExecutionSkills(executionId, snapped, { user: user ?? null, primaryName: primaryName ?? null });
+    return snapped.length;
 }
 
 export interface ExecutionRecord {
@@ -951,6 +1068,49 @@ export async function listObservedAgentNames(user?: string): Promise<string[]> {
     return names;
 }
 
+/**
+ * 列出该 user 可见的全部 skill(name + 出现过的版本),用于 /trace 等页面的 skill 下拉 facet。
+ * 走 ExecutionSkill(agent 作用域,含 sub-agent 用到的 skill);ES 不可用/未回填时降级到 Execution.skill 列。
+ */
+export async function listObservedSkills(user?: string): Promise<{ name: string; versions: number[] }[]> {
+    const byName = new Map<string, Set<number>>();
+    if (EXECUTION_SKILL_ENABLED) {
+        try {
+            const esWhere: any = {};
+            if (user) esWhere.OR = [{ user }, { user: null }];
+            const rows = await prismaRaw.executionSkill.findMany({
+                where: esWhere,
+                select: { skillName: true, skillVersion: true },
+                distinct: ['skillName', 'skillVersion'],
+            });
+            for (const r of rows) {
+                if (!r.skillName) continue;
+                const set = byName.get(r.skillName) ?? new Set<number>();
+                if (typeof r.skillVersion === 'number') set.add(r.skillVersion);
+                byName.set(r.skillName, set);
+            }
+        } catch (e) {
+            console.warn('[listObservedSkills] ExecutionSkill query failed, falling back to legacy column:', e);
+        }
+    }
+    if (byName.size === 0) {
+        // 降级:从 Execution.skill / skillVersion 列汇总(OpenGauss 或尚未回填)。
+        const where: any = {};
+        if (user) where.OR = [{ user }, { user: null }];
+        const records = await db.findExecutions(where, { timestamp: 'desc' }, { skill: true, skillVersion: true } as any);
+        for (const r of records) {
+            const name = String(r?.skill || '').trim();
+            if (!name) continue;
+            const set = byName.get(name) ?? new Set<number>();
+            if (typeof r.skillVersion === 'number') set.add(r.skillVersion);
+            byName.set(name, set);
+        }
+    }
+    return Array.from(byName.entries())
+        .map(([name, vs]) => ({ name, versions: Array.from(vs).sort((a, b) => a - b) }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+}
+
 export async function listObservedTraceIds(
     user?: string,
     agentName?: string,
@@ -1095,20 +1255,14 @@ async function hydrateAndNormalizeBatch(
 ): Promise<ExecutionRecord[]> {
     const { user, light, attachEvaluations, getConfigsForEvaluationUser } = ctx;
 
-    // heavy: dedup pass 走 light 投影未取 finalResult,这里按本批 id 回取;并加载本批 session
-    // (整段 interactions 是最大内存来源)。light: 两者都跳过——finalResult 不返回,agents 从
-    // 写入时 denormalize 的 observedAgents 列还原。
-    const batchTaskIds = Array.from(new Set(
-        batch.map((r: any) => r.taskId).filter(Boolean) as string[],
-    ));
-    const [finalResultRows, sessions] = await Promise.all([
-        (!light && batch.length > 0)
-            ? db.findExecutions({ id: { in: batch.map((r: any) => r.id) } }, undefined, { id: true, finalResult: true })
-            : Promise.resolve([] as any[]),
-        (!light && batchTaskIds.length > 0)
-            ? db.findSessions({ user: user || undefined, taskId: { in: batchTaskIds } })
-            : Promise.resolve([] as any[]),
-    ]);
+    // heavy: dedup pass 走 light 投影未取 finalResult,这里按本批 id 回取。
+    // skills/invokedSkills/rootSkill 一律从 ExecutionSkill(写入时已按 agent 作用域算好并定格版本)批量取,
+    // agents 从 denormalize 的 observedAgents 列还原 —— 两者都不再逐行加载/解析 session interactions。
+    // 这是列表页"频繁大量重复解析 → 卡死"的根因;去掉后 hydrate 与数据量解耦,light/heavy 仅差 finalResult。
+    const execIds = batch.map((r: any) => r.id);
+    const finalResultRows = (!light && execIds.length > 0)
+        ? await db.findExecutions({ id: { in: execIds } }, undefined, { id: true, finalResult: true })
+        : [];
     if (finalResultRows.length > 0) {
         const finalById = new Map<string, any>();
         for (const fr of finalResultRows) finalById.set(fr.id, fr.finalResult ?? null);
@@ -1117,31 +1271,27 @@ async function hydrateAndNormalizeBatch(
         }
     }
 
-    const sessionMap = new Map<string, any>();
-    sessions.forEach((s: any) => {
-        if (s.taskId) sessionMap.set(s.taskId, s);
-    });
-    // 每个 session 的 interactions 只解析一次：之前在"取 agent 名"和"取 invokedSkills"两处各
-    // JSON.parse 一遍同一段 interactions，对长 trace 是双倍解析开销。这里 memoize 一次。
-    const parsedInteractionsCache = new Map<string, any[] | null>();
-    const getParsedInteractions = (taskId: string | null | undefined): any[] | null => {
-        if (!taskId) return null;
-        if (parsedInteractionsCache.has(taskId)) return parsedInteractionsCache.get(taskId) ?? null;
-        const session = sessionMap.get(taskId);
-        let arr: any[] | null = null;
-        if (session?.interactions) {
-            try {
-                const p = JSON.parse(session.interactions);
-                if (Array.isArray(p)) arr = p;
-            } catch { /* ignore */ }
+    // 批量取本批所有 Execution 的 agent 作用域 skill 绑定。
+    const esByExec = new Map<string, InvokedSkill[]>();
+    const esPrimaryByExec = new Map<string, InvokedSkill>();
+    if (EXECUTION_SKILL_ENABLED && execIds.length > 0) {
+        try {
+            const esRows = await prismaRaw.executionSkill.findMany({
+                where: { executionId: { in: execIds } },
+                select: { executionId: true, skillName: true, skillVersion: true, isPrimary: true },
+            });
+            for (const e of esRows) {
+                const item: InvokedSkill = { name: e.skillName, version: e.skillVersion ?? null };
+                const arr = esByExec.get(e.executionId);
+                if (arr) arr.push(item); else esByExec.set(e.executionId, [item]);
+                if (e.isPrimary && !esPrimaryByExec.has(e.executionId)) esPrimaryByExec.set(e.executionId, item);
+            }
+        } catch (e) {
+            console.warn('[readRecords] ExecutionSkill batch fetch failed, falling back to legacy columns:', e);
         }
-        parsedInteractionsCache.set(taskId, arr);
-        return arr;
-    };
+    }
 
-    // For each record, pre-extract session-derived agent names + the effective agent name
-    // used for both display and ownership lookup. Mirrors the frontend's
-    // `agentName?.trim() || getPrimaryExecutionAgentName(d)` resolution.
+    // agents + effective agent name(for ownership)——一律从 denormalize 的 observedAgents 列还原,不解析 interactions。
     const recordAgentsByTaskId = new Map<string, string[]>();
     const recordEffectiveAgent = new Map<string, string>();
     const resolveEffectiveAgentName = (agentName: string | null | undefined, sessionAgents: string[]): string => {
@@ -1151,21 +1301,7 @@ async function hydrateAndNormalizeBatch(
     };
     batch.forEach((r: any) => {
         const taskId = r.taskId || r.id;
-        const sessionAgents: string[] = [];
-        if (light) {
-            // light: 从写入时 denormalize 的 observedAgents 列还原 agents,不解析 interactions。
-            // 与 heavy 的 extractObservedAgentNames 同源,agents 完全一致、不丢数据(含 opencode 'build' 等)。
-            sessionAgents.push(...parseObservedAgents(r.observedAgents));
-        } else {
-            // 解析结果走 memoize 缓存（与下方 invokedSkills 提取共用，每个 session 只 parse 一次）。
-            // 注意：agents 字段对外暴露(含多 agent / 子 agent 列表)，不能因 agentName 已存在就跳过解析。
-            const interactions = getParsedInteractions(r.taskId);
-            if (interactions) {
-                const agentSet = new Set<string>();
-                extractObservedAgentNames(interactions).forEach(name => agentSet.add(name));
-                sessionAgents.push(...agentSet);
-            }
-        }
+        const sessionAgents = parseObservedAgents(r.observedAgents);
         recordAgentsByTaskId.set(taskId, sessionAgents);
         recordEffectiveAgent.set(taskId, resolveEffectiveAgentName(r.agentName, sessionAgents));
     });
@@ -1245,21 +1381,20 @@ async function hydrateAndNormalizeBatch(
         const pricing = pricingResult?.pricing ?? null;
         const cwResult = (model && r.maxSingleCallTokens != null) ? getModelContextWindow(model) : null;
 
-        // Extract agents from session (re-parse only for invokedSkills; agent names already
-        // pre-computed in recordAgentsByTaskId / recordEffectiveAgent above).
         const taskKey = r.taskId || r.id;
         const agents = recordAgentsByTaskId.get(taskKey) || [];
         const effectiveAgentName = recordEffectiveAgent.get(taskKey) || '';
-        let invokedSkillsFromSession: InvokedSkill[] | null = null;
-        let rootSkillFromSession: InvokedSkill | null = null;
-        const sessionInteractions = getParsedInteractions(r.taskId);
-        if (sessionInteractions) {
-            invokedSkillsFromSession = extractInvokedSkillsFromSessionInteractions(r.framework, sessionInteractions);
-            rootSkillFromSession = getRootSkillFromInteractions(sessionInteractions);
+
+        // agent 作用域的 skill 绑定来自 ExecutionSkill(写入时算好);无绑定(历史未回填 / OpenGauss 降级)
+        // 回退到旧的 invokedSkills/skills JSON 列。不再解析 session interactions。
+        let invokedSkills: InvokedSkill[] | null = esByExec.get(r.id) ?? null;
+        if (!invokedSkills && r.invokedSkills) {
+            try { const p = JSON.parse(r.invokedSkills); if (Array.isArray(p)) invokedSkills = p; } catch { /* ignore */ }
         }
+        let rootSkill: InvokedSkill | null = esPrimaryByExec.get(r.id) ?? null;
+
         // 懒回填：Execution.skillVersion 为空但 skill 名命中 DB → 回写 activeVersion。
-        // 在 in-memory r 上即时更新（让下方 normalizedRecord 拿到值），同时 fire-and-forget
-        // UPDATE DB（不阻塞本次响应）。仅 root execution 回填，sub-agent 行跳过。
+        // 在 in-memory r 上即时更新（喂下方 rootSkill 兜底），同时 fire-and-forget UPDATE DB。仅 root 行。
         if (r.skill && r.skillVersion == null && !r.isSubagent && skillActiveVersionMap.has(String(r.skill))) {
             const backfilled = skillActiveVersionMap.get(String(r.skill))!;
             r.skillVersion = backfilled;
@@ -1269,20 +1404,9 @@ async function hydrateAndNormalizeBatch(
                 data: { skillVersion: backfilled },
             }).catch((e: unknown) => console.warn('[readRecords] backfill skillVersion failed for', r.id, ':', e));
         }
-        // 兜底：用 Execution 行 denormalized 的 skill + skillVersion 补全 rootSkill。
-        // 三种情况都需要兜：
-        //   1) interactions 完全解析不出 rootSkill（旧 trace / 没 Session / 上报不规范）→ 整个对象给一个
-        //   2) interactions 解出 name 但没 version（agent 调 skill 工具时没传 version 参数，常见）→ 补 version
-        //   3) interactions 解出的 name 跟 Execution.skill 不一致 → 保留 interactions 那份不动（agent 实际加载的为准）
-        // 跟 analyze-match/route.ts 同口径——前后端版本筛选都靠这个兜底。
-        if (r.skill) {
-            const execName = String(r.skill);
-            const execVersion = typeof r.skillVersion === 'number' ? r.skillVersion : null;
-            if (!rootSkillFromSession) {
-                rootSkillFromSession = { name: execName, version: execVersion };
-            } else if (rootSkillFromSession.name === execName && rootSkillFromSession.version == null && execVersion != null) {
-                rootSkillFromSession = { name: rootSkillFromSession.name, version: execVersion };
-            }
+        // 兜底：ExecutionSkill 无 isPrimary 时,用 Execution 行 denormalized 的 skill + skillVersion 补全 rootSkill。
+        if (!rootSkill && r.skill) {
+            rootSkill = { name: String(r.skill), version: typeof r.skillVersion === 'number' ? r.skillVersion : null };
         }
 
         const normalizedRecord: ExecutionRecord = {
@@ -1304,11 +1428,11 @@ async function hydrateAndNormalizeBatch(
             timestamp: r.timestamp?.toISOString?.() || r.timestamp,
             final_result: r.finalResult || undefined,
             skill: r.skill || undefined,
-            rootSkill: rootSkillFromSession,
-            root_skill: rootSkillFromSession,
-            skills: invokedSkillsFromSession ? invokedSkillsFromSession.map(s => s.name) : (r.skills ? JSON.parse(r.skills) : undefined),
-            invokedSkills: invokedSkillsFromSession ?? (r.invokedSkills ? JSON.parse(r.invokedSkills) : undefined),
-            invoked_skills: invokedSkillsFromSession ?? (r.invokedSkills ? JSON.parse(r.invokedSkills) : undefined),
+            rootSkill: rootSkill,
+            root_skill: rootSkill,
+            skills: invokedSkills ? invokedSkills.map(s => s.name) : (r.skills ? JSON.parse(r.skills) : undefined),
+            invokedSkills: invokedSkills ?? undefined,
+            invoked_skills: invokedSkills ?? undefined,
             is_skill_correct: r.isSkillCorrect ?? false,
             is_answer_correct: r.isAnswerCorrect ?? null,
 
@@ -1404,12 +1528,16 @@ async function readRecordsInternal(
     // 显式按 taskId / taskIds / parentExecutionId 查询时跳过该过滤，
     // 让"按 sub-agent sessionID 直查"和"列出某 root 的所有子 agent"都能工作。
     const hasExplicitTaskIdFilter = !!(filters?.taskIds?.length || filters?.taskId);
+    // 按 skill 筛选时走 ExecutionSkill(agent 作用域):结果应精确命中真正用到该 skill 的那一层,
+    // 可能是 sub-agent 行,因此放开默认的 isSubagent=false 排除。
+    const skillFilterActive = EXECUTION_SKILL_ENABLED && filters?.skill !== undefined;
     if (filters?.onlySubagents === true) {
         where.isSubagent = true;
     } else if (
         filters?.includeSubagents !== true &&
         filters?.parentExecutionId === undefined &&
-        !hasExplicitTaskIdFilter
+        !hasExplicitTaskIdFilter &&
+        !skillFilterActive
     ) {
         where.isSubagent = false;
     }
@@ -1429,12 +1557,24 @@ async function readRecordsInternal(
         if (filters.framework) where.framework = filters.framework;
     }
 
-    if (filters?.skill !== undefined) {
-        where.skill = filters.skill;
-    }
-
-    if (filters?.skillVersion !== undefined) {
-        where.skillVersion = filters.skillVersion;
+    if (skillFilterActive) {
+        // 反查 ExecutionSkill 得到真正用到该 skill(+可选版本)的 executionId 集合,再交给 Execution 主查询。
+        // 索引 (skillName, skillVersion) 命中,与数据量解耦;失败则降级回旧主 skill 列匹配。
+        const esWhere: any = { skillName: filters!.skill };
+        if (filters?.skillVersion !== undefined) esWhere.skillVersion = filters.skillVersion;
+        if (user && !filters?.showAllUsers) esWhere.OR = [{ user }, { user: null }];
+        try {
+            const esRows = await prismaRaw.executionSkill.findMany({ where: esWhere, select: { executionId: true } });
+            where.id = { in: Array.from(new Set(esRows.map((r: any) => r.executionId))) };
+        } catch (e) {
+            console.warn('[readRecords] ExecutionSkill filter failed, falling back to legacy skill column:', e);
+            where.skill = filters!.skill;
+            if (filters?.skillVersion !== undefined) where.skillVersion = filters.skillVersion;
+        }
+    } else {
+        // EXECUTION_SKILL_ENABLED=false(OpenGauss)或无 skill 过滤:沿用旧的主 skill 列匹配。
+        if (filters?.skill !== undefined) where.skill = filters.skill;
+        if (filters?.skillVersion !== undefined) where.skillVersion = filters.skillVersion;
     }
 
     if (filters?.agentName !== undefined) {
@@ -2148,6 +2288,29 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
         } catch {}
     }
 
+    // 写入 root 这一层 agent 自己用到的 skill 到 ExecutionSkill(agent 作用域,不含子 agent)。
+    //   - opencode：用 agent-call-tree 取 root 节点本层显式 skill 调用（剥离子 agent 冒泡）。
+    //   - claude/openclaw / label 显式绑定：targetRecord.invokedSkills 已是单 agent + 显式口径,直接复用。
+    // 版本写时定格(snapshotSkillVersions)。子 agent 的绑定在 deriveSubagentExecutions 里各自写。
+    if (EXECUTION_SKILL_ENABLED) {
+        try {
+            let rootSkills: InvokedSkill[];
+            const hasInteractions = Array.isArray(mergedInteractionsForSession) && mergedInteractionsForSession.length > 0;
+            if (explicitSkillVersionRewrite) {
+                // label 显式绑定:用绑定的 skill(权威),不从 interactions 重算
+                rootSkills = Array.isArray(targetRecord.invokedSkills) ? (targetRecord.invokedSkills as InvokedSkill[]) : [];
+            } else if (hasInteractions) {
+                rootSkills = computeOwnSkills(targetRecord.framework, mergedInteractionsForSession as any[]);
+            } else {
+                rootSkills = Array.isArray(targetRecord.invokedSkills) ? (targetRecord.invokedSkills as InvokedSkill[]) : [];
+            }
+            const snapped = await snapshotSkillVersions(rootSkills, targetRecord.user);
+            await persistExecutionSkills(recordId, snapped, { user: targetRecord.user, primaryName: targetRecord.skill ?? null });
+        } catch (e) {
+            console.warn(`[Data-Service] root ExecutionSkill persist failed for ${recordId}:`, e);
+        }
+    }
+
     // 多 Agent 拆分：把 root execution 里挂着的 sub-agent 切片单独派生成 Execution + Session 行，
     // 通过 parentExecutionId 与 root 建立父子关系。列表/聚合默认 filter isSubagent=false，
     // 详情页可下钻到 sub-agent。历史上这里曾对相同 taskId 的 child Execution 做 dedup 删除，
@@ -2340,6 +2503,16 @@ export async function deriveSubagentExecutions(args: DeriveSubagentArgs): Promis
         } catch (e) {
             console.warn(`[Data-Service] upsertExecution(sub) failed sub=${sessionId}:`, e);
             continue;
+        }
+
+        // 这一层 sub-agent 自己显式调用的 skill(agent 作用域,不含其更深子孙)。
+        if (EXECUTION_SKILL_ENABLED) {
+            try {
+                const ownSkills = await snapshotSkillVersions(extractExplicitSkillsFromNode(node), parentUser);
+                await persistExecutionSkills(childExecutionId, ownSkills, { user: parentUser ?? null });
+            } catch (e) {
+                console.warn(`[Data-Service] sub ExecutionSkill persist failed sub=${sessionId}:`, e);
+            }
         }
 
         try {

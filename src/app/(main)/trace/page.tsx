@@ -404,24 +404,31 @@ function TracePageContent() {
             : agentScopeFilter === 'all'
                 ? '&includeSubagents=1'
                 : '';
-        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&includeEvaluations=0&fields=light${scopeParam}`)
+        // 按 skill 筛选交给服务端(走 ExecutionSkill 索引,agent 作用域):结果精确命中真正用到该 skill 的
+        // 那一层(含 sub-agent),而非把全量拉到浏览器再 JS 过滤。
+        const skillParam = skillFilter !== 'all' ? `&skill=${encodeURIComponent(skillFilter)}` : '';
+        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&includeEvaluations=0&fields=light${scopeParam}${skillParam}`)
             .then(r => r.json())
             .then((d: Execution[]) => setData(Array.isArray(d) ? d : []))
             .catch(() => setData([]))
             .finally(() => setLoading(false));
-    }, [user, agentScopeFilter]);
+    }, [user, agentScopeFilter, skillFilter]);
 
-    const { availableAgents, availableSkills } = useMemo(() => {
+    // skill 下拉走 facet 接口(全量 skill,含 sub-agent 专属),避免随服务端筛选结果塌缩。
+    const [availableSkills, setAvailableSkills] = useState<string[]>([]);
+    useEffect(() => {
+        if (!user) return;
+        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&facet=skills`)
+            .then(r => r.json())
+            .then((rows: { name: string }[]) => setAvailableSkills(Array.isArray(rows) ? rows.map(s => s.name) : []))
+            .catch(() => setAvailableSkills([]));
+    }, [user]);
+
+    // agents 下拉仍从当前工作集推导(framework 同理)。
+    const availableAgents = useMemo(() => {
         const agents = new Set<string>();
-        const skills = new Set<string>();
-        data.forEach(d => {
-            getExecutionAgentNames(d).forEach(a => agents.add(a));
-            getInvokedSkillNames(d).forEach(s => skills.add(s));
-        });
-        return {
-            availableAgents: Array.from(agents).sort(),
-            availableSkills: Array.from(skills).sort(),
-        };
+        data.forEach(d => getExecutionAgentNames(d).forEach(a => agents.add(a)));
+        return Array.from(agents).sort();
     }, [data]);
 
     const frameworks = useMemo(() => {
@@ -447,9 +454,7 @@ function TracePageContent() {
                     const status = getExecStatus(d);
                     if (anomalyFilter !== status) return false;
                 }
-                if (skillFilter !== 'all') {
-                    if (!getInvokedSkillNames(d).includes(skillFilter)) return false;
-                }
+                // skill 筛选已在服务端按 ExecutionSkill(agent 作用域)完成,这里不再 JS 过滤。
                 if (ownershipFilter !== 'all') {
                     const ownership = d.agentOwnership ?? 'user';
                     if (ownership !== ownershipFilter) return false;
@@ -485,7 +490,7 @@ function TracePageContent() {
                 }
                 return sortDir === 'asc' ? cmp : -cmp;
             });
-    }, [data, timeFilter, frameworkFilter, anomalyFilter, agentFilter, skillFilter, ownershipFilter, sortKey, sortDir]);
+    }, [data, timeFilter, frameworkFilter, anomalyFilter, agentFilter, ownershipFilter, sortKey, sortDir]);
 
     useEffect(() => {
         if (page !== 1) setPage(1);
