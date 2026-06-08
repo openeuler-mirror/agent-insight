@@ -58,6 +58,12 @@ interface SkillOptScopeLimits {
     maxFiles: number;
 }
 
+const DEFAULT_SCOPE_LIMITS: SkillOptScopeLimits = {
+    maxOpportunities: 5,
+    maxFiles: 5,
+};
+const SCOPE_LIMITS_KEY = 'skill-opt:scope-limits:v1';
+
 type ChatTurn =
     | { kind: 'user'; id: string; text: string }
     | { kind: 'agent'; id: string; blocks: AgentBlock[]; streaming?: boolean };
@@ -287,6 +293,7 @@ export default function SkillOptimizePage() {
     interface ModelConfigLite { id: string; name: string }
     const [modelConfigs, setModelConfigs] = useState<ModelConfigLite[]>([]);
     const [selectedModelId, setSelectedModelId] = useState<string>('');
+    const [scopeLimits, setScopeLimits] = useState<SkillOptScopeLimits>(DEFAULT_SCOPE_LIMITS);
     useEffect(() => {
         if (!user) return;
         fetch(`/api/settings?user=${encodeURIComponent(user)}`)
@@ -299,6 +306,27 @@ export default function SkillOptimizePage() {
             })
             .catch(() => { /* 静默：拉不到时按默认模型走 */ });
     }, [user]);
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        try {
+            const saved = normalizeScopeLimits(JSON.parse(localStorage.getItem(SCOPE_LIMITS_KEY) || 'null'));
+            if (saved) setScopeLimits(saved);
+        } catch { /* corrupt — fall back to defaults */ }
+    }, []);
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        try {
+            localStorage.setItem(SCOPE_LIMITS_KEY, JSON.stringify(scopeLimits));
+        } catch { /* quota / disabled — silently skip */ }
+    }, [scopeLimits]);
+
+    const updateScopeLimit = (key: keyof SkillOptScopeLimits, value: number) => {
+        if (!Number.isFinite(value)) return;
+        setScopeLimits(prev => ({
+            ...prev,
+            [key]: Math.max(1, Math.trunc(value)),
+        }));
+    };
 
     // 真接口：拉 (skillName, baseVersion) 的 optimization points。
     // 后端 GET /api/skills/by-name/[name]/optimization-points 已经把 SkillIssue +
@@ -671,6 +699,7 @@ export default function SkillOptimizePage() {
                     userFeedback: userInputText,
                     baselineFiles: startingFiles,
                     modelId: selectedModelId || undefined,
+                    scopeLimits,
                     mock: useMockOptimizer,
                 }),
             });
@@ -1137,6 +1166,33 @@ export default function SkillOptimizePage() {
                                     <option key={c.id} value={c.id}>{c.name}</option>
                                 ))}
                             </select>
+                        </div>
+                        <div className="scope-limit-picker" aria-label="优化范围上限">
+                            <div className="scope-limit-title">优化范围上限</div>
+                            <label>
+                                <span>处理问题</span>
+                                <input
+                                    type="number"
+                                    min={1}
+                                    step={1}
+                                    value={scopeLimits.maxOpportunities}
+                                    onChange={e => updateScopeLimit('maxOpportunities', e.currentTarget.valueAsNumber)}
+                                    disabled={optimizing}
+                                    title="本轮最多处理的优化点数量"
+                                />
+                            </label>
+                            <label>
+                                <span>触达文件</span>
+                                <input
+                                    type="number"
+                                    min={1}
+                                    step={1}
+                                    value={scopeLimits.maxFiles}
+                                    onChange={e => updateScopeLimit('maxFiles', e.currentTarget.valueAsNumber)}
+                                    disabled={optimizing}
+                                    title="本轮最多允许触达的文件数量"
+                                />
+                            </label>
                         </div>
                         <button
                             disabled={

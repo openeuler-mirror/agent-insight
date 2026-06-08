@@ -728,6 +728,43 @@
     font-size: 12px;
     min-width: 0;
 }
+.skopt-left .actions .scope-limit-picker {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    padding: 9px 10px;
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius);
+}
+.skopt-left .actions .scope-limit-title {
+    grid-column: 1 / -1;
+    color: var(--foreground-muted);
+    font-size: 12px;
+    font-weight: 600;
+}
+.skopt-left .actions .scope-limit-picker label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+    color: var(--foreground-secondary);
+    font-size: 11px;
+}
+.skopt-left .actions .scope-limit-picker input {
+    width: 100%;
+    min-width: 0;
+    padding: 5px 7px;
+    background: var(--input-bg);
+    border: 1px solid var(--input-border);
+    border-radius: var(--radius-sm);
+    color: var(--foreground);
+    font-size: 12px;
+}
+.skopt-left .actions .scope-limit-picker input:disabled {
+    color: var(--foreground-muted);
+    background: var(--background-tertiary);
+}
 .skopt-left .actions button {
     width: 100%;
     padding: 9px 12px;
