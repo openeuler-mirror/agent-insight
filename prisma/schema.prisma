@@ -477,7 +477,11 @@ model GrayscaleTask {
   @@index([user])
   @@index([user, skillId])
   @@index([user, skillId, skillVersion])
-  @@unique([user, skillName, skillVersion])
+  // 任务名作为身份的一部分:同一 (user, skill, 版本) 下允许多个不同名的 A/B 任务。
+  // 之前是 @@unique([user, skillName, skillVersion])(每个版本仅一个),拓宽后:
+  //  - 新名字 → 建新任务;同名+同版本 → 命中已有(创建路由按这四元组判重)。
+  //  - 改名是原地 PATCH(甲语义),只在改成"同版本已存在的别的名字"时才会撞键。
+  @@unique([user, skillName, skillVersion, taskName])
 }
 
 /// Persisted debug job results — survives server restarts

@@ -46,7 +46,7 @@ type GrayscalePrisma = {
             take: number;
         }): Promise<GrayscaleTaskRow[]>;
         findFirst(args: {
-            where: { user: string; skillName: string; skillVersion: number };
+            where: { user: string; skillName: string; skillVersion: number; taskName?: string };
         }): Promise<GrayscaleTaskRow | null>;
         create(args: {
             data: {
@@ -196,12 +196,14 @@ export async function POST(req: NextRequest) {
             }
         }
 
+        // 任务名作为身份的一部分:按 (user, skill, 版本, taskName) 四元组判重。
+        // 同名+同版本 → 命中已有(切过去);新名字 → 落到下面 create 建新任务。
         const existing = await (prisma as unknown as GrayscalePrisma).grayscaleTask.findFirst({
-            where: { user, skillName: skill.name, skillVersion: version.version },
+            where: { user, skillName: skill.name, skillVersion: version.version, taskName: taskName.trim() },
         });
         if (existing) {
             return NextResponse.json({
-                error: 'A/B task already exists for this skill version',
+                error: 'A/B task with this name already exists for this skill version',
                 existingTask: {
                     ...existing,
                     configJson: {

@@ -196,7 +196,7 @@ interface ExecutionMetricRow {
 
 interface GrayscalePrisma {
     grayscaleTask: {
-        findFirst(args: { where: { id: string; user: string } }): Promise<GrayscaleTaskRow | null>;
+        findFirst(args: { where: { id?: string; user: string; skillName?: string; skillVersion?: number; taskName?: string; NOT?: { id: string } } }): Promise<GrayscaleTaskRow | null>;
         findMany(args: { select: { id: true; user: true; caseStatesJson: true } }): Promise<Array<{ id: string; user: string; caseStatesJson: string }>>;
         updateMany(args: { where: { id: string; user: string; caseStatesJson?: string }; data: Record<string, string> }): Promise<{ count: number }>;
     };
@@ -2518,7 +2518,26 @@ export async function PATCH(
             data.configJson = JSON.stringify(nextConfig);
         }
         if (caseStatesJson !== undefined) data.caseStatesJson = JSON.stringify(caseStatesJson);
-        if (typeof taskName === 'string' && taskName.trim()) data.taskName = taskName.trim();
+        if (typeof taskName === 'string' && taskName.trim()) {
+            const trimmedName = taskName.trim();
+            // 甲(原地改名):同一任务换标签。但唯一键现在含 taskName,改成"同版本里别的任务已占用的名字"
+            // 会撞键,直接 updateMany 会抛 Prisma P2002。先查重,把它变成可读的 409,前端弹"名字已被占用"。
+            if (trimmedName !== existing.taskName) {
+                const clash = await (prisma as unknown as GrayscalePrisma).grayscaleTask.findFirst({
+                    where: {
+                        user,
+                        skillName: existing.skillName,
+                        skillVersion: existing.skillVersion,
+                        taskName: trimmedName,
+                        NOT: { id: taskId },
+                    },
+                });
+                if (clash) {
+                    return NextResponse.json({ error: '该版本下已存在同名 A/B 任务，请换一个名字' }, { status: 409 });
+                }
+            }
+            data.taskName = trimmedName;
+        }
 
         if (Object.keys(data).length === 0) {
             return NextResponse.json({ error: 'Nothing to update' }, { status: 400 });

@@ -2172,6 +2172,14 @@ export function GrayscaleEvaluation({
                     const updated = await res.json();
                     applyTaskToState(updated);
                     setTaskHistory(prev => prev.map(t => t.id === updated.id ? updated : t));
+                } else if (res.status === 409) {
+                    // 甲(原地改名)撞同版本同名:提示并把名字还原回当前任务名,不要显示成"已改名"。
+                    const data = await res.json().catch(() => ({} as { error?: string }));
+                    alert(data?.error || (locale === 'zh'
+                        ? '该版本下已存在同名 A/B 任务，请换一个名字'
+                        : 'An A/B task with this name already exists for this version'));
+                    setTaskNameInput(currentTask.taskName || '');
+                    return;
                 }
             } else {
                 const created = await createTaskForBinding(selectedSkillId, versionBId, resolvedTaskName);
@@ -3348,7 +3356,13 @@ export function GrayscaleEvaluation({
                                 {/* 嵌入模式(parentSkillId)下隐藏「新建任务」: 一版本一任务 —— 无任务进来已自动创建、
                                     有任务又不能再建, 此按钮无作用。独立模式(无 parentSkillId, 可换版本建多条)保留。 */}
                                 {!parentSkillId && (
-                                    <button type="button" className="gh-btn" onClick={handleNewTask}>
+                                    <button
+                                        type="button"
+                                        className="gh-btn"
+                                        onClick={handleNewTask}
+                                        // 用户反馈"有任务时新建按钮不明显":给它加 accent 边框/字色,跟普通灰按钮区分开。
+                                        style={{ borderColor: 'var(--accent)', color: 'var(--accent)', fontWeight: 600 }}
+                                    >
                                         + {locale === 'zh' ? '新建任务' : 'New Task'}
                                     </button>
                                 )}
@@ -4718,6 +4732,22 @@ export function GrayscaleEvaluation({
                                 <button className="d-drawer-close" onClick={() => setShowHistoryDrawer(false)}>×</button>
                             </div>
                             <div className="d-history-body">
+                                {/* 新建固定在列表顶部(参考用例分析的任务选择器):有再多历史任务,新建依然第一眼可见。
+                                    嵌入模式(parentSkillId,一版本一任务)下不显示。 */}
+                                {!parentSkillId && (
+                                    <button
+                                        type="button"
+                                        onClick={() => { handleNewTask(); setShowHistoryDrawer(false); }}
+                                        style={{
+                                            width: '100%', textAlign: 'left', padding: '10px 12px', borderRadius: 8,
+                                            border: '1px dashed var(--accent)', background: 'var(--accent-soft)',
+                                            color: 'var(--accent)', fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                                            marginBottom: 10,
+                                        }}
+                                    >
+                                        + {locale === 'zh' ? '新建 A/B 任务' : 'New A/B Task'}
+                                    </button>
+                                )}
                                 {visibleTaskHistory.length === 0 ? (
                                     <div style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--ink-4)', fontSize: 12 }}>
                                         {locale === 'zh' ? '暂无历史任务' : 'No task history'}
