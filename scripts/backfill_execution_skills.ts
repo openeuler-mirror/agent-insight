@@ -12,13 +12,9 @@
  *
  * 分批游标遍历,逐条加载单个 session 的 interactions,避免脚本自身 OOM。
  */
-import path from 'node:path';
-
-// 防御:DATABASE_URL 未注入时回落到仓库内 SQLite(Prisma 相对 file: 以 schema.prisma 目录为基准)。
-if (!process.env.DATABASE_URL) {
-    const dbPath = path.resolve(process.cwd(), 'data/witty_insight.db');
-    process.env.DATABASE_URL = `file:${dbPath}`;
-}
+// 不再在这里兜底 DATABASE_URL。下面 import('@/lib/storage/prisma') 时会触发 loadAgentInsightEnv,
+// 它统一把库解析到 ~/.agent-insight/data(未设置/模板默认/含 ~ 都能正确归一)。
+// 之前在这里回落到 <cwd>/data/witty_insight.db,反而会在没显式传 DATABASE_URL 时把数据写错库。
 
 const FORCE = process.argv.includes('--force');
 const BATCH = 200;
