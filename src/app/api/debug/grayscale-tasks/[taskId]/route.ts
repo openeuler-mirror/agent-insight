@@ -1879,6 +1879,21 @@ async function waitAndApplyEvaluationResult(args: {
     throw new Error(timeoutMessage);
 }
 
+// 把稳定批次 id 落到 task.configJson.evaluationBatchId。只更新 configJson(不碰 caseStatesJson),
+// 避免覆盖并发进行的 case 状态写入。落库后,本任务后续所有评测(全量/补评/重试/重启续跑)都能
+// 读到同一个 evaluatorRunId 并 append 进去 → 评测中心(按 evaluatorRunId 聚合)一个 A/B 任务只一条。
+async function persistEvaluationBatchId(taskId: string, user: string, config: GrayscaleConfig, batchId: string) {
+    config.evaluationBatchId = batchId;
+    try {
+        await (prisma as unknown as GrayscalePrisma).grayscaleTask.updateMany({
+            where: { id: taskId, user },
+            data: { configJson: JSON.stringify(withDefaultConfig(config)) },
+        });
+    } catch (err) {
+        console.warn('[grayscale] persist evaluationBatchId failed:', (err as Error)?.message);
+    }
+}
+
 async function evaluateRunsWithConcurrency(args: {
     taskId: string;
     user: string;
@@ -1941,7 +1956,10 @@ async function evaluateRunsWithConcurrency(args: {
                         target,
                         caseDatasetIdByCaseId,
                         evaluatorIds: target.evaluatorIds,
-                        appendToBatch: !args.onlyMissingEvaluation,
+                        // 一旦本任务有了稳定批次(config.evaluationBatchId),所有 target——含补评/行级重试——
+                        // 都 append 到同一批;没有批次时(seed 那一条)config.evaluationBatchId 为空,
+                        // startSingleEvaluation 自然走"建批次"分支,append 标志不影响。
+                        appendToBatch: true,
                     }),
                     {
                         taskType: 'grayscale-eval',
@@ -1976,20 +1994,20 @@ async function evaluateRunsWithConcurrency(args: {
         }, args.parentSignal);
     };
 
-    // 反散裂修复: 让本次评测的所有 target 落到同一个评测批次。
-    // 此前每个 target 各自 POST /api/eval/trajectory/run、各 mint 一个 evaluatorRunId
-    // (因为 config.evaluationBatchId 一直没值、append 分支是死代码 —— 那个对话框在 A/B 页打不开),
-    // 导致 "N case × M round 在「评测执行」里散裂成 N×M 个只有一条的批次"。
-    // 做法(对齐用例分析的同一批次语义): 先串行跑第一条建出批次, 把 evaluatorRunId 写进**内存中**的
-    // config(仅本次调用内共享, 故意不落库 —— 落库会让下次重跑 append 到旧批次、越积越多;
-    // 不落库则每次评测各自成一个干净批次)。其余 target 走 append 落到同一批。
-    // 每条 run 的 evaluatorRunId 已写进各自 run 状态,「评测执行」按它分组就归到一批。
-    // 仅在「全量评测(非 onlyMissing) 且尚未关联批次」时介入; onlyMissing(行级重试)维持原语义不动。
-    if (!args.onlyMissingEvaluation && !args.config.evaluationBatchId && targets.length > 1) {
+    // 稳定批次(point 2a): 一个 A/B 任务的所有评测——全量 / 补评 / 行级重试 / 重启续跑——都落到
+    // 同一个 evaluatorRunId。评测中心按 evaluatorRunId 聚合, 故一个任务只显示一条(根治用户看到的
+    // "同名任务散成 9条/5条/一堆1条")。批次 id 落库到 task.configJson.evaluationBatchId, 跨调用/重启稳定。
+    //
+    // 之前刻意"不落库"是怕"重跑 append 到旧批次越积越多";现在展示侧用 latestByCase(同 case 取最新分、
+    // 评测行保留, 即用户要的第 2 点)消解了这个顾虑, 所以这里改为落库, 让一个任务恒等于一条批次。
+    //
+    // 做法: 还没有批次时, 用第一条 target 建出批次(此刻 config.evaluationBatchId 为空 → 走"建批次"分支),
+    // 拿到 evaluatorRunId 后落库, 其余 target append 到同一批; 已有批次(后续评测/补评)直接全员 append。
+    if (!args.config.evaluationBatchId && targets.length > 0) {
         await runEvaluationBatch([targets[0]]);
         const seedBatchId = targets[0].run.evaluatorRunId;
         if (seedBatchId) {
-            args.config.evaluationBatchId = seedBatchId; // 仅本次调用内共享, 不落库
+            await persistEvaluationBatchId(args.taskId, args.user, args.config, seedBatchId);
         }
         // seedBatchId 为空(第一条建批次失败)时退回原行为: 其余各自评测, 至少不阻塞。
         await runEvaluationBatch(targets.slice(1));
