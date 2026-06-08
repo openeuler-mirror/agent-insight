@@ -197,6 +197,7 @@ interface ExecutionMetricRow {
 interface GrayscalePrisma {
     grayscaleTask: {
         findFirst(args: { where: { id: string; user: string } }): Promise<GrayscaleTaskRow | null>;
+        findMany(args: { select: { id: true; user: true; caseStatesJson: true } }): Promise<Array<{ id: string; user: string; caseStatesJson: string }>>;
         updateMany(args: { where: { id: string; user: string; caseStatesJson?: string }; data: Record<string, string> }): Promise<{ count: number }>;
     };
     skillVersion: {
@@ -2545,4 +2546,69 @@ export async function PATCH(
         console.error('[GRAYSCALE_TASKS_PATCH] Failed:', err);
         return NextResponse.json({ error: 'Failed to update task' }, { status: 500 });
     }
+}
+
+/**
+ * 启动回收:把所有灰度(A/B)任务里"崩溃/重启前还在跑"的运行(running/evaluating/pending)一次性标失败。
+ *
+ * 背景:灰度的执行/评测运行状态存在 GrayscaleTask.caseStatesJson。进程崩溃/重启后这些 run 的 agent 进程
+ * 已死,但 JSON 里仍是非终态。原来只在用户打开任务时惰性收尾(把它们判成「服务重启中断」)——于是用户
+ * "选 case → 开始执行"时,这些上一轮崩溃的旧残骸会被恰好这时标成报错、混进新一轮里看着像新跑失败,
+ * 状态也自相矛盾(能"重新执行"说明没有在跑的,却又显示着"运行中"的旧条目)。
+ *
+ * 开机就一次性清掉(与 opencode 孤儿回收 / 评测行回收同处、同理):重启 = 没有任何灰度 run 真的在跑,
+ * 故把所有非终态 run 标 failed 是安全的。复用 rebuildSideAggregate 保证侧聚合状态一致。返回改动的任务数。
+ */
+export async function reapStaleGrayscaleRunsAtStartup(): Promise<number> {
+    const cancelable: CaseStatus[] = ['running', 'evaluating', 'pending'];
+    const reason = '服务重启中断（启动回收）';
+    let tasks: Array<{ id: string; user: string; caseStatesJson: string }>;
+    try {
+        tasks = await (prisma as unknown as GrayscalePrisma).grayscaleTask.findMany({
+            select: { id: true, user: true, caseStatesJson: true },
+        });
+    } catch {
+        return 0;
+    }
+    let patchedTasks = 0;
+    for (const task of tasks) {
+        let states: CaseStates;
+        try { states = JSON.parse(task.caseStatesJson || '{}') as CaseStates; } catch { continue; }
+        let changed = false;
+        for (const cid of Object.keys(states)) {
+            for (const side of ['a', 'b'] as Side[]) {
+                const sideState = states[cid]?.[side];
+                if (!sideState) continue;
+                let patched = false;
+                for (const run of sideState.runs || []) {
+                    if (cancelable.includes(run.status)) {
+                        run.status = 'fail';
+                        run.failureType = 'agent_error';
+                        run.failureDetail = run.failureDetail || reason;
+                        run.output = run.output || '服务重启中断';
+                        patched = true;
+                        changed = true;
+                    }
+                }
+                if (patched) {
+                    states[cid][side] = rebuildSideAggregate(sideState, sideState.runCount || sideState.runs?.length || 0);
+                    const rebuilt = states[cid][side];
+                    if (cancelable.includes(rebuilt.status)) {
+                        rebuilt.status = 'fail';
+                        rebuilt.output = rebuilt.output || '服务重启中断';
+                    }
+                }
+            }
+        }
+        if (changed) {
+            try {
+                await (prisma as unknown as GrayscalePrisma).grayscaleTask.updateMany({
+                    where: { id: task.id, user: task.user },
+                    data: { caseStatesJson: JSON.stringify(states) },
+                });
+                patchedTasks++;
+            } catch { /* 单任务失败不影响其它 */ }
+        }
+    }
+    return patchedTasks;
 }
