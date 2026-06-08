@@ -363,7 +363,7 @@ function TracePageContent() {
     //     selectedExecution 在 deps 里, effect 重新跑, 又走 fetch → 死循环
     // 死循环 + 反复 setState 会让 TraceDetailView 的子 effect 反复 abort/重启,
     // 表现就是用户「click → 跳到 trace 列表页, detail 永远渲染不上」。
-    const fetchGuardRef = useRef<{ taskId: string; user: string } | null>(null);
+    const fetchGuardRef = useRef<string | null>(null);
     useEffect(() => {
         if (!taskIdParam) {
             if (selectedExecution) setSelectedExecution(null);
@@ -375,26 +375,26 @@ function TracePageContent() {
             if (selectedExecution !== exec) setSelectedExecution(exec);
             return;
         }
-        // data 里没有, fallback 到 API 直查; 每个 (taskId, user) 只 fetch 一次
-        if (!user) return;
-        const guardKey = { taskId: taskIdParam, user };
-        if (
-            fetchGuardRef.current?.taskId === guardKey.taskId
-            && fetchGuardRef.current?.user === guardKey.user
-        ) return;
-        fetchGuardRef.current = guardKey;
-        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&taskId=${encodeURIComponent(taskIdParam)}&includeEvaluations=0`)
+        // data 列表里没有这条(列表只含当前登录账号自己的 trace), fallback 到 API 按 taskId 直查。
+        // 关键:不能再按当前登录 user 过滤——评测/灰度的"被执行 trace"跑在服务账号(如 admin)名下,
+        // 从评测结果里点 session id / 评估器 id 跳过来的是别人账号的 trace。taskId 全局唯一,
+        // 按 taskId 直查即可唯一命中;之前带 user 过滤 → 跨账号深链永远查空 → 退回列表页(本 bug)。
+        // 与本路由已有的 executionId 直查口径一致(单条直查都不做 user 作用域)。
+        // 每个 taskId 只 fetch 一次, 防死循环(fetch 回新对象 → setState → effect 重跑 → 再 fetch)。
+        if (fetchGuardRef.current === taskIdParam) return;
+        fetchGuardRef.current = taskIdParam;
+        apiFetch(`/api/observe/data?taskId=${encodeURIComponent(taskIdParam)}&includeEvaluations=0`)
             .then(r => r.json())
             .then((d: Execution[]) => {
                 if (Array.isArray(d) && d.length > 0) setSelectedExecution(d[0]);
             })
             .catch(() => {
                 // 失败让用户能重试: 清掉 guard, 下次 effect 再 fire 时还能再试一次
-                if (fetchGuardRef.current?.taskId === taskIdParam) fetchGuardRef.current = null;
+                if (fetchGuardRef.current === taskIdParam) fetchGuardRef.current = null;
             });
     // selectedExecution 不放 deps——它由本 effect 自己写, 放进去就死循环
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [taskIdParam, data, user]);
+    }, [taskIdParam, data]);
 
     useEffect(() => {
         if (!user) return;
