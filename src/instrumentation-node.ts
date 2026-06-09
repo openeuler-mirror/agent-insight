@@ -27,6 +27,19 @@ export async function setupNodeRuntime(): Promise<void> {
     );
   }
 
+  // 确保内置「messages 日志分析」示例日志存在于平台数据根。内置 case 的 query 指向
+  // ~/.agent-insight/example/messages（执行时展开成绝对路径），换台干净服务器/重装后那个
+  // 路径可能没文件 → agent 一读就 "No such file" 直接结束。这里"不在才补"一份（存在即跳过，
+  // 绝不覆盖）。详见 ensure-example-file.ts。
+  try {
+    const { ensureExampleMessagesFile } = await import('@/server/builtin-example/ensure-example-file');
+    if (ensureExampleMessagesFile() === 'copied') {
+      console.warn('[instrumentation] 补齐内置示例日志 → ~/.agent-insight/example/messages');
+    }
+  } catch (err) {
+    console.warn('[instrumentation] ensure example messages failed (non-fatal):', (err as Error)?.message);
+  }
+
   // 注册进程退出钩子：dev server / 生产 server 关闭时把 spawn 出去的 opencode 子进程
   // 一并带走，避免孤儿堆积。详见 opencode-manager.registerExitHandlers 的注释。
   try {
