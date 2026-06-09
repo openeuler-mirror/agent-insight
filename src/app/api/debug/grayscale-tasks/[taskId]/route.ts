@@ -1565,8 +1565,45 @@ async function rehydrateRunFromExistingEval(args: {
         row = await trajectory.findFirst({ where: base, orderBy: { updatedAt: 'desc' } });
     }
     if (!row) return false;
+    // 清掉本次失败/进行中的评测痕迹, 只留已完成的, 让 applyTrajectoryRowToRun 干净地按历史真实结果重算状态。
+    args.run.evaluations = (args.run.evaluations || []).filter(e => e.status === 'done');
+    args.run.failureType = undefined;
+    args.run.failureDetail = undefined;
     applyTrajectoryRowToRun(args.run, row as unknown as TrajectoryResultRow, args.evaluatorRunId);
     return true;
+}
+
+/**
+ * 打开任务页时(GET)把"评测失败但库里其实已有真实结果"的 run 用历史结果回填(Q2 根治, 无需重试):
+ * 只动"评测失败(failureType 空=非执行失败)且有 sessionId"的 run; 拿这条 trace 最近一条真实评测结果
+ *   - done   → run = pass + 分(那 5 条卡死的就这样自愈);
+ *   - failed → run = 真失败(保持, 可重试);
+ * 绝不重新派发评测, 纯展示纠偏。
+ */
+async function reconcileFailedRunsFromExistingEval(user: string, config: GrayscaleConfig, states: CaseStates): Promise<boolean> {
+    let changed = false;
+    for (const state of Object.values(states)) {
+        for (const side of ['a', 'b'] as Side[]) {
+            let sideChanged = false;
+            for (const run of state[side].runs || []) {
+                if (run.status !== 'fail' || run.failureType || !run.sessionId) continue;
+                const beforeStatus = run.status;
+                const beforeScore = run.score;
+                const ok = await rehydrateRunFromExistingEval({
+                    user,
+                    run,
+                    sessionId: run.sessionId,
+                    evaluatorRunId: config.evaluationBatchId || run.evaluatorRunId,
+                }).catch(() => false);
+                if (ok && (run.status !== beforeStatus || run.score !== beforeScore)) sideChanged = true;
+            }
+            if (sideChanged) {
+                state[side] = rebuildSideAggregate(state[side], state[side].runCount || state[side].runs?.length || 0);
+                changed = true;
+            }
+        }
+    }
+    return changed;
 }
 
 async function markEvaluatorRunFailed(user: string, evaluatorRunId: string, errorMessage: string) {
@@ -2306,6 +2343,8 @@ export async function GET(
             states: task.caseStatesJson,
         });
         const reconciled = await reconcileFinishedEvaluations(taskId, user, task.configJson, task.caseStatesJson);
+        // Q2: "评测失败但库里其实已有真实结果"的 run 用历史结果回填(no valid tasks 残留自愈, 不重新评测)。
+        const failedRehydrated = await reconcileFailedRunsFromExistingEval(user, task.configJson, task.caseStatesJson);
 
         // === 孤儿 in-flight 清理 ===
         // activeRuns 是内存 map (挂 globalThis), server 重启就丢。如果 caseStates
@@ -2347,7 +2386,7 @@ export async function GET(
             }
         }
 
-        if (orphanCleanup || metricsHydrated || executionsReconciled || reconciled) {
+        if (orphanCleanup || metricsHydrated || executionsReconciled || reconciled || failedRehydrated) {
             // 乐观锁回写: 这次 reconcile 是基于 task 刚 load 时的快照算的。若期间评测
             // flow 已经写了更新的状态(CAS 落空), 不能用我们这份旧快照覆盖它 —— 否则
             // 会把刚落库的 pass 又擦回 evaluating(就是"评完又退回评估中"那个抖动)。

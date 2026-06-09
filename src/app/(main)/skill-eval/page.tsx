@@ -1175,9 +1175,16 @@ function SkillAnalysisPage() {
     }, [traceEvalBatchStorageKey]);
 
     useEffect(() => {
-        if (traceEvaluationBatchId || caseEvalTasksForSkill.length === 0) return;
-        const latest = caseEvalTasksForSkill[0];
-        handleSelectTraceEvalBatch({ runId: latest.runId, taskTitle: latest.taskTitle });
+        // 当前选中的若仍在(已排除 A/B 后的)列表里 → 保持。否则(未选 / 残留指向已被排除的 A/B 批次):
+        // 有可选项就自动选第一个有效的, 没有就清空, 避免用例分析里残留显示一个 A/B 任务。
+        const stillValid = traceEvaluationBatchId && caseEvalTasksForSkill.some(t => t.runId === traceEvaluationBatchId);
+        if (stillValid) return;
+        if (caseEvalTasksForSkill.length > 0) {
+            const latest = caseEvalTasksForSkill[0];
+            handleSelectTraceEvalBatch({ runId: latest.runId, taskTitle: latest.taskTitle });
+        } else if (traceEvaluationBatchId) {
+            setTraceEvaluationBatchId('');
+        }
     }, [caseEvalTasksForSkill, handleSelectTraceEvalBatch, traceEvaluationBatchId]);
 
     const runBatchTraceAnalysis = useCallback(async (taskIds: string[]): Promise<{

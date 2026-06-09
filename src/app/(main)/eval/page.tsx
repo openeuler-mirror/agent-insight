@@ -338,7 +338,6 @@ function EvalPageContent() {
                 const anchorRunId = requestedRunId || preferredRunIdForLoadRef.current;
                 if (anchorRunId) qs.set('includeRunId', anchorRunId);
                 if (autoWatchOnly) qs.set('autoWatchOnly', '1');
-                qs.set('excludeGrayscale', '1'); // 用例分析只看独立评测任务, 不展示灰度 A/B 的评测批次
                 const res = await apiFetch(`/api/eval/trajectory/runs?${qs.toString()}`);
                 const data = await res.json();
                 if (!res.ok) throw new Error(data?.error || res.statusText);
@@ -425,7 +424,6 @@ function EvalPageContent() {
             });
             qs.set('offset', String(historyOffset));
             if (autoWatchOnly) qs.set('autoWatchOnly', '1');
-            qs.set('excludeGrayscale', '1'); // 用例分析只看独立评测任务, 不展示灰度 A/B 的评测批次
             apiFetch(`/api/eval/trajectory/runs?${qs.toString()}`)
                 .then(async res => {
                     const data = await res.json();
