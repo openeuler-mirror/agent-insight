@@ -3041,7 +3041,7 @@ export function GrayscaleEvaluation({
 
                                 {/* 评测结果列: 只有绑定到明确的 TrajectoryEvalResult.id 时才允许跳转。 */}
                                 <div>
-                                    {evaluationDetailUrl ? (
+                                    {evaluationDetailUrl && hasScoredEvaluation ? (
                                         <button
                                             className="v2-action-btn"
                                             style={{
@@ -3060,11 +3060,11 @@ export function GrayscaleEvaluation({
                                         >
                                             📋 {locale === 'zh' ? '查看' : 'View'}
                                         </button>
+                                    ) : evaluation ? (
+                                        // 没出分时不显示"查看"(避免误导:待评/评测中也能点进去却没结果),改显评测状态。
+                                        <StatusText label={evaluation.label} tone={evaluation.tone} />
                                     ) : record.evaluatorRunId ? (
-                                        <StatusText
-                                            label={evaluation?.tone === 'running' && !hasScoredEvaluation ? '评测中' : '结果未绑定'}
-                                            tone={evaluation?.tone === 'running' && !hasScoredEvaluation ? 'running' : 'fail'}
-                                        />
+                                        <StatusText label={locale === 'zh' ? '结果未绑定' : 'Unbound'} tone="fail" />
                                     ) : (
                                         <span style={{ color: '#B8B6AE', fontSize: 11 }}>—</span>
                                     )}

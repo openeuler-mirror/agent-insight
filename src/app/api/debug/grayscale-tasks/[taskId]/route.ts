@@ -2570,6 +2570,15 @@ export async function PATCH(
             }
             nextConfig.skillId = existing.skillId;
             nextConfig.versionBId = existing.skillVersionId;
+            // E: evaluationBatchId 后端独占 —— 前端 PATCH 不带/带空值时,保留库里已有的稳定批次 id,
+            // 不让前端用空值覆盖。否则一个 A/B 任务的评测会散裂成多个批次(实测 gyc-v0 散成 20 个)。
+            if (!String(nextConfig.evaluationBatchId || '').trim()) {
+                let existingBatchId = '';
+                try {
+                    existingBatchId = String((JSON.parse(existing.configJson || '{}') as GrayscaleConfig).evaluationBatchId || '').trim();
+                } catch { /* ignore */ }
+                if (existingBatchId) nextConfig.evaluationBatchId = existingBatchId;
+            }
             data.configJson = JSON.stringify(nextConfig);
         }
         if (caseStatesJson !== undefined) data.caseStatesJson = JSON.stringify(caseStatesJson);
