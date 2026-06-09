@@ -8,7 +8,7 @@
  *
  * 现仅保留两类被外部复用的内容：
  *   1. 轨迹评测的输入/输出类型契约 —— 被 opencode 评测器 import 并 re-export；
- *   2. `aggregateTrajectoryScore` —— 轨迹分【加权 + 严重度封顶】的唯一真源（纯代码侧），
+ *   2. `aggregateTrajectoryScore` —— 轨迹分加权聚合的唯一真源（纯代码侧），
  *      opencode 主路径、direct fallback 与归因对齐都共用同一套口径。
  *
  * 输出口径：dimensionScores + trajectoryScore + deviationSteps + rootCauseStep + reasonText。
@@ -51,9 +51,9 @@ export interface TrajectoryDeviationStep {
     deviation: string;
     severity: 'low' | 'medium' | 'high';
     /**
-     * 偏差归属维度/因子，用于展示与封顶解释：
+     * 偏差归属维度/因子，用于展示与诊断：
      * completeness | tool_choice | redundancy | error_recovery | grounding | other。
-     * error_recovery / grounding 不是独立加权维度，只通过 severity 影响封顶。
+     * error_recovery / grounding 不是独立加权维度，仅作为偏差诊断信息保留。
      */
     factor?: 'completeness' | 'tool_choice' | 'redundancy' | 'error_recovery' | 'grounding' | 'other';
     /**
@@ -91,18 +91,17 @@ export interface TrajectoryEvalOutput {
     keyActionResults?: KeyActionTraceAnalysisResult[];
     rootCauseStep?: string;
     reasonText: string;
-    /** 封顶前的纯加权分（completeness/tool_choice/redundancy 加权和）。 */
+    /** 纯加权分（completeness/tool_choice/redundancy 加权和）。 */
     rawWeightedScore?: number;
-    /** 严重度封顶信息：是否触发、上限、原因、封顶前后分数。 */
-    cap?: TrajectoryCapInfo;
+    /** 代码侧分数聚合信息：权重、严重度计数、最终分。 */
+    scoreAggregation?: TrajectoryScoreAggregationInfo;
     rawAnalysis: any;
 }
 
 /**
  * 轨迹分加权权重（v2）。
  *  - attribution 不再计入（只用于根因定位展示）。
- *  - error_recovery / grounding 不作为独立加权维度，而是通过 deviation_steps 的 severity
- *    影响"严重度封顶"。
+ *  - error_recovery / grounding 不作为独立加权维度，仅保留在 deviation_steps 中用于诊断。
  */
 export const TRAJECTORY_WEIGHTS = {
     completeness: 0.45,
@@ -110,41 +109,145 @@ export const TRAJECTORY_WEIGHTS = {
     redundancy: 0.20,
 } as const;
 
-export interface TrajectoryCapInfo {
+export interface TrajectoryScoreAggregationInfo {
     /** 聚合口径：有 Skill 时使用三维加权；无 Skill 时只使用工具选择和冗余。 */
     mode?: 'skill_key_actions' | 'trace_only' | 'trajectory';
-    /** 是否触发了封顶规则（high≥1 或 medium≥3）。 */
-    triggered: boolean;
-    /** 触发后是否真的把分数压低了（rawWeighted 本就低于上限时为 false）。 */
-    effective: boolean;
-    /** 封顶上限；未触发为 null。 */
-    ceiling: number | null;
-    /** 触发原因（含 high/medium 计数）的中文说明。 */
+    /** 计分说明（含 high/medium 计数）。 */
     reason: string;
-    /** 封顶前的加权分。 */
+    /** 维度加权分。 */
     rawWeightedScore: number;
-    /** 封顶后的最终轨迹分。 */
+    /** 最终轨迹分；当前等于 rawWeightedScore。 */
     finalScore: number;
     highCount: number;
     mediumCount: number;
+}
+
+type JsonRecord = Record<string, unknown>;
+
+type TraceCallStat = {
+    call: string;
+    count: number;
+    firstIndex: number | null;
+    lastIndex: number | null;
+};
+
+function asRecord(value: unknown): JsonRecord {
+    return value && typeof value === 'object' && !Array.isArray(value)
+        ? value as JsonRecord
+        : {};
+}
+
+function getTraceStepCallName(step: JsonRecord): string {
+    return String(
+        step.name
+        ?? step.call
+        ?? step.toolName
+        ?? step.tool
+        ?? step.functionName
+        ?? '',
+    ).trim();
+}
+
+function getTraceStepIndex(step: JsonRecord, fallback: number): number {
+    const raw = step.step_index ?? step.stepIndex ?? step.index;
+    const n = typeof raw === 'number' ? raw : Number(raw);
+    return Number.isFinite(n) ? n : fallback;
+}
+
+function getTraceCallStats(actualSteps: unknown[]): TraceCallStat[] {
+    const byCall = new Map<string, TraceCallStat>();
+    for (const [fallbackIndex, raw] of actualSteps.entries()) {
+        const step = asRecord(raw);
+        const kind = String(step.kind || '').toLowerCase();
+        if (kind !== 'tool' && kind !== 'skill' && kind !== 'task') continue;
+        const call = getTraceStepCallName(step);
+        if (!call) continue;
+        const idx = getTraceStepIndex(step, fallbackIndex);
+        const current = byCall.get(call) || { call, count: 0, firstIndex: null, lastIndex: null };
+        current.count += 1;
+        current.firstIndex = current.firstIndex == null ? idx : Math.min(current.firstIndex, idx);
+        current.lastIndex = current.lastIndex == null ? idx : Math.max(current.lastIndex, idx);
+        byCall.set(call, current);
+    }
+    return Array.from(byCall.values()).sort((a, b) => {
+        const byCount = b.count - a.count;
+        if (byCount !== 0) return byCount;
+        return (a.firstIndex ?? Number.MAX_SAFE_INTEGER) - (b.firstIndex ?? Number.MAX_SAFE_INTEGER);
+    });
+}
+
+function pickCallForCount(stats: TraceCallStat[], countRaw: unknown, used: Set<string>): string {
+    const count = typeof countRaw === 'number' ? countRaw : Number(countRaw);
+    const candidates = stats.filter(stat => !used.has(stat.call));
+    const exact = Number.isFinite(count)
+        ? candidates.find(stat => stat.count === count)
+        : null;
+    const picked = exact || candidates[0] || stats[0];
+    if (!picked) return '';
+    used.add(picked.call);
+    return picked.call;
+}
+
+export function normalizeTrajectoryRedundancyDetails(
+    parsed: JsonRecord,
+    actualSteps: unknown[],
+): JsonRecord {
+    const details = asRecord(parsed.dimension_details ?? parsed.dimensionDetails);
+    const redundancy = asRecord(details.redundancy);
+    const stats = getTraceCallStats(Array.isArray(actualSteps) ? actualSteps : []);
+    if (Object.keys(redundancy).length === 0 || stats.length === 0) return parsed;
+
+    const usedHeavyCalls = new Set<string>();
+    const heavy = Array.isArray(redundancy.heavy_repeated_calls)
+        ? redundancy.heavy_repeated_calls.map(item => {
+            const row = asRecord(item);
+            const existing = getTraceStepCallName(row);
+            const call = existing || pickCallForCount(stats, row.count, usedHeavyCalls);
+            return call ? { ...row, call } : row;
+        })
+        : redundancy.heavy_repeated_calls;
+
+    const usedRunCalls = new Set<string>();
+    const consecutive = Array.isArray(redundancy.consecutive_same_runs)
+        ? redundancy.consecutive_same_runs.map(item => {
+            const row = asRecord(item);
+            const existing = getTraceStepCallName(row);
+            const call = existing || pickCallForCount(stats, row.count, usedRunCalls);
+            const stat = stats.find(s => s.call === call);
+            return call
+                ? {
+                    ...row,
+                    name: call,
+                    from: row.from ?? stat?.firstIndex,
+                    to: row.to ?? stat?.lastIndex,
+                }
+                : row;
+        })
+        : redundancy.consecutive_same_runs;
+
+    const nextRedundancy = {
+        ...redundancy,
+        ...(Array.isArray(heavy) ? { heavy_repeated_calls: heavy } : {}),
+        ...(Array.isArray(consecutive) ? { consecutive_same_runs: consecutive } : {}),
+    };
+    const nextDetails = { ...details, redundancy: nextRedundancy };
+    return {
+        ...parsed,
+        dimension_details: nextDetails,
+    };
 }
 
 /**
  * 轨迹分聚合层（代码侧，唯一真源）。
  *
  * LLM 只负责输出 3 个维度分（completeness / tool_choice / redundancy）和带 severity 的
- * deviation_steps；最终轨迹分的【加权 + 严重度封顶】一律在这里算，保证 opencode 主路径与
+ * deviation_steps；最终轨迹分的加权聚合一律在这里算，保证 opencode 主路径与
  * direct fallback、以及未来 analyze-match 确定性对齐都走同一套口径。
- *
- * 封顶规则（min(加权分, 上限)）：
- *   - 存在 ≥1 个 high 偏差 → 上限 0.40（关键步骤缺失 / 方向性错误 / 不可逆后果）。
- *   - 无 high 但 ≥3 个 medium 偏差 → 上限 0.65（多处明显绕路 / 次优）。
- *   - 否则不封顶。
  */
 export function aggregateTrajectoryScore(
     dims: { completeness: number | null | undefined; toolChoice: number; redundancy: number },
     deviations: TrajectoryDeviationStep[],
-): { trajectoryScore: number; rawWeightedScore: number; cap: TrajectoryCapInfo } {
+): { trajectoryScore: number; rawWeightedScore: number; scoreAggregation: TrajectoryScoreAggregationInfo } {
     const c = clamp01(typeof dims.completeness === 'number' ? dims.completeness : 0);
     const t = clamp01(dims.toolChoice);
     const r = clamp01(dims.redundancy);
@@ -158,36 +261,16 @@ export function aggregateTrajectoryScore(
     const highCount = list.filter(d => d?.severity === 'high').length;
     const mediumCount = list.filter(d => d?.severity === 'medium').length;
 
-    let ceiling: number | null = null;
-    let reason = '';
-    if (highCount >= 1) {
-        ceiling = 0.4;
-        reason = `存在 ${highCount} 个 high 严重度偏差（关键步骤缺失 / 方向性错误 / 不可逆后果 / 阻塞错误未恢复 / 基于幻觉行动），轨迹分封顶 0.40。`;
-    } else if (mediumCount >= 3) {
-        ceiling = 0.65;
-        reason = `无 high 偏差，但存在 ${mediumCount} 个 medium 严重度偏差（≥3，多处明显绕路 / 次优），轨迹分封顶 0.65。`;
-    } else {
-        reason = `无 high 偏差且 medium 偏差仅 ${mediumCount} 个（<3），不触发封顶。`;
-    }
-
-    const finalScore = ceiling != null ? Math.min(rawWeightedScore, ceiling) : rawWeightedScore;
-    const effective = ceiling != null && finalScore < rawWeightedScore;
+    const reason = `轨迹分按完整性/工具选择/冗余加权计算；严重度仅用于诊断展示（high ${highCount}，medium ${mediumCount}），不调整最终分。`;
 
     return {
-        trajectoryScore: clamp01(finalScore),
+        trajectoryScore: clamp01(rawWeightedScore),
         rawWeightedScore,
-        cap: {
+        scoreAggregation: {
             mode: 'trajectory',
-            triggered: ceiling != null,
-            effective,
-            ceiling,
-            reason: effective
-                ? reason
-                : ceiling != null
-                ? `${reason}（但加权分 ${rawWeightedScore.toFixed(3)} 本就不高于上限，最终分未被进一步压低。）`
-                : reason,
+            reason,
             rawWeightedScore,
-            finalScore: clamp01(finalScore),
+            finalScore: clamp01(rawWeightedScore),
             highCount,
             mediumCount,
         },

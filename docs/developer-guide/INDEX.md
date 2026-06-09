@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `e0e7917281e064e96d6959dc00d3cdb8db5327d5` (`e0e7917`) |
-| Branch | `master_0530` |
-| Date | 2026-06-04T11:53:01+08:00 |
-| Author | Tech1024Wizard |
-| Subject | `docs:` |
+| Commit | `7c773a87fcde18fcd36e2782e47fb2ccc8031d35` (`7c773a8`) |
+| Branch | `new-dev-06-09-before` |
+| Date | 2026-06-09T10:13:49+08:00 |
+| Author | gyctl |
+| Subject | `!105 merge new-dev-06-08 into master` |
 
-**如何更新：** `git diff e0e7917 HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff 7c773a8 HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
