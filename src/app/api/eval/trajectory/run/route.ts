@@ -358,6 +358,7 @@ async function evaluateTaskCompletionAgainstExpected(
     precomputedRootCauseSource?: 'dataset-cache' | 'none',
     traceSummaryText?: string,
     skillContext?: TaskCompletionEvalInput['skillContext'],
+    skillAttributionMode?: TaskCompletionEvalInput['skillAttributionMode'],
     user?: string | null,
     skillName?: string | null,
     skillVersion?: number | null,
@@ -371,6 +372,7 @@ async function evaluateTaskCompletionAgainstExpected(
             precomputedRootCauseSource,
             traceSummaryText,
             skillContext,
+            skillAttributionMode,
         },
         user,
         skillName,
@@ -1376,6 +1378,9 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
         user,
         interactions,
     );
+    const resultSkillTargets = getPrimaryExecutionSkillTargets(execution, interactions);
+    const resultSkillMode: NonNullable<TaskCompletionEvalInput['skillAttributionMode']> =
+        resultSkillTargets.length > 0 ? 'skill-aware' : 'no-skill';
     const keyActionComparisonForStatus: SkillKeyActionComparisonResult = keyActionReference.status === 'ok'
         ? {
             status: 'ok',
@@ -1421,6 +1426,7 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
         ...(grayscaleBinding ? { grayscaleBinding } : {}),
         caseSnapshot,
         skillAttribution: skillAttributionStatus,
+        resultSkillMode,
         comparisonMode,
         actualTraceExtraction: traceEvidence
             ? {
@@ -1486,7 +1492,9 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
     }
 
     if (shouldRunResultEvaluation) {
-        const taskCompletionSkillContext = await loadTaskCompletionSkillContext(execution, interactions, user);
+        const taskCompletionSkillContext = resultSkillMode === 'skill-aware'
+            ? await loadTaskCompletionSkillContext(execution, interactions, user)
+            : undefined;
         const traceSummaryForResultEvaluation = traceEvidence?.text || '';
         const attempt = Math.min(
             readResultEvaluationAttemptCount(row.rawAnalysisJson) + 1,
@@ -1567,6 +1575,7 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
                     precomputedRootCauseSource,
                     traceSummaryForResultEvaluation,
                     taskCompletionSkillContext,
+                    resultSkillMode,
                     user,
                     evalSkillName,
                     evalSkillVersion,
