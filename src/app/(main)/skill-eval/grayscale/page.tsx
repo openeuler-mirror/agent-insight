@@ -1189,6 +1189,14 @@ export function GrayscaleEvaluation({
     const resetToNewTaskDraft = (skillId: string) => {
         setCurrentTask(null);
         currentTaskRef.current = null;
+        // 新建草稿没有已存任务, 清掉 URL 的 ?task, 否则刷新又会去恢复旧任务。
+        if (typeof window !== 'undefined') {
+            const url = new URL(window.location.href);
+            if (url.searchParams.has('task')) {
+                url.searchParams.delete('task');
+                window.history.replaceState(window.history.state, '', url.toString());
+            }
+        }
         setTaskNameInput(defaultTaskName());
         setTaskDescInput('');
         setSelectedSkillId(skillId);
@@ -1270,6 +1278,12 @@ export function GrayscaleEvaluation({
 
     const applyTaskToState = (task: GrayscaleTask) => {
         setCurrentTask(task);
+        // 把选中任务写进 URL(?task=<id>), 刷新后恢复到这个任务、而不是跳回最新(详见加载 effect)。
+        if (typeof window !== 'undefined' && task?.id) {
+            const url = new URL(window.location.href);
+            url.searchParams.set('task', task.id);
+            window.history.replaceState(window.history.state, '', url.toString());
+        }
         setIsFreshTaskDraft(false);
         setIsEditingTask(false);
         setTaskNameInput('');
@@ -1340,6 +1354,8 @@ export function GrayscaleEvaluation({
     };
 
     // Load all tasks for history, then pick the task bound to the current Skill + B version.
+    // 优先恢复 URL 里 ?task=<id> 指定的任务: 刷新后保持用户选中的任务, 而不是跳回最新。
+    const urlTaskConsumedRef = useRef(false);
     useEffect(() => {
         if (!user) return;
         apiFetch(`/api/debug/grayscale-tasks?user=${encodeURIComponent(user)}`)
@@ -1347,9 +1363,17 @@ export function GrayscaleEvaluation({
             .then(data => {
                 if (Array.isArray(data) && data.length > 0) {
                     setTaskHistory(data);
-                    const task = parentSkillId
+                    // 仅首次加载吃 URL 的 ?task; 之后切换 skill 等不再被旧 URL 拽回。
+                    const urlTaskId = !urlTaskConsumedRef.current && typeof window !== 'undefined'
+                        ? new URLSearchParams(window.location.search).get('task')
+                        : null;
+                    urlTaskConsumedRef.current = true;
+                    const fromUrl = urlTaskId
+                        ? (data as GrayscaleTask[]).find(t => t.id === urlTaskId)
+                        : null;
+                    const task = fromUrl || (parentSkillId
                         ? pickLatestTaskForBinding(data as GrayscaleTask[], parentSkillId, undefined, parentSkillVersion)
-                        : [...(data as GrayscaleTask[])].sort((a, b) => getTaskRunTime(b) - getTaskRunTime(a))[0];
+                        : [...(data as GrayscaleTask[])].sort((a, b) => getTaskRunTime(b) - getTaskRunTime(a))[0]);
                     if (task) {
                         applyTaskToState(task);
                     } else if (parentSkillId) {
