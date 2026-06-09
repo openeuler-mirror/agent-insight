@@ -13,6 +13,7 @@ import {
 import { ensureOpencodeServer, runWithEphemeralOpencodeServer } from '@/lib/engine/skill-generation/opencode-agent-cli/opencode-manager';
 
 import { resolveSkill, skillToSystemPrompt } from './skill-resolver';
+import { expandHomePathsInText } from './expand-home';
 import { loadServerModelForUser } from './server-model-config';
 import {
   buildPermissionsForWorkspace,
@@ -244,7 +245,9 @@ export async function runGeneralAgent(
 ): Promise<RunGeneralAgentResult> {
   const user = String(input.user || '').trim();
   if (!user) throw new Error('user is required');
-  const query = String(input.query || '').trim();
+  // 把 query 里的 `~/` 展开成执行机绝对 HOME, 再交给 agent —— `~` 是 shell 语法糖, agent 用
+  // 文件读取工具/加引号/Node 读时拿到字面量 `~` 会 "No such file" 直接结束(详见 expand-home.ts)。
+  const query = expandHomePathsInText(String(input.query || '').trim());
   if (!query) throw new Error('query is required');
 
   // ephemeral 模式: 起独立 opencode 进程,跑完自动杀。后台批量任务用这条路保证拿最新 skill。
