@@ -99,6 +99,7 @@ exclude/
 
 # local docs backup
 docs_backup/
+docs/series-articles/
 
 # npm pack output (build artifact, never commit)
 *.tgz

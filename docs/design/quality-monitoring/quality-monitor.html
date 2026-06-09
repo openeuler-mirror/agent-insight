@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>质量监控 · Agent Insight</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#ffffff; --sidebar:#fbfbfc; --panel:#ffffff;
+    --border:#edeef1; --border-2:#e3e4e8;
+    --ink:#1b1c20; --ink-2:#646973; --ink-3:#9aa0ab;
+    --accent:#6457f5; --accent-2:#8b7ffb; --accent-soft:#f2f0fe;
+    --green:#159a5b; --green-soft:#e7f6ee;
+    --amber:#cd7a08; --amber-soft:#fbf2e1;
+    --red:#df4248; --red-soft:#fdecee;
+    --slate:#5b6472; --slate-soft:#eef0f3;
+    --blue:#2c6bd1; --blue-soft:#eaf1fb;
+    --teal:#0f897e; --teal-soft:#e3f4f1;
+    --shadow:0 1px 2px rgba(20,22,30,.04),0 1px 3px rgba(20,22,30,.03);
+    --shadow-lg:0 6px 24px rgba(20,22,30,.12);
+    --r:12px;
+    --mono:"JetBrains Mono",ui-monospace,monospace;
+    --sans:"Manrope","PingFang SC","Microsoft YaHei",-apple-system,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%} html{scroll-behavior:smooth}
+  body{font-family:var(--sans);background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased;display:flex;font-size:13px;letter-spacing:-.005em}
+  ::-webkit-scrollbar{width:9px;height:9px}
+  ::-webkit-scrollbar-thumb{background:#dcdde2;border-radius:9px;border:2px solid #fff}
+  a{text-decoration:none;color:inherit}
+
+  /* SIDEBAR */
+  .sidebar{width:212px;flex:0 0 212px;background:var(--sidebar);border-right:1px solid var(--border);height:100vh;position:sticky;top:0;display:flex;flex-direction:column;padding:16px 0}
+  .brand{display:flex;align-items:center;gap:9px;padding:2px 18px 18px}
+  .brand .mark{width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,var(--accent),var(--accent-2));display:grid;place-items:center;flex:0 0 26px;box-shadow:0 2px 8px rgba(100,87,245,.35)}
+  .brand .mark svg{width:15px;height:15px} .brand .name{font-weight:800;font-size:15px;letter-spacing:-.02em}
+  .nav{flex:1;overflow-y:auto;padding:0 10px} .nav-group{margin-bottom:14px}
+  .nav-label{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);padding:6px 8px}
+  .nav-item{display:flex;align-items:center;gap:9px;padding:7px 8px;border-radius:8px;color:var(--ink-2);font-size:12.5px;font-weight:500;cursor:pointer;margin-bottom:1px;position:relative;transition:background .14s,color .14s}
+  .nav-item svg{width:15px;height:15px;flex:0 0 15px;opacity:.85}
+  .nav-item:hover{background:#f2f2f4;color:var(--ink)}
+  .nav-item.active{background:var(--accent-soft);color:var(--accent);font-weight:700} .nav-item.active svg{opacity:1}
+  .nav-item.active::before{content:"";position:absolute;left:-10px;top:50%;transform:translateY(-50%);width:3px;height:16px;border-radius:0 3px 3px 0;background:var(--accent)}
+
+  /* MAIN */
+  .main{flex:1;min-width:0;height:100vh;overflow-y:auto;display:flex;flex-direction:column}
+  .topbar{height:54px;flex:0 0 54px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;padding:0 26px;position:sticky;top:0;background:rgba(255,255,255,.88);backdrop-filter:blur(8px);z-index:20}
+  .topbar .crumb{font-size:11.5px;color:var(--ink-3);font-weight:600}
+  .topbar h1{font-size:15px;font-weight:800;letter-spacing:-.02em;display:flex;align-items:center;gap:8px}
+  .topbar .beta{font:600 9.5px/1 var(--sans);background:var(--accent-soft);color:var(--accent);padding:3px 6px;border-radius:5px}
+  .topbar .spacer{flex:1}
+  .topbar .updated{font-size:11px;color:var(--ink-3)} .topbar .updated b{color:var(--ink-2);font-weight:600;font-family:var(--mono)}
+  .content{padding:18px 26px 48px;max-width:1320px;width:100%}
+  section[id]{scroll-margin-top:66px}
+
+  /* CONFIG BAR */
+  .cfgbar{display:flex;align-items:center;gap:24px;background:var(--panel);border:1px solid var(--border);border-radius:var(--r);box-shadow:var(--shadow);padding:12px 18px;margin-bottom:14px;flex-wrap:wrap}
+  .cfg-item{display:flex;align-items:center;gap:10px}
+  .cfg-k{font-size:11px;font-weight:700;color:var(--ink-3)}
+  .cfg-sel{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--border-2);background:#fff;border-radius:8px;padding:6px 11px;font:700 12.5px/1 var(--sans);color:var(--ink);cursor:pointer}
+  .cfg-sel .av{width:18px;height:18px;border-radius:5px;background:linear-gradient(135deg,var(--accent),var(--accent-2));display:grid;place-items:center;color:#fff;font:700 8px/1 var(--mono)}
+  .cfg-sel svg{width:13px;height:13px;opacity:.5}
+  .seg{display:inline-flex;background:#f3f3f5;border-radius:9px;padding:3px}
+  .seg button{border:none;background:transparent;font:600 12px/1 var(--sans);color:var(--ink-2);padding:7px 13px;border-radius:7px;cursor:pointer;transition:all .14s}
+  .seg button.on{background:#fff;color:var(--accent);box-shadow:var(--shadow);font-weight:700}
+  .cfg-grow{flex:1}
+  .cfg-note{font-size:11px;color:var(--ink-3);max-width:300px;line-height:1.5} .cfg-note b{color:var(--ink);font-family:var(--mono);font-weight:700}
+
+  /* SUMMARY STRIP */
+  .sbar{display:flex;align-items:stretch;background:var(--panel);border:1px solid var(--border);border-radius:var(--r);box-shadow:var(--shadow);overflow:hidden;margin-bottom:14px}
+  .sseg{padding:13px 18px;display:flex;flex-direction:column;justify-content:center;gap:3px;border-right:1px solid var(--border)}
+  .sseg:last-child{border-right:none}
+  .sseg .k{font-size:10.5px;color:var(--ink-3);font-weight:600}
+  .sscore{display:flex;align-items:baseline;gap:7px}
+  .sscore .n{font:800 28px/1 var(--mono);letter-spacing:-.02em} .sscore .of{font-size:12px;color:var(--ink-3);font-weight:600;font-family:var(--mono)}
+  .rk{display:inline-flex;align-items:center;gap:6px;background:linear-gradient(135deg,var(--accent),var(--accent-2));color:#fff;padding:4px 9px;border-radius:7px;font-weight:700;font-size:11px;box-shadow:0 2px 8px rgba(100,87,245,.28);align-self:flex-start;margin-top:2px}
+  .rk .p{font-family:var(--mono);font-size:12.5px}
+  .pmini-row{display:flex;gap:16px;align-items:center}
+  .pm{display:flex;flex-direction:column;gap:5px;min-width:84px}
+  .pm .pt{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:600;color:var(--ink-2)}
+  .ptag{font:700 9px/1 var(--mono);padding:2px 5px;border-radius:4px;letter-spacing:.03em}
+  .p0{background:var(--red-soft);color:var(--red)} .p1{background:var(--amber-soft);color:var(--amber)} .p2{background:var(--slate-soft);color:var(--slate)}
+  .pm .pt b{font-family:var(--mono);font-weight:700;color:var(--ink);margin-left:auto}
+  .pm .bar{height:5px;border-radius:4px;background:#f0f1f3;overflow:hidden} .pm .bar i{display:block;height:100%;border-radius:4px}
+  .smeta{display:flex;flex-direction:column;gap:4px;justify-content:center}
+  .smeta .line{font-size:11.5px;color:var(--ink-2)} .smeta .line b{font-family:var(--mono);font-weight:700;color:var(--ink)}
+  .chip-up{color:var(--green);font:700 11px/1 var(--mono)} .sgrow{flex:1}
+
+  /* PANEL */
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:var(--r);box-shadow:var(--shadow);margin-bottom:14px}
+  .panel-h{padding:13px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .panel-h .ix{width:22px;height:22px;border-radius:6px;display:grid;place-items:center;flex:0 0 22px} .panel-h .ix svg{width:13px;height:13px}
+  .panel-h .t{font-size:13.5px;font-weight:800} .panel-h .spacer{flex:1} .panel-h .hint{font-size:10.5px;color:var(--ink-3);font-weight:500}
+  .panel-b{padding:16px 18px}
+
+  /* 综合分析 */
+  .verdict{background:linear-gradient(180deg,#faf9ff,#fff);border:1px solid #e8e4fb;border-radius:10px;padding:14px 16px;display:flex;gap:12px;align-items:flex-start;margin-bottom:16px}
+  .verdict .vi{width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,var(--accent),var(--accent-2));display:grid;place-items:center;flex:0 0 30px;box-shadow:0 2px 8px rgba(100,87,245,.3)} .verdict .vi svg{width:17px;height:17px}
+  .verdict .vt{font-size:13px;line-height:1.6;color:var(--ink)} .verdict .vt b{font-weight:800} .verdict .vt .hl{color:var(--accent);font-weight:700} .verdict .vt .warn{color:var(--amber);font-weight:700}
+  .method{font-size:11px;color:var(--ink-3);margin-bottom:14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .method .m{display:inline-flex;align-items:center;gap:5px;font-weight:600;color:var(--ink-2)} .method .m b{color:var(--ink)} .method .sep{color:#d4d6db}
+  .lens{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+  .lcard{border:1px solid var(--border);border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:9px;transition:border-color .15s,box-shadow .15s,transform .15s;cursor:pointer;background:#fff}
+  .lcard:hover{border-color:var(--accent-2);box-shadow:0 4px 16px rgba(100,87,245,.1);transform:translateY(-2px)}
+  .lcard .lh{display:flex;align-items:center;gap:8px}
+  .lcard .lic{width:24px;height:24px;border-radius:7px;display:grid;place-items:center;flex:0 0 24px} .lcard .lic svg{width:14px;height:14px}
+  .lcard .lname{font-size:12.5px;font-weight:800} .lcard .lq{font-size:9.5px;color:var(--ink-3);font-weight:600;margin-left:auto}
+  .lcard .lsig{display:flex;align-items:baseline;gap:6px} .lcard .lsig .v{font:800 24px/1 var(--mono);letter-spacing:-.02em} .lcard .lsig .st{font-size:10.5px;font-weight:700;padding:3px 7px;border-radius:5px}
+  .lcard .lfind{font-size:11px;color:var(--ink-2);line-height:1.5;min-height:33px}
+  .lcard .lgo{font-size:11px;font-weight:700;color:var(--accent);display:flex;align-items:center;gap:5px;margin-top:auto} .lcard .lgo svg{width:13px;height:13px}
+  .st-ok{background:var(--green-soft);color:var(--green)} .st-warn{background:var(--amber-soft);color:var(--amber)}
+  .ic-res{background:var(--green-soft);color:var(--green)} .ic-proc{background:var(--blue-soft);color:var(--blue)} .ic-cost{background:var(--amber-soft);color:var(--amber)} .ic-err{background:var(--red-soft);color:var(--red)}
+
+  /* 同类排名 */
+  .cohort{display:flex;gap:6px}
+  .cchip{font-size:11px;font-weight:600;padding:5px 10px;border-radius:7px;border:1px solid var(--border-2);color:var(--ink-2);cursor:pointer;background:#fff} .cchip.on{background:var(--accent-soft);border-color:#d9d4fb;color:var(--accent)}
+  .rank-sum{display:flex;align-items:center;gap:18px;padding:4px 0 14px}
+  .rank-sum .big{font:800 30px/1 var(--mono);letter-spacing:-.02em} .rank-sum .big small{font-size:14px;color:var(--ink-3);font-weight:600}
+  .rank-sum .txt{font-size:11.5px;color:var(--ink-2);line-height:1.5} .rank-sum .txt b{color:var(--ink);font-family:var(--mono);font-weight:700}
+  .lb{width:100%;border-collapse:collapse}
+  .lb th{font-size:10px;font-weight:700;color:var(--ink-3);text-transform:uppercase;letter-spacing:.04em;text-align:left;padding:8px 12px;border-bottom:1px solid var(--border)} .lb th.c{text-align:center}
+  .lb td{padding:10px 12px;border-bottom:1px solid var(--border);font-size:12px} .lb tr:last-child td{border-bottom:none}
+  .lb .rnk{font:700 13px/1 var(--mono);color:var(--ink-2);width:48px} .lb .medal{color:var(--accent)} .lb .agn{font-weight:700}
+  .lb .scol{display:flex;align-items:center;gap:9px} .lb .scol .sv{font:700 13px/1 var(--mono);width:42px} .lb .scol .mb{flex:1;max-width:120px;height:6px;border-radius:5px;background:#f0f1f3;overflow:hidden} .lb .scol .mb i{display:block;height:100%;border-radius:5px;background:var(--accent)}
+  .lb .weak{font-size:11px;color:var(--ink-2)} .lb .smp{font:600 11px/1 var(--mono);color:var(--ink-3)}
+  .lb .self{background:linear-gradient(90deg,var(--accent-soft),#fff)} .lb .self td{border-color:#e3def9} .lb .self .rnk,.lb .self .agn{color:var(--accent)}
+  .lb .selftag{font:700 9px/1 var(--mono);background:var(--accent);color:#fff;padding:2px 6px;border-radius:4px;margin-left:7px}
+  .lb .ell td{text-align:center;color:var(--ink-3);font-family:var(--mono);font-size:11px;padding:5px}
+  .tu{color:var(--green)} .td{color:var(--red)}
+
+  /* process bars */
+  .pbars{display:flex;flex-direction:column;gap:15px}
+  .pbar .top{display:flex;align-items:center;gap:9px;margin-bottom:7px}
+  .pbar .nm{font-size:12.5px;font-weight:700} .pbar .en{font:500 10px/1 var(--mono);color:var(--ink-3)} .pbar .sc{margin-left:auto;font:700 14px/1 var(--mono)} .pbar .pp{font:600 10px/1 var(--mono);color:var(--ink-3);width:34px;text-align:right} .pbar .stt{font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:5px}
+  .pbar .track{height:7px;border-radius:5px;background:#f0f1f3;overflow:hidden} .pbar .track i{display:block;height:100%;border-radius:5px}
+  .subrows{margin:9px 0 0 16px;padding-left:14px;border-left:2px solid var(--border);display:flex;flex-direction:column;gap:9px}
+  .subrow{display:flex;align-items:center;gap:9px;font-size:11.5px} .subrow .sn{color:var(--ink-2);font-weight:600} .subrow .cond{font:600 9px/1 var(--mono);background:var(--slate-soft);color:var(--slate);padding:2px 5px;border-radius:4px} .subrow .sb{flex:1;max-width:150px;height:5px;border-radius:4px;background:#f0f1f3;overflow:hidden} .subrow .sb i{display:block;height:100%;border-radius:4px} .subrow .sv{font:700 12px/1 var(--mono);margin-left:auto}
+
+  /* trend */
+  .toggles{display:flex;gap:6px}
+  .tg{font-size:11px;font-weight:600;padding:5px 10px;border-radius:7px;border:1px dashed var(--border-2);color:var(--ink-2);cursor:pointer;display:inline-flex;align-items:center;gap:6px;background:#fff;opacity:.5;transition:all .14s;user-select:none}
+  .tg .sw{width:9px;height:3px;border-radius:2px}
+  .tg.act{opacity:1;border-style:solid;box-shadow:var(--shadow);color:var(--ink)}
+  .trend-cap{font-size:11px;color:var(--ink-3);margin-bottom:8px} .trend-cap b{color:var(--ink-2);font-family:var(--mono)}
+  .chart-wrap{position:relative}
+  .chart{width:100%;height:auto;display:block;overflow:visible}
+  .gl{stroke:#f0f1f3;stroke-width:1} .axlbl{font:500 9.5px/1 var(--mono);fill:var(--ink-3)} .vbar{fill:#eceaf9} .cband{fill:rgba(205,122,8,.13)}
+  .trend-tip{position:absolute;top:4px;pointer-events:none;opacity:0;transition:opacity .12s;background:#fff;border:1px solid var(--border-2);box-shadow:var(--shadow-lg);border-radius:9px;padding:9px 11px;font-size:11px;min-width:120px;z-index:6}
+  .trend-tip .th{font:700 11px/1 var(--mono);margin-bottom:6px;color:var(--ink)}
+  .trend-tip .tr{display:flex;align-items:center;gap:6px;margin:3px 0;color:var(--ink-2)} .trend-tip .tr .sw{width:8px;height:8px;border-radius:2px} .trend-tip .tr b{margin-left:auto;font-family:var(--mono);color:var(--ink);font-weight:700}
+  .trend-tip .tn{margin-top:6px;padding-top:6px;border-top:1px solid var(--border);font-size:10px;color:var(--ink-3);font-family:var(--mono)}
+  .base-note{margin-top:14px;background:#fbfafe;border:1px dashed #e3def9;border-radius:8px;padding:10px 13px;font-size:11px;line-height:1.7;color:var(--ink-2)}
+  .base-note b{color:var(--ink);font-weight:700}
+  .base-note .bk{font-weight:700;padding:1px 6px;border-radius:5px;margin:0 2px}
+  .bk1{background:var(--amber-soft);color:var(--amber)} .bk2{background:var(--blue-soft);color:var(--blue)} .bk3{background:var(--accent-soft);color:var(--accent)}
+
+  /* error clusters */
+  .err-grid{display:grid;grid-template-columns:1.55fr 1fr;gap:18px}
+  .ec-row{display:flex;align-items:center;gap:11px;padding:11px 0;border-bottom:1px solid var(--border)} .ec-row:last-child{border-bottom:none}
+  .ec-rank{font:700 12px/1 var(--mono);color:var(--ink-3);width:18px} .ec-main{flex:1;min-width:0}
+  .ec-cat{font-size:12.5px;font-weight:700;display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+  .nodetag{font:600 9px/1 var(--mono);padding:2px 6px;border-radius:4px;background:var(--slate-soft);color:var(--slate)} .obj{font:600 10px/1 var(--mono);color:var(--ink-3)}
+  .ec-sub{display:flex;align-items:center;gap:8px;margin-top:6px} .ec-bar{flex:1;max-width:170px;height:6px;border-radius:5px;background:#f0f1f3;overflow:hidden} .ec-bar i{display:block;height:100%;border-radius:5px;background:linear-gradient(90deg,#ec8a8e,var(--red))} .ec-cnt{font:700 11px/1 var(--mono);color:var(--ink-2)} .ec-pct{font:600 10px/1 var(--mono);color:var(--ink-3)}
+  .attr{font:600 9.5px/1 var(--sans);padding:3px 7px;border-radius:5px} .at-agent{background:var(--accent-soft);color:var(--accent)} .at-model{background:var(--blue-soft);color:var(--blue)} .at-infra{background:var(--amber-soft);color:var(--amber)} .at-input{background:var(--teal-soft);color:var(--teal)}
+  .ec-tr{font:700 10px/1 var(--mono);width:34px;text-align:right}
+  .nodedist{display:flex;flex-direction:column;gap:12px} .nd-title{font-size:11.5px;font-weight:700;color:var(--ink-2);margin-bottom:2px}
+  .nd-stack{display:flex;height:34px;border-radius:8px;overflow:hidden;border:1px solid var(--border)} .nd-seg{display:grid;place-items:center;font:700 10px/1 var(--mono);color:#fff}
+  .nd-legend{display:flex;flex-direction:column;gap:8px;margin-top:4px} .nd-li{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--ink-2)} .nd-li .d{width:9px;height:9px;border-radius:3px} .nd-li b{margin-left:auto;font-family:var(--mono);color:var(--ink)}
+  .ec-foot{margin-top:12px;font-size:11px;color:var(--ink-3);background:#fbfafe;border:1px dashed #e3def9;border-radius:8px;padding:9px 12px;line-height:1.5} .ec-foot b{color:var(--accent)}
+
+  /* FILTERS */
+  .filters{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin:18px 0 12px}
+  .fchip{display:inline-flex;align-items:center;gap:7px;background:var(--panel);border:1px solid var(--border-2);border-radius:8px;padding:7px 11px;font-size:12px;font-weight:600;color:var(--ink-2);cursor:pointer;box-shadow:var(--shadow)} .fchip:hover{border-color:#cfd0d6}
+  .fchip .k{color:var(--ink-3)} .fchip .v{color:var(--ink);font-weight:700} .fchip svg{width:13px;height:13px;opacity:.5}
+  .fchip.active-chip{background:var(--accent-soft);border-color:#d9d4fb;color:var(--accent)} .fchip.active-chip .v{color:var(--accent)}
+  .freset{margin-left:2px;color:var(--ink-3);font-size:12px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:5px;padding:7px 4px} .freset svg{width:13px;height:13px}
+
+  /* exec table */
+  .tbl-wrap{background:var(--panel);border:1px solid var(--border);border-radius:var(--r);box-shadow:var(--shadow);overflow:hidden}
+  .tbl-head{padding:14px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px}
+  .tbl-head .t{font-size:13.5px;font-weight:800} .tbl-head .badge{background:var(--accent-soft);color:var(--accent);font:700 11px/1 var(--mono);padding:4px 8px;border-radius:6px} .tbl-head .spacer{flex:1} .tbl-head .note{font-size:10.5px;color:var(--ink-3)}
+  table.ex{width:100%;border-collapse:collapse}
+  table.ex thead th{font-size:10.5px;font-weight:700;color:var(--ink-3);text-transform:uppercase;letter-spacing:.05em;text-align:left;padding:10px 14px;background:#fbfbfc;border-bottom:1px solid var(--border);white-space:nowrap} table.ex thead th.c{text-align:center}
+  table.ex tbody td{padding:12px 14px;border-bottom:1px solid var(--border);vertical-align:middle} table.ex tbody tr:last-child td{border-bottom:none} table.ex tbody tr:hover{background:#fbfbfc;cursor:pointer}
+  .tid{font:600 11.5px/1 var(--mono);color:var(--accent)} .ag{font-size:12px;font-weight:600;color:var(--ink-2)}
+  .task{font-size:11.5px;color:var(--ink-2);line-height:1.4;max-width:300px;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+  .errb{display:inline-block;font:600 9.5px/1 var(--mono);padding:2px 6px;border-radius:5px;margin-right:5px;background:var(--red-soft);color:var(--red)} .errb.to{background:var(--amber-soft);color:var(--amber)}
+  .scell{display:flex;flex-direction:column;gap:5px;min-width:104px} .scell .row1{display:flex;align-items:baseline;gap:5px} .scell .num{font:700 15px/1 var(--mono)} .scell .of{font-size:10px;color:var(--ink-3);font-family:var(--mono)} .scell .pp{margin-left:auto;font:600 10px/1 var(--mono);color:var(--ink-3)}
+  .mini{height:5px;border-radius:5px;background:#f0f1f3;overflow:hidden} .mini i{display:block;height:100%;border-radius:5px}
+  .sigs{display:flex;gap:5px;flex-wrap:wrap} .sig{display:inline-flex;align-items:center;gap:4px;font:600 10px/1 var(--sans);padding:3px 7px;border-radius:6px} .sig .d{width:5px;height:5px;border-radius:50%}
+  .sig-ok{background:var(--green-soft);color:var(--green)} .sig-ok .d{background:var(--green)} .sig-warn{background:var(--amber-soft);color:var(--amber)} .sig-warn .d{background:var(--amber)} .sig-bad{background:var(--red-soft);color:var(--red)} .sig-bad .d{background:var(--red)}
+  .stt2{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:700;padding:4px 10px;border-radius:20px} .stt2 .d{width:6px;height:6px;border-radius:50%}
+  .s-ok{background:var(--green-soft);color:var(--green)} .s-ok .d{background:var(--green)} .s-warn{background:var(--amber-soft);color:var(--amber)} .s-warn .d{background:var(--amber)} .s-bad{background:var(--red-soft);color:var(--red)} .s-bad .d{background:var(--red)}
+  .ts{font:500 11px/1.3 var(--mono);color:var(--ink-3);white-space:nowrap}
+  .tbl-foot{display:flex;align-items:center;padding:12px 18px;font-size:11.5px;color:var(--ink-3)} .tbl-foot .spacer{flex:1}
+  .pager{display:flex;gap:4px;align-items:center} .pg{width:26px;height:26px;border-radius:7px;border:1px solid var(--border-2);display:grid;place-items:center;font:600 11px/1 var(--mono);color:var(--ink-2);cursor:pointer;background:#fff} .pg.on{background:var(--accent);color:#fff;border-color:var(--accent)} .pg svg{width:13px;height:13px}
+
+  .reveal{opacity:0;transform:translateY(8px);animation:rise .55s cubic-bezier(.2,.8,.2,1) forwards} @keyframes rise{to{opacity:1;transform:none}}
+  @media(max-width:1080px){.lens{grid-template-columns:repeat(2,1fr)}.err-grid{grid-template-columns:1fr}.sbar{flex-wrap:wrap}.sseg{border-right:none;border-bottom:1px solid var(--border)}}
+</style>
+</head>
+<body>
+<aside class="sidebar">
+  <div class="brand"><div class="mark"><svg viewBox="0 0 24 24" fill="none"><path d="M12 2L3 7v10l9 5 9-5V7l-9-5z" stroke="#fff" stroke-width="1.6" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" fill="#fff"/></svg></div><div class="name">Agent Insight</div></div>
+  <nav class="nav">
+    <div class="nav-group"><div class="nav-label">Agent Workspace</div>
+      <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>概览</div>
+      <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="4"/><path d="M5 21v-1a7 7 0 0114 0v1"/></svg>Agent 管理</div></div>
+    <div class="nav-group"><div class="nav-label">运行观测</div>
+      <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M8 7h6a4 4 0 014 4v5"/></svg>链路追踪</div>
+      <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3a9 9 0 109 9"/><path d="M12 7v5l3 3"/></svg>智能诊断</div>
+      <div class="nav-item active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 13l4 4 5-7 4 5 5-9"/></svg>质量监控</div></div>
+    <div class="nav-group"><div class="nav-label">评测中心</div>
+      <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg>评测数据集</div>
+      <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 12l2 2 4-4"/><rect x="3" y="4" width="18" height="16" rx="2"/></svg>评估器</div>
+      <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polygon points="6 4 20 12 6 20 6 4"/></svg>评测运行</div></div>
+    <div class="nav-group"><div class="nav-label">Skills 能力</div>
+      <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2l3 6 6 .9-4.5 4.3 1 6.2L12 17l-5.5 2.4 1-6.2L3 8.9 9 8z"/></svg>Skills Hub</div>
+      <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 3v4M3 5h4M6 17v4M4 19h4M13 3l2.5 6.5L22 12l-6.5 2.5L13 21l-2.5-6.5L4 12l6.5-2.5z"/></svg>Skills 生成</div>
+      <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="9"/></svg>Skills 评测</div>
+      <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 20V10M18 20V4M6 20v-4"/></svg>Skills 优化</div></div>
+    <div class="nav-group"><div class="nav-label">配置</div>
+      <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 00-.1-1.3l2-1.6-2-3.4-2.4 1a7 7 0 00-2.2-1.3L13.9 2h-3.8l-.4 2.4a7 7 0 00-2.2 1.3l-2.4-1-2 3.4 2 1.6A7 7 0 005 12c0 .4 0 .9.1 1.3l-2 1.6 2 3.4 2.4-1a7 7 0 002.2 1.3l.4 2.4h3.8l.4-2.4a7 7 0 002.2-1.3l2.4 1 2-3.4-2-1.6c.1-.4.1-.9.1-1.3z"/></svg>模型主链</div>
+      <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>联网搜索</div>
+      <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 15V3M8 11l4 4 4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>安装指南</div></div>
+  </nav>
+</aside>
+
+<main class="main">
+  <header class="topbar"><span class="crumb">运行观测 /</span><h1>质量监控 <span class="beta">SINGLE-AGENT</span></h1><div class="spacer"></div><div class="updated">基线 <b>build · v2.3.1</b> · 更新于 <b>2026/06/04 09:12</b></div></header>
+
+  <div class="content">
+
+    <!-- ===== 配置区 ===== -->
+    <section class="cfgbar reveal">
+      <div class="cfg-item"><span class="cfg-k">分析对象 Agent</span>
+        <button class="cfg-sel"><span class="av">B</span>build <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M6 9l6 6 6-6"/></svg></button>
+      </div>
+      <div class="cfg-item"><span class="cfg-k">时间范围</span>
+        <div class="seg" id="timeSeg">
+          <button data-w="day">最近一天</button>
+          <button data-w="week" class="on">最近一周</button>
+          <button data-w="month">最近一月</button>
+          <button data-w="custom">自定义</button>
+        </div>
+      </div>
+      <div class="cfg-grow"></div>
+      <div class="cfg-note">分析对象 = 该 Agent 在所选窗口内执行的<b>全部 trace</b>（共 <b>265</b> 条），下方全部指标 / 排名 / 趋势据此重算</div>
+    </section>
+
+    <!-- 汇总条 -->
+    <section class="sbar reveal">
+      <div class="sseg"><div class="k">综合质量分</div><div class="sscore"><span class="n">86.8</span><span class="of">/100</span></div><div class="rk">百分位 <span class="p">P92</span> · 良好</div></div>
+      <div class="sseg"><div class="k" style="margin-bottom:7px">优先级加权得分</div><div class="pmini-row">
+        <div class="pm"><div class="pt"><span class="ptag p0">P0</span>必上<b>89.8</b></div><div class="bar"><i style="width:89.8%;background:var(--amber)"></i></div></div>
+        <div class="pm"><div class="pt"><span class="ptag p1">P1</span>重要<b>81.6</b></div><div class="bar"><i style="width:81.6%;background:var(--amber)"></i></div></div>
+        <div class="pm"><div class="pt"><span class="ptag p2">P2</span>增益<b>85.0</b></div><div class="bar"><i style="width:85%;background:var(--green)"></i></div></div>
+      </div></div>
+      <div class="sseg smeta"><div class="line">评估执行 <b>265</b> 次 · 达标率 <b>87.5%</b></div><div class="line">较上周期 <span class="chip-up">▲ 2.4</span> · 待关注 <b style="color:var(--amber)">2</b> 项</div><div class="line">报错 <b style="color:var(--red)">37</b> 次 · 聚为 <b>8</b> 类</div></div>
+      <div class="sgrow"></div>
+    </section>
+
+    <!-- 综合分析 -->
+    <section id="analysis" class="panel reveal" style="animation-delay:.06s">
+      <div class="panel-h"><span class="ix" style="background:var(--accent-soft);color:var(--accent)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M6 6l2 2M16 16l2 2M18 6l-2 2M8 16l-2 2"/><circle cx="12" cy="12" r="3.2"/></svg></span><span class="t">综合分析</span><span class="spacer"></span><span class="hint">点击维度卡片，跳转下方对应明细</span></div>
+      <div class="panel-b">
+        <div class="verdict"><div class="vi"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M9 18h6M10 22h4M12 2a7 7 0 00-4 12.7c.6.5 1 1.2 1 2h6c0-.8.4-1.5 1-2A7 7 0 0012 2z"/></svg></div>
+          <div class="vt"><b>整体处于良好区间（综合 86.8 / 百分位 <span class="hl">P92</span>）。</b> 结果与安全稳健，瓶颈集中在<span class="warn">成本控制</span>与<span class="warn">工具稳定性</span>——报错以「工具超时」为主（占 38%、归因上游 infra），叠加成本得分 7 日下行。建议优先治理工具超时类错误并压缩失控步数，可将综合分从 86.8 提升至 ~89+（优秀区间）。</div></div>
+        <div class="method"><span>诊断方法论：</span><span class="m"><b>结果</b>（做对了吗）</span><span class="sep">×</span><span class="m"><b>过程</b>（做得对不对路）</span><span class="sep">×</span><span class="m"><b>成本</b>（划不划算）</span><span class="sep">×</span><span class="m"><b>错误</b>（在哪儿崩）</span></div>
+        <div class="lens">
+          <a class="lcard" href="#exec"><div class="lh"><span class="lic ic-res"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg></span><span class="lname">结果</span><span class="lq">做对了吗</span></div><div class="lsig"><span class="v" style="color:var(--green)">92.4</span><span class="st st-ok">健康</span></div><div class="lfind">完成度 92.4 / 安全 99.2，结果稳健；质量百分位 <b>P92（良好）</b>。</div><div class="lgo">查看执行记录 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 5v14M5 12l7 7 7-7"/></svg></div></a>
+          <a class="lcard" href="#process"><div class="lh"><span class="lic ic-proc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 3v6l-5 8a2 2 0 002 3h12a2 2 0 002-3l-5-8V3"/><path d="M8 3h8"/></svg></span><span class="lname">过程</span><span class="lq">对不对路</span></div><div class="lsig"><span class="v" style="color:var(--amber)">81.6</span><span class="st st-warn">关注</span></div><div class="lfind">计划/工具良好；<b>约束遵循 81.6</b> 偏弱，Skill 遵从仅 72.8。</div><div class="lgo">查看过程分析 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 5v14M5 12l7 7 7-7"/></svg></div></a>
+          <a class="lcard" href="#cost"><div class="lh"><span class="lic ic-cost"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v10M9.5 9.5a2.5 2 0 015 0c0 2.5-5 1.5-5 4a2.5 2 0 005 0"/></svg></span><span class="lname">成本</span><span class="lq">划不划算</span></div><div class="lsig"><span class="v" style="color:var(--amber)">78.5</span><span class="st st-warn">关注</span></div><div class="lfind">7 日下行，p95 时延上升、步数膨胀，为<b>主要瓶颈</b>。</div><div class="lgo">查看成本趋势 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 5v14M5 12l7 7 7-7"/></svg></div></a>
+          <a class="lcard" href="#errors"><div class="lh"><span class="lic ic-err"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9L2 18a2 2 0 001.7 3h16.6a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg></span><span class="lname">错误</span><span class="lq">在哪儿崩</span></div><div class="lsig"><span class="v" style="color:var(--red)">37</span><span class="st st-warn">8 类</span></div><div class="lfind">报错聚为 8 类，<b>工具超时占 38%</b>，多为上游 infra。</div><div class="lgo">查看错误聚类 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 5v14M5 12l7 7 7-7"/></svg></div></a>
+        </div>
+      </div>
+    </section>
+
+    <!-- 过程分析 -->
+    <section id="process" class="panel reveal" style="animation-delay:.12s">
+      <div class="panel-h"><span class="ix ic-proc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M9 3v6l-5 8a2 2 0 002 3h12a2 2 0 002-3l-5-8V3"/><path d="M8 3h8"/></svg></span><span class="t">过程分析</span><span class="hint">· step 级：合规步数 ÷ 总步数</span><span class="spacer"></span><span class="hint">对应「过程」维度</span></div>
+      <div class="panel-b"><div class="pbars">
+        <div class="pbar"><div class="top"><span class="nm">计划遵循与步骤效率</span><span class="en">Plan + Step Efficiency</span><span class="sc" style="color:var(--green)">83.0</span><span class="pp">P70</span><span class="stt st-ok">达标</span></div><div class="track"><i style="width:83%;background:var(--green)"></i></div></div>
+        <div class="pbar"><div class="top"><span class="nm">工具选择与参数正确性</span><span class="en">Tool Selection + Args</span><span class="sc" style="color:var(--green)">89.1</span><span class="pp">P81</span><span class="stt st-ok">达标</span></div><div class="track"><i style="width:89.1%;background:var(--green)"></i></div></div>
+        <div class="pbar"><div class="top"><span class="nm">约束遵循</span><span class="en">Instruction &amp; Skill Adherence</span><span class="sc" style="color:var(--amber)">81.6</span><span class="pp">P66</span><span class="stt st-warn">关注</span></div><div class="track"><i style="width:81.6%;background:var(--amber)"></i></div>
+          <div class="subrows">
+            <div class="subrow"><span class="sn">System-prompt 遵循</span><span class="cond">全量</span><span class="sb"><i style="width:90.5%;background:var(--green)"></i></span><span class="sv" style="color:var(--green)">90.5</span></div>
+            <div class="subrow"><span class="sn">Skill 遵从</span><span class="cond">条件触发 · 32/265</span><span class="sb"><i style="width:72.8%;background:var(--amber)"></i></span><span class="sv" style="color:var(--amber)">72.8</span></div>
+          </div></div>
+        <div class="pbar"><div class="top"><span class="nm">工具输出归因</span><span class="en">Tool Output Grounding</span><span class="sc" style="color:var(--amber)">71.3</span><span class="pp">P52</span><span class="stt st-warn">关注</span></div><div class="track"><i style="width:71.3%;background:var(--amber)"></i></div></div>
+      </div></div>
+    </section>
+
+    <!-- 成本与质量趋势（交互） -->
+    <section id="cost" class="panel reveal" style="animation-delay:.14s">
+      <div class="panel-h"><span class="ix ic-cost"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg></span><span class="t">成本与质量趋势</span><span class="hint">· trace 按时间桶聚合（柱=trace 量 / 成本含 p95 带）</span><span class="spacer"></span>
+        <div class="toggles" id="dimToggles">
+          <span class="tg act" data-k="comp"><span class="sw" style="background:var(--accent)"></span>综合</span>
+          <span class="tg" data-k="res"><span class="sw" style="background:var(--green)"></span>结果</span>
+          <span class="tg" data-k="proc"><span class="sw" style="background:var(--blue)"></span>过程</span>
+          <span class="tg act" data-k="cost"><span class="sw" style="background:var(--amber)"></span>成本</span>
+        </div></div>
+      <div class="panel-b">
+        <div class="trend-cap" id="trendCap"></div>
+        <div class="chart-wrap"><svg id="trendSvg" class="chart" viewBox="0 0 920 240" preserveAspectRatio="xMidYMid meet"></svg><div id="trendTip" class="trend-tip"></div></div><div class="base-note"><b>成本怎么对比？基线是什么</b> 步数 / Token / 时长是原始量，不能直接横比（复杂任务本就更贵）。成本得分按三种基线归一，<b>均不依赖其它 Agent</b>：① <span class="bk bk1">预算 / SLO 阈值</span>固定上限，判"是否失控烧钱"（对应图中<b>达标线</b>）；② <span class="bk bk2">任务类目参考成本</span>最小可行步数 ÷ 实际、同类任务 p50，判"值不值"；③ <span class="bk bk3">自身历史</span>与该 Agent 过去对比，判"在变好还是变坏"（即本趋势 + p95 带）。</div>
+      </div>
+    </section>
+
+    <!-- 错误聚类 -->
+    <section id="errors" class="panel reveal" style="animation-delay:.16s">
+      <div class="panel-h"><span class="ix ic-err"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M12 9v4M12 17h.01M10.3 3.9L2 18a2 2 0 001.7 3h16.6a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg></span><span class="t">错误聚类</span><span class="hint">· 节点 × 错误码 × 对象 · 帕累托（37 次 / 8 类）</span><span class="spacer"></span><span class="hint">对应「错误」维度</span></div>
+      <div class="panel-b"><div class="err-grid">
+        <div>
+          <div class="ec-row"><div class="ec-rank">1</div><div class="ec-main"><div class="ec-cat">工具超时 <span class="nodetag">工具调用</span><span class="obj">ftp_log_fetch</span></div><div class="ec-sub"><span class="ec-bar"><i style="width:100%"></i></span><span class="ec-cnt">14 次</span><span class="ec-pct">38%</span><span class="attr at-infra">工具&amp;infra</span></div></div><div class="ec-tr td">▲</div></div>
+          <div class="ec-row"><div class="ec-rank">2</div><div class="ec-main"><div class="ec-cat">输出解析失败（JSON） <span class="nodetag">LLM 推理</span><span class="obj">model-x</span></div><div class="ec-sub"><span class="ec-bar"><i style="width:50%"></i></span><span class="ec-cnt">7 次</span><span class="ec-pct">19%</span><span class="attr at-model">模型能力</span></div></div><div class="ec-tr">—</div></div>
+          <div class="ec-row"><div class="ec-rank">3</div><div class="ec-main"><div class="ec-cat">参数校验失败 <span class="nodetag">工具调用</span><span class="obj">disk_log_query</span></div><div class="ec-sub"><span class="ec-bar"><i style="width:36%"></i></span><span class="ec-cnt">5 次</span><span class="ec-pct">14%</span><span class="attr at-agent">agent 逻辑</span></div></div><div class="ec-tr tu">▼</div></div>
+          <div class="ec-row"><div class="ec-rank">4</div><div class="ec-main"><div class="ec-cat">死循环 / 步数超限 <span class="nodetag">规划</span><span class="obj">—</span></div><div class="ec-sub"><span class="ec-bar"><i style="width:29%"></i></span><span class="ec-cnt">4 次</span><span class="ec-pct">11%</span><span class="attr at-agent">agent 逻辑</span></div></div><div class="ec-tr td">▲</div></div>
+          <div class="ec-row"><div class="ec-rank">5</div><div class="ec-main"><div class="ec-cat">日志路径不存在 <span class="nodetag">工具调用</span><span class="obj">file_read</span></div><div class="ec-sub"><span class="ec-bar"><i style="width:21%"></i></span><span class="ec-cnt">3 次</span><span class="ec-pct">8%</span><span class="attr at-input">外部输入</span></div></div><div class="ec-tr">—</div></div>
+          <div class="ec-row"><div class="ec-rank">6</div><div class="ec-main"><div class="ec-cat">其余长尾（语义聚类） <span class="nodetag">混合</span><span class="obj">3 小类</span></div><div class="ec-sub"><span class="ec-bar"><i style="width:29%"></i></span><span class="ec-cnt">4 次</span><span class="ec-pct">11%</span><span class="attr at-input">外部输入</span></div></div><div class="ec-tr">—</div></div>
+        </div>
+        <div class="nodedist">
+          <div class="nd-title">错误的节点分布</div>
+          <div class="nd-stack"><div class="nd-seg" style="width:60%;background:var(--amber)">60%</div><div class="nd-seg" style="width:19%;background:var(--blue)">19%</div><div class="nd-seg" style="width:11%;background:var(--accent)">11%</div><div class="nd-seg" style="width:10%;background:var(--slate)">10%</div></div>
+          <div class="nd-legend"><div class="nd-li"><span class="d" style="background:var(--amber)"></span>工具调用节点<b>60%</b></div><div class="nd-li"><span class="d" style="background:var(--blue)"></span>LLM 推理节点<b>19%</b></div><div class="nd-li"><span class="d" style="background:var(--accent)"></span>规划节点<b>11%</b></div><div class="nd-li"><span class="d" style="background:var(--slate)"></span>检索 / 编排等<b>10%</b></div></div>
+          <div class="ec-foot">前 <b>2</b> 类已覆盖 <b>57%</b> 报错；治理「工具超时」（归因上游 infra）预计将达标率从 87.5% 提升至 ~93%。点击任一簇下钻至 trace 出错节点。</div>
+        </div>
+      </div></div>
+    </section>
+
+    <!-- 筛选 -->
+    <section class="filters">
+      <div class="fchip active-chip"><span class="k">Agent 归属</span><span class="v">用户</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M6 9l6 6 6-6"/></svg></div>
+      <div class="fchip"><span class="k">Skill</span><span class="v">全部</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M6 9l6 6 6-6"/></svg></div>
+      <div class="fchip"><span class="k">状态</span><span class="v">全部</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M6 9l6 6 6-6"/></svg></div>
+      <div class="freset"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 109-9 9 9 0 00-6.3 2.6L3 8"/><path d="M3 3v5h5"/></svg>重置</div>
+    </section>
+
+    <!-- 执行记录 -->
+    <section id="exec" class="tbl-wrap reveal" style="animation-delay:.18s">
+      <div class="tbl-head"><span class="t">执行记录评分</span><span class="badge">265 次执行</span><span class="spacer"></span><span class="note">每条按 8 指标评估并归一 · 对应「结果」维度 · 点击下钻 trace</span></div>
+      <table class="ex"><thead><tr><th style="width:118px">TRACE ID</th><th style="width:96px">AGENT</th><th>任务内容</th><th class="c" style="width:130px">综合评分</th><th style="width:230px">维度信号</th><th class="c" style="width:110px">状态</th><th style="width:120px">执行时间</th></tr></thead><tbody>
+        <tr><td><span class="tid">ses_17363debaf</span></td><td><span class="ag">build</span></td><td><div class="task">[search-mode] MAXIMIZE SEARCH EFFORT. Launch multiple background agents IN PARALLEL: explore agents…</div></td><td><div class="scell"><div class="row1"><span class="num" style="color:var(--green)">91.2</span><span class="of">/100</span><span class="pp">P89</span></div><div class="mini"><i style="width:91.2%;background:var(--green)"></i></div></div></td><td><div class="sigs"><span class="sig sig-ok"><span class="d"></span>完成</span><span class="sig sig-ok"><span class="d"></span>工具</span><span class="sig sig-ok"><span class="d"></span>成本</span><span class="sig sig-ok"><span class="d"></span>安全</span></div></td><td class="c"><span class="stt2 s-ok"><span class="d"></span>达标</span></td><td><span class="ts">2026/06/03<br>16:12:36</span></td></tr>
+        <tr><td><span class="tid">ses_171558aaff</span></td><td><span class="ag">build</span></td><td><div class="task">[search-mode] MAXIMIZE SEARCH EFFORT. Launch multiple background agents IN PARALLEL: explore agents…</div></td><td><div class="scell"><div class="row1"><span class="num" style="color:var(--green)">88.5</span><span class="of">/100</span><span class="pp">P83</span></div><div class="mini"><i style="width:88.5%;background:var(--green)"></i></div></div></td><td><div class="sigs"><span class="sig sig-ok"><span class="d"></span>完成</span><span class="sig sig-ok"><span class="d"></span>工具</span><span class="sig sig-warn"><span class="d"></span>成本</span><span class="sig sig-ok"><span class="d"></span>安全</span></div></td><td class="c"><span class="stt2 s-ok"><span class="d"></span>达标</span></td><td><span class="ts">2026/06/03<br>16:48:38</span></td></tr>
+        <tr><td><span class="tid">ses_190c8736ef</span></td><td><span class="ag">build</span></td><td><div class="task">分析 /opt/data/jinshan_cloud_log/disk_logs/10.112.17.32 目录中的文件系统日志，定位 4.28–4.29 故障原因…</div></td><td><div class="scell"><div class="row1"><span class="num" style="color:var(--green)">86.3</span><span class="of">/100</span><span class="pp">P78</span></div><div class="mini"><i style="width:86.3%;background:var(--green)"></i></div></div></td><td><div class="sigs"><span class="sig sig-ok"><span class="d"></span>完成</span><span class="sig sig-ok"><span class="d"></span>工具</span><span class="sig sig-ok"><span class="d"></span>成本</span><span class="sig sig-ok"><span class="d"></span>安全</span></div></td><td class="c"><span class="stt2 s-ok"><span class="d"></span>达标</span></td><td><span class="ts">2026/05/29<br>08:28:05</span></td></tr>
+        <tr><td><span class="tid">ses_13d05a068f</span></td><td><span class="ag">build</span></td><td><div class="task">请分析下 messages 日志 /opt/data/messages，这台主机的 FTP 服务对外暴露面有多大？一共多少个来源 IP？</div></td><td><div class="scell"><div class="row1"><span class="num" style="color:var(--amber)">70.1</span><span class="of">/100</span><span class="pp">P51</span></div><div class="mini"><i style="width:70.1%;background:var(--amber)"></i></div></div></td><td><div class="sigs"><span class="sig sig-warn"><span class="d"></span>完成</span><span class="sig sig-warn"><span class="d"></span>工具</span><span class="sig sig-ok"><span class="d"></span>成本</span><span class="sig sig-ok"><span class="d"></span>安全</span></div></td><td class="c"><span class="stt2 s-warn"><span class="d"></span>关注</span></td><td><span class="ts">2026/05/29<br>17:06:14</span></td></tr>
+        <tr><td><span class="tid">ses_178f48891f</span></td><td><span class="ag">build</span></td><td><div class="task">我的服务器最近出现了故障，你帮我分析下，日志路径 /opt/data/jinshan_cloud_log/10.112.17.32/</div></td><td><div class="scell"><div class="row1"><span class="num" style="color:var(--red)">62.4</span><span class="of">/100</span><span class="pp">P31</span></div><div class="mini"><i style="width:62.4%;background:var(--red)"></i></div></div></td><td><div class="sigs"><span class="sig sig-warn"><span class="d"></span>完成</span><span class="sig sig-ok"><span class="d"></span>工具</span><span class="sig sig-bad"><span class="d"></span>成本</span><span class="sig sig-ok"><span class="d"></span>安全</span></div></td><td class="c"><span class="stt2 s-bad"><span class="d"></span><span class="errb to">Timeout</span>异常</span></td><td><span class="ts">2026/06/03<br>14:11:32</span></td></tr>
+        <tr><td><span class="tid">ses_19d06d025f</span></td><td><span class="ag">build</span></td><td><div class="task">[search-mode] MAXIMIZE SEARCH EFFORT. Launch multiple background agents IN PARALLEL: explore agents…</div></td><td><div class="scell"><div class="row1"><span class="num" style="color:var(--red)">58.9</span><span class="of">/100</span><span class="pp">P22</span></div><div class="mini"><i style="width:58.9%;background:var(--red)"></i></div></div></td><td><div class="sigs"><span class="sig sig-bad"><span class="d"></span>完成</span><span class="sig sig-warn"><span class="d"></span>工具</span><span class="sig sig-bad"><span class="d"></span>成本</span><span class="sig sig-ok"><span class="d"></span>安全</span></div></td><td class="c"><span class="stt2 s-bad"><span class="d"></span><span class="errb">Tool Error</span>异常</span></td><td><span class="ts">2026/05/29<br>17:06:14</span></td></tr>
+      </tbody></table>
+      <div class="tbl-foot"><div>显示 1 – 6 条 · 共 265 条执行记录</div><div class="spacer"></div><div class="pager"><span class="pg"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M15 6l-6 6 6 6"/></svg></span><span class="pg on">1</span><span class="pg">2</span><span class="pg">3</span><span class="pg"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M9 6l6 6-6 6"/></svg></span></div></div>
+    </section>
+
+  </div>
+</main>
+
+<script>
+(function(){
+  var COLORS={comp:'#6457f5',res:'#159a5b',proc:'#2c6bd1',cost:'#cd7a08'};
+  var NAMES={comp:'综合',res:'结果',proc:'过程',cost:'成本'};
+  function gen(n,mk){var a=[],maxN=1;for(var i=0;i<n;i++){var p=n>1?i/(n-1):0;
+    var comp=82+p*5+Math.sin(i*1.7)*0.9, res=90+p*3+Math.sin(i*1.3)*1.0, proc=79+p*4+Math.sin(i*2.1)*1.1, cost=82-p*4+Math.sin(i*1.05)*0.7;
+    var costLo=cost-(4+p*3), cnt=Math.round(28+Math.sin(i*0.9)*9+p*4); if(cnt>maxN)maxN=cnt;
+    a.push({label:mk(i),n:cnt,comp:comp,res:res,proc:proc,cost:cost,costLo:costLo});}return {pts:a,maxN:maxN};}
+  var weekDates=['05/29','05/30','05/31','06/01','06/02','06/03','06/04'];
+  function dayLbl(i){return i%4===0?(('0'+i).slice(-2)+':00'):'';}
+  function monthLbl(i){if(i%5!==0&&i!==29)return '';var d=new Date(2026,4,6);d.setDate(d.getDate()+i);return ('0'+(d.getMonth()+1)).slice(-2)+'/'+('0'+d.getDate()).slice(-2);}
+  var DATA={day:gen(24,dayLbl),week:gen(7,function(i){return weekDates[i];}),month:gen(30,monthLbl)};
+  var CAP={day:'最近一天 · 按小时聚合 · 24 个时间桶',week:'最近一周 · 按天聚合 · 7 个时间桶',month:'最近一月 · 按天聚合 · 30 个时间桶',custom:'自定义窗口 · 自动按天聚合 · 30 个时间桶'};
+  var curW='week', active={};
+  var svg=document.getElementById('trendSvg'), tip=document.getElementById('trendTip'), cap=document.getElementById('trendCap');
+  var PL={x0:56,x1:892,y0:28,y1:196};
+  function yF(v){return PL.y1-(v-60)*((PL.y1-PL.y0)/40);}
+  function xF(i,n){return n<=1?PL.x0:PL.x0+i*((PL.x1-PL.x0)/(n-1));}
+  function el(t,a,tx){var e=document.createElementNS('http://www.w3.org/2000/svg',t);for(var k in a)e.setAttribute(k,a[k]);if(tx!=null)e.textContent=tx;return e;}
+  document.querySelectorAll('#dimToggles .tg').forEach(function(t){active[t.getAttribute('data-k')]=t.classList.contains('act');});
+  function render(){
+    var D=(curW==='custom')?DATA.month:DATA[curW]; var pts=D.pts,n=pts.length,maxN=D.maxN;
+    svg.innerHTML='';
+    [100,90,80,70,60].forEach(function(v){svg.appendChild(el('line',{x1:PL.x0,y1:yF(v),x2:PL.x1,y2:yF(v),'class':'gl'}));svg.appendChild(el('text',{x:PL.x0-9,y:yF(v)+3,'text-anchor':'end','class':'axlbl'},v));});svg.appendChild(el('line',{x1:PL.x0,y1:yF(85),x2:PL.x1,y2:yF(85),stroke:'#c9b6ef','stroke-width':1.3,'stroke-dasharray':'3 3'}));svg.appendChild(el('text',{x:PL.x1,y:yF(85)-5,'text-anchor':'end','class':'axlbl',fill:'#8b73d6'},'达标线 85'));
+    pts.forEach(function(d,i){var bx=xF(i,n),bw=Math.max(3,Math.min(14,(PL.x1-PL.x0)/n*0.5)),bh=(d.n/maxN)*30,by=PL.y1-bh;svg.appendChild(el('rect',{x:bx-bw/2,y:by,width:bw,height:bh,rx:1.5,'class':'vbar'}));});
+    if(active.cost){var dp='';pts.forEach(function(d,i){dp+=(i?'L':'M')+xF(i,n)+','+yF(d.cost)+' ';});for(var j=n-1;j>=0;j--){dp+='L'+xF(j,n)+','+yF(pts[j].costLo)+' ';}dp+='Z';svg.appendChild(el('path',{d:dp,'class':'cband'}));}
+    ['proc','res','comp','cost'].forEach(function(k){if(!active[k])return;var p='';pts.forEach(function(d,i){p+=(i?'L':'M')+xF(i,n)+','+yF(k==='cost'?d.cost:d[k])+' ';});var ln=el('path',{d:p,fill:'none',stroke:COLORS[k],'stroke-width':k==='comp'?2.6:2,'stroke-linejoin':'round','stroke-linecap':'round'});if(k==='cost')ln.setAttribute('stroke-dasharray','5 4');svg.appendChild(ln);});
+    if(active.comp){var step=n>14?Math.ceil(n/12):1;pts.forEach(function(d,i){if(i%step!==0&&i!==n-1)return;var last=i===n-1;svg.appendChild(el('circle',{cx:xF(i,n),cy:yF(d.comp),r:last?4.2:2.8,fill:last?COLORS.comp:'#fff',stroke:COLORS.comp,'stroke-width':last?2.5:2}));});}
+    pts.forEach(function(d,i){if(d.label)svg.appendChild(el('text',{x:xF(i,n),y:PL.y1+22,'text-anchor':'middle','class':'axlbl'},d.label));});
+    pts.forEach(function(d,i){var w=(PL.x1-PL.x0)/n;var r=el('rect',{x:xF(i,n)-w/2,y:PL.y0,width:w,height:PL.y1-PL.y0,fill:'transparent'});r.style.cursor='crosshair';r.addEventListener('mousemove',function(){showTip(d,i,n);});r.addEventListener('mouseleave',function(){tip.style.opacity=0;});svg.appendChild(r);});
+    cap.innerHTML='当前窗口：<b>'+CAP[curW]+'</b> ｜ trace → 时间桶 → 趋势（二值取通过率、成本取 p50 线 + p90/p95 带）';
+  }
+  function showTip(d,i,n){var rows='';['comp','res','proc','cost'].forEach(function(k){if(active[k])rows+='<div class="tr"><span class="sw" style="background:'+COLORS[k]+'"></span>'+NAMES[k]+'<b>'+(k==='cost'?d.cost:d[k]).toFixed(1)+'</b></div>';});
+    tip.innerHTML='<div class="th">'+(d.label||('#'+(i+1)))+'</div>'+rows+'<div class="tn">trace 量 '+d.n+'</div>';
+    var wrap=svg.parentElement.getBoundingClientRect();var px=(xF(i,n)/920)*wrap.width;tip.style.left=Math.min(wrap.width-140,Math.max(0,px+10))+'px';tip.style.opacity=1;}
+  document.querySelectorAll('#dimToggles .tg').forEach(function(t){t.addEventListener('click',function(){var k=t.getAttribute('data-k');active[k]=!active[k];t.classList.toggle('act',active[k]);render();});});
+  document.querySelectorAll('#timeSeg button').forEach(function(b){b.addEventListener('click',function(){document.querySelectorAll('#timeSeg button').forEach(function(x){x.classList.remove('on');});b.classList.add('on');curW=b.getAttribute('data-w');render();});});
+  render();
+})();
+</script>
+</body>
+</html>
