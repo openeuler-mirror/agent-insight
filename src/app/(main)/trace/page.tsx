@@ -383,7 +383,9 @@ function TracePageContent() {
         // 每个 taskId 只 fetch 一次, 防死循环(fetch 回新对象 → setState → effect 重跑 → 再 fetch)。
         if (fetchGuardRef.current === taskIdParam) return;
         fetchGuardRef.current = taskIdParam;
-        apiFetch(`/api/observe/data?taskId=${encodeURIComponent(taskIdParam)}&includeEvaluations=0`)
+        // skipAutoEvalReady=1: Trace 详情不需要"自动评测就绪"信息,而算它要扫 7 天 opencode 遥测
+        // jsonl 建索引(实测冷构建 ~16s、缓存仅 30s),会让"点 session id 跳详情"非常慢。这里跳过。
+        apiFetch(`/api/observe/data?taskId=${encodeURIComponent(taskIdParam)}&includeEvaluations=0&skipAutoEvalReady=1`)
             .then(r => r.json())
             .then((d: Execution[]) => {
                 if (Array.isArray(d) && d.length > 0) setSelectedExecution(d[0]);

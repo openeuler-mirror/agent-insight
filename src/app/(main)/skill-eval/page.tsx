@@ -257,6 +257,30 @@ function hasGrayRunningStates(states: GrayTaskMeta['caseStatesJson'] | undefined
     );
 }
 
+// 与 A/B 页 getTaskRunTime / hasTaskRunHistory 同源:卡片要和 A/B 页"自动加载哪条任务"一致,
+// 否则同一 skill+版本下有多条任务时,卡片(原本取 createdAt 最新)与 A/B 页(取最近运行的那条)
+// 会选到不同任务 → 分数对不上(用户反馈第 4 点)。
+function grayTaskRunTime(t: GrayTaskMeta): number {
+    const rawLatest = t.configJson?.latestResultAt;
+    const latest = typeof rawLatest === 'string' ? Date.parse(rawLatest) : 0;
+    if (Number.isFinite(latest) && latest > 0) return latest;
+    const times = Object.values(t.caseStatesJson || {}).flatMap(pair =>
+        (['a', 'b'] as const).flatMap(side =>
+            (pair?.[side]?.runs || []).map(r => (typeof r.completedAt === 'string' ? Date.parse(r.completedAt) : 0))
+        )
+    ).filter(n => Number.isFinite(n) && n > 0);
+    if (times.length > 0) return Math.max(...times);
+    return Date.parse(t.createdAt || '') || 0;
+}
+function grayTaskHasHistory(t: GrayTaskMeta): boolean {
+    return Object.values(t.caseStatesJson || {}).some(pair =>
+        (['a', 'b'] as const).some(side => {
+            const s = pair?.[side];
+            return Boolean(s && (s.status !== 'pending' || (s.runs?.length || 0) > 0));
+        })
+    );
+}
+
 function getGrayRunScore(run: GrayRunLike | undefined): number | null {
     if (!run) return null;
     if (typeof run.score === 'number') return run.score;
@@ -1252,7 +1276,15 @@ function SkillAnalysisPage() {
                     })
                     : list)
                 : [];
-            const latest = (matches[0] as GrayTaskMeta | undefined) || null;
+            // 取"最近运行的那条"而非"最近创建的那条",与 A/B 页 pickLatestTaskForBinding 对齐:
+            // 正在跑的优先,其次有运行历史的,再按运行时间倒序。避免刚新建的空任务把有分数的老任务挤掉。
+            const latest = ([...matches] as GrayTaskMeta[]).sort((a, b) => {
+                const activeDelta = Number(Boolean(b.activeRun)) - Number(Boolean(a.activeRun));
+                if (activeDelta !== 0) return activeDelta;
+                const histDelta = Number(grayTaskHasHistory(b)) - Number(grayTaskHasHistory(a));
+                if (histDelta !== 0) return histDelta;
+                return grayTaskRunTime(b) - grayTaskRunTime(a);
+            })[0] || null;
             const versionLookup: Record<string, { version: number | string; skillName: string }> = {};
             (selectedSkill?.versions || []).forEach(v => {
                 if (v.id) versionLookup[v.id] = { version: v.version, skillName: selectedSkill?.name || 'Skill' };

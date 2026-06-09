@@ -2273,9 +2273,17 @@ export function GrayscaleEvaluation({
 
     // 嵌入模式(parentSkillId 存在)下, 历史抽屉只列当前 skill 的任务 —— 否则会混进别的 skill 的任务,
     // 且点了也切不动(handleSelectHistoryTask 仅同 skill 放行)。独立模式(无 parentSkillId)不过滤。
+    // 历史任务与"当前选中的 skill + B 版本"绑定:切换 skill 或版本时,列表随之刷新只显示对应任务。
+    // 嵌入模式按父级 skill 过滤;独立模式按当前选中的 skill(选了 B 版本则进一步按版本)过滤。
     const visibleTaskHistory = parentSkillId
         ? taskHistory.filter(t => t.skillId === parentSkillId || t.configJson?.skillId === parentSkillId)
-        : taskHistory;
+        : (selectedSkillId
+            ? taskHistory.filter(t => taskMatchesBinding(
+                t,
+                selectedSkillId,
+                versionBId && versionBId !== NONE_VERSION_ID ? versionBId : undefined,
+            ))
+            : taskHistory);
 
     // Dataset handlers
     const handleCreateDataset = async () => {
