@@ -30,8 +30,39 @@ import '../../skill-opt.css';
 type AgentBlock =
     | { kind: 'text'; id: string; text: string }
     | { kind: 'thinking'; id: string; text: string; done: boolean }
+    | {
+        kind: 'scope';
+        id: string;
+        selectedIssueIds: string[];
+        deferredIssueIds: string[];
+        selectedCount: number;
+        deferredCount: number;
+        limits?: SkillOptScopeLimits;
+        allowedFiles: string[];
+        allowedRegions: SkillEditRegion[];
+    }
     | { kind: 'tool'; id: string; name: string; args?: any; status: 'running' | 'ok' | 'error'; summary?: string; error?: string }
     | { kind: 'error'; id: string; text: string };
+
+interface SkillEditRegion {
+    file: string;
+    kind: 'frontmatter' | 'section';
+    label: string;
+    anchor: string;
+    startLine: number;
+    endLine: number;
+}
+
+interface SkillOptScopeLimits {
+    maxOpportunities: number;
+    maxFiles: number;
+}
+
+const DEFAULT_SCOPE_LIMITS: SkillOptScopeLimits = {
+    maxOpportunities: 5,
+    maxFiles: 5,
+};
+const SCOPE_LIMITS_KEY = 'skill-opt:scope-limits:v1';
 
 type ChatTurn =
     | { kind: 'user'; id: string; text: string }
@@ -262,6 +293,7 @@ export default function SkillOptimizePage() {
     interface ModelConfigLite { id: string; name: string }
     const [modelConfigs, setModelConfigs] = useState<ModelConfigLite[]>([]);
     const [selectedModelId, setSelectedModelId] = useState<string>('');
+    const [scopeLimits, setScopeLimits] = useState<SkillOptScopeLimits>(DEFAULT_SCOPE_LIMITS);
     useEffect(() => {
         if (!user) return;
         fetch(`/api/settings?user=${encodeURIComponent(user)}`)
@@ -274,6 +306,27 @@ export default function SkillOptimizePage() {
             })
             .catch(() => { /* 静默：拉不到时按默认模型走 */ });
     }, [user]);
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        try {
+            const saved = normalizeScopeLimits(JSON.parse(localStorage.getItem(SCOPE_LIMITS_KEY) || 'null'));
+            if (saved) setScopeLimits(saved);
+        } catch { /* corrupt — fall back to defaults */ }
+    }, []);
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        try {
+            localStorage.setItem(SCOPE_LIMITS_KEY, JSON.stringify(scopeLimits));
+        } catch { /* quota / disabled — silently skip */ }
+    }, [scopeLimits]);
+
+    const updateScopeLimit = (key: keyof SkillOptScopeLimits, value: number) => {
+        if (!Number.isFinite(value)) return;
+        setScopeLimits(prev => ({
+            ...prev,
+            [key]: Math.max(1, Math.trunc(value)),
+        }));
+    };
 
     // 真接口：拉 (skillName, baseVersion) 的 optimization points。
     // 后端 GET /api/skills/by-name/[name]/optimization-points 已经把 SkillIssue +
@@ -334,8 +387,17 @@ export default function SkillOptimizePage() {
                 if (Array.isArray(ids)) ids.forEach(id => optimizedIds.add(String(id)));
             } catch { /* ignore */ }
         }
+        const latestScopeBlock = [...turns]
+            .reverse()
+            .flatMap(turn => turn.kind === 'agent' ? [...turn.blocks].reverse() : [])
+            .find((block: any) => block?.kind === 'scope');
+        const deferredIds = Array.isArray((latestScopeBlock as any)?.deferredIssueIds)
+            ? (latestScopeBlock as any).deferredIssueIds
+                .map((id: unknown) => String(id))
+                .filter((id: string) => !optimizedIds.has(id))
+            : [];
         setOptimizedIssueIds(optimizedIds);
-        setCheckedIssueIds(new Set());
+        setCheckedIssueIds(new Set(deferredIds));
 
         // diff viewer 默认选中最新 iteration（如果有），否则停在 base
         if (persistedIters.length > 0) {
@@ -537,6 +599,8 @@ export default function SkillOptimizePage() {
 
         const checked = issues.filter(i => checkedIssueIds.has(i.id));
         const userInputText = input.trim();
+        const useMockOptimizer = typeof window !== 'undefined'
+            && new URLSearchParams(window.location.search).get('mock') === '1';
 
         // 1) push 用户消息 + 一个空 agent turn（streaming=true）
         //    后续所有 thinking / text / tool 事件都作为 block 追加到这个 turn 里
@@ -604,6 +668,8 @@ export default function SkillOptimizePage() {
         let agentDidWork = false;
         // 后端是否推过 error 事件——错了就不该再造草稿
         let streamErrored = false;
+        // 后端 rank/select 之后，本轮实际处理的 issue。null 表示后端未推 scope，沿用 checked。
+        let scopedIssueIds: Set<string> | null = null;
 
         // 起点文件：有草稿就基于最后一份草稿，否则从 base 版本真实文件出发。
         // baselineFiles state 已在页面 useEffect 里从 /api/skills/[id]/versions/[v] 拉好；
@@ -624,12 +690,17 @@ export default function SkillOptimizePage() {
                     checkedIssues: checked.map(i => ({
                         id: i.id, severity: i.severity, category: i.category,
                         summary: i.summary, evidence: i.evidence,
+                        reasoning: i.reasoning,
+                        dedupKey: i.dedupKey,
+                        occurrence: i.occurrence,
+                        sourceKind: i.source?.kind,
                         improvementSuggestion: i.improvementSuggestion,
                     })),
                     userFeedback: userInputText,
                     baselineFiles: startingFiles,
                     modelId: selectedModelId || undefined,
-                    mock: false,
+                    scopeLimits,
+                    mock: useMockOptimizer,
                 }),
             });
             if (!resp.ok || !resp.body) {
@@ -726,6 +797,32 @@ export default function SkillOptimizePage() {
                         if (data.payload?.files) {
                             latestFiles = data.payload.files;
                         }
+                    } else if (data.mode === 'optimization_scope') {
+                        const selected = data.payload?.selectedIssueIds;
+                        if (Array.isArray(selected)) {
+                            scopedIssueIds = new Set(selected.map((id: unknown) => String(id)));
+                        }
+                        upsertBlock(`${agentTurnId}:scope`, 'scope', () => ({
+                            kind: 'scope',
+                            id: `${agentTurnId}:scope`,
+                            selectedIssueIds: Array.isArray(data.payload?.selectedIssueIds)
+                                ? data.payload.selectedIssueIds.map((id: unknown) => String(id))
+                                : [],
+                            deferredIssueIds: Array.isArray(data.payload?.deferredIssueIds)
+                                ? data.payload.deferredIssueIds.map((id: unknown) => String(id))
+                                : [],
+                            selectedCount: Number.isFinite(Number(data.payload?.selectedCount))
+                                ? Number(data.payload.selectedCount)
+                                : 0,
+                            deferredCount: Number.isFinite(Number(data.payload?.deferredCount))
+                                ? Number(data.payload.deferredCount)
+                                : 0,
+                            limits: normalizeScopeLimits(data.payload?.limits),
+                            allowedFiles: Array.isArray(data.payload?.allowedFiles)
+                                ? data.payload.allowedFiles.map((p: unknown) => String(p))
+                                : [],
+                            allowedRegions: normalizeSkillEditRegions(data.payload?.allowedRegions),
+                        }));
                     } else if (data.mode === 'done') {
                         // 静默：实际收尾在 finally 里（覆盖正常 + 异常两路）
                     } else if (data.mode === 'error') {
@@ -759,17 +856,24 @@ export default function SkillOptimizePage() {
                 return;
             }
 
-            // 把这批 issue 标记为"已优化"，清掉勾选，方便下一轮选新批次
+            const resolvedThisRound = scopedIssueIds
+                ? checked.filter(i => scopedIssueIds?.has(i.id))
+                : checked;
+            const deferredThisRound = scopedIssueIds
+                ? checked.filter(i => !scopedIssueIds?.has(i.id))
+                : [];
+
+            // 把本轮 select 的 issue 标记为"已优化"；gate 延后项继续保持勾选，方便下一轮处理。
             setOptimizedIssueIds(prev => {
                 const next = new Set(prev);
-                checked.forEach(i => next.add(i.id));
+                resolvedThisRound.forEach(i => next.add(i.id));
                 return next;
             });
-            setCheckedIssueIds(new Set());
+            setCheckedIssueIds(new Set(deferredThisRound.map(i => i.id)));
 
             // 服务端置 resolvedAt，下次进来这些 id 不会再出现在优化点列表里。
             // best-effort：失败不影响本次会话已经有的"已优化"标记。
-            if (skill && user && checked.length > 0) {
+            if (skill && user && resolvedThisRound.length > 0) {
                 apiFetch(
                     `/api/skills/by-name/${encodeURIComponent(skill.name)}/optimization-points/resolve`,
                     {
@@ -777,7 +881,7 @@ export default function SkillOptimizePage() {
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                             user,
-                            ids: checked.map(i => i.id),
+                            ids: resolvedThisRound.map(i => i.id),
                             threadId: currentSessionId,
                         }),
                     },
@@ -818,9 +922,11 @@ export default function SkillOptimizePage() {
                 label: `草稿 #${draftNum}`,
                 baseVersion,
                 createdAt: new Date().toISOString(),
-                summary: agentSummary || (checked.length > 0
-                    ? `针对 ${checked.length} 个 issue 的优化结果（agent 未输出总结）`
-                    : (userInputText ? '基于用户诉求的修改（agent 未输出总结）' : '本次未产生修改')),
+                summary: agentSummary || (resolvedThisRound.length > 0
+                    ? `针对 ${resolvedThisRound.length} 个本轮 issue 的优化结果（agent 未输出总结）`
+                    : checked.length > 0
+                        ? '本轮优化面收束后未处理已勾选 issue（agent 未输出总结）'
+                        : (userInputText ? '基于用户诉求的修改（agent 未输出总结）' : '本次未产生修改')),
                 files: draftFiles,
             };
             setIterations(prev => [...prev, draft]);
@@ -836,7 +942,7 @@ export default function SkillOptimizePage() {
                     body: JSON.stringify({
                         summary: draft.summary,
                         files: draftFiles,
-                        resolvedIssueIds: checked.map(i => i.id),
+                        resolvedIssueIds: resolvedThisRound.map(i => i.id),
                     }),
                 });
                 if (!resp.ok) {
@@ -1061,6 +1167,33 @@ export default function SkillOptimizePage() {
                                 ))}
                             </select>
                         </div>
+                        <div className="scope-limit-picker" aria-label="优化范围上限">
+                            <div className="scope-limit-title">优化范围上限</div>
+                            <label>
+                                <span>处理问题</span>
+                                <input
+                                    type="number"
+                                    min={1}
+                                    step={1}
+                                    value={scopeLimits.maxOpportunities}
+                                    onChange={e => updateScopeLimit('maxOpportunities', e.currentTarget.valueAsNumber)}
+                                    disabled={optimizing}
+                                    title="本轮最多处理的优化点数量"
+                                />
+                            </label>
+                            <label>
+                                <span>触达文件</span>
+                                <input
+                                    type="number"
+                                    min={1}
+                                    step={1}
+                                    value={scopeLimits.maxFiles}
+                                    onChange={e => updateScopeLimit('maxFiles', e.currentTarget.valueAsNumber)}
+                                    disabled={optimizing}
+                                    title="本轮最多允许触达的文件数量"
+                                />
+                            </label>
+                        </div>
                         <button
                             disabled={
                                 (checkedIssueIds.size === 0 && !input.trim())
@@ -1128,6 +1261,9 @@ export default function SkillOptimizePage() {
                                                 status: b.status, summary: b.summary, error: b.error,
                                             };
                                             return <ChatToolBlock key={b.id} block={data} locale="zh" />;
+                                        }
+                                        if (b.kind === 'scope') {
+                                            return <OptimizationScopeBlock key={b.id} block={b} issues={issues} />;
                                         }
                                         // error block in-line
                                         return <div key={b.id} className="agent-error-block">⚠ {b.text}</div>;
@@ -1245,3 +1381,119 @@ export default function SkillOptimizePage() {
     );
 }
 
+function OptimizationScopeBlock({
+    block,
+    issues,
+}: {
+    block: Extract<AgentBlock, { kind: 'scope' }>;
+    issues: OptIssue[];
+}) {
+    const issueById = new Map(issues.map(issue => [issue.id, issue]));
+    const selected = block.selectedIssueIds.map(id => issueById.get(id)).filter((issue): issue is OptIssue => Boolean(issue));
+    const deferred = block.deferredIssueIds.map(id => issueById.get(id)).filter((issue): issue is OptIssue => Boolean(issue));
+    const total = block.selectedCount + block.deferredCount;
+    const allowedRegions = Array.isArray(block.allowedRegions) ? block.allowedRegions : [];
+    const allowedFiles = Array.isArray(block.allowedFiles) ? block.allowedFiles : [];
+
+    const issueRows = (items: OptIssue[], ids: string[]) => {
+        if (items.length > 0) {
+            return items.map(issue => (
+                <li key={issue.id}>
+                    <span className={`scope-severity ${issue.severity}`}>{issue.severity}</span>
+                    <span>{issue.summary}</span>
+                </li>
+            ));
+        }
+        return ids.map(id => (
+            <li key={id}>
+                <span className="scope-severity unknown">issue</span>
+                <span>{id.slice(0, 10)}</span>
+            </li>
+        ));
+    };
+
+    return (
+        <div className="skopt-scope-block">
+            <div className="scope-head">
+                <div>
+                    <div className="scope-kicker">Rank / Select / Gate</div>
+                    <strong>本轮优化范围已收束</strong>
+                </div>
+                <div className="scope-stats">
+                    <span>输入 {total}</span>
+                    <span>处理 {block.selectedCount}</span>
+                    <span>延后 {block.deferredCount}</span>
+                    {block.limits && <span>上限 {block.limits.maxOpportunities}/{block.limits.maxFiles}</span>}
+                </div>
+            </div>
+
+            <div className="scope-section">
+                <div className="scope-label">Select 本轮处理</div>
+                <ul>{issueRows(selected, block.selectedIssueIds)}</ul>
+            </div>
+
+            {block.deferredIssueIds.length > 0 && (
+                <div className="scope-section deferred">
+                    <div className="scope-label">Gate 保留下轮</div>
+                    <ul>{issueRows(deferred, block.deferredIssueIds)}</ul>
+                </div>
+            )}
+
+            {(allowedRegions.length > 0 || allowedFiles.length > 0) && (
+                <div className="scope-files">
+                    <span>允许编辑区域</span>
+                    {allowedRegions.length > 0
+                        ? allowedRegions.map(region => (
+                            <code key={`${region.file}:${region.label}:${region.startLine}`}>
+                                {formatSkillEditRegion(region)}
+                            </code>
+                        ))
+                        : allowedFiles.map(file => <code key={file}>{file}</code>)}
+                </div>
+            )}
+        </div>
+    );
+}
+
+function normalizeSkillEditRegions(value: unknown): SkillEditRegion[] {
+    if (!Array.isArray(value)) return [];
+    return value
+        .map((item): SkillEditRegion | null => {
+            if (!item || typeof item !== 'object') return null;
+            const record = item as Record<string, unknown>;
+            const startLine = Number(record.startLine);
+            const endLine = Number(record.endLine);
+            if (!Number.isFinite(startLine) || !Number.isFinite(endLine)) return null;
+            const kind = record.kind === 'frontmatter' || record.kind === 'section'
+                ? record.kind
+                : 'section';
+            return {
+                file: typeof record.file === 'string' ? record.file : 'SKILL.md',
+                kind,
+                label: typeof record.label === 'string' ? record.label : kind,
+                anchor: typeof record.anchor === 'string' ? record.anchor : '',
+                startLine,
+                endLine,
+            };
+        })
+        .filter((item): item is SkillEditRegion => Boolean(item));
+}
+
+function normalizeScopeLimits(value: unknown): SkillOptScopeLimits | undefined {
+    if (!value || typeof value !== 'object') return undefined;
+    const record = value as Record<string, unknown>;
+    const maxOpportunities = Number(record.maxOpportunities);
+    const maxFiles = Number(record.maxFiles);
+    if (!Number.isFinite(maxOpportunities) || !Number.isFinite(maxFiles)) return undefined;
+    return {
+        maxOpportunities: Math.max(1, Math.trunc(maxOpportunities)),
+        maxFiles: Math.max(1, Math.trunc(maxFiles)),
+    };
+}
+
+function formatSkillEditRegion(region: SkillEditRegion): string {
+    const range = region.startLine === region.endLine
+        ? `L${region.startLine}`
+        : `L${region.startLine}-L${region.endLine}`;
+    return `${region.file}:${region.label} ${range}`;
+}

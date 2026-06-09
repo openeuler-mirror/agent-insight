@@ -81,8 +81,37 @@ export function createBlockMirror(
         if (status) blocks[idx].status = status;
         if (answer !== undefined) blocks[idx].answer = answer;
       }
+    } else if (mode === 'optimization_scope') {
+      const selectedIssueIds = Array.isArray(payload?.selectedIssueIds) ? payload.selectedIssueIds.map(String) : [];
+      const deferredIssueIds = Array.isArray(payload?.deferredIssueIds) ? payload.deferredIssueIds.map(String) : [];
+      const allowedFiles = Array.isArray(payload?.allowedFiles) ? payload.allowedFiles.map(String) : [];
+      const allowedRegions = Array.isArray(payload?.allowedRegions) ? payload.allowedRegions : [];
+      const limits = normalizeScopeLimits(payload?.limits);
+      blocks.push({
+        kind: 'scope',
+        id: `scope_${blocks.length}`,
+        selectedIssueIds,
+        deferredIssueIds,
+        allowedFiles,
+        allowedRegions,
+        selectedCount: Number(payload?.selectedCount ?? selectedIssueIds.length),
+        deferredCount: Number(payload?.deferredCount ?? deferredIssueIds.length),
+        ...(limits ? { limits } : {}),
+      });
     }
     // 'vfs_patch' / 'done' / 'error' 是运行时事件，不入持久化数组。
   };
   return { send, getBlocks: () => blocks };
+}
+
+function normalizeScopeLimits(value: unknown): { maxOpportunities: number; maxFiles: number } | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const record = value as Record<string, unknown>;
+  const maxOpportunities = Number(record.maxOpportunities);
+  const maxFiles = Number(record.maxFiles);
+  if (!Number.isFinite(maxOpportunities) || !Number.isFinite(maxFiles)) return undefined;
+  return {
+    maxOpportunities: Math.max(1, Math.trunc(maxOpportunities)),
+    maxFiles: Math.max(1, Math.trunc(maxFiles)),
+  };
 }

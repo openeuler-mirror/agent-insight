@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { buildSkillOptSystemPrompt } from "../src/lib/engine/general-agent/skill-opt-prompt";
+import {
+  buildSkillOptIssueScope,
+  resolveSkillOptScopeLimits,
+} from "../src/lib/engine/general-agent/skill-opt-scope";
 
 test("skill-opt prompt: includes skill name + base version in header", () => {
   const out = buildSkillOptSystemPrompt({
@@ -85,4 +89,81 @@ test("skill-opt prompt: includes 修改总结 template with stable section heade
   assert.match(out, /### 已解决的优化点/);
   assert.match(out, /### 暂未处理/);
   assert.match(out, /### 改动要点/);
+});
+
+test("skill-opt prompt: scopes a large issue set to selected issues and lists deferred ids", () => {
+  const checkedIssues = [
+    { id: "iss_low", severity: "low" as const, summary: "low", occurrence: 1 },
+    { id: "iss_high", severity: "high" as const, summary: "high", occurrence: 1 },
+    { id: "iss_med", severity: "medium" as const, summary: "medium", occurrence: 4 },
+  ];
+  const optimizationScope = buildSkillOptIssueScope(checkedIssues, { maxOpportunities: 2 });
+  const out = buildSkillOptSystemPrompt({
+    skillName: "demo",
+    baseVersion: 1,
+    checkedIssues,
+    userFeedback: "",
+    optimizationScope,
+  });
+
+  assert.match(out, /本轮优化范围/);
+  assert.match(out, /最多处理 2 个 issue，最多触达 5 个文件/);
+  assert.match(out, /iss_high/);
+  assert.match(out, /iss_med/);
+  assert.match(out, /延后到后续轮次：`iss_low`/);
+  assert.doesNotMatch(out, /### `iss_low`/);
+});
+
+test("skill-opt scope limits: env defaults and request overrides are configurable", () => {
+  const env = {
+    SKILL_OPT_MAX_OPPORTUNITIES: "7",
+    SKILL_OPT_MAX_FILES: "4",
+  };
+
+  assert.deepEqual(resolveSkillOptScopeLimits(undefined, env), {
+    maxOpportunities: 7,
+    maxFiles: 4,
+  });
+  assert.deepEqual(resolveSkillOptScopeLimits({ maxOpportunities: 2 }, env), {
+    maxOpportunities: 2,
+    maxFiles: 4,
+  });
+  assert.deepEqual(resolveSkillOptScopeLimits({ maxFiles: "6" }, env), {
+    maxOpportunities: 7,
+    maxFiles: 6,
+  });
+});
+
+test("skill-opt prompt: lists concrete SKILL.md edit regions when scope has skill content", () => {
+  const skillContent = `---
+name: demo
+description: demo skill
+tags: [demo]
+---
+
+# demo
+
+## Examples
+
+见 examples/。
+`;
+  const checkedIssues = [
+    { id: "iss_example", severity: "high" as const, summary: "缺少示例", category: "examples" },
+  ];
+  const optimizationScope = buildSkillOptIssueScope(
+    checkedIssues,
+    { maxOpportunities: 1 },
+    skillContent,
+  );
+  const out = buildSkillOptSystemPrompt({
+    skillName: "demo",
+    baseVersion: 1,
+    checkedIssues,
+    userFeedback: "",
+    optimizationScope,
+  });
+
+  assert.match(out, /本轮允许编辑区域/);
+  assert.match(out, /SKILL\.md:section:Examples/);
+  assert.match(out, /只允许修改以上 frontmatter 字段或 markdown 标题段落/);
 });

@@ -9,6 +9,13 @@ import {
   buildSkillOptSystemPrompt,
   type SkillOptIssueLite,
 } from '@/lib/engine/general-agent/skill-opt-prompt';
+import type { OptimizationScope } from '@/lib/engine/skill-optimization/opportunity-scope';
+import {
+  buildSkillOptIssueScope,
+  selectSkillOptIssues,
+  summarizeSkillOptScope,
+  type SkillOptScopeSummary,
+} from '@/lib/engine/general-agent/skill-opt-scope';
 import { scanWorkspaceFiles, type FileData } from '@/lib/skill-generator-opencode-bridge';
 import type {
   ChatHandlers,
@@ -60,6 +67,7 @@ export interface StreamSkillOptOpts {
    * "scripts/extract.py"），值是文件全文。生产链路接 DB 后前端不传，自动忽略。
    */
   baselineFiles?: Record<string, string>;
+  optimizationScope?: OptimizationScope;
   send: (mode: string, payload: unknown) => void;
 }
 
@@ -79,7 +87,18 @@ export function streamSkillOptOpencode(
 async function streamSkillOptOpencodeImpl(
   opts: StreamSkillOptOpts,
 ): Promise<StreamSkillOptResult> {
-  const { user, threadId, skillName, baseVersion, checkedIssues, userFeedback, modelId, baselineFiles, send } = opts;
+  const {
+    user,
+    threadId,
+    skillName,
+    baseVersion,
+    checkedIssues,
+    userFeedback,
+    modelId,
+    baselineFiles,
+    optimizationScope: providedOptimizationScope,
+    send,
+  } = opts;
 
   console.log('[skill-opt-bridge] start', {
     user, threadId, skillName, baseVersion,
@@ -94,6 +113,19 @@ async function streamSkillOptOpencodeImpl(
   if (prefilled.copied > 0) {
     console.log('[skill-opt-bridge] prefilled workspace:', prefilled);
   }
+  const skillMdContent = readWorkspaceSkillMd(workspaceDir) ?? baselineFiles?.['SKILL.md'] ?? null;
+  const optimizationScope = providedOptimizationScope
+    ?? buildSkillOptIssueScope(checkedIssues, undefined, skillMdContent);
+  const scopeSummary = summarizeSkillOptScope(optimizationScope);
+  const scopedIssues = selectSkillOptIssues(checkedIssues, optimizationScope);
+  console.log('[skill-opt-bridge] optimization scope', {
+    selected: scopeSummary.selectedIssueIds,
+    deferred: scopeSummary.deferredIssueIds,
+    limits: scopeSummary.limits,
+    allowedFiles: scopeSummary.allowedFiles,
+    allowedRegions: scopeSummary.allowedRegions.map(region => `${region.file}:${region.label}`),
+  });
+
   // 把预填后的 VFS 推一次给前端，让 diff 能立刻渲染基线（即便 agent 还没改）
   try {
     const initialVfs = scanWorkspaceFiles(workspaceDir);
@@ -103,13 +135,18 @@ async function streamSkillOptOpencodeImpl(
   } catch {
     /* 扫描失败不阻塞——agent 跑完还会再扫一次 */
   }
+  send('optimization_scope', scopeSummary);
 
   // ── 2. 模型配置 ────────────────────────────────────────────────────────────
   const modelOverride = await resolveModelOverride(user, modelId);
 
   // ── 3. system prompt ───────────────────────────────────────────────────────
   const systemPrompt = buildSkillOptSystemPrompt({
-    skillName, baseVersion, checkedIssues, userFeedback,
+    skillName,
+    baseVersion,
+    checkedIssues,
+    userFeedback,
+    optimizationScope,
   });
 
   // ── 4. SSE handlers + watchdog（直接抄 skill-generator 的）──────────────────────
@@ -290,7 +327,7 @@ async function streamSkillOptOpencodeImpl(
     result = await withBackgroundOpencodeSlot(
       () => runGeneralAgent({
         user,
-        query: composeUserQuery(checkedIssues, userFeedback),
+        query: composeUserQuery(scopedIssues, userFeedback, scopeSummary),
         sessionId: cachedSessionId,
         workspaceTag: threadId,
         sessionTitle: `skill-opt · ${skillName} v${baseVersion} · ${threadId.slice(0, 8)}`,
@@ -317,7 +354,7 @@ async function streamSkillOptOpencodeImpl(
       result = await withBackgroundOpencodeSlot(
         () => runGeneralAgent({
           user,
-          query: composeUserQuery(checkedIssues, userFeedback),
+          query: composeUserQuery(scopedIssues, userFeedback, scopeSummary),
           workspaceTag: threadId,
           sessionTitle: `skill-opt · ${skillName} v${baseVersion} · ${threadId.slice(0, 8)}`,
           system: systemPrompt,
@@ -428,6 +465,16 @@ function writeBaselineFiles(workspaceDir: string, files: Record<string, string>)
   return count;
 }
 
+function readWorkspaceSkillMd(workspaceDir: string): string | null {
+  const skillMdPath = path.join(workspaceDir, 'SKILL.md');
+  try {
+    if (!fs.existsSync(skillMdPath)) return null;
+    return fs.readFileSync(skillMdPath, 'utf-8');
+  } catch {
+    return null;
+  }
+}
+
 /**
  * 同步版本（避免给 caller 加 async 链）。
  *
@@ -510,12 +557,21 @@ function copyDirRecursive(src: string, dst: string): number {
 
 // ── 辅助函数 ─────────────────────────────────────────────────────────────────
 
-function composeUserQuery(issues: SkillOptIssueLite[], userFeedback: string): string {
+function composeUserQuery(
+  issues: SkillOptIssueLite[],
+  userFeedback: string,
+  scope?: SkillOptScopeSummary,
+): string {
   // system prompt 已包含 issues 全部细节；query 只放一个简短的"开干"指令 + 用户原文，
   // 避免 LLM 把 system 当背景 / query 当主输入时漏掉哪一边。
   const lines: string[] = [];
   if (issues.length > 0) {
-    lines.push(`请按 system 提示中列出的 ${issues.length} 个 issue 进行优化。`);
+    lines.push(`请按 system 提示中 rank/select 后的 ${issues.length} 个本轮 issue 进行优化。`);
+  } else if (scope && scope.deferredIssueIds.length > 0) {
+    lines.push('本轮没有可安全收束的 issue，请按 system 提示说明暂未处理原因，不要扩大改写范围。');
+  }
+  if (scope && (scope.allowedRegions.length > 0 || scope.deferredIssueIds.length > 0)) {
+    lines.push(`本轮允许编辑区域 ${scope.allowedRegions.length} 个，延后 issue ${scope.deferredIssueIds.length} 个。`);
   }
   if (userFeedback.trim()) {
     lines.push('用户附加说明：');
@@ -581,4 +637,5 @@ export const __testing = {
   resolveSkillStorageDirSync,
   composeUserQuery,
   writeBaselineFiles,
+  readWorkspaceSkillMd,
 };
