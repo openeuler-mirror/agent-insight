@@ -820,7 +820,10 @@ export async function POST(request: Request) {
                 const executionId = pair.executionId ? String(pair.executionId).trim() : undefined;
                 const taskId = pair.taskId ? String(pair.taskId).trim() : undefined;
                 const duplicateKey = taskId || executionId || '';
-                if (duplicateKey && existingRunTaskIds.has(duplicateKey)) {
+                // 灰度(A/B)评测显式要"重评这一条 trace"——绝不能被去重挡掉(否则一条 trace 在批次里
+                // 评过一次后就再也重评不动了,报 "no valid tasks to run")。重评会新增一行,展示侧
+                // latestByCase 取最新分、旧行保留。非灰度(用例分析)仍按 existingRunTaskIds 去重。
+                if (!grayscaleBinding && duplicateKey && existingRunTaskIds.has(duplicateKey)) {
                     skipped.push({ caseId, reason: `${duplicateKey} already exists in this run` });
                     continue;
                 }
