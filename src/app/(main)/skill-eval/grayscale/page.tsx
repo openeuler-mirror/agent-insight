@@ -7,7 +7,7 @@ import { StatusBadge } from '@/components/feedback/StatusBadge';
 import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
 import { MetricValue } from '@/components/text/MetricValue';
-import { History, Play, ExternalLink } from 'lucide-react';
+import { History, Play, ExternalLink, Plus } from 'lucide-react';
 import { useLocale } from '@/lib/client/locale-context';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
@@ -994,6 +994,11 @@ function GrayscalePageInner() {
                     { label: locale === 'zh' ? '调测分析' : 'Debug & Analysis' },
                 ]}
                 title={locale === 'zh' ? 'A/B 测试' : 'A/B Test'}
+                action={{
+                    label: locale === 'zh' ? '新建任务' : 'New Task',
+                    icon: Plus,
+                    onClick: () => setNewTaskTrigger(c => c + 1),
+                }}
                 secondaryAction={{
                     label: locale === 'zh' ? '历史任务' : 'History',
                     icon: History,
@@ -3399,6 +3404,47 @@ export function GrayscaleEvaluation({
                         </button>
                         <span>/</span>
                         <b>{locale === 'zh' ? 'A/B测试' : 'A/B Testing'}</b>
+                    </div>
+                )}
+
+                {/* 新建任务草稿条:经典视图(非 hifi、独立模式)本来没有"命名 + 保存"的入口,
+                    点了头部「新建任务」进入草稿态(currentTask=null)后,这条出现,让用户给新任务起名并创建。
+                    复用 handleSaveTask(无 currentTask 时走 createTaskForBinding 建新任务)。 */}
+                {!parentSkillId && !currentTask && (
+                    <div style={{
+                        display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+                        background: '#FAF5FF', border: '1px dashed var(--accent, #7E22CE)',
+                        borderRadius: 12, padding: '14px 18px', marginBottom: 16,
+                    }}>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: '#7E22CE', whiteSpace: 'nowrap' }}>
+                            + {locale === 'zh' ? '新建 A/B 任务' : 'New A/B Task'}
+                        </span>
+                        <input
+                            value={taskNameInput}
+                            onChange={e => setTaskNameInput(e.target.value)}
+                            placeholder={locale === 'zh' ? '给这个任务起个名字…' : 'Name this task…'}
+                            spellCheck={false}
+                            style={{
+                                flex: 1, minWidth: 200, height: 34, borderRadius: 6,
+                                border: '1px solid #E7E5E4', padding: '0 12px', fontSize: 13, outline: 'none',
+                            }}
+                        />
+                        <button
+                            type="button"
+                            onClick={handleSaveTask}
+                            disabled={!selectedSkillId || !versionBId || versionBId === NONE_VERSION_ID || !taskNameInput.trim() || isCreatingTask}
+                            style={{
+                                height: 34, padding: '0 18px', borderRadius: 6, border: 'none',
+                                background: '#7E22CE', color: '#fff', fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap',
+                                cursor: (!selectedSkillId || !versionBId || versionBId === NONE_VERSION_ID || !taskNameInput.trim() || isCreatingTask) ? 'not-allowed' : 'pointer',
+                                opacity: (!selectedSkillId || !versionBId || versionBId === NONE_VERSION_ID || !taskNameInput.trim() || isCreatingTask) ? 0.5 : 1,
+                            }}
+                        >
+                            {locale === 'zh' ? '创建任务' : 'Create'}
+                        </button>
+                        <span style={{ fontSize: 11, color: '#A1A1AA', whiteSpace: 'nowrap' }}>
+                            {locale === 'zh' ? '先在下方选好 Skill 与 B 实验版本' : 'Pick a skill & B version below'}
+                        </span>
                     </div>
                 )}
 
