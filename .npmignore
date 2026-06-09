@@ -63,3 +63,12 @@ features/
 .next/standalone/.env
 .next/standalone/server.log
 .next/standalone/prisma/dev.db
+
+# Local/temp & non-runtime project dirs that next build sweeps into standalone
+exclude/
+.next/standalone/exclude/
+.next/standalone/tests/
+.next/standalone/test/
+.next/standalone/skillbench/
+.next/standalone/features/
+.next/standalone/tools/

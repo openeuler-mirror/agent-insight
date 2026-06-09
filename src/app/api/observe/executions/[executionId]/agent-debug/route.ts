@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+import {
+  clearActiveAgentDebugBackgroundJob,
+  hasActiveAgentDebugBackgroundJob,
+  setActiveAgentDebugBackgroundJob,
+} from '@/lib/engine/agent-debug/background-jobs';
 import { runAgentDebugDiagnosis } from '@/lib/engine/agent-debug/runner';
 import { AGENT_DEBUG_GENERATOR } from '@/lib/engine/agent-debug/runner';
 import {
@@ -11,37 +16,34 @@ import {
   upsertRunningAgentDebugReport,
 } from '@/lib/engine/agent-debug/report-store';
 import { hashInteractions } from '@/lib/engine/agent-debug/trace-adapter';
-import { inferSubagentNamesFromInteractions } from '@/lib/engine/observability/subagent-inference';
-import { normalizeClaudeCodeInteractionsForStorage } from '@/lib/shared/interaction-content';
-import { db } from '@/lib/storage/prisma';
+import { resolveAgentDebugExecution } from '@/lib/engine/agent-debug/execution-resolver';
+import { withBackgroundOpencodeSlot } from '@/lib/engine/general-agent/concurrency-limiter';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 600;
 
-interface ExecutionRecord {
-  id: string;
-  taskId?: string | null;
-  framework?: string | null;
-  failures?: string | null;
-  answerScore?: number | null;
-  judgmentReason?: string | null;
-  user?: string | null;
-  query?: string | null;
-}
-
-interface SessionRecord {
-  interactions?: string | unknown[] | null;
-}
+const STOPPED_MESSAGE = 'AgentDebug background task stopped before completion. Please retry.';
 
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ executionId: string }> },
 ) {
   const { executionId } = await params;
-  const resolved = await resolveExecution(executionId);
+  const resolved = await resolveAgentDebugExecution(executionId);
   if (!resolved) return NextResponse.json({ report: null, row: null });
-  const row = await findAgentDebugReport(resolved.execution.id);
-  const report = row?.generator === AGENT_DEBUG_GENERATOR ? parseReportPayload(row) : null;
+  let row = await findAgentDebugReport(resolved.execution.id);
+  if (
+    row?.status === 'running'
+    && row.generator === AGENT_DEBUG_GENERATOR
+    && !hasActiveAgentDebugBackgroundJob('agent-debug', resolved.execution.id, row.interactionsHash)
+  ) {
+    row = await markAgentDebugReportFailed({
+      executionId: resolved.execution.id,
+      interactionsHash: row.interactionsHash,
+      errorMessage: STOPPED_MESSAGE,
+    });
+  }
+  const report = row?.status === 'done' && row.generator === AGENT_DEBUG_GENERATOR ? parseReportPayload(row) : null;
   return NextResponse.json({
     report,
     row: summarizeRow(row),
@@ -54,7 +56,7 @@ export async function POST(
 ) {
   const { executionId } = await params;
   const body = await request.json().catch(() => ({})) as { user?: string; force?: boolean };
-  const resolved = await resolveExecution(executionId);
+  const resolved = await resolveAgentDebugExecution(executionId);
   if (!resolved) {
     return NextResponse.json({ error: 'Execution not found' }, { status: 404 });
   }
@@ -70,25 +72,42 @@ export async function POST(
   if (!body.force && existing?.status === 'done' && existing.generator === AGENT_DEBUG_GENERATOR && existing.interactionsHash === interactionsHash && existingPayload) {
     return NextResponse.json({ report: existingPayload, row: summarizeRow(existing), cached: true });
   }
-  if (!body.force && existing?.status === 'running' && existing.generator === AGENT_DEBUG_GENERATOR && existing.interactionsHash === interactionsHash) {
-    return NextResponse.json({ reportId: existing.id, status: 'running' }, { status: 409 });
+  if (existing?.status === 'running' && existing.generator === AGENT_DEBUG_GENERATOR && existing.interactionsHash === interactionsHash) {
+    if (hasActiveAgentDebugBackgroundJob('agent-debug', execution.id, interactionsHash)) {
+      return NextResponse.json({ reportId: existing.id, row: summarizeRow(existing), status: 'running' }, { status: 409 });
+    }
+    await markAgentDebugReportFailed({
+      executionId: execution.id,
+      interactionsHash,
+      errorMessage: STOPPED_MESSAGE,
+    });
   }
 
-  await upsertRunningAgentDebugReport({
+  const runningRow = await upsertRunningAgentDebugReport({
     executionId: execution.id,
     user,
     interactionsHash,
   });
 
-  try {
-    const report = await runAgentDebugDiagnosis({ execution, interactions, user });
-    const row = await markAgentDebugReportDone({ executionId: execution.id, report });
-    return NextResponse.json({ report, row: summarizeRow(row), cached: false });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const row = await markAgentDebugReportFailed({ executionId: execution.id, errorMessage: message });
-    return NextResponse.json({ error: message, row: summarizeRow(row) }, { status: 500 });
-  }
+  setActiveAgentDebugBackgroundJob({
+    kind: 'agent-debug',
+    executionId: execution.id,
+    interactionsHash,
+    startedAt: Date.now(),
+  });
+
+  void withBackgroundOpencodeSlot(
+    () => runAgentDebugDiagnosis({ execution, interactions, user }),
+    { taskType: 'agent-debug', user, label: `agent-debug: ${execution.id}` },
+  )
+    .then(report => markAgentDebugReportDone({ executionId: execution.id, interactionsHash, report }))
+    .catch(error => {
+      const message = error instanceof Error ? error.message : String(error);
+      return markAgentDebugReportFailed({ executionId: execution.id, interactionsHash, errorMessage: message });
+    })
+    .finally(() => clearActiveAgentDebugBackgroundJob('agent-debug', execution.id, interactionsHash));
+
+  return NextResponse.json({ reportId: runningRow.id, row: summarizeRow(runningRow), status: 'running', cached: false }, { status: 202 });
 }
 
 export async function DELETE(
@@ -96,40 +115,10 @@ export async function DELETE(
   { params }: { params: Promise<{ executionId: string }> },
 ) {
   const { executionId } = await params;
-  const resolved = await resolveExecution(executionId);
+  const resolved = await resolveAgentDebugExecution(executionId);
   if (!resolved) return NextResponse.json({ ok: true });
   await deleteAgentDebugReport(resolved.execution.id);
   return NextResponse.json({ ok: true });
-}
-
-async function resolveExecution(inputId: string): Promise<{ execution: ExecutionRecord; interactions: unknown[] } | null> {
-  const byId = await db.findExecutionById(inputId).catch(() => null) as ExecutionRecord | null;
-  let execution = byId;
-  if (!execution) {
-    const rows = await db.findExecutions({ taskId: inputId }, { timestamp: 'desc' }).catch(() => []) as ExecutionRecord[];
-    execution = rows[0] || null;
-  }
-  if (!execution?.id) return null;
-
-  const sessionKey = execution.taskId || inputId;
-  const session = await db.findSessionByTaskId(sessionKey).catch(() => null) as SessionRecord | null;
-  let interactions = parseInteractions(session?.interactions);
-  if (execution.framework === 'claudecode') {
-    interactions = normalizeClaudeCodeInteractionsForStorage(interactions as Parameters<typeof normalizeClaudeCodeInteractionsForStorage>[0]);
-  }
-  interactions = inferSubagentNamesFromInteractions(interactions as Parameters<typeof inferSubagentNamesFromInteractions>[0]);
-  return { execution, interactions };
-}
-
-function parseInteractions(value: SessionRecord['interactions']): unknown[] {
-  if (Array.isArray(value)) return value;
-  if (!value || typeof value !== 'string') return [];
-  try {
-    const parsed = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
 }
 
 function summarizeRow(row: Awaited<ReturnType<typeof findAgentDebugReport>>) {

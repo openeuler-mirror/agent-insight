@@ -1,6 +1,5 @@
-
-import { config } from 'dotenv';
-config();
+import { loadAgentInsightEnv } from '@/lib/env';
+loadAgentInsightEnv();
 
 import { PrismaClient } from '@prisma/client';
 import { Pool, PoolClient, QueryResult } from 'pg';
@@ -42,7 +41,9 @@ export interface DatabaseAdapter {
 
     // Execution operations
     findExecutionById(id: string): Promise<any>;
-    findExecutions(where: any, orderBy?: any): Promise<any[]>;
+    // select: 可选列投影(Prisma select 形态,如 { id: true, taskId: true }）。仅 PrismaAdapter 实现，
+    // 用于轻量列表查询排除 finalResult 等大字段；OpenGaussAdapter 忽略它（返回全列，与既有行为一致）。
+    findExecutions(where: any, orderBy?: any, select?: Record<string, boolean>): Promise<any[]>;
     upsertExecution(data: any): Promise<any>;
     updateExecution(id: string, data: any): Promise<any>;
     deleteExecution(id: string): Promise<boolean>;
@@ -219,10 +220,11 @@ class PrismaAdapter implements DatabaseAdapter {
         return this.client.execution.findUnique({ where: { id } });
     }
 
-    async findExecutions(where: any, orderBy?: any) {
+    async findExecutions(where: any, orderBy?: any, select?: Record<string, boolean>) {
         return this.client.execution.findMany({
             where,
-            orderBy
+            orderBy,
+            ...(select ? { select } : {}),
         });
     }
 

@@ -9,6 +9,10 @@ import { numberField, parseJsonObject, stringField } from './json';
 import type {
   AgentDebugIssue,
   AgentDebugCandidateWindow,
+  AgentDebugFinding,
+  AgentDebugFindingImpact,
+  AgentDebugFindingIssueRole,
+  AgentDebugIssueResolution,
   AgentDebugModule,
   AgentDebugModuleOutput,
   AgentDebugPhase1Cell,
@@ -30,9 +34,6 @@ const AGENT_DEBUG_FINAL_REPORT_REL_PATH = '.agent-insight/agent-debug-final.json
 interface ExecutionLike {
   id?: string;
   taskId?: string | null;
-  failures?: string | unknown[] | null;
-  answerScore?: number | null;
-  judgmentReason?: string | null;
   query?: string | null;
   framework?: string | null;
   user?: string | null;
@@ -52,7 +53,7 @@ export async function runAgentDebugDiagnosis(args: {
 
   if (turns.length === 0) {
     return {
-      schemaVersion: 1,
+      schemaVersion: 2,
       generator: AGENT_DEBUG_GENERATOR,
       executionId,
       interactionHash,
@@ -61,6 +62,7 @@ export async function runAgentDebugDiagnosis(args: {
       triage: normalTriage(),
       rootCause: null,
       issues: [],
+      findings: [],
       phase1Grid: [],
       stepRecords: [],
       candidateWindows,
@@ -119,11 +121,13 @@ export async function runAgentDebugDiagnosis(args: {
   const stepRecords = normalizeStepRecords(parsed.stepRecords, turns);
   const phase1Grid = normalizePhase1Grid(parsed.phase1Grid);
   const issues = normalizeIssues(parsed.issues, phase1Grid);
-  const rootCause = normalizeRootCause(parsed.rootCause);
+  const parsedRootCause = normalizeRootCause(parsed.rootCause);
+  const findings = normalizeFindings(parsed.findings, issues, parsedRootCause);
+  const rootCause = parsedRootCause || projectFindingToRootCause(findings[0], issues);
   const triage = normalizeTriage(parsed.triage);
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     generator: AGENT_DEBUG_GENERATOR,
     executionId,
     interactionHash,
@@ -132,6 +136,7 @@ export async function runAgentDebugDiagnosis(args: {
     triage,
     rootCause,
     issues,
+    findings,
     phase1Grid,
     stepRecords,
     candidateWindows,
@@ -231,9 +236,6 @@ function buildAgentQuery(args: {
     taskId: args.execution.taskId,
     framework: args.execution.framework,
     query: args.execution.query,
-    failures: parseFailures(args.execution.failures),
-    answerScore: args.execution.answerScore,
-    judgmentReason: args.execution.judgmentReason,
   };
 
   return [
@@ -250,6 +252,7 @@ function buildAgentQuery(args: {
     '- 不使用候选窗口；必须基于输入文件中的全部 turns 运行拆分、静态检测和 Phase 1 分析。',
     '- 用户界面只展示左侧真实 trace 节点；所有 issue/root/cascade 必须尽量带 anchorId、traceStepIndex、traceNodeLabel。',
     '- 如果归一化 Step 摘要证据不足，可读取 Trace 资料包里的 manifest/index/nodes。',
+    '- AgentDebug 主诊断必须只基于 trace、静态检测和 AgentDebug 诊断规程；不要读取或推断 Skills 关键动作分析结果。',
     '',
     '## 执行记录',
     compactJson(executionBrief, 8000),
@@ -290,9 +293,6 @@ function writeAgentDebugInput(args: {
       taskId: args.execution.taskId,
       framework: args.execution.framework,
       query: args.execution.query,
-      failures: parseFailures(args.execution.failures),
-      answerScore: args.execution.answerScore,
-      judgmentReason: args.execution.judgmentReason,
     },
     candidateWindows: [],
     turns: args.turns,
@@ -431,6 +431,7 @@ function normalizeIssues(value: unknown, phase1Grid: AgentDebugPhase1Cell[]): Ag
       reasoning: cell.reasoning,
       confidence: cell.confidence,
       anchorId: cell.anchorId,
+      resolution: 'unresolved' as AgentDebugIssueResolution,
     }));
   if (!Array.isArray(value)) return fromGrid;
   return value
@@ -450,8 +451,129 @@ function normalizeIssues(value: unknown, phase1Grid: AgentDebugPhase1Cell[]): Ag
       reasoning: stringField(item, 'reasoning', ''),
       confidence: clamp(numberField(item, 'confidence', 0.5)),
       anchorId: optionalStringField(item, 'anchorId'),
+      resolution: normalizeIssueResolution(optionalStringField(item, 'resolution')),
+      resolutionEvidence: optionalStringField(item, 'resolutionEvidence'),
     }))
     .filter(issue => issue.module !== 'unknown');
+}
+
+function normalizeFindings(value: unknown, issues: AgentDebugIssue[], root: AgentDebugRootCause | null): AgentDebugFinding[] {
+  const issueIds = new Set(issues.map(issue => issue.id));
+  const normalized: AgentDebugFinding[] = [];
+  const rootOwners = new Set<string>();
+  if (Array.isArray(value)) {
+    for (const raw of value) {
+      if (!raw || typeof raw !== 'object') continue;
+      const item = raw as Record<string, unknown>;
+      const refsRaw = Array.isArray(item.issueRefs) ? item.issueRefs : [];
+      const refs = refsRaw
+        .map(ref => ref && typeof ref === 'object' ? ref as Record<string, unknown> : null)
+        .filter((ref): ref is Record<string, unknown> => Boolean(ref))
+        .map(ref => ({
+          issueId: stringField(ref, 'issueId', ''),
+          role: normalizeFindingIssueRole(optionalStringField(ref, 'role')),
+        }))
+        .filter(ref => ref.issueId && issueIds.has(ref.issueId));
+
+      const dedupedRefs = refs.filter((ref, index) =>
+        refs.findIndex(item => item.issueId === ref.issueId) === index
+      );
+      const rootRefs = dedupedRefs.filter(ref => ref.role === 'root');
+      if (rootRefs.length !== 1) continue;
+      if (rootOwners.has(rootRefs[0].issueId)) continue;
+      rootOwners.add(rootRefs[0].issueId);
+
+      normalized.push({
+        id: stringField(item, 'id', `finding-${normalized.length + 1}`),
+        severity: normalizeSeverity(stringField(item, 'severity', issueById(issues, rootRefs[0].issueId)?.severity || 'medium')),
+        impact: normalizeFindingImpact(optionalStringField(item, 'impact')),
+        summary: stringField(item, 'summary', ''),
+        evidence: stringField(item, 'evidence', ''),
+        issueRefs: dedupedRefs,
+        correctionGuidance: stringField(item, 'correctionGuidance', ''),
+        confidence: clamp(numberField(item, 'confidence', 0.5)),
+      });
+    }
+  }
+  if (normalized.length > 0) return normalized;
+  return root ? [findingFromRootCause(root, issues)] : [];
+}
+
+function findingFromRootCause(root: AgentDebugRootCause, issues: AgentDebugIssue[]): AgentDebugFinding {
+  const refs = issueRefsFromRootCause(root, issues);
+  return {
+    id: 'finding-root-cause',
+    severity: issueById(issues, refs[0]?.issueId)?.severity || 'high',
+    impact: 'quality_degrading',
+    summary: root.summary,
+    evidence: root.evidence,
+    issueRefs: refs,
+    correctionGuidance: root.correctionGuidance,
+    confidence: root.confidence,
+  };
+}
+
+function issueRefsFromRootCause(root: AgentDebugRootCause, issues: AgentDebugIssue[]): AgentDebugFinding['issueRefs'] {
+  const refs: AgentDebugFinding['issueRefs'] = [];
+  const rootIssue = issues.find(issue =>
+    issue.module === root.criticalModule
+    && locationIndexFromIssue(issue) === locationIndexFromRoot(root)
+    && (!root.criticalErrorType || issue.errorType === root.criticalErrorType)
+  ) || issues.find(issue =>
+    issue.module === root.criticalModule
+    && locationIndexFromIssue(issue) === locationIndexFromRoot(root)
+  );
+  if (rootIssue) refs.push({ issueId: rootIssue.id, role: 'root' });
+  for (const chainItem of root.cascadingChain) {
+    const matched = issues.find(issue =>
+      issue.module === chainItem.module
+      && locationIndexFromIssue(issue) === (chainItem.traceStepIndex ?? chainItem.step)
+      && issue.errorType === chainItem.errorType
+    ) || issues.find(issue =>
+      issue.module === chainItem.module
+      && locationIndexFromIssue(issue) === (chainItem.traceStepIndex ?? chainItem.step)
+    );
+    if (matched && !refs.some(ref => ref.issueId === matched.id)) {
+      refs.push({ issueId: matched.id, role: 'downstream' });
+    }
+  }
+  if (refs.length === 0 && issues[0]) refs.push({ issueId: issues[0].id, role: 'root' });
+  return refs;
+}
+
+function projectFindingToRootCause(finding: AgentDebugFinding | undefined, issues: AgentDebugIssue[]): AgentDebugRootCause | null {
+  if (!finding) return null;
+  const rootRef = finding.issueRefs.find(ref => ref.role === 'root') || finding.issueRefs[0];
+  const rootIssue = rootRef ? issueById(issues, rootRef.issueId) : null;
+  if (!rootIssue) return null;
+  return {
+    criticalStep: rootIssue.step,
+    criticalTraceStepIndex: rootIssue.traceStepIndex ?? rootIssue.step,
+    criticalTraceNodeLabel: rootIssue.traceNodeLabel,
+    criticalTraceNodeKind: rootIssue.traceNodeKind,
+    criticalAnchorId: rootIssue.anchorId,
+    criticalModule: rootIssue.module,
+    criticalErrorType: rootIssue.errorType,
+    summary: finding.summary,
+    evidence: finding.evidence,
+    cascadingChain: finding.issueRefs
+      .filter(ref => ref.issueId !== rootIssue.id)
+      .map(ref => issueById(issues, ref.issueId))
+      .filter((issue): issue is AgentDebugIssue => Boolean(issue))
+      .map(issue => ({
+        step: issue.step,
+        diagnosticStep: issue.diagnosticStep,
+        traceStepIndex: issue.traceStepIndex,
+        traceNodeLabel: issue.traceNodeLabel,
+        traceNodeKind: issue.traceNodeKind,
+        module: issue.module,
+        errorType: issue.errorType,
+        consequence: issue.reasoning || issue.evidence,
+        anchorId: issue.anchorId,
+      })),
+    correctionGuidance: finding.correctionGuidance,
+    confidence: finding.confidence,
+  };
 }
 
 function normalizeRootCause(value: unknown): AgentDebugRootCause | null {
@@ -530,6 +652,32 @@ function normalizeSeverity(value: string): AgentDebugSeverity {
   return value === 'high' || value === 'medium' || value === 'low' ? value : 'medium';
 }
 
+function normalizeIssueResolution(value: string | undefined): AgentDebugIssueResolution | undefined {
+  return value === 'unresolved' || value === 'recovered' || value === 'non_blocking' ? value : undefined;
+}
+
+function normalizeFindingIssueRole(value: string | undefined): AgentDebugFindingIssueRole {
+  return value === 'contributing' || value === 'downstream' || value === 'root' ? value : 'contributing';
+}
+
+function normalizeFindingImpact(value: string | undefined): AgentDebugFindingImpact {
+  return value === 'result_blocking' || value === 'quality_degrading' || value === 'recovered_cost' || value === 'risk'
+    ? value
+    : 'quality_degrading';
+}
+
+function issueById(issues: AgentDebugIssue[], id: string | undefined): AgentDebugIssue | null {
+  return issues.find(issue => issue.id === id) || null;
+}
+
+function locationIndexFromIssue(issue: AgentDebugIssue): number | null {
+  return issue.traceStepIndex ?? issue.step ?? null;
+}
+
+function locationIndexFromRoot(root: AgentDebugRootCause): number | null {
+  return root.criticalTraceStepIndex ?? root.criticalStep ?? null;
+}
+
 function optionalStringField(obj: Record<string, unknown>, key: string): string | undefined {
   const value = obj[key];
   return typeof value === 'string' && value.trim() ? value : undefined;
@@ -554,17 +702,6 @@ function numberArrayField(obj: Record<string, unknown>, key: string): number[] {
       .map(item => typeof item === 'number' && Number.isFinite(item) ? Math.max(1, Math.round(item)) : null)
       .filter((item): item is number => item != null)
     : [];
-}
-
-function parseFailures(value: ExecutionLike['failures']) {
-  if (Array.isArray(value)) return value as Array<{ trace_anchor?: { step_id?: string; interaction_index?: number }; anchor_step_id?: string; description?: string; failure_type?: string }>;
-  if (!value || typeof value !== 'string') return [];
-  try {
-    const parsed = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
 }
 
 function compactJson(value: unknown, max = 12_000): string {

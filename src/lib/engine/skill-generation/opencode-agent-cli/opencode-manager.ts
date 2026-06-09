@@ -48,6 +48,8 @@ type ManagerState = {
    * 但也不调 LLM，throw-path 兜不住。
    */
   generations: Map<string, number>
+  /** 所有当前存活的 opencode 子进程(含 ephemeral)。退出钩子据此按进程组全杀, 避免漏掉 ephemeral。 */
+  liveProcs: Set<ChildProcess>
 }
 const globalAny = globalThis as unknown as { [GLOBAL_KEY]?: ManagerState }
 if (!globalAny[GLOBAL_KEY]) {
@@ -55,9 +57,12 @@ if (!globalAny[GLOBAL_KEY]) {
     servers: new Map<string, SingleServer>(),
     startingServers: new Map<string, Promise<SingleServer>>(),
     generations: new Map<string, number>(),
+    liveProcs: new Set<ChildProcess>(),
   }
 }
 const state: ManagerState = globalAny[GLOBAL_KEY]!
+// HMR/旧 global 兼容: 老结构无 liveProcs 时补一个, 防 undefined。
+if (!state.liveProcs) state.liveProcs = new Set<ChildProcess>()
 
 /**
  * 暴露当前 user 的 server 代次。skill-generator-bridge 调它给 cached sessionId 打戳。
@@ -622,8 +627,108 @@ function processGroupExists(pgid: number): boolean {
   }
 }
 
+// ── opencode 进程组磁盘注册表 (跨进程/跨重启防孤儿) ───────────────────────────
+// 我们 spawn opencode 用 detached:true (为了能按进程组 -pgid 整组杀)。代价是: 父 server 被
+// SIGKILL/OOM/jetsam 干掉时跑不了任何退出钩子, detached 的进程组会被 init(PPID=1) 收养、永远活着。
+// 解决: spawn 即把 pgid+属主pid 落盘; 干净退场即删记录; 新 server 启动时 sweep 一遍, 把"属主已死"
+// 的进程组 SIGKILL 掉。这样无论上一代怎么死, 下一代启动都能兜底回收, 不依赖将死进程执行任何代码。
+const OPENCODE_PGID_REGISTRY_DIR = path.join(
+  process.env.AGENT_INSIGHT_DATA_DIR || path.join(os.homedir(), '.agent-insight'),
+  'opencode-pgids',
+)
+
+function registerOpencodePgid(pgid: number, user: string): void {
+  try {
+    fs.mkdirSync(OPENCODE_PGID_REGISTRY_DIR, { recursive: true })
+    fs.writeFileSync(
+      path.join(OPENCODE_PGID_REGISTRY_DIR, String(pgid)),
+      JSON.stringify({ pgid, ownerPid: process.pid, user, startedAt: Date.now() }),
+    )
+  } catch {
+    /* 注册表是尽力而为, 失败绝不影响主流程 */
+  }
+}
+
+function unregisterOpencodePgid(pgid: number): void {
+  try {
+    fs.rmSync(path.join(OPENCODE_PGID_REGISTRY_DIR, String(pgid)), { force: true })
+  } catch {
+    /* ignore */
+  }
+}
+
+/** 某 pid 当前是否存活 (signal 0 探测; EPERM=存在但无权限, 也算活)。 */
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (err) {
+    return (err as NodeJS.ErrnoException)?.code === 'EPERM'
+  }
+}
+
 /**
- * Graceful-then-forceful 终止整个进程组。SIGTERM → 轮询 3s → 还有成员就 SIGKILL → 再轮询 2s。
+ * 启动时回收上一代 server 遗留的 opencode 孤儿进程组。新 server 启动时(instrumentation)调一次。
+ * 判定: 属主就是当前进程 → 本进程实例, 跳过; 属主仍存活且非自己 → 另一个并发存活的 server,
+ * 归它管, 不能误杀; 其余(属主已死 / 没记属主) → 孤儿, SIGKILL 整组。
+ * 所有被杀对象都来自我们自己写的注册表, 绝不会动无关系统进程。
+ */
+export function sweepOrphanedOpencodeProcesses(): void {
+  let files: string[]
+  try {
+    files = fs.readdirSync(OPENCODE_PGID_REGISTRY_DIR)
+  } catch {
+    return // 目录不存在 = 无历史记录
+  }
+  let killed = 0
+  let skipped = 0
+  for (const name of files) {
+    const filePath = path.join(OPENCODE_PGID_REGISTRY_DIR, name)
+    let ownerPid: number | undefined
+    let pgid = Number(name)
+    try {
+      const rec = JSON.parse(fs.readFileSync(filePath, 'utf8'))
+      if (Number.isFinite(rec?.pgid)) pgid = rec.pgid
+      if (Number.isFinite(rec?.ownerPid)) ownerPid = rec.ownerPid
+    } catch {
+      /* 记录损坏: 用文件名当 pgid 兜底 */
+    }
+    if (!Number.isFinite(pgid)) {
+      try { fs.rmSync(filePath, { force: true }) } catch { /* ignore */ }
+      continue
+    }
+    if (typeof ownerPid === 'number' && ownerPid === process.pid) {
+      continue // 本进程自己的实例, 不动
+    }
+    if (typeof ownerPid === 'number' && pidAlive(ownerPid)) {
+      skipped++ // 另一个仍存活的 server, 归它管
+      continue
+    }
+    if (processGroupExists(pgid)) {
+      try { process.kill(-pgid, 'SIGKILL') } catch { /* ESRCH=已经没了 */ }
+      killed++
+    }
+    try { fs.rmSync(filePath, { force: true }) } catch { /* ignore */ }
+  }
+  if (killed > 0 || skipped > 0) {
+    console.warn(
+      `[opencode] 启动孤儿回收: SIGKILL ${killed} 个上一代遗留进程组, 跳过 ${skipped} 个(属主仍存活)。`,
+    )
+  }
+}
+
+/**
+ * 反进程泄漏的硬上限: SIGKILL 之后最多再占着 slot 等多久 (ms) 等进程组真正退场。
+ * 默认 30s, 可用 OPENCODE_KILL_HARD_TIMEOUT_MS 覆盖。下限 2s。详见 terminateOpencodeProcess。
+ */
+const OPENCODE_KILL_HARD_TIMEOUT_MS = Math.max(
+  2000,
+  Number(process.env.OPENCODE_KILL_HARD_TIMEOUT_MS) || 30_000,
+)
+
+/**
+ * Graceful-then-forceful 终止整个进程组。SIGTERM → 轮询 3s → 还有成员就 SIGKILL →
+ * 一直占着 slot 轮询到进程组真清空 (硬上限 OPENCODE_KILL_HARD_TIMEOUT_MS, 默认 30s)。
  * 返回的 promise 在进程组真的清空之后才 resolve——caller 可以放心 spawn 新实例。
  *
  * 为什么必须轮询进程组、不能只 wait 'exit' 事件：
@@ -639,14 +744,14 @@ async function terminateOpencodeProcess(
 ): Promise<void> {
   const pgid = proc.pid
   if (typeof pgid !== 'number') return
-  if (proc.exitCode !== null && !processGroupExists(pgid)) return
+  if (proc.exitCode !== null && !processGroupExists(pgid)) { unregisterOpencodePgid(pgid); return }
 
   killOpencodeProcessTree(proc, 'SIGTERM')
 
   const tickMs = 50
   const sigtermDeadline = Date.now() + 3000
   while (Date.now() < sigtermDeadline) {
-    if (!processGroupExists(pgid)) return
+    if (!processGroupExists(pgid)) { unregisterOpencodePgid(pgid); return }
     await new Promise<void>((r) => setTimeout(r, tickMs))
   }
 
@@ -655,22 +760,39 @@ async function terminateOpencodeProcess(
   )
   killOpencodeProcessTree(proc, 'SIGKILL')
 
-  const sigkillDeadline = Date.now() + 2000
-  while (Date.now() < sigkillDeadline) {
-    if (!processGroupExists(pgid)) return
+  // 关键修复 (反进程泄漏): SIGKILL 之后**一直占着 slot 等到进程组真清空**, 而不是原来只等 2s
+  // 就 return 放行。原因: 内存吃紧/换页抖动时, 被 SIGKILL 的 .opencode (Go/Bun 二进制) 常卡在
+  // 不可中断 I/O (D 状态), 信号已挂起、要等 I/O 完成才真正退场, 往往 >2s。提前 return 会释放
+  // slot → caller 立刻 spawn 新实例 → 旧的还没死 → 越堆越多 → 内存更紧 → 死得更慢, 形成正反馈
+  // 雪崩 (实测一次 8 任务 A/B 堆到 85 个 opencode、swap 吃满)。
+  //
+  // 现在把"泄漏"转成"背压": slot 占到进程真死为止, 机器紧张时整条流水线自然变慢 (不再 spawn
+  // 新实例), 系统得以排空恢复, 而不是堆爆。正常情况进程亚秒级退场, 这段根本不触发, 无副作用。
+  // 给一个很宽的硬上限 (OPENCODE_KILL_HARD_TIMEOUT_MS, 默认 30s) 防御真·僵死 (D 状态永不返回等
+  // 极端情况), 避免单个坏进程把 slot 永久焊死拖垮整批任务; 期间每 2s 补发一次 SIGKILL 收漏网成员。
+  // 每个 tick 先查存活、空了立刻 return, 所以绝不会在进程组已清空后误杀 PID 复用的无关进程组。
+  const hardDeadline = Date.now() + OPENCODE_KILL_HARD_TIMEOUT_MS
+  let lastResend = Date.now()
+  while (Date.now() < hardDeadline) {
+    if (!processGroupExists(pgid)) { unregisterOpencodePgid(pgid); return }
     await new Promise<void>((r) => setTimeout(r, tickMs))
+    if (Date.now() - lastResend >= 2000) {
+      killOpencodeProcessTree(proc, 'SIGKILL')
+      lastResend = Date.now()
+    }
   }
 
   console.error(
-    `[opencode] ${label}: SIGKILL 后进程组仍存在（pgid=${pgid}）—— 可能是僵尸或权限问题，` +
-      `caller 仍会继续 spawn 新实例，请人工检查 ps`,
+    `[opencode] ${label}: SIGKILL ${Math.round(OPENCODE_KILL_HARD_TIMEOUT_MS / 1000)}s 后进程组仍存在` +
+      `（pgid=${pgid}）—— 可能是真·僵死(D 状态)或权限问题; slot 已等满硬上限放行以免整批卡死，` +
+      `请人工检查 ps 并酌情清理`,
   )
 }
 
 /**
  * 给本次 spawn 的 opencode 子进程拼出"上报目标"的 env 覆盖。
  *
- * 解决的问题: opencode plugin (Witty-Skill-Insight.ts) 用 SKILL_INSIGHT_HOST / SKILL_INSIGHT_API_KEY
+ * 解决的问题: opencode plugin (Witty-Skill-Insight.ts) 用 AGENT_INSIGHT_HOST / AGENT_INSIGHT_API_KEY
  * 决定数据上报到哪台 server / 归到哪个 user。这两个值的解析顺序是 process.env > ~/.skill-insight/.env。
  * 用户机器上 ~/.skill-insight/.env 通常装着远端服务器地址 + 用户自己的 api key
  * (适用于他们手动跑 opencode CLI 时把数据传到远端 dashboard 的场景)。
@@ -681,8 +803,8 @@ async function terminateOpencodeProcess(
  * 飞到了远端服务器, 本地 trace 列表完全看不到。
  *
  * 这里强制注入两个值:
- *   - SKILL_INSIGHT_HOST = http://127.0.0.1:{PORT}    本机 next.js 自身
- *   - SKILL_INSIGHT_API_KEY = 触发 user 自己的 api key 锁数据归属
+ *   - AGENT_INSIGHT_HOST = http://127.0.0.1:{PORT}    本机 next.js 自身
+ *   - AGENT_INSIGHT_API_KEY = 触发 user 自己的 api key 锁数据归属
  *
  * 用户手动跑 opencode CLI 不走这里, 仍按 ~/.skill-insight/.env 走, 行为不变。
  */
@@ -690,15 +812,15 @@ async function buildPluginUploadEnvOverride(user: string): Promise<Record<string
   const overrides: Record<string, string> = {}
   // host: 优先环境变量 (部署侧 PORT), 缺省 3000
   const localPort = process.env.PORT || process.env.NEXT_PORT || '3000'
-  overrides.SKILL_INSIGHT_HOST = `http://127.0.0.1:${localPort}`
+  overrides.AGENT_INSIGHT_HOST = `http://127.0.0.1:${localPort}`
   // api key: 查触发 user 在 DB 里登记的 apiKey, 让 plugin 上报数据时归这个 user
   try {
     const u = (await db.findUserByUsername(user)) as { apiKey?: string } | null
     if (u?.apiKey) {
-      overrides.SKILL_INSIGHT_API_KEY = u.apiKey
+      overrides.AGENT_INSIGHT_API_KEY = u.apiKey
     } else {
       console.warn(
-        `[opencode:${user}] user not in DB or has no apiKey — plugin 数据将仍按 process.env / ~/.skill-insight/.env 走, 可能归属错误`,
+        `[opencode:${user}] user not in DB or has no apiKey — plugin 数据将仍按 process.env / ~/.agent-insight/.env 走, 可能归属错误`,
       )
     }
   } catch (e) {
@@ -733,7 +855,7 @@ async function startServerForUser(
   // 把 plugin upload 用的 apiKey 也算进 hash —— user 在 UI 改 apiKey 后老实例
   // 会继续用旧 key 上报数据,被 /api/ingest/upload 401 reject,数据丢失。新 hash
   // 触发 ensureOpencodeServer 重启实例,新进程拿新 apiKey。
-  const configHash = baseConfigHash + '|upload:' + (pluginUploadEnv.SKILL_INSIGHT_API_KEY || 'no-key')
+  const configHash = baseConfigHash + '|upload:' + (pluginUploadEnv.AGENT_INSIGHT_API_KEY || 'no-key')
 
   const proc = spawn(
     binary,
@@ -769,6 +891,10 @@ async function startServerForUser(
     },
   )
 
+  // 登记到内存集合 + 磁盘注册表: 退出钩子据此整组全杀(含 ephemeral); 本进程崩溃后下次启动 sweep 据此回收孤儿。
+  state.liveProcs.add(proc)
+  if (typeof proc.pid === 'number') registerOpencodePgid(proc.pid, user)
+
   // 转发日志(可选)。生产环境可以写到文件。
   if (verbose) {
     proc.stdout?.on('data', (b: Buffer) =>
@@ -789,6 +915,9 @@ async function startServerForUser(
 
   // 关键:server 进程崩了或主动退出后,清空 map 中对应条目，下次请求会自动 respawn。
   proc.on('exit', (code, signal) => {
+    state.liveProcs.delete(proc)
+    // wrapper 退出后, 若整组确实也没了就清注册表; 若 .opencode 仍残留(组还在)则保留记录留给下次 sweep。
+    if (typeof proc.pid === 'number' && !processGroupExists(proc.pid)) unregisterOpencodePgid(proc.pid)
     const current = state.servers.get(user)
     if (current?.process === proc) {
       console.error(
@@ -941,11 +1070,18 @@ export function registerExitHandlers(): void {
   if (exitHandlersRegistered) return
   exitHandlersRegistered = true
 
-  const killAll = (): void => {
-    for (const inst of state.servers.values()) {
-      if (inst.process.exitCode === null) {
+  // 整组杀掉所有存活的 opencode(含 ephemeral): 用 -pgid 而不是 proc.kill, 否则只杀 npm wrapper,
+  // 它 spawnSync 出的 .opencode 真二进制会变孤儿。遍历 state.liveProcs 而不只是 state.servers,
+  // 否则关服时 in-flight 的 ephemeral 实例(A/B、评测)会被漏掉、变孤儿。
+  const killAllGroups = (signal: NodeJS.Signals): void => {
+    for (const proc of state.liveProcs) {
+      const pgid = proc.pid
+      if (typeof pgid !== 'number' || proc.exitCode !== null) continue
+      try {
+        process.kill(-pgid, signal)
+      } catch {
         try {
-          inst.process.kill('SIGTERM')
+          proc.kill(signal)
         } catch {
           /* 已经死了 */
         }
@@ -953,9 +1089,11 @@ export function registerExitHandlers(): void {
     }
   }
 
-  process.on('exit', killAll)
-  process.on('SIGINT', killAll)
-  process.on('SIGTERM', killAll)
+  // 'exit' 是最后一拍, 同步钩子不能 await grace, 直接 SIGKILL 整组确保不留孤儿。
+  process.on('exit', () => killAllGroups('SIGKILL'))
+  // SIGINT/SIGTERM 早一拍发 SIGTERM 给 opencode 100~200ms 收尾; 不调 process.exit, 让 Next.js 自己 graceful。
+  process.on('SIGINT', () => killAllGroups('SIGTERM'))
+  process.on('SIGTERM', () => killAllGroups('SIGTERM'))
 }
 
 /** 调试用:返回指定 user 的 server baseUrl，不传 user 时返回任意一个（兼容老 caller）。 */

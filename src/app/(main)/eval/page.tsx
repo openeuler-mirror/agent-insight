@@ -23,6 +23,13 @@ import { useLocale } from '@/lib/client/locale-context';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { fmtPercentScore } from '@/lib/eval/score-format';
 import {
+    getTrajectoryDisplayStatus,
+    getTrajectoryStatusLabel,
+    getTrajectoryStatusTitle,
+    getTrajectoryStatusTone,
+    isTrajectoryEvaluationTerminal,
+} from '@/lib/eval/trajectory-diagnostic';
+import {
     getPrimaryExecutionAgentName,
     isEvaluatorTraceRecord,
 } from '@/lib/evaluator-agent';
@@ -54,8 +61,8 @@ interface TrajectoryResult {
     resultEvaluationError?: string | null;
     trajectoryScore: number | null;
     resultEvaluationScore?: number | null;
-    customEvaluationScore?: number | null;
-    customEvaluations?: unknown;
+    diagnostic?: unknown;
+    rawAnalysis?: unknown;
     dimensionScores: TrajectoryDimensionScores | null;
     rootCauseStep: string | null;
     createdAt: string;
@@ -126,15 +133,6 @@ const COLORS = {
 const POLL_MS = 5000;
 const HISTORY_PAGE_SIZE = 10;
 const EVAL_HISTORY_STATE_KEY = 'agent-insight:eval-history-state';
-const NO_EVALUABLE_CASE_PREFIX = '[no-evaluable-case]';
-
-const STATUS_LABEL: Record<TrajectoryResult['status'], string> = {
-    pending: '待评测',
-    running: '评测中',
-    done: '已评测',
-    failed: '评测失败',
-};
-
 const STATUS_COLOR: Record<TrajectoryResult['status'], string> = {
     pending: COLORS.textDisabled,
     running: '#1677ff',
@@ -142,20 +140,17 @@ const STATUS_COLOR: Record<TrajectoryResult['status'], string> = {
     failed: COLORS.danger,
 };
 
-function getEffectiveStatus(r: TrajectoryResult): TrajectoryResult['status'] {
-    return r.status === 'done' && r.resultEvaluationError ? 'failed' : r.status;
-}
-
-function isNoEvaluableCase(r?: Pick<TrajectoryResult, 'status' | 'errorMessage' | 'resultEvaluationError'> | null): boolean {
-    return Boolean(r?.status === 'failed' && r.errorMessage?.includes(NO_EVALUABLE_CASE_PREFIX));
-}
-
 function getStatusLabel(r: TrajectoryResult): string {
-    return isNoEvaluableCase(r) ? '无可评测case' : STATUS_LABEL[getEffectiveStatus(r)];
+    return getTrajectoryStatusLabel(r);
 }
 
 function getStatusColor(r: TrajectoryResult): string {
-    return isNoEvaluableCase(r) ? COLORS.warning : STATUS_COLOR[getEffectiveStatus(r)];
+    const tone = getTrajectoryStatusTone(r);
+    if (tone === 'warning') return COLORS.warning;
+    if (tone === 'danger') return COLORS.danger;
+    if (tone === 'running') return STATUS_COLOR.running;
+    if (tone === 'success') return COLORS.success;
+    return COLORS.textDisabled;
 }
 
 function fmtTime(s?: string | null): string {
@@ -195,36 +190,12 @@ function hasSelectedEvaluator(r: TrajectoryResult, evaluatorId: string): boolean
     return selected.includes(evaluatorId);
 }
 
-function isEvaluationTerminal(status?: TrajectoryResult['status'] | null): boolean {
-    return status === 'done' || status === 'failed';
-}
-
-function deriveCustomEvaluationScore(result: TrajectoryResult): number | null {
-    if (typeof result.customEvaluationScore === 'number' && Number.isFinite(result.customEvaluationScore)) {
-        return result.customEvaluationScore;
-    }
-    const rawItems = Array.isArray(result.customEvaluations)
-        ? result.customEvaluations
-        : result.customEvaluations && typeof result.customEvaluations === 'object'
-            ? Object.values(result.customEvaluations as Record<string, unknown>)
-            : [];
-    const scores = rawItems
-        .map(item => item && typeof item === 'object' ? (item as Record<string, unknown>).score : null)
-        .filter((score): score is number => typeof score === 'number' && Number.isFinite(score));
-    return scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
-}
-
 function getDisplayScore(result: TrajectoryResult): number | null {
-    if (!isEvaluationTerminal(result.status) || getEffectiveStatus(result) !== 'done' || isNoEvaluableCase(result)) return null;
+    if (!isTrajectoryEvaluationTerminal(result.status) || getTrajectoryDisplayStatus(result) !== 'done') return null;
     const traceScore = hasSelectedEvaluator(result, 'preset-agent-trace-quality') ? result.trajectoryScore : null;
     const answerScore = hasSelectedEvaluator(result, 'preset-agent-task-completion')
         ? result.resultEvaluationScore ?? null
         : null;
-    const derivedCustomScore = deriveCustomEvaluationScore(result);
-    const hasCustom = Array.isArray(result.selectedEvaluators)
-        ? result.selectedEvaluators.some(id => id.startsWith('custom-'))
-        : derivedCustomScore != null;
-    const customScore = hasCustom ? derivedCustomScore : null;
 
     if (hasSelectedEvaluator(result, 'preset-agent-trace-quality') && (traceScore == null || !Number.isFinite(traceScore))) {
         return null;
@@ -232,13 +203,26 @@ function getDisplayScore(result: TrajectoryResult): number | null {
     if (hasSelectedEvaluator(result, 'preset-agent-task-completion') && (answerScore == null || !Number.isFinite(answerScore))) {
         return null;
     }
-    if (hasCustom && (customScore == null || !Number.isFinite(customScore))) {
-        return null;
-    }
 
-    const parts = [traceScore, answerScore, customScore]
+    const parts = [traceScore, answerScore]
         .filter((score): score is number => typeof score === 'number' && Number.isFinite(score));
     return parts.length > 0 ? parts.reduce((a, b) => a + b, 0) / parts.length : null;
+}
+
+function getVisibleEvaluatorName(run: Pick<RunSummary, 'evaluatorIds' | 'evaluatorName'>): string {
+    const names = run.evaluatorName
+        ? run.evaluatorName.split('、').map(name => name.trim())
+        : [];
+    const visible = run.evaluatorIds
+        .map((id, index) => {
+            if (id.startsWith('custom-')) return '';
+            if (names[index]) return names[index];
+            if (id === 'preset-agent-task-completion') return 'Agent 任务完成度';
+            if (id === 'preset-agent-trace-quality') return 'Agent 轨迹质量';
+            return id;
+        })
+        .filter(Boolean);
+    return visible.length > 0 ? Array.from(new Set(visible)).join('、') : '—';
 }
 
 function EvalPageContent() {
@@ -977,7 +961,7 @@ function RunPanel({
                         primary
                         truncate
                     />
-                    <Stat label={<Term id="evaluator" label="评估器" />} value={run.evaluatorName || '—'} truncate />
+                    <Stat label={<Term id="evaluator" label="评估器" />} value={getVisibleEvaluatorName(run)} truncate />
                     <Stat label="trace 总数" value={String(run.traceCount)} />
                     <Stat
                         label="评测进度"
@@ -1206,7 +1190,7 @@ function RunPanel({
                                         )}
                                     </td>
                                     <td style={tdStyle('center')}>
-                                        <span style={{ color: getStatusColor(r), fontWeight: 500 }} title={r.errorMessage || r.resultEvaluationError || ''}>
+                                        <span style={{ color: getStatusColor(r), fontWeight: 500 }} title={getTrajectoryStatusTitle(r)}>
                                             {getStatusLabel(r)}
                                         </span>
                                     </td>
@@ -1243,6 +1227,7 @@ function RunSidebarItem({
     deleting: boolean;
 }) {
     const totalScore = run.avgScore != null ? `${fmtPercentScore(run.avgScore)} / 100` : '—';
+    const evaluatorName = getVisibleEvaluatorName(run);
     return (
         <div
             onClick={onClick}
@@ -1332,9 +1317,9 @@ function RunSidebarItem({
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
                 }}
-                title={run.evaluatorName}
+                title={evaluatorName}
             >
-                评估器：{run.evaluatorName || '—'}
+                评估器：{evaluatorName}
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11 }}>
                 <ProgressDot done={run.doneCount} running={run.runningCount} failed={run.failedCount} total={run.traceCount} />

@@ -6,9 +6,6 @@ import {
     Search,
     Server,
     Key,
-    Eye,
-    EyeOff,
-    Copy,
     Pencil,
     Trash2,
     Check,
@@ -102,7 +99,6 @@ export function ModelConfigManager({}: ModelConfigManagerProps = {}) {
     });
     const [isSaving, setIsSaving] = useState(false);
     const [status, setStatus] = useState<{ type: 'success' | 'error' | 'info', msg: string } | null>(null);
-    const [revealedKeys, setRevealedKeys] = useState<Set<string>>(new Set());
     const [loaded, setLoaded] = useState(false);
     const [query, setQuery] = useState('');
     const [categoryFilter, setCategoryFilter] = useState<'all' | ProviderCategory>('all');
@@ -169,6 +165,8 @@ export function ModelConfigManager({}: ModelConfigManagerProps = {}) {
                         apiKey: c.apiKey,
                         baseUrl: c.baseUrl,
                         model: c.model,
+                        user,
+                        configId: c.id,
                     }),
                 });
                 const data = await res.json().catch(() => ({ success: false }));
@@ -215,6 +213,8 @@ export function ModelConfigManager({}: ModelConfigManagerProps = {}) {
                     apiKey: configToSave.apiKey,
                     baseUrl: configToSave.baseUrl,
                     model: configToSave.model,
+                    user,
+                    configId: configToSave.id,
                 }),
             });
             const testData = await testRes.json();
@@ -231,8 +231,9 @@ export function ModelConfigManager({}: ModelConfigManagerProps = {}) {
 
             const res = await persist(newConfigs, newActiveId);
             if (res.ok) {
-                setAllConfigs(newConfigs);
-                setActiveConfigId(newActiveId);
+                // Reload from the server so state holds masked keys, not the
+                // plaintext key just typed (the server never returns real keys).
+                await fetchSettings();
                 setEditingConfigId(null);
                 setPickedProvider(null);
                 setStatus({ type: 'success', msg: locale === 'zh' ? '已保存' : 'Saved' });
@@ -303,25 +304,6 @@ export function ModelConfigManager({}: ModelConfigManagerProps = {}) {
         setEditingConfigId(c.id);
         setPickerOpen(false);
         setStatus(null);
-    };
-
-    const toggleReveal = (id: string) => {
-        setRevealedKeys(prev => {
-            const next = new Set(prev);
-            if (next.has(id)) next.delete(id);
-            else next.add(id);
-            return next;
-        });
-    };
-
-    const copyText = async (text: string) => {
-        try {
-            await navigator.clipboard.writeText(text);
-            setStatus({ type: 'success', msg: t('common.copySuccess') });
-            setTimeout(() => setStatus(null), 1200);
-        } catch {
-            setStatus({ type: 'error', msg: t('common.copyFailed') });
-        }
     };
 
     const filteredConfigs = useMemo(() => {
@@ -452,13 +434,10 @@ export function ModelConfigManager({}: ModelConfigManagerProps = {}) {
                                             config={c}
                                             isActive={c.id === activeConfigId}
                                             isDefault={isDefaultConfig(c.id)}
-                                            revealed={revealedKeys.has(c.id)}
                                             health={healthMap[c.id]}
                                             onActivate={() => activateConfig(c.id)}
                                             onEdit={() => startEdit(c)}
                                             onDelete={() => setPendingDelete(c)}
-                                            onToggleReveal={() => toggleReveal(c.id)}
-                                            onCopy={() => c.apiKey && copyText(c.apiKey)}
                                             locale={locale}
                                         />
                                     ))}
@@ -570,18 +549,15 @@ function FilterChip({
 }
 
 function ModelCard({
-    config, isActive, isDefault, revealed, health, onActivate, onEdit, onDelete, onToggleReveal, onCopy, locale,
+    config, isActive, isDefault, health, onActivate, onEdit, onDelete, locale,
 }: {
     config: EvalConfigItem;
     isActive: boolean;
     isDefault: boolean;
-    revealed: boolean;
     health?: HealthState;
     onActivate: () => void;
     onEdit: () => void;
     onDelete: () => void;
-    onToggleReveal: () => void;
-    onCopy: () => void;
     locale: string;
 }) {
     const meta = PROVIDER_META[config.provider] ?? {
@@ -668,19 +644,9 @@ function ModelCard({
                 <div style={apiKeyRow}>
                     <Key size={12} strokeWidth={2.2} style={{ color: 'var(--primary)' }} />
                     {config.apiKey ? (
-                        <>
-                            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>
-                                {revealed ? config.apiKey : maskKey(config.apiKey)}
-                            </span>
-                            <span style={keyActions}>
-                                <button title={revealed ? (locale === 'zh' ? '隐藏' : 'Hide') : (locale === 'zh' ? '显示' : 'Show')} style={keyIconBtn} onClick={onToggleReveal}>
-                                    {revealed ? <EyeOff size={13} /> : <Eye size={13} />}
-                                </button>
-                                <button title={locale === 'zh' ? '复制' : 'Copy'} style={keyIconBtn} onClick={onCopy}>
-                                    <Copy size={13} />
-                                </button>
-                            </span>
-                        </>
+                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+                            {config.apiKey}
+                        </span>
                     ) : (
                         <span style={{ color: 'var(--foreground-muted)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>
                             {locale === 'zh' ? '(未设置)' : '(not set)'}
@@ -1226,13 +1192,20 @@ function EditForm({
                 <div style={{ gridColumn: '1 / -1' }}>
                     <Field label={locale === 'zh' ? 'API 密钥' : 'API Key'}>
                         <input
-                            style={inputStyle}
-                            type="password"
+                            style={{ ...inputStyle, fontFamily: 'var(--font-mono, ui-monospace, monospace)' }}
+                            type="text"
                             placeholder="sk-..."
                             value={config.apiKey || ''}
                             disabled={isDefault}
                             onChange={e => setConfig({ ...config, apiKey: e.target.value })}
                         />
+                        {(config.apiKey || '').includes('•') && (
+                            <div style={{ marginTop: 6, fontSize: 11.5, color: 'var(--foreground-muted)' }}>
+                                {locale === 'zh'
+                                    ? '出于安全考虑仅显示掩码。保持不变则沿用原 Key；如需更换请清空后输入新 Key。'
+                                    : 'Masked for security. Leave unchanged to keep the current key; clear and type a new key to replace it.'}
+                            </div>
+                        )}
                         {pickedProvider?.docsUrl && (
                             <div style={{ marginTop: 6, fontSize: 11.5, color: 'var(--foreground-muted)' }}>
                                 <a href={pickedProvider.docsUrl} target="_blank" rel="noreferrer" style={{ color: 'var(--primary)', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
@@ -1266,11 +1239,6 @@ function Field({ label, children }: { label: string, children: React.ReactNode }
             {children}
         </div>
     );
-}
-
-function maskKey(k: string): string {
-    if (k.length <= 8) return '••••••••';
-    return `${k.slice(0, 4)}••••••••${k.slice(-4)}`;
 }
 
 /* ====================== Styles ====================== */
@@ -1661,28 +1629,6 @@ const apiKeyRow: CSSProperties = {
     borderRadius: 7,
     color: 'var(--foreground-secondary)',
     maxWidth: 'fit-content',
-};
-
-const keyActions: CSSProperties = {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 2,
-    marginLeft: 4,
-    paddingLeft: 6,
-    borderLeft: '1px solid var(--border)',
-};
-
-const keyIconBtn: CSSProperties = {
-    width: 22,
-    height: 22,
-    display: 'grid',
-    placeItems: 'center',
-    background: 'transparent',
-    border: 0,
-    borderRadius: 4,
-    color: 'var(--foreground-muted)',
-    cursor: 'pointer',
-    transition: 'all .15s',
 };
 
 const cardActions: CSSProperties = {

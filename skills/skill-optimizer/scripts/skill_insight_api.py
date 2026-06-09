@@ -40,12 +40,12 @@ def _get_base_url():
 
     _ensure_env_loaded()
 
-    base_ip = os.environ.get("SKILL_INSIGHT_HOST")
+    base_ip = os.environ.get("AGENT_INSIGHT_HOST")
 
     if not base_ip:
         raise ValueError(
             f"\n❌ Error: Cannot resolve Agent Insight API IP.\n"
-            f"'SKILL_INSIGHT_HOST' environment variable is not set.\n"
+            f"'AGENT_INSIGHT_HOST' environment variable is not set.\n"
             f"This is required for Dynamic/Hybrid modes to fetch historical execution logs."
         )
 
@@ -81,7 +81,7 @@ def get_skill_logs(skill: str, skill_version: int = None, limit: int = 20):
     headers = _get_headers()
 
     _ensure_env_loaded()
-    api_key = os.environ.get("SKILL_INSIGHT_API_KEY", "")
+    api_key = os.environ.get("AGENT_INSIGHT_API_KEY", "")
 
     url = f"{base_url}/api/skills/logs"
     params = {

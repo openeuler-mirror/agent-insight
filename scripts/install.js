@@ -171,7 +171,7 @@ async function run(options = {}) {
   }
 
   try {
-    await runCommand('npm install @witty-ai/skill-insight', { silent: true })
+    await runCommand('npm install agent-insight', { silent: true })
     console.log('   ✅ npm 包安装成功\n')
   } catch (error) {
     errors.push({ step: 1, message: `npm install 失败: ${error.message}` })
@@ -192,7 +192,7 @@ async function run(options = {}) {
       fs.mkdirSync(logDir, { recursive: true })
     }
 
-    const startProc = spawn('npx', ['@witty-ai/skill-insight', 'start', '--port', port.toString()], {
+    const startProc = spawn('npx', ['agent-insight', 'start', '--port', port.toString()], {
       stdio: ['ignore', fs.openSync(logPath, 'a'), fs.openSync(logPath, 'a')],
       shell: true,
       detached: true

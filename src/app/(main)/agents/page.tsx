@@ -7,9 +7,6 @@ import { useLocale } from '@/lib/client/locale-context';
 import {
     Users,
     Database,
-    Plus,
-    Info,
-    CheckCircle2,
     Network,
     ArrowRight,
     X,
@@ -20,7 +17,7 @@ import {
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { AppTopBar } from '@/components/shell/AppTopBar';
 
-type AgentOwnership = 'system' | 'user' | 'unregistered';
+type AgentOwnership = 'system' | 'user';
 type AgentLayer = 'main' | 'subagent';
 type PlatformFilter = 'all' | 'opencode' | 'openclaw' | 'hermes';
 type ExecutionTimeFilter = 'all' | '1h' | '24h' | '7d' | 'exact';
@@ -36,12 +33,11 @@ interface Agent {
     platform: Exclude<PlatformFilter, 'all'>;
     version: string;
     framework: string;
-    status: 'running' | 'idle' | 'unregistered';
+    status: 'running' | 'idle';
     successRate?: string;
     todayCalls: string;
     p99?: string;
     parentAgent?: string;
-    discoveryTime?: string;
     lastExecutedAt: string;
 }
 
@@ -145,8 +141,7 @@ function normalizePlatform(value: string): Exclude<PlatformFilter, 'all'> {
 }
 
 function normalizeOwnership(value: string): AgentOwnership {
-    if (value === 'system' || value === 'unregistered') return value;
-    return 'user';
+    return value === 'system' ? 'system' : 'user';
 }
 
 function normalizeLayer(value: string): AgentLayer {
@@ -155,8 +150,7 @@ function normalizeLayer(value: string): AgentLayer {
 
 function dedupeAgentsByPlatformAndName(agents: Agent[]): Agent[] {
     const ownershipRank: Record<AgentOwnership, number> = {
-        user: 3,
-        unregistered: 2,
+        user: 2,
         system: 1,
     };
     const map = new Map<string, Agent>();
@@ -378,213 +372,6 @@ function FilterDateTimeInput({ label, value, onChange, minWidth = 220 }: FilterD
 }
 
 // ============================================================
-// 注册 Agent 弹窗组件
-// ============================================================
-
-interface RegisterAgentDialogProps {
-    isOpen: boolean;
-    onClose: () => void;
-    onSuccess: () => void;
-    initialName?: string;
-    initialPlatform?: string;
-}
-
-function RegisterAgentDialog({ isOpen, onClose, onSuccess, initialName, initialPlatform }: RegisterAgentDialogProps) {
-    const [platform, setPlatform] = useState<string>(initialPlatform || 'opencode');
-    const [name, setName] = useState(initialName || '');
-    const [description, setDescription] = useState('');
-    const [loading, setLoading] = useState(false);
-    const [error, setError] = useState('');
-
-    useEffect(() => {
-        if (isOpen) {
-            setName(initialName || '');
-            setPlatform(initialPlatform || 'opencode');
-            setDescription('');
-            setError('');
-        }
-    }, [isOpen, initialName, initialPlatform]);
-
-    if (!isOpen) return null;
-
-    const handleSubmit = async (e: React.FormEvent) => {
-        e.preventDefault();
-        setError('');
-
-        if (!platform || !name) {
-            setError('平台名称和 Agent 名称不能为空');
-            return;
-        }
-
-        setLoading(true);
-        try {
-            const res = await fetch('/api/agents', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ platform, name, description }),
-            });
-
-            if (!res.ok) {
-                const data = await res.json();
-                throw new Error(data.error || '注册失败');
-            }
-
-            onSuccess();
-            onClose();
-            setName('');
-            setDescription('');
-        } catch (err) {
-            setError(err instanceof Error ? err.message : String(err));
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    return (
-        <AnimatePresence>
-            <div
-                style={{
-                    position: 'fixed',
-                    inset: 0,
-                    background: 'rgba(15, 23, 42, 0.45)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    padding: 20,
-                    zIndex: 1000,
-                }}
-                onClick={onClose}
-            >
-                <motion.div
-                    initial={{ opacity: 0, scale: 0.95 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    exit={{ opacity: 0, scale: 0.95 }}
-                    style={{
-                        width: 'min(480px, 100%)',
-                        borderRadius: 16,
-                        border: '1px solid var(--border)',
-                        background: 'var(--background)',
-                        boxShadow: '0 24px 60px rgba(0,0,0,0.18)',
-                        padding: 24,
-                        boxSizing: 'border-box',
-                    }}
-                    onClick={(e) => e.stopPropagation()}
-                >
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
-                        <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600, color: 'var(--foreground)' }}>
-                            注册 Agent
-                        </h2>
-                        <button
-                            type="button"
-                            onClick={onClose}
-                            style={{
-                                width: 28,
-                                height: 28,
-                                borderRadius: 999,
-                                border: '1px solid var(--border)',
-                                background: 'transparent',
-                                color: 'var(--foreground-secondary)',
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                cursor: 'pointer',
-                            }}
-                        >
-                            <X style={{ width: 14, height: 14 }} />
-                        </button>
-                    </div>
-
-                    <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                        {error && (
-                            <div style={{ padding: 10, borderRadius: 8, background: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', fontSize: 13 }}>
-                                {error}
-                            </div>
-                        )}
-                        
-                        <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--foreground)' }}>
-                                平台名称 <span style={{ color: '#ef4444' }}>*</span>
-                            </span>
-                            <select
-                                value={platform}
-                                onChange={(e) => setPlatform(e.target.value)}
-                                style={{
-                                    height: 38,
-                                    padding: '0 12px',
-                                    borderRadius: 10,
-                                    border: '1px solid var(--border)',
-                                    background: 'var(--background)',
-                                    color: 'var(--foreground)',
-                                    fontSize: 13,
-                                    outline: 'none',
-                                }}
-                            >
-                                <option value="opencode">opencode</option>
-                                <option value="openclaw">openclaw</option>
-                                <option value="hermes">hermes</option>
-                            </select>
-                        </label>
-
-                        <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--foreground)' }}>
-                                Agent 名称 <span style={{ color: '#ef4444' }}>*</span>
-                            </span>
-                            <input
-                                type="text"
-                                placeholder="输入唯一的 Agent 名称"
-                                value={name}
-                                onChange={(e) => setName(e.target.value)}
-                                style={{
-                                    height: 38,
-                                    padding: '0 12px',
-                                    borderRadius: 10,
-                                    border: '1px solid var(--border)',
-                                    background: 'var(--background)',
-                                    color: 'var(--foreground)',
-                                    fontSize: 13,
-                                    outline: 'none',
-                                }}
-                            />
-                        </label>
-
-                        <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--foreground)' }}>
-                                Agent 描述 <span style={{ color: 'var(--foreground-muted)', fontWeight: 400 }}>(可选)</span>
-                            </span>
-                            <textarea
-                                placeholder="输入 Agent 的功能描述"
-                                value={description}
-                                onChange={(e) => setDescription(e.target.value)}
-                                rows={3}
-                                style={{
-                                    padding: '10px 12px',
-                                    borderRadius: 10,
-                                    border: '1px solid var(--border)',
-                                    background: 'var(--background)',
-                                    color: 'var(--foreground)',
-                                    fontSize: 13,
-                                    outline: 'none',
-                                    resize: 'vertical',
-                                }}
-                            />
-                        </label>
-
-                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 8 }}>
-                            <Btn variant="outline" type="button" onClick={onClose} disabled={loading}>
-                                取消
-                            </Btn>
-                            <Btn variant="default" type="submit" disabled={loading || !name}>
-                                {loading ? <Loader2 className="animate-spin" style={{ width: 14, height: 14 }} /> : '确认注册'}
-                            </Btn>
-                        </div>
-                    </form>
-                </motion.div>
-            </div>
-        </AnimatePresence>
-    );
-}
-
-// ============================================================
 // 主页面
 // ============================================================
 
@@ -640,8 +427,6 @@ function AgentsPageInner() {
         const qs = params.toString();
         router.replace(qs ? `?${qs}` : '?', { scroll: false });
     }, [platform, executionTime, sortBy, agentLayer, ownership, exactStartAt, exactEndAt]);
-    const [isRegisterDialogOpen, setIsRegisterDialogOpen] = useState(false);
-    const [convertTarget, setConvertTarget] = useState<{ name: string; platform: string } | null>(null);
     const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
     const [isDeleting, setIsDeleting] = useState(false);
     const [deleteError, setDeleteError] = useState('');
@@ -694,7 +479,7 @@ function AgentsPageInner() {
                     platform: normalizePlatform(a.platform),
                     version: a.version || 'v1.0',
                     framework: a.framework || 'Custom',
-                    status: a.status === 'unregistered' || a.agentOwnership === 'unregistered' ? 'unregistered' : 'idle',
+                    status: 'idle',
                     todayCalls: a.todayCalls || '0',
                     lastExecutedAt: a.lastExecutedAt || a.createdAt || new Date().toISOString(),
                 }));
@@ -742,19 +527,6 @@ function AgentsPageInner() {
             successRate: '94.1%',
             todayCalls: '128',
             lastExecutedAt: '2026-05-05T20:10:00',
-        },
-        {
-            id: 'temp-worker-42',
-            name: 'temp-worker-42',
-            ownership: 'unregistered',
-            layer: 'main',
-            platform: 'hermes',
-            version: 'N/A',
-            framework: 'N/A',
-            status: 'unregistered',
-            todayCalls: '12',
-            discoveryTime: '2026-05-06T10:02:00',
-            lastExecutedAt: '2026-05-06T10:02:00',
         },
         {
             id: 'order-executor',
@@ -828,7 +600,6 @@ function AgentsPageInner() {
         return dedupeAgentsByPlatformAndName([...dbAgents, ...mockAgents]);
     }, [dbAgents, mockAgents]);
 
-    const unregisteredCount = agents.filter(agent => agent.ownership === 'unregistered').length;
     const hasActiveFilters =
         platform !== DEFAULT_PLATFORM ||
         executionTime !== DEFAULT_EXECUTION_TIME ||
@@ -908,7 +679,6 @@ function AgentsPageInner() {
             { value: 'all', label: t('nav.filterDefaultOption') },
             { value: 'system', label: t('nav.systemAgent') },
             { value: 'user', label: t('nav.userAgent') },
-            { value: 'unregistered', label: t('nav.unregisteredAgent') },
         ],
     };
 
@@ -974,46 +744,8 @@ function AgentsPageInner() {
             <AppTopBar
                 title={t('nav.agents')}
                 showDefaultActions={false}
-                actions={
-                    <Btn variant="default" size="sm" onClick={() => setIsRegisterDialogOpen(true)}>
-                        <Plus style={{ width: 14, height: 14 }} />
-                        {t('nav.registerAgent')}
-                    </Btn>
-                }
             />
             <div style={{ flex: 1, overflowY: 'auto', padding: '18px 22px 28px', width: '100%', boxSizing: 'border-box' }}>
-                {/* Unregistered Alert */}
-                {unregisteredCount > 0 && (
-                    <div style={{
-                        background: 'var(--background-secondary)',
-                        border: '1px dashed var(--border-dark, var(--border))',
-                        borderRadius: 8,
-                        padding: 10,
-                        marginBottom: 12,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        gap: 8,
-                    }}>
-                        <div style={{ fontSize: 11.5, color: 'var(--foreground-secondary)', display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <Info style={{ width: 14, height: 14, flexShrink: 0 }} />
-                            <span>{t('nav.unregisteredAlert').replace('{{count}}', unregisteredCount.toString())}</span>
-                        </div>
-                        <button style={{
-                            fontSize: 10,
-                            fontWeight: 500,
-                            color: 'var(--primary)',
-                            background: 'none',
-                            border: 'none',
-                            cursor: 'pointer',
-                            padding: 0,
-                            flexShrink: 0,
-                        }}>
-                            {t('nav.viewAll')}
-                        </button>
-                    </div>
-                )}
-
                 <div style={{
                     background: 'linear-gradient(180deg, rgba(127,127,127,0.03), transparent 88%), var(--card-bg, var(--background))',
                     border: '1px solid var(--border)',
@@ -1101,10 +833,6 @@ function AgentsPageInner() {
                                     <div style={{ display: 'flex', gap: 6, alignItems: 'flex-start' }}>
                                         <span style={{ fontWeight: 600, color: 'var(--foreground)' }}>{t('nav.systemAgent')}:</span>
                                         <span style={{ color: 'var(--foreground-muted)' }}>{t('nav.filterAgentOwnershipTooltipSystem')}</span>
-                                    </div>
-                                    <div style={{ display: 'flex', gap: 6, alignItems: 'flex-start' }}>
-                                        <span style={{ fontWeight: 600, color: 'var(--foreground)' }}>{t('nav.unregisteredAgent')}:</span>
-                                        <span style={{ color: 'var(--foreground-muted)' }}>{t('nav.filterAgentOwnershipTooltipUnregistered')}</span>
                                     </div>
                                 </div>
                             }
@@ -1211,10 +939,7 @@ function AgentsPageInner() {
                                     key={agent.id}
                                     variants={{ hidden: { opacity: 0, y: 10 }, visible: { opacity: 1, y: 0 } }}
                                 >
-                                    <AgentCard agent={agent} onConvert={() => {
-                                        setConvertTarget({ name: agent.name, platform: agent.platform });
-                                        setIsRegisterDialogOpen(true);
-                                    }} onDelete={() => {
+                                    <AgentCard agent={agent} onDelete={() => {
                                         setDeleteTarget({ id: agent.id, name: agent.name });
                                     }} />
                                 </motion.div>
@@ -1328,13 +1053,6 @@ function AgentsPageInner() {
                 </div>
             )}
             
-            <RegisterAgentDialog
-                isOpen={isRegisterDialogOpen}
-                onClose={() => { setIsRegisterDialogOpen(false); setConvertTarget(null); }}
-                onSuccess={() => { fetchDbAgents(); setConvertTarget(null); }}
-                initialName={convertTarget?.name}
-                initialPlatform={convertTarget?.platform}
-            />
 
             <AnimatePresence>
                 {deleteTarget && (
@@ -1405,14 +1123,12 @@ export default function AgentsPage() {
 // 卡片组件
 // ============================================================
 
-function AgentCard({ agent, onConvert, onDelete }: { agent: Agent; onConvert?: () => void; onDelete?: () => void }) {
+function AgentCard({ agent, onDelete }: { agent: Agent; onDelete?: () => void }) {
     const { t } = useLocale();
     const router = useRouter();
     const [hover, setHover] = useState(false);
 
-    const isUnregistered = agent.ownership === 'unregistered';
     const relativeExecution = getRelativeTimeParts(agent.lastExecutedAt);
-    const relativeDiscovery = agent.discoveryTime ? getRelativeTimeParts(agent.discoveryTime) : null;
 
     const formatRelativeLabel = (value: ReturnType<typeof getRelativeTimeParts>) => {
         if (value.unit === 'minutes') {
@@ -1441,20 +1157,17 @@ function AgentCard({ agent, onConvert, onDelete }: { agent: Agent; onConvert?: (
         agent.ownership === 'system' ? Users :
         Database;
 
-    const tagVariant: 'default' | 'secondary' | 'outline' =
-        agent.ownership === 'system' ? 'default' :
-        agent.ownership === 'user' ? 'secondary' :
-        'outline';
+    const tagVariant: 'default' | 'secondary' =
+        agent.ownership === 'system' ? 'default' : 'secondary';
 
     const cardStyle: React.CSSProperties = {
         height: '100%',
         display: 'flex',
         flexDirection: 'column',
         borderRadius: 8,
-        border: isUnregistered ? '1px dashed var(--border)' : '1px solid var(--border)',
+        border: '1px solid var(--border)',
         background: 'var(--card-bg, var(--background))',
         padding: 16,
-        opacity: isUnregistered ? 0.92 : 1,
         boxShadow: hover ? '0 4px 12px rgba(0,0,0,0.06)' : 'none',
         borderColor: hover ? 'var(--primary)' : 'var(--border)',
         transition: 'box-shadow 0.2s, border-color 0.2s',
@@ -1568,14 +1281,12 @@ function AgentCard({ agent, onConvert, onDelete }: { agent: Agent; onConvert?: (
                         </Tag>
                     </div>
                     <div style={{ fontSize: 10, color: 'var(--foreground-muted)', marginTop: 4 }}>
-                        {isUnregistered && relativeDiscovery
-                            ? `${t('nav.discoveredAt')} ${formatRelativeLabel(relativeDiscovery)}`
-                            : `${agent.version} · ${agent.framework}`}
+                        {`${agent.version} · ${agent.framework}`}
                     </div>
                 </div>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    {!isUnregistered && renderStatusBadge()}
+                    {renderStatusBadge()}
                     {agent.ownership !== 'system' && (
                         <button
                             title="删除 Agent"
@@ -1628,80 +1339,63 @@ function AgentCard({ agent, onConvert, onDelete }: { agent: Agent; onConvert?: (
             )}
 
             {/* Stats */}
-            {!isUnregistered && (
-                <div style={{
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(auto-fit, minmax(70px, 1fr))',
-                    gap: 14,
-                    marginTop: 12,
-                    paddingTop: 12,
-                    borderTop: '1px solid var(--border)',
-                }}>
-                    {agent.successRate && (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                            <span style={labelStyle}>{t('nav.successRate')}</span>
-                            <span style={valueStyle}>{agent.successRate}</span>
-                        </div>
-                    )}
+            <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(70px, 1fr))',
+                gap: 14,
+                marginTop: 12,
+                paddingTop: 12,
+                borderTop: '1px solid var(--border)',
+            }}>
+                {agent.successRate && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                        <span style={labelStyle}>{t('nav.lastExecuted')}</span>
-                        <span style={valueStyle}>{formatRelativeLabel(relativeExecution)}</span>
+                        <span style={labelStyle}>{t('nav.successRate')}</span>
+                        <span style={valueStyle}>{agent.successRate}</span>
                     </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                        <span style={labelStyle}>{t('nav.todayCalls')}</span>
-                        <span style={valueStyle}>{agent.todayCalls}</span>
-                    </div>
-                    {agent.p99 && (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                            <span style={labelStyle}>P99</span>
-                            <span style={valueStyle}>{agent.p99}</span>
-                        </div>
-                    )}
+                )}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <span style={labelStyle}>{t('nav.lastExecuted')}</span>
+                    <span style={valueStyle}>{formatRelativeLabel(relativeExecution)}</span>
                 </div>
-            )}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <span style={labelStyle}>{t('nav.todayCalls')}</span>
+                    <span style={valueStyle}>{agent.todayCalls}</span>
+                </div>
+                {agent.p99 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        <span style={labelStyle}>P99</span>
+                        <span style={valueStyle}>{agent.p99}</span>
+                    </div>
+                )}
+            </div>
 
             {/* Spacer */}
             <div style={{ flex: 1, minHeight: 12 }} />
 
             {/* Actions */}
-            <div style={{ display: 'flex', gap: 8, marginTop: isUnregistered ? 16 : 12 }}>
-                {isUnregistered ? (
-                    <Btn
-                        variant="default"
-                        size="sm"
-                        fullWidth
-                        style={{ height: 32 }}
-                        onClick={(e) => { e.stopPropagation(); onConvert?.(); }}
-                    >
-                        <CheckCircle2 style={{ width: 14, height: 14 }} />
-                        {t('nav.convertNow')}
-                    </Btn>
-                ) : (
-                    <>
-                        <Btn
-                            variant="outline"
-                            size="sm"
-                            style={{ flex: 1 }}
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                router.push(`/trace?agent=${encodeURIComponent(agent.name)}`);
-                            }}
-                        >
-                            {t('nav.agentTrace')}
-                        </Btn>
-                        <Btn
-                            variant={agent.layer === 'subagent' ? 'outline' : 'secondary'}
-                            size="sm"
-                            style={{ flex: 1 }}
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                router.push(`/fault?agent=${encodeURIComponent(agent.name)}`);
-                            }}
-                        >
-                            {agent.layer === 'subagent' ? t('nav.details') : t('nav.diagnosis')}
-                        </Btn>
-                    </>
-                )}
+            <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+                <Btn
+                    variant="outline"
+                    size="sm"
+                    style={{ flex: 1 }}
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        router.push(`/trace?agent=${encodeURIComponent(agent.name)}`);
+                    }}
+                >
+                    {t('nav.agentTrace')}
+                </Btn>
+                <Btn
+                    variant={agent.layer === 'subagent' ? 'outline' : 'secondary'}
+                    size="sm"
+                    style={{ flex: 1 }}
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        router.push(`/fault?agent=${encodeURIComponent(agent.name)}`);
+                    }}
+                >
+                    {agent.layer === 'subagent' ? t('nav.details') : t('nav.diagnosis')}
+                </Btn>
             </div>
         </div>
     );

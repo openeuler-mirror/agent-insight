@@ -41,7 +41,9 @@ export interface EvaluationDetail {
         generator?: string | null;
         l2Scores?: {
             scores?: Record<string, number>;
-            comments?: { meta?: string; code?: string };
+            // generator @0.2: { meta, robustness, security }
+            // generator @0.1 旧数据: { meta, code }（仅向后兼容读取，不再产出）
+            comments?: { meta?: string; robustness?: string; security?: string; code?: string };
         } | null;
     };
     execution?: {

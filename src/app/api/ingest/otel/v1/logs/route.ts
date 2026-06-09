@@ -27,7 +27,7 @@ export async function POST(req: Request) {
     const receivedAt = new Date().toISOString();
     const events = normalizeClaudeOtlpLogs(body, { receivedAt, authenticatedUser });
     const { dirtySessionIds } = appendClaudeOtelEvents(events);
-    const skipEvaluation = process.env.SKILL_INSIGHT_CLAUDE_OTEL_SKIP_EVALUATION !== 'false';
+    const skipEvaluation = process.env.AGENT_INSIGHT_CLAUDE_OTEL_SKIP_EVALUATION !== 'false';
 
     const saved: Array<{ sessionId: string; eventCount: number; saved: boolean }> = [];
     for (const sessionId of dirtySessionIds) {

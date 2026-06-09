@@ -11,6 +11,13 @@ import { useRouter } from 'next/navigation';
 import { apiFetch } from '@/lib/client/api';
 import { useAuth } from '@/lib/auth/auth-context';
 import { fmtPercentScore } from '@/lib/eval/score-format';
+import {
+    getTrajectoryDisplayStatus,
+    getTrajectoryStatusLabel,
+    getTrajectoryStatusTitle,
+    getTrajectoryStatusTone,
+    isTrajectoryEvaluationTerminal,
+} from '@/lib/eval/trajectory-diagnostic';
 
 interface TrajectoryDimensionScores {
     completeness: number;
@@ -36,8 +43,8 @@ interface TrajectoryResult {
     resultEvaluationError?: string | null;
     trajectoryScore: number | null;
     resultEvaluationScore?: number | null;
-    customEvaluationScore?: number | null;
-    customEvaluations?: unknown;
+    diagnostic?: unknown;
+    rawAnalysis?: unknown;
     dimensionScores: TrajectoryDimensionScores | null;
     rootCauseStep: string | null;
     createdAt: string;
@@ -78,20 +85,12 @@ const COLORS = {
 
 const POLL_MS = 3000;
 const EVALUATOR_KEYWORDS = ['evaluator', 'checker', 'judge', 'locator', 'assessor', 'grader', '评估器'];
-const NO_EVALUABLE_CASE_PREFIX = '[no-evaluable-case]';
 
 function isEvaluatorAgentName(name?: string | null): boolean {
     const n = String(name || '').trim();
     if (!n) return true;
     return EVALUATOR_KEYWORDS.some(kw => n.toLowerCase().includes(kw));
 }
-
-const STATUS_LABEL: Record<TrajectoryResult['status'], string> = {
-    pending: '待评测',
-    running: '评测中',
-    done: '已评测',
-    failed: '评测失败',
-};
 
 const STATUS_COLOR: Record<TrajectoryResult['status'], string> = {
     pending: COLORS.textDisabled,
@@ -100,11 +99,22 @@ const STATUS_COLOR: Record<TrajectoryResult['status'], string> = {
     failed: COLORS.danger,
 };
 
-function getEvaluatorDisplayNames(rows: Pick<TrajectoryResult, 'selectedEvaluatorNames'>[]): string {
-    const names = Array.from(new Set(
-        rows.flatMap(row => Array.isArray(row.selectedEvaluatorNames) ? row.selectedEvaluatorNames : []),
-    ));
-    return names.length > 0 ? names.join('、') : 'Agent 轨迹质量';
+function getEvaluatorDisplayNames(rows: Pick<TrajectoryResult, 'selectedEvaluatorNames' | 'selectedEvaluators'>[]): string {
+    const names = Array.from(new Set(rows.flatMap(row => {
+        const selected = Array.isArray(row.selectedEvaluators) ? row.selectedEvaluators : [];
+        const selectedNames = Array.isArray(row.selectedEvaluatorNames) ? row.selectedEvaluatorNames : [];
+        if (selected.length === 0) return ['Agent 轨迹质量'];
+        return selected
+            .map((id, index) => {
+                if (id.startsWith('custom-')) return '';
+                if (selectedNames[index]) return selectedNames[index];
+                if (id === 'preset-agent-task-completion') return 'Agent 任务完成度';
+                if (id === 'preset-agent-trace-quality') return 'Agent 轨迹质量';
+                return id;
+            })
+            .filter(Boolean);
+    })));
+    return names.length > 0 ? names.join('、') : '—';
 }
 
 function hasSelectedEvaluator(r: TrajectoryResult, evaluatorId: string): boolean {
@@ -113,56 +123,29 @@ function hasSelectedEvaluator(r: TrajectoryResult, evaluatorId: string): boolean
     return selected.includes(evaluatorId);
 }
 
-function isEvaluationTerminal(status?: TrajectoryResult['status'] | null): boolean {
-    return status === 'done' || status === 'failed';
-}
-
-function getEffectiveStatus(r: TrajectoryResult): TrajectoryResult['status'] {
-    return r.status === 'done' && r.resultEvaluationError ? 'failed' : r.status;
-}
-
-function deriveCustomEvaluationScore(result: TrajectoryResult): number | null {
-    if (typeof result.customEvaluationScore === 'number' && Number.isFinite(result.customEvaluationScore)) {
-        return result.customEvaluationScore;
-    }
-    const rawItems = Array.isArray(result.customEvaluations)
-        ? result.customEvaluations
-        : result.customEvaluations && typeof result.customEvaluations === 'object'
-            ? Object.values(result.customEvaluations as Record<string, unknown>)
-            : [];
-    const scores = rawItems
-        .map(item => item && typeof item === 'object' ? (item as Record<string, unknown>).score : null)
-        .filter((score): score is number => typeof score === 'number' && Number.isFinite(score));
-    return scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
-}
-
 function getDisplayScore(result: TrajectoryResult, exec?: ExecutionRecord): number | null {
-    if (!isEvaluationTerminal(result.status) || getEffectiveStatus(result) !== 'done' || isNoEvaluableCase(result)) return null;
+    if (!isTrajectoryEvaluationTerminal(result.status) || getTrajectoryDisplayStatus(result) !== 'done') return null;
     const traceScore = hasSelectedEvaluator(result, 'preset-agent-trace-quality') ? result.trajectoryScore : null;
     const answerScore = hasSelectedEvaluator(result, 'preset-agent-task-completion')
-        ? exec?.answer_score ?? result.resultEvaluationScore ?? null
+        ? result.resultEvaluationScore ?? exec?.answer_score ?? null
         : null;
-    const derivedCustomScore = deriveCustomEvaluationScore(result);
-    const hasCustom = Array.isArray(result.selectedEvaluators)
-        ? result.selectedEvaluators.some(id => id.startsWith('custom-'))
-        : derivedCustomScore != null;
-    const customScore = hasCustom ? derivedCustomScore : null;
-    const parts = [traceScore, answerScore, customScore]
+    const parts = [traceScore, answerScore]
         .filter((score): score is number => typeof score === 'number' && Number.isFinite(score));
     if (parts.length === 0) return null;
     return parts.reduce((a, b) => a + b, 0) / parts.length;
 }
 
-function isNoEvaluableCase(r?: Pick<TrajectoryResult, 'status' | 'errorMessage' | 'resultEvaluationError'> | null): boolean {
-    return Boolean(r?.status === 'failed' && r.errorMessage?.includes(NO_EVALUABLE_CASE_PREFIX));
-}
-
 function getStatusLabel(r: TrajectoryResult): string {
-    return isNoEvaluableCase(r) ? '无可评测case' : STATUS_LABEL[getEffectiveStatus(r)];
+    return getTrajectoryStatusLabel(r);
 }
 
 function getStatusColor(r: TrajectoryResult): string {
-    return isNoEvaluableCase(r) ? COLORS.warning : STATUS_COLOR[getEffectiveStatus(r)];
+    const tone = getTrajectoryStatusTone(r);
+    if (tone === 'warning') return COLORS.warning;
+    if (tone === 'danger') return COLORS.danger;
+    if (tone === 'running') return STATUS_COLOR.running;
+    if (tone === 'success') return COLORS.success;
+    return COLORS.textDisabled;
 }
 
 function fmtTime(s?: string | null): string {
@@ -186,6 +169,12 @@ export default function EvaluationRunDetailView({ runId }: { runId: string }) {
     const [execMap, setExecMap] = useState<Map<string, ExecutionRecord>>(new Map());
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string>('');
+    const wantedExecIds = useMemo(
+        () => Array.from(new Set(
+            results.flatMap(r => [r.taskId, r.executionId]).filter(Boolean) as string[],
+        )),
+        [results],
+    );
 
     // 拉该 Run 的 results（轮询，因为可能 running）
     useEffect(() => {
@@ -218,23 +207,27 @@ export default function EvaluationRunDetailView({ runId }: { runId: string }) {
 
     // 拉 execution 元数据（按 traceId 批量）—— 简化为一次性拉用户全量执行记录后过滤
     useEffect(() => {
-        if (!user || results.length === 0) return;
-        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}`)
+        if (!user) return;
+        if (wantedExecIds.length === 0) return;
+        let stopped = false;
+        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&taskIds=${encodeURIComponent(wantedExecIds.join(','))}&includeEvaluations=0`)
             .then(r => r.json())
             .then((arr: ExecutionRecord[]) => {
-                if (!Array.isArray(arr)) return;
-                const wanted = new Set(
-                    results.flatMap(r => [r.taskId, r.executionId]).filter(Boolean) as string[],
-                );
+                if (stopped || !Array.isArray(arr)) return;
                 const m = new Map<string, ExecutionRecord>();
                 for (const r of arr) {
-                    if (r.task_id && wanted.has(r.task_id)) m.set(r.task_id, r);
-                    if (r.upload_id && wanted.has(r.upload_id)) m.set(r.upload_id, r);
+                    if (r.task_id) m.set(r.task_id, r);
+                    if (r.upload_id) m.set(r.upload_id, r);
                 }
                 setExecMap(m);
             })
-            .catch(() => undefined);
-    }, [user, results]);
+            .catch(() => {
+                if (!stopped) setExecMap(new Map());
+            });
+        return () => {
+            stopped = true;
+        };
+    }, [user, wantedExecIds]);
 
     function getExecutionAgent(r?: ExecutionRecord): string {
         if (!r) return '';
@@ -246,9 +239,12 @@ export default function EvaluationRunDetailView({ runId }: { runId: string }) {
     }
 
     const summary = useMemo(() => {
-        const done = results.filter(r => getEffectiveStatus(r) === 'done').length;
+        const done = results.filter(r => getTrajectoryDisplayStatus(r) === 'done').length;
         const running = results.filter(r => r.status === 'pending' || r.status === 'running').length;
-        const failed = results.filter(r => getEffectiveStatus(r) === 'failed').length;
+        const failed = results.filter(r => {
+            const displayStatus = getTrajectoryDisplayStatus(r);
+            return displayStatus === 'failed' || displayStatus === 'partial_failed';
+        }).length;
         const scores = results
             .map(r => getDisplayScore(r, execMap.get(r.taskId || r.executionId || '')))
             .filter((s): s is number => typeof s === 'number');
@@ -265,6 +261,7 @@ export default function EvaluationRunDetailView({ runId }: { runId: string }) {
             : new Date(Math.min(...results.map(r => new Date(r.createdAt).getTime()))).toISOString();
         return { total: results.length, done, running, failed, avg, startedAt, executionAgent, autoWatch };
     }, [results, execMap]);
+    const waitingForExecMeta = wantedExecIds.length > 0 && wantedExecIds.some(id => !execMap.has(id));
 
     if (loading) return <div style={{ padding: 24 }}>加载评测批次中...</div>;
 
@@ -356,7 +353,7 @@ export default function EvaluationRunDetailView({ runId }: { runId: string }) {
                                     onClick={() =>
                                         traceId &&
                                         router.push(
-                                            `/eval/trajectory/${encodeURIComponent(traceId)}?runId=${encodeURIComponent(runId)}&datasetId=${encodeURIComponent(r.datasetId)}`,
+                                            `/eval/trajectory/${encodeURIComponent(traceId)}?runId=${encodeURIComponent(runId)}&datasetId=${encodeURIComponent(r.datasetId)}&resultId=${encodeURIComponent(r.id)}`,
                                         )
                                     }
                                     style={{
@@ -374,6 +371,8 @@ export default function EvaluationRunDetailView({ runId }: { runId: string }) {
                                             <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                                 {exec.query || '(空)'}
                                             </div>
+                                        ) : waitingForExecMeta ? (
+                                            <span style={{ color: COLORS.textDisabled }}>加载中...</span>
                                         ) : (
                                             <span style={{ color: COLORS.textDisabled }}>(无 trace 输入)</span>
                                         )}
@@ -388,12 +387,14 @@ export default function EvaluationRunDetailView({ runId }: { runId: string }) {
                                                     {exec.framework} · {exec.model}
                                                 </div>
                                             </>
+                                        ) : waitingForExecMeta ? (
+                                            <span style={{ color: COLORS.textDisabled }}>加载中...</span>
                                         ) : (
                                             <span style={{ color: COLORS.textDisabled }}>(无 trace 元数据)</span>
                                         )}
                                     </td>
                                     <td style={tdStyle('center')}>
-                                        <span style={{ color: getStatusColor(r), fontWeight: 600, fontSize: 11 }} title={r.errorMessage || r.resultEvaluationError || ''}>
+                                        <span style={{ color: getStatusColor(r), fontWeight: 600, fontSize: 11 }} title={getTrajectoryStatusTitle(r)}>
                                             {getStatusLabel(r)}
                                         </span>
                                     </td>

@@ -14,6 +14,52 @@ const {
 
 const PACKAGE_ROOT = path.resolve(__dirname, '..')
 
+// Ensure the standalone bundle's sharp (next/image) native binary matches the
+// CURRENT install platform. The published tarball ships the binary of whatever
+// platform built it; on a different OS/arch we swap in the one npm just resolved
+// for this machine, so the package is build-anywhere / run-anywhere (online install).
+function syncStandaloneSharp(packageRoot, standaloneDir) {
+  try {
+    const target = `${process.platform}-${process.arch}` // e.g. win32-x64, darwin-arm64, linux-x64
+    const standaloneImg = path.join(standaloneDir, 'node_modules', '@img')
+    if (!fs.existsSync(standaloneImg)) return // sharp not bundled in standalone; nothing to do
+
+    // Find an @img dir that already has THIS platform's sharp (installed by npm for the user)
+    const candidates = [
+      path.join(packageRoot, 'node_modules', '@img'), // package's own deps
+      path.join(packageRoot, '..', '@img'),           // hoisted to consumer root (unscoped pkg)
+      path.join(packageRoot, '..', '..', '@img'),     // hoisted (scoped pkg layout)
+    ]
+    const sourceImg = candidates.find((c) => fs.existsSync(path.join(c, `sharp-${target}`)))
+    if (!sourceImg) {
+      console.log(`⚠️  Platform sharp (sharp-${target}) not found; leaving bundled @img unchanged`)
+      return
+    }
+
+    const wanted = [`sharp-${target}`, `sharp-libvips-${target}`]
+    for (const name of wanted) {
+      const src = path.join(sourceImg, name)
+      const dst = path.join(standaloneImg, name)
+      if (fs.existsSync(src) && !fs.existsSync(dst)) {
+        fs.cpSync(src, dst, { recursive: true })
+        console.log(`✓ Synced @img/${name} into standalone`)
+      }
+    }
+
+    // Only prune mismatched binaries once the correct one is confirmed present
+    if (fs.existsSync(path.join(standaloneImg, `sharp-${target}`))) {
+      for (const entry of fs.readdirSync(standaloneImg)) {
+        if (entry.startsWith('sharp-') && !wanted.includes(entry) && !entry.includes('colour')) {
+          fs.rmSync(path.join(standaloneImg, entry), { recursive: true, force: true })
+          console.log(`✓ Removed mismatched @img/${entry} from standalone`)
+        }
+      }
+    }
+  } catch (err) {
+    console.log(`⚠️  sharp sync skipped: ${err.message}`)
+  }
+}
+
 console.log('=== Agent-Insight Post-Install Initialization ===\n')
 
 try {
@@ -85,6 +131,8 @@ try {
       fs.cpSync(prismaClientDir, standaloneClientDir, { recursive: true })
       console.log('✓ Prisma client copied to standalone')
     }
+
+    syncStandaloneSharp(PACKAGE_ROOT, standaloneDir)
 
     const pgDir = path.join(PACKAGE_ROOT, 'node_modules', 'pg')
     if (fs.existsSync(pgDir)) {
@@ -182,9 +230,9 @@ try {
 
   console.log('=== Initialization Complete ===')
   console.log('\nStart the service with:')
-  console.log('  npx @witty-ai/skill-insight start')
+  console.log('  npx agent-insight start')
   console.log('\nOr specify a custom port:')
-  console.log('  npx @witty-ai/skill-insight start --port 3001')
+  console.log('  npx agent-insight start --port 3001')
   console.log('\nAccess the dashboard at: http://localhost:3000')
 } catch (error) {
   console.error('\n❌ Initialization failed:', error.message)

@@ -93,6 +93,9 @@ model Execution {
   user            String?
   // Execution-level trigger-accuracy metric: correct_invoked_skills / expected_skills (per execution).
   skillTriggerRate     Float?
+  // 写入时从 trace interactions 预解析的 agent 名列表(JSON string[],来自 extractObservedAgentNames)。
+  // 让轻量列表(fields=light)无需加载/解析 session interactions 即可拿到完整 agents,根治堆 OOM 又不丢数据。
+  observedAgents       String?
 
   // --- 多 Agent 拆分字段 ---
   // 一次主 agent 的 trace 会被拆成 1 条 root execution + N 条 sub-agent execution，
@@ -545,6 +548,24 @@ model AgentDebugReport {
   llmCallCount     Int      @default(0)
   durationMs       Int?
   generator        String   @default("agent-debug-diagnosis-skill@0.1")
+
+  ranAt            DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([user, ranAt])
+  @@index([status])
+}
+
+model AgentDebugSkillsAnalysis {
+  id               String   @id @default(cuid())
+  executionId      String   @unique
+  user             String?
+  interactionsHash String
+  status           String   @default("pending") // pending | running | done | failed
+  errorMessage     String?
+
+  analysisJson     String?
+  keyActionCount   Int      @default(0)
 
   ranAt            DateTime @default(now())
   updatedAt        DateTime @updatedAt

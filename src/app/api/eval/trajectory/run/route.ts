@@ -14,13 +14,10 @@ import {
 import { startOrReplace as startEvalTask, finish as finishEvalTask } from '@/lib/evaluation-task-manager';
 import { deriveAndPersistOptPoints } from '@/lib/engine/evaluation/derive-skill-opt-points';
 import {
-    analyzeDynamicOnly,
-    extractKeyActionsFromFlow,
-    mergeKeyActionsFromMultipleSkills,
-    parseSkillFlow,
-    type ExtractedKeyAction,
-    type ParsedFlowResult,
-} from '@/lib/engine/observability/flow-parser';
+    buildSkillKeyActionReference,
+    getPrimaryExecutionSkillTargets,
+    loadTaskCompletionSkillContext,
+} from '@/lib/engine/evaluation/key-action-trace-analysis';
 import { extractRealUserInput, findBestSemanticCaseMatch } from '@/lib/engine/evaluation/semantic-dataset-match';
 import { extractTaskResultArtifact } from '@/lib/engine/evaluation/result-artifact-extractor';
 import { parseLooseJson } from '@/lib/engine/evaluation/task-completion-json';
@@ -28,6 +25,10 @@ import {
     extractTrajectoryTaskMeta,
     normalizeTrajectoryTaskMeta,
 } from '@/lib/eval/trajectory-task-meta';
+import {
+    buildEvaluationDiagnostic,
+    type EvaluationDiagnostic,
+} from '@/lib/eval/trajectory-diagnostic';
 import {
     isCustomEvaluatorId,
     listCustomEvaluatorIds,
@@ -39,7 +40,6 @@ import {
     buildSkillAttributionStatus,
     type SkillKeyActionComparisonResult,
 } from '@/lib/engine/evaluation/skill-attribution';
-import { getRootSkillFromInteractions } from '@/lib/engine/observability/skill-scope';
 import {
     autoWatchAgentNamesMatch,
     mergeWatchedAgentIntoRawAnalysis,
@@ -57,6 +57,18 @@ interface RunPair {
     caseId: string;
     executionId?: string;
     taskId?: string;
+}
+
+interface GrayscaleBinding {
+    source: 'grayscale-ab';
+    grayscaleTaskId: string;
+    caseId: string;
+    side: 'a' | 'b';
+    runIndex: number;
+    roundIndex: number;
+    executionTraceId: string;
+    evaluationClaimId: string;
+    evaluationAttempt: number;
 }
 
 const SUPPORTED_TRAJECTORY_EVALUATORS = new Set([
@@ -86,6 +98,19 @@ function normalizeMatchText(value: string | null | undefined): string {
     return String(value || '').trim().replace(/\s+/g, ' ');
 }
 
+function buildTrajectoryTraceEvidence(interactions: TrajectoryEvalInput['actualInteractions']) {
+    const summary = summarizeTrace(interactions, { maxSteps: 80, maxTextLen: 400 });
+    return {
+        summary,
+        text: formatTraceForLLM(summary),
+        steps: summary.steps.map(step => ({
+            ...step,
+            step_index: step.index,
+            stepIndex: step.index,
+        })),
+    };
+}
+
 function collectCustomEvaluatorVariables(prompts: string[]): Set<CustomEvaluatorVariable> {
     const vars = new Set<CustomEvaluatorVariable>();
     for (const prompt of prompts) {
@@ -96,20 +121,6 @@ function collectCustomEvaluatorVariables(prompts: string[]): Set<CustomEvaluator
         }
     }
     return vars;
-}
-
-interface SkillTarget {
-    skill: string;
-    version: number | null;
-}
-
-interface ExtractedTraceStep {
-    uiStepIndex?: number;
-    name?: string;
-    description?: string;
-    dialogStartIndex?: number;
-    dialogEndIndex?: number;
-    type?: 'action' | 'decision' | 'output';
 }
 
 interface ExecutionLike {
@@ -152,15 +163,6 @@ interface SelectedEvaluatorMeta {
     autoWatch?: boolean;
     watchedAgent?: string;
     autoWatchEnabledAt?: string;
-}
-
-function normalizeOptionalVersion(value: unknown): number | null {
-    if (typeof value === 'number' && Number.isFinite(value)) return value;
-    if (typeof value === 'string' && value.trim()) {
-        const parsed = Number(value);
-        return Number.isFinite(parsed) ? parsed : null;
-    }
-    return null;
 }
 
 function normalizeSelectedEvaluators(value: unknown): string[] {
@@ -285,6 +287,67 @@ function mergeRawAnalysisMeta(
 function safeParseRecord(text: string | null | undefined): Record<string, unknown> {
     const parsed = parseLooseJson(text || '');
     return parsed && typeof parsed === 'object' ? parsed : {};
+}
+
+function mergeDiagnosticIntoRawAnalysis(
+    rawAnalysisJson: string | null | undefined,
+    diagnostic: EvaluationDiagnostic,
+    extra: Record<string, unknown> = {},
+): string {
+    return JSON.stringify({
+        ...safeParseRecord(rawAnalysisJson),
+        ...extra,
+        diagnostic,
+    });
+}
+
+function normalizeGrayscaleBinding(value: unknown): GrayscaleBinding | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const raw = value as Record<string, unknown>;
+    const source = String(raw.source || '').trim();
+    const grayscaleTaskId = String(raw.grayscaleTaskId || '').trim();
+    const caseId = String(raw.caseId || '').trim();
+    const side = String(raw.side || '').trim();
+    const executionTraceId = String(raw.executionTraceId || '').trim();
+    const evaluationClaimId = String(raw.evaluationClaimId || '').trim();
+    const runIndex = typeof raw.runIndex === 'number' && Number.isFinite(raw.runIndex)
+        ? Math.floor(raw.runIndex)
+        : Number.NaN;
+    const roundIndex = typeof raw.roundIndex === 'number' && Number.isFinite(raw.roundIndex)
+        ? Math.floor(raw.roundIndex)
+        : Number.NaN;
+    const evaluationAttempt = typeof raw.evaluationAttempt === 'number' && Number.isFinite(raw.evaluationAttempt)
+        ? Math.floor(raw.evaluationAttempt)
+        : Number.NaN;
+    if (
+        source !== 'grayscale-ab'
+        || !grayscaleTaskId
+        || !caseId
+        || (side !== 'a' && side !== 'b')
+        || !executionTraceId
+        || !evaluationClaimId
+        || !Number.isFinite(runIndex)
+        || !Number.isFinite(roundIndex)
+        || !Number.isFinite(evaluationAttempt)
+    ) {
+        return null;
+    }
+    return {
+        source: 'grayscale-ab',
+        grayscaleTaskId,
+        caseId,
+        side: side as 'a' | 'b',
+        runIndex,
+        roundIndex,
+        executionTraceId,
+        evaluationClaimId,
+        evaluationAttempt,
+    };
+}
+
+function readGrayscaleBinding(rawAnalysisJson: string | null | undefined): GrayscaleBinding | null {
+    const parsed = safeParseRecord(rawAnalysisJson);
+    return normalizeGrayscaleBinding(parsed.grayscaleBinding);
 }
 
 async function evaluateTaskCompletionAgainstExpected(
@@ -439,208 +502,6 @@ async function persistResultJudgment(
     }
 }
 
-function getPrimaryExecutionSkillTargets(
-    execution: ExecutionLike | null | undefined,
-    interactions?: unknown,
-): SkillTarget[] {
-    const rootSkill = getRootSkillFromInteractions(interactions);
-    const skill = rootSkill?.name || execution?.skill;
-    const normalized = String(skill || '').trim();
-    if (!normalized) return [];
-    return [{
-        skill: normalized,
-        version: rootSkill?.version ?? normalizeOptionalVersion(execution?.skillVersion),
-    }];
-}
-
-async function loadTaskCompletionSkillContext(
-    execution: ExecutionLike | null | undefined,
-    interactions: unknown,
-    user?: string | null,
-): Promise<TaskCompletionEvalInput['skillContext'] | undefined> {
-    const targets = getPrimaryExecutionSkillTargets(execution, interactions);
-    if (targets.length === 0) return undefined;
-
-    const invokedSkills: NonNullable<NonNullable<TaskCompletionEvalInput['skillContext']>['invokedSkills']> = [];
-    for (const target of targets) {
-        const skillRecord = await db.findSkill(target.skill, user || null);
-        if (!skillRecord?.id) {
-            invokedSkills.push({ name: target.skill, version: target.version });
-            continue;
-        }
-
-        const fullSkill = await db.findSkillById(skillRecord.id);
-        const resolvedVersion = target.version
-            ?? fullSkill?.activeVersion
-            ?? fullSkill?.versions?.[0]?.version
-            ?? null;
-        const versionRow = resolvedVersion != null
-            ? await db.findSkillVersion(skillRecord.id, resolvedVersion).catch(() => null)
-            : null;
-        const content = String(versionRow?.content || '').trim();
-        invokedSkills.push({
-            name: target.skill,
-            version: resolvedVersion,
-            content: content ? content.slice(0, 12_000) : undefined,
-        });
-    }
-
-    return invokedSkills.length > 0 ? { invokedSkills } : undefined;
-}
-
-async function extractSkillKeyActionsFromTargets(targets: SkillTarget[], user?: string | null): Promise<ExtractedKeyAction[]> {
-    const allActions: { name: string; actions: ExtractedKeyAction[] }[] = [];
-
-    for (const target of targets) {
-        const skillRecord = await db.findSkill(target.skill, user || null);
-        if (!skillRecord?.id) continue;
-
-        const fullSkill = await db.findSkillById(skillRecord.id);
-        const resolvedVersion = target.version
-            ?? fullSkill?.activeVersion
-            ?? fullSkill?.versions?.[0]?.version
-            ?? null;
-        if (resolvedVersion == null) continue;
-
-        const parsedFlow = await db.findParsedFlow(skillRecord.id, resolvedVersion, user || null);
-        if (!parsedFlow?.flowJson) continue;
-
-        const flow: ParsedFlowResult = JSON.parse(parsedFlow.flowJson);
-        const actions = extractKeyActionsFromFlow(flow).map(action => ({
-            ...action,
-            skillSource: action.skillSource || target.skill,
-        }));
-        if (actions.length > 0) {
-            allActions.push({ name: target.skill, actions });
-        }
-    }
-
-    if (allActions.length === 0) return [];
-    return allActions.length === 1
-        ? allActions[0].actions
-        : mergeKeyActionsFromMultipleSkills(allActions);
-}
-
-function formatReferenceKeyActions(actions: ExtractedKeyAction[]): string {
-    if (actions.length === 0) return '';
-    return actions.map((action, index) => {
-        const tags = [
-            action.skillSource ? `skill=${action.skillSource}` : '',
-            action.controlFlowType !== 'required' ? `type=${action.controlFlowType}` : '',
-            action.branchLabel ? `branch=${action.branchLabel}` : '',
-            action.loopCondition ? `loop=${action.loopCondition}` : '',
-        ].filter(Boolean).join(', ');
-        return `${index + 1}. ${action.content}${tags ? ` [${tags}]` : ''}`;
-    }).join('\n');
-}
-
-function formatActualExtractedSteps(steps: ExtractedTraceStep[]): string {
-    if (steps.length === 0) return '';
-    return steps.map((step, index) => {
-        const desc = normalizeMatchText(step.description || '');
-        const uiStep = typeof step.uiStepIndex === 'number' ? ` [step=${step.uiStepIndex}]` : '';
-        const range = step.dialogStartIndex != null && step.dialogEndIndex != null
-            ? ` [dialog=${step.dialogStartIndex}-${step.dialogEndIndex}]`
-            : '';
-        return `${index + 1}. ${step.name || desc || '未命名步骤'}${step.type ? ` [${step.type}]` : ''}${uiStep}${range}${desc && desc !== step.name ? ` - ${desc}` : ''}`;
-    }).join('\n');
-}
-
-async function buildSkillKeyActionComparison(
-    execution: ExecutionLike | null | undefined,
-    resolvedTaskId: string | null | undefined,
-    user?: string | null,
-    interactions?: unknown,
-): Promise<SkillKeyActionComparisonResult> {
-    const skillTargets = getPrimaryExecutionSkillTargets(execution, interactions);
-    if (skillTargets.length === 0 || !resolvedTaskId) return { status: 'no-skill-targets' };
-
-    const missingSkills: string[] = [];
-    const missingParsedFlowSkills: string[] = [];
-    for (const target of skillTargets) {
-        const skillRecord = await db.findSkill(target.skill, user || null);
-        if (!skillRecord?.id) {
-            missingSkills.push(target.skill);
-            continue;
-        }
-
-        const fullSkill = await db.findSkillById(skillRecord.id);
-        const resolvedVersion = target.version
-            ?? fullSkill?.activeVersion
-            ?? fullSkill?.versions?.[0]?.version
-            ?? null;
-        if (resolvedVersion == null) {
-            missingParsedFlowSkills.push(target.skill);
-            continue;
-        }
-
-        let parsedFlow = await db.findParsedFlow(skillRecord.id, resolvedVersion, user || null);
-        if (!parsedFlow?.flowJson) {
-            // 没解析过——之前直接报错让用户去 UI 手动触发, UX 太差; 现在直接在这里
-            // 拉取 SKILL.md 内容 + 调 parseSkillFlow 同步解析一次。成功就用新结果继续,
-            // 失败 (LLM 没配 / SKILL.md 缺失 / 解析错误) 再 fallback 到原来的 missing 报错,
-            // 错误信息里带上根因方便排查。
-            const versionRow = await db.findSkillVersion(skillRecord.id, resolvedVersion);
-            const skillContent = versionRow?.content;
-            if (!skillContent || !skillContent.trim()) {
-                console.warn(`[trajectory-eval] auto-parse skill flow skipped: SkillVersion ${skillRecord.id}/v${resolvedVersion} 内容为空`);
-                missingParsedFlowSkills.push(target.skill);
-                continue;
-            }
-            console.log(`[trajectory-eval] auto-parsing skill flow for ${target.skill} v${resolvedVersion}...`);
-            const t0 = Date.now();
-            const parseResult = await parseSkillFlow(skillContent, skillRecord.id, resolvedVersion, user || null);
-            const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
-            if (!parseResult.success) {
-                console.warn(`[trajectory-eval] auto-parse skill flow failed for ${target.skill} v${resolvedVersion} (${elapsed}s): ${parseResult.error || 'unknown'}`);
-                missingParsedFlowSkills.push(target.skill);
-                continue;
-            }
-            console.log(`[trajectory-eval] auto-parsed skill flow for ${target.skill} v${resolvedVersion} in ${elapsed}s`);
-            parsedFlow = await db.findParsedFlow(skillRecord.id, resolvedVersion, user || null);
-            if (!parsedFlow?.flowJson) {
-                // parseSkillFlow 说成功了但 DB 里没落 → 数据写库失败, 罕见。
-                console.warn(`[trajectory-eval] auto-parse reported success but DB has no flowJson for ${target.skill} v${resolvedVersion}`);
-                missingParsedFlowSkills.push(target.skill);
-            }
-        }
-    }
-
-    if (missingSkills.length > 0) {
-        return { status: 'missing-skill', missingSkills };
-    }
-    if (missingParsedFlowSkills.length > 0) {
-        return { status: 'missing-parsed-flow', missingSkills: missingParsedFlowSkills };
-    }
-
-    const executionMatch = await db.findExecutionMatch(resolvedTaskId);
-    const extractedSteps = executionMatch?.extractedSteps
-        ? JSON.parse(executionMatch.extractedSteps)
-        : [];
-    let normalizedSteps = Array.isArray(extractedSteps) ? extractedSteps as ExtractedTraceStep[] : [];
-    if (normalizedSteps.length === 0) {
-        const dynamicResult = await analyzeDynamicOnly(resolvedTaskId, user);
-        if (!dynamicResult.success) return { status: 'dynamic-analysis-failed' };
-        const refreshedExecutionMatch = await db.findExecutionMatch(resolvedTaskId);
-        const refreshedExtractedSteps = refreshedExecutionMatch?.extractedSteps
-            ? JSON.parse(refreshedExecutionMatch.extractedSteps)
-            : [];
-        normalizedSteps = Array.isArray(refreshedExtractedSteps) ? refreshedExtractedSteps as ExtractedTraceStep[] : [];
-    }
-    if (normalizedSteps.length === 0) return { status: 'no-extracted-steps' };
-
-    const keyActions = await extractSkillKeyActionsFromTargets(skillTargets, user);
-    if (keyActions.length === 0) return { status: 'no-key-actions' };
-
-    return {
-        status: 'ok',
-        referenceKeyActionsText: formatReferenceKeyActions(keyActions),
-        actualExtractedStepsText: formatActualExtractedSteps(normalizedSteps),
-        referenceKeyActions: keyActions,
-        actualExtractedSteps: normalizedSteps,
-    };
-}
-
 async function findMatchingDatasetCaseForTrace(
     user: string,
     traceQuery: string,
@@ -718,6 +579,7 @@ export async function POST(request: Request) {
         const body = await request.json();
         const user = String(body.user || '').trim();
         const appendRunId = String(body.evaluatorRunId || body.runId || '').trim();
+        const grayscaleBinding = normalizeGrayscaleBinding(body.grayscaleBinding);
         const requestedEvaluators = Array.isArray(body.evaluators) && body.evaluators.length > 0
             ? body.evaluators
             : body.evaluator;
@@ -917,6 +779,7 @@ export async function POST(request: Request) {
                         rawAnalysisJson: JSON.stringify({
                             ...evaluatorMeta,
                             taskMeta,
+                            ...(grayscaleBinding ? { grayscaleBinding } : {}),
                             ...(allowedDatasetIds.length > 0 ? { allowedDatasetIds } : {}),
                         }),
                     },
@@ -951,6 +814,7 @@ export async function POST(request: Request) {
                     rawAnalysisJson: JSON.stringify({
                         ...evaluatorMeta,
                         taskMeta,
+                        ...(grayscaleBinding ? { grayscaleBinding } : {}),
                         watchPlaceholder: true,
                         ...(requestedPlaceholderOnly ? { placeholderOnly: true } : {}),
                     }),
@@ -985,7 +849,11 @@ export async function POST(request: Request) {
                         executionId: executionId || null,
                         taskId: taskId || null,
                         status: 'pending',
-                        rawAnalysisJson: JSON.stringify({ ...evaluatorMeta, taskMeta }),
+                        rawAnalysisJson: JSON.stringify({
+                            ...evaluatorMeta,
+                            taskMeta,
+                            ...(grayscaleBinding ? { grayscaleBinding } : {}),
+                        }),
                     },
                 });
                 created.push({ id: row.id, caseId, executionId, taskId });
@@ -1095,7 +963,64 @@ class StagedEvaluationError extends Error {
     }
 }
 
-/** 包装 evaluateTrajectory + 加超时；分阶段抛错便于 UI 显示根因 */
+function buildDiagnosticFromError(error: unknown): EvaluationDiagnostic {
+    const stage = error instanceof StagedEvaluationError ? error.stage : 'unknown';
+    const message = error instanceof Error ? error.message : String(error || 'unknown error');
+    const cleanMessage = message.replace(/^\[[^\]]+\]\s*/, '').replace(NO_EVALUABLE_CASE_PREFIX, '').trim();
+    const includes = (needle: string) => cleanMessage.includes(needle);
+
+    if (stage === 'trace-parse') {
+        return buildEvaluationDiagnostic('trace_parse_failed', { details: cleanMessage, reason: cleanMessage });
+    }
+    if (stage === 'trace-empty') {
+        return buildEvaluationDiagnostic('trace_data_empty', { details: cleanMessage, reason: cleanMessage });
+    }
+    if (stage === 'semantic-match-llm' || stage === 'dataset-auto-match') {
+        return buildEvaluationDiagnostic('case_match_failed', {
+            details: cleanMessage,
+            internal: {
+                stage: 'semantic_match',
+                reason: cleanMessage,
+            },
+        });
+    }
+    if (stage === 'result-artifact-timeout' || stage === 'result-timeout' || stage === 'timeout') {
+        return buildEvaluationDiagnostic('evaluator_timeout', { details: cleanMessage, reason: cleanMessage });
+    }
+    if (stage === 'persist') {
+        return buildEvaluationDiagnostic('persist_failed', { details: cleanMessage, reason: cleanMessage });
+    }
+    if (stage === 'llm-or-agent' || stage === 'config') {
+        return buildEvaluationDiagnostic('evaluator_output_invalid', { details: cleanMessage, reason: cleanMessage });
+    }
+    if (stage === 'no-evaluable-case') {
+        if (includes('没有实际输入')) {
+            return buildEvaluationDiagnostic('trace_missing_input', { details: cleanMessage, reason: cleanMessage });
+        }
+        if (includes('评估数据集不存在')) {
+            return buildEvaluationDiagnostic('dataset_missing', { details: cleanMessage, reason: cleanMessage });
+        }
+        if (includes('未找到可用于评测的数据集') || includes('未找到可用于结果评测的数据集') || includes('未找到轨迹评测数据集')) {
+            return buildEvaluationDiagnostic('dataset_empty', { details: cleanMessage, reason: cleanMessage });
+        }
+        if (includes('reference_output')) {
+            return buildEvaluationDiagnostic('custom_reference_missing', { details: cleanMessage, reason: cleanMessage });
+        }
+        if (includes('expectedOutput') || includes('预期结果')) {
+            return buildEvaluationDiagnostic('case_missing_expected_output', { details: cleanMessage, reason: cleanMessage });
+        }
+        if (includes('动态分析失败')) {
+            return buildEvaluationDiagnostic('trace_step_analysis_failed', { details: cleanMessage, reason: cleanMessage });
+        }
+        if (includes('无法提取可评测步骤') || includes('提取出实际执行步骤') || includes('无可提取执行步骤')) {
+            return buildEvaluationDiagnostic('trace_no_steps', { details: cleanMessage, reason: cleanMessage });
+        }
+        return buildEvaluationDiagnostic('case_not_matched', { details: cleanMessage, reason: cleanMessage });
+    }
+    return buildEvaluationDiagnostic('evaluator_recovered_failed', { details: cleanMessage, reason: cleanMessage });
+}
+
+/** 包装 evaluateTrajectoryViaOpencode + 加超时；分阶段抛错便于 UI 显示根因 */
 async function runOneEvaluation(user: string, id: string): Promise<void> {
  // 注册到 evaluation-task-manager 的 activeTasks 内存表 —— 让 GET /api/observe/data 的
  // is_evaluating 字段在轮询时对这条 trace 返 true,前端"已评测历史"列表立刻显示"评测中",
@@ -1146,6 +1071,7 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
         : null;
     const evaluatorMeta = readSelectedEvaluatorMeta(row.rawAnalysisJson);
     const taskMeta = extractTrajectoryTaskMeta(row.rawAnalysisJson, row.createdAt);
+    const grayscaleBinding = readGrayscaleBinding(row.rawAnalysisJson);
     const shouldRunTraceEvaluation = evaluatorMeta.selectedEvaluators.includes(TRACE_EVALUATOR_ID);
     const shouldRunResultEvaluation = evaluatorMeta.selectedEvaluators.includes(TASK_COMPLETION_EVALUATOR_ID);
     const customEvaluatorIds = evaluatorMeta.selectedEvaluators.filter(isCustomEvaluatorId);
@@ -1157,6 +1083,7 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
     let scheduledResultRetryAttemptCount = 0;
     let resultArtifactExtractionRawAnalysis: Record<string, unknown> | null = null;
     let resultActualOutput = '';
+    let finalDiagnostic: EvaluationDiagnostic | null = null;
     let customEvaluationsRawAnalysis: Record<string, unknown> | null = null;
     const customEvaluatorScores: number[] = [];
     const customEvaluatorBundles = hasCustomEvaluators
@@ -1437,46 +1364,53 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
     let comparisonMode: TrajectoryEvalInput['comparisonMode'] = 'trajectory';
     let referenceKeyActionsText = '';
     let actualExtractedStepsText = '';
+    let referenceKeyActionsForEval: unknown[] = [];
+    let actualExtractedStepsForEval: unknown[] = [];
     let evaluationFocus = caseEntry.evaluationFocus;
     const referenceTrajectory = caseEntry.trajectory;
-    const hasReferenceTrajectory = !!normalizeMatchText(caseEntry.trajectory);
-    const keyActionComparison = await buildSkillKeyActionComparison(
+    const traceEvidence = interactions.length > 0
+        ? buildTrajectoryTraceEvidence(interactions)
+        : null;
+    const keyActionReference = await buildSkillKeyActionReference(
         execution,
-        resolvedTaskId,
         user,
         interactions,
     );
-    const skillAttributionStatus = buildSkillAttributionStatus(keyActionComparison);
+    const keyActionComparisonForStatus: SkillKeyActionComparisonResult = keyActionReference.status === 'ok'
+        ? {
+            status: 'ok',
+            referenceKeyActionsText: keyActionReference.referenceKeyActionsText,
+            actualExtractedStepsText: traceEvidence?.text || '',
+            referenceKeyActions: keyActionReference.referenceKeyActions,
+            actualExtractedSteps: traceEvidence?.steps || [],
+        }
+        : keyActionReference;
+    const skillAttributionStatus = buildSkillAttributionStatus(keyActionComparisonForStatus);
 
-    // missing-skill / missing-parsed-flow 是真的"用户配置不完整"的错——如果连
-    // reference trajectory 都没有，评估就跑不动，必须抛错让用户去补 skill 解析。
-    // 但如果已经有 reference trajectory，evaluator 还能在 trajectory 模式下产分，
-    // 没必要因 skill 归因失败而整条评测作废——把降级状态写进 rawAnalysisJson 即可。
-    if (!hasReferenceTrajectory) {
-        if (keyActionComparison.status === 'missing-skill') {
-            throw new StagedEvaluationError(
-                'no-evaluable-case',
-                `${NO_EVALUABLE_CASE_PREFIX} trace 使用了 skill，但在 Skills 管理中未找到同名 skill：${keyActionComparison.missingSkills.join('、')}`,
-            );
-        }
-        if (keyActionComparison.status === 'missing-parsed-flow') {
-            throw new StagedEvaluationError(
-                'no-evaluable-case',
-                `${NO_EVALUABLE_CASE_PREFIX} trace 使用的 skill 缺少可用于提取关键步骤的已解析流程：${keyActionComparison.missingSkills.join('、')}`,
-            );
-        }
-    }
-    if (keyActionComparison.status === 'ok') {
+    if (keyActionReference.status === 'ok' && traceEvidence && traceEvidence.steps.length > 0) {
         comparisonMode = 'skill_key_actions';
-        referenceKeyActionsText = keyActionComparison.referenceKeyActionsText;
-        actualExtractedStepsText = keyActionComparison.actualExtractedStepsText;
+        referenceKeyActionsText = keyActionReference.referenceKeyActionsText;
+        actualExtractedStepsText = traceEvidence.text;
+        referenceKeyActionsForEval = keyActionReference.referenceKeyActions ?? [];
+        actualExtractedStepsForEval = traceEvidence.steps;
         evaluationFocus = [
             normalizeMatchText(caseEntry.evaluationFocus),
-            '优先比较技能自动提取的参考关键步骤与 trace 自动提取的实际关键步骤，再结合实际 trace 判断工具选择与根因。',
+            '逐条比较 Skill 自动提取的关键动作与 trace 事件级步骤（user/llm/tool/skill/task），并直接生成每个关键动作的 Skill 改进建议。',
         ].filter(Boolean).join(' ');
-        // 不再清空 referenceTrajectory——同时有 case trajectory 和 skill key actions
-        // 时，evaluator 可以兼用两者（COORDINATOR_SYSTEM_PROMPT 在 skill_key_actions
-        // 模式下也会引用 actual_trace + reference）。
+    } else if (shouldRunTraceEvaluation) {
+        if (!traceEvidence || traceEvidence.steps.length === 0) {
+            throw new StagedEvaluationError(
+                'no-evaluable-case',
+                `${NO_EVALUABLE_CASE_PREFIX} 当前 trace 无法提取可评测事件步骤`,
+            );
+        }
+        comparisonMode = 'trace_only';
+        actualExtractedStepsText = traceEvidence.text;
+        actualExtractedStepsForEval = traceEvidence.steps;
+        evaluationFocus = [
+            normalizeMatchText(caseEntry.evaluationFocus),
+            '当前 trace 未获得可用 Skill 关键动作；不评估完整性，不生成 Skill 关键动作建议，仅评估工具选择与冗余。',
+        ].filter(Boolean).join(' ');
     }
 
     // skillAttribution + comparisonMode 写进 baseRawAnalysisMeta 后所有 evaluator
@@ -1484,15 +1418,28 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
     const baseRawAnalysisMeta = {
         ...evaluatorMeta,
         taskMeta,
+        ...(grayscaleBinding ? { grayscaleBinding } : {}),
         caseSnapshot,
         skillAttribution: skillAttributionStatus,
         comparisonMode,
-        skillKeyActionComparison: keyActionComparison.status === 'ok'
+        actualTraceExtraction: traceEvidence
             ? {
-                referenceKeyActionsText: keyActionComparison.referenceKeyActionsText,
-                actualExtractedStepsText: keyActionComparison.actualExtractedStepsText,
-                referenceKeyActions: keyActionComparison.referenceKeyActions ?? [],
-                actualExtractedSteps: keyActionComparison.actualExtractedSteps ?? [],
+                source: 'summarizeTrace',
+                totalSteps: traceEvidence.summary.totalSteps,
+                shownSteps: traceEvidence.steps.length,
+                truncated: traceEvidence.summary.truncated,
+                totalLlmCalls: traceEvidence.summary.totalLlmCalls,
+                totalToolCalls: traceEvidence.summary.totalToolCalls,
+                totalSkillCalls: traceEvidence.summary.totalSkillCalls,
+                totalTaskCalls: traceEvidence.summary.totalTaskCalls,
+            }
+            : null,
+        skillKeyActionComparison: keyActionReference.status === 'ok'
+            ? {
+                referenceKeyActionsText: keyActionReference.referenceKeyActionsText,
+                actualExtractedStepsText,
+                referenceKeyActions: keyActionReference.referenceKeyActions ?? [],
+                actualExtractedSteps: actualExtractedStepsForEval,
             }
             : null,
     };
@@ -1540,9 +1487,7 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
 
     if (shouldRunResultEvaluation) {
         const taskCompletionSkillContext = await loadTaskCompletionSkillContext(execution, interactions, user);
-        const traceSummaryForResultEvaluation = interactions.length > 0
-            ? formatTraceForLLM(summarizeTrace(interactions, { maxSteps: 80, maxTextLen: 400 }))
-            : '';
+        const traceSummaryForResultEvaluation = traceEvidence?.text || '';
         const attempt = Math.min(
             readResultEvaluationAttemptCount(row.rawAnalysisJson) + 1,
             MAX_RESULT_EVALUATION_ATTEMPTS,
@@ -1563,6 +1508,15 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
 
                 if (!resultActualOutput) {
                     resultEvaluationError = `结果输出提取失败：${artifactExtraction.reason}`;
+                    finalDiagnostic = buildEvaluationDiagnostic(
+                        String(artifactExtraction.reason || '').includes('没有可用于输出提取的 LLM 调用')
+                            ? 'trace_missing_output'
+                            : 'task_output_extraction_failed',
+                        {
+                            details: resultEvaluationError,
+                            reason: resultEvaluationError,
+                        },
+                    );
                     resultEvaluationRetryState = buildResultEvaluationRetryState(attempt, {
                         retrying: false,
                         exhausted: true,
@@ -1579,6 +1533,7 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
                                 resultEvaluation: null,
                                 resultEvaluationError,
                                 resultEvaluationRetry: resultEvaluationRetryState,
+                                diagnostic: finalDiagnostic,
                             }),
                         },
                     });
@@ -1590,6 +1545,7 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
                     exhausted: false,
                     now: attemptStartedAt,
                 });
+                finalDiagnostic = null;
                 await prisma.trajectoryEvalResult.update({
                     where: { id },
                     data: {
@@ -1617,6 +1573,9 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
                 );
                 resultEvaluationRawAnalysis = {
                     ...(resultJudgment.rawAnalysis || {}),
+                    score: resultJudgment.score,
+                    is_correct: resultJudgment.isCorrect,
+                    reason: resultJudgment.reason,
                     result_artifact_extraction: {
                         status: artifactExtraction.rawAnalysis?.fallback ? 'fallback_final_result' : artifactExtraction.status,
                         confidence: artifactExtraction.confidence,
@@ -1645,6 +1604,7 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
                     },
                 });
                 resultEvaluationError = null;
+                finalDiagnostic = null;
             })(), PER_RESULT_TIMEOUT_MS, new StagedEvaluationError(
                 'result-timeout',
                 `结果评测超过 ${PER_RESULT_TIMEOUT_MS / 1000}s 未完成`,
@@ -1681,6 +1641,15 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
                 });
             } else {
                 resultEvaluationError = `结果评测失败：${detail}`;
+                finalDiagnostic = buildEvaluationDiagnostic(
+                    e instanceof StagedEvaluationError && (e.stage === 'result-timeout' || e.stage === 'result-artifact-timeout')
+                        ? 'evaluator_timeout'
+                        : 'result_evaluator_failed',
+                    {
+                        details: resultEvaluationError,
+                        reason: resultEvaluationError,
+                    },
+                );
                 resultEvaluationRetryState = buildResultEvaluationRetryState(attempt, {
                     retrying: false,
                     exhausted: true,
@@ -1697,6 +1666,7 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
                             resultEvaluation: resultEvaluationRawAnalysis,
                             resultEvaluationError,
                             resultEvaluationRetry: resultEvaluationRetryState,
+                            diagnostic: finalDiagnostic,
                         }),
                     },
                 });
@@ -1738,12 +1708,7 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
         }
         const actualOutputForCustom = needsCustomOutput ? resultActualOutput : '';
         const traceTextForCustom = needsCustomTrajectory ? (() => {
-            if (interactions.length === 0) return '';
-            try {
-                return formatTraceForLLM(summarizeTrace(interactions, { maxSteps: 50, maxTextLen: 400 }));
-            } catch {
-                return '';
-            }
+            return traceEvidence?.text || '';
         })() : '';
 
         const customResults: Array<Awaited<ReturnType<typeof runCustomLlmEvaluator>>> = await Promise.all(
@@ -1797,6 +1762,12 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
         const finalErrorMessage = resultEvaluationMissing
             ? (resultEvaluationError || '结果评测未产出有效结果或评测 session')
             : null;
+        if (resultEvaluationMissing && !finalDiagnostic) {
+            finalDiagnostic = buildEvaluationDiagnostic('result_evaluator_failed', {
+                details: finalErrorMessage || undefined,
+                reason: finalErrorMessage || undefined,
+            });
+        }
         await prisma.trajectoryEvalResult.update({
             where: { id },
             data: {
@@ -1816,6 +1787,7 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
                     customEvaluations: customEvaluationsRawAnalysis,
                     customVariableNeeds: Array.from(requestedCustomVars),
                     customEvaluationScore: customAvg,
+                    ...(finalDiagnostic ? { diagnostic: finalDiagnostic } : {}),
                 }),
                 errorMessage: finalErrorMessage,
             },
@@ -1833,6 +1805,9 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
         referenceTrajectory,
         referenceKeyActionsText,
         actualExtractedStepsText,
+        referenceKeyActions: referenceKeyActionsForEval,
+        actualExtractedSteps: actualExtractedStepsForEval,
+        skillContext: await loadTaskCompletionSkillContext(execution, interactions, user),
         comparisonMode,
         evaluationFocus,
         actualInteractions: interactions,
@@ -1875,6 +1850,7 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
             customEvaluationScore: customEvaluatorScores.length > 0
                 ? customEvaluatorScores.reduce((a, b) => a + b, 0) / customEvaluatorScores.length
                 : null,
+            ...(finalDiagnostic ? { diagnostic: finalDiagnostic } : {}),
         };
         await prisma.trajectoryEvalResult.update({
             where: { id },
@@ -1971,11 +1947,19 @@ export async function runEvaluations(user: string, evaluatorRunId: string, resul
                         failCount++;
                         const stage = err instanceof StagedEvaluationError ? err.stage : 'unknown';
                         const msg = err?.message || 'unknown error';
+                        const diagnostic = buildDiagnosticFromError(err);
                         console.error(`[trajectory-eval]   ✗ ${id} failed [${stage}]: ${msg}`);
+                        const existing = await prisma.trajectoryEvalResult
+                            .findUnique({ where: { id }, select: { rawAnalysisJson: true } })
+                            .catch(() => null);
                         await prisma.trajectoryEvalResult
                             .update({
                                 where: { id },
-                                data: { status: 'failed', errorMessage: msg },
+                                data: {
+                                    status: 'failed',
+                                    errorMessage: msg,
+                                    rawAnalysisJson: mergeDiagnosticIntoRawAnalysis(existing?.rawAnalysisJson, diagnostic),
+                                },
                             })
                             .catch(e2 => console.error(`[trajectory-eval] failed to mark ${id} as failed: ${e2.message}`));
                     })

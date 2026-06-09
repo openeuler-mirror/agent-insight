@@ -5,7 +5,7 @@
  *
  * 顶部：返回列表 + tid + 综合状态徽章
  * 综合评测结论卡（绿色渐变）
- * 分析 Tab：结果评测 / 轨迹评测 / 自定义评测
+ * 分析 Tab：结果评测 / 轨迹评测
  *
  * 数据来源：
  *   - Execution（GET /api/observe/data?taskId=）
@@ -14,15 +14,17 @@
  */
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import { apiFetch } from '@/lib/client/api';
 import { useAuth } from '@/lib/auth/auth-context';
-import { EvaluatorFindingsView } from './EvaluatorFindingsView';
-import { TraceAlignmentPanel, type TraceAlignmentPanelProps } from './TraceAlignmentPanel';
 import { Term } from '@/components/text/Term';
 import { parseSkillAttributionFromRow } from '@/lib/engine/evaluation/skill-attribution';
 import { fmtPercentScore } from '@/lib/eval/score-format';
+import {
+    getTrajectoryOverallConclusion,
+    isTrajectoryEvaluationTerminal,
+    parseTrajectoryDiagnostic,
+} from '@/lib/eval/trajectory-diagnostic';
+import './evaluator-findings-view.css';
 
 interface DatasetCase {
     id: string;
@@ -59,7 +61,7 @@ interface ExecutionRecord {
 }
 
 interface DimensionScores {
-    completeness: number;
+    completeness: number | null;
     toolChoice: number;
     redundancy: number;
     /** 归因维度（v2 起不计入加权轨迹分，仅历史数据可能携带）。 */
@@ -126,16 +128,6 @@ interface ResultEvaluationPayload {
     } | null;
 }
 
-interface CustomEvaluationItem {
-    evaluatorId: string;
-    evaluatorName: string;
-    score: number | null;
-    reason: string;
-    model?: string;
-    durationMs?: number;
-    error?: string;
-}
-
 interface CaseSnapshot {
     id?: string;
     input?: string;
@@ -175,7 +167,7 @@ interface SkillKeyActionComparisonPayload {
     actualExtractedSteps: ActualExtractedStep[];
 }
 
-type KeyActionCoverage = 'covered' | 'partial' | 'missing';
+type KeyActionCoverage = 'covered' | 'partial' | 'missing' | 'not_applicable';
 
 interface SkillKeyActionCard {
     action: ReferenceKeyAction;
@@ -187,15 +179,21 @@ interface SkillKeyActionCard {
     severity?: 'high' | 'medium' | 'low';
 }
 
-/** 宽松解析 JSON 字符串，返回对象或数组原值（解析失败 / 空串返回 null）。 */
-function safeJsonParseLoose(s: string | null | undefined): Record<string, unknown> | unknown[] | null {
-    if (!s || typeof s !== 'string') return null;
-    try {
-        const parsed = JSON.parse(s);
-        return parsed && typeof parsed === 'object' ? parsed : null;
-    } catch {
-        return null;
-    }
+interface LlmKeyActionResult {
+    actionId: string;
+    actionContent: string;
+    coverage: KeyActionCoverage;
+    severity?: 'high' | 'medium' | 'low';
+    matchedTraceSteps: number[];
+    traceComparisonAnalysis: string;
+    hasSkillImprovement: boolean;
+    skillImprovementSuggestion: string;
+    confidence?: number;
+}
+
+interface TrajectoryReasonLine {
+    label: string;
+    body: string;
 }
 
 function parseLooseJsonText(text: string): Record<string, unknown> | null {
@@ -303,7 +301,7 @@ interface TrajectoryResult {
     evaluatorRunId: string;
     selectedEvaluators?: string[];
     selectedEvaluatorNames?: string[];
-    comparisonMode?: 'trajectory' | 'skill_key_actions';
+    comparisonMode?: 'trajectory' | 'skill_key_actions' | 'trace_only';
     taskTitle?: string;
     taskDescription?: string;
     datasetId: string;
@@ -312,13 +310,14 @@ interface TrajectoryResult {
     taskId: string | null;
     status: 'pending' | 'running' | 'done' | 'failed';
     errorMessage: string | null;
+    resultEvaluationError?: string | null;
     trajectoryScore: number | null;
+    resultEvaluationScore?: number | null;
     dimensionScores: DimensionScores | null;
     deviationSteps: TrajectoryDeviation[];
     rootCauseStep: string | null;
     reasonText: string | null;
-    customEvaluationScore?: number | null;
-    customEvaluations?: CustomEvaluationItem[];
+    diagnostic?: unknown;
     rawAnalysis?: unknown;
     createdAt: string;
 }
@@ -458,31 +457,6 @@ function includesEvaluator(result: TrajectoryResult | null, evaluatorId: string)
     return selected.includes(evaluatorId);
 }
 
-function isCustomEvaluatorId(evaluatorId: string): boolean {
-    return evaluatorId.startsWith('custom-');
-}
-
-function normalizeCustomEvaluations(value: unknown): CustomEvaluationItem[] {
-    const rawItems = Array.isArray(value)
-        ? value
-        : value && typeof value === 'object'
-        ? Object.values(value as Record<string, unknown>)
-        : [];
-    return rawItems
-        .map(item => item && typeof item === 'object' ? item as Record<string, unknown> : null)
-        .filter((item): item is Record<string, unknown> => Boolean(item))
-        .map(item => ({
-            evaluatorId: String(item.evaluatorId || '').trim(),
-            evaluatorName: String(item.evaluatorName || item.evaluatorId || '自定义评估器').trim(),
-            score: typeof item.score === 'number' && Number.isFinite(item.score) ? item.score : null,
-            reason: String(item.reason || '').trim(),
-            model: typeof item.model === 'string' ? item.model : undefined,
-            durationMs: typeof item.durationMs === 'number' ? item.durationMs : undefined,
-            error: typeof item.error === 'string' ? item.error : undefined,
-        }))
-        .filter(item => item.evaluatorId || item.evaluatorName);
-}
-
 function deriveResultEvaluationFindings(rawAnalysis: unknown): ResultEvaluationFinding[] {
     const root = rawAnalysis && typeof rawAnalysis === 'object'
         ? rawAnalysis as {
@@ -588,6 +562,68 @@ function buildDefaultSkillSuggestion(action: ReferenceKeyAction, coverage: KeyAc
         return `在 ${skillSource} 中把“${action.content || '该关键动作'}”补成更强的过程约束${flowHint}，明确推荐工具、完成信号和禁止跳步条件。`;
     }
     return `在 ${skillSource} 中把“${action.content || '该关键动作'}”标记为必须执行的核心步骤${flowHint}，写清操作方式和完成标准，避免 trace 直接跳过。`;
+}
+
+function normalizeKeyActionCoverage(value: unknown): LlmKeyActionResult['coverage'] {
+    const raw = String(value || '').trim();
+    if (raw === 'covered' || raw === 'partial' || raw === 'missing' || raw === 'not_applicable') return raw;
+    return 'missing';
+}
+
+function parseLlmKeyActionResults(rawAnalysis: unknown): LlmKeyActionResult[] {
+    const root = rawAnalysis && typeof rawAnalysis === 'object' && !Array.isArray(rawAnalysis)
+        ? rawAnalysis as Record<string, unknown>
+        : null;
+    if (!root) return [];
+    const direct = Array.isArray(root.keyActionResults)
+        ? root.keyActionResults
+        : Array.isArray(root.key_action_results)
+        ? root.key_action_results
+        : [];
+
+    return direct
+        .map(item => item && typeof item === 'object' && !Array.isArray(item) ? item as Record<string, unknown> : null)
+        .filter((item): item is Record<string, unknown> => Boolean(item))
+        .map(item => {
+            const steps = Array.isArray(item.matchedTraceSteps)
+                ? item.matchedTraceSteps
+                : Array.isArray(item.matched_trace_steps)
+                ? item.matched_trace_steps
+                : [];
+            const rawSeverity = String(item.severity || '');
+            const severity: LlmKeyActionResult['severity'] = rawSeverity === 'high' || rawSeverity === 'medium' || rawSeverity === 'low'
+                ? rawSeverity
+                : undefined;
+            return {
+                actionId: String(item.actionId ?? item.action_id ?? '').trim(),
+                actionContent: String(item.actionContent ?? item.action_content ?? '').trim(),
+                coverage: normalizeKeyActionCoverage(item.coverage),
+                severity,
+                matchedTraceSteps: steps
+                    .map(step => typeof step === 'number' ? step : Number(step))
+                    .filter(step => Number.isFinite(step)),
+                traceComparisonAnalysis: String(item.traceComparisonAnalysis ?? item.trace_comparison_analysis ?? '').trim(),
+                hasSkillImprovement: (item.hasSkillImprovement ?? item.has_skill_improvement) === true,
+                skillImprovementSuggestion: String(item.skillImprovementSuggestion ?? item.skill_improvement_suggestion ?? '').trim(),
+                confidence: typeof item.confidence === 'number' && Number.isFinite(item.confidence)
+                    ? item.confidence
+                    : undefined,
+            };
+        })
+        .filter(item => item.actionId || item.actionContent || item.traceComparisonAnalysis);
+}
+
+function deriveSkillKeyActionCardsFromLlm(rawAnalysis: unknown): SkillKeyActionCard[] {
+    return parseLlmKeyActionResults(rawAnalysis).map((item, index) => ({
+        action: {
+            id: item.actionId,
+            content: item.actionContent || `关键动作 ${index + 1}`,
+        },
+        analysis: item.traceComparisonAnalysis || '评估器未返回该关键动作的 trace 对比分析。',
+        suggestion: item.skillImprovementSuggestion || '路径已覆盖该动作，无 Skill 改进点',
+        coverage: item.coverage,
+        severity: item.severity,
+    }));
 }
 
 function deriveSkillKeyActionCards(
@@ -718,6 +754,57 @@ function deriveResultEvaluationSummary(
     };
 }
 
+function formatTrajectoryReasonText(text: string | null | undefined): TrajectoryReasonLine[] {
+    const raw = String(text || '').trim();
+    if (!raw) return [];
+    const normalized = raw
+        .replace(/可能触发封顶的偏差/g, '关键偏差')
+        .replace(/，?可能触发\s*(?:0\.\d+|[\d.]+)\s*封顶。?/g, '。')
+        .replace(/轨迹分封顶\s*(?:0\.\d+|[\d.]+)。?/g, '')
+        .replace(/\s*(完整性(?:[（(]|[:：]))/g, '\n$1')
+        .replace(/。?\s*(工具选择[（(])/g, '\n$1')
+        .replace(/。?\s*(冗余[（(])/g, '\n$1')
+        .replace(/。?\s*(关键偏差[:：]?)/g, '\n$1')
+        .replace(/\n{2,}/g, '\n')
+        .trim();
+
+    const lines = normalized
+        .split('\n')
+        .map(line => line.trim())
+        .map(line => line.replace(/^[-*]\s+/, '').trim())
+        .filter(Boolean);
+
+    return lines
+        .map(line => {
+            const match = line.match(/^(完整性(?:[（(][^）)]*[）)]|[:：])|工具选择[（(][^）)]*[）)]|冗余[（(][^）)]*[）)]|关键偏差)\s*[:：]?\s*(.*)$/);
+            if (!match) {
+                return { label: '', body: line };
+            }
+            return {
+                label: match[1].replace(/[:：]$/, ''),
+                body: match[2] || '',
+            };
+        });
+}
+
+function TrajectoryReasonBlock({ text }: { text: string | null | undefined }) {
+    const lines = formatTrajectoryReasonText(text);
+    if (lines.length === 0) {
+        return <span style={{ color: COLORS.textDisabled }}>(无 reasonText)</span>;
+    }
+    return (
+        <ul>
+            {lines.map((line, index) => (
+                <li key={`${line.label || 'line'}-${index}`}>
+                    {line.label ? <strong>{line.label}</strong> : null}
+                    {line.label && line.body ? '：' : null}
+                    {line.body}
+                </li>
+            ))}
+        </ul>
+    );
+}
+
 export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
     const { user } = useAuth();
     const router = useRouter();
@@ -732,10 +819,7 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
     const [dataset, setDataset] = useState<AgentDataset | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string>('');
-    const [activeAnalysisTab, setActiveAnalysisTab] = useState<'result' | 'trajectory' | 'custom'>('result');
-    // 执行轨迹对齐面板默认折叠（放在轨迹评测最后，按需展开看详细对齐时序图）。
-    const [alignmentOpen, setAlignmentOpen] = useState(false);
-
+    const [activeAnalysisTab, setActiveAnalysisTab] = useState<'result' | 'trajectory'>('result');
     // Execution（轮询，结果评测字段可能在轨迹评测过程中被补写）
     useEffect(() => {
         if (!user || !traceId) return;
@@ -813,46 +897,6 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
         };
     }, [user, traceId, datasetId, runId, resultId]);
 
-    // analyze-match 数据（执行轨迹对齐 · Skill 预期标注 面板用）。原在 用例分析 ③ 分析结果，
-    // 现迁移到这里（评测执行 → 轨迹评测）。GET 拿已存的对齐结果，没有则面板自然空着。
-    const [matchData, setMatchData] = useState<{ matchJson?: string; flowJson?: string; extractedSteps?: string; dynamicMermaid?: string } | null>(null);
-    useEffect(() => {
-        if (!user || !traceId) return;
-        let stopped = false;
-        apiFetch(`/api/observe/executions/${encodeURIComponent(traceId)}/analyze-match`)
-            .then(r => (r.ok ? r.json() : null))
-            .then(d => { if (!stopped && d && typeof d === 'object') setMatchData(d); })
-            .catch(() => undefined);
-        return () => { stopped = true; };
-    }, [user, traceId]);
-
-    const alignmentPanelProps = useMemo<TraceAlignmentPanelProps | null>(() => {
-        const parsedRaw = safeJsonParseLoose(matchData?.matchJson);
-        if (!parsedRaw || Array.isArray(parsedRaw)) return null;
-        const parsedMatch = parsedRaw as Record<string, unknown>;
-        const parsedFlow = safeJsonParseLoose(matchData?.flowJson);
-        const extractedRaw = safeJsonParseLoose(matchData?.extractedSteps);
-        const problemSteps = Array.isArray(parsedMatch.problemSteps) ? parsedMatch.problemSteps : [];
-        const problemByStepKey = new Map<string, Record<string, unknown>>();
-        for (const raw of problemSteps) {
-            const p = asRecord(raw);
-            if (p.stepIndex != null) problemByStepKey.set(`actual:${p.stepIndex}`, p);
-            if (p.stepName) problemByStepKey.set(`name:${String(p.stepName)}`, p);
-        }
-        const flowSteps = !Array.isArray(parsedFlow) && Array.isArray((parsedFlow as Record<string, unknown> | null)?.steps)
-            ? (parsedFlow as { steps: unknown[] }).steps
-            : [];
-        return {
-            matches: Array.isArray(parsedMatch.matches) ? parsedMatch.matches : [],
-            skippedExpectedSteps: Array.isArray(parsedMatch.skippedExpectedSteps) ? parsedMatch.skippedExpectedSteps : [],
-            problemByStepKey,
-            flowSteps,
-            extractedSteps: Array.isArray(extractedRaw) ? extractedRaw : [],
-            alignment: parsedMatch.alignment,
-            mermaidCode: matchData?.dynamicMermaid,
-        } as unknown as TraceAlignmentPanelProps;
-    }, [matchData]);
-
     const effectiveDatasetId = datasetId || result?.datasetId || '';
 
     // Dataset（用于查 case）
@@ -875,18 +919,6 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
     const noEvaluableCase = isNoEvaluableCase(result);
     const hasTraceEvaluation = includesEvaluator(result, 'preset-agent-trace-quality');
     const hasResultEvaluation = includesEvaluator(result, 'preset-agent-task-completion');
-    const hasCustomEvaluation = (result?.selectedEvaluators || []).some(isCustomEvaluatorId);
-    const customEvaluationFailed = hasCustomEvaluation && result?.status === 'failed' && Boolean(result.errorMessage);
-    const customEvaluations = useMemo(
-        () => normalizeCustomEvaluations(result?.customEvaluations ?? (result?.rawAnalysis as { customEvaluations?: unknown } | undefined)?.customEvaluations),
-        [result?.customEvaluations, result?.rawAnalysis],
-    );
-    const customEvaluationScore = useMemo(() => {
-        const scores = customEvaluations
-            .map(item => item.score)
-            .filter((score): score is number => typeof score === 'number' && Number.isFinite(score));
-        return scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
-    }, [customEvaluations]);
     const resultEvaluationPayload = useMemo(
         () => deriveResultEvaluationPayload(exec, result?.rawAnalysis),
         [exec, result?.rawAnalysis],
@@ -898,6 +930,18 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
     const resultEvaluationFindings = resultEvaluationPayload.findings;
     const resultEvaluationReady = isResultEvaluationReady(resultEvaluationPayload, hasResultEvaluation);
     const resultEvaluationFailed = hasResultEvaluationFailed(resultEvaluationPayload);
+    const evaluationDiagnostic = useMemo(
+        () => parseTrajectoryDiagnostic(result),
+        [result],
+    );
+    const terminalDiagnosticText = useMemo(() => {
+        if (!result || !isTrajectoryEvaluationTerminal(result.status) || !evaluationDiagnostic) return '';
+        return [
+            evaluationDiagnostic.userMessage,
+            evaluationDiagnostic.reason ? `具体原因：${evaluationDiagnostic.reason}` : '',
+            evaluationDiagnostic.nextAction ? `下一步建议：${evaluationDiagnostic.nextAction}` : '',
+        ].filter(Boolean).join('\n');
+    }, [evaluationDiagnostic, result]);
     const isMatchingCase = Boolean(result && !caseEntry && !isEvaluationTerminal(result.status));
     const caseSnapshot = useMemo(
         () => deriveCaseSnapshot(result?.rawAnalysis),
@@ -912,9 +956,18 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
         [result?.rawAnalysis],
     );
     const skillKeyActionCards = useMemo(
-        () => deriveSkillKeyActionCards(skillKeyActionComparison, result?.deviationSteps),
-        [skillKeyActionComparison, result?.deviationSteps],
+        () => {
+            const llmCards = deriveSkillKeyActionCardsFromLlm(result?.rawAnalysis);
+            return llmCards.length > 0
+                ? llmCards
+                : deriveSkillKeyActionCards(skillKeyActionComparison, result?.deviationSteps);
+        },
+        [result?.rawAnalysis, skillKeyActionComparison, result?.deviationSteps],
     );
+    const isTraceOnlyTrajectory = result?.comparisonMode === 'trace_only'
+        || asRecord(result?.rawAnalysis).comparisonMode === 'trace_only'
+        || asRecord(result?.rawAnalysis).comparison_mode === 'trace_only';
+    const shouldShowSkillKeyActions = !isTraceOnlyTrajectory && skillKeyActionCards.length > 0;
     const taskInputValue = caseSnapshot?.taskInput?.trim()
         || caseSnapshot?.input?.trim()
         || (isEvaluationTerminal(result?.status) ? '(未提取到任务输入)' : '任务输入提取中…');
@@ -943,26 +996,18 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
         const r = hasResultEvaluation
             ? (resultEvaluationSummary.score ?? null)
             : null;
-        const c = hasCustomEvaluation ? customEvaluationScore : null;
 
         if (hasTraceEvaluation && (traj == null || !Number.isFinite(traj))) return null;
         if (hasResultEvaluation && (r == null || !Number.isFinite(r))) return null;
-        if (hasCustomEvaluation && (c == null || !Number.isFinite(c))) return null;
 
-        const parts = [traj, r, c].filter((item): item is number => typeof item === 'number' && Number.isFinite(item));
+        const parts = [traj, r].filter((item): item is number => typeof item === 'number' && Number.isFinite(item));
         return parts.length > 0 ? parts.reduce((a, b) => a + b, 0) / parts.length : null;
-    }, [result, noEvaluableCase, hasTraceEvaluation, hasResultEvaluation, hasCustomEvaluation, customEvaluationScore, resultEvaluationSummary.score]);
+    }, [result, noEvaluableCase, hasTraceEvaluation, hasResultEvaluation, resultEvaluationSummary.score]);
 
-    const overallText =
-        noEvaluableCase
-            ? cleanNoEvaluableCaseMessage(result?.errorMessage)
-            : composite == null
-            ? '该执行尚未评测'
-            : composite >= 0.8
-            ? '该执行在结果与过程两个维度均表现良好'
-            : composite >= 0.5
-            ? '该执行结果基本可用，但过程存在偏离参考路径的问题'
-            : '该执行偏离参考较大，建议优先排查';
+    const overallText = getTrajectoryOverallConclusion(result, {
+        composite,
+        fallbackRootCauseStep: result?.rootCauseStep,
+    });
 
     if (loading && !exec && !result) {
         return <div style={{ padding: 24 }}>加载中...</div>;
@@ -1038,7 +1083,6 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
                     <TopMetric label="TRACE ID" value={traceId} mono />
                     <TopMetric label="结果评测" value={hasResultEvaluation ? '已开启' : '未开启'} />
                     <TopMetric label="轨迹评测" value={hasTraceEvaluation ? '已开启' : '未开启'} />
-                    <TopMetric label="自定义评测" value={hasCustomEvaluation ? `${customEvaluations.length || '运行中'} 个` : '未开启'} />
                 </div>
             </div>
 
@@ -1061,7 +1105,7 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
                         </>
                     )}
                 </div>
-                <div style={{ fontSize: 12, color: COLORS.textSecondary, lineHeight: 1.6 }}>
+                <div style={{ fontSize: 12, color: COLORS.textSecondary, lineHeight: 1.6, whiteSpace: 'pre-line' }}>
                     {overallText}
                     {result?.rootCauseStep ? (
                         <>
@@ -1082,11 +1126,6 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
                     active={activeAnalysisTab === 'trajectory'}
                     label="轨迹评测"
                     onClick={() => setActiveAnalysisTab('trajectory')}
-                />
-                <AnalysisTabButton
-                    active={activeAnalysisTab === 'custom'}
-                    label="自定义评测"
-                    onClick={() => setActiveAnalysisTab('custom')}
                 />
             </div>
 
@@ -1110,6 +1149,20 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
                             <div style={{ color: COLORS.textMuted, fontSize: 12, paddingTop: 8 }}>
                                 本次未选择 Agent 任务完成度评估器。
                             </div>
+                        ) : terminalDiagnosticText ? (
+                            <div style={{
+                                color: COLORS.danger,
+                                fontSize: 12,
+                                padding: 10,
+                                marginTop: 8,
+                                background: COLORS.dangerSubtle,
+                                border: `1px solid ${COLORS.border}`,
+                                borderRadius: 6,
+                                lineHeight: 1.6,
+                                whiteSpace: 'pre-line',
+                            }}>
+                                {terminalDiagnosticText}
+                            </div>
                         ) : resultEvaluationFailed ? (
                             <div style={{
                                 color: COLORS.danger,
@@ -1123,13 +1176,15 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
                             }}>
                                 {resultEvaluationPayload.errorMessage}
                             </div>
-                        ) : !resultEvaluationReady ? (
-                            <div style={{ color: COLORS.textMuted, fontSize: 12, paddingTop: 8 }}>
-                                结果评测进行中…任务完成度得分、原因、关键观点会在结果评估器产出完整结果后一起显示。
-                            </div>
                         ) : noEvaluableCase ? (
                             <div style={{ color: COLORS.textMuted, fontSize: 12, paddingTop: 8 }}>
                                 {cleanNoEvaluableCaseMessage(result?.errorMessage)}
+                            </div>
+                        ) : !resultEvaluationReady ? (
+                            <div style={{ color: COLORS.textMuted, fontSize: 12, paddingTop: 8 }}>
+                                {result && isTrajectoryEvaluationTerminal(result.status)
+                                    ? '结果评测未产出完整结构化结果。'
+                                    : '结果评测进行中…任务完成度得分、原因、关键观点会在结果评估器产出完整结果后一起显示。'}
                             </div>
                         ) : (
                             <>
@@ -1146,26 +1201,9 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
                                             : 'danger'
                                     }
                                 />
-                                <div style={{ marginTop: 8 }}>
-                                    <div style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 6 }}>原因</div>
-                                    <div style={{
-                                        fontSize: 11,
-                                        padding: 10,
-                                        background: COLORS.bgSoft,
-                                        border: `1px solid ${COLORS.borderSoft}`,
-                                        borderRadius: 4,
-                                        whiteSpace: 'pre-wrap',
-                                        wordBreak: 'break-word',
-                                        maxHeight: 240,
-                                        overflow: 'auto',
-                                        color: COLORS.textSecondary,
-                                    }}>
-                                        {resultEvaluationSummary.reason || '结果评测进行中...'}
-                                    </div>
-                                </div>
                                 {resultEvaluationFindings.length > 0 && (
                                     <div style={{ marginTop: 12 }}>
-                                        <div style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 6 }}>关键观点评测</div>
+                                        <div style={{ fontSize: 11.5, color: COLORS.textMuted, marginBottom: 6 }}>任务完成度评测详情</div>
                                         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                                             {resultEvaluationFindings.map((item, index) => (
                                                 <KeyPointFindingCard key={index} item={item} fallbackTitle={`关键观点 #${index + 1}`} />
@@ -1198,15 +1236,6 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
                                         ? '评测进行中…（每 3s 自动刷新）'
                                         : '该 trace 尚未由轨迹评估器评测。'}
                                 </div>
-                                {/* 即使没有/失败的情况下也允许就地重新触发评估器，避免用户必须回 batch 列表 */}
-                                {(!result || result.status === 'failed') && !noEvaluableCase && (
-                                    <RerunTrajectoryEvalButton
-                                        taskId={traceId}
-                                        user={user}
-                                        onTriggered={() => { /* 轮询会自动接管 */ }}
-                                        compact
-                                    />
-                                )}
                             </div>
                         ) : (
                             <>
@@ -1226,62 +1255,37 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
                                             overflow: 'auto',
                                         }}
                                     >
-                                        {result.reasonText ? (
-                                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                                {result.reasonText}
-                                            </ReactMarkdown>
-                                        ) : (
-                                            <span style={{ color: COLORS.textDisabled }}>(无 reasonText)</span>
-                                        )}
+                                        <TrajectoryReasonBlock text={result.reasonText} />
                                     </div>
                                 </div>
 
                                 {(() => {
                                     const findings = deriveDimensionFindings(result.rawAnalysis);
-                                    // trace 模式下 analyze-match 会把 dimensionScoresJson 覆写成 {alignment, attribution}，
-                                    // 三维分只剩在 rawAnalysis.dimension_details.<dim>.score。这里两处都读：
-                                    // 优先 dimensionScores 列，缺失则回退 dimension_details，避免分数空白。
                                     const dims = resolveDimensionScores(result.dimensionScores, result.rawAnalysis);
                                     if (dims.completeness == null && dims.toolChoice == null && dims.redundancy == null) return null;
                                     return (
                                         <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 8, marginBottom: 12 }}>
-                                            <DimensionCard label="完整性" termId="traj-completeness" weight={0.45} score={dims.completeness} findings={findings.completeness} />
-                                            <DimensionCard label="工具选择" termId="traj-tool-choice" weight={0.35} score={dims.toolChoice} findings={findings.toolChoice} />
-                                            <DimensionCard label="冗余" termId="traj-redundancy" weight={0.20} score={dims.redundancy} findings={findings.redundancy} />
+                                            <DimensionCard label="完整性" termId="traj-completeness" weight={isTraceOnlyTrajectory ? undefined : 0.45} score={isTraceOnlyTrajectory ? null : dims.completeness} findings={findings.completeness} notScored={isTraceOnlyTrajectory} />
+                                            <DimensionCard label="工具选择" termId="traj-tool-choice" weight={isTraceOnlyTrajectory ? 0.6364 : 0.35} score={dims.toolChoice} findings={findings.toolChoice} />
+                                            <DimensionCard label="冗余" termId="traj-redundancy" weight={isTraceOnlyTrajectory ? 0.3636 : 0.20} score={dims.redundancy} findings={findings.redundancy} />
                                         </div>
                                     );
                                 })()}
 
-                                <TrajectoryCapBanner rawAnalysis={result.rawAnalysis} trajectoryScore={result.trajectoryScore} />
-
-                                {/* 轨迹 tab 只保留过程向的 Skill 归因问题：
-                                    - deviation_steps     -> 路径偏离
-                                    - tool_choice_findings -> 工具选择
-                                   结果评测的 key_point_findings / result_issues 留在结果评测 tab 展示，
-                                   同时删除与路径偏离重复的原始“偏离步骤”区块。 */}
+                                {shouldShowSkillKeyActions ? (
                                 <div style={{ marginTop: 14 }}>
                                     <div style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 6 }}>
-                                        评估器识别的 Skill 归因问题
+                                        Skill 关键动作
                                     </div>
-                                    <EvaluatorFindingsView
-                                        row={result}
-                                        allowedKinds={['deviation', 'tool_choice']}
-                                    />
-                                </div>
-
-                                <div style={{ marginTop: 14 }}>
-                                    <div style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 6 }}>
-                                        Skill 关键动作对比
-                                    </div>
-                                    {skillAttribution?.state === 'ok' && skillKeyActionComparison ? (
+                                    {(
                                         <div className="efv-root">
                                             <div className="efv-summary">
                                                 <span>
-                                                    基于 <b>{skillKeyActionComparison.referenceKeyActions.length}</b> 个关键动作与 <b>{skillKeyActionComparison.actualExtractedSteps.length}</b> 个 Trace 提取步骤做过程对比
+                                                    评估器逐条分析 <b>{skillKeyActionCards.length}</b> 个关键动作
                                                 </span>
                                                 <span className="efv-summary-sep">·</span>
                                                 <span>
-                                                    比较模式：{result?.comparisonMode === 'skill_key_actions' ? 'Skill 关键动作' : '轨迹参考'}
+                                                    分数：{result.trajectoryScore == null ? '—' : `${fmtPercentScore(result.trajectoryScore)} / 100`}
                                                 </span>
                                                 {skillAttribution ? (
                                                     <>
@@ -1311,7 +1315,7 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
                                                                 {card.action.content || `关键动作 ${index + 1}`}
                                                             </span>
                                                             <span className={`efv-pill${card.coverage === 'missing' ? ' err' : card.coverage === 'partial' ? ' warn' : ''}`}>
-                                                                {card.coverage === 'covered' ? '已覆盖' : card.coverage === 'partial' ? '部分覆盖' : '未覆盖'}
+                                                                {card.coverage === 'covered' ? '已覆盖' : card.coverage === 'partial' ? '部分覆盖' : card.coverage === 'not_applicable' ? '不适用' : '未覆盖'}
                                                             </span>
                                                         </div>
                                                         <div className="efv-desc">
@@ -1325,46 +1329,9 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
                                                 ))}
                                             </div>
                                         </div>
-                                    ) : (
-                                        <div className="efv-empty">
-                                            {skillAttribution?.message || '当前记录没有可展示的 Skill 关键动作对比。'}
-                                        </div>
                                     )}
                                 </div>
-
-                                {/* 执行轨迹对齐 · Skill 预期标注 —— 放在轨迹评测最后，默认折叠，
-                                    点击展开看详细的对齐时序图 / 缺失·偏离标注；数据来自 analyze-match。 */}
-                                {alignmentPanelProps && (
-                                    <div style={{ marginTop: 14 }}>
-                                        <button
-                                            type="button"
-                                            onClick={() => setAlignmentOpen(o => !o)}
-                                            style={{
-                                                display: 'flex', alignItems: 'center', gap: 8, width: '100%',
-                                                background: COLORS.bgSoft, border: `1px solid ${COLORS.border}`,
-                                                borderRadius: 6, padding: '8px 12px', cursor: 'pointer', textAlign: 'left',
-                                            }}
-                                            aria-expanded={alignmentOpen}
-                                        >
-                                            <span style={{ fontSize: 11, color: COLORS.textDisabled, transition: 'transform 0.15s', transform: alignmentOpen ? 'rotate(90deg)' : 'none' }}>▶</span>
-                                            <span style={{ fontSize: 12.5, fontWeight: 600, color: COLORS.text }}>执行轨迹对齐 · Skill 预期标注</span>
-                                            <span style={{ fontSize: 11, color: COLORS.textMuted }}>以实际执行为主，直接标注偏离与缺失步骤</span>
-                                        </button>
-                                        {alignmentOpen && (
-                                            <div style={{ marginTop: 8 }}>
-                                                <TraceAlignmentPanel {...alignmentPanelProps} />
-                                            </div>
-                                        )}
-                                    </div>
-                                )}
-
-                                {/* 重新跑归因评估按钮 —— 用户在详情页看到结果过时/不完整时可以就地重新触发，
-                                    避免必须回 batch 列表才能重跑（对应方案 A：保留单条 trace 重新归因入口）。 */}
-                                <RerunTrajectoryEvalButton
-                                    taskId={traceId}
-                                    user={user}
-                                    onTriggered={() => { /* 拉刷会通过外层轮询自动接管 */ }}
-                                />
+                                ) : null}
 
                                 {/* 主入口：跳到链路观测查看被评测的实际 trace */}
                                 <button
@@ -1399,85 +1366,6 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
                                 </button>
 
                             </>
-                        )}
-                    </div>
-                </div>
-                )}
-
-                {activeAnalysisTab === 'custom' && (
-                <div>
-                    <div style={cardStyle()}>
-                        {!hasCustomEvaluation ? (
-                            <div style={{ color: COLORS.textMuted, fontSize: 12, padding: 12, textAlign: 'center' }}>
-                                本次未选择自定义评估器。
-                            </div>
-                        ) : customEvaluationFailed ? (
-                            <div style={{ color: COLORS.danger, background: COLORS.dangerSubtle, border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: 12, fontSize: 12, lineHeight: 1.6 }}>
-                                {cleanNoEvaluableCaseMessage(result?.errorMessage)}
-                            </div>
-                        ) : customEvaluations.length === 0 ? (
-                            <div style={{ color: COLORS.textMuted, fontSize: 12, padding: 12, textAlign: 'center' }}>
-                                自定义评测进行中…多个自定义评估器会在这里分别展示。
-                            </div>
-                        ) : (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                                {customEvaluations.map((item, index) => {
-                                    return (
-                                        <div key={`${item.evaluatorId || item.evaluatorName}-${index}`} style={{ border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: 12, background: '#fff' }}>
-                                            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 10 }}>
-                                                <div style={{ fontSize: 13, fontWeight: 700, color: COLORS.text }}>{item.evaluatorName}</div>
-                                                <span style={{
-                                                    ...badgeStyle(
-                                                        item.score == null
-                                                            ? COLORS.bgSoft
-                                                            : item.score >= 0.8
-                                                                ? COLORS.successSubtle
-                                                                : item.score >= 0.5
-                                                                    ? COLORS.warningSubtle
-                                                                    : COLORS.dangerSubtle,
-                                                        item.score == null
-                                                            ? COLORS.textMuted
-                                                            : item.score >= 0.8
-                                                                ? COLORS.success
-                                                                : item.score >= 0.5
-                                                                    ? COLORS.warning
-                                                                    : COLORS.danger,
-                                                        true,
-                                                    ),
-                                                    minHeight: 30,
-                                                    fontSize: 13,
-                                                    display: 'inline-flex',
-                                                    alignItems: 'center',
-                                                }}>
-                                                    分数 {item.score == null ? '--' : `${fmtPercentScore(item.score)} / 100`}
-                                                </span>
-                                            </div>
-                                            {item.error ? (
-                                                <div style={{ color: COLORS.danger, background: COLORS.dangerSubtle, border: `1px solid ${COLORS.border}`, borderRadius: 5, padding: 10, fontSize: 12, lineHeight: 1.6 }}>
-                                                    {item.error}
-                                                </div>
-                                            ) : (
-                                                <div>
-                                                    <div style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 6 }}>原因</div>
-                                                    <div style={{
-                                                        fontSize: 12,
-                                                        padding: 10,
-                                                        background: COLORS.bgSoft,
-                                                        border: `1px solid ${COLORS.borderSoft}`,
-                                                        borderRadius: 4,
-                                                        whiteSpace: 'pre-wrap',
-                                                        wordBreak: 'break-word',
-                                                        color: COLORS.textSecondary,
-                                                        lineHeight: 1.65,
-                                                    }}>
-                                                        {item.reason || '该评估器未返回原因。'}
-                                                    </div>
-                                                </div>
-                                            )}
-                                        </div>
-                                    );
-                                })}
-                            </div>
                         )}
                     </div>
                 </div>
@@ -1542,9 +1430,10 @@ function KeyPointFindingCard({ item, fallbackTitle }: { item: ResultEvaluationFi
         : severity === 'medium' || status === 'partial' ? COLORS.warningSubtle
         : COLORS.bgSoft;
     const scoreText = item.score == null ? '--' : `(${fmtPercentScore(item.score)}/100)`;
-    const hasTrace = Boolean(item.traceRootCause?.failureReason || item.traceRootCause?.failureStage || item.traceRootCause?.relatedSteps?.length);
-    const hasSkillSuggestion = item.isSkillAttributable !== false && Boolean(item.improvementSuggestion);
-    const hasAttribution = typeof item.isSkillAttributable === 'boolean' || item.attributionReason || item.improvementSuggestion;
+    const isCovered = status === 'covered';
+    const resultJudgement = buildResultJudgement(item);
+    const hasTrace = !isCovered && Boolean(item.traceRootCause?.failureReason || item.traceRootCause?.failureStage || item.traceRootCause?.relatedSteps?.length);
+    const hasAttribution = !isCovered && (item.isSkillAttributable === false || item.attributionReason || item.improvementSuggestion);
 
     return (
         <div style={{
@@ -1555,9 +1444,9 @@ function KeyPointFindingCard({ item, fallbackTitle }: { item: ResultEvaluationFi
         }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start', marginBottom: 6 }}>
                 <span style={{ fontSize: 12, fontWeight: 650, color: COLORS.textSecondary, lineHeight: 1.45 }}>
-                    {item.content || fallbackTitle}
+                    关键观点：{item.content || fallbackTitle}
                 </span>
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, flexShrink: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                     <span style={{
                         fontSize: 10,
                         lineHeight: 1,
@@ -1573,22 +1462,12 @@ function KeyPointFindingCard({ item, fallbackTitle }: { item: ResultEvaluationFi
                 </div>
             </div>
 
-            {item.explanation && (
-                <div style={{ fontSize: 11.5, color: COLORS.textSecondary, lineHeight: 1.55, marginBottom: 6 }}>
-                    {item.explanation}
-                </div>
-            )}
-
             <div style={{ display: 'grid', gap: 6 }}>
-                {item.coverageReason && (
-                    <FindingDetailBlock label="覆盖依据" value={item.coverageReason} tone="success" />
-                )}
-                {item.missingReason && (
-                    <FindingDetailBlock label="缺失原因" value={item.missingReason} tone="warning" />
-                )}
-                {(item.evidence?.actual || item.evidence?.expected) && (
-                    <FindingEvidenceBlock evidence={item.evidence} />
-                )}
+                <FindingDetailBlock
+                    label="结果判断"
+                    value={resultJudgement}
+                    tone={isCovered ? 'success' : 'warning'}
+                />
                 {hasTrace && (
                     <TraceRootCauseBlock rootCause={item.traceRootCause} />
                 )}
@@ -1596,12 +1475,20 @@ function KeyPointFindingCard({ item, fallbackTitle }: { item: ResultEvaluationFi
                     <SkillAttributionBlock
                         isSkillAttributable={item.isSkillAttributable}
                         attributionReason={item.attributionReason}
-                        improvementSuggestion={hasSkillSuggestion ? item.improvementSuggestion : ''}
+                        improvementSuggestion={item.isSkillAttributable !== false ? item.improvementSuggestion : ''}
                     />
                 )}
             </div>
         </div>
     );
+}
+
+function buildResultJudgement(item: ResultEvaluationFinding): string {
+    const parts = [item.coverageReason, item.missingReason]
+        .map(part => String(part || '').trim())
+        .filter((part, index, arr) => part && arr.indexOf(part) === index);
+    if (parts.length > 0) return parts.join(' ');
+    return item.explanation || '评估器未返回结果判断。';
 }
 
 function FindingDetailBlock({ label, value, tone }: { label: string; value: string; tone: 'success' | 'warning' }) {
@@ -1621,27 +1508,6 @@ function FindingDetailBlock({ label, value, tone }: { label: string; value: stri
     );
 }
 
-function FindingEvidenceBlock({ evidence }: { evidence?: ResultEvaluationFinding['evidence'] }) {
-    const rows = [
-        { label: '实际输出片段', value: evidence?.actual || '' },
-        { label: '预期结果片段', value: evidence?.expected || '' },
-    ].filter(row => row.value.trim());
-    if (rows.length === 0) return null;
-    return (
-        <div style={{ border: `1px solid ${COLORS.borderSoft}`, borderRadius: 4, background: '#fff', overflow: 'hidden' }}>
-            {rows.map((row, index) => (
-                <div key={row.label} style={{
-                    padding: '6px 8px',
-                    borderTop: index === 0 ? 'none' : `1px solid ${COLORS.borderSoft}`,
-                }}>
-                    <div style={{ fontSize: 10.5, color: COLORS.textMuted, marginBottom: 3 }}>{row.label}</div>
-                    <div style={{ fontSize: 11, color: COLORS.textSecondary, lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>{row.value}</div>
-                </div>
-            ))}
-        </div>
-    );
-}
-
 function TraceRootCauseBlock({ rootCause }: { rootCause?: ResultEvaluationFinding['traceRootCause'] }) {
     const steps = rootCause?.relatedSteps || [];
     return (
@@ -1652,7 +1518,7 @@ function TraceRootCauseBlock({ rootCause }: { rootCause?: ResultEvaluationFindin
             borderRadius: 4,
         }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
-                <span style={{ fontSize: 11, fontWeight: 650, color: COLORS.textSecondary }}>执行过程原因</span>
+                <span style={{ fontSize: 11, fontWeight: 650, color: COLORS.textSecondary }}>问题定位</span>
                 {rootCause?.failureStage && (
                     <span style={badgeStyle(COLORS.bgSoft, COLORS.textMuted, true)}>
                         {failureStageLabel(rootCause.failureStage)}
@@ -1698,25 +1564,49 @@ function SkillAttributionBlock({
     attributionReason?: string;
     improvementSuggestion?: string;
 }) {
-    return (
-        <div style={{
-            fontSize: 11,
-            lineHeight: 1.55,
-            color: COLORS.textSecondary,
-            padding: '6px 8px',
-            background: isSkillAttributable === false ? COLORS.bgSoft : '#f0f7f4',
-            borderLeft: `2px solid ${isSkillAttributable === false ? COLORS.textDisabled : COLORS.success}`,
-            borderRadius: 3,
-        }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: attributionReason || improvementSuggestion ? 3 : 0 }}>
-                <span style={{ fontWeight: 650, color: isSkillAttributable === false ? COLORS.textMuted : COLORS.success }}>
-                    {isSkillAttributable === false ? '非 Skill 问题' : 'Skill 归因'}
-                </span>
+    if (isSkillAttributable === false) {
+        return (
+            <div style={{
+                fontSize: 11,
+                lineHeight: 1.55,
+                color: COLORS.textSecondary,
+                padding: '6px 8px',
+                background: COLORS.bgSoft,
+                borderLeft: `2px solid ${COLORS.textDisabled}`,
+                borderRadius: 3,
+            }}>
+                <span style={{ fontWeight: 650, color: COLORS.textMuted }}>非 Skill 问题</span>
             </div>
-            {attributionReason && <div>{attributionReason}</div>}
+        );
+    }
+
+    return (
+        <div style={{ display: 'grid', gap: 6 }}>
+            {attributionReason && (
+                <div style={{
+                    fontSize: 11,
+                    lineHeight: 1.55,
+                    color: COLORS.textSecondary,
+                    padding: '6px 8px',
+                    background: '#f0f7f4',
+                    borderLeft: `2px solid ${COLORS.success}`,
+                    borderRadius: 3,
+                }}>
+                    <span style={{ fontWeight: 650, color: COLORS.success, marginRight: 6 }}>Skill 归因</span>
+                    {attributionReason}
+                </div>
+            )}
             {improvementSuggestion && (
-                <div style={{ marginTop: attributionReason ? 3 : 0 }}>
-                    <span style={{ fontWeight: 650, color: COLORS.success, marginRight: 6 }}>改进建议</span>
+                <div style={{
+                    fontSize: 11,
+                    lineHeight: 1.55,
+                    color: COLORS.textSecondary,
+                    padding: '6px 8px',
+                    background: '#f0f7f4',
+                    borderLeft: `2px solid ${COLORS.success}`,
+                    borderRadius: 3,
+                }}>
+                    <span style={{ fontWeight: 650, color: COLORS.success, marginRight: 6 }}>skill改进建议</span>
                     {improvementSuggestion}
                 </div>
             )}
@@ -1790,104 +1680,6 @@ function Divider() {
     return <div style={{ height: 1, background: COLORS.borderSoft, margin: '10px 0' }} />;
 }
 
-/**
- * 单条 trace 的"重新跑归因评估"触发按钮。
- *
- * 直接调 POST /api/eval/trajectory/run，taskIds=[taskId] + evaluators=['preset-agent-trace-quality']。
- * 评测启动后写一行 TrajectoryEvalResult；外层 TrajectoryDetailView 的 3s 轮询会自动接管
- * 状态从 pending → running → done 的更新。
- *
- * 用途（方案 A）：用户在评测详情页发现结果过时或没跑过 → 就地重新触发，不用回 batch 列表。
- * 跟原 TraceDeviationPanel 里的 startTrajectoryEval 行为一致；从那里抽出来共用。
- */
-function RerunTrajectoryEvalButton({
-    taskId,
-    user,
-    onTriggered,
-    compact = false,
-}: {
-    taskId: string;
-    user: string | null;
-    onTriggered?: () => void;
-    compact?: boolean;
-}) {
-    const [starting, setStarting] = useState(false);
-    const [error, setError] = useState('');
-
-    const trigger = async () => {
-        if (!taskId || !user) return;
-        setStarting(true);
-        setError('');
-        try {
-            const res = await apiFetch('/api/eval/trajectory/run', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    user,
-                    taskIds: [taskId],
-                    // 单 trace 兜底归因走轨迹质量评估器；它内部有空 case fallback
-                    // (没 reference trajectory 时用 SKILL.md key actions)。
-                    // 不带 task-completion 是因为它强依赖 expectedOutput——见
-                    // src/lib/engine/evaluation/opencode-trajectory-evaluator.ts 注释。
-                    evaluators: ['preset-agent-trace-quality'],
-                }),
-            });
-            const data = await res.json();
-            if (!res.ok || !data.success) {
-                throw new Error(data.error || '启动评估失败');
-            }
-            onTriggered?.();
-        } catch (e) {
-            setError(e instanceof Error ? e.message : '启动评估失败');
-        } finally {
-            setStarting(false);
-        }
-    };
-
-    return (
-        <div style={{ marginTop: compact ? 0 : 12 }}>
-            <button
-                type="button"
-                onClick={trigger}
-                disabled={starting || !user}
-                style={{
-                    width: '100%',
-                    padding: '8px 12px',
-                    background: starting ? COLORS.bgSoft : COLORS.successSubtle,
-                    color: COLORS.success,
-                    border: `1px solid #BDE3D2`,
-                    borderRadius: 6,
-                    fontSize: 12,
-                    fontWeight: 500,
-                    cursor: starting || !user ? 'not-allowed' : 'pointer',
-                    opacity: starting || !user ? 0.6 : 1,
-                }}
-            >
-                {starting
-                    ? '正在启动评估…'
-                    : compact
-                    ? '↻ 触发归因评估'
-                    : '↻ 重新跑归因评估（评估器会重新分析这条 trace）'}
-            </button>
-            {error && (
-                <div
-                    style={{
-                        marginTop: 6,
-                        padding: '6px 10px',
-                        background: COLORS.dangerSubtle,
-                        color: COLORS.danger,
-                        border: `1px solid #F5CFCF`,
-                        borderRadius: 4,
-                        fontSize: 11,
-                    }}
-                >
-                    {error}
-                </div>
-            )}
-        </div>
-    );
-}
-
 function AnalysisTabButton({
     active,
     label,
@@ -1919,26 +1711,23 @@ function AnalysisTabButton({
     );
 }
 
-/**
- * 维度卡片：分数 + 进度条；点击头部展开看 subagent 具体发现（默认折叠）
- */
 function DimensionCard({
     label,
     score,
     findings,
     weight,
     termId,
+    notScored,
 }: {
     label: string;
     score: number | null | undefined;
     findings?: { type: 'high' | 'medium' | 'low' | 'info'; text: string }[];
-    /** 该维度在加权轨迹分中的权重（0-1）；提供时在标签后展示「权重 xx%」。 */
     weight?: number;
-    /** glossary 条目 id；提供时在标签后加一个 i 角标，hover 展示"评测什么能力 + 怎么算分"。 */
     termId?: string;
+    notScored?: boolean;
 }) {
     const [expanded, setExpanded] = useState(false);
-    const hasScore = typeof score === 'number' && Number.isFinite(score);
+    const hasScore = !notScored && typeof score === 'number' && Number.isFinite(score);
     const tone = !hasScore ? COLORS.textMuted : score >= 0.8 ? COLORS.success : score >= 0.5 ? COLORS.warning : COLORS.danger;
     const bg = !hasScore ? COLORS.bgSoft : score >= 0.8 ? COLORS.successSubtle : score >= 0.5 ? COLORS.warningSubtle : COLORS.dangerSubtle;
     const barWidth = hasScore ? Math.round(score * 100) : 0;
@@ -1978,12 +1767,15 @@ function DimensionCard({
                     ) : null}
                     {label}
                     {termId ? (
-                        // i 角标：hover 展示"评测什么能力 + 怎么算分"。stopPropagation 防止点角标误触展开。
                         <span onClick={e => e.stopPropagation()} style={{ display: 'inline-flex', alignItems: 'center' }}>
                             <Term id={termId} render="compact" />
                         </span>
                     ) : null}
-                    {typeof weight === 'number' ? (
+                    {notScored ? (
+                        <span style={{ color: COLORS.textDisabled, fontSize: 10, fontWeight: 400 }}>
+                            不计分
+                        </span>
+                    ) : typeof weight === 'number' ? (
                         <span style={{ color: COLORS.textDisabled, fontSize: 10, fontWeight: 400 }}>
                             权重 {Math.round(weight * 100)}%
                         </span>
@@ -1995,8 +1787,14 @@ function DimensionCard({
                     ) : null}
                 </span>
                 <span>
-                    <span style={{ fontSize: 14, fontWeight: 600, color: tone }}>{fmtPercentScore(score)}</span>
-                    <span style={{ fontSize: 9, color: COLORS.textDisabled, marginLeft: 2 }}>/100</span>
+                    {notScored ? (
+                        <span style={{ fontSize: 12, fontWeight: 600, color: tone }}>N/A</span>
+                    ) : (
+                        <>
+                            <span style={{ fontSize: 14, fontWeight: 600, color: tone }}>{fmtPercentScore(score)}</span>
+                            <span style={{ fontSize: 9, color: COLORS.textDisabled, marginLeft: 2 }}>/100</span>
+                        </>
+                    )}
                 </span>
             </div>
             <div style={{ height: 3, background: bg, borderRadius: 2, overflow: 'hidden' }}>
@@ -2039,86 +1837,12 @@ function DimensionCard({
     );
 }
 
-/**
- * 严重度封顶说明条。读取 rawAnalysis.score_aggregation（评估器代码侧聚合层产出）：
- *  - 展示「加权分 → 最终分」以及是否触发封顶 / 封顶原因 / high·medium 偏差计数。
- *  - 旧评测数据没有 score_aggregation → 不渲染，安全降级。
- */
-function TrajectoryCapBanner({
-    rawAnalysis,
-    trajectoryScore,
-}: {
-    rawAnalysis: unknown;
-    trajectoryScore: number | null;
-}) {
-    const agg = asRecord(asRecord(rawAnalysis).score_aggregation ?? asRecord(rawAnalysis).scoreAggregation);
-    if (Object.keys(agg).length === 0) return null;
-
-    const rawWeighted = typeof agg.rawWeightedScore === 'number' ? agg.rawWeightedScore : null;
-    const finalScore = typeof agg.finalScore === 'number'
-        ? agg.finalScore
-        : (typeof trajectoryScore === 'number' ? trajectoryScore : null);
-    const ceiling = typeof agg.ceiling === 'number' ? agg.ceiling : null;
-    const triggered = agg.triggered === true;
-    const effective = agg.effective === true;
-    const highCount = typeof agg.highCount === 'number' ? agg.highCount : 0;
-    const mediumCount = typeof agg.mediumCount === 'number' ? agg.mediumCount : 0;
-    const reason = typeof agg.reason === 'string' ? agg.reason : '';
-
-    const accent = effective ? COLORS.danger : triggered ? COLORS.warning : COLORS.success;
-    const bg = effective ? COLORS.dangerSubtle : triggered ? COLORS.warningSubtle : COLORS.successSubtle;
-
-    return (
-        <div style={{
-            border: `1px solid ${COLORS.border}`,
-            borderLeft: `3px solid ${accent}`,
-            borderRadius: 6,
-            background: bg,
-            padding: '10px 12px',
-            marginBottom: 12,
-            fontSize: 12,
-            lineHeight: 1.6,
-            color: COLORS.textSecondary,
-        }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                <span style={{ fontWeight: 600, color: accent }}>
-                    {effective ? '已封顶' : triggered ? '触发封顶规则（未压低）' : '未封顶'}
-                </span>
-                <span style={{ flex: 1 }} />
-                <span style={{ fontSize: 11, color: COLORS.textMuted }}>
-                    加权分 {rawWeighted != null ? fmtPercentScore(rawWeighted) : '--'}
-                    {' → '}
-                    <b style={{ color: accent }}>{finalScore != null ? fmtPercentScore(finalScore) : '--'}</b>
-                    {' / 100'}
-                    {ceiling != null ? `（上限 ${fmtPercentScore(ceiling)}）` : ''}
-                </span>
-            </div>
-            <div style={{ fontSize: 11.5, color: COLORS.textSecondary }}>
-                {reason || '无封顶：无 high 偏差且 medium 偏差少于 3 个。'}
-            </div>
-            <div style={{ marginTop: 4, fontSize: 10.5, color: COLORS.textMuted }}>
-                偏差严重度：high {highCount} · medium {mediumCount}
-                {' · 规则：≥1 个 high → 封顶 40.0；无 high 但 ≥3 个 medium → 封顶 65.0'}
-            </div>
-        </div>
-    );
-}
-
-/**
- * 把 rawAnalysis.dimension_details 派生成各维度卡片的 findings 列表。
- * 任何字段缺失都安全降级为空数组。
- */
 function asRecord(value: unknown): Record<string, unknown> {
     return value && typeof value === 'object' && !Array.isArray(value)
         ? value as Record<string, unknown>
         : {};
 }
 
-/**
- * 维度明细里的 step 项可能是字符串(评估器常这么输出)，也可能是对象。
- * 统一抽成 { text, severity, idx, name }，避免 string 项被当对象读 .description
- * 而显示成「(未给描述)」。对象时按多字段兜底取文案。
- */
 function extractStepInfo(raw: unknown): {
     text: string;
     severity: unknown;
@@ -2136,12 +1860,6 @@ function extractStepInfo(raw: unknown): {
     return { text, severity: m.severity, idx: m.step_index ?? m.stepIndex, name: m.name };
 }
 
-/**
- * 解析三维分（completeness / toolChoice / redundancy），返回 number 或 null。
- * 取值优先级：dimensionScores 列 → rawAnalysis.dimension_details.<dim>.score。
- * 这样 trace 模式下被 analyze-match 覆写成 {alignment, attribution} 的行，
- * 也能从评估器原始输出里把三维分捞回来展示，不再空白。
- */
 function resolveDimensionScores(
     dimensionScores: DimensionScores | null | undefined,
     rawAnalysis: unknown,
@@ -2150,11 +1868,11 @@ function resolveDimensionScores(
     const rawDimScores = asRecord(root.dimension_scores ?? root.dimensionScores);
     const details = asRecord(root.dimension_details ?? root.dimensionDetails);
     const num = (v: unknown): number | null => {
+        if (v == null) return null;
         const n = typeof v === 'number' ? v : Number(v);
         return Number.isFinite(n) ? n : null;
     };
-    // 取值优先级：dimensionScores 列 → rawAnalysis.dimension_scores → dimension_details.<dim>.score(冗余用 redundancy_score)。
-    const pick = (colVal: number | undefined, rawKey: string, detailKey: string, detailScoreKey = 'score'): number | null => {
+    const pick = (colVal: number | null | undefined, rawKey: string, detailKey: string, detailScoreKey = 'score'): number | null => {
         const fromCol = num(colVal);
         if (fromCol != null) return fromCol;
         const fromRaw = num(rawDimScores[rawKey] ?? rawDimScores[detailKey]);
@@ -2173,7 +1891,6 @@ function deriveDimensionFindings(rawAnalysis: unknown): {
     completeness: { type: 'high' | 'medium' | 'low' | 'info'; text: string }[];
     toolChoice: { type: 'high' | 'medium' | 'low' | 'info'; text: string }[];
     redundancy: { type: 'high' | 'medium' | 'low' | 'info'; text: string }[];
-    attribution: { type: 'high' | 'medium' | 'low' | 'info'; text: string }[];
 } {
     const root = asRecord(rawAnalysis);
     const details = asRecord(root.dimension_details ?? root.dimensionDetails);
@@ -2214,36 +1931,25 @@ function deriveDimensionFindings(rawAnalysis: unknown): {
     const rd = asRecord(details.redundancy);
     for (const raw of (Array.isArray(rd.consecutive_same_runs) ? rd.consecutive_same_runs : [])) {
         const r = asRecord(raw);
-        const name = r.name || '?';
-        const count = r.count ?? '?';
-        const from = r.from ?? '?';
-        const to = r.to ?? '?';
-        redundancy.push({ type: 'high', text: `连续重复：${name} ×${count}（步骤 #${from}–#${to}）` });
+        const name = String(r.name ?? r.call ?? r.toolName ?? r.tool ?? r.functionName ?? '未命名调用').trim() || '未命名调用';
+        const count = String(r.count ?? '多次').trim() || '多次';
+        const from = String(r.from ?? '').trim();
+        const to = String(r.to ?? '').trim();
+        const range = from && to ? `（步骤 #${from}–#${to}）` : '';
+        redundancy.push({ type: 'high', text: `连续重复：${name} ×${count}${range}` });
     }
     for (const raw of (Array.isArray(rd.heavy_repeated_calls) ? rd.heavy_repeated_calls : [])) {
         const r = asRecord(raw);
-        redundancy.push({ type: 'medium', text: `高频调用：${r.call || '?'} 共 ${r.count ?? '?'} 次` });
+        const name = String(r.call ?? r.name ?? r.toolName ?? r.tool ?? r.functionName ?? '未命名调用').trim() || '未命名调用';
+        const count = String(r.count ?? '').trim();
+        const countText = count ? `共 ${count} 次` : '多次出现';
+        redundancy.push({ type: 'medium', text: `高频调用：${name} ${countText}` });
     }
-    if (redundancy.length === 0) {
-        const totalToolCalls = typeof rd.total_tool_calls === 'number' ? rd.total_tool_calls : 0;
-        const totalSkillCalls = typeof rd.total_skill_calls === 'number' ? rd.total_skill_calls : 0;
-        const tot = totalToolCalls + totalSkillCalls;
-        redundancy.push({ type: 'info', text: `无连续重复 / 高频调用（共 ${tot} 次工具/Skill 调用）` });
-    }
-
-    const attribution: { type: ReturnType<typeof sev>; text: string }[] = [];
-    const at = asRecord(details.attribution);
-    if (at.root_cause_step) {
-        attribution.push({ type: 'high', text: `根因：${at.root_cause_step}` });
-    }
-    if (at.reasoning) {
-        attribution.push({ type: 'info', text: String(at.reasoning) });
-    }
-    if (attribution.length === 0) {
-        attribution.push({ type: 'info', text: '归因子代理未输出明确根因' });
+    if (redundancy.length === 0 && rd.explanation) {
+        redundancy.push({ type: 'info', text: String(rd.explanation) });
     }
 
-    return { completeness, toolChoice, redundancy, attribution };
+    return { completeness, toolChoice, redundancy };
 }
 
 function badgeStyle(bg: string, color: string, small?: boolean): CSSProperties {

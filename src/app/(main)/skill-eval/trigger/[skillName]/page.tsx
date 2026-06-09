@@ -58,6 +58,11 @@ interface RunResultItem {
   pass: boolean;
   latencyMsAvg: number;
   competingSkill?: string;
+  // 跑完/没跑完拆分（旧 run 记录没有 → optional，渲染处要兼容缺失）
+  runsCompleted?: number;
+  runsTimedOut?: number;
+  runsErrored?: number;
+  errorMessage?: string;
 }
 interface RunRecord {
   id: string;
@@ -71,7 +76,7 @@ interface RunRecord {
   triggerThreshold: number;
   durationMs: number | null;
   modelId: string | null;
-  status: 'running' | 'done' | 'failed';
+  status: 'running' | 'done' | 'failed' | 'cancelled';
   errorMessage: string | null;
   createdAt: string;
 }
@@ -119,6 +124,7 @@ export default function SkillEvalTriggerPage() {
 
   const [runDialogOpen, setRunDialogOpen] = useState(false);
   const [running, setRunning] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   // 历次评测 run，最新在前。latestRun = runs[0]（filter done），其余进「历史评测」面板。
   const [runs, setRuns] = useState<RunRecord[]>([]);
   // 当前在「执行概览」+ 行内评分里展示的 run id；null 表示跟随最新。
@@ -247,6 +253,68 @@ export default function SkillEvalTriggerPage() {
     void reload();
   }, [reload]);
 
+  // 只刷新 run 列表（不动 set / settings、不触发整页 loading），供后台评测进行中轮询用。
+  const refreshRuns = useCallback(async () => {
+    if (!user) return;
+    const runParams = new URLSearchParams({ user, limit: '50' });
+    if (selectedVersion != null) runParams.set('skillVersion', String(selectedVersion));
+    try {
+      const res = await apiFetch(
+        `/api/skill-eval/trigger/${encodeURIComponent(skillName)}/runs?${runParams.toString()}`,
+      );
+      if (!res.ok) return;
+      const data = await res.json();
+      const runList: RunRecord[] = Array.isArray(data.runs) ? data.runs : [];
+      setRuns(runList);
+    } catch {
+      // 轮询期间的瞬时网络错误吞掉——下一拍重试即可，不打扰用户。
+    }
+  }, [user, skillName, selectedVersion]);
+
+  // 评测改异步后，后端建好 run（status=running）即返回；真正跑完是后台行为。
+  // 只要列表里还有 running 的 run，就每 3s 轮询一次 /runs 把最新状态拉回来——跑完后
+  // running 消失，effect cleanup 自动停。用户关掉页面再回来时 reload 会重新拉到 running，
+  // 轮询照常接上。MAX 拍兜底，避免后台进程异常残留 running 时无限空轮询。
+  const runningRun = useMemo(() => runs.find(r => r.status === 'running') ?? null, [runs]);
+  const hasRunningRun = runningRun != null;
+  useEffect(() => {
+    if (!hasRunningRun) return;
+    let attempts = 0;
+    const MAX_ATTEMPTS = 200; // 200 × 3s ≈ 10min 上限
+    const timer = setInterval(() => {
+      attempts += 1;
+      if (attempts > MAX_ATTEMPTS) {
+        clearInterval(timer);
+        return;
+      }
+      void refreshRuns();
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [hasRunningRun, refreshRuns]);
+
+  // 终止正在跑的评测：打 /run/<id>/cancel，后端 abort 后台 runner + 把这条 run 置 cancelled。
+  // 成功后立刻 refreshRuns 把 cancelled 状态拉回来（不等下一拍轮询），banner 随即消失。
+  const cancelRun = useCallback(async () => {
+    if (!user || !runningRun) return;
+    if (!confirm('终止这次评测？已经跑出来的部分结果不会保留。')) return;
+    setCancelling(true);
+    try {
+      const res = await apiFetch(
+        `/api/skill-eval/trigger/${encodeURIComponent(skillName)}/run/${encodeURIComponent(runningRun.id)}/cancel`,
+        { method: 'POST', body: JSON.stringify({ user }) },
+      );
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `cancel failed: ${res.status}`);
+      }
+      await refreshRuns();
+    } catch (err) {
+      setErrorMsg((err as Error)?.message ?? '终止失败');
+    } finally {
+      setCancelling(false);
+    }
+  }, [user, runningRun, skillName, refreshRuns]);
+
   // 编辑：单项更新
   const updateItem = useCallback((id: string, patch: Partial<TriggerItem>) => {
     setSet(prev => {
@@ -338,6 +406,9 @@ export default function SkillEvalTriggerPage() {
 
   // 历史里取最新的 done run 作为"最新一次评测"（其它状态如 running/failed 不进概览）
   const latestRun = useMemo(() => runs.find(r => r.status === 'done') ?? null, [runs]);
+  // 最近一次 run（含 running/failed）——异步后后台失败不再走请求返回，要靠它把
+  // errorMessage 浮出来；否则用户只看到历史里一个「失败」小标，不知道为什么。
+  const mostRecentRun = useMemo(() => runs[0] ?? null, [runs]);
   // 「执行概览」+ 行内评分实际展示的 run：用户选中的优先；没选就跟随最新。
   const displayedRun = useMemo(
     () => (selectedRunId ? runs.find(r => r.id === selectedRunId) ?? null : latestRun),
@@ -704,9 +775,10 @@ export default function SkillEvalTriggerPage() {
               <button
                 className="sa-btn sa-btn-primary"
                 onClick={() => setRunDialogOpen(true)}
-                disabled={!set || set.items.length === 0}
+                disabled={!set || set.items.length === 0 || hasRunningRun || running}
+                title={hasRunningRun ? '已有一次评测在后台运行，完成后再开始下一次' : undefined}
               >
-                {hasRun ? '立即复测' : '立即评测'}
+                {hasRunningRun ? '评测进行中…' : hasRun ? '立即复测' : '立即评测'}
               </button>
             </div>
           </div>
@@ -725,6 +797,68 @@ export default function SkillEvalTriggerPage() {
             }}
           >
             {errorMsg}
+          </div>
+        )}
+
+        {hasRunningRun && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              padding: '10px 14px',
+              marginBottom: 12,
+              background: '#eef2ff',
+              border: '1px solid #c7d2fe',
+              color: '#3730a3',
+              borderRadius: 6,
+              fontSize: 13,
+            }}
+          >
+            <span className="trigger-run-spinner" aria-hidden />
+            <span>
+              <b>评测进行中…</b> 在后台跑，完成后这里会自动刷新。
+              <span style={{ opacity: 0.85 }}>你可以关掉本页，跑完回来即可看到结果。</span>
+            </span>
+            <button
+              type="button"
+              onClick={cancelRun}
+              disabled={cancelling}
+              style={{
+                marginLeft: 'auto',
+                flex: 'none',
+                padding: '5px 12px',
+                fontSize: 12,
+                fontWeight: 600,
+                color: '#991b1b',
+                background: '#fff',
+                border: '1px solid #fecaca',
+                borderRadius: 6,
+                cursor: cancelling ? 'default' : 'pointer',
+                opacity: cancelling ? 0.6 : 1,
+              }}
+            >
+              {cancelling ? '终止中…' : '终止'}
+            </button>
+          </div>
+        )}
+
+        {!hasRunningRun && mostRecentRun?.status === 'failed' && (
+          <div
+            style={{
+              padding: '10px 14px',
+              marginBottom: 12,
+              background: '#fef2f2',
+              border: '1px solid #fecaca',
+              color: '#991b1b',
+              borderRadius: 6,
+              fontSize: 13,
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+            }}
+          >
+            <div style={{ fontWeight: 600, marginBottom: 4 }}>最近一次评测失败</div>
+            {mostRecentRun.errorMessage || '后台执行出错，请重试。'}
           </div>
         )}
 
@@ -801,9 +935,10 @@ export default function SkillEvalTriggerPage() {
             <button
               className="sa-btn sa-btn-primary"
               onClick={() => setRunDialogOpen(true)}
-              disabled={!set || set.items.length === 0}
+              disabled={!set || set.items.length === 0 || hasRunningRun || running}
+              title={hasRunningRun ? '已有一次评测在后台运行，完成后再开始下一次' : undefined}
             >
-              {hasRun ? '立即复测' : '立即评测'}
+              {hasRunningRun ? '评测进行中…' : hasRun ? '立即复测' : '立即评测'}
             </button>
             <span className="recall-exec-hint">
               点击会打开评测配置对话框（模型 / 每条 query 跑几次 / 阈值 / 并发 / 数据集版本）
@@ -1031,6 +1166,16 @@ function TriggerColumn({
                       <span style={{ color: '#888' }}>
                         触发 {result.runsTriggered}/{result.runsTotal}
                       </span>
+                      {result.runsTimedOut ? (
+                        <span style={{ color: '#d97706' }} title="超时被掐断、没跑到 skill 调用（已含重试后仍超时）">
+                          ⏱ 超时 {result.runsTimedOut}
+                        </span>
+                      ) : null}
+                      {result.runsErrored ? (
+                        <span style={{ color: '#ef4444' }} title={result.errorMessage || 'opencode 报错'}>
+                          ⚠ 出错 {result.runsErrored}
+                        </span>
+                      ) : null}
                       {result.competingSkill && (
                         <span style={{ color: '#a16207' }}>↳ 被 {result.competingSkill} 抢路由</span>
                       )}
@@ -1155,7 +1300,7 @@ function RunDialog({
 }) {
   const [runsPerQuery, setRunsPerQuery] = useState(1);
   const [triggerThreshold, setTriggerThreshold] = useState(0.5);
-  const [timeoutMs, setTimeoutMs] = useState(30000);
+  const [timeoutMs, setTimeoutMs] = useState(60000);
   const [concurrency, setConcurrency] = useState(5);
   const [modelConfigId, setModelConfigId] = useState<string>(activeConfigId);
   // 默认跑「用户当前在看的版本」；没有就 latest
@@ -1184,10 +1329,21 @@ function RunDialog({
           concurrency,
         }),
       });
+      // 409 = 该版本已有一次评测在跑（防重入）。这不是错误：直接当成"已发起"，关窗后
+      // 由 parent 轮询接管同一条 run 的进度即可。
+      if (res.status === 409) {
+        setRunning(false);
+        onCompleted();
+        return;
+      }
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error || `run failed: ${res.status}`);
       }
+      // 异步评测：POST 仅把 run 建好（status=running）就返回，真正跑完是后台行为。
+      // 这里只负责"已成功发起"，把局部 running 复位、关掉对话框；后续进度由 parent 轮询
+      // /runs 接管（hasRunningRun → banner + 自动刷新）。
+      setRunning(false);
       onCompleted();
     } catch (err) {
       const msg = (err as Error)?.message ?? '评测失败';
@@ -1324,11 +1480,11 @@ function RunDialog({
               />
             </label>
             <label>
-              <div style={{ fontSize: 11, color: '#888' }}>单条超时（ms）</div>
+              <div style={{ fontSize: 11, color: '#888' }}>单条超时（ms，最高 300000）</div>
               <input
                 type="number"
                 min={5000}
-                max={120000}
+                max={300000}
                 step={1000}
                 value={timeoutMs}
                 onChange={e => setTimeoutMs(Number(e.target.value))}
@@ -1373,7 +1529,7 @@ function RunDialog({
             取消
           </button>
           <button onClick={startRun} disabled={running} style={btnPrimary}>
-            {running ? '评测中...' : dialogError ? '重试' : '开始评测'}
+            {running ? '发起中…' : dialogError ? '重试' : '开始评测'}
           </button>
         </div>
       </div>
@@ -1435,9 +1591,19 @@ function RecallResultBlock({
   const toItem = (r: typeof run.results[number]): FindingItem => {
     // 证据 = 本次跑的实测数据。每条 case 的触发率 / runs 数 / 抢路由情况都不同，
     // 自然就是 per-case 真证据，绝对不会"全长一样"。
+    // 没跑完拆分（超时/出错）——区分"没触发"和"根本没跑到路由决策"。旧记录无这些字段 → 兼容缺失。
+    const notRunParts: string[] = [];
+    if (r.runsTimedOut) notRunParts.push(`⏱ ${r.runsTimedOut} 次超时未跑完`);
+    if (r.runsErrored) notRunParts.push(`⚠ ${r.runsErrored} 次出错${r.errorMessage ? `：${r.errorMessage}` : ''}`);
     const triggerObs = `实际触发率 ${Math.round(r.triggerRate * 100)}%（命中 ${r.runsTriggered}/${r.runsTotal} 次${
       r.latencyMsAvg > 0 ? ` · 平均 ${Math.round(r.latencyMsAvg)}ms` : ''
-    }）${r.competingSkill ? ` · 被「${r.competingSkill}」抢路由` : ''}`;
+    }）${r.competingSkill ? ` · 被「${r.competingSkill}」抢路由` : ''}${
+      notRunParts.length > 0 ? ` · ${notRunParts.join(' · ')}` : ''
+    }`;
+    // 这条 fail 是不是"没跑完"主导（超时+出错占了多数）——若是，建议改成"提高超时/降并发重测"，
+    // 而不是误导用户去改 SKILL.md（skill 可能根本没拿到一次完整的路由机会）。
+    const notRunCount = (r.runsTimedOut ?? 0) + (r.runsErrored ?? 0);
+    const notCompletedDominated = notRunCount > 0 && notRunCount >= r.runsTotal - notRunCount;
     // 原因 = 当初这条 case 想测什么（rationale）。没有就不展示，让它退化为空——
     // 比硬塞「触发评价集标记为应该命中本 Skill」的占位句子干净。
     const rationale = rationaleMap.get(r.itemId)?.trim() || null;
@@ -1459,7 +1625,9 @@ function RecallResultBlock({
       evidence: triggerObs,
       reasoning: rationale,
       suggestedFix: r.shouldTrigger
-        ? '在 SKILL.md 加该类 query 的触发关键词或更明确的触发场景说明'
+        ? notCompletedDominated
+          ? '本条多为超时/出错没跑完（不是 skill 不触发）：提高单条超时或降低并发后重测，再判断触发质量'
+          : '在 SKILL.md 加该类 query 的触发关键词或更明确的触发场景说明'
         : '在 SKILL.md 加排除条件 / 边界说明，避免被无关 query 命中',
     };
   };
@@ -1640,6 +1808,20 @@ function ExecSummary({
   const score = Math.round(latestRun.passRate * 100);
   const klass = scoreColorClass(score);
   const modelName = modelLabelOf(latestRun.modelId);
+  // 跑完/没跑完 rollup：统计最近一次 run 里有多少 item 至少有一次没跑完（超时/出错），
+  // 以及总的超时/出错次数。直接在卡片摘要里点出来——让"应触发全挂"一眼能区分是
+  // "没跑完"还是"skill 真不触发"。旧 run 记录无这些字段时自然算 0、不显示。
+  const notRun = latestRun.results.reduce(
+    (acc, r) => {
+      acc.timedOut += r.runsTimedOut ?? 0;
+      acc.errored += r.runsErrored ?? 0;
+      return acc;
+    },
+    { timedOut: 0, errored: 0 },
+  );
+  const itemsNotFullyRun = latestRun.results.filter(
+    r => (r.runsTimedOut ?? 0) + (r.runsErrored ?? 0) > 0,
+  ).length;
   return (
     <>
       <span>已执行</span>
@@ -1648,6 +1830,12 @@ function ExecSummary({
       {modelName && <span>· {modelName}</span>}
       <span>· 最近评分</span>
       <code className={`score-${klass}`}>{score} 分</code>
+      {itemsNotFullyRun > 0 && (
+        <span style={{ color: '#d97706' }} title="没跑完 = 被超时掐断或 opencode 报错，没产出路由决策；不等于 skill 不触发">
+          · ⚠ {itemsNotFullyRun} 条没跑完（超时 {notRun.timedOut}
+          {notRun.errored ? ` · 出错 ${notRun.errored}` : ''}）
+        </span>
+      )}
     </>
   );
 }
@@ -1903,7 +2091,7 @@ function TriggerRunHistoryPanel({
                           </>
                         ) : (
                           <span className={`trigger-history-status status-${r.status}`}>
-                            {r.status === 'running' ? '执行中' : '失败'}
+                            {r.status === 'running' ? '执行中' : r.status === 'cancelled' ? '已终止' : '失败'}
                           </span>
                         )}
                       </span>

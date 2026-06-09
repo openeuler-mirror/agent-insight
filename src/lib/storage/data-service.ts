@@ -905,6 +905,7 @@ interface ReadRecordFilters {
     query?: string;
     taskId?: string;
     taskIds?: string[];
+    agentName?: string;
     framework?: string;
     skill?: string;
     skillVersion?: number;
@@ -919,134 +920,202 @@ interface ReadRecordFilters {
 
 interface ReadRecordsOptions {
     attachEvaluations?: boolean;
+    page?: number;
+    pageSize?: number;
+    /**
+     * 轻量返回:findExecutions 排除大字段 finalResult、完全跳过 session interactions 解析、
+     * 跳过每条 execution_match、强制不附评测快照;agents 改从已持久化的子 agent 行批量还原。
+     * 把每条记录从 KB–MB 降到几百字节,根治非分页路径的 next-server 堆 OOM(仅 SQLite/Prisma 路径正确)。
+     */
+    lightweight?: boolean;
 }
 
-export async function readRecords(
-    user?: string,
-    filters?: ReadRecordFilters,
-    options?: ReadRecordsOptions
-): Promise<ExecutionRecord[]> {
-    const attachEvaluations = options?.attachEvaluations ?? true;
-    const where: any = {};
-    if (user && !filters?.showAllUsers) {
+export async function listObservedAgentNames(user?: string): Promise<string[]> {
+    const where: any = { isSubagent: false };
+    if (user) {
         where.OR = [
-            { user: user },
-            { user: null }
+            { user },
+            { user: null },
         ];
     }
 
-    // 默认列表只显示 root execution；sub-agent 行通过 trace 视图下钻进入。
-    // 显式按 taskId / taskIds / parentExecutionId 查询时跳过该过滤，
-    // 让"按 sub-agent sessionID 直查"和"列出某 root 的所有子 agent"都能工作。
-    const hasExplicitTaskIdFilter = !!(filters?.taskIds?.length || filters?.taskId);
-    if (filters?.onlySubagents === true) {
-        where.isSubagent = true;
-    } else if (
-        filters?.includeSubagents !== true &&
-        filters?.parentExecutionId === undefined &&
-        !hasExplicitTaskIdFilter
-    ) {
-        where.isSubagent = false;
+    const records = await db.findExecutions(where, { timestamp: 'desc' });
+    const names: string[] = [];
+    const seen = new Set<string>();
+    for (const record of records) {
+        const name = String(record?.agentName || '').trim();
+        if (!name || seen.has(name) || isEvaluatorAgentName(name)) continue;
+        seen.add(name);
+        names.push(name);
     }
+    return names;
+}
 
-    if (filters?.parentExecutionId !== undefined) {
-        where.parentExecutionId = filters.parentExecutionId;
+export async function listObservedTraceIds(
+    user?: string,
+    agentName?: string,
+): Promise<string[]> {
+    const where: any = { isSubagent: false };
+    if (user) {
+        where.OR = [
+            { user },
+            { user: null },
+        ];
     }
-
-    if (filters?.taskIds && filters.taskIds.length > 0) {
-        where.taskId = { in: filters.taskIds };
-        if (filters.framework) where.framework = filters.framework;
-    } else if (!filters?.query && filters?.taskId) {
-        where.taskId = filters.taskId;
-        if (filters.framework) where.framework = filters.framework;
-    } else if (filters?.query) {
-        where.query = filters.query;
-        if (filters.framework) where.framework = filters.framework;
-    }
-
-    if (filters?.skill !== undefined) {
-        where.skill = filters.skill;
-    }
-
-    if (filters?.skillVersion !== undefined) {
-        where.skillVersion = filters.skillVersion;
+    if (agentName) {
+        where.agentName = agentName;
     }
 
     const records = await db.findExecutions(where, { timestamp: 'desc' });
-    const byTaskId = new Map<string, any[]>();
+    const traceIds: string[] = [];
+    const seenTaskIds = new Set<string>();
+    for (const record of records) {
+        const taskId = String(record?.taskId || '').trim();
+        if (taskId) {
+            if (seenTaskIds.has(taskId)) continue;
+            seenTaskIds.add(taskId);
+            traceIds.push(taskId);
+            continue;
+        }
+        const uploadId = String(record?.id || '').trim();
+        if (uploadId) traceIds.push(uploadId);
+    }
+    return traceIds;
+}
+
+// 轻量列表用的 Execution 列投影:穷举 schema.prisma 的 Execution 全部标量列,仅排除大字段 finalResult
+// 与 evaluations 关系。normalizedRecord 用 `{ ...r }` 整体展开,故凡前端可能读的列都要在此列出。
+// 注意:必须只含真实列名——例如 expectedSkillVersion 不是 Execution 列(今天即恒 undefined→null),不能放入。
+// 导出供测试断言"不含 finalResult"。
+export const LIGHT_EXECUTION_SELECT: Record<string, boolean> = {
+    id: true, taskId: true, query: true, framework: true, tokens: true, cost: true, latency: true,
+    toolCallCount: true, llmCallCount: true, inputTokens: true, outputTokens: true, toolCallErrorCount: true,
+    cacheReadInputTokens: true, cacheCreationInputTokens: true, maxSingleCallTokens: true, reasoningTokens: true,
+    timestamp: true, model: true, agentName: true, agentId: true, skill: true, skills: true, invokedSkills: true,
+    isSkillCorrect: true, isAnswerCorrect: true, answerScore: true, skillScore: true, judgmentReason: true,
+    failures: true, skillIssues: true, skillVersion: true, label: true, user: true, skillTriggerRate: true,
+    parentExecutionId: true, rootExecutionId: true, agentSessionId: true, subagentType: true,
+    subagentName: true, isSubagent: true, observedAgents: true,
+    // 排除: finalResult(大字段,轻量模式的核心), evaluations(关系)
+};
+
+/**
+ * 解析 denormalized 的 observedAgents 列(JSON string[]),供轻量模式还原 agents。
+ * observedAgents 在写入时由 extractObservedAgentNames(interactions) 算好存入(见 saveExecutionRecord),
+ * 与读侧 heavy 路径同源同口径,故 light 的 agents 与 heavy 完全一致、不丢任何 agent 名(含 opencode 'build' 等)。
+ * 导出供测试。
+ */
+export function parseObservedAgents(observedAgents: string | null | undefined): string[] {
+    if (!observedAgents) return [];
+    try {
+        const arr: unknown = JSON.parse(observedAgents);
+        return Array.isArray(arr)
+            ? arr.filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+            : [];
+    } catch {
+        return [];
+    }
+}
+
+// 按批 hydrate 的批大小:每批只把本批记录的 finalResult + session(整段 interactions 是最大
+// 内存来源)拉进内存,解析/归一化后即释放。分页路径 pageSize≤100 → 单批;非分页路径
+// (paged===filtered)按此切批,峰值内存从 O(全量 session) 降到 O(批大小)。
+// 可经 READ_RECORDS_HYDRATE_BATCH_SIZE 环境变量调小(内存吃紧的线上机)或调大(批查询更少);
+// 非法/缺省回落 100。批大小只影响峰值内存与查询次数,不影响返回结果(等价性见
+// scripts/dryrun_readrecords_batched.ts)。
+const READ_RECORDS_HYDRATE_BATCH_SIZE = Math.max(
+    1,
+    Math.trunc(Number(process.env.READ_RECORDS_HYDRATE_BATCH_SIZE)) || 100,
+);
+
+/** 把数组切成定长批次(最后一批可短)。size≤0 兜底成 1;空数组返回 []。导出供测试。 */
+export function chunk<T>(arr: T[], size: number): T[][] {
+    const n = Math.max(1, Math.trunc(size));
+    const out: T[][] = [];
+    for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
+    return out;
+}
+
+/**
+ * dedup-by-taskId:同一 taskId 可能有多条 Execution 行(id≠taskId 的重复上报),选一条 canonical。
+ * 规则:组内唯一→留;存在 id===taskId→留它;否则按 timestamp desc → id localeCompare 稳定兜底。
+ * taskId 为空的行不参与去重(各自保留,由调用方原样透传)。
+ * dedup 这一遍统一走 light 投影(无 finalResult),故不再用 finalResult 长度做 tiebreak——该
+ * tiebreak 仅在"同 taskId 多行+时间戳完全相同+无 canonical"时才生效,极罕见,统一到 id 兜底
+ * (与既有 light 模式行为一致)。返回 byTaskId 供调用方做重复行清理。导出供测试。
+ */
+export type DedupRow = { id: string; taskId?: string | null; timestamp?: string | number | Date | null };
+
+export function selectKeepIdsByTaskId<T extends DedupRow>(
+    records: T[],
+): { keepIds: Set<string>; byTaskId: Map<string, T[]> } {
+    const byTaskId = new Map<string, T[]>();
     for (const r of records) {
         const tid = r.taskId || null;
         if (!tid) continue;
         if (!byTaskId.has(tid)) byTaskId.set(tid, []);
         byTaskId.get(tid)!.push(r);
     }
-
     const keepIds = new Set<string>();
     for (const [tid, group] of byTaskId.entries()) {
         if (group.length === 1) {
             keepIds.add(group[0].id);
             continue;
         }
-
-        const canonical = group.find((x: any) => x.id === tid);
+        const canonical = group.find(x => x.id === tid);
         if (canonical) {
             keepIds.add(canonical.id);
             continue;
         }
-
-        const sorted = group.slice().sort((a: any, b: any) => {
-            const ta = new Date(a.timestamp).getTime();
-            const tb = new Date(b.timestamp).getTime();
+        const sorted = group.slice().sort((a, b) => {
+            const ta = new Date(a.timestamp ?? 0).getTime();
+            const tb = new Date(b.timestamp ?? 0).getTime();
             if (tb !== ta) return tb - ta;
-            const la = String(a.finalResult || '').length;
-            const lb = String(b.finalResult || '').length;
-            return lb - la;
+            return String(a.id).localeCompare(String(b.id));
         });
         keepIds.add(sorted[0].id);
     }
+    return { keepIds, byTaskId };
+}
 
-    const filtered = records.filter((r: any) => {
-        if (!r.taskId) return true;
-        return keepIds.has(r.id);
-    });
+/**
+ * 把一批已去重的 Execution 行 hydrate 成对外 ExecutionRecord:载本批 finalResult + session,
+ * 解析 interactions 还原 agents/invokedSkills/rootSkill,补 ownership / 懒回填 skillVersion /
+ * execution_match / 评测快照。每批用完即释放——这是把非分页路径"一次性全量 session"的堆 OOM
+ * 根治掉的关键。light 批跳过 finalResult/session 加载,agents/skills 从 denormalized 列还原。
+ */
+async function hydrateAndNormalizeBatch(
+    batch: any[],
+    ctx: {
+        user?: string;
+        light: boolean;
+        attachEvaluations: boolean;
+        getConfigsForEvaluationUser: (evaluationUser?: string | null) => Promise<ConfigItem[]>;
+    },
+): Promise<ExecutionRecord[]> {
+    const { user, light, attachEvaluations, getConfigsForEvaluationUser } = ctx;
 
-    for (const [tid, group] of byTaskId.entries()) {
-        if (group.length <= 1) continue;
-        for (const r of group) {
-            if (!keepIds.has(r.id)) {
-                if (AUDIT_DATA_MUTATIONS) {
-                    const keepId = group.find(x => keepIds.has(x.id))?.id ?? 'unknown';
-                    console.warn(`[Data-Audit] deleteExecution (read dedup): taskId=${tid} deleteId=${r.id} keepId=${keepId}`);
-                }
-                db.deleteExecution(r.id).catch(() => {});
-            }
+    // heavy: dedup pass 走 light 投影未取 finalResult,这里按本批 id 回取;并加载本批 session
+    // (整段 interactions 是最大内存来源)。light: 两者都跳过——finalResult 不返回,agents 从
+    // 写入时 denormalize 的 observedAgents 列还原。
+    const batchTaskIds = Array.from(new Set(
+        batch.map((r: any) => r.taskId).filter(Boolean) as string[],
+    ));
+    const [finalResultRows, sessions] = await Promise.all([
+        (!light && batch.length > 0)
+            ? db.findExecutions({ id: { in: batch.map((r: any) => r.id) } }, undefined, { id: true, finalResult: true })
+            : Promise.resolve([] as any[]),
+        (!light && batchTaskIds.length > 0)
+            ? db.findSessions({ user: user || undefined, taskId: { in: batchTaskIds } })
+            : Promise.resolve([] as any[]),
+    ]);
+    if (finalResultRows.length > 0) {
+        const finalById = new Map<string, any>();
+        for (const fr of finalResultRows) finalById.set(fr.id, fr.finalResult ?? null);
+        for (const r of batch) {
+            if (finalById.has(r.id)) r.finalResult = finalById.get(r.id);
         }
     }
-
-    // Sessions must be fetched BEFORE building the ownership map: an execution's effective
-    // agent name may come from session.interactions when `r.agentName` is empty, and ownership
-    // is keyed on that resolved name.
-    // 性能：只加载本次列表用到的 session（filtered 去重后的 taskId），不要把用户的全部历史
-    // session（每行含大段 interactions 文本）整表拉进内存。sessionMap 也只按 filtered 记录访问。
-    const neededSessionTaskIds = Array.from(new Set(
-        filtered.map((r: any) => r.taskId).filter(Boolean) as string[],
-    ));
-    const [sessions, configsData] = await Promise.all([
-        neededSessionTaskIds.length > 0
-            ? db.findSessions({ user: user || undefined, taskId: { in: neededSessionTaskIds } })
-            : Promise.resolve([] as any[]),
-        (async () => {
-            const configCache = new Map<string, Promise<ConfigItem[]>>();
-            const getConfigsForEvaluationUser = (evaluationUser?: string | null) => {
-                const key = evaluationUser || '__global__';
-                if (!configCache.has(key)) {
-                    configCache.set(key, readConfig(evaluationUser || undefined));
-                }
-                return configCache.get(key)!;
-            };
-            return { getConfigsForEvaluationUser };
-        })()
-    ]);
 
     const sessionMap = new Map<string, any>();
     sessions.forEach((s: any) => {
@@ -1080,16 +1149,22 @@ export async function readRecords(
         if (direct) return direct;
         return sessionAgents.find(n => n && !isEvaluatorAgentName(n)) || '';
     };
-    filtered.forEach((r: any) => {
+    batch.forEach((r: any) => {
         const taskId = r.taskId || r.id;
         const sessionAgents: string[] = [];
-        // 解析结果走 memoize 缓存（与下方 invokedSkills 提取共用，每个 session 只 parse 一次）。
-        // 注意：agents 字段对外暴露(含多 agent / 子 agent 列表)，不能因 agentName 已存在就跳过解析。
-        const interactions = getParsedInteractions(r.taskId);
-        if (interactions) {
-            const agentSet = new Set<string>();
-            extractObservedAgentNames(interactions).forEach(name => agentSet.add(name));
-            sessionAgents.push(...agentSet);
+        if (light) {
+            // light: 从写入时 denormalize 的 observedAgents 列还原 agents,不解析 interactions。
+            // 与 heavy 的 extractObservedAgentNames 同源,agents 完全一致、不丢数据(含 opencode 'build' 等)。
+            sessionAgents.push(...parseObservedAgents(r.observedAgents));
+        } else {
+            // 解析结果走 memoize 缓存（与下方 invokedSkills 提取共用，每个 session 只 parse 一次）。
+            // 注意：agents 字段对外暴露(含多 agent / 子 agent 列表)，不能因 agentName 已存在就跳过解析。
+            const interactions = getParsedInteractions(r.taskId);
+            if (interactions) {
+                const agentSet = new Set<string>();
+                extractObservedAgentNames(interactions).forEach(name => agentSet.add(name));
+                sessionAgents.push(...agentSet);
+            }
         }
         recordAgentsByTaskId.set(taskId, sessionAgents);
         recordEffectiveAgent.set(taskId, resolveEffectiveAgentName(r.agentName, sessionAgents));
@@ -1099,11 +1174,12 @@ export async function readRecords(
     // of agent identity (platform + name). The `user` dimension is collapsed so a given agent
     // name resolves to one ownership regardless of which user's execution record we look at.
     // When multiple registrations exist for (platform, name) across users, prefer
-    // user > system > unregistered.
-    const OWNERSHIP_RANK: Record<string, number> = { user: 3, system: 2, unregistered: 1 };
+    // system > user: 一个全局注册的系统 Agent（user=null）是权威归属，即使同名还存在
+    // 各 user 的 trace 自动发现行（observe 时落库为 user），也应判定为 system。
+    const OWNERSHIP_RANK: Record<string, number> = { system: 2, user: 1 };
     const agentOwnershipMap = new Map<string, string>();
     const uniqueAgents = new Map<string, { platform: string; name: string }>();
-    filtered.forEach((r: any) => {
+    batch.forEach((r: any) => {
         const taskId = r.taskId || r.id;
         const effective = recordEffectiveAgent.get(taskId) || '';
         if (r.framework && effective) {
@@ -1124,7 +1200,7 @@ export async function readRecords(
                     agentOwnershipMap.set(key, a.agentOwnership);
                 }
             }
-        } catch { /* graceful degradation — ownership stays 'unregistered' */ }
+        } catch { /* graceful degradation — ownership stays 'user' */ }
     }
 
     /* ─── 懒回填 Skill 版本绑定 ─────────────────────────────────────────
@@ -1138,7 +1214,7 @@ export async function readRecords(
      * 单条 Execution。fire-and-forget——回填失败不影响本次返回。
      */
     const skillNamesNeedingBackfill = new Set<string>();
-    filtered.forEach((r: any) => {
+    batch.forEach((r: any) => {
         if (r.skill && (r.skillVersion == null) && !r.isSubagent) {
             skillNamesNeedingBackfill.add(String(r.skill));
         }
@@ -1163,7 +1239,7 @@ export async function readRecords(
         }
     }
 
-    return Promise.all(filtered.map(async (r: any) => {
+    const normalizedBatch = await Promise.all(batch.map(async (r: any) => {
         const model = r.model ?? null;
         const pricingResult = model ? getModelPricing(model) : null;
         const pricing = pricingResult?.pricing ?? null;
@@ -1218,8 +1294,8 @@ export async function readRecords(
             agent: r.agentName || undefined,
             agentName: r.agentName || undefined,
             agentOwnership: (r.framework && effectiveAgentName)
-                ? (agentOwnershipMap.get(`${r.framework}::${effectiveAgentName}`) ?? 'unregistered')
-                : 'unregistered',
+                ? (agentOwnershipMap.get(`${r.framework}::${effectiveAgentName}`) ?? 'user')
+                : 'user',
             tokens: r.tokens || undefined,
             cost: (pricing && r.inputTokens != null && r.outputTokens != null)
                 ? calculateCost(r.inputTokens, r.outputTokens, pricing, r.cacheReadInputTokens ?? undefined, r.cacheCreationInputTokens ?? undefined)
@@ -1279,7 +1355,8 @@ export async function readRecords(
         };
         const executionId = normalizedRecord.task_id || normalizedRecord.upload_id || '';
         let executionMatch: ExecutionRecord['execution_match'] = null;
-        if (executionId) {
+        // light: 跳过每条 execution_match 查询(仅 skill-eval 消费它,而 skill-eval 不走 light)。
+        if (!light && executionId) {
             try {
                 const match = await db.findExecutionMatch(executionId);
                 if (match) {
@@ -1298,9 +1375,142 @@ export async function readRecords(
             return normalizedRecord;
         }
         const evaluationUser = normalizedRecord.user ?? user ?? null;
-        const configs = await configsData.getConfigsForEvaluationUser(evaluationUser);
+        const configs = await getConfigsForEvaluationUser(evaluationUser);
         return attachEvaluationSnapshots(normalizedRecord, configs, evaluationUser);
     }));
+    return normalizedBatch;
+}
+
+async function readRecordsInternal(
+    user?: string,
+    filters?: ReadRecordFilters,
+    options?: ReadRecordsOptions
+): Promise<{ records: ExecutionRecord[]; total: number }> {
+    const light = options?.lightweight === true;
+    // light 强制不附评测快照(routing/outcome_evaluation 需 final_result/judge 等重上下文,与轻量语义冲突;
+    // 迁移的调用方今天也没开 includeEvaluations,故零行为变化,且连带省掉 configsData 与每条快照查询)。
+    const attachEvaluations = light ? false : (options?.attachEvaluations ?? true);
+    const page = options?.page && Number.isFinite(options.page) ? Math.max(1, Math.trunc(options.page)) : 1;
+    const pageSize = options?.pageSize && Number.isFinite(options.pageSize) ? Math.max(1, Math.trunc(options.pageSize)) : 0;
+    const where: any = {};
+    if (user && !filters?.showAllUsers) {
+        where.OR = [
+            { user: user },
+            { user: null }
+        ];
+    }
+
+    // 默认列表只显示 root execution；sub-agent 行通过 trace 视图下钻进入。
+    // 显式按 taskId / taskIds / parentExecutionId 查询时跳过该过滤，
+    // 让"按 sub-agent sessionID 直查"和"列出某 root 的所有子 agent"都能工作。
+    const hasExplicitTaskIdFilter = !!(filters?.taskIds?.length || filters?.taskId);
+    if (filters?.onlySubagents === true) {
+        where.isSubagent = true;
+    } else if (
+        filters?.includeSubagents !== true &&
+        filters?.parentExecutionId === undefined &&
+        !hasExplicitTaskIdFilter
+    ) {
+        where.isSubagent = false;
+    }
+
+    if (filters?.parentExecutionId !== undefined) {
+        where.parentExecutionId = filters.parentExecutionId;
+    }
+
+    if (filters?.taskIds && filters.taskIds.length > 0) {
+        where.taskId = { in: filters.taskIds };
+        if (filters.framework) where.framework = filters.framework;
+    } else if (!filters?.query && filters?.taskId) {
+        where.taskId = filters.taskId;
+        if (filters.framework) where.framework = filters.framework;
+    } else if (filters?.query) {
+        where.query = filters.query;
+        if (filters.framework) where.framework = filters.framework;
+    }
+
+    if (filters?.skill !== undefined) {
+        where.skill = filters.skill;
+    }
+
+    if (filters?.skillVersion !== undefined) {
+        where.skillVersion = filters.skillVersion;
+    }
+
+    if (filters?.agentName !== undefined) {
+        where.agentName = filters.agentName;
+    }
+
+    // dedup pass 统一走 light 投影(不取大字段 finalResult):heavy 模式的 finalResult 由
+    // hydrateAndNormalizeBatch 按批回取,避免把全量 finalResult 一次性拉进内存(分页路径尤甚)。
+    const records = await db.findExecutions(where, { timestamp: 'desc' }, LIGHT_EXECUTION_SELECT);
+    const { keepIds, byTaskId } = selectKeepIdsByTaskId(records);
+
+    const filtered = records.filter((r: any) => {
+        if (!r.taskId) return true;
+        return keepIds.has(r.id);
+    });
+    const total = filtered.length;
+    const paged = pageSize > 0
+        ? filtered.slice((page - 1) * pageSize, (page - 1) * pageSize + pageSize)
+        : filtered;
+
+    for (const [tid, group] of byTaskId.entries()) {
+        if (group.length <= 1) continue;
+        for (const r of group) {
+            if (!keepIds.has(r.id)) {
+                if (AUDIT_DATA_MUTATIONS) {
+                    const keepId = group.find(x => keepIds.has(x.id))?.id ?? 'unknown';
+                    console.warn(`[Data-Audit] deleteExecution (read dedup): taskId=${tid} deleteId=${r.id} keepId=${keepId}`);
+                }
+                db.deleteExecution(r.id).catch(() => {});
+            }
+        }
+    }
+
+    // 评测快照需要的 config 加载缓存(memoize per evaluationUser),跨批共享。
+    const configCache = new Map<string, Promise<ConfigItem[]>>();
+    const getConfigsForEvaluationUser = (evaluationUser?: string | null): Promise<ConfigItem[]> => {
+        const key = evaluationUser || '__global__';
+        if (!configCache.has(key)) {
+            configCache.set(key, readConfig(evaluationUser || undefined));
+        }
+        return configCache.get(key)!;
+    };
+
+    // 按批 hydrate + normalize:每批只把本批的 finalResult + session 拉进内存,用完即释放。
+    // 历史 OOM:非分页路径(paged===filtered)曾把全历史 session 的整段 interactions 一次性读进
+    // 内存解析,随 DB 增长把 next-server V8 堆撑到 ~4GB → FATAL heap OOM 自杀。按批后峰值内存
+    // 降到 O(批大小);分页路径 pageSize≤100 只一批,查询次数/行为不变。批与批之间串行 await
+    // 以封顶峰值内存与并发 DB 查询数;out 顺序 = paged 顺序(light pass 已按 timestamp desc 排好)。
+    const out: ExecutionRecord[] = [];
+    for (const batch of chunk(paged, READ_RECORDS_HYDRATE_BATCH_SIZE)) {
+        const normalizedBatch = await hydrateAndNormalizeBatch(batch, {
+            user,
+            light,
+            attachEvaluations,
+            getConfigsForEvaluationUser,
+        });
+        out.push(...normalizedBatch);
+    }
+    return { records: out, total };
+}
+
+export async function readRecords(
+    user?: string,
+    filters?: ReadRecordFilters,
+    options?: ReadRecordsOptions
+): Promise<ExecutionRecord[]> {
+    const result = await readRecordsInternal(user, filters, options);
+    return result.records;
+}
+
+export async function readRecordPage(
+    user?: string,
+    filters?: ReadRecordFilters,
+    options?: ReadRecordsOptions
+): Promise<{ records: ExecutionRecord[]; total: number }> {
+    return readRecordsInternal(user, filters, options);
 }
 
 
@@ -1824,7 +2034,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
                             platform,
                             name: observed.name,
                             user,
-                            agentOwnership: 'unregistered',
+                            agentOwnership: 'user',
                             agentType: observed.agentType === 'main'
                                 ? (targetRecord.agentType || 'main')
                                 : 'subagent'
@@ -1841,6 +2051,12 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
         }
     }
 
+    // 写入时预解析 agents 列表并 denormalize 存入 observedAgents,供轻量列表(fields=light)直接读取,
+    // 无需加载/解析 session interactions。与读侧 extractObservedAgentNames(interactions) 同源同口径
+    // (含 opencode 'build' 等只出现在 interactions 里的 agent 名),保证 light 与 heavy 的 agents 一致、不丢数据。
+    const observedAgentsJson = Array.isArray(mergedInteractionsForSession) && mergedInteractionsForSession.length > 0
+        ? JSON.stringify(extractObservedAgentNames(mergedInteractionsForSession))
+        : null;
     await db.upsertExecution({
         where: { id: recordId },
         create: {
@@ -1879,6 +2095,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
             cacheCreationInputTokens: targetRecord.cache_creation_input_tokens,
             maxSingleCallTokens: targetRecord.max_single_call_tokens,
             reasoningTokens: targetRecord.reasoning_tokens,
+            observedAgents: observedAgentsJson,
         },
         update: {
             taskId: targetRecord.task_id,
@@ -1915,6 +2132,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
             cacheCreationInputTokens: targetRecord.cache_creation_input_tokens,
             maxSingleCallTokens: targetRecord.max_single_call_tokens,
             reasoningTokens: targetRecord.reasoning_tokens,
+            observedAgents: observedAgentsJson,
         }
     });
 
@@ -2109,6 +2327,8 @@ export async function deriveSubagentExecutions(args: DeriveSubagentArgs): Promis
             subagentType: node.subagentType ?? null,
             subagentName: node.agentName ?? null,
             isSubagent: true,
+            // 子 agent 行也 denormalize observedAgents,保证 includeSubagents 的轻量列表 agents 一致。
+            observedAgents: JSON.stringify(extractObservedAgentNames(childInteractions)),
         } as const;
 
         try {

@@ -46,8 +46,8 @@ function loadConfiguration(): Config {
     } catch (e) {}
     
     return {
-        apiKey: config['SKILL_INSIGHT_API_KEY'] || config['WITTY_INSIGHT_API_KEY'] || process.env.SKILL_INSIGHT_API_KEY || process.env.WITTY_INSIGHT_API_KEY,
-        host: config['SKILL_INSIGHT_HOST'] || config['WITTY_INSIGHT_HOST'] || process.env.SKILL_INSIGHT_HOST || process.env.WITTY_INSIGHT_HOST || '127.0.0.1:3000'
+        apiKey: config['AGENT_INSIGHT_API_KEY'] || config['WITTY_INSIGHT_API_KEY'] || process.env.AGENT_INSIGHT_API_KEY || process.env.WITTY_INSIGHT_API_KEY,
+        host: config['AGENT_INSIGHT_HOST'] || config['WITTY_INSIGHT_HOST'] || process.env.AGENT_INSIGHT_HOST || process.env.WITTY_INSIGHT_HOST || '127.0.0.1:3000'
     };
 }
 

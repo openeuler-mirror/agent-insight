@@ -12,8 +12,8 @@ import {
 test('opencode deleted session tombstone persists ids and dedupes', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'skill-insight-deleted-sessions-'));
   const file = path.join(dir, 'deleted.json');
-  const previous = process.env.SKILL_INSIGHT_OPENCODE_DELETED_SESSIONS;
-  process.env.SKILL_INSIGHT_OPENCODE_DELETED_SESSIONS = file;
+  const previous = process.env.AGENT_INSIGHT_OPENCODE_DELETED_SESSIONS;
+  process.env.AGENT_INSIGHT_OPENCODE_DELETED_SESSIONS = file;
 
   try {
     assert.equal(isDeletedOpencodeSessionId('ses_old'), false);
@@ -26,9 +26,9 @@ test('opencode deleted session tombstone persists ids and dedupes', () => {
     assert.deepEqual(saved.sessionIds, ['ses_new', 'ses_old']);
   } finally {
     if (previous === undefined) {
-      delete process.env.SKILL_INSIGHT_OPENCODE_DELETED_SESSIONS;
+      delete process.env.AGENT_INSIGHT_OPENCODE_DELETED_SESSIONS;
     } else {
-      process.env.SKILL_INSIGHT_OPENCODE_DELETED_SESSIONS = previous;
+      process.env.AGENT_INSIGHT_OPENCODE_DELETED_SESSIONS = previous;
     }
     fs.rmSync(dir, { recursive: true, force: true });
   }

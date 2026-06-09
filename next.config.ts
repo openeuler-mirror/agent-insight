@@ -1,14 +1,40 @@
 import type { NextConfig } from "next";
+import { config } from "dotenv";
+import os from "node:os";
 import path from "path";
+
+config({ path: path.join(process.env.AGENT_INSIGHT_DATA_DIR || path.join(os.homedir(), ".agent-insight"), ".env") });
+config();
 
 const nextConfig: NextConfig = {
   basePath: process.env.NEXT_PUBLIC_URL_PREFIX || '',
   output: 'standalone',
   serverExternalPackages: ["node-fetch", "pg"],
+  // Keep local/temp & non-runtime dirs out of the standalone bundle, otherwise
+  // next build sweeps them in (e.g. the gitignored ./exclude scratch dir can be
+  // 1GB+ of local logs, bloating the npm package non-deterministically per machine).
+  outputFileTracingExcludes: {
+    '*': [
+      'exclude/**',
+      'tests/**',
+      'test/**',
+      'skillbench/**',
+      'features/**',
+      'tools/**',
+      'docs/**',
+      'data/**',
+    ],
+  },
   // 显式锁定 workspace root，避免 Next.js 在多 lockfile 时选错根
   // （家目录如果也存在 package-lock.json 会被误识别为 monorepo 根）。
+  // git worktree 场景：cwd 在 <main>/.claude/worktrees/<id>，依赖装在主仓库 node_modules，
+  // worktree 本地 node_modules 不完整——root 必须指向主仓库根，turbopack 才解析得到 next。
   turbopack: {
-    root: path.resolve('.'),
+    root: (() => {
+      const cwd = path.resolve('.');
+      const m = cwd.match(/^(.*)\/\.claude\/worktrees\/[^/]+$/);
+      return m ? m[1] : cwd;
+    })(),
   },
   experimental: {
       serverActions: {

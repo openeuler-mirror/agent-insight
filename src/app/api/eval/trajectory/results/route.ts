@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { prismaRaw as prisma } from '@/lib/storage/prisma';
 import { extractTrajectoryTaskMeta } from '@/lib/eval/trajectory-task-meta';
+import { selectLatestDatasetCaseResults } from '@/lib/eval/latest-trajectory-results';
 
 export const dynamic = 'force-dynamic';
 
@@ -100,6 +101,7 @@ export async function GET(request: Request) {
         const taskId = (searchParams.get('taskId') || '').trim();
         const evaluatorRunId = (searchParams.get('runId') || '').trim();
         const limit = Math.min(Number(searchParams.get('limit') || '100'), 500);
+        const latestByCase = searchParams.get('latestByCase') === '1' || searchParams.get('latestByCase') === 'true';
 
         const where: Record<string, unknown> = { user };
         if (datasetId) where.datasetId = datasetId;
@@ -110,17 +112,23 @@ export async function GET(request: Request) {
         const rows = await prisma.trajectoryEvalResult.findMany({
             where,
             orderBy: { createdAt: 'desc' },
-            take: limit,
+            take: latestByCase ? 500 : limit,
         });
+        const visibleRows = latestByCase
+            ? selectLatestDatasetCaseResults(rows).slice(0, limit)
+            : rows;
 
-        const results = rows.map(r => ({
-            ...(safeParse(r.rawAnalysisJson, {}) as {
+        const results = visibleRows.map(r => {
+            const rawAnalysis = safeParse(r.rawAnalysisJson, null) as Record<string, unknown> | null;
+            const rawMeta = (rawAnalysis || {}) as {
                 selectedEvaluators?: string[];
                 selectedEvaluatorNames?: string[];
                 autoWatch?: boolean;
                 watchedAgent?: string;
                 watchPlaceholder?: boolean;
-            }),
+            };
+            return {
+            ...rawMeta,
             ...(() => {
                 const taskMeta = extractTrajectoryTaskMeta(r.rawAnalysisJson, r.createdAt);
                 return {
@@ -144,10 +152,12 @@ export async function GET(request: Request) {
             resultEvaluationScore: pickResultEvaluationScore(r.rawAnalysisJson),
             customEvaluationScore: pickCustomEvaluationScore(r.rawAnalysisJson),
             customEvaluations: pickCustomEvaluations(r.rawAnalysisJson),
-            rawAnalysis: safeParse(r.rawAnalysisJson, null),
+            diagnostic: rawAnalysis?.diagnostic ?? null,
+            rawAnalysis,
             createdAt: r.createdAt.toISOString(),
             updatedAt: r.updatedAt.toISOString(),
-        }));
+            };
+        });
 
         return NextResponse.json({ results });
     } catch (error: unknown) {

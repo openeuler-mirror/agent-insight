@@ -17,6 +17,8 @@ import React from 'react';
 export interface EvalRecordRow {
     /** 唯一 key (通常 = TrajectoryEvalResult.id) */
     id: string;
+    /** 数据集 case id；尚未生成 trace 时用于稳定标识该行。 */
+    caseId?: string;
     /** 用例内容 (query / case input) —— 第一列展示, 让用户一眼认出是哪个用例 */
     caseLabel: string;
     /** hover 文案 (完整 query / 来源信息) */
@@ -32,6 +34,8 @@ export interface EvalRecordRow {
     trajEvalTraceId?: string;
     /** 评测任务批次 id —— 用于拼"评测结果详情"链接 (/eval/trajectory/<trace>?runId=<id>) */
     evaluatorRunId?: string;
+    /** 当前行对应的唯一评测结果 id。 */
+    resultId?: string;
     /** 评测参考数据集 id —— 拼结果详情链接的 datasetId (可选, 不传则详情页自行解析) */
     datasetId?: string;
     /** pending=排队中 running/evaluating=评测中 done=已评测 failed=失败 */
@@ -42,6 +46,8 @@ export interface EvalRecordRow {
     trajScore?: number | null;
     /** 失败时的错误信息, 失败态 hover 展示 */
     errorMsg?: string;
+    /** 尚未生成执行 Trace 等情况下禁用行级操作。 */
+    actionsDisabled?: boolean;
 }
 
 /** 0-100 分 → 颜色: ≥80 绿 / ≥60 橙 / 其余红 / null 灰 */
@@ -60,6 +66,8 @@ function statusToneLabel(status: string, locale: string): { tone: Tone; label: s
             return { tone: 'pending', label: zh ? '排队中' : 'Queued' };
         case 'executing':
             return { tone: 'running', label: zh ? '执行中' : 'Executing' };
+        case 'executed':
+            return { tone: 'pending', label: zh ? '待评测' : 'Awaiting evaluation' };
         case 'running':
         case 'evaluating':
             return { tone: 'running', label: zh ? '评测中' : 'Evaluating' };
@@ -296,14 +304,13 @@ export function ExecutionRecordsTable({
                                     <StatusPill tone={tone} label={label} title={tone === 'fail' ? rec.errorMsg : undefined} />
                                 </div>
 
-                                {/* 评测结果 → 该 trace 的评测结果详情 (/eval/trajectory/<trace>?runId=&datasetId=);
-                                    缺 trace 时退回批次详情 (/eval/run/<runId>)。 */}
+                                {/* 评测结果必须由 resultId 唯一定位，缺少结果行时不提供详情入口。 */}
                                 <div>
                                     {(() => {
-                                        if (!rec.evaluatorRunId) return <span style={{ color: '#B8B6AE', fontSize: 11 }}>—</span>;
-                                        const resultUrl = rec.executionTraceId
-                                            ? `/eval/trajectory/${encodeURIComponent(rec.executionTraceId)}?runId=${encodeURIComponent(rec.evaluatorRunId)}${rec.datasetId ? `&datasetId=${encodeURIComponent(rec.datasetId)}` : ''}`
-                                            : `/eval/run/${encodeURIComponent(rec.evaluatorRunId)}`;
+                                        if (!rec.evaluatorRunId || !rec.executionTraceId || !rec.resultId) {
+                                            return <span style={{ color: '#B8B6AE', fontSize: 11 }}>—</span>;
+                                        }
+                                        const resultUrl = `/eval/trajectory/${encodeURIComponent(rec.executionTraceId)}?runId=${encodeURIComponent(rec.evaluatorRunId)}${rec.datasetId ? `&datasetId=${encodeURIComponent(rec.datasetId)}` : ''}&resultId=${encodeURIComponent(rec.resultId)}`;
                                         return (
                                             <button
                                                 className="v2-action-btn"
@@ -331,15 +338,16 @@ export function ExecutionRecordsTable({
                                 {hasActions && (() => {
                                     // 进行中(评测中/执行中=running, 排队中=pending) 不允许删除, 避免删掉正在写盘的记录。
                                     const inProgress = tone === 'running' || tone === 'pending';
+                                    const actionsDisabled = inProgress || rec.actionsDisabled;
                                     return (
                                         <div style={{ display: 'flex', gap: 4, justifyContent: 'center' }}>
                                             {onRetry && (
                                                 <button
                                                     className="v2-action-btn"
-                                                    style={{ fontSize: 11, padding: '3px 8px', border: '1px solid #D4D4D8', background: '#fff', borderRadius: 4, cursor: tone === 'running' ? 'not-allowed' : 'pointer', color: tone === 'running' ? '#B8B6AE' : '#52525B', opacity: tone === 'running' ? 0.6 : 1 }}
-                                                    disabled={tone === 'running'}
-                                                    title={tone === 'running' ? (zh ? '评测/执行进行中…' : 'In progress…') : (zh ? '重新评测这条' : 'Re-evaluate')}
-                                                    onClick={e => { e.stopPropagation(); if (tone !== 'running') onRetry(rec); }}
+                                                    style={{ fontSize: 11, padding: '3px 8px', border: '1px solid #D4D4D8', background: '#fff', borderRadius: 4, cursor: actionsDisabled ? 'not-allowed' : 'pointer', color: actionsDisabled ? '#B8B6AE' : '#52525B', opacity: actionsDisabled ? 0.6 : 1 }}
+                                                    disabled={actionsDisabled}
+                                                    title={actionsDisabled ? (zh ? '当前记录暂不可重试' : 'Retry is unavailable') : (zh ? '重新评测这条' : 'Re-evaluate')}
+                                                    onClick={e => { e.stopPropagation(); if (!actionsDisabled) onRetry(rec); }}
                                                 >
                                                     {zh ? '重试' : 'Retry'}
                                                 </button>
@@ -347,10 +355,10 @@ export function ExecutionRecordsTable({
                                             {onDelete && (
                                                 <button
                                                     className="v2-action-btn"
-                                                    style={{ fontSize: 11, padding: '3px 8px', border: '1px solid ' + (inProgress ? '#E7E5E4' : '#F0C5C5'), background: '#fff', borderRadius: 4, cursor: inProgress ? 'not-allowed' : 'pointer', color: inProgress ? '#B8B6AE' : '#DC2626', opacity: inProgress ? 0.6 : 1 }}
-                                                    disabled={inProgress}
-                                                    title={inProgress ? (zh ? '评测/执行进行中，无法删除' : 'In progress, cannot delete') : (zh ? '从评测执行列表删除这条' : 'Delete this record')}
-                                                    onClick={e => { e.stopPropagation(); if (!inProgress) onDelete(rec); }}
+                                                    style={{ fontSize: 11, padding: '3px 8px', border: '1px solid ' + (actionsDisabled ? '#E7E5E4' : '#F0C5C5'), background: '#fff', borderRadius: 4, cursor: actionsDisabled ? 'not-allowed' : 'pointer', color: actionsDisabled ? '#B8B6AE' : '#DC2626', opacity: actionsDisabled ? 0.6 : 1 }}
+                                                    disabled={actionsDisabled}
+                                                    title={actionsDisabled ? (zh ? '当前记录暂不可删除' : 'Delete is unavailable') : (zh ? '从评测执行列表删除这条' : 'Delete this record')}
+                                                    onClick={e => { e.stopPropagation(); if (!actionsDisabled) onDelete(rec); }}
                                                 >
                                                     {zh ? '删除' : 'Delete'}
                                                 </button>

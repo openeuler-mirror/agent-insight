@@ -4,7 +4,7 @@ import type { ClaudeOtelAppendResult, ClaudeOtelEvent } from './types';
 import { getExistingInsightDir } from '@/lib/agent-insight-paths';
 
 export function getClaudeOtelSpoolDir(): string {
-  return process.env.SKILL_INSIGHT_CLAUDE_OTEL_SPOOL_DIR ||
+  return process.env.AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR ||
     path.join(getExistingInsightDir(), 'otel_data', 'claude');
 }
 

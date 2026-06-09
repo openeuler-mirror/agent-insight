@@ -20,6 +20,7 @@
   "stepRecords": [],
   "phase1Grid": [],
   "issues": [],
+  "findings": [],
   "rootCause": null,
   "humanSummary": "中文摘要"
 }
@@ -142,7 +143,9 @@
   "evidence": "中文证据，可包含原始英文报错",
   "reasoning": "中文判定理由",
   "confidence": 0.86,
-  "anchorId": "optional-anchor"
+  "anchorId": "optional-anchor",
+  "resolution": "unresolved",
+  "resolutionEvidence": "该问题未在后续步骤中被修正。"
 }
 ```
 
@@ -191,10 +194,62 @@
 - 同一 `step + module + errorType` 只保留一条。
 - 证据要短而具体。
 - 不要用 `S2` 这类内部诊断编号作为用户可见 ID；ID 可使用 `N<traceStepIndex>-...`。
+- `resolution` 可选值为 `unresolved`、`recovered`、`non_blocking`。它用于 Phase 2 判断该 issue 是否应提升为 finding。
+
+## findings
+
+`findings` 是 Phase 2 面向用户展示的关键诊断发现列表。它不是 `issues` 的简单平铺，而是若干 issue 组成的因果组。
+
+```json
+{
+  "id": "finding-1",
+  "severity": "high",
+  "impact": "quality_degrading",
+  "summary": "关键发现：Agent 在规划阶段选择了不相关的事件过滤参数，导致专用脚本未能返回用户关心的 Kerberos 日志内容。",
+  "evidence": "节点 #12 中使用 --event E16,E17 分析 Kerberos 认证事件，但这些事件 ID 与 Kerberos 不相关。",
+  "issueRefs": [
+    {
+      "issueId": "N12-planning-constraint_ignorance",
+      "role": "root"
+    },
+    {
+      "issueId": "N13-action-parameter_error",
+      "role": "downstream"
+    }
+  ],
+  "correctionGuidance": "在规划提示中加入事件域白名单约束校验，参数生成后先做 schema 比对。",
+  "confidence": 0.86
+}
+```
+
+允许的 `impact`：
+
+- `result_blocking`
+- `quality_degrading`
+- `recovered_cost`
+- `risk`
+
+允许的 `issueRefs[].role`：
+
+- `root`
+- `contributing`
+- `downstream`
+
+规则：
+
+- 每条 finding 必须有且只有一个 `role=root` 的 issueRef。
+- `issueRefs[].issueId` 必须能在 `issues` 中找到。
+- 同一 finding 内不能重复引用同一个 issue。
+- 同一个 issue 默认不能被多个 finding 同时声明为 root。
+- 下游症状通常保留为当前 finding 的 `downstream`，不要重复提升成另一条 finding。
+- 每条 finding 必须提供独立的 `correctionGuidance`。
+- findings 按严重度、因果重要性和用户关注价值排序，最重要的放第一条。
 
 ## rootCause
 
 字段名 `rootCause` 为历史兼容。用户可见语义是“关键诊断发现”：没有明确关键发现时使用 `null`。当 trace 明确失败时，它可以表示失败根因；当 trace 最终完成或问题已恢复时，它应表示潜在问题或过程风险，不能在自然语言里写成“根因”。
+
+新报告中，`rootCause` 必须与 `findings[0]` 语义一致；如果没有 `findings`，前端和后端只能按旧协议兼容展示单条关键发现。
 
 ```json
 {

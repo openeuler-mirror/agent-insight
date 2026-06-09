@@ -14,7 +14,7 @@
  *      给"用户在分析页点复测"场景用；旧路径维持不变避免破坏 supervisor 流水线。
  *      v2 把生成 pipeline 也切到 live 模式时再统一。
  */
-import { readFileSync, existsSync, mkdirSync, lstatSync, unlinkSync, writeFileSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync, lstatSync, unlinkSync, writeFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import matter from 'gray-matter';
 import { createModel, type ModelOptions } from '@/lib/engine/skill-generation/shared/model';
@@ -43,6 +43,12 @@ import type {
   SkillTriggerEvalSetRecord,
   TriggerRunResultItem,
 } from '@/server/skill_trigger_eval_storage';
+import {
+  classifyEndReason,
+  retryOnTimeout,
+  MAX_TIMEOUT_RETRIES,
+  type TriggerEndReason,
+} from './triggerEvalRetry';
 
 const logger = createLogger('skill-generation:trigger-eval');
 
@@ -136,6 +142,11 @@ export interface RunTriggerEvalLiveArgs {
   timeoutMs?: number;
   /** 并发跑几条 query。 */
   concurrency?: number;
+  /**
+   * 外部中止信号。用户在前端点「终止」时 abort：runPool 停止领新任务，在跑的 evalOne
+   * 把 in-flight chat 一起 abort；随后 runTriggerEvalLive 抛 AbortError，由调用方 finalize 成 cancelled。
+   */
+  signal?: AbortSignal;
 }
 
 export interface RunTriggerEvalLiveResult {
@@ -147,10 +158,14 @@ export interface RunTriggerEvalLiveResult {
 
 interface SingleRunOutcome {
   triggered: boolean;
+  /** 结束原因。聚合时据此分出"跑完/超时/出错"，前端可见。 */
+  endReason: TriggerEndReason;
   /** opencode session.error 文本；非空表示这次 run 实际没跑成（不是"没命中"，是根本没问到模型）。 */
   sessionError?: string;
   competingSkill?: string;
   latencyMs: number;
+  /** 实际尝试次数（含超时重试）。1 = 没重试。 */
+  attempts: number;
 }
 
 /**
@@ -208,10 +223,23 @@ async function evalOne(
     sessionTitle: string;
     user: string;
     agentId: string | null;
+    /** 外部中止信号（用户点终止）。abort 时把本条 in-flight chat 一起 abort。 */
+    externalSignal?: AbortSignal;
   },
 ): Promise<SingleRunOutcome> {
   const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), args.timeoutMs);
+  // 区分超时 abort vs 命中 abort vs 外部终止：timer 触发时置 timedOut，结束时据此分类 endReason。
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    ac.abort();
+  }, args.timeoutMs);
+  // 外部终止：把本条 query 的 AbortController 一起 abort，让 in-flight chat 立刻停（省 token）。
+  const onExternalAbort = () => ac.abort();
+  if (args.externalSignal) {
+    if (args.externalSignal.aborted) ac.abort();
+    else args.externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+  }
   const startedAt = Date.now();
   let triggered = false;
   let competingSkill: string | undefined;
@@ -340,17 +368,42 @@ async function evalOne(
     }
   } finally {
     clearTimeout(timer);
+    args.externalSignal?.removeEventListener('abort', onExternalAbort);
     // 不等 finish，直接 close session 释放资源
     if (sessionId) {
       client.deleteSession(sessionId).catch(() => {});
     }
   }
+  // endReason 判定抽到 triggerEvalRetry.classifyEndReason（纯函数，单测覆盖）。
+  // 外部终止（用户点终止）也会 abort，但那条路径上层会 throwIfAborted 抛掉、不进聚合，这里不单独分类。
   return {
     triggered,
+    endReason: classifyEndReason({ triggered, sessionError, timedOut }),
     competingSkill,
     sessionError,
     latencyMs: Date.now() - startedAt,
+    attempts: 1,
   };
+}
+
+/**
+ * 单条超时上限内跑 query；超时被掐断且没命中时自动重试，最多 MAX_TIMEOUT_RETRIES 次。
+ * 重试策略（只重试超时、外部终止即停）全在 triggerEvalRetry.retryOnTimeout 里，纯逻辑单测覆盖。
+ */
+async function evalOneWithRetry(
+  client: AgentInsight,
+  args: Parameters<typeof evalOne>[1],
+): Promise<SingleRunOutcome> {
+  return retryOnTimeout(() => evalOne(client, args), {
+    maxRetries: MAX_TIMEOUT_RETRIES,
+    isAborted: () => !!args.externalSignal?.aborted,
+    onRetry: attempt =>
+      logger.log('evalOne timed out, retrying', {
+        query: args.query.slice(0, 60),
+        attempt,
+        maxRetries: MAX_TIMEOUT_RETRIES,
+      }),
+  });
 }
 
 /**
@@ -360,16 +413,19 @@ async function runPool<T, R>(
   tasks: T[],
   concurrency: number,
   worker: (task: T, idx: number) => Promise<R>,
+  signal?: AbortSignal,
 ): Promise<R[]> {
   const results: R[] = new Array(tasks.length);
   let cursor = 0;
   const launch = async () => {
     while (true) {
+      // 用户终止：不再领新任务（在跑的那批由 evalOne 内部 abort 自行收尾）。
+      if (signal?.aborted) return;
       const i = cursor++;
       if (i >= tasks.length) return;
       try {
         results[i] = await worker(tasks[i], i);
-      } catch (err) {
+      } catch {
         // worker 已经 try/catch，这里不应该到；fallback 给空对象避免 hole
         results[i] = undefined as unknown as R;
       }
@@ -504,6 +560,21 @@ function shortUuid(): string {
 }
 
 /**
+ * 物化时只保留 frontmatter（name + description），body 换成一行占位。
+ * 触发评测测的是「路由会不会挑中这个 skill」，而 opencode 的路由只看 frontmatter 的
+ * name + description（渐进式披露：body 要等 skill 被 load 之后才进上下文）。裁掉 body 也省
+ * token——模型若（误）加载某个 skill，不会把整篇 playbook + scripts 拉进上下文。
+ * description 必须原样保留（它就是被测的路由信号），所以只裁 body、不动 frontmatter。
+ */
+function stubSkillBodyForRouting(content: string): string {
+  // 匹配开头的 YAML frontmatter 块：`---\n …(缩进内容)… \n---\n`。闭合 `---` 锚定行首且整行
+  // 只有 `---`；folded scalar 里的续行是缩进的，不会误命中。匹配不到（异常 skill）保守原样返回。
+  const m = content.match(/^---\r?\n[\s\S]*?\r?\n---[ \t]*\r?\n?/);
+  if (!m) return content;
+  return `${m[0]}\n<!-- body omitted for trigger-eval: routing only uses the frontmatter description -->\n`;
+}
+
+/**
  * 把 user 在 DB 里的所有 skill 物化到 <workspaceRoot>/.opencode/skills/，让 opencode
  * 通过它的标准发现路径（.opencode/skills/<name>/SKILL.md）找到所有 user 注册的 skill。
  *
@@ -557,6 +628,18 @@ async function materializeUserSkillsToOpencode(
     /* ignore */
   }
 
+  // 清场：删掉目录里已有的 skill 子目录。即便 workspace 现在是 per-run 独立目录（本应是空的），
+  // 这一步也兜住「同一 tag 被复用」「目录意外残留」等情况——确保参与路由竞争的只有本 user 当下
+  // 的 skill，不会混进上一轮 run / 其它 user 的近义 skill 把目标 skill 触发率压成 0（历史 bug：
+  // 物化进共享 process.cwd()/.opencode/skills 且从不清空）。
+  try {
+    for (const entry of readdirSync(skillsDir)) {
+      rmSync(join(skillsDir, entry), { recursive: true, force: true });
+    }
+  } catch {
+    /* 目录不存在或为空，忽略 */
+  }
+
   // 拉 user 的全部 skill + 各自的 latest version。若 targetSkillPin 命中本 skill
   // 则在下面单独拉指定版本的 content 覆盖；其它 skill 仍走 latest。
   const skills = await prismaRaw.skill.findMany({
@@ -607,7 +690,8 @@ async function materializeUserSkillsToOpencode(
     const targetDir = join(skillsDir, name);
     try {
       mkdirSync(targetDir, { recursive: true });
-      writeFileSync(join(targetDir, 'SKILL.md'), content, 'utf-8');
+      // 只物化 frontmatter（name + description）——路由判断只看它；body 用占位替掉省 token。
+      writeFileSync(join(targetDir, 'SKILL.md'), stubSkillBodyForRouting(content), 'utf-8');
       writtenNames.push(name);
     } catch (err) {
       logger.warn('Failed to materialize skill', {
@@ -651,7 +735,18 @@ export async function runTriggerEvalLive(
     triggerThreshold = 0.5,
     timeoutMs = 30_000,
     concurrency = 5,
+    signal,
   } = args;
+
+  // 终止可能在物化 / 起 server 之前就到——尽早退出，别白干活。
+  const throwIfAborted = () => {
+    if (signal?.aborted) {
+      const e = new Error('trigger eval cancelled by user');
+      e.name = 'AbortError';
+      throw e;
+    }
+  };
+  throwIfAborted();
 
   if (!user) {
     throw new Error('runTriggerEvalLive: user is required (从 /modelconfig 拉模型 + opencode 实例都要用)');
@@ -714,7 +809,7 @@ export async function runTriggerEvalLive(
   await runPool(tasks, concurrency, async task => {
     const item = triggerSet.items[task.itemIdx];
     const sessionTitle = `trigger-eval-${shortUuid()}-${item.id.slice(0, 4)}-r${task.runIdx}`;
-    const outcome = await evalOne(client, {
+    const outcome = await evalOneWithRetry(client, {
       query: item.query,
       targetSkillName: skillName,
       modelConfig,
@@ -723,6 +818,7 @@ export async function runTriggerEvalLive(
       sessionTitle,
       user,
       agentId: triggerAgentId,
+      externalSignal: signal,
     });
     outcomes[task.itemIdx].push(outcome);
     if (outcome.competingSkill) {
@@ -731,7 +827,11 @@ export async function runTriggerEvalLive(
       competingMap.set(task.itemIdx, m);
     }
     return outcome;
-  });
+  }, signal);
+
+  // 用户终止：pool 已停止领新任务、在跑的也 abort 收尾了。这里抛出去，让调用方把这条
+  // run finalize 成 cancelled（而不是把残缺结果当 done 落库）。
+  throwIfAborted();
 
   // 3.5 systemic-error 早退：如果所有 run 都因为 opencode 报错根本没问到模型
   // （例如 agent 名拼错、apiKey 失效、provider 拒绝、模型不存在等），
@@ -758,6 +858,18 @@ export async function runTriggerEvalLive(
     const pass = triggered === item.shouldTrigger;
     const latencyMsAvg =
       runsTotal > 0 ? Math.round(runs.reduce((sum, r) => sum + r.latencyMs, 0) / runsTotal) : 0;
+    // 跑完 vs 没跑完：triggered/completed = 真正产出了路由决策；timeout/error = 没跑完。
+    const runsCompleted = runs.filter(r => r.endReason === 'triggered' || r.endReason === 'completed').length;
+    const runsTimedOut = runs.filter(r => r.endReason === 'timeout').length;
+    const runsErrored = runs.filter(r => r.endReason === 'error').length;
+    // 代表性错误文本：取 errored run 里出现最多的一条（同根因下 N 条通常完全一致）。
+    let errorMessage: string | undefined;
+    const errTexts = runs.map(r => r.sessionError).filter((s): s is string => !!s);
+    if (errTexts.length > 0) {
+      const freq = new Map<string, number>();
+      for (const t of errTexts) freq.set(t, (freq.get(t) ?? 0) + 1);
+      errorMessage = [...freq.entries()].sort((a, b) => b[1] - a[1])[0][0];
+    }
     // 多次跑里出现次数最多的 competing skill
     const compMap = competingMap.get(idx);
     let competingSkill: string | undefined;
@@ -775,6 +887,10 @@ export async function runTriggerEvalLive(
       pass,
       latencyMsAvg,
       competingSkill,
+      runsCompleted,
+      runsTimedOut,
+      runsErrored,
+      errorMessage,
     };
   });
 

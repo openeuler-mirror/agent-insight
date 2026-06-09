@@ -22,6 +22,30 @@ function runCommand(command, description, ignoreFailure = false) {
   }
 }
 
+const PUBLISH_REGISTRY = 'https://registry.npmjs.org/'
+
+// Verify the maintainer has a working npm token BEFORE doing any expensive build.
+// Returns the npm username on success; prints a setup guide and exits otherwise.
+function preflightAuth() {
+  try {
+    const who = execSync(`npm whoami --registry ${PUBLISH_REGISTRY}`, { encoding: 'utf8' }).trim()
+    console.log(`\n✓ Authenticated to npm as: ${who}`)
+    return who
+  } catch (e) {
+    console.error('\n❌ Not authenticated to the npm registry (' + PUBLISH_REGISTRY + ').')
+    console.error('   Publishing needs an npm Automation token (it bypasses 2FA). To set one up:\n')
+    console.error('   1. Make sure an owner added you as a maintainer:')
+    console.error('        npm owner add <your-npm-username> <package-name>')
+    console.error('   2. npmjs.com → avatar → Access Tokens → Generate New Token')
+    console.error('        → Classic Token → Automation → Generate')
+    console.error('   3. Save it to your ~/.npmrc (never commit this):')
+    console.error('        echo "//registry.npmjs.org/:_authToken=npm_xxxxxxxx" >> ~/.npmrc')
+    console.error('   4. Verify:  npm whoami --registry ' + PUBLISH_REGISTRY + '\n')
+    console.error('   Then re-run this script.\n')
+    process.exit(1)
+  }
+}
+
 function isValidVersion(version) {
   const semverRegex = /^(\d+)\.(\d+)\.(\d+)(-([a-zA-Z0-9]+(\.[a-zA-Z0-9]+)*))?(\+([a-zA-Z0-9]+(\.[a-zA-Z0-9]+)*))?$/
   return semverRegex.test(version)
@@ -98,7 +122,7 @@ function setupStandalone() {
   const packageRoot = process.cwd()
   const standaloneDir = ensureStandalonePackage(packageRoot)
 
-  const dirsToRemove = ['docs', 'data', 'src', 'skills']
+  const dirsToRemove = ['docs', 'data', 'src', 'skills', 'exclude', 'tests', 'test', 'skillbench', 'features', 'tools']
   const filesToRemove = ['README.md', '.env', 'server.log', 'tsconfig.tsbuildinfo', 'package-lock.json']
   
   const prismaDbFile = path.join(standaloneDir, 'prisma', 'dev.db')
@@ -140,26 +164,12 @@ function setupStandalone() {
       }
     }
     
-    const imgDir = path.join(nodeModulesDir, '@img')
-    if (fs.existsSync(imgDir)) {
-      const platform = process.platform
-      const arch = process.arch
-      const keepPattern = `${platform}-${arch}`
-      
-      const imgSubDirs = fs.readdirSync(imgDir, { withFileTypes: true })
-        .filter(dirent => dirent.isDirectory())
-        .map(dirent => dirent.name)
-      
-      for (const subDir of imgSubDirs) {
-        if (!subDir.includes(keepPattern) && !subDir.includes('colour')) {
-          const subDirPath = path.join(imgDir, subDir)
-          fs.rmSync(subDirPath, { recursive: true, force: true })
-          console.log(`✓ Removed @img/${subDir} from standalone (platform-specific)`)
-        }
-      }
-    }
+    // NOTE: Do NOT prune @img by build platform here. The standalone bundles
+    // whichever platform built it; the consumer's postinstall (syncStandaloneSharp)
+    // swaps in the correct-platform sharp at install time. Pruning to one platform
+    // would lock the artifact to the build machine's OS/arch.
   }
-  
+
   console.log('✓ Standalone setup complete')
 }
 
@@ -264,9 +274,15 @@ function main() {
       process.exit(1)
     }
     
+    // Fail fast: check the maintainer is authenticated BEFORE the long build.
+    // (Skipped for --dry-run, which never publishes.)
+    if (!dryRun) {
+      preflightAuth()
+    }
+
     const currentVersion = packageJson.version
     let newVersion
-    
+
     if (specifiedVersion) {
       newVersion = specifiedVersion
     } else if (prereleaseType) {
@@ -274,9 +290,9 @@ function main() {
     } else {
       newVersion = incrementVersion(currentVersion, type)
     }
-    
+
     console.log(`\nVersion: ${currentVersion} → ${newVersion}`)
-    
+
     packageJson.version = newVersion
     fs.writeFileSync(packageJsonPath, JSON.stringify(packageJson, null, 2) + '\n')
     
@@ -323,25 +339,13 @@ function main() {
       console.log(`Package: ${tgzName}`)
       console.log('\nTo publish, run without --dry-run flag')
     } else {
-      try {
-        execSync('npm whoami', { stdio: 'ignore' })
-      } catch (error) {
-        console.error('\n❌ Error: Not logged in to npm')
-        console.error('Please run: npm login')
-        process.exit(1)
-      }
-      
+      // Auth was already verified up-front by preflightAuth().
       const isScopedPackage = packageJson.name.startsWith('@')
-      let publishCmd
-      if (isScopedPackage) {
-        publishCmd = npmTag === 'latest' 
-          ? 'npm publish --access public' 
-          : `npm publish --access public --tag ${npmTag}`
-      } else {
-        publishCmd = npmTag === 'latest' 
-          ? 'npm publish' 
-          : `npm publish --tag ${npmTag}`
-      }
+      const accessFlag = isScopedPackage ? ' --access public' : ''
+      // Always pass --tag explicitly: npm refuses to publish a prerelease version
+      // (e.g. 0.1.0-beta) to the latest tag unless --tag is given. Also pin the
+      // official registry so a default mirror (e.g. npmmirror) doesn't break publish.
+      const publishCmd = `npm publish${accessFlag} --tag ${npmTag} --registry ${PUBLISH_REGISTRY}`
       
       runCommand(publishCmd, `Publishing to npm (${npmTag} tag)`)
       

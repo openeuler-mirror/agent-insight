@@ -1,8 +1,8 @@
 'use client';
 
 /**
- * Skill 管理 —— 头部对齐 /skill-eval（Skill 分析）：
- *   1. 顶部用 <AppTopBar title="Skill 管理" />（与 Skill 分析、Skill 优化等子模块一致）
+ * Skills Hub —— 头部对齐 /skill-eval（Skill 分析）：
+ *   1. 顶部用 <AppTopBar title="Skills Hub" />（与 Skill 分析、Skill 优化等子模块一致）
  *   2. 内容区第一行是一个单行 selector toolbar（标题块 + 搜索 + 筛选 + inline 统计 + 上传按钮），
  *      取代之前的"badge + h1 + button + 描述 + 4 卡 KPI strip + 单独筛选行"那一坨纵向占位。
  *
@@ -45,7 +45,7 @@ function SkillsPageInner() {
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--background)', overflow: 'hidden' }}>
-            <AppTopBar title="Skill 管理" showDefaultActions={false} />
+            <AppTopBar title="Skills Hub" showDefaultActions={false} />
             <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '14px 20px 24px', width: '100%', boxSizing: 'border-box' }}>
                 <SkillCatalog refresh={refreshKey} onUploadClick={() => setUploadOpen(true)} />
             </div>

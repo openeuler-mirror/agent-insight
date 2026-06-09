@@ -2,15 +2,20 @@ import type { StaticStandard } from './types';
 
 /**
  * 静态评估 6 维度标准（与 src/lib/engine/skill-issues/static-evaluator/prompts.ts 对齐）。
- * dimensionAliases 同时兼容 L2 LLM 的中文维度名 与 L1 linter 的英文枚举（role/structure/content），
- * 以及历史遗留名「代码质量」→ 6. 脚本及参考文档质量。
+ *
+ * 2026-06 重整：
+ *  - 替换"运维可靠性" → "安全风险性"（独立的威胁评估维度，详见 agent-scan issue-codes）
+ *  - 重命名 / 扩展 "脚本及参考文档质量" → "工程健壮性"（吸收原"运维可靠性"中的灾难恢复 / 可观测性 / 人机协作子项）
+ *  - L1 linter 全部归到 structure / security（原 'role' / 'content' alias 删除；旧数据归"其它静态扫描问题"分区）
+ *
+ * dimensionAliases 同时兼容 L2 LLM 的中文维度名 与 L1 linter 的英文枚举（structure / security）。
  */
 export const STATIC_EVAL_STANDARDS: StaticStandard[] = [
     {
         key: 'purpose',
         title: '目的适配性',
         desc: '评估 Skill 是否具有清晰的单一目的，并能让 LLM 准确识别调用时机。',
-        dimensionAliases: ['目的适配性', 'role'],
+        dimensionAliases: ['目的适配性'],
     },
     {
         key: 'structure',
@@ -28,19 +33,19 @@ export const STATIC_EVAL_STANDARDS: StaticStandard[] = [
         key: 'consistency',
         title: '内容一致性',
         desc: '评估 Skill 在术语、表达风格是否保持一致，且不依赖隐含的时效性假设。',
-        dimensionAliases: ['内容一致性', 'content'],
+        dimensionAliases: ['内容一致性'],
     },
     {
-        key: 'reliability',
-        title: '运维可靠性',
-        desc: '评估 Skill 的安全边界、灾难恢复和操作可观测性。',
-        dimensionAliases: ['运维可靠性'],
+        key: 'security',
+        title: '安全风险性',
+        desc: '检测 prompt injection / 硬编码 secret / 可疑下载 URL / 不安全凭据处理等 10 类威胁（参考 agent-scan issue-codes）。',
+        dimensionAliases: ['安全风险性', 'security'],
     },
     {
-        key: 'asset',
-        title: '脚本及参考文档质量',
-        desc: '评估 Skill 关联的参考实现和脚本文件，强调其独立性、健壮性与自愈能力。',
-        dimensionAliases: ['脚本及参考文档质量', '代码质量'],
+        key: 'robustness',
+        title: '工程健壮性',
+        desc: '评估 Skill 关联的脚本独立性、错误处理、依赖管理，以及流程层面的灾难恢复、可观测性和人机协作设计。',
+        dimensionAliases: ['工程健壮性'],
     },
 ];
 

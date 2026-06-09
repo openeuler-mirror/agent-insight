@@ -1,6 +1,9 @@
 export type AgentDebugModule = 'memory' | 'reflection' | 'planning' | 'action' | 'system' | 'others' | 'unknown';
 export type AgentDebugSeverity = 'high' | 'medium' | 'low';
 export type AgentDebugStatus = 'pending' | 'running' | 'done' | 'failed';
+export type AgentDebugIssueResolution = 'unresolved' | 'recovered' | 'non_blocking';
+export type AgentDebugFindingIssueRole = 'root' | 'contributing' | 'downstream';
+export type AgentDebugFindingImpact = 'result_blocking' | 'quality_degrading' | 'recovered_cost' | 'risk';
 
 export interface DebugToolCall {
   id?: string;
@@ -62,6 +65,24 @@ export interface AgentDebugIssue extends AgentDebugTraceLocation {
   confidence: number;
   anchorId?: string;
   windowId?: string;
+  resolution?: AgentDebugIssueResolution;
+  resolutionEvidence?: string;
+}
+
+export interface AgentDebugFindingIssueRef {
+  issueId: string;
+  role: AgentDebugFindingIssueRole;
+}
+
+export interface AgentDebugFinding {
+  id: string;
+  severity: AgentDebugSeverity;
+  impact: AgentDebugFindingImpact;
+  summary: string;
+  evidence: string;
+  issueRefs: AgentDebugFindingIssueRef[];
+  correctionGuidance: string;
+  confidence: number;
 }
 
 export interface AgentDebugRootCause {
@@ -142,8 +163,31 @@ export interface AgentDebugPhase1Cell extends AgentDebugTraceLocation {
   anchorId?: string;
 }
 
+export type AgentDebugSkillsAnalysisStatus = 'pending' | 'running' | 'done' | 'failed';
+
+export interface AgentDebugSkillsKeyActionResult {
+  actionId: string;
+  actionContent: string;
+  coverage: 'covered' | 'partial' | 'missing' | 'not_applicable';
+  severity: AgentDebugSeverity;
+  traceComparisonAnalysis: string;
+  skillImprovementSuggestion: string;
+}
+
+export interface AgentDebugSkillsAnalysis {
+  status: AgentDebugSkillsAnalysisStatus;
+  source: 'agent-debug';
+  generatedAt?: string;
+  updatedAt?: string;
+  interactionHash?: string;
+  errorMessage?: string | null;
+  reasonText?: string;
+  skillKeyActionComparison?: unknown;
+  keyActionResults?: AgentDebugSkillsKeyActionResult[];
+}
+
 export interface AgentDebugReportPayload {
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   generator: string;
   executionId: string;
   interactionHash: string;
@@ -152,9 +196,11 @@ export interface AgentDebugReportPayload {
   triage?: AgentDebugTriage;
   rootCause: AgentDebugRootCause | null;
   issues: AgentDebugIssue[];
+  findings?: AgentDebugFinding[];
   phase1Grid?: AgentDebugPhase1Cell[];
   stepRecords?: AgentDebugStepRecord[];
   candidateWindows: AgentDebugCandidateWindow[];
+  skillsAnalysis?: AgentDebugSkillsAnalysis;
   modelLabel?: string | null;
   llmPowered?: boolean;
   stats: {
@@ -180,6 +226,19 @@ export interface AgentDebugReportRow {
   llmCallCount: number;
   durationMs: number | null;
   generator: string;
+  ranAt: string | Date;
+  updatedAt: string | Date;
+}
+
+export interface AgentDebugSkillsAnalysisRow {
+  id: string;
+  executionId: string;
+  user: string | null;
+  interactionsHash: string;
+  status: AgentDebugSkillsAnalysisStatus;
+  errorMessage: string | null;
+  analysisJson: string | null;
+  keyActionCount: number;
   ranAt: string | Date;
   updatedAt: string | Date;
 }

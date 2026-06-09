@@ -56,11 +56,12 @@ test('trajectory evaluator stays single-agent and forbids subagents', () => {
   const source = fs.readFileSync(file, 'utf8');
   assert.match(source, /禁止派发、调用或生成任何 subagent \/ task/);
   assert.match(source, /dimension_details/);
-  assert.match(source, /Step 1：冗余分析/);
-  assert.match(source, /Step 5：聚合输出/);
-  assert.match(source, /最终只输出 JSON/);
-  assert.match(source, /不要输出步骤过程/);
-  assert.match(source, /dimension_scores\.completeness.*dimension_details\.completeness\.score/);
+  assert.match(source, /关键动作轨迹分析器/);
+  assert.match(source, /只输出严格 JSON/);
+  assert.match(source, /不要输出 deviation_steps/);
+  assert.match(source, /key_action_results/);
+  assert.match(source, /dimension_scores\.completeness 为 null/);
+  assert.match(source, /dimension_details\.completeness\.score 为 null/);
   assert.doesNotMatch(source, /raw_subagent_outputs/);
   assert.doesNotMatch(source, /const COMPLETENESS_CHECKER_PROMPT =/);
   assert.doesNotMatch(source, /const TOOL_CHOICE_JUDGE_PROMPT =/);

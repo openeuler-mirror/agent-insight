@@ -6,11 +6,9 @@ import React, { FormEvent, useCallback, useEffect, useMemo, useRef, useState, Su
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
-    AlertTriangle,
     ArrowLeft,
     AtSign,
     Bot,
-    CheckCircle2,
     ChevronDown,
     ChevronRight,
     Clock,
@@ -25,7 +23,6 @@ import {
     Sparkles,
     UserRound,
     X,
-    XCircle,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -35,7 +32,6 @@ import { StatusBadge } from '@/components/feedback/StatusBadge';
 import { useAuth } from '@/lib/auth/auth-context';
 import { useLocale } from '@/lib/client/locale-context';
 import { apiFetch } from '@/lib/client/api';
-import { ExpandableText } from '@/components/text/ExpandableText';
 import { Term } from '@/components/text/Term';
 import { formatDuration, type AgentEvent, type RawInteraction } from '@/lib/engine/observability/agent-trace';
 import { buildFaultPathSteps, type FailureTraceAnchor } from '@/lib/engine/observability/fault-path';
@@ -202,14 +198,10 @@ function FaultPageContent() {
     const [timeFilter, setTimeFilter] = useState<TimeFilter>('all');
     const [anomalyFilter, setAnomalyFilter] = useState<'all' | 'yes' | 'no'>('yes'); // 默认筛选"是"
     const [frameworkFilter, setFrameworkFilter] = useState<string>('all');
-    const [agentFilter, setAgentFilter] = useState<string>('all');
+    // 初始 agent 过滤直接从 URL ?agent= 派生（懒初始化），避免 mount 后再 setState 触发级联渲染。
+    const [agentFilter, setAgentFilter] = useState<string>(() => searchParams?.get('agent') || 'all');
     const [skillFilter, setSkillFilter] = useState<string>('all');
     const [ownershipFilter, setOwnershipFilter] = useState<string>('user');
-
-    useEffect(() => {
-        const agent = searchParams?.get('agent');
-        if (agent) setAgentFilter(agent);
-    }, []);
 
     const handleSelectExecution = (e: Execution | null) => {
         setSelectedExecution(e);
@@ -241,7 +233,7 @@ function FaultPageContent() {
     useEffect(() => {
         if (!user) return;
         setLoading(true);
-        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}`)
+        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&fields=light`)
             .then(r => r.json())
             .then((d: Execution[]) => {
                 const list = Array.isArray(d) ? d : [];
@@ -306,7 +298,7 @@ function FaultPageContent() {
 
                 // 6. Agent 归属过滤
                 if (ownershipFilter !== 'all') {
-                    const ownership = e.agentOwnership ?? 'unregistered';
+                    const ownership = e.agentOwnership ?? 'user';
                     if (ownership !== ownershipFilter) return false;
                 }
 
@@ -380,7 +372,6 @@ function FaultPageContent() {
                                     <option value="all">{t('nav.allOwnership')}</option>
                                     <option value="user">{t('nav.userAgent')}</option>
                                     <option value="system">{t('nav.systemAgent')}</option>
-                                    <option value="unregistered">{t('nav.unregisteredAgent')}</option>
                                 </FilterChip>
 
                                 {/* ── Agent ── */}
@@ -496,7 +487,7 @@ function FaultPageContent() {
                                     </span>
                                     {ownershipFilter !== 'all' && (
                                         <ActiveFilterTag
-                                            label={`${t('nav.filterAgentOwnership')}: ${ownershipFilter === 'user' ? t('nav.userAgent') : ownershipFilter === 'system' ? t('nav.systemAgent') : t('nav.unregisteredAgent')}`}
+                                            label={`${t('nav.filterAgentOwnership')}: ${ownershipFilter === 'system' ? t('nav.systemAgent') : t('nav.userAgent')}`}
                                             onRemove={() => setOwnershipFilter('all')}
                                         />
                                     )}
@@ -604,6 +595,8 @@ function FaultDetailView({ execution, locale, user, onBack }: { execution: Execu
     const [input, setInput] = useState('');
     const [agentSessionId, setAgentSessionId] = useState<string | null>(null);
     const [sending, setSending] = useState(false);
+    // 列表走 fields=light(不带 final_result),详情打开时按需单查回填,供诊断 brief 使用。
+    const [finalResult, setFinalResult] = useState<string | null>(null);
 
     // ── UI state ──
     const [pendingNodeRefs, setPendingNodeRefs] = useState<Map<string, TraceNodeItem>>(new Map());
@@ -625,10 +618,9 @@ function FaultDetailView({ execution, locale, user, onBack }: { execution: Execu
     const [selectedNode, setSelectedNode] = useState<TreeTraceNode | null>(null);
 
     // ── Computed ──
-    const faultKinds = useMemo(() => classifyFaultKinds(execution), [execution]);
     const diagnosticItems = useMemo(() => buildDiagnosticItems(execution, locale), [execution, locale]);
-    const traceExplicitErrors = useMemo(() => buildTraceExplicitErrors(diagnosticItems), [diagnosticItems]);
     const traceNodes = useMemo(() => buildFaultPath(execution, session?.interactions || [], locale, diagnosticItems), [execution, session?.interactions, locale, diagnosticItems]);
+    const traceExplicitErrors = useMemo(() => buildTraceExplicitErrors(diagnosticItems, traceNodes), [diagnosticItems, traceNodes]);
     const faultSummary = useMemo(() => summarizeFaultPath(traceNodes, execution), [traceNodes, execution]);
     const skillCount = (execution.invoked_skills?.length ?? 0) || (execution.skills?.length ?? 0) || (execution.skill ? 1 : 0);
 
@@ -677,8 +669,17 @@ function FaultDetailView({ execution, locale, user, onBack }: { execution: Execu
     useEffect(() => {
         setMessages([]); setInput(''); setAgentSessionId(null); setSession(null);
         setPendingNodeRefs(new Map()); setTraceSearch(''); setCollapsedNodes(new Set());
+        setFinalResult(null);
         if (!taskId) return;
         setSessionLoading(true);
+        // 列表是轻量返回(无 final_result),这里按需单查回填(单条,无 OOM 风险),供诊断 brief 用。
+        apiFetch(`/api/observe/data?executionId=${encodeURIComponent(taskId)}`)
+            .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+            .then((arr: Array<{ final_result?: string | null }>) => {
+                const fr = Array.isArray(arr) && arr[0] ? (arr[0].final_result ?? null) : null;
+                setFinalResult(fr);
+            })
+            .catch(() => {});
         apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}`)
             .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
             .then((d: SessionData) => setSession(d))
@@ -762,7 +763,7 @@ function FaultDetailView({ execution, locale, user, onBack }: { execution: Execu
             const response = await apiFetch('/api/fault/diagnosis/stream', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ user, message: fullMessage, executionId: taskId, sessionId: agentSessionId, executionBrief: buildExecutionBrief(execution) }),
+                body: JSON.stringify({ user, message: fullMessage, executionId: taskId, sessionId: agentSessionId, executionBrief: buildExecutionBrief({ ...execution, final_result: finalResult ?? execution.final_result ?? undefined }) }),
             });
             if (!response.ok || !response.body) throw new Error((await response.text().catch(() => '')) || `HTTP ${response.status}`);
             await consumeSse(response, {
@@ -810,7 +811,6 @@ function FaultDetailView({ execution, locale, user, onBack }: { execution: Execu
                         {(execution.agentName || execution.agent) && (
                             <span style={{ fontSize: 12, color: 'var(--foreground-muted)', fontWeight: 600 }}>· {execution.agentName || execution.agent}</span>
                         )}
-                        {faultKinds.map(k => <FaultKindBadge key={k} locale={locale} />)}
                     </div>
                 </div>
                 <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 0 }}>
@@ -1253,20 +1253,24 @@ function buildDiagnosticItems(execution: Execution, locale: string): DiagnosticI
     return original;
 }
 
-function buildTraceExplicitErrors(items: DiagnosticItem[]): TraceExplicitError[] {
+function buildTraceExplicitErrors(items: DiagnosticItem[], nodes: TraceNodeItem[]): TraceExplicitError[] {
     return items
         .filter(item => item.diagnostic_kind === 'original')
-        .map((item, index) => ({
-            id: item.trace_anchor?.step_id || item.anchor_step_id || `trace-explicit-error-${index + 1}`,
-            title: item.failure_type || 'Trace error',
-            description: item.description,
-            context: item.context || item.attribution_reason || item.step,
-            recovery: item.recovery,
-            anchorId: item.trace_anchor?.step_id || item.anchor_step_id,
-            traceStepIndex: item.trace_anchor?.step_index,
-            traceNodeLabel: item.trace_anchor?.display_name,
-            traceNodeKind: item.trace_anchor?.kind,
-        }));
+        .map((item, index) => {
+            const matchedNode = findBestFaultNode(nodes, item)?.node;
+            const anchorId = matchedNode?.id || item.trace_anchor?.step_id || item.anchor_step_id;
+            return {
+                id: anchorId || `trace-explicit-error-${index + 1}`,
+                title: item.failure_type || 'Trace error',
+                description: item.description,
+                context: item.context || item.attribution_reason || item.step,
+                recovery: item.recovery,
+                anchorId,
+                traceStepIndex: matchedNode?.step ?? item.trace_anchor?.step_index,
+                traceNodeLabel: [matchedNode?.name, matchedNode?.meta].filter(Boolean).join(' · ') || item.trace_anchor?.display_name,
+                traceNodeKind: matchedNode?.kind || item.trace_anchor?.kind,
+            };
+        });
 }
 
 function isToolErrorCovered(items: DiagnosticItem[]): boolean {
@@ -1928,14 +1932,6 @@ function ChatMarkdown({ content, onNodeRefClick, nodeMap }: {
     );
 }
 
-function classifyFaultKinds(execution: Execution): FaultKind[] {
-    const kinds: FaultKind[] = [];
-    if ((execution.failures?.length || 0) > 0 || (execution.tool_call_error_count || 0) > 0) {
-        kinds.push('original');
-    }
-    return kinds;
-}
-
 function buildExecutionBrief(execution: Execution) {
     return {
         task_id: execution.task_id,
@@ -1990,28 +1986,6 @@ async function consumeSse(response: Response, handlers: { text?: (data: any) => 
             if (event === 'error') handlers.error?.(data);
         }
     }
-}
-
-function FaultKindBadge({ locale }: { locale: string }) {
-    return (
-        <span
-            style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 5,
-                padding: '3px 8px',
-                borderRadius: 999,
-                fontSize: 10.5,
-                fontWeight: 650,
-                background: 'var(--error-subtle)',
-                color: 'var(--error)',
-                border: '1px solid var(--error-subtle-border)',
-            }}
-        >
-            <span style={{ width: 6, height: 6, borderRadius: 999, background: 'currentColor' }} />
-            {locale === 'zh' ? 'Trace 明确报错' : 'Trace error'}
-        </span>
-    );
 }
 
 function FaultFilterPill({ label, count, active }: { label: string; count?: number; active?: boolean }) {

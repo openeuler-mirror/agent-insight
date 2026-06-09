@@ -227,6 +227,79 @@ export async function POST(
     }
 }
 
+/**
+ * 在 config.datasetIds 指向的"仍存在"数据集里找出包含指定 caseId 的数据集 id。
+ * 多选数据集后不能再假设 case 一定属于 datasetIds[0]——评测需带上 case 真正归属的 datasetId,
+ * 否则 /api/eval/trajectory/run 在该数据集里找不到这个 case 会跳过评测。
+ */
+async function findCaseDatasetId(user: string, datasetIds: string[] | undefined, caseId: string): Promise<string | undefined> {
+    const ids = (datasetIds || []).filter(Boolean);
+    if (ids.length === 0) return undefined;
+    const rows = await (prisma as unknown as { agentEvalDataset: { findMany: (a: unknown) => Promise<Array<{ id: string; casesJson: string }>> } }).agentEvalDataset.findMany({
+        where: { id: { in: ids }, user },
+    });
+    for (const d of rows) {
+        const cases = JSON.parse(d.casesJson || '[]') as Array<{ id: string }>;
+        if (cases.some(c => c.id === caseId)) return d.id;
+    }
+    return undefined;
+}
+
+async function resolveBatchSkillContext(user: string, config: BatchEvalConfig): Promise<{
+    skillName: string | undefined;
+    skillVersion: number | undefined;
+}> {
+    if (!config.skillId) return { skillName: undefined, skillVersion: undefined };
+
+    const skill = await (prisma as unknown as { skill: { findFirst: (a: unknown) => Promise<{ name: string } | null> } }).skill.findFirst({
+        where: { id: config.skillId, user },
+    });
+    if (!skill) throw new Error('selected skill not found');
+    if (!config.versionId) throw new Error('selected skill version is required');
+
+    const version = await (prisma as unknown as { skillVersion: { findFirst: (a: unknown) => Promise<{ version: number } | null> } }).skillVersion.findFirst({
+        where: { id: config.versionId, skillId: config.skillId },
+    });
+    if (!version) throw new Error('selected skill version not found');
+    return { skillName: skill.name, skillVersion: version.version };
+}
+
+async function assertEvaluationBatchContext(
+    user: string,
+    evaluatorRunId: string | undefined,
+    skillName: string | undefined,
+    skillVersion: number | undefined,
+) {
+    if (!evaluatorRunId) return;
+    const rows = await prisma.trajectoryEvalResult.findMany({
+        where: { user, evaluatorRunId },
+        select: { taskId: true, executionId: true },
+    }) as Array<{ taskId: string | null; executionId: string | null }>;
+    const executionKeys = Array.from(new Set(
+        rows.flatMap(row => [row.taskId, row.executionId].filter((value): value is string => Boolean(value))),
+    ));
+    if (executionKeys.length === 0) return;
+
+    const executions = await prisma.execution.findMany({
+        where: {
+            OR: [
+                { taskId: { in: executionKeys } },
+                { id: { in: executionKeys } },
+            ],
+        },
+        select: { skill: true, skillVersion: true },
+    }) as Array<{ skill: string | null; skillVersion: number | null }>;
+    const expectedName = skillName || '';
+    const expectedVersion = skillVersion ?? null;
+    const mismatched = executions.some(execution =>
+        String(execution.skill || '').trim() !== expectedName
+        || execution.skillVersion !== expectedVersion,
+    );
+    if (mismatched) {
+        throw new Error('evaluation task belongs to a different skill or version');
+    }
+}
+
 async function startBatchTaskInBackground(origin: string, taskId: string, user: string, caseIds: string[]) {
     // 1. 加载 task
     const task = await (prisma as unknown as { batchEvalTask: { findFirst: (a: unknown) => Promise<BatchEvalTaskRow | null> } }).batchEvalTask.findFirst({
@@ -236,41 +309,36 @@ async function startBatchTaskInBackground(origin: string, taskId: string, user: 
     const config: BatchEvalConfig = JSON.parse(task.configJson || '{}');
     const states: Record<string, BatchCaseState> = JSON.parse(task.caseStatesJson || '{}');
 
-    // 2. 解析 skill (用户可能不绑 skill, 即纯模型基线 -- runGeneralAgent 不传 skill 即可)
-    let skillName: string | undefined;
-    let skillVersion: number | undefined;
-    if (config.skillId) {
-        const skill = await (prisma as unknown as { skill: { findFirst: (a: unknown) => Promise<{ name: string } | null> } }).skill.findFirst({
-            where: { id: config.skillId, user },
-        });
-        skillName = skill?.name;
-        if (config.versionId && skill) {
-            // SkillVersion 表没有 user 字段 (user 通过 skillId 间接归属), 用 skillId 验证关联即可
-            const sv = await (prisma as unknown as { skillVersion: { findFirst: (a: unknown) => Promise<{ version: number } | null> } }).skillVersion.findFirst({
-                where: { id: config.versionId, skillId: config.skillId },
-            });
-            skillVersion = sv?.version;
+    // 2. 解析并校验 skill/version。绑定 skill 时不允许回落到 active version。
+    const { skillName, skillVersion } = await resolveBatchSkillContext(user, config);
+    await assertEvaluationBatchContext(user, config.evaluationBatchId, skillName, skillVersion);
+
+    // 3. 加载 dataset(支持多选), 合并所有"仍存在"数据集的 case, 并记录每个 case 归属的 datasetId。
+    //    旧实现只取 datasetIds[0] 有两个 bug: ①首位数据集被删 → 整批 "dataset not found" 启动失败;
+    //    ②跨数据集勾选 case 时, 非首位数据集的 case 在执行(此处)与评测(autoEval 传 datasetId)两处都被静默丢弃。
+    //    case id 为全局唯一 UUID, 跨数据集合并无键冲突; 全部数据集都查不到才报错。
+    const datasetIds = (config.datasetIds || []).filter(Boolean);
+    if (datasetIds.length === 0) throw new Error('dataset not selected in task config');
+    const datasetRows = await (prisma as unknown as { agentEvalDataset: { findMany: (a: unknown) => Promise<Array<{ id: string; casesJson: string }>> } }).agentEvalDataset.findMany({
+        where: { id: { in: datasetIds }, user },
+    });
+    if (datasetRows.length === 0) throw new Error('dataset not found');
+    const caseMap = new Map<string, { id: string; input?: string; datasetId: string }>();
+    for (const d of datasetRows) {
+        for (const c of JSON.parse(d.casesJson || '[]') as Array<{ id: string; input?: string }>) {
+            caseMap.set(c.id, { id: c.id, input: c.input, datasetId: d.id });
         }
     }
-
-    // 3. 加载 dataset, 选出要跑的 case
-    const datasetId = config.datasetIds?.[0];
-    if (!datasetId) throw new Error('dataset not selected in task config');
-    const dataset = await (prisma as unknown as { agentEvalDataset: { findFirst: (a: unknown) => Promise<{ casesJson: string } | null> } }).agentEvalDataset.findFirst({
-        where: { id: datasetId, user },
-    });
-    if (!dataset) throw new Error('dataset not found');
-    const allCases = JSON.parse(dataset.casesJson || '[]') as Array<{ id: string; input?: string }>;
-    const caseMap = new Map(allCases.map(c => [c.id, c]));
-    const targets = caseIds.map(id => caseMap.get(id)).filter((c): c is { id: string; input?: string } => !!c);
+    const targets = caseIds.map(id => caseMap.get(id)).filter((c): c is { id: string; input?: string; datasetId: string } => !!c);
     if (targets.length === 0) throw new Error('no valid cases selected');
 
     // 4. 初始化状态 pending, persist
     for (const c of targets) {
         states[c.id] = {
-            ...(states[c.id] || {}),
             status: 'pending',
             input: c.input || '',
+            evaluatorRunId: config.evaluationBatchId,
+            startedAt: Date.now(),
         };
     }
     await persistStates(taskId, user, states);
@@ -289,7 +357,7 @@ async function runBatchTaskBackground(
     origin: string,
     taskId: string,
     user: string,
-    targets: Array<{ id: string; input?: string }>,
+    targets: Array<{ id: string; input?: string; datasetId?: string }>,
     config: BatchEvalConfig,
     states: Record<string, BatchCaseState>,
     skillName: string | undefined,
@@ -322,7 +390,7 @@ async function runOneBatchCase(
     origin: string,
     taskId: string,
     user: string,
-    c: { id: string; input?: string },
+    c: { id: string; input?: string; datasetId?: string },
     config: BatchEvalConfig,
     states: Record<string, BatchCaseState>,
     skillName: string | undefined,
@@ -345,9 +413,11 @@ async function runOneBatchCase(
                 skill: skillName,
                 skillVersion,
                 interactionPolicy: 'auto-deny',
-                systemAgentName: skillName ? 'grayscale-skill-agent' : 'grayscale-baseline-agent',
+                // 用例分析「从数据集」执行器: 记成 skill-debug-executor → classifyTraceSource 归为 'batch'(用例分析)。
+                // 旧实现误用 grayscale-* 名, 导致这些 trace 被标成 A/B 测试。skill/baseline 区分靠 skill 字段, 与名字无关。
+                systemAgentName: 'skill-debug-executor',
                 ephemeralServer: true,
-                recordTraceAs: skillName ? 'grayscale-skill-agent' : 'grayscale-baseline-agent',
+                recordTraceAs: 'skill-debug-executor',
                 sessionTitle: `batch ${user} · ${taskId} · ${c.id.slice(0, 8)}`,
                 workspaceTag: `batch-${taskId}-${c.id}`,
                 tagSkill: skillName,
@@ -388,7 +458,8 @@ async function runOneBatchCase(
         try {
             const evalBody: Record<string, unknown> = {
                 user,
-                datasetId: config.datasetIds?.[0],
+                // 多选数据集时 case 不一定属于 datasetIds[0], 用执行阶段记录的归属 datasetId, 否则评测会找不到 case。
+                datasetId: c.datasetId ?? config.datasetIds?.[0],
                 pairs: [{ caseId: c.id, taskId: sessionId }],
             };
             if (config.evaluationBatchId) {
@@ -453,7 +524,7 @@ async function waitAndApplyBatchEvaluation(
             await persistStates(taskId, user, states);
             return;
         }
-        const res = await fetch(`${origin}/api/eval/trajectory/results?user=${encodeURIComponent(user)}&runId=${encodeURIComponent(evaluatorRunId)}&limit=500`).catch(() => null);
+        const res = await fetch(`${origin}/api/eval/trajectory/results?user=${encodeURIComponent(user)}&runId=${encodeURIComponent(evaluatorRunId)}&latestByCase=1&limit=500`).catch(() => null);
         const data = res ? await res.json().catch(() => ({})) : {};
         const results = Array.isArray((data as { results?: unknown }).results) ? (data as { results: Array<Record<string, unknown>> }).results : [];
         // 找匹配本 case sessionId 的 result (评测里 taskId 字段 = agent sessionId)
@@ -676,32 +747,21 @@ async function retryBatchCase(origin: string, taskId: string, user: string, case
             status: 'evaluating',
             input: baseInput,
             sessionId: existing.sessionId,
+            evaluatorRunId: config.evaluationBatchId,
             startedAt: Date.now(),
         };
     } else {
         states[caseId] = {
             status: 'pending',
             input: baseInput,
+            evaluatorRunId: config.evaluationBatchId,
             startedAt: Date.now(),
         };
     }
     await persistStates(taskId, user, states);
 
-    // 解析 skill (跟 startBatchTaskInBackground 一样)
-    let skillName: string | undefined;
-    let skillVersion: number | undefined;
-    if (config.skillId) {
-        const skill = await (prisma as unknown as { skill: { findFirst: (a: unknown) => Promise<{ name: string } | null> } }).skill.findFirst({
-            where: { id: config.skillId, user },
-        });
-        skillName = skill?.name;
-        if (config.versionId && skill) {
-            const sv = await (prisma as unknown as { skillVersion: { findFirst: (a: unknown) => Promise<{ version: number } | null> } }).skillVersion.findFirst({
-                where: { id: config.versionId, skillId: config.skillId },
-            });
-            skillVersion = sv?.version;
-        }
-    }
+    const { skillName, skillVersion } = await resolveBatchSkillContext(user, config);
+    await assertEvaluationBatchContext(user, config.evaluationBatchId, skillName, skillVersion);
 
     // 一次性 controller, 不进 batchActiveRuns (避免跟主任务 abort 冲突)
     const abortController = new AbortController();
@@ -712,7 +772,8 @@ async function retryBatchCase(origin: string, taskId: string, user: string, case
             try {
                 const evalBody: Record<string, unknown> = {
                     user,
-                    datasetId: config.datasetIds?.[0],
+                    // 多选数据集时按 caseId 反查真正归属的 datasetId, 写死 datasetIds[0] 会导致评测找不到 case。
+                    datasetId: (await findCaseDatasetId(user, config.datasetIds, caseId)) ?? config.datasetIds?.[0],
                     pairs: [{ caseId, taskId: sessionId }],
                 };
                 if (config.evaluationBatchId) {

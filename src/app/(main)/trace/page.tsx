@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import React, { useCallback, useEffect, useMemo, useRef, useState, Suspense } from 'react';
 import {
     ArrowLeft,
+    Download,
     RefreshCw,
     ExternalLink as ExternalLinkIcon,
     X as XIcon,
@@ -16,6 +17,7 @@ import {
     RotateCcw,
 } from 'lucide-react';
 import { parseAsInteger, parseAsString, useQueryState } from 'nuqs';
+import { toast } from 'sonner';
 
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { PageContainer, PageContent, PageFooter, PageHeader, PageToolbar } from '@/components/shell/PageContainer';
@@ -84,7 +86,7 @@ type TimeFilter = '1h' | '3h' | '24h' | '7d' | '30d' | 'all';
 type SortKey = 'timestamp' | 'agent' | 'status' | 'latency' | 'tokens' | 'cost';
 type SortDir = 'asc' | 'desc';
 type AnomalyFilter = 'all' | 'running' | 'success' | 'failed';
-type OwnershipFilter = 'all' | 'user' | 'system' | 'unregistered';
+type OwnershipFilter = 'all' | 'user' | 'system';
 
 const TIME_WIN_MS: Record<TimeFilter, number> = {
     '1h': 3.6e6,
@@ -165,6 +167,52 @@ function toDisplayLatencyMs(latency: number, framework?: string): number {
     const fw = (framework || '').toLowerCase();
     if ((fw === 'opencode' || fw === 'openhands' || fw === 'claude' || fw === 'claudecode') && latency > 0 && latency < 1000) return latency * 1000;
     return latency;
+}
+
+function formatTimestampForDisplay(ts: number): string {
+    if (!ts && ts !== 0) return '-';
+    const d = new Date(ts);
+    return d.getFullYear() + '/' +
+        String(d.getMonth() + 1).padStart(2, '0') + '/' +
+        String(d.getDate()).padStart(2, '0') + ' ' +
+        String(d.getHours()).padStart(2, '0') + ':' +
+        String(d.getMinutes()).padStart(2, '0') + ':' +
+        String(d.getSeconds()).padStart(2, '0') + '.' +
+        String(d.getMilliseconds()).padStart(3, '0');
+}
+
+function formatSessionForDisplay(session: any): any {
+    if (!session) return session;
+    const formatted = JSON.parse(JSON.stringify(session));
+
+    if (formatted.startTime) {
+        formatted.startTime = formatTimestampForDisplay(formatted.startTime);
+    }
+
+    if (Array.isArray(formatted.interactions)) {
+        formatted.interactions = formatted.interactions.map((interaction: any) => {
+            const formattedInteraction = { ...interaction };
+            if (formattedInteraction.timestamp) {
+                formattedInteraction.timestamp = formatTimestampForDisplay(formattedInteraction.timestamp);
+            }
+            if (formattedInteraction.message?.timestamp) {
+                formattedInteraction.message.timestamp = formatTimestampForDisplay(formattedInteraction.message.timestamp);
+            }
+            if (formattedInteraction.timeInfo?.created) {
+                formattedInteraction.timeInfo.created = formatTimestampForDisplay(formattedInteraction.timeInfo.created);
+            }
+            return formattedInteraction;
+        });
+    }
+
+    return formatted;
+}
+
+function safeFilenameSegment(value: string): string {
+    return value
+        .replace(/[\\/:*?"<>|]+/g, '_')
+        .replace(/\s+/g, '_')
+        .slice(0, 120) || 'trace';
 }
 
 function clampColumnWidth(key: ResizableColKey, width: number): number {
@@ -356,7 +404,7 @@ function TracePageContent() {
             : agentScopeFilter === 'all'
                 ? '&includeSubagents=1'
                 : '';
-        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&includeEvaluations=0${scopeParam}`)
+        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&includeEvaluations=0&fields=light${scopeParam}`)
             .then(r => r.json())
             .then((d: Execution[]) => setData(Array.isArray(d) ? d : []))
             .catch(() => setData([]))
@@ -403,7 +451,7 @@ function TracePageContent() {
                     if (!getInvokedSkillNames(d).includes(skillFilter)) return false;
                 }
                 if (ownershipFilter !== 'all') {
-                    const ownership = d.agentOwnership ?? 'unregistered';
+                    const ownership = d.agentOwnership ?? 'user';
                     if (ownership !== ownershipFilter) return false;
                 }
                 return true;
@@ -489,7 +537,6 @@ function TracePageContent() {
         { value: 'all', label: t('nav.allOwnership') },
         { value: 'user', label: t('nav.userAgent') },
         { value: 'system', label: t('nav.systemAgent') },
-        { value: 'unregistered', label: t('nav.unregisteredAgent') },
     ];
     const statusOptions: SelectOption[] = [
         { value: 'all', label: t('common.all') },
@@ -791,6 +838,27 @@ function TraceDetailView({
     const { framework, latency, tokens, cost } = execution;
     const detailsLink = `${basePath}/details?framework=${encodeURIComponent(framework || '')}&expandTaskId=${taskId}`;
     const isRunning = execStatus === 'running';
+    const canDownloadSession = !loading && !!session && !session.error;
+
+    const downloadSessionJson = () => {
+        if (!session || session.error) return;
+        try {
+            const formatted = formatSessionForDisplay(session);
+            const blob = new Blob([JSON.stringify(formatted, null, 2)], { type: 'application/json;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `trace-${safeFilenameSegment(taskId)}-session.json`;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            URL.revokeObjectURL(url);
+            toast.success(locale === 'zh' ? 'JSON 已开始下载' : 'JSON download started');
+        } catch (error) {
+            console.error('[trace] download session json failed:', error);
+            toast.error(locale === 'zh' ? '下载 JSON 失败' : 'Failed to download JSON');
+        }
+    };
 
     return (
         <div className="flex flex-col h-full min-h-0">
@@ -883,6 +951,21 @@ function TraceDetailView({
                     <Separator orientation="vertical" className="h-5" />
                     <Button variant="default" size="sm" asChild className="h-7 text-xs">
                         <Link href={`${basePath}/fault?taskId=${taskId}`}>{t('tracePage.diagnosis')}</Link>
+                    </Button>
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={downloadSessionJson}
+                        disabled={!canDownloadSession}
+                        title={
+                            canDownloadSession
+                                ? (locale === 'zh' ? '下载会话数据（原始JSON）' : 'Download session data raw JSON')
+                                : (locale === 'zh' ? '会话数据加载后可下载' : 'Download available after session data loads')
+                        }
+                        className="h-7 text-xs"
+                    >
+                        <Download className="size-3.5" aria-hidden />
+                        {locale === 'zh' ? '保存trace' : 'Save trace'}
                     </Button>
                     <Button variant="outline" size="sm" asChild className="h-7 text-xs">
                         <a href={detailsLink} target="_blank" rel="noopener noreferrer">

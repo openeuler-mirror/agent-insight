@@ -89,7 +89,7 @@ export function buildSkillAttributionStatus(
             return {
                 state: 'degraded',
                 code: 'missing-skill',
-                message: `trace 关联的 skill 在 Skills 管理中找不到：${comparison.missingSkills.join('、')}`,
+                message: `trace 关联的 skill 在 Skills Hub 中找不到：${comparison.missingSkills.join('、')}`,
             };
         case 'missing-parsed-flow':
             return {

@@ -4,8 +4,6 @@ import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 import {
     Globe,
     Save,
-    Eye,
-    EyeOff,
     Check,
     Info,
     BookOpen,
@@ -50,7 +48,6 @@ export function WebSearchConfig() {
     const [snapshot, setSnapshot] = useState<FullSettings | null>(null);
     const [provider, setProvider] = useState<Provider>('none');
     const [apiKey, setApiKey] = useState('');
-    const [revealKey, setRevealKey] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [status, setStatus] = useState<{ type: 'success' | 'error' | 'info'; msg: string } | null>(null);
     const [loaded, setLoaded] = useState(false);
@@ -176,24 +173,20 @@ export function WebSearchConfig() {
 
                                 {provider === 'tavily' ? (
                                     <Field label={isZh ? 'API 密钥' : 'API Key'}>
-                                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                                            <input
-                                                type={revealKey ? 'text' : 'password'}
-                                                value={apiKey}
-                                                onChange={e => setApiKey(e.target.value)}
-                                                placeholder="tvly-..."
-                                                style={{ ...inputStyle, fontFamily: 'var(--font-mono, ui-monospace, monospace)' }}
-                                            />
-                                            <button
-                                                type="button"
-                                                onClick={() => setRevealKey(v => !v)}
-                                                style={ghostBtn}
-                                                title={revealKey ? (isZh ? '隐藏' : 'Hide') : (isZh ? '显示' : 'Show')}
-                                            >
-                                                {revealKey ? <EyeOff size={13} /> : <Eye size={13} />}
-                                                {revealKey ? (isZh ? '隐藏' : 'Hide') : (isZh ? '显示' : 'Show')}
-                                            </button>
-                                        </div>
+                                        <input
+                                            type="text"
+                                            value={apiKey}
+                                            onChange={e => setApiKey(e.target.value)}
+                                            placeholder="tvly-..."
+                                            style={{ ...inputStyle, fontFamily: 'var(--font-mono, ui-monospace, monospace)' }}
+                                        />
+                                        {apiKey.includes('•') && (
+                                            <div style={{ marginTop: 6, fontSize: 11.5, color: 'var(--foreground-muted)' }}>
+                                                {isZh
+                                                    ? '出于安全考虑仅显示掩码。保持不变则沿用原 Key;如需更换请清空后输入新 Key。'
+                                                    : 'Masked for security. Leave unchanged to keep the current key; clear and type a new key to replace it.'}
+                                            </div>
+                                        )}
                                     </Field>
                                 ) : (
                                     <Field label={isZh ? '状态' : 'Status'}>
@@ -304,9 +297,7 @@ function CurrentStatusPanel({
                 />
                 <KvRow
                     label={isZh ? 'API Key' : 'API Key'}
-                    value={apiKey
-                        ? maskKey(apiKey)
-                        : (isZh ? '(未设置)' : '(not set)')}
+                    value={apiKey || (isZh ? '(未设置)' : '(not set)')}
                     mono
                 />
                 <KvRow
@@ -422,11 +413,6 @@ function Field({ label, children }: { label: string, children: React.ReactNode }
             {children}
         </div>
     );
-}
-
-function maskKey(k: string): string {
-    if (k.length <= 8) return '••••••••';
-    return `${k.slice(0, 4)}••••••••${k.slice(-4)}`;
 }
 
 /* ====================== Styles (aligned with ModelConfigManager) ====================== */
@@ -576,23 +562,6 @@ const primaryBtnDisabled: CSSProperties = {
     ...primaryBtn,
     opacity: 0.6,
     cursor: 'not-allowed',
-};
-
-const ghostBtn: CSSProperties = {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 5,
-    padding: '6px 12px',
-    background: 'var(--card-bg)',
-    color: 'var(--foreground-secondary)',
-    border: '1px solid var(--border)',
-    borderRadius: 7,
-    fontSize: 12,
-    fontWeight: 500,
-    cursor: 'pointer',
-    transition: 'all .12s ease',
-    lineHeight: 1.4,
-    flexShrink: 0,
 };
 
 const hintBox: CSSProperties = {

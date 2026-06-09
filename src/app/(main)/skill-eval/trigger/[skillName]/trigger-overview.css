@@ -277,6 +277,11 @@
   color: #dc2626;
 }
 
+.trigger-history-status.status-cancelled {
+  background: rgba(113, 113, 122, 0.14);
+  color: #71717a;
+}
+
 @media (max-width: 720px) {
   .trigger-history-row {
     grid-template-columns: 1fr;
@@ -342,4 +347,21 @@
 
 .recall-empty b {
   color: var(--ev-fg);
+}
+
+/* 「评测进行中」banner 里的小转圈——表示后台还在跑。 */
+.trigger-run-spinner {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border: 2px solid #c7d2fe;
+  border-top-color: #4f46e5;
+  border-radius: 50%;
+  animation: trigger-run-spin 0.8s linear infinite;
+}
+
+@keyframes trigger-run-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }

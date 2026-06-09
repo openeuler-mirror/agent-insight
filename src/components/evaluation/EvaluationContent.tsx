@@ -184,7 +184,7 @@ function DimensionScoresCard({
     l2ErrorMessage,
 }: {
     grouped: GroupedStandard[];
-    comments?: { meta?: string; code?: string };
+    comments?: { meta?: string; robustness?: string; security?: string; code?: string };
     histogram: Record<Severity, number>;
     totalIssues: number;
     hasL2Scores: boolean;
@@ -262,10 +262,13 @@ function DimensionScoresCard({
                 </div>
             </div>
 
-            {(comments?.meta || comments?.code) && (
+            {(comments?.meta || comments?.robustness || comments?.security || comments?.code) && (
                 <div className="ev-comments">
                     {comments.meta && <div><b>SKILL.md：</b>{comments.meta}</div>}
-                    {comments.code && <div><b>参考实现：</b>{comments.code}</div>}
+                    {comments.robustness && <div><b>工程健壮性：</b>{comments.robustness}</div>}
+                    {comments.security && <div><b>安全风险性：</b>{comments.security}</div>}
+                    {/* 旧 generator @0.1 数据的 code 字段——仅向后展示，新数据用 robustness 取代 */}
+                    {comments.code && !comments.robustness && <div><b>参考实现：</b>{comments.code}</div>}
                 </div>
             )}
         </div>

@@ -163,7 +163,8 @@ export function buildFaultPathSteps(input: any[], locale = 'zh'): FaultPathStep[
                     }
 
                     rawInput = parts.length > 0 ? parts.join('\n\n---\n\n') : undefined;
-                    rawOutput = event.interaction?.content || event.summary || '';
+                    const toolCallSummary = formatLlmToolCallSummary(event.interaction?.tool_calls, locale);
+                    rawOutput = [event.interaction?.content, toolCallSummary].filter(Boolean).join('\n') || event.summary || '';
                 } else if (event.kind === 'tool' || event.kind === 'skill' || event.kind === 'task') {
                     if (event.args !== undefined) rawInput = stringifyPreview(event.args, 2000);
                     if ((event.kind === 'tool' || event.kind === 'skill') && event.output !== undefined && event.output !== null) {
@@ -398,6 +399,17 @@ function formatToolMeta(toolName: string, args: any): string {
     if (toolName === 'glob') return `glob ${args?.pattern || ''}`.trim();
     if (toolName === 'grep') return `grep ${args?.pattern || ''}`.trim();
     return `${toolName}${args ? ` ${truncateText(stringifyPreview(args, 90), 90)}` : ''}`;
+}
+
+function formatLlmToolCallSummary(toolCalls: unknown, locale: string): string {
+    if (!Array.isArray(toolCalls) || toolCalls.length === 0) return '';
+    const names = toolCalls
+        .map(call => call?.function?.name || call?.name || 'tool')
+        .slice(0, 3);
+    const suffix = toolCalls.length > names.length ? ', ...' : '';
+    return locale === 'zh'
+        ? `${toolCalls.length} 个工具调用: ${names.join(', ')}${suffix}`
+        : `${toolCalls.length} tool call${toolCalls.length > 1 ? 's' : ''}: ${names.join(', ')}${suffix}`;
 }
 
 function toMsTimestamp(v: any): number | undefined {

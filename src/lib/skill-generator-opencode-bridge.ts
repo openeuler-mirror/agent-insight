@@ -139,7 +139,20 @@ function prepareSkillGeneratorSystemPrompt(
     '',
   ].filter(Boolean).join('\n');
 
-  return meta + baseSkillContent;
+  return meta + baseSkillContent + [
+    '',
+    '',
+    '---',
+    '# 完成判据（必须满足，否则视为未完成本次任务）',
+    '',
+    '1. 你**必须用 write 工具真实落盘**：`./SKILL.md`，以及 SKILL.md 中引用的**每一个** `scripts/*` 与 `references/*` 文件。',
+    '   引用了就必须写出来——**严禁在 SKILL.md 里引用一个并未写出的脚本/文件**。',
+    '2. 在上述所有文件都用 write 落盘之前，**禁止输出任何「总结 / 计划 / 已生成 / 已完成 / 验证通过」之类的文字**。',
+    '   不要只描述你打算做什么——直接调用 write 写文件。',
+    '3. 若该 skill 涉及**精确计数 / 排名 / 时间窗 / 去重统计**等定量分析，**必须随包提供一个真实可运行的脚本**',
+    '   （优先 Python，仅用标准库），并在 SKILL.md 中明确指示「先运行该脚本、所有数字逐字引用脚本输出、禁止肉眼估算」。',
+    '4. 收尾前用 `ls` / `read` 自检：逐一确认 SKILL.md 里引用的每个文件都真实存在；缺哪个补哪个，齐全后再做收尾说明。',
+  ].join('\n');
 }
 
 
