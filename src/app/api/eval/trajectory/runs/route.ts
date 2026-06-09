@@ -141,12 +141,16 @@ export async function GET(request: Request) {
         const limit = Math.min(Math.max(Number(searchParams.get('limit') || '10'), 1), 50);
         const offset = Math.max(Number(searchParams.get('offset') || '0'), 0);
         const autoWatchOnly = searchParams.get('autoWatchOnly') === '1' || searchParams.get('autoWatchOnly') === 'true';
+        // 用例分析(eval 页)只看独立评测任务, 不该混入灰度 A/B 的评测批次 —— A/B 批次只在 A/B 页看。
+        const excludeGrayscale = searchParams.get('excludeGrayscale') === '1' || searchParams.get('excludeGrayscale') === 'true';
         const includeRunId = (searchParams.get('includeRunId') || '').trim();
         const latestByCase = searchParams.get('latestByCase') === '1' || searchParams.get('latestByCase') === 'true';
 
         const where: Record<string, unknown> = { user };
 
-        const groupLimit = autoWatchOnly ? Math.max(limit * 8, 50) : limit + 1;
+        // 需要过滤(autoWatch / 排除灰度)时多抓些 group, 过滤后再分页, 避免一页被过滤到几乎为空。
+        const overFetch = autoWatchOnly || excludeGrayscale;
+        const groupLimit = overFetch ? Math.max(limit * 8, 50) : limit + 1;
         const groups = await prisma.trajectoryEvalResult.groupBy({
             by: ['evaluatorRunId'],
             where,
@@ -309,24 +313,32 @@ export async function GET(request: Request) {
                     avgScore: scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : null,
                     createdAt: new Date(earliest).toISOString(),
                     evaluatorName: getEvaluatorName(runRows),
+                    // 来源标记: 任一 trace 带 grayscaleBinding 即为灰度 A/B 的评测批次。
+                    source: runRows.some(row => {
+                        const raw = safeParse(row.rawAnalysisJson, {}) as { grayscaleBinding?: unknown };
+                        return raw.grayscaleBinding != null;
+                    }) ? 'grayscale-ab' : 'standalone',
                 };
             })
             .filter((item): item is NonNullable<typeof item> => Boolean(item))
             .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
-        const normalPage = summaries.slice(0, limit);
+        // 用例分析: 排除灰度 A/B 的评测批次(它们只在 A/B 页查看)。
+        const visible = excludeGrayscale ? summaries.filter(item => item.source !== 'grayscale-ab') : summaries;
+
+        const normalPage = visible.slice(0, limit);
         const includedIndex = includeRunId
-            ? summaries.findIndex(summary => summary.runId === includeRunId)
+            ? visible.findIndex(summary => summary.runId === includeRunId)
             : -1;
         const anchorStart = includedIndex >= limit
-            ? Math.max(0, Math.min(includedIndex - Math.floor(limit / 2), summaries.length - limit))
+            ? Math.max(0, Math.min(includedIndex - Math.floor(limit / 2), visible.length - limit))
             : 0;
         const page = includedIndex >= limit
-            ? summaries.slice(anchorStart, anchorStart + limit)
+            ? visible.slice(anchorStart, anchorStart + limit)
             : normalPage;
-        const hasMore = summaries.length > limit || (autoWatchOnly ? groups.length === groupLimit : groups.length > limit);
+        const hasMore = visible.length > limit || (overFetch ? groups.length === groupLimit : groups.length > limit);
         const nextOffset = hasMore
-            ? autoWatchOnly && summaries.length <= limit
+            ? overFetch && visible.length <= limit
                 ? offset + groups.length
                 : offset + (includedIndex >= limit ? anchorStart + limit : limit)
             : null;
