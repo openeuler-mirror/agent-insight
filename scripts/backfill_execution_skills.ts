@@ -16,6 +16,8 @@
 // 它统一把库解析到 ~/.agent-insight/data(未设置/模板默认/含 ~ 都能正确归一)。
 // 之前在这里回落到 <cwd>/data/witty_insight.db,反而会在没显式传 DATABASE_URL 时把数据写错库。
 
+export {}; // 模块化(独立作用域),避免顶层 main/常量与其它脚本在全局作用域里重名
+
 const FORCE = process.argv.includes('--force');
 const BATCH = 200;
 

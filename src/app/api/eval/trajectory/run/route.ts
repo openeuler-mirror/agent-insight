@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db, prismaRaw as prisma } from '@/lib/storage/prisma';
+import { reattributeServiceTraceOwner } from '@/lib/storage/data-service';
 import { findAgentDataset, readAllAgentDatasets, type AgentDatasetRecord, type DatasetCase } from '@/server/agent_datasets_storage';
 import { canReuseRootCauseCache, type RootCauseItem } from '@/lib/dataset-case-root-causes';
 import {
@@ -847,6 +848,13 @@ export async function POST(request: Request) {
         if (created.length === 0) {
             return NextResponse.json({ error: 'no valid tasks to run', skipped }, { status: 400 });
         }
+
+        // 归属修复(往后自动):平台服务端跑出来的执行 trace 默认记在服务账号(admin)名下,这里把
+        // 本次评测引用的"被执行 trace"归还给评测发起人。只动服务账号拥有的 trace(不碰别人已拥有的)。
+        // fire-and-forget,不阻塞评测响应;失败也不影响主流程。
+        void Promise.all(created.map(c =>
+            reattributeServiceTraceOwner((c.taskId || c.executionId || '').trim(), user).catch(() => false)
+        ));
 
         const runnableIds = created
             .filter(c => c.taskId || c.executionId)

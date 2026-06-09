@@ -145,6 +145,55 @@ export function computeOwnSkills(framework: string | null | undefined, interacti
 }
 
 /**
+ * 服务账号集合:平台在服务端替用户跑 agent/评测时,产物 trace 由 server 的遥测带 server 自己的
+ * witty key 上传 → 归到这些"服务账号"名下(默认 admin/anonymous/空)。用于把这类 trace 归还给
+ * 真正的发起人。可用 TRACE_SERVICE_OWNERS 环境变量覆盖(逗号分隔)。
+ */
+const TRACE_SERVICE_OWNERS = new Set<string>([
+    ...(process.env.TRACE_SERVICE_OWNERS || 'admin,anonymous').split(',').map(s => s.trim()).filter(Boolean),
+    '', 'debug-user', 'anonymous',
+]);
+
+export function isServiceTraceOwner(owner: string | null | undefined): boolean {
+    return TRACE_SERVICE_OWNERS.has((owner || '').trim());
+}
+
+/**
+ * 把"平台服务端替某用户跑出来、却记在服务账号(admin)名下"的执行 trace 归还给真正的发起人。
+ * 安全前提:只在 trace 当前 owner 是服务账号(admin/anonymous/空/debug-user)时才改,绝不动真实
+ * 用户已拥有的 trace。一并改 root 自身 + 它的 sub-agent 行 + ExecutionSkill + Session 的 user。
+ * 供写侧 hook(评测创建时)与一次性回填脚本共用。返回是否发生了改动。
+ */
+export async function reattributeServiceTraceOwner(traceRef: string, intendedUser: string): Promise<boolean> {
+    const ref = (traceRef || '').trim();
+    const user = (intendedUser || '').trim();
+    if (!ref || !user || isServiceTraceOwner(user)) return false;
+
+    let exec = await prismaRaw.execution.findUnique({ where: { id: ref }, select: { id: true, taskId: true, user: true } });
+    if (!exec) {
+        exec = await prismaRaw.execution.findFirst({ where: { taskId: ref }, select: { id: true, taskId: true, user: true } });
+    }
+    if (!exec) return false;
+    const cur = (exec.user || '').trim();
+    if (cur === user) return false;
+    if (!isServiceTraceOwner(cur)) return false; // 真实用户的 trace 不动
+
+    const serviceOwnersForIn = [...TRACE_SERVICE_OWNERS].filter(Boolean);
+    await prismaRaw.execution.update({ where: { id: exec.id }, data: { user } });
+    // 同一棵树里仍归服务账号(或 null)的 sub-agent 行一并归还
+    await prismaRaw.execution.updateMany({
+        where: { rootExecutionId: exec.id, OR: [{ user: { in: serviceOwnersForIn } }, { user: null }] },
+        data: { user },
+    });
+    // ExecutionSkill(skill facet 按 user 过滤)与 Session 同步,避免列表/筛选口径不一致
+    try { await prismaRaw.executionSkill.updateMany({ where: { executionId: exec.id }, data: { user } }); } catch { /* 表未启用时忽略 */ }
+    if (exec.taskId) {
+        try { await prismaRaw.session.updateMany({ where: { taskId: exec.taskId }, data: { user } }); } catch { /* ignore */ }
+    }
+    return true;
+}
+
+/**
  * 从一条 Execution 的 session interactions 重算 agent 作用域 skill 并写入 ExecutionSkill(版本写时定格)。
  * 供回填脚本对历史数据逐行重建;返回写入的 skill 条数。
  */
