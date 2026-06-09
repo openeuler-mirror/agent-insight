@@ -951,21 +951,6 @@ function isRecoverableInterruptedRun(run: RunResult): boolean {
     return run.failureType === 'agent_error' && /服务重启中断|server .*restart|restarted/i.test(detail);
 }
 
-function getAutoEvaluationBacklogCaseIds(states: CaseStates): string[] {
-    return Object.entries(states)
-        .filter(([, state]) => (
-            (['a', 'b'] as Side[]).some(side => (
-                (state[side].runs || []).some(run => (
-                    run.status === 'executed'
-                    && Boolean(run.sessionId)
-                    && !run.evaluatorRunId
-                    && typeof run.score !== 'number'
-                ))
-            ))
-        ))
-        .map(([caseId]) => caseId);
-}
-
 function rebuildSideAggregate(state: PerVersionState, totalRuns: number): PerVersionState {
     const runs = state.runs || [];
     const expectedRuns = Math.max(0, Number(totalRuns) || 0);
@@ -2336,29 +2321,9 @@ export async function GET(
         if (active && !hasAnyRunningCaseStates(task.caseStatesJson)) {
             activeRuns().delete(storeKey);
         }
-        const currentActive = activeRuns().get(storeKey);
-        if (!currentActive && task.configJson.autoEval !== false) {
-            const backlogCaseIds = getAutoEvaluationBacklogCaseIds(task.caseStatesJson);
-            if (backlogCaseIds.length > 0) {
-                const runId = `gray_recover_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-                activeRuns().set(storeKey, { taskId, runId, status: 'evaluating', startedAt: Date.now() });
-                void evaluateRunsWithConcurrency({
-                    taskId,
-                    user,
-                    origin: req.nextUrl.origin,
-                    config: task.configJson,
-                    states: task.caseStatesJson,
-                    caseIds: backlogCaseIds,
-                    evaluatorId: task.configJson.evaluatorId,
-                    evaluatorIds: normalizeAbEvaluators(task.configJson.evaluators, task.configJson.evaluatorId),
-                    onlyMissingEvaluation: true,
-                })
-                    .catch(err => console.error('[GRAYSCALE_TASKS_RECOVER_EVAL] Failed:', err))
-                    .finally(() => {
-                        activeRuns().delete(storeKey);
-                    });
-            }
-        }
+        // 注意: 这里**不再自动补评**崩溃残留的"待评测/中断"积压(原 gray_recover_ 自动重评已移除)。
+        // 解卡(reconcileStaleGrayscaleRun)已把被打断的评测摆成"评测失败(中断) + 「重评」按钮",
+        // 由用户自行点击恢复 —— 避免"打开页面就自己重评起来、还把看着有分的又评一遍"。
         return respondTask(task, activeRuns().get(`${user}:${taskId}`) || null);
     } catch (err) {
         console.error('[GRAYSCALE_TASKS_GET_ONE] Failed:', err);
