@@ -1286,7 +1286,10 @@ function SkillAnalysisPage() {
                 : [];
             // 取"最近运行的那条"而非"最近创建的那条",与 A/B 页 pickLatestTaskForBinding 对齐:
             // 正在跑的优先,其次有运行历史的,再按运行时间倒序。避免刚新建的空任务把有分数的老任务挤掉。
-            const latest = ([...matches] as GrayTaskMeta[]).sort((a, b) => {
+            // 若用户在 A/B 页选了某个任务(URL ?task), 概览卡也用这条 —— 保持"里外一致", 而不是永远显示最新。
+            const urlTaskId = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('task') : null;
+            const picked = urlTaskId ? (matches as GrayTaskMeta[]).find(t => t.id === urlTaskId) : null;
+            const latest = picked || ([...matches] as GrayTaskMeta[]).sort((a, b) => {
                 const activeDelta = Number(Boolean(b.activeRun)) - Number(Boolean(a.activeRun));
                 if (activeDelta !== 0) return activeDelta;
                 const histDelta = Number(grayTaskHasHistory(b)) - Number(grayTaskHasHistory(a));
