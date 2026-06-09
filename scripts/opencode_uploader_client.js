@@ -823,7 +823,7 @@ function deriveFields(interactions) {
 }
 
 function cleanupOldFiles(spoolDir, retentionDays) {
-  const days = Number(retentionDays) || 10
+  const days = Number(retentionDays) || 3
   const cutoff = Date.now() - days * 24 * 3600 * 1000
   try {
     const entries = fs.readdirSync(spoolDir, { withFileTypes: true })
@@ -854,7 +854,9 @@ async function main() {
 
   const spoolDir = env.AGENT_INSIGHT_OPENCODE_SPOOL_DIR || path.join(getExistingInsightDir(), "otel_data", "opencode")
   const checkpointFile = path.join(getPreferredInsightDir(), "opencode_uploader_checkpoint.json")
-  const retentionDays = env.AGENT_INSIGHT_RETENTION_DAYS || "10"
+  // 保留天数:默认 3 天(原来 10 天 + 上传量大时 spool 堆到 GB 级,是 OOM 诱因之一)。
+  // 同时兼容旧前缀 SKILL_INSIGHT_RETENTION_DAYS(部署的 .env 里用的是这个,旧版只读 AGENT_INSIGHT_ → 没生效)。
+  const retentionDays = env.AGENT_INSIGHT_RETENTION_DAYS || env.SKILL_INSIGHT_RETENTION_DAYS || "3"
   const deletedSessionIds = loadDeletedSessionIds(env)
   appendUploaderLog(
     `main.config spoolDir=${spoolDir} checkpoint=${checkpointFile} retentionDays=${retentionDays} deletedSessions=${deletedSessionIds.size}`,

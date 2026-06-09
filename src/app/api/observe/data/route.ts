@@ -3,6 +3,7 @@ import { db, prismaRaw as prisma } from '@/lib/storage/prisma';
 import { NextResponse } from 'next/server';
 import { isActive } from '@/lib/evaluation-task-manager';
 import { triggerTrajectoryAutoWatchForTask } from '@/lib/engine/evaluation/trajectory-auto-watch';
+import { buildOpencodeTelemetryIndex } from '@/lib/observe/opencode-telemetry-index';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -115,71 +116,14 @@ function getOpencodeTelemetryIndex(): Map<string, { hasShutdown: boolean; pids: 
     if (opencodeTelemetryIndexCache && opencodeTelemetryIndexCache.expiresAt > Date.now()) {
         return opencodeTelemetryIndexCache.sessions;
     }
-
-    const sessions = new Map<string, { hasShutdown: boolean; pids: Set<number> }>();
-    const upsert = (sessionId: string, patch: { hasShutdown?: boolean; pid?: number }) => {
-        if (!sessionId) return;
-        const current = sessions.get(sessionId) || { hasShutdown: false, pids: new Set<number>() };
-        if (patch.hasShutdown) current.hasShutdown = true;
-        if (patch.pid && Number.isFinite(patch.pid) && patch.pid > 0) current.pids.add(patch.pid);
-        sessions.set(sessionId, current);
-    };
-
-    const spoolDir = getOpencodeSpoolDir();
-    if (!fs.existsSync(spoolDir)) {
-        opencodeTelemetryIndexCache = { expiresAt: Date.now() + 30_000, sessions };
-        return sessions;
+    // 防 OOM:有界扫描(只看最近活动文件 + 总量/单文件封顶),不再把整个 spool 读进内存。
+    // 详见 src/lib/observe/opencode-telemetry-index.ts 的注释(spool 堆到 GB 级会把堆撑爆)。
+    const { sessions, skippedFiles, scannedBytes } = buildOpencodeTelemetryIndex(getOpencodeSpoolDir());
+    if (skippedFiles > 0) {
+        console.warn(
+            `[Data-API] opencode 遥测索引:跳过 ${skippedFiles} 个超龄/超预算/超大文件(已扫 ${Math.round(scannedBytes / 1024 / 1024)}MB,防 OOM)`,
+        );
     }
-
-    try {
-        const dayDirs = fs.readdirSync(spoolDir, { withFileTypes: true })
-            .filter(entry => entry.isDirectory())
-            .map(entry => path.join(spoolDir, entry.name))
-            .sort()
-            .reverse()
-            .slice(0, 7);
-
-        for (const dayDir of dayDirs) {
-            const files = fs.readdirSync(dayDir)
-                .filter(name => name.endsWith('.jsonl'))
-                .map(name => path.join(dayDir, name));
-
-            for (const file of files) {
-                let text = '';
-                try {
-                    text = fs.readFileSync(file, 'utf8');
-                } catch {
-                    continue;
-                }
-
-                let pluginPid: number | null = null;
-                for (const line of text.split('\n')) {
-                    if (!line.trim()) continue;
-
-                    if (line.includes('"kind":"plugin.start"')) {
-                        const pidMatch = line.match(/"pid":\s*(\d+)/);
-                        const pid = pidMatch ? Number(pidMatch[1]) : 0;
-                        if (Number.isFinite(pid) && pid > 0) pluginPid = pid;
-                        continue;
-                    }
-
-                    if (!line.includes('"sessionID"')) continue;
-                    const hasShutdown = line.includes('"kind":"plugin.shutdown"');
-                    for (const match of line.matchAll(/"sessionID":"([^"]+)"/g)) {
-                        const sessionId = match[1];
-                        if (!sessionId) continue;
-                        upsert(sessionId, {
-                            hasShutdown,
-                            pid: pluginPid || undefined,
-                        });
-                    }
-                }
-            }
-        }
-    } catch (error) {
-        console.warn('[Data-API] Failed to build opencode telemetry index', error);
-    }
-
     opencodeTelemetryIndexCache = { expiresAt: Date.now() + 30_000, sessions };
     return sessions;
 }
@@ -231,7 +175,9 @@ async function getAutoEvalReadiness(record: Record<string, unknown>, baseUrl?: s
     const framework = String(record.framework ?? '').toLowerCase();
     const quietLongEnough = latestActivityMs > 0 && Date.now() - latestActivityMs >= stableMs;
     const explicitCompleted = completedAtMs != null && completedAtMs > 0;
-    const opencodeCliExited = framework === 'opencode'
+    // 已有明确结束时间(endTime)的 session 就别再扫遥测了——它已经判完。这让"服务端自己跑完、已落
+    // endTime"的 trace(灰度/评测/已完成的)完全绕开遥测扫描:大多数 trace 走这条,是防 OOM 的关键。
+    const opencodeCliExited = (framework === 'opencode' && !explicitCompleted)
         ? inferOpencodeCliExitedFromExistingTelemetry(taskId)
         : null;
     if (framework === 'opencode' && !explicitCompleted && opencodeCliExited === true && taskId) {
