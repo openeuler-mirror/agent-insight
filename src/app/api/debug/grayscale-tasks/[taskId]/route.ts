@@ -1538,6 +1538,37 @@ async function startSingleEvaluation(
     };
 }
 
+/**
+ * "no valid tasks to run" 不是一次真正的评测结果——它是派发器去重判定"这条 trace 已经评过、
+ * 没有新任务可建"。绝不能把它当成 run 的失败(那正是"明明评过却显示失败、重试还失败"的根因)。
+ * 这里把这条 trace 在库里**最近一条真正的评测结果**(done/failed)回填到 run:
+ *   - done   → run = pass + 分数(救活);
+ *   - failed → run = 真失败、可重试(符合"看到的失败一定是真失败");
+ *   - 找不到任何真实结果 → 返回 false, 交给调用方按真失败处理。
+ * 优先本批次(evaluatorRunId)的最近一条; 取不到再放宽到这条 trace 的全局最近一条。
+ */
+async function rehydrateRunFromExistingEval(args: {
+    user: string;
+    run: RunResult;
+    sessionId: string;
+    evaluatorRunId?: string;
+}): Promise<boolean> {
+    const trajectory = (prisma as any).trajectoryEvalResult;
+    const base = { user: args.user, taskId: args.sessionId, status: { in: ['done', 'failed'] } };
+    let row = args.evaluatorRunId
+        ? await trajectory.findFirst({
+            where: { ...base, evaluatorRunId: args.evaluatorRunId },
+            orderBy: { updatedAt: 'desc' },
+        })
+        : null;
+    if (!row) {
+        row = await trajectory.findFirst({ where: base, orderBy: { updatedAt: 'desc' } });
+    }
+    if (!row) return false;
+    applyTrajectoryRowToRun(args.run, row as unknown as TrajectoryResultRow, args.evaluatorRunId);
+    return true;
+}
+
 async function markEvaluatorRunFailed(user: string, evaluatorRunId: string, errorMessage: string) {
     await (prisma as unknown as GrayscalePrisma).trajectoryEvalResult.updateMany({
         where: {
@@ -1651,6 +1682,7 @@ async function evaluateSingleRunTarget(args: {
         touchLatestResultAt: true,
     });
 
+    let rehydratedFromExisting = false;
     try {
         const binding: GrayscaleBinding = {
             source: 'grayscale-ab',
@@ -1713,25 +1745,40 @@ async function evaluateSingleRunTarget(args: {
         }
     } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        if (evaluationResultId) {
-            await markEvaluatorRowsFailed(args.user, [evaluationResultId], message).catch(() => {});
-        } else if (evaluatorRunId) {
-            await markEvaluatorTasksFailed(args.user, evaluatorRunId, target.run.sessionId ? [target.run.sessionId] : [], message).catch(() => {});
+        // "no valid tasks to run" 不是失败 —— 是去重判定"这条 trace 已经评过、没有新任务可派发"。
+        // 不写失败, 而是从库里把这条 trace 最近一条真正的评测结果回填到 run(详见 rehydrateRunFromExistingEval)。
+        if (/no valid tasks to run/i.test(message) && target.run.sessionId) {
+            rehydratedFromExisting = await rehydrateRunFromExistingEval({
+                user: args.user,
+                run: target.run,
+                sessionId: target.run.sessionId,
+                evaluatorRunId: args.config.evaluationBatchId || evaluatorRunId || undefined,
+            }).catch(() => false);
         }
-        target.run.status = 'fail';
-        target.run.evaluations = mergeRunEvaluations(
-            target.run.evaluations,
-            effectiveEvaluatorIds.map(id => ({
-                evaluatorId: id,
-                evaluatorName: AB_EVALUATOR_NAMES[id] || id,
-                status: 'failed',
-                evaluatorRunId,
-                evaluationResultId,
-                errorMessage: message,
-            })),
-        );
-        target.run.output = message;
-        markRunCompleted(target.run);
+        if (rehydratedFromExisting) {
+            target.run.evalRetryPending = false;
+        } else {
+            // 真失败(评测器真的跑了且失败 / 或确实找不到任何历史结果)→ 照实标失败、可重试。
+            if (evaluationResultId) {
+                await markEvaluatorRowsFailed(args.user, [evaluationResultId], message).catch(() => {});
+            } else if (evaluatorRunId) {
+                await markEvaluatorTasksFailed(args.user, evaluatorRunId, target.run.sessionId ? [target.run.sessionId] : [], message).catch(() => {});
+            }
+            target.run.status = 'fail';
+            target.run.evaluations = mergeRunEvaluations(
+                target.run.evaluations,
+                effectiveEvaluatorIds.map(id => ({
+                    evaluatorId: id,
+                    evaluatorName: AB_EVALUATOR_NAMES[id] || id,
+                    status: 'failed',
+                    evaluatorRunId,
+                    evaluationResultId,
+                    errorMessage: message,
+                })),
+            );
+            target.run.output = message;
+            markRunCompleted(target.run);
+        }
         await persistRunStatePatch({
             taskId: args.taskId,
             user: args.user,
@@ -1748,7 +1795,9 @@ async function evaluateSingleRunTarget(args: {
     // C+D: 评测失败若"可重试且还有重试次数",不进终态——回到「评测中/重试中」并标 evalRetryPending,
     // 让下面的重试循环挑它重跑。失败只在"最终确切失败(不可重试/重试用尽)"时出现,且此后不再变化。
     // 仅对"评测失败"生效:run.failureType 是执行失败(另有语义),不在此列。
-    if (target.run.status === 'fail' && !target.run.failureType) {
+    // rehydratedFromExisting 时跳过:run 已用历史真实结果回填(pass/真失败),不该再被自动重跑(否则
+    // 又派发→又 no valid tasks→又回填,空转)。真失败要重试由用户手动点。
+    if (!rehydratedFromExisting && target.run.status === 'fail' && !target.run.failureType) {
         const failMsg = target.run.output
             || target.run.evaluations?.find(e => e.status === 'failed')?.errorMessage
             || '';
