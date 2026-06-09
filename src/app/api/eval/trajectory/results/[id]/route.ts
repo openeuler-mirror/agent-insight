@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { prismaRaw as prisma } from '@/lib/storage/prisma';
 import { extractTrajectoryTaskMeta } from '@/lib/eval/trajectory-task-meta';
+import { summarizeTrace } from '@/lib/engine/evaluation/trace-summarizer';
+import { normalizeTrajectoryRedundancyDetails } from '@/lib/engine/evaluation/trajectory-evaluator';
 
 export const dynamic = 'force-dynamic';
 
@@ -42,6 +44,23 @@ function pickCustomEvaluationScore(rawAnalysisJson: string | null | undefined): 
     return typeof value === 'number' && !Number.isNaN(value) ? value : null;
 }
 
+async function normalizeRawAnalysisForDisplay(
+    rawAnalysis: Record<string, unknown> | null,
+    taskId: string | null,
+): Promise<Record<string, unknown> | null> {
+    if (!rawAnalysis || !taskId) return rawAnalysis;
+    try {
+        const session = await prisma.session.findUnique({ where: { taskId } });
+        const interactions = safeParse(session?.interactions, []);
+        if (!Array.isArray(interactions) || interactions.length === 0) return rawAnalysis;
+        const summary = summarizeTrace(interactions, { maxSteps: 80, maxTextLen: 400 });
+        return normalizeTrajectoryRedundancyDetails(rawAnalysis, summary.steps);
+    } catch (error) {
+        console.warn('[trajectory/results detail] failed to normalize redundancy details:', (error as Error)?.message || error);
+        return rawAnalysis;
+    }
+}
+
 export async function GET(
     request: Request,
     context: { params: Promise<{ id: string }> },
@@ -57,7 +76,8 @@ export async function GET(
             return NextResponse.json({ error: 'not found' }, { status: 404 });
         }
         const taskMeta = extractTrajectoryTaskMeta(row.rawAnalysisJson, row.createdAt);
-        const rawAnalysis = safeParse(row.rawAnalysisJson, null) as Record<string, unknown> | null;
+        const parsedRawAnalysis = safeParse(row.rawAnalysisJson, null) as Record<string, unknown> | null;
+        const rawAnalysis = await normalizeRawAnalysisForDisplay(parsedRawAnalysis, row.taskId);
         const rawMeta = (rawAnalysis || {}) as { selectedEvaluators?: string[]; selectedEvaluatorNames?: string[] };
 
         return NextResponse.json({

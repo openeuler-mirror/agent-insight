@@ -104,7 +104,7 @@ export async function persistAlignmentAttribution(
   );
   // ── 方案A：统一轨迹分口径 ──────────────────────────────────────────────
   // 若该行已被轨迹质量评估器写入了 tool_choice / redundancy 单项分（existingRaw.dimension_scores），
-  // 则把 alignment 覆盖率作为 completeness，走代码侧聚合层算统一轨迹分（0.45/0.35/0.20 + 严重度封顶），
+  // 则把 alignment 覆盖率作为 completeness，走代码侧聚合层算统一轨迹分（0.45/0.35/0.20），
   // 与 dataset 模式同一口径；否则（纯轨迹分析模式，没跑评估器）保持 alignment 即轨迹分（旧行为）。
   const llmDims = readLlmToolRedundancy(existingRaw);
   let trajectoryScore: number | null = score;
@@ -112,13 +112,13 @@ export async function persistAlignmentAttribution(
     alignment: score,
     attribution: candidates.length === 0 ? 1 : null,
   };
-  let scoreAggregation: ReturnType<typeof aggregateTrajectoryScore>['cap'] | null = null;
+  let scoreAggregation: ReturnType<typeof aggregateTrajectoryScore>['scoreAggregation'] | null = null;
   if (typeof score === 'number' && llmDims) {
     const dims = { completeness: score, toolChoice: llmDims.toolChoice, redundancy: llmDims.redundancy };
     const agg = aggregateTrajectoryScore(dims, deviationSteps as unknown as TrajectoryDeviationStep[]);
     trajectoryScore = agg.trajectoryScore;
     dimensionScoresPayload = dims;
-    scoreAggregation = agg.cap;
+    scoreAggregation = agg.scoreAggregation;
   }
 
   const rawAnalysis = {
@@ -140,7 +140,7 @@ export async function persistAlignmentAttribution(
       findings: deviationSteps,
     },
     deviation_steps: deviationSteps,
-    // 方案A：把 completeness 标成对齐覆盖率，并落 score_aggregation 给前端展示封顶。
+    // 方案A：把 completeness 标成对齐覆盖率，并落 score_aggregation 记录统一加权口径。
     ...(scoreAggregation
       ? {
           score_aggregation: scoreAggregation,

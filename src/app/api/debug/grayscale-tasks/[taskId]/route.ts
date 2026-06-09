@@ -369,6 +369,7 @@ function matchesGrayscaleBinding(
         side: Side;
         run: Pick<RunResult, 'runIndex' | 'roundIndex' | 'sessionId' | 'evaluationClaimId'>;
         expectedClaimId?: string;
+        allowClaimMismatch?: boolean;
     },
 ): boolean {
     if (!binding) return false;
@@ -379,7 +380,35 @@ function matchesGrayscaleBinding(
         && binding.runIndex === args.run.runIndex
         && binding.roundIndex === args.run.roundIndex
         && binding.executionTraceId === String(args.run.sessionId || '').trim()
-        && binding.evaluationClaimId === String(args.expectedClaimId || args.run.evaluationClaimId || '').trim();
+        && (
+            args.allowClaimMismatch === true
+            || binding.evaluationClaimId === String(args.expectedClaimId || args.run.evaluationClaimId || '').trim()
+        );
+}
+
+function buildGrayscaleBindingKey(binding: GrayscaleBinding | null): string {
+    if (!binding) return '';
+    return [
+        binding.grayscaleTaskId,
+        binding.caseId,
+        binding.side,
+        binding.runIndex,
+        binding.roundIndex,
+        binding.executionTraceId,
+    ].join('|');
+}
+
+function buildRunBindingKey(taskId: string, caseId: string, side: Side, run: RunResult): string {
+    const sessionId = String(run.sessionId || '').trim();
+    if (!sessionId) return '';
+    return [
+        taskId,
+        caseId,
+        side,
+        run.runIndex,
+        run.roundIndex,
+        sessionId,
+    ].join('|');
 }
 
 function findRunIndex(runs: RunResult[] | undefined, target: Pick<RunResult, 'runIndex' | 'roundIndex' | 'caseId'>): number {
@@ -1254,12 +1283,17 @@ async function reconcileFinishedEvaluations(taskId: string, user: string, config
 
     const rowsById = new Map<string, TrajectoryResultRow>();
     const rowsByClaimId = new Map<string, TrajectoryResultRow>();
+    const rowsByBindingKey = new Map<string, TrajectoryResultRow>();
     for (const row of rows) {
         if (row.id) rowsById.set(row.id, row);
         const binding = readGrayscaleBindingFromRawAnalysisJson(row.rawAnalysisJson);
         const claimId = binding?.evaluationClaimId || '';
         if (claimId && isNewerTrajectoryRow(row, rowsByClaimId.get(claimId))) {
             rowsByClaimId.set(claimId, row);
+        }
+        const bindingKey = buildGrayscaleBindingKey(binding);
+        if (bindingKey && isTerminalTrajectoryStatus(row.status) && isNewerTrajectoryRow(row, rowsByBindingKey.get(bindingKey))) {
+            rowsByBindingKey.set(bindingKey, row);
         }
     }
 
@@ -1268,11 +1302,16 @@ async function reconcileFinishedEvaluations(taskId: string, user: string, config
         for (const side of ['a', 'b'] as Side[]) {
             for (const run of state[side].runs || []) {
                 if (!run.sessionId) continue;
-                const row = (run.evaluationResultId ? rowsById.get(run.evaluationResultId) : undefined)
+                let allowClaimMismatch = false;
+                let row = (run.evaluationResultId ? rowsById.get(run.evaluationResultId) : undefined)
                     || (run.evaluationClaimId ? rowsByClaimId.get(run.evaluationClaimId) : undefined);
+                if (!row) {
+                    row = rowsByBindingKey.get(buildRunBindingKey(taskId, run.caseId, side, run));
+                    allowClaimMismatch = Boolean(row);
+                }
                 if (!row) continue;
                 const binding = readGrayscaleBindingFromRawAnalysisJson(row.rawAnalysisJson);
-                if (!matchesGrayscaleBinding(binding, { taskId, caseId: run.caseId, side, run })) {
+                if (!matchesGrayscaleBinding(binding, { taskId, caseId: run.caseId, side, run, allowClaimMismatch })) {
                     continue;
                 }
                 const before = JSON.stringify({

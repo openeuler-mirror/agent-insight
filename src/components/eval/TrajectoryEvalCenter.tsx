@@ -130,7 +130,6 @@ interface TrajectoryResult {
     rootCauseStep: string | null;
     reasonText: string | null;
     resultEvaluationScore?: number | null;
-    customEvaluationScore?: number | null;
     diagnostic?: unknown;
     rawAnalysis?: unknown;
     createdAt: string;
@@ -143,6 +142,7 @@ const TRACE_PAGE_SIZE = 20;
 import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
 
 const RUNTIME_EVALUATORS = presetEvaluators.map(e => ({ id: e.id, name: e.name }));
+const RUNTIME_EVALUATOR_IDS = new Set(RUNTIME_EVALUATORS.map(e => e.id));
 
 const COLORS = {
     primary: '#4F46E5',
@@ -234,11 +234,6 @@ interface ModelConfig {
     baseUrl?: string;
 }
 
-interface CustomEvaluatorOption {
-    id: string;
-    name: string;
-}
-
 export default function TrajectoryEvalCenter() {
     const { user } = useAuth();
     const router = useRouter();
@@ -248,7 +243,7 @@ export default function TrajectoryEvalCenter() {
     // 初始化默认选中参数传过来的评估器
     const [selectedEvaluators, setSelectedEvaluators] = useState<string[]>(() => {
         const initialEvaluator = searchParams?.get('evaluatorId');
-        return initialEvaluator ? [initialEvaluator] : [];
+        return initialEvaluator && RUNTIME_EVALUATOR_IDS.has(initialEvaluator) ? [initialEvaluator] : [];
     });
     const [selectedAgent, setSelectedAgent] = useState<string>('');
     const [evaluatorToAdd, setEvaluatorToAdd] = useState<string>('');
@@ -270,7 +265,6 @@ export default function TrajectoryEvalCenter() {
     const [modelConfigs, setModelConfigs] = useState<ModelConfig[]>([]);
     const [selectedModelConfigId, setSelectedModelConfigId] = useState<string>('');
     const [dbAgents, setDbAgents] = useState<Agent[]>([]);
-    const [customEvaluatorOptions, setCustomEvaluatorOptions] = useState<CustomEvaluatorOption[]>([]);
     const [taskTitle, setTaskTitle] = useState('');
     const [taskDescription, setTaskDescription] = useState('');
     const [savedTaskSnapshot, setSavedTaskSnapshot] = useState('');
@@ -329,27 +323,6 @@ export default function TrajectoryEvalCenter() {
     useEffect(() => {
         fetchDbAgents();
     }, []);
-
-    useEffect(() => {
-        if (!user) return;
-        apiFetch(`/api/user-evaluators?user=${encodeURIComponent(user)}`)
-            .then(r => r.json())
-            .then((items: unknown) => {
-                const next = Array.isArray(items)
-                    ? items
-                        .map(item => item && typeof item === 'object' ? item as Record<string, unknown> : null)
-                        .filter((item): item is Record<string, unknown> => Boolean(item))
-                        .filter(item => item.evaluatorType === 'LLM')
-                        .map(item => ({
-                            id: String(item.id || '').trim(),
-                            name: String(item.name || '').trim(),
-                        }))
-                        .filter(item => item.id && item.name)
-                    : [];
-                setCustomEvaluatorOptions(next);
-            })
-            .catch(() => setCustomEvaluatorOptions([]));
-    }, [user]);
 
     useEffect(() => {
         if (typeof window === 'undefined') return;
@@ -571,18 +544,12 @@ export default function TrajectoryEvalCenter() {
     // 执行 Agent 列表（排除评估器 agent，按 name 去重）
     // `build` 是 opencode runtime 默认/内部 agent，不作为业务执行 Agent 展示。
     const agentOptions = useMemo(() => {
-        const customEvaluatorNames = new Set(
-            customEvaluatorOptions
-                .map(item => item.name.trim())
-                .filter(Boolean),
-        );
         const registered = combinedAgents
             .filter(a => a.layer === 'main')
             .filter(a => !isEvaluatorAgent(a))
-            .filter(a => !customEvaluatorNames.has(a.name))
             .map(a => a.name);
         const observed = observedAgentNames
-            .filter((name): name is string => Boolean(name) && !customEvaluatorNames.has(name));
+            .filter((name): name is string => Boolean(name));
         const seen = new Set<string>();
         return [...registered, ...observed]
             .filter(name => {
@@ -591,17 +558,9 @@ export default function TrajectoryEvalCenter() {
                 return true;
             })
             .sort();
-    }, [combinedAgents, customEvaluatorOptions, observedAgentNames]);
+    }, [combinedAgents, observedAgentNames]);
 
-    const evaluatorOptions = useMemo(() => {
-        const merged = [...RUNTIME_EVALUATORS, ...customEvaluatorOptions];
-        const seen = new Set<string>();
-        return merged.filter(item => {
-            if (!item.id || seen.has(item.id)) return false;
-            seen.add(item.id);
-            return true;
-        });
-    }, [customEvaluatorOptions]);
+    const evaluatorOptions = RUNTIME_EVALUATORS;
 
     // 默认选中第一个 Agent
     useEffect(() => {
@@ -652,7 +611,7 @@ export default function TrajectoryEvalCenter() {
         });
     }
     function addEvaluator(evaluatorId: string) {
-        if (!evaluatorId) return;
+        if (!evaluatorId || !RUNTIME_EVALUATOR_IDS.has(evaluatorId)) return;
         setSelectedEvaluators(prev => (
             prev.includes(evaluatorId) ? prev : [...prev, evaluatorId]
         ));
@@ -1231,15 +1190,11 @@ export default function TrajectoryEvalCenter() {
                                             ? (() => {
                                                 const hasTrace = hasSelectedEvaluator(r, 'preset-agent-trace-quality');
                                                 const hasResult = hasSelectedEvaluator(r, 'preset-agent-task-completion');
-                                                const hasCustom = Array.isArray(r.selectedEvaluators)
-                                                    ? r.selectedEvaluators.some(id => id.startsWith('custom-'))
-                                                    : typeof r.customEvaluationScore === 'number';
                                                 const traceScore = hasTrace ? r.trajectoryScore : null;
                                                 const resultScore = hasResult
                                                     ? (typeof r.resultEvaluationScore === 'number' ? r.resultEvaluationScore : null)
                                                     : null;
-                                                const customScore = hasCustom ? (r.customEvaluationScore ?? null) : null;
-                                                const parts = [traceScore, resultScore, customScore]
+                                                const parts = [traceScore, resultScore]
                                                     .filter((item): item is number => typeof item === 'number' && Number.isFinite(item));
                                                 if (parts.length === 0) return null;
                                                 return parts.reduce((a, b) => a + b, 0) / parts.length;
