@@ -50,6 +50,17 @@ export type SkillKeyActionComparisonResult =
   | { status: 'no-extracted-steps' }
   | { status: 'no-key-actions' };
 
+export type SkillKeyActionReferenceResult =
+  | {
+      status: 'ok';
+      referenceKeyActionsText: string;
+      referenceKeyActions: ExtractedKeyAction[];
+    }
+  | { status: 'no-skill-targets' }
+  | { status: 'missing-skill'; missingSkills: string[] }
+  | { status: 'missing-parsed-flow'; missingSkills: string[] }
+  | { status: 'no-key-actions' };
+
 export function normalizeOptionalVersion(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
   if (typeof value === 'string' && value.trim()) {
@@ -199,8 +210,28 @@ export async function buildSkillKeyActionComparison(
   user?: string | null,
   interactions?: unknown,
 ): Promise<SkillKeyActionComparisonResult> {
+  const reference = await buildSkillKeyActionReference(execution, user, interactions);
+  if (reference.status !== 'ok') return reference;
+
+  const actualTrace = await loadActualExtractedTraceSteps(resolvedTaskId, user);
+  if (actualTrace.status !== 'ok') return { status: actualTrace.status };
+
+  return {
+    status: 'ok',
+    referenceKeyActionsText: reference.referenceKeyActionsText,
+    actualExtractedStepsText: actualTrace.text,
+    referenceKeyActions: reference.referenceKeyActions,
+    actualExtractedSteps: actualTrace.steps,
+  };
+}
+
+export async function buildSkillKeyActionReference(
+  execution: KeyActionExecutionLike | null | undefined,
+  user?: string | null,
+  interactions?: unknown,
+): Promise<SkillKeyActionReferenceResult> {
   const skillTargets = getPrimaryExecutionSkillTargets(execution, interactions);
-  if (skillTargets.length === 0 || !resolvedTaskId) return { status: 'no-skill-targets' };
+  if (skillTargets.length === 0) return { status: 'no-skill-targets' };
 
   const missingSkills: string[] = [];
   const missingParsedFlowSkills: string[] = [];
@@ -255,18 +286,13 @@ export async function buildSkillKeyActionComparison(
     return { status: 'missing-parsed-flow', missingSkills: missingParsedFlowSkills };
   }
 
-  const actualTrace = await loadActualExtractedTraceSteps(resolvedTaskId, user);
-  if (actualTrace.status !== 'ok') return { status: actualTrace.status };
-
   const keyActions = await extractSkillKeyActionsFromTargets(skillTargets, user);
   if (keyActions.length === 0) return { status: 'no-key-actions' };
 
   return {
     status: 'ok',
     referenceKeyActionsText: formatReferenceKeyActions(keyActions),
-    actualExtractedStepsText: actualTrace.text,
     referenceKeyActions: keyActions,
-    actualExtractedSteps: actualTrace.steps,
   };
 }
 

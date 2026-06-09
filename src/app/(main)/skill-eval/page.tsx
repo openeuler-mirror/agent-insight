@@ -1199,7 +1199,7 @@ function SkillAnalysisPage() {
         // 方案A 顺序约定（重要）：先跑「评测」(trajectory/run，写 tool_choice/redundancy 单项分)，
         // 完成后再跑「analyze-match」。这样 analyze-match 的 persistAlignmentAttribution 作为最后写入者，
         // 能读到评测器写好的 tool_choice/redundancy，用 alignment 覆盖率当 completeness 走代码侧聚合层
-        // 算出统一轨迹分（0.45/0.35/0.20 + 封顶）。两者并发时会因 last-write-wins 互相覆盖、口径不稳。
+        // 算出统一轨迹分（0.45/0.35/0.20）。两者并发时会因 last-write-wins 互相覆盖、口径不稳。
         const resultErrors: string[] = [];
         try {
             // 透传评测任务关联: 用户在配置区关联了批次时走 append 模式, 不再每次新建批次。
@@ -3633,7 +3633,7 @@ function TraceDeviationPanel({
             : rRaw <= 1 ? Math.round(rRaw * 100)  // 0-1 normalized
             : Math.round(rRaw);                    // 防御性：已经是 0-100 的兼容
         // 方案A: 轨迹分统一口径——优先用后端聚合层算出的 trajectoryScore（0.45 完整性 + 0.35 工具
-        // + 0.20 冗余, 再封顶, 其中 完整性=对齐覆盖率），没有(未评测/纯对齐旧数据)再回退 getTraceFlowScore
+        // + 0.20 冗余，其中 完整性=对齐覆盖率），没有(未评测/纯对齐旧数据)再回退 getTraceFlowScore
         // (matchJson.overallScore = 对齐覆盖率单维)。两者都是 0-1。
         const aggTraj = typeof t.trajectory_score === 'number' ? t.trajectory_score
             : typeof t.trajectoryScore === 'number' ? t.trajectoryScore : null;
@@ -5087,7 +5087,7 @@ function getTraceFlowScore(trace: TraceRecord): number | null {
 
 /**
  * 一条 trace 的"轨迹分"(0-1) 统一口径：优先用后端聚合层算出的 trajectoryScore（方案A：
- * 0.45 完整性 + 0.35 工具 + 0.20 冗余, 再封顶），没有(未评测/旧数据)再回退 analyze-match
+ * 0.45 完整性 + 0.35 工具 + 0.20 冗余），没有(未评测/旧数据)再回退 analyze-match
  * 对齐覆盖率 getTraceFlowScore。所有"卡片/概览/健康分/诊断"聚合都走它，避免与 ③ 详情口径分裂。
  */
 function getEffectiveTrajScore(trace: TraceRecord): number | null {

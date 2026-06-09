@@ -14,7 +14,7 @@
  *   - 通过 onCreated(batchId, taskMeta) 把创建结果传回父组件, 父组件负责把 batchId 持久化
  *     到当前 A/B 任务 / 用例分析任务的 config 里 (后续启动评测带 evaluatorRunId 透传 append)
  *
- * 评估器列表: 预置 (presetEvaluators) + 用户自建 (/api/user-evaluators) 合并展示
+ * 评估器列表: 评测执行页只展示并提交预置评估器；自建评估器仍由后端能力保留。
  * 任务创建后不允许改评估器配置 (改了会让历史批次和当前任务设置脱钩, 难维护) —— 表单 hint 提示
  */
 
@@ -46,7 +46,7 @@ interface EvaluatorOption {
     id: string;
     name: string;
     description?: string;
-    source: 'preset' | 'custom';
+    source: 'preset';
 }
 
 // 跟 BatchEvaluation / GrayscaleEvaluation 里的 BUILT_IN_EVALUATORS 保持一致——只暴露
@@ -77,46 +77,25 @@ export function NewEvaluationBatchDialog({
 }: Props) {
     const [title, setTitle] = useState('');
     const [desc, setDesc] = useState('');
-    // 自建评估器列表: 仅用于把传入的 evaluator id 解析成名字做只读展示 (不再让用户在此勾选)。
-    const [customEvaluators, setCustomEvaluators] = useState<EvaluatorOption[]>([]);
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState('');
 
-    // open 时 reset 表单 + 拉用户自建评估器列表 (解析名字用)
+    // open 时 reset 表单
     useEffect(() => {
         if (!open) return;
         setTitle(defaultTitle ?? '');
         setDesc(defaultDescription ?? '');
         setError('');
         setSubmitting(false);
-        if (!user) return;
-        apiFetch(`/api/user-evaluators?user=${encodeURIComponent(user)}`)
-            .then(r => r.json())
-            .then(data => {
-                if (Array.isArray(data)) {
-                    setCustomEvaluators(
-                        data
-                            .filter((e: { id?: string; name?: string }) => e?.id && e?.name)
-                            .map((e: { id: string; name: string; description?: string }) => ({
-                                id: e.id,
-                                name: e.name,
-                                description: e.description,
-                                source: 'custom' as const,
-                            })),
-                    );
-                }
-            })
-            .catch(() => {/* 自建评估器拉取失败不阻塞主流程 */});
-    }, [open, user, defaultTitle, defaultDescription]);
+    }, [open, defaultTitle, defaultDescription]);
 
     if (!open) return null;
 
     // 评估器来自配置区 (props.evaluators), 对话框内不再选择。解析名字做只读展示。
     const nameById = new Map<string, string>([
         ...READY_PRESETS.map(e => [e.id, e.name] as [string, string]),
-        ...customEvaluators.map(e => [e.id, e.name] as [string, string]),
     ]);
-    const finalIds = (evaluators || []).filter(Boolean);
+    const finalIds = (evaluators || []).filter(id => nameById.has(id));
     const finalNames = finalIds.map(id => nameById.get(id) || id);
 
     const trimmedTitle = title.trim();

@@ -5,7 +5,7 @@
  *
  * 顶部：返回列表 + tid + 综合状态徽章
  * 综合评测结论卡（绿色渐变）
- * 分析 Tab：结果评测 / 轨迹评测 / 自定义评测
+ * 分析 Tab：结果评测 / 轨迹评测
  *
  * 数据来源：
  *   - Execution（GET /api/observe/data?taskId=）
@@ -126,16 +126,6 @@ interface ResultEvaluationPayload {
         nextRetryAt?: string;
         lastError?: string;
     } | null;
-}
-
-interface CustomEvaluationItem {
-    evaluatorId: string;
-    evaluatorName: string;
-    score: number | null;
-    reason: string;
-    model?: string;
-    durationMs?: number;
-    error?: string;
 }
 
 interface CaseSnapshot {
@@ -327,8 +317,6 @@ interface TrajectoryResult {
     deviationSteps: TrajectoryDeviation[];
     rootCauseStep: string | null;
     reasonText: string | null;
-    customEvaluationScore?: number | null;
-    customEvaluations?: CustomEvaluationItem[];
     diagnostic?: unknown;
     rawAnalysis?: unknown;
     createdAt: string;
@@ -467,31 +455,6 @@ function includesEvaluator(result: TrajectoryResult | null, evaluatorId: string)
         return evaluatorId === 'preset-agent-trace-quality';
     }
     return selected.includes(evaluatorId);
-}
-
-function isCustomEvaluatorId(evaluatorId: string): boolean {
-    return evaluatorId.startsWith('custom-');
-}
-
-function normalizeCustomEvaluations(value: unknown): CustomEvaluationItem[] {
-    const rawItems = Array.isArray(value)
-        ? value
-        : value && typeof value === 'object'
-        ? Object.values(value as Record<string, unknown>)
-        : [];
-    return rawItems
-        .map(item => item && typeof item === 'object' ? item as Record<string, unknown> : null)
-        .filter((item): item is Record<string, unknown> => Boolean(item))
-        .map(item => ({
-            evaluatorId: String(item.evaluatorId || '').trim(),
-            evaluatorName: String(item.evaluatorName || item.evaluatorId || '自定义评估器').trim(),
-            score: typeof item.score === 'number' && Number.isFinite(item.score) ? item.score : null,
-            reason: String(item.reason || '').trim(),
-            model: typeof item.model === 'string' ? item.model : undefined,
-            durationMs: typeof item.durationMs === 'number' ? item.durationMs : undefined,
-            error: typeof item.error === 'string' ? item.error : undefined,
-        }))
-        .filter(item => item.evaluatorId || item.evaluatorName);
 }
 
 function deriveResultEvaluationFindings(rawAnalysis: unknown): ResultEvaluationFinding[] {
@@ -795,10 +758,13 @@ function formatTrajectoryReasonText(text: string | null | undefined): Trajectory
     const raw = String(text || '').trim();
     if (!raw) return [];
     const normalized = raw
+        .replace(/可能触发封顶的偏差/g, '关键偏差')
+        .replace(/，?可能触发\s*(?:0\.\d+|[\d.]+)\s*封顶。?/g, '。')
+        .replace(/轨迹分封顶\s*(?:0\.\d+|[\d.]+)。?/g, '')
         .replace(/\s*(完整性(?:[（(]|[:：]))/g, '\n$1')
         .replace(/。?\s*(工具选择[（(])/g, '\n$1')
         .replace(/。?\s*(冗余[（(])/g, '\n$1')
-        .replace(/。?\s*(可能触发封顶的偏差[:：]?)/g, '\n$1')
+        .replace(/。?\s*(关键偏差[:：]?)/g, '\n$1')
         .replace(/\n{2,}/g, '\n')
         .trim();
 
@@ -810,7 +776,7 @@ function formatTrajectoryReasonText(text: string | null | undefined): Trajectory
 
     return lines
         .map(line => {
-            const match = line.match(/^(完整性(?:[（(][^）)]*[）)]|[:：])|工具选择[（(][^）)]*[）)]|冗余[（(][^）)]*[）)]|可能触发封顶的偏差)\s*[:：]?\s*(.*)$/);
+            const match = line.match(/^(完整性(?:[（(][^）)]*[）)]|[:：])|工具选择[（(][^）)]*[）)]|冗余[（(][^）)]*[）)]|关键偏差)\s*[:：]?\s*(.*)$/);
             if (!match) {
                 return { label: '', body: line };
             }
@@ -853,7 +819,7 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
     const [dataset, setDataset] = useState<AgentDataset | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string>('');
-    const [activeAnalysisTab, setActiveAnalysisTab] = useState<'result' | 'trajectory' | 'custom'>('result');
+    const [activeAnalysisTab, setActiveAnalysisTab] = useState<'result' | 'trajectory'>('result');
     // Execution（轮询，结果评测字段可能在轨迹评测过程中被补写）
     useEffect(() => {
         if (!user || !traceId) return;
@@ -953,18 +919,6 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
     const noEvaluableCase = isNoEvaluableCase(result);
     const hasTraceEvaluation = includesEvaluator(result, 'preset-agent-trace-quality');
     const hasResultEvaluation = includesEvaluator(result, 'preset-agent-task-completion');
-    const hasCustomEvaluation = (result?.selectedEvaluators || []).some(isCustomEvaluatorId);
-    const customEvaluationFailed = hasCustomEvaluation && result?.status === 'failed' && Boolean(result.errorMessage);
-    const customEvaluations = useMemo(
-        () => normalizeCustomEvaluations(result?.customEvaluations ?? (result?.rawAnalysis as { customEvaluations?: unknown } | undefined)?.customEvaluations),
-        [result?.customEvaluations, result?.rawAnalysis],
-    );
-    const customEvaluationScore = useMemo(() => {
-        const scores = customEvaluations
-            .map(item => item.score)
-            .filter((score): score is number => typeof score === 'number' && Number.isFinite(score));
-        return scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
-    }, [customEvaluations]);
     const resultEvaluationPayload = useMemo(
         () => deriveResultEvaluationPayload(exec, result?.rawAnalysis),
         [exec, result?.rawAnalysis],
@@ -997,6 +951,10 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
         () => parseSkillAttributionFromRow(result),
         [result],
     );
+    const resultSkillMode = String(asRecord(result?.rawAnalysis).resultSkillMode || '').trim();
+    const canShowResultSkillAttribution = resultSkillMode
+        ? resultSkillMode === 'skill-aware'
+        : skillAttribution?.state !== 'not-applicable';
     const skillKeyActionComparison = useMemo(
         () => deriveSkillKeyActionComparison(result?.rawAnalysis),
         [result?.rawAnalysis],
@@ -1042,15 +1000,13 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
         const r = hasResultEvaluation
             ? (resultEvaluationSummary.score ?? null)
             : null;
-        const c = hasCustomEvaluation ? customEvaluationScore : null;
 
         if (hasTraceEvaluation && (traj == null || !Number.isFinite(traj))) return null;
         if (hasResultEvaluation && (r == null || !Number.isFinite(r))) return null;
-        if (hasCustomEvaluation && (c == null || !Number.isFinite(c))) return null;
 
-        const parts = [traj, r, c].filter((item): item is number => typeof item === 'number' && Number.isFinite(item));
+        const parts = [traj, r].filter((item): item is number => typeof item === 'number' && Number.isFinite(item));
         return parts.length > 0 ? parts.reduce((a, b) => a + b, 0) / parts.length : null;
-    }, [result, noEvaluableCase, hasTraceEvaluation, hasResultEvaluation, hasCustomEvaluation, customEvaluationScore, resultEvaluationSummary.score]);
+    }, [result, noEvaluableCase, hasTraceEvaluation, hasResultEvaluation, resultEvaluationSummary.score]);
 
     const overallText = getTrajectoryOverallConclusion(result, {
         composite,
@@ -1131,7 +1087,6 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
                     <TopMetric label="TRACE ID" value={traceId} mono />
                     <TopMetric label="结果评测" value={hasResultEvaluation ? '已开启' : '未开启'} />
                     <TopMetric label="轨迹评测" value={hasTraceEvaluation ? '已开启' : '未开启'} />
-                    <TopMetric label="自定义评测" value={hasCustomEvaluation ? `${customEvaluations.length || '运行中'} 个` : '未开启'} />
                 </div>
             </div>
 
@@ -1175,11 +1130,6 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
                     active={activeAnalysisTab === 'trajectory'}
                     label="轨迹评测"
                     onClick={() => setActiveAnalysisTab('trajectory')}
-                />
-                <AnalysisTabButton
-                    active={activeAnalysisTab === 'custom'}
-                    label="自定义评测"
-                    onClick={() => setActiveAnalysisTab('custom')}
                 />
             </div>
 
@@ -1260,7 +1210,12 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
                                         <div style={{ fontSize: 11.5, color: COLORS.textMuted, marginBottom: 6 }}>任务完成度评测详情</div>
                                         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                                             {resultEvaluationFindings.map((item, index) => (
-                                                <KeyPointFindingCard key={index} item={item} fallbackTitle={`关键观点 #${index + 1}`} />
+                                                <KeyPointFindingCard
+                                                    key={index}
+                                                    item={item}
+                                                    fallbackTitle={`关键观点 #${index + 1}`}
+                                                    canShowSkillAttribution={canShowResultSkillAttribution}
+                                                />
                                             ))}
                                         </div>
                                     </div>
@@ -1290,15 +1245,6 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
                                         ? '评测进行中…（每 3s 自动刷新）'
                                         : '该 trace 尚未由轨迹评估器评测。'}
                                 </div>
-                                {/* 即使没有/失败的情况下也允许就地重新触发评估器，避免用户必须回 batch 列表 */}
-                                {(!result || result.status === 'failed') && !noEvaluableCase && (
-                                    <RerunTrajectoryEvalButton
-                                        taskId={traceId}
-                                        user={user}
-                                        onTriggered={() => { /* 轮询会自动接管 */ }}
-                                        compact
-                                    />
-                                )}
                             </div>
                         ) : (
                             <>
@@ -1334,10 +1280,6 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
                                         </div>
                                     );
                                 })()}
-
-                                {!isTraceOnlyTrajectory ? (
-                                    <TrajectoryCapBanner rawAnalysis={result.rawAnalysis} trajectoryScore={result.trajectoryScore} />
-                                ) : null}
 
                                 {shouldShowSkillKeyActions ? (
                                 <div style={{ marginTop: 14 }}>
@@ -1400,14 +1342,6 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
                                 </div>
                                 ) : null}
 
-                                {/* 重新跑归因评估按钮 —— 用户在详情页看到结果过时/不完整时可以就地重新触发，
-                                    避免必须回 batch 列表才能重跑（对应方案 A：保留单条 trace 重新归因入口）。 */}
-                                <RerunTrajectoryEvalButton
-                                    taskId={traceId}
-                                    user={user}
-                                    onTriggered={() => { /* 拉刷会通过外层轮询自动接管 */ }}
-                                />
-
                                 {/* 主入口：跳到链路观测查看被评测的实际 trace */}
                                 <button
                                     type="button"
@@ -1441,85 +1375,6 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
                                 </button>
 
                             </>
-                        )}
-                    </div>
-                </div>
-                )}
-
-                {activeAnalysisTab === 'custom' && (
-                <div>
-                    <div style={cardStyle()}>
-                        {!hasCustomEvaluation ? (
-                            <div style={{ color: COLORS.textMuted, fontSize: 12, padding: 12, textAlign: 'center' }}>
-                                本次未选择自定义评估器。
-                            </div>
-                        ) : customEvaluationFailed ? (
-                            <div style={{ color: COLORS.danger, background: COLORS.dangerSubtle, border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: 12, fontSize: 12, lineHeight: 1.6 }}>
-                                {cleanNoEvaluableCaseMessage(result?.errorMessage)}
-                            </div>
-                        ) : customEvaluations.length === 0 ? (
-                            <div style={{ color: COLORS.textMuted, fontSize: 12, padding: 12, textAlign: 'center' }}>
-                                自定义评测进行中…多个自定义评估器会在这里分别展示。
-                            </div>
-                        ) : (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                                {customEvaluations.map((item, index) => {
-                                    return (
-                                        <div key={`${item.evaluatorId || item.evaluatorName}-${index}`} style={{ border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: 12, background: '#fff' }}>
-                                            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 10 }}>
-                                                <div style={{ fontSize: 13, fontWeight: 700, color: COLORS.text }}>{item.evaluatorName}</div>
-                                                <span style={{
-                                                    ...badgeStyle(
-                                                        item.score == null
-                                                            ? COLORS.bgSoft
-                                                            : item.score >= 0.8
-                                                                ? COLORS.successSubtle
-                                                                : item.score >= 0.5
-                                                                    ? COLORS.warningSubtle
-                                                                    : COLORS.dangerSubtle,
-                                                        item.score == null
-                                                            ? COLORS.textMuted
-                                                            : item.score >= 0.8
-                                                                ? COLORS.success
-                                                                : item.score >= 0.5
-                                                                    ? COLORS.warning
-                                                                    : COLORS.danger,
-                                                        true,
-                                                    ),
-                                                    minHeight: 30,
-                                                    fontSize: 13,
-                                                    display: 'inline-flex',
-                                                    alignItems: 'center',
-                                                }}>
-                                                    分数 {item.score == null ? '--' : `${fmtPercentScore(item.score)} / 100`}
-                                                </span>
-                                            </div>
-                                            {item.error ? (
-                                                <div style={{ color: COLORS.danger, background: COLORS.dangerSubtle, border: `1px solid ${COLORS.border}`, borderRadius: 5, padding: 10, fontSize: 12, lineHeight: 1.6 }}>
-                                                    {item.error}
-                                                </div>
-                                            ) : (
-                                                <div>
-                                                    <div style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 6 }}>原因</div>
-                                                    <div style={{
-                                                        fontSize: 12,
-                                                        padding: 10,
-                                                        background: COLORS.bgSoft,
-                                                        border: `1px solid ${COLORS.borderSoft}`,
-                                                        borderRadius: 4,
-                                                        whiteSpace: 'pre-wrap',
-                                                        wordBreak: 'break-word',
-                                                        color: COLORS.textSecondary,
-                                                        lineHeight: 1.65,
-                                                    }}>
-                                                        {item.reason || '该评估器未返回原因。'}
-                                                    </div>
-                                                </div>
-                                            )}
-                                        </div>
-                                    );
-                                })}
-                            </div>
                         )}
                     </div>
                 </div>
@@ -1570,7 +1425,15 @@ function ScoreLine({ label, value, tone }: { label: string; value: string; tone:
     );
 }
 
-function KeyPointFindingCard({ item, fallbackTitle }: { item: ResultEvaluationFinding; fallbackTitle: string }) {
+function KeyPointFindingCard({
+    item,
+    fallbackTitle,
+    canShowSkillAttribution,
+}: {
+    item: ResultEvaluationFinding;
+    fallbackTitle: string;
+    canShowSkillAttribution: boolean;
+}) {
     const status = item.coverageStatus || (item.covered ? 'covered' : 'missing');
     const severity = item.severity || (status === 'covered' ? 'low' : 'high');
     const tone =
@@ -1587,7 +1450,9 @@ function KeyPointFindingCard({ item, fallbackTitle }: { item: ResultEvaluationFi
     const isCovered = status === 'covered';
     const resultJudgement = buildResultJudgement(item);
     const hasTrace = !isCovered && Boolean(item.traceRootCause?.failureReason || item.traceRootCause?.failureStage || item.traceRootCause?.relatedSteps?.length);
-    const hasAttribution = !isCovered && (item.isSkillAttributable === false || item.attributionReason || item.improvementSuggestion);
+    const hasAttribution = canShowSkillAttribution
+        && !isCovered
+        && (item.isSkillAttributable === false || item.attributionReason || item.improvementSuggestion);
 
     return (
         <div style={{
@@ -1834,104 +1699,6 @@ function Divider() {
     return <div style={{ height: 1, background: COLORS.borderSoft, margin: '10px 0' }} />;
 }
 
-/**
- * 单条 trace 的"重新跑归因评估"触发按钮。
- *
- * 直接调 POST /api/eval/trajectory/run，taskIds=[taskId] + evaluators=['preset-agent-trace-quality']。
- * 评测启动后写一行 TrajectoryEvalResult；外层 TrajectoryDetailView 的 3s 轮询会自动接管
- * 状态从 pending → running → done 的更新。
- *
- * 用途（方案 A）：用户在评测详情页发现结果过时或没跑过 → 就地重新触发，不用回 batch 列表。
- * 跟原 TraceDeviationPanel 里的 startTrajectoryEval 行为一致；从那里抽出来共用。
- */
-function RerunTrajectoryEvalButton({
-    taskId,
-    user,
-    onTriggered,
-    compact = false,
-}: {
-    taskId: string;
-    user: string | null;
-    onTriggered?: () => void;
-    compact?: boolean;
-}) {
-    const [starting, setStarting] = useState(false);
-    const [error, setError] = useState('');
-
-    const trigger = async () => {
-        if (!taskId || !user) return;
-        setStarting(true);
-        setError('');
-        try {
-            const res = await apiFetch('/api/eval/trajectory/run', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    user,
-                    taskIds: [taskId],
-                    // 单 trace 兜底归因走轨迹质量评估器；它内部有空 case fallback
-                    // (没 reference trajectory 时用 SKILL.md key actions)。
-                    // 不带 task-completion 是因为它强依赖 expectedOutput——见
-                    // src/lib/engine/evaluation/opencode-trajectory-evaluator.ts 注释。
-                    evaluators: ['preset-agent-trace-quality'],
-                }),
-            });
-            const data = await res.json();
-            if (!res.ok || !data.success) {
-                throw new Error(data.error || '启动评估失败');
-            }
-            onTriggered?.();
-        } catch (e) {
-            setError(e instanceof Error ? e.message : '启动评估失败');
-        } finally {
-            setStarting(false);
-        }
-    };
-
-    return (
-        <div style={{ marginTop: compact ? 0 : 12 }}>
-            <button
-                type="button"
-                onClick={trigger}
-                disabled={starting || !user}
-                style={{
-                    width: '100%',
-                    padding: '8px 12px',
-                    background: starting ? COLORS.bgSoft : COLORS.successSubtle,
-                    color: COLORS.success,
-                    border: `1px solid #BDE3D2`,
-                    borderRadius: 6,
-                    fontSize: 12,
-                    fontWeight: 500,
-                    cursor: starting || !user ? 'not-allowed' : 'pointer',
-                    opacity: starting || !user ? 0.6 : 1,
-                }}
-            >
-                {starting
-                    ? '正在启动评估…'
-                    : compact
-                    ? '↻ 触发归因评估'
-                    : '↻ 重新跑归因评估（评估器会重新分析这条 trace）'}
-            </button>
-            {error && (
-                <div
-                    style={{
-                        marginTop: 6,
-                        padding: '6px 10px',
-                        background: COLORS.dangerSubtle,
-                        color: COLORS.danger,
-                        border: `1px solid #F5CFCF`,
-                        borderRadius: 4,
-                        fontSize: 11,
-                    }}
-                >
-                    {error}
-                </div>
-            )}
-        </div>
-    );
-}
-
 function AnalysisTabButton({
     active,
     label,
@@ -2089,67 +1856,6 @@ function DimensionCard({
     );
 }
 
-function TrajectoryCapBanner({
-    rawAnalysis,
-    trajectoryScore,
-}: {
-    rawAnalysis: unknown;
-    trajectoryScore: number | null;
-}) {
-    const agg = asRecord(asRecord(rawAnalysis).score_aggregation ?? asRecord(rawAnalysis).scoreAggregation);
-    if (Object.keys(agg).length === 0) return null;
-    if (agg.mode === 'trace_only') return null;
-
-    const rawWeighted = typeof agg.rawWeightedScore === 'number' ? agg.rawWeightedScore : null;
-    const finalScore = typeof agg.finalScore === 'number'
-        ? agg.finalScore
-        : (typeof trajectoryScore === 'number' ? trajectoryScore : null);
-    const ceiling = typeof agg.ceiling === 'number' ? agg.ceiling : null;
-    const triggered = agg.triggered === true;
-    const effective = agg.effective === true;
-    const highCount = typeof agg.highCount === 'number' ? agg.highCount : 0;
-    const mediumCount = typeof agg.mediumCount === 'number' ? agg.mediumCount : 0;
-    const reason = typeof agg.reason === 'string' ? agg.reason : '';
-
-    const accent = effective ? COLORS.danger : triggered ? COLORS.warning : COLORS.success;
-    const bg = effective ? COLORS.dangerSubtle : triggered ? COLORS.warningSubtle : COLORS.successSubtle;
-
-    return (
-        <div style={{
-            border: `1px solid ${COLORS.border}`,
-            borderLeft: `3px solid ${accent}`,
-            borderRadius: 6,
-            background: bg,
-            padding: '10px 12px',
-            marginBottom: 12,
-            fontSize: 12,
-            lineHeight: 1.6,
-            color: COLORS.textSecondary,
-        }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                <span style={{ fontWeight: 600, color: accent }}>
-                    {effective ? '已封顶' : triggered ? '触发封顶规则（未压低）' : '未封顶'}
-                </span>
-                <span style={{ flex: 1 }} />
-                <span style={{ fontSize: 11, color: COLORS.textMuted }}>
-                    加权分 {rawWeighted != null ? fmtPercentScore(rawWeighted) : '--'}
-                    {' → '}
-                    <b style={{ color: accent }}>{finalScore != null ? fmtPercentScore(finalScore) : '--'}</b>
-                    {' / 100'}
-                    {ceiling != null ? `（上限 ${fmtPercentScore(ceiling)}）` : ''}
-                </span>
-            </div>
-            <div style={{ fontSize: 11.5, color: COLORS.textSecondary }}>
-                {reason || '无封顶：无 high 偏差且 medium 偏差少于 3 个。'}
-            </div>
-            <div style={{ marginTop: 4, fontSize: 10.5, color: COLORS.textMuted }}>
-                严重度：high {highCount} · medium {mediumCount}
-                {' · 规则：≥1 个 high → 封顶 40.0；无 high 但 ≥3 个 medium → 封顶 65.0'}
-            </div>
-        </div>
-    );
-}
-
 function asRecord(value: unknown): Record<string, unknown> {
     return value && typeof value === 'object' && !Array.isArray(value)
         ? value as Record<string, unknown>
@@ -2244,15 +1950,19 @@ function deriveDimensionFindings(rawAnalysis: unknown): {
     const rd = asRecord(details.redundancy);
     for (const raw of (Array.isArray(rd.consecutive_same_runs) ? rd.consecutive_same_runs : [])) {
         const r = asRecord(raw);
-        const name = r.name || '?';
-        const count = r.count ?? '?';
-        const from = r.from ?? '?';
-        const to = r.to ?? '?';
-        redundancy.push({ type: 'high', text: `连续重复：${name} ×${count}（步骤 #${from}–#${to}）` });
+        const name = String(r.name ?? r.call ?? r.toolName ?? r.tool ?? r.functionName ?? '未命名调用').trim() || '未命名调用';
+        const count = String(r.count ?? '多次').trim() || '多次';
+        const from = String(r.from ?? '').trim();
+        const to = String(r.to ?? '').trim();
+        const range = from && to ? `（步骤 #${from}–#${to}）` : '';
+        redundancy.push({ type: 'high', text: `连续重复：${name} ×${count}${range}` });
     }
     for (const raw of (Array.isArray(rd.heavy_repeated_calls) ? rd.heavy_repeated_calls : [])) {
         const r = asRecord(raw);
-        redundancy.push({ type: 'medium', text: `高频调用：${r.call || '?'} 共 ${r.count ?? '?'} 次` });
+        const name = String(r.call ?? r.name ?? r.toolName ?? r.tool ?? r.functionName ?? '未命名调用').trim() || '未命名调用';
+        const count = String(r.count ?? '').trim();
+        const countText = count ? `共 ${count} 次` : '多次出现';
+        redundancy.push({ type: 'medium', text: `高频调用：${name} ${countText}` });
     }
     if (redundancy.length === 0 && rd.explanation) {
         redundancy.push({ type: 'info', text: String(rd.explanation) });

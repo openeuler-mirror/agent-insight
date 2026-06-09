@@ -61,8 +61,6 @@ interface TrajectoryResult {
     resultEvaluationError?: string | null;
     trajectoryScore: number | null;
     resultEvaluationScore?: number | null;
-    customEvaluationScore?: number | null;
-    customEvaluations?: unknown;
     diagnostic?: unknown;
     rawAnalysis?: unknown;
     dimensionScores: TrajectoryDimensionScores | null;
@@ -192,32 +190,12 @@ function hasSelectedEvaluator(r: TrajectoryResult, evaluatorId: string): boolean
     return selected.includes(evaluatorId);
 }
 
-function deriveCustomEvaluationScore(result: TrajectoryResult): number | null {
-    if (typeof result.customEvaluationScore === 'number' && Number.isFinite(result.customEvaluationScore)) {
-        return result.customEvaluationScore;
-    }
-    const rawItems = Array.isArray(result.customEvaluations)
-        ? result.customEvaluations
-        : result.customEvaluations && typeof result.customEvaluations === 'object'
-            ? Object.values(result.customEvaluations as Record<string, unknown>)
-            : [];
-    const scores = rawItems
-        .map(item => item && typeof item === 'object' ? (item as Record<string, unknown>).score : null)
-        .filter((score): score is number => typeof score === 'number' && Number.isFinite(score));
-    return scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
-}
-
 function getDisplayScore(result: TrajectoryResult): number | null {
     if (!isTrajectoryEvaluationTerminal(result.status) || getTrajectoryDisplayStatus(result) !== 'done') return null;
     const traceScore = hasSelectedEvaluator(result, 'preset-agent-trace-quality') ? result.trajectoryScore : null;
     const answerScore = hasSelectedEvaluator(result, 'preset-agent-task-completion')
         ? result.resultEvaluationScore ?? null
         : null;
-    const derivedCustomScore = deriveCustomEvaluationScore(result);
-    const hasCustom = Array.isArray(result.selectedEvaluators)
-        ? result.selectedEvaluators.some(id => id.startsWith('custom-'))
-        : derivedCustomScore != null;
-    const customScore = hasCustom ? derivedCustomScore : null;
 
     if (hasSelectedEvaluator(result, 'preset-agent-trace-quality') && (traceScore == null || !Number.isFinite(traceScore))) {
         return null;
@@ -225,13 +203,26 @@ function getDisplayScore(result: TrajectoryResult): number | null {
     if (hasSelectedEvaluator(result, 'preset-agent-task-completion') && (answerScore == null || !Number.isFinite(answerScore))) {
         return null;
     }
-    if (hasCustom && (customScore == null || !Number.isFinite(customScore))) {
-        return null;
-    }
 
-    const parts = [traceScore, answerScore, customScore]
+    const parts = [traceScore, answerScore]
         .filter((score): score is number => typeof score === 'number' && Number.isFinite(score));
     return parts.length > 0 ? parts.reduce((a, b) => a + b, 0) / parts.length : null;
+}
+
+function getVisibleEvaluatorName(run: Pick<RunSummary, 'evaluatorIds' | 'evaluatorName'>): string {
+    const names = run.evaluatorName
+        ? run.evaluatorName.split('、').map(name => name.trim())
+        : [];
+    const visible = run.evaluatorIds
+        .map((id, index) => {
+            if (id.startsWith('custom-')) return '';
+            if (names[index]) return names[index];
+            if (id === 'preset-agent-task-completion') return 'Agent 任务完成度';
+            if (id === 'preset-agent-trace-quality') return 'Agent 轨迹质量';
+            return id;
+        })
+        .filter(Boolean);
+    return visible.length > 0 ? Array.from(new Set(visible)).join('、') : '—';
 }
 
 function EvalPageContent() {
@@ -970,7 +961,7 @@ function RunPanel({
                         primary
                         truncate
                     />
-                    <Stat label={<Term id="evaluator" label="评估器" />} value={run.evaluatorName || '—'} truncate />
+                    <Stat label={<Term id="evaluator" label="评估器" />} value={getVisibleEvaluatorName(run)} truncate />
                     <Stat label="trace 总数" value={String(run.traceCount)} />
                     <Stat
                         label="评测进度"
@@ -1236,6 +1227,7 @@ function RunSidebarItem({
     deleting: boolean;
 }) {
     const totalScore = run.avgScore != null ? `${fmtPercentScore(run.avgScore)} / 100` : '—';
+    const evaluatorName = getVisibleEvaluatorName(run);
     return (
         <div
             onClick={onClick}
@@ -1325,9 +1317,9 @@ function RunSidebarItem({
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
                 }}
-                title={run.evaluatorName}
+                title={evaluatorName}
             >
-                评估器：{run.evaluatorName || '—'}
+                评估器：{evaluatorName}
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11 }}>
                 <ProgressDot done={run.doneCount} running={run.runningCount} failed={run.failedCount} total={run.traceCount} />

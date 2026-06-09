@@ -43,8 +43,6 @@ interface TrajectoryResult {
     resultEvaluationError?: string | null;
     trajectoryScore: number | null;
     resultEvaluationScore?: number | null;
-    customEvaluationScore?: number | null;
-    customEvaluations?: unknown;
     diagnostic?: unknown;
     rawAnalysis?: unknown;
     dimensionScores: TrajectoryDimensionScores | null;
@@ -101,11 +99,22 @@ const STATUS_COLOR: Record<TrajectoryResult['status'], string> = {
     failed: COLORS.danger,
 };
 
-function getEvaluatorDisplayNames(rows: Pick<TrajectoryResult, 'selectedEvaluatorNames'>[]): string {
-    const names = Array.from(new Set(
-        rows.flatMap(row => Array.isArray(row.selectedEvaluatorNames) ? row.selectedEvaluatorNames : []),
-    ));
-    return names.length > 0 ? names.join('、') : 'Agent 轨迹质量';
+function getEvaluatorDisplayNames(rows: Pick<TrajectoryResult, 'selectedEvaluatorNames' | 'selectedEvaluators'>[]): string {
+    const names = Array.from(new Set(rows.flatMap(row => {
+        const selected = Array.isArray(row.selectedEvaluators) ? row.selectedEvaluators : [];
+        const selectedNames = Array.isArray(row.selectedEvaluatorNames) ? row.selectedEvaluatorNames : [];
+        if (selected.length === 0) return ['Agent 轨迹质量'];
+        return selected
+            .map((id, index) => {
+                if (id.startsWith('custom-')) return '';
+                if (selectedNames[index]) return selectedNames[index];
+                if (id === 'preset-agent-task-completion') return 'Agent 任务完成度';
+                if (id === 'preset-agent-trace-quality') return 'Agent 轨迹质量';
+                return id;
+            })
+            .filter(Boolean);
+    })));
+    return names.length > 0 ? names.join('、') : '—';
 }
 
 function hasSelectedEvaluator(r: TrajectoryResult, evaluatorId: string): boolean {
@@ -114,33 +123,13 @@ function hasSelectedEvaluator(r: TrajectoryResult, evaluatorId: string): boolean
     return selected.includes(evaluatorId);
 }
 
-function deriveCustomEvaluationScore(result: TrajectoryResult): number | null {
-    if (typeof result.customEvaluationScore === 'number' && Number.isFinite(result.customEvaluationScore)) {
-        return result.customEvaluationScore;
-    }
-    const rawItems = Array.isArray(result.customEvaluations)
-        ? result.customEvaluations
-        : result.customEvaluations && typeof result.customEvaluations === 'object'
-            ? Object.values(result.customEvaluations as Record<string, unknown>)
-            : [];
-    const scores = rawItems
-        .map(item => item && typeof item === 'object' ? (item as Record<string, unknown>).score : null)
-        .filter((score): score is number => typeof score === 'number' && Number.isFinite(score));
-    return scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
-}
-
 function getDisplayScore(result: TrajectoryResult, exec?: ExecutionRecord): number | null {
     if (!isTrajectoryEvaluationTerminal(result.status) || getTrajectoryDisplayStatus(result) !== 'done') return null;
     const traceScore = hasSelectedEvaluator(result, 'preset-agent-trace-quality') ? result.trajectoryScore : null;
     const answerScore = hasSelectedEvaluator(result, 'preset-agent-task-completion')
         ? result.resultEvaluationScore ?? exec?.answer_score ?? null
         : null;
-    const derivedCustomScore = deriveCustomEvaluationScore(result);
-    const hasCustom = Array.isArray(result.selectedEvaluators)
-        ? result.selectedEvaluators.some(id => id.startsWith('custom-'))
-        : derivedCustomScore != null;
-    const customScore = hasCustom ? derivedCustomScore : null;
-    const parts = [traceScore, answerScore, customScore]
+    const parts = [traceScore, answerScore]
         .filter((score): score is number => typeof score === 'number' && Number.isFinite(score));
     if (parts.length === 0) return null;
     return parts.reduce((a, b) => a + b, 0) / parts.length;

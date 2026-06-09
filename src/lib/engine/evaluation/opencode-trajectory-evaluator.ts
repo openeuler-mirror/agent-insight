@@ -39,12 +39,13 @@ import { tagOpencodeSession } from '@/lib/internal-agent-tag';
 import { findSystemAgentDefinition, getSystemAgentId } from '@/lib/system-agents';
 
 import {
+    normalizeTrajectoryRedundancyDetails,
     type TrajectoryEvalInput,
     type TrajectoryEvalOutput,
     type TrajectoryDimensionScores,
     type TrajectoryDeviationStep,
     type KeyActionTraceAnalysisResult,
-    type TrajectoryCapInfo,
+    type TrajectoryScoreAggregationInfo,
 } from './trajectory-evaluator';
 
 export class TrajectoryEvalConfigError extends Error {
@@ -70,6 +71,8 @@ const COORDINATOR_SYSTEM_PROMPT = `你是 Agent Insight 的「关键动作轨迹
 【硬性约束】
 - 禁止派发、调用或生成任何 subagent / task。
 - 只使用输入中的 actual_flat_trace_steps 作为 trace 判断依据。
+- actual_flat_trace_steps 是事件级 trace 摘要，包含 user / llm / tool / skill / task；tool、skill、task 事件本身就是覆盖证据，不能因为多个工具服务于同一业务目标就合并忽略。
+- 判断 read/bash/脚本/文件读取等行为时，必须查看 tool/skill/task 事件的 name、argsSummary、outputSummary、textContent、index/step_index。
 - comparison_mode=skill_key_actions 时，必须为 reference_key_actions 中的每个关键动作输出且只输出一条 key_action_results。
 - comparison_mode=trace_only 时，reference_key_actions 为空，必须输出 key_action_results: []，不要生成 Skill 改进建议。
 - 不要输出 deviation_steps，不要输出 path deviation 列表。
@@ -100,7 +103,8 @@ const COORDINATOR_SYSTEM_PROMPT = `你是 Agent Insight 的「关键动作轨迹
 - tool_choice：工具/Skill 选择合理性。基于 actual_flat_trace_steps 中的工具/Skill 调用是否符合关键动作意图，0.0 到 1.0。
 - redundancy：冗余程度。基于 actual_flat_trace_steps 中是否有明显重复、绕路、高频无效调用，0.0 到 1.0。
 - dimension_details 中必须给出每个维度的 score 和 explanation；如有具体问题，放入 missing_steps / problematic_steps / heavy_repeated_calls 等数组，供前端展开。
-- reason_text 是前端顶部「执行路径分析」绿色框的正文，必须总结完整性、工具选择、冗余，以及可能触发封顶的关键偏差；不要只写关键动作覆盖数量。
+- dimension_details.redundancy.consecutive_same_runs 每项必须包含 name、count、from、to；heavy_repeated_calls 每项必须包含 call、count。name/call 必须来自 actual_flat_trace_steps 的 name 字段，不能留空。
+- reason_text 是前端顶部「执行路径分析」绿色框的正文，必须总结完整性、工具选择、冗余，以及关键偏差；不要只写关键动作覆盖数量。
 
 【最终输出】只输出下面 schema 对应的严格 JSON：
 \`\`\`json
@@ -114,7 +118,7 @@ const COORDINATOR_SYSTEM_PROMPT = `你是 Agent Insight 的「关键动作轨迹
     "missing_count": 1,
     "not_applicable_count": 0
   },
-  "reason_text": "完整性(0.60)：5 个关键动作中 2 个覆盖、1 个部分覆盖、2 个缺失，缺失项会影响主流程闭环。工具选择(0.65)：大多数工具调用与任务相关，但缺少验证类调用。冗余(0.50)：存在部分重复或绕路，未形成连续重复调用。可能触发封顶的偏差：存在 high 严重度关键动作缺失，可能触发 0.40 封顶。",
+  "reason_text": "完整性(0.60)：5 个关键动作中 2 个覆盖、1 个部分覆盖、2 个缺失，缺失项会影响主流程闭环。工具选择(0.65)：大多数工具调用与任务相关，但缺少验证类调用。冗余(0.50)：存在部分重复或绕路，未形成连续重复调用。关键偏差：存在 high 严重度关键动作缺失，应优先修正。",
   "dimension_scores": {
     "completeness": 0.6,
     "tool_choice": 0.65,
@@ -138,8 +142,12 @@ const COORDINATOR_SYSTEM_PROMPT = `你是 Agent Insight 的「关键动作轨迹
     },
     "redundancy": {
       "score": 0.5,
-      "consecutive_same_runs": [],
-      "heavy_repeated_calls": [],
+      "consecutive_same_runs": [
+        { "name": "bash", "count": 3, "from": 4, "to": 6 }
+      ],
+      "heavy_repeated_calls": [
+        { "call": "read", "count": 8 }
+      ],
       "explanation": "存在部分重复或绕路，但未形成连续重复调用。"
     }
   },
@@ -207,6 +215,7 @@ function buildKeyActionAnalysisPayload(input: TrajectoryEvalInput) {
             language: 'zh-CN',
             analyze_each_key_action_independently: true,
             only_use_actual_flat_trace_steps_as_trace_basis: true,
+            actual_trace_granularity: 'event_level_user_llm_tool_skill_task',
             do_not_generate_path_deviation_items: true,
             do_not_merge_or_dedupe_suggestions: true,
             do_not_infer_extra_key_actions: true,
@@ -308,7 +317,7 @@ function aggregateTrajectoryScoreByMode(
     dims: TrajectoryDimensionScores,
     keyActionResults: KeyActionTraceAnalysisResult[],
     mode: TrajectoryEvalInput['comparisonMode'],
-): { trajectoryScore: number; rawWeightedScore: number; cap: TrajectoryCapInfo } {
+): { trajectoryScore: number; rawWeightedScore: number; scoreAggregation: TrajectoryScoreAggregationInfo } {
     if (mode === 'trace_only') {
         const toolWeight = 0.35;
         const redundancyWeight = 0.20;
@@ -319,12 +328,9 @@ function aggregateTrajectoryScoreByMode(
         return {
             trajectoryScore: rawWeightedScore,
             rawWeightedScore,
-            cap: {
+            scoreAggregation: {
                 mode: 'trace_only',
-                triggered: false,
-                effective: false,
-                ceiling: null,
-                reason: '当前 trace 未关联 Skill，完整性与关键动作严重度封顶不参与计分；最终分只由工具选择和冗余归一化计算。',
+                reason: '当前 trace 未关联 Skill，完整性不参与计分；最终分只由工具选择和冗余归一化计算。',
                 rawWeightedScore,
                 finalScore: rawWeightedScore,
                 highCount: 0,
@@ -342,31 +348,16 @@ function aggregateTrajectoryScoreByMode(
     const actionable = keyActionResults.filter(item => item.coverage !== 'covered' && item.coverage !== 'not_applicable');
     const highCount = actionable.filter(item => item.severity === 'high').length;
     const mediumCount = actionable.filter(item => item.severity === 'medium').length;
-    let ceiling: number | null = null;
-    let reason = `无 high 严重度关键动作问题且 medium 问题仅 ${mediumCount} 个（<3），不触发封顶。`;
-    if (highCount >= 1) {
-        ceiling = 0.4;
-        reason = `存在 ${highCount} 个 high 严重度关键动作问题，轨迹分封顶 0.40。`;
-    } else if (mediumCount >= 3) {
-        ceiling = 0.65;
-        reason = `无 high 问题，但存在 ${mediumCount} 个 medium 严重度关键动作问题（≥3），轨迹分封顶 0.65。`;
-    }
+    const reason = `轨迹分按完整性/工具选择/冗余加权计算；关键动作严重度仅用于诊断展示（high ${highCount}，medium ${mediumCount}），不调整最终分。`;
 
-    const finalScore = ceiling == null ? rawWeightedScore : Math.min(rawWeightedScore, ceiling);
-    const effective = ceiling != null && finalScore < rawWeightedScore;
     return {
-        trajectoryScore: clamp01(finalScore),
+        trajectoryScore: clamp01(rawWeightedScore),
         rawWeightedScore,
-        cap: {
+        scoreAggregation: {
             mode: 'skill_key_actions',
-            triggered: ceiling != null,
-            effective,
-            ceiling,
-            reason: effective || ceiling == null
-                ? reason
-                : `${reason}（但加权分 ${rawWeightedScore.toFixed(3)} 本就不高于上限，最终分未被进一步压低。）`,
+            reason,
             rawWeightedScore,
-            finalScore: clamp01(finalScore),
+            finalScore: clamp01(rawWeightedScore),
             highCount,
             mediumCount,
         },
@@ -376,7 +367,7 @@ function aggregateTrajectoryScoreByMode(
 function buildFallbackReasonText(
     parsed: JsonRecord,
     dims: TrajectoryDimensionScores,
-    cap: TrajectoryCapInfo,
+    scoreAggregation: TrajectoryScoreAggregationInfo,
 ): string {
     const details = asRecord(parsed.dimension_details ?? parsed.dimensionDetails);
     const completeness = asRecord(details.completeness);
@@ -389,7 +380,7 @@ function buildFallbackReasonText(
         `完整性(${completenessText})：${String(completeness.explanation || '评估器未给出完整性说明。')}`,
         `工具选择(${dims.toolChoice.toFixed(2)})：${String(toolChoice.explanation || '评估器未给出工具选择说明。')}`,
         `冗余(${dims.redundancy.toFixed(2)})：${String(redundancy.explanation || '评估器未给出冗余说明。')}`,
-        `可能触发封顶的偏差：${cap.reason}`,
+        `关键偏差：${scoreAggregation.reason}`,
     ];
     return parts.join('\n\n');
 }
@@ -398,8 +389,9 @@ function normalizeOutput(
     parsedInput: unknown,
     expectedKeyActionCount = 0,
     comparisonMode: TrajectoryEvalInput['comparisonMode'] = 'skill_key_actions',
+    actualSteps: unknown[] = [],
 ): TrajectoryEvalOutput {
-    const parsed = asRecord(parsedInput);
+    const parsed = normalizeTrajectoryRedundancyDetails(asRecord(parsedInput), actualSteps);
     const overall = asRecord(parsed.overall);
     const traceOnly = comparisonMode === 'trace_only';
     const keyActionResults = traceOnly
@@ -437,20 +429,20 @@ function normalizeOutput(
         }
     }
     const dimensionScores = pickDimensionScores(parsed, score, traceOnly);
-    const { trajectoryScore, rawWeightedScore, cap } = aggregateTrajectoryScoreByMode(
+    const { trajectoryScore, rawWeightedScore, scoreAggregation } = aggregateTrajectoryScoreByMode(
         dimensionScores,
         keyActionResults,
         comparisonMode,
     );
     const reasonText = String(parsed.reason_text || parsed.reasonText || '').trim()
-        || buildFallbackReasonText(parsed, dimensionScores, cap);
+        || buildFallbackReasonText(parsed, dimensionScores, scoreAggregation);
 
     const deviationSteps: TrajectoryDeviationStep[] = [];
 
     return {
         trajectoryScore,
         rawWeightedScore,
-        cap,
+        scoreAggregation,
         dimensionScores,
         deviationSteps,
         keyActionResults,
@@ -460,7 +452,7 @@ function normalizeOutput(
             schema_version: parsed.schema_version || (traceOnly ? 'trace-only-analysis@1.0' : 'key-action-trace-analysis@1.0'),
             comparison_mode: comparisonMode,
             keyActionResults,
-            score_aggregation: cap,
+            score_aggregation: scoreAggregation,
             dimension_scores: {
                 completeness: dimensionScores.completeness,
                 tool_choice: dimensionScores.toolChoice,
@@ -510,6 +502,7 @@ async function evaluateTrajectoryDirect(
         parsedRecord,
         Array.isArray(input.referenceKeyActions) ? input.referenceKeyActions.length : 0,
         input.comparisonMode,
+        input.actualExtractedSteps,
     );
 }
 
@@ -688,6 +681,7 @@ export async function evaluateTrajectoryViaOpencode(
                 parsed,
                 Array.isArray(input.referenceKeyActions) ? input.referenceKeyActions.length : 0,
                 input.comparisonMode,
+                input.actualExtractedSteps,
             );
             return {
                 ...normalized,
