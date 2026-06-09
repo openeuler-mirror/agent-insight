@@ -17,7 +17,10 @@ import { findSystemAgentDefinition, getSystemAgentId } from '@/lib/system-agents
 import { type RootCauseItem } from '@/lib/dataset-case-root-causes';
 import { recordEvaluatorExecution } from './evaluator-execution-recorder';
 import { extractRootCausesFromExpected } from './root-cause-extractor';
-import { deriveTaskCompletionScoreFromFindings } from './task-completion-scoring';
+import {
+    deriveTaskCompletionScoreFromFindings,
+    stripSkillAttributionFromKeyPointFindings,
+} from './task-completion-scoring';
 import { parseLooseJson } from './task-completion-json';
 
 export interface TaskCompletionEvalInput {
@@ -27,6 +30,7 @@ export interface TaskCompletionEvalInput {
     precomputedRootCauses?: RootCauseItem[];
     precomputedRootCauseSource?: 'dataset-cache' | 'none';
     traceSummaryText?: string;
+    skillAttributionMode?: 'skill-aware' | 'no-skill';
     skillContext?: {
         invokedSkills?: Array<{
             name: string;
@@ -46,7 +50,21 @@ export interface TaskCompletionEvalOutput {
 const TASK_COMPLETION_EVALUATOR_NAME = 'task-completion-evaluator';
 const OPENCODE_FALLBACK_AGENT_NAME = 'build';
 
-const COORDINATOR_SYSTEM_PROMPT = `你是「Agent 任务完成度 + 关键观点根因分析」评估器。你会收到用户输入、预期结果、实际输出、从标准答案中提取的关键观点、压缩执行轨迹 Trace Summary，以及可选的 Skill 上下文。
+function buildCoordinatorSystemPrompt(mode: NonNullable<TaskCompletionEvalInput['skillAttributionMode']>): string {
+    const skillBranch = mode === 'skill-aware'
+        ? `【Skill 归因分支】
+本 trace 关联了 Skill。你会收到真实的 Skill 上下文，必须基于该 SKILL.md 内容判断每条未覆盖 / 部分覆盖 / 错误覆盖的关键观点是否可通过修改 Skill 降低复现概率。
+- 如果可归因到 Skill，输出 is_skill_attributable=true，并给出 attribution_reason 与 improvement_suggestion。
+- improvement_suggestion 必须具体到"在 SKILL.md 的哪类流程、规则、检查清单、输出约束或反例约束中补什么"。
+- 如果主要不是 Skill 文档能解决的问题，输出 is_skill_attributable=false，attribution_reason 简述原因，improvement_suggestion 置空。`
+        : `【无 Skill 分支】
+本 trace 未关联任何 Skill。本次结果评测只评估任务完成度、关键观点覆盖情况和 trace 根因定位。
+- 禁止输出有效的 Skill 归因和 Skill 改进建议。
+- 每条 key_point_findings 必须设置 is_skill_attributable=false。
+- attribution_reason 必须为空字符串。
+- improvement_suggestion 必须为空字符串。`;
+
+    return `你是「Agent 任务完成度 + 关键观点根因分析」评估器。你会收到用户输入、预期结果、实际输出、从标准答案中提取的关键观点、压缩执行轨迹 Trace Summary，以及可选的 Skill 上下文。
 
 【必须遵循的工作流程】
 1. 你必须自己逐条检查每个关键观点是否被实际输出覆盖，不要跳过任何一条。
@@ -113,10 +131,9 @@ Step 6. 查看 Trace Summary，判断问题发生阶段：
 - final_answer：trace 中已有正确分析，但最终输出漏写或组织错误。
 - model_or_environment：主要来自模型能力、外部环境、工具失败等，难以通过 Skill 修复。
 - unknown：压缩轨迹中没有足够证据定位。
-Step 7. 如果存在 Skill 上下文，判断 is_skill_attributable：
-- true：修改 SKILL.md 的规则、流程、检查清单、输出约束或反例约束，可以降低复现概率。
-- false：问题主要不是 Skill 文档能解决的，比如模型随机失误、工具环境失败、用户输入不可解。
-Step 8. 给出简短、可落地的 improvement_suggestion。必须具体到"在 SKILL.md 增加/修改什么约束"，不要写空泛建议。
+Step 7. 按下方 Skill 归因分支要求填写 is_skill_attributable / attribution_reason / improvement_suggestion。
+
+${skillBranch}
 
 【重要约束】
 - 不要输出 result_issues。
@@ -126,6 +143,7 @@ Step 8. 给出简短、可落地的 improvement_suggestion。必须具体到"在
 - covered=true 的关键观点必须给 coverage_reason。
 - covered=false / partial / wrong 的关键观点必须给 missing_reason、trace_root_cause.failure_stage、trace_root_cause.failure_reason。
 `;
+}
 
 function clampTaskScore(value: unknown): number {
     const score = typeof value === 'number'
@@ -137,10 +155,13 @@ function clampTaskScore(value: unknown): number {
     return Math.max(0, Math.min(1, score));
 }
 
-function tryNormalizeFromTexts(...texts: Array<string | null | undefined>): TaskCompletionEvalOutput | null {
+function tryNormalizeFromTexts(
+    mode: NonNullable<TaskCompletionEvalInput['skillAttributionMode']>,
+    ...texts: Array<string | null | undefined>
+): TaskCompletionEvalOutput | null {
     for (const text of texts) {
         const parsed = parseLooseJson(String(text || ''));
-        if (parsed && isTaskCompletionPayload(parsed)) return normalizeOutput(parsed);
+        if (parsed && isTaskCompletionPayload(parsed)) return normalizeOutput(parsed, mode);
     }
     return null;
 }
@@ -192,6 +213,10 @@ function buildUserMessage(input: TaskCompletionEvalInput, rootCauses: RootCauseI
     return [
         '# Agent 任务完成度评测输入',
         '',
+        `## Skill 归因模式\n${input.skillAttributionMode === 'skill-aware'
+            ? 'skill-aware：本 trace 关联了 Skill，允许基于 Skill 上下文输出 Skill 归因和改进建议。'
+            : 'no-skill：本 trace 未关联任何 Skill，禁止输出 Skill 归因和 Skill 改进建议。'}`,
+        '',
         `## 用户输入\n${input.caseInput}`,
         '',
         `## 预期结果\n${input.expectedOutput}`,
@@ -217,15 +242,24 @@ function formatSkillContext(skillContext: TaskCompletionEvalInput['skillContext'
     ].join('\n')).join('\n\n');
 }
 
-function normalizeOutput(parsed: Record<string, unknown>): TaskCompletionEvalOutput {
-    const scoreSummary = deriveTaskCompletionScoreFromFindings(parsed.key_point_findings);
+function normalizeOutput(
+    parsed: Record<string, unknown>,
+    mode: NonNullable<TaskCompletionEvalInput['skillAttributionMode']> = 'skill-aware',
+): TaskCompletionEvalOutput {
+    const parsedForScoring = mode === 'no-skill'
+        ? {
+            ...parsed,
+            key_point_findings: stripSkillAttributionFromKeyPointFindings(parsed.key_point_findings),
+        }
+        : parsed;
+    const scoreSummary = deriveTaskCompletionScoreFromFindings(parsedForScoring.key_point_findings);
     // deriveTaskCompletionScoreFromFindings 类型上 score 为 number|null, 但实现里 findings 为空会直接 throw,
     // 非空时必返回 clamp 过的数字 —— 实际不会到 null。?? 0 仅为满足类型 + 万一为 null 时按 0 分(不达标)兜底。
     const score = scoreSummary.score ?? 0;
     const isCorrect = score >= 0.8;
     const reason = String(parsed.reason || '').trim() || '任务完成度评测已完成，但未返回理由。';
     const llmReportedScore = typeof parsed.score === 'undefined' ? undefined : clampTaskScore(parsed.score);
-    const { result_issues: _ignoredResultIssues, resultIssues: _ignoredResultIssuesCamel, ...rest } = parsed;
+    const { result_issues: _ignoredResultIssues, resultIssues: _ignoredResultIssuesCamel, ...rest } = parsedForScoring;
     return {
         isCorrect,
         score,
@@ -239,6 +273,7 @@ function normalizeOutput(parsed: Record<string, unknown>): TaskCompletionEvalOut
                 method: 'equal_weight_average',
                 item_count: scoreSummary.itemCount,
             },
+            skillAttributionMode: mode,
             key_point_findings: scoreSummary.findings,
         },
     };
@@ -253,6 +288,7 @@ export async function evaluateTaskCompletionViaOpencode(
   return withBackgroundOpencodeSlot(async () => {
    return runWithEphemeralOpencodeServer({ user: user || undefined, verbose: false, isolateHome: true }, async (serverUrl) => {
     const { rootCauses, source: rootCauseSource } = await resolveRootCauses(input, user);
+    const skillAttributionMode = input.skillAttributionMode || 'skill-aware';
     const config = await getActiveConfig(user);
     if (!config) {
         return {
@@ -282,7 +318,7 @@ export async function evaluateTaskCompletionViaOpencode(
             top_p: 1,
             seed: 42,
         },
-        system: COORDINATOR_SYSTEM_PROMPT,
+        system: buildCoordinatorSystemPrompt(skillAttributionMode),
         // 用统一的评测器权限基线：read/bash/webfetch 显式 allow + question/plan_* deny + 写允许 /tmp/*。
         // 之前只允许 external_directory /tmp/*,read/bash 没规则 → 后端无 TTY 时
         // permission.asked 没人响应 → 工具调用 silent 卡死,a/b 测试看不到任何输出。
@@ -356,7 +392,7 @@ export async function evaluateTaskCompletionViaOpencode(
 
         const parsed = parseLooseJson(fullText);
         if (parsed && isTaskCompletionPayload(parsed)) {
-            const normalized = normalizeOutput(parsed);
+            const normalized = normalizeOutput(parsed, skillAttributionMode);
             return {
                 ...normalized,
                 rawAnalysis: {
@@ -391,6 +427,7 @@ export async function evaluateTaskCompletionViaOpencode(
     }
 
     const salvaged = tryNormalizeFromTexts(
+        skillAttributionMode,
         fullText,
         runtimeError?.message,
     );
@@ -439,5 +476,6 @@ export const TASK_COMPLETION_EVALUATOR_AGENTS = [
 ];
 
 export const TASK_COMPLETION_EVALUATOR_PROMPTS = {
-    coordinator: COORDINATOR_SYSTEM_PROMPT,
+    coordinator: buildCoordinatorSystemPrompt('skill-aware'),
+    coordinatorNoSkill: buildCoordinatorSystemPrompt('no-skill'),
 };

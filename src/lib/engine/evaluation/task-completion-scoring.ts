@@ -51,3 +51,20 @@ export function deriveTaskCompletionScoreFromFindings(rawFindings: unknown): Tas
     findings,
   };
 }
+
+export function stripSkillAttributionFromKeyPointFindings(rawFindings: unknown): Record<string, unknown>[] {
+  return (Array.isArray(rawFindings) ? rawFindings : [])
+    .map(item => item && typeof item === 'object' && !Array.isArray(item)
+      ? item as Record<string, unknown>
+      : null)
+    .filter((item): item is Record<string, unknown> => Boolean(item))
+    .map(item => ({
+      ...item,
+      is_skill_attributable: false,
+      isSkillAttributable: false,
+      attribution_reason: '',
+      attributionReason: '',
+      improvement_suggestion: '',
+      improvementSuggestion: '',
+    }));
+}

@@ -138,6 +138,8 @@ export interface DeriveOptPointsArgs {
 export async function deriveAndPersistOptPoints(args: DeriveOptPointsArgs): Promise<number> {
   const { user, taskId, runId, trajectoryRow, skills } = args;
   if (skills.length === 0) return 0;
+  const raw = parseJsonObject(trajectoryRow.rawAnalysisJson);
+  if (rawAnalysisDisablesSkillIssues(raw)) return 0;
 
   const issues: DerivedIssue[] = [];
   for (const it of extractKeyActionIssues(trajectoryRow)) issues.push(it);
@@ -292,6 +294,7 @@ function extractKeyActionIssues(
 ): DerivedIssue[] {
   const raw = parseJsonObject(row.rawAnalysisJson);
   if (!raw) return [];
+  if (rawAnalysisDisablesSkillIssues(raw)) return [];
   const list = extractRawKeyActionResults(raw);
   const out: DerivedIssue[] = [];
   for (const item of list) {
@@ -333,6 +336,8 @@ function extractKeyPointIssues(
   row: Pick<TrajectoryEvalResult, 'rawAnalysisJson'>,
 ): DerivedIssue[] {
   const findings = extractRawKeyPointFindings(row.rawAnalysisJson);
+  const raw = parseJsonObject(row.rawAnalysisJson);
+  if (rawAnalysisDisablesSkillIssues(raw)) return [];
   const out: DerivedIssue[] = [];
   for (const f of findings) {
     if (f.covered === true) continue;
@@ -369,6 +374,7 @@ function extractToolChoiceIssues(
 ): DerivedIssue[] {
   const raw = parseJsonObject(row.rawAnalysisJson);
   if (!raw) return [];
+  if (rawAnalysisDisablesSkillIssues(raw)) return [];
   const toolChoice =
     raw.dimension_details && typeof raw.dimension_details === 'object'
       ? (raw.dimension_details as Record<string, unknown>).tool_choice
@@ -419,6 +425,7 @@ function extractResultIssues(
 ): DerivedIssue[] {
   const raw = parseJsonObject(row.rawAnalysisJson);
   if (!raw) return [];
+  if (rawAnalysisDisablesSkillIssues(raw)) return [];
   // 兼容两种位置：rawAnalysis.resultEvaluation.result_issues 和顶层 rawAnalysis.result_issues
   const direct = arrayOrEmpty<RawResultIssue>(raw.result_issues);
   const nested = arrayOrEmpty<RawResultIssue>(
@@ -457,6 +464,16 @@ function resolveSkillAttributable(snake?: boolean, camel?: boolean): boolean | n
   if (snake === false || camel === false) return false;
   if (snake === true || camel === true) return true;
   return null;
+}
+
+function rawAnalysisDisablesSkillIssues(raw: Record<string, unknown> | null): boolean {
+  if (!raw) return false;
+  if (raw.resultSkillMode === 'no-skill') return true;
+  const skillAttribution = raw.skillAttribution;
+  if (skillAttribution && typeof skillAttribution === 'object' && !Array.isArray(skillAttribution)) {
+    return (skillAttribution as Record<string, unknown>).state === 'not-applicable';
+  }
+  return false;
 }
 
 function pickSuggestion(snake?: string, camel?: string): string | undefined {
