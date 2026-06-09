@@ -14,9 +14,8 @@ import {
 import { startOrReplace as startEvalTask, finish as finishEvalTask } from '@/lib/evaluation-task-manager';
 import { deriveAndPersistOptPoints } from '@/lib/engine/evaluation/derive-skill-opt-points';
 import {
-    buildSkillKeyActionComparison,
+    buildSkillKeyActionReference,
     getPrimaryExecutionSkillTargets,
-    loadActualExtractedTraceSteps,
     loadTaskCompletionSkillContext,
 } from '@/lib/engine/evaluation/key-action-trace-analysis';
 import { extractRealUserInput, findBestSemanticCaseMatch } from '@/lib/engine/evaluation/semantic-dataset-match';
@@ -97,6 +96,19 @@ type CustomEvaluatorVariable = 'input' | 'output' | 'reference_output' | 'trajec
 
 function normalizeMatchText(value: string | null | undefined): string {
     return String(value || '').trim().replace(/\s+/g, ' ');
+}
+
+function buildTrajectoryTraceEvidence(interactions: TrajectoryEvalInput['actualInteractions']) {
+    const summary = summarizeTrace(interactions, { maxSteps: 80, maxTextLen: 400 });
+    return {
+        summary,
+        text: formatTraceForLLM(summary),
+        steps: summary.steps.map(step => ({
+            ...step,
+            step_index: step.index,
+            stepIndex: step.index,
+        })),
+    };
 }
 
 function collectCustomEvaluatorVariables(prompts: string[]): Set<CustomEvaluatorVariable> {
@@ -1356,35 +1368,45 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
     let actualExtractedStepsForEval: unknown[] = [];
     let evaluationFocus = caseEntry.evaluationFocus;
     const referenceTrajectory = caseEntry.trajectory;
-    const keyActionComparison = await buildSkillKeyActionComparison(
+    const traceEvidence = interactions.length > 0
+        ? buildTrajectoryTraceEvidence(interactions)
+        : null;
+    const keyActionReference = await buildSkillKeyActionReference(
         execution,
-        resolvedTaskId,
         user,
         interactions,
     );
-    const skillAttributionStatus = buildSkillAttributionStatus(keyActionComparison);
+    const keyActionComparisonForStatus: SkillKeyActionComparisonResult = keyActionReference.status === 'ok'
+        ? {
+            status: 'ok',
+            referenceKeyActionsText: keyActionReference.referenceKeyActionsText,
+            actualExtractedStepsText: traceEvidence?.text || '',
+            referenceKeyActions: keyActionReference.referenceKeyActions,
+            actualExtractedSteps: traceEvidence?.steps || [],
+        }
+        : keyActionReference;
+    const skillAttributionStatus = buildSkillAttributionStatus(keyActionComparisonForStatus);
 
-    if (keyActionComparison.status === 'ok') {
+    if (keyActionReference.status === 'ok' && traceEvidence && traceEvidence.steps.length > 0) {
         comparisonMode = 'skill_key_actions';
-        referenceKeyActionsText = keyActionComparison.referenceKeyActionsText;
-        actualExtractedStepsText = keyActionComparison.actualExtractedStepsText;
-        referenceKeyActionsForEval = keyActionComparison.referenceKeyActions ?? [];
-        actualExtractedStepsForEval = keyActionComparison.actualExtractedSteps ?? [];
+        referenceKeyActionsText = keyActionReference.referenceKeyActionsText;
+        actualExtractedStepsText = traceEvidence.text;
+        referenceKeyActionsForEval = keyActionReference.referenceKeyActions ?? [];
+        actualExtractedStepsForEval = traceEvidence.steps;
         evaluationFocus = [
             normalizeMatchText(caseEntry.evaluationFocus),
-            '逐条比较 Skill 自动提取的关键动作与 trace 自动提取的扁平化实际步骤，并直接生成每个关键动作的 Skill 改进建议。',
+            '逐条比较 Skill 自动提取的关键动作与 trace 事件级步骤（user/llm/tool/skill/task），并直接生成每个关键动作的 Skill 改进建议。',
         ].filter(Boolean).join(' ');
     } else if (shouldRunTraceEvaluation) {
-        const actualTrace = await loadActualExtractedTraceSteps(resolvedTaskId, user);
-        if (actualTrace.status !== 'ok') {
+        if (!traceEvidence || traceEvidence.steps.length === 0) {
             throw new StagedEvaluationError(
                 'no-evaluable-case',
-                `${NO_EVALUABLE_CASE_PREFIX} ${skillAttributionStatus.message || '当前 trace 无法提取可评测步骤'}`,
+                `${NO_EVALUABLE_CASE_PREFIX} 当前 trace 无法提取可评测事件步骤`,
             );
         }
         comparisonMode = 'trace_only';
-        actualExtractedStepsText = actualTrace.text;
-        actualExtractedStepsForEval = actualTrace.steps;
+        actualExtractedStepsText = traceEvidence.text;
+        actualExtractedStepsForEval = traceEvidence.steps;
         evaluationFocus = [
             normalizeMatchText(caseEntry.evaluationFocus),
             '当前 trace 未获得可用 Skill 关键动作；不评估完整性，不生成 Skill 关键动作建议，仅评估工具选择与冗余。',
@@ -1400,12 +1422,24 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
         caseSnapshot,
         skillAttribution: skillAttributionStatus,
         comparisonMode,
-        skillKeyActionComparison: keyActionComparison.status === 'ok'
+        actualTraceExtraction: traceEvidence
             ? {
-                referenceKeyActionsText: keyActionComparison.referenceKeyActionsText,
-                actualExtractedStepsText: keyActionComparison.actualExtractedStepsText,
-                referenceKeyActions: keyActionComparison.referenceKeyActions ?? [],
-                actualExtractedSteps: keyActionComparison.actualExtractedSteps ?? [],
+                source: 'summarizeTrace',
+                totalSteps: traceEvidence.summary.totalSteps,
+                shownSteps: traceEvidence.steps.length,
+                truncated: traceEvidence.summary.truncated,
+                totalLlmCalls: traceEvidence.summary.totalLlmCalls,
+                totalToolCalls: traceEvidence.summary.totalToolCalls,
+                totalSkillCalls: traceEvidence.summary.totalSkillCalls,
+                totalTaskCalls: traceEvidence.summary.totalTaskCalls,
+            }
+            : null,
+        skillKeyActionComparison: keyActionReference.status === 'ok'
+            ? {
+                referenceKeyActionsText: keyActionReference.referenceKeyActionsText,
+                actualExtractedStepsText,
+                referenceKeyActions: keyActionReference.referenceKeyActions ?? [],
+                actualExtractedSteps: actualExtractedStepsForEval,
             }
             : null,
     };
@@ -1453,9 +1487,7 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
 
     if (shouldRunResultEvaluation) {
         const taskCompletionSkillContext = await loadTaskCompletionSkillContext(execution, interactions, user);
-        const traceSummaryForResultEvaluation = interactions.length > 0
-            ? formatTraceForLLM(summarizeTrace(interactions, { maxSteps: 80, maxTextLen: 400 }))
-            : '';
+        const traceSummaryForResultEvaluation = traceEvidence?.text || '';
         const attempt = Math.min(
             readResultEvaluationAttemptCount(row.rawAnalysisJson) + 1,
             MAX_RESULT_EVALUATION_ATTEMPTS,
@@ -1676,12 +1708,7 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
         }
         const actualOutputForCustom = needsCustomOutput ? resultActualOutput : '';
         const traceTextForCustom = needsCustomTrajectory ? (() => {
-            if (interactions.length === 0) return '';
-            try {
-                return formatTraceForLLM(summarizeTrace(interactions, { maxSteps: 50, maxTextLen: 400 }));
-            } catch {
-                return '';
-            }
+            return traceEvidence?.text || '';
         })() : '';
 
         const customResults: Array<Awaited<ReturnType<typeof runCustomLlmEvaluator>>> = await Promise.all(
