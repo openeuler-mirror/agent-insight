@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
     isRetryableResultEvaluationFailure,
     createSimpleAsyncLimiter,
+    shouldRetryGrayscaleEval,
 } from '@/lib/engine/evaluation/eval-run-guards';
 
 // 看护 119 上"并行跑多个评测任务 → next-server 堆 OOM 崩溃"的两个修复:
@@ -51,4 +52,19 @@ test('limiter: 多余的 release 不会把计数压成负(健壮性)', async () 
     // cap 仍完整,acquire 应立即成功
     await lim.acquire();
     assert.ok(true);
+});
+
+// C+D: 灰度评测"失败=终态"——重试期间显示评测中,只有最终确切失败才标失败、且此后不变。
+test('shouldRetryGrayscaleEval: 可重试失败 且 未超重试数 → 重试(期间保持评测中)', () => {
+    assert.equal(shouldRetryGrayscaleEval(new Error('服务重启，评测中断（stale）'), 1, 2), true);
+    assert.equal(shouldRetryGrayscaleEval(new Error('网络抖动'), 2, 2), true);
+});
+
+test('shouldRetryGrayscaleEval: 重试次数用尽 → 不再重试(进终态失败)', () => {
+    assert.equal(shouldRetryGrayscaleEval(new Error('网络抖动'), 3, 2), false);
+});
+
+test('shouldRetryGrayscaleEval: 不可重试失败 → 一次即终态(即便还有次数)', () => {
+    assert.equal(shouldRetryGrayscaleEval(new Error('任务完成度评估器不允许派发子代理'), 1, 2), false);
+    assert.equal(shouldRetryGrayscaleEval(new Error('aborted: user terminated'), 1, 2), false);
 });

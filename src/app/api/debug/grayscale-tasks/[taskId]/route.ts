@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/storage/prisma';
 import { runGeneralAgent } from '@/lib/engine/general-agent';
 import { withBackgroundOpencodeSlot } from '@/lib/engine/general-agent/concurrency-limiter';
+import { shouldRetryGrayscaleEval } from '@/lib/engine/evaluation/eval-run-guards';
 import { findAgentDataset, type DatasetCase } from '@/server/agent_datasets_storage';
 import { saveExecutionRecord } from '@/lib/storage/data-service';
 
@@ -69,6 +70,9 @@ interface RunResult {
     toolCalls?: string[];
     executionAttempts?: number;
     evaluationAttempts?: number;
+    // 评测失败但"可重试且还有次数"时为 true:此时 status 保持 'evaluating'(显示「评测中/重试中」),
+    // 由编排层的重试循环挑它重跑。失败只在最终确切失败(不可重试/重试用尽)时进 'fail' 终态。
+    evalRetryPending?: boolean;
     failureType?: RunFailureType;
     failureDetail?: string;
     completedAt?: string;
@@ -1632,6 +1636,7 @@ async function evaluateSingleRunTarget(args: {
     const evaluationAttempt = (target.run.evaluationAttempts || 0) + 1;
     const evaluationClaimId = buildEvaluationClaimId();
     target.run.status = 'evaluating';
+    delete target.run.evalRetryPending; // 本次(重)评开始,清掉"待重试"标记;失败时再按可重试性重置
     target.run.evaluationAttempts = evaluationAttempt;
     target.run.evaluationClaimId = evaluationClaimId;
     target.run.evaluationStartedAt = new Date().toISOString();
@@ -1753,6 +1758,25 @@ async function evaluateSingleRunTarget(args: {
             sidePatch: evaluatorRunId ? { evaluatorRunId } : undefined,
             touchLatestResultAt: true,
         }).catch(() => {});
+    }
+    // C+D: 评测失败若"可重试且还有重试次数",不进终态——回到「评测中/重试中」并标 evalRetryPending,
+    // 让下面的重试循环挑它重跑。失败只在"最终确切失败(不可重试/重试用尽)"时出现,且此后不再变化。
+    // 仅对"评测失败"生效:run.failureType 是执行失败(另有语义),不在此列。
+    if (target.run.status === 'fail' && !target.run.failureType) {
+        const failMsg = target.run.output
+            || target.run.evaluations?.find(e => e.status === 'failed')?.errorMessage
+            || '';
+        if (shouldRetryGrayscaleEval(failMsg, target.run.evaluationAttempts || 1, MAX_EVALUATION_RETRIES)) {
+            target.run.status = 'evaluating';
+            target.run.evalRetryPending = true;
+            target.run.output = undefined;
+            delete target.run.completedAt; // 重试中不算完成
+            // 把失败的评估器回到 'pending':① getFailedOrMissingEvaluatorIds 据此挑它重评;
+            // ② deriveExecAndEval 把 pending/running 都算「评测中」,所以 UI 显示评测中而不是失败。
+            target.run.evaluations = (target.run.evaluations || []).map(e =>
+                e.status === 'failed' ? { ...e, status: 'pending', errorMessage: undefined } : e,
+            );
+        }
     }
     markLatestGrayResultAt(args.config);
     await persistRunStatePatch({
@@ -2015,15 +2039,28 @@ async function evaluateRunsWithConcurrency(args: {
         await runEvaluationBatch(targets);
     }
     for (let retry = 1; retry <= MAX_EVALUATION_RETRIES; retry++) {
-        const failedTargets = targets
-            .filter(target => target.run.status === 'fail' && target.run.sessionId)
+        // C+D: 只重跑"待重试"的(evaluateSingleRunTarget 已据可重试性把它们标 evalRetryPending,
+        // 且状态保持 evaluating/评测中);不可重试或重试用尽的留在 'fail' 终态,绝不再动。
+        const retryTargets = targets
+            .filter(target => target.run.evalRetryPending && target.run.sessionId)
             .map(target => ({
                 ...target,
                 evaluatorIds: getFailedOrMissingEvaluatorIds(target.run, configuredEvaluatorIds),
             }))
             .filter(target => (target.evaluatorIds || []).length > 0);
-        if (failedTargets.length === 0) break;
-        await runEvaluationBatch(failedTargets);
+        if (retryTargets.length === 0) break;
+        await runEvaluationBatch(retryTargets);
+    }
+    // 兜底:循环跑完后仍"待重试"的(理论上不该有——末次尝试 attempts>MAX 已进终态)强制落终态失败,
+    // 避免卡在「评测中」。
+    for (const t of targets.filter(t => t.run.evalRetryPending)) {
+        t.run.evalRetryPending = false;
+        t.run.status = 'fail';
+        markRunCompleted(t.run);
+        await persistRunStatePatch({
+            taskId: args.taskId, user: args.user, config: args.config, states: args.states,
+            caseId: t.caseId, side: t.side, nextRun: t.run, touchLatestResultAt: true,
+        }).catch(() => {});
     }
     return evaluatorRunIds[evaluatorRunIds.length - 1] || null;
 }

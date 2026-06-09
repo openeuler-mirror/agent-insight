@@ -40,6 +40,18 @@ export function isRetryableResultEvaluationFailure(error: unknown): boolean {
     return true;
 }
 
+/**
+ * 灰度评测"是否再重试一次"的决策(纯逻辑,可测)。
+ *   - 可重试失败 且 已尝试次数 <= 最大重试数 → true(重试期间状态保持「评测中/重试中」,不显示失败);
+ *   - 不可重试 或 重试用尽 → false(进终态「失败」,此后不再变化)。
+ * attemptsSoFar 传"本条 run 截至当前已尝试的次数"(初次=1, 第一次重试后=2 …)。
+ */
+export function shouldRetryGrayscaleEval(error: unknown, attemptsSoFar: number, maxRetries: number): boolean {
+    if (!isRetryableResultEvaluationFailure(error)) return false;
+    const attempts = Number.isFinite(attemptsSoFar) ? Math.floor(attemptsSoFar) : 1;
+    return attempts <= Math.max(0, Math.floor(maxRetries));
+}
+
 export interface SimpleAsyncLimiter {
     acquire: () => Promise<void>;
     release: () => void;
