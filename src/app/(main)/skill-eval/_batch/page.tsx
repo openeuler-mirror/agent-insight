@@ -259,7 +259,8 @@ export function BatchEvaluation({
     const reloadEvalTasks = useCallback(async () => {
         if (!user) { setEvalTasks([]); return; }
         try {
-            const res = await apiFetch(`/api/eval/trajectory/runs?user=${encodeURIComponent(user)}&limit=50&latestByCase=1`);
+            // 用例分析只看独立评测任务, 不展示灰度 A/B 的评测批次(A/B 只在 A/B 页看)。
+            const res = await apiFetch(`/api/eval/trajectory/runs?user=${encodeURIComponent(user)}&limit=50&latestByCase=1&excludeGrayscale=1`);
             const data = await res.json();
             if (Array.isArray(data?.runs)) {
                 setEvalTasks(data.runs.map((r: any) => ({

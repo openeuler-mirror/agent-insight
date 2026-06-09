@@ -1189,6 +1189,7 @@ export function GrayscaleEvaluation({
     const resetToNewTaskDraft = (skillId: string) => {
         setCurrentTask(null);
         currentTaskRef.current = null;
+        selectedTaskIdRef.current = null; // 草稿: 明确无选中, 别再被 URL/旧选择拽回
         // 新建草稿没有已存任务, 清掉 URL 的 ?task, 否则刷新又会去恢复旧任务。
         if (typeof window !== 'undefined') {
             const url = new URL(window.location.href);
@@ -1278,7 +1279,8 @@ export function GrayscaleEvaluation({
 
     const applyTaskToState = (task: GrayscaleTask) => {
         setCurrentTask(task);
-        // 把选中任务写进 URL(?task=<id>), 刷新后恢复到这个任务、而不是跳回最新(详见加载 effect)。
+        // 记下"意向选中"的任务并写进 URL(?task=<id>): 刷新 / effect 重跑都恢复到这个任务, 不跳回最新。
+        selectedTaskIdRef.current = task?.id ?? null;
         if (typeof window !== 'undefined' && task?.id) {
             const url = new URL(window.location.href);
             url.searchParams.set('task', task.id);
@@ -1354,8 +1356,10 @@ export function GrayscaleEvaluation({
     };
 
     // Load all tasks for history, then pick the task bound to the current Skill + B version.
-    // 优先恢复 URL 里 ?task=<id> 指定的任务: 刷新后保持用户选中的任务, 而不是跳回最新。
-    const urlTaskConsumedRef = useRef(false);
+    // 用户"意向选中"的任务 id: 首次取 URL 的 ?task, 之后由 applyTaskToState / 手动切换维护。
+    // 始终优先它(只要还在列表里)—— 不能"消费一次就丢", 否则本 effect 因 parentSkill 异步解析重跑时
+    // 会跳回最新(Q3 根因)。undefined=还没初始化, null=明确无选中(草稿)。
+    const selectedTaskIdRef = useRef<string | null | undefined>(undefined);
     useEffect(() => {
         if (!user) return;
         apiFetch(`/api/debug/grayscale-tasks?user=${encodeURIComponent(user)}`)
@@ -1363,15 +1367,15 @@ export function GrayscaleEvaluation({
             .then(data => {
                 if (Array.isArray(data) && data.length > 0) {
                     setTaskHistory(data);
-                    // 仅首次加载吃 URL 的 ?task; 之后切换 skill 等不再被旧 URL 拽回。
-                    const urlTaskId = !urlTaskConsumedRef.current && typeof window !== 'undefined'
-                        ? new URLSearchParams(window.location.search).get('task')
+                    if (selectedTaskIdRef.current === undefined) {
+                        selectedTaskIdRef.current = typeof window !== 'undefined'
+                            ? new URLSearchParams(window.location.search).get('task')
+                            : null;
+                    }
+                    const intended = selectedTaskIdRef.current
+                        ? (data as GrayscaleTask[]).find(t => t.id === selectedTaskIdRef.current)
                         : null;
-                    urlTaskConsumedRef.current = true;
-                    const fromUrl = urlTaskId
-                        ? (data as GrayscaleTask[]).find(t => t.id === urlTaskId)
-                        : null;
-                    const task = fromUrl || (parentSkillId
+                    const task = intended || (parentSkillId
                         ? pickLatestTaskForBinding(data as GrayscaleTask[], parentSkillId, undefined, parentSkillVersion)
                         : [...(data as GrayscaleTask[])].sort((a, b) => getTaskRunTime(b) - getTaskRunTime(a))[0]);
                     if (task) {

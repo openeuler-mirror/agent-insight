@@ -323,8 +323,11 @@ export async function GET(request: Request) {
             .filter((item): item is NonNullable<typeof item> => Boolean(item))
             .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
-        // 用例分析: 排除灰度 A/B 的评测批次(它们只在 A/B 页查看)。
-        const visible = excludeGrayscale ? summaries.filter(item => item.source !== 'grayscale-ab') : summaries;
+        // 用例分析: 排除灰度 A/B 的评测批次(它们只在 A/B 页查看)。但 includeRunId 锚定的那条永远保留,
+        // 保证"按 runId 直达某批次详情"即便它是灰度批次也能正常显示。
+        const visible = excludeGrayscale
+            ? summaries.filter(item => item.source !== 'grayscale-ab' || item.runId === includeRunId)
+            : summaries;
 
         const normalPage = visible.slice(0, limit);
         const includedIndex = includeRunId

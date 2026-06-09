@@ -709,7 +709,8 @@ function SkillAnalysisPage() {
             const includeRun = traceEvaluationBatchId
                 ? `&includeRunId=${encodeURIComponent(traceEvaluationBatchId)}`
                 : '';
-            const res = await apiFetch(`/api/eval/trajectory/runs?user=${encodeURIComponent(user)}&limit=50&latestByCase=1${includeRun}`);
+            // 用例分析只看独立评测任务, 不展示灰度 A/B 的评测批次(A/B 只在 A/B 页看)。
+            const res = await apiFetch(`/api/eval/trajectory/runs?user=${encodeURIComponent(user)}&limit=50&latestByCase=1&excludeGrayscale=1${includeRun}`);
             const data = await res.json();
             if (Array.isArray(data?.runs)) {
                 setCaseEvalTasks(data.runs.map((r: any) => ({
