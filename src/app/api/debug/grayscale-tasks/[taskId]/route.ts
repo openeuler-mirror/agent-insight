@@ -3,6 +3,7 @@ import { prisma } from '@/lib/storage/prisma';
 import { runGeneralAgent } from '@/lib/engine/general-agent';
 import { withBackgroundOpencodeSlot } from '@/lib/engine/general-agent/concurrency-limiter';
 import { shouldRetryGrayscaleEval } from '@/lib/engine/evaluation/eval-run-guards';
+import { reconcileStaleGrayscaleRun } from '@/lib/grayscale/stale-run-reconcile';
 import { findAgentDataset, type DatasetCase } from '@/server/agent_datasets_storage';
 import { saveExecutionRecord } from '@/lib/storage/data-service';
 
@@ -2284,7 +2285,6 @@ export async function GET(
         const orphanStoreKey = `${user}:${taskId}`;
         let orphanCleanup = false;
         if (!activeRuns().get(orphanStoreKey) && hasAnyRunningCaseStates(task.caseStatesJson)) {
-            const cancelable: CaseStatus[] = ['running', 'evaluating', 'pending'];
             const states = task.caseStatesJson;
             for (const cid of Object.keys(states)) {
                 for (const side of ['a', 'b'] as Side[]) {
@@ -2292,11 +2292,8 @@ export async function GET(
                     if (!sideState) continue;
                     let patched = false;
                     for (const run of sideState.runs || []) {
-                        if (cancelable.includes(run.status)) {
-                            run.status = 'fail';
-                            run.failureType = 'agent_error';
-                            run.failureDetail = run.failureDetail || '服务重启中断, 请重新评测';
-                            run.output = run.output || '服务重启中断';
+                        // 同 startup 回收口径:评测被打断(执行已完成)的回到 executed 可重评,真没跑完的才执行失败。
+                        if (reconcileStaleGrayscaleRun(run, '服务重启中断, 请重新评测')) {
                             patched = true;
                             orphanCleanup = true;
                         }
@@ -2664,11 +2661,9 @@ export async function reapStaleGrayscaleRunsAtStartup(): Promise<number> {
                 if (!sideState) continue;
                 let patched = false;
                 for (const run of sideState.runs || []) {
-                    if (cancelable.includes(run.status)) {
-                        run.status = 'fail';
-                        run.failureType = 'agent_error';
-                        run.failureDetail = run.failureDetail || reason;
-                        run.output = run.output || '服务重启中断';
+                    // 执行完成、评测被打断的(evaluating 且有 sessionId,或已是 fail 的崩溃残骸)→ 回到 executed
+                    // 可重评;真没跑完的(running/pending)→ 执行失败。详见 reconcileStaleGrayscaleRun。
+                    if (reconcileStaleGrayscaleRun(run, reason)) {
                         patched = true;
                         changed = true;
                     }

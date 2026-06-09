@@ -3014,23 +3014,31 @@ export function GrayscaleEvaluation({
                                                 {recordEvaluations.map(item => {
                                                     const tone: BadgeTone = item.status === 'done' ? 'done' : item.status === 'failed' ? 'fail' : item.status === 'running' ? 'running' : 'pending';
                                                     return (
-                                                        <div key={`${item.evaluatorId}-${item.evaluatorRunId || ''}`} style={{ display: 'grid', gridTemplateColumns: 'minmax(96px, 1fr) minmax(80px, 1fr) 44px', gap: 6, alignItems: 'center' }}>
-                                                            <span title={item.evaluatorName} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.evaluatorName}</span>
-                                                            {item.evaluationTraceId ? (
-                                                                <button
-                                                                    className="v2-action-btn"
-                                                                    style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'ui-monospace, monospace' }}
-                                                                    onClick={() => window.open(`/trace?taskId=${encodeURIComponent(item.evaluationTraceId || '')}`, '_blank')}
-                                                                    title={item.evaluatorRunId ? `runId: ${item.evaluatorRunId}` : undefined}
-                                                                >
-                                                                    {item.evaluationTraceId}
-                                                                </button>
-                                                            ) : (
-                                                                <StatusText label={item.status === 'done' ? '已评测' : item.status === 'failed' ? '失败' : item.status === 'running' ? '评测中' : '待评'} tone={tone} />
-                                                            )}
-                                                            <span style={{ textAlign: 'right', fontWeight: 700, color: item.status === 'failed' ? '#B91C1C' : accent }}>
-                                                                {typeof item.score === 'number' ? item.score : '—'}
-                                                            </span>
+                                                        <div key={`${item.evaluatorId}-${item.evaluatorRunId || ''}`} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                                                            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(96px, 1fr) minmax(80px, 1fr) 44px', gap: 6, alignItems: 'center' }}>
+                                                                <span title={item.evaluatorName} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.evaluatorName}</span>
+                                                                {item.evaluationTraceId ? (
+                                                                    <button
+                                                                        className="v2-action-btn"
+                                                                        style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'ui-monospace, monospace' }}
+                                                                        onClick={() => window.open(`/trace?taskId=${encodeURIComponent(item.evaluationTraceId || '')}`, '_blank')}
+                                                                        title={item.evaluatorRunId ? `runId: ${item.evaluatorRunId}` : undefined}
+                                                                    >
+                                                                        {item.evaluationTraceId}
+                                                                    </button>
+                                                                ) : (
+                                                                    <StatusText label={item.status === 'done' ? '已评测' : item.status === 'failed' ? '失败' : item.status === 'running' ? '评测中' : '待评'} tone={tone} />
+                                                                )}
+                                                                <span style={{ textAlign: 'right', fontWeight: 700, color: item.status === 'failed' ? '#B91C1C' : accent }}>
+                                                                    {typeof item.score === 'number' ? item.score : '—'}
+                                                                </span>
+                                                            </div>
+                                                            {item.status === 'failed' && item.errorMessage ? (
+                                                                // 直接把失败原因显示出来(不再只藏在 hover):用户"完全看不到原因"的修复。
+                                                                <div style={{ fontSize: 10.5, color: '#B91C1C', lineHeight: 1.4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={item.errorMessage}>
+                                                                    ⚠ {item.errorMessage}
+                                                                </div>
+                                                            ) : null}
                                                         </div>
                                                     );
                                                 })}
