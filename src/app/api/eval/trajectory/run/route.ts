@@ -684,8 +684,12 @@ export async function POST(request: Request) {
                 || await resolveWatchedAgentForRunRows(user, existingRows as AutoWatchRunRowLike[]),
             );
             existingRunAutoWatchEnabledAt = normalizeAutoWatchEnabledAt(latestExplicitMeta?.autoWatchEnabledAt);
+            // 去重只针对"已出分(done)或正在跑(pending/running)"的 trace——避免重复添加 / 抢跑。
+            // 失败(failed)的 trace 必须放行重评:否则一条 trace 在批次里失败过一次后,就再也重评不了
+            // (用户现象:重评全报 "no valid tasks to run")。稳定批次(同批次反复评测)下这点尤其关键。
             existingRunTaskIds = new Set(
                 existingRows
+                    .filter(row => row.status !== 'failed')
                     .map(row => row.taskId || row.executionId || '')
                     .filter(Boolean),
             );
