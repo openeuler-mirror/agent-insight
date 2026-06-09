@@ -1553,7 +1553,7 @@ function SkillAnalysisPage() {
                     <EmbeddedDebugPanel
                         title="A/B测试"
                         description="对照两个 Skill 版本或基础 Agent 的执行质量，定位新版本是否真正修复了关键失败类型。"
-                        primaryAction="发起新一轮"
+                        primaryAction="新建任务"
                         secondaryAction="历史任务"
                         onBack={() => setView('overview')}
                         onPrimary={() => setGrayNewTaskTrigger(v => v + 1)}

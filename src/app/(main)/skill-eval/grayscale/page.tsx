@@ -2230,19 +2230,9 @@ export function GrayscaleEvaluation({
     };
 
     const handleNewTask = () => {
-        // 方向A —— 每个 Skill 版本仅允许一个 A/B 任务(后端唯一键 user+skill+version 强约束)。
-        // 当前版本若已有任务(currentTask 已由 auto-bind 绑定), "新建" 无法真的多建一条:
-        // 旧逻辑会开一个空草稿、让用户配置半天, 却在保存时撞唯一键被"切回/覆盖"到现有任务
-        // —— 即用户反馈的"新建变覆盖"。这里改成名实相符: 已有任务就一次性说明规则并保留在该任务上
-        // 编辑(不开草稿、不清它的轮询); 仅当本版本确实还没有任务时, 才真正开新草稿。
-        // 仅在嵌入模式(parentSkillId 存在 → 版本被父级锁死, 新建必然撞同一版本)生效;
-        // 独立模式(无 parentSkillId)可自由换版本建多条任务, 不拦。
-        if (currentTask && parentSkillId) {
-            alert(locale === 'zh'
-                ? '每个 Skill 版本仅允许一个 A/B 任务。已为你保留当前版本的任务 —— 直接调整配置/样本后再次执行即可，无需新建。'
-                : 'Only one A/B task is allowed per skill version. Keeping this version’s existing task — adjust its config/samples and run again; no need to create a new one.');
-            return;
-        }
+        // 任务名作为身份后,同一 skill 版本可建多个不同名任务 —— 嵌入模式(parentSkillId,版本被父级
+        // 锁死)也放行。后端唯一键含 taskName:起个新名字就是新任务,只有撞同版本同名才会切到已有。
+        // (旧逻辑在嵌入模式拦死"新建",是当年"一版本一任务"的约束,现已解除。)
         Object.entries(activePollsRef.current).forEach(([key, timer]) => {
             if (key.startsWith('task_')) {
                 clearInterval(timer);
@@ -2251,6 +2241,8 @@ export function GrayscaleEvaluation({
         });
         setIsFreshTaskDraft(true);
         resetToNewTaskDraft(parentSkillId || selectedSkillId);
+        // 直接进入命名态:让用户立刻给新任务改名(嵌入模式 hifi 任务行的标题输入框即时聚焦)。
+        setIsEditingTask(true);
     };
 
     // Sync triggers
@@ -3366,19 +3358,16 @@ export function GrayscaleEvaluation({
                                 </span>
                             </div>
                             <div className="gh-task-actions">
-                                {/* 嵌入模式(parentSkillId)下隐藏「新建任务」: 一版本一任务 —— 无任务进来已自动创建、
-                                    有任务又不能再建, 此按钮无作用。独立模式(无 parentSkillId, 可换版本建多条)保留。 */}
-                                {!parentSkillId && (
-                                    <button
-                                        type="button"
-                                        className="gh-btn"
-                                        onClick={handleNewTask}
-                                        // 用户反馈"有任务时新建按钮不明显":给它加 accent 边框/字色,跟普通灰按钮区分开。
-                                        style={{ borderColor: 'var(--accent)', color: 'var(--accent)', fontWeight: 600 }}
-                                    >
-                                        + {locale === 'zh' ? '新建任务' : 'New Task'}
-                                    </button>
-                                )}
+                                {/* 「新建任务」嵌入模式也显示(同 skill 版本可建多个不同名任务)。
+                                    加 accent 边框/字色,跟普通灰按钮区分开,凸显新建。 */}
+                                <button
+                                    type="button"
+                                    className="gh-btn"
+                                    onClick={handleNewTask}
+                                    style={{ borderColor: 'var(--accent)', color: 'var(--accent)', fontWeight: 600 }}
+                                >
+                                    + {locale === 'zh' ? '新建任务' : 'New Task'}
+                                </button>
                                 <button
                                     type="button"
                                     className="gh-btn"
@@ -4787,21 +4776,19 @@ export function GrayscaleEvaluation({
                             </div>
                             <div className="d-history-body">
                                 {/* 新建固定在列表顶部(参考用例分析的任务选择器):有再多历史任务,新建依然第一眼可见。
-                                    嵌入模式(parentSkillId,一版本一任务)下不显示。 */}
-                                {!parentSkillId && (
-                                    <button
-                                        type="button"
-                                        onClick={() => { handleNewTask(); setShowHistoryDrawer(false); }}
-                                        style={{
-                                            width: '100%', textAlign: 'left', padding: '10px 12px', borderRadius: 8,
-                                            border: '1px dashed var(--accent)', background: 'var(--accent-soft)',
-                                            color: 'var(--accent)', fontSize: 13, fontWeight: 600, cursor: 'pointer',
-                                            marginBottom: 10,
-                                        }}
-                                    >
-                                        + {locale === 'zh' ? '新建 A/B 任务' : 'New A/B Task'}
-                                    </button>
-                                )}
+                                    嵌入/独立模式都显示(同 skill 版本可建多个不同名任务)。 */}
+                                <button
+                                    type="button"
+                                    onClick={() => { handleNewTask(); setShowHistoryDrawer(false); }}
+                                    style={{
+                                        width: '100%', textAlign: 'left', padding: '10px 12px', borderRadius: 8,
+                                        border: '1px dashed var(--accent)', background: 'var(--accent-soft)',
+                                        color: 'var(--accent)', fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                                        marginBottom: 10,
+                                    }}
+                                >
+                                    + {locale === 'zh' ? '新建 A/B 任务' : 'New A/B Task'}
+                                </button>
                                 {visibleTaskHistory.length === 0 ? (
                                     <div style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--ink-4)', fontSize: 12 }}>
                                         {locale === 'zh' ? '暂无历史任务' : 'No task history'}
