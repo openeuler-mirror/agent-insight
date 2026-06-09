@@ -7,7 +7,7 @@ import { StatusBadge } from '@/components/feedback/StatusBadge';
 import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
 import { MetricValue } from '@/components/text/MetricValue';
-import { History, Play, ExternalLink } from 'lucide-react';
+import { History, Play, ExternalLink, Plus } from 'lucide-react';
 import { useLocale } from '@/lib/client/locale-context';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
@@ -994,6 +994,11 @@ function GrayscalePageInner() {
                     { label: locale === 'zh' ? '调测分析' : 'Debug & Analysis' },
                 ]}
                 title={locale === 'zh' ? 'A/B 测试' : 'A/B Test'}
+                action={{
+                    label: locale === 'zh' ? '新建任务' : 'New Task',
+                    icon: Plus,
+                    onClick: () => setNewTaskTrigger(c => c + 1),
+                }}
                 secondaryAction={{
                     label: locale === 'zh' ? '历史任务' : 'History',
                     icon: History,
@@ -1184,6 +1189,15 @@ export function GrayscaleEvaluation({
     const resetToNewTaskDraft = (skillId: string) => {
         setCurrentTask(null);
         currentTaskRef.current = null;
+        selectedTaskIdRef.current = null; // 草稿: 明确无选中, 别再被 URL/旧选择拽回
+        // 新建草稿没有已存任务, 清掉 URL 的 ?task, 否则刷新又会去恢复旧任务。
+        if (typeof window !== 'undefined') {
+            const url = new URL(window.location.href);
+            if (url.searchParams.has('task')) {
+                url.searchParams.delete('task');
+                window.history.replaceState(window.history.state, '', url.toString());
+            }
+        }
         setTaskNameInput(defaultTaskName());
         setTaskDescInput('');
         setSelectedSkillId(skillId);
@@ -1265,6 +1279,13 @@ export function GrayscaleEvaluation({
 
     const applyTaskToState = (task: GrayscaleTask) => {
         setCurrentTask(task);
+        // 记下"意向选中"的任务并写进 URL(?task=<id>): 刷新 / effect 重跑都恢复到这个任务, 不跳回最新。
+        selectedTaskIdRef.current = task?.id ?? null;
+        if (typeof window !== 'undefined' && task?.id) {
+            const url = new URL(window.location.href);
+            url.searchParams.set('task', task.id);
+            window.history.replaceState(window.history.state, '', url.toString());
+        }
         setIsFreshTaskDraft(false);
         setIsEditingTask(false);
         setTaskNameInput('');
@@ -1335,6 +1356,10 @@ export function GrayscaleEvaluation({
     };
 
     // Load all tasks for history, then pick the task bound to the current Skill + B version.
+    // 用户"意向选中"的任务 id: 首次取 URL 的 ?task, 之后由 applyTaskToState / 手动切换维护。
+    // 始终优先它(只要还在列表里)—— 不能"消费一次就丢", 否则本 effect 因 parentSkill 异步解析重跑时
+    // 会跳回最新(Q3 根因)。undefined=还没初始化, null=明确无选中(草稿)。
+    const selectedTaskIdRef = useRef<string | null | undefined>(undefined);
     useEffect(() => {
         if (!user) return;
         apiFetch(`/api/debug/grayscale-tasks?user=${encodeURIComponent(user)}`)
@@ -1342,9 +1367,17 @@ export function GrayscaleEvaluation({
             .then(data => {
                 if (Array.isArray(data) && data.length > 0) {
                     setTaskHistory(data);
-                    const task = parentSkillId
+                    if (selectedTaskIdRef.current === undefined) {
+                        selectedTaskIdRef.current = typeof window !== 'undefined'
+                            ? new URLSearchParams(window.location.search).get('task')
+                            : null;
+                    }
+                    const intended = selectedTaskIdRef.current
+                        ? (data as GrayscaleTask[]).find(t => t.id === selectedTaskIdRef.current)
+                        : null;
+                    const task = intended || (parentSkillId
                         ? pickLatestTaskForBinding(data as GrayscaleTask[], parentSkillId, undefined, parentSkillVersion)
-                        : [...(data as GrayscaleTask[])].sort((a, b) => getTaskRunTime(b) - getTaskRunTime(a))[0];
+                        : [...(data as GrayscaleTask[])].sort((a, b) => getTaskRunTime(b) - getTaskRunTime(a))[0]);
                     if (task) {
                         applyTaskToState(task);
                     } else if (parentSkillId) {
@@ -2172,6 +2205,14 @@ export function GrayscaleEvaluation({
                     const updated = await res.json();
                     applyTaskToState(updated);
                     setTaskHistory(prev => prev.map(t => t.id === updated.id ? updated : t));
+                } else if (res.status === 409) {
+                    // 甲(原地改名)撞同版本同名:提示并把名字还原回当前任务名,不要显示成"已改名"。
+                    const data = await res.json().catch(() => ({} as { error?: string }));
+                    alert(data?.error || (locale === 'zh'
+                        ? '该版本下已存在同名 A/B 任务，请换一个名字'
+                        : 'An A/B task with this name already exists for this version'));
+                    setTaskNameInput(currentTask.taskName || '');
+                    return;
                 }
             } else {
                 const created = await createTaskForBinding(selectedSkillId, versionBId, resolvedTaskName);
@@ -2217,19 +2258,9 @@ export function GrayscaleEvaluation({
     };
 
     const handleNewTask = () => {
-        // 方向A —— 每个 Skill 版本仅允许一个 A/B 任务(后端唯一键 user+skill+version 强约束)。
-        // 当前版本若已有任务(currentTask 已由 auto-bind 绑定), "新建" 无法真的多建一条:
-        // 旧逻辑会开一个空草稿、让用户配置半天, 却在保存时撞唯一键被"切回/覆盖"到现有任务
-        // —— 即用户反馈的"新建变覆盖"。这里改成名实相符: 已有任务就一次性说明规则并保留在该任务上
-        // 编辑(不开草稿、不清它的轮询); 仅当本版本确实还没有任务时, 才真正开新草稿。
-        // 仅在嵌入模式(parentSkillId 存在 → 版本被父级锁死, 新建必然撞同一版本)生效;
-        // 独立模式(无 parentSkillId)可自由换版本建多条任务, 不拦。
-        if (currentTask && parentSkillId) {
-            alert(locale === 'zh'
-                ? '每个 Skill 版本仅允许一个 A/B 任务。已为你保留当前版本的任务 —— 直接调整配置/样本后再次执行即可，无需新建。'
-                : 'Only one A/B task is allowed per skill version. Keeping this version’s existing task — adjust its config/samples and run again; no need to create a new one.');
-            return;
-        }
+        // 任务名作为身份后,同一 skill 版本可建多个不同名任务 —— 嵌入模式(parentSkillId,版本被父级
+        // 锁死)也放行。后端唯一键含 taskName:起个新名字就是新任务,只有撞同版本同名才会切到已有。
+        // (旧逻辑在嵌入模式拦死"新建",是当年"一版本一任务"的约束,现已解除。)
         Object.entries(activePollsRef.current).forEach(([key, timer]) => {
             if (key.startsWith('task_')) {
                 clearInterval(timer);
@@ -2238,6 +2269,8 @@ export function GrayscaleEvaluation({
         });
         setIsFreshTaskDraft(true);
         resetToNewTaskDraft(parentSkillId || selectedSkillId);
+        // 直接进入命名态:让用户立刻给新任务改名(嵌入模式 hifi 任务行的标题输入框即时聚焦)。
+        setIsEditingTask(true);
     };
 
     // Sync triggers
@@ -2260,9 +2293,17 @@ export function GrayscaleEvaluation({
 
     // 嵌入模式(parentSkillId 存在)下, 历史抽屉只列当前 skill 的任务 —— 否则会混进别的 skill 的任务,
     // 且点了也切不动(handleSelectHistoryTask 仅同 skill 放行)。独立模式(无 parentSkillId)不过滤。
+    // 历史任务与"当前选中的 skill + B 版本"绑定:切换 skill 或版本时,列表随之刷新只显示对应任务。
+    // 嵌入模式按父级 skill 过滤;独立模式按当前选中的 skill(选了 B 版本则进一步按版本)过滤。
     const visibleTaskHistory = parentSkillId
         ? taskHistory.filter(t => t.skillId === parentSkillId || t.configJson?.skillId === parentSkillId)
-        : taskHistory;
+        : (selectedSkillId
+            ? taskHistory.filter(t => taskMatchesBinding(
+                t,
+                selectedSkillId,
+                versionBId && versionBId !== NONE_VERSION_ID ? versionBId : undefined,
+            ))
+            : taskHistory);
 
     // Dataset handlers
     const handleCreateDataset = async () => {
@@ -3001,23 +3042,31 @@ export function GrayscaleEvaluation({
                                                 {recordEvaluations.map(item => {
                                                     const tone: BadgeTone = item.status === 'done' ? 'done' : item.status === 'failed' ? 'fail' : item.status === 'running' ? 'running' : 'pending';
                                                     return (
-                                                        <div key={`${item.evaluatorId}-${item.evaluatorRunId || ''}`} style={{ display: 'grid', gridTemplateColumns: 'minmax(96px, 1fr) minmax(80px, 1fr) 44px', gap: 6, alignItems: 'center' }}>
-                                                            <span title={item.evaluatorName} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.evaluatorName}</span>
-                                                            {item.evaluationTraceId ? (
-                                                                <button
-                                                                    className="v2-action-btn"
-                                                                    style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'ui-monospace, monospace' }}
-                                                                    onClick={() => window.open(`/trace?taskId=${encodeURIComponent(item.evaluationTraceId || '')}`, '_blank')}
-                                                                    title={item.evaluatorRunId ? `runId: ${item.evaluatorRunId}` : undefined}
-                                                                >
-                                                                    {item.evaluationTraceId}
-                                                                </button>
-                                                            ) : (
-                                                                <StatusText label={item.status === 'done' ? '已评测' : item.status === 'failed' ? '失败' : item.status === 'running' ? '评测中' : '待评'} tone={tone} />
-                                                            )}
-                                                            <span style={{ textAlign: 'right', fontWeight: 700, color: item.status === 'failed' ? '#B91C1C' : accent }}>
-                                                                {typeof item.score === 'number' ? item.score : '—'}
-                                                            </span>
+                                                        <div key={`${item.evaluatorId}-${item.evaluatorRunId || ''}`} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                                                            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(96px, 1fr) minmax(80px, 1fr) 44px', gap: 6, alignItems: 'center' }}>
+                                                                <span title={item.evaluatorName} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.evaluatorName}</span>
+                                                                {item.evaluationTraceId ? (
+                                                                    <button
+                                                                        className="v2-action-btn"
+                                                                        style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'ui-monospace, monospace' }}
+                                                                        onClick={() => window.open(`/trace?taskId=${encodeURIComponent(item.evaluationTraceId || '')}`, '_blank')}
+                                                                        title={item.evaluatorRunId ? `runId: ${item.evaluatorRunId}` : undefined}
+                                                                    >
+                                                                        {item.evaluationTraceId}
+                                                                    </button>
+                                                                ) : (
+                                                                    <StatusText label={item.status === 'done' ? '已评测' : item.status === 'failed' ? '失败' : item.status === 'running' ? '评测中' : '待评'} tone={tone} />
+                                                                )}
+                                                                <span style={{ textAlign: 'right', fontWeight: 700, color: item.status === 'failed' ? '#B91C1C' : accent }}>
+                                                                    {typeof item.score === 'number' ? item.score : '—'}
+                                                                </span>
+                                                            </div>
+                                                            {item.status === 'failed' && item.errorMessage ? (
+                                                                // 直接把失败原因显示出来(不再只藏在 hover):用户"完全看不到原因"的修复。
+                                                                <div style={{ fontSize: 10.5, color: '#B91C1C', lineHeight: 1.4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={item.errorMessage}>
+                                                                    ⚠ {item.errorMessage}
+                                                                </div>
+                                                            ) : null}
                                                         </div>
                                                     );
                                                 })}
@@ -3028,7 +3077,7 @@ export function GrayscaleEvaluation({
 
                                 {/* 评测结果列: 只有绑定到明确的 TrajectoryEvalResult.id 时才允许跳转。 */}
                                 <div>
-                                    {evaluationDetailUrl ? (
+                                    {evaluationDetailUrl && hasScoredEvaluation ? (
                                         <button
                                             className="v2-action-btn"
                                             style={{
@@ -3047,11 +3096,11 @@ export function GrayscaleEvaluation({
                                         >
                                             📋 {locale === 'zh' ? '查看' : 'View'}
                                         </button>
+                                    ) : evaluation ? (
+                                        // 没出分时不显示"查看"(避免误导:待评/评测中也能点进去却没结果),改显评测状态。
+                                        <StatusText label={evaluation.label} tone={evaluation.tone} />
                                     ) : record.evaluatorRunId ? (
-                                        <StatusText
-                                            label={evaluation?.tone === 'running' && !hasScoredEvaluation ? '评测中' : '结果未绑定'}
-                                            tone={evaluation?.tone === 'running' && !hasScoredEvaluation ? 'running' : 'fail'}
-                                        />
+                                        <StatusText label={locale === 'zh' ? '结果未绑定' : 'Unbound'} tone="fail" />
                                     ) : (
                                         <span style={{ color: '#B8B6AE', fontSize: 11 }}>—</span>
                                     )}
@@ -3345,13 +3394,16 @@ export function GrayscaleEvaluation({
                                 </span>
                             </div>
                             <div className="gh-task-actions">
-                                {/* 嵌入模式(parentSkillId)下隐藏「新建任务」: 一版本一任务 —— 无任务进来已自动创建、
-                                    有任务又不能再建, 此按钮无作用。独立模式(无 parentSkillId, 可换版本建多条)保留。 */}
-                                {!parentSkillId && (
-                                    <button type="button" className="gh-btn" onClick={handleNewTask}>
-                                        + {locale === 'zh' ? '新建任务' : 'New Task'}
-                                    </button>
-                                )}
+                                {/* 「新建任务」嵌入模式也显示(同 skill 版本可建多个不同名任务)。
+                                    加 accent 边框/字色,跟普通灰按钮区分开,凸显新建。 */}
+                                <button
+                                    type="button"
+                                    className="gh-btn"
+                                    onClick={handleNewTask}
+                                    style={{ borderColor: 'var(--accent)', color: 'var(--accent)', fontWeight: 600 }}
+                                >
+                                    + {locale === 'zh' ? '新建任务' : 'New Task'}
+                                </button>
                                 <button
                                     type="button"
                                     className="gh-btn"
@@ -3385,6 +3437,47 @@ export function GrayscaleEvaluation({
                         </button>
                         <span>/</span>
                         <b>{locale === 'zh' ? 'A/B测试' : 'A/B Testing'}</b>
+                    </div>
+                )}
+
+                {/* 新建任务草稿条:经典视图(非 hifi、独立模式)本来没有"命名 + 保存"的入口,
+                    点了头部「新建任务」进入草稿态(currentTask=null)后,这条出现,让用户给新任务起名并创建。
+                    复用 handleSaveTask(无 currentTask 时走 createTaskForBinding 建新任务)。 */}
+                {!parentSkillId && !currentTask && (
+                    <div style={{
+                        display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+                        background: '#FAF5FF', border: '1px dashed var(--accent, #7E22CE)',
+                        borderRadius: 12, padding: '14px 18px', marginBottom: 16,
+                    }}>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: '#7E22CE', whiteSpace: 'nowrap' }}>
+                            + {locale === 'zh' ? '新建 A/B 任务' : 'New A/B Task'}
+                        </span>
+                        <input
+                            value={taskNameInput}
+                            onChange={e => setTaskNameInput(e.target.value)}
+                            placeholder={locale === 'zh' ? '给这个任务起个名字…' : 'Name this task…'}
+                            spellCheck={false}
+                            style={{
+                                flex: 1, minWidth: 200, height: 34, borderRadius: 6,
+                                border: '1px solid #E7E5E4', padding: '0 12px', fontSize: 13, outline: 'none',
+                            }}
+                        />
+                        <button
+                            type="button"
+                            onClick={handleSaveTask}
+                            disabled={!selectedSkillId || !versionBId || versionBId === NONE_VERSION_ID || !taskNameInput.trim() || isCreatingTask}
+                            style={{
+                                height: 34, padding: '0 18px', borderRadius: 6, border: 'none',
+                                background: '#7E22CE', color: '#fff', fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap',
+                                cursor: (!selectedSkillId || !versionBId || versionBId === NONE_VERSION_ID || !taskNameInput.trim() || isCreatingTask) ? 'not-allowed' : 'pointer',
+                                opacity: (!selectedSkillId || !versionBId || versionBId === NONE_VERSION_ID || !taskNameInput.trim() || isCreatingTask) ? 0.5 : 1,
+                            }}
+                        >
+                            {locale === 'zh' ? '创建任务' : 'Create'}
+                        </button>
+                        <span style={{ fontSize: 11, color: '#A1A1AA', whiteSpace: 'nowrap' }}>
+                            {locale === 'zh' ? '先在下方选好 Skill 与 B 实验版本' : 'Pick a skill & B version below'}
+                        </span>
                     </div>
                 )}
 
@@ -4718,6 +4811,20 @@ export function GrayscaleEvaluation({
                                 <button className="d-drawer-close" onClick={() => setShowHistoryDrawer(false)}>×</button>
                             </div>
                             <div className="d-history-body">
+                                {/* 新建固定在列表顶部(参考用例分析的任务选择器):有再多历史任务,新建依然第一眼可见。
+                                    嵌入/独立模式都显示(同 skill 版本可建多个不同名任务)。 */}
+                                <button
+                                    type="button"
+                                    onClick={() => { handleNewTask(); setShowHistoryDrawer(false); }}
+                                    style={{
+                                        width: '100%', textAlign: 'left', padding: '10px 12px', borderRadius: 8,
+                                        border: '1px dashed var(--accent)', background: 'var(--accent-soft)',
+                                        color: 'var(--accent)', fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                                        marginBottom: 10,
+                                    }}
+                                >
+                                    + {locale === 'zh' ? '新建 A/B 任务' : 'New A/B Task'}
+                                </button>
                                 {visibleTaskHistory.length === 0 ? (
                                     <div style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--ink-4)', fontSize: 12 }}>
                                         {locale === 'zh' ? '暂无历史任务' : 'No task history'}

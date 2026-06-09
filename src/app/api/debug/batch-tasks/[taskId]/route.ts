@@ -61,7 +61,29 @@ interface BatchEvalTaskRow {
 
 /** 简化版任务级 abort 控制器: 用 module-level Map 缓存, key=taskId。
  *  Step 1.2 会换成跟 grayscale activeRuns 一致的机制 (跨 server 进程信息更全), 当前阶段保最小可用。 */
-const batchActiveRuns = new Map<string, { abortController: AbortController; startedAt: number }>();
+const batchActiveRuns = new Map<string, { abortController: AbortController; startedAt: number; user: string }>();
+
+/**
+ * 终止某 user 名下**全部**在跑的批量执行(供「终止全部」调用):abort 每个 run 的 controller,
+ * 并把它们 DB 里残留的非终态 case 重置为「已终止」失败。返回 abort 的 run 数 + reset 的 case 数。
+ */
+export async function abortBatchRunsForUser(user: string): Promise<{ abortedRuns: number; resetCases: number }> {
+    if (!user) return { abortedRuns: 0, resetCases: 0 };
+    let abortedRuns = 0;
+    let resetCases = 0;
+    const taskIds: string[] = [];
+    for (const [taskId, entry] of batchActiveRuns) {
+        if (entry.user !== user) continue;
+        try { entry.abortController.abort(); } catch { /* ignore */ }
+        batchActiveRuns.delete(taskId);
+        abortedRuns++;
+        taskIds.push(taskId);
+    }
+    for (const taskId of taskIds) {
+        try { resetCases += await resetStuckCases(taskId, user); } catch { /* ignore */ }
+    }
+    return { abortedRuns, resetCases };
+}
 
 /** GET /api/debug/batch-tasks/[taskId]?user=... — fetch a single task's latest state */
 export async function GET(
@@ -345,7 +367,7 @@ async function startBatchTaskInBackground(origin: string, taskId: string, user: 
 
     // 5. 任务级 abort controller (供 Step 1.2 abort action 用)
     const abortController = new AbortController();
-    batchActiveRuns.set(taskId, { abortController, startedAt: Date.now() });
+    batchActiveRuns.set(taskId, { abortController, startedAt: Date.now(), user });
 
     // 6. fire-and-forget: 并发执行 + 自动评测
     void runBatchTaskBackground(origin, taskId, user, targets, config, states, skillName, skillVersion, abortController.signal)
@@ -632,7 +654,7 @@ async function startTraceEvaluateInBackground(origin: string, taskId: string, us
     await persistStates(taskId, user, states);
 
     const abortController = new AbortController();
-    batchActiveRuns.set(taskId, { abortController, startedAt: Date.now() });
+    batchActiveRuns.set(taskId, { abortController, startedAt: Date.now(), user });
 
     void runTraceEvalBackground(origin, taskId, user, traceTaskIds, config, states, abortController.signal)
         .catch(err => console.error(`[BATCH_TASKS_TRACE_EVAL] task=${taskId} crashed:`, err))

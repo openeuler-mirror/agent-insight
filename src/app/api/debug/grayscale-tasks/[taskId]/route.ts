@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/storage/prisma';
 import { runGeneralAgent } from '@/lib/engine/general-agent';
 import { withBackgroundOpencodeSlot } from '@/lib/engine/general-agent/concurrency-limiter';
+import { shouldRetryGrayscaleEval } from '@/lib/engine/evaluation/eval-run-guards';
+import { reconcileStaleGrayscaleRun } from '@/lib/grayscale/stale-run-reconcile';
 import { findAgentDataset, type DatasetCase } from '@/server/agent_datasets_storage';
 import { saveExecutionRecord } from '@/lib/storage/data-service';
 
@@ -69,6 +71,9 @@ interface RunResult {
     toolCalls?: string[];
     executionAttempts?: number;
     evaluationAttempts?: number;
+    // 评测失败但"可重试且还有次数"时为 true:此时 status 保持 'evaluating'(显示「评测中/重试中」),
+    // 由编排层的重试循环挑它重跑。失败只在最终确切失败(不可重试/重试用尽)时进 'fail' 终态。
+    evalRetryPending?: boolean;
     failureType?: RunFailureType;
     failureDetail?: string;
     completedAt?: string;
@@ -196,7 +201,8 @@ interface ExecutionMetricRow {
 
 interface GrayscalePrisma {
     grayscaleTask: {
-        findFirst(args: { where: { id: string; user: string } }): Promise<GrayscaleTaskRow | null>;
+        findFirst(args: { where: { id?: string; user: string; skillName?: string; skillVersion?: number; taskName?: string; NOT?: { id: string } } }): Promise<GrayscaleTaskRow | null>;
+        findMany(args: { select: { id: true; user: true; caseStatesJson: true } }): Promise<Array<{ id: string; user: string; caseStatesJson: string }>>;
         updateMany(args: { where: { id: string; user: string; caseStatesJson?: string }; data: Record<string, string> }): Promise<{ count: number }>;
     };
     skillVersion: {
@@ -974,21 +980,6 @@ function isRecoverableInterruptedRun(run: RunResult): boolean {
     return run.failureType === 'agent_error' && /服务重启中断|server .*restart|restarted/i.test(detail);
 }
 
-function getAutoEvaluationBacklogCaseIds(states: CaseStates): string[] {
-    return Object.entries(states)
-        .filter(([, state]) => (
-            (['a', 'b'] as Side[]).some(side => (
-                (state[side].runs || []).some(run => (
-                    run.status === 'executed'
-                    && Boolean(run.sessionId)
-                    && !run.evaluatorRunId
-                    && typeof run.score !== 'number'
-                ))
-            ))
-        ))
-        .map(([caseId]) => caseId);
-}
-
 function rebuildSideAggregate(state: PerVersionState, totalRuns: number): PerVersionState {
     const runs = state.runs || [];
     const expectedRuns = Math.max(0, Number(totalRuns) || 0);
@@ -1586,6 +1577,74 @@ async function startSingleEvaluation(
     };
 }
 
+/**
+ * "no valid tasks to run" 不是一次真正的评测结果——它是派发器去重判定"这条 trace 已经评过、
+ * 没有新任务可建"。绝不能把它当成 run 的失败(那正是"明明评过却显示失败、重试还失败"的根因)。
+ * 这里把这条 trace 在库里**最近一条真正的评测结果**(done/failed)回填到 run:
+ *   - done   → run = pass + 分数(救活);
+ *   - failed → run = 真失败、可重试(符合"看到的失败一定是真失败");
+ *   - 找不到任何真实结果 → 返回 false, 交给调用方按真失败处理。
+ * 优先本批次(evaluatorRunId)的最近一条; 取不到再放宽到这条 trace 的全局最近一条。
+ */
+async function rehydrateRunFromExistingEval(args: {
+    user: string;
+    run: RunResult;
+    sessionId: string;
+    evaluatorRunId?: string;
+}): Promise<boolean> {
+    const trajectory = (prisma as any).trajectoryEvalResult;
+    const base = { user: args.user, taskId: args.sessionId, status: { in: ['done', 'failed'] } };
+    let row = args.evaluatorRunId
+        ? await trajectory.findFirst({
+            where: { ...base, evaluatorRunId: args.evaluatorRunId },
+            orderBy: { updatedAt: 'desc' },
+        })
+        : null;
+    if (!row) {
+        row = await trajectory.findFirst({ where: base, orderBy: { updatedAt: 'desc' } });
+    }
+    if (!row) return false;
+    // 清掉本次失败/进行中的评测痕迹, 只留已完成的, 让 applyTrajectoryRowToRun 干净地按历史真实结果重算状态。
+    args.run.evaluations = (args.run.evaluations || []).filter(e => e.status === 'done');
+    args.run.failureType = undefined;
+    args.run.failureDetail = undefined;
+    applyTrajectoryRowToRun(args.run, row as unknown as TrajectoryResultRow, args.evaluatorRunId);
+    return true;
+}
+
+/**
+ * 打开任务页时(GET)把"评测失败但库里其实已有真实结果"的 run 用历史结果回填(Q2 根治, 无需重试):
+ * 只动"评测失败(failureType 空=非执行失败)且有 sessionId"的 run; 拿这条 trace 最近一条真实评测结果
+ *   - done   → run = pass + 分(那 5 条卡死的就这样自愈);
+ *   - failed → run = 真失败(保持, 可重试);
+ * 绝不重新派发评测, 纯展示纠偏。
+ */
+async function reconcileFailedRunsFromExistingEval(user: string, config: GrayscaleConfig, states: CaseStates): Promise<boolean> {
+    let changed = false;
+    for (const state of Object.values(states)) {
+        for (const side of ['a', 'b'] as Side[]) {
+            let sideChanged = false;
+            for (const run of state[side].runs || []) {
+                if (run.status !== 'fail' || run.failureType || !run.sessionId) continue;
+                const beforeStatus = run.status;
+                const beforeScore = run.score;
+                const ok = await rehydrateRunFromExistingEval({
+                    user,
+                    run,
+                    sessionId: run.sessionId,
+                    evaluatorRunId: config.evaluationBatchId || run.evaluatorRunId,
+                }).catch(() => false);
+                if (ok && (run.status !== beforeStatus || run.score !== beforeScore)) sideChanged = true;
+            }
+            if (sideChanged) {
+                state[side] = rebuildSideAggregate(state[side], state[side].runCount || state[side].runs?.length || 0);
+                changed = true;
+            }
+        }
+    }
+    return changed;
+}
+
 async function markEvaluatorRunFailed(user: string, evaluatorRunId: string, errorMessage: string) {
     await (prisma as unknown as GrayscalePrisma).trajectoryEvalResult.updateMany({
         where: {
@@ -1670,6 +1729,7 @@ async function evaluateSingleRunTarget(args: {
     const evaluationAttempt = (target.run.evaluationAttempts || 0) + 1;
     const evaluationClaimId = buildEvaluationClaimId();
     target.run.status = 'evaluating';
+    delete target.run.evalRetryPending; // 本次(重)评开始,清掉"待重试"标记;失败时再按可重试性重置
     target.run.evaluationAttempts = evaluationAttempt;
     target.run.evaluationClaimId = evaluationClaimId;
     target.run.evaluationStartedAt = new Date().toISOString();
@@ -1698,6 +1758,7 @@ async function evaluateSingleRunTarget(args: {
         touchLatestResultAt: true,
     });
 
+    let rehydratedFromExisting = false;
     try {
         const binding: GrayscaleBinding = {
             source: 'grayscale-ab',
@@ -1760,25 +1821,40 @@ async function evaluateSingleRunTarget(args: {
         }
     } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        if (evaluationResultId) {
-            await markEvaluatorRowsFailed(args.user, [evaluationResultId], message).catch(() => {});
-        } else if (evaluatorRunId) {
-            await markEvaluatorTasksFailed(args.user, evaluatorRunId, target.run.sessionId ? [target.run.sessionId] : [], message).catch(() => {});
+        // "no valid tasks to run" 不是失败 —— 是去重判定"这条 trace 已经评过、没有新任务可派发"。
+        // 不写失败, 而是从库里把这条 trace 最近一条真正的评测结果回填到 run(详见 rehydrateRunFromExistingEval)。
+        if (/no valid tasks to run/i.test(message) && target.run.sessionId) {
+            rehydratedFromExisting = await rehydrateRunFromExistingEval({
+                user: args.user,
+                run: target.run,
+                sessionId: target.run.sessionId,
+                evaluatorRunId: args.config.evaluationBatchId || evaluatorRunId || undefined,
+            }).catch(() => false);
         }
-        target.run.status = 'fail';
-        target.run.evaluations = mergeRunEvaluations(
-            target.run.evaluations,
-            effectiveEvaluatorIds.map(id => ({
-                evaluatorId: id,
-                evaluatorName: AB_EVALUATOR_NAMES[id] || id,
-                status: 'failed',
-                evaluatorRunId,
-                evaluationResultId,
-                errorMessage: message,
-            })),
-        );
-        target.run.output = message;
-        markRunCompleted(target.run);
+        if (rehydratedFromExisting) {
+            target.run.evalRetryPending = false;
+        } else {
+            // 真失败(评测器真的跑了且失败 / 或确实找不到任何历史结果)→ 照实标失败、可重试。
+            if (evaluationResultId) {
+                await markEvaluatorRowsFailed(args.user, [evaluationResultId], message).catch(() => {});
+            } else if (evaluatorRunId) {
+                await markEvaluatorTasksFailed(args.user, evaluatorRunId, target.run.sessionId ? [target.run.sessionId] : [], message).catch(() => {});
+            }
+            target.run.status = 'fail';
+            target.run.evaluations = mergeRunEvaluations(
+                target.run.evaluations,
+                effectiveEvaluatorIds.map(id => ({
+                    evaluatorId: id,
+                    evaluatorName: AB_EVALUATOR_NAMES[id] || id,
+                    status: 'failed',
+                    evaluatorRunId,
+                    evaluationResultId,
+                    errorMessage: message,
+                })),
+            );
+            target.run.output = message;
+            markRunCompleted(target.run);
+        }
         await persistRunStatePatch({
             taskId: args.taskId,
             user: args.user,
@@ -1791,6 +1867,27 @@ async function evaluateSingleRunTarget(args: {
             sidePatch: evaluatorRunId ? { evaluatorRunId } : undefined,
             touchLatestResultAt: true,
         }).catch(() => {});
+    }
+    // C+D: 评测失败若"可重试且还有重试次数",不进终态——回到「评测中/重试中」并标 evalRetryPending,
+    // 让下面的重试循环挑它重跑。失败只在"最终确切失败(不可重试/重试用尽)"时出现,且此后不再变化。
+    // 仅对"评测失败"生效:run.failureType 是执行失败(另有语义),不在此列。
+    // rehydratedFromExisting 时跳过:run 已用历史真实结果回填(pass/真失败),不该再被自动重跑(否则
+    // 又派发→又 no valid tasks→又回填,空转)。真失败要重试由用户手动点。
+    if (!rehydratedFromExisting && target.run.status === 'fail' && !target.run.failureType) {
+        const failMsg = target.run.output
+            || target.run.evaluations?.find(e => e.status === 'failed')?.errorMessage
+            || '';
+        if (shouldRetryGrayscaleEval(failMsg, target.run.evaluationAttempts || 1, MAX_EVALUATION_RETRIES)) {
+            target.run.status = 'evaluating';
+            target.run.evalRetryPending = true;
+            target.run.output = undefined;
+            delete target.run.completedAt; // 重试中不算完成
+            // 把失败的评估器回到 'pending':① getFailedOrMissingEvaluatorIds 据此挑它重评;
+            // ② deriveExecAndEval 把 pending/running 都算「评测中」,所以 UI 显示评测中而不是失败。
+            target.run.evaluations = (target.run.evaluations || []).map(e =>
+                e.status === 'failed' ? { ...e, status: 'pending', errorMessage: undefined } : e,
+            );
+        }
     }
     markLatestGrayResultAt(args.config);
     await persistRunStatePatch({
@@ -1917,6 +2014,21 @@ async function waitAndApplyEvaluationResult(args: {
     throw new Error(timeoutMessage);
 }
 
+// 把稳定批次 id 落到 task.configJson.evaluationBatchId。只更新 configJson(不碰 caseStatesJson),
+// 避免覆盖并发进行的 case 状态写入。落库后,本任务后续所有评测(全量/补评/重试/重启续跑)都能
+// 读到同一个 evaluatorRunId 并 append 进去 → 评测中心(按 evaluatorRunId 聚合)一个 A/B 任务只一条。
+async function persistEvaluationBatchId(taskId: string, user: string, config: GrayscaleConfig, batchId: string) {
+    config.evaluationBatchId = batchId;
+    try {
+        await (prisma as unknown as GrayscalePrisma).grayscaleTask.updateMany({
+            where: { id: taskId, user },
+            data: { configJson: JSON.stringify(withDefaultConfig(config)) },
+        });
+    } catch (err) {
+        console.warn('[grayscale] persist evaluationBatchId failed:', (err as Error)?.message);
+    }
+}
+
 async function evaluateRunsWithConcurrency(args: {
     taskId: string;
     user: string;
@@ -1979,7 +2091,10 @@ async function evaluateRunsWithConcurrency(args: {
                         target,
                         caseDatasetIdByCaseId,
                         evaluatorIds: target.evaluatorIds,
-                        appendToBatch: !args.onlyMissingEvaluation,
+                        // 一旦本任务有了稳定批次(config.evaluationBatchId),所有 target——含补评/行级重试——
+                        // 都 append 到同一批;没有批次时(seed 那一条)config.evaluationBatchId 为空,
+                        // startSingleEvaluation 自然走"建批次"分支,append 标志不影响。
+                        appendToBatch: true,
                     }),
                     {
                         taskType: 'grayscale-eval',
@@ -2014,20 +2129,20 @@ async function evaluateRunsWithConcurrency(args: {
         }, args.parentSignal);
     };
 
-    // 反散裂修复: 让本次评测的所有 target 落到同一个评测批次。
-    // 此前每个 target 各自 POST /api/eval/trajectory/run、各 mint 一个 evaluatorRunId
-    // (因为 config.evaluationBatchId 一直没值、append 分支是死代码 —— 那个对话框在 A/B 页打不开),
-    // 导致 "N case × M round 在「评测执行」里散裂成 N×M 个只有一条的批次"。
-    // 做法(对齐用例分析的同一批次语义): 先串行跑第一条建出批次, 把 evaluatorRunId 写进**内存中**的
-    // config(仅本次调用内共享, 故意不落库 —— 落库会让下次重跑 append 到旧批次、越积越多;
-    // 不落库则每次评测各自成一个干净批次)。其余 target 走 append 落到同一批。
-    // 每条 run 的 evaluatorRunId 已写进各自 run 状态,「评测执行」按它分组就归到一批。
-    // 仅在「全量评测(非 onlyMissing) 且尚未关联批次」时介入; onlyMissing(行级重试)维持原语义不动。
-    if (!args.onlyMissingEvaluation && !args.config.evaluationBatchId && targets.length > 1) {
+    // 稳定批次(point 2a): 一个 A/B 任务的所有评测——全量 / 补评 / 行级重试 / 重启续跑——都落到
+    // 同一个 evaluatorRunId。评测中心按 evaluatorRunId 聚合, 故一个任务只显示一条(根治用户看到的
+    // "同名任务散成 9条/5条/一堆1条")。批次 id 落库到 task.configJson.evaluationBatchId, 跨调用/重启稳定。
+    //
+    // 之前刻意"不落库"是怕"重跑 append 到旧批次越积越多";现在展示侧用 latestByCase(同 case 取最新分、
+    // 评测行保留, 即用户要的第 2 点)消解了这个顾虑, 所以这里改为落库, 让一个任务恒等于一条批次。
+    //
+    // 做法: 还没有批次时, 用第一条 target 建出批次(此刻 config.evaluationBatchId 为空 → 走"建批次"分支),
+    // 拿到 evaluatorRunId 后落库, 其余 target append 到同一批; 已有批次(后续评测/补评)直接全员 append。
+    if (!args.config.evaluationBatchId && targets.length > 0) {
         await runEvaluationBatch([targets[0]]);
         const seedBatchId = targets[0].run.evaluatorRunId;
         if (seedBatchId) {
-            args.config.evaluationBatchId = seedBatchId; // 仅本次调用内共享, 不落库
+            await persistEvaluationBatchId(args.taskId, args.user, args.config, seedBatchId);
         }
         // seedBatchId 为空(第一条建批次失败)时退回原行为: 其余各自评测, 至少不阻塞。
         await runEvaluationBatch(targets.slice(1));
@@ -2035,15 +2150,28 @@ async function evaluateRunsWithConcurrency(args: {
         await runEvaluationBatch(targets);
     }
     for (let retry = 1; retry <= MAX_EVALUATION_RETRIES; retry++) {
-        const failedTargets = targets
-            .filter(target => target.run.status === 'fail' && target.run.sessionId)
+        // C+D: 只重跑"待重试"的(evaluateSingleRunTarget 已据可重试性把它们标 evalRetryPending,
+        // 且状态保持 evaluating/评测中);不可重试或重试用尽的留在 'fail' 终态,绝不再动。
+        const retryTargets = targets
+            .filter(target => target.run.evalRetryPending && target.run.sessionId)
             .map(target => ({
                 ...target,
                 evaluatorIds: getFailedOrMissingEvaluatorIds(target.run, configuredEvaluatorIds),
             }))
             .filter(target => (target.evaluatorIds || []).length > 0);
-        if (failedTargets.length === 0) break;
-        await runEvaluationBatch(failedTargets);
+        if (retryTargets.length === 0) break;
+        await runEvaluationBatch(retryTargets);
+    }
+    // 兜底:循环跑完后仍"待重试"的(理论上不该有——末次尝试 attempts>MAX 已进终态)强制落终态失败,
+    // 避免卡在「评测中」。
+    for (const t of targets.filter(t => t.run.evalRetryPending)) {
+        t.run.evalRetryPending = false;
+        t.run.status = 'fail';
+        markRunCompleted(t.run);
+        await persistRunStatePatch({
+            taskId: args.taskId, user: args.user, config: args.config, states: args.states,
+            caseId: t.caseId, side: t.side, nextRun: t.run, touchLatestResultAt: true,
+        }).catch(() => {});
     }
     return evaluatorRunIds[evaluatorRunIds.length - 1] || null;
 }
@@ -2254,6 +2382,8 @@ export async function GET(
             states: task.caseStatesJson,
         });
         const reconciled = await reconcileFinishedEvaluations(taskId, user, task.configJson, task.caseStatesJson);
+        // Q2: "评测失败但库里其实已有真实结果"的 run 用历史结果回填(no valid tasks 残留自愈, 不重新评测)。
+        const failedRehydrated = await reconcileFailedRunsFromExistingEval(user, task.configJson, task.caseStatesJson);
 
         // === 孤儿 in-flight 清理 ===
         // activeRuns 是内存 map (挂 globalThis), server 重启就丢。如果 caseStates
@@ -2267,7 +2397,6 @@ export async function GET(
         const orphanStoreKey = `${user}:${taskId}`;
         let orphanCleanup = false;
         if (!activeRuns().get(orphanStoreKey) && hasAnyRunningCaseStates(task.caseStatesJson)) {
-            const cancelable: CaseStatus[] = ['running', 'evaluating', 'pending'];
             const states = task.caseStatesJson;
             for (const cid of Object.keys(states)) {
                 for (const side of ['a', 'b'] as Side[]) {
@@ -2275,11 +2404,8 @@ export async function GET(
                     if (!sideState) continue;
                     let patched = false;
                     for (const run of sideState.runs || []) {
-                        if (cancelable.includes(run.status)) {
-                            run.status = 'fail';
-                            run.failureType = 'agent_error';
-                            run.failureDetail = run.failureDetail || '服务重启中断, 请重新评测';
-                            run.output = run.output || '服务重启中断';
+                        // 同 startup 回收口径:评测被打断(执行已完成)的回到 executed 可重评,真没跑完的才执行失败。
+                        if (reconcileStaleGrayscaleRun(run, '服务重启中断, 请重新评测')) {
                             patched = true;
                             orphanCleanup = true;
                         }
@@ -2299,7 +2425,7 @@ export async function GET(
             }
         }
 
-        if (orphanCleanup || metricsHydrated || executionsReconciled || reconciled) {
+        if (orphanCleanup || metricsHydrated || executionsReconciled || reconciled || failedRehydrated) {
             // 乐观锁回写: 这次 reconcile 是基于 task 刚 load 时的快照算的。若期间评测
             // flow 已经写了更新的状态(CAS 落空), 不能用我们这份旧快照覆盖它 —— 否则
             // 会把刚落库的 pass 又擦回 evaluating(就是"评完又退回评估中"那个抖动)。
@@ -2322,29 +2448,9 @@ export async function GET(
         if (active && !hasAnyRunningCaseStates(task.caseStatesJson)) {
             activeRuns().delete(storeKey);
         }
-        const currentActive = activeRuns().get(storeKey);
-        if (!currentActive && task.configJson.autoEval !== false) {
-            const backlogCaseIds = getAutoEvaluationBacklogCaseIds(task.caseStatesJson);
-            if (backlogCaseIds.length > 0) {
-                const runId = `gray_recover_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-                activeRuns().set(storeKey, { taskId, runId, status: 'evaluating', startedAt: Date.now() });
-                void evaluateRunsWithConcurrency({
-                    taskId,
-                    user,
-                    origin: req.nextUrl.origin,
-                    config: task.configJson,
-                    states: task.caseStatesJson,
-                    caseIds: backlogCaseIds,
-                    evaluatorId: task.configJson.evaluatorId,
-                    evaluatorIds: normalizeAbEvaluators(task.configJson.evaluators, task.configJson.evaluatorId),
-                    onlyMissingEvaluation: true,
-                })
-                    .catch(err => console.error('[GRAYSCALE_TASKS_RECOVER_EVAL] Failed:', err))
-                    .finally(() => {
-                        activeRuns().delete(storeKey);
-                    });
-            }
-        }
+        // 注意: 这里**不再自动补评**崩溃残留的"待评测/中断"积压(原 gray_recover_ 自动重评已移除)。
+        // 解卡(reconcileStaleGrayscaleRun)已把被打断的评测摆成"评测失败(中断) + 「重评」按钮",
+        // 由用户自行点击恢复 —— 避免"打开页面就自己重评起来、还把看着有分的又评一遍"。
         return respondTask(task, activeRuns().get(`${user}:${taskId}`) || null);
     } catch (err) {
         console.error('[GRAYSCALE_TASKS_GET_ONE] Failed:', err);
@@ -2553,10 +2659,38 @@ export async function PATCH(
             }
             nextConfig.skillId = existing.skillId;
             nextConfig.versionBId = existing.skillVersionId;
+            // E: evaluationBatchId 后端独占 —— 前端 PATCH 不带/带空值时,保留库里已有的稳定批次 id,
+            // 不让前端用空值覆盖。否则一个 A/B 任务的评测会散裂成多个批次(实测 gyc-v0 散成 20 个)。
+            if (!String(nextConfig.evaluationBatchId || '').trim()) {
+                let existingBatchId = '';
+                try {
+                    existingBatchId = String((JSON.parse(existing.configJson || '{}') as GrayscaleConfig).evaluationBatchId || '').trim();
+                } catch { /* ignore */ }
+                if (existingBatchId) nextConfig.evaluationBatchId = existingBatchId;
+            }
             data.configJson = JSON.stringify(nextConfig);
         }
         if (caseStatesJson !== undefined) data.caseStatesJson = JSON.stringify(caseStatesJson);
-        if (typeof taskName === 'string' && taskName.trim()) data.taskName = taskName.trim();
+        if (typeof taskName === 'string' && taskName.trim()) {
+            const trimmedName = taskName.trim();
+            // 甲(原地改名):同一任务换标签。但唯一键现在含 taskName,改成"同版本里别的任务已占用的名字"
+            // 会撞键,直接 updateMany 会抛 Prisma P2002。先查重,把它变成可读的 409,前端弹"名字已被占用"。
+            if (trimmedName !== existing.taskName) {
+                const clash = await (prisma as unknown as GrayscalePrisma).grayscaleTask.findFirst({
+                    where: {
+                        user,
+                        skillName: existing.skillName,
+                        skillVersion: existing.skillVersion,
+                        taskName: trimmedName,
+                        NOT: { id: taskId },
+                    },
+                });
+                if (clash) {
+                    return NextResponse.json({ error: '该版本下已存在同名 A/B 任务，请换一个名字' }, { status: 409 });
+                }
+            }
+            data.taskName = trimmedName;
+        }
 
         if (Object.keys(data).length === 0) {
             return NextResponse.json({ error: 'Nothing to update' }, { status: 400 });
@@ -2584,4 +2718,67 @@ export async function PATCH(
         console.error('[GRAYSCALE_TASKS_PATCH] Failed:', err);
         return NextResponse.json({ error: 'Failed to update task' }, { status: 500 });
     }
+}
+
+/**
+ * 启动回收:把所有灰度(A/B)任务里"崩溃/重启前还在跑"的运行(running/evaluating/pending)一次性标失败。
+ *
+ * 背景:灰度的执行/评测运行状态存在 GrayscaleTask.caseStatesJson。进程崩溃/重启后这些 run 的 agent 进程
+ * 已死,但 JSON 里仍是非终态。原来只在用户打开任务时惰性收尾(把它们判成「服务重启中断」)——于是用户
+ * "选 case → 开始执行"时,这些上一轮崩溃的旧残骸会被恰好这时标成报错、混进新一轮里看着像新跑失败,
+ * 状态也自相矛盾(能"重新执行"说明没有在跑的,却又显示着"运行中"的旧条目)。
+ *
+ * 开机就一次性清掉(与 opencode 孤儿回收 / 评测行回收同处、同理):重启 = 没有任何灰度 run 真的在跑,
+ * 故把所有非终态 run 标 failed 是安全的。复用 rebuildSideAggregate 保证侧聚合状态一致。返回改动的任务数。
+ */
+export async function reapStaleGrayscaleRunsAtStartup(): Promise<number> {
+    const cancelable: CaseStatus[] = ['running', 'evaluating', 'pending'];
+    const reason = '服务重启中断（启动回收）';
+    let tasks: Array<{ id: string; user: string; caseStatesJson: string }>;
+    try {
+        tasks = await (prisma as unknown as GrayscalePrisma).grayscaleTask.findMany({
+            select: { id: true, user: true, caseStatesJson: true },
+        });
+    } catch {
+        return 0;
+    }
+    let patchedTasks = 0;
+    for (const task of tasks) {
+        let states: CaseStates;
+        try { states = JSON.parse(task.caseStatesJson || '{}') as CaseStates; } catch { continue; }
+        let changed = false;
+        for (const cid of Object.keys(states)) {
+            for (const side of ['a', 'b'] as Side[]) {
+                const sideState = states[cid]?.[side];
+                if (!sideState) continue;
+                let patched = false;
+                for (const run of sideState.runs || []) {
+                    // 执行完成、评测被打断的(evaluating 且有 sessionId,或已是 fail 的崩溃残骸)→ 回到 executed
+                    // 可重评;真没跑完的(running/pending)→ 执行失败。详见 reconcileStaleGrayscaleRun。
+                    if (reconcileStaleGrayscaleRun(run, reason)) {
+                        patched = true;
+                        changed = true;
+                    }
+                }
+                if (patched) {
+                    states[cid][side] = rebuildSideAggregate(sideState, sideState.runCount || sideState.runs?.length || 0);
+                    const rebuilt = states[cid][side];
+                    if (cancelable.includes(rebuilt.status)) {
+                        rebuilt.status = 'fail';
+                        rebuilt.output = rebuilt.output || '服务重启中断';
+                    }
+                }
+            }
+        }
+        if (changed) {
+            try {
+                await (prisma as unknown as GrayscalePrisma).grayscaleTask.updateMany({
+                    where: { id: task.id, user: task.user },
+                    data: { caseStatesJson: JSON.stringify(states) },
+                });
+                patchedTasks++;
+            } catch { /* 单任务失败不影响其它 */ }
+        }
+    }
+    return patchedTasks;
 }

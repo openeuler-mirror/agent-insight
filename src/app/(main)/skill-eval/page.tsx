@@ -257,6 +257,30 @@ function hasGrayRunningStates(states: GrayTaskMeta['caseStatesJson'] | undefined
     );
 }
 
+// 与 A/B 页 getTaskRunTime / hasTaskRunHistory 同源:卡片要和 A/B 页"自动加载哪条任务"一致,
+// 否则同一 skill+版本下有多条任务时,卡片(原本取 createdAt 最新)与 A/B 页(取最近运行的那条)
+// 会选到不同任务 → 分数对不上(用户反馈第 4 点)。
+function grayTaskRunTime(t: GrayTaskMeta): number {
+    const rawLatest = t.configJson?.latestResultAt;
+    const latest = typeof rawLatest === 'string' ? Date.parse(rawLatest) : 0;
+    if (Number.isFinite(latest) && latest > 0) return latest;
+    const times = Object.values(t.caseStatesJson || {}).flatMap(pair =>
+        (['a', 'b'] as const).flatMap(side =>
+            (pair?.[side]?.runs || []).map(r => (typeof r.completedAt === 'string' ? Date.parse(r.completedAt) : 0))
+        )
+    ).filter(n => Number.isFinite(n) && n > 0);
+    if (times.length > 0) return Math.max(...times);
+    return Date.parse(t.createdAt || '') || 0;
+}
+function grayTaskHasHistory(t: GrayTaskMeta): boolean {
+    return Object.values(t.caseStatesJson || {}).some(pair =>
+        (['a', 'b'] as const).some(side => {
+            const s = pair?.[side];
+            return Boolean(s && (s.status !== 'pending' || (s.runs?.length || 0) > 0));
+        })
+    );
+}
+
 function getGrayRunScore(run: GrayRunLike | undefined): number | null {
     if (!run) return null;
     if (typeof run.score === 'number') return run.score;
@@ -685,7 +709,8 @@ function SkillAnalysisPage() {
             const includeRun = traceEvaluationBatchId
                 ? `&includeRunId=${encodeURIComponent(traceEvaluationBatchId)}`
                 : '';
-            const res = await apiFetch(`/api/eval/trajectory/runs?user=${encodeURIComponent(user)}&limit=50&latestByCase=1${includeRun}`);
+            // 用例分析只看独立评测任务, 不展示灰度 A/B 的评测批次(A/B 只在 A/B 页看)。
+            const res = await apiFetch(`/api/eval/trajectory/runs?user=${encodeURIComponent(user)}&limit=50&latestByCase=1&excludeGrayscale=1${includeRun}`);
             const data = await res.json();
             if (Array.isArray(data?.runs)) {
                 setCaseEvalTasks(data.runs.map((r: any) => ({
@@ -1150,9 +1175,16 @@ function SkillAnalysisPage() {
     }, [traceEvalBatchStorageKey]);
 
     useEffect(() => {
-        if (traceEvaluationBatchId || caseEvalTasksForSkill.length === 0) return;
-        const latest = caseEvalTasksForSkill[0];
-        handleSelectTraceEvalBatch({ runId: latest.runId, taskTitle: latest.taskTitle });
+        // 当前选中的若仍在(已排除 A/B 后的)列表里 → 保持。否则(未选 / 残留指向已被排除的 A/B 批次):
+        // 有可选项就自动选第一个有效的, 没有就清空, 避免用例分析里残留显示一个 A/B 任务。
+        const stillValid = traceEvaluationBatchId && caseEvalTasksForSkill.some(t => t.runId === traceEvaluationBatchId);
+        if (stillValid) return;
+        if (caseEvalTasksForSkill.length > 0) {
+            const latest = caseEvalTasksForSkill[0];
+            handleSelectTraceEvalBatch({ runId: latest.runId, taskTitle: latest.taskTitle });
+        } else if (traceEvaluationBatchId) {
+            setTraceEvaluationBatchId('');
+        }
     }, [caseEvalTasksForSkill, handleSelectTraceEvalBatch, traceEvaluationBatchId]);
 
     const runBatchTraceAnalysis = useCallback(async (taskIds: string[]): Promise<{
@@ -1252,7 +1284,18 @@ function SkillAnalysisPage() {
                     })
                     : list)
                 : [];
-            const latest = (matches[0] as GrayTaskMeta | undefined) || null;
+            // 取"最近运行的那条"而非"最近创建的那条",与 A/B 页 pickLatestTaskForBinding 对齐:
+            // 正在跑的优先,其次有运行历史的,再按运行时间倒序。避免刚新建的空任务把有分数的老任务挤掉。
+            // 若用户在 A/B 页选了某个任务(URL ?task), 概览卡也用这条 —— 保持"里外一致", 而不是永远显示最新。
+            const urlTaskId = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('task') : null;
+            const picked = urlTaskId ? (matches as GrayTaskMeta[]).find(t => t.id === urlTaskId) : null;
+            const latest = picked || ([...matches] as GrayTaskMeta[]).sort((a, b) => {
+                const activeDelta = Number(Boolean(b.activeRun)) - Number(Boolean(a.activeRun));
+                if (activeDelta !== 0) return activeDelta;
+                const histDelta = Number(grayTaskHasHistory(b)) - Number(grayTaskHasHistory(a));
+                if (histDelta !== 0) return histDelta;
+                return grayTaskRunTime(b) - grayTaskRunTime(a);
+            })[0] || null;
             const versionLookup: Record<string, { version: number | string; skillName: string }> = {};
             (selectedSkill?.versions || []).forEach(v => {
                 if (v.id) versionLookup[v.id] = { version: v.version, skillName: selectedSkill?.name || 'Skill' };
@@ -1521,7 +1564,7 @@ function SkillAnalysisPage() {
                     <EmbeddedDebugPanel
                         title="A/B测试"
                         description="对照两个 Skill 版本或基础 Agent 的执行质量，定位新版本是否真正修复了关键失败类型。"
-                        primaryAction="发起新一轮"
+                        primaryAction="新建任务"
                         secondaryAction="历史任务"
                         onBack={() => setView('overview')}
                         onPrimary={() => setGrayNewTaskTrigger(v => v + 1)}

@@ -330,7 +330,6 @@ export function AppSidebar() {
                                 <span style={{ fontSize: 11.5, fontWeight: 500, color: 'var(--foreground)', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                     {user}
                                 </span>
-                                <span style={{ fontSize: 10, color: 'var(--foreground-muted)' }}>Admin</span>
                             </span>
                         </button>
                         {showUserMenu && (

@@ -718,6 +718,54 @@ export function sweepOrphanedOpencodeProcesses(): void {
 }
 
 /**
+ * 硬终止某 user 名下、由**本进程**起的后台 opencode 进程组(ephemeral 执行/评测实例),整组 SIGKILL。
+ * 用于「终止全部」:配合 user_termination_registry 的 choke-point guard(挡住还没起的),一起做到
+ * "点终止 → 该用户在跑的执行/评测 opencode 立刻停"。
+ *
+ * 刻意**跳过该用户的常驻交互 server**(skill-gen 对话用,pgid === 该 server 的 pid)——终止的是
+ * "执行/评测",不该顺手把用户的对话也掐了。只动注册表里属于本进程(ownerPid===本 pid)的记录,
+ * 绝不误杀别的 server 或无关系统进程。返回杀掉的进程组数。
+ */
+export function killOpencodeForUser(user: string): number {
+  if (!user) return 0
+  const persistentPid = state.servers.get(user)?.process?.pid
+  let files: string[]
+  try {
+    files = fs.readdirSync(OPENCODE_PGID_REGISTRY_DIR)
+  } catch {
+    return 0
+  }
+  let killed = 0
+  for (const name of files) {
+    const filePath = path.join(OPENCODE_PGID_REGISTRY_DIR, name)
+    let rec: { pgid?: number; ownerPid?: number; user?: string }
+    try {
+      rec = JSON.parse(fs.readFileSync(filePath, 'utf8'))
+    } catch {
+      continue
+    }
+    if (!rec || rec.user !== user) continue
+    if (rec.ownerPid !== process.pid) continue // 只动本进程起的
+    const pgid = Number(rec.pgid)
+    if (!Number.isFinite(pgid)) continue
+    if (persistentPid && pgid === persistentPid) continue // 跳过常驻交互 server
+    if (processGroupExists(pgid)) {
+      try {
+        process.kill(-pgid, 'SIGKILL')
+        killed++
+      } catch {
+        /* ESRCH = 已经没了 */
+      }
+    }
+    try { fs.rmSync(filePath, { force: true }) } catch { /* ignore */ }
+  }
+  if (killed > 0) {
+    console.warn(`[opencode] 终止全部: SIGKILL ${killed} 个 ${user} 的后台 opencode 进程组。`)
+  }
+  return killed
+}
+
+/**
  * 反进程泄漏的硬上限: SIGKILL 之后最多再占着 slot 等多久 (ms) 等进程组真正退场。
  * 默认 30s, 可用 OPENCODE_KILL_HARD_TIMEOUT_MS 覆盖。下限 2s。详见 terminateOpencodeProcess。
  */
