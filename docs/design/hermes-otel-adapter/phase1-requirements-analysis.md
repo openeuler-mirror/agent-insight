@@ -1,15 +1,20 @@
 # Hermes 平台适配（OTel / OTLP 接入）— 需求分析规格（IR）
-版本：v0.3
-最后更新：2026-06-03 06:16:08
+版本：v0.4
+最后更新：2026-06-09
 
 > 文档类型：Phase1 需求分析规格（IR）
 > 关联项目：agent-insight
 > 复杂度评估：**Medium**
-> 版本：v0.2（已纳入 Phase1 评审修订）
-> base_commit：c47829a（master_0530）
+> base_commit：d72f05e（master）
 > 变更类型：新增能力（feature）
-> 更新时间：2026-06-02
-> 状态：评审条件通过 → 已修订
+> 更新时间：2026-06-09
+> 状态：评审条件通过 → 已修订 → **v0.4 refine（纠正「无需插件」前提，纳入客户端插件接入）**
+>
+> **v0.4 关键修订**（据源文档 `docs/series-articles/hermes-otel-设计文档.md` 与同批未开发设计的兼容性）：
+> 原 v0.3 假设「hermes 侧仅配置 OTLP exporter、无需插件」属**事实性错误**——hermes 内核**不支持 OTel**，
+> 只暴露 8 个 hook，必须在**客户端安装/配置插件**才能产出 OTLP。本次把「客户端插件接入」纳入需求范围
+> （**复用开源 `briancaffey/hermes-otel`**，配置其通用 `otlp` 后端指向平台端点），并对齐同批未开发的
+> [`framework-adapter-registry`](../framework-adapter-registry/) 与 [`otel-spool-consumer`](../otel-spool-consumer/) 目标架构。
 
 ---
 
@@ -19,7 +24,13 @@
 
 需求价值：agent-insight 的核心定位是「框架无关」的 Agent 观测/评测/Skill 优化工程底座，北向兼容多 Agent 运行时是其差异化竞争力；新增 hermes 适配可扩大可服务的 Agent 生态、兑现 README 中已对外宣称的「兼容 OpenCode、Hermes、OpenClaw」能力承诺。
 
-需求描述：使运行在 **hermes** 平台上的 Agent 能够通过**标准 OpenTelemetry（OTel/OTLP）协议**将运行链路数据上报到 agent-insight，被正确解析、归并为会话并在观测看板呈现，框架标识为 `hermes`。本需求**是**「让 hermes 数据成为平台的一等观测对象」，**不是**为 hermes 编写专用侵入式插件（区别于 OpenCode 的插件模式），也**不**改变现有 OpenCode/Claude/OpenClaw 的接入行为。
+需求描述：使运行在 **hermes** 平台上的 Agent 能够通过**标准 OpenTelemetry（OTel/OTLP）协议**将运行链路数据上报到 agent-insight，被正确解析、归并为会话并在观测看板呈现，框架标识为 `hermes`。本需求**是**「让 hermes 数据成为平台的一等观测对象」，也**不**改变现有 OpenCode/Claude/OpenClaw 的接入行为。
+
+> **【v0.4 前提纠正】hermes 内核不支持 OTel——接入是「双层适配器」**：源文档明确，hermes Agent 内核不懂 Span/Trace、不依赖 OpenTelemetry，仅暴露 8 个 hook（`on_session_start/end`、`pre/post_llm_call`、`pre/post_api_request`、`pre/post_tool_call`）。因此「hermes 产出 OTLP」**不能仅靠配置**，必须有一个**客户端插件**以纯观察者身份挂到这些 hook 上，把私有事件流翻译并重建成 OTel Span 树再导出。这构成一对「双层适配器」：
+> - **上游/客户端适配器（本次新纳入范围）**：hermes hook 事件 → OTel Span/Metric。**实现策略 = 复用开源 `briancaffey/hermes-otel` 插件**，把它的下游后端配成一个通用 `otlp` 后端，端点指向 `…/api/ingest/otel/v1/traces`、认证头 `x-witty-api-key`，资源属性 `service.name=hermes`。
+> - **下游/服务端适配器（原 v0.3 已覆盖）**：平台收到 OTLP → 解析/归并/标记 framework=hermes → 整形为 opencode 同构 interaction 复用既有建树/注册/skill 管线。
+>
+> 故「为 hermes 写专用侵入式插件」与本需求**不矛盾**：客户端走的是 hermes 既有插件机制（纯观察者、不改内核），且**优先复用开源插件而非自研**；与 OpenCode 那种深度侵入式插件不同。
 
 ### 1.2 结构化信息
 
@@ -28,10 +39,10 @@
 |Who|hermes 平台的 Agent 开发者 / 运维者（数据生产侧）；agent-insight 平台使用者（观测/评测消费侧）|
 |When|在 hermes Agent 运行时（产生 trace）与运行后（在 agent-insight 看板查看链路、发起评测）|
 |What|hermes 以标准 OTLP 协议上报运行数据，平台正确接收、解析、按会话归并并标记 framework=hermes，呈现于链路追踪；数据天然可进入「从 Trace」评测流程|
-|Why|兑现「框架无关、多平台兼容」的产品定位，降低新平台接入成本（走标准协议而非定制插件）|
-|Where|hermes 运行环境（OTLP exporter 指向 agent-insight 端点）；agent-insight 自托管服务端（Next.js + Prisma/SQLite）|
-|How Much|复用现有 `/api/ingest/otel/v1/traces`（HTTP/JSON）；上报鉴权沿用 `x-witty-api-key`；解析需兼容 GenAI 语义约定，对自定义属性提供映射兜底|
-|How|hermes 侧配置 OTLP exporter（endpoint + api-key header）→ 运行 → 平台自动入库 → 用户在看板按 framework=hermes 检索查看|
+|Why|兑现「框架无关、多平台兼容」的产品定位，降低新平台接入成本（走标准 OTLP 协议 + **复用社区插件**，而非自研定制插件）|
+|Where|hermes 运行环境（**安装/配置 hermes-otel 插件**，其 otlp 后端指向 agent-insight 端点）；agent-insight 自托管服务端（Next.js + Prisma/SQLite）|
+|How Much|**客户端**：复用开源 `briancaffey/hermes-otel`，仅配置一个通用 `otlp` 后端（零/极少自研代码）；**服务端**：复用现有 `/api/ingest/otel/v1/traces`（HTTP/JSON），鉴权沿用 `x-witty-api-key`，解析兼容 GenAI 语义约定 + 自定义属性映射兜底|
+|How|在 hermes 侧**安装 hermes-otel 插件并配置 `otlp` 后端**（endpoint + `x-witty-api-key` 头 + `service.name=hermes`）→ 运行 Agent 产生 hook 事件→插件翻译为 OTel Span 树并以 OTLP/HTTP-JSON 导出 → 平台受理/异步聚合入库 → 用户在看板按 framework=hermes 检索查看|
 
 ---
 
@@ -45,9 +56,11 @@
 @startuml
 |hermes Agent|
 start
-:配置 OTLP exporter\n(endpoint=/api/ingest/otel/v1/traces, x-witty-api-key);
-:运行 Agent, 产生 gen_ai/tool spans;
-:以 OTLP/HTTP-JSON 上报;
+:安装 hermes-otel 插件\n(~/.hermes/plugins/hermes_otel);
+:配置通用 otlp 后端\n(endpoint=/api/ingest/otel/v1/traces,\n x-witty-api-key, service.name=hermes);
+:运行 Agent, 插件挂 8 个 hook;
+:插件把 hook 事件翻译为\nOTel Span 树(parentSpanId 嵌套);
+:以 OTLP/HTTP-JSON 导出;
 |agent-insight 服务端|
 :API Key 鉴权, 识别归属用户;
 :解析 resourceSpans→scopeSpans→spans;
@@ -62,7 +75,9 @@ stop
 
 |编号|路径|类别|触发|步骤|
 |-|-|-|-|-|
-|S-001|主成功|业务|hermes 上报有效 OTLP/JSON trace|exporter 配置→运行产生 span→上报→鉴权→解析→归并会话→入库→看板呈现 framework=hermes|
+|S-001|主成功|业务|hermes 经 hermes-otel 插件上报有效 OTLP/JSON trace|安装并配置 hermes-otel 插件(otlp 后端→平台)→运行产生 hook 事件→插件翻译为 Span 树并导出→平台受理→（异步）解析归并会话→入库→看板呈现 framework=hermes|
+|S-014|主成功|接入|用户为 hermes 接入平台（客户端侧）|平台**接入引导**输出 hermes-otel 插件安装步骤 + `otlp` 后端配置块（endpoint/key/`service.name=hermes`/`http/json`）；用户照此装好插件并配置后端，首次运行即上报成功|
+|S-015|备选|接入|hermes-otel 插件默认发 OpenInference/OTel GenAI 双约定属性，命名与平台「标准 gen_ai.*」假设存在差异|平台服务端适配层以「标准语义优先 + 映射表兜底 + 降级保留」吸收差异；交付前以 T001 真实样本校准映射（含 OpenInference 命名如 `llm.token_count.*`/`openinference.span.kind`）|
 |S-002|扩展|业务|hermes 多次/分批上报同一会话的 span|平台按会话标识增量归并，去重（同 spanId 不重复），按时间戳排序，聚合 token/延迟|
 |S-003|扩展|业务|hermes 会话含多 Agent / 子 Agent 调用|平台据 span 父子关系（parentSpanId）保留链路层级，正确归属主/子 Agent|
 |S-004|备选|业务|hermes 未携带 `session.id`，仅有 `service.instance.id` 或 `traceId`|平台按既定优先级 session.id→instance.id→traceId 选择会话归并键|
@@ -89,6 +104,8 @@ stop
 |BR-007|hermes 多 Agent 运行必须建模为多条 Execution 并组成树（parentExecutionId/rootExecutionId/isSubagent 等），语义与 opencode 对齐，不得塌缩为单条扁平记录|子 Agent 级别可观测/可评测是平台核心能力|入库、观测、评测、Agent 注册|
 |BR-008|hermes 的 agent 身份（含子 Agent）首次被观测到时必须自动注册到 RegisteredAgent（platform=hermes，agentType 区分 main/subagent），同一 (platform,name,user) 不重复注册|Agent 注册表与筛选需识别 hermes agent|Agent 注册、筛选|
 |BR-009|skill 调用的抽取必须覆盖主 Agent 与子 Agent 加载的 skill，并尽力带出版本；抽取结果写入 invokedSkills 供下游消费|Skill 为一等公民，评测/A-B/优化依赖 invokedSkills|Skill 抽取、评测、A-B、优化|
+|BR-010|hermes 客户端插件**优先复用开源 `briancaffey/hermes-otel`**，通过配置其通用 `otlp` 后端接入，**不自研侵入式插件**；服务端解析必须以「插件实际发出的属性」为准（OpenInference + OTel GenAI 双约定），不得假设平台私有命名|降低接入与维护成本、避免与上游插件演进脱钩；服务端不能凭空假设 hermes 属性命名|客户端接入、服务端语义映射、T001 样本|
+|BR-011|平台服务端的 OTLP 解析/聚合必须落在**同批 `otel-spool-consumer` 的目标管线**（薄壳端点写 spool → 后台消费者聚合）与**`framework-adapter-registry` 的查表入口**上，不得在 `traces/route.ts` 内联落库，也不得新增 per-framework 裸分支|三条线同批实现，必须共用一套接收/转换分层，避免互相冲突与返工|服务端架构、接收路径、转换层|
 
 ### 2.3 数据约束
 
@@ -115,7 +132,8 @@ stop
 |FR-003|标识|framework 稳定标记为 hermes|hermes 数据在 Session/Execution 中被稳定标记为 hermes，可在看板按框架检索与统计，且不与其他框架混淆|P0|
 |FR-004|兼容|自定义属性映射兜底|当 hermes span 未严格遵循 GenAI 语义约定时，提供映射适配层尽力识别关键字段，无法识别时降级保留原始信息|P1|
 |FR-005|多Agent|子 Agent 链路层级还原|当 hermes 会话含多/子 Agent 时，依据 span 父子关系还原链路层级与主/子 Agent 归属（链路图展示层）|P1|
-|FR-006|接入引导|hermes 接入引导|在安装指导页/框架选择器中新增 hermes 选项，向用户提供 hermes 侧 OTLP exporter 的配置指引（endpoint 与 api-key）|P1|
+|FR-006|接入引导|hermes 接入引导（含插件安装）|在安装指导页/框架选择器中新增 hermes 选项（接入方式标记为 `plugin`），向用户提供**hermes-otel 插件安装步骤** + 通用 `otlp` 后端配置块（endpoint、`x-witty-api-key`、`service.name=hermes`、`OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf` 或 `http/json`）|P1|
+|FR-014|客户端接入|hermes-otel 插件复用与配置规约|交付一份「客户端插件接入规约」：以开源 `briancaffey/hermes-otel` 为基础，说明其下游 `otlp` 后端如何指向平台（认证头、`service.name`、采样/隐私开关），并标注它默认发出的属性约定（OpenInference + OTel GenAI），作为服务端 FR-013 语义契约与 T001 样本校准的输入|P0|
 |FR-007|可诊断|不支持编码的显式反馈|对 protobuf/gRPC 等暂不支持的上报，返回明确状态与改用 http/json 的指引|P2|
 |FR-009|健壮性|畸形/超限上报处理|对畸形 JSON、缺失 resourceSpans、截断或超限上报体，返回确定性 4xx 并保证不写入部分损坏数据；超大字段按既定上限截断并标注|P1|
 |FR-008|评测承接|hermes 会话可作为评测对象|hermes 上报形成的 Execution/会话（含子 Agent 维度）可进入「从 Trace」评测流程；主 Agent 与子 Agent 均可作为评测对象|P2|
@@ -157,6 +175,7 @@ stop
 |AC-011|S-011, FR-010, BR-007, NFR-007|功能|子 Agent 多 Execution 树|含 1 主 + M 子 Agent 的 hermes 运行上报后，生成 1+M 条 Execution；子 Agent 行 isSubagent=true 且 parentExecutionId/rootExecutionId 链与运行结构一致；可按 rootExecutionId 聚合、可在看板筛选/下钻子 Agent；与等价 opencode 运行的树结构一致|
 |AC-012|S-013, FR-011, BR-008|功能|agent 自动注册|hermes 主/子 Agent 首次上报后自动出现在 RegisteredAgent（platform=hermes，agentType 正确）；重复上报不产生重复注册|
 |AC-013|S-012, FR-012, BR-009|功能|skill 全链路解析|hermes 主 Agent 与子 Agent 加载的 skill 均被抽取入 invokedSkills（带版本，若上报含版本）；该会话在 Skill 诊断/路由评测中显示「实际调用 skill」非空；可进入 A-B/优化|
+|AC-014|S-014/S-015, FR-006/FR-014, BR-010|接入|客户端插件接入（复用 hermes-otel）|按接入引导安装 hermes-otel 插件并配置 `otlp` 后端（端点指向平台、`x-witty-api-key`、`service.name=hermes`）后，运行一次 hermes 任务即在看板出现 framework=hermes 会话；接入规约文档记录了插件默认属性约定，且服务端映射对这些约定（含 OpenInference 命名）有覆盖或降级保留|
 
 ### 4.2 测试用例
 
@@ -174,14 +193,16 @@ stop
 |TC-010|AC-011|hermes 运行含 1 主 + M 子 Agent（已知结构）|按语义契约上报含 agent 身份标记的 spans|生成 1+M 条 Execution；子 Agent isSubagent=true、parent/root 链正确；按 rootExecutionId 聚合得到全树；看板可筛选/下钻子 Agent；与等价 opencode 运行树结构一致|
 |TC-011|AC-012|平台运行|首次上报 hermes 主+子 Agent；随后重复上报相同 agent|首次后 RegisteredAgent 出现 platform=hermes 的 main 与 subagent 记录；重复上报无重复行|
 |TC-012|AC-013|hermes 运行主 Agent 调 skillA、子 Agent 加载 skillB（带版本）|按语义契约上报|invokedSkills 含 skillA、skillB 及版本；Skill 诊断/路由评测显示实际调用非空；可发起 A-B/优化|
+|TC-013|AC-014|纯净 hermes 环境 + 平台运行 + 有效 key|按接入引导装 hermes-otel 插件、配 otlp 后端指向平台、跑一次含 LLM/工具的任务|看板 ≤1 次刷新出现 framework=hermes 会话，model/token/latency 非空；插件未做任何平台私有改造（仅配置后端）|
 
 ### 4.3 交付物定义
 
 |交付物|描述|
 |-|-|
 |hermes OTLP 接入能力|后端解析/归并/标识对 hermes 的支持（复用并必要扩展现有 OTLP 通路）|
-|hermes 接入引导|安装指导页/框架选择器中的 hermes 选项与配置说明|
-|hermes 接入文档|hermes 侧 OTLP exporter 配置指南（endpoint、鉴权、语义约定要求）|
+|hermes 接入引导|安装指导页/框架选择器中的 hermes 选项（`plugin` 接入）+ hermes-otel 插件安装步骤 + otlp 后端配置说明|
+|**hermes-otel 客户端插件接入规约**|以开源 `briancaffey/hermes-otel` 为基础的安装与 `otlp` 后端配置指南（endpoint、`x-witty-api-key`、`service.name=hermes`、协议、采样/隐私开关），并记录其默认发出的属性约定（OpenInference + OTel GenAI）|
+|hermes 接入文档|端到端接入指南（客户端插件 + 服务端语义约定要求 + 排障自检）|
 |回归与新增测试|覆盖上述验收准则的测试用例|
 |子 Agent 多 Execution 树能力|hermes 多 Agent 运行拆多条 Execution + agent 树（与 opencode 对齐）|
 |agent 自动注册能力|hermes 主/子 Agent 自动注册 RegisteredAgent|
@@ -245,8 +266,9 @@ OTLP 路径不传 agent 树字段（traces/route.ts:194-205）、各框架 skill
 - `Execution.framework` 取自 OTLP `service.name`（route.ts:198），故 hermes 框架标识可由 `service.name=hermes` 驱动。
 - 当前 traces 端点仅支持 `application/json`，`application/x-protobuf` 返回 415（route.ts:45-47）；无 gRPC 服务端。
 - 会话归并键优先级：`session.id` → `service.instance.id` → `traceId`（route.ts:144-151）。
-- Claude Code 已采用「仅配置环境变量把官方 OTel 指向平台端点」的零插件接入方式，是 hermes 最接近的参照模板。
-- 框架选择器当前枚举：opencode / claude / openclaw（`src/app/api/ingest/setup/route.ts`），新增 hermes 需在此扩展。
+- **接入模式对照（v0.4 修正）**：Claude Code 是「官方内置 OTel + 仅配置环境变量」的零插件接入；hermes **不同**——内核无 OTel，必须装 hermes-otel 插件才能产出 OTLP。故 hermes 接入模式为 `plugin`（装插件 + 配 otlp 后端），**不能照搬 Claude 的「仅配置」模板**。最接近的参照是「装一个把私有事件翻译成 OTLP 的社区插件，再把它指向平台」。
+- 框架选择器当前枚举：opencode / claude / openclaw（`src/app/api/ingest/setup/route.ts`），新增 hermes 需在此扩展；与同批 `framework-adapter-registry` 的 `listFrameworks()` **合并为单一出处**。
+- **同批未开发的关联设计（v0.4 新增依赖）**：`otel-spool-consumer`（把 traces 端点退化为薄壳 + 后台消费者异步聚合）、`framework-adapter-registry`（`getAdapter(framework)` 查表，禁 per-framework 裸分支）。三者同批实现，hermes 服务端解析须落在这两套目标架构上（见 Phase2 §2.1 与 §8.3 兼容性附件）。
 
 ## 变更记录（合成文档）
 
@@ -256,5 +278,6 @@ OTLP 路径不传 agent 树字段（traces/route.ts:194-205）、各框架 skill
 | v0.2 | 可行性验证修订：rejudge 第二处 switch 统一化、framework 兜底澄清、缺 resourceSpans 确定性 400、并发幂等定稿、setup 四副本+共享常量 |
 | v0.3 | **refine：skill / subagent 一等公民**——新增 FR-010/011/012/013、NFR-007、BR-007/008/009、AC-011/012/013、D-004/D-005、§2.2.4/2.2.5、IF-N05、任务 T007~T010 与 T004 升级 |
 | v0.3.1（本合成） | 据代码二次核对修正两处 ERROR：①`extractObservedAgentRegistrations` 实为 `agent-registration.ts:14` 框架无关函数（不加分支、靠标记自动注册）；②`buildAgentCallTree` 无 parentSpanId 能力，改为「适配层把 hermes 整形为 opencode 同构 interaction，建树/派生/注册函数零改动」。同步收敛冻结区与任务边界（T008 整形为关键、T009 仅解 :1937 门、T010 多半零改、T006 纯 UI 消费）|
+| **v0.4（本次 refine）** | **纠正「无需插件/仅配置 exporter」事实性错误前提**：据源文档 `hermes-otel-设计文档.md`，hermes 内核不支持 OTel、仅暴露 8 个 hook，必须**客户端插件**才能产出 OTLP。① §1.1/1.2 改为「双层适配器」叙事，客户端**复用开源 `briancaffey/hermes-otel`** 配 `otlp` 后端；② 新增 S-014/S-015、BR-010/BR-011、FR-006 升级 + FR-014、AC-014/TC-013、交付物「客户端插件接入规约」；③ §5.2 修正 Claude「仅配置」参照、声明同批未开发的 `otel-spool-consumer`/`framework-adapter-registry` 为服务端目标架构依赖（BR-011）|
 
-> 注：本文件为三阶段 + refine + 代码核对修正的**合成终稿**，取代此前的分阶段草稿与 .refine 副本。
+> 注：本文件为三阶段 + refine + 代码核对修正的合成稿；v0.4 在 `.refine` 副本上做最小修订（纠正前提 + 纳入客户端插件 + 同批兼容性），原 v0.3.1 文件保留以便生成变更记录。
