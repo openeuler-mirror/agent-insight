@@ -215,18 +215,23 @@ function FaultPageContent() {
         router.push(`${window.location.pathname}?${params.toString()}`, { scroll: false });
     };
 
-    // 同步 URL taskId → selectedExecution
+    // 同步 URL taskId / executionId → selectedExecution
+    // executionId 为质量监控下钻入口（仅加性）：命中列表则按 task_id/upload_id 选中；
+    // 列表未含该 trace（如内部 agent 不在默认数据源）时构造最小 stub，由详情视图按 id 直接加载完整 trace。
+    // 不改既有 ?agent= / ?taskId= 行为（?taskId 未命中仍回退默认列表）。
     useEffect(() => {
-        const taskId = searchParams?.get('taskId');
-        if (taskId) {
-            const exec = data.find(e => e.task_id === taskId || e.upload_id === taskId);
-            if (exec && selectedExecution !== exec) {
-                setSelectedExecution(exec);
+        const taskKey = searchParams?.get('taskId');
+        const execKey = searchParams?.get('executionId');
+        const key = taskKey || execKey;
+        if (key) {
+            const exec = data.find(e => e.task_id === key || e.upload_id === key);
+            if (exec) {
+                if (selectedExecution !== exec) setSelectedExecution(exec);
+            } else if (execKey && (!selectedExecution || (selectedExecution.task_id !== key && selectedExecution.upload_id !== key))) {
+                setSelectedExecution({ timestamp: new Date().toISOString(), task_id: key, upload_id: key } as Execution);
             }
-        } else {
-            if (selectedExecution) {
-                setSelectedExecution(null);
-            }
+        } else if (selectedExecution) {
+            setSelectedExecution(null);
         }
     }, [searchParams, data]);
 
