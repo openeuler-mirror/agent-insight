@@ -595,6 +595,68 @@ const GLOSSARY = {
     body: '正在被引用的激活版本，作为优化的基线（如 v0 当前）。',
   },
 
+  // ===== §11.5 质量监控 =====
+  'quality-monitoring': {
+    name: '质量监控',
+    tag: 'metric',
+    body: '以单个 Agent 为对象，对其时间窗内全部 trace 做整体度量：四维评分、趋势、统一问题汇总，并可下钻到单条 trace 诊断。回答"这个 Agent 整体好不好、先修哪个问题"。',
+  },
+  'quality-composite-score': {
+    name: '综合质量分',
+    tag: 'metric',
+    body: '把窗口内全部 trace 的四维表现压成的总分（0–100）。按 P0/P1/P2 优先级加权；任一 P0 硬约束命中（如安全违规）时封顶降级标红。状态按绝对阈值判定：≥85 达标 / 70–85 关注 / <70 异常，不与其他 Agent 比排名。',
+    formula: '综合分 = Σ(层均值 × 层权重)；权重 P0 0.55 / P1 0.30 / P2 0.15（缺层时重新归一）',
+  },
+  'quality-priority-tiers': {
+    name: '指标优先级 P0/P1/P2',
+    tag: 'metric',
+    body: 'P0=必达基线：任务完成度、安全、工具正确性、成本；P1=重要进阶：计划效率、约束遵循、工具归因（依赖轨迹评测，无数据时记 N/A）；P2=增益项（如用户满意度，暂未启用）。N/A 的层不参与综合分加权。',
+  },
+  'quality-deterministic-baseline': {
+    name: '确定性打底',
+    tag: 'eval',
+    body: '没有模型评测分的 trace，其指标由确定性规则推断：有工具报错或失败记录 → 判失败；无任何失败信号 → 视为成功。零模型成本但偏乐观，须结合评测覆盖一起判读。',
+  },
+  'quality-eval-coverage': {
+    name: '评测覆盖',
+    tag: 'eval',
+    body: '窗口内有模型评测分（judge 结果分或轨迹评测分）的 trace 占比。覆盖越低，分数越依赖确定性推断；可通过采样回填提升覆盖。',
+    formula: '评测覆盖 = 已评测 trace 数 ÷ 窗口内 trace 总数',
+  },
+  'quality-pass-rate': {
+    name: '达标率',
+    tag: 'metric',
+    body: '窗口内"无失败信号"的 trace 占比（确定性口径：无工具报错、无失败记录、judge 未判错）。',
+    formula: '达标率 = 成功 trace 数 ÷ trace 总数',
+  },
+  'quality-impact': {
+    name: '影响度',
+    tag: 'metric',
+    body: '统一问题汇总的排序键，回答"先修哪个"：频次越高、越严重、影响面越聚焦的问题排越前。',
+    formula: '影响度 = 频次 × 严重度权重 ÷ 受影响维度数',
+  },
+  'quality-pareto': {
+    name: '帕累托累计',
+    tag: 'metric',
+    body: '问题按频次降序排列后的累计占比，用于判断"修前几类能消掉多大比例的报错"。通常头部少数几类覆盖大多数报错次数。',
+  },
+  'quality-skill-drag': {
+    name: 'Skill 拖累榜',
+    tag: 'skill',
+    body: '按 Skill 聚合窗口内未解决的 SkillIssue，回答"哪个 skill 在拖累这个 Agent"。点「去优化」直达 Skills 优化工作台，修复后自动销账。',
+    formula: '拖累分 = Σ(未解决问题的严重度权重)；受影响 = 调用该 skill 的 trace 占比',
+  },
+  'quality-expected-gain': {
+    name: '预期收益（估）',
+    tag: 'metric',
+    body: '修复该问题后达标率提升的保守估算：按关联 trace 占窗口 trace 的比例推算，封顶于剩余提升空间。仅供排序参考，非承诺值。',
+  },
+  'quality-attribution': {
+    name: '归因标签',
+    tag: 'fault',
+    body: '问题该派给谁修：agent逻辑（提示词/Skill/编排）、模型能力（理解/幻觉）、工具&infra（超时/限流/环境）、外部输入（用户输入或上游数据问题）。当前由确定性规则与评测信号推断。',
+  },
+
   // ===== §12 配置 =====
   'model-registry': {
     name: '模型注册',

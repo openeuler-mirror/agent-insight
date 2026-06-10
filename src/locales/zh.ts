@@ -900,6 +900,7 @@ details: {
       fix: '建议',
       skillDrag: 'Skill 拖累榜',
       skillDragHint: '哪个 skill 在拖累这个 Agent · 来自 SkillIssue 未解决项',
+      skillDragEmpty: '窗口内无关联的 Skill 问题（未触发 skill，或评测未发现问题）',
       unresolvedN: '未解决',
       affected: '受影响',
       optimize: '去优化',

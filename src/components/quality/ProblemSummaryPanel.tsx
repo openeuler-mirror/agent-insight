@@ -3,6 +3,7 @@
 import React from 'react';
 import { AlertTriangle, ArrowUpRight } from 'lucide-react';
 import { useLocale } from '@/lib/client/locale-context';
+import { Term } from '@/components/text/Term';
 import type { QualityReport, ProblemItem } from '@/lib/engine/quality-monitoring/types';
 import { severityColor, ATTR_COLOR } from './quality-ui';
 
@@ -34,7 +35,10 @@ export function ProblemSummaryPanel({ report, onDrillTrace }: {
                         </span>
                     </span>
                 )}
-                <span style={{ fontSize: 10.5, color: 'var(--foreground-muted)' }}>· {t('quality.problems.hint')}</span>
+                <span style={{ fontSize: 10.5, color: 'var(--foreground-muted)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    · {t('quality.problems.hint')}
+                    <Term id="quality-impact" render="compact" />
+                </span>
             </div>
 
             {problems.length === 0 && report.skillDrag.length === 0 ? (
@@ -73,17 +77,22 @@ export function ProblemSummaryPanel({ report, onDrillTrace }: {
                         ) : (
                             <div style={{ fontSize: 11.5, color: 'var(--foreground-muted)', padding: '8px 0' }}>—</div>
                         )}
-                        <div style={{ fontSize: 11, color: 'var(--foreground-muted)', background: 'var(--background-secondary)', border: '1px dashed var(--border)', borderRadius: 8, padding: '9px 12px', lineHeight: 1.5 }}>
+                        <div style={{ fontSize: 11, color: 'var(--foreground-muted)', background: 'var(--background-secondary)', border: '1px dashed var(--border)', borderRadius: 8, padding: '9px 12px', lineHeight: 1.5, display: 'flex', alignItems: 'center', gap: 4 }}>
                             {t('quality.problems.pareto')}
+                            <Term id="quality-pareto" render="compact" />
                         </div>
 
-                        {/* Skill 拖累榜：哪个 skill 在拖累这个 Agent（SkillIssue 未解决项聚合） */}
-                        {report.skillDrag.length > 0 && (
-                            <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
-                                <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 8 }}>
-                                    <span style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--foreground-secondary)' }}>{t('quality.problems.skillDrag')}</span>
-                                    <span style={{ fontSize: 9.5, color: 'var(--foreground-muted)' }}>{t('quality.problems.skillDragHint')}</span>
-                                </div>
+                        {/* Skill 拖累榜：哪个 skill 在拖累这个 Agent（SkillIssue 未解决项聚合）。
+                            空数据也渲染标题+空态提示，保证功能可发现。 */}
+                        <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                                <span style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--foreground-secondary)' }}>{t('quality.problems.skillDrag')}</span>
+                                <Term id="quality-skill-drag" render="compact" />
+                                <span style={{ fontSize: 9.5, color: 'var(--foreground-muted)' }}>{t('quality.problems.skillDragHint')}</span>
+                            </div>
+                            {report.skillDrag.length === 0 ? (
+                                <div style={{ fontSize: 11, color: 'var(--foreground-muted)', padding: '2px 0' }}>{t('quality.problems.skillDragEmpty')}</div>
+                            ) : (
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                                     {report.skillDrag.slice(0, 5).map((s) => (
                                         <div key={`${s.name}@${s.version}`} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5, flexWrap: 'wrap' }}>
@@ -102,8 +111,8 @@ export function ProblemSummaryPanel({ report, onDrillTrace }: {
                                         </div>
                                     ))}
                                 </div>
-                            </div>
-                        )}
+                            )}
+                        </div>
                     </div>
                 </div>
             )}

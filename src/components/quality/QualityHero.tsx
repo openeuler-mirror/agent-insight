@@ -4,6 +4,7 @@ import React from 'react';
 import { Sparkles, ArrowUpRight, Wrench } from 'lucide-react';
 import { useLocale } from '@/lib/client/locale-context';
 import { StatusBadge } from '@/components/feedback/StatusBadge';
+import { Term } from '@/components/text/Term';
 import type { QualityReport, ProblemItem, DimScore } from '@/lib/engine/quality-monitoring/types';
 import { statusToKind, scoreColor, severityColor, ATTR_COLOR, fmtNum } from './quality-ui';
 
@@ -57,7 +58,10 @@ export function QualityHero({ report, onDrillTrace, onAnchor }: {
             <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', alignItems: 'stretch' }}>
                 {/* ① 综合分（置信度调制） */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 200, flex: '0 0 auto' }}>
-                    <div style={{ fontSize: 10.5, color: 'var(--foreground-muted)', fontWeight: 600 }}>{t('quality.summary.composite')}</div>
+                    <div style={{ fontSize: 10.5, color: 'var(--foreground-muted)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
+                        {t('quality.summary.composite')}
+                        <Term id="quality-composite-score" render="compact" />
+                    </div>
                     <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
                         <span style={{ fontSize: 40, fontWeight: 800, letterSpacing: '-0.02em', lineHeight: 1, color: scoreCol }}>
                             {fmtNum(composite.score)}
@@ -74,7 +78,7 @@ export function QualityHero({ report, onDrillTrace, onAnchor }: {
                         {composite.capped && <StatusBadge status="error" variant="outline" label={t('quality.summary.capped')} />}
                     </div>
                     {/* 可信度标注：低评测覆盖/样本不足时显式提醒，调制对分数的信任 */}
-                    <div style={{ fontSize: 10.5, lineHeight: 1.5 }}>
+                    <div style={{ fontSize: 10.5, lineHeight: 1.5, display: 'flex', alignItems: 'center', gap: 4 }}>
                         {meta.lowSample ? (
                             <span style={{ color: 'var(--warning)', fontWeight: 700 }}>⚠ {t('quality.hero.lowSampleTag')}</span>
                         ) : (
@@ -82,12 +86,14 @@ export function QualityHero({ report, onDrillTrace, onAnchor }: {
                                 {lowJudge ? `${t('quality.hero.deterministicTag')} · ` : ''}{t('quality.hero.judgeCoverage')} {judgedPct}%
                             </span>
                         )}
+                        <Term id={lowJudge ? 'quality-deterministic-baseline' : 'quality-eval-coverage'} render="compact" />
                     </div>
                     {/* P0/P1/P2 紧凑条 */}
-                    <div style={{ display: 'flex', gap: 10, marginTop: 2 }}>
+                    <div style={{ display: 'flex', gap: 10, marginTop: 2, alignItems: 'flex-start' }}>
                         <MiniP tag="P0" v={composite.p0} tone="var(--error)" />
                         <MiniP tag="P1" v={composite.p1} tone="var(--warning)" />
                         <MiniP tag="P2" v={composite.p2} tone="var(--foreground-muted)" />
+                        <Term id="quality-priority-tiers" render="compact" />
                     </div>
                     {nonEmpty.length >= 2 && <Spark values={nonEmpty.map((b) => b.composite)} color={scoreCol} />}
                 </div>
@@ -107,9 +113,10 @@ export function QualityHero({ report, onDrillTrace, onAnchor }: {
                         {top[0] && <> 优先治理右侧 Top 问题，预计能最快抬升综合分。</>}
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 5, fontSize: 11.5, color: 'var(--foreground-secondary)', borderTop: '1px solid var(--border)', paddingTop: 10, marginTop: 2 }}>
-                        <span>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
                             {t('quality.summary.evaluated')} <b style={{ color: 'var(--foreground)' }}>{meta.n}</b> {t('quality.summary.times')}
                             {' · '}{t('quality.summary.passRate')} <b style={{ color: 'var(--foreground)' }}>{fmtNum(meta.passRate)}%</b>
+                            <Term id="quality-pass-rate" render="compact" />
                         </span>
                         <span>
                             {t('quality.summary.errors')} <b style={{ color: errorCount ? 'var(--error)' : 'var(--foreground)' }}>{errorCount}</b> {t('quality.summary.times')}
@@ -173,8 +180,9 @@ function TopProblemRow({ rank, p, meta, t, onDrillTrace }: {
                     <span style={{ fontSize: 9, fontWeight: 600, padding: '1px 5px', borderRadius: 4, background: attr.bg, color: attr.fg }}>{p.attribution}</span>
                     <span style={{ fontSize: 10, color: 'var(--foreground-muted)' }}>{p.frequency} 次</span>
                     {gain && (
-                        <span title={t('quality.hero.gainNote')} style={{ fontSize: 10, fontWeight: 700, color: 'var(--success)' }}>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2, fontSize: 10, fontWeight: 700, color: 'var(--success)' }}>
                             {t('quality.hero.expectedGain')} {gain}<sup style={{ fontSize: 8 }}>估</sup>
+                            <Term id="quality-expected-gain" render="compact" />
                         </span>
                     )}
                 </div>

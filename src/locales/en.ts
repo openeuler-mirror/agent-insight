@@ -900,6 +900,7 @@ export const en = {
       fix: 'Fix',
       skillDrag: 'Skill drag ranking',
       skillDragHint: 'which skill is dragging this agent · from unresolved SkillIssues',
+      skillDragEmpty: 'No skill issues linked in this window (no skill invoked, or none found by evals)',
       unresolvedN: 'Unresolved',
       affected: 'Affected',
       optimize: 'Optimize',
