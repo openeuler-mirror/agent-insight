@@ -113,6 +113,12 @@ export interface TrendBucket {
 
 export type TrendGranularity = 'hour' | 'day' | 'week';
 
+/** 问题项关联的 Skill 资产（来自 SkillIssue 表，用于「去优化」路由到 skill-opt）。 */
+export interface SkillRef {
+    name: string;
+    version: number | null;
+}
+
 /** 统一问题汇总项（DC-009 / §4.3）。 */
 export interface ProblemItem {
     key: string;
@@ -128,6 +134,22 @@ export interface ProblemItem {
     /** 节点类型（错误来源，BR-012：节点×错误码×对象）。 */
     node?: string;
     suggestedFix?: string;
+    /** 来自 SkillIssue 表的问题带 skill 归属 → 问题卡可一键「去优化」。 */
+    skillRef?: SkillRef;
+}
+
+/** Skill 拖累榜行：「哪个 skill 在拖累这个 Agent」（复用 SkillIssue 表聚合）。 */
+export interface SkillDragItem {
+    name: string;
+    version: number | null;
+    /** 窗口内关联到 T 的未解决问题数（按 dedupKey 去重）。 */
+    unresolved: number;
+    topSeverity: Severity;
+    /** T 中调用该 skill（或其评测覆盖）的 trace 数与占比。 */
+    affectedTraces: number;
+    affectedPct: number;              // 0–100
+    /** 排序键：未解决问题的严重度加权和。 */
+    dragScore: number;
 }
 
 /** /report 返回体。 */
@@ -143,6 +165,10 @@ export interface QualityReport {
     problems: ProblemItem[];          // 已按影响度排序
     /** 错误聚类的节点分布（FR-009）。 */
     errorNodeDistribution: { node: string; count: number; pct: number }[];
+    /** Skill 拖累榜（按 dragScore 降序）；窗口内无 skill 问题时为空数组。 */
+    skillDrag: SkillDragItem[];
+    /** 问题全量计数（problems 数组按影响度封顶返回，计数用此处全量值，防徽章失真）。 */
+    problemCounts: { error: number; eval: number; total: number; errorEvents: number };
     coverage: { judged: number; total: number; perDimension: Record<string, number> };
     meta: {
         n: number;

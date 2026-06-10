@@ -52,3 +52,5 @@ export const METRIC_REGISTRY: Record<MetricKey, {
 export const MAX_TRACES = 5000;
 /** 问题汇总结构化错误重解析的 trace 上限（仅对含错误信号的样本解析交互，控成本）。 */
 export const MAX_ERROR_PARSE_TRACES = 400;
+/** /report 返回的问题项上限（按影响度取头部；动态 dedupKey 近乎逐条唯一，不封顶会把 payload 撑爆）。 */
+export const MAX_PROBLEM_ITEMS = 100;

@@ -898,6 +898,12 @@ details: {
       empty: '窗口内无错误事件与评测问题',
       pareto: '帕累托（频次降序 + 累计占比）',
       fix: '建议',
+      skillDrag: 'Skill 拖累榜',
+      skillDragHint: '哪个 skill 在拖累这个 Agent · 来自 SkillIssue 未解决项',
+      unresolvedN: '未解决',
+      affected: '受影响',
+      optimize: '去优化',
+      dragScore: '拖累分',
     },
     table: {
       title: '执行记录评分',

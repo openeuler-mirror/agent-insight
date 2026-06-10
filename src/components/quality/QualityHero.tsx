@@ -42,9 +42,11 @@ export function QualityHero({ report, onDrillTrace, onAnchor }: {
     const bottleneck = dimEntries.filter(([, d]) => d.coverage > 0).sort((a, b) => a[1].score - b[1].score)[0];
     const top = problems.slice(0, 3);
 
-    const errorCount = problems.filter((p) => p.source === '错误').reduce((s, p) => s + p.frequency, 0);
-    const clusterCount = problems.filter((p) => p.source === '错误').length;
-    const evalIssueCount = problems.length - clusterCount;
+    // 全量计数来自 problemCounts（problems 数组按影响度封顶，直接 filter 会少算）
+    const errorCount = report.problemCounts.errorEvents;
+    const clusterCount = report.problemCounts.error;
+    const evalIssueCount = report.problemCounts.eval;
+    const totalProblems = report.problemCounts.total;
 
     return (
         <section id="verdict" style={{
@@ -125,9 +127,9 @@ export function QualityHero({ report, onDrillTrace, onAnchor }: {
                         <Wrench size={13} style={{ color: 'var(--error)' }} />
                         <span style={{ fontSize: 12, fontWeight: 800 }}>{t('quality.hero.fixFirst')}</span>
                         <span style={{ flex: 1 }} />
-                        {problems.length > 0 && (
+                        {totalProblems > 0 && (
                             <button onClick={() => onAnchor('problems')} style={linkBtn}>
-                                {t('quality.hero.viewAll')} {problems.length} {t('quality.hero.problemsUnit')} ↓
+                                {t('quality.hero.viewAll')} {totalProblems} {t('quality.hero.problemsUnit')} ↓
                             </button>
                         )}
                     </div>
@@ -177,11 +179,20 @@ function TopProblemRow({ rank, p, meta, t, onDrillTrace }: {
                     )}
                 </div>
             </div>
-            {p.relatedTraces.length > 0 && (
-                <button onClick={() => onDrillTrace(p.relatedTraces[0])} title={t('quality.hero.drill')} style={{ ...linkBtn, flex: '0 0 auto', display: 'inline-flex', alignItems: 'center', gap: 2 }}>
-                    <ArrowUpRight size={13} />
-                </button>
-            )}
+            <span style={{ display: 'inline-flex', gap: 6, flex: '0 0 auto' }}>
+                {p.skillRef && (
+                    <a href={`/skill-opt/${encodeURIComponent(p.skillRef.name)}/${p.skillRef.version ?? 0}`}
+                        title={`${p.skillRef.name}@v${p.skillRef.version ?? 0} · ${t('quality.problems.optimize')}`}
+                        style={{ ...linkBtn, color: 'var(--success)', display: 'inline-flex', alignItems: 'center' }}>
+                        <Wrench size={12} />
+                    </a>
+                )}
+                {p.relatedTraces.length > 0 && (
+                    <button onClick={() => onDrillTrace(p.relatedTraces[0])} title={t('quality.hero.drill')} style={{ ...linkBtn, display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+                        <ArrowUpRight size={13} />
+                    </button>
+                )}
+            </span>
         </div>
     );
 }

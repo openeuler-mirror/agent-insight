@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { buildProblemSummary, rankProblems, lowScoreProblems, clusterErrorSteps, isErrorStep } from '@/lib/engine/quality-monitoring/problem-summary';
+import {
+    buildProblemSummary, rankProblems, lowScoreProblems, clusterErrorSteps, isErrorStep,
+    tableSkillIssueProblems, buildSkillDrag, type SkillIssueRowLite,
+} from '@/lib/engine/quality-monitoring/problem-summary';
 import type { TraceLite, DimScore } from '@/lib/engine/quality-monitoring/types';
 import type { FaultPathStep } from '@/lib/engine/observability/fault-path';
 
@@ -84,6 +87,60 @@ test('空源 → 空清单、不报错', () => {
     assert.equal(res.problems.length, 0);
     assert.equal(res.errorSummary.clusterCount, 0);
     assert.equal(rankProblems(res.problems).length, 0);
+});
+
+// ── SkillIssue 表级来源（切片1/2）────────────────────────────────────────────
+function issueRow(over: Partial<SkillIssueRowLite>): SkillIssueRowLite {
+    return { dedupKey: 'k1', severity: 'medium', summary: '工具误用：参数缺失', skillName: 'log-triage', version: 3, executionId: 'e1', category: '工具误用', ...over };
+}
+
+test('tableSkillIssueProblems：同 dedupKey 聚合、带 skillRef/suggestedFix/真实严重度', () => {
+    const rows = [
+        issueRow({ executionId: 'e1', suggestedFix: '补充参数示例' }),
+        issueRow({ executionId: 'e2', severity: 'high' }),                       // 同 dedupKey 跨 trace
+        issueRow({ dedupKey: 'k2', category: '关键观点遗漏', summary: '遗漏根因结论', executionId: 'e1' }),
+    ];
+    const items = tableSkillIssueProblems(rows);
+    assert.equal(items.length, 2, '按 dedupKey 聚为 2 项');
+    const k1 = items.find((p) => p.key.includes('k1'))!;
+    assert.equal(k1.frequency, 2);
+    assert.equal(k1.severity, 'high', '取簇内最高严重度');
+    assert.deepEqual(k1.skillRef, { name: 'log-triage', version: 3 });
+    assert.equal(k1.suggestedFix, '补充参数示例');
+    assert.equal(k1.relatedTraces.length, 2);
+    const k2 = items.find((p) => p.key.includes('k2'))!;
+    assert.deepEqual(k2.affectedDimensions, ['结果'], '观点遗漏 → 结果维');
+});
+
+test('buildSkillDrag：按 skill 聚合未解决数/受影响面/拖累分排序', () => {
+    const rows = [
+        issueRow({ dedupKey: 'a', severity: 'high' }),
+        issueRow({ dedupKey: 'b', severity: 'medium', executionId: 'e2' }),
+        issueRow({ dedupKey: 'c', skillName: 'net-diag', version: 1, severity: 'low', executionId: 'e3' }),
+    ];
+    const traces: TraceLite[] = [
+        trace({ executionId: 'e1', invokedSkills: [{ name: 'log-triage', version: 3 }] }),
+        trace({ executionId: 'e2', invokedSkills: [{ name: 'log-triage', version: 3 }] }),
+        trace({ executionId: 'e3' }),
+        trace({ executionId: 'e4' }),
+    ];
+    const drag = buildSkillDrag(rows, traces);
+    assert.equal(drag.length, 2);
+    assert.equal(drag[0].name, 'log-triage', '严重度加权和高者居前');
+    assert.equal(drag[0].unresolved, 2, 'dedupKey 去重');
+    assert.equal(drag[0].affectedPct, 50, '2/4 trace 受影响');
+    assert.equal(drag[1].name, 'net-diag');
+    assert.equal(drag[1].affectedTraces, 1, 'invokedSkills 未匹配时按评测覆盖 executionId 兜底');
+});
+
+test('跨源去重：表级条目优先，JSON 快照同描述剔除', () => {
+    const traces: TraceLite[] = [
+        trace({ executionId: 'e1', skillIssues: [{ id: 'RC-0', type: 'root_cause', content: '工具误用：参数缺失', match_score: 0.2, explanation: 'x', weight: 1, is_skill_issue: true, reasoning: 'y' } as any] }),
+    ];
+    const res = buildProblemSummary({ traces, skillIssueRows: [issueRow({ summary: '工具误用：参数缺失' })] });
+    const dupes = res.problems.filter((p) => p.desc.includes('工具误用'));
+    assert.equal(dupes.length, 1, '同描述只留表级一条');
+    assert.ok(dupes[0].key.startsWith('skilltbl:'), '保留的是表级条目（带 skillRef/severity 真值）');
 });
 
 test('lowScoreProblems：低分维度转问题项', () => {

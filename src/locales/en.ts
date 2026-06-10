@@ -898,6 +898,12 @@ export const en = {
       empty: 'No errors or eval findings in window',
       pareto: 'Pareto (by frequency + cumulative %)',
       fix: 'Fix',
+      skillDrag: 'Skill drag ranking',
+      skillDragHint: 'which skill is dragging this agent · from unresolved SkillIssues',
+      unresolvedN: 'Unresolved',
+      affected: 'Affected',
+      optimize: 'Optimize',
+      dragScore: 'Drag score',
     },
     table: {
       title: 'Execution scores',

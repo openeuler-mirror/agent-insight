@@ -16,8 +16,8 @@ export function ProblemSummaryPanel({ report, onDrillTrace }: {
     const problems = report.problems;
     const maxImpact = Math.max(1, ...problems.map((p) => p.impact));
     const sevLabel: Record<string, string> = { high: t('quality.problems.high'), medium: t('quality.problems.medium'), low: t('quality.problems.low') };
-    const nErr = problems.filter((p) => p.source === '错误').length;
-    const nEval = problems.length - nErr;
+    const nErr = report.problemCounts.error;
+    const nEval = report.problemCounts.eval;
 
     return (
         <section id="problems" style={panel}>
@@ -37,7 +37,7 @@ export function ProblemSummaryPanel({ report, onDrillTrace }: {
                 <span style={{ fontSize: 10.5, color: 'var(--foreground-muted)' }}>· {t('quality.problems.hint')}</span>
             </div>
 
-            {problems.length === 0 ? (
+            {problems.length === 0 && report.skillDrag.length === 0 ? (
                 <div style={{ padding: 32, textAlign: 'center', color: 'var(--foreground-muted)', fontSize: 12 }}>{t('quality.problems.empty')}</div>
             ) : (
                 <div style={{ padding: '16px 18px', display: 'grid', gridTemplateColumns: '1.55fr 1fr', gap: 18 }}>
@@ -76,6 +76,34 @@ export function ProblemSummaryPanel({ report, onDrillTrace }: {
                         <div style={{ fontSize: 11, color: 'var(--foreground-muted)', background: 'var(--background-secondary)', border: '1px dashed var(--border)', borderRadius: 8, padding: '9px 12px', lineHeight: 1.5 }}>
                             {t('quality.problems.pareto')}
                         </div>
+
+                        {/* Skill 拖累榜：哪个 skill 在拖累这个 Agent（SkillIssue 未解决项聚合） */}
+                        {report.skillDrag.length > 0 && (
+                            <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+                                <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 8 }}>
+                                    <span style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--foreground-secondary)' }}>{t('quality.problems.skillDrag')}</span>
+                                    <span style={{ fontSize: 9.5, color: 'var(--foreground-muted)' }}>{t('quality.problems.skillDragHint')}</span>
+                                </div>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                                    {report.skillDrag.slice(0, 5).map((s) => (
+                                        <div key={`${s.name}@${s.version}`} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5, flexWrap: 'wrap' }}>
+                                            <span style={{ fontWeight: 700, color: 'var(--foreground)' }}>
+                                                {s.name}<span style={{ color: 'var(--foreground-muted)', fontWeight: 500 }}>@v{s.version ?? 0}</span>
+                                            </span>
+                                            <span style={{ fontSize: 9.5, fontWeight: 700, color: severityColor(s.topSeverity) }}>{sevLabel[s.topSeverity]}</span>
+                                            <span style={{ color: 'var(--foreground-secondary)' }}>
+                                                {t('quality.problems.unresolvedN')} <b style={{ color: 'var(--foreground)' }}>{s.unresolved}</b>
+                                                {' · '}{t('quality.problems.affected')} <b style={{ color: 'var(--foreground)' }}>{s.affectedPct}%</b>
+                                            </span>
+                                            <a href={`/skill-opt/${encodeURIComponent(s.name)}/${s.version ?? 0}`}
+                                                style={{ marginLeft: 'auto', fontSize: 10.5, fontWeight: 700, color: 'var(--success)', textDecoration: 'none', whiteSpace: 'nowrap' }}>
+                                                {t('quality.problems.optimize')} →
+                                            </a>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </div>
             )}
@@ -116,6 +144,21 @@ function ProblemRow({ rank, p, maxImpact, sevLabel, t, onDrill }: {
                         </button>
                     )}
                 </div>
+                {(p.suggestedFix || p.skillRef) && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
+                        {p.skillRef && (
+                            <a href={`/skill-opt/${encodeURIComponent(p.skillRef.name)}/${p.skillRef.version ?? 0}`}
+                                style={{ fontSize: 9.5, fontWeight: 700, padding: '2px 7px', borderRadius: 5, background: 'var(--success-subtle)', color: 'var(--success)', textDecoration: 'none', whiteSpace: 'nowrap' }}>
+                                {p.skillRef.name}@v{p.skillRef.version ?? 0} · {t('quality.problems.optimize')} →
+                            </a>
+                        )}
+                        {p.suggestedFix && (
+                            <span title={p.suggestedFix} style={{ fontSize: 10.5, color: 'var(--foreground-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 520 }}>
+                                {t('quality.problems.fix')}：{p.suggestedFix}
+                            </span>
+                        )}
+                    </div>
+                )}
             </div>
         </div>
     );

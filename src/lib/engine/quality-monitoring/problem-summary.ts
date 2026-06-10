@@ -5,7 +5,19 @@
 
 import { buildFaultPathSteps, type FaultPathStep } from '@/lib/engine/observability/fault-path';
 import type { FailureItem } from '@/lib/engine/evaluation/judge';
-import type { TraceLite, ProblemItem, Attribution, Severity, DimScore } from './types';
+import type { TraceLite, ProblemItem, Attribution, Severity, DimScore, SkillDragItem } from './types';
+
+/** SkillIssue 表行的精简投影（由编排层 join Evaluation.executionId∈T 加载，只取未解决的）。 */
+export interface SkillIssueRowLite {
+    dedupKey: string;
+    severity: string;                 // 'high' | 'medium' | 'low'（表内为自由字符串，解析时容错）
+    summary: string;
+    suggestedFix?: string | null;
+    category?: string | null;         // '轨迹偏差' | '工具误用' | '关键观点遗漏' | ...
+    skillName: string;
+    version: number | null;
+    executionId?: string | null;
+}
 
 const SEV_WEIGHT: Record<Severity, number> = { high: 3, medium: 2, low: 1 };
 
@@ -105,6 +117,8 @@ export interface ProblemSummaryInput {
     traces: TraceLite[];
     /** executionId 或 taskId → 原始 interactions（调用方注入；缺失则跳过结构化解析并计覆盖率）。 */
     interactionsByTrace?: Map<string, unknown[]>;
+    /** SkillIssue 表行（未解决，已 scope 到 T）；缺省退化为仅用 Execution.skillIssues JSON 快照。 */
+    skillIssueRows?: SkillIssueRowLite[];
 }
 
 export interface ProblemSummaryResult {
@@ -208,6 +222,88 @@ function evalProblems(traces: TraceLite[]): ProblemItem[] {
     return out;
 }
 
+function parseSeverity(s: string | null | undefined): Severity {
+    return s === 'high' || s === 'medium' || s === 'low' ? s : 'medium';
+}
+
+/** SkillIssue.category → 受影响维度（粗映射）。 */
+function dimsOfCategory(category: string | null | undefined): string[] {
+    if (!category) return ['过程'];
+    if (/观点遗漏|事实错误|结果/.test(category)) return ['结果'];
+    return ['过程']; // 轨迹偏差 / 工具误用 / 关键动作执行不足 / 静态扫描 / 触发评测 等
+}
+
+/**
+ * 来源B'：SkillIssue 表（按 dedupKey 聚合 = 同一问题跨评测的身份键）。
+ * 相比 Execution.skillIssues JSON 快照：有真实严重度、suggestedFix、生命周期(只取未解决)、skill 归属。
+ */
+export function tableSkillIssueProblems(rows: SkillIssueRowLite[]): ProblemItem[] {
+    const byKey = new Map<string, {
+        rows: SkillIssueRowLite[]; traces: Set<string>;
+    }>();
+    for (const r of rows) {
+        const key = `${r.skillName}@${r.version ?? 0}:${r.dedupKey}`;
+        const e = byKey.get(key) ?? { rows: [], traces: new Set<string>() };
+        e.rows.push(r);
+        if (r.executionId) e.traces.add(r.executionId);
+        byKey.set(key, e);
+    }
+    const out: ProblemItem[] = [];
+    for (const [key, e] of byKey) {
+        const first = e.rows[0];
+        // 严重度取簇内最高（prevalence 抬升的完整逻辑在 skill-issues 引擎，这里取保守近似）
+        const sev = e.rows.map((r) => parseSeverity(r.severity))
+            .sort((a, b) => SEV_WEIGHT[b] - SEV_WEIGHT[a])[0];
+        out.push({
+            key: `skilltbl:${key}`,
+            desc: clip(first.summary, 80),
+            source: '评测',
+            affectedDimensions: dimsOfCategory(first.category),
+            frequency: e.rows.length,                  // T 范围内的 prevalence
+            severity: sev,
+            attribution: 'agent逻辑',                   // skill 问题定义上归 agent 逻辑，路由到 skill-opt
+            relatedTraces: [...e.traces],
+            impact: 0,
+            suggestedFix: first.suggestedFix ?? undefined,
+            skillRef: { name: first.skillName, version: first.version },
+        });
+    }
+    return out;
+}
+
+/** Skill 拖累榜：按 skill@version 聚合未解决问题，回答「哪个 skill 在拖累这个 Agent」。 */
+export function buildSkillDrag(rows: SkillIssueRowLite[], traces: TraceLite[]): SkillDragItem[] {
+    const bySkill = new Map<string, { name: string; version: number | null; dedup: Map<string, Severity>; traces: Set<string> }>();
+    for (const r of rows) {
+        const key = `${r.skillName}@${r.version ?? 0}`;
+        const e = bySkill.get(key) ?? { name: r.skillName, version: r.version, dedup: new Map<string, Severity>(), traces: new Set<string>() };
+        const sev = parseSeverity(r.severity);
+        const prev = e.dedup.get(r.dedupKey);
+        if (!prev || SEV_WEIGHT[sev] > SEV_WEIGHT[prev]) e.dedup.set(r.dedupKey, sev);
+        if (r.executionId) e.traces.add(r.executionId);
+        bySkill.set(key, e);
+    }
+    const n = traces.length || 1;
+    const out: SkillDragItem[] = [];
+    for (const e of bySkill.values()) {
+        // 受影响面：优先按 invokedSkills 匹配；评测覆盖的 executionId 兜底（两者口径取大）
+        const invoked = traces.filter((t) => t.invokedSkills?.some((s) => s.name === e.name)).length;
+        const affectedTraces = Math.max(invoked, e.traces.size);
+        const sevSum = [...e.dedup.values()].reduce((s, sev) => s + SEV_WEIGHT[sev], 0);
+        const topSeverity = [...e.dedup.values()].sort((a, b) => SEV_WEIGHT[b] - SEV_WEIGHT[a])[0] ?? 'low';
+        out.push({
+            name: e.name,
+            version: e.version,
+            unresolved: e.dedup.size,
+            topSeverity,
+            affectedTraces,
+            affectedPct: Math.round((affectedTraces / n) * 100),
+            dragScore: Math.round(sevSum * 10) / 10,
+        });
+    }
+    return out.sort((a, b) => b.dragScore - a.dragScore);
+}
+
 export function buildProblemSummary(input: ProblemSummaryInput): ProblemSummaryResult {
     const { clusters, errorTraces, eventCount } = clusterStructuredErrors(input);
 
@@ -226,7 +322,13 @@ export function buildProblemSummary(input: ProblemSummaryInput): ProblemSummaryR
         node: c.node,
     }));
 
-    const problems = [...errorProblems, ...evalProblems(input.traces)];
+    // 评测来源双轨：SkillIssue 表级聚合（真实严重度/suggestedFix/skill 归属/生命周期）优先，
+    // Execution.skillIssues/failures JSON 快照补充；同描述跨源去重，表级胜出。
+    const normDesc = (s: string) => clip(s, 48).toLowerCase();
+    const tableItems = tableSkillIssueProblems(input.skillIssueRows ?? []);
+    const tableDescs = new Set(tableItems.map((p) => normDesc(p.desc)));
+    const jsonItems = evalProblems(input.traces).filter((p) => !tableDescs.has(normDesc(p.desc)));
+    const problems = [...errorProblems, ...tableItems, ...jsonItems];
 
     // 节点分布（FR-009）
     const nodeCount = new Map<string, number>();
