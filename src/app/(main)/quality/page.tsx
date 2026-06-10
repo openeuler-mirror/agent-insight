@@ -116,8 +116,9 @@ export default function QualityPage() {
     return (
         <>
             <AppTopBar title={<Term id="quality-monitoring" label={t('quality.title')} />} showDefaultActions={false} />
-            <div style={{ flex: 1, overflowY: 'auto', padding: '18px 26px 48px', background: 'var(--background)' }}>
-                <div style={{ maxWidth: 1320, width: '100%', margin: '0 auto' }}>
+            {/* 容器规格对齐 fault/dashboard：全宽 + 18px 20px，不做限宽居中 */}
+            <div style={{ flex: 1, overflowY: 'auto', padding: '18px 20px 48px', background: 'var(--background)' }}>
+                <div style={{ width: '100%' }}>
                     <QualityConfigBar
                         agents={agents}
                         skills={skills}
