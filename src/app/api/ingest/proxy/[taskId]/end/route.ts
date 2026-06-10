@@ -1,12 +1,14 @@
 
-import { readConfig, saveExecutionRecord, findBestMatchConfig } from '@/lib/storage/data-service';
+import { readConfig, saveExecutionRecord, findBestMatchConfig, extractInvokedSkillsFromSessionInteractions } from '@/lib/storage/data-service';
 import { analyzeExecutionMatch, analyzeDynamicOnly } from '@/lib/engine/observability/flow-parser';
 import { analyzeFailures, analyzeSession, judgeAnswer } from '@/lib/engine/evaluation/judge';
 import { isEvaluatorTraceRecord } from '@/lib/evaluator-agent';
 import { db, prisma } from '@/lib/storage/prisma';
 import { endSession } from '@/lib/ingest/proxy-store';
 import { getActiveConfig } from '@/lib/storage/server-config';
+import { resolveFrameworkId } from '@/lib/ingest/adapters/registry';
 import { NextResponse } from 'next/server';
+import type { InvokedSkill } from '@/lib/shared/interaction-utils';
 
 import { SKILLS_EXTRACT_PROMPT } from '@/prompts/skills-prompt';
 
@@ -39,11 +41,6 @@ function parseSkillsFromModelResponse(content: string): string[] {
 
 const SKILLS_FETCH_TIMEOUT_MS = 25_000;
 
-interface InvokedSkill {
-  name: string;
-  version: number | null;
-}
-
 function extractSkillsWithVersionsFromWittySession(session: {
   interactions: { toolCalls?: any[]; responseMessage?: { tool_calls?: any[] } }[];
 }): InvokedSkill[] {
@@ -74,82 +71,6 @@ function extractSkillsWithVersionsFromWittySession(session: {
         }
       } catch {
       }
-    }
-  }
-  return skills;
-}
-
-function extractSkillsWithVersionsFromOpencodeSession(session: {
-  interactions: { toolCalls?: any[]; responseMessage?: { tool_calls?: any[] } }[];
-}): InvokedSkill[] {
-  const seen = new Set<string>();
-  const skills: InvokedSkill[] = [];
-  const skillNamePattern = /^[a-zA-Z0-9_\-\.]+$/;
-
-  for (const interaction of session.interactions) {
-    const calls =
-      interaction.toolCalls ??
-      interaction.responseMessage?.tool_calls ??
-      [];
-    for (const tc of calls) {
-      const name = tc?.function?.name ?? tc?.name;
-      if (name !== 'skill') continue;
-      const raw = tc?.function?.arguments ?? tc?.arguments ?? '';
-      if (!raw || typeof raw !== 'string') continue;
-      try {
-        const args = typeof raw === 'string' ? JSON.parse(raw) : raw;
-        const skillName = args?.name ?? args?.skill_name ?? args?.skillName ?? args?.skill;
-        if (skillName != null && String(skillName).trim()) {
-          const s = String(skillName).trim().replace(/^['"]+|['"]+$/g, '');
-          if (skillNamePattern.test(s) && !seen.has(s)) {
-            seen.add(s);
-            const version = args?.version != null ? Number(args.version) : null;
-            skills.push({ name: s, version: (version !== null && !isNaN(version)) ? version : null });
-          }
-        }
-      } catch {
-      }
-    }
-  }
-  return skills;
-}
-
-function collectSkillToolUseFromContent(
-  content: unknown,
-  seen: Set<string>,
-  skills: InvokedSkill[]
-): void {
-  if (!content || !Array.isArray(content)) return;
-  const skillNamePattern = /^[a-zA-Z0-9_\-\.]+$/;
-  for (const block of content) {
-    if (block?.type !== 'tool_use' || block?.name !== 'Skill') continue;
-    const input = block.input;
-    const skillName = input?.skill ?? input?.skill_name ?? input?.skillName ?? input?.name;
-    if (skillName == null || !String(skillName).trim()) continue;
-    const s = String(skillName).trim().replace(/^['"]+|['"]+$/g, '');
-    if (skillNamePattern.test(s) && !seen.has(s)) {
-      seen.add(s);
-      const version = input?.version != null ? Number(input.version) : null;
-      skills.push({ name: s, version: (version !== null && !isNaN(version)) ? version : null });
-    }
-  }
-}
-
-function extractSkillsWithVersionsFromClaudeSession(session: {
-  interactions: {
-    requestMessages?: { role?: string; content?: unknown }[];
-    responseMessage?: { content?: unknown };
-  }[];
-}): InvokedSkill[] {
-  const seen = new Set<string>();
-  const skills: InvokedSkill[] = [];
-
-  for (const interaction of session.interactions) {
-    collectSkillToolUseFromContent(interaction.responseMessage?.content, seen, skills);
-    const reqMsgs = interaction.requestMessages ?? [];
-    for (const msg of reqMsgs) {
-      if (msg?.role !== 'assistant') continue;
-      collectSkillToolUseFromContent(msg.content, seen, skills);
     }
   }
   return skills;
@@ -308,17 +229,16 @@ export async function POST(
       framework === 'witty' ||
       framework === 'witty(deepagents)';
     let skillsWithVersions: InvokedSkill[];
-    if (framework === 'claude') {
-      skillsWithVersions = extractSkillsWithVersionsFromClaudeSession(session);
-      if (skillsWithVersions.length === 0) {
-        console.log(`No Skill tool_use in Claude session for ${taskId}, falling back to model extraction...`);
+    const extractedByFramework = extractInvokedSkillsFromSessionInteractions(framework, session.interactions);
+    if (extractedByFramework !== null) {
+      const isClaudeFramework = resolveFrameworkId(framework) === 'claude';
+      skillsWithVersions = extractedByFramework;
+      if (isClaudeFramework && skillsWithVersions.length === 0) {
+        console.log(`No Skill tool call in ${framework} session for ${taskId}, falling back to model extraction...`);
         const fallbackSkills = await fetchSkillsViaModel(taskId, session.interactions);
         skillsWithVersions = fallbackSkills.map(name => ({ name, version: null }));
       }
-      console.log(`Skills from Claude session for ${taskId}:`, JSON.stringify(skillsWithVersions));
-    } else if (framework === 'opencode') {
-      skillsWithVersions = extractSkillsWithVersionsFromOpencodeSession(session);
-      console.log(`Skills from OpenEncode session for ${taskId}:`, JSON.stringify(skillsWithVersions));
+      console.log(`Skills from ${framework} session for ${taskId}:`, JSON.stringify(skillsWithVersions));
     } else if (isWittyLike) {
       skillsWithVersions = extractSkillsWithVersionsFromWittySession(session);
       console.log(`Skills from Witty session for ${taskId}:`, JSON.stringify(skillsWithVersions));

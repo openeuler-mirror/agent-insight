@@ -1,4 +1,4 @@
-import type { ClaudeOtelEvent } from './types';
+import type { ClaudeOtelEvent, OtelTraceEvent } from './types';
 
 export function getOtelAnyValue(anyValue: any): any {
   if (!anyValue || typeof anyValue !== 'object') return undefined;
@@ -66,6 +66,21 @@ function asOptionalNumber(value: any): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
+function asNumber(value: any, fallback = 0): number {
+  if (value === undefined || value === null || value === '') return fallback;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function nanoToBigInt(value: any): bigint {
+  if (value === undefined || value === null || value === '') return BigInt(0);
+  try {
+    return BigInt(String(value));
+  } catch {
+    return BigInt(0);
+  }
+}
+
 export function normalizeClaudeOtlpLogs(
   body: any,
   opts: { receivedAt?: string; authenticatedUser?: string } = {},
@@ -114,3 +129,75 @@ export function normalizeClaudeOtlpLogs(
   return events;
 }
 
+export function normalizeClaudeOtlpTraces(
+  body: any,
+  opts: { receivedAt?: string; authenticatedUser?: string } = {},
+): OtelTraceEvent[] {
+  const receivedAt = opts.receivedAt || new Date().toISOString();
+  const events: OtelTraceEvent[] = [];
+  const resourceSpans = Array.isArray(body?.resourceSpans) ? body.resourceSpans : [];
+
+  for (const resourceSpan of resourceSpans) {
+    const resource = otelAttrsToObject(resourceSpan?.resource?.attributes || []);
+    const serviceName = asOptionalString(resource['service.name']) || 'unknown-service';
+    const resourceUser = opts.authenticatedUser ||
+      asOptionalString(resource['user.id']) ||
+      asOptionalString(resource['enduser.id']);
+    const serviceInstanceId = asOptionalString(resource['service.instance.id']);
+    const resourceSessionId = asOptionalString(resource['session.id']);
+    const scopeSpans = Array.isArray(resourceSpan?.scopeSpans) ? resourceSpan.scopeSpans : [];
+
+    for (const scopeSpan of scopeSpans) {
+      const spans = Array.isArray(scopeSpan?.spans) ? scopeSpan.spans : [];
+      for (const span of spans) {
+        try {
+          const attributes = otelAttrsToObject(span?.attributes || []);
+          const isGenAI = Object.keys(attributes).some((key) => key.startsWith('gen_ai.') || key.startsWith('llm.'));
+          const isTool = attributes['tool.name'] !== undefined;
+          if (!isGenAI && !isTool) continue;
+
+          const traceId = asOptionalString(span?.traceId);
+          const explicitSessionId = resourceSessionId || asOptionalString(attributes['session.id']);
+          let sessionId = explicitSessionId || serviceInstanceId || traceId;
+          if (sessionId === 'unknown' && traceId) sessionId = traceId;
+          if (!sessionId) continue;
+
+          const inputTokens = asNumber(attributes['gen_ai.usage.input_tokens'] ?? attributes['llm.usage.prompt_tokens']);
+          const outputTokens = asNumber(attributes['gen_ai.usage.output_tokens'] ?? attributes['llm.usage.completion_tokens']);
+          const reasoningTokens = asNumber(attributes['gen_ai.usage.reasoning_tokens']);
+          const startTimeNano = nanoToBigInt(span?.startTimeUnixNano);
+          const endTimeNano = nanoToBigInt(span?.endTimeUnixNano);
+          const latencyMs = endTimeNano > startTimeNano
+            ? Number((endTimeNano - startTimeNano) / BigInt(1_000_000))
+            : 0;
+          const startTimeMs = Number(startTimeNano / BigInt(1_000_000));
+
+          events.push({
+            receivedAt,
+            sessionId,
+            traceId,
+            spanId: asOptionalString(span?.spanId),
+            parentSpanId: asOptionalString(span?.parentSpanId),
+            name: asOptionalString(span?.name),
+            kind: isTool ? 'tool' : 'llm',
+            serviceName,
+            user: resourceUser,
+            model: asOptionalString(attributes['gen_ai.request.model']) ||
+              asOptionalString(attributes['llm.request.model']),
+            usage: {
+              input_tokens: inputTokens,
+              output_tokens: outputTokens,
+              reasoning_tokens: reasoningTokens || undefined,
+              total_tokens: inputTokens + outputTokens,
+            },
+            latencyMs,
+            startTimeMs,
+            attributes,
+          });
+        } catch {}
+      }
+    }
+  }
+
+  return events;
+}

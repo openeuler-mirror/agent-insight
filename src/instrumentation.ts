@@ -1,7 +1,8 @@
 export async function register() {
   // Server-side watchers have been removed.
-  // Watchers now run on the client side via scripts downloaded through curl setup.
-  // See: scripts/claude_watcher_client.ts and scripts/openclaw_watcher_client.ts
+  // Claude Code now uses official OTel logs configured by setup; OpenClaw still uses
+  // the client-side watcher script downloaded through curl setup.
+  // See: scripts/openclaw_watcher_client.ts
 
   // 仅在 nodejs runtime 起来的时候做 instrumentation——edge 没 prisma / child_process
   // 等 Node API。所有真正的启动逻辑都在 ./instrumentation-node.ts 里，这里只做 runtime

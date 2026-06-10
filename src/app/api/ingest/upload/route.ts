@@ -1,7 +1,7 @@
-import { readConfig, saveExecutionRecord, findBestMatchConfig } from '@/lib/storage/data-service';
+import { readConfig, saveExecutionRecord, findBestMatchConfig, extractInvokedSkillsFromSessionInteractions } from '@/lib/storage/data-service';
 import { isDeletedOpencodeSessionId } from '@/lib/ingest/opencode-deleted-sessions';
 import { analyzeDynamicOnly } from '@/lib/engine/observability/flow-parser';
-import { analyzeFailures, analyzeSession, extractSkillsFromClaudeSession, extractSkillsFromOpenClawSession, extractSkillsFromOpencodeSession, extractSkillsWithVersionsFromClaudeSession, extractSkillsWithVersionsFromOpenClawSession, extractSkillsWithVersionsFromOpencodeSession, InvokedSkill, judgeAnswer, normalizeInteractions } from '@/lib/engine/evaluation/judge';
+import { analyzeFailures, analyzeSession, InvokedSkill, judgeAnswer, normalizeInteractions } from '@/lib/engine/evaluation/judge';
 import { isEvaluatorTraceRecord } from '@/lib/evaluator-agent';
 import { db, prisma } from '@/lib/storage/prisma';
 import { debounceByKey } from '@/lib/ingest/upload-analysis-debouncer';
@@ -172,14 +172,7 @@ export async function POST(request: Request) {
         console.log(`[Upload-Debug] Turn ${idx}: ReqMsgs=${turn.requestMessages?.length}, RespRole=${turn.responseMessage?.role}, RespTool=${hasRespTool}, AssistantReqTools=${reqToolCount}`);
     });
 
-    let quickSkillsWithVersions: InvokedSkill[] = [];
-    if (data.framework === 'opencode') {
-        quickSkillsWithVersions = extractSkillsWithVersionsFromOpencodeSession(normalized);
-    } else if (data.framework === 'claudecode' || data.framework === 'claude') {
-        quickSkillsWithVersions = extractSkillsWithVersionsFromClaudeSession(normalized);
-    } else if (data.framework === 'openclaw') {
-        quickSkillsWithVersions = extractSkillsWithVersionsFromOpenClawSession(normalized);
-    }
+    const quickSkillsWithVersions: InvokedSkill[] = extractInvokedSkillsFromSessionInteractions(data.framework, normalized) ?? [];
     
     console.log(`[Upload-API] Extracted skills: ${JSON.stringify(quickSkillsWithVersions)}`);
     
@@ -297,14 +290,7 @@ async function processUploadAsync(data: any, username: any, normalized: any, int
     if (!data.query && analysis.query) data.query = analysis.query;
     if (!data.final_result && analysis.final_result) data.final_result = analysis.final_result;
     
-    let skillsWithVersions: InvokedSkill[] = [];
-    if (data.framework === 'opencode') {
-        skillsWithVersions = extractSkillsWithVersionsFromOpencodeSession(normalized);
-    } else if (data.framework === 'claudecode' || data.framework === 'claude') {
-        skillsWithVersions = extractSkillsWithVersionsFromClaudeSession(normalized);
-    } else if (data.framework === 'openclaw') {
-        skillsWithVersions = extractSkillsWithVersionsFromOpenClawSession(normalized);
-    }
+    const skillsWithVersions: InvokedSkill[] = extractInvokedSkillsFromSessionInteractions(data.framework, normalized) ?? [];
     assertActive(username, taskId, runId);
     
     const skills = skillsWithVersions.map(s => s.name);

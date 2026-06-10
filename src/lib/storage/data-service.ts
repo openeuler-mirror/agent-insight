@@ -30,13 +30,8 @@ import { extractKeyActionsFromFlow, mergeKeyActionsFromMultipleSkills, type Extr
 import { mergeSessionInteractionsMonotonic } from '@/lib/engine/observability/session-interactions-merge';
 import { buildAgentCallTree, inferSubagentType, walkTree, type AgentNode } from '@/lib/engine/observability/agent-trace';
 import { isEvaluatorAgentName } from '@/lib/evaluator-agent';
-import { normalizeClaudeCodeInteractionsForStorage } from '@/lib/shared/interaction-content';
-import {
-    normalizeInteractions,
-    extractSkillsWithVersionsFromClaudeSession,
-    extractSkillsWithVersionsFromOpenClawSession,
-    extractSkillsWithVersionsFromOpencodeSession,
-} from '@/lib/shared/interaction-utils';
+import { getAdapter } from '@/lib/ingest/adapters/registry';
+import { normalizeInteractions } from '@/lib/shared/interaction-utils';
 
 export interface InvokedSkill {
     name: string;
@@ -639,22 +634,10 @@ function getEffectiveInvokedSkills(record: Pick<ExecutionRecord, 'invokedSkills'
     return [];
 }
 
-function extractInvokedSkillsFromSessionInteractions(framework: string | null | undefined, interactions: any[]): InvokedSkill[] | null {
+export function extractInvokedSkillsFromSessionInteractions(framework: string | null | undefined, interactions: any[]): InvokedSkill[] | null {
     if (!Array.isArray(interactions)) return null;
     const normalized = normalizeInteractions(interactions);
-    const fw = (framework || '').toLowerCase();
-
-    if (fw === 'opencode') {
-        return extractSkillsWithVersionsFromOpencodeSession(normalized);
-    }
-    if (fw === 'claude' || fw === 'claudecode') {
-        return extractSkillsWithVersionsFromClaudeSession(normalized);
-    }
-    if (fw === 'openclaw') {
-        return extractSkillsWithVersionsFromOpenClawSession(normalized);
-    }
-
-    return null;
+    return getAdapter(framework).extractSkills?.(normalized) ?? null;
 }
 
 interface SkillContext {
@@ -1949,12 +1932,13 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
 
     let mergedInteractionsForSession: any[] | null = null;
     if (targetRecord.task_id && targetRecord.interactions) {
+        const storageAdapter = getAdapter(targetRecord.framework);
+        const normalizeForStorage = (interactions: any) =>
+            storageAdapter.normalizeForStorage?.(interactions) ?? interactions;
         let incomingInteractions = typeof targetRecord.interactions === 'string'
             ? (() => { try { return JSON.parse(targetRecord.interactions); } catch { return []; } })()
             : targetRecord.interactions;
-        if (targetRecord.framework === 'claudecode') {
-            incomingInteractions = normalizeClaudeCodeInteractionsForStorage(incomingInteractions);
-        }
+        incomingInteractions = normalizeForStorage(incomingInteractions);
 
         mergedInteractionsForSession = incomingInteractions;
         try {
@@ -1962,18 +1946,14 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
             let existingInteractions = existingSession?.interactions
                 ? (() => { try { return JSON.parse(existingSession.interactions as string); } catch { return []; } })()
                 : [];
-            if (targetRecord.framework === 'claudecode') {
-                existingInteractions = normalizeClaudeCodeInteractionsForStorage(existingInteractions);
-            }
+            existingInteractions = normalizeForStorage(existingInteractions);
 
             if (Array.isArray(existingInteractions) && existingInteractions.length > 0) {
                 mergedInteractionsForSession = mergeSessionInteractionsMonotonic(existingInteractions, incomingInteractions);
             }
         } catch {}
 
-        if (targetRecord.framework === 'claudecode') {
-            mergedInteractionsForSession = normalizeClaudeCodeInteractionsForStorage(mergedInteractionsForSession);
-        }
+        mergedInteractionsForSession = normalizeForStorage(mergedInteractionsForSession);
         targetRecord.interactions = mergedInteractionsForSession;
 
         if (targetRecord.framework === 'opencode' && Array.isArray(mergedInteractionsForSession)) {

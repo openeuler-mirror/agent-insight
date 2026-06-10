@@ -110,7 +110,7 @@
 
 ## 4. 架构总览（Architecture Overview）
 
-整体是一个 **以领域引擎为核心的分层全栈单体**：轻量的 Next.js 路由处理器将工作委派给 `src/lib/engine/*` 子系统；持久化隐藏在 `DatabaseAdapter` 之后；框架特定的接入逻辑隔离在 parser/watcher（并正收敛为 `FrameworkAdapter` 注册表）；LLM 工作委派给内部的 opencode agent 运行时（遗留/示例路径仍走 deepagents/LangGraph）。
+整体是一个 **以领域引擎为核心的分层全栈单体**：轻量的 Next.js 路由处理器将工作委派给 `src/lib/engine/*` 子系统；持久化隐藏在 `DatabaseAdapter` 之后；框架特定的接入逻辑隔离在 parser/watcher 与 `FrameworkAdapter` 注册表；LLM 工作委派给内部的 opencode agent 运行时（遗留/示例路径仍走 deepagents/LangGraph）。
 
 ### 4.1 系统上下文（C4 Context）`[确证]`
 
@@ -211,7 +211,7 @@ sequenceDiagram
 | 全栈框架 | Next.js 16 App Router + React 19 | UI 与 API 同仓同进程，降低部署复杂度；RSC 减少前端样板 | 独立 React SPA + Express/Nest 后端 |
 | 主存储 | Prisma + SQLite（默认），`DatabaseAdapter` 可切 OpenGauss | SQLite 实现零依赖单机；OpenGauss 适配信创/企业 | 直接绑定 PostgreSQL / MySQL |
 | 接入协议 | OpenTelemetry 标准 + 框架插件/watcher 旁路 | 标准协议最大化「框架无关」，旁路避免侵入 Agent 代码 | 仅私有 SDK 上报 |
-| 框架扩展 | `FrameworkAdapter` 查表注册表（重构进行中） | 收编散落的 `if (framework===...)` 分支，降低新框架接入成本 | 保持分散 if/switch |
+| 框架扩展 | `FrameworkAdapter` 查表注册表（第一刀已落地） | skill 抽取、Claude 存储归一化、框架名别名解析走统一入口，降低新框架接入成本 | 保持分散 if/switch |
 | 内部 Agent 运行时 | opencode 为主，deepagents/LangGraph 为遗留/示例 | 迁移到 opencode SDK；保留 LangGraph 兼容历史代码 | 全量自研 agent loop |
 | 异步长任务 | 落库 + `status` 状态机（`*JobResult` 表） | 评测/诊断耗时长，需重启可恢复、可重跑、可追溯 | 纯内存队列 / 外部 MQ |
 
@@ -298,7 +298,7 @@ flowchart LR
 - **`[推断]` 存储接口弱类型** —— `DatabaseAdapter` 几乎全 `any`（`db-interface.ts`），绕开了 Prisma 类型安全；重构时易引入运行时错误。依据：接口签名。
 - **`[推断]` JSON-as-string 蔓延** —— 大量业务结构存为 JSON 字符串，无法用 DB 查询/约束保证一致性，schema 演进靠注释约定。依据：§6。
 - **`[推断]` 运行时迁移中的双轨** —— opencode（主）与 deepagents/LangGraph（遗留/示例）并存，存在 `legacy/` 目录；过渡期维护成本与认知负担。依据：`package.json` deepagent 脚本 + `00-positioning.md` 提到 `legacy/`。
-- **`[推断]` 架构重构进行中** —— `FrameworkAdapter` 注册表（base_commit `c47829a`）尚未完全落地，散落的 `if (framework===...)` 分支与新注册表并存。依据：`docs/design/framework-adapter-registry/phase2`。
+- **`[推断]` 架构重构进行中** —— `FrameworkAdapter` 注册表第一刀已落地，skill 抽取与 `data-service` 内 Claude 存储归一化已收敛；setup 脚本框架清单、platform 轴、`role === 'opencode'` 等仍按设计留待后续治理。依据：`docs/design/framework-adapter-registry/phase2`。
 - **`[推断]` 测试覆盖偏接入/解析** —— 38 个测试文件，但 `todo_fixme_count=7`；评测/优化等重逻辑的端到端覆盖待确认。依据：`evidence.json`。
 - **`[推断]` 单进程单点** —— 模块化单体无水平扩展/高可用配置；长评测任务与 Web 请求共享进程资源。依据：§8 无编排配置。
 
@@ -317,7 +317,7 @@ flowchart LR
 
 代码与设计文档暗示但尚未完全落地的方向：
 
-- **框架适配器注册表统一化** —— `docs/design/framework-adapter-registry/`（进行中），把按框架分支收敛为单一 `getAdapter(framework)` 查表入口。
+- **框架适配器注册表统一化** —— `docs/design/framework-adapter-registry/`（第一刀已落地），把 skill 抽取、Claude 存储归一化与框架名别名解析收敛为单一 `getAdapter(framework)` 查表入口。
 - **Hermes / OTel 适配扩展** —— `docs/design/hermes-otel-adapter/` 表明在接入更多运行时。
 - **运行时全面迁移 opencode** —— 逐步退役 deepagents/LangGraph 遗留路径（`src/lib/engine/skill-generation/legacy/`）。
 

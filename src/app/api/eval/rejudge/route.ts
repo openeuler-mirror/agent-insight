@@ -1,5 +1,5 @@
-import { readConfig, saveExecutionRecord, findBestMatchConfig } from '@/lib/storage/data-service';
-import { analyzeFailures, extractSkillsFromClaudeSession, extractSkillsFromOpencodeSession, extractSkillsWithVersionsFromClaudeSession, extractSkillsWithVersionsFromOpencodeSession, InvokedSkill, judgeAnswer, normalizeInteractions } from '@/lib/engine/evaluation/judge';
+import { readConfig, saveExecutionRecord, findBestMatchConfig, extractInvokedSkillsFromSessionInteractions } from '@/lib/storage/data-service';
+import { analyzeFailures, InvokedSkill, judgeAnswer, normalizeInteractions } from '@/lib/engine/evaluation/judge';
 import { isEvaluatorTraceRecord } from '@/lib/evaluator-agent';
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/storage/prisma';
@@ -58,11 +58,7 @@ export async function POST(request: Request) {
     }
     
     if (invokedSkills.length === 0) {
-        if (existingRecord.framework === 'opencode') {
-            invokedSkills = extractSkillsWithVersionsFromOpencodeSession(normalized);
-        } else if (existingRecord.framework === 'claudecode' || existingRecord.framework === 'claude') {
-            invokedSkills = extractSkillsWithVersionsFromClaudeSession(normalized);
-        }
+        invokedSkills = extractInvokedSkillsFromSessionInteractions(existingRecord.framework, normalized) ?? [];
     }
     
     const skills = invokedSkills.map(s => s.name);
