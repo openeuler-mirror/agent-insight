@@ -102,7 +102,6 @@ export default function QualityPage() {
         }
     }, [report, onAnchor]);
 
-    const traceCount = report?.meta.n ?? (agents.find((a) => a.name === config.agent)?.traceCount ?? null);
     const showBody = report && !report.meta.empty;
 
     const NAV: { id: string; label: string }[] = [
@@ -124,7 +123,6 @@ export default function QualityPage() {
                         skills={skills}
                         value={config}
                         onChange={(patch) => setConfig((c) => ({ ...c, ...patch }))}
-                        traceCount={traceCount}
                     />
 
                     {/* 粘性迷你导航：让"结论→证据"的跳转始终可达 */}

@@ -3,6 +3,7 @@
 import React from 'react';
 import { CheckCircle2, GitBranch, Coins, AlertTriangle, ArrowDown, Sparkles } from 'lucide-react';
 import { useLocale } from '@/lib/client/locale-context';
+import { Term } from '@/components/text/Term';
 import type { QualityReport, DimScore } from '@/lib/engine/quality-monitoring/types';
 import { scoreColor, statusColor, fmtNum } from './quality-ui';
 
@@ -45,7 +46,7 @@ export function MethodologyCards({ report, onAnchor }: { report: QualityReport; 
                 <span style={{ fontSize: 10.5, color: 'var(--foreground-muted)' }}>{t('quality.analysis.hint')}</span>
             </div>
             <div style={{ padding: '16px 18px' }}>
-                {/* 方法论 */}
+                {/* 方法论 + 状态基准线 */}
                 <div style={{ fontSize: 11, color: 'var(--foreground-muted)', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                     <span>{t('quality.analysis.method')}</span>
                     {[t('quality.dim.result'), t('quality.dim.process'), t('quality.dim.cost'), t('quality.dim.error')].map((m, i) => (
@@ -54,6 +55,8 @@ export function MethodologyCards({ report, onAnchor }: { report: QualityReport; 
                             {i < 3 && <span style={{ color: 'var(--border-dark)' }}>×</span>}
                         </React.Fragment>
                     ))}
+                    <span style={{ flex: 1 }} />
+                    <span style={{ fontSize: 10.5 }}>{t('quality.analysis.baseline')}</span>
                 </div>
 
                 {/* 四卡 */}
@@ -64,9 +67,10 @@ export function MethodologyCards({ report, onAnchor }: { report: QualityReport; 
                         const color = c.key === 'error' ? statusColor(dim.status) : scoreColor(dim.score);
                         return (
                             <button key={c.key} onClick={() => onAnchor(c.anchor)} style={lcard}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                                     <span style={{ ...ix, width: 24, height: 24, background: 'color-mix(in srgb, ' + color + ' 13%, transparent)', color }}><Icon size={14} /></span>
                                     <span style={{ fontSize: 12.5, fontWeight: 800 }}>{c.name}</span>
+                                    <span onClick={(e) => e.stopPropagation()}><Term id={`quality-dim-${c.key}`} render="compact" /></span>
                                     <span style={{ fontSize: 9.5, color: 'var(--foreground-muted)', fontWeight: 600, marginLeft: 'auto' }}>{c.q}</span>
                                 </div>
                                 <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>

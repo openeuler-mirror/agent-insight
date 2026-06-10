@@ -14,12 +14,11 @@ export interface ConfigState {
 }
 
 export function QualityConfigBar({
-    agents, value, onChange, traceCount, skills,
+    agents, value, onChange, skills,
 }: {
     agents: QualityAgentInfo[];
     value: ConfigState;
     onChange: (patch: Partial<ConfigState>) => void;
-    traceCount: number | null;
     skills: string[];
 }) {
     const { t } = useLocale();
@@ -97,14 +96,6 @@ export function QualityConfigBar({
                 ]} />
 
             <div style={{ flex: 1, minWidth: 40 }} />
-
-            {traceCount != null && (
-                <div style={{ fontSize: 11, color: 'var(--foreground-muted)', maxWidth: 340, lineHeight: 1.5 }}>
-                    {t('quality.config.noteHead')} {t('quality.config.traces')}{' '}
-                    <b style={{ color: 'var(--foreground)', fontWeight: 700 }}>{traceCount}</b>
-                    {t('quality.config.noteTail')}
-                </div>
-            )}
         </section>
     );
 }

@@ -104,13 +104,18 @@ export function QualityHero({ report, onDrillTrace, onAnchor }: {
                         <Sparkles size={13} style={{ color: 'var(--primary)' }} />
                         <span style={{ fontSize: 12, fontWeight: 800 }}>{t('quality.hero.verdictLabel')}</span>
                     </div>
-                    <div style={{ borderLeft: '3px solid var(--primary)', paddingLeft: 12, fontSize: 12.5, lineHeight: 1.7, color: 'var(--foreground)' }}>
-                        <b style={{ fontWeight: 800 }}>整体处于「{t(`quality.status.${composite.status}`)}」区间。</b>{' '}
-                        {composite.capped && <span style={{ color: 'var(--error)', fontWeight: 700 }}>安全护栏命中，综合分已硬降级；</span>}
-                        {bottleneck
-                            ? <>瓶颈集中在 <span style={{ color: 'var(--warning)', fontWeight: 700 }}>{bottleneck[0]}（{fmtNum(bottleneck[1].score)}）</span>。</>
-                            : <>各维覆盖有限，建议先补足评测覆盖率。</>}
-                        {top[0] && <> 优先治理右侧 Top 问题，预计能最快抬升综合分。</>}
+                    {/* 判读分点换行：结论 / 瓶颈 / 行动 各占一行，扫读友好 */}
+                    <div style={{ borderLeft: '3px solid var(--primary)', paddingLeft: 12, fontSize: 12.5, lineHeight: 1.7, color: 'var(--foreground)', display: 'flex', flexDirection: 'column', gap: 3 }}>
+                        <span>
+                            <b style={{ fontWeight: 800 }}>整体处于「{t(`quality.status.${composite.status}`)}」区间</b>
+                            {composite.capped && <span style={{ color: 'var(--error)', fontWeight: 700 }}>（安全护栏命中，综合分已硬降级）</span>}
+                        </span>
+                        <span>
+                            {bottleneck
+                                ? <>瓶颈集中在 <span style={{ color: 'var(--warning)', fontWeight: 700 }}>{bottleneck[0]}（{fmtNum(bottleneck[1].score)}）</span></>
+                                : <>各维覆盖有限，建议先补足评测覆盖率</>}
+                        </span>
+                        {top[0] && <span style={{ color: 'var(--foreground-secondary)' }}>优先治理右侧 Top 问题，预计能最快抬升综合分</span>}
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 5, fontSize: 11.5, color: 'var(--foreground-secondary)', borderTop: '1px solid var(--border)', paddingTop: 10, marginTop: 2 }}>
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>

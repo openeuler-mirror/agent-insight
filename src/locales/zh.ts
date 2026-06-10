@@ -828,9 +828,6 @@ details: {
       skill: 'Skill',
       status: '状态',
       all: '全部',
-      noteHead: '分析对象 =',
-      noteTail: '条 trace，下方全部指标 / 趋势 / 问题汇总据此重算',
-      traces: '全部 trace（共',
     },
     summary: {
       composite: '综合质量分',
@@ -860,6 +857,7 @@ details: {
       title: '综合分析',
       hint: '点击维度卡片，跳转下方对应明细',
       method: '诊断方法论：',
+      baseline: '基准线：达标 ≥85 · 关注 70–85 · 异常 <70（绝对阈值，不与其他 Agent 对比）',
       naCoverage: '覆盖率',
       na: 'N/A',
     },

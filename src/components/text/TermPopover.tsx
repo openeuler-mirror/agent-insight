@@ -113,7 +113,8 @@ export function TermPopover({
               )}
             </header>
 
-            <div className="text-xs leading-[18px] text-foreground-secondary">
+            {/* pre-line：词条 body 可用 \n 分点换行（无 \n 的既有词条不受影响） */}
+            <div className="text-xs leading-[18px] text-foreground-secondary whitespace-pre-line">
               {body}
             </div>
 

@@ -828,9 +828,6 @@ export const en = {
       skill: 'Skill',
       status: 'Status',
       all: 'All',
-      noteHead: 'Scope =',
-      noteTail: ' traces; all metrics / trends / problems below are recomputed on this set',
-      traces: 'all traces (',
     },
     summary: {
       composite: 'Composite score',
@@ -860,6 +857,7 @@ export const en = {
       title: 'Overview',
       hint: 'Click a dimension card to jump to its detail',
       method: 'Methodology: ',
+      baseline: 'Baseline: healthy ≥85 · watch 70–85 · at-risk <70 (absolute thresholds, no cross-agent ranking)',
       naCoverage: 'coverage',
       na: 'N/A',
     },
