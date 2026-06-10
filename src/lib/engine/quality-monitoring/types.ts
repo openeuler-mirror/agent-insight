@@ -119,6 +119,19 @@ export interface SkillRef {
     version: number | null;
 }
 
+/** 已诊断 trace 的根因摘要（join AgentDebugReport.reportJson 的精简投影）。 */
+export interface DiagnosisLite {
+    /** 根因认知模块：memory | reflection | planning | action | system | others。 */
+    module: string;
+    /** triage 分类（infra/tool_systemic 等，归因投票时优先于模块映射）。 */
+    category?: string;
+    errorType?: string;
+    summary?: string;
+    /** 修复指引（rootCause.correctionGuidance 或 fatalDiagnosis.recommendation）。 */
+    guidance?: string;
+    confidence?: number;
+}
+
 /** 统一问题汇总项（DC-009 / §4.3）。 */
 export interface ProblemItem {
     key: string;
@@ -136,6 +149,10 @@ export interface ProblemItem {
     suggestedFix?: string;
     /** 来自 SkillIssue 表的问题带 skill 归属 → 问题卡可一键「去优化」。 */
     skillRef?: SkillRef;
+    /** 簇内已诊断 trace 的多数根因模块（来自 AgentDebugReport 投票）。 */
+    rootCauseModule?: string;
+    /** 簇内已诊断 trace 数（>0 时问题卡显示「已诊断」徽章）。 */
+    diagnosedTraces?: number;
 }
 
 /** Skill 拖累榜行：「哪个 skill 在拖累这个 Agent」（复用 SkillIssue 表聚合）。 */
@@ -169,6 +186,10 @@ export interface QualityReport {
     skillDrag: SkillDragItem[];
     /** 问题全量计数（problems 数组按影响度封顶返回，计数用此处全量值，防徽章失真）。 */
     problemCounts: { error: number; eval: number; total: number; errorEvents: number };
+    /** 根因模块分布（已诊断 trace 的 rootCause.criticalModule 聚合；诊断覆盖 0 时为空）。 */
+    moduleFingerprint: { module: string; count: number; pct: number }[];
+    /** 诊断覆盖：T 中已诊断 trace 数 / 含错误信号的 trace 数。 */
+    diagnosisCoverage: { diagnosed: number; errorish: number };
     coverage: { judged: number; total: number; perDimension: Record<string, number> };
     meta: {
         n: number;

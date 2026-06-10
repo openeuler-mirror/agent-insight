@@ -10,9 +10,10 @@ import { collectTraces } from './trace-collector';
 import { scoreDimensions, isSuccessDeterministic } from './dimension-scorer';
 import { bucketTrends } from './trend-bucketer';
 import {
-    buildProblemSummary, lowScoreProblems, rankProblems, buildSkillDrag,
+    buildProblemSummary, lowScoreProblems, rankProblems, buildSkillDrag, summarizeDiagnoses,
     type SkillIssueRowLite,
 } from './problem-summary';
+import type { DiagnosisLite } from './types';
 
 const EMPTY_DIM: DimScore = { score: 0, status: '异常', coverage: 0, n: 0 };
 
@@ -25,6 +26,8 @@ function emptyReport(input: QualityReportInput): QualityReport {
         errorNodeDistribution: [],
         skillDrag: [],
         problemCounts: { error: 0, eval: 0, total: 0, errorEvents: 0 },
+        moduleFingerprint: [],
+        diagnosisCoverage: { diagnosed: 0, errorish: 0 },
         coverage: { judged: 0, total: 0, perDimension: {} },
         meta: {
             n: 0, passRate: 0, empty: true, lowSample: true, window: input.window,
@@ -68,6 +71,41 @@ async function loadSkillIssueRows(executionIds: string[]): Promise<SkillIssueRow
     }
 }
 
+/**
+ * 加载 T 范围内已完成的智能诊断报告（join AgentDebugReport，status=done），
+ * 解析 reportJson 为 DiagnosisLite。失败/表缺失降级为空 Map，不影响读路径。
+ */
+async function loadDiagnoses(executionIds: string[]): Promise<Map<string, DiagnosisLite>> {
+    const map = new Map<string, DiagnosisLite>();
+    if (!executionIds.length) return map;
+    try {
+        const rows = await prisma.agentDebugReport.findMany({
+            where: { executionId: { in: executionIds }, status: 'done' },
+            select: { executionId: true, reportJson: true },
+        });
+        for (const r of rows) {
+            if (!r.reportJson) continue;
+            try {
+                const p = JSON.parse(r.reportJson);
+                const rc = p?.rootCause;
+                const fatal = p?.triage?.fatalDiagnosis;
+                if (!rc && !fatal) continue;
+                map.set(r.executionId, {
+                    module: rc?.criticalModule ?? 'system',
+                    category: p?.triage?.category,
+                    errorType: rc?.criticalErrorType ?? fatal?.errorType,
+                    summary: rc?.summary ?? fatal?.summary,
+                    guidance: rc?.correctionGuidance ?? fatal?.recommendation,
+                    confidence: typeof rc?.confidence === 'number' ? rc.confidence : undefined,
+                });
+            } catch { /* 单条解析失败跳过 */ }
+        }
+    } catch (e) {
+        console.warn('[quality] agentDebugReport join failed, diagnosis enrichment skipped:', e);
+    }
+    return map;
+}
+
 /** 为含错误信号的 trace 批量加载原始 interactions（按需，控成本）。 */
 async function loadInteractions(taskIds: string[]): Promise<Map<string, unknown[]>> {
     const map = new Map<string, unknown[]>();
@@ -104,14 +142,16 @@ export async function buildQualityReport(
     const errorish = traces
         .filter((t) => (t.toolCallErrorCount ?? 0) > 0 || (t.failures?.length ?? 0) > 0)
         .slice(0, MAX_ERROR_PARSE_TRACES);
-    const [interactionsByTrace, skillIssueRows] = await Promise.all([
+    const [interactionsByTrace, skillIssueRows, diagnosesByTrace] = await Promise.all([
         loadInteractions(errorish.map((t) => t.taskId).filter((x): x is string => Boolean(x))),
         loadSkillIssueRows(traces.map((t) => t.executionId)),
+        loadDiagnoses(traces.map((t) => t.executionId)),
     ]);
 
-    // 3. 统一问题汇总（先于错误维）
-    const summary = buildProblemSummary({ traces, interactionsByTrace, skillIssueRows });
+    // 3. 统一问题汇总（先于错误维）+ 诊断增强 + Skill 拖累榜
+    const summary = buildProblemSummary({ traces, interactionsByTrace, skillIssueRows, diagnosesByTrace });
     const skillDrag = buildSkillDrag(skillIssueRows, traces);
+    const { moduleFingerprint, diagnosisCoverage } = summarizeDiagnoses(traces, diagnosesByTrace);
 
     // 4. 四维 + 综合（错误维由问题汇总反哺）
     const scored = scoreDimensions(traces, policy, summary.errorSummary);
@@ -140,6 +180,8 @@ export async function buildQualityReport(
         errorNodeDistribution: summary.errorNodeDistribution,
         skillDrag,
         problemCounts,
+        moduleFingerprint,
+        diagnosisCoverage,
         coverage: scored.coverage,
         meta: {
             n,

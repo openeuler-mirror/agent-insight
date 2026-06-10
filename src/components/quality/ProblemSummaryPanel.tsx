@@ -1,11 +1,12 @@
 'use client';
 
-import React from 'react';
-import { AlertTriangle, ArrowUpRight } from 'lucide-react';
+import React, { useState } from 'react';
+import { AlertTriangle, ArrowUpRight, Stethoscope } from 'lucide-react';
 import { useLocale } from '@/lib/client/locale-context';
+import { apiFetch } from '@/lib/client/api';
 import { Term } from '@/components/text/Term';
 import type { QualityReport, ProblemItem } from '@/lib/engine/quality-monitoring/types';
-import { severityColor, ATTR_COLOR } from './quality-ui';
+import { severityColor, ATTR_COLOR, MODULE_LABEL, MODULE_COLORS } from './quality-ui';
 
 const NODE_COLORS = ['var(--warning)', '#2c6bd1', 'var(--primary)', 'var(--foreground-muted)', 'var(--success)'];
 
@@ -19,6 +20,25 @@ export function ProblemSummaryPanel({ report, onDrillTrace }: {
     const sevLabel: Record<string, string> = { high: t('quality.problems.high'), medium: t('quality.problems.medium'), low: t('quality.problems.low') };
     const nErr = report.problemCounts.error;
     const nEval = report.problemCounts.eval;
+    const [diagMsg, setDiagMsg] = useState<string | null>(null);
+
+    // 「去诊断」：挑影响度最高且未诊断的错误簇，POST 现有 agent-debug 接口后台跑（slot 限流）
+    const triggerDiagnosis = async () => {
+        const target = problems.find((p) => p.source === '错误' && p.relatedTraces.length > 0 && !p.rootCauseModule)
+            ?? problems.find((p) => p.relatedTraces.length > 0);
+        if (!target) return;
+        setDiagMsg(t('quality.problems.diagSubmitting'));
+        try {
+            const res = await apiFetch(`/api/observe/executions/${encodeURIComponent(target.relatedTraces[0])}/agent-debug`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({}),
+            });
+            setDiagMsg(res.ok || res.status === 409 ? t('quality.problems.diagSubmitted') : t('quality.problems.diagFailed'));
+        } catch {
+            setDiagMsg(t('quality.problems.diagFailed'));
+        }
+    };
 
     return (
         <section id="problems" style={panel}>
@@ -77,6 +97,53 @@ export function ProblemSummaryPanel({ report, onDrillTrace }: {
                         ) : (
                             <div style={{ fontSize: 11.5, color: 'var(--foreground-muted)', padding: '8px 0' }}>—</div>
                         )}
+
+                        {/* 根因模块分布：比节点分布深一层——失败卡在哪个认知环节（来自智能诊断报告）。
+                            诊断覆盖 0 时给「去诊断」造血入口而非空着。 */}
+                        <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                                <Stethoscope size={12} style={{ color: 'var(--primary)' }} />
+                                <span style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--foreground-secondary)' }}>{t('quality.problems.moduleDist')}</span>
+                                <span style={{ fontSize: 9.5, color: 'var(--foreground-muted)', marginLeft: 'auto' }}>
+                                    {t('quality.problems.diagCoverage')} {report.diagnosisCoverage.diagnosed}/{Math.max(report.diagnosisCoverage.errorish, report.diagnosisCoverage.diagnosed)}
+                                </span>
+                            </div>
+                            {report.moduleFingerprint.length > 0 ? (
+                                <>
+                                    <div style={{ display: 'flex', height: 26, borderRadius: 7, overflow: 'hidden', border: '1px solid var(--border)', marginBottom: 8 }}>
+                                        {report.moduleFingerprint.map((m, i) => (
+                                            <div key={m.module} style={{ width: `${m.pct}%`, background: MODULE_COLORS[i % MODULE_COLORS.length], display: 'grid', placeItems: 'center', color: '#fff', fontSize: 9.5, fontWeight: 700 }}>
+                                                {m.pct >= 14 ? `${m.pct}%` : ''}
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                                        {report.moduleFingerprint.map((m, i) => (
+                                            <div key={m.module} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, color: 'var(--foreground-secondary)' }}>
+                                                <span style={{ width: 8, height: 8, borderRadius: 2, background: MODULE_COLORS[i % MODULE_COLORS.length] }} />
+                                                {MODULE_LABEL[m.module] ?? m.module}
+                                                <b style={{ marginLeft: 'auto', color: 'var(--foreground)' }}>{m.count} · {m.pct}%</b>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </>
+                            ) : (
+                                <div style={{ fontSize: 11, color: 'var(--foreground-muted)', lineHeight: 1.5 }}>
+                                    {t('quality.problems.diagEmpty')}
+                                </div>
+                            )}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
+                                <button onClick={triggerDiagnosis} style={{
+                                    fontSize: 10.5, fontWeight: 700, padding: '4px 10px', borderRadius: 6, cursor: 'pointer',
+                                    border: '1px solid var(--primary-subtle-border)', background: 'var(--primary-subtle)', color: 'var(--primary)',
+                                    display: 'inline-flex', alignItems: 'center', gap: 4,
+                                }}>
+                                    <Stethoscope size={11} /> {t('quality.problems.runDiag')}
+                                </button>
+                                {diagMsg && <span style={{ fontSize: 10, color: 'var(--foreground-muted)' }}>{diagMsg}</span>}
+                            </div>
+                        </div>
+
                         <div style={{ fontSize: 11, color: 'var(--foreground-muted)', background: 'var(--background-secondary)', border: '1px dashed var(--border)', borderRadius: 8, padding: '9px 12px', lineHeight: 1.5, display: 'flex', alignItems: 'center', gap: 4 }}>
                             {t('quality.problems.pareto')}
                             <Term id="quality-pareto" render="compact" />
@@ -136,6 +203,11 @@ function ProblemRow({ rank, p, maxImpact, sevLabel, t, onDrill }: {
                         {p.source === '错误' ? t('quality.problems.sourceErr') : t('quality.problems.sourceEval')}
                     </span>
                     {p.node && <span style={{ fontSize: 9, fontWeight: 600, padding: '2px 6px', borderRadius: 4, background: 'var(--background-secondary)', color: 'var(--foreground-secondary)' }}>{p.node}</span>}
+                    {p.rootCauseModule && (
+                        <span title={`${t('quality.problems.diagnosed')} ${p.diagnosedTraces ?? 1} trace`} style={{ fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 4, background: 'var(--primary-subtle)', color: 'var(--primary)', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                            ⚕ {t('quality.problems.diagnosed')} · {MODULE_LABEL[p.rootCauseModule] ?? p.rootCauseModule}
+                        </span>
+                    )}
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
                     <span style={{ flex: 1, maxWidth: 160, height: 6, borderRadius: 5, background: 'var(--background-secondary)', overflow: 'hidden' }}>

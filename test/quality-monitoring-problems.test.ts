@@ -3,9 +3,10 @@ import test from 'node:test';
 
 import {
     buildProblemSummary, rankProblems, lowScoreProblems, clusterErrorSteps, isErrorStep,
-    tableSkillIssueProblems, buildSkillDrag, type SkillIssueRowLite,
+    tableSkillIssueProblems, buildSkillDrag, applyDiagnoses, summarizeDiagnoses,
+    type SkillIssueRowLite,
 } from '@/lib/engine/quality-monitoring/problem-summary';
-import type { TraceLite, DimScore } from '@/lib/engine/quality-monitoring/types';
+import type { TraceLite, DimScore, ProblemItem, DiagnosisLite } from '@/lib/engine/quality-monitoring/types';
 import type { FaultPathStep } from '@/lib/engine/observability/fault-path';
 
 function trace(over: Partial<TraceLite>): TraceLite {
@@ -141,6 +142,57 @@ test('跨源去重：表级条目优先，JSON 快照同描述剔除', () => {
     const dupes = res.problems.filter((p) => p.desc.includes('工具误用'));
     assert.equal(dupes.length, 1, '同描述只留表级一条');
     assert.ok(dupes[0].key.startsWith('skilltbl:'), '保留的是表级条目（带 skillRef/severity 真值）');
+});
+
+// ── 诊断增强（焊点B）──────────────────────────────────────────────────────────
+function diag(over: Partial<DiagnosisLite>): DiagnosisLite {
+    return { module: 'action', guidance: '为该工具增加超时重试', ...over };
+}
+function problemItem(over: Partial<ProblemItem>): ProblemItem {
+    return {
+        key: 'err:x', desc: '工具超时', source: '错误', affectedDimensions: ['过程'],
+        frequency: 3, severity: 'medium', attribution: 'agent逻辑', relatedTraces: ['e1', 'e2', 'e3'], impact: 0, ...over,
+    };
+}
+
+test('applyDiagnoses：簇内模块投票 → rootCauseModule + 归因升级 + 修法补全', () => {
+    const problems = [problemItem({})];
+    const diagnoses = new Map<string, DiagnosisLite>([
+        ['e1', diag({ module: 'action' })],
+        ['e2', diag({ module: 'action', guidance: undefined })],
+        // e3 未诊断
+    ]);
+    applyDiagnoses(problems, diagnoses);
+    assert.equal(problems[0].rootCauseModule, 'action');
+    assert.equal(problems[0].diagnosedTraces, 2);
+    assert.equal(problems[0].attribution, '工具&infra', 'action 模块多数 → 归因升级为工具&infra');
+    assert.equal(problems[0].suggestedFix, '为该工具增加超时重试', '诊断修复指引补进建议');
+});
+
+test('applyDiagnoses：triage=infra 优先于模块映射；评测来源问题不动', () => {
+    const probs = [
+        problemItem({ key: 'err:y', relatedTraces: ['e1'] }),
+        problemItem({ key: 'eval:z', source: '评测', relatedTraces: ['e1'], attribution: 'agent逻辑' }),
+    ];
+    applyDiagnoses(probs, new Map([['e1', diag({ module: 'planning', category: 'infra' })]]));
+    assert.equal(probs[0].attribution, '工具&infra', 'triage infra 直接判 infra');
+    assert.equal(probs[1].rootCauseModule, undefined, '评测来源不参与诊断增强');
+});
+
+test('summarizeDiagnoses：模块指纹分布 + 诊断覆盖', () => {
+    const traces: TraceLite[] = [
+        trace({ executionId: 'e1', toolCallErrorCount: 1 }),
+        trace({ executionId: 'e2', failures: [{ failure_type: 'x', description: '', context: '', recovery: '' }] }),
+        trace({ executionId: 'e3' }),
+    ];
+    const { moduleFingerprint, diagnosisCoverage } = summarizeDiagnoses(traces, new Map([
+        ['e1', diag({ module: 'planning' })],
+        ['e2', diag({ module: 'planning' })],
+    ]));
+    assert.equal(diagnosisCoverage.diagnosed, 2);
+    assert.equal(diagnosisCoverage.errorish, 2);
+    assert.equal(moduleFingerprint[0].module, 'planning');
+    assert.equal(moduleFingerprint[0].pct, 100);
 });
 
 test('lowScoreProblems：低分维度转问题项', () => {

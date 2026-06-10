@@ -5,7 +5,7 @@
 
 import { buildFaultPathSteps, type FaultPathStep } from '@/lib/engine/observability/fault-path';
 import type { FailureItem } from '@/lib/engine/evaluation/judge';
-import type { TraceLite, ProblemItem, Attribution, Severity, DimScore, SkillDragItem } from './types';
+import type { TraceLite, ProblemItem, Attribution, Severity, DimScore, SkillDragItem, DiagnosisLite } from './types';
 
 /** SkillIssue 表行的精简投影（由编排层 join Evaluation.executionId∈T 加载，只取未解决的）。 */
 export interface SkillIssueRowLite {
@@ -119,6 +119,8 @@ export interface ProblemSummaryInput {
     interactionsByTrace?: Map<string, unknown[]>;
     /** SkillIssue 表行（未解决，已 scope 到 T）；缺省退化为仅用 Execution.skillIssues JSON 快照。 */
     skillIssueRows?: SkillIssueRowLite[];
+    /** executionId → 诊断根因摘要（join AgentDebugReport，status=done）；缺省不做诊断增强。 */
+    diagnosesByTrace?: Map<string, DiagnosisLite>;
 }
 
 export interface ProblemSummaryResult {
@@ -304,6 +306,63 @@ export function buildSkillDrag(rows: SkillIssueRowLite[], traces: TraceLite[]): 
     return out.sort((a, b) => b.dragScore - a.dragScore);
 }
 
+/** 诊断 triage 分类 / 根因模块 → 责任归因（诊断信号优先级高于文本规则）。 */
+function attributionOfDiagnosis(d: DiagnosisLite): Attribution {
+    if (d.category === 'infra' || d.category === 'tool_systemic') return '工具&infra';
+    switch (d.module) {
+        case 'planning': case 'memory': case 'reflection': return 'agent逻辑';
+        case 'action': case 'system': return '工具&infra';
+        default: return 'agent逻辑';
+    }
+}
+
+/**
+ * 诊断增强（簇 × 根因交叉校验）：对每个错误簇看簇内已诊断成员——
+ * 多数模块一致 → 写入 rootCauseModule 并把归因从"文本规则猜的"升级为"诊断投票的"；
+ * 簇没有 suggestedFix 时用诊断的修复指引补上。纯函数，导出供单测。
+ */
+export function applyDiagnoses(problems: ProblemItem[], diagnoses: Map<string, DiagnosisLite>): void {
+    if (!diagnoses.size) return;
+    for (const p of problems) {
+        if (p.source !== '错误' || !p.relatedTraces.length) continue;
+        const ds = p.relatedTraces
+            .map((id) => diagnoses.get(id))
+            .filter((d): d is DiagnosisLite => Boolean(d));
+        if (!ds.length) continue;
+        p.diagnosedTraces = ds.length;
+        const votes = new Map<string, number>();
+        for (const d of ds) votes.set(d.module, (votes.get(d.module) ?? 0) + 1);
+        const [topModule, topCount] = [...votes.entries()].sort((a, b) => b[1] - a[1])[0];
+        p.rootCauseModule = topModule;
+        if (topCount * 2 >= ds.length) p.attribution = attributionOfDiagnosis(ds.find((d) => d.module === topModule)!);
+        if (!p.suggestedFix) {
+            const g = ds.find((d) => d.guidance)?.guidance;
+            if (g) p.suggestedFix = clip(g, 120);
+        }
+    }
+}
+
+/** 根因模块分布 + 诊断覆盖（T 全量视角，供右栏指纹条与"去诊断"调度）。纯函数。 */
+export function summarizeDiagnoses(traces: TraceLite[], diagnoses: Map<string, DiagnosisLite>): {
+    moduleFingerprint: { module: string; count: number; pct: number }[];
+    diagnosisCoverage: { diagnosed: number; errorish: number };
+} {
+    const errorish = traces.filter((t) => (t.toolCallErrorCount ?? 0) > 0 || (t.failures?.length ?? 0) > 0).length;
+    const counts = new Map<string, number>();
+    let diagnosed = 0;
+    for (const t of traces) {
+        const d = diagnoses.get(t.executionId);
+        if (!d) continue;
+        diagnosed++;
+        counts.set(d.module, (counts.get(d.module) ?? 0) + 1);
+    }
+    const total = [...counts.values()].reduce((a, b) => a + b, 0) || 1;
+    const moduleFingerprint = [...counts.entries()]
+        .map(([module, count]) => ({ module, count, pct: Math.round((count / total) * 100) }))
+        .sort((a, b) => b.count - a.count);
+    return { moduleFingerprint, diagnosisCoverage: { diagnosed, errorish } };
+}
+
 export function buildProblemSummary(input: ProblemSummaryInput): ProblemSummaryResult {
     const { clusters, errorTraces, eventCount } = clusterStructuredErrors(input);
 
@@ -328,6 +387,10 @@ export function buildProblemSummary(input: ProblemSummaryInput): ProblemSummaryR
     const tableItems = tableSkillIssueProblems(input.skillIssueRows ?? []);
     const tableDescs = new Set(tableItems.map((p) => normDesc(p.desc)));
     const jsonItems = evalProblems(input.traces).filter((p) => !tableDescs.has(normDesc(p.desc)));
+
+    // 诊断增强：错误簇 × 已诊断成员的根因模块交叉校验（归因升级 + 修复指引补全）
+    if (input.diagnosesByTrace) applyDiagnoses(errorProblems, input.diagnosesByTrace);
+
     const problems = [...errorProblems, ...tableItems, ...jsonItems];
 
     // 节点分布（FR-009）

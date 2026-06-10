@@ -32,3 +32,14 @@ export function fmtNum(n: number | null | undefined, digits = 1): string {
     if (n == null || !Number.isFinite(n)) return '—';
     return (Math.round(n * 10 ** digits) / 10 ** digits).toString();
 }
+
+/** agent-debug 认知模块 → 展示标签与配色（与智能诊断模块口径一致）。 */
+export const MODULE_LABEL: Record<string, string> = {
+    planning: 'Planning·规划',
+    action: 'Action·执行',
+    memory: 'Memory·记忆',
+    reflection: 'Reflection·反思',
+    system: 'System·环境',
+    others: '其他',
+};
+export const MODULE_COLORS = ['var(--primary)', 'var(--warning)', '#2c6bd1', 'var(--success)', 'var(--foreground-muted)', 'var(--error)'];
