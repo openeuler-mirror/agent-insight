@@ -45,7 +45,7 @@ flowchart TD
 ```
 
 ## 后端流水线：接入（agent run → Execution 记录）
-客户端 agent（OpenCode 插件 + uploader、Claude Code 官方 OTel logs、OpenClaw watcher、OTel SDK）将运行数据推送到接入路由。平台将原始 session 规范化为一棵 `Execution` 树。OTel `logs` / `traces` 是异步摄取：HTTP 端点只负责校验、归一化、写 JSONL spool 并返回已受理；`instrumentation-node.ts` 启动的进程内 `OtelSpoolConsumer` 再按 checkpoint 增量消费、短 debounce 快速落库、长 debounce 触发评估。
+客户端 agent（OpenCode 插件 + uploader、Claude Code 官方 OTel logs、OpenClaw watcher、OTel SDK）将运行数据推送到接入路由。平台将原始 session 规范化为一棵 `Execution` 树。Claude Code 的 `tool_result` log 只包含工具名、输入和结果大小等 metadata；工具输出正文从 raw API request body 的 `tool_result` blocks 回填，因此安装脚本将 `OTEL_LOG_RAW_API_BODIES` 配成 `file:<dir>`，避免 inline `1` 模式被 Claude Code 截断到 60 KB。`OTEL_LOG_TOOL_CONTENT=1` 只影响 tracing span events，需要启用 traces。OTel `logs` / `traces` 是异步摄取：HTTP 端点只负责校验、归一化、写 JSONL spool 并返回已受理；`instrumentation-node.ts` 启动的进程内 `OtelSpoolConsumer` 再按 checkpoint 增量消费、短 debounce 快速落库、长 debounce 触发评估。
 
 ```mermaid
 flowchart TD

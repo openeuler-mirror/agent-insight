@@ -57,6 +57,67 @@ test("agent trace: content blocks are converted to text before building events",
   assert.equal(tree!.events[1]?.summary, "done")
 })
 
+test("agent trace: parallel same-type task calls create separate child nodes", () => {
+  const tree = buildAgentCallTree([
+    { role: "user", content: "diagnose", timestamp: 1 },
+    {
+      role: "assistant",
+      agent: "Root",
+      content: "dispatch",
+      timestamp: 2,
+      tool_calls: [
+        {
+          id: "task_1",
+          type: "function",
+          function: {
+            name: "task",
+            arguments: JSON.stringify({
+              subagent_type: "general",
+              description: "first branch",
+            }),
+          },
+          state: "success",
+        },
+        {
+          id: "task_2",
+          type: "function",
+          function: {
+            name: "task",
+            arguments: JSON.stringify({
+              subagent_type: "general",
+              description: "second branch",
+            }),
+          },
+          state: "success",
+        },
+      ],
+    },
+    {
+      role: "subagent",
+      agent: "general",
+      subagent_name: "general",
+      subagent_session_id: "ses_child_1",
+      content: "first result",
+      timestamp: 3,
+    },
+    {
+      role: "subagent",
+      agent: "general",
+      subagent_name: "general",
+      subagent_session_id: "ses_child_2",
+      content: "second result",
+      timestamp: 4,
+    },
+  ] as any)
+
+  assert.ok(tree)
+  assert.equal(tree!.stats.taskCalls, 2)
+  assert.equal(tree!.children.length, 2)
+  assert.deepEqual(tree!.children.map((child) => child.sessionId), ["ses_child_1", "ses_child_2"])
+  assert.equal(tree!.events.find((event) => (event as any)._toolCallId === "task_1")?.spawnedChildId, tree!.children[0].id)
+  assert.equal(tree!.events.find((event) => (event as any)._toolCallId === "task_2")?.spawnedChildId, tree!.children[1].id)
+})
+
 test("agent trace: tool-only assistant turn (empty content) still emits an llm event from reasoning", () => {
   // In opencode a tool-calling turn carries its chain-of-thought in `reasoning`
   // parts while `content` (text parts only) is empty. Each such turn is one LLM

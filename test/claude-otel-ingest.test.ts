@@ -1,8 +1,12 @@
 import assert from "node:assert/strict"
+import fs from "node:fs"
+import os from "node:os"
+import path from "node:path"
 import test from "node:test"
 
 import { aggregateClaudeOtelEvents } from "@/lib/ingest/claude-otel/aggregator"
 import { buildAgentCallTree } from "@/lib/engine/observability/agent-trace"
+import { ClaudeParser } from "@/lib/engine/observability/claude-parser"
 import { normalizeClaudeOtlpLogs } from "@/lib/ingest/claude-otel/otlp-json"
 import { normalizeClaudeCodeInteractionsForStorage } from "@/lib/shared/interaction-content"
 
@@ -38,7 +42,15 @@ test("Claude OTel: normalizes OTLP logs and aggregates an execution record", () 
     type: "message",
     role: "assistant",
     model: "claude-sonnet-4-6",
-    content: [{ type: "text", text: "done" }],
+    content: [
+      { type: "text", text: "done" },
+      {
+        type: "tool_use",
+        id: "toolu_1",
+        name: "Read",
+        input: { file_path: "README.md" },
+      },
+    ],
     usage: { input_tokens: 10, output_tokens: 4 },
     stop_reason: "end_turn",
   })
@@ -83,6 +95,7 @@ test("Claude OTel: normalizes OTLP logs and aggregates an execution record", () 
                 success: "true",
                 duration_ms: 50,
                 tool_input: JSON.stringify({ file_path: "README.md" }),
+                tool_result: "README contents",
               }),
               logRecord("api_response_body", {
                 "session.id": "session-a",
@@ -123,10 +136,109 @@ test("Claude OTel: normalizes OTLP logs and aggregates an execution record", () 
   assert.equal(record.interactions?.length, 2)
   assert.equal(typeof record.interactions?.[1]?.content, "string")
   assert.equal(record.interactions?.[1]?.content, "done")
-  assert.deepEqual(record.interactions?.[1]?.content_blocks, [{ type: "text", text: "done" }])
+  assert.deepEqual(record.interactions?.[1]?.content_blocks, [
+    { type: "text", text: "done" },
+    {
+      type: "tool_use",
+      id: "toolu_1",
+      name: "Read",
+      input: { file_path: "README.md" },
+    },
+  ])
+  assert.equal(record.interactions?.[1]?.tool_calls?.[0]?.output, "README contents")
   assert.equal(record.interactions?.[1]?.usage.total, 19)
   assert.ok(record.interactions?.[1]?.timeInfo?.created)
   assert.ok(record.interactions?.[1]?.timeInfo?.completed)
+})
+
+test("Claude OTel: maps tool_result blocks from request body refs onto tool call output", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "claude-otel-body-ref-"))
+  const requestBodyPath = path.join(dir, "request.json")
+  const responseBody = JSON.stringify({
+    id: "msg_1",
+    type: "message",
+    role: "assistant",
+    model: "claude-sonnet-4-6",
+    content: [
+      { type: "text", text: "I'll read it." },
+      {
+        type: "tool_use",
+        id: "toolu_body_ref",
+        name: "Read",
+        input: { file_path: "README.md" },
+      },
+    ],
+    usage: { input_tokens: 10, output_tokens: 4 },
+    stop_reason: "tool_use",
+  })
+  fs.writeFileSync(requestBodyPath, JSON.stringify({
+    messages: [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_body_ref",
+            name: "Read",
+            input: { file_path: "README.md" },
+          },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "toolu_body_ref",
+            content: "README contents from body_ref",
+          },
+        ],
+      },
+    ],
+  }))
+
+  const events = normalizeClaudeOtlpLogs({
+    resourceLogs: [{
+      scopeLogs: [{
+        logRecords: [
+          logRecord("user_prompt", {
+            "session.id": "session-body-ref",
+            "prompt.id": "prompt-body-ref",
+            "event.sequence": 1,
+            prompt: "read the file",
+          }),
+          logRecord("api_response_body", {
+            "session.id": "session-body-ref",
+            "prompt.id": "prompt-body-ref",
+            "event.sequence": 2,
+            model: "claude-sonnet-4-6",
+            body: responseBody,
+          }),
+          logRecord("tool_result", {
+            "session.id": "session-body-ref",
+            "prompt.id": "prompt-body-ref",
+            "event.sequence": 3,
+            tool_name: "Read",
+            tool_use_id: "toolu_body_ref",
+            success: "true",
+            duration_ms: 50,
+            tool_input: JSON.stringify({ file_path: "README.md" }),
+            tool_result_size_bytes: "29",
+          }),
+          logRecord("api_request_body", {
+            "session.id": "session-body-ref",
+            "prompt.id": "prompt-body-ref",
+            "event.sequence": 4,
+            body_ref: requestBodyPath,
+          }),
+        ],
+      }],
+    }],
+  })
+
+  const record = aggregateClaudeOtelEvents("session-body-ref", events)
+  assert.ok(record)
+  assert.equal(record.interactions?.[1]?.tool_calls?.[0]?.output, "README contents from body_ref")
 })
 
 test("Claude OTel: maps Agent tool calls into trace subagent relationships", () => {
@@ -250,4 +362,72 @@ test("ClaudeCode interactions: converts content blocks to storage-safe strings",
 
   assert.equal(normalized[0].content, "hello")
   assert.deepEqual(normalized[0].content_blocks, rawBlocks)
+})
+
+test("Claude parser: maps tool_result blocks back onto tool_calls output", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "claude-parser-"))
+  const file = path.join(dir, "session.jsonl")
+  const lines = [
+    {
+      type: "user",
+      sessionId: "claude-session",
+      timestamp: "2026-05-11T01:00:00.000Z",
+      message: { content: "read the file" },
+    },
+    {
+      type: "assistant",
+      sessionId: "claude-session",
+      timestamp: "2026-05-11T01:00:01.000Z",
+      message: {
+        model: "claude-sonnet-4-6",
+        usage: { input_tokens: 10, output_tokens: 5 },
+        content: [
+          { type: "text", text: "I'll read it." },
+          {
+            type: "tool_use",
+            id: "toolu_read_1",
+            name: "Read",
+            input: { file_path: "README.md" },
+          },
+        ],
+      },
+    },
+    {
+      type: "user",
+      sessionId: "claude-session",
+      timestamp: "2026-05-11T01:00:02.000Z",
+      message: {
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "toolu_read_1",
+            content: "README contents",
+          },
+        ],
+      },
+      toolUseID: "toolu_read_1",
+      toolUseResult: { durationMs: 25 },
+    },
+    {
+      type: "assistant",
+      sessionId: "claude-session",
+      timestamp: "2026-05-11T01:00:03.000Z",
+      message: {
+        model: "claude-sonnet-4-6",
+        usage: { input_tokens: 8, output_tokens: 2 },
+        content: [{ type: "text", text: "done" }],
+      },
+    },
+  ]
+  fs.writeFileSync(file, lines.map((line) => JSON.stringify(line)).join("\n"))
+
+  try {
+    const record = await new ClaudeParser().parseFile(file)
+    assert.ok(record)
+    const assistant = record.interactions.find((item: any) => item.role === "assistant" && item.tool_calls?.length)
+    assert.equal(assistant?.tool_calls?.[0]?.output, "README contents")
+    assert.equal(assistant?.tool_calls?.[0]?.timing?.duration_ms, 25)
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
 })
