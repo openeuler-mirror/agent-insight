@@ -33,7 +33,7 @@ export interface TriggerItem {
   source: TriggerItemSource;
 }
 
-export type TriggerSetStatus = 'drafting' | 'ready';
+export type TriggerSetStatus = 'drafting' | 'ready' | 'failed';
 
 /** 一个数据集版本是怎么来的。 */
 export type TriggerSetVersionSource = 'llm-draft' | 'user-upload' | 'manual';
@@ -170,6 +170,10 @@ function normalizeVersionSource(value: unknown): TriggerSetVersionSource {
   }
 }
 
+function normalizeSetStatus(value: unknown): TriggerSetStatus {
+  return value === 'drafting' ? 'drafting' : value === 'failed' ? 'failed' : 'ready';
+}
+
 function setRecordFromRow(row: {
   id: string;
   user: string;
@@ -200,7 +204,7 @@ function setRecordFromRow(row: {
     description: row.description,
     items,
     draftedFromSkillHash: row.draftedFromSkillHash,
-    status: row.status === 'drafting' ? 'drafting' : 'ready',
+    status: normalizeSetStatus(row.status),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -441,6 +445,98 @@ export async function deleteTriggerEvalSet(user: string, skillName: string): Pro
   const prisma = requirePrisma();
   const res = await prisma.skillTriggerEvalSet.deleteMany({ where: { user, skillName } });
   return res.count > 0;
+}
+
+// =========================================================================
+// 异步起草占位版本（status=drafting → ready / failed）
+//
+// AI 起草耗时 5-15s，改成异步后：先建一个 status=drafting 的占位版本立刻返回，
+// LLM 在后台跑完再就地 flip 成 ready（写入 items）；失败则 flip 成 failed（versionNote 落原因）。
+// 占位版本落在 DB 里，跟请求生命周期解耦——用户刷新 / 关页面回来都能看到「起草中」，
+// 不会因为本地 state 丢了就以为没在跑、又点一次重复起草。
+// =========================================================================
+
+/** 一个 drafting 占位超过这个时长还没 flip，视为僵尸（多半进程中途挂了），不再阻塞新起草。 */
+export const DRAFTING_SET_STALE_MS = 5 * 60 * 1000;
+
+/**
+ * 查 (user, skillName) 下是否有一条**新鲜**的 drafting 占位版本。
+ * 用于「同一 skill 已有起草在跑就别再起一个」的 409 防重入——异步化后一次 POST 立刻返回，
+ * 连点 / 多标签页极易并发发起，每次都建一个新占位版本既浪费算力又把版本号拱乱。
+ * 只认 updatedAt 在 staleMs 以内的 drafting；更久的当僵尸忽略，避免崩溃残留永久卡死后续起草。
+ */
+export async function findFreshDraftingSet(
+  user: string,
+  skillName: string,
+  opts?: { staleMs?: number },
+): Promise<SkillTriggerEvalSetRecord | null> {
+  const prisma = requirePrisma();
+  const staleMs = opts?.staleMs ?? DRAFTING_SET_STALE_MS;
+  const freshAfter = new Date(Date.now() - staleMs);
+  const row = await prisma.skillTriggerEvalSet.findFirst({
+    where: { user, skillName, status: 'drafting', updatedAt: { gte: freshAfter } },
+    orderBy: { version: 'desc' },
+  });
+  return row ? setRecordFromRow(row) : null;
+}
+
+/**
+ * 删除 (user, skillName) 下所有**占位**版本（status drafting/failed）。
+ * 新起草前调用，清掉上次失败的 failed 占位 + 僵尸 drafting，避免它们一直顶在版本号最大位
+ * 把编辑器「latest 可编辑版本」语义带歪。**只删占位**——ready 的真版本一律不碰。
+ * 注意：调用方须先做完 findFreshDraftingSet 的 409 判断，确保此刻没有「正在跑」的占位被误删。
+ */
+export async function deletePlaceholderDraftingSets(
+  user: string,
+  skillName: string,
+): Promise<number> {
+  const prisma = requirePrisma();
+  const res = await prisma.skillTriggerEvalSet.deleteMany({
+    where: { user, skillName, status: { in: ['drafting', 'failed'] } },
+  });
+  return res.count;
+}
+
+/**
+ * 后台起草成功：把占位版本就地填上 items 并 flip 成 ready。
+ * 用 updateMany 限定 status=drafting，避免覆盖已被并发清理 / 已 finalize 的行；命中 0 行返回 null。
+ */
+export async function markDraftingSetReady(
+  id: string,
+  args: { items: TriggerItem[]; draftedFromSkillHash?: string | null; versionNote?: string | null },
+): Promise<SkillTriggerEvalSetRecord | null> {
+  const prisma = requirePrisma();
+  const res = await prisma.skillTriggerEvalSet.updateMany({
+    where: { id, status: 'drafting' },
+    data: {
+      itemsJson: JSON.stringify(args.items),
+      draftedFromSkillHash: args.draftedFromSkillHash ?? undefined,
+      versionNote: args.versionNote ?? undefined,
+      status: 'ready',
+    },
+  });
+  if (res.count === 0) return null;
+  const row = await prisma.skillTriggerEvalSet.findUnique({ where: { id } });
+  return row ? setRecordFromRow(row) : null;
+}
+
+/**
+ * 后台起草失败：把占位版本 flip 成 failed，错误原因塞进 versionNote（前端轮询到 failed 时浮出来）。
+ * 同样限定 status=drafting。errorMessage 截断防超长。
+ */
+export async function markDraftingSetFailed(
+  id: string,
+  errorMessage: string,
+): Promise<SkillTriggerEvalSetRecord | null> {
+  const prisma = requirePrisma();
+  const note = errorMessage.slice(0, 500);
+  const res = await prisma.skillTriggerEvalSet.updateMany({
+    where: { id, status: 'drafting' },
+    data: { status: 'failed', versionNote: note },
+  });
+  if (res.count === 0) return null;
+  const row = await prisma.skillTriggerEvalSet.findUnique({ where: { id } });
+  return row ? setRecordFromRow(row) : null;
 }
 
 // =========================================================================
