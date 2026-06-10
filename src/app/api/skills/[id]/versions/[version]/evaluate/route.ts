@@ -1,11 +1,12 @@
 import { canAccessSkill, resolveUser } from '@/lib/auth/auth';
 import { db } from '@/lib/storage/prisma';
 import { runStaticEvaluation } from '@/lib/engine/skill-issues/static-evaluator';
+import { getActiveConfig } from '@/lib/storage/server-config';
 import { NextRequest, NextResponse } from 'next/server';
 
 /**
  * 手动触发当前 SkillVersion 的静态评估（完整 L1+L2 流程，L1 不单独评分）。
- * 未配 LLM 时 L2 失败：评估记为 partial，只产出 L1 issue 列表，不产出维度分数。
+ * 未配置评估模型直接 400 拒绝，不创建评估行——不允许单独跑 L1。
  * 同步等待执行；典型耗时数秒～30s。
  */
 export async function POST(
@@ -35,6 +36,15 @@ export async function POST(
     const sv = await db.findSkillVersion(id, version);
     if (!sv) {
       return NextResponse.json({ error: `Version ${version} not found` }, { status: 404 });
+    }
+
+    // 模型门控：评估必须完整 L1+L2，未配模型直接拒绝（runStaticEvaluation 内部还有同款兜底）。
+    const config = await getActiveConfig(username || null);
+    if (!config) {
+      return NextResponse.json(
+        { error: '未配置评估模型，请先在「模型注册」页配置后再评估。' },
+        { status: 400 },
+      );
     }
 
     const result = await runStaticEvaluation({

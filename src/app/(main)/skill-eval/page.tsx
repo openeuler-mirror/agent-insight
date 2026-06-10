@@ -4435,6 +4435,9 @@ function StaticCompliancePanel({
             await onReload({
                 expectedEvaluationId: typeof data.evaluationId === 'string' ? data.evaluationId : undefined,
             });
+        } catch (e) {
+            // 未配模型会被后端 400 拦截（不创建评估行），这里 toast 出具体原因
+            toast.error(e instanceof Error ? e.message : '静态合规启动失败');
         } finally {
             setRunning(false);
         }

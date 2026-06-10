@@ -1,6 +1,6 @@
 import { canAccessSkill, resolveUser } from '@/lib/auth/auth';
 import { parseSkillFlow } from '@/lib/engine/observability/flow-parser';
-import { runAutoStaticEvaluation } from '@/lib/engine/skill-issues/static-evaluator';
+import { runStaticEvaluation } from '@/lib/engine/skill-issues/static-evaluator';
 import { findSkillMd } from '@/lib/skill-generator/skill-files';
 import { db, prismaRaw } from '@/lib/storage/prisma';
 import fs from 'fs';
@@ -134,10 +134,11 @@ export async function POST(
             })
             .catch(e => console.warn(`[skill-opt apply] Flow parse error:`, e));
 
-        runAutoStaticEvaluation({
+        runStaticEvaluation({
             skillId: skill.id,
             version: nextVersionNum,
             user: user || null,
+            trigger: 'auto-upload',
         })
             .then(r => {
                 if (r.status === 'skipped') {

@@ -6,13 +6,14 @@
  *   - 把 L1 linter + L2 LLM 的产出统一转成 SkillIssue 行（source='static'，FK = evaluation.id）
  *
  * 触发：
- *   - 自动：skill 上传 / skill-opt 采纳后 fire-and-forget（runAutoStaticEvaluation）——
- *     必须已配置评估模型才触发；24h 内同 contentHash + 同 generator 的 ok 评估存在则跳过
- *   - 手动：UI 上「重新评估」按钮，永远跑（不 skip）
+ *   - 自动：skill 上传 / 存新版本 / skill-opt 采纳后 fire-and-forget；
+ *     24h 内同 contentHash + 同 generator 的 ok 评估存在则跳过
+ *   - 手动：UI 上「重新评估」按钮，不走 24h skip
  *
- * 评估一律是完整 L1+L2 流程。L1 不单独评分：维度分数只在 L2（LLM）跑成功后产出
- * （L1 命中作为 floor 与 L2 分取 min）；L2 没跑成功时只落 issue 列表，不落任何分数，
- * 避免 UI 把纯 L1 floor 当完整评分展示、误导用户。
+ * 模型门控：未配置评估模型时，自动/手动一律直接 skip、不创建 Evaluation 行——
+ * 评估必须是完整 L1+L2 流程，不允许单独跑 L1。L1 不单独评分：维度分数只在
+ * L2（LLM）跑成功后产出（L1 命中作为 floor 与 L2 分取 min）；L2 中途失败时只落
+ * issue 列表，不落任何分数，避免 UI 把纯 L1 floor 当完整评分展示、误导用户。
  *
  * 重评懒删除：每次跑都新建 Evaluation 行，旧的不删；前端按 ranAt DESC 取最近一条做概述。
  */
@@ -173,29 +174,21 @@ function llmDraftToSkillIssueData(
 }
 
 /**
- * 自动触发入口（skill 上传 / skill-opt 采纳后 fire-and-forget 调用）。
- * 必须已配置评估模型才会真正触发——否则直接 skip，不创建 Evaluation 行：
- * 没有模型只能跑纯 L1，而 L1 不单独评分，自动产出一条没有分数的评估只会误导用户。
+ * 主入口。同步等待整个流程完成，由调用方决定是否 await（自动触发应 fire-and-forget）。
  */
-export async function runAutoStaticEvaluation(
-  args: Omit<RunArgs, 'trigger'>,
-): Promise<RunResult> {
+export async function runStaticEvaluation(args: RunArgs): Promise<RunResult> {
+  const startedAt = Date.now();
+
+  // 模型门控：评估必须有 LLM 参与（L1 不单独评分），未配模型一律不跑、不创建 Evaluation 行。
   const config = await getActiveConfig(args.user);
   if (!config) {
     return {
       status: 'skipped',
       issuesCount: 0,
-      skipReason: '未配置评估模型，跳过自动评估',
+      skipReason: '未配置评估模型，跳过评估',
     };
   }
-  return runStaticEvaluation({ ...args, trigger: 'auto-upload' });
-}
 
-/**
- * 主入口。同步等待整个流程完成，由调用方决定是否 await（自动触发应 fire-and-forget）。
- */
-export async function runStaticEvaluation(args: RunArgs): Promise<RunResult> {
-  const startedAt = Date.now();
   const skillVersion = await prismaRaw.skillVersion.findUnique({
     where: { skillId_version: { skillId: args.skillId, version: args.version } },
   });

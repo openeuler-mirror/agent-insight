@@ -1,6 +1,6 @@
 /**
  * 一次性 smoke 脚本：跑完整 L1+L2 静态评估器，确认 Evaluation + SkillIssue 落库。
- * （未配模型时 L2 失败，评估记为 partial，只产出 L1 issue、不产出分数。）
+ * （未配置评估模型时直接 skip、不创建评估行——不允许单独跑 L1。）
  * 用法：
  *   npx tsx scripts/smoke_static_evaluator.ts <skillId> <version>
  */
@@ -25,6 +25,10 @@ async function main() {
   });
   console.log('[smoke] orchestrator result:', JSON.stringify(result, null, 2));
 
+  if (result.status === 'skipped') {
+    console.error(`[smoke] skipped: ${result.skipReason}`);
+    process.exit(1);
+  }
   if (!result.evaluationId) {
     console.error('[smoke] no evaluationId returned');
     process.exit(1);
