@@ -8,6 +8,7 @@ import { ensureSessionWorkspace, ensureUserWorkspace } from '@/lib/engine/genera
 import {
   buildSkillOptSystemPrompt,
   type SkillOptIssueLite,
+  type SkillOptPlanItemLite,
 } from '@/lib/engine/general-agent/skill-opt-prompt';
 import { scanWorkspaceFiles, type FileData } from '@/lib/skill-generator-opencode-bridge';
 import type {
@@ -52,6 +53,8 @@ export interface StreamSkillOptOpts {
   skillName: string;
   baseVersion: number;
   checkedIssues: SkillOptIssueLite[];
+  /** 归并 plan 条目；非空时 prompt 走 plan 注入路径（替代 checkedIssues） */
+  planItems?: SkillOptPlanItemLite[];
   userFeedback: string;
   modelId?: string;
   /**
@@ -79,11 +82,12 @@ export function streamSkillOptOpencode(
 async function streamSkillOptOpencodeImpl(
   opts: StreamSkillOptOpts,
 ): Promise<StreamSkillOptResult> {
-  const { user, threadId, skillName, baseVersion, checkedIssues, userFeedback, modelId, baselineFiles, send } = opts;
+  const { user, threadId, skillName, baseVersion, checkedIssues, planItems, userFeedback, modelId, baselineFiles, send } = opts;
 
   console.log('[skill-opt-bridge] start', {
     user, threadId, skillName, baseVersion,
-    issuesCount: checkedIssues.length, feedbackLen: userFeedback.length,
+    issuesCount: checkedIssues.length, planItemsCount: planItems?.length ?? 0,
+    feedbackLen: userFeedback.length,
     baselineFiles: baselineFiles ? Object.keys(baselineFiles).length : 0,
   });
 
@@ -109,7 +113,7 @@ async function streamSkillOptOpencodeImpl(
 
   // ── 3. system prompt ───────────────────────────────────────────────────────
   const systemPrompt = buildSkillOptSystemPrompt({
-    skillName, baseVersion, checkedIssues, userFeedback,
+    skillName, baseVersion, checkedIssues, userFeedback, planItems,
   });
 
   // ── 4. SSE handlers + watchdog（直接抄 skill-generator 的）──────────────────────
@@ -290,7 +294,7 @@ async function streamSkillOptOpencodeImpl(
     result = await withBackgroundOpencodeSlot(
       () => runGeneralAgent({
         user,
-        query: composeUserQuery(checkedIssues, userFeedback),
+        query: composeUserQuery(checkedIssues, userFeedback, planItems),
         sessionId: cachedSessionId,
         workspaceTag: threadId,
         sessionTitle: `skill-opt · ${skillName} v${baseVersion} · ${threadId.slice(0, 8)}`,
@@ -317,7 +321,7 @@ async function streamSkillOptOpencodeImpl(
       result = await withBackgroundOpencodeSlot(
         () => runGeneralAgent({
           user,
-          query: composeUserQuery(checkedIssues, userFeedback),
+          query: composeUserQuery(checkedIssues, userFeedback, planItems),
           workspaceTag: threadId,
           sessionTitle: `skill-opt · ${skillName} v${baseVersion} · ${threadId.slice(0, 8)}`,
           system: systemPrompt,
@@ -510,11 +514,13 @@ function copyDirRecursive(src: string, dst: string): number {
 
 // ── 辅助函数 ─────────────────────────────────────────────────────────────────
 
-function composeUserQuery(issues: SkillOptIssueLite[], userFeedback: string): string {
-  // system prompt 已包含 issues 全部细节；query 只放一个简短的"开干"指令 + 用户原文，
+function composeUserQuery(issues: SkillOptIssueLite[], userFeedback: string, planItems?: SkillOptPlanItemLite[]): string {
+  // system prompt 已包含 issues/plan 全部细节；query 只放一个简短的"开干"指令 + 用户原文，
   // 避免 LLM 把 system 当背景 / query 当主输入时漏掉哪一边。
   const lines: string[] = [];
-  if (issues.length > 0) {
+  if (planItems && planItems.length > 0) {
+    lines.push(`请按 system 提示中的优化计划逐条执行（共 ${planItems.length} 条）。`);
+  } else if (issues.length > 0) {
     lines.push(`请按 system 提示中列出的 ${issues.length} 个 issue 进行优化。`);
   }
   if (userFeedback.trim()) {
