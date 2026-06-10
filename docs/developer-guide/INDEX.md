@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `2e8c4af572e79b91b1cfdd8b3216bf6541835c64` (`2e8c4af`) |
+| Commit | `ec0d3d69379f71956fd168387265e62a2902e3ec` (`ec0d3d6`) |
 | Branch | `gyc0528` |
 | Date | 2026-06-09T16:25:00+08:00 |
 | Author | ljnkirito |
 | Subject | `refactor: 统一框架适配器注册表处理 Skill 抽取和 Claude 归一化` |
 
-**如何更新：** `git diff 2e8c4af HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff ec0d3d6 HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。

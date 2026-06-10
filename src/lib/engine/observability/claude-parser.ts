@@ -1,6 +1,58 @@
 import fs from 'fs';
 import readline from 'readline';
 
+function stringifyToolResultContent(value: any): any {
+  if (value == null) return undefined;
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) {
+    const text = value
+      .map((item) => {
+        if (typeof item === 'string') return item;
+        if (typeof item?.text === 'string') return item.text;
+        if (typeof item?.content === 'string') return item.content;
+        return '';
+      })
+      .filter(Boolean)
+      .join('');
+    return text || value;
+  }
+  if (typeof value === 'object') {
+    if (typeof value.text === 'string') return value.text;
+    if (typeof value.content === 'string') return value.content;
+    if (value.output !== undefined) return stringifyToolResultContent(value.output);
+    if (value.result !== undefined) return stringifyToolResultContent(value.result);
+  }
+  return value;
+}
+
+function extractToolResultOutput(source: any): any {
+  if (!source || typeof source !== 'object') return undefined;
+  for (const key of ['content', 'output', 'result', 'stdout', 'stderr']) {
+    if (source[key] !== undefined) return stringifyToolResultContent(source[key]);
+  }
+  return undefined;
+}
+
+function toolResultUseId(block: any): string | undefined {
+  return block?.tool_use_id || block?.toolUseId || block?.toolUseID || block?.id;
+}
+
+function buildToolCallFromClaudeToolUse(tool: any): any {
+  const input = tool?.input || {};
+  const args = typeof input === 'string' ? input : JSON.stringify(input);
+  return {
+    id: tool?.id,
+    type: 'function',
+    function: {
+      name: tool?.name || 'tool',
+      arguments: args,
+    },
+    name: tool?.name || 'tool',
+    arguments: args,
+    state: 'pending',
+  };
+}
+
 /**
  * Parses Claude Code session `.jsonl` files and transforms them into an ExecutionRecord.
  */
@@ -101,7 +153,21 @@ export class ClaudeParser {
                 if (!turnEndTime || ts > turnEndTime) turnEndTime = ts;
             }
 
-            interactions.push({ type: entry.type, message: entry.message, timestamp: entry.timestamp });
+            const interaction: any = {
+                type: entry.type,
+                message: entry.message,
+                timestamp: entry.timestamp,
+                role: entry.type === 'assistant' ? 'assistant' : entry.type === 'user' ? 'user' : entry.type,
+                content: typeof entry.message?.content === 'string'
+                    ? entry.message.content
+                    : Array.isArray(entry.message?.content)
+                        ? entry.message.content
+                            .filter((c: any) => c?.type === 'text')
+                            .map((c: any) => c.text || '')
+                            .join('')
+                        : '',
+            };
+            interactions.push(interaction);
 
             if (entry.type === 'user' && !firstUserMsg && !entry.isMeta) {
                 let rawText = "";
@@ -158,13 +224,19 @@ export class ClaudeParser {
                         lastAssistantMsg = textBlock.text;
                     }
                     const toolBlocks = entry.message.content.filter((c: any) => c.type === 'tool_use');
+                    const topLevelToolCalls: any[] = [];
                     for (const tool of toolBlocks) {
+                        const topLevelToolCall = buildToolCallFromClaudeToolUse(tool);
+                        topLevelToolCalls.push(topLevelToolCall);
+
                         // Store tool call for later matching with result
                         if (tool.id) {
                             toolCallMap.set(tool.id, {
                                 name: tool.name,
                                 input: tool.input,
-                                timestamp: entry.timestamp
+                                timestamp: entry.timestamp,
+                                toolUseBlock: tool,
+                                toolCall: topLevelToolCall,
                             });
                         }
                         
@@ -177,14 +249,34 @@ export class ClaudeParser {
                             skills.add(tool.name);
                         }
                     }
+                    if (topLevelToolCalls.length > 0) {
+                        interaction.tool_calls = topLevelToolCalls;
+                    }
                 }
             }
             
             // Count tool call errors from tool_result content blocks
             if (entry.type === 'user' && Array.isArray(entry.message?.content)) {
                 for (const block of entry.message.content) {
-                    if (block.type === 'tool_result' && block.is_error) {
-                        toolCallErrorCount++;
+                    if (block.type === 'tool_result') {
+                        if (block.is_error) {
+                            toolCallErrorCount++;
+                        }
+                        const toolUseId = toolResultUseId(block);
+                        const output = extractToolResultOutput(block);
+                        if (toolUseId && toolCallMap.has(toolUseId)) {
+                            const toolCall = toolCallMap.get(toolUseId);
+                            if (output !== undefined) {
+                                toolCall.toolCall.output = output;
+                                toolCall.toolUseBlock.output = output;
+                            }
+                            if (block.is_error) {
+                                toolCall.toolCall.state = 'error';
+                                toolCall.toolCall.error = output;
+                            } else {
+                                toolCall.toolCall.state = 'success';
+                            }
+                        }
                     }
                 }
             }
@@ -204,11 +296,20 @@ export class ClaudeParser {
                     if (interaction) {
                         const toolUse = interaction.message.content.find((c: any) => c.type === 'tool_use' && c.id === toolUseId);
                         if (toolUse) {
-                            toolUse.timing = {
+                            const timing = {
                                 started_at: toolCall.timestamp,
                                 completed_at: entry.timestamp,
                                 duration_ms: entry.toolUseResult.durationMs
                             };
+                            toolUse.timing = timing;
+                            if (toolCall.toolCall) {
+                                toolCall.toolCall.timing = timing;
+                            }
+                            const output = extractToolResultOutput(entry.toolUseResult);
+                            if (output !== undefined) {
+                                toolUse.output = output;
+                                if (toolCall.toolCall) toolCall.toolCall.output = output;
+                            }
                         }
                     }
                 }

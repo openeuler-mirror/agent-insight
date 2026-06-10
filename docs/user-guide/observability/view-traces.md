@@ -220,6 +220,7 @@ Task Spawn 表示当前执行过程中派生出的新任务数量。在多 Agent
 
 > **Note**
 > 通过 OTel `logs` / `traces` 端点接入的数据是异步可见的：端点返回成功表示平台已受理并写入本地 spool，后台消费者会在短暂 debounce 后落库，随后在会话空闲后再补充结果评估。因此刚发完上报后，列表页可能需要等待几秒才出现新 Trace，评估分数可能再稍后更新。
+> Claude Code 接入需要通过安装脚本生成的 OTel wrapper 开启 `OTEL_LOG_TOOL_DETAILS=1`，并将 `OTEL_LOG_RAW_API_BODIES` 配成 `file:<dir>`。`OTEL_LOG_RAW_API_BODIES=1` 的 inline body 会被 Claude Code 截断到 60 KB，长会话里可能拿不到工具结果正文；`OTEL_LOG_TOOL_CONTENT=1` 只影响 tracing span events，需要启用 traces。
 
 ### 场景二：排查失败问题
 

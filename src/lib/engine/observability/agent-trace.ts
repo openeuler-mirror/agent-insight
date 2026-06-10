@@ -224,28 +224,51 @@ export function buildAgentCallTree(interactions: RawInteraction[]): AgentNode | 
 
     /**
      * In OpenCode, a child agent's session_id can be re-visited across multiple
-     * parent task() invocations — the runtime persists the child session and
-     * re-uses it for follow-up calls. We treat each *parent task interaction*
-     * (the LLM turn that issued one or more task() calls of a given type) as a
-     * separate spawn boundary, producing a fresh child node. Within one parent
-     * interaction, parallel task() calls of the same subagent_type collapse
-     * into a single spawn (we can't reliably split a shared session by which
-     * parallel call drove which inner step).
+     * parent task() invocations. Every task() call is still a separate logical
+     * spawn, including parallel calls with the same subagent_type.
      */
     interface PendingTask {
         parentNode: AgentNode;
         subagentType: string;
+        expectedSessionId?: string;
         startedAt?: number;
-        /** Spawn events from the same parent interaction that share this claim */
+        /** Spawn events covered by this claim. Normally one per task() call. */
         spawnEvents: AgentEvent[];
-        /** Number of parallel task() calls collapsed into this spawn */
+        /** Retained for legacy records that already encoded collapsed claims. */
         parallelCount: number;
-        /** Original parent interaction index — used to detect spawn boundary */
+        /** Original parent interaction index, used for stable FIFO matching. */
         parentInteractionIndex: number;
     }
 
     /** Pending task spawns waiting for their first subagent interaction */
-    const pendingByType = new Map<string, PendingTask[]>();
+    const pendingTasks: PendingTask[] = [];
+
+    function addPendingTask(parentNode: AgentNode, sType: string, ev: AgentEvent, parentInteractionIndex: number) {
+        pendingTasks.push({
+            parentNode,
+            subagentType: sType,
+            expectedSessionId: extractSessionIdFromTaskEvent(ev),
+            startedAt: ev.startedAt,
+            spawnEvents: [ev],
+            parallelCount: 1,
+            parentInteractionIndex,
+        });
+    }
+
+    function takePendingTask(sid: string, sType: string | null): PendingTask | undefined {
+        const exactIdx = pendingTasks.findIndex(claim =>
+            claim.expectedSessionId === sid &&
+            (!sType || claim.subagentType === sType),
+        );
+        if (exactIdx >= 0) return pendingTasks.splice(exactIdx, 1)[0];
+
+        if (!sType) return undefined;
+        const typeIdx = pendingTasks.findIndex(claim =>
+            !claim.expectedSessionId &&
+            claim.subagentType === sType,
+        );
+        return typeIdx >= 0 ? pendingTasks.splice(typeIdx, 1)[0] : undefined;
+    }
 
     /** session_id → active child node currently receiving interactions */
     const sessionToNode = new Map<string, AgentNode>();
@@ -318,28 +341,29 @@ export function buildAgentCallTree(interactions: RawInteraction[]): AgentNode | 
 
         if (isSub) {
             const sType = inferSubagentType(it);
-            const queue = (sType && pendingByType.get(sType)) || [];
-            const claim = queue.length > 0 ? queue[0] : undefined;
+            const claim = takePendingTask(sid, sType);
 
             if (claim) {
-                // A pending spawn exists for this subagent_type → start a fresh
-                // node (even if the session_id was seen before — this is a new
-                // logical invocation from the parent).
-                queue.shift();
+                // A pending task claim starts a fresh logical invocation even
+                // when the runtime reuses a prior session id.
                 const parent = claim.parentNode;
                 host = makeNode({
                     id: nextId(),
                     agentName,
-                    subagentType: sType,
+                    subagentType: claim.subagentType || sType,
                     sessionId: sid,
                     parentId: parent.id,
                     depth: parent.depth + 1,
                 });
-                (host as AgentNode).parallelCallCount = claim.parallelCount;
+                if (claim.parallelCount > 1) {
+                    (host as AgentNode).parallelCallCount = claim.parallelCount;
+                }
                 parent.children.push(host);
                 sessionToNode.set(sid, host); // rebind: subsequent same-sid interactions extend this newest slice
-                if (claim.spawnEvents[0]) claim.spawnEvents[0].spawnedChildId = host.id;
-                if (claim.startedAt && !host.startedAt) host.startedAt = claim.startedAt;
+                for (const spawnEvent of claim.spawnEvents) {
+                    spawnEvent.spawnedChildId = host.id;
+                }
+                if (claim.startedAt != null && !host.startedAt) host.startedAt = claim.startedAt;
                 attachSystemPrompts(host, sid);
             } else {
                 // No pending claim — extend the existing slice for this session
@@ -407,22 +431,6 @@ export function buildAgentCallTree(interactions: RawInteraction[]): AgentNode | 
         // Convert this interaction into events
         const events = interactionToEvents(it, idx);
 
-        // Group parallel task() calls in this same interaction by subagent_type
-        // so they collapse into a single spawn (one child node).
-        const taskGroupsByType = new Map<string, AgentEvent[]>();
-        const addPendingTask = (sType: string, groupEvents: AgentEvent[]) => {
-            const arr = pendingByType.get(sType) || [];
-            arr.push({
-                parentNode: host,
-                subagentType: sType,
-                startedAt: groupEvents[0]?.startedAt,
-                spawnEvents: groupEvents,
-                parallelCount: groupEvents.length,
-                parentInteractionIndex: idx,
-            });
-            pendingByType.set(sType, arr);
-        };
-
         for (const ev of events) {
             host.events.push(ev);
             if (ev.kind === 'llm') host.stats.llmCalls++;
@@ -431,25 +439,52 @@ export function buildAgentCallTree(interactions: RawInteraction[]): AgentNode | 
                 host.stats.taskCalls++;
                 const sType = ev.args?.subagent_type || ev.args?.subagentType;
                 if (sType) {
-                    if ((ev as any).splitParallelTask) {
-                        addPendingTask(sType, [ev]);
-                    } else {
-                        const g = taskGroupsByType.get(sType) || [];
-                        g.push(ev);
-                        taskGroupsByType.set(sType, g);
-                    }
+                    addPendingTask(host, sType, ev, idx);
                 }
             } else if (ev.kind === 'tool') host.stats.toolCalls++;
-        }
-
-        for (const [sType, groupEvents] of taskGroupsByType) {
-            addPendingTask(sType, groupEvents);
         }
     }
 
     // Compute durations
     finalizeStats(root);
     return root;
+}
+
+function extractSessionIdFromTaskEvent(ev: AgentEvent): string | undefined {
+    return extractSessionIdValue(ev.args) ?? extractSessionIdValue(ev.output);
+}
+
+function extractSessionIdValue(value: any, depth = 0): string | undefined {
+    if (value == null || depth > 3) return undefined;
+    if (typeof value === 'string') {
+        const trimmed = value.trim();
+        if (!trimmed) return undefined;
+        if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+            try {
+                const parsed = JSON.parse(trimmed);
+                const fromParsed = extractSessionIdValue(parsed, depth + 1);
+                if (fromParsed) return fromParsed;
+            } catch {}
+        }
+        const match = trimmed.match(/\b(?:session_id|sessionId|subagent_session_id|subagentSessionId)\s*[:=]\s*([A-Za-z0-9_.:-]+)/);
+        return match?.[1];
+    }
+    if (Array.isArray(value)) {
+        for (const item of value) {
+            const found = extractSessionIdValue(item, depth + 1);
+            if (found) return found;
+        }
+        return undefined;
+    }
+    if (typeof value === 'object') {
+        const direct = value.session_id ?? value.sessionId ?? value.subagent_session_id ?? value.subagentSessionId;
+        if (typeof direct === 'string' && direct.trim()) return direct.trim();
+        for (const item of Object.values(value)) {
+            const found = extractSessionIdValue(item, depth + 1);
+            if (found) return found;
+        }
+    }
+    return undefined;
 }
 
 function makeNode(init: {
