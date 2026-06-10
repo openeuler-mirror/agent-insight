@@ -4,9 +4,9 @@ import { runStaticEvaluation } from '@/lib/engine/skill-issues/static-evaluator'
 import { NextRequest, NextResponse } from 'next/server';
 
 /**
- * 手动触发当前 SkillVersion 的静态评估。
- * 体：{ enableL2?: boolean }（默认 true，未配 LLM 时自动降级为仅 L1）。
- * 同步等待执行；典型耗时：纯 L1 < 50ms，含 L2 数秒～30s。
+ * 手动触发当前 SkillVersion 的静态评估（完整 L1+L2 流程，L1 不单独评分）。
+ * 未配 LLM 时 L2 失败：评估记为 partial，只产出 L1 issue 列表，不产出维度分数。
+ * 同步等待执行；典型耗时数秒～30s。
  */
 export async function POST(
   request: NextRequest,
@@ -19,7 +19,7 @@ export async function POST(
       return NextResponse.json({ error: 'Invalid version number' }, { status: 400 });
     }
 
-    let body: { enableL2?: boolean; user?: string } = {};
+    let body: { user?: string } = {};
     try { body = await request.json(); } catch { /* 允许空 body */ }
 
     const { username } = await resolveUser(request, body.user);
@@ -42,7 +42,6 @@ export async function POST(
       version,
       user: username || null,
       trigger: 'manual',
-      enableL2: body.enableL2 ?? true,
     });
 
     return NextResponse.json(result);

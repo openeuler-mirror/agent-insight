@@ -1,6 +1,6 @@
 import { resolveUser } from '@/lib/auth/auth';
 import { parseSkillFlow } from '@/lib/engine/observability/flow-parser';
-import { runStaticEvaluation } from '@/lib/engine/skill-issues/static-evaluator';
+import { runAutoStaticEvaluation } from '@/lib/engine/skill-issues/static-evaluator';
 import { db } from '@/lib/storage/prisma';
 import fs from 'fs';
 import { NextRequest, NextResponse } from 'next/server';
@@ -151,12 +151,10 @@ export async function POST(request: NextRequest) {
             })
             .catch(e => console.warn(`[Upload] Auto-parse flow error for skill ${skill.name} v${nextVersionNum}:`, e));
 
-        runStaticEvaluation({
+        runAutoStaticEvaluation({
             skillId: skill.id,
             version: nextVersionNum,
             user: user || null,
-            trigger: 'auto-upload',
-            enableL2: false,
         })
             .then(r => {
                 if (r.status === 'skipped') {

@@ -1,5 +1,6 @@
 /**
- * 一次性 smoke 脚本：跑 L1 静态评估器，确认 Evaluation + SkillIssue 落库。
+ * 一次性 smoke 脚本：跑完整 L1+L2 静态评估器，确认 Evaluation + SkillIssue 落库。
+ * （未配模型时 L2 失败，评估记为 partial，只产出 L1 issue、不产出分数。）
  * 用法：
  *   npx tsx scripts/smoke_static_evaluator.ts <skillId> <version>
  */
@@ -21,7 +22,6 @@ async function main() {
     version,
     user: null,
     trigger: 'manual',
-    enableL2: false,
   });
   console.log('[smoke] orchestrator result:', JSON.stringify(result, null, 2));
 

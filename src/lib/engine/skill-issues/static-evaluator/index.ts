@@ -6,8 +6,13 @@
  *   - 把 L1 linter + L2 LLM 的产出统一转成 SkillIssue 行（source='static'，FK = evaluation.id）
  *
  * 触发：
- *   - 自动：skill 上传后 fire-and-forget；24h 内同 contentHash + 同 generator 的 ok 评估存在则跳过
+ *   - 自动：skill 上传 / skill-opt 采纳后 fire-and-forget（runAutoStaticEvaluation）——
+ *     必须已配置评估模型才触发；24h 内同 contentHash + 同 generator 的 ok 评估存在则跳过
  *   - 手动：UI 上「重新评估」按钮，永远跑（不 skip）
+ *
+ * 评估一律是完整 L1+L2 流程。L1 不单独评分：维度分数只在 L2（LLM）跑成功后产出
+ * （L1 命中作为 floor 与 L2 分取 min）；L2 没跑成功时只落 issue 列表，不落任何分数，
+ * 避免 UI 把纯 L1 floor 当完整评分展示、误导用户。
  *
  * 重评懒删除：每次跑都新建 Evaluation 行，旧的不删；前端按 ranAt DESC 取最近一条做概述。
  */
@@ -15,6 +20,7 @@
 import { createHash } from 'crypto';
 
 import { prismaRaw } from '@/lib/storage/prisma';
+import { getActiveConfig } from '@/lib/storage/server-config';
 import type { Severity } from '../prevalence';
 import { lintSkillContent, lintSecurity, type LinterDiagnosis } from './linter';
 import { loadAssetBundle } from './content-loader';
@@ -25,10 +31,20 @@ import { runLlmStaticEvaluation, type LlmIssueDraft } from './llm-evaluator';
  * 2026-06 升级到 @0.2：6 维重组（替换运维可靠性 → 安全风险性；脚本质量 → 工程健壮性）
  * + L1 命中参与维度计分（L1_floor 与 L2 分数取 min）。
  * 升版本号会让所有历史 skill 在下一次 auto-upload 时自动重扫。
+ *
+ * 评估一律 L1+L2；不带 +llm 后缀的纯 L1 generator（@0.1 / @0.2）只存在于历史数据。
  */
-export const STATIC_EVAL_GENERATOR_L1 = 'static-evaluator@0.2';
 export const STATIC_EVAL_GENERATOR_L1_L2 = 'static-evaluator@0.2+llm';
 const SKIP_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * 维度分数只在 LLM 参与的完整评估（generator 带 +llm 后缀，含历史 @0.1+llm）里有效。
+ * 纯 L1 generator 的历史行可能在 l2ScoresJson 里残留 L1 floor 分数——L1 不单独评分，
+ * 序列化层用本判断把这些分数挡在前端之外。
+ */
+export function isLlmScoredGenerator(generator: string | null | undefined): boolean {
+  return !!generator && generator.includes('+llm');
+}
 
 /**
  * L1 命中转换为维度 floor 分数：
@@ -53,10 +69,9 @@ const L1_DIMENSION_TO_L2_NAME: Record<string, string> = {
 /**
  * 合并 L1 floor 和 L2 LLM 分数：
  *  - L1 命中的维度：finalScore = min(L1_floor, L2_score ?? 5)
- *  - L1 无命中的维度：保留 L2_score（若 L2 没跑则该维度仍为 notEvaluated）
+ *  - L1 无命中的维度：保留 L2_score（L2 没评到的维度仍为 notEvaluated）
  *
- * 这意味着 L2 没跑（用户没配 LLM / auto-upload 默认不跑 L2）时，
- * 只要 L1 命中了 structure / security 规则，相应维度仍有分。
+ * 仅在 L2 跑成功后调用——L1 不单独评分，纯 L1 的命中只产出 issue，不产出分数。
  */
 function mergeL1FloorWithL2Scores(
   diagnoses: LinterDiagnosis[],
@@ -85,7 +100,6 @@ export interface RunArgs {
   version: number;
   user: string | null;
   trigger: 'manual' | 'auto-upload';
-  enableL2?: boolean;        // 默认：manual=true（如可用）/ auto=false
 }
 
 export interface RunResult {
@@ -159,6 +173,25 @@ function llmDraftToSkillIssueData(
 }
 
 /**
+ * 自动触发入口（skill 上传 / skill-opt 采纳后 fire-and-forget 调用）。
+ * 必须已配置评估模型才会真正触发——否则直接 skip，不创建 Evaluation 行：
+ * 没有模型只能跑纯 L1，而 L1 不单独评分，自动产出一条没有分数的评估只会误导用户。
+ */
+export async function runAutoStaticEvaluation(
+  args: Omit<RunArgs, 'trigger'>,
+): Promise<RunResult> {
+  const config = await getActiveConfig(args.user);
+  if (!config) {
+    return {
+      status: 'skipped',
+      issuesCount: 0,
+      skipReason: '未配置评估模型，跳过自动评估',
+    };
+  }
+  return runStaticEvaluation({ ...args, trigger: 'auto-upload' });
+}
+
+/**
  * 主入口。同步等待整个流程完成，由调用方决定是否 await（自动触发应 fire-and-forget）。
  */
 export async function runStaticEvaluation(args: RunArgs): Promise<RunResult> {
@@ -172,8 +205,7 @@ export async function runStaticEvaluation(args: RunArgs): Promise<RunResult> {
 
   const content = skillVersion.content ?? '';
   const contentHash = computeContentHash(content);
-  const enableL2 = args.enableL2 ?? args.trigger === 'manual';
-  const generator = enableL2 ? STATIC_EVAL_GENERATOR_L1_L2 : STATIC_EVAL_GENERATOR_L1;
+  const generator = STATIC_EVAL_GENERATOR_L1_L2;
 
   if (args.trigger === 'auto-upload') {
     const skipCutoff = new Date(Date.now() - SKIP_WINDOW_MS);
@@ -238,42 +270,46 @@ export async function runStaticEvaluation(args: RunArgs): Promise<RunResult> {
 
     let l2DimensionScores: Record<string, number> = {};
     let l2Comments: Record<string, string | undefined> = {};
+    let l2Ok = false;
 
-    // L2 — 可选；3 stage 并发（chunking 在 runLlmStaticEvaluation 内部展开）
-    if (enableL2) {
-      const llm = await runLlmStaticEvaluation({
-        user: args.user,
-        skillContent: content,
-        bundleChunks: bundle.bundleChunks,
-      });
+    // L2 — 3 stage 并发（chunking 在 runLlmStaticEvaluation 内部展开）；
+    // 未配模型 / 全 stage 失败时 llm.ok = false，评估记为 partial。
+    const llm = await runLlmStaticEvaluation({
+      user: args.user,
+      skillContent: content,
+      bundleChunks: bundle.bundleChunks,
+    });
 
-      if (llm.ok) {
-        l2DimensionScores = llm.dimensionScores;
-        l2Comments = llm.overallComments;
-        for (const i of llm.issues) {
-          issuesData.push(llmDraftToSkillIssueData(i, {
-            evaluationId: evaluation.id,
-            skillId: args.skillId,
-            version: args.version,
-            user: args.user,
-          }));
-        }
-        // 部分 stage 失败仍算 ok，但要把 errorMessage 记录到 evaluation
-        if (llm.errorMessage) {
-          llmFailureMessage = llm.errorMessage;
-        }
-      } else {
-        llmFailureMessage = llm.errorMessage || 'LLM 评估失败';
+    if (llm.ok) {
+      l2Ok = true;
+      l2DimensionScores = llm.dimensionScores;
+      l2Comments = llm.overallComments;
+      for (const i of llm.issues) {
+        issuesData.push(llmDraftToSkillIssueData(i, {
+          evaluationId: evaluation.id,
+          skillId: args.skillId,
+          version: args.version,
+          user: args.user,
+        }));
       }
+      // 部分 stage 失败仍算 ok，但要把 errorMessage 记录到 evaluation
+      if (llm.errorMessage) {
+        llmFailureMessage = llm.errorMessage;
+      }
+    } else {
+      llmFailureMessage = llm.errorMessage || 'LLM 评估失败';
     }
 
     // 合并 L1 floor 与 L2 LLM 分数。l2ScoresJson 字段名沿用，但语义已是"合并后的维度分数"。
-    const mergedScores = mergeL1FloorWithL2Scores(linterDiagnoses, l2DimensionScores);
-    if (Object.keys(mergedScores).length > 0) {
-      l2ScoresJson = JSON.stringify({
-        scores: mergedScores,
-        comments: l2Comments,
-      });
+    // L1 不单独评分：L2 没跑成功时不落任何分数，只留 issue 列表。
+    if (l2Ok) {
+      const mergedScores = mergeL1FloorWithL2Scores(linterDiagnoses, l2DimensionScores);
+      if (Object.keys(mergedScores).length > 0) {
+        l2ScoresJson = JSON.stringify({
+          scores: mergedScores,
+          comments: l2Comments,
+        });
+      }
     }
 
     if (issuesData.length > 0) {
