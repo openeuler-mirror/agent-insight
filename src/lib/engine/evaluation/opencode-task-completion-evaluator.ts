@@ -260,6 +260,10 @@ function makeDirectModel(config: ModelConfig) {
         },
         temperature: 0,
         topP: 1,
+        // 显式超时 + 重试，对齐 opencode 路径（idleTimeoutMs 3min / streamTimeoutMs 10min）。
+        // 单轮 judge 正常 <10s，180s 兜住卡死调用；瞬时错误自动重试 2 次。
+        timeout: 180_000,
+        maxRetries: 2,
         modelKwargs: {
             seed: 42,
         },

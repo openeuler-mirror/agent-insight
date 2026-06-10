@@ -485,6 +485,11 @@ function makeDirectModel(config: ModelConfig) {
         },
         temperature: 0,
         topP: 1,
+        // 显式超时 + 重试，对齐 opencode 路径的健壮性（opencode chat 走 idleTimeoutMs 3min /
+        // streamTimeoutMs 10min）。单轮 judge 正常 <10s，180s 足够兜住卡死的 deepseek 调用而不会
+        // 误伤慢推理；瞬时网络错误自动重试 2 次（也是 langchain 默认值，这里显式写明）。
+        timeout: 180_000,
+        maxRetries: 2,
         modelKwargs: {
             seed: 42,
         },
@@ -503,16 +508,13 @@ async function evaluateTrajectoryDirect(
     const content = typeof response.content === 'string'
         ? response.content
         : JSON.stringify(response.content);
-    const parsed = parseJsonLoose(content);
-    const parsedRecord = asRecord(parsed);
-    if (
-        typeof (parsedRecord.key_action_results ?? parsedRecord.keyActionResults) === 'undefined'
-        && typeof (parsedRecord.dimension_scores ?? parsedRecord.dimensionScores) === 'undefined'
-    ) {
+    // 与 opencode 路径用同一个多策略提取器（extractFinalResultFromText），保证两路解析一致。
+    const parsed = extractFinalResultFromText(content);
+    if (!parsed) {
         throw new Error(`直接 LLM 评测未产出有效 JSON。模型输出前 800 字符：${content.slice(0, 800)}`);
     }
     return normalizeOutput(
-        parsedRecord,
+        parsed,
         Array.isArray(input.referenceKeyActions) ? input.referenceKeyActions.length : 0,
         input.comparisonMode,
     );
@@ -556,16 +558,13 @@ async function evaluateTrajectoryDirectAndRecord(
     const assistantText = typeof response.content === 'string'
         ? response.content
         : JSON.stringify(response.content);
-    const parsed = parseJsonLoose(assistantText);
-    const parsedRecord = asRecord(parsed);
-    if (
-        typeof (parsedRecord.key_action_results ?? parsedRecord.keyActionResults) === 'undefined'
-        && typeof (parsedRecord.dimension_scores ?? parsedRecord.dimensionScores) === 'undefined'
-    ) {
+    // 与 opencode 路径用同一个多策略提取器（extractFinalResultFromText），保证两路解析一致。
+    const parsed = extractFinalResultFromText(assistantText);
+    if (!parsed) {
         throw new Error(`直接 LLM 轨迹评测未产出有效 JSON。模型输出前 800 字符：${assistantText.slice(0, 800)}`);
     }
     const normalized = normalizeOutput(
-        parsedRecord,
+        parsed,
         Array.isArray(input.referenceKeyActions) ? input.referenceKeyActions.length : 0,
         input.comparisonMode,
     );
