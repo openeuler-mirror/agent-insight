@@ -586,7 +586,6 @@ function FaultPageContent() {
 
 function FaultDetailView({ execution, locale, user, onBack }: { execution: Execution; locale: string; user: string; onBack: () => void }) {
     const taskId = execution.task_id || execution.upload_id || '';
-    const detailsLink = `${basePath}/details?framework=${encodeURIComponent(execution.framework || '')}&expandTaskId=${taskId}`;
 
     // ── Data state (unchanged logic) ──
     const [session, setSession] = useState<SessionData | null>(null);
@@ -930,20 +929,10 @@ function FaultDetailView({ execution, locale, user, onBack }: { execution: Execu
                                             </div>
                                         )}
                                         {execution.query && (
-                                            <div style={{ fontSize: 11, color: 'var(--foreground)', lineHeight: 1.5, marginBottom: 8, wordBreak: 'break-all' }}>
+                                            <div style={{ fontSize: 11, color: 'var(--foreground)', lineHeight: 1.5, wordBreak: 'break-all' }}>
                                                 {execution.query.slice(0, 120)}{execution.query.length > 120 ? '…' : ''}
                                             </div>
                                         )}
-                                        <a
-                                            href={detailsLink}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            className="ai-btn-s"
-                                            style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11 }}
-                                        >
-                                            <ExternalLink size={11} />
-                                            {locale === 'zh' ? '在详情页查看' : 'View full details'}
-                                        </a>
                                     </div>
                                 )}
                             </div>

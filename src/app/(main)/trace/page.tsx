@@ -7,7 +7,6 @@ import {
     ArrowLeft,
     Download,
     RefreshCw,
-    ExternalLink as ExternalLinkIcon,
     X as XIcon,
     XCircle,
     Wrench,
@@ -843,7 +842,6 @@ function TraceDetailView({
     }, []);
 
     const { framework, latency, tokens, cost } = execution;
-    const detailsLink = `${basePath}/details?framework=${encodeURIComponent(framework || '')}&expandTaskId=${taskId}`;
     const isRunning = execStatus === 'running';
     const canDownloadSession = !loading && !!session && !session.error;
 
@@ -973,12 +971,6 @@ function TraceDetailView({
                     >
                         <Download className="size-3.5" aria-hidden />
                         {locale === 'zh' ? '保存trace' : 'Save trace'}
-                    </Button>
-                    <Button variant="outline" size="sm" asChild className="h-7 text-xs">
-                        <a href={detailsLink} target="_blank" rel="noopener noreferrer">
-                            {t('tracePage.fullDetails')}
-                            <ExternalLinkIcon className="size-3.5" aria-hidden />
-                        </a>
                     </Button>
                 </div>
             </div>

@@ -120,7 +120,6 @@ export default function TraceDrawer({ open, execution, onClose }: TraceDrawerPro
 function Header({ execution, onClose, locale }: { execution: TraceDrawerExecutionMeta | null; onClose: () => void; locale: string }) {
     if (!execution) return null;
     const { taskId, query, framework, model, latency, tokens, cost, score, isAnswerCorrect, timestamp } = execution;
-    const detailsLink = `${basePath}/details?framework=${encodeURIComponent(framework || '')}&expandTaskId=${taskId}`;
     const metricsLink = `${basePath}/metrics?taskId=${taskId}`;
     const debugLink = `${basePath}/skill-eval?taskId=${taskId}`;
 
@@ -168,15 +167,6 @@ function Header({ execution, onClose, locale }: { execution: TraceDrawerExecutio
                         style={{ textDecoration: 'none', fontSize: 11 }}
                     >
                         {locale === 'zh' ? '调测分析 ↗' : 'Skill diagnosis ↗'}
-                    </a>
-                    <a
-                        href={detailsLink}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="ai-btn-s"
-                        style={{ textDecoration: 'none', fontSize: 11 }}
-                    >
-                        {locale === 'zh' ? '完整详情 ↗' : 'Full details ↗'}
                     </a>
                     <button
                         onClick={onClose}

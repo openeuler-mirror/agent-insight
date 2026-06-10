@@ -87,9 +87,8 @@ async function fetchTaskStats(base: URL, taskId: string, apiKey?: string) {
 }
 
 function buildDetailsUrl(base: URL, taskId: string) {
-  const u = new URL("/details", base)
-  u.searchParams.set("framework", "opencode")
-  u.searchParams.set("expandTaskId", taskId)
+  const u = new URL("/trace", base)
+  u.searchParams.set("taskId", taskId)
   return u.toString()
 }
 

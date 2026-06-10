@@ -685,10 +685,10 @@ function SkillContent() {
                           {recordId && (
                             <div style={{ marginTop: '0.75rem' }}>
                               <Link
-                                href={`/details?expandTaskId=${encodeURIComponent(recordId)}`}
+                                href={`/trace?taskId=${encodeURIComponent(recordId)}`}
                                 style={{ color: '#60a5fa', fontSize: '0.85rem', textDecoration: 'underline' }}
                               >
-                                打开执行详情
+                                打开链路详情
                               </Link>
                             </div>
                           )}
