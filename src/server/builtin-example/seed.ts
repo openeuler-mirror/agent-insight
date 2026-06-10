@@ -7,9 +7,9 @@
  *     demo agent (messages-log-analyzer) 名下，使其落到链路追踪页默认的「用户 Agent」
  *     视图里（其他用户/系统/评测器 trace 不受影响——ownership 按 (platform,name) 解析，
  *     而这个 agent 名只被这几条 demo trace 使用）。其中 2 条为正常成功链路，
- *     第 3 条（label 后缀 -err-v0）为同场景下的「带报错」链路：Agent 误用 skill 文档里
- *     硬编码的 /var/log/messages（而非用户给定路径）反复 grep，触发多次工具报错并误判为
- *     「无攻击」，专门用于演示「智能诊断 / 故障诊断」能力。
+ *     第 3 条（label 后缀 -err-v0）为同场景下的历史「带报错」链路：Agent 误用旧版
+ *     skill 文档里的 /var/log/messages（而非用户给定路径）反复 grep，触发多次工具
+ *     报错并误判为「无攻击」，专门用于演示「智能诊断 / 故障诊断」能力。
  *
  * 语义：只在「用户从未被注入过」时执行一次（标记 = demo agent 是否存在）。
  * 用户之后删掉示例数据，不会再补回来——因为本函数只在 createUser 成功（新用户）时被调一次。
