@@ -44,7 +44,7 @@ export function EvaluationContent({
     }
 
     // 统一计算 6 大标准的 score / issues / status，下方两个组件共用一份数据。
-    const grouped = groupByStandards(detail.issues, scores, hasL2Scores);
+    const grouped = groupByStandards(detail.issues, scores);
     const matchedIds = new Set(grouped.flatMap(g => g.items.map(i => i.id)));
     const otherIssues = detail.issues.filter(i => !matchedIds.has(i.id));
 
@@ -153,7 +153,6 @@ interface GroupedStandard extends StaticStandard {
 function groupByStandards(
     issues: IssueRow[],
     scores: Record<string, number>,
-    hasL2Scores: boolean,
 ): GroupedStandard[] {
     return STATIC_EVAL_STANDARDS.map(std => {
         const aliasSet = new Set(std.dimensionAliases);
@@ -161,14 +160,11 @@ function groupByStandards(
         const score = std.dimensionAliases
             .map(a => scores[a])
             .find(s => typeof s === 'number' && Number.isFinite(s));
-        let status: StdStatus;
-        if (typeof score === 'number') {
-            status = score >= 4 ? 'passed' : 'failed';
-        } else if (hasL2Scores) {
-            status = 'notEvaluated';
-        } else {
-            status = items.some(i => i.severity === 'high' || i.severity === 'medium') ? 'failed' : 'passed';
-        }
+        // 无分数的维度一律"未评估"——L1 不单独评分，L2 没跑成功时不能用 L1 命中
+        // 推导 通过/不通过 的结论，命中只作为问题列出。
+        const status: StdStatus = typeof score === 'number'
+            ? (score >= 4 ? 'passed' : 'failed')
+            : 'notEvaluated';
         return { ...std, items, score, status };
     });
 }
