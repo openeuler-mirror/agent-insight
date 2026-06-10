@@ -86,7 +86,7 @@ const OBSERVE_TREE: NavItem = {
     labelKey: 'nav.groupObserve',
     iconPath: ICON_OBSERVE,
     children: [
-        { key: 'trace', href: '/trace', labelKey: 'nav.trace', iconPath: ICON_TRACE, matchPrefixes: ['/trace', '/details'] },
+        { key: 'trace', href: '/trace', labelKey: 'nav.trace', iconPath: ICON_TRACE, matchPrefixes: ['/trace'] },
         { key: 'fault', href: '/fault', labelKey: 'nav.fault', iconPath: ICON_FAULT },
         { key: 'quality', href: '/quality', labelKey: 'nav.quality', iconPath: ICON_QUALITY, pending: true },
     ],

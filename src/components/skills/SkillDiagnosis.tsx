@@ -122,15 +122,6 @@ export function SkillDiagnosis({ taskId }: Props) {
                 >
                     {locale === 'zh' ? '查看指标 ↗' : 'View metrics ↗'}
                 </Link>
-                <Link
-                    href={`${basePath}/details?framework=${encodeURIComponent(record.framework || '')}&expandTaskId=${taskId}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="ai-btn-s"
-                    style={{ textDecoration: 'none', fontSize: 11, flexShrink: 0 }}
-                >
-                    {locale === 'zh' ? '完整详情 ↗' : 'Full details ↗'}
-                </Link>
             </div>
 
             {/* Skill summary KPIs */}
