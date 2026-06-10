@@ -12,6 +12,8 @@
 | `runStaticEvaluation` | [#run-static-evaluation](#run-static-evaluation) | engine/skill-issues |
 | `buildAgentCallTree` | [#build-agent-call-tree](#build-agent-call-tree) | engine/observability |
 | `saveExecutionRecord` / `readRecords` | [#save-execution-record](#save-execution-record) | lib/storage |
+| OTel spool consumer | [#otel-spool-consumer](#otel-spool-consumer) | lib/ingest |
+| `getAdapter` / `resolveFrameworkId` / `listFrameworks` | [#framework-adapter-registry](#framework-adapter-registry) | lib/ingest |
 | `getDatabaseAdapter` | [#get-database-adapter](#get-database-adapter) | lib/storage |
 | `resolveUser` / `canAccessSkill` | [#resolve-user](#resolve-user) | lib/auth |
 | `getActiveConfig` / `getUserSettings` | [#get-active-config](#get-active-config) | lib/storage |
@@ -48,6 +50,19 @@
 ### `saveExecutionRecord(data: ExecutionRecord): Promise<{ success: boolean; record: ExecutionRecord }>`  {#save-execution-record}
 - **Location**: `src/lib/storage/data-service.ts` · **Called by**: 约 13 处调用点（接入运行数据的核心写入路径）。
 - **Read side**: `readRecords(user?, filters?: ReadRecordFilters, options?: ReadRecordsOptions): Promise<ExecutionRecord[]>`、`readConfig(user?, datasetType): Promise<ConfigItem[]>`、`deriveSubagentExecutions(args: DeriveSubagentArgs)`、`findBestRoutingConfig(...)`、`findBestOutcomeConfig(...)`。
+- **Framework skill dispatcher**: `extractInvokedSkillsFromSessionInteractions(framework, interactions): InvokedSkill[] | null` 统一经由 `FrameworkAdapter.extractSkills`，未知框架返回 `null`。
+
+### OTel spool consumer  {#otel-spool-consumer}
+- **External endpoints**: `POST /api/ingest/otel/v1/logs` and `POST /api/ingest/otel/v1/traces` accept OTLP http/json payloads, normalize events, append JSONL spool rows, and return `status: "accepted"` after the append succeeds. The response means accepted, not already persisted to `Execution`.
+- **Startup**: `src/instrumentation-node.ts:setupNodeRuntime()` calls `startOtelSpoolConsumer()` for the Node runtime. The consumer is process-local and guarded by `globalThis.__otelSpoolConsumer`.
+- **Consumer API**: `startOtelSpoolConsumer(options?)`, `stopOtelSpoolConsumer()`, and `runOtelSpoolConsumerTick(state)` live in `src/lib/ingest/otel-consumer/consumer.ts`.
+- **Source API**: `SpoolSource` in `src/lib/ingest/otel-consumer/sources.ts` registers `claude-otel-logs` and `otel-traces`. Sources own aggregation; the consumer owns scheduling/checkpoints and must not branch on framework names.
+- **State files**: checkpoints are stored as `consumer-checkpoint.json` beside each spool root. Checkpoints advance only after fast save succeeds; duplicate protection is handled by source-level dedupe plus `saveExecutionRecord` upsert keys.
+
+### `getAdapter(framework)` / `resolveFrameworkId(framework)` / `listFrameworks()`  {#framework-adapter-registry}
+- **Location**: `src/lib/ingest/adapters/registry.ts`
+- **Contract types**: `FrameworkAdapter`、`FrameworkDescriptor`（`src/lib/ingest/adapters/types.ts`）。
+- **Current responsibilities**: 框架名别名解析（`claudecode` → `claude`）、框架 skill 抽取分发、Claude 入库前 interactions 归一化。adapter 是纯转换层，不访问 DB/网络；入库仍由 `saveExecutionRecord` 负责。
 
 ### `getDatabaseAdapter(): DatabaseAdapter`  {#get-database-adapter}
 - **Location**: `src/lib/storage/db-interface.ts`
@@ -90,6 +105,7 @@
 ## Key TypeScript data contracts (`types`)
 核心接口（形状节选；完整成员见源码）：
 - **Ingest / records** — `ExecutionRecord`（`storage/data-service.ts`）：`{ upload_id; task_id; query; framework; tokens; cost; latency; final_result; skill; invokedSkills: InvokedSkill[]; is_skill_correct; is_answer_correct; ... }`；`RoutingEvaluationSnapshot`、`OutcomeEvaluationSnapshot`、`ConfigItem`、`InvokedSkill { name; version }`。
+- **Framework adapters** — `FrameworkAdapter`（`ingest/adapters/types.ts`）：`{ descriptor; extractSkills?; normalizeForStorage? }`；`FrameworkDescriptor { id; aliases?; label; onboard; platform? }`。
 - **Evaluation** — `EvaluationResult`（`evaluation/evaluation-types.ts`）：维度得分（`functionalScore`/`efficiencyScore`/`practicalityScore`/`economicScore`：`DimensionScore`）+ `overallScore`/`weightedScore`；`JudgmentResult { is_correct; score; reason }`、`JudgeCriteria`、`TrajectoryEvalInput/Output`、`ABExperiment`、`TestCase`、`QualityBenchmark`。
 - **A/B scoring** — `AbScoringResult` / `AbScoringPolicy` / `AbScoreBreakdown`（`skill-analysis/ab-scoring.ts`）：评级、决策、`allowRelease`。
 - **Agent debug** — `AgentDebugReportPayload`、`AgentDebugIssue`、`AgentDebugRootCause`、`AgentDebugTriage`、`AgentDebugSkillsAnalysis`、`AgentDebugSkillsAnalysisRow`、`DebugTurn`、`DebugToolCall`（`engine/agent-debug/types.ts`）。
@@ -104,6 +120,7 @@
 | Name | Kind | File | Note |
 |---|---|---|---|
 | `DatabaseAdapter` | interface | `src/lib/storage/db-interface.ts` | 实现它以新增存储后端（已有 Prisma/SQLite 和 OpenGauss） |
+| `FrameworkAdapter` | interface | `src/lib/ingest/adapters/types.ts` | 新增框架的 skill 抽取、存储归一化、框架描述信息入口 |
 | `SystemAgentDefinition` | interface | `src/lib/system-agents.ts` | 注册一个内部/系统 agent 身份 |
 | `LlmProvider` | interface | `src/lib/llm-providers.ts` | 向注册表新增一个 LLM provider |
 | `LlmEvaluatorConfig` / `CodeEvaluatorConfig` / `EvaluatorCard` | interface | `src/lib/evaluators/custom-evaluator-model.ts` | 定义一个自定义评测器 |

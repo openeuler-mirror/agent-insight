@@ -13,8 +13,8 @@
 | `POST` skill-generator chat | `src/app/api/skill-generator/chat/route.ts` | HTTP |
 | `POST` skill-opt chat | `src/app/api/skill-opt/chat/route.ts` | HTTP |
 | `POST` fault diagnosis | `src/app/api/fault/diagnosis/stream/route.ts` | HTTP |
-| `ClaudeLogWatcher.start` | `scripts/claude_watcher_client.ts` | 客户端 agent |
-| `WittySkillInsightPlugin` | `scripts/opencode_plugin.ts` | 客户端插件 |
+| `Claude Code OTel logs` | `src/app/api/ingest/setup/route.ts` | 客户端 OTel 配置 |
+| `WittySkillInsightOtelPlugin` | `scripts/opencode_plugin_otel.ts` | 客户端插件 |
 
 ## 前端流程（分析器追踪）
 静态分析器从 10 个页面/组件入口出发跟踪调用边。其中最大的几个：
@@ -45,17 +45,21 @@ flowchart TD
 ```
 
 ## 后端流水线：接入（agent run → Execution 记录）
-客户端 agent（OpenCode 插件、Claude/OpenClaw watcher、OTel SDK）将运行数据推送到接入路由。平台将原始 session 规范化为一棵 `Execution` 树。
+客户端 agent（OpenCode 插件 + uploader、Claude Code 官方 OTel logs、OpenClaw watcher、OTel SDK）将运行数据推送到接入路由。平台将原始 session 规范化为一棵 `Execution` 树。OTel `logs` / `traces` 是异步摄取：HTTP 端点只负责校验、归一化、写 JSONL spool 并返回已受理；`instrumentation-node.ts` 启动的进程内 `OtelSpoolConsumer` 再按 checkpoint 增量消费、短 debounce 快速落库、长 debounce 触发评估。
 
 ```mermaid
 flowchart TD
-    client["client watcher/plugin/OTel"] --> route["POST /api/ingest/{upload,otel/*,proxy/*}"]
-    route --> parse["lib/ingest + observability parsers\n(claude-parser / openclaw-parser / buildAgentCallTree)"]
+    client["client plugin/uploader/OTel"] --> route["POST /api/ingest/{upload,otel/*,proxy/*}"]
+    route --> otelspool["OTel logs/traces spool\n(JSONL accepted response)"]
+    otelspool --> consumer["OtelSpoolConsumer\ncheckpoint + dual debounce"]
+    consumer --> adapter["FrameworkAdapter registry\n(resolve framework / extract skills / storage normalize)"]
+    route --> adapter
+    adapter --> parse["lib/ingest + observability parsers\n(claude-parser / openclaw-parser / buildAgentCallTree)"]
     parse --> derive["deriveSubagentExecutions\n(split root + sub-agents)"]
     derive --> save["saveExecutionRecord → DatabaseAdapter"]
     save --> db[("Execution / Session (Prisma)")]
 ```
-关键函数：接入路由处理器（`processUploadAsync`、`proxyFetch`、OTel `POST`）→ `src/lib/ingest/*` + `engine/observability/{claude,openclaw}-parser.ts`、`agent-trace.ts:buildAgentCallTree` → `storage/data-service.ts:saveExecutionRecord` / `deriveSubagentExecutions`。
+关键函数：接入路由处理器（`processUploadAsync`、`proxyFetch`、OTel `POST`）→ OTel 路由的 `normalizeClaudeOtlpLogs` / `normalizeClaudeOtlpTraces` + spool append → `otel-consumer/consumer.ts:startOtelSpoolConsumer` / `runOtelSpoolConsumerTick` → `src/lib/ingest/adapters/registry.ts:getAdapter` / `storage/data-service.ts:extractInvokedSkillsFromSessionInteractions` → `src/lib/ingest/*` + `engine/observability/{claude,openclaw}-parser.ts`、`agent-trace.ts:buildAgentCallTree` → `storage/data-service.ts:saveExecutionRecord` / `deriveSubagentExecutions`。当前 adapter 只承担纯转换职责（skill 抽取、Claude 存储归一化、框架名解析），不写库。
 
 ## 后端流水线：评测（Config → Execution → Decision）
 数据集 `Config` 提供真值；将执行记录进行匹配并评分；结果转化为 `Evaluation` + `SkillIssue` 行。

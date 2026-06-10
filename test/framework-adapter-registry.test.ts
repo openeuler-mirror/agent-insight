@@ -1,0 +1,69 @@
+import test from "node:test"
+import assert from "node:assert/strict"
+import { normalizeClaudeCodeInteractionsForStorage } from "../src/lib/shared/interaction-content"
+import {
+  extractSkillsWithVersionsFromClaudeSession,
+  extractSkillsWithVersionsFromOpenClawSession,
+  extractSkillsWithVersionsFromOpencodeSession,
+  normalizeInteractions,
+} from "../src/lib/shared/interaction-utils"
+import { getAdapter, listFrameworks, resolveFrameworkId } from "../src/lib/ingest/adapters/registry"
+import {
+  claudeExpectedSkills,
+  claudeSkillMessages,
+  claudeStorageExpected,
+  claudeStorageInput,
+  openclawExpectedSkills,
+  openclawSkillMessages,
+  opencodeExpectedSkills,
+  opencodeSkillMessages,
+} from "./fixtures/framework-skill-fixtures"
+
+test("registry resolves framework ids and aliases", () => {
+  assert.equal(resolveFrameworkId("opencode"), "opencode")
+  assert.equal(resolveFrameworkId("claude"), "claude")
+  assert.equal(resolveFrameworkId("claudecode"), "claude")
+  assert.equal(resolveFrameworkId("unknown-framework"), "unknown-framework")
+  assert.equal(resolveFrameworkId(null), "")
+  assert.equal(getAdapter("claudecode"), getAdapter("claude"))
+})
+
+test("registry exposes the framework descriptor list", () => {
+  assert.deepEqual(
+    listFrameworks().map((descriptor) => descriptor.id),
+    ["opencode", "claude", "openclaw", "hermes"],
+  )
+})
+
+test("registry adapters keep direct references to existing functions", () => {
+  assert.equal(getAdapter("opencode").extractSkills, extractSkillsWithVersionsFromOpencodeSession)
+  assert.equal(getAdapter("claude").extractSkills, extractSkillsWithVersionsFromClaudeSession)
+  assert.equal(getAdapter("claude").normalizeForStorage, normalizeClaudeCodeInteractionsForStorage)
+  assert.equal(getAdapter("openclaw").extractSkills, extractSkillsWithVersionsFromOpenClawSession)
+})
+
+test("registry adapters match golden skill extraction outputs", () => {
+  assert.deepEqual(
+    getAdapter("opencode").extractSkills?.(normalizeInteractions(opencodeSkillMessages)),
+    opencodeExpectedSkills,
+  )
+  assert.deepEqual(
+    getAdapter("claudecode").extractSkills?.(normalizeInteractions(claudeSkillMessages)),
+    claudeExpectedSkills,
+  )
+  assert.deepEqual(
+    getAdapter("openclaw").extractSkills?.(normalizeInteractions(openclawSkillMessages)),
+    openclawExpectedSkills,
+  )
+})
+
+test("registry adapters match golden storage normalization output", () => {
+  assert.deepEqual(getAdapter("claude").normalizeForStorage?.(claudeStorageInput), claudeStorageExpected)
+})
+
+test("registry fallback adapter is inert", () => {
+  const adapter = getAdapter("unknown-framework")
+  assert.equal(adapter.descriptor.id, "unknown")
+  assert.equal(adapter.extractSkills?.([]), undefined)
+  assert.equal(adapter.normalizeForStorage?.([]), undefined)
+})

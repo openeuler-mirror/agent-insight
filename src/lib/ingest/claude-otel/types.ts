@@ -20,9 +20,41 @@ export type ClaudeOtelAppendResult = {
   dirtySessionIds: string[];
 };
 
+export type OtelTraceEvent = {
+  receivedAt: string;
+  sessionId: string;
+  traceId?: string;
+  spanId?: string;
+  parentSpanId?: string;
+  name?: string;
+  kind: 'llm' | 'tool';
+  serviceName: string;
+  user?: string;
+  model?: string;
+  usage: {
+    input_tokens: number;
+    output_tokens: number;
+    reasoning_tokens?: number;
+    total_tokens: number;
+  };
+  latencyMs: number;
+  startTimeMs: number;
+  attributes: Record<string, any>;
+};
+
+export type OtelTraceAppendResult = {
+  events: OtelTraceEvent[];
+  dirtySessionIds: string[];
+};
+
 export type ClaudeOtelAggregationResult = {
   sessionId: string;
   record: ExecutionRecord | null;
   eventCount: number;
 };
 
+export type OtelTraceAggregationResult = {
+  sessionId: string;
+  record: ExecutionRecord | null;
+  eventCount: number;
+};

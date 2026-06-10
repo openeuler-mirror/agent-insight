@@ -42,14 +42,15 @@
 ## lib — storage / ingest / auth / shared
 | File | Area | Key symbols |
 |---|---|---|
-| `storage/data-service.ts` | storage | `saveExecutionRecord`、`readRecords`、`readConfig`、`findBestRoutingConfig`、`findBestOutcomeConfig`、`deriveSubagentExecutions`；`ExecutionRecord`、`RoutingEvaluationSnapshot`、`OutcomeEvaluationSnapshot`、`ConfigItem` |
+| `storage/data-service.ts` | storage | `saveExecutionRecord`、`extractInvokedSkillsFromSessionInteractions`、`readRecords`、`readConfig`、`findBestRoutingConfig`、`findBestOutcomeConfig`、`deriveSubagentExecutions`；`ExecutionRecord`、`RoutingEvaluationSnapshot`、`OutcomeEvaluationSnapshot`、`ConfigItem` |
 | `storage/db-interface.ts` | storage | `getDatabaseAdapter`；`DatabaseAdapter`、`OpenGaussAdapter.query` |
 | `storage/prisma.ts` | storage | Prisma 客户端单例 |
 | `storage/server-config.ts` | storage | `getActiveConfig`、`getUserSettings`、`saveUserSettings`；`ModelConfig`、`UserSettings` |
 | `auth/auth.ts` | auth | `resolveUser`、`canAccessSkill`；`AuthResult` |
 | `ingest/proxy-config.ts` / `proxy-store.ts` | ingest | `getProxyConfig`；`ProxyConfig`、`SessionData` |
+| `ingest/adapters/{registry,types,opencode,claude,openclaw,hermes}.ts` | ingest | `getAdapter`、`resolveFrameworkId`、`listFrameworks`；`FrameworkAdapter`、`FrameworkDescriptor` |
 | `ingest/routing-signature.ts` | ingest | `RoutingSemanticSignature`、`RoutingSemanticMatch` |
-| `ingest/claude-watcher.ts` / `openclaw-watcher.ts` / `claude-otel/` | ingest | 特定框架的接入 |
+| `ingest/claude-otel/` / `ingest/otel-consumer/` / `openclaw-watcher.ts` | ingest | 特定框架的接入与 OTel spool 消费 |
 | `shared/model-config.ts` / `default-model-config.ts` | shared | `ModelPricing`，定价/上下文窗口查询 |
 | `shared/interaction-utils.ts` | shared | `InvokedSkill`，交互解析 |
 | `client/api.ts` | client | `apiFetch`（标准的客户端 fetch 封装） |

@@ -29,6 +29,7 @@
 - **多 Agent 执行树**：一次主运行会变成 1 个根 `Execution` + N 个子 agent 的 `Execution`，通过 `parentExecutionId`/`rootExecutionId` 关联，并共享 `agentSessionId`。列表/聚合视图会过滤 `isSubagent = false`；详情视图则下钻到子 agent。查询执行记录时要遵循这一点。
 - **评测分为两张表**：`Evaluation`（事件）+ `SkillIssue`（优化点），带有 `source`/`category`/`resolvedAt` 以及 `Evaluation.runId`。旧的单表 `SkillOptimizationPoint` 已废弃——不要重新引入它。流行度（prevalence）在读取时派生（懒删除的重新评测模型）。
 - **列中存 JSON**：许多 Prisma 字段以 JSON 字符串存储（`invokedSkills`、`casesJson`、`configJson`、`itemsJson`、…）。在存储边界处解析/序列化，在 TS 中保持类型化的结构（`ExecutionRecord`、`ConfigItem` 等）。
+- **框架名判断走注册表**：对存量 `Execution.framework` 做框架判断时优先走 `resolveFrameworkId` / `getAdapter`。Claude 的标准 adapter id 是 `claude`，但存量数据仍可能是 `claudecode`；不要新增裸 `framework === 'claude'` 来判断存量值。
 
 ## How to extend
 - **新增 API 端点**：创建 `src/app/api/<group>/<name>/route.ts`，导出对应 HTTP 动词的函数，先调用 `resolveUser(request)` 做鉴权，再委派给 `src/lib/*` / `src/server/*`。参照同一 group 下已有的 handler（例如 `api/skills/[id]/runs/route.ts`）。
@@ -37,7 +38,7 @@
 - **新增存储后端**：与 `OpenGaussAdapter` 并列实现 `DatabaseAdapter`（`db-interface.ts`）。
 - **新增 LLM provider**：扩展 `src/lib/llm-providers.ts` 中的 `LlmProvider` 注册表。
 - **新增自定义评测器**：用 `LlmEvaluatorConfig` / `CodeEvaluatorConfig`（`src/lib/evaluators/custom-evaluator-model.ts`）建模；通过 `src/server/user_evaluators_storage.ts` 持久化。
-- **新增框架接入路径**：在 `src/lib/ingest/*` 下加一个 parser/watcher + 在 `api/ingest/setup/*` 下加一个 setup 脚本路由；通过 `saveExecutionRecord` 归一化为 `Execution`。（参见进行中的 `docs/design/framework-adapter-registry/` 与 `hermes-otel-adapter/` 两条工作线——接入正在被统一到一个适配器注册表之后。）
+- **新增框架接入路径**：在 `src/lib/ingest/*` 下加 parser/watcher 或 OTel 聚合器，并在 `src/lib/ingest/adapters/` 注册 `FrameworkAdapter`（descriptor、skill 抽取、必要的 `normalizeForStorage`）。路由层不要再手写框架分支；通过 `saveExecutionRecord` 归一化为 `Execution`。安装脚本框架清单仍是后续治理范围。
 - **流程闸门**（`AGENTS.md` §4）：对 **Prisma schema** 的任何改动，或任何**新增 API 路由**，都需要先在 `docs/plans/YYYY-MM-DD-<topic>-design.md` 下产出一份 Plan 文档，对齐后再编码。
 
 ## Boundaries — change with care
@@ -50,7 +51,7 @@
 - **SQLite + 适配器，自托管** —— 本地优先的数据所有权；通过 `DatabaseAdapter` 支持 OpenGauss/PostgreSQL 以扩展规模。
 - **Skill 作为一等的、带版本的实体** —— `Skill`/`SkillVersion`，版本不可变；`name` 是外部键。
 - **统一的评测模型** —— 静态/动态/触发三类收敛为 `Evaluation` + `SkillIssue`；懒删除的重新评测，流行度在读取时派生。
-- **框架无关的接入** —— OTel + 各框架的 watcher/插件将一切归一化为统一的 `Execution` 树。
+- **框架无关的接入** —— OTel + 各框架的 watcher/插件将一切归一化为统一的 `Execution` 树；框架名解析、skill 抽取与部分存储归一化由 `FrameworkAdapter` 注册表承接。
 - **内部工作委派给 agent** —— 生成/优化/评测经由 `runGeneralAgent` 在 deepagents/LangGraph 上运行，隔离在桥接层之后。
 
 ## Build / test / run
