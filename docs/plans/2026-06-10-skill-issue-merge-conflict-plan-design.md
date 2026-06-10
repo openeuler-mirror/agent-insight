@@ -238,6 +238,22 @@ backlog/dismissed 的源 issues 不 resolve → 留在台账，下轮重新归�
 归并阶段的预过滤**。本设计 P1/P2 先做结构检测+人工仲裁（人机协同场景下用户就是
 终裁者），P3 补经验门，两层互补而非二选一。
 
+## 12. P1 实测（2026-06-10，deepseek-chat）
+
+归并算子在真实 issue 池上的表现（详见 `agent-insight-data/skill-opt-merge-experiment/REPORT.md`）：
+
+| 池 | 输入 issue | 输出 item | 压缩 | core 预算 | 批/层 | LLM 调用 | 墙钟 |
+|---|---|---|---|---|---|---|---|
+| doc-summarizer v3（真实）| 88 | 25 | 3.5× | 4/4 | 3/2 | 5 | 95s |
+| pad 到 240（含 152 克隆）| 240 | 9 | 26.7× | 4/4 | 8/3 | 12 | 123s |
+| messages skill（真实 static+dynamic）| 42 | 11（core4/ref2/backlog5）| 3.8× | 4/4 | 2/2 | 3 | 40s |
+
+- **240 条规模验证**：用户报告的最大规模可处理，墙钟仅比 88 条慢 30%（分批并发）。
+- **去重 recall**：240 臂中 83%（121/145）被引用克隆与原件归并进同一 item。
+- **锚点命中**：core 条目普遍带 `targetFile + anchorText`（逐字摘自 baseVersion 快照、
+  后端校验通过），证明 version-scoped 文本锚可行。
+- 端到端优化效果对比（flat 平铺 vs plan 归并注入）结论见 REPORT.md。
+
 ## 11. 风险与对策
 
 | 风险 | 对策 |
