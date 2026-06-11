@@ -56,8 +56,8 @@ export function QualityHero({ report, onDrillTrace, onAnchor }: {
             padding: '18px 20px',
         }}>
             <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', alignItems: 'stretch' }}>
-                {/* ① 综合分（置信度调制） */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 200, flex: '0 0 auto' }}>
+                {/* ① 综合分（置信度调制）—— 内容垂直居中，与右侧较高的两栏视觉平衡 */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 200, flex: '0 0 auto', justifyContent: 'center' }}>
                     <div style={{ fontSize: 10.5, color: 'var(--foreground-muted)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
                         {t('quality.summary.composite')}
                         <Term id="quality-composite-score" render="compact" />
@@ -95,7 +95,6 @@ export function QualityHero({ report, onDrillTrace, onAnchor }: {
                         <MiniP tag="P2" v={composite.p2} tone="var(--foreground-muted)" />
                         <Term id="quality-priority-tiers" render="compact" />
                     </div>
-                    {nonEmpty.length >= 2 && <Spark values={nonEmpty.map((b) => b.composite)} color={scoreCol} />}
                 </div>
 
                 {/* ② 一句话判读 + 关键计数（与左右栏同节奏：标签行 + 内容，顶对齐） */}
@@ -221,18 +220,6 @@ function MiniP({ tag, v, tone }: { tag: string; v: number | null; tone: string }
                 <span style={{ display: 'block', height: '100%', width: `${v ?? 0}%`, background: tone, borderRadius: 3 }} />
             </div>
         </div>
-    );
-}
-
-function Spark({ values, color }: { values: number[]; color: string }) {
-    const W = 180, H = 26;
-    const min = Math.min(...values), max = Math.max(...values);
-    const range = max - min || 1;
-    const pts = values.map((v, i) => `${(i / (values.length - 1)) * W},${H - 3 - ((v - min) / range) * (H - 6)}`).join(' ');
-    return (
-        <svg width={W} height={H} style={{ display: 'block', marginTop: 2 }}>
-            <polyline points={pts} fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" opacity={0.85} />
-        </svg>
     );
 }
 
