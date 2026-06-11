@@ -5,6 +5,8 @@ import { withBackgroundOpencodeSlot } from '@/lib/engine/general-agent/concurren
 import { getUserSettings, type ModelConfig as ServerModelConfig } from '@/lib/storage/server-config';
 import { inferProviderFromBaseUrl, normalizeProviderID } from '@/lib/engine/general-agent/server-model-config';
 import { ensureSessionWorkspace, ensureUserWorkspace } from '@/lib/engine/general-agent/workspace';
+import { resolveSkill } from '@/lib/engine/general-agent/skill-resolver';
+import { ensureSkillFilesInWorkspace } from '@/lib/skill-opt-storage';
 import {
   buildSkillOptSystemPrompt,
   type SkillOptIssueLite,
@@ -95,7 +97,12 @@ async function streamSkillOptOpencodeImpl(
   // ── 1. workspace 准备（首次调用时从 storage 拷文件，找不到则用 baselineFiles 兜底）──
   ensureUserWorkspace(user);
   const workspaceDir = ensureSessionWorkspace(user, threadId);
-  const prefilled = ensureSkillFilesInWorkspace({ skillName, baseVersion, workspaceDir, baselineFiles });
+  // 权威存储目录：按 skill 真实 id + SkillVersion.assetPath 解析（复用测量路径
+  // runGeneralAgent→resolveSkill→deploySkillToWorkspace 用的同一个 resolveSkill），
+  // 让"优化器预填的基线"与"被测的基线"指向同一目录。解析不到（DB 无此 skill /
+  // 无 assetPath / 目录不在盘上）返回 null，下游回退到 name-scan / baselineFiles。
+  const storageDirOverride = await resolveAuthoritativeStorageDir(user, skillName, baseVersion);
+  const prefilled = ensureSkillFilesInWorkspace({ skillName, baseVersion, workspaceDir, baselineFiles, storageDirOverride });
   if (prefilled.copied > 0) {
     console.log('[skill-opt-bridge] prefilled workspace:', prefilled);
   }
@@ -377,160 +384,39 @@ async function streamSkillOptOpencodeImpl(
 }
 
 // ── workspace 预填 ─────────────────────────────────────────────────────────────
-
-interface PrefillResult {
-  copied: number;
-  source: 'storage' | 'baseline_files' | 'none';
-  skipped: 'workspace_not_empty' | null;
-  storageDir?: string;
-}
+// 纯 fs 的预填/存储解析机制（ensureSkillFilesInWorkspace / resolveSkillStorageDirSync /
+// writeBaselineFiles）已拆到 ./skill-opt-storage，便于单测且与本文件的 opencode 重依赖解耦。
+// 这里只留需要 DB 的"权威目录解析"。
 
 /**
- * 如果 workspace 还是空的，按优先级填充：
- *   1. data/storage/skills/<id|name>/v<N>/  （生产路径）
- *   2. caller 传进来的 baselineFiles  （dev fallback，前端 mock 数据场景）
- *   3. 都没有 → source=none，agent 在空目录里跑（read SKILL.md 会失败，但不至于挂）
+ * 按 skill 真实 id 解析 baseVersion 的【权威】存储目录绝对路径。
  *
- * 已经有 SKILL.md 时跳过——说明是同 thread 的 follow-up 请求，复用现有文件。
- */
-function ensureSkillFilesInWorkspace(args: {
-  skillName: string;
-  baseVersion: number;
-  workspaceDir: string;
-  baselineFiles?: Record<string, string>;
-}): PrefillResult {
-  const { skillName, baseVersion, workspaceDir, baselineFiles } = args;
-
-  const skillMdPath = path.join(workspaceDir, 'SKILL.md');
-  if (fs.existsSync(skillMdPath)) {
-    return { copied: 0, source: 'none', skipped: 'workspace_not_empty' };
-  }
-
-  const storageDir = resolveSkillStorageDirSync(skillName, baseVersion);
-  if (storageDir && fs.existsSync(storageDir)) {
-    const copied = copyDirRecursive(storageDir, workspaceDir);
-    return { copied, source: 'storage', skipped: null, storageDir };
-  }
-
-  // 生产 storage 没有 → 试 baselineFiles
-  if (baselineFiles && Object.keys(baselineFiles).length > 0) {
-    const copied = writeBaselineFiles(workspaceDir, baselineFiles);
-    return { copied, source: 'baseline_files', skipped: null };
-  }
-
-  return { copied: 0, source: 'none', skipped: null };
-}
-
-/**
- * 把 caller 提供的 { 相对路径 → 文件内容 } 直接写到 workspace。
- * 用 path.normalize + 起点检查防止 baselineFiles 里夹绝对路径或 ../ 越权（即使前端不会，
- * 服务端代码也得自卫——bridge 是受网络可达的入口）。
- */
-function writeBaselineFiles(workspaceDir: string, files: Record<string, string>): number {
-  let count = 0;
-  for (const [rawPath, content] of Object.entries(files)) {
-    if (typeof content !== 'string') continue;
-    const rel = rawPath.startsWith('/workspace/')
-      ? rawPath.slice('/workspace/'.length)
-      : rawPath;
-    if (rel.startsWith('/') || rel.startsWith('..') || rel.includes('\0')) {
-      console.warn('[skill-opt-bridge] baseline file rejected:', rel);
-      continue;
-    }
-    const abs = path.resolve(workspaceDir, rel);
-    if (!abs.startsWith(workspaceDir + path.sep) && abs !== workspaceDir) {
-      console.warn('[skill-opt-bridge] baseline file outside workspace:', rel);
-      continue;
-    }
-    try {
-      fs.mkdirSync(path.dirname(abs), { recursive: true });
-      fs.writeFileSync(abs, content, 'utf-8');
-      count++;
-    } catch (err) {
-      console.warn('[skill-opt-bridge] write baseline file failed:', rel, (err as Error)?.message);
-    }
-  }
-  return count;
-}
-
-/**
- * 同步版本（避免给 caller 加 async 链）。
+ * 复用 resolveSkill——即测量路径（runGeneralAgent → resolveSkill →
+ * deploySkillToWorkspace）所用的同一个解析器——拿到 SkillVersion.assetPath，
+ * 再按 deploySkillToWorkspace 同款 path.resolve(assetPath) 落到绝对目录。
+ * 这样"优化器预填的基线"与"被测的基线"恒等同一目录（包括 version 回退场景：
+ * resolveSkill 找不到精确 baseVersion 时回退 active/latest，与测量端口径一致）。
  *
- * 由于 db helpers 是 async，这里采用两步：先在外层 await 拿 skillId，再用同步 fs。
- * ——但本函数现在是同步的，没法 await。改用：
- *  路径模式 1：data/storage/skills/<skillName>/v<N>/  （legacy 命名）
- *  路径模式 2：data/storage/skills/<id>/v<N>/         （现行 by-id 命名）
- * 先按 name 试，失败再扫目录找匹配的 id。
- *
- * 真正接 DB 的 id-based 路径放在异步分支里。
+ * 任何一步缺失——DB 无此 skill / 该版本无 assetPath / assetPath 指向的目录不在盘上——
+ * 都返回 null，让 ensureSkillFilesInWorkspace 回退到 legacy name-scan / baselineFiles
+ * （dev/mock：DB 里没有但盘上按 name 存了文件，或前端直接喂 baselineFiles）。
  */
-function resolveSkillStorageDirSync(skillName: string, version: number): string | null {
-  const root = path.join(process.cwd(), 'data', 'storage', 'skills');
-  if (!fs.existsSync(root)) return null;
-
-  // 模式 1：直接按 skillName 命名（少数老 skill）
-  const byName = path.join(root, skillName, `v${version}`);
-  if (fs.existsSync(byName)) return byName;
-
-  // 模式 2：按 id 命名——扫一遍目录，找含 SKILL.md 且 frontmatter name 匹配的
-  // 通常 skill 不会很多（< 几十个），扫一遍可接受
-  let entries: string[];
+async function resolveAuthoritativeStorageDir(
+  user: string,
+  skillName: string,
+  baseVersion: number,
+): Promise<string | null> {
   try {
-    entries = fs.readdirSync(root);
-  } catch {
+    const skill = await resolveSkill(skillName, user, baseVersion);
+    const assetPath = skill?.assetPath;
+    if (!assetPath || typeof assetPath !== 'string') return null;
+    // 与 deploySkillToWorkspace 一致：path.resolve(相对 assetPath) === path.join(cwd, assetPath)
+    const abs = path.resolve(assetPath);
+    return fs.existsSync(abs) ? abs : null;
+  } catch (err) {
+    console.warn('[skill-opt-bridge] authoritative storageDir resolve failed:', (err as Error)?.message);
     return null;
   }
-  for (const entry of entries) {
-    const candidate = path.join(root, entry, `v${version}`);
-    const md = path.join(candidate, 'SKILL.md');
-    if (!fs.existsSync(md)) continue;
-    try {
-      const head = fs.readFileSync(md, 'utf-8').slice(0, 600);
-      const m = head.match(/^name:\s*(.+)$/m);
-      if (m && m[1].trim() === skillName) return candidate;
-    } catch {
-      continue;
-    }
-  }
-  return null;
-}
-
-/**
- * 递归拷目录。返回拷贝的文件数。跳过隐藏文件和超大文件（与 scanWorkspaceFiles 对齐）。
- */
-function copyDirRecursive(src: string, dst: string): number {
-  let count = 0;
-  const FILE_SIZE_CAP = 1024 * 1024; // 1MB
-  const IGNORE = new Set(['.git', '.opencode', '.DS_Store', 'node_modules']);
-
-  const walk = (relDir: string) => {
-    const absSrc = path.join(src, relDir);
-    let items: string[];
-    try { items = fs.readdirSync(absSrc); } catch { return; }
-    for (const item of items) {
-      if (IGNORE.has(item) || item.startsWith('.')) continue;
-      const relPath = relDir ? path.join(relDir, item) : item;
-      const absSrcPath = path.join(src, relPath);
-      const absDstPath = path.join(dst, relPath);
-      let stat: fs.Stats;
-      try { stat = fs.statSync(absSrcPath); } catch { continue; }
-      if (stat.isDirectory()) {
-        try { fs.mkdirSync(absDstPath, { recursive: true }); } catch { /* exists */ }
-        walk(relPath);
-      } else {
-        if (stat.size > FILE_SIZE_CAP) continue;
-        try {
-          fs.mkdirSync(path.dirname(absDstPath), { recursive: true });
-          fs.copyFileSync(absSrcPath, absDstPath);
-          count++;
-        } catch (err) {
-          console.warn('[skill-opt-bridge] copy failed:', absSrcPath, (err as Error)?.message);
-        }
-      }
-    }
-  };
-  walk('');
-  return count;
 }
 
 // ── 辅助函数 ─────────────────────────────────────────────────────────────────
@@ -602,10 +488,9 @@ function formatSessionError(err: unknown): string {
   return String(err);
 }
 
-// 给测试用的 internal helper 导出（生产代码不要直接调）
+// 给测试用的 internal helper 导出（生产代码不要直接调）。
+// 预填/存储解析的纯 fs 部分见 ./skill-opt-storage（直接 named export，单测从那边导入）。
 export const __testing = {
-  ensureSkillFilesInWorkspace,
-  resolveSkillStorageDirSync,
+  resolveAuthoritativeStorageDir,
   composeUserQuery,
-  writeBaselineFiles,
 };
