@@ -32,6 +32,8 @@ type SessionForReadiness = {
     endTime?: unknown;
 };
 
+type TraceLifecycleStatus = 'running' | 'success' | 'failed';
+
 const opencodeCliExitCache = new Map<string, { value: boolean | null; expiresAt: number }>();
 let opencodeTelemetryIndexCache: {
     expiresAt: number;
@@ -95,6 +97,32 @@ function getInteractionActivityMs(interaction: TimestampCarrier): number {
 function getLatestTraceActivityMs(interactions: TimestampCarrier[], fallbackTimestamp: unknown): number {
     const fromInteractions = interactions.reduce((latest, item) => Math.max(latest, getInteractionActivityMs(item)), 0);
     return Math.max(fromInteractions, toMsTimestamp(fallbackTimestamp) || 0);
+}
+
+function toIsoTimestamp(value: unknown): string | null {
+    const ms = toMsTimestamp(value);
+    return ms != null && ms > 0 ? new Date(ms).toISOString() : null;
+}
+
+function getTraceLifecycle(completedAt: unknown): {
+    traceStatus: TraceLifecycleStatus;
+    traceCompletedAt: string | null;
+    traceStatusReason: string;
+} {
+    const completedIso = toIsoTimestamp(completedAt);
+    if (completedIso) {
+        return {
+            traceStatus: 'success',
+            traceCompletedAt: completedIso,
+            traceStatusReason: 'session-ended',
+        };
+    }
+
+    return {
+        traceStatus: 'running',
+        traceCompletedAt: null,
+        traceStatusReason: 'missing-completion-signal',
+    };
 }
 
 function isPidAlive(pid: number): boolean {
@@ -310,6 +338,20 @@ export async function GET(request: Request) {
     const recordTaskIdsForEvalLookup = Array.from(new Set(
         data.map(r => r.task_id || r.upload_id || '').filter(Boolean)
     ));
+    const sessionEndByTaskId = new Map<string, Date | null>();
+    if (recordTaskIdsForEvalLookup.length > 0) {
+        try {
+            const sessionRows = await prisma.session.findMany({
+                where: { taskId: { in: recordTaskIdsForEvalLookup } },
+                select: { taskId: true, endTime: true },
+            });
+            for (const row of sessionRows) {
+                sessionEndByTaskId.set(row.taskId, row.endTime);
+            }
+        } catch (e) {
+            console.warn('[Data-API] failed to fetch session lifecycle status:', (e as Error)?.message);
+        }
+    }
     const lastEvalByTaskId = new Map<string, { status: string; errorMessage: string | null; trajectoryScore: number | null }>();
     if (user && recordTaskIdsForEvalLookup.length > 0) {
         try {
@@ -340,6 +382,7 @@ export async function GET(request: Request) {
         const lastEval = recordTaskId ? lastEvalByTaskId.get(recordTaskId) : null;
         const last_eval_status = lastEval?.status ?? null;
         const last_eval_error = lastEval?.errorMessage ?? null;
+        const baseTraceLifecycle = getTraceLifecycle(recordTaskId ? sessionEndByTaskId.get(recordTaskId) : null);
         // 方案A: 统一轨迹分（聚合层产出）。前端 getTraceFlowScore/ScoredTrace 优先读它，
         // 没有(未评测/纯对齐)再回退 matchJson.overallScore。
         const trajectory_score = lastEval?.trajectoryScore ?? null;
@@ -351,9 +394,18 @@ export async function GET(request: Request) {
                 last_eval_error,
                 trajectory_score,
                 trajectoryScore: trajectory_score,
+                trace_status: baseTraceLifecycle.traceStatus,
+                traceStatus: baseTraceLifecycle.traceStatus,
+                trace_completed_at: baseTraceLifecycle.traceCompletedAt,
+                traceCompletedAt: baseTraceLifecycle.traceCompletedAt,
+                trace_status_reason: baseTraceLifecycle.traceStatusReason,
+                traceStatusReason: baseTraceLifecycle.traceStatusReason,
             };
         }
         const readiness = await getAutoEvalReadiness(record, new URL(request.url).origin);
+        const traceLifecycle = baseTraceLifecycle.traceStatus === 'success'
+            ? baseTraceLifecycle
+            : getTraceLifecycle(readiness.traceCompletedAt);
         return {
             ...record,
             is_evaluating,
@@ -361,11 +413,16 @@ export async function GET(request: Request) {
             last_eval_error,
             trajectory_score,
             trajectoryScore: trajectory_score,
+            trace_status: traceLifecycle.traceStatus,
+            traceStatus: traceLifecycle.traceStatus,
+            trace_completed_at: traceLifecycle.traceCompletedAt,
+            traceCompletedAt: traceLifecycle.traceCompletedAt,
+            trace_status_reason: traceLifecycle.traceStatusReason,
+            traceStatusReason: traceLifecycle.traceStatusReason,
             auto_eval_ready: readiness.autoEvalReady,
             autoEvalReady: readiness.autoEvalReady,
             auto_eval_wait_reason: readiness.autoEvalWaitReason,
             trace_last_activity_at: readiness.traceLastActivityAt,
-            trace_completed_at: readiness.traceCompletedAt,
         };
     }));
     

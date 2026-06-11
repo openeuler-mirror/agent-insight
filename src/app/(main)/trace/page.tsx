@@ -76,6 +76,12 @@ interface Execution {
     model?: string;
     label?: string;
     is_evaluating?: boolean;
+    trace_status?: 'running' | 'success' | 'failed' | string | null;
+    traceStatus?: 'running' | 'success' | 'failed' | string | null;
+    trace_completed_at?: string | null;
+    traceCompletedAt?: string | null;
+    trace_status_reason?: string | null;
+    traceStatusReason?: string | null;
     judgment_reason?: string;
     failures?: any[];
     agentOwnership?: string | null;
@@ -150,9 +156,9 @@ function getExecutionAgentNames(execution: Execution): string[] {
 }
 
 function getExecStatus(e: Execution): 'running' | 'success' | 'failed' {
-    if (e.is_evaluating) return 'running';
-    if (e.failures && e.failures.length > 0) return 'failed';
-    return 'success';
+    const status = String(e.trace_status ?? e.traceStatus ?? '').trim().toLowerCase();
+    if (status === 'running' || status === 'success' || status === 'failed') return status;
+    return e.trace_completed_at || e.traceCompletedAt ? 'success' : 'running';
 }
 
 function fmtSec(ms: number): string {
