@@ -254,6 +254,33 @@ backlog/dismissed 的源 issues 不 resolve → 留在台账，下轮重新归�
   后端校验通过），证明 version-scoped 文本锚可行。
 - 端到端优化效果对比（flat 平铺 vs plan 归并注入）结论见 REPORT.md。
 
+## 13. 优化回路改进（第二轮，2026-06-11）
+
+目标：让优化后的分数真正上升且不过拟合。落地的回路/评测改进（均已提交）：
+
+- **held-out 验证门**（反过拟合核心）：评测集做 val/test 切分；优化版只有在 val 严格优于基线
+  才被接受，最终分报在密封 test。等价于 SkillOpt 的 strictly-improves + ML 的 train/val/test。
+  实验侧已验证能正确拒绝所有回归候选、保留基线（floor=baseline，杜绝负迁移盲发）。
+- **eval-aligned 优化点生成**：当前 issue 多来自 trace 的"过程合规"，与评测目标错位。改为从
+  skill 在 held-out 上的判官 `missing_reason` 抽象出**能力级** issue（自动剥离答案值防过拟合）。
+- **编辑范围硬守卫**（src/lib/engine/skill-opt/edit-scope-guard.ts）：实测 deepseek-v4-pro 无视
+  "别删脚本"的 prompt → 改用结构性强制：禁删基线文件（删了还原）+ 改动行数预算。借鉴 trace2skill。
+- **优化器/测量模型解耦**：/plan 与 /chat 支持 modelId；优化器可用 v4-pro，测量模型固定保证可比。
+- **评测健壮性**：per-case 超时 + 仅对基建失败（超时/ECONNRESET/空输出）重试，不对真实低分重试。
+
+### 三个"为什么测不出提升"的混淆（实验关键教训）
+
+1. **评测方差极大**：同一 skill 同一 case 跑 4 次，分数极差可达 **1.0**（agent 执行随机）。
+   单次测量 ±0.4/case 淹没优化效果(~0.1)。→ 必须多轮平均（runsPerCase，runs≥3）。
+2. **deepseek "限流"实为 ECONNRESET**（非 429）：本机代理重置慢长连接。多 key 无用；
+   解法是退避重试 + deepseek 直连绕代理。
+3. **优化器预填错基线**：resolveSkillStorageDirSync 按 frontmatter name 扫目录，同名 orphan
+   storage 碰撞 + readdir 顺序不稳 → 优化器有时拿到缺核心脚本的旧基线（已提修复任务，应按
+   id/assetPath 解析，与测量路径一致）。
+
+**结论**：可靠地"让分数上升"的前提是先消除这三个混淆 + 多轮平均把方差降到可分辨增益；
+机制（门/守卫/eval-aligned/复用）本身由单测与直接检查独立验证有效。
+
 ## 11. 风险与对策
 
 | 风险 | 对策 |
