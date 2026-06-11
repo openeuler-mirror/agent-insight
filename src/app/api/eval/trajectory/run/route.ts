@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db, prismaRaw as prisma } from '@/lib/storage/prisma';
+import { reattributeServiceTraceOwner } from '@/lib/storage/data-service';
 import { findAgentDataset, readAllAgentDatasets, type AgentDatasetRecord, type DatasetCase } from '@/server/agent_datasets_storage';
 import { canReuseRootCauseCache, type RootCauseItem } from '@/lib/dataset-case-root-causes';
 import {
@@ -13,6 +14,17 @@ import {
 } from '@/lib/engine/evaluation/opencode-task-completion-evaluator';
 import { startOrReplace as startEvalTask, finish as finishEvalTask } from '@/lib/evaluation-task-manager';
 import { deriveAndPersistOptPoints } from '@/lib/engine/evaluation/derive-skill-opt-points';
+import {
+    NO_EVALUABLE_CASE_PREFIX,
+    isRetryableResultEvaluationFailure,
+    createSimpleAsyncLimiter,
+    type SimpleAsyncLimiter,
+} from '@/lib/engine/evaluation/eval-run-guards';
+import {
+    registerTrajectoryEvalRun,
+    unregisterTrajectoryEvalRun,
+    getTrajectoryEvalRunSignal,
+} from '@/server/trajectory_eval_run_registry';
 import {
     buildSkillKeyActionReference,
     getPrimaryExecutionSkillTargets,
@@ -90,7 +102,6 @@ function generateRunId(): string {
     return `trun_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-const NO_EVALUABLE_CASE_PREFIX = '[no-evaluable-case]';
 const CUSTOM_EVALUATOR_VARIABLE_RE = /\{\{\s*(input|output|reference_output|trajectory)\s*\}\}/g;
 type CustomEvaluatorVariable = 'input' | 'output' | 'reference_output' | 'trajectory';
 
@@ -358,6 +369,7 @@ async function evaluateTaskCompletionAgainstExpected(
     precomputedRootCauseSource?: 'dataset-cache' | 'none',
     traceSummaryText?: string,
     skillContext?: TaskCompletionEvalInput['skillContext'],
+    skillAttributionMode?: TaskCompletionEvalInput['skillAttributionMode'],
     user?: string | null,
     skillName?: string | null,
     skillVersion?: number | null,
@@ -371,6 +383,7 @@ async function evaluateTaskCompletionAgainstExpected(
             precomputedRootCauseSource,
             traceSummaryText,
             skillContext,
+            skillAttributionMode,
         },
         user,
         skillName,
@@ -431,22 +444,6 @@ function readResultEvaluationAttemptCount(rawAnalysisJson: string | null | undef
         : 0;
 }
 
-function isRetryableResultEvaluationFailure(error: unknown): boolean {
-    const message = error instanceof Error ? error.message : String(error || '');
-    if (!message.trim()) return false;
-    if (message.includes(NO_EVALUABLE_CASE_PREFIX)) return false;
-    if (message.includes('缺少预期结果')) return false;
-    if (message.includes('expectedOutput')) return false;
-    if (message.includes('trace 没有实际输入')) return false;
-    if (message.includes('Session.interactions JSON 解析失败')) return false;
-    if (message.includes('Session 不存在或 interactions 为空')) return false;
-    if (message.includes('读取数据集失败')) return false;
-    if (message.includes('未匹配到可评测 case')) return false;
-    if (message.includes('评估数据集不存在')) return false;
-    if (message.includes('写入评测结果失败')) return false;
-    if (message.includes('结果输出提取失败')) return false;
-    return true;
-}
 
 function scheduleResultEvaluationRetry(user: string, id: string, delayMs: number, attemptCount: number): void {
     setTimeout(() => {
@@ -595,10 +592,24 @@ export async function POST(request: Request) {
         // 走相同的 watchPlaceholder 数据库分支但语义不同; rawAnalysisJson 加 placeholderOnly=true
         // 让前端 /eval 页可识别此批次是用户主动创建的"空批次"而不是 autoWatch 待跑。
         const requestedPlaceholderOnly = body.placeholderOnly === true;
+        const taskScope = String(body.taskScope || '').trim();
+        const taskSkillName = String(body.skillName || '').trim();
+        const taskSkillVersionRaw = body.skillVersion;
+        const taskSkillVersion = taskSkillVersionRaw === undefined || taskSkillVersionRaw === null || taskSkillVersionRaw === ''
+            ? null
+            : Number(taskSkillVersionRaw);
 
         if (!user) return NextResponse.json({ error: 'user is required' }, { status: 400 });
         if (requestedAutoWatch && requestedWatchedAgent && isEvaluatorAgentName(requestedWatchedAgent)) {
             return NextResponse.json({ error: 'autoWatch requires a non-evaluator execution agent' }, { status: 400 });
+        }
+        if (taskScope === 'skill-case-analysis') {
+            if (!taskSkillName) {
+                return NextResponse.json({ error: 'skillName is required for skill-case-analysis task' }, { status: 400 });
+            }
+            if (taskSkillVersion == null || !Number.isFinite(taskSkillVersion)) {
+                return NextResponse.json({ error: 'skillVersion is required for skill-case-analysis task' }, { status: 400 });
+            }
         }
 
         // 自建评估器需要真存在于该用户的 CustomEvaluatorList 才能放行；找不到的 ID 直接拒绝，
@@ -669,6 +680,9 @@ export async function POST(request: Request) {
         let taskMeta = normalizeTrajectoryTaskMeta({
             title: body.taskTitle,
             description: body.taskDescription,
+            scope: taskScope,
+            skillName: taskScope === 'skill-case-analysis' ? taskSkillName : undefined,
+            skillVersion: taskScope === 'skill-case-analysis' ? taskSkillVersion : undefined,
         });
 
         let existingRunTaskIds = new Set<string>();
@@ -701,8 +715,12 @@ export async function POST(request: Request) {
                 || await resolveWatchedAgentForRunRows(user, existingRows as AutoWatchRunRowLike[]),
             );
             existingRunAutoWatchEnabledAt = normalizeAutoWatchEnabledAt(latestExplicitMeta?.autoWatchEnabledAt);
+            // 去重只针对"已出分(done)或正在跑(pending/running)"的 trace——避免重复添加 / 抢跑。
+            // 失败(failed)的 trace 必须放行重评:否则一条 trace 在批次里失败过一次后,就再也重评不了
+            // (用户现象:重评全报 "no valid tasks to run")。稳定批次(同批次反复评测)下这点尤其关键。
             existingRunTaskIds = new Set(
                 existingRows
+                    .filter(row => row.status !== 'failed')
                     .map(row => row.taskId || row.executionId || '')
                     .filter(Boolean),
             );
@@ -833,7 +851,10 @@ export async function POST(request: Request) {
                 const executionId = pair.executionId ? String(pair.executionId).trim() : undefined;
                 const taskId = pair.taskId ? String(pair.taskId).trim() : undefined;
                 const duplicateKey = taskId || executionId || '';
-                if (duplicateKey && existingRunTaskIds.has(duplicateKey)) {
+                // 灰度(A/B)评测显式要"重评这一条 trace"——绝不能被去重挡掉(否则一条 trace 在批次里
+                // 评过一次后就再也重评不动了,报 "no valid tasks to run")。重评会新增一行,展示侧
+                // latestByCase 取最新分、旧行保留。非灰度(用例分析)仍按 existingRunTaskIds 去重。
+                if (!grayscaleBinding && duplicateKey && existingRunTaskIds.has(duplicateKey)) {
                     skipped.push({ caseId, reason: `${duplicateKey} already exists in this run` });
                     continue;
                 }
@@ -866,13 +887,24 @@ export async function POST(request: Request) {
             return NextResponse.json({ error: 'no valid tasks to run', skipped }, { status: 400 });
         }
 
+        // 归属修复(往后自动):平台服务端跑出来的执行 trace 默认记在服务账号(admin)名下,这里把
+        // 本次评测引用的"被执行 trace"归还给评测发起人。只动服务账号拥有的 trace(不碰别人已拥有的)。
+        // fire-and-forget,不阻塞评测响应;失败也不影响主流程。
+        void Promise.all(created.map(c =>
+            reattributeServiceTraceOwner((c.taskId || c.executionId || '').trim(), user).catch(() => false)
+        ));
+
         const runnableIds = created
             .filter(c => c.taskId || c.executionId)
             .map(c => c.id);
         if (runnableIds.length > 0) {
-            void runEvaluations(user, evaluatorRunId, runnableIds).catch(err => {
-                console.error('[trajectory-eval] background run crashed:', err);
-            });
+            // 登记本次评测 run 的 AbortController(供「终止」按 user 中止),收尾时注销避免泄漏。
+            registerTrajectoryEvalRun(evaluatorRunId, user);
+            void runEvaluations(user, evaluatorRunId, runnableIds)
+                .catch(err => {
+                    console.error('[trajectory-eval] background run crashed:', err);
+                })
+                .finally(() => unregisterTrajectoryEvalRun(evaluatorRunId));
         }
 
         return NextResponse.json({
@@ -951,8 +983,32 @@ export async function PATCH(request: Request) {
     }
 }
 
-/** 单条 trace 评测的并发上限 */
+/** 单条 trace 评测的并发上限（单个 run 内部） */
 const RUN_CONCURRENCY = 3;
+
+/**
+ * **全局**正在跑的评测行总数硬上限（跨所有 run/批次/用户）。
+ *
+ * 背景:opencode 5-slot 信号量只约束 opencode 进程数;但每个评测行在拿 slot 之前/期间,会把
+ * "解析后的 trace / 拼好的 LLM 输入 / 结果对象"留在 next-server 堆里。并行跑多个评测任务(多个 run)
+ * 时 RUN_CONCURRENCY 只是"每个 run 内"的上限,run 之间会叠加 → 堆内驻留量随并行任务数无界增长 →
+ * next-server 堆 OOM(119 实测 30 任务把堆撑到 4G 崩)。这里给"全局在跑的评测行数"加硬上限,
+ * 把堆内驻留量与并行任务数解耦。默认 4(< opencode 5-slot,不会和 opencode 信号量互锁),
+ * 可用 MAX_EVAL_ROW_CONCURRENCY 覆盖。
+ */
+const EVAL_ROW_CONCURRENCY = (() => {
+    const raw = Number(process.env.MAX_EVAL_ROW_CONCURRENCY);
+    return Number.isFinite(raw) && raw > 0 ? Math.min(20, Math.floor(raw)) : 4;
+})();
+/** 用 globalThis 存,跨 Next 模块重载/HMR 仍是同一个 limiter(否则会出现多份、上限失效)。 */
+const EVAL_ROW_LIMITER_KEY = Symbol.for('@witty-insight/trajectory-eval-row-limiter');
+function getEvalRowLimiter(): SimpleAsyncLimiter {
+    const g = globalThis as unknown as Record<symbol, SimpleAsyncLimiter>;
+    if (!g[EVAL_ROW_LIMITER_KEY]) {
+        g[EVAL_ROW_LIMITER_KEY] = createSimpleAsyncLimiter(EVAL_ROW_CONCURRENCY);
+    }
+    return g[EVAL_ROW_LIMITER_KEY];
+}
 /** 单条 trace 评测的硬超时（ms）。超过则自动标 failed。 */
 const PER_RESULT_TIMEOUT_MS = 10 * 60 * 1000;
 
@@ -1021,7 +1077,22 @@ function buildDiagnosticFromError(error: unknown): EvaluationDiagnostic {
 }
 
 /** 包装 evaluateTrajectoryViaOpencode + 加超时；分阶段抛错便于 UI 显示根因 */
+/**
+ * 评测单行的入口包装:先抢全局评测行 slot(EVAL_ROW_CONCURRENCY),再跑实际评测。
+ * 所有调用方(runEvaluations 主循环、scheduleResultEvaluationRetry 重试)都走这里 →
+ * 全局在跑的评测行数被硬限制住,堆内驻留量与并行任务数解耦。slot 在 finally 里必释放。
+ */
 async function runOneEvaluation(user: string, id: string): Promise<void> {
+    const limiter = getEvalRowLimiter();
+    await limiter.acquire();
+    try {
+        await runOneEvaluationInner(user, id);
+    } finally {
+        limiter.release();
+    }
+}
+
+async function runOneEvaluationInner(user: string, id: string): Promise<void> {
  // 注册到 evaluation-task-manager 的 activeTasks 内存表 —— 让 GET /api/observe/data 的
  // is_evaluating 字段在轮询时对这条 trace 返 true,前端"已评测历史"列表立刻显示"评测中",
  // 不会再卡在老评测结果不刷新。
@@ -1041,6 +1112,14 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
     // ---- 1. 加载行 + case + interactions ----
     const row = await prisma.trajectoryEvalResult.findUnique({ where: { id } });
     if (!row) throw new StagedEvaluationError('lookup', `result row ${id} disappeared`);
+    // 「终止」关键检查点:该评测 run 已被用户终止 → 本行不跑任何评测器、直接置失败(已终止)。
+    // 这也挡住了"终止后重试/排队的行再去派发重型 opencode"——重试会重新进到这里、被这里拦下。
+    if (getTrajectoryEvalRunSignal(row.evaluatorRunId)?.aborted) {
+        await prisma.trajectoryEvalResult
+            .update({ where: { id }, data: { status: 'failed', errorMessage: '已终止：用户中止了该批次评测' } })
+            .catch(() => { /* row 可能已被清理,忽略 */ });
+        return;
+    }
     // 注册 isActive: 必须在 row 加载后才有 taskId, 但要尽早调以缩短"用户点评测" → "isActive=true"的窗口
     if (row.taskId) {
         registeredTaskId = row.taskId;
@@ -1376,6 +1455,9 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
         user,
         interactions,
     );
+    const resultSkillTargets = getPrimaryExecutionSkillTargets(execution, interactions);
+    const resultSkillMode: NonNullable<TaskCompletionEvalInput['skillAttributionMode']> =
+        resultSkillTargets.length > 0 ? 'skill-aware' : 'no-skill';
     const keyActionComparisonForStatus: SkillKeyActionComparisonResult = keyActionReference.status === 'ok'
         ? {
             status: 'ok',
@@ -1421,6 +1503,7 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
         ...(grayscaleBinding ? { grayscaleBinding } : {}),
         caseSnapshot,
         skillAttribution: skillAttributionStatus,
+        resultSkillMode,
         comparisonMode,
         actualTraceExtraction: traceEvidence
             ? {
@@ -1486,7 +1569,9 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
     }
 
     if (shouldRunResultEvaluation) {
-        const taskCompletionSkillContext = await loadTaskCompletionSkillContext(execution, interactions, user);
+        const taskCompletionSkillContext = resultSkillMode === 'skill-aware'
+            ? await loadTaskCompletionSkillContext(execution, interactions, user)
+            : undefined;
         const traceSummaryForResultEvaluation = traceEvidence?.text || '';
         const attempt = Math.min(
             readResultEvaluationAttemptCount(row.rawAnalysisJson) + 1,
@@ -1567,6 +1652,7 @@ async function runOneEvaluation(user: string, id: string): Promise<void> {
                     precomputedRootCauseSource,
                     traceSummaryForResultEvaluation,
                     taskCompletionSkillContext,
+                    resultSkillMode,
                     user,
                     evalSkillName,
                     evalSkillVersion,
@@ -1935,6 +2021,8 @@ export async function runEvaluations(user: string, evaluatorRunId: string, resul
 
     await new Promise<void>(resolveAll => {
         const tryStartNext = () => {
+            // 被「终止」后:不再派发新行,并清空剩余队列,让下面的收尾条件能成立(否则 promise 永挂)。
+            if (getTrajectoryEvalRunSignal(evaluatorRunId)?.aborted) queue.length = 0;
             while (activeCount < RUN_CONCURRENCY && queue.length > 0) {
                 const id = queue.shift()!;
                 activeCount++;
@@ -1965,6 +2053,8 @@ export async function runEvaluations(user: string, evaluatorRunId: string, resul
                     })
                     .finally(() => {
                         activeCount--;
+                        // 终止后清空剩余队列,保证"queue 空 && 无在跑"的收尾条件最终成立。
+                        if (getTrajectoryEvalRunSignal(evaluatorRunId)?.aborted) queue.length = 0;
                         if (queue.length === 0 && activeCount === 0) {
                             resolveAll();
                         } else {

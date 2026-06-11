@@ -1,6 +1,9 @@
 export interface TrajectoryTaskMeta {
     title: string;
     description: string;
+    scope?: string;
+    skillName?: string;
+    skillVersion?: number | null;
 }
 
 const DEFAULT_TITLE_PREFIX = '评测执行';
@@ -30,14 +33,23 @@ export function buildDefaultTrajectoryTaskTitle(date = new Date()): string {
 }
 
 export function normalizeTrajectoryTaskMeta(
-    input: { title?: unknown; description?: unknown },
+    input: { title?: unknown; description?: unknown; scope?: unknown; skillName?: unknown; skillVersion?: unknown },
     fallbackDate = new Date(),
 ): TrajectoryTaskMeta {
     const title = String(input.title || '').trim();
     const description = String(input.description || '').trim();
+    const scope = String(input.scope || '').trim();
+    const skillName = String(input.skillName || '').trim();
+    const rawSkillVersion = input.skillVersion;
+    const skillVersion = rawSkillVersion === null || rawSkillVersion === undefined || rawSkillVersion === ''
+        ? null
+        : Number(rawSkillVersion);
     return {
         title: title || buildDefaultTrajectoryTaskTitle(fallbackDate),
         description,
+        ...(scope ? { scope } : {}),
+        ...(skillName ? { skillName } : {}),
+        ...(skillVersion != null && Number.isFinite(skillVersion) ? { skillVersion } : {}),
     };
 }
 
@@ -53,5 +65,8 @@ export function extractTrajectoryTaskMeta(
     return normalizeTrajectoryTaskMeta({
         title: taskMeta?.title ?? parsed?.taskTitle,
         description: taskMeta?.description ?? parsed?.taskDescription,
+        scope: taskMeta?.scope ?? parsed?.taskScope,
+        skillName: taskMeta?.skillName ?? parsed?.skillName,
+        skillVersion: taskMeta?.skillVersion ?? parsed?.skillVersion,
     }, fallbackDate);
 }

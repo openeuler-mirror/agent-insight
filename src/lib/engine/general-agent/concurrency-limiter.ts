@@ -19,6 +19,8 @@
  * 实测内存 ~ 30-60MB/session × 5 = 150-300MB 上限, 不会失控。
  */
 
+import { isTaskTerminated } from '@/server/user_termination_registry';
+
 const DEFAULT_MAX_BG = 5;
 const MAX_BG = (() => {
   const raw = Number(process.env.MAX_BACKGROUND_OPENCODE_TASKS);
@@ -338,6 +340,13 @@ export async function withBackgroundOpencodeSlot<T>(
   const modeOpts = { silent: opts?.silent, displayOnly: opts?.displayOnly, signal: opts?.signal };
   const waitStart = Date.now();
   const taskId = await semaphore.acquire(meta, modeOpts);
+  // 用户级终止 choke-point:拿到 slot 后,若这个任务在该用户「终止全部」之前就已入队
+  // (= 属于被终止的那批 in-flight 工作),直接中止、不去跑 opencode。覆盖执行 agent 与评测裁判
+  // 两类后台任务;配合 killOpencodeForUser(杀在跑的)一起,做到"点终止 → 该用户的活全停"。
+  if (isTaskTerminated(opts?.user, waitStart)) {
+    semaphore.release(taskId, { error: new Error('aborted: user terminated') }, modeOpts);
+    throw Object.assign(new Error('已终止:用户中止了该批次任务'), { name: 'AbortError' });
+  }
   const waited = Date.now() - waitStart;
   if (waited > 5000) {
     // 排队超过 5s 才能拿到 slot 说明背压大,打 log 让运维注意

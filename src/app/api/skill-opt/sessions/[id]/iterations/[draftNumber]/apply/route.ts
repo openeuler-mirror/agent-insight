@@ -139,7 +139,6 @@ export async function POST(
             version: nextVersionNum,
             user: user || null,
             trigger: 'auto-upload',
-            enableL2: false,
         })
             .then(r => {
                 if (r.status === 'skipped') {

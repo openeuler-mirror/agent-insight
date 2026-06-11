@@ -23,7 +23,7 @@ Agent，就能把核心能力完整体验一遍：**智能诊断 → Skill 生�
 | 资产 | 在哪看 | 说明 |
 | --- | --- | --- |
 | **messages 日志分析（内置示例）** 数据集 | 评测中心 → **数据集** | `ideal_output` 类型，10 条用例，覆盖认证攻击 / SSH 爆破 / 登录异常等场景。 |
-| **linux-messages-auth-triage-demo** Skill | **Skills** 列表 | 内置示例 Skill：分析 messages 日志的认证失败 / 暴力破解事件（含 references / scripts）。名字带 `-demo`，避免和你之后自己生成的 Skill 撞名。 |
+| **linux-messages-auth-triage-demo** Skill | **Skills** 列表 | 内置示例 Skill：离线分析用户提供的 messages 日志，识别认证失败、暴力破解、用户枚举和登录异常（含 references / scripts）。名字带 `-demo`，避免和你之后自己生成的 Skill 撞名。 |
 | 两条示例 **Trace** | **链路追踪** | 内置 `messages-log-analyzer` Agent 调用 `linux-messages-auth-triage-demo` Skill 对示例日志做的安全分析（一条聚焦 root SSH 爆破、一条做整体安全评估）。进入链路追踪页**默认就能看到**（它们被归到「用户 Agent」视图）。 |
 | `~/.agent-insight/example/messages` | 你机器的本地目录 | 一份真实的 Linux `messages` 日志（SSH 爆破、认证失败等）。**注意：它不是注册时就有的**，而是你执行**客户端安装命令**后才落到本地——见下方说明。 |
 
@@ -81,7 +81,12 @@ Loghub Linux 数据集里「认证失败 / 暴力破解」相关的事件模板�
 Skill 能精确识别并归类这些事件、输出准确结论：
 
 ```text
-你帮我生成一个skill，该skills实现对linux的messages日志进行提取分析，实现如下实践的分析整理，可以快速诊断如下的认证失败 / 暴力破解等相关问题，输出准确结果：
+你帮我生成一个 skill，该 skill 用于对离线 Linux messages 日志文件进行提取分析。
+必须注意：这里的日志分析是离线分析，不是在目标 Linux 系统上进行实时排查。用户已经将 Linux 主机中的 /var/log/messages 或相关 messages 日志文件拉取到本机后，再提供给 skill 进行分析。
+该 skill 只能基于用户提供的离线日志文件或日志文本内容进行分析，不得假设当前运行环境就是被分析的 Linux 主机，不得登录目标 Linux 主机，不得执行依赖目标系统状态的命令，也不得擅自读取当前机器上的系统日志。
+该 skill 必须严格按照 skill 中定义的 step 顺序执行分析流程，不允许跳过 step，不允许自行简化流程，不允许在未完成前置 step 的情况下直接给出结论。每一步都必须基于前一步的结果继续分析，最终结论必须来自日志原文中的可验证证据。
+如果日志中不存在相关事件，则明确说明未发现对应事件，不允许编造分析结果，不允许基于经验进行无证据推断。所有风险判断、攻击判断和诊断结论都必须能够在日志内容中找到对应依据。
+该 skill 需要实现如下实践的分析整理，可以快速诊断如下的认证失败 / 暴力破解等相关问题，输出准确结果：
 ## Loghub Linux 数据集：认证失败 / 暴力破解相关事件清单
 | EventId | EventTemplate | 含义解释 |
 |---|---|---|

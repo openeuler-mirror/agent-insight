@@ -7,7 +7,6 @@ import {
     ArrowLeft,
     Download,
     RefreshCw,
-    ExternalLink as ExternalLinkIcon,
     X as XIcon,
     XCircle,
     Wrench,
@@ -363,7 +362,7 @@ function TracePageContent() {
     //     selectedExecution 在 deps 里, effect 重新跑, 又走 fetch → 死循环
     // 死循环 + 反复 setState 会让 TraceDetailView 的子 effect 反复 abort/重启,
     // 表现就是用户「click → 跳到 trace 列表页, detail 永远渲染不上」。
-    const fetchGuardRef = useRef<{ taskId: string; user: string } | null>(null);
+    const fetchGuardRef = useRef<string | null>(null);
     useEffect(() => {
         if (!taskIdParam) {
             if (selectedExecution) setSelectedExecution(null);
@@ -375,26 +374,28 @@ function TracePageContent() {
             if (selectedExecution !== exec) setSelectedExecution(exec);
             return;
         }
-        // data 里没有, fallback 到 API 直查; 每个 (taskId, user) 只 fetch 一次
-        if (!user) return;
-        const guardKey = { taskId: taskIdParam, user };
-        if (
-            fetchGuardRef.current?.taskId === guardKey.taskId
-            && fetchGuardRef.current?.user === guardKey.user
-        ) return;
-        fetchGuardRef.current = guardKey;
-        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&taskId=${encodeURIComponent(taskIdParam)}&includeEvaluations=0`)
+        // data 列表里没有这条(列表只含当前登录账号自己的 trace), fallback 到 API 按 taskId 直查。
+        // 关键:不能再按当前登录 user 过滤——评测/灰度的"被执行 trace"跑在服务账号(如 admin)名下,
+        // 从评测结果里点 session id / 评估器 id 跳过来的是别人账号的 trace。taskId 全局唯一,
+        // 按 taskId 直查即可唯一命中;之前带 user 过滤 → 跨账号深链永远查空 → 退回列表页(本 bug)。
+        // 与本路由已有的 executionId 直查口径一致(单条直查都不做 user 作用域)。
+        // 每个 taskId 只 fetch 一次, 防死循环(fetch 回新对象 → setState → effect 重跑 → 再 fetch)。
+        if (fetchGuardRef.current === taskIdParam) return;
+        fetchGuardRef.current = taskIdParam;
+        // skipAutoEvalReady=1: Trace 详情不需要"自动评测就绪"信息,而算它要扫 7 天 opencode 遥测
+        // jsonl 建索引(实测冷构建 ~16s、缓存仅 30s),会让"点 session id 跳详情"非常慢。这里跳过。
+        apiFetch(`/api/observe/data?taskId=${encodeURIComponent(taskIdParam)}&includeEvaluations=0&skipAutoEvalReady=1`)
             .then(r => r.json())
             .then((d: Execution[]) => {
                 if (Array.isArray(d) && d.length > 0) setSelectedExecution(d[0]);
             })
             .catch(() => {
                 // 失败让用户能重试: 清掉 guard, 下次 effect 再 fire 时还能再试一次
-                if (fetchGuardRef.current?.taskId === taskIdParam) fetchGuardRef.current = null;
+                if (fetchGuardRef.current === taskIdParam) fetchGuardRef.current = null;
             });
     // selectedExecution 不放 deps——它由本 effect 自己写, 放进去就死循环
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [taskIdParam, data, user]);
+    }, [taskIdParam, data]);
 
     useEffect(() => {
         if (!user) return;
@@ -404,24 +405,31 @@ function TracePageContent() {
             : agentScopeFilter === 'all'
                 ? '&includeSubagents=1'
                 : '';
-        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&includeEvaluations=0&fields=light${scopeParam}`)
+        // 按 skill 筛选交给服务端(走 ExecutionSkill 索引,agent 作用域):结果精确命中真正用到该 skill 的
+        // 那一层(含 sub-agent),而非把全量拉到浏览器再 JS 过滤。
+        const skillParam = skillFilter !== 'all' ? `&skill=${encodeURIComponent(skillFilter)}` : '';
+        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&includeEvaluations=0&fields=light${scopeParam}${skillParam}`)
             .then(r => r.json())
             .then((d: Execution[]) => setData(Array.isArray(d) ? d : []))
             .catch(() => setData([]))
             .finally(() => setLoading(false));
-    }, [user, agentScopeFilter]);
+    }, [user, agentScopeFilter, skillFilter]);
 
-    const { availableAgents, availableSkills } = useMemo(() => {
+    // skill 下拉走 facet 接口(全量 skill,含 sub-agent 专属),避免随服务端筛选结果塌缩。
+    const [availableSkills, setAvailableSkills] = useState<string[]>([]);
+    useEffect(() => {
+        if (!user) return;
+        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&facet=skills`)
+            .then(r => r.json())
+            .then((rows: { name: string }[]) => setAvailableSkills(Array.isArray(rows) ? rows.map(s => s.name) : []))
+            .catch(() => setAvailableSkills([]));
+    }, [user]);
+
+    // agents 下拉仍从当前工作集推导(framework 同理)。
+    const availableAgents = useMemo(() => {
         const agents = new Set<string>();
-        const skills = new Set<string>();
-        data.forEach(d => {
-            getExecutionAgentNames(d).forEach(a => agents.add(a));
-            getInvokedSkillNames(d).forEach(s => skills.add(s));
-        });
-        return {
-            availableAgents: Array.from(agents).sort(),
-            availableSkills: Array.from(skills).sort(),
-        };
+        data.forEach(d => getExecutionAgentNames(d).forEach(a => agents.add(a)));
+        return Array.from(agents).sort();
     }, [data]);
 
     const frameworks = useMemo(() => {
@@ -447,9 +455,7 @@ function TracePageContent() {
                     const status = getExecStatus(d);
                     if (anomalyFilter !== status) return false;
                 }
-                if (skillFilter !== 'all') {
-                    if (!getInvokedSkillNames(d).includes(skillFilter)) return false;
-                }
+                // skill 筛选已在服务端按 ExecutionSkill(agent 作用域)完成,这里不再 JS 过滤。
                 if (ownershipFilter !== 'all') {
                     const ownership = d.agentOwnership ?? 'user';
                     if (ownership !== ownershipFilter) return false;
@@ -485,7 +491,7 @@ function TracePageContent() {
                 }
                 return sortDir === 'asc' ? cmp : -cmp;
             });
-    }, [data, timeFilter, frameworkFilter, anomalyFilter, agentFilter, skillFilter, ownershipFilter, sortKey, sortDir]);
+    }, [data, timeFilter, frameworkFilter, anomalyFilter, agentFilter, ownershipFilter, sortKey, sortDir]);
 
     useEffect(() => {
         if (page !== 1) setPage(1);
@@ -836,7 +842,6 @@ function TraceDetailView({
     }, []);
 
     const { framework, latency, tokens, cost } = execution;
-    const detailsLink = `${basePath}/details?framework=${encodeURIComponent(framework || '')}&expandTaskId=${taskId}`;
     const isRunning = execStatus === 'running';
     const canDownloadSession = !loading && !!session && !session.error;
 
@@ -966,12 +971,6 @@ function TraceDetailView({
                     >
                         <Download className="size-3.5" aria-hidden />
                         {locale === 'zh' ? '保存trace' : 'Save trace'}
-                    </Button>
-                    <Button variant="outline" size="sm" asChild className="h-7 text-xs">
-                        <a href={detailsLink} target="_blank" rel="noopener noreferrer">
-                            {t('tracePage.fullDetails')}
-                            <ExternalLinkIcon className="size-3.5" aria-hidden />
-                        </a>
                     </Button>
                 </div>
             </div>

@@ -271,7 +271,7 @@ echo "AGENT_INSIGHT_OPENCODE_OTEL_ENABLE=true" >> "$AGENT_INSIGHT_CONFIG_FILE"
 echo "AGENT_INSIGHT_OPENCODE_SPOOL_DIR=$HOME/.agent-insight/otel_data/opencode" >> "$AGENT_INSIGHT_CONFIG_FILE"
 echo "AGENT_INSIGHT_OPENCODE_UPLOADER=$HOME/.agent-insight/opencode_uploader_client.js" >> "$AGENT_INSIGHT_CONFIG_FILE"
 echo "AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR=$HOME/.agent-insight/otel_data/claude" >> "$AGENT_INSIGHT_CONFIG_FILE"
-echo "AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES=1" >> "$AGENT_INSIGHT_CONFIG_FILE"
+echo "AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES=file:$HOME/.agent-insight/claude_raw_bodies" >> "$AGENT_INSIGHT_CONFIG_FILE"
 echo "AGENT_INSIGHT_MAX_TOOL_IO=4000" >> "$AGENT_INSIGHT_CONFIG_FILE"
 echo "AGENT_INSIGHT_MAX_EVENT_STRING=20000" >> "$AGENT_INSIGHT_CONFIG_FILE"
 echo "AGENT_INSIGHT_OPENCODE_UPLOAD_COOLDOWN_MS=15000" >> "$AGENT_INSIGHT_CONFIG_FILE"
@@ -314,6 +314,7 @@ claude() {
   local _si_host="\${AGENT_INSIGHT_HOST:-127.0.0.1:3000}"
   case "$_si_host" in http://*|https://*) ;; *) _si_host="http://$_si_host" ;; esac
   _si_host="\${_si_host%/}"
+  mkdir -p "$HOME/.agent-insight/claude_raw_bodies" 2>/dev/null || true
   env \\
     CLAUDE_CODE_ENABLE_TELEMETRY=1 \\
     OTEL_LOGS_EXPORTER=otlp \\
@@ -323,7 +324,8 @@ claude() {
     OTEL_EXPORTER_OTLP_HEADERS="x-witty-api-key=\${AGENT_INSIGHT_API_KEY:-}" \\
     OTEL_LOG_USER_PROMPTS=1 \\
     OTEL_LOG_TOOL_DETAILS=1 \\
-    OTEL_LOG_RAW_API_BODIES="\${AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES:-1}" \\
+    OTEL_LOG_TOOL_CONTENT=1 \\
+    OTEL_LOG_RAW_API_BODIES="\${AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES:-file:$HOME/.agent-insight/claude_raw_bodies}" \\
     claude "$@"
 }
 CLAUDE_OTEL_EOF
@@ -688,7 +690,7 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_OPENCODE_SPOOL_DIR=$skillInsightDir\\otel_data\\opencode"',
         'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_OPENCODE_UPLOADER=$skillInsightDir\\opencode_uploader_client.js"',
         'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR=$skillInsightDir\\otel_data\\claude"',
-        'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES=1"',
+        'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES=file:$skillInsightDir\\claude_raw_bodies"',
         'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_MAX_TOOL_IO=4000"',
         'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_MAX_EVENT_STRING=20000"',
         'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_OPENCODE_UPLOAD_COOLDOWN_MS=15000"',
@@ -733,7 +735,10 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '  $env:OTEL_EXPORTER_OTLP_HEADERS = "x-witty-api-key=$($env:AGENT_INSIGHT_API_KEY)"',
         '  $env:OTEL_LOG_USER_PROMPTS = "1"',
         '  $env:OTEL_LOG_TOOL_DETAILS = "1"',
-        '  if (-not $env:AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES) { $env:AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES = "1" }',
+        '  $env:OTEL_LOG_TOOL_CONTENT = "1"',
+        '  $rawBodyDir = Join-Path $env:USERPROFILE ".agent-insight\\claude_raw_bodies"',
+        '  New-Item -ItemType Directory -Path $rawBodyDir -Force | Out-Null',
+        '  if (-not $env:AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES) { $env:AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES = "file:$rawBodyDir" }',
         '  $env:OTEL_LOG_RAW_API_BODIES = $env:AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES',
         '  $cmd = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue',
         '  if (-not $cmd) { throw "claude executable not found in PATH" }',

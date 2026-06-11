@@ -30,7 +30,7 @@
   - `skill-generation/` —— 通过 Agent 进行 Skill 创作：`index.ts`（`generateSkill` / `generateSkillStream`）、`types.ts`（`SkillSpec`）、`opencode-agent-cli/`（OpenCode 客户端 + 事件类型）、`evaluator/runners/`，以及一个 `legacy/` 的 skill-sync/registry 层。
   - `skill-issues/` —— Skill 问题聚合 + `static-evaluator/`（用于静态合规检查的 linter + LLM 评测器）。
 - **`storage/`** —— 持久化：`data-service.ts`（`Execution` 记录、路由/结果快照、配置）、`db-interface.ts`（`DatabaseAdapter`、`OpenGaussAdapter`、`getDatabaseAdapter`）、`prisma.ts`、`server-config.ts`（`ModelConfig` / `UserSettings`）。
-- **`ingest/`** —— 框架无关的接入：`claude-otel/`、`claude-watcher.ts`、`openclaw-watcher.ts`、`opencode-deleted-sessions.ts`、`proxy-config.ts` / `proxy-store.ts`、`routing-signature.ts`、`upload-throttle.ts` / `upload-analysis-debouncer.ts`。
+- **`ingest/`** —— 框架无关的接入：`adapters/`（`FrameworkAdapter` 注册表、skill 抽取与存储归一化入口）、`claude-otel/`、`otel-consumer/`、`openclaw-watcher.ts`、`opencode-deleted-sessions.ts`、`proxy-config.ts` / `proxy-store.ts`、`routing-signature.ts`、`upload-throttle.ts` / `upload-analysis-debouncer.ts`。
 - **`auth/`** —— `auth.ts`（`resolveUser`、`canAccessSkill`）和 `auth-context.tsx`。
 - **`skill-analysis/`** —— `ab-scoring.ts`、`ab-significance.ts`、`diagnosis.ts`、`grayscale-utils.ts`。
 - **`evaluators/`** —— 预设 + 自定义评测器模型。
@@ -60,7 +60,7 @@ assistant-ui 集成：`client.ts`、`Stream.tsx`、`Thread.tsx` —— 串联起
 `(main)/` 下的页面（每个功能一个路由组：dashboard、agents、dataset、eval、fault、metrics、modelconfig、quality、security、skill-eval、skill-generator、skill-opt、skill-release、skills、trace），以及 `api/` 下的 API 路由处理器。这里是 HTTP 请求的入口；处理器将工作委派给 `lib`/`server`。参见 [01-architecture.md](01-architecture.md#entry-surface) 和 [06-frontend.md](06-frontend.md)。
 
 ## `scripts` (`scripts/`) — edge, operational + client agents
-安装器/生命周期（`install.js`、`start.js`、`stop.js`、`status.js`、`restart*.{js,sh}`）、客户端接入 watcher/插件（`claude_watcher_client.ts`、`openclaw_watcher_client.ts`、`opencode_plugin*.ts`、`opencode_uploader_client.js`、`opencode_tui_plugin.tsx`）、数据回填/种子，以及一个 Python OTel 接收器（`otel_receiver.py`）。
+安装器/生命周期（`install.js`、`start.js`、`stop.js`、`status.js`、`restart*.{js,sh}`）、客户端接入 watcher/插件（`openclaw_watcher_client.ts`、`opencode_plugin*.ts`、`opencode_uploader_client.js`、`opencode_tui_plugin.tsx`）、Claude Code 官方 OTel 配置脚本、数据回填/种子，以及一个 Python OTel 接收器（`otel_receiver.py`）。
 
 ## `public`, `tools`, `test` — edge / peripheral
 - `public/` —— 静态资源 + `sync_skills.ts`（客户端 Skill 同步脚本）。

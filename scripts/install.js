@@ -170,6 +170,17 @@ async function run(options = {}) {
     console.log('   ⚠️ 数据迁移检测失败，跳过: ' + e.message)
   }
 
+  // 把 npm 钉死在当前目录：当前目录没有 package.json 时，npm 会向上找最近的
+  // 祖先项目（常见是被旧安装污染过的 $HOME），转而在那棵树上做安装——旧依赖的
+  // postinstall 一挂，整个一键安装就死了，且当前目录什么都不会留下。
+  if (!fs.existsSync(path.join(process.cwd(), 'package.json'))) {
+    fs.writeFileSync(
+      path.join(process.cwd(), 'package.json'),
+      JSON.stringify({ name: 'agent-insight-deploy', version: '1.0.0', private: true }, null, 2) + '\n'
+    )
+    console.log('   📄 当前目录无 package.json，已生成最小清单，安装将固定在本目录')
+  }
+
   try {
     await runCommand('npm install agent-insight', { silent: true })
     console.log('   ✅ npm 包安装成功\n')

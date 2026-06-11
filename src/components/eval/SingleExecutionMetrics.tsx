@@ -115,15 +115,6 @@ export function SingleExecutionMetrics({ taskId }: Props) {
                     </div>
                 </div>
                 <Link
-                    href={`${basePath}/details?framework=${encodeURIComponent(record.framework || '')}&expandTaskId=${taskId}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="ai-btn-s"
-                    style={{ textDecoration: 'none', fontSize: 11, flexShrink: 0 }}
-                >
-                    {locale === 'zh' ? '完整详情 ↗' : 'Full details ↗'}
-                </Link>
-                <Link
                     href={`${basePath}/skill-eval?taskId=${taskId}`}
                     className="ai-btn-s"
                     style={{ textDecoration: 'none', fontSize: 11, flexShrink: 0 }}

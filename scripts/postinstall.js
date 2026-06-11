@@ -78,12 +78,26 @@ try {
   process.env.DATABASE_URL = dbUrl
 
   console.log('Syncing database schema...')
-  execSync('npx prisma db push', {
-    stdio: 'inherit',
-    cwd: PACKAGE_ROOT,
-    env: { ...process.env, DATABASE_URL: dbUrl }
-  })
-  console.log('✓ Database schema synced')
+  try {
+    execSync('npx prisma db push', {
+      stdio: 'inherit',
+      cwd: PACKAGE_ROOT,
+      env: { ...process.env, DATABASE_URL: dbUrl }
+    })
+    console.log('✓ Database schema synced')
+  } catch (e) {
+    // prisma 在迁移会删用户数据（删表/删列/加唯一约束）时拒绝执行并退出 1。
+    // 这种情况绝不能让整个 npm install 失败——旧库照常可用，给出恢复指引即可。
+    console.log('⚠️  Database schema sync skipped: prisma db push failed.')
+    console.log(`   现有数据库 ${dbPath}`)
+    console.log('   里可能存在新 schema 需要删除的数据（prisma 拒绝破坏性变更）。')
+    console.log('   恢复方式（二选一）：')
+    console.log('   1) 备份后原地迁移（接受丢弃冲突项）：')
+    console.log(`        cp "${dbPath}" "${dbPath}.bak"`)
+    console.log(`        DATABASE_URL="${dbUrl}" npx prisma db push --accept-data-loss`)
+    console.log('   2) 全新开始：把旧库移走，重新 start 即可自动建库。')
+    console.log('   注意：schema 未同步时服务仍可启动，但部分新功能可能报错。')
+  }
   console.log()
 
   console.log('Generating Prisma client...')

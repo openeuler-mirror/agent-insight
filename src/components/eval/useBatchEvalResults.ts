@@ -34,8 +34,10 @@ export function useBatchEvalResults(
     user: string | null | undefined,
     evaluatorRunId: string | undefined,
     pollMs = 0,
+    options?: { latestByCase?: boolean },
 ): Map<string, BatchEvalResultMeta> {
-    const scopeKey = user && evaluatorRunId ? `${user}\u0000${evaluatorRunId}` : '';
+    const latestByCase = options?.latestByCase !== false;
+    const scopeKey = user && evaluatorRunId ? `${user}\u0000${evaluatorRunId}\u0000${latestByCase ? 'latest' : 'all'}` : '';
     const [result, setResult] = useState<{ scopeKey: string; map: Map<string, BatchEvalResultMeta> }>({
         scopeKey: '',
         map: new Map(),
@@ -47,16 +49,20 @@ export function useBatchEvalResults(
         const load = async () => {
             const currentSequence = ++requestSequence;
             try {
-                const res = await apiFetch(`/api/eval/trajectory/results?user=${encodeURIComponent(user)}&runId=${encodeURIComponent(evaluatorRunId)}&latestByCase=1&limit=500`);
+                const latestParam = latestByCase ? '&latestByCase=1' : '';
+                const res = await apiFetch(`/api/eval/trajectory/results?user=${encodeURIComponent(user)}&runId=${encodeURIComponent(evaluatorRunId)}${latestParam}&limit=500`);
                 const data = await res.json();
-                const rows: any[] = data?.results || [];
+                const rows = Array.isArray(data?.results) ? data.results : [];
                 const m = new Map<string, BatchEvalResultMeta>();
                 for (const r of rows) {
-                    const key = r.taskId || r.executionId;
-                    if (!key || r.watchPlaceholder || r.placeholderOnly) continue;
+                    const row = (r && typeof r === 'object') ? r as Record<string, unknown> : {};
+                    const key = row.taskId || row.executionId;
+                    if (!key || row.watchPlaceholder || row.placeholderOnly) continue;
                     if (m.has(String(key))) continue;
-                    const raw = (r.rawAnalysis && typeof r.rawAnalysis === 'object') ? r.rawAnalysis : {};
-                    const resultEvaluation = (raw.resultEvaluation && typeof raw.resultEvaluation === 'object') ? raw.resultEvaluation : {};
+                    const raw = (row.rawAnalysis && typeof row.rawAnalysis === 'object') ? row.rawAnalysis as Record<string, unknown> : {};
+                    const resultEvaluation = (raw.resultEvaluation && typeof raw.resultEvaluation === 'object')
+                        ? raw.resultEvaluation as Record<string, unknown>
+                        : {};
                     // raw.evaluatorSessionId = 轨迹质量评估器 session；resultEvaluation.evaluatorSessionId = 结果评估器 session。
                     const trajEvalTraceId = (typeof raw.evaluatorSessionId === 'string' && raw.evaluatorSessionId.trim())
                         ? raw.evaluatorSessionId.trim() : '';
@@ -64,18 +70,18 @@ export function useBatchEvalResults(
                         ? resultEvaluation.evaluatorSessionId.trim() : '';
                     const evalTrace = trajEvalTraceId || resultEvalTraceId || '';
                     m.set(String(key), {
-                        resultId: r.id || undefined,
-                        caseId: r.caseId || undefined,
+                        resultId: typeof row.id === 'string' ? row.id : undefined,
+                        caseId: typeof row.caseId === 'string' ? row.caseId : undefined,
                         taskId: String(key),
                         evaluationTraceId: evalTrace || undefined,
                         resultEvalTraceId: resultEvalTraceId || undefined,
                         trajEvalTraceId: trajEvalTraceId || undefined,
-                        datasetId: r.datasetId || undefined,
-                        status: r.status,
+                        datasetId: typeof row.datasetId === 'string' ? row.datasetId : undefined,
+                        status: typeof row.status === 'string' ? row.status : undefined,
                         // trajectoryScore / resultEvaluationScore 后端为 0-1, 这里 ×100 转 0-100 与 trace 模式口径一致。
-                        resultScore: typeof r.resultEvaluationScore === 'number' ? Math.round(r.resultEvaluationScore * 100) : null,
-                        trajScore: typeof r.trajectoryScore === 'number' ? Math.round(r.trajectoryScore * 100) : null,
-                        errorMessage: r.errorMessage || undefined,
+                        resultScore: typeof row.resultEvaluationScore === 'number' ? Math.round(row.resultEvaluationScore * 100) : null,
+                        trajScore: typeof row.trajectoryScore === 'number' ? Math.round(row.trajectoryScore * 100) : null,
+                        errorMessage: typeof row.errorMessage === 'string' ? row.errorMessage : undefined,
                     });
                 }
                 if (!cancelled && currentSequence === requestSequence) setResult({ scopeKey, map: m });
@@ -87,6 +93,6 @@ export function useBatchEvalResults(
             return () => { cancelled = true; clearInterval(t); };
         }
         return () => { cancelled = true; };
-    }, [user, evaluatorRunId, pollMs, scopeKey]);
+    }, [user, evaluatorRunId, pollMs, scopeKey, latestByCase]);
     return result.scopeKey === scopeKey ? result.map : EMPTY_RESULT_MAP;
 }

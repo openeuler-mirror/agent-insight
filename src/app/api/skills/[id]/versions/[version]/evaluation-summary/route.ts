@@ -1,4 +1,5 @@
 import { resolveUser } from '@/lib/auth/auth';
+import { isLlmScoredGenerator } from '@/lib/engine/skill-issues/static-evaluator';
 import { prismaRaw } from '@/lib/storage/prisma';
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -67,7 +68,8 @@ export async function GET(
       contentHash: top.contentHash,
       issuesCount: top.issues.length,
       severityHistogram: histogramFor(top.issues),
-      l2Scores: top.l2ScoresJson ? safeParse(top.l2ScoresJson) : null,
+      // 纯 L1 generator（无 +llm）的历史行可能残留 L1 floor 分数——L1 不单独评分，不下发。
+      l2Scores: top.l2ScoresJson && isLlmScoredGenerator(top.generator) ? safeParse(top.l2ScoresJson) : null,
     };
 
     const history = evaluations.map(e => ({

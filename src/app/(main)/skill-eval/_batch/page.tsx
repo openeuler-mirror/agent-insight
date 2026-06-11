@@ -259,7 +259,8 @@ export function BatchEvaluation({
     const reloadEvalTasks = useCallback(async () => {
         if (!user) { setEvalTasks([]); return; }
         try {
-            const res = await apiFetch(`/api/eval/trajectory/runs?user=${encodeURIComponent(user)}&limit=50&latestByCase=1`);
+            // 用例分析只看独立评测任务, 不展示灰度 A/B 的评测批次(A/B 只在 A/B 页看)。
+            const res = await apiFetch(`/api/eval/trajectory/runs?user=${encodeURIComponent(user)}&limit=50&latestByCase=1&excludeGrayscale=1`);
             const data = await res.json();
             if (Array.isArray(data?.runs)) {
                 setEvalTasks(data.runs.map((r: any) => ({
@@ -284,6 +285,11 @@ export function BatchEvaluation({
         if (!controlled) return;
         if (controlledSkillId !== undefined) setSelectedSkillId(controlledSkillId);
         if (controlledVersionId !== undefined) setSelectedVersionId(controlledVersionId);
+    }, [controlled, controlledSkillId, controlledVersionId]);
+    useEffect(() => {
+        if (!controlled) return;
+        if (controlledSkillId !== undefined) setTraceSkillId(controlledSkillId);
+        setSelectedTraceIds([]);
     }, [controlled, controlledSkillId, controlledVersionId]);
 
     // 拉当前评测任务结果, 给 ② 表每行补"评估 Trace"(caseStates 里只有执行 trace sessionId)。
@@ -1325,19 +1331,28 @@ export function BatchEvaluation({
     const bulkAbortUnified = async () => {
         // 放宽守卫：只要本次会话在跑(batchStartInFlight) 或 后端存在未完成 case，都允许终止。
         if (!currentTask || (!batchStartInFlight && !hasInFlightCase)) return;
-        if (!window.confirm(locale === 'zh' ? '确定终止当前批量执行? 已 in-flight 的 case 会标记为「用户终止」失败' : 'Abort current batch run?')) return;
+        if (!window.confirm(locale === 'zh' ? '确定终止? 将停止你当前所有在跑的执行与评测, 已 in-flight 的会标记为「用户终止」失败。' : 'Terminate all your running executions and evaluations?')) return;
+        const u = user || 'debug-user';
         try {
+            // 1) 当前任务的执行侧 abort(含该任务 DB 残留 case 的兜底重置)。
             const res = await apiFetch(`/api/debug/batch-tasks/${currentTask.id}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ user: user || 'debug-user', action: 'abort' }),
+                body: JSON.stringify({ user: u, action: 'abort' }),
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
                 alert((locale === 'zh' ? '终止失败: ' : 'Abort failed: ') + (data.error || res.status));
                 return;
             }
-            // polling 下一轮就能看到所有 case 进入 fail/pass 状态, 自动释放 in-flight 锁
+            // 2) 用户级「终止全部」:停掉我所有在跑的执行 + 评测(opencode 进程组、评测 run/重试),严格只动本用户。
+            //    这是真正让"已经开始的评测"也停下来的关键(执行侧 abort 之前就有,评测侧之前没有)。
+            await apiFetch('/api/eval/terminate-all', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user: u }),
+            }).catch(() => { /* 尽力而为,不阻塞 UI */ });
+            // polling 下一轮就能看到所有 case/评测进入 fail 状态, 自动释放 in-flight 锁
         } catch (err) {
             alert(String(err));
         }
@@ -2240,7 +2255,7 @@ export function BatchEvaluation({
                         ⏹ {locale === 'zh' ? '终止' : 'Abort'}
                     </button>
                 )}
-                <span style={{ fontSize: 11, color: !evaluationBatchId ? '#D97706' : 'var(--ink-3, #a1a1aa)' }}>
+                <span style={{ fontSize: 15, fontWeight: 700, color: !evaluationBatchId ? '#EA580C' : '#2563EB' }}>
                     {!evaluationBatchId
                         ? (locale === 'zh' ? '请先在上方「评测任务」新建或选择一个任务，再开始评测' : 'Create/select an eval task above first')
                         : (locale === 'zh' ? '勾选 case 后开始评测：先执行生成 Trace 再评测；进度见 ② 评测执行' : 'Select cases → execute to generate traces → evaluate; progress in ②')}

@@ -951,6 +951,10 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
         () => parseSkillAttributionFromRow(result),
         [result],
     );
+    const resultSkillMode = String(asRecord(result?.rawAnalysis).resultSkillMode || '').trim();
+    const canShowResultSkillAttribution = resultSkillMode
+        ? resultSkillMode === 'skill-aware'
+        : skillAttribution?.state !== 'not-applicable';
     const skillKeyActionComparison = useMemo(
         () => deriveSkillKeyActionComparison(result?.rawAnalysis),
         [result?.rawAnalysis],
@@ -1206,7 +1210,12 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
                                         <div style={{ fontSize: 11.5, color: COLORS.textMuted, marginBottom: 6 }}>任务完成度评测详情</div>
                                         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                                             {resultEvaluationFindings.map((item, index) => (
-                                                <KeyPointFindingCard key={index} item={item} fallbackTitle={`关键观点 #${index + 1}`} />
+                                                <KeyPointFindingCard
+                                                    key={index}
+                                                    item={item}
+                                                    fallbackTitle={`关键观点 #${index + 1}`}
+                                                    canShowSkillAttribution={canShowResultSkillAttribution}
+                                                />
                                             ))}
                                         </div>
                                     </div>
@@ -1416,7 +1425,15 @@ function ScoreLine({ label, value, tone }: { label: string; value: string; tone:
     );
 }
 
-function KeyPointFindingCard({ item, fallbackTitle }: { item: ResultEvaluationFinding; fallbackTitle: string }) {
+function KeyPointFindingCard({
+    item,
+    fallbackTitle,
+    canShowSkillAttribution,
+}: {
+    item: ResultEvaluationFinding;
+    fallbackTitle: string;
+    canShowSkillAttribution: boolean;
+}) {
     const status = item.coverageStatus || (item.covered ? 'covered' : 'missing');
     const severity = item.severity || (status === 'covered' ? 'low' : 'high');
     const tone =
@@ -1433,7 +1450,9 @@ function KeyPointFindingCard({ item, fallbackTitle }: { item: ResultEvaluationFi
     const isCovered = status === 'covered';
     const resultJudgement = buildResultJudgement(item);
     const hasTrace = !isCovered && Boolean(item.traceRootCause?.failureReason || item.traceRootCause?.failureStage || item.traceRootCause?.relatedSteps?.length);
-    const hasAttribution = !isCovered && (item.isSkillAttributable === false || item.attributionReason || item.improvementSuggestion);
+    const hasAttribution = canShowSkillAttribution
+        && !isCovered
+        && (item.isSkillAttributable === false || item.attributionReason || item.improvementSuggestion);
 
     return (
         <div style={{

@@ -44,7 +44,8 @@ interface TriggerSet {
   versionNote: string | null;
   description: string;
   items: TriggerItem[];
-  status: 'drafting' | 'ready';
+  /** 'drafting'/'failed' 是异步 AI 起草的占位版本；'ready' 才是真正可编辑 / 可评测的版本 */
+  status: 'drafting' | 'ready' | 'failed';
   createdAt: string;
   updatedAt: string;
 }
@@ -100,6 +101,24 @@ const VERSION_SOURCE_LABEL: Record<TriggerSetVersionSource, string> = {
   'user-upload': '上传',
   manual: '手编',
 };
+
+/**
+ * 编辑器该绑定哪个版本：
+ *  - 用户显式选了某历史版本（selectedSetId）→ 直接用 GET 返回的那一个。
+ *  - 否则 GET 返回的是 latest；若它是异步起草的 drafting/failed 占位（不可编辑），
+ *    退回 versions 里最新的 ready 版本，让编辑器始终拿到真内容。都没有 ready 才退回占位本身。
+ */
+function pickEditableSet(
+  incoming: TriggerSet | null,
+  versions: TriggerSet[],
+  selectedSetId: string | null,
+): TriggerSet | null {
+  if (selectedSetId) return incoming;
+  if (incoming && incoming.status !== 'ready') {
+    return versions.find(v => v.status === 'ready') ?? incoming;
+  }
+  return incoming;
+}
 
 export default function SkillEvalTriggerPage() {
   const params = useParams<{ skillName: string }>();
@@ -219,9 +238,12 @@ export default function SkillEvalTriggerPage() {
       const setData = await setRes.json();
       const runData = await runRes.json();
       const settings = await settingsRes.json().catch(() => ({}));
-      setSet(setData.set ?? null);
       const vList: TriggerSet[] = Array.isArray(setData.versions) ? setData.versions : [];
       setVersions(vList);
+      // 编辑器只绑定**可编辑（ready）**版本：GET 返回的 latest 可能是异步起草的 drafting/failed
+      // 占位（version 最大但不可编辑），这时退回最新的 ready 版本，让编辑器始终拿到真内容；
+      // 用户显式选了某历史版本（selectedSetId）则直接用它。
+      setSet(pickEditableSet(setData.set ?? null, vList, selectedSetId));
       // selectedSetId 已不在新列表里就清掉，避免悬空选择
       if (selectedSetId && !vList.some(v => v.id === selectedSetId)) {
         setSelectedSetId(null);
@@ -271,6 +293,29 @@ export default function SkillEvalTriggerPage() {
     }
   }, [user, skillName, selectedVersion]);
 
+  // 只刷新触发集 + 版本列表（不动 runs / settings、不触发整页 loading），供后台起草进行中轮询用。
+  // 起草完成时占位版本会从 drafting → ready（新 id），pickEditableSet 随之把编辑器切到新版本。
+  const refreshSet = useCallback(async () => {
+    if (!user) return;
+    const setUrl = new URLSearchParams({ user });
+    if (selectedSetId) setUrl.set('versionId', selectedSetId);
+    try {
+      const res = await apiFetch(
+        `/api/skill-eval/trigger/${encodeURIComponent(skillName)}?${setUrl.toString()}`,
+      );
+      if (!res.ok) return;
+      const data = await res.json();
+      const vList: TriggerSet[] = Array.isArray(data.versions) ? data.versions : [];
+      setVersions(vList);
+      const editable = pickEditableSet(data.set ?? null, vList, selectedSetId);
+      // 只在可编辑版本真的变了（起草完成 → 新版本 id）时替换，避免轮询每拍都把当前 set 换成
+      // 同内容的新对象、白白触发列重渲染。
+      setSet(prev => (prev && editable && prev.id === editable.id ? prev : editable));
+    } catch {
+      // 轮询期间的瞬时网络错误吞掉——下一拍重试即可。
+    }
+  }, [user, skillName, selectedSetId]);
+
   // 评测改异步后，后端建好 run（status=running）即返回；真正跑完是后台行为。
   // 只要列表里还有 running 的 run，就每 3s 轮询一次 /runs 把最新状态拉回来——跑完后
   // running 消失，effect cleanup 自动停。用户关掉页面再回来时 reload 会重新拉到 running，
@@ -291,6 +336,39 @@ export default function SkillEvalTriggerPage() {
     }, 3000);
     return () => clearInterval(timer);
   }, [hasRunningRun, refreshRuns]);
+
+  // ── 异步 AI 起草状态（drafting/failed 占位版本）────────────────────────────
+  // ready 版本 = 真正可编辑 / 可评测的版本；drafting/failed 是后台起草的占位，单独用 banner 呈现。
+  const readyVersions = useMemo(() => versions.filter(v => v.status === 'ready'), [versions]);
+  // 「latest 可编辑版本」= 最新的 ready 版本（versions 已 version desc，filter 后第一条即最新 ready）。
+  const latestReadySet = useMemo<TriggerSet | null>(() => readyVersions[0] ?? null, [readyVersions]);
+  // 正在后台起草的占位（防重入后最多一条新鲜的）；存在即「起草中」。
+  const draftingSet = useMemo(() => versions.find(v => v.status === 'drafting') ?? null, [versions]);
+  const hasDrafting = draftingSet != null;
+  // 上次起草失败的占位——失败占位永远顶在 version 最大位，所以只看 versions[0]。
+  const failedDraftSet = useMemo(() => {
+    const top = versions[0];
+    return top && top.status === 'failed' ? top : null;
+  }, [versions]);
+
+  // 起草改异步后，POST 建好 drafting 占位即返回，真正跑完是后台行为。只要还有 drafting 占位，
+  // 就每 3s 轮询一次 /trigger 把最新状态拉回来——跑完后占位 flip 成 ready（或 failed），
+  // hasDrafting 转 false，effect cleanup 自动停。用户关页面再回来时 reload 会重新拉到 drafting，
+  // 轮询照常接上。MAX 拍兜底，避免后台进程异常残留 drafting 时无限空轮询。
+  useEffect(() => {
+    if (!hasDrafting) return;
+    let attempts = 0;
+    const MAX_ATTEMPTS = 120; // 120 × 3s ≈ 6min 上限（起草典型 5-15s）
+    const timer = setInterval(() => {
+      attempts += 1;
+      if (attempts > MAX_ATTEMPTS) {
+        clearInterval(timer);
+        return;
+      }
+      void refreshSet();
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [hasDrafting, refreshSet]);
 
   // 终止正在跑的评测：打 /run/<id>/cancel，后端 abort 后台 runner + 把这条 run 置 cancelled。
   // 成功后立刻 refreshRuns 把 cancelled 状态拉回来（不等下一拍轮询），banner 随即消失。
@@ -369,10 +447,10 @@ export default function SkillEvalTriggerPage() {
     setSet(prev => (prev ? { ...prev, items: prev.items.filter(item => item.id !== id) } : prev));
   }, []);
 
-  // latest = versions desc 的第一个；编辑器只允许在 latest 上保存。
-  const latestSet = useMemo<TriggerSet | null>(() => versions[0] ?? null, [versions]);
-  const isViewingLatestSet = !set || !latestSet || set.id === latestSet.id;
-  const readOnly = !isViewingLatestSet;
+  // latest 可编辑版本 = 最新的 ready 版本（drafting/failed 占位不算）；编辑器只允许在它上面保存。
+  const isViewingLatestSet = !set || !latestReadySet || set.id === latestReadySet.id;
+  // 起草进行中时也锁编辑——正在新建版本，此刻改旧版没意义（起草完会切到新版本），免得白改一通。
+  const readOnly = !isViewingLatestSet || hasDrafting;
 
   const saveAll = useCallback(async () => {
     if (!set || !user) return;
@@ -416,13 +494,15 @@ export default function SkillEvalTriggerPage() {
   );
   const viewingHistory = selectedRunId != null && displayedRun?.id !== latestRun?.id;
 
-  // 是否已经有过任意数据集版本 —— 用于按钮文案
-  const hasAnyVersion = versions.length > 0;
+  // 是否已经有过任意 ready 数据集版本 —— 用于按钮文案（占位版本不算）
+  const hasAnyVersion = readyVersions.length > 0;
   // 是否跑过评测 —— 决定"立即复测"还是"立即评测"
   const hasRun = latestRun != null;
+  // 起草进行中：local drafting（POST 往返窗口的即时反馈）或已落 DB 的 drafting 占位（刷新后仍在）。
+  const draftBusy = drafting || hasDrafting;
 
   const draftRedo = useCallback(async () => {
-    if (!user) return;
+    if (!user || hasDrafting) return; // 已在起草，按钮本应 disabled，这里双保险防连点
     // 新语义：起草 = 新建一个版本。不再覆盖旧数据，所以只有当已经存在版本时才二次确认。
     if (hasAnyVersion && !confirm('将基于当前 SKILL.md 生成一个新的 AI 起草版本，旧版本会保留为历史。确认？')) return;
     setDrafting(true);
@@ -435,21 +515,23 @@ export default function SkillEvalTriggerPage() {
           modelConfigId: draftConfigId || undefined,
         }),
       });
-      if (!res.ok) {
+      // 409 = 该 skill 已有一次起草在跑（防重入）。不是错误：当成"已发起"，reload 把 drafting
+      // 占位拉回来，由轮询接管进度即可。
+      if (res.status !== 409 && !res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error || `draft failed: ${res.status}`);
       }
-      const data = await res.json();
-      // 切回 latest（新版本就是 latest），让用户立刻看到新建的版本
+      // 异步起草：POST 只建好 drafting 占位（status=drafting）就返回，真正跑完是后台行为。
+      // 切回 latest 并 reload，让占位进入 versions → 触发「起草中」banner + 轮询接管；不要把
+      // 编辑器直接绑到占位（pickEditableSet 会自动退回最新 ready 版本）。
       setSelectedSetId(null);
-      setSet(data.set);
-      void reload();
+      await reload();
     } catch (err) {
       setErrorMsg((err as Error)?.message ?? '起草失败');
     } finally {
       setDrafting(false);
     }
-  }, [user, skillName, draftConfigId, hasAnyVersion, reload]);
+  }, [user, skillName, draftConfigId, hasAnyVersion, hasDrafting, reload]);
 
   // 上传数据集 —— 选 JSON 文件 → 解析 → POST → 新建版本
   const onUploadFile = useCallback(async (file: File) => {
@@ -735,8 +817,13 @@ export default function SkillEvalTriggerPage() {
                   ))
                 )}
               </select>
-              <button className="sa-btn" onClick={draftRedo} disabled={drafting}>
-                {drafting ? '起草中...' : hasAnyVersion ? 'AI 起草新版本' : 'AI 起草'}
+              <button
+                className="sa-btn"
+                onClick={draftRedo}
+                disabled={draftBusy}
+                title={hasDrafting ? 'AI 起草正在后台运行，完成后再起草下一版' : undefined}
+              >
+                {draftBusy ? '起草中...' : hasAnyVersion ? 'AI 起草新版本' : 'AI 起草'}
               </button>
               <button
                 className="sa-btn"
@@ -797,6 +884,48 @@ export default function SkillEvalTriggerPage() {
             }}
           >
             {errorMsg}
+          </div>
+        )}
+
+        {hasDrafting && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              padding: '10px 14px',
+              marginBottom: 12,
+              background: '#eef2ff',
+              border: '1px solid #c7d2fe',
+              color: '#3730a3',
+              borderRadius: 6,
+              fontSize: 13,
+            }}
+          >
+            <span className="trigger-run-spinner" aria-hidden />
+            <span>
+              <b>AI 起草进行中…</b> 在后台跑，完成后这里会自动出现新版本数据集。
+              <span style={{ opacity: 0.85 }}>你可以关掉本页，跑完回来即可看到。</span>
+            </span>
+          </div>
+        )}
+
+        {!hasDrafting && failedDraftSet && (
+          <div
+            style={{
+              padding: '10px 14px',
+              marginBottom: 12,
+              background: '#fef2f2',
+              border: '1px solid #fecaca',
+              color: '#991b1b',
+              borderRadius: 6,
+              fontSize: 13,
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+            }}
+          >
+            <div style={{ fontWeight: 600, marginBottom: 4 }}>AI 起草失败</div>
+            {failedDraftSet.versionNote || '后台执行出错，请重新起草。'}
           </div>
         )}
 
@@ -872,16 +1001,16 @@ export default function SkillEvalTriggerPage() {
             <ConfigSummary
               set={set}
               isViewingLatestSet={isViewingLatestSet}
-              versionsCount={versions.length}
+              versionsCount={readyVersions.length}
             />
           }
           open={configSecOpen}
           onToggle={() => setConfigSecOpen(o => !o)}
         >
-          {versions.length > 0 && (
+          {readyVersions.length > 0 && (
             <TriggerDatasetVersionsPanel
-              versions={versions}
-              latestId={latestSet?.id ?? null}
+              versions={readyVersions}
+              latestId={latestReadySet?.id ?? null}
               selectedId={set?.id ?? null}
               open={datasetVersionsOpen}
               onToggle={() => setDatasetVersionsOpen(o => !o)}
@@ -1025,8 +1154,8 @@ export default function SkillEvalTriggerPage() {
           user={user}
           modelConfigs={modelConfigs}
           activeConfigId={activeConfigId}
-          versions={versions}
-          latestSetId={latestSet?.id ?? null}
+          versions={readyVersions}
+          latestSetId={latestReadySet?.id ?? null}
           currentSetId={set?.id ?? null}
           onClose={() => setRunDialogOpen(false)}
           running={running}

@@ -43,11 +43,12 @@ export function isInternalSystemAgentTrace(agentName: string | null | undefined)
 /**
  * "用例分析-从 Trace" 模式应该隐藏哪些 agent 的 trace?
  *
- * 跟 isInternalSystemAgentTrace 区别: 这个排除集合**不含** grayscale-* (A/B 灰度),
- * 让 A/B 跑过的 trace 也能在用例分析里看到 (用户可以复用 A/B 的 trace 跑评测)。
- * 真正要隐藏的: 平台辅助 + 各评测器 (它们的 trace 跟"用例分析"语义无关)。
+ * 隐藏: 平台辅助 + 各评测器(它们跟"用例分析"语义无关) + A/B 灰度执行器。
  *
- * 调用方需要进一步加来源徽章 (A/B / 用例分析 / 真实), 帮用户区分。
+ * 关于 A/B 灰度(grayscale-*-agent): 这些 trace 只属于 A/B 测试, 不该出现在用例分析里 ——
+ * 否则"只跑了 A/B"的用户会发现用例分析的 trace 列表 / ②评测执行 里冒出一堆 A/B 的 trace,
+ * 评测它们还会产生**不带 A/B 标记的"泄漏"评测记录**(混进用例分析历史)。A/B 的 trace / 评测
+ * 一律只在 A/B 页看。(历史上曾保留它们做"复用 A/B trace"功能, 但实测造成困惑, 已去掉。)
  */
 const HIDDEN_FROM_CASE_ANALYSIS = new Set<string>([
   'skill-generator-agent',
@@ -56,6 +57,9 @@ const HIDDEN_FROM_CASE_ANALYSIS = new Set<string>([
   'trace-quality-evaluator',
   'task-completion-evaluator',
   'skill-trigger-analyzer',
+  // A/B 灰度执行器: 见上面注释, 不在用例分析里展示, 杜绝 A/B trace 漏进用例分析。
+  'grayscale-skill-agent',
+  'grayscale-baseline-agent',
 ]);
 
 export function shouldHideFromCaseAnalysis(agentName: string | null | undefined): boolean {

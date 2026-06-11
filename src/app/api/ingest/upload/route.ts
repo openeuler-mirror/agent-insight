@@ -1,7 +1,7 @@
-import { readConfig, saveExecutionRecord, findBestMatchConfig } from '@/lib/storage/data-service';
+import { readConfig, saveExecutionRecord, findBestMatchConfig, extractInvokedSkillsFromSessionInteractions } from '@/lib/storage/data-service';
 import { isDeletedOpencodeSessionId } from '@/lib/ingest/opencode-deleted-sessions';
 import { analyzeDynamicOnly } from '@/lib/engine/observability/flow-parser';
-import { analyzeFailures, analyzeSession, extractSkillsFromClaudeSession, extractSkillsFromOpenClawSession, extractSkillsFromOpencodeSession, extractSkillsWithVersionsFromClaudeSession, extractSkillsWithVersionsFromOpenClawSession, extractSkillsWithVersionsFromOpencodeSession, InvokedSkill, judgeAnswer, normalizeInteractions } from '@/lib/engine/evaluation/judge';
+import { analyzeFailures, analyzeSession, InvokedSkill, judgeAnswer, normalizeInteractions } from '@/lib/engine/evaluation/judge';
 import { isEvaluatorTraceRecord } from '@/lib/evaluator-agent';
 import { db, prisma } from '@/lib/storage/prisma';
 import { debounceByKey } from '@/lib/ingest/upload-analysis-debouncer';
@@ -122,22 +122,23 @@ export async function POST(request: Request) {
     // 说明是我们服务自己 spawn 的 opencode（skill-generator / 评估器 / 优化器 等），
     // 用我们登记的 agentName/agentId/skill 覆盖 plugin 默认填的字段。
     if (data.task_id) {
-        let tag = getInternalAgentTag(String(data.task_id)) as { agentName: string; agentId?: string | null; skill?: string; displayQuery?: string } | undefined;
+        let tag = getInternalAgentTag(String(data.task_id)) as { agentName: string; agentId?: string | null; skill?: string; displayQuery?: string; user?: string } | undefined;
 
         // 内存查不到时回退 DB——dev server 重启后内存映射丢了，但 SkillGeneratorSession
-        // 上的 agentName/agentTraceSkill 字段还在，按 opencodeSessionId 反查能补上 trace 归属。
+        // 上的 agentName/agentTraceSkill/user 字段还在，按 opencodeSessionId 反查能补上 trace 归属。
         if (!tag) {
             try {
                 const row = await (prisma as any).skillGeneratorSession.findFirst({
                     where: { opencodeSessionId: String(data.task_id) },
-                    select: { agentName: true, agentTraceSkill: true },
+                    select: { agentName: true, agentTraceSkill: true, user: true },
                 });
                 if (row?.agentName) {
                     tag = {
                         agentName: row.agentName,
                         skill: row.agentTraceSkill ?? undefined,
+                        user: row.user ?? undefined,
                     };
-                    console.log(`[Upload-API] 🗄️ Internal agent tag from DB for task_id=${data.task_id}: agentName=${tag.agentName}`);
+                    console.log(`[Upload-API] 🗄️ Internal agent tag from DB for task_id=${data.task_id}: agentName=${tag.agentName} user=${tag.user ?? '-'}`);
                 }
             } catch (err) {
                 // DB 查询失败不阻塞上报，trace 仍然落 Execution，只是 agentName 字段空着
@@ -150,7 +151,15 @@ export async function POST(request: Request) {
             if (tag.agentId) data.agentId = tag.agentId;
             if (tag.skill) data.skill = tag.skill;
             if (tag.displayQuery) data.query = tag.displayQuery;
-            console.log(`[Upload-API] ⭐ Internal agent tag applied for task_id=${data.task_id}: agentName=${tag.agentName} skill=${tag.skill ?? '-'}`);
+            // 归属修正(根治"无脑往 admin 写"): 内部 agent(灰度 A/B、评测、skill-gen)的 trace 由服务端
+            // spawn 的 opencode 产生, 其 telemetry 常被服务端 uploader 用服务账号 key 上报 → 误记到 admin。
+            // tag.user 是 runner 登记的"真正触发用户"(服务端写入、可信), 以它为准覆盖 api-key 归属。
+            if (tag.user && tag.user !== username) {
+                console.log(`[Upload-API] ⭐ 归属修正: ${username} → ${tag.user} (internal agent ${tag.agentName}, task_id=${data.task_id})`);
+                username = tag.user;
+                data.user = tag.user;
+            }
+            console.log(`[Upload-API] ⭐ Internal agent tag applied for task_id=${data.task_id}: agentName=${tag.agentName} skill=${tag.skill ?? '-'} user=${username}`);
         }
     }
 
@@ -163,14 +172,7 @@ export async function POST(request: Request) {
         console.log(`[Upload-Debug] Turn ${idx}: ReqMsgs=${turn.requestMessages?.length}, RespRole=${turn.responseMessage?.role}, RespTool=${hasRespTool}, AssistantReqTools=${reqToolCount}`);
     });
 
-    let quickSkillsWithVersions: InvokedSkill[] = [];
-    if (data.framework === 'opencode') {
-        quickSkillsWithVersions = extractSkillsWithVersionsFromOpencodeSession(normalized);
-    } else if (data.framework === 'claudecode' || data.framework === 'claude') {
-        quickSkillsWithVersions = extractSkillsWithVersionsFromClaudeSession(normalized);
-    } else if (data.framework === 'openclaw') {
-        quickSkillsWithVersions = extractSkillsWithVersionsFromOpenClawSession(normalized);
-    }
+    const quickSkillsWithVersions: InvokedSkill[] = extractInvokedSkillsFromSessionInteractions(data.framework, normalized) ?? [];
     
     console.log(`[Upload-API] Extracted skills: ${JSON.stringify(quickSkillsWithVersions)}`);
     
@@ -288,14 +290,7 @@ async function processUploadAsync(data: any, username: any, normalized: any, int
     if (!data.query && analysis.query) data.query = analysis.query;
     if (!data.final_result && analysis.final_result) data.final_result = analysis.final_result;
     
-    let skillsWithVersions: InvokedSkill[] = [];
-    if (data.framework === 'opencode') {
-        skillsWithVersions = extractSkillsWithVersionsFromOpencodeSession(normalized);
-    } else if (data.framework === 'claudecode' || data.framework === 'claude') {
-        skillsWithVersions = extractSkillsWithVersionsFromClaudeSession(normalized);
-    } else if (data.framework === 'openclaw') {
-        skillsWithVersions = extractSkillsWithVersionsFromOpenClawSession(normalized);
-    }
+    const skillsWithVersions: InvokedSkill[] = extractInvokedSkillsFromSessionInteractions(data.framework, normalized) ?? [];
     assertActive(username, taskId, runId);
     
     const skills = skillsWithVersions.map(s => s.name);

@@ -79,6 +79,42 @@ function parseJsonMaybe(value: any): any {
   }
 }
 
+function stringifyToolResultContent(value: any): any {
+  if (value == null) return undefined;
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) {
+    const text = value
+      .map((item) => {
+        if (typeof item === 'string') return item;
+        if (typeof item?.text === 'string') return item.text;
+        if (typeof item?.content === 'string') return item.content;
+        return '';
+      })
+      .filter(Boolean)
+      .join('');
+    return text || value;
+  }
+  if (typeof value === 'object') {
+    if (typeof value.text === 'string') return value.text;
+    if (typeof value.content === 'string') return value.content;
+    if (value.output !== undefined) return stringifyToolResultContent(value.output);
+    if (value.result !== undefined) return stringifyToolResultContent(value.result);
+  }
+  return value;
+}
+
+function extractToolResultOutput(source: any): any {
+  if (!source || typeof source !== 'object') return undefined;
+  for (const key of ['content', 'output', 'result', 'stdout', 'stderr']) {
+    if (source[key] !== undefined) return stringifyToolResultContent(source[key]);
+  }
+  return undefined;
+}
+
+function toolResultUseId(block: any): string | undefined {
+  return block?.tool_use_id || block?.toolUseId || block?.toolUseID || block?.id;
+}
+
 function readBodyPayload(attrs: Record<string, any>): any {
   const inline = parseJsonMaybe(attrs.body);
   if (inline) return inline;
@@ -91,6 +127,20 @@ function readBodyPayload(attrs: Record<string, any>): any {
     return parseJsonMaybe(text);
   } catch {
     return null;
+  }
+}
+
+function collectToolResultOutputsFromRequestBody(body: any, outputsByToolId: Map<string, any>): void {
+  const messages = Array.isArray(body?.messages) ? body.messages : [];
+  for (const message of messages) {
+    const content = Array.isArray(message?.content) ? message.content : [];
+    for (const block of content) {
+      if (block?.type !== 'tool_result') continue;
+      const toolUseId = toolResultUseId(block);
+      if (!toolUseId) continue;
+      const output = extractToolResultOutput(block);
+      if (output !== undefined) outputsByToolId.set(toolUseId, output);
+    }
   }
 }
 
@@ -212,6 +262,42 @@ function buildToolCallFromResult(event: ClaudeOtelEvent, toolUse?: any, output?:
   };
 }
 
+function normalizeToolResultOutput(value: any): any {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'string') return value;
+  const s = value.trim();
+  if (!s) return undefined;
+  if (s === 'claude_code.tool_result' || s === 'tool_result') return undefined;
+  if (s.startsWith('{') || s.startsWith('[')) {
+    try {
+      return JSON.parse(s);
+    } catch {}
+  }
+  return value;
+}
+
+function readToolResultOutput(event: ClaudeOtelEvent, fallback?: any): any {
+  const attrs = event.attributes || {};
+  const outputKeys = [
+    'tool_result',
+    'tool_result_content',
+    'tool_result_text',
+    'tool_output',
+    'tool_output_text',
+    'output',
+    'result',
+  ];
+
+  for (const key of outputKeys) {
+    if (!Object.prototype.hasOwnProperty.call(attrs, key)) continue;
+    const value = normalizeToolResultOutput(attrs[key]);
+    if (value !== undefined) return value;
+  }
+
+  const body = normalizeToolResultOutput(event.body);
+  return body !== undefined ? body : fallback;
+}
+
 function mergeToolCall(existing: any, incoming: any): any {
   const merged = { ...existing, ...incoming };
   if (existing.function || incoming.function) {
@@ -222,6 +308,14 @@ function mergeToolCall(existing: any, incoming: any): any {
     merged.function = { ...(merged.function || {}), name: 'task' };
   }
   return merged;
+}
+
+function mergeToolCallIntoInteraction(target: any, toolCall: any): void {
+  const existing = Array.isArray(target.tool_calls) ? target.tool_calls : [];
+  const idx = existing.findIndex((tc: any) => tc.id === toolCall.id);
+  target.tool_calls = idx >= 0
+    ? existing.map((tc: any, i: number) => i === idx ? mergeToolCall(tc, toolCall) : tc)
+    : [...existing, toolCall];
 }
 
 function toolUseBlocks(content: any[]): any[] {
@@ -320,6 +414,8 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
   const subagentSessionByToolId = new Map<string, string>();
   const responseToToolId = new Map<string, string>();
   const subagentOutputByToolId = new Map<string, string>();
+  const pendingToolResultById = new Map<string, any>();
+  const requestBodyToolOutputById = new Map<string, any>();
   let query = '';
   let finalResult = '';
   let model = '';
@@ -340,6 +436,11 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
 
   const pendingRequestsByPrompt = new Map<string, ClaudeOtelEvent[]>();
   for (const event of ordered) {
+    if (event.eventName === 'api_request_body') {
+      const body = readBodyPayload(event.attributes || {});
+      if (body) collectToolResultOutputsFromRequestBody(body, requestBodyToolOutputById);
+      continue;
+    }
     if (event.eventName === 'api_request') {
       const key = promptKey(event);
       const queue = pendingRequestsByPrompt.get(key) || [];
@@ -431,6 +532,13 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
       finalResult = state.finalResult;
       model = state.model || model;
       const last = interactions[interactions.length - 1];
+      if (last && Array.isArray(last.tool_calls)) {
+        for (const toolCall of last.tool_calls) {
+          if (!toolCall?.id || !pendingToolResultById.has(toolCall.id)) continue;
+          mergeToolCallIntoInteraction(last, pendingToolResultById.get(toolCall.id));
+          pendingToolResultById.delete(toolCall.id);
+        }
+      }
       if (last?.agent) agentNames.add(last.agent);
       continue;
     }
@@ -440,15 +548,17 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
       if (String(attrs.success) === 'false') toolCallErrorCount += 1;
       const toolId = attrs.tool_use_id;
       const toolUse = typeof toolId === 'string' ? toolUseById.get(toolId) : undefined;
-      const toolCall = buildToolCallFromResult(event, toolUse, typeof toolId === 'string' ? subagentOutputByToolId.get(toolId) : undefined);
+      const fallbackOutput = typeof toolId === 'string'
+        ? (requestBodyToolOutputById.has(toolId) ? requestBodyToolOutputById.get(toolId) : subagentOutputByToolId.get(toolId))
+        : undefined;
+      const toolCall = buildToolCallFromResult(event, toolUse, readToolResultOutput(event, fallbackOutput));
       let target = interactions.find((m) => Array.isArray(m.tool_calls) && m.tool_calls.some((tc: any) => tc.id === toolCall.id));
-      if (!target) target = [...interactions].reverse().find((m) => m.role === 'assistant');
+      if (!target && !toolCall.id) target = [...interactions].reverse().find((m) => m.role === 'assistant');
       if (target) {
-        const existing = Array.isArray(target.tool_calls) ? target.tool_calls : [];
-        const idx = existing.findIndex((tc: any) => tc.id === toolCall.id);
-        target.tool_calls = idx >= 0
-          ? existing.map((tc: any, i: number) => i === idx ? mergeToolCall(tc, toolCall) : tc)
-          : [...existing, toolCall];
+        mergeToolCallIntoInteraction(target, toolCall);
+      } else if (toolCall.id) {
+        const existing = pendingToolResultById.get(toolCall.id);
+        pendingToolResultById.set(toolCall.id, existing ? mergeToolCall(existing, toolCall) : toolCall);
       }
       const skillName = parseJsonMaybe(attrs.tool_parameters)?.skill_name || parseJsonMaybe(attrs.tool_input)?.skill;
       if (typeof skillName === 'string' && skillName.trim()) skills.add(skillName.trim());

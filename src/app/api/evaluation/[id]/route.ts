@@ -1,4 +1,5 @@
 import { resolveUser } from '@/lib/auth/auth';
+import { isLlmScoredGenerator } from '@/lib/engine/skill-issues/static-evaluator';
 import { prismaRaw } from '@/lib/storage/prisma';
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -47,8 +48,10 @@ export async function GET(
       else if (i.severity === 'low') histogram.low++;
     }
 
+    // l2ScoresJson 只由静态评估器写入；纯 L1 generator（无 +llm）的历史行可能残留
+    // L1 floor 分数——L1 不单独评分，这类分数不下发给前端。
     let l2Scores: any = null;
-    if (evaluation.l2ScoresJson) {
+    if (evaluation.l2ScoresJson && isLlmScoredGenerator(evaluation.generator)) {
       try { l2Scores = JSON.parse(evaluation.l2ScoresJson); } catch { l2Scores = null; }
     }
 
