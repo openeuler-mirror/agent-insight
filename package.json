@@ -49,6 +49,7 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@monaco-editor/react": "^4.7.0",
     "@opencode-ai/sdk": "^1.14.30",
+    "@opentelemetry/otlp-transformer": "0.216.0",
     "@opentelemetry/sdk-node": "^0.216.0",
     "@prisma/client": "5.22.0",
     "@radix-ui/react-avatar": "^1.1.11",

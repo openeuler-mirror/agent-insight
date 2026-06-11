@@ -4,7 +4,8 @@ export const hermesAdapter: FrameworkAdapter = {
   descriptor: {
     id: "hermes",
     label: "Hermes",
-    onboard: "env",
+    onboard: "plugin",
     platform: "hermes",
   },
+  sessionMergeStrategy: "snapshot-replace",
 }

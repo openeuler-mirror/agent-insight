@@ -106,6 +106,7 @@ import fs from 'fs';
 const frameworks = [
     { name: 'OpenCode', value: 'opencode' },
     { name: 'Claude Code', value: 'claude' },
+    { name: 'Hermes', value: 'hermes' },
     { name: 'OpenClaw', value: 'openclaw' }
 ];
 
@@ -174,6 +175,7 @@ fi
 # Set installation flags based on selection
 INSTALL_OPENCODE=false
 INSTALL_CLAUDE=false
+INSTALL_HERMES=false
 INSTALL_OPENCLAW=false
 
 if [[ "$SELECTED_FRAMEWORKS" == *"opencode"* ]]; then
@@ -182,12 +184,15 @@ fi
 if [[ "$SELECTED_FRAMEWORKS" == *"claude"* ]]; then
     INSTALL_CLAUDE=true
 fi
+if [[ "$SELECTED_FRAMEWORKS" == *"hermes"* ]]; then
+    INSTALL_HERMES=true
+fi
 if [[ "$SELECTED_FRAMEWORKS" == *"openclaw"* ]]; then
     INSTALL_OPENCLAW=true
 fi
 
 # Exit if nothing selected
-if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ]; then
+if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ]; then
     echo "⚠️  未选择任何框架组件，将跳过插件安装。"
     echo "   继续执行配置步骤..."
     echo ""
@@ -241,6 +246,37 @@ if [ "$INSTALL_CLAUDE" = "true" ]; then
     echo "🛰️  Claude Code will use official OpenTelemetry logs; no session-file watcher is required."
 fi
 
+if [ "$INSTALL_HERMES" = "true" ]; then
+    echo "Installing Hermes OTel plugin..."
+    HERMES_HOME="\${HERMES_HOME:-$HOME/.hermes}"
+    HERMES_AGENT_DIR="$HERMES_HOME/hermes-agent"
+    HERMES_OTEL_PLUGIN_DIR="$HERMES_HOME/plugins/hermes_otel"
+    if command -v hermes >/dev/null 2>&1; then
+        hermes plugins install briancaffey/hermes-otel --enable || echo "Warning: hermes plugin install failed; will still write config if plugin dir exists."
+    else
+        echo "Warning: hermes command not found. Install Hermes first, then rerun this setup or run: hermes plugins install briancaffey/hermes-otel"
+    fi
+    mkdir -p "$HERMES_OTEL_PLUGIN_DIR"
+    HERMES_PIP=""
+    if [ -x "$HERMES_AGENT_DIR/venv/bin/pip" ]; then
+        HERMES_PIP="$HERMES_AGENT_DIR/venv/bin/pip"
+    fi
+    for HERMES_VENV in "\${HERMES_AGENT_VENV:-}" "\${HERMES_VENV:-}" "$HOME/git/hermes-agent/venv" "$HOME/agent/hermes-agent/venv"; do
+        if [ -z "$HERMES_PIP" ] && [ -n "$HERMES_VENV" ] && [ -x "$HERMES_VENV/bin/pip" ]; then
+            HERMES_PIP="$HERMES_VENV/bin/pip"
+        fi
+    done
+    if [ -n "$HERMES_PIP" ]; then
+        "$HERMES_PIP" install opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp-proto-http pyyaml
+        if [ -f "$HERMES_OTEL_PLUGIN_DIR/pyproject.toml" ] || [ -f "$HERMES_OTEL_PLUGIN_DIR/setup.py" ]; then
+            "$HERMES_PIP" install -e "$HERMES_OTEL_PLUGIN_DIR" || true
+        fi
+        echo "Hermes OTel dependencies installed with $HERMES_PIP"
+    else
+        echo "Warning: could not find hermes-agent venv pip under $HERMES_AGENT_DIR/venv, ~/git/hermes-agent/venv, or ~/agent/hermes-agent/venv. Set HERMES_AGENT_VENV=/path/to/venv and rerun setup if Hermes cannot load OTel dependencies."
+    fi
+fi
+
 if [ "$INSTALL_OPENCLAW" = "true" ]; then
     echo "⏬ Downloading OpenClaw Watcher..."
     curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/openclaw-watcher" -o "$HOME/.agent-insight/openclaw_watcher_client.ts"
@@ -278,6 +314,34 @@ echo "AGENT_INSIGHT_OPENCODE_UPLOAD_COOLDOWN_MS=15000" >> "$AGENT_INSIGHT_CONFIG
 echo "✅ Configuration updated at $AGENT_INSIGHT_CONFIG_FILE"
 echo "   AGENT_INSIGHT_HOST=$AGENT_INSIGHT_HOST"
 echo "   AGENT_INSIGHT_API_KEY=********"
+
+# 6.4 Configure Hermes OTel plugin
+if [ "$INSTALL_HERMES" = "true" ]; then
+    HERMES_HOME="\${HERMES_HOME:-$HOME/.hermes}"
+    HERMES_OTEL_PLUGIN_DIR="$HERMES_HOME/plugins/hermes_otel"
+    mkdir -p "$HERMES_OTEL_PLUGIN_DIR"
+    HERMES_OTEL_ENDPOINT="$AGENT_INSIGHT_HOST"
+    case "$HERMES_OTEL_ENDPOINT" in http://*|https://*) ;; *) HERMES_OTEL_ENDPOINT="http://$HERMES_OTEL_ENDPOINT" ;; esac
+    HERMES_OTEL_ENDPOINT="\${HERMES_OTEL_ENDPOINT%/}/api/ingest/otel/v1/traces"
+    cat > "$HERMES_OTEL_PLUGIN_DIR/config.yaml" << HERMES_OTEL_CONFIG
+enabled: true
+capture_previews: true
+preview_max_chars: 4000
+capture_conversation_history: true
+conversation_history_max_chars: 40000
+capture_full_prompts: false
+capture_full_responses: true
+resource_attributes:
+  service.name: hermes
+backends:
+  - type: otlp
+    name: agent-insight
+    endpoint: \${HERMES_OTEL_ENDPOINT}
+    headers:
+      x-witty-api-key: "\${AGENT_INSIGHT_API_KEY}"
+HERMES_OTEL_CONFIG
+    echo "Hermes OTel config written to $HERMES_OTEL_PLUGIN_DIR/config.yaml"
+fi
 
 # 6. Install Watcher Dependencies (only if OpenClaw watcher is selected)
 if [ "$INSTALL_OPENCLAW" = "true" ]; then
@@ -432,6 +496,9 @@ fi
 if [ "$INSTALL_CLAUDE" = "true" ]; then
     echo "  ✅ Claude Code OTel: ~/.agent-insight/claude_otel_env.sh"
 fi
+if [ "$INSTALL_HERMES" = "true" ]; then
+    echo "  ✅ Hermes OTel Plugin: \${HERMES_HOME:-$HOME/.hermes}/plugins/hermes_otel/config.yaml"
+fi
 if [ "$INSTALL_OPENCLAW" = "true" ]; then
     echo "  ✅ OpenClaw Watcher: ~/.agent-insight/openclaw_watcher_client.ts"
 fi
@@ -456,8 +523,11 @@ fi
 if [ "$INSTALL_CLAUDE" = "true" ]; then
     echo "  2. Restart terminal, then run: claude"
 fi
+if [ "$INSTALL_HERMES" = "true" ]; then
+    echo "  3. Restart Hermes or start a new Hermes conversation"
+fi
 if [ "$INSTALL_OPENCLAW" = "true" ]; then
-    echo "  3. OpenClaw will automatically monitor and upload telemetry"
+    echo "  4. OpenClaw will automatically monitor and upload telemetry"
 fi
 echo "------------------------------------------------"
 `;
@@ -537,6 +607,7 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    "const frameworks = ["',
         '    "    { name: \'OpenCode\', value: \'opencode\' },"',
         '    "    { name: \'Claude Code\', value: \'claude\' },"',
+        '    "    { name: \'Hermes\', value: \'hermes\' },"',
         '    "    { name: \'OpenClaw\', value: \'openclaw\' }"',
         '    "];"',
         '    ""',
@@ -607,6 +678,7 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '# Set installation flags based on selection',
         '$INSTALL_OPENCODE = $false',
         '$INSTALL_CLAUDE = $false',
+        '$INSTALL_HERMES = $false',
         '$INSTALL_OPENCLAW = $false',
         '',
         'if ($SELECTED_FRAMEWORKS -match "opencode") {',
@@ -615,12 +687,15 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         'if ($SELECTED_FRAMEWORKS -match "claude") {',
         '    $INSTALL_CLAUDE = $true',
         '}',
+        'if ($SELECTED_FRAMEWORKS -match "hermes") {',
+        '    $INSTALL_HERMES = $true',
+        '}',
         'if ($SELECTED_FRAMEWORKS -match "openclaw") {',
         '    $INSTALL_OPENCLAW = $true',
         '}',
         '',
         '# Exit if nothing selected',
-        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_OPENCLAW) {',
+        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_HERMES -and -not $INSTALL_OPENCLAW) {',
         '    Write-Host "⚠️  未选择任何框架组件，将跳过插件安装。"',
         '    Write-Host "   继续执行配置步骤..."',
         '    Write-Host ""',
@@ -662,6 +737,43 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    Write-Host "🛰️  Claude Code will use official OpenTelemetry logs; no session-file watcher is required."',
         '}',
         '',
+        'if ($INSTALL_HERMES) {',
+        '    Write-Host "Installing Hermes OTel plugin..."',
+        '    $hermesHome = if ($env:HERMES_HOME) { $env:HERMES_HOME } else { Join-Path $env:USERPROFILE ".hermes" }',
+        '    $hermesAgentDir = Join-Path $hermesHome "hermes-agent"',
+        '    $hermesOtelPluginDir = Join-Path $hermesHome "plugins\\hermes_otel"',
+        '    $hermesCmd = Get-Command hermes -ErrorAction SilentlyContinue',
+        '    if ($hermesCmd) {',
+        '        & $hermesCmd.Source plugins install briancaffey/hermes-otel --enable',
+        '    } else {',
+        '        Write-Host "Warning: hermes command not found. Install Hermes first, then rerun this setup or run: hermes plugins install briancaffey/hermes-otel"',
+        '    }',
+        '    New-Item -ItemType Directory -Path $hermesOtelPluginDir -Force | Out-Null',
+        '    $hermesPip = $null',
+        '    foreach ($rel in @("venv\\Scripts\\pip.exe", "venv\\bin\\pip")) {',
+        '        $candidate = Join-Path $hermesAgentDir $rel',
+        '        if (-not $hermesPip -and (Test-Path $candidate)) { $hermesPip = $candidate }',
+        '    }',
+        '    $venvCandidates = @($env:HERMES_AGENT_VENV, $env:HERMES_VENV, (Join-Path $env:USERPROFILE "git\\hermes-agent\\venv"), (Join-Path $env:USERPROFILE "agent\\hermes-agent\\venv"))',
+        '    foreach ($venv in $venvCandidates) {',
+        '        if (-not $hermesPip -and $venv) {',
+        '            foreach ($rel in @("Scripts\\pip.exe", "bin\\pip")) {',
+        '                $candidate = Join-Path $venv $rel',
+        '                if (Test-Path $candidate) { $hermesPip = $candidate; break }',
+        '            }',
+        '        }',
+        '    }',
+        '    if ($hermesPip) {',
+        '        & $hermesPip install opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp-proto-http pyyaml',
+        '        if ((Test-Path (Join-Path $hermesOtelPluginDir "pyproject.toml")) -or (Test-Path (Join-Path $hermesOtelPluginDir "setup.py"))) {',
+        '            & $hermesPip install -e $hermesOtelPluginDir',
+        '        }',
+        '        Write-Host "Hermes OTel dependencies installed with $hermesPip"',
+        '    } else {',
+        '        Write-Host "Warning: could not find hermes-agent venv pip under $hermesAgentDir\\venv, ~/git/hermes-agent/venv, or ~/agent/hermes-agent/venv. Set HERMES_AGENT_VENV=/path/to/venv and rerun setup if Hermes cannot load OTel dependencies."',
+        '    }',
+        '}',
+        '',
         'if ($INSTALL_OPENCLAW) {',
         '    Write-Host "⏬ Downloading OpenClaw Watcher..."',
         '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/setup/openclaw-watcher" -OutFile (Join-Path $skillInsightDir "openclaw_watcher_client.ts")',
@@ -697,6 +809,35 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         'Write-Host "✅ Configuration updated at $AGENT_INSIGHT_CONFIG_FILE"',
         'Write-Host "   AGENT_INSIGHT_HOST=$AGENT_INSIGHT_HOST"',
         'Write-Host "   AGENT_INSIGHT_API_KEY=********"',
+        '',
+        '# 6.4 Configure Hermes OTel plugin',
+        'if ($INSTALL_HERMES) {',
+        '    $hermesHome = if ($env:HERMES_HOME) { $env:HERMES_HOME } else { Join-Path $env:USERPROFILE ".hermes" }',
+        '    $hermesOtelPluginDir = Join-Path $hermesHome "plugins\\hermes_otel"',
+        '    New-Item -ItemType Directory -Path $hermesOtelPluginDir -Force | Out-Null',
+        '    $hermesOtelEndpoint = $AGENT_INSIGHT_HOST',
+        '    if ($hermesOtelEndpoint -notmatch "^https?://") { $hermesOtelEndpoint = "http://$hermesOtelEndpoint" }',
+        '    $hermesOtelEndpoint = $hermesOtelEndpoint.TrimEnd("/") + "/api/ingest/otel/v1/traces"',
+        '    $hermesOtelConfig = @"',
+        'enabled: true',
+        'capture_previews: true',
+        'preview_max_chars: 4000',
+        'capture_conversation_history: true',
+        'conversation_history_max_chars: 40000',
+        'capture_full_prompts: false',
+        'capture_full_responses: true',
+        'resource_attributes:',
+        '  service.name: hermes',
+        'backends:',
+        '  - type: otlp',
+        '    name: agent-insight',
+        '    endpoint: $hermesOtelEndpoint',
+        '    headers:',
+        '      x-witty-api-key: "$AGENT_INSIGHT_API_KEY"',
+        '"@',
+        '    Set-Content -Path (Join-Path $hermesOtelPluginDir "config.yaml") -Value $hermesOtelConfig -Encoding UTF8',
+        '    Write-Host "Hermes OTel config written to $hermesOtelPluginDir\\config.yaml"',
+        '}',
         '',
         '# 6. Install Watcher Dependencies (only if OpenClaw watcher is selected)',
         'if ($INSTALL_OPENCLAW) {',
@@ -841,6 +982,10 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         'if ($INSTALL_CLAUDE) {',
         '    Write-Host "  ✅ Claude Code OTel: ~/.agent-insight/claude_otel_env.ps1"',
         '}',
+        'if ($INSTALL_HERMES) {',
+        '    $summaryHermesHome = if ($env:HERMES_HOME) { $env:HERMES_HOME } else { Join-Path $env:USERPROFILE ".hermes" }',
+        '    Write-Host "  ✅ Hermes OTel Plugin: $summaryHermesHome\\plugins\\hermes_otel\\config.yaml"',
+        '}',
         'if ($INSTALL_OPENCLAW) {',
         '    Write-Host "  ✅ OpenClaw Watcher: ~/.agent-insight/openclaw_watcher_client.ts"',
         '}',
@@ -865,8 +1010,11 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         'if ($INSTALL_CLAUDE) {',
         '    Write-Host "  2. Restart PowerShell, then run: claude"',
         '}',
+        'if ($INSTALL_HERMES) {',
+        '    Write-Host "  3. Restart Hermes or start a new Hermes conversation"',
+        '}',
         'if ($INSTALL_OPENCLAW) {',
-        '    Write-Host "  3. OpenClaw will automatically monitor and upload telemetry"',
+        '    Write-Host "  4. OpenClaw will automatically monitor and upload telemetry"',
         '}',
         'Write-Host "------------------------------------------------"',
     ].join('\n');
