@@ -90,6 +90,19 @@ async function snapshotSkillVersions(skills: InvokedSkill[], user: string | null
     return skills.map(s => s.version != null ? s : { name: s.name, version: activeMap.get(s.name) ?? null });
 }
 
+function preferExplicitPrimarySkillVersion(
+    skills: InvokedSkill[],
+    primaryName: string | null | undefined,
+    primaryVersion: number | null | undefined,
+): InvokedSkill[] {
+    if (!primaryName || typeof primaryVersion !== 'number') return skills;
+    return skills.map(s => (
+        s.name === primaryName && s.version == null
+            ? { ...s, version: primaryVersion }
+            : s
+    ));
+}
+
 /**
  * 幂等地把某条 Execution(= 某一层 agent)本层用到的 skill 写入 ExecutionSkill:
  * 先按 executionId 清空再重建,不依赖 NULL 版本的唯一约束。
@@ -1423,7 +1436,10 @@ async function hydrateAndNormalizeBatch(
         if (!invokedSkills && r.invokedSkills) {
             try { const p = JSON.parse(r.invokedSkills); if (Array.isArray(p)) invokedSkills = p; } catch { /* ignore */ }
         }
-        let rootSkill: InvokedSkill | null = esPrimaryByExec.get(r.id) ?? null;
+        const rootSkillFromExecution: InvokedSkill | null = (!r.isSubagent && r.skill)
+            ? { name: String(r.skill), version: typeof r.skillVersion === 'number' ? r.skillVersion : null }
+            : null;
+        let rootSkill: InvokedSkill | null = rootSkillFromExecution ?? esPrimaryByExec.get(r.id) ?? null;
 
         // 懒回填：Execution.skillVersion 为空但 skill 名命中 DB → 回写 activeVersion。
         // 在 in-memory r 上即时更新（喂下方 rootSkill 兜底），同时 fire-and-forget UPDATE DB。仅 root 行。
@@ -1436,7 +1452,7 @@ async function hydrateAndNormalizeBatch(
                 data: { skillVersion: backfilled },
             }).catch((e: unknown) => console.warn('[readRecords] backfill skillVersion failed for', r.id, ':', e));
         }
-        // 兜底：ExecutionSkill 无 isPrimary 时,用 Execution 行 denormalized 的 skill + skillVersion 补全 rootSkill。
+        // 兜底：sub-agent 或历史行没有 isPrimary 时,用 Execution 行 denormalized 的 skill 补全 rootSkill。
         if (!rootSkill && r.skill) {
             rootSkill = { name: String(r.skill), version: typeof r.skillVersion === 'number' ? r.skillVersion : null };
         }
@@ -2333,7 +2349,12 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
             } else {
                 rootSkills = Array.isArray(targetRecord.invokedSkills) ? (targetRecord.invokedSkills as InvokedSkill[]) : [];
             }
-            const snapped = await snapshotSkillVersions(rootSkills, targetRecord.user);
+            const pinnedRootSkills = preferExplicitPrimarySkillVersion(
+                rootSkills,
+                targetRecord.skill ?? null,
+                targetRecord.skill_version ?? null,
+            );
+            const snapped = await snapshotSkillVersions(pinnedRootSkills, targetRecord.user);
             await persistExecutionSkills(recordId, snapped, { user: targetRecord.user, primaryName: targetRecord.skill ?? null });
         } catch (e) {
             console.warn(`[Data-Service] root ExecutionSkill persist failed for ${recordId}:`, e);

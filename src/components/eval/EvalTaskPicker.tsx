@@ -50,52 +50,61 @@ export function EvalTaskPicker({
         : (zh ? '选择 / 新建评测任务' : 'Select / new eval task');
 
     return (
-        <div ref={ref} style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+        <div ref={ref} style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            <button
+                type="button"
+                onClick={onCreateNew}
+                style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    padding: '7px 14px',
+                    borderRadius: 7,
+                    border: '1px dashed #C4B5FD',
+                    background: '#FAF5FF',
+                    color: '#7E22CE',
+                    fontSize: 13.5,
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                }}
+            >
+                + {zh ? '新建评测任务' : 'New eval task'}
+            </button>
             <button
                 type="button"
                 onClick={() => setOpen(o => !o)}
                 style={{
                     display: 'inline-flex', alignItems: 'center', gap: 6,
-                    padding: '5px 11px', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                    padding: '7px 14px', borderRadius: 7, fontSize: 13.5, fontWeight: 700, cursor: 'pointer',
                     border: '1px solid ' + (selectedRunId ? 'rgba(126,34,206,.3)' : '#D4D4D8'),
                     background: selectedRunId ? '#F5E8FF' : '#fff',
                     color: selectedRunId ? '#7E22CE' : '#52525B',
-                    maxWidth: 260, overflow: 'hidden',
+                    maxWidth: 340, overflow: 'hidden',
                 }}
                 title={selectedRunId ? `评测任务 ${selectedRunId}` : undefined}
             >
                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>📋 {label}</span>
-                <span style={{ color: '#A1A1AA', fontSize: 10 }}>{open ? '▲' : '▼'}</span>
+                <span style={{ color: '#A1A1AA', fontSize: 11 }}>{open ? '▲' : '▼'}</span>
             </button>
             {selectedRunId && (
                 <button
                     type="button"
                     onClick={() => window.open(`/eval/run/${encodeURIComponent(selectedRunId)}`, '_blank')}
-                    style={{ padding: '4px 9px', background: '#EEF2FF', border: '1px solid rgba(79,70,229,.25)', borderRadius: 5, fontSize: 11.5, fontWeight: 600, color: '#4F46E5', cursor: 'pointer' }}
+                    style={{ padding: '7px 14px', background: '#EEF2FF', border: '1px solid rgba(79,70,229,.25)', borderRadius: 7, fontSize: 13.5, fontWeight: 700, color: '#4F46E5', cursor: 'pointer', whiteSpace: 'nowrap' }}
                     title={zh ? '打开评测任务详情' : 'Open eval task'}
                 >
-                    {zh ? '查看' : 'View'}
+                    {zh ? '查看评测详情' : 'View details'}
                 </button>
             )}
             {open && (
                 <div style={{
-                    position: 'absolute', top: 'calc(100% + 4px)', right: 0, zIndex: 60, minWidth: 300,
+                    position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 60, minWidth: 360,
                     background: '#fff', border: '1px solid #E4E4E7', borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,.12)',
-                    maxHeight: 340, overflowY: 'auto', padding: 4,
+                    maxHeight: 340, overflowY: 'auto', padding: 6,
                 }}>
-                    <button
-                        type="button"
-                        onClick={() => { setOpen(false); onCreateNew(); }}
-                        style={{
-                            width: '100%', textAlign: 'left', padding: '8px 10px', borderRadius: 5,
-                            border: '1px dashed #C4B5FD', background: '#FAF5FF', color: '#7E22CE',
-                            fontSize: 12.5, fontWeight: 600, cursor: 'pointer', marginBottom: 4,
-                        }}
-                    >
-                        + {zh ? '新建评测任务' : 'New eval task'}
-                    </button>
                     {tasks.length === 0 ? (
-                        <div style={{ padding: '8px 10px', fontSize: 12, color: '#A1A1AA' }}>{zh ? '暂无历史评测任务' : 'No eval tasks yet'}</div>
+                        <div style={{ padding: '10px 12px', fontSize: 13, color: '#A1A1AA' }}>{zh ? '暂无历史评测任务' : 'No eval tasks yet'}</div>
                     ) : tasks.map(t => {
                         const on = t.runId === selectedRunId;
                         return (
@@ -106,17 +115,17 @@ export function EvalTaskPicker({
                                 onClick={() => { setOpen(false); onSelect({ runId: t.runId, taskTitle: t.taskTitle }); }}
                                 onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(false); onSelect({ runId: t.runId, taskTitle: t.taskTitle }); } }}
                                 style={{
-                                    padding: '8px 10px', borderRadius: 5, cursor: 'pointer',
+                                    padding: '10px 12px', borderRadius: 6, cursor: 'pointer',
                                     background: on ? 'rgba(126,34,206,.08)' : 'transparent',
                                 }}
                             >
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 600, color: '#27272A' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 13.5, fontWeight: 700, color: '#27272A' }}>
                                     {on && <span style={{ color: '#7E22CE' }}>✓</span>}
                                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                         {t.taskTitle || t.runId.slice(0, 8)}
                                     </span>
                                 </div>
-                                <div style={{ fontSize: 11, color: '#A1A1AA', marginTop: 2 }}>
+                                <div style={{ fontSize: 12, color: '#A1A1AA', marginTop: 3 }}>
                                     {zh ? '共' : ''} {t.traceCount ?? 0} {zh ? '条' : 'records'}
                                     {typeof t.doneCount === 'number' ? ` · ${zh ? '已完成' : 'done'} ${t.doneCount}` : ''}
                                     {t.runningCount ? ` · ${zh ? '进行中' : 'running'} ${t.runningCount}` : ''}
