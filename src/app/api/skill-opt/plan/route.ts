@@ -16,7 +16,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db, prismaRaw } from '@/lib/storage/prisma';
 import { resolveUser, canAccessSkill } from '@/lib/auth/auth';
-import { getActiveConfig } from '@/lib/storage/server-config';
+import { getActiveConfig, getUserSettings } from '@/lib/storage/server-config';
 import { aggregateSkillIssues } from '@/lib/engine/skill-issues';
 import { runMergeOperator, type MergeIssueInput } from '@/lib/engine/skill-opt/merge-operator';
 import { loadSkillVersionSnapshot } from '@/lib/engine/skill-opt/version-snapshot';
@@ -73,8 +73,15 @@ export async function POST(req: NextRequest) {
     const { allowed } = await canAccessSkill(skill.id, user);
     if (!allowed) return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
 
-    // 模型配置：没配模型直接拦（与静态评估同款约束）
-    const config = await getActiveConfig(user);
+    // 模型配置：body.modelId 显式指定优化器模型（与"测量模型"解耦，便于对照实验）；
+    // 不传则回退 active config。没配模型直接拦（与静态评估同款约束）。
+    const modelId = typeof body?.modelId === 'string' ? body.modelId.trim() : '';
+    let config = null;
+    if (modelId) {
+      const settings = await getUserSettings(user);
+      config = settings.configs.find(c => c.id === modelId) || null;
+    }
+    if (!config) config = await getActiveConfig(user);
     if (!config) {
       return NextResponse.json({ error: '未配置可用的 LLM，请先到「配置」页设置模型' }, { status: 400 });
     }

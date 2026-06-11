@@ -87,8 +87,13 @@ export interface RunMergeOperatorArgs {
 const DEFAULT_CORE_BUDGET = 4;
 const DEFAULT_BATCH_SIZE = 30;
 const DEFAULT_CONCURRENCY = 2;
-const LLM_TIMEOUT_MS = 180_000;
-const MAX_OUTPUT_TOKENS = 4096;
+// 300s：推理模型（deepseek-v4-pro）在大 prompt 上 reasoning + 生成较慢，180s 下并发两个
+// batch 调用会撞超时被 abort（raw len=0 → 0 items）。给足时间，非推理模型本就秒级收尾不受影响。
+const LLM_TIMEOUT_MS = 300_000;
+// 给推理模型（如 deepseek-v4-pro）留足预算：reasoning_content 会先吃掉一大截 token，
+// 4096 在大 prompt 下会被推理耗尽 → finish_reason=length、content 为空 → 0 items。
+// 非推理模型（deepseek-chat）到 stop 自然收尾，不会用到这么多，无副作用。
+const MAX_OUTPUT_TOKENS = 16_000;
 const SKILL_MD_PROMPT_CAP = 8_000; // prompt 里 SKILL.md 截断上限（字符）
 
 /** 失败类 category：先归并定调；表达/格式类后归并让位（SkillOpt failure-first） */
