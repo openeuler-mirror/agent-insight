@@ -3174,8 +3174,10 @@ function TraceDeviationPanel({
     const [caseConfigOpen, setCaseConfigOpen] = useState(true);
     const [caseExecOpen, setCaseExecOpen] = useState(false);
     const [caseResultOpen, setCaseResultOpen] = useState(true);
-    // 拉当前评测任务的结果, 给 ② 表每行补"评估 Trace / datasetId"(displayedTraces 里没有)。5s 轮询接异步落库。
+    // 拉当前评测任务的最新结果, 给 ② 表每行补"评估 Trace / datasetId"(displayedTraces 里没有)。5s 轮询接异步落库。
     const traceEvalResultsMap = useBatchEvalResults(user, traceEvaluationBatchId, 5000);
+    // 全量结果只用于识别同一 case 的旧执行 trace。主展示/统计仍用 latestByCase, 避免旧评测污染分数。
+    const traceEvalAllResultsMap = useBatchEvalResults(user, traceEvaluationBatchId, 5000, { latestByCase: false });
     const [datasetExecutionRecords, setDatasetExecutionRecords] = useState<EvalRecordRow[]>([]);
 
     // 已触发评测的 trace id → 触发时间戳。runBothAnalyses 调用时填，让 ② 执行块的
@@ -3852,7 +3854,7 @@ function TraceDeviationPanel({
     const datasetTraceIds = new Set(effectiveDatasetExecutionRecords.map(record => record.executionTraceId).filter(Boolean));
     const traceExecutionRecords: EvalRecordRow[] = displayedTraces
         .filter(s => {
-            const meta = traceEvalResultsMap.get(s.id);
+            const meta = traceEvalResultsMap.get(s.id) || traceEvalAllResultsMap.get(s.id);
             return !datasetTraceIds.has(s.id) && (!meta?.caseId || !datasetCaseIds.has(meta.caseId));
         })
         .map(s => {
@@ -4325,6 +4327,12 @@ function TraceDeviationPanel({
                     onRetry={async rec => {
                         const id = rec.executionTraceId;
                         if (!id) return;
+                        if (rec.status === 'done' && rec.resultScore != null && rec.trajScore != null) {
+                            if (typeof window !== 'undefined') {
+                                window.alert('这条用例已完成评测，当前评测任务下无需重试。若需要重新执行用例，请重新生成 trace 后再发起评测。');
+                            }
+                            return;
+                        }
                         // 立刻给反馈：把这条标记为"已触发"——getTraceEvalStatus 读 triggeredTaskIds
                         // 返回 'pending'，行状态徽章随即切到「评测中」(spinner) 且重试按钮置灰，
                         // 不必等后端 is_evaluating 回报或手动刷新。和 ① 配置块「开始评测」同款。
