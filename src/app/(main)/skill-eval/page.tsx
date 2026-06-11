@@ -1428,28 +1428,22 @@ function SkillAnalysisPage() {
         });
     const grayFinalScore = (grayAllSidesReady ? graySummary?.scoring.totalScore : null) ?? null;
     const batchHasResult = false;
-    /*
-     * 用例分析（trace）卡上展示的分数 = "已评测过的 trace" 的「(结果分 + 轨迹分) / 2」的平均值。
-     * 关键约束：每条 trace 只有结果分 + 轨迹分都在时才参与；只跑了一边的不算"已评测"。
-     *   - 结果分：trace.answer_score（Execution.answerScore，task-completion 评估器写）
-     *   - 轨迹分：getEffectiveTrajScore(trace)（优先方案A聚合分 trajectoryScore，回退 analyze-match 覆盖率）
-     * 跟单 trace 详情页 Hero 的口径不一样（详情页只看 LLM 单分），但卡片这层要求双分都备齐
-     * 才算"完整评测"，避免被半评测的 trace 拉偏。
-     */
-    const traceCombinedScores = traces.reduce<{ sum: number; count: number }>((acc, t) => {
-        const result = typeof t.answer_score === 'number' ? t.answer_score
-            : typeof t.answerScore === 'number' ? t.answerScore : null;
-        const traj = getEffectiveTrajScore(t);
-        if (result != null && traj != null) {
-            acc.sum += (result + traj) / 2;
-            acc.count += 1;
-        }
-        return acc;
-    }, { sum: 0, count: 0 });
-    const traceHasResult = traceCombinedScores.count > 0;
-    // 折成 passed/total = avgPct/100，喂给 health 计算同口径
+    const overviewTraceEvalResultsMap = useBatchEvalResults(user, traceEvaluationBatchId, 5000);
+    const overviewTraceEvalMetas = traceEvaluationBatchId
+        ? Array.from(overviewTraceEvalResultsMap.values())
+        : [];
+    const overviewTraceEvalValid = overviewTraceEvalMetas.filter(
+        m => typeof m.resultScore === 'number' && typeof m.trajScore === 'number',
+    ) as { resultScore: number; trajScore: number }[];
+    const traceHasResult = overviewTraceEvalValid.length > 0;
     const traceCardScore = traceHasResult
-        ? { passed: Math.round((traceCombinedScores.sum / traceCombinedScores.count) * 100), total: 100 }
+        ? {
+            passed: Math.round(
+                overviewTraceEvalValid.reduce((sum, m) => sum + (m.resultScore + m.trajScore) / 2, 0)
+                / overviewTraceEvalValid.length,
+            ),
+            total: 100,
+        }
         : null;
     // 综合健康分：把维度均分（0-100%）按 passed/total = avgPct/100 的形式喂给 health 计算，
     // 跟详情页"维度均分"严格同口径。未评估的维度（avgPct=null）的不参与 health。
@@ -1581,7 +1575,7 @@ function SkillAnalysisPage() {
                 {view === 'trace' && (
                     <TraceDeviationPanel
                         // key 强制 remount：切 skill / version 时 panel 的内部 state
-                        // (triggeredTaskIds / failedTaskIds / evaluatedTaskIds / recovery 轮询 timer 等)
+                        // (triggeredTaskIds / failedTaskIds / recovery 轮询 timer 等)
                         // 全部重置——否则上个版本的状态会泄漏到新版本视图，用户看到"切了版本下面没变"。
                         key={`tracepanel_${selectedSkill?.id || 'noskill'}_${selectedVersion ?? 'all'}`}
                         skill={selectedSkill}
@@ -1931,21 +1925,6 @@ function AnalysisOverview({
     const selectedTraceScoreLabel = selectedTraceStats.totalSteps > 0
         ? `${selectedTraceStats.matchedSteps}/${selectedTraceStats.totalSteps}`
         : '--';
-    // 用例分析卡片的"已分析/分数"口径：每条 trace 只有结果分(answer_score) + 轨迹分
-    // (flow-parser overallScore) 双双就绪时才算"已完整评测"。卡片大数=已完整评测 trace
-    // 的「(结果分+轨迹分)/2」平均值。只跑了一边的不算，避免半评测拉偏。
-    const traceCardAgg = traces.reduce<{ sum: number; count: number }>((acc, t) => {
-        const result = typeof t.answer_score === 'number' ? t.answer_score
-            : typeof t.answerScore === 'number' ? t.answerScore : null;
-        const traj = getEffectiveTrajScore(t);
-        if (result != null && traj != null) {
-            acc.sum += (result + traj) / 2;
-            acc.count += 1;
-        }
-        return acc;
-    }, { sum: 0, count: 0 });
-    const fullyEvaluatedCount = traceCardAgg.count;
-    const traceCardHasResult = fullyEvaluatedCount > 0;
     // 用例分析卡片口径：绑定当前关联的「评测任务」(traceEvaluationBatchId)，
     // 分数/用例数只统计该任务下的评测记录——与详情页 ③ 总评分同口径，
     // 而非该 skill 版本全部 trace 的平均。未关联任务时卡片提示先去关联。
@@ -1958,24 +1937,15 @@ function AnalysisOverview({
     const cardEvalScore = cardEvalDone === 0 ? null
         : Math.round(cardEvalValid.reduce((sum, m) => sum + (m.resultScore + m.trajScore) / 2, 0) / cardEvalDone);
     const cardEvalStatus = !hasEvalTask ? '未关联' : cardEvalScore == null ? '待评测' : cardEvalScore >= 60 ? '正常' : '需关注';
-    const traceLatestUpdatedAt = traces.reduce<string | null>((latest, t) => {
-        const result = typeof t.answer_score === 'number' ? t.answer_score
-            : typeof t.answerScore === 'number' ? t.answerScore : null;
-        const traj = getEffectiveTrajScore(t);
-        if (result == null || traj == null) return latest;
-        const candidate = t.execution_match?.matchedAt || t.timestamp || null;
-        if (!candidate) return latest;
-        if (!latest) return candidate;
-        return new Date(candidate).getTime() > new Date(latest).getTime() ? candidate : latest;
-    }, null);
+    const traceCardHasResult = cardEvalDone > 0;
     useEffect(() => {
-        if (!user || !selectedTraceId) {
+        if (!user || !selectedTraceId || !traceEvaluationBatchId) {
             setSelectedTraceEvalUpdatedAt(null);
             return;
         }
         let cancelled = false;
         apiFetch(
-            `/api/eval/trajectory/results?user=${encodeURIComponent(user)}&taskId=${encodeURIComponent(selectedTraceId)}&limit=1`,
+            `/api/eval/trajectory/results?user=${encodeURIComponent(user)}&taskId=${encodeURIComponent(selectedTraceId)}&runId=${encodeURIComponent(traceEvaluationBatchId)}&limit=1`,
             { cache: 'no-store' },
         )
             .then(res => res.ok ? res.json() : null)
@@ -1990,11 +1960,11 @@ function AnalysisOverview({
         return () => {
             cancelled = true;
         };
-    }, [selectedTraceId, traceCardUpdatedAt, user]);
+    }, [selectedTraceId, traceCardUpdatedAt, traceEvaluationBatchId, user]);
     const traceCardFooterAt = traceCardHasResult
-        ? (selectedTraceEvalUpdatedAt || traceCardUpdatedAt || traceLatestUpdatedAt)
+        ? (selectedTraceEvalUpdatedAt || traceCardUpdatedAt)
         : null;
-    const traceHasCompleteCardData = traces.length > 0 && fullyEvaluatedCount === traces.length;
+    const traceHasCompleteCardData = hasEvalTask && cardEvalTotal > 0 && cardEvalDone === cardEvalTotal;
     const tracePrimarySkill = selectedTrace ? getTracePrimarySkill(selectedTrace) : null;
     const traceCanTest = !!selectedTraceId && !!tracePrimarySkill?.name;
 
@@ -2128,20 +2098,12 @@ function AnalysisOverview({
         const triggerData = overrides?.triggerSummary ?? triggerSummary;
         const grayData = overrides?.graySummary ?? graySummary;
         const grayMeta = overrides?.grayTaskMeta ?? grayTaskMeta;
-        const traceBusyValue = overrides?.traceBusy ?? tracesData.some(t => t.is_evaluating);
+        const traceBusyValue = traceEvaluationBatchId
+            ? (overrides?.traceBusy ?? tracesData.some(t => t.is_evaluating))
+            : false;
         const grayBusyValue = overrides?.grayBusy ?? (Boolean(grayMeta?.activeRun) || hasGrayRunningStates(grayMeta?.caseStatesJson));
 
-        const traceAgg = tracesData.reduce<{ sum: number; count: number }>((acc, t) => {
-            const result = typeof t.answer_score === 'number' ? t.answer_score
-                : typeof t.answerScore === 'number' ? t.answerScore : null;
-            const traj = getEffectiveTrajScore(t);
-            if (result != null && traj != null) {
-                acc.sum += (result + traj) / 2;
-                acc.count += 1;
-            }
-            return acc;
-        }, { sum: 0, count: 0 });
-        const traceScore = traceAgg.count > 0 ? Math.round((traceAgg.sum / traceAgg.count) * 100) : null;
+        const traceScore = traceEvaluationBatchId ? cardEvalScore : null;
         const traceStatsLocal = summarizeTraceMatches(tracesData);
         const staticStatsLocal = computeStaticPassRate(staticData?.latest ?? null);
         const triggerHasSetLocal = !!triggerData?.hasSet;
@@ -2201,7 +2163,7 @@ function AnalysisOverview({
                 hasResult: traceScore != null,
                 status: toStatus(traceConfigured, traceScore != null, traceBusyValue),
                 score: traceScore,
-                fullyEvaluatedCount: traceAgg.count,
+                fullyEvaluatedCount: traceEvaluationBatchId ? cardEvalDone : 0,
                 totalTraceCount: tracesData.length,
                 highDeviationCount: traceStatsLocal.highDeviation,
             },
@@ -2229,6 +2191,8 @@ function AnalysisOverview({
     }, [
         graySummary,
         grayTaskMeta,
+        cardEvalDone,
+        cardEvalScore,
         health,
         selectedSkill,
         selectedTrace,
@@ -2238,6 +2202,7 @@ function AnalysisOverview({
         standards.total,
         staticSummary,
         totalEvaluators,
+        traceEvaluationBatchId,
         traces,
         triggerSummary,
     ]);
@@ -3222,7 +3187,7 @@ function TraceDeviationPanel({
             let changed = false;
             const next = new Map(prev);
             for (const t of traces) {
-                const id = (t as any).task_id || (t as any).taskId;
+                const id = getTraceId(t);
                 if (!id) continue;
                 if (next.has(id) && t.is_evaluating === false) {
                     next.delete(id);
@@ -3237,11 +3202,6 @@ function TraceDeviationPanel({
     // 之前完全没暴露给前端,trace 显示"未评估"用户以为没触发,实际上是 API key 失效一类的真实错误。
     // 现在 recovery 时把这种行也抓出来,UI 用红色"评测失败"徽章 + tooltip 显示根因。
     const [failedTaskIds, setFailedTaskIds] = useState<Map<string, string>>(new Map());
-    // 跑过任何评测的 taskId（不管成功失败 / 完整或部分）。② 执行块要列"所有跑过的评测",
-    // 而不是只列双分都齐的 trace。这个 set 是 recovery 时从后端 latestRows 全量提取的。
-    // 之前用 displayedTraces = filter(status !== 'idle'),依赖双分 + triggeredTaskIds + failedTaskIds,
-    // 漏掉了"部分成功"（如 result=0.48 / traj=null）和"老评测记录"（refresh 后内存丢)。
-    const [evaluatedTaskIds, setEvaluatedTaskIds] = useState<Set<string>>(new Set());
     // 本次会话里点过「开始评测」提交的 trace id（含勾选批量）。与 triggeredTaskIds 不同：
     // 它不会在 is_evaluating 变 false 时被清掉。用来保证"选了 N 条就一直显示 N 条"——
     // 即使某条后端没产出结果行(未匹配 case / 未引用 skill 等)，也留在 ② 列表里标"未产出"，
@@ -3253,7 +3213,6 @@ function TraceDeviationPanel({
         setTriggeredTaskIds(new Map());
         setFailedTaskIds(new Map());
         setSubmittedTaskIds(new Set());
-        setEvaluatedTaskIds(new Set());
         setTransientEvalRunId(traceEvaluationBatchId || '');
     }, [traceEvaluationBatchId]);
     const transientStateMatchesRun = transientEvalRunId === (traceEvaluationBatchId || '');
@@ -3288,17 +3247,17 @@ function TraceDeviationPanel({
             const id = getTraceId(t);
             const analyzed = isTraceFlowAnalyzed(t);
             const score = getTraceFlowScore(t);
-            // 已评估 = 结果分 + 轨迹分双双就绪；跟左侧 dot 标识和卡片"已完整评测"同口径
-            const resultScore = typeof t.answer_score === 'number' ? t.answer_score
-                : typeof t.answerScore === 'number' ? t.answerScore : null;
-            const evaluated = resultScore != null && score != null;
+            const evalMeta = traceEvalResultsMap.get(id);
+            const evaluated = !!traceEvaluationBatchId
+                && evalMeta?.resultScore != null
+                && evalMeta?.trajScore != null;
             if (tab === 'analyzed' && !evaluated) return false;
             if (tab === 'pending' && evaluated) return false;
             if (tab === 'deviation' && (!analyzed || score == null || score >= 0.7)) return false;
             if (!q) return true;
             return id.toLowerCase().includes(q) || (t.query || '').toLowerCase().includes(q);
         });
-    }, [query, tab, traces]);
+    }, [query, tab, traceEvalResultsMap, traceEvaluationBatchId, traces]);
 
     // ── 分页 ─────────────────────────────────────────────────────────
     // 用例分析的 trace 列表常常上百条,一次全渲染既慢又难浏览。这里做客户端分页:
@@ -3336,13 +3295,13 @@ function TraceDeviationPanel({
 
     /* ── 轨迹评估器：拉最新结果 ── */
     const fetchTrajectoryEval = useCallback(async () => {
-        if (!selectedTraceId || !user) {
+        if (!selectedTraceId || !user || !traceEvaluationBatchId) {
             setTrajectoryEval(null);
             return null;
         }
         try {
             const res = await apiFetch(
-                `/api/eval/trajectory/results?user=${encodeURIComponent(user)}&taskId=${encodeURIComponent(selectedTraceId)}&limit=1`,
+                `/api/eval/trajectory/results?user=${encodeURIComponent(user)}&taskId=${encodeURIComponent(selectedTraceId)}&runId=${encodeURIComponent(traceEvaluationBatchId)}&limit=1`,
             );
             const data = await res.json();
             const latest = (Array.isArray(data?.results) ? data.results : [])[0] as TrajectoryEvalRow | undefined;
@@ -3351,7 +3310,7 @@ function TraceDeviationPanel({
         } catch {
             return null;
         }
-    }, [selectedTraceId, user]);
+    }, [selectedTraceId, traceEvaluationBatchId, user]);
 
     useEffect(() => {
         void fetchTrajectoryEval();
@@ -3381,13 +3340,11 @@ function TraceDeviationPanel({
      * 只在 traces 列表里出现过的 taskId 才入 Map——避免捞到别的 skill 的脏行。
      */
     useEffect(() => {
-        if (!user || traces.length === 0) return;
+        if (!user || traces.length === 0 || !traceEvaluationBatchId) return;
         let cancelled = false;
         (async () => {
             try {
-                const runScope = traceEvaluationBatchId
-                    ? `&runId=${encodeURIComponent(traceEvaluationBatchId)}&latestByCase=1`
-                    : '';
+                const runScope = `&runId=${encodeURIComponent(traceEvaluationBatchId)}&latestByCase=1`;
                 const res = await apiFetch(`/api/eval/trajectory/results?user=${encodeURIComponent(user)}${runScope}&limit=500`);
                 if (!res.ok) return;
                 const data = await res.json();
@@ -3424,19 +3381,6 @@ function TraceDeviationPanel({
                         || r.rawAnalysis?.trajectoryError;
                     return !!err || r.status === 'failed';
                 });
-                // 全量"跑过评测"集合——user 要求"无论成功失败都要列出来",
-                // 这里把所有 latestRows 的 taskId 都收进 evaluatedTaskIds。
-                // displayedTraces 用这个 set 决定"该出现在 ② 执行块",
-                // status 派生还是用 done/pending/failed/partial 区分。
-                if (latestRows.length > 0) {
-                    setEvaluatedTaskIds(prev => {
-                        const next = new Set(prev);
-                        for (const r of latestRows) {
-                            if (r.taskId) next.add(r.taskId);
-                        }
-                        return next;
-                    });
-                }
                 if (inFlight.length === 0 && failed.length === 0) return;
                 if (inFlight.length > 0) {
                     setTriggeredTaskIds(prev => {
@@ -3543,7 +3487,6 @@ function TraceDeviationPanel({
             return next;
         });
         // 清空这批 trace 的 failed 标记——用户重新触发就是想重试,旧错误别再挂着扰乱状态。
-        // evaluatedTaskIds 保留(它代表"历史上跑过评测",重试不影响这事实)。
         setFailedTaskIds(prev => {
             if (prev.size === 0) return prev;
             const next = new Map(prev);
@@ -3693,31 +3636,19 @@ function TraceDeviationPanel({
         lastEvalError: string | null;
     };
     const scoredTraces: ScoredTrace[] = traces.map(t => {
-        // answer_score / answerScore 后端写的是 0-1 (clampTaskScore 范围)，
-        // 这里统一 × 100 转 0-100 跟 trajScore 一致——之前少了 × 100 导致
-        // dual tab 显示"1 分"而详情显示"100 分"的量纲冲突 bug。
-        const rRaw = typeof t.answer_score === 'number' ? t.answer_score
-            : typeof t.answerScore === 'number' ? t.answerScore : null;
-        const r = rRaw == null ? null
-            : rRaw <= 1 ? Math.round(rRaw * 100)  // 0-1 normalized
-            : Math.round(rRaw);                    // 防御性：已经是 0-100 的兼容
-        // 方案A: 轨迹分统一口径——优先用后端聚合层算出的 trajectoryScore（0.45 完整性 + 0.35 工具
-        // + 0.20 冗余，其中 完整性=对齐覆盖率），没有(未评测/纯对齐旧数据)再回退 getTraceFlowScore
-        // (matchJson.overallScore = 对齐覆盖率单维)。两者都是 0-1。
-        const aggTraj = typeof t.trajectory_score === 'number' ? t.trajectory_score
-            : typeof t.trajectoryScore === 'number' ? t.trajectoryScore : null;
-        const j = aggTraj != null ? aggTraj : getTraceFlowScore(t);
+        const id = getTraceId(t);
+        const taskMeta = traceEvaluationBatchId ? traceEvalResultsMap.get(id) : undefined;
         return {
             trace: t,
-            id: getTraceId(t),
+            id,
             query: t.query || '(无 query)',
-            resultScore: r,
-            trajScore: j == null ? null : Math.round(j * 100),
+            resultScore: taskMeta?.resultScore ?? null,
+            trajScore: taskMeta?.trajScore ?? null,
             // 后端 isActive (我们注册 evaluation-task-manager 的 activeTasks 后会真实返 true/false)
             isEvaluating: t.is_evaluating === true,
             // 后端 TrajectoryEvalResult 最近一次 status,让"评测失败"的 trace 即使有老分数也能正确显示
-            lastEvalStatus: t.last_eval_status ?? null,
-            lastEvalError: t.last_eval_error ?? null,
+            lastEvalStatus: taskMeta?.status ?? null,
+            lastEvalError: taskMeta?.errorMessage ?? null,
         };
     });
     // 每条 trace 的评测状态：
@@ -3762,11 +3693,12 @@ function TraceDeviationPanel({
     // ② 评测执行 列表口径：
     //   - 关联了「评测任务」时：只列该任务(evaluatorRunId)的记录(traceEvalResultsMap) + 本次会话刚触发/失败的，
     //     使列表与上方"已评测 X/Y"、③ 总评分(都绑定该任务)一致；且每行都在任务里 → 都有评估 Trace。
-    //     之前 recovery 拉的是全量结果(所有任务, limit 200)塞进 evaluatedTaskIds，导致列表显示几十条历史
+    //     之前 recovery 拉的是全量结果(所有任务, limit 200)塞进历史集合，导致列表显示几十条历史
     //     "已评测"(其它任务、无评估ID)，与 4/6 这种任务内统计对不上。
-    //   - 未关联任务时：沿用 status / 历史口径(无论成功失败都列出)。
+    //   - 未关联任务时：不展示历史评测记录，避免把评测中心的全局结果误当成用例分析结果。
     const displayedTraces = scoredTraces.filter(s => {
         if (deletedTaskIds.has(s.id)) return false;
+        if (!traceEvaluationBatchId) return false;
         if (traceEvaluationBatchId) {
             // submittedTaskIds 兜底：本次提交过的 trace 即使后端没产出结果行也保留在列表里，
             // 由下方 records 映射标成"未产出/失败"，不再静默消失。
@@ -3777,7 +3709,7 @@ function TraceDeviationPanel({
                     || submittedTaskIds.has(s.id)
                 ));
         }
-        return getTraceEvalStatus(s) !== 'idle' || evaluatedTaskIds.has(s.id);
+        return false;
     });
     // ② 评测执行 头部「已评测 X/Y」严格对应下面的列表(displayedTraces): 批次里若有 trace 不在
     // scoredTraces(不属于本 skill/版本、或已从列表移除等), 会被批次全量统计算进去却不进列表 →
@@ -4370,7 +4302,6 @@ function TraceDeviationPanel({
                             const next = new Set(deletedTaskIds); next.add(id); persistDeletedTaskIds(next);
                             setTriggeredTaskIds(prev => { if (!prev.has(id)) return prev; const m = new Map(prev); m.delete(id); return m; });
                             setFailedTaskIds(prev => { if (!prev.has(id)) return prev; const m = new Map(prev); m.delete(id); return m; });
-                            setEvaluatedTaskIds(prev => { if (!prev.has(id)) return prev; const ss = new Set(prev); ss.delete(id); return ss; });
                         } catch (e) {
                             alert('删除失败：' + (e instanceof Error ? e.message : String(e)));
                         }
@@ -5155,17 +5086,6 @@ function getTraceFlowScore(trace: TraceRecord): number | null {
     const total = scoringMatches.length + skipped.length;
     if (total === 0) return null;
     return scoringMatches.filter(match => match.matchStatus === 'matched').length / total;
-}
-
-/**
- * 一条 trace 的"轨迹分"(0-1) 统一口径：优先用后端聚合层算出的 trajectoryScore（方案A：
- * 0.45 完整性 + 0.35 工具 + 0.20 冗余），没有(未评测/旧数据)再回退 analyze-match
- * 对齐覆盖率 getTraceFlowScore。所有"卡片/概览/健康分/诊断"聚合都走它，避免与 ③ 详情口径分裂。
- */
-function getEffectiveTrajScore(trace: TraceRecord): number | null {
-    if (typeof trace.trajectory_score === 'number') return trace.trajectory_score;
-    if (typeof trace.trajectoryScore === 'number') return trace.trajectoryScore;
-    return getTraceFlowScore(trace);
 }
 
 function getTraceId(trace: TraceRecord) {
