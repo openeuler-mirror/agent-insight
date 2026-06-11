@@ -11,6 +11,7 @@ import {
   type SkillOptPlanItemLite,
 } from '@/lib/engine/general-agent/skill-opt-prompt';
 import { scanWorkspaceFiles, type FileData } from '@/lib/skill-generator-opencode-bridge';
+import { enforceEditScope } from '@/lib/engine/skill-opt/edit-scope-guard';
 import type {
   ChatHandlers,
   ModelConfig as OpencodeModelConfig,
@@ -99,10 +100,12 @@ async function streamSkillOptOpencodeImpl(
     console.log('[skill-opt-bridge] prefilled workspace:', prefilled);
   }
   // 把预填后的 VFS 推一次给前端，让 diff 能立刻渲染基线（即便 agent 还没改）
+  // 同时把这份"基线快照"留存——收尾时用它做编辑范围硬约束（防优化器删/大改既有资产）。
+  let baselineVfs: Record<string, FileData> = {};
   try {
-    const initialVfs = scanWorkspaceFiles(workspaceDir);
-    if (Object.keys(initialVfs).length > 0) {
-      send('vfs_patch', { files: initialVfs });
+    baselineVfs = scanWorkspaceFiles(workspaceDir);
+    if (Object.keys(baselineVfs).length > 0) {
+      send('vfs_patch', { files: baselineVfs });
     }
   } catch {
     /* 扫描失败不阻塞——agent 跑完还会再扫一次 */
@@ -339,6 +342,24 @@ async function streamSkillOptOpencodeImpl(
   if (idleWatchdog) clearTimeout(idleWatchdog);
   threadSessionMap.set(threadId, result.sessionId);
   closeThinkingIfOpen();
+
+  // ── 编辑范围硬约束（结构性，不依赖 prompt——实测强模型会无视"别删脚本"的提示）──
+  // 借鉴 trace2skill 的"有界编辑"：默认禁止删除基线已有文件（优化器常把关键脚本整删/整重写，
+  // 损失远大于收益）。删了就还原，并发一条 warning 让前端可见。可用 SKILL_OPT_NO_PROTECT=1 关闭。
+  // 同时统计改动行数，超 SKILL_OPT_MAX_CHANGED_LINES（默认不限）时告警（不自动回滚，交 gate/用户裁决）。
+  if (process.env.SKILL_OPT_NO_PROTECT !== '1') {
+    const guard = enforceEditScope(result.workspaceDir, baselineVfs, {
+      maxChangedLines: Number(process.env.SKILL_OPT_MAX_CHANGED_LINES) || 0,
+    });
+    if (guard.restored.length > 0) {
+      console.warn('[skill-opt-bridge] edit-scope guard restored deleted baseline files:', guard.restored);
+      send('warning', { kind: 'edit_scope', message: `优化器删除了基线文件，已自动还原：${guard.restored.join(', ')}`, restored: guard.restored });
+    }
+    if (guard.changedLines > 0 && guard.overBudget) {
+      console.warn(`[skill-opt-bridge] edit-scope: changed ${guard.changedLines} lines, over budget`);
+      send('warning', { kind: 'edit_scope', message: `本次改动 ${guard.changedLines} 行，超过预算上限`, changedLines: guard.changedLines });
+    }
+  }
 
   // 兜底全量扫描，最终一次 VFS 推送
   vfsAccum = scanWorkspaceFiles(result.workspaceDir);
