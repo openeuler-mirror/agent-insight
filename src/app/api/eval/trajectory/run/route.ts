@@ -592,10 +592,24 @@ export async function POST(request: Request) {
         // 走相同的 watchPlaceholder 数据库分支但语义不同; rawAnalysisJson 加 placeholderOnly=true
         // 让前端 /eval 页可识别此批次是用户主动创建的"空批次"而不是 autoWatch 待跑。
         const requestedPlaceholderOnly = body.placeholderOnly === true;
+        const taskScope = String(body.taskScope || '').trim();
+        const taskSkillName = String(body.skillName || '').trim();
+        const taskSkillVersionRaw = body.skillVersion;
+        const taskSkillVersion = taskSkillVersionRaw === undefined || taskSkillVersionRaw === null || taskSkillVersionRaw === ''
+            ? null
+            : Number(taskSkillVersionRaw);
 
         if (!user) return NextResponse.json({ error: 'user is required' }, { status: 400 });
         if (requestedAutoWatch && requestedWatchedAgent && isEvaluatorAgentName(requestedWatchedAgent)) {
             return NextResponse.json({ error: 'autoWatch requires a non-evaluator execution agent' }, { status: 400 });
+        }
+        if (taskScope === 'skill-case-analysis') {
+            if (!taskSkillName) {
+                return NextResponse.json({ error: 'skillName is required for skill-case-analysis task' }, { status: 400 });
+            }
+            if (taskSkillVersion == null || !Number.isFinite(taskSkillVersion)) {
+                return NextResponse.json({ error: 'skillVersion is required for skill-case-analysis task' }, { status: 400 });
+            }
         }
 
         // 自建评估器需要真存在于该用户的 CustomEvaluatorList 才能放行；找不到的 ID 直接拒绝，
@@ -666,6 +680,9 @@ export async function POST(request: Request) {
         let taskMeta = normalizeTrajectoryTaskMeta({
             title: body.taskTitle,
             description: body.taskDescription,
+            scope: taskScope,
+            skillName: taskScope === 'skill-case-analysis' ? taskSkillName : undefined,
+            skillVersion: taskScope === 'skill-case-analysis' ? taskSkillVersion : undefined,
         });
 
         let existingRunTaskIds = new Set<string>();

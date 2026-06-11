@@ -286,6 +286,11 @@ export function BatchEvaluation({
         if (controlledSkillId !== undefined) setSelectedSkillId(controlledSkillId);
         if (controlledVersionId !== undefined) setSelectedVersionId(controlledVersionId);
     }, [controlled, controlledSkillId, controlledVersionId]);
+    useEffect(() => {
+        if (!controlled) return;
+        if (controlledSkillId !== undefined) setTraceSkillId(controlledSkillId);
+        setSelectedTraceIds([]);
+    }, [controlled, controlledSkillId, controlledVersionId]);
 
     // 拉当前评测任务结果, 给 ② 表每行补"评估 Trace"(caseStates 里只有执行 trace sessionId)。
     const evalResultsMap = useBatchEvalResults(user, evaluationBatchId || undefined, 5000);
@@ -2250,7 +2255,7 @@ export function BatchEvaluation({
                         ⏹ {locale === 'zh' ? '终止' : 'Abort'}
                     </button>
                 )}
-                <span style={{ fontSize: 11, color: !evaluationBatchId ? '#D97706' : 'var(--ink-3, #a1a1aa)' }}>
+                <span style={{ fontSize: 15, fontWeight: 700, color: !evaluationBatchId ? '#EA580C' : '#2563EB' }}>
                     {!evaluationBatchId
                         ? (locale === 'zh' ? '请先在上方「评测任务」新建或选择一个任务，再开始评测' : 'Create/select an eval task above first')
                         : (locale === 'zh' ? '勾选 case 后开始评测：先执行生成 Trace 再评测；进度见 ② 评测执行' : 'Select cases → execute to generate traces → evaluate; progress in ②')}

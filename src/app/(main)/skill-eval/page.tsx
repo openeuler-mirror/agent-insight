@@ -619,6 +619,7 @@ interface TrajectoryEvalRow {
 
 const LOOKBACK_DAYS = 30;
 const SKILL_ANALYSIS_SELECTION_STORAGE_KEY = 'skill-analysis-selection';
+const CASE_ANALYSIS_TASK_SCOPE = 'skill-case-analysis';
 
 export default function SkillDebugPage() {
     return (
@@ -634,6 +635,7 @@ function SkillAnalysisPage() {
     const { user } = useAuth();
     const [initialSkillParam] = useState(() => searchParams.get('skill') || '');
     const [initialVersionParam] = useState(() => searchParams.get('version') || '');
+    const caseRunIdParam = searchParams.get('caseRunId') || '';
     const [view, setView] = useState<AnalysisView>(() => {
         const v = searchParams.get('view');
         return (v === 'trace' || v === 'static' || v === 'gray' || v === 'overview') ? v : 'overview';
@@ -677,9 +679,10 @@ function SkillAnalysisPage() {
     // 单独的 task 实体承载这一关联 (BatchEvalTask 只跟 dataset 模式相关)。
     // 跨设备不同步是 known limitation, 后续如果接入跨设备 task 表可以迁移。
     const [newBatchDialogOpen, setNewBatchDialogOpen] = useState(false);
-    const [traceEvaluationBatchId, setTraceEvaluationBatchId] = useState('');
+    const [traceEvaluationBatchId, setTraceEvaluationBatchId] = useState(() => searchParams.get('caseRunId') || '');
     const [traceEvaluationBatchTitle, setTraceEvaluationBatchTitle] = useState('');
     const [traceEvaluationBatchEvaluators, setTraceEvaluationBatchEvaluators] = useState<string[]>([]);
+    const pendingTraceEvalBatchIdRef = useRef<string>('');
 
     // 用例分析 AB 式配置区: 共享的「数据集多选」+「评估器多选」。
     // 数据集作为评测参考集 (后端按 datasetIds 收窄 trace↔case 匹配)，评估器多选决定开始评测时调用哪些评估器。
@@ -690,37 +693,74 @@ function SkillAnalysisPage() {
     const [caseEvaluatorIds, setCaseEvaluatorIds] = useState<string[]>(
         () => presetEvaluators.filter(e => e.status === 'ready').map(e => e.id),
     );
+    const selectedSkill = useMemo(
+        () => skills.find(s => s.id === selectedSkillId) || null,
+        [skills, selectedSkillId],
+    );
+    const selectedSkillName = selectedSkill?.name || '';
     useEffect(() => {
         if (!user) { setCaseDatasets([]); setCaseUserEvaluators([]); return; }
         Promise.all([
             apiFetch(`/api/agent-datasets?user=${encodeURIComponent(user)}`).then(r => r.json()).catch(() => []),
             apiFetch(`/api/user-evaluators?user=${encodeURIComponent(user)}`).then(r => r.json()).catch(() => []),
         ]).then(([ds, ev]) => {
-            if (Array.isArray(ds)) setCaseDatasets(ds.map((d: any) => ({ id: d.id, name: d.name, cases: d.cases })));
-            if (Array.isArray(ev)) setCaseUserEvaluators(ev.map((e: any) => ({ id: e.id, name: e.name })));
+            if (Array.isArray(ds)) {
+                setCaseDatasets(ds.map((d: { id?: unknown; name?: unknown; cases?: unknown[] }) => ({
+                    id: String(d.id || ''),
+                    name: String(d.name || ''),
+                    cases: d.cases,
+                })));
+            }
+            if (Array.isArray(ev)) {
+                setCaseUserEvaluators(ev.map((e: { id?: unknown; name?: unknown }) => ({
+                    id: String(e.id || ''),
+                    name: String(e.name || ''),
+                })));
+            }
         }).catch(() => {});
     }, [user]);
 
     // 评测任务(批次)列表 —— 供配置区"选历史评测任务"。trace / dataset 共用同一份。
     const [caseEvalTasks, setCaseEvalTasks] = useState<Array<{ runId: string; taskTitle?: string; traceCount?: number; doneCount?: number; runningCount?: number; createdAt?: string; skillName?: string; skillVersion?: number | null }>>([]);
-    const reloadEvalTasks = useCallback(async () => {
+    const reloadEvalTasks = useCallback(async (options?: { includeRunId?: string }) => {
         if (!user) { setCaseEvalTasks([]); return; }
+        if (!selectedSkillName || selectedVersion == null) { setCaseEvalTasks([]); return; }
         try {
-            const includeRun = traceEvaluationBatchId
-                ? `&includeRunId=${encodeURIComponent(traceEvaluationBatchId)}`
-                : '';
-            // 用例分析只看独立评测任务, 不展示灰度 A/B 的评测批次(A/B 只在 A/B 页看)。
-            const res = await apiFetch(`/api/eval/trajectory/runs?user=${encodeURIComponent(user)}&limit=50&latestByCase=1&excludeGrayscale=1${includeRun}`);
+            const params = new URLSearchParams({
+                user,
+                limit: '50',
+                latestByCase: '1',
+                scope: CASE_ANALYSIS_TASK_SCOPE,
+                skillName: selectedSkillName,
+                skillVersion: String(selectedVersion),
+            });
+            const includeRunId = options?.includeRunId || traceEvaluationBatchId;
+            if (includeRunId) params.set('includeRunId', includeRunId);
+            const res = await apiFetch(`/api/eval/trajectory/runs?${params.toString()}`);
             const data = await res.json();
             if (Array.isArray(data?.runs)) {
-                setCaseEvalTasks(data.runs.map((r: any) => ({
-                    runId: r.runId, taskTitle: r.taskTitle, traceCount: r.traceCount,
-                    doneCount: r.doneCount, runningCount: r.runningCount, createdAt: r.createdAt,
-                    skillName: r.skillName, skillVersion: r.skillVersion,
+                setCaseEvalTasks(data.runs.map((r: {
+                    runId?: unknown;
+                    taskTitle?: unknown;
+                    traceCount?: unknown;
+                    doneCount?: unknown;
+                    runningCount?: unknown;
+                    createdAt?: unknown;
+                    skillName?: unknown;
+                    skillVersion?: unknown;
+                }) => ({
+                    runId: String(r.runId || ''),
+                    taskTitle: typeof r.taskTitle === 'string' ? r.taskTitle : undefined,
+                    traceCount: typeof r.traceCount === 'number' ? r.traceCount : undefined,
+                    doneCount: typeof r.doneCount === 'number' ? r.doneCount : undefined,
+                    runningCount: typeof r.runningCount === 'number' ? r.runningCount : undefined,
+                    createdAt: typeof r.createdAt === 'string' ? r.createdAt : undefined,
+                    skillName: typeof r.skillName === 'string' ? r.skillName : undefined,
+                    skillVersion: typeof r.skillVersion === 'number' ? r.skillVersion : null,
                 })));
             }
         } catch {/* 列表加载失败不阻塞主流程 */}
-    }, [user, traceEvaluationBatchId]);
+    }, [user, selectedSkillName, selectedVersion, traceEvaluationBatchId]);
     useEffect(() => { reloadEvalTasks(); }, [reloadEvalTasks]);
 
     // 持久化「数据集 + 评估器」选择 (按 user+skill+版本), 刷新页面不丢。
@@ -780,6 +820,12 @@ function SkillAnalysisPage() {
             return;
         }
         try {
+            if (caseRunIdParam) {
+                setTraceEvaluationBatchId(caseRunIdParam);
+                setTraceEvaluationBatchTitle('');
+                setTraceEvaluationBatchEvaluators([]);
+                return;
+            }
             const raw = localStorage.getItem(traceEvalBatchStorageKey);
             if (!raw) {
                 setTraceEvaluationBatchId('');
@@ -796,12 +842,19 @@ function SkillAnalysisPage() {
             setTraceEvaluationBatchTitle('');
             setTraceEvaluationBatchEvaluators([]);
         }
-    }, [traceEvalBatchStorageKey]);
+    }, [caseRunIdParam, traceEvalBatchStorageKey]);
 
-    const selectedSkill = useMemo(
-        () => skills.find(s => s.id === selectedSkillId) || null,
-        [skills, selectedSkillId],
-    );
+    useEffect(() => {
+        const params = new URLSearchParams(Array.from(searchParams.entries()));
+        const current = params.get('caseRunId') || '';
+        if (current === traceEvaluationBatchId) return;
+        if (traceEvaluationBatchId) params.set('caseRunId', traceEvaluationBatchId);
+        else params.delete('caseRunId');
+        const qs = params.toString();
+        router.replace(qs ? `?${qs}` : '?', { scroll: false });
+    // searchParams 故意不进依赖：这里和 skill/version 的 URL 同步一样, 只响应 state 变化。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [traceEvaluationBatchId]);
 
     // 关联评测任务的版本一致性（非破坏式）：若已关联任务(其评测的 trace 属于另一个版本)与当前查看版本
     // 明确不一致，则在"展示/取数"层把它当作未关联，避免在 v0 看到 v1 任务的数据。
@@ -827,6 +880,11 @@ function SkillAnalysisPage() {
                 && (selectedVersion == null || (t.traceCount || 0) === 0 || t.skillVersion === selectedVersion)),
         );
     }, [caseEvalTasks, selectedSkill?.name, selectedVersion, effectiveTraceEvaluationBatchId]);
+    const currentTraceEvaluationBatchTitle = useMemo(() => {
+        if (!effectiveTraceEvaluationBatchId) return traceEvaluationBatchTitle;
+        const selectedTask = caseEvalTasksForSkill.find(t => t.runId === effectiveTraceEvaluationBatchId);
+        return selectedTask?.taskTitle || traceEvaluationBatchTitle;
+    }, [caseEvalTasksForSkill, effectiveTraceEvaluationBatchId, traceEvaluationBatchTitle]);
 
     const sortedVersions = useMemo(() => {
         const versions = selectedSkill?.versions || [];
@@ -1145,6 +1203,7 @@ function SkillAnalysisPage() {
     // 让评测 append 到同一批次, 不再每次新建。
     const handleTraceEvalBatchCreated = useCallback((result: NewBatchCreated) => {
         setNewBatchDialogOpen(false);
+        pendingTraceEvalBatchIdRef.current = result.evaluatorRunId;
         setTraceEvaluationBatchId(result.evaluatorRunId);
         setTraceEvaluationBatchTitle(result.taskTitle);
         setTraceEvaluationBatchEvaluators(result.selectedEvaluators);
@@ -1157,7 +1216,7 @@ function SkillAnalysisPage() {
                 }));
             } catch {/* localStorage quota 异常时仍以 state 持有, 不阻塞主流程 */}
         }
-        reloadEvalTasks();
+        reloadEvalTasks({ includeRunId: result.evaluatorRunId });
     }, [traceEvalBatchStorageKey, reloadEvalTasks]);
 
     // 选一个已有评测任务 (评测执行批次) 关联到当前 trace 分析。
@@ -1177,6 +1236,13 @@ function SkillAnalysisPage() {
     useEffect(() => {
         // 当前选中的若仍在(已排除 A/B 后的)列表里 → 保持。否则(未选 / 残留指向已被排除的 A/B 批次):
         // 有可选项就自动选第一个有效的, 没有就清空, 避免用例分析里残留显示一个 A/B 任务。
+        if (pendingTraceEvalBatchIdRef.current) {
+            if (caseEvalTasksForSkill.some(t => t.runId === pendingTraceEvalBatchIdRef.current)) {
+                pendingTraceEvalBatchIdRef.current = '';
+            } else if (traceEvaluationBatchId === pendingTraceEvalBatchIdRef.current) {
+                return;
+            }
+        }
         const stillValid = traceEvaluationBatchId && caseEvalTasksForSkill.some(t => t.runId === traceEvaluationBatchId);
         if (stillValid) return;
         if (caseEvalTasksForSkill.length > 0) {
@@ -1484,7 +1550,7 @@ function SkillAnalysisPage() {
                         selectedSkill={selectedSkill}
                         selectedVersion={selectedVersion}
                         traceEvaluationBatchId={effectiveTraceEvaluationBatchId}
-                        traceEvaluationBatchTitle={traceEvaluationBatchTitle}
+                        traceEvaluationBatchTitle={currentTraceEvaluationBatchTitle}
                         health={health}
                         standards={standards}
                         traces={traces}
@@ -1531,7 +1597,7 @@ function SkillAnalysisPage() {
                         onOptimize={() => router.push(optimizeHref)}
                         onBatchAnalyze={runBatchTraceAnalysis}
                         traceEvaluationBatchId={effectiveTraceEvaluationBatchId}
-                        traceEvaluationBatchTitle={traceEvaluationBatchTitle}
+                        traceEvaluationBatchTitle={currentTraceEvaluationBatchTitle}
                         onOpenEvalBatchDialog={() => setNewBatchDialogOpen(true)}
                         evalTaskOptions={caseEvalTasksForSkill}
                         onSelectEvalBatch={handleSelectTraceEvalBatch}
@@ -1664,6 +1730,9 @@ function SkillAnalysisPage() {
                 user={user || ''}
                 defaultTitle={traceEvaluationBatchTitle || (selectedSkill ? `${selectedSkill.name} trace 评测` : undefined)}
                 evaluators={caseEvaluatorIds}
+                taskScope={CASE_ANALYSIS_TASK_SCOPE}
+                taskSkillName={selectedSkill?.name}
+                taskSkillVersion={selectedVersion}
                 onClose={() => setNewBatchDialogOpen(false)}
                 onCreated={handleTraceEvalBatchCreated}
             />
@@ -4148,7 +4217,7 @@ function TraceDeviationPanel({
                     >
                         {bothRunning ? '评测中…' : checkedTraceIds.size > 0 ? `▶ 开始评测（${checkedTraceIds.size} 条）` : '▶ 开始评测'}
                     </button>
-                    <span style={{ fontSize: 11, color: !traceEvaluationBatchId ? 'var(--ev-warning)' : 'var(--ev-muted)' }}>
+                    <span style={{ fontSize: 15, fontWeight: 700, color: !traceEvaluationBatchId ? '#EA580C' : 'var(--ev-info)' }}>
                         {!traceEvaluationBatchId
                             ? '请先在上方「评测任务」新建或选择一个任务，再开始评测'
                             : '勾选 trace 后开始评测；进度见 ② 评测执行'}

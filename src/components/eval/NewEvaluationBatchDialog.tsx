@@ -40,6 +40,10 @@ interface Props {
     defaultDescription?: string;
     /** 配置区已选的评估器 id 列表。新建评测任务直接用这批评估器, 对话框内不再重复让用户选。 */
     evaluators?: string[];
+    /** 可选: 用例分析任务归属。只有 Skill 用例分析入口会传, 其它入口保持普通评测任务。 */
+    taskScope?: 'skill-case-analysis';
+    taskSkillName?: string;
+    taskSkillVersion?: number | null;
 }
 
 interface EvaluatorOption {
@@ -74,6 +78,9 @@ export function NewEvaluationBatchDialog({
     defaultTitle,
     defaultDescription,
     evaluators,
+    taskScope,
+    taskSkillName,
+    taskSkillVersion,
 }: Props) {
     const [title, setTitle] = useState('');
     const [desc, setDesc] = useState('');
@@ -115,6 +122,11 @@ export function NewEvaluationBatchDialog({
                     user,
                     // 关键: 触发后端 watchPlaceholder 路径但带 placeholderOnly 标记, 仅创建 1 行空批次
                     placeholderOnly: true,
+                    ...(taskScope ? {
+                        taskScope,
+                        skillName: taskSkillName,
+                        skillVersion: taskSkillVersion,
+                    } : {}),
                     evaluators: finalIds,
                     taskTitle: finalTitle,
                     taskDescription: desc.trim(),
