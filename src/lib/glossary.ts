@@ -379,7 +379,7 @@ const GLOSSARY = {
   'health-score': {
     name: '综合健康分 · 置信加权',
     tag: 'skill',
-    body: 'Skill 当前总分。各维度按权重加权，未跑完的维度不计入分母，故称"置信加权"。',
+    body: 'Skill 当前总分。各维度按权重加权，未跑完的维度不计入分母；用例分析维度只读取当前关联评测任务的结果。',
     formula: 'Σ(score_i × weight_i) / Σ(weight_i, 已完成)',
   },
   'eval-coverage': {
