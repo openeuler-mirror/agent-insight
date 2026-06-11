@@ -1,6 +1,6 @@
 {
   "name": "agent-insight",
-  "version": "0.2.0-beta",
+  "version": "0.2.1-beta",
   "description": "Agent Skill 评估与观测平台 — 量化评估 Skills 在 Agent 上的实际运行效果",
   "license": "MIT",
   "private": false,
@@ -62,7 +62,6 @@
     "@radix-ui/react-tooltip": "^1.2.8",
     "@types/archiver": "^7.0.0",
     "@types/diff": "^7.0.2",
-    "@types/uuid": "^11.0.0",
     "@uiw/react-md-editor": "^4.1.0",
     "@xyflow/react": "^12.10.2",
     "adm-zip": "^0.5.10",
@@ -99,7 +98,6 @@
     "react-arborist": "^3.5.0",
     "react-dom": "19.2.3",
     "react-is": "^19.2.4",
-    "react-json-view": "^1.21.3",
     "react-markdown": "^10.1.0",
     "react-syntax-highlighter": "^16.1.1",
     "react18-json-view": "^0.2.9",
