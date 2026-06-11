@@ -146,6 +146,14 @@ async function run(options) {
     console.log()
   } catch (error) {
     console.error('❌ Database initialization failed:', error.message)
+    console.error('')
+    console.error('   若报错提示 data loss / --accept-data-loss，说明现有数据库')
+    console.error(`   ${dbPath}`)
+    console.error('   里有新 schema 需要删除的数据（prisma 拒绝破坏性变更）。恢复方式：')
+    console.error('   1) 备份后原地迁移（接受丢弃冲突项）：')
+    console.error(`        cp "${dbPath}" "${dbPath}.bak"`)
+    console.error(`        DATABASE_URL="${dbUrl}" npx prisma db push --accept-data-loss`)
+    console.error('   2) 全新开始：把旧库移走后重新 start，会自动建新库。')
     process.exit(1)
   }
 
