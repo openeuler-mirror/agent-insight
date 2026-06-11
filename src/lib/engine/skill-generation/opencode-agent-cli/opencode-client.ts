@@ -32,6 +32,7 @@
 // @ts-ignore
 import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk";
 import { fileURLToPath } from "node:url";
+import { extractCoreOutput } from "./core-output";
 
 // =============================================================================
 // 类型定义
@@ -761,6 +762,10 @@ export class AgentInsight {
     options: ChatOptions = {},
   ): Promise<{
     text: string;
+    /** 本轮**所有** assistant 文本消息按时序拼接（不只最后一条）。
+     * 多轮 agent 常把分析写在前几轮、最后一条只说"分析完毕，见上"——若只取最后一条，
+     * judge 拿到的就是那句废话、评分为 0。评测/打分应消费 transcriptText 而非 text。 */
+    transcriptText: string;
     messageId: string | null;
     userMessageId: string | null;
     stats: {
@@ -1785,11 +1790,19 @@ export class AgentInsight {
     const fullText =
       (assistantMsgId ? textAcc.get(assistantMsgId) : undefined) || promptResponseText || "";
 
+    // 取本轮的**核心输出**给评测（见 extractCoreOutput）：以最长的 assistant 消息为主报告 +
+    // 同等量级兄弟消息，滤掉短旁白/"见上"指针——既不丢内容（修最后一条为空导致的假 0），
+    // 也不把过程旁白喂给 judge。
+    const msgs = [...textAcc.values()];
+    const transcriptText = extractCoreOutput(msgs, { fallback: fullText });
+
     this.log("info", "chat.done", {
       sessionId,
       assistantMsgId,
       userMsgId,
       textLength: fullText.length,
+      coreOutputLength: transcriptText.length,
+      assistantMsgCount: msgs.length,
       eventCount,
       textDeltaCount,
       toolCallCount,
@@ -1798,6 +1811,7 @@ export class AgentInsight {
 
     return {
       text: fullText,
+      transcriptText,
       messageId: assistantMsgId,
       userMessageId: userMsgId,
       stats: {
