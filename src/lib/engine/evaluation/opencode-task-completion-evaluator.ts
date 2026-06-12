@@ -15,7 +15,14 @@ import {
 import { tagOpencodeSession } from '@/lib/internal-agent-tag';
 import { findSystemAgentDefinition, getSystemAgentId } from '@/lib/system-agents';
 import { type RootCauseItem } from '@/lib/dataset-case-root-causes';
-import { recordEvaluatorExecution } from './evaluator-execution-recorder';
+import { ChatOpenAI } from '@langchain/openai';
+import { HumanMessage, SystemMessage } from '@langchain/core/messages';
+import { randomUUID } from 'node:crypto';
+import {
+    recordDirectEvaluatorExecution,
+    recordEvaluatorExecution,
+    shouldForceOpencodeEvalTransport,
+} from './evaluator-execution-recorder';
 import { extractRootCausesFromExpected } from './root-cause-extractor';
 import {
     deriveTaskCompletionScoreFromFindings,
@@ -279,6 +286,95 @@ function normalizeOutput(
     };
 }
 
+function makeDirectModel(config: ModelConfig) {
+    return new ChatOpenAI({
+        apiKey: config.apiKey || 'no-api-key',
+        model: config.model || 'deepseek-chat',
+        configuration: {
+            baseURL: config.baseUrl || 'https://api.deepseek.com',
+        },
+        temperature: 0,
+        topP: 1,
+        // 显式超时 + 重试，对齐 opencode 路径（idleTimeoutMs 3min / streamTimeoutMs 10min）。
+        // 单轮 judge 正常 <10s，180s 兜住卡死调用；瞬时错误自动重试 2 次。
+        timeout: 180_000,
+        maxRetries: 2,
+        modelKwargs: {
+            seed: 42,
+        },
+    });
+}
+
+/** 从 langchain 响应里抽 token 用量（usage_metadata 优先，回退 response_metadata.tokenUsage）。 */
+function extractLangchainUsage(
+    response: unknown,
+): { input?: number; output?: number; total?: number } | null {
+    const meta = (response as {
+        usage_metadata?: { input_tokens?: number; output_tokens?: number; total_tokens?: number };
+    })?.usage_metadata;
+    if (meta && (typeof meta.input_tokens === 'number' || typeof meta.output_tokens === 'number')) {
+        return { input: meta.input_tokens, output: meta.output_tokens, total: meta.total_tokens };
+    }
+    const tu = (response as {
+        response_metadata?: { tokenUsage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number } };
+    })?.response_metadata?.tokenUsage;
+    if (tu && (typeof tu.promptTokens === 'number' || typeof tu.completionTokens === 'number')) {
+        return { input: tu.promptTokens, output: tu.completionTokens, total: tu.totalTokens };
+    }
+    return null;
+}
+
+/**
+ * 直连 LLM 任务完成度评测（primary path）：一次 model.invoke 拿到 JSON，正常解析后把这次 judge
+ * 合成成一条 trace 落库。system prompt / 模型参数(temperature 0, seed 42) 与 opencode 路径完全一致，
+ * 只是省掉了起进程 + session 往返。
+ */
+async function evaluateTaskCompletionDirectAndRecord(
+    input: TaskCompletionEvalInput,
+    config: ModelConfig,
+    rootCauses: RootCauseItem[],
+    rootCauseSource: 'dataset-cache' | 'live-extract' | 'none',
+    user?: string | null,
+): Promise<TaskCompletionEvalOutput> {
+    const model = makeDirectModel(config);
+    const userMsg = buildUserMessage(input, rootCauses);
+    const response = await model.invoke([
+        new SystemMessage(buildCoordinatorSystemPrompt(input.skillAttributionMode || 'skill-aware')),
+        new HumanMessage(userMsg),
+    ]);
+    const assistantText = typeof response.content === 'string'
+        ? response.content
+        : JSON.stringify(response.content);
+    const parsed = parseLooseJson(assistantText);
+    if (!parsed || !isTaskCompletionPayload(parsed)) {
+        throw new Error(`任务完成度直接 LLM 评测未产出有效 JSON。模型输出前 800 字符：${assistantText.slice(0, 800)}`);
+    }
+    const normalized = normalizeOutput(parsed);
+    const evaluatorSessionId = `${TASK_COMPLETION_EVALUATOR_NAME}-${randomUUID()}`;
+    const def = findSystemAgentDefinition('opencode', TASK_COMPLETION_EVALUATOR_NAME);
+    await recordDirectEvaluatorExecution({
+        taskId: evaluatorSessionId,
+        agentName: TASK_COMPLETION_EVALUATOR_NAME,
+        user,
+        query: input.caseInput,
+        userMessage: userMsg,
+        assistantOutput: assistantText,
+        usage: extractLangchainUsage(response),
+        modelID: config.model,
+        skill: def?.traceSkill ?? null,
+    }).catch((err) => {
+        console.warn('[opencode-task-completion] failed to record direct evaluator trace:', (err as Error)?.message || err);
+    });
+    return {
+        ...normalized,
+        rawAnalysis: {
+            ...(normalized.rawAnalysis || {}),
+            evaluatorSessionId,
+            root_cause_source: rootCauseSource,
+        },
+    };
+}
+
 export async function evaluateTaskCompletionViaOpencode(
     input: TaskCompletionEvalInput,
     user?: string | null,
@@ -286,6 +382,28 @@ export async function evaluateTaskCompletionViaOpencode(
     skillVersion?: number | null, // skill 版本号,展示用
 ): Promise<TaskCompletionEvalOutput> {
   return withBackgroundOpencodeSlot(async () => {
+   // PRIMARY: 直连 LLM 单轮 judge —— 不起 opencode 进程、不建 session（省 ~1.6s 固定开销/次）。
+   // 评测 trace 由 recordDirectEvaluatorExecution 合成落库。EVAL_FORCE_OPENCODE_TRANSPORT=1 回退旧路径。
+   if (!shouldForceOpencodeEvalTransport()) {
+     const { rootCauses, source: rootCauseSource } = await resolveRootCauses(input, user);
+     const directConfig = await getActiveConfig(user);
+     if (!directConfig) {
+       return {
+         isCorrect: false,
+         score: 0,
+         reason: '请先在模型配置中激活一个评测模型，才能执行结果评测。',
+         rawAnalysis: { root_cause_source: rootCauseSource },
+       };
+     }
+     try {
+       return await evaluateTaskCompletionDirectAndRecord(input, directConfig, rootCauses, rootCauseSource, user);
+     } catch (directErr) {
+       console.warn(
+         '[opencode-task-completion] direct LLM path failed, falling back to opencode transport:',
+         (directErr as Error)?.message || directErr,
+       );
+     }
+   }
    return runWithEphemeralOpencodeServer({ user: user || undefined, verbose: false, isolateHome: true }, async (serverUrl) => {
     const { rootCauses, source: rootCauseSource } = await resolveRootCauses(input, user);
     const skillAttributionMode = input.skillAttributionMode || 'skill-aware';
