@@ -61,8 +61,9 @@ function safetySig(r: ExecRow): Sig {
     return (r.failures ?? []).some((f) => SECURITY.test(`${f.failure_type ?? ''} ${f.description ?? ''}`)) ? 'bad' : 'ok';
 }
 
-export function ExecutionScoreTable({ agent, from, to, skill, statusFilter, bucketLabel, onClearBucket, onDrill, collapsed, onToggleCollapse }: {
+export function ExecutionScoreTable({ agent, user, from, to, skill, statusFilter, bucketLabel, onClearBucket, onDrill, collapsed, onToggleCollapse }: {
     agent: string;
+    user?: string | null;   // 身份口径：拼入 ?user= 实现用户隔离，缺失会越权拿全量执行记录
     from: string;
     to: string;
     skill?: string;
@@ -82,16 +83,16 @@ export function ExecutionScoreTable({ agent, from, to, skill, statusFilter, buck
     // 无需在 effect 内同步 setState（避免 react-hooks/set-state-in-effect 级联渲染）。
 
     const load = useCallback(() => {
-        if (!agent) return;
+        if (!agent || !user) return;
         setLoading(true);
-        const q = new URLSearchParams({ agent, from, to, page: String(page), pageSize: String(PAGE_SIZE) });
+        const q = new URLSearchParams({ agent, user, from, to, page: String(page), pageSize: String(PAGE_SIZE) });
         if (skill && skill !== 'all') q.set('skill', skill);
         apiFetch(`/api/quality/executions?${q.toString()}`)
             .then((r) => r.json())
             .then((d) => { setRows(Array.isArray(d.records) ? d.records : []); setTotal(d.total ?? 0); })
             .catch(() => { setRows([]); setTotal(0); })
             .finally(() => setLoading(false));
-    }, [agent, from, to, skill, page]);
+    }, [agent, user, from, to, skill, page]);
 
     useEffect(() => { load(); }, [load]);
 

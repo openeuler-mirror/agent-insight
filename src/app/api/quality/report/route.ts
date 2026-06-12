@@ -10,8 +10,9 @@ const STATUSES: QualityStatus[] = ['达标', '关注', '异常'];
 
 export async function GET(req: Request) {
     try {
-        const { username } = await resolveUser(req);
         const url = new URL(req.url);
+        // 身份由前端 ?user= 携带；不读则 username=null 会越权聚合全量数据。
+        const { username } = await resolveUser(req, url.searchParams.get('user') || undefined);
 
         const agent = (url.searchParams.get('agent') || '').trim();
         if (!agent) return NextResponse.json({ error: 'agent is required' }, { status: 400 });
