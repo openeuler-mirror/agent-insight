@@ -369,11 +369,52 @@ model SkillOptSession {
   agentTraceSkill  String?
   messages    SkillOptMessage[]
   iterations  SkillOptIteration[]
+  plan        SkillOptPlan?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   // 列表页核心查询：按 user + skill + baseVersion 列出最近会话
   @@index([user, skillName, baseVersion, updatedAt])
+}
+
+/// 一轮优化会话入口处由归并算子产出的统一优化计划。
+/// SkillIssue 是不可变的原始发现台账（跨 eval 累积）；plan 是它的归并视图，
+/// 生命周期 = 一轮会话 + 一个 baseVersion，不回写台账。
+/// 设计：docs/plans/2026-06-10-skill-issue-merge-conflict-plan-design.md
+model SkillOptPlan {
+  id           String   @id @default(cuid())
+  sessionId    String   @unique          // 一轮会话至多一份 plan
+  session      SkillOptSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  skillId      String
+  baseVersion  Int
+  status       String   @default("draft") // draft | confirmed | applied | abandoned
+  operatorMeta String   @default("{}")    // JSON：批数/层数/模型/耗时，纯审计
+  createdAt    DateTime @default(now())
+  items        SkillOptPlanItem[]
+
+  @@index([skillId, baseVersion])
+}
+
+model SkillOptPlanItem {
+  id               String   @id @default(cuid())
+  planId           String
+  plan             SkillOptPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  rank             Int                          // 展示与应用顺序（prevalence×severity 降序）
+  route            String                       // 'core' | 'reference' | 'backlog'
+  status           String   @default("pending") // pending | conflict | applied | deferred | dismissed
+  title            String
+  rationale        String                       // 归并理由：为什么这些 issue 是一件事 + 综合后的修改方向
+  severity         String   @default("medium")  // 'high' | 'medium' | 'low'（归并后的代表严重度）
+  targetFile       String?                      // 锚点：相对 baseVersion 快照的文件路径
+  anchorText       String?                      // 锚点：目标位置原文片段 / section 标题
+  proposedEdit     String?                      // 建议修改（diff 或指令式描述）
+  conflictNote     String?                      // status='conflict' 时的矛盾说明，给用户仲裁
+  sourceIssueIds   String   @default("[]")      // JSON string[]：归并自哪些 SkillIssue.id
+  sourcesBreakdown String   @default("{}")      // JSON：{"static":n,"dynamic":m,"trigger":k}
+  prevalence       Int      @default(1)         // Σ 源 issues 的 prevalenceCount
+  createdAt        DateTime @default(now())
+
+  @@index([planId, rank])
 }
 
 model SkillOptMessage {

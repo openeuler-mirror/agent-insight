@@ -42,6 +42,11 @@ export interface OptIssue {
         label: string;     // 显示文本，例如 "trace tr_28a91" 或 "fault 报告 #12"
         url?: string;      // 同源跳转路径或外链；缺失时只展示 label，不可点击
     };
+    /**
+     * 已优化（resolved）标记。非空 = 这个点已被某次优化处理掉（服务端置 resolvedAt）。
+     * 前端据此持久显示「已优化」徽章并沉底、禁选——区别于本会话内存里的 optimizedIssueIds。
+     */
+    resolvedAt?: string | null;
 }
 
 /**

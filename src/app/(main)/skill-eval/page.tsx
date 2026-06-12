@@ -723,9 +723,14 @@ function SkillAnalysisPage() {
 
     // 评测任务(批次)列表 —— 供配置区"选历史评测任务"。trace / dataset 共用同一份。
     const [caseEvalTasks, setCaseEvalTasks] = useState<Array<{ runId: string; taskTitle?: string; traceCount?: number; doneCount?: number; runningCount?: number; createdAt?: string; skillName?: string; skillVersion?: number | null }>>([]);
+    // 「本 skill@version 的批次列表是否已确实拉取完成」。下方裁剪无效关联的守卫 effect 只在
+    // 它为 true 时才动手——加载窗口里 caseEvalTasksForSkill 暂时为空，过早裁决会误清掉一个
+    // 其实有效的关联（也是 caseRunId 在 URL 上无限跳变这个 bug 的关键一环）。
+    const [caseEvalTasksLoaded, setCaseEvalTasksLoaded] = useState(false);
     const reloadEvalTasks = useCallback(async (options?: { includeRunId?: string }) => {
-        if (!user) { setCaseEvalTasks([]); return; }
-        if (!selectedSkillName || selectedVersion == null) { setCaseEvalTasks([]); return; }
+        setCaseEvalTasksLoaded(false); // 进入即标记未就绪，下面任一出口再置回 true
+        if (!user) { setCaseEvalTasks([]); setCaseEvalTasksLoaded(true); return; }
+        if (!selectedSkillName || selectedVersion == null) { setCaseEvalTasks([]); setCaseEvalTasksLoaded(true); return; }
         try {
             const params = new URLSearchParams({
                 user,
@@ -761,6 +766,7 @@ function SkillAnalysisPage() {
                 })));
             }
         } catch {/* 列表加载失败不阻塞主流程 */}
+        finally { setCaseEvalTasksLoaded(true); }
     }, [user, selectedSkillName, selectedVersion, traceEvaluationBatchId]);
     useEffect(() => { reloadEvalTasks(); }, [reloadEvalTasks]);
 
@@ -1245,6 +1251,9 @@ function SkillAnalysisPage() {
                 return;
             }
         }
+        // 列表尚未拉取完成时不裁决：此刻 caseEvalTasksForSkill 的空是「还没加载」而非
+        // 「确实没有」，过早动手会误清有效关联，也会和 localStorage→state 的恢复来回拉锯。
+        if (!caseEvalTasksLoaded) return;
         const stillValid = traceEvaluationBatchId && caseEvalTasksForSkill.some(t => t.runId === traceEvaluationBatchId);
         if (stillValid) return;
         if (caseEvalTasksForSkill.length > 0) {
@@ -1252,8 +1261,14 @@ function SkillAnalysisPage() {
             handleSelectTraceEvalBatch({ runId: latest.runId, taskTitle: latest.taskTitle });
         } else if (traceEvaluationBatchId) {
             setTraceEvaluationBatchId('');
+            // 关键：同步清掉 localStorage 幽灵。否则 URL/localStorage→state 那个 effect 会
+            // 每轮把这个「查无此批次」的 id 复活，和本守卫经由 URL caseRunId 来回拉锯，
+            // 造成地址栏在 ?caseRunId=… 与无参之间无限跳变。
+            if (traceEvalBatchStorageKey) {
+                try { localStorage.removeItem(traceEvalBatchStorageKey); } catch {/* ignore */}
+            }
         }
-    }, [caseEvalTasksForSkill, handleSelectTraceEvalBatch, traceEvaluationBatchId]);
+    }, [caseEvalTasksForSkill, handleSelectTraceEvalBatch, traceEvaluationBatchId, caseEvalTasksLoaded, traceEvalBatchStorageKey]);
 
     const runBatchTraceAnalysis = useCallback(async (taskIds: string[]): Promise<{
         resultErrors: string[];                                    // 结果评测整体失败（一次入队全失败）

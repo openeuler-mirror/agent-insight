@@ -213,7 +213,11 @@ export interface RunGeneralAgentResult {
   workspaceDir: string;
   skillResolved: boolean;
   skillMeta: { name: string; version: number | null; semanticVersion: string | null; source: string } | null;
+  /** 最后一条 assistant 消息（交互/展示用）。 */
   output: string;
+  /** 本轮**所有** assistant 文本按时序拼接——多轮 agent 把分析写在前几轮、最后只说"见上"时，
+   * output 会丢内容、judge 评 0。**评测/打分应用 fullOutput**。 */
+  fullOutput: string;
   /** 本次执行中所有触发的权限/问题事件及其应答，便于审计。 */
   interactions: InteractionRecord[];
   stats: {
@@ -499,6 +503,7 @@ async function runGeneralAgentWithClient(
     skillResolved: skillMeta !== null,
     skillMeta,
     output: result.text,
+    fullOutput: result.transcriptText || result.text,
     interactions,
     stats: result.stats,
   };
