@@ -1,6 +1,6 @@
 {
   "name": "agent-insight",
-  "version": "0.2.2-beta",
+  "version": "0.3.0-beta",
   "description": "Agent Skill 评估与观测平台 — 量化评估 Skills 在 Agent 上的实际运行效果",
   "license": "MIT",
   "private": false,
@@ -40,7 +40,7 @@
     "@dagrejs/dagre": "^3.0.0",
     "@langchain/anthropic": "^0.3.0",
     "@langchain/core": "^1.1.42",
-    "@langchain/langgraph": "^0.4.9",
+    "@langchain/langgraph": "^1.4.1",
     "@langchain/langgraph-sdk": "^1.8.10",
     "@langchain/openai": "^0.6.17",
     "@langchain/tavily": "^0.1.0",
