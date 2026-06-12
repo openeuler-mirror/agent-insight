@@ -34,7 +34,12 @@ import {
 } from '@/lib/engine/general-agent/server-model-config';
 import { ChatOpenAI } from '@langchain/openai';
 import { HumanMessage, SystemMessage } from '@langchain/core/messages';
-import { recordEvaluatorExecution } from './evaluator-execution-recorder';
+import { randomUUID } from 'node:crypto';
+import {
+    recordDirectEvaluatorExecution,
+    recordEvaluatorExecution,
+    shouldForceOpencodeEvalTransport,
+} from './evaluator-execution-recorder';
 import { tagOpencodeSession } from '@/lib/internal-agent-tag';
 import { findSystemAgentDefinition, getSystemAgentId } from '@/lib/system-agents';
 
@@ -472,6 +477,10 @@ function makeDirectModel(config: ModelConfig) {
         },
         temperature: 0,
         topP: 1,
+        // 显式超时 + 重试，对齐 opencode 路径（idleTimeoutMs 3min / streamTimeoutMs 10min）。
+        // 单轮 judge 正常 <10s，180s 兜住卡死调用；瞬时错误自动重试 2 次。
+        timeout: 180_000,
+        maxRetries: 2,
         modelKwargs: {
             seed: 42,
         },
@@ -490,20 +499,91 @@ async function evaluateTrajectoryDirect(
     const content = typeof response.content === 'string'
         ? response.content
         : JSON.stringify(response.content);
-    const parsed = parseJsonLoose(content);
-    const parsedRecord = asRecord(parsed);
-    if (
-        typeof (parsedRecord.key_action_results ?? parsedRecord.keyActionResults) === 'undefined'
-        && typeof (parsedRecord.dimension_scores ?? parsedRecord.dimensionScores) === 'undefined'
-    ) {
+    // 与 opencode 路径用同一个多策略提取器（extractFinalResultFromText），保证两路解析一致。
+    const parsed = extractFinalResultFromText(content);
+    if (!parsed) {
         throw new Error(`直接 LLM 评测未产出有效 JSON。模型输出前 800 字符：${content.slice(0, 800)}`);
     }
     return normalizeOutput(
-        parsedRecord,
+        asRecord(parsed),
         Array.isArray(input.referenceKeyActions) ? input.referenceKeyActions.length : 0,
         input.comparisonMode,
         input.actualExtractedSteps,
     );
+}
+
+/** 从 langchain 响应里抽 token 用量（usage_metadata 优先，回退 response_metadata.tokenUsage）。 */
+function extractLangchainUsage(
+    response: unknown,
+): { input?: number; output?: number; total?: number } | null {
+    const meta = (response as {
+        usage_metadata?: { input_tokens?: number; output_tokens?: number; total_tokens?: number };
+    })?.usage_metadata;
+    if (meta && (typeof meta.input_tokens === 'number' || typeof meta.output_tokens === 'number')) {
+        return { input: meta.input_tokens, output: meta.output_tokens, total: meta.total_tokens };
+    }
+    const tu = (response as {
+        response_metadata?: { tokenUsage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number } };
+    })?.response_metadata?.tokenUsage;
+    if (tu && (typeof tu.promptTokens === 'number' || typeof tu.completionTokens === 'number')) {
+        return { input: tu.promptTokens, output: tu.completionTokens, total: tu.totalTokens };
+    }
+    return null;
+}
+
+/**
+ * 直连 LLM 轨迹评测（primary path）：一次 model.invoke 拿到 JSON，正常解析后把这次 judge 合成成一条
+ * trace 落库（含 system rubric）。prompt / 模型参数(temperature 0, seed 42) 与 opencode 路径一致，
+ * 只是省掉了起进程 + session 往返。EVAL_FORCE_OPENCODE_TRANSPORT=1 可回退旧 opencode 路径。
+ */
+async function evaluateTrajectoryDirectAndRecord(
+    input: TrajectoryEvalInput,
+    config: ModelConfig,
+    user?: string | null,
+): Promise<TrajectoryEvalOutput> {
+    const model = makeDirectModel(config);
+    const userMsg = buildUserMessage(input);
+    const response = await model.invoke([
+        new SystemMessage(DIRECT_EVALUATOR_SYSTEM_PROMPT),
+        new HumanMessage(userMsg),
+    ]);
+    const assistantText = typeof response.content === 'string'
+        ? response.content
+        : JSON.stringify(response.content);
+    // 与 opencode 路径用同一个多策略提取器（extractFinalResultFromText），保证两路解析一致。
+    const parsed = extractFinalResultFromText(assistantText);
+    if (!parsed) {
+        throw new Error(`直接 LLM 轨迹评测未产出有效 JSON。模型输出前 800 字符：${assistantText.slice(0, 800)}`);
+    }
+    const normalized = normalizeOutput(
+        asRecord(parsed),
+        Array.isArray(input.referenceKeyActions) ? input.referenceKeyActions.length : 0,
+        input.comparisonMode,
+        input.actualExtractedSteps,
+    );
+    const evaluatorSessionId = `${EVALUATOR_AGENT_NAME}-${(input.caseId || 'case').slice(0, 24)}-${randomUUID()}`;
+    const def = findSystemAgentDefinition('opencode', EVALUATOR_AGENT_NAME);
+    await recordDirectEvaluatorExecution({
+        taskId: evaluatorSessionId,
+        agentName: EVALUATOR_AGENT_NAME,
+        user,
+        query: input.caseInput,
+        systemPrompt: DIRECT_EVALUATOR_SYSTEM_PROMPT,
+        userMessage: userMsg,
+        assistantOutput: assistantText,
+        usage: extractLangchainUsage(response),
+        modelID: config.model,
+        skill: def?.traceSkill ?? null,
+    }).catch((err) => {
+        console.warn('[opencode-trajectory-eval] failed to record direct evaluator trace:', (err as Error)?.message || err);
+    });
+    return {
+        ...normalized,
+        rawAnalysis: {
+            ...(normalized.rawAnalysis || {}),
+            evaluatorSessionId,
+        },
+    };
 }
 
 function parseJsonLoose(s: string): unknown | null {
@@ -570,6 +650,26 @@ export async function evaluateTrajectoryViaOpencode(
     skillVersion?: number | null, // skill 版本号,展示用
 ): Promise<TrajectoryEvalOutput> {
   return withBackgroundOpencodeSlot(async () => {
+   // PRIMARY: 直连 LLM 单轮 judge —— 不起 opencode 进程、不建 session（省 ~1.6s 固定开销/次）。
+   // 评测 trace 由 recordDirectEvaluatorExecution 合成落库（含 system rubric），与走 opencode 等价。
+   // 设 EVAL_FORCE_OPENCODE_TRANSPORT=1 可一键回到旧 opencode 路径。
+   if (!shouldForceOpencodeEvalTransport()) {
+     const directConfig = await getActiveConfig(user);
+     if (!directConfig) {
+       throw new TrajectoryEvalConfigError(
+         '未配置评测模型，请先在「模型配置」中激活一个模型。',
+       );
+     }
+     try {
+       return await evaluateTrajectoryDirectAndRecord(input, directConfig, user);
+     } catch (directErr) {
+       if (directErr instanceof TrajectoryEvalConfigError) throw directErr;
+       console.warn(
+         '[opencode-trajectory-eval] direct LLM path failed, falling back to opencode transport:',
+         (directErr as Error)?.message || directErr,
+       );
+     }
+   }
    return runWithEphemeralOpencodeServer({ user: user || undefined, verbose: false, isolateHome: true }, async (serverUrl) => {
     const config = await getActiveConfig(user);
     if (!config) {

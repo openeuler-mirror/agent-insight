@@ -31,6 +31,32 @@ test('synthesizes user + assistant interactions for a single-shot LLM judge', ()
   assert.equal(interactions[1]?.usage?.total, 1500);
 });
 
+test('records the system rubric as the first interaction (parity with opencode trace)', () => {
+  const interactions = buildDirectEvaluatorInteractions({
+    agentName: 'task-completion-evaluator',
+    systemPrompt: '你是「Agent 任务完成度」评估器。只输出严格 JSON。',
+    query: 'case-input-short',
+    userMessage: '# 任务完成度评测输入\n{...}',
+    assistantOutput: '{"score":0.9,"is_correct":true,"key_point_findings":[]}',
+    usage: { input: 2000, output: 400 },
+    timestampISO: TS,
+  });
+
+  // system rubric must be recorded (was dropped before — observability bug) and come first
+  assert.equal(interactions.length, 3);
+  assert.equal(interactions[0]?.role, 'system');
+  assert.match(interactions[0]?.content ?? '', /评估器/);
+  assert.equal(interactions[1]?.role, 'user');
+  assert.equal(interactions[2]?.role, 'assistant');
+
+  // the extra system message must NOT be miscounted as an LLM call
+  const tree = buildAgentCallTree(
+    interactions as unknown as Parameters<typeof buildAgentCallTree>[0],
+  );
+  assert.equal(tree?.stats.llmCalls, 1);
+  assert.equal(tree?.stats.toolCalls, 0);
+});
+
 test('renders as a 1-LLM-call / 0-tool-call trace (matches what a judge actually is)', () => {
   const interactions = buildDirectEvaluatorInteractions({
     agentName: 'task-completion-evaluator',
