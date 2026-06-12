@@ -907,6 +907,21 @@ export default function SkillOptimizePage() {
         return null;
     };
 
+    // 把一份 DB plan 构造成对话里的「合并结果」计划卡片 turn。live push 和刷新后还原共用，保证形态一致。
+    const buildPlanCardTurn = (plan: any) => {
+        const items: PlanCardItem[] = (plan?.items || []).map((it: any) => ({
+            id: it.id,
+            route: it.route,
+            severity: it.severity,
+            title: it.title,
+            mergedFrom: Array.isArray(it.sourceIssueIds) ? it.sourceIssueIds.length : 0,
+            targetFile: it.targetFile ?? null,
+        }));
+        // 源点数 = 各 item 的 sourceIssueIds 之和（parse 阶段已保证一个源 id 只归一个 item，不重复计）
+        const sourceCount = items.reduce((n, it) => n + it.mergedFrom, 0);
+        return { kind: 'plan' as const, id: safeUUID(), sourceCount, items };
+    };
+
     const startOneClickOptimize = async () => {
         if (!skill || optimizing || merging) return;
         if (!currentSessionId || !baselineFiles) return;
@@ -955,15 +970,7 @@ export default function SkillOptimizePage() {
             const exec = plan.items.filter((it: any) => (it.route === 'core' || it.route === 'reference') && it.status === 'pending');
             const srcIds = Array.from(new Set(exec.flatMap((it: any) => Array.isArray(it.sourceIssueIds) ? it.sourceIssueIds : [])));
             // 把合并结果作为一张「计划卡片」推进对话，让用户一眼看见 N 条优化点合并成了什么
-            const cardItems: PlanCardItem[] = plan.items.map((it: any) => ({
-                id: it.id,
-                route: it.route,
-                severity: it.severity,
-                title: it.title,
-                mergedFrom: Array.isArray(it.sourceIssueIds) ? it.sourceIssueIds.length : 0,
-                targetFile: it.targetFile ?? null,
-            }));
-            setChat(prev => [...prev, { kind: 'plan', id: safeUUID(), sourceCount: issues.length, items: cardItems }]);
+            setChat(prev => [...prev, buildPlanCardTurn(plan)]);
             setMerging(false);
             await startOptimize({ planId: plan.id, planSourceIssueIds: srcIds as string[] });
         } catch (err: any) {
@@ -971,6 +978,38 @@ export default function SkillOptimizePage() {
             setChat(prev => [...prev, { kind: 'user', id: safeUUID(), text: `一键优化失败：${err?.message || String(err)}` }]);
         }
     };
+
+    // 刷新/切会话后从 DB 还原「合并结果」计划卡片：plan 卡片原本只在内存 chat 里，
+    // applySessionDetail 从 messages 重建 chat 时会丢（messages 不含 plan）。plan 本身按 session
+    // 持久在 DB——这里读回来补一张卡片，使合并结果跟会话一起留存、不再"刷新就没"。
+    // 若归并还在后台跑（status=running，刷新打断了原来的内存轮询），恢复"合并中"态并接续轮询。
+    useEffect(() => {
+        const sid = currentSessionId;
+        if (!sid) return;
+        let cancelled = false;
+        (async () => {
+            try {
+                const r = await fetch(`/api/skill-opt/plan?sessionId=${encodeURIComponent(sid)}`);
+                if (!r.ok) return;
+                const d = await r.json();
+                let plan = d?.plan;
+                if (cancelled || !plan) return;
+                if (plan.status === 'running') {
+                    setMerging(true);
+                    plan = await pollPlanReady(sid);
+                    if (cancelled) return;
+                    setMerging(false);
+                }
+                if (cancelled || !plan || !Array.isArray(plan.items) || plan.items.length === 0) return;
+                // 仅当对话里还没有 plan 卡片时补一张（避免和 live push / 重复 effect 撞车）；
+                // 合并发生在优化之前，放到对话最前面，顺序与原始一致。
+                setChat(prev => prev.some(t => t.kind === 'plan') ? prev : [buildPlanCardTurn(plan), ...prev]);
+            } catch { /* 读取失败不影响主流程 */ }
+        })();
+        return () => { cancelled = true; };
+    // 只在切换会话时跑；pollPlanReady/buildPlanCardTurn 是稳定闭包，不进依赖避免重复触发。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [currentSessionId]);
 
     const sendMessage = () => {
         if (!input.trim()) return;
