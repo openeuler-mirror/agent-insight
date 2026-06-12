@@ -471,12 +471,15 @@ export default function SkillOptimizePage() {
     }, [user, skill?.id, baseVersion]);
 
     const toggleIssue = (id: string) => {
+        if (optimizing || merging) return; // 优化/合并进行中锁定勾选（一键优化期间不允许改选）
         setCheckedIssueIds(prev => {
             const next = new Set(prev);
             next.has(id) ? next.delete(id) : next.add(id);
             return next;
         });
     };
+    // 一键优化按钮上的计数：扣除本会话已优化的点，只显示剩余待优化数
+    const pendingIssueCount = issues.filter(i => !optimizedIssueIds.has(i.id)).length;
 
     /**
      * 从 agent turn 的 blocks 抠 markdown 总结作为优化报告主体。
@@ -1051,10 +1054,12 @@ export default function SkillOptimizePage() {
                         {issues.length === 0 && <div className="empty">暂无可优化点</div>}
                         {issues.map(it => {
                             const isOptimized = optimizedIssueIds.has(it.id);
+                            const locked = optimizing || merging;
                             const cls = [
                                 'issue-row',
                                 checkedIssueIds.has(it.id) && 'checked',
                                 isOptimized && 'optimized',
+                                locked && 'locked',
                             ].filter(Boolean).join(' ');
                             return (
                                 <div
@@ -1066,6 +1071,7 @@ export default function SkillOptimizePage() {
                                     <input
                                         type="checkbox"
                                         checked={checkedIssueIds.has(it.id)}
+                                        disabled={locked}
                                         onChange={() => toggleIssue(it.id)}
                                         onClick={e => e.stopPropagation()}
                                     />
@@ -1118,7 +1124,7 @@ export default function SkillOptimizePage() {
                         <button
                             className="skopt-oneclick-btn"
                             disabled={
-                                issues.length === 0
+                                pendingIssueCount === 0
                                 || optimizing
                                 || merging
                                 || baselineLoading
@@ -1131,7 +1137,7 @@ export default function SkillOptimizePage() {
                                 ? '合并优化点…'
                                 : optimizing
                                     ? '优化中…'
-                                    : `一键优化 (${issues.length})`}
+                                    : `一键优化 (${pendingIssueCount})`}
                         </button>
                         <button
                             disabled={

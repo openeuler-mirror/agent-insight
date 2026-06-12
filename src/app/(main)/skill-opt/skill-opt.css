@@ -591,6 +591,12 @@
     transition: border-color 0.15s, background 0.15s;
 }
 .skopt-left .issue-row:hover { border-color: var(--border-dark); }
+/* 一键优化/合并进行中：锁定勾选，整行置灰、禁用指针 */
+.skopt-left .issue-row.locked {
+    opacity: 0.55;
+    cursor: not-allowed;
+    pointer-events: none;
+}
 .skopt-left .issue-row.checked {
     background: var(--primary-subtle);
     border-color: var(--primary-subtle-border);
