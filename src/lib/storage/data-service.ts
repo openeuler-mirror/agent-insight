@@ -1958,14 +1958,17 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
 
         mergedInteractionsForSession = incomingInteractions;
         try {
-            const existingSession = await db.findSessionByTaskId(targetRecord.task_id);
-            let existingInteractions = existingSession?.interactions
-                ? (() => { try { return JSON.parse(existingSession.interactions as string); } catch { return []; } })()
-                : [];
-            existingInteractions = normalizeForStorage(existingInteractions);
+            const mergeStrategy = targetRecord.session_merge_strategy || storageAdapter.sessionMergeStrategy || 'monotonic';
+            if (mergeStrategy !== 'snapshot-replace') {
+                const existingSession = await db.findSessionByTaskId(targetRecord.task_id);
+                let existingInteractions = existingSession?.interactions
+                    ? (() => { try { return JSON.parse(existingSession.interactions as string); } catch { return []; } })()
+                    : [];
+                existingInteractions = normalizeForStorage(existingInteractions);
 
-            if (Array.isArray(existingInteractions) && existingInteractions.length > 0) {
-                mergedInteractionsForSession = mergeSessionInteractionsMonotonic(existingInteractions, incomingInteractions);
+                if (Array.isArray(existingInteractions) && existingInteractions.length > 0) {
+                    mergedInteractionsForSession = mergeSessionInteractionsMonotonic(existingInteractions, incomingInteractions);
+                }
             }
         } catch {}
 

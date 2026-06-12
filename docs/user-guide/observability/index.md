@@ -61,3 +61,9 @@ description: "链路追踪、智能诊断与质量监控总览"
 - 查看异常样本归因： [智能诊断](./diagnosis)
 - 了解趋势能力当前状态： [质量监控](./quality-monitoring)
 - 将线上问题沉淀为回归验证： [评测中心](../evaluation/index)
+
+## Hermes 接入
+
+安装指导页下发的普通交互版 setup 和 auto setup 都支持选择 Hermes。选择后脚本会安装并启用 `briancaffey/hermes-otel` 插件、向 Hermes 运行环境安装 OTel 依赖，并写入 `$HERMES_HOME/plugins/hermes_otel/config.yaml`（未设置 `HERMES_HOME` 时默认为 `~/.hermes`）。Hermes venv 会优先从 `$HERMES_HOME/hermes-agent/venv` 探测，再 fallback 到 `~/git/hermes-agent/venv` / `~/agent/hermes-agent/venv`。
+
+Hermes 的 OTLP trace 会直接上报到平台 `/api/ingest/otel/v1/traces`。当前平台会按 Hermes span tree 生成用户输入、工具步骤、中间 LLM 回复和最终回复；同一 session 的后续 OTel batch 会按最新 snapshot 覆盖旧 interactions，避免 partial batch 造成步骤重复或顺序污染。跨 session 的 subagent 归并仍依赖 Hermes 侧提供 parent/root session 关联字段，暂未自动合并。

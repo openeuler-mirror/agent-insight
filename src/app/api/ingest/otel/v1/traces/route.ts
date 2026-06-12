@@ -1,5 +1,6 @@
 import { normalizeClaudeOtlpTraces } from '@/lib/ingest/claude-otel/otlp-json';
 import { appendOtelTraceEvents } from '@/lib/ingest/claude-otel/spool';
+import { decodeOtlpRequest, OtlpDecodeError } from '@/lib/ingest/otel/decode';
 import { db } from '@/lib/storage/prisma';
 import { NextResponse } from 'next/server';
 
@@ -18,19 +19,14 @@ export async function POST(req: Request) {
       }
     }
 
-    const contentType = req.headers.get('content-type') || '';
-    if (contentType.includes('application/x-protobuf')) {
-      return NextResponse.json(
-        { error: 'Protobuf not supported yet, please use OTEL_EXPORTER_OTLP_PROTOCOL=http/json' },
-        { status: 415 },
-      );
-    }
-
     let body: any;
     try {
-      body = await req.json();
+      body = await decodeOtlpRequest(req, 'traces');
     } catch (err) {
-      console.error('[OTel] Failed to parse request body:', err);
+      if (err instanceof OtlpDecodeError) {
+        return NextResponse.json({ error: err.message }, { status: err.status });
+      }
+      console.error('[OTel] Failed to decode request body:', err);
       return NextResponse.json({ error: 'Invalid Payload' }, { status: 400 });
     }
 

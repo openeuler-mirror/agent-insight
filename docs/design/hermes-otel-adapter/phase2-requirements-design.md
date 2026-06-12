@@ -1,18 +1,22 @@
 # Hermes 平台适配（OTel / OTLP 接入）— 需求设计规格
-版本：v0.4
-最后更新：2026-06-09
+版本：v0.4.1
+最后更新：2026-06-10
 
 > 文档类型：Phase2 需求设计规格
 > 关联项目：agent-insight ｜ 关联 Phase1：[phase1-requirements-analysis.md](phase1-requirements-analysis.md)
 > 复杂度评估：**Medium**
 > base_commit：d72f05e（master）
-> 更新时间：2026-06-09
+> 更新时间：2026-06-10
 > 状态：Phase2 评审条件通过 → 已修订 → **v0.4 refine（补客户端插件 + 对齐同批两线目标架构）**
 > 关联设计（同批未开发，须兼容）：
 > - [`otel-spool-consumer`](../otel-spool-consumer/) —— **接收/处理解耦**：traces 端点退化为薄壳（写 spool 即 200），聚合/落库/评估移到后台消费者。hermes 的 span→interaction 映射须落在其 `traces-aggregator.ts`，**不再内联在 route**。
 > - [`framework-adapter-registry`](../framework-adapter-registry/) —— **转换层查表**：`getAdapter(framework)`，dispatcher 缩为 `getAdapter(fw).extractSkills?.(n) ?? null`，**禁 per-framework 裸分支**。hermes 的 skill 抽取/整形挂为 `hermes.ts` adapter，框架清单合并为单一 `listFrameworks()`。
 >
 > **v0.4 关键修订**：① 补「客户端插件」一层（复用开源 `briancaffey/hermes-otel`，配 `otlp` 后端指向平台）——这是 v0.3 完全缺失的上游适配器；② 服务端解析下沉到 spool-consumer 的 traces-aggregator + registry 的 hermes adapter，撤销「改 route 内联编排 + 401 收敛 + dispatcher 分支」的旧路径；③ 详见新增 §2.0 三线分层架构与 §8.4 兼容性附件。
+>
+> **v0.4.1 补充**：把「一键 curl 接入」纳入客户端插件接入设计。安装脚本不得 hardcode `~/git/hermes-agent/venv/bin/pip`；必须以 `$HERMES_HOME` 为中心探测 Hermes 正式安装布局（默认 `~/.hermes`），将插件安装到 `$HERMES_HOME/plugins/hermes_otel`，并将 OTel runtime 依赖安装到 Hermes 运行时 venv。
+>
+> **v0.4.1 编码校正**：据 `hermes-otel` 当前代码核实，它使用 `opentelemetry-exporter-otlp-proto-http`，实际发出的通常是 OTLP/HTTP protobuf，而非平台当前已支持的 OTLP/HTTP JSON。Phase 0 必须把这一点作为真实验证项：若平台仍只接 JSON，首次上报预期会 415；后续需在「服务端支持 protobuf」与「客户端侧最小 JSON/proxy 适配」之间做取舍。
 
 ---
 
@@ -28,6 +32,7 @@
 3. **适配层抽象（下沉到 aggregator，对齐 spool-consumer）**：把 span→interaction 映射、双约定语义解析 + hermes 兜底、framework 解析、体量/畸形防护，实现为**纯函数模块**，由后台消费者的 **`aggregateOtelTraceSession`（traces-aggregator）调用**——而非 v0.3 设想的「route 内联编排」。模块仍放 `src/lib/ingest/otel/`（纯函数、无 DB I/O），但**调用方从 route 改为 traces-aggregator**。落库仍是唯一出口 `saveExecutionRecord`。
 4. **下游打通（走 registry，对齐 framework-adapter-registry）**：skill 抽取**不再在 dispatcher 加 `fw==='hermes'` 裸分支**，而是把 `extractSkillsWithVersionsFromHermesSession` 挂为 **`adapters/hermes.ts` 的 `extractSkills`**；dispatcher 缩为 `getAdapter(fw).extractSkills?.(n) ?? null`；`rejudge/route.ts` 同走该 dispatcher（补回 openclaw）。子 Agent 整形（toOpencodeShape）作为 hermes adapter 的能力（registry 预留的 `capabilities.subagentTree` / `deriveExecutionFields` 扩展点）。`saveExecutionRecord` 仍**仅在 `:1937` 解 `framework==='opencode'` 门处纳入 hermes**。
 5. **接入引导（plugin 模式）**：框架选择器/安装脚本新增 hermes，接入方式标记 `onboard:'plugin'`，输出**hermes-otel 插件安装步骤 + `otlp` 后端配置块**（非 Claude 那种「仅配置 env」）；框架清单与 registry 的 `listFrameworks()` **合并为单一出处**（消除 `frameworks.ts` 与 registry 各搞一套）。
+6. **一键 curl 安装边界（v0.4.1 新增）**：平台安装引导应能替用户完成「装插件 + 装依赖 + 写配置」的本机步骤。脚本以 `HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"` 为根，优先探测 `$HERMES_HOME/hermes-agent/venv/bin/pip`，仅在不存在时 fallback 到 README 示例 `~/git/hermes-agent/venv/bin/pip`、`~/agent/hermes-agent/venv/bin/pip` 等开发者布局；不得把用户手动 clone 的 `~/agent/hermes-otel` 当作 Hermes 自动发现目录。插件目录固定按 Hermes 约定落在 `$HERMES_HOME/plugins/hermes_otel`，运行时 OTel 依赖必须进入 Hermes 自身 venv。
 
 ### 1.2 设计决策
 
@@ -197,15 +202,31 @@ graph LR
      - `endpoint = https://<平台>/api/ingest/otel/v1/traces`（或根重写 `/v1/traces`）
      - `headers = { "x-witty-api-key": "<用户 key>" }`（hermes-otel 的通用 `otlp` resolver 支持透传任意 headers）
      - resource 属性 `service.name = hermes`（驱动 `framework=hermes`，spool-consumer R-2 红线）
-     - 协议 `OTEL_EXPORTER_OTLP_PROTOCOL = http/protobuf` 或 `http/json`（与服务端支持的编码一致；当前服务端仅 json，见 FR-007）
+     - 协议编码以插件实际 exporter 为准：当前 `hermes-otel` 代码使用 `opentelemetry-exporter-otlp-proto-http`，即 OTLP/HTTP protobuf；平台当前若仅支持 JSON，会触发 415（见 FR-007/Phase0 校验）
      - 隐私/采样开关按需（`capture_previews`、`sample_rate` 等）
 - 非功能设计：
   1. **零侵入、可独立演进**：纯观察者，不改 hermes 内核；平台不 fork、不维护客户端代码，随上游升级。
   2. **属性事实即契约输入**：插件实际发出的属性（双约定 + 其 agent/session span 命名）是服务端 FR-013 语义契约左列的**唯一事实来源**，由 T001 采样定稿，不臆造。
 - 风险与缓解：
   1. 插件默认命名与服务端「标准 gen_ai.*」假设有差异（尤其 OpenInference 那套）→ 服务端 semantic-mapping 同时认两套 key + 映射表兜底 + 降级保留；T001 校准。
-  2. 协议不匹配（插件默认可能 protobuf）→ 接入规约显式要求 `http/json`（或服务端补 protobuf 解码，本期 415 拒绝 + 指引，FR-007）。
+  2. 协议不匹配（插件当前实际为 OTLP/HTTP protobuf，而平台当前主路径为 JSON）→ Phase 0 先用真实上报确认；若返回 415，后续优先评估服务端补 protobuf 解码，或临时使用客户端侧 capture/proxy 采样，不再假设 `OTEL_EXPORTER_OTLP_PROTOCOL=http/json` 能改变该插件行为。
   3. skill 版本 / agent.type 等平台关心字段，插件未必显式发出 → 先以「降级保留 + 父子推断」兜底；若 T001 证实缺失影响 FR-012/010，再评估**最小 fork** 补属性（本期默认不 fork，见 Phase1 决策「先复用，缺口再 fork」的延后选项）。
+
+#### 2.2.0.1 一键 curl 安装与环境探测（v0.4.1 新增）
+
+- 目标：把「用户手动照 README 装插件」升级为平台接入引导可复制的一键脚本，脚本完成 Hermes 插件安装、Hermes runtime venv 依赖安装、OTLP 后端配置写入/提示，并输出自检结果。
+- 路径探测规则：
+  1. `HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"` 为唯一配置根；插件自动发现目录为 `$HERMES_HOME/plugins`。
+  2. 优先使用 `$HERMES_HOME/hermes-agent/venv/bin/pip`。这是 curl/git 正式安装 Hermes 的常见布局。
+  3. 若不存在，再 fallback 到开发者布局：`~/git/hermes-agent/venv/bin/pip`、`~/agent/hermes-agent/venv/bin/pip`、当前 `command -v hermes` 可反推的项目根 venv。
+  4. 如果仍找不到 Hermes runtime pip，脚本必须停止并提示用户传入 `HERMES_HOME` 或手动指定 venv；不得把依赖装进系统 Python 或 agent-insight 自身 venv。
+- 安装动作：
+  1. 执行 `hermes plugins install briancaffey/hermes-otel --enable`；若已存在则提示 `hermes plugins update hermes_otel` 或使用受控的 force reinstall 选项。
+  2. 执行 `"$HERMES_PIP" install -e "$HERMES_HOME/plugins/hermes_otel"`；该步骤由插件包声明拉入 `opentelemetry-api`、`opentelemetry-sdk`、`opentelemetry-exporter-otlp-proto-http`。若上游包元数据不可用，fallback 为显式安装 README 中三项依赖。
+  3. 配置写入前备份 `$HERMES_HOME/config.yaml`，只追加/更新 hermes-otel 所需的 `otlp` 后端块，不覆盖用户已有 provider、skill、profile 等配置。
+  4. 配置必须包含 `resource_attributes.service.name: hermes`；API key 通过 `headers.x-witty-api-key` 传入；endpoint 优先使用平台根重写 `/v1/traces`，也可写全 `/api/ingest/otel/v1/traces`。
+- 自检输出：脚本结束时打印 Hermes home、插件目录、pip 路径、已安装的 OTel 包版本、OTLP endpoint、`service.name`、是否启用 `hermes_otel`。不得把完整 API key 明文打印到日志，只显示脱敏后缀。
+- 约束：一键脚本只负责客户端安装配置，不改变服务端鉴权语义、不 fork 插件、不读取/上传本地历史会话；真实数据样本仍由用户主动跑一次 Hermes 对话后产生。
 
 #### 2.2.1 OTLP 适配层 `src/lib/ingest/otel/`（纯函数，由 traces-aggregator 调用）
 
@@ -596,5 +617,6 @@ extractSkills(shaped)                        # invokedSkills(含子 Agent 加载
 | v0.3 | **refine：skill / subagent 一等公民**——新增 FR-010/011/012/013、NFR-007、BR-007/008/009、AC-011/012/013、D-004/D-005、§2.2.4/2.2.5、IF-N05、任务 T007~T010 与 T004 升级 |
 | v0.3.1（本合成） | 据代码二次核对修正两处 ERROR：①`extractObservedAgentRegistrations` 实为 `agent-registration.ts:14` 框架无关函数（不加分支、靠标记自动注册）；②`buildAgentCallTree` 无 parentSpanId 能力，改为「适配层把 hermes 整形为 opencode 同构 interaction，建树/派生/注册函数零改动」。同步收敛冻结区与任务边界（T008 整形为关键、T009 仅解 :1937 门、T010 多半零改、T006 纯 UI 消费）|
 | **v0.4（本次 refine）** | **补客户端插件 + 对齐同批两线**：① 新增 §2.0 三线分层目标架构、§2.2.0 客户端插件接入（复用 `briancaffey/hermes-otel`，配 `otlp` 后端）；② 新增 D-006/007/008（复用插件 / 落 spool-consumer 管线 / 走 registry 查表），修订 D-001/D-002/D-003（适配层调用方改 aggregator、401 收敛降级）；③ §2.2.1~2.2.3 调用方/接线改为「aggregator + registry adapter」，§2.2.2 撤销自建串行锁（改依赖检查点+upsert）；④ §3.1/3.2 主流程与异常分支重画为「插件→薄壳→spool→消费者→aggregator」；⑤ §6 端点改受理语义、新增插件配置接口、IF-N02/M01 改调用方；⑥ §7 鉴权/并发/接入风险重写；⑦ 新增 §8.4 三线兼容性附件。**核心：服务端不再改 route 内联落库、不加 dispatcher 裸分支、撤销强 401；客户端复用社区插件** |
+| **v0.4.1** | 补充「一键 curl 安装与环境探测」：以 `$HERMES_HOME` 为中心探测 Hermes 正式安装布局，插件落 `$HERMES_HOME/plugins/hermes_otel`，OTel runtime 依赖安装到 `$HERMES_HOME/hermes-agent/venv`；禁止 hardcode README 示例 `~/git/hermes-agent/venv/bin/pip`，并要求配置写入前备份、API key 脱敏输出、自检插件/依赖/endpoint/service.name。同步补充编码校正：`hermes-otel` 当前实际使用 OTLP/HTTP protobuf exporter，平台 JSON-only 端点若返回 415，应进入服务端 protobuf 支持或临时 capture/proxy 决策。 |
 
-> 注：本文件为三阶段 + refine + 代码核对修正的合成稿；v0.4 在 `.refine` 副本上修订，原 v0.3.1 文件保留以便生成变更记录。
+> 注：本文件为三阶段 + refine + 代码核对修正的合成稿；v0.4.1 在 v0.4 基础上补齐客户端一键安装闭环，原 v0.3.1 文件保留以便生成变更记录。
