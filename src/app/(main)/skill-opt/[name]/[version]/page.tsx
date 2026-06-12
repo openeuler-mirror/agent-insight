@@ -33,9 +33,11 @@ type AgentBlock =
     | { kind: 'tool'; id: string; name: string; args?: any; status: 'running' | 'ok' | 'error'; summary?: string; error?: string }
     | { kind: 'error'; id: string; text: string };
 
+type PlanCardItem = { id: string; route: string; severity: string; title: string; mergedFrom: number; targetFile: string | null };
 type ChatTurn =
     | { kind: 'user'; id: string; text: string }
-    | { kind: 'agent'; id: string; blocks: AgentBlock[]; streaming?: boolean };
+    | { kind: 'agent'; id: string; blocks: AgentBlock[]; streaming?: boolean }
+    | { kind: 'plan'; id: string; sourceCount: number; items: PlanCardItem[] };
 
 export default function SkillOptimizePage() {
     const { t } = useLocale();
@@ -136,6 +138,8 @@ export default function SkillOptimizePage() {
     const [chat, setChat] = useState<ChatTurn[]>([]);
     const [input, setInput] = useState('');
     const [optimizing, setOptimizing] = useState(false);
+    // 一键优化：先调归并算子产出 plan（merging=true 阶段），再走 startOptimize 执行
+    const [merging, setMerging] = useState(false);
     const [diffOpen, setDiffOpen] = useState(false);
     // 多个草稿的迭代历史（每次"开始优化"push 一个）
     const [iterations, setIterations] = useState<OptimizationIteration[]>([]);
@@ -526,9 +530,9 @@ export default function SkillOptimizePage() {
         return out;
     }
 
-    const startOptimize = async () => {
+    const startOptimize = async (opts?: { planId?: string; planSourceIssueIds?: string[]; feedbackText?: string }) => {
         if (!skill || optimizing) return;
-        if (checkedIssueIds.size === 0 && !input.trim()) return;
+        if (!opts?.planId && checkedIssueIds.size === 0 && !input.trim()) return;
         // session 还没创建好（页面进入 → fetchSessions → handleNewChat 那个链路还在跑）就不发请求
         if (!currentSessionId) {
             console.warn('[skill-opt] startOptimize called before session ready');
@@ -536,7 +540,9 @@ export default function SkillOptimizePage() {
         }
 
         const checked = issues.filter(i => checkedIssueIds.has(i.id));
-        const userInputText = input.trim();
+        // plan 模式（一键优化）：resolve / 已优化标记用 plan 的源 issue id；手动模式用勾选的。
+        const resolveIds = opts?.planSourceIssueIds ?? checked.map(i => i.id);
+        const userInputText = opts?.feedbackText ?? input.trim();
 
         // 1) push 用户消息 + 一个空 agent turn（streaming=true）
         //    后续所有 thinking / text / tool 事件都作为 block 追加到这个 turn 里
@@ -621,11 +627,12 @@ export default function SkillOptimizePage() {
                     threadId: currentSessionId,
                     skillName: skill.name,
                     baseVersion,
-                    checkedIssues: checked.map(i => ({
+                    checkedIssues: opts?.planId ? [] : checked.map(i => ({
                         id: i.id, severity: i.severity, category: i.category,
                         summary: i.summary, evidence: i.evidence,
                         improvementSuggestion: i.improvementSuggestion,
                     })),
+                    planId: opts?.planId,
                     userFeedback: userInputText,
                     baselineFiles: startingFiles,
                     modelId: selectedModelId || undefined,
@@ -762,14 +769,14 @@ export default function SkillOptimizePage() {
             // 把这批 issue 标记为"已优化"，清掉勾选，方便下一轮选新批次
             setOptimizedIssueIds(prev => {
                 const next = new Set(prev);
-                checked.forEach(i => next.add(i.id));
+                resolveIds.forEach(id => next.add(id));
                 return next;
             });
             setCheckedIssueIds(new Set());
 
             // 服务端置 resolvedAt，下次进来这些 id 不会再出现在优化点列表里。
             // best-effort：失败不影响本次会话已经有的"已优化"标记。
-            if (skill && user && checked.length > 0) {
+            if (skill && user && resolveIds.length > 0) {
                 apiFetch(
                     `/api/skills/by-name/${encodeURIComponent(skill.name)}/optimization-points/resolve`,
                     {
@@ -777,7 +784,7 @@ export default function SkillOptimizePage() {
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                             user,
-                            ids: checked.map(i => i.id),
+                            ids: resolveIds,
                             threadId: currentSessionId,
                         }),
                     },
@@ -818,8 +825,8 @@ export default function SkillOptimizePage() {
                 label: `草稿 #${draftNum}`,
                 baseVersion,
                 createdAt: new Date().toISOString(),
-                summary: agentSummary || (checked.length > 0
-                    ? `针对 ${checked.length} 个 issue 的优化结果（agent 未输出总结）`
+                summary: agentSummary || (resolveIds.length > 0
+                    ? `针对 ${resolveIds.length} 个优化点的优化结果（agent 未输出总结）`
                     : (userInputText ? '基于用户诉求的修改（agent 未输出总结）' : '本次未产生修改')),
                 files: draftFiles,
             };
@@ -836,7 +843,7 @@ export default function SkillOptimizePage() {
                     body: JSON.stringify({
                         summary: draft.summary,
                         files: draftFiles,
-                        resolvedIssueIds: checked.map(i => i.id),
+                        resolvedIssueIds: resolveIds,
                     }),
                 });
                 if (!resp.ok) {
@@ -867,6 +874,53 @@ export default function SkillOptimizePage() {
                 }
             });
             setOptimizing(false);
+        }
+    };
+
+    // 一键优化：先把本版本所有未解决优化点交给归并算子产出 plan（去重/冲突/三路路由），
+    // 再用该 plan 直接执行优化——不用用户逐条勾选。
+    const startOneClickOptimize = async () => {
+        if (!skill || optimizing || merging) return;
+        if (!currentSessionId || !baselineFiles) return;
+        setMerging(true);
+        try {
+            const resp = await fetch('/api/skill-opt/plan', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    user: user || 'anonymous',
+                    skillName: skill.name,
+                    baseVersion,
+                    sessionId: currentSessionId,
+                    modelId: selectedModelId || undefined,
+                }),
+            });
+            const data = await resp.json().catch(() => ({}));
+            if (!resp.ok) throw new Error(data?.error || `归并失败 (HTTP ${resp.status})`);
+            const plan = data?.plan;
+            if (!plan || !Array.isArray(plan.items) || plan.items.length === 0) {
+                setChat(prev => [...prev, { kind: 'user', id: safeUUID(),
+                    text: data?.reason === 'no unresolved issues' ? '一键优化：当前没有待优化点' : '一键优化：归并未产出可执行计划' }]);
+                setMerging(false);
+                return;
+            }
+            const exec = plan.items.filter((it: any) => (it.route === 'core' || it.route === 'reference') && it.status === 'pending');
+            const srcIds = Array.from(new Set(exec.flatMap((it: any) => Array.isArray(it.sourceIssueIds) ? it.sourceIssueIds : [])));
+            // 把合并结果作为一张「计划卡片」推进对话，让用户一眼看见 N 条优化点合并成了什么
+            const cardItems: PlanCardItem[] = plan.items.map((it: any) => ({
+                id: it.id,
+                route: it.route,
+                severity: it.severity,
+                title: it.title,
+                mergedFrom: Array.isArray(it.sourceIssueIds) ? it.sourceIssueIds.length : 0,
+                targetFile: it.targetFile ?? null,
+            }));
+            setChat(prev => [...prev, { kind: 'plan', id: safeUUID(), sourceCount: issues.length, items: cardItems }]);
+            setMerging(false);
+            await startOptimize({ planId: plan.id, planSourceIssueIds: srcIds as string[] });
+        } catch (err: any) {
+            setMerging(false);
+            setChat(prev => [...prev, { kind: 'user', id: safeUUID(), text: `一键优化失败：${err?.message || String(err)}` }]);
         }
     };
 
@@ -1062,26 +1116,45 @@ export default function SkillOptimizePage() {
                             </select>
                         </div>
                         <button
+                            className="skopt-oneclick-btn"
                             disabled={
-                                (checkedIssueIds.size === 0 && !input.trim())
+                                issues.length === 0
                                 || optimizing
+                                || merging
                                 || baselineLoading
                                 || !baselineFiles
                             }
-                            onClick={startOptimize}
+                            onClick={startOneClickOptimize}
+                            title="自动合并全部优化点（去重 / 冲突消解 / 分核心·长尾），再一键执行"
+                        >
+                            {merging
+                                ? '合并优化点…'
+                                : optimizing
+                                    ? '优化中…'
+                                    : `一键优化 (${issues.length})`}
+                        </button>
+                        <button
+                            disabled={
+                                (checkedIssueIds.size === 0 && !input.trim())
+                                || optimizing
+                                || merging
+                                || baselineLoading
+                                || !baselineFiles
+                            }
+                            onClick={() => startOptimize()}
                             title={
                                 baselineLoading
                                     ? '正在加载 base 版本文件…'
                                     : baselineError
                                         ? `base 版本加载失败：${baselineError}`
-                                        : undefined
+                                        : '只优化你勾选的优化点'
                             }
                         >
                             {optimizing
                                 ? '优化中…'
                                 : baselineLoading
                                     ? '加载基线…'
-                                    : `开始优化 (${checkedIssueIds.size})`}
+                                    : `手动优化 (${checkedIssueIds.size})`}
                         </button>
                     </div>
                 </aside>
@@ -1104,6 +1177,45 @@ export default function SkillOptimizePage() {
                         {chat.map(turn => {
                             if (turn.kind === 'user') {
                                 return <div key={turn.id} className="msg user">{turn.text}</div>;
+                            }
+                            if (turn.kind === 'plan') {
+                                const core = turn.items.filter(i => i.route === 'core');
+                                const ref = turn.items.filter(i => i.route === 'reference');
+                                const backlog = turn.items.filter(i => i.route === 'backlog');
+                                const renderItem = (i: PlanCardItem) => (
+                                    <div key={i.id} className="skopt-plan-item">
+                                        <span className={`skopt-plan-sev sev-${i.severity}`}>{i.severity}</span>
+                                        <div className="skopt-plan-item-body">
+                                            <div className="skopt-plan-item-title">{i.title}</div>
+                                            <div className="skopt-plan-item-meta">
+                                                合并自 {i.mergedFrom} 条{i.targetFile ? ` · ${i.targetFile}` : ''}
+                                            </div>
+                                        </div>
+                                    </div>
+                                );
+                                return (
+                                    <div key={turn.id} className="skopt-plan-card">
+                                        <div className="skopt-plan-head">
+                                            <span className="skopt-plan-head-title">优化点已合并</span>
+                                            <span className="skopt-plan-count">{turn.sourceCount} → {core.length + ref.length} 条</span>
+                                        </div>
+                                        {core.length > 0 && (
+                                            <div className="skopt-plan-group">
+                                                <div className="skopt-plan-group-label">核心修改 · {core.length}</div>
+                                                {core.map(renderItem)}
+                                            </div>
+                                        )}
+                                        {ref.length > 0 && (
+                                            <div className="skopt-plan-group">
+                                                <div className="skopt-plan-group-label">长尾沉淀 → references/ · {ref.length}</div>
+                                                {ref.map(renderItem)}
+                                            </div>
+                                        )}
+                                        {backlog.length > 0 && (
+                                            <div className="skopt-plan-backlog">另有 {backlog.length} 条信号不足，本轮顺延</div>
+                                        )}
+                                    </div>
+                                );
                             }
                             // agent turn：一个气泡里按顺序渲染所有 blocks（thinking/text/tool/error）
                             const empty = turn.blocks.length === 0;
