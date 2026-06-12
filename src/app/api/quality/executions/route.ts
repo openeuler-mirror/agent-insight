@@ -7,8 +7,9 @@ export const dynamic = 'force-dynamic';
 /** 执行记录评分表 / 桶下钻数据源（FR-016 / S-003）。复用 readRecords + 时间窗内存过滤 + 分页。 */
 export async function GET(req: Request) {
     try {
-        const { username } = await resolveUser(req);
         const url = new URL(req.url);
+        // 身份由前端 ?user= 携带；不读则 username=null 会越权返回全量执行记录。
+        const { username } = await resolveUser(req, url.searchParams.get('user') || undefined);
 
         const agent = (url.searchParams.get('agent') || '').trim();
         if (!agent) return NextResponse.json({ error: 'agent is required' }, { status: 400 });

@@ -6,6 +6,7 @@ import { Activity, Loader2 } from 'lucide-react';
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { Term } from '@/components/text/Term';
 import { useLocale } from '@/lib/client/locale-context';
+import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
 import { QualityConfigBar, type ConfigState } from '@/components/quality/QualityConfigBar';
 import { QualityHero } from '@/components/quality/QualityHero';
@@ -40,6 +41,7 @@ const ANCHOR_TO_SECTION: Record<string, SectionKey | undefined> = { cost: 'trend
 
 export default function QualityPage() {
     const { t } = useLocale();
+    const { user } = useAuth();
     const router = useRouter();
 
     const [agents, setAgents] = useState<QualityAgentInfo[]>([]);
@@ -50,9 +52,10 @@ export default function QualityPage() {
     const [bucketSel, setBucketSel] = useState<{ from: string; to: string; label: string } | null>(null);
     const [open, setOpen] = useState<Record<SectionKey, boolean>>({ trend: false, process: false, exec: false });
 
-    // 加载 Agent 列表 + skill facet
+    // 加载 Agent 列表 + skill facet（按用户隔离：?user= 是身份口径，缺失会越权拿全量）
     useEffect(() => {
-        apiFetch('/api/quality/agents')
+        if (!user) return;
+        apiFetch(`/api/quality/agents?user=${encodeURIComponent(user)}`)
             .then((r) => r.json())
             .then((d) => {
                 const list: QualityAgentInfo[] = Array.isArray(d.agents) ? d.agents : [];
@@ -61,21 +64,21 @@ export default function QualityPage() {
                 if (list.length) setConfig((c) => (c.agent ? c : { ...c, agent: list[0].name }));
             })
             .catch(() => setAgents([]));
-    }, []);
+    }, [user]);
 
     // 切 Agent/窗口/Skill → 全页重算（BR-002）。status 为行级三态，不触发重算。
     const loadReport = useCallback((agent: string, window: WindowKind, skill: string) => {
-        if (!agent) { setReport(null); return; }
+        if (!agent || !user) { setReport(null); return; }
         setLoading(true);
         setBucketSel(null);
-        const q = new URLSearchParams({ agent, window });
+        const q = new URLSearchParams({ agent, window, user });
         if (skill && skill !== 'all') q.set('skill', skill);
         apiFetch(`/api/quality/report?${q.toString()}`)
             .then((r) => r.json())
             .then((d) => setReport(d?.error ? null : d))
             .catch(() => setReport(null))
             .finally(() => setLoading(false));
-    }, []);
+    }, [user]);
 
     useEffect(() => {
         loadReport(config.agent, config.window, config.skill);
@@ -173,6 +176,7 @@ export default function QualityPage() {
                             <ExecutionScoreTable
                                 key={`${config.agent}|${execRange.from}|${execRange.to}|${config.skill}`}
                                 agent={config.agent}
+                                user={user}
                                 from={execRange.from}
                                 to={execRange.to}
                                 skill={config.skill}
