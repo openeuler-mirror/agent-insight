@@ -287,7 +287,9 @@ export default function SkillOptimizePage() {
         if (!skillName || !Number.isInteger(baseVersion)) { setIssues([]); return; }
         let aborted = false;
         const userQuery = user ? `&user=${encodeURIComponent(user)}` : '';
-        const url = `/api/skills/by-name/${encodeURIComponent(skillName)}/optimization-points?version=${baseVersion}${userQuery}`;
+        // includeResolved=1：把已优化(resolved)的点也取回来，持久显示「已优化」徽章——
+        // 否则优化完成后这些点被排除、直接从左侧消失，用户会以为"没生效/没标记"。
+        const url = `/api/skills/by-name/${encodeURIComponent(skillName)}/optimization-points?version=${baseVersion}&includeResolved=1${userQuery}`;
         fetch(url)
             .then(res => {
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -295,7 +297,10 @@ export default function SkillOptimizePage() {
             })
             .then((data: { issues?: OptIssue[] }) => {
                 if (aborted) return;
-                setIssues(Array.isArray(data.issues) ? data.issues : []);
+                const list = Array.isArray(data.issues) ? data.issues : [];
+                // 已优化的沉到底部，未优化的保持原序(severity)在前。V8 sort 稳定，组内次序不变。
+                list.sort((a, b) => Number(!!a.resolvedAt) - Number(!!b.resolvedAt));
+                setIssues(list);
                 setCheckedIssueIds(new Set());
                 setOptimizedIssueIds(new Set());
             })
@@ -472,14 +477,18 @@ export default function SkillOptimizePage() {
 
     const toggleIssue = (id: string) => {
         if (optimizing || merging) return; // 优化/合并进行中锁定勾选（一键优化期间不允许改选）
+        // 已优化的点不可再选（本会话内存标记 or 服务端 resolvedAt）
+        if (optimizedIssueIds.has(id) || issues.find(i => i.id === id)?.resolvedAt) return;
         setCheckedIssueIds(prev => {
             const next = new Set(prev);
             next.has(id) ? next.delete(id) : next.add(id);
             return next;
         });
     };
-    // 一键优化按钮上的计数：扣除本会话已优化的点，只显示剩余待优化数
-    const pendingIssueCount = issues.filter(i => !optimizedIssueIds.has(i.id)).length;
+    // 一键优化按钮上的计数：只数"未优化"的——排除本会话已优化(optimizedIssueIds)
+    // 和服务端已 resolved 的点。
+    const pendingIssueCount = issues.filter(i => !optimizedIssueIds.has(i.id) && !i.resolvedAt).length;
+    const optimizedCountInList = issues.length - pendingIssueCount;
 
     /**
      * 从 agent turn 的 blocks 抠 markdown 总结作为优化报告主体。
@@ -1050,10 +1059,15 @@ export default function SkillOptimizePage() {
                 {/* ───── Left: issues only (no search — skill is fixed) ───── */}
                 <aside className="skopt-left">
                     <div className="issues">
-                        <h4>可优化点 ({issues.length})</h4>
+                        <h4>
+                            可优化点 ({pendingIssueCount})
+                            {optimizedCountInList > 0 && (
+                                <span className="done-count"> · 已优化 {optimizedCountInList}</span>
+                            )}
+                        </h4>
                         {issues.length === 0 && <div className="empty">暂无可优化点</div>}
                         {issues.map(it => {
-                            const isOptimized = optimizedIssueIds.has(it.id);
+                            const isOptimized = optimizedIssueIds.has(it.id) || !!it.resolvedAt;
                             const locked = optimizing || merging;
                             const cls = [
                                 'issue-row',
@@ -1071,7 +1085,7 @@ export default function SkillOptimizePage() {
                                     <input
                                         type="checkbox"
                                         checked={checkedIssueIds.has(it.id)}
-                                        disabled={locked}
+                                        disabled={locked || isOptimized}
                                         onChange={() => toggleIssue(it.id)}
                                         onClick={e => e.stopPropagation()}
                                     />

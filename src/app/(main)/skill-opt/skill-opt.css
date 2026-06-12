@@ -573,6 +573,10 @@
     letter-spacing: 0.6px;
     font-weight: 600;
 }
+.skopt-left .issues h4 .done-count {
+    color: var(--success);
+    font-weight: 600;
+}
 .skopt-left .issues .empty {
     font-size: 13px;
     color: var(--foreground-muted);
@@ -604,7 +608,9 @@
 .skopt-left .issue-row.optimized {
     background: var(--success-subtle);
     border-color: var(--success-subtle-border);
+    cursor: default; /* 已优化的点不可再选 */
 }
+.skopt-left .issue-row.optimized:hover { border-color: var(--success-subtle-border); }
 .skopt-left .issue-row.optimized .summary {
     color: var(--foreground-muted);
     text-decoration: line-through;
