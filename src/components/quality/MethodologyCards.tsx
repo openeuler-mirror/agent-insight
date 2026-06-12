@@ -30,8 +30,10 @@ export function MethodologyCards({ report, onAnchor }: { report: QualityReport; 
             signal: dimensions.cost.signal || '', go: t('quality.dim.viewTrend'),
         },
         {
+            // 与其他三卡同口径显示"分数"（无错 trace 占比），避免"次数 4 + 达标徽章"的误读；
+            // 报错次数/簇数在下方 signal 行（"报错 N 次 · 聚为 K 类"）。
             key: 'error', name: t('quality.dim.error'), q: t('quality.dim.errorQ'), anchor: 'problems',
-            score: String(report.problems.filter((p) => p.source === '错误').reduce((s, p) => s + p.frequency, 0)),
+            score: fmtNum(dimensions.error.score),
             status: dimensions.error.status,
             signal: dimensions.error.signal || '', go: t('quality.dim.viewErrors'),
         },
@@ -64,7 +66,7 @@ export function MethodologyCards({ report, onAnchor }: { report: QualityReport; 
                     {cards.map((c) => {
                         const Icon = ICONS[c.key];
                         const dim = dimensions[c.key];
-                        const color = c.key === 'error' ? statusColor(dim.status) : scoreColor(dim.score);
+                        const color = scoreColor(dim.score); // 四卡统一：颜色随分数（错误卡也显示分数了）
                         return (
                             <button key={c.key} onClick={() => onAnchor(c.anchor)} style={lcard}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
