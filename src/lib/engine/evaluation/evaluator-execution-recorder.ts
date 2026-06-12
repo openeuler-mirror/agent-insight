@@ -301,15 +301,22 @@ export async function recordEvaluatorExecution(
 // 而起一个 ephemeral opencode 进程（实测 spawn→ready 中位数 ~1.5s + session 往返 ~0.14s）。
 //
 // recordEvaluatorExecution 唯一依赖 opencode 的地方是 `client.listMessages()` —— 用来把
-// session 里的真实 message 拉回来。对单轮 judge，我们手里已经有完整的 {user prompt, assistant
-// 输出, token usage}，直接合成 interactions 落库即可，产出的 trace 与走 opencode 的等价
-// （judge 永远只有 user + assistant 两条，没有工具调用）。
+// session 里的真实 message 拉回来。对单轮 judge，我们手里已经有完整的 {system rubric, user prompt,
+// assistant 输出, token usage}，直接合成 interactions 落库即可，产出的 trace 与走 opencode 的等价
+// （system + user + assistant 三条，没有工具调用）。
 // =========================================================================
 
 export interface DirectEvaluatorTraceInput {
   agentName: string;
   /** 列表展示用的短 query（caseInput），写入 Execution.query。 */
   query?: string | null;
+  /**
+   * 评测器的 system prompt（rubric / 输出 schema）。作为 trace 的 system 一条记录，跟 opencode
+   * 路径对齐——opencode 的 listMessages 会带上 system，直连若不显式传就会在链路详情页丢失评测器
+   * 的判分依据。注意：模型调用本身始终带 system（见 evaluateXxxDirectAndRecord 的 invoke），这里
+   * 只影响 trace 记录是否完整，与评分正确性无关。
+   */
+  systemPrompt?: string | null;
   /** 实际发给模型的 user 消息（通常是大块 JSON payload），作为 user interaction 正文。 */
   userMessage?: string | null;
   /** 模型返回的评测 JSON 文本，作为 assistant interaction 正文 + final_result。 */
@@ -332,7 +339,7 @@ export interface RecordDirectEvaluatorExecutionInput extends DirectEvaluatorTrac
 }
 
 /**
- * 纯函数：把一次直连 LLM judge 合成成 trace interactions（user + assistant 两条）。
+ * 纯函数：把一次直连 LLM judge 合成成 trace interactions（system + user + assistant 三条）。
  * 与 saveExecutionRecord 的副作用解耦，方便单测。
  */
 export function buildDirectEvaluatorInteractions(
@@ -340,6 +347,12 @@ export function buildDirectEvaluatorInteractions(
 ): EvaluatorTraceInteraction[] {
   const now = input.timestampISO || new Date().toISOString();
   const interactions: EvaluatorTraceInteraction[] = [];
+
+  // system rubric 在最前——与 opencode trace 对齐，链路详情页能看到评测器的判分依据。
+  const systemContent = String(input.systemPrompt || '').trim();
+  if (systemContent) {
+    interactions.push({ role: 'system', content: systemContent, timestamp: now });
+  }
 
   const userContent = String(input.userMessage || input.query || '').trim();
   if (userContent) {

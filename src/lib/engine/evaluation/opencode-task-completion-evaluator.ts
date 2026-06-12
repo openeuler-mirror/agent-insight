@@ -338,8 +338,9 @@ async function evaluateTaskCompletionDirectAndRecord(
 ): Promise<TaskCompletionEvalOutput> {
     const model = makeDirectModel(config);
     const userMsg = buildUserMessage(input, rootCauses);
+    const systemPrompt = buildCoordinatorSystemPrompt(input.skillAttributionMode || 'skill-aware');
     const response = await model.invoke([
-        new SystemMessage(buildCoordinatorSystemPrompt(input.skillAttributionMode || 'skill-aware')),
+        new SystemMessage(systemPrompt),
         new HumanMessage(userMsg),
     ]);
     const assistantText = typeof response.content === 'string'
@@ -357,6 +358,7 @@ async function evaluateTaskCompletionDirectAndRecord(
         agentName: TASK_COMPLETION_EVALUATOR_NAME,
         user,
         query: input.caseInput,
+        systemPrompt,
         userMessage: userMsg,
         assistantOutput: assistantText,
         usage: extractLangchainUsage(response),
