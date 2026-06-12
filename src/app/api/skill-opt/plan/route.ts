@@ -1,13 +1,14 @@
 /**
  * 优化计划（归并算子）API。
  *
- * POST /api/skill-opt/plan
+ * POST /api/skill-opt/plan  （异步）
  *   body: { user, skillName, baseVersion, sessionId, coreBudget?, batchSize? }
- *   幂等：同 sessionId 已有 plan 时直接返回既有 plan（不重跑算子）。
- *   流程：聚合 (skill, baseVersion) 未解决 issues → runMergeOperator → 持久化 plan + items。
+ *   立刻建一条 status=running 的空 plan 返回；归并（多轮 LLM，240 点可达数分钟）在后台
+ *   fire-and-forget 跑，落库后置 status=draft，失败置 failed。HTTP 不再一直挂着。
+ *   幂等：同 sessionId 已有非终态 plan（running/draft/…）直接返回；failed 或卡死的 running 删旧重跑。
  *
  * GET /api/skill-opt/plan?sessionId=...&user=...
- *   返回该会话的 plan + items（无则 { plan: null }）。
+ *   返回该会话的 plan + items（无则 { plan: null }）。前端据 plan.status 轮询到非 running 为止。
  *
  * SkillIssue 台账只读不写；resolve 回标发生在 iteration 落库时（见 iterations 路由）。
  * 设计：docs/plans/2026-06-10-skill-issue-merge-conflict-plan-design.md
@@ -22,6 +23,70 @@ import { runMergeOperator, type MergeIssueInput } from '@/lib/engine/skill-opt/m
 import { loadSkillVersionSnapshot } from '@/lib/engine/skill-opt/version-snapshot';
 
 export const dynamic = 'force-dynamic';
+
+// running 状态的 plan 超过这个时长仍没收尾，视作"进程中途挂了"的僵尸，允许重跑。
+const STALE_RUNNING_MS = 10 * 60 * 1000;
+
+/**
+ * 后台跑归并算子：runMergeOperator（多轮 LLM，240 点可达几十秒～数分钟）→ 把 items 落库、
+ * status 置 draft。任何失败都落进 plan.status=failed + operatorMeta.error，绝不向外抛——
+ * 由 POST 以 fire-and-forget 调起（void + .catch），app 是长驻 node 进程，响应返回后这个
+ * promise 继续跑到 update。前端据 GET /plan?sessionId 轮询 status 直到不再是 running。
+ */
+async function executeMergeOperator(args: {
+  planId: string;
+  skillName: string;
+  baseVersion: number;
+  issues: MergeIssueInput[];
+  files: Record<string, string>;
+  config: Parameters<typeof runMergeOperator>[0]['config'];
+  coreBudget?: number;
+  batchSize?: number;
+}): Promise<void> {
+  try {
+    const result = await runMergeOperator({
+      skillName: args.skillName,
+      baseVersion: args.baseVersion,
+      issues: args.issues,
+      files: args.files,
+      config: args.config,
+      coreBudget: args.coreBudget,
+      batchSize: args.batchSize,
+    });
+    await (prismaRaw as any).skillOptPlan.update({
+      where: { id: args.planId },
+      data: {
+        status: 'draft',
+        operatorMeta: JSON.stringify(result.meta),
+        items: {
+          create: result.items.map((it) => ({
+            rank: it.rank,
+            route: it.route,
+            status: it.status,
+            title: it.title,
+            rationale: it.rationale,
+            severity: it.severity,
+            targetFile: it.targetFile,
+            anchorText: it.anchorText,
+            proposedEdit: it.proposedEdit,
+            conflictNote: it.conflictNote,
+            sourceIssueIds: JSON.stringify(it.sourceIssueIds),
+            sourcesBreakdown: JSON.stringify(it.sourcesBreakdown),
+            prevalence: it.prevalence,
+          })),
+        },
+      },
+    });
+  } catch (err: any) {
+    console.error('[skill-opt plan] background merge failed:', err?.message || err);
+    await (prismaRaw as any).skillOptPlan
+      .update({
+        where: { id: args.planId },
+        data: { status: 'failed', operatorMeta: JSON.stringify({ error: String(err?.message || err) }) },
+      })
+      .catch(() => {/* plan 可能已被删/重建，吞掉 */});
+  }
+}
 
 export async function POST(req: NextRequest) {
   let body: any;
@@ -46,13 +111,21 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    // 幂等：该会话已有 plan 直接返回
+    // 幂等：该会话已有 plan 直接返回（running/draft/confirmed/… 原样回，前端据 status 决定是否轮询）。
+    // 例外：failed 或"卡死的 running"（超 STALE_RUNNING_MS 没收尾，多半进程中途挂了）→ 删旧重跑。
     const existing = await (prismaRaw as any).skillOptPlan.findUnique({
       where: { sessionId },
       include: { items: { orderBy: { rank: 'asc' } } },
     });
     if (existing) {
-      return NextResponse.json({ plan: serializePlan(existing), reused: true });
+      const staleRunning =
+        existing.status === 'running' &&
+        Date.now() - new Date(existing.createdAt).getTime() > STALE_RUNNING_MS;
+      if (existing.status === 'failed' || staleRunning) {
+        await (prismaRaw as any).skillOptPlan.delete({ where: { id: existing.id } }).catch(() => {});
+      } else {
+        return NextResponse.json({ plan: serializePlan(existing), reused: true });
+      }
     }
 
     // session 必须存在且 skill/version 对得上（防串会话写 plan）
@@ -118,7 +191,21 @@ export async function POST(req: NextRequest) {
       prevalenceCount: it.prevalenceCount,
     }));
 
-    const result = await runMergeOperator({
+    // 建一条 status=running 的空 plan，立刻返回；真正的归并（多轮 LLM）在后台 fire-and-forget
+    // 跑，落库后置 draft。前端据 GET /plan?sessionId 轮询 status 直到不再是 running。
+    const plan = await (prismaRaw as any).skillOptPlan.create({
+      data: {
+        sessionId,
+        skillId: skill.id,
+        baseVersion,
+        status: 'running',
+        operatorMeta: '{}',
+      },
+      include: { items: { orderBy: { rank: 'asc' } } },
+    });
+
+    void executeMergeOperator({
+      planId: plan.id,
       skillName,
       baseVersion,
       issues: mergeInput,
@@ -126,35 +213,8 @@ export async function POST(req: NextRequest) {
       config,
       coreBudget: Number.isInteger(body?.coreBudget) ? body.coreBudget : undefined,
       batchSize: Number.isInteger(body?.batchSize) ? body.batchSize : undefined,
-    });
-
-    // 持久化（再查一次防并发双跑——sessionId unique 约束兜底）
-    const plan = await (prismaRaw as any).skillOptPlan.create({
-      data: {
-        sessionId,
-        skillId: skill.id,
-        baseVersion,
-        status: 'draft',
-        operatorMeta: JSON.stringify(result.meta),
-        items: {
-          create: result.items.map((it) => ({
-            rank: it.rank,
-            route: it.route,
-            status: it.status,
-            title: it.title,
-            rationale: it.rationale,
-            severity: it.severity,
-            targetFile: it.targetFile,
-            anchorText: it.anchorText,
-            proposedEdit: it.proposedEdit,
-            conflictNote: it.conflictNote,
-            sourceIssueIds: JSON.stringify(it.sourceIssueIds),
-            sourcesBreakdown: JSON.stringify(it.sourcesBreakdown),
-            prevalence: it.prevalence,
-          })),
-        },
-      },
-      include: { items: { orderBy: { rank: 'asc' } } },
+    }).catch((err) => {
+      console.error('[skill-opt plan] background merge crashed:', err);
     });
 
     return NextResponse.json({ plan: serializePlan(plan), reused: false });

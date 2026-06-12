@@ -891,6 +891,22 @@ export default function SkillOptimizePage() {
 
     // 一键优化：先把本版本所有未解决优化点交给归并算子产出 plan（去重/冲突/三路路由），
     // 再用该 plan 直接执行优化——不用用户逐条勾选。
+    // 轮询 plan 直到后台归并收尾（status 不再是 running）。返回收尾后的 plan；超时返回 null。
+    const pollPlanReady = async (sessionId: string): Promise<any | null> => {
+        const deadline = Date.now() + 6 * 60 * 1000; // 6min 兜底——240 点多轮 LLM 的合理上界
+        while (Date.now() < deadline) {
+            await new Promise(r => setTimeout(r, 2000));
+            try {
+                const r = await fetch(`/api/skill-opt/plan?sessionId=${encodeURIComponent(sessionId)}`);
+                if (!r.ok) continue;
+                const d = await r.json();
+                const p = d?.plan;
+                if (p && p.status !== 'running') return p;
+            } catch { /* 网络抖动忽略，下个 tick 再试 */ }
+        }
+        return null;
+    };
+
     const startOneClickOptimize = async () => {
         if (!skill || optimizing || merging) return;
         if (!currentSessionId || !baselineFiles) return;
@@ -909,10 +925,30 @@ export default function SkillOptimizePage() {
             });
             const data = await resp.json().catch(() => ({}));
             if (!resp.ok) throw new Error(data?.error || `归并失败 (HTTP ${resp.status})`);
-            const plan = data?.plan;
-            if (!plan || !Array.isArray(plan.items) || plan.items.length === 0) {
+            let plan = data?.plan;
+            // 没有待优化点：plan 为 null
+            if (!plan) {
                 setChat(prev => [...prev, { kind: 'user', id: safeUUID(),
                     text: data?.reason === 'no unresolved issues' ? '一键优化：当前没有待优化点' : '一键优化：归并未产出可执行计划' }]);
+                setMerging(false);
+                return;
+            }
+            // 异步：刚建的 plan 是 status=running，归并在后台跑——轮询到收尾（draft/failed）。
+            // 此间按钮一直显示「合并优化点…」，用户可离开页面，回来再点会命中幂等的同一条。
+            if (plan.status === 'running') {
+                plan = await pollPlanReady(currentSessionId);
+            }
+            if (!plan || plan.status === 'failed') {
+                const errMsg = plan?.operatorMeta?.error;
+                setChat(prev => [...prev, { kind: 'user', id: safeUUID(),
+                    text: plan == null
+                        ? '一键优化：合并超时，请稍后重试'
+                        : `一键优化失败：归并出错${errMsg ? `（${errMsg}）` : ''}` }]);
+                setMerging(false);
+                return;
+            }
+            if (!Array.isArray(plan.items) || plan.items.length === 0) {
+                setChat(prev => [...prev, { kind: 'user', id: safeUUID(), text: '一键优化：归并未产出可执行计划' }]);
                 setMerging(false);
                 return;
             }
