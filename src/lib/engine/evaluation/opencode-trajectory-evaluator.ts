@@ -69,7 +69,7 @@ const OPENCODE_FALLBACK_AGENT_NAME = 'build';
 
 const COORDINATOR_SYSTEM_PROMPT = `你是 Agent Insight 的「关键动作轨迹分析器」。你会收到一个 case、可能存在的 Skill 已提取关键动作列表，以及已经处理过的扁平化 trace 步骤。
 
-当 comparison_mode=skill_key_actions 时，你的核心任务是：逐个关键动作独立判断它是否被扁平化 trace 覆盖，并为每个关键动作直接生成 trace 比较分析与 Skill 改进建议。
+当 comparison_mode=skill_key_actions 时，你的核心任务是：逐个关键动作独立判断它是否被扁平化 trace 覆盖，并给出覆盖判定与简要比较说明。Skill 改进建议由独立的「建议流」负责，本分析器只做覆盖判定，不产出 Skill 改进建议。
 当 comparison_mode=trace_only 时，说明当前 trace 未关联 Skill 或没有可用关键动作；此时不要做关键动作分析，只评估工具选择与冗余，完整性不计分。
 你的任务不是输出路径偏离清单，也不是把 trace 和参考路径做全局对齐。为了兼容既有前端，你需要保留执行路径分析汇总：completeness / tool_choice / redundancy。
 
@@ -82,10 +82,7 @@ const COORDINATOR_SYSTEM_PROMPT = `你是 Agent Insight 的「关键动作轨迹
 - comparison_mode=trace_only 时，reference_key_actions 为空，必须输出 key_action_results: []，不要生成 Skill 改进建议。
 - 不要输出 deviation_steps，不要输出 path deviation 列表。
 - 必须输出 dimension_scores 与 dimension_details，用于前端展示完整性、工具选择、冗余三张卡片。
-- 不要合并、去重或复用 Skill 建议；每个关键动作各自生成自己的 skill_improvement_suggestion。
-- 如果关键动作已覆盖，has_skill_improvement 必须为 false，skill_improvement_suggestion 必须是：路径已覆盖该动作，无 Skill 改进点
-- 如果关键动作部分覆盖、缺失或不适用，你需要判断是否能通过修改 SKILL.md 降低复现概率；能则 has_skill_improvement=true，并给出具体建议。
-- skill_improvement_suggestion 必须是可直接落库到 Skill 优化点的建议，写清“在 SKILL.md 哪类流程/约束中补什么”。
+- 本分析器不输出 Skill 改进建议（has_skill_improvement / skill_improvement_suggestion 字段已废弃，无需生成）；只需给出 coverage 判定与 trace_comparison_analysis 比较说明。
 - matched_trace_steps 只能填 actual_flat_trace_steps 中存在的 step_index；没有命中则填 []。
 - confidence 是 0.0 到 1.0 的数字。
 - severity 只能是 low / medium / high。
@@ -164,10 +161,6 @@ const COORDINATOR_SYSTEM_PROMPT = `你是 Agent Insight 的「关键动作轨迹
       "severity": "high",
       "matched_trace_steps": [],
       "trace_comparison_analysis": "实际 trace 在完成修改后直接回复，没有运行测试、lint、构建或其它验证命令，因此该关键动作未覆盖。",
-      "has_skill_improvement": true,
-      "skill_improvement_suggestion": "在 SKILL.md 的执行流程中明确要求：完成代码或配置修改后，必须运行与改动范围匹配的验证命令，并在最终回复中说明验证结果；如果无法验证，需要明确说明原因。",
-      "skill_issue_summary": "修改后缺少验证步骤",
-      "skill_issue_evidence": "Step 2 完成修改后，Step 3 直接最终回复，未出现验证命令。",
       "confidence": 0.91
     }
   ]
@@ -222,12 +215,10 @@ function buildKeyActionAnalysisPayload(input: TrajectoryEvalInput) {
             only_use_actual_flat_trace_steps_as_trace_basis: true,
             actual_trace_granularity: 'event_level_user_llm_tool_skill_task',
             do_not_generate_path_deviation_items: true,
-            do_not_merge_or_dedupe_suggestions: true,
             do_not_infer_extra_key_actions: true,
             skip_key_action_analysis: input.comparisonMode === 'trace_only',
             completeness_is_not_scored: input.comparisonMode === 'trace_only',
             score_only_tool_choice_and_redundancy: input.comparisonMode === 'trace_only',
-            covered_suggestion_text: '路径已覆盖该动作，无 Skill 改进点',
         },
     };
 }
@@ -284,8 +275,6 @@ function normalizeKeyActionResults(value: unknown): KeyActionTraceAnalysisResult
         .map(item => {
             const actionId = String(item.action_id ?? item.actionId ?? '').trim();
             const actionContent = String(item.action_content ?? item.actionContent ?? '').trim();
-            const hasSkillImprovementRaw = item.has_skill_improvement ?? item.hasSkillImprovement;
-            const suggestion = String(item.skill_improvement_suggestion ?? item.skillImprovementSuggestion ?? '').trim();
             return {
                 actionId,
                 actionContent,
@@ -293,10 +282,10 @@ function normalizeKeyActionResults(value: unknown): KeyActionTraceAnalysisResult
                 severity: normalizeSeverity(item.severity),
                 matchedTraceSteps: normalizeStepIndexes(item.matched_trace_steps ?? item.matchedTraceSteps),
                 traceComparisonAnalysis: String(item.trace_comparison_analysis ?? item.traceComparisonAnalysis ?? '').trim(),
-                hasSkillImprovement: hasSkillImprovementRaw === true,
-                skillImprovementSuggestion: suggestion || (hasSkillImprovementRaw === true ? '' : '路径已覆盖该动作，无 Skill 改进点'),
-                skillIssueSummary: String(item.skill_issue_summary ?? item.skillIssueSummary ?? '').trim() || undefined,
-                skillIssueEvidence: String(item.skill_issue_evidence ?? item.skillIssueEvidence ?? '').trim() || undefined,
+                // Skill 改进建议改由独立的「建议流」(skill-suggestion-agent) 产出；
+                // 关键动作覆盖判定不再生成建议，以下字段保留仅为兼容旧结构。
+                hasSkillImprovement: false,
+                skillImprovementSuggestion: '',
                 confidence: Number.isFinite(toNumber(item.confidence)) ? clamp01(toNumber(item.confidence)) : undefined,
             };
         });
@@ -414,12 +403,8 @@ function normalizeOutput(
         if (!item.actionContent) {
             throw new Error(`关键动作评估结果缺少 action_content: ${item.actionId}`);
         }
-        if (!item.traceComparisonAnalysis) {
-            throw new Error(`关键动作评估结果缺少 trace_comparison_analysis: ${item.actionId || item.actionContent}`);
-        }
-        if (!item.skillImprovementSuggestion) {
-            throw new Error(`关键动作评估结果缺少 skill_improvement_suggestion: ${item.actionId || item.actionContent}`);
-        }
+        // trace_comparison_analysis / skill_improvement_suggestion 不再强制校验：
+        // 建议已迁出到独立的「建议流」(skill-suggestion-agent)，本判定只产覆盖结果。
     }
 
     const rawScore = toNumber(overall.score);

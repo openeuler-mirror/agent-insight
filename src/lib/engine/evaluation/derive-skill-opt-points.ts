@@ -104,23 +104,13 @@ interface RawResultIssue {
   improvementSuggestion?: string;
 }
 
-interface RawKeyActionResult {
-  action_id?: string;
-  actionId?: string;
-  action_content?: string;
-  actionContent?: string;
-  coverage?: string;
+interface RawSkillSuggestion {
+  category?: string;
   severity?: string;
-  trace_comparison_analysis?: string;
-  traceComparisonAnalysis?: string;
-  has_skill_improvement?: boolean;
-  hasSkillImprovement?: boolean;
-  skill_improvement_suggestion?: string;
-  skillImprovementSuggestion?: string;
-  skill_issue_summary?: string;
-  skillIssueSummary?: string;
-  skill_issue_evidence?: string;
-  skillIssueEvidence?: string;
+  summary?: string;
+  evidence?: string;
+  improvement_suggestion?: string;
+  improvementSuggestion?: string;
 }
 
 export interface DeriveOptPointsArgs {
@@ -142,7 +132,7 @@ export async function deriveAndPersistOptPoints(args: DeriveOptPointsArgs): Prom
   if (rawAnalysisDisablesSkillIssues(raw)) return 0;
 
   const issues: DerivedIssue[] = [];
-  for (const it of extractKeyActionIssues(trajectoryRow)) issues.push(it);
+  for (const it of extractSkillSuggestionIssues(trajectoryRow)) issues.push(it);
   for (const it of extractDeviationIssues(trajectoryRow)) issues.push(it);
   for (const it of extractKeyPointIssues(trajectoryRow)) issues.push(it);
   for (const it of extractToolChoiceIssues(trajectoryRow)) issues.push(it);
@@ -289,47 +279,43 @@ function extractDeviationIssues(
   return out;
 }
 
-function extractKeyActionIssues(
+/**
+ * 「建议流」(skill-suggestion-agent) 产出的 skill 改进建议 → DerivedIssue。
+ * 5 字段直接映射：category / severity / summary / evidence / improvementSuggestion。
+ * summary 与 improvementSuggestion 缺任一不入库；不带 dedupSalt（dedupKey 退化为
+ * hash6(category + summary)）。取代旧的「关键动作覆盖 → 一动作一建议」逻辑。
+ */
+function extractSkillSuggestionIssues(
   row: Pick<TrajectoryEvalResult, 'rawAnalysisJson'>,
 ): DerivedIssue[] {
   const raw = parseJsonObject(row.rawAnalysisJson);
   if (!raw) return [];
   if (rawAnalysisDisablesSkillIssues(raw)) return [];
-  const list = extractRawKeyActionResults(raw);
+  const list = arrayOrEmpty<RawSkillSuggestion>(raw.skill_suggestions);
   const out: DerivedIssue[] = [];
-  for (const item of list) {
-    if ((item.has_skill_improvement ?? item.hasSkillImprovement) !== true) continue;
-    const suggestion = pickSuggestion(item.skill_improvement_suggestion, item.skillImprovementSuggestion);
-    if (!suggestion) continue;
-    const actionId = String(item.action_id ?? item.actionId ?? '').trim();
-    const actionContent = String(item.action_content ?? item.actionContent ?? '').trim();
-    const summary = String(item.skill_issue_summary ?? item.skillIssueSummary ?? '').trim()
-      || actionContent
-      || suggestion;
-    const evidence = String(item.skill_issue_evidence ?? item.skillIssueEvidence ?? '').trim()
-      || String(item.trace_comparison_analysis ?? item.traceComparisonAnalysis ?? '').trim();
+  for (const it of list) {
+    const summary = String(it.summary || '').trim();
+    const suggestion = pickSuggestion(it.improvement_suggestion, it.improvementSuggestion);
+    if (!summary || !suggestion) continue;
     out.push({
-      severity: normalizeSeverity(item.severity),
-      category: '关键动作执行不足',
+      severity: normalizeSeverity(it.severity),
+      category: String(it.category || '').trim() || '其他',
       summary,
-      evidence,
-      reasoning: String(item.trace_comparison_analysis ?? item.traceComparisonAnalysis ?? '').trim() || undefined,
+      evidence: String(it.evidence || '').trim(),
       improvementSuggestion: suggestion,
-      dedupSalt: actionId || actionContent,
     });
   }
   return out;
 }
 
-export function extractKeyActionIssuesFromRawAnalysis(rawAnalysisJson: string | null | undefined): Array<{
+export function extractSkillSuggestionIssuesFromRawAnalysis(rawAnalysisJson: string | null | undefined): Array<{
   severity: Severity;
   category: string;
   summary: string;
   evidence: string;
-  reasoning?: string;
   improvementSuggestion?: string;
 }> {
-  return extractKeyActionIssues({ rawAnalysisJson: rawAnalysisJson ?? null });
+  return extractSkillSuggestionIssues({ rawAnalysisJson: rawAnalysisJson ?? null });
 }
 
 function extractKeyPointIssues(
@@ -516,12 +502,6 @@ function parseJsonArray<T>(s: string | null | undefined): T[] {
 
 function arrayOrEmpty<T>(v: unknown): T[] {
   return Array.isArray(v) ? (v as T[]) : [];
-}
-
-function extractRawKeyActionResults(raw: Record<string, unknown>): RawKeyActionResult[] {
-  const direct = arrayOrEmpty<RawKeyActionResult>(raw.key_action_results);
-  const normalized = arrayOrEmpty<RawKeyActionResult>(raw.keyActionResults);
-  return direct.length > 0 ? direct : normalized;
 }
 
 function extractRawKeyPointFindings(rawAnalysisJson: string | null | undefined): RawKeyPointFinding[] {

@@ -89,6 +89,12 @@ export const SYSTEM_AGENTS: SystemAgentDefinition[] = [
   },
   {
     platform: 'opencode',
+    name: 'skill-suggestion-advisor',
+    description: '内置：Skill 改进建议 Agent（读完整 trace，为 SKILL.md 给出改进建议；轨迹评测的建议流）',
+    agentType: 'main',
+  },
+  {
+    platform: 'opencode',
     name: 'skill-trigger-analyzer',
     description: '内置：Skill 触发分析评测 Agent（read-only 模式跑触发集，与用例评估 trace 分流）',
     agentType: 'main',
