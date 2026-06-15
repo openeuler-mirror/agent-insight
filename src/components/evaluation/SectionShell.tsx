@@ -60,11 +60,9 @@ export function SectionShell({
             <div
                 role="button"
                 tabIndex={0}
-                className="ev-section-head"
+                className={`ev-section-head ${actions ? 'has-actions' : ''}`}
                 onClick={onToggle}
                 onKeyDown={handleKeyDown}
-                // 传了 actions 时插入 actions 列, 不传时维持 CSS 默认 4 列布局, 不影响老 caller。
-                style={actions ? { gridTemplateColumns: '36px 1fr auto auto 14px' } : undefined}
             >
                 <span className="ev-section-num">{num}</span>
                 <span className="ev-section-title">
@@ -77,7 +75,6 @@ export function SectionShell({
                         className="ev-section-actions"
                         onClick={e => e.stopPropagation()}
                         onKeyDown={e => e.stopPropagation()}
-                        style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginLeft: 8 }}
                     >
                         {actions}
                     </span>
