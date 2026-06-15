@@ -1,9 +1,60 @@
 # Hermes OTel Trace Tree 与 Subagent 归并后续设计
 
-> 状态：真实 Hermes 对话样本验证后的 follow-up 设计，已按 2026-06-12 的当前实现状态刷新。本文聚焦三类问题：单 trace 展示、Hermes OTel 数据高保真边界，以及 subagent/skill 后续全链路。
-> 结论先行：OTLP/protobuf 接收、Hermes 单 trace span tree 展示、一键 setup、snapshot replacement 已经落地；当前剩余风险主要来自 `hermes-otel` 插件上报内容本身不完整，以及平台侧 Hermes skill/subagent/OTel adapter registry 尚未闭环。
+> 2026-06-15 更新：Hermes 接入主路径调整为仓库内置的轻量插件。插件直接消费 Hermes hooks，使用 Python 标准库编码并发送标准 OTLP/HTTP JSON，不再运行时安装 GitHub 上游 `hermes-otel` 或 OpenTelemetry Python 依赖。平台继续复用现有 OTLP 接收、Hermes adapter 与 snapshot-replace 管线。
 
-## 0. 当前落地状态（2026-06-12）
+## 0.1 已落地方案（2026-06-15）
+
+1. 在仓库 `scripts/` 内维护固定版本的 Hermes 插件核心代码，一键 setup 从 Agent Insight 服务下载到 `$HERMES_HOME/plugins/agent_insight_hermes/`。
+2. 插件从 `pre_llm_call`、`post_api_request`、`post_tool`、`subagent_start`、`subagent_stop` 等 hooks 采集完整内容，并编码标准 OTLP JSON 发往现有 `/v1/traces` 接口。
+3. LLM 正文优先读取 `assistant_message.content`，工具结果保留可配置的高保真正文和明确的截断元数据，避免上游插件固定 500/2000 chars preview。
+4. subagent hook 提供的 parent/child session 关系被编码到同一个 root trace；插件同时生成平台现有调用树可识别的 `task` span，后端 Hermes adapter 再生成 `role=subagent` interactions。
+5. setup 的普通交互版与 auto 版都安装该插件；不再 clone GitHub，也不再寻找 Hermes venv 或安装 OTel SDK。
+6. 若 OTLP span 语义经过真实样本验证仍不足，则切换到 `docs1/hermes-otel-adapter/lightweight-local-plugin-otlp-design.md` 中记录的 OpenCode 式原生事件/snapshot 上报备用方案。采集层与 exporter 分离，切换出口时无需重写 Hermes hook 采集。
+
+该调整不会删除后端 protobuf/JSON OTLP decode。新插件发送 JSON，只是现有标准 OTLP 接收能力的另一个编码格式；protobuf 仍用于兼容其他标准 OTel 客户端。
+
+实现状态：插件源码、分发 API、普通/auto setup 的 Unix/PowerShell 安装路径、Hermes interaction ownership 与 subagent Execution 派生均已落代码；2026-06-15 已使用普通工具链对话 `20260615_152004_08dfac` 和双 subagent 对话 `20260615_152209_054a8a` 完成第一轮真实样本验证。本轮新增 skill 全链路、child self-only 投影、持久化 exporter、API error span 与统一 OTel trace registry，仍需用新插件版本补一轮真实对话验收。
+
+> 状态：真实 Hermes 对话样本验证后的 follow-up 设计，当前结论以 0.2 和 0.3 为准。后文保留的 2026-06-11/12 上游 `hermes-otel` 样本分析用于解释方案演进，不再代表当前待办状态。
+> 结论先行：OTLP JSON/protobuf 接收、Hermes 单 trace span tree 展示、中间 LLM 正文、高保真工具输出、一键 setup、snapshot replacement、root/subagent trace 归并、skill 全链路、child Execution self-only 投影、持久化 exporter 和统一 OTel trace registry 已落代码。当前明确延期的是 subagent 深层/异常矩阵与 `Session.endTime` 语义；还需补新版本真实样本和更完整的断网/超大 payload 回归。
+
+## 0.2 真实样本验收（2026-06-15）
+
+### `20260615_152004_08dfac`：普通工具链任务
+
+- 数据库中只有一个 root Execution，`framework=hermes`，模型为 `GLM-5.1`，共 7 次 LLM 调用和 10 次工具调用。
+- `Session.interactions` 共 17 条，顺序为 user → intermediate assistant → tool → intermediate assistant → ... → final assistant。
+- 中间自然语言回复已经存在，不再只剩工具步骤；最终 assistant 正文为 2056 字符，已突破旧插件固定 500 chars preview。
+- 实测工具输出可达到 6113 字符，说明新的高保真采集路径已生效；插件仍保留默认 200000 字符上限及显式截断元数据，这是有界采集策略，不是界面二次截断。
+- `skill_view` 调用了 `server-troubleshooter-1` 和 `report-generator`，但 `Execution.invokedSkills` 仍为 null，证明 skill 全链路尚未闭环。
+
+### `20260615_152209_054a8a`：双 subagent 任务
+
+- 数据库中生成一个 root Execution 和两个 child Execution；child 均写入正确的 `parentExecutionId`、`rootExecutionId`、`agentSessionId`、`subagentType=leaf` 与 `isSubagent=true`。
+- root session 的 interaction 序列包含两个 `task` tool call、两个 child session 的输入/输出以及 root 最终回复；两个 child 不再作为三条互不相关的 root trace 存储。
+- child Execution 目前只有身份与父子关系，`finalResult`、token、latency、model、tool/LLM call count 仍为空。root Execution 的聚合统计包含 child 调用，因此后续需要明确“整棵 trace 总量”和“单个 agent 自身消耗”的统计口径，避免父子 Execution 汇总时重复计算。
+
+### 插件共存验证
+
+- 平台插件名为 `agent_insight_hermes`，目录为 `$HERMES_HOME/plugins/agent_insight_hermes/`，配置文件为 `config.json`。
+- 上游插件名为 `hermes_otel`，目录为 `$HERMES_HOME/plugins/hermes_otel/`，配置文件为 `config.yaml`。
+- 两者没有插件名、目录或配置文件冲突。setup 只启用和更新 `agent_insight_hermes`，不得自动启用、禁用或改写其他插件。
+- 若两个插件都向同一个 Agent Insight endpoint 上报，同一轮对话可能产生重复 telemetry；这是 endpoint 配置重复，不是 Hermes 插件注册冲突。
+
+## 0.3 当前状态与剩余问题
+
+1. **Hermes skill 全链路：已落代码**。`FrameworkAdapter.extractSkills` 识别 `skill_view` / `skill` / `load_skill`，root 与 child 按 agent 节点隔离写入 `ExecutionSkill`、`skills`、`invokedSkills`；Hermes capability 声明包含 `skills` 与 `subagentTree`。
+2. **child Execution 完整投影：已落代码**。child 从自身 interactions/events 写入 `finalResult`、model、token、latency、tool/LLM/error call count 与 skill；root 保留整棵 trace 总量，child 使用 self-only 指标，读取或汇总时不得把 root 与 child 相加。
+3. **subagent 深层与异常场景：延期**。当前双 leaf 子任务已通过，后续再验证多层嵌套、并行失败、取消、缺失 stop hook、同一 child session 重试等情况。该项本版本不继续扩展。
+4. **exporter 可靠性：已落代码，待断网实测**。插件先把每个 root 的最新累计 snapshot 原子写入 `~/.agent-insight/data/hermes-otel-spool/`，再异步发送；网络错误、408、429、5xx 使用指数退避，成功后才删除文件。日志写入 `~/.agent-insight/logs/hermes-plugin.log`，默认滚动保留一个 `.1` 文件。session 结束后清理内存中的 span/session 状态，磁盘 snapshot 不受影响。
+5. **API/provider 形态与错误 span：主路径已落代码**。插件优先使用 Hermes 规范化后的 `assistant_message.content`，同时识别 OpenAI choices、Responses output、Gemini candidates 和文本 content blocks；注册 `api_request_error` hook，写入错误类型、消息、HTTP 状态和重试信息。多模态非文本正文、provider 私有 reasoning 结构仍按实际样本增量补充。
+6. **Session 生命周期：延期**。两条真实样本的 `Session.endTime` 仍为空，需要另行确定 on-session-end snapshot 是否更新结束时间，以及该字段是否影响时长、状态或清理逻辑。本版本只清理插件内存，不改变数据库 endTime 契约。
+7. **统一 OTel adapter registry：已落代码**。traces route 通过 `ingest/otel/normalize.ts` 与 `spool.ts` 进入统一 trace 管线，`adapter-registry.ts` 按 Hermes → generic 顺序选择框架 adapter；旧 `claude-otel` trace 文件仅保留兼容导出，Claude logs 专属逻辑继续留在原目录。
+8. **仍需补充回归矩阵**：至少覆盖同一 Hermes session 多轮对话、重复 snapshot、断网恢复、进程重启补发、超 200000 字符截断元数据、两个插件同时启用但指向不同 endpoint。OpenCode 式原生事件/snapshot 上报继续作为 exporter 备用方案，不是当前主路径的必做改造。
+
+## 0. 历史落地状态（2026-06-12）
+
+以下内容保留当时的上游插件问题与决策背景；当前完成度和剩余问题以 0.2、0.3 为准。
 
 本阶段已经按“平台侧先可用、暂不改 Hermes 原工具代码”的顺序落地：
 
@@ -389,7 +440,7 @@ preview_max_chars: 4000
 
 ### Phase A：拆出通用 OTLP 与 Hermes adapter
 
-状态：**部分完成**。Hermes 主逻辑已经拆到 `src/lib/ingest/otel/adapters/hermes.ts`；统一 `adapter-registry.ts`、`adapters/hermes/` 子目录拆分、以及 `claude-otel` 历史入口迁移仍未完成。
+状态：**已完成当前范围**。Hermes 主逻辑位于 `src/lib/ingest/otel/adapters/hermes.ts`，统一 `adapter-registry.ts` 已负责 Hermes/generic 选择；trace route、normalization facade、spool facade 与聚合入口均从 `ingest/otel` 暴露。旧 `claude-otel` trace 模块保留兼容导出，Claude logs 不在本轮迁移范围。
 
 - 新增 `src/lib/ingest/otel/adapter-registry.ts`。
 - 新增 `src/lib/ingest/otel/adapters/hermes/`。
@@ -434,7 +485,7 @@ preview_max_chars: 4000
 
 ### Phase D：subagent 可靠归并
 
-状态：**未完成，需要插件侧字段**。
+状态：**基础归并已完成，深层/异常矩阵延期**。内置插件已从 `subagent_start/stop` 上报 parent/root/child session 和 task back-reference，真实双 leaf 样本已生成一个 root + 两个 child Execution；child self-only 指标与 skill 投影也已落代码。多层嵌套、失败、取消、缺失 stop 与重试场景留到后续版本。
 
 - 优先改 `hermes-otel`，增加 parent/root session 字段或 trace context propagation。
 - 平台 `subagent-linker` 只消费显式字段。
@@ -448,7 +499,7 @@ preview_max_chars: 4000
 
 ### Phase E：配置与接入引导
 
-状态：**基础 setup 已完成，插件级高保真仍未完成**。普通交互版和 auto 版都能安装/配置 Hermes；但完整 LLM/tool 正文仍受 `hermes-otel` 插件采集能力限制。
+状态：**当前范围已完成**。普通交互版和 auto 版安装固定版本的 `agent_insight_hermes`，不依赖上游 `hermes-otel`；配置高保真上限、磁盘 spool 与日志位置。插件直接读取 Hermes hooks 中的 assistant/tool/subagent 内容，API 错误也会形成 span。
 
 - Hermes 安装引导中增加可选高保真配置：
   - `capture_conversation_history`
@@ -466,8 +517,8 @@ preview_max_chars: 4000
 | OTLP 解码 | 支持标准 OTLP JSON，必要时补 protobuf | 已支持 JSON/protobuf traces decode | 已完成，并且比原计划更完整 |
 | 接收路由 | `/v1/traces` 只负责鉴权、解码、入 spool | 路由已保持薄入口，decode 逻辑已下沉 | 基本符合 |
 | Hermes 单 trace 映射 | 识别 model/token/tool/skill/session 字段 | 已新增 Hermes span tree adapter，能生成 user/tool/final output 序列 | 单 trace 主流程已完成 |
-| adapter 文件层级 | 通用 OTLP mapper + `otel/adapter-registry.ts` + framework adapter | 目前已有 `ingest/otel/adapters/hermes.ts`，但 registry/聚合入口仍部分挂在历史 `claude-otel` 路径 | 分层方向一致，但尚未完全迁移 |
-| FrameworkAdapter | `src/lib/ingest/adapters/hermes.ts` 暴露 `descriptor`、`extractSkills`、`capabilities.subagentTree` | 目前只注册了 Hermes descriptor，未补 skill/subagent 能力 | 未完成 |
+| adapter 文件层级 | 通用 OTLP mapper + `otel/adapter-registry.ts` + framework adapter | `ingest/otel` 已提供 normalize/spool/aggregate/registry 统一入口，Hermes 与 generic adapter 独立；旧 trace 文件仅兼容导出 | 当前范围已完成 |
+| FrameworkAdapter | `src/lib/ingest/adapters/hermes.ts` 暴露 `descriptor`、`extractSkills`、`capabilities.subagentTree` | 已补 `skill_view` 等 skill 抽取及 `skills/subagentTree` capability，并按 agent 节点写入 root/child skill | 已完成 |
 | 接入引导 | setup 中提供 Hermes plugin 安装、venv 依赖安装、config 模板 | 普通交互版和 auto 版都已集成 Hermes，安装以 `$HERMES_HOME` 为中心探测，写入 `config.yaml` | 已完成基础接入 |
 | 高保真内容 | 可选采集完整 conversation/response，并提示隐私与体量风险 | setup 已开启 `capture_conversation_history` / `capture_full_responses` / `preview_max_chars=4000`；但实测 `llm` / `agent` 仍被插件硬编码 500 chars 截断，中间 `api.*` 输出缺失，tool output 受插件 preview 限制 | 平台配置已完成，完整正文需要插件侧改造 |
 | partial batch | OTel trace 采用 snapshot replacement，不走 append merge | Hermes `FrameworkAdapter` 已声明 `sessionMergeStrategy: "snapshot-replace"`，存储层已跳过 monotonic merge | 当前链路已完成，后续 registry 迁移需保留 |
@@ -475,8 +526,8 @@ preview_max_chars: 4000
 
 这里最关键的差异有三点：
 
-1. **Phase3 里的 `otel/adapter-registry.ts` 与 Phase4 的“适配代码放错层”是同一个问题。** 当前已经把 Hermes 主逻辑抽到了 `ingest/otel/adapters/hermes.ts`，但入口和部分通用 normalization 仍沿用 `claude-otel` 历史目录。短期能工作，长期应该迁到 `ingest/otel/*` 的统一 registry。
-2. **Phase3 计划的 `FrameworkAdapter.extractSkills` / `capabilities.subagentTree` 还没做。** 这部分不是单 trace 展示必需能力，而是让 Hermes 进入平台“框架能力模型”的完整链路：skill 识别、subagent 能力声明、后续接入引导和分析模块按能力开关工作。
+1. **Phase3 里的 `otel/adapter-registry.ts` 与 Phase4 的“适配代码放错层”是同一个问题。** 当前已由 `ingest/otel/*` 统一 traces 对外入口和 adapter 选择；`claude-otel` 中保留的 trace 实现仅作为兼容层，不再是新框架扩展点。
+2. **Phase3 计划的 `FrameworkAdapter.extractSkills` / `capabilities.subagentTree` 已补齐。** Hermes 已进入平台框架能力模型，skill 识别、ExecutionSkill、筛选/分析与 subagent 能力声明使用同一 adapter 契约。
 3. **Phase3 低估了真实 Hermes OTLP 的分批、子任务拆 trace、以及正文采集缺失问题。** Phase4 已把单 trace span tree 和 snapshot replacement 先闭环；后续重点转向插件侧高保真正文采集、Hermes skill 全链路、以及需要显式字段支撑的 subagent linkage。
 
 ## 10. 风险与取舍
@@ -492,8 +543,8 @@ preview_max_chars: 4000
 
 ## 11. 最终建议
 
-1. **当前版本可以先以“单 trace 正常显示”作为可提交基线。** OTLP/protobuf、Hermes 单 trace adapter、setup、snapshot replacement 已经闭环。
-2. **下一阶段优先补数据高保真。** 先改 `hermes-otel` 解决 LLM 500 chars 截断、中间 `api.*` 输出缺失、工具 output preview 限制；平台侧同步补 `llm.output.content` 和多 provider response JSON fallback。
-3. **Hermes skill 全链路应作为平台侧下一项。** 实现 `FrameworkAdapter.extractSkills`，把 `skill_view` / Hermes skill 调用写入 `ExecutionSkill`，让 skill 筛选和分析模块能识别 Hermes trace。
-4. **subagent 不要靠猜。** 没有 parent/root session 字段时，只能展示多条独立 trace 或候选关联；要达到产品级父子树，需要插件侧补显式字段或 trace context propagation。
-5. **框架适配应继续独立文件化。** 通用 OTLP 解码和标准字段映射共享；框架语义转换由 `adapters/<framework>` 独立维护；后续补 `otel/adapter-registry.ts`，减少新 OTel 框架接入时的后端改动量。
+1. **当前版本以“高保真单 trace + 基础 subagent 树 + skill 全链路”作为提交基线。** OTLP JSON/protobuf、setup、snapshot replacement、child self-only 投影和 adapter registry 已闭环到代码层。
+2. **发布前补一轮新插件真实验收。** 至少跑普通 skill/tool 对话、双 subagent 对话和一次可恢复的 endpoint 失败，核对 `invokedSkills`、child 指标、spool 删除与日志内容。
+3. **subagent 深层异常矩阵暂不扩展。** 多层嵌套、失败、取消、缺失 stop 与重试保留在 0.3 第 3 项，不在当前版本继续增加推断逻辑。
+4. **`Session.endTime` 契约暂不改。** 插件 session end 只负责 flush 和内存清理；数据库结束时间需结合状态展示、时长和清理策略另行设计。
+5. **新增 OTel 框架统一走 registry。** 复用 normalize/spool/aggregate，只新增独立 framework trace adapter；不要再向 `claude-otel` 或 Hermes adapter 追加其他框架分支。

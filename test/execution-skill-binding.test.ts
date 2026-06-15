@@ -2,7 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { buildAgentCallTree, walkTree, type AgentNode } from '@/lib/engine/observability/agent-trace';
-import { computeOwnSkills, extractExplicitSkillsFromNode } from '@/lib/storage/data-service';
+import {
+    computeOwnSkills,
+    extractExplicitSkillsFromNode,
+    projectAgentNodeExecution,
+} from '@/lib/storage/data-service';
 
 // 看护 ExecutionSkill 的 agent 作用域绑定口径(需求 1/2 的核心):
 //   - 每一层 agent 只绑定**自己显式调用**(skill/load_skill)的 skill;
@@ -112,4 +116,91 @@ test('binding: claude 单 agent — 显式抽取即本层口径', () => {
     const own = computeOwnSkills('claude', interactions);
     assert.deepEqual(own.map(s => s.name), ['claude-skill']);
     assert.equal(own[0].version, 4);
+});
+
+test('binding: Hermes skill_view follows the same per-agent ownership rule', () => {
+    const interactions = [
+        { role: 'user', content: 'root question', timestamp: 1 },
+        {
+            role: 'assistant', content: 'root loads a skill', timestamp: 2,
+            tool_calls: [{
+                id: 'root-skill', type: 'function', state: 'success',
+                function: { name: 'skill_view', arguments: JSON.stringify({ skill: 'root-skill', version: 3 }) },
+            }],
+        },
+        {
+            role: 'assistant', content: 'spawn researcher', timestamp: 3,
+            tool_calls: [{
+                id: 'task', type: 'function', state: 'success',
+                function: { name: 'task', arguments: JSON.stringify({ subagent_type: 'researcher' }) },
+                output: '<task_metadata>\nsession_id: hermes-child\n</task_metadata>',
+            }],
+        },
+        {
+            role: 'subagent', subagent_session_id: 'hermes-child', subagent_name: 'researcher',
+            content: 'child loads another skill', timestamp: 4,
+            tool_calls: [{
+                id: 'child-skill', type: 'function', state: 'success',
+                function: { name: 'skill_view', arguments: JSON.stringify({ name: 'child-skill' }) },
+            }],
+        },
+    ];
+
+    assert.deepEqual(computeOwnSkills('hermes', interactions).map(s => s.name), ['root-skill']);
+
+    const tree = buildAgentCallTree(interactions as any);
+    assert.ok(tree);
+    const child = subagentNode(tree!, 'hermes-child');
+    assert.ok(child);
+    assert.deepEqual(extractExplicitSkillsFromNode(child!).map(s => s.name), ['child-skill']);
+});
+
+test('subagent projection: Hermes child stores its own result, usage, model, and calls', () => {
+    const interactions = [
+        { role: 'user', content: 'root question', timestamp: 1 },
+        {
+            role: 'assistant', content: 'spawn researcher', timestamp: 2,
+            tool_calls: [{
+                id: 'task', type: 'function', state: 'success',
+                function: { name: 'task', arguments: JSON.stringify({ subagent_type: 'researcher' }) },
+                output: '<task_metadata>\nsession_id: hermes-child\n</task_metadata>',
+            }],
+        },
+        {
+            role: 'subagent', subagent_session_id: 'hermes-child', subagent_name: 'researcher',
+            content: 'inspect the service', timestamp: 3,
+            model: 'GLM-5.1', usage: { input: 0, output: 0, total: 0 },
+        },
+        {
+            role: 'subagent', subagent_session_id: 'hermes-child', subagent_name: 'researcher',
+            content: 'checking logs', timestamp: 4,
+            model: 'GLM-5.1', usage: { input: 20, output: 8, total: 28 },
+            tool_calls: [{
+                id: 'terminal', type: 'function', state: 'success',
+                function: { name: 'terminal', arguments: JSON.stringify({ command: 'ps aux' }) },
+                output: 'service is healthy',
+            }],
+        },
+        {
+            role: 'subagent', subagent_session_id: 'hermes-child', subagent_name: 'researcher',
+            content: 'child final answer', timestamp: 5,
+            model: 'GLM-5.1', usage: { input: 30, output: 12, total: 42 },
+        },
+    ];
+
+    const tree = buildAgentCallTree(interactions as any);
+    assert.ok(tree);
+    const child = subagentNode(tree!, 'hermes-child');
+    assert.ok(child);
+
+    const projection = projectAgentNodeExecution(child!, interactions);
+    assert.equal(projection.query, 'inspect the service');
+    assert.equal(projection.finalResult, 'child final answer');
+    assert.equal(projection.model, 'GLM-5.1');
+    assert.equal(projection.inputTokens, 50);
+    assert.equal(projection.outputTokens, 20);
+    assert.equal(projection.tokens, 70);
+    assert.equal(projection.llmCallCount, 2);
+    assert.equal(projection.toolCallCount, 1);
+    assert.equal(projection.toolCallErrorCount, 0);
 });

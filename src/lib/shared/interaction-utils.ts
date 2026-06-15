@@ -109,6 +109,41 @@ export function extractSkillsWithVersionsFromOpencodeSession(interactions: any[]
   return skills
 }
 
+export function extractSkillsWithVersionsFromHermesSession(interactions: any[]): InvokedSkill[] {
+  const seen = new Set<string>()
+  const skills: InvokedSkill[] = []
+  const skillNamePattern = /^[a-zA-Z0-9_\-\.]+$/
+
+  const collectFromMsg = (msg: any) => {
+    if (!msg) return
+    const calls = msg.tool_calls || msg.toolCalls || []
+    for (const tc of calls) {
+      const toolName = String(tc?.function?.name ?? tc?.name ?? "").toLowerCase()
+      if (toolName !== "skill_view" && toolName !== "skill" && toolName !== "load_skill") continue
+      const raw = tc?.function?.arguments ?? tc?.arguments ?? ""
+      try {
+        const args = typeof raw === "string" ? JSON.parse(raw) : raw
+        const rawName = args?.name ?? args?.skill_name ?? args?.skillName ?? args?.skill
+        if (rawName == null || !String(rawName).trim()) continue
+        const name = String(rawName).trim().replace(/^['"]+|['"]+$/g, "")
+        if (!skillNamePattern.test(name) || seen.has(name)) continue
+        seen.add(name)
+        const rawVersion = args?.version
+        const version = rawVersion != null ? Number(rawVersion) : null
+        skills.push({ name, version: version !== null && !Number.isNaN(version) ? version : null })
+      } catch {}
+    }
+  }
+
+  for (const interaction of interactions) {
+    collectFromMsg(interaction.responseMessage)
+    for (const message of interaction.requestMessages || []) {
+      if (message?.role === "assistant" || message?.role === "subagent") collectFromMsg(message)
+    }
+  }
+  return skills
+}
+
 export function extractSkillsWithVersionsFromClaudeSession(interactions: any[]): InvokedSkill[] {
   const seen = new Set<string>()
   const skills: InvokedSkill[] = []
@@ -187,4 +222,8 @@ export function extractSkillsFromClaudeSession(interactions: any[]): string[] {
 
 export function extractSkillsFromOpenClawSession(interactions: any[]): string[] {
   return extractSkillsWithVersionsFromOpenClawSession(interactions).map((s) => s.name)
+}
+
+export function extractSkillsFromHermesSession(interactions: any[]): string[] {
+  return extractSkillsWithVersionsFromHermesSession(interactions).map((s) => s.name)
 }
