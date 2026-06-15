@@ -379,7 +379,7 @@ on_llm_invoke_output → close span  <span class="c"># 只在「非流式」路�
           <div class="outcome bad"><span class="icon">⚠</span><div>team 成员走 streaming，span 开了不关 → exporter 只收已结束 span → 团队模式导出 0 个 LLM span、没有 token。</div></div>
         </div>
         <div class="panel" data-tab="a1">
-          <pre class="code"><span class="c"># 3 处改动（见 assets/agent-core-streaming-span-fix.patch）</span>
+          <pre class="code"><span class="c"># 3 处改动（详见上游 PR openJiuwen/agent-core#1648）</span>
 LlmSpanState += completion_parts / closed
 _is_terminal_chunk(chunk)  <span class="c"># finish_reason 或 usage 即终止</span>
 on_llm_stream_output → 终止 chunk 时 <span class="marker ok">真 pop + 写合并 completion + span.end()</span></pre>

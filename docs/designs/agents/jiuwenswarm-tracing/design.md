@@ -109,11 +109,11 @@ init_observability(ObservabilityConfig(enabled=True, exporter="console",
 - agent-core **自身没声明 opentelemetry 依赖**（靠 jiuwenswarm 带），独立装 agent-core 要补 `opentelemetry-{api,sdk,exporter-otlp-proto-http}` + `aiosqlite`（team DB）。
 
 ## 顺带修复 / 已回馈 openJiuwen 的三个上游 bug
-spike 过程中暴露并修复了 agent-core observability 的三个真实 bug，均已提 issue + PR（走 gitcode fork → `openJiuwen/agent-core` `develop`；patch 见 `assets/agent-core-*.patch`，各带回归单测）。三者正交、可独立 review；②③ 改 `on_agent_invoke_input/output` 相邻行，合入按顺序 rebase 即可。
+spike 过程中暴露并修复了 agent-core observability 的三个真实 bug，均已提 issue + PR（走 gitcode fork → `openJiuwen/agent-core` `develop`，各带回归单测）。**这三处改动属于 agent-core 仓库、以下方各自的下游 PR 为唯一 source of truth，agent-insight 不再镜像 diff**；三者正交、可独立 review，②③ 改 `on_agent_invoke_input/output` 相邻行，合入按顺序 rebase 即可。
 
-1. **流式 LLM span 不收尾** — issue [#1023](https://gitcode.com/openJiuwen/agent-core/issues/1023) · PR [1648](https://gitcode.com/openJiuwen/agent-core/pull/1648)：team/成员走 streaming（`LLM_STREAM_*`），`callback_handler.py` 只在非流式 `LLM_INVOKE_OUTPUT` 关 span，`on_llm_stream_output` 仅 `peek` 不 close → 流式 span 开了不关 → exporter 收不到 → **team 导出 0 个 llm.call span（没 token）**。修：终止 chunk（`finish_reason`/`usage`）时真 pop + 写合并 completion + `span.end()`（`LlmSpanState` 加 `completion_parts`/`closed`）。**效果：llm.call 0 → 38；UI LLM TURNS 1/TOKENS 0 → 34/335k。**（`agent-core-streaming-span-fix.patch`）
-2. **agent span 未挂为当前 OTel context → 子 LLM/Tool span 全成孤儿根** — issue [#1025](https://gitcode.com/openJiuwen/agent-core/issues/1025) · PR [1652](https://gitcode.com/openJiuwen/agent-core/pull/1652)：`on_agent_invoke_input` 建 agent span 却没 `otel_context.attach`（对比 `_open_llm_span` 有）→ team 下每个 span 各自独立 trace、无 parent → 无法按 agent 归属（成员"只有 tool 没 LLM"）。修：input attach / output detach（`push/pop_agent_span` 带 context token）。**效果：llm.call 孤儿根 38 → 0；distinct trace 63 → 2；成员 LLM/工具精确嵌套到其 agent span 下。**（`agent-core-agent-span-fix.patch`）
-3. **agent span `agentteam.agent.id == "unknown"`** — issue [#1024](https://gitcode.com/openJiuwen/agent-core/issues/1024) · PR [1650](https://gitcode.com/openJiuwen/agent-core/pull/1650)：`_AgentMeta` 包绑定的 `instance.invoke`，`self.card` 不进事件，真实入参无 agent id → 落 unknown。修：`_AgentMeta` 用 `emit_before/after(..., extra_kwargs={"agent_id": card.name or card.id})` 注入，handler 优先读。选 `card.name`（可读、与 tool id 后缀一致）。**效果：单 agent span `agent.unknown` → `agent.spike_agent`。**（`agent-core-agent-id-fix.patch`）
+1. **流式 LLM span 不收尾** — issue [#1023](https://gitcode.com/openJiuwen/agent-core/issues/1023) · PR [1648](https://gitcode.com/openJiuwen/agent-core/pull/1648)：team/成员走 streaming（`LLM_STREAM_*`），`callback_handler.py` 只在非流式 `LLM_INVOKE_OUTPUT` 关 span，`on_llm_stream_output` 仅 `peek` 不 close → 流式 span 开了不关 → exporter 收不到 → **team 导出 0 个 llm.call span（没 token）**。修：终止 chunk（`finish_reason`/`usage`）时真 pop + 写合并 completion + `span.end()`（`LlmSpanState` 加 `completion_parts`/`closed`）。**效果：llm.call 0 → 38；UI LLM TURNS 1/TOKENS 0 → 34/335k。**
+2. **agent span 未挂为当前 OTel context → 子 LLM/Tool span 全成孤儿根** — issue [#1025](https://gitcode.com/openJiuwen/agent-core/issues/1025) · PR [1652](https://gitcode.com/openJiuwen/agent-core/pull/1652)：`on_agent_invoke_input` 建 agent span 却没 `otel_context.attach`（对比 `_open_llm_span` 有）→ team 下每个 span 各自独立 trace、无 parent → 无法按 agent 归属（成员"只有 tool 没 LLM"）。修：input attach / output detach（`push/pop_agent_span` 带 context token）。**效果：llm.call 孤儿根 38 → 0；distinct trace 63 → 2；成员 LLM/工具精确嵌套到其 agent span 下。**
+3. **agent span `agentteam.agent.id == "unknown"`** — issue [#1024](https://gitcode.com/openJiuwen/agent-core/issues/1024) · PR [1650](https://gitcode.com/openJiuwen/agent-core/pull/1650)：`_AgentMeta` 包绑定的 `instance.invoke`，`self.card` 不进事件，真实入参无 agent id → 落 unknown。修：`_AgentMeta` 用 `emit_before/after(..., extra_kwargs={"agent_id": card.name or card.id})` 注入，handler 优先读。选 `card.name`（可读、与 tool id 后缀一致）。**效果：单 agent span `agent.unknown` → `agent.spike_agent`。**
 
 > PR 号映射按 #1023→1648 / #1024→1650 / #1025→1652 记录；若 1650/1652 实际对调，互换即可。
 
@@ -132,6 +132,7 @@ spike 过程中暴露并修复了 agent-core observability 的三个真实 bug�
 6.（可选，更大）**标准 OTLP 直连路径**：agent-insight OTEL 端点支持 protobuf + 兼容 OpenLLMetry 实际属性名 → 任何 OTEL-emitting agent 直接接。
 
 ## 复现命令（最小）
+> 桥的对外函数、8 个脚本逐个说明、完整环境变量、以及"桥与脚本不同级、需先让 import 生效"的运行前提，见 [`assets/README.md`](assets/README.md)。
 ```bash
 # 1) 装 agent-core 到隔离 venv（+ 补 OTEL/aiosqlite）
 uv venv .venv && uv pip install --python .venv/bin/python -e /path/to/agent-core \
