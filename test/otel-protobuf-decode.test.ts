@@ -6,7 +6,7 @@ import test from "node:test"
 
 import otlpRoot from "@opentelemetry/otlp-transformer/build/src/generated/root"
 import { POST as postOtlpTraces } from "@/app/api/ingest/otel/v1/traces/route"
-import { normalizeClaudeOtlpTraces } from "@/lib/ingest/claude-otel/otlp-json"
+import { normalizeOtlpTraces } from "@/lib/ingest/otel/normalize"
 import { decodeOtlpProtobufBody, decodeOtlpRequest } from "@/lib/ingest/otel/decode"
 
 const traceRequestType = (otlpRoot as any).opentelemetry.proto.collector.trace.v1.ExportTraceServiceRequest
@@ -77,7 +77,7 @@ test("OTLP protobuf decoder converts trace request into JSON-compatible trace ob
   assert.equal(spans[0].spanId, "1021324354657687")
   assert.equal(spans[1].parentSpanId, "1021324354657687")
 
-  const events = normalizeClaudeOtlpTraces(decoded, {
+  const events = normalizeOtlpTraces(decoded, {
     receivedAt: "2026-06-11T00:00:00.000Z",
     authenticatedUser: "alice",
   })

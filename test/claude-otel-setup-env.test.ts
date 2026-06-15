@@ -43,7 +43,7 @@ test('Claude Code OTel setup preserves tool output sources in shell and PowerShe
   }
 });
 
-test('setup scripts include Hermes OTel plugin installation and high-fidelity config', () => {
+test('setup scripts install the first-party Hermes plugin without GitHub or venv dependencies', () => {
   for (const route of SETUP_ROUTES) {
     const source = readFileSync(route, 'utf8');
 
@@ -52,9 +52,11 @@ test('setup scripts include Hermes OTel plugin installation and high-fidelity co
         source.includes("{ name: \\'Hermes\\', value: \\'hermes\\' }"),
       `${route} should offer Hermes in the setup framework selector`,
     );
+    assert.ok(source.includes('/api/setup/hermes-plugin'), `${route} should download the first-party plugin`);
+    assert.ok(source.includes('plugins enable agent_insight_hermes'), `${route} should enable the first-party plugin`);
     assert.ok(
-      source.includes('hermes plugins install briancaffey/hermes-otel --enable'),
-      `${route} should install and enable the upstream hermes-otel plugin`,
+      !source.includes('plugins disable hermes_otel'),
+      `${route} should leave independently configured Hermes plugins untouched`,
     );
     assert.match(
       source,
@@ -62,34 +64,39 @@ test('setup scripts include Hermes OTel plugin installation and high-fidelity co
       `${route} should center Unix Hermes discovery on HERMES_HOME`,
     );
     assert.ok(
-      source.includes('HERMES_AGENT_DIR="$HERMES_HOME/hermes-agent"') &&
-        source.includes('HERMES_OTEL_PLUGIN_DIR="$HERMES_HOME/plugins/hermes_otel"'),
-      `${route} should use HERMES_HOME for Hermes agent and plugin paths`,
+      source.includes('HERMES_PLUGIN_DIR="$HERMES_HOME/plugins/agent_insight_hermes"'),
+      `${route} should install the Unix plugin under HERMES_HOME`,
     );
     assert.ok(
-      source.includes('$hermesAgentDir = Join-Path $hermesHome "hermes-agent"') &&
-        source.includes('$hermesOtelPluginDir = Join-Path $hermesHome "plugins\\\\hermes_otel"'),
-      `${route} should use HERMES_HOME for PowerShell Hermes agent and plugin paths`,
+      source.includes('$hermesPluginDir = Join-Path $hermesHome "plugins\\\\agent_insight_hermes"'),
+      `${route} should install the PowerShell plugin under HERMES_HOME`,
     );
     assert.ok(
-      source.includes('opentelemetry-exporter-otlp-proto-http pyyaml'),
-      `${route} should install OTel runtime dependencies into the Hermes runtime`,
+      !source.includes('briancaffey/hermes-otel') &&
+        !source.includes('opentelemetry-exporter-otlp-proto-http'),
+      `${route} should not depend on GitHub or the OTel Python runtime`,
     );
     assert.ok(
-      source.includes('install -e "$HERMES_OTEL_PLUGIN_DIR"') ||
-        source.includes('install -e $hermesOtelPluginDir'),
-      `${route} should install the plugin package in editable mode into the Hermes runtime`,
+      source.includes('plugin.yaml') && source.includes('config.json'),
+      `${route} should write the Hermes manifest and JSON config`,
     );
     assert.ok(
-      source.includes('capture_full_responses: true') &&
-        source.includes('capture_conversation_history: true') &&
-        source.includes('preview_max_chars: 4000'),
-      `${route} should write high-fidelity Hermes capture settings`,
+      source.includes('"max_content_chars": 200000') ||
+        source.includes('max_content_chars = 200000'),
+      `${route} should configure high-fidelity Hermes content capture`,
+    );
+    assert.ok(source.includes('api_request_error'), `${route} should register Hermes API error telemetry`);
+    assert.ok(
+      source.includes('hermes-otel-spool'),
+      `${route} should configure a durable Hermes snapshot spool`,
     );
     assert.ok(
-      source.includes('/api/ingest/otel/v1/traces') &&
-        source.includes('x-witty-api-key'),
-      `${route} should point Hermes OTel to the platform trace endpoint with API key header`,
+      source.includes('hermes-plugin.log'),
+      `${route} should configure the Hermes plugin log path`,
+    );
+    assert.ok(
+      source.includes('"api_key":') || source.includes('api_key ='),
+      `${route} should pass the platform API key to the plugin config`,
     );
   }
 });

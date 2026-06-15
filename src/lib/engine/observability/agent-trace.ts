@@ -602,7 +602,12 @@ function interactionToEvents(it: RawInteraction, idx: number): AgentEvent[] {
             args = argStr;
         }
 
-        const kind: CallKind = name === 'task' ? 'task' : name === 'skill' ? 'skill' : 'tool';
+        const normalizedName = name.toLowerCase();
+        const kind: CallKind = normalizedName === 'task'
+            ? 'task'
+            : normalizedName === 'skill' || normalizedName === 'load_skill' || normalizedName === 'skill_view'
+                ? 'skill'
+                : 'tool';
         const ev: AgentEvent = {
             kind,
             name,

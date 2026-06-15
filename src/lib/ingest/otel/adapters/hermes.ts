@@ -1,5 +1,6 @@
 import type { ExecutionRecord } from '@/lib/storage/data-service';
-import type { OtelTraceEvent } from '@/lib/ingest/claude-otel/types';
+import type { OtelTraceEvent } from '@/lib/ingest/otel/types';
+import type { OtelTraceAdapter } from './types';
 
 type AnyObj = Record<string, any>;
 
@@ -71,6 +72,20 @@ function isApiSpan(event: OtelTraceEvent): boolean {
   return String(event.name || '').startsWith('api.');
 }
 
+function finishReason(event: OtelTraceEvent): string {
+  const attrs = event.attributes || {};
+  const value = attrs['llm.response.finish_reason'] ?? attrs['gen_ai.response.finish_reasons'];
+  if (Array.isArray(value)) return String(value[0] || '').toLowerCase();
+  const text = String(value || '').trim();
+  if (text.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(text);
+      if (Array.isArray(parsed)) return String(parsed[0] || '').toLowerCase();
+    } catch {}
+  }
+  return text.toLowerCase();
+}
+
 function isLlmContainer(event: OtelTraceEvent): boolean {
   if (event.kind !== 'llm') return false;
   if (isAgentContainer(event) || isApiSpan(event)) return false;
@@ -81,6 +96,37 @@ function isLlmContainer(event: OtelTraceEvent): boolean {
 
 function isToolSpan(event: OtelTraceEvent): boolean {
   return event.kind === 'tool' || spanKind(event) === 'TOOL' || (event.attributes || {})['tool.name'] !== undefined;
+}
+
+interface EventOwner {
+  sessionId: string;
+  isSubagent: boolean;
+  name: string;
+}
+
+function eventOwner(event: OtelTraceEvent, rootSessionId: string, framework: string): EventOwner {
+  const attrs = event.attributes || {};
+  const sessionId = firstContent(attrs['hermes.session_id']) || rootSessionId;
+  const parentSessionId = firstContent(attrs['hermes.parent_session_id']);
+  const role = firstContent(attrs['hermes.agent.role']);
+  const name = firstContent(attrs['hermes.agent.name'], role) || framework;
+  return {
+    sessionId,
+    isSubagent: sessionId !== rootSessionId || !!parentSessionId || (role !== undefined && role !== 'root'),
+    name,
+  };
+}
+
+function ownerFields(owner: EventOwner, framework: string): AnyObj {
+  if (!owner.isSubagent) {
+    return { role: 'assistant', agent: framework };
+  }
+  return {
+    role: 'subagent',
+    agent: owner.name,
+    subagent_name: owner.name,
+    subagent_session_id: owner.sessionId,
+  };
 }
 
 function toolName(event: OtelTraceEvent): string {
@@ -173,6 +219,15 @@ function assistantTextFromJson(value: string | undefined): string | undefined {
     if (text.trim()) return text;
   }
 
+  if (Array.isArray(parsed.candidates)) {
+    const text = parsed.candidates
+      .flatMap((candidate: any) => candidate?.content?.parts ?? candidate?.content ?? candidate?.output ?? candidate)
+      .map((part: any) => stringifyMessageContent(part?.text ?? part?.content ?? part))
+      .filter((part: string) => part.trim())
+      .join('\n');
+    if (text.trim()) return text;
+  }
+
   return undefined;
 }
 
@@ -191,6 +246,16 @@ function outputText(event: OtelTraceEvent | undefined): string | undefined {
     return assistantTextFromJson(raw);
   }
   return raw;
+}
+
+function apiErrorText(event: OtelTraceEvent | undefined): string | undefined {
+  if (!event) return undefined;
+  const attrs = event.attributes || {};
+  return firstContent(
+    attrs['error.message'],
+    attrs['exception.message'],
+    attrs['hermes.api_error.reason'],
+  );
 }
 
 function usageForEvents(events: OtelTraceEvent[]) {
@@ -240,14 +305,16 @@ function buildChildren(events: OtelTraceEvent[]): Map<string, OtelTraceEvent[]> 
   return children;
 }
 
-function collectDescendants(root: OtelTraceEvent, children: Map<string, OtelTraceEvent[]>): OtelTraceEvent[] {
+function collectOwnedDescendants(root: OtelTraceEvent, children: Map<string, OtelTraceEvent[]>): OtelTraceEvent[] {
   if (!root.spanId) return [];
   const out: OtelTraceEvent[] = [];
   const stack = [...(children.get(root.spanId) || [])];
   while (stack.length > 0) {
     const event = stack.shift()!;
     out.push(event);
-    if (event.spanId) stack.push(...(children.get(event.spanId) || []));
+    if (event.spanId && !isAgentContainer(event) && !isLlmContainer(event)) {
+      stack.push(...(children.get(event.spanId) || []));
+    }
   }
   return out.sort((a, b) => eventSortValue(a) - eventSortValue(b));
 }
@@ -263,17 +330,18 @@ function makeUserInteraction(args: {
   content: string;
   event: OtelTraceEvent;
   framework: string;
+  owner: EventOwner;
 }): AnyObj {
   const created = args.event.startTimeMs || Date.parse(args.event.receivedAt) || Date.now();
   return {
-    role: 'user',
+    ...ownerFields(args.owner, args.framework),
+    role: args.owner.isSubagent ? 'subagent' : 'user',
     content: args.content,
     timestamp: toIso(created),
     timeInfo: {
       created: toIso(created),
       completed: toIso(created),
     },
-    agent: args.framework,
     traceId: args.event.traceId,
     spanId: `${args.event.spanId || 'llm'}:input`,
   };
@@ -284,18 +352,18 @@ function makeToolInteraction(args: {
   tool: OtelTraceEvent;
   framework: string;
   model?: string;
+  owner: EventOwner;
 }): AnyObj {
   const created = args.tool.startTimeMs || Date.parse(args.tool.receivedAt) || Date.now();
   const completed = eventEndMs(args.tool) || created;
   return {
-    role: 'assistant',
+    ...ownerFields(args.owner, args.framework),
     content: '',
     timestamp: toIso(created),
     timeInfo: {
       created: toIso(created),
       completed: toIso(completed),
     },
-    agent: args.framework,
     traceId: args.llm.traceId,
     spanId: `${args.llm.spanId || 'llm'}:${args.tool.spanId || toolName(args.tool)}`,
     parentSpanId: args.llm.spanId,
@@ -317,6 +385,7 @@ function makeAssistantInteraction(args: {
   framework: string;
   model?: string;
   usageEvents: OtelTraceEvent[];
+  owner: EventOwner;
 }): AnyObj {
   const source = args.sourceEvent || args.llm;
   const created = Math.max(
@@ -325,15 +394,15 @@ function makeAssistantInteraction(args: {
   ) || Date.parse(source.receivedAt) || Date.now();
   const completed = eventEndMs(source) || created;
   const usage = usageForEvents(args.usageEvents);
+  const error = apiErrorText(source);
   return {
-    role: 'assistant',
+    ...ownerFields(args.owner, args.framework),
     content: args.content,
     timestamp: toIso(created),
     timeInfo: {
       created: toIso(created),
       completed: toIso(completed),
     },
-    agent: args.framework,
     traceId: source.traceId,
     spanId: `${source.spanId || args.llm.spanId || 'llm'}:output`,
     parentSpanId: source.parentSpanId || args.llm.spanId,
@@ -345,6 +414,7 @@ function makeAssistantInteraction(args: {
       reasoning_tokens: usage.reasoning_tokens || undefined,
       total: usage.total,
     },
+    ...(error ? { status: 'error', error: { message: error } } : {}),
   };
 }
 
@@ -357,7 +427,7 @@ export function aggregateHermesTraceEvents(sessionId: string, events: OtelTraceE
 
   const framework = ordered.find((event) => event.serviceName)?.serviceName || 'hermes';
   const children = buildChildren(ordered);
-  const agent = ordered.find(isAgentContainer);
+  const agent = ordered.find((event) => isAgentContainer(event) && !eventOwner(event, sessionId, framework).isSubagent);
   const llmContainers = ordered.filter(isLlmContainer);
   const contentHosts = llmContainers.length > 0
     ? llmContainers
@@ -370,28 +440,41 @@ export function aggregateHermesTraceEvents(sessionId: string, events: OtelTraceE
   const model = models[0] || 'unknown';
 
   for (const llm of contentHosts) {
-    const subtree = collectDescendants(llm, children);
-    const subtreeEvents = subtree.length > 0 ? subtree : ordered.filter((event) => event.traceId === llm.traceId && event !== llm);
-    const apiEvents = subtreeEvents.filter((event) => isApiSpan(event) && eventTokenTotal(event) > 0);
+    const owner = eventOwner(llm, sessionId, framework);
+    const ownerAgent = ordered.find((event) =>
+      isAgentContainer(event) && eventOwner(event, sessionId, framework).sessionId === owner.sessionId
+    );
+    const subtree = collectOwnedDescendants(llm, children);
+    const subtreeEvents = subtree.length > 0
+      ? subtree
+      : ordered.filter((event) =>
+          event.traceId === llm.traceId &&
+          event !== llm &&
+          eventOwner(event, sessionId, framework).sessionId === owner.sessionId &&
+          !isAgentContainer(event) &&
+          !isLlmContainer(event)
+        );
+    const apiEvents = subtreeEvents.filter(isApiSpan);
     const toolEvents = subtreeEvents.filter(isToolSpan);
     const finalApi = [...apiEvents].reverse().find((event) =>
-      String(event.attributes?.['llm.response.finish_reason'] || '').toLowerCase() === 'stop' &&
+      finishReason(event) === 'stop' &&
       outputText(event)
     );
-    const userInput = inputText(llm) || inputText(agent);
-    const assistantOutput = outputText(finalApi) || outputText(llm) || outputText(agent);
+    const userInput = inputText(llm) || inputText(ownerAgent);
+    const assistantOutput = outputText(finalApi) || outputText(llm) || outputText(ownerAgent);
 
     if (userInput) {
       const previousUser = [...interactions].reverse().find((interaction) => interaction.role === 'user');
       if (!previousUser || previousUser.content !== userInput) {
-        interactions.push(makeUserInteraction({ content: userInput, event: llm, framework }));
+        interactions.push(makeUserInteraction({ content: userInput, event: llm, framework, owner }));
       }
     }
 
     for (const event of subtreeEvents.filter((event) => isApiSpan(event) || isToolSpan(event))) {
       if (isApiSpan(event)) {
         if (event === finalApi) continue;
-        const apiOutput = outputText(event);
+        const error = apiErrorText(event);
+        const apiOutput = outputText(event) || (error ? `API request failed: ${error}` : undefined);
         if (apiOutput) {
           interactions.push(makeAssistantInteraction({
             content: apiOutput,
@@ -400,12 +483,13 @@ export function aggregateHermesTraceEvents(sessionId: string, events: OtelTraceE
             framework,
             model: eventModel(event) || model,
             usageEvents: [event],
+            owner,
           }));
         }
         continue;
       }
 
-      interactions.push(makeToolInteraction({ llm, tool: event, framework, model }));
+      interactions.push(makeToolInteraction({ llm, tool: event, framework, model, owner }));
     }
 
     if (assistantOutput) {
@@ -416,6 +500,7 @@ export function aggregateHermesTraceEvents(sessionId: string, events: OtelTraceE
         framework,
         model,
         usageEvents: finalApi ? [finalApi] : apiEvents,
+        owner,
       }));
     }
   }
@@ -436,7 +521,7 @@ export function aggregateHermesTraceEvents(sessionId: string, events: OtelTraceE
   const lastAssistant = [...interactions].reverse().find((interaction) => interaction.role === 'assistant' && String(interaction.content || '').trim());
   const firstUser = interactions.find((interaction) => interaction.role === 'user' && String(interaction.content || '').trim());
   const latency = agent?.latencyMs || Math.max(...ordered.map((event) => event.latencyMs || 0), 0);
-  const llmCallCount = ordered.filter((event) => isApiSpan(event) && eventTokenTotal(event) > 0).length ||
+  const llmCallCount = ordered.filter(isApiSpan).length ||
     contentHosts.length;
 
   return {
@@ -460,3 +545,15 @@ export function aggregateHermesTraceEvents(sessionId: string, events: OtelTraceE
     reasoning_tokens: totalUsage.reasoning_tokens || undefined,
   };
 }
+
+export const hermesOtelTraceAdapter: OtelTraceAdapter = {
+  id: 'hermes',
+  matches(events) {
+    return events.some((event) =>
+      event.serviceName === 'hermes' ||
+      event.attributes?.['hermes.session_id'] !== undefined ||
+      event.attributes?.['agent.insight.framework'] === 'hermes'
+    );
+  },
+  aggregate: aggregateHermesTraceEvents,
+};

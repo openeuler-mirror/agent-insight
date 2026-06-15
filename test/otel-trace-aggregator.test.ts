@@ -5,9 +5,11 @@ import path from "node:path"
 import test from "node:test"
 
 import { getAdapter } from "@/lib/ingest/adapters/registry"
-import { appendOtelTraceEvents } from "@/lib/ingest/claude-otel/spool"
-import { aggregateOtelTraceEvents, aggregateOtelTraceSession } from "@/lib/ingest/claude-otel/traces-aggregator"
-import type { OtelTraceEvent } from "@/lib/ingest/claude-otel/types"
+import { appendOtelTraceEvents } from "@/lib/ingest/otel/spool"
+import { aggregateOtelTraceEvents, aggregateOtelTraceSession } from "@/lib/ingest/otel/aggregate"
+import { getOtelTraceAdapter, listOtelTraceAdapters } from "@/lib/ingest/otel/adapter-registry"
+import type { OtelTraceEvent } from "@/lib/ingest/otel/types"
+import { buildAgentCallTree } from "@/lib/engine/observability/agent-trace"
 
 function traceEvent(overrides: Partial<OtelTraceEvent>): OtelTraceEvent {
   return {
@@ -439,6 +441,126 @@ test("Framework adapter registry marks Hermes as plugin onboarding with snapshot
 
   assert.equal(adapter.descriptor.onboard, "plugin");
   assert.equal(adapter.sessionMergeStrategy, "snapshot-replace");
+  assert.equal(adapter.capabilities?.skills, true);
+  assert.equal(adapter.capabilities?.subagentTree, true);
+});
+
+test("OTel trace adapter registry selects Hermes before the generic fallback", () => {
+  const hermesEvent = traceEvent({ serviceName: "hermes" });
+  const genericEvent = traceEvent({ serviceName: "another-agent" });
+
+  assert.deepEqual(listOtelTraceAdapters().map(adapter => adapter.id), ["hermes", "generic"]);
+  assert.equal(getOtelTraceAdapter([hermesEvent]).id, "hermes");
+  assert.equal(getOtelTraceAdapter([genericEvent]).id, "generic");
+});
+
+test("OTel traces: Hermes adapter preserves subagent ownership and builds a child tree", () => {
+  const rootSessionId = "hermes-root";
+  const childSessionId = "hermes-child";
+  const rootAttrs = {
+    "hermes.session_id": rootSessionId,
+    "hermes.root_session_id": rootSessionId,
+    "hermes.agent.role": "root",
+  };
+  const childAttrs = {
+    "hermes.session_id": childSessionId,
+    "hermes.root_session_id": rootSessionId,
+    "hermes.parent_session_id": rootSessionId,
+    "hermes.agent.role": "researcher",
+    "hermes.agent.name": "researcher",
+  };
+  const events = [
+    traceEvent({
+      sessionId: rootSessionId,
+      traceId: "trace-hermes-subagent",
+      spanId: "root-agent",
+      name: "agent",
+      serviceName: "hermes",
+      startTimeMs: 1000,
+      latencyMs: 5000,
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+      attributes: { ...rootAttrs, "openinference.span.kind": "AGENT", "input.value": "Delegate this task." },
+    }),
+    traceEvent({
+      sessionId: rootSessionId,
+      traceId: "trace-hermes-subagent",
+      spanId: "root-llm",
+      parentSpanId: "root-agent",
+      name: "llm.GLM-5.1",
+      serviceName: "hermes",
+      startTimeMs: 1001,
+      latencyMs: 4990,
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+      attributes: { ...rootAttrs, "openinference.span.kind": "LLM", "input.value": "Delegate this task.", "output.value": "Root final." },
+    }),
+    traceEvent({
+      sessionId: rootSessionId,
+      traceId: "trace-hermes-subagent",
+      spanId: "task-span",
+      parentSpanId: "root-llm",
+      kind: "tool",
+      name: "tool.task",
+      serviceName: "hermes",
+      startTimeMs: 1100,
+      latencyMs: 3000,
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+      attributes: {
+        ...rootAttrs,
+        "openinference.span.kind": "TOOL",
+        "tool.name": "task",
+        "input.value": JSON.stringify({ subagent_type: "researcher", description: "Inspect logs", session_id: childSessionId }),
+        "output.value": JSON.stringify({ session_id: childSessionId, result: "Child final." }),
+      },
+    }),
+    traceEvent({
+      sessionId: rootSessionId,
+      traceId: "trace-hermes-subagent",
+      spanId: "child-agent",
+      parentSpanId: "task-span",
+      name: "agent.subagent.researcher",
+      serviceName: "hermes",
+      startTimeMs: 1200,
+      latencyMs: 2500,
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+      attributes: { ...childAttrs, "openinference.span.kind": "AGENT", "input.value": "Inspect logs", "output.value": "Child final." },
+    }),
+    traceEvent({
+      sessionId: rootSessionId,
+      traceId: "trace-hermes-subagent",
+      spanId: "child-llm",
+      parentSpanId: "child-agent",
+      name: "llm.GLM-5.1",
+      serviceName: "hermes",
+      startTimeMs: 1201,
+      latencyMs: 2400,
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+      attributes: { ...childAttrs, "openinference.span.kind": "LLM", "input.value": "Inspect logs", "output.value": "Child final." },
+    }),
+    traceEvent({
+      sessionId: rootSessionId,
+      traceId: "trace-hermes-subagent",
+      spanId: "child-api",
+      parentSpanId: "child-llm",
+      name: "api.GLM-5.1",
+      serviceName: "hermes",
+      startTimeMs: 1300,
+      latencyMs: 2000,
+      usage: { input_tokens: 20, output_tokens: 10, total_tokens: 30 },
+      attributes: { ...childAttrs, "openinference.span.kind": "LLM", "llm.response.finish_reason": "stop", "output.value": "Child final." },
+    }),
+  ];
+
+  const record = aggregateOtelTraceEvents(rootSessionId, events);
+  assert.ok(record);
+  assert.equal(record.interactions?.filter((interaction: any) => interaction.role === "subagent").length, 2);
+  assert.equal(record.interactions?.find((interaction: any) => interaction.role === "subagent")?.subagent_session_id, childSessionId);
+
+  const tree = buildAgentCallTree(record.interactions as any[]);
+  assert.ok(tree);
+  assert.equal(tree.children.length, 1);
+  assert.equal(tree.children[0]?.sessionId, childSessionId);
+  assert.equal(tree.children[0]?.subagentType, "researcher");
+  assert.equal(tree.children[0]?.agentName, "researcher");
 });
 
 test("OTel traces: aggregateOtelTraceSession reads traces spool files", () => {
@@ -459,3 +581,58 @@ test("OTel traces: aggregateOtelTraceSession reads traces spool files", () => {
     fs.rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test("OTel traces: Hermes parses provider candidate content and preserves API errors", () => {
+  const events = [
+    traceEvent({
+      sessionId: "hermes-provider-shapes",
+      traceId: "trace-provider-shapes",
+      spanId: "llm",
+      name: "llm.GLM-5.1",
+      serviceName: "hermes",
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+      attributes: {
+        "openinference.span.kind": "LLM",
+        "input.value": "hello",
+      },
+    }),
+    traceEvent({
+      sessionId: "hermes-provider-shapes",
+      traceId: "trace-provider-shapes",
+      spanId: "api-error",
+      parentSpanId: "llm",
+      name: "api.GLM-5.1",
+      serviceName: "hermes",
+      startTimeMs: 1100,
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+      attributes: {
+        "openinference.span.kind": "LLM",
+        "llm.response.finish_reason": "error",
+        "error.message": "provider temporarily unavailable",
+      },
+    }),
+    traceEvent({
+      sessionId: "hermes-provider-shapes",
+      traceId: "trace-provider-shapes",
+      spanId: "api-success",
+      parentSpanId: "llm",
+      name: "api.GLM-5.1",
+      serviceName: "hermes",
+      startTimeMs: 1200,
+      usage: { input_tokens: 8, output_tokens: 4, total_tokens: 12 },
+      attributes: {
+        "openinference.span.kind": "LLM",
+        "llm.response.finish_reason": "stop",
+        "output.value": JSON.stringify({ candidates: [{ content: { parts: [{ text: "candidate answer" }] } }] }),
+      },
+    }),
+  ];
+
+  const record = aggregateOtelTraceEvents("hermes-provider-shapes", events);
+  assert.ok(record);
+  assert.equal(record.llm_call_count, 2);
+  assert.equal(record.final_result, "candidate answer");
+  const errorInteraction = record.interactions?.find((interaction: any) => interaction.status === "error");
+  assert.equal(errorInteraction?.content, "API request failed: provider temporarily unavailable");
+  assert.equal(errorInteraction?.error?.message, "provider temporarily unavailable");
+});

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-import { normalizeClaudeOtlpTraces } from "@/lib/ingest/claude-otel/otlp-json"
+import { normalizeOtlpTraces } from "@/lib/ingest/otel/normalize"
 
 const attr = (key: string, value: any) => ({
   key,
@@ -59,7 +59,7 @@ test("OTel traces: normalizes gen_ai and tool spans into trace events", () => {
     }],
   }
 
-  const events = normalizeClaudeOtlpTraces(body, {
+  const events = normalizeOtlpTraces(body, {
     receivedAt: "2026-06-09T00:00:00.000Z",
     authenticatedUser: "alice",
   })
@@ -115,7 +115,7 @@ test("OTel traces: normalizes Hermes llm model and token count attributes", () =
     }],
   }
 
-  const events = normalizeClaudeOtlpTraces(body, {
+  const events = normalizeOtlpTraces(body, {
     receivedAt: "2026-06-11T00:00:00.000Z",
   })
 

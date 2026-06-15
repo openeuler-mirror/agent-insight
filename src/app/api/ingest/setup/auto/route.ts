@@ -247,33 +247,31 @@ if [ "$INSTALL_CLAUDE" = "true" ]; then
 fi
 
 if [ "$INSTALL_HERMES" = "true" ]; then
-    echo "Installing Hermes OTel plugin..."
+    echo "Installing Agent Insight Hermes plugin..."
     HERMES_HOME="\${HERMES_HOME:-$HOME/.hermes}"
-    HERMES_AGENT_DIR="$HERMES_HOME/hermes-agent"
-    HERMES_OTEL_PLUGIN_DIR="$HERMES_HOME/plugins/hermes_otel"
+    HERMES_PLUGIN_DIR="$HERMES_HOME/plugins/agent_insight_hermes"
+    mkdir -p "$HERMES_PLUGIN_DIR"
+    curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/hermes-plugin" -o "$HERMES_PLUGIN_DIR/__init__.py"
+    cat > "$HERMES_PLUGIN_DIR/plugin.yaml" <<'HERMES_PLUGIN_EOF'
+name: agent_insight_hermes
+version: 0.2.0
+description: Agent Insight telemetry for Hermes
+provides_hooks:
+  - pre_llm_call
+  - post_llm_call
+  - pre_api_request
+  - post_api_request
+  - api_request_error
+  - pre_tool_call
+  - post_tool_call
+  - subagent_start
+  - subagent_stop
+  - on_session_end
+HERMES_PLUGIN_EOF
     if command -v hermes >/dev/null 2>&1; then
-        hermes plugins install briancaffey/hermes-otel --enable || echo "Warning: hermes plugin install failed; will still write config if plugin dir exists."
+        hermes plugins enable agent_insight_hermes || echo "Warning: enable the plugin manually with: hermes plugins enable agent_insight_hermes"
     else
-        echo "Warning: hermes command not found. Install Hermes first, then rerun this setup or run: hermes plugins install briancaffey/hermes-otel"
-    fi
-    mkdir -p "$HERMES_OTEL_PLUGIN_DIR"
-    HERMES_PIP=""
-    if [ -x "$HERMES_AGENT_DIR/venv/bin/pip" ]; then
-        HERMES_PIP="$HERMES_AGENT_DIR/venv/bin/pip"
-    fi
-    for HERMES_VENV in "\${HERMES_AGENT_VENV:-}" "\${HERMES_VENV:-}" "$HOME/git/hermes-agent/venv" "$HOME/agent/hermes-agent/venv"; do
-        if [ -z "$HERMES_PIP" ] && [ -n "$HERMES_VENV" ] && [ -x "$HERMES_VENV/bin/pip" ]; then
-            HERMES_PIP="$HERMES_VENV/bin/pip"
-        fi
-    done
-    if [ -n "$HERMES_PIP" ]; then
-        "$HERMES_PIP" install opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp-proto-http pyyaml
-        if [ -f "$HERMES_OTEL_PLUGIN_DIR/pyproject.toml" ] || [ -f "$HERMES_OTEL_PLUGIN_DIR/setup.py" ]; then
-            "$HERMES_PIP" install -e "$HERMES_OTEL_PLUGIN_DIR" || true
-        fi
-        echo "Hermes OTel dependencies installed with $HERMES_PIP"
-    else
-        echo "Warning: could not find hermes-agent venv pip under $HERMES_AGENT_DIR/venv, ~/git/hermes-agent/venv, or ~/agent/hermes-agent/venv. Set HERMES_AGENT_VENV=/path/to/venv and rerun setup if Hermes cannot load OTel dependencies."
+        echo "Warning: hermes command not found. The plugin files were installed; enable agent_insight_hermes after installing Hermes."
     fi
 fi
 
@@ -315,32 +313,22 @@ echo "✅ Configuration updated at $AGENT_INSIGHT_CONFIG_FILE"
 echo "   AGENT_INSIGHT_HOST=$AGENT_INSIGHT_HOST"
 echo "   AGENT_INSIGHT_API_KEY=********"
 
-# 6.4 Configure Hermes OTel plugin
+# 6.4 Configure Agent Insight Hermes plugin
 if [ "$INSTALL_HERMES" = "true" ]; then
     HERMES_HOME="\${HERMES_HOME:-$HOME/.hermes}"
-    HERMES_OTEL_PLUGIN_DIR="$HERMES_HOME/plugins/hermes_otel"
-    mkdir -p "$HERMES_OTEL_PLUGIN_DIR"
-    HERMES_OTEL_ENDPOINT="$AGENT_INSIGHT_HOST"
-    case "$HERMES_OTEL_ENDPOINT" in http://*|https://*) ;; *) HERMES_OTEL_ENDPOINT="http://$HERMES_OTEL_ENDPOINT" ;; esac
-    HERMES_OTEL_ENDPOINT="\${HERMES_OTEL_ENDPOINT%/}/api/ingest/otel/v1/traces"
-    cat > "$HERMES_OTEL_PLUGIN_DIR/config.yaml" << HERMES_OTEL_CONFIG
-enabled: true
-capture_previews: true
-preview_max_chars: 4000
-capture_conversation_history: true
-conversation_history_max_chars: 40000
-capture_full_prompts: false
-capture_full_responses: true
-resource_attributes:
-  service.name: hermes
-backends:
-  - type: otlp
-    name: agent-insight
-    endpoint: \${HERMES_OTEL_ENDPOINT}
-    headers:
-      x-witty-api-key: "\${AGENT_INSIGHT_API_KEY}"
-HERMES_OTEL_CONFIG
-    echo "Hermes OTel config written to $HERMES_OTEL_PLUGIN_DIR/config.yaml"
+    HERMES_PLUGIN_DIR="$HERMES_HOME/plugins/agent_insight_hermes"
+    mkdir -p "$HERMES_PLUGIN_DIR"
+    cat > "$HERMES_PLUGIN_DIR/config.json" <<HERMES_CONFIG_EOF
+{
+  "host": "\${AGENT_INSIGHT_HOST%/}",
+  "api_key": "$AGENT_INSIGHT_API_KEY",
+  "service_name": "hermes",
+  "max_content_chars": 200000,
+  "spool_dir": "$HOME/.agent-insight/data/hermes-otel-spool",
+  "log_file": "$HOME/.agent-insight/logs/hermes-plugin.log"
+}
+HERMES_CONFIG_EOF
+    echo "Agent Insight Hermes config written to $HERMES_PLUGIN_DIR/config.json"
 fi
 
 # 6. Install Watcher Dependencies (only if OpenClaw watcher is selected)
@@ -497,7 +485,7 @@ if [ "$INSTALL_CLAUDE" = "true" ]; then
     echo "  ✅ Claude Code OTel: ~/.agent-insight/claude_otel_env.sh"
 fi
 if [ "$INSTALL_HERMES" = "true" ]; then
-    echo "  ✅ Hermes OTel Plugin: \${HERMES_HOME:-$HOME/.hermes}/plugins/hermes_otel/config.yaml"
+    echo "  ✅ Agent Insight Hermes Plugin: \${HERMES_HOME:-$HOME/.hermes}/plugins/agent_insight_hermes/config.json"
 fi
 if [ "$INSTALL_OPENCLAW" = "true" ]; then
     echo "  ✅ OpenClaw Watcher: ~/.agent-insight/openclaw_watcher_client.ts"
@@ -738,39 +726,17 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '}',
         '',
         'if ($INSTALL_HERMES) {',
-        '    Write-Host "Installing Hermes OTel plugin..."',
+        '    Write-Host "Installing Agent Insight Hermes plugin..."',
         '    $hermesHome = if ($env:HERMES_HOME) { $env:HERMES_HOME } else { Join-Path $env:USERPROFILE ".hermes" }',
-        '    $hermesAgentDir = Join-Path $hermesHome "hermes-agent"',
-        '    $hermesOtelPluginDir = Join-Path $hermesHome "plugins\\hermes_otel"',
+        '    $hermesPluginDir = Join-Path $hermesHome "plugins\\agent_insight_hermes"',
+        '    New-Item -ItemType Directory -Path $hermesPluginDir -Force | Out-Null',
+        '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/setup/hermes-plugin" -OutFile (Join-Path $hermesPluginDir "__init__.py")',
+        '    @("name: agent_insight_hermes", "version: 0.2.0", "description: Agent Insight telemetry for Hermes", "provides_hooks:", "  - pre_llm_call", "  - post_llm_call", "  - pre_api_request", "  - post_api_request", "  - api_request_error", "  - pre_tool_call", "  - post_tool_call", "  - subagent_start", "  - subagent_stop", "  - on_session_end") | Set-Content -Path (Join-Path $hermesPluginDir "plugin.yaml") -Encoding UTF8',
         '    $hermesCmd = Get-Command hermes -ErrorAction SilentlyContinue',
         '    if ($hermesCmd) {',
-        '        & $hermesCmd.Source plugins install briancaffey/hermes-otel --enable',
+        '        & $hermesCmd.Source plugins enable agent_insight_hermes',
         '    } else {',
-        '        Write-Host "Warning: hermes command not found. Install Hermes first, then rerun this setup or run: hermes plugins install briancaffey/hermes-otel"',
-        '    }',
-        '    New-Item -ItemType Directory -Path $hermesOtelPluginDir -Force | Out-Null',
-        '    $hermesPip = $null',
-        '    foreach ($rel in @("venv\\Scripts\\pip.exe", "venv\\bin\\pip")) {',
-        '        $candidate = Join-Path $hermesAgentDir $rel',
-        '        if (-not $hermesPip -and (Test-Path $candidate)) { $hermesPip = $candidate }',
-        '    }',
-        '    $venvCandidates = @($env:HERMES_AGENT_VENV, $env:HERMES_VENV, (Join-Path $env:USERPROFILE "git\\hermes-agent\\venv"), (Join-Path $env:USERPROFILE "agent\\hermes-agent\\venv"))',
-        '    foreach ($venv in $venvCandidates) {',
-        '        if (-not $hermesPip -and $venv) {',
-        '            foreach ($rel in @("Scripts\\pip.exe", "bin\\pip")) {',
-        '                $candidate = Join-Path $venv $rel',
-        '                if (Test-Path $candidate) { $hermesPip = $candidate; break }',
-        '            }',
-        '        }',
-        '    }',
-        '    if ($hermesPip) {',
-        '        & $hermesPip install opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp-proto-http pyyaml',
-        '        if ((Test-Path (Join-Path $hermesOtelPluginDir "pyproject.toml")) -or (Test-Path (Join-Path $hermesOtelPluginDir "setup.py"))) {',
-        '            & $hermesPip install -e $hermesOtelPluginDir',
-        '        }',
-        '        Write-Host "Hermes OTel dependencies installed with $hermesPip"',
-        '    } else {',
-        '        Write-Host "Warning: could not find hermes-agent venv pip under $hermesAgentDir\\venv, ~/git/hermes-agent/venv, or ~/agent/hermes-agent/venv. Set HERMES_AGENT_VENV=/path/to/venv and rerun setup if Hermes cannot load OTel dependencies."',
+        '        Write-Host "Warning: hermes command not found. The plugin files were installed; enable agent_insight_hermes after installing Hermes."',
         '    }',
         '}',
         '',
@@ -810,33 +776,14 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         'Write-Host "   AGENT_INSIGHT_HOST=$AGENT_INSIGHT_HOST"',
         'Write-Host "   AGENT_INSIGHT_API_KEY=********"',
         '',
-        '# 6.4 Configure Hermes OTel plugin',
+        '# 6.4 Configure Agent Insight Hermes plugin',
         'if ($INSTALL_HERMES) {',
         '    $hermesHome = if ($env:HERMES_HOME) { $env:HERMES_HOME } else { Join-Path $env:USERPROFILE ".hermes" }',
-        '    $hermesOtelPluginDir = Join-Path $hermesHome "plugins\\hermes_otel"',
-        '    New-Item -ItemType Directory -Path $hermesOtelPluginDir -Force | Out-Null',
-        '    $hermesOtelEndpoint = $AGENT_INSIGHT_HOST',
-        '    if ($hermesOtelEndpoint -notmatch "^https?://") { $hermesOtelEndpoint = "http://$hermesOtelEndpoint" }',
-        '    $hermesOtelEndpoint = $hermesOtelEndpoint.TrimEnd("/") + "/api/ingest/otel/v1/traces"',
-        '    $hermesOtelConfig = @"',
-        'enabled: true',
-        'capture_previews: true',
-        'preview_max_chars: 4000',
-        'capture_conversation_history: true',
-        'conversation_history_max_chars: 40000',
-        'capture_full_prompts: false',
-        'capture_full_responses: true',
-        'resource_attributes:',
-        '  service.name: hermes',
-        'backends:',
-        '  - type: otlp',
-        '    name: agent-insight',
-        '    endpoint: $hermesOtelEndpoint',
-        '    headers:',
-        '      x-witty-api-key: "$AGENT_INSIGHT_API_KEY"',
-        '"@',
-        '    Set-Content -Path (Join-Path $hermesOtelPluginDir "config.yaml") -Value $hermesOtelConfig -Encoding UTF8',
-        '    Write-Host "Hermes OTel config written to $hermesOtelPluginDir\\config.yaml"',
+        '    $hermesPluginDir = Join-Path $hermesHome "plugins\\agent_insight_hermes"',
+        '    New-Item -ItemType Directory -Path $hermesPluginDir -Force | Out-Null',
+        '    $hermesConfig = @{ host = $AGENT_INSIGHT_HOST.TrimEnd("/"); api_key = $AGENT_INSIGHT_API_KEY; service_name = "hermes"; max_content_chars = 200000; spool_dir = (Join-Path $skillInsightDir "data\\hermes-otel-spool"); log_file = (Join-Path $skillInsightDir "logs\\hermes-plugin.log") } | ConvertTo-Json',
+        '    Set-Content -Path (Join-Path $hermesPluginDir "config.json") -Value $hermesConfig -Encoding UTF8',
+        '    Write-Host "Agent Insight Hermes config written to $hermesPluginDir\\config.json"',
         '}',
         '',
         '# 6. Install Watcher Dependencies (only if OpenClaw watcher is selected)',
@@ -984,7 +931,7 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '}',
         'if ($INSTALL_HERMES) {',
         '    $summaryHermesHome = if ($env:HERMES_HOME) { $env:HERMES_HOME } else { Join-Path $env:USERPROFILE ".hermes" }',
-        '    Write-Host "  ✅ Hermes OTel Plugin: $summaryHermesHome\\plugins\\hermes_otel\\config.yaml"',
+        '    Write-Host "  ✅ Agent Insight Hermes Plugin: $summaryHermesHome\\plugins\\agent_insight_hermes\\config.json"',
         '}',
         'if ($INSTALL_OPENCLAW) {',
         '    Write-Host "  ✅ OpenClaw Watcher: ~/.agent-insight/openclaw_watcher_client.ts"',

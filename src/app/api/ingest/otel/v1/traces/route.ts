@@ -1,5 +1,5 @@
-import { normalizeClaudeOtlpTraces } from '@/lib/ingest/claude-otel/otlp-json';
-import { appendOtelTraceEvents } from '@/lib/ingest/claude-otel/spool';
+import { normalizeOtlpTraces } from '@/lib/ingest/otel/normalize';
+import { appendOtelTraceEvents } from '@/lib/ingest/otel/spool';
 import { decodeOtlpRequest, OtlpDecodeError } from '@/lib/ingest/otel/decode';
 import { db } from '@/lib/storage/prisma';
 import { NextResponse } from 'next/server';
@@ -31,7 +31,7 @@ export async function POST(req: Request) {
     }
 
     const receivedAt = new Date().toISOString();
-    const events = normalizeClaudeOtlpTraces(body, { receivedAt, authenticatedUser });
+    const events = normalizeOtlpTraces(body, { receivedAt, authenticatedUser });
     const { dirtySessionIds } = appendOtelTraceEvents(events);
 
     return NextResponse.json({
