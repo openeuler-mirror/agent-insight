@@ -1,0 +1,81 @@
+diff --git a/openjiuwen/agent_teams/observability/callback_handler.py b/openjiuwen/agent_teams/observability/callback_handler.py
+index ad80dec..5520cec 100644
+--- a/openjiuwen/agent_teams/observability/callback_handler.py
++++ b/openjiuwen/agent_teams/observability/callback_handler.py
+@@ -277,6 +277,9 @@ class OtelCallbackHandler:
+         try:
+             inputs = self._extract_agent_inputs(args, kwargs)
+             agent_id, role, query = self._unpack_agent_inputs(inputs)
++            # Identity injected via extra_kwargs (from the agent's card) wins over the
++            # inputs payload, which in real invokes carries no agent id.
++            agent_id = str(kwargs.get("agent_id") or agent_id)
+             span = self._tracer().start_span(name=f"agent.{agent_id}", kind=SpanKind.INTERNAL)
+             span.set_attribute(AT_AGENT_ID, agent_id)
+             if role:
+@@ -292,6 +295,7 @@ class OtelCallbackHandler:
+         try:
+             inputs = self._extract_agent_inputs(args, kwargs)
+             agent_id, _, _ = self._unpack_agent_inputs(inputs)
++            agent_id = str(kwargs.get("agent_id") or agent_id)  # match the input-side identity
+             output = kwargs.get("result")
+             span = pop_agent_span(agent_id)
+             if span is None:
+diff --git a/openjiuwen/core/single_agent/base.py b/openjiuwen/core/single_agent/base.py
+index 9cf1946..63b3f2c 100644
+--- a/openjiuwen/core/single_agent/base.py
++++ b/openjiuwen/core/single_agent/base.py
+@@ -60,12 +60,19 @@ class _AgentMeta(ABCMeta):
+         _fw = Runner.callback_framework
+ 
+         fn = instance.invoke
+-        fn = _fw.emit_before(AgentEvents.AGENT_INVOKE_INPUT)(fn)
++        # Inject the agent's own identity (from its card) into the invoke events so
++        # observability can name the agent span. The bound ``instance.invoke`` does
++        # not carry ``self``, and the invoke inputs (query / conversation_id) have no
++        # agent id, so without this the span falls back to "agent.unknown".
++        _agent_identity = {
++            "agent_id": getattr(instance.card, "name", None) or getattr(instance.card, "id", None),
++        }
++        fn = _fw.emit_before(AgentEvents.AGENT_INVOKE_INPUT, extra_kwargs=_agent_identity)(fn)
+         fn = _fw.transform_io(
+             input_event=AgentEvents.AGENT_INVOKE_INPUT,
+             output_event=AgentEvents.AGENT_INVOKE_OUTPUT,
+         )(fn)
+-        fn = _fw.emit_after(AgentEvents.AGENT_INVOKE_OUTPUT)(fn)
++        fn = _fw.emit_after(AgentEvents.AGENT_INVOKE_OUTPUT, extra_kwargs=_agent_identity)(fn)
+         instance.invoke = fn
+ 
+         fn = instance.stream
+diff --git a/tests/unit_tests/agent_teams/observability/test_observability.py b/tests/unit_tests/agent_teams/observability/test_observability.py
+index c9fbc07..7b66a41 100644
+--- a/tests/unit_tests/agent_teams/observability/test_observability.py
++++ b/tests/unit_tests/agent_teams/observability/test_observability.py
+@@ -492,3 +492,28 @@ async def test_agent_invoke_emits_named_span(
+     assert _attr(span, "agentteam.agent.id") == "leader"
+     assert _attr(span, "agentteam.agent.input") == "hello"
+     assert _attr(span, "agentteam.agent.output") == "acknowledged"
++
++
++@pytest.mark.asyncio
++async def test_agent_id_from_injected_kwargs(
++    in_memory_exporter: InMemorySpanExporter,
++) -> None:
++    """The agent identity injected via extra_kwargs names the span even when the
++    invoke inputs carry no agent_id (the real-world shape).
++
++    Regression: real BaseAgent.invoke inputs are {query, conversation_id} with no
++    agent_id, so the agent span fell back to "agent.unknown". _AgentMeta now
++    injects {"agent_id": card.name or card.id} via extra_kwargs on the invoke
++    events; the handler must prefer it over the inputs payload.
++    """
++    fw = Runner.callback_framework
++    real_inputs = {"query": "hi", "conversation_id": "c1"}  # no agent_id, like a real invoke
++
++    await fw.trigger(AgentEvents.AGENT_INVOKE_INPUT, real_inputs, agent_id="reporter-1")
++    await fw.trigger(AgentEvents.AGENT_INVOKE_OUTPUT, real_inputs, agent_id="reporter-1", result="done")
++
++    named = [s for s in in_memory_exporter.get_finished_spans() if s.name == "agent.reporter-1"]
++    assert named, "agent span should be named from injected agent_id, not agent.unknown"
++    assert _attr(named[0], "agentteam.agent.id") == "reporter-1"
++    assert not [s for s in in_memory_exporter.get_finished_spans() if s.name == "agent.unknown"], \
++        "should not fall back to agent.unknown when identity is injected"

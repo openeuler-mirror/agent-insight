@@ -1,0 +1,142 @@
+diff --git a/openjiuwen/agent_teams/observability/callback_handler.py b/openjiuwen/agent_teams/observability/callback_handler.py
+index 0000666..56604b5 100644
+--- a/openjiuwen/agent_teams/observability/callback_handler.py
++++ b/openjiuwen/agent_teams/observability/callback_handler.py
+@@ -304,7 +304,12 @@ class OtelCallbackHandler:
+                 span.set_attribute(AT_AGENT_ROLE, role)
+             if query:
+                 span.set_attribute(AT_AGENT_INPUT, redact_prompt(query, self._config))
+-            push_agent_span(agent_id, span)
++            # Attach the agent span as the current OTel context so LLM/Tool spans
++            # opened during this agent's invoke nest under it (and share its trace).
++            # Without this, child spans become orphan roots and downstream cannot
++            # attribute LLM/tool activity to the agent (esp. in agent-team runs).
++            token = otel_context.attach(set_span_in_context(span))
++            push_agent_span(agent_id, span, token)
+         except Exception as exc:
+             team_logger.warning("otel: on_agent_invoke_input failed: {}", exc)
+ 
+@@ -314,12 +319,15 @@ class OtelCallbackHandler:
+             inputs = self._extract_agent_inputs(args, kwargs)
+             agent_id, _, _ = self._unpack_agent_inputs(inputs)
+             output = kwargs.get("result")
+-            span = pop_agent_span(agent_id)
+-            if span is None:
++            entry = pop_agent_span(agent_id)
++            if entry is None:
+                 return
++            span, token = entry
+             span.set_attribute(AT_AGENT_OUTPUT, redact_completion(output, self._config))
+             span.set_status(Status(StatusCode.OK))
+             span.end()
++            if token is not None:
++                otel_context.detach(token)
+         except Exception as exc:
+             team_logger.warning("otel: on_agent_invoke_output failed: {}", exc)
+ 
+diff --git a/openjiuwen/agent_teams/observability/span_context.py b/openjiuwen/agent_teams/observability/span_context.py
+index aae1d4c..be1dd58 100644
+--- a/openjiuwen/agent_teams/observability/span_context.py
++++ b/openjiuwen/agent_teams/observability/span_context.py
+@@ -69,8 +69,8 @@ _tool_span_map: ContextVar[dict[str, list[Span]]] = ContextVar(
+     default={},
+ )
+ 
+-# Agent spans, keyed by agent identifier.
+-_agent_span_map: ContextVar[dict[str, list[Span]]] = ContextVar(
++# Agent spans (with their attached context token), keyed by agent identifier.
++_agent_span_map: ContextVar[dict[str, list[tuple[Span, Any]]]] = ContextVar(
+     "_otel_agent_span_map",
+     default={},
+ )
+@@ -125,28 +125,33 @@ def pop_tool_span(tool_name: str) -> Span | None:
+     return span
+ 
+ 
+-def push_agent_span(agent_id: str, span: Span) -> None:
+-    """Push an agent span keyed by agent_id."""
++def push_agent_span(agent_id: str, span: Span, token: Any = None) -> None:
++    """Push an agent span (and its attached OTel context token) keyed by agent_id.
++
++    ``token`` is the value returned by ``context.attach`` when the agent span
++    is attached as the current context, so child LLM/Tool spans nest under it;
++    ``pop_agent_span`` hands it back for the paired ``context.detach``.
++    """
+     mapping = dict(_agent_span_map.get())
+     bucket = list(mapping.get(agent_id, []))
+-    bucket.append(span)
++    bucket.append((span, token))
+     mapping[agent_id] = bucket
+     _agent_span_map.set(mapping)
+ 
+ 
+-def pop_agent_span(agent_id: str) -> Span | None:
+-    """Pop the most recent open agent span for agent_id, or None."""
++def pop_agent_span(agent_id: str) -> tuple[Span, Any] | None:
++    """Pop the most recent open ``(span, token)`` for agent_id, or None."""
+     mapping = dict(_agent_span_map.get())
+     bucket = list(mapping.get(agent_id, []))
+     if not bucket:
+         return None
+-    span = bucket.pop()
++    entry = bucket.pop()
+     if bucket:
+         mapping[agent_id] = bucket
+     else:
+         mapping.pop(agent_id, None)
+     _agent_span_map.set(mapping)
+-    return span
++    return entry
+ 
+ 
+ def reset_all() -> None:
+diff --git a/tests/unit_tests/agent_teams/observability/test_observability.py b/tests/unit_tests/agent_teams/observability/test_observability.py
+index b231b50..5870bd2 100644
+--- a/tests/unit_tests/agent_teams/observability/test_observability.py
++++ b/tests/unit_tests/agent_teams/observability/test_observability.py
+@@ -537,3 +537,45 @@ async def test_agent_invoke_emits_named_span(
+     assert _attr(span, "agentteam.agent.id") == "leader"
+     assert _attr(span, "agentteam.agent.input") == "hello"
+     assert _attr(span, "agentteam.agent.output") == "acknowledged"
++
++
++@pytest.mark.asyncio
++async def test_child_spans_nest_under_agent_span(
++    in_memory_exporter: InMemorySpanExporter,
++) -> None:
++    """LLM/Tool spans opened during an agent's invoke nest under the agent span.
++
++    Regression: on_agent_invoke_input created the agent span but never attached
++    it as the current OTel context, so child LLM/Tool spans became orphan ROOT
++    spans (own trace, no parent). In agent-team runs this meant per-agent LLM/
++    tool activity could not be attributed to the agent at all.
++    """
++    fw = Runner.callback_framework
++
++    await fw.trigger(
++        AgentEvents.AGENT_INVOKE_INPUT, {"agent_id": "leader", "user_input": "hi"},
++    )
++    # An LLM call (and a tool call) happen INSIDE the agent's invoke.
++    await fw.trigger(
++        LLMCallEvents.LLM_INVOKE_INPUT, messages=[{"role": "user", "content": "x"}], model="fake-llm-1",
++    )
++    await fw.trigger(ToolCallEvents.TOOL_CALL_STARTED, tool_name="calc", tool_id="c1", inputs=((), {}))
++    await fw.trigger(ToolCallEvents.TOOL_CALL_FINISHED, tool_name="calc", tool_id="c1", inputs=((), {}), result=1)
++    await fw.trigger(
++        LLMCallEvents.LLM_INVOKE_OUTPUT, messages=[], result=_FakeAssistantMessage(content="ok"),
++    )
++    await fw.trigger(
++        AgentEvents.AGENT_INVOKE_OUTPUT, {"agent_id": "leader", "user_input": "hi"}, result="done",
++    )
++
++    agent_spans = [s for s in in_memory_exporter.get_finished_spans() if s.name == "agent.leader"]
++    llm_spans = _spans_by_name(in_memory_exporter, "llm.call")
++    tool_spans = _spans_by_name(in_memory_exporter, "tool.calc")
++    assert agent_spans and llm_spans and tool_spans
++    agent_sid = agent_spans[0].context.span_id
++
++    # The LLM span must nest under the agent span (not be an orphan root).
++    assert llm_spans[0].parent is not None, "llm.call is an orphan root — agent span not attached as context"
++    assert llm_spans[0].context.trace_id == agent_spans[0].context.trace_id
++    # Walk the tool span's ancestry up to the agent span (tool nests under llm nests under agent).
++    assert tool_spans[0].context.trace_id == agent_spans[0].context.trace_id
