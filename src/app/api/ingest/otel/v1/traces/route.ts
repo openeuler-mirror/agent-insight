@@ -1,6 +1,8 @@
 import { normalizeOtlpTraces } from '@/lib/ingest/otel/normalize';
 import { appendOtelTraceEvents } from '@/lib/ingest/otel/spool';
 import { decodeOtlpRequest, OtlpDecodeError } from '@/lib/ingest/otel/decode';
+import { jiuwenServiceName } from '@/lib/ingest/otel/jiuwen/aggregate';
+import { ingestJiuwenOtlp } from '@/lib/ingest/otel/jiuwen/ingest';
 import { db } from '@/lib/storage/prisma';
 import { NextResponse } from 'next/server';
 
@@ -28,6 +30,14 @@ export async function POST(req: Request) {
       }
       console.error('[OTel] Failed to decode request body:', err);
       return NextResponse.json({ error: 'Invalid Payload' }, { status: 400 });
+    }
+
+    // jiuwen (openJiuwen / JiuwenSwarm via agent-core) emits a nested agent.*/team.*
+    // span tree whose structural spans the flat claude-otel normalizer would drop,
+    // so it takes a self-contained raw-span path that rebuilds the agent tree.
+    if (jiuwenServiceName(body) === 'jiuwenswarm') {
+      const { received, sessions } = await ingestJiuwenOtlp(body, { user: authenticatedUser });
+      return NextResponse.json({ status: 'accepted', framework: 'jiuwenswarm', received, sessions });
     }
 
     const receivedAt = new Date().toISOString();
