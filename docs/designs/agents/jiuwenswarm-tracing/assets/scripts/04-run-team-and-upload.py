@@ -24,7 +24,7 @@ from openjiuwen.agent_teams.observability import (
 from openjiuwen.agent_teams.schema.blueprint import TeamAgentSpec
 from openjiuwen.core.runner.runner import Runner
 
-from insight_bridge import make_exporter, transform_team_spans_v2, post_to_insight
+from insight_bridge import make_exporter, transform_team_spans_v3, post_to_insight
 
 
 def load_spec():
@@ -62,7 +62,7 @@ async def main() -> None:
     print(f"=== collected {len(spans)} spans: {dict(names)} ===", flush=True)
     shutdown_observability()
 
-    payload = transform_team_spans_v2(
+    payload = transform_team_spans_v3(
         spans, task_id=task_id, query=query, team_name=team_name,
         leader="team_leader", framework="jiuwenswarm",
         user=os.getenv("INSIGHT_USER") or None,

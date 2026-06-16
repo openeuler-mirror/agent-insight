@@ -41,10 +41,13 @@ PYTHONPATH=.. python 02-run-and-upload.py
 |---|---|---|
 | `make_exporter()` | 造一个 `InMemorySpanExporter`,作为 `init_observability(span_exporter_override=...)` 传入,接住 agent-core 自己 emit 的 span | — |
 | `transform_spans(spans, *, task_id, query, framework="jiuwenswarm", user=None, agent_name="jiuwenswarm")` | **单 agent**:run 后的全部 finished span → 富 payload | `agent_name` 显示名 |
-| `transform_team_spans_v2(spans, *, task_id, query, team_name, leader="team_leader", framework, user)` | **team(当前版)**:用 span 父链精确把 LLM/工具归属到成员;含多 agent 子节点联动配方 | 需上游 #1025 修复后的 span 才精确 |
-| `transform_team_spans(...)` | team **v1**(时间近邻启发式归属):仅作**未打上游修复的 jiuwen** 的 fallback,新代码用 v2 | — |
-| `transform_task_spans(spans, *, task_id, query, coordinator="coordinator", framework, user)` | **Task fan-out**:隔离子 agent(hub-and-spoke)→ 富 payload | — |
+| `transform_team_spans_v3(spans, *, task_id, query, team_name, leader=None, framework, user)` | **team(当前版,新 develop 8b2a384 起用这个)**:按 **span 父链**归属成员 + **自动检测 leader**(card.name 如 `TeamLeader`);含子节点联动 + 顺序 + timing | `leader` 不传会自动测 |
+| `transform_team_spans_v2(...)` | team 旧版:按 **trace_id 投票**归属——**新 develop 单 trace 下失效**,仅留作历史/未修 jiuwen 的 fallback | — |
+| `transform_team_spans(...)` | team **v1**(时间近邻启发式):更老的 fallback | — |
+| `transform_task_spans(spans, *, task_id, query, coordinator="coordinator", framework, user)` | **Task fan-out**:隔离子 agent → 富 payload;含子 agent 联动(`subagent_type` JSON args + 干净 token)、顺序拆分(spawn 回合→子 agent→汇总回合)、timing、`_unwrap_tool_data` 解 `success=True data={...} error=None` | — |
 | `post_to_insight(payload, *, base_url, api_key) -> (status, text)` | POST 到 `{base_url}/api/ingest/upload`;`api_key` 走 header `x-witty-api-key`,无 key 时靠 `payload.user` scope | — |
+
+> **校准要点 / 踩坑**(联动规则、顺序、timing、同 task_id 重传合并、ghost session、protobuf 已通、模块化目标)见 [`../design.md` 文末「接新 develop（8b2a384）重验 + bridge 校准 + 踩坑」](../design.md)。`04-run-team-and-upload.py` 已改用 `transform_team_spans_v3`。
 
 ## scripts/ 各脚本
 
