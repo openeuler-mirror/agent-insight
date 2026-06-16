@@ -140,39 +140,3 @@ export function deriveOpencodeExecutionFields(interactions: AnyObj[]) {
   }
 }
 
-/**
- * 把若干条 opencode 原生 token 用量对象累加成一份总量，口径与 deriveOpencodeExecutionFields
- * 完全一致（复用 usageTotals）。每条入参形如 assistant message 的 `info.tokens`：
- *   `{ input, output, reasoning, cache: { read, write } }`
- *
- * 用途：流式层（opencode-client.chat）在不额外拉一次 listMessages 的前提下，把本轮真实
- * token 用量直接回收进 chat stats —— 与最终落库的 Execution.tokens 同口径，使
- * DebugJobResult.tokenUsage / 灰度 run.tokenUsage 等成本统计不再恒为 0。
- */
-export function sumOpencodeTokenUsages(usages: Array<AnyObj | null | undefined>) {
-  let total = 0
-  let input = 0
-  let output = 0
-  let reasoning = 0
-  let cacheRead = 0
-  let cacheWrite = 0
-  for (const u of usages || []) {
-    if (!u) continue
-    const t = usageTotals(u)
-    total += t.total
-    input += t.input
-    output += t.output
-    reasoning += t.reasoning
-    cacheRead += t.cacheRead
-    cacheWrite += t.cacheWrite
-  }
-  return {
-    total: Math.round(total),
-    input: Math.round(input),
-    output: Math.round(output),
-    reasoning: Math.round(reasoning),
-    cacheRead: Math.round(cacheRead),
-    cacheWrite: Math.round(cacheWrite),
-  }
-}
-
