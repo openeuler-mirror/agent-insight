@@ -104,22 +104,33 @@ interface EventOwner {
   name: string;
 }
 
+function displayHermesAgentName(value: string | undefined, framework: string): string | undefined {
+  const name = String(value || "").trim();
+  if (!name) return undefined;
+  if (name.toLowerCase() === "default") return framework;
+  return name;
+}
+
 function eventOwner(event: OtelTraceEvent, rootSessionId: string, framework: string): EventOwner {
   const attrs = event.attributes || {};
-  const sessionId = firstContent(attrs['hermes.session_id']) || rootSessionId;
-  const parentSessionId = firstContent(attrs['hermes.parent_session_id']);
-  const role = firstContent(attrs['hermes.agent.role']);
-  const name = firstContent(attrs['hermes.agent.name'], role) || framework;
+  const sessionId = firstContent(attrs["hermes.session_id"]) || rootSessionId;
+  const parentSessionId = firstContent(attrs["hermes.parent_session_id"]);
+  const role = firstContent(attrs["hermes.agent.role"]);
+  const isSubagent = sessionId !== rootSessionId || !!parentSessionId || (role !== undefined && role !== "root");
+  const profileName = displayHermesAgentName(firstContent(attrs["hermes.profile.name"]), framework);
+  const explicitName = displayHermesAgentName(firstContent(attrs["hermes.agent.name"]), framework);
+  const legacyRootRoleName = !isSubagent && explicitName?.toLowerCase() === "root";
+  const name = (legacyRootRoleName ? profileName : explicitName) || profileName || (isSubagent ? displayHermesAgentName(role, framework) : undefined) || framework;
   return {
     sessionId,
-    isSubagent: sessionId !== rootSessionId || !!parentSessionId || (role !== undefined && role !== 'root'),
+    isSubagent,
     name,
   };
 }
 
 function ownerFields(owner: EventOwner, framework: string): AnyObj {
   if (!owner.isSubagent) {
-    return { role: 'assistant', agent: framework };
+    return { role: 'assistant', agent: owner.name || framework };
   }
   return {
     role: 'subagent',
@@ -523,6 +534,11 @@ export function aggregateHermesTraceEvents(sessionId: string, events: OtelTraceE
   const latency = agent?.latencyMs || Math.max(...ordered.map((event) => event.latencyMs || 0), 0);
   const llmCallCount = ordered.filter(isApiSpan).length ||
     contentHosts.length;
+  const rootOwner = agent
+    ? eventOwner(agent, sessionId, framework)
+    : ordered.map((event) => eventOwner(event, sessionId, framework)).find((owner) => !owner.isSubagent);
+  const rootAgentName = rootOwner?.name || framework;
+
 
   return {
     task_id: sessionId,
@@ -536,8 +552,8 @@ export function aggregateHermesTraceEvents(sessionId: string, events: OtelTraceE
     label: framework,
     user: firstEvent.user || 'anonymous',
     interactions,
-    agent: framework,
-    agentName: framework,
+    agent: rootAgentName,
+    agentName: rootAgentName,
     llm_call_count: llmCallCount,
     tool_call_count: ordered.filter(isToolSpan).length,
     input_tokens: totalUsage.input_tokens,

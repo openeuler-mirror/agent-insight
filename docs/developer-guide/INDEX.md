@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `a17e02d435fb0aa405acdb26003c117c1674f825` (`a17e02d`) |
+| Commit | `614e5bc89054a36d5fe498d044efdf3fecc4cf06` (`614e5bc`) |
 | Branch | `gyc0528` |
-| Date | 2026-06-11T17:37:44+08:00 |
-| Author | ljnkirito |
-| Subject | `feat: 支持 Hermes OTel trace 接入` |
+| Date | 2026-06-16T15:50:07+08:00 |
+| Author | chen-dingjia |
+| Subject | `!137 merge fix/static-eval-bundle-path into master` |
 
-**如何更新：** `git diff a17e02d HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff 614e5bc HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
