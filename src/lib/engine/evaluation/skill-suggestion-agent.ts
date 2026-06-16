@@ -6,16 +6,26 @@
  *   - 建议流（本模块）：读**完整 trace 资料包**（含 thinking、工具入参出参）整体反思，
  *     按根因产出 skill 改进建议。贵、只对「有信号」的 case 跑（见 shouldRunSuggestionAgent）。
  *
- * 复用智能诊断那套设施：ensureTraceBundle 落盘 + runGeneralAgent 让 agent 按需读
- * （manifest/index → node → artifact）。skill 内容**不旁路注入**——agent 直接从 trace
- * 里读运行期实际 load 进去的 SKILL.md（load_skill 节点），评的就是"真实跑过的那版 skill"。
+ * 对齐旧版 opencode 评测器：ensureTraceBundle 落盘 + ephemeral opencode
+ * createSession/tag/chat/recordEvaluatorExecution。skill 内容**不旁路注入**——agent 直接从
+ * trace 里读运行期实际 load 进去的 SKILL.md（load_skill 节点），评的就是"真实跑过的那版 skill"。
  *
  * 输出固定 5 字段，直接对接 derive-skill-opt-points → SkillIssue 表。
  */
 import { jsonrepair } from 'jsonrepair';
-import { runGeneralAgent, ensureSessionWorkspace } from '@/lib/engine/general-agent';
+import {
+  AgentInsight,
+  type ChatHandlers,
+  type SendPromptPayload,
+} from '@/lib/engine/skill-generation/opencode-agent-cli/opencode-client';
+import { runWithEphemeralOpencodeServer } from '@/lib/engine/skill-generation/opencode-agent-cli/opencode-manager';
+import { ensureSessionWorkspace, buildPermissionsForWorkspace } from '@/lib/engine/general-agent';
 import { withBackgroundOpencodeSlot } from '@/lib/engine/general-agent/concurrency-limiter';
+import { loadServerModelForUser } from '@/lib/engine/general-agent/server-model-config';
 import { ensureTraceBundle } from '@/lib/engine/observability/trace-bundle';
+import { tagOpencodeSession } from '@/lib/internal-agent-tag';
+import { findSystemAgentDefinition, getSystemAgentId } from '@/lib/system-agents';
+import { recordEvaluatorExecution } from './evaluator-execution-recorder';
 import type { KeyActionTraceAnalysisResult, TrajectoryDimensionScores } from './trajectory-evaluator';
 
 /** 改进建议分类——映射到 SkillIssue.category（前端按它分组展示）。 */
@@ -29,6 +39,8 @@ export const SKILL_SUGGESTION_CATEGORIES = [
   '其他',
 ] as const;
 export type SkillSuggestionCategory = (typeof SKILL_SUGGESTION_CATEGORIES)[number];
+
+const SUGGESTION_AGENT_NAME = 'skill-suggestion-advisor';
 
 /** 建议 agent 的产物——一条 skill 归因 ↔ 一条改进建议（+ trace 证据）。 */
 export interface SkillSuggestion {
@@ -260,6 +272,104 @@ export interface RunSkillSuggestionAgentArgs {
   keyActionResults?: KeyActionTraceAnalysisResult[] | null;
 }
 
+async function runSuggestionViaOpencode(args: {
+  user: string;
+  query: string;
+  workspaceDir: string;
+  executionId: string;
+}): Promise<string> {
+  const model = await loadServerModelForUser(args.user);
+  if (!model?.apiKey) {
+    throw new Error('未配置评测模型，请先在「模型配置」中激活一个模型。');
+  }
+
+  return runWithEphemeralOpencodeServer(
+    { user: args.user || undefined, verbose: false, isolateHome: true },
+    async (serverUrl) => {
+      const insight = new AgentInsight({
+        baseURL: serverUrl,
+        timeout: 180_000,
+        maxRetries: 2,
+        logLevel: 'warn',
+      });
+      const permissions = buildPermissionsForWorkspace(args.workspaceDir);
+      const sessionResp = await insight.createSession({
+        title: `${SUGGESTION_AGENT_NAME}-${args.executionId}-${Date.now()}`,
+        permission: permissions,
+        directory: args.workspaceDir,
+      });
+      const sessionId = String(
+        (sessionResp as Record<string, unknown>)?.id
+          ?? (sessionResp as Record<string, unknown>)?.ID
+          ?? '',
+      );
+      if (!sessionId) {
+        throw new Error('Failed to create opencode session for skill suggestion');
+      }
+
+      const agentId = await getSystemAgentId('opencode', SUGGESTION_AGENT_NAME);
+      const def = findSystemAgentDefinition('opencode', SUGGESTION_AGENT_NAME);
+      tagOpencodeSession(sessionId, {
+        agentName: SUGGESTION_AGENT_NAME,
+        agentId,
+        skill: def?.traceSkill,
+        displayQuery: args.query,
+        user: args.user || undefined,
+      });
+
+      let fullText = '';
+      let runtimeError: Error | null = null;
+      const handlers: ChatHandlers = {
+        onText: (e) => {
+          fullText += e.delta;
+        },
+        onError: (e) => {
+          runtimeError = e;
+        },
+        onTool: (e) => {
+          console.log(`[skill-suggestion-agent] tool ${e.name}: phase=${e.phase}`);
+        },
+      };
+
+      const payload: SendPromptPayload = {
+        text: args.query,
+        agent: 'plan',
+        model,
+        modelOptions: { temperature: 0.2, maxTokens: 6000 },
+        system: SUGGESTION_SYSTEM_PROMPT,
+        permission: permissions,
+        directory: args.workspaceDir,
+      };
+
+      let agentText = '';
+      try {
+        const result = await insight.chat(sessionId, payload, handlers, {
+          streamTimeoutMs: 5 * 60 * 1000,
+          idleTimeoutMs: 60_000,
+        });
+        agentText = result.transcriptText || result.text || fullText;
+        if (runtimeError) throw runtimeError;
+        return agentText;
+      } finally {
+        try {
+          await recordEvaluatorExecution(insight, {
+            taskId: sessionId,
+            agentName: SUGGESTION_AGENT_NAME,
+            user: args.user,
+            query: args.query,
+            fallbackOutput: agentText || fullText,
+          });
+        } catch (persistError) {
+          console.warn(
+            '[skill-suggestion-agent] failed to persist suggestion execution:',
+            (persistError as Error)?.message || persistError,
+          );
+        }
+      }
+    },
+  );
+}
+
 /**
  * 跑建议 agent：落盘 trace 资料包 → agent 从 trace 读实际加载的 skill 并整体反思 → 返回 5 字段建议[]。
  * 失败时返回 []（不影响评测主流程）。门控由 caller 用 shouldRunSuggestionAgent 决定。
@@ -303,26 +413,12 @@ export async function runSkillSuggestionAgent(args: RunSkillSuggestionAgentArgs)
   const MAX_ATTEMPTS = 3;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
-      const result = await withBackgroundOpencodeSlot(
-        () => runGeneralAgent({
+      const agentText = await withBackgroundOpencodeSlot(
+        () => runSuggestionViaOpencode({
           user,
           query,
-          system: SUGGESTION_SYSTEM_PROMPT,
-          workspaceTag,
-          // 标成内部系统 Agent：让这些会话像 trace-quality-evaluator 一样被识别为"系统内部任务"，
-          // 从用例分析/链路列表过滤掉（见 system-agent-names.ts 的 SYSTEM_AGENT_NAMES /
-          // HIDDEN_FROM_CASE_ANALYSIS），不污染被测 skill 的链路。不打 tagSkill。
-          systemAgentName: 'skill-suggestion-advisor',
-          // 一次性按真实时间写库（同 trace-quality-evaluator 走 recordEvaluatorExecution），
-          // 不依赖 plugin 反复上报——否则后续评测重传同一 session 会把执行时间刷成最新。
-          recordTraceAs: 'skill-suggestion-advisor',
-          sessionTitle: `skill-suggestion · ${executionId}`,
-          interactionPolicy: 'auto-deny',
-          agent: 'plan',
-          // 批量评测下用独立 opencode 进程，避免共享 server 过载导致 fetch failed。
-          ephemeralServer: true,
-          timeoutMs: 5 * 60 * 1000,
-          modelOptions: { temperature: 0.2, maxTokens: 6000 },
+          workspaceDir,
+          executionId,
         }),
         {
           taskType: 'skill-suggestion',
@@ -332,14 +428,10 @@ export async function runSkillSuggestionAgent(args: RunSkillSuggestionAgentArgs)
           label: `skill-suggestion · ${executionId}`,
         },
       );
-      // 先用 fullOutput（多轮 agent 可能把 JSON 写在中途），解析不到再退回 output。
-      let suggestions = parseSkillSuggestions(result.fullOutput || '');
-      if (suggestions.length === 0 && result.output) {
-        suggestions = parseSkillSuggestions(result.output);
-      }
+      const suggestions = parseSkillSuggestions(agentText);
       if (suggestions.length === 0) {
         // 跑完但没解析出建议：打印原始输出预览，便于区分"解析问题"还是"真没建议"。
-        const preview = String(result.fullOutput || result.output || '').slice(0, 800);
+        const preview = String(agentText || '').slice(0, 800);
         console.warn(`[skill-suggestion-agent] empty parse for ${executionId} (attempt ${attempt}); raw output preview:\n${preview}`);
       }
       // 成功跑完（无论是否空）不再重试——重试只针对错误。
