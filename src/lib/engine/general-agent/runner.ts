@@ -23,6 +23,7 @@ import {
 import { deploySkillToWorkspace } from './skill-workspace-deployer';
 import { tagOpencodeSession } from '@/lib/internal-agent-tag';
 import { findSystemAgentDefinition, getSystemAgentId } from '@/lib/system-agents';
+import { deriveOpencodeExecutionFields } from '@/lib/engine/observability/opencode-derived-metrics';
 
 let dispatcherInited = false;
 function ensureDispatcher() {
@@ -226,6 +227,16 @@ export interface RunGeneralAgentResult {
     toolCallCount: number;
     subagentCount: number;
     eventTypeCounter: Record<string, number>;
+    /** 本轮真实 token 总量（与落库 Execution.tokens 同口径）。无 token 信息时为 0。
+     * 供 DebugJobResult.tokenUsage / 灰度 run.tokenUsage 等成本统计使用。 */
+    totalTokens: number;
+    /** token 明细，按 assistant/subagent message 累加。 */
+    tokens: {
+      input: number;
+      output: number;
+      reasoning: number;
+      cache: { read: number; write: number };
+    };
   };
 }
 
@@ -497,6 +508,36 @@ async function runGeneralAgentWithClient(
     }
   }
 
+  // 本轮真实 token 用量：复用与落库 Execution.tokens **完全同源**的链路
+  // (client.listMessages → normalizeEvaluatorExecutionInteractions → deriveOpencodeExecutionFields)，
+  // 不另起平行统计、不会有口径漂移。chat() 的事件流 stats 不含 token，这里补上，使
+  // DebugJobResult.tokenUsage / 灰度 run.tokenUsage 等成本统计不再恒为 0
+  // (ephemeralServer 路径在 server 仍存活的窗口内完成本次拉取，同样生效)。
+  // normalize 与 recordEvaluatorExecution 同住一个会牵连 prisma 的模块，沿用 recordTraceAs
+  // 的动态 import 规避静态依赖；失败兜底为 0，不影响主流程返回。
+  let tokenStats: Pick<RunGeneralAgentResult['stats'], 'totalTokens' | 'tokens'> = {
+    totalTokens: 0,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+  };
+  try {
+    const { normalizeEvaluatorExecutionInteractions } = await import('@/lib/engine/evaluation/evaluator-execution-recorder');
+    const rawMessages = await client.listMessages(sessionId);
+    const derived = deriveOpencodeExecutionFields(
+      normalizeEvaluatorExecutionInteractions(Array.isArray(rawMessages) ? rawMessages : []),
+    );
+    tokenStats = {
+      totalTokens: derived.tokens,
+      tokens: {
+        input: derived.input_tokens,
+        output: derived.output_tokens,
+        reasoning: derived.reasoning_tokens,
+        cache: { read: derived.cache_read_input_tokens, write: derived.cache_creation_input_tokens },
+      },
+    };
+  } catch (err) {
+    console.warn(`[general-agent] token usage derivation failed for session ${sessionId}:`, (err as Error)?.message || err);
+  }
+
   return {
     sessionId,
     workspaceDir,
@@ -505,7 +546,7 @@ async function runGeneralAgentWithClient(
     output: result.text,
     fullOutput: result.transcriptText || result.text,
     interactions,
-    stats: result.stats,
+    stats: { ...result.stats, ...tokenStats },
   };
 }
 /**
