@@ -75,7 +75,7 @@ def _content_text(value: Any) -> str:
     if isinstance(value, list):
         return "\n".join(part for part in (_content_text(item) for item in value) if part)
     if isinstance(value, dict):
-        for key in ("text", "output_text", "content"):
+        for key in ("text", "output_text", "content", "parts"):
             text = _content_text(value.get(key))
             if text:
                 return text
@@ -381,6 +381,7 @@ class _Collector:
         self.tool_spans: Dict[str, Dict[str, Any]] = {}
         self.subagents: Dict[str, Dict[str, Any]] = {}
         self.completed_by_root: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        self.ended_roots: set[str] = set()
 
     def close(self) -> None:
         self.exporter.close()
@@ -474,6 +475,51 @@ class _Collector:
                 }
             ]
         }
+
+    def _cleanup_root(self, root_id: str) -> None:
+        session_ids = {
+            sid for sid in self.sessions
+            if sid == root_id or self._root_id(sid) == root_id
+        }
+        span_count = len(self.completed_by_root.get(root_id, {}))
+        self.completed_by_root.pop(root_id, None)
+        self.ended_roots.discard(root_id)
+        for sid in session_ids:
+            self.sessions.pop(sid, None)
+            self.current_turn.pop(sid, None)
+        self.turns = {key: value for key, value in self.turns.items() if key[0] not in session_ids}
+        self.api_spans = {
+            key: value for key, value in self.api_spans.items()
+            if value.get("session_id") not in session_ids
+        }
+        self.tool_spans = {
+            key: value for key, value in self.tool_spans.items()
+            if value.get("session_id") not in session_ids
+        }
+        self.subagents = {
+            key: value for key, value in self.subagents.items()
+            if key not in session_ids and value.get("parent_session_id") not in session_ids
+        }
+        self.exporter.logger.write(
+            "info",
+            f"root state cleaned root={root_id} sessions={len(session_ids)} spans={span_count}",
+        )
+
+    def _maybe_cleanup_root(self, root_id: str) -> bool:
+        if root_id not in self.ended_roots:
+            return False
+        active_children = [
+            child_session_id for child_session_id in self.subagents
+            if self._root_id(child_session_id) == root_id
+        ]
+        if active_children:
+            self.exporter.logger.write(
+                "info",
+                f"root cleanup deferred root={root_id} active_subagents={len(active_children)}",
+            )
+            return False
+        self._cleanup_root(root_id)
+        return True
 
     def pre_llm_call(self, **kwargs: Any) -> None:
         with self.lock:
@@ -757,6 +803,7 @@ class _Collector:
     def subagent_stop(self, **kwargs: Any) -> None:
         with self.lock:
             child_session_id = str(_first(kwargs.get("child_session_id"), ""))
+            root_id = self._root_id(child_session_id)
             state = self.subagents.pop(child_session_id, None)
             if not state:
                 return
@@ -786,34 +833,24 @@ class _Collector:
                 },
             )
             self._complete(state["parent_session_id"], state["task_span"])
+            self._maybe_cleanup_root(root_id)
 
     def on_session_end(self, **kwargs: Any) -> None:
         with self.lock:
             session_id = self._session_id(kwargs)
             root_id = self._root_id(session_id)
+            is_root_session = session_id == root_id
+            if is_root_session:
+                self.ended_roots.add(root_id)
         self.exporter.flush()
         with self.lock:
-            session_ids = {
-                sid for sid in self.sessions
-                if sid == root_id or self._root_id(sid) == root_id
-            }
-            self.completed_by_root.pop(root_id, None)
-            for sid in session_ids:
-                self.sessions.pop(sid, None)
-                self.current_turn.pop(sid, None)
-            self.turns = {key: value for key, value in self.turns.items() if key[0] not in session_ids}
-            self.api_spans = {
-                key: value for key, value in self.api_spans.items()
-                if value.get("session_id") not in session_ids
-            }
-            self.tool_spans = {
-                key: value for key, value in self.tool_spans.items()
-                if value.get("session_id") not in session_ids
-            }
-            self.subagents = {
-                key: value for key, value in self.subagents.items()
-                if key not in session_ids and value.get("parent_session_id") not in session_ids
-            }
+            if is_root_session:
+                self._maybe_cleanup_root(root_id)
+            else:
+                self.exporter.logger.write(
+                    "info",
+                    f"child session ended session={session_id} root={root_id}; root state retained",
+                )
 
 
 _collector: Optional[_Collector] = None

@@ -53,3 +53,51 @@ test("Hermes plugin source imports and extracts normalized provider text", () =>
 
   assert.equal(result.status, 0, result.stderr || result.stdout)
 })
+
+test("Hermes plugin retains root snapshots until all subagents finish", () => {
+  const pluginPath = path.join(process.cwd(), "scripts/hermes_agent_insight_plugin.py")
+  const script = [
+    "import importlib.util",
+    "import threading",
+    `spec = importlib.util.spec_from_file_location('agent_insight_hermes_lifecycle_test', ${JSON.stringify(pluginPath)})`,
+    "module = importlib.util.module_from_spec(spec)",
+    "spec.loader.exec_module(module)",
+    "class Logger:",
+    "    def write(self, level, message): pass",
+    "class Exporter:",
+    "    def __init__(self): self.logger = Logger(); self.flushes = 0; self.submissions = []",
+    "    def flush(self): self.flushes += 1",
+    "    def submit(self, root_id, payload): self.submissions.append((root_id, payload))",
+    "collector = module._Collector.__new__(module._Collector)",
+    "collector.config = {'service_name': 'hermes'}",
+    "collector.max_chars = module.DEFAULT_MAX_CONTENT_CHARS",
+    "collector.exporter = Exporter()",
+    "collector.lock = threading.RLock()",
+    "collector.sessions = {'root': {'root_session_id': 'root', 'role': 'root'}, 'child': {'root_session_id': 'root', 'parent_session_id': 'root', 'role': 'leaf'}}",
+    "collector.turns = {}",
+    "collector.current_turn = {}",
+    "collector.api_spans = {}",
+    "collector.tool_spans = {}",
+    "existing_span = collector._new_span('api.test', 'root', '0000000000000000', None, {})",
+    "collector.completed_by_root = {'root': {'existing': existing_span}}",
+    "collector.ended_roots = set()",
+    "task_span = collector._new_span('tool.task', 'root', '0000000000000001', None, {})",
+    "agent_span = collector._new_span('agent.subagent.leaf', 'child', '0000000000000002', task_span['spanId'], {})",
+    "collector.subagents = {'child': {'parent_session_id': 'root', 'task_span': task_span, 'agent_span': agent_span}}",
+    "collector.on_session_end(session_id='child')",
+    "assert 'root' in collector.completed_by_root",
+    "assert 'child' in collector.subagents",
+    "collector.on_session_end(session_id='root')",
+    "assert 'root' in collector.completed_by_root",
+    "assert 'root' in collector.ended_roots",
+    "collector.subagent_stop(child_session_id='child', child_summary='done', child_status='completed')",
+    "assert collector.exporter.submissions",
+    "assert 'root' not in collector.completed_by_root",
+    "assert 'root' not in collector.sessions",
+    "assert 'child' not in collector.sessions",
+    "assert 'root' not in collector.ended_roots",
+  ].join("\n")
+  const result = spawnSync("python3", ["-c", script], { encoding: "utf8" })
+
+  assert.equal(result.status, 0, result.stderr || result.stdout)
+})
