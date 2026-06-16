@@ -226,6 +226,16 @@ export interface RunGeneralAgentResult {
     toolCallCount: number;
     subagentCount: number;
     eventTypeCounter: Record<string, number>;
+    /** 本轮真实 token 总量（与落库 Execution.tokens 同口径）。无 token 信息时为 0。
+     * 供 DebugJobResult.tokenUsage / 灰度 run.tokenUsage 等成本统计使用。 */
+    totalTokens: number;
+    /** token 明细，按 assistant/subagent message 累加。 */
+    tokens: {
+      input: number;
+      output: number;
+      reasoning: number;
+      cache: { read: number; write: number };
+    };
   };
 }
 

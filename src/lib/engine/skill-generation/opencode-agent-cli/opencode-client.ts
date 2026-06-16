@@ -33,6 +33,7 @@
 import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk";
 import { fileURLToPath } from "node:url";
 import { extractCoreOutput } from "./core-output";
+import { sumOpencodeTokenUsages } from "@/lib/engine/observability/opencode-derived-metrics";
 
 // =============================================================================
 // 类型定义
@@ -774,6 +775,15 @@ export class AgentInsight {
       toolCallCount: number;
       subagentCount: number;
       eventTypeCounter: Record<string, number>;
+      /** 本轮真实 token 总量（与落库的 Execution.tokens 同口径）。无 token 信息时为 0。 */
+      totalTokens: number;
+      /** token 明细，按 assistant/subagent message 累加。 */
+      tokens: {
+        input: number;
+        output: number;
+        reasoning: number;
+        cache: { read: number; write: number };
+      };
     };
   }> {
     assertNonEmptyString(sessionId, "sessionId");
@@ -841,6 +851,10 @@ export class AgentInsight {
     let subagentCount = 0;
     const eventTypeCounter: Record<string, number> = {};
     const unknownEventSamples: Record<string, unknown>[] = [];
+    // 每条 assistant/subagent message 的 token 用量（opencode 原生 `info.tokens`，累积值），
+    // 按 messageID 去重取最新——message.updated 对同一条消息会多次触发，键去重避免重复累加。
+    // 收尾时用 sumOpencodeTokenUsages 按 Execution.tokens 同口径合计 → stats.totalTokens。
+    const tokensByMessage = new Map<string, Record<string, unknown>>();
 
     // 子会话追踪
     const allowedSessionIDs = new Set<string>([sessionId]);
@@ -1378,6 +1392,12 @@ export class AgentInsight {
                 // 这里始终用最新的 info.id 作为"当前 assistant message"。
                 assistantMsgId = info.id;
 
+                // 收集本条消息的 token 用量。info.tokens 是该 message 的累积值，message.updated
+                // 多次触发时后到的更全，按 messageID set 覆盖即可（含子 agent 的独立 message）。
+                if (info.tokens && typeof info.tokens === "object") {
+                  tokensByMessage.set(info.id, info.tokens as Record<string, unknown>);
+                }
+
                 if (!assistantStartedEmitted.has(info.id)) {
                   assistantStartedEmitted.add(info.id);
                   onAssistantMessage?.({
@@ -1728,6 +1748,18 @@ export class AgentInsight {
       response?.info?.id || response?.message?.id || assistantMsgId;
     promptResponseText = extractTextFromPromptResponse(response);
 
+    // 兜底：流式若整体降级没收到 message.updated（只剩 sendPrompt 同步返回），
+    // 用同步返回的最终 assistant message 的 token 补一条，避免 stats.totalTokens 假 0。
+    const respInfo = (response as { info?: { id?: string; tokens?: unknown } } | undefined)?.info;
+    if (
+      respInfo?.id &&
+      respInfo.tokens &&
+      typeof respInfo.tokens === "object" &&
+      !tokensByMessage.has(respInfo.id)
+    ) {
+      tokensByMessage.set(respInfo.id, respInfo.tokens as Record<string, unknown>);
+    }
+
     // 兜底：若短时间内未收到 text delta，再用 prompt 同步返回的文本补一刀。
     // 通过延迟避免与首批 SSE 增量事件竞态导致“一次性整段输出”。
     if (
@@ -1796,6 +1828,9 @@ export class AgentInsight {
     const msgs = [...textAcc.values()];
     const transcriptText = extractCoreOutput(msgs, { fallback: fullText });
 
+    // 本轮真实 token 用量：按 Execution.tokens 同口径合计每条 assistant/subagent message。
+    const tokenTotals = sumOpencodeTokenUsages([...tokensByMessage.values()]);
+
     this.log("info", "chat.done", {
       sessionId,
       assistantMsgId,
@@ -1807,6 +1842,7 @@ export class AgentInsight {
       textDeltaCount,
       toolCallCount,
       subagentCount,
+      totalTokens: tokenTotals.total,
     });
 
     return {
@@ -1820,6 +1856,13 @@ export class AgentInsight {
         toolCallCount,
         subagentCount,
         eventTypeCounter,
+        totalTokens: tokenTotals.total,
+        tokens: {
+          input: tokenTotals.input,
+          output: tokenTotals.output,
+          reasoning: tokenTotals.reasoning,
+          cache: { read: tokenTotals.cacheRead, write: tokenTotals.cacheWrite },
+        },
       },
     };
   }
