@@ -45,6 +45,21 @@ export interface LlmEvalOutcome {
 const TIMEOUT_MS = Number(process.env.STATIC_EVAL_LLM_TIMEOUT_MS || 120_000);
 const MAX_OUTPUT_TOKENS = 2048;
 
+/**
+ * 评分采样温度。实测：不设 temperature 时走 provider 默认（DeepSeek ≈1.0），
+ * 同一份 SKILL.md 的维度分会在 1-5 间剧烈抖动（尤以「指令适配性」为甚），
+ * 单次抽样跨版本对比会造出"优化后分数下降"的假象。固定为 0 大幅压缩方差。
+ */
+const TEMPERATURE = Number(process.env.STATIC_EVAL_TEMPERATURE ?? 0);
+
+/**
+ * 每个评估阶段的采样次数：跑 SAMPLES 次取「每维度中位数」。
+ * 动机：temperature=0 对 DeepSeek 仍非完全确定（偶有离群分），且会出现偶发假阴性
+ * （如把完整脚本判为"核心脚本不完整→1"）。多采样取中位数把离群值投票掉，让分数可复现。
+ * 代价：LLM 调用数 ×SAMPLES（静态评估低频，可接受）；设 1 即退回单次行为。
+ */
+const SAMPLES = Math.max(1, Number(process.env.STATIC_EVAL_SAMPLES || 3));
+
 function severityFromScore(score: number): Severity | null {
   if (!Number.isFinite(score)) return null;
   if (score >= 5) return null;          // 5 = 无 issue
@@ -105,6 +120,7 @@ async function callLlm(
         messages: [{ role: 'user', content: prompt }],
         response_format: { type: 'json_object' as const },
         max_tokens: MAX_OUTPUT_TOKENS,
+        temperature: TEMPERATURE,
       },
       { signal: controller.signal },
     );
@@ -234,6 +250,57 @@ function mergeChunkResults(results: ChunkResult[]): ChunkResult {
   return { comment: mergedComment, dimensionScores: mergedScores, issues: mergedIssues };
 }
 
+/** 下中位数（偶数个取偏低者），确定性、对离群值鲁棒。整数评分场景下稳定。 */
+function lowerMedian(nums: number[]): number {
+  const s = [...nums].sort((a, b) => a - b);
+  return s[Math.floor((s.length - 1) / 2)];
+}
+
+/**
+ * 把同一阶段的 SAMPLES 次采样聚合成一个结果：
+ *   - 每个维度的分数取所有采样的「中位数」（投票掉离群的高/低分与偶发假阴性）
+ *   - 该维度的 issues / justification 取「分数等于中位数」的那次采样（与上报分自洽）
+ *   - comment 取首个非空代表采样
+ * 注意：用中位数而非 mergeChunkResults 的 min——min 会把"不幸的低抽样"重新放大，正是要消除的噪声。
+ */
+function aggregateSamples(results: ChunkResult[]): ChunkResult {
+  if (results.length === 0) return { comment: '', dimensionScores: {}, issues: [] };
+  if (results.length === 1) return results[0];
+
+  const allDims = new Set<string>();
+  for (const r of results) for (const d of Object.keys(r.dimensionScores)) allDims.add(d);
+
+  const dimensionScores: Record<string, number> = {};
+  const issues: LlmIssueDraft[] = [];
+  let comment = '';
+
+  for (const dim of allDims) {
+    const scored = results.filter(r => typeof r.dimensionScores[dim] === 'number');
+    if (scored.length === 0) continue;
+    const med = lowerMedian(scored.map(r => r.dimensionScores[dim]));
+    dimensionScores[dim] = med;
+    // 代表采样：分数命中中位数的第一条；其 issues 才与上报分自洽
+    const rep = scored.find(r => r.dimensionScores[dim] === med) || scored[0];
+    issues.push(...rep.issues.filter(i => i.dimension === dim));
+    if (!comment && rep.comment) comment = rep.comment;
+  }
+  return { comment, dimensionScores, issues };
+}
+
+/** 跑某阶段 SAMPLES 次并按中位数聚合；单次失败不拖累其它采样，全失败才抛错。 */
+async function sampleStage(fn: () => Promise<ChunkResult>, k: number): Promise<ChunkResult> {
+  if (k <= 1) return fn();
+  const settled = await Promise.allSettled(Array.from({ length: k }, () => fn()));
+  const ok = settled
+    .filter((s): s is PromiseFulfilledResult<ChunkResult> => s.status === 'fulfilled')
+    .map(s => s.value);
+  if (ok.length === 0) {
+    const firstErr = settled.find(s => s.status === 'rejected') as PromiseRejectedResult | undefined;
+    throw firstErr?.reason ?? new Error('all samples failed');
+  }
+  return aggregateSamples(ok);
+}
+
 export async function runLlmStaticEvaluation(args: {
   user?: string | null;
   skillContent: string;        // SKILL.md 全文
@@ -325,12 +392,13 @@ export async function runLlmStaticEvaluation(args: {
     return parsedToResult(await callAndParse(prompt, '安全风险性', 'SECURITY'), 'security');
   };
 
-  // 3 类并发：META 1 次；ROBUSTNESS / SECURITY 每 chunk 1 次
-  // 用 Promise.allSettled 让单段失败不拖累其它段
+  // 3 类并发：每类各跑 SAMPLES 次取中位数去噪。
+  // META 每次 1 调用；ROBUSTNESS / SECURITY 每次按 chunk fan-out 后 mergeChunkResults。
+  // 用 Promise.allSettled 让单段失败不拖累其它段。
   const settled = await Promise.allSettled([
-    evalMeta(),
-    Promise.all(effectiveChunks.map(evalRobustness)).then(mergeChunkResults),
-    Promise.all(effectiveChunks.map(evalSecurity)).then(mergeChunkResults),
+    sampleStage(evalMeta, SAMPLES),
+    sampleStage(() => Promise.all(effectiveChunks.map(evalRobustness)).then(mergeChunkResults), SAMPLES),
+    sampleStage(() => Promise.all(effectiveChunks.map(evalSecurity)).then(mergeChunkResults), SAMPLES),
   ]);
 
   const [metaRes, robustnessRes, securityRes] = settled;
