@@ -10,6 +10,8 @@ human_summary: ../../humans/jiuwenswarm-tracing/index.html
 
 # 把 agent-insight 接入 openJiuwen / JiuwenSwarm —— 一次执行的端到端追踪（OTEL seam）
 
+> **⚠️ 2026-06-16 更新（接手前必读）**：上游 agent-core `develop` 已被 rework（`8b2a384`）重写整个 observability 子系统——**本文档原文（"顺带修复"那三个 bug、`agent.<id>` 那套 span 形状）已过时**：三个 bug 都被上游修了（我们当初的 3 个回馈 PR 作废、应关），span 形状也变了。针对新 develop 的**重新验证、`insight_bridge.py` 校准、以及一串新踩的坑**记在文末 → [接新 develop（8b2a384）重验 + bridge 校准 + 踩坑](#接新-develop8b2a384重验--bridge-校准--踩坑2026-06-16)。**校准后的 `assets/insight_bridge.py` 已是当前版本**，接手模块化从它起步。
+
 ## What this is
 验证 **agent-insight（agent 观测/评估平台）能否观测 openJiuwen / JiuwenSwarm（多 agent 系统）的一次执行**，并在 trace UI 里看到完整链路。结论：**能，且零改 jiuwen 业务代码**。已端到端跑通并 UI 验证了三种执行形态——单 agent、多 agent team（消息总线、成员互相通信）、Task fan-out（隔离子 agent、无通信）；过程中还顺手修复了 jiuwen observability 的三个真实 bug（流式 span 不收尾、agent span 未挂 context 致子 span 孤儿、agent.id=unknown；均已提 issue+PR），并定位了多 agent 子节点渲染的精确约定。这条路天然支撑"openJiuwen 缺的 jiuwen-ops 由 agent-insight 来补"的合作叙事。
 
@@ -145,3 +147,64 @@ uv venv .venv && uv pip install --python .venv/bin/python -e /path/to/agent-core
 .venv/bin/python 06-run-task-and-upload.py   # Task fan-out
 # 查看：{INSIGHT}/trace?ownership=all&scope=all&time=all&taskId=<task_id>
 ```
+
+---
+
+## 接新 develop（8b2a384）重验 + bridge 校准 + 踩坑（2026-06-16）
+
+接手模块化前先看这节。上游把 observability 重写后，我们重新跑通了三形态并把 `assets/insight_bridge.py` 校准到位（**当前 asset 已是校准版**）；下面记下新 span 形状、校准点、和一串非常坑的细节。
+
+### 1) 上游 rework 修了全部三个 bug → 我们的回馈 PR 作废
+
+`8b2a384`（`feat(observability): agent team observability`，MR `!1603`，Refs `#1013`，现 `origin/develop` tip）重写了整个子系统。前文"顺带修复"的三个 bug 都被正确实现 + 带回归测试：
+
+| 缺口 | 上游怎么修的 | 回归测试 |
+|---|---|---|
+| ① 流式 llm span 不收尾 | `on_llm_output` 终止回调真 pop + `span.end()` | `test_streaming_llm_call_records_ttft_and_reasoning`（断言流式 total_tokens） |
+| ② agent span 孤儿（未 attach） | `otel_context.attach` 挂 agent span | `test_tool_call_nests_under_agent_span` / `test_span_tree_shape` |
+| ③ `agent.id="unknown"` | `rail.py` 用 `agent.card.name` 设 `AT_AGENT_ID`（与我们当初选 card.name 一致） | 同上 |
+
+→ **我们之前提的 3 个 PR（#1023/1648、#1024/1650、#1025/1652）与 rework 冲突、应直接关闭。**
+
+### 2) 新 span 形状（bridge 必须按这个）
+
+- 整次 run **单一 trace_id、正确嵌套**：`team.<name>`(root) → `agent.<member>.task_iteration.<n>`（`member` = `agentteam.agent.id`，已是真名不再 unknown）→ `llm.call` / `tool.<name>`。**`llm.call` 和 `tool.*` 是兄弟，都挂 agent span 下（不再 tool 挂 llm 下）。** 新增 `llm.reasoning`(挂 llm.call 下) 和 `llm.chunk`(event)。
+- token / indexed prompt / `gen_ai.completion.0` / tool 属性名**没变**。
+- **单 agent 和 Task fan-out** 仍是多 root-trace、**无 agent/team span**（rail 只在 team 模式 fire）；task 委派 span 名是 `tool.task_tool`，output 包成 `success=True data={...} error=None`。
+
+### 3) bridge 校准点（已落进 `assets/insight_bridge.py`）
+
+- **`transform_team_spans_v3`**（替代 v2）：v2 按 trace_id 投票归属成员，**单 trace 下失效**；v3 按 **span 父链**找 enclosing `agent.*` span 归属成员（`_enclosing_member`）+ **自动检测 leader**（跑 spawn/build/create 的成员，即 card.name 如 `TeamLeader`）。`v2` 留作未打上游修复的 jiuwen 的 fallback。
+- **`transform_task_spans`**：① summary fallback（task 无 agent span → 取最长 llm completion）；② `_unwrap_tool_data` 解 `success=True data={...} error=None`；③ **子 agent 联动**；④ **顺序拆分**；⑤ **timing**（见下）。
+- **单 agent `transform_spans` 不用改。**
+
+### 4) 多 agent 子节点联动（不满足就 AGENTS=1、子 agent 塌缩）
+
+`buildAgentCallTree`（`src/lib/engine/observability/agent-trace.ts`）建子节点要**两条同时**：
+
+1. 父发一个 tool_call，`function.name == "task"`，且 `arguments` 是**含 `subagent_type` 的 JSON 字符串**（`interactionToEvents` 会 `JSON.parse`；写成纯描述字符串就读不到 → 不联动）；
+2. 子 agent interaction `role:"subagent"` + `subagent_session_id` 非空，其 `subagent_name` 经 `inferSubagentType()`（取**首词**、`#` 等非 `[\w-]` 字符处**截断**、小写）**== 那个 `subagent_type`**。
+
+→ 成员名用**干净 token**（`reporter-1` / `general-purpose-1`，**别带 `#`**）。team 的 `spawn_teammate` 映射成 `task` + `subagent_type=成员名`；task fan-out 的委派同理。
+
+### 5) 顺序坑（UI 对单个 turn 先渲 llm 文本、再渲 tool_calls）
+
+把"最终汇总 + spawns"塞进**一个** assistant turn → 汇总文本会排在 spawns **之前**。修法：
+
+- **task**：拆成 **spawn 回合（content=最早 llm completion、带 spawns + 各自 timing）→ 子 agent → 汇总回合（content=最后/最长 completion，放在子 agent 之后）**。
+- **team（v3）**：合成的 spawn-linkage 回合**别插在 user 之后**（会抢在 leader 的 build_team/create_task 真实 setup 前面）；**惰性插在第一个 member turn 之前**——既满足"spawn 必须先于 subagent"，又不抢 leader setup。
+- 注意：spawn 回合的 content 常为空（协调者首个 llm.call 只发 task 调用、没正文）→ UI 有一行空 LLM，**是真实的不是 bug**。
+
+### 6) 时长（task 早期全是 "-"）
+
+UI 时长来自：tool_call 的 `timing.{started_at, completed_at}`、interaction 的 `timeInfo.{created, completed}`（ms；`interactionStartedAt` / `agent-trace.ts:613`）。`v3` 给每个 turn 都加了 `timeInfo`；task 也已补：task tool_call 加 `timing`、subagent interaction 加 `timeInfo`，都取该 `tool.task_tool` span 的 start/end（= 子 agent 工作时长）。
+
+### 7) 摄入 / 重传两个大坑
+
+- **同 `task_id` 重传是合并、不是覆盖**：`data-service.ts` 默认 `sessionMergeStrategy='monotonic'`（为 opencode 流式上报反复重传同 session 而设计），未知框架（jiuwenswarm→fallback adapter）命中它 → 重传纠正版会**并到旧的**上（实测变 8 条=旧4+新4）。**纠正版务必换全新 `task_id`**。Hermes adapter 用的是 `'snapshot-replace'`（整体覆盖）→ **模块化时给 jiuwen adapter 声明 `sessionMergeStrategy:'snapshot-replace'`** 就能同 id 覆盖。
+- **`DELETE /api/observe/data {task_id}` 只删 execution、不删 session（interactions）**；而且若删除时那次上传的**后台 auto-eval 还在跑**，会从残留 session 把 execution **重新落回来**（看着像删不掉）。稳妥做法：换新 id，不要纠结删旧 session。
+
+### 8) 重验结果 + 模块化目标
+
+- **三形态全部 POST 200 入库、UI 渲染正确**（顺序、时长、子 agent 下钻都对）。119 上 `demo@huawei.com` 下三条 demo：`jiuwen-team-demo` / `jiuwen-task-92a62308` / `jiuwen-spike-725295b4`（看链接带 `ownership=all&scope=all&time=all&user=demo@huawei.com`）。
+- **模块化目标 = Hermes 式服务端 OTEL adapter**：`src/lib/ingest/otel/adapters/jiuwen.ts`（把 `OtelTraceEvent[]` 归一化成 `ExecutionRecord`，`traces-aggregator.ts` 按 `service.name=jiuwenswarm` 路由）+ `adapters/jiuwen.ts`（FrameworkDescriptor，`sessionMergeStrategy:'snapshot-replace'`）注册进 `adapters/registry.ts`。**spike 当年否掉 OTLP 直连的 protobuf 拦路虎已通**（`src/lib/ingest/otel/decode.ts` 现支持 `application/x-protobuf`）→ jiuwen 侧可用 agent-core 自带 OTLP exporter（`init_observability(exporter="otlp_http", endpoint=...)`）近乎零代码直连，归一化全交给 TS adapter。本 `insight_bridge.py`（批量 InMemory → transform → 富 `/upload`）只是 spike/demo 形态，**不是模块化目标**，但它的属性映射 + 联动/顺序/timing 规则可直接搬进 TS adapter。
