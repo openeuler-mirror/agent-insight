@@ -101,6 +101,9 @@ test("OTel traces: aggregates Hermes agent spans without double-counting usage",
       attributes: {
         "openinference.span.kind": "AGENT",
         "hermes.session.kind": "session",
+        "hermes.agent.role": "root",
+        "hermes.agent.name": "default",
+        "hermes.profile.name": "default",
         "input.value": "Which subagents are available?",
         "output.value": "Here are the available subagents.",
       },
@@ -147,6 +150,8 @@ test("OTel traces: aggregates Hermes agent spans without double-counting usage",
 
   assert.ok(record)
   assert.equal(record.framework, "hermes")
+  assert.equal(record.agentName, "hermes")
+  assert.equal(record.agent, "hermes")
   assert.equal(record.model, "GLM-5.1")
   assert.equal(record.query, "Which subagents are available?")
   assert.equal(record.final_result, "Here are the available subagents.")
@@ -461,6 +466,8 @@ test("OTel traces: Hermes adapter preserves subagent ownership and builds a chil
     "hermes.session_id": rootSessionId,
     "hermes.root_session_id": rootSessionId,
     "hermes.agent.role": "root",
+    "hermes.agent.name": "planner",
+    "hermes.profile.name": "planner",
   };
   const childAttrs = {
     "hermes.session_id": childSessionId,
@@ -552,6 +559,9 @@ test("OTel traces: Hermes adapter preserves subagent ownership and builds a chil
 
   const record = aggregateOtelTraceEvents(rootSessionId, events);
   assert.ok(record);
+  assert.equal(record.agentName, "planner");
+  assert.equal(record.agent, "planner");
+  assert.equal(record.interactions?.find((interaction: any) => interaction.role === "user")?.agent, "planner");
   assert.equal(record.interactions?.filter((interaction: any) => interaction.role === "subagent").length, 2);
   assert.equal(record.interactions?.find((interaction: any) => interaction.role === "subagent")?.subagent_session_id, childSessionId);
 
