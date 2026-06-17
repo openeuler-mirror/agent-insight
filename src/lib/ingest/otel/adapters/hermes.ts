@@ -16,6 +16,19 @@ function eventEndMs(event: OtelTraceEvent): number {
   return (event.startTimeMs || 0) + Math.max(0, event.latencyMs || 0);
 }
 
+function eventEndIso(event: OtelTraceEvent | undefined): string | undefined {
+  if (!event) return undefined;
+  const endMs = eventEndMs(event);
+  return endMs > 0 ? toIso(endMs) : undefined;
+}
+
+function latestEventByEnd(events: OtelTraceEvent[]): OtelTraceEvent | undefined {
+  return events.reduce<OtelTraceEvent | undefined>((latest, event) => {
+    if (!latest) return event;
+    return eventEndMs(event) >= eventEndMs(latest) ? event : latest;
+  }, undefined);
+}
+
 function asContent(value: any): string | undefined {
   if (value === undefined || value === null) return undefined;
   if (typeof value === 'string') {
@@ -438,7 +451,8 @@ export function aggregateHermesTraceEvents(sessionId: string, events: OtelTraceE
 
   const framework = ordered.find((event) => event.serviceName)?.serviceName || 'hermes';
   const children = buildChildren(ordered);
-  const agent = ordered.find((event) => isAgentContainer(event) && !eventOwner(event, sessionId, framework).isSubagent);
+  const rootAgents = ordered.filter((event) => isAgentContainer(event) && !eventOwner(event, sessionId, framework).isSubagent);
+  const agent = latestEventByEnd(rootAgents);
   const llmContainers = ordered.filter(isLlmContainer);
   const contentHosts = llmContainers.length > 0
     ? llmContainers
@@ -466,7 +480,6 @@ export function aggregateHermesTraceEvents(sessionId: string, events: OtelTraceE
           !isLlmContainer(event)
         );
     const apiEvents = subtreeEvents.filter(isApiSpan);
-    const toolEvents = subtreeEvents.filter(isToolSpan);
     const finalApi = [...apiEvents].reverse().find((event) =>
       finishReason(event) === 'stop' &&
       outputText(event)
@@ -528,9 +541,19 @@ export function aggregateHermesTraceEvents(sessionId: string, events: OtelTraceE
 
   const usageEvents = selectUsageEvents(ordered, agent);
   const totalUsage = usageForEvents(usageEvents);
-  const firstEvent = agent || ordered[0];
+  const firstEvent = ordered[0];
   const lastAssistant = [...interactions].reverse().find((interaction) => interaction.role === 'assistant' && String(interaction.content || '').trim());
   const firstUser = interactions.find((interaction) => interaction.role === 'user' && String(interaction.content || '').trim());
+  const finalResult = lastAssistant?.content || '';
+  const rootStopApi = latestEventByEnd(ordered.filter((event) => {
+    const owner = eventOwner(event, sessionId, framework);
+    return isApiSpan(event)
+      && !owner.isSubagent
+      && owner.sessionId === sessionId
+      && finishReason(event) === 'stop'
+      && !!outputText(event);
+  }));
+  const traceCompletedAt = finalResult ? eventEndIso(agent || rootStopApi) : undefined;
   const latency = agent?.latencyMs || Math.max(...ordered.map((event) => event.latencyMs || 0), 0);
   const llmCallCount = ordered.filter(isApiSpan).length ||
     contentHosts.length;
@@ -547,7 +570,8 @@ export function aggregateHermesTraceEvents(sessionId: string, events: OtelTraceE
     model,
     tokens: totalUsage.total,
     latency,
-    final_result: lastAssistant?.content || '',
+    final_result: finalResult,
+    trace_completed_at: traceCompletedAt,
     timestamp: new Date(firstEvent.startTimeMs || Date.parse(firstEvent.receivedAt) || Date.now()),
     label: framework,
     user: firstEvent.user || 'anonymous',

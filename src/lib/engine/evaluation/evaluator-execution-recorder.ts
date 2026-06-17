@@ -212,6 +212,18 @@ function inferTimestampFromInteractions(interactions: EvaluatorTraceInteraction[
   return firstCreated ? new Date(firstCreated) : new Date();
 }
 
+export function inferCompletionTimestampFromInteractions(interactions: EvaluatorTraceInteraction[]): Date {
+  const latest = interactions
+    .flatMap(interaction => [
+      toTimestamp(interaction.timeInfo?.completed),
+      toTimestamp(interaction.timeInfo?.created),
+      toTimestamp(interaction.timestamp),
+    ])
+    .filter((value): value is number => Number.isFinite(value))
+    .reduce((max, value) => Math.max(max, value), 0);
+  return latest > 0 ? new Date(latest) : new Date();
+}
+
 function buildFallbackInteractions(input: RecordEvaluatorExecutionInput): EvaluatorTraceInteraction[] {
   const now = new Date().toISOString();
   const query = String(input.query || '').trim();
@@ -417,7 +429,7 @@ export async function recordDirectEvaluatorExecution(
     failures: [],
     skill_issues: [],
     force_query_update: true,
-    opencode_cli_completed: true,
+    trace_completed_at: inferCompletionTimestampFromInteractions(interactions),
   });
 
   return interactions.length;

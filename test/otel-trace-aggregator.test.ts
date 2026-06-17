@@ -155,6 +155,7 @@ test("OTel traces: aggregates Hermes agent spans without double-counting usage",
   assert.equal(record.model, "GLM-5.1")
   assert.equal(record.query, "Which subagents are available?")
   assert.equal(record.final_result, "Here are the available subagents.")
+  assert.equal(record.trace_completed_at, "1970-01-01T00:00:12.697Z")
   assert.equal(record.tokens, 16115)
   assert.equal(record.input_tokens, 15694)
   assert.equal(record.output_tokens, 421)
@@ -166,6 +167,131 @@ test("OTel traces: aggregates Hermes agent spans without double-counting usage",
   assert.equal(record.interactions?.[1]?.role, "assistant")
   assert.equal(record.interactions?.[1]?.content, "Here are the available subagents.")
   assert.equal(record.interactions?.[1]?.usage.total, 16115)
+})
+
+test("OTel traces: Hermes completion uses the latest root turn without hermes.session.kind", () => {
+  const sessionId = "20260616_195101_0590e0";
+  const rootAttrs = {
+    "hermes.session_id": sessionId,
+    "hermes.root_session_id": sessionId,
+    "hermes.agent.role": "root",
+    "hermes.agent.name": "root",
+  };
+  const events = [
+    traceEvent({
+      sessionId,
+      traceId: "trace-hermes-real-shape",
+      spanId: "agent-1",
+      name: "agent",
+      serviceName: "hermes",
+      model: undefined,
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+      latencyMs: 2223,
+      startTimeMs: 1000,
+      attributes: {
+        ...rootAttrs,
+        "openinference.span.kind": "AGENT",
+        "input.value": "hello didi",
+        "output.value": "Hi.",
+      },
+    }),
+    traceEvent({
+      sessionId,
+      traceId: "trace-hermes-real-shape",
+      spanId: "llm-1",
+      parentSpanId: "agent-1",
+      name: "llm.deepseek-v4-flash",
+      serviceName: "hermes",
+      model: undefined,
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+      latencyMs: 2222,
+      startTimeMs: 1000,
+      attributes: {
+        ...rootAttrs,
+        "openinference.span.kind": "LLM",
+        "input.value": "hello didi",
+        "output.value": "Hi.",
+      },
+    }),
+    traceEvent({
+      sessionId,
+      traceId: "trace-hermes-real-shape",
+      spanId: "api-1",
+      parentSpanId: "llm-1",
+      name: "api.deepseek-v4-flash",
+      serviceName: "hermes",
+      model: undefined,
+      usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
+      latencyMs: 2210,
+      startTimeMs: 1009,
+      attributes: {
+        ...rootAttrs,
+        "openinference.span.kind": "LLM",
+        "llm.response.finish_reason": "stop",
+        "output.value": "Hi.",
+      },
+    }),
+    traceEvent({
+      sessionId,
+      traceId: "trace-hermes-real-shape",
+      spanId: "agent-2",
+      name: "agent",
+      serviceName: "hermes",
+      model: undefined,
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+      latencyMs: 15515,
+      startTimeMs: 15000,
+      attributes: {
+        ...rootAttrs,
+        "openinference.span.kind": "AGENT",
+        "input.value": "帮我看看啊内存",
+        "output.value": "Memory summary.",
+      },
+    }),
+    traceEvent({
+      sessionId,
+      traceId: "trace-hermes-real-shape",
+      spanId: "llm-2",
+      parentSpanId: "agent-2",
+      name: "llm.deepseek-v4-flash",
+      serviceName: "hermes",
+      model: undefined,
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+      latencyMs: 15512,
+      startTimeMs: 15000,
+      attributes: {
+        ...rootAttrs,
+        "openinference.span.kind": "LLM",
+        "input.value": "帮我看看啊内存",
+        "output.value": "Memory summary.",
+      },
+    }),
+    traceEvent({
+      sessionId,
+      traceId: "trace-hermes-real-shape",
+      spanId: "api-2",
+      parentSpanId: "llm-2",
+      name: "api.deepseek-v4-flash",
+      serviceName: "hermes",
+      model: undefined,
+      usage: { input_tokens: 20, output_tokens: 5, total_tokens: 25 },
+      latencyMs: 2380,
+      startTimeMs: 28120,
+      attributes: {
+        ...rootAttrs,
+        "openinference.span.kind": "LLM",
+        "llm.response.finish_reason": "stop",
+        "output.value": "Memory summary.",
+      },
+    }),
+  ];
+
+  const record = aggregateOtelTraceEvents(sessionId, events);
+
+  assert.ok(record);
+  assert.equal(record.query, "hello didi");
+  assert.equal(record.final_result, "Memory summary.");
+  assert.equal(record.trace_completed_at, "1970-01-01T00:00:30.515Z");
 })
 
 test("OTel traces: Hermes adapter builds user, tool, and final output from span tree", () => {
@@ -266,6 +392,7 @@ test("OTel traces: Hermes adapter builds user, tool, and final output from span 
   assert.equal(record.model, "GLM-5.1")
   assert.equal(record.query, "Show me the skill.")
   assert.equal(record.final_result, "Final answer.")
+  assert.equal(record.trace_completed_at, "1970-01-01T00:00:13.731Z")
   assert.equal(record.tokens, 44356)
   assert.equal(record.input_tokens, 44033)
   assert.equal(record.output_tokens, 323)

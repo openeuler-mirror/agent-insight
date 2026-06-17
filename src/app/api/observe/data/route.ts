@@ -175,9 +175,32 @@ function inferOpencodeCliExitedFromExistingTelemetry(taskId: string): boolean | 
     return setCache(true);
 }
 
+export function hasClaudeCodeAssistantOutput(interactions: TimestampCarrier[]): boolean {
+    return interactions.some((interaction: any) => {
+        const role = String(interaction?.role || '').toLowerCase();
+        if (role !== 'assistant' && role !== 'subagent') return false;
+        return Boolean(String(interaction?.content || '').trim());
+    });
+}
+
+export function inferClaudeCodeTraceCompletedAt(args: {
+    framework?: unknown;
+    explicitCompleted?: boolean;
+    latestActivityMs?: number;
+    quietLongEnough?: boolean;
+}): string | null {
+    const framework = String(args.framework ?? '').toLowerCase();
+    if (framework !== 'claudecode') return null;
+    if (args.explicitCompleted) return null;
+    const latestActivityMs = args.latestActivityMs || 0;
+    if (!args.quietLongEnough || latestActivityMs <= 0) return null;
+    return new Date(latestActivityMs).toISOString();
+}
+
 async function getAutoEvalReadiness(record: Record<string, unknown>, baseUrl?: string | null) {
+    const framework = String(record.framework ?? '').toLowerCase();
     const hasFinalResult = Boolean(String(record.final_result ?? record.finalResult ?? '').trim());
-    if (!hasFinalResult) {
+    if (!hasFinalResult && framework !== 'claudecode') {
         return {
             autoEvalReady: false,
             autoEvalWaitReason: 'missing-final-result',
@@ -197,10 +220,18 @@ async function getAutoEvalReadiness(record: Record<string, unknown>, baseUrl?: s
     }
 
     const interactions = parseInteractionList(session?.interactions);
+    if (!hasFinalResult && !hasClaudeCodeAssistantOutput(interactions)) {
+        return {
+            autoEvalReady: false,
+            autoEvalWaitReason: 'missing-final-result',
+            traceLastActivityAt: null,
+            traceCompletedAt: null,
+        };
+    }
+
     const latestActivityMs = getLatestTraceActivityMs(interactions, record.timestamp);
     const completedAtMs = toMsTimestamp(session?.endTime);
     const stableMs = getAutoEvalStableMs();
-    const framework = String(record.framework ?? '').toLowerCase();
     const quietLongEnough = latestActivityMs > 0 && Date.now() - latestActivityMs >= stableMs;
     const explicitCompleted = completedAtMs != null && completedAtMs > 0;
     // 已有明确结束时间(endTime)的 session 就别再扫遥测了——它已经判完。这让"服务端自己跑完、已落
@@ -234,7 +265,12 @@ async function getAutoEvalReadiness(record: Record<string, unknown>, baseUrl?: s
             ? new Date(completedAtMs).toISOString()
             : opencodeCliExited === true
                 ? new Date().toISOString()
-                : null,
+                : inferClaudeCodeTraceCompletedAt({
+                    framework,
+                    explicitCompleted,
+                    latestActivityMs,
+                    quietLongEnough,
+                }),
     };
 }
 
@@ -387,6 +423,11 @@ export async function GET(request: Request) {
         // 没有(未评测/纯对齐)再回退 matchJson.overallScore。
         const trajectory_score = lastEval?.trajectoryScore ?? null;
         if (skipAutoEvalReady) {
+            const traceLifecycle = baseTraceLifecycle.traceStatus === 'success'
+                ? baseTraceLifecycle
+                : String(record.framework ?? '').toLowerCase() === 'claudecode'
+                    ? getTraceLifecycle((await getAutoEvalReadiness(record, new URL(request.url).origin)).traceCompletedAt)
+                    : baseTraceLifecycle;
             return {
                 ...record,
                 is_evaluating,
@@ -394,12 +435,12 @@ export async function GET(request: Request) {
                 last_eval_error,
                 trajectory_score,
                 trajectoryScore: trajectory_score,
-                trace_status: baseTraceLifecycle.traceStatus,
-                traceStatus: baseTraceLifecycle.traceStatus,
-                trace_completed_at: baseTraceLifecycle.traceCompletedAt,
-                traceCompletedAt: baseTraceLifecycle.traceCompletedAt,
-                trace_status_reason: baseTraceLifecycle.traceStatusReason,
-                traceStatusReason: baseTraceLifecycle.traceStatusReason,
+                trace_status: traceLifecycle.traceStatus,
+                traceStatus: traceLifecycle.traceStatus,
+                trace_completed_at: traceLifecycle.traceCompletedAt,
+                traceCompletedAt: traceLifecycle.traceCompletedAt,
+                trace_status_reason: traceLifecycle.traceStatusReason,
+                traceStatusReason: traceLifecycle.traceStatusReason,
             };
         }
         const readiness = await getAutoEvalReadiness(record, new URL(request.url).origin);

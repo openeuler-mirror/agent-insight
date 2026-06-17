@@ -4,6 +4,7 @@ import test from 'node:test';
 import { buildAgentCallTree } from '@/lib/engine/observability/agent-trace';
 import {
   buildDirectEvaluatorInteractions,
+  inferCompletionTimestampFromInteractions,
   shouldForceOpencodeEvalTransport,
 } from '@/lib/engine/evaluation/evaluator-execution-recorder';
 
@@ -83,6 +84,25 @@ test('explicit usage.total wins over input+output sum', () => {
     timestampISO: TS,
   });
   assert.equal(interactions[1]?.usage?.total, 999);
+});
+
+test('infers direct evaluator completion from the latest interaction timestamp', () => {
+  const completedAt = inferCompletionTimestampFromInteractions([
+    {
+      role: 'user',
+      timestamp: '2026-06-10T00:00:00.000Z',
+    },
+    {
+      role: 'assistant',
+      timestamp: '2026-06-10T00:00:01.000Z',
+      timeInfo: {
+        created: '2026-06-10T00:00:01.000Z',
+        completed: '2026-06-10T00:00:03.000Z',
+      },
+    },
+  ]);
+
+  assert.equal(completedAt.toISOString(), '2026-06-10T00:00:03.000Z');
 });
 
 test('falls back to display query when userMessage is absent; drops empty content', () => {
