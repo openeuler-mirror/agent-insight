@@ -1,15 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-    hasClaudeCodeAssistantOutput,
-    inferClaudeCodeTraceCompletedAt,
+    hasAssistantOutput,
+    inferQuietWindowTraceCompletedAt,
 } from '@/app/api/observe/data/route';
 
 test('Claude Code trace lifecycle: quiet window infers completion for claudecode only', () => {
     const latestActivityMs = Date.parse('2026-06-17T07:03:13.399Z');
 
     assert.equal(
-        inferClaudeCodeTraceCompletedAt({
+        inferQuietWindowTraceCompletedAt({
             framework: 'claudecode',
             latestActivityMs,
             quietLongEnough: true,
@@ -20,7 +20,7 @@ test('Claude Code trace lifecycle: quiet window infers completion for claudecode
 
     for (const framework of ['opencode', 'hermes', 'openclaw', 'claude', undefined]) {
         assert.equal(
-            inferClaudeCodeTraceCompletedAt({
+            inferQuietWindowTraceCompletedAt({
                 framework,
                 latestActivityMs,
                 quietLongEnough: true,
@@ -36,7 +36,7 @@ test('Claude Code trace lifecycle: active or explicitly completed traces are not
     const latestActivityMs = Date.parse('2026-06-17T07:03:13.399Z');
 
     assert.equal(
-        inferClaudeCodeTraceCompletedAt({
+        inferQuietWindowTraceCompletedAt({
             framework: 'claudecode',
             latestActivityMs,
             quietLongEnough: false,
@@ -46,7 +46,7 @@ test('Claude Code trace lifecycle: active or explicitly completed traces are not
     );
 
     assert.equal(
-        inferClaudeCodeTraceCompletedAt({
+        inferQuietWindowTraceCompletedAt({
             framework: 'claudecode',
             latestActivityMs,
             quietLongEnough: true,
@@ -58,7 +58,7 @@ test('Claude Code trace lifecycle: active or explicitly completed traces are not
 
 test('Claude Code trace lifecycle: light records can use session assistant output as completion signal', () => {
     assert.equal(
-        hasClaudeCodeAssistantOutput([
+        hasAssistantOutput([
             { role: 'user', content: 'hello' },
             { role: 'assistant', content: 'hi there' },
         ]),
@@ -66,7 +66,7 @@ test('Claude Code trace lifecycle: light records can use session assistant outpu
     );
 
     assert.equal(
-        hasClaudeCodeAssistantOutput([
+        hasAssistantOutput([
             { role: 'user', content: 'hello' },
             { role: 'assistant', content: '   ' },
         ]),
