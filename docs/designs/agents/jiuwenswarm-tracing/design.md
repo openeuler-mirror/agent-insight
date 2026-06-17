@@ -10,6 +10,8 @@ human_summary: ../../humans/jiuwenswarm-tracing/index.html
 
 # 把 agent-insight 接入 openJiuwen / JiuwenSwarm —— 一次执行的端到端追踪（OTEL seam）
 
+> **⚠️ 2026-06-16 更新（接手前必读）**：上游 agent-core `develop` 已被 rework（`8b2a384`）重写整个 observability 子系统——**本文档原文（"顺带修复"那三个 bug、`agent.<id>` 那套 span 形状）已过时**：三个 bug 都被上游修了（我们当初的 3 个回馈 PR 作废、应关），span 形状也变了。针对新 develop 的**重新验证、`insight_bridge.py` 校准、以及一串新踩的坑**记在文末 → [接新 develop（8b2a384）重验 + bridge 校准 + 踩坑](#接新-develop8b2a384重验--bridge-校准--踩坑2026-06-16)。**校准后的 `assets/insight_bridge.py` 已是当前版本**，接手模块化从它起步。
+
 ## What this is
 验证 **agent-insight（agent 观测/评估平台）能否观测 openJiuwen / JiuwenSwarm（多 agent 系统）的一次执行**，并在 trace UI 里看到完整链路。结论：**能，且零改 jiuwen 业务代码**。已端到端跑通并 UI 验证了三种执行形态——单 agent、多 agent team（消息总线、成员互相通信）、Task fan-out（隔离子 agent、无通信）；过程中还顺手修复了 jiuwen observability 的三个真实 bug（流式 span 不收尾、agent span 未挂 context 致子 span 孤儿、agent.id=unknown；均已提 issue+PR），并定位了多 agent 子节点渲染的精确约定。这条路天然支撑"openJiuwen 缺的 jiuwen-ops 由 agent-insight 来补"的合作叙事。
 
@@ -145,3 +147,108 @@ uv venv .venv && uv pip install --python .venv/bin/python -e /path/to/agent-core
 .venv/bin/python 06-run-task-and-upload.py   # Task fan-out
 # 查看：{INSIGHT}/trace?ownership=all&scope=all&time=all&taskId=<task_id>
 ```
+
+---
+
+## 接新 develop（8b2a384）重验 + bridge 校准 + 踩坑（2026-06-16）
+
+接手模块化前先看这节。上游把 observability 重写后，我们重新跑通了三形态并把 `assets/insight_bridge.py` 校准到位（**当前 asset 已是校准版**）；下面记下新 span 形状、校准点、和一串非常坑的细节。
+
+### 1) 上游 rework 修了全部三个 bug → 我们的回馈 PR 作废
+
+`8b2a384`（`feat(observability): agent team observability`，MR `!1603`，Refs `#1013`，现 `origin/develop` tip）重写了整个子系统。前文"顺带修复"的三个 bug 都被正确实现 + 带回归测试：
+
+| 缺口 | 上游怎么修的 | 回归测试 |
+|---|---|---|
+| ① 流式 llm span 不收尾 | `on_llm_output` 终止回调真 pop + `span.end()` | `test_streaming_llm_call_records_ttft_and_reasoning`（断言流式 total_tokens） |
+| ② agent span 孤儿（未 attach） | `otel_context.attach` 挂 agent span | `test_tool_call_nests_under_agent_span` / `test_span_tree_shape` |
+| ③ `agent.id="unknown"` | `rail.py` 用 `agent.card.name` 设 `AT_AGENT_ID`（与我们当初选 card.name 一致） | 同上 |
+
+→ **我们之前提的 3 个 PR（#1023/1648、#1024/1650、#1025/1652）与 rework 冲突、应直接关闭。**
+
+### 2) 新 span 形状（bridge 必须按这个）
+
+- 整次 run **单一 trace_id、正确嵌套**：`team.<name>`(root) → `agent.<member>.task_iteration.<n>`（`member` = `agentteam.agent.id`，已是真名不再 unknown）→ `llm.call` / `tool.<name>`。**`llm.call` 和 `tool.*` 是兄弟，都挂 agent span 下（不再 tool 挂 llm 下）。** 新增 `llm.reasoning`(挂 llm.call 下) 和 `llm.chunk`(event)。
+- token / indexed prompt / `gen_ai.completion.0` / tool 属性名**没变**。
+- **单 agent 和 Task fan-out** 仍是多 root-trace、**无 agent/team span**（rail 只在 team 模式 fire）；task 委派 span 名是 `tool.task_tool`，output 包成 `success=True data={...} error=None`。
+
+### 3) bridge 校准点（已落进 `assets/insight_bridge.py`）
+
+- **`transform_team_spans_v3`**（替代 v2）：v2 按 trace_id 投票归属成员，**单 trace 下失效**；v3 按 **span 父链**找 enclosing `agent.*` span 归属成员（`_enclosing_member`）+ **自动检测 leader**（跑 spawn/build/create 的成员，即 card.name 如 `TeamLeader`）。`v2` 留作未打上游修复的 jiuwen 的 fallback。
+- **`transform_task_spans`**：① summary fallback（task 无 agent span → 取最长 llm completion）；② `_unwrap_tool_data` 解 `success=True data={...} error=None`；③ **子 agent 联动**；④ **顺序拆分**；⑤ **timing**（见下）。
+- **单 agent `transform_spans` 不用改。**
+
+### 4) 多 agent 子节点联动（不满足就 AGENTS=1、子 agent 塌缩）
+
+`buildAgentCallTree`（`src/lib/engine/observability/agent-trace.ts`）建子节点要**两条同时**：
+
+1. 父发一个 tool_call，`function.name == "task"`，且 `arguments` 是**含 `subagent_type` 的 JSON 字符串**（`interactionToEvents` 会 `JSON.parse`；写成纯描述字符串就读不到 → 不联动）；
+2. 子 agent interaction `role:"subagent"` + `subagent_session_id` 非空，其 `subagent_name` 经 `inferSubagentType()`（取**首词**、`#` 等非 `[\w-]` 字符处**截断**、小写）**== 那个 `subagent_type`**。
+
+→ 成员名用**干净 token**（`reporter-1` / `general-purpose-1`，**别带 `#`**）。team 的 `spawn_teammate` 映射成 `task` + `subagent_type=成员名`；task fan-out 的委派同理。
+
+### 5) 顺序坑（UI 对单个 turn 先渲 llm 文本、再渲 tool_calls）
+
+把"最终汇总 + spawns"塞进**一个** assistant turn → 汇总文本会排在 spawns **之前**。修法：
+
+- **task**：拆成 **spawn 回合（content=最早 llm completion、带 spawns + 各自 timing）→ 子 agent → 汇总回合（content=最后/最长 completion，放在子 agent 之后）**。
+- **team（v3）**：合成的 spawn-linkage 回合**别插在 user 之后**（会抢在 leader 的 build_team/create_task 真实 setup 前面）；**惰性插在第一个 member turn 之前**——既满足"spawn 必须先于 subagent"，又不抢 leader setup。
+- 注意：spawn 回合的 content 常为空（协调者首个 llm.call 只发 task 调用、没正文）→ UI 有一行空 LLM，**是真实的不是 bug**。
+
+### 6) 时长（task 早期全是 "-"）
+
+UI 时长来自：tool_call 的 `timing.{started_at, completed_at}`、interaction 的 `timeInfo.{created, completed}`（ms；`interactionStartedAt` / `agent-trace.ts:613`）。`v3` 给每个 turn 都加了 `timeInfo`；task 也已补：task tool_call 加 `timing`、subagent interaction 加 `timeInfo`，都取该 `tool.task_tool` span 的 start/end（= 子 agent 工作时长）。
+
+### 7) 摄入 / 重传两个大坑
+
+- **同 `task_id` 重传是合并、不是覆盖**：`data-service.ts` 默认 `sessionMergeStrategy='monotonic'`（为 opencode 流式上报反复重传同 session 而设计），未知框架（jiuwenswarm→fallback adapter）命中它 → 重传纠正版会**并到旧的**上（实测变 8 条=旧4+新4）。**纠正版务必换全新 `task_id`**。Hermes adapter 用的是 `'snapshot-replace'`（整体覆盖）→ **模块化时给 jiuwen adapter 声明 `sessionMergeStrategy:'snapshot-replace'`** 就能同 id 覆盖。
+- **`DELETE /api/observe/data {task_id}` 只删 execution、不删 session（interactions）**；而且若删除时那次上传的**后台 auto-eval 还在跑**，会从残留 session 把 execution **重新落回来**（看着像删不掉）。稳妥做法：换新 id，不要纠结删旧 session。
+
+### 8) 重验结果 + 模块化目标
+
+- **三形态全部 POST 200 入库、UI 渲染正确**（顺序、时长、子 agent 下钻都对）。119 上 `demo@huawei.com` 下三条 demo：`jiuwen-team-demo` / `jiuwen-task-92a62308` / `jiuwen-spike-725295b4`（看链接带 `ownership=all&scope=all&time=all&user=demo@huawei.com`）。
+- **模块化目标 = Hermes 式服务端 OTEL adapter**：`src/lib/ingest/otel/adapters/jiuwen.ts`（把 `OtelTraceEvent[]` 归一化成 `ExecutionRecord`，`traces-aggregator.ts` 按 `service.name=jiuwenswarm` 路由）+ `adapters/jiuwen.ts`（FrameworkDescriptor，`sessionMergeStrategy:'snapshot-replace'`）注册进 `adapters/registry.ts`。**spike 当年否掉 OTLP 直连的 protobuf 拦路虎已通**（`src/lib/ingest/otel/decode.ts` 现支持 `application/x-protobuf`）→ jiuwen 侧可用 agent-core 自带 OTLP exporter（`init_observability(exporter="otlp_http", endpoint=...)`）近乎零代码直连，归一化全交给 TS adapter。本 `insight_bridge.py`（批量 InMemory → transform → 富 `/upload`）只是 spike/demo 形态，**不是模块化目标**，但它的属性映射 + 联动/顺序/timing 规则可直接搬进 TS adapter。
+
+---
+
+## 零代码「配置即接入」—— jiuwenswarm extension（2026-06-16）
+
+> 诉求：复刻 OpenCode 的 `curl -sSf .../api/ingest/setup?key=xx | bash` 一键接入——让 **jiuwenswarm 不写 Python、靠配置/插件接入观测**。服务端 OTLP adapter（上节）已 merge 进 master，缺的是客户端「不写代码把 OTLP 指向我们」这一段。
+
+### 结论：jiuwenswarm 是产品、且预留了配置面，只是没接线 → 我们补一个 extension
+
+- **JiuwenSwarm 是产品**（不是框架）：`[project.scripts]`（`jiuwenswarm-app/-agentserver/-gateway/-tui/-desktop`）、PyInstaller + Inno Setup 安装器、workspace（`~/.jiuwenswarm`）+ `config/config.yaml`、以及一套 **extensions 插件系统**（`jiuwenswarm/extensions/{loader,manager,registry,sdk/base}.py`）。
+- **`config.yaml` 已声明 `telemetry:` 段**（`enabled`/`exporter: otlp`/`protocol: grpc|http`/`headers:{}`/`service_name: jiuwenswarm`/`provider_factory`/`traces`·`metrics`）——产品 owner 本就打算做配置驱动观测。**但当前 checkout 没有任何代码读 `telemetry.*` 去建 exporter**（跨 jiuwenswarm/agent-core grep `provider_factory`/`OTEL_ENABLED`/`log_messages` 仅命中 config 文件本身 + 一个 e2e 测试）。唯一真正能用的 OTEL 仍是 agent-core 的 `init_observability(ObservabilityConfig)` 代码调用。
+- **所以差的不是路、是接线**。我们做一个 jiuwenswarm extension 把它接上（option B，我们掌控、不依赖上游评审；可选把同逻辑作为 PR 贡献给上游 = option A）。
+
+### 接线机制（已读真实代码确认）
+
+- **执行钩子 = 模块级 `register_extensions(registry)`**：`ExtensionLoader`（`extensions/loader.py`）import `extension.py` 后**只调 `register_extensions`，从不调 `BaseExtension.initialize`**（symphony 同理）。我们在 `register_extensions` 里调一次 `init_observability(ObservabilityConfig(enabled=True, exporter="otlp_http", endpoint=<我们的/api/ingest/otel/v1/traces>, service_name="jiuwenswarm"))`。
+- **进程时机**：`agentserver` 与 `gateway` 两进程都 `load_all_extensions()`（`server/app_agentserver.py:146`、`gateway/app_gateway.py:841`）；**agentserver 正是跑 `Runner` 的进程**，init 后 `OtelCallbackHandler` 挂上 `Runner.callback_framework`，覆盖之后所有 run（与验证过的 `otlp-team.py` 那一行等价，故服务端 aggregate 已适配）。
+- **鉴权（user 归属）—— env-header 回退技巧**：agent-core 的 `ObservabilityConfig` **没有通用 headers 字段**（develop 的 `_build_auth_headers` 只认 langfuse basic auth），但它 `HttpExporter(endpoint=..., headers=_build_auth_headers())` 传的是**空 dict**；底层 `OTLPSpanExporter`（opentelemetry 1.42.1）对空 headers 会**回退读 `OTEL_EXPORTER_OTLP_TRACES_HEADERS`/`OTEL_EXPORTER_OTLP_HEADERS` 环境变量**。extension 在 init 前把 `x-witty-api-key=<key>` 写进该 env → header 上线 → `/api/ingest/otel/v1/traces` route 据此归属 user（解决"无主用户"caveat）。
+- **安装 = 纯 `.env` 追加 + 丢文件，零 YAML 解析**：默认 `config.yaml` 是 `extension_dirs: ${EXTENSION_DIRS:-jiuwenswarm/extensions}`（读 env），且 agentserver 启动 `load_dotenv($JW_HOME/config/.env)`。所以 `curl|bash` 往 `$JW_HOME/config/.env` 追加 `OTEL_ENABLED=true` / `AGENT_INSIGHT_OTLP_ENDPOINT` / `AGENT_INSIGHT_API_KEY` / `EXTENSION_DIRS=jiuwenswarm/extensions;<abs>/.jiuwenswarm/extensions`（保留 symphony + 加我们的，去重），再把 `extension.{py,yaml}` 放进 `$JW_HOME/extensions/agent-insight-observability/`。（EXTENSION_DIRS env 覆盖仅在用户 config 用了 `${EXTENSION_DIRS:-...}`（默认）时生效。）
+
+### 代码落点
+
+| 件 | 位置 |
+|---|---|
+| extension 源（source of truth） | `scripts/jiuwen_extension/{extension.py,extension.yaml,README.md}` |
+| 分发路由（curl 取 extension.py） | `src/app/api/ingest/setup/jiuwen-extension/route.ts`（仿 `hermes-plugin`，读盘返回） |
+| `curl\|bash` 接入 | `src/app/api/ingest/setup/route.ts` 加第 4 个框架选项 **JiuwenSwarm**（bash + PowerShell 双路径：selector / flag / download / `.env` config / summary）；`next.config` 已有 rewrite `/api/setup/:path* → /api/ingest/setup/:path*` |
+
+### 验证（2026-06-16，`.spike/jiuwenswarm-retest/.venv`，openjiuwen + opentelemetry 1.42.1）
+
+- ✅ extension 从 env 解析配置正确；**空-headers exporter 回退读 env header（鉴权命门）实测成立**（`session.headers` 含 `x-witty-api-key`，发 `application/x-protobuf` 到精确路径）。
+- ✅ **真实 openjiuwen 单 agent 经 `register_extensions`→`init_observability` 跑通 → 捕获 1 个带 `x-witty-api-key` 的 protobuf OTLP POST 到 `/api/ingest/otel/v1/traces`**（deepseek key 仍有效，输出正常）。
+- ✅ 生成 bash `bash -n` 通过、jiuwen 标记齐全；分发路由 `served == repo source`；安装 dry-run 落 `extension.{py,yaml}` + `config/.env` 且**幂等**（2 次 = 4 行管理项不重复、EXTENSION_DIRS 去重；FINAL_HOST 尾斜杠正确 strip）。`tsc --noEmit` + `eslint` 通过。
+- ✅ **产品级验收（真实 agentserver 代码路径，2026-06-17，已装 jiuwenswarm + openjiuwen 0.1.15）**：复刻 `app_agentserver.py:137-146` 的 `ExtensionRegistry.create_instance` + `ExtensionManager.load_all_extensions()` → 真实 `get_config()` 从 `.env` 读 `EXTENSION_DIRS` → 发现并加载我们的 extension → `init_observability` 生效 → 真实 openjiuwen run → 带 `x-witty-api-key` 的 protobuf OTLP POST 流出。**验收抓到并修了 2 个真 bug**：① `extension.yaml` manifest 混入 stray 标签（YAML 解析失败）；② protocol 误从 `config.yaml` 默认 `grpc` 取（agent-insight 是 OTLP/**HTTP** → 改为 env `AGENT_INSIGHT_OTLP_PROTOCOL` 覆盖、默认 http）。
+
+### 已修：ACP 固定 session 致 trace 合并（2026-06-17）
+
+产品的 ACP 入口（`jiuwenswarm-tui acp` / `jiuwenswarm-acp`）把 `session_id` 默认**硬编码成 `acp_cli_session`**（`channels/acp/app_acp.py:54`、`gateway/.../acp/acp_connect.py:59`），并把它透传进 span 的 `agentteam.session.id`。我们的摄入早先按 `agentteam.session.id` 攒 spool + 取 `task_id`，于是**多次单 agent ACP 调用复用同一 session → 合并成一条 trace**。
+
+修复（`ingest.ts` + `aggregate.ts`，本分支）：**spool 改按 `traceId` 分桶**；保存时按 session 分组，**只有含 team/agent/`tool.task` span 的「多 trace」run（team / fan-out）才把它的多个 trace 拼成一条**；单 agent 各自一条。`task_id` 同步：单 agent = `jiuwen-<traceId>`（每次 run 新 traceId、唯一），team/fan-out = `agentteam.session.id`。合成 OTLP JSON 端到端验证：两次单 agent（同 `acp_cli_session`、不同 traceId）→ 两条独立 `jiuwen-<traceId>`；team（带 team/agent span）仍按 session 拼接，无回归。
+
+> 仍建议上游把 ACP `session_id` 默认值改成每次唯一（连同 `logger.warning(..., file=…)` 那个 stdlib 不兼容的 bug 一起作为善意反馈）。
+
+> 分支：`feat/jiuwen-extension-onboarding`（从 `upstream/master` tip `975d39f` 起）。

@@ -205,6 +205,27 @@ def _extract_output_text(raw: Any) -> str:
     return s
 
 
+def _unwrap_tool_data(raw: Any) -> str:
+    """jiuwen task tool output: "success=True data={'output': '...', ...} error=None".
+    Pull out data['output']; the trailing " error=..." after the dict otherwise
+    breaks a naive literal_eval on the whole tail."""
+    import ast
+    s = str(raw or "")
+    d = s.find("data=")
+    if d >= 0:
+        frag = s[d + 5:]
+        e = frag.rfind("} error=")          # strip trailing " error=None"
+        if e >= 0:
+            frag = frag[:e + 1]
+        try:
+            obj = ast.literal_eval(frag)
+            if isinstance(obj, dict) and "output" in obj:
+                return str(obj["output"])
+        except (ValueError, SyntaxError):
+            pass
+    return _extract_output_text(s) or s
+
+
 def transform_team_spans(
     spans: Iterable[Any],
     *,
@@ -467,6 +488,186 @@ def transform_team_spans_v2(
     return payload
 
 
+# ---------------------------------------------------------------------------
+# v3: parent-chain attribution for agent-core develop >= 8b2a384 ("agent team
+# observability" rework). The whole run is now ONE trace with proper nesting:
+#   team.<name> -> agent.<member>.task_iteration.<n> -> llm.call / tool.<name>
+# so we attribute each llm/tool span to its ENCLOSING agent span's member
+# (agentteam.agent.id), replacing v2's trace-id voting (which collapses now that
+# everything shares one trace_id) and v2's fixed `leader` (the real leader id is
+# the agent card name, e.g. "TeamLeader", not the "team_leader" hint).
+# ---------------------------------------------------------------------------
+
+def _index_by_span_id(spans: Iterable[Any]) -> dict[int, Any]:
+    idx: dict[int, Any] = {}
+    for s in spans:
+        try:
+            idx[s.context.span_id] = s
+        except Exception:
+            pass
+    return idx
+
+
+def _is_agent_span(s: Any) -> bool:
+    return s.name.startswith("agent.") and ".task_iteration." in s.name
+
+
+def _agent_member(s: Any) -> str:
+    m = _attrs(s).get("agentteam.agent.id")
+    if m:
+        return str(m)
+    parts = s.name.split(".")  # agent.<member>.task_iteration.<n>
+    return parts[1] if len(parts) > 2 else s.name
+
+
+def _enclosing_member(s: Any, idx: dict[int, Any], default: str) -> str:
+    cur, seen = s, set()
+    while cur is not None:
+        if _is_agent_span(cur):
+            return _agent_member(cur)
+        pid = cur.parent.span_id if cur.parent else None
+        if pid is None or pid in seen:
+            break
+        seen.add(pid)
+        cur = idx.get(pid)
+    return default
+
+
+def transform_team_spans_v3(
+    spans: Iterable[Any],
+    *,
+    task_id: str,
+    query: str,
+    team_name: str,
+    leader: str | None = None,
+    framework: str = "jiuwenswarm",
+    user: str | None = None,
+) -> dict[str, Any]:
+    spans = sorted(spans, key=lambda s: s.start_time or 0)
+    idx = _index_by_span_id(spans)
+
+    # Leader = the member running team-management tools (spawn/build/create);
+    # fallback to the earliest agent span's member, then the caller's hint.
+    LEADER_TOOLS = ("tool.spawn_teammate", "tool.build_team", "tool.create_task")
+    detected = None
+    for s in spans:
+        if s.name in LEADER_TOOLS:
+            detected = _enclosing_member(s, idx, leader or "")
+            if detected:
+                break
+    if not detected:
+        agent_spans = [s for s in spans if _is_agent_span(s)]
+        if agent_spans:
+            detected = _agent_member(min(agent_spans, key=lambda s: s.start_time or 0))
+    leader = detected or leader or "team_leader"
+
+    turns: list[tuple[int, str, dict[str, Any]]] = []
+    in_tok = out_tok = tot_tok = llm_count = tool_count = 0
+    first = last = None
+    for s in spans:
+        st, en = s.start_time or 0, s.end_time or 0
+        first = st if first is None else min(first, st)
+        last = en if last is None else max(last, en)
+        a = _attrs(s)
+        if s.name == "llm.call":
+            llm_count += 1
+            pt = int(a.get("gen_ai.usage.prompt_tokens", 0) or 0)
+            ct = int(a.get("gen_ai.usage.completion_tokens", 0) or 0)
+            tt = int(a.get("gen_ai.usage.total_tokens", 0) or (pt + ct))
+            in_tok += pt
+            out_tok += ct
+            tot_tok += tt
+            turns.append((st, _enclosing_member(s, idx, leader), {
+                "content": str(a.get("gen_ai.completion.0.content", "")),
+                "usage": {"input": pt, "output": ct, "total": tt},
+                "modelID": str(a.get("gen_ai.request.model", "")),
+                "tool_calls": [],
+                "timeInfo": {"created": _ms(st), "completed": _ms(en)},
+            }))
+        elif s.name.startswith("tool."):
+            tool_count += 1
+            turns.append((st, _enclosing_member(s, idx, leader), {
+                "content": "",
+                "tool_calls": [{
+                    "id": str(a.get("gen_ai.tool.id", s.context.span_id)),
+                    "type": "function",
+                    "function": {
+                        "name": str(a.get("gen_ai.tool.name", s.name.split(".", 1)[-1])),
+                        "arguments": str(a.get("gen_ai.tool.input", ""))[:2000],
+                    },
+                    "state": "success",
+                    "output": str(a.get("gen_ai.tool.output", ""))[:2000],
+                }],
+                "timeInfo": {"created": _ms(st), "completed": _ms(en)},
+            }))
+
+    summary = ""
+    for s in spans:
+        if _is_agent_span(s):
+            t = _extract_output_text(_attrs(s).get("agentteam.agent.output"))
+            if len(t) > len(summary):
+                summary = t
+    model_name = next((t[2]["modelID"] for t in turns if t[2].get("modelID")), "")
+
+    interactions: list[dict[str, Any]] = [{"role": "user", "content": query}]
+    members = sorted({m for _, m, _ in turns})
+    others = [m for m in members if m != leader]
+    # The spawn-linkage turn must precede the first member turn (so buildAgentCallTree
+    # has the pending task claims ready), but NOT precede the leader's own setup turns
+    # (build_team / create_task etc.) — else those render after the spawns. So insert
+    # it lazily, right before the first subagent turn in time order.
+    spawn_turn = None
+    if others:
+        spawn_turn = {"role": "assistant", "agent": leader, "content": "", "tool_calls": [
+            {
+                "id": f"spawn_{m}",
+                "type": "function",
+                "function": {"name": "task", "arguments": json.dumps(
+                    {"subagent_type": m, "description": f"spawn teammate {m}"}, ensure_ascii=False)},
+                "state": "success",
+                "output": f"{m} joined the team",
+            } for m in others
+        ]}
+    spawned = False
+    for st, m, frag in sorted(turns, key=lambda x: x[0]):
+        if m != leader and not spawned and spawn_turn is not None:
+            spawn_turn["timeInfo"] = {"created": _ms(st), "completed": _ms(st)}
+            interactions.append(spawn_turn)
+            spawned = True
+        if m == leader:
+            interactions.append({"role": "assistant", "agent": leader, **frag})
+        else:
+            interactions.append({
+                "role": "subagent", "agent": m, "subagent_name": m,
+                "subagent_session_id": f"{team_name}_{m}", **frag,
+            })
+    if spawn_turn is not None and not spawned:   # no member turns seen — still link
+        interactions.append(spawn_turn)
+
+    latency_s = (((last or 0) - (first or 0)) / 1_000_000_000.0) if first else 0.0
+    payload: dict[str, Any] = {
+        "task_id": task_id,
+        "query": query,
+        "framework": framework,
+        "agentName": leader,
+        "agents": members,
+        "model": model_name or "unknown",
+        "tokens": tot_tok,
+        "input_tokens": in_tok,
+        "output_tokens": out_tok,
+        "tool_call_count": tool_count,
+        "llm_call_count": llm_count,
+        "latency": round(latency_s, 3),
+        "final_result": summary,
+        "interactions": interactions,
+        "label": framework,
+        "subagentCount": max(0, len(members) - 1),
+    }
+    if user:
+        payload["user"] = user
+    return payload
+
+
 def transform_task_spans(
     spans: Iterable[Any],
     *,
@@ -486,8 +687,12 @@ def transform_task_spans(
     in_tok = out_tok = tot_tok = llm_count = 0
     first = last = None
     task_spans: list[Any] = []
-    summary = ""
-    for s in spans:
+    summary = ""          # from agentteam.agent.output (team mode only)
+    llm_summary = ""      # fallback: longest llm completion (task fan-out has no agent spans)
+    plan_content = ""     # earliest llm completion = coordinator's "delegate" turn
+    merge_content = ""    # latest llm completion = coordinator's final synthesis
+    model_name = ""
+    for s in spans:       # spans are sorted by start_time (above)
         st, en = s.start_time or 0, s.end_time or 0
         first = st if first is None else min(first, st)
         last = en if last is None else max(last, en)
@@ -499,12 +704,21 @@ def transform_task_spans(
             tot_tok += int(a.get("gen_ai.usage.total_tokens", 0) or (pt + ct))
             in_tok += pt
             out_tok += ct
+            model_name = str(a.get("gen_ai.request.model") or model_name)
+            _c = str(a.get("gen_ai.completion.0.content", ""))
+            if len(_c) > len(llm_summary):
+                llm_summary = _c
+            if llm_count == 1:
+                plan_content = _c
+            if _c:
+                merge_content = _c
         elif s.name.startswith("tool.task"):
             task_spans.append(s)
         if s.name.startswith("agent."):
             t = _extract_output_text(a.get("agentteam.agent.output"))
             if len(t) > len(summary):
                 summary = t
+    final = summary or merge_content or llm_summary
 
     coord_tools: list[dict[str, Any]] = []
     sub_interactions: list[dict[str, Any]] = []
@@ -522,28 +736,49 @@ def transform_task_spans(
                 sub_type = str(params.get("subagent_type", sub_type))
         except (ValueError, SyntaxError, IndexError, TypeError):
             pass
-        result = _extract_output_text(raw_out) or raw_out
-        name = f"{sub_type}#{i + 1}"
+        # tool output is wrapped as "success=True data={...} error=None" -> unwrap
+        # the dict (note the trailing " error=..." after the dict breaks literal_eval).
+        result = _unwrap_tool_data(raw_out)
+        # Clean, distinct token (no '#': inferSubagentType truncates at non-[\w-]).
+        # subagent_type in the task tool_call MUST equal inferSubagentType(subagent_name)
+        # or buildAgentCallTree can't claim the spawn → sub-agent collapses into root.
+        name = (f"{sub_type}-{i + 1}").replace(" ", "-").replace("#", "")
+        # the delegation span's [start,end] = how long that sub-agent ran
+        ts_start, ts_end = _ms(ts.start_time), _ms(ts.end_time)
         coord_tools.append({
             "id": f"{a.get('gen_ai.tool.id', ts.context.span_id)}#{i}",
             "type": "function",
-            "function": {"name": "task", "arguments": desc[:1500]},
+            "function": {"name": "task", "arguments": json.dumps(
+                {"subagent_type": name, "description": desc[:1500]}, ensure_ascii=False)},
             "state": "success",
             "output": result[:1500],
+            "timing": {"started_at": ts_start, "completed_at": ts_end},
         })
         sub_interactions.append({
             "role": "subagent", "agent": name, "subagent_name": name,
             "subagent_session_id": f"{task_id}_sub_{i + 1}",
             "content": result[:1500], "tool_calls": [],
+            "timeInfo": {"created": ts_start, "completed": ts_end},
         })
 
+    # Order: spawn turn (delegates) FIRST, sub-agents, then the merge turn LAST —
+    # else the final synthesis text renders before the spawns (UI draws an
+    # interaction's llm text before its tool_calls).
+    task_ends = [_ms(t.end_time) for t in task_spans] or [_ms(last)]
+    spawn_done = max(task_ends)
     interactions: list[dict[str, Any]] = [
         {"role": "user", "content": query},
-        {"role": "assistant", "agent": coordinator, "content": summary,
+        {"role": "assistant", "agent": coordinator,
+         "content": plan_content if plan_content and plan_content != merge_content else "",
          "tool_calls": coord_tools,
-         "usage": {"input": in_tok, "output": out_tok, "total": tot_tok}},
+         "timeInfo": {"created": _ms(first), "completed": spawn_done}},
     ]
     interactions += sub_interactions
+    interactions.append({
+        "role": "assistant", "agent": coordinator, "content": final,
+        "usage": {"input": in_tok, "output": out_tok, "total": tot_tok},
+        "timeInfo": {"created": spawn_done, "completed": _ms(last)},
+    })
 
     latency_s = (((last or 0) - (first or 0)) / 1_000_000_000.0) if first else 0.0
     payload: dict[str, Any] = {
@@ -552,14 +787,14 @@ def transform_task_spans(
         "framework": framework,
         "agentName": coordinator,
         "agents": [coordinator] + [s["agent"] for s in sub_interactions],
-        "model": "deepseek-v4-flash",
+        "model": model_name or "unknown",
         "tokens": tot_tok,
         "input_tokens": in_tok,
         "output_tokens": out_tok,
         "tool_call_count": len(task_spans),
         "llm_call_count": llm_count,
         "latency": round(latency_s, 3),
-        "final_result": summary,
+        "final_result": final,
         "interactions": interactions,
         "label": framework,
         "subagentCount": len(sub_interactions),

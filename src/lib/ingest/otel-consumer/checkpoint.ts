@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import type { Dirent } from 'node:fs';
 import path from 'node:path';
 import type { SpoolCursor } from '@/lib/ingest/claude-otel/spool';
 
@@ -45,9 +46,8 @@ export function getFileCursor(spoolDir: string, relPath: string): SpoolCursor {
 
 export function saveFileCursor(spoolDir: string, relPath: string, cursor: SpoolCursor): void {
   const checkpoint = loadCheckpoint(spoolDir);
-  const previous = checkpoint.files[relPath]?.bytes || 0;
   checkpoint.files[relPath] = {
-    bytes: Math.max(previous, cursor.bytes || 0),
+    bytes: Math.max(0, cursor.bytes || 0),
     updatedAt: new Date().toISOString(),
   };
   writeCheckpoint(spoolDir, checkpoint);
@@ -62,17 +62,26 @@ export function invalidateCursor(spoolDir: string, relPath: string): void {
 
 function listJsonlFiles(spoolDir: string): string[] {
   const out: string[] = [];
+  const collect = (dir: string) => {
+    let entries: Dirent[] = [];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        collect(fullPath);
+      } else if (entry.isFile() && entry.name.endsWith('.jsonl')) {
+        out.push(fullPath);
+      }
+    }
+  };
   try {
     const days = fs.readdirSync(spoolDir, { withFileTypes: true }).filter((entry) => entry.isDirectory());
     for (const day of days) {
-      const dir = path.join(spoolDir, day.name);
-      let files: string[] = [];
-      try {
-        files = fs.readdirSync(dir).filter((file) => file.endsWith('.jsonl'));
-      } catch {
-        continue;
-      }
-      for (const file of files) out.push(path.join(dir, file));
+      collect(path.join(spoolDir, day.name));
     }
   } catch {}
   return out.sort();

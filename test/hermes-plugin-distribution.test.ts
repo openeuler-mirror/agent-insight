@@ -43,11 +43,56 @@ test("Hermes plugin source imports and extracts normalized provider text", () =>
   const pluginPath = path.join(process.cwd(), "scripts/hermes_agent_insight_plugin.py")
   const script = [
     "import importlib.util",
+    "import os",
     `spec = importlib.util.spec_from_file_location('agent_insight_hermes_test', ${JSON.stringify(pluginPath)})`,
     "module = importlib.util.module_from_spec(spec)",
     "spec.loader.exec_module(module)",
     "assert module._response_text({'assistant_message': {'content': [{'type': 'text', 'text': 'canonical'}]}}) == 'canonical'",
     "assert module._response_text({'response': {'candidates': [{'content': {'parts': [{'text': 'candidate'}]}}]}}) == 'candidate'",
+  ].join("\n")
+  const result = spawnSync("python3", ["-c", script], { encoding: "utf8" })
+
+  assert.equal(result.status, 0, result.stderr || result.stdout)
+})
+
+test("Hermes plugin derives root agent name from active Hermes profile", () => {
+  const pluginPath = path.join(process.cwd(), "scripts/hermes_agent_insight_plugin.py")
+  const script = [
+    "import importlib.util",
+    "import os",
+    "import sys",
+    "import types",
+    "hermes_cli = types.ModuleType(\"hermes_cli\")",
+    "hermes_cli.__path__ = []",
+    "profiles = types.ModuleType(\"hermes_cli.profiles\")",
+    "profiles.get_active_profile_name = lambda: \"build\"",
+    "sys.modules[\"hermes_cli\"] = hermes_cli",
+    "sys.modules[\"hermes_cli.profiles\"] = profiles",
+    `spec = importlib.util.spec_from_file_location("agent_insight_hermes_profile_test", ${JSON.stringify(pluginPath)})`,
+    "module = importlib.util.module_from_spec(spec)",
+    "spec.loader.exec_module(module)",
+    "os.environ.pop(\"HERMES_PROFILE\", None)",
+    "os.environ[\"HERMES_HOME\"] = \"/tmp/hermes-root/profiles/demo\"",
+    "assert module._profile_name_from_home_path(\"/tmp/hermes-root/profiles/demo\") == \"demo\"",
+    "assert module._resolve_active_profile_name() == \"demo\"",
+    "os.environ.pop(\"HERMES_HOME\", None)",
+    "assert module._resolve_active_profile_name() == \"build\"",
+    "assert module._agent_name_from_profile(\"default\") == \"hermes\"",
+    "assert module._agent_name_from_profile(\"build\") == \"build\"",
+    "collector = module._Collector.__new__(module._Collector)",
+    "collector.config = {\"service_name\": \"hermes\"}",
+    "collector.root_profile_name = \"build\"",
+    "collector.root_agent_name = \"build\"",
+    "collector.sessions = {\"root\": {\"root_session_id\": \"root\", \"role\": \"root\", \"agent_name\": \"build\", \"profile_name\": \"build\"}}",
+    "attrs = collector._base_attributes(\"root\")",
+    "assert attrs[\"hermes.agent.name\"] == \"build\"",
+    "assert attrs[\"hermes.profile.name\"] == \"build\"",
+    "collector.root_profile_name = \"default\"",
+    "collector.root_agent_name = \"hermes\"",
+    "collector.sessions = {\"root\": {\"root_session_id\": \"root\", \"role\": \"root\"}}",
+    "attrs = collector._base_attributes(\"root\")",
+    "assert attrs[\"hermes.agent.name\"] == \"hermes\"",
+    "assert attrs[\"hermes.profile.name\"] == \"default\"",
   ].join("\n")
   const result = spawnSync("python3", ["-c", script], { encoding: "utf8" })
 

@@ -9,7 +9,8 @@ import {
   skillKeyActionComparisonMessage,
   type KeyActionExecutionLike,
 } from '@/lib/engine/evaluation/key-action-trace-analysis';
-import type { AgentDebugSkillsAnalysis, AgentDebugSkillsKeyActionResult } from './types';
+import { runSkillSuggestionAgent, shouldRunSuggestionAgent } from '@/lib/engine/evaluation/skill-suggestion-agent';
+import type { AgentDebugSkillsAnalysis, AgentDebugSkillsKeyActionResult, AgentDebugSkillSuggestion } from './types';
 
 export async function runAgentDebugSkillsAnalysis(args: {
   execution: KeyActionExecutionLike;
@@ -51,6 +52,29 @@ export async function runAgentDebugSkillsAnalysis(args: {
     primarySkill?.version ?? null,
   );
 
+  // 建议流：门控命中才跑读完整 trace 的建议 agent（非致命，失败退回空）。
+  let skillSuggestions: AgentDebugSkillSuggestion[] = [];
+  try {
+    if (
+      primarySkill?.skill &&
+      shouldRunSuggestionAgent({
+        keyActionResults: out.keyActionResults,
+        completeness: out.dimensionScores?.completeness,
+      })
+    ) {
+      skillSuggestions = await runSkillSuggestionAgent({
+        user: args.user,
+        skillName: primarySkill.skill,
+        skillVersion: primarySkill.version ?? null,
+        executionId: executionId || taskId,
+        interactions,
+        keyActionResults: out.keyActionResults,
+      });
+    }
+  } catch (e) {
+    console.warn('[agent-debug-skills] suggestion agent failed (non-fatal):', (e as Error).message);
+  }
+
   const now = new Date().toISOString();
   return {
     status: 'done',
@@ -66,6 +90,7 @@ export async function runAgentDebugSkillsAnalysis(args: {
       actualExtractedStepCount: comparison.actualExtractedSteps.length,
     },
     keyActionResults: (out.keyActionResults || []).map(normalizeKeyActionResult),
+    skillSuggestions,
   };
 }
 

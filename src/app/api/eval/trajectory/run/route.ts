@@ -15,6 +15,11 @@ import {
 import { startOrReplace as startEvalTask, finish as finishEvalTask } from '@/lib/evaluation-task-manager';
 import { deriveAndPersistOptPoints } from '@/lib/engine/evaluation/derive-skill-opt-points';
 import {
+    runSkillSuggestionAgent,
+    shouldRunSuggestionAgent,
+    type SkillSuggestion,
+} from '@/lib/engine/evaluation/skill-suggestion-agent';
+import {
     NO_EVALUABLE_CASE_PREFIX,
     isRetryableResultEvaluationFailure,
     createSimpleAsyncLimiter,
@@ -1921,11 +1926,37 @@ async function runOneEvaluationInner(user: string, id: string): Promise<void> {
         throw new StagedEvaluationError('llm-or-agent', (e as Error).message || String(e), e);
     }
 
+    // ---- 2.5 建议流：门控命中则跑 skill 改进建议 agent（读完整 trace，独立于覆盖打分）----
+    // 计分（out.keyActionResults / completeness）已出，用它做门控：失败 / 覆盖不全才跑这次贵的深读。
+    // 非致命：任何异常都吞掉、退回空建议，不阻塞评测落库。
+    let skillSuggestions: SkillSuggestion[] = [];
+    try {
+        if (
+            evalSkillName &&
+            shouldRunSuggestionAgent({
+                keyActionResults: out.keyActionResults,
+                completeness: out.dimensionScores?.completeness,
+            })
+        ) {
+            skillSuggestions = await runSkillSuggestionAgent({
+                user,
+                skillName: evalSkillName,
+                skillVersion: evalSkillVersion,
+                executionId: String(row.executionId || execution?.id || resolvedTaskId || id),
+                interactions: Array.isArray(interactions) ? interactions : [],
+                keyActionResults: out.keyActionResults,
+            });
+        }
+    } catch (e) {
+        console.warn('[trajectory-eval] skill suggestion agent failed (non-fatal):', (e as Error).message);
+    }
+
     // ---- 3. 落库 ----
     try {
         const mergedRawAnalysis = {
             ...(out.rawAnalysis && typeof out.rawAnalysis === 'object' ? out.rawAnalysis : {}),
             ...baseRawAnalysisMeta,
+            skill_suggestions: skillSuggestions,
             resultArtifactExtraction: resultArtifactExtractionRawAnalysis,
             resultActualOutput,
             resultEvaluation: resultEvaluationRawAnalysis,

@@ -115,6 +115,25 @@ function computeContentHash(content: string): string {
   return createHash('sha256').update(content).digest('hex').slice(0, 16);
 }
 
+/**
+ * 从 SkillVersion.files（JSON 字符串数组的相对路径清单）数出 references/ 与 scripts/ 下的附件数。
+ * 只数这两个子目录——这正是 loadAssetBundle 实际会读取的范围（见 content-loader）。
+ * 用来判断「清单说有附件、但磁盘 bundle 一个都没读到」的不一致（防御性硬失败用）。
+ */
+function countExpectedBundleFiles(filesJson: string | null | undefined): number {
+  if (!filesJson) return 0;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(filesJson);
+  } catch {
+    return 0;
+  }
+  if (!Array.isArray(parsed)) return 0;
+  return parsed.filter(
+    (p) => typeof p === 'string' && /^(references|scripts)\//.test(p),
+  ).length;
+}
+
 interface SkillIssueRow {
   evaluationId: string;
   source: string;
@@ -246,6 +265,22 @@ export async function runStaticEvaluation(args: RunArgs): Promise<RunResult> {
     //  - L1 security regex 用 bundleTextFull（不截断、不分批，本地扫描没 token 成本）
     //  - L2 LLM prompt 用 bundleChunks（按文件边界切分，大 bundle 自动 fan-out）
     const bundle = loadAssetBundle(skillVersion.assetPath);
+
+    // 防御性硬失败：清单（SkillVersion.files）声明了 references/scripts 附件，但磁盘上一个都没读到。
+    // 成因：loadAssetBundle 用 path.resolve(assetPath)（相对 process.cwd()）解析存储目录，
+    // 当运行 cwd ≠ 存储根（如 git worktree 里跑、或部署布局把 cwd 与 data/ 分离）时 bundle 解析为空。
+    // 若放任不管，ROBUSTNESS / SECURITY 两个 L2 阶段会被喂空 bundle 盲评，
+    // 稳定误判成「缺少所有参考脚本 / 核心脚本不完整 → 工程健壮性=1」这类假阴性。
+    // 宁可显式失败也不盲评：抛错由下方 catch 统一记为 failed + 写 errorMessage 便于诊断。
+    const expectedBundleFiles = countExpectedBundleFiles(skillVersion.files);
+    if (expectedBundleFiles > 0 && bundle.fileCount === 0) {
+      throw new Error(
+        `资产 bundle 加载为空，但 SkillVersion.files 声明了 ${expectedBundleFiles} 个 references/scripts 附件` +
+          `（assetPath=${skillVersion.assetPath ?? 'null'}，cwd=${process.cwd()}）。` +
+          `多半是运行工作目录与存储根不一致（如在 git worktree 内运行）。` +
+          `已中止评估以避免对工程健壮性/安全风险性盲评出假阴性；请从存储根目录运行，或修正 assetPath / 存储路径。`,
+      );
+    }
 
     // L1 — 永远跑：structure（formal）+ security（threat regex），扫全量
     const linterDiagnoses: LinterDiagnosis[] = [

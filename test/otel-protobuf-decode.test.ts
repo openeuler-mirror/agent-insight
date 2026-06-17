@@ -8,6 +8,7 @@ import otlpRoot from "@opentelemetry/otlp-transformer/build/src/generated/root"
 import { POST as postOtlpTraces } from "@/app/api/ingest/otel/v1/traces/route"
 import { normalizeOtlpTraces } from "@/lib/ingest/otel/normalize"
 import { decodeOtlpProtobufBody, decodeOtlpRequest } from "@/lib/ingest/otel/decode"
+import { listOtelTraceSpoolFiles } from "@/lib/ingest/otel/spool"
 
 const traceRequestType = (otlpRoot as any).opentelemetry.proto.collector.trace.v1.ExportTraceServiceRequest
 
@@ -124,8 +125,10 @@ test("OTLP traces route accepts protobuf requests and writes trace spool", async
     assert.equal(body.received, 2)
     assert.deepEqual(body.sessions, ["00112233445566778899aabbccddeeff"])
 
-    const day = new Date().toISOString().slice(0, 10)
-    const spoolFile = path.join(dir, day, "traces.jsonl")
+    const files = listOtelTraceSpoolFiles(dir)
+    assert.equal(files.length, 1)
+    assert.ok(files[0].includes(`${path.sep}sessions${path.sep}`))
+    const spoolFile = files[0]
     const lines = fs.readFileSync(spoolFile, "utf8").trim().split("\n")
     assert.equal(lines.length, 2)
   } finally {

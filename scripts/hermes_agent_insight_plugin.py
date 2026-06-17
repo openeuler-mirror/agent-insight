@@ -185,6 +185,53 @@ def _load_config() -> Dict[str, Any]:
     return config
 
 
+def _profile_name_from_home_path(home_path: Any) -> str:
+    raw = str(home_path or "").strip()
+    if not raw:
+        return ""
+    try:
+        path = Path(raw).expanduser().resolve()
+    except Exception:
+        path = Path(raw).expanduser()
+    if path.parent.name == "profiles" and path.name:
+        return path.name
+    return ""
+
+
+def _resolve_active_profile_name() -> str:
+    try:
+        from hermes_constants import get_hermes_home  # type: ignore
+
+        name = _profile_name_from_home_path(get_hermes_home())
+        if name:
+            return name
+    except Exception:
+        pass
+
+    name = _profile_name_from_home_path(os.getenv("HERMES_HOME"))
+    if name:
+        return name
+
+    env_profile = str(os.getenv("HERMES_PROFILE") or "").strip()
+    if env_profile:
+        return env_profile
+
+    try:
+        from hermes_cli.profiles import get_active_profile_name  # type: ignore
+
+        name = str(get_active_profile_name() or "").strip()
+        return name or "default"
+    except Exception:
+        return "default"
+
+
+def _agent_name_from_profile(profile_name: Any) -> str:
+    name = str(profile_name or "").strip()
+    if not name or name.lower() == "default":
+        return "hermes"
+    return name
+
+
 def _otel_value(value: Any) -> Dict[str, Any]:
     if isinstance(value, bool):
         return {"boolValue": value}
@@ -372,6 +419,8 @@ class _Collector:
     def __init__(self, config: Optional[Dict[str, Any]] = None) -> None:
         self.config = config or _load_config()
         self.max_chars = int(self.config.get("max_content_chars") or DEFAULT_MAX_CONTENT_CHARS)
+        self.root_profile_name = _resolve_active_profile_name()
+        self.root_agent_name = _agent_name_from_profile(self.root_profile_name)
         self.exporter = _SnapshotExporter(self.config)
         self.lock = threading.RLock()
         self.sessions: Dict[str, Dict[str, Any]] = {}
@@ -401,6 +450,10 @@ class _Collector:
     def _base_attributes(self, session_id: str, model: Any = None) -> Dict[str, Any]:
         state = self.sessions.get(session_id, {})
         root_id = self._root_id(session_id)
+        role = state.get("role") or "root"
+        root_profile_name = str(getattr(self, "root_profile_name", "default") or "default")
+        root_agent_name = str(getattr(self, "root_agent_name", _agent_name_from_profile(root_profile_name)) or "hermes")
+        agent_name = state.get("agent_name") or (root_agent_name if role == "root" else role)
         return {
             "service.name": self.config.get("service_name", "hermes"),
             "agent.insight.framework": "hermes",
@@ -410,8 +463,9 @@ class _Collector:
             "hermes.parent_session_id": state.get("parent_session_id"),
             "hermes.subagent.id": state.get("subagent_id"),
             "hermes.subagent.parent_id": state.get("parent_subagent_id"),
-            "hermes.agent.role": state.get("role") or "root",
-            "hermes.agent.name": state.get("role") or "hermes",
+            "hermes.agent.role": role,
+            "hermes.agent.name": agent_name,
+            "hermes.profile.name": state.get("profile_name") or root_profile_name,
             "llm.model_name": model,
             "agent.insight.plugin.version": PLUGIN_VERSION,
         }
@@ -529,8 +583,15 @@ class _Collector:
             self.current_turn[session_id] = turn_id
             session_state = self.sessions.setdefault(
                 session_id,
-                {"root_session_id": session_id, "role": "root"},
+                {
+                    "root_session_id": session_id,
+                    "role": "root",
+                    "agent_name": self.root_agent_name,
+                    "profile_name": self.root_profile_name,
+                },
             )
+            session_state.setdefault("agent_name", self.root_agent_name)
+            session_state.setdefault("profile_name", self.root_profile_name)
             parent_span_id = session_state.get("container_span_id")
             agent_span = None
             if session_state.get("role") == "root":
@@ -749,6 +810,7 @@ class _Collector:
             parent_turn_id = str(_first(kwargs.get("parent_turn_id"), self.current_turn.get(parent_session_id), "unknown"))
             root_id = self._root_id(parent_session_id)
             role = str(_first(kwargs.get("child_role"), "subagent"))
+            child_agent_name = str(_first(kwargs.get("child_agent_name"), role))
             goal = kwargs.get("child_goal")
             self.sessions[child_session_id] = {
                 "root_session_id": root_id,
@@ -756,6 +818,8 @@ class _Collector:
                 "subagent_id": kwargs.get("child_subagent_id"),
                 "parent_subagent_id": kwargs.get("parent_subagent_id"),
                 "role": role,
+                "agent_name": child_agent_name,
+                "profile_name": self.root_profile_name,
             }
             parent_turn = self.turns.get((parent_session_id, parent_turn_id), {})
             task_span = self._new_span(
