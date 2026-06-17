@@ -241,6 +241,14 @@ UI 时长来自：tool_call 的 `timing.{started_at, completed_at}`、interactio
 - ✅ extension 从 env 解析配置正确；**空-headers exporter 回退读 env header（鉴权命门）实测成立**（`session.headers` 含 `x-witty-api-key`，发 `application/x-protobuf` 到精确路径）。
 - ✅ **真实 openjiuwen 单 agent 经 `register_extensions`→`init_observability` 跑通 → 捕获 1 个带 `x-witty-api-key` 的 protobuf OTLP POST 到 `/api/ingest/otel/v1/traces`**（deepseek key 仍有效，输出正常）。
 - ✅ 生成 bash `bash -n` 通过、jiuwen 标记齐全；分发路由 `served == repo source`；安装 dry-run 落 `extension.{py,yaml}` + `config/.env` 且**幂等**（2 次 = 4 行管理项不重复、EXTENSION_DIRS 去重；FINAL_HOST 尾斜杠正确 strip）。`tsc --noEmit` + `eslint` 通过。
-- ⏳ **唯一未跑的最后一环**（产品级验收，需起真实 agentserver）：装进 `~/.jiuwenswarm/extensions/` 后由真实 `ExtensionManager` loader 加载 + 真实 jiuwen run → trace 入 agent-insight UI 带正确 user。loader 是读过的机械代码；span→ExecutionRecord→UI 上节 merge 时已验证。
+- ✅ **产品级验收（真实 agentserver 代码路径，2026-06-17，已装 jiuwenswarm + openjiuwen 0.1.15）**：复刻 `app_agentserver.py:137-146` 的 `ExtensionRegistry.create_instance` + `ExtensionManager.load_all_extensions()` → 真实 `get_config()` 从 `.env` 读 `EXTENSION_DIRS` → 发现并加载我们的 extension → `init_observability` 生效 → 真实 openjiuwen run → 带 `x-witty-api-key` 的 protobuf OTLP POST 流出。**验收抓到并修了 2 个真 bug**：① `extension.yaml` manifest 混入 stray 标签（YAML 解析失败）；② protocol 误从 `config.yaml` 默认 `grpc` 取（agent-insight 是 OTLP/**HTTP** → 改为 env `AGENT_INSIGHT_OTLP_PROTOCOL` 覆盖、默认 http）。
+
+### 已修：ACP 固定 session 致 trace 合并（2026-06-17）
+
+产品的 ACP 入口（`jiuwenswarm-tui acp` / `jiuwenswarm-acp`）把 `session_id` 默认**硬编码成 `acp_cli_session`**（`channels/acp/app_acp.py:54`、`gateway/.../acp/acp_connect.py:59`），并把它透传进 span 的 `agentteam.session.id`。我们的摄入早先按 `agentteam.session.id` 攒 spool + 取 `task_id`，于是**多次单 agent ACP 调用复用同一 session → 合并成一条 trace**。
+
+修复（`ingest.ts` + `aggregate.ts`，本分支）：**spool 改按 `traceId` 分桶**；保存时按 session 分组，**只有含 team/agent/`tool.task` span 的「多 trace」run（team / fan-out）才把它的多个 trace 拼成一条**；单 agent 各自一条。`task_id` 同步：单 agent = `jiuwen-<traceId>`（每次 run 新 traceId、唯一），team/fan-out = `agentteam.session.id`。合成 OTLP JSON 端到端验证：两次单 agent（同 `acp_cli_session`、不同 traceId）→ 两条独立 `jiuwen-<traceId>`；team（带 team/agent span）仍按 session 拼接，无回归。
+
+> 仍建议上游把 ACP `session_id` 默认值改成每次唯一（连同 `logger.warning(..., file=…)` 那个 stdlib 不兼容的 bug 一起作为善意反馈）。
 
 > 分支：`feat/jiuwen-extension-onboarding`（从 `upstream/master` tip `975d39f` 起）。
