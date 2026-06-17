@@ -13,6 +13,10 @@ export const dynamic = 'force-dynamic';
 const DEFAULT_AUTO_EVAL_TRACE_STABLE_MS = 60_000;
 
 type TimestampCarrier = {
+    // hasAssistantOutput() reads role/content to detect a produced answer; the rest
+    // are the activity-timestamp fields getLatestTraceActivityMs() scans.
+    role?: unknown;
+    content?: unknown;
     timestamp?: unknown;
     createdAt?: unknown;
     completedAt?: unknown;
@@ -175,7 +179,14 @@ function inferOpencodeCliExitedFromExistingTelemetry(taskId: string): boolean | 
     return setCache(true);
 }
 
-export function hasClaudeCodeAssistantOutput(interactions: TimestampCarrier[]): boolean {
+// 没有显式"轨迹结束"信号的框架:既不会在入库时落 Session.endTime(hermes / direct_llm 那样),
+// 也没有 CLI 退出标记(opencode 那样)。对它们改用"静默窗口"推断完成——轨迹已产出 assistant 输出后
+// 静默超过稳定窗口即视为结束。Claude Code 是第一个(见 PR !150);jiuwenswarm 同形:agent-core 的
+// 单 agent(run_agent / ReAct)只发 llm.call / tool.* span,没有把整条轨迹包起来的 root span,OTLP
+// 流里永远不会出现"已完成"信号,于是一直停在"执行中"。
+export const QUIET_WINDOW_INFERRED_FRAMEWORKS = new Set(['claudecode', 'jiuwenswarm']);
+
+export function hasAssistantOutput(interactions: TimestampCarrier[]): boolean {
     return interactions.some((interaction: any) => {
         const role = String(interaction?.role || '').toLowerCase();
         if (role !== 'assistant' && role !== 'subagent') return false;
@@ -183,14 +194,14 @@ export function hasClaudeCodeAssistantOutput(interactions: TimestampCarrier[]): 
     });
 }
 
-export function inferClaudeCodeTraceCompletedAt(args: {
+export function inferQuietWindowTraceCompletedAt(args: {
     framework?: unknown;
     explicitCompleted?: boolean;
     latestActivityMs?: number;
     quietLongEnough?: boolean;
 }): string | null {
     const framework = String(args.framework ?? '').toLowerCase();
-    if (framework !== 'claudecode') return null;
+    if (!QUIET_WINDOW_INFERRED_FRAMEWORKS.has(framework)) return null;
     if (args.explicitCompleted) return null;
     const latestActivityMs = args.latestActivityMs || 0;
     if (!args.quietLongEnough || latestActivityMs <= 0) return null;
@@ -200,7 +211,7 @@ export function inferClaudeCodeTraceCompletedAt(args: {
 async function getAutoEvalReadiness(record: Record<string, unknown>, baseUrl?: string | null) {
     const framework = String(record.framework ?? '').toLowerCase();
     const hasFinalResult = Boolean(String(record.final_result ?? record.finalResult ?? '').trim());
-    if (!hasFinalResult && framework !== 'claudecode') {
+    if (!hasFinalResult && !QUIET_WINDOW_INFERRED_FRAMEWORKS.has(framework)) {
         return {
             autoEvalReady: false,
             autoEvalWaitReason: 'missing-final-result',
@@ -220,7 +231,7 @@ async function getAutoEvalReadiness(record: Record<string, unknown>, baseUrl?: s
     }
 
     const interactions = parseInteractionList(session?.interactions);
-    if (!hasFinalResult && !hasClaudeCodeAssistantOutput(interactions)) {
+    if (!hasFinalResult && !hasAssistantOutput(interactions)) {
         return {
             autoEvalReady: false,
             autoEvalWaitReason: 'missing-final-result',
@@ -265,7 +276,7 @@ async function getAutoEvalReadiness(record: Record<string, unknown>, baseUrl?: s
             ? new Date(completedAtMs).toISOString()
             : opencodeCliExited === true
                 ? new Date().toISOString()
-                : inferClaudeCodeTraceCompletedAt({
+                : inferQuietWindowTraceCompletedAt({
                     framework,
                     explicitCompleted,
                     latestActivityMs,
@@ -425,7 +436,7 @@ export async function GET(request: Request) {
         if (skipAutoEvalReady) {
             const traceLifecycle = baseTraceLifecycle.traceStatus === 'success'
                 ? baseTraceLifecycle
-                : String(record.framework ?? '').toLowerCase() === 'claudecode'
+                : QUIET_WINDOW_INFERRED_FRAMEWORKS.has(String(record.framework ?? '').toLowerCase())
                     ? getTraceLifecycle((await getAutoEvalReadiness(record, new URL(request.url).origin)).traceCompletedAt)
                     : baseTraceLifecycle;
             return {

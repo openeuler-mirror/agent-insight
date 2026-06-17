@@ -401,6 +401,22 @@ export function aggregateJiuwenOtlp(body: any, opts: { user?: string } = {}): Ex
   return aggregateJiuwenOtlpFromSpans(collectJiuwenSpans(body), opts);
 }
 
+/**
+ * The team-run root span (`team.<name>`), once it has ended. agent-core creates it
+ * with no parent and EXCLUDES it from forced span cleanup, so it is closed only when
+ * the whole team run finishes and is therefore exported in the final OTLP batch. Its
+ * presence in the spool is an explicit "this run is done" signal — we key
+ * `trace_completed_at` off its end time. `team.<name>` only matches the root span
+ * (tool spans are `tool.*`; tool *ids* like `team.create_task` are attributes, not span
+ * names), so there is no collision. Single-agent (`run_agent`/ReAct) runs emit no such
+ * span; their completion is inferred read-side from a quiet window instead.
+ */
+function endedTeamRootSpan(spans: JiuwenSpan[]): JiuwenSpan | undefined {
+  return spans
+    .filter((s) => s.name.startsWith('team.') && s.endNs > 0)
+    .reduce<JiuwenSpan | undefined>((latest, s) => (!latest || s.endNs > latest.endNs ? s : latest), undefined);
+}
+
 /** Same as aggregateJiuwenOtlp but from an already-collected (and possibly
  *  spool-accumulated across OTLP batches) span list. */
 export function aggregateJiuwenOtlpFromSpans(spansIn: JiuwenSpan[], opts: { user?: string } = {}): ExecutionRecord | null {
@@ -419,7 +435,19 @@ export function aggregateJiuwenOtlpFromSpans(spansIn: JiuwenSpan[], opts: { user
   const traceTaskId = `jiuwen-${spans[0].traceId ?? 'run'}`;
   const taskId = (hasTeam || hasTaskTool) ? (sessionId(spans) || traceTaskId) : traceTaskId;
 
-  if (hasTeam) return transformTeam(spans, taskId, query, user);
-  if (hasTaskTool) return transformTask(spans, taskId, query, user);
-  return transformSingle(spans, taskId, query, user);
+  const rec = hasTeam
+    ? transformTeam(spans, taskId, query, user)
+    : hasTaskTool
+      ? transformTask(spans, taskId, query, user)
+      : transformSingle(spans, taskId, query, user);
+
+  // Explicit trace-completion signal for team runs: the `team.<name>` root span ends
+  // last, so once it lands we mark the trace complete. saveExecutionRecord turns this
+  // into Session.endTime, flipping the 列表/详情 status from "执行中" to "成功". Single-agent
+  // runs have no root span → left undefined, handled by the read-side quiet-window rule.
+  if (rec) {
+    const teamRoot = endedTeamRootSpan(spans);
+    if (teamRoot) rec.trace_completed_at = new Date(toMs(teamRoot.endNs)).toISOString();
+  }
+  return rec;
 }
