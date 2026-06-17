@@ -227,6 +227,7 @@ export interface ExecutionRecord {
     cost?: number;
     latency?: number;
     timestamp?: string | Date;
+    trace_completed_at?: string | Date | null;
     final_result?: string;
     skill?: string;
     rootSkill?: InvokedSkill | null;
@@ -278,6 +279,50 @@ export interface ExecutionRecord {
     routing_evaluation?: RoutingEvaluationSnapshot;
     outcome_evaluation?: OutcomeEvaluationSnapshot;
     [key: string]: any;
+}
+
+function toTraceLifecycleMs(value: unknown): number | null {
+    if (value == null) return null;
+    if (value instanceof Date) return Number.isFinite(value.getTime()) ? value.getTime() : null;
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    if (/^\d+$/.test(trimmed)) {
+        const numeric = Number(trimmed);
+        return Number.isFinite(numeric) ? numeric : null;
+    }
+    const parsed = Date.parse(trimmed);
+    return Number.isFinite(parsed) ? parsed : null;
+}
+
+function inferTraceCompletionFromInteractions(interactions: unknown): Date | null {
+    if (!Array.isArray(interactions)) return null;
+    const latest = interactions
+        .flatMap((interaction) => {
+            const item = interaction && typeof interaction === 'object'
+                ? interaction as Record<string, unknown>
+                : {};
+            const timeInfo = item.timeInfo && typeof item.timeInfo === 'object'
+                ? item.timeInfo as Record<string, unknown>
+                : {};
+            const timing = item.timing && typeof item.timing === 'object'
+                ? item.timing as Record<string, unknown>
+                : {};
+            return [
+                toTraceLifecycleMs(timeInfo.completed),
+                toTraceLifecycleMs(timeInfo.created),
+                toTraceLifecycleMs(timing.completed_at),
+                toTraceLifecycleMs(timing.started_at),
+                toTraceLifecycleMs(item.completedAt),
+                toTraceLifecycleMs(item.completed_at),
+                toTraceLifecycleMs(item.timestamp),
+                toTraceLifecycleMs(item.createdAt),
+            ];
+        })
+        .filter((value): value is number => value != null && Number.isFinite(value) && value > 0)
+        .reduce((max, value) => Math.max(max, value), 0);
+    return latest > 0 ? new Date(latest) : null;
 }
 
 export interface RoutingMatchedSkill {
@@ -2389,6 +2434,26 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
         }
     }
 
+    const explicitTraceCompletedAt = targetRecord.trace_completed_at
+        ? new Date(targetRecord.trace_completed_at)
+        : null;
+    const hasExplicitTraceCompletion = explicitTraceCompletedAt != null
+        && Number.isFinite(explicitTraceCompletedAt.getTime());
+    const inferredHermesTraceCompletedAt = !hasExplicitTraceCompletion
+        && targetRecord.framework === 'hermes'
+        && typeof targetRecord.final_result === 'string'
+        && targetRecord.final_result.trim()
+        ? inferTraceCompletionFromInteractions(mergedInteractionsForSession)
+        : null;
+    const traceCompletedAtForSession = hasExplicitTraceCompletion
+        ? explicitTraceCompletedAt
+        : inferredHermesTraceCompletedAt;
+    if (!hasExplicitTraceCompletion && inferredHermesTraceCompletedAt) {
+        targetRecord.trace_completed_at = inferredHermesTraceCompletedAt;
+    }
+    const hasTraceCompletion = traceCompletedAtForSession != null
+        && Number.isFinite(traceCompletedAtForSession.getTime());
+
     if (targetRecord.task_id && mergedInteractionsForSession) {
         await db.upsertSession(
             targetRecord.task_id,
@@ -2398,16 +2463,20 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
                 label: targetRecord.label,
                 user: targetRecord.user,
                 model: targetRecord.model,
-                interactions: JSON.stringify(mergedInteractionsForSession)
+                interactions: JSON.stringify(mergedInteractionsForSession),
+                ...(hasTraceCompletion ? { endTime: traceCompletedAtForSession } : {}),
             },
             {
                 query: targetRecord.query,
                 label: targetRecord.label,
                 user: targetRecord.user,
                 model: targetRecord.model,
-                interactions: JSON.stringify(mergedInteractionsForSession)
+                interactions: JSON.stringify(mergedInteractionsForSession),
             }
         );
+        if (hasTraceCompletion) {
+            await db.updateSession(targetRecord.task_id, { endTime: traceCompletedAtForSession });
+        }
         if (targetRecord.framework === 'opencode' && targetRecord.opencode_cli_completed === true) {
             await db.updateSession(targetRecord.task_id, { endTime: new Date() });
         }
