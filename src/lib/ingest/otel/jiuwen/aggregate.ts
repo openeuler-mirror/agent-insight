@@ -371,12 +371,19 @@ export function aggregateJiuwenOtlp(body: any, opts: { user?: string } = {}): Ex
 export function aggregateJiuwenOtlpFromSpans(spansIn: JiuwenSpan[], opts: { user?: string } = {}): ExecutionRecord | null {
   const spans = [...spansIn].sort((a, b) => a.startNs - b.startNs);
   if (!spans.length) return null;
-  const taskId = sessionId(spans) || `jiuwen-${spans[0].traceId ?? 'run'}`;
   const query = String(spans.find((s) => s.attrs['gen_ai.prompt.1.content'])?.attrs['gen_ai.prompt.1.content'] ?? 'jiuwenswarm run');
   const user = opts.user;
 
   const hasTeam = spans.some((s) => s.name.startsWith('team.') || isAgentSpan(s));
   const hasTaskTool = spans.some((s) => s.name.startsWith('tool.task'));
+  // Single-agent runs reuse a process-wide session id (e.g. the ACP CLI's fixed
+  // "acp_cli_session"), so grouping single runs by session id would merge separate
+  // invocations into one trace. They are single-trace, so key them by traceId
+  // (unique per run). Only multi-trace team / fan-out runs — which genuinely need
+  // the session id to stitch their spans across trace ids — use the session id.
+  const traceTaskId = `jiuwen-${spans[0].traceId ?? 'run'}`;
+  const taskId = (hasTeam || hasTaskTool) ? (sessionId(spans) || traceTaskId) : traceTaskId;
+
   if (hasTeam) return transformTeam(spans, taskId, query, user);
   if (hasTaskTool) return transformTask(spans, taskId, query, user);
   return transformSingle(spans, taskId, query, user);
