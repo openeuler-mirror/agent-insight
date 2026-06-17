@@ -1095,10 +1095,8 @@ interface ReadRecordsOptions {
 export async function listObservedAgentNames(user?: string): Promise<string[]> {
     const where: any = { isSubagent: false };
     if (user) {
-        where.OR = [
-            { user },
-            { user: null },
-        ];
+        // 只看 user=自己；无主(null)不可见(与 trace 列表口径一致)。
+        where.user = user;
     }
 
     const records = await db.findExecutions(where, { timestamp: 'desc' });
@@ -1122,7 +1120,7 @@ export async function listObservedSkills(user?: string): Promise<{ name: string;
     if (EXECUTION_SKILL_ENABLED) {
         try {
             const esWhere: any = {};
-            if (user) esWhere.OR = [{ user }, { user: null }];
+            if (user) esWhere.user = user;
             const rows = await prismaRaw.executionSkill.findMany({
                 where: esWhere,
                 select: { skillName: true, skillVersion: true },
@@ -1141,7 +1139,7 @@ export async function listObservedSkills(user?: string): Promise<{ name: string;
     if (byName.size === 0) {
         // 降级:从 Execution.skill / skillVersion 列汇总(OpenGauss 或尚未回填)。
         const where: any = {};
-        if (user) where.OR = [{ user }, { user: null }];
+        if (user) where.user = user;
         const records = await db.findExecutions(where, { timestamp: 'desc' }, { skill: true, skillVersion: true } as any);
         for (const r of records) {
             const name = String(r?.skill || '').trim();
@@ -1162,10 +1160,8 @@ export async function listObservedTraceIds(
 ): Promise<string[]> {
     const where: any = { isSubagent: false };
     if (user) {
-        where.OR = [
-            { user },
-            { user: null },
-        ];
+        // 只看 user=自己；无主(null)不可见(与 trace 列表口径一致)。
+        where.user = user;
     }
     if (agentName) {
         where.agentName = agentName;
@@ -1566,10 +1562,9 @@ async function readRecordsInternal(
     const pageSize = options?.pageSize && Number.isFinite(options.pageSize) ? Math.max(1, Math.trunc(options.pageSize)) : 0;
     const where: any = {};
     if (user && !filters?.showAllUsers) {
-        where.OR = [
-            { user: user },
-            { user: null }
-        ];
+        // 严格按 owner 隔离：用户只看见 user=自己的记录；无主(user=null)记录不可见。
+        // 全看(ownership=all / admin)走 showAllUsers ⇒ 不加 user 过滤、返回全部。
+        where.user = user;
     }
 
     // 默认列表只显示 root execution；sub-agent 行通过 trace 视图下钻进入。
@@ -1610,7 +1605,7 @@ async function readRecordsInternal(
         // 索引 (skillName, skillVersion) 命中,与数据量解耦;失败则降级回旧主 skill 列匹配。
         const esWhere: any = { skillName: filters!.skill };
         if (filters?.skillVersion !== undefined) esWhere.skillVersion = filters.skillVersion;
-        if (user && !filters?.showAllUsers) esWhere.OR = [{ user }, { user: null }];
+        if (user && !filters?.showAllUsers) esWhere.user = user;
         try {
             const esRows = await prismaRaw.executionSkill.findMany({ where: esWhere, select: { executionId: true } });
             where.id = { in: Array.from(new Set(esRows.map((r: any) => r.executionId))) };
