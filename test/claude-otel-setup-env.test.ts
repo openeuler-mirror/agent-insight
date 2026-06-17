@@ -40,6 +40,22 @@ test('Claude Code OTel setup preserves tool output sources in shell and PowerShe
         source.includes('AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES = "file:$rawBodyDir"'),
       `${route} should create and use the PowerShell raw body directory`,
     );
+    assert.ok(
+      source.includes('grep -q "\\\\.agent-insight/claude_otel_env\\\\.sh"'),
+      `${route} should not let a legacy .skill-insight shell source block the new wrapper`,
+    );
+    assert.ok(
+      !source.includes('grep -q "claude_otel_env.sh"'),
+      `${route} should not use a broad shell source check`,
+    );
+    assert.ok(
+      source.includes('profileText.Contains(".agent-insight\\\\claude_otel_env.ps1")'),
+      `${route} should not let a legacy .skill-insight PowerShell source block the new wrapper`,
+    );
+    assert.ok(
+      !source.includes('-match "claude_otel_env.ps1"'),
+      `${route} should not use a broad PowerShell profile check`,
+    );
   }
 });
 
