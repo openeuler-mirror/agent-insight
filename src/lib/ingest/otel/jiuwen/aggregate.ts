@@ -129,6 +129,40 @@ function pyDictOutput(s: string): string | null {
   return m ? m[2] : null;
 }
 
+// ---- main-agent naming ---------------------------------------------------
+// Mirror of the hermes adapter's displayHermesAgentName (PR !146 "适配自定义主agent"):
+// the main/root agent shown for a trace must be the agent's *real* configured name,
+// not a baked-in placeholder. Blank → undefined (caller falls back), the sentinel
+// "default" → the framework label, otherwise the configured name verbatim.
+const JIUWEN_FRAMEWORK = 'jiuwenswarm';
+
+function displayJiuwenAgentName(value: unknown, framework: string = JIUWEN_FRAMEWORK): string | undefined {
+  const name = String(value ?? '').trim();
+  if (!name) return undefined;
+  if (name.toLowerCase() === 'default') return framework;
+  return name;
+}
+
+/**
+ * Main-agent name for a single-agent (run_agent / ReAct) run. agent-core only stamps
+ * the agent card name onto the `agent.<member>.task_iteration` boundary spans that
+ * *team* runs emit (carrying agentteam.agent.*); a bare single run emits only
+ * llm.call / tool.* spans, so there is usually no per-agent name to recover and we
+ * fall back to the framework label "jiuwenswarm". When a name attribute IS present we
+ * honor it — that is what "适配自定义主agent" means here. The previous port hardcoded a
+ * spike's "jiuwenswarm/spike_agent", which then showed up as the agent of every
+ * single-agent jiuwen trace regardless of the real agent.
+ */
+function singleAgentName(spans: JiuwenSpan[]): string {
+  for (const s of spans) {
+    const name =
+      displayJiuwenAgentName(s.attrs['agentteam.agent.name']) ??
+      displayJiuwenAgentName(s.attrs['gen_ai.agent.name']);
+    if (name) return name;
+  }
+  return JIUWEN_FRAMEWORK;
+}
+
 type Turn = { st: number; member: string; frag: any };
 
 // ---- single agent --------------------------------------------------------
@@ -141,6 +175,7 @@ function transformSingle(spans: JiuwenSpan[], taskId: string, query: string, use
       (toolByParent.get(s.parentSpanId) ?? toolByParent.set(s.parentSpanId, []).get(s.parentSpanId)!).push(s);
     }
   }
+  const agentName = singleAgentName(spans);
   const interactions: any[] = [{ role: 'user', content: query }];
   let inTok = 0, outTok = 0, totTok = 0, llm = 0, tools = 0, model = '', final = '';
   let first: number | null = null, last: number | null = null;
@@ -169,12 +204,12 @@ function transformSingle(spans: JiuwenSpan[], taskId: string, query: string, use
     });
     interactions.push({
       role: 'assistant', content, tool_calls: tcs,
-      usage: { input: pt, output: ct, total: tt }, modelID: model, agent: 'jiuwenswarm',
+      usage: { input: pt, output: ct, total: tt }, modelID: model, agent: agentName,
       timeInfo: { created: toMs(s.startNs), completed: toMs(s.endNs) },
     });
   }
   return record({
-    taskId, query, agentName: 'jiuwenswarm/spike_agent', agents: ['jiuwenswarm/spike_agent'],
+    taskId, query, agentName, agents: [agentName],
     model, inTok, outTok, totTok, tools, llm, first, last, final, interactions, user,
     subagentCount: 0,
   });
