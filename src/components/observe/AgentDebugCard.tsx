@@ -957,6 +957,7 @@ function SkillsAnalysisSection({ executionId, user, zh, analysis, onAnalysisUpda
   }, [analysis]);
 
   const keyActions = extractSkillsKeyActions(localAnalysis as Record<string, unknown> | null);
+  const skillSuggestions = extractSkillsSuggestions(localAnalysis as Record<string, unknown> | null);
   const summaryText = summarizeSkillsReason(localAnalysis?.reasonText || '');
   const status = localAnalysis?.status || 'pending';
   const hasUsableData = status === 'done' && keyActions.length > 0;
@@ -1122,6 +1123,30 @@ function SkillsAnalysisSection({ executionId, user, zh, analysis, onAnalysisUpda
                   </div>
                 )}
               </div>
+              {skillSuggestions.length > 0 && (
+                <div className="rounded-md border border-border bg-background-secondary">
+                  <div className="flex items-center gap-2 px-3 py-2.5">
+                    <span className="text-[12px] font-bold text-foreground">{zh ? 'Skill 改进建议' : 'Skill improvement suggestions'}</span>
+                    <StatusBadge status="warning" label={`${skillSuggestions.length}`} />
+                    <span className="h-px min-w-4 flex-1 bg-border" />
+                  </div>
+                  <div className="space-y-2 border-t border-border p-2.5">
+                    {skillSuggestions.map((item, index) => (
+                      <div key={`sugg-${index}-${item.summary}`} className="rounded-md border border-border bg-card px-2.5 py-2">
+                        <div className="mb-1 flex flex-wrap items-center gap-1.5">
+                          <StatusBadge status={item.severity === 'high' ? 'error' : item.severity === 'medium' ? 'warning' : 'success'} label={item.category} />
+                          <span className="text-[12px] font-semibold text-foreground">{item.summary}</span>
+                        </div>
+                        {item.evidence && <p className="text-[11.5px] leading-5 text-foreground-muted">{item.evidence}</p>}
+                        <div className="mt-2 rounded-md border border-success-border bg-success-subtle px-2 py-1.5 text-[11.5px] leading-5 text-success">
+                          <span className="font-semibold">{zh ? '改进建议' : 'Suggestion'}</span>
+                          <span className="ml-1 text-foreground-muted">{item.improvementSuggestion}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             <div className="rounded-md border border-border bg-background-secondary p-3">
@@ -1282,6 +1307,26 @@ function extractSkillsKeyActions(raw: Record<string, unknown> | null): Array<{ t
         || stringValue(item.suggestion)
         || '',
     }));
+}
+
+function extractSkillsSuggestions(raw: Record<string, unknown> | null): Array<{ category: string; severity: 'high' | 'medium' | 'low'; summary: string; evidence: string; improvementSuggestion: string }> {
+  if (!raw) return [];
+  const value = raw.skillSuggestions || raw.skill_suggestions;
+  if (!Array.isArray(value)) return [];
+  return value
+    .map(item => item && typeof item === 'object' ? item as Record<string, unknown> : null)
+    .filter((item): item is Record<string, unknown> => Boolean(item))
+    .map(item => {
+      const sev = stringValue(item.severity).toLowerCase();
+      return {
+        category: stringValue(item.category) || '其他',
+        severity: (sev === 'high' || sev === 'low' ? sev : 'medium') as 'high' | 'medium' | 'low',
+        summary: stringValue(item.summary),
+        evidence: stringValue(item.evidence),
+        improvementSuggestion: stringValue(item.improvementSuggestion) || stringValue(item.improvement_suggestion),
+      };
+    })
+    .filter(item => item.summary && item.improvementSuggestion);
 }
 
 function stringValue(value: unknown): string {

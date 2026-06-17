@@ -174,6 +174,14 @@ export interface AgentDebugSkillsKeyActionResult {
   skillImprovementSuggestion: string;
 }
 
+export interface AgentDebugSkillSuggestion {
+  category: string;
+  severity: AgentDebugSeverity;
+  summary: string;
+  evidence: string;
+  improvementSuggestion: string;
+}
+
 export interface AgentDebugSkillsAnalysis {
   status: AgentDebugSkillsAnalysisStatus;
   source: 'agent-debug';
@@ -184,6 +192,8 @@ export interface AgentDebugSkillsAnalysis {
   reasonText?: string;
   skillKeyActionComparison?: unknown;
   keyActionResults?: AgentDebugSkillsKeyActionResult[];
+  /** 「建议流」(skill-suggestion-agent) 产出的 skill 改进建议，与关键动作覆盖解耦。 */
+  skillSuggestions?: AgentDebugSkillSuggestion[];
 }
 
 export interface AgentDebugReportPayload {

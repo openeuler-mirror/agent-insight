@@ -20,6 +20,7 @@ export const SYSTEM_AGENT_NAMES: readonly string[] = [
   'trace-quality-evaluator',  // 轨迹质量评估
   'task-completion-evaluator', // 任务完成度评估
   'skill-trigger-analyzer',    // 触发分析评测 ← 用户特别提到的"做触发分析时跑的用例"
+  'skill-suggestion-advisor',  // Skill 改进建议（轨迹评测的建议流，读 trace 给 SKILL.md 建议，非真实用户任务）
 
   // 灰度测评 (A/B) 的 agent: A/B 数据量大(N rounds × M cases),让它在 case analysis
   // 列表也冒出来会冲淡真实 user trace。用户在专门的 A/B 测评页看这些数据,这里隔离。
@@ -57,6 +58,7 @@ const HIDDEN_FROM_CASE_ANALYSIS = new Set<string>([
   'trace-quality-evaluator',
   'task-completion-evaluator',
   'skill-trigger-analyzer',
+  'skill-suggestion-advisor',
   // A/B 灰度执行器: 见上面注释, 不在用例分析里展示, 杜绝 A/B trace 漏进用例分析。
   'grayscale-skill-agent',
   'grayscale-baseline-agent',
