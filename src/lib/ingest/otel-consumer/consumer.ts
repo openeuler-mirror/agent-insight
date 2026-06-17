@@ -278,7 +278,7 @@ export async function runOtelSpoolConsumerTick(state: OtelSpoolConsumerState): P
           };
           state.pendingFiles.set(fileKey, pending);
           resetTimers = true;
-        } else if (read.nextCursor.bytes > pending.nextCursor.bytes) {
+        } else if (read.nextCursor.bytes !== pending.nextCursor.bytes) {
           pending.nextCursor = read.nextCursor;
           resetTimers = true;
         }

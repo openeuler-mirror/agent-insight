@@ -29,7 +29,7 @@ test("OTel consumer: runs one loop, fast-saves, evaluates, and advances checkpoi
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "otel-consumer-"))
   stopOtelSpoolConsumer()
   try {
-    const dayDir = path.join(dir, "2026-06-09")
+    const dayDir = path.join(dir, new Date().toISOString().slice(0, 10))
     fs.mkdirSync(dayDir, { recursive: true })
     const file = path.join(dayDir, "logs.jsonl")
     fs.writeFileSync(file, "{\"sessionId\":\"session-a\"}\n", "utf8")
