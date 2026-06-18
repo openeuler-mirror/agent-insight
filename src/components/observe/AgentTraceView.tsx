@@ -27,6 +27,7 @@ import {
 } from '@/lib/engine/observability/agent-trace';
 import {
     extractSkillsWithVersionsFromClaudeSession,
+    extractSkillsWithVersionsFromHermesSession,
     extractSkillsWithVersionsFromOpenClawSession,
     extractSkillsWithVersionsFromOpencodeSession,
     normalizeInteractions,
@@ -262,6 +263,7 @@ function collectTraceSkillCalls(interactions: RawInteraction[], node?: AgentNode
         ...extractSkillsWithVersionsFromOpencodeSession(normalized),
         ...extractSkillsWithVersionsFromClaudeSession(normalized),
         ...extractSkillsWithVersionsFromOpenClawSession(normalized),
+        ...extractSkillsWithVersionsFromHermesSession(normalized),
     ];
 
     const byKey = new Map<string, TraceSkillCall>();
