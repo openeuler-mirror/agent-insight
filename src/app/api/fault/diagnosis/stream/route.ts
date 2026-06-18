@@ -171,6 +171,23 @@ function summarizeSkillsAnalysisForFollowUp(analysis: AgentDebugSkillsAnalysis |
     return { available: false };
   }
   const keyActionResults = Array.isArray(analysis.keyActionResults) ? analysis.keyActionResults : [];
+  const rawSkillSuggestions = Array.isArray(analysis.skillSuggestions)
+    ? analysis.skillSuggestions
+    : Array.isArray((analysis as unknown as { skill_suggestions?: unknown[] }).skill_suggestions)
+      ? (analysis as unknown as { skill_suggestions: unknown[] }).skill_suggestions
+      : [];
+  const skillSuggestions = rawSkillSuggestions
+    .map((item) => item && typeof item === 'object' ? item as Record<string, unknown> : null)
+    .filter((item): item is Record<string, unknown> => Boolean(item))
+    .map((item) => ({
+      category: String(item.category || '其他'),
+      severity: String(item.severity || 'medium'),
+      summary: compactText(item.summary, 500),
+      evidence: compactText(item.evidence, 700),
+      improvementSuggestion: compactText(item.improvementSuggestion ?? item.improvement_suggestion, 700),
+    }))
+    .filter((item) => item.summary || item.improvementSuggestion)
+    .slice(0, 20);
   const coverageCounts = keyActionResults.reduce<Record<string, number>>((acc, item) => {
     const coverage = item.coverage || 'unknown';
     acc[coverage] = (acc[coverage] || 0) + 1;
@@ -185,6 +202,8 @@ function summarizeSkillsAnalysisForFollowUp(analysis: AgentDebugSkillsAnalysis |
     reasonText: compactText(analysis.reasonText || '', 3000),
     coverageCounts,
     keyActionCount: keyActionResults.length,
+    skillSuggestionCount: skillSuggestions.length,
+    skillSuggestions,
     keyActions: keyActionResults.slice(0, 20).map((item) => ({
       actionId: item.actionId,
       actionContent: compactText(item.actionContent, 500),
