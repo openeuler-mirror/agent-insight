@@ -28,7 +28,7 @@ import {
     deriveTaskCompletionScoreFromFindings,
     stripSkillAttributionFromKeyPointFindings,
 } from './task-completion-scoring';
-import { parseLooseJson } from './task-completion-json';
+import { normalizeResultIssues, parseLooseJson } from './task-completion-json';
 
 export interface TaskCompletionEvalInput {
     caseInput: string;
@@ -116,7 +116,17 @@ function buildCoordinatorSystemPrompt(mode: NonNullable<TaskCompletionEvalInput[
       "improvement_suggestion": "仅当 is_skill_attributable=true 时填，写到 SKILL.md 具体小节级"
     }
   ],
-  "key_point_summary": "中文总结关键观点整体覆盖情况"
+  "key_point_summary": "中文总结关键观点整体覆盖情况",
+  "result_issues": [
+    {
+      "kind": "incorrect_fact|extra_content|verbosity|format|other",
+      "summary": "一句话描述这个【不对应任何预期关键观点、但实际输出自身存在】的结果层问题",
+      "severity": "low|medium|high",
+      "is_skill_attributable": false,
+      "attribution_reason": "为什么这个问题可/不可通过修改 Skill 降低复现概率",
+      "improvement_suggestion": "仅当 is_skill_attributable=true 时填，具体到 SKILL.md 小节 / scripts 文件级"
+    }
+  ]
 }
 
 【评分规则】
@@ -139,11 +149,16 @@ Step 6. 查看 Trace Summary，判断问题发生阶段：
 - model_or_environment：主要来自模型能力、外部环境、工具失败等，难以通过 Skill 修复。
 - unknown：压缩轨迹中没有足够证据定位。
 Step 7. 按下方 Skill 归因分支要求填写 is_skill_attributable / attribution_reason / improvement_suggestion。
+Step 8. 单独检查【不对应任何预期关键观点、但实际输出自身就有】的结果层问题，逐条放进 result_issues：
+- incorrect_fact：实际输出里与证据/事实矛盾的系统性错误（如时间/年份、数量、IP 等算错或写错）。
+- extra_content：实际输出**编造**了预期结果与证据中都不存在的内容（如凭空多出的来源 IP、事件）——这类"多出来的错"不会体现在关键观点覆盖里，必须靠 result_issues 抓。
+- verbosity / format / other：明显冗余或格式问题（保守判定，拿不准就不报）。
+没有这类问题时 result_issues 输出空数组 []；每条按下方 Skill 归因分支规则填 is_skill_attributable / attribution_reason / improvement_suggestion。
 
 ${skillBranch}
 
 【重要约束】
-- 不要输出 result_issues。
+- result_issues 只装"关键观点覆盖之外"的结果层问题（事实错 / 编造 / 冗余）；已在 key_point_findings 里报过的覆盖问题不要重复塞进 result_issues。
 - 不要编造 trace 证据。Trace Summary 中找不到证据时，related_steps 为空，failure_stage 使用 "unknown"。
 - 每条关键观点都必须输出一条 key_point_findings。
 - 每条关键观点都必须输出显式 score，范围 0.0～1.0。
@@ -181,7 +196,6 @@ function isTaskCompletionPayload(parsed: Record<string, unknown>): boolean {
     if (typeof parsed.score !== 'undefined') return true;
     if (typeof parsed.is_correct !== 'undefined') return true;
     if (Array.isArray(parsed.key_point_findings)) return true;
-    if (Array.isArray(parsed.result_issues)) return true;
     return false;
 }
 
@@ -266,7 +280,8 @@ function normalizeOutput(
     const isCorrect = score >= 0.8;
     const reason = String(parsed.reason || '').trim() || '任务完成度评测已完成，但未返回理由。';
     const llmReportedScore = typeof parsed.score === 'undefined' ? undefined : clampTaskScore(parsed.score);
-    const { result_issues: _ignoredResultIssues, resultIssues: _ignoredResultIssuesCamel, ...rest } = parsedForScoring;
+    const { result_issues: rawResultIssues, resultIssues: rawResultIssuesCamel, ...rest } = parsedForScoring;
+    const resultIssues = normalizeResultIssues(rawResultIssues ?? rawResultIssuesCamel, mode);
     return {
         isCorrect,
         score,
@@ -281,6 +296,7 @@ function normalizeOutput(
                 item_count: scoreSummary.itemCount,
             },
             skillAttributionMode: mode,
+            result_issues: resultIssues,
             key_point_findings: scoreSummary.findings,
         },
     };
@@ -350,7 +366,7 @@ async function evaluateTaskCompletionDirectAndRecord(
     if (!parsed || !isTaskCompletionPayload(parsed)) {
         throw new Error(`任务完成度直接 LLM 评测未产出有效 JSON。模型输出前 800 字符：${assistantText.slice(0, 800)}`);
     }
-    const normalized = normalizeOutput(parsed);
+    const normalized = normalizeOutput(parsed, input.skillAttributionMode || 'skill-aware');
     const evaluatorSessionId = `${TASK_COMPLETION_EVALUATOR_NAME}-${randomUUID()}`;
     const def = findSystemAgentDefinition('opencode', TASK_COMPLETION_EVALUATOR_NAME);
     await recordDirectEvaluatorExecution({
