@@ -130,6 +130,34 @@
     margin-bottom: 4px;
 }
 
+.efv-attribution {
+    font-size: 11.5px;
+    color: #2c2b28;
+    line-height: 1.55;
+    padding: 6px 8px;
+    background: #f0f7f4;
+    border-left: 2px solid #0f7b57;
+    border-radius: 3px;
+    margin-top: 4px;
+}
+
+.efv-attribution.non-attr {
+    background: #f9f9fb;
+    border-left-color: #8a8884;
+}
+
+.efv-attribution-label {
+    display: inline-block;
+    font-weight: 600;
+    color: #0F7B57;
+    margin-right: 6px;
+    font-size: 11px;
+}
+
+.efv-attribution.non-attr .efv-attribution-label {
+    color: #6b6a66;
+}
+
 .efv-suggestion {
     font-size: 11.5px;
     color: #2c2b28;

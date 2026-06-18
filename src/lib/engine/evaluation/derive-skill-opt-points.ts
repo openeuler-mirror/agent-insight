@@ -355,6 +355,17 @@ export function extractKeyPointIssuesFromRawAnalysis(rawAnalysisJson: string | n
   return extractKeyPointIssues({ rawAnalysisJson: rawAnalysisJson ?? null });
 }
 
+export function extractResultIssuesFromRawAnalysis(rawAnalysisJson: string | null | undefined): Array<{
+  severity: Severity;
+  category: string;
+  summary: string;
+  evidence: string;
+  reasoning?: string;
+  improvementSuggestion?: string;
+}> {
+  return extractResultIssues({ rawAnalysisJson: rawAnalysisJson ?? null });
+}
+
 function extractToolChoiceIssues(
   row: Pick<TrajectoryEvalResult, 'rawAnalysisJson'>,
 ): DerivedIssue[] {

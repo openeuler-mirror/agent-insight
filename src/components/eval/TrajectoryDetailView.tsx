@@ -24,6 +24,7 @@ import {
     isTrajectoryEvaluationTerminal,
     parseTrajectoryDiagnostic,
 } from '@/lib/eval/trajectory-diagnostic';
+import { EvaluatorFindingsView, extractFindings } from './EvaluatorFindingsView';
 import './evaluator-findings-view.css';
 
 interface DatasetCase {
@@ -959,6 +960,11 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
         [resultEvaluationPayload],
     );
     const resultEvaluationFindings = resultEvaluationPayload.findings;
+    const resultIssueFindings = useMemo(
+        () => extractFindings({ deviationSteps: [], rawAnalysis: result?.rawAnalysis })
+            .filter(item => item.kind === 'result_issue'),
+        [result?.rawAnalysis],
+    );
     const resultEvaluationReady = isResultEvaluationReady(resultEvaluationPayload, hasResultEvaluation);
     const resultEvaluationFailed = hasResultEvaluationFailed(resultEvaluationPayload);
     const evaluationDiagnostic = useMemo(
@@ -1253,6 +1259,17 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
                                                 />
                                             ))}
                                         </div>
+                                    </div>
+                                )}
+                                {resultIssueFindings.length > 0 && (
+                                    <div style={{ marginTop: 14 }}>
+                                        <div style={{ fontSize: 11.5, color: COLORS.textMuted, marginBottom: 6 }}>
+                                            结果层问题
+                                        </div>
+                                        <EvaluatorFindingsView
+                                            row={{ deviationSteps: [], rawAnalysis: result?.rawAnalysis }}
+                                            allowedKinds={['result_issue']}
+                                        />
                                     </div>
                                 )}
                             </>

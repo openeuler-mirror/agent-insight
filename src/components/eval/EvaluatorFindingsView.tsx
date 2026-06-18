@@ -26,6 +26,7 @@ export interface EvaluatorFinding {
     stepIndex?: number;
     covered?: boolean;
     isSkillAttributable?: boolean;
+    attributionReason?: string;
     improvementSuggestion?: string;
 }
 
@@ -55,6 +56,7 @@ export function extractFindings(row: EvaluatorFindingsRowLike): EvaluatorFinding
         : [];
     for (const d of dev) {
         const isAttr = pickAttr(d, 'is_skill_attributable', 'isSkillAttributable');
+        const attributionReason = pickAttr(d, 'attribution_reason', 'attributionReason');
         const suggestion = pickAttr(d, 'improvement_suggestion', 'improvementSuggestion');
         out.push({
             kind: 'deviation',
@@ -63,6 +65,7 @@ export function extractFindings(row: EvaluatorFindingsRowLike): EvaluatorFinding
             severity: typeof d.severity === 'string' ? d.severity as EvaluatorFinding['severity'] : undefined,
             stepIndex: typeof d.stepIndex === 'number' ? d.stepIndex : undefined,
             isSkillAttributable: typeof isAttr === 'boolean' ? isAttr : true,
+            attributionReason: typeof attributionReason === 'string' ? attributionReason : undefined,
             improvementSuggestion: typeof suggestion === 'string' ? suggestion : undefined,
         });
     }
@@ -88,6 +91,7 @@ export function extractFindings(row: EvaluatorFindingsRowLike): EvaluatorFinding
         const covered = pickAttr(f, 'covered', 'covered');
         if (covered === true) continue;
         const isAttr = pickAttr(f, 'is_skill_attributable', 'isSkillAttributable');
+        const attributionReason = pickAttr(f, 'attribution_reason', 'attributionReason');
         const suggestion = pickAttr(f, 'improvement_suggestion', 'improvementSuggestion');
         out.push({
             kind: 'key_point',
@@ -96,6 +100,7 @@ export function extractFindings(row: EvaluatorFindingsRowLike): EvaluatorFinding
             severity: typeof f.severity === 'string' ? f.severity as EvaluatorFinding['severity'] : undefined,
             covered: false,
             isSkillAttributable: typeof isAttr === 'boolean' ? isAttr : true,
+            attributionReason: typeof attributionReason === 'string' ? attributionReason : undefined,
             improvementSuggestion: typeof suggestion === 'string' ? suggestion : undefined,
         });
     }
@@ -103,6 +108,7 @@ export function extractFindings(row: EvaluatorFindingsRowLike): EvaluatorFinding
     // 3) tool_choice_findings
     for (const f of findFromRaw('tool_choice_findings')) {
         const isAttr = pickAttr(f, 'is_skill_attributable', 'isSkillAttributable');
+        const attributionReason = pickAttr(f, 'attribution_reason', 'attributionReason');
         const suggestion = pickAttr(f, 'improvement_suggestion', 'improvementSuggestion');
         out.push({
             kind: 'tool_choice',
@@ -111,6 +117,7 @@ export function extractFindings(row: EvaluatorFindingsRowLike): EvaluatorFinding
             severity: typeof f.severity === 'string' ? f.severity as EvaluatorFinding['severity'] : undefined,
             stepIndex: typeof f.step_index === 'number' ? f.step_index as number : (typeof f.stepIndex === 'number' ? f.stepIndex as number : undefined),
             isSkillAttributable: typeof isAttr === 'boolean' ? isAttr : true,
+            attributionReason: typeof attributionReason === 'string' ? attributionReason : undefined,
             improvementSuggestion: typeof suggestion === 'string' ? suggestion : undefined,
         });
     }
@@ -125,6 +132,7 @@ export function extractFindings(row: EvaluatorFindingsRowLike): EvaluatorFinding
     };
     for (const f of findFromRaw('result_issues')) {
         const isAttr = pickAttr(f, 'is_skill_attributable', 'isSkillAttributable');
+        const attributionReason = pickAttr(f, 'attribution_reason', 'attributionReason');
         const suggestion = pickAttr(f, 'improvement_suggestion', 'improvementSuggestion');
         const subKind = typeof f.kind === 'string' ? f.kind : 'other';
         out.push({
@@ -132,6 +140,7 @@ export function extractFindings(row: EvaluatorFindingsRowLike): EvaluatorFinding
             title: `${RESULT_KIND_LABEL[subKind] || subKind}：${String(f.summary ?? '未命名问题')}`,
             severity: typeof f.severity === 'string' ? f.severity as EvaluatorFinding['severity'] : undefined,
             isSkillAttributable: typeof isAttr === 'boolean' ? isAttr : true,
+            attributionReason: typeof attributionReason === 'string' ? attributionReason : undefined,
             improvementSuggestion: typeof suggestion === 'string' ? suggestion : undefined,
         });
     }
@@ -199,9 +208,17 @@ export function EvaluatorFindingsView({ row, allowedKinds }: EvaluatorFindingsVi
                                     )}
                                 </div>
                                 {f.description && <div className="efv-desc">{f.description}</div>}
+                                {f.attributionReason && (
+                                    <div className={`efv-attribution${f.isSkillAttributable === false ? ' non-attr' : ''}`}>
+                                        <span className="efv-attribution-label">
+                                            {f.isSkillAttributable === false ? '非 Skill 归因' : 'Skill 归因'}
+                                        </span>
+                                        {f.attributionReason}
+                                    </div>
+                                )}
                                 {f.improvementSuggestion && f.isSkillAttributable !== false && (
                                     <div className="efv-suggestion">
-                                        <span className="efv-suggestion-label">改进建议</span>
+                                        <span className="efv-suggestion-label">Skill 改进建议</span>
                                         {f.improvementSuggestion}
                                     </div>
                                 )}

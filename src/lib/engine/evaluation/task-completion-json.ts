@@ -111,3 +111,38 @@ export function parseLooseJson(text: string): Record<string, unknown> | null {
 
     return null;
 }
+
+const RESULT_ISSUE_KINDS = new Set(['incorrect_fact', 'extra_content', 'verbosity', 'format', 'other']);
+const RESULT_ISSUE_SEVERITIES = new Set(['low', 'medium', 'high']);
+
+export function normalizeResultIssues(
+    raw: unknown,
+    mode: 'skill-aware' | 'no-skill',
+): Array<Record<string, unknown>> {
+    if (!Array.isArray(raw)) return [];
+    const out: Array<Record<string, unknown>> = [];
+    for (const it of raw) {
+        if (!it || typeof it !== 'object') continue;
+        const o = it as Record<string, unknown>;
+        const summary = String(o.summary ?? '').trim();
+        if (!summary) continue;
+
+        const kindRaw = String(o.kind ?? 'other').toLowerCase().trim();
+        const kind = RESULT_ISSUE_KINDS.has(kindRaw) ? kindRaw : 'other';
+        const sevRaw = String(o.severity ?? 'medium').toLowerCase().trim();
+        const severity = RESULT_ISSUE_SEVERITIES.has(sevRaw) ? sevRaw : 'medium';
+        const attributable = mode === 'no-skill'
+            ? false
+            : (o.is_skill_attributable === true || o.isSkillAttributable === true);
+
+        out.push({
+            kind,
+            summary,
+            severity,
+            is_skill_attributable: attributable,
+            attribution_reason: attributable ? String(o.attribution_reason ?? o.attributionReason ?? '').trim() : '',
+            improvement_suggestion: attributable ? String(o.improvement_suggestion ?? o.improvementSuggestion ?? '').trim() : '',
+        });
+    }
+    return out;
+}
