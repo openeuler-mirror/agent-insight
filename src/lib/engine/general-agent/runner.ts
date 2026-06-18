@@ -271,7 +271,7 @@ export async function runGeneralAgent(
   // 被测的 skill 通过 workspace 的 .opencode/skills/ 由 deploySkillToWorkspace 注入。
   if (input.ephemeralServer) {
     ensureDispatcher();
-    return runWithEphemeralOpencodeServer({ user, verbose: false, isolateHome: true }, async (baseURL) => {
+    return runWithEphemeralOpencodeServer({ user, verbose: false, isolateHome: true, telemetryEnabled: !input.recordTraceAs }, async (baseURL) => {
       const ephemeralClient = new AgentInsight({
         baseURL,
         timeout: 180_000,
