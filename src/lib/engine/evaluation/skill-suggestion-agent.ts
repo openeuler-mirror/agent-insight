@@ -284,7 +284,7 @@ async function runSuggestionViaOpencode(args: {
   }
 
   return runWithEphemeralOpencodeServer(
-    { user: args.user || undefined, verbose: false, isolateHome: true },
+    { user: args.user || undefined, verbose: false, isolateHome: true, telemetryEnabled: false },
     async (serverUrl) => {
       const insight = new AgentInsight({
         baseURL: serverUrl,
