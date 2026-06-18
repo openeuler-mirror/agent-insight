@@ -1186,7 +1186,6 @@ export async function runWithEphemeralOpencodeServer<T>(
     /**
      * true: 启用 HOME 隔离, opencode 看不到 user HOME 下的 skill (~/.claude/skills/ +
      *       ~/.agents/skills/) 和插件 (~/.opencode/plugins/ 除 Witty-Skill-Insight 外)。
-     *       但 Witty-Skill-Insight.ts plugin 会自动 symlink 到隔离 HOME, trace 上报链路保留。
      *       用于后台评测 (evaluator / grayscale / trigger) 等"内部任务",避免被 user skill 污染。
      * false (默认): 用 process.env.HOME, opencode 能看到 user 所有 skill / plugin。
      *               用于"用户实时对话"等需要看到 user skill 的场景 (skill-generator 等)。
@@ -1196,6 +1195,8 @@ export async function runWithEphemeralOpencodeServer<T>(
      * false: 不让隔离 OpenCode 进程里的 Witty-Skill-Insight plugin 采集/上传。
      * 适用于评测器/建议器/recordTraceAs 执行：这些内部执行已通过后端显式落库，
      * plugin 再上传会在 trace 列表里产生普通 build 伪业务 trace。
+     *
+     * 不传时: isolateHome=true 的内部临时进程默认关闭; 非隔离/用户态进程默认开启。
      */
     telemetryEnabled?: boolean
   },
@@ -1203,6 +1204,7 @@ export async function runWithEphemeralOpencodeServer<T>(
 ): Promise<T> {
   const userKey = opts.user || ANONYMOUS_USER_KEY
   const verbose = opts.verbose ?? false
+  const telemetryEnabled = opts.telemetryEnabled ?? !opts.isolateHome
   // 准备隔离 HOME (如启用), 拿 cleanup 在 finally 里调
   let homeCleanup: (() => Promise<void>) | null = null
   let homeOverride: string | undefined = undefined
@@ -1213,7 +1215,7 @@ export async function runWithEphemeralOpencodeServer<T>(
   }
   // 注意: 直接调内部 startServerForUser 不走 cache, 也不写 state.servers。
   // 多个 ephemeral 调用并发时各自起独立进程,互不复用,自然隔离。
-  const inst = await startServerForUser(userKey, { verbose, homeOverride, telemetryEnabled: opts.telemetryEnabled })
+  const inst = await startServerForUser(userKey, { verbose, homeOverride, telemetryEnabled })
   try {
     return await fn(inst.baseUrl)
   } finally {
