@@ -1153,7 +1153,12 @@ function Row({
     const id = e.task_id || e.upload_id || '';
     const status = getExecStatus(e);
     const skillCount = getInvokedSkillNames(e).length;
-    const isMultiAgent = skillCount > 1;
+    // "Multi-Agent" 标签（见 glossary multi-agent）= Trace 中实际出现多个协同 Agent（含主-子派生），
+    // 按**真实 agent 数**判定、与框架无关：e.agents 是该 trace 实际观测到的去重 agent 集合
+    //（light 由 observedAgents 还原，与 heavy 同源）。单 agent 的 jiuwenswarm/opencode/claude 都不会标——
+    //「框架=jiuwenswarm」并不等于多 agent（它有 transformSingle 单 agent 路径）。不拿 skill 数当多 agent 的代理。
+    const agentCount = new Set((e.agents ?? []).filter(Boolean)).size;
+    const isMultiAgent = agentCount > 1;
     const statusKind: StatusKind = status === 'running' ? 'running' : status === 'failed' ? 'error' : 'success';
     const statusLabel = status === 'running' ? t('tracePage.statusRunning')
         : status === 'failed' ? t('tracePage.statusFailed')
