@@ -186,3 +186,65 @@ test("opencode uploader: merges repeated updates for the same task tool call by 
   assert.equal(toolCalls[0].id, "call_task_1")
   assert.equal(toolCalls[0].state, "success")
 })
+
+test("opencode uploader: recovers user input from text part when chat.message.messageID is null", async () => {
+  const uploader = await uploaderPromise
+  const state = uploader.buildState([
+    // Newer opencode often fires the chat.message hook without a messageID, so
+    // userTextByMsg can't be keyed to the message.
+    { kind: "chat.message", sessionID: "ses_root", payload: { messageID: null, text: "nihao" } },
+    // User message. On newer opencode info.system is null (not the system-prompt
+    // string the old fallback relied on).
+    {
+      kind: "event",
+      payload: {
+        type: "message.updated",
+        event: {
+          properties: {
+            info: { id: "msg_user", sessionID: "ses_root", role: "user", system: null, time: { created: 1 } },
+          },
+        },
+      },
+    },
+    // The user's typed query reliably lives in the message's own text part.
+    {
+      kind: "event",
+      payload: {
+        type: "message.part.updated",
+        event: {
+          properties: {
+            part: { id: "prt_user", messageID: "msg_user", sessionID: "ses_root", type: "text", text: "nihao" },
+          },
+        },
+      },
+    },
+    // An assistant reply so the session looks complete.
+    {
+      kind: "event",
+      payload: {
+        type: "message.updated",
+        event: {
+          properties: {
+            info: { id: "msg_asst", sessionID: "ses_root", role: "assistant", time: { created: 2, completed: 3 } },
+          },
+        },
+      },
+    },
+    {
+      kind: "event",
+      payload: {
+        type: "message.part.updated",
+        event: {
+          properties: {
+            part: { id: "prt_asst", messageID: "msg_asst", sessionID: "ses_root", type: "text", text: "你好" },
+          },
+        },
+      },
+    },
+  ])
+
+  const messages = uploader.buildMessagesForSession(state, "ses_root")
+  const user = messages.find((m: any) => m.role === "user")
+  assert.ok(user, "应当存在 user 消息")
+  assert.equal(user.content, "nihao", "messageID 缺失时仍应从 text part 还原用户输入")
+})
