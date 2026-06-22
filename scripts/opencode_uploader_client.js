@@ -580,6 +580,22 @@ function buildState(records) {
   return { sessions, sessionParent, sessionAgent, children, msgInfo, msgParts, partText, userTextByMsg, sysPrompts, cliCompletedSessions, sessionPids }
 }
 
+// Join all text-type parts of a message into one string. Prefers the
+// streamed-complete text (text.complete hook) over the partial captured on
+// message.part.updated. Shared by user and assistant message rendering.
+function collectTextPartContent(parts, mid, partText) {
+  const buf = []
+  for (const p of parts || []) {
+    if ((p?.type || "").toLowerCase() !== "text") continue
+    const key = `${mid}:${p.id}`
+    const streamed = partText.get(key)
+    const fallback = typeof p?.text === "string" ? p.text : ""
+    const out = typeof streamed === "string" && streamed ? streamed : fallback
+    if (out) buf.push(out)
+  }
+  return buf.join("")
+}
+
 function buildMessagesForSession(state, sid) {
   const { msgInfo, msgParts, partText, userTextByMsg } = state
   const messages = []
@@ -592,21 +608,20 @@ function buildMessagesForSession(state, sid) {
 
     let content = ""
     if (role === "user") {
-      content = userTextByMsg.get(mid) || ""
+      // The real user query lives in this message's own text part(s), and
+      // message.part.updated reliably carries messageID, so reading from parts
+      // is version-proof. The legacy sources are unreliable on newer opencode:
+      //   - userTextByMsg is keyed off the chat.message hook's input.messageID,
+      //     an OPTIONAL field newer opencode often omits → key is null → the
+      //     user text is never recorded.
+      //   - info.system (last-ditch fallback) is now null on user messages —
+      //     and was the system prompt, not the query, anyway.
+      // With both broken the query uploaded empty. Keep them only as fallbacks.
+      content = collectTextPartContent(msgParts.get(mid) || [], mid, partText)
+      if (!content) content = userTextByMsg.get(mid) || ""
       if (!content && typeof info?.system === "string") content = info.system
     } else {
-      const parts = msgParts.get(mid) || []
-      const buf = []
-      for (const p of parts) {
-        if ((p?.type || "").toLowerCase() === "text") {
-          const key = `${mid}:${p.id}`
-          const text = partText.get(key)
-          const fallback = typeof p?.text === "string" ? p.text : ""
-          const out = typeof text === "string" && text ? text : fallback
-          if (out) buf.push(out)
-        }
-      }
-      content = buf.join("")
+      content = collectTextPartContent(msgParts.get(mid) || [], mid, partText)
     }
 
     const tool_calls = []
