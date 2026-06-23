@@ -370,6 +370,7 @@ function transformTask(spans: JiuwenSpan[], taskId: string, query: string, user?
   let inTok = 0, outTok = 0, totTok = 0, llm = 0, model = '', planContent = '', mergeContent = '';
   let first: number | null = null, last: number | null = null;
   const taskSpans: JiuwenSpan[] = [];
+  const coordToolSpans: JiuwenSpan[] = []; // coordinator's own (non-task) tool calls
   for (const s of spans) {
     first = first === null ? s.startNs : Math.min(first, s.startNs);
     last = last === null ? s.endNs : Math.max(last, s.endNs);
@@ -386,6 +387,8 @@ function transformTask(spans: JiuwenSpan[], taskId: string, query: string, user?
       if (c) mergeContent = c;
     } else if (s.name.startsWith('tool.task')) {
       taskSpans.push(s);
+    } else if (isTool(s)) {
+      coordToolSpans.push(s);
     }
   }
   const final = mergeContent;
@@ -414,19 +417,62 @@ function transformTask(spans: JiuwenSpan[], taskId: string, query: string, user?
     });
   });
 
+  // The coordinator's OWN tool calls (read_file/list_files/bash/...) — everything that is
+  // not a task spawn. transformTask used to drop these entirely; keep them with FULL
+  // input/output so the trace reflects the real tool usage.
+  const toToolCall = (s: JiuwenSpan) => {
+    const a = s.attrs;
+    return {
+      id: String(a['gen_ai.tool.id'] ?? s.spanId), type: 'function',
+      function: {
+        name: String(a['gen_ai.tool.name'] ?? s.name.split('.').slice(1).join('.')),
+        arguments: String(a['gen_ai.tool.input'] ?? ''),
+      },
+      state: 'success', output: unwrapToolData(a['gen_ai.tool.output']),
+      timing: { started_at: toMs(s.startNs), completed_at: toMs(s.endNs) },
+    };
+  };
+  // Split coordinator tools by time relative to the subagent spawns:
+  //  - tools run BEFORE the first spawn share the plan/spawn turn (interleaved with the
+  //    spawn calls) — the model "this LLM step decided → called these tools" holds there;
+  //  - tools run AFTER the subagents returned get their OWN coordinator turn, placed before
+  //    the wrap-up answer. agent-trace emits a turn's LLM step before its tool events, so
+  //    lumping them onto the answer turn would render the tools AFTER the final answer.
+  const firstTaskStartNs = taskSpans.length ? Math.min(...taskSpans.map((t) => t.startNs)) : Infinity;
+  coordToolSpans.sort((a, b) => a.startNs - b.startNs);
+  const preSpawnTools = coordToolSpans.filter((s) => s.startNs < firstTaskStartNs).map(toToolCall);
+  const postSpawnTools = coordToolSpans.filter((s) => s.startNs >= firstTaskStartNs).map(toToolCall);
+  const planTools = [...preSpawnTools, ...coordTools].sort(
+    (a, b) => (a.timing?.started_at ?? 0) - (b.timing?.started_at ?? 0),
+  );
+
   const taskEnds = taskSpans.length ? taskSpans.map((t) => toMs(t.endNs)) : [toMs(last ?? 0)];
   const spawnDone = Math.max(...taskEnds);
   const interactions: any[] = [
     { role: 'user', content: query },
     { role: 'assistant', agent: 'coordinator', content: planContent && planContent !== mergeContent ? planContent : '',
-      tool_calls: coordTools, timeInfo: { created: toMs(first ?? 0), completed: spawnDone } },
+      tool_calls: planTools, timeInfo: { created: toMs(first ?? 0), completed: spawnDone } },
     ...subs,
-    { role: 'assistant', agent: 'coordinator', content: final,
-      usage: { input: inTok, output: outTok, total: totTok }, timeInfo: { created: spawnDone, completed: toMs(last ?? 0) } },
   ];
+  // Post-spawn coordinator tools (e.g. reading a skill after the subagents returned) on
+  // their own turn, timed by the tools' real window so they sit before the wrap-up answer.
+  let wrapStart = spawnDone;
+  if (postSpawnTools.length) {
+    const pStart = Math.min(...postSpawnTools.map((t) => t.timing.started_at));
+    const pEnd = Math.max(...postSpawnTools.map((t) => t.timing.completed_at ?? t.timing.started_at));
+    interactions.push({
+      role: 'assistant', agent: 'coordinator', content: '', tool_calls: postSpawnTools,
+      timeInfo: { created: pStart, completed: pEnd },
+    });
+    wrapStart = pEnd;
+  }
+  interactions.push({
+    role: 'assistant', agent: 'coordinator', content: final,
+    usage: { input: inTok, output: outTok, total: totTok }, timeInfo: { created: wrapStart, completed: toMs(last ?? 0) },
+  });
   return record({
     taskId, query, agentName: 'coordinator', agents: ['coordinator', ...subs.map((s) => s.subagent_name)],
-    model, inTok, outTok, totTok, tools: taskSpans.length, llm, first, last, final, interactions, user,
+    model, inTok, outTok, totTok, tools: taskSpans.length + coordToolSpans.length, llm, first, last, final, interactions, user,
     subagentCount: subs.length,
   });
 }
