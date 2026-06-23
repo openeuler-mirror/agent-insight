@@ -18,7 +18,7 @@
  * Prototype note: the spool is in-memory (per dev process). Productionizing
  * would move it to the same durable spool the claude-otel path uses.
  */
-import { saveExecutionRecord } from '@/lib/storage/data-service';
+import { saveExecutionRecord, deleteExecutionsByTaskId } from '@/lib/storage/data-service';
 import { collectJiuwenSpans, aggregateJiuwenOtlpFromSpans, type JiuwenSpan } from './aggregate';
 
 const spool = new Map<string, Map<string, JiuwenSpan>>(); // traceKey -> spanId -> span
@@ -81,10 +81,10 @@ export async function ingestJiuwenOtlp(
     // session is a genuine multi-trace (team / fan-out) run; otherwise this trace
     // stands alone (single agent — never merge separate invocations).
     const sess = bucketSpans(key).map(spanSession).find(Boolean);
-    const groupKeys =
-      sess && multiTraceSessions.has(sess)
-        ? Array.from(sessionToKeys.get(sess) ?? [key])
-        : [key];
+    const stitched = !!sess && multiTraceSessions.has(sess);
+    const groupKeys = stitched
+      ? Array.from(sessionToKeys.get(sess!) ?? [key])
+      : [key];
 
     const groupId = groupKeys.slice().sort().join('|');
     if (doneGroups.has(groupId)) continue;
@@ -95,6 +95,19 @@ export async function ingestJiuwenOtlp(
     if (record?.task_id) {
       await saveExecutionRecord(record);
       saved.push(record.task_id);
+
+      // 多 trace（team / fan-out）聚合落库后，清理此前被误判为单 agent 而单独存的孤儿：
+      // 早到批次在 team/task 标记到达前会以 jiuwen-<traceId> 存一条，待该 trace 并入本
+      // session（sess_…）后这条需删除，否则界面重复出现、且首轮 llm/token 被计两遍。
+      // groupKeys 即本 session 的全部 trace id，孤儿 task_id 必为 jiuwen-<key>，可精确定位。
+      if (stitched) {
+        for (const k of groupKeys) {
+          const orphanTaskId = `jiuwen-${k}`;
+          if (orphanTaskId !== record.task_id) {
+            await deleteExecutionsByTaskId(orphanTaskId, 'jiuwenswarm');
+          }
+        }
+      }
     }
   }
   return { received: spans.length, sessions: saved };

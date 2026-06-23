@@ -1830,6 +1830,28 @@ export function resolveImmutableSkillVersion(input: {
     return { resolved: existingSkillVersion, blocked: true };
 }
 
+/**
+ * 按 task_id 删除 Execution（可选 framework 守卫），返回删除行数。
+ * 用于清理"已被更完整记录取代"的孤儿：jiuwenswarm 早到批次先以单 agent task_id
+ * （jiuwen-<traceId>）落库，随后该 trace 被并入多 agent session（sess_…）后，原单 agent
+ * 记录需删除，否则界面重复出现并把首轮 llm/token 计两遍。ExecutionSkill 经 onDelete:Cascade
+ * 连带清理。
+ */
+export async function deleteExecutionsByTaskId(taskId: string, framework?: string): Promise<number> {
+    if (!taskId) return 0;
+    const where: any = { taskId };
+    if (framework) where.framework = framework;
+    try {
+        const count = await db.deleteExecutions(where);
+        if (count > 0 && AUDIT_DATA_MUTATIONS) {
+            console.warn(`[Data-Audit] deleteExecutionsByTaskId: taskId=${taskId} framework=${framework ?? '*'} deleted=${count}`);
+        }
+        return count;
+    } catch {
+        return 0;
+    }
+}
+
 export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ success: boolean; record: ExecutionRecord }> {
     const id = data.upload_id || data.task_id;
     let recordId = id || crypto.randomUUID();
