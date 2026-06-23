@@ -1,3 +1,4 @@
+import { extractSkillsWithVersionsFromJiuwenSession } from "@/lib/shared/interaction-utils"
 import type { FrameworkAdapter } from "./types"
 
 /**
@@ -21,6 +22,9 @@ export const jiuwenAdapter: FrameworkAdapter = {
     onboard: "env",
     platform: "jiuwenswarm",
   },
-  capabilities: { subagentTree: true },
+  capabilities: { subagentTree: true, skills: true },
   sessionMergeStrategy: "snapshot-replace",
+  // jiuwen invokes a skill via its dedicated `skill_tool` (skill_name arg); detection keys
+  // off that tool only (a read_file of SKILL.md is deliberately NOT treated as a skill use).
+  extractSkills: extractSkillsWithVersionsFromJiuwenSession,
 }
