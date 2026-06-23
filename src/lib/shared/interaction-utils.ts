@@ -3,6 +3,29 @@ export interface InvokedSkill {
   version: number | null
 }
 
+const SKILL_NAME_PATTERN = /^[a-zA-Z0-9_\-\.]+$/
+
+/**
+ * jiuwen/jiuwenswarm invokes a skill through its dedicated `skill_tool`, which takes a
+ * `skill_name` argument (openjiuwen harness/tools/skills/skill_tool.py). We key skill
+ * detection off this tool only — NOT off `read_file` of a SKILL.md (jiuwen can also read a
+ * skill that way, but per product decision that path is not counted as a skill invocation).
+ *
+ * The tool name is jiuwen-specific (`skill_tool`), so this is safe to share with the
+ * framework-agnostic agent-trace classifier without affecting other frameworks. Returns the
+ * skill name, or null. Note OTLP serializes the tool input as a positional dump like
+ * `[[{"skill_name":"x"}], {"session":"..."}]`, so we extract `skill_name` by regex rather
+ * than assuming a clean top-level JSON object.
+ */
+export function jiuwenSkillNameFromToolCall(name: string | undefined, rawArgs: any): string | null {
+  if (String(name ?? "").toLowerCase() !== "skill_tool") return null
+  const text = typeof rawArgs === "string" ? rawArgs : JSON.stringify(rawArgs ?? "")
+  const m = text.match(/["']skill_name["']\s*:\s*["']([^"']+)["']/)
+  if (!m) return null
+  const s = m[1].trim().replace(/^['"]+|['"]+$/g, "")
+  return SKILL_NAME_PATTERN.test(s) ? s : null
+}
+
 export function normalizeInteractions(messages: any[]): any[] {
   if (!messages || !Array.isArray(messages) || messages.length === 0) return []
 
@@ -207,6 +230,34 @@ export function extractSkillsWithVersionsFromOpenClawSession(interactions: any[]
       for (const m of turn.requestMessages) {
         if (m.role === "assistant" && m.content) collect(m.content)
       }
+    }
+  }
+  return skills
+}
+
+export function extractSkillsWithVersionsFromJiuwenSession(interactions: any[]): InvokedSkill[] {
+  const seen = new Set<string>()
+  const skills: InvokedSkill[] = []
+
+  const collectFromMsg = (msg: any) => {
+    if (!msg) return
+    const calls = msg.tool_calls || msg.toolCalls || []
+    for (const tc of calls) {
+      const name = tc?.function?.name ?? tc?.name
+      const raw = tc?.function?.arguments ?? tc?.arguments ?? ""
+      const skillName = jiuwenSkillNameFromToolCall(name, raw)
+      if (skillName && !seen.has(skillName)) {
+        seen.add(skillName)
+        // jiuwen traces carry no skill version; snapshotSkillVersions fills active version at write time
+        skills.push({ name: skillName, version: null })
+      }
+    }
+  }
+
+  for (const interaction of interactions) {
+    collectFromMsg(interaction.responseMessage)
+    for (const m of interaction.requestMessages || []) {
+      if (m.role === "assistant" || m.role === "subagent") collectFromMsg(m)
     }
   }
   return skills

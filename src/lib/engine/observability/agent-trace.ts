@@ -603,9 +603,11 @@ function interactionToEvents(it: RawInteraction, idx: number): AgentEvent[] {
         }
 
         const normalizedName = name.toLowerCase();
+        // `skill_tool` is jiuwen's dedicated skill-invocation tool; count it as a skill call
+        // (drives the per-agent Skill stat / timeline). Other frameworks don't emit it.
         const kind: CallKind = normalizedName === 'task'
             ? 'task'
-            : normalizedName === 'skill' || normalizedName === 'load_skill' || normalizedName === 'skill_view'
+            : normalizedName === 'skill' || normalizedName === 'load_skill' || normalizedName === 'skill_view' || normalizedName === 'skill_tool'
                 ? 'skill'
                 : 'tool';
         const ev: AgentEvent = {
