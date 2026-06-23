@@ -143,6 +143,75 @@ function displayJiuwenAgentName(value: unknown, framework: string = JIUWEN_FRAME
   return name;
 }
 
+// ---- task content (the "任务内容" column = ExecutionRecord.query) ------------
+// jiuwen's prompt telemetry varies by topology and inbound channel; deriving the
+// user request from a single hardcoded attribute produced three different displays
+// for the same onboarding (raw user text / a leaked envelope / a "jiuwenswarm run"
+// placeholder). extractQuery normalizes both axes: where the prompt lives, and how
+// the channel wrapped it.
+
+/**
+ * The user request shown as a trace's task content. Robust across jiuwen's
+ * prompt shapes: prefer a role=user prompt when roles are stamped, else fall back
+ * .1 → .0 (the old code hardcoded `gen_ai.prompt.1.content`, so runs with the user
+ * turn at .0 — no system message — degraded to the useless "jiuwenswarm run"
+ * placeholder). The chosen content is then unwrapped (see unwrapUserMessage).
+ */
+function extractQuery(spans: JiuwenSpan[]): string {
+  const llmFirst = spans.filter(isLlm).sort((a, b) => a.startNs - b.startNs);
+  for (const s of [...llmFirst, ...spans]) {
+    const content = userPromptContent(s.attrs);
+    if (content) return unwrapUserMessage(content);
+  }
+  return `${JIUWEN_FRAMEWORK} run`;
+}
+
+/** First user-turn prompt content from one span's `gen_ai.prompt.*` attrs —
+ *  role-aware, with an index fallback for spans that don't stamp roles. '' if none. */
+function userPromptContent(attrs: Record<string, unknown>): string {
+  const at = (n: number): string | undefined => {
+    const v = attrs[`gen_ai.prompt.${n}.content`];
+    return v == null ? undefined : String(v);
+  };
+  for (let n = 0; n < 32; n++) {
+    if (at(n) === undefined) continue;
+    if (String(attrs[`gen_ai.prompt.${n}.role`] ?? '').toLowerCase() === 'user') return at(n)!;
+  }
+  // No roles stamped → skip a likely system prompt at .0: prefer .1, then .0.
+  return at(1) ?? at(0) ?? '';
+}
+
+/**
+ * jiuwen's ACP / metadata channels wrap the user turn as
+ * `你收到一条消息：{ … "type":"user input", "content":"<real text>" … }` and send it
+ * verbatim to the LLM, so the envelope lands in `gen_ai.prompt.*.content`. Show the
+ * human's actual `.content` instead. Only unwraps when the envelope markers are
+ * present, and tolerates truncated JSON (team payloads can be cut ~2000 chars) via a
+ * best-effort content regex. Anything unrecognized passes through untouched.
+ */
+function unwrapUserMessage(raw: string): string {
+  const s = String(raw ?? '').trim();
+  const brace = s.indexOf('{');
+  if (brace < 0) return s;
+  const json = s.slice(brace);
+  const looksLikeEnvelope =
+    (json.includes('"type"') && json.includes('user input')) ||
+    (json.includes('"source"') && json.includes('acp'));
+  if (!looksLikeEnvelope) return s;
+  try {
+    const obj = JSON.parse(json);
+    if (obj && typeof obj === 'object' && typeof obj.content === 'string' && obj.content.trim()) {
+      return obj.content.trim();
+    }
+  } catch {
+    const m = json.match(/"content"\s*:\s*"((?:\\.|[^"\\])*)"/);
+    if (m) {
+      try { return String(JSON.parse(`"${m[1]}"`)).trim() || s; } catch { return m[1]; }
+    }
+  }
+  return s;
+}
+
 /**
  * Main-agent name for a single-agent (run_agent / ReAct) run. agent-core only stamps
  * the agent card name onto the `agent.<member>.task_iteration` boundary spans that
@@ -422,7 +491,7 @@ function endedTeamRootSpan(spans: JiuwenSpan[]): JiuwenSpan | undefined {
 export function aggregateJiuwenOtlpFromSpans(spansIn: JiuwenSpan[], opts: { user?: string } = {}): ExecutionRecord | null {
   const spans = [...spansIn].sort((a, b) => a.startNs - b.startNs);
   if (!spans.length) return null;
-  const query = String(spans.find((s) => s.attrs['gen_ai.prompt.1.content'])?.attrs['gen_ai.prompt.1.content'] ?? 'jiuwenswarm run');
+  const query = extractQuery(spans);
   const user = opts.user;
 
   const hasTeam = spans.some((s) => s.name.startsWith('team.') || isAgentSpan(s));
