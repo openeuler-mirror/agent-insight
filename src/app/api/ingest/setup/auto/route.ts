@@ -107,7 +107,8 @@ const frameworks = [
     { name: 'OpenCode', value: 'opencode' },
     { name: 'Claude Code', value: 'claude' },
     { name: 'Hermes', value: 'hermes' },
-    { name: 'OpenClaw', value: 'openclaw' }
+    { name: 'OpenClaw', value: 'openclaw' },
+    { name: 'JiuwenSwarm', value: 'jiuwen' }
 ];
 
 async function select() {
@@ -177,6 +178,7 @@ INSTALL_OPENCODE=false
 INSTALL_CLAUDE=false
 INSTALL_HERMES=false
 INSTALL_OPENCLAW=false
+INSTALL_JIUWEN=false
 
 if [[ "$SELECTED_FRAMEWORKS" == *"opencode"* ]]; then
     INSTALL_OPENCODE=true
@@ -190,9 +192,12 @@ fi
 if [[ "$SELECTED_FRAMEWORKS" == *"openclaw"* ]]; then
     INSTALL_OPENCLAW=true
 fi
+if [[ "$SELECTED_FRAMEWORKS" == *"jiuwen"* ]]; then
+    INSTALL_JIUWEN=true
+fi
 
 # Exit if nothing selected
-if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ]; then
+if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ]; then
     echo "⚠️  未选择任何框架组件，将跳过插件安装。"
     echo "   继续执行配置步骤..."
     echo ""
@@ -280,6 +285,26 @@ if [ "$INSTALL_OPENCLAW" = "true" ]; then
     curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/openclaw-watcher" -o "$HOME/.agent-insight/openclaw_watcher_client.ts"
 fi
 
+if [ "$INSTALL_JIUWEN" = "true" ]; then
+    echo "⏬ Installing Agent-insight JiuwenSwarm extension..."
+    JW_HOME="\${JIUWENSWARM_DATA_DIR:-$HOME/.jiuwenswarm}"
+    JW_EXT_DIR="$JW_HOME/extensions/agent-insight-observability"
+    mkdir -p "$JW_EXT_DIR" "$JW_HOME/config"
+    curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/jiuwen-extension" -o "$JW_EXT_DIR/extension.py"
+    cat > "$JW_EXT_DIR/extension.yaml" <<'JIUWEN_EXT_EOF'
+id: agent-insight-observability
+name: agent-insight-observability
+version: 0.1.0
+description: Zero-code observability onboarding for JiuwenSwarm via agent-core OTLP.
+author: agent-insight
+min_jiuwenswarm_version: "0.2.0"
+dependencies: {}
+config_schema:
+  type: object
+JIUWEN_EXT_EOF
+    echo "✅ JiuwenSwarm extension installed at $JW_EXT_DIR"
+fi
+
 # 4. Configure ~/.agent-insight/.env (Auto mode - no interaction)
 AGENT_INSIGHT_CONFIG_FILE="$HOME/.agent-insight/.env"
 FINAL_SHOW_TASK_STATS="true"
@@ -329,6 +354,37 @@ if [ "$INSTALL_HERMES" = "true" ]; then
 }
 HERMES_CONFIG_EOF
     echo "Agent Insight Hermes config written to $HERMES_PLUGIN_DIR/config.json"
+fi
+
+# 6.45 Configure JiuwenSwarm telemetry (workspace config/.env, read by the extension)
+if [ "$INSTALL_JIUWEN" = "true" ]; then
+    JW_HOME="\${JIUWENSWARM_DATA_DIR:-$HOME/.jiuwenswarm}"
+    JW_ENV="$JW_HOME/config/.env"
+    JW_EXT_PARENT="$JW_HOME/extensions"
+    JW_OTLP_HOST="$AGENT_INSIGHT_HOST"
+    case "$JW_OTLP_HOST" in http://*|https://*) ;; *) JW_OTLP_HOST="http://$JW_OTLP_HOST" ;; esac
+    JW_OTLP_ENDPOINT="\${JW_OTLP_HOST%/}/api/ingest/otel/v1/traces"
+    mkdir -p "$JW_HOME/config"
+    touch "$JW_ENV"
+    cp "$JW_ENV" "\${JW_ENV}.bak"
+    # EXTENSION_DIRS: 保留既有(默认 jiuwenswarm/extensions) + 追加我们的目录(去重)
+    PREV_EXT_DIRS=$(grep '^EXTENSION_DIRS=' "\${JW_ENV}.bak" | head -n 1 | cut -d'=' -f2-)
+    # 去掉历史值可能带的成对双引号：jiuwenswarm 模板默认 EXTENSION_DIRS=""，
+    # 直接拼接会写出 "";<dir>，python-dotenv 无法解析整行而丢弃 → 扩展目录失效。
+    PREV_EXT_DIRS="\${PREV_EXT_DIRS#\\"}"; PREV_EXT_DIRS="\${PREV_EXT_DIRS%\\"}"
+    if [ -z "$PREV_EXT_DIRS" ]; then PREV_EXT_DIRS="jiuwenswarm/extensions"; fi
+    case ";$PREV_EXT_DIRS;" in
+        *";$JW_EXT_PARENT;"*) NEW_EXT_DIRS="$PREV_EXT_DIRS" ;;
+        *) NEW_EXT_DIRS="$PREV_EXT_DIRS;$JW_EXT_PARENT" ;;
+    esac
+    grep -v '^OTEL_ENABLED=' "\${JW_ENV}.bak" | grep -v '^AGENT_INSIGHT_OTLP_ENDPOINT=' | grep -v '^AGENT_INSIGHT_API_KEY=' | grep -v '^EXTENSION_DIRS=' > "$JW_ENV"
+    echo "OTEL_ENABLED=true" >> "$JW_ENV"
+    echo "AGENT_INSIGHT_OTLP_ENDPOINT=$JW_OTLP_ENDPOINT" >> "$JW_ENV"
+    echo "AGENT_INSIGHT_API_KEY=$AGENT_INSIGHT_API_KEY" >> "$JW_ENV"
+    echo "EXTENSION_DIRS=$NEW_EXT_DIRS" >> "$JW_ENV"
+    rm -f "\${JW_ENV}.bak"
+    echo "✅ JiuwenSwarm telemetry configured -> $JW_OTLP_ENDPOINT (service=jiuwenswarm)"
+    echo "   重启 JiuwenSwarm（agentserver）后，agent/LLM/tool trace 自动上报。"
 fi
 
 # 6. Install Watcher Dependencies (only if OpenClaw watcher is selected)
@@ -490,6 +546,9 @@ fi
 if [ "$INSTALL_OPENCLAW" = "true" ]; then
     echo "  ✅ OpenClaw Watcher: ~/.agent-insight/openclaw_watcher_client.ts"
 fi
+if [ "$INSTALL_JIUWEN" = "true" ]; then
+    echo "  ✅ JiuwenSwarm Extension: \${JIUWENSWARM_DATA_DIR:-$HOME/.jiuwenswarm}/extensions/agent-insight-observability (telemetry in config/.env)"
+fi
 
 if [ "$NEEDS_WATCHER_SCRIPTS" = "true" ]; then
     echo ""
@@ -516,6 +575,9 @@ if [ "$INSTALL_HERMES" = "true" ]; then
 fi
 if [ "$INSTALL_OPENCLAW" = "true" ]; then
     echo "  4. OpenClaw will automatically monitor and upload telemetry"
+fi
+if [ "$INSTALL_JIUWEN" = "true" ]; then
+    echo "  5. Restart JiuwenSwarm (agentserver), then start a conversation"
 fi
 echo "------------------------------------------------"
 `;
@@ -596,7 +658,8 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    "    { name: \'OpenCode\', value: \'opencode\' },"',
         '    "    { name: \'Claude Code\', value: \'claude\' },"',
         '    "    { name: \'Hermes\', value: \'hermes\' },"',
-        '    "    { name: \'OpenClaw\', value: \'openclaw\' }"',
+        '    "    { name: \'OpenClaw\', value: \'openclaw\' },"',
+        '    "    { name: \'JiuwenSwarm\', value: \'jiuwen\' }"',
         '    "];"',
         '    ""',
         '    "async function select() {"',
@@ -668,6 +731,7 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '$INSTALL_CLAUDE = $false',
         '$INSTALL_HERMES = $false',
         '$INSTALL_OPENCLAW = $false',
+        '$INSTALL_JIUWEN = $false',
         '',
         'if ($SELECTED_FRAMEWORKS -match "opencode") {',
         '    $INSTALL_OPENCODE = $true',
@@ -681,9 +745,12 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         'if ($SELECTED_FRAMEWORKS -match "openclaw") {',
         '    $INSTALL_OPENCLAW = $true',
         '}',
+        'if ($SELECTED_FRAMEWORKS -match "jiuwen") {',
+        '    $INSTALL_JIUWEN = $true',
+        '}',
         '',
         '# Exit if nothing selected',
-        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_HERMES -and -not $INSTALL_OPENCLAW) {',
+        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_HERMES -and -not $INSTALL_OPENCLAW -and -not $INSTALL_JIUWEN) {',
         '    Write-Host "⚠️  未选择任何框架组件，将跳过插件安装。"',
         '    Write-Host "   继续执行配置步骤..."',
         '    Write-Host ""',
@@ -745,6 +812,17 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/setup/openclaw-watcher" -OutFile (Join-Path $skillInsightDir "openclaw_watcher_client.ts")',
         '}',
         '',
+        'if ($INSTALL_JIUWEN) {',
+        '    Write-Host "⏬ Installing Agent-insight JiuwenSwarm extension..."',
+        '    $jwHome = if ($env:JIUWENSWARM_DATA_DIR) { $env:JIUWENSWARM_DATA_DIR } else { Join-Path $env:USERPROFILE ".jiuwenswarm" }',
+        '    $jwExtDir = Join-Path $jwHome "extensions\\agent-insight-observability"',
+        '    New-Item -ItemType Directory -Path $jwExtDir -Force | Out-Null',
+        '    New-Item -ItemType Directory -Path (Join-Path $jwHome "config") -Force | Out-Null',
+        '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/setup/jiuwen-extension" -OutFile (Join-Path $jwExtDir "extension.py")',
+        '    @("id: agent-insight-observability", "name: agent-insight-observability", "version: 0.1.0", "description: Zero-code observability onboarding for JiuwenSwarm via agent-core OTLP.", "author: agent-insight", "min_jiuwenswarm_version: \\"0.2.0\\"", "dependencies: {}", "config_schema:", "  type: object") | Set-Content -Path (Join-Path $jwExtDir "extension.yaml") -Encoding UTF8',
+        '    Write-Host "✅ JiuwenSwarm extension installed at $jwExtDir"',
+        '}',
+        '',
         '# 4. Configure ~/.agent-insight/.env (Auto mode - no interaction)',
         '$AGENT_INSIGHT_CONFIG_FILE = Join-Path $skillInsightDir ".env"',
         '',
@@ -784,6 +862,29 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    $hermesConfig = @{ host = $AGENT_INSIGHT_HOST.TrimEnd("/"); api_key = $AGENT_INSIGHT_API_KEY; service_name = "hermes"; max_content_chars = 200000; spool_dir = (Join-Path $skillInsightDir "data\\hermes-otel-spool"); log_file = (Join-Path $skillInsightDir "logs\\hermes-plugin.log") } | ConvertTo-Json',
         '    Set-Content -Path (Join-Path $hermesPluginDir "config.json") -Value $hermesConfig -Encoding UTF8',
         '    Write-Host "Agent Insight Hermes config written to $hermesPluginDir\\config.json"',
+        '}',
+        '',
+        '# 6.45 Configure JiuwenSwarm telemetry (workspace config\\.env, read by the extension)',
+        'if ($INSTALL_JIUWEN) {',
+        '    $jwHome = if ($env:JIUWENSWARM_DATA_DIR) { $env:JIUWENSWARM_DATA_DIR } else { Join-Path $env:USERPROFILE ".jiuwenswarm" }',
+        '    $jwEnv = Join-Path $jwHome "config\\.env"',
+        '    $jwExtParent = Join-Path $jwHome "extensions"',
+        '    $jwOtlpHost = if ($AGENT_INSIGHT_HOST -match "^https?://") { $AGENT_INSIGHT_HOST } else { "http://$AGENT_INSIGHT_HOST" }',
+        '    $jwOtlpEndpoint = $jwOtlpHost.TrimEnd("/") + "/api/ingest/otel/v1/traces"',
+        '    New-Item -ItemType Directory -Path (Join-Path $jwHome "config") -Force | Out-Null',
+        '    New-Item -ItemType File -Path $jwEnv -Force | Out-Null',
+        '    $jwPrev = Get-Content $jwEnv',
+        '    $prevExtLine = $jwPrev | Select-String \'^EXTENSION_DIRS=\' | Select-Object -First 1',
+        '    # 去掉历史值可能带的成对引号（模板默认 EXTENSION_DIRS=""），否则拼出 "";<dir> 会破坏 dotenv 解析',
+        '    $prevExtDirs = if ($prevExtLine) { $prevExtLine.Line.Substring(\'EXTENSION_DIRS=\'.Length).Trim(\'"\').Trim("\'") } else { "jiuwenswarm/extensions" }',
+        '    if (-not $prevExtDirs) { $prevExtDirs = "jiuwenswarm/extensions" }',
+        '    if ($prevExtDirs.Split(";") -notcontains $jwExtParent) { $newExtDirs = "$prevExtDirs;$jwExtParent" } else { $newExtDirs = $prevExtDirs }',
+        '    $jwPrev | Where-Object { $_ -notmatch \'^OTEL_ENABLED=\' -and $_ -notmatch \'^AGENT_INSIGHT_OTLP_ENDPOINT=\' -and $_ -notmatch \'^AGENT_INSIGHT_API_KEY=\' -and $_ -notmatch \'^EXTENSION_DIRS=\' } | Set-Content $jwEnv',
+        '    Add-Content $jwEnv "OTEL_ENABLED=true"',
+        '    Add-Content $jwEnv "AGENT_INSIGHT_OTLP_ENDPOINT=$jwOtlpEndpoint"',
+        '    Add-Content $jwEnv "AGENT_INSIGHT_API_KEY=$AGENT_INSIGHT_API_KEY"',
+        '    Add-Content $jwEnv "EXTENSION_DIRS=$newExtDirs"',
+        '    Write-Host "✅ JiuwenSwarm telemetry configured -> $jwOtlpEndpoint (service=jiuwenswarm)"',
         '}',
         '',
         '# 6. Install Watcher Dependencies (only if OpenClaw watcher is selected)',
@@ -937,6 +1038,7 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         'if ($INSTALL_OPENCLAW) {',
         '    Write-Host "  ✅ OpenClaw Watcher: ~/.agent-insight/openclaw_watcher_client.ts"',
         '}',
+        'if ($INSTALL_JIUWEN) { $summaryJwHome = if ($env:JIUWENSWARM_DATA_DIR) { $env:JIUWENSWARM_DATA_DIR } else { Join-Path $env:USERPROFILE ".jiuwenswarm" }; Write-Host "  ✅ JiuwenSwarm Extension: $summaryJwHome\\extensions\\agent-insight-observability (telemetry in config\\.env)" }',
         '',
         'if ($NEEDS_WATCHER_SCRIPTS) {',
         '    Write-Host ""',
@@ -963,6 +1065,9 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '}',
         'if ($INSTALL_OPENCLAW) {',
         '    Write-Host "  4. OpenClaw will automatically monitor and upload telemetry"',
+        '}',
+        'if ($INSTALL_JIUWEN) {',
+        '    Write-Host "  5. Restart JiuwenSwarm (agentserver), then start a conversation"',
         '}',
         'Write-Host "------------------------------------------------"',
     ].join('\n');
