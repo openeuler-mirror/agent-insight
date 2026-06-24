@@ -76,21 +76,23 @@ test("transformTask: coordinator tools preserved with full input AND output", ()
   assert.match(listFiles.output, /system-resource-check/)
 })
 
-test("transformTask: pre-spawn tools on plan turn; post-spawn tools on their OWN turn", () => {
+test("transformTask: tools attach to their llm-call turn; final answer turn has no tools", () => {
   const rec = aggregateJiuwenOtlpFromSpans(fanoutSpans())!
   const coordTurns = (rec.interactions || []).filter((it: any) => it.agent === "coordinator")
-  const planTurn = coordTurns[0]
-  const planNames = (planTurn.tool_calls || []).map((c: any) => c.function?.name)
-  // list_files ran before the spawns -> plan turn, interleaved with the two task calls
-  assert.deepEqual(planNames, ["list_files", "task", "task"])
+  // This fixture has two llm.calls; every tool ran under the first one (no llm between the
+  // tools and the spawns), so they all attach to that turn in time order.
+  const planNames = (coordTurns[0].tool_calls || []).map((c: any) => c.function?.name)
+  assert.deepEqual(planNames, ["list_files", "task", "task", "read_file"])
 
-  // read_file gets its own coordinator turn, and the FINAL answer turn carries no tools
+  // The final answer turn (last llm.call) carries the wrap-up text and no tools.
   const wrapTurn = coordTurns[coordTurns.length - 1]
   assert.match(wrapTurn.content, /全部完成/)
   assert.deepEqual(wrapTurn.tool_calls ?? [], [])
-  const readTurn = coordTurns.find((t: any) => (t.tool_calls || []).some((c: any) => c.function?.name === "read_file"))
-  assert.ok(readTurn, "read_file should be on its own coordinator turn")
-  assert.equal(readTurn.content, "")
+
+  // Per-step tokens: each coordinator turn carries its own usage.
+  for (const t of coordTurns) {
+    assert.ok(t.usage && t.usage.total > 0, `coordinator turn missing usage: ${JSON.stringify(t.usage)}`)
+  }
 })
 
 test("transformTask: render order — read_file comes BEFORE the final answer (not after)", () => {
