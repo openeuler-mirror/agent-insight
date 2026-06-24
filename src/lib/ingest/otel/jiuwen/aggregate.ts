@@ -367,59 +367,13 @@ function transformTeam(spans: JiuwenSpan[], taskId: string, query: string, user?
 // ---- task fan-out (isolated sub-agents) ----------------------------------
 
 function transformTask(spans: JiuwenSpan[], taskId: string, query: string, user?: string): ExecutionRecord {
-  let inTok = 0, outTok = 0, totTok = 0, llm = 0, model = '', planContent = '', mergeContent = '';
+  const sorted = [...spans].sort((a, b) => a.startNs - b.startNs);
+  let inTok = 0, outTok = 0, totTok = 0, llm = 0, toolCount = 0, model = '', final = '';
   let first: number | null = null, last: number | null = null;
-  const taskSpans: JiuwenSpan[] = [];
-  const coordToolSpans: JiuwenSpan[] = []; // coordinator's own (non-task) tool calls
-  for (const s of spans) {
-    first = first === null ? s.startNs : Math.min(first, s.startNs);
-    last = last === null ? s.endNs : Math.max(last, s.endNs);
-    const a = s.attrs;
-    if (isLlm(s)) {
-      llm++;
-      const pt = Number(a['gen_ai.usage.prompt_tokens'] || 0);
-      const ct = Number(a['gen_ai.usage.completion_tokens'] || 0);
-      totTok += Number(a['gen_ai.usage.total_tokens'] || pt + ct);
-      inTok += pt; outTok += ct;
-      model = String(a['gen_ai.request.model'] || model);
-      const c = completion(a);
-      if (llm === 1) planContent = c;
-      if (c) mergeContent = c;
-    } else if (s.name.startsWith('tool.task')) {
-      taskSpans.push(s);
-    } else if (isTool(s)) {
-      coordToolSpans.push(s);
-    }
-  }
-  const final = mergeContent;
+  let subIdx = 0;
+  const subNames: string[] = [];
 
-  const coordTools: any[] = [];
-  const subs: any[] = [];
-  taskSpans.sort((a, b) => a.startNs - b.startNs).forEach((ts, i) => {
-    const a = ts.attrs;
-    const rawIn = String(a['gen_ai.tool.input'] ?? '');
-    let desc = rawIn, subType = 'general-purpose';
-    const dm = rawIn.match(/['"]subagent_type['"]\s*:\s*['"]([^'"]+)['"]/);
-    const tm = rawIn.match(/['"]task_description['"]\s*:\s*(['"])([\s\S]*?)\1/);
-    if (dm) subType = dm[1];
-    if (tm) desc = tm[2];
-    const result = unwrapToolData(a['gen_ai.tool.output']);
-    const name = `${subType}-${i + 1}`.replace(/ /g, '-').replace(/#/g, '');
-    const tsStart = toMs(ts.startNs), tsEnd = toMs(ts.endNs);
-    coordTools.push({
-      id: `${a['gen_ai.tool.id'] ?? ts.spanId}#${i}`, type: 'function',
-      function: { name: 'task', arguments: JSON.stringify({ subagent_type: name, description: desc.slice(0, 1500) }) },
-      state: 'success', output: result.slice(0, 1500), timing: { started_at: tsStart, completed_at: tsEnd },
-    });
-    subs.push({
-      role: 'subagent', agent: name, subagent_name: name, subagent_session_id: `${taskId}_sub_${i + 1}`,
-      content: result.slice(0, 1500), tool_calls: [], timeInfo: { created: tsStart, completed: tsEnd },
-    });
-  });
-
-  // The coordinator's OWN tool calls (read_file/list_files/bash/...) — everything that is
-  // not a task spawn. transformTask used to drop these entirely; keep them with FULL
-  // input/output so the trace reflects the real tool usage.
+  // A coordinator tool span (non-task) -> a tool_call carrying FULL input/output.
   const toToolCall = (s: JiuwenSpan) => {
     const a = s.attrs;
     return {
@@ -432,48 +386,77 @@ function transformTask(spans: JiuwenSpan[], taskId: string, query: string, user?
       timing: { started_at: toMs(s.startNs), completed_at: toMs(s.endNs) },
     };
   };
-  // Split coordinator tools by time relative to the subagent spawns:
-  //  - tools run BEFORE the first spawn share the plan/spawn turn (interleaved with the
-  //    spawn calls) — the model "this LLM step decided → called these tools" holds there;
-  //  - tools run AFTER the subagents returned get their OWN coordinator turn, placed before
-  //    the wrap-up answer. agent-trace emits a turn's LLM step before its tool events, so
-  //    lumping them onto the answer turn would render the tools AFTER the final answer.
-  const firstTaskStartNs = taskSpans.length ? Math.min(...taskSpans.map((t) => t.startNs)) : Infinity;
-  coordToolSpans.sort((a, b) => a.startNs - b.startNs);
-  const preSpawnTools = coordToolSpans.filter((s) => s.startNs < firstTaskStartNs).map(toToolCall);
-  const postSpawnTools = coordToolSpans.filter((s) => s.startNs >= firstTaskStartNs).map(toToolCall);
-  const planTools = [...preSpawnTools, ...coordTools].sort(
-    (a, b) => (a.timing?.started_at ?? 0) - (b.timing?.started_at ?? 0),
-  );
 
-  const taskEnds = taskSpans.length ? taskSpans.map((t) => toMs(t.endNs)) : [toMs(last ?? 0)];
-  const spawnDone = Math.max(...taskEnds);
-  const interactions: any[] = [
-    { role: 'user', content: query },
-    { role: 'assistant', agent: 'coordinator', content: planContent && planContent !== mergeContent ? planContent : '',
-      tool_calls: planTools, timeInfo: { created: toMs(first ?? 0), completed: spawnDone } },
-    ...subs,
-  ];
-  // Post-spawn coordinator tools (e.g. reading a skill after the subagents returned) on
-  // their own turn, timed by the tools' real window so they sit before the wrap-up answer.
-  let wrapStart = spawnDone;
-  if (postSpawnTools.length) {
-    const pStart = Math.min(...postSpawnTools.map((t) => t.timing.started_at));
-    const pEnd = Math.max(...postSpawnTools.map((t) => t.timing.completed_at ?? t.timing.started_at));
-    interactions.push({
-      role: 'assistant', agent: 'coordinator', content: '', tool_calls: postSpawnTools,
-      timeInfo: { created: pStart, completed: pEnd },
-    });
-    wrapStart = pEnd;
+  // Walk spans in time order. Each llm.call opens its OWN coordinator turn carrying its OWN
+  // usage, so per-step tokens show in the timeline instead of being lumped onto one wrap-up
+  // turn; the tool spans that follow attach to that turn (jiuwen tool spans have no parent
+  // link, so association is by time). Task spawns additionally emit a subagent turn. Ordering
+  // (e.g. a skill read after the subagents return but before the final answer) falls out of
+  // the time walk for free.
+  const interactions: any[] = [{ role: 'user', content: query }];
+  let curLlm: any = null;
+  const coordTurnFor = (s: JiuwenSpan) => {
+    if (curLlm) return curLlm;
+    // tool before any llm.call (rare) — open a usage-less coordinator turn so it isn't lost
+    curLlm = { role: 'assistant', agent: 'coordinator', content: '', tool_calls: [],
+      timeInfo: { created: toMs(s.startNs), completed: toMs(s.startNs) } };
+    interactions.push(curLlm);
+    return curLlm;
+  };
+
+  for (const s of sorted) {
+    first = first === null ? s.startNs : Math.min(first, s.startNs);
+    last = last === null ? s.endNs : Math.max(last, s.endNs);
+    const a = s.attrs;
+    if (isLlm(s)) {
+      llm++;
+      const pt = Number(a['gen_ai.usage.prompt_tokens'] || 0);
+      const ct = Number(a['gen_ai.usage.completion_tokens'] || 0);
+      const tt = Number(a['gen_ai.usage.total_tokens'] || pt + ct);
+      inTok += pt; outTok += ct; totTok += tt;
+      model = String(a['gen_ai.request.model'] || model);
+      const c = completion(a);
+      if (c) final = c;
+      curLlm = {
+        role: 'assistant', agent: 'coordinator', content: c,
+        usage: { input: pt, output: ct, total: tt }, modelID: String(a['gen_ai.request.model'] || ''),
+        tool_calls: [], timeInfo: { created: toMs(s.startNs), completed: toMs(s.endNs) },
+      };
+      interactions.push(curLlm);
+    } else if (s.name.startsWith('tool.task')) {
+      toolCount++;
+      subIdx++;
+      const rawIn = String(a['gen_ai.tool.input'] ?? '');
+      let desc = rawIn, subType = 'general-purpose';
+      const dm = rawIn.match(/['"]subagent_type['"]\s*:\s*['"]([^'"]+)['"]/);
+      const tm = rawIn.match(/['"]task_description['"]\s*:\s*(['"])([\s\S]*?)\1/);
+      if (dm) subType = dm[1];
+      if (tm) desc = tm[2];
+      const result = unwrapToolData(a['gen_ai.tool.output']);
+      const name = `${subType}-${subIdx}`.replace(/ /g, '-').replace(/#/g, '');
+      subNames.push(name);
+      const tsStart = toMs(s.startNs), tsEnd = toMs(s.endNs);
+      // spawn rendered as a `task` tool_call on the spawning coordinator turn ...
+      coordTurnFor(s).tool_calls.push({
+        id: `${a['gen_ai.tool.id'] ?? s.spanId}#${subIdx}`, type: 'function',
+        function: { name: 'task', arguments: JSON.stringify({ subagent_type: name, description: desc.slice(0, 1500) }) },
+        state: 'success', output: result.slice(0, 1500), timing: { started_at: tsStart, completed_at: tsEnd },
+      });
+      // ... and the subagent result as its own subagent turn right after.
+      interactions.push({
+        role: 'subagent', agent: name, subagent_name: name, subagent_session_id: `${taskId}_sub_${subIdx}`,
+        content: result.slice(0, 1500), tool_calls: [], timeInfo: { created: tsStart, completed: tsEnd },
+      });
+    } else if (isTool(s)) {
+      toolCount++;
+      coordTurnFor(s).tool_calls.push(toToolCall(s));
+    }
   }
-  interactions.push({
-    role: 'assistant', agent: 'coordinator', content: final,
-    usage: { input: inTok, output: outTok, total: totTok }, timeInfo: { created: wrapStart, completed: toMs(last ?? 0) },
-  });
+
   return record({
-    taskId, query, agentName: 'coordinator', agents: ['coordinator', ...subs.map((s) => s.subagent_name)],
-    model, inTok, outTok, totTok, tools: taskSpans.length + coordToolSpans.length, llm, first, last, final, interactions, user,
-    subagentCount: subs.length,
+    taskId, query, agentName: 'coordinator', agents: ['coordinator', ...subNames],
+    model, inTok, outTok, totTok, tools: toolCount, llm, first, last, final, interactions, user,
+    subagentCount: subIdx,
   });
 }
 
