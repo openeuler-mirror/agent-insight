@@ -24,7 +24,7 @@
 
 随着 Agent 在各行业的落地，开发者面临三大痛点：Agent 运行过程如同黑盒，难以定位问题根因；Skill 质量参差不齐，缺少体系化的评测与迭代手段；Agent 经验无法沉淀复用，每次优化都从零开始。
 
-**Agent-Insight** 正是为解决这些问题而生 —— 它是一个**框架无关**的 Agent Insight 工程底座，让运行在 OpenCode、Claude Code、LangChain、OpenClaw 等任意框架上的 Agent 都能被持续观测、系统评测和自主优化。
+**Agent-Insight** 正是为解决这些问题而生 —— 它是一个**框架无关**的 Agent Insight 工程底座，让运行在 OpenCode、Claude Code、Hermes 等任意框架上的 Agent 都能被持续观测、系统评测和自主优化。
 
 > 与同类产品不同的是，Agent-Insight 把 **Skills（Agent 能力）** 作为一等公民，提供从生成、A/B 测试到优化的完整闭环。
 
@@ -36,7 +36,7 @@
 - 🛠️ **Skill 开发与自进化** · 围绕 *Skill 生成 → 调试 → 观测 → 评估 → 优化* 构建全生命周期能力闭环，将 Skill 打造为可持续进化的工程资产。
 - 🆎 **智能 A/B 测评** · Config → Execution → Decision 三步法结构化工作流，支持一键执行、自动对比与智能决策，让能力升级有据可依、省心高效。
 - 🧠 **智能诊断** · 基于链路与失败模式自动定位异常调用与根因。
-- 🔌 **框架无关** · 基于 OpenTelemetry 等业界标准协议，通过原生插件或日志旁路无缝兼容 OpenCode、Hermes、OpenClaw 等多种 Agent 运行时与平台。
+- 🔌 **框架无关** · 基于 OpenTelemetry 等业界标准协议，通过原生插件或 OTLP 上报无缝兼容 OpenCode、Claude Code、Hermes、JiuwenSwarm 等多种 Agent 运行时与平台。
 - 🏠 **完全自托管** · 一键安装，全栈本地化部署，数据完全自主可控，无外部依赖。
 
 ---
@@ -46,6 +46,19 @@
 <p align="center">
   <img src="docs/images/architecture.png" alt="Agent-Insight 架构图" />
 </p>
+
+---
+
+## 🔌 支持平台
+
+Agent-Insight 框架无关，已接入以下 Agent 运行时/框架，更多平台持续接入中：
+
+| Agent 框架   | 采集方式      |
+|:------------|:------------|
+| OpenCode    | 原生插件      |
+| Claude Code | OTLP 上报      |
+| Hermes      | 原生插件      |
+| JiuwenSwarm | OTLP 上报     |
 
 ## 🚀 快速开始
 
