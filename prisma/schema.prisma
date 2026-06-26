@@ -110,6 +110,7 @@ model Execution {
 
   // 反向关系：被多少次 Evaluation 评估过（dynamic 类型，重评懒删除）
   evaluations          Evaluation[]
+  traceEvaluations     TraceEvaluation[]
 
   // 反向关系：这条 Execution（= 某一层 agent）本层实际调用的 skill（按 agent 作用域，不含子 agent）。
   // 可索引的多对多，替代 skills/invokedSkills JSON blob 做"按 skill+version 反查 trace"与统一筛选。
@@ -119,6 +120,30 @@ model Execution {
   @@index([rootExecutionId])
   @@index([isSubagent, timestamp])
   @@index([agentSessionId])
+}
+
+/// Trace 级通用评测明细：一行 = 一个 execution 的一个指标。
+model TraceEvaluation {
+  id               String    @id @default(cuid())
+  executionId      String
+  execution        Execution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  evaluatorId      String
+  evaluatorVersion String
+  dimension        String
+  metricKey        String
+  status           String    @default("pending") // pending | running | done | failed
+  score            Float?    // 0–100；null = N/A
+  method           String
+  confidence       Float     @default(0)
+  evidenceJson     String?
+  note             String?
+  interactionsHash String
+  errorMessage     String?
+  ranAt            DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@unique([executionId, evaluatorId, metricKey])
+  @@index([executionId, status])
 }
 
 // Trace(= 单层 agent 的 Execution)↔ skill 的可索引绑定。

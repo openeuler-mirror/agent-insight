@@ -36,7 +36,7 @@ function bucketRange(b: TrendBucket, g: TrendGranularity): { from: string; to: s
     return { from: start.toISOString(), to: end.toISOString(), label };
 }
 
-// 信息金字塔：Hero(结论+先修) → 四维卡 → 问题汇总 → 趋势/过程/执行表默认折叠（证据层按需展开）。
+// 信息金字塔：Hero(结论+先修) → 四维卡 → 问题汇总 → 结果评测 → 趋势/过程/执行表默认折叠（证据层按需展开）。
 type SectionKey = 'trend' | 'process' | 'exec' | 'result';
 const ANCHOR_TO_SECTION: Record<string, SectionKey | undefined> = { result: 'result', cost: 'trend', process: 'process', exec: 'exec' };
 
@@ -111,8 +111,8 @@ export default function QualityPage() {
     const NAV: { id: string; label: string }[] = [
         { id: 'verdict', label: t('quality.nav.verdict') },
         { id: 'analysis', label: t('quality.nav.dims') },
-        { id: 'result', label: t('quality.nav.result') },
         { id: 'problems', label: t('quality.nav.problems') },
+        { id: 'result', label: t('quality.nav.result') },
         { id: 'cost', label: t('quality.nav.trend') },
         { id: 'process', label: t('quality.nav.process') },
         { id: 'exec', label: t('quality.nav.exec') },
@@ -161,9 +161,9 @@ export default function QualityPage() {
                             <QualityHero report={report} onDrillTrace={onDrillTrace} onAnchor={onAnchor} />
                             {/* ② 方向层：四维卡 */}
                             <MethodologyCards report={report} onAnchor={onAnchor} />
-                            <ResultPanel report={report} />
                             {/* ③ 行动层：完整问题清单（核心差异点，默认展开） */}
                             <ProblemSummaryPanel report={report} onDrillTrace={onDrillTrace} />
+                            <ResultPanel report={report} />
                             {/* ④ 证据层：默认折叠，按需展开 */}
                             <QualityTrendChart
                                 report={report}
