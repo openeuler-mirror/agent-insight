@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { verifyScriptTruth, makeYearAssertion, makeNumericAssertion, type ScriptAssertion } from '@/lib/engine/skill-opt/self-verify-structural';
+import { verifyScriptTruth, makeYearAssertion, makeNumericAssertion, runScriptsForSample, type ScriptAssertion } from '@/lib/engine/skill-opt/self-verify-structural';
 
 // 脚本真值门（①.5）单测——引擎是通用的（跑脚本、执行声明的任意断言）；年份是其中一条
 // 数据集驱动推导出的断言。覆盖：真值年份过/不过、log_year=None、回显假阳、非日期脚本跳过、
@@ -74,6 +74,11 @@ test('数值断言：算出值含期望→过 / 不含→失败 / 仅引号串�
   // 1815 只出现在引号串里（回显）→ 非值位 → 跳过、不算「算对」
   const echoed = verifyScriptTruth({ 'SKILL.md': SKILL, 'scripts/a.py': py("    print('{\"text\": \"matched 1815 lines\"}')") }, { logPath: LOG, assertions: A });
   assert.ok(echoed.checks.some((c) => c.skipped));
+});
+
+test('runScriptsForSample 返回脚本合并 stdout（给 reviewer 当样本）', { skip: SKIP }, () => {
+  const out = runScriptsForSample({ 'scripts/a.py': py("    print('{\"first_event_time\": \"2005-06-14T00:00:00\"}')") }, LOG);
+  assert.ok(out.includes('2005-06-14'));
 });
 
 test('空断言 → 整体跳过（诚实 no-op）', () => {

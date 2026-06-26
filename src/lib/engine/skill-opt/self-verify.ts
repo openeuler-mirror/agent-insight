@@ -17,7 +17,7 @@ import { db } from '@/lib/storage/prisma';
 import { runGeneralAgent } from '@/lib/engine/general-agent';
 import { judgeAnswer, type JudgeCriteria } from '@/lib/engine/evaluation/judge';
 import { findAgentDatasetsByTargetSkill, type DatasetCase } from '@/server/agent_datasets_storage';
-import { verifyStructure, verifyScriptTruth, type StructuralResult, type ScriptTruthResult } from './self-verify-structural';
+import { verifyStructure, verifyScriptTruth, runScriptsForSample, type StructuralResult, type ScriptTruthResult } from './self-verify-structural';
 import { deriveScriptAssertions } from './self-verify-derive';
 
 export interface CaseVerdict {
@@ -247,8 +247,10 @@ export async function runSelfVerification(args: SelfVerifyArgs): Promise<SelfVer
   // ①.5 脚本真值门：跑脚本、用数据集真值年份断言其输出——确定性、零成本，门住昂贵的行为门。
   // （只判 agent 输出的行为门会被 agent 兜住坏脚本而误放行，见 e2e 实测：log_year=None 却 +7 被接受。）
   let scriptTruth: ScriptTruthResult | null = null;
-  const assertions = await deriveScriptAssertions(allCases, args.user);
   const logPath = exampleLogPath(allCases);
+  // 跑一次候选脚本拿输出样本，给断言 reviewer 看「脚本算了哪些全局字段」（首次派生用；之后缓存）
+  const scriptSample = logPath ? runScriptsForSample(args.candidateFiles, logPath) : '';
+  const assertions = await deriveScriptAssertions(allCases, args.user, scriptSample);
   if (assertions.length && logPath) {
     scriptTruth = verifyScriptTruth(args.candidateFiles, { logPath, assertions });
     args.onProgress?.(`脚本真值门（${assertions.map((a) => a.id).join(', ')}）：${scriptTruth.ok ? 'pass' : 'FAIL — ' + scriptTruth.failures.join('；')}`);

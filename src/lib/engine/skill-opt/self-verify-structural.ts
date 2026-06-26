@@ -252,3 +252,26 @@ export function verifyScriptTruth(
   const failures = checks.filter((c) => !c.pass && !c.skipped).map((c) => `${c.name}: ${c.detail}`);
   return { ok: failures.length === 0, checks, failures, ran };
 }
+
+/** 跑候选里所有可运行 python 脚本，返回合并 stdout（给断言 reviewer 当「脚本算了哪些全局字段」的样本）。 */
+export function runScriptsForSample(files: Record<string, string>, logPath: string, cap = 6000): string {
+  if (!fs.existsSync(logPath)) return '';
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'skillopt-sample-'));
+  let out = '';
+  try {
+    for (const [rel, content] of Object.entries(files)) {
+      if (rel.includes('..')) continue;
+      const full = path.join(tmp, rel);
+      fs.mkdirSync(path.dirname(full), { recursive: true });
+      fs.writeFileSync(full, content ?? '');
+    }
+    for (const [rel, content] of Object.entries(files)) {
+      if (!rel.endsWith('.py') || !RUNNABLE_PY.test(content)) continue;
+      try { out += execFileSync('python3', [path.join(tmp, rel), logPath], { stdio: 'pipe', timeout: 30_000, maxBuffer: 1 << 28 }).toString() + '\n'; }
+      catch { /* 崩的脚本跳过 */ }
+    }
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  return out.slice(0, cap);
+}
