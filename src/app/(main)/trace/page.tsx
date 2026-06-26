@@ -614,7 +614,6 @@ function TracePageContent() {
                                     active={skillFilter !== 'all'}
                                 />
                             )}
-                            <Separator orientation="vertical" className="h-5" />
                             <Select
                                 label={t('tracePage.filterStatus')}
                                 value={anomalyFilter}
