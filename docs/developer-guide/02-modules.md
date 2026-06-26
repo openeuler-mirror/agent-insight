@@ -24,7 +24,8 @@
 系统的枢纽。大部分业务逻辑都在这里。主要子区域：
 - **`engine/`** —— 领域引擎，按能力组织：
   - `agent-debug/` —— 失败根因分析（`AgentDebugReportPayload`，step/issue/triage 模型）。驱动故障诊断。
-  - `evaluation/` —— 评测核心：`judge.ts`（LLM 评判）、`trajectory-evaluator.ts`、`custom-llm-evaluator.ts`、`semantic-dataset-match.ts`、`task-completion-scoring.ts`、`trace-summarizer.ts`、`config-target.ts` / `config-dataset.ts`、`derive-skill-opt-points.ts`，以及大型契约文件 `evaluation-types.ts`。
+  - `evaluation/` —— 评测核心：`judge.ts`（LLM 评判）、`result-quality-evaluator.ts`（质量监控结果四指标编排）、`result-accuracy-evaluator.ts`（预期关键观点与完整最终输出的准确性裁决）、`dataset-case-match.ts`（评测中心与质量监控共用的 Case 精确/语义匹配）、`faithfulness-evaluator.ts`（链路工具证据、原子主张和逐项忠实度裁决）、`instruction-adherence-evaluator.ts`（两阶段输出约束评测）、`answer-quality-evaluator.ts`（相关性/完整性/连贯性评测）、`trajectory-evaluator.ts`、`custom-llm-evaluator.ts`、`semantic-dataset-match.ts`、`task-completion-scoring.ts`、`trace-summarizer.ts`、`config-target.ts` / `config-dataset.ts`、`derive-skill-opt-points.ts`，以及大型契约文件 `evaluation-types.ts`。
+  - `quality-monitoring/` —— 按 Agent/时间窗收集 trace，批量 join `TraceEvaluation`，聚合结果、过程、成本和错误维度，生成趋势、问题汇总和历史回填。
   - `general-agent/` —— 内部的 LangGraph/deepagents 运行时：`runner.ts`（`runGeneralAgent`）、`concurrency-limiter.ts`、`pending-requests.ts`、`skill-resolver.ts`、`skill-workspace-deployer.ts`、`skill-opt-prompt.ts`。
   - `observability/` —— trace 解析/归一化：`agent-trace.ts`（`buildAgentCallTree`、`AgentNode`）、`claude-parser.ts`、`openclaw-parser.ts`、`flow-parser.ts`（Skill 流程对齐）、`fault-path.ts`、`trace-bundle.ts`、`agent-registration.ts`。
   - `skill-generation/` —— 通过 Agent 进行 Skill 创作：`index.ts`（`generateSkill` / `generateSkillStream`）、`types.ts`（`SkillSpec`）、`opencode-agent-cli/`（OpenCode 客户端 + 事件类型）、`evaluator/runners/`，以及一个 `legacy/` 的 skill-sync/registry 层。
@@ -45,7 +46,7 @@
 - `user_evaluators_storage.ts` —— 用户自定义评测器的持久化。
 
 ## `prompts` (`src/prompts/`) — core, LLM prompt builders
-返回 prompt 字符串的纯函数，由 `lib/engine/evaluation` 和 Skill 生成消费：`judge-prompt.ts`、`extraction-prompt.ts`、`failure-analysis-prompt.ts`、`attribution-prompt.ts` / `item-attribution-prompt.ts`、`benchmark-generation-prompt.ts`、`config-extraction-prompt.ts`、`flow-parse-prompt.ts`、`skills-prompt.ts`。无内部依赖（叶子模块）。
+返回 prompt 字符串或 `{system,user}` 消息的纯函数，由 `lib/engine/evaluation` 和 Skill 生成消费：`judge-prompt.ts`、`result-faithfulness-prompt.ts`、`result-instruction-adherence-prompt.ts`、`result-answer-quality-prompt.ts`、`result-accuracy-prompt.ts`、`extraction-prompt.ts`、`failure-analysis-prompt.ts`、`attribution-prompt.ts` / `item-attribution-prompt.ts`、`benchmark-generation-prompt.ts`、`config-extraction-prompt.ts`、`flow-parse-prompt.ts`、`skills-prompt.ts`。无内部依赖（叶子模块）。
 
 ## `components` (`src/components/`) — shared React UI
 全部仪表盘 UI。按功能组织（`eval/`、`evaluation/`、`observe/`、`skills/`、`skill-generator/`、`config/`、`chat/`、`thread/`）以及基础组件（`ui/`、`feedback/`、`text/`、`shell/`、`ai-elements/`、`SmartViewer/`）。重量级组件：`eval/Dashboard.tsx`、`eval/TrajectoryEvalCenter.tsx`、`observe/AgentTraceView.tsx`、`AgentDatasetCenter.tsx`。
