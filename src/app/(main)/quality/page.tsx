@@ -12,6 +12,7 @@ import { QualityConfigBar, type ConfigState } from '@/components/quality/Quality
 import { QualityHero } from '@/components/quality/QualityHero';
 import { MethodologyCards } from '@/components/quality/MethodologyCards';
 import { ProcessPanel } from '@/components/quality/ProcessPanel';
+import { ResultPanel } from '@/components/quality/ResultPanel';
 import { QualityTrendChart } from '@/components/quality/QualityTrendChart';
 import { ProblemSummaryPanel } from '@/components/quality/ProblemSummaryPanel';
 import { ExecutionScoreTable } from '@/components/quality/ExecutionScoreTable';
@@ -36,8 +37,8 @@ function bucketRange(b: TrendBucket, g: TrendGranularity): { from: string; to: s
 }
 
 // 信息金字塔：Hero(结论+先修) → 四维卡 → 问题汇总 → 趋势/过程/执行表默认折叠（证据层按需展开）。
-type SectionKey = 'trend' | 'process' | 'exec';
-const ANCHOR_TO_SECTION: Record<string, SectionKey | undefined> = { cost: 'trend', process: 'process', exec: 'exec' };
+type SectionKey = 'trend' | 'process' | 'exec' | 'result';
+const ANCHOR_TO_SECTION: Record<string, SectionKey | undefined> = { result: 'result', cost: 'trend', process: 'process', exec: 'exec' };
 
 export default function QualityPage() {
     const { t } = useLocale();
@@ -50,7 +51,7 @@ export default function QualityPage() {
     const [report, setReport] = useState<QualityReport | null>(null);
     const [loading, setLoading] = useState(false);
     const [bucketSel, setBucketSel] = useState<{ from: string; to: string; label: string } | null>(null);
-    const [open, setOpen] = useState<Record<SectionKey, boolean>>({ trend: false, process: false, exec: false });
+    const [open, setOpen] = useState<Record<SectionKey, boolean>>({ result: true, trend: false, process: false, exec: false });
 
     // 加载 Agent 列表 + skill facet（按用户隔离：?user= 是身份口径，缺失会越权拿全量）
     useEffect(() => {
@@ -110,6 +111,7 @@ export default function QualityPage() {
     const NAV: { id: string; label: string }[] = [
         { id: 'verdict', label: t('quality.nav.verdict') },
         { id: 'analysis', label: t('quality.nav.dims') },
+        { id: 'result', label: t('quality.nav.result') },
         { id: 'problems', label: t('quality.nav.problems') },
         { id: 'cost', label: t('quality.nav.trend') },
         { id: 'process', label: t('quality.nav.process') },
@@ -159,6 +161,7 @@ export default function QualityPage() {
                             <QualityHero report={report} onDrillTrace={onDrillTrace} onAnchor={onAnchor} />
                             {/* ② 方向层：四维卡 */}
                             <MethodologyCards report={report} onAnchor={onAnchor} />
+                            <ResultPanel report={report} />
                             {/* ③ 行动层：完整问题清单（核心差异点，默认展开） */}
                             <ProblemSummaryPanel report={report} onDrillTrace={onDrillTrace} />
                             {/* ④ 证据层：默认折叠，按需展开 */}

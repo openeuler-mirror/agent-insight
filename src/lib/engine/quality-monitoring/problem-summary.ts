@@ -411,8 +411,22 @@ export function buildProblemSummary(input: ProblemSummaryInput): ProblemSummaryR
 /** 由四维分追加「低分/失败维度」评测问题（编排序：score 之后）。 */
 export function lowScoreProblems(dims: { result: DimScore; process: DimScore; cost: DimScore }, statusFloor: number): ProblemItem[] {
     const out: ProblemItem[] = [];
+    for (const metric of dims.result.metrics ?? []) {
+        if (metric.score == null || metric.score >= statusFloor) continue;
+        const deficit = Math.max(1, Math.round(metric.n * (statusFloor - metric.score) / 100));
+        out.push({
+            key: `result-metric:${metric.key}`,
+            desc: `${metric.label}偏弱（${metric.score}）${metric.evidence?.[0]?.reason ? '：' + metric.evidence[0].reason : ''}`,
+            source: '评测',
+            affectedDimensions: ['结果'],
+            frequency: deficit,
+            severity: metric.score < statusFloor - 15 ? 'high' : 'medium',
+            attribution: '模型能力',
+            relatedTraces: metric.evidence?.map((item) => item.executionId) ?? [],
+            impact: 0,
+        });
+    }
     const entries: [string, DimScore, Attribution][] = [
-        ['结果', dims.result, '模型能力'],
         ['过程', dims.process, 'agent逻辑'],
         ['成本', dims.cost, '工具&infra'],
     ];

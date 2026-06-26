@@ -36,19 +36,25 @@ function costScore(t: TraceLite, policy: ScoringPolicy): number | null {
     return clamp01(1 - Math.max(...ratios)) * 100;
 }
 
-function completionScore(t: TraceLite): number {
-    return t.answerScore != null ? clamp01(t.answerScore) * 100 : (successRate([t]));
+function resultScore(t: TraceLite): number | null {
+    const vals = Object.values(t.resultMetrics ?? {})
+        .filter((r) => r?.status === 'done' && r.score != null)
+        .map((r) => r!.score as number);
+    return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
 }
 
 /** 桶级综合分（自身趋势用，确定性可算）：完成 × 成本 的简化合成。 */
 function bucketComposite(traces: TraceLite[], policy: ScoringPolicy): number {
     if (!traces.length) return 0;
     const vals = traces.map((t) => {
-        const parts: number[] = [completionScore(t)];
+        const parts: number[] = [];
+        const result = resultScore(t);
+        if (result != null) parts.push(result);
         const c = costScore(t, policy);
         if (c != null) parts.push(c);
-        return parts.reduce((a, b) => a + b, 0) / parts.length;
-    });
+        return parts.length ? parts.reduce((a, b) => a + b, 0) / parts.length : null;
+    }).filter((v): v is number => v != null);
+    if (!vals.length) return 0;
     return round1(vals.reduce((a, b) => a + b, 0) / vals.length);
 }
 
@@ -132,6 +138,8 @@ export function bucketTrends(input: BucketTrendsInput): { granularity: TrendGran
             : 0;
         const costScores = inBucket.map((t) => costScore(t, policy)).filter((v): v is number => v != null);
         const costRatio = costScores.length ? round1(costScores.reduce((a, b) => a + b, 0) / costScores.length) : 0;
+        const resultScores = inBucket.map(resultScore).filter((v): v is number => v != null);
+        const resultRatio = resultScores.length ? round1(resultScores.reduce((a, b) => a + b, 0) / resultScores.length) : null;
 
         const mkPct = (vals: number[]) => ({ p50: round1(percentile(vals, 0.5)), p90: round1(percentile(vals, 0.9)), p95: round1(percentile(vals, 0.95)) });
 
@@ -140,6 +148,7 @@ export function bucketTrends(input: BucketTrendsInput): { granularity: TrendGran
             n_traces: inBucket.length,
             ratios: {
                 completion: successRate(inBucket),
+                result: resultRatio,
                 safety: safeRate,
                 toolCorrect,
                 cost: costRatio,
