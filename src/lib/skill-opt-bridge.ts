@@ -14,6 +14,8 @@ import {
 } from '@/lib/engine/general-agent/skill-opt-prompt';
 import { scanWorkspaceFiles, type FileData } from '@/lib/skill-generator-opencode-bridge';
 import { enforceEditScope } from '@/lib/engine/skill-opt/edit-scope-guard';
+import { runSelfVerification, type SelfVerifyResult } from '@/lib/engine/skill-opt/self-verify';
+import { findSkillMd } from '@/lib/skill-generator/skill-files';
 import type {
   ChatHandlers,
   ModelConfig as OpencodeModelConfig,
@@ -30,6 +32,12 @@ import type {
  */
 
 const SKILL_OPT_AGENT_NAME = 'skill-optimizer-chat';
+
+// 优化器改完后的【自验证】配置。SKILL_OPT_NO_VERIFY=1 整体关。
+// 行为门每例 ~1 rollout（含基线共 ~2×，基线带进程缓存），故 MAX_CASES + BUDGET 双重封顶成本。
+const VERIFY_REPAIR_K = Number(process.env.SKILL_OPT_VERIFY_REPAIR_K) || 1;       // 自验证失败后最多 repair 几轮
+const VERIFY_MAX_CASES = Number(process.env.SKILL_OPT_VERIFY_MAX_CASES) || 5;     // 行为门最多量几例
+const VERIFY_BUDGET_YUAN = Number(process.env.SKILL_OPT_VERIFY_BUDGET_YUAN) || 8; // 行为门 ¥ 软上限
 
 /** threadId → opencode sessionId 进程内缓存。重启即失（本期不持久化）。 */
 const threadSessionMap = new Map<string, string>();
@@ -368,6 +376,73 @@ async function streamSkillOptOpencodeImpl(
     }
   }
 
+  // ── 自验证（自动）：结构门 + 行为重评，失败则 repair（复用同一 opencode session）──
+  // 开环链路的补门：优化器「改完直接落版本、从不校验对不对」是年份 bug 等「编译过却答错」
+  // 回归的温床。这里在收尾前自动验一遍，回归就把具体问题喂回还活着的 session 让 agent 修。
+  if (process.env.SKILL_OPT_NO_VERIFY !== '1') {
+    try {
+      for (let attempt = 0; attempt <= VERIFY_REPAIR_K; attempt++) {
+        const current = scanWorkspaceFiles(result.workspaceDir);
+        // FileData.content 是 string[]，归一成字符串并适配 findSkillMd 的 PlaygroundFiles 形态
+        const vfs: Record<string, { content: string }> = {};
+        for (const [key, fd] of Object.entries(current)) {
+          vfs[key] = { content: Array.isArray(fd.content) ? fd.content.join('\n') : String((fd as { content?: unknown }).content ?? '') };
+        }
+        const skillMd = findSkillMd(vfs);
+        if (!skillMd) { send('warning', { kind: 'self_verify', message: '自验证跳过：workspace 里找不到 SKILL.md' }); break; }
+        // workspace VFS（/workspace/<folder>/...）→ 技能根相对（SKILL.md 在根），同 apply 落盘口径
+        const folderPrefix = skillMd.folder ? `${skillMd.folder}/` : '';
+        const candidateFiles: Record<string, string> = {};
+        for (const [key, f] of Object.entries(vfs)) {
+          if (!key.startsWith('/workspace/')) continue;
+          let rel = key.slice('/workspace/'.length);
+          if (folderPrefix) { if (!rel.startsWith(folderPrefix)) continue; rel = rel.slice(folderPrefix.length); }
+          if (rel) candidateFiles[rel] = f.content;
+        }
+        send('verify_progress', { message: attempt === 0 ? '开始自验证（结构门 + 行为重评）…' : `repair 第 ${attempt} 轮后重新自验证…` });
+        const verdict: SelfVerifyResult = await runSelfVerification({
+          user, skillName, baseVersion,
+          candidateSkillMd: skillMd.content, candidateFiles,
+          maxCases: VERIFY_MAX_CASES, budgetYuan: VERIFY_BUDGET_YUAN,
+          onProgress: (m) => send('verify_progress', { message: m }),
+        });
+        if (verdict.ok) {
+          const beh = verdict.behavioral;
+          send('verify_ok', {
+            structural: verdict.structural.ok,
+            behavioral: beh ? { baseMean: beh.baseMean, candMean: beh.candMean, delta: beh.delta, measured: beh.measured, skipped: beh.skipped } : null,
+          });
+          break;
+        }
+        if (attempt >= VERIFY_REPAIR_K) {
+          send('warning', { kind: 'self_verify', message: `自验证仍未通过（已 repair ${VERIFY_REPAIR_K} 轮），保留当前结果供你裁决：${verdict.failures.join('；')}` });
+          break;
+        }
+        // 还有 repair 额度：把失败喂回同一 session 让 agent 修
+        send('warning', { kind: 'self_verify', message: `自验证未通过，自动 repair（第 ${attempt + 1}/${VERIFY_REPAIR_K} 轮）：${verdict.failures.join('；')}` });
+        try {
+          await withBackgroundOpencodeSlot(
+            () => runGeneralAgent({
+              user, query: buildSelfVerifyRepairQuery(verdict),
+              sessionId: result.sessionId, workspaceTag: threadId,
+              sessionTitle: `skill-opt repair · ${skillName} v${baseVersion} · ${threadId.slice(0, 8)}`,
+              system: systemPrompt, interactionPolicy: 'auto-allow',
+              ...(modelOverride ? { model: modelOverride } : {}),
+              handlers,
+            }),
+            slotMeta,
+          );
+        } catch (e) {
+          console.warn('[skill-opt-bridge] repair turn failed:', (e as Error)?.message);
+          send('warning', { kind: 'self_verify', message: 'repair 回合执行失败，保留当前结果' });
+          break;
+        }
+      }
+    } catch (e) {
+      console.warn('[skill-opt-bridge] self-verify errored (non-blocking):', (e as Error)?.message);
+    }
+  }
+
   // 兜底全量扫描，最终一次 VFS 推送
   vfsAccum = scanWorkspaceFiles(result.workspaceDir);
   send('vfs_patch', { files: vfsAccum });
@@ -420,6 +495,24 @@ async function resolveAuthoritativeStorageDir(
 }
 
 // ── 辅助函数 ─────────────────────────────────────────────────────────────────
+
+/** 把自验证失败拼成给优化器 agent 的 repair 指令（喂回还活着的 session）。 */
+function buildSelfVerifyRepairQuery(v: SelfVerifyResult): string {
+  const parts: string[] = ['你刚才的修改没通过自验证，请据下面的问题修复（修完我会再自动验一遍）：'];
+  if (!v.structural.ok) {
+    parts.push('【结构问题】\n' + v.structural.failures.map((f) => '- ' + f).join('\n'));
+  }
+  if (v.behavioral && !v.behavioral.ok) {
+    parts.push(`【行为回归】在评测用例上净分 ${v.behavioral.baseMean}→${v.behavioral.candMean}（Δ${v.behavioral.delta}）。以下用例改后掉分（含原本答对的）：`);
+    for (const r of v.behavioral.regressions) parts.push(`- ${r.caseId.slice(0, 8)} ${r.base}→${r.cand}：${r.reason}`);
+  }
+  parts.push(
+    '修复要求：① SKILL.md 引用的每个脚本/参考文件都要真实写出且能编译（py_compile / node --check）；'
+    + '② 别让原本答对的用例掉分；③ 定量结论（年份/计数/IP 等）必须来自脚本对真实日志的解析、逐字引用，'
+    + '禁止编造、禁止用当前系统年份（如日志真实年份是 2005，就不能输出 2026）。只改必要部分，不要整文件重写。',
+  );
+  return parts.join('\n');
+}
 
 function composeUserQuery(issues: SkillOptIssueLite[], userFeedback: string, planItems?: SkillOptPlanItemLite[]): string {
   // system prompt 已包含 issues/plan 全部细节；query 只放一个简短的"开干"指令 + 用户原文，
