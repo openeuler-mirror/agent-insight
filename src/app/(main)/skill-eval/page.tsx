@@ -30,6 +30,7 @@ import {
     SectionShell,
     FindingsGrouped,
     STATIC_EVAL_STANDARDS,
+    computeStaticScore,
     type EvaluationDetail,
     type FindingItem,
     type FindingGroup,
@@ -468,35 +469,19 @@ function buildGraySummary(task: {
 }
 
 /**
- * 把最近一次静态评估折算成「维度均分 ×20」的百分数。
- *   - 只统计拿到了 L2 维度分数的标准：未评估的维度不计入分母（用户要求）
- *   - avgPct = 已评估维度的平均分 × 20（满分 5 → 100%）
- *   - scoredCount = 实际被 L2 评估的维度数
- * 跟 EvaluationContent 维度评分卡顶部的"维度均分"严格同口径。
- * 没有任何 L2 分数（只跑过 L1）→ avgPct = null，由调用方显示 `--`。
+ * 把最近一次静态评估折算成静态合规总分。
+ *   - 走 computeStaticScore 唯一口径（= 详情页 EvaluationContent 同源），总分 = 各维度
+ *     贡献分之和，确保列表页与详情页 Hero 显示完全一致（修掉历史上的 90/91 不一致）。
+ *   - 只统计拿到了 L2 维度分数的标准：未评估的维度不计入分母（用户要求）。
+ *   - 没有任何 L2 分数（只跑过 L1）→ avgPct = null，由调用方显示 `--`。
  */
 function computeStaticPassRate(latest: StaticSummary['latest']): {
     avgPct: number | null;
     scoredCount: number;
 } {
     if (!latest) return { avgPct: null, scoredCount: 0 };
-    const scores = latest.l2Scores?.scores;
-    if (!scores) return { avgPct: null, scoredCount: 0 };
-    let sum = 0;
-    let scored = 0;
-    for (const std of STATIC_EVAL_STANDARDS) {
-        const v = std.dimensionAliases
-            .map(a => scores[a])
-            .find(s => typeof s === 'number' && Number.isFinite(s));
-        if (typeof v === 'number') {
-            scored++;
-            sum += v;
-        }
-    }
-    return {
-        avgPct: scored > 0 ? Math.round((sum / scored) * 20) : null,
-        scoredCount: scored,
-    };
+    const { total, scoredCount } = computeStaticScore(latest.l2Scores?.scores);
+    return { avgPct: total, scoredCount };
 }
 
 interface MatchSummary {
