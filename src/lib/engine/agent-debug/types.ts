@@ -85,6 +85,57 @@ export interface AgentDebugFinding {
   confidence: number;
 }
 
+export type AgentDebugTrajectoryPattern = 'non_termination' | 'no_progress' | 'oscillation' | 'runaway_repetition';
+
+export interface AgentDebugTrajectoryAnchor {
+  traceStepIndex?: number;
+  traceNodeLabel?: string;
+  anchorId?: string;
+  sourceInteractionIndex?: number;
+  note?: string;
+}
+
+/**
+ * 轨迹级 finding —— 由确定性「轨迹诊断器」(trajectory-detector) 产出，与逐-step 认知
+ * finding (AgentDebugFinding) 并列存在于报告中。它描述"跨区间的循环 / 无进展"这类
+ * 时序属性，不绑定单一 criticalStep、不套五模块；展示形态是"故障机制 + 故障链 + 证据节点"。
+ * 设计见 docs/agentdebug-diagnosis-principle-and-loop-detection-gap.md。
+ */
+export interface AgentDebugTrajectoryFinding {
+  id: string;
+  kind: 'trajectory';
+  pattern: AgentDebugTrajectoryPattern;
+  severity: AgentDebugSeverity;
+  /** 1-2 句结论 */
+  summary: string;
+  /** 循环 / 无进展所跨的区间（左侧 trace 节点编号 + 原始 interaction 下标） */
+  span: {
+    fromStep: number | null;
+    toStep: number | null;
+    fromInteractionIndex: number;
+    toInteractionIndex: number;
+    turnCount: number;
+  };
+  /** 主导重复动作在区间内被识别到的次数 */
+  cycleCount: number;
+  /** 触发循环的代表性动作签名（工具名 + 归一化参数 / 文本指纹） */
+  signature: string;
+  /** "重复动作占比"等无进展度量的可读描述 */
+  noProgressEvidence: string;
+  /** 故障机制详解（确定性默认；可由可选 LLM 阶段覆盖为更详细叙事） */
+  mechanism: string;
+  /** 故障链（区间内主导动作循环的有序描述） */
+  faultChain: string[];
+  /** 代表性证据节点（举证用，非唯一根因点） */
+  anchors: AgentDebugTrajectoryAnchor[];
+  correctionGuidance: string;
+  confidence: number;
+  /** 产出器标识，例如 trajectory-detector@0.1 */
+  detector: string;
+  /** summary / mechanism / faultChain / correctionGuidance 是否已由 LLM 基于真实证据重写（否则为确定性兜底文案） */
+  llmEnriched?: boolean;
+}
+
 export interface AgentDebugRootCause {
   criticalStep: number | null;
   criticalTraceStepIndex?: number | null;
@@ -207,6 +258,8 @@ export interface AgentDebugReportPayload {
   rootCause: AgentDebugRootCause | null;
   issues: AgentDebugIssue[];
   findings?: AgentDebugFinding[];
+  /** 轨迹诊断器产出的循环 / 无进展类 finding，与认知 findings 并列（确定性、零 LLM 成本）。 */
+  trajectoryFindings?: AgentDebugTrajectoryFinding[];
   phase1Grid?: AgentDebugPhase1Cell[];
   stepRecords?: AgentDebugStepRecord[];
   candidateWindows: AgentDebugCandidateWindow[];
