@@ -3,7 +3,7 @@
 
 import { prisma } from '@/lib/storage/prisma';
 import type { FailureItem, SkillImprovementItem } from '@/lib/engine/evaluation/judge';
-import type { TraceLite, TrajectoryLite } from './types';
+import type { TraceLite, TrajectoryLite, ResultMetricKey, ResultMetricLite } from './types';
 import { MAX_TRACES } from './config';
 
 export interface CollectInput {
@@ -103,6 +103,7 @@ export async function collectTraces(input: CollectInput): Promise<CollectResult>
     // join 轨迹评测（独立表，1:1 by executionId）
     const ids = sliced.map((r) => r.id).filter(Boolean);
     const trajByExec = new Map<string, TrajectoryLite>();
+    const resultByExec = new Map<string, Partial<Record<ResultMetricKey, ResultMetricLite>>>();
     if (ids.length) {
         try {
             const trajRows = await prisma.trajectoryEvalResult.findMany({
@@ -120,6 +121,43 @@ export async function collectTraces(input: CollectInput): Promise<CollectResult>
         }
     }
 
+    if (ids.length) {
+        try {
+            const evalRows = await prisma.traceEvaluation.findMany({
+                where: { executionId: { in: ids }, evaluatorId: 'result-quality' },
+                select: { executionId: true, metricKey: true, status: true, evaluatorVersion: true, interactionsHash: true, score: true, method: true, confidence: true, evidenceJson: true, note: true, errorMessage: true },
+            });
+            const keyMap: Record<string, ResultMetricKey> = {
+                faithfulness: 'faithfulness',
+                'instruction-adherence': 'instructionAdherence',
+                'answer-quality': 'answerQuality',
+                accuracy: 'accuracy',
+            };
+            for (const row of evalRows) {
+                const key = keyMap[row.metricKey];
+                if (!key) continue;
+                let evidence: Record<string, unknown> | undefined;
+                try { evidence = row.evidenceJson ? JSON.parse(row.evidenceJson) : undefined; } catch { /* ignore */ }
+                const current = resultByExec.get(row.executionId) ?? {};
+                current[key] = {
+                    key,
+                    status: row.status as ResultMetricLite['status'],
+                    evaluatorVersion: row.evaluatorVersion,
+                    inputHash: row.interactionsHash,
+                    score: row.score,
+                    method: row.method,
+                    confidence: row.confidence,
+                    evidence,
+                    note: row.note ?? undefined,
+                    errorMessage: row.errorMessage ?? undefined,
+                };
+                resultByExec.set(row.executionId, current);
+            }
+        } catch (e) {
+            console.warn('[quality] result evaluation join failed:', e);
+        }
+    }
+
     const traces: TraceLite[] = sliced.map((r) => {
         const toolCallCount = r.toolCallCount ?? undefined;
         const llmCallCount = r.llmCallCount ?? undefined;
@@ -133,6 +171,7 @@ export async function collectTraces(input: CollectInput): Promise<CollectResult>
             query: r.query ?? undefined,
             isAnswerCorrect: r.isAnswerCorrect,
             answerScore: r.answerScore,
+            resultMetrics: resultByExec.get(r.id),
             toolCallErrorCount: r.toolCallErrorCount ?? undefined,
             failures: safeParseArray<FailureItem>(r.failures),
             toolCallCount,

@@ -16,6 +16,21 @@ export type Attribution = 'agent逻辑' | '模型能力' | '工具&infra' | '外
 /** 严重度。 */
 export type Severity = 'high' | 'medium' | 'low';
 
+export type ResultMetricKey = 'faithfulness' | 'instructionAdherence' | 'answerQuality' | 'accuracy';
+
+export interface ResultMetricLite {
+    key: ResultMetricKey;
+    status: 'pending' | 'running' | 'done' | 'failed';
+    evaluatorVersion?: string;
+    inputHash?: string;
+    score: number | null;
+    method: string;
+    confidence: number;
+    note?: string;
+    evidence?: Record<string, unknown>;
+    errorMessage?: string;
+}
+
 /**
  * TraceLite —— collectTraces 产出、四个聚合函数共同消费的中心契约（投影 DTO）。
  * 缺失字段保持 undefined，不臆造（NFR-002）。
@@ -29,7 +44,8 @@ export interface TraceLite {
     model?: string;
     query?: string;
 
-    // 结果维（确定性打底 + judge 加成）
+    // 结果维（持久化的四项结果评测）
+    resultMetrics?: Partial<Record<ResultMetricKey, ResultMetricLite>>;
     isAnswerCorrect?: boolean | null;
     answerScore?: number | null;       // 0–1，judge（已落库），可空
     toolCallErrorCount?: number;
@@ -85,6 +101,16 @@ export interface MetricScore {
     n: number;
     /** 条件触发型指标（如 Skill 遵从）标注口径，例 "条件触发 · 32/265"。 */
     note?: string;
+    confidence?: number;
+    methodBreakdown?: Record<string, number>;
+    naReason?: string;
+    evidence?: Array<{
+        executionId: string;
+        reason: string;
+        score?: number | null;
+        confidence?: number;
+        detail?: Record<string, unknown>;
+    }>;
 }
 
 export interface CompositeScore {
@@ -102,7 +128,7 @@ export interface CompositeScore {
 export interface TrendBucket {
     bucket_ts: string;
     n_traces: number;
-    ratios: Record<string, number>;                                   // 0–100
+    ratios: Record<string, number | null>;                            // 0–100；null = 该桶无有效结果评测
     percentiles: Record<string, { p50: number; p90: number; p95: number }>;
     composite: number;
     errorCount: number;
@@ -193,7 +219,7 @@ export interface QualityReport {
     coverage: { judged: number; total: number; perDimension: Record<string, number> };
     meta: {
         n: number;
-        passRate: number;             // 达标率：确定性成功 trace 占比（0–100）
+        passRate: number;             // 达标率：有效结果评测 trace 中结果均分达标的占比（0–100）
         empty: boolean;
         lowSample: boolean;
         window: string;

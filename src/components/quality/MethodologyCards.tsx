@@ -15,9 +15,9 @@ export function MethodologyCards({ report, onAnchor }: { report: QualityReport; 
 
     const cards: { key: 'result' | 'process' | 'cost' | 'error'; name: string; q: string; anchor: string; score: string; status: string; signal: string; go: string }[] = [
         {
-            key: 'result', name: t('quality.dim.result'), q: t('quality.dim.resultQ'), anchor: 'exec',
-            score: fmtNum(dimensions.result.score), status: dimensions.result.status,
-            signal: dimensions.result.signal || '', go: t('quality.dim.viewExec'),
+            key: 'result', name: t('quality.dim.result'), q: t('quality.dim.resultQ'), anchor: 'result',
+            score: dimensions.result.coverage ? fmtNum(dimensions.result.score) : 'N/A', status: dimensions.result.status,
+            signal: dimensions.result.signal || '', go: t('quality.dim.viewResult'),
         },
         {
             key: 'process', name: t('quality.dim.process'), q: t('quality.dim.processQ'), anchor: 'process',
@@ -66,7 +66,9 @@ export function MethodologyCards({ report, onAnchor }: { report: QualityReport; 
                     {cards.map((c) => {
                         const Icon = ICONS[c.key];
                         const dim = dimensions[c.key];
-                        const color = scoreColor(dim.score); // 四卡统一：颜色随分数（错误卡也显示分数了）
+                        const noCoverage = c.key === 'result' && dim.coverage === 0;
+                        const color = noCoverage ? 'var(--foreground-muted)' : scoreColor(dim.score);
+                        const badgeColor = noCoverage ? 'var(--foreground-muted)' : statusColor(dim.status);
                         return (
                             <button key={c.key} onClick={() => onAnchor(c.anchor)} style={lcard}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -79,8 +81,8 @@ export function MethodologyCards({ report, onAnchor }: { report: QualityReport; 
                                     <span style={{ fontSize: 24, fontWeight: 800, letterSpacing: '-0.02em', color }}>{c.score}</span>
                                     <span style={{
                                         fontSize: 10.5, fontWeight: 700, padding: '3px 7px', borderRadius: 5,
-                                        background: 'color-mix(in srgb, ' + statusColor(dim.status) + ' 13%, transparent)', color: statusColor(dim.status),
-                                    }}>{t(`quality.status.${dim.status}`)}</span>
+                                        background: 'color-mix(in srgb, ' + badgeColor + ' 13%, transparent)', color: badgeColor,
+                                    }}>{noCoverage ? t('quality.analysis.na') : t(`quality.status.${dim.status}`)}</span>
                                     {dim.coverage < 1 && (
                                         <span style={{ fontSize: 9.5, color: 'var(--foreground-muted)', marginLeft: 'auto' }}>
                                             {t('quality.analysis.naCoverage')} {Math.round(dim.coverage * 100)}%

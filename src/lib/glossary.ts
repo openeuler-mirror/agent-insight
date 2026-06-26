@@ -680,6 +680,160 @@ const GLOSSARY = {
     body: '无错 trace 的占比：出错 trace 越少分越高（如 108 条里 4 条出错 → 96.3）。报错次数与聚类数见卡片下方诊断行。\n错误事件来自重解析执行步骤：工具步看返回内容，LLM 步只看结构化元信息——模型"谈论失败"不算"步骤失败"。',
     formula: '错误分 = (1 − 出错 trace 数 ÷ trace 总数) × 100\n基准线：达标 ≥85 · 关注 70–85 · 异常 <70',
   },
+  'quality-result-faithfulness': {
+    name: '忠实度',
+    tag: 'eval',
+    body: '检查最终回答里的可验证事实主张，是否能被本次 trace 中 Agent 实际看到的工具结果支持。评测会从最终回答抽取关键主张，再对照工具证据判断 supported / contradicted / not_covered；与证据矛盾或证据未覆盖都会拉低分数。没有工具证据或没有可验证主张时记为 N/A，不进入结果维总分。',
+    formula: '忠实度 = 被工具证据支持的主张占比（矛盾主张权重更高）',
+  },
+  'quality-result-instruction-adherence': {
+    name: '指令遵循',
+    tag: 'eval',
+    body: '只评用户或相关 system 指令中明确要求最终输出必须遵守的约束，例如格式、语言、长度、字段、数量、范围、禁止项、交付物形态等。它不评价业务问题是否答全，也不评价事实是否正确；这些分别由答案质量、忠实度和准确性处理。没有明确输出约束时记为 N/A。',
+    formula: '指令遵循 = 满足的显式输出约束数 ÷ 可裁决约束数',
+  },
+  'quality-result-answer-quality': {
+    name: '答案质量',
+    tag: 'eval',
+    body: '从最终交付本身评价“回答得像不像一个好答案”：相关性看内容是否服务于用户问题；完整性看业务必答要点是否覆盖；连贯性看结构、主线、指代和内部表述是否清楚一致。',
+    formula: '答案质量 = 相关性、完整性、连贯性三个子分的加权汇总',
+  },
+  'quality-result-accuracy': {
+    name: '准确性',
+    tag: 'eval',
+    body: '仅在 trace 命中标准答案、关键观点或结果准则时启用。评测会把最终回答与标准关键观点逐项比对，判断 correct / partially_correct / wrong / not_mentioned，并关注额外事实错误。未命中标准答案或结果准则时记为 N/A；未提及的关键观点通常交给完整性体现，不强行进入准确率分母。',
+    formula: '准确性 = 正确或部分正确的关键观点得分 ÷ 可裁决关键观点数',
+  },
+  'quality-result-detail-constraint-id': {
+    name: '约束ID',
+    tag: 'eval',
+    body: '指令遵循评测中，每条显式输出约束的唯一编号，用来把约束内容与裁决结果对应起来。',
+  },
+  'quality-result-detail-constraint-text': {
+    name: '约束内容',
+    tag: 'eval',
+    body: 'LLM 从用户问题或相关 system 指令中提取出的原子化输出约束，例如指定格式、语言、字段、数量、范围或禁止项。',
+  },
+  'quality-result-detail-verdict-status': {
+    name: '裁决结果',
+    tag: 'eval',
+    body: 'LLM 对该条约束、主张或要点的最终判断。不同表格会使用不同枚举，例如满足/未满足、有证据支持/与证据矛盾、正确/部分正确/错误。',
+  },
+  'quality-result-detail-verdict-reason': {
+    name: '裁决原因',
+    tag: 'eval',
+    body: 'LLM 给出的裁决依据，解释为什么该条约束、主张或要点被判为当前结果。',
+  },
+  'quality-result-detail-claim-id': {
+    name: '主张ID',
+    tag: 'eval',
+    body: '忠实度评测中，从最终回答里抽取出的可验证事实主张编号。',
+  },
+  'quality-result-detail-claim-text': {
+    name: '主张内容',
+    tag: 'eval',
+    body: '最终回答中可被工具证据验证的关键事实表述。忠实度会逐条判断这些主张是否有证据支撑。',
+  },
+  'quality-result-detail-evidence-source': {
+    name: '证据与来源',
+    tag: 'eval',
+    body: '用于支持或反驳裁决的工具证据片段，以及对应的工具名、工具调用 ID 或交互序号。没有可用证据时展示“无”。',
+  },
+  'quality-result-detail-key-point-id': {
+    name: '观点ID',
+    tag: 'eval',
+    body: '准确性评测中，标准答案或结果准则里的关键观点编号。',
+  },
+  'quality-result-detail-key-point-content': {
+    name: '标准关键观点',
+    tag: 'eval',
+    body: '来自标准答案、关键观点缓存或结果准则的期望内容，用来与 Agent 的最终回答逐项比对。',
+  },
+  'quality-result-detail-judgement-status': {
+    name: '判定结果',
+    tag: 'eval',
+    body: 'LLM 对关键观点、陈述或其他检查对象的判断结果，例如正确、部分正确、错误、未提及，或相关/不相关。',
+  },
+  'quality-result-detail-actual-evidence': {
+    name: '实际答案证据',
+    tag: 'eval',
+    body: 'LLM 从 Agent 最终回答中引用或概括出的证据片段，用于说明它为什么做出该项准确性判断。',
+  },
+  'quality-result-detail-error-kind': {
+    name: '错误类型',
+    tag: 'eval',
+    body: '准确性额外错误的分类，例如事实错误或额外编造，用来区分问题性质。',
+  },
+  'quality-result-detail-severity': {
+    name: '严重度',
+    tag: 'eval',
+    body: '额外错误对最终答案影响的等级，通常分为高、中、低；严重度越高，对准确性扣分影响越大。',
+  },
+  'quality-result-detail-error-reason': {
+    name: '错误原因',
+    tag: 'eval',
+    body: 'LLM 对额外错误的解释，说明实际答案哪里与标准答案、证据或结果准则不一致。',
+  },
+  'quality-result-detail-statement-id': {
+    name: '陈述ID',
+    tag: 'eval',
+    body: '答案质量相关性评测中，从最终回答拆出的陈述编号。',
+  },
+  'quality-result-detail-statement-text': {
+    name: '陈述内容',
+    tag: 'eval',
+    body: '最终回答中的一个独立信息单元。相关性评测会判断它是否直接服务于用户任务。',
+  },
+  'quality-result-detail-source-quote': {
+    name: '原文引用',
+    tag: 'eval',
+    body: 'LLM 提供的最终回答来源片段，用来帮助定位该陈述来自哪里；展示时不要求与原文逐字硬匹配。',
+  },
+  'quality-result-detail-relevance-status': {
+    name: '相关性判定',
+    tag: 'eval',
+    body: '判断该陈述与用户任务的关系：相关表示直接回答任务，支撑性内容表示辅助解释，不相关表示偏离任务。',
+  },
+  'quality-result-detail-judgement-reason': {
+    name: '判定原因',
+    tag: 'eval',
+    body: 'LLM 对相关性等判定的简要解释，说明该陈述为什么被认为相关、支撑或不相关。',
+  },
+  'quality-result-detail-requirement-id': {
+    name: '要点ID',
+    tag: 'eval',
+    body: '答案质量完整性评测中，从用户任务拆出的业务要点编号。',
+  },
+  'quality-result-detail-requirement-text': {
+    name: '任务要点',
+    tag: 'eval',
+    body: '用户问题中需要被回答或交付的核心业务要求。完整性评测会逐项判断这些要点是否被覆盖。',
+  },
+  'quality-result-detail-coverage-status': {
+    name: '覆盖状态',
+    tag: 'eval',
+    body: '完整性评测对任务要点的覆盖判断：已覆盖、部分覆盖或缺失。',
+  },
+  'quality-result-detail-result-evidence': {
+    name: '结果证据',
+    tag: 'eval',
+    body: 'LLM 从最终回答中提取的覆盖证据，用于说明某个任务要点被回答到什么程度；缺失时可以为空。',
+  },
+  'quality-result-detail-check-item': {
+    name: '检查项',
+    tag: 'eval',
+    body: '连贯性评测中的具体检查维度，例如主结论、结构顺序、指代一致、矛盾、重复或跳跃问题。',
+  },
+  'quality-result-detail-check-result': {
+    name: '结果',
+    tag: 'eval',
+    body: '该连贯性检查项的结果值，可能是分数、是/否、百分比或问题列表。',
+  },
+  'quality-result-detail-check-note': {
+    name: '说明',
+    tag: 'eval',
+    body: '对连贯性检查项的解释或计算口径，帮助理解该行结果的含义。',
+  },
 
   // ===== §12 配置 =====
   'model-registry': {

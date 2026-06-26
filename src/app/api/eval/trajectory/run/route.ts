@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
-import { db, prismaRaw as prisma } from '@/lib/storage/prisma';
+import { prismaRaw as prisma } from '@/lib/storage/prisma';
 import { reattributeServiceTraceOwner } from '@/lib/storage/data-service';
-import { findAgentDataset, readAllAgentDatasets, type AgentDatasetRecord, type DatasetCase } from '@/server/agent_datasets_storage';
+import { findAgentDataset, type AgentDatasetRecord, type DatasetCase } from '@/server/agent_datasets_storage';
 import { canReuseRootCauseCache, type RootCauseItem } from '@/lib/dataset-case-root-causes';
 import {
     evaluateTrajectoryViaOpencode,
@@ -36,6 +36,7 @@ import {
     loadTaskCompletionSkillContext,
 } from '@/lib/engine/evaluation/key-action-trace-analysis';
 import { extractRealUserInput, findBestSemanticCaseMatch } from '@/lib/engine/evaluation/semantic-dataset-match';
+import { matchAgentDatasetCase } from '@/lib/engine/evaluation/dataset-case-match';
 import { extractTaskResultArtifact } from '@/lib/engine/evaluation/result-artifact-extractor';
 import { parseLooseJson } from '@/lib/engine/evaluation/task-completion-json';
 import {
@@ -509,70 +510,36 @@ async function findMatchingDatasetCaseForTrace(
     traceQuery: string,
     options: { requireExpectedOutput?: boolean; includeAllDatasetKinds?: boolean; allowedDatasetIds?: string[] } = {},
 ): Promise<MatchedDatasetCase> {
-    const normalizedTraceInput = normalizeMatchText(traceQuery);
-    if (!normalizedTraceInput) {
+    const result = await matchAgentDatasetCase({
+        user,
+        traceQuery,
+        requireExpectedOutput: options.requireExpectedOutput,
+        includeAllDatasetKinds: options.includeAllDatasetKinds,
+        allowedDatasetIds: options.allowedDatasetIds,
+    });
+    if (result.reason === 'empty-input') {
         throw new StagedEvaluationError(
             'no-evaluable-case',
             `${NO_EVALUABLE_CASE_PREFIX} trace 没有实际输入，无法匹配评估数据集 case`,
         );
     }
-
-    const requireExpectedOutput = options.requireExpectedOutput === true;
-    const includeAllDatasetKinds = options.includeAllDatasetKinds === true;
-    // allowedDatasetIds 非空 → 把匹配范围收窄到用户在配置区显式选的数据集 (参考集); 空 → 沿用全量 auto-match。
-    const allowedDatasetIds = Array.isArray(options.allowedDatasetIds)
-        ? options.allowedDatasetIds.map(id => String(id).trim()).filter(Boolean)
-        : [];
-    const datasets = (await readAllAgentDatasets())
-        .filter(dataset => dataset.user === user)
-        .filter(dataset => allowedDatasetIds.length === 0 || allowedDatasetIds.includes(dataset.id))
-        .filter(dataset => includeAllDatasetKinds || requireExpectedOutput || dataset.datasetKind === 'trajectory');
-
-    if (datasets.length === 0) {
+    if (result.reason === 'no-datasets') {
         throw new StagedEvaluationError(
             'no-evaluable-case',
-            `${NO_EVALUABLE_CASE_PREFIX} ${includeAllDatasetKinds ? '未找到可用于评测的数据集' : requireExpectedOutput ? '未找到可用于结果评测的数据集' : '未找到轨迹评测数据集'}`,
+            `${NO_EVALUABLE_CASE_PREFIX} ${options.includeAllDatasetKinds ? '未找到可用于评测的数据集' : options.requireExpectedOutput ? '未找到可用于结果评测的数据集' : '未找到轨迹评测数据集'}`,
         );
     }
-
-    for (const dataset of datasets) {
-        const found = dataset.cases.find(c =>
-            normalizeMatchText(c.input) === normalizedTraceInput
-            && (!requireExpectedOutput || Boolean(normalizeMatchText(c.expectedOutput)))
-        );
-        if (found) return { dataset, caseEntry: found };
-    }
-
-    const semanticCandidates: { id: string; input: string }[] = [];
-    const semanticCaseMap = new Map<string, MatchedDatasetCase>();
-    for (const dataset of datasets) {
-        for (const caseEntry of dataset.cases) {
-            if (requireExpectedOutput && !normalizeMatchText(caseEntry.expectedOutput)) continue;
-            const id = `${dataset.id}::${caseEntry.id}`;
-            semanticCandidates.push({ id, input: caseEntry.input });
-            semanticCaseMap.set(id, { dataset, caseEntry });
-        }
-    }
-
-    const semantic = await findBestSemanticCaseMatch(
-        semanticCandidates,
-        traceQuery,
-        { user, requireModelAvailable: true },
-    );
-    if (semantic.error) {
+    if (result.error) {
         throw new StagedEvaluationError(
             'semantic-match-llm',
-            `${NO_EVALUABLE_CASE_PREFIX} 语义匹配调用评测模型失败：${semantic.error}`,
+            `${NO_EVALUABLE_CASE_PREFIX} 语义匹配调用评测模型失败：${result.error}`,
         );
     }
-    if (semantic.caseId) {
-        const found = semanticCaseMap.get(semantic.caseId);
-        if (found) return found;
-    }
+    if (result.match) return result.match;
 
     throw new StagedEvaluationError(
         'no-evaluable-case',
-        `${NO_EVALUABLE_CASE_PREFIX} trace 实际输入未匹配到${includeAllDatasetKinds ? '评测数据集中的' : requireExpectedOutput ? '带预期结果的' : '轨迹评测数据集中的'} case 输入`,
+        `${NO_EVALUABLE_CASE_PREFIX} trace 实际输入未匹配到${options.includeAllDatasetKinds ? '评测数据集中的' : options.requireExpectedOutput ? '带预期结果的' : '轨迹评测数据集中的'} case 输入`,
     );
 }
 

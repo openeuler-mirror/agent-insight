@@ -93,6 +93,10 @@ export interface AgentEvent {
     args?: any;
     /** Output / result if recorded on the same interaction */
     output?: any;
+    /** Stable source call id for tool/skill/task events. */
+    toolCallId?: string;
+    /** Adapter-provided tool state, for example success/error/completed. */
+    toolStatus?: string;
     /** ms since epoch */
     startedAt?: number;
     completedAt?: number;
@@ -615,6 +619,8 @@ function interactionToEvents(it: RawInteraction, idx: number): AgentEvent[] {
             name,
             args,
             output: tc.output ?? tc.result,
+            toolCallId: tc.id,
+            toolStatus: tc.state,
             interaction: it,
             interactionIndex: idx,
             startedAt: toMsTimestamp(tc.timing?.started_at) ?? baseTs,

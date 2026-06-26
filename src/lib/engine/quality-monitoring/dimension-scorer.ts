@@ -26,21 +26,6 @@ function clamp01(n: number): number {
 function round1(n: number): number { return Math.round(n * 10) / 10; }
 function mean(xs: number[]): number { return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0; }
 
-/**
- * 确定性成功口径（结果维打底）。
- * 注意：schema 中 `isAnswerCorrect @default(false)` —— 未评测的 trace 会带默认 false，
- * 不能据此判失败（会把"没判过"误读成"判错了"，passRate 假性归零）。故口径为：
- * 具体失败信号优先（工具错误 / failures）→ 已落库 judge 分（answerScore）→ 显式 isAnswerCorrect=true
- * → 否则视为"无失败信号的完成"presumptive success（确定性打底，留待采样回填 judge 精修）。
- */
-export function isSuccessDeterministic(t: TraceLite): boolean {
-    if (t.toolCallErrorCount != null && t.toolCallErrorCount > 0) return false; // 具体失败信号
-    if (t.failures && t.failures.length > 0) return false;
-    if (t.answerScore != null) return t.answerScore >= 0.5;                     // 已落库 judge
-    if (t.isAnswerCorrect === true) return true;
-    return true;                                                                // 无失败信号 → 打底为成功
-}
-
 const SECURITY_PATTERNS = /(inject|injection|越权|未授权|unauthorized|越界|pii|敏感信息|泄露|leak|prompt\s*injection|jailbreak)/i;
 /** 安全护栏命中检测（双侧）。MVP 启发式：扫 failures 文本 + 已置 safety 位（FR-003）。 */
 function detectSecurityHit(t: TraceLite): boolean {
@@ -62,7 +47,10 @@ function statusOf(score: number, policy: ScoringPolicy): QualityStatus {
 type PerTrace = (t: TraceLite, policy: ScoringPolicy) => number | null;
 
 const EXTRACTORS: Record<MetricKey, PerTrace> = {
-    completion: (t) => (t.answerScore != null ? clamp01(t.answerScore) * 100 : (isSuccessDeterministic(t) ? 100 : 0)),
+    faithfulness: (t) => t.resultMetrics?.faithfulness?.status === 'done' ? t.resultMetrics.faithfulness.score : null,
+    instructionAdherence: (t) => t.resultMetrics?.instructionAdherence?.status === 'done' ? t.resultMetrics.instructionAdherence.score : null,
+    answerQuality: (t) => t.resultMetrics?.answerQuality?.status === 'done' ? t.resultMetrics.answerQuality.score : null,
+    accuracy: (t) => t.resultMetrics?.accuracy?.status === 'done' ? t.resultMetrics.accuracy.score : null,
     safety: (t) => (detectSecurityHit(t) ? 0 : 100),
     toolCorrectness: (t) => {
         const calls = t.toolCallCount ?? 0;
@@ -109,6 +97,27 @@ function scoreMetric(key: MetricKey, traces: TraceLite[], policy: ScoringPolicy)
     }
     const n = vals.length;
     const total = traces.length || 1;
+    const resultRows = traces
+        .map((t) => t.resultMetrics?.[key as keyof typeof t.resultMetrics])
+        .filter((row): row is NonNullable<typeof row> => Boolean(row?.status === 'done'));
+    const methods = new Map<string, number>();
+    for (const row of resultRows) methods.set(row.method, (methods.get(row.method) ?? 0) + 1);
+    const confidences = resultRows.map((row) => row.confidence).filter(Number.isFinite);
+    const evidence = traces.flatMap((t) => {
+        const row = t.resultMetrics?.[key as keyof typeof t.resultMetrics];
+        if (!row?.evidence) return [];
+        const reason = String(row.evidence.reason ?? row.note ?? '').trim();
+        return reason ? [{
+            executionId: t.executionId,
+            reason,
+            score: row.score,
+            confidence: row.confidence,
+            detail: row.evidence,
+        }] : [];
+    }).slice(0, 3);
+    const naReason = n === 0
+        ? traces.map((t) => t.resultMetrics?.[key as keyof typeof t.resultMetrics]?.note).find(Boolean)
+        : undefined;
     return {
         key,
         label: reg.label,
@@ -116,6 +125,10 @@ function scoreMetric(key: MetricKey, traces: TraceLite[], policy: ScoringPolicy)
         score: n ? round1(mean(vals)) : null,
         coverage: round1(n / total) ,
         n,
+        confidence: confidences.length ? round1(mean(confidences)) : undefined,
+        methodBreakdown: Object.fromEntries(methods),
+        naReason,
+        evidence,
     };
 }
 
@@ -163,13 +176,12 @@ export function scoreDimensions(
     }
 
     // 四维
-    const result = dimFrom([m.completion, m.safety], policy, (mm) => {
-        const safe = mm.find((x) => x.key === 'safety');
-        const comp = mm.find((x) => x.key === 'completion');
-        if (safe && safe.score === 0) return '存在安全护栏命中，结果维已硬降级';
-        if (comp && comp.score != null && comp.score < policy.status.关注) return `完成度 ${round1(comp.score)} 偏低，是结果维主要短板`;
-        if (comp && comp.score != null && comp.score < policy.status.达标) return `完成度 ${round1(comp.score)} 待提升`;
-        return '完成度与安全稳健';
+    const result = dimFrom([m.faithfulness, m.instructionAdherence, m.answerQuality, m.accuracy], policy, (mm) => {
+        const valid = mm.filter((x) => x.score != null).sort((a, b) => (a.score as number) - (b.score as number));
+        if (!valid.length) return '尚无结果评测覆盖';
+        return valid[0].score! < policy.status.达标
+            ? `${valid[0].label} ${round1(valid[0].score!)} 是结果维主要短板`
+            : '四项结果指标整体稳健';
     });
     const process = dimFrom([m.toolCorrectness, m.planEfficiency, m.constraintAdherence, m.toolGrounding], policy);
     const cost = dimFrom([m.cost], policy, () => '成本须看 p95 长尾，详见趋势');
@@ -211,8 +223,8 @@ export function scoreDimensions(
 
     const status: QualityStatus = capped ? '异常' : statusOf(composite, policy);
 
-    // 覆盖率：judged = 有 answerScore 或轨迹分的 trace 占比
-    const judged = traces.filter((t) => t.answerScore != null || t.trajectory != null).length;
+    // 覆盖率：judged = 至少有一项有效结果评测的 trace 数。
+    const judged = traces.filter((t) => Object.values(t.resultMetrics ?? {}).some((r) => r?.status === 'done' && r.score != null)).length;
 
     return {
         composite: { score: composite, status, p0, p1, p2, capped, cappedReason },
