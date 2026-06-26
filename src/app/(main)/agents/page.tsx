@@ -16,6 +16,8 @@ import {
 } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { AppTopBar } from '@/components/shell/AppTopBar';
+import { useAuth } from '@/lib/auth/auth-context';
+import { apiFetch } from '@/lib/client/api';
 
 type AgentOwnership = 'system' | 'user';
 type AgentLayer = 'main' | 'subagent';
@@ -377,6 +379,7 @@ function FilterDateTimeInput({ label, value, onChange, minWidth = 220 }: FilterD
 
 function AgentsPageInner() {
     const { t } = useLocale();
+    const { user } = useAuth();
     const router = useRouter();
     const searchParams = useSearchParams();
     const defaultExactRange = useMemo(
@@ -453,8 +456,11 @@ function AgentsPageInner() {
     };
 
     const fetchDbAgents = useCallback(async () => {
+        // 与执行记录页一致：按当前登录用户隔离，只拉取自己的（+ 系统）Agent。
+        // 未登录时不拉取，避免后端在缺省 user 时返回全量。
+        if (!user) return;
         try {
-            const res = await fetch('/api/agents');
+            const res = await apiFetch(`/api/agents?user=${encodeURIComponent(user)}`);
             if (res.ok) {
                 const data = await res.json();
                 const formatted: Agent[] = data.agents.map((a: {
@@ -488,7 +494,7 @@ function AgentsPageInner() {
         } catch (error) {
             console.error('Failed to fetch DB agents', error);
         }
-    }, []);
+    }, [user]);
 
     useEffect(() => {
         isDbAgentsMountedRef.current = true;

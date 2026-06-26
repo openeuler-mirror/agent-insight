@@ -654,7 +654,7 @@ function TrajectoryFindingRow({ finding, index, zh, expanded, onToggle, onNodeRe
             <span className="inline-flex items-center gap-1 rounded bg-error-subtle px-1 py-0.5 text-error">
               <RotateCcw className="size-3" />{zh ? '疑似循环' : 'Suspected loop'}
             </span>
-            <span>{zh ? '区间' : 'span'} {spanText} · ×{finding.cycleCount} · {Math.round(finding.confidence * 100)}%</span>
+            <span>{zh ? '区间' : 'span'} {spanText}</span>
           </div>
         </div>
         {expanded ? <ChevronDown className="mt-1 size-3.5 shrink-0 text-foreground-muted" /> : <ChevronRight className="mt-1 size-3.5 shrink-0 text-foreground-muted" />}
