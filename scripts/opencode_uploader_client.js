@@ -449,6 +449,7 @@ function buildState(records) {
   const sysPrompts = new Map()
   const cliCompletedSessions = new Set()
   const sessionPids = new Map()
+  const sessionIdleAt = new Map()
 
   const ensureSession = (sid) => {
     if (!sessions.has(sid)) sessions.set(sid, { sessionID: sid, messageIDs: new Set() })
@@ -467,6 +468,13 @@ function buildState(records) {
     if (!pid || !cid) return
     if (!children.has(pid)) children.set(pid, new Set())
     children.get(pid).add(cid)
+  }
+
+  const recordSessionIdle = (sid, r) => {
+    if (!sid) return
+    const ms = toMsTimestamp(r?.t) || Date.now()
+    const prev = sessionIdleAt.get(sid) || 0
+    if (ms > prev) sessionIdleAt.set(sid, ms)
   }
 
   for (const r of records) {
@@ -518,6 +526,17 @@ function buildState(records) {
     const t = r?.payload?.type
     const ev = r?.payload?.event
     if (!t || !ev) continue
+
+    const statusType = String(ev?.properties?.status?.type || ev?.properties?.status || "").toLowerCase()
+    if (t === "session.idle" || (t === "session.status" && statusType === "idle")) {
+      const sid = r.sessionID || ev?.properties?.sessionID
+      if (sid) {
+        ensureSession(sid)
+        recordSessionPid(sid, r)
+        recordSessionIdle(sid, r)
+      }
+      continue
+    }
 
     if (t === "session.created" || t === "session.updated") {
       const { sid, pid, agent } = getSessionInfoFromEvent(r, ev)
@@ -577,7 +596,7 @@ function buildState(records) {
     }
   }
 
-  return { sessions, sessionParent, sessionAgent, children, msgInfo, msgParts, partText, userTextByMsg, sysPrompts, cliCompletedSessions, sessionPids }
+  return { sessions, sessionParent, sessionAgent, children, msgInfo, msgParts, partText, userTextByMsg, sysPrompts, cliCompletedSessions, sessionPids, sessionIdleAt }
 }
 
 // Join all text-type parts of a message into one string. Prefers the
@@ -962,6 +981,10 @@ async function main() {
     const pids = Array.from(state.sessionPids.get(rootSid) || [])
     const opencodeCliCompleted = state.cliCompletedSessions.has(rootSid)
       || (pids.length > 0 && pids.every((pid) => !isPidAlive(pid)))
+    const idleMs = state.sessionIdleAt.get(rootSid) || 0
+    const traceCompletedAt = derived.final_result && idleMs > 0
+      ? new Date(idleMs).toISOString()
+      : undefined
     const payload = {
       task_id: rootSid,
       query,
@@ -982,6 +1005,7 @@ async function main() {
       interactions,
       system_prompts: sys,
       trace: { trace_id: rootSid },
+      trace_completed_at: traceCompletedAt,
       opencode_cli_completed: opencodeCliCompleted,
       timestamp: new Date().toISOString(),
     }
@@ -994,9 +1018,10 @@ async function main() {
       lastTs = Math.max(lastTs, t1, t2, t3)
     }
     const lastAssistant = String(payload.final_result || "")
-    const sig = `${interactions.length}|${lastAssistant.length}|${lastTs}|${payload.opencode_cli_completed ? 1 : 0}`
+    const sig = `${interactions.length}|${lastAssistant.length}|${lastTs}|${payload.trace_completed_at || ""}|${payload.opencode_cli_completed ? 1 : 0}`
     appendUploaderLog(
-      `session.prepare task_id=${rootSid} interactions=${interactions.length} query=${String(query).slice(0, 120).replace(/\s+/g, " ")} cliCompleted=${payload.opencode_cli_completed ? "1" : "0"} sig=${sig}`,
+      `session.prepare task_id=${rootSid} interactions=${interactions.length} query=${String(query).slice(0, 120).replace(/\s+/g, " ")} ` +
+      `traceCompletedAt=${payload.trace_completed_at || "(none)"} cliCompleted=${payload.opencode_cli_completed ? "1" : "0"} sig=${sig}`,
     )
     if (ckpt[rootSid] && ckpt[rootSid] === sig) {
       appendUploaderLog(`session.skip checkpoint task_id=${rootSid} sig=${sig}`)

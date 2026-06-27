@@ -179,12 +179,10 @@ function inferOpencodeCliExitedFromExistingTelemetry(taskId: string): boolean | 
     return setCache(true);
 }
 
-// 没有显式"轨迹结束"信号的框架:既不会在入库时落 Session.endTime(hermes / direct_llm 那样),
-// 也没有 CLI 退出标记(opencode 那样)。对它们改用"静默窗口"推断完成——轨迹已产出 assistant 输出后
-// 静默超过稳定窗口即视为结束。Claude Code 是第一个(见 PR !150);jiuwenswarm 同形:agent-core 的
-// 单 agent(run_agent / ReAct)只发 llm.call / tool.* span,没有把整条轨迹包起来的 root span,OTLP
-// 流里永远不会出现"已完成"信号,于是一直停在"执行中"。
-export const QUIET_WINDOW_INFERRED_FRAMEWORKS = new Set(['claudecode', 'jiuwenswarm']);
+// 缺少可靠结束信号时的读侧兜底:轨迹已产出 assistant 输出后,静默超过稳定窗口即视为结束。
+// Claude Code / jiuwenswarm single-agent 没有 root span;Hermes/OpenCode 有显式完成信号,
+// 但旧接入或异常退出可能漏写 Session.endTime,需要 quiet-window 防止已完成 trace 长期停在"执行中"。
+export const QUIET_WINDOW_INFERRED_FRAMEWORKS = new Set(['claudecode', 'jiuwenswarm', 'opencode', 'hermes']);
 
 export function hasAssistantOutput(interactions: TimestampCarrier[]): boolean {
     return interactions.some((interaction: any) => {
@@ -258,17 +256,14 @@ async function getAutoEvalReadiness(record: Record<string, unknown>, baseUrl?: s
             console.warn(`[Data-API] Failed to persist inferred opencode completion for ${taskId}`, error);
         }
     }
-    const autoEvalReady = framework === 'opencode'
-        ? explicitCompleted || opencodeCliExited === true
-        : explicitCompleted || quietLongEnough;
+    const quietWindowCompleted = QUIET_WINDOW_INFERRED_FRAMEWORKS.has(framework) && quietLongEnough;
+    const autoEvalReady = explicitCompleted || opencodeCliExited === true || quietWindowCompleted;
 
     return {
         autoEvalReady,
         autoEvalWaitReason: autoEvalReady
             ? null
-            : framework === 'opencode'
-                ? 'opencode-cli-not-exited'
-                : latestActivityMs > 0
+            : latestActivityMs > 0
                 ? 'trace-still-active'
                 : 'missing-trace-activity',
         traceLastActivityAt: latestActivityMs > 0 ? new Date(latestActivityMs).toISOString() : null,

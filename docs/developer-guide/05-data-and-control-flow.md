@@ -79,6 +79,20 @@ flowchart TD
 ```
 入口路由：`eval/config/*`、`eval/trajectory/run`、`eval/rejudge`、`debug/batch-tasks/*`、`debug/grayscale-tasks/*`（A/B 经由 `ab-scoring.ts`）。引擎：`evaluation/judge.ts:judgeAnswer`、`trajectory-evaluator.ts:evaluateTrajectory`、`semantic-dataset-match.ts`、`derive-skill-opt-points.ts`、`result-artifact-extractor.ts`。轨迹评测的实际 trace 证据由 `trace-summarizer.ts` 基于 `Session.interactions` 生成事件级步骤；`ExecutionMatch.extractedSteps` 仍用于 Skill 流程对齐/可视化缓存，不作为轨迹评测唯一输入。结果评测会在运行前按轨迹评测同口径解析 trace 关联 Skill（含 `execution.skill` fallback）并写入 `rawAnalysis.resultSkillMode`；`no-skill` 分支不生成 Skill 归因、改进建议或 `SkillIssue`。任务完成度评测的 `rawAnalysis.key_point_findings` 负责关键观点覆盖与等权算分；`rawAnalysis.result_issues` 单独承载关键观点之外的事实错误、编造内容、冗余或格式问题，只作为可归因的动态优化点输入，不直接参与任务完成度分数。
 
+### 质量监控结果评测
+
+`processUploadAsync` 在 `Execution`/`Session` 落库后调用 `scheduleResultEvaluation`，proxy end 在 root trace 完成后触发同一入口。`evaluateResultQuality` 读取 query、最终交付和完整 interactions，四个结果指标独立运行、独立失败和独立写入 `TraceEvaluation`。
+
+忠实度与链路追踪共用 `buildAgentCallTree`：在最终交付所属 Agent 节点上读取有 output 的 TOOL 事件，排除 Skill/Task 控制调用，并在 compaction 后只使用仍对最终交付可见的证据。`faithfulness-evaluator.ts` 先单独提取关键事实主张，再验证工具 context；长输出按行切块并按 claim 召回最多 5 个候选，随后将最多 8 条 claim 合成一批交给模型裁决。模型返回逐项 verdict 和引用，代码只校验 claim ID、verdict ID 集合与引用的 context ID 是否来自本次输入，不再要求模型给出的 `sourceQuote/evidenceQuote` 与原文逐字子串匹配；总分由支持主张占比计算。
+
+指令遵循不再与答案质量共用一次 LLM 响应：`instruction-adherence-evaluator.ts` 先仅凭 query 与相关 system 指令提取显式输出约束，再把约束和最终结果交给第二次 LLM 逐项裁决；代码校验约束 ID、裁决 ID 集合、Schema 与枚举类型，计算比例分并生成本指标原因，不再对 `sourceQuote/evidenceQuote` 做逐字命中校验。格式、语言、长度、字段、数量等约束也由这两次 LLM 统一处理，不再维护正则检查器。
+
+答案质量由 `answer-quality-evaluator.ts` 执行五次专用调用。statement 提取、requirement 提取和固定 0–4 rubric 的连贯性评价同时启动；相关性在 statements 就绪后启动，完整性在 requirements 就绪后启动。代码校验 statement/requirement ID 唯一和裁决 ID 集合一致，不再对 statement、requirement、完整性证据或连贯性问题引用做逐字命中校验；随后分别计算相关性、重要性加权完整性和连贯性子分，再按 30%/50%/20% 汇总并从本指标证据生成原因。普通业务必答内容只进入完整性，不进入指令遵循。
+
+准确性不再读取旧 Config 的 `standardAnswer/rootCauses`。`dataset-case-match.ts` 复用评测中心口径，在当前用户的评测数据集中先做规范化 input 精确匹配，再以 LLM 语义匹配兜底，并且只接受带 `expectedOutput` 的 Case。关键观点优先读取 Case 按 `expectedOutput hash` 缓存的 `rootCauses`，缓存无效时实时提取；`result-accuracy-evaluator.ts` 不拆实际输出，而是让 Judge 对完整最终答案逐条返回 `correct/partially_correct/wrong/not_mentioned`，其中 `not_mentioned` 不进入准确率，关键观点之外的事实错误和编造内容以零分项进入分母。代码校验观点 ID、状态分数和必要字段，不再要求 `actualEvidence/expectedEvidence/additionalErrors.evidence` 逐字命中对应文本；随后按关键观点 weight 计算总分。
+
+每个指标使用自己的输入 hash 与 evaluator version 控制幂等，因此只重跑输入或版本发生变化的指标。准确性 hash 额外包含当前用户评测数据集范围快照；Case、预期输出或关键观点变化会使旧分数失效。回填读取 `evaluatorVersion` 和 evidence 中的 `datasetScopeHash`，可重新选择旧 N/A、失败、版本过期或 GT 已变化的 trace。有效准确性兼容写回 `Execution.answerScore/isAnswerCorrect/judgmentReason`。`GET /api/quality/report` 只批量读取已落库明细；`POST /api/quality/backfill` 为历史 trace 补齐或刷新结果指标。
+
 ## 后端流水线：Skill 生成与优化
 ```mermaid
 flowchart TD

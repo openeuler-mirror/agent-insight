@@ -67,7 +67,7 @@
 | Agent 管理 | `/agents` | `api/agents/**`、`api/auth/**` |
 | 运行观测 · 链路追踪 | `/trace`（+`/details`） | `api/observe/**`、`engine/observability` |
 | 运行观测 · 智能诊断 | `/fault` | `api/fault/**`、`api/debug/**`、`engine/agent-debug` |
-| 运行观测 · 质量监控 | `/quality` **（未上线，nav `pending`）** | — |
+| 运行观测 · 质量监控 | `/quality` | `/api/quality/{agents,report,executions,backfill}` |
 | 评测中心 · 评测数据集 | `/dataset` | `api/agent-datasets/**`、`engine/evaluation` |
 | 评测中心 · 评估器 | `/metrics` | `api/user-evaluators/**`、`engine/evaluation` |
 | 评测中心 · 评测执行 | `/eval` | `api/eval/**`、`api/evaluation/**`、`engine/evaluation` |
