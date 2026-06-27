@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { verifyScriptTruth, makeYearAssertion, makeNumericAssertion, runScriptsForSample, type ScriptAssertion } from '@/lib/engine/skill-opt/self-verify-structural';
+import { verifyScriptTruth, makeYearAssertion, makeNumericAssertion, makeAbsentAssertion, getByPath, runScriptsForSample, type ScriptAssertion } from '@/lib/engine/skill-opt/self-verify-structural';
 
 // 脚本真值门（①.5）单测——引擎是通用的（跑脚本、执行声明的任意断言）；年份是其中一条
 // 数据集驱动推导出的断言。覆盖：真值年份过/不过、log_year=None、回显假阳、非日期脚本跳过、
@@ -79,6 +79,35 @@ test('数值断言：算出值含期望→过 / 不含→失败 / 仅引号串�
 test('runScriptsForSample 返回脚本合并 stdout（给 reviewer 当样本）', { skip: SKIP }, () => {
   const out = runScriptsForSample({ 'scripts/a.py': py("    print('{\"first_event_time\": \"2005-06-14T00:00:00\"}')") }, LOG);
   assert.ok(out.includes('2005-06-14'));
+});
+
+// ── grafted from cluster-and-verify: JSON 路径精确性 + 负向断言 ──
+test('getByPath 点路径取值', () => {
+  const o = JSON.parse('{"file_info":{"first_event_time":"2005-06-14T00:00:00"},"arr":[{"n":7}]}');
+  assert.equal(getByPath(o, 'file_info.first_event_time'), '2005-06-14T00:00:00');
+  assert.equal(getByPath(o, 'arr.0.n'), 7);
+  assert.equal(getByPath(o, 'nope.x'), undefined);
+});
+
+test('makeYearAssertion path-preferred：路径取到精确判，取不到回退扫描', () => {
+  const a = makeYearAssertion('2005', 'file_info.log_year');
+  assert.equal(a.check('{"file_info":{"log_year":"2005"}}').pass, true);    // 路径取到且对
+  assert.equal(a.check('{"file_info":{"log_year":"2026"}}').pass, false);   // 路径取到但错
+  assert.equal(a.check('{"first_event_time":"2005-06-14T00:00:00"}').pass, true); // 路径取不到(改名)→回退扫描命中 ISO 2005
+  assert.equal(a.check('{"first_event_time":""}').pass, false);             // 取不到 + 扫描无年份(有日期字段)
+});
+
+test('makeNumericAssertion path-preferred', () => {
+  const a = makeNumericAssertion('命中', '1815', 'summary.matched');
+  assert.equal(a.check('{"summary":{"matched":1815}}').pass, true);
+  assert.equal(a.check('{"summary":{"matched":906}}').pass, false);
+  assert.equal(a.check('{"total":1815}').pass, true); // 路径取不到→回退扫描值位数字
+});
+
+test('makeAbsentAssertion：输出不得出现 pattern', () => {
+  const a = makeAbsentAssertion('错误年份2026', '\\b2026\\b');
+  assert.equal(a.check('year 2005 ok').pass, true);
+  assert.equal(a.check('year 2026 wrong').pass, false);
 });
 
 test('空断言 → 整体跳过（诚实 no-op）', () => {

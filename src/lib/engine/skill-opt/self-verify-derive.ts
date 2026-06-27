@@ -15,7 +15,7 @@ import { getProxyConfig } from '@/lib/ingest/proxy-config';
 import type { DatasetCase } from '@/server/agent_datasets_storage';
 import { makeYearAssertion, makeNumericAssertion, type ScriptAssertion } from './self-verify-structural';
 
-export interface FactSpec { description?: string; kind?: string; expectedValue?: string | number }
+export interface FactSpec { description?: string; kind?: string; expectedValue?: string | number; jsonPath?: string }
 
 const PROMPT = `你在为一个 skill 的【脚本质量门】挑选**要用确定性断言看护**的数据点。下面是该 skill 评测数据集里
 多个用例的**标准答案**。请挑出应被看护的数据点——只挑**同时满足**：
@@ -61,46 +61,63 @@ export async function extractGuardableFacts(cases: DatasetCase[], user: string):
 }
 
 const REVIEW_PROMPT = `你在审核「skill 脚本质量门」的候选断言，删掉**不该用确定性断言看护**的。
-判据 = 「这是不是一个**全日志的全局不变量、且脚本本就该算的量**」：
-- **保留**：全日志全局量（总行数、全日志命中数、某类事件全日志总数、日志年份、某全局 Top 项等）
+判据 = 「这是不是一个**全日志的全局不变量、且脚本本就该算的量**」。**最关键的判断方法：看每条事实的「来源用例问的是什么」**：
+- **保留**：来源用例问的是**全日志/整体**的量（总行数、全日志命中数、某类事件全日志总数、日志年份、某全局 Top 项等）
   ——**哪怕脚本当前算错/没算，那正是要抓的 bug，必须留**。
-- **删除**：某个用例问题的**子范围/条件子集**的数（不是全日志全局）；或口径跟脚本全局字段对不上的错配
-  （把某用例的子量当成脚本的全局总数）。
-⚠️ 判断依据是「按 scope 是不是全局不变量」，**不是**「当前脚本输出里有没有这个值」——脚本可能漏算本该算的
-全局量，那种要保留。真·拿不准就删（宁可漏看护，不可误拦）。
+- **删除**：来源用例问的是**某时间窗 / 某子集 / 某条记录 / 某条件下**的量 → 这是 per-case 子范围，**即使描述里写「总数」也只是那个子集的总数**（典型：「高危认证失败总数=200」若来自只问某时间段的用例 → 删）。
+⚠️ 不要用「当前脚本输出里有没有这个值」当依据——脚本可能漏算本该算的全局量（那种要保留）。判 scope 只看**来源用例的问题**。
+真·拿不准就删（宁可漏看护，不可误拦）。
 
-## 候选事实（带编号）
+## 候选事实（每条带：期望值、在几条用例出现、来源用例的问题）
 %FACTS%
-## 用例问题（看每条数据的 scope 是全局还是某道题的子范围）
-%INPUTS%
-## 脚本对真实输入的实际输出样本（看脚本算了哪些全局字段）
+## 脚本对真实输入的实际输出样本（仅供参考「脚本算了哪些字段」，**不作为保留/删除依据**）
 %SAMPLE%
 
-只输出 JSON：{"keep":[要保留的编号, ...]}`;
+另外（可选，提升精度）：对每条**保留**的事实，若它的值在【脚本实际输出样本】里对应一个清晰的 JSON 字段，
+给它的点路径（如 file_info.first_event_time）——门会优先精确查该字段；取不到/不确定**就别给**（会自动回退扫描）。
 
-/** 独立 reviewer（第二次 LLM 调用，逆向高精度）：删掉 per-case 子范围/口径错配的假阳（如「200」）。 */
+只输出 JSON：{"keep":[要保留的编号, ...], "paths":{"<编号>":"<点路径>"}}`;
+
+const REVIEW_K = Number(process.env.SKILL_OPT_REVIEW_K) || 3; // reviewer 跑几遍取交集（治非确定性）
+
+/** 独立 reviewer（多遍 LLM 取交集，逆向高精度）：删掉 per-case 子范围/口径错配的假阳（如「200」）。 */
 async function reviewFacts(facts: FactSpec[], scriptSample: string, cases: DatasetCase[], user: string): Promise<FactSpec[]> {
   if (!facts.length) return [];
   const config = await getActiveConfig(user);
   if (!config?.apiKey) return facts;
-  const factsText = facts.map((f, i) => `${i}. [${f.kind}] ${f.description ?? ''}（期望 ${f.expectedValue}）`).join('\n');
-  const inputs = cases.map((c, i) => `【用例${i + 1}】${(c.input || '').slice(0, 200)}`).join('\n').slice(0, 3000);
-  const prompt = REVIEW_PROMPT.replace('%FACTS%', factsText).replace('%INPUTS%', inputs).replace('%SAMPLE%', scriptSample.slice(0, 4000));
-  try {
-    const r = await newClient(config).chat.completions.create({
-      model: config.model || 'deepseek-chat', temperature: 0,
-      response_format: { type: 'json_object' },
-      messages: [{ role: 'user', content: prompt }],
-    });
-    const j = parseLoose(r.choices?.[0]?.message?.content || '') as { keep?: number[] };
-    if (!Array.isArray(j.keep)) return [];
-    const keep = new Set(j.keep.map(Number));
-    return facts.filter((_, i) => keep.has(i));
-  } catch (e) {
-    // reviewer 失败 → 不带未审的断言进门（避免假阳让主动修追幽灵）；脚本真值门本轮 no-op。
-    console.warn('[self-verify] reviewer failed → drop script-truth assertions this round:', (e as Error)?.message);
-    return [];
+  // 给每条事实**溯源**：它的值来自哪条用例的标准答案 + 那条用例问的是什么 + 在几条用例出现。
+  // 这是判 scope 的关键信号——「总数=200」听着全局，但若来源用例问的是某时间窗/子集，它就是 per-case 子范围。
+  const factsText = facts.map((f, i) => {
+    const val = String(f.expectedValue ?? '');
+    const src = cases.find((c) => (c.expectedOutput || '').includes(val));
+    const nHits = val ? cases.filter((c) => (c.expectedOutput || '').includes(val)).length : 0;
+    return `${i}. [${f.kind}] ${f.description ?? ''}（期望 ${val}；在 ${nHits}/${cases.length} 条用例出现；来源用例问的是：${(src?.input || '').replace(/\s+/g, ' ').slice(0, 160)}）`;
+  }).join('\n');
+  const prompt = REVIEW_PROMPT.replace('%FACTS%', factsText).replace('%SAMPLE%', scriptSample.slice(0, 4000));
+  // 跑 k 遍取**交集**治判官非确定性（单次 deepseek temp0 实测会忽删忽留「200」这类边界假阳）。
+  // drop-biased：只有**每一轮都保留**才保留（任一轮删→删）——偏精度、与「主动修」配套：
+  // 漏看护一个遗留 bug 只是少道门(下次以它为目标会被抓)，留一个假阳却会让主动修去追永远修不掉的幽灵。
+  const votes: Set<number>[] = [];
+  const pathVotes: Record<string, string> = {};
+  for (let round = 0; round < REVIEW_K; round++) {
+    try {
+      const r = await newClient(config).chat.completions.create({
+        model: config.model || 'deepseek-chat', temperature: 0,
+        response_format: { type: 'json_object' },
+        messages: [{ role: 'user', content: prompt }],
+      });
+      const j = parseLoose(r.choices?.[0]?.message?.content || '') as { keep?: number[]; paths?: Record<string, string> };
+      if (!Array.isArray(j.keep)) continue;
+      votes.push(new Set(j.keep.map(Number)));
+      for (const [k, v] of Object.entries(j.paths ?? {})) if (v && !pathVotes[k]) pathVotes[k] = v;
+    } catch (e) {
+      console.warn('[self-verify] reviewer round failed (skip):', (e as Error)?.message);
+    }
   }
+  if (!votes.length) return []; // 全失败 → 不带未审断言进门（脚本真值门本轮 no-op）
+  return facts
+    .map((f, i): FactSpec | null => (votes.every((s) => s.has(i)) ? { ...f, jsonPath: pathVotes[String(i)] } : null))
+    .filter((x): x is FactSpec => x != null);
 }
 
 /** 护栏：期望值必须在数据集标准答案里逐字出现（防 LLM 幻觉出一个不存在的真值）。 */
@@ -113,8 +130,8 @@ function appearsInDataset(value: string, cases: DatasetCase[]): boolean {
 function specToAssertion(spec: FactSpec): ScriptAssertion | null {
   const v = String(spec.expectedValue ?? '').trim();
   if (!v) return null;
-  if (spec.kind === 'year' && /^\d{4}$/.test(v)) return makeYearAssertion(v);
-  if ((spec.kind === 'count' || spec.kind === 'number') && /^\d+(?:\.\d+)?$/.test(v)) return makeNumericAssertion((spec.description || 'count').slice(0, 24), v);
+  if (spec.kind === 'year' && /^\d{4}$/.test(v)) return makeYearAssertion(v, spec.jsonPath);
+  if ((spec.kind === 'count' || spec.kind === 'number') && /^\d+(?:\.\d+)?$/.test(v)) return makeNumericAssertion((spec.description || 'count').slice(0, 24), v, spec.jsonPath);
   return null;
 }
 

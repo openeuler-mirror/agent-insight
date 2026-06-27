@@ -143,18 +143,49 @@ const YEAR_FIELD = /"[^"]*year[^"]*"\s*:\s*"?((?:19|20)\d{2})\b/gi;
 // 避免 MONTH_MAP/parse_ts 这种 skill 专属符号名的过拟合。
 const DATE_FIELD = /"[^"]*(?:year|time|date|timestamp)[^"]*"\s*:/i;
 
+/** 点路径取值：`a.b.0.c`（graft 自 cluster-and-verify/self-verify-gate.ts，任一段缺失返回 undefined）。 */
+export function getByPath(obj: unknown, dotted: string): unknown {
+  let cur: unknown = obj;
+  for (const seg of dotted.split('.')) {
+    if (cur == null || typeof cur !== 'object') return undefined;
+    cur = (cur as Record<string, unknown>)[seg];
+  }
+  return cur;
+}
+
+/** 解释器是否可用（按进程缓存）；用于 fail-open：校验器运行时缺失不该拦截交付（graft 自 self-verify-gate.ts）。 */
+const _interpAvail = new Map<string, boolean>();
+export function interpreterAvailable(interp: string): boolean {
+  const c = _interpAvail.get(interp);
+  if (c !== undefined) return c;
+  let ok = false;
+  try { execFileSync(interp, ['--version'], { stdio: 'pipe' }); ok = true; }
+  catch (e) { ok = (e as { code?: string }).code !== 'ENOENT'; }
+  _interpAvail.set(interp, ok);
+  return ok;
+}
+
 /**
- * 年份断言工厂（数据集驱动推导出来的断言之一，**不是**引擎写死的）。skip/fail 由输出结构决定：
- *   · 输出里压根没日期字段 → skip（这脚本不负责日期，交行为门）
- *   · 有日期字段但没算出年份(None/空) → FAIL（试图算却算挂了，如 e2e log_year=None）
- *   · 算出的年份不含真值 → FAIL（如 run C 全 2026）
- *   · 算出含真值 → pass
+ * 年份断言工厂（数据集驱动推导出来的断言之一，**不是**引擎写死的）。
+ * **path-preferred + scan-fallback**（融合 cluster-and-verify 的 JSON 路径精确性 + 本分支的抗改名扫描）：
+ *   · 若给了可解析的 jsonPath 且能取到值 → 精确查该字段（无回显假阳，最准）；
+ *   · 取不到（脚本改了字段名 / 输出非 JSON）→ 回退 schema-agnostic 扫描（抗字段改名）。
+ * skip/fail（扫描路径）由输出结构决定：无日期字段→skip；有字段但 None/空→FAIL；算出非真值→FAIL；含真值→pass。
  */
-export function makeYearAssertion(groundTruthYear: string): ScriptAssertion {
+export function makeYearAssertion(groundTruthYear: string, jsonPath?: string): ScriptAssertion {
   return {
     id: `year=${groundTruthYear}`,
     describe: `脚本算出的年份须含真值 ${groundTruthYear}`,
     check(stdout) {
+      if (jsonPath) {
+        try {
+          const got = getByPath(JSON.parse(stdout), jsonPath);
+          if (got != null) {
+            const s = String(got); const pass = s.startsWith(groundTruthYear);
+            return { pass, detail: pass ? `${jsonPath}="${s}" 以 ${groundTruthYear} 开头` : `${jsonPath}="${s}" 非 ${groundTruthYear}（很可能硬编码/回落当前年）` };
+          }
+        } catch { /* 非 JSON / 路径失配 → 落到扫描 */ }
+      }
       const computed = new Set<string>();
       for (const m of stdout.matchAll(ISO_YEAR)) computed.add(m[1]);
       for (const m of stdout.matchAll(YEAR_FIELD)) computed.add(m[1]);
@@ -169,20 +200,38 @@ export function makeYearAssertion(groundTruthYear: string): ScriptAssertion {
 }
 
 /**
- * 数值断言工厂（计数/总数/时长等）。只认脚本**算出的**数值——JSON 值位 `"字段": 1815` 的数字，
- * **不**认引号串里回显的（同年份那条防回显的道理）。schema-agnostic：不绑字段名（优化器会改名）。
+ * 数值断言工厂（计数/总数/时长等）。同样 **path-preferred + scan-fallback**：有 jsonPath 取得到 → 精确比对；
+ * 否则只认脚本**算出的**数值（JSON 值位 `"字段": 1815`，不认引号串里回显的）。schema-agnostic 抗字段改名。
  */
-export function makeNumericAssertion(label: string, expected: string): ScriptAssertion {
+export function makeNumericAssertion(label: string, expected: string, jsonPath?: string): ScriptAssertion {
   const want = Number(expected);
   return {
     id: `num:${label}=${expected}`,
     describe: `脚本算出的「${label}」须含 ${expected}`,
     check(stdout) {
+      if (jsonPath) {
+        try {
+          const got = getByPath(JSON.parse(stdout), jsonPath);
+          if (got != null) { const pass = Number(got) === want; return { pass, detail: pass ? `${jsonPath}=${got}` : `${jsonPath}=${JSON.stringify(got)} ≠ ${expected}` }; }
+        } catch { /* 落到扫描 */ }
+      }
       const nums = new Set<number>();
       for (const m of stdout.matchAll(/:\s*(-?\d+(?:\.\d+)?)\b/g)) nums.add(Number(m[1])); // 仅「字段: 数值」值位，排除引号串里回显的
       if (nums.size === 0) return { pass: true, skipped: true, detail: `输出无数值字段 → 跳过「${label}」` };
       if (!nums.has(want)) return { pass: false, detail: `脚本算出的数值不含「${label}」期望 ${expected}` };
       return { pass: true, detail: `脚本算出的数值含「${label}」=${expected}` };
+    },
+  };
+}
+
+/** 负向断言（graft 自 self-verify-gate.ts 的 stdoutNotMatches）：输出**不得**命中 pattern（如不得出现编造 IP / 错误年份）。 */
+export function makeAbsentAssertion(label: string, pattern: string): ScriptAssertion {
+  return {
+    id: `absent:${label}`,
+    describe: `输出不得出现「${label}」`,
+    check(stdout) {
+      const hit = new RegExp(pattern).test(stdout);
+      return { pass: !hit, detail: hit ? `输出不应出现「${label}」却命中 /${pattern}/` : `未出现「${label}」（符合）` };
     },
   };
 }
@@ -205,6 +254,10 @@ export function verifyScriptTruth(
   }
   if (!fs.existsSync(opts.logPath)) {
     checks.push({ name: 'script-truth', pass: true, skipped: true, detail: `示例输入不存在(${opts.logPath}) → 跳过` });
+    return { ok: true, checks, failures: [], ran };
+  }
+  if (!interpreterAvailable('python3')) { // fail-open：校验器运行时缺失不拦截交付
+    checks.push({ name: 'script-truth', pass: true, skipped: true, detail: '跳过：python3 不可用（fail-open）' });
     return { ok: true, checks, failures: [], ran };
   }
 
@@ -255,7 +308,7 @@ export function verifyScriptTruth(
 
 /** 跑候选里所有可运行 python 脚本，返回合并 stdout（给断言 reviewer 当「脚本算了哪些全局字段」的样本）。 */
 export function runScriptsForSample(files: Record<string, string>, logPath: string, cap = 6000): string {
-  if (!fs.existsSync(logPath)) return '';
+  if (!fs.existsSync(logPath) || !interpreterAvailable('python3')) return '';
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'skillopt-sample-'));
   let out = '';
   try {
