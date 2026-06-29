@@ -2031,8 +2031,37 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
                 if (Array.isArray(existingInteractions) && existingInteractions.length > 0) {
                     mergedInteractionsForSession = mergeSessionInteractionsMonotonic(existingInteractions, incomingInteractions);
                 }
+            } else {
+                // snapshot-replace 防退化护栏（目前仅 jiuwen 走这条）：每批都重新聚合「全量 span」后整条
+                // 覆盖，正常情况下 incoming 是越来越全的快照。但若上游 span spool 在极端下仍残缺（历史
+                // span 永久丢失等），一个偏小的快照会把库里更完整的记录盖没——这正是 jiuwen 之前丢数据
+                // 的最后一刀。这里比较 interaction 数：incoming 严格更小则判为退化快照，保留库里现有记录、
+                // 不覆盖。设 AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK=true 可在确有「正当缩小」场景时放行。
+                const allowShrink = process.env.AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK === 'true';
+                if (!allowShrink) {
+                    const existingSession = await db.findSessionByTaskId(targetRecord.task_id);
+                    let existingInteractions = existingSession?.interactions
+                        ? (() => { try { return JSON.parse(existingSession.interactions as string); } catch { return []; } })()
+                        : [];
+                    existingInteractions = normalizeForStorage(existingInteractions);
+                    const existingCount = Array.isArray(existingInteractions) ? existingInteractions.length : 0;
+                    const incomingCount = Array.isArray(incomingInteractions) ? incomingInteractions.length : 0;
+                    if (existingCount > 0 && incomingCount < existingCount) {
+                        console.warn(
+                            `[Data-Service] snapshot-replace 退化护栏：拒绝用更小快照覆盖 task ${targetRecord.task_id}` +
+                            `（incoming ${incomingCount} < existing ${existingCount} interactions），保留现有记录。` +
+                            `设 AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK=true 可放行。`,
+                        );
+                        return { success: true, record: targetRecord };
+                    }
+                }
             }
-        } catch {}
+        } catch (e) {
+            // 护栏/合并的 DB 读取失败时 fail-open：按原逻辑继续落库，不因检查本身报错而阻断写入。
+            if (e && typeof e === 'object' && 'task_id' in (targetRecord as any)) {
+                console.warn('[Data-Service] snapshot-replace 退化检查异常，按原逻辑继续：', (e as Error)?.message || e);
+            }
+        }
 
         mergedInteractionsForSession = normalizeForStorage(mergedInteractionsForSession);
         targetRecord.interactions = mergedInteractionsForSession;
