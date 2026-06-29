@@ -1171,8 +1171,8 @@ export default function TrajectoryEvalCenter() {
                                             />
                                         </th>
                                         <th style={thStyle(170, 'left')}>TRACE ID</th>
-                                        <th style={thStyle(undefined, 'left')}>Trace 实际输入</th>
-                                        <th style={thStyle(undefined, 'left')}>Trace 实际输出</th>
+                                        <th style={thStyle(undefined, 'left')}>Trace 任务输入</th>
+                                        <th style={thStyle(undefined, 'left')}>Trace 任务输出</th>
                                         <th style={thStyle(80, 'center')}>评测状态</th>
                                         <th style={thStyle(76, 'right')}>得分</th>
                                         <th style={thStyle(80, 'left')}>评测器</th>
