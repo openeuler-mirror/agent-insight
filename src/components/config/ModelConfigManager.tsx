@@ -621,7 +621,7 @@ function ModelCard({
                 <div style={metaRow}>
                     <span style={metaItem}>
                         <span style={metaLabel}>Provider</span>
-                        <span style={metaValue}>{meta.label}</span>
+                        <span style={{ ...metaValue, fontFamily: 'var(--font-mono)', fontSize: 12 }}>{meta.label}</span>
                     </span>
                     <span style={metaSep} />
                     <span style={metaItem}>
