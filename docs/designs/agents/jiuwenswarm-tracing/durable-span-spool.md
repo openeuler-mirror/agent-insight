@@ -276,5 +276,81 @@ exporter ──► /api/ingest/otel/v1/traces
 | span 展平 / JiuwenSpan 形状 | [`aggregate.ts:19-62`](../../../../src/lib/ingest/otel/jiuwen/aggregate.ts) |
 | snapshot-replace 落库（要加护栏） | [`data-service.ts:2023-2034`](../../../../src/lib/storage/data-service.ts) |
 | jiuwen 用 snapshot-replace 的原因 | [`adapters/jiuwen.ts:12-26`](../../../../src/lib/ingest/adapters/jiuwen.ts) |
-</content>
-</invoke>
+
+---
+
+## 附二：业界对照 —— Langfuse 怎么做（prior art）
+
+> 2026-06-27 补：把 Langfuse（开源 LLM 观测平台）的摄取链路拉下来读了一遍（`~/code/github/langfuse`，commit `fb58dcc`），做对照。结论：**我们方案 A 的方向与 Langfuse 的核心原则一字不差——「返回 ack 前先把原始数据写进持久层，下游一切处理都可从这份持久副本重放」**。规模不同（它 SaaS 重型基建，我们 local-first 单进程），原理同构。
+
+### Langfuse 的数据流
+
+基础设施四件套：**S3/MinIO（blob）+ Redis BullMQ（队列）+ ClickHouse（列存）+ Postgres（元数据）**。
+
+```
+client POST ──► /api/public/ingestion
+                  │  ① 原始 event 写进 S3（阻塞！S3 失败就抛错，不返回 200）
+                  │  ② 入 Redis BullMQ 队列（6 次重试，保留 10w 条失败 job）
+                  ▼  返回 200
+        worker 消费 job ──► 从 S3 下载原始 event ──► 合并
+                  │
+          ClickhouseWriter：按表在内存攒批（size 满 OR interval 到点 flush）
+                  ▼  写成功 job 才算完成
+              批量写入 ClickHouse
+```
+
+证据（langfuse 仓库）：
+- 原始 event 在返回 200 *之前*阻塞写 S3，失败即抛错：`packages/shared/src/server/ingestion/processEventBatch.ts:274-328`（`uploadJson` + `if (s3UploadErrored) throw`）。
+- 队列是 Redis BullMQ（durable，6 重试，留 10w 失败 job）：`packages/shared/src/server/redis/ingestionQueue.ts`。
+- ClickhouseWriter 内存攒批 + size/interval 双触发 flush + 优雅关闭 drain：`worker/src/services/ClickhouseWriter/index.ts:82-111`。
+- 从 S3 blob 重放恢复：`worker/src/scripts/replayIngestionEvents/`。
+
+### 内存 vs 落盘？
+
+**先落久再处理**。原始 event 返回 200 前就写进 S3；队列在 Redis（抗重启）。**唯一的内存环节是 ClickhouseWriter 的写批 buffer**——但它有 S3+Redis 兜底：worker 崩了，Redis job 不算完成 → 重试 → 从 S3 重下 → 重写，所以那个内存窗口**丢了也能重放回来**，不是永久丢失。
+
+### 定期清理？有，多层
+
+| 清理器（langfuse） | 清什么 | 触发 | 依据 |
+|---|---|---|---|
+| `batch-data-retention-cleaner` | ClickHouse traces/observations/scores | 定时 interval | 每项目 `retentionDays`（Postgres），`DELETE WHERE timestamp < cutoff` |
+| `media-retention-cleaner` | S3 媒体文件 + 摄取 blob | 定时 interval | 同 `retentionDays` |
+| ClickHouse **TTL** | 7天/30天聚合表 | DB 引擎自动 | `TTL toDate(start_time)+INTERVAL N DAY`（仅聚合表，主表靠批删） |
+| `batch-project-blob-cleaner` | 项目删除后残留 blob | 定时 | 兜底被 OOM/超时打断的删除 |
+
+### 与本方案对比
+
+| 维度 | Langfuse | 我们 jiuwen 现状 | 本方案（A + 护栏） |
+|---|---|---|---|
+| 原始数据落久 | S3，返回 200 前阻塞写 | ❌ 仅内存 Map | ✅ 本地 JSONL，处理前写 |
+| 传输/缓冲 | Redis BullMQ（durable，6 重试） | 进程内直处理 | 磁盘 spool 本身即缓冲 |
+| 聚合内存 buffer | ClickhouseWriter 攒批 | **Map 本身即 buffer，且无界** | 从磁盘按组读回，不跨请求常驻 |
+| 内存丢失窗口 | 极小，**可从 S3 重放** | **全部（整条 trace）** | 极小，**可从 JSONL 重放** |
+| 崩溃恢复 | job 重试 → 重下 S3 → 重写 | ❌ 不可能 | 重读 JSONL spool 再聚合 |
+| 定期清理 | 4 层（批删 + 媒体 + TTL + 兜底） | ❌ 无 | spool 按 mtime 过期清理 |
+| 覆盖安全 | append-only，按 eventBodyId 幂等，从不整条覆盖 | **snapshot-replace 整条覆盖** | + 单调护栏（只许涨不许缩） |
+
+**三条对我们最有价值的判断**：
+
+1. **方向被验证**：两边骨架一致——「ack 前落久 + 下游可重放」。Langfuse 用 S3，我们用本地 JSONL spool。
+2. **「有内存 buffer」不是罪**：Langfuse 的 ClickhouseWriter 也在内存攒批。教训是「**缓冲必须有持久上游副本兜底，崩了能重放**」。jiuwen 的病根是那个 Map 是**唯一**副本，无上游可重放。
+3. **清理我们已有半套**：Langfuse 按 `retentionDays` 定时批删 + TTL；我们的 `compactProcessedSpoolFiles`/`RETENTION_DAYS` 是同类机制。但注意：Langfuse 清的是最终数据，我们的 retention 只清 **spool 文件**——**DB 记录本身没有保留期策略**（超出本次范围，单独记一笔）。
+
+**规模提醒**：不照搬 S3/ClickHouse/Redis（那是 SaaS 多租户级重型基建），而是**原则照搬、实现降级**：本地 JSONL + 进程内再聚合，实现同一套「durable-before-ack + replay + retention」。
+
+---
+
+## 附三：本分支实现状态（2026-06-27）
+
+本分支落地了方案 A 的**核心**（消除数据丢失）+ 横切护栏，但对 §4.1 的「后台消费者 + 双 debounce」做了**降级简化**，原因见下。
+
+**已实现**
+- **持久化 span spool**（§4.2）：新增 [`jiuwen/spool.ts`](../../../../src/lib/ingest/otel/jiuwen/spool.ts)。每个 span 作为一行 JSONL 落到 `otel_data/jiuwen/buckets/<traceKey>.jsonl`；另有一份轻量 `session-index.jsonl`（每 `(traceKey, session, marker)` 一行）记录跨 trace 缝合所需的 session→buckets 关系。spanId 去重在读回时做。
+- **从磁盘读回再聚合**（§4.3）：[`ingest.ts`](../../../../src/lib/ingest/otel/jiuwen/ingest.ts) 退役内存 Map，改为 append→从 index 解析分组→**只读回受影响组的 bucket 文件**→复用 `aggregateJiuwenOtlpFromSpans`→`snapshot-replace` 落库。缝合判定 / 孤儿清理逻辑原样平移。重启后磁盘 spool 仍在，下一批（或手动重放）即可重聚合出完整 trace。
+- **内存有界**（G2）：再聚合只加载「当前组」的 span（一条 trace 或一个 team session），用完即释放，不再跨请求常驻全量——根除「无界 Map → OOM 重启」这个触发器。
+- **snapshot-replace 防退化护栏**（§4.4）：[`data-service.ts`](../../../../src/lib/storage/data-service.ts) 在 snapshot-replace 分支比较 incoming 与库里现有记录的 interaction 数，**更小则拒绝覆盖**并打 warn；可用 `AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK=true` 放行。
+- **spool 过期清理**：`pruneJiuwenSpool()` 按文件 mtime 删除超 `AGENT_INSIGHT_JIUWEN_SPOOL_RETENTION_DAYS`（默认 7 天）的 bucket，并同步重写 index；ingest 时按节流（每进程最多每 30 分钟一次）触发。
+
+**降级 / 暂缓（后续）**
+- **未接 otel-consumer 后台 loop**：再聚合仍在请求内**同步**触发（沿用 jiuwen 现状的「每批重聚合」节奏），未引入双 debounce / 评估调度。原因见 §4.2：consumer 按 `event.sessionId` 分组，与 jiuwen「traceId 分桶 + 按 session 条件缝合」的模型阻抗较大，强行套入风险高。当前实现已消除数据丢失，consumer 集成（含 debounce、评估调度、与 claude-otel 共用 retention）列为下一步。
+- **同步再聚合的代价**：超大单 trace 仍是「每批重读该组 bucket」，IO 偏 O(n²)；以「慢」换「不丢/不 OOM」，可接受；debounce 化即根治。
