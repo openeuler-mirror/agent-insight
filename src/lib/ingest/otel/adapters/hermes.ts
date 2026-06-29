@@ -209,6 +209,39 @@ function latestUserMessageFromJson(value: string | undefined): string | undefine
   return undefined;
 }
 
+/** Concatenated text of every `role=system` message in a request payload.
+ *  The Hermes plugin ships the full request_messages array on the api span's
+ *  `input.value` / `llm.input_messages`; the system prompt(s) live there. Returns
+ *  undefined when the value isn't a messages array or carries no system turn. */
+function systemMessagesFromJson(value: string | undefined): string | undefined {
+  const parsed = typeof value === 'string' ? parseMaybeJson(value) : undefined;
+  const messages = Array.isArray(parsed)
+    ? parsed
+    : Array.isArray(parsed?.messages)
+      ? parsed.messages
+      : undefined;
+  if (!messages) return undefined;
+  const texts: string[] = [];
+  for (const msg of messages) {
+    if (String(msg?.role || '').toLowerCase() !== 'system') continue;
+    const text = stringifyMessageContent(msg.content);
+    if (text.trim()) texts.push(text);
+  }
+  return texts.length > 0 ? texts.join('\n\n') : undefined;
+}
+
+/** First system prompt recoverable from a set of events (api spans carry the full
+ *  request_messages; the llm container / agent span are fallbacks). */
+function systemTextFromEvents(events: (OtelTraceEvent | undefined)[]): string | undefined {
+  for (const event of events) {
+    if (!event) continue;
+    const raw = firstContent(event.attributes?.['llm.input_messages'], event.attributes?.['input.value']);
+    const sys = systemMessagesFromJson(raw);
+    if (sys) return sys;
+  }
+  return undefined;
+}
+
 function assistantTextFromJson(value: string | undefined): string | undefined {
   const parsed = typeof value === 'string' ? parseMaybeJson(value) : undefined;
   if (!parsed || typeof parsed !== 'object') return undefined;
@@ -371,6 +404,29 @@ function makeUserInteraction(args: {
   };
 }
 
+function makeSystemInteraction(args: {
+  content: string;
+  event: OtelTraceEvent;
+  framework: string;
+  owner: EventOwner;
+}): AnyObj {
+  const created = args.event.startTimeMs || Date.parse(args.event.receivedAt) || Date.now();
+  return {
+    role: 'system',
+    agent: args.owner.name || args.framework,
+    ...(args.owner.isSubagent ? { subagent_session_id: args.owner.sessionId } : {}),
+    content: args.content,
+    system_prompt_length: args.content.length,
+    timestamp: toIso(created),
+    timeInfo: {
+      created: toIso(created),
+      completed: toIso(created),
+    },
+    traceId: args.event.traceId,
+    spanId: `${args.event.spanId || 'llm'}:system`,
+  };
+}
+
 function makeToolInteraction(args: {
   llm: OtelTraceEvent;
   tool: OtelTraceEvent;
@@ -463,6 +519,7 @@ export function aggregateHermesTraceEvents(sessionId: string, events: OtelTraceE
   const interactions: AnyObj[] = [];
   const models = ordered.map(eventModel).filter(Boolean) as string[];
   const model = models[0] || 'unknown';
+  const emittedSystemBySession = new Set<string>();
 
   for (const llm of contentHosts) {
     const owner = eventOwner(llm, sessionId, framework);
@@ -486,6 +543,17 @@ export function aggregateHermesTraceEvents(sessionId: string, events: OtelTraceE
     );
     const userInput = inputText(llm) || inputText(ownerAgent);
     const assistantOutput = outputText(finalApi) || outputText(llm) || outputText(ownerAgent);
+
+    // System prompt lives on the api span's full request_messages; emit it once per
+    // owner session (root or each subagent) before that session's first user turn.
+    const systemInput = systemTextFromEvents([finalApi, ...apiEvents, llm, ownerAgent]);
+    if (systemInput) {
+      const dedupKey = `${owner.sessionId}::${systemInput}`;
+      if (!emittedSystemBySession.has(dedupKey)) {
+        emittedSystemBySession.add(dedupKey);
+        interactions.push(makeSystemInteraction({ content: systemInput, event: llm, framework, owner }));
+      }
+    }
 
     if (userInput) {
       const previousUser = [...interactions].reverse().find((interaction) => interaction.role === 'user');

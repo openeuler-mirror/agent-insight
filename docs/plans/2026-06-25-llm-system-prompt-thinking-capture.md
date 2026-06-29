@@ -4,6 +4,11 @@
 > 结论先行：**四个框架的 trace 里，只有 OpenCode 能完整看到每次 LLM 调用的系统提示词与思考过程；其余三个都看不到，但"看不到"的根因各不相同。**
 > 本文给出统一的下游契约、四框架现状对照，以及按成本排序的补齐方案，供后续开发分批落地。
 
+> **实施进展（2026-06-25，分支 `feat/llm-system-prompt-capture`）**
+> ✅ **「已采到未解析」全部补齐**：Claude Code / Hermes / JiuwenSwarm 三者的「系统提示词」+ Claude Code 的「思考过程」——这些原始数据本就采到，改的全是解析侧（adapter），各加了专项测试（全量通过，无回归）。
+> ⏸️ **真·缺数据的思考过程暂不做**：Hermes（上游插件未采）与 Jiuwen（需确认 agent-core 的 `llm.reasoning` span）的 thinking 依赖上游导出，留待后续，详见第 4 节阶段二/三。
+> 改动文件：[`claude-otel/aggregator.ts`](../../src/lib/ingest/claude-otel/aggregator.ts)（系统提示词 + thinking）、[`otel/adapters/hermes.ts`](../../src/lib/ingest/otel/adapters/hermes.ts)、[`otel/jiuwen/aggregate.ts`](../../src/lib/ingest/otel/jiuwen/aggregate.ts)。
+
 ---
 
 ## 1. 背景
@@ -96,19 +101,24 @@ adapter 需要在 assistant 交互上挂一个 `parts` 数组，其中含 `type:
 
 ## 4. 补齐方案（按成本排序）
 
-### 阶段一（P0）：系统提示词 —— 纯 adapter 改动，数据已在 span 里
+### 阶段一（P0）：系统提示词 —— 纯 adapter 改动，数据已在 span 里　✅ 已实现
 
-> 零上游依赖，两个框架当天可上。
+> 零上游依赖；三个框架已在 `feat/llm-system-prompt-capture` 分支落地。下游契约见第 2 节：adapter 产出 `role:'system'` 交互即可。
 
-**Hermes**（改 [`src/lib/ingest/otel/adapters/hermes.ts`](../../src/lib/ingest/otel/adapters/hermes.ts)）：
-1. 仿 `latestUserMessageFromJson` 加 `systemMessagesFromJson(input.value)`，取出 `role=system` 的消息文本。
-2. 仿 `makeUserInteraction`（[`:353`](../../src/lib/ingest/otel/adapters/hermes.ts#L353)）加 `makeSystemInteraction`（`role:'system'`，可顺手算 sha256 填 `system_prompt_sha256` 助去重）。
-3. 在 `aggregateHermesTraceEvents` 的 `contentHosts` 循环里、push user 之前（[`:490`](../../src/lib/ingest/otel/adapters/hermes.ts#L490)）按 owner/session 各 push 一次 system 交互。
+**Claude Code**（[`src/lib/ingest/claude-otel/aggregator.ts`](../../src/lib/ingest/claude-otel/aggregator.ts)）：
+1. 新增 `stringifyAnthropicSystem(body.system)`，兼容 string 与 `{type:'text'}` 块数组两种形态。
+2. 处理 `api_request_body` 时按 `promptKey` 收集系统提示词到 `systemByPromptKey`。
+3. `appendAssistantFromApiResponse` 据 `promptKey` 取回系统提示词，按 scope（root / 每个 Agent 子会话）去重，emit `role:'system'` 交互（子代理带 `subagent_session_id`）。
 
-**JiuwenSwarm**（改 [`src/lib/ingest/otel/jiuwen/aggregate.ts`](../../src/lib/ingest/otel/jiuwen/aggregate.ts)）：
-1. 加 `systemPromptContent(attrs)`：遍历 `gen_ai.prompt.{n}`，取 `role=system` 的 content。
-2. 在 `transformSingle/Team/Task` 构造 `interactions` 头部（如 [`:248`](../../src/lib/ingest/otel/jiuwen/aggregate.ts#L248)、[`:341`](../../src/lib/ingest/otel/jiuwen/aggregate.ts#L341)、[`:396`](../../src/lib/ingest/otel/jiuwen/aggregate.ts#L396) 的 `[{role:'user', content:query}]`）插入一条 `{role:'system', content}`。
-3. system 在每个 `llm.call` 上重复，靠 agent-trace 的 text/sha 去重即可；先做 root agent，team/task 的 per-agent system 后续再细化。
+**Hermes**（[`src/lib/ingest/otel/adapters/hermes.ts`](../../src/lib/ingest/otel/adapters/hermes.ts)）：
+1. 新增 `systemMessagesFromJson` + `systemTextFromEvents`，从 api span 的 `llm.input_messages` / `input.value` 解析 `role=system` 文本。
+2. 新增 `makeSystemInteraction`（`role:'system'`，子代理带 `subagent_session_id`）。
+3. 在 `aggregateHermesTraceEvents` 的 `contentHosts` 循环里、push user 之前，按 owner session 去重各 push 一次 system 交互。
+
+**JiuwenSwarm**（[`src/lib/ingest/otel/jiuwen/aggregate.ts`](../../src/lib/ingest/otel/jiuwen/aggregate.ts)）：
+1. 新增 `systemPromptContent(attrs)` + `firstSystemPrompt(spans)`：从 `gen_ai.prompt.{n}` 取 `role=system` 的 content。
+2. 新增 `leadInteractions(query, sys, agent)`，在 `transformSingle/Team/Task` 头部插入 `{role:'system', content}`（分别归属 root agent / leader / coordinator）。
+3. system 在每个 `llm.call` 上重复，靠 agent-trace 的 text 去重；先做 root agent，team/task 的 per-agent system 后续再细化。
 
 ### 阶段二（P1）：JiuwenSwarm 思考过程 —— 先确认上游，再改 adapter
 
@@ -121,25 +131,27 @@ adapter 需要在 assistant 交互上挂一个 `parts` 数组，其中含 `type:
 2. **插件**（[`scripts/hermes_agent_insight_plugin.py`](../../scripts/hermes_agent_insight_plugin.py)）：在 `post_api_request` 加 `_reasoning_text(kwargs)`，把 thinking 写进新 span 属性（如 `llm.output.reasoning`，挨着 [`:669`](../../scripts/hermes_agent_insight_plugin.py#L669)）。
 3. **adapter**：`makeAssistantInteraction`（[`:405`](../../src/lib/ingest/otel/adapters/hermes.ts#L405)）读该属性，给交互加 `parts:[{type:'reasoning', text}]`。
 
-### （附）Claude Code 补齐 —— 用户本次未要求，记录备查
+### 阶段一补充：Claude Code 思考过程 —— 同属「已采到未解析」　✅ 已实现
 
-数据已落盘，属"解析缺口"，成本中等：
-- 系统提示词：在 `api_request_body` 处理（[`aggregator.ts:439`](../../src/lib/ingest/claude-otel/aggregator.ts#L439)）读 `body.system`，emit `{role:'system'}` 交互。
-- 思考过程：在归一化阶段把 `content_blocks` 里 `type:'thinking'` 的块转成 `parts:[{type:'reasoning', text: block.thinking}]`。
+Claude Code 的 thinking 和系统提示词一样：原始体已落盘（`OTEL_LOG_RAW_API_BODIES`），只是没解析。和 Hermes/Jiuwen 的「真·缺数据」思考过程不同，这里纯解析侧即可补齐，已随阶段一一并落地（[`src/lib/ingest/claude-otel/aggregator.ts`](../../src/lib/ingest/claude-otel/aggregator.ts)）：
+1. 新增 `reasoningPartsFromContent(content)`：从响应 `content_blocks` 里挑出 `type:'thinking'` 块（`redacted_thinking` 加密块跳过）。
+2. `appendAssistantFromApiResponse` 构造 assistant 交互时，仅在有 thinking 时附加 `parts:[{type:'reasoning', text: block.thinking}]`；可见回答仍走 `content`，前端 `extractReasoningText` 即可渲染"Thought for Ns"折叠块。
 
 ---
 
 ## 5. 工作量与优先级一览
 
-| 项 | 数据现状 | 改动范围 | 成本 |
-|---|---|---|---|
-| Hermes 系统提示词 | span 里**已有** | 仅 `hermes.ts` | 🟢 低 |
-| Jiuwen 系统提示词 | span 里**已有** | 仅 `aggregate.ts` | 🟢 低 |
-| Jiuwen 思考过程 | design 已规划，需确认 agent-core 实装 | 确认/改 agent-core + `aggregate.ts` | 🟡 中 |
-| Claude Code 系统提示词/思考 | 原始体**已落盘** | `claude-otel/` 解析 + 归一化 | 🟡 中 |
-| Hermes 思考过程 | 上游**完全没采** | 插件 +(可能)Hermes core + adapter | 🔴 高 |
+| 项 | 数据现状 | 改动范围 | 成本 | 状态 |
+|---|---|---|---|---|
+| Claude Code 系统提示词 | 原始体**已落盘** | `claude-otel/aggregator.ts` 解析 | 🟢 低 | ✅ 已实现 |
+| Hermes 系统提示词 | span 里**已有** | 仅 `hermes.ts` | 🟢 低 | ✅ 已实现 |
+| Jiuwen 系统提示词 | span 里**已有** | 仅 `aggregate.ts` | 🟢 低 | ✅ 已实现 |
+| Claude Code 思考过程 | 原始体**已落盘**（`content_blocks`） | `claude-otel/aggregator.ts` → `parts[reasoning]` | 🟢 低 | ✅ 已实现 |
+| Jiuwen 思考过程 | design 已规划，需确认 agent-core 实装 | 确认/改 agent-core + `aggregate.ts` | 🟡 中 | ⏸️ 待办 |
+| Hermes 思考过程 | 上游**完全没采** | 插件 +(可能)Hermes core + adapter | 🔴 高 | ⏸️ 待办 |
 
-**建议落地顺序**：P0（两边系统提示词，纯 adapter）→ P1（Jiuwen 思考，确认 agent-core 后接 adapter）→ 视需要补 Claude Code → P2（Hermes 思考，最重）。
+**已完成**：三个框架的系统提示词 + Claude Code 思考过程——即全部「已采到未解析」项（纯 adapter，数据已在原始里）。
+**后续落地顺序**：P1（Jiuwen 思考，确认 agent-core 后接 adapter）→ P2（Hermes 思考，最重）。这两项都依赖上游先导出 reasoning 正文。
 
 ---
 

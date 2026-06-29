@@ -166,6 +166,44 @@ function extractQuery(spans: JiuwenSpan[]): string {
   return `${JIUWEN_FRAMEWORK} run`;
 }
 
+/** Concatenated `role=system` prompt content from one span's `gen_ai.prompt.*`
+ *  attrs. jiuwen stamps the system turn at index .0 (see configure_prompt_template);
+ *  '' when the span carries no system turn. */
+function systemPromptContent(attrs: Record<string, unknown>): string {
+  const out: string[] = [];
+  for (let n = 0; n < 32; n++) {
+    const content = attrs[`gen_ai.prompt.${n}.content`];
+    if (content == null) continue;
+    if (String(attrs[`gen_ai.prompt.${n}.role`] ?? '').toLowerCase() === 'system') {
+      const text = String(content);
+      if (text.trim()) out.push(text);
+    }
+  }
+  return out.join('\n\n');
+}
+
+/** First non-empty system prompt across the run's llm.call spans. The system turn
+ *  is identical on every call of an agent, so one entry is enough; the trace builder
+ *  dedups and stashes it on the agent node. '' when no span carries a system turn. */
+function firstSystemPrompt(spans: JiuwenSpan[]): string {
+  for (const s of spans) {
+    if (!isLlm(s)) continue;
+    const sys = systemPromptContent(s.attrs);
+    if (sys) return sys;
+  }
+  return '';
+}
+
+/** Opening interactions for a run: the root agent's system prompt (when present,
+ *  `role:'system'` so the trace builder stashes it on the node) followed by the user
+ *  turn. Subagent-specific system prompts are a follow-up; here we surface the root. */
+function leadInteractions(query: string, sys: string, agent: string): any[] {
+  const head: any[] = [];
+  if (sys) head.push({ role: 'system', content: sys, agent, system_prompt_length: sys.length });
+  head.push({ role: 'user', content: query });
+  return head;
+}
+
 /** First user-turn prompt content from one span's `gen_ai.prompt.*` attrs —
  *  role-aware, with an index fallback for spans that don't stamp roles. '' if none. */
 function userPromptContent(attrs: Record<string, unknown>): string {
@@ -245,7 +283,7 @@ function transformSingle(spans: JiuwenSpan[], taskId: string, query: string, use
     }
   }
   const agentName = singleAgentName(spans);
-  const interactions: any[] = [{ role: 'user', content: query }];
+  const interactions: any[] = leadInteractions(query, firstSystemPrompt(spans), agentName);
   let inTok = 0, outTok = 0, totTok = 0, llm = 0, tools = 0, model = '', final = '';
   let first: number | null = null, last: number | null = null;
   for (const s of spans) {
@@ -338,7 +376,7 @@ function transformTeam(spans: JiuwenSpan[], taskId: string, query: string, user?
   const members = Array.from(new Set(turns.map((t) => t.member))).sort();
   const others = members.filter((m) => m !== leader);
 
-  const interactions: any[] = [{ role: 'user', content: query }];
+  const interactions: any[] = leadInteractions(query, firstSystemPrompt(spans), leader);
   const spawnTurn = others.length ? {
     role: 'assistant', agent: leader, content: '',
     tool_calls: others.map((m) => ({
@@ -393,7 +431,7 @@ function transformTask(spans: JiuwenSpan[], taskId: string, query: string, user?
   // link, so association is by time). Task spawns additionally emit a subagent turn. Ordering
   // (e.g. a skill read after the subagents return but before the final answer) falls out of
   // the time walk for free.
-  const interactions: any[] = [{ role: 'user', content: query }];
+  const interactions: any[] = leadInteractions(query, firstSystemPrompt(sorted), 'coordinator');
   let curLlm: any = null;
   const coordTurnFor = (s: JiuwenSpan) => {
     if (curLlm) return curLlm;

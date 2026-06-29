@@ -64,3 +64,21 @@ test('a non-envelope JSON that happens to have a content field is NOT unwrapped 
 test('no prompt content at all → "jiuwenswarm run" fallback is unchanged', () => {
     assert.equal(queryOf({}), 'jiuwenswarm run');
 });
+
+test('system prompt: a role=system prompt surfaces as a system interaction', () => {
+    const rec = aggregateJiuwenOtlpFromSpans([llm({
+        'gen_ai.prompt.0.role': 'system', 'gen_ai.prompt.0.content': '你是一个助手',
+        'gen_ai.prompt.1.role': 'user', 'gen_ai.prompt.1.content': '今天几号',
+    })])!;
+    const sys = rec.interactions.find((it: any) => it.role === 'system');
+    assert.ok(sys, 'expected a system interaction');
+    assert.equal(sys.content, '你是一个助手');
+    assert.equal(sys.system_prompt_length, '你是一个助手'.length);
+    // the user turn (= task content) is still derived correctly alongside it
+    assert.equal(rec.query, '今天几号');
+});
+
+test('system prompt: absent role=system → no system interaction', () => {
+    const rec = aggregateJiuwenOtlpFromSpans([llm({ 'gen_ai.prompt.1.content': '只有用户' })])!;
+    assert.equal(rec.interactions.filter((it: any) => it.role === 'system').length, 0);
+});
