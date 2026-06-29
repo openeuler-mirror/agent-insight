@@ -44,8 +44,31 @@ import '@/components/evaluation/evaluation-content.css';
 
 type AnalysisView = 'overview' | 'trace' | 'static' | 'gray';
 type Severity = 'high' | 'medium' | 'low';
-const HEALTH_DIMENSION_WEIGHT = 25;
-const AB_WEIGHT_LABEL = '25%';
+const HEALTH_DIMENSION_WEIGHTS: Record<DiagnosisDimensionKey, number> = {
+    ab: 40,
+    trace: 30,
+    recall: 20,
+    static: 10,
+};
+const AB_WEIGHT_LABEL = `${HEALTH_DIMENSION_WEIGHTS.ab}%`;
+
+type HealthDimensionScore = {
+    key: DiagnosisDimensionKey;
+    score: number | null;
+    weight: number;
+};
+
+function computeWeightedHealth(dimensions: HealthDimensionScore[]) {
+    const completed = dimensions.filter((item): item is HealthDimensionScore & { score: number } => typeof item.score === 'number');
+    const totalWeight = completed.reduce((sum, item) => sum + item.weight, 0);
+    const weightedSum = completed.reduce((sum, item) => sum + item.score * item.weight, 0);
+    return {
+        completed,
+        coveredCount: completed.length,
+        totalCount: dimensions.length,
+        health: totalWeight > 0 ? Math.round(weightedSum / totalWeight) : null,
+    };
+}
 
 /**
  * 触发分析摘要（"触发分析"卡 + Smart Run 行的数据源）。
@@ -1433,16 +1456,15 @@ function SkillAnalysisPage() {
     const triggerScore = triggerHasResult && triggerSummary?.latestRun
         ? Math.round(triggerSummary.latestRun.passRate * 100)
         : null;
-    const completedDimensionScores = [traceScore, staticStats.avgPct, triggerScore, grayScore]
-        .filter((score): score is number => typeof score === 'number');
-    const hasAnyAnalysisResult = completedDimensionScores.length > 0;
-    const standards = {
-        total: completedDimensionScores.length * HEALTH_DIMENSION_WEIGHT,
-        passed: completedDimensionScores.reduce((sum, score) => sum + (score / 100) * HEALTH_DIMENSION_WEIGHT, 0),
-    };
-    const health = hasAnyAnalysisResult && standards.total > 0
-        ? Math.round((standards.passed / standards.total) * 100)
-        : null;
+    const healthDimensions: HealthDimensionScore[] = [
+        { key: 'ab', score: grayScore, weight: HEALTH_DIMENSION_WEIGHTS.ab },
+        { key: 'trace', score: traceScore, weight: HEALTH_DIMENSION_WEIGHTS.trace },
+        { key: 'recall', score: triggerScore, weight: HEALTH_DIMENSION_WEIGHTS.recall },
+        { key: 'static', score: staticStats.avgPct, weight: HEALTH_DIMENSION_WEIGHTS.static },
+    ];
+    const healthSummary = computeWeightedHealth(healthDimensions);
+    const hasAnyAnalysisResult = healthSummary.coveredCount > 0;
+    const health = healthSummary.health;
     const optimizeHref = selectedSkill && selectedVersion != null
         ? `/skill-opt/${encodeURIComponent(selectedSkill.name)}/${selectedVersion}`
         : '/skill-opt';
@@ -1892,8 +1914,6 @@ function AnalysisOverview({
     const staticStats = computeStaticPassRate(staticSummary?.latest ?? null);
     const staticHasEvaluation = !!staticSummary?.latest;
     const staticHasResult = staticStats.avgPct != null;
-    const traceStats = summarizeTraceMatches(traces);
-    const highDeviation = traceStats.highDeviation;
     const [selectedTraceEvalUpdatedAt, setSelectedTraceEvalUpdatedAt] = useState<string | null>(null);
     const selectedTraceId = selectedTrace ? getTraceId(selectedTrace) : '';
     const selectedTraceScoreLabel = selectedTraceStats.totalSteps > 0
@@ -1962,6 +1982,17 @@ function AnalysisOverview({
     const triggerHasResult = !!triggerSummary?.latestRun;
     const triggerCanTest = triggerHasSet && (triggerSummary?.itemCount ?? 0) > 0;
     const grayHasResult = typeof graySummary?.scoring.totalScore === 'number';
+    const triggerCardScore = triggerHasResult && triggerSummary?.latestRun
+        ? Math.round(triggerSummary.latestRun.passRate * 100)
+        : null;
+    const grayCardScore = grayHasResult ? graySummary!.scoring.totalScore : null;
+    const cardDimensions: HealthDimensionScore[] = [
+        { key: 'ab', score: grayCardScore, weight: HEALTH_DIMENSION_WEIGHTS.ab },
+        { key: 'trace', score: cardEvalScore, weight: HEALTH_DIMENSION_WEIGHTS.trace },
+        { key: 'recall', score: triggerCardScore, weight: HEALTH_DIMENSION_WEIGHTS.recall },
+        { key: 'static', score: staticStats.avgPct, weight: HEALTH_DIMENSION_WEIGHTS.static },
+    ];
+    const cardHealthSummary = computeWeightedHealth(cardDimensions);
     const grayPreparedSampleCount = (
         grayTaskMeta?.configJson?.checkedCaseIds
         ?? grayTaskMeta?.configJson?.selectedCaseIds
@@ -1976,7 +2007,7 @@ function AnalysisOverview({
         {
             key: 'trace',
             name: '用例分析',
-            hasResult: traceCardHasResult,
+            hasResult: cardEvalScore != null,
             canRun: traceCanTest,
             runHint: traceCanTest
                 ? '当前 Trace 可分析'
@@ -1991,14 +2022,14 @@ function AnalysisOverview({
         {
             key: 'static',
             name: '静态合规',
-            hasResult: staticHasResult,
+            hasResult: staticStats.avgPct != null,
             canRun: staticCanTest,
             runHint: staticCanTest ? '可启动静态扫描' : '待分析 · 需先选择 Skill 与版本',
         },
         {
             key: 'trigger',
             name: '触发分析',
-            hasResult: triggerHasResult,
+            hasResult: triggerCardScore != null,
             canRun: triggerCanTest,
             runHint: !triggerHasSet
                 ? '未配置 · 需先准备触发集'
@@ -2009,7 +2040,7 @@ function AnalysisOverview({
         {
             key: 'gray',
             name: 'A/B测试',
-            hasResult: grayHasResult,
+            hasResult: grayCardScore != null,
             canRun: grayCanTest,
             runHint: grayCanTest
                 ? '开始执行可点击'
@@ -2020,8 +2051,8 @@ function AnalysisOverview({
                         : '未配置 · 需先保存 A/B 任务',
         },
     ];
-    const coveredCount = evalRunStates.filter(s => s.hasResult).length;
-    const totalEvaluators = evalRunStates.length;
+    const coveredCount = cardHealthSummary.coveredCount;
+    const totalEvaluators = cardHealthSummary.totalCount;
     const dxOptimizeHref = selectedSkill && selectedVersion != null
         ? `/skill-opt/${encodeURIComponent(selectedSkill.name)}/${selectedVersion}`
         : '/skill-opt';
@@ -2085,11 +2116,20 @@ function AnalysisOverview({
             ?? []
         ).length;
         const traceConfigured = hasEvalTask || (!!selectedTraceId && !!(selectedTraceLocal ? getTracePrimarySkill(selectedTraceLocal)?.name : null));
-        const missingDimensions: string[] = [];
-        if (!(grayData && grayData.scoring.totalScore != null)) missingDimensions.push('ab');
-        if (traceScore == null) missingDimensions.push('trace');
-        if (!triggerHasResultLocal) missingDimensions.push('recall');
-        if (staticStatsLocal.avgPct == null) missingDimensions.push('static');
+        const abScore = typeof grayData?.scoring.totalScore === 'number' ? grayData.scoring.totalScore : null;
+        const recallScore = triggerHasResultLocal && triggerData?.latestRun
+            ? Math.round(triggerData.latestRun.passRate * 100)
+            : null;
+        const diagnosisDimensions: HealthDimensionScore[] = [
+            { key: 'ab', score: abScore, weight: HEALTH_DIMENSION_WEIGHTS.ab },
+            { key: 'trace', score: traceScore, weight: HEALTH_DIMENSION_WEIGHTS.trace },
+            { key: 'recall', score: recallScore, weight: HEALTH_DIMENSION_WEIGHTS.recall },
+            { key: 'static', score: staticStatsLocal.avgPct, weight: HEALTH_DIMENSION_WEIGHTS.static },
+        ];
+        const diagnosisHealthSummary = computeWeightedHealth(diagnosisDimensions);
+        const missingDimensions = diagnosisDimensions
+            .filter(item => typeof item.score !== 'number')
+            .map(item => item.key);
 
         const toStatus = (configured: boolean, hasResult: boolean, running: boolean, failed = false): DiagnosisDimensionStatus => {
             if (running) return 'running';
@@ -2103,9 +2143,9 @@ function AnalysisOverview({
             skillName: selectedSkill.name,
             version: selectedVersion,
             overall: {
-                weightedScore: health,
-                coveredCount: totalEvaluators - missingDimensions.length,
-                totalCount: totalEvaluators,
+                weightedScore: diagnosisHealthSummary.health,
+                coveredCount: diagnosisHealthSummary.coveredCount,
+                totalCount: diagnosisHealthSummary.totalCount,
                 missingDimensions,
                 selectedDimensionsThisRun: (overrides?.selectedDimensionsThisRun ?? []).map(key =>
                     key === 'gray' ? 'ab' : key === 'trigger' ? 'recall' : key
@@ -2113,11 +2153,11 @@ function AnalysisOverview({
             },
             ab: {
                 configured: !!grayMeta?.id && grayPreparedSamples > 0,
-                hasResult: !!grayData && grayData.scoring.totalScore != null,
-                status: toStatus(!!grayMeta?.id && grayPreparedSamples > 0, !!grayData && grayData.scoring.totalScore != null, grayBusyValue),
+                hasResult: abScore != null,
+                status: toStatus(!!grayMeta?.id && grayPreparedSamples > 0, abScore != null, grayBusyValue),
                 scoreA: grayData?.a.avgScore ?? null,
-                scoreB: grayData?.scoring.totalScore ?? null,
-                finalScore: grayData?.scoring.totalScore ?? null,
+                scoreB: abScore,
+                finalScore: abScore,
                 decisionLabel: grayData?.scoring.decisionLabel ?? null,
                 capabilityDeltaPp: grayData?.scoring.capability.deltaPp ?? null,
                 tokenDeltaPct: grayData?.scoring.cost.deltaTokenPct ?? null,
@@ -2139,9 +2179,9 @@ function AnalysisOverview({
             },
             recall: {
                 configured: triggerHasSetLocal,
-                hasResult: triggerHasResultLocal,
-                status: toStatus(triggerHasSetLocal, triggerHasResultLocal, false),
-                score: triggerHasResultLocal ? Math.round((triggerData?.latestRun?.passRate ?? 0) * 100) : null,
+                hasResult: recallScore != null,
+                status: toStatus(triggerHasSetLocal, recallScore != null, false),
+                score: recallScore,
                 passRate: triggerData?.latestRun?.passRate ?? null,
                 truePositiveRate: triggerData?.latestRun?.truePositiveRate ?? null,
                 falsePositiveRate: triggerData?.latestRun?.falsePositiveRate ?? null,
@@ -2161,7 +2201,6 @@ function AnalysisOverview({
     }, [
         graySummary,
         grayTaskMeta,
-        health,
         cardEvalDone,
         cardEvalScore,
         cardEvalTotal,
@@ -2171,7 +2210,6 @@ function AnalysisOverview({
         selectedTraceId,
         selectedVersion,
         staticSummary,
-        totalEvaluators,
         traces,
         triggerSummary,
     ]);
@@ -2481,7 +2519,6 @@ function AnalysisOverview({
                     : smartRunBlocked
                         ? '测试进行中...'
                         : `一键测试 ${selectedCount} 项`;
-    const traceCardStatus = !traceCardHasResult ? '待分析' : highDeviation > 0 ? '需关注' : '正常';
     // status 用均分分级：≥80 视为「正常」，否则「需关注」（跟详情页"维度均分"色阶对齐）
     const staticCardStatus = !staticHasResult ? '待分析'
         : staticStats.avgPct >= 80 ? '正常' : '需关注';
@@ -2538,16 +2575,16 @@ function AnalysisOverview({
                             <b>{coveredCount} / {totalEvaluators} 维 · {Math.round((coveredCount / totalEvaluators) * 100)}%</b>
                         </div>
                         <div className="sa-hero-coverage-bar">
-                            <div className={`sa-hero-coverage-seg${grayHasResult ? ' on' : ''}`} style={{ background: 'var(--sa-warning)' }} title="A/B 测试（权重 25%）"></div>
-                            <div className={`sa-hero-coverage-seg${traceCardStatus !== '待分析' ? ' on' : ''}`} style={{ background: 'var(--sa-success)' }} title="用例分析（权重 25%）"></div>
+                            <div className={`sa-hero-coverage-seg${grayCardScore != null ? ' on' : ''}`} style={{ background: 'var(--sa-warning)' }} title={`A/B 测试（权重 ${HEALTH_DIMENSION_WEIGHTS.ab}%）`}></div>
+                            <div className={`sa-hero-coverage-seg${cardEvalScore != null ? ' on' : ''}`} style={{ background: 'var(--sa-success)' }} title={`用例分析（权重 ${HEALTH_DIMENSION_WEIGHTS.trace}%）`}></div>
                             <div
-                                className={`sa-hero-coverage-seg${triggerHasResult ? ' on' : ''}`}
+                                className={`sa-hero-coverage-seg${triggerCardScore != null ? ' on' : ''}`}
                                 style={{ background: 'var(--sa-info, #6366f1)' }}
-                                title={triggerHasResult
-                                    ? `触发分析 · 已评测（权重 25%）`
-                                    : triggerHasSet ? '触发分析 · 待评测（权重 25%）' : '触发分析 · 未配置（权重 25%）'}
+                                title={triggerCardScore != null
+                                    ? `触发分析 · 已评测（权重 ${HEALTH_DIMENSION_WEIGHTS.recall}%）`
+                                    : triggerHasSet ? `触发分析 · 待评测（权重 ${HEALTH_DIMENSION_WEIGHTS.recall}%）` : `触发分析 · 未配置（权重 ${HEALTH_DIMENSION_WEIGHTS.recall}%）`}
                             ></div>
-                            <div className={`sa-hero-coverage-seg${staticCardStatus !== '待分析' ? ' on' : ''}`} style={{ background: 'var(--sa-purple)' }} title="静态合规（权重 25%）"></div>
+                            <div className={`sa-hero-coverage-seg${staticStats.avgPct != null ? ' on' : ''}`} style={{ background: 'var(--sa-purple)' }} title={`静态合规（权重 ${HEALTH_DIMENSION_WEIGHTS.static}%）`}></div>
                         </div>
                     </div>
                 </div>
@@ -2580,7 +2617,7 @@ function AnalysisOverview({
                         </div>
                     </div>
                     <div className="sa-hero-formula">
-                        <div className="sa-hero-formula-label">置信加权 · A/B、用例、触发、静态各 25%（未跑维度不进分母）</div>
+                        <div className="sa-hero-formula-label">置信加权 · A/B 40% · 用例 30% · 触发 20% · 静态 10%（未跑维度不进分母）</div>
                         score = Σ(分 × 权重) ÷ Σ(已跑权重)<br />
                         &nbsp;&nbsp;= <strong>{health == null ? '—' : health}</strong>
                     </div>
@@ -2604,7 +2641,7 @@ function AnalysisOverview({
                             <input type="checkbox" checked={selectedRunKeys.includes('static')} onChange={() => toggleRunKey('static')} disabled={!staticCanTest} />
                             <span className="dot" style={{ '--cdot': 'var(--sa-purple)' } as React.CSSProperties}></span>
                             <span className="nm">
-                                <Term id="static-compliance" label="静态合规" /> <span className="wpct">25%</span>
+                                <Term id="static-compliance" label="静态合规" /> <span className="wpct">{HEALTH_DIMENSION_WEIGHTS.static}%</span>
                                 {!staticCanTest && <span className="cfg-tag">待扫描</span>}
                             </span>
                             {!staticCanTest ? (
@@ -2636,7 +2673,7 @@ function AnalysisOverview({
                             />
                             <span className="dot" style={{ '--cdot': 'var(--sa-info, #6366f1)' } as React.CSSProperties}></span>
                             <span className="nm">
-                                <Term id="trigger-analysis" label="触发分析" /> <span className="wpct">25%</span>
+                                <Term id="trigger-analysis" label="触发分析" /> <span className="wpct">{HEALTH_DIMENSION_WEIGHTS.recall}%</span>
                                 {!triggerHasSet && <span className="cfg-tag">未配置</span>}
                                 {triggerHasSet && !triggerHasResult && <span className="cfg-tag">待评测</span>}
                                 {triggerHasResult && triggerSummary?.latestRun && (
@@ -2659,7 +2696,7 @@ function AnalysisOverview({
                             <input type="checkbox" checked={selectedRunKeys.includes('trace')} onChange={() => toggleRunKey('trace')} disabled={!traceCanTest} />
                             <span className="dot" style={{ '--cdot': 'var(--sa-success)' } as React.CSSProperties}></span>
                             <span className="nm">
-                                <Term id="case-analysis" label="用例分析" /> <span className="wpct">25%</span>
+                                <Term id="case-analysis" label="用例分析" /> <span className="wpct">{HEALTH_DIMENSION_WEIGHTS.trace}%</span>
                                 {!traceCanTest && <span className="cfg-tag">待分析</span>}
                             </span>
                             {!traceCanTest ? (
@@ -2866,7 +2903,7 @@ function AnalysisOverview({
                             <div className={`sa-card-stat-val${triggerHasResult ? '' : ' muted'}`}>
                                 {triggerHasResult && triggerSummary?.latestRun
                                     ? `${Math.round(triggerSummary.latestRun.truePositiveRate * 100)}% / ${Math.round(triggerSummary.latestRun.falsePositiveRate * 100)}%`
-                                    : '不计入总分 (-25%)'}
+                                    : `不计入总分 (-${HEALTH_DIMENSION_WEIGHTS.recall}%)`}
                             </div>
                         </div>
                     </div>
@@ -3023,7 +3060,7 @@ function AnalysisOverview({
                                 </div>
                                 <div className="sa-card-stat">
                                     <div className="sa-card-stat-label">影响</div>
-                                    <div className="sa-card-stat-val muted">不计入总分 (-25%)</div>
+                                    <div className="sa-card-stat-val muted">{`不计入总分 (-${HEALTH_DIMENSION_WEIGHTS.ab}%)`}</div>
                                 </div>
                             </div>
 
