@@ -46,6 +46,29 @@ const EXECUTION_SKILL_ENABLED = !process.env.DB_HOST;
 
 const SKILL_NAME_PATTERN = /^[a-zA-Z0-9_\-\.]+$/;
 
+export function inferUserQueryFromInteractions(interactions: unknown): string | undefined {
+    if (!Array.isArray(interactions)) return undefined;
+    for (const interaction of interactions) {
+        if (!interaction || typeof interaction !== 'object') continue;
+        const item = interaction as Record<string, any>;
+        if (String(item.role || '').toLowerCase() !== 'user') continue;
+        const content = typeof item.content === 'string' ? item.content.trim() : '';
+        if (content) return content;
+    }
+    return undefined;
+}
+
+export function shouldRefreshStoredQueryFromInteractions(
+    query: unknown,
+    framework: unknown,
+): boolean {
+    const current = typeof query === 'string' ? query.trim() : '';
+    if (!current) return true;
+    const fw = typeof framework === 'string' ? framework.trim().toLowerCase() : '';
+    if (!fw) return false;
+    return current.toLowerCase() === `${fw} session`;
+}
+
 /**
  * 从单个 AgentNode 抽取**本层 agent 自己显式调用**的 skill(kind==='skill',即 skill/load_skill;
  * 天然排除 task() 预加载与子 agent 的事件)。用于 opencode 的逐层 agent 作用域绑定。
@@ -2032,11 +2055,11 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
                     mergedInteractionsForSession = mergeSessionInteractionsMonotonic(existingInteractions, incomingInteractions);
                 }
             } else {
-                // snapshot-replace 防退化护栏（目前仅 jiuwen 走这条）：每批都重新聚合「全量 span」后整条
-                // 覆盖，正常情况下 incoming 是越来越全的快照。但若上游 span spool 在极端下仍残缺（历史
-                // span 永久丢失等），一个偏小的快照会把库里更完整的记录盖没——这正是 jiuwen 之前丢数据
-                // 的最后一刀。这里比较 interaction 数：incoming 严格更小则判为退化快照，保留库里现有记录、
-                // 不覆盖。设 AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK=true 可在确有「正当缩小」场景时放行。
+                // snapshot-replace 防退化护栏：上游或服务端聚合层每批都重新形成「当前会话快照」后整条
+                // 覆盖，正常情况下 incoming 是越来越全的快照。但若 span spool 在极端下仍残缺（历史 span
+                // 永久丢失等），一个偏小的快照会把库里更完整的记录盖没。这里比较 interaction 数：incoming
+                // 严格更小则判为退化快照，保留库里现有记录、不覆盖。设 AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK=true
+                // 可在确有「正当缩小」场景时放行。
                 const allowShrink = process.env.AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK === 'true';
                 if (!allowShrink) {
                     const existingSession = await db.findSessionByTaskId(targetRecord.task_id);
@@ -2065,6 +2088,10 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
 
         mergedInteractionsForSession = normalizeForStorage(mergedInteractionsForSession);
         targetRecord.interactions = mergedInteractionsForSession;
+        const derivedQuery = inferUserQueryFromInteractions(mergedInteractionsForSession);
+        if (derivedQuery && shouldRefreshStoredQueryFromInteractions(targetRecord.query, targetRecord.framework)) {
+            targetRecord.query = derivedQuery;
+        }
 
         if (targetRecord.framework === 'opencode' && Array.isArray(mergedInteractionsForSession)) {
             const derived = deriveOpencodeExecutionFields(mergedInteractionsForSession);
