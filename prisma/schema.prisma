@@ -122,6 +122,10 @@ model Execution {
   @@index([rootExecutionId])
   @@index([isSubagent, timestamp])
   @@index([agentSessionId])
+  // 主列表查询(链路追踪/概览)是 WHERE user=? AND isSubagent=false ORDER BY timestamp DESC。
+  // 缺 user 维度时每个并发请求都要全表扫+排序；该复合索引让规划器按 (user,isSubagent) 定位后
+  // 直接按 timestamp 倒序读，把高并发下的列表查询降为索引范围扫描。
+  @@index([user, isSubagent, timestamp])
 }
 
 /// Trace 级通用评测明细：一行 = 一个 execution 的一个指标。
