@@ -32,6 +32,8 @@ import { buildAgentCallTree, inferSubagentType, walkTree, type AgentNode } from 
 import { isEvaluatorAgentName } from '@/lib/evaluator-agent';
 import { getAdapter } from '@/lib/ingest/adapters/registry';
 import { normalizeInteractions } from '@/lib/shared/interaction-utils';
+import { buildPrismaWhere } from '@/lib/filters/to-prisma';
+import type { FilterClause } from '@/lib/filters/types';
 
 export interface InvokedSkill {
     name: string;
@@ -1146,6 +1148,11 @@ interface ReadRecordFilters {
     onlySubagents?: boolean;
     /** 列出指定 root 下的所有 sub-agent */
     parentExecutionId?: string | null;
+    /**
+     * 统一过滤器模型子句(operator 模型,见 src/lib/filters)。只下推 pushable 实列
+     * (execution / observedAgents);skill / 计算列(status/ownership)由各自既有通道处理。
+     */
+    clauses?: FilterClause[];
 }
 
 interface ReadRecordsOptions {
@@ -1220,6 +1227,34 @@ export async function listObservedSkills(user?: string): Promise<{ name: string;
     return Array.from(byName.entries())
         .map(([name, vs]) => ({ name, versions: Array.from(vs).sort((a, b) => a - b) }))
         .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * 某个分类列的观测值 + 出现次数,给过滤器值下拉(facet)用 —— 对标 langfuse SUGGESTIONS 的「值 + 件数」。
+ * 仅允许白名单内的真实标量列 groupBy(防任意列注入);root 作用域、按 user 隔离,与其它 facet 口径一致。
+ */
+const FACETABLE_COLUMNS = new Set(['framework', 'agentName', 'model', 'subagentType']);
+export async function listObservedFieldValues(
+    column: string,
+    user?: string,
+): Promise<{ value: string; count: number }[]> {
+    if (!FACETABLE_COLUMNS.has(column)) return [];
+    const where: any = { isSubagent: false, [column]: { not: null } };
+    if (user) where.user = user;
+    try {
+        const rows = await prismaRaw.execution.groupBy({
+            by: [column] as any,
+            where,
+            _count: { _all: true },
+        });
+        return rows
+            .map((r: any) => ({ value: String(r[column] ?? ''), count: r._count?._all ?? 0 }))
+            .filter((r: { value: string }) => r.value !== '')
+            .sort((a: { count: number }, b: { count: number }) => b.count - a.count);
+    } catch (e) {
+        console.warn('[listObservedFieldValues] groupBy failed:', column, (e as Error)?.message);
+        return [];
+    }
 }
 
 export async function listObservedTraceIds(
@@ -1664,7 +1699,17 @@ async function readRecordsInternal(
         where.taskId = filters.taskId;
         if (filters.framework) where.framework = filters.framework;
     } else if (filters?.query) {
-        where.query = filters.query;
+        const term = filters.query.trim();
+        if (term) {
+            // 文本搜索：trace 的 input(query) + output(finalResult) 子串模糊匹配
+            // （对齐 Langfuse 的 input/output 搜索语义）。两列 OR，再与其它过滤 AND。
+            // SQLite 注意：Prisma 在 SQLite 上不支持 mode:'insensitive'；但 LIKE 对 ASCII
+            // 默认大小写不敏感，中文无大小写概念，故名称/内容搜索天然可用。
+            where.OR = [
+                { query: { contains: term } },
+                { finalResult: { contains: term } },
+            ];
+        }
         if (filters.framework) where.framework = filters.framework;
     }
 
@@ -1690,6 +1735,19 @@ async function readRecordsInternal(
 
     if (filters?.agentName !== undefined) {
         where.agentName = filters.agentName;
+    }
+
+    // 统一过滤器(operator 模型)下推:FilterClause[] → Prisma where,AND 进主查询。
+    // 只下推 pushable 实列(execution/observedAgents);skill(executionSkill)/计算列(status/ownership)
+    // buildPrismaWhere 会放进 deferred,这里忽略——它们仍走各自既有通道(skillFilterActive / 前端二次过滤)。
+    if (filters?.clauses && filters.clauses.length > 0) {
+        const { where: clauseWhere, errors } = buildPrismaWhere(filters.clauses);
+        if (Array.isArray(clauseWhere.AND) && clauseWhere.AND.length > 0) {
+            where.AND = [...((where.AND as any[]) ?? []), ...clauseWhere.AND];
+        }
+        if (errors.length > 0) {
+            console.warn('[readRecords] ignored invalid filter clauses:', errors.map((e) => e.reason));
+        }
     }
 
     // dedup pass 统一走 light 投影(不取大字段 finalResult):heavy 模式的 finalResult 由

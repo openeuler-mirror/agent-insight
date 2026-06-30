@@ -14,6 +14,7 @@ import {
     Layers,
     Terminal,
     RotateCcw,
+    Search,
 } from 'lucide-react';
 import { parseAsInteger, parseAsString, useQueryState } from 'nuqs';
 import { toast } from 'sonner';
@@ -21,12 +22,15 @@ import { toast } from 'sonner';
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { PageContainer, PageContent, PageFooter, PageHeader, PageToolbar } from '@/components/shell/PageContainer';
 import AgentTraceView from '@/components/observe/AgentTraceView';
+import TraceFilterBar from '@/components/observe/TraceFilterBar';
+import type { FilterClause } from '@/lib/filters/types';
 import { useAuth } from '@/lib/auth/auth-context';
 import { useLocale } from '@/lib/client/locale-context';
 import { apiFetch } from '@/lib/client/api';
 import { getPrimaryExecutionAgentName } from '@/lib/evaluator-agent';
 
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
@@ -348,6 +352,29 @@ function TracePageContent() {
     const [page, setPage] = useQueryState('page', parseAsInteger.withDefault(1));
     const [pageSize, setPageSize] = useQueryState('size', parseAsInteger.withDefault(20));
     const [taskIdParam, setTaskIdParam] = useQueryState('taskId', parseAsString);
+    // 文本搜索（trace input/output 模糊匹配，服务端下推）。draft = 输入框即时值；
+    // debounce 300ms 后写入 URL 的 `q` 触发 refetch，避免每个按键打一次后端。
+    const [search, setSearch] = useQueryState('q', parseAsString.withDefault(''));
+    const [searchDraft, setSearchDraft] = useState(search);
+    useEffect(() => {
+        const id = setTimeout(() => setSearch(searchDraft.trim() || null), 300);
+        return () => clearTimeout(id);
+    }, [searchDraft, setSearch]);
+    // 结构化过滤子句(operator 模型),序列化进 URL 的 `f`,下推后端 filters=。
+    const [clausesRaw, setClausesRaw] = useQueryState('f', parseAsString.withDefault(''));
+    const clauses = useMemo<FilterClause[]>(() => {
+        if (!clausesRaw) return [];
+        try {
+            const p = JSON.parse(clausesRaw);
+            return Array.isArray(p) ? (p as FilterClause[]) : [];
+        } catch {
+            return [];
+        }
+    }, [clausesRaw]);
+    const setClauses = useCallback(
+        (next: FilterClause[]) => setClausesRaw(next.length ? JSON.stringify(next) : null),
+        [setClausesRaw],
+    );
 
     const { widths, setColumnWidth, resetColumnWidths, isCustomized } = useColumnWidths();
     const tableMinWidth = useMemo(
@@ -414,12 +441,16 @@ function TracePageContent() {
         // 按 skill 筛选交给服务端(走 ExecutionSkill 索引,agent 作用域):结果精确命中真正用到该 skill 的
         // 那一层(含 sub-agent),而非把全量拉到浏览器再 JS 过滤。
         const skillParam = skillFilter !== 'all' ? `&skill=${encodeURIComponent(skillFilter)}` : '';
-        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&includeEvaluations=0&fields=light${scopeParam}${skillParam}`)
+        // 文本搜索下推服务端（input/output 子串模糊），与其它客户端过滤 AND 组合。
+        const searchParam = search ? `&query=${encodeURIComponent(search)}` : '';
+        // 结构化过滤子句下推（operator 模型 → buildPrismaWhere）。
+        const filtersParam = clauses.length ? `&filters=${encodeURIComponent(JSON.stringify(clauses))}` : '';
+        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&includeEvaluations=0&fields=light${scopeParam}${skillParam}${searchParam}${filtersParam}`)
             .then(r => r.json())
             .then((d: Execution[]) => setData(Array.isArray(d) ? d : []))
             .catch(() => setData([]))
             .finally(() => setLoading(false));
-    }, [user, agentScopeFilter, skillFilter]);
+    }, [user, agentScopeFilter, skillFilter, search, clausesRaw]);
 
     // skill 下拉走 facet 接口(全量 skill,含 sub-agent 专属),避免随服务端筛选结果塌缩。
     const [availableSkills, setAvailableSkills] = useState<string[]>([]);
@@ -503,7 +534,7 @@ function TracePageContent() {
         if (page !== 1) setPage(1);
         // page reset on filter / sort change
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [timeFilter, frameworkFilter, anomalyFilter, agentFilter, skillFilter, ownershipFilter, sortKey, sortDir, pageSize]);
+    }, [timeFilter, frameworkFilter, anomalyFilter, agentFilter, skillFilter, ownershipFilter, search, clausesRaw, sortKey, sortDir, pageSize]);
 
     const handleSort = (key: SortKey) => {
         if (key === sortKey) {
@@ -532,7 +563,7 @@ function TracePageContent() {
 
     const hasActiveFilters = ownershipFilter !== 'all' || agentFilter !== 'all' || skillFilter !== 'all'
         || anomalyFilter !== 'all' || timeFilter !== 'all' || frameworkFilter !== 'all'
-        || agentScopeFilter !== 'root';
+        || agentScopeFilter !== 'root' || search !== '' || clauses.length > 0;
 
     const resetFilters = () => {
         setOwnershipFilter('all');
@@ -542,6 +573,9 @@ function TracePageContent() {
         setTimeFilter('all');
         setFrameworkFilter('all');
         setAgentScopeFilter('root');
+        setSearch(null);
+        setSearchDraft('');
+        setClauses([]);
     };
 
     // Filter dropdown option sets
@@ -593,6 +627,26 @@ function TracePageContent() {
                                 value={`${stats.errRate}%`}
                             />
                         </div>
+
+                        <div className="relative mb-3">
+                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-foreground-muted pointer-events-none" />
+                            {/* pl-9! 用 important 覆盖 Input 基类的 px-3：二者都设 padding-left，twMerge 会保留 px-3
+                                （它还管 padding-right），Tailwind v4 级联里 px-3 反而胜出 → 文字钻到放大镜下面。 */}
+                            <Input
+                                type="search"
+                                value={searchDraft}
+                                onChange={e => setSearchDraft(e.target.value)}
+                                placeholder={locale === 'zh' ? '搜索 trace 输入 / 输出内容…' : 'Search trace input / output…'}
+                                className="pl-9! h-9"
+                                aria-label={locale === 'zh' ? '搜索 trace 内容' : 'Search trace content'}
+                            />
+                        </div>
+
+                        {user && (
+                            <div className="mb-3">
+                                <TraceFilterBar clauses={clauses} onChange={setClauses} user={user} />
+                            </div>
+                        )}
 
                         <PageToolbar className="border border-border bg-background-secondary rounded-md p-2 mb-3">
                             <Select
