@@ -1,22 +1,26 @@
 'use client';
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Plus, X, ChevronLeft } from 'lucide-react';
-import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { X, ChevronLeft, Search } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { apiFetch } from '@/lib/client/api';
+import { cn } from '@/lib/utils';
 import { TRACE_FILTER_COLUMNS } from '@/lib/filters/trace-columns';
 import { operatorsForColumn, type FilterClause, type FilterColumn, type Operator } from '@/lib/filters/types';
 
 /**
- * 链路追踪结构化过滤栏(click 驱动,对标 langfuse 搜索栏的下拉选择体验):
- * 点「+ 过滤」→ 选字段(FIELDS,来自列注册表)→ 选操作符 / 值(枚举走 facet 件数下拉,
- * 文本/数值走输入框)→ 确定成 chip。chip 集合 = FilterClause[],上抛由父组件序列化进 URL/后端。
+ * 链路追踪统一搜索/过滤栏(对标 langfuse 的 SearchComposer):**一个**输入栏里同时承载
+ *   ① 已添加的结构化过滤 chip(FilterClause[])
+ *   ② 一个内联的自由文本输入(对 trace input/output 做 contains 模糊,debounce 下推 `q`)
+ * 点/聚焦输入 → 直接弹出字段下拉(FIELDS,来自列注册表)→ 选字段 → 选操作符/值(枚举走
+ * facet 件数下拉,文本/数值走输入框)→ 确定成 chip。chip / 自由文本分别上抛,父组件序列化进 URL/后端。
  *
- * v1 只覆盖可下推的实列(排除 computed 的 status/ownership、executionSkill 的 skill——它们仍走既有下拉);
- * 自由文本(query/finalResult)由顶部搜索框承担,这里聚焦结构化字段。
+ * 自由文本与结构化字段共用一个输入:打字即模糊搜索 + 同步过滤字段下拉;一旦从下拉里**选了字段**,
+ * 视为要加结构化过滤 → 清空输入(连带清掉这段临时自由文本),进入值录入。
+ *
+ * v1 只覆盖可下推的实列(排除 computed 的 status/ownership、executionSkill 的 skill——它们仍走既有下拉)。
  */
 
 const BAR_COLUMNS: FilterColumn[] = TRACE_FILTER_COLUMNS.filter(
@@ -28,7 +32,7 @@ const BAR_COLUMNS: FilterColumn[] = TRACE_FILTER_COLUMNS.filter(
 );
 
 // 这些列在后端有 facet 值+件数端点(facet=values&column=)。
-const FACETED = new Set(['framework', 'subagentType']);
+const FACETED = new Set(['framework', 'agentName', 'model', 'subagentType']);
 
 function defaultOperator(col: FilterColumn): Operator {
   switch (col.type) {
@@ -79,30 +83,67 @@ function clauseLabel(clause: FilterClause): string {
 interface Props {
   clauses: FilterClause[];
   onChange: (clauses: FilterClause[]) => void;
+  /** 自由文本搜索的已提交值(来自父组件 URL `q`)。 */
+  search: string;
+  /** 提交自由文本搜索(空串=清除)。 */
+  onSearchChange: (value: string) => void;
   user: string;
 }
 
-export default function TraceFilterBar({ clauses, onChange, user }: Props) {
+export default function TraceFilterBar({ clauses, onChange, search, onSearchChange, user }: Props) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
   const [open, setOpen] = useState(false);
   const [stage, setStage] = useState<'field' | 'value'>('field');
   const [col, setCol] = useState<FilterColumn | null>(null);
   const [op, setOp] = useState<Operator>('contains');
-  const [text, setText] = useState(''); // field 阶段=过滤字段名;value 阶段=输入值
+  const [valueText, setValueText] = useState(''); // value 阶段的输入值
   const [picked, setPicked] = useState<Set<string>>(new Set()); // 多选(any of)选中的值
   const [facet, setFacet] = useState<{ value: string; count: number }[]>([]);
 
-  const reset = useCallback(() => {
+  // 内联自由文本输入(同时:① 模糊搜索 ② 过滤字段下拉)。
+  const [barInput, setBarInput] = useState(search);
+  // 外部(如「重置」)改了 search → 同步回输入框。用 React 官方「prop 变化时调整 state」推荐法:
+  // 渲染期比较(避免 set-state-in-effect 的级联渲染);trim 比较避免下方 debounce 的回声覆盖用户输入。
+  const [prevSearch, setPrevSearch] = useState(search);
+  if (search !== prevSearch) {
+    setPrevSearch(search);
+    if (search !== barInput.trim()) setBarInput(search);
+  }
+  // 输入 debounce 300ms 提交到父组件的 `q`(input/output contains 搜索)。
+  useEffect(() => {
+    const id = setTimeout(() => onSearchChange(barInput.trim()), 300);
+    return () => clearTimeout(id);
+  }, [barInput, onSearchChange]);
+
+  const backToField = useCallback(() => {
     setStage('field');
     setCol(null);
-    setText('');
+    setValueText('');
     setPicked(new Set());
     setFacet([]);
   }, []);
 
+  const close = useCallback(() => {
+    setOpen(false);
+    backToField();
+  }, [backToField]);
+
+  // 点击栏外 → 关闭下拉(自前实现,避免 Radix Popover 抢走输入焦点导致没法边打字边筛字段)。
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) close();
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [open, close]);
+
   const fieldMatches = useMemo(() => {
-    const q = text.trim().toLowerCase();
+    const q = barInput.trim().toLowerCase();
     return BAR_COLUMNS.filter((c) => !q || c.label.toLowerCase().includes(q) || c.column.toLowerCase().includes(q));
-  }, [text]);
+  }, [barInput]);
 
   // 进入 value 阶段且字段有 facet 时,拉「值 + 件数」。
   useEffect(() => {
@@ -119,18 +160,41 @@ export default function TraceFilterBar({ clauses, onChange, user }: Props) {
     };
   }, [stage, col, user]);
 
+  // SUGGESTIONS:几个示例枚举列的「最高频值 + 件数」,对标 langfuse 顶部建议。挂载时拉一次。
+  const [suggestions, setSuggestions] = useState<{ column: string; value: string; count: number }[]>([]);
+  useEffect(() => {
+    const showcase = BAR_COLUMNS.filter((c) => c.type === 'stringOptions' && FACETED.has(c.column)).slice(0, 4);
+    let alive = true;
+    Promise.all(
+      showcase.map((c) =>
+        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&facet=values&column=${encodeURIComponent(c.column)}`)
+          .then((r) => r.json())
+          .then((rows) =>
+            Array.isArray(rows) && rows[0] ? { column: c.column, value: rows[0].value, count: rows[0].count } : null,
+          )
+          .catch(() => null),
+      ),
+    ).then((res) => {
+      if (alive) setSuggestions(res.filter((x): x is { column: string; value: string; count: number } => x != null));
+    });
+    return () => {
+      alive = false;
+    };
+  }, [user]);
+
   const pickField = (c: FilterColumn) => {
     setCol(c);
     setOp(defaultOperator(c));
-    setText('');
+    setValueText('');
     setPicked(new Set());
+    setBarInput(''); // 选了字段=要加结构化过滤,清掉这段临时自由文本(连带清搜索)
     setStage('value');
   };
 
   const addClause = (clause: FilterClause) => {
     onChange([...clauses, clause]);
-    reset();
-    setOpen(false);
+    backToField();
+    inputRef.current?.focus(); // 加完一个,焦点回到栏继续
   };
 
   const commitValueStage = () => {
@@ -145,7 +209,7 @@ export default function TraceFilterBar({ clauses, onChange, user }: Props) {
       addClause({ column: col.column, operator: op, value: Array.from(picked) });
       return;
     }
-    const v = text.trim();
+    const v = valueText.trim();
     if (!v) return;
     addClause({ column: col.column, operator: op, value: v });
   };
@@ -153,62 +217,120 @@ export default function TraceFilterBar({ clauses, onChange, user }: Props) {
   const removeClause = (i: number) => onChange(clauses.filter((_, idx) => idx !== i));
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      {clauses.map((c, i) => (
-        <Badge key={i} variant="secondary" className="gap-1 pl-2 pr-1 py-1 text-xs font-normal">
-          {clauseLabel(c)}
-          <button
-            type="button"
-            onClick={() => removeClause(i)}
-            className="rounded-sm hover:bg-background-secondary p-0.5"
-            aria-label="移除过滤"
-          >
-            <X className="size-3" />
-          </button>
-        </Badge>
-      ))}
-
-      <Popover
-        open={open}
-        onOpenChange={(o) => {
-          setOpen(o);
-          if (!o) reset();
+    <div ref={containerRef} className="relative">
+      {/* 栏体:看起来像一个搜索输入框,内含 chip + 内联自由文本输入 */}
+      <div
+        className={cn(
+          'flex flex-wrap items-center gap-1.5 rounded-md border border-input bg-transparent px-2.5 py-1.5 min-h-9 cursor-text',
+          'focus-within:ring-1 focus-within:ring-ring',
+        )}
+        onMouseDown={(e) => {
+          // 点空白处(非 chip/按钮)→ 聚焦输入并打开下拉
+          if (e.target === e.currentTarget) {
+            e.preventDefault();
+            inputRef.current?.focus();
+            setOpen(true);
+          }
         }}
       >
-        <PopoverAnchor asChild>
-          <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={() => setOpen(true)}>
-            <Plus className="size-3" />
-            过滤
-          </Button>
-        </PopoverAnchor>
-        <PopoverContent align="start" className="w-72 p-0">
+        <Search className="size-4 text-foreground-muted shrink-0" />
+        {clauses.map((c, i) => (
+          <Badge key={i} variant="secondary" className="gap-1 pl-2 pr-1 py-0.5 text-xs font-normal">
+            {clauseLabel(c)}
+            <button
+              type="button"
+              onClick={() => removeClause(i)}
+              className="rounded-sm hover:bg-background-secondary p-0.5"
+              aria-label="移除过滤"
+            >
+              <X className="size-3" />
+            </button>
+          </Badge>
+        ))}
+        <input
+          ref={inputRef}
+          value={barInput}
+          onChange={(e) => setBarInput(e.target.value)}
+          onFocus={() => setOpen(true)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              close();
+              inputRef.current?.blur();
+            }
+          }}
+          placeholder={clauses.length ? '继续搜索 / 过滤…' : '搜索输入/输出内容,或点选字段过滤…'}
+          aria-label="搜索或过滤 trace"
+          className="flex-1 min-w-[10rem] bg-transparent outline-none text-sm h-6 placeholder:text-muted-foreground"
+        />
+      </div>
+
+      {/* 下拉:field 阶段=字段列表(被 barInput 过滤);value 阶段=操作符 + 值录入 */}
+      {open && (
+        <div className="absolute left-0 top-full mt-1 z-50 w-full max-w-md rounded-md border border-card-border bg-card text-card-foreground shadow-sm">
           {stage === 'field' ? (
-            <div>
-              <div className="p-2 border-b border-border">
-                <Input
-                  autoFocus
-                  value={text}
-                  onChange={(e) => setText(e.target.value)}
-                  placeholder="选择字段…"
-                  className="h-8 text-sm"
-                />
+            <div className="py-1">
+              {/* 有输入 → 顶部「模糊搜索」行(自由文本已实时下推,点它仅收起下拉) */}
+              {barInput.trim() && (
+                <button
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    setOpen(false);
+                    inputRef.current?.blur();
+                  }}
+                  className="flex w-full items-center gap-2 border-b border-card-border px-3 py-2 text-left text-xs text-foreground-muted hover:bg-background-secondary"
+                >
+                  <Search className="size-3.5 shrink-0" />
+                  <span className="truncate">
+                    模糊搜索输入/输出含 <span className="font-medium text-foreground">{barInput.trim()}</span>
+                  </span>
+                </button>
+              )}
+
+              {/* 无输入 → SUGGESTIONS:示例列的最高频值 + 件数,点击直接加 chip(对标 langfuse) */}
+              {!barInput.trim() && suggestions.length > 0 && (
+                <>
+                  <div className="px-3 pb-1 pt-1.5 text-[11px] font-medium uppercase tracking-wide text-foreground-muted">
+                    建议
+                  </div>
+                  <ul className="pb-1">
+                    {suggestions.map((s) => (
+                      <li key={s.column}>
+                        <button
+                          type="button"
+                          onClick={() => addClause({ column: s.column, operator: 'any of', value: [s.value] })}
+                          className="flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-sm hover:bg-background-secondary"
+                        >
+                          <span className="truncate font-mono text-xs">
+                            <span className="text-foreground-muted">{s.column}:</span>
+                            {s.value}
+                          </span>
+                          <span className="shrink-0 text-xs tabular-nums text-foreground-muted">{s.count}</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+
+              <div className="px-3 pb-1 pt-1.5 text-[11px] font-medium uppercase tracking-wide text-foreground-muted">
+                字段
               </div>
-              <ul className="max-h-64 overflow-auto py-1">
+              <ul className="max-h-64 overflow-auto pb-1">
                 {fieldMatches.map((c) => (
                   <li key={c.column}>
                     <button
                       type="button"
                       onClick={() => pickField(c)}
-                      className="flex w-full items-center justify-between px-3 py-1.5 text-sm hover:bg-background-secondary text-left"
+                      className="flex w-full items-center gap-3 px-3 py-1.5 text-left text-sm hover:bg-background-secondary"
                     >
-                      <span>{c.label}</span>
-                      <span className="text-xs text-foreground-muted">{c.column}</span>
+                      <Search className="size-4 shrink-0 text-foreground-muted" />
+                      <span className="font-medium">{c.label}</span>
+                      <span className="ml-auto truncate text-xs text-foreground-muted">{c.description ?? c.column}</span>
                     </button>
                   </li>
                 ))}
-                {fieldMatches.length === 0 && (
-                  <li className="px-3 py-2 text-xs text-foreground-muted">无匹配字段</li>
-                )}
+                {fieldMatches.length === 0 && <li className="px-3 py-2 text-xs text-foreground-muted">无匹配字段</li>}
               </ul>
             </div>
           ) : (
@@ -217,7 +339,7 @@ export default function TraceFilterBar({ clauses, onChange, user }: Props) {
                 <div className="flex items-center gap-1 p-2 border-b border-border">
                   <button
                     type="button"
-                    onClick={reset}
+                    onClick={backToField}
                     className="rounded-sm hover:bg-background-secondary p-1"
                     aria-label="返回字段"
                   >
@@ -280,8 +402,8 @@ export default function TraceFilterBar({ clauses, onChange, user }: Props) {
                       <Input
                         autoFocus
                         type={col.type === 'number' ? 'number' : col.type === 'datetime' ? 'datetime-local' : 'text'}
-                        value={text}
-                        onChange={(e) => setText(e.target.value)}
+                        value={valueText}
+                        onChange={(e) => setValueText(e.target.value)}
                         onKeyDown={(e) => e.key === 'Enter' && commitValueStage()}
                         placeholder={col.unit ? `值（${col.unit}）` : '值…'}
                         className="h-8 text-sm"
@@ -295,8 +417,8 @@ export default function TraceFilterBar({ clauses, onChange, user }: Props) {
               </div>
             )
           )}
-        </PopoverContent>
-      </Popover>
+        </div>
+      )}
     </div>
   );
 }

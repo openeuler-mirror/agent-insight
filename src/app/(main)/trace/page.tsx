@@ -14,7 +14,6 @@ import {
     Layers,
     Terminal,
     RotateCcw,
-    Search,
 } from 'lucide-react';
 import { parseAsInteger, parseAsString, useQueryState } from 'nuqs';
 import { toast } from 'sonner';
@@ -30,7 +29,6 @@ import { apiFetch } from '@/lib/client/api';
 import { getPrimaryExecutionAgentName } from '@/lib/evaluator-agent';
 
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
@@ -352,14 +350,8 @@ function TracePageContent() {
     const [page, setPage] = useQueryState('page', parseAsInteger.withDefault(1));
     const [pageSize, setPageSize] = useQueryState('size', parseAsInteger.withDefault(20));
     const [taskIdParam, setTaskIdParam] = useQueryState('taskId', parseAsString);
-    // 文本搜索（trace input/output 模糊匹配，服务端下推）。draft = 输入框即时值；
-    // debounce 300ms 后写入 URL 的 `q` 触发 refetch，避免每个按键打一次后端。
+    // 文本搜索（trace input/output 模糊匹配，服务端下推）。输入框 + debounce 现由 TraceFilterBar 内联承载。
     const [search, setSearch] = useQueryState('q', parseAsString.withDefault(''));
-    const [searchDraft, setSearchDraft] = useState(search);
-    useEffect(() => {
-        const id = setTimeout(() => setSearch(searchDraft.trim() || null), 300);
-        return () => clearTimeout(id);
-    }, [searchDraft, setSearch]);
     // 结构化过滤子句(operator 模型),序列化进 URL 的 `f`,下推后端 filters=。
     const [clausesRaw, setClausesRaw] = useQueryState('f', parseAsString.withDefault(''));
     const clauses = useMemo<FilterClause[]>(() => {
@@ -574,7 +566,6 @@ function TracePageContent() {
         setFrameworkFilter('all');
         setAgentScopeFilter('root');
         setSearch(null);
-        setSearchDraft('');
         setClauses([]);
     };
 
@@ -628,23 +619,17 @@ function TracePageContent() {
                             />
                         </div>
 
-                        <div className="relative mb-3">
-                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-foreground-muted pointer-events-none" />
-                            {/* pl-9! 用 important 覆盖 Input 基类的 px-3：二者都设 padding-left，twMerge 会保留 px-3
-                                （它还管 padding-right），Tailwind v4 级联里 px-3 反而胜出 → 文字钻到放大镜下面。 */}
-                            <Input
-                                type="search"
-                                value={searchDraft}
-                                onChange={e => setSearchDraft(e.target.value)}
-                                placeholder={locale === 'zh' ? '搜索 trace 输入 / 输出内容…' : 'Search trace input / output…'}
-                                className="pl-9! h-9"
-                                aria-label={locale === 'zh' ? '搜索 trace 内容' : 'Search trace content'}
-                            />
-                        </div>
-
+                        {/* 统一搜索/过滤栏(对标 langfuse SearchComposer):一个栏内承载自由文本模糊搜索 + chip 结构化过滤,
+                            聚焦即弹字段下拉。自由文本走 `q`(input/output contains),chip 走 `f`(operator 模型下推)。 */}
                         {user && (
                             <div className="mb-3">
-                                <TraceFilterBar clauses={clauses} onChange={setClauses} user={user} />
+                                <TraceFilterBar
+                                    clauses={clauses}
+                                    onChange={setClauses}
+                                    search={search}
+                                    onSearchChange={(v) => setSearch(v || null)}
+                                    user={user}
+                                />
                             </div>
                         )}
 
