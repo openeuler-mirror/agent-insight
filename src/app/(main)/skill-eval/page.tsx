@@ -2520,7 +2520,7 @@ function AnalysisOverview({
                         ? '测试进行中...'
                         : `一键测试 ${selectedCount} 项`;
     // status 用均分分级：≥80 视为「正常」，否则「需关注」（跟详情页"维度均分"色阶对齐）
-    const staticCardStatus = !staticHasResult ? '待分析'
+    const staticCardStatus = staticStats.avgPct == null ? '待分析'
         : staticStats.avgPct >= 80 ? '正常' : '需关注';
     const staticAgoLabel = staticHasEvaluation && staticSummary?.latest
         ? formatRelative(staticSummary.latest.ranAt)

@@ -44,7 +44,8 @@ test('BR-009 连续量含 p50/p90/p95，二值含比率', () => {
     const hit = buckets.find((b) => b.n_traces > 0);
     assert.ok(hit, '应有非空桶');
     assert.ok(hit!.percentiles.latency.p50 <= hit!.percentiles.latency.p95, 'p50 ≤ p95');
-    assert.ok(hit!.ratios.completion >= 0 && hit!.ratios.completion <= 100, '完成率 0–100');
+    const completion = hit!.ratios.completion;
+    assert.ok(completion != null && completion >= 0 && completion <= 100, '完成率 0–100');
 });
 
 // 稀疏桶：n < thetaSample → lowConfidence。
