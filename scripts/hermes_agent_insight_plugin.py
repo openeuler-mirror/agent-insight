@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
 
-PLUGIN_VERSION = "0.2.0"
+PLUGIN_VERSION = "0.2.1"
 DEFAULT_MAX_CONTENT_CHARS = 200_000
 DEFAULT_LOG_MAX_BYTES = 2 * 1024 * 1024
 
@@ -278,7 +278,7 @@ class _FileLogger:
             pass
 
 
-class _SnapshotExporter:
+class _DeltaExporter:
     def __init__(self, config: Dict[str, Any]) -> None:
         self.endpoint = str(config.get("endpoint") or "")
         self.api_key = str(config.get("api_key") or "")
@@ -301,8 +301,8 @@ class _SnapshotExporter:
         self._worker.start()
         self.logger.write("info", f"exporter started spool={self.spool_dir} endpoint_configured={bool(self.endpoint)}")
 
-    def submit(self, root_id: str, payload: Dict[str, Any]) -> None:
-        path = self.spool_dir / f"{_stable_hex(root_id, 32)}.json"
+    def submit(self, item_id: str, payload: Dict[str, Any]) -> None:
+        path = self.spool_dir / f"{_stable_hex(item_id, 32)}.json"
         data = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         temp_path = path.with_name(f".{path.name}.{threading.get_ident()}.tmp")
         try:
@@ -421,7 +421,7 @@ class _Collector:
         self.max_chars = int(self.config.get("max_content_chars") or DEFAULT_MAX_CONTENT_CHARS)
         self.root_profile_name = _resolve_active_profile_name()
         self.root_agent_name = _agent_name_from_profile(self.root_profile_name)
-        self.exporter = _SnapshotExporter(self.config)
+        self.exporter = _DeltaExporter(self.config)
         self.lock = threading.RLock()
         self.sessions: Dict[str, Dict[str, Any]] = {}
         self.turns: Dict[tuple[str, str], Dict[str, Any]] = {}
@@ -505,9 +505,10 @@ class _Collector:
 
     def _complete(self, session_id: str, span: Dict[str, Any]) -> None:
         root_id = self._root_id(session_id)
+        span_id = str(span["spanId"])
         spans = self.completed_by_root.setdefault(root_id, {})
-        spans[str(span["spanId"])] = span
-        self.exporter.submit(root_id, self._payload(root_id, spans.values()))
+        spans[span_id] = span
+        self.exporter.submit(f"{root_id}:{span_id}", self._payload(root_id, [span]))
 
     def _payload(self, root_id: str, spans: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
         resource_attrs = {
