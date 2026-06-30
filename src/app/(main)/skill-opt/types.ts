@@ -26,9 +26,6 @@ export interface OptIssue {
     category: string;
     summary: string;
     evidence?: string;
-    reasoning?: string;
-    dedupKey?: string;
-    occurrence?: number;
     /**
      * 评估器子代理给出的"应当在 SKILL.md 哪段加什么约束"具体建议。
      * 仅当评估器判定 is_skill_attributable=true 时才有值；用户在 skill-opt 页可看到，

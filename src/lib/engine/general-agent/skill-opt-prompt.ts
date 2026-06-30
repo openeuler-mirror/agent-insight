@@ -10,20 +10,12 @@
  * 现成的 SKILL.md / scripts/ / references/，agent 应该 read-then-edit，不要新建副本。
  */
 
-import type { OptimizationScope } from '@/lib/engine/skill-optimization/opportunity-scope';
-import { formatSkillEditRegion } from '@/lib/engine/skill-optimization/skill-edit-regions';
-import { selectSkillOptIssues } from './skill-opt-scope';
-
 export interface SkillOptIssueLite {
   id: string;
   severity: 'high' | 'medium' | 'low';
   category?: string;
   summary: string;
   evidence?: string;
-  reasoning?: string;
-  dedupKey?: string;
-  occurrence?: number;
-  sourceKind?: 'trace' | 'fault' | 'log' | 'static';
   /** 评估器给的"在 SKILL.md 哪段加什么"具体建议；可空。直接喂 prompt，让 agent 优先按这条做。 */
   improvementSuggestion?: string;
 }
@@ -52,40 +44,19 @@ export interface BuildSkillOptPromptArgs {
   userFeedback: string;
   /** 归并 plan（core/reference 路由的待执行条目）；非空时替代 checkedIssues 注入 */
   planItems?: SkillOptPlanItemLite[];
-  /** 优化范围收束（rank/select/limit 后的本轮范围）；驱动 scope 段并按范围筛 issue */
-  optimizationScope?: OptimizationScope;
 }
 
 export function buildSkillOptSystemPrompt(args: BuildSkillOptPromptArgs): string {
-  const { skillName, baseVersion, checkedIssues, userFeedback, planItems, optimizationScope } = args;
+  const { skillName, baseVersion, checkedIssues, userFeedback, planItems } = args;
 
   const planMode = Array.isArray(planItems) && planItems.length > 0;
-  const scopedIssues = optimizationScope
-    ? selectSkillOptIssues(checkedIssues, optimizationScope)
-    : null;
-  const sortedIssues = scopedIssues ?? [...checkedIssues].sort(severityRank);
-  // plan 模式优先：plan 已是归并去重后的可执行条目，直接铺；否则按（收束后的）issue 列表铺。
-  const issuesSection = planMode
-    ? formatPlanSection(planItems!)
-    : formatIssuesSection(
-        sortedIssues,
-        optimizationScope ? '## 本轮待优化点（rank/select 后）' : '## 待优化点（按 severity 排序）',
-      );
-  const scopeSection = optimizationScope ? formatScopeSection(optimizationScope) : '';
+  const sortedIssues = [...checkedIssues].sort(severityRank);
+  const issuesSection = planMode ? formatPlanSection(planItems!) : formatIssuesSection(sortedIssues);
   const feedbackSection = formatFeedbackSection(userFeedback);
   const noInputBanner =
     !planMode && sortedIssues.length === 0 && !userFeedback.trim()
       ? '\n（用户既没勾选 issue 也没填诉求，请直接询问 / 给出改进建议而不是动文件。）\n'
       : '';
-  const editExpectation = optimizationScope
-    ? '探索之后**必须**调用 edit / write 工具实际落地修改，但只针对「本轮待优化点」和用户附加诉求。'
-    : '探索之后**必须**调用 edit / write 工具实际落地修改——这是用户期望看到的产出。';
-  const perIssueExpectation = optimizationScope
-    ? '即便你觉得现状已经不错，也要至少针对每个本轮选中的 issue 做一次有意义的修改尝试。'
-    : '即便你觉得现状已经不错，也要至少针对每个已勾选的 issue 做一次有意义的修改尝试。';
-  const scopeChangeRule = optimizationScope
-    ? '2. **不要无关改动**：只动「本轮允许编辑区域」内直接对应本轮待优化点或用户诉求的内容；保持原有结构、目录布局和 markdown 格式。'
-    : '2. **不要无关改动**：只动直接对应已勾选 issue 或用户诉求的内容；保持原有结构、目录布局和 markdown 格式。';
 
   return [
     '# 角色',
@@ -101,7 +72,6 @@ export function buildSkillOptSystemPrompt(args: BuildSkillOptPromptArgs): string
     '# 用户输入',
     '',
     issuesSection,
-    scopeSection,
     feedbackSection,
     noInputBanner,
     '# 工作流程（必须按顺序）',
@@ -109,8 +79,8 @@ export function buildSkillOptSystemPrompt(args: BuildSkillOptPromptArgs): string
     '**Step 1 · 探索**：用 read 工具查看 SKILL.md 与你判断相关的 scripts/references 文件。',
     '',
     '**Step 2 · 修改（必做）**：',
-    editExpectation,
-    perIssueExpectation,
+    '探索之后**必须**调用 edit / write 工具实际落地修改——这是用户期望看到的产出。',
+    '即便你觉得现状已经不错，也要至少针对每个已勾选的 issue 做一次有意义的修改尝试。',
     '只读不写不是合格的优化输出。',
     '',
     '**Step 3 · 收尾报告**：所有文件改完之后，**用一段 markdown 输出"修改总结"**。这段会作为',
@@ -143,7 +113,7 @@ export function buildSkillOptSystemPrompt(args: BuildSkillOptPromptArgs): string
       : '1. **prevalence 优先**：如果多个 issue 指向同一段文本或同一类问题，**合并成一次修改**并表达成"通用原则"，而不是为每个 issue 单独打补丁。',
     planMode
       ? '2. **锚点最小编辑（关键纪律）**：每个 plan item 带了 `目标位置`（targetFile + 锚点原文）。用 `edit` 在该锚点处做**最小必要修改**，不要整段/整文件重写。改动范围严格限定在 plan 列出的条目，**没被任何 item 指向的文件/段落一律不动**。'
-      : scopeChangeRule,
+      : '2. **不要无关改动**：只动直接对应已勾选 issue 或用户诉求的内容；保持原有结构、目录布局和 markdown 格式。',
     '3. **就地编辑**：用 edit / write 工具直接改原文件。**不要**新建 `.draft` / `.new` / `*.bak` / `optimized/` 之类的副本目录或文件——前端会通过 diff 视图让用户对比。',
     planMode
       ? '4. **保护既有可用产物（防回归，关键）**：现有 `scripts/` 里能正确运行的脚本是基线的核心资产。'
@@ -160,7 +130,6 @@ export function buildSkillOptSystemPrompt(args: BuildSkillOptPromptArgs): string
     '6. **定量正确性（不止"文件在"，要"算得对"）**：脚本里的日期/年份、计数、IP 等必须**解析自日志真实内容**——'
       + '年份要从日志行里解析出来（如 ftpd 连接行尾的真实年份），**禁止硬编码、禁止回落到当前系统年份**（曾出现取年正则匹配 0 行 → 静默用 2026 的真实事故）；'
       + '数字一律来自脚本输出、禁止编造。这是「能编译却答错」最常翻车的地方，改完会有自动评测复跑校验，错了会被打回重修。',
-    '7. **Gate**：如果某个本轮 issue 证据不足、建议不可执行，或需要额外 trace 才能判断，不要扩大改写范围；把它放入"暂未处理"并说明需要什么信息。',
     '',
     '# 运行环境',
     '',
@@ -173,23 +142,17 @@ function severityRank(a: SkillOptIssueLite, b: SkillOptIssueLite): number {
   return (order[a.severity] ?? 3) - (order[b.severity] ?? 3);
 }
 
-function formatIssuesSection(issues: SkillOptIssueLite[], title: string): string {
+function formatIssuesSection(issues: SkillOptIssueLite[]): string {
   if (issues.length === 0) {
     return '## 待优化点\n\n（用户未勾选任何 issue）\n';
   }
-  const lines = [title, ''];
+  const lines = ['## 待优化点（按 severity 排序）', ''];
   for (const it of issues) {
     const cat = it.category ? ` · ${it.category}` : '';
     lines.push(`### \`${it.id}\` · **${it.severity}**${cat}`);
     lines.push(`- 摘要：${it.summary}`);
-    if (it.occurrence && it.occurrence > 1) {
-      lines.push(`- 出现次数：${it.occurrence}`);
-    }
     if (it.evidence) {
       lines.push(`- 证据：${it.evidence}`);
-    }
-    if (it.reasoning) {
-      lines.push(`- 归因推理：${it.reasoning}`);
     }
     if (it.improvementSuggestion) {
       lines.push(`- 改进建议（评估器给出，优先按此执行）：${it.improvementSuggestion}`);
@@ -197,33 +160,6 @@ function formatIssuesSection(issues: SkillOptIssueLite[], title: string): string
     lines.push('');
   }
   return lines.join('\n');
-}
-
-function formatScopeSection(scope: OptimizationScope): string {
-  const selected = scope.issueIds;
-  const deferred = scope.deferred
-    .map(item => item.issueId)
-    .filter((id): id is string => Boolean(id));
-  const lines = [
-    '## 本轮优化范围',
-    '',
-    '- rank：按 SkillIssue 的 severity、prevalence 排序。',
-    `- limit：本轮最多处理 ${scope.limits.maxOpportunities} 个 issue，最多触达 ${scope.limits.maxFiles} 个文件。`,
-    `- select：本轮只处理 ${selected.length} 个 issue：${selected.length ? selected.map(id => `\`${id}\``).join('、') : '无'}`,
-    `- 允许编辑文件：${scope.allowedFiles.length ? scope.allowedFiles.map(file => `\`${file}\``).join('、') : '无'}`,
-  ];
-  if (scope.allowedRegions.length > 0) {
-    lines.push('- 本轮允许编辑区域：');
-    for (const region of scope.allowedRegions) {
-      lines.push(`  - \`${formatSkillEditRegion(region)}\``);
-    }
-    lines.push('- 只允许修改以上 frontmatter 字段或 markdown 标题段落；如果需要改其它区域，把对应 issue 放入"暂未处理"。');
-  }
-  if (deferred.length > 0) {
-    lines.push(`- 延后到后续轮次：${deferred.map(id => `\`${id}\``).join('、')}`);
-    lines.push('- 收尾报告里把延后项放到"暂未处理"，原因写"本轮优化面收束，留待下一轮"。');
-  }
-  return `${lines.join('\n')}\n`;
 }
 
 function formatFeedbackSection(feedback: string): string {
