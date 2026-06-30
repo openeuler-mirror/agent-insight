@@ -351,6 +351,112 @@ test("Claude OTel: maps Agent tool calls into trace subagent relationships", () 
   assert.equal(tree?.children[0]?.stats.totalTokens, 33)
 })
 
+test("Claude OTel: surfaces the system prompt from api_request_body", () => {
+  const systemText = "You are Claude Code. Follow the rules and use tools."
+  const responseBody = JSON.stringify({
+    id: "msg_sys",
+    type: "message",
+    role: "assistant",
+    model: "claude-sonnet-4-6",
+    content: [{ type: "text", text: "hi" }],
+    usage: { input_tokens: 5, output_tokens: 2 },
+    stop_reason: "end_turn",
+  })
+  // Anthropic carries the system prompt at the top level (string OR text-block array),
+  // separate from `messages`.
+  const requestBody = JSON.stringify({
+    model: "claude-sonnet-4-6",
+    system: [{ type: "text", text: systemText }],
+    messages: [{ role: "user", content: "hello" }],
+  })
+
+  const events = normalizeClaudeOtlpLogs({
+    resourceLogs: [{
+      scopeLogs: [{
+        logRecords: [
+          logRecord("user_prompt", {
+            "session.id": "s-sys",
+            "prompt.id": "p-sys",
+            "event.sequence": 1,
+            prompt: "hello",
+          }),
+          logRecord("api_request_body", {
+            "session.id": "s-sys",
+            "prompt.id": "p-sys",
+            "event.sequence": 2,
+            body: requestBody,
+          }),
+          logRecord("api_response_body", {
+            "session.id": "s-sys",
+            "prompt.id": "p-sys",
+            "event.sequence": 3,
+            model: "claude-sonnet-4-6",
+            body: responseBody,
+          }),
+        ],
+      }],
+    }],
+  })
+
+  const record = aggregateClaudeOtelEvents("s-sys", events)
+  assert.ok(record)
+  const system = record.interactions?.find((item: any) => item.role === "system")
+  assert.ok(system, "expected a system interaction")
+  assert.equal(system.content, systemText)
+  assert.equal(system.system_prompt_length, systemText.length)
+
+  const tree = buildAgentCallTree(record.interactions as any[])
+  assert.equal(tree?.systemPrompts?.length, 1)
+  assert.equal(tree?.systemPrompts?.[0]?.text, systemText)
+})
+
+test("Claude OTel: surfaces thinking blocks as reasoning parts", () => {
+  const responseBody = JSON.stringify({
+    id: "msg_think",
+    type: "message",
+    role: "assistant",
+    model: "claude-sonnet-4-6",
+    content: [
+      { type: "thinking", thinking: "Let me reason about this step by step.", signature: "sig" },
+      { type: "text", text: "The answer is 4." },
+    ],
+    usage: { input_tokens: 6, output_tokens: 3 },
+    stop_reason: "end_turn",
+  })
+
+  const events = normalizeClaudeOtlpLogs({
+    resourceLogs: [{
+      scopeLogs: [{
+        logRecords: [
+          logRecord("user_prompt", {
+            "session.id": "s-think",
+            "prompt.id": "p-think",
+            "event.sequence": 1,
+            prompt: "what is 2+2?",
+          }),
+          logRecord("api_response_body", {
+            "session.id": "s-think",
+            "prompt.id": "p-think",
+            "event.sequence": 2,
+            model: "claude-sonnet-4-6",
+            body: responseBody,
+          }),
+        ],
+      }],
+    }],
+  })
+
+  const record = aggregateClaudeOtelEvents("s-think", events)
+  assert.ok(record)
+  const assistant = record.interactions?.find((item: any) => item.role === "assistant")
+  assert.ok(assistant, "expected an assistant interaction")
+  // visible answer stays as content; thinking is carried separately as a reasoning part
+  assert.equal(assistant.content, "The answer is 4.")
+  assert.deepEqual(assistant.parts, [
+    { type: "reasoning", text: "Let me reason about this step by step." },
+  ])
+})
+
 test("ClaudeCode interactions: converts content blocks to storage-safe strings", () => {
   const rawBlocks = [{ type: "text", text: "hello" }]
   const normalized = normalizeClaudeCodeInteractionsForStorage([

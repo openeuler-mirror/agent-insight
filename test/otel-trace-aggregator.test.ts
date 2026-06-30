@@ -773,3 +773,80 @@ test("OTel traces: Hermes parses provider candidate content and preserves API er
   assert.equal(errorInteraction?.content, "API request failed: provider temporarily unavailable");
   assert.equal(errorInteraction?.error?.message, "provider temporarily unavailable");
 });
+
+test("OTel traces: Hermes adapter surfaces the system prompt from request messages", () => {
+  const requestMessages = JSON.stringify([
+    { role: "system", content: "You are a Hermes agent. Be concise." },
+    { role: "user", content: "hi" },
+  ]);
+  const events = [
+    traceEvent({
+      sessionId: "sess-sys",
+      traceId: "trace-sys",
+      spanId: "span-agent",
+      name: "agent",
+      serviceName: "hermes",
+      model: undefined,
+      usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+      startTimeMs: 1000,
+      attributes: {
+        "openinference.span.kind": "AGENT",
+        "hermes.session.kind": "session",
+        "hermes.agent.role": "root",
+        "hermes.agent.name": "default",
+        "hermes.profile.name": "default",
+        "input.value": "hi",
+        "output.value": "hello",
+      },
+    }),
+    traceEvent({
+      sessionId: "sess-sys",
+      traceId: "trace-sys",
+      spanId: "span-llm",
+      parentSpanId: "span-agent",
+      name: "llm.GLM",
+      serviceName: "hermes",
+      model: undefined,
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+      startTimeMs: 1005,
+      attributes: {
+        "openinference.span.kind": "LLM",
+        "input.value": "hi",
+        "output.value": "hello",
+      },
+    }),
+    traceEvent({
+      sessionId: "sess-sys",
+      traceId: "trace-sys",
+      spanId: "span-api",
+      parentSpanId: "span-llm",
+      name: "api.GLM",
+      serviceName: "hermes",
+      model: undefined,
+      usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+      startTimeMs: 1006,
+      attributes: {
+        "openinference.span.kind": "LLM",
+        "llm.model_name": "GLM",
+        "input.value": requestMessages,
+        "llm.input_messages": requestMessages,
+        "output.value": "hello",
+        "llm.response.finish_reason": "stop",
+      },
+    }),
+  ];
+
+  const record = aggregateOtelTraceEvents("sess-sys", events);
+  assert.ok(record);
+  const system = record.interactions?.find((it: any) => it.role === "system");
+  assert.ok(system, "expected a system interaction");
+  assert.equal(system.content, "You are a Hermes agent. Be concise.");
+  assert.equal(system.system_prompt_length, "You are a Hermes agent. Be concise.".length);
+  // a plain-string input.value (no messages array) must NOT fabricate a system turn
+  const userOnly = record.interactions?.find((it: any) => it.role === "user");
+  assert.equal(userOnly?.content, "hi");
+
+  const tree = buildAgentCallTree(record.interactions as any[]);
+  assert.equal(tree?.systemPrompts?.length, 1);
+  assert.equal(tree?.systemPrompts?.[0]?.text, "You are a Hermes agent. Be concise.");
+});
