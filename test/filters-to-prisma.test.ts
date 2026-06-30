@@ -47,8 +47,9 @@ test('string: contains / =/ does not contain / starts / ends', () => {
   assert.deepEqual(buildPrismaWhere([{ column: 'query', operator: '=', value: 'foo' }]).where, {
     AND: [{ query: 'foo' }],
   });
+  // query is nullable → does not contain also matches NULL rows (see null-negation test)
   assert.deepEqual(buildPrismaWhere([{ column: 'query', operator: 'does not contain', value: 'foo' }]).where, {
-    AND: [{ NOT: { query: { contains: 'foo' } } }],
+    AND: [{ OR: [{ NOT: { query: { contains: 'foo' } } }, { query: null }] }],
   });
   assert.deepEqual(buildPrismaWhere([{ column: 'agentName', operator: 'starts with', value: 'Ku' }]).where, {
     AND: [{ agentName: { startsWith: 'Ku' } }],
@@ -102,12 +103,25 @@ test('boolean: equals true/false, coerces "true"/"false"', () => {
 
 // ---- stringOptions ----
 
-test('stringOptions: any of -> in, none of -> notIn', () => {
+test('stringOptions: any of -> in, none of -> notIn (+ null-include on nullable)', () => {
   assert.deepEqual(buildPrismaWhere([{ column: 'framework', operator: 'any of', value: ['claude', 'opencode'] }]).where, {
     AND: [{ framework: { in: ['claude', 'opencode'] } }],
   });
+  // framework is nullable → none of must also include NULL rows (null isn't any of the values)
   assert.deepEqual(buildPrismaWhere([{ column: 'framework', operator: 'none of', value: ['hermes'] }]).where, {
-    AND: [{ framework: { notIn: ['hermes'] } }],
+    AND: [{ OR: [{ framework: { notIn: ['hermes'] } }, { framework: null }] }],
+  });
+});
+
+test('null-negation: nullable cols include NULL rows on does-not-contain / none-of; non-nullable stay plain', () => {
+  // does not contain on nullable `query`
+  assert.deepEqual(buildPrismaWhere([{ column: 'query', operator: 'does not contain', value: 'x' }]).where, {
+    AND: [{ OR: [{ NOT: { query: { contains: 'x' } } }, { query: null }] }],
+  });
+  // non-nullable col via custom resolver → plain NOT, no OR-null
+  const reg = (c: string) => (c === 'name' ? { column: 'name', type: 'string' as const, label: 'n' } : undefined);
+  assert.deepEqual(buildPrismaWhere([{ column: 'name', operator: 'does not contain', value: 'x' }], reg).where, {
+    AND: [{ NOT: { name: { contains: 'x' } } }],
   });
 });
 
@@ -120,8 +134,9 @@ test('arrayOptions(observedAgents): any of/all of/none of degrade to JSON-member
   assert.deepEqual(buildPrismaWhere([{ column: 'agents', operator: 'all of', value: ['a', 'b'] }]).where, {
     AND: [{ AND: [{ observedAgents: { contains: '"a"' } }, { observedAgents: { contains: '"b"' } }] }],
   });
+  // agents is nullable → none of wraps NOT(OR contains) with an observedAgents IS NULL alternative
   assert.deepEqual(buildPrismaWhere([{ column: 'agents', operator: 'none of', value: ['x'] }]).where, {
-    AND: [{ NOT: { OR: [{ observedAgents: { contains: '"x"' } }] } }],
+    AND: [{ OR: [{ NOT: { OR: [{ observedAgents: { contains: '"x"' } }] } }, { observedAgents: null }] }],
   });
 });
 

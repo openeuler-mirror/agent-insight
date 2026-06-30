@@ -69,8 +69,11 @@ export interface FilterColumn {
   nullable?: boolean;
   /** 文法栏裸值语义(front half 用),Phase 1 仅登记不消费。 */
   syncMode?: SyncMode;
-  /** 数值/时间的展示单位(如 latency 'ms'、cost '$')。 */
+  /** 数值/时间的展示单位(如 latency 's'、cost '$')。仅作 UI 标注,不做单位换算——
+   *  过滤值与 DB 原始列同单位(见 trace-columns.ts 对 latency=秒的说明)。 */
   unit?: string;
+  /** 字段说明,langfuse 风格 FIELDS 下拉右侧灰字。 */
+  description?: string;
 }
 
 /** 一条过滤子句。多条之间 AND 组合(Phase 1 不支持跨字段 OR)。 */

@@ -329,6 +329,22 @@ export const TRACE_FILTER_COLUMNS = [
 
 ---
 
+## 8. 对抗性测试结论(filter 功能,06-30)
+
+用「真实 API(3023)vs 直连 DB 同语义 ground truth」对比 ~25 个场景,发现并修复 2 个真 bug、记录 2 个局限:
+
+**已修复**
+- **latency 单位错(用户点名)**:DB 原始 `latency` 是**秒**(claude=durationMs/1000、jiuwen=ns/1e9),但注册表标了 `ms` 且裸下推 `latency > 值` → 用户输 `2000`(以为 2 秒)几乎匹配不到。**改单位为秒**(`unit:'s'`、描述「执行时长(秒)」),裸比较原始列即正确。实测 `latency>2` → 36 条命中。(展示侧 `toDisplayLatencyMs` 的 ms 换算是另一套、且对 jiuwenswarm 漏转 = 独立**展示** bug,本期不动。)
+- **否定操作符丢 NULL 行**:`does not contain` / `none of` 用 `NOT(LIKE)` / `notIn`,SQL 里对 NULL 行求值为 NULL → 被排除;但「不包含 X / 不属于这些值」语义上 NULL 应命中。**nullable 列的否定结果再 OR `IS NULL`**。证据:`subagentType`(该 user 全 NULL)`none of [kuafu]` 修复前 0 → 修复后 60。
+
+**已记录的局限(本期不修)**
+- **LIKE 通配符不转义**:Prisma SQLite 的 `contains/startsWith/endsWith` 不转义 `_`/`%`(无 ESCAPE)。`de_pseek`、`de%` 都会通配匹配 → **过匹配**(返回超集,绝不漏)。彻底修需 raw SQL `LIKE … ESCAPE`,危害小故缓。已在 `to-prisma.ts` 注明。
+- **分数列 0–1 标度**:`answerScore/skillScore/skillTriggerRate` 存 0–1(非 0–100),描述里标「(0–1)」提示用户按 0–1 输入。
+
+**已验证正确**(api==truth):number 区间(>/>=/</<=、负/零/小数、string 强转)、datetime 区间(ISO→Date、拒 `=`)、stringOptions any/none、string contains/前后缀、boolean、`agents` observedAgents JSON 成员降级(any/all/none,且不被子串误命中)、多子句 AND、`q` 自由文本 + clause 组合、非法子句优雅忽略(不 500、不过滤)、deferred(skill/status/ownership)忽略。
+
+---
+
 ## 附:对照一图
 
 ```

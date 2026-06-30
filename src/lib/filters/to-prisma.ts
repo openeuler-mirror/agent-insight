@@ -6,8 +6,12 @@
  * 需异步反查或派生的列(executionSkill / computed)放进 `deferred` 交调用方。
  *
  * 多条子句 AND 组合(用 `where.AND` 数组,避免同字段多子句的 key 覆盖)。
- * SQLite 注意:`contains/startsWith/endsWith` 走 LIKE,对 ASCII 默认大小写不敏感;
- * Prisma 在 SQLite 上不支持 `mode:'insensitive'`(写了会报错)。
+ * SQLite 注意:
+ *  - `contains/startsWith/endsWith` 走 LIKE,对 ASCII 默认大小写不敏感;Prisma 在 SQLite 上不支持
+ *    `mode:'insensitive'`(写了会报错)。
+ *  - ⚠️ 已知局限:Prisma SQLite 的 `contains/startsWith/endsWith` **不转义 LIKE 通配符** `_` / `%`
+ *    (无 ESCAPE 子句)。故搜索值里的 `_`/`%` 会被当通配符,可能**过匹配**(返回超集,绝不漏)。
+ *    彻底修需走 raw SQL `LIKE … ESCAPE`,本期不做(危害小、仅过匹配)。
  */
 import { type FilterClause, type FilterColumn, isOperatorAllowed } from './types';
 import { resolveTraceColumn } from './trace-columns';
@@ -73,6 +77,17 @@ function fieldName(col: FilterColumn): string {
   return col.field ?? col.column;
 }
 
+/**
+ * 否定类操作符(does not contain / none of)的 NULL 修正:SQL 里 `NOT (col LIKE …)` 和
+ * `col NOT IN (…)` 对 NULL 行求值为 NULL → 被排除。但「不包含 X / 不属于这些值」语义上 NULL 应**命中**
+ * (空值确实不包含 X)。所以 nullable 列的否定结果再 OR 上 `col IS NULL`。
+ * (正向匹配 =/contains/>/… 无需此修正:NULL 本就该被排除。)
+ */
+function includeNullOnNegation(frag: PrismaWhere, col: FilterColumn): PrismaWhere {
+  if (!col.nullable) return frag;
+  return { OR: [frag, { [fieldName(col)]: null }] };
+}
+
 function lowerColumn(col: FilterColumn, clause: FilterClause): Frag {
   const f = fieldName(col);
   const op = clause.operator;
@@ -89,7 +104,7 @@ function lowerColumn(col: FilterColumn, clause: FilterClause): Frag {
         case 'contains':
           return { [f]: { contains: v } };
         case 'does not contain':
-          return { NOT: { [f]: { contains: v } } };
+          return includeNullOnNegation({ NOT: { [f]: { contains: v } } }, col);
         case 'starts with':
           return { [f]: { startsWith: v } };
         case 'ends with':
@@ -119,7 +134,7 @@ function lowerColumn(col: FilterColumn, clause: FilterClause): Frag {
       const arr = asStringArray(clause.value);
       if (arr === null || arr.length === 0) return INVALID;
       if (op === 'any of') return { [f]: { in: arr } };
-      if (op === 'none of') return { [f]: { notIn: arr } };
+      if (op === 'none of') return includeNullOnNegation({ [f]: { notIn: arr } }, col);
       return INVALID;
     }
     case 'arrayOptions':
@@ -146,7 +161,7 @@ function lowerObservedAgents(col: FilterColumn, clause: FilterClause): Frag {
   const member = (v: string): PrismaWhere => ({ [f]: { contains: JSON.stringify(v) } });
   if (op === 'any of') return { OR: arr.map(member) };
   if (op === 'all of') return { AND: arr.map(member) };
-  if (op === 'none of') return { NOT: { OR: arr.map(member) } };
+  if (op === 'none of') return includeNullOnNegation({ NOT: { OR: arr.map(member) } }, col);
   return INVALID;
 }
 
