@@ -24,7 +24,7 @@
 
 随着 Agent 在各行业的落地，开发者面临三大痛点：Agent 运行过程如同黑盒，难以定位问题根因；Skill 质量参差不齐，缺少体系化的评测与迭代手段；Agent 经验无法沉淀复用，每次优化都从零开始。
 
-**Agent-Insight** 正是为解决这些问题而生 —— 它是一个**框架无关**的 Agent Insight 工程底座，让运行在 OpenCode、Claude Code、Hermes 等任意框架上的 Agent 都能被持续观测、系统评测和自主优化。
+**Agent-Insight** 正是为解决这些问题而生 —— 它是一个**框架无关**的 Agent Insight 工程底座，让运行在 OpenCode、Claude Code、Hermes、Openclaw 等任意框架上的 Agent 都能被持续观测、系统评测和自主优化。
 
 > 与同类产品不同的是，Agent-Insight 把 **Skills（Agent 能力）** 作为一等公民，提供从生成、A/B 测试到优化的完整闭环。
 
@@ -69,72 +69,83 @@ Agent-Insight 框架无关，已接入以下 Agent 运行时/框架，更多平�
 - Node.js >= 20.0.0
 - 3000 端口未被占用
 
-**一键安装**
+提供以下两种安装方式，可根据实际应用场景任选其一：
+
+#### 方式一：使用 npm 快速部署（推荐）
+
+通过包管理工具直接安装，适用于快速启动及基础使用的场景。
 
 ```bash
 npx agent-insight install
 ```
 
-**源码安装**
+**平台服务管理命令参考：**
+
+| 命令 | 说明 |
+| :--- | :--- |
+| `npx agent-insight install` | 一键安装平台及所有组件 |
+| `npx agent-insight start` | 启动服务（默认 3000 端口） |
+| `npx agent-insight start --port <端口>` | 指定端口启动 |
+| `npx agent-insight stop --port <端口>` | 停止指定端口的服务 |
+| `npx agent-insight restart` | 重启服务 |
+| `npx agent-insight status` | 查看服务运行状态 |
+| `npx agent-insight logs` | 查看服务日志 |
+
+#### 方式二：基于源码构建
+
+适用于需要二次开发或深度定制的场景。
 
 ```bash
 git clone https://gitcode.com/openeuler/agent-insight.git
 cd agent-insight
 npm install
-
-# 开发模式
-bash scripts/develop_start.sh
-
-# 生产模式
-bash scripts/start.sh
-
-# 配置数据上报路径
-curl -sSf "http://<IP>:<PORT>/api/setup?key=<API_KEY>" | bash
 ```
 
 **启动服务**
 
+安装完成后，在工作目录下执行以下命令启动服务：
+
 ```bash
 cd agent-insight
 
-# 开发模式
-bash scripts/develop_start.sh
-
-# 生产模式
+# 启动服务端，默认端口是3000
 bash scripts/start.sh
+```
+
+**停止服务**
+
+如果需要停止运行，在工作目录下执行以下命令。该脚本将安全关闭 Next.js 服务端及所有相关的后台子进程：
+
+```bash
+bash scripts/stop.sh
 ```
 
 **访问看板**
 
-浏览器打开 `http://localhost:3000`，使用任意邮箱登录即可，例如 `demo@163.com`。
+浏览器打开 `http://localhost:3000`，使用个人邮箱登录即可。
 
 <p align="center">
   <img src="docs/images/login.png" alt="登录" />
 </p>
 
-### 2. 安装客户端
+### 2. Agent 平台接入
 
-以下以 Linux 系统 + OpenCode 运行时为例：
+当前系统支持与多种主流 Agent 平台（包括但不限于 OpenCode、Claude Code 等）集成。为实现数据采集与能力观测，需在目标 Agent 平台中配置并安装 Agent-Insight 插件。各平台的插件安装流程基本通用，以下以 Linux 环境下的 OpenCode 平台为例，说明 Agent-Insight 插件的具体安装与配置方式：
 
-1. 在看板的 **安装指导** 页面复制客户端安装命令。
+1. 在看板的 **安装指导** 页面选择对应的 Agent 平台，并复制生成的插件安装命令。
    <p align="center"><img src="docs/images/guide.png" alt="安装指导" /></p>
 
-2. 在 Agent 所在服务器执行安装命令：
+2. 在目标 Agent 平台所在的服务器终端执行该安装命令，根据交互提示完成对应平台的插件安装配置。
 
-   ```bash
-   curl -sSf "http://172.29.209.207:3000/api/ingest/setup?key=<API_KEY>" | bash
-   ```
-
-3. 选择 Agent 运行时。
    <p align="center"><img src="docs/images/guide-framework.png" alt="选择运行时" /></p>
 
-4. 执行安装成功后提示的 Usage 命令，例如：
+3. 验证接入配置：在 Agent 平台中触发一次测试任务（仍以 OpenCode 为例，执行任意基础命令）。
 
    ```bash
    opencode run 'hello'
    ```
 
-5. 在看板的 **链路追踪** 页面确认链路数据已生成，即表示客户端安装成功。
+4. 登录 Agent-Insight 看板，进入 **链路追踪** 页面。若能观测到刚才执行的测试任务链路数据上报，即表明 Agent 平台已成功接入并正常工作。
    <p align="center"><img src="docs/images/trace.png" alt="链路追踪" /></p>
 
 ---

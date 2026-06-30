@@ -740,6 +740,43 @@
     font-size: 12px;
     min-width: 0;
 }
+.skopt-left .actions .scope-limit-picker {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    padding: 9px 10px;
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius);
+}
+.skopt-left .actions .scope-limit-title {
+    grid-column: 1 / -1;
+    color: var(--foreground-muted);
+    font-size: 12px;
+    font-weight: 600;
+}
+.skopt-left .actions .scope-limit-picker label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+    color: var(--foreground-secondary);
+    font-size: 11px;
+}
+.skopt-left .actions .scope-limit-picker input {
+    width: 100%;
+    min-width: 0;
+    padding: 5px 7px;
+    background: var(--input-bg);
+    border: 1px solid var(--input-border);
+    border-radius: var(--radius-sm);
+    color: var(--foreground);
+    font-size: 12px;
+}
+.skopt-left .actions .scope-limit-picker input:disabled {
+    color: var(--foreground-muted);
+    background: var(--background-tertiary);
+}
 .skopt-left .actions button {
     width: 100%;
     padding: 9px 12px;
@@ -884,6 +921,130 @@
     border-radius: var(--radius-sm);
     padding: 6px 10px;
     font-size: 13px;
+}
+.skopt-middle .msg.agent .skopt-scope-block {
+    border: 1px solid var(--primary-subtle-border);
+    background: var(--primary-subtle);
+    border-radius: var(--radius);
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.skopt-scope-block .scope-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: flex-start;
+}
+.skopt-scope-block .scope-kicker {
+    font-size: 11px;
+    line-height: 1.2;
+    color: var(--primary);
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    margin-bottom: 3px;
+}
+.skopt-scope-block strong {
+    font-size: 14px;
+}
+.skopt-scope-block .scope-stats {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+.skopt-scope-block .scope-stats span {
+    border: 1px solid var(--primary-subtle-border);
+    background: var(--card-bg);
+    color: var(--foreground-secondary);
+    border-radius: var(--radius-sm);
+    padding: 2px 7px;
+    font-size: 12px;
+    white-space: nowrap;
+}
+.skopt-scope-block .scope-section {
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-sm);
+    padding: 9px 10px;
+}
+.skopt-scope-block .scope-section.deferred {
+    background: var(--background-secondary);
+}
+.skopt-scope-block .scope-label {
+    color: var(--foreground-secondary);
+    font-size: 12px;
+    font-weight: 600;
+    margin-bottom: 6px;
+}
+.skopt-scope-block ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+.skopt-scope-block li {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+    color: var(--foreground);
+    font-size: 13px;
+}
+.skopt-scope-block li span:last-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.skopt-scope-block .scope-severity {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    min-width: 48px;
+    border-radius: var(--radius-sm);
+    padding: 1px 6px;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+}
+.skopt-scope-block .scope-severity.high {
+    color: var(--error);
+    border: 1px solid var(--error-subtle-border);
+    background: var(--error-subtle);
+}
+.skopt-scope-block .scope-severity.medium {
+    color: var(--warning);
+    border: 1px solid var(--warning-subtle-border);
+    background: var(--warning-subtle);
+}
+.skopt-scope-block .scope-severity.low,
+.skopt-scope-block .scope-severity.unknown {
+    color: var(--primary);
+    border: 1px solid var(--primary-subtle-border);
+    background: var(--primary-subtle);
+}
+.skopt-scope-block .scope-files {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    color: var(--foreground-muted);
+    font-size: 12px;
+}
+.skopt-scope-block .scope-files code {
+    color: var(--foreground);
+    background: var(--input-bg);
+    border: 1px solid var(--input-border);
+    border-radius: var(--radius-sm);
+    padding: 1px 5px;
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
 }
 /* ─── 顶栏右侧"优化记录"控件（mirror playground 的 history button + dropdown） ─── */
 .skopt-history-controls {

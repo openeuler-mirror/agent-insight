@@ -12,6 +12,13 @@ import {
   type SkillOptIssueLite,
   type SkillOptPlanItemLite,
 } from '@/lib/engine/general-agent/skill-opt-prompt';
+import type { OptimizationScope } from '@/lib/engine/skill-optimization/opportunity-scope';
+import {
+  buildSkillOptIssueScope,
+  selectSkillOptIssues,
+  summarizeSkillOptScope,
+  type SkillOptScopeSummary,
+} from '@/lib/engine/general-agent/skill-opt-scope';
 import { scanWorkspaceFiles, type FileData } from '@/lib/skill-generator-opencode-bridge';
 import { enforceEditScope } from '@/lib/engine/skill-opt/edit-scope-guard';
 import { runSelfVerification, type SelfVerifyResult } from '@/lib/engine/skill-opt/self-verify';
@@ -74,6 +81,7 @@ export interface StreamSkillOptOpts {
    * "scripts/extract.py"），值是文件全文。生产链路接 DB 后前端不传，自动忽略。
    */
   baselineFiles?: Record<string, string>;
+  optimizationScope?: OptimizationScope;
   send: (mode: string, payload: unknown) => void;
 }
 
@@ -93,7 +101,19 @@ export function streamSkillOptOpencode(
 async function streamSkillOptOpencodeImpl(
   opts: StreamSkillOptOpts,
 ): Promise<StreamSkillOptResult> {
-  const { user, threadId, skillName, baseVersion, checkedIssues, planItems, userFeedback, modelId, baselineFiles, send } = opts;
+  const {
+    user,
+    threadId,
+    skillName,
+    baseVersion,
+    checkedIssues,
+    planItems,
+    userFeedback,
+    modelId,
+    baselineFiles,
+    optimizationScope: providedOptimizationScope,
+    send,
+  } = opts;
 
   console.log('[skill-opt-bridge] start', {
     user, threadId, skillName, baseVersion,
@@ -114,6 +134,19 @@ async function streamSkillOptOpencodeImpl(
   if (prefilled.copied > 0) {
     console.log('[skill-opt-bridge] prefilled workspace:', prefilled);
   }
+  const skillMdContent = readWorkspaceSkillMd(workspaceDir) ?? baselineFiles?.['SKILL.md'] ?? null;
+  const optimizationScope = providedOptimizationScope
+    ?? buildSkillOptIssueScope(checkedIssues, undefined, skillMdContent);
+  const scopeSummary = summarizeSkillOptScope(optimizationScope);
+  const scopedIssues = selectSkillOptIssues(checkedIssues, optimizationScope);
+  console.log('[skill-opt-bridge] optimization scope', {
+    selected: scopeSummary.selectedIssueIds,
+    deferred: scopeSummary.deferredIssueIds,
+    limits: scopeSummary.limits,
+    allowedFiles: scopeSummary.allowedFiles,
+    allowedRegions: scopeSummary.allowedRegions.map(region => `${region.file}:${region.label}`),
+  });
+
   // 把预填后的 VFS 推一次给前端，让 diff 能立刻渲染基线（即便 agent 还没改）
   // 同时把这份"基线快照"留存——收尾时用它做编辑范围硬约束（防优化器删/大改既有资产）。
   let baselineVfs: Record<string, FileData> = {};
@@ -125,13 +158,19 @@ async function streamSkillOptOpencodeImpl(
   } catch {
     /* 扫描失败不阻塞——agent 跑完还会再扫一次 */
   }
+  send('optimization_scope', scopeSummary);
 
   // ── 2. 模型配置 ────────────────────────────────────────────────────────────
   const modelOverride = await resolveModelOverride(user, modelId);
 
   // ── 3. system prompt ───────────────────────────────────────────────────────
   const systemPrompt = buildSkillOptSystemPrompt({
-    skillName, baseVersion, checkedIssues, userFeedback, planItems,
+    skillName,
+    baseVersion,
+    checkedIssues,
+    userFeedback,
+    planItems,
+    optimizationScope,
   });
 
   // ── 4. SSE handlers + watchdog（直接抄 skill-generator 的）──────────────────────
@@ -312,7 +351,7 @@ async function streamSkillOptOpencodeImpl(
     result = await withBackgroundOpencodeSlot(
       () => runGeneralAgent({
         user,
-        query: composeUserQuery(checkedIssues, userFeedback, planItems),
+        query: composeUserQuery(planItems?.length ? checkedIssues : scopedIssues, userFeedback, planItems, scopeSummary),
         sessionId: cachedSessionId,
         workspaceTag: threadId,
         sessionTitle: `skill-opt · ${skillName} v${baseVersion} · ${threadId.slice(0, 8)}`,
@@ -339,7 +378,7 @@ async function streamSkillOptOpencodeImpl(
       result = await withBackgroundOpencodeSlot(
         () => runGeneralAgent({
           user,
-          query: composeUserQuery(checkedIssues, userFeedback, planItems),
+          query: composeUserQuery(planItems?.length ? checkedIssues : scopedIssues, userFeedback, planItems, scopeSummary),
           workspaceTag: threadId,
           sessionTitle: `skill-opt · ${skillName} v${baseVersion} · ${threadId.slice(0, 8)}`,
           system: systemPrompt,
@@ -463,6 +502,17 @@ async function streamSkillOptOpencodeImpl(
 // writeBaselineFiles）已拆到 ./skill-opt-storage，便于单测且与本文件的 opencode 重依赖解耦。
 // 这里只留需要 DB 的"权威目录解析"。
 
+/** 读 workspace 里的 SKILL.md 原文，供优化范围收束分析其结构；不存在/读失败返回 null。 */
+function readWorkspaceSkillMd(workspaceDir: string): string | null {
+  const skillMdPath = path.join(workspaceDir, 'SKILL.md');
+  try {
+    if (!fs.existsSync(skillMdPath)) return null;
+    return fs.readFileSync(skillMdPath, 'utf-8');
+  } catch {
+    return null;
+  }
+}
+
 /**
  * 按 skill 真实 id 解析 baseVersion 的【权威】存储目录绝对路径。
  *
@@ -514,14 +564,24 @@ function buildSelfVerifyRepairQuery(v: SelfVerifyResult): string {
   return parts.join('\n');
 }
 
-function composeUserQuery(issues: SkillOptIssueLite[], userFeedback: string, planItems?: SkillOptPlanItemLite[]): string {
+function composeUserQuery(
+  issues: SkillOptIssueLite[],
+  userFeedback: string,
+  planItems?: SkillOptPlanItemLite[],
+  scope?: SkillOptScopeSummary,
+): string {
   // system prompt 已包含 issues/plan 全部细节；query 只放一个简短的"开干"指令 + 用户原文，
   // 避免 LLM 把 system 当背景 / query 当主输入时漏掉哪一边。
   const lines: string[] = [];
   if (planItems && planItems.length > 0) {
     lines.push(`请按 system 提示中的优化计划逐条执行（共 ${planItems.length} 条）。`);
   } else if (issues.length > 0) {
-    lines.push(`请按 system 提示中列出的 ${issues.length} 个 issue 进行优化。`);
+    lines.push(`请按 system 提示中 rank/select 后的 ${issues.length} 个本轮 issue 进行优化。`);
+  } else if (scope && scope.deferredIssueIds.length > 0) {
+    lines.push('本轮没有可安全收束的 issue，请按 system 提示说明暂未处理原因，不要扩大改写范围。');
+  }
+  if (!planItems?.length && scope && (scope.allowedRegions.length > 0 || scope.deferredIssueIds.length > 0)) {
+    lines.push(`本轮允许编辑区域 ${scope.allowedRegions.length} 个，延后 issue ${scope.deferredIssueIds.length} 个。`);
   }
   if (userFeedback.trim()) {
     lines.push('用户附加说明：');
@@ -586,4 +646,5 @@ function formatSessionError(err: unknown): string {
 export const __testing = {
   resolveAuthoritativeStorageDir,
   composeUserQuery,
+  readWorkspaceSkillMd,
 };

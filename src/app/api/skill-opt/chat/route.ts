@@ -1,6 +1,13 @@
 import { NextRequest } from 'next/server';
 import { streamSkillOptOpencode } from '@/lib/skill-opt-bridge';
 import type { SkillOptIssueLite, SkillOptPlanItemLite } from '@/lib/engine/general-agent/skill-opt-prompt';
+import {
+  buildSkillOptIssueScope,
+  selectSkillOptIssues,
+  summarizeSkillOptScope,
+  resolveSkillOptScopeLimits,
+  type SkillOptScopeSummary,
+} from '@/lib/engine/general-agent/skill-opt-scope';
 import { prismaRaw } from '@/lib/storage/prisma';
 import { createBlockMirror } from '@/lib/chat/block-mirror';
 
@@ -22,6 +29,10 @@ export const dynamic = 'force-dynamic';
  *     userFeedback: string;
  *     modelId?: string;
  *     mock?: boolean;              // true → 回放固定脚本，不调 LLM
+ *     scopeLimits?: {              // 可选；不传则读 env，再退回默认 5/5
+ *       maxOpportunities?: number; // env: SKILL_OPT_MAX_OPPORTUNITIES
+ *       maxFiles?: number;         // env: SKILL_OPT_MAX_FILES
+ *     };
  *   }
  *
  * 持久化（skill-generator 同款）：
@@ -41,7 +52,19 @@ export async function POST(req: NextRequest) {
     return new Response(JSON.stringify({ error: 'Invalid JSON' }), { status: 400 });
   }
 
-  const { user, threadId, skillName, baseVersion, checkedIssues, userFeedback, modelId, baselineFiles, mock, planId } = body || {};
+  const {
+    user,
+    threadId,
+    skillName,
+    baseVersion,
+    checkedIssues,
+    userFeedback,
+    modelId,
+    baselineFiles,
+    mock,
+    planId,
+    scopeLimits,
+  } = body || {};
 
   const missing: string[] = [];
   if (!user) missing.push('user');
@@ -61,6 +84,10 @@ export async function POST(req: NextRequest) {
           category: typeof it.category === 'string' ? it.category : undefined,
           summary: String(it.summary),
           evidence: typeof it.evidence === 'string' ? it.evidence : undefined,
+          reasoning: typeof it.reasoning === 'string' ? it.reasoning : undefined,
+          dedupKey: typeof it.dedupKey === 'string' ? it.dedupKey : undefined,
+          occurrence: Number.isFinite(Number(it.occurrence)) ? Math.max(1, Math.trunc(Number(it.occurrence))) : undefined,
+          sourceKind: (['trace', 'fault', 'log', 'static'] as const).includes(it.sourceKind) ? it.sourceKind : undefined,
           improvementSuggestion: typeof it.improvementSuggestion === 'string' ? it.improvementSuggestion : undefined,
         }))
     : [];
@@ -123,13 +150,22 @@ export async function POST(req: NextRequest) {
     return Object.keys(out).length > 0 ? out : undefined;
   })();
 
+  const resolvedScopeLimits = resolveSkillOptScopeLimits(scopeLimits);
+  const optimizationScope = buildSkillOptIssueScope(
+    issuesNormalized,
+    resolvedScopeLimits,
+    baselineFilesNormalized?.['SKILL.md'],
+  );
+  const scopeSummary = summarizeSkillOptScope(optimizationScope);
+  const scopedIssues = selectSkillOptIssues(issuesNormalized, optimizationScope);
+
   const encoder = new TextEncoder();
 
   // ── 持久化前置：构造一条 user message 描述这次"开始优化"的请求。
   // 用 issues/plan + feedback 拼，让会话历史回看时知道用户每次点了什么。
   const userMessageText = planItems
     ? composePlanUserMessageText(planItems, feedback)
-    : composeUserMessageText(issuesNormalized, feedback);
+    : composeUserMessageText(issuesNormalized, feedback, scopeSummary);
 
   // session 校验 + 落 user message + auto-title（skill-generator 同款逻辑，区别只是表名）
   let sessionExists = false;
@@ -171,7 +207,8 @@ export async function POST(req: NextRequest) {
             if (mode === 'text' && typeof payload === 'string') agentText += payload;
             send(mode, payload);
           };
-          await runMockScript({ skillName, baseVersion, issues: issuesNormalized, feedback, send: trackedSend });
+          trackedSend('optimization_scope', scopeSummary);
+          await runMockScript({ skillName, baseVersion, issues: scopedIssues, feedback, send: trackedSend });
           send('done', { reason: 'completed' });
         } catch (err: any) {
           try { send('error', err?.message || String(err)); } catch { /* closed */ }
@@ -221,6 +258,7 @@ export async function POST(req: NextRequest) {
           userFeedback: feedback,
           modelId,
           baselineFiles: baselineFilesNormalized,
+          optimizationScope,
           send: trackedSend,
         });
       } catch (err: any) {
@@ -269,11 +307,23 @@ function composePlanUserMessageText(items: SkillOptPlanItemLite[], feedback: str
   return parts.join('\n\n');
 }
 
-function composeUserMessageText(issues: SkillOptIssueLite[], feedback: string): string {
+function composeUserMessageText(
+  issues: SkillOptIssueLite[],
+  feedback: string,
+  scope?: SkillOptScopeSummary,
+): string {
   const parts: string[] = [];
   if (issues.length > 0) {
     const summary = issues.map(i => `[${i.severity}] ${i.id}: ${i.summary}`).join('\n');
     parts.push(`勾选了 ${issues.length} 个待优化点：\n${summary}`);
+  }
+  if (scope && (scope.selectedIssueIds.length > 0 || scope.deferredIssueIds.length > 0)) {
+    parts.push([
+      `本轮优化面收束：处理 ${scope.selectedIssueIds.length} 个，延后 ${scope.deferredIssueIds.length} 个。`,
+      scope.allowedRegions.length > 0
+        ? `允许编辑区域：${scope.allowedRegions.map(r => `${r.file}:${r.label}`).join('、')}`
+        : `允许编辑文件：${scope.allowedFiles.join('、') || '无'}`,
+    ].join('\n'));
   }
   if (feedback.trim()) {
     parts.push(`附加诉求：${feedback.trim()}`);
