@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { judgeAnswer } from '@/lib/engine/evaluation/judge';
+import { normalizeEndpointUrl } from '@/lib/infra/endpoint-resolve';
 import { db, prisma, prismaRaw } from '@/lib/storage/prisma';
 import { getModelPricing, calculateCost, getModelContextWindow, DEFAULT_CACHE_READ_RATIO, DEFAULT_CACHE_CREATION_RATIO } from '@/lib/shared/model-config';
 import {
@@ -282,6 +283,8 @@ export interface ExecutionRecord {
     label?: string | null;
     user?: string | null;
     model?: string | null;
+    /** 真实推理源 URL（scheme://host:port），session↔infra 关联键。 */
+    endpoint?: string | null;
     agent?: string | null;
     agentName?: string | null;
     agentType?: string | null;
@@ -2477,6 +2480,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
             agentId: agentId,
             skillVersion: targetRecord.skill_version,
             model: targetRecord.model,
+            endpoint: normalizeEndpointUrl(targetRecord.endpoint),
             toolCallCount: targetRecord.tool_call_count,
             llmCallCount: targetRecord.llm_call_count,
             inputTokens: targetRecord.input_tokens,
@@ -2514,6 +2518,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
             agentId: agentId,
             skillVersion: targetRecord.skill_version,
             model: targetRecord.model,
+            endpoint: normalizeEndpointUrl(targetRecord.endpoint),
             toolCallCount: targetRecord.tool_call_count,
             llmCallCount: targetRecord.llm_call_count,
             inputTokens: targetRecord.input_tokens,

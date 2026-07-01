@@ -39,7 +39,8 @@ AGENT WORKSPACE  (nav.groupAgentWorkspace)
 ├─ 运行观测 (groupObserve)
 │  ├─ 链路追踪           → /trace   (matchPrefixes: /trace, /details)
 │  ├─ 智能诊断           → /fault
-│  └─ 质量监控           → /quality
+│  ├─ 质量监控           → /quality
+│  └─ 推理 Infra         → /infra
 ├─ 评测中心 (evalCenter)
 │  ├─ 评测数据集         → /dataset
 │  ├─ 评估器             → /metrics

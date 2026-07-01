@@ -103,6 +103,6 @@
 | skill-generator | `skill-generator/{chat,sessions/*,files/*,attachments,download/*}` | skill 生成 playground 后端 |
 | eval | `eval/{config/*,evaluation,rejudge,settings,trajectory/*}` | 数据集配置、评测运行、轨迹评测 |
 | debug | `debug/{batch-tasks/*,grayscale-tasks/*,execute/*,history/*}` | 批量与灰度（A/B）执行编排 |
-| observe | `observe/{data,session,task-stats,executions/[executionId]/*}` | 可观测性数据与单次执行分析 |
+| observe | `observe/{data,session,task-stats,infra/*,executions/[executionId]/*}` | 可观测性数据、infra 观测与单次执行分析 |
 | fault | `fault/diagnosis/{session,stream}` | 故障诊断对话（agent-debug） |
 | misc | `agents`、`agent-datasets/*`、`auth/*`、`dashboard/stats`、`guide`、`user-evaluators`、`background-tasks`、`evaluation/*` | 注册表、数据集、认证、仪表盘、引导 |
