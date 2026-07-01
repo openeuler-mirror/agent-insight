@@ -1,4 +1,5 @@
 import { prismaRaw } from '@/lib/storage/prisma';
+import { SYSTEM_AGENT_NAME_SET } from '@/lib/system-agent-names';
 
 /**
  * 系统内置 Agent 注册表。
@@ -222,9 +223,37 @@ async function migrateLegacyUnregisteredToUser(): Promise<void> {
   }
 }
 
+/**
+ * 一次性把「已知系统 Agent 名」但归属仍是 user 的历史行升为 system。幂等。
+ *
+ * 修因：系统 Agent 的身份被 (platform, name) 绑定，而同一逻辑 Agent（尤其评估器
+ * trace-quality-evaluator / task-completion-evaluator）有多条执行路径——评估器既有
+ * opencode 版（已登记 system），又有 direct-llm 版。走 direct-llm 时 ingest 按
+ * (platform=direct-llm, name) 找不到系统登记，就落成 user 行，污染用户 trace 列表 /
+ * Agent 管理页 / 概览统计。这里按名字（与 framework 无关）纠正历史脏数据；写侧新数据由
+ * data-service ingest 直接按名字落 system，读侧 trace 列表再加一层框架无关兜底。
+ */
+async function migrateKnownSystemAgentNamesToSystemOwnership(): Promise<void> {
+  try {
+    await (prismaRaw as any).registeredAgent.updateMany({
+      where: {
+        name: { in: Array.from(SYSTEM_AGENT_NAME_SET) },
+        agentOwnership: { not: 'system' },
+      },
+      data: { agentOwnership: 'system' },
+    });
+  } catch (err) {
+    console.warn(
+      '[system-agents] migrate known system-agent names → system failed:',
+      (err as Error)?.message,
+    );
+  }
+}
+
 /** 启动时一次性注册所有系统 Agent。失败的那些不阻塞别的，独立 catch。 */
 export async function ensureAllSystemAgents(): Promise<void> {
   await migrateLegacyUnregisteredToUser();
+  await migrateKnownSystemAgentNamesToSystemOwnership();
   await Promise.all(SYSTEM_AGENTS.map((d) => ensureSystemAgent(d).catch(() => null)));
 }
 

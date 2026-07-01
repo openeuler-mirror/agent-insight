@@ -31,6 +31,7 @@ import { extractKeyActionsFromFlow, mergeKeyActionsFromMultipleSkills, type Extr
 import { mergeSessionInteractionsMonotonic } from '@/lib/engine/observability/session-interactions-merge';
 import { buildAgentCallTree, inferSubagentType, walkTree, type AgentNode } from '@/lib/engine/observability/agent-trace';
 import { isEvaluatorAgentName } from '@/lib/evaluator-agent';
+import { isInternalSystemAgentTrace } from '@/lib/system-agent-names';
 import { getAdapter } from '@/lib/ingest/adapters/registry';
 import { normalizeInteractions } from '@/lib/shared/interaction-utils';
 import { buildPrismaWhere } from '@/lib/filters/to-prisma';
@@ -1585,9 +1586,14 @@ async function hydrateAndNormalizeBatch(
             framework: r.framework || undefined,
             agent: r.agentName || undefined,
             agentName: r.agentName || undefined,
-            agentOwnership: (r.framework && effectiveAgentName)
-                ? (agentOwnershipMap.get(`${r.framework}::${effectiveAgentName}`) ?? 'user')
-                : 'user',
+            // 归属兜底：已知系统/内置 Agent 名（评估器等）一律判 system，与 framework 无关。
+            // 修复同一逻辑系统 Agent 换 framework（如评估器的 direct-llm 路径）逃出 (platform,name)
+            // 注册、被误判为 user 的问题。写侧登记 + 启动迁移见 system-agents.ts，此处为框架无关兜底。
+            agentOwnership: isInternalSystemAgentTrace(effectiveAgentName)
+                ? 'system'
+                : (r.framework && effectiveAgentName)
+                    ? (agentOwnershipMap.get(`${r.framework}::${effectiveAgentName}`) ?? 'user')
+                    : 'user',
             tokens: r.tokens || undefined,
             cost: (pricing && r.inputTokens != null && r.outputTokens != null)
                 ? calculateCost(r.inputTokens, r.outputTokens, pricing, r.cacheReadInputTokens ?? undefined, r.cacheCreationInputTokens ?? undefined)
@@ -2429,7 +2435,9 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
                             platform,
                             name: observed.name,
                             user,
-                            agentOwnership: 'user',
+                            // 已知系统/内置 Agent 名（评估器等）直接落 system，避免它们换 framework
+                            // （如评估器的 direct-llm 路径）被 ingest 登记成 user、污染用户视图/统计。
+                            agentOwnership: isInternalSystemAgentTrace(observed.name) ? 'system' : 'user',
                             agentType: observed.agentType === 'main'
                                 ? (targetRecord.agentType || 'main')
                                 : 'subagent'
