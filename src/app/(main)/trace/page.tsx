@@ -458,19 +458,6 @@ function TracePageContent() {
             .catch(() => setAvailableSkills([]));
     }, [user]);
 
-    // agents 下拉仍从当前工作集推导(framework 同理)。
-    const availableAgents = useMemo(() => {
-        const agents = new Set<string>();
-        data.forEach(d => getExecutionAgentNames(d).forEach(a => agents.add(a)));
-        return Array.from(agents).sort();
-    }, [data]);
-
-    const frameworks = useMemo(() => {
-        const set = new Set<string>();
-        data.forEach(d => d.framework && set.add(d.framework));
-        return Array.from(set).sort();
-    }, [data]);
-
     const filtered = useMemo(() => {
         const now = Date.now();
         const winMs = TIME_WIN_MS[timeFilter as TimeFilter] ?? Infinity;
@@ -591,9 +578,7 @@ function TracePageContent() {
         { value: '24h', label: t('topbar.last24h') },
         { value: '1h', label: t('nav.last1Hour') },
     ];
-    const agentOptions: SelectOption[] = [{ value: 'all', label: t('common.all') }, ...availableAgents.map(a => ({ value: a, label: a }))];
     const skillOptions: SelectOption[] = [{ value: 'all', label: t('common.all') }, ...availableSkills.map(s => ({ value: s, label: s }))];
-    const frameworkOptions: SelectOption[] = [{ value: 'all', label: t('common.all') }, ...frameworks.map(f => ({ value: f, label: f }))];
 
     return (
         <>
@@ -637,29 +622,14 @@ function TracePageContent() {
                             </div>
                         )}
 
-                        {/* filters 显隐(对标 langfuse Hide filters) */}
-                        <div className="mb-2">
+                        {/* filters 显隐 + 常用快捷下拉(ownership/skill/status/time/scope)横排在按钮右侧。
+                            agent 去掉(与搜索栏 agentName 重)、平台去掉(framework 挪进左侧结构化侧栏做 facet 多选)。 */}
+                        <div className="mb-2 flex flex-wrap items-center gap-2">
                             <Button variant="outline" size="sm" className="h-7 gap-1.5 text-xs" onClick={() => setShowFilters(v => !v)}>
                                 <SlidersHorizontal className="size-3.5" />
                                 {showFilters ? (locale === 'zh' ? '隐藏过滤' : 'Hide filters') : (locale === 'zh' ? '显示过滤' : 'Show filters')}
                             </Button>
-                        </div>
-
-                        {/* 二栏:左=Filters 侧栏(对标 langfuse 最左列),右=列表。两者与搜索栏共享同一份 clauses。 */}
-                        <div className="flex-1 min-h-0 flex gap-3">
-                            {showFilters && (
-                                <aside className="w-60 shrink-0 overflow-auto rounded-md border border-card-border bg-card">
-                                    <div className="flex items-center justify-between px-3 py-2 border-b border-card-border">
-                                        <span className="text-sm font-semibold">{locale === 'zh' ? '过滤器' : 'Filters'}</span>
-                                        {hasActiveFilters && (
-                                            <Button variant="ghost" size="sm" onClick={resetFilters} className="h-6 px-1.5 text-xs text-foreground-muted gap-1">
-                                                <XIcon className="size-3" />
-                                                {t('tracePage.resetFilters')}
-                                            </Button>
-                                        )}
-                                    </div>
-                                    {/* 既有下拉(ownership/agent/skill/status/time/framework/scope)竖排 */}
-                                    <div className="space-y-2 p-3 border-b border-card-border">
+                            <Separator orientation="vertical" className="h-5" />
                             <Select
                                 label={t('nav.filterAgentOwnership')}
                                 value={ownershipFilter}
@@ -667,15 +637,6 @@ function TracePageContent() {
                                 options={ownershipOptions}
                                 active={ownershipFilter !== 'all'}
                             />
-                            {availableAgents.length > 0 && (
-                                <Select
-                                    label="Agent"
-                                    value={agentFilter}
-                                    onChange={setAgentFilter}
-                                    options={agentOptions}
-                                    active={agentFilter !== 'all' && agentFilter !== ''}
-                                />
-                            )}
                             {availableSkills.length > 0 && (
                                 <Select
                                     label="Skill"
@@ -699,15 +660,6 @@ function TracePageContent() {
                                 options={timeOptions}
                                 active={timeFilter !== 'all'}
                             />
-                            {frameworks.length > 1 && (
-                                <Select
-                                    label={t('tracePage.filterPlatform')}
-                                    value={frameworkFilter}
-                                    onChange={setFrameworkFilter}
-                                    options={frameworkOptions}
-                                    active={frameworkFilter !== 'all'}
-                                />
-                            )}
                             <Select
                                 label={locale === 'zh' ? '范围' : 'Scope'}
                                 value={agentScopeFilter}
@@ -719,6 +671,20 @@ function TracePageContent() {
                                 ]}
                                 active={agentScopeFilter !== 'root'}
                             />
+                            {hasActiveFilters && (
+                                <Button variant="ghost" size="sm" onClick={resetFilters} className="ml-auto h-7 gap-1 text-xs text-foreground-muted">
+                                    <XIcon className="size-3" />
+                                    {t('tracePage.resetFilters')}
+                                </Button>
+                            )}
+                        </div>
+
+                        {/* 二栏:左=结构化 Filters 侧栏(对标 langfuse 最左列),右=列表。与搜索栏共享同一份 clauses。 */}
+                        <div className="flex-1 min-h-0 flex gap-3">
+                            {showFilters && (
+                                <aside className="w-60 shrink-0 overflow-auto rounded-md border border-card-border bg-card">
+                                    <div className="px-3 py-2 border-b border-card-border">
+                                        <span className="text-sm font-semibold">{locale === 'zh' ? '过滤器' : 'Filters'}</span>
                                     </div>
                                     {/* 结构化字段(clauses):数值区间 / 布尔 / 文本包含 / 枚举多选 */}
                                     {user && (
