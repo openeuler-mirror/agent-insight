@@ -186,6 +186,7 @@ export const zh = {
     columnStatus: '执行状态',
     columnTags: '标签',
     columnTask: '任务内容',
+    columnTokens: 'Tokens',
     columnTime: '执行时间',
     columnActions: '操作',
     resetColumnWidths: '恢复默认列宽',

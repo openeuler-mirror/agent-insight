@@ -112,13 +112,14 @@ const REFRESH_INTERVAL_OPTIONS = [5, 10, 30, 60] as const;
 // Resizable trace-list columns. "task" has no fixed width — it absorbs remaining
 // space via `table-fixed` + col without width. Widths persist to localStorage per
 // user (docs/design/patterns.md §11 — table state survives reload).
-type ResizableColKey = 'traceId' | 'agent' | 'status' | 'tags' | 'time' | 'actions';
+type ResizableColKey = 'traceId' | 'agent' | 'status' | 'tags' | 'tokens' | 'time' | 'actions';
 
 const DEFAULT_COLUMN_WIDTHS: Record<ResizableColKey, number> = {
     traceId: 130,
     agent:   170,
     status:  110,
     tags:    240,
+    tokens:  110,
     time:    120,
     actions: 220,
 };
@@ -127,6 +128,7 @@ const MIN_COLUMN_WIDTH: Record<ResizableColKey, number> = {
     agent:   100,
     status:  80,
     tags:    120,
+    tokens:  70,
     time:    80,
     actions: 160,
 };
@@ -393,7 +395,7 @@ function TracePageContent() {
 
     const { widths, setColumnWidth, resetColumnWidths, isCustomized } = useColumnWidths();
     const tableMinWidth = useMemo(
-        () => widths.traceId + widths.agent + widths.status + widths.tags + widths.time + widths.actions + TASK_COL_MIN_PX,
+        () => widths.traceId + widths.agent + widths.status + widths.tags + widths.tokens + widths.time + widths.actions + TASK_COL_MIN_PX,
         [widths],
     );
 
@@ -534,7 +536,7 @@ function TracePageContent() {
             setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
         } else {
             setSortKey(key);
-            setSortDir(key === 'timestamp' ? 'desc' : 'asc');
+            setSortDir(key === 'timestamp' || key === 'tokens' ? 'desc' : 'asc');
         }
     };
 
@@ -742,6 +744,7 @@ function TracePageContent() {
                                             <col style={{ width: widths.status }} />
                                             <col style={{ width: widths.tags }} />
                                             <col />
+                                            <col style={{ width: widths.tokens }} />
                                             <col style={{ width: widths.time }} />
                                             <col style={{ width: widths.actions }} />
                                         </colgroup>
@@ -758,6 +761,9 @@ function TracePageContent() {
                                                 </SortableTh>
                                                 <Th colKey="tags" currentWidth={widths.tags} onResize={setColumnWidth}>{t('tracePage.columnTags')}</Th>
                                                 <Th>{t('tracePage.columnTask')}</Th>
+                                                <SortableTh sortKey="tokens" currentKey={sortKey as SortKey} dir={sortDir as SortDir} onSort={handleSort} colKey="tokens" currentWidth={widths.tokens} onResize={setColumnWidth}>
+                                                    <Term id="tokens" label={t('tracePage.columnTokens')} />
+                                                </SortableTh>
                                                 <SortableTh sortKey="timestamp" currentKey={sortKey as SortKey} dir={sortDir as SortDir} onSort={handleSort} colKey="time" currentWidth={widths.time} onResize={setColumnWidth}>{t('tracePage.columnTime')}</SortableTh>
                                                 <Th align="right" colKey="actions" currentWidth={widths.actions} onResize={setColumnWidth}>{t('tracePage.columnActions')}</Th>
                                             </tr>
@@ -1244,6 +1250,11 @@ function Row({
                 <TruncateText className="text-foreground text-sm">
                     {e.query || t('tracePage.noQuery')}
                 </TruncateText>
+            </Td>
+            <Td>
+                <span className="text-xs text-foreground-secondary font-mono tabular-nums whitespace-nowrap">
+                    {e.tokens != null ? e.tokens.toLocaleString() : '-'}
+                </span>
             </Td>
             <Td>
                 <RelativeTime value={e.timestamp} className="text-xs text-foreground-secondary font-mono whitespace-nowrap" />

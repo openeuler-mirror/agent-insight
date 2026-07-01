@@ -186,6 +186,7 @@ export const en = {
     columnStatus: 'Status',
     columnTags: 'Tags',
     columnTask: 'Task',
+    columnTokens: 'Tokens',
     columnTime: 'Time',
     columnActions: 'Actions',
     resetColumnWidths: 'Reset column widths',
