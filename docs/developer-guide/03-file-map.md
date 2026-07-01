@@ -48,9 +48,10 @@
 | `storage/server-config.ts` | storage | `getActiveConfig`、`getUserSettings`、`saveUserSettings`；`ModelConfig`、`UserSettings` |
 | `auth/auth.ts` | auth | `resolveUser`、`canAccessSkill`；`AuthResult` |
 | `ingest/proxy-config.ts` / `proxy-store.ts` | ingest | `getProxyConfig`；`ProxyConfig`、`SessionData` |
-| `ingest/adapters/{registry,types,opencode,claude,openclaw,hermes}.ts` | ingest | `getAdapter`、`resolveFrameworkId`、`listFrameworks`；`FrameworkAdapter`、`FrameworkDescriptor` |
+| `ingest/adapters/{registry,types,opencode,claude,openclaw,hermes,langfuse-langgraph}.ts` | ingest | `getAdapter`、`resolveFrameworkId`、`listFrameworks`；`FrameworkAdapter`、`FrameworkDescriptor` |
 | `ingest/routing-signature.ts` | ingest | `RoutingSemanticSignature`、`RoutingSemanticMatch` |
 | `ingest/claude-otel/` / `ingest/otel-consumer/` / `openclaw-watcher.ts` | ingest | 特定框架的接入与 OTel spool 消费 |
+| `ingest/otel/langfuse.ts` / `ingest/otel/adapters/langfuse-langgraph.ts` | ingest | Langfuse Python SDK / LangGraph OTLP span tree 归属转换；`follow_skill`→skill、`call_report_subagent`→task/subagent |
 | `ingest/otel/adapters/hermes.ts` / `scripts/hermes_agent_insight_plugin.py` | ingest | Hermes span tree 归属转换；Hermes hooks 到累计 OTLP JSON snapshot |
 | `shared/model-config.ts` / `default-model-config.ts` | shared | `ModelPricing`，定价/上下文窗口查询 |
 | `shared/interaction-utils.ts` | shared | `InvokedSkill`，交互解析 |

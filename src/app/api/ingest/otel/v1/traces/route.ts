@@ -6,6 +6,22 @@ import { ingestJiuwenOtlp } from '@/lib/ingest/otel/jiuwen/ingest';
 import { db } from '@/lib/storage/prisma';
 import { NextResponse } from 'next/server';
 
+function userFromLangfuseBasicAuth(req: Request): string | undefined {
+  const auth = req.headers.get('authorization') || '';
+  if (!auth.toLowerCase().startsWith('basic ')) {
+    const publicKey = req.headers.get('x-langfuse-public-key')?.trim();
+    return publicKey || undefined;
+  }
+
+  try {
+    const decoded = Buffer.from(auth.slice('basic '.length).trim(), 'base64').toString('utf8');
+    const [publicKey] = decoded.split(':');
+    return publicKey?.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function POST(req: Request) {
   try {
     const apiKey = req.headers.get('x-witty-api-key');
@@ -18,6 +34,12 @@ export async function POST(req: Request) {
         console.log(`[OTel] Authenticated User: ${authenticatedUser}`);
       } else {
         console.warn(`[OTel] Invalid API Key provided: ${apiKey}`);
+      }
+    }
+    if (!authenticatedUser) {
+      authenticatedUser = userFromLangfuseBasicAuth(req);
+      if (authenticatedUser) {
+        console.log(`[OTel] Langfuse Basic Auth User: ${authenticatedUser}`);
       }
     }
 
@@ -65,7 +87,7 @@ export async function OPTIONS(req: Request) {
     headers: {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-witty-api-key, x-api-key, baggage, traceparent, tracestate',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-witty-api-key, x-api-key, x-langfuse-public-key, x-langfuse-sdk-name, x-langfuse-sdk-version, baggage, traceparent, tracestate',
     },
   });
 }

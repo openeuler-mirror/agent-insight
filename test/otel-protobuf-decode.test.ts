@@ -6,6 +6,7 @@ import test from "node:test"
 
 import otlpRoot from "@opentelemetry/otlp-transformer/build/src/generated/root"
 import { POST as postOtlpTraces } from "@/app/api/ingest/otel/v1/traces/route"
+import { POST as postLangfusePublicTraces } from "@/app/api/public/otel/v1/traces/route"
 import { normalizeOtlpTraces } from "@/lib/ingest/otel/normalize"
 import { decodeOtlpProtobufBody, decodeOtlpRequest } from "@/lib/ingest/otel/decode"
 import { listOtelTraceSpoolFiles } from "@/lib/ingest/otel/spool"
@@ -70,6 +71,36 @@ function encodeTraceRequest(body = buildTraceRequest()): Uint8Array {
   return traceRequestType.encode(traceRequestType.create(body)).finish()
 }
 
+function buildLangfuseTraceRequest() {
+  return {
+    resourceSpans: [{
+      resource: {
+        attributes: [
+          attr("service.name", "unknown_service"),
+          attr("service.instance.id", "langfuse-instance"),
+        ],
+      },
+      scopeSpans: [{
+        spans: [{
+          traceId: Buffer.from("11112222333344445555666677778888", "hex"),
+          spanId: Buffer.from("aaaabbbbccccdddd", "hex"),
+          name: "agent-run",
+          startTimeUnixNano: "1000000000",
+          endTimeUnixNano: "2000000000",
+          attributes: [
+            attr("langfuse.internal.is_app_root", true),
+            attr("langfuse.observation.type", "span"),
+            attr("langfuse.trace.metadata.ls_integration", "langgraph"),
+            attr("langfuse.trace.metadata.session_id", "langfuse-session"),
+            attr("langfuse.observation.input", JSON.stringify({ input: "hello", model: "gpt-test", skill: "server-troubleshooter" })),
+            attr("langfuse.observation.output", JSON.stringify({ final_output: "done" })),
+          ],
+        }],
+      }],
+    }],
+  }
+}
+
 test("OTLP protobuf decoder converts trace request into JSON-compatible trace object", () => {
   const decoded = decodeOtlpProtobufBody(encodeTraceRequest(), "traces")
   const spans = decoded.resourceSpans[0].scopeSpans[0].spans
@@ -131,6 +162,51 @@ test("OTLP traces route accepts protobuf requests and writes trace spool", async
     const spoolFile = files[0]
     const lines = fs.readFileSync(spoolFile, "utf8").trim().split("\n")
     assert.equal(lines.length, 2)
+  } finally {
+    if (prevSpoolDir === undefined) {
+      delete process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR
+    } else {
+      process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR = prevSpoolDir
+    }
+  }
+})
+
+test("Langfuse public OTLP traces route accepts protobuf and maps Basic Auth public key to user", async () => {
+  const prevSpoolDir = process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "langfuse-proto-route-"))
+  process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR = dir
+
+  try {
+    const req = new Request("http://localhost/api/public/otel/v1/traces", {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-protobuf",
+        "authorization": `Basic ${Buffer.from("alice:alice").toString("base64")}`,
+        "x-langfuse-sdk-name": "python",
+        "x-langfuse-public-key": "alice",
+      },
+      body: encodeTraceRequest(buildLangfuseTraceRequest()) as BodyInit,
+    })
+
+    const res = await postLangfusePublicTraces(req)
+    const body = await res.json()
+
+    assert.equal(res.status, 200)
+    assert.equal(body.status, "accepted")
+    assert.equal(body.received, 1)
+    assert.deepEqual(body.sessions, ["11112222333344445555666677778888"])
+
+    const files = listOtelTraceSpoolFiles(dir)
+    assert.equal(files.length, 1)
+    const lines = fs.readFileSync(files[0], "utf8").trim().split("\n")
+    assert.equal(lines.length, 1)
+    const event = JSON.parse(lines[0])
+    assert.equal(event.framework, undefined)
+    assert.equal(event.serviceName, "langfuse-langgraph")
+    assert.equal(event.sessionId, "11112222333344445555666677778888")
+    assert.equal(event.attributes["langfuse.internal.session_id"], "langfuse-session")
+    assert.equal(event.user, "alice")
+    assert.equal(event.kind, "span")
   } finally {
     if (prevSpoolDir === undefined) {
       delete process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR

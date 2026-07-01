@@ -5,6 +5,7 @@ import { buildAgentCallTree, walkTree, type AgentNode } from '@/lib/engine/obser
 import {
     computeOwnSkills,
     extractExplicitSkillsFromNode,
+    extractInvokedSkillsFromSessionInteractions,
     projectAgentNodeExecution,
 } from '@/lib/storage/data-service';
 
@@ -155,6 +156,31 @@ test('binding: Hermes skill_view follows the same per-agent ownership rule', () 
     assert.deepEqual(extractExplicitSkillsFromNode(child!).map(s => s.name), ['child-skill']);
 });
 
+test('binding: Langfuse LangGraph dispatcher extracts normalized skill tool calls', () => {
+    const interactions = [
+        { role: 'user', content: 'diagnose disk', timestamp: 1 },
+        {
+            role: 'assistant',
+            content: 'load skill',
+            timestamp: 2,
+            tool_calls: [{
+                id: 'skill',
+                type: 'function',
+                state: 'success',
+                function: {
+                    name: 'skill',
+                    arguments: JSON.stringify({ name: 'server-troubleshooter', source_tool: 'follow_skill' }),
+                },
+            }],
+        },
+    ];
+
+    assert.deepEqual(
+        extractInvokedSkillsFromSessionInteractions('langfuse-langgraph', interactions),
+        [{ name: 'server-troubleshooter', version: null }],
+    );
+});
+
 test('subagent projection: Hermes child stores its own result, usage, model, and calls', () => {
     const interactions = [
         { role: 'user', content: 'root question', timestamp: 1 },
@@ -203,4 +229,57 @@ test('subagent projection: Hermes child stores its own result, usage, model, and
     assert.equal(projection.llmCallCount, 2);
     assert.equal(projection.toolCallCount, 1);
     assert.equal(projection.toolCallErrorCount, 0);
+});
+
+test('subagent projection: ignores Langfuse JSON tool-call wrappers as text', () => {
+    const interactions = [
+        { role: 'user', content: 'root question', timestamp: 1 },
+        {
+            role: 'assistant', content: 'spawn report generator', timestamp: 2,
+            tool_calls: [{
+                id: 'task', type: 'function', state: 'success',
+                function: {
+                    name: 'task',
+                    arguments: JSON.stringify({
+                        subagent_type: 'report-generator',
+                        subagent_session_id: 'langfuse-child',
+                        description: 'write the diagnostic report',
+                    }),
+                },
+            }],
+        },
+        {
+            role: 'subagent',
+            subagent_session_id: 'langfuse-child',
+            subagent_name: 'report-generator',
+            content: JSON.stringify({
+                role: 'assistant',
+                content: '',
+                tool_calls: [{ name: 'write_report', args: { content: 'report' } }],
+            }),
+            timestamp: 3,
+            tool_calls: [{
+                id: 'write', type: 'function', state: 'success',
+                function: { name: 'write_report', arguments: JSON.stringify({ content: 'report' }) },
+                output: 'ok',
+            }],
+        },
+        {
+            role: 'subagent',
+            subagent_session_id: 'langfuse-child',
+            subagent_name: 'report-generator',
+            content: 'report saved',
+            timestamp: 4,
+        },
+    ];
+
+    const tree = buildAgentCallTree(interactions as any);
+    assert.ok(tree);
+    const child = subagentNode(tree!, 'langfuse-child');
+    assert.ok(child);
+
+    const projection = projectAgentNodeExecution(child!, interactions);
+    assert.equal(projection.query, 'report saved');
+    assert.equal(projection.finalResult, null);
+    assert.equal(projection.toolCallCount, 1);
 });

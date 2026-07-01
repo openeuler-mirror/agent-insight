@@ -168,7 +168,7 @@ async function persistExecutionSkills(
  */
 export function computeOwnSkills(framework: string | null | undefined, interactions: any[]): InvokedSkill[] {
     if (!Array.isArray(interactions) || interactions.length === 0) return [];
-    if (framework === 'opencode' || framework === 'hermes') {
+    if (framework === 'opencode' || framework === 'hermes' || framework === 'langfuse-langgraph') {
         const tree = buildAgentCallTree(interactions as any);
         return tree ? extractExplicitSkillsFromNode(tree) : [];
     }
@@ -2493,7 +2493,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
     // 通过 parentExecutionId 与 root 建立父子关系。列表/聚合默认 filter isSubagent=false，
     // 详情页可下钻到 sub-agent。历史上这里曾对相同 taskId 的 child Execution 做 dedup 删除，
     // 现在反过来——保留它们，并补齐父子链接。
-    if ((targetRecord.framework === 'opencode' || targetRecord.framework === 'hermes') && targetRecord.task_id && Array.isArray(mergedInteractionsForSession)) {
+    if ((targetRecord.framework === 'opencode' || targetRecord.framework === 'hermes' || targetRecord.framework === 'langfuse-langgraph') && targetRecord.task_id && Array.isArray(mergedInteractionsForSession)) {
         try {
             await deriveSubagentExecutions({
                 parentExecutionId: recordId,
@@ -2584,7 +2584,15 @@ export interface AgentNodeExecutionProjection {
 
 function interactionContentText(content: any): string {
     if (content == null) return '';
-    if (typeof content === 'string') return content;
+    if (typeof content === 'string') {
+        const trimmed = content.trim();
+        if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+            try {
+                return interactionContentText(JSON.parse(trimmed));
+            } catch {}
+        }
+        return content;
+    }
     if (Array.isArray(content)) {
         return content
             .map((part) => interactionContentText(part?.text ?? part?.content ?? part))
@@ -2612,6 +2620,36 @@ function isFailedAgentToolEvent(event: any): boolean {
         } catch {}
     }
     return false;
+}
+
+function parsedToolArguments(call: any): Record<string, any> {
+    const value = call?.function?.arguments ?? call?.arguments;
+    if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+    if (typeof value !== 'string') return {};
+    try {
+        const parsed = JSON.parse(value);
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+        return {};
+    }
+}
+
+function findSubagentSpawnDescription(interactions: any[], sessionId: string): string | null {
+    const sid = String(sessionId || '').trim();
+    if (!sid) return null;
+    for (const interaction of interactions) {
+        const calls = Array.isArray(interaction?.tool_calls) ? interaction.tool_calls : [];
+        for (const call of calls) {
+            const name = call?.function?.name ?? call?.name;
+            if (name !== 'task') continue;
+            const args = parsedToolArguments(call);
+            const argSessionId = String(args.subagent_session_id ?? args.session_id ?? args.agent_session_id ?? '').trim();
+            if (argSessionId !== sid) continue;
+            const description = interactionContentText(args.description ?? args.task_description ?? args.prompt ?? args.subagent_type).trim();
+            if (description) return description;
+        }
+    }
+    return null;
 }
 
 export function projectAgentNodeExecution(node: AgentNode, interactions: any[]): AgentNodeExecutionProjection {
@@ -2756,7 +2794,8 @@ export async function deriveSubagentExecutions(args: DeriveSubagentArgs): Promis
         }
         const childInteractions = [...sliceSystemPrompts, ...sliceTurns];
         const projection = projectAgentNodeExecution(node, interactions);
-        const queryText = projection.query.slice(0, 500);
+        const spawnDescription = findSubagentSpawnDescription(interactions, sessionId);
+        const queryText = (spawnDescription || projection.query).slice(0, 500);
         let ownSkills = extractExplicitSkillsFromNode(node);
         if (EXECUTION_SKILL_ENABLED) {
             try {
@@ -2767,6 +2806,7 @@ export async function deriveSubagentExecutions(args: DeriveSubagentArgs): Promis
         }
 
         const timestamp = node.startedAt ? new Date(node.startedAt) : new Date();
+        const childCompletedAt = node.endedAt ? new Date(node.endedAt) : null;
 
         const baseFields = {
             taskId: sessionId,
@@ -2828,12 +2868,14 @@ export async function deriveSubagentExecutions(args: DeriveSubagentArgs): Promis
                     user: parentUser ?? null,
                     query: queryText,
                     interactions: JSON.stringify(childInteractions),
+                    ...(childCompletedAt ? { endTime: childCompletedAt } : {}),
                 },
                 {
                     label: node.agentName ?? null,
                     user: parentUser ?? null,
                     query: queryText,
                     interactions: JSON.stringify(childInteractions),
+                    ...(childCompletedAt ? { endTime: childCompletedAt } : {}),
                 },
             );
         } catch (e) {

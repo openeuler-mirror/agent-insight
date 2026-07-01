@@ -36,6 +36,7 @@ description: "生成客户端接入命令并获取当前账号 API Key"
 
 - **Linux / macOS 命令**：用于 Bash 环境的一键接入
 - **Windows PowerShell 命令**：用于 PowerShell 环境的一键接入
+- **Langfuse Python SDK 环境变量**：用于已经接入 Langfuse Python SDK 或 LangChain CallbackHandler 的项目
 - **复制按钮**：用于复制对应平台命令
 - **说明提示区**：说明命令执行后通常需要输入 API Key，并完成后续初始化
 
@@ -63,6 +64,7 @@ description: "生成客户端接入命令并获取当前账号 API Key"
 | **上报路径** | 平台接收链路数据的接口路径，用于确认客户端上报目标。 |
 | **当前账号** | 当前登录态对应的用户身份，用于确认数据归属是否正确。 |
 | **API Key 状态** | 当前凭证的展示状态，用于辅助判断是否需要重新复制或更新。 |
+| **Langfuse 环境变量** | 将已有 Langfuse 上报目标重定向到 Agent Insight；`LANGFUSE_PUBLIC_KEY` 与 `LANGFUSE_SECRET_KEY` 暂填当前用户名，`session_id` 继续按 Langfuse 原语义作为跨 trace 会话归组字段。 |
 
 ## API Key 归属机制
 
@@ -97,7 +99,19 @@ API Key 决定客户端上报数据的身份归属与接入上下文。错误的
 5. 使用当前 API Key 完成配置。
 6. 触发一次验证执行并观察链路数据是否恢复。
 
-### 流程三：排查“无数据上报”
+### 流程三：接入已有 Langfuse Python SDK 项目
+
+适用于项目代码已经使用 Langfuse Python SDK、LangChain CallbackHandler 或兼容的 Langfuse OTLP 上报方式。
+
+1. 进入 **安装指导** 页面。
+2. 复制 **Langfuse Python SDK** 区域中的环境变量。
+3. 在目标项目运行环境中设置这些变量。
+4. 重新运行一次真实 agent 请求。
+5. 在 [链路追踪](../observability/view-traces) 中确认是否出现新的 Trace。
+
+Agent Insight 会按 Langfuse traceId 生成执行记录；Langfuse `session_id` 只是跨 trace 的会话归组字段，不参与生成 Agent Insight 执行 ID。
+
+### 流程四：排查“无数据上报”
 
 1. 回到安装指导页确认当前账号、API Key 与平台地址。
 2. 确认执行命令的机器就是目标 Agent 实际运行环境。
