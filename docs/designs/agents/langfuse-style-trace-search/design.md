@@ -313,7 +313,7 @@ export const TRACE_FILTER_COLUMNS = [
 | **Phase 0(最小切口)✅ 已落地+验证** | 顶部加**文本搜索框**(debounce 300ms→URL `q`);后端 `query` 从 `=` 改 `contains`,对 **input(`query`)+ output(`finalResult`)** 两列 OR 下推 Prisma(对齐 Langfuse input/output 搜索语义) | 立刻能「按内容模糊搜索」;改动面小,已验证下推链路。**验证**:直连 home DB(128 root,`system`→4)+ 真实 API 路由(user 作用域 60→`system` 1 / `SYSTEM` 1 大小写不敏感 / 乱码→0);tsc 净、`/trace` 编译 200 |
 | **Phase 1（back half · 模型）** | 落 `FilterType`/`Operator`/`OPERATORS_BY_TYPE`（对标 langfuse FieldDef.kind + operator 妥当性表）+ `TRACE_FILTER_COLUMNS` 列注册表（对标 `FIELDS`）+ `buildPrismaWhere` 翻译层（对标 adapter→FilterState→SQL）;现有 7 下拉接进模型(真实列下推、计算列暂留前端) | **这是 langfuse 的「back half」**:统一抽象;加一种过滤=注册一列。后续 front half 全靠它 |
 | **Phase 2（数据流）** | `readRecordsInternal` 服务端分页 + `count`;排序下推;API 增 `page/pageSize/filters/sort` | 解决「数据量越大越拖垮」;去掉前端内存分页 |
-| **Phase 3（结构化过滤 UI + facet）🟡 v1 已落地** | click 驱动过滤栏 `TraceFilterBar`(点「+过滤」→选字段→选操作符/值→chip);**facet 计数端点已建**(`facet=values&column=`→观测值+count,白名单 framework/agentName/model/subagentType);后端收 `filters=<JSON FilterClause[]>` 经 `buildPrismaWhere` 下推。**待补**:数值/时间区间双值控件、agents 多选(`ExecutionAgent` 反查表对称 `ExecutionSkill`)、现有 7 下拉收编进栏 | 对齐 langfuse 区间/多选 + 那个带件数的下拉。**验证**:facet(framework opencode34/direct-llm19/jiuwen7=60)+ clause 下推(any of/none of/contains/AND/非法兜底)真实 API 全过;tsc+eslint 净;`/trace` 编译 200 |
+| **Phase 3（结构化过滤 UI + facet）✅ 已落地(见 §9)** | **统一搜索/过滤栏 `TraceFilterBar`**(chip + 内联自由文本,聚焦弹 SUGGESTIONS+FIELDS 下拉)**+ 左侧 facet 侧栏 `TraceFilterSidebar`**(framework/skill facet 复选+件数、subagentType、model 包含、latency/tokens/cost/answerScore **区间双值**、布尔),二者共享同一份 `clauses`;**facet 计数端点** `facet=values&column=`(framework/agentName/model/subagentType + skill 走 ExecutionSkill 聚合);skill 经 `skill any of` clause 多选反查。**待补**:agents 多选(`ExecutionAgent` 反查表)、Phase 2 服务端分页 | langfuse「一份 FilterState 两个编辑器」在 SQLite 上落地。**验证**:facet + clause 下推 + skill 多选真实 API 全过(见 §8/§9);tsc+eslint 净、16 单测 |
 | **Phase 4（front half · 文法搜索栏）** | `field:value` 文法栏(用户要的「按 fields 选」):`langQ` 解析器 + `ast` + `adapter`(AST→FilterClause) + `filterClauseToQueryText`(反向导出) + `completions`(FIELDS+SUGGESTIONS,吃 Phase 3 的 facet) + **round-trip property test**;与 Phase 3 的结构化 UI 共享同一 FilterClause(两个编辑器一个真实源) | 复刻 langfuse 搜索栏;**只可能在 back half(P1)+facet(P3)就位后**才便宜 |
 | **后期(可选)** | SQLite FTS5 全文(input/output 大字段,对标 `matches`)、保存的视图、否定/分组扩展、自然语言入口(对标 `searchBar.generateFilter`,prompt 由列注册表生成) | 性能/体验增强,非必需 |
 
@@ -342,6 +342,54 @@ export const TRACE_FILTER_COLUMNS = [
 - **分数列 0–1 标度**:`answerScore/skillScore/skillTriggerRate` 存 0–1(非 0–100),描述里标「(0–1)」提示用户按 0–1 输入。
 
 **已验证正确**(api==truth):number 区间(>/>=/</<=、负/零/小数、string 强转)、datetime 区间(ISO→Date、拒 `=`)、stringOptions any/none、string contains/前后缀、boolean、`agents` observedAgents JSON 成员降级(any/all/none,且不被子串误命中)、多子句 AND、`q` 自由文本 + clause 组合、非法子句优雅忽略(不 500、不过滤)、deferred(skill/status/ownership)忽略。
+
+---
+
+## 9. front-half 落地:搜索栏 + 左侧 facet 侧栏(两个编辑器一份 FilterState)
+
+langfuse 的「一份 FilterState,两个编辑器」在我们(SQLite)侧的落地形态。三处过滤 UI **全部只读写同一份 `clauses`(URL `f`)+ 自由文本(URL `q`)**:
+
+```
+┌─ 顶部:统一搜索/过滤栏 TraceFilterBar ─────────────────────────┐
+│  🔍 [chip:framework 任一 opencode ×] [chip:latency ≥ 2 ×]  输入…│  ← 聚焦弹下拉
+│     下拉:SUGGESTIONS(示例列最高频值+件数) / FIELDS(图标+中文名+英文 column+描述)
+└──────────────────────────────────────────────────────────────┘
+[隐藏过滤] │ 归属 状态 时间 范围            ← 固定小枚举,普通紧凑下拉(不进 clauses)
+┌── 左:Filters 侧栏 ──┐ ┌── 右:trace 列表 ──────────────────┐
+│ framework  facet☑+件数 │ │  (表格)                          │
+│ skill      facet☑+件数 │ │                                  │
+│ subagentType facet    │ │                                  │
+│ model  包含           │ │                                  │
+│ latency/tokens/cost/  │ │                                  │
+│ answerScore  区间 min–max │                                  │
+│ isAnswerCorrect 全部·是·否 │                                 │
+└───────────────────────┘ └──────────────────────────────────┘
+```
+
+### 9.1 组件与职责
+- `src/components/observe/TraceFilterBar.tsx`:统一栏。chip = `clauses`;内联输入 debounce→`q`(input/output contains);聚焦弹字段下拉,选字段→操作符/值→加 chip。自前 outside-click 下拉(不用 Radix,免抢输入焦点)。
+- `src/components/observe/TraceFilterSidebar.tsx`:左侧 facet 侧栏。段按 kind 渲染:`select`(facet 复选+件数)/ `contains`(文本)/ `range`(数值双值)/ `boolean`(全部·是·否)。每段读写 `clauses` 里该列的子句。
+- `src/app/(main)/trace/page.tsx`:二栏布局 + Hide/Show filters;顶部横排放固定小枚举下拉(归属/状态/时间/范围,走各自前端/服务端既有通道,**不是 clause**)。
+
+### 9.2 字段归位原则
+| 去处 | 字段 | 为何 |
+|---|---|---|
+| 左栏 facet 复选+件数 | framework、skill、subagentType | 高基数观测值,件数有意义,多选 = `any of` |
+| 左栏 区间/文本/布尔 | latency(秒)/tokens/cost/answerScore、model、isAnswerCorrect/isSkillCorrect | 可下推实列的区间/包含/布尔 |
+| 顶部小下拉 | 归属(ownership)、状态(status)、时间(time)、范围(scope) | 固定小枚举 / 计算列 / 时间窗,件数无意义,留紧凑下拉 |
+| 已删除 | agent(与搜索栏 `agentName` 字段重)、平台(与 framework 重) | 去重 |
+
+### 9.3 skill 的特殊接线(defer 列如何进 facet)
+skill 不是 Execution 标量列,走 `ExecutionSkill` 反查,故:
+- **facet 件数**:`facet=values&column=skill` → `ExecutionSkill.groupBy(skillName)`(agent 作用域,与过滤同源)。
+- **多选过滤**:`readRecordsInternal` 从 `skill any of [...]` clause 收集 skillName(并入旧单值 `?skill=` 深链),一次反查 `ExecutionSkill(skillName in […])→executionId`,`where.id in`;skill 存在时放开 sub-agent 作用域。
+- `buildPrismaWhere` 仍把 skill 归 `deferred`(不硬下推),由上面这段消化——这是「computed/关系列」接进统一 clauses 模型的范式(agents 二期同理)。
+- 端到端验证:`skill any of [linux-messages-auth-triage-demo]` → API 20 == DB 反查 20 == facet 件数 20。
+
+### 9.4 已知取舍
+- 顶部小下拉(status/ownership 计算列、time/scope)暂不进 clauses(不可纯下推),Phase 2 服务端分页时若要严格正确需 denorm。
+- facet 件数是「该值的总出现数」(近似,未随其它过滤联动收缩),对齐 langfuse 的 facet 口径。
+- 数值区间是两条子句(`>=` + `<=`)AND,不是单控件——买了「和 chip/搜索栏无缝互通」。
 
 ---
 
