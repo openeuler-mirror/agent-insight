@@ -64,7 +64,7 @@ description: "生成客户端接入命令并获取当前账号 API Key"
 | **上报路径** | 平台接收链路数据的接口路径，用于确认客户端上报目标。 |
 | **当前账号** | 当前登录态对应的用户身份，用于确认数据归属是否正确。 |
 | **API Key 状态** | 当前凭证的展示状态，用于辅助判断是否需要重新复制或更新。 |
-| **Langfuse 环境变量** | 将已有 Langfuse 上报目标重定向到 Agent Insight；`LANGFUSE_PUBLIC_KEY` 与 `LANGFUSE_SECRET_KEY` 暂填当前用户名，`session_id` 继续按 Langfuse 原语义作为跨 trace 会话归组字段。 |
+| **Langfuse 环境变量** | 将已有 Langfuse 上报目标重定向到 Agent Insight；`LANGFUSE_PUBLIC_KEY` 填当前 Agent Insight 用户名，`LANGFUSE_SECRET_KEY` 填该用户的 Agent Insight API Key，二者不对应时平台会拒绝上报；`session_id` 继续按 Langfuse 原语义作为跨 trace 会话归组字段。 |
 
 ## API Key 归属机制
 
@@ -109,7 +109,7 @@ API Key 决定客户端上报数据的身份归属与接入上下文。错误的
 4. 重新运行一次真实 agent 请求。
 5. 在 [链路追踪](../observability/view-traces) 中确认是否出现新的 Trace。
 
-Agent Insight 会按 Langfuse traceId 生成执行记录；Langfuse `session_id` 只是跨 trace 的会话归组字段，不参与生成 Agent Insight 执行 ID。
+Agent Insight 会按 Langfuse traceId 生成执行记录；Langfuse `session_id` 只是跨 trace 的会话归组字段，不参与生成 Agent Insight 执行 ID。Langfuse 兼容上报会校验 `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`：public key 必须是 Agent Insight 用户名，secret key 必须是该用户的 Agent Insight API Key。
 
 ### 流程四：排查“无数据上报”
 

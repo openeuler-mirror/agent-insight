@@ -170,7 +170,14 @@ export function normalizeLangfuseOtlpTraces(
             startTimeMs,
             attributes,
           });
-        } catch {}
+        } catch (err) {
+          console.warn('[Langfuse] Failed to normalize span', {
+            traceId: asString(span?.traceId),
+            spanId: asString(span?.spanId),
+            name: asString(span?.name),
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
     }
   }

@@ -116,11 +116,12 @@ export default function AccessInstallPage() {
 
     const keyReady = !!apiKey;
     const langfuseUser = user || (isZh ? '<你的用户名>' : '<your-username>');
+    const langfuseSecret = apiKey || (isZh ? '<你的 Agent Insight API Key>' : '<your Agent Insight API key>');
     const langfuseHost = host ? `${host}${getApiUrl('')}` : 'http://localhost:3000';
     const langfuseEnv = [
         `LANGFUSE_BASE_URL=${langfuseHost}`,
         `LANGFUSE_PUBLIC_KEY=${langfuseUser}`,
-        `LANGFUSE_SECRET_KEY=${langfuseUser}`,
+        `LANGFUSE_SECRET_KEY=${langfuseSecret}`,
     ].join('\n');
 
     return (
@@ -394,8 +395,8 @@ function LangfuseEnvCard({
             </div>
             <div style={langfuseNote}>
                 {isZh
-                    ? 'PUBLIC_KEY / SECRET_KEY 暂用当前 Agent Insight 用户名。'
-                    : 'PUBLIC_KEY / SECRET_KEY use your Agent Insight username for now.'}
+                    ? 'PUBLIC_KEY 填当前 Agent Insight 用户名，SECRET_KEY 填该用户的 Agent Insight API Key；两者不对应时平台会拒绝上报。'
+                    : 'Set PUBLIC_KEY to your Agent Insight username and SECRET_KEY to that user\'s Agent Insight API key. Mismatched credentials are rejected.'}
             </div>
         </article>
     );

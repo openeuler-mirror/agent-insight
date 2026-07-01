@@ -10,6 +10,7 @@ import { POST as postLangfusePublicTraces } from "@/app/api/public/otel/v1/trace
 import { normalizeOtlpTraces } from "@/lib/ingest/otel/normalize"
 import { decodeOtlpProtobufBody, decodeOtlpRequest } from "@/lib/ingest/otel/decode"
 import { listOtelTraceSpoolFiles } from "@/lib/ingest/otel/spool"
+import { prismaRaw } from "@/lib/storage/prisma"
 
 const traceRequestType = (otlpRoot as any).opentelemetry.proto.collector.trace.v1.ExportTraceServiceRequest
 
@@ -171,19 +172,27 @@ test("OTLP traces route accepts protobuf requests and writes trace spool", async
   }
 })
 
-test("Langfuse public OTLP traces route accepts protobuf and maps Basic Auth public key to user", async () => {
+test("Langfuse public OTLP traces route accepts protobuf with matching username and API key", async () => {
   const prevSpoolDir = process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "langfuse-proto-route-"))
   process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR = dir
+  const username = "langfuse-auth-test-user"
+  const apiKey = "langfuse-auth-test-api-key"
 
   try {
+    await prismaRaw.user.upsert({
+      where: { username },
+      create: { username, apiKey },
+      update: { apiKey },
+    })
+
     const req = new Request("http://localhost/api/public/otel/v1/traces", {
       method: "POST",
       headers: {
         "content-type": "application/x-protobuf",
-        "authorization": `Basic ${Buffer.from("alice:alice").toString("base64")}`,
+        "authorization": `Basic ${Buffer.from(`${username}:${apiKey}`).toString("base64")}`,
         "x-langfuse-sdk-name": "python",
-        "x-langfuse-public-key": "alice",
+        "x-langfuse-public-key": username,
       },
       body: encodeTraceRequest(buildLangfuseTraceRequest()) as BodyInit,
     })
@@ -205,9 +214,57 @@ test("Langfuse public OTLP traces route accepts protobuf and maps Basic Auth pub
     assert.equal(event.serviceName, "langfuse-langgraph")
     assert.equal(event.sessionId, "11112222333344445555666677778888")
     assert.equal(event.attributes["langfuse.internal.session_id"], "langfuse-session")
-    assert.equal(event.user, "alice")
+    assert.equal(event.user, username)
     assert.equal(event.kind, "span")
   } finally {
+    await prismaRaw.user.deleteMany({ where: { username } })
+    if (prevSpoolDir === undefined) {
+      delete process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR
+    } else {
+      process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR = prevSpoolDir
+    }
+  }
+})
+
+test("Langfuse public OTLP traces route rejects missing or mismatched credentials", async () => {
+  const prevSpoolDir = process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "langfuse-proto-reject-"))
+  process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR = dir
+  const username = "langfuse-auth-reject-user"
+  const apiKey = "langfuse-auth-reject-api-key"
+
+  try {
+    await prismaRaw.user.upsert({
+      where: { username },
+      create: { username, apiKey },
+      update: { apiKey },
+    })
+
+    const missing = new Request("http://localhost/api/public/otel/v1/traces", {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-protobuf",
+        "x-langfuse-sdk-name": "python",
+      },
+      body: encodeTraceRequest(buildLangfuseTraceRequest()) as BodyInit,
+    })
+    const missingRes = await postLangfusePublicTraces(missing)
+    assert.equal(missingRes.status, 401)
+
+    const mismatched = new Request("http://localhost/api/public/otel/v1/traces", {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-protobuf",
+        "authorization": `Basic ${Buffer.from(`${username}:wrong-key`).toString("base64")}`,
+        "x-langfuse-sdk-name": "python",
+      },
+      body: encodeTraceRequest(buildLangfuseTraceRequest()) as BodyInit,
+    })
+    const mismatchedRes = await postLangfusePublicTraces(mismatched)
+    assert.equal(mismatchedRes.status, 401)
+    assert.equal(listOtelTraceSpoolFiles(dir).length, 0)
+  } finally {
+    await prismaRaw.user.deleteMany({ where: { username } })
     if (prevSpoolDir === undefined) {
       delete process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR
     } else {
