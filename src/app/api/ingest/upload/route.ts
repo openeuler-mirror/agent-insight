@@ -5,6 +5,7 @@ import { analyzeDynamicOnly } from '@/lib/engine/observability/flow-parser';
 import { analyzeFailures, analyzeSession, InvokedSkill, normalizeInteractions } from '@/lib/engine/evaluation/judge';
 import { isEvaluatorTraceRecord } from '@/lib/evaluator-agent';
 import { db, prisma } from '@/lib/storage/prisma';
+import { normalizeEndpointUrl } from '@/lib/infra/endpoint-resolve';
 import { debounceByKey } from '@/lib/ingest/upload-analysis-debouncer';
 import { getUserSettings } from '@/lib/storage/server-config';
 import { assertActive, finish, startOrReplace, EvaluationCancelledError } from '@/lib/evaluation-task-manager';
@@ -113,6 +114,10 @@ export async function POST(request: Request) {
     }
 
     console.log(`[Upload-API] 📥 Received data from ${data.framework || 'unknown'}: task_id=${data.task_id}, query=${data.query?.substring(0, 50)}..., user=${username} (via ${userResolutionPath})`);
+
+    if (data.endpoint) {
+        data.endpoint = normalizeEndpointUrl(data.endpoint) ?? undefined;
+    }
 
     if (data.framework === 'opencode' && data.task_id && isDeletedOpencodeSessionId(data.task_id)) {
         console.log(`[Upload-API] 🪦 Skipping deleted opencode session: task_id=${data.task_id}`);

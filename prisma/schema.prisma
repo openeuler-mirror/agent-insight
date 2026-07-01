@@ -75,6 +75,8 @@ model Execution {
   reasoningTokens          Int?
   timestamp       DateTime @default(now())
   model           String?
+  // 真实推理源 URL（scheme://host:port），用作 session↔infra 关联键。
+  endpoint        String?
   agentName       String?
   agentId         String?
   finalResult     String?
@@ -736,4 +738,55 @@ model SkillTriggerEvalRun {
   updatedAt          DateTime @updatedAt
 
   @@index([user, skillName, skillVersion, createdAt])
+}
+
+// 会话级 infra 关联的人工覆盖：按整棵 trace 树（rootExecutionId）存一组关联。
+// 存在行 = 人工权威集合（覆盖按 endpoint 的自动推断）；无行 = 走自动推断。
+model SessionInfraLink {
+  id              String   @id @default(cuid())
+  rootExecutionId String
+  sourceId        String
+  model           String?
+  createdAt       DateTime @default(now())
+
+  @@unique([rootExecutionId, sourceId, model])
+  @@index([rootExecutionId])
+}
+
+// 已注册的「AI 推理 infra 源」（任意暴露 Prometheus /metrics 的 vLLM/OpenAI 兼容服务）。
+// endpoint = scheme://host:port，既是展示身份也是 session↔infra 的关联键。
+model InfraSource {
+  id               String   @id @default(cuid())
+  endpoint         String   @unique
+  scrapeUrl        String
+  kind             String   @default("pull") // pull | push
+  model            String?
+  hardwareName     String?
+  memBandwidthGBs  Float?
+  scrapeIntervalMs Int      @default(1000)
+  enabled          Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  samples          InfraMetricSample[]
+
+  @@index([endpoint])
+}
+
+// 一次采样 = 某源在 T 时刻的状态。counters 存累计值（查询时算 rate），histogram 存 buckets/sum/count。
+// gauges/counters/histograms/waitingByReason 都以 JSON 字符串落库（SQLite 无 JSON 列）。
+model InfraMetricSample {
+  id              String      @id @default(cuid())
+  sourceId        String
+  source          InfraSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  tsMs            Float
+  via             String?
+  model           String?
+  gauges          String
+  counters        String
+  histograms      String
+  waitingByReason String?
+  createdAt       DateTime    @default(now())
+
+  @@index([sourceId, tsMs])
 }

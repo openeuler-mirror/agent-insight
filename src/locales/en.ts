@@ -78,6 +78,8 @@ export const en = {
     evalMetrics: 'Evaluators',
     evalExecute: 'Eval Runs',
     quality: 'Quality Monitor',
+    infra: 'Inference Infra',
+    infraSources: 'Infra Sources',
     memory: 'Memory',
     security: 'Security',
     fault: 'Diagnosis',

@@ -146,4 +146,11 @@ export async function setupNodeRuntime(): Promise<void> {
       (err as Error)?.message,
     );
   }
+
+  try {
+    const { startInfraPoller } = await import('@/lib/infra/poller');
+    startInfraPoller();
+  } catch (err) {
+    console.warn('[instrumentation] startInfraPoller failed (non-fatal):', (err as Error)?.message);
+  }
 }
