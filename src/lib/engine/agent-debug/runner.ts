@@ -5,6 +5,8 @@ import { ensureTraceBundle } from '@/lib/engine/observability/trace-bundle';
 import fs from 'node:fs';
 import path from 'node:path';
 import { buildDebugTurns, hashInteractions } from './trace-adapter';
+import { detectTrajectoryFindings } from './trajectory-detector';
+import { enrichTrajectoryFindings } from './trajectory-enricher';
 import { numberField, parseJsonObject, stringField } from './json';
 import type {
   AgentDebugIssue,
@@ -50,6 +52,9 @@ export async function runAgentDebugDiagnosis(args: {
   const interactionHash = hashInteractions(interactions);
   const turns = buildDebugTurns(interactions);
   const candidateWindows: AgentDebugCandidateWindow[] = [];
+  // 轨迹诊断器：确定性、零 LLM 成本，直接在完整 turns 上找循环 / 无进展，
+  // 与逐-step 认知诊断并行，结果并入报告 trajectoryFindings。
+  const trajectoryFindings = detectTrajectoryFindings(turns);
 
   if (turns.length === 0) {
     return {
@@ -63,6 +68,7 @@ export async function runAgentDebugDiagnosis(args: {
       rootCause: null,
       issues: [],
       findings: [],
+      trajectoryFindings,
       phase1Grid: [],
       stepRecords: [],
       candidateWindows,
@@ -125,6 +131,9 @@ export async function runAgentDebugDiagnosis(args: {
   const findings = normalizeFindings(parsed.findings, issues, parsedRootCause);
   const rootCause = parsedRootCause || projectFindingToRootCause(findings[0], issues);
   const triage = normalizeTriage(parsed.triage);
+  // 把确定性检测到的循环 finding 统一交给 LLM 富化（基于真实证据写机制/故障链/建议）；
+  // 一次调用处理全部；失败则降级回确定性文案。
+  const enrichedTrajectoryFindings = await enrichTrajectoryFindings(trajectoryFindings, turns, args.user);
 
   return {
     schemaVersion: 2,
@@ -137,6 +146,7 @@ export async function runAgentDebugDiagnosis(args: {
     rootCause,
     issues,
     findings,
+    trajectoryFindings: enrichedTrajectoryFindings,
     phase1Grid,
     stepRecords,
     candidateWindows,

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-import { normalizeClaudeOtlpTraces } from "@/lib/ingest/claude-otel/otlp-json"
+import { normalizeOtlpTraces } from "@/lib/ingest/otel/normalize"
 
 const attr = (key: string, value: any) => ({
   key,
@@ -59,7 +59,7 @@ test("OTel traces: normalizes gen_ai and tool spans into trace events", () => {
     }],
   }
 
-  const events = normalizeClaudeOtlpTraces(body, {
+  const events = normalizeOtlpTraces(body, {
     receivedAt: "2026-06-09T00:00:00.000Z",
     authenticatedUser: "alice",
   })
@@ -80,4 +80,53 @@ test("OTel traces: normalizes gen_ai and tool spans into trace events", () => {
   assert.equal(events[0].startTimeMs, 1000)
   assert.equal(events[1].kind, "tool")
   assert.equal(events[1].parentSpanId, "span-llm")
+})
+
+test("OTel traces: normalizes Hermes llm model and token count attributes", () => {
+  const body = {
+    resourceSpans: [{
+      resource: {
+        attributes: [
+          attr("service.name", "hermes"),
+          attr("service.instance.id", "hermes-instance"),
+        ],
+      },
+      scopeSpans: [{
+        spans: [
+          {
+            traceId: "trace-hermes",
+            spanId: "span-api",
+            name: "api.GLM-5.1",
+            startTimeUnixNano: "1000000000",
+            endTimeUnixNano: "2500000000",
+            attributes: [
+              attr("hermes.session_id", "20260611_103002_288942"),
+              attr("llm.model_name", "GLM-5.1"),
+              attr("llm.token_count.prompt", 5),
+              attr("llm.token_count.completion", 3),
+              attr("llm.token_count.reasoning", 2),
+              attr("llm.token_count.total", 99),
+              attr("input.value", "Which subagents are available?"),
+              attr("output.value", "Here are the available subagents."),
+            ],
+          },
+        ],
+      }],
+    }],
+  }
+
+  const events = normalizeOtlpTraces(body, {
+    receivedAt: "2026-06-11T00:00:00.000Z",
+  })
+
+  assert.equal(events.length, 1)
+  assert.equal(events[0].sessionId, "20260611_103002_288942")
+  assert.equal(events[0].serviceName, "hermes")
+  assert.equal(events[0].model, "GLM-5.1")
+  assert.deepEqual(events[0].usage, {
+    input_tokens: 5,
+    output_tokens: 3,
+    reasoning_tokens: 2,
+    total_tokens: 99,
+  })
 })

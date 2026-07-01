@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { prismaRaw as prisma } from '@/lib/storage/prisma';
 import { extractTrajectoryTaskMeta } from '@/lib/eval/trajectory-task-meta';
 import { selectLatestDatasetCaseResults } from '@/lib/eval/latest-trajectory-results';
+import { selectKeepIdsByTaskId } from '@/lib/storage/data-service';
 
 export const dynamic = 'force-dynamic';
 
@@ -41,6 +42,96 @@ function pickCustomEvaluationScore(rawAnalysisJson: string | null | undefined): 
     const raw = safeParse(rawAnalysisJson, null) as { customEvaluationScore?: unknown } | null;
     const value = raw?.customEvaluationScore;
     return typeof value === 'number' && !Number.isNaN(value) ? value : null;
+}
+
+type TraceDisplaySource = 'snapshot' | 'execution' | 'missing';
+
+type TraceExecutionDisplay = {
+    id: string;
+    taskId: string | null;
+    query: string | null;
+    finalResult: string | null;
+    framework: string | null;
+    model: string | null;
+    agentName: string | null;
+    timestamp: Date | string | null;
+};
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+    return value && typeof value === 'object' && !Array.isArray(value)
+        ? value as Record<string, unknown>
+        : null;
+}
+
+function firstNonEmptyString(...values: unknown[]): string {
+    for (const value of values) {
+        if (typeof value !== 'string') continue;
+        const trimmed = value.trim();
+        if (trimmed) return trimmed;
+    }
+    return '';
+}
+
+export function resolveTrajectoryTraceDisplay(
+    rawAnalysis: Record<string, unknown> | null,
+    execution?: TraceExecutionDisplay | null,
+): {
+    traceInput: string | null;
+    traceInputSource: TraceDisplaySource;
+    traceOutput: string | null;
+    traceOutputSource: TraceDisplaySource;
+} {
+    const caseSnapshot = asRecord(rawAnalysis?.caseSnapshot);
+    const snapshotInput = firstNonEmptyString(
+        caseSnapshot?.taskInput,
+        caseSnapshot?.rawTaskInput,
+        caseSnapshot?.input,
+    );
+    const snapshotOutput = firstNonEmptyString(rawAnalysis?.resultActualOutput);
+    const executionInput = firstNonEmptyString(execution?.query);
+    const executionOutput = firstNonEmptyString(execution?.finalResult);
+
+    return {
+        traceInput: snapshotInput || executionInput || null,
+        traceInputSource: snapshotInput ? 'snapshot' : executionInput ? 'execution' : 'missing',
+        traceOutput: snapshotOutput || executionOutput || null,
+        traceOutputSource: snapshotOutput ? 'snapshot' : executionOutput ? 'execution' : 'missing',
+    };
+}
+
+async function loadExecutionDisplayByTraceId(rows: { taskId: string | null; executionId: string | null }[]): Promise<Map<string, TraceExecutionDisplay>> {
+    const taskIds = Array.from(new Set(rows.map(row => row.taskId).filter((id): id is string => Boolean(id))));
+    const executionIds = Array.from(new Set(rows.map(row => row.executionId).filter((id): id is string => Boolean(id))));
+    if (taskIds.length === 0 && executionIds.length === 0) return new Map();
+
+    const executionRows = await prisma.execution.findMany({
+        where: {
+            OR: [
+                ...(taskIds.length > 0 ? [{ taskId: { in: taskIds } }] : []),
+                ...(executionIds.length > 0 ? [{ id: { in: executionIds } }] : []),
+            ],
+        },
+        select: {
+            id: true,
+            taskId: true,
+            query: true,
+            finalResult: true,
+            framework: true,
+            model: true,
+            agentName: true,
+            timestamp: true,
+        },
+    });
+
+    const byTraceId = new Map<string, TraceExecutionDisplay>();
+    const rowsWithTaskId = executionRows.filter(row => row.taskId);
+    const { keepIds } = selectKeepIdsByTaskId(rowsWithTaskId);
+    for (const row of executionRows) {
+        const item: TraceExecutionDisplay = row;
+        if (row.taskId && keepIds.has(row.id)) byTraceId.set(row.taskId, item);
+        byTraceId.set(row.id, item);
+    }
+    return byTraceId;
 }
 
 /**
@@ -117,9 +208,13 @@ export async function GET(request: Request) {
         const visibleRows = latestByCase
             ? selectLatestDatasetCaseResults(rows).slice(0, limit)
             : rows;
+        const executionByTraceId = await loadExecutionDisplayByTraceId(visibleRows);
 
         const results = visibleRows.map(r => {
             const rawAnalysis = safeParse(r.rawAnalysisJson, null) as Record<string, unknown> | null;
+            const traceId = r.taskId || r.executionId || '';
+            const executionDisplay = traceId ? executionByTraceId.get(traceId) : null;
+            const traceDisplay = resolveTrajectoryTraceDisplay(rawAnalysis, executionDisplay);
             const rawMeta = (rawAnalysis || {}) as {
                 selectedEvaluators?: string[];
                 selectedEvaluatorNames?: string[];
@@ -154,6 +249,13 @@ export async function GET(request: Request) {
             customEvaluations: pickCustomEvaluations(r.rawAnalysisJson),
             diagnostic: rawAnalysis?.diagnostic ?? null,
             rawAnalysis,
+            ...traceDisplay,
+            traceFramework: executionDisplay?.framework ?? null,
+            traceModel: executionDisplay?.model ?? null,
+            traceAgentName: executionDisplay?.agentName ?? null,
+            traceTimestamp: executionDisplay?.timestamp instanceof Date
+                ? executionDisplay.timestamp.toISOString()
+                : executionDisplay?.timestamp ?? null,
             createdAt: r.createdAt.toISOString(),
             updatedAt: r.updatedAt.toISOString(),
             };

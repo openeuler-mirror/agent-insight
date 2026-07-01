@@ -68,6 +68,8 @@ description: "查看、筛选并分析一次执行的完整 Trace"
 - **执行时间**：发生时间，用于回溯事件窗口
 - **操作**：继续进入详情、分析或评测流程
 
+其中，**执行状态**只表示 Trace 生命周期：平台收到明确完成信号后显示成功；尚未收到完成信号时显示运行中。它不等同于评测状态；部分接入会在有最终回答且能从 Trace 时间戳推断完成点时补齐完成时间，例如 Hermes 可使用根 span/交互时间，OpenCode 可使用 `session.idle`；Hermes/OpenCode 的旧记录或漏写完成信号时还会用 60 秒静默窗口兜底，但不会只凭回答文本判定完成。
+
 可将列表页理解为一次“样本筛选台”：先判断哪些 Trace 值得看，再进入详情做证据级分析。
 
 #### 4. 操作入口
@@ -219,7 +221,7 @@ Task Spawn 表示当前执行过程中派生出的新任务数量。在多 Agent
 该路径适合首次接入后确认“数据是否已进入平台”。
 
 > **Note**
-> 通过 OTel `logs` / `traces` 端点接入的数据是异步可见的：端点返回成功表示平台已受理并写入本地 spool，后台消费者会在短暂 debounce 后落库，随后在会话空闲后再补充结果评估。因此刚发完上报后，列表页可能需要等待几秒才出现新 Trace，评估分数可能再稍后更新。
+> 通过 OTel `logs` / `traces` 端点接入的数据是异步可见的：端点返回成功表示平台已受理并写入本地 spool（`traces` 支持 OTLP JSON 与 protobuf），后台消费者会在短暂 debounce 后落库，随后在会话空闲后再补充结果评估。因此刚发完上报后，列表页可能需要等待几秒才出现新 Trace，评估分数可能再稍后更新。
 > Claude Code 接入需要通过安装脚本生成的 OTel wrapper 开启 `OTEL_LOG_TOOL_DETAILS=1`，并将 `OTEL_LOG_RAW_API_BODIES` 配成 `file:<dir>`。`OTEL_LOG_RAW_API_BODIES=1` 的 inline body 会被 Claude Code 截断到 60 KB，长会话里可能拿不到工具结果正文；`OTEL_LOG_TOOL_CONTENT=1` 只影响 tracing span events，需要启用 traces。
 
 ### 场景二：排查失败问题

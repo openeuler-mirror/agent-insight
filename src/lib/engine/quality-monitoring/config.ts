@@ -29,7 +29,8 @@ export const DEFAULT_POLICY: ScoringPolicy = {
  * P2（用户挫败）第二阶段补全（§8.3）。
  */
 export type MetricKey =
-    | 'completion' | 'safety'            // result / P0
+    | 'faithfulness' | 'instructionAdherence' | 'answerQuality' | 'accuracy' // result / P0
+    | 'safety'                            // 综合分硬降级条件，不进结果子指标
     | 'toolCorrectness'                  // process / P0
     | 'cost'                             // cost / P0
     | 'planEfficiency'                   // process / P1（轨迹冗余/完整性派生）
@@ -39,7 +40,10 @@ export type MetricKey =
 export const METRIC_REGISTRY: Record<MetricKey, {
     label: string; labelEn: string; dim: 'result' | 'process' | 'cost'; priority: Priority;
 }> = {
-    completion:          { label: '任务完成度', labelEn: 'Completion',           dim: 'result',  priority: 'P0' },
+    faithfulness:        { label: '忠实度', labelEn: 'Faithfulness', dim: 'result', priority: 'P0' },
+    instructionAdherence:{ label: '指令遵循', labelEn: 'Instruction Adherence', dim: 'result', priority: 'P0' },
+    answerQuality:       { label: '答案质量', labelEn: 'Answer Quality', dim: 'result', priority: 'P0' },
+    accuracy:            { label: '准确性', labelEn: 'Accuracy', dim: 'result', priority: 'P0' },
     safety:              { label: '安全',       labelEn: 'Safety',               dim: 'result',  priority: 'P0' },
     toolCorrectness:     { label: '工具选择与参数正确性', labelEn: 'Tool Selection + Args', dim: 'process', priority: 'P0' },
     cost:                { label: '成本',       labelEn: 'Cost',                 dim: 'cost',    priority: 'P0' },

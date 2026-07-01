@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
-import { db, prismaRaw as prisma } from '@/lib/storage/prisma';
+import { prismaRaw as prisma } from '@/lib/storage/prisma';
 import { reattributeServiceTraceOwner } from '@/lib/storage/data-service';
-import { findAgentDataset, readAllAgentDatasets, type AgentDatasetRecord, type DatasetCase } from '@/server/agent_datasets_storage';
+import { findAgentDataset, type AgentDatasetRecord, type DatasetCase } from '@/server/agent_datasets_storage';
 import { canReuseRootCauseCache, type RootCauseItem } from '@/lib/dataset-case-root-causes';
 import {
     evaluateTrajectoryViaOpencode,
@@ -14,6 +14,11 @@ import {
 } from '@/lib/engine/evaluation/opencode-task-completion-evaluator';
 import { startOrReplace as startEvalTask, finish as finishEvalTask } from '@/lib/evaluation-task-manager';
 import { deriveAndPersistOptPoints } from '@/lib/engine/evaluation/derive-skill-opt-points';
+import {
+    runSkillSuggestionAgent,
+    shouldRunSuggestionAgent,
+    type SkillSuggestion,
+} from '@/lib/engine/evaluation/skill-suggestion-agent';
 import {
     NO_EVALUABLE_CASE_PREFIX,
     isRetryableResultEvaluationFailure,
@@ -31,6 +36,7 @@ import {
     loadTaskCompletionSkillContext,
 } from '@/lib/engine/evaluation/key-action-trace-analysis';
 import { extractRealUserInput, findBestSemanticCaseMatch } from '@/lib/engine/evaluation/semantic-dataset-match';
+import { matchAgentDatasetCase } from '@/lib/engine/evaluation/dataset-case-match';
 import { extractTaskResultArtifact } from '@/lib/engine/evaluation/result-artifact-extractor';
 import { parseLooseJson } from '@/lib/engine/evaluation/task-completion-json';
 import {
@@ -504,70 +510,36 @@ async function findMatchingDatasetCaseForTrace(
     traceQuery: string,
     options: { requireExpectedOutput?: boolean; includeAllDatasetKinds?: boolean; allowedDatasetIds?: string[] } = {},
 ): Promise<MatchedDatasetCase> {
-    const normalizedTraceInput = normalizeMatchText(traceQuery);
-    if (!normalizedTraceInput) {
+    const result = await matchAgentDatasetCase({
+        user,
+        traceQuery,
+        requireExpectedOutput: options.requireExpectedOutput,
+        includeAllDatasetKinds: options.includeAllDatasetKinds,
+        allowedDatasetIds: options.allowedDatasetIds,
+    });
+    if (result.reason === 'empty-input') {
         throw new StagedEvaluationError(
             'no-evaluable-case',
             `${NO_EVALUABLE_CASE_PREFIX} trace 没有实际输入，无法匹配评估数据集 case`,
         );
     }
-
-    const requireExpectedOutput = options.requireExpectedOutput === true;
-    const includeAllDatasetKinds = options.includeAllDatasetKinds === true;
-    // allowedDatasetIds 非空 → 把匹配范围收窄到用户在配置区显式选的数据集 (参考集); 空 → 沿用全量 auto-match。
-    const allowedDatasetIds = Array.isArray(options.allowedDatasetIds)
-        ? options.allowedDatasetIds.map(id => String(id).trim()).filter(Boolean)
-        : [];
-    const datasets = (await readAllAgentDatasets())
-        .filter(dataset => dataset.user === user)
-        .filter(dataset => allowedDatasetIds.length === 0 || allowedDatasetIds.includes(dataset.id))
-        .filter(dataset => includeAllDatasetKinds || requireExpectedOutput || dataset.datasetKind === 'trajectory');
-
-    if (datasets.length === 0) {
+    if (result.reason === 'no-datasets') {
         throw new StagedEvaluationError(
             'no-evaluable-case',
-            `${NO_EVALUABLE_CASE_PREFIX} ${includeAllDatasetKinds ? '未找到可用于评测的数据集' : requireExpectedOutput ? '未找到可用于结果评测的数据集' : '未找到轨迹评测数据集'}`,
+            `${NO_EVALUABLE_CASE_PREFIX} ${options.includeAllDatasetKinds ? '未找到可用于评测的数据集' : options.requireExpectedOutput ? '未找到可用于结果评测的数据集' : '未找到轨迹评测数据集'}`,
         );
     }
-
-    for (const dataset of datasets) {
-        const found = dataset.cases.find(c =>
-            normalizeMatchText(c.input) === normalizedTraceInput
-            && (!requireExpectedOutput || Boolean(normalizeMatchText(c.expectedOutput)))
-        );
-        if (found) return { dataset, caseEntry: found };
-    }
-
-    const semanticCandidates: { id: string; input: string }[] = [];
-    const semanticCaseMap = new Map<string, MatchedDatasetCase>();
-    for (const dataset of datasets) {
-        for (const caseEntry of dataset.cases) {
-            if (requireExpectedOutput && !normalizeMatchText(caseEntry.expectedOutput)) continue;
-            const id = `${dataset.id}::${caseEntry.id}`;
-            semanticCandidates.push({ id, input: caseEntry.input });
-            semanticCaseMap.set(id, { dataset, caseEntry });
-        }
-    }
-
-    const semantic = await findBestSemanticCaseMatch(
-        semanticCandidates,
-        traceQuery,
-        { user, requireModelAvailable: true },
-    );
-    if (semantic.error) {
+    if (result.error) {
         throw new StagedEvaluationError(
             'semantic-match-llm',
-            `${NO_EVALUABLE_CASE_PREFIX} 语义匹配调用评测模型失败：${semantic.error}`,
+            `${NO_EVALUABLE_CASE_PREFIX} 语义匹配调用评测模型失败：${result.error}`,
         );
     }
-    if (semantic.caseId) {
-        const found = semanticCaseMap.get(semantic.caseId);
-        if (found) return found;
-    }
+    if (result.match) return result.match;
 
     throw new StagedEvaluationError(
         'no-evaluable-case',
-        `${NO_EVALUABLE_CASE_PREFIX} trace 实际输入未匹配到${includeAllDatasetKinds ? '评测数据集中的' : requireExpectedOutput ? '带预期结果的' : '轨迹评测数据集中的'} case 输入`,
+        `${NO_EVALUABLE_CASE_PREFIX} trace 实际输入未匹配到${options.includeAllDatasetKinds ? '评测数据集中的' : options.requireExpectedOutput ? '带预期结果的' : '轨迹评测数据集中的'} case 输入`,
     );
 }
 
@@ -1921,11 +1893,37 @@ async function runOneEvaluationInner(user: string, id: string): Promise<void> {
         throw new StagedEvaluationError('llm-or-agent', (e as Error).message || String(e), e);
     }
 
+    // ---- 2.5 建议流：门控命中则跑 skill 改进建议 agent（读完整 trace，独立于覆盖打分）----
+    // 计分（out.keyActionResults / completeness）已出，用它做门控：失败 / 覆盖不全才跑这次贵的深读。
+    // 非致命：任何异常都吞掉、退回空建议，不阻塞评测落库。
+    let skillSuggestions: SkillSuggestion[] = [];
+    try {
+        if (
+            evalSkillName &&
+            shouldRunSuggestionAgent({
+                keyActionResults: out.keyActionResults,
+                completeness: out.dimensionScores?.completeness,
+            })
+        ) {
+            skillSuggestions = await runSkillSuggestionAgent({
+                user,
+                skillName: evalSkillName,
+                skillVersion: evalSkillVersion,
+                executionId: String(row.executionId || execution?.id || resolvedTaskId || id),
+                interactions: Array.isArray(interactions) ? interactions : [],
+                keyActionResults: out.keyActionResults,
+            });
+        }
+    } catch (e) {
+        console.warn('[trajectory-eval] skill suggestion agent failed (non-fatal):', (e as Error).message);
+    }
+
     // ---- 3. 落库 ----
     try {
         const mergedRawAnalysis = {
             ...(out.rawAnalysis && typeof out.rawAnalysis === 'object' ? out.rawAnalysis : {}),
             ...baseRawAnalysisMeta,
+            skill_suggestions: skillSuggestions,
             resultArtifactExtraction: resultArtifactExtractionRawAnalysis,
             resultActualOutput,
             resultEvaluation: resultEvaluationRawAnalysis,

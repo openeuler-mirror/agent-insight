@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `ec0d3d69379f71956fd168387265e62a2902e3ec` (`ec0d3d6`) |
-| Branch | `gyc0528` |
-| Date | 2026-06-09T16:25:00+08:00 |
-| Author | ljnkirito |
-| Subject | `refactor: 统一框架适配器注册表处理 Skill 抽取和 Claude 归一化` |
+| Commit | `ef13db9440c984a99abf9933055929a93a48b67f` (`ef13db9`) |
+| Branch | `new-dev-06-23` |
+| Date | 2026-06-23T11:36:40+08:00 |
+| Author | gyctl |
+| Subject | `!160 merge feat/jiuwen-auto-setup into master` |
 
-**如何更新：** `git diff ec0d3d6 HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff ef13db9 HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
@@ -45,6 +45,7 @@
 - **Execution / trace**：接入平台的一次 Agent 运行（Prisma `Execution`）。一次主运行被拆分为一个根执行 + N 个子 Agent 执行，通过 `parentExecutionId` / `rootExecutionId` 关联。
 - **Trajectory evaluation**：针对某次执行的工具/Skill 路径，对照预期流程逐步打分（`evaluateTrajectory`、`TrajectoryEvalResult`）。
 - **Outcome vs Routing evaluation**：结果评测 = 最终答案是否与标准答案匹配；路由评测 = Agent 是否调用了预期的 Skill。参见 `ConfigDatasetType`、`RoutingEvaluationSnapshot`、`OutcomeEvaluationSnapshot`。
+- **Result quality evaluation**：质量监控的结果维评测，将最终交付拆为忠实度、指令遵循、答案质量和准确性，按 trace 写入 `TraceEvaluation`。
 - **Grayscale (A/B)**：在一个数据集上对两个 Skill 版本进行对比（`GrayscaleTask`、`ab-scoring.ts`）。
 - **Config (dataset config)**：某个查询的标准答案记录——预期 Skill、标准答案、根因、关键动作（Prisma `Config`、`ConfigItem`）。
 - **General agent / deepagents**：内部的 LangGraph/deepagents 运行时（`runGeneralAgent`），为 Skill 生成、优化和 LLM 评测器提供支撑。

@@ -54,8 +54,9 @@ Agent Insight is designed to solve these problems.
 | Agent Framework | Collection Method |
 |:---------------|:-----------------|
 | OpenCode       | Native plugin    |
-| Claude Code    | Log bypass       |
-| OpenClaw       | Log bypass       |
+| Claude Code    | OTLP export      |
+| Hermes         | Native plugin    |
+| JiuwenSwarm    | OTLP export      |
 
 ## Installation
 

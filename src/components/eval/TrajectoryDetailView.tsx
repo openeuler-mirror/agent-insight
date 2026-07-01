@@ -24,6 +24,7 @@ import {
     isTrajectoryEvaluationTerminal,
     parseTrajectoryDiagnostic,
 } from '@/lib/eval/trajectory-diagnostic';
+import { EvaluatorFindingsView, extractFindings } from './EvaluatorFindingsView';
 import './evaluator-findings-view.css';
 
 interface DatasetCase {
@@ -613,6 +614,37 @@ function parseLlmKeyActionResults(rawAnalysis: unknown): LlmKeyActionResult[] {
         .filter(item => item.actionId || item.actionContent || item.traceComparisonAnalysis);
 }
 
+interface SkillSuggestionCard {
+    category: string;
+    severity: 'high' | 'medium' | 'low';
+    summary: string;
+    evidence: string;
+    improvementSuggestion: string;
+}
+
+/**
+ * 「建议流」(skill-suggestion-agent) 产出，存在 rawAnalysis.skill_suggestions。
+ * 与关键动作覆盖解耦：N 条「根因 → 建议（+ trace 证据）」，不再一动作一建议。
+ */
+function deriveSkillSuggestions(rawAnalysis: unknown): SkillSuggestionCard[] {
+    const root = asRecord(rawAnalysis);
+    const list = Array.isArray(root.skill_suggestions) ? root.skill_suggestions : [];
+    return list
+        .map(item => item && typeof item === 'object' ? item as Record<string, unknown> : null)
+        .filter((item): item is Record<string, unknown> => Boolean(item))
+        .map(item => {
+            const sev = String(item.severity ?? '').toLowerCase().trim();
+            return {
+                category: String(item.category ?? '').trim() || '其他',
+                severity: sev === 'high' || sev === 'low' ? sev : 'medium' as 'high' | 'medium' | 'low',
+                summary: String(item.summary ?? '').trim(),
+                evidence: String(item.evidence ?? '').trim(),
+                improvementSuggestion: String(item.improvementSuggestion ?? item.improvement_suggestion ?? '').trim(),
+            };
+        })
+        .filter(item => item.summary && item.improvementSuggestion);
+}
+
 function deriveSkillKeyActionCardsFromLlm(rawAnalysis: unknown): SkillKeyActionCard[] {
     return parseLlmKeyActionResults(rawAnalysis).map((item, index) => ({
         action: {
@@ -928,6 +960,11 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
         [resultEvaluationPayload],
     );
     const resultEvaluationFindings = resultEvaluationPayload.findings;
+    const resultIssueFindings = useMemo(
+        () => extractFindings({ deviationSteps: [], rawAnalysis: result?.rawAnalysis })
+            .filter(item => item.kind === 'result_issue'),
+        [result?.rawAnalysis],
+    );
     const resultEvaluationReady = isResultEvaluationReady(resultEvaluationPayload, hasResultEvaluation);
     const resultEvaluationFailed = hasResultEvaluationFailed(resultEvaluationPayload);
     const evaluationDiagnostic = useMemo(
@@ -967,6 +1004,10 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
                 : deriveSkillKeyActionCards(skillKeyActionComparison, result?.deviationSteps);
         },
         [result?.rawAnalysis, skillKeyActionComparison, result?.deviationSteps],
+    );
+    const skillSuggestions = useMemo(
+        () => deriveSkillSuggestions(result?.rawAnalysis),
+        [result?.rawAnalysis],
     );
     const isTraceOnlyTrajectory = result?.comparisonMode === 'trace_only'
         || asRecord(result?.rawAnalysis).comparisonMode === 'trace_only'
@@ -1220,6 +1261,17 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
                                         </div>
                                     </div>
                                 )}
+                                {resultIssueFindings.length > 0 && (
+                                    <div style={{ marginTop: 14 }}>
+                                        <div style={{ fontSize: 11.5, color: COLORS.textMuted, marginBottom: 6 }}>
+                                            结果层问题
+                                        </div>
+                                        <EvaluatorFindingsView
+                                            row={{ deviationSteps: [], rawAnalysis: result?.rawAnalysis }}
+                                            allowedKinds={['result_issue']}
+                                        />
+                                    </div>
+                                )}
                             </>
                         )}
                     </div>
@@ -1330,13 +1382,35 @@ export default function TrajectoryDetailView({ traceId }: { traceId: string }) {
                                                         <div className="efv-desc">
                                                             {card.analysis}
                                                         </div>
-                                                        <div className="efv-suggestion">
-                                                            <span className="efv-suggestion-label">改进建议</span>
-                                                            {card.suggestion}
-                                                        </div>
                                                     </div>
                                                 ))}
                                             </div>
+                                            {skillSuggestions.length > 0 && (
+                                                <div className="efv-group">
+                                                    <div className="efv-group-head">
+                                                        Skill 改进建议
+                                                        <span className="efv-group-count">{skillSuggestions.length}</span>
+                                                    </div>
+                                                    {skillSuggestions.map((s, index) => (
+                                                        <div
+                                                            key={`${s.summary}-${index}`}
+                                                            className={`efv-card sev-${s.severity}`}
+                                                        >
+                                                            <div className="efv-card-head">
+                                                                <span className="efv-title">{s.summary}</span>
+                                                                <span className="efv-pill">{s.category}</span>
+                                                            </div>
+                                                            {s.evidence && (
+                                                                <div className="efv-desc">{s.evidence}</div>
+                                                            )}
+                                                            <div className="efv-suggestion">
+                                                                <span className="efv-suggestion-label">改进建议</span>
+                                                                {s.improvementSuggestion}
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
                                         </div>
                                     )}
                                 </div>

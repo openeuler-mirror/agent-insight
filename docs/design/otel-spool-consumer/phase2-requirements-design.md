@@ -53,7 +53,7 @@ Exporter ──OTLP──> [薄壳端点]──append──> [spool JSONL] <─�
 
 |编号|决策项|类别|内容|理由|
 |-|-|-|-|-|
-|D-001|双 debounce 复用边界|架构设计|**仅复用** ClaudeLogWatcher 的两个常量（短 3s / 长 30s）与「双计时器」形态；keying、dirty-set、最大等待兜底均为净新增|ClaudeLogWatcher 按 `filePath` 计时（claude-watcher.ts:12-13/51-73）且走 `ClaudeParser.parseFile`——与 spool 模型不通。spool 一个日文件含多 session，消费者必须**按 sessionId** 计时。且 watcher **没有**最大等待兜底（FR-007 是净新增，不能宣称「复用」）。另：`instrumentation.ts` 注明「Server-side watchers have been removed」，watcher 现在跑在客户端，本消费者是**新模块**而非复活 watcher|
+|D-001|双 debounce 复用边界|架构设计|**仅复用** ClaudeLogWatcher 的两个常量（短 3s / 长 30s）与「双计时器」形态；keying、dirty-set、最大等待兜底均为净新增|ClaudeLogWatcher 按 `filePath` 计时（claude-watcher.ts:12-13/51-73）且走 `ClaudeParser.parseFile`——与 spool 模型不通。legacy 日文件曾含多 session；当前新写入已按 session shard，但消费者仍必须**按 sessionId** 计时。且 watcher **没有**最大等待兜底（FR-007 是净新增，不能宣称「复用」）。另：`instrumentation.ts` 注明「Server-side watchers have been removed」，watcher 现在跑在客户端，本消费者是**新模块**而非复活 watcher|
 |D-002|与 framework-adapter-registry 不合并|架构设计|两份设计独立落地、互不阻塞。本设计聚合环节遇到「按框架转换」走 adapter registry 入口（若已落地），否则沿用现有函数。**硬约束**：此缝**不得改变** `saveExecutionRecord` 的 `{task_id, framework}` 去重键|关注点正交（转换 vs 调度），合并会把可分轮演进的两件事耦死。代码层证据：`logs/route.ts` 当前直接调 `aggregateClaudeOtelSession`（不经 registry），回退路径有现成代码为据。registry 的 Phase3 T5 已把 `aggregator.ts:476` 的 normalize 列为**后续轮**迁移点——天然是缝不是并|
 |D-003|不丢/不重职责分离|数据/可靠性|「不丢」由检查点保证（崩溃后从检查点续处理）；「不重」由聚合期 `dedupeEvents`（aggregator.ts:241）+ `saveExecutionRecord` 的 `{task_id,framework}` upsert（data-service.ts:1487）双重兜底。检查点**只在落库成功后推进**，自身**不要求幂等**|对齐 Phase1 BR-004/BR-004a。避免把检查点设计成需保证幂等而过度设计；重启后重放检查点之后的事件是允许的，重复落库由去重兜住|
 
@@ -342,8 +342,9 @@ on dirtySession(sid):
 {
   "version": 1,
   "files": {
-    "2026-06-09/logs.jsonl":   { "bytes": 10240, "updatedAt": "..." },
-    "2026-06-09/traces.jsonl": { "bytes": 4096,  "updatedAt": "..." }
+    "2026-06-09/sessions/session-a/logs.jsonl":   { "bytes": 10240, "updatedAt": "..." },
+    "2026-06-09/sessions/session-a/traces.jsonl": { "bytes": 4096,  "updatedAt": "..." },
+    "2026-06-09/traces.jsonl":                    { "bytes": 2048,  "updatedAt": "..." } // legacy daily file
   }
 }
 ```

@@ -104,6 +104,7 @@ interface OptIssue {
   };
   occurrence: number;
   createdAt: string;
+  resolvedAt?: string | null;
 }
 
 function toOptIssue(it: IssueWithPrevalence, skillName: string): OptIssue {
@@ -158,6 +159,9 @@ function toOptIssue(it: IssueWithPrevalence, skillName: string): OptIssue {
     source: { kind, label, url },
     occurrence: it.prevalenceCount,
     createdAt: it.createdAt instanceof Date ? it.createdAt.toISOString() : String(it.createdAt),
+    resolvedAt: it.resolvedAt
+      ? (it.resolvedAt instanceof Date ? it.resolvedAt.toISOString() : String(it.resolvedAt))
+      : null,
   };
 }
 

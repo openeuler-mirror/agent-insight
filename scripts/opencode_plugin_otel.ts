@@ -493,7 +493,14 @@ export default async function WittySkillInsightOtelPlugin() {
           providerID: input?.model?.providerID,
           modelID: input?.model?.modelID,
           trace_id: input?.sessionID,
-          payload: { messageID: input?.messageID, length: String(text).length, text: String(text) },
+          // input.messageID is OPTIONAL in the opencode plugin API and newer
+          // builds often omit it; output.message.id (UserMessage.id) is always
+          // present. Prefer it so the uploader can key user text to the message.
+          payload: {
+            messageID: output?.message?.id ?? input?.messageID,
+            length: String(text).length,
+            text: String(text),
+          },
         })
       } catch {}
     },

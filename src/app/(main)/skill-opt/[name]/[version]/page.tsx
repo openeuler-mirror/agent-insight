@@ -30,43 +30,14 @@ import '../../skill-opt.css';
 type AgentBlock =
     | { kind: 'text'; id: string; text: string }
     | { kind: 'thinking'; id: string; text: string; done: boolean }
-    | {
-        kind: 'scope';
-        id: string;
-        selectedIssueIds: string[];
-        deferredIssueIds: string[];
-        selectedCount: number;
-        deferredCount: number;
-        limits?: SkillOptScopeLimits;
-        allowedFiles: string[];
-        allowedRegions: SkillEditRegion[];
-    }
     | { kind: 'tool'; id: string; name: string; args?: any; status: 'running' | 'ok' | 'error'; summary?: string; error?: string }
     | { kind: 'error'; id: string; text: string };
 
-interface SkillEditRegion {
-    file: string;
-    kind: 'frontmatter' | 'section';
-    label: string;
-    anchor: string;
-    startLine: number;
-    endLine: number;
-}
-
-interface SkillOptScopeLimits {
-    maxOpportunities: number;
-    maxFiles: number;
-}
-
-const DEFAULT_SCOPE_LIMITS: SkillOptScopeLimits = {
-    maxOpportunities: 5,
-    maxFiles: 5,
-};
-const SCOPE_LIMITS_KEY = 'skill-opt:scope-limits:v1';
-
+type PlanCardItem = { id: string; route: string; severity: string; title: string; mergedFrom: number; targetFile: string | null };
 type ChatTurn =
     | { kind: 'user'; id: string; text: string }
-    | { kind: 'agent'; id: string; blocks: AgentBlock[]; streaming?: boolean };
+    | { kind: 'agent'; id: string; blocks: AgentBlock[]; streaming?: boolean }
+    | { kind: 'plan'; id: string; sourceCount: number; items: PlanCardItem[] };
 
 export default function SkillOptimizePage() {
     const { t } = useLocale();
@@ -167,6 +138,8 @@ export default function SkillOptimizePage() {
     const [chat, setChat] = useState<ChatTurn[]>([]);
     const [input, setInput] = useState('');
     const [optimizing, setOptimizing] = useState(false);
+    // 一键优化：先调归并算子产出 plan（merging=true 阶段），再走 startOptimize 执行
+    const [merging, setMerging] = useState(false);
     const [diffOpen, setDiffOpen] = useState(false);
     // 多个草稿的迭代历史（每次"开始优化"push 一个）
     const [iterations, setIterations] = useState<OptimizationIteration[]>([]);
@@ -293,7 +266,6 @@ export default function SkillOptimizePage() {
     interface ModelConfigLite { id: string; name: string }
     const [modelConfigs, setModelConfigs] = useState<ModelConfigLite[]>([]);
     const [selectedModelId, setSelectedModelId] = useState<string>('');
-    const [scopeLimits, setScopeLimits] = useState<SkillOptScopeLimits>(DEFAULT_SCOPE_LIMITS);
     useEffect(() => {
         if (!user) return;
         fetch(`/api/settings?user=${encodeURIComponent(user)}`)
@@ -306,27 +278,6 @@ export default function SkillOptimizePage() {
             })
             .catch(() => { /* 静默：拉不到时按默认模型走 */ });
     }, [user]);
-    useEffect(() => {
-        if (typeof window === 'undefined') return;
-        try {
-            const saved = normalizeScopeLimits(JSON.parse(localStorage.getItem(SCOPE_LIMITS_KEY) || 'null'));
-            if (saved) setScopeLimits(saved);
-        } catch { /* corrupt — fall back to defaults */ }
-    }, []);
-    useEffect(() => {
-        if (typeof window === 'undefined') return;
-        try {
-            localStorage.setItem(SCOPE_LIMITS_KEY, JSON.stringify(scopeLimits));
-        } catch { /* quota / disabled — silently skip */ }
-    }, [scopeLimits]);
-
-    const updateScopeLimit = (key: keyof SkillOptScopeLimits, value: number) => {
-        if (!Number.isFinite(value)) return;
-        setScopeLimits(prev => ({
-            ...prev,
-            [key]: Math.max(1, Math.trunc(value)),
-        }));
-    };
 
     // 真接口：拉 (skillName, baseVersion) 的 optimization points。
     // 后端 GET /api/skills/by-name/[name]/optimization-points 已经把 SkillIssue +
@@ -336,7 +287,9 @@ export default function SkillOptimizePage() {
         if (!skillName || !Number.isInteger(baseVersion)) { setIssues([]); return; }
         let aborted = false;
         const userQuery = user ? `&user=${encodeURIComponent(user)}` : '';
-        const url = `/api/skills/by-name/${encodeURIComponent(skillName)}/optimization-points?version=${baseVersion}${userQuery}`;
+        // includeResolved=1：把已优化(resolved)的点也取回来，持久显示「已优化」徽章——
+        // 否则优化完成后这些点被排除、直接从左侧消失，用户会以为"没生效/没标记"。
+        const url = `/api/skills/by-name/${encodeURIComponent(skillName)}/optimization-points?version=${baseVersion}&includeResolved=1${userQuery}`;
         fetch(url)
             .then(res => {
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -344,7 +297,10 @@ export default function SkillOptimizePage() {
             })
             .then((data: { issues?: OptIssue[] }) => {
                 if (aborted) return;
-                setIssues(Array.isArray(data.issues) ? data.issues : []);
+                const list = Array.isArray(data.issues) ? data.issues : [];
+                // 已优化的沉到底部，未优化的保持原序(severity)在前。V8 sort 稳定，组内次序不变。
+                list.sort((a, b) => Number(!!a.resolvedAt) - Number(!!b.resolvedAt));
+                setIssues(list);
                 setCheckedIssueIds(new Set());
                 setOptimizedIssueIds(new Set());
             })
@@ -387,17 +343,8 @@ export default function SkillOptimizePage() {
                 if (Array.isArray(ids)) ids.forEach(id => optimizedIds.add(String(id)));
             } catch { /* ignore */ }
         }
-        const latestScopeBlock = [...turns]
-            .reverse()
-            .flatMap(turn => turn.kind === 'agent' ? [...turn.blocks].reverse() : [])
-            .find((block: any) => block?.kind === 'scope');
-        const deferredIds = Array.isArray((latestScopeBlock as any)?.deferredIssueIds)
-            ? (latestScopeBlock as any).deferredIssueIds
-                .map((id: unknown) => String(id))
-                .filter((id: string) => !optimizedIds.has(id))
-            : [];
         setOptimizedIssueIds(optimizedIds);
-        setCheckedIssueIds(new Set(deferredIds));
+        setCheckedIssueIds(new Set());
 
         // diff viewer 默认选中最新 iteration（如果有），否则停在 base
         if (persistedIters.length > 0) {
@@ -529,12 +476,19 @@ export default function SkillOptimizePage() {
     }, [user, skill?.id, baseVersion]);
 
     const toggleIssue = (id: string) => {
+        if (optimizing || merging) return; // 优化/合并进行中锁定勾选（一键优化期间不允许改选）
+        // 已优化的点不可再选（本会话内存标记 or 服务端 resolvedAt）
+        if (optimizedIssueIds.has(id) || issues.find(i => i.id === id)?.resolvedAt) return;
         setCheckedIssueIds(prev => {
             const next = new Set(prev);
             next.has(id) ? next.delete(id) : next.add(id);
             return next;
         });
     };
+    // 一键优化按钮上的计数：只数"未优化"的——排除本会话已优化(optimizedIssueIds)
+    // 和服务端已 resolved 的点。
+    const pendingIssueCount = issues.filter(i => !optimizedIssueIds.has(i.id) && !i.resolvedAt).length;
+    const optimizedCountInList = issues.length - pendingIssueCount;
 
     /**
      * 从 agent turn 的 blocks 抠 markdown 总结作为优化报告主体。
@@ -588,9 +542,9 @@ export default function SkillOptimizePage() {
         return out;
     }
 
-    const startOptimize = async () => {
+    const startOptimize = async (opts?: { planId?: string; planSourceIssueIds?: string[]; feedbackText?: string }) => {
         if (!skill || optimizing) return;
-        if (checkedIssueIds.size === 0 && !input.trim()) return;
+        if (!opts?.planId && checkedIssueIds.size === 0 && !input.trim()) return;
         // session 还没创建好（页面进入 → fetchSessions → handleNewChat 那个链路还在跑）就不发请求
         if (!currentSessionId) {
             console.warn('[skill-opt] startOptimize called before session ready');
@@ -598,9 +552,9 @@ export default function SkillOptimizePage() {
         }
 
         const checked = issues.filter(i => checkedIssueIds.has(i.id));
-        const userInputText = input.trim();
-        const useMockOptimizer = typeof window !== 'undefined'
-            && new URLSearchParams(window.location.search).get('mock') === '1';
+        // plan 模式（一键优化）：resolve / 已优化标记用 plan 的源 issue id；手动模式用勾选的。
+        const resolveIds = opts?.planSourceIssueIds ?? checked.map(i => i.id);
+        const userInputText = opts?.feedbackText ?? input.trim();
 
         // 1) push 用户消息 + 一个空 agent turn（streaming=true）
         //    后续所有 thinking / text / tool 事件都作为 block 追加到这个 turn 里
@@ -668,8 +622,6 @@ export default function SkillOptimizePage() {
         let agentDidWork = false;
         // 后端是否推过 error 事件——错了就不该再造草稿
         let streamErrored = false;
-        // 后端 rank/select 之后，本轮实际处理的 issue。null 表示后端未推 scope，沿用 checked。
-        let scopedIssueIds: Set<string> | null = null;
 
         // 起点文件：有草稿就基于最后一份草稿，否则从 base 版本真实文件出发。
         // baselineFiles state 已在页面 useEffect 里从 /api/skills/[id]/versions/[v] 拉好；
@@ -687,20 +639,16 @@ export default function SkillOptimizePage() {
                     threadId: currentSessionId,
                     skillName: skill.name,
                     baseVersion,
-                    checkedIssues: checked.map(i => ({
+                    checkedIssues: opts?.planId ? [] : checked.map(i => ({
                         id: i.id, severity: i.severity, category: i.category,
                         summary: i.summary, evidence: i.evidence,
-                        reasoning: i.reasoning,
-                        dedupKey: i.dedupKey,
-                        occurrence: i.occurrence,
-                        sourceKind: i.source?.kind,
                         improvementSuggestion: i.improvementSuggestion,
                     })),
+                    planId: opts?.planId,
                     userFeedback: userInputText,
                     baselineFiles: startingFiles,
                     modelId: selectedModelId || undefined,
-                    scopeLimits,
-                    mock: useMockOptimizer,
+                    mock: false,
                 }),
             });
             if (!resp.ok || !resp.body) {
@@ -797,32 +745,6 @@ export default function SkillOptimizePage() {
                         if (data.payload?.files) {
                             latestFiles = data.payload.files;
                         }
-                    } else if (data.mode === 'optimization_scope') {
-                        const selected = data.payload?.selectedIssueIds;
-                        if (Array.isArray(selected)) {
-                            scopedIssueIds = new Set(selected.map((id: unknown) => String(id)));
-                        }
-                        upsertBlock(`${agentTurnId}:scope`, 'scope', () => ({
-                            kind: 'scope',
-                            id: `${agentTurnId}:scope`,
-                            selectedIssueIds: Array.isArray(data.payload?.selectedIssueIds)
-                                ? data.payload.selectedIssueIds.map((id: unknown) => String(id))
-                                : [],
-                            deferredIssueIds: Array.isArray(data.payload?.deferredIssueIds)
-                                ? data.payload.deferredIssueIds.map((id: unknown) => String(id))
-                                : [],
-                            selectedCount: Number.isFinite(Number(data.payload?.selectedCount))
-                                ? Number(data.payload.selectedCount)
-                                : 0,
-                            deferredCount: Number.isFinite(Number(data.payload?.deferredCount))
-                                ? Number(data.payload.deferredCount)
-                                : 0,
-                            limits: normalizeScopeLimits(data.payload?.limits),
-                            allowedFiles: Array.isArray(data.payload?.allowedFiles)
-                                ? data.payload.allowedFiles.map((p: unknown) => String(p))
-                                : [],
-                            allowedRegions: normalizeSkillEditRegions(data.payload?.allowedRegions),
-                        }));
                     } else if (data.mode === 'done') {
                         // 静默：实际收尾在 finally 里（覆盖正常 + 异常两路）
                     } else if (data.mode === 'error') {
@@ -856,24 +778,17 @@ export default function SkillOptimizePage() {
                 return;
             }
 
-            const resolvedThisRound = scopedIssueIds
-                ? checked.filter(i => scopedIssueIds?.has(i.id))
-                : checked;
-            const deferredThisRound = scopedIssueIds
-                ? checked.filter(i => !scopedIssueIds?.has(i.id))
-                : [];
-
-            // 把本轮 select 的 issue 标记为"已优化"；gate 延后项继续保持勾选，方便下一轮处理。
+            // 把这批 issue 标记为"已优化"，清掉勾选，方便下一轮选新批次
             setOptimizedIssueIds(prev => {
                 const next = new Set(prev);
-                resolvedThisRound.forEach(i => next.add(i.id));
+                resolveIds.forEach(id => next.add(id));
                 return next;
             });
-            setCheckedIssueIds(new Set(deferredThisRound.map(i => i.id)));
+            setCheckedIssueIds(new Set());
 
             // 服务端置 resolvedAt，下次进来这些 id 不会再出现在优化点列表里。
             // best-effort：失败不影响本次会话已经有的"已优化"标记。
-            if (skill && user && resolvedThisRound.length > 0) {
+            if (skill && user && resolveIds.length > 0) {
                 apiFetch(
                     `/api/skills/by-name/${encodeURIComponent(skill.name)}/optimization-points/resolve`,
                     {
@@ -881,7 +796,7 @@ export default function SkillOptimizePage() {
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                             user,
-                            ids: resolvedThisRound.map(i => i.id),
+                            ids: resolveIds,
                             threadId: currentSessionId,
                         }),
                     },
@@ -922,11 +837,9 @@ export default function SkillOptimizePage() {
                 label: `草稿 #${draftNum}`,
                 baseVersion,
                 createdAt: new Date().toISOString(),
-                summary: agentSummary || (resolvedThisRound.length > 0
-                    ? `针对 ${resolvedThisRound.length} 个本轮 issue 的优化结果（agent 未输出总结）`
-                    : checked.length > 0
-                        ? '本轮优化面收束后未处理已勾选 issue（agent 未输出总结）'
-                        : (userInputText ? '基于用户诉求的修改（agent 未输出总结）' : '本次未产生修改')),
+                summary: agentSummary || (resolveIds.length > 0
+                    ? `针对 ${resolveIds.length} 个优化点的优化结果（agent 未输出总结）`
+                    : (userInputText ? '基于用户诉求的修改（agent 未输出总结）' : '本次未产生修改')),
                 files: draftFiles,
             };
             setIterations(prev => [...prev, draft]);
@@ -942,7 +855,7 @@ export default function SkillOptimizePage() {
                     body: JSON.stringify({
                         summary: draft.summary,
                         files: draftFiles,
-                        resolvedIssueIds: resolvedThisRound.map(i => i.id),
+                        resolvedIssueIds: resolveIds,
                     }),
                 });
                 if (!resp.ok) {
@@ -975,6 +888,128 @@ export default function SkillOptimizePage() {
             setOptimizing(false);
         }
     };
+
+    // 一键优化：先把本版本所有未解决优化点交给归并算子产出 plan（去重/冲突/三路路由），
+    // 再用该 plan 直接执行优化——不用用户逐条勾选。
+    // 轮询 plan 直到后台归并收尾（status 不再是 running）。返回收尾后的 plan；超时返回 null。
+    const pollPlanReady = async (sessionId: string): Promise<any | null> => {
+        const deadline = Date.now() + 6 * 60 * 1000; // 6min 兜底——240 点多轮 LLM 的合理上界
+        while (Date.now() < deadline) {
+            await new Promise(r => setTimeout(r, 2000));
+            try {
+                const r = await fetch(`/api/skill-opt/plan?sessionId=${encodeURIComponent(sessionId)}`);
+                if (!r.ok) continue;
+                const d = await r.json();
+                const p = d?.plan;
+                if (p && p.status !== 'running') return p;
+            } catch { /* 网络抖动忽略，下个 tick 再试 */ }
+        }
+        return null;
+    };
+
+    // 把一份 DB plan 构造成对话里的「合并结果」计划卡片 turn。live push 和刷新后还原共用，保证形态一致。
+    const buildPlanCardTurn = (plan: any) => {
+        const items: PlanCardItem[] = (plan?.items || []).map((it: any) => ({
+            id: it.id,
+            route: it.route,
+            severity: it.severity,
+            title: it.title,
+            mergedFrom: Array.isArray(it.sourceIssueIds) ? it.sourceIssueIds.length : 0,
+            targetFile: it.targetFile ?? null,
+        }));
+        // 源点数 = 各 item 的 sourceIssueIds 之和（parse 阶段已保证一个源 id 只归一个 item，不重复计）
+        const sourceCount = items.reduce((n, it) => n + it.mergedFrom, 0);
+        return { kind: 'plan' as const, id: safeUUID(), sourceCount, items };
+    };
+
+    const startOneClickOptimize = async () => {
+        if (!skill || optimizing || merging) return;
+        if (!currentSessionId || !baselineFiles) return;
+        setMerging(true);
+        try {
+            const resp = await fetch('/api/skill-opt/plan', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    user: user || 'anonymous',
+                    skillName: skill.name,
+                    baseVersion,
+                    sessionId: currentSessionId,
+                    modelId: selectedModelId || undefined,
+                }),
+            });
+            const data = await resp.json().catch(() => ({}));
+            if (!resp.ok) throw new Error(data?.error || `归并失败 (HTTP ${resp.status})`);
+            let plan = data?.plan;
+            // 没有待优化点：plan 为 null
+            if (!plan) {
+                setChat(prev => [...prev, { kind: 'user', id: safeUUID(),
+                    text: data?.reason === 'no unresolved issues' ? '一键优化：当前没有待优化点' : '一键优化：归并未产出可执行计划' }]);
+                setMerging(false);
+                return;
+            }
+            // 异步：刚建的 plan 是 status=running，归并在后台跑——轮询到收尾（draft/failed）。
+            // 此间按钮一直显示「合并优化点…」，用户可离开页面，回来再点会命中幂等的同一条。
+            if (plan.status === 'running') {
+                plan = await pollPlanReady(currentSessionId);
+            }
+            if (!plan || plan.status === 'failed') {
+                const errMsg = plan?.operatorMeta?.error;
+                setChat(prev => [...prev, { kind: 'user', id: safeUUID(),
+                    text: plan == null
+                        ? '一键优化：合并超时，请稍后重试'
+                        : `一键优化失败：归并出错${errMsg ? `（${errMsg}）` : ''}` }]);
+                setMerging(false);
+                return;
+            }
+            if (!Array.isArray(plan.items) || plan.items.length === 0) {
+                setChat(prev => [...prev, { kind: 'user', id: safeUUID(), text: '一键优化：归并未产出可执行计划' }]);
+                setMerging(false);
+                return;
+            }
+            const exec = plan.items.filter((it: any) => (it.route === 'core' || it.route === 'reference') && it.status === 'pending');
+            const srcIds = Array.from(new Set(exec.flatMap((it: any) => Array.isArray(it.sourceIssueIds) ? it.sourceIssueIds : [])));
+            // 把合并结果作为一张「计划卡片」推进对话，让用户一眼看见 N 条优化点合并成了什么
+            setChat(prev => [...prev, buildPlanCardTurn(plan)]);
+            setMerging(false);
+            await startOptimize({ planId: plan.id, planSourceIssueIds: srcIds as string[] });
+        } catch (err: any) {
+            setMerging(false);
+            setChat(prev => [...prev, { kind: 'user', id: safeUUID(), text: `一键优化失败：${err?.message || String(err)}` }]);
+        }
+    };
+
+    // 刷新/切会话后从 DB 还原「合并结果」计划卡片：plan 卡片原本只在内存 chat 里，
+    // applySessionDetail 从 messages 重建 chat 时会丢（messages 不含 plan）。plan 本身按 session
+    // 持久在 DB——这里读回来补一张卡片，使合并结果跟会话一起留存、不再"刷新就没"。
+    // 若归并还在后台跑（status=running，刷新打断了原来的内存轮询），恢复"合并中"态并接续轮询。
+    useEffect(() => {
+        const sid = currentSessionId;
+        if (!sid) return;
+        let cancelled = false;
+        (async () => {
+            try {
+                const r = await fetch(`/api/skill-opt/plan?sessionId=${encodeURIComponent(sid)}`);
+                if (!r.ok) return;
+                const d = await r.json();
+                let plan = d?.plan;
+                if (cancelled || !plan) return;
+                if (plan.status === 'running') {
+                    setMerging(true);
+                    plan = await pollPlanReady(sid);
+                    if (cancelled) return;
+                    setMerging(false);
+                }
+                if (cancelled || !plan || !Array.isArray(plan.items) || plan.items.length === 0) return;
+                // 仅当对话里还没有 plan 卡片时补一张（避免和 live push / 重复 effect 撞车）；
+                // 合并发生在优化之前，放到对话最前面，顺序与原始一致。
+                setChat(prev => prev.some(t => t.kind === 'plan') ? prev : [buildPlanCardTurn(plan), ...prev]);
+            } catch { /* 读取失败不影响主流程 */ }
+        })();
+        return () => { cancelled = true; };
+    // 只在切换会话时跑；pollPlanReady/buildPlanCardTurn 是稳定闭包，不进依赖避免重复触发。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [currentSessionId]);
 
     const sendMessage = () => {
         if (!input.trim()) return;
@@ -1099,14 +1134,21 @@ export default function SkillOptimizePage() {
                 {/* ───── Left: issues only (no search — skill is fixed) ───── */}
                 <aside className="skopt-left">
                     <div className="issues">
-                        <h4>可优化点 ({issues.length})</h4>
+                        <h4>
+                            可优化点 ({pendingIssueCount})
+                            {optimizedCountInList > 0 && (
+                                <span className="done-count"> · 已优化 {optimizedCountInList}</span>
+                            )}
+                        </h4>
                         {issues.length === 0 && <div className="empty">暂无可优化点</div>}
                         {issues.map(it => {
-                            const isOptimized = optimizedIssueIds.has(it.id);
+                            const isOptimized = optimizedIssueIds.has(it.id) || !!it.resolvedAt;
+                            const locked = optimizing || merging;
                             const cls = [
                                 'issue-row',
                                 checkedIssueIds.has(it.id) && 'checked',
                                 isOptimized && 'optimized',
+                                locked && 'locked',
                             ].filter(Boolean).join(' ');
                             return (
                                 <div
@@ -1118,6 +1160,7 @@ export default function SkillOptimizePage() {
                                     <input
                                         type="checkbox"
                                         checked={checkedIssueIds.has(it.id)}
+                                        disabled={locked || isOptimized}
                                         onChange={() => toggleIssue(it.id)}
                                         onClick={e => e.stopPropagation()}
                                     />
@@ -1167,54 +1210,46 @@ export default function SkillOptimizePage() {
                                 ))}
                             </select>
                         </div>
-                        <div className="scope-limit-picker" aria-label="优化范围上限">
-                            <div className="scope-limit-title">优化范围上限</div>
-                            <label>
-                                <span>处理问题</span>
-                                <input
-                                    type="number"
-                                    min={1}
-                                    step={1}
-                                    value={scopeLimits.maxOpportunities}
-                                    onChange={e => updateScopeLimit('maxOpportunities', e.currentTarget.valueAsNumber)}
-                                    disabled={optimizing}
-                                    title="本轮最多处理的优化点数量"
-                                />
-                            </label>
-                            <label>
-                                <span>触达文件</span>
-                                <input
-                                    type="number"
-                                    min={1}
-                                    step={1}
-                                    value={scopeLimits.maxFiles}
-                                    onChange={e => updateScopeLimit('maxFiles', e.currentTarget.valueAsNumber)}
-                                    disabled={optimizing}
-                                    title="本轮最多允许触达的文件数量"
-                                />
-                            </label>
-                        </div>
+                        <button
+                            className="skopt-oneclick-btn"
+                            disabled={
+                                pendingIssueCount === 0
+                                || optimizing
+                                || merging
+                                || baselineLoading
+                                || !baselineFiles
+                            }
+                            onClick={startOneClickOptimize}
+                            title="自动合并全部优化点（去重 / 冲突消解 / 分核心·长尾），再一键执行"
+                        >
+                            {merging
+                                ? '合并优化点…'
+                                : optimizing
+                                    ? '优化中…'
+                                    : `一键优化 (${pendingIssueCount})`}
+                        </button>
                         <button
                             disabled={
                                 (checkedIssueIds.size === 0 && !input.trim())
                                 || optimizing
+                                || merging
                                 || baselineLoading
                                 || !baselineFiles
                             }
-                            onClick={startOptimize}
+                            onClick={() => startOptimize()}
                             title={
                                 baselineLoading
                                     ? '正在加载 base 版本文件…'
                                     : baselineError
                                         ? `base 版本加载失败：${baselineError}`
-                                        : undefined
+                                        : '只优化你勾选的优化点'
                             }
                         >
                             {optimizing
                                 ? '优化中…'
                                 : baselineLoading
                                     ? '加载基线…'
-                                    : `开始优化 (${checkedIssueIds.size})`}
+                                    : `手动优化 (${checkedIssueIds.size})`}
                         </button>
                     </div>
                 </aside>
@@ -1237,6 +1272,45 @@ export default function SkillOptimizePage() {
                         {chat.map(turn => {
                             if (turn.kind === 'user') {
                                 return <div key={turn.id} className="msg user">{turn.text}</div>;
+                            }
+                            if (turn.kind === 'plan') {
+                                const core = turn.items.filter(i => i.route === 'core');
+                                const ref = turn.items.filter(i => i.route === 'reference');
+                                const backlog = turn.items.filter(i => i.route === 'backlog');
+                                const renderItem = (i: PlanCardItem) => (
+                                    <div key={i.id} className="skopt-plan-item">
+                                        <span className={`skopt-plan-sev sev-${i.severity}`}>{i.severity}</span>
+                                        <div className="skopt-plan-item-body">
+                                            <div className="skopt-plan-item-title">{i.title}</div>
+                                            <div className="skopt-plan-item-meta">
+                                                合并自 {i.mergedFrom} 条{i.targetFile ? ` · ${i.targetFile}` : ''}
+                                            </div>
+                                        </div>
+                                    </div>
+                                );
+                                return (
+                                    <div key={turn.id} className="skopt-plan-card">
+                                        <div className="skopt-plan-head">
+                                            <span className="skopt-plan-head-title">优化点已合并</span>
+                                            <span className="skopt-plan-count">{turn.sourceCount} → {core.length + ref.length} 条</span>
+                                        </div>
+                                        {core.length > 0 && (
+                                            <div className="skopt-plan-group">
+                                                <div className="skopt-plan-group-label">核心修改 · {core.length}</div>
+                                                {core.map(renderItem)}
+                                            </div>
+                                        )}
+                                        {ref.length > 0 && (
+                                            <div className="skopt-plan-group">
+                                                <div className="skopt-plan-group-label">长尾沉淀 → references/ · {ref.length}</div>
+                                                {ref.map(renderItem)}
+                                            </div>
+                                        )}
+                                        {backlog.length > 0 && (
+                                            <div className="skopt-plan-backlog">另有 {backlog.length} 条信号不足，本轮顺延</div>
+                                        )}
+                                    </div>
+                                );
                             }
                             // agent turn：一个气泡里按顺序渲染所有 blocks（thinking/text/tool/error）
                             const empty = turn.blocks.length === 0;
@@ -1261,9 +1335,6 @@ export default function SkillOptimizePage() {
                                                 status: b.status, summary: b.summary, error: b.error,
                                             };
                                             return <ChatToolBlock key={b.id} block={data} locale="zh" />;
-                                        }
-                                        if (b.kind === 'scope') {
-                                            return <OptimizationScopeBlock key={b.id} block={b} issues={issues} />;
                                         }
                                         // error block in-line
                                         return <div key={b.id} className="agent-error-block">⚠ {b.text}</div>;
@@ -1381,119 +1452,3 @@ export default function SkillOptimizePage() {
     );
 }
 
-function OptimizationScopeBlock({
-    block,
-    issues,
-}: {
-    block: Extract<AgentBlock, { kind: 'scope' }>;
-    issues: OptIssue[];
-}) {
-    const issueById = new Map(issues.map(issue => [issue.id, issue]));
-    const selected = block.selectedIssueIds.map(id => issueById.get(id)).filter((issue): issue is OptIssue => Boolean(issue));
-    const deferred = block.deferredIssueIds.map(id => issueById.get(id)).filter((issue): issue is OptIssue => Boolean(issue));
-    const total = block.selectedCount + block.deferredCount;
-    const allowedRegions = Array.isArray(block.allowedRegions) ? block.allowedRegions : [];
-    const allowedFiles = Array.isArray(block.allowedFiles) ? block.allowedFiles : [];
-
-    const issueRows = (items: OptIssue[], ids: string[]) => {
-        if (items.length > 0) {
-            return items.map(issue => (
-                <li key={issue.id}>
-                    <span className={`scope-severity ${issue.severity}`}>{issue.severity}</span>
-                    <span>{issue.summary}</span>
-                </li>
-            ));
-        }
-        return ids.map(id => (
-            <li key={id}>
-                <span className="scope-severity unknown">issue</span>
-                <span>{id.slice(0, 10)}</span>
-            </li>
-        ));
-    };
-
-    return (
-        <div className="skopt-scope-block">
-            <div className="scope-head">
-                <div>
-                    <div className="scope-kicker">Rank / Select / Gate</div>
-                    <strong>本轮优化范围已收束</strong>
-                </div>
-                <div className="scope-stats">
-                    <span>输入 {total}</span>
-                    <span>处理 {block.selectedCount}</span>
-                    <span>延后 {block.deferredCount}</span>
-                    {block.limits && <span>上限 {block.limits.maxOpportunities}/{block.limits.maxFiles}</span>}
-                </div>
-            </div>
-
-            <div className="scope-section">
-                <div className="scope-label">Select 本轮处理</div>
-                <ul>{issueRows(selected, block.selectedIssueIds)}</ul>
-            </div>
-
-            {block.deferredIssueIds.length > 0 && (
-                <div className="scope-section deferred">
-                    <div className="scope-label">Gate 保留下轮</div>
-                    <ul>{issueRows(deferred, block.deferredIssueIds)}</ul>
-                </div>
-            )}
-
-            {(allowedRegions.length > 0 || allowedFiles.length > 0) && (
-                <div className="scope-files">
-                    <span>允许编辑区域</span>
-                    {allowedRegions.length > 0
-                        ? allowedRegions.map(region => (
-                            <code key={`${region.file}:${region.label}:${region.startLine}`}>
-                                {formatSkillEditRegion(region)}
-                            </code>
-                        ))
-                        : allowedFiles.map(file => <code key={file}>{file}</code>)}
-                </div>
-            )}
-        </div>
-    );
-}
-
-function normalizeSkillEditRegions(value: unknown): SkillEditRegion[] {
-    if (!Array.isArray(value)) return [];
-    return value
-        .map((item): SkillEditRegion | null => {
-            if (!item || typeof item !== 'object') return null;
-            const record = item as Record<string, unknown>;
-            const startLine = Number(record.startLine);
-            const endLine = Number(record.endLine);
-            if (!Number.isFinite(startLine) || !Number.isFinite(endLine)) return null;
-            const kind = record.kind === 'frontmatter' || record.kind === 'section'
-                ? record.kind
-                : 'section';
-            return {
-                file: typeof record.file === 'string' ? record.file : 'SKILL.md',
-                kind,
-                label: typeof record.label === 'string' ? record.label : kind,
-                anchor: typeof record.anchor === 'string' ? record.anchor : '',
-                startLine,
-                endLine,
-            };
-        })
-        .filter((item): item is SkillEditRegion => Boolean(item));
-}
-
-function normalizeScopeLimits(value: unknown): SkillOptScopeLimits | undefined {
-    if (!value || typeof value !== 'object') return undefined;
-    const record = value as Record<string, unknown>;
-    const maxOpportunities = Number(record.maxOpportunities);
-    const maxFiles = Number(record.maxFiles);
-    if (!Number.isFinite(maxOpportunities) || !Number.isFinite(maxFiles)) return undefined;
-    return {
-        maxOpportunities: Math.max(1, Math.trunc(maxOpportunities)),
-        maxFiles: Math.max(1, Math.trunc(maxFiles)),
-    };
-}
-
-function formatSkillEditRegion(region: SkillEditRegion): string {
-    const range = region.startLine === region.endLine
-        ? `L${region.startLine}`
-        : `L${region.startLine}-L${region.endLine}`;
-    return `${region.file}:${region.label} ${range}`;
-}

@@ -46,6 +46,29 @@ const EXECUTION_SKILL_ENABLED = !process.env.DB_HOST;
 
 const SKILL_NAME_PATTERN = /^[a-zA-Z0-9_\-\.]+$/;
 
+export function inferUserQueryFromInteractions(interactions: unknown): string | undefined {
+    if (!Array.isArray(interactions)) return undefined;
+    for (const interaction of interactions) {
+        if (!interaction || typeof interaction !== 'object') continue;
+        const item = interaction as Record<string, any>;
+        if (String(item.role || '').toLowerCase() !== 'user') continue;
+        const content = typeof item.content === 'string' ? item.content.trim() : '';
+        if (content) return content;
+    }
+    return undefined;
+}
+
+export function shouldRefreshStoredQueryFromInteractions(
+    query: unknown,
+    framework: unknown,
+): boolean {
+    const current = typeof query === 'string' ? query.trim() : '';
+    if (!current) return true;
+    const fw = typeof framework === 'string' ? framework.trim().toLowerCase() : '';
+    if (!fw) return false;
+    return current.toLowerCase() === `${fw} session`;
+}
+
 /**
  * 从单个 AgentNode 抽取**本层 agent 自己显式调用**的 skill(kind==='skill',即 skill/load_skill;
  * 天然排除 task() 预加载与子 agent 的事件)。用于 opencode 的逐层 agent 作用域绑定。
@@ -145,7 +168,7 @@ async function persistExecutionSkills(
  */
 export function computeOwnSkills(framework: string | null | undefined, interactions: any[]): InvokedSkill[] {
     if (!Array.isArray(interactions) || interactions.length === 0) return [];
-    if (framework === 'opencode') {
+    if (framework === 'opencode' || framework === 'hermes') {
         const tree = buildAgentCallTree(interactions as any);
         return tree ? extractExplicitSkillsFromNode(tree) : [];
     }
@@ -227,6 +250,7 @@ export interface ExecutionRecord {
     cost?: number;
     latency?: number;
     timestamp?: string | Date;
+    trace_completed_at?: string | Date | null;
     final_result?: string;
     skill?: string;
     rootSkill?: InvokedSkill | null;
@@ -278,6 +302,50 @@ export interface ExecutionRecord {
     routing_evaluation?: RoutingEvaluationSnapshot;
     outcome_evaluation?: OutcomeEvaluationSnapshot;
     [key: string]: any;
+}
+
+function toTraceLifecycleMs(value: unknown): number | null {
+    if (value == null) return null;
+    if (value instanceof Date) return Number.isFinite(value.getTime()) ? value.getTime() : null;
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    if (/^\d+$/.test(trimmed)) {
+        const numeric = Number(trimmed);
+        return Number.isFinite(numeric) ? numeric : null;
+    }
+    const parsed = Date.parse(trimmed);
+    return Number.isFinite(parsed) ? parsed : null;
+}
+
+function inferTraceCompletionFromInteractions(interactions: unknown): Date | null {
+    if (!Array.isArray(interactions)) return null;
+    const latest = interactions
+        .flatMap((interaction) => {
+            const item = interaction && typeof interaction === 'object'
+                ? interaction as Record<string, unknown>
+                : {};
+            const timeInfo = item.timeInfo && typeof item.timeInfo === 'object'
+                ? item.timeInfo as Record<string, unknown>
+                : {};
+            const timing = item.timing && typeof item.timing === 'object'
+                ? item.timing as Record<string, unknown>
+                : {};
+            return [
+                toTraceLifecycleMs(timeInfo.completed),
+                toTraceLifecycleMs(timeInfo.created),
+                toTraceLifecycleMs(timing.completed_at),
+                toTraceLifecycleMs(timing.started_at),
+                toTraceLifecycleMs(item.completedAt),
+                toTraceLifecycleMs(item.completed_at),
+                toTraceLifecycleMs(item.timestamp),
+                toTraceLifecycleMs(item.createdAt),
+            ];
+        })
+        .filter((value): value is number => value != null && Number.isFinite(value) && value > 0)
+        .reduce((max, value) => Math.max(max, value), 0);
+    return latest > 0 ? new Date(latest) : null;
 }
 
 export interface RoutingMatchedSkill {
@@ -1095,10 +1163,8 @@ interface ReadRecordsOptions {
 export async function listObservedAgentNames(user?: string): Promise<string[]> {
     const where: any = { isSubagent: false };
     if (user) {
-        where.OR = [
-            { user },
-            { user: null },
-        ];
+        // 只看 user=自己；无主(null)不可见(与 trace 列表口径一致)。
+        where.user = user;
     }
 
     const records = await db.findExecutions(where, { timestamp: 'desc' });
@@ -1122,7 +1188,7 @@ export async function listObservedSkills(user?: string): Promise<{ name: string;
     if (EXECUTION_SKILL_ENABLED) {
         try {
             const esWhere: any = {};
-            if (user) esWhere.OR = [{ user }, { user: null }];
+            if (user) esWhere.user = user;
             const rows = await prismaRaw.executionSkill.findMany({
                 where: esWhere,
                 select: { skillName: true, skillVersion: true },
@@ -1141,7 +1207,7 @@ export async function listObservedSkills(user?: string): Promise<{ name: string;
     if (byName.size === 0) {
         // 降级:从 Execution.skill / skillVersion 列汇总(OpenGauss 或尚未回填)。
         const where: any = {};
-        if (user) where.OR = [{ user }, { user: null }];
+        if (user) where.user = user;
         const records = await db.findExecutions(where, { timestamp: 'desc' }, { skill: true, skillVersion: true } as any);
         for (const r of records) {
             const name = String(r?.skill || '').trim();
@@ -1162,10 +1228,8 @@ export async function listObservedTraceIds(
 ): Promise<string[]> {
     const where: any = { isSubagent: false };
     if (user) {
-        where.OR = [
-            { user },
-            { user: null },
-        ];
+        // 只看 user=自己；无主(null)不可见(与 trace 列表口径一致)。
+        where.user = user;
     }
     if (agentName) {
         where.agentName = agentName;
@@ -1566,10 +1630,9 @@ async function readRecordsInternal(
     const pageSize = options?.pageSize && Number.isFinite(options.pageSize) ? Math.max(1, Math.trunc(options.pageSize)) : 0;
     const where: any = {};
     if (user && !filters?.showAllUsers) {
-        where.OR = [
-            { user: user },
-            { user: null }
-        ];
+        // 严格按 owner 隔离：用户只看见 user=自己的记录；无主(user=null)记录不可见。
+        // 全看(ownership=all / admin)走 showAllUsers ⇒ 不加 user 过滤、返回全部。
+        where.user = user;
     }
 
     // 默认列表只显示 root execution；sub-agent 行通过 trace 视图下钻进入。
@@ -1610,7 +1673,7 @@ async function readRecordsInternal(
         // 索引 (skillName, skillVersion) 命中,与数据量解耦;失败则降级回旧主 skill 列匹配。
         const esWhere: any = { skillName: filters!.skill };
         if (filters?.skillVersion !== undefined) esWhere.skillVersion = filters.skillVersion;
-        if (user && !filters?.showAllUsers) esWhere.OR = [{ user }, { user: null }];
+        if (user && !filters?.showAllUsers) esWhere.user = user;
         try {
             const esRows = await prismaRaw.executionSkill.findMany({ where: esWhere, select: { executionId: true } });
             where.id = { in: Array.from(new Set(esRows.map((r: any) => r.executionId))) };
@@ -1790,6 +1853,28 @@ export function resolveImmutableSkillVersion(input: {
     return { resolved: existingSkillVersion, blocked: true };
 }
 
+/**
+ * 按 task_id 删除 Execution（可选 framework 守卫），返回删除行数。
+ * 用于清理"已被更完整记录取代"的孤儿：jiuwenswarm 早到批次先以单 agent task_id
+ * （jiuwen-<traceId>）落库，随后该 trace 被并入多 agent session（sess_…）后，原单 agent
+ * 记录需删除，否则界面重复出现并把首轮 llm/token 计两遍。ExecutionSkill 经 onDelete:Cascade
+ * 连带清理。
+ */
+export async function deleteExecutionsByTaskId(taskId: string, framework?: string): Promise<number> {
+    if (!taskId) return 0;
+    const where: any = { taskId };
+    if (framework) where.framework = framework;
+    try {
+        const count = await db.deleteExecutions(where);
+        if (count > 0 && AUDIT_DATA_MUTATIONS) {
+            console.warn(`[Data-Audit] deleteExecutionsByTaskId: taskId=${taskId} framework=${framework ?? '*'} deleted=${count}`);
+        }
+        return count;
+    } catch {
+        return 0;
+    }
+}
+
 export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ success: boolean; record: ExecutionRecord }> {
     const id = data.upload_id || data.task_id;
     let recordId = id || crypto.randomUUID();
@@ -1958,19 +2043,55 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
 
         mergedInteractionsForSession = incomingInteractions;
         try {
-            const existingSession = await db.findSessionByTaskId(targetRecord.task_id);
-            let existingInteractions = existingSession?.interactions
-                ? (() => { try { return JSON.parse(existingSession.interactions as string); } catch { return []; } })()
-                : [];
-            existingInteractions = normalizeForStorage(existingInteractions);
+            const mergeStrategy = targetRecord.session_merge_strategy || storageAdapter.sessionMergeStrategy || 'monotonic';
+            if (mergeStrategy !== 'snapshot-replace') {
+                const existingSession = await db.findSessionByTaskId(targetRecord.task_id);
+                let existingInteractions = existingSession?.interactions
+                    ? (() => { try { return JSON.parse(existingSession.interactions as string); } catch { return []; } })()
+                    : [];
+                existingInteractions = normalizeForStorage(existingInteractions);
 
-            if (Array.isArray(existingInteractions) && existingInteractions.length > 0) {
-                mergedInteractionsForSession = mergeSessionInteractionsMonotonic(existingInteractions, incomingInteractions);
+                if (Array.isArray(existingInteractions) && existingInteractions.length > 0) {
+                    mergedInteractionsForSession = mergeSessionInteractionsMonotonic(existingInteractions, incomingInteractions);
+                }
+            } else {
+                // snapshot-replace 防退化护栏：上游或服务端聚合层每批都重新形成「当前会话快照」后整条
+                // 覆盖，正常情况下 incoming 是越来越全的快照。但若 span spool 在极端下仍残缺（历史 span
+                // 永久丢失等），一个偏小的快照会把库里更完整的记录盖没。这里比较 interaction 数：incoming
+                // 严格更小则判为退化快照，保留库里现有记录、不覆盖。设 AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK=true
+                // 可在确有「正当缩小」场景时放行。
+                const allowShrink = process.env.AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK === 'true';
+                if (!allowShrink) {
+                    const existingSession = await db.findSessionByTaskId(targetRecord.task_id);
+                    let existingInteractions = existingSession?.interactions
+                        ? (() => { try { return JSON.parse(existingSession.interactions as string); } catch { return []; } })()
+                        : [];
+                    existingInteractions = normalizeForStorage(existingInteractions);
+                    const existingCount = Array.isArray(existingInteractions) ? existingInteractions.length : 0;
+                    const incomingCount = Array.isArray(incomingInteractions) ? incomingInteractions.length : 0;
+                    if (existingCount > 0 && incomingCount < existingCount) {
+                        console.warn(
+                            `[Data-Service] snapshot-replace 退化护栏：拒绝用更小快照覆盖 task ${targetRecord.task_id}` +
+                            `（incoming ${incomingCount} < existing ${existingCount} interactions），保留现有记录。` +
+                            `设 AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK=true 可放行。`,
+                        );
+                        return { success: true, record: targetRecord };
+                    }
+                }
             }
-        } catch {}
+        } catch (e) {
+            // 护栏/合并的 DB 读取失败时 fail-open：按原逻辑继续落库，不因检查本身报错而阻断写入。
+            if (e && typeof e === 'object' && 'task_id' in (targetRecord as any)) {
+                console.warn('[Data-Service] snapshot-replace 退化检查异常，按原逻辑继续：', (e as Error)?.message || e);
+            }
+        }
 
         mergedInteractionsForSession = normalizeForStorage(mergedInteractionsForSession);
         targetRecord.interactions = mergedInteractionsForSession;
+        const derivedQuery = inferUserQueryFromInteractions(mergedInteractionsForSession);
+        if (derivedQuery && shouldRefreshStoredQueryFromInteractions(targetRecord.query, targetRecord.framework)) {
+            targetRecord.query = derivedQuery;
+        }
 
         if (targetRecord.framework === 'opencode' && Array.isArray(mergedInteractionsForSession)) {
             const derived = deriveOpencodeExecutionFields(mergedInteractionsForSession);
@@ -2356,6 +2477,13 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
             );
             const snapped = await snapshotSkillVersions(pinnedRootSkills, targetRecord.user);
             await persistExecutionSkills(recordId, snapped, { user: targetRecord.user, primaryName: targetRecord.skill ?? null });
+            await prismaRaw.execution.update({
+                where: { id: recordId },
+                data: {
+                    skills: snapped.length ? JSON.stringify(snapped.map((skill) => skill.name)) : null,
+                    invokedSkills: snapped.length ? JSON.stringify(snapped) : null,
+                },
+            });
         } catch (e) {
             console.warn(`[Data-Service] root ExecutionSkill persist failed for ${recordId}:`, e);
         }
@@ -2365,7 +2493,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
     // 通过 parentExecutionId 与 root 建立父子关系。列表/聚合默认 filter isSubagent=false，
     // 详情页可下钻到 sub-agent。历史上这里曾对相同 taskId 的 child Execution 做 dedup 删除，
     // 现在反过来——保留它们，并补齐父子链接。
-    if (targetRecord.framework === 'opencode' && targetRecord.task_id && Array.isArray(mergedInteractionsForSession)) {
+    if ((targetRecord.framework === 'opencode' || targetRecord.framework === 'hermes') && targetRecord.task_id && Array.isArray(mergedInteractionsForSession)) {
         try {
             await deriveSubagentExecutions({
                 parentExecutionId: recordId,
@@ -2379,6 +2507,26 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
         }
     }
 
+    const explicitTraceCompletedAt = targetRecord.trace_completed_at
+        ? new Date(targetRecord.trace_completed_at)
+        : null;
+    const hasExplicitTraceCompletion = explicitTraceCompletedAt != null
+        && Number.isFinite(explicitTraceCompletedAt.getTime());
+    const inferredHermesTraceCompletedAt = !hasExplicitTraceCompletion
+        && targetRecord.framework === 'hermes'
+        && typeof targetRecord.final_result === 'string'
+        && targetRecord.final_result.trim()
+        ? inferTraceCompletionFromInteractions(mergedInteractionsForSession)
+        : null;
+    const traceCompletedAtForSession = hasExplicitTraceCompletion
+        ? explicitTraceCompletedAt
+        : inferredHermesTraceCompletedAt;
+    if (!hasExplicitTraceCompletion && inferredHermesTraceCompletedAt) {
+        targetRecord.trace_completed_at = inferredHermesTraceCompletedAt;
+    }
+    const hasTraceCompletion = traceCompletedAtForSession != null
+        && Number.isFinite(traceCompletedAtForSession.getTime());
+
     if (targetRecord.task_id && mergedInteractionsForSession) {
         await db.upsertSession(
             targetRecord.task_id,
@@ -2388,16 +2536,20 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
                 label: targetRecord.label,
                 user: targetRecord.user,
                 model: targetRecord.model,
-                interactions: JSON.stringify(mergedInteractionsForSession)
+                interactions: JSON.stringify(mergedInteractionsForSession),
+                ...(hasTraceCompletion ? { endTime: traceCompletedAtForSession } : {}),
             },
             {
                 query: targetRecord.query,
                 label: targetRecord.label,
                 user: targetRecord.user,
                 model: targetRecord.model,
-                interactions: JSON.stringify(mergedInteractionsForSession)
+                interactions: JSON.stringify(mergedInteractionsForSession),
             }
         );
+        if (hasTraceCompletion) {
+            await db.updateSession(targetRecord.task_id, { endTime: traceCompletedAtForSession });
+        }
         if (targetRecord.framework === 'opencode' && targetRecord.opencode_cli_completed === true) {
             await db.updateSession(targetRecord.task_id, { endTime: new Date() });
         }
@@ -2412,6 +2564,94 @@ interface DeriveSubagentArgs {
     parentFramework?: string | null;
     parentUser?: string | null;
     interactions: any[];
+}
+
+export interface AgentNodeExecutionProjection {
+    query: string;
+    finalResult: string | null;
+    model: string | null;
+    tokens: number;
+    inputTokens: number;
+    outputTokens: number;
+    reasoningTokens: number;
+    cacheReadInputTokens: number;
+    cacheCreationInputTokens: number;
+    latency: number | null;
+    llmCallCount: number;
+    toolCallCount: number;
+    toolCallErrorCount: number;
+}
+
+function interactionContentText(content: any): string {
+    if (content == null) return '';
+    if (typeof content === 'string') return content;
+    if (Array.isArray(content)) {
+        return content
+            .map((part) => interactionContentText(part?.text ?? part?.content ?? part))
+            .filter(Boolean)
+            .join('\n');
+    }
+    if (typeof content === 'object') return interactionContentText(content.text ?? content.content ?? '');
+    return String(content);
+}
+
+function isFailedAgentToolEvent(event: any): boolean {
+    const calls = Array.isArray(event?.interaction?.tool_calls) ? event.interaction.tool_calls : [];
+    const eventId = event?._toolCallId;
+    const call = calls.find((item: any) => !eventId || item?.id === eventId);
+    const state = String(call?.state || '').toLowerCase();
+    if (state === 'error' || state === 'failed') return true;
+    const output = event?.output ?? call?.output ?? call?.result;
+    if (output && typeof output === 'object') {
+        const status = String(output.status || output.state || '').toLowerCase();
+        return status === 'error' || status === 'failed' || !!output.error;
+    }
+    if (typeof output === 'string' && output.trim().startsWith('{')) {
+        try {
+            return isFailedAgentToolEvent({ ...event, output: JSON.parse(output), interaction: undefined });
+        } catch {}
+    }
+    return false;
+}
+
+export function projectAgentNodeExecution(node: AgentNode, interactions: any[]): AgentNodeExecutionProjection {
+    const ownTurns = (node.interactionIndices || []).map((index) => interactions[index]).filter(Boolean);
+    const textTurns = ownTurns
+        .map((interaction) => interactionContentText(interaction?.content).trim())
+        .filter(Boolean);
+    const query = textTurns[0] || node.agentName || node.sessionId;
+    const llmEvents = (node.events || []).filter((event) => event.kind === 'llm');
+    const meteredLlmEvents = llmEvents.filter((event) => {
+        const usage = event.usage;
+        return !!usage && ((usage.total || 0) > 0 || (usage.input || 0) > 0 || (usage.output || 0) > 0 || (usage.reasoning || 0) > 0);
+    });
+    const firstOwnIndex = node.interactionIndices?.[0];
+    const fallbackLlmCalls = llmEvents.filter((event) =>
+        event.interactionIndex !== firstOwnIndex &&
+        (!!event.summary?.trim() || (event.interaction?.tool_calls?.length || 0) > 0)
+    ).length;
+    const toolEvents = (node.events || []).filter((event) =>
+        event.kind === 'tool' || event.kind === 'skill' || event.kind === 'task'
+    );
+    const model = ownTurns
+        .map((interaction) => interaction?.model ?? interaction?.modelID)
+        .find((value) => typeof value === 'string' && value.trim()) || null;
+
+    return {
+        query,
+        finalResult: textTurns.length > 1 ? textTurns[textTurns.length - 1] : null,
+        model,
+        tokens: node.stats.totalTokens,
+        inputTokens: node.stats.inputTokens,
+        outputTokens: node.stats.outputTokens,
+        reasoningTokens: node.stats.reasoningTokens,
+        cacheReadInputTokens: node.stats.cacheReadTokens,
+        cacheCreationInputTokens: node.stats.cacheWriteTokens,
+        latency: node.stats.durationMs ?? null,
+        llmCallCount: meteredLlmEvents.length || fallbackLlmCalls,
+        toolCallCount: toolEvents.length,
+        toolCallErrorCount: toolEvents.filter(isFailedAgentToolEvent).length,
+    };
 }
 
 /**
@@ -2515,15 +2755,16 @@ export async function deriveSubagentExecutions(args: DeriveSubagentArgs): Promis
             }
         }
         const childInteractions = [...sliceSystemPrompts, ...sliceTurns];
-
-        // 抽 query：用第一条有文本内容的 turn（避免 /api/observe/session 触发 LLM analyzeSession）
-        const queryText = (() => {
-            for (const it of sliceTurns) {
-                const c = typeof it?.content === 'string' ? it.content.trim() : '';
-                if (c) return c.slice(0, 500);
+        const projection = projectAgentNodeExecution(node, interactions);
+        const queryText = projection.query.slice(0, 500);
+        let ownSkills = extractExplicitSkillsFromNode(node);
+        if (EXECUTION_SKILL_ENABLED) {
+            try {
+                ownSkills = await snapshotSkillVersions(ownSkills, parentUser);
+            } catch (e) {
+                console.warn(`[Data-Service] sub skill version snapshot failed sub=${sessionId}:`, e);
             }
-            return node.agentName || sessionId;
-        })();
+        }
 
         const timestamp = node.startedAt ? new Date(node.startedAt) : new Date();
 
@@ -2534,6 +2775,20 @@ export async function deriveSubagentExecutions(args: DeriveSubagentArgs): Promis
             agentName: node.agentName ?? null,
             user: parentUser ?? null,
             query: queryText,
+            finalResult: projection.finalResult,
+            model: projection.model,
+            tokens: projection.tokens,
+            inputTokens: projection.inputTokens,
+            outputTokens: projection.outputTokens,
+            reasoningTokens: projection.reasoningTokens,
+            cacheReadInputTokens: projection.cacheReadInputTokens,
+            cacheCreationInputTokens: projection.cacheCreationInputTokens,
+            latency: projection.latency,
+            llmCallCount: projection.llmCallCount,
+            toolCallCount: projection.toolCallCount,
+            toolCallErrorCount: projection.toolCallErrorCount,
+            skills: ownSkills.length ? JSON.stringify(ownSkills.map((skill) => skill.name)) : null,
+            invokedSkills: ownSkills.length ? JSON.stringify(ownSkills) : null,
             parentExecutionId: directParentExecId,
             rootExecutionId: parentExecutionId,
             agentSessionId: sessionId,
@@ -2558,7 +2813,6 @@ export async function deriveSubagentExecutions(args: DeriveSubagentArgs): Promis
         // 这一层 sub-agent 自己显式调用的 skill(agent 作用域,不含其更深子孙)。
         if (EXECUTION_SKILL_ENABLED) {
             try {
-                const ownSkills = await snapshotSkillVersions(extractExplicitSkillsFromNode(node), parentUser);
                 await persistExecutionSkills(childExecutionId, ownSkills, { user: parentUser ?? null });
             } catch (e) {
                 console.warn(`[Data-Service] sub ExecutionSkill persist failed sub=${sessionId}:`, e);

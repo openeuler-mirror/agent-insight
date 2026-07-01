@@ -144,6 +144,26 @@ function collectToolResultOutputsFromRequestBody(body: any, outputsByToolId: Map
   }
 }
 
+/**
+ * The Anthropic Messages request carries the system prompt in the top-level
+ * `system` field (NOT in `messages`), as either a plain string or an array of
+ * `{ type: 'text', text }` blocks (with optional cache_control). Flatten both
+ * shapes to text; return '' when there is no usable system prompt.
+ */
+function stringifyAnthropicSystem(system: any): string {
+  if (!system) return '';
+  if (typeof system === 'string') return system.trim();
+  if (Array.isArray(system)) {
+    return system
+      .map((block) => (typeof block === 'string' ? block : typeof block?.text === 'string' ? block.text : ''))
+      .filter(Boolean)
+      .join('\n')
+      .trim();
+  }
+  if (typeof system === 'object' && typeof system.text === 'string') return system.text.trim();
+  return '';
+}
+
 function textFromContent(content: any): string {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
@@ -159,6 +179,25 @@ function textFromContent(content: any): string {
 function contentBlocksFromResponseBody(body: any): any[] {
   const content = body?.content;
   return Array.isArray(content) ? content : [];
+}
+
+/**
+ * Anthropic extended-thinking responses carry the model's reasoning as
+ * `{ type: 'thinking', thinking }` blocks in the response content, separate from
+ * the visible `{ type: 'text' }` blocks. The trace UI reads reasoning from
+ * `parts[type='reasoning']` (the OpenCode shape), so surface those blocks there.
+ * `redacted_thinking` blocks are encrypted with no readable text and are skipped.
+ * Returns undefined when the turn carries no thinking.
+ */
+function reasoningPartsFromContent(content: any): Array<{ type: 'reasoning'; text: string }> | undefined {
+  if (!Array.isArray(content)) return undefined;
+  const parts: Array<{ type: 'reasoning'; text: string }> = [];
+  for (const block of content) {
+    if (block?.type === 'thinking' && typeof block.thinking === 'string' && block.thinking.trim()) {
+      parts.push({ type: 'reasoning', text: block.thinking });
+    }
+  }
+  return parts.length > 0 ? parts : undefined;
 }
 
 function normalizeUsage(bodyUsage: any, attrs: Record<string, any> = {}): any {
@@ -363,6 +402,8 @@ function appendAssistantFromApiResponse(
     responseToToolId: Map<string, string>;
     toolUseById: Map<string, any>;
     subagentSessionByToolId: Map<string, string>;
+    systemByPromptKey: Map<string, string>;
+    emittedSystemScopes: Set<string>;
   },
 ): void {
   const attrs = event.attributes || {};
@@ -383,10 +424,36 @@ function appendAssistantFromApiResponse(
   const subagentName = isSubagentResponse ? subagentNameFromToolUse(linkedToolUse) : undefined;
   const subagentSessionId = linkedToolId ? state.subagentSessionByToolId.get(linkedToolId) : undefined;
 
+  // System prompt (top-level `system` of the matching api_request_body). The same
+  // prompt repeats on every call of an agent, so emit it once per scope — root, or
+  // each Agent sub-session — and let the trace builder stash it on that node.
+  const systemText = state.systemByPromptKey.get(promptKey(event));
+  if (systemText) {
+    const resolvedSubSession = isSubagentResponse ? subagentSessionId || `${event.sessionId}:${linkedToolId}` : undefined;
+    const scopeKey = `${resolvedSubSession || '__root__'}::${systemText}`;
+    if (!state.emittedSystemScopes.has(scopeKey)) {
+      state.emittedSystemScopes.add(scopeKey);
+      interactions.push({
+        role: 'system',
+        content: systemText,
+        system_prompt_length: systemText.length,
+        timestamp: eventTime(event),
+        timeInfo: interactionTimeInfo(requestEvent, event),
+        agent: isSubagentResponse ? subagentName : ROOT_AGENT_NAME,
+        subagent_session_id: resolvedSubSession,
+        prompt_id: event.promptId,
+        model: attrs.model || body.model,
+      });
+    }
+  }
+
+  const reasoningParts = reasoningPartsFromContent(content);
+
   interactions.push({
     role: isSubagentResponse ? 'subagent' : 'assistant',
     content: text,
     content_blocks: content,
+    ...(reasoningParts ? { parts: reasoningParts } : {}),
     timestamp: eventTime(event),
     timeInfo: interactionTimeInfo(requestEvent, event),
     agent: isSubagentResponse ? subagentName : ROOT_AGENT_NAME,
@@ -434,11 +501,18 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
   const skills = new Set<string>();
   const agentNames = new Set<string>([ROOT_AGENT_NAME]);
 
+  const systemByPromptKey = new Map<string, string>();
+  const emittedSystemScopes = new Set<string>();
+
   const pendingRequestsByPrompt = new Map<string, ClaudeOtelEvent[]>();
   for (const event of ordered) {
     if (event.eventName === 'api_request_body') {
       const body = readBodyPayload(event.attributes || {});
-      if (body) collectToolResultOutputsFromRequestBody(body, requestBodyToolOutputById);
+      if (body) {
+        collectToolResultOutputsFromRequestBody(body, requestBodyToolOutputById);
+        const systemText = stringifyAnthropicSystem(body.system);
+        if (systemText) systemByPromptKey.set(promptKey(event), systemText);
+      }
       continue;
     }
     if (event.eventName === 'api_request') {
@@ -527,7 +601,7 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
     }
 
     if (event.eventName === 'api_response_body') {
-      const state = { finalResult, model, responseMetaByKey, responseToToolId, toolUseById, subagentSessionByToolId };
+      const state = { finalResult, model, responseMetaByKey, responseToToolId, toolUseById, subagentSessionByToolId, systemByPromptKey, emittedSystemScopes };
       appendAssistantFromApiResponse(event, interactions, state);
       finalResult = state.finalResult;
       model = state.model || model;

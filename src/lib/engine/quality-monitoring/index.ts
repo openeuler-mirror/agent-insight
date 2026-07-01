@@ -7,7 +7,7 @@ import { prisma } from '@/lib/storage/prisma';
 import type { QualityReport, QualityReportInput, WindowKind, ScoringPolicy, DimScore } from './types';
 import { DEFAULT_POLICY, MAX_ERROR_PARSE_TRACES, MAX_PROBLEM_ITEMS } from './config';
 import { collectTraces } from './trace-collector';
-import { scoreDimensions, isSuccessDeterministic } from './dimension-scorer';
+import { scoreDimensions } from './dimension-scorer';
 import { bucketTrends } from './trend-bucketer';
 import {
     buildProblemSummary, lowScoreProblems, rankProblems, buildSkillDrag, summarizeDiagnoses,
@@ -171,7 +171,15 @@ export async function buildQualityReport(
     const trend = bucketTrends({ traces, window: input.window, from: input.from, to: input.to, policy });
 
     const n = traces.length;
-    const passRate = n ? Math.round((traces.filter(isSuccessDeterministic).length / n) * 1000) / 10 : 0;
+    const perTraceResultScores = traces.map((trace) => {
+        const values = Object.values(trace.resultMetrics ?? {})
+            .filter((metric) => metric?.status === 'done' && metric.score != null)
+            .map((metric) => metric!.score as number);
+        return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+    }).filter((score): score is number => score != null);
+    const passRate = perTraceResultScores.length
+        ? Math.round((perTraceResultScores.filter((score) => score >= policy.status.达标).length / perTraceResultScores.length) * 1000) / 10
+        : 0;
     return {
         composite: scored.composite,
         dimensions: scored.dimensions,

@@ -692,7 +692,7 @@ export const zh = {
     dim: {
       result: '结果', process: '过程', cost: '成本', error: '错误',
       resultQ: '做对了吗', processQ: '对不对路', costQ: '划不划算', errorQ: '在哪儿崩',
-      viewExec: '查看执行记录', viewProcess: '查看过程分析', viewTrend: '查看成本趋势', viewErrors: '查看问题汇总',
+      viewExec: '查看执行记录', viewResult: '查看结果明细', viewProcess: '查看过程分析', viewTrend: '查看成本趋势', viewErrors: '查看问题汇总',
     },
     analysis: {
       title: '综合分析',
@@ -707,6 +707,19 @@ export const zh = {
       hint: 'step 级：合规步数 ÷ 总步数',
       coverage: '覆盖',
       na: 'N/A · 无有效样本',
+    },
+    result: {
+      title: '结果评测',
+      hint: '只评 Agent 最终交付，N/A 不进入分母',
+      coverage: '覆盖',
+      confidence: '置信度',
+      noEvidence: '暂无可展开的证据摘要',
+      metric: {
+        faithfulness: '核对最终答案中的关键事实主张，是否能被本次 trace 的工具证据支持',
+        instructionAdherence: '检查明确要求的格式、语言、字段、数量、范围等输出约束是否满足',
+        answerQuality: '综合相关性、业务必答要点完整性与表达连贯性',
+        accuracy: '在命中标准答案或结果准则时，逐项核对关键观点与额外事实错误',
+      },
     },
     trend: {
       title: '成本与质量趋势',
@@ -760,7 +773,7 @@ export const zh = {
       traceId: 'TRACE ID',
       agent: 'AGENT',
       task: '任务内容',
-      score: '综合评分',
+      score: '结果评分',
       signals: '维度信号',
       status: '状态',
       time: '执行时间',
@@ -768,7 +781,8 @@ export const zh = {
       to: '–',
       of: '条 · 共',
       total: '条执行记录',
-      sigDone: '完成', sigTool: '工具', sigCost: '成本', sigSafe: '安全',
+      sigDone: '完成', sigResult: '结果', sigTool: '工具', sigCost: '成本', sigSafe: '安全',
+      evaluating: '评测中', evalFailed: '评测失败', notEvaluated: '尚未评测',
       loading: '加载中…',
       empty: '该窗口内无执行记录',
     },
@@ -804,6 +818,7 @@ export const zh = {
     nav: {
       verdict: '结论',
       dims: '四维',
+      result: '结果',
       problems: '问题',
       trend: '趋势',
       process: '过程',

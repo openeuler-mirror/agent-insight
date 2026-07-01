@@ -34,7 +34,7 @@ export function QualityTrendChart({ report, onBucketClick, collapsed, onToggleCo
     const data = useMemo(() => report.trend.buckets.map((b) => ({
         label: bucketLabel(b.bucket_ts, g),
         comp: b.composite,
-        res: b.ratios.completion ?? 0,
+        res: b.ratios.result,
         proc: b.ratios.toolCorrect ?? 0,
         cost: b.ratios.cost ?? 0,
         n: b.n_traces,

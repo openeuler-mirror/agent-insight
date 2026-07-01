@@ -50,7 +50,7 @@ export function EvalTaskPicker({
         : (zh ? '选择 / 新建评测任务' : 'Select / new eval task');
 
     return (
-        <div ref={ref} style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+        <div ref={ref} className="eval-task-picker" style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', gap: 8, maxWidth: '100%', minWidth: 0 }}>
             <button
                 type="button"
                 onClick={onCreateNew}
@@ -67,6 +67,7 @@ export function EvalTaskPicker({
                     fontWeight: 700,
                     cursor: 'pointer',
                     whiteSpace: 'nowrap',
+                    flex: '0 0 auto',
                 }}
             >
                 + {zh ? '新建评测任务' : 'New eval task'}
@@ -80,18 +81,21 @@ export function EvalTaskPicker({
                     border: '1px solid ' + (selectedRunId ? 'rgba(126,34,206,.3)' : '#D4D4D8'),
                     background: selectedRunId ? '#F5E8FF' : '#fff',
                     color: selectedRunId ? '#7E22CE' : '#52525B',
-                    maxWidth: 340, overflow: 'hidden',
+                    width: selectedRunId ? 'min(340px, 100%)' : undefined,
+                    maxWidth: '100%',
+                    minWidth: 0,
+                    overflow: 'hidden',
                 }}
                 title={selectedRunId ? `评测任务 ${selectedRunId}` : undefined}
             >
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>📋 {label}</span>
+                <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>📋 {label}</span>
                 <span style={{ color: '#A1A1AA', fontSize: 11 }}>{open ? '▲' : '▼'}</span>
             </button>
             {selectedRunId && (
                 <button
                     type="button"
                     onClick={() => window.open(`/eval/run/${encodeURIComponent(selectedRunId)}`, '_blank')}
-                    style={{ padding: '7px 14px', background: '#EEF2FF', border: '1px solid rgba(79,70,229,.25)', borderRadius: 7, fontSize: 13.5, fontWeight: 700, color: '#4F46E5', cursor: 'pointer', whiteSpace: 'nowrap' }}
+                    style={{ padding: '7px 14px', background: '#EEF2FF', border: '1px solid rgba(79,70,229,.25)', borderRadius: 7, fontSize: 13.5, fontWeight: 700, color: '#4F46E5', cursor: 'pointer', whiteSpace: 'nowrap', flex: '0 0 auto' }}
                     title={zh ? '打开评测任务详情' : 'Open eval task'}
                 >
                     {zh ? '查看评测详情' : 'View details'}

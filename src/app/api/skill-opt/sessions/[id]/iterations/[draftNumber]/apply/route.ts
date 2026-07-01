@@ -2,6 +2,7 @@ import { canAccessSkill, resolveUser } from '@/lib/auth/auth';
 import { parseSkillFlow } from '@/lib/engine/observability/flow-parser';
 import { runStaticEvaluation } from '@/lib/engine/skill-issues/static-evaluator';
 import { findSkillMd } from '@/lib/skill-generator/skill-files';
+import { verifyStructure } from '@/lib/engine/skill-opt/self-verify-structural';
 import { db, prismaRaw } from '@/lib/storage/prisma';
 import fs from 'fs';
 import { NextRequest, NextResponse } from 'next/server';
@@ -102,6 +103,26 @@ export async function POST(
         // skillMd.folder 是从 /workspace/<folder>/SKILL.md 抠的 folder 段，
         // 若 SKILL.md 直接在根（/workspace/SKILL.md）则为 null。
         const folderPrefix = skillMd.folder ? `${skillMd.folder}/` : '';
+
+        // 提交前【结构自验证】硬门（确定性、零成本）：悬空引用 / 编译错的版本不许落库。
+        // 先于落盘做——挡下时不会留下孤儿 v<N>/ 目录。语义/行为门已在优化流 bridge 侧自动跑过（含 repair），
+        // 这里只兜最便宜的结构门（草稿可能绕过 bridge 直接 apply，或旧草稿重放）。SKILL_OPT_NO_VERIFY=1 关。
+        if (process.env.SKILL_OPT_NO_VERIFY !== '1') {
+            const candidateFiles: Record<string, string> = {};
+            for (const [rel, content] of Object.entries(relFiles)) {
+                if (folderPrefix && !rel.startsWith(folderPrefix)) continue;
+                const stripped = folderPrefix ? rel.slice(folderPrefix.length) : rel;
+                if (stripped) candidateFiles[stripped] = content;
+            }
+            const struct = verifyStructure(candidateFiles);
+            if (!struct.ok) {
+                return NextResponse.json(
+                    { error: `结构自验证未通过，已阻止落库：${struct.failures.join('；')}`, selfVerify: { failures: struct.failures } },
+                    { status: 422 },
+                );
+            }
+        }
+
         const savedFilesList: string[] = [];
         for (const [rel, content] of Object.entries(relFiles)) {
             if (folderPrefix && !rel.startsWith(folderPrefix)) continue;

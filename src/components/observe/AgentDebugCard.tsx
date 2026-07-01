@@ -14,6 +14,7 @@ import {
   Loader2,
   MessageSquare,
   RefreshCw,
+  RotateCcw,
   Sparkles,
   Zap,
 } from 'lucide-react';
@@ -31,6 +32,7 @@ import type {
   AgentDebugRootCause,
   AgentDebugSkillsAnalysis,
   AgentDebugTraceLocation,
+  AgentDebugTrajectoryFinding,
 } from '@/lib/engine/agent-debug/types';
 
 interface AgentDebugCardProps {
@@ -501,8 +503,13 @@ function ReportView({ report, zh, executionId, user, traceExplicitErrors, onNode
   onRerun: () => void;
 }) {
   const findings = useMemo(() => normalizeReportFindings(report), [report]);
+  const trajectoryFindings = useMemo(
+    () => (Array.isArray(report.trajectoryFindings) ? report.trajectoryFindings : []),
+    [report],
+  );
   const [expandedFindingIds, setExpandedFindingIds] = useState<Set<string>>(() => new Set(findings[0] ? [findings[0].id] : []));
   const issueCount = report.issues.length + traceExplicitErrors.length;
+  const totalFindings = findings.length + trajectoryFindings.length;
 
   useEffect(() => {
     setExpandedFindingIds(new Set(findings[0] ? [findings[0].id] : []));
@@ -551,8 +558,8 @@ function ReportView({ report, zh, executionId, user, traceExplicitErrors, onNode
             <div>
               <div className="text-[10.5px] font-bold tracking-[0.14em] text-error">{zh ? '关键诊断发现' : 'KEY DIAGNOSTIC FINDINGS'}</div>
               <div className="mt-0.5 text-sm font-bold tracking-tight text-foreground">
-                {findings.length > 0
-                  ? (zh ? `${findings.length} 条发现 · ${issueCount} 条证据节点` : `${findings.length} findings · ${issueCount} evidence nodes`)
+                {totalFindings > 0
+                  ? (zh ? `${totalFindings} 条发现 · ${issueCount} 条证据节点` : `${totalFindings} findings · ${issueCount} evidence nodes`)
                   : (zh ? '未发现明确关键问题' : 'No clear key finding')}
               </div>
             </div>
@@ -563,7 +570,7 @@ function ReportView({ report, zh, executionId, user, traceExplicitErrors, onNode
           </Button>
         </div>
 
-        {findings.length > 0 ? (
+        {totalFindings > 0 ? (
           <div className="space-y-2">
             {findings.map((finding, index) => (
               <FindingCard
@@ -574,6 +581,24 @@ function ReportView({ report, zh, executionId, user, traceExplicitErrors, onNode
                 zh={zh}
                 expanded={expandedFindingIds.has(finding.id)}
                 traceExplicitErrors={index === 0 ? traceExplicitErrors : []}
+                onToggle={() => {
+                  setExpandedFindingIds(prev => {
+                    const next = new Set(prev);
+                    if (next.has(finding.id)) next.delete(finding.id);
+                    else next.add(finding.id);
+                    return next;
+                  });
+                }}
+                onNodeRefClick={onNodeRefClick}
+              />
+            ))}
+            {trajectoryFindings.map((finding, i) => (
+              <TrajectoryFindingRow
+                key={finding.id}
+                finding={finding}
+                index={findings.length + i}
+                zh={zh}
+                expanded={expandedFindingIds.has(finding.id)}
                 onToggle={() => {
                   setExpandedFindingIds(prev => {
                     const next = new Set(prev);
@@ -601,6 +626,95 @@ function ReportView({ report, zh, executionId, user, traceExplicitErrors, onNode
     </div>
   );
 }
+function TrajectoryFindingRow({ finding, index, zh, expanded, onToggle, onNodeRefClick }: {
+  finding: AgentDebugTrajectoryFinding;
+  index: number;
+  zh: boolean;
+  expanded: boolean;
+  onToggle: () => void;
+  onNodeRefClick?: (nodeId: string) => void;
+}) {
+  const spanText = finding.span.fromStep != null && finding.span.toStep != null
+    ? `#${finding.span.fromStep}–#${finding.span.toStep}`
+    : (zh ? `${finding.span.turnCount} 个 turn` : `${finding.span.turnCount} turns`);
+  return (
+    <div className="rounded-lg border border-border bg-background-secondary p-3">
+      <button
+        type="button"
+        aria-expanded={expanded}
+        onClick={onToggle}
+        className="flex w-full items-start gap-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+      >
+        <div className="flex size-6 shrink-0 items-center justify-center rounded-md border border-border bg-card text-[11px] font-bold text-primary">
+          {index + 1}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="text-[13px] font-semibold leading-6 text-foreground">{sanitizeConclusionText(finding.summary)}</div>
+          <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-foreground-muted">
+            <span className="inline-flex items-center gap-1 rounded bg-error-subtle px-1 py-0.5 text-error">
+              <RotateCcw className="size-3" />{zh ? '疑似循环' : 'Suspected loop'}
+            </span>
+            <span>{zh ? '区间' : 'span'} {spanText}</span>
+          </div>
+        </div>
+        {expanded ? <ChevronDown className="mt-1 size-3.5 shrink-0 text-foreground-muted" /> : <ChevronRight className="mt-1 size-3.5 shrink-0 text-foreground-muted" />}
+      </button>
+
+      {expanded && (
+        <div className="mt-3 space-y-3 border-t border-border pt-3">
+          <section>
+            <div className="mb-1 text-[10.5px] font-bold tracking-wider text-foreground-muted">{zh ? '故障机制' : 'Mechanism'}</div>
+            <div className="text-[12.5px] leading-6 text-foreground">{sanitizeReportText(finding.mechanism)}</div>
+          </section>
+
+          {finding.faultChain.length > 0 && (
+            <section>
+              <div className="mb-1 text-[10.5px] font-bold tracking-wider text-foreground-muted">{zh ? '故障链' : 'Fault chain'}</div>
+              <ol className="space-y-0.5">
+                {finding.faultChain.map((step, i) => (
+                  <li key={i} className="text-[12px] leading-6 text-foreground-muted">{i + 1}. {sanitizeReportText(step)}</li>
+                ))}
+              </ol>
+            </section>
+          )}
+
+          <section>
+            <div className="mb-1 text-[10.5px] font-bold tracking-wider text-foreground-muted">{zh ? '无进展证据' : 'No-progress evidence'}</div>
+            <div className="text-[12px] leading-6 text-foreground-muted">{sanitizeReportText(finding.noProgressEvidence)}</div>
+          </section>
+
+          {finding.anchors.length > 0 && (
+            <section className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[10.5px] font-bold tracking-wider text-foreground-muted">{zh ? '证据节点' : 'Evidence'}</span>
+              {finding.anchors.map((anchor, i) => {
+                const label = anchor.traceStepIndex != null ? `#${anchor.traceStepIndex}` : (anchor.traceNodeLabel || `node ${i + 1}`);
+                const clickable = Boolean(anchor.anchorId && onNodeRefClick);
+                return (
+                  <button
+                    key={i}
+                    type="button"
+                    disabled={!clickable}
+                    onClick={() => { if (anchor.anchorId && onNodeRefClick) onNodeRefClick(anchor.anchorId); }}
+                    className={`rounded border border-border px-1.5 py-0.5 text-[11px] ${clickable ? 'cursor-pointer text-error hover:bg-error-subtle' : 'cursor-default text-foreground-muted'}`}
+                    title={anchor.traceNodeLabel || ''}
+                  >
+                    {label}{anchor.note ? ` · ${anchor.note}` : ''}
+                  </button>
+                );
+              })}
+            </section>
+          )}
+
+          <section className="rounded-lg border border-border bg-card px-3 py-2.5">
+            <div className="mb-1 text-[10.5px] font-bold tracking-wider text-foreground-muted">{zh ? '建议' : 'Guidance'}</div>
+            <div className="text-[12.5px] leading-6 text-foreground">{sanitizeReportText(finding.correctionGuidance)}</div>
+          </section>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function FatalDiagnosisCard({ report, zh, onNodeRefClick, onRerun }: {
   report: AgentDebugReportPayload;
   zh: boolean;
@@ -957,6 +1071,7 @@ function SkillsAnalysisSection({ executionId, user, zh, analysis, onAnalysisUpda
   }, [analysis]);
 
   const keyActions = extractSkillsKeyActions(localAnalysis as Record<string, unknown> | null);
+  const skillSuggestions = extractSkillsSuggestions(localAnalysis as Record<string, unknown> | null);
   const summaryText = summarizeSkillsReason(localAnalysis?.reasonText || '');
   const status = localAnalysis?.status || 'pending';
   const hasUsableData = status === 'done' && keyActions.length > 0;
@@ -1122,6 +1237,30 @@ function SkillsAnalysisSection({ executionId, user, zh, analysis, onAnalysisUpda
                   </div>
                 )}
               </div>
+              {skillSuggestions.length > 0 && (
+                <div className="rounded-md border border-border bg-background-secondary">
+                  <div className="flex items-center gap-2 px-3 py-2.5">
+                    <span className="text-[12px] font-bold text-foreground">{zh ? 'Skill 改进建议' : 'Skill improvement suggestions'}</span>
+                    <StatusBadge status="warning" label={`${skillSuggestions.length}`} />
+                    <span className="h-px min-w-4 flex-1 bg-border" />
+                  </div>
+                  <div className="space-y-2 border-t border-border p-2.5">
+                    {skillSuggestions.map((item, index) => (
+                      <div key={`sugg-${index}-${item.summary}`} className="rounded-md border border-border bg-card px-2.5 py-2">
+                        <div className="mb-1 flex flex-wrap items-center gap-1.5">
+                          <StatusBadge status={item.severity === 'high' ? 'error' : item.severity === 'medium' ? 'warning' : 'success'} label={item.category} />
+                          <span className="text-[12px] font-semibold text-foreground">{item.summary}</span>
+                        </div>
+                        {item.evidence && <p className="text-[11.5px] leading-5 text-foreground-muted">{item.evidence}</p>}
+                        <div className="mt-2 rounded-md border border-success-border bg-success-subtle px-2 py-1.5 text-[11.5px] leading-5 text-success">
+                          <span className="font-semibold">{zh ? '改进建议' : 'Suggestion'}</span>
+                          <span className="ml-1 text-foreground-muted">{item.improvementSuggestion}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             <div className="rounded-md border border-border bg-background-secondary p-3">
@@ -1282,6 +1421,26 @@ function extractSkillsKeyActions(raw: Record<string, unknown> | null): Array<{ t
         || stringValue(item.suggestion)
         || '',
     }));
+}
+
+function extractSkillsSuggestions(raw: Record<string, unknown> | null): Array<{ category: string; severity: 'high' | 'medium' | 'low'; summary: string; evidence: string; improvementSuggestion: string }> {
+  if (!raw) return [];
+  const value = raw.skillSuggestions || raw.skill_suggestions;
+  if (!Array.isArray(value)) return [];
+  return value
+    .map(item => item && typeof item === 'object' ? item as Record<string, unknown> : null)
+    .filter((item): item is Record<string, unknown> => Boolean(item))
+    .map(item => {
+      const sev = stringValue(item.severity).toLowerCase();
+      return {
+        category: stringValue(item.category) || '其他',
+        severity: (sev === 'high' || sev === 'low' ? sev : 'medium') as 'high' | 'medium' | 'low',
+        summary: stringValue(item.summary),
+        evidence: stringValue(item.evidence),
+        improvementSuggestion: stringValue(item.improvementSuggestion) || stringValue(item.improvement_suggestion),
+      };
+    })
+    .filter(item => item.summary && item.improvementSuggestion);
 }
 
 function stringValue(value: unknown): string {

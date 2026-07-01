@@ -18,8 +18,10 @@ load_agent_insight_env() {
     set +a
   fi
 
-  if [ "${DATABASE_URL:-}" = "$DEFAULT_DATABASE_URL" ]; then
+  if [ -z "${DATABASE_URL:-}" ] || [ "$DATABASE_URL" = "$DEFAULT_DATABASE_URL" ]; then
     export DATABASE_URL="file:$AGENT_INSIGHT_DATA_DIR/witty_insight.db"
+  elif [[ "$DATABASE_URL" == file:\~* ]]; then
+    export DATABASE_URL="file:$HOME${DATABASE_URL#file:\~}"
   fi
 }
 
@@ -72,6 +74,12 @@ echo "Checking port $PORT..."
 
 # Check for OpenGauss configuration in ~/.agent-insight/.env
 load_agent_insight_env
+
+if [[ "${DATABASE_URL:-}" == file:* ]]; then
+  echo "SQLite database target: ${DATABASE_URL#file:}"
+else
+  echo "Using custom database configuration."
+fi
 
 if [ -n "$DB_HOST" ]; then
   echo "OpenGauss configuration detected (DB_HOST=$DB_HOST)."
@@ -215,6 +223,17 @@ if ! npx prisma db push; then
   echo "     直接启动 server 会让运行时撞到 schema/code 不一致（旧 client 查不到的列等）。"
   echo "     退出脚本。修好后重新跑 bash scripts/develop_start.sh。"
   exit 1
+fi
+
+if [ -z "${DB_HOST:-}" ] && [[ "${DATABASE_URL:-}" == file:* ]] && command -v sqlite3 >/dev/null 2>&1; then
+  DB_PATH="${DATABASE_URL#file:}"
+  TRACE_EVALUATION_TABLE=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'TraceEvaluation';")
+  if [ "$TRACE_EVALUATION_TABLE" != "1" ]; then
+    echo ""
+    echo "  ⛔ TraceEvaluation 表未在 $DB_PATH 中创建。"
+    echo "     为避免服务连接到未同步的数据库，退出启动。"
+    exit 1
+  fi
 fi
 
 echo "Generating Prisma client..."

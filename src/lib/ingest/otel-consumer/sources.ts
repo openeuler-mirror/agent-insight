@@ -1,12 +1,11 @@
 import type { ExecutionRecord } from '@/lib/storage/data-service';
 import { aggregateClaudeOtelSession } from '@/lib/ingest/claude-otel/aggregator';
-import { aggregateOtelTraceSession } from '@/lib/ingest/claude-otel/traces-aggregator';
+import { aggregateOtelTraceSession } from '@/lib/ingest/otel/aggregate';
 import {
   getClaudeOtelSpoolDir,
-  getOtelTraceSpoolDir,
   listClaudeOtelSpoolFiles,
-  listOtelTraceSpoolFiles,
 } from '@/lib/ingest/claude-otel/spool';
+import { getOtelTraceSpoolDir, listOtelTraceSpoolFiles } from '@/lib/ingest/otel/spool';
 
 export type SpoolAggregationResult = {
   sessionId: string;

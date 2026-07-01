@@ -25,15 +25,20 @@ export interface GrayscaleRunLike {
 
 export function extractDebugJobTokenUsage(stats: unknown): number {
   const obj = (stats || {}) as { totalTokens?: unknown; tokenUsage?: unknown; tokens?: unknown };
+  // 优先取顶层数值 totalTokens（runGeneralAgent stats 现在直接给出本轮真实总量）；
+  // 退化时再从明细对象求和，兼容两种 cache 形态：纯数值 / 嵌套 { read, write }。
   const candidates = [obj.totalTokens, obj.tokenUsage, obj.tokens];
+  const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
   for (const value of candidates) {
     if (typeof value === 'number' && Number.isFinite(value)) return Math.round(value);
     if (value && typeof value === 'object') {
       const tokenObj = value as Record<string, unknown>;
-      const sum = ['input', 'output', 'reasoning', 'cache'].reduce((acc, key) => {
-        const n = tokenObj[key];
-        return acc + (typeof n === 'number' && Number.isFinite(n) ? n : 0);
-      }, 0);
+      const cache = tokenObj.cache;
+      const cacheSum =
+        cache && typeof cache === 'object'
+          ? num((cache as Record<string, unknown>).read) + num((cache as Record<string, unknown>).write)
+          : num(cache);
+      const sum = num(tokenObj.input) + num(tokenObj.output) + num(tokenObj.reasoning) + cacheSum;
       if (sum > 0) return Math.round(sum);
     }
   }

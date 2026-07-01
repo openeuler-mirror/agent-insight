@@ -1,0 +1,59 @@
+# Minimal jiuwen agent-team for the spike: leader + dynamically-spawned teammates,
+# NO worktree / workspace / sandbox / tools — just multi-agent coordination + LLM calls.
+team_name: jiuwen_spike_team
+lifecycle: temporary
+teammate_mode: build_mode
+spawn_mode: inprocess
+enable_team_plan: false
+
+leader:
+  member_name: team_leader
+  display_name: TeamLeader
+  persona: "团队负责人，擅长把任务拆解给成员并汇总结果。"
+
+worktree:
+  enabled: false
+workspace:
+  enabled: false
+
+x-model-template: &model_template
+  model_client_config:
+    client_provider: OpenAI
+    api_base: "${API_BASE}"
+    api_key: "${API_KEY}"
+    timeout: 120
+    rate_limit: 2.0
+    verify_ssl: false
+  model_request_config:
+    model: "${MODEL_NAME}"
+    temperature: 0.2
+    top_p: 0.9
+
+x-shared-agent-spec: &shared_agent_spec
+  max_iterations: 12
+  completion_timeout: 300.0
+  language: cn
+  enable_task_planning: false
+  enable_async_subagent: false
+  restrict_to_sandbox: false
+
+agents:
+  leader:
+    <<: *shared_agent_spec
+    model:
+      <<: *model_template
+  teammate:
+    <<: *shared_agent_spec
+    model:
+      <<: *model_template
+
+transport:
+  type: inprocess
+storage:
+  type: sqlite
+
+runtime:
+  session_id: jiuwen_spike_team_session
+  initial_query: >-
+    拉2个人报数：第一个人报"1"，第二个人在看到第一个人报"1"后报"2"。
+    最后你把两个人的结果汇总成一句话回复我。

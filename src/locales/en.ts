@@ -692,7 +692,7 @@ export const en = {
     dim: {
       result: 'Result', process: 'Process', cost: 'Cost', error: 'Errors',
       resultQ: 'got it right?', processQ: 'right path?', costQ: 'worth it?', errorQ: 'where it broke',
-      viewExec: 'View executions', viewProcess: 'View process', viewTrend: 'View cost trend', viewErrors: 'View problems',
+      viewExec: 'View executions', viewResult: 'View result detail', viewProcess: 'View process', viewTrend: 'View cost trend', viewErrors: 'View problems',
     },
     analysis: {
       title: 'Overview',
@@ -707,6 +707,19 @@ export const en = {
       hint: 'step-level: compliant steps ÷ total steps',
       coverage: 'coverage',
       na: 'N/A · no valid sample',
+    },
+    result: {
+      title: 'Result evaluation',
+      hint: 'final deliverable only; N/A is excluded from the denominator',
+      coverage: 'coverage',
+      confidence: 'confidence',
+      noEvidence: 'No evidence summary to expand',
+      metric: {
+        faithfulness: 'checks whether key factual claims in the final answer are supported by this trace\'s tool evidence',
+        instructionAdherence: 'checks explicit output constraints such as format, language, fields, count, scope, and prohibitions',
+        answerQuality: 'combines relevance, business-requirement coverage, and coherence',
+        accuracy: 'compares key points and extra factual errors when a gold answer or outcome criteria are matched',
+      },
     },
     trend: {
       title: 'Cost & quality trend',
@@ -760,7 +773,7 @@ export const en = {
       traceId: 'TRACE ID',
       agent: 'AGENT',
       task: 'Task',
-      score: 'Score',
+      score: 'Result score',
       signals: 'Signals',
       status: 'Status',
       time: 'Time',
@@ -768,7 +781,8 @@ export const en = {
       to: '–',
       of: 'of',
       total: 'executions',
-      sigDone: 'Done', sigTool: 'Tool', sigCost: 'Cost', sigSafe: 'Safe',
+      sigDone: 'Done', sigResult: 'Result', sigTool: 'Tool', sigCost: 'Cost', sigSafe: 'Safe',
+      evaluating: 'Evaluating', evalFailed: 'Evaluation failed', notEvaluated: 'Not evaluated',
       loading: 'Loading…',
       empty: 'No executions in this window',
     },
@@ -804,6 +818,7 @@ export const en = {
     nav: {
       verdict: 'Verdict',
       dims: 'Dimensions',
+      result: 'Result',
       problems: 'Problems',
       trend: 'Trend',
       process: 'Process',

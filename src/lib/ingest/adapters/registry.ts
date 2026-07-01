@@ -1,10 +1,11 @@
 import { claudeAdapter } from "./claude"
 import { hermesAdapter } from "./hermes"
+import { jiuwenAdapter } from "./jiuwen"
 import { openclawAdapter } from "./openclaw"
 import { opencodeAdapter } from "./opencode"
 import type { FrameworkAdapter, FrameworkDescriptor } from "./types"
 
-const adapters = [opencodeAdapter, claudeAdapter, openclawAdapter, hermesAdapter] as const
+const adapters = [opencodeAdapter, claudeAdapter, openclawAdapter, hermesAdapter, jiuwenAdapter] as const
 
 const fallbackAdapter: FrameworkAdapter = {
   descriptor: {

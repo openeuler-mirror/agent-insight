@@ -10,7 +10,7 @@
  *  - /eval/run/[runId] 单独 panel 路由保留（外链分享用），未删除
  *
  * 数据：拉用户全部 TrajectoryEvalResult，按 evaluatorRunId 在前端聚合成 RunSummary。
- * 同时拉 /api/observe/data 取 execution 元数据（query / final_result / 执行 agent 名）。
+ * trace 输入/输出优先用评测结果快照；/api/observe/data 只补充 execution 元数据和追加 trace 候选。
  */
 import { Suspense, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -63,6 +63,14 @@ interface TrajectoryResult {
     resultEvaluationScore?: number | null;
     diagnostic?: unknown;
     rawAnalysis?: unknown;
+    traceInput?: string | null;
+    traceInputSource?: 'snapshot' | 'execution' | 'missing';
+    traceOutput?: string | null;
+    traceOutputSource?: 'snapshot' | 'execution' | 'missing';
+    traceFramework?: string | null;
+    traceModel?: string | null;
+    traceAgentName?: string | null;
+    traceTimestamp?: string | null;
     dimensionScores: TrajectoryDimensionScores | null;
     rootCauseStep: string | null;
     createdAt: string;
@@ -178,6 +186,29 @@ function shortId(s: string | null | undefined, head = 8, tail = 6): string {
 function formatTraceIdPreview(traceId: string | null | undefined): string {
     if (!traceId) return '--';
     return traceId.slice(0, 14) || '--';
+}
+
+function firstText(...values: unknown[]): string {
+    for (const value of values) {
+        if (typeof value !== 'string') continue;
+        const trimmed = value.trim();
+        if (trimmed) return trimmed;
+    }
+    return '';
+}
+
+function getTraceInputText(result: TrajectoryResult, exec?: ExecutionRecord): string {
+    return firstText(result.traceInput, exec?.query);
+}
+
+function getTraceOutputText(result: TrajectoryResult, exec?: ExecutionRecord): string {
+    return firstText(result.traceOutput, exec?.final_result);
+}
+
+function getTraceMetaText(result: TrajectoryResult, exec?: ExecutionRecord): string {
+    const framework = firstText(exec?.framework, result.traceFramework);
+    const model = firstText(exec?.model, result.traceModel);
+    return [framework, model].filter(Boolean).join(' · ');
 }
 
 function getExecutionAgentFromRecord(r?: ExecutionRecord): string {
@@ -1074,8 +1105,8 @@ function RunPanel({
                                     >
                                         <span />
                                         <span>TRACE ID</span>
-                                        <span>Trace 实际输入</span>
-                                        <span>Trace 实际输出</span>
+                                        <span>Trace 任务输入</span>
+                                        <span>Trace 任务输出</span>
                                         <span style={{ textAlign: 'right' }}>执行时间</span>
                                     </div>
                                     {addableRecords.map(record => {
@@ -1132,8 +1163,8 @@ function RunPanel({
                     <thead>
                         <tr style={{ background: COLORS.bgSoft, borderBottom: `1px solid ${COLORS.border}` }}>
                             <th style={thStyle(170, 'left')}><Term id="trace" label="TRACE ID" /></th>
-                            <th style={thStyle(undefined, 'left')}><Term id="trace" label="Trace 实际输入" /></th>
-                            <th style={thStyle(undefined, 'left')}><Term id="trace" label="Trace 实际输出" /></th>
+                            <th style={thStyle(undefined, 'left')}><Term id="trace" label="Trace 任务输入" /></th>
+                            <th style={thStyle(undefined, 'left')}><Term id="trace" label="Trace 任务输出" /></th>
                             <th style={thStyle(80, 'center')}>评测状态</th>
                             <th style={thStyle(92, 'left')}>得分</th>
                             <th style={thStyle(110, 'left')}>评测时间</th>
@@ -1145,6 +1176,9 @@ function RunPanel({
                             const exec = recordMap.get(traceId);
                             const clickable = !!traceId;
                             const displayScore = getDisplayScore(r);
+                            const traceInput = getTraceInputText(r, exec);
+                            const traceOutput = getTraceOutputText(r, exec);
+                            const traceMeta = getTraceMetaText(r, exec);
                             return (
                                 <tr
                                     key={r.id}
@@ -1166,27 +1200,29 @@ function RunPanel({
                                     <td style={{ ...tdStyle('left'), fontFamily: 'var(--font-mono)', color: COLORS.textSecondary, whiteSpace: 'nowrap' }} title={traceId}>
                                         {formatTraceIdPreview(traceId)}
                                     </td>
-                                    <td style={{ ...tdStyle('left'), maxWidth: 280 }} title={exec?.query || ''}>
-                                        {exec ? (
+                                    <td style={{ ...tdStyle('left'), maxWidth: 280 }} title={traceInput}>
+                                        {traceInput ? (
                                             <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                                {exec.query || '(空)'}
+                                                {traceInput}
                                             </div>
                                         ) : (
-                                            <span style={{ color: COLORS.textDisabled }}>(无 trace 输入)</span>
+                                            <span style={{ color: COLORS.textDisabled }}>未提取到任务输入</span>
                                         )}
                                     </td>
-                                    <td style={{ ...tdStyle('left'), maxWidth: 280 }} title={exec?.final_result || ''}>
-                                        {exec ? (
+                                    <td style={{ ...tdStyle('left'), maxWidth: 280 }} title={traceOutput}>
+                                        {traceOutput ? (
                                             <>
                                                 <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                                    {exec.final_result || '—'}
+                                                    {traceOutput}
                                                 </div>
-                                                <div style={{ fontSize: 11, color: COLORS.textDisabled, marginTop: 2 }}>
-                                                    {exec.framework} · {exec.model}
-                                                </div>
+                                                {traceMeta && (
+                                                    <div style={{ fontSize: 11, color: COLORS.textDisabled, marginTop: 2 }}>
+                                                        {traceMeta}
+                                                    </div>
+                                                )}
                                             </>
                                         ) : (
-                                            <span style={{ color: COLORS.textDisabled }}>(无 trace 元数据)</span>
+                                            <span style={{ color: COLORS.textDisabled }}>未提取到任务输出</span>
                                         )}
                                     </td>
                                     <td style={tdStyle('center')}>
