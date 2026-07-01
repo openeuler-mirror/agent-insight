@@ -1238,6 +1238,24 @@ export async function listObservedFieldValues(
     column: string,
     user?: string,
 ): Promise<{ value: string; count: number }[]> {
+    // skill 不是 Execution 标量列:计数走 ExecutionSkill(与 skill 过滤同源,agent 作用域),
+    // 按 skillName 聚合(每 (executionId, skillName) 一行 ⇒ 近似「用到该 skill 的 trace 数」)。
+    if (column === 'skill') {
+        try {
+            const rows = await prismaRaw.executionSkill.groupBy({
+                by: ['skillName'],
+                where: user ? { user } : undefined,
+                _count: { executionId: true },
+            });
+            return rows
+                .map((r) => ({ value: String(r.skillName ?? ''), count: r._count.executionId ?? 0 }))
+                .filter((r) => r.value !== '')
+                .sort((a, b) => b.count - a.count);
+        } catch (e) {
+            console.warn('[listObservedFieldValues] skill groupBy failed:', (e as Error)?.message);
+            return [];
+        }
+    }
     if (!FACETABLE_COLUMNS.has(column)) return [];
     const where: any = { isSubagent: false, [column]: { not: null } };
     if (user) where.user = user;
@@ -1676,7 +1694,17 @@ async function readRecordsInternal(
     const hasExplicitTaskIdFilter = !!(filters?.taskIds?.length || filters?.taskId);
     // 按 skill 筛选时走 ExecutionSkill(agent 作用域):结果应精确命中真正用到该 skill 的那一层,
     // 可能是 sub-agent 行,因此放开默认的 isSubagent=false 排除。
-    const skillFilterActive = EXECUTION_SKILL_ENABLED && filters?.skill !== undefined;
+    // skill 既可来自单值 filters.skill(旧路径 / ?skill= 深链),也可来自结构化过滤的
+    // `skill any of [...]` clause(左侧栏 facet 多选)。合并成一组 skillName 一次反查。
+    const skillNamesFromClauses = (filters?.clauses ?? [])
+        .filter((c) => c.column === 'skill' && (c.operator === 'any of' || c.operator === '='))
+        .flatMap((c) => (Array.isArray(c.value) ? c.value : c.value != null ? [c.value] : []))
+        .map((v) => String(v));
+    const skillNames = Array.from(new Set([
+        ...(filters?.skill !== undefined ? [String(filters.skill)] : []),
+        ...skillNamesFromClauses,
+    ]));
+    const skillFilterActive = EXECUTION_SKILL_ENABLED && skillNames.length > 0;
     if (filters?.onlySubagents === true) {
         where.isSubagent = true;
     } else if (
@@ -1714,9 +1742,9 @@ async function readRecordsInternal(
     }
 
     if (skillFilterActive) {
-        // 反查 ExecutionSkill 得到真正用到该 skill(+可选版本)的 executionId 集合,再交给 Execution 主查询。
+        // 反查 ExecutionSkill 得到真正用到这些 skill(+可选版本)的 executionId 集合,再交给 Execution 主查询。
         // 索引 (skillName, skillVersion) 命中,与数据量解耦;失败则降级回旧主 skill 列匹配。
-        const esWhere: any = { skillName: filters!.skill };
+        const esWhere: any = { skillName: { in: skillNames } };
         if (filters?.skillVersion !== undefined) esWhere.skillVersion = filters.skillVersion;
         if (user && !filters?.showAllUsers) esWhere.user = user;
         try {
@@ -1724,7 +1752,7 @@ async function readRecordsInternal(
             where.id = { in: Array.from(new Set(esRows.map((r: any) => r.executionId))) };
         } catch (e) {
             console.warn('[readRecords] ExecutionSkill filter failed, falling back to legacy skill column:', e);
-            where.skill = filters!.skill;
+            where.skill = { in: skillNames };
             if (filters?.skillVersion !== undefined) where.skillVersion = filters.skillVersion;
         }
     } else {

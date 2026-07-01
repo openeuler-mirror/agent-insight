@@ -17,6 +17,7 @@ import type { FilterClause, FilterColumn } from '@/lib/filters/types';
 type SectionKind = 'select' | 'contains' | 'range' | 'boolean';
 const SECTIONS: { column: string; kind: SectionKind; defaultOpen?: boolean }[] = [
   { column: 'framework', kind: 'select', defaultOpen: true },
+  { column: 'skill', kind: 'select', defaultOpen: true },
   { column: 'subagentType', kind: 'select' },
   { column: 'model', kind: 'contains', defaultOpen: true },
   { column: 'latency', kind: 'range', defaultOpen: true },

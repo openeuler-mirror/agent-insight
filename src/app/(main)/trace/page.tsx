@@ -448,15 +448,6 @@ function TracePageContent() {
             .finally(() => setLoading(false));
     }, [user, agentScopeFilter, skillFilter, search, clausesRaw]);
 
-    // skill 下拉走 facet 接口(全量 skill,含 sub-agent 专属),避免随服务端筛选结果塌缩。
-    const [availableSkills, setAvailableSkills] = useState<string[]>([]);
-    useEffect(() => {
-        if (!user) return;
-        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&facet=skills`)
-            .then(r => r.json())
-            .then((rows: { name: string }[]) => setAvailableSkills(Array.isArray(rows) ? rows.map(s => s.name) : []))
-            .catch(() => setAvailableSkills([]));
-    }, [user]);
 
     const filtered = useMemo(() => {
         const now = Date.now();
@@ -578,7 +569,6 @@ function TracePageContent() {
         { value: '24h', label: t('topbar.last24h') },
         { value: '1h', label: t('nav.last1Hour') },
     ];
-    const skillOptions: SelectOption[] = [{ value: 'all', label: t('common.all') }, ...availableSkills.map(s => ({ value: s, label: s }))];
 
     return (
         <>
@@ -637,15 +627,6 @@ function TracePageContent() {
                                 options={ownershipOptions}
                                 active={ownershipFilter !== 'all'}
                             />
-                            {availableSkills.length > 0 && (
-                                <Select
-                                    label="Skill"
-                                    value={skillFilter}
-                                    onChange={setSkillFilter}
-                                    options={skillOptions}
-                                    active={skillFilter !== 'all'}
-                                />
-                            )}
                             <Select
                                 label={t('tracePage.filterStatus')}
                                 value={anomalyFilter}

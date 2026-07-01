@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { apiFetch } from '@/lib/client/api';
 import { cn } from '@/lib/utils';
-import { TRACE_FILTER_COLUMNS } from '@/lib/filters/trace-columns';
+import { TRACE_FILTER_COLUMNS, resolveTraceColumn } from '@/lib/filters/trace-columns';
 import { operatorsForColumn, type FilterClause, type FilterColumn, type Operator } from '@/lib/filters/types';
 
 /**
@@ -71,7 +71,8 @@ function opLabel(op: Operator): string {
 }
 
 function clauseLabel(clause: FilterClause): string {
-  const col = BAR_COLUMNS.find((c) => c.column === clause.column);
+  // 用注册表解析 label(不限 BAR_COLUMNS——skill 等 defer 列不在其中,但 chip 仍要显示中文名)。
+  const col = resolveTraceColumn(clause.column);
   const name = col?.label ?? clause.column;
   if (clause.operator === 'is null' || clause.operator === 'is not null') {
     return `${name} ${opLabel(clause.operator)}`;
