@@ -371,6 +371,8 @@ function TracePageContent() {
         (next: FilterClause[]) => setClausesRaw(next.length ? JSON.stringify(next) : null),
         [setClausesRaw],
     );
+    // 稳定引用,避免每次渲染新建箭头函数(TraceFilterBar 内部还有 ref 兜底,双保险)。
+    const handleSearchChange = useCallback((v: string) => setSearch(v || null), [setSearch]);
 
     const { widths, setColumnWidth, resetColumnWidths, isCustomized } = useColumnWidths();
     const tableMinWidth = useMemo(
@@ -606,7 +608,7 @@ function TracePageContent() {
                                     clauses={clauses}
                                     onChange={setClauses}
                                     search={search}
-                                    onSearchChange={(v) => setSearch(v || null)}
+                                    onSearchChange={handleSearchChange}
                                     user={user}
                                 />
                             </div>

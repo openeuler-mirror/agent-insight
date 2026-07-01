@@ -112,11 +112,18 @@ export default function TraceFilterBar({ clauses, onChange, search, onSearchChan
     setPrevSearch(search);
     if (search !== barInput.trim()) setBarInput(search);
   }
+  // 用 ref 持有最新 onSearchChange:调用方常传内联箭头函数(每次父渲染都是新引用),若把它放进下方
+  // debounce effect 的依赖里,父组件频繁重渲染(数据加载、filtered/stats 更新)会不断 cleanup+重启
+  // 定时器,300ms 窗口被反复重置 → 自由文本搜索可能永不提交。故 effect 只依赖 barInput,回调走 ref。
+  const onSearchChangeRef = useRef(onSearchChange);
+  useEffect(() => {
+    onSearchChangeRef.current = onSearchChange;
+  });
   // 输入 debounce 300ms 提交到父组件的 `q`(input/output contains 搜索)。
   useEffect(() => {
-    const id = setTimeout(() => onSearchChange(barInput.trim()), 300);
+    const id = setTimeout(() => onSearchChangeRef.current(barInput.trim()), 300);
     return () => clearTimeout(id);
-  }, [barInput, onSearchChange]);
+  }, [barInput]);
 
   const backToField = useCallback(() => {
     setStage('field');
@@ -210,8 +217,17 @@ export default function TraceFilterBar({ clauses, onChange, search, onSearchChan
       addClause({ column: col.column, operator: op, value: Array.from(picked) });
       return;
     }
-    const v = valueText.trim();
-    if (!v) return;
+    const raw = valueText.trim();
+    if (!raw) return;
+    // datetime-local 无时区信息:在**客户端**按本地墙钟解析成绝对时刻,再归一成带 Z 的 UTC ISO。
+    // 否则裸串 "YYYY-MM-DDTHH:mm" 会随 URL 传到后端,由**服务器**的 new Date() 按服务器时区解析,
+    // 与用户本地时区差多少就偏多少。归一成 UTC ISO 后,前后端解析都无歧义。
+    let v: string = raw;
+    if (col.type === 'datetime') {
+      const d = new Date(raw);
+      if (Number.isNaN(d.getTime())) return;
+      v = d.toISOString();
+    }
     addClause({ column: col.column, operator: op, value: v });
   };
 
