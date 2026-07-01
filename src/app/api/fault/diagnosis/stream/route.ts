@@ -14,6 +14,7 @@ import {
 } from '@/lib/engine/agent-debug/report-store';
 import { hashInteractions } from '@/lib/engine/agent-debug/trace-adapter';
 import type { AgentDebugReportPayload, AgentDebugSkillsAnalysis } from '@/lib/engine/agent-debug/types';
+import { buildExecutionInfraContext, summarizeExecutionInfraForDiagnosis } from '@/lib/infra/execution-context';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 600;
@@ -52,7 +53,7 @@ const faultDb = prismaRaw as unknown as FaultDiagnosisStore;
 const SYSTEM_PROMPT = `你是 Agent Insight 的故障定位诊断助手，运行在基于 OpenCode 的通用 Agent 框架中。
 
 职责：
-1. 基于用户提供的执行记录、异常详情、评测结论、AgentDebug 四维认知诊断、历史对话和 trace 资料包回答追问。
+1. 基于用户提供的执行记录、异常详情、评测结论、AgentDebug 四维认知诊断、推理 Infra 观测指标、历史对话和 trace 资料包回答追问。
 2. 区分两类故障：原始错误类故障（接口、工具、权限、运行时、环境、链路中断等）与效果偏差类故障（无明显报错但输出、路由、Skill 调用、最终答案偏离预期）。
 3. 回答要直接、可操作，优先给出针对 Agent / Skill / 工具链路的根因假设、证据、影响范围、下一步验证和修复建议；除非用户明确要求，不要把回答变成原始案例任务的解法。
 
@@ -67,11 +68,12 @@ trace 资料包读取规则：
 - 先读取 manifest.json 和 trace-index.json 理解整体链路。
 - 不要一次性读取 artifacts 目录下的大文件；只有需要验证某个节点证据时，才读取对应 nodeFile 或 artifactPath。
 - nodeFile 中的 input/output 如带 artifactPath，说明正文较长，应按需读取该 artifact。
-- 回答必须优先基于执行记录、AgentDebug 上游诊断、trace-index、相关节点文件和历史对话，证据不足时说明缺口。
+- 回答必须优先基于执行记录、AgentDebug 上游诊断、推理 Infra 观测指标、trace-index、相关节点文件和历史对话，证据不足时说明缺口。
 
 约束：
 - 不要重新声明自己已经完成了自动诊断；首屏异常详情由前端静态展示，当前对话只处理用户追问。
 - 如果提供了 AgentDebug 上游诊断，必须把它视为重要参考；若你不同意其结论，必须说明冲突证据。
+- 如果推理 Infra 观测指标显示 classification=INFRA-BOUND，应把底层排队、KV、抢占、吞吐或延迟分段作为根因候选；如果 classification=APP-BOUND 或 INHERENT，不要把慢请求误归因给 infra。
 - 如果证据不足，明确说"当前证据不足"，然后列出需要补充的日志或字段。
 - 不要编造不存在的接口、文件路径、日志行或配置项。
 - 默认用中文回答，除非用户明确要求其他语言。`;
@@ -316,6 +318,8 @@ export async function POST(request: Request) {
   const traceBundle = ensureTraceBundle({ workspaceDir, executionId, interactions });
   const executionBrief = compactJson(body.executionBrief, 14_000);
   const agentDebugContext = await formatAgentDebugContext(executionId, interactions);
+  const infraContext = await buildExecutionInfraContext(executionId).catch(() => null);
+  const infraDiagnosisContext = summarizeExecutionInfraForDiagnosis(infraContext);
   const conversationHistory = formatConversationHistory(previousMessages);
   const query = [
     '下面是用户当前打开的故障记录上下文，请只基于这些证据和后续用户问题作答。',
@@ -325,6 +329,9 @@ export async function POST(request: Request) {
     '',
     '## AgentDebug 四维认知诊断（上游分析结果）',
     agentDebugContext,
+    '',
+    '## 推理 Infra 观测指标（session 关联）',
+    infraDiagnosisContext,
     '',
     '## 历史对话上下文',
     conversationHistory,

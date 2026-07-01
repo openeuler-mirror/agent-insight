@@ -9,6 +9,7 @@ import {
     ArrowLeft,
     AtSign,
     Bot,
+    Activity,
     ChevronDown,
     ChevronRight,
     Clock,
@@ -173,6 +174,35 @@ interface ConversationSnapshot {
     messages: ChatMessage[];
     agentSessionId: string | null;
     createdAt: number;
+}
+
+interface InfraDiagnosisCard {
+    endpoint: string;
+    model: string | null;
+    correlated: boolean;
+    reason?: string;
+    verdict: string | null;
+    bottleneck: string | null;
+    samples: number;
+    classification: { label: string; why: string } | null;
+    metrics?: {
+        runningPeak?: number | null;
+        waitingPeak?: number | null;
+        kvPeakPerc?: number | null;
+        preemptRate?: number | null;
+        genTokPerS?: number | null;
+        queueP95?: number | null;
+        itlP95?: number | null;
+        tpotP95?: number | null;
+    };
+    findings?: Array<{ sev: string; cls: string; title: string; evidence: string }>;
+}
+
+interface InfraDiagnosisContext {
+    correlated: boolean;
+    manual: boolean;
+    reason?: string;
+    cards: InfraDiagnosisCard[];
 }
 
 export default function FaultPage() {
@@ -599,6 +629,8 @@ function FaultDetailView({ execution, locale, user, onBack }: { execution: Execu
     const [input, setInput] = useState('');
     const [agentSessionId, setAgentSessionId] = useState<string | null>(null);
     const [sending, setSending] = useState(false);
+    const [infraContext, setInfraContext] = useState<InfraDiagnosisContext | null>(null);
+    const [infraLoading, setInfraLoading] = useState(false);
     // 列表走 fields=light(不带 final_result),详情打开时按需单查回填,供诊断 brief 使用。
     const [finalResult, setFinalResult] = useState<string | null>(null);
 
@@ -673,9 +705,11 @@ function FaultDetailView({ execution, locale, user, onBack }: { execution: Execu
     useEffect(() => {
         setMessages([]); setInput(''); setAgentSessionId(null); setSession(null);
         setPendingNodeRefs(new Map()); setTraceSearch(''); setCollapsedNodes(new Set());
+        setInfraContext(null);
         setFinalResult(null);
         if (!taskId) return;
         setSessionLoading(true);
+        setInfraLoading(true);
         // 列表是轻量返回(无 final_result),这里按需单查回填(单条,无 OOM 风险),供诊断 brief 用。
         apiFetch(`/api/observe/data?executionId=${encodeURIComponent(taskId)}`)
             .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
@@ -696,6 +730,11 @@ function FaultDetailView({ execution, locale, user, onBack }: { execution: Execu
                 if (d.messages?.length) setMessages(d.messages.map(m => ({ id: m.id, role: m.role as 'user' | 'assistant', content: m.content })));
             })
             .catch(() => {});
+        apiFetch(`/api/observe/executions/${encodeURIComponent(taskId)}/infra`)
+            .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+            .then((d: InfraDiagnosisContext) => setInfraContext(d))
+            .catch(() => setInfraContext(null))
+            .finally(() => setInfraLoading(false));
     }, [taskId]);
 
     useEffect(() => {
@@ -1073,6 +1112,7 @@ function FaultDetailView({ execution, locale, user, onBack }: { execution: Execu
                             traceExplicitErrors={traceExplicitErrors}
                             onNodeRefClick={scrollToNode}
                         />
+                        <InfraDiagnosisPanel context={infraContext} loading={infraLoading} locale={locale} />
                         {messages.map(msg => <ChatBubble key={msg.id} message={msg} onNodeRefClick={scrollToNode} locale={locale} nodeMap={treeNodeMap} />)}
                         {messages.length === 0 && (
                             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', margin: '8px 0 0 40px' }}>
@@ -2015,6 +2055,81 @@ function MiniMetric({ label, value, tone = 'normal' }: { label: string; value: s
     );
 }
 
+function InfraDiagnosisPanel({ context, loading, locale }: { context: InfraDiagnosisContext | null; loading: boolean; locale: string }) {
+    if (loading) {
+        return (
+            <div className="ai-card" style={{ marginBottom: 12, padding: 14, display: 'flex', alignItems: 'center', gap: 8, color: 'var(--foreground-muted)', fontSize: 12 }}>
+                <Loader2 size={14} className="animate-spin" />
+                {locale === 'zh' ? '加载推理 Infra 观测指标…' : 'Loading infra metrics...'}
+            </div>
+        );
+    }
+    if (!context || context.cards.length === 0) {
+        return (
+            <div className="ai-card" style={{ marginBottom: 12, padding: 14 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 700, color: 'var(--foreground)' }}>
+                    <Activity size={15} color="var(--foreground-muted)" />
+                    {locale === 'zh' ? '推理 Infra 观测' : 'Inference Infra'}
+                </div>
+                <div style={{ marginTop: 6, fontSize: 12, color: 'var(--foreground-muted)', lineHeight: 1.6 }}>
+                    {context?.reason || (locale === 'zh' ? '当前 session 未关联到可用 infra 指标。' : 'No infra metrics are linked to this session.')}
+                </div>
+            </div>
+        );
+    }
+
+    const primary = context.cards[0];
+    const cls = primary.classification?.label || 'unknown';
+    const tone = cls === 'INFRA-BOUND' || primary.verdict === 'critical' ? 'danger'
+        : primary.verdict === 'degraded' ? 'warn'
+        : primary.correlated ? 'ok'
+        : 'muted';
+    const toneColor = tone === 'danger' ? 'var(--error,#dc2626)' : tone === 'warn' ? 'var(--warning,#d97706)' : tone === 'ok' ? 'var(--success,#15a572)' : 'var(--foreground-muted)';
+    const metrics = primary.metrics || {};
+
+    return (
+        <div className="ai-card" style={{ marginBottom: 12, padding: 14 }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                <div style={{ width: 30, height: 30, borderRadius: 8, background: 'var(--background-secondary)', border: '1px solid var(--border)', display: 'grid', placeItems: 'center', color: toneColor, flexShrink: 0 }}>
+                    <Activity size={15} />
+                </div>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--foreground)' }}>
+                            {locale === 'zh' ? '推理 Infra 观测' : 'Inference Infra'}
+                        </div>
+                        <FaultFilterPill active={tone === 'danger' || tone === 'warn'} label={cls} />
+                        {context.manual && <FaultFilterPill label={locale === 'zh' ? '人工关联' : 'Manual link'} />}
+                        {context.cards.length > 1 && <FaultFilterPill label={`${context.cards.length} sources`} />}
+                    </div>
+                    <div style={{ marginTop: 5, fontSize: 11.5, color: 'var(--foreground-muted)', lineHeight: 1.6, overflowWrap: 'anywhere' }}>
+                        {primary.endpoint}{primary.model ? ` · ${primary.model}` : ''} · {primary.samples} samples
+                    </div>
+                    <div style={{ marginTop: 8, display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 7 }}>
+                        <InlineFact label="queue p95" value={fmtMaybeSec(metrics.queueP95)} />
+                        <InlineFact label="KV peak" value={fmtMaybePct(metrics.kvPeakPerc)} />
+                        <InlineFact label="preempt" value={fmtMaybeRate(metrics.preemptRate)} />
+                        <InlineFact label="gen tok/s" value={fmtMaybeNumber(metrics.genTokPerS, 1)} />
+                    </div>
+                    <div style={{ marginTop: 8, fontSize: 12, color: 'var(--foreground-secondary)', lineHeight: 1.55 }}>
+                        {primary.classification?.why || primary.reason || (locale === 'zh' ? '该时间窗内未形成明确 infra 归因。' : 'No clear infra attribution for this window.')}
+                    </div>
+                    {primary.findings && primary.findings.length > 0 && (
+                        <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 5 }}>
+                            {primary.findings.slice(0, 2).map((finding, index) => (
+                                <div key={`${finding.cls}-${index}`} style={{ fontSize: 11.5, color: 'var(--foreground-muted)', lineHeight: 1.5 }}>
+                                    <b style={{ color: 'var(--foreground-secondary)' }}>{finding.title}</b>
+                                    {finding.evidence ? ` · ${finding.evidence}` : ''}
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+}
+
 function InlineFact({ label, value }: { label: string; value: string }) {
     return (
         <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '7px 8px', background: 'var(--background-secondary)' }}>
@@ -2314,6 +2429,22 @@ function fmtSec(ms: number): string {
     if (ms < 1000) return `${Math.round(ms)}ms`;
     if (ms < 60000) return `${(ms / 1000).toFixed(2)}s`;
     return `${(ms / 60000).toFixed(1)}m`;
+}
+
+function fmtMaybeNumber(value: number | null | undefined, digits = 0): string {
+    return value == null || !Number.isFinite(value) ? '-' : value.toFixed(digits);
+}
+
+function fmtMaybeSec(value: number | null | undefined): string {
+    return value == null || !Number.isFinite(value) ? '-' : `${value.toFixed(2)}s`;
+}
+
+function fmtMaybePct(value: number | null | undefined): string {
+    return value == null || !Number.isFinite(value) ? '-' : `${value.toFixed(1)}%`;
+}
+
+function fmtMaybeRate(value: number | null | undefined): string {
+    return value == null || !Number.isFinite(value) ? '-' : `${value.toFixed(2)}/s`;
 }
 
 function toDisplayLatencyMs(latency: number, framework?: string): number {
