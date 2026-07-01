@@ -326,7 +326,10 @@ export default function TraceFilterBar({ clauses, onChange, search, onSearchChan
                     >
                       <Search className="size-4 shrink-0 text-foreground-muted" />
                       <span className="font-medium">{c.label}</span>
-                      <span className="ml-auto truncate text-xs text-foreground-muted">{c.description ?? c.column}</span>
+                      <span className="font-mono text-xs text-foreground-muted">{c.column}</span>
+                      {c.description && (
+                        <span className="ml-auto truncate text-xs text-foreground-muted">{c.description}</span>
+                      )}
                     </button>
                   </li>
                 ))}

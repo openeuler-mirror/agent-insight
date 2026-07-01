@@ -14,14 +14,16 @@ import {
     Layers,
     Terminal,
     RotateCcw,
+    SlidersHorizontal,
 } from 'lucide-react';
 import { parseAsInteger, parseAsString, useQueryState } from 'nuqs';
 import { toast } from 'sonner';
 
 import { AppTopBar } from '@/components/shell/AppTopBar';
-import { PageContainer, PageContent, PageFooter, PageHeader, PageToolbar } from '@/components/shell/PageContainer';
+import { PageContainer, PageContent, PageFooter } from '@/components/shell/PageContainer';
 import AgentTraceView from '@/components/observe/AgentTraceView';
 import TraceFilterBar from '@/components/observe/TraceFilterBar';
+import TraceFilterSidebar from '@/components/observe/TraceFilterSidebar';
 import type { FilterClause } from '@/lib/filters/types';
 import { useAuth } from '@/lib/auth/auth-context';
 import { useLocale } from '@/lib/client/locale-context';
@@ -352,6 +354,8 @@ function TracePageContent() {
     const [taskIdParam, setTaskIdParam] = useQueryState('taskId', parseAsString);
     // 文本搜索（trace input/output 模糊匹配，服务端下推）。输入框 + debounce 现由 TraceFilterBar 内联承载。
     const [search, setSearch] = useQueryState('q', parseAsString.withDefault(''));
+    // 左侧 Filters 侧栏显隐(对标 langfuse Hide filters)。
+    const [showFilters, setShowFilters] = useState(true);
     // 结构化过滤子句(operator 模型),序列化进 URL 的 `f`,下推后端 filters=。
     const [clausesRaw, setClausesRaw] = useQueryState('f', parseAsString.withDefault(''));
     const clauses = useMemo<FilterClause[]>(() => {
@@ -633,7 +637,29 @@ function TracePageContent() {
                             </div>
                         )}
 
-                        <PageToolbar className="border border-border bg-background-secondary rounded-md p-2 mb-3">
+                        {/* filters 显隐(对标 langfuse Hide filters) */}
+                        <div className="mb-2">
+                            <Button variant="outline" size="sm" className="h-7 gap-1.5 text-xs" onClick={() => setShowFilters(v => !v)}>
+                                <SlidersHorizontal className="size-3.5" />
+                                {showFilters ? (locale === 'zh' ? '隐藏过滤' : 'Hide filters') : (locale === 'zh' ? '显示过滤' : 'Show filters')}
+                            </Button>
+                        </div>
+
+                        {/* 二栏:左=Filters 侧栏(对标 langfuse 最左列),右=列表。两者与搜索栏共享同一份 clauses。 */}
+                        <div className="flex-1 min-h-0 flex gap-3">
+                            {showFilters && (
+                                <aside className="w-60 shrink-0 overflow-auto rounded-md border border-card-border bg-card">
+                                    <div className="flex items-center justify-between px-3 py-2 border-b border-card-border">
+                                        <span className="text-sm font-semibold">{locale === 'zh' ? '过滤器' : 'Filters'}</span>
+                                        {hasActiveFilters && (
+                                            <Button variant="ghost" size="sm" onClick={resetFilters} className="h-6 px-1.5 text-xs text-foreground-muted gap-1">
+                                                <XIcon className="size-3" />
+                                                {t('tracePage.resetFilters')}
+                                            </Button>
+                                        )}
+                                    </div>
+                                    {/* 既有下拉(ownership/agent/skill/status/time/framework/scope)竖排 */}
+                                    <div className="space-y-2 p-3 border-b border-card-border">
                             <Select
                                 label={t('nav.filterAgentOwnership')}
                                 value={ownershipFilter}
@@ -659,7 +685,6 @@ function TracePageContent() {
                                     active={skillFilter !== 'all'}
                                 />
                             )}
-                            <Separator orientation="vertical" className="h-5" />
                             <Select
                                 label={t('tracePage.filterStatus')}
                                 value={anomalyFilter}
@@ -694,13 +719,16 @@ function TracePageContent() {
                                 ]}
                                 active={agentScopeFilter !== 'root'}
                             />
-                            {hasActiveFilters && (
-                                <Button variant="ghost" size="sm" onClick={resetFilters} className="ml-auto text-xs text-foreground-muted h-7">
-                                    <XIcon className="size-3" />
-                                    {t('tracePage.resetFilters')}
-                                </Button>
+                                    </div>
+                                    {/* 结构化字段(clauses):数值区间 / 布尔 / 文本包含 / 枚举多选 */}
+                                    {user && (
+                                        <div className="p-3">
+                                            <TraceFilterSidebar clauses={clauses} onChange={setClauses} user={user} />
+                                        </div>
+                                    )}
+                                </aside>
                             )}
-                        </PageToolbar>
+                            <div className="flex-1 min-w-0 flex flex-col">
 
                         <div className="flex items-center justify-between mb-2">
                             <h2 className="text-sm font-semibold text-foreground">
@@ -802,6 +830,8 @@ function TracePageContent() {
                                 />
                             </PageFooter>
                         )}
+                            </div>
+                        </div>
                     </>
                 )}
             </PageContainer>
