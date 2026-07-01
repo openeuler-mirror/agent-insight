@@ -4,6 +4,7 @@ import React, { ReactNode, useEffect, useMemo, useState } from 'react';
 import { Check, ChevronDown, ChevronRight, Copy as CopyIcon, Search as SearchIcon, X as XIcon, AlertTriangle as AlertIcon, SlidersHorizontal as FiltersIcon, Brain as BrainIcon, MessageSquare as MessageIcon, Wrench as WrenchIcon } from 'lucide-react';
 import { parseAsString, useQueryState } from 'nuqs';
 import { toast } from 'sonner';
+import { CartesianGrid, Line, LineChart, ReferenceArea, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from 'recharts';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { SmartViewer } from '@/components/SmartViewer';
@@ -83,7 +84,7 @@ function KindBadge({ kind, size = 'xs', className }: { kind: string; size?: 'xs'
     );
 }
 
-type DetailTab = 'timeline' | 'prompt' | 'overview' | 'skills';
+type DetailTab = 'timeline' | 'prompt' | 'overview' | 'skills' | 'infra';
 type EventTypeFilter = 'all' | 'llm' | 'tool' | 'skill' | 'task' | 'user';
 
 interface TraceSkillCall {
@@ -374,9 +375,11 @@ export interface AgentTraceViewProps {
      * 不传则不渲染跳转按钮。
      */
     onSubagentNavigate?: (sessionId: string) => void;
+    /** 当前 trace 对应的 Execution.id（= upload_id）。用于 Infra tab 做会话级 infra 关联；不传则该 tab 提示无法关联。 */
+    rootExecutionId?: string;
 }
 
-export default function AgentTraceView({ interactions, onSubagentNavigate }: AgentTraceViewProps) {
+export default function AgentTraceView({ interactions, onSubagentNavigate, rootExecutionId }: AgentTraceViewProps) {
     const { user } = useAuth();
     const { t: tt } = useLocale();
     const tree = useMemo(() => buildAgentCallTree(interactions || []), [interactions]);
@@ -824,6 +827,7 @@ export default function AgentTraceView({ interactions, onSubagentNavigate }: Age
                             interactions={interactions}
                             traceSkills={selectedTraceSkillUsages}
                             currentUser={user}
+                            rootExecutionId={rootExecutionId}
                         />
                     ) : null}
                 </div>
@@ -2791,7 +2795,7 @@ function InlineCodeBlock({ text }: { text: string }) {
 // ─── AgentDetail (right panel) ────────────────────────────────────────────────
 function AgentDetail({
     node, highlightEvent, activeTab, onTabChange, eventTypeFilter, onEventTypeFilterChange,
-    totalDurationMs, onSelectChild, interactions, traceSkills, currentUser
+    totalDurationMs, onSelectChild, interactions, traceSkills, currentUser, rootExecutionId
 }: {
     node: AgentNode;
     highlightEvent: AgentEvent | null;
@@ -2804,6 +2808,7 @@ function AgentDetail({
     interactions: RawInteraction[];
     traceSkills: TraceSkillUsage[];
     currentUser?: string | null;
+    rootExecutionId?: string;
 }) {
     const status = getStatus(node);
     const hasPrompt = !!(node.systemPrompts && node.systemPrompts.length > 0);
@@ -2813,6 +2818,7 @@ function AgentDetail({
         { id: 'timeline', label: '时间线', count: node.events.length },
         { id: 'skills', label: 'Skills', count: traceSkills.length },
         ...(hasPrompt ? [{ id: 'prompt' as DetailTab, label: 'System Prompt', count: node.systemPrompts!.length }] : []),
+        { id: 'infra' as DetailTab, label: 'Infra' },
     ];
 
     return (
@@ -2888,7 +2894,268 @@ function AgentDetail({
                 )}
                 {activeTab === 'skills' && <SkillsTab skills={traceSkills} currentUser={currentUser} />}
                 {activeTab === 'prompt' && hasPrompt && <SystemPromptsBlock prompts={node.systemPrompts!} />}
+                {activeTab === 'infra' && <InfraTab executionId={rootExecutionId} />}
             </div>
+        </div>
+    );
+}
+
+interface InfraFinding { sev: string; cls: string; title: string; evidence: string; diagnosis: string; remediation: string[] }
+interface InfraCard {
+    endpoint: string;
+    model: string | null;
+    sourceId: string | null;
+    window: { startMs: number; endMs: number; latencyMs: number };
+    correlated: boolean;
+    reason?: string;
+    verdict: string | null;
+    bottleneck: string | null;
+    samples: number;
+    classification: { label: string; why: string } | null;
+    findings: InfraFinding[];
+}
+interface InfraCorrelation {
+    correlated: boolean;
+    rootExecutionId: string;
+    manual: boolean;
+    sessionWindow: { startMs: number; endMs: number } | null;
+    reason?: string;
+    endpoint?: string;
+    cards: InfraCard[];
+}
+interface SourceOption { id: string; endpoint: string; model: string | null }
+
+interface InfraHistoryPoint { tsMs: number; running: number; waiting: number; kvPerc: number; itlP95Ms: number | null; tpotP95Ms: number | null; ttftP95: number | null }
+
+const cardKey = (c: { sourceId: string | null; endpoint: string; model: string | null }) => `${c.sourceId ?? c.endpoint}|${c.model ?? ''}`;
+
+function ihhmmss(ms: number) { const dt = new Date(ms); return `${String(dt.getHours()).padStart(2, '0')}:${String(dt.getMinutes()).padStart(2, '0')}:${String(dt.getSeconds()).padStart(2, '0')}`; }
+
+// session 时间窗内的一张 infra 曲线（高亮 session 实际跨度）
+function InfraWindowChart({ title, data, win, series }: { title: string; data: InfraHistoryPoint[]; win: { startMs: number; endMs: number }; series: { key: keyof InfraHistoryPoint; name: string; color: string }[] }) {
+    return (
+        <div style={{ background: 'var(--background)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px' }}>
+            <div style={{ fontSize: 11.5, color: 'var(--foreground-muted)', marginBottom: 4 }}>{title}</div>
+            <div style={{ width: '100%', height: 120 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: -20 }}>
+                        <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" vertical={false} />
+                        <XAxis dataKey="tsMs" tickFormatter={ihhmmss} stroke="var(--foreground-muted)" tick={{ fontSize: 9 }} interval="preserveStartEnd" minTickGap={40} type="number" domain={['dataMin', 'dataMax']} />
+                        <YAxis stroke="var(--foreground-muted)" tick={{ fontSize: 9 }} width={34} />
+                        <RTooltip labelFormatter={(v) => ihhmmss(Number(v))} contentStyle={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 11 }} />
+                        <ReferenceArea x1={win.startMs} x2={win.endMs} fill="var(--primary)" fillOpacity={0.12} />
+                        {series.map((s) => <Line key={String(s.key)} type="monotone" dataKey={s.key as string} name={s.name} stroke={s.color} strokeWidth={1.8} dot={false} isAnimationActive={false} connectNulls />)}
+                    </LineChart>
+                </ResponsiveContainer>
+            </div>
+        </div>
+    );
+}
+
+const INFRA_LABEL_COLOR: Record<string, string> = {
+    'INFRA-BOUND': 'var(--error)',
+    'APP-BOUND': 'var(--warning)',
+    'INHERENT': 'var(--success)',
+    'unknown': 'var(--foreground-muted)',
+};
+const INFRA_SEV_COLOR: Record<string, string> = {
+    critical: 'var(--error)', warn: 'var(--warning)', healthy: 'var(--success)', info: 'var(--foreground-muted)',
+};
+
+// 单张 (endpoint,模型) 关联卡：归因标签 + 源链接 + 时间窗曲线 + findings。
+function InfraCardView({ card, hist }: { card: InfraCard; hist: InfraHistoryPoint[] }) {
+    const label = card.classification?.label ?? 'unknown';
+    const win = card.window;
+    return (
+        <div style={{ border: '1px solid var(--card-border)', borderRadius: 'var(--radius-md)', background: 'var(--card-bg)', padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <span style={{ fontWeight: 700, color: INFRA_LABEL_COLOR[label] ?? 'var(--foreground)' }}>{label}</span>
+                <span style={{ fontWeight: 600 }}>
+                    {card.sourceId
+                        ? <a href={`/infra/source/${encodeURIComponent(card.sourceId)}`} style={{ color: 'var(--primary)' }}>{card.endpoint} →</a>
+                        : card.endpoint}
+                </span>
+                <span style={{ color: 'var(--foreground-muted)' }}>· 模型 {card.model ?? '全部'}</span>
+            </div>
+            {card.correlated ? (
+                <div style={{ color: 'var(--foreground-muted)' }}>窗口 infra：{card.verdict ?? 'n/a'} / {card.bottleneck ?? 'none'} · 命中采样 {card.samples}</div>
+            ) : (
+                <div style={{ color: 'var(--foreground-muted)' }}>{card.reason || '该 endpoint 尚未注册为 infra 源'}{!card.sourceId && <> —— 到 <a href="/infra/sources" style={{ color: 'var(--primary)' }}>源管理</a> 导入</>}</div>
+            )}
+            {card.classification?.why && <div style={{ color: 'var(--foreground-secondary)' }}>{card.classification.why}</div>}
+            {card.correlated && hist.length > 0 && (
+                <div>
+                    <div style={{ color: 'var(--foreground-muted)', marginBottom: 6 }}>
+                        该 session 时间段内的 infra 曲线（高亮区 = 调用跨度 {ihhmmss(win.startMs)}–{ihhmmss(win.endMs)}，{(win.latencyMs / 1000).toFixed(1)}s）
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 8 }}>
+                        <InfraWindowChart title="调度：并发 / 排队" data={hist} win={win} series={[{ key: 'running', name: '并发', color: 'var(--primary)' }, { key: 'waiting', name: '排队', color: 'var(--warning)' }]} />
+                        <InfraWindowChart title="KV 使用率 %" data={hist} win={win} series={[{ key: 'kvPerc', name: 'KV%', color: 'var(--error)' }]} />
+                        <InfraWindowChart title="decode 延迟 (ms)：ITL / TPOT" data={hist} win={win} series={[{ key: 'itlP95Ms', name: 'ITL', color: 'var(--warning)' }, { key: 'tpotP95Ms', name: 'TPOT', color: 'var(--error)' }]} />
+                    </div>
+                </div>
+            )}
+            {card.correlated && hist.length === 0 && (
+                <div style={{ color: 'var(--foreground-muted)' }}>该时间窗内暂无 infra 采样曲线（采样间隔可能大于调用时长）。</div>
+            )}
+            {card.findings.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {card.findings.map((f, i) => (
+                        <div key={i} style={{ padding: '6px 10px', borderRadius: 'var(--radius-sm)', background: 'var(--background)', borderLeft: `3px solid ${INFRA_SEV_COLOR[f.sev] ?? 'var(--border)'}` }}>
+                            <div style={{ fontWeight: 600, marginBottom: 2 }}>[{f.cls}] {f.title}</div>
+                            <div style={{ color: 'var(--foreground-muted)', marginBottom: 2 }}>证据：{f.evidence}</div>
+                            <div style={{ color: 'var(--foreground-secondary)' }}>{f.diagnosis}</div>
+                        </div>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+}
+
+// 人工修改 session↔infra 关联：编辑一组 {源, 模型}，POST 覆盖式保存（按整棵 trace 树）。
+function InfraLinkEditor({ executionId, cards, onSaved, onCancel }: { executionId: string; cards: InfraCard[]; onSaved: () => void; onCancel: () => void }) {
+    const [sources, setSources] = useState<SourceOption[]>([]);
+    const [rows, setRows] = useState<{ sourceId: string; model: string }[]>(
+        cards.filter(c => c.sourceId).map(c => ({ sourceId: c.sourceId as string, model: c.model ?? '' })),
+    );
+    const [saving, setSaving] = useState(false);
+    const [err, setErr] = useState<string | null>(null);
+
+    useEffect(() => {
+        let active = true;
+        (async () => {
+            await Promise.resolve();
+            if (!active) return;
+            try {
+                const res = await fetch('/api/observe/infra/sources');
+                const body = await res.json();
+                const list: SourceOption[] = (body.sources ?? body ?? []).map((s: { id: string; endpoint: string; model?: string | null }) => ({ id: s.id, endpoint: s.endpoint, model: s.model ?? null }));
+                if (active) setSources(list);
+            } catch { /* 下拉空也能用现有行 */ }
+        })();
+        return () => { active = false; };
+    }, []);
+
+    const addRow = () => setRows(r => [...r, { sourceId: sources[0]?.id ?? '', model: '' }]);
+    const save = async () => {
+        setSaving(true); setErr(null);
+        try {
+            const links = rows.filter(r => r.sourceId).map(r => ({ sourceId: r.sourceId, model: r.model.trim() || null }));
+            const res = await fetch(`/api/observe/executions/${encodeURIComponent(executionId)}/infra`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ links }),
+            });
+            if (!res.ok) { const b = await res.json().catch(() => ({})); throw new Error(b.error || `HTTP ${res.status}`); }
+            onSaved();
+        } catch (e) {
+            setErr(e instanceof Error ? e.message : String(e));
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    return (
+        <div style={{ border: '1px dashed var(--border)', borderRadius: 'var(--radius-md)', padding: 12, display: 'flex', flexDirection: 'column', gap: 8, background: 'var(--background)' }}>
+            <div style={{ fontWeight: 600 }}>编辑关联（按整个 session 覆盖；留空模型=该源全部模型）</div>
+            {rows.map((row, i) => (
+                <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <select value={row.sourceId} onChange={e => setRows(rs => rs.map((r, j) => j === i ? { ...r, sourceId: e.target.value } : r))}
+                        style={{ flex: 1, padding: '5px 8px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--card-bg)', color: 'var(--foreground)' }}>
+                        <option value="">（选择源）</option>
+                        {sources.map(s => <option key={s.id} value={s.id}>{s.endpoint}</option>)}
+                        {row.sourceId && !sources.some(s => s.id === row.sourceId) && <option value={row.sourceId}>{cards.find(c => c.sourceId === row.sourceId)?.endpoint ?? row.sourceId}</option>}
+                    </select>
+                    <input value={row.model} placeholder="模型（可空）" onChange={e => setRows(rs => rs.map((r, j) => j === i ? { ...r, model: e.target.value } : r))}
+                        style={{ width: 180, padding: '5px 8px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--card-bg)', color: 'var(--foreground)' }} />
+                    <button onClick={() => setRows(rs => rs.filter((_, j) => j !== i))} style={{ border: 'none', background: 'transparent', color: 'var(--error)', cursor: 'pointer' }}>移除</button>
+                </div>
+            ))}
+            <div style={{ display: 'flex', gap: 8 }}>
+                <button onClick={addRow} style={{ padding: '5px 12px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--card-bg)', color: 'var(--foreground)', cursor: 'pointer' }}>+ 添加源</button>
+                <span style={{ flex: 1 }} />
+                {err && <span style={{ color: 'var(--error)', alignSelf: 'center' }}>{err}</span>}
+                <button onClick={onCancel} style={{ padding: '5px 12px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--card-bg)', color: 'var(--foreground)', cursor: 'pointer' }}>取消</button>
+                <button onClick={save} disabled={saving} style={{ padding: '5px 14px', borderRadius: 'var(--radius-sm)', border: 'none', background: 'var(--primary)', color: 'var(--primary-foreground)', cursor: 'pointer', opacity: saving ? 0.6 : 1 }}>{saving ? '保存中…' : '保存'}</button>
+            </div>
+        </div>
+    );
+}
+
+// session↔infra 关联 Tab：会话级多卡（每 endpoint×模型一张），支持人工覆盖关联。
+function InfraTab({ executionId }: { executionId?: string }) {
+    const [data, setData] = useState<InfraCorrelation | null>(null);
+    const [histByKey, setHistByKey] = useState<Record<string, InfraHistoryPoint[]>>({});
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
+    const [editing, setEditing] = useState(false);
+    const [reloadTick, setReloadTick] = useState(0);
+
+    useEffect(() => {
+        if (!executionId) { setLoading(false); return; }
+        let active = true;
+        (async () => {
+            await Promise.resolve();
+            if (!active) return;
+            setLoading(true);
+            setError(null);
+            setHistByKey({});
+            try {
+                const res = await fetch(`/api/observe/executions/${encodeURIComponent(executionId)}/infra`);
+                const body = await res.json();
+                if (!res.ok) throw new Error(body.message || body.error || `HTTP ${res.status}`);
+                if (!active) return;
+                setData(body as InfraCorrelation);
+                // 每张关联成功的卡 → 拉它自己时间窗（前后各放宽 30s）内的曲线
+                const cards: InfraCard[] = (body.cards ?? []).filter((c: InfraCard) => c.correlated && c.sourceId);
+                const entries = await Promise.all(cards.map(async (c) => {
+                    const from = c.window.startMs - 30_000;
+                    const to = c.window.endMs + 30_000;
+                    const qs = `sourceId=${encodeURIComponent(c.sourceId as string)}&from=${from}&to=${to}${c.model ? `&model=${encodeURIComponent(c.model)}` : ''}`;
+                    const hres = await fetch(`/api/observe/infra/history?${qs}`);
+                    const hbody = await hres.json().catch(() => ({}));
+                    return [cardKey(c), hres.ok ? (hbody.points ?? []) : []] as const;
+                }));
+                if (active) setHistByKey(Object.fromEntries(entries));
+            } catch (e) {
+                if (active) setError(e instanceof Error ? e.message : String(e));
+            } finally {
+                if (active) setLoading(false);
+            }
+        })();
+        return () => { active = false; };
+    }, [executionId, reloadTick]);
+
+    if (!executionId) return <div style={{ color: 'var(--foreground-muted)', fontSize: '0.8125rem' }}>当前视图缺少 execution id，无法做 infra 关联。</div>;
+    if (loading) return <div style={{ color: 'var(--foreground-muted)', fontSize: '0.8125rem' }}>加载 Infra 关联…</div>;
+    if (error) return <div style={{ color: 'var(--error)', fontSize: '0.8125rem' }}>加载失败：{error}</div>;
+    if (!data) return null;
+
+    const cards = data.cards ?? [];
+    return (
+        <div style={{ fontSize: '0.8125rem', display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <span style={{ fontWeight: 600 }}>Infra 关联（{cards.length} 个 源×模型）</span>
+                {data.manual && <span style={{ fontSize: 11, color: 'var(--warning)', background: 'var(--warning-subtle)', border: '1px solid var(--warning-subtle-border)', borderRadius: 999, padding: '1px 8px' }}>人工指定</span>}
+                <span style={{ flex: 1 }} />
+                {!editing && <button onClick={() => setEditing(true)} style={{ padding: '4px 12px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--card-bg)', color: 'var(--foreground)', cursor: 'pointer' }}>编辑关联</button>}
+            </div>
+
+            {editing && (
+                <InfraLinkEditor
+                    executionId={executionId}
+                    cards={cards}
+                    onCancel={() => setEditing(false)}
+                    onSaved={() => { setEditing(false); setReloadTick(t => t + 1); }}
+                />
+            )}
+
+            {cards.length === 0 && !editing && (
+                <div style={{ color: 'var(--foreground-muted)', lineHeight: 1.6 }}>
+                    {data.reason || '未关联到 infra 源'}。可「编辑关联」手动指定该 session 对应的推理源。
+                </div>
+            )}
+
+            {cards.map((c) => <InfraCardView key={cardKey(c)} card={c} hist={histByKey[cardKey(c)] ?? []} />)}
         </div>
     );
 }

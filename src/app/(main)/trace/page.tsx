@@ -1002,6 +1002,7 @@ function TraceDetailView({
                     <AgentTraceView
                         interactions={session.interactions}
                         onSubagentNavigate={navigateToTaskId}
+                        rootExecutionId={execution.upload_id || execution.task_id}
                     />
                 ) : (
                     <div className="rounded-md border border-card-border bg-card">

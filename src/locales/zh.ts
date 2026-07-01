@@ -78,6 +78,8 @@ export const zh = {
     evalMetrics: '评估器',
     evalExecute: '评测执行',
     quality: '质量监控',
+    infra: '推理 Infra',
+    infraSources: '推理 Infra 源',
     memory: '记忆评估',
     security: '安全设计',
     fault: '智能诊断',
