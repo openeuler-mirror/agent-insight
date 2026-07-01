@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `ef13db9440c984a99abf9933055929a93a48b67f` (`ef13db9`) |
-| Branch | `new-dev-06-23` |
-| Date | 2026-06-23T11:36:40+08:00 |
-| Author | gyctl |
-| Subject | `!160 merge feat/jiuwen-auto-setup into master` |
+| Commit | `e95ceca0fc7e6c2a80906ab5436b8f65ed7c4fe9` (`e95ceca`) |
+| Branch | `master` |
+| Date | 2026-07-01T16:27:50+08:00 |
+| Author | wanglei177 |
+| Subject | `docs: document infra observability` |
 
-**如何更新：** `git diff ef13db9 HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff e95ceca HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
