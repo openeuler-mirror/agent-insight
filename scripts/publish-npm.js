@@ -122,7 +122,7 @@ function setupStandalone() {
   const packageRoot = process.cwd()
   const standaloneDir = ensureStandalonePackage(packageRoot)
 
-  const dirsToRemove = ['docs', 'data', 'src', 'skills', 'exclude', 'tests', 'test', 'skillbench', 'features', 'tools']
+  const dirsToRemove = ['docs', 'data', 'src', 'exclude', 'tests', 'test', 'skillbench', 'features', 'tools']
   const filesToRemove = ['README.md', '.env', 'server.log', 'tsconfig.tsbuildinfo', 'package-lock.json']
   
   const prismaDbFile = path.join(standaloneDir, 'prisma', 'dev.db')

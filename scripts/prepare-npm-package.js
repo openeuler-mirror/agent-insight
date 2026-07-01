@@ -18,6 +18,18 @@ function copyDirIfMissing(sourceDir, targetDir, label) {
 // `files` whitelist makes .npmignore unable to drop them, so we delete physically.
 // Runs on every `npm pack`/`npm publish` via the prepack hook.
 const STANDALONE_JUNK_DIRS = ['exclude', 'tests', 'test', 'skillbench', 'features', 'tools', 'docs', 'data', 'src', 'skills']
+const RUNTIME_SYSTEM_SKILLS = {
+  'agent-debug-diagnosis': [
+    'SKILL.md',
+    path.join('references', '01-input-and-extraction.md'),
+    path.join('references', '02-error-taxonomy.md'),
+    path.join('references', '03-phase-analysis.md'),
+    path.join('references', '04-output-schema.md'),
+    path.join('scripts', 'agentdebug_common.py'),
+    path.join('scripts', 'agentdebug_static.py'),
+    path.join('scripts', 'agentdebug_validate.py'),
+  ],
+}
 
 function pruneStandaloneJunk(standaloneDir) {
   for (const dir of STANDALONE_JUNK_DIRS) {
@@ -29,6 +41,39 @@ function pruneStandaloneJunk(standaloneDir) {
   }
 }
 
+function copyRuntimeSystemSkills(packageRoot, standaloneDir) {
+  const sourceRoot = path.join(packageRoot, 'skills')
+  const targetRoot = path.join(standaloneDir, 'skills')
+
+  for (const skillName of Object.keys(RUNTIME_SYSTEM_SKILLS)) {
+    const sourceDir = path.join(sourceRoot, skillName)
+    const targetDir = path.join(targetRoot, skillName)
+
+    if (!fs.existsSync(sourceDir)) {
+      throw new Error(`Missing runtime system skill: ${sourceDir}`)
+    }
+
+    if (fs.existsSync(targetDir)) {
+      fs.rmSync(targetDir, { recursive: true, force: true })
+    }
+
+    fs.mkdirSync(path.dirname(targetDir), { recursive: true })
+    fs.cpSync(sourceDir, targetDir, { recursive: true })
+    console.log(`✓ Runtime system skill copied: ${skillName}`)
+  }
+}
+
+function assertRuntimeSystemSkills(standaloneDir) {
+  for (const [skillName, requiredFiles] of Object.entries(RUNTIME_SYSTEM_SKILLS)) {
+    for (const relativeFile of requiredFiles) {
+      const target = path.join(standaloneDir, 'skills', skillName, relativeFile)
+      if (!fs.existsSync(target)) {
+        throw new Error(`Missing runtime system skill file in standalone package: ${target}`)
+      }
+    }
+  }
+}
+
 function ensureStandalonePackage(packageRoot = process.cwd()) {
   const standaloneDir = path.join(packageRoot, '.next', 'standalone')
   if (!fs.existsSync(standaloneDir)) {
@@ -36,6 +81,7 @@ function ensureStandalonePackage(packageRoot = process.cwd()) {
   }
 
   pruneStandaloneJunk(standaloneDir)
+  copyRuntimeSystemSkills(packageRoot, standaloneDir)
 
   const staticDir = path.join(packageRoot, '.next', 'static')
   const standaloneStaticDir = path.join(standaloneDir, '.next', 'static')
@@ -61,6 +107,8 @@ function ensureStandalonePackage(packageRoot = process.cwd()) {
   if (!fs.existsSync(standaloneServer)) {
     throw new Error('Missing standalone server.js in .next/standalone.')
   }
+
+  assertRuntimeSystemSkills(standaloneDir)
 
   return standaloneDir
 }

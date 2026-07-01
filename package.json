@@ -1,6 +1,6 @@
 {
   "name": "agent-insight",
-  "version": "0.3.0-beta",
+  "version": "0.4.1",
   "description": "Agent Skill 评估与观测平台 — 量化评估 Skills 在 Agent 上的实际运行效果",
   "license": "MIT",
   "private": false,
