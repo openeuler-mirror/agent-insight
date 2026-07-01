@@ -1,4 +1,5 @@
-import { listObservedAgentNames, listObservedSkills, listObservedTraceIds, readRecordPage, readRecords, saveExecutionRecord } from '@/lib/storage/data-service';
+import { listObservedAgentNames, listObservedFieldValues, listObservedSkills, listObservedTraceIds, readRecordPage, readRecords, saveExecutionRecord } from '@/lib/storage/data-service';
+import type { FilterClause } from '@/lib/filters/types';
 import { db, prismaRaw as prisma } from '@/lib/storage/prisma';
 import { NextResponse } from 'next/server';
 import { isActive } from '@/lib/evaluation-task-manager';
@@ -320,6 +321,11 @@ export async function GET(request: Request) {
     if (facet === 'skills') {
         return NextResponse.json(await listObservedSkills(user));
     }
+    // facet=values&column=<col>：某分类列的观测值 + 件数,给过滤器值下拉(对标 langfuse SUGGESTIONS)。
+    if (facet === 'values') {
+        const column = searchParams.get('column') || '';
+        return NextResponse.json(await listObservedFieldValues(column, user));
+    }
 
     // 直查单条 Execution（用于"返回父执行 / 派生子 Agent 跳转"等仅需 task_id + 元数据的场景）。
     // 跳过 readRecords 的 ownership / pricing / session merge / evaluation snapshots enrichment——
@@ -354,6 +360,18 @@ export async function GET(request: Request) {
         return NextResponse.json({ traceIds });
     }
 
+    // filters=<JSON FilterClause[]>：统一过滤器模型(operator 模型)的子句,下推到 Prisma where。
+    const filtersParam = searchParams.get('filters');
+    let clauses: FilterClause[] | undefined;
+    if (filtersParam) {
+        try {
+            const parsed = JSON.parse(filtersParam);
+            if (Array.isArray(parsed)) clauses = parsed as FilterClause[];
+        } catch {
+            // 容忍 malformed:忽略,不影响其它过滤
+        }
+    }
+
     const recordFilters = {
         query,
         taskId,
@@ -365,6 +383,7 @@ export async function GET(request: Request) {
         includeSubagents,
         onlySubagents,
         parentExecutionId,
+        clauses,
     };
     const pageResult = paginated
         ? await readRecordPage(user, recordFilters, { attachEvaluations, page, pageSize, lightweight })
