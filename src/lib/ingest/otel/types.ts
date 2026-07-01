@@ -7,7 +7,7 @@ export type OtelTraceEvent = {
   spanId?: string;
   parentSpanId?: string;
   name?: string;
-  kind: 'llm' | 'tool';
+  kind: 'llm' | 'tool' | 'agent' | 'chain' | 'span';
   serviceName: string;
   user?: string;
   model?: string;

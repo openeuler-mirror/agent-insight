@@ -86,6 +86,365 @@ test("OTel traces: aggregates trace spool events into one execution record", () 
   assert.equal(record.tool_call_count, 1)
 })
 
+test("OTel traces: aggregates Langfuse LangGraph spans into skill, tool, and subagent interactions", () => {
+  const sessionId = "server-troubleshooter-langfuse-capture"
+  const events: OtelTraceEvent[] = [
+    traceEvent({
+      sessionId,
+      traceId: "trace-langfuse",
+      spanId: "root",
+      name: "agent-run",
+      kind: "span",
+      serviceName: "langfuse-langgraph",
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+      latencyMs: 10000,
+      startTimeMs: 1000,
+      attributes: {
+        "langfuse.internal.is_app_root": true,
+        "langfuse.observation.type": "span",
+        "langfuse.trace.metadata.skill": "server-troubleshooter",
+        "langfuse.observation.input": JSON.stringify({
+          input: "diagnose disk",
+          model: "GLM-5.2",
+          skill: "server-troubleshooter",
+        }),
+        "langfuse.observation.output": JSON.stringify({ final_output: "disk is ok" }),
+      },
+    }),
+    traceEvent({
+      sessionId,
+      traceId: "trace-langfuse",
+      spanId: "main-llm-1",
+      parentSpanId: "main-agent",
+      name: "ChatOpenAI",
+      kind: "llm",
+      serviceName: "langfuse-langgraph",
+      model: "GLM-5.2",
+      usage: { input_tokens: 10, output_tokens: 3, reasoning_tokens: 1, total_tokens: 14 },
+      latencyMs: 1000,
+      startTimeMs: 2000,
+      attributes: {
+        "langfuse.observation.type": "generation",
+        "langfuse.observation.output": JSON.stringify({
+          role: "assistant",
+          content: "I will load the skill.",
+          tool_calls: [{ name: "follow_skill", args: { fault_type: "disk" }, id: "call-skill", type: "tool_call" }],
+        }),
+      },
+    }),
+    traceEvent({
+      sessionId,
+      traceId: "trace-langfuse",
+      spanId: "main-agent",
+      parentSpanId: "root",
+      name: "server-troubleshooter",
+      kind: "chain",
+      serviceName: "langfuse-langgraph",
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+      latencyMs: 9000,
+      startTimeMs: 1900,
+      attributes: {
+        "langfuse.observation.type": "chain",
+      },
+    }),
+    traceEvent({
+      sessionId,
+      traceId: "trace-langfuse",
+      spanId: "tool-skill",
+      parentSpanId: "root",
+      name: "follow_skill",
+      kind: "tool",
+      serviceName: "langfuse-langgraph",
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+      latencyMs: 20,
+      startTimeMs: 3100,
+      attributes: {
+        "langfuse.observation.type": "tool",
+        "langfuse.observation.input": JSON.stringify({ fault_type: "disk" }),
+        "langfuse.observation.output": "server-troubleshooter steps",
+      },
+    }),
+    traceEvent({
+      sessionId,
+      traceId: "trace-langfuse",
+      spanId: "main-llm-2",
+      parentSpanId: "root",
+      name: "ChatOpenAI",
+      kind: "llm",
+      serviceName: "langfuse-langgraph",
+      model: "GLM-5.2",
+      usage: { input_tokens: 12, output_tokens: 4, total_tokens: 16 },
+      latencyMs: 1000,
+      startTimeMs: 4000,
+      attributes: {
+        "langfuse.observation.type": "generation",
+        "langfuse.observation.output": JSON.stringify({
+          role: "assistant",
+          content: "I will call the report subagent.",
+          tool_calls: [{
+            name: "call_report_subagent",
+            args: { diagnosis_summary: "disk ok" },
+            id: "call-subagent",
+            type: "tool_call",
+          }],
+        }),
+      },
+    }),
+    traceEvent({
+      sessionId,
+      traceId: "trace-langfuse",
+      spanId: "tool-subagent",
+      parentSpanId: "root",
+      name: "call_report_subagent",
+      kind: "tool",
+      serviceName: "langfuse-langgraph",
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+      latencyMs: 3000,
+      startTimeMs: 5100,
+      attributes: {
+        "langfuse.observation.type": "tool",
+        "langfuse.observation.input": JSON.stringify({ diagnosis_summary: "disk ok" }),
+        "langfuse.observation.output": "[subagent] report written",
+      },
+    }),
+    traceEvent({
+      sessionId,
+      traceId: "trace-langfuse",
+      spanId: "sub-llm",
+      parentSpanId: "tool-subagent",
+      name: "ChatOpenAI",
+      kind: "llm",
+      serviceName: "langfuse-langgraph",
+      model: "GLM-5.2",
+      usage: { input_tokens: 5, output_tokens: 6, total_tokens: 11 },
+      latencyMs: 1000,
+      startTimeMs: 5500,
+      attributes: {
+        "langfuse.observation.type": "generation",
+        "langfuse.observation.output": JSON.stringify({
+          role: "assistant",
+          content: "Report is ready.",
+          tool_calls: [{ name: "write_report", args: { content: "report" }, id: "call-write", type: "tool_call" }],
+        }),
+      },
+    }),
+    traceEvent({
+      sessionId,
+      traceId: "trace-langfuse",
+      spanId: "write-report",
+      parentSpanId: "tool-subagent",
+      name: "write_report",
+      kind: "tool",
+      serviceName: "langfuse-langgraph",
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+      latencyMs: 100,
+      startTimeMs: 6600,
+      attributes: {
+        "langfuse.observation.type": "tool",
+        "langfuse.observation.output": "report path",
+      },
+    }),
+  ]
+
+  const record = aggregateOtelTraceEvents(sessionId, events)
+
+  assert.ok(record)
+  assert.equal(record.framework, "langfuse-langgraph")
+  assert.equal(record.agentName, "server-troubleshooter")
+  assert.equal(record.agent, "server-troubleshooter")
+  assert.equal(record.query, "diagnose disk")
+  assert.equal(record.final_result, "disk is ok")
+  assert.equal(record.skill, "server-troubleshooter")
+  assert.deepEqual(record.invokedSkills, [{ name: "server-troubleshooter", version: null }])
+  assert.equal(record.force_query_update, true)
+  assert.equal(record.session_merge_strategy, "snapshot-replace")
+  assert.equal(record.llm_call_count, 3)
+  assert.equal(record.tool_call_count, 3)
+  assert.equal(record.subagentCount, 1)
+  assert.equal(record.interactions?.[0]?.role, "user")
+  assert.equal(record.interactions?.[0]?.agent, "server-troubleshooter")
+  assert.equal(record.interactions?.some((interaction: any) => interaction.role === "subagent"), true)
+  const calls = record.interactions?.flatMap((interaction: any) => interaction.tool_calls || []) || []
+  assert.equal(calls[0].function.name, "skill")
+  assert.equal(JSON.parse(calls[0].function.arguments).name, "server-troubleshooter")
+  assert.equal(calls.some((call: any) => call.function.name === "task"), true)
+  assert.equal(calls.some((call: any) => call.function.name === "write_report" && call.output === "report path"), true)
+})
+
+test("OTel traces: Langfuse LangGraph falls back to AI message names for unnamed internal agent spans", () => {
+  const sessionId = "legacy-langgraph-agent-name"
+  const events: OtelTraceEvent[] = [
+    traceEvent({
+      sessionId,
+      traceId: "trace-legacy-langgraph",
+      spanId: "root",
+      name: "agent-run-20260701T074612Z",
+      kind: "span",
+      serviceName: "langfuse-langgraph",
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+      latencyMs: 1000,
+      startTimeMs: 1000,
+      attributes: {
+        "langfuse.internal.is_app_root": true,
+        "langfuse.observation.type": "span",
+        "langfuse.trace.metadata.skill": "server-troubleshooter",
+        "langfuse.observation.input": JSON.stringify({ input: "diagnose disk", skill: "server-troubleshooter" }),
+        "langfuse.observation.output": JSON.stringify({ final_output: "disk is ok" }),
+      },
+    }),
+    traceEvent({
+      sessionId,
+      traceId: "trace-legacy-langgraph",
+      spanId: "internal-agent",
+      parentSpanId: "root",
+      name: "agent",
+      kind: "agent",
+      serviceName: "langfuse-langgraph",
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+      latencyMs: 900,
+      startTimeMs: 1100,
+      attributes: {
+        "langfuse.observation.type": "agent",
+        "langfuse.observation.metadata.langgraph_node": "agent",
+        "langfuse.observation.output": JSON.stringify({
+          messages: [{
+            type: "ai",
+            name: "server-troubleshooter",
+            content: "I will diagnose disk.",
+          }],
+        }),
+      },
+    }),
+    traceEvent({
+      sessionId,
+      traceId: "trace-legacy-langgraph",
+      spanId: "llm",
+      parentSpanId: "internal-agent",
+      name: "ChatOpenAI",
+      kind: "llm",
+      serviceName: "langfuse-langgraph",
+      model: "GLM-5.2",
+      usage: { input_tokens: 5, output_tokens: 5, total_tokens: 10 },
+      latencyMs: 400,
+      startTimeMs: 1200,
+      attributes: {
+        "langfuse.observation.type": "generation",
+        "langfuse.observation.output": JSON.stringify({
+          content: "disk is ok",
+          name: "server-troubleshooter",
+        }),
+      },
+    }),
+  ]
+
+  const record = aggregateOtelTraceEvents(sessionId, events)
+
+  assert.ok(record)
+  assert.equal(record.agentName, "server-troubleshooter")
+  assert.equal(record.agent, "server-troubleshooter")
+  assert.equal(record.interactions?.[0]?.agent, "server-troubleshooter")
+})
+
+test("OTel traces: Langfuse LangGraph snapshots latest root trace for reused session ids", () => {
+  const sessionId = "reused-langfuse-session"
+  const events: OtelTraceEvent[] = [
+    traceEvent({
+      sessionId,
+      traceId: "trace-old",
+      spanId: "old-root",
+      name: "old-run",
+      kind: "span",
+      serviceName: "langfuse-langgraph",
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+      latencyMs: 100,
+      startTimeMs: 1000,
+      attributes: {
+        "langfuse.internal.is_app_root": true,
+        "langfuse.observation.type": "span",
+        "langfuse.observation.input": JSON.stringify({ input: "old query" }),
+        "langfuse.observation.output": JSON.stringify({ final_output: "" }),
+      },
+    }),
+    traceEvent({
+      sessionId,
+      traceId: "trace-old",
+      spanId: "old-tool",
+      parentSpanId: "old-root",
+      name: "old_tool",
+      kind: "tool",
+      serviceName: "langfuse-langgraph",
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+      startTimeMs: 1050,
+      attributes: { "langfuse.observation.type": "tool" },
+    }),
+    traceEvent({
+      sessionId,
+      traceId: "trace-new",
+      spanId: "new-root",
+      name: "new-run",
+      kind: "span",
+      serviceName: "langfuse-langgraph",
+      user: "dev-user",
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+      latencyMs: 1000,
+      startTimeMs: 3000,
+      attributes: {
+        "langfuse.internal.is_app_root": true,
+        "langfuse.observation.type": "span",
+        "langfuse.trace.metadata.skill": "server-troubleshooter",
+        "langfuse.observation.input": JSON.stringify({ input: "new query", skill: "server-troubleshooter" }),
+        "langfuse.observation.output": JSON.stringify({ final_output: "new final" }),
+      },
+    }),
+    traceEvent({
+      sessionId,
+      traceId: "trace-new",
+      spanId: "new-llm",
+      parentSpanId: "new-root",
+      name: "ChatOpenAI",
+      kind: "llm",
+      serviceName: "langfuse-langgraph",
+      model: "GLM-5.2",
+      usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+      startTimeMs: 3100,
+      attributes: {
+        "langfuse.observation.type": "generation",
+        "langfuse.observation.output": JSON.stringify({
+          content: "new assistant",
+          tool_calls: [{ name: "check_disk", args: {}, id: "call-disk", type: "tool_call" }],
+        }),
+      },
+    }),
+    traceEvent({
+      sessionId,
+      traceId: "trace-new",
+      spanId: "new-tool",
+      parentSpanId: "new-root",
+      name: "check_disk",
+      kind: "tool",
+      serviceName: "langfuse-langgraph",
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+      startTimeMs: 3200,
+      attributes: {
+        "langfuse.observation.type": "tool",
+        "langfuse.observation.output": "disk ok",
+      },
+    }),
+  ]
+
+  const record = aggregateOtelTraceEvents(sessionId, events)
+
+  assert.ok(record)
+  assert.equal(record.query, "new query")
+  assert.equal(record.final_result, "new final")
+  assert.equal(record.skill, "server-troubleshooter")
+  assert.equal(record.tool_call_count, 1)
+  assert.equal(record.llm_call_count, 1)
+  assert.equal(record.user, "dev-user")
+  assert.equal(record.agentName, "new-run")
+  assert.equal(record.interactions?.some((interaction: any) => String(interaction.content || "").includes("old query")), false)
+})
+
 test("OTel traces: aggregates Hermes agent spans without double-counting usage", () => {
   const events = [
     traceEvent({
@@ -581,7 +940,7 @@ test("OTel trace adapter registry selects Hermes before the generic fallback", (
   const hermesEvent = traceEvent({ serviceName: "hermes" });
   const genericEvent = traceEvent({ serviceName: "another-agent" });
 
-  assert.deepEqual(listOtelTraceAdapters().map(adapter => adapter.id), ["hermes", "generic"]);
+  assert.deepEqual(listOtelTraceAdapters().map(adapter => adapter.id), ["langfuse-langgraph", "hermes", "generic"]);
   assert.equal(getOtelTraceAdapter([hermesEvent]).id, "hermes");
   assert.equal(getOtelTraceAdapter([genericEvent]).id, "generic");
 });

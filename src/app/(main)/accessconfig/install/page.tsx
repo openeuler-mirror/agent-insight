@@ -115,6 +115,14 @@ export default function AccessInstallPage() {
     };
 
     const keyReady = !!apiKey;
+    const langfuseUser = user || (isZh ? '<你的用户名>' : '<your-username>');
+    const langfuseSecret = apiKey || (isZh ? '<你的 Agent Insight API Key>' : '<your Agent Insight API key>');
+    const langfuseHost = host ? `${host}${getApiUrl('')}` : 'http://localhost:3000';
+    const langfuseEnv = [
+        `LANGFUSE_BASE_URL=${langfuseHost}`,
+        `LANGFUSE_PUBLIC_KEY=${langfuseUser}`,
+        `LANGFUSE_SECRET_KEY=${langfuseSecret}`,
+    ].join('\n');
 
     return (
         <>
@@ -165,6 +173,25 @@ export default function AccessInstallPage() {
                                 cmd={windowsCmd}
                                 copied={copied === 'windows'}
                                 onCopy={() => handleCopy(windowsCmd, 'windows')}
+                                locale={locale}
+                            />
+
+                            <div style={{ ...sectionHeading, marginTop: 8 }}>
+                                <Cloud size={14} strokeWidth={2.2} style={{ color: 'var(--primary)' }} />
+                                <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--foreground)' }}>
+                                    Langfuse Python SDK
+                                </span>
+                                <span style={countPill}>env</span>
+                                <span style={{ flex: 1 }} />
+                                <span style={{ fontSize: 11.5, color: 'var(--foreground-muted)' }}>
+                                    {isZh ? '只改环境变量' : 'Environment only'}
+                                </span>
+                            </div>
+
+                            <LangfuseEnvCard
+                                envText={langfuseEnv}
+                                copied={copied === 'langfuse-env'}
+                                onCopy={() => handleCopy(langfuseEnv, 'langfuse-env')}
                                 locale={locale}
                             />
 
@@ -323,8 +350,55 @@ function ConnectionPanel({
                     value="/api/ingest/v1/*"
                     mono
                 />
+                <KvRow
+                    label="Langfuse"
+                    value="/api/public/otel/v1/traces"
+                    mono
+                    ellipsis
+                />
             </ul>
         </section>
+    );
+}
+
+function LangfuseEnvCard({
+    envText, copied, onCopy, locale,
+}: {
+    envText: string;
+    copied: boolean;
+    onCopy: () => void;
+    locale: string;
+}) {
+    const isZh = locale === 'zh';
+    return (
+        <article style={commandCard}>
+            <header style={commandCardHeader}>
+                <span style={commandIconBox}><Cloud size={14} strokeWidth={2.2} /></span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--foreground)', letterSpacing: '-0.01em' }}>
+                        {isZh ? 'Langfuse 上报配置' : 'Langfuse ingest config'}
+                    </div>
+                    <div style={{ fontSize: 11.5, color: 'var(--foreground-muted)', marginTop: 1 }}>
+                        {isZh ? '适用于已接入 Langfuse Python SDK / LangChain CallbackHandler 的项目' : 'For projects already using Langfuse Python SDK / LangChain CallbackHandler'}
+                    </div>
+                </div>
+                <button onClick={onCopy} style={copied ? copiedBtn : ghostBtn}>
+                    {copied
+                        ? <><Check size={13} strokeWidth={2.5} />{isZh ? '已复制' : 'Copied'}</>
+                        : <><Copy size={13} strokeWidth={2.2} />{isZh ? '复制' : 'Copy'}</>}
+                </button>
+            </header>
+            <div style={commandBox}>
+                <code style={{ ...commandCode, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                    {envText}
+                </code>
+            </div>
+            <div style={langfuseNote}>
+                {isZh
+                    ? 'PUBLIC_KEY 填当前 Agent Insight 用户名，SECRET_KEY 填该用户的 Agent Insight API Key；两者不对应时平台会拒绝上报。'
+                    : 'Set PUBLIC_KEY to your Agent Insight username and SECRET_KEY to that user\'s Agent Insight API key. Mismatched credentials are rejected.'}
+            </div>
+        </article>
     );
 }
 
@@ -640,6 +714,13 @@ const hintIcon: CSSProperties = {
     display: 'grid',
     placeItems: 'center',
     flexShrink: 0,
+};
+
+const langfuseNote: CSSProperties = {
+    fontSize: 12,
+    lineHeight: 1.6,
+    color: 'var(--foreground-secondary)',
+    padding: '0 2px',
 };
 
 const inlineCode: CSSProperties = {

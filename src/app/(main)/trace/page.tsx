@@ -165,6 +165,23 @@ function getExecStatus(e: Execution): 'running' | 'success' | 'failed' {
     return e.trace_completed_at || e.traceCompletedAt ? 'success' : 'running';
 }
 
+function getFrameworkLabel(framework?: string | null): string {
+    const value = String(framework || '').trim();
+    switch (value.toLowerCase()) {
+        case 'langfuse-langgraph':
+            return 'Langfuse-Langgraph';
+        case 'opencode':
+            return 'OpenCode';
+        case 'claude':
+        case 'claudecode':
+            return 'Claude Code';
+        case 'hermes':
+            return 'Hermes';
+        default:
+            return value;
+    }
+}
+
 function fmtSec(ms: number): string {
     if (!ms || !Number.isFinite(ms)) return '-';
     if (ms < 1000) return `${Math.round(ms)}ms`;
@@ -571,7 +588,6 @@ function TracePageContent() {
         { value: '24h', label: t('topbar.last24h') },
         { value: '1h', label: t('nav.last1Hour') },
     ];
-
     return (
         <>
             <AppTopBar title={<Term id="trace" label={t('nav.trace')} />} actions={undefined} showDefaultActions={false} />
@@ -926,6 +942,7 @@ function TraceDetailView({
                         : t('tracePage.statusNormal')
                     }
                 />
+                {framework && <Tag variant="framework" icon={Terminal}>{getFrameworkLabel(framework)}</Tag>}
 
                 {(typeof tokens === 'number' && tokens > 0) || (typeof latency === 'number' && latency > 0) || (typeof cost === 'number' && cost > 0) ? (
                     <Separator orientation="vertical" className="h-5" />
@@ -1219,7 +1236,7 @@ function Row({
                         <Tag variant="skill" icon={Layers}>Skills</Tag>
                     )}
                     {e.framework && (
-                        <Tag variant="framework" icon={Terminal}>{e.framework}</Tag>
+                        <Tag variant="framework" icon={Terminal}>{getFrameworkLabel(e.framework)}</Tag>
                     )}
                 </div>
             </Td>

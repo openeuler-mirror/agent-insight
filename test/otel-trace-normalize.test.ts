@@ -130,3 +130,88 @@ test("OTel traces: normalizes Hermes llm model and token count attributes", () =
     total_tokens: 99,
   })
 })
+
+test("OTel traces: normalizes Langfuse LangGraph observation spans", () => {
+  const body = {
+    resourceSpans: [{
+      resource: {
+        attributes: [
+          attr("service.name", "unknown_service"),
+          attr("service.instance.id", "langfuse-instance"),
+        ],
+      },
+      scopeSpans: [{
+        spans: [
+          {
+            traceId: "trace-langfuse",
+            spanId: "root",
+            name: "agent-run",
+            startTimeUnixNano: "1000000000",
+            endTimeUnixNano: "2000000000",
+            attributes: [
+              attr("langfuse.internal.is_app_root", true),
+              attr("langfuse.observation.type", "span"),
+              attr("langfuse.trace.metadata.ls_integration", "langgraph"),
+              attr("langfuse.trace.metadata.session_id", "session-langfuse"),
+              attr("langfuse.trace.metadata.user_id", "span-user"),
+              attr("langfuse.trace.metadata.skill", "server-troubleshooter"),
+              attr("langfuse.observation.input", JSON.stringify({ input: "diagnose disk", model: "GLM-5.2", skill: "server-troubleshooter" })),
+              attr("langfuse.observation.output", JSON.stringify({ final_output: "disk ok" })),
+            ],
+          },
+          {
+            traceId: "trace-langfuse",
+            spanId: "llm",
+            parentSpanId: "root",
+            name: "ChatOpenAI",
+            startTimeUnixNano: "2100000000",
+            endTimeUnixNano: "3100000000",
+            attributes: [
+              attr("langfuse.observation.type", "generation"),
+              attr("langfuse.observation.metadata.ls_integration", "langgraph"),
+              attr("langfuse.observation.metadata.session_id", "session-langfuse"),
+              attr("langfuse.observation.metadata.user_id", "span-user"),
+              attr("langfuse.observation.model.name", "GLM-5.2"),
+              attr("langfuse.observation.usage_details", JSON.stringify({ input: 10, output: 4, output_reasoning: 2, total: 16 })),
+            ],
+          },
+          {
+            traceId: "trace-langfuse",
+            spanId: "tool",
+            parentSpanId: "root",
+            name: "follow_skill",
+            startTimeUnixNano: "3200000000",
+            endTimeUnixNano: "3300000000",
+            attributes: [
+              attr("langfuse.observation.type", "tool"),
+              attr("langfuse.observation.metadata.ls_integration", "langgraph"),
+              attr("langfuse.observation.metadata.session_id", "session-langfuse"),
+            ],
+          },
+        ],
+      }],
+    }],
+  }
+
+  const events = normalizeOtlpTraces(body, {
+    receivedAt: "2026-06-30T00:00:00.000Z",
+    authenticatedUser: "alice",
+  })
+
+  assert.equal(events.length, 3)
+  assert.equal(events[0].sessionId, "trace-langfuse")
+  assert.equal(events[0].attributes["langfuse.internal.session_id"], "session-langfuse")
+  assert.equal(events[0].serviceName, "langfuse-langgraph")
+  assert.equal(events[0].user, "alice")
+  assert.equal(events[0].kind, "span")
+  assert.equal(events[1].kind, "llm")
+  assert.equal(events[1].model, "GLM-5.2")
+  assert.deepEqual(events[1].usage, {
+    input_tokens: 10,
+    output_tokens: 4,
+    reasoning_tokens: 2,
+    total_tokens: 16,
+  })
+  assert.equal(events[2].kind, "tool")
+  assert.equal(events[2].name, "follow_skill")
+})
