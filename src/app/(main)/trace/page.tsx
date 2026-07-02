@@ -460,7 +460,11 @@ function TracePageContent() {
         const searchParam = search ? `&query=${encodeURIComponent(search)}` : '';
         // 结构化过滤子句下推（operator 模型 → buildPrismaWhere）。
         const filtersParam = clauses.length ? `&filters=${encodeURIComponent(JSON.stringify(clauses))}` : '';
-        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&includeEvaluations=0&fields=light${scopeParam}${skillParam}${searchParam}${filtersParam}`)
+        // skipAutoEvalReady=1: 列表只用 trace_status，不读 auto_eval_ready 等就绪字段。跳过它能让已结束
+        // (session 有 endTime)的记录直接由批量 sessionEndByTaskId 判定 success，省掉每条一次整行 session
+        // (含巨大 interactions blob)的 N+1 读——这是 20+ 并发搜索卡顿的主因之一。QUIET_WINDOW 框架
+        // (opencode/claude/jiuwen/hermes)未结束的 trace 仍会走 quiet-window 推断，状态判定口径不变。
+        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&includeEvaluations=0&fields=light&skipAutoEvalReady=1${scopeParam}${skillParam}${searchParam}${filtersParam}`)
             .then(r => r.json())
             .then((d: Execution[]) => setData(Array.isArray(d) ? d : []))
             .catch(() => setData([]))
