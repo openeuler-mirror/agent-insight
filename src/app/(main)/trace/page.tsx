@@ -371,8 +371,8 @@ function TracePageContent() {
     const [taskIdParam, setTaskIdParam] = useQueryState('taskId', parseAsString);
     // 文本搜索（trace input/output 模糊匹配，服务端下推）。输入框 + debounce 现由 TraceFilterBar 内联承载。
     const [search, setSearch] = useQueryState('q', parseAsString.withDefault(''));
-    // 左侧 Filters 侧栏显隐(对标 langfuse Hide filters)。
-    const [showFilters, setShowFilters] = useState(true);
+    // 左侧 Filters 侧栏显隐(对标 langfuse Hide filters)。默认隐藏,点「过滤」再展开。
+    const [showFilters, setShowFilters] = useState(false);
     // 结构化过滤子句(operator 模型),序列化进 URL 的 `f`,下推后端 filters=。
     const [clausesRaw, setClausesRaw] = useQueryState('f', parseAsString.withDefault(''));
     const clauses = useMemo<FilterClause[]>(() => {
@@ -635,7 +635,7 @@ function TracePageContent() {
                         <div className="mb-2 flex flex-wrap items-center gap-2">
                             <Button variant="outline" size="sm" className="h-7 gap-1.5 text-xs" onClick={() => setShowFilters(v => !v)}>
                                 <SlidersHorizontal className="size-3.5" />
-                                {showFilters ? (locale === 'zh' ? '隐藏过滤' : 'Hide filters') : (locale === 'zh' ? '显示过滤' : 'Show filters')}
+                                {showFilters ? (locale === 'zh' ? '隐藏过滤' : 'Hide filters') : (locale === 'zh' ? '过滤' : 'Show filters')}
                             </Button>
                             <Separator orientation="vertical" className="h-5" />
                             <Select
