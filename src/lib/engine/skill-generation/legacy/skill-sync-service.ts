@@ -1,6 +1,7 @@
 import AdmZip from 'adm-zip';
 import fs from 'fs';
 import path from 'path';
+import { getSkillVersionAssetPath, getSkillVersionStorageDir } from '@/lib/env';
 import { db } from '@/lib/storage/prisma';
 import { EnterpriseSkill, EnterpriseSkillListResponse, EnterpriseDownloadResponse, SyncResult, SkillSyncResult, EnterpriseDeleteResponse, EnterpriseSkillInfoResponse } from '@/lib/engine/skill-generation/legacy/skill-sync-types';
 
@@ -150,7 +151,7 @@ async function storeSkillFromExtracted(
   const nextVersionNum = lastVersion ? (lastVersion.version + 1) : 0;
   console.log('[Enterprise-Sync] 下一个整数版本号:', nextVersionNum);
 
-  const storageBase = path.join(process.cwd(), 'data', 'storage', 'skills', skill.id, `v${nextVersionNum}`);
+  const storageBase = getSkillVersionStorageDir(skill.id, nextVersionNum);
   console.log('[Enterprise-Sync] 存储路径:', storageBase);
   fs.mkdirSync(storageBase, { recursive: true });
 
@@ -183,7 +184,7 @@ async function storeSkillFromExtracted(
     semanticVersion: skillInfo.version,
     enterpriseSkillId: skillInfo.id,
     content: skillContent,
-    assetPath: `data/storage/skills/${skill.id}/v${nextVersionNum}`,
+    assetPath: getSkillVersionAssetPath(skill.id, nextVersionNum),
     files: JSON.stringify(fileList),
     changeLog: `从企业同步 ${skillInfo.version}`
   });

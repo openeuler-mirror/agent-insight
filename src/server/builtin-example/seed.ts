@@ -21,6 +21,7 @@
 import { randomUUID } from 'crypto';
 import { prisma } from '@/lib/storage/prisma';
 import { createAgentDatasetRecord, type DatasetCase, type DatasetKind } from '@/server/agent_datasets_storage';
+import { getSkillVersionAssetPath, getSkillVersionStorageDir } from '@/lib/env';
 import fs from 'node:fs';
 import path from 'node:path';
 import fixturesRaw from './fixtures.json';
@@ -98,10 +99,9 @@ async function seedDemoSkill(p: any, user: string): Promise<string> {
     },
   });
 
-  // 落盘 SKILL.md + references/scripts，路径约定与 skills/publish 一致：
-  //   data/storage/skills/<skillId>/v<version>/...（assetPath 存相对路径，读取时 join(process.cwd())）。
-  const storageRel = `data/storage/skills/${skillRow.id}/v${version}`;
-  const storageAbs = path.join(process.cwd(), storageRel);
+  // 落盘 SKILL.md + references/scripts，路径约定与 skills/publish 一致。
+  const storageRel = getSkillVersionAssetPath(skillRow.id, version);
+  const storageAbs = getSkillVersionStorageDir(skillRow.id, version);
   fs.mkdirSync(storageAbs, { recursive: true });
   fs.writeFileSync(path.join(storageAbs, 'SKILL.md'), skillBundle.content, 'utf-8');
   for (const [rel, content] of Object.entries(skillBundle.assets)) {

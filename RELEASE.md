@@ -84,6 +84,12 @@ node scripts/publish-npm.js [options]
 
 ### 第 1 步：构建 + 打包（不发布）
 
+先清掉旧的 Next.js 构建产物，避免 `npm pack` 把上一次的 `.next/standalone` 打进包里：
+
+```bash
+rm -rf .next
+```
+
 ```bash
 node scripts/publish-npm.js --version 0.1.0-beta --dry-run
 ```

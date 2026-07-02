@@ -1,5 +1,6 @@
 import { resolveUser } from '@/lib/auth/auth';
 import { parseSkillFlow } from '@/lib/engine/observability/flow-parser';
+import { getSkillVersionAssetPath, getSkillVersionStorageDir } from '@/lib/env';
 import { db } from '@/lib/storage/prisma';
 import fs from 'fs';
 import { NextRequest, NextResponse } from 'next/server';
@@ -87,7 +88,7 @@ export async function POST(request: NextRequest) {
             nextVersionNum = lastVersion ? (lastVersion.version + 1) : 0;
         }
 
-        const storageBase = path.join(process.cwd(), 'data', 'storage', 'skills', skill.id, `v${nextVersionNum}`);
+        const storageBase = getSkillVersionStorageDir(skill.id, nextVersionNum);
         ensureDir(storageBase);
 
         const savedFilesList: string[] = [];
@@ -97,7 +98,7 @@ export async function POST(request: NextRequest) {
             skillId: skill.id,
             version: nextVersionNum,
             content: skillContent,
-            assetPath: `data/storage/skills/${skill.id}/v${nextVersionNum}`,
+            assetPath: getSkillVersionAssetPath(skill.id, nextVersionNum),
             files: JSON.stringify(savedFilesList),
             changeLog: `Auto-imported version ${nextVersionNum}`
         });

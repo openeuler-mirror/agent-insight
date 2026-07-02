@@ -2,8 +2,9 @@
 import fs from 'fs';
 import { NextResponse } from 'next/server';
 import path from 'path';
+import { resolveAgentInsightDataPath } from '@/lib/env';
 
-const DATA_DIR = path.join(process.cwd(), 'data');
+const DATA_DIR = resolveAgentInsightDataPath();
 const EVALUATION_FILE = path.join(DATA_DIR, 'evaluation_result.json');
 
 function ensureDataDir() {

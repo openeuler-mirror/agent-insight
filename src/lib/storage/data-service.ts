@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { resolveAgentInsightDataPath } from '@/lib/env';
 import { judgeAnswer } from '@/lib/engine/evaluation/judge';
 import { normalizeEndpointUrl } from '@/lib/infra/endpoint-resolve';
 import { db, prisma, prismaRaw } from '@/lib/storage/prisma';
@@ -1132,7 +1133,7 @@ async function attachEvaluationSnapshots(
     };
 }
 
-const DATA_DIR = path.join(process.cwd(), 'data');
+const DATA_DIR = resolveAgentInsightDataPath();
 const EVALUATION_FILE = path.join(DATA_DIR, 'evaluation_result.json');
 const AUDIT_DATA_MUTATIONS = process.env.AUDIT_DATA_MUTATIONS === '1' || process.env.AUDIT_DATA_MUTATIONS === 'true';
 

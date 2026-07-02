@@ -11,6 +11,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { getSkillVersionStorageDir, resolveRuntimeAssetPath } from '@/lib/env';
 
 const MAX_FILE_BYTES = 256 * 1024; // 单文件读入上限；超限文件跳过（锚点不可能锚在巨文件上）
 
@@ -22,10 +23,9 @@ export interface SkillVersionRowLite {
 
 export function resolveVersionStorageRoot(skillId: string, version: number, assetPath: string | null): string {
   if (assetPath) {
-    const m = assetPath.match(/^data\/storage\/skills\/([^/]+)\/v(\d+)$/);
-    if (m) return path.join(process.cwd(), 'data', 'storage', 'skills', m[1], `v${m[2]}`);
+    return resolveRuntimeAssetPath(assetPath);
   }
-  return path.join(process.cwd(), 'data', 'storage', 'skills', skillId, `v${version}`);
+  return getSkillVersionStorageDir(skillId, version);
 }
 
 export function loadSkillVersionSnapshot(args: {

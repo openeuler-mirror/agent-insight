@@ -6,6 +6,7 @@ import { getUserSettings, type ModelConfig as ServerModelConfig } from '@/lib/st
 import { inferProviderFromBaseUrl, normalizeProviderID } from '@/lib/engine/general-agent/server-model-config';
 import { ensureSessionWorkspace, ensureUserWorkspace } from '@/lib/engine/general-agent/workspace';
 import { resolveSkill } from '@/lib/engine/general-agent/skill-resolver';
+import { resolveRuntimeAssetPath } from '@/lib/env';
 import { ensureSkillFilesInWorkspace } from '@/lib/skill-opt-storage';
 import {
   buildSkillOptSystemPrompt,
@@ -468,7 +469,7 @@ async function streamSkillOptOpencodeImpl(
  *
  * 复用 resolveSkill——即测量路径（runGeneralAgent → resolveSkill →
  * deploySkillToWorkspace）所用的同一个解析器——拿到 SkillVersion.assetPath，
- * 再按 deploySkillToWorkspace 同款 path.resolve(assetPath) 落到绝对目录。
+ * 再按 deploySkillToWorkspace 同款运行时 assetPath 解析落到绝对目录。
  * 这样"优化器预填的基线"与"被测的基线"恒等同一目录（包括 version 回退场景：
  * resolveSkill 找不到精确 baseVersion 时回退 active/latest，与测量端口径一致）。
  *
@@ -485,8 +486,7 @@ async function resolveAuthoritativeStorageDir(
     const skill = await resolveSkill(skillName, user, baseVersion);
     const assetPath = skill?.assetPath;
     if (!assetPath || typeof assetPath !== 'string') return null;
-    // 与 deploySkillToWorkspace 一致：path.resolve(相对 assetPath) === path.join(cwd, assetPath)
-    const abs = path.resolve(assetPath);
+    const abs = resolveRuntimeAssetPath(assetPath);
     return fs.existsSync(abs) ? abs : null;
   } catch (err) {
     console.warn('[skill-opt-bridge] authoritative storageDir resolve failed:', (err as Error)?.message);

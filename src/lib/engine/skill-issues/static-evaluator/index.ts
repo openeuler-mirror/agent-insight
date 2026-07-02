@@ -267,8 +267,7 @@ export async function runStaticEvaluation(args: RunArgs): Promise<RunResult> {
     const bundle = loadAssetBundle(skillVersion.assetPath);
 
     // 防御性硬失败：清单（SkillVersion.files）声明了 references/scripts 附件，但磁盘上一个都没读到。
-    // 成因：loadAssetBundle 用 path.resolve(assetPath)（相对 process.cwd()）解析存储目录，
-    // 当运行 cwd ≠ 存储根（如 git worktree 里跑、或部署布局把 cwd 与 data/ 分离）时 bundle 解析为空。
+    // 成因：SkillVersion.files 与运行时数据根下的 assetPath 目录不一致（常见于旧容器未持久化附件）。
     // 若放任不管，ROBUSTNESS / SECURITY 两个 L2 阶段会被喂空 bundle 盲评，
     // 稳定误判成「缺少所有参考脚本 / 核心脚本不完整 → 工程健壮性=1」这类假阴性。
     // 宁可显式失败也不盲评：抛错由下方 catch 统一记为 failed + 写 errorMessage 便于诊断。
@@ -277,8 +276,8 @@ export async function runStaticEvaluation(args: RunArgs): Promise<RunResult> {
       throw new Error(
         `资产 bundle 加载为空，但 SkillVersion.files 声明了 ${expectedBundleFiles} 个 references/scripts 附件` +
           `（assetPath=${skillVersion.assetPath ?? 'null'}，cwd=${process.cwd()}）。` +
-          `多半是运行工作目录与存储根不一致（如在 git worktree 内运行）。` +
-          `已中止评估以避免对工程健壮性/安全风险性盲评出假阴性；请从存储根目录运行，或修正 assetPath / 存储路径。`,
+          `多半是运行时数据目录中缺少对应附件，或 assetPath 指向了错误位置。` +
+          `已中止评估以避免对工程健壮性/安全风险性盲评出假阴性；请恢复附件或修正 assetPath / 存储路径。`,
       );
     }
 

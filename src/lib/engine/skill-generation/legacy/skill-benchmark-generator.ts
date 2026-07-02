@@ -16,6 +16,7 @@ import { db } from '@/lib/storage/prisma';
 import { getProxyConfig } from '@/lib/ingest/proxy-config';
 import { deriveRoutingSignature } from '@/lib/ingest/routing-signature';
 import { getActiveConfig } from '@/lib/storage/server-config';
+import { resolveRuntimeAssetPath } from '@/lib/env';
 
 interface SkillVersionRecord {
   version: number;
@@ -119,7 +120,7 @@ function dedupeQueries(queries: RoutingDraft[]): RoutingDraft[] {
 function loadAuxiliarySummaries(assetPath?: string | null): string[] {
   if (!assetPath) return [];
 
-  const metaPath = path.join(process.cwd(), assetPath, 'AUXILIARY_META.json');
+  const metaPath = path.join(resolveRuntimeAssetPath(assetPath), 'AUXILIARY_META.json');
   if (!fs.existsSync(metaPath)) return [];
 
   try {

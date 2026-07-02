@@ -1,4 +1,5 @@
 import { canAccessSkill, resolveUser } from '@/lib/auth/auth';
+import { resolveRuntimeAssetPath } from '@/lib/env';
 import { db } from '@/lib/storage/prisma';
 import fs from 'fs';
 import { NextRequest, NextResponse } from 'next/server';
@@ -60,7 +61,7 @@ export async function POST(request: NextRequest) {
         fs.writeFileSync(path.join(targetDir, 'SKILL.md'), skillVersion.content);
 
         if (skillVersion.assetPath) {
-            const sourcePath = path.resolve(skillVersion.assetPath);
+            const sourcePath = resolveRuntimeAssetPath(skillVersion.assetPath);
 
             if (fs.existsSync(sourcePath)) {
                 const files = fs.readdirSync(sourcePath);

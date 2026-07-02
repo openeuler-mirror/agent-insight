@@ -3,6 +3,7 @@ import { parseSkillFlow } from '@/lib/engine/observability/flow-parser';
 import { runStaticEvaluation } from '@/lib/engine/skill-issues/static-evaluator';
 import { findSkillMd } from '@/lib/skill-generator/skill-files';
 import { verifyStructure } from '@/lib/engine/skill-opt/self-verify-structural';
+import { getSkillVersionAssetPath, getSkillVersionStorageDir } from '@/lib/env';
 import { db, prismaRaw } from '@/lib/storage/prisma';
 import fs from 'fs';
 import { NextRequest, NextResponse } from 'next/server';
@@ -93,10 +94,7 @@ export async function POST(
         const lastVersion = await db.findLatestSkillVersion(skill.id);
         const nextVersionNum = lastVersion ? lastVersion.version + 1 : 0;
 
-        const storageBase = path.join(
-            process.cwd(),
-            'data', 'storage', 'skills', skill.id, `v${nextVersionNum}`
-        );
+        const storageBase = getSkillVersionStorageDir(skill.id, nextVersionNum);
         ensureDir(storageBase);
 
         // skill 文件夹之外的散文件不算 skill 的一部分，跳过——避免污染发布产物。
@@ -138,7 +136,7 @@ export async function POST(
             skillId: skill.id,
             version: nextVersionNum,
             content: skillMd.content,
-            assetPath: `data/storage/skills/${skill.id}/v${nextVersionNum}`,
+            assetPath: getSkillVersionAssetPath(skill.id, nextVersionNum),
             files: JSON.stringify(savedFilesList),
             changeLog: iteration.summary
                 ? `Adopted from skill-opt draft #${draftNumber}`
