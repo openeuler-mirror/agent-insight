@@ -99,6 +99,18 @@ async function syncAdminApiKey(options = {}) {
   const envPath = path.join(dataRoot, '.env')
   const keyFilePath = path.join(dataRoot, '.admin_api_key')
 
+  // keyless 共享账号模式：配了 AGENT_INSIGHT_DEFAULT_INGEST_USER 就【不】注入 admin key，
+  // 反而清空 AGENT_INSIGHT_API_KEY —— 让本机客户端（opencode 等）以「无 key」上报、归到默认账号。
+  // 否则每次 dev 重启都会把 admin key 写回，冲掉 keyless 配置（AGENT_INSIGHT_HOST 仍同步）。
+  const defaultIngestUser = (process.env.AGENT_INSIGHT_DEFAULT_INGEST_USER || '').trim()
+  if (defaultIngestUser) {
+    updateEnvFile(envPath, {
+      AGENT_INSIGHT_HOST: host,
+      AGENT_INSIGHT_API_KEY: '',
+    })
+    return { apiKey: '', username: null, envPath, keyFilePath, skipped: true, defaultIngestUser }
+  }
+
   const result = await requestAdminApiKey(port)
   fs.mkdirSync(dataRoot, { recursive: true })
   fs.writeFileSync(keyFilePath, result.apiKey, 'utf8')
@@ -119,6 +131,11 @@ async function main() {
   const port = Number(process.argv[2] || process.env.PORT || 3000)
   const host = process.argv[3] || `http://localhost:${port}`
   const result = await syncAdminApiKey({ port, host })
+  if (result.skipped) {
+    console.log(`✓ keyless 模式：检测到 AGENT_INSIGHT_DEFAULT_INGEST_USER=${result.defaultIngestUser}`)
+    console.log(`  已清空 ${result.envPath} 的 AGENT_INSIGHT_API_KEY（本机客户端以无 key 上报，归到默认账号），未同步 admin key`)
+    return
+  }
   console.log(`✓ Admin API key synced for ${result.username || 'admin'}`)
   console.log(`  API Key saved to: ${result.keyFilePath}`)
   console.log(`  Client env updated: ${result.envPath}`)

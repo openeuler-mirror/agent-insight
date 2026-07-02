@@ -23,7 +23,7 @@ function powerShellDoubleQuoted(value: string): string {
     return value.replace(/`/g, '``').replace(/"/g, '`"').replace(/\$/g, '`$');
 }
 
-function generateBashScript(host: string, baseUrl: string, apiKey: string, noninteractive: boolean = false, frameworks: string = 'opencode'): string {
+function generateBashScript(host: string, baseUrl: string, apiKey: string, noninteractive: boolean = false, frameworks: string = 'opencode', nokey: boolean = false): string {
     const lines = [
         '#!/bin/bash',
         '# =============================================================================',
@@ -40,11 +40,14 @@ function generateBashScript(host: string, baseUrl: string, apiKey: string, nonin
         '#   URL 直接带：       curl -sSf "<host>/api/ingest/setup?yes=1" | bash',
         '#   env：              curl -sSf "<host>/api/ingest/setup" | AGENT_INSIGHT_NONINTERACTIVE=1 bash',
         '#   指定框架：         ... | bash -s -- -y --frameworks=opencode,claude',
+        '#   强制无 key：       ... ?yes=1&nokey=1  或  bash -s -- -y --no-key（清空本机已有 key，切共享账号）',
         'NONINTERACTIVE=' + (noninteractive ? 'true' : 'false'),
         'NONINTERACTIVE_FRAMEWORKS="' + bashDoubleQuoted(frameworks || 'opencode') + '"',
+        'FORCE_NO_KEY=' + (nokey ? 'true' : 'false'),
         'for arg in "$@"; do',
         '    case "$arg" in',
         '        -y|--yes|--non-interactive|--noninteractive) NONINTERACTIVE=true ;;',
+        '        --no-key|--nokey) FORCE_NO_KEY=true ;;',
         '        --frameworks=*) NONINTERACTIVE=true; NONINTERACTIVE_FRAMEWORKS="${arg#*=}" ;;',
         '    esac',
         'done',
@@ -316,7 +319,10 @@ function generateBashScript(host: string, baseUrl: string, apiKey: string, nonin
         '',
         '# -- API Key Logic --',
         'FINAL_KEY="${AGENT_INSIGHT_SETUP_API_KEY:-$EXISTING_KEY}"',
-        'if [ "$NONINTERACTIVE" = "true" ]; then',
+        'if [ "$FORCE_NO_KEY" = "true" ]; then',
+        '    FINAL_KEY=""',
+        '    echo "🔑 --no-key：强制无 key（清空本机已有 key），数据归到服务端 AGENT_INSIGHT_DEFAULT_INGEST_USER 指定的共享账号。"',
+        'elif [ "$NONINTERACTIVE" = "true" ]; then',
         '    if [ -n "$FINAL_KEY" ]; then',
         '        echo "🔑 Using API Key (from setup URL / existing config)."',
         '    else',
@@ -354,7 +360,7 @@ function generateBashScript(host: string, baseUrl: string, apiKey: string, nonin
         'fi',
         '',
         'if [ -z "$FINAL_KEY" ]; then',
-        '    if [ "$NONINTERACTIVE" = "true" ]; then',
+        '    if [ "$NONINTERACTIVE" = "true" ] || [ "$FORCE_NO_KEY" = "true" ]; then',
         '        echo "ℹ️  未配置 API Key：以「无 key」方式上报，数据归到服务端默认共享账号（需服务端已配 AGENT_INSIGHT_DEFAULT_INGEST_USER）。"',
         '    else',
         '        echo "⚠️  Warning: No API Key provided. Telemetry upload will fail until you set it in $AGENT_INSIGHT_CONFIG_FILE"',
@@ -1084,6 +1090,9 @@ export async function GET(request: Request) {
         ?? requestUrl.searchParams.get('noninteractive');
     const noninteractive = yesRaw !== null && !['0', 'false', 'no'].includes(yesRaw.trim().toLowerCase());
     const frameworks = (requestUrl.searchParams.get('frameworks') || requestUrl.searchParams.get('framework') || 'opencode').trim() || 'opencode';
+    // 强制无 key：?nokey / ?no-key（present 即启用，除非 =0/false/no）。清空本机已有 key，切共享账号。
+    const nokeyRaw = requestUrl.searchParams.get('nokey') ?? requestUrl.searchParams.get('no-key');
+    const nokey = nokeyRaw !== null && !['0', 'false', 'no'].includes(nokeyRaw.trim().toLowerCase());
 
     const platform = detectPlatform(request);
 
@@ -1095,7 +1104,7 @@ export async function GET(request: Request) {
             },
         });
     } else {
-        const script = generateBashScript(skillInsightHost, baseUrl, apiKey, noninteractive, frameworks);
+        const script = generateBashScript(skillInsightHost, baseUrl, apiKey, noninteractive, frameworks, nokey);
         return new NextResponse(script, {
             headers: {
                 'Content-Type': 'text/x-shellscript',
