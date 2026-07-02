@@ -1,7 +1,8 @@
-const fs = require("fs")
-const path = require("path")
-const os = require("os")
-const crypto = require("crypto")
+import fs from "node:fs"
+import path from "node:path"
+import os from "node:os"
+import crypto from "node:crypto"
+import { spawn } from "node:child_process"
 
 function getPreferredInsightDir() {
   return path.join(os.homedir(), ".agent-insight")
@@ -317,9 +318,8 @@ export default async function WittySkillInsightOtelPlugin() {
         try { fs.writeSync(logFd, header) } catch {}
       } catch {}
 
-      const cp = require("child_process")
       const stdio = logFd >= 0 ? ["ignore", logFd, logFd] : "ignore"
-      const child = cp.spawn(runtime.cmd, [...runtime.argsPrefix, uploaderPath], {
+      const child = spawn(runtime.cmd, [...runtime.argsPrefix, uploaderPath], {
         detached: true,
         stdio,
         windowsHide: true,

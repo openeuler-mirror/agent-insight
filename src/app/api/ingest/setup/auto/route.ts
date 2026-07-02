@@ -79,7 +79,6 @@ echo "✅ Node.js version: $NODE_VERSION"
 # 1. Setup Directories
 mkdir -p "$HOME/.agent-insight"
 mkdir -p "$HOME/.agent-insight/logs"
-mkdir -p "$HOME/.opencode/plugins"
 mkdir -p "$HOME/.opencode/skills"
 mkdir -p "$HOME/.claude/projects"
 mkdir -p "$HOME/.openclaw/agents"
@@ -211,7 +210,6 @@ if [ "$INSTALL_OPENCODE" = "true" ]; then
     rm -f "$OPENCODE_CONFIG_DIR/plugins/Skill-Insight.ts" "$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.ts" 2>/dev/null || true
     rm -f "$HOME/.opencode/plugins/Skill-Insight.ts" "$HOME/.opencode/plugins/Witty-Skill-Insight.ts" 2>/dev/null || true
     curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/opencode" -o "$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.ts"
-    cp "$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.ts" "$HOME/.opencode/plugins/Witty-Skill-Insight.ts" 2>/dev/null || true
     echo "⏬ Downloading OpenCode Uploader..."
     curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/opencode-uploader" -o "$HOME/.agent-insight/opencode_uploader_client.js"
     echo "⏬ Installing OpenCode commands..."
@@ -219,7 +217,6 @@ if [ "$INSTALL_OPENCODE" = "true" ]; then
     curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/opencode-commands/si-optimizer" -o "$OPENCODE_CONFIG_DIR/commands/si-optimizer.md"
     echo "⏬ Downloading OpenCode TUI Plugin..."
     curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/opencode-tui" -o "$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.tui.tsx"
-    cp "$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.tui.tsx" "$HOME/.opencode/plugins/Witty-Skill-Insight.tui.tsx" 2>/dev/null || true
     export TUI_PLUGIN_PATH="$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.tui.tsx"
     export TUI_CONFIG_FILE="$OPENCODE_CONFIG_DIR/tui.json"
     if command -v node &> /dev/null; then
@@ -534,7 +531,7 @@ echo "🌟 Agent-Insight Telemetry: READY"
 echo "------------------------------------------------"
 echo "Installed Components:"
 if [ "$INSTALL_OPENCODE" = "true" ]; then
-    echo "  ✅ OpenCode Plugin: ~/.opencode/plugins/Witty-Skill-Insight.ts"
+    echo "  ✅ OpenCode Plugin: $OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.ts"
     echo "  ✅ OpenCode Command: ~/.config/opencode/commands/si-optimizer.md"
 fi
 if [ "$INSTALL_CLAUDE" = "true" ]; then
@@ -630,7 +627,6 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '',
         'New-Item -ItemType Directory -Force -Path $skillInsightDir | Out-Null',
         'New-Item -ItemType Directory -Force -Path $skillInsightLogsDir | Out-Null',
-        'New-Item -ItemType Directory -Force -Path $opencodePluginsDir | Out-Null',
         'New-Item -ItemType Directory -Force -Path $opencodeSkillsDir | Out-Null',
         'New-Item -ItemType Directory -Force -Path $claudeProjectsDir | Out-Null',
         'New-Item -ItemType Directory -Force -Path $openclawAgentsDir | Out-Null',
@@ -759,20 +755,18 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '# 3. Download Components',
         'if ($INSTALL_OPENCODE) {',
         '    Write-Host "⏬ Downloading OpenCode Plugin..."',
-        '    $opencodeConfigDir = if ($env:XDG_CONFIG_HOME) { Join-Path $env:XDG_CONFIG_HOME "opencode" } elseif ($env:APPDATA) { Join-Path $env:APPDATA "opencode" } else { Join-Path $env:USERPROFILE ".config\\opencode" }',
+        '    $opencodeConfigDir = Join-Path $env:USERPROFILE ".config\\opencode"',
         '    New-Item -ItemType Directory -Path (Join-Path $opencodeConfigDir "plugins") -Force | Out-Null',
         '    Remove-Item -Path (Join-Path $opencodeConfigDir "plugins\\Skill-Insight.ts") -Force -ErrorAction SilentlyContinue',
         '    Remove-Item -Path (Join-Path $opencodeConfigDir "plugins\\Witty-Skill-Insight.ts") -Force -ErrorAction SilentlyContinue',
         '    Remove-Item -Path (Join-Path $opencodePluginsDir "Skill-Insight.ts") -Force -ErrorAction SilentlyContinue',
         '    Remove-Item -Path (Join-Path $opencodePluginsDir "Witty-Skill-Insight.ts") -Force -ErrorAction SilentlyContinue',
         '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/setup/opencode" -OutFile (Join-Path $opencodeConfigDir "plugins\\Witty-Skill-Insight.ts")',
-        '    Copy-Item (Join-Path $opencodeConfigDir "plugins\\Witty-Skill-Insight.ts") (Join-Path $opencodePluginsDir "Witty-Skill-Insight.ts") -Force -ErrorAction SilentlyContinue',
         '    Write-Host "⏬ Downloading OpenCode Uploader..."',
         '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/setup/opencode-uploader" -OutFile (Join-Path $skillInsightDir "opencode_uploader_client.js")',
         '    Write-Host "⏬ Downloading OpenCode TUI Plugin..."',
         '    $tuiPluginPath = Join-Path $opencodeConfigDir "plugins\\Witty-Skill-Insight.tui.tsx"',
         '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/setup/opencode-tui" -OutFile $tuiPluginPath',
-        '    Copy-Item $tuiPluginPath (Join-Path $opencodePluginsDir "Witty-Skill-Insight.tui.tsx") -Force -ErrorAction SilentlyContinue',
         '    $tuiConfigFile = Join-Path $opencodeConfigDir "tui.json"',
         '    try {',
         '        $data = @{}',
@@ -819,7 +813,7 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    New-Item -ItemType Directory -Path $jwExtDir -Force | Out-Null',
         '    New-Item -ItemType Directory -Path (Join-Path $jwHome "config") -Force | Out-Null',
         '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/setup/jiuwen-extension" -OutFile (Join-Path $jwExtDir "extension.py")',
-        '    @("id: agent-insight-observability", "name: agent-insight-observability", "version: 0.1.0", "description: Zero-code observability onboarding for JiuwenSwarm via agent-core OTLP.", "author: agent-insight", "min_jiuwenswarm_version: \\"0.2.0\\"", "dependencies: {}", "config_schema:", "  type: object") | Set-Content -Path (Join-Path $jwExtDir "extension.yaml") -Encoding UTF8',
+        '    @(\'id: agent-insight-observability\', \'name: agent-insight-observability\', \'version: 0.1.0\', \'description: Zero-code observability onboarding for JiuwenSwarm via agent-core OTLP.\', \'author: agent-insight\', \'min_jiuwenswarm_version: "0.2.0"\', \'dependencies: {}\', \'config_schema:\', \'  type: object\') | Set-Content -Path (Join-Path $jwExtDir "extension.yaml") -Encoding UTF8',
         '    Write-Host "✅ JiuwenSwarm extension installed at $jwExtDir"',
         '}',
         '',
@@ -1026,7 +1020,7 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         'Write-Host "------------------------------------------------"',
         'Write-Host "Installed Components:"',
         'if ($INSTALL_OPENCODE) {',
-        '    Write-Host "  ✅ OpenCode Plugin: ~/.opencode/plugins/Witty-Skill-Insight.ts"',
+        '    Write-Host "  ✅ OpenCode Plugin: $opencodeConfigDir\\plugins\\Witty-Skill-Insight.ts"',
         '}',
         'if ($INSTALL_CLAUDE) {',
         '    Write-Host "  ✅ Claude Code OTel: ~/.agent-insight/claude_otel_env.ps1"',
