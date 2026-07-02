@@ -116,3 +116,57 @@ test('setup scripts install the first-party Hermes plugin without GitHub or venv
     );
   }
 });
+
+test('JiuwenSwarm setup writes a PowerShell-safe extension manifest', () => {
+  for (const route of SETUP_ROUTES) {
+    const source = readFileSync(route, 'utf8');
+
+    assert.ok(
+      source.includes('\\\'min_jiuwenswarm_version: "0.2.0"\\\''),
+      `${route} should quote YAML values with PowerShell single-quoted strings`,
+    );
+    assert.ok(
+      !source.includes('min_jiuwenswarm_version: \\\\"0.2.0\\\\"'),
+      `${route} should not emit bash-style escaped quotes in PowerShell strings`,
+    );
+  }
+});
+
+test('OpenCode setup installs the telemetry plugin only under the config directory', () => {
+  for (const route of SETUP_ROUTES) {
+    const source = readFileSync(route, 'utf8');
+
+    assert.ok(
+      source.includes('plugins/Witty-Skill-Insight.ts') || source.includes('plugins\\\\Witty-Skill-Insight.ts'),
+      `${route} should install the OpenCode plugin under the config plugins directory`,
+    );
+    assert.ok(
+      !source.includes('Join-Path $env:APPDATA "opencode"'),
+      `${route} should not install the Windows OpenCode plugin under AppData`,
+    );
+    assert.ok(
+      source.includes('.config\\\\opencode'),
+      `${route} should use the user .config OpenCode directory on Windows`,
+    );
+    assert.ok(
+      !source.includes('cp "$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.ts" "$HOME/.opencode/plugins/Witty-Skill-Insight.ts"'),
+      `${route} should not copy the OpenCode plugin into ~/.opencode/plugins`,
+    );
+    assert.ok(
+      !source.includes('Copy-Item (Join-Path $opencodeConfigDir "plugins\\\\Witty-Skill-Insight.ts")'),
+      `${route} should not copy the OpenCode plugin into the legacy PowerShell directory`,
+    );
+  }
+});
+
+test('OpenCode telemetry plugin stays compatible with the desktop ESM loader', () => {
+  const source = readFileSync('scripts/opencode_plugin_otel.ts', 'utf8');
+
+  assert.match(source, /import fs from ['"]node:fs['"]/);
+  assert.match(source, /import path from ['"]node:path['"]/);
+  assert.match(source, /import os from ['"]node:os['"]/);
+  assert.match(source, /import crypto from ['"]node:crypto['"]/);
+  assert.match(source, /import \{ spawn \} from ['"]node:child_process['"]/);
+  assert.doesNotMatch(source, /\brequire\s*\(/);
+  assert.match(source, /export default async function WittySkillInsightOtelPlugin/);
+});
