@@ -21,6 +21,9 @@ interface ExecRow {
     failures?: { failure_type?: string; description?: string }[];
     tokens?: number | null;
     latency?: number | null;
+    result_score?: number | null;
+    result_eval_status?: 'missing' | 'running' | 'done' | 'failed';
+    result_metrics?: Record<string, { score: number | null; status: string; confidence: number; note?: string; error?: string }>;
 }
 
 type Sig = 'ok' | 'warn' | 'bad';
@@ -28,26 +31,10 @@ type Sig = 'ok' | 'warn' | 'bad';
 const SECURITY = /(inject|越权|未授权|unauthorized|pii|敏感|泄露|leak)/i;
 const PAGE_SIZE = 20;
 
-// 完成度（0–1）确定性口径：与后端 dimension-scorer.isSuccessDeterministic 一致 ——
-// 具体失败信号优先（工具错误/failures）→ judge 分 → 显式 isAnswerCorrect → 否则打底为成功
-// （schema 中 isAnswerCorrect @default(false)，未评测的 trace 不能据此判失败）。
-function completion01(r: ExecRow): number {
-    if ((r.tool_call_error_count ?? 0) > 0) return 0;
-    if ((r.failures?.length ?? 0) > 0) return 0;
-    if (r.answer_score != null) return r.answer_score;
-    if (r.is_answer_correct === true) return 1;
-    return 1;
-}
-function rowScore(r: ExecRow): number {
-    const completion = completion01(r) * 100;
-    const calls = r.tool_call_count ?? 0;
-    const tool = calls > 0 ? (1 - Math.min(1, (r.tool_call_error_count ?? 0) / calls)) * 100 : 100;
-    const cost = r.latency != null ? Math.max(0, 1 - r.latency / 120000) * 100 : 100;
-    return Math.round((completion * 0.5 + tool * 0.3 + cost * 0.2) * 10) / 10;
-}
-function completionSig(r: ExecRow): Sig {
-    const v = completion01(r);
-    return v >= 0.7 ? 'ok' : v >= 0.4 ? 'warn' : 'bad';
+function resultSig(r: ExecRow): Sig {
+    const v = r.result_score;
+    if (v == null) return 'warn';
+    return v >= 85 ? 'ok' : v >= 70 ? 'warn' : 'bad';
 }
 function toolSig(r: ExecRow): Sig {
     const e = r.tool_call_error_count ?? 0;
@@ -61,8 +48,9 @@ function safetySig(r: ExecRow): Sig {
     return (r.failures ?? []).some((f) => SECURITY.test(`${f.failure_type ?? ''} ${f.description ?? ''}`)) ? 'bad' : 'ok';
 }
 
-export function ExecutionScoreTable({ agent, from, to, skill, statusFilter, bucketLabel, onClearBucket, onDrill, collapsed, onToggleCollapse }: {
+export function ExecutionScoreTable({ agent, user, from, to, skill, statusFilter, bucketLabel, onClearBucket, onDrill, collapsed, onToggleCollapse }: {
     agent: string;
+    user?: string | null;   // 身份口径：拼入 ?user= 实现用户隔离，缺失会越权拿全量执行记录
     from: string;
     to: string;
     skill?: string;
@@ -82,22 +70,22 @@ export function ExecutionScoreTable({ agent, from, to, skill, statusFilter, buck
     // 无需在 effect 内同步 setState（避免 react-hooks/set-state-in-effect 级联渲染）。
 
     const load = useCallback(() => {
-        if (!agent) return;
+        if (!agent || !user) return;
         setLoading(true);
-        const q = new URLSearchParams({ agent, from, to, page: String(page), pageSize: String(PAGE_SIZE) });
+        const q = new URLSearchParams({ agent, user, from, to, page: String(page), pageSize: String(PAGE_SIZE) });
         if (skill && skill !== 'all') q.set('skill', skill);
         apiFetch(`/api/quality/executions?${q.toString()}`)
             .then((r) => r.json())
             .then((d) => { setRows(Array.isArray(d.records) ? d.records : []); setTotal(d.total ?? 0); })
             .catch(() => { setRows([]); setTotal(0); })
             .finally(() => setLoading(false));
-    }, [agent, from, to, skill, page]);
+    }, [agent, user, from, to, skill, page]);
 
     useEffect(() => { load(); }, [load]);
 
     const statusOf = (s: number): '达标' | '关注' | '异常' => (s >= 85 ? '达标' : s >= 70 ? '关注' : '异常');
     const shown = (statusFilter && statusFilter !== 'all')
-        ? rows.filter((r) => statusOf(rowScore(r)) === statusFilter)
+        ? rows.filter((r) => r.result_score != null && statusOf(r.result_score) === statusFilter)
         : rows;
 
     const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -142,8 +130,12 @@ export function ExecutionScoreTable({ agent, from, to, skill, statusFilter, buck
                         ) : shown.length === 0 ? (
                             <tr><td colSpan={7} style={{ padding: 28, textAlign: 'center', color: 'var(--foreground-muted)', fontSize: 12 }}>{t('quality.table.empty')}</td></tr>
                         ) : shown.map((r) => {
-                            const s = rowScore(r);
-                            const status = s >= 85 ? 'success' : s >= 70 ? 'warning' : 'error';
+                            const s = r.result_score;
+                            const status = s == null ? 'pending' : s >= 85 ? 'success' : s >= 70 ? 'warning' : 'error';
+                            const evalLabel = r.result_eval_status === 'running' ? t('quality.table.evaluating')
+                                : r.result_eval_status === 'failed' ? t('quality.table.evalFailed')
+                                    : r.result_eval_status === 'missing' ? t('quality.table.notEvaluated') : null;
+                            const metricTitle = Object.entries(r.result_metrics ?? {}).map(([key, value]) => `${key}: ${value.score ?? 'N/A'}`).join('\n');
                             return (
                                 <tr key={r.id || r.task_id || r.upload_id} onClick={() => onDrill(r.id)} style={{ cursor: 'pointer' }}
                                     onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--background-secondary)')}
@@ -153,19 +145,19 @@ export function ExecutionScoreTable({ agent, from, to, skill, statusFilter, buck
                                     <td style={{ ...td, maxWidth: 300 }}><div style={{ fontSize: 11.5, color: 'var(--foreground-secondary)', lineHeight: 1.4, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{r.query || '—'}</div></td>
                                     <td style={td}>
                                         <div style={{ display: 'flex', flexDirection: 'column', gap: 5, minWidth: 96 }}>
-                                            <span style={{ fontSize: 15, fontWeight: 700, color: scoreColor(s) }}>{s}<span style={{ fontSize: 10, color: 'var(--foreground-muted)' }}>/100</span></span>
-                                            <span style={{ height: 5, borderRadius: 5, background: 'var(--background-secondary)', overflow: 'hidden' }}><span style={{ display: 'block', height: '100%', width: `${s}%`, background: scoreColor(s), borderRadius: 5 }} /></span>
+                                            <span style={{ fontSize: 15, fontWeight: 700, color: s == null ? 'var(--foreground-muted)' : scoreColor(s) }}>{s == null ? 'N/A' : s}<span style={{ fontSize: 10, color: 'var(--foreground-muted)' }}>{s == null ? '' : '/100'}</span></span>
+                                            <span style={{ height: 5, borderRadius: 5, background: 'var(--background-secondary)', overflow: 'hidden' }}><span style={{ display: 'block', height: '100%', width: `${s ?? 0}%`, background: s == null ? 'var(--foreground-muted)' : scoreColor(s), borderRadius: 5 }} /></span>
                                         </div>
                                     </td>
                                     <td style={td}>
                                         <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
-                                            <SigChip sig={completionSig(r)} label={t('quality.table.sigDone')} />
+                                            <span title={metricTitle}><SigChip sig={resultSig(r)} label={t('quality.table.sigResult')} /></span>
                                             <SigChip sig={toolSig(r)} label={t('quality.table.sigTool')} />
                                             <SigChip sig={costSig(r)} label={t('quality.table.sigCost')} />
                                             <SigChip sig={safetySig(r)} label={t('quality.table.sigSafe')} />
                                         </div>
                                     </td>
-                                    <td style={td}><StatusBadge status={status} label={t(`quality.status.${s >= 85 ? '达标' : s >= 70 ? '关注' : '异常'}`)} /></td>
+                                    <td style={td}>{evalLabel ? <span style={{ fontSize: 10.5, color: r.result_eval_status === 'failed' ? 'var(--error)' : 'var(--foreground-muted)' }}>{evalLabel}</span> : <StatusBadge status={status} label={t(`quality.status.${(s ?? 0) >= 85 ? '达标' : (s ?? 0) >= 70 ? '关注' : '异常'}`)} />}</td>
                                     <td style={td}><span style={{ fontFamily: 'var(--font-mono, monospace)', fontSize: 11, color: 'var(--foreground-muted)', whiteSpace: 'nowrap' }}>{fmtTs(r.timestamp)}</span></td>
                                 </tr>
                             );

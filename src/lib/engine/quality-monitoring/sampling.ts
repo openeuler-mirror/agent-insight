@@ -3,10 +3,19 @@
 
 import { prisma } from '@/lib/storage/prisma';
 import { withBackgroundOpencodeSlot } from '@/lib/engine/general-agent/concurrency-limiter';
-import type { ScoringPolicy, WindowKind } from './types';
+import type { ScoringPolicy, TraceLite, WindowKind } from './types';
 import { DEFAULT_POLICY } from './config';
 import { collectTraces } from './trace-collector';
 import { resolveWindowRange } from './index';
+import {
+    evaluateResultQuality,
+    RESULT_METRIC_KEYS,
+    RESULT_METRIC_VERSIONS,
+} from '@/lib/engine/evaluation/result-quality-evaluator';
+import {
+    hashAgentDatasetScope,
+    loadUserAgentDatasets,
+} from '@/lib/engine/evaluation/dataset-case-match';
 
 export interface BackfillResult {
     accepted: boolean;
@@ -14,11 +23,14 @@ export interface BackfillResult {
     evaluated: number;
     failed: number;
     coverageDelta: number; // 评测覆盖率提升估计（0–1）
+    metricRecords: number;
 }
 
 /** 单条 trace 的回填评测结果；返回 null 表示本条跳过（不写回）。 */
 export interface TraceEvalResult {
     answerScore?: number | null; // 0–1
+    metricRecords?: number;
+    metricFailures?: number;
 }
 
 export type TraceEvaluator = (trace: { executionId: string; taskId?: string; query?: string; user: string | null }) => Promise<TraceEvalResult | null>;
@@ -37,12 +49,34 @@ export interface BackfillInput {
     now?: Date;
 }
 
-/**
- * 默认评测器：MVP 占位的安全实现 —— 不在缺少 ground-truth criteria 时臆造 judge 调用，
- * 返回 null（跳过写回）。真实接入 judgeAnswer/轨迹评测在后续阶段按 Config 命中情况补全。
- * 保留此 hook 是为了让回填编排（选样/限流/写回/失败隔离）现在即可端到端跑通与单测。
- */
-const defaultEvaluator: TraceEvaluator = async () => null;
+/** 默认评测器：复用结果质量评测器，单指标失败隔离在 evaluateResultQuality 内完成。 */
+const defaultEvaluator: TraceEvaluator = async (trace) => {
+    const run = await evaluateResultQuality(trace.executionId);
+    return {
+        answerScore: run.metrics.accuracy.score == null ? null : run.metrics.accuracy.score / 100,
+        metricRecords: run.reused ? 0 : RESULT_METRIC_KEYS.length,
+        metricFailures: Object.values(run.metrics).filter((metric) => metric.failed).length,
+    };
+};
+
+export function needsResultEvaluationBackfill(
+    trace: TraceLite,
+    accuracyDatasetScopeHash: string,
+): boolean {
+    const rows = Object.values(trace.resultMetrics ?? {});
+    if (rows.some(row => row?.status === 'running' || row?.status === 'pending')) return false;
+    return RESULT_METRIC_KEYS.some((key) => {
+        const camel = key === 'instruction-adherence' ? 'instructionAdherence' : key === 'answer-quality' ? 'answerQuality' : key;
+        const row = trace.resultMetrics?.[camel as keyof typeof trace.resultMetrics];
+        if (!row) return true;
+        if (row.status === 'failed') return true;
+        if (row.evaluatorVersion !== RESULT_METRIC_VERSIONS[key]) return true;
+        if (key === 'accuracy') {
+            return row.evidence?.datasetScopeHash !== accuracyDatasetScopeHash;
+        }
+        return false;
+    });
+}
 
 export async function sampleAndBackfill(input: BackfillInput): Promise<BackfillResult> {
     const policy: ScoringPolicy = DEFAULT_POLICY;
@@ -52,15 +86,19 @@ export async function sampleAndBackfill(input: BackfillInput): Promise<BackfillR
     const budget = input.budget ?? policy.sample.budget;
 
     const { traces } = await collectTraces({ user: input.user, agent: input.agent, from, to });
+    const accuracyDatasetScopeHash = hashAgentDatasetScope(
+        input.user ? await loadUserAgentDatasets(input.user) : [],
+    );
 
-    // 选未评测子集：无 answerScore 且无轨迹分；按预算 + 采样率封顶。
-    const unevaluated = traces.filter((t) => t.answerScore == null && t.trajectory == null);
+    // 选缺失、失败、版本过期或准确性 GT 数据集已变化的 trace。
+    const unevaluated = traces.filter(trace => needsResultEvaluationBackfill(trace, accuracyDatasetScopeHash));
     const byRate = Math.ceil(traces.length * policy.sample.rate);
     const limit = Math.min(budget, byRate || budget, unevaluated.length);
     const sample = unevaluated.slice(0, limit);
 
     let evaluated = 0;
     let failed = 0;
+    let metricRecords = 0;
 
     await Promise.all(sample.map((t) =>
         withBackgroundOpencodeSlot(
@@ -73,6 +111,12 @@ export async function sampleAndBackfill(input: BackfillInput): Promise<BackfillR
                             data: { answerScore: res.answerScore },
                         });
                         evaluated++;
+                        metricRecords += res.metricRecords ?? 0;
+                        failed += res.metricFailures ?? 0;
+                    } else if (res?.metricRecords) {
+                        evaluated++;
+                        metricRecords += res.metricRecords;
+                        failed += res.metricFailures ?? 0;
                     }
                 } catch (e) {
                     failed++;
@@ -92,5 +136,6 @@ export async function sampleAndBackfill(input: BackfillInput): Promise<BackfillR
         evaluated,
         failed,
         coverageDelta: traces.length ? Math.round((evaluated / traces.length) * 1000) / 1000 : 0,
+        metricRecords,
     };
 }

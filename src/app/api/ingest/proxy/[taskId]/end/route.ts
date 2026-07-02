@@ -1,7 +1,7 @@
 
-import { readConfig, saveExecutionRecord, findBestMatchConfig, extractInvokedSkillsFromSessionInteractions } from '@/lib/storage/data-service';
+import { saveExecutionRecord, extractInvokedSkillsFromSessionInteractions } from '@/lib/storage/data-service';
 import { analyzeExecutionMatch, analyzeDynamicOnly } from '@/lib/engine/observability/flow-parser';
-import { analyzeFailures, analyzeSession, judgeAnswer } from '@/lib/engine/evaluation/judge';
+import { analyzeFailures, analyzeSession } from '@/lib/engine/evaluation/judge';
 import { isEvaluatorTraceRecord } from '@/lib/evaluator-agent';
 import { db, prisma } from '@/lib/storage/prisma';
 import { endSession } from '@/lib/ingest/proxy-store';
@@ -9,6 +9,7 @@ import { getActiveConfig } from '@/lib/storage/server-config';
 import { resolveFrameworkId } from '@/lib/ingest/adapters/registry';
 import { NextResponse } from 'next/server';
 import type { InvokedSkill } from '@/lib/shared/interaction-utils';
+import { scheduleResultEvaluation } from '@/lib/engine/evaluation/result-quality-evaluator';
 
 import { SKILLS_EXTRACT_PROMPT } from '@/prompts/skills-prompt';
 
@@ -276,24 +277,13 @@ export async function POST(
          console.warn(`[End] No primarySkillName extracted. Attribution will be skipped.`);
     }
 
-    let evaluation = { is_skill_correct: false, is_answer_correct: false, answer_score: 0, judgment_reason: "Auto-eval skipped (missing query/result/skill)" };
+    let evaluation: { is_skill_correct: boolean; is_answer_correct: boolean | null; answer_score: number | null; judgment_reason: string | null } = {
+      is_skill_correct: false, is_answer_correct: null, answer_score: null, judgment_reason: null,
+    };
     
     if (session.query) analysis.query = session.query;
     if (analysis.query) analysis.query = analysis.query.trim().replace(/^['"]+|['"]+$/g, '').trim();
     if (primarySkillName) analysis.skill = primarySkillName;
-
-    const criteria: any = { skill_definition: skillDef };
-    
-    try {
-        const configs = await readConfig(session.user);
-        const cfg = findBestMatchConfig(configs, analysis.query, 'outcome');
-        
-        if (cfg) {
-             criteria.root_causes = cfg.root_causes;
-             criteria.key_actions = cfg.key_actions;
-             criteria.standard_answer_example = cfg.standard_answer;
-        }
-    } catch (e) { console.warn("Config load error", e); }
 
     let body = {};
     try {
@@ -321,9 +311,9 @@ export async function POST(
       user: session.user,
       
       is_skill_correct: false,
-      is_answer_correct: false,
-      answer_score: 0,
-      judgment_reason: "Evaluation in progress...",
+      is_answer_correct: undefined,
+      answer_score: undefined,
+      judgment_reason: undefined,
       force_judgment: false,
       skip_evaluation: true,
     });
@@ -370,30 +360,6 @@ export async function POST(
         }
     }
 
-    // --- Evaluation ---
-    if (analysis.query && analysis.final_result) {
-        let executionSteps: { name: string; description: string; type: string }[] | null = null;
-        try {
-            const matchRecord = await db.findExecutionMatch(executionId);
-            if (matchRecord?.extractedSteps) {
-                executionSteps = typeof matchRecord.extractedSteps === 'string' 
-                    ? JSON.parse(matchRecord.extractedSteps) 
-                    : matchRecord.extractedSteps;
-                console.log(`[End] Found ${executionSteps?.length || 0} execution steps for KA evaluation`);
-            }
-        } catch (e) {
-            console.warn(`[End] Failed to load execution steps for KA evaluation:`, e);
-        }
-
-        const judgmentResult = await judgeAnswer(analysis.query, criteria, analysis.final_result, session.user, executionSteps);
-        evaluation = {
-            is_skill_correct: false,
-            is_answer_correct: judgmentResult.is_correct,
-            answer_score: judgmentResult.score,
-            judgment_reason: judgmentResult.reason || 'Judged by Evaluation Model'
-        };
-    }
-
     const evaluatorAgentName = (body as any)?.agentName ?? (body as any)?.agent ?? null;
     const isEvaluatorTrace = isEvaluatorTraceRecord({
         agent: evaluatorAgentName,
@@ -407,12 +373,26 @@ export async function POST(
         console.log(`[End] Skipping analyzeFailures for evaluator trace ${taskId} (agent=${evaluatorAgentName || 'unknown'}) — evaluator output describes evaluated case, not this session`);
         failureAnalysis = { failures: [], skill_issues: [] };
     } else {
+        try {
+            const resultRun = await scheduleResultEvaluation(executionId, session.user);
+            const accuracy = resultRun.metrics.accuracy;
+            if (accuracy.score != null) {
+                evaluation = {
+                    is_skill_correct: false,
+                    is_answer_correct: accuracy.score >= 80,
+                    answer_score: accuracy.score / 100,
+                    judgment_reason: String(accuracy.evidence.reason || '结果准确性评测'),
+                };
+            }
+        } catch (error) {
+            console.warn(`[End] Result quality evaluation failed for ${executionId}:`, error);
+        }
         console.log(`[End] Calling analyzeFailures: skillName=${primarySkillName || 'none'}, skillDef=${skillDef ? 'present' : 'absent'}, answerScore=${evaluation.answer_score}`);
         failureAnalysis = await analyzeFailures(
             session.interactions,
             primarySkillName,
             skillDef,
-            evaluation.answer_score,
+            evaluation.answer_score ?? undefined,
             String(evaluation.judgment_reason || ""),
             analysis.query,
             analysis.final_result,

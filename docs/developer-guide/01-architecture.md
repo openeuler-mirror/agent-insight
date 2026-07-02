@@ -67,7 +67,8 @@
 | Agent 管理 | `/agents` | `api/agents/**`、`api/auth/**` |
 | 运行观测 · 链路追踪 | `/trace`（+`/details`） | `api/observe/**`、`engine/observability` |
 | 运行观测 · 智能诊断 | `/fault` | `api/fault/**`、`api/debug/**`、`engine/agent-debug` |
-| 运行观测 · 质量监控 | `/quality` **（未上线，nav `pending`）** | — |
+| 运行观测 · 质量监控 | `/quality` | `/api/quality/{agents,report,executions,backfill}` |
+| 运行观测 · 推理 Infra | `/infra`（+`/infra/sources`、`/infra/source/:id`） | `api/observe/infra/**`、`lib/infra`、`lib/ingest/vllm` |
 | 评测中心 · 评测数据集 | `/dataset` | `api/agent-datasets/**`、`engine/evaluation` |
 | 评测中心 · 评估器 | `/metrics` | `api/user-evaluators/**`、`engine/evaluation` |
 | 评测中心 · 评测执行 | `/eval` | `api/eval/**`、`api/evaluation/**`、`engine/evaluation` |
@@ -266,11 +267,12 @@ erDiagram
 
 ## 8. 部署架构（Deployment）
 
-`[确证]`：**核心服务无容器编排配置** —— 仓库内 `infra_signals` 只有 `skillbench/witty-integration/Dockerfile.{base,template}`（属基准测评子项目，非主服务部署）。主服务部署方式是：
+`[确证]`：核心服务提供基于 npm 包的 `Dockerfile`：镜像构建时从 npm 安装 `agent-insight@latest`（可通过 `AGENT_INSIGHT_VERSION` 构建参数固定版本），不复制源码；运行时由 `scripts/docker-entrypoint.sh` 初始化持久化目录、同步数据库 schema，并以前台进程启动 Next.js standalone server。所有运行时数据均以 `AGENT_INSIGHT_DATA_DIR` 为根：SQLite、Skill 附件、评测 runtime 文件默认落到 `/data/agent-insight/data/`，避免写入 Next.js standalone 目录。镜像同时显式导出 `OPENCODE_BIN=/app/node_modules/.bin/opencode`，以支持 `opencode-live` 评测在服务端容器内直接 spawn `opencode serve`。当前默认镜像走 SQLite-first 路线，不打包 OpenGauss 的 Python 依赖；若部署侧设置了 `DB_HOST`，entrypoint 会直接报错退出。主服务部署方式是：
 
 - **单 Node 进程**，`next start -p 3000`（`output: 'standalone'`）。
 - **CLI 安装器** `bin/cli.js` → `scripts/{install,start,stop,status,restart}.js`，供 `npx @witty-ai/skill-insight install` 一键装。
 - **进程管理脚本** `scripts/restart.sh`（生产）/ `scripts/restart_dev.sh`（开发）。
+- **容器部署**：`docker build --pull --no-cache -t agent-insight:npm-latest .` 后运行，默认暴露 3000，并将 `/data/agent-insight` 作为持久化根目录。
 - **客户端接入** 通过 `curl http://<host>:3000/api/ingest/setup | bash` 分发 watcher/插件到 Agent 宿主机。
 
 ```mermaid
@@ -280,6 +282,7 @@ flowchart LR
         sqlite[("SQLite data/*.db<br/>或外部 OpenGauss")]
         proc --- sqlite
     end
+    image["Docker image<br/>npm: agent-insight@latest"] --> proc
     subgraph agents["各 Agent 宿主机"]
         w["watcher / plugin<br/>（curl setup 安装）"]
     end

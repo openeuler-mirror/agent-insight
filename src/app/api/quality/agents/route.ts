@@ -8,8 +8,10 @@ export const dynamic = 'force-dynamic';
 
 export async function GET(req: Request) {
     try {
-        const { username } = await resolveUser(req);
         const url = new URL(req.url);
+        // 与全站口径一致：身份由前端 ?user= 携带（resolveUser 优先用 explicitUser，再退回 apiKey）。
+        // 不读则 username=null → listObservedAgentNames(undefined) 会越权返回全量 Agent。
+        const { username } = await resolveUser(req, url.searchParams.get('user') || undefined);
         const platform = url.searchParams.get('platform') || undefined;
 
         const names = await listObservedAgentNames(username ?? undefined);

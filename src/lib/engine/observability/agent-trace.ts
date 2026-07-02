@@ -93,6 +93,10 @@ export interface AgentEvent {
     args?: any;
     /** Output / result if recorded on the same interaction */
     output?: any;
+    /** Stable source call id for tool/skill/task events. */
+    toolCallId?: string;
+    /** Adapter-provided tool state, for example success/error/completed. */
+    toolStatus?: string;
     /** ms since epoch */
     startedAt?: number;
     completedAt?: number;
@@ -602,12 +606,21 @@ function interactionToEvents(it: RawInteraction, idx: number): AgentEvent[] {
             args = argStr;
         }
 
-        const kind: CallKind = name === 'task' ? 'task' : name === 'skill' ? 'skill' : 'tool';
+        const normalizedName = name.toLowerCase();
+        // `skill_tool` is jiuwen's dedicated skill-invocation tool; count it as a skill call
+        // (drives the per-agent Skill stat / timeline). Other frameworks don't emit it.
+        const kind: CallKind = normalizedName === 'task'
+            ? 'task'
+            : normalizedName === 'skill' || normalizedName === 'load_skill' || normalizedName === 'skill_view' || normalizedName === 'skill_tool'
+                ? 'skill'
+                : 'tool';
         const ev: AgentEvent = {
             kind,
             name,
             args,
             output: tc.output ?? tc.result,
+            toolCallId: tc.id,
+            toolStatus: tc.state,
             interaction: it,
             interactionIndex: idx,
             startedAt: toMsTimestamp(tc.timing?.started_at) ?? baseTs,

@@ -1,7 +1,73 @@
-import { normalizeClaudeOtlpTraces } from '@/lib/ingest/claude-otel/otlp-json';
-import { appendOtelTraceEvents } from '@/lib/ingest/claude-otel/spool';
+import { normalizeOtlpTraces } from '@/lib/ingest/otel/normalize';
+import { appendOtelTraceEvents } from '@/lib/ingest/otel/spool';
+import { decodeOtlpRequest, OtlpDecodeError } from '@/lib/ingest/otel/decode';
+import { isLangfuseOtlpTraceBody } from '@/lib/ingest/otel/langfuse';
+import { jiuwenServiceName } from '@/lib/ingest/otel/jiuwen/aggregate';
+import { ingestJiuwenOtlp } from '@/lib/ingest/otel/jiuwen/ingest';
 import { db } from '@/lib/storage/prisma';
 import { NextResponse } from 'next/server';
+
+type LangfuseCredentials = {
+  publicKey?: string;
+  secretKey?: string;
+  source: 'basic' | 'headers';
+};
+
+function langfuseCredentialsFromRequest(req: Request): LangfuseCredentials {
+  const auth = req.headers.get('authorization') || '';
+  if (auth.toLowerCase().startsWith('basic ')) {
+    try {
+      const decoded = Buffer.from(auth.slice('basic '.length).trim(), 'base64').toString('utf8');
+      const separator = decoded.indexOf(':');
+      if (separator >= 0) {
+        return {
+          publicKey: decoded.slice(0, separator).trim(),
+          secretKey: decoded.slice(separator + 1).trim(),
+          source: 'basic',
+        };
+      }
+      return { publicKey: decoded.trim(), source: 'basic' };
+    } catch {
+      return { source: 'basic' };
+    }
+  }
+
+  return {
+    publicKey: req.headers.get('x-langfuse-public-key')?.trim(),
+    secretKey: req.headers.get('x-langfuse-secret-key')?.trim(),
+    source: 'headers',
+  };
+}
+
+async function authenticateLangfuseCredentials(req: Request): Promise<string | undefined> {
+  const credentials = langfuseCredentialsFromRequest(req);
+  if (!credentials.publicKey || !credentials.secretKey) {
+    console.warn('[OTel] Rejected Langfuse trace ingest: missing public or secret key', {
+      source: credentials.source,
+      publicKey: credentials.publicKey || undefined,
+    });
+    return undefined;
+  }
+
+  const userRecord = await db.findUserByUsername(credentials.publicKey);
+  if (!userRecord) {
+    console.warn('[OTel] Rejected Langfuse trace ingest: unknown public key', {
+      source: credentials.source,
+      publicKey: credentials.publicKey,
+    });
+    return undefined;
+  }
+
+  if (userRecord.apiKey !== credentials.secretKey) {
+    console.warn('[OTel] Rejected Langfuse trace ingest: secret key does not match public key', {
+      source: credentials.source,
+      publicKey: credentials.publicKey,
+    });
+    return undefined;
+  }
+
+  return userRecord.username;
+}
 
 export async function POST(req: Request) {
   try {
@@ -17,25 +83,35 @@ export async function POST(req: Request) {
         console.warn(`[OTel] Invalid API Key provided: ${apiKey}`);
       }
     }
-
-    const contentType = req.headers.get('content-type') || '';
-    if (contentType.includes('application/x-protobuf')) {
-      return NextResponse.json(
-        { error: 'Protobuf not supported yet, please use OTEL_EXPORTER_OTLP_PROTOCOL=http/json' },
-        { status: 415 },
-      );
-    }
-
     let body: any;
     try {
-      body = await req.json();
+      body = await decodeOtlpRequest(req, 'traces');
     } catch (err) {
-      console.error('[OTel] Failed to parse request body:', err);
+      if (err instanceof OtlpDecodeError) {
+        return NextResponse.json({ error: err.message }, { status: err.status });
+      }
+      console.error('[OTel] Failed to decode request body:', err);
       return NextResponse.json({ error: 'Invalid Payload' }, { status: 400 });
     }
 
+    if (!authenticatedUser && isLangfuseOtlpTraceBody(body)) {
+      authenticatedUser = await authenticateLangfuseCredentials(req);
+      if (!authenticatedUser) {
+        return NextResponse.json({ error: 'Invalid Langfuse credentials' }, { status: 401 });
+      }
+      console.log(`[OTel] Langfuse Authenticated User: ${authenticatedUser}`);
+    }
+
+    // jiuwen (openJiuwen / JiuwenSwarm via agent-core) emits a nested agent.*/team.*
+    // span tree whose structural spans the flat claude-otel normalizer would drop,
+    // so it takes a self-contained raw-span path that rebuilds the agent tree.
+    if (jiuwenServiceName(body) === 'jiuwenswarm') {
+      const { received, sessions } = await ingestJiuwenOtlp(body, { user: authenticatedUser });
+      return NextResponse.json({ status: 'accepted', framework: 'jiuwenswarm', received, sessions });
+    }
+
     const receivedAt = new Date().toISOString();
-    const events = normalizeClaudeOtlpTraces(body, { receivedAt, authenticatedUser });
+    const events = normalizeOtlpTraces(body, { receivedAt, authenticatedUser });
     const { dirtySessionIds } = appendOtelTraceEvents(events);
 
     return NextResponse.json({
@@ -59,7 +135,7 @@ export async function OPTIONS(req: Request) {
     headers: {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-witty-api-key, x-api-key, baggage, traceparent, tracestate',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-witty-api-key, x-api-key, x-langfuse-public-key, x-langfuse-secret-key, x-langfuse-sdk-name, x-langfuse-sdk-version, baggage, traceparent, tracestate',
     },
   });
 }

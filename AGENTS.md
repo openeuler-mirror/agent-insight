@@ -4,6 +4,7 @@
 
 > 项目简介：Agent Skill 评估与观测平台 —— 量化评估 Skills 在 Agent 上的实际运行效果。
 > 技术栈：Next.js (App Router) + Prisma + TypeScript + Tailwind。
+> 本地默认数据目录：`~/.agent-insight/data`；默认 SQLite 数据库：`~/.agent-insight/data/witty_insight.db`。WSL 场景下对应 `\\wsl.localhost\<发行版>\home\<user>\.agent-insight\data`。
 
 ***
 

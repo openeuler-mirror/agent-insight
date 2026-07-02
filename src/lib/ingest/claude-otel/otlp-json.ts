@@ -60,6 +60,14 @@ function asOptionalString(value: any): string | undefined {
   return s ? s : undefined;
 }
 
+function firstOptionalString(...values: any[]): string | undefined {
+  for (const value of values) {
+    const s = asOptionalString(value);
+    if (s) return s;
+  }
+  return undefined;
+}
+
 function asOptionalNumber(value: any): number | undefined {
   if (value === undefined || value === null || value === '') return undefined;
   const n = Number(value);
@@ -70,6 +78,13 @@ function asNumber(value: any, fallback = 0): number {
   if (value === undefined || value === null || value === '') return fallback;
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
+}
+
+function firstDefined(...values: any[]): any {
+  for (const value of values) {
+    if (value !== undefined && value !== null && value !== '') return value;
+  }
+  return undefined;
 }
 
 function nanoToBigInt(value: any): bigint {
@@ -144,7 +159,11 @@ export function normalizeClaudeOtlpTraces(
       asOptionalString(resource['user.id']) ||
       asOptionalString(resource['enduser.id']);
     const serviceInstanceId = asOptionalString(resource['service.instance.id']);
-    const resourceSessionId = asOptionalString(resource['session.id']);
+    const resourceSessionId = firstOptionalString(
+      resource['session.id'],
+      resource['session_id'],
+      resource['hermes.session_id'],
+    );
     const scopeSpans = Array.isArray(resourceSpan?.scopeSpans) ? resourceSpan.scopeSpans : [];
 
     for (const scopeSpan of scopeSpans) {
@@ -157,14 +176,36 @@ export function normalizeClaudeOtlpTraces(
           if (!isGenAI && !isTool) continue;
 
           const traceId = asOptionalString(span?.traceId);
-          const explicitSessionId = resourceSessionId || asOptionalString(attributes['session.id']);
+          const explicitSessionId = firstOptionalString(
+            resourceSessionId,
+            attributes['session.id'],
+            attributes['session_id'],
+            attributes['hermes.session_id'],
+            attributes['correlation.id'],
+          );
           let sessionId = explicitSessionId || serviceInstanceId || traceId;
           if (sessionId === 'unknown' && traceId) sessionId = traceId;
           if (!sessionId) continue;
 
-          const inputTokens = asNumber(attributes['gen_ai.usage.input_tokens'] ?? attributes['llm.usage.prompt_tokens']);
-          const outputTokens = asNumber(attributes['gen_ai.usage.output_tokens'] ?? attributes['llm.usage.completion_tokens']);
-          const reasoningTokens = asNumber(attributes['gen_ai.usage.reasoning_tokens']);
+          const inputTokens = asNumber(firstDefined(
+            attributes['gen_ai.usage.input_tokens'],
+            attributes['llm.usage.prompt_tokens'],
+            attributes['llm.token_count.prompt'],
+          ));
+          const outputTokens = asNumber(firstDefined(
+            attributes['gen_ai.usage.output_tokens'],
+            attributes['llm.usage.completion_tokens'],
+            attributes['llm.token_count.completion'],
+          ));
+          const reasoningTokens = asNumber(firstDefined(
+            attributes['gen_ai.usage.reasoning_tokens'],
+            attributes['llm.token_count.reasoning'],
+          ));
+          const explicitTotalTokens = asOptionalNumber(firstDefined(
+            attributes['gen_ai.usage.total_tokens'],
+            attributes['llm.usage.total_tokens'],
+            attributes['llm.token_count.total'],
+          ));
           const startTimeNano = nanoToBigInt(span?.startTimeUnixNano);
           const endTimeNano = nanoToBigInt(span?.endTimeUnixNano);
           const latencyMs = endTimeNano > startTimeNano
@@ -182,13 +223,17 @@ export function normalizeClaudeOtlpTraces(
             kind: isTool ? 'tool' : 'llm',
             serviceName,
             user: resourceUser,
-            model: asOptionalString(attributes['gen_ai.request.model']) ||
-              asOptionalString(attributes['llm.request.model']),
+            model: firstOptionalString(
+              attributes['gen_ai.request.model'],
+              attributes['llm.request.model'],
+              attributes['llm.model_name'],
+              attributes['gen_ai.response.model'],
+            ),
             usage: {
               input_tokens: inputTokens,
               output_tokens: outputTokens,
               reasoning_tokens: reasoningTokens || undefined,
-              total_tokens: inputTokens + outputTokens,
+              total_tokens: explicitTotalTokens ?? (inputTokens + outputTokens + reasoningTokens),
             },
             latencyMs,
             startTimeMs,

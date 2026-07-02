@@ -15,10 +15,11 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { resolveAgentInsightDataPath } from '../src/lib/env';
 
-// 防御:DATABASE_URL 未注入时回落到仓库内 SQLite(Prisma 相对 file: 以 schema.prisma 目录为基准)。
+// 防御:DATABASE_URL 未注入时回落到统一运行时 SQLite。
 if (!process.env.DATABASE_URL) {
-    const dbPath = path.resolve(process.cwd(), 'data/witty_insight.db');
+    const dbPath = resolveAgentInsightDataPath('witty_insight.db');
     process.env.DATABASE_URL = `file:${dbPath}`;
 }
 

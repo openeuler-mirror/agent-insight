@@ -213,27 +213,6 @@ function FilterBar({
                 onChange={setFilterOwnership}
                 options={ownershipOptions}
             />
-
-            <div style={{ flex: 1 }} />
-
-            {/* Supported platforms notice */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ fontSize: 11, color: 'var(--foreground-muted)' }}>
-                    <Term id="platform" label="支持平台" />
-                </span>
-                <span style={{
-                    fontSize: 11, padding: '2px 8px', borderRadius: 4,
-                    background: 'var(--primary-subtle)',
-                    color: 'var(--primary)',
-                    fontWeight: 500,
-                    border: '1px solid color-mix(in srgb, var(--primary) 18%, transparent)',
-                }}>
-                    opencode
-                </span>
-                <span style={{ fontSize: 11, color: 'var(--foreground-muted)', opacity: 0.6 }}>
-                    · 更多接入中
-                </span>
-            </div>
         </div>
     );
 }

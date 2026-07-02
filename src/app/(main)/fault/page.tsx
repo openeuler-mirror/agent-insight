@@ -1719,6 +1719,21 @@ function TreeNodeRow({
                         </div>
                         {/* Status dot */}
                         <div style={{ width: 7, height: 7, borderRadius: '50%', background: statusColor, boxShadow: `0 0 0 2px ${statusGlow}`, flexShrink: 0 }} />
+                        <span
+                            title={locale === 'zh' ? `左侧节点 #${node.step}` : `Trace node #${node.step}`}
+                            style={{
+                                width: 34,
+                                flexShrink: 0,
+                                textAlign: 'right',
+                                fontFamily: 'var(--font-mono)',
+                                fontSize: 9.5,
+                                fontWeight: 700,
+                                fontVariantNumeric: 'tabular-nums',
+                                color: isHighlighted ? 'var(--primary)' : 'var(--foreground-muted)',
+                            }}
+                        >
+                            #{node.step}
+                        </span>
                         {/* Type badge */}
                         {badge && (
                             <span style={{ fontFamily: 'var(--font-mono)', fontSize: 9, fontWeight: 700, padding: '1px 4px', borderRadius: 3, background: badge.bg, color: badge.color, flexShrink: 0, letterSpacing: '0.02em' }}>

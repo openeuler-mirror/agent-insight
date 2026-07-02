@@ -1,9 +1,11 @@
-import { readConfig, saveExecutionRecord, findBestMatchConfig, extractInvokedSkillsFromSessionInteractions } from '@/lib/storage/data-service';
+import { saveExecutionRecord, extractInvokedSkillsFromSessionInteractions } from '@/lib/storage/data-service';
+import { scheduleResultEvaluation } from '@/lib/engine/evaluation/result-quality-evaluator';
 import { isDeletedOpencodeSessionId } from '@/lib/ingest/opencode-deleted-sessions';
 import { analyzeDynamicOnly } from '@/lib/engine/observability/flow-parser';
-import { analyzeFailures, analyzeSession, InvokedSkill, judgeAnswer, normalizeInteractions } from '@/lib/engine/evaluation/judge';
+import { analyzeFailures, analyzeSession, InvokedSkill, normalizeInteractions } from '@/lib/engine/evaluation/judge';
 import { isEvaluatorTraceRecord } from '@/lib/evaluator-agent';
 import { db, prisma } from '@/lib/storage/prisma';
+import { normalizeEndpointUrl } from '@/lib/infra/endpoint-resolve';
 import { debounceByKey } from '@/lib/ingest/upload-analysis-debouncer';
 import { getUserSettings } from '@/lib/storage/server-config';
 import { assertActive, finish, startOrReplace, EvaluationCancelledError } from '@/lib/evaluation-task-manager';
@@ -112,6 +114,10 @@ export async function POST(request: Request) {
     }
 
     console.log(`[Upload-API] 📥 Received data from ${data.framework || 'unknown'}: task_id=${data.task_id}, query=${data.query?.substring(0, 50)}..., user=${username} (via ${userResolutionPath})`);
+
+    if (data.endpoint) {
+        data.endpoint = normalizeEndpointUrl(data.endpoint) ?? undefined;
+    }
 
     if (data.framework === 'opencode' && data.task_id && isDeletedOpencodeSessionId(data.task_id)) {
         console.log(`[Upload-API] 🪦 Skipping deleted opencode session: task_id=${data.task_id}`);
@@ -349,7 +355,7 @@ async function processUploadAsync(data: any, username: any, normalized: any, int
 
     data.skip_evaluation = true;
     data.force_judgment = false;
-    await saveExecutionRecord(data);
+    const initialSave = await saveExecutionRecord(data);
     assertActive(username, taskId, runId);
 
     try {
@@ -362,45 +368,6 @@ async function processUploadAsync(data: any, username: any, normalized: any, int
         }
     } catch (e) {
         console.warn(`[Upload-Async] Auto-parse dynamic flow error for ${data.task_id}:`, e);
-    }
-
-    if (data.query && data.final_result) {
-        const criteria: any = { skill_definition: skillDef };
-        let cfg = undefined;
-        try {
-            const configs = await readConfig(username);
-            assertActive(username, taskId, runId);
-            cfg = findBestMatchConfig(configs, data.query, 'outcome');
-            if (cfg) {
-                 criteria.root_causes = cfg.root_causes;
-                 criteria.key_actions = cfg.key_actions;
-                 criteria.standard_answer_example = cfg.standard_answer;
-            }
-        } catch (e) { console.warn("Config load error", e); }
-
-        if (cfg) {
-            let executionSteps: { name: string; description: string; type: string }[] | null = null;
-            try {
-                const matchRecord = await db.findExecutionMatch(data.task_id);
-                if (matchRecord?.extractedSteps) {
-                    executionSteps = typeof matchRecord.extractedSteps === 'string' 
-                        ? JSON.parse(matchRecord.extractedSteps) 
-                        : matchRecord.extractedSteps;
-                    console.log(`[Upload-Async] Found ${executionSteps?.length || 0} execution steps for KA evaluation`);
-                }
-            } catch (e) {
-                console.warn(`[Upload-Async] Failed to load execution steps for KA evaluation:`, e);
-            }
-            assertActive(username, taskId, runId);
-
-            const judgmentResult = await judgeAnswer(data.query, criteria, data.final_result, username, executionSteps);
-            assertActive(username, taskId, runId);
-            data.is_answer_correct = judgmentResult.is_correct;
-            data.answer_score = judgmentResult.score;
-            data.judgment_reason = judgmentResult.reason || 'Judged by Evaluation Model';
-        } else {
-            console.log(`[Upload-Async] No config match for query: "${data.query.substring(0, 20)}...". Skipping judgment to preserve potential existing score.`);
-        }
     }
 
     assertActive(username, taskId, runId);
@@ -417,6 +384,20 @@ async function processUploadAsync(data: any, username: any, normalized: any, int
         console.log(`[Upload-Async] Skipping analyzeFailures for evaluator trace ${taskId} (agent=${data.agentName || data.agent || 'unknown'}) — evaluator output describes evaluated case, not this session`);
         failureAnalysis = { failures: [], skill_issues: [] };
     } else {
+        try {
+            const executionId = initialSave.record.upload_id || data.upload_id || data.task_id;
+            if (executionId) {
+                const resultRun = await scheduleResultEvaluation(executionId, username);
+                const accuracy = resultRun.metrics.accuracy;
+                if (accuracy.score != null) {
+                    data.answer_score = accuracy.score / 100;
+                    data.is_answer_correct = accuracy.score >= 80;
+                    data.judgment_reason = String(accuracy.evidence.reason || '结果准确性评测');
+                }
+            }
+        } catch (e) {
+            console.warn(`[Upload-Async] Result quality evaluation failed for ${taskId}:`, e);
+        }
         failureAnalysis = await analyzeFailures(
             interactions,
             primarySkillName,

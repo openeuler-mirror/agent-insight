@@ -1,0 +1,11 @@
+id: agent-insight-observability
+name: agent-insight-observability
+version: 0.1.0
+description: Zero-code observability onboarding — wire JiuwenSwarm's telemetry config to agent-core's built-in OTLP exporter so agent/LLM/tool traces stream to agent-insight.
+author: agent-insight
+min_jiuwenswarm_version: "0.2.0"
+# 依赖留空：jiuwenswarm 的 pyproject 已声明 opentelemetry-exporter-otlp-proto-http，
+# 不让 loader 在产品进程里同步 pip-install（有风险）。非捆绑环境请手动补该包。
+dependencies: {}
+config_schema:
+  type: object

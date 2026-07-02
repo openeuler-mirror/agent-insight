@@ -1,8 +1,9 @@
 import fs from 'fs';
 import path from 'path';
+import { resolveAgentInsightDataPath } from '@/lib/env';
 import { prismaRaw } from '@/lib/storage/prisma';
 
-const DATA_DIR = path.join(process.cwd(), 'data');
+const DATA_DIR = resolveAgentInsightDataPath();
 const LEGACY_FILE = path.join(DATA_DIR, 'user_custom_evaluators.json');
 
 /**

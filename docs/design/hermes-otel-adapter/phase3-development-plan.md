@@ -1,13 +1,17 @@
 # Hermes 平台适配（OTel / OTLP 接入）— 开发计划（SDD）
-版本：v0.4
-最后更新：2026-06-09
+版本：v0.4.1
+最后更新：2026-06-10
 
-> 文档类型：Phase3 开发计划 ｜ base_commit：d72f05e（master）｜ 更新时间：2026-06-09 ｜ 状态：待 Phase3 评审（v0.4 refine：补客户端插件 + 对齐同批两线）
+> 文档类型：Phase3 开发计划 ｜ base_commit：d72f05e（master）｜ 更新时间：2026-06-10 ｜ 状态：待 Phase3 评审（v0.4.1：补客户端插件一键安装闭环 + 对齐同批两线）
 >
 > **v0.4 关键修订**（详见 [Phase2 §2.0/§8.4](phase2-requirements-design.md) 与 [Phase1 v0.4](phase1-requirements-analysis.md)）：
 > 1. **新增客户端插件接入任务**（T000）：hermes 内核无 OTel，**复用开源 `briancaffey/hermes-otel`** 配 `otlp` 后端指向平台——这是 v0.3 完全缺失的上游适配器。
 > 2. **服务端落同批两线目标架构**：traces 端点退薄壳（`otel-spool-consumer`），hermes 映射下沉到 `traces-aggregator`；skill/整形走 `framework-adapter-registry` 的 `getAdapter('hermes')`，**不改 route 内联落库、不加 dispatcher 裸分支**。
 > 3. **撤销强 401 收敛**（端点鉴权归 spool-consumer 后续轮）；**框架清单并入 registry 的 `listFrameworks()`**（取消独立 `frameworks.ts`）。
+>
+> **v0.4.1 补充**：T000/T005 纳入「一键 curl 安装」设计。脚本必须以 `$HERMES_HOME` 探测 Hermes 正式安装目录和 runtime venv，自动安装/启用 `hermes_otel`，把 OTel 依赖装进 Hermes 自身 venv，并写入/提示 `otlp` 后端配置；不得 hardcode README 示例的 `~/git/hermes-agent/venv/bin/pip`。
+>
+> **v0.4.1 编码校正**：据 `hermes-otel` 代码核实，当前插件使用 `opentelemetry-exporter-otlp-proto-http`，首次真实上报可能是 OTLP/HTTP protobuf。平台当前 JSON-only 端点若返回 415，不视为插件安装失败，而是进入后续服务端 protobuf 支持或临时 capture/proxy 取样的技术决策。
 >
 > **跨线依赖（同批未开发，需协调落地次序）**：
 > - 依赖 `otel-spool-consumer` 提供：薄壳 traces 端点、`traces-aggregator.aggregateOtelTraceSession`、`OtelTraceEvent` 类型、后台消费者 + 检查点。hermes 把纯函数插进 aggregator。
@@ -23,7 +27,7 @@
 | **Plan Type** | New Feature Development（北向多平台适配） |
 | **Estimated Effort** | Medium |
 | **Parallel Execution** | YES - 2 Waves（+ FINAL）|
-| **Critical Path** | T001 → T002 → T003 → F1-F4 |
+| **Critical Path** | T000 → T001 → T002 → T003 → F1-F4 |
 
 ## §2 Change Scope
 
@@ -37,17 +41,18 @@
 ### 2.2 Key Clarifications
 
 - 适配深度：观测/链路追踪为本期核心(P0)，评测随 Execution 入库承接(P1/P2)，Skill 优化为未来（用户未答弹窗，按默认假设推进）。
-- OTLP 编码：HTTP/JSON 为主路径复用现有端点；protobuf/gRPC 仅显式拒绝 + 可扩展位，不实现。
+- OTLP 编码：平台现有端点以 HTTP/JSON 为主路径；但 `hermes-otel` 当前实际使用 OTLP/HTTP protobuf exporter。Phase 0 真实上报需先确认是否 415；若 415，后续在服务端 protobuf 解码与客户端侧临时 capture/proxy 间选型。
 - span 语义：以 hermes-otel 插件实际发出的**双约定属性**（OpenInference + OTel GenAI）为准；以映射表 + 降级保留兜底，**交付前需真实样本校准（T000/T001）**。
 - 接入引导：提供（安装脚本四副本，**onboard:'plugin'** —— 插件安装步骤 + otlp 后端配置块，引用 registry `listFrameworks()`）。
 - **客户端（v0.4）**：hermes 内核无 OTel，**复用开源 `briancaffey/hermes-otel`** 配 `otlp` 后端指向平台，平台不写客户端代码。
+- **一键安装（v0.4.1）**：setup/curl 引导需要替用户完成插件安装、Hermes runtime venv 依赖安装和 OTLP 配置探测；路径以 `$HERMES_HOME` 为根，不假设 `~/git/hermes-agent`。
 - 关键设计决策（v0.4）：零 schema 迁移；可单测 OTLP 适配层（**由 traces-aggregator 调用**）；**服务端落 spool-consumer 管线 + registry 查表**；**撤销强 401 收敛**（端点鉴权归 spool-consumer 后续轮）。
 
 ### 2.3 Module Change Details
 
 | Status | Module | Change Description | Constraints |
 |------|------|----------|------|
-| 🔵 External | **`briancaffey/hermes-otel`（客户端插件，复用开源）** | 上游适配器：hook→Span→双父栈重建树→双约定属性→OTLP 导出。**平台不写代码**，仅配 `otlp` 后端 + 写接入规约 | 纯观察者；不 fork（缺口确认后再评估最小 fork）|
+| 🔵 External | **`briancaffey/hermes-otel`（客户端插件，复用开源）** | 上游适配器：hook→Span→双父栈重建树→双约定属性→OTLP 导出。**平台不写代码**，但 setup/curl 需要自动安装插件、安装 Hermes runtime OTel 依赖、写入/提示 `otlp` 后端配置 | 纯观察者；不 fork（缺口确认后再评估最小 fork）；路径探测以 `$HERMES_HOME` 为根 |
 | 🟢 New | `src/lib/ingest/otel/`（otel-trace-mapper / semantic-mapping / framework-resolver / payload-guard / **agent-semantics**）| OTLP span→内部模型映射、**双约定**语义兜底、framework 解析、体量防护、agent 身份/skill 标记契约 | 纯函数、无 DB I/O；**由 `traces-aggregator` 调用，不由 route 调用** |
 | 🟢 New | `src/lib/ingest/adapters/hermes.ts`（registry 线文件，hermes 填充）| hermes `FrameworkAdapter`：`descriptor{onboard:'plugin'}` + `extractSkills` + `capabilities.subagentTree`/整形 | 注册即生效；**不在 dispatcher 加裸分支** |
 | ⚪ 取消 | ~~`src/lib/ingest/frameworks.ts`~~ | **取消**——框架清单并入 registry 的 `listFrameworks()`（单一出处）| 与 registry §3 对齐，避免两套清单 |
@@ -60,7 +65,7 @@
 | ⚪ 不改(registry 线) | `src/lib/storage/data-service.ts::extractInvokedSkillsFromSessionInteractions`（:476 dispatcher）| registry 线已缩为 `getAdapter(fw).extractSkills?.(n) ?? null`；**hermes 不加 `fw==='hermes'` 分支**，靠注册 adapter 生效 | 禁裸分支（registry 红线）|
 | 🟢 New | `extractSkillsWithVersionsFromHermesSession`（放 `interaction-utils.ts` 或 `adapters/hermes.ts`）| hermes OTLP 形状 skill 抽取（含版本 + 子 Agent 加载）；挂为 hermes adapter 的 `extractSkills` | 既有抽取函数冻结 |
 | ⚪ 不改(registry 线) | `src/app/api/eval/rejudge/route.ts`（:61）| registry 线已把它改走 dispatcher 并补回 openclaw；hermes **复用其结果** | 不重复改 |
-| 🟡 Modified | `src/app/api/ingest/setup/route.ts` + `setup/auto/route.ts` | 四副本加入 hermes（onboard:'plugin'）+ **插件安装步骤 + otlp 配置块**，引用 registry 的 `listFrameworks()` | bash/PS×setup/auto 四处一致；非「仅配 env」|
+| 🟡 Modified | `src/app/api/ingest/setup/route.ts` + `setup/auto/route.ts` | 四副本加入 hermes（onboard:'plugin'）+ **一键 curl 安装脚本/插件安装步骤 + otlp 配置块**，引用 registry 的 `listFrameworks()` | bash/PS×setup/auto 四处一致；非「仅配 env」；不得 hardcode `~/git/hermes-agent` |
 | 🟢 New | hermes-otel **客户端接入规约文档** | 插件安装 + `otlp` 后端配置（endpoint/key/service.name/协议/隐私开关）+ 默认属性约定记录 | 复用开源；平台不写客户端代码 |
 | 🔴 Protected | `opencode/claude/openclaw` 既有分支（建树/派生/注册/skill 抽取）| 不改 | 防回退 |
 | ⚪ Not Involved | `prisma/schema.prisma`、`otel/v1/logs`、`/v1/metrics` | 无迁移（agent 树/注册字段已存在）、不触碰 | 防误改 |
@@ -88,7 +93,7 @@
 
 - **Backend**: Next.js 16.1.4（App Router, Route Handlers）, Node.js ≥20, TypeScript 5.x
 - **DB/ORM**: Prisma 5.22 + SQLite（本期不迁移）
-- **Telemetry**: OpenTelemetry OTLP/HTTP-JSON（复用既有端点）
+- **Telemetry**: OpenTelemetry OTLP/HTTP；平台当前主路径为 JSON，hermes-otel 当前实际 exporter 为 proto-http，需在 Phase 0 验证编码兼容性
 - **Test**: Node test runner + tsx（项目既有），新增适配层单测
 
 ### 3.2 Core Decisions
@@ -115,7 +120,7 @@
 
 ### 3.4 Interface Contracts
 
-- **POST `/v1/traces`**（重写至 `/api/ingest/otel/v1/traces`，**薄壳受理**）：Header `x-witty-api-key`（解析 user，无效不阻塞，D-003 v0.4）+ `Content-Type: application/json`；Body OTLP `resourceSpans`（要求 `service.name=hermes`）；返回 `{status:'accepted'}`；错误码 400 畸形/缺 resourceSpans、413 超限、415 protobuf、append 失败非 2xx。
+- **POST `/v1/traces`**（重写至 `/api/ingest/otel/v1/traces`，**薄壳受理**）：Header `x-witty-api-key`（解析 user，无效不阻塞，D-003 v0.4）。JSON 路径为 `Content-Type: application/json` + OTLP `resourceSpans`（要求 `service.name=hermes`）；hermes-otel 当前 proto-http 上报若命中现有 JSON-only 端点，预期 415，后续需补 protobuf 解码或临时 capture/proxy。错误码 400 畸形/缺 resourceSpans、413 超限、415 protobuf、append 失败非 2xx。
 - 内部纯函数契约（IF-N01~N05、IF-M01、IF-R04 等，调用方为 traces-aggregator / registry）见 [Phase2 §6](phase2-requirements-design.md)。
 
 ## §4 Task Breakdown
@@ -217,8 +222,9 @@ Maximum Concurrency: Wave 2 (T008→T009/T010/T004 并行) + Wave 3 (T005/T006)
 **Core Objective**: 用开源 hermes-otel 插件让 hermes 端到端吐数据到平台，并产出真实 trace 样本与接入规约——这是上游适配器，也是所有服务端映射任务的事实输入。
 
 **Independent Validation Criteria**:
+- [ ] 一键安装脚本能在标准 Hermes 安装布局中探测 `$HERMES_HOME/hermes-agent/venv/bin/pip`，安装并启用 hermes-otel 插件，安装 OTel runtime 依赖，配置 `otlp` 后端。
 - [ ] 装好 hermes-otel 插件、配 `otlp` 后端指向平台后，跑一次 hermes 任务 → 看板出现 framework=hermes 会话（AC-014）
-- [ ] 产出 ≥1 条真实 OTLP/HTTP trace 原文 + 属性映射对照表
+- [ ] 产出 ≥1 条真实 OTLP/HTTP trace 原文或 protobuf 解码结果 + 属性映射对照表
 
 **Git Commit**: NO（客户端配置 + 文档，不改平台代码）
 
@@ -230,17 +236,23 @@ Maximum Concurrency: Wave 2 (T008→T009/T010/T004 并行) + Wave 3 (T005/T006)
 
    - **Delegate Subagent**: YES / researcher / Effort: Low-Medium / Parallelism: 阻塞 T001/T002/T007
    - **What to do**:
-     + 在一个 hermes 环境安装 `briancaffey/hermes-otel` 插件（`~/.hermes/plugins/hermes_otel/`），配置其**通用 `otlp` 后端**：`endpoint=…/api/ingest/otel/v1/traces`、`headers: x-witty-api-key`、`service.name=hermes`、`OTEL_EXPORTER_OTLP_PROTOCOL=http/json`（与服务端编码一致）。
+     + 验证一键安装策略：以 `HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"` 为根探测 Hermes 安装；优先使用 `$HERMES_HOME/hermes-agent/venv/bin/pip`，仅在不存在时 fallback 到 `~/git/hermes-agent/venv/bin/pip`、`~/agent/hermes-agent/venv/bin/pip` 等开发者布局；找不到 venv 时停止并给出可操作提示。
+     + 安装 `briancaffey/hermes-otel` 插件到 `$HERMES_HOME/plugins/hermes_otel/` 并启用（`hermes plugins install briancaffey/hermes-otel --enable`）；不要把用户手动 clone 的 `~/agent/hermes-otel` 当作自动发现目录。
+     + 将 OTel runtime 依赖安装到 Hermes runtime venv：优先执行 `"$HERMES_PIP" install -e "$HERMES_HOME/plugins/hermes_otel"`，必要时 fallback 到 README 中的 `opentelemetry-api`、`opentelemetry-sdk`、`opentelemetry-exporter-otlp-proto-http` 显式安装。
+     + 配置其**通用 `otlp` 后端**：`endpoint=…/api/ingest/otel/v1/traces` 或 `/v1/traces`、`headers: x-witty-api-key`、`resource_attributes.service.name=hermes`。写 `$HERMES_HOME/config.yaml` 前必须备份，且只改 hermes-otel 相关块。
+     + 编码兼容性验证：记录真实请求的 `Content-Type`。若为 `application/x-protobuf` 且平台返回 415，保留插件 debug/服务端日志，后续进入「服务端补 protobuf」或「临时 capture/proxy 解码」决策，不把它误判为插件安装失败。
+     + 输出自检信息：Hermes home、插件目录、pip 路径、OTel 包版本、endpoint、`service.name`、插件是否 enabled；API key 只脱敏展示，不明文打印。
      + 跑一次含 LLM/工具（最好含子 Agent + skill）的 hermes 任务，确认平台出现 framework=hermes 会话；抓取一条真实 OTLP trace 原文。
      + 产出**接入规约文档** `hermes-onboarding.md`：插件安装步骤、后端配置块、协议/隐私/采样开关、排障（无数据时先查「装没装插件 + 配没配后端」）。
      + 记录插件**实际发出的属性**（OpenInference 如 `llm.token_count.*`/`openinference.span.kind`、OTel GenAI 如 `gen_ai.usage.*`、agent/session span 命名、skill 是否带版本、是否有 `parentSpanId` 嵌套），写入 `hermes-trace-sample.md` 供 T002/T007。
-   - **Must NOT do**: 不 fork/改插件源码（缺口确认后才评估最小 fork）；不改平台代码；不臆造属性（拿不到真实环境时用插件源码/文档推断并显式标注「假设」）。
+   - **Must NOT do**: 不 fork/改插件源码（缺口确认后才评估最小 fork）；不改平台代码；不臆造属性（拿不到真实环境时用插件源码/文档推断并显式标注「假设」）；不把依赖装进系统 Python 或 agent-insight 自身 venv；不明文打印 API key。
    - **Parallelism Info**: Can Parallel: NO / Prerequisite: 平台可达 + 有效 key / Blocking: T001/T002/T007
    - **Reading List**:
      + External: `briancaffey/hermes-otel`（plugin.yaml / backends.py 的通用 otlp resolver / tracer.py 双约定）
      + Source: `docs/series-articles/hermes-otel-设计文档.md`（机制全解）
      + Pattern: `src/app/api/ingest/otel/v1/traces/route.ts` - 服务端当前接收形状
    - **Acceptance Criteria**:
+     + [ ] 安装脚本/手动验证记录证明：插件目录、Hermes runtime venv、OTel 依赖、`service.name=hermes` 均命中正确位置
      + [ ] 端到端：插件→平台，看板出现 framework=hermes 会话（AC-014）
      + [ ] `hermes-onboarding.md` 含可复制的安装步骤 + otlp 后端配置块
      + [ ] `hermes-trace-sample.md` 含真实/推断 trace + 属性对照（标注双约定命名与缺口）
@@ -266,7 +278,7 @@ Maximum Concurrency: Wave 2 (T008→T009/T010/T004 并行) + Wave 3 (T005/T006)
 
    - **Delegate Subagent**: YES / researcher / Effort: Low / Parallelism: 可与 T002 骨架并行（T002 映射表定稿依赖本任务结论）
    - **What to do**:
-     + 获取/构造一条真实 hermes 运行的 OTLP/HTTP-JSON trace（resourceSpans 原文），记录其 `service.name`、资源属性、span 属性键（是否 `gen_ai.*`/`llm.*`/`tool.name` 或自定义命名）、是否含 `session.id`、是否含父子 span。
+     + 获取/构造一条真实 hermes 运行的 OTLP/HTTP trace（JSON 原文或 protobuf 解码后的 resourceSpans），记录其 `service.name`、资源属性、span 属性键（是否 `gen_ai.*`/`llm.*`/`tool.name` 或自定义命名）、是否含 `session.id`、是否含父子 span。
      + 产出「hermes→内部模型」映射规约表（属性键对照 + skill 调用识别方式），供 T002 的 semantic-mapping 映射表与 T004 的 skill 抽取使用。
    - **Must NOT do**: 不改任何代码；不臆造属性命名（无法获取真实样本时，明确标注「假设」并给出最可能命名）。
    - **Parallelism Info**: Can Parallel: YES / Prerequisite: 无 / Blocking: T002(映射表定稿)、T004(skill 抽取)
@@ -465,7 +477,7 @@ Maximum Concurrency: Wave 2 (T008→T009/T010/T004 并行) + Wave 3 (T005/T006)
 **Core Objective**: 安装引导可用、子 Agent 链路层级展示。
 
 **Independent Validation Criteria**:
-- [ ] 安装脚本（bash/PS × setup/auto）均出现 Hermes 选项并输出配置指引（AC-006）
+- [ ] 安装脚本（bash/PS × setup/auto）均出现 Hermes 选项并输出一键 curl 安装命令 + 配置指引（AC-006）
 - [ ] 含父子 span 的 hermes 会话层级深度=上报深度（AC-003）
 
 **Git Commit**: YES — `feat(hermes): install guide and sub-agent hierarchy view`
@@ -474,21 +486,23 @@ Maximum Concurrency: Wave 2 (T008→T009/T010/T004 并行) + Wave 3 (T005/T006)
 
 ---
 
-- [ ] T005 安装脚本四副本加 hermes(onboard:'plugin') + 插件安装步骤/otlp 配置块 - `src/app/api/ingest/setup/route.ts`, `src/app/api/ingest/setup/auto/route.ts`（框架清单引用 registry `listFrameworks()`）
+- [ ] T005 安装脚本四副本加 hermes(onboard:'plugin') + 一键 curl 安装/otlp 配置块 - `src/app/api/ingest/setup/route.ts`, `src/app/api/ingest/setup/auto/route.ts`（框架清单引用 registry `listFrameworks()`）
 
    - **Delegate Subagent**: YES / coder / Effort: Medium / Parallelism: 与 T006 及 Wave 2 各任务并行（依赖 registry listFrameworks）
    - **What to do**:
      + **框架清单单一出处**：hermes descriptor 进 registry 的 `listFrameworks()`：`{id:'hermes', label:'Hermes', onboard:'plugin'}`。**不新建 `src/lib/ingest/frameworks.ts`**（v0.4 取消，避免与 registry 各搞一套）。
      + 四处选择器（setup bash :80-84 / PS :540-544；auto bash / PS）引用 `listFrameworks()` 加入 hermes。
-     + hermes 为 **plugin 接入**（非 Claude 那种「仅配 env」）：输出**两段**——①**hermes-otel 插件安装步骤**（装到 `~/.hermes/plugins/hermes_otel/`）；②**通用 `otlp` 后端配置块**（endpoint=`/v1/traces`、`x-witty-api-key`、`service.name=hermes`、`OTEL_EXPORTER_OTLP_PROTOCOL=http/json`）。内容引用 T000 的 `hermes-onboarding.md`。
-   - **Must NOT do**: 不改 opencode/claude/openclaw 既有安装分支逻辑；保持 bash/PS 四副本一致；不把 hermes 标为 `env`。
+     + hermes 为 **plugin 接入**（非 Claude 那种「仅配 env」）：输出**三段**——①**一键 curl 安装脚本**（探测 `$HERMES_HOME`、执行 `hermes plugins install ... --enable`、安装 Hermes runtime OTel 依赖、备份并更新 `$HERMES_HOME/config.yaml`）；②**手动 fallback 步骤**（装到 `$HERMES_HOME/plugins/hermes_otel/`，优先 `$HERMES_HOME/hermes-agent/venv/bin/pip`）；③**通用 `otlp` 后端配置块**（endpoint=`/v1/traces`、`x-witty-api-key`、`resource_attributes.service.name=hermes`、协议与服务端一致）。内容引用 T000 的 `hermes-onboarding.md`。
+     + 安装脚本要脱敏输出 API key，自检 Hermes home、插件目录、pip 路径、OTel 包版本、endpoint、`service.name`；如果找不到 Hermes runtime venv，停止并提示用户设置 `HERMES_HOME`，不得退到系统 Python。
+   - **Must NOT do**: 不改 opencode/claude/openclaw 既有安装分支逻辑；保持 bash/PS 四副本一致；不把 hermes 标为 `env`；不 hardcode `~/git/hermes-agent/venv/bin/pip`；不明文打印 API key。
    - **Parallelism Info**: Can Parallel: YES(T006, Wave 2 各任务) / Prerequisite: registry(listFrameworks) + T000(规约内容) / Blocking: 无
    - **Reading List**:
      + Pattern: `src/app/api/ingest/setup/route.ts:80-84,151-159,300-344` - 选择器、安装 flag、Claude env 块（结构参照，但 hermes 是 plugin 形态）
      + Cross-line: `docs/design/framework-adapter-registry` - listFrameworks 单一出处
      + Doc: `hermes-onboarding.md`（T000 产出）- 插件安装 + otlp 配置内容来源
    - **Acceptance Criteria**:
-     + [ ] 四处脚本生成结果均含 Hermes 选项（onboard:'plugin'）；选 hermes 后输出「插件安装步骤 + otlp 后端配置块」
+     + [ ] 四处脚本生成结果均含 Hermes 选项（onboard:'plugin'）；选 hermes 后输出「一键 curl 安装 + 手动 fallback + otlp 后端配置块」
+     + [ ] 一键脚本包含 `$HERMES_HOME` 探测、runtime venv 依赖安装、配置备份、API key 脱敏、自检输出
      + [ ] 框架清单只有 `listFrameworks()` 一个出处；opencode/claude/openclaw 安装路径无变化
 
 ---
@@ -624,6 +638,7 @@ Maximum Concurrency: Wave 2 (T008→T009/T010/T004 并行) + Wave 3 (T005/T006)
 - 新增 interaction 字段均可选，旧消费者忽略未知字段；不改既有字段语义。
 - 严守冻结区：`deriveSubagentExecutions`/`buildAgentCallTree`/`extractObservedAgentRegistrations` **函数体不动**、既有框架 skill 抽取分支、prisma schema、`/v1/logs`、`/v1/metrics`。
 - **核心范式（v0.4）**：**hermes 接入 = 复用 hermes-otel 插件（客户端）+ 适配层纯函数插进 `aggregateOtelTraceSession`（整形为 opencode 同构 interaction）+ `data-service.ts:1937` 解门限 + 注册 `adapters/hermes.ts`（extractSkills/capabilities）+ setup 加 hermes(plugin)**；共享建树/注册/dispatcher 只复用、不改；不内联落库、不加裸分支、不单独改鉴权。
+- **一键安装范式（v0.4.1）**：setup/curl 负责探测 `$HERMES_HOME`、安装并启用 `hermes_otel`、把 OTel 依赖装进 Hermes runtime venv、备份并更新 Hermes config；不得硬编码 `~/git/hermes-agent`，不得把依赖装入系统 Python 或 agent-insight venv，API key 输出必须脱敏。
 
 ---
 
@@ -636,5 +651,6 @@ Maximum Concurrency: Wave 2 (T008→T009/T010/T004 并行) + Wave 3 (T005/T006)
 | v0.3 | **refine：skill / subagent 一等公民**——新增 FR-010/011/012/013、NFR-007、BR-007/008/009、AC-011/012/013、D-004/D-005、§2.2.4/2.2.5、IF-N05、任务 T007~T010 与 T004 升级 |
 | v0.3.1（本合成） | 据代码二次核对修正两处 ERROR：①`extractObservedAgentRegistrations` 实为 `agent-registration.ts:14` 框架无关函数（不加分支、靠标记自动注册）；②`buildAgentCallTree` 无 parentSpanId 能力，改为「适配层把 hermes 整形为 opencode 同构 interaction，建树/派生/注册函数零改动」。同步收敛冻结区与任务边界（T008 整形为关键、T009 仅解 :1937 门、T010 多半零改、T006 纯 UI 消费）|
 | **v0.4（本次 refine）** | **补客户端插件 + 对齐同批两线**：① 新增 **Phase 0 / T000**（复用 `briancaffey/hermes-otel` 插件、配 otlp 后端、跑通端到端 + 出接入规约/真实样本）；② §2.3 模块表改：route 退薄壳、适配层由 traces-aggregator 调用、skill 注册 `adapters/hermes.ts`（不加 dispatcher 裸分支）、取消 `frameworks.ts`（并入 `listFrameworks()`）；③ Decision 2/2b/3 重写（aggregator 调用 / 复用插件 / 撤销强 401）；④ T002 加双约定、T003 改「接 aggregator + 端点薄壳 + 不自建并发锁」、T004 改注册 adapter、T005 改 plugin 接入；⑤ §4.3 覆盖矩阵加 FR-014/BR-010/011、Critical Path 加 T000、标注跨线依赖；⑥ §8 风险/编码范式/ F4 核验项全面对齐（无内联落库/无裸分支/无单独 401/无固化 TODO/单一框架清单）|
+| **v0.4.1** | 补齐 T000/T005 的一键 curl 安装闭环：`$HERMES_HOME` 探测、插件目录 `$HERMES_HOME/plugins/hermes_otel`、Hermes runtime venv 依赖安装、配置备份与 OTLP 后端写入、API key 脱敏、自检输出；修正顶部 Critical Path 从 T000 开始；补充 `hermes-otel` 实际使用 OTLP/HTTP protobuf exporter 的编码校正与 415 后续决策。 |
 
-> 注：本文件为三阶段 + refine + 代码核对修正的合成稿；v0.4 在 `.refine` 副本上修订，原 v0.3.1 文件保留以便生成变更记录。
+> 注：本文件为三阶段 + refine + 代码核对修正的合成稿；v0.4.1 在 v0.4 基础上补齐客户端一键安装闭环，原 v0.3.1 文件保留以便生成变更记录。

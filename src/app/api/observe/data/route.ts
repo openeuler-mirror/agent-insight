@@ -1,4 +1,5 @@
-import { listObservedAgentNames, listObservedSkills, listObservedTraceIds, readRecordPage, readRecords, saveExecutionRecord } from '@/lib/storage/data-service';
+import { listObservedAgentNames, listObservedFieldValues, listObservedSkills, listObservedTraceIds, readRecordPage, readRecords, saveExecutionRecord } from '@/lib/storage/data-service';
+import type { FilterClause } from '@/lib/filters/types';
 import { db, prismaRaw as prisma } from '@/lib/storage/prisma';
 import { NextResponse } from 'next/server';
 import { isActive } from '@/lib/evaluation-task-manager';
@@ -13,6 +14,10 @@ export const dynamic = 'force-dynamic';
 const DEFAULT_AUTO_EVAL_TRACE_STABLE_MS = 60_000;
 
 type TimestampCarrier = {
+    // hasAssistantOutput() reads role/content to detect a produced answer; the rest
+    // are the activity-timestamp fields getLatestTraceActivityMs() scans.
+    role?: unknown;
+    content?: unknown;
     timestamp?: unknown;
     createdAt?: unknown;
     completedAt?: unknown;
@@ -31,6 +36,8 @@ type SessionForReadiness = {
     interactions?: unknown;
     endTime?: unknown;
 };
+
+type TraceLifecycleStatus = 'running' | 'success' | 'failed';
 
 const opencodeCliExitCache = new Map<string, { value: boolean | null; expiresAt: number }>();
 let opencodeTelemetryIndexCache: {
@@ -97,6 +104,32 @@ function getLatestTraceActivityMs(interactions: TimestampCarrier[], fallbackTime
     return Math.max(fromInteractions, toMsTimestamp(fallbackTimestamp) || 0);
 }
 
+function toIsoTimestamp(value: unknown): string | null {
+    const ms = toMsTimestamp(value);
+    return ms != null && ms > 0 ? new Date(ms).toISOString() : null;
+}
+
+function getTraceLifecycle(completedAt: unknown): {
+    traceStatus: TraceLifecycleStatus;
+    traceCompletedAt: string | null;
+    traceStatusReason: string;
+} {
+    const completedIso = toIsoTimestamp(completedAt);
+    if (completedIso) {
+        return {
+            traceStatus: 'success',
+            traceCompletedAt: completedIso,
+            traceStatusReason: 'session-ended',
+        };
+    }
+
+    return {
+        traceStatus: 'running',
+        traceCompletedAt: null,
+        traceStatusReason: 'missing-completion-signal',
+    };
+}
+
 function isPidAlive(pid: number): boolean {
     if (!Number.isFinite(pid) || pid <= 0) return false;
     try {
@@ -147,9 +180,37 @@ function inferOpencodeCliExitedFromExistingTelemetry(taskId: string): boolean | 
     return setCache(true);
 }
 
+// 缺少可靠结束信号时的读侧兜底:轨迹已产出 assistant 输出后,静默超过稳定窗口即视为结束。
+// Claude Code / jiuwenswarm single-agent 没有 root span;Hermes/OpenCode 有显式完成信号,
+// 但旧接入或异常退出可能漏写 Session.endTime,需要 quiet-window 防止已完成 trace 长期停在"执行中"。
+export const QUIET_WINDOW_INFERRED_FRAMEWORKS = new Set(['claudecode', 'jiuwenswarm', 'opencode', 'hermes']);
+
+export function hasAssistantOutput(interactions: TimestampCarrier[]): boolean {
+    return interactions.some((interaction: any) => {
+        const role = String(interaction?.role || '').toLowerCase();
+        if (role !== 'assistant' && role !== 'subagent') return false;
+        return Boolean(String(interaction?.content || '').trim());
+    });
+}
+
+export function inferQuietWindowTraceCompletedAt(args: {
+    framework?: unknown;
+    explicitCompleted?: boolean;
+    latestActivityMs?: number;
+    quietLongEnough?: boolean;
+}): string | null {
+    const framework = String(args.framework ?? '').toLowerCase();
+    if (!QUIET_WINDOW_INFERRED_FRAMEWORKS.has(framework)) return null;
+    if (args.explicitCompleted) return null;
+    const latestActivityMs = args.latestActivityMs || 0;
+    if (!args.quietLongEnough || latestActivityMs <= 0) return null;
+    return new Date(latestActivityMs).toISOString();
+}
+
 async function getAutoEvalReadiness(record: Record<string, unknown>, baseUrl?: string | null) {
+    const framework = String(record.framework ?? '').toLowerCase();
     const hasFinalResult = Boolean(String(record.final_result ?? record.finalResult ?? '').trim());
-    if (!hasFinalResult) {
+    if (!hasFinalResult && !QUIET_WINDOW_INFERRED_FRAMEWORKS.has(framework)) {
         return {
             autoEvalReady: false,
             autoEvalWaitReason: 'missing-final-result',
@@ -169,10 +230,18 @@ async function getAutoEvalReadiness(record: Record<string, unknown>, baseUrl?: s
     }
 
     const interactions = parseInteractionList(session?.interactions);
+    if (!hasFinalResult && !hasAssistantOutput(interactions)) {
+        return {
+            autoEvalReady: false,
+            autoEvalWaitReason: 'missing-final-result',
+            traceLastActivityAt: null,
+            traceCompletedAt: null,
+        };
+    }
+
     const latestActivityMs = getLatestTraceActivityMs(interactions, record.timestamp);
     const completedAtMs = toMsTimestamp(session?.endTime);
     const stableMs = getAutoEvalStableMs();
-    const framework = String(record.framework ?? '').toLowerCase();
     const quietLongEnough = latestActivityMs > 0 && Date.now() - latestActivityMs >= stableMs;
     const explicitCompleted = completedAtMs != null && completedAtMs > 0;
     // 已有明确结束时间(endTime)的 session 就别再扫遥测了——它已经判完。这让"服务端自己跑完、已落
@@ -188,17 +257,14 @@ async function getAutoEvalReadiness(record: Record<string, unknown>, baseUrl?: s
             console.warn(`[Data-API] Failed to persist inferred opencode completion for ${taskId}`, error);
         }
     }
-    const autoEvalReady = framework === 'opencode'
-        ? explicitCompleted || opencodeCliExited === true
-        : explicitCompleted || quietLongEnough;
+    const quietWindowCompleted = QUIET_WINDOW_INFERRED_FRAMEWORKS.has(framework) && quietLongEnough;
+    const autoEvalReady = explicitCompleted || opencodeCliExited === true || quietWindowCompleted;
 
     return {
         autoEvalReady,
         autoEvalWaitReason: autoEvalReady
             ? null
-            : framework === 'opencode'
-                ? 'opencode-cli-not-exited'
-                : latestActivityMs > 0
+            : latestActivityMs > 0
                 ? 'trace-still-active'
                 : 'missing-trace-activity',
         traceLastActivityAt: latestActivityMs > 0 ? new Date(latestActivityMs).toISOString() : null,
@@ -206,7 +272,12 @@ async function getAutoEvalReadiness(record: Record<string, unknown>, baseUrl?: s
             ? new Date(completedAtMs).toISOString()
             : opencodeCliExited === true
                 ? new Date().toISOString()
-                : null,
+                : inferQuietWindowTraceCompletedAt({
+                    framework,
+                    explicitCompleted,
+                    latestActivityMs,
+                    quietLongEnough,
+                }),
     };
 }
 
@@ -250,6 +321,11 @@ export async function GET(request: Request) {
     if (facet === 'skills') {
         return NextResponse.json(await listObservedSkills(user));
     }
+    // facet=values&column=<col>：某分类列的观测值 + 件数,给过滤器值下拉(对标 langfuse SUGGESTIONS)。
+    if (facet === 'values') {
+        const column = searchParams.get('column') || '';
+        return NextResponse.json(await listObservedFieldValues(column, user));
+    }
 
     // 直查单条 Execution（用于"返回父执行 / 派生子 Agent 跳转"等仅需 task_id + 元数据的场景）。
     // 跳过 readRecords 的 ownership / pricing / session merge / evaluation snapshots enrichment——
@@ -284,6 +360,18 @@ export async function GET(request: Request) {
         return NextResponse.json({ traceIds });
     }
 
+    // filters=<JSON FilterClause[]>：统一过滤器模型(operator 模型)的子句,下推到 Prisma where。
+    const filtersParam = searchParams.get('filters');
+    let clauses: FilterClause[] | undefined;
+    if (filtersParam) {
+        try {
+            const parsed = JSON.parse(filtersParam);
+            if (Array.isArray(parsed)) clauses = parsed as FilterClause[];
+        } catch {
+            // 容忍 malformed:忽略,不影响其它过滤
+        }
+    }
+
     const recordFilters = {
         query,
         taskId,
@@ -295,6 +383,7 @@ export async function GET(request: Request) {
         includeSubagents,
         onlySubagents,
         parentExecutionId,
+        clauses,
     };
     const pageResult = paginated
         ? await readRecordPage(user, recordFilters, { attachEvaluations, page, pageSize, lightweight })
@@ -310,6 +399,20 @@ export async function GET(request: Request) {
     const recordTaskIdsForEvalLookup = Array.from(new Set(
         data.map(r => r.task_id || r.upload_id || '').filter(Boolean)
     ));
+    const sessionEndByTaskId = new Map<string, Date | null>();
+    if (recordTaskIdsForEvalLookup.length > 0) {
+        try {
+            const sessionRows = await prisma.session.findMany({
+                where: { taskId: { in: recordTaskIdsForEvalLookup } },
+                select: { taskId: true, endTime: true },
+            });
+            for (const row of sessionRows) {
+                sessionEndByTaskId.set(row.taskId, row.endTime);
+            }
+        } catch (e) {
+            console.warn('[Data-API] failed to fetch session lifecycle status:', (e as Error)?.message);
+        }
+    }
     const lastEvalByTaskId = new Map<string, { status: string; errorMessage: string | null; trajectoryScore: number | null }>();
     if (user && recordTaskIdsForEvalLookup.length > 0) {
         try {
@@ -340,10 +443,16 @@ export async function GET(request: Request) {
         const lastEval = recordTaskId ? lastEvalByTaskId.get(recordTaskId) : null;
         const last_eval_status = lastEval?.status ?? null;
         const last_eval_error = lastEval?.errorMessage ?? null;
+        const baseTraceLifecycle = getTraceLifecycle(recordTaskId ? sessionEndByTaskId.get(recordTaskId) : null);
         // 方案A: 统一轨迹分（聚合层产出）。前端 getTraceFlowScore/ScoredTrace 优先读它，
         // 没有(未评测/纯对齐)再回退 matchJson.overallScore。
         const trajectory_score = lastEval?.trajectoryScore ?? null;
         if (skipAutoEvalReady) {
+            const traceLifecycle = baseTraceLifecycle.traceStatus === 'success'
+                ? baseTraceLifecycle
+                : QUIET_WINDOW_INFERRED_FRAMEWORKS.has(String(record.framework ?? '').toLowerCase())
+                    ? getTraceLifecycle((await getAutoEvalReadiness(record, new URL(request.url).origin)).traceCompletedAt)
+                    : baseTraceLifecycle;
             return {
                 ...record,
                 is_evaluating,
@@ -351,9 +460,18 @@ export async function GET(request: Request) {
                 last_eval_error,
                 trajectory_score,
                 trajectoryScore: trajectory_score,
+                trace_status: traceLifecycle.traceStatus,
+                traceStatus: traceLifecycle.traceStatus,
+                trace_completed_at: traceLifecycle.traceCompletedAt,
+                traceCompletedAt: traceLifecycle.traceCompletedAt,
+                trace_status_reason: traceLifecycle.traceStatusReason,
+                traceStatusReason: traceLifecycle.traceStatusReason,
             };
         }
         const readiness = await getAutoEvalReadiness(record, new URL(request.url).origin);
+        const traceLifecycle = baseTraceLifecycle.traceStatus === 'success'
+            ? baseTraceLifecycle
+            : getTraceLifecycle(readiness.traceCompletedAt);
         return {
             ...record,
             is_evaluating,
@@ -361,11 +479,16 @@ export async function GET(request: Request) {
             last_eval_error,
             trajectory_score,
             trajectoryScore: trajectory_score,
+            trace_status: traceLifecycle.traceStatus,
+            traceStatus: traceLifecycle.traceStatus,
+            trace_completed_at: traceLifecycle.traceCompletedAt,
+            traceCompletedAt: traceLifecycle.traceCompletedAt,
+            trace_status_reason: traceLifecycle.traceStatusReason,
+            traceStatusReason: traceLifecycle.traceStatusReason,
             auto_eval_ready: readiness.autoEvalReady,
             autoEvalReady: readiness.autoEvalReady,
             auto_eval_wait_reason: readiness.autoEvalWaitReason,
             trace_last_activity_at: readiness.traceLastActivityAt,
-            trace_completed_at: readiness.traceCompletedAt,
         };
     }));
     

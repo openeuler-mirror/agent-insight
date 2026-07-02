@@ -302,7 +302,7 @@ Maximum Concurrency: Phase 1 有 4 个任务并行
    - **Delegate Subagent**: YES / coder / Medium / 可与 T001、T004 并行
    - **What to do**:
      + 新增 `readNewLinesSince(file, cursor) → { events, nextCursor }`：只取以 `\n` 结尾的整行区（`lastIndexOf('\n')`），自 `cursor.bytes` 起切片，逐行安全 JSON.parse（沿用现有坏行静默跳过 spool.ts:64），尾部半行不消费（Phase2 §4.1）。
-     + 新增 traces spool：`appendOtelTraceEvents(events, dir)` 写 `<dir>/<day>/traces.jsonl`；traces spool 目录 getter；列举复用 `listClaudeOtelSpoolFiles` 风格（区分 logs.jsonl / traces.jsonl）。
+     + 新增 traces spool：`appendOtelTraceEvents(events, dir)` 新写入 `<dir>/<day>/sessions/<safe-session>/traces.jsonl`；traces spool 目录 getter；列举递归查找 `traces.jsonl`，并继续兼容 legacy `<dir>/<day>/traces.jsonl`。
      + **不破坏** `appendClaudeOtelEvents` / `readClaudeOtelEventsForSession` 现有签名。
      + 单测：写 3 行 + 半行 → 读到 3 行、游标停在第 3 行末；再补全半行 → 读到第 4 行。
    - **Must NOT do**:

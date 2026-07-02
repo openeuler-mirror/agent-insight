@@ -1,13 +1,6 @@
 import { NextRequest } from 'next/server';
 import { streamSkillOptOpencode } from '@/lib/skill-opt-bridge';
-import type { SkillOptIssueLite } from '@/lib/engine/general-agent/skill-opt-prompt';
-import {
-  buildSkillOptIssueScope,
-  selectSkillOptIssues,
-  summarizeSkillOptScope,
-  resolveSkillOptScopeLimits,
-  type SkillOptScopeSummary,
-} from '@/lib/engine/general-agent/skill-opt-scope';
+import type { SkillOptIssueLite, SkillOptPlanItemLite } from '@/lib/engine/general-agent/skill-opt-prompt';
 import { prismaRaw } from '@/lib/storage/prisma';
 import { createBlockMirror } from '@/lib/chat/block-mirror';
 
@@ -29,10 +22,6 @@ export const dynamic = 'force-dynamic';
  *     userFeedback: string;
  *     modelId?: string;
  *     mock?: boolean;              // true → 回放固定脚本，不调 LLM
- *     scopeLimits?: {              // 可选；不传则读 env，再退回默认 5/5
- *       maxOpportunities?: number; // env: SKILL_OPT_MAX_OPPORTUNITIES
- *       maxFiles?: number;         // env: SKILL_OPT_MAX_FILES
- *     };
  *   }
  *
  * 持久化（skill-generator 同款）：
@@ -52,18 +41,7 @@ export async function POST(req: NextRequest) {
     return new Response(JSON.stringify({ error: 'Invalid JSON' }), { status: 400 });
   }
 
-  const {
-    user,
-    threadId,
-    skillName,
-    baseVersion,
-    checkedIssues,
-    userFeedback,
-    modelId,
-    baselineFiles,
-    mock,
-    scopeLimits,
-  } = body || {};
+  const { user, threadId, skillName, baseVersion, checkedIssues, userFeedback, modelId, baselineFiles, mock, planId } = body || {};
 
   const missing: string[] = [];
   if (!user) missing.push('user');
@@ -83,15 +61,49 @@ export async function POST(req: NextRequest) {
           category: typeof it.category === 'string' ? it.category : undefined,
           summary: String(it.summary),
           evidence: typeof it.evidence === 'string' ? it.evidence : undefined,
-          reasoning: typeof it.reasoning === 'string' ? it.reasoning : undefined,
-          dedupKey: typeof it.dedupKey === 'string' ? it.dedupKey : undefined,
-          occurrence: Number.isFinite(Number(it.occurrence)) ? Math.max(1, Math.trunc(Number(it.occurrence))) : undefined,
-          sourceKind: (['trace', 'fault', 'log', 'static'] as const).includes(it.sourceKind) ? it.sourceKind : undefined,
           improvementSuggestion: typeof it.improvementSuggestion === 'string' ? it.improvementSuggestion : undefined,
         }))
     : [];
 
   const feedback = typeof userFeedback === 'string' ? userFeedback : '';
+
+  // ── plan 模式：planId 有效时加载归并 plan 的可执行条目（core/reference 且未弃用），
+  // 注入 prompt 替代平铺 checkedIssues；conflict 未仲裁的条目不进 prompt。
+  let planItems: SkillOptPlanItemLite[] | undefined;
+  if (typeof planId === 'string' && planId.trim()) {
+    try {
+      const plan = await (prismaRaw as any).skillOptPlan.findUnique({
+        where: { id: planId.trim() },
+        include: { items: { orderBy: { rank: 'asc' } } },
+      });
+      if (!plan || plan.sessionId !== threadId) {
+        return new Response(JSON.stringify({ error: 'plan not found for this session' }), { status: 400 });
+      }
+      planItems = (plan.items || [])
+        .filter((it: any) => (it.route === 'core' || it.route === 'reference') && it.status === 'pending')
+        .map((it: any) => ({
+          id: it.id,
+          route: it.route,
+          title: it.title,
+          rationale: it.rationale,
+          severity: (['high', 'medium', 'low'] as const).includes(it.severity) ? it.severity : 'medium',
+          targetFile: it.targetFile ?? undefined,
+          anchorText: it.anchorText ?? undefined,
+          proposedEdit: it.proposedEdit ?? undefined,
+          prevalence: it.prevalence ?? undefined,
+        }));
+      if (planItems!.length === 0) {
+        return new Response(JSON.stringify({ error: 'plan has no executable items (all conflict/dismissed/backlog)' }), { status: 400 });
+      }
+      // plan 进入执行 → confirmed（应用完成由 iterations 路由置 applied）
+      if (plan.status === 'draft') {
+        await (prismaRaw as any).skillOptPlan.update({ where: { id: plan.id }, data: { status: 'confirmed' } });
+      }
+    } catch (err: any) {
+      console.warn('[skill-opt route] plan load failed:', err?.message || err);
+      return new Response(JSON.stringify({ error: 'failed to load plan' }), { status: 500 });
+    }
+  }
 
   // baselineFiles 只接 string→string，剔掉非法值；体积上限 2MB（防滥用）
   const baselineFilesNormalized: Record<string, string> | undefined = (() => {
@@ -111,20 +123,13 @@ export async function POST(req: NextRequest) {
     return Object.keys(out).length > 0 ? out : undefined;
   })();
 
-  const resolvedScopeLimits = resolveSkillOptScopeLimits(scopeLimits);
-  const optimizationScope = buildSkillOptIssueScope(
-    issuesNormalized,
-    resolvedScopeLimits,
-    baselineFilesNormalized?.['SKILL.md'],
-  );
-  const scopeSummary = summarizeSkillOptScope(optimizationScope);
-  const scopedIssues = selectSkillOptIssues(issuesNormalized, optimizationScope);
-
   const encoder = new TextEncoder();
 
   // ── 持久化前置：构造一条 user message 描述这次"开始优化"的请求。
-  // 用 issues + feedback 拼，让会话历史回看时知道用户每次点了什么。
-  const userMessageText = composeUserMessageText(issuesNormalized, feedback, scopeSummary);
+  // 用 issues/plan + feedback 拼，让会话历史回看时知道用户每次点了什么。
+  const userMessageText = planItems
+    ? composePlanUserMessageText(planItems, feedback)
+    : composeUserMessageText(issuesNormalized, feedback);
 
   // session 校验 + 落 user message + auto-title（skill-generator 同款逻辑，区别只是表名）
   let sessionExists = false;
@@ -166,8 +171,7 @@ export async function POST(req: NextRequest) {
             if (mode === 'text' && typeof payload === 'string') agentText += payload;
             send(mode, payload);
           };
-          trackedSend('optimization_scope', scopeSummary);
-          await runMockScript({ skillName, baseVersion, issues: scopedIssues, feedback, send: trackedSend });
+          await runMockScript({ skillName, baseVersion, issues: issuesNormalized, feedback, send: trackedSend });
           send('done', { reason: 'completed' });
         } catch (err: any) {
           try { send('error', err?.message || String(err)); } catch { /* closed */ }
@@ -213,10 +217,10 @@ export async function POST(req: NextRequest) {
           skillName,
           baseVersion,
           checkedIssues: issuesNormalized,
+          planItems,
           userFeedback: feedback,
           modelId,
           baselineFiles: baselineFilesNormalized,
-          optimizationScope,
           send: trackedSend,
         });
       } catch (err: any) {
@@ -255,23 +259,21 @@ export async function POST(req: NextRequest) {
  * 把 issues + feedback 拼成一条人类可读的 user message。
  * 历史会话回看时用户能清楚看到这次"开始优化"勾了什么 + 写了什么诉求。
  */
-function composeUserMessageText(
-  issues: SkillOptIssueLite[],
-  feedback: string,
-  scope?: SkillOptScopeSummary,
-): string {
+function composePlanUserMessageText(items: SkillOptPlanItemLite[], feedback: string): string {
+  const parts: string[] = [];
+  const core = items.filter(it => it.route === 'core').length;
+  const reference = items.length - core;
+  const summary = items.map(i => `[${i.severity}/${i.route}] ${i.id}: ${i.title}`).join('\n');
+  parts.push(`按归并优化计划执行（core ${core} 条 + reference ${reference} 条）：\n${summary}`);
+  if (feedback.trim()) parts.push(`附加诉求：${feedback.trim()}`);
+  return parts.join('\n\n');
+}
+
+function composeUserMessageText(issues: SkillOptIssueLite[], feedback: string): string {
   const parts: string[] = [];
   if (issues.length > 0) {
     const summary = issues.map(i => `[${i.severity}] ${i.id}: ${i.summary}`).join('\n');
     parts.push(`勾选了 ${issues.length} 个待优化点：\n${summary}`);
-  }
-  if (scope && (scope.selectedIssueIds.length > 0 || scope.deferredIssueIds.length > 0)) {
-    parts.push([
-      `本轮优化面收束：处理 ${scope.selectedIssueIds.length} 个，延后 ${scope.deferredIssueIds.length} 个。`,
-      scope.allowedRegions.length > 0
-        ? `允许编辑区域：${scope.allowedRegions.map(r => `${r.file}:${r.label}`).join('、')}`
-        : `允许编辑文件：${scope.allowedFiles.join('、') || '无'}`,
-    ].join('\n'));
   }
   if (feedback.trim()) {
     parts.push(`附加诉求：${feedback.trim()}`);

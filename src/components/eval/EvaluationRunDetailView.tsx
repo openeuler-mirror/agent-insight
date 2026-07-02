@@ -45,6 +45,14 @@ interface TrajectoryResult {
     resultEvaluationScore?: number | null;
     diagnostic?: unknown;
     rawAnalysis?: unknown;
+    traceInput?: string | null;
+    traceInputSource?: 'snapshot' | 'execution' | 'missing';
+    traceOutput?: string | null;
+    traceOutputSource?: 'snapshot' | 'execution' | 'missing';
+    traceFramework?: string | null;
+    traceModel?: string | null;
+    traceAgentName?: string | null;
+    traceTimestamp?: string | null;
     dimensionScores: TrajectoryDimensionScores | null;
     rootCauseStep: string | null;
     createdAt: string;
@@ -160,6 +168,29 @@ function fmtTime(s?: string | null): string {
 function formatTraceIdPreview(traceId: string | null | undefined): string {
     if (!traceId) return '--';
     return traceId.slice(0, 14) || '--';
+}
+
+function firstText(...values: unknown[]): string {
+    for (const value of values) {
+        if (typeof value !== 'string') continue;
+        const trimmed = value.trim();
+        if (trimmed) return trimmed;
+    }
+    return '';
+}
+
+function getTraceInputText(result: TrajectoryResult, exec?: ExecutionRecord): string {
+    return firstText(result.traceInput, exec?.query);
+}
+
+function getTraceOutputText(result: TrajectoryResult, exec?: ExecutionRecord): string {
+    return firstText(result.traceOutput, exec?.final_result);
+}
+
+function getTraceMetaText(result: TrajectoryResult, exec?: ExecutionRecord): string {
+    const framework = firstText(exec?.framework, result.traceFramework);
+    const model = firstText(exec?.model, result.traceModel);
+    return [framework, model].filter(Boolean).join(' · ');
 }
 
 export default function EvaluationRunDetailView({ runId }: { runId: string }) {
@@ -335,8 +366,8 @@ export default function EvaluationRunDetailView({ runId }: { runId: string }) {
                     <thead>
                         <tr style={{ background: COLORS.bgSoft, borderBottom: `1px solid ${COLORS.border}` }}>
                             <th style={thStyle(170, 'left')}>TRACE ID</th>
-                            <th style={thStyle(undefined, 'left')}>Trace 实际输入</th>
-                            <th style={thStyle(undefined, 'left')}>Trace 实际输出</th>
+                            <th style={thStyle(undefined, 'left')}>Trace 任务输入</th>
+                            <th style={thStyle(undefined, 'left')}>Trace 任务输出</th>
                             <th style={thStyle(80, 'center')}>评测状态</th>
                             <th style={thStyle(60, 'right')}>得分</th>
                             <th style={thStyle(170, 'left')}>根因步骤</th>
@@ -347,6 +378,11 @@ export default function EvaluationRunDetailView({ runId }: { runId: string }) {
                         {results.map(r => {
                             const traceId = r.taskId || r.executionId || '';
                             const exec = execMap.get(traceId);
+                            const traceInput = getTraceInputText(r, exec);
+                            const traceOutput = getTraceOutputText(r, exec);
+                            const traceMeta = getTraceMetaText(r, exec);
+                            const inputResolved = Boolean(r.traceInputSource);
+                            const outputResolved = Boolean(r.traceOutputSource);
                             return (
                                 <tr
                                     key={r.id}
@@ -366,31 +402,33 @@ export default function EvaluationRunDetailView({ runId }: { runId: string }) {
                                     <td style={{ ...tdStyle('left'), fontFamily: 'monospace', color: COLORS.textSecondary, whiteSpace: 'nowrap' }} title={traceId}>
                                         {formatTraceIdPreview(traceId)}
                                     </td>
-                                    <td style={{ ...tdStyle('left'), maxWidth: 280 }} title={exec?.query || ''}>
-                                        {exec ? (
+                                    <td style={{ ...tdStyle('left'), maxWidth: 280 }} title={traceInput}>
+                                        {traceInput ? (
                                             <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                                {exec.query || '(空)'}
+                                                {traceInput}
                                             </div>
-                                        ) : waitingForExecMeta ? (
+                                        ) : waitingForExecMeta && !inputResolved ? (
                                             <span style={{ color: COLORS.textDisabled }}>加载中...</span>
                                         ) : (
-                                            <span style={{ color: COLORS.textDisabled }}>(无 trace 输入)</span>
+                                            <span style={{ color: COLORS.textDisabled }}>未提取到任务输入</span>
                                         )}
                                     </td>
-                                    <td style={{ ...tdStyle('left'), maxWidth: 280 }} title={exec?.final_result || ''}>
-                                        {exec ? (
+                                    <td style={{ ...tdStyle('left'), maxWidth: 280 }} title={traceOutput}>
+                                        {traceOutput ? (
                                             <>
                                                 <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                                    {exec.final_result || '—'}
+                                                    {traceOutput}
                                                 </div>
-                                                <div style={{ fontSize: 10, color: COLORS.textDisabled, marginTop: 2 }}>
-                                                    {exec.framework} · {exec.model}
-                                                </div>
+                                                {traceMeta && (
+                                                    <div style={{ fontSize: 10, color: COLORS.textDisabled, marginTop: 2 }}>
+                                                        {traceMeta}
+                                                    </div>
+                                                )}
                                             </>
-                                        ) : waitingForExecMeta ? (
+                                        ) : waitingForExecMeta && !outputResolved ? (
                                             <span style={{ color: COLORS.textDisabled }}>加载中...</span>
                                         ) : (
-                                            <span style={{ color: COLORS.textDisabled }}>(无 trace 元数据)</span>
+                                            <span style={{ color: COLORS.textDisabled }}>未提取到任务输出</span>
                                         )}
                                     </td>
                                     <td style={tdStyle('center')}>

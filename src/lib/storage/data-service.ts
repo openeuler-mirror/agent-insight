@@ -1,6 +1,8 @@
 import fs from 'fs';
 import path from 'path';
+import { resolveAgentInsightDataPath } from '@/lib/env';
 import { judgeAnswer } from '@/lib/engine/evaluation/judge';
+import { normalizeEndpointUrl } from '@/lib/infra/endpoint-resolve';
 import { db, prisma, prismaRaw } from '@/lib/storage/prisma';
 import { getModelPricing, calculateCost, getModelContextWindow, DEFAULT_CACHE_READ_RATIO, DEFAULT_CACHE_CREATION_RATIO } from '@/lib/shared/model-config';
 import {
@@ -32,6 +34,8 @@ import { buildAgentCallTree, inferSubagentType, walkTree, type AgentNode } from 
 import { isEvaluatorAgentName } from '@/lib/evaluator-agent';
 import { getAdapter } from '@/lib/ingest/adapters/registry';
 import { normalizeInteractions } from '@/lib/shared/interaction-utils';
+import { buildPrismaWhere } from '@/lib/filters/to-prisma';
+import type { FilterClause } from '@/lib/filters/types';
 
 export interface InvokedSkill {
     name: string;
@@ -45,6 +49,29 @@ export interface InvokedSkill {
 const EXECUTION_SKILL_ENABLED = !process.env.DB_HOST;
 
 const SKILL_NAME_PATTERN = /^[a-zA-Z0-9_\-\.]+$/;
+
+export function inferUserQueryFromInteractions(interactions: unknown): string | undefined {
+    if (!Array.isArray(interactions)) return undefined;
+    for (const interaction of interactions) {
+        if (!interaction || typeof interaction !== 'object') continue;
+        const item = interaction as Record<string, any>;
+        if (String(item.role || '').toLowerCase() !== 'user') continue;
+        const content = typeof item.content === 'string' ? item.content.trim() : '';
+        if (content) return content;
+    }
+    return undefined;
+}
+
+export function shouldRefreshStoredQueryFromInteractions(
+    query: unknown,
+    framework: unknown,
+): boolean {
+    const current = typeof query === 'string' ? query.trim() : '';
+    if (!current) return true;
+    const fw = typeof framework === 'string' ? framework.trim().toLowerCase() : '';
+    if (!fw) return false;
+    return current.toLowerCase() === `${fw} session`;
+}
 
 /**
  * 从单个 AgentNode 抽取**本层 agent 自己显式调用**的 skill(kind==='skill',即 skill/load_skill;
@@ -145,7 +172,7 @@ async function persistExecutionSkills(
  */
 export function computeOwnSkills(framework: string | null | undefined, interactions: any[]): InvokedSkill[] {
     if (!Array.isArray(interactions) || interactions.length === 0) return [];
-    if (framework === 'opencode') {
+    if (framework === 'opencode' || framework === 'hermes' || framework === 'langfuse-langgraph') {
         const tree = buildAgentCallTree(interactions as any);
         return tree ? extractExplicitSkillsFromNode(tree) : [];
     }
@@ -227,6 +254,7 @@ export interface ExecutionRecord {
     cost?: number;
     latency?: number;
     timestamp?: string | Date;
+    trace_completed_at?: string | Date | null;
     final_result?: string;
     skill?: string;
     rootSkill?: InvokedSkill | null;
@@ -256,6 +284,8 @@ export interface ExecutionRecord {
     label?: string | null;
     user?: string | null;
     model?: string | null;
+    /** 真实推理源 URL（scheme://host:port），session↔infra 关联键。 */
+    endpoint?: string | null;
     agent?: string | null;
     agentName?: string | null;
     agentType?: string | null;
@@ -278,6 +308,50 @@ export interface ExecutionRecord {
     routing_evaluation?: RoutingEvaluationSnapshot;
     outcome_evaluation?: OutcomeEvaluationSnapshot;
     [key: string]: any;
+}
+
+function toTraceLifecycleMs(value: unknown): number | null {
+    if (value == null) return null;
+    if (value instanceof Date) return Number.isFinite(value.getTime()) ? value.getTime() : null;
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    if (/^\d+$/.test(trimmed)) {
+        const numeric = Number(trimmed);
+        return Number.isFinite(numeric) ? numeric : null;
+    }
+    const parsed = Date.parse(trimmed);
+    return Number.isFinite(parsed) ? parsed : null;
+}
+
+function inferTraceCompletionFromInteractions(interactions: unknown): Date | null {
+    if (!Array.isArray(interactions)) return null;
+    const latest = interactions
+        .flatMap((interaction) => {
+            const item = interaction && typeof interaction === 'object'
+                ? interaction as Record<string, unknown>
+                : {};
+            const timeInfo = item.timeInfo && typeof item.timeInfo === 'object'
+                ? item.timeInfo as Record<string, unknown>
+                : {};
+            const timing = item.timing && typeof item.timing === 'object'
+                ? item.timing as Record<string, unknown>
+                : {};
+            return [
+                toTraceLifecycleMs(timeInfo.completed),
+                toTraceLifecycleMs(timeInfo.created),
+                toTraceLifecycleMs(timing.completed_at),
+                toTraceLifecycleMs(timing.started_at),
+                toTraceLifecycleMs(item.completedAt),
+                toTraceLifecycleMs(item.completed_at),
+                toTraceLifecycleMs(item.timestamp),
+                toTraceLifecycleMs(item.createdAt),
+            ];
+        })
+        .filter((value): value is number => value != null && Number.isFinite(value) && value > 0)
+        .reduce((max, value) => Math.max(max, value), 0);
+    return latest > 0 ? new Date(latest) : null;
 }
 
 export interface RoutingMatchedSkill {
@@ -1059,7 +1133,7 @@ async function attachEvaluationSnapshots(
     };
 }
 
-const DATA_DIR = path.join(process.cwd(), 'data');
+const DATA_DIR = resolveAgentInsightDataPath();
 const EVALUATION_FILE = path.join(DATA_DIR, 'evaluation_result.json');
 const AUDIT_DATA_MUTATIONS = process.env.AUDIT_DATA_MUTATIONS === '1' || process.env.AUDIT_DATA_MUTATIONS === 'true';
 
@@ -1078,6 +1152,11 @@ interface ReadRecordFilters {
     onlySubagents?: boolean;
     /** 列出指定 root 下的所有 sub-agent */
     parentExecutionId?: string | null;
+    /**
+     * 统一过滤器模型子句(operator 模型,见 src/lib/filters)。只下推 pushable 实列
+     * (execution / observedAgents);skill / 计算列(status/ownership)由各自既有通道处理。
+     */
+    clauses?: FilterClause[];
 }
 
 interface ReadRecordsOptions {
@@ -1095,10 +1174,8 @@ interface ReadRecordsOptions {
 export async function listObservedAgentNames(user?: string): Promise<string[]> {
     const where: any = { isSubagent: false };
     if (user) {
-        where.OR = [
-            { user },
-            { user: null },
-        ];
+        // 只看 user=自己；无主(null)不可见(与 trace 列表口径一致)。
+        where.user = user;
     }
 
     const records = await db.findExecutions(where, { timestamp: 'desc' });
@@ -1122,7 +1199,7 @@ export async function listObservedSkills(user?: string): Promise<{ name: string;
     if (EXECUTION_SKILL_ENABLED) {
         try {
             const esWhere: any = {};
-            if (user) esWhere.OR = [{ user }, { user: null }];
+            if (user) esWhere.user = user;
             const rows = await prismaRaw.executionSkill.findMany({
                 where: esWhere,
                 select: { skillName: true, skillVersion: true },
@@ -1141,7 +1218,7 @@ export async function listObservedSkills(user?: string): Promise<{ name: string;
     if (byName.size === 0) {
         // 降级:从 Execution.skill / skillVersion 列汇总(OpenGauss 或尚未回填)。
         const where: any = {};
-        if (user) where.OR = [{ user }, { user: null }];
+        if (user) where.user = user;
         const records = await db.findExecutions(where, { timestamp: 'desc' }, { skill: true, skillVersion: true } as any);
         for (const r of records) {
             const name = String(r?.skill || '').trim();
@@ -1156,16 +1233,60 @@ export async function listObservedSkills(user?: string): Promise<{ name: string;
         .sort((a, b) => a.name.localeCompare(b.name));
 }
 
+/**
+ * 某个分类列的观测值 + 出现次数,给过滤器值下拉(facet)用 —— 对标 langfuse SUGGESTIONS 的「值 + 件数」。
+ * 仅允许白名单内的真实标量列 groupBy(防任意列注入);root 作用域、按 user 隔离,与其它 facet 口径一致。
+ */
+const FACETABLE_COLUMNS = new Set(['framework', 'agentName', 'model', 'subagentType']);
+export async function listObservedFieldValues(
+    column: string,
+    user?: string,
+): Promise<{ value: string; count: number }[]> {
+    // skill 不是 Execution 标量列:计数走 ExecutionSkill(与 skill 过滤同源,agent 作用域),
+    // 按 skillName 聚合(每 (executionId, skillName) 一行 ⇒ 近似「用到该 skill 的 trace 数」)。
+    if (column === 'skill') {
+        try {
+            const rows = await prismaRaw.executionSkill.groupBy({
+                by: ['skillName'],
+                where: user ? { user } : undefined,
+                _count: { executionId: true },
+            });
+            return rows
+                .map((r) => ({ value: String(r.skillName ?? ''), count: r._count.executionId ?? 0 }))
+                .filter((r) => r.value !== '')
+                .sort((a, b) => b.count - a.count);
+        } catch (e) {
+            console.warn('[listObservedFieldValues] skill groupBy failed:', (e as Error)?.message);
+            return [];
+        }
+    }
+    if (!FACETABLE_COLUMNS.has(column)) return [];
+    const where: any = { isSubagent: false, [column]: { not: null } };
+    if (user) where.user = user;
+    try {
+        const rows = await prismaRaw.execution.groupBy({
+            by: [column] as any,
+            where,
+            _count: { _all: true },
+        });
+        return rows
+            .map((r: any) => ({ value: String(r[column] ?? ''), count: r._count?._all ?? 0 }))
+            .filter((r: { value: string }) => r.value !== '')
+            .sort((a: { count: number }, b: { count: number }) => b.count - a.count);
+    } catch (e) {
+        console.warn('[listObservedFieldValues] groupBy failed:', column, (e as Error)?.message);
+        return [];
+    }
+}
+
 export async function listObservedTraceIds(
     user?: string,
     agentName?: string,
 ): Promise<string[]> {
     const where: any = { isSubagent: false };
     if (user) {
-        where.OR = [
-            { user },
-            { user: null },
-        ];
+        // 只看 user=自己；无主(null)不可见(与 trace 列表口径一致)。
+        where.user = user;
     }
     if (agentName) {
         where.agentName = agentName;
@@ -1566,10 +1687,9 @@ async function readRecordsInternal(
     const pageSize = options?.pageSize && Number.isFinite(options.pageSize) ? Math.max(1, Math.trunc(options.pageSize)) : 0;
     const where: any = {};
     if (user && !filters?.showAllUsers) {
-        where.OR = [
-            { user: user },
-            { user: null }
-        ];
+        // 严格按 owner 隔离：用户只看见 user=自己的记录；无主(user=null)记录不可见。
+        // 全看(ownership=all / admin)走 showAllUsers ⇒ 不加 user 过滤、返回全部。
+        where.user = user;
     }
 
     // 默认列表只显示 root execution；sub-agent 行通过 trace 视图下钻进入。
@@ -1578,7 +1698,17 @@ async function readRecordsInternal(
     const hasExplicitTaskIdFilter = !!(filters?.taskIds?.length || filters?.taskId);
     // 按 skill 筛选时走 ExecutionSkill(agent 作用域):结果应精确命中真正用到该 skill 的那一层,
     // 可能是 sub-agent 行,因此放开默认的 isSubagent=false 排除。
-    const skillFilterActive = EXECUTION_SKILL_ENABLED && filters?.skill !== undefined;
+    // skill 既可来自单值 filters.skill(旧路径 / ?skill= 深链),也可来自结构化过滤的
+    // `skill any of [...]` clause(左侧栏 facet 多选)。合并成一组 skillName 一次反查。
+    const skillNamesFromClauses = (filters?.clauses ?? [])
+        .filter((c) => c.column === 'skill' && (c.operator === 'any of' || c.operator === '='))
+        .flatMap((c) => (Array.isArray(c.value) ? c.value : c.value != null ? [c.value] : []))
+        .map((v) => String(v));
+    const skillNames = Array.from(new Set([
+        ...(filters?.skill !== undefined ? [String(filters.skill)] : []),
+        ...skillNamesFromClauses,
+    ]));
+    const skillFilterActive = EXECUTION_SKILL_ENABLED && skillNames.length > 0;
     if (filters?.onlySubagents === true) {
         where.isSubagent = true;
     } else if (
@@ -1601,22 +1731,32 @@ async function readRecordsInternal(
         where.taskId = filters.taskId;
         if (filters.framework) where.framework = filters.framework;
     } else if (filters?.query) {
-        where.query = filters.query;
+        const term = filters.query.trim();
+        if (term) {
+            // 文本搜索：trace 的 input(query) + output(finalResult) 子串模糊匹配
+            // （对齐 Langfuse 的 input/output 搜索语义）。两列 OR，再与其它过滤 AND。
+            // SQLite 注意：Prisma 在 SQLite 上不支持 mode:'insensitive'；但 LIKE 对 ASCII
+            // 默认大小写不敏感，中文无大小写概念，故名称/内容搜索天然可用。
+            where.OR = [
+                { query: { contains: term } },
+                { finalResult: { contains: term } },
+            ];
+        }
         if (filters.framework) where.framework = filters.framework;
     }
 
     if (skillFilterActive) {
-        // 反查 ExecutionSkill 得到真正用到该 skill(+可选版本)的 executionId 集合,再交给 Execution 主查询。
+        // 反查 ExecutionSkill 得到真正用到这些 skill(+可选版本)的 executionId 集合,再交给 Execution 主查询。
         // 索引 (skillName, skillVersion) 命中,与数据量解耦;失败则降级回旧主 skill 列匹配。
-        const esWhere: any = { skillName: filters!.skill };
+        const esWhere: any = { skillName: { in: skillNames } };
         if (filters?.skillVersion !== undefined) esWhere.skillVersion = filters.skillVersion;
-        if (user && !filters?.showAllUsers) esWhere.OR = [{ user }, { user: null }];
+        if (user && !filters?.showAllUsers) esWhere.user = user;
         try {
             const esRows = await prismaRaw.executionSkill.findMany({ where: esWhere, select: { executionId: true } });
             where.id = { in: Array.from(new Set(esRows.map((r: any) => r.executionId))) };
         } catch (e) {
             console.warn('[readRecords] ExecutionSkill filter failed, falling back to legacy skill column:', e);
-            where.skill = filters!.skill;
+            where.skill = { in: skillNames };
             if (filters?.skillVersion !== undefined) where.skillVersion = filters.skillVersion;
         }
     } else {
@@ -1627,6 +1767,19 @@ async function readRecordsInternal(
 
     if (filters?.agentName !== undefined) {
         where.agentName = filters.agentName;
+    }
+
+    // 统一过滤器(operator 模型)下推:FilterClause[] → Prisma where,AND 进主查询。
+    // 只下推 pushable 实列(execution/observedAgents);skill(executionSkill)/计算列(status/ownership)
+    // buildPrismaWhere 会放进 deferred,这里忽略——它们仍走各自既有通道(skillFilterActive / 前端二次过滤)。
+    if (filters?.clauses && filters.clauses.length > 0) {
+        const { where: clauseWhere, errors } = buildPrismaWhere(filters.clauses);
+        if (Array.isArray(clauseWhere.AND) && clauseWhere.AND.length > 0) {
+            where.AND = [...((where.AND as any[]) ?? []), ...clauseWhere.AND];
+        }
+        if (errors.length > 0) {
+            console.warn('[readRecords] ignored invalid filter clauses:', errors.map((e) => e.reason));
+        }
     }
 
     // dedup pass 统一走 light 投影(不取大字段 finalResult):heavy 模式的 finalResult 由
@@ -1788,6 +1941,28 @@ export function resolveImmutableSkillVersion(input: {
         return { resolved: existingSkillVersion, blocked: false };
     }
     return { resolved: existingSkillVersion, blocked: true };
+}
+
+/**
+ * 按 task_id 删除 Execution（可选 framework 守卫），返回删除行数。
+ * 用于清理"已被更完整记录取代"的孤儿：jiuwenswarm 早到批次先以单 agent task_id
+ * （jiuwen-<traceId>）落库，随后该 trace 被并入多 agent session（sess_…）后，原单 agent
+ * 记录需删除，否则界面重复出现并把首轮 llm/token 计两遍。ExecutionSkill 经 onDelete:Cascade
+ * 连带清理。
+ */
+export async function deleteExecutionsByTaskId(taskId: string, framework?: string): Promise<number> {
+    if (!taskId) return 0;
+    const where: any = { taskId };
+    if (framework) where.framework = framework;
+    try {
+        const count = await db.deleteExecutions(where);
+        if (count > 0 && AUDIT_DATA_MUTATIONS) {
+            console.warn(`[Data-Audit] deleteExecutionsByTaskId: taskId=${taskId} framework=${framework ?? '*'} deleted=${count}`);
+        }
+        return count;
+    } catch {
+        return 0;
+    }
 }
 
 export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ success: boolean; record: ExecutionRecord }> {
@@ -1958,19 +2133,55 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
 
         mergedInteractionsForSession = incomingInteractions;
         try {
-            const existingSession = await db.findSessionByTaskId(targetRecord.task_id);
-            let existingInteractions = existingSession?.interactions
-                ? (() => { try { return JSON.parse(existingSession.interactions as string); } catch { return []; } })()
-                : [];
-            existingInteractions = normalizeForStorage(existingInteractions);
+            const mergeStrategy = targetRecord.session_merge_strategy || storageAdapter.sessionMergeStrategy || 'monotonic';
+            if (mergeStrategy !== 'snapshot-replace') {
+                const existingSession = await db.findSessionByTaskId(targetRecord.task_id);
+                let existingInteractions = existingSession?.interactions
+                    ? (() => { try { return JSON.parse(existingSession.interactions as string); } catch { return []; } })()
+                    : [];
+                existingInteractions = normalizeForStorage(existingInteractions);
 
-            if (Array.isArray(existingInteractions) && existingInteractions.length > 0) {
-                mergedInteractionsForSession = mergeSessionInteractionsMonotonic(existingInteractions, incomingInteractions);
+                if (Array.isArray(existingInteractions) && existingInteractions.length > 0) {
+                    mergedInteractionsForSession = mergeSessionInteractionsMonotonic(existingInteractions, incomingInteractions);
+                }
+            } else {
+                // snapshot-replace 防退化护栏：上游或服务端聚合层每批都重新形成「当前会话快照」后整条
+                // 覆盖，正常情况下 incoming 是越来越全的快照。但若 span spool 在极端下仍残缺（历史 span
+                // 永久丢失等），一个偏小的快照会把库里更完整的记录盖没。这里比较 interaction 数：incoming
+                // 严格更小则判为退化快照，保留库里现有记录、不覆盖。设 AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK=true
+                // 可在确有「正当缩小」场景时放行。
+                const allowShrink = process.env.AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK === 'true';
+                if (!allowShrink) {
+                    const existingSession = await db.findSessionByTaskId(targetRecord.task_id);
+                    let existingInteractions = existingSession?.interactions
+                        ? (() => { try { return JSON.parse(existingSession.interactions as string); } catch { return []; } })()
+                        : [];
+                    existingInteractions = normalizeForStorage(existingInteractions);
+                    const existingCount = Array.isArray(existingInteractions) ? existingInteractions.length : 0;
+                    const incomingCount = Array.isArray(incomingInteractions) ? incomingInteractions.length : 0;
+                    if (existingCount > 0 && incomingCount < existingCount) {
+                        console.warn(
+                            `[Data-Service] snapshot-replace 退化护栏：拒绝用更小快照覆盖 task ${targetRecord.task_id}` +
+                            `（incoming ${incomingCount} < existing ${existingCount} interactions），保留现有记录。` +
+                            `设 AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK=true 可放行。`,
+                        );
+                        return { success: true, record: targetRecord };
+                    }
+                }
             }
-        } catch {}
+        } catch (e) {
+            // 护栏/合并的 DB 读取失败时 fail-open：按原逻辑继续落库，不因检查本身报错而阻断写入。
+            if (e && typeof e === 'object' && 'task_id' in (targetRecord as any)) {
+                console.warn('[Data-Service] snapshot-replace 退化检查异常，按原逻辑继续：', (e as Error)?.message || e);
+            }
+        }
 
         mergedInteractionsForSession = normalizeForStorage(mergedInteractionsForSession);
         targetRecord.interactions = mergedInteractionsForSession;
+        const derivedQuery = inferUserQueryFromInteractions(mergedInteractionsForSession);
+        if (derivedQuery && shouldRefreshStoredQueryFromInteractions(targetRecord.query, targetRecord.framework)) {
+            targetRecord.query = derivedQuery;
+        }
 
         if (targetRecord.framework === 'opencode' && Array.isArray(mergedInteractionsForSession)) {
             const derived = deriveOpencodeExecutionFields(mergedInteractionsForSession);
@@ -2270,6 +2481,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
             agentId: agentId,
             skillVersion: targetRecord.skill_version,
             model: targetRecord.model,
+            endpoint: normalizeEndpointUrl(targetRecord.endpoint),
             toolCallCount: targetRecord.tool_call_count,
             llmCallCount: targetRecord.llm_call_count,
             inputTokens: targetRecord.input_tokens,
@@ -2307,6 +2519,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
             agentId: agentId,
             skillVersion: targetRecord.skill_version,
             model: targetRecord.model,
+            endpoint: normalizeEndpointUrl(targetRecord.endpoint),
             toolCallCount: targetRecord.tool_call_count,
             llmCallCount: targetRecord.llm_call_count,
             inputTokens: targetRecord.input_tokens,
@@ -2356,6 +2569,13 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
             );
             const snapped = await snapshotSkillVersions(pinnedRootSkills, targetRecord.user);
             await persistExecutionSkills(recordId, snapped, { user: targetRecord.user, primaryName: targetRecord.skill ?? null });
+            await prismaRaw.execution.update({
+                where: { id: recordId },
+                data: {
+                    skills: snapped.length ? JSON.stringify(snapped.map((skill) => skill.name)) : null,
+                    invokedSkills: snapped.length ? JSON.stringify(snapped) : null,
+                },
+            });
         } catch (e) {
             console.warn(`[Data-Service] root ExecutionSkill persist failed for ${recordId}:`, e);
         }
@@ -2365,7 +2585,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
     // 通过 parentExecutionId 与 root 建立父子关系。列表/聚合默认 filter isSubagent=false，
     // 详情页可下钻到 sub-agent。历史上这里曾对相同 taskId 的 child Execution 做 dedup 删除，
     // 现在反过来——保留它们，并补齐父子链接。
-    if (targetRecord.framework === 'opencode' && targetRecord.task_id && Array.isArray(mergedInteractionsForSession)) {
+    if ((targetRecord.framework === 'opencode' || targetRecord.framework === 'hermes' || targetRecord.framework === 'langfuse-langgraph') && targetRecord.task_id && Array.isArray(mergedInteractionsForSession)) {
         try {
             await deriveSubagentExecutions({
                 parentExecutionId: recordId,
@@ -2379,6 +2599,26 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
         }
     }
 
+    const explicitTraceCompletedAt = targetRecord.trace_completed_at
+        ? new Date(targetRecord.trace_completed_at)
+        : null;
+    const hasExplicitTraceCompletion = explicitTraceCompletedAt != null
+        && Number.isFinite(explicitTraceCompletedAt.getTime());
+    const inferredHermesTraceCompletedAt = !hasExplicitTraceCompletion
+        && targetRecord.framework === 'hermes'
+        && typeof targetRecord.final_result === 'string'
+        && targetRecord.final_result.trim()
+        ? inferTraceCompletionFromInteractions(mergedInteractionsForSession)
+        : null;
+    const traceCompletedAtForSession = hasExplicitTraceCompletion
+        ? explicitTraceCompletedAt
+        : inferredHermesTraceCompletedAt;
+    if (!hasExplicitTraceCompletion && inferredHermesTraceCompletedAt) {
+        targetRecord.trace_completed_at = inferredHermesTraceCompletedAt;
+    }
+    const hasTraceCompletion = traceCompletedAtForSession != null
+        && Number.isFinite(traceCompletedAtForSession.getTime());
+
     if (targetRecord.task_id && mergedInteractionsForSession) {
         await db.upsertSession(
             targetRecord.task_id,
@@ -2388,16 +2628,20 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
                 label: targetRecord.label,
                 user: targetRecord.user,
                 model: targetRecord.model,
-                interactions: JSON.stringify(mergedInteractionsForSession)
+                interactions: JSON.stringify(mergedInteractionsForSession),
+                ...(hasTraceCompletion ? { endTime: traceCompletedAtForSession } : {}),
             },
             {
                 query: targetRecord.query,
                 label: targetRecord.label,
                 user: targetRecord.user,
                 model: targetRecord.model,
-                interactions: JSON.stringify(mergedInteractionsForSession)
+                interactions: JSON.stringify(mergedInteractionsForSession),
             }
         );
+        if (hasTraceCompletion) {
+            await db.updateSession(targetRecord.task_id, { endTime: traceCompletedAtForSession });
+        }
         if (targetRecord.framework === 'opencode' && targetRecord.opencode_cli_completed === true) {
             await db.updateSession(targetRecord.task_id, { endTime: new Date() });
         }
@@ -2412,6 +2656,132 @@ interface DeriveSubagentArgs {
     parentFramework?: string | null;
     parentUser?: string | null;
     interactions: any[];
+}
+
+export interface AgentNodeExecutionProjection {
+    query: string;
+    finalResult: string | null;
+    model: string | null;
+    tokens: number;
+    inputTokens: number;
+    outputTokens: number;
+    reasoningTokens: number;
+    cacheReadInputTokens: number;
+    cacheCreationInputTokens: number;
+    latency: number | null;
+    llmCallCount: number;
+    toolCallCount: number;
+    toolCallErrorCount: number;
+}
+
+function interactionContentText(content: any): string {
+    if (content == null) return '';
+    if (typeof content === 'string') {
+        const trimmed = content.trim();
+        if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+            try {
+                return interactionContentText(JSON.parse(trimmed));
+            } catch {}
+        }
+        return content;
+    }
+    if (Array.isArray(content)) {
+        return content
+            .map((part) => interactionContentText(part?.text ?? part?.content ?? part))
+            .filter(Boolean)
+            .join('\n');
+    }
+    if (typeof content === 'object') return interactionContentText(content.text ?? content.content ?? '');
+    return String(content);
+}
+
+function isFailedAgentToolEvent(event: any): boolean {
+    const calls = Array.isArray(event?.interaction?.tool_calls) ? event.interaction.tool_calls : [];
+    const eventId = event?._toolCallId;
+    const call = calls.find((item: any) => !eventId || item?.id === eventId);
+    const state = String(call?.state || '').toLowerCase();
+    if (state === 'error' || state === 'failed') return true;
+    const output = event?.output ?? call?.output ?? call?.result;
+    if (output && typeof output === 'object') {
+        const status = String(output.status || output.state || '').toLowerCase();
+        return status === 'error' || status === 'failed' || !!output.error;
+    }
+    if (typeof output === 'string' && output.trim().startsWith('{')) {
+        try {
+            return isFailedAgentToolEvent({ ...event, output: JSON.parse(output), interaction: undefined });
+        } catch {}
+    }
+    return false;
+}
+
+function parsedToolArguments(call: any): Record<string, any> {
+    const value = call?.function?.arguments ?? call?.arguments;
+    if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+    if (typeof value !== 'string') return {};
+    try {
+        const parsed = JSON.parse(value);
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+        return {};
+    }
+}
+
+function findSubagentSpawnDescription(interactions: any[], sessionId: string): string | null {
+    const sid = String(sessionId || '').trim();
+    if (!sid) return null;
+    for (const interaction of interactions) {
+        const calls = Array.isArray(interaction?.tool_calls) ? interaction.tool_calls : [];
+        for (const call of calls) {
+            const name = call?.function?.name ?? call?.name;
+            if (name !== 'task') continue;
+            const args = parsedToolArguments(call);
+            const argSessionId = String(args.subagent_session_id ?? args.session_id ?? args.agent_session_id ?? '').trim();
+            if (argSessionId !== sid) continue;
+            const description = interactionContentText(args.description ?? args.task_description ?? args.prompt ?? args.subagent_type).trim();
+            if (description) return description;
+        }
+    }
+    return null;
+}
+
+export function projectAgentNodeExecution(node: AgentNode, interactions: any[]): AgentNodeExecutionProjection {
+    const ownTurns = (node.interactionIndices || []).map((index) => interactions[index]).filter(Boolean);
+    const textTurns = ownTurns
+        .map((interaction) => interactionContentText(interaction?.content).trim())
+        .filter(Boolean);
+    const query = textTurns[0] || node.agentName || node.sessionId;
+    const llmEvents = (node.events || []).filter((event) => event.kind === 'llm');
+    const meteredLlmEvents = llmEvents.filter((event) => {
+        const usage = event.usage;
+        return !!usage && ((usage.total || 0) > 0 || (usage.input || 0) > 0 || (usage.output || 0) > 0 || (usage.reasoning || 0) > 0);
+    });
+    const firstOwnIndex = node.interactionIndices?.[0];
+    const fallbackLlmCalls = llmEvents.filter((event) =>
+        event.interactionIndex !== firstOwnIndex &&
+        (!!event.summary?.trim() || (event.interaction?.tool_calls?.length || 0) > 0)
+    ).length;
+    const toolEvents = (node.events || []).filter((event) =>
+        event.kind === 'tool' || event.kind === 'skill' || event.kind === 'task'
+    );
+    const model = ownTurns
+        .map((interaction) => interaction?.model ?? interaction?.modelID)
+        .find((value) => typeof value === 'string' && value.trim()) || null;
+
+    return {
+        query,
+        finalResult: textTurns.length > 1 ? textTurns[textTurns.length - 1] : null,
+        model,
+        tokens: node.stats.totalTokens,
+        inputTokens: node.stats.inputTokens,
+        outputTokens: node.stats.outputTokens,
+        reasoningTokens: node.stats.reasoningTokens,
+        cacheReadInputTokens: node.stats.cacheReadTokens,
+        cacheCreationInputTokens: node.stats.cacheWriteTokens,
+        latency: node.stats.durationMs ?? null,
+        llmCallCount: meteredLlmEvents.length || fallbackLlmCalls,
+        toolCallCount: toolEvents.length,
+        toolCallErrorCount: toolEvents.filter(isFailedAgentToolEvent).length,
+    };
 }
 
 /**
@@ -2515,17 +2885,20 @@ export async function deriveSubagentExecutions(args: DeriveSubagentArgs): Promis
             }
         }
         const childInteractions = [...sliceSystemPrompts, ...sliceTurns];
-
-        // 抽 query：用第一条有文本内容的 turn（避免 /api/observe/session 触发 LLM analyzeSession）
-        const queryText = (() => {
-            for (const it of sliceTurns) {
-                const c = typeof it?.content === 'string' ? it.content.trim() : '';
-                if (c) return c.slice(0, 500);
+        const projection = projectAgentNodeExecution(node, interactions);
+        const spawnDescription = findSubagentSpawnDescription(interactions, sessionId);
+        const queryText = (spawnDescription || projection.query).slice(0, 500);
+        let ownSkills = extractExplicitSkillsFromNode(node);
+        if (EXECUTION_SKILL_ENABLED) {
+            try {
+                ownSkills = await snapshotSkillVersions(ownSkills, parentUser);
+            } catch (e) {
+                console.warn(`[Data-Service] sub skill version snapshot failed sub=${sessionId}:`, e);
             }
-            return node.agentName || sessionId;
-        })();
+        }
 
         const timestamp = node.startedAt ? new Date(node.startedAt) : new Date();
+        const childCompletedAt = node.endedAt ? new Date(node.endedAt) : null;
 
         const baseFields = {
             taskId: sessionId,
@@ -2534,6 +2907,20 @@ export async function deriveSubagentExecutions(args: DeriveSubagentArgs): Promis
             agentName: node.agentName ?? null,
             user: parentUser ?? null,
             query: queryText,
+            finalResult: projection.finalResult,
+            model: projection.model,
+            tokens: projection.tokens,
+            inputTokens: projection.inputTokens,
+            outputTokens: projection.outputTokens,
+            reasoningTokens: projection.reasoningTokens,
+            cacheReadInputTokens: projection.cacheReadInputTokens,
+            cacheCreationInputTokens: projection.cacheCreationInputTokens,
+            latency: projection.latency,
+            llmCallCount: projection.llmCallCount,
+            toolCallCount: projection.toolCallCount,
+            toolCallErrorCount: projection.toolCallErrorCount,
+            skills: ownSkills.length ? JSON.stringify(ownSkills.map((skill) => skill.name)) : null,
+            invokedSkills: ownSkills.length ? JSON.stringify(ownSkills) : null,
             parentExecutionId: directParentExecId,
             rootExecutionId: parentExecutionId,
             agentSessionId: sessionId,
@@ -2558,7 +2945,6 @@ export async function deriveSubagentExecutions(args: DeriveSubagentArgs): Promis
         // 这一层 sub-agent 自己显式调用的 skill(agent 作用域,不含其更深子孙)。
         if (EXECUTION_SKILL_ENABLED) {
             try {
-                const ownSkills = await snapshotSkillVersions(extractExplicitSkillsFromNode(node), parentUser);
                 await persistExecutionSkills(childExecutionId, ownSkills, { user: parentUser ?? null });
             } catch (e) {
                 console.warn(`[Data-Service] sub ExecutionSkill persist failed sub=${sessionId}:`, e);
@@ -2574,12 +2960,14 @@ export async function deriveSubagentExecutions(args: DeriveSubagentArgs): Promis
                     user: parentUser ?? null,
                     query: queryText,
                     interactions: JSON.stringify(childInteractions),
+                    ...(childCompletedAt ? { endTime: childCompletedAt } : {}),
                 },
                 {
                     label: node.agentName ?? null,
                     user: parentUser ?? null,
                     query: queryText,
                     interactions: JSON.stringify(childInteractions),
+                    ...(childCompletedAt ? { endTime: childCompletedAt } : {}),
                 },
             );
         } catch (e) {

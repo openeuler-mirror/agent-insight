@@ -449,6 +449,7 @@ function buildState(records) {
   const sysPrompts = new Map()
   const cliCompletedSessions = new Set()
   const sessionPids = new Map()
+  const sessionIdleAt = new Map()
 
   const ensureSession = (sid) => {
     if (!sessions.has(sid)) sessions.set(sid, { sessionID: sid, messageIDs: new Set() })
@@ -467,6 +468,13 @@ function buildState(records) {
     if (!pid || !cid) return
     if (!children.has(pid)) children.set(pid, new Set())
     children.get(pid).add(cid)
+  }
+
+  const recordSessionIdle = (sid, r) => {
+    if (!sid) return
+    const ms = toMsTimestamp(r?.t) || Date.now()
+    const prev = sessionIdleAt.get(sid) || 0
+    if (ms > prev) sessionIdleAt.set(sid, ms)
   }
 
   for (const r of records) {
@@ -518,6 +526,17 @@ function buildState(records) {
     const t = r?.payload?.type
     const ev = r?.payload?.event
     if (!t || !ev) continue
+
+    const statusType = String(ev?.properties?.status?.type || ev?.properties?.status || "").toLowerCase()
+    if (t === "session.idle" || (t === "session.status" && statusType === "idle")) {
+      const sid = r.sessionID || ev?.properties?.sessionID
+      if (sid) {
+        ensureSession(sid)
+        recordSessionPid(sid, r)
+        recordSessionIdle(sid, r)
+      }
+      continue
+    }
 
     if (t === "session.created" || t === "session.updated") {
       const { sid, pid, agent } = getSessionInfoFromEvent(r, ev)
@@ -577,7 +596,23 @@ function buildState(records) {
     }
   }
 
-  return { sessions, sessionParent, sessionAgent, children, msgInfo, msgParts, partText, userTextByMsg, sysPrompts, cliCompletedSessions, sessionPids }
+  return { sessions, sessionParent, sessionAgent, children, msgInfo, msgParts, partText, userTextByMsg, sysPrompts, cliCompletedSessions, sessionPids, sessionIdleAt }
+}
+
+// Join all text-type parts of a message into one string. Prefers the
+// streamed-complete text (text.complete hook) over the partial captured on
+// message.part.updated. Shared by user and assistant message rendering.
+function collectTextPartContent(parts, mid, partText) {
+  const buf = []
+  for (const p of parts || []) {
+    if ((p?.type || "").toLowerCase() !== "text") continue
+    const key = `${mid}:${p.id}`
+    const streamed = partText.get(key)
+    const fallback = typeof p?.text === "string" ? p.text : ""
+    const out = typeof streamed === "string" && streamed ? streamed : fallback
+    if (out) buf.push(out)
+  }
+  return buf.join("")
 }
 
 function buildMessagesForSession(state, sid) {
@@ -592,21 +627,20 @@ function buildMessagesForSession(state, sid) {
 
     let content = ""
     if (role === "user") {
-      content = userTextByMsg.get(mid) || ""
+      // The real user query lives in this message's own text part(s), and
+      // message.part.updated reliably carries messageID, so reading from parts
+      // is version-proof. The legacy sources are unreliable on newer opencode:
+      //   - userTextByMsg is keyed off the chat.message hook's input.messageID,
+      //     an OPTIONAL field newer opencode often omits → key is null → the
+      //     user text is never recorded.
+      //   - info.system (last-ditch fallback) is now null on user messages —
+      //     and was the system prompt, not the query, anyway.
+      // With both broken the query uploaded empty. Keep them only as fallbacks.
+      content = collectTextPartContent(msgParts.get(mid) || [], mid, partText)
+      if (!content) content = userTextByMsg.get(mid) || ""
       if (!content && typeof info?.system === "string") content = info.system
     } else {
-      const parts = msgParts.get(mid) || []
-      const buf = []
-      for (const p of parts) {
-        if ((p?.type || "").toLowerCase() === "text") {
-          const key = `${mid}:${p.id}`
-          const text = partText.get(key)
-          const fallback = typeof p?.text === "string" ? p.text : ""
-          const out = typeof text === "string" && text ? text : fallback
-          if (out) buf.push(out)
-        }
-      }
-      content = buf.join("")
+      content = collectTextPartContent(msgParts.get(mid) || [], mid, partText)
     }
 
     const tool_calls = []
@@ -947,6 +981,10 @@ async function main() {
     const pids = Array.from(state.sessionPids.get(rootSid) || [])
     const opencodeCliCompleted = state.cliCompletedSessions.has(rootSid)
       || (pids.length > 0 && pids.every((pid) => !isPidAlive(pid)))
+    const idleMs = state.sessionIdleAt.get(rootSid) || 0
+    const traceCompletedAt = derived.final_result && idleMs > 0
+      ? new Date(idleMs).toISOString()
+      : undefined
     const payload = {
       task_id: rootSid,
       query,
@@ -967,6 +1005,7 @@ async function main() {
       interactions,
       system_prompts: sys,
       trace: { trace_id: rootSid },
+      trace_completed_at: traceCompletedAt,
       opencode_cli_completed: opencodeCliCompleted,
       timestamp: new Date().toISOString(),
     }
@@ -979,9 +1018,10 @@ async function main() {
       lastTs = Math.max(lastTs, t1, t2, t3)
     }
     const lastAssistant = String(payload.final_result || "")
-    const sig = `${interactions.length}|${lastAssistant.length}|${lastTs}|${payload.opencode_cli_completed ? 1 : 0}`
+    const sig = `${interactions.length}|${lastAssistant.length}|${lastTs}|${payload.trace_completed_at || ""}|${payload.opencode_cli_completed ? 1 : 0}`
     appendUploaderLog(
-      `session.prepare task_id=${rootSid} interactions=${interactions.length} query=${String(query).slice(0, 120).replace(/\s+/g, " ")} cliCompleted=${payload.opencode_cli_completed ? "1" : "0"} sig=${sig}`,
+      `session.prepare task_id=${rootSid} interactions=${interactions.length} query=${String(query).slice(0, 120).replace(/\s+/g, " ")} ` +
+      `traceCompletedAt=${payload.trace_completed_at || "(none)"} cliCompleted=${payload.opencode_cli_completed ? "1" : "0"} sig=${sig}`,
     )
     if (ckpt[rootSid] && ckpt[rootSid] === sig) {
       appendUploaderLog(`session.skip checkpoint task_id=${rootSid} sig=${sig}`)

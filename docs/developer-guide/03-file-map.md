@@ -48,9 +48,11 @@
 | `storage/server-config.ts` | storage | `getActiveConfig`、`getUserSettings`、`saveUserSettings`；`ModelConfig`、`UserSettings` |
 | `auth/auth.ts` | auth | `resolveUser`、`canAccessSkill`；`AuthResult` |
 | `ingest/proxy-config.ts` / `proxy-store.ts` | ingest | `getProxyConfig`；`ProxyConfig`、`SessionData` |
-| `ingest/adapters/{registry,types,opencode,claude,openclaw,hermes}.ts` | ingest | `getAdapter`、`resolveFrameworkId`、`listFrameworks`；`FrameworkAdapter`、`FrameworkDescriptor` |
+| `ingest/adapters/{registry,types,opencode,claude,openclaw,hermes,langfuse-langgraph}.ts` | ingest | `getAdapter`、`resolveFrameworkId`、`listFrameworks`；`FrameworkAdapter`、`FrameworkDescriptor` |
 | `ingest/routing-signature.ts` | ingest | `RoutingSemanticSignature`、`RoutingSemanticMatch` |
 | `ingest/claude-otel/` / `ingest/otel-consumer/` / `openclaw-watcher.ts` | ingest | 特定框架的接入与 OTel spool 消费 |
+| `ingest/otel/langfuse.ts` / `ingest/otel/adapters/langfuse-langgraph.ts` | ingest | Langfuse Python SDK / LangGraph OTLP span tree 归属转换；`follow_skill`→skill、`call_report_subagent`→task/subagent |
+| `ingest/otel/adapters/hermes.ts` / `scripts/hermes_agent_insight_plugin.py` | ingest | Hermes span tree 归属转换；Hermes hooks 到累计 OTLP JSON snapshot |
 | `shared/model-config.ts` / `default-model-config.ts` | shared | `ModelPricing`，定价/上下文窗口查询 |
 | `shared/interaction-utils.ts` | shared | `InvokedSkill`，交互解析 |
 | `client/api.ts` | client | `apiFetch`（标准的客户端 fetch 封装） |
@@ -94,7 +96,7 @@
 ## API routes (`src/app/api/`) — grouped
 | Group | Route files (under `api/`) | Purpose |
 |---|---|---|
-| ingest | `ingest/otel/v1/{logs,metrics,traces}`、`ingest/upload`、`ingest/proxy/[taskId]/*`、`ingest/setup/*`、`ingest/sync/*`、`ingest/opencode/session-complete`、`ingest/parse-document`、`ingest/v1/[...path]` | 接收并归一化 agent 运行数据；下发客户端安装脚本 |
+| ingest | `ingest/otel/v1/{logs,metrics,traces}`、`ingest/upload`、`ingest/proxy/[taskId]/*`、`ingest/setup/*`（含 `setup/hermes-plugin`）、`ingest/sync/*`、`ingest/opencode/session-complete`、`ingest/parse-document`、`ingest/v1/[...path]` | 接收并归一化 agent 运行数据；下发客户端安装脚本与 Hermes 插件源码 |
 | agent | `agent/{run,respond,stream}` | 驱动内部的通用 agent |
 | skills | `skills`、`skills/[id]/*`、`skills/by-name/*`、`skills/{publish,upload,automation/*,sync-enterprise,logs}` | skill 增删改查、版本、发布、企业同步 |
 | skill-eval | `skill-eval/trigger/[skillName]/*` | 触发评测集/评测运行 |
@@ -102,6 +104,6 @@
 | skill-generator | `skill-generator/{chat,sessions/*,files/*,attachments,download/*}` | skill 生成 playground 后端 |
 | eval | `eval/{config/*,evaluation,rejudge,settings,trajectory/*}` | 数据集配置、评测运行、轨迹评测 |
 | debug | `debug/{batch-tasks/*,grayscale-tasks/*,execute/*,history/*}` | 批量与灰度（A/B）执行编排 |
-| observe | `observe/{data,session,task-stats,executions/[executionId]/*}` | 可观测性数据与单次执行分析 |
+| observe | `observe/{data,session,task-stats,infra/*,executions/[executionId]/*}` | 可观测性数据、infra 观测与单次执行分析 |
 | fault | `fault/diagnosis/{session,stream}` | 故障诊断对话（agent-debug） |
 | misc | `agents`、`agent-datasets/*`、`auth/*`、`dashboard/stats`、`guide`、`user-evaluators`、`background-tasks`、`evaluation/*` | 注册表、数据集、认证、仪表盘、引导 |

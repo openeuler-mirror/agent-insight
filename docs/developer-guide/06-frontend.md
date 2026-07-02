@@ -39,7 +39,8 @@ AGENT WORKSPACE  (nav.groupAgentWorkspace)
 ├─ 运行观测 (groupObserve)
 │  ├─ 链路追踪           → /trace   (matchPrefixes: /trace, /details)
 │  ├─ 智能诊断           → /fault
-│  └─ 质量监控           → /quality  ⚠ pending（未上线，琥珀色标记）
+│  ├─ 质量监控           → /quality
+│  └─ 推理 Infra         → /infra
 ├─ 评测中心 (evalCenter)
 │  ├─ 评测数据集         → /dataset
 │  ├─ 评估器             → /metrics
@@ -71,8 +72,7 @@ AGENT WORKSPACE  (nav.groupAgentWorkspace)
 
 | 状态 | 路由 | 说明 |
 |---|---|---|
-| ✅ 导航可达 | `/dashboard` `/agents` `/trace` `/fault` `/dataset` `/metrics` `/eval` `/skills` `/skill-generator` `/skill-eval` `/skill-opt` `/modelconfig/registry` `/modelconfig/web-search` `/accessconfig/install` | 侧边栏直达 |
-| ⚠ 上线中 / pending | `/quality` | nav `pending: true`，琥珀色，功能未稳定 |
+| ✅ 导航可达 | `/dashboard` `/agents` `/trace` `/fault` `/quality` `/dataset` `/metrics` `/eval` `/skills` `/skill-generator` `/skill-eval` `/skill-opt` `/modelconfig/registry` `/modelconfig/web-search` `/accessconfig/install` | 侧边栏直达；`/quality` 的 `QualityPage` 含 `ResultPanel` 结果明细 |
 | 🔁 间接可达 | `/skill-history` `/skill-detail`（经 Skills Hub）、`/details`（经链路追踪）、`/eval/run/[runId]`、`/skill-opt/[name]/[version]` 等子路由 | 由父页面跳转，无独立 nav 项 |
 | 🚫 存在但未挂导航 | `/memory` `/optapi` `/security` `/skill-release` `/modelconfig`(index) `/accessconfig/{channels,webhooks,health}` | nav 中注释或未引用；多为半成品/已下线，源码保留 |
 

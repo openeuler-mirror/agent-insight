@@ -212,6 +212,18 @@ function inferTimestampFromInteractions(interactions: EvaluatorTraceInteraction[
   return firstCreated ? new Date(firstCreated) : new Date();
 }
 
+export function inferCompletionTimestampFromInteractions(interactions: EvaluatorTraceInteraction[]): Date {
+  const latest = interactions
+    .flatMap(interaction => [
+      toTimestamp(interaction.timeInfo?.completed),
+      toTimestamp(interaction.timeInfo?.created),
+      toTimestamp(interaction.timestamp),
+    ])
+    .filter((value): value is number => Number.isFinite(value))
+    .reduce((max, value) => Math.max(max, value), 0);
+  return latest > 0 ? new Date(latest) : new Date();
+}
+
 function buildFallbackInteractions(input: RecordEvaluatorExecutionInput): EvaluatorTraceInteraction[] {
   const now = new Date().toISOString();
   const query = String(input.query || '').trim();
@@ -291,4 +303,142 @@ export async function recordEvaluatorExecution(
   });
 
   return interactions.length;
+}
+
+// =========================================================================
+// 直连 LLM 评测器的 trace 记录（不经过 opencode session）。
+//
+// 预置评测器（trace-quality / task-completion）的 system prompt 明确禁止派发 subagent /
+// 调用工具，本质是"一次 prompt → 一段 JSON"的单轮 judge。这种场景没必要为了拿一条 trace
+// 而起一个 ephemeral opencode 进程（实测 spawn→ready 中位数 ~1.5s + session 往返 ~0.14s）。
+//
+// recordEvaluatorExecution 唯一依赖 opencode 的地方是 `client.listMessages()` —— 用来把
+// session 里的真实 message 拉回来。对单轮 judge，我们手里已经有完整的 {system rubric, user prompt,
+// assistant 输出, token usage}，直接合成 interactions 落库即可，产出的 trace 与走 opencode 的等价
+// （system + user + assistant 三条，没有工具调用）。
+// =========================================================================
+
+export interface DirectEvaluatorTraceInput {
+  agentName: string;
+  /** 列表展示用的短 query（caseInput），写入 Execution.query。 */
+  query?: string | null;
+  /**
+   * 评测器的 system prompt（rubric / 输出 schema）。作为 trace 的 system 一条记录，跟 opencode
+   * 路径对齐——opencode 的 listMessages 会带上 system，直连若不显式传就会在链路详情页丢失评测器
+   * 的判分依据。注意：模型调用本身始终带 system（见 evaluateXxxDirectAndRecord 的 invoke），这里
+   * 只影响 trace 记录是否完整，与评分正确性无关。
+   */
+  systemPrompt?: string | null;
+  /** 实际发给模型的 user 消息（通常是大块 JSON payload），作为 user interaction 正文。 */
+  userMessage?: string | null;
+  /** 模型返回的评测 JSON 文本，作为 assistant interaction 正文 + final_result。 */
+  assistantOutput?: string | null;
+  /** 从 LLM 响应里抽出的 token 用量；total 缺省时按 input+output 估算。 */
+  usage?: { input?: number; output?: number; total?: number } | null;
+  modelID?: string | null;
+  /** 注入式时间戳（ISO），仅供测试做确定性断言；不传则取当前时间。 */
+  timestampISO?: string;
+}
+
+export interface RecordDirectEvaluatorExecutionInput extends DirectEvaluatorTraceInput {
+  /** Execution 主键（合成 id，例如 `trace-quality-evaluator-<uuid>`）。 */
+  taskId: string;
+  user?: string | null;
+  skill?: string | null;
+  skillVersion?: number | null;
+  /** 默认 'direct-llm'，便于在「从 Trace」里区分直连评测与 opencode 评测。 */
+  framework?: string | null;
+}
+
+/**
+ * 纯函数：把一次直连 LLM judge 合成成 trace interactions（system + user + assistant 三条）。
+ * 与 saveExecutionRecord 的副作用解耦，方便单测。
+ */
+export function buildDirectEvaluatorInteractions(
+  input: DirectEvaluatorTraceInput,
+): EvaluatorTraceInteraction[] {
+  const now = input.timestampISO || new Date().toISOString();
+  const interactions: EvaluatorTraceInteraction[] = [];
+
+  // system rubric 在最前——与 opencode trace 对齐，链路详情页能看到评测器的判分依据。
+  const systemContent = String(input.systemPrompt || '').trim();
+  if (systemContent) {
+    interactions.push({ role: 'system', content: systemContent, timestamp: now });
+  }
+
+  const userContent = String(input.userMessage || input.query || '').trim();
+  if (userContent) {
+    interactions.push({ role: 'user', content: userContent, timestamp: now });
+  }
+
+  const assistant = String(input.assistantOutput || '').trim();
+  if (assistant) {
+    const usage = input.usage
+      ? {
+          input: input.usage.input,
+          output: input.usage.output,
+          total:
+            typeof input.usage.total === 'number'
+              ? input.usage.total
+              : (input.usage.input || 0) + (input.usage.output || 0),
+        }
+      : undefined;
+    interactions.push({
+      role: 'assistant',
+      content: assistant,
+      timestamp: now,
+      agent: input.agentName || undefined,
+      modelID: input.modelID || undefined,
+      usage,
+    });
+  }
+
+  return interactions;
+}
+
+/**
+ * 把一次直连 LLM 评测落成一条 Execution/Session trace —— 不需要 opencode client。
+ * 返回写入的 interaction 条数（0 表示缺少 taskId/agentName 或内容为空，未落库）。
+ */
+export async function recordDirectEvaluatorExecution(
+  input: RecordDirectEvaluatorExecutionInput,
+): Promise<number> {
+  const taskId = String(input.taskId || '').trim();
+  const agentName = String(input.agentName || '').trim();
+  if (!taskId || !agentName) return 0;
+
+  const interactions = buildDirectEvaluatorInteractions(input);
+  if (interactions.length === 0) return 0;
+
+  await saveExecutionRecord({
+    task_id: taskId,
+    upload_id: taskId,
+    query: String(input.query || '').trim() || undefined,
+    framework: input.framework || 'direct-llm',
+    user: input.user ?? null,
+    agent: agentName,
+    agentName,
+    model: input.modelID ?? undefined,
+    final_result: String(input.assistantOutput || '').trim() || undefined,
+    skill: input.skill ?? undefined,
+    skill_version: input.skillVersion ?? undefined,
+    interactions,
+    timestamp: inferTimestampFromInteractions(interactions),
+    skip_evaluation: true,
+    skip_internal_judgment: true,
+    failures: [],
+    skill_issues: [],
+    force_query_update: true,
+    trace_completed_at: inferCompletionTimestampFromInteractions(interactions),
+  });
+
+  return interactions.length;
+}
+
+/**
+ * 评测传输层开关：默认走直连 LLM（无 opencode 进程）。设 EVAL_FORCE_OPENCODE_TRANSPORT=1
+ * 可强制回到旧的 ephemeral-opencode 路径（线上一键回滚，无需改代码）。
+ */
+export function shouldForceOpencodeEvalTransport(): boolean {
+  return process.env.EVAL_FORCE_OPENCODE_TRANSPORT === '1';
 }

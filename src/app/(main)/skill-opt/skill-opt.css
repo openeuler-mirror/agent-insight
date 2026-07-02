@@ -573,6 +573,10 @@
     letter-spacing: 0.6px;
     font-weight: 600;
 }
+.skopt-left .issues h4 .done-count {
+    color: var(--success);
+    font-weight: 600;
+}
 .skopt-left .issues .empty {
     font-size: 13px;
     color: var(--foreground-muted);
@@ -591,6 +595,12 @@
     transition: border-color 0.15s, background 0.15s;
 }
 .skopt-left .issue-row:hover { border-color: var(--border-dark); }
+/* 一键优化/合并进行中：锁定勾选，整行置灰、禁用指针 */
+.skopt-left .issue-row.locked {
+    opacity: 0.55;
+    cursor: not-allowed;
+    pointer-events: none;
+}
 .skopt-left .issue-row.checked {
     background: var(--primary-subtle);
     border-color: var(--primary-subtle-border);
@@ -598,7 +608,9 @@
 .skopt-left .issue-row.optimized {
     background: var(--success-subtle);
     border-color: var(--success-subtle-border);
+    cursor: default; /* 已优化的点不可再选 */
 }
+.skopt-left .issue-row.optimized:hover { border-color: var(--success-subtle-border); }
 .skopt-left .issue-row.optimized .summary {
     color: var(--foreground-muted);
     text-decoration: line-through;
@@ -728,43 +740,6 @@
     font-size: 12px;
     min-width: 0;
 }
-.skopt-left .actions .scope-limit-picker {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 8px;
-    padding: 9px 10px;
-    background: var(--card-bg);
-    border: 1px solid var(--card-border);
-    border-radius: var(--radius);
-}
-.skopt-left .actions .scope-limit-title {
-    grid-column: 1 / -1;
-    color: var(--foreground-muted);
-    font-size: 12px;
-    font-weight: 600;
-}
-.skopt-left .actions .scope-limit-picker label {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    min-width: 0;
-    color: var(--foreground-secondary);
-    font-size: 11px;
-}
-.skopt-left .actions .scope-limit-picker input {
-    width: 100%;
-    min-width: 0;
-    padding: 5px 7px;
-    background: var(--input-bg);
-    border: 1px solid var(--input-border);
-    border-radius: var(--radius-sm);
-    color: var(--foreground);
-    font-size: 12px;
-}
-.skopt-left .actions .scope-limit-picker input:disabled {
-    color: var(--foreground-muted);
-    background: var(--background-tertiary);
-}
 .skopt-left .actions button {
     width: 100%;
     padding: 9px 12px;
@@ -784,6 +759,20 @@
     background: var(--background-tertiary);
     color: var(--foreground-muted);
     cursor: not-allowed;
+}
+/* 一键优化 = 主操作（保持 primary 填充）；手动「开始优化」降为次级（描边），形成层次 */
+.skopt-left .actions button:not(.skopt-oneclick-btn) {
+    background: var(--background-secondary);
+    color: var(--foreground);
+    border: 1px solid var(--border);
+    font-weight: 400;
+}
+.skopt-left .actions button:not(.skopt-oneclick-btn):hover:not(:disabled) {
+    background: var(--background-tertiary);
+}
+.skopt-left .actions button:not(.skopt-oneclick-btn):disabled {
+    background: var(--background-tertiary);
+    color: var(--foreground-muted);
 }
 
 /* ── Middle: chat ─────────────────────────────────────────── */
@@ -836,6 +825,55 @@
     flex-direction: column;
     gap: 6px;
 }
+/* ── 一键优化的「合并结果」卡片 ─────────────────────────── */
+.skopt-middle .skopt-plan-card {
+    margin-bottom: 12px;
+    max-width: 92%;
+    margin-right: auto;
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-lg);
+    box-shadow: 0 1px 2px var(--shadow-color);
+    overflow: hidden;
+}
+.skopt-plan-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    background: var(--background-secondary);
+    border-bottom: 1px solid var(--card-border);
+}
+.skopt-plan-head-title { font-size: 13px; font-weight: 600; color: var(--foreground); }
+.skopt-plan-count {
+    font-size: 12px; font-weight: 600;
+    padding: 1px 8px; border-radius: 999px;
+    background: var(--primary-subtle); color: var(--primary);
+    border: 1px solid var(--primary-subtle-border);
+}
+.skopt-plan-group { padding: 8px 14px; }
+.skopt-plan-group + .skopt-plan-group { border-top: 1px solid var(--card-border); }
+.skopt-plan-group-label {
+    font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px;
+    color: var(--foreground-secondary); margin-bottom: 6px;
+}
+.skopt-plan-item { display: flex; gap: 8px; padding: 5px 0; }
+.skopt-plan-item + .skopt-plan-item { border-top: 1px dashed var(--border); }
+.skopt-plan-sev {
+    flex: none; height: 18px; align-self: flex-start;
+    font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px;
+    padding: 1px 6px; border-radius: var(--radius-sm); line-height: 16px;
+}
+.skopt-plan-sev.sev-high { background: var(--error-subtle); color: var(--error); border: 1px solid var(--error-subtle-border); }
+.skopt-plan-sev.sev-medium { background: var(--warning-subtle); color: var(--warning); border: 1px solid var(--warning-subtle-border); }
+.skopt-plan-sev.sev-low { background: var(--primary-subtle); color: var(--primary); border: 1px solid var(--primary-subtle-border); }
+.skopt-plan-item-body { min-width: 0; }
+.skopt-plan-item-title { font-size: 13px; color: var(--foreground); line-height: 1.4; }
+.skopt-plan-item-meta { font-size: 11px; color: var(--foreground-muted); margin-top: 2px; }
+.skopt-plan-backlog {
+    padding: 8px 14px; font-size: 12px; color: var(--foreground-muted);
+    border-top: 1px solid var(--card-border); background: var(--background-secondary);
+}
 /* agent 气泡内 text block：MarkdownText 居中视觉，与 inline-block 视觉错开 */
 .skopt-middle .msg.agent .agent-text-block {
     /* 文本与上下 inline-block 之间用 gap 给间距，自身不再加 margin */
@@ -846,130 +884,6 @@
     border-radius: var(--radius-sm);
     padding: 6px 10px;
     font-size: 13px;
-}
-.skopt-middle .msg.agent .skopt-scope-block {
-    border: 1px solid var(--primary-subtle-border);
-    background: var(--primary-subtle);
-    border-radius: var(--radius);
-    padding: 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-}
-.skopt-scope-block .scope-head {
-    display: flex;
-    justify-content: space-between;
-    gap: 12px;
-    align-items: flex-start;
-}
-.skopt-scope-block .scope-kicker {
-    font-size: 11px;
-    line-height: 1.2;
-    color: var(--primary);
-    font-weight: 700;
-    letter-spacing: 0.5px;
-    text-transform: uppercase;
-    margin-bottom: 3px;
-}
-.skopt-scope-block strong {
-    font-size: 14px;
-}
-.skopt-scope-block .scope-stats {
-    display: flex;
-    gap: 6px;
-    flex-wrap: wrap;
-    justify-content: flex-end;
-}
-.skopt-scope-block .scope-stats span {
-    border: 1px solid var(--primary-subtle-border);
-    background: var(--card-bg);
-    color: var(--foreground-secondary);
-    border-radius: var(--radius-sm);
-    padding: 2px 7px;
-    font-size: 12px;
-    white-space: nowrap;
-}
-.skopt-scope-block .scope-section {
-    background: var(--card-bg);
-    border: 1px solid var(--card-border);
-    border-radius: var(--radius-sm);
-    padding: 9px 10px;
-}
-.skopt-scope-block .scope-section.deferred {
-    background: var(--background-secondary);
-}
-.skopt-scope-block .scope-label {
-    color: var(--foreground-secondary);
-    font-size: 12px;
-    font-weight: 600;
-    margin-bottom: 6px;
-}
-.skopt-scope-block ul {
-    margin: 0;
-    padding: 0;
-    list-style: none;
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
-}
-.skopt-scope-block li {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    min-width: 0;
-    color: var(--foreground);
-    font-size: 13px;
-}
-.skopt-scope-block li span:last-child {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-.skopt-scope-block .scope-severity {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    flex: 0 0 auto;
-    min-width: 48px;
-    border-radius: var(--radius-sm);
-    padding: 1px 6px;
-    font-size: 10px;
-    font-weight: 700;
-    text-transform: uppercase;
-}
-.skopt-scope-block .scope-severity.high {
-    color: var(--error);
-    border: 1px solid var(--error-subtle-border);
-    background: var(--error-subtle);
-}
-.skopt-scope-block .scope-severity.medium {
-    color: var(--warning);
-    border: 1px solid var(--warning-subtle-border);
-    background: var(--warning-subtle);
-}
-.skopt-scope-block .scope-severity.low,
-.skopt-scope-block .scope-severity.unknown {
-    color: var(--primary);
-    border: 1px solid var(--primary-subtle-border);
-    background: var(--primary-subtle);
-}
-.skopt-scope-block .scope-files {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex-wrap: wrap;
-    color: var(--foreground-muted);
-    font-size: 12px;
-}
-.skopt-scope-block .scope-files code {
-    color: var(--foreground);
-    background: var(--input-bg);
-    border: 1px solid var(--input-border);
-    border-radius: var(--radius-sm);
-    padding: 1px 5px;
-    max-width: 100%;
-    white-space: normal;
-    overflow-wrap: anywhere;
 }
 /* ─── 顶栏右侧"优化记录"控件（mirror playground 的 history button + dropdown） ─── */
 .skopt-history-controls {

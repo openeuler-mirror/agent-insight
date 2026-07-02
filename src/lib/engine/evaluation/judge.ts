@@ -2,6 +2,7 @@
 import fs from 'fs';
 import { OpenAI } from "openai";
 import path from 'path';
+import { resolveAgentInsightDataPath } from '@/lib/env';
 import { getProxyConfig } from '@/lib/ingest/proxy-config';
 import { getActiveConfig } from '@/lib/storage/server-config';
 import {
@@ -31,7 +32,7 @@ export {
     extractSkillsWithVersionsFromOpencodeSession
 } from '@/lib/shared/interaction-utils';
 
-const LOG_FILE = path.join(process.cwd(), 'data', 'model_debug.jsonl');
+const LOG_FILE = resolveAgentInsightDataPath('model_debug.jsonl');
 const EVALUATION_LLM_OPTIONS = {
     temperature: 0,
     top_p: 1,

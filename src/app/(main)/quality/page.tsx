@@ -6,11 +6,13 @@ import { Activity, Loader2 } from 'lucide-react';
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { Term } from '@/components/text/Term';
 import { useLocale } from '@/lib/client/locale-context';
+import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
 import { QualityConfigBar, type ConfigState } from '@/components/quality/QualityConfigBar';
 import { QualityHero } from '@/components/quality/QualityHero';
 import { MethodologyCards } from '@/components/quality/MethodologyCards';
 import { ProcessPanel } from '@/components/quality/ProcessPanel';
+import { ResultPanel } from '@/components/quality/ResultPanel';
 import { QualityTrendChart } from '@/components/quality/QualityTrendChart';
 import { ProblemSummaryPanel } from '@/components/quality/ProblemSummaryPanel';
 import { ExecutionScoreTable } from '@/components/quality/ExecutionScoreTable';
@@ -34,12 +36,13 @@ function bucketRange(b: TrendBucket, g: TrendGranularity): { from: string; to: s
     return { from: start.toISOString(), to: end.toISOString(), label };
 }
 
-// 信息金字塔：Hero(结论+先修) → 四维卡 → 问题汇总 → 趋势/过程/执行表默认折叠（证据层按需展开）。
-type SectionKey = 'trend' | 'process' | 'exec';
-const ANCHOR_TO_SECTION: Record<string, SectionKey | undefined> = { cost: 'trend', process: 'process', exec: 'exec' };
+// 信息金字塔：Hero(结论+先修) → 四维卡 → 问题汇总 → 结果评测 → 趋势/过程/执行表默认折叠（证据层按需展开）。
+type SectionKey = 'trend' | 'process' | 'exec' | 'result';
+const ANCHOR_TO_SECTION: Record<string, SectionKey | undefined> = { result: 'result', cost: 'trend', process: 'process', exec: 'exec' };
 
 export default function QualityPage() {
     const { t } = useLocale();
+    const { user } = useAuth();
     const router = useRouter();
 
     const [agents, setAgents] = useState<QualityAgentInfo[]>([]);
@@ -48,11 +51,12 @@ export default function QualityPage() {
     const [report, setReport] = useState<QualityReport | null>(null);
     const [loading, setLoading] = useState(false);
     const [bucketSel, setBucketSel] = useState<{ from: string; to: string; label: string } | null>(null);
-    const [open, setOpen] = useState<Record<SectionKey, boolean>>({ trend: false, process: false, exec: false });
+    const [open, setOpen] = useState<Record<SectionKey, boolean>>({ result: true, trend: false, process: false, exec: false });
 
-    // 加载 Agent 列表 + skill facet
+    // 加载 Agent 列表 + skill facet（按用户隔离：?user= 是身份口径，缺失会越权拿全量）
     useEffect(() => {
-        apiFetch('/api/quality/agents')
+        if (!user) return;
+        apiFetch(`/api/quality/agents?user=${encodeURIComponent(user)}`)
             .then((r) => r.json())
             .then((d) => {
                 const list: QualityAgentInfo[] = Array.isArray(d.agents) ? d.agents : [];
@@ -61,21 +65,21 @@ export default function QualityPage() {
                 if (list.length) setConfig((c) => (c.agent ? c : { ...c, agent: list[0].name }));
             })
             .catch(() => setAgents([]));
-    }, []);
+    }, [user]);
 
     // 切 Agent/窗口/Skill → 全页重算（BR-002）。status 为行级三态，不触发重算。
     const loadReport = useCallback((agent: string, window: WindowKind, skill: string) => {
-        if (!agent) { setReport(null); return; }
+        if (!agent || !user) { setReport(null); return; }
         setLoading(true);
         setBucketSel(null);
-        const q = new URLSearchParams({ agent, window });
+        const q = new URLSearchParams({ agent, window, user });
         if (skill && skill !== 'all') q.set('skill', skill);
         apiFetch(`/api/quality/report?${q.toString()}`)
             .then((r) => r.json())
             .then((d) => setReport(d?.error ? null : d))
             .catch(() => setReport(null))
             .finally(() => setLoading(false));
-    }, []);
+    }, [user]);
 
     useEffect(() => {
         loadReport(config.agent, config.window, config.skill);
@@ -108,6 +112,7 @@ export default function QualityPage() {
         { id: 'verdict', label: t('quality.nav.verdict') },
         { id: 'analysis', label: t('quality.nav.dims') },
         { id: 'problems', label: t('quality.nav.problems') },
+        { id: 'result', label: t('quality.nav.result') },
         { id: 'cost', label: t('quality.nav.trend') },
         { id: 'process', label: t('quality.nav.process') },
         { id: 'exec', label: t('quality.nav.exec') },
@@ -158,6 +163,7 @@ export default function QualityPage() {
                             <MethodologyCards report={report} onAnchor={onAnchor} />
                             {/* ③ 行动层：完整问题清单（核心差异点，默认展开） */}
                             <ProblemSummaryPanel report={report} onDrillTrace={onDrillTrace} />
+                            <ResultPanel report={report} />
                             {/* ④ 证据层：默认折叠，按需展开 */}
                             <QualityTrendChart
                                 report={report}
@@ -173,6 +179,7 @@ export default function QualityPage() {
                             <ExecutionScoreTable
                                 key={`${config.agent}|${execRange.from}|${execRange.to}|${config.skill}`}
                                 agent={config.agent}
+                                user={user}
                                 from={execRange.from}
                                 to={execRange.to}
                                 skill={config.skill}

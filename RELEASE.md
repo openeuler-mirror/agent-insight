@@ -84,6 +84,12 @@ node scripts/publish-npm.js [options]
 
 ### 第 1 步：构建 + 打包（不发布）
 
+先清掉旧的 Next.js 构建产物，避免 `npm pack` 把上一次的 `.next/standalone` 打进包里：
+
+```bash
+rm -rf .next
+```
+
 ```bash
 node scripts/publish-npm.js --version 0.1.0-beta --dry-run
 ```
@@ -97,6 +103,7 @@ node scripts/publish-npm.js --version 0.1.0-beta --dry-run
 ls -lh agent-insight-*.tgz                                    # 体积正常约 30~35MB
 tar -tzf agent-insight-*.tgz | grep -c 'standalone/exclude/'  # 应为 0
 tar -tzf agent-insight-*.tgz | grep -c 'standalone/data/'     # 应为 0
+tar -tzf agent-insight-*.tgz | grep -c 'standalone/skills/agent-debug-diagnosis/SKILL.md'  # 应为 1
 ```
 
 **装这个 tarball 跑一遍冒烟测试：**
@@ -112,7 +119,7 @@ cd - && rm -rf /tmp/ai-verify
 **最小通过标准（全绿才发布）：**
 - [ ] `npm install` 无报错（sharp / prisma 跨平台自愈 OK）
 - [ ] 服务起得来、首页返回 200/307、`~/.agent-insight/.admin_api_key` 已生成
-- [ ] 包体积 ~30MB，`exclude/`、`data/` 计数为 0
+- [ ] 包体积 ~30MB，`exclude/`、`data/` 计数为 0，`agent-debug-diagnosis` 运行时 Skill 已打入 standalone
 - [ ]（跨平台发布时）在另一个 OS（mac / linux / windows）重复装一遍验证
 
 ### 第 3 步：发布「你刚测过的同一个 tarball」（推荐）

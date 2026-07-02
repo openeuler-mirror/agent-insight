@@ -56,3 +56,25 @@ test('extractDebugJobTokenUsage prefers token totals instead of tool-call counts
   assert.equal(extractDebugJobTokenUsage({ tokens: 88, toolCallCount: 999 }), 88);
   assert.equal(extractDebugJobTokenUsage({ toolCallCount: 7 }), 0);
 });
+
+test('extractDebugJobTokenUsage reads the real runGeneralAgent stats shape', () => {
+  // runGeneralAgent / opencode-client.chat() 收尾时产出的真实 stats 形状：
+  // 顶层 totalTokens 是本轮真实总量，tokens 是明细（cache 为嵌套 { read, write }）。
+  const realStats = {
+    eventCount: 412,
+    textDeltaCount: 95,
+    toolCallCount: 8,
+    subagentCount: 0,
+    eventTypeCounter: { 'message.part.updated': 300 },
+    totalTokens: 201809,
+    tokens: { input: 150000, output: 41809, reasoning: 0, cache: { read: 10000, write: 0 } },
+  };
+  assert.equal(extractDebugJobTokenUsage(realStats), 201809);
+
+  // 退化路径：没有顶层 totalTokens，只有带嵌套 cache 的明细对象，也要正确求和（旧实现会把
+  // 嵌套 cache 当成 0 → 漏算）。120 + 30 + 5 + (7 + 3) = 165。
+  assert.equal(
+    extractDebugJobTokenUsage({ tokens: { input: 120, output: 30, reasoning: 5, cache: { read: 7, write: 3 } } }),
+    165,
+  );
+});

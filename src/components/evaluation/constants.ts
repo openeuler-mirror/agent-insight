@@ -49,6 +49,54 @@ export const STATIC_EVAL_STANDARDS: StaticStandard[] = [
     },
 ];
 
+/**
+ * 静态评估总分 + 各维度贡献分的【唯一口径】——列表页与详情页共用这一个函数，
+ * 杜绝「列表 90 / 详情 91」这类两页不一致（根因是两边各自用不同的取整顺序聚合）。
+ *
+ * 口径：
+ *   - 已评估维度数 N 把 100 分均分，每维度满分 = 100/N；
+ *   - 单维度贡献 contribution = round((score/5) × (100/N))（score ∈ 0..5）；
+ *   - 总分 total = Σ contribution。
+ *
+ * 因为总分就是各维度贡献的和，所以天然满足「小分加起来 = 总分」，
+ * 且相同的维度分得到完全相同的贡献分（不会出现配额法那种「同分不同贡献」的怪象）。
+ * 未评估的维度不计入分母（用户要求）；无任何 L2 维度分 → total = null，调用方显示 `--`。
+ */
+export interface StaticScoreResult {
+    /** 静态合规总分 0..100；没有任何已评估维度时为 null */
+    total: number | null;
+    /** 实际被 L2 评估的维度数（= 均分分母） */
+    scoredCount: number;
+    /** STATIC_EVAL_STANDARDS.key → 该维度整数贡献分；Σ 恰等于 total */
+    contributionByKey: Record<string, number>;
+}
+
+export function computeStaticScore(
+    scores: Record<string, number> | null | undefined,
+): StaticScoreResult {
+    if (!scores) return { total: null, scoredCount: 0, contributionByKey: {} };
+
+    // 按标准顺序收集已评估维度（dimensionAliases 容错 L2 中文名 / L1 英文枚举）
+    const evaluated: { key: string; score: number }[] = [];
+    for (const std of STATIC_EVAL_STANDARDS) {
+        const v = std.dimensionAliases
+            .map(a => scores[a])
+            .find(s => typeof s === 'number' && Number.isFinite(s));
+        if (typeof v === 'number') evaluated.push({ key: std.key, score: v });
+    }
+    const n = evaluated.length;
+    if (n === 0) return { total: null, scoredCount: 0, contributionByKey: {} };
+
+    const contributionByKey: Record<string, number> = {};
+    let total = 0;
+    for (const d of evaluated) {
+        const contribution = Math.round((d.score / 5) * (100 / n));
+        contributionByKey[d.key] = contribution;
+        total += contribution;
+    }
+    return { total, scoredCount: n, contributionByKey };
+}
+
 export const SEVERITY_LABEL: Record<'high' | 'medium' | 'low', string> = {
     high: '高',
     medium: '中',

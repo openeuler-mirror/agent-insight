@@ -67,6 +67,8 @@ Agent 管理页负责把真实运行中的智能体纳入平台管理，是 Agen
 
 ## 平台字段是什么意思
 
+对于 Hermes trace，平台仍然是 `hermes`，主 Agent 名称会从 Hermes 当前 active profile 自动识别：profile 为 `default` 时显示为 `hermes`，其他 profile 显示其 profile 名；子 Agent 名称来自 Hermes 上报的子 Agent role/name。
+
 平台字段用于标识 Agent 所依赖的运行时或执行框架。当前常见平台包括：
 
 - `opencode`

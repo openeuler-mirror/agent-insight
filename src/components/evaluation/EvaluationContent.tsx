@@ -4,6 +4,7 @@ import './evaluation-content.css';
 import {
     STATIC_EVAL_STANDARDS,
     SEVERITY_LABEL,
+    computeStaticScore,
 } from './constants';
 import type {
     EvaluationDetail,
@@ -48,13 +49,9 @@ export function EvaluationContent({
     const matchedIds = new Set(grouped.flatMap(g => g.items.map(i => i.id)));
     const otherIssues = detail.issues.filter(i => !matchedIds.has(i.id));
 
-    // "每维度对总分的贡献"——已评估维度数 N 把 100 分均分，每维度满分 = 100/N，
-    // 维度得分 score (0-5) 转换为贡献 = (score/5) × (100/N)。
-    // 关键约束：所有维度的贡献相加 = 总分（用户原话），所以总分必须从 contribution
-    // 求和反推（而不是先算 avg×20 再独立显示），否则四舍五入会让两边对不上。
-    const evaluatedCount = grouped.filter(g => typeof g.score === 'number').length;
-    const dimContribution = (score: number): number =>
-        evaluatedCount > 0 ? Math.round((score / 5) * (100 / evaluatedCount)) : 0;
+    // 总分与各维度贡献分走唯一口径 computeStaticScore（与列表页 /skill-eval 同源，
+    // 杜绝两页 90/91 不一致）：总分 = 各维度 contribution 之和 → 天然「小分加起来=总分」。
+    const { total: overallScore, contributionByKey } = computeStaticScore(scores);
 
     const findingGroups: FindingGroup[] = grouped.map(g => ({
         key: g.key,
@@ -63,16 +60,10 @@ export function EvaluationContent({
         status: g.status,
         items: g.items.map(toFindingItem),
         scoreLabel: typeof g.score === 'number'
-            ? `${dimContribution(g.score)} 分`
+            ? `${contributionByKey[g.key] ?? 0} 分`
             : undefined,
     }));
     const otherItems = otherIssues.map(toFindingItem);
-
-    // 顶部 Hero 总分 = 所有维度 contribution 之和（不是独立 avg×20 算法），
-    // 这样保证"小分加起来就是总分"在视觉上严丝合缝。
-    const overallScore = evaluatedCount > 0
-        ? grouped.reduce((sum, g) => sum + (typeof g.score === 'number' ? dimContribution(g.score) : 0), 0)
-        : null;
 
     return (
         <div className="ev-content">

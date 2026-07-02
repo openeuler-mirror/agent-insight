@@ -34,7 +34,12 @@ import {
 } from '@/lib/engine/general-agent/server-model-config';
 import { ChatOpenAI } from '@langchain/openai';
 import { HumanMessage, SystemMessage } from '@langchain/core/messages';
-import { recordEvaluatorExecution } from './evaluator-execution-recorder';
+import { randomUUID } from 'node:crypto';
+import {
+    recordDirectEvaluatorExecution,
+    recordEvaluatorExecution,
+    shouldForceOpencodeEvalTransport,
+} from './evaluator-execution-recorder';
 import { tagOpencodeSession } from '@/lib/internal-agent-tag';
 import { findSystemAgentDefinition, getSystemAgentId } from '@/lib/system-agents';
 
@@ -64,7 +69,7 @@ const OPENCODE_FALLBACK_AGENT_NAME = 'build';
 
 const COORDINATOR_SYSTEM_PROMPT = `你是 Agent Insight 的「关键动作轨迹分析器」。你会收到一个 case、可能存在的 Skill 已提取关键动作列表，以及已经处理过的扁平化 trace 步骤。
 
-当 comparison_mode=skill_key_actions 时，你的核心任务是：逐个关键动作独立判断它是否被扁平化 trace 覆盖，并为每个关键动作直接生成 trace 比较分析与 Skill 改进建议。
+当 comparison_mode=skill_key_actions 时，你的核心任务是：逐个关键动作独立判断它是否被扁平化 trace 覆盖，并给出覆盖判定与简要比较说明。Skill 改进建议由独立的「建议流」负责，本分析器只做覆盖判定，不产出 Skill 改进建议。
 当 comparison_mode=trace_only 时，说明当前 trace 未关联 Skill 或没有可用关键动作；此时不要做关键动作分析，只评估工具选择与冗余，完整性不计分。
 你的任务不是输出路径偏离清单，也不是把 trace 和参考路径做全局对齐。为了兼容既有前端，你需要保留执行路径分析汇总：completeness / tool_choice / redundancy。
 
@@ -77,10 +82,7 @@ const COORDINATOR_SYSTEM_PROMPT = `你是 Agent Insight 的「关键动作轨迹
 - comparison_mode=trace_only 时，reference_key_actions 为空，必须输出 key_action_results: []，不要生成 Skill 改进建议。
 - 不要输出 deviation_steps，不要输出 path deviation 列表。
 - 必须输出 dimension_scores 与 dimension_details，用于前端展示完整性、工具选择、冗余三张卡片。
-- 不要合并、去重或复用 Skill 建议；每个关键动作各自生成自己的 skill_improvement_suggestion。
-- 如果关键动作已覆盖，has_skill_improvement 必须为 false，skill_improvement_suggestion 必须是：路径已覆盖该动作，无 Skill 改进点
-- 如果关键动作部分覆盖、缺失或不适用，你需要判断是否能通过修改 SKILL.md 降低复现概率；能则 has_skill_improvement=true，并给出具体建议。
-- skill_improvement_suggestion 必须是可直接落库到 Skill 优化点的建议，写清“在 SKILL.md 哪类流程/约束中补什么”。
+- 本分析器不输出 Skill 改进建议（has_skill_improvement / skill_improvement_suggestion 字段已废弃，无需生成）；只需给出 coverage 判定与 trace_comparison_analysis 比较说明。
 - matched_trace_steps 只能填 actual_flat_trace_steps 中存在的 step_index；没有命中则填 []。
 - confidence 是 0.0 到 1.0 的数字。
 - severity 只能是 low / medium / high。
@@ -159,10 +161,6 @@ const COORDINATOR_SYSTEM_PROMPT = `你是 Agent Insight 的「关键动作轨迹
       "severity": "high",
       "matched_trace_steps": [],
       "trace_comparison_analysis": "实际 trace 在完成修改后直接回复，没有运行测试、lint、构建或其它验证命令，因此该关键动作未覆盖。",
-      "has_skill_improvement": true,
-      "skill_improvement_suggestion": "在 SKILL.md 的执行流程中明确要求：完成代码或配置修改后，必须运行与改动范围匹配的验证命令，并在最终回复中说明验证结果；如果无法验证，需要明确说明原因。",
-      "skill_issue_summary": "修改后缺少验证步骤",
-      "skill_issue_evidence": "Step 2 完成修改后，Step 3 直接最终回复，未出现验证命令。",
       "confidence": 0.91
     }
   ]
@@ -217,12 +215,10 @@ function buildKeyActionAnalysisPayload(input: TrajectoryEvalInput) {
             only_use_actual_flat_trace_steps_as_trace_basis: true,
             actual_trace_granularity: 'event_level_user_llm_tool_skill_task',
             do_not_generate_path_deviation_items: true,
-            do_not_merge_or_dedupe_suggestions: true,
             do_not_infer_extra_key_actions: true,
             skip_key_action_analysis: input.comparisonMode === 'trace_only',
             completeness_is_not_scored: input.comparisonMode === 'trace_only',
             score_only_tool_choice_and_redundancy: input.comparisonMode === 'trace_only',
-            covered_suggestion_text: '路径已覆盖该动作，无 Skill 改进点',
         },
     };
 }
@@ -279,8 +275,6 @@ function normalizeKeyActionResults(value: unknown): KeyActionTraceAnalysisResult
         .map(item => {
             const actionId = String(item.action_id ?? item.actionId ?? '').trim();
             const actionContent = String(item.action_content ?? item.actionContent ?? '').trim();
-            const hasSkillImprovementRaw = item.has_skill_improvement ?? item.hasSkillImprovement;
-            const suggestion = String(item.skill_improvement_suggestion ?? item.skillImprovementSuggestion ?? '').trim();
             return {
                 actionId,
                 actionContent,
@@ -288,10 +282,10 @@ function normalizeKeyActionResults(value: unknown): KeyActionTraceAnalysisResult
                 severity: normalizeSeverity(item.severity),
                 matchedTraceSteps: normalizeStepIndexes(item.matched_trace_steps ?? item.matchedTraceSteps),
                 traceComparisonAnalysis: String(item.trace_comparison_analysis ?? item.traceComparisonAnalysis ?? '').trim(),
-                hasSkillImprovement: hasSkillImprovementRaw === true,
-                skillImprovementSuggestion: suggestion || (hasSkillImprovementRaw === true ? '' : '路径已覆盖该动作，无 Skill 改进点'),
-                skillIssueSummary: String(item.skill_issue_summary ?? item.skillIssueSummary ?? '').trim() || undefined,
-                skillIssueEvidence: String(item.skill_issue_evidence ?? item.skillIssueEvidence ?? '').trim() || undefined,
+                // Skill 改进建议改由独立的「建议流」(skill-suggestion-agent) 产出；
+                // 关键动作覆盖判定不再生成建议，以下字段保留仅为兼容旧结构。
+                hasSkillImprovement: false,
+                skillImprovementSuggestion: '',
                 confidence: Number.isFinite(toNumber(item.confidence)) ? clamp01(toNumber(item.confidence)) : undefined,
             };
         });
@@ -409,12 +403,8 @@ function normalizeOutput(
         if (!item.actionContent) {
             throw new Error(`关键动作评估结果缺少 action_content: ${item.actionId}`);
         }
-        if (!item.traceComparisonAnalysis) {
-            throw new Error(`关键动作评估结果缺少 trace_comparison_analysis: ${item.actionId || item.actionContent}`);
-        }
-        if (!item.skillImprovementSuggestion) {
-            throw new Error(`关键动作评估结果缺少 skill_improvement_suggestion: ${item.actionId || item.actionContent}`);
-        }
+        // trace_comparison_analysis / skill_improvement_suggestion 不再强制校验：
+        // 建议已迁出到独立的「建议流」(skill-suggestion-agent)，本判定只产覆盖结果。
     }
 
     const rawScore = toNumber(overall.score);
@@ -472,6 +462,10 @@ function makeDirectModel(config: ModelConfig) {
         },
         temperature: 0,
         topP: 1,
+        // 显式超时 + 重试，对齐 opencode 路径（idleTimeoutMs 3min / streamTimeoutMs 10min）。
+        // 单轮 judge 正常 <10s，180s 兜住卡死调用；瞬时错误自动重试 2 次。
+        timeout: 180_000,
+        maxRetries: 2,
         modelKwargs: {
             seed: 42,
         },
@@ -490,20 +484,91 @@ async function evaluateTrajectoryDirect(
     const content = typeof response.content === 'string'
         ? response.content
         : JSON.stringify(response.content);
-    const parsed = parseJsonLoose(content);
-    const parsedRecord = asRecord(parsed);
-    if (
-        typeof (parsedRecord.key_action_results ?? parsedRecord.keyActionResults) === 'undefined'
-        && typeof (parsedRecord.dimension_scores ?? parsedRecord.dimensionScores) === 'undefined'
-    ) {
+    // 与 opencode 路径用同一个多策略提取器（extractFinalResultFromText），保证两路解析一致。
+    const parsed = extractFinalResultFromText(content);
+    if (!parsed) {
         throw new Error(`直接 LLM 评测未产出有效 JSON。模型输出前 800 字符：${content.slice(0, 800)}`);
     }
     return normalizeOutput(
-        parsedRecord,
+        asRecord(parsed),
         Array.isArray(input.referenceKeyActions) ? input.referenceKeyActions.length : 0,
         input.comparisonMode,
         input.actualExtractedSteps,
     );
+}
+
+/** 从 langchain 响应里抽 token 用量（usage_metadata 优先，回退 response_metadata.tokenUsage）。 */
+function extractLangchainUsage(
+    response: unknown,
+): { input?: number; output?: number; total?: number } | null {
+    const meta = (response as {
+        usage_metadata?: { input_tokens?: number; output_tokens?: number; total_tokens?: number };
+    })?.usage_metadata;
+    if (meta && (typeof meta.input_tokens === 'number' || typeof meta.output_tokens === 'number')) {
+        return { input: meta.input_tokens, output: meta.output_tokens, total: meta.total_tokens };
+    }
+    const tu = (response as {
+        response_metadata?: { tokenUsage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number } };
+    })?.response_metadata?.tokenUsage;
+    if (tu && (typeof tu.promptTokens === 'number' || typeof tu.completionTokens === 'number')) {
+        return { input: tu.promptTokens, output: tu.completionTokens, total: tu.totalTokens };
+    }
+    return null;
+}
+
+/**
+ * 直连 LLM 轨迹评测（primary path）：一次 model.invoke 拿到 JSON，正常解析后把这次 judge 合成成一条
+ * trace 落库（含 system rubric）。prompt / 模型参数(temperature 0, seed 42) 与 opencode 路径一致，
+ * 只是省掉了起进程 + session 往返。EVAL_FORCE_OPENCODE_TRANSPORT=1 可回退旧 opencode 路径。
+ */
+async function evaluateTrajectoryDirectAndRecord(
+    input: TrajectoryEvalInput,
+    config: ModelConfig,
+    user?: string | null,
+): Promise<TrajectoryEvalOutput> {
+    const model = makeDirectModel(config);
+    const userMsg = buildUserMessage(input);
+    const response = await model.invoke([
+        new SystemMessage(DIRECT_EVALUATOR_SYSTEM_PROMPT),
+        new HumanMessage(userMsg),
+    ]);
+    const assistantText = typeof response.content === 'string'
+        ? response.content
+        : JSON.stringify(response.content);
+    // 与 opencode 路径用同一个多策略提取器（extractFinalResultFromText），保证两路解析一致。
+    const parsed = extractFinalResultFromText(assistantText);
+    if (!parsed) {
+        throw new Error(`直接 LLM 轨迹评测未产出有效 JSON。模型输出前 800 字符：${assistantText.slice(0, 800)}`);
+    }
+    const normalized = normalizeOutput(
+        asRecord(parsed),
+        Array.isArray(input.referenceKeyActions) ? input.referenceKeyActions.length : 0,
+        input.comparisonMode,
+        input.actualExtractedSteps,
+    );
+    const evaluatorSessionId = `${EVALUATOR_AGENT_NAME}-${(input.caseId || 'case').slice(0, 24)}-${randomUUID()}`;
+    const def = findSystemAgentDefinition('opencode', EVALUATOR_AGENT_NAME);
+    await recordDirectEvaluatorExecution({
+        taskId: evaluatorSessionId,
+        agentName: EVALUATOR_AGENT_NAME,
+        user,
+        query: input.caseInput,
+        systemPrompt: DIRECT_EVALUATOR_SYSTEM_PROMPT,
+        userMessage: userMsg,
+        assistantOutput: assistantText,
+        usage: extractLangchainUsage(response),
+        modelID: config.model,
+        skill: def?.traceSkill ?? null,
+    }).catch((err) => {
+        console.warn('[opencode-trajectory-eval] failed to record direct evaluator trace:', (err as Error)?.message || err);
+    });
+    return {
+        ...normalized,
+        rawAnalysis: {
+            ...(normalized.rawAnalysis || {}),
+            evaluatorSessionId,
+        },
+    };
 }
 
 function parseJsonLoose(s: string): unknown | null {
@@ -570,6 +635,26 @@ export async function evaluateTrajectoryViaOpencode(
     skillVersion?: number | null, // skill 版本号,展示用
 ): Promise<TrajectoryEvalOutput> {
   return withBackgroundOpencodeSlot(async () => {
+   // PRIMARY: 直连 LLM 单轮 judge —— 不起 opencode 进程、不建 session（省 ~1.6s 固定开销/次）。
+   // 评测 trace 由 recordDirectEvaluatorExecution 合成落库（含 system rubric），与走 opencode 等价。
+   // 设 EVAL_FORCE_OPENCODE_TRANSPORT=1 可一键回到旧 opencode 路径。
+   if (!shouldForceOpencodeEvalTransport()) {
+     const directConfig = await getActiveConfig(user);
+     if (!directConfig) {
+       throw new TrajectoryEvalConfigError(
+         '未配置评测模型，请先在「模型配置」中激活一个模型。',
+       );
+     }
+     try {
+       return await evaluateTrajectoryDirectAndRecord(input, directConfig, user);
+     } catch (directErr) {
+       if (directErr instanceof TrajectoryEvalConfigError) throw directErr;
+       console.warn(
+         '[opencode-trajectory-eval] direct LLM path failed, falling back to opencode transport:',
+         (directErr as Error)?.message || directErr,
+       );
+     }
+   }
    return runWithEphemeralOpencodeServer({ user: user || undefined, verbose: false, isolateHome: true }, async (serverUrl) => {
     const config = await getActiveConfig(user);
     if (!config) {

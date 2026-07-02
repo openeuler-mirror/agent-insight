@@ -1,4 +1,5 @@
 import { canAccessSkill, resolveUser } from '@/lib/auth/auth';
+import { getSkillVersionStorageDir, resolveRuntimeAssetPath } from '@/lib/env';
 import { db } from '@/lib/storage/prisma';
 import fs from 'fs';
 import { NextRequest, NextResponse } from 'next/server';
@@ -59,13 +60,10 @@ export async function GET(
         let storageRoot = '';
         const assetPath = (sv as any).assetPath as string | undefined;
         if (assetPath) {
-            const m = assetPath.match(/^data\/storage\/skills\/([^/]+)\/v(\d+)$/);
-            if (m) {
-                storageRoot = path.join(process.cwd(), 'data', 'storage', 'skills', m[1], `v${m[2]}`);
-            }
+            storageRoot = resolveRuntimeAssetPath(assetPath);
         }
         if (!storageRoot) {
-            storageRoot = path.join(process.cwd(), 'data', 'storage', 'skills', id, `v${version}`);
+            storageRoot = getSkillVersionStorageDir(id, version);
         }
 
         const fullPath = path.resolve(storageRoot, relPath);
