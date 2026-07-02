@@ -1,6 +1,7 @@
 import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import { resolveAgentInsightDataPath } from '../src/lib/env';
 
 interface PingTarget {
   host: string;
@@ -32,7 +33,7 @@ const DEFAULT_CONFIG: MonitorConfig = {
     { host: '8.8.8.8', label: 'DNS-Google', intervalMs: 30000, count: 2 },
     { host: 'baidu.com', label: '百度', intervalMs: 60000, count: 3 },
   ],
-  logDir: path.resolve(process.cwd(), 'data/ping-logs'),
+  logDir: resolveAgentInsightDataPath('ping-logs'),
   alertThreshold: 3,
 };
 

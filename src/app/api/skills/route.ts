@@ -1,5 +1,6 @@
 import { resolveUser } from '@/lib/auth/auth';
 import { db, prisma, prismaRaw } from '@/lib/storage/prisma';
+import { getSkillStorageRoot } from '@/lib/env';
 import fs from 'fs';
 import { NextRequest, NextResponse } from 'next/server';
 import path from 'path';
@@ -224,7 +225,7 @@ export async function DELETE(request: NextRequest) {
       }
     }
 
-    const storagePath = path.join(process.cwd(), 'data', 'storage', 'skills', id);
+    const storagePath = path.join(getSkillStorageRoot(), id);
 
     if (fs.existsSync(storagePath)) {
       fs.rmSync(storagePath, { recursive: true, force: true });

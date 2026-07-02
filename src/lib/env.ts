@@ -8,6 +8,38 @@ export function getAgentInsightHome(): string {
   return process.env.AGENT_INSIGHT_DATA_DIR || path.join(os.homedir(), '.agent-insight');
 }
 
+export function getAgentInsightDataDir(): string {
+  return path.join(getAgentInsightHome(), 'data');
+}
+
+export function resolveAgentInsightHomePath(...segments: string[]): string {
+  return path.join(getAgentInsightHome(), ...segments);
+}
+
+export function resolveAgentInsightDataPath(...segments: string[]): string {
+  return path.join(getAgentInsightDataDir(), ...segments);
+}
+
+export function getSkillStorageRoot(): string {
+  return resolveAgentInsightDataPath('storage', 'skills');
+}
+
+export function getSkillVersionAssetPath(skillId: string, version: number): string {
+  return `data/storage/skills/${skillId}/v${version}`;
+}
+
+export function getSkillVersionStorageDir(skillId: string, version: number): string {
+  return path.join(getSkillStorageRoot(), skillId, `v${version}`);
+}
+
+export function resolveRuntimeAssetPath(assetPath: string): string {
+  if (path.isAbsolute(assetPath)) return assetPath;
+  if (assetPath === 'data' || assetPath.startsWith('data/')) {
+    return path.join(getAgentInsightHome(), assetPath);
+  }
+  return resolveAgentInsightDataPath(assetPath);
+}
+
 export function getAgentInsightEnvPath(): string {
   return path.join(getAgentInsightHome(), '.env');
 }
@@ -24,7 +56,7 @@ export function getAgentInsightEnvPath(): string {
  *   4) 其它(已是绝对路径 / 自定义 / 非 file:)→ 原样返回。
  */
 export function resolveDefaultDatabaseUrl(databaseUrl: string | undefined): string {
-  const homeDbUrl = `file:${path.join(getAgentInsightHome(), 'data', 'witty_insight.db')}`;
+  const homeDbUrl = `file:${resolveAgentInsightDataPath('witty_insight.db')}`;
 
   if (!databaseUrl || !databaseUrl.trim()) return homeDbUrl;                 // 1
   if (databaseUrl === DEFAULT_DATABASE_URL) return homeDbUrl;               // 2

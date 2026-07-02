@@ -12,8 +12,9 @@ import {
   type RootCauseItem,
 } from '@/lib/dataset-case-root-causes';
 import { extractRootCausesFromExpected } from '@/lib/engine/evaluation/root-cause-extractor';
+import { resolveAgentInsightDataPath } from '@/lib/env';
 
-const DATA_DIR = path.join(process.cwd(), 'data');
+const DATA_DIR = resolveAgentInsightDataPath();
 const LEGACY_FILE = path.join(DATA_DIR, 'agent_datasets.json');
 
 let fileBackendWarned = false;

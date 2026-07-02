@@ -6,8 +6,9 @@ import { generateFlowParsePrompt, generateExecutionMatchPrompt, generateStepExtr
 import { buildAgentCallTree, walkTree, type AgentEvent, type AgentNode, type RawInteraction } from '@/lib/engine/observability/agent-trace';
 import fs from 'fs';
 import path from 'path';
+import { resolveAgentInsightDataPath } from '@/lib/env';
 
-const LOG_FILE = path.join(process.cwd(), 'data', 'flow_debug.jsonl');
+const LOG_FILE = resolveAgentInsightDataPath('flow_debug.jsonl');
 const BATCH_SIZE = 10;
 
 interface LogInput {

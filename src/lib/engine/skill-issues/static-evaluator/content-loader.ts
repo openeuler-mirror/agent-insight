@@ -10,6 +10,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import { resolveRuntimeAssetPath } from '@/lib/env';
 
 export interface AssetBundle {
   /** @deprecated 仅向后兼容；用 bundleTextFull 或 bundleChunks 替代 */
@@ -132,9 +133,7 @@ export function loadAssetBundle(assetPath: string | null | undefined): AssetBund
       bundleTextFull: '', bundleChunks: [],
     };
   }
-  // path.resolve 等价于 path.join(process.cwd(), x)，但避开 Turbopack
-  // 对 `path.join(process.cwd(), <dynamic>)` 的 broad-pattern 警告。
-  const rootAbs = path.resolve(assetPath);
+  const rootAbs = resolveRuntimeAssetPath(assetPath);
   const refs = readDirRecursive(rootAbs, 'references');
   const scripts = readDirRecursive(rootAbs, 'scripts');
   const all = [...refs, ...scripts];

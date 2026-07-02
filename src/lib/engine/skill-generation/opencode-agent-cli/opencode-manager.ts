@@ -6,6 +6,7 @@ import os from 'node:os'
 import path from 'node:path'
 // @ts-ignore
 import { createOpencodeClient, type OpencodeClient } from '@opencode-ai/sdk'
+import { resolveAgentInsightDataPath } from '@/lib/env'
 import { db } from '@/lib/storage/prisma'
 
 // ── 类型 ─────────────────────────────────────────────────────────────
@@ -518,7 +519,7 @@ export async function prepareIsolatedHome(
 ): Promise<{ isolatedHome: string; cleanup: () => Promise<void> }> {
   const slug = userToSlug(user)
   const key = opts?.key || `eph-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-  const root = path.join(process.cwd(), 'data', '.opencode-runtime', slug, `isolated-home-${key}`)
+  const root = resolveAgentInsightDataPath('.opencode-runtime', slug, `isolated-home-${key}`)
 
   // 创建 4 个空目录, 确保 opencode 扫到的 user skill 列表是空
   // (即使空目录 opencode 扫也 OK, 没有 SKILL.md 就算 0 个 skill)
@@ -567,7 +568,7 @@ async function prepareIsolatedXdgConfigHome(user: string): Promise<{
   configHash: string
 }> {
   const slug = userToSlug(user)
-  const root = path.join(process.cwd(), 'data', '.opencode-runtime', slug)
+  const root = resolveAgentInsightDataPath('.opencode-runtime', slug)
   const cfgDir = path.join(root, 'opencode')
   fs.mkdirSync(cfgDir, { recursive: true })
   const cfgPath = path.join(cfgDir, 'opencode.json')

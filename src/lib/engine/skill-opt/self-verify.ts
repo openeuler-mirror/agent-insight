@@ -13,6 +13,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { getSkillVersionAssetPath, getSkillVersionStorageDir } from '@/lib/env';
 import { db } from '@/lib/storage/prisma';
 import { runGeneralAgent } from '@/lib/engine/general-agent';
 import { judgeAnswer, type JudgeCriteria } from '@/lib/engine/evaluation/judge';
@@ -65,7 +66,7 @@ async function deployTempCandidate(
 ): Promise<{ version: number; cleanup: () => void }> {
   // 负且唯一：不进 latest 链路；随机段降低并发碰撞概率。int32 安全。
   const version = -(100_000 + Math.floor(Math.random() * 1_000_000));
-  const dir = path.join(process.cwd(), 'data', 'storage', 'skills', skillId, `v${version}`);
+  const dir = getSkillVersionStorageDir(skillId, version);
   const rels: string[] = [];
   fs.mkdirSync(dir, { recursive: true });
   for (const [rel, content] of Object.entries(candidateFiles)) {
@@ -80,7 +81,7 @@ async function deployTempCandidate(
     skillId,
     version,
     content: candidateSkillMd,
-    assetPath: `data/storage/skills/${skillId}/v${version}`,
+    assetPath: getSkillVersionAssetPath(skillId, version),
     files: JSON.stringify(rels),
     changeLog: 'self-verify ephemeral candidate',
   });

@@ -26,6 +26,32 @@ description: "登录看板、注册模型、创建 Agent、完成接入，并在
 
 ---
 
+## 可选：用 Docker 部署服务端
+
+如果你还没有部署看板，可以直接用仓库根目录的 `Dockerfile` 构建镜像。镜像默认从 npm 拉取 `agent-insight@latest`，不会把源码复制进镜像：
+
+```bash
+docker build --pull --no-cache -t agent-insight:npm-latest .
+docker run -d --name agent-insight -p 3000:3000 -v agent-insight-data:/data/agent-insight agent-insight:npm-latest
+curl -i http://localhost:3000/
+```
+
+这条命令会把容器内的 `/data/agent-insight` 挂到 Docker volume `agent-insight-data`。SQLite 数据库、Skill 附件、评测运行时文件都会写入该目录下的 `data/`，容器重启或重建后仍可复用。
+
+需要固定某个 npm 版本时：
+
+```bash
+docker build --pull --build-arg AGENT_INSIGHT_VERSION=0.2.2-beta -t agent-insight:0.2.2-beta .
+```
+
+如果你只是想在服务器上快速验证本地改动，不想每次都先发布 npm 包，可以改走“`npm pack` + 上传 `.tgz` + Docker 缓存构建”的测试流程，见 [Docker 测试构建](./docker-testing)。
+
+容器只负责运行 Agent Insight 服务端。OpenCode、Claude Code、OpenClaw、LangChain 等框架的接入命令仍应在对应 Agent 实际运行的机器或容器里执行。当前仓库里的这份 `Dockerfile` 走 **SQLite 优先** 路线，不内置 OpenGauss 运行时依赖。
+
+如果你要使用 `opencode-live` 触发分析、轨迹评测等会由服务端**本机拉起 opencode** 的能力，请确保当前 `Dockerfile` 构建出的镜像完整保留 npm 依赖，并让容器能够访问模型提供商网络；这些评测不会复用外部宿主机上另开的 opencode 进程。
+
+---
+
 ## 推荐路径
 
 对于大多数用户，建议按下面顺序操作：

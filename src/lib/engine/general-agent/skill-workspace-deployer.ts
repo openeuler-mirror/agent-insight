@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { resolveRuntimeAssetPath } from '@/lib/env';
 import type { ResolvedSkill } from './skill-resolver';
 
 /**
@@ -75,9 +76,7 @@ export function deploySkillToWorkspace(
   // 2. 复制 assetPath 下的附属资源（references/, scripts/ 等子目录）
   //    SKILL.md 已由上面用 DB content 写过，assetPath 里的同名文件不覆盖，保证版本精确性。
   if (skill.assetPath) {
-    // path.resolve 等价于 path.join(process.cwd(), x)，但避开 Turbopack
-    // 对 `path.join(process.cwd(), <dynamic>)` 的 broad-pattern 警告。
-    const assetRoot = path.resolve(skill.assetPath);
+    const assetRoot = resolveRuntimeAssetPath(skill.assetPath);
 
     if (fs.existsSync(assetRoot)) {
       for (const entry of fs.readdirSync(assetRoot)) {

@@ -53,6 +53,7 @@ test('storageDirOverride 命中 → 从权威目录预填（带上核心脚本 a
 
 test('同名碰撞：name-scan 会选到缺脚本的旧目录；storageDirOverride 绕过它选到正确目录', () => {
   const origCwd = process.cwd();
+  const origDataDir = process.env.AGENT_INSIGHT_DATA_DIR;
   // realpathSync：macOS 下 mktmp 返回 /var/...，chdir 后 process.cwd() 是 /private/var/...，
   // resolveSkillStorageDirSync 按 process.cwd() 拼路径——预期值也得用同一 realpath 形态。
   const cwd = fs.realpathSync(mktmp('cwd-'));
@@ -67,6 +68,7 @@ test('同名碰撞：name-scan 会选到缺脚本的旧目录；storageDirOverri
     seedSkillDir(path.join(root, 'id-zzz-orphan', 'v1'), SKILL, { withScript: false });
     seedSkillDir(authoritativeDir, SKILL, { withScript: true });
 
+    process.env.AGENT_INSIGHT_DATA_DIR = cwd;
     process.chdir(cwd);
 
     // 1) 暴露 bug：name-scan 只能按 frontmatter name 匹配，两个同名目录无法区分，
@@ -93,6 +95,8 @@ test('同名碰撞：name-scan 会选到缺脚本的旧目录；storageDirOverri
     assert.ok(hasScript(workspaceB), 'override 应让预填命中带 analyze_logs.py 的权威目录');
   } finally {
     process.chdir(origCwd);
+    if (origDataDir === undefined) delete process.env.AGENT_INSIGHT_DATA_DIR;
+    else process.env.AGENT_INSIGHT_DATA_DIR = origDataDir;
     fs.rmSync(cwd, { recursive: true, force: true });
     fs.rmSync(workspaceA, { recursive: true, force: true });
     fs.rmSync(workspaceB, { recursive: true, force: true });
@@ -102,12 +106,14 @@ test('同名碰撞：name-scan 会选到缺脚本的旧目录；storageDirOverri
 
 test('storageDirOverride 指向不存在的路径 → 回退 legacy name-scan', () => {
   const origCwd = process.cwd();
+  const origDataDir = process.env.AGENT_INSIGHT_DATA_DIR;
   const cwd = fs.realpathSync(mktmp('cwd-'));
   const workspaceDir = mktmp('ws-');
   try {
     const root = path.join(cwd, 'data', 'storage', 'skills');
     const onlyDir = path.join(root, 'id-only', 'v2');
     seedSkillDir(onlyDir, SKILL, { withScript: true });
+    process.env.AGENT_INSIGHT_DATA_DIR = cwd;
     process.chdir(cwd);
 
     const res = ensureSkillFilesInWorkspace({
@@ -122,6 +128,8 @@ test('storageDirOverride 指向不存在的路径 → 回退 legacy name-scan', 
     assert.ok(hasScript(workspaceDir));
   } finally {
     process.chdir(origCwd);
+    if (origDataDir === undefined) delete process.env.AGENT_INSIGHT_DATA_DIR;
+    else process.env.AGENT_INSIGHT_DATA_DIR = origDataDir;
     fs.rmSync(cwd, { recursive: true, force: true });
     fs.rmSync(workspaceDir, { recursive: true, force: true });
   }
@@ -152,9 +160,11 @@ test('workspace 已有 SKILL.md → 跳过预填（follow-up 复用），即便�
 
 test('无 override、name-scan 未命中 → 回退 baselineFiles', () => {
   const origCwd = process.cwd();
+  const origDataDir = process.env.AGENT_INSIGHT_DATA_DIR;
   const cwd = mktmp('cwd-empty-'); // 没有 data/storage/skills，name-scan 必然 miss
   const workspaceDir = mktmp('ws-');
   try {
+    process.env.AGENT_INSIGHT_DATA_DIR = cwd;
     process.chdir(cwd);
     const res = ensureSkillFilesInWorkspace({
       skillName: SKILL,
@@ -169,6 +179,8 @@ test('无 override、name-scan 未命中 → 回退 baselineFiles', () => {
     assert.ok(fs.existsSync(path.join(workspaceDir, 'SKILL.md')));
   } finally {
     process.chdir(origCwd);
+    if (origDataDir === undefined) delete process.env.AGENT_INSIGHT_DATA_DIR;
+    else process.env.AGENT_INSIGHT_DATA_DIR = origDataDir;
     fs.rmSync(cwd, { recursive: true, force: true });
     fs.rmSync(workspaceDir, { recursive: true, force: true });
   }

@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { getSkillStorageRoot } from '@/lib/env';
 
 /**
  * skill-opt 的 workspace 预填与存储目录解析（纯 fs，无 DB / 无 opencode 依赖）。
@@ -112,7 +113,7 @@ export function writeBaselineFiles(workspaceDir: string, files: Record<string, s
  *  路径模式 2：data/storage/skills/<id>/v<N>/         （by-id 命名，按 frontmatter name 扫描匹配）
  */
 export function resolveSkillStorageDirSync(skillName: string, version: number): string | null {
-  const root = path.join(process.cwd(), 'data', 'storage', 'skills');
+  const root = getSkillStorageRoot();
   if (!fs.existsSync(root)) return null;
 
   // 模式 1：直接按 skillName 命名（少数老 skill）
