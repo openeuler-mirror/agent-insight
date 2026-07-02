@@ -1970,6 +1970,24 @@ export async function deleteExecutionsByTaskId(taskId: string, framework?: strin
     }
 }
 
+/**
+ * 无 key、也无法解析出 user 时的**默认归属账户**。用于「多人共用一个账号、开箱即用不配 key」场景：
+ * client 只填平台 IP、不带 x-witty-api-key，数据统一归到这个账号。
+ *
+ * 通过 env `AGENT_INSIGHT_DEFAULT_INGEST_USER` 配置；未设置则返回 null（保持原行为：upload 直接拒绝、
+ * 其他路径走旧的「DB 第一个用户」非确定兜底）。
+ *
+ * 建议指向一个**专门的普通账号**（如 team/shared），不要用 admin / anonymous —— 它们是
+ * TRACE_SERVICE_OWNERS 服务占位账号，reattributeServiceTraceOwner 会把 trace 从中挪走。
+ *
+ * 注意：这是「完全没带 key」才走的默认；「带了 key 但 DB 查不到」仍按各入口规则报错（如 upload 401），
+ * 以免把配错 key 的数据静默灌进共享账号。
+ */
+export function getDefaultIngestUser(): string | null {
+    const v = (process.env.AGENT_INSIGHT_DEFAULT_INGEST_USER || '').trim();
+    return v || null;
+}
+
 export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ success: boolean; record: ExecutionRecord }> {
     const id = data.upload_id || data.task_id;
     let recordId = id || crypto.randomUUID();
@@ -2099,17 +2117,27 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
     }
 
     if (!targetRecord.user) {
-        try {
-            const client = db.getClient();
-            if ('query' in client) {
-                const res = await (client as any).query('SELECT username FROM "User" LIMIT 1');
-                if (res.rows[0]) {
-                    targetRecord.user = res.rows[0].username;
-                    console.log(`[Data-Service] Fallback resolved user for task ${targetRecord.task_id} to: ${targetRecord.user}`);
+        const defaultUser = getDefaultIngestUser();
+        if (defaultUser) {
+            // 无 key / 无法解析 user 时，确定性地归到配置的默认账号（开箱即用共享账号场景）。
+            // 覆盖 OTLP / proxy / opencode 等所有「不 reject、user 落空」的路径 —— 它们都汇到这里。
+            targetRecord.user = defaultUser;
+            console.log(`[Data-Service] No user on record for task ${targetRecord.task_id}, defaulting to AGENT_INSIGHT_DEFAULT_INGEST_USER=${defaultUser}`);
+        } else {
+            // 未配置默认账号：保留旧兜底（DB 第一个用户）。注意这是**非确定性**的（取决于建表顺序），
+            // 生产建议配 AGENT_INSIGHT_DEFAULT_INGEST_USER 明确指定，避免数据莫名归到某个账号。
+            try {
+                const client = db.getClient();
+                if ('query' in client) {
+                    const res = await (client as any).query('SELECT username FROM "User" LIMIT 1');
+                    if (res.rows[0]) {
+                        targetRecord.user = res.rows[0].username;
+                        console.log(`[Data-Service] Fallback resolved user for task ${targetRecord.task_id} to: ${targetRecord.user}`);
+                    }
                 }
+            } catch (e) {
+                console.warn('[Data-Service] Fallback user lookup failed:', e);
             }
-        } catch (e) {
-            console.warn('[Data-Service] Fallback user lookup failed:', e);
         }
     }
 
@@ -2419,38 +2447,48 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
             targetRecord.agentName,
         );
 
-        try {
-            for (const observed of observedAgents) {
+        // 并发安全 + 单点隔离：try/catch 收细到**单个 agent**，一个失败不再中断整条 trace 的其余登记
+        // 与 agentId 关联；create 撞 @@unique([platform,name,user]) 时回查拿现有行（多人共用同一账号、
+        // 首次并发登记同名 agent 的场景）——不重复、不覆盖、不报错。
+        for (const observed of observedAgents) {
+            try {
                 let existingAgent = await prisma.registeredAgent.findFirst({
-                    where: {
-                        platform,
-                        name: observed.name,
-                        user: user
-                    }
+                    where: { platform, name: observed.name, user: user }
                 });
 
                 if (!existingAgent) {
-                    existingAgent = await prisma.registeredAgent.create({
-                        data: {
-                            platform,
-                            name: observed.name,
-                            user,
-                            // 已知系统/内置 Agent 名（评估器等）直接落 system，避免它们换 framework
-                            // （如评估器的 direct-llm 路径）被 ingest 登记成 user、污染用户视图/统计。
-                            agentOwnership: isInternalSystemAgentTrace(observed.name) ? 'system' : 'user',
-                            agentType: observed.agentType === 'main'
-                                ? (targetRecord.agentType || 'main')
-                                : 'subagent'
+                    try {
+                        existingAgent = await prisma.registeredAgent.create({
+                            data: {
+                                platform,
+                                name: observed.name,
+                                user,
+                                // 已知系统/内置 Agent 名（评估器等）直接落 system，避免它们换 framework
+                                // （如评估器的 direct-llm 路径）被 ingest 登记成 user、污染用户视图/统计。
+                                agentOwnership: isInternalSystemAgentTrace(observed.name) ? 'system' : 'user',
+                                agentType: observed.agentType === 'main'
+                                    ? (targetRecord.agentType || 'main')
+                                    : 'subagent'
+                            }
+                        });
+                    } catch (createErr) {
+                        // 并发下另一个请求刚建了同一 (platform,name,user) 行 → 撞唯一约束。回查拿到它即可。
+                        existingAgent = await prisma.registeredAgent.findFirst({
+                            where: { platform, name: observed.name, user: user }
+                        });
+                        if (!existingAgent) {
+                            console.warn(`[Data-Service] register observed agent failed (non-fatal): ${observed.name}`, createErr);
                         }
-                    });
+                    }
                 }
 
-                if (observed.agentType === 'main' && observed.name === targetRecord.agentName) {
+                if (existingAgent && observed.agentType === 'main' && observed.name === targetRecord.agentName) {
                     agentId = existingAgent.id;
                 }
+            } catch (e) {
+                // 单个 agent 的意外错误不影响其余 agent 与本条 trace 的保存。
+                console.warn(`[Data-Service] observed-agent registration error (non-fatal): ${observed.name}`, e);
             }
-        } catch (e) {
-            console.error('[Data-Service] Failed to query or create RegisteredAgent:', e);
         }
     }
 
