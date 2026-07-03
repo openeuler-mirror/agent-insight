@@ -128,6 +128,51 @@ bash scripts/stop.sh
   <img src="docs/images/login.png" alt="登录" />
 </p>
 
+#### 方式三：使用 Docker 镜像部署
+
+适用于服务器部署或希望应用容器与数据目录分离的场景。镜像已发布为多架构，`x86_64` 服务器会自动拉取 `linux/amd64`，`aarch64` 服务器会自动拉取 `linux/arm64`。
+
+**用法一：在线拉取 Docker Hub 镜像**
+
+```bash
+docker pull karaggagent/agent-insight:latest
+
+mkdir -p /root/.agent-insight/data
+chmod -R 777 /root/.agent-insight
+
+docker run -d \
+  --name agent-insight \
+  --restart unless-stopped \
+  -p 3000:3000 \
+  -v /root/.agent-insight:/data/agent-insight \
+  karaggagent/agent-insight:latest
+```
+
+生产环境如需锁定版本号，可以把 `latest` 换成固定版本，例如 `karaggagent/agent-insight:0.5.0`。
+
+**用法二：离线导入 `.tar` 镜像**
+
+如果服务器无法访问 Docker Hub，可以先拿到离线镜像包，例如 `agent-insight-0.5.0-image.tar`，再导入运行：
+
+```bash
+docker load -i agent-insight-0.5.0-image.tar
+docker images | grep agent-insight
+
+mkdir -p /root/.agent-insight/data
+chmod -R 777 /root/.agent-insight
+
+docker run -d \
+  --name agent-insight \
+  --restart unless-stopped \
+  -p 3000:3000 \
+  -v /root/.agent-insight:/data/agent-insight \
+  karaggagent/agent-insight:0.5.0
+```
+
+容器内 `/data/agent-insight` 对应宿主机 `/root/.agent-insight`，默认 SQLite 数据库位于 `/root/.agent-insight/data/witty_insight.db`。升级镜像时保留这个挂载目录即可复用数据。
+
+更多部署、升级和排查说明见 [5 分钟上手](docs/user-guide/quickstart.md)。
+
 ### 2. Agent 平台接入
 
 当前系统支持与多种主流 Agent 平台（包括但不限于 OpenCode、Claude Code 等）集成。为实现数据采集与能力观测，需在目标 Agent 平台中配置并安装 Agent-Insight 插件。各平台的插件安装流程基本通用，以下以 Linux 环境下的 OpenCode 平台为例，说明 Agent-Insight 插件的具体安装与配置方式：
