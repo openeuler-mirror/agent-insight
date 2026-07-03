@@ -137,14 +137,14 @@ bash scripts/stop.sh
 ```bash
 docker pull karaggagent/agent-insight:latest
 
-mkdir -p /root/.agent-insight/data
-chmod -R 777 /root/.agent-insight
+mkdir -p ~/.agent-insight/data
+chmod -R 777 ~/.agent-insight
 
 docker run -d \
   --name agent-insight \
   --restart unless-stopped \
   -p 3000:3000 \
-  -v /root/.agent-insight:/data/agent-insight \
+  -v ~/.agent-insight:/data/agent-insight \
   karaggagent/agent-insight:latest
 ```
 
@@ -158,18 +158,18 @@ docker run -d \
 docker load -i agent-insight-0.5.0-image.tar
 docker images | grep agent-insight
 
-mkdir -p /root/.agent-insight/data
-chmod -R 777 /root/.agent-insight
+mkdir -p ~/.agent-insight/data
+chmod -R 777 ~/.agent-insight
 
 docker run -d \
   --name agent-insight \
   --restart unless-stopped \
   -p 3000:3000 \
-  -v /root/.agent-insight:/data/agent-insight \
+  -v ~/.agent-insight:/data/agent-insight \
   karaggagent/agent-insight:0.5.0
 ```
 
-容器内 `/data/agent-insight` 对应宿主机 `/root/.agent-insight`，默认 SQLite 数据库位于 `/root/.agent-insight/data/witty_insight.db`。升级镜像时保留这个挂载目录即可复用数据。
+容器内 `/data/agent-insight` 对应宿主机当前用户的 `~/.agent-insight`，默认 SQLite 数据库位于 `~/.agent-insight/data/witty_insight.db`。升级镜像时保留这个挂载目录即可复用数据。
 
 更多部署、升级和排查说明见 [5 分钟上手](docs/user-guide/quickstart.md)。
 

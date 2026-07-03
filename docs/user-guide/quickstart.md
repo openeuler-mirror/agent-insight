@@ -35,8 +35,8 @@ description: "登录看板、注册模型、创建 Agent、完成接入，并在
 ```bash
 docker pull karaggagent/agent-insight:latest
 
-mkdir -p /root/.agent-insight/data
-chmod -R 777 /root/.agent-insight
+mkdir -p ~/.agent-insight/data
+chmod -R 777 ~/.agent-insight
 
 docker stop agent-insight 2>/dev/null || true
 docker rm agent-insight 2>/dev/null || true
@@ -45,16 +45,16 @@ docker run -d \
   --name agent-insight \
   --restart unless-stopped \
   -p 3000:3000 \
-  -v /root/.agent-insight:/data/agent-insight \
+  -v ~/.agent-insight:/data/agent-insight \
   karaggagent/agent-insight:latest
 
 curl -i http://localhost:3000/
 ```
 
-这条命令会把容器内的 `/data/agent-insight` 挂到服务器宿主机的 `/root/.agent-insight`。SQLite 数据库、Skill 附件、评测运行时文件都会写入该目录下的 `data/`，容器重启、删除、重拉镜像后仍可复用。默认数据库路径是：
+这条命令会把容器内的 `/data/agent-insight` 挂到服务器宿主机当前用户的 `~/.agent-insight`。SQLite 数据库、Skill 附件、评测运行时文件都会写入该目录下的 `data/`，容器重启、删除、重拉镜像后仍可复用。默认数据库路径是：
 
 ```text
-/root/.agent-insight/data/witty_insight.db
+~/.agent-insight/data/witty_insight.db
 ```
 
 ### 用法二：离线导入 `.tar` 镜像
@@ -65,8 +65,8 @@ curl -i http://localhost:3000/
 docker load -i agent-insight-0.5.0-image.tar
 docker images | grep agent-insight
 
-mkdir -p /root/.agent-insight/data
-chmod -R 777 /root/.agent-insight
+mkdir -p ~/.agent-insight/data
+chmod -R 777 ~/.agent-insight
 
 docker stop agent-insight 2>/dev/null || true
 docker rm agent-insight 2>/dev/null || true
@@ -75,7 +75,7 @@ docker run -d \
   --name agent-insight \
   --restart unless-stopped \
   -p 3000:3000 \
-  -v /root/.agent-insight:/data/agent-insight \
+  -v ~/.agent-insight:/data/agent-insight \
   karaggagent/agent-insight:0.5.0
 
 curl -i http://localhost:3000/
@@ -104,11 +104,11 @@ docker run -d \
   --name agent-insight \
   --restart unless-stopped \
   -p 3000:3000 \
-  -v /root/.agent-insight:/data/agent-insight \
+  -v ~/.agent-insight:/data/agent-insight \
   karaggagent/agent-insight:0.5.0
 ```
 
-升级到新版本时，保留同一个挂载目录即可，容器数据不会随镜像更新丢失。
+服务器上用哪个用户运行 Docker，就会挂载哪个用户的 home 目录。升级到新版本时，保留同一个挂载目录即可，容器数据不会随镜像更新丢失。
 
 如果容器启动后访问不到 `3000`，先看容器状态和日志：
 
