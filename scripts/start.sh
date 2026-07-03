@@ -18,8 +18,10 @@ load_agent_insight_env() {
     set +a
   fi
 
-  if [ "${DATABASE_URL:-}" = "$DEFAULT_DATABASE_URL" ]; then
+  if [ -z "${DATABASE_URL:-}" ] || [ "$DATABASE_URL" = "$DEFAULT_DATABASE_URL" ]; then
     export DATABASE_URL="file:$AGENT_INSIGHT_DATA_DIR/witty_insight.db"
+  elif [[ "$DATABASE_URL" == file:\~* ]]; then
+    export DATABASE_URL="file:$HOME${DATABASE_URL#file:\~}"
   fi
 }
 
@@ -74,6 +76,12 @@ echo "Checking port $PORT..."
 
 # Check for OpenGauss configuration in ~/.agent-insight/.env
 load_agent_insight_env
+
+if [[ "${DATABASE_URL:-}" == file:* ]]; then
+  echo "SQLite database target: ${DATABASE_URL#file:}"
+else
+  echo "Using custom database configuration."
+fi
 
 if [ -n "$DB_HOST" ]; then
   echo "OpenGauss configuration detected (DB_HOST=$DB_HOST)."
@@ -147,10 +155,22 @@ echo "Clearing Next.js build cache (.next)..."
 rm -rf .next
 
 echo "Syncing database schema..."
-npx prisma db push
+if ! npx prisma db push; then
+  echo ""
+  echo "  ⛔ prisma db push 失败 —— 数据库 schema 没同步成功。"
+  echo "     直接启动 server 会让运行时撞到 schema/code 不一致。"
+  echo "     退出脚本。修好后重新跑 bash scripts/start.sh。"
+  exit 1
+fi
 
 echo "Generating Prisma client..."
-npx prisma generate
+if ! npx prisma generate; then
+  echo ""
+  echo "  ⛔ prisma generate 失败 —— Prisma Client 没更新，但 schema 已同步。"
+  echo "     启动 server 会用旧 client 查新表，所有数据 API 都可能挂。"
+  echo "     退出脚本。修好后重新跑 bash scripts/start.sh。"
+  exit 1
+fi
 
 echo "Building project..."
 # Limit Node memory to 2GB to prevent OOM kills on small servers
