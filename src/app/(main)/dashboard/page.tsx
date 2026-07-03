@@ -1,996 +1,622 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
-import { AppTopBar } from '@/components/shell/AppTopBar';
-import { apiFetch } from '@/lib/client/api';
-import { Term } from '@/components/text/Term';
+// 仪表盘 · 舰队监控大盘。
+// 结构（对齐《监控大盘需求文档》REQ-FW）：健康总览 KPI 常驻 + 6 维度页签 + 懒加载 + 告警角标。
+// 数据全部来自真实 Execution 聚合（/api/fleet/trends + /api/fleet/breakdowns）。
+// 口径见 src/lib/fleet/agg.ts / 《视图数据计算口径说明》；硬错误口径，软错误(judge)未叠加。
+// 缺埋点的面板（per-tool 延迟、TTFT、箱线、self-time、协作网络）以占位卡诚实标注。
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+import React, { useCallback, useEffect, useState } from 'react';
+import {
+    ResponsiveContainer, ComposedChart, BarChart, LineChart,
+    Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, Legend,
+} from 'recharts';
+import { apiFetch, getApiUrl } from '@/lib/client/api';
+import { useThemeColors } from '@/lib/client/theme-context';
+import { useAuth } from '@/lib/auth/auth-context';
 
-interface AgentRow {
-    name: string;
-    platform: string;
-    status: 'running' | 'idle' | 'error';
-    calls: number;
-    successRate: number;
-    p95ms: number;
+// ─── Types ──────────────────────────────────────────────────────────────────
+interface Kpi {
+    traces: number; successRate: number; p95Latency: number;
+    activeAgents: number; activeModels: number;
+    toolCalls: number; toolErrorRate: number; llmCalls: number;
+    totalTokens: number; inputTokens: number; outputTokens: number; totalCost: number;
 }
-
-interface AlertRow {
-    id: number;
-    level: string;
-    agent: string;
-    desc: string;
-    href: string;
-    cta: string;
+interface Bucket {
+    ts: string; label: string; traces: number; success: number; fail: number; errorRate: number;
+    latencyP50: number; latencyP95: number; latencyP99: number;
+    inputTokens: number; outputTokens: number; totalTokens: number;
+    cost: number; avgTokens: number; avgCost: number;
 }
-
-interface TrendRow {
-    day: string;
-    calls: number;
-    success: number;
+interface TrendsResp {
+    window: '1d' | '1w' | '1m'; granularity: 'hour' | 'day';
+    currency: string; errorThreshold: number; pricingMissingModels: string[];
+    kpi: { current: Kpi; previous: Kpi }; buckets: Bucket[];
 }
-
-interface RecentItem {
-    icon: string;
-    text: string;
-    time: string;
-    href: string;
-}
-
-interface DashboardStats {
-    health: {
-        totalAgents: number;
-        onlineAgents: number;
-        todayCalls: number;
-        yesterdayCalls: number;
-        successRate1h: number | null;
-        p95Latency: number;
-        avgLatency: number;
-        todayCost: number;
+interface BreakdownsResp {
+    reliability: {
+        failAgents: { name: string; total: number; fail: number; errorRate: number }[];
+        latHist: { label: string; count: number }[];
+        slowTraces: { taskId: string; agent: string; query: string; latency: number; tokens: number; agents: number; ok: boolean; ts: string }[];
     };
-    trend: TrendRow[];
-    agents: AgentRow[];
-    alerts: AlertRow[];
-    recent: RecentItem[];
-    availablePlatforms: string[];
+    model: { callRank: { model: string; calls: number }[]; tokenComp: { model: string; input: number; output: number }[] };
+    tool: { trend: { label: string; calls: number; successRate: number }[] };
+    agent: {
+        trend: { label: string; avgTools: number; avgModels: number }[];
+        tokenRank: { name: string; tokens: number }[];
+        callRank: { name: string; traces: number }[];
+        skillRank: { skill: string; calls: number }[];
+    };
+    orchestration: {
+        complexityHist: { label: string; count: number }[];
+        collab: {
+            nodes: { id: string; degree: number }[];
+            edges: { from: string; to: string; weight: number }[];
+            traceCount: number; truncated: boolean;
+        };
+    };
+    flags: Record<string, boolean>;
 }
 
-// ─── Fallback data (shown while loading or when DB is empty) ──────────────────
-
-const EMPTY_STATS: DashboardStats = {
-    health: {
-        totalAgents: 0, onlineAgents: 0, todayCalls: 0, yesterdayCalls: 0,
-        successRate1h: null, p95Latency: 0, avgLatency: 0, todayCost: 0,
-    },
-    trend: Array.from({ length: 7 }, (_, i) => {
-        const d = new Date();
-        d.setDate(d.getDate() - (6 - i));
-        return { day: `${d.getMonth() + 1}/${d.getDate()}`, calls: 0, success: 0 };
-    }),
-    agents: [],
-    alerts: [],
-    recent: [],
-    availablePlatforms: [],
-};
-
-const REFRESH_OPTIONS = [
-    { label: '3s',  value: 3000  },
-    { label: '5s',  value: 5000  },
-    { label: '10s', value: 10000 },
-    { label: '30s', value: 30000 },
-    { label: '60s', value: 60000 },
+type TabKey = 'trends' | 'reliability' | 'model' | 'tool' | 'agent' | 'orchestration';
+const TABS: { key: TabKey; label: string }[] = [
+    { key: 'trends', label: '系统趋势' },
+    { key: 'reliability', label: '可靠性与性能' },
+    { key: 'model', label: '模型监控' },
+    { key: 'tool', label: '工具监控' },
+    { key: 'agent', label: 'Agent 监控' },
+    { key: 'orchestration', label: '多智能体编排' },
 ];
+const WINDOWS: { key: '1d' | '1w' | '1m'; label: string }[] = [
+    { key: '1d', label: '近 24h' }, { key: '1w', label: '近 7 天' }, { key: '1m', label: '近 30 天' },
+];
+const TEAL = '#2c7a6b';
 
-// ─── Primitives ───────────────────────────────────────────────────────────────
+// ─── Formatters ─────────────────────────────────────────────────────────────
+const fmtInt = (n: number) => (n ?? 0).toLocaleString();
+const fmtPct = (n: number) => `${n}%`;
+const fmtSec = (n: number) => `${n}s`;
+const fmtCost = (n: number) => (n < 1 ? `$${n.toFixed(4)}` : `$${n.toFixed(2)}`);
+const fmtTok = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`);
 
-function Section({ label, badge, children, style }: {
-    label: string;
-    badge?: React.ReactNode;
-    children: React.ReactNode;
-    style?: React.CSSProperties;
-}) {
+export default function DashboardPage() {
+    const { user } = useAuth();
+    const [win, setWin] = useState<'1d' | '1w' | '1m'>('1w');
+    const [tab, setTab] = useState<TabKey>('trends');
+    const [trends, setTrends] = useState<TrendsResp | null>(null);
+    const [bd, setBd] = useState<BreakdownsResp | null>(null);
+    const [tErr, setTErr] = useState<string | null>(null);
+    const [bErr, setBErr] = useState<string | null>(null);
+    const [bLoading, setBLoading] = useState(false);
+
+    // 系统趋势 + KPI：随窗口即时加载。作用域=当前登录用户（带 ?user=）。
+    useEffect(() => {
+        if (!user) return; // 等登录用户就绪再取，避免误查全库
+        let live = true;
+        setTrends(null); setTErr(null); setBd(null); // 窗口/用户变→清空 breakdowns，按需重取
+        apiFetch(`/api/fleet/trends?window=${win}&user=${encodeURIComponent(user)}`)
+            .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+            .then((d) => { if (live) setTrends(d); })
+            .catch((e) => { if (live) setTErr(e.message || '取数失败'); });
+        return () => { live = false; };
+    }, [win, user]);
+
+    // breakdowns：懒加载——首次切到非「系统趋势」页签时才取，之后缓存。
+    // 注意：deps 不能含 bLoading——否则 setBLoading(true) 会触发本 effect cleanup(live=false)
+    // 把 in-flight 请求的结果丢弃，导致永远卡「加载中」。
+    useEffect(() => {
+        if (tab === 'trends' || bd || !user) return;
+        let live = true;
+        setBLoading(true); setBErr(null);
+        apiFetch(`/api/fleet/breakdowns?window=${win}&user=${encodeURIComponent(user)}`)
+            .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+            .then((d) => { if (live) setBd(d); })
+            .catch((e) => { if (live) setBErr(e.message || '取数失败'); })
+            .finally(() => { if (live) setBLoading(false); });
+        return () => { live = false; };
+    }, [tab, win, bd, user]);
+
+    const threshold = trends?.errorThreshold ?? 5;
+    const badges: Partial<Record<TabKey, boolean>> = {
+        trends: !!trends?.buckets.some((b) => b.errorRate > threshold),
+        reliability: !!bd?.reliability.failAgents.some((a) => a.errorRate >= threshold),
+    };
+
     return (
-        <section style={{ display: 'flex', flexDirection: 'column', gap: 12, ...style }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{
-                    fontSize: 13, fontWeight: 700,
-                    color: 'var(--foreground)',
-                    letterSpacing: 0.1,
-                }}>
-                    {label}
-                </span>
-                {badge}
+        <div style={{ height: '100%', overflowY: 'auto', background: 'var(--background)' }}>
+            {/* Header */}
+            <div style={{
+                position: 'sticky', top: 0, zIndex: 20, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+                padding: '14px 22px', borderBottom: '1px solid var(--border)', background: 'var(--background)',
+            }}>
+                <span style={{ fontSize: 15, fontWeight: 800, color: 'var(--foreground)' }}>仪表盘</span>
+                <Info text="成本按模型单价加权（单位 USD）；成功/错误为硬错误口径（工具 state / failures），软错误（judge）未叠加；端到端时延为 wall-time。数据源：真实 Execution 聚合。" />
+                <span style={{ flex: 1 }} />
+                <div style={{ display: 'flex', gap: 4, background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 8, padding: 2 }}>
+                    {WINDOWS.map((o) => (
+                        <button key={o.key} onClick={() => setWin(o.key)} style={{
+                            fontSize: 11.5, fontWeight: 600, padding: '5px 11px', borderRadius: 6, cursor: 'pointer', border: 'none',
+                            background: win === o.key ? 'var(--primary)' : 'transparent',
+                            color: win === o.key ? 'var(--primary-foreground, #fff)' : 'var(--foreground-secondary)',
+                        }}>{o.label}</button>
+                    ))}
+                </div>
             </div>
-            {children}
+
+            <div style={{ padding: 22, display: 'flex', flexDirection: 'column', gap: 16 }}>
+                {tErr && <ErrBox msg={tErr} />}
+
+                {/* 健康总览常驻 */}
+                {!trends && !tErr && <Placeholder text="加载中…" />}
+                {trends && (
+                    <>
+                        <KpiGrid kpi={trends.kpi} />
+                        {trends.pricingMissingModels.length > 0 && (
+                            <div style={{ fontSize: 11, color: 'var(--warning)', marginTop: -6 }}>
+                                ⚠ 以下模型缺单价，成本按 0 计：{trends.pricingMissingModels.join('、')}（在 custom-models.json 补单价）
+                            </div>
+                        )}
+
+                        {/* 页签栏 */}
+                        <div style={{ display: 'flex', gap: 2, borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
+                            {TABS.map((tb) => {
+                                const active = tab === tb.key;
+                                return (
+                                    <button key={tb.key} onClick={() => setTab(tb.key)} style={{
+                                        position: 'relative', fontSize: 12.5, fontWeight: active ? 700 : 500,
+                                        padding: '9px 15px', border: 'none', cursor: 'pointer', background: 'transparent',
+                                        color: active ? 'var(--primary)' : 'var(--foreground-secondary)',
+                                        borderBottom: active ? '2px solid var(--primary)' : '2px solid transparent', marginBottom: -1,
+                                    }}>
+                                        {tb.label}
+                                        {badges[tb.key] && <span title={tb.key === 'trends' ? '告警：部分时段错误率超过 5% 阈值' : '告警：存在失败热点 Agent 错误率 ≥ 5% 阈值'} style={{ position: 'absolute', top: 6, right: 4, width: 6, height: 6, borderRadius: '50%', background: 'var(--error)', cursor: 'help' }} />}
+                                    </button>
+                                );
+                            })}
+                        </div>
+
+                        {/* 页签内容（懒加载 + 缓存） */}
+                        {tab === 'trends' && <TrendsTab data={trends} />}
+                        {tab !== 'trends' && (
+                            bErr ? <ErrBox msg={bErr} />
+                                : bLoading || !bd ? <Placeholder text="加载中…" />
+                                    : tab === 'reliability' ? <ReliabilityTab bd={bd} />
+                                        : tab === 'model' ? <ModelTab bd={bd} />
+                                            : tab === 'tool' ? <ToolTab bd={bd} />
+                                                : tab === 'agent' ? <AgentTab bd={bd} />
+                                                    : <OrchestrationTab bd={bd} />
+                        )}
+                    </>
+                )}
+            </div>
+        </div>
+    );
+}
+
+// ═══ 页签：② 系统趋势 ═════════════════════════════════════════════════════════
+function TrendsTab({ data }: { data: TrendsResp }) {
+    const c = useThemeColors();
+    if (data.buckets.every((b) => b.traces === 0)) return <Placeholder text="当前窗口内暂无数据" />;
+    return (
+        <Grid>
+            <Panel title="Trace 流量趋势" hint="成功 / 失败分层堆叠">
+                <ResponsiveContainer width="100%" height={CHART_H}>
+                    <BarChart data={data.buckets} margin={mgn}>
+                        <CartesianGrid strokeDasharray="3 3" stroke={c.border} vertical={false} />
+                        <XAxis dataKey="label" stroke={c.fgMuted} tick={ax} interval="preserveStartEnd" />
+                        <YAxis width={52} stroke={c.fgMuted} tick={ax} allowDecimals={false} />
+                        <Tooltip contentStyle={tipStyle} /><Legend verticalAlign="top" align="right" wrapperStyle={lg} />
+                        <Bar dataKey="success" name="成功" stackId="t" fill={c.success} />
+                        <Bar dataKey="fail" name="失败" stackId="t" fill={c.error} radius={[2, 2, 0, 0]} />
+                    </BarChart>
+                </ResponsiveContainer>
+            </Panel>
+            <Panel title="错误率趋势" hint={`失败 trace 占比 · 阈值线 ${data.errorThreshold}%`}>
+                <ResponsiveContainer width="100%" height={CHART_H}>
+                    <LineChart data={data.buckets} margin={mgn}>
+                        <CartesianGrid strokeDasharray="3 3" stroke={c.border} vertical={false} />
+                        <XAxis dataKey="label" stroke={c.fgMuted} tick={ax} interval="preserveStartEnd" />
+                        <YAxis width={52} stroke={c.fgMuted} tick={ax} unit="%" />
+                        <Tooltip contentStyle={tipStyle} />
+                        <ReferenceLine y={data.errorThreshold} stroke={c.warning} strokeDasharray="5 4" label={{ value: `${data.errorThreshold}%`, position: 'right', fill: c.warning, fontSize: 10 }} />
+                        <Line type="monotone" dataKey="errorRate" name="错误率" stroke={c.error} strokeWidth={2} dot={{ r: 2 }} />
+                    </LineChart>
+                </ResponsiveContainer>
+            </Panel>
+            <Panel title="端到端时延趋势" hint="per-trace P50 / P95 / P99（wall-time，秒）">
+                <ResponsiveContainer width="100%" height={CHART_H}>
+                    <LineChart data={data.buckets} margin={mgn}>
+                        <CartesianGrid strokeDasharray="3 3" stroke={c.border} vertical={false} />
+                        <XAxis dataKey="label" stroke={c.fgMuted} tick={ax} interval="preserveStartEnd" />
+                        <YAxis width={52} stroke={c.fgMuted} tick={ax} unit="s" />
+                        <Tooltip contentStyle={tipStyle} /><Legend verticalAlign="top" align="right" wrapperStyle={lg} />
+                        <Line type="monotone" dataKey="latencyP50" name="P50" stroke={c.success} strokeWidth={1.8} dot={false} />
+                        <Line type="monotone" dataKey="latencyP95" name="P95" stroke={c.warning} strokeWidth={2} dot={false} />
+                        <Line type="monotone" dataKey="latencyP99" name="P99" stroke={c.error} strokeWidth={2} dot={false} />
+                    </LineChart>
+                </ResponsiveContainer>
+            </Panel>
+            <Panel title="Token 消耗趋势" hint="input / output 堆叠 + 总量线">
+                <ResponsiveContainer width="100%" height={CHART_H}>
+                    <ComposedChart data={data.buckets} margin={mgn}>
+                        <CartesianGrid strokeDasharray="3 3" stroke={c.border} vertical={false} />
+                        <XAxis dataKey="label" stroke={c.fgMuted} tick={ax} interval="preserveStartEnd" />
+                        <YAxis width={52} stroke={c.fgMuted} tick={ax} tickFormatter={fmtTok} />
+                        <Tooltip contentStyle={tipStyle} formatter={(v: number) => fmtInt(v)} /><Legend verticalAlign="top" align="right" wrapperStyle={lg} />
+                        <Bar dataKey="inputTokens" name="input" stackId="tok" fill={c.primary} />
+                        <Bar dataKey="outputTokens" name="output" stackId="tok" fill={TEAL} radius={[2, 2, 0, 0]} />
+                        <Line type="monotone" dataKey="totalTokens" name="总量" stroke={c.warning} strokeWidth={2} dot={false} />
+                    </ComposedChart>
+                </ResponsiveContainer>
+            </Panel>
+            <Panel title="成本趋势" hint={`按模型单价加权（${data.currency}）`}>
+                <ResponsiveContainer width="100%" height={CHART_H}>
+                    <LineChart data={data.buckets} margin={mgn}>
+                        <CartesianGrid strokeDasharray="3 3" stroke={c.border} vertical={false} />
+                        <XAxis dataKey="label" stroke={c.fgMuted} tick={ax} interval="preserveStartEnd" />
+                        <YAxis width={52} stroke={c.fgMuted} tick={ax} tickFormatter={(v) => `$${v}`} />
+                        <Tooltip contentStyle={tipStyle} formatter={(v: number) => fmtCost(v)} />
+                        <Line type="monotone" dataKey="cost" name="成本" stroke={c.warning} strokeWidth={2.2} dot={{ r: 2 }} />
+                    </LineChart>
+                </ResponsiveContainer>
+            </Panel>
+            <Panel title="单 trace 平均 Token / 平均成本" hint="效率指标（与流量解耦）">
+                <ResponsiveContainer width="100%" height={CHART_H}>
+                    <ComposedChart data={data.buckets} margin={mgn}>
+                        <CartesianGrid strokeDasharray="3 3" stroke={c.border} vertical={false} />
+                        <XAxis dataKey="label" stroke={c.fgMuted} tick={ax} interval="preserveStartEnd" />
+                        <YAxis yAxisId="tok" width={52} stroke={c.fgMuted} tick={ax} tickFormatter={fmtTok} />
+                        <YAxis yAxisId="cost" orientation="right" width={52} stroke={c.fgMuted} tick={ax} tickFormatter={(v) => `$${v}`} />
+                        <Tooltip contentStyle={tipStyle} /><Legend verticalAlign="top" align="right" wrapperStyle={lg} />
+                        <Line yAxisId="tok" type="monotone" dataKey="avgTokens" name="平均 Token" stroke={c.primary} strokeWidth={2} dot={false} />
+                        <Line yAxisId="cost" type="monotone" dataKey="avgCost" name={`平均成本(${data.currency})`} stroke={c.warning} strokeWidth={2} strokeDasharray="5 4" dot={false} />
+                    </ComposedChart>
+                </ResponsiveContainer>
+            </Panel>
+        </Grid>
+    );
+}
+
+// ═══ 页签：③ 可靠性与性能 ═════════════════════════════════════════════════════
+function ReliabilityTab({ bd }: { bd: BreakdownsResp }) {
+    const r = bd.reliability;
+    return (
+        <Grid>
+            <Panel title="失败热点 · Agent" hint="错误率 TOP10（失败/总调用）">
+                <HBar data={r.failAgents.map((a) => ({ name: a.name, value: a.errorRate }))} color="var(--error)" unit="%" />
+            </Panel>
+            <Panel title="端到端时延分布" hint="per-trace 对数桶（秒）">
+                <Histogram data={r.latHist} color="var(--warning)" />
+            </Panel>
+            <Panel title="慢 Trace 排行" hint="按端到端耗时降序 TOP20（点击进链路）" wide>
+                <SlowTable rows={r.slowTraces} />
+            </Panel>
+        </Grid>
+    );
+}
+
+// ═══ 页签：④ 模型监控 ════════════════════════════════════════════════════════
+function ModelTab({ bd }: { bd: BreakdownsResp }) {
+    const m = bd.model;
+    return (
+        <Grid>
+            <Panel title="模型调用次数排行" hint="Σ 模型调用次数 TOP10">
+                <HBar data={m.callRank.map((x) => ({ name: x.model, value: x.calls }))} color="var(--primary)" />
+            </Panel>
+            <Panel title="Token 构成排行" hint="input / output 堆叠 · 柱长=总消耗 TOP10">
+                <StackedHBar data={m.tokenComp} />
+            </Panel>
+        </Grid>
+    );
+}
+
+// ═══ 页签：⑤ 工具监控 ════════════════════════════════════════════════════════
+function ToolTab({ bd }: { bd: BreakdownsResp }) {
+    const c = useThemeColors();
+    const t = bd.tool.trend;
+    return (
+        <Grid>
+            <Panel title="工具调用量趋势" hint="Σ tool_calls 条数 / 桶">
+                <ResponsiveContainer width="100%" height={CHART_H}>
+                    <BarChart data={t} margin={mgn}>
+                        <CartesianGrid strokeDasharray="3 3" stroke={c.border} vertical={false} />
+                        <XAxis dataKey="label" stroke={c.fgMuted} tick={ax} interval="preserveStartEnd" />
+                        <YAxis width={52} stroke={c.fgMuted} tick={ax} allowDecimals={false} />
+                        <Tooltip contentStyle={tipStyle} />
+                        <Bar dataKey="calls" name="工具调用" fill={c.primary} radius={[2, 2, 0, 0]} />
+                    </BarChart>
+                </ResponsiveContainer>
+            </Panel>
+            <Panel title="工具调用成功率趋势" hint="1 − 工具错误/总调用（%）">
+                <ResponsiveContainer width="100%" height={CHART_H}>
+                    <LineChart data={t} margin={mgn}>
+                        <CartesianGrid strokeDasharray="3 3" stroke={c.border} vertical={false} />
+                        <XAxis dataKey="label" stroke={c.fgMuted} tick={ax} interval="preserveStartEnd" />
+                        <YAxis width={52} stroke={c.fgMuted} tick={ax} unit="%" domain={[90, 100]} />
+                        <Tooltip contentStyle={tipStyle} />
+                        <Line type="monotone" dataKey="successRate" name="成功率" stroke={c.success} strokeWidth={2} dot={{ r: 2 }} />
+                    </LineChart>
+                </ResponsiveContainer>
+            </Panel>
+        </Grid>
+    );
+}
+
+// ═══ 页签：⑥ Agent 监控 ══════════════════════════════════════════════════════
+function AgentTab({ bd }: { bd: BreakdownsResp }) {
+    const c = useThemeColors();
+    const a = bd.agent;
+    return (
+        <Grid>
+            <Panel title="平均执行工具数 / 模型数趋势" hint="每 trace 人均（分母=当桶 trace 数）">
+                <ResponsiveContainer width="100%" height={CHART_H}>
+                    <LineChart data={a.trend} margin={mgn}>
+                        <CartesianGrid strokeDasharray="3 3" stroke={c.border} vertical={false} />
+                        <XAxis dataKey="label" stroke={c.fgMuted} tick={ax} interval="preserveStartEnd" />
+                        <YAxis width={52} stroke={c.fgMuted} tick={ax} />
+                        <Tooltip contentStyle={tipStyle} /><Legend verticalAlign="top" align="right" wrapperStyle={lg} />
+                        <Line type="monotone" dataKey="avgTools" name="平均工具数" stroke={c.primary} strokeWidth={2} dot={false} />
+                        <Line type="monotone" dataKey="avgModels" name="平均模型调用数" stroke={TEAL} strokeWidth={2} dot={false} />
+                    </LineChart>
+                </ResponsiveContainer>
+            </Panel>
+            <Panel title="Agent Token 消耗（self）" hint="按 Agent 自身 token TOP10">
+                <HBar data={a.tokenRank.map((x) => ({ name: x.name, value: x.tokens }))} color="var(--warning)" fmt={fmtTok} />
+            </Panel>
+            <Panel title="Agent 调用排行" hint="distinct trace 出现数 TOP10">
+                <HBar data={a.callRank.map((x) => ({ name: x.name, value: x.traces }))} color="var(--primary)" />
+            </Panel>
+            <Panel title="Skill 调用排行" hint="调用次数 TOP10（成功率色深待 skill-call state）">
+                {a.skillRank.length ? <HBar data={a.skillRank.map((x) => ({ name: x.skill, value: x.calls }))} color={TEAL} />
+                    : <Placeholder text="窗口内无 skill 调用" />}
+            </Panel>
+        </Grid>
+    );
+}
+
+// ═══ 页签：⑦ 多智能体编排 ════════════════════════════════════════════════════
+function OrchestrationTab({ bd }: { bd: BreakdownsResp }) {
+    const col = bd.orchestration.collab;
+    return (
+        <Grid>
+            <Panel title="编排复杂度分布" hint="每 trace 的 distinct Agent 数分桶">
+                <Histogram data={bd.orchestration.complexityHist} color="var(--primary)" />
+            </Panel>
+            <Panel
+                title="全局协作网络"
+                info="边来自 buildAgentCallTree 还原的 parent→child 派发关系（谁 spawn 了谁），跨当前窗口内所有 trace 聚合，边权=派发次数、节点大小=中心度。非 send_message 点对点消息（该口径四框架均无数据源），但同样能识别通信枢纽 Agent。"
+                hint={`节点大小=中心度 · 边=派发(from→to) · ${col.traceCount} 条多 Agent trace${col.truncated ? '（已截断）' : ''}`}
+                wide
+            >
+                {col.nodes.length
+                    ? <CollabNetwork data={col} />
+                    : <Placeholder text="窗口内无多 Agent 协作数据" />}
+            </Panel>
+        </Grid>
+    );
+}
+
+// 全局协作网络：ECharts 力导向，对齐高保真原型 tab-7(graph/force + 可拖拽缩放 roam + 邻接高亮)。
+// 节点大小=中心度、边宽=派发次数、曲线边;节点色按中心度分档(PRD 设计色 navy→teal→terra→gold→muted)。
+const NET_PALETTE = ['#1D2B45', '#2C7A6B', '#C8553D', '#B5811F', '#76705f'];
+function CollabNetwork({ data }: { data: BreakdownsResp['orchestration']['collab'] }) {
+    const c = useThemeColors();
+    const ref = React.useRef<HTMLDivElement>(null);
+    React.useEffect(() => {
+        const el = ref.current;
+        if (!el) return;
+        let chart: import('echarts').ECharts | null = null;
+        let disposed = false;
+        let onResize: (() => void) | null = null;
+        import('echarts').then((echarts) => {
+            if (disposed || !el) return;
+            const maxDeg = Math.max(1, ...data.nodes.map((n) => n.degree));
+            const maxW = Math.max(1, ...data.edges.map((e) => e.weight));
+            const colorOf = (deg: number) => {
+                const r = deg / maxDeg;
+                return r > 0.8 ? NET_PALETTE[0] : r > 0.5 ? NET_PALETTE[1] : r > 0.3 ? NET_PALETTE[2] : r > 0.15 ? NET_PALETTE[3] : NET_PALETTE[4];
+            };
+            chart = echarts.init(el);
+            chart.setOption({
+                tooltip: {
+                    confine: true,
+                    backgroundColor: 'var(--card-bg)',
+                    borderColor: 'var(--border)',
+                    textStyle: { color: c.fg, fontSize: 12 },
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    formatter: (p: any) => p.dataType === 'edge'
+                        ? `${p.data.source} → ${p.data.target}<br/>派发 <b>${p.data.value}</b> 次`
+                        : `${p.name}<br/>中心度 <b>${p.value}</b>`,
+                },
+                series: [{
+                    type: 'graph', layout: 'force', roam: true, draggable: true,
+                    data: data.nodes.map((n) => ({
+                        name: n.id, value: n.degree,
+                        symbolSize: 16 + 40 * (n.degree / maxDeg),
+                        itemStyle: { color: colorOf(n.degree) },
+                    })),
+                    links: data.edges.map((e) => ({
+                        source: e.from, target: e.to, value: e.weight,
+                        lineStyle: { width: 1 + 3.5 * (e.weight / maxW) },
+                    })),
+                    force: { repulsion: 300, edgeLength: [60, 140], gravity: 0.12 },
+                    label: { show: true, position: 'right', color: c.fg, fontSize: 10, fontWeight: 500 },
+                    lineStyle: { color: c.fgMuted, opacity: 0.5, curveness: 0.18 },
+                    emphasis: { focus: 'adjacency', label: { fontWeight: 700 }, lineStyle: { color: '#C8553D', opacity: 0.95, width: 2.5 } },
+                }],
+            });
+            onResize = () => chart?.resize();
+            window.addEventListener('resize', onResize);
+        });
+        return () => {
+            disposed = true;
+            if (onResize) window.removeEventListener('resize', onResize);
+            if (chart) chart.dispose();
+        };
+    }, [data, c]);
+    return <div ref={ref} style={{ width: '100%', height: 440 }} />;
+}
+
+// ─── KPI 卡组 ─────────────────────────────────────────────────────────────────
+type Tone = 'count' | 'good' | 'latency' | 'error';
+interface CardDef { label: string; key: keyof Kpi; fmt: (n: number) => string; goodWhenUp: boolean | null; tone: Tone; group: string }
+const CARDS: CardDef[] = [
+    { label: '总 Trace', key: 'traces', fmt: fmtInt, goodWhenUp: null, tone: 'count', group: '系统' },
+    { label: '成功率', key: 'successRate', fmt: fmtPct, goodWhenUp: true, tone: 'good', group: '系统' },
+    { label: 'P95 端到端时延', key: 'p95Latency', fmt: fmtSec, goodWhenUp: false, tone: 'latency', group: '系统' },
+    { label: '活跃 Agent', key: 'activeAgents', fmt: fmtInt, goodWhenUp: null, tone: 'count', group: '系统' },
+    { label: '活跃模型', key: 'activeModels', fmt: fmtInt, goodWhenUp: null, tone: 'count', group: '系统' },
+    { label: '工具调用次数', key: 'toolCalls', fmt: fmtInt, goodWhenUp: null, tone: 'count', group: '工具' },
+    { label: '工具调用错误率', key: 'toolErrorRate', fmt: fmtPct, goodWhenUp: false, tone: 'error', group: '工具' },
+    { label: '模型 Tokens', key: 'totalTokens', fmt: fmtInt, goodWhenUp: null, tone: 'count', group: '模型' },
+    { label: '模型调用次数', key: 'llmCalls', fmt: fmtInt, goodWhenUp: null, tone: 'count', group: '模型' },
+    { label: '总成本', key: 'totalCost', fmt: fmtCost, goodWhenUp: false, tone: 'latency', group: '模型' },
+];
+function KpiGrid({ kpi }: { kpi: { current: Kpi; previous: Kpi } }) {
+    return (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
+            {CARDS.map((cd) => <KpiCard key={cd.key} def={cd} cur={kpi.current[cd.key]} prev={kpi.previous[cd.key]} />)}
+        </div>
+    );
+}
+const TONE_COLOR: Record<Tone, string> = { count: 'var(--foreground)', good: 'var(--success)', latency: 'var(--warning)', error: 'var(--error)' };
+function KpiCard({ def, cur, prev }: { def: CardDef; cur: number; prev: number }) {
+    return (
+        <div style={{ background: 'var(--card-bg)', border: '1px solid var(--card-border)', borderRadius: 10, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <span style={{ fontSize: 11, color: 'var(--foreground-muted)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontSize: 9, opacity: 0.7 }}>{def.group}</span>{def.label}
+            </span>
+            <span style={{ fontSize: 22, fontWeight: 800, color: TONE_COLOR[def.tone], fontFamily: 'var(--font-mono, monospace)', lineHeight: 1.1 }}>{def.fmt(cur ?? 0)}</span>
+            <Delta cur={cur} prev={prev} goodWhenUp={def.goodWhenUp} />
+        </div>
+    );
+}
+function Delta({ cur, prev, goodWhenUp }: { cur: number; prev: number; goodWhenUp: boolean | null }) {
+    if (prev == null || prev === 0) return <span style={{ fontSize: 10.5, color: 'var(--foreground-muted)' }}>环比 —</span>;
+    const d = ((cur - prev) / prev) * 100;
+    const rounded = Math.round(d * 10) / 10;
+    if (Math.abs(rounded) < 0.05) return <span style={{ fontSize: 10.5, color: 'var(--foreground-muted)' }}>环比 ±0%</span>;
+    const up = rounded > 0;
+    const color = goodWhenUp === null ? 'var(--foreground-muted)' : (goodWhenUp === up ? 'var(--success)' : 'var(--error)');
+    return (
+        <span style={{ fontSize: 10.5, color, display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+            {up ? '▲' : '▼'} {Math.abs(rounded)}%<span style={{ color: 'var(--foreground-muted)', fontSize: 9.5 }}>环比</span>
+        </span>
+    );
+}
+
+// ─── 图表 helper ──────────────────────────────────────────────────────────────
+function HBar({ data, color, unit, fmt }: { data: { name: string; value: number }[]; color: string; unit?: string; fmt?: (n: number) => string }) {
+    const c = useThemeColors();
+    if (!data.length) return <Placeholder text="暂无数据" />;
+    const h = CHART_H;
+    return (
+        <ResponsiveContainer width="100%" height={h}>
+            <BarChart layout="vertical" data={data} margin={{ top: 4, right: 18, bottom: 4, left: 8 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={c.border} horizontal={false} />
+                <XAxis type="number" stroke={c.fgMuted} tick={ax} unit={unit} tickFormatter={fmt} />
+                <YAxis type="category" dataKey="name" stroke={c.fgMuted} tick={{ fontSize: 10 }} width={118} />
+                <Tooltip contentStyle={tipStyle} formatter={(v: number) => (fmt ? fmt(v) : v)} />
+                <Bar dataKey="value" fill={color} radius={[0, 3, 3, 0]} />
+            </BarChart>
+        </ResponsiveContainer>
+    );
+}
+function StackedHBar({ data }: { data: { model: string; input: number; output: number }[] }) {
+    const c = useThemeColors();
+    if (!data.length) return <Placeholder text="暂无数据" />;
+    const h = CHART_H;
+    return (
+        <ResponsiveContainer width="100%" height={h}>
+            <BarChart layout="vertical" data={data} margin={{ top: 4, right: 18, bottom: 4, left: 8 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={c.border} horizontal={false} />
+                <XAxis type="number" stroke={c.fgMuted} tick={ax} tickFormatter={fmtTok} />
+                <YAxis type="category" dataKey="model" stroke={c.fgMuted} tick={{ fontSize: 10 }} width={118} />
+                <Tooltip contentStyle={tipStyle} formatter={(v: number) => fmtInt(v)} /><Legend verticalAlign="top" align="right" wrapperStyle={lg} />
+                <Bar dataKey="input" name="input" stackId="s" fill={c.primary} />
+                <Bar dataKey="output" name="output" stackId="s" fill={TEAL} radius={[0, 3, 3, 0]} />
+            </BarChart>
+        </ResponsiveContainer>
+    );
+}
+function Histogram({ data, color }: { data: { label: string; count: number }[]; color: string }) {
+    const c = useThemeColors();
+    return (
+        <ResponsiveContainer width="100%" height={CHART_H}>
+            <BarChart data={data} margin={mgn}>
+                <CartesianGrid strokeDasharray="3 3" stroke={c.border} vertical={false} />
+                <XAxis dataKey="label" stroke={c.fgMuted} tick={ax} />
+                <YAxis width={52} stroke={c.fgMuted} tick={ax} allowDecimals={false} />
+                <Tooltip contentStyle={tipStyle} />
+                <Bar dataKey="count" name="trace 数" fill={color} radius={[2, 2, 0, 0]} />
+            </BarChart>
+        </ResponsiveContainer>
+    );
+}
+function SlowTable({ rows }: { rows: BreakdownsResp['reliability']['slowTraces'] }) {
+    if (!rows.length) return <Placeholder text="暂无数据" />;
+    const th: React.CSSProperties = { textAlign: 'left', padding: '7px 10px', color: 'var(--foreground-muted)', fontWeight: 600, borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' };
+    const td: React.CSSProperties = { padding: '7px 10px', borderBottom: '1px solid var(--border)', color: 'var(--foreground-secondary)' };
+    return (
+        <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
+                <thead><tr>
+                    <th style={th}>Trace</th><th style={th}>Agent</th><th style={th}>时延(s)</th>
+                    <th style={th}>Token</th><th style={th}>Agent 数</th><th style={th}>状态</th>
+                </tr></thead>
+                <tbody>
+                    {rows.map((r, i) => (
+                        <tr key={i}>
+                            <td style={td}><a href={getApiUrl(`/trace?taskId=${encodeURIComponent(r.taskId)}`)} style={{ color: 'var(--primary)', textDecoration: 'none', fontFamily: 'var(--font-mono, monospace)' }}>{r.taskId.slice(0, 12)}…</a></td>
+                            <td style={td}>{r.agent}</td>
+                            <td style={{ ...td, fontFamily: 'var(--font-mono, monospace)', color: 'var(--warning)' }}>{r.latency}</td>
+                            <td style={{ ...td, fontFamily: 'var(--font-mono, monospace)' }}>{fmtInt(r.tokens)}</td>
+                            <td style={td}>{r.agents}</td>
+                            <td style={{ ...td, color: r.ok ? 'var(--success)' : 'var(--error)' }}>{r.ok ? '成功' : '失败'}</td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+        </div>
+    );
+}
+
+// ─── Building blocks ──────────────────────────────────────────────────────────
+function Grid({ children }: { children: React.ReactNode }) {
+    return <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(430px, 1fr))', gap: 14 }}>{children}</div>;
+}
+function Panel({ title, hint, info, wide, children }: { title: string; hint?: string; info?: string; wide?: boolean; children: React.ReactNode }) {
+    return (
+        <section style={{ background: 'var(--card-bg)', border: '1px solid var(--card-border)', borderRadius: 12, gridColumn: wide ? '1 / -1' : undefined, minWidth: 0, overflow: 'hidden' }}>
+            <div style={{ padding: '11px 16px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--foreground)' }}>{title}</span>
+                {info && <Info text={info} />}
+                {hint && <span style={{ fontSize: 10.5, color: 'var(--foreground-muted)' }}>· {hint}</span>}
+            </div>
+            <div style={{ padding: '12px 12px 6px' }}>{children}</div>
         </section>
     );
 }
-
-function Sparkline({ data, color = 'var(--primary)' }: { data: number[]; color?: string }) {
-    const max = Math.max(...data), min = Math.min(...data);
-    const range = max - min || 1;
-    const W = 72, H = 26;
-    const pts = data.map((v, i) =>
-        `${(i / (data.length - 1)) * W},${H - ((v - min) / range) * H}`
-    ).join(' ');
+// 指标/口径说明角标：hover 显示 tooltip（原生 title），取代大段说明文字。
+function Info({ text }: { text: string }) {
     return (
-        <svg width={W} height={H} style={{ display: 'block', flexShrink: 0 }}>
-            <polyline points={pts} fill="none" stroke={color} strokeWidth="1.8"
-                strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
+        <span title={text} style={{
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 14, height: 14,
+            borderRadius: '50%', border: '1px solid var(--border-dark)', color: 'var(--foreground-muted)',
+            fontSize: 9.5, fontWeight: 700, fontStyle: 'normal', cursor: 'help', flexShrink: 0, lineHeight: 1,
+        }}>i</span>
     );
 }
-
-// ─── Filter Bar ───────────────────────────────────────────────────────────────
-
-function FilterSelect({ label, value, onChange, options }: {
-    label: React.ReactNode;
-    value: string;
-    onChange: (v: string) => void;
-    options: { value: string; label: string }[];
-}) {
-    const isActive = value !== options[0].value;
-    return (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-            <span style={{ fontSize: 11, color: 'var(--foreground-muted)', flexShrink: 0 }}>
-                {label}
-            </span>
-            <div style={{ position: 'relative' }}>
-                <select
-                    value={value}
-                    onChange={e => onChange(e.target.value)}
-                    style={{
-                        fontSize: 12,
-                        padding: '3px 22px 3px 8px',
-                        borderRadius: 6,
-                        border: `1px solid ${isActive ? 'var(--border)' : 'var(--border)'}`,
-                        background: isActive ? 'var(--primary-subtle)' : 'var(--background)',
-                        color: isActive ? 'var(--primary)' : 'var(--foreground-secondary)',
-                        cursor: 'pointer',
-                        outline: 'none',
-                        appearance: 'none' as const,
-                        WebkitAppearance: 'none' as const,
-                        lineHeight: 1.5,
-                        fontWeight: isActive ? 500 : 400,
-                    }}
-                >
-                    {options.map(o => (
-                        <option key={o.value} value={o.value}>{o.label}</option>
-                    ))}
-                </select>
-                <span style={{
-                    position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)',
-                    fontSize: 9, color: 'var(--foreground-muted)', pointerEvents: 'none',
-                }}>
-                    ▾
-                </span>
-            </div>
-        </div>
-    );
+function Placeholder({ text }: { text: string }) {
+    return <div style={{ padding: 50, textAlign: 'center', color: 'var(--foreground-muted)', fontSize: 13, background: 'var(--card-bg)', border: '1px solid var(--card-border)', borderRadius: 12 }}>{text}</div>;
+}
+function ErrBox({ msg }: { msg: string }) {
+    return <div style={{ padding: 16, borderRadius: 10, background: 'var(--error-subtle)', border: '1px solid var(--error-subtle-border)', color: 'var(--error)', fontSize: 13 }}>取数失败：{msg}</div>;
 }
 
-function FilterBar({
-    platforms,
-    filterPlatform,
-    setFilterPlatform,
-    filterOwnership,
-    setFilterOwnership,
-}: {
-    platforms: string[];
-    filterPlatform: string;
-    setFilterPlatform: (v: string) => void;
-    filterOwnership: string;
-    setFilterOwnership: (v: string) => void;
-}) {
-    const platformOptions = [
-        { value: 'all', label: '全部平台' },
-        ...platforms.map(p => ({ value: p, label: p })),
-    ];
-    const ownershipOptions = [
-        { value: 'user', label: '用户 Agent' },
-        { value: 'all',  label: '全部类型'   },
-    ];
-
-    return (
-        <div style={{
-            display: 'flex', alignItems: 'center', gap: 16,
-            padding: '6px 28px',
-            borderBottom: '1px solid var(--border)',
-            background: 'var(--background)',
-        }}>
-            <span style={{ fontSize: 11, color: 'var(--foreground-muted)', opacity: 0.7 }}>筛选</span>
-            <FilterSelect
-                label={<Term id="platform" label="平台" />}
-                value={filterPlatform}
-                onChange={setFilterPlatform}
-                options={platformOptions}
-            />
-            <FilterSelect
-                label={<Term id="agent-type" label="Agent 类型" />}
-                value={filterOwnership}
-                onChange={setFilterOwnership}
-                options={ownershipOptions}
-            />
-        </div>
-    );
-}
-
-// ─── Block 1：系统健康快照 ────────────────────────────────────────────────────
-
-function HealthCard({ title, value, sub, spark, sparkColor, highlight }: {
-    title: React.ReactNode;
-    value: React.ReactNode;
-    sub: React.ReactNode;
-    spark?: number[];
-    sparkColor?: string;
-    highlight?: boolean;
-}) {
-    return (
-        <div style={{
-            flex: 1, minWidth: 170,
-            background: highlight
-                ? 'linear-gradient(135deg, var(--primary) 0%, color-mix(in srgb,var(--primary) 75%,#000) 100%)'
-                : 'var(--card-bg)',
-            border: `1px solid ${highlight ? 'transparent' : 'var(--card-border)'}`,
-            borderRadius: 12,
-            padding: '16px 18px',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 10,
-        }}>
-            <span style={{ fontSize: 11, fontWeight: 500, letterSpacing: 0.3,
-                color: highlight ? 'rgba(255,255,255,.72)' : 'var(--foreground-muted)' }}>
-                {title}
-            </span>
-            <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between' }}>
-                <span style={{ fontSize: 28, fontWeight: 700, lineHeight: 1,
-                    color: highlight ? '#fff' : 'var(--foreground)' }}>
-                    {value}
-                </span>
-                {spark && spark.length > 1 && (
-                    <Sparkline data={spark} color={highlight ? 'rgba(255,255,255,.55)' : sparkColor} />
-                )}
-            </div>
-            <span style={{ fontSize: 11,
-                color: highlight ? 'rgba(255,255,255,.65)' : 'var(--foreground-secondary)' }}>
-                {sub}
-            </span>
-        </div>
-    );
-}
-
-function BlockHealth({ stats }: { stats: DashboardStats }) {
-    const { health, trend } = stats;
-    const errAgents = stats.agents.filter(a => a.status === 'error').length;
-
-    const callTrend = trend.map(d => d.calls);
-    const okTrend = trend.map(d => d.success);
-
-    const todayCallsStr = health.todayCalls.toLocaleString();
-    const vsYesterday = health.yesterdayCalls > 0
-        ? ((health.todayCalls - health.yesterdayCalls) / health.yesterdayCalls * 100).toFixed(1)
-        : null;
-
-    const successRateStr = health.successRate1h != null
-        ? `${health.successRate1h.toFixed(1)}%`
-        : '—';
-    const errorRateStr = health.successRate1h != null
-        ? `${(100 - health.successRate1h).toFixed(1)}%`
-        : '—';
-
-    const p95Str = health.p95Latency > 0 ? `${health.p95Latency.toLocaleString()}ms` : '—';
-    const costStr = health.todayCost > 0 ? `$${health.todayCost.toFixed(3)}` : '$0.000';
-    const avgStr = health.avgLatency > 0 ? `均值 ${health.avgLatency}ms` : '暂无数据';
-
-    return (
-        <Section label="系统健康快照">
-            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-                <HealthCard
-                    highlight
-                    title={<Term id="agent" label="Agent 在线 / 总数" badgeTone="primary" />}
-                    value={<>
-                        {health.onlineAgents}
-                        <span style={{ fontSize: 16, opacity: .6 }}> / {health.totalAgents}</span>
-                    </>}
-                    sub={errAgents > 0
-                        ? <span style={{ color: '#ff9090' }}>⚠ {errAgents} 个异常</span>
-                        : health.totalAgents === 0 ? '尚未注册 Agent' : '全部正常'}
-                />
-                <HealthCard
-                    title="今日调用量"
-                    value={todayCallsStr}
-                    sub={vsYesterday != null
-                        ? <span style={{ color: Number(vsYesterday) >= 0 ? 'var(--tag-green-fg)' : 'var(--error)' }}>
-                            {Number(vsYesterday) >= 0 ? '↑' : '↓'} {Math.abs(Number(vsYesterday))}% vs 昨日
-                          </span>
-                        : '暂无昨日数据'}
-                    spark={callTrend}
-                    sparkColor="var(--primary)"
-                />
-                <HealthCard
-                    title="成功率（过去 1h）"
-                    value={successRateStr}
-                    sub={health.successRate1h != null
-                        ? <span style={{ color: health.successRate1h < 95 ? 'var(--error)' : 'var(--foreground-secondary)' }}>
-                            错误率 {errorRateStr}
-                          </span>
-                        : '过去 1h 暂无调用'}
-                    spark={okTrend}
-                    sparkColor="var(--tag-green-fg)"
-                />
-                <HealthCard
-                    title={<Term id="p95-latency" label="P95 时延 / 今日成本" />}
-                    value={p95Str}
-                    sub={`${avgStr} · 预估 ${costStr}`}
-                />
-            </div>
-        </Section>
-    );
-}
-
-// ─── Block 2：需要立即处理 ────────────────────────────────────────────────────
-
-const LEVEL_STYLE = {
-    error: { dot: 'var(--error)',          badge: 'var(--tag-red-bg)',   text: 'var(--tag-red-fg)'   },
-    warn:  { dot: 'var(--tag-amber-fg)',   badge: 'var(--tag-amber-bg)', text: 'var(--tag-amber-fg)' },
-    info:  { dot: 'var(--primary)',        badge: 'var(--primary-subtle)', text: 'var(--primary)'    },
-} as const;
-
-function BlockAlerts({ alerts, router }: { alerts: AlertRow[]; router: ReturnType<typeof useRouter> }) {
-    const errorCount = alerts.filter(a => a.level === 'error').length;
-    const badge = errorCount > 0 && (
-        <span style={{
-            fontSize: 10, fontWeight: 700, padding: '1px 7px',
-            borderRadius: 10, background: 'var(--tag-red-bg)', color: 'var(--tag-red-fg)',
-        }}>
-            {errorCount} 错误
-        </span>
-    );
-    return (
-        <Section label="需要立即处理" badge={badge}>
-            <div style={{
-                background: 'var(--card-bg)',
-                border: '1px solid var(--card-border)',
-                borderRadius: 12,
-                overflow: 'hidden',
-            }}>
-                {alerts.length === 0 ? (
-                    <div style={{ padding: '20px 16px', textAlign: 'center', color: 'var(--foreground-muted)', fontSize: 13 }}>
-                        ✅ 暂无告警，系统运行正常
-                    </div>
-                ) : alerts.map((a, i) => {
-                    const s = LEVEL_STYLE[a.level as keyof typeof LEVEL_STYLE] ?? LEVEL_STYLE.info;
-                    return (
-                        <div
-                            key={a.id}
-                            onClick={() => router.push(a.href)}
-                            style={{
-                                display: 'flex', alignItems: 'center', gap: 12,
-                                padding: '12px 16px',
-                                borderBottom: i < alerts.length - 1 ? '1px solid var(--border)' : 'none',
-                                cursor: 'pointer', transition: 'background 0.12s',
-                            }}
-                            onMouseEnter={e => (e.currentTarget.style.background = 'var(--background)')}
-                            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-                        >
-                            <span style={{ width: 8, height: 8, borderRadius: '50%', background: s.dot, flexShrink: 0 }} />
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                                <span style={{ fontWeight: 600, fontSize: 13, color: 'var(--foreground)' }}>{a.agent}</span>
-                                <span style={{ fontSize: 12, color: 'var(--foreground-secondary)', marginLeft: 8 }}>{a.desc}</span>
-                            </div>
-                            <span style={{
-                                flexShrink: 0, fontSize: 11, fontWeight: 500,
-                                padding: '3px 10px', borderRadius: 20,
-                                background: s.badge, color: s.text,
-                            }}>
-                                {a.cta} →
-                            </span>
-                        </div>
-                    );
-                })}
-            </div>
-        </Section>
-    );
-}
-
-// ─── Block 3：7 日趋势 ────────────────────────────────────────────────────────
-
-function BarChart({ data }: { data: TrendRow[] }) {
-    const max = Math.max(...data.map(d => d.calls), 1);
-    return (
-        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, height: 96 }}>
-            {data.map((d, i) => {
-                const isToday = i === data.length - 1;
-                return (
-                    <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, height: '100%' }}>
-                        <div style={{ flex: 1, width: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' }}>
-                            <div
-                                title={`${d.calls.toLocaleString()} 次`}
-                                style={{
-                                    width: '100%',
-                                    height: `${Math.max((d.calls / max) * 100, d.calls > 0 ? 4 : 0)}%`,
-                                    minHeight: d.calls > 0 ? 4 : 0,
-                                    background: isToday ? 'var(--primary)' : 'var(--primary-subtle)',
-                                    borderRadius: '3px 3px 0 0',
-                                    opacity: isToday ? 1 : 0.65,
-                                    transition: 'opacity 0.15s',
-                                    cursor: 'default',
-                                }}
-                            />
-                        </div>
-                        <span style={{ fontSize: 9, color: isToday ? 'var(--foreground)' : 'var(--foreground-muted)', fontWeight: isToday ? 600 : 400 }}>
-                            {d.day}
-                        </span>
-                    </div>
-                );
-            })}
-        </div>
-    );
-}
-
-function LineChart({ data }: { data: TrendRow[] }) {
-    const vals = data.map(d => d.success);
-    const hasData = vals.some(v => v > 0);
-    const minV = hasData ? Math.max(0, Math.min(...vals.filter(v => v > 0)) - 5) : 0;
-    const maxV = hasData ? Math.min(100, Math.max(...vals) + 2) : 100;
-    const range = maxV - minV || 1;
-    const W = 300, H = 80;
-
-    const toXY = (v: number, i: number) => ({
-        x: data.length > 1 ? (i / (data.length - 1)) * W : W / 2,
-        y: H - ((v - minV) / range) * H,
-    });
-
-    const nonZero = vals.filter(v => v > 0);
-    const pts = vals.map((v, i) => { const p = toXY(v, i); return `${p.x},${p.y}`; }).join(' ');
-    const refLines = hasData
-        ? [minV + range * 0.25, minV + range * 0.5, minV + range * 0.75].map(v => Math.round(v))
-        : [95, 97, 99];
-
-    const todayVal = vals[vals.length - 1];
-    const minVal = nonZero.length ? Math.min(...nonZero) : 0;
-
-    return (
-        <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
-            {refLines.map((v, idx) => {
-                const y = H - ((v - minV) / range) * H;
-                return (
-                    <g key={`${v}-${idx}`}>
-                        <line x1={0} y1={y} x2={W} y2={y} stroke="var(--border)" strokeWidth={0.6} strokeDasharray="4 3" />
-                        <text x={2} y={y - 3} fontSize={8} fill="var(--foreground-muted)">{v}%</text>
-                    </g>
-                );
-            })}
-            <defs>
-                <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="var(--primary)" stopOpacity="0.15" />
-                    <stop offset="100%" stopColor="var(--primary)" stopOpacity="0" />
-                </linearGradient>
-            </defs>
-            {hasData && (
-                <>
-                    <polygon points={`0,${H} ${pts} ${W},${H}`} fill="url(#areaGrad)" />
-                    <polyline points={pts} fill="none" stroke="var(--primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                    {vals.map((v, i) => {
-                        const { x, y } = toXY(v, i);
-                        const isToday = i === data.length - 1;
-                        return (
-                            <g key={i}>
-                                <circle cx={x} cy={y} r={isToday ? 4 : 3}
-                                    fill={isToday ? 'var(--primary)' : 'var(--card-bg)'}
-                                    stroke="var(--primary)" strokeWidth={1.5} />
-                                {isToday && (
-                                    <text x={x} y={y - 8} fontSize={9} fill="var(--primary)"
-                                        textAnchor="middle" fontWeight="600">{v}%</text>
-                                )}
-                            </g>
-                        );
-                    })}
-                </>
-            )}
-            {!hasData && (
-                <text x={W / 2} y={H / 2} fontSize={11} fill="var(--foreground-muted)"
-                    textAnchor="middle" dominantBaseline="middle">暂无数据</text>
-            )}
-        </svg>
-    );
-}
-
-function BlockTrend({ trend }: { trend: TrendRow[] }) {
-    const todayCalls = trend[trend.length - 1]?.calls ?? 0;
-    const avgCalls = trend.length
-        ? Math.round(trend.reduce((s, d) => s + d.calls, 0) / trend.length)
-        : 0;
-    const todaySuccess = trend[trend.length - 1]?.success ?? 0;
-    const nonZeroSuccess = trend.map(d => d.success).filter(v => v > 0);
-    const minSuccess = nonZeroSuccess.length ? Math.min(...nonZeroSuccess) : 0;
-
-    return (
-        <Section label="7 日趋势">
-            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-                <div style={{
-                    flex: 1, minWidth: 260,
-                    background: 'var(--card-bg)', border: '1px solid var(--card-border)',
-                    borderRadius: 12, padding: '16px 18px',
-                }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 16 }}>
-                        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--foreground)' }}>调用量</span>
-                        <span style={{ fontSize: 11, color: 'var(--foreground-muted)' }}>次 / 天</span>
-                    </div>
-                    <BarChart data={trend} />
-                    <div style={{ marginTop: 10, display: 'flex', gap: 16 }}>
-                        <span style={{ fontSize: 11, color: 'var(--foreground-secondary)' }}>
-                            今日 <strong style={{ color: 'var(--foreground)' }}>{todayCalls.toLocaleString()}</strong>
-                        </span>
-                        <span style={{ fontSize: 11, color: 'var(--foreground-secondary)' }}>
-                            7日均值 <strong style={{ color: 'var(--foreground)' }}>{avgCalls.toLocaleString()}</strong>
-                        </span>
-                    </div>
-                </div>
-
-                <div style={{
-                    flex: 1, minWidth: 260,
-                    background: 'var(--card-bg)', border: '1px solid var(--card-border)',
-                    borderRadius: 12, padding: '16px 18px',
-                }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 16 }}>
-                        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--foreground)' }}>成功率</span>
-                        <span style={{ fontSize: 11, color: 'var(--foreground-muted)' }}>% / 天</span>
-                    </div>
-                    <LineChart data={trend} />
-                    <div style={{ marginTop: 10, display: 'flex', gap: 16 }}>
-                        <span style={{ fontSize: 11, color: 'var(--foreground-secondary)' }}>
-                            今日 <strong style={{ color: 'var(--tag-green-fg)' }}>
-                                {todaySuccess > 0 ? `${todaySuccess}%` : '—'}
-                            </strong>
-                        </span>
-                        <span style={{ fontSize: 11, color: 'var(--foreground-secondary)' }}>
-                            7日最低 <strong style={{ color: 'var(--tag-amber-fg)' }}>
-                                {minSuccess > 0 ? `${minSuccess}%` : '—'}
-                            </strong>
-                        </span>
-                    </div>
-                </div>
-            </div>
-        </Section>
-    );
-}
-
-// ─── Block 4：Agent 状态一览 ──────────────────────────────────────────────────
-
-const STATUS_META = {
-    running: { label: '运行中', color: 'var(--tag-green-fg)' },
-    idle:    { label: '空闲',   color: 'var(--foreground-muted)' },
-    error:   { label: '异常',   color: 'var(--error)' },
-} as const;
-
-function BlockAgents({ agents, router }: { agents: AgentRow[]; router: ReturnType<typeof useRouter> }) {
-    const [filter, setFilter] = useState<'all' | 'running' | 'error' | 'idle'>('all');
-    const list = filter === 'all' ? agents : agents.filter(a => a.status === filter);
-
-    return (
-        <Section label="Agent 状态一览">
-            <div style={{
-                background: 'var(--card-bg)', border: '1px solid var(--card-border)',
-                borderRadius: 12, overflow: 'hidden',
-            }}>
-                <div style={{
-                    display: 'flex', alignItems: 'center', gap: 6,
-                    padding: '10px 14px', borderBottom: '1px solid var(--border)',
-                    background: 'var(--background)',
-                }}>
-                    {(['all', 'running', 'error', 'idle'] as const).map(f => (
-                        <button
-                            key={f}
-                            onClick={() => setFilter(f)}
-                            style={{
-                                fontSize: 11, padding: '3px 10px', borderRadius: 20,
-                                border: '1px solid var(--border)',
-                                background: filter === f ? 'var(--primary)' : 'transparent',
-                                color: filter === f ? '#fff' : 'var(--foreground-secondary)',
-                                cursor: 'pointer', fontWeight: filter === f ? 600 : 400,
-                                transition: 'all 0.12s',
-                            }}
-                        >
-                            {{ all: '全部', running: '运行中', error: '异常', idle: '空闲' }[f]}
-                            {f !== 'all' && (
-                                <span style={{ marginLeft: 4, opacity: 0.75 }}>
-                                    {agents.filter(a => a.status === f).length}
-                                </span>
-                            )}
-                        </button>
-                    ))}
-                    <div style={{ flex: 1 }} />
-                    <button
-                        onClick={() => router.push('/agents')}
-                        style={{
-                            fontSize: 11, color: 'var(--primary)', background: 'none',
-                            border: 'none', cursor: 'pointer', padding: 0,
-                        }}
-                    >
-                        查看全部 →
-                    </button>
-                </div>
-
-                <div style={{
-                    display: 'grid',
-                    gridTemplateColumns: '2fr 100px 90px 90px 90px 80px',
-                    padding: '8px 14px',
-                    borderBottom: '1px solid var(--border)',
-                }}>
-                    {([
-                        { id: 'agent', label: 'Agent' },
-                        { id: 'platform', label: '平台' },
-                        { id: 'agent-status', label: '状态' },
-                        { id: null, label: '今日调用' },
-                        { id: null, label: '成功率' },
-                        { id: 'p95-latency', label: 'P95', align: 'end' as const },
-                    ]).map((h, i) => (
-                        <span key={i} style={{ fontSize: 11, color: 'var(--foreground-muted)', fontWeight: 500 }}>
-                            {h.id ? <Term id={h.id} label={h.label} align={h.align} /> : h.label}
-                        </span>
-                    ))}
-                </div>
-
-                {list.length === 0 ? (
-                    <div style={{ padding: '20px 16px', textAlign: 'center', color: 'var(--foreground-muted)', fontSize: 13 }}>
-                        {agents.length === 0 ? '尚未注册任何 Agent，前往「Agent 管理」创建' : '该状态下无 Agent'}
-                    </div>
-                ) : list.map((a, i) => {
-                    const sm = STATUS_META[a.status];
-                    return (
-                        <div
-                            key={i}
-                            onClick={() => router.push('/trace')}
-                            style={{
-                                display: 'grid',
-                                gridTemplateColumns: '2fr 100px 90px 90px 90px 80px',
-                                padding: '10px 14px',
-                                borderBottom: i < list.length - 1 ? '1px solid var(--border)' : 'none',
-                                cursor: 'pointer', alignItems: 'center',
-                                transition: 'background 0.1s',
-                            }}
-                            onMouseEnter={e => (e.currentTarget.style.background = 'var(--background)')}
-                            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-                        >
-                            <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--foreground)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }} title={a.name}>{a.name}</span>
-                            <span style={{
-                                display: 'inline-block', fontSize: 10, padding: '2px 7px',
-                                borderRadius: 8, background: 'var(--background-secondary)',
-                                color: 'var(--foreground-secondary)', width: 'fit-content',
-                            }}>{a.platform}</span>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                                <span style={{ width: 6, height: 6, borderRadius: '50%', background: sm.color, flexShrink: 0 }} />
-                                <span style={{ fontSize: 12, color: sm.color }}>{sm.label}</span>
-                            </div>
-                            <span style={{ fontSize: 13, color: 'var(--foreground)' }}>{a.calls.toLocaleString()}</span>
-                            <span style={{
-                                fontSize: 13, fontWeight: 600,
-                                color: a.calls === 0
-                                    ? 'var(--foreground-muted)'
-                                    : a.successRate >= 98 ? 'var(--tag-green-fg)'
-                                    : a.successRate >= 95 ? 'var(--tag-amber-fg)'
-                                    : 'var(--error)',
-                            }}>
-                                {a.calls === 0 ? '—' : `${a.successRate}%`}
-                            </span>
-                            <span style={{ fontSize: 12, color: 'var(--foreground-secondary)' }}>
-                                {a.p95ms > 0 ? `${a.p95ms}ms` : '—'}
-                            </span>
-                        </div>
-                    );
-                })}
-            </div>
-        </Section>
-    );
-}
-
-
-// ─── Block 5：快捷入口 + 近期活动 ────────────────────────────────────────────
-
-const QUICK_ACTIONS = [
-    { icon: '🤖', label: '新建 Agent',   sub: '注册并配置 Agent',  href: '/agents'       },
-    { icon: '🧪', label: 'Skills 生成',  sub: '快速调试 Skill',     href: '/skill-generator'   },
-    { icon: '✅', label: '运行评测',     sub: '批量验证效果',        href: '/eval'         },
-    { icon: '🔍', label: '链路分析',     sub: '排查线上问题',        href: '/trace'        },
-];
-
-function BlockQuickAccess({ recent, router }: { recent: RecentItem[]; router: ReturnType<typeof useRouter> }) {
-    return (
-        <Section label="快捷入口 · 近期活动">
-            <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-                <div style={{ flex: 1, minWidth: 260, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                    {QUICK_ACTIONS.map(a => (
-                        <button
-                            key={a.href}
-                            onClick={() => router.push(a.href)}
-                            style={{
-                                display: 'flex', flexDirection: 'column', alignItems: 'flex-start',
-                                gap: 4, padding: '14px 16px', borderRadius: 10,
-                                background: 'var(--card-bg)', border: '1px solid var(--card-border)',
-                                cursor: 'pointer', textAlign: 'left',
-                                transition: 'border-color 0.15s, background 0.15s',
-                            }}
-                            onMouseEnter={e => {
-                                e.currentTarget.style.borderColor = 'var(--primary)';
-                                e.currentTarget.style.background = 'var(--primary-subtle)';
-                            }}
-                            onMouseLeave={e => {
-                                e.currentTarget.style.borderColor = 'var(--card-border)';
-                                e.currentTarget.style.background = 'var(--card-bg)';
-                            }}
-                        >
-                            <span style={{ fontSize: 22, lineHeight: 1 }}>{a.icon}</span>
-                            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--foreground)', marginTop: 4 }}>{a.label}</span>
-                            <span style={{ fontSize: 11, color: 'var(--foreground-muted)' }}>{a.sub}</span>
-                        </button>
-                    ))}
-                </div>
-
-                <div style={{
-                    flex: 1, minWidth: 260,
-                    background: 'var(--card-bg)', border: '1px solid var(--card-border)',
-                    borderRadius: 12, overflow: 'hidden',
-                }}>
-                    <div style={{
-                        padding: '10px 14px', borderBottom: '1px solid var(--border)',
-                        fontSize: 12, fontWeight: 600, color: 'var(--foreground)',
-                        background: 'var(--background)',
-                    }}>
-                        近期活动
-                    </div>
-                    {recent.length === 0 ? (
-                        <div style={{ padding: '20px 16px', textAlign: 'center', color: 'var(--foreground-muted)', fontSize: 13 }}>
-                            暂无活动记录
-                        </div>
-                    ) : recent.map((item, i) => (
-                        <div
-                            key={i}
-                            onClick={() => router.push(item.href)}
-                            style={{
-                                display: 'flex', alignItems: 'center', gap: 10,
-                                padding: '9px 14px',
-                                borderBottom: i < recent.length - 1 ? '1px solid var(--border)' : 'none',
-                                cursor: 'pointer', transition: 'background 0.1s',
-                            }}
-                            onMouseEnter={e => (e.currentTarget.style.background = 'var(--background)')}
-                            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-                        >
-                            <span style={{ fontSize: 16, flexShrink: 0 }}>{item.icon}</span>
-                            <span style={{ flex: 1, minWidth: 0, fontSize: 12, color: 'var(--foreground)', lineHeight: 1.4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                {item.text}
-                            </span>
-                            <span style={{ fontSize: 10, color: 'var(--foreground-muted)', flexShrink: 0 }}>
-                                {item.time}
-                            </span>
-                        </div>
-                    ))}
-                </div>
-            </div>
-        </Section>
-    );
-}
-
-// ─── Page ─────────────────────────────────────────────────────────────────────
-
-export default function DashboardPage() {
-    const router = useRouter();
-    const [stats, setStats] = useState<DashboardStats>(EMPTY_STATS);
-    const [loading, setLoading] = useState(true);
-    const [error, setError] = useState(false);
-    const [lastUpdated, setLastUpdated] = useState<string>('');
-
-    // Filter state — default: all platforms, user-owned agents only
-    const [filterPlatform, setFilterPlatform] = useState<string>('all');
-    const [filterOwnership, setFilterOwnership] = useState<string>('user');
-
-    // Auto-refresh state
-    const [autoRefresh, setAutoRefresh] = useState(true);
-    const [refreshInterval, setRefreshInterval] = useState(3000);
-    const [showIntervalPicker, setShowIntervalPicker] = useState(false);
-    const pickerRef = useRef<HTMLDivElement>(null);
-
-    const fetchStats = useCallback(async (isBackground = false) => {
-        if (!isBackground) setLoading(true);
-        try {
-            const params = new URLSearchParams();
-            if (filterPlatform !== 'all') params.set('platform', filterPlatform);
-            if (filterOwnership !== 'all') params.set('agentOwnership', filterOwnership);
-
-            const res = await fetch(`/api/dashboard/stats?${params}`);
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            const data: DashboardStats = await res.json();
-            setStats(data);
-            setError(false);
-            setLastUpdated(new Date().toLocaleTimeString('zh-CN', {
-                hour: '2-digit', minute: '2-digit', second: '2-digit',
-            }));
-        } catch (e) {
-            console.error('[Dashboard] Failed to fetch stats:', e);
-            setError(true);
-        } finally {
-            setLoading(false);
-        }
-    }, [filterPlatform, filterOwnership]);
-
-    // Initial fetch + auto-refresh
-    useEffect(() => {
-        fetchStats(false);
-        if (!autoRefresh) return;
-        const timer = setInterval(() => fetchStats(true), refreshInterval);
-        return () => clearInterval(timer);
-    }, [fetchStats, autoRefresh, refreshInterval]);
-
-    // Close interval picker on outside click
-    useEffect(() => {
-        function onClickOutside(e: MouseEvent) {
-            if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
-                setShowIntervalPicker(false);
-            }
-        }
-        document.addEventListener('mousedown', onClickOutside);
-        return () => document.removeEventListener('mousedown', onClickOutside);
-    }, []);
-
-    const today = new Date().toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
-    const currentIntervalLabel = REFRESH_OPTIONS.find(o => o.value === refreshInterval)?.label ?? '3s';
-
-    return (
-        <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-            <AppTopBar
-                title="概览"
-                showDefaultActions={false}
-                actions={
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        {/* Status badge */}
-                        {loading ? (
-                            <span style={{
-                                fontSize: 11, padding: '2px 9px', borderRadius: 20,
-                                background: 'var(--tag-amber-bg)', color: 'var(--tag-amber-fg)', fontWeight: 500,
-                            }}>
-                                加载中…
-                            </span>
-                        ) : error ? (
-                            <span style={{
-                                fontSize: 11, padding: '2px 9px', borderRadius: 20,
-                                background: 'var(--tag-red-bg)', color: 'var(--tag-red-fg)', fontWeight: 500,
-                            }}>
-                                数据加载失败
-                            </span>
-                        ) : (
-                            <span style={{
-                                fontSize: 11, padding: '2px 9px', borderRadius: 20,
-                                background: 'var(--tag-green-bg, var(--primary-subtle))',
-                                color: 'var(--tag-green-fg, var(--primary))', fontWeight: 500,
-                            }}>
-                                实时数据
-                            </span>
-                        )}
-
-                        <span style={{ fontSize: 11, color: 'var(--foreground-muted)' }}>
-                            {today}{lastUpdated ? ` · ${lastUpdated}` : ' · 过去 24h'}
-                        </span>
-
-                        {/* Divider */}
-                        <span style={{ width: 1, height: 14, background: 'var(--border)' }} />
-
-                        {/* Manual refresh button */}
-                        <button
-                            onClick={() => fetchStats(false)}
-                            title="立即刷新"
-                            style={{
-                                fontSize: 14, lineHeight: 1,
-                                background: 'none', border: 'none',
-                                color: 'var(--foreground-secondary)',
-                                cursor: 'pointer', padding: '2px 4px',
-                                borderRadius: 4,
-                                transition: 'color 0.12s',
-                            }}
-                            onMouseEnter={e => (e.currentTarget.style.color = 'var(--primary)')}
-                            onMouseLeave={e => (e.currentTarget.style.color = 'var(--foreground-secondary)')}
-                        >
-                            ↻
-                        </button>
-
-                        {/* Interval picker */}
-                        <div ref={pickerRef} style={{ position: 'relative' }}>
-                            <button
-                                onClick={() => setShowIntervalPicker(v => !v)}
-                                disabled={!autoRefresh}
-                                title="刷新周期"
-                                style={{
-                                    fontSize: 11, padding: '3px 8px', borderRadius: 6,
-                                    border: '1px solid var(--border)',
-                                    background: 'var(--background)',
-                                    color: autoRefresh ? 'var(--foreground)' : 'var(--foreground-muted)',
-                                    cursor: autoRefresh ? 'pointer' : 'default',
-                                    display: 'flex', alignItems: 'center', gap: 3,
-                                    transition: 'border-color 0.12s',
-                                }}
-                                onMouseEnter={e => { if (autoRefresh) e.currentTarget.style.borderColor = 'var(--primary)'; }}
-                                onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--border)')}
-                            >
-                                {currentIntervalLabel}
-                                <span style={{ fontSize: 8, opacity: 0.6 }}>▾</span>
-                            </button>
-                            {showIntervalPicker && (
-                                <div style={{
-                                    position: 'absolute', top: 'calc(100% + 4px)', right: 0,
-                                    background: 'var(--card-bg)', border: '1px solid var(--card-border)',
-                                    borderRadius: 8, overflow: 'hidden', zIndex: 100,
-                                    boxShadow: '0 4px 12px rgba(0,0,0,0.12)',
-                                    minWidth: 80,
-                                }}>
-                                    {REFRESH_OPTIONS.map(opt => (
-                                        <button
-                                            key={opt.value}
-                                            onClick={() => { setRefreshInterval(opt.value); setShowIntervalPicker(false); }}
-                                            style={{
-                                                display: 'block', width: '100%', textAlign: 'left',
-                                                fontSize: 12, padding: '7px 12px',
-                                                background: opt.value === refreshInterval ? 'var(--primary-subtle)' : 'transparent',
-                                                color: opt.value === refreshInterval ? 'var(--primary)' : 'var(--foreground)',
-                                                fontWeight: opt.value === refreshInterval ? 600 : 400,
-                                                border: 'none', cursor: 'pointer',
-                                                transition: 'background 0.1s',
-                                            }}
-                                            onMouseEnter={e => { if (opt.value !== refreshInterval) e.currentTarget.style.background = 'var(--background)'; }}
-                                            onMouseLeave={e => { if (opt.value !== refreshInterval) e.currentTarget.style.background = 'transparent'; }}
-                                        >
-                                            {opt.label}
-                                        </button>
-                                    ))}
-                                </div>
-                            )}
-                        </div>
-
-                        {/* Pause / Resume toggle */}
-                        <button
-                            onClick={() => setAutoRefresh(v => !v)}
-                            title={autoRefresh ? '暂停自动刷新' : '恢复自动刷新'}
-                            style={{
-                                fontSize: 11, padding: '3px 9px', borderRadius: 6,
-                                border: '1px solid var(--border)',
-                                background: autoRefresh ? 'transparent' : 'var(--tag-amber-bg, #fef3c7)',
-                                color: autoRefresh ? 'var(--foreground-secondary)' : 'var(--tag-amber-fg, #92400e)',
-                                cursor: 'pointer', fontWeight: 400,
-                                transition: 'all 0.12s',
-                                display: 'flex', alignItems: 'center', gap: 3,
-                            }}
-                            onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--foreground-muted)'; }}
-                            onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; }}
-                        >
-                            {autoRefresh ? '⏸ 暂停' : '▶ 恢复'}
-                        </button>
-                    </div>
-                }
-            />
-
-            {/* Filter bar */}
-            <FilterBar
-                platforms={stats.availablePlatforms}
-                filterPlatform={filterPlatform}
-                setFilterPlatform={setFilterPlatform}
-                filterOwnership={filterOwnership}
-                setFilterOwnership={setFilterOwnership}
-            />
-
-            <div style={{
-                flex: 1, overflowY: 'auto',
-                padding: '24px 28px',
-                display: 'flex', flexDirection: 'column', gap: 32,
-                opacity: loading ? 0.6 : 1,
-                transition: 'opacity 0.3s',
-            }}>
-                <BlockHealth stats={stats} />
-                <BlockAlerts alerts={stats.alerts} router={router} />
-                <BlockTrend trend={stats.trend} />
-                <BlockAgents agents={stats.agents} router={router} />
-                <BlockQuickAccess recent={stats.recent} router={router} />
-                <div style={{ height: 8 }} />
-            </div>
-        </div>
-    );
-}
+// ─── shared style tokens ──────────────────────────────────────────────────────
+const CHART_H = 260; // 所有图表统一高度：保证同一行不同类型图表的横轴在一条线上
+const mgn = { top: 8, right: 16, bottom: 4, left: 0 } as const;
+const ax = { fontSize: 10 } as const;
+const lg = { fontSize: 11 } as const;
+const tipStyle: React.CSSProperties = { background: 'var(--card-bg)', border: '1px solid var(--border-dark)', borderRadius: 9, fontSize: 11, boxShadow: '0 6px 24px rgba(20,22,30,.12)' };

@@ -46,7 +46,7 @@ export const zh = {
   },
 
   nav: {
-    dashboard: '概览',
+    dashboard: '仪表盘',
     dataset: '数据集管理',
     skill: '技能管理',
     catalog: 'Skill 管理',
@@ -77,7 +77,7 @@ export const zh = {
     evalDataset: '评测数据集',
     evalMetrics: '评估器',
     evalExecute: '评测执行',
-    quality: '质量监控',
+    quality: '可靠性与性能',
     infra: '推理 Infra',
     infraSources: '推理 Infra 源',
     memory: '记忆评估',
@@ -187,6 +187,7 @@ export const zh = {
     columnStatus: '执行状态',
     columnTags: '标签',
     columnTask: '任务内容',
+    columnTokens: 'Tokens',
     columnTime: '执行时间',
     columnActions: '操作',
     resetColumnWidths: '恢复默认列宽',

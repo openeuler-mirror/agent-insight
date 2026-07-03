@@ -339,6 +339,14 @@ function getRequestOptions(targetUrl, apiKey, bodyLength) {
     process.env.all_proxy ||
     process.env.ALL_PROXY
 
+  const headers = {
+    "Content-Type": "application/json",
+    "Content-Length": bodyLength,
+  }
+  // keyless 共享账号模式：apiKey 为空时【不带】x-witty-api-key，让服务端按
+  // AGENT_INSIGHT_DEFAULT_INGEST_USER 归属。若强行带上空/undefined 值，服务端会把它
+  // 当成一把无效 key → 401，反而上不去。
+  if (apiKey) headers["x-witty-api-key"] = apiKey
   const options = {
     hostname: targetUrl.hostname,
     port: targetUrl.port || (protocol === "https:" ? 443 : 80),
@@ -348,11 +356,7 @@ function getRequestOptions(targetUrl, apiKey, bodyLength) {
       return base + "/api/upload"
     })(),
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Content-Length": bodyLength,
-      "x-witty-api-key": apiKey,
-    },
+    headers,
   }
 
   if (proxy && !shouldSkipProxy(targetUrl.hostname)) {
@@ -881,9 +885,14 @@ async function main() {
   appendUploaderLog(
     `main.start host=${host || "(missing)"} apiKeyPresent=${apiKey ? "yes" : "no"} force=${process.env.AGENT_INSIGHT_UPLOADER_FORCE === "1" ? "1" : "0"}`,
   )
-  if (!apiKey || !host) {
-    appendUploaderLog(`main.skip missingConfig hostPresent=${host ? "yes" : "no"} apiKeyPresent=${apiKey ? "yes" : "no"}`)
+  if (!host) {
+    appendUploaderLog(`main.skip missingConfig hostPresent=no apiKeyPresent=${apiKey ? "yes" : "no"}`)
     process.exit(0)
+  }
+  if (!apiKey) {
+    // keyless 共享账号模式：无 key 也照常上报（不带 x-witty-api-key），由服务端
+    // AGENT_INSIGHT_DEFAULT_INGEST_USER 归属。以前这里 `!apiKey` 直接 skip，导致无 key 上不去。
+    appendUploaderLog(`main.keyless no api key — uploading anyway (server attributes via AGENT_INSIGHT_DEFAULT_INGEST_USER)`)
   }
 
   const spoolDir = env.AGENT_INSIGHT_OPENCODE_SPOOL_DIR || path.join(getExistingInsightDir(), "otel_data", "opencode")

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { prismaRaw } from '@/lib/storage/prisma';
 import { ensureAllSystemAgents } from '@/lib/system-agents';
+import { isInternalSystemAgentTrace } from '@/lib/system-agent-names';
 import { extractObservedAgentRegistrations } from '@/lib/engine/observability/agent-registration';
 
 export const dynamic = 'force-dynamic';
@@ -122,6 +123,12 @@ export async function GET(request: Request) {
       rows.filter((r: any) => r.agentOwnership === 'system').map((r: any) => `${r.platform}-${r.name}`)
     );
     const filteredRows = rows.filter((r: any) => {
+      // 已知系统 Agent（评估器等）：只保留其规范注册行（user=null 的 system 行），隐藏各
+      // framework 下 ingest 派生出的 (platform, name, user) 行——否则评估器的 direct-llm 版
+      // 会作为“用户 Agent”重复冒出来。规范行由 ensureAllSystemAgents 保证已存在。
+      if (isInternalSystemAgentTrace(r.name)) {
+        return r.user == null && r.agentOwnership === 'system';
+      }
       if (r.agentOwnership !== 'system' && systemKeys.has(`${r.platform}-${r.name}`)) {
         return false;
       }

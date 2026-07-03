@@ -45,7 +45,6 @@ custom-models.json
 # typescript
 *.tsbuildinfo
 next-env.d.ts
-package-lock.json
 
 # database
 *.db

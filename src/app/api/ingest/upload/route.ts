@@ -1,4 +1,4 @@
-import { saveExecutionRecord, extractInvokedSkillsFromSessionInteractions } from '@/lib/storage/data-service';
+import { saveExecutionRecord, extractInvokedSkillsFromSessionInteractions, getDefaultIngestUser } from '@/lib/storage/data-service';
 import { scheduleResultEvaluation } from '@/lib/engine/evaluation/result-quality-evaluator';
 import { isDeletedOpencodeSessionId } from '@/lib/ingest/opencode-deleted-sessions';
 import { analyzeDynamicOnly } from '@/lib/engine/observability/flow-parser';
@@ -43,7 +43,7 @@ export async function POST(request: Request) {
     //   3. apiKey 没提供 + payload.user 也没有 → 400 reject + 报错
     // ─────────────────────────────────────────────────────────────────────
     let username: string | undefined;
-    let userResolutionPath: 'api-key' | 'payload-user-unauth' | 'none' = 'none';
+    let userResolutionPath: 'api-key' | 'payload-user-unauth' | 'default-ingest-user' | 'none' = 'none';
 
     if (apiKey) {
       const user = await db.findUserByApiKey(apiKey);
@@ -93,24 +93,37 @@ export async function POST(request: Request) {
     }
 
     if (!username) {
-        // 既没 apiKey 也没 payload.user —— 之前会兜底到"public"账号，现在直接拒绝。
-        // 这就是用户被踩坑的那个静默路径。
-        console.error(
-          `[Upload-API] ❌ Rejecting upload (HTTP 400): no x-witty-api-key header and no payload.user field.\n` +
-          `  task_id: ${data.task_id}\n` +
-          `  framework: ${data.framework || 'unknown'}\n` +
-          `  → 之前会兜底到 DB 第一个 active user（例如 witty_insight_public@huawei.com），\n` +
-          `    导致 "trace 莫名其妙跑到另一个账号"。该 fallback 已下线。\n` +
-          `  → 修复：在 client 配 AGENT_INSIGHT_API_KEY env 或在 payload 里设 user 字段。`
-        );
-        return NextResponse.json(
-          {
-            error: 'Missing user identity',
-            detail: '上报没带 x-witty-api-key header，也没在 payload.user 写身份。Server 拒绝接收以避免数据归属错误。',
-            hint: '配 AGENT_INSIGHT_API_KEY env 后重试',
-          },
-          { status: 400 },
-        );
+        // 完全没带 key、也没 payload.user 时：
+        //   - 配了 AGENT_INSIGHT_DEFAULT_INGEST_USER → 归到该默认共享账号（开箱即用，client 只需填 IP）
+        //   - 没配 → 保持硬拒绝（历史踩坑的「静默兜底到 DB 第一个用户」已下线）
+        // 注意：这里只处理「完全没带 key」；「带了 key 但查不到」在上面已 401，不会静默落到共享账号。
+        const defaultUser = getDefaultIngestUser();
+        if (defaultUser) {
+            username = defaultUser;
+            data.user = username;
+            userResolutionPath = 'default-ingest-user';
+            console.warn(
+              `[Upload-API] ⚠ No API key / user — defaulting to AGENT_INSIGHT_DEFAULT_INGEST_USER: ${username}\n` +
+              `  task_id: ${data.task_id}, framework: ${data.framework || 'unknown'}`
+            );
+        } else {
+            console.error(
+              `[Upload-API] ❌ Rejecting upload (HTTP 400): no x-witty-api-key header and no payload.user field.\n` +
+              `  task_id: ${data.task_id}\n` +
+              `  framework: ${data.framework || 'unknown'}\n` +
+              `  → 之前会兜底到 DB 第一个 active user（例如 witty_insight_public@huawei.com），\n` +
+              `    导致 "trace 莫名其妙跑到另一个账号"。该 fallback 已下线。\n` +
+              `  → 修复：服务端配 AGENT_INSIGHT_DEFAULT_INGEST_USER（共享账号场景），或 client 配 AGENT_INSIGHT_API_KEY env。`
+            );
+            return NextResponse.json(
+              {
+                error: 'Missing user identity',
+                detail: '上报没带 x-witty-api-key header，也没在 payload.user 写身份，且服务端未配 AGENT_INSIGHT_DEFAULT_INGEST_USER。Server 拒绝接收以避免数据归属错误。',
+                hint: '服务端配 AGENT_INSIGHT_DEFAULT_INGEST_USER，或 client 配 AGENT_INSIGHT_API_KEY env',
+              },
+              { status: 400 },
+            );
+        }
     }
 
     console.log(`[Upload-API] 📥 Received data from ${data.framework || 'unknown'}: task_id=${data.task_id}, query=${data.query?.substring(0, 50)}..., user=${username} (via ${userResolutionPath})`);

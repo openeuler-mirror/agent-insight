@@ -50,7 +50,9 @@ test('Path C 路由：OTLP/protobuf 推送 → accepted（collector 默认 proto
   const req = new Request('http://localhost/api/ingest/otel/v1/metrics', {
     method: 'POST',
     headers: { 'content-type': 'application/x-protobuf' },
-    body: buf,
+    // Buffer.from：encodeOtlpMetricsProto 返回 Uint8Array<ArrayBufferLike>，TS 5.7+ 起不再直接兼容
+    // BodyInit（后者要 Uint8Array<ArrayBuffer>）；包成 Buffer 语义等价且可赋值（同本文件 gzip 用例）。
+    body: Buffer.from(buf),
   });
   const res = await POST(req);
   assert.equal(res.status, 200);
