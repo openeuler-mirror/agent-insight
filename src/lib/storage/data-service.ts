@@ -1734,12 +1734,15 @@ async function readRecordsInternal(
         const term = filters.query.trim();
         if (term) {
             // 文本搜索：trace 的 input(query) + output(finalResult) 子串模糊匹配
-            // （对齐 Langfuse 的 input/output 搜索语义）。两列 OR，再与其它过滤 AND。
+            // （对齐 Langfuse 的 input/output 搜索语义），再加 id/taskId 前缀·子串匹配
+            // （列表 Trace ID 列显示 taskId || id，粘贴 ID 应能直查）。多列 OR，再与其它过滤 AND。
             // SQLite 注意：Prisma 在 SQLite 上不支持 mode:'insensitive'；但 LIKE 对 ASCII
             // 默认大小写不敏感，中文无大小写概念，故名称/内容搜索天然可用。
             where.OR = [
                 { query: { contains: term } },
                 { finalResult: { contains: term } },
+                { id: { contains: term } },
+                { taskId: { contains: term } },
             ];
         }
         if (filters.framework) where.framework = filters.framework;

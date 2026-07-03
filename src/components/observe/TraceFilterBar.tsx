@@ -275,7 +275,7 @@ export default function TraceFilterBar({ clauses, onChange, search, onSearchChan
               inputRef.current?.blur();
             }
           }}
-          placeholder={clauses.length ? '继续搜索 / 过滤…' : '搜索输入/输出内容,或点选字段过滤…'}
+          placeholder={clauses.length ? '继续搜索 / 过滤…' : '搜索输入/输出内容或 Trace ID,或点选字段过滤…'}
           aria-label="搜索或过滤 trace"
           className="flex-1 min-w-[10rem] bg-transparent outline-none text-sm h-6 placeholder:text-muted-foreground"
         />
