@@ -242,7 +242,7 @@ function TrendsTab({ data }: { data: TrendsResp }) {
                         <CartesianGrid strokeDasharray="3 3" stroke={c.border} vertical={false} />
                         <XAxis dataKey="label" stroke={c.fgMuted} tick={ax} interval="preserveStartEnd" />
                         <YAxis width={52} stroke={c.fgMuted} tick={ax} tickFormatter={fmtTok} />
-                        <Tooltip contentStyle={tipStyle} formatter={(v: number) => fmtInt(v)} /><Legend verticalAlign="top" align="right" wrapperStyle={lg} />
+                        <Tooltip contentStyle={tipStyle} formatter={(v) => fmtInt(Number(v))} /><Legend verticalAlign="top" align="right" wrapperStyle={lg} />
                         <Bar dataKey="inputTokens" name="input" stackId="tok" fill={c.primary} />
                         <Bar dataKey="outputTokens" name="output" stackId="tok" fill={TEAL} radius={[2, 2, 0, 0]} />
                         <Line type="monotone" dataKey="totalTokens" name="总量" stroke={c.warning} strokeWidth={2} dot={false} />
@@ -255,7 +255,7 @@ function TrendsTab({ data }: { data: TrendsResp }) {
                         <CartesianGrid strokeDasharray="3 3" stroke={c.border} vertical={false} />
                         <XAxis dataKey="label" stroke={c.fgMuted} tick={ax} interval="preserveStartEnd" />
                         <YAxis width={52} stroke={c.fgMuted} tick={ax} tickFormatter={(v) => `$${v}`} />
-                        <Tooltip contentStyle={tipStyle} formatter={(v: number) => fmtCost(v)} />
+                        <Tooltip contentStyle={tipStyle} formatter={(v) => fmtCost(Number(v))} />
                         <Line type="monotone" dataKey="cost" name="成本" stroke={c.warning} strokeWidth={2.2} dot={{ r: 2 }} />
                     </LineChart>
                 </ResponsiveContainer>
@@ -405,7 +405,7 @@ function CollabNetwork({ data }: { data: BreakdownsResp['orchestration']['collab
     React.useEffect(() => {
         const el = ref.current;
         if (!el) return;
-        let chart: import('echarts').ECharts | null = null;
+        let chart: ReturnType<typeof import('echarts').init> | null = null;
         let disposed = false;
         let onResize: (() => void) | null = null;
         import('echarts').then((echarts) => {
@@ -516,7 +516,7 @@ function HBar({ data, color, unit, fmt }: { data: { name: string; value: number 
                 <CartesianGrid strokeDasharray="3 3" stroke={c.border} horizontal={false} />
                 <XAxis type="number" stroke={c.fgMuted} tick={ax} unit={unit} tickFormatter={fmt} />
                 <YAxis type="category" dataKey="name" stroke={c.fgMuted} tick={{ fontSize: 10 }} width={118} />
-                <Tooltip contentStyle={tipStyle} formatter={(v: number) => (fmt ? fmt(v) : v)} />
+                <Tooltip contentStyle={tipStyle} formatter={(v) => (fmt ? fmt(Number(v)) : String(v))} />
                 <Bar dataKey="value" fill={color} radius={[0, 3, 3, 0]} />
             </BarChart>
         </ResponsiveContainer>
@@ -532,7 +532,7 @@ function StackedHBar({ data }: { data: { model: string; input: number; output: n
                 <CartesianGrid strokeDasharray="3 3" stroke={c.border} horizontal={false} />
                 <XAxis type="number" stroke={c.fgMuted} tick={ax} tickFormatter={fmtTok} />
                 <YAxis type="category" dataKey="model" stroke={c.fgMuted} tick={{ fontSize: 10 }} width={118} />
-                <Tooltip contentStyle={tipStyle} formatter={(v: number) => fmtInt(v)} /><Legend verticalAlign="top" align="right" wrapperStyle={lg} />
+                <Tooltip contentStyle={tipStyle} formatter={(v) => fmtInt(Number(v))} /><Legend verticalAlign="top" align="right" wrapperStyle={lg} />
                 <Bar dataKey="input" name="input" stackId="s" fill={c.primary} />
                 <Bar dataKey="output" name="output" stackId="s" fill={TEAL} radius={[0, 3, 3, 0]} />
             </BarChart>
