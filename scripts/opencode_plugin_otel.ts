@@ -318,7 +318,7 @@ export default async function WittySkillInsightOtelPlugin() {
         try { fs.writeSync(logFd, header) } catch {}
       } catch {}
 
-      const stdio = logFd >= 0 ? ["ignore", logFd, logFd] : "ignore"
+      const stdio: import("child_process").StdioOptions = logFd >= 0 ? ["ignore", logFd, logFd] : "ignore"
       const child = spawn(runtime.cmd, [...runtime.argsPrefix, uploaderPath], {
         detached: true,
         stdio,
