@@ -896,7 +896,13 @@ async function main() {
   }
 
   const spoolDir = env.AGENT_INSIGHT_OPENCODE_SPOOL_DIR || path.join(getExistingInsightDir(), "otel_data", "opencode")
-  const checkpointFile = path.join(getPreferredInsightDir(), "opencode_uploader_checkpoint.json")
+  // 账号级隔离: spool / checkpoint 都按 API key 分目录(setup 写入 per-account 路径),
+  // 否则同一台机器切账号会复用机器级 spool/checkpoint, 把历史 trace 错误归到当前 key。
+  // 旧 .env 没有这两个变量时回退到机器级路径, 保持向后兼容。
+  const checkpointFile = env.AGENT_INSIGHT_OPENCODE_CHECKPOINT || path.join(getPreferredInsightDir(), "opencode_uploader_checkpoint.json")
+  // 时间门: 只上传本次账号安装(setup)之后才有活动的 session。早于安装时间的历史会话一律
+  // skip, 这样即使 spool 里残留别的账号/本机历史, 也不会被当前 key 回放上去(展示成“最近上传”)。
+  const uploadSinceMs = Number(env.AGENT_INSIGHT_OPENCODE_UPLOAD_SINCE_MS || 0) || 0
   // 保留天数:默认 3 天(原来 10 天 + 上传量大时 spool 堆到 GB 级,是 OOM 诱因之一)。
   // 同时兼容旧前缀 SKILL_INSIGHT_RETENTION_DAYS(部署的 .env 里用的是这个,旧版只读 AGENT_INSIGHT_ → 没生效)。
   const retentionDays = env.AGENT_INSIGHT_RETENTION_DAYS || env.SKILL_INSIGHT_RETENTION_DAYS || "3"
@@ -1032,6 +1038,20 @@ async function main() {
       `session.prepare task_id=${rootSid} interactions=${interactions.length} query=${String(query).slice(0, 120).replace(/\s+/g, " ")} ` +
       `traceCompletedAt=${payload.trace_completed_at || "(none)"} cliCompleted=${payload.opencode_cli_completed ? "1" : "0"} sig=${sig}`,
     )
+
+    // 账号级时间门: session 最后活动时间早于本账号安装时间(uploadSinceMs)就 skip,
+    // 防止切账号后历史 trace 被当前 key 回放。写入 checkpoint 以免每次扫描重复评估。
+    // 仅在能解析出活动时间(activityMs>0)时启用门, 解析不到时不拦截、走正常上传, 避免误杀。
+    const activityMs = Math.max(lastTs, idleMs)
+    if (uploadSinceMs > 0 && activityMs > 0 && activityMs < uploadSinceMs) {
+      appendUploaderLog(
+        `session.skip before-upload-since task_id=${rootSid} activityMs=${activityMs} sinceMs=${uploadSinceMs} sig=${sig}`,
+      )
+      ckpt[rootSid] = sig
+      saveCheckpoint(checkpointFile, ckpt)
+      continue
+    }
+
     if (ckpt[rootSid] && ckpt[rootSid] === sig) {
       appendUploaderLog(`session.skip checkpoint task_id=${rootSid} sig=${sig}`)
       continue
