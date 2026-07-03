@@ -59,6 +59,7 @@ Agent Insight 框架无关，已接入以下 Agent 运行时/框架，更多平�
 | Claude Code | OTLP 上报 |
 | Hermes      | 原生插件    |
 | JiuwenSwarm | OTLP 上报 |
+| Langgraph | OTLP 上报 |
 
 ## 🚀 快速开始
 
