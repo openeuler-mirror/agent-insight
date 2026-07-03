@@ -312,11 +312,27 @@ if [ -f "$AGENT_INSIGHT_CONFIG_FILE" ]; then
   fi
 fi
 
+# Per-account isolation: namespace opencode spool/checkpoint by API-key hash so
+# switching accounts on one machine doesn't replay another account's history.
+EXISTING_KEY=""
+EXISTING_UPLOAD_SINCE_MS=""
+if [ -f "$AGENT_INSIGHT_CONFIG_FILE" ]; then
+  EXISTING_KEY=$(grep '^AGENT_INSIGHT_API_KEY=' "$AGENT_INSIGHT_CONFIG_FILE" | head -n 1 | cut -d'=' -f2-)
+  EXISTING_UPLOAD_SINCE_MS=$(grep '^AGENT_INSIGHT_OPENCODE_UPLOAD_SINCE_MS=' "$AGENT_INSIGHT_CONFIG_FILE" | head -n 1 | cut -d'=' -f2-)
+fi
+CLIENT_KEY_HASH=$(printf '%s' "$AGENT_INSIGHT_API_KEY" | { shasum -a 256 2>/dev/null || sha256sum; } | cut -c1-16)
+NOW_MS=$(node -e 'process.stdout.write(String(Date.now()))' 2>/dev/null || echo $(( $(date +%s) * 1000 )))
+if [ -n "$EXISTING_UPLOAD_SINCE_MS" ] && [ "$AGENT_INSIGHT_API_KEY" = "$EXISTING_KEY" ]; then
+  UPLOAD_SINCE_MS="$EXISTING_UPLOAD_SINCE_MS"
+else
+  UPLOAD_SINCE_MS="$NOW_MS"
+fi
+
 echo "⚙️  Updating configuration..."
 touch "$AGENT_INSIGHT_CONFIG_FILE"
 if [ -f "$AGENT_INSIGHT_CONFIG_FILE" ]; then
     cp "$AGENT_INSIGHT_CONFIG_FILE" "\${AGENT_INSIGHT_CONFIG_FILE}.bak"
-    grep -v "^AGENT_INSIGHT_HOST=" "\${AGENT_INSIGHT_CONFIG_FILE}.bak" | grep -v "^AGENT_INSIGHT_API_KEY=" | grep -v "^AGENT_INSIGHT_SHOW_TASK_STATS=" | grep -v "^AGENT_INSIGHT_RETENTION_DAYS=" | grep -v "^AGENT_INSIGHT_OPENCODE_OTEL_ENABLE=" | grep -v "^AGENT_INSIGHT_OPENCODE_SPOOL_DIR=" | grep -v "^AGENT_INSIGHT_OPENCODE_UPLOADER=" | grep -v "^AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR=" | grep -v "^AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES=" | grep -v "^AGENT_INSIGHT_MAX_TOOL_IO=" | grep -v "^AGENT_INSIGHT_MAX_EVENT_STRING=" | grep -v "^AGENT_INSIGHT_OPENCODE_UPLOAD_COOLDOWN_MS=" > "$AGENT_INSIGHT_CONFIG_FILE"
+    grep -v "^AGENT_INSIGHT_HOST=" "\${AGENT_INSIGHT_CONFIG_FILE}.bak" | grep -v "^AGENT_INSIGHT_API_KEY=" | grep -v "^AGENT_INSIGHT_SHOW_TASK_STATS=" | grep -v "^AGENT_INSIGHT_RETENTION_DAYS=" | grep -v "^AGENT_INSIGHT_OPENCODE_OTEL_ENABLE=" | grep -v "^AGENT_INSIGHT_OPENCODE_SPOOL_DIR=" | grep -v "^AGENT_INSIGHT_OPENCODE_UPLOADER=" | grep -v "^AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR=" | grep -v "^AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES=" | grep -v "^AGENT_INSIGHT_MAX_TOOL_IO=" | grep -v "^AGENT_INSIGHT_MAX_EVENT_STRING=" | grep -v "^AGENT_INSIGHT_OPENCODE_UPLOAD_COOLDOWN_MS=" | grep -v "^AGENT_INSIGHT_CLIENT_KEY_HASH=" | grep -v "^AGENT_INSIGHT_OPENCODE_CHECKPOINT=" | grep -v "^AGENT_INSIGHT_OPENCODE_UPLOAD_SINCE_MS=" > "$AGENT_INSIGHT_CONFIG_FILE"
     rm "\${AGENT_INSIGHT_CONFIG_FILE}.bak"
 fi
 echo "AGENT_INSIGHT_HOST=$AGENT_INSIGHT_HOST" >> "$AGENT_INSIGHT_CONFIG_FILE"
@@ -324,7 +340,10 @@ echo "AGENT_INSIGHT_API_KEY=$AGENT_INSIGHT_API_KEY" >> "$AGENT_INSIGHT_CONFIG_FI
 echo "AGENT_INSIGHT_SHOW_TASK_STATS=$FINAL_SHOW_TASK_STATS" >> "$AGENT_INSIGHT_CONFIG_FILE"
 echo "AGENT_INSIGHT_RETENTION_DAYS=10" >> "$AGENT_INSIGHT_CONFIG_FILE"
 echo "AGENT_INSIGHT_OPENCODE_OTEL_ENABLE=true" >> "$AGENT_INSIGHT_CONFIG_FILE"
-echo "AGENT_INSIGHT_OPENCODE_SPOOL_DIR=$HOME/.agent-insight/otel_data/opencode" >> "$AGENT_INSIGHT_CONFIG_FILE"
+echo "AGENT_INSIGHT_CLIENT_KEY_HASH=$CLIENT_KEY_HASH" >> "$AGENT_INSIGHT_CONFIG_FILE"
+echo "AGENT_INSIGHT_OPENCODE_SPOOL_DIR=$HOME/.agent-insight/otel_data/opencode/$CLIENT_KEY_HASH" >> "$AGENT_INSIGHT_CONFIG_FILE"
+echo "AGENT_INSIGHT_OPENCODE_CHECKPOINT=$HOME/.agent-insight/opencode_uploader_checkpoint_$CLIENT_KEY_HASH.json" >> "$AGENT_INSIGHT_CONFIG_FILE"
+echo "AGENT_INSIGHT_OPENCODE_UPLOAD_SINCE_MS=$UPLOAD_SINCE_MS" >> "$AGENT_INSIGHT_CONFIG_FILE"
 echo "AGENT_INSIGHT_OPENCODE_UPLOADER=$HOME/.agent-insight/opencode_uploader_client.js" >> "$AGENT_INSIGHT_CONFIG_FILE"
 echo "AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR=$HOME/.agent-insight/otel_data/claude" >> "$AGENT_INSIGHT_CONFIG_FILE"
 echo "AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES=file:$HOME/.agent-insight/claude_raw_bodies" >> "$AGENT_INSIGHT_CONFIG_FILE"
@@ -820,13 +839,27 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '# 4. Configure ~/.agent-insight/.env (Auto mode - no interaction)',
         '$AGENT_INSIGHT_CONFIG_FILE = Join-Path $skillInsightDir ".env"',
         '',
+        '# Per-account isolation: namespace opencode spool/checkpoint by API-key hash.',
+        '$EXISTING_KEY = ""',
+        '$EXISTING_UPLOAD_SINCE_MS = ""',
+        'if (Test-Path $AGENT_INSIGHT_CONFIG_FILE) {',
+        '    $prevContent = Get-Content $AGENT_INSIGHT_CONFIG_FILE',
+        '    $kl = ($prevContent | Where-Object { $_ -match "^AGENT_INSIGHT_API_KEY=" } | Select-Object -First 1)',
+        '    if ($kl) { $EXISTING_KEY = ($kl -split "=", 2)[1] }',
+        '    $sl = ($prevContent | Where-Object { $_ -match "^AGENT_INSIGHT_OPENCODE_UPLOAD_SINCE_MS=" } | Select-Object -First 1)',
+        '    if ($sl) { $EXISTING_UPLOAD_SINCE_MS = ($sl -split "=", 2)[1] }',
+        '}',
+        '$CLIENT_KEY_HASH = ([System.BitConverter]::ToString(([System.Security.Cryptography.SHA256]::Create()).ComputeHash([System.Text.Encoding]::UTF8.GetBytes([string]$AGENT_INSIGHT_API_KEY))) -replace \'-\',\'\').ToLower().Substring(0,16)',
+        '$NOW_MS = [string][long]([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())',
+        'if ($EXISTING_UPLOAD_SINCE_MS -and ($AGENT_INSIGHT_API_KEY -eq $EXISTING_KEY)) { $UPLOAD_SINCE_MS = $EXISTING_UPLOAD_SINCE_MS } else { $UPLOAD_SINCE_MS = $NOW_MS }',
+        '',
         'Write-Host "⚙️  Updating configuration..."',
         'if (Test-Path $AGENT_INSIGHT_CONFIG_FILE) {',
         '    $existingContent = Get-Content $AGENT_INSIGHT_CONFIG_FILE',
         '    $existingShow = ($existingContent | Where-Object { $_ -match "^AGENT_INSIGHT_SHOW_TASK_STATS=" } | Select-Object -First 1)',
         '    $showValue = "true"',
         '    if ($existingShow) { $showValue = ($existingShow -split "=", 2)[1] }',
-        '    $filteredContent = $existingContent | Where-Object { $_ -notmatch "^AGENT_INSIGHT_HOST=" -and $_ -notmatch "^AGENT_INSIGHT_API_KEY=" -and $_ -notmatch "^AGENT_INSIGHT_SHOW_TASK_STATS=" -and $_ -notmatch "^AGENT_INSIGHT_RETENTION_DAYS=" -and $_ -notmatch "^AGENT_INSIGHT_OPENCODE_OTEL_ENABLE=" -and $_ -notmatch "^AGENT_INSIGHT_OPENCODE_SPOOL_DIR=" -and $_ -notmatch "^AGENT_INSIGHT_OPENCODE_UPLOADER=" -and $_ -notmatch "^AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR=" -and $_ -notmatch "^AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES=" -and $_ -notmatch "^AGENT_INSIGHT_MAX_TOOL_IO=" -and $_ -notmatch "^AGENT_INSIGHT_MAX_EVENT_STRING=" -and $_ -notmatch "^AGENT_INSIGHT_OPENCODE_UPLOAD_COOLDOWN_MS=" }',
+        '    $filteredContent = $existingContent | Where-Object { $_ -notmatch "^AGENT_INSIGHT_HOST=" -and $_ -notmatch "^AGENT_INSIGHT_API_KEY=" -and $_ -notmatch "^AGENT_INSIGHT_SHOW_TASK_STATS=" -and $_ -notmatch "^AGENT_INSIGHT_RETENTION_DAYS=" -and $_ -notmatch "^AGENT_INSIGHT_OPENCODE_OTEL_ENABLE=" -and $_ -notmatch "^AGENT_INSIGHT_OPENCODE_SPOOL_DIR=" -and $_ -notmatch "^AGENT_INSIGHT_OPENCODE_UPLOADER=" -and $_ -notmatch "^AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR=" -and $_ -notmatch "^AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES=" -and $_ -notmatch "^AGENT_INSIGHT_MAX_TOOL_IO=" -and $_ -notmatch "^AGENT_INSIGHT_MAX_EVENT_STRING=" -and $_ -notmatch "^AGENT_INSIGHT_OPENCODE_UPLOAD_COOLDOWN_MS=" -and $_ -notmatch "^AGENT_INSIGHT_CLIENT_KEY_HASH=" -and $_ -notmatch "^AGENT_INSIGHT_OPENCODE_CHECKPOINT=" -and $_ -notmatch "^AGENT_INSIGHT_OPENCODE_UPLOAD_SINCE_MS=" }',
         '    Set-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value $filteredContent',
         '} else {',
         '    New-Item -ItemType File -Path $AGENT_INSIGHT_CONFIG_FILE -Force | Out-Null',
@@ -837,7 +870,10 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_SHOW_TASK_STATS=$showValue"',
         'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_RETENTION_DAYS=10"',
         'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_OPENCODE_OTEL_ENABLE=true"',
-        'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_OPENCODE_SPOOL_DIR=$skillInsightDir\\otel_data\\opencode"',
+        'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_CLIENT_KEY_HASH=$CLIENT_KEY_HASH"',
+        'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_OPENCODE_SPOOL_DIR=$skillInsightDir\\otel_data\\opencode\\$CLIENT_KEY_HASH"',
+        'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_OPENCODE_CHECKPOINT=$skillInsightDir\\opencode_uploader_checkpoint_$CLIENT_KEY_HASH.json"',
+        'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_OPENCODE_UPLOAD_SINCE_MS=$UPLOAD_SINCE_MS"',
         'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_OPENCODE_UPLOADER=$skillInsightDir\\opencode_uploader_client.js"',
         'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR=$skillInsightDir\\otel_data\\claude"',
         'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES=file:$skillInsightDir\\claude_raw_bodies"',
