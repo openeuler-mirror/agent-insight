@@ -174,7 +174,7 @@ function createWriter(outFile: string): { enqueue: (obj: any) => void; close: ()
       while (queue.length > 0 && !stopped) {
         const chunk = queue.shift()
         const ok = stream.write(chunk)
-        if (!ok) await new Promise((resolve) => stream.once("drain", resolve))
+        if (!ok) await new Promise<void>((resolve) => stream.once("drain", () => resolve()))
       }
     } catch {}
     flushing = false
