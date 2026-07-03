@@ -41,7 +41,6 @@ export const TRACE_FILTER_COLUMNS: readonly FilterColumn[] = [
 
   // —— 布尔 ——
   { column: 'isAnswerCorrect', type: 'boolean', label: '答案正确', description: '评测:答案是否正确', nullable: true },
-  { column: 'isSkillCorrect', type: 'boolean', label: 'Skill 正确', description: '评测:skill 是否正确', nullable: true },
   { column: 'isSubagent', type: 'boolean', label: '是子 Agent', description: '是否子 Agent 执行' },
 
   // —— 数组/多选 ——

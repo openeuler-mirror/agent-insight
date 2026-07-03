@@ -91,13 +91,14 @@ interface Execution {
     agentOwnership?: string | null;
 }
 
-type TimeFilter = '1h' | '3h' | '24h' | '7d' | '30d' | 'all';
+type TimeFilter = '30m' | '1h' | '3h' | '24h' | '7d' | '30d' | 'all';
 type SortKey = 'timestamp' | 'agent' | 'status' | 'latency' | 'tokens' | 'cost';
 type SortDir = 'asc' | 'desc';
 type AnomalyFilter = 'all' | 'running' | 'success' | 'failed';
 type OwnershipFilter = 'all' | 'user' | 'system';
 
 const TIME_WIN_MS: Record<TimeFilter, number> = {
+    '30m': 1.8e6,
     '1h': 3.6e6,
     '3h': 1.08e7,
     '24h': 8.64e7,
@@ -574,6 +575,13 @@ function TracePageContent() {
         setClauses([]);
     };
 
+    // framework 下拉选项从当前工作集推导。
+    const frameworks = useMemo(() => {
+        const set = new Set<string>();
+        data.forEach(d => d.framework && set.add(d.framework));
+        return Array.from(set).sort();
+    }, [data]);
+
     // Filter dropdown option sets
     const ownershipOptions: SelectOption[] = [
         { value: 'all', label: t('nav.allOwnership') },
@@ -591,6 +599,12 @@ function TracePageContent() {
         { value: '7d', label: t('nav.last7Days') },
         { value: '24h', label: t('topbar.last24h') },
         { value: '1h', label: t('nav.last1Hour') },
+        { value: '30m', label: t('nav.last30Min') },
+    ];
+    // 框架下拉选项从当前工作集推导(与 agent 同源;侧栏 facet 版已按需求挪回横排)。
+    const frameworkOptions: SelectOption[] = [
+        { value: 'all', label: t('common.all') },
+        ...frameworks.map(f => ({ value: f, label: f })),
     ];
     return (
         <>
@@ -634,8 +648,8 @@ function TracePageContent() {
                             </div>
                         )}
 
-                        {/* filters 显隐 + 常用快捷下拉(ownership/skill/status/time/scope)横排在按钮右侧。
-                            agent 去掉(与搜索栏 agentName 重)、平台去掉(framework 挪进左侧结构化侧栏做 facet 多选)。 */}
+                        {/* filters 显隐 + 常用快捷下拉(ownership/status/time/framework/scope)横排在按钮右侧。
+                            agent 去掉(与搜索栏 agentName 重);framework 按需求放回横排(不再进左侧侧栏)。 */}
                         <div className="mb-2 flex flex-wrap items-center gap-2">
                             <Button variant="outline" size="sm" className="h-7 gap-1.5 text-xs" onClick={() => setShowFilters(v => !v)}>
                                 <SlidersHorizontal className="size-3.5" />
@@ -662,6 +676,13 @@ function TracePageContent() {
                                 onChange={setTimeFilter}
                                 options={timeOptions}
                                 active={timeFilter !== 'all'}
+                            />
+                            <Select
+                                label={t('tracePage.filterFramework')}
+                                value={frameworkFilter}
+                                onChange={setFrameworkFilter}
+                                options={frameworkOptions}
+                                active={frameworkFilter !== 'all'}
                             />
                             <Select
                                 label={locale === 'zh' ? '范围' : 'Scope'}
