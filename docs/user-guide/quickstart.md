@@ -28,7 +28,99 @@ description: "登录看板、注册模型、创建 Agent、完成接入，并在
 
 ## 可选：用 Docker 部署服务端
 
-如果你还没有部署看板，可以直接用仓库根目录的 `Dockerfile` 构建镜像。镜像默认从 npm 拉取 `agent-insight@latest`，不会把源码复制进镜像：
+如果你还没有部署看板，可以直接拉取已发布的 Docker 镜像。`karaggagent/agent-insight` 已发布多架构镜像，`x86_64` 服务器会自动拉取 `linux/amd64`，`aarch64` 服务器会自动拉取 `linux/arm64`。
+
+### 用法一：在线拉取 Docker Hub 镜像
+
+```bash
+docker pull karaggagent/agent-insight:latest
+
+mkdir -p /root/.agent-insight/data
+chmod -R 777 /root/.agent-insight
+
+docker stop agent-insight 2>/dev/null || true
+docker rm agent-insight 2>/dev/null || true
+
+docker run -d \
+  --name agent-insight \
+  --restart unless-stopped \
+  -p 3000:3000 \
+  -v /root/.agent-insight:/data/agent-insight \
+  karaggagent/agent-insight:latest
+
+curl -i http://localhost:3000/
+```
+
+这条命令会把容器内的 `/data/agent-insight` 挂到服务器宿主机的 `/root/.agent-insight`。SQLite 数据库、Skill 附件、评测运行时文件都会写入该目录下的 `data/`，容器重启、删除、重拉镜像后仍可复用。默认数据库路径是：
+
+```text
+/root/.agent-insight/data/witty_insight.db
+```
+
+### 用法二：离线导入 `.tar` 镜像
+
+如果服务器无法访问 Docker Hub，可以先拿到离线镜像包，例如 `agent-insight-0.5.0-image.tar`，再导入运行：
+
+```bash
+docker load -i agent-insight-0.5.0-image.tar
+docker images | grep agent-insight
+
+mkdir -p /root/.agent-insight/data
+chmod -R 777 /root/.agent-insight
+
+docker stop agent-insight 2>/dev/null || true
+docker rm agent-insight 2>/dev/null || true
+
+docker run -d \
+  --name agent-insight \
+  --restart unless-stopped \
+  -p 3000:3000 \
+  -v /root/.agent-insight:/data/agent-insight \
+  karaggagent/agent-insight:0.5.0
+
+curl -i http://localhost:3000/
+```
+
+如果 `docker load` 输出的镜像 tag 不是 `karaggagent/agent-insight:0.5.0`，请以 `docker images | grep agent-insight` 看到的实际镜像名为准。
+
+如果你不想直接挂宿主机目录，也可以使用 Docker volume：
+
+```bash
+docker run -d \
+  --name agent-insight \
+  --restart unless-stopped \
+  -p 3000:3000 \
+  -v agent-insight-data:/data/agent-insight \
+  karaggagent/agent-insight:latest
+```
+
+如果生产环境需要锁定版本号，可以把 `latest` 换成固定版本，例如 `0.5.0`：
+
+```bash
+docker pull karaggagent/agent-insight:0.5.0
+docker stop agent-insight
+docker rm agent-insight
+docker run -d \
+  --name agent-insight \
+  --restart unless-stopped \
+  -p 3000:3000 \
+  -v /root/.agent-insight:/data/agent-insight \
+  karaggagent/agent-insight:0.5.0
+```
+
+升级到新版本时，保留同一个挂载目录即可，容器数据不会随镜像更新丢失。
+
+如果容器启动后访问不到 `3000`，先看容器状态和日志：
+
+```bash
+docker ps -a --filter name=agent-insight
+docker logs --tail=200 agent-insight
+curl -i http://127.0.0.1:3000/
+```
+
+常见的 `unable to open database file` 通常是宿主机挂载目录不存在或权限不足。确认目录已创建，并且容器内的 `node` 用户可以写入 `/data/agent-insight/data`。
+
+如果你需要自己构建镜像，可以直接用仓库根目录的 `Dockerfile`。镜像默认从 npm 拉取 `agent-insight@latest`，不会把源码复制进镜像：
 
 ```bash
 docker build --pull --no-cache -t agent-insight:npm-latest .
@@ -36,12 +128,10 @@ docker run -d --name agent-insight -p 3000:3000 -v agent-insight-data:/data/agen
 curl -i http://localhost:3000/
 ```
 
-这条命令会把容器内的 `/data/agent-insight` 挂到 Docker volume `agent-insight-data`。SQLite 数据库、Skill 附件、评测运行时文件都会写入该目录下的 `data/`，容器重启或重建后仍可复用。
-
 需要固定某个 npm 版本时：
 
 ```bash
-docker build --pull --build-arg AGENT_INSIGHT_VERSION=0.2.2-beta -t agent-insight:0.2.2-beta .
+docker build --pull --build-arg AGENT_INSIGHT_VERSION=0.5.0 -t agent-insight:0.5.0 .
 ```
 
 如果你只是想在服务器上快速验证本地改动，不想每次都先发布 npm 包，可以改走“`npm pack` + 上传 `.tgz` + Docker 缓存构建”的测试流程，见 [Docker 测试构建](./docker-testing)。
