@@ -76,6 +76,7 @@
     "deepagents": "^1.9.0",
     "diff": "^9.0.0",
     "dotenv": "^17.3.1",
+    "echarts": "^6.1.0",
     "framer-motion": "^12.38.0",
     "gray-matter": "^4.0.3",
     "https-proxy-agent": "^7.0.6",
