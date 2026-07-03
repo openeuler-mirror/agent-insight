@@ -77,7 +77,7 @@ export const en = {
     evalDataset: 'Datasets',
     evalMetrics: 'Evaluators',
     evalExecute: 'Eval Runs',
-    quality: 'Quality Monitor',
+    quality: 'Reliability & Performance',
     infra: 'Inference Infra',
     infraSources: 'Infra Sources',
     memory: 'Memory',
