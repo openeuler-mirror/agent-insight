@@ -20,13 +20,13 @@
 
 ---
 
-## 📖 什么是 Agent-Insight？
+## 📖 什么是 Agent Insight？
 
 随着 Agent 在各行业的落地，开发者面临三大痛点：Agent 运行过程如同黑盒，难以定位问题根因；Skill 质量参差不齐，缺少体系化的评测与迭代手段；Agent 经验无法沉淀复用，每次优化都从零开始。
 
-**Agent-Insight** 正是为解决这些问题而生 —— 它是一个**框架无关**的 Agent Insight 工程底座，让运行在 OpenCode、Claude Code、Hermes、Openclaw 等任意框架上的 Agent 都能被持续观测、系统评测和自主优化。
+**Agent Insight** 正是为解决这些问题而生 —— 它是一个**框架无关**的统一AgentOps平台，让运行在 OpenCode、Claude Code、Hermes、Openclaw 等任意框架上的 Agent 都能被持续观测、系统评测和自主优化。
 
-> 与同类产品不同的是，Agent-Insight 把 **Skills（Agent 能力）** 作为一等公民，提供从生成、A/B 测试到优化的完整闭环。
+> 与同类产品不同的是，Agent Insight 把 **Skills（Agent 能力）** 作为一等公民，提供从生成、A/B 测试到优化的完整闭环。
 
 ---
 
@@ -51,14 +51,14 @@
 
 ## 🔌 支持平台
 
-Agent-Insight 框架无关，已接入以下 Agent 运行时/框架，更多平台持续接入中：
+Agent Insight 框架无关，已接入以下 Agent 运行时/框架，更多平台持续接入中：
 
-| Agent 框架   | 采集方式      |
-|:------------|:------------|
-| OpenCode    | 原生插件      |
-| Claude Code | OTLP 上报      |
-| Hermes      | 原生插件      |
-| JiuwenSwarm | OTLP 上报     |
+| Agent 框架    | 采集方式    |
+|:----------- |:------- |
+| OpenCode    | 原生插件    |
+| Claude Code | OTLP 上报 |
+| Hermes      | 原生插件    |
+| JiuwenSwarm | OTLP 上报 |
 
 ## 🚀 快速开始
 
@@ -81,15 +81,15 @@ npx agent-insight install
 
 **平台服务管理命令参考：**
 
-| 命令 | 说明 |
-| :--- | :--- |
-| `npx agent-insight install` | 一键安装平台及所有组件 |
-| `npx agent-insight start` | 启动服务（默认 3000 端口） |
-| `npx agent-insight start --port <端口>` | 指定端口启动 |
-| `npx agent-insight stop --port <端口>` | 停止指定端口的服务 |
-| `npx agent-insight restart` | 重启服务 |
-| `npx agent-insight status` | 查看服务运行状态 |
-| `npx agent-insight logs` | 查看服务日志 |
+| 命令                                    | 说明               |
+|:------------------------------------- |:---------------- |
+| `npx agent-insight install`           | 一键安装平台及所有组件      |
+| `npx agent-insight start`             | 启动服务（默认 3000 端口） |
+| `npx agent-insight start --port <端口>` | 指定端口启动           |
+| `npx agent-insight stop --port <端口>`  | 停止指定端口的服务        |
+| `npx agent-insight restart`           | 重启服务             |
+| `npx agent-insight status`            | 查看服务运行状态         |
+| `npx agent-insight logs`              | 查看服务日志           |
 
 #### 方式二：基于源码构建
 
@@ -100,33 +100,6 @@ git clone https://gitcode.com/openeuler/agent-insight.git
 cd agent-insight
 npm install
 ```
-
-**启动服务**
-
-安装完成后，在工作目录下执行以下命令启动服务：
-
-```bash
-cd agent-insight
-
-# 启动服务端，默认端口是3000
-bash scripts/start.sh
-```
-
-**停止服务**
-
-如果需要停止运行，在工作目录下执行以下命令。该脚本将安全关闭 Next.js 服务端及所有相关的后台子进程：
-
-```bash
-bash scripts/stop.sh
-```
-
-**访问看板**
-
-浏览器打开 `http://localhost:3000`，使用个人邮箱登录即可。
-
-<p align="center">
-  <img src="docs/images/login.png" alt="登录" />
-</p>
 
 #### 方式三：使用 Docker 镜像部署
 
@@ -173,24 +146,53 @@ docker run -d \
 
 更多部署、升级和排查说明见 [5 分钟上手](docs/user-guide/quickstart.md)。
 
+**启动服务**
+
+安装完成后，在工作目录下执行以下命令启动服务：
+
+```bash
+cd agent-insight
+
+# 启动服务端，默认端口是3000
+bash scripts/start.sh
+```
+
+**停止服务**
+
+如果需要停止运行，在工作目录下执行以下命令。该脚本将安全关闭 Next.js 服务端及所有相关的后台子进程：
+
+```bash
+bash scripts/stop.sh
+```
+
+**访问看板**
+
+浏览器打开 `http://localhost:3000`，使用个人邮箱登录即可。
+
+<p align="center">
+  <img src="docs/images/login.png" alt="登录" />
+</p>
+
 ### 2. Agent 平台接入
 
 当前系统支持与多种主流 Agent 平台（包括但不限于 OpenCode、Claude Code 等）集成。为实现数据采集与能力观测，需在目标 Agent 平台中配置并安装 Agent-Insight 插件。各平台的插件安装流程基本通用，以下以 Linux 环境下的 OpenCode 平台为例，说明 Agent-Insight 插件的具体安装与配置方式：
 
 1. 在看板的 **安装指导** 页面选择对应的 Agent 平台，并复制生成的插件安装命令。
+   
    <p align="center"><img src="docs/images/guide.png" alt="安装指导" /></p>
 
 2. 在目标 Agent 平台所在的服务器终端执行该安装命令，根据交互提示完成对应平台的插件安装配置。
-
+   
    <p align="center"><img src="docs/images/guide-framework.png" alt="选择运行时" /></p>
 
 3. 验证接入配置：在 Agent 平台中触发一次测试任务（仍以 OpenCode 为例，执行任意基础命令）。
-
+   
    ```bash
    opencode run 'hello'
    ```
 
 4. 登录 Agent-Insight 看板，进入 **链路追踪** 页面。若能观测到刚才执行的测试任务链路数据上报，即表明 Agent 平台已成功接入并正常工作。
+   
    <p align="center"><img src="docs/images/trace.png" alt="链路追踪" /></p>
 
 ---
@@ -204,20 +206,23 @@ docker run -d \
 ### 注册模型
 
 1. 进入 **模型注册**，单击 **注册首个模型**。
+   
    <p align="center"><img src="docs/images/model-view.png" alt="注册模型" /></p>
 
 2. 选择模型供应商。
+   
    <p align="center"><img src="docs/images/model-provider.png" alt="选择模型供应商" /></p>
 
 3. 配置 API 密钥，单击 **测试连接并保存**。
+   
    <p align="center"><img src="docs/images/model-configkey.png" alt="配置 API Key" /></p>
 
 ### 生成 Skill
 
 1. 进入 **Skills 生成**，提交需求描述，例如：
-
+   
    > 创建一个 Skill，当用户请求查看系统信息时，自动执行 shell 脚本收集当前系统的关键信息（操作系统、CPU、内存、磁盘、网络等），以 Markdown 报告呈现给用户。
-
+   
    <p align="center"><img src="docs/images/skill-gen.png" alt="生成 Skill" /></p>
 
 2. 单击 **保存并发布**。
@@ -225,17 +230,21 @@ docker run -d \
 ### 分析 Skill
 
 1. 进入 **Skills 评测**，单击 **静态合规**。
+   
    <p align="center"><img src="docs/images/skill-analyse.png" alt="分析 Skill" /></p>
 
 2. 单击 **重新扫描**，查看分析结果。
+   
    <p align="center"><img src="docs/images/skill-analyse-static.png" alt="静态合规分析" /></p>
 
 ### 优化 Skill
 
 1. 进入 **Skills 优化**，选择 Skill 并单击 **优化**。
+   
    <p align="center"><img src="docs/images/skill-optimization.png" alt="优化 Skill" /></p>
 
 2. 选择可优化项并单击 **开始优化**，或直接输入优化需求后单击 **发送**。
+   
    <p align="center"><img src="docs/images/skill-optimization-result.png" alt="优化结果" /></p>
 
 3. 优化完成后，单击 **发布为 v1**，系统将自动保存为新版本。
