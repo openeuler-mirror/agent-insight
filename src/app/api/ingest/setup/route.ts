@@ -608,7 +608,7 @@ function generateBashScript(host: string, baseUrl: string, apiKey: string, nonin
     return lines.join('\n');
 }
 
-function generatePowerShellScript(host: string, baseUrl: string, apiKey: string): string {
+function generatePowerShellScript(host: string, baseUrl: string, apiKey: string, noninteractive: boolean = false, frameworks: string = 'opencode', nokey: boolean = false): string {
     const lines = [
         '# =============================================================================',
         '# Agent-insight One-Click Setup (PowerShell)',
@@ -617,6 +617,16 @@ function generatePowerShellScript(host: string, baseUrl: string, apiKey: string)
         '$AGENT_INSIGHT_HOST = "' + powerShellDoubleQuoted(host) + '"',
         '$AGENT_INSIGHT_BASE_URL = "' + powerShellDoubleQuoted(baseUrl) + '"',
         '$AGENT_INSIGHT_SETUP_API_KEY = "' + powerShellDoubleQuoted(apiKey) + '"',
+        '',
+        '# ── 非交互模式（?yes=1 / ?nokey=1，或 env）：全程无提示，默认只装 opencode ──────',
+        '#   iex (irm "<host>/api/ingest/setup?yes=1&nokey=1")',
+        '#   或 env： $env:AGENT_INSIGHT_NONINTERACTIVE=1; $env:AGENT_INSIGHT_NO_KEY=1',
+        '$NONINTERACTIVE = $' + (noninteractive ? 'true' : 'false'),
+        '$NONINTERACTIVE_FRAMEWORKS = "' + powerShellDoubleQuoted(frameworks || 'opencode') + '"',
+        '$FORCE_NO_KEY = $' + (nokey ? 'true' : 'false'),
+        'if ($env:AGENT_INSIGHT_NONINTERACTIVE -eq "1" -or $env:AGENT_INSIGHT_NONINTERACTIVE -eq "true") { $NONINTERACTIVE = $true }',
+        'if ($env:AGENT_INSIGHT_NO_KEY -eq "1" -or $env:AGENT_INSIGHT_NO_KEY -eq "true") { $FORCE_NO_KEY = $true }',
+        'if ($NONINTERACTIVE) { Write-Host "🤖 非交互模式：跳过所有提示，安装框架 = $NONINTERACTIVE_FRAMEWORKS" }',
         '',
         'Write-Host "🚀 Fetching Agent-insight telemetry components from $AGENT_INSIGHT_BASE_URL..."',
         '',
@@ -648,8 +658,12 @@ function generatePowerShellScript(host: string, baseUrl: string, apiKey: string)
         'New-Item -ItemType Directory -Force -Path ".opencode\\skills" | Out-Null',
         'Write-Host "📂 Created necessary directories"',
         '',
-        '# 2. Interactive Framework Selection with inquirer',
+        '# 2. Framework Selection（非交互模式跳过 inquirer，用默认 $NONINTERACTIVE_FRAMEWORKS）',
         'Write-Host ""',
+        '',
+        'if ($NONINTERACTIVE) {',
+        '    $SELECTED_FRAMEWORKS = $NONINTERACTIVE_FRAMEWORKS',
+        '} else {',
         '',
         '$SELECTOR_SCRIPT = "$homeDir\\.agent-insight\\framework_selector.mjs"',
         '$SELECTOR_RESULT = "$homeDir\\.agent-insight\\.selector_result"',
@@ -738,6 +752,7 @@ function generatePowerShellScript(host: string, baseUrl: string, apiKey: string)
         '} else {',
         '    $SELECTED_FRAMEWORKS = ""',
         '}',
+        '}   # end: 交互 vs 非交互 框架选择',
         '',
         '# Set installation flags based on selection',
         '$INSTALL_OPENCODE = $false',
@@ -853,7 +868,13 @@ function generatePowerShellScript(host: string, baseUrl: string, apiKey: string)
         '',
         '# -- API Key Logic --',
         '$FINAL_KEY = if ($AGENT_INSIGHT_SETUP_API_KEY) { $AGENT_INSIGHT_SETUP_API_KEY } else { $EXISTING_KEY }',
-        'if ($AGENT_INSIGHT_SETUP_API_KEY) {',
+        'if ($FORCE_NO_KEY) {',
+        '    $FINAL_KEY = ""',
+        '    Write-Host "🔑 --no-key：强制无 key（清空本机已有 key），数据归到服务端 AGENT_INSIGHT_DEFAULT_INGEST_USER 指定的共享账号。"',
+        '} elseif ($NONINTERACTIVE) {',
+        '    if ($FINAL_KEY) { Write-Host "🔑 Using API Key (from setup URL / existing config)." }',
+        '    else { Write-Host "🔑 非交互模式且未提供 API Key —— 以「无 key」方式上报，数据归到服务端 AGENT_INSIGHT_DEFAULT_INGEST_USER 指定的共享账号。" }',
+        '} elseif ($AGENT_INSIGHT_SETUP_API_KEY) {',
         '    Write-Host "🔑 Using API Key from setup URL."',
         '} elseif ($EXISTING_KEY) {',
         '    Write-Host "🔑 Found existing API Key."',
@@ -868,7 +889,7 @@ function generatePowerShellScript(host: string, baseUrl: string, apiKey: string)
         '',
         '# -- Host Logic --',
         '$FINAL_HOST = $AGENT_INSIGHT_HOST',
-        'if ($EXISTING_HOST -and ($EXISTING_HOST -ne $AGENT_INSIGHT_HOST)) {',
+        'if (-not $NONINTERACTIVE -and $EXISTING_HOST -and ($EXISTING_HOST -ne $AGENT_INSIGHT_HOST)) {',
         '    Write-Host "🌐 Current Host in config: $EXISTING_HOST"',
         '    Write-Host "🌐 New Host detected: $AGENT_INSIGHT_HOST"',
         '    $CHANGE_HOST = Read-Host "👉 Change to new Host? (y/N, Default: y)"',
@@ -885,7 +906,11 @@ function generatePowerShellScript(host: string, baseUrl: string, apiKey: string)
         '}',
         '',
         'if (-not $FINAL_KEY) {',
-        '    Write-Host "⚠️  Warning: No API Key provided. Telemetry upload will fail until you set it in $AGENT_INSIGHT_CONFIG_FILE"',
+        '    if ($NONINTERACTIVE -or $FORCE_NO_KEY) {',
+        '        Write-Host "ℹ️  未配置 API Key：以「无 key」方式上报，数据归到服务端默认共享账号（需服务端已配 AGENT_INSIGHT_DEFAULT_INGEST_USER）。"',
+        '    } else {',
+        '        Write-Host "⚠️  Warning: No API Key provided. Telemetry upload will fail until you set it in $AGENT_INSIGHT_CONFIG_FILE"',
+        '    }',
         '}',
         '',
         '# -- Per-account isolation: namespace opencode spool/checkpoint by API-key hash --',
@@ -1121,7 +1146,7 @@ export async function GET(request: Request) {
     const platform = detectPlatform(request);
 
     if (platform === 'windows') {
-        const script = generatePowerShellScript(skillInsightHost, baseUrl, apiKey);
+        const script = generatePowerShellScript(skillInsightHost, baseUrl, apiKey, noninteractive, frameworks, nokey);
         return new NextResponse(script, {
             headers: {
                 'Content-Type': 'text/plain; charset=utf-8',
