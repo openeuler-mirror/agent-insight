@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import type { ExecutionRecord } from '@/lib/storage/data-service';
 import { normalizeClaudeCodeInteractionsForStorage } from '@/lib/shared/interaction-content';
+import { resolveAgentInsightHomePath } from '@/lib/env';
 import { readClaudeOtelEventsForSession } from './spool';
 import type { ClaudeOtelAggregationResult, ClaudeOtelEvent } from './types';
 
@@ -115,12 +116,20 @@ function toolResultUseId(block: any): string | undefined {
   return block?.tool_use_id || block?.toolUseId || block?.toolUseID || block?.id;
 }
 
+function resolveBodyRefPath(bodyRef: string): string {
+  if (fs.existsSync(bodyRef)) return bodyRef;
+  const idx = bodyRef.indexOf('claude_raw_bodies/');
+  if (idx === -1) return bodyRef;
+  return resolveAgentInsightHomePath(bodyRef.slice(idx));
+}
+
 function readBodyPayload(attrs: Record<string, any>): any {
   const inline = parseJsonMaybe(attrs.body);
   if (inline) return inline;
 
-  const bodyRef = typeof attrs.body_ref === 'string' ? attrs.body_ref : '';
-  if (!bodyRef) return null;
+  const rawBodyRef = typeof attrs.body_ref === 'string' ? attrs.body_ref : '';
+  if (!rawBodyRef) return null;
+  const bodyRef = resolveBodyRefPath(rawBodyRef);
   try {
     if (!fs.existsSync(bodyRef)) return null;
     const text = fs.readFileSync(bodyRef, 'utf8');
