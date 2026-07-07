@@ -11,7 +11,7 @@ App Router。页面位于 `src/app` 下。主仪表盘位于 `(main)` 路由组�
 | `/login` | `LoginPage` (`src/app/login/page.tsx`) | 邮箱登录 |
 | `/(main)/dashboard` | `DashboardPage` (`(main)/dashboard/page.tsx`) | 概览：健康度、趋势、告警、agents |
 | `/(main)/agents` | `AgentsPage` (`(main)/agents/page.tsx`) | 已注册/已观测的 agents |
-| `/(main)/trace` | `TracePage` (`(main)/trace/page.tsx`) | trace 列表 + 详情 |
+| `/(main)/trace` | `TracePage` (`(main)/trace/page.tsx`) | trace 列表 + 详情；支持用户标签列、系统标签列、列显隐和业务标签筛选 |
 | `/(main)/fault` | `FaultPage` (`(main)/fault/page.tsx`) | 故障诊断 |
 | `/(main)/dataset`, `/(main)/dataset/[id]` | `DatasetPage`, `DatasetDataItemsRoutePage` | 评测数据集 |
 | `/(main)/eval`, `/(main)/eval/run/[runId]`, `/(main)/eval/trajectory/*` | `EvalPage`, `RunDetailPage`, `TrajectoryDetailPage`/`TrajectoryTracePage` | 评测运行与轨迹视图 |
@@ -38,6 +38,7 @@ AGENT WORKSPACE  (nav.groupAgentWorkspace)
 ├─ Agent 管理           → /agents
 ├─ 运行观测 (groupObserve)
 │  ├─ 链路追踪           → /trace   (matchPrefixes: /trace, /details)
+│  ├─ 版本分析           → /version-analysis
 │  ├─ 智能诊断           → /fault
 │  ├─ 质量监控           → /quality
 │  └─ 推理 Infra         → /infra
@@ -55,6 +56,7 @@ AGENT WORKSPACE  (nav.groupAgentWorkspace)
 配置  (nav.configGroup)
 ├─ 模型注册             → /modelconfig/registry
 ├─ 联网搜索             → /modelconfig/web-search
+├─ 版本管理             → /version-management
 └─ 安装指导             → /accessconfig/install
    (接入通道/Webhook/健康检查 → /accessconfig/{channels,webhooks,health}) 代码注释掉，"后端能力未稳定"
 ```
@@ -82,7 +84,7 @@ AGENT WORKSPACE  (nav.groupAgentWorkspace)
 组件按功能与可复用基础组件进行分组（`src/components/`）：
 - **应用外壳** — `shell/{AppSidebar,AppTopBar,PageContainer,PageHeader,providers}.tsx`。页面在 `<PageContainer>` 内渲染（左对齐、全幅——不要手写居中）。
 - **评测** — `eval/*`（`Dashboard`、`SkillEvaluation`、`TrajectoryEvalCenter`、`EvaluationRunDetailView`、`ExecutionRecordsTable`、`EvaluatorFindingsView`）以及 `evaluation/*`（`EvaluationContent`、`EvaluationFindings`）。
-- **可观测性** — `observe/{AgentTraceView,TraceDrawer,AgentDebugCard}.tsx`（trace 树由 `buildAgentCallTree` 渲染）。
+- **可观测性** — `observe/{AgentTraceView,TraceDrawer,AgentDebugCard}.tsx`（trace 树由 `buildAgentCallTree` 渲染）。Trace 列表主体在 `app/(main)/trace/page.tsx`，列宽存 `trace.columnWidths.v1`，列显隐存 `trace.columnVisibility.v1`；用户标签列默认显示，系统标签列默认隐藏；隐藏用户标签列后，操作列不再提供标签编辑入口。Version Analysis page: `app/(main)/version-analysis/page.tsx`; Version Management page: `app/(main)/version-management/page.tsx`。
 - **Skills** — `skills/*`（`SkillCatalogV2`、`SkillDiagnosis`、`SkillRegistry`）、`skill-generator/*`。
 - **数据集 / 评测器** — `AgentDatasetCenter.tsx`、`DatasetItemsPage.tsx`、`EvaluatorsCenter.tsx`。
 - **聊天 / agent UI** — `thread/*`、`chat/*`、`ai-elements/*`，通过 `src/providers/{Stream,Thread}.tsx` 中的 assistant-ui providers 接线。
