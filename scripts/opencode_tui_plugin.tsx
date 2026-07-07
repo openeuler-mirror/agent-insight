@@ -4,7 +4,29 @@ import { Show, createEffect, createMemo, createSignal } from "solid-js"
 import fs from "fs"
 import path from "path"
 import { spawn } from "child_process"
-import { getExistingInsightDir, getInsightEnvCandidates } from "./insight-paths.js"
+import os from "os"
+
+// 自包含：内联 insight 路径解析。原先从 "./insight-paths.js" 导入，但安装脚本从不下发该文件，
+// 会导致本插件在 opencode 加载时报“找不到模块”，进而拖垮 opencode 本地服务启动。改为内联，去除外部相对依赖。
+function getPreferredInsightDir() {
+  return path.join(os.homedir(), ".agent-insight")
+}
+function getLegacyInsightDir() {
+  return path.join(os.homedir(), ".skill-insight")
+}
+function getExistingInsightDir() {
+  const preferred = getPreferredInsightDir()
+  const legacy = getLegacyInsightDir()
+  if (fs.existsSync(preferred)) return preferred
+  if (fs.existsSync(legacy)) return legacy
+  return preferred
+}
+function getInsightEnvCandidates() {
+  return [
+    path.join(getPreferredInsightDir(), ".env"),
+    path.join(getLegacyInsightDir(), ".env"),
+  ]
+}
 
 function parseBool(input: unknown, defaultValue: boolean) {
   if (input === undefined || input === null) return defaultValue
