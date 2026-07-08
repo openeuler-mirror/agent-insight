@@ -74,6 +74,7 @@ function strings(locale: string) {
       detailOverview: '单版本指标概览',
       detailChartTitle: '版本内 Trace 指标趋势',
       detailChartHint: '每个点=一条 Trace；点击可进入 Trace 详情；警告色=未完成 Trace。',
+      openTraceHint: '点击节点可在新页面打开 Trace 详情',
       compare: '版本对比',
       detail: '版本详情',
       compareObject: '对比对象',
@@ -141,6 +142,7 @@ function strings(locale: string) {
     detailOverview: 'Single-version metric overview',
     detailChartTitle: 'In-version trace metric trend',
     detailChartHint: 'Each point is one Trace; click to open Trace detail; warning color marks unfinished Trace.',
+    openTraceHint: 'Click a node to open Trace detail in a new page',
     compare: 'Version comparison',
     detail: 'Version detail',
     compareObject: 'Compare object',
@@ -431,6 +433,11 @@ export default function VersionAnalysisPage() {
       value: traceMetricValue(trace, metric),
       status: trace.traceStatus,
       label: formatDateTime(trace.timestamp),
+      query: trace.query,
+      answerScore: trace.answerScore,
+      tokens: trace.tokens,
+      latencySec: trace.latencySec,
+      cost: trace.cost,
       traceHref: basePath + '/trace?taskId=' + encodeURIComponent(trace.taskId || trace.id),
     }));
 
@@ -624,14 +631,16 @@ export default function VersionAnalysisPage() {
                   <h2 className="text-sm font-semibold text-foreground">{copy.detailOverview}</h2>
                 </div>
                 <div className='flex flex-wrap items-center gap-3'>
-                  <Select
-                    value={selectedVersionId ?? ''}
-                    onChange={(value) => setSelectedVersionId(value || null)}
-                    options={versionOptions}
-                    label={copy.selected}
-                    active
-                    className='min-w-[220px] max-w-xs'
-                  />
+                  <div className='inline-flex max-w-full items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1'>
+                    <span className='shrink-0 text-xs font-medium text-foreground-muted'>{copy.selected}</span>
+                    <Select
+                      value={selectedVersionId ?? ''}
+                      onChange={(value) => setSelectedVersionId(value || null)}
+                      options={versionOptions}
+                      aria-label={copy.selected}
+                      className='h-7 max-w-[180px] border-0 bg-background-secondary px-2 text-sm font-medium text-foreground hover:bg-background-secondary'
+                    />
+                  </div>
                   {selectedVersion && (
                     <div className='grid min-w-[520px] flex-1 grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6'>
                       <CompactMetric label={copy.traceCount} value={selectedVersion.traceCount.toLocaleString()} />
@@ -663,9 +672,8 @@ export default function VersionAnalysisPage() {
                         <XAxis dataKey="index" tick={{ fontSize: 11, fill: 'var(--foreground-muted)' }} />
                         <YAxis tick={{ fontSize: 11, fill: 'var(--foreground-muted)' }} tickFormatter={(value) => formatChartTick(Number(value), metric)} width={64} />
                         <Tooltip
-                          formatter={(value: any) => [formatMetric(Number(value), metric, locale), copy[metric]]}
-                          labelFormatter={(label) => '#' + label}
-                          contentStyle={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--foreground)' }}
+                          content={<TraceMetricTooltip metric={metric} copy={copy} locale={locale} />}
+                          cursor={{ stroke: 'var(--border-dark)', strokeDasharray: '4 4' }}
                         />
                         <Line type='monotone' dataKey='value' stroke={metricColor(metric)} strokeWidth={2.8} dot={<TraceDot metric={metric} />} activeDot={<TraceDot metric={metric} active />} connectNulls />
                       </LineChart>
@@ -782,29 +790,79 @@ function CompactMetric({ label, value }: { label: string; value: string }) {
   );
 }
 
+function TraceMetricTooltip({ active, payload, label, metric, copy, locale }: {
+  active?: boolean;
+  payload?: Array<{ payload?: any }>;
+  label?: string | number;
+  metric: MetricKey;
+  copy: ReturnType<typeof strings>;
+  locale: string;
+}) {
+  const item = payload?.[0]?.payload;
+  if (!active || !item) return null;
+  const statusText = item.status === 'success' ? copy.success : copy.running;
+
+  return (
+    <div className="min-w-60 max-w-80 rounded-md border border-border bg-card p-3 text-xs text-foreground shadow-lg">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="font-semibold text-foreground">Trace #{label}</div>
+          <div className="mt-0.5 text-[11px] text-foreground-muted">{item.label}</div>
+        </div>
+        <span className={cn('shrink-0 rounded-sm border px-1.5 py-0.5 text-[11px] font-medium', item.status === 'success' ? 'border-success-subtle bg-success-subtle text-success' : 'border-error-border bg-error-subtle text-error')}>
+          {statusText}
+        </span>
+      </div>
+      {item.query && <div className="mt-2 line-clamp-2 text-foreground-secondary">{item.query}</div>}
+      <div className="mt-3 grid gap-1.5">
+        <MetricTooltipRow color="var(--success)" label={copy.accuracy} value={formatMetric(item.answerScore, 'accuracy', locale)} />
+        <MetricTooltipRow color="var(--warning)" label={copy.tokens} value={formatMetric(item.tokens, 'tokens', locale)} />
+        <MetricTooltipRow color="#0ea5e9" label={copy.latency} value={formatMetric(item.latencySec, 'latency', locale)} />
+        <MetricTooltipRow color="#14b8a6" label={copy.cost} value={formatMetric(item.cost, 'cost', locale)} />
+      </div>
+      <div className="mt-2 border-t border-border pt-2 text-[11px] font-medium text-primary">{copy.openTraceHint}</div>
+    </div>
+  );
+}
+
+function MetricTooltipRow({ color, label, value }: { color: string; label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <span className="inline-flex items-center gap-1.5 text-foreground-muted">
+        <span className="size-2 rounded-full" style={{ backgroundColor: color }} />
+        {label}
+      </span>
+      <span className="font-semibold tabular-nums text-foreground">{value}</span>
+    </div>
+  );
+}
+
 function TraceDot(props: any) {
   const { cx, cy, payload, metric, active } = props;
   if (cx == null || cy == null) return null;
   const href = payload?.traceHref;
-  const color = payload?.status === 'success' ? metricColor(metric) : 'var(--warning)';
-  const circle = (
-    <circle
-      cx={cx}
-      cy={cy}
-      r={active ? 6 : 4.5}
-      fill={color}
-      stroke='var(--card-bg)'
-      strokeWidth={2}
-      style={{ cursor: href ? 'pointer' : 'default' }}
-    >
-      <title>{payload?.label ?? 'Trace'}</title>
-    </circle>
+  const color = payload?.status === 'success' ? metricColor(metric) : 'var(--error)';
+  const node = (
+    <g style={{ cursor: href ? 'pointer' : 'default' }}>
+      <circle cx={cx} cy={cy} r={active ? 13 : 11} fill="transparent" />
+      <circle cx={cx} cy={cy} r={active ? 10 : 8} fill={color} opacity={active ? 0.18 : 0.12} />
+      <circle
+        cx={cx}
+        cy={cy}
+        r={active ? 5.8 : 4.8}
+        fill={color}
+        stroke={active ? color : 'var(--card-bg)'}
+        strokeWidth={active ? 1.5 : 2}
+      >
+        <title>{payload?.label ?? 'Trace'}</title>
+      </circle>
+    </g>
   );
   return href ? (
-    <a href={href} target='_blank' rel='noreferrer' aria-label='Open trace'>
-      {circle}
+    <a href={href} target="_blank" rel="noreferrer" aria-label="Open trace">
+      {node}
     </a>
-  ) : circle;
+  ) : node;
 }
 
 function StatusChip({ status, copy }: { status: VersionAnalysisTrace['traceStatus']; copy: ReturnType<typeof strings> }) {

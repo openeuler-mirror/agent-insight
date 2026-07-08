@@ -24,6 +24,8 @@ test("registry resolves framework ids and aliases", () => {
   assert.equal(resolveFrameworkId("claude"), "claude")
   assert.equal(resolveFrameworkId("claudecode"), "claude")
   assert.equal(resolveFrameworkId("unknown-framework"), "unknown-framework")
+  assert.equal(resolveFrameworkId("jiuwen"), "jiuwenswarm")
+  assert.equal(resolveFrameworkId("openjiuwen"), "jiuwenswarm")
   assert.equal(resolveFrameworkId(null), "")
   assert.equal(getAdapter("claudecode"), getAdapter("claude"))
 })
@@ -31,7 +33,7 @@ test("registry resolves framework ids and aliases", () => {
 test("registry exposes the framework descriptor list", () => {
   assert.deepEqual(
     listFrameworks().map((descriptor) => descriptor.id),
-    ["opencode", "claude", "openclaw", "hermes"],
+    ["opencode", "claude", "openclaw", "hermes", "jiuwenswarm", "langfuse-langgraph"],
   )
 })
 

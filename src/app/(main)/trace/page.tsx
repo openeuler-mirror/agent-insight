@@ -16,7 +16,6 @@ import {
     RotateCcw,
     SlidersHorizontal,
     Columns3,
-    Tag as TagIcon,
     Plus,
     Check,
 } from 'lucide-react';
@@ -1605,26 +1604,28 @@ function TraceTagCell({
     const trigger = mode === 'button' ? (
         <Button
             type="button"
-            variant="ghost"
-            size="icon"
-            className="size-7"
+            variant="outline"
+            size="sm"
+            className="h-7 gap-1.5 px-2 text-xs"
             title={t('tracePage.editTags')}
             onClick={ev => ev.stopPropagation()}
         >
-            <TagIcon className="size-3.5" aria-hidden />
+            <Plus className="size-3.5" aria-hidden />
+            {t('tracePage.editTags')}
         </Button>
     ) : (
         <button
             type="button"
-            className="flex min-h-7 w-full min-w-0 items-center gap-1.5 rounded-sm px-1 py-0.5 text-left hover:bg-background-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="flex min-h-8 w-full min-w-0 items-center gap-2 rounded-md border border-primary-subtle bg-primary-subtle px-2 py-1 text-left hover:border-primary hover:bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             onClick={ev => ev.stopPropagation()}
         >
             <span className="flex min-w-0 flex-1 flex-wrap gap-1">
-                {selectedTags.length > 0
-                    ? selectedTags.map(tag => <UserTagChip key={tag.id} tag={tag} />)
-                    : <span className="text-xs text-foreground-muted">{t('tracePage.noUserTags')}</span>}
+                {selectedTags.map(tag => <UserTagChip key={tag.id} tag={tag} />)}
             </span>
-            <Plus className="size-3.5 shrink-0 text-foreground-muted" aria-hidden />
+            <span className="inline-flex h-6 shrink-0 items-center gap-1 rounded-sm bg-card px-1.5 text-xs font-medium text-primary shadow-sm">
+                <Plus className="size-3.5" aria-hidden />
+                {t('tracePage.createTag')}
+            </span>
         </button>
     );
 
@@ -1635,7 +1636,19 @@ function TraceTagCell({
                 <div className="space-y-3">
                     <div className="flex items-center justify-between gap-2">
                         <span className="text-sm font-semibold text-foreground">{t('tracePage.editTags')}</span>
-                        <span className="text-xs text-foreground-muted tabular-nums">{selectedTags.length}</span>
+                        <div className="flex items-center gap-1">
+                            <span className="text-xs text-foreground-muted tabular-nums">{selectedTags.length}</span>
+                            <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="size-7"
+                                aria-label={locale === 'zh' ? '关闭' : 'Close'}
+                                onClick={() => setOpen(false)}
+                            >
+                                <XIcon className="size-3.5" aria-hidden />
+                            </Button>
+                        </div>
                     </div>
                     <TagPickerGroup
                         title={tagKindLabel('version', locale)}

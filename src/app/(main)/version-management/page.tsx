@@ -84,6 +84,7 @@ function strings(locale: string) {
       formTitleEdit: '编辑标签',
       formDescNew: '创建后可在链路追踪的用户标签列绑定到 Trace。',
       formDescEdit: '修改会影响所有已绑定 Trace 上的标签展示。',
+      editImpact: '影响范围：名称、说明、颜色和类型变化会同步影响链路追踪、版本分析和业务筛选中的展示；已绑定的 Trace 不会丢失。',
       name: '名称',
       description: '描述',
       type: '标签类型',
@@ -104,6 +105,10 @@ function strings(locale: string) {
       deleted: '标签已删除',
       deleteTitle: '确认删除标签？',
       deleteDesc: '这是硬删除：会删除标签并移除所有 Trace 绑定，Trace 记录本身会保留。',
+      deleteImpactTitle: '影响范围',
+      deleteImpactBindings: '将从 {count} 条 Trace 上移除此标签绑定。',
+      deleteImpactVersion: '版本标签删除后，对应版本会从版本分析的对比和详情中消失。',
+      deleteImpactBusiness: '业务标签删除后，对应链路追踪筛选条件将失效。',
       confirmDelete: '删除',
     };
   }
@@ -133,6 +138,7 @@ function strings(locale: string) {
     formTitleEdit: 'Edit tag',
     formDescNew: 'After creation, tags can be attached to traces in Trace.',
     formDescEdit: 'Changes affect how the tag appears on every bound trace.',
+    editImpact: 'Impact: name, description, color, and type changes are reflected in Trace, Version Analysis, and business filters. Bound traces are kept.',
     name: 'Name',
     description: 'Description',
     type: 'Type',
@@ -153,6 +159,10 @@ function strings(locale: string) {
     deleted: 'Tag deleted',
     deleteTitle: 'Delete tag?',
     deleteDesc: 'This hard-deletes the tag and removes it from every trace. Trace records are kept.',
+    deleteImpactTitle: 'Impact scope',
+    deleteImpactBindings: 'This tag will be removed from {count} traces.',
+    deleteImpactVersion: 'Deleting a version tag removes that version from Version Analysis comparison and detail views.',
+    deleteImpactBusiness: 'Deleting a business tag makes the corresponding Trace filter unavailable.',
     confirmDelete: 'Delete',
   };
 }
@@ -358,6 +368,11 @@ export default function VersionManagementPage() {
                 <Input type="color" value={form.color} onChange={(event) => setForm(prev => ({ ...prev, color: event.target.value }))} className="h-8 w-12 p-1" />
               </div>
             </div>
+            {form.id && (
+              <div className="rounded-md border border-warning-subtle bg-warning-subtle px-3 py-2 text-xs leading-5 text-warning">
+                {copy.editImpact}
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setFormOpen(false)} disabled={saving}>{copy.cancel}</Button>
@@ -372,7 +387,16 @@ export default function VersionManagementPage() {
         open={Boolean(deleteTarget)}
         onOpenChange={(open) => !open && setDeleteTarget(null)}
         title={copy.deleteTitle}
-        description={deleteTarget ? `${copy.deleteDesc} (${deleteTarget.name})` : copy.deleteDesc}
+        description={deleteTarget ? (
+          <span className="block space-y-2">
+            <span className="block">{copy.deleteDesc} ({deleteTarget.name})</span>
+            <span className="block rounded-md border border-error-border bg-error-subtle px-3 py-2 text-xs leading-5 text-error">
+              <span className="block font-semibold">{copy.deleteImpactTitle}</span>
+              <span className="mt-1 block">{copy.deleteImpactBindings.replace('{count}', (deleteTarget.usageCount || 0).toLocaleString())}</span>
+              <span className="mt-1 block">{deleteTarget.kind === 'version' ? copy.deleteImpactVersion : copy.deleteImpactBusiness}</span>
+            </span>
+          </span>
+        ) : copy.deleteDesc}
         confirmText={copy.confirmDelete}
         cancelText={copy.cancel}
         tone="danger"
