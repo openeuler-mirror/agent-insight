@@ -131,13 +131,31 @@ export default function AccessInstallPage() {
                 <div style={pageInner}>
                     {/* === Page intro === */}
                     <div style={introRow}>
-                        <p style={descText}>
-                            {isZh ? (
-                                <>在终端中执行下面对应操作系统的<b style={descStrong}>一行命令</b>,即可把客户端接入平台并自动配置 <code style={inlineCode}>AGENT_INSIGHT_HOST</code> 与 <code style={inlineCode}>AGENT_INSIGHT_API_KEY</code>。</>
-                            ) : (
-                                <>Run the matching <b style={descStrong}>one-liner</b> in your terminal to install the client. It auto-configures <code style={inlineCode}>AGENT_INSIGHT_HOST</code> and <code style={inlineCode}>AGENT_INSIGHT_API_KEY</code>.</>
-                            )}
-                        </p>
+                        <div style={descText}>
+                            <p style={introLead}>
+                                {isZh
+                                    ? <>按<b style={descStrong}>项目类型</b>(而非操作系统)选择接入方式:</>
+                                    : <>Pick your integration path by <b style={descStrong}>project type</b>, not OS:</>}
+                            </p>
+                            <ul style={introList}>
+                                <li style={introItem}>
+                                    <span style={introDot} />
+                                    <span>
+                                        {isZh
+                                            ? <><b style={descStrong}>命令行 Agent</b>(Claude Code / opencode 等):运行下方一键脚本,自动配置 <code style={inlineCode}>AGENT_INSIGHT_HOST</code> 与 <code style={inlineCode}>AGENT_INSIGHT_API_KEY</code>。</>
+                                            : <><b style={descStrong}>Command-line agents</b> (Claude Code, opencode, …): run the one-liner below — it auto-configures <code style={inlineCode}>AGENT_INSIGHT_HOST</code> and <code style={inlineCode}>AGENT_INSIGHT_API_KEY</code>.</>}
+                                    </span>
+                                </li>
+                                <li style={introItem}>
+                                    <span style={introDot} />
+                                    <span>
+                                        {isZh
+                                            ? <><b style={descStrong}>LangChain / LangGraph</b> 的 Python 项目:无需安装,只改环境变量;Windows / Linux / macOS 写法相同。</>
+                                            : <><b style={descStrong}>LangChain / LangGraph</b> Python projects: no install needed — just set environment variables; identical on Windows, Linux and macOS.</>}
+                                    </span>
+                                </li>
+                            </ul>
+                        </div>
                     </div>
 
                     {/* === Body: 2-column with right sidebar === */}
@@ -145,14 +163,14 @@ export default function AccessInstallPage() {
                         {/* --- Main column --- */}
                         <div style={mainCol}>
                             <div style={sectionHeading}>
-                                <Cloud size={14} strokeWidth={2.2} style={{ color: 'var(--primary)' }} />
+                                <Terminal size={14} strokeWidth={2.2} style={{ color: 'var(--primary)' }} />
                                 <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--foreground)' }}>
-                                    {isZh ? '安装命令' : 'Install Commands'}
+                                    {isZh ? '命令行 Agent 安装' : 'Command-line Agents'}
                                 </span>
                                 <span style={countPill}>2</span>
                                 <span style={{ flex: 1 }} />
                                 <span style={{ fontSize: 11.5, color: 'var(--foreground-muted)' }}>
-                                    {isZh ? '选择匹配的操作系统' : 'Pick your OS'}
+                                    {isZh ? 'Claude Code / opencode 等,按系统二选一' : 'Claude Code, opencode … — pick your OS'}
                                 </span>
                             </div>
 
@@ -179,12 +197,12 @@ export default function AccessInstallPage() {
                             <div style={{ ...sectionHeading, marginTop: 8 }}>
                                 <Cloud size={14} strokeWidth={2.2} style={{ color: 'var(--primary)' }} />
                                 <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--foreground)' }}>
-                                    Langfuse Python SDK
+                                    {isZh ? 'LangChain / LangGraph 接入' : 'LangChain / LangGraph'}
                                 </span>
                                 <span style={countPill}>env</span>
                                 <span style={{ flex: 1 }} />
                                 <span style={{ fontSize: 11.5, color: 'var(--foreground-muted)' }}>
-                                    {isZh ? '只改环境变量' : 'Environment only'}
+                                    {isZh ? 'Python 项目,任何系统只改环境变量' : 'Python — env vars only, any OS'}
                                 </span>
                             </div>
 
@@ -351,7 +369,7 @@ function ConnectionPanel({
                     mono
                 />
                 <KvRow
-                    label="Langfuse"
+                    label={isZh ? 'OTEL 上报' : 'OTEL trace'}
                     value="/api/public/otel/v1/traces"
                     mono
                     ellipsis
@@ -376,10 +394,10 @@ function LangfuseEnvCard({
                 <span style={commandIconBox}><Cloud size={14} strokeWidth={2.2} /></span>
                 <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--foreground)', letterSpacing: '-0.01em' }}>
-                        {isZh ? 'Langfuse 上报配置' : 'Langfuse ingest config'}
+                        {isZh ? '环境变量配置' : 'Environment variables'}
                     </div>
                     <div style={{ fontSize: 11.5, color: 'var(--foreground-muted)', marginTop: 1 }}>
-                        {isZh ? '适用于已接入 Langfuse Python SDK / LangChain CallbackHandler 的项目' : 'For projects already using Langfuse Python SDK / LangChain CallbackHandler'}
+                        {isZh ? 'LangChain / LangGraph 项目通用,Windows / Linux / macOS 写法一致' : 'Same for LangChain / LangGraph on Windows, Linux or macOS'}
                     </div>
                 </div>
                 <button onClick={onCopy} style={copied ? copiedBtn : ghostBtn}>
@@ -395,8 +413,8 @@ function LangfuseEnvCard({
             </div>
             <div style={langfuseNote}>
                 {isZh
-                    ? 'PUBLIC_KEY 填当前 Agent Insight 用户名，SECRET_KEY 填该用户的 Agent Insight API Key；两者不对应时平台会拒绝上报。'
-                    : 'Set PUBLIC_KEY to your Agent Insight username and SECRET_KEY to that user\'s Agent Insight API key. Mismatched credentials are rejected.'}
+                    ? '这些以 LANGFUSE_ 开头的变量由 LangChain / LangGraph 的追踪回调读取,填好即可、无需改代码。PUBLIC_KEY 填当前 Agent Insight 用户名,SECRET_KEY 填该用户的 Agent Insight API Key;两者不对应时平台会拒绝上报。'
+                    : 'These LANGFUSE_-prefixed variables are read by the LangChain / LangGraph tracing callback — no code changes needed. Set PUBLIC_KEY to your Agent Insight username and SECRET_KEY to that user\'s Agent Insight API key. Mismatched credentials are rejected.'}
             </div>
         </article>
     );
@@ -501,6 +519,34 @@ const descText: CSSProperties = {
 const descStrong: CSSProperties = {
     color: 'var(--foreground)',
     fontWeight: 600,
+};
+
+const introLead: CSSProperties = {
+    margin: '0 0 8px',
+};
+
+const introList: CSSProperties = {
+    listStyle: 'none',
+    margin: 0,
+    padding: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 6,
+};
+
+const introItem: CSSProperties = {
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: 8,
+};
+
+const introDot: CSSProperties = {
+    width: 5,
+    height: 5,
+    borderRadius: '50%',
+    background: 'var(--primary)',
+    flexShrink: 0,
+    marginTop: 7,
 };
 
 const twoColGrid: CSSProperties = {
