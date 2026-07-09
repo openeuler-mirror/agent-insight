@@ -1,7 +1,7 @@
 'use client';
 
 import React, { ReactNode, useEffect, useMemo, useState } from 'react';
-import { Check, ChevronDown, ChevronRight, Copy as CopyIcon, Search as SearchIcon, X as XIcon, AlertTriangle as AlertIcon, SlidersHorizontal as FiltersIcon, Brain as BrainIcon, MessageSquare as MessageIcon, Wrench as WrenchIcon } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Copy as CopyIcon, Search as SearchIcon, X as XIcon, AlertTriangle as AlertIcon, SlidersHorizontal as FiltersIcon, Brain as BrainIcon, MessageSquare as MessageIcon, Wrench as WrenchIcon } from 'lucide-react';
 import { parseAsString, useQueryState } from 'nuqs';
 import { toast } from 'sonner';
 import { CartesianGrid, Line, LineChart, ReferenceArea, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from 'recharts';
@@ -493,22 +493,32 @@ export default function AgentTraceView({ interactions, onSubagentNavigate, rootE
         });
     };
 
-    const expandAll = () => {
-        if (!tree) return;
+    // 树中所有「可展开」的行 key(Agent 行 + 会派生子 Agent 的 TASK 行),供展开/收起开关复用。
+    const allExpandableKeys = useMemo(() => {
         const keys = new Set<string>();
-        walkTree(tree, n => {
-            keys.add(agentKey(n.id));
-            n.events.forEach((ev, idx) => {
-                if (ev.kind === 'task' && ev.spawnedChildId) keys.add(eventKey(n.id, idx));
+        if (tree) {
+            walkTree(tree, n => {
+                keys.add(agentKey(n.id));
+                n.events.forEach((ev, idx) => {
+                    if (ev.kind === 'task' && ev.spawnedChildId) keys.add(eventKey(n.id, idx));
+                });
             });
-        });
-        setExpandedKeys(keys);
-    };
+        }
+        return keys;
+    }, [tree]);
+
+    // 是否已全部展开:决定开关当前展示「收起」还是「展开」。
+    const isAllExpanded = allExpandableKeys.size > 0
+        && [...allExpandableKeys].every(k => expandedKeys.has(k));
+
+    const expandAll = () => setExpandedKeys(new Set(allExpandableKeys));
 
     const collapseAll = () => {
         if (!tree) return;
         setExpandedKeys(new Set([agentKey(tree.id)]));
     };
+
+    const toggleExpandAll = () => (isAllExpanded ? collapseAll() : expandAll());
 
     const slowCount = useMemo(() => {
         let n = 0;
@@ -674,10 +684,18 @@ export default function AgentTraceView({ interactions, onSubagentNavigate, rootE
                         'flex flex-wrap items-center gap-2 px-2.5 py-1.5',
                         !(showFilters || hasActiveFilters) && 'border-b border-border',
                     )}>
-                        <div className="flex border border-border rounded-md overflow-hidden shrink-0">
-                            <Button variant="ghost" size="sm" onClick={expandAll} className="h-7 rounded-none border-r border-border text-xs px-2">{tt('traceTree.expandAll')}</Button>
-                            <Button variant="ghost" size="sm" onClick={collapseAll} className="h-7 rounded-none text-xs px-2">{tt('traceTree.collapseAll')}</Button>
-                        </div>
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={toggleExpandAll}
+                            aria-pressed={isAllExpanded}
+                            className="h-7 border border-border rounded-md text-xs px-2 gap-1 shrink-0"
+                        >
+                            {isAllExpanded
+                                ? <ChevronsDownUp className="size-3.5" />
+                                : <ChevronsUpDown className="size-3.5" />}
+                            {isAllExpanded ? tt('traceTree.collapseAll') : tt('traceTree.expandAll')}
+                        </Button>
 
                         {/* Global search bar */}
                         <div className="flex-1 min-w-[120px] flex items-center gap-1 px-2 py-0.5 rounded-md border border-border bg-background-secondary focus-within:border-primary transition-colors">
