@@ -15,6 +15,9 @@ import {
     Terminal,
     RotateCcw,
     SlidersHorizontal,
+    Columns3,
+    Plus,
+    Check,
 } from 'lucide-react';
 import { parseAsInteger, parseAsString, useQueryState } from 'nuqs';
 import { toast } from 'sonner';
@@ -36,6 +39,17 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { Select, type SelectOption } from '@/components/ui/select';
 import { Pagination } from '@/components/ui/pagination';
+import { Input } from '@/components/ui/input';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import {
+    DropdownMenu,
+    DropdownMenuCheckboxItem,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuLabel,
+    DropdownMenuSeparator,
+    DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 
 import { StatusBadge, type StatusKind } from '@/components/feedback/StatusBadge';
 import { EmptyState } from '@/components/feedback/EmptyState';
@@ -52,6 +66,16 @@ interface InvokedSkill {
     version?: number | null;
 }
 
+interface TraceUserTag {
+    id: string;
+    name: string;
+    description?: string | null;
+    kind: 'version' | 'business';
+    color: string;
+    createdAt?: string;
+    usageCount?: number;
+}
+
 interface Execution {
     timestamp: string;
     framework?: string;
@@ -60,7 +84,7 @@ interface Execution {
     query?: string;
     final_result?: string;
     skill?: string;
-    /** 主 skill 的版本号。Execution.skillVersion 字段，上传时由 ingest/upload 三级 fallback 确定 */
+    /** Primary skill version from Execution.skillVersion. */
     skill_version?: number | null;
     skillVersion?: number | null;
     skills?: string[];
@@ -89,6 +113,8 @@ interface Execution {
     judgment_reason?: string;
     failures?: any[];
     agentOwnership?: string | null;
+    user?: string | null;
+    userTags?: TraceUserTag[];
 }
 
 type TimeFilter = '30m' | '1h' | '3h' | '24h' | '7d' | '30d' | 'all';
@@ -110,31 +136,46 @@ const TIME_WIN_MS: Record<TimeFilter, number> = {
 const PAGE_SIZE_OPTIONS = [20, 50, 100] as const;
 const REFRESH_INTERVAL_OPTIONS = [5, 10, 30, 60] as const;
 
-// Resizable trace-list columns. "task" has no fixed width — it absorbs remaining
 // space via `table-fixed` + col without width. Widths persist to localStorage per
-// user (docs/design/patterns.md §11 — table state survives reload).
-type ResizableColKey = 'traceId' | 'agent' | 'status' | 'tags' | 'tokens' | 'time' | 'actions';
+type TraceColumnKey = 'traceId' | 'agent' | 'status' | 'userTags' | 'systemTags' | 'task' | 'tokens' | 'time' | 'actions';
+type ResizableColKey = Exclude<TraceColumnKey, 'task'>;
+
+const TRACE_COLUMN_ORDER: TraceColumnKey[] = ['traceId', 'agent', 'status', 'userTags', 'systemTags', 'task', 'tokens', 'time', 'actions'];
 
 const DEFAULT_COLUMN_WIDTHS: Record<ResizableColKey, number> = {
-    traceId: 130,
-    agent:   170,
-    status:  110,
-    tags:    240,
-    tokens:  110,
-    time:    120,
-    actions: 220,
+    traceId:    130,
+    agent:      170,
+    status:     110,
+    userTags:   260,
+    systemTags: 220,
+    tokens:     110,
+    time:       120,
+    actions:    220,
 };
 const MIN_COLUMN_WIDTH: Record<ResizableColKey, number> = {
-    traceId: 90,
-    agent:   100,
-    status:  80,
-    tags:    120,
-    tokens:  70,
-    time:    80,
-    actions: 160,
+    traceId:    90,
+    agent:      100,
+    status:     80,
+    userTags:   150,
+    systemTags: 140,
+    tokens:     70,
+    time:       80,
+    actions:    160,
+};
+const DEFAULT_COLUMN_VISIBILITY: Record<TraceColumnKey, boolean> = {
+    traceId: true,
+    agent: true,
+    status: true,
+    userTags: true,
+    systemTags: false,
+    task: true,
+    tokens: true,
+    time: true,
+    actions: true,
 };
 const MAX_COLUMN_WIDTH = 640;
 const COL_WIDTHS_STORAGE_KEY = 'trace.columnWidths.v1';
+const COL_VISIBILITY_STORAGE_KEY = 'trace.columnVisibility.v1';
 const TASK_COL_MIN_PX = 280; // reserved minimum for the flexible "task" column
 
 function getInvokedSkillNames(execution: Execution): string[] {
@@ -256,13 +297,16 @@ function useColumnWidths() {
         try {
             const raw = window.localStorage.getItem(COL_WIDTHS_STORAGE_KEY);
             if (!raw) return;
-            const parsed = JSON.parse(raw) as Partial<Record<ResizableColKey, number>>;
+            const parsed = JSON.parse(raw) as Partial<Record<ResizableColKey, number>> & { tags?: number };
             setWidths(prev => {
                 const next = { ...prev };
                 (Object.keys(prev) as ResizableColKey[]).forEach(k => {
                     const v = parsed[k];
                     if (typeof v === 'number' && Number.isFinite(v)) next[k] = clampColumnWidth(k, v);
                 });
+                if (typeof parsed.tags === 'number' && Number.isFinite(parsed.tags)) {
+                    next.systemTags = clampColumnWidth('systemTags', parsed.tags);
+                }
                 return next;
             });
         } catch { /* ignore */ }
@@ -288,6 +332,56 @@ function useColumnWidths() {
     );
 
     return { widths, setColumnWidth, resetColumnWidths, isCustomized };
+}
+
+function useColumnVisibility() {
+    const [columnVisibility, setColumnVisibility] = useState<Record<TraceColumnKey, boolean>>(DEFAULT_COLUMN_VISIBILITY);
+
+    useEffect(() => {
+        try {
+            const raw = window.localStorage.getItem(COL_VISIBILITY_STORAGE_KEY);
+            if (!raw) return;
+            const parsed = JSON.parse(raw) as Partial<Record<TraceColumnKey, boolean>>;
+            setColumnVisibility(prev => {
+                const next = { ...prev };
+                TRACE_COLUMN_ORDER.forEach(key => {
+                    if (typeof parsed[key] === 'boolean') next[key] = parsed[key] as boolean;
+                });
+                return next;
+            });
+        } catch { /* ignore */ }
+    }, []);
+
+    const setColumnVisible = useCallback((key: TraceColumnKey, visible: boolean) => {
+        setColumnVisibility(prev => {
+            const next = { ...prev, [key]: visible };
+            try { window.localStorage.setItem(COL_VISIBILITY_STORAGE_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+            return next;
+        });
+    }, []);
+
+    const resetColumnVisibility = useCallback(() => {
+        setColumnVisibility(DEFAULT_COLUMN_VISIBILITY);
+        try { window.localStorage.removeItem(COL_VISIBILITY_STORAGE_KEY); } catch { /* ignore */ }
+    }, []);
+
+    const isVisibilityCustomized = useMemo(
+        () => TRACE_COLUMN_ORDER.some(key => columnVisibility[key] !== DEFAULT_COLUMN_VISIBILITY[key]),
+        [columnVisibility],
+    );
+
+    return { columnVisibility, setColumnVisible, resetColumnVisibility, isVisibilityCustomized };
+}
+
+function getExecutionRowKey(execution: Execution): string {
+    return execution.upload_id || execution.task_id || '';
+}
+
+function mergeTraceTags(prev: TraceUserTag[], tag: TraceUserTag): TraceUserTag[] {
+    const next = prev.some(item => item.id === tag.id)
+        ? prev.map(item => item.id === tag.id ? tag : item)
+        : [...prev, tag];
+    return next.slice().sort((a, b) => a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind.localeCompare(b.kind));
 }
 
 function ResizeHandle({
@@ -356,6 +450,7 @@ function TracePageContent() {
     const [data, setData] = useState<Execution[]>([]);
     const [loading, setLoading] = useState(true);
     const [selectedExecution, setSelectedExecution] = useState<Execution | null>(null);
+    const [availableTags, setAvailableTags] = useState<TraceUserTag[]>([]);
 
     // URL-persisted filter / sort / paging state (docs/design/patterns.md §1 + §11).
     const [timeFilter, setTimeFilter] = useQueryState('time', parseAsString.withDefault('all'));
@@ -363,20 +458,16 @@ function TracePageContent() {
     const [frameworkFilter, setFrameworkFilter] = useQueryState('framework', parseAsString.withDefault('all'));
     const [agentFilter, setAgentFilter] = useQueryState('agent', parseAsString.withDefault('all'));
     const [skillFilter, setSkillFilter] = useQueryState('skill', parseAsString.withDefault('all'));
+    const [businessTagFilter, setBusinessTagFilter] = useQueryState('bizTag', parseAsString.withDefault('all'));
     const [ownershipFilter, setOwnershipFilter] = useQueryState('ownership', parseAsString.withDefault('user'));
-    // 主 Agent / 子 Agent 维度筛选。默认 'root'：列表只展示主 Agent 执行，
-    // sub-agent 行通过详情页下钻或切换到 'subagent'/'all' 后才出现。
     const [agentScopeFilter, setAgentScopeFilter] = useQueryState('scope', parseAsString.withDefault('root'));
     const [sortKey, setSortKey] = useQueryState('sort', parseAsString.withDefault('timestamp'));
     const [sortDir, setSortDir] = useQueryState('dir', parseAsString.withDefault('desc'));
     const [page, setPage] = useQueryState('page', parseAsInteger.withDefault(1));
     const [pageSize, setPageSize] = useQueryState('size', parseAsInteger.withDefault(20));
     const [taskIdParam, setTaskIdParam] = useQueryState('taskId', parseAsString);
-    // 文本搜索（trace input/output 模糊匹配，服务端下推）。输入框 + debounce 现由 TraceFilterBar 内联承载。
     const [search, setSearch] = useQueryState('q', parseAsString.withDefault(''));
-    // 左侧 Filters 侧栏显隐(对标 langfuse Hide filters)。默认隐藏,点「过滤」再展开。
     const [showFilters, setShowFilters] = useState(false);
-    // 结构化过滤子句(operator 模型),序列化进 URL 的 `f`,下推后端 filters=。
     const [clausesRaw, setClausesRaw] = useQueryState('f', parseAsString.withDefault(''));
     const clauses = useMemo<FilterClause[]>(() => {
         if (!clausesRaw) return [];
@@ -391,14 +482,68 @@ function TracePageContent() {
         (next: FilterClause[]) => setClausesRaw(next.length ? JSON.stringify(next) : null),
         [setClausesRaw],
     );
-    // 稳定引用,避免每次渲染新建箭头函数(TraceFilterBar 内部还有 ref 兜底,双保险)。
     const handleSearchChange = useCallback((v: string) => setSearch(v || null), [setSearch]);
 
+    const loadAvailableTags = useCallback(() => {
+        if (!user) {
+            setAvailableTags([]);
+            return;
+        }
+        apiFetch(`/api/tags?user=${encodeURIComponent(user)}`)
+            .then(r => r.ok ? r.json() : [])
+            .then(rows => setAvailableTags(Array.isArray(rows) ? rows : []))
+            .catch(() => setAvailableTags([]));
+    }, [user]);
+
+    useEffect(() => {
+        loadAvailableTags();
+    }, [loadAvailableTags]);
+
+    const handleTraceTagsChanged = useCallback((executionId: string, tags: TraceUserTag[]) => {
+        setData(prev => prev.map(item => (
+            item.upload_id === executionId || item.task_id === executionId
+                ? { ...item, userTags: tags }
+                : item
+        )));
+        setSelectedExecution(prev => prev && (prev.upload_id === executionId || prev.task_id === executionId)
+            ? { ...prev, userTags: tags }
+            : prev);
+    }, []);
+
+    const handleTraceTagCreated = useCallback((tag: TraceUserTag) => {
+        setAvailableTags(prev => mergeTraceTags(prev, tag));
+    }, []);
+
+    const businessTagOptions: SelectOption[] = useMemo(() => [
+        { value: 'all', label: locale === 'zh' ? '全部业务标签' : 'All business tags' },
+        ...availableTags
+            .filter(tag => tag.kind === 'business')
+            .map(tag => ({
+                value: tag.id,
+                label: tag.usageCount ? `${tag.name} (${tag.usageCount})` : tag.name,
+            })),
+    ], [availableTags, locale]);
+
+    const columnLabels = useMemo<Record<TraceColumnKey, string>>(() => ({
+        traceId: t('tracePage.columnTraceId'),
+        agent: t('tracePage.columnAgent'),
+        status: t('tracePage.columnStatus'),
+        userTags: t('tracePage.columnUserTags'),
+        systemTags: t('tracePage.columnSystemTags'),
+        task: t('tracePage.columnTask'),
+        tokens: t('tracePage.columnTokens'),
+        time: t('tracePage.columnTime'),
+        actions: t('tracePage.columnActions'),
+    }), [t]);
+
     const { widths, setColumnWidth, resetColumnWidths, isCustomized } = useColumnWidths();
-    const tableMinWidth = useMemo(
-        () => widths.traceId + widths.agent + widths.status + widths.tags + widths.tokens + widths.time + widths.actions + TASK_COL_MIN_PX,
-        [widths],
-    );
+    const { columnVisibility, setColumnVisible, resetColumnVisibility, isVisibilityCustomized } = useColumnVisibility();
+    const tableMinWidth = useMemo(() => {
+        const fixedWidth = (Object.keys(DEFAULT_COLUMN_WIDTHS) as ResizableColKey[])
+            .filter(key => columnVisibility[key])
+            .reduce((sum, key) => sum + widths[key], 0);
+        return fixedWidth + (columnVisibility.task ? TASK_COL_MIN_PX : 0);
+    }, [widths, columnVisibility]);
 
     const handleSelectExecution = useCallback((e: Execution | null) => {
         setSelectedExecution(e);
@@ -407,12 +552,7 @@ function TracePageContent() {
     }, [setTaskIdParam]);
 
     // Resolve selectedExecution from URL on data load or URL change.
-    // fetchGuardRef: 记录已经为哪个 taskIdParam fire 过 fallback fetch, 避免:
     //   - data 列表里没这条(比如系统 agent grayscale-* 被前端过滤掉)
-    //   - 每次 fetch 返回新对象 ref → setSelectedExecution → 因为
-    //     selectedExecution 在 deps 里, effect 重新跑, 又走 fetch → 死循环
-    // 死循环 + 反复 setState 会让 TraceDetailView 的子 effect 反复 abort/重启,
-    // 表现就是用户「click → 跳到 trace 列表页, detail 永远渲染不上」。
     const fetchGuardRef = useRef<string | null>(null);
     useEffect(() => {
         if (!taskIdParam) {
@@ -425,26 +565,16 @@ function TracePageContent() {
             if (selectedExecution !== exec) setSelectedExecution(exec);
             return;
         }
-        // data 列表里没有这条(列表只含当前登录账号自己的 trace), fallback 到 API 按 taskId 直查。
-        // 关键:不能再按当前登录 user 过滤——评测/灰度的"被执行 trace"跑在服务账号(如 admin)名下,
-        // 从评测结果里点 session id / 评估器 id 跳过来的是别人账号的 trace。taskId 全局唯一,
-        // 按 taskId 直查即可唯一命中;之前带 user 过滤 → 跨账号深链永远查空 → 退回列表页(本 bug)。
-        // 与本路由已有的 executionId 直查口径一致(单条直查都不做 user 作用域)。
-        // 每个 taskId 只 fetch 一次, 防死循环(fetch 回新对象 → setState → effect 重跑 → 再 fetch)。
         if (fetchGuardRef.current === taskIdParam) return;
         fetchGuardRef.current = taskIdParam;
-        // skipAutoEvalReady=1: Trace 详情不需要"自动评测就绪"信息,而算它要扫 7 天 opencode 遥测
-        // jsonl 建索引(实测冷构建 ~16s、缓存仅 30s),会让"点 session id 跳详情"非常慢。这里跳过。
         apiFetch(`/api/observe/data?taskId=${encodeURIComponent(taskIdParam)}&includeEvaluations=0&skipAutoEvalReady=1`)
             .then(r => r.json())
             .then((d: Execution[]) => {
                 if (Array.isArray(d) && d.length > 0) setSelectedExecution(d[0]);
             })
             .catch(() => {
-                // 失败让用户能重试: 清掉 guard, 下次 effect 再 fire 时还能再试一次
                 if (fetchGuardRef.current === taskIdParam) fetchGuardRef.current = null;
             });
-    // selectedExecution 不放 deps——它由本 effect 自己写, 放进去就死循环
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [taskIdParam, data]);
 
@@ -456,23 +586,16 @@ function TracePageContent() {
             : agentScopeFilter === 'all'
                 ? '&includeSubagents=1'
                 : '';
-        // 按 skill 筛选交给服务端(走 ExecutionSkill 索引,agent 作用域):结果精确命中真正用到该 skill 的
-        // 那一层(含 sub-agent),而非把全量拉到浏览器再 JS 过滤。
         const skillParam = skillFilter !== 'all' ? `&skill=${encodeURIComponent(skillFilter)}` : '';
-        // 文本搜索下推服务端（input/output 子串模糊），与其它客户端过滤 AND 组合。
         const searchParam = search ? `&query=${encodeURIComponent(search)}` : '';
-        // 结构化过滤子句下推（operator 模型 → buildPrismaWhere）。
         const filtersParam = clauses.length ? `&filters=${encodeURIComponent(JSON.stringify(clauses))}` : '';
-        // skipAutoEvalReady=1: 列表只用 trace_status，不读 auto_eval_ready 等就绪字段。跳过它能让已结束
-        // (session 有 endTime)的记录直接由批量 sessionEndByTaskId 判定 success，省掉每条一次整行 session
-        // (含巨大 interactions blob)的 N+1 读——这是 20+ 并发搜索卡顿的主因之一。QUIET_WINDOW 框架
-        // (opencode/claude/jiuwen/hermes)未结束的 trace 仍会走 quiet-window 推断，状态判定口径不变。
-        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&includeEvaluations=0&fields=light&skipAutoEvalReady=1${scopeParam}${skillParam}${searchParam}${filtersParam}`)
+        const bizTagParam = businessTagFilter !== 'all' ? `&bizTag=${encodeURIComponent(businessTagFilter)}` : '';
+        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&includeEvaluations=0&fields=light&includeTags=1&skipAutoEvalReady=1${scopeParam}${skillParam}${searchParam}${filtersParam}${bizTagParam}`)
             .then(r => r.json())
             .then((d: Execution[]) => setData(Array.isArray(d) ? d : []))
             .catch(() => setData([]))
             .finally(() => setLoading(false));
-    }, [user, agentScopeFilter, skillFilter, search, clausesRaw]);
+    }, [user, agentScopeFilter, skillFilter, businessTagFilter, search, clausesRaw]);
 
 
     const filtered = useMemo(() => {
@@ -492,7 +615,6 @@ function TracePageContent() {
                     const status = getExecStatus(d);
                     if (anomalyFilter !== status) return false;
                 }
-                // skill 筛选已在服务端按 ExecutionSkill(agent 作用域)完成,这里不再 JS 过滤。
                 if (ownershipFilter !== 'all') {
                     const ownership = d.agentOwnership ?? 'user';
                     if (ownership !== ownershipFilter) return false;
@@ -534,7 +656,7 @@ function TracePageContent() {
         if (page !== 1) setPage(1);
         // page reset on filter / sort change
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [timeFilter, frameworkFilter, anomalyFilter, agentFilter, skillFilter, ownershipFilter, search, clausesRaw, sortKey, sortDir, pageSize]);
+    }, [timeFilter, frameworkFilter, anomalyFilter, agentFilter, skillFilter, businessTagFilter, ownershipFilter, search, clausesRaw, sortKey, sortDir, pageSize]);
 
     const handleSort = (key: SortKey) => {
         if (key === sortKey) {
@@ -561,7 +683,7 @@ function TracePageContent() {
         [filtered, page, pageSize],
     );
 
-    const hasActiveFilters = ownershipFilter !== 'all' || agentFilter !== 'all' || skillFilter !== 'all'
+    const hasActiveFilters = ownershipFilter !== 'all' || agentFilter !== 'all' || skillFilter !== 'all' || businessTagFilter !== 'all'
         || anomalyFilter !== 'all' || timeFilter !== 'all' || frameworkFilter !== 'all'
         || agentScopeFilter !== 'root' || search !== '' || clauses.length > 0;
 
@@ -569,6 +691,7 @@ function TracePageContent() {
         setOwnershipFilter('all');
         setAgentFilter('all');
         setSkillFilter('all');
+        setBusinessTagFilter('all');
         setAnomalyFilter('all');
         setTimeFilter('all');
         setFrameworkFilter('all');
@@ -577,7 +700,6 @@ function TracePageContent() {
         setClauses([]);
     };
 
-    // framework 下拉选项从当前工作集推导。
     const frameworks = useMemo(() => {
         const set = new Set<string>();
         data.forEach(d => d.framework && set.add(d.framework));
@@ -603,7 +725,6 @@ function TracePageContent() {
         { value: '1h', label: t('nav.last1Hour') },
         { value: '30m', label: t('nav.last30Min') },
     ];
-    // 框架下拉选项从当前工作集推导(与 agent 同源;侧栏 facet 版已按需求挪回横排)。
     const frameworkOptions: SelectOption[] = [
         { value: 'all', label: t('common.all') },
         ...frameworks.map(f => ({ value: f, label: f })),
@@ -636,8 +757,6 @@ function TracePageContent() {
                             />
                         </div>
 
-                        {/* 统一搜索/过滤栏(对标 langfuse SearchComposer):一个栏内承载自由文本模糊搜索 + chip 结构化过滤,
-                            聚焦即弹字段下拉。自由文本走 `q`(input/output contains),chip 走 `f`(operator 模型下推)。 */}
                         {user && (
                             <div className="mb-3">
                                 <TraceFilterBar
@@ -650,8 +769,6 @@ function TracePageContent() {
                             </div>
                         )}
 
-                        {/* filters 显隐 + 常用快捷下拉(ownership/status/time/framework/scope)横排在按钮右侧。
-                            agent 去掉(与搜索栏 agentName 重);framework 按需求放回横排(不再进左侧侧栏)。 */}
                         <div className="mb-2 flex flex-wrap items-center gap-2">
                             <Button variant="outline" size="sm" className="h-7 gap-1.5 text-xs" onClick={() => setShowFilters(v => !v)}>
                                 <SlidersHorizontal className="size-3.5" />
@@ -687,6 +804,13 @@ function TracePageContent() {
                                 active={frameworkFilter !== 'all'}
                             />
                             <Select
+                                label={t('tracePage.filterBusinessTag')}
+                                value={businessTagFilter}
+                                onChange={setBusinessTagFilter}
+                                options={businessTagOptions}
+                                active={businessTagFilter !== 'all'}
+                            />
+                            <Select
                                 label={locale === 'zh' ? '范围' : 'Scope'}
                                 value={agentScopeFilter}
                                 onChange={setAgentScopeFilter}
@@ -705,14 +829,12 @@ function TracePageContent() {
                             )}
                         </div>
 
-                        {/* 二栏:左=结构化 Filters 侧栏(对标 langfuse 最左列),右=列表。与搜索栏共享同一份 clauses。 */}
                         <div className="flex-1 min-h-0 flex gap-3">
                             {showFilters && (
                                 <aside className="w-60 shrink-0 overflow-auto rounded-md border border-card-border bg-card">
                                     <div className="px-3 py-2 border-b border-card-border">
                                         <span className="text-sm font-semibold">{locale === 'zh' ? '过滤器' : 'Filters'}</span>
                                     </div>
-                                    {/* 结构化字段(clauses):数值区间 / 布尔 / 文本包含 / 枚举多选 */}
                                     {user && (
                                         <div className="p-3">
                                             <TraceFilterSidebar clauses={clauses} onChange={setClauses} user={user} />
@@ -728,17 +850,43 @@ function TracePageContent() {
                                 <span className="ml-2 text-foreground-muted font-normal tabular-nums">{filtered.length}</span>
                             </h2>
                             <div className="flex items-center gap-3">
-                                {isCustomized && (
+                                {(isCustomized || isVisibilityCustomized) && (
                                     <Button
                                         variant="ghost"
                                         size="sm"
-                                        onClick={resetColumnWidths}
+                                        onClick={() => { resetColumnWidths(); resetColumnVisibility(); }}
                                         className="h-7 px-2 text-xs text-foreground-muted gap-1"
                                     >
                                         <RotateCcw className="size-3" aria-hidden />
-                                        {t('tracePage.resetColumnWidths')}
+                                        {t('tracePage.resetColumns')}
                                     </Button>
                                 )}
+                                <DropdownMenu>
+                                    <DropdownMenuTrigger asChild>
+                                        <Button variant="outline" size="sm" className="h-7 px-2 text-xs gap-1.5">
+                                            <Columns3 className="size-3.5" aria-hidden />
+                                            {t('tracePage.columnSettings')}
+                                        </Button>
+                                    </DropdownMenuTrigger>
+                                    <DropdownMenuContent align="end" className="w-44">
+                                        <DropdownMenuLabel>{t('tracePage.columnSettings')}</DropdownMenuLabel>
+                                        {TRACE_COLUMN_ORDER.map(key => (
+                                            <DropdownMenuCheckboxItem
+                                                key={key}
+                                                checked={columnVisibility[key]}
+                                                onCheckedChange={checked => setColumnVisible(key, checked === true)}
+                                                onSelect={ev => ev.preventDefault()}
+                                            >
+                                                {columnLabels[key]}
+                                            </DropdownMenuCheckboxItem>
+                                        ))}
+                                        <DropdownMenuSeparator />
+                                        <DropdownMenuItem onSelect={() => { resetColumnWidths(); resetColumnVisibility(); }}>
+                                            <RotateCcw className="size-3.5" aria-hidden />
+                                            {t('tracePage.resetColumns')}
+                                        </DropdownMenuItem>
+                                    </DropdownMenuContent>
+                                </DropdownMenu>
                                 <span className="text-xs text-foreground-muted">
                                     {t('tracePage.listHint')}
                                 </span>
@@ -764,33 +912,43 @@ function TracePageContent() {
                                 ) : (
                                     <table className="w-full table-fixed text-sm" style={{ minWidth: tableMinWidth }}>
                                         <colgroup>
-                                            <col style={{ width: widths.traceId }} />
-                                            <col style={{ width: widths.agent }} />
-                                            <col style={{ width: widths.status }} />
-                                            <col style={{ width: widths.tags }} />
-                                            <col />
-                                            <col style={{ width: widths.tokens }} />
-                                            <col style={{ width: widths.time }} />
-                                            <col style={{ width: widths.actions }} />
+                                            {columnVisibility.traceId && <col style={{ width: widths.traceId }} />}
+                                            {columnVisibility.agent && <col style={{ width: widths.agent }} />}
+                                            {columnVisibility.status && <col style={{ width: widths.status }} />}
+                                            {columnVisibility.userTags && <col style={{ width: widths.userTags }} />}
+                                            {columnVisibility.systemTags && <col style={{ width: widths.systemTags }} />}
+                                            {columnVisibility.task && <col />}
+                                            {columnVisibility.tokens && <col style={{ width: widths.tokens }} />}
+                                            {columnVisibility.time && <col style={{ width: widths.time }} />}
+                                            {columnVisibility.actions && <col style={{ width: widths.actions }} />}
                                         </colgroup>
                                         <thead className="sticky top-0 z-10">
                                             <tr className="bg-background-secondary text-left">
-                                                <Th colKey="traceId" currentWidth={widths.traceId} onResize={setColumnWidth}>
-                                                    <Term id="trace" label={t('tracePage.columnTraceId')} />
-                                                </Th>
-                                                <SortableTh sortKey="agent" currentKey={sortKey as SortKey} dir={sortDir as SortDir} onSort={handleSort} colKey="agent" currentWidth={widths.agent} onResize={setColumnWidth}>
-                                                    <Term id="agent" label={t('tracePage.columnAgent')} />
-                                                </SortableTh>
-                                                <SortableTh sortKey="status" currentKey={sortKey as SortKey} dir={sortDir as SortDir} onSort={handleSort} colKey="status" currentWidth={widths.status} onResize={setColumnWidth}>
-                                                    <Term id="chain-status" label={t('tracePage.columnStatus')} />
-                                                </SortableTh>
-                                                <Th colKey="tags" currentWidth={widths.tags} onResize={setColumnWidth}>{t('tracePage.columnTags')}</Th>
-                                                <Th>{t('tracePage.columnTask')}</Th>
-                                                <SortableTh sortKey="tokens" currentKey={sortKey as SortKey} dir={sortDir as SortDir} onSort={handleSort} colKey="tokens" currentWidth={widths.tokens} onResize={setColumnWidth}>
-                                                    <Term id="tokens" label={t('tracePage.columnTokens')} />
-                                                </SortableTh>
-                                                <SortableTh sortKey="timestamp" currentKey={sortKey as SortKey} dir={sortDir as SortDir} onSort={handleSort} colKey="time" currentWidth={widths.time} onResize={setColumnWidth}>{t('tracePage.columnTime')}</SortableTh>
-                                                <Th align="right" colKey="actions" currentWidth={widths.actions} onResize={setColumnWidth}>{t('tracePage.columnActions')}</Th>
+                                                {columnVisibility.traceId && (
+                                                    <Th colKey="traceId" currentWidth={widths.traceId} onResize={setColumnWidth}>
+                                                        <Term id="trace" label={t('tracePage.columnTraceId')} />
+                                                    </Th>
+                                                )}
+                                                {columnVisibility.agent && (
+                                                    <SortableTh sortKey="agent" currentKey={sortKey as SortKey} dir={sortDir as SortDir} onSort={handleSort} colKey="agent" currentWidth={widths.agent} onResize={setColumnWidth}>
+                                                        <Term id="agent" label={t('tracePage.columnAgent')} />
+                                                    </SortableTh>
+                                                )}
+                                                {columnVisibility.status && (
+                                                    <SortableTh sortKey="status" currentKey={sortKey as SortKey} dir={sortDir as SortDir} onSort={handleSort} colKey="status" currentWidth={widths.status} onResize={setColumnWidth}>
+                                                        <Term id="chain-status" label={t('tracePage.columnStatus')} />
+                                                    </SortableTh>
+                                                )}
+                                                {columnVisibility.userTags && <Th colKey="userTags" currentWidth={widths.userTags} onResize={setColumnWidth}>{t('tracePage.columnUserTags')}</Th>}
+                                                {columnVisibility.systemTags && <Th colKey="systemTags" currentWidth={widths.systemTags} onResize={setColumnWidth}>{t('tracePage.columnSystemTags')}</Th>}
+                                                {columnVisibility.task && <Th>{t('tracePage.columnTask')}</Th>}
+                                                {columnVisibility.tokens && (
+                                                    <SortableTh sortKey="tokens" currentKey={sortKey as SortKey} dir={sortDir as SortDir} onSort={handleSort} colKey="tokens" currentWidth={widths.tokens} onResize={setColumnWidth}>
+                                                        <Term id="tokens" label={t('tracePage.columnTokens')} />
+                                                    </SortableTh>
+                                                )}
+                                                {columnVisibility.time && <SortableTh sortKey="timestamp" currentKey={sortKey as SortKey} dir={sortDir as SortDir} onSort={handleSort} colKey="time" currentWidth={widths.time} onResize={setColumnWidth}>{t('tracePage.columnTime')}</SortableTh>}
+                                                {columnVisibility.actions && <Th align="right" colKey="actions" currentWidth={widths.actions} onResize={setColumnWidth}>{t('tracePage.columnActions')}</Th>}
                                             </tr>
                                         </thead>
                                         <tbody>
@@ -798,6 +956,10 @@ function TracePageContent() {
                                                 <Row
                                                     key={(e.task_id || e.upload_id || i) + ''}
                                                     execution={e}
+                                                    columnVisibility={columnVisibility}
+                                                    availableTags={availableTags}
+                                                    onTagsChanged={handleTraceTagsChanged}
+                                                    onTagCreated={handleTraceTagCreated}
                                                     onClick={() => handleSelectExecution(e)}
                                                 />
                                             ))}
@@ -848,8 +1010,6 @@ function TraceDetailView({
     const [session, setSession] = useState<any | null>(null);
     const [loading, setLoading] = useState(false);
     const taskId = execution.task_id || execution.upload_id || '';
-    // 多 Agent 拆分：当前 trace 可能本身就是某个 sub-agent execution，
-    // 通过 parent_execution_id / is_subagent 判断并在 header 显示返回父执行入口。
     const execAny = execution as any;
     const isSubagentTrace: boolean = !!execAny.is_subagent;
     const parentExecutionId: string | null = execAny.parent_execution_id || null;
@@ -866,8 +1026,6 @@ function TraceDetailView({
     const navigateToParent = useCallback(async () => {
         if (!parentExecutionId) return;
         try {
-            // parent_execution_id 是 Execution.id，不是 taskId；需要换算一次。
-            // 复用 /api/observe/data?taskIds=… 不行（这是 taskId 入口），改用专用查询。
             const res = await apiFetch(`/api/observe/data?executionId=${encodeURIComponent(parentExecutionId)}&includeEvaluations=0`);
             if (!res.ok) return;
             const arr = await res.json();
@@ -882,9 +1040,6 @@ function TraceDetailView({
     const [refreshIntervalSec, setRefreshIntervalSec] = useState(5);
     const [secondsSinceRefresh, setSecondsSinceRefresh] = useState(0);
 
-    // 用 ref 跟踪当前 session，避免把 session 加进 fetchSession 依赖导致循环。
-    // 切换 trace（从 xuanyuan → dayu）时，sessionRef.current 是上一个 trace 的非空数据 → 不显示 loading skeleton，
-    // 保留旧 trace 渲染直到新数据到达，肉眼无闪烁。首次加载（无旧 session）才显示 loading。
     const sessionRef = useRef<any | null>(null);
     useEffect(() => { sessionRef.current = session; }, [session]);
 
@@ -1036,7 +1191,7 @@ function TraceDetailView({
                         disabled={!canDownloadSession}
                         title={
                             canDownloadSession
-                                ? (locale === 'zh' ? '下载会话数据（原始JSON）' : 'Download session data raw JSON')
+                                ? (locale === 'zh' ? '下载会话数据（原始 JSON）' : 'Download session data raw JSON')
                                 : (locale === 'zh' ? '会话数据加载后可下载' : 'Download available after session data loads')
                         }
                         className="h-7 text-xs"
@@ -1201,7 +1356,7 @@ function SortableTh({
             <span className="inline-flex items-center gap-1">
                 {children}
                 <span className={cn('text-[10px]', active ? 'opacity-100' : 'opacity-40')}>
-                    {active ? (dir === 'asc' ? '▲' : '▼') : '⇅'}
+                    {active ? (dir === 'asc' ? '\u2191' : '\u2193') : '\u2195'}
                 </span>
             </span>
             {resizable && <ResizeHandle colKey={colKey} currentWidth={currentWidth} onResize={onResize} />}
@@ -1211,19 +1366,23 @@ function SortableTh({
 
 function Row({
     execution: e,
+    columnVisibility,
+    availableTags,
+    onTagsChanged,
+    onTagCreated,
     onClick,
 }: {
     execution: Execution;
+    columnVisibility: Record<TraceColumnKey, boolean>;
+    availableTags: TraceUserTag[];
+    onTagsChanged: (executionId: string, tags: TraceUserTag[]) => void;
+    onTagCreated: (tag: TraceUserTag) => void;
     onClick: () => void;
 }) {
     const { t } = useLocale();
     const id = e.task_id || e.upload_id || '';
     const status = getExecStatus(e);
     const skillCount = getInvokedSkillNames(e).length;
-    // "Multi-Agent" 标签（见 glossary multi-agent）= Trace 中实际出现多个协同 Agent（含主-子派生），
-    // 按**真实 agent 数**判定、与框架无关：e.agents 是该 trace 实际观测到的去重 agent 集合
-    //（light 由 observedAgents 还原，与 heavy 同源）。单 agent 的 jiuwenswarm/opencode/claude 都不会标——
-    //「框架=jiuwenswarm」并不等于多 agent（它有 transformSingle 单 agent 路径）。不拿 skill 数当多 agent 的代理。
     const agentCount = new Set((e.agents ?? []).filter(Boolean)).size;
     const isMultiAgent = agentCount > 1;
     const statusKind: StatusKind = status === 'running' ? 'running' : status === 'failed' ? 'error' : 'success';
@@ -1240,72 +1399,360 @@ function Row({
             aria-label={`${t('tracePage.columnTraceId')} ${id}`}
             className="border-b border-border hover:bg-background-secondary focus-visible:outline-none focus-visible:bg-background-secondary focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset cursor-pointer transition-colors"
         >
-            <Td>
-                <IdChip value={id} head={6} tail={4} />
-            </Td>
-            <Td>
-                <TruncateText className="text-foreground text-sm">
-                    {e.agent || (e.agents && e.agents.length > 0 ? e.agents[0] : null) || e.framework || '-'}
-                </TruncateText>
-            </Td>
-            <Td>
-                <StatusBadge status={statusKind} label={statusLabel} />
-            </Td>
-            <Td>
-                <div className="flex gap-1 flex-wrap">
-                    {(e as any).is_subagent ? (
-                        <span
-                            title={(e as any).subagent_name || (e as any).subagent_type || ''}
-                            className="text-[9px] font-bold tracking-wider px-1.5 py-0.5 rounded-sm bg-primary/10 text-primary border border-primary/30"
-                        >
-                            SUB
-                        </span>
-                    ) : isMultiAgent && (
-                        <Tag variant="agent" icon={Users}>Multi-Agent</Tag>
-                    )}
-                    {skillCount > 0 && (
-                        <Tag variant="skill" icon={Layers}>Skills</Tag>
-                    )}
-                    {e.framework && (
-                        <Tag variant="framework" icon={Terminal}>{getFrameworkLabel(e.framework)}</Tag>
-                    )}
-                </div>
-            </Td>
-            <Td>
-                <TruncateText className="text-foreground text-sm">
-                    {e.query || t('tracePage.noQuery')}
-                </TruncateText>
-            </Td>
-            <Td>
-                <span className="text-xs text-foreground-secondary font-mono tabular-nums whitespace-nowrap">
-                    {e.tokens != null ? e.tokens.toLocaleString() : '-'}
-                </span>
-            </Td>
-            <Td>
-                <RelativeTime value={e.timestamp} className="text-xs text-foreground-secondary font-mono whitespace-nowrap" />
-            </Td>
-            <Td align="right">
-                <div className="inline-flex gap-1 group" onClick={ev => ev.stopPropagation()}>
-                    <Button variant="ghost" size="sm" onClick={onClick} className="h-7 px-2 text-xs">
-                        {t('tracePage.rowDetail')}
-                    </Button>
-                    <Button variant="ghost" size="sm" asChild className="h-7 px-2 text-xs">
-                        <Link href={`${basePath}/fault?taskId=${id}`}>
-                            {t('tracePage.rowAnalysis')}
-                        </Link>
-                    </Button>
-                    <Button variant="ghost" size="sm" asChild className="h-7 px-2 text-xs">
-                        <Link href={`${basePath}/eval/trajectory/${id}`}>
-                            <Wrench className="size-3" />
-                            {t('tracePage.rowEval')}
-                        </Link>
-                    </Button>
-                </div>
-            </Td>
+            {columnVisibility.traceId && (
+                <Td>
+                    <IdChip value={id} head={6} tail={4} />
+                </Td>
+            )}
+            {columnVisibility.agent && (
+                <Td>
+                    <TruncateText className="text-foreground text-sm">
+                        {e.agent || (e.agents && e.agents.length > 0 ? e.agents[0] : null) || e.framework || '-'}
+                    </TruncateText>
+                </Td>
+            )}
+            {columnVisibility.status && (
+                <Td>
+                    <StatusBadge status={statusKind} label={statusLabel} />
+                </Td>
+            )}
+            {columnVisibility.userTags && (
+                <Td>
+                    <TraceTagCell
+                        execution={e}
+                        availableTags={availableTags}
+                        onTagsChanged={onTagsChanged}
+                        onTagCreated={onTagCreated}
+                    />
+                </Td>
+            )}
+            {columnVisibility.systemTags && (
+                <Td>
+                    <div className="flex gap-1 flex-wrap">
+                        {(e as any).is_subagent ? (
+                            <span
+                                title={(e as any).subagent_name || (e as any).subagent_type || ''}
+                                className="text-[9px] font-bold tracking-wider px-1.5 py-0.5 rounded-sm bg-primary/10 text-primary border border-primary/30"
+                            >
+                                SUB
+                            </span>
+                        ) : isMultiAgent && (
+                            <Tag variant="agent" icon={Users}>Multi-Agent</Tag>
+                        )}
+                        {skillCount > 0 && (
+                            <Tag variant="skill" icon={Layers}>Skills</Tag>
+                        )}
+                        {e.framework && (
+                            <Tag variant="framework" icon={Terminal}>{getFrameworkLabel(e.framework)}</Tag>
+                        )}
+                    </div>
+                </Td>
+            )}
+            {columnVisibility.task && (
+                <Td>
+                    <TruncateText className="text-foreground text-sm">
+                        {e.query || t('tracePage.noQuery')}
+                    </TruncateText>
+                </Td>
+            )}
+            {columnVisibility.tokens && (
+                <Td>
+                    <span className="text-xs text-foreground-secondary font-mono tabular-nums whitespace-nowrap">
+                        {e.tokens != null ? e.tokens.toLocaleString() : '-'}
+                    </span>
+                </Td>
+            )}
+            {columnVisibility.time && (
+                <Td>
+                    <RelativeTime value={e.timestamp} className="text-xs text-foreground-secondary font-mono whitespace-nowrap" />
+                </Td>
+            )}
+            {columnVisibility.actions && (
+                <Td align="right">
+                    <div className="inline-flex gap-1 group" onClick={ev => ev.stopPropagation()}>
+
+
+                        <Button variant="ghost" size="sm" onClick={onClick} className="h-7 px-2 text-xs">
+                            {t('tracePage.rowDetail')}
+                        </Button>
+                        <Button variant="ghost" size="sm" asChild className="h-7 px-2 text-xs">
+                            <Link href={`${basePath}/fault?taskId=${id}`}>
+                                {t('tracePage.rowAnalysis')}
+                            </Link>
+                        </Button>
+                        <Button variant="ghost" size="sm" asChild className="h-7 px-2 text-xs">
+                            <Link href={`${basePath}/eval/trajectory/${id}`}>
+                                <Wrench className="size-3" />
+                                {t('tracePage.rowEval')}
+                            </Link>
+                        </Button>
+                    </div>
+                </Td>
+            )}
         </tr>
     );
 }
 
+async function readApiError(response: Response): Promise<string> {
+    try {
+        const body = await response.json();
+        return String(body?.error || response.statusText || 'Request failed');
+    } catch {
+        return response.statusText || 'Request failed';
+    }
+}
+
+function tagKindLabel(kind: TraceUserTag['kind'], locale: string): string {
+    if (kind === 'version') return locale === 'zh' ? '版本' : 'Version';
+    return locale === 'zh' ? '业务' : 'Business';
+}
+
+function UserTagChip({ tag, removable }: { tag: TraceUserTag; removable?: boolean }) {
+    return (
+        <span className="inline-flex max-w-full items-center gap-1 rounded-sm border border-border bg-background px-1.5 py-0.5 text-xs text-foreground-secondary leading-none">
+            <span className="size-2 rounded-full shrink-0" style={{ backgroundColor: tag.color }} aria-hidden />
+            <span className="truncate">{tag.name}</span>
+            {removable && <XIcon className="size-3 shrink-0 text-foreground-muted" aria-hidden />}
+        </span>
+    );
+}
+
+function TraceTagCell({
+    execution,
+    availableTags,
+    onTagsChanged,
+    onTagCreated,
+    mode = 'cell',
+}: {
+    execution: Execution;
+    availableTags: TraceUserTag[];
+    onTagsChanged: (executionId: string, tags: TraceUserTag[]) => void;
+    onTagCreated: (tag: TraceUserTag) => void;
+    mode?: 'cell' | 'button';
+}) {
+    const { user } = useAuth();
+    const { t, locale } = useLocale();
+    const executionId = getExecutionRowKey(execution);
+    const selectedTags = execution.userTags ?? [];
+    const selectedIds = new Set(selectedTags.map(tag => tag.id));
+    const [open, setOpen] = useState(false);
+    const [savingId, setSavingId] = useState<string | null>(null);
+    const [creating, setCreating] = useState(false);
+    const [newName, setNewName] = useState('');
+    const [newKind, setNewKind] = useState<TraceUserTag['kind']>('business');
+    const [newColor, setNewColor] = useState('#6366f1');
+
+    const applyTagsResponse = useCallback(async (response: Response) => {
+        if (!response.ok) throw new Error(await readApiError(response));
+        const body = await response.json();
+        const tags = Array.isArray(body?.tags) ? body.tags : [];
+        onTagsChanged(executionId, tags);
+        return tags as TraceUserTag[];
+    }, [executionId, onTagsChanged]);
+
+    const toggleTag = useCallback(async (tag: TraceUserTag) => {
+        if (!user || !executionId) return;
+        setSavingId(tag.id);
+        try {
+            const selected = selectedIds.has(tag.id);
+            const response = selected
+                ? await apiFetch(`/api/observe/executions/${encodeURIComponent(executionId)}/tags?user=${encodeURIComponent(user)}&tagId=${encodeURIComponent(tag.id)}`, { method: 'DELETE' })
+                : await apiFetch(`/api/observe/executions/${encodeURIComponent(executionId)}/tags`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user, tagIds: [tag.id] }),
+                });
+            await applyTagsResponse(response);
+        } catch (error) {
+            toast.error(error instanceof Error ? error.message : t('tracePage.tagSaveFailed'));
+        } finally {
+            setSavingId(null);
+        }
+    }, [applyTagsResponse, executionId, selectedIds, t, user]);
+
+    const createAndAttachTag = useCallback(async () => {
+        if (!user || !executionId || !newName.trim()) return;
+        setCreating(true);
+        try {
+            const createResponse = await apiFetch('/api/tags', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user, name: newName.trim(), kind: newKind, color: newColor }),
+            });
+            if (!createResponse.ok) throw new Error(await readApiError(createResponse));
+            const tag = await createResponse.json() as TraceUserTag;
+            onTagCreated(tag);
+            const attachResponse = await apiFetch(`/api/observe/executions/${encodeURIComponent(executionId)}/tags`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user, tagIds: [tag.id] }),
+            });
+            await applyTagsResponse(attachResponse);
+            setNewName('');
+            setNewKind('business');
+            setNewColor('#6366f1');
+        } catch (error) {
+            toast.error(error instanceof Error ? error.message : t('tracePage.tagCreateFailed'));
+        } finally {
+            setCreating(false);
+        }
+    }, [applyTagsResponse, executionId, newColor, newKind, newName, onTagCreated, t, user]);
+
+    const versionTags = availableTags.filter(tag => tag.kind === 'version');
+    const businessTags = availableTags.filter(tag => tag.kind === 'business');
+
+    const trigger = mode === 'button' ? (
+        <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-7 gap-1.5 px-2 text-xs"
+            title={t('tracePage.editTags')}
+            onClick={ev => ev.stopPropagation()}
+        >
+            <Plus className="size-3.5" aria-hidden />
+            {t('tracePage.editTags')}
+        </Button>
+    ) : (
+        <button
+            type="button"
+            className="flex min-h-8 w-full min-w-0 items-center gap-2 rounded-md border border-primary-subtle bg-primary-subtle px-2 py-1 text-left hover:border-primary hover:bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={ev => ev.stopPropagation()}
+        >
+            <span className="flex min-w-0 flex-1 flex-wrap gap-1">
+                {selectedTags.map(tag => <UserTagChip key={tag.id} tag={tag} />)}
+            </span>
+            <span className="inline-flex h-6 shrink-0 items-center gap-1 rounded-sm bg-card px-1.5 text-xs font-medium text-primary shadow-sm">
+                <Plus className="size-3.5" aria-hidden />
+                {t('tracePage.createTag')}
+            </span>
+        </button>
+    );
+
+    return (
+        <Popover open={open} onOpenChange={setOpen}>
+            <PopoverTrigger asChild>{trigger}</PopoverTrigger>
+            <PopoverContent align="start" className="w-80 p-3" onClick={ev => ev.stopPropagation()}>
+                <div className="space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                        <span className="text-sm font-semibold text-foreground">{t('tracePage.editTags')}</span>
+                        <div className="flex items-center gap-1">
+                            <span className="text-xs text-foreground-muted tabular-nums">{selectedTags.length}</span>
+                            <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="size-7"
+                                aria-label={locale === 'zh' ? '关闭' : 'Close'}
+                                onClick={() => setOpen(false)}
+                            >
+                                <XIcon className="size-3.5" aria-hidden />
+                            </Button>
+                        </div>
+                    </div>
+                    <TagPickerGroup
+                        title={tagKindLabel('version', locale)}
+                        tags={versionTags}
+                        selectedIds={selectedIds}
+                        savingId={savingId}
+                        onToggle={toggleTag}
+                    />
+                    <TagPickerGroup
+                        title={tagKindLabel('business', locale)}
+                        tags={businessTags}
+                        selectedIds={selectedIds}
+                        savingId={savingId}
+                        onToggle={toggleTag}
+                    />
+                    <div className="border-t border-border pt-3 space-y-2">
+                        <div className="flex items-center gap-2">
+                            <select
+                                value={newKind}
+                                onChange={ev => setNewKind(ev.target.value as TraceUserTag['kind'])}
+                                className="h-8 rounded-md border border-input bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-ring"
+                            >
+                                <option value="business">{tagKindLabel('business', locale)}</option>
+                                <option value="version">{tagKindLabel('version', locale)}</option>
+                            </select>
+                            <input
+                                type="color"
+                                value={newColor}
+                                onChange={ev => setNewColor(ev.target.value)}
+                                className="size-8 rounded border border-input bg-background p-0.5"
+                                aria-label={t('tracePage.tagColor')}
+                            />
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <Input
+                                value={newName}
+                                onChange={ev => setNewName(ev.target.value)}
+                                onKeyDown={ev => { if (ev.key === 'Enter') { ev.preventDefault(); void createAndAttachTag(); } }}
+                                placeholder={t('tracePage.newTagPlaceholder')}
+                                className="h-8 text-sm"
+                            />
+                            <Button
+                                type="button"
+                                size="sm"
+                                className="h-8 px-2"
+                                disabled={creating || !newName.trim()}
+                                onClick={() => void createAndAttachTag()}
+                            >
+                                <Plus className="size-3.5" aria-hidden />
+                                {t('tracePage.createTag')}
+                            </Button>
+                        </div>
+                    </div>
+                </div>
+            </PopoverContent>
+        </Popover>
+    );
+}
+
+function TagPickerGroup({
+    title,
+    tags,
+    selectedIds,
+    savingId,
+    onToggle,
+}: {
+    title: string;
+    tags: TraceUserTag[];
+    selectedIds: Set<string>;
+    savingId: string | null;
+    onToggle: (tag: TraceUserTag) => void;
+}) {
+    const { t } = useLocale();
+    return (
+        <div className="space-y-1.5">
+            <div className="text-xs font-medium text-foreground-muted">{title}</div>
+            {tags.length === 0 ? (
+                <p className="text-xs text-foreground-muted">{t('tracePage.noTagsAvailable')}</p>
+            ) : (
+                <div className="max-h-36 overflow-auto space-y-1 pr-1">
+                    {tags.map(tag => {
+                        const selected = selectedIds.has(tag.id);
+                        return (
+                            <button
+                                key={tag.id}
+                                type="button"
+                                disabled={savingId === tag.id}
+                                onClick={() => onToggle(tag)}
+                                className={cn(
+                                    'flex h-8 w-full items-center gap-2 rounded-sm px-2 text-left text-sm hover:bg-background-secondary disabled:opacity-60',
+                                    selected && 'bg-primary-subtle text-primary',
+                                )}
+                            >
+                                <span className="size-2 rounded-full shrink-0" style={{ backgroundColor: tag.color }} aria-hidden />
+                                <span className="min-w-0 flex-1 truncate">{tag.name}</span>
+                                {selected && <Check className="size-3.5 shrink-0" aria-hidden />}
+                            </button>
+                        );
+                    })}
+                </div>
+            )}
+        </div>
+    );
+}
 type TagVariant = 'agent' | 'skill' | 'framework';
 
 const TAG_VARIANT_CLASSES: Record<TagVariant, string> = {

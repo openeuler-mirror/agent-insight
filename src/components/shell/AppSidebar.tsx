@@ -41,6 +41,8 @@ const ICON_RELEASE = (<><circle cx="7" cy="7" r="5.5" /><path d="M5 7l2 2 2-4" /
 const ICON_DASHBOARD = (<><rect x="2" y="2" width="4.5" height="4.5" rx="1" /><rect x="7.5" y="2" width="4.5" height="4.5" rx="1" /><rect x="2" y="7.5" width="4.5" height="4.5" rx="1" /><rect x="7.5" y="7.5" width="4.5" height="4.5" rx="1" /></>);
 const ICON_OBSERVE = (<><circle cx="7" cy="7" r="5.5" /><path d="M4.5 7c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5" /><circle cx="7" cy="7" r="1.5" /></>);
 const ICON_TRACE = <path d="M2 4h10M2 7h7M2 10h9" />;
+const ICON_VERSION_ANALYSIS = (<><path d="M2 11h10" /><path d="M3.5 9V6.5M7 9V3M10.5 9V5" /><circle cx="3.5" cy="5.5" r="1" /><circle cx="7" cy="2.5" r="1" /><circle cx="10.5" cy="4" r="1" /></>);
+const ICON_TAGS = (<><path d="M2 3.5V8l4 4 5.5-5.5-4-4H3a1 1 0 0 0-1 1z" /><circle cx="5" cy="5.5" r="1" /></>);
 const ICON_FAULT = (<><path d="M7 2.5v4.5M7 10v.5" /><circle cx="7" cy="7" r="5.5" /></>);
 const ICON_EVAL = (<><path d="M4.5 7l2 2 3-3" /><circle cx="7" cy="7" r="5.5" /></>);
 const ICON_DATASET = (<><ellipse cx="7" cy="4.5" rx="4.5" ry="2" /><path d="M2.5 4.5v3c0 1.1 2.02 2 4.5 2s4.5-.9 4.5-2v-3" /><path d="M2.5 7.5v3c0 1.1 2.02 2 4.5 2s4.5-.9 4.5-2v-3" /></>);
@@ -87,6 +89,7 @@ const OBSERVE_TREE: NavItem = {
     iconPath: ICON_OBSERVE,
     children: [
         { key: 'trace', href: '/trace', labelKey: 'nav.trace', iconPath: ICON_TRACE, matchPrefixes: ['/trace'] },
+        { key: 'version-analysis', href: '/version-analysis', labelKey: 'nav.versionAnalysis', iconPath: ICON_VERSION_ANALYSIS },
         { key: 'fault', href: '/fault', labelKey: 'nav.fault', iconPath: ICON_FAULT },
         { key: 'quality', href: '/quality', labelKey: 'nav.quality', iconPath: ICON_QUALITY },
         { key: 'infra', href: '/infra', labelKey: 'nav.infra', iconPath: ICON_METRICS, matchPrefixes: ['/infra'] },
@@ -114,6 +117,7 @@ const CONFIG_GROUP: NavGroup = {
     items: [
         { key: 'model-registry', href: '/modelconfig/registry', labelKey: 'nav.modelRegistry', iconPath: ICON_MODEL },
         { key: 'web-search', href: '/modelconfig/web-search', labelKey: 'nav.webSearch', iconPath: ICON_WEB },
+        { key: 'version-management', href: '/version-management', labelKey: 'nav.versionManagement', iconPath: ICON_TAGS },
         { key: 'access-install', href: '/accessconfig/install', labelKey: 'nav.accessInstall', iconPath: ICON_INSTALL },
         // 暂时屏蔽 channels / webhooks / health —— 后端能力未稳定,先不暴露给用户。
         // 页面源码保留在 src/app/(main)/accessconfig/{channels,webhooks,health} 下,

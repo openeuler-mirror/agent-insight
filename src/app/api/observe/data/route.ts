@@ -5,6 +5,7 @@ import { NextResponse } from 'next/server';
 import { isActive } from '@/lib/evaluation-task-manager';
 import { triggerTrajectoryAutoWatchForTask } from '@/lib/engine/evaluation/trajectory-auto-watch';
 import { buildOpencodeTelemetryIndex } from '@/lib/observe/opencode-telemetry-index';
+import { listTraceTags } from '@/lib/trace-tags';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -314,12 +315,23 @@ export async function GET(request: Request) {
     const skillVersionStr = searchParams.get('skillVersion');
     const skillVersion = skillVersionStr ? parseInt(skillVersionStr, 10) : undefined;
     const attachEvaluations = includeEvaluationsParam === '1' || includeEvaluationsParam === 'true';
+    const includeTags = searchParams.get('includeTags') === '1' || searchParams.get('includeTags') === 'true';
+    const bizTagParam = searchParams.get('bizTag') || '';
+    const businessTagIds = bizTagParam
+        .split(',')
+        .map(item => item.trim())
+        .filter(Boolean)
+        .slice(0, 50);
 
     // facet=skills：返回该 user 可见的全部 skill(name + 版本)给前端下拉用。来自 ExecutionSkill(agent 作用域,
     // 含 sub-agent 用到的 skill),与"按 skill 服务端筛选"同源,避免下拉项随筛选结果塌缩。
     const facet = searchParams.get('facet') || undefined;
     if (facet === 'skills') {
         return NextResponse.json(await listObservedSkills(user));
+    }
+    // facet=tags&kind=business|version：返回用户标签 + 使用次数，给业务标签筛选/打标控件使用。
+    if (facet === 'tags') {
+        return NextResponse.json(await listTraceTags(user || '', searchParams.get('kind')));
     }
     // facet=values&column=<col>：某分类列的观测值 + 件数,给过滤器值下拉(对标 langfuse SUGGESTIONS)。
     if (facet === 'values') {
@@ -384,13 +396,14 @@ export async function GET(request: Request) {
         onlySubagents,
         parentExecutionId,
         clauses,
+        businessTagIds: businessTagIds.length > 0 ? businessTagIds : undefined,
     };
     const pageResult = paginated
-        ? await readRecordPage(user, recordFilters, { attachEvaluations, page, pageSize, lightweight })
+        ? await readRecordPage(user, recordFilters, { attachEvaluations, page, pageSize, lightweight, includeTags })
         : null;
     const data = pageResult
         ? pageResult.records
-        : await readRecords(user, recordFilters, { attachEvaluations, lightweight });
+        : await readRecords(user, recordFilters, { attachEvaluations, lightweight, includeTags });
     
     // 批量查每条 trace 的最近一次 TrajectoryEvalResult.status, 让前端 trace 行能反映"上次评测
     // 跑成功 / 失败"。之前 trace 行 status 只看 resultScore/trajScore + 前端内存 failedTaskIds
