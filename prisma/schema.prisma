@@ -118,6 +118,9 @@ model Execution {
   // 可索引的多对多，替代 skills/invokedSkills JSON blob 做"按 skill+version 反查 trace"与统一筛选。
   executionSkills      ExecutionSkill[]
 
+  // Trace ↔ 用户标签的可索引绑定。系统标签不入库，由读路径派生。
+  executionTags        ExecutionTag[]
+
   @@index([parentExecutionId])
   @@index([rootExecutionId])
   @@index([isSubagent, timestamp])
@@ -174,6 +177,41 @@ model ExecutionSkill {
   @@index([skillName, skillVersion]) // 按 skill@version 反查所有 trace（核心诉求）
   @@index([skillName])               // 按 skill 任意版本反查
   @@index([executionId])
+}
+// 用户可维护的 Trace 标签定义。kind = version | business。
+// 系统标签不存这里，避免用户编辑派生事实。
+model Tag {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  kind        String
+  color       String
+  createdBy   String?
+  user        String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  executionTags ExecutionTag[]
+
+  @@unique([user, kind, name])
+  @@index([user, kind, createdAt])
+}
+
+// Trace ↔ 用户标签多对多绑定。硬删除 Tag 时级联清理绑定，Trace 本体保留。
+model ExecutionTag {
+  id          String    @id @default(cuid())
+  executionId String
+  execution   Execution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  tagId       String
+  tag         Tag       @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  user        String?
+  createdBy   String?
+  createdAt   DateTime  @default(now())
+
+  @@unique([executionId, tagId])
+  @@index([tagId, createdAt])
+  @@index([executionId])
+  @@index([user, tagId])
 }
 
 /// 一次评估事件——静态评估和动态评估统一到这张表，按 type 区分。

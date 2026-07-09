@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `4122a97b46934b2bbcd4f42420f0f17da0194d43` (`4122a97`) |
-| Branch | `gyc0528` |
-| Date | 2026-06-30T11:24:44+08:00 |
-| Author | gyctl |
-| Subject | `revert(skill-opt): 撤掉 upstream 的「优化范围收束」(scope)，与一键优化重复` |
+| Commit | `0ab6374fbb789b77321be8901a7ca24d46b3e9b4` (`0ab6374f`) |
+| Branch | `develop0228` |
+| Date | 2026-07-07T16:43:24+08:00 |
+| Author | ljnkirito |
+| Subject | `feat: 完成标签化版本管理 MVP` |
 
-**如何更新：** `git diff 4122a97 HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff 0ab6374f HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。

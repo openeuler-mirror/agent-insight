@@ -43,6 +43,7 @@
 | File | Area | Key symbols |
 |---|---|---|
 | `storage/data-service.ts` | storage | `saveExecutionRecord`、`extractInvokedSkillsFromSessionInteractions`、`readRecords`、`readConfig`、`findBestRoutingConfig`、`findBestOutcomeConfig`、`deriveSubagentExecutions`；`ExecutionRecord`、`RoutingEvaluationSnapshot`、`OutcomeEvaluationSnapshot`、`ConfigItem` |
+| `trace-tags.ts` | storage | `listTraceTags`、`createTraceTag`、`updateTraceTag`、`deleteTraceTag`、`getExecutionTraceTags`、`addExecutionTraceTags`、`replaceExecutionTraceTags`、`removeExecutionTraceTag`、`getTraceTagsByExecutionIds` |
 | `storage/db-interface.ts` | storage | `getDatabaseAdapter`；`DatabaseAdapter`、`OpenGaussAdapter.query` |
 | `storage/prisma.ts` | storage | Prisma 客户端单例 |
 | `storage/server-config.ts` | storage | `getActiveConfig`、`getUserSettings`、`saveUserSettings`；`ModelConfig`、`UserSettings` |
@@ -88,7 +89,7 @@
 | `eval/SkillEvaluation.tsx`、`eval/EvaluationRunDetailView.tsx` | skill 评测视图 |
 | `observe/AgentTraceView.tsx`、`observe/TraceDrawer.tsx`、`observe/AgentDebugCard.tsx` | trace 可视化 + 调试 |
 | `AgentDatasetCenter.tsx`、`DatasetItemsPage.tsx`、`EvaluatorsCenter.tsx` | 数据集与评测器管理 |
-| `config/ModelConfigManager.tsx`、`config/WebSearchConfig.tsx` | 模型/搜索配置 |
+| `config/ModelConfigManager.tsx`、`config/WebSearchConfig.tsx` | 模型/搜索配置 |; Trace tag management page: `app/(main)/version-management/page.tsx` |
 | `shell/{AppSidebar,AppTopBar,PageContainer,PageHeader}.tsx` | 应用外壳 |
 | `ui/*` | 可复用基础组件（button、card、dialog、select 等）—— 复用它们，不要自行实现 |
 | `feedback/{EmptyState,ErrorState,StatusBadge}.tsx` | 标准状态组件 |
@@ -104,6 +105,7 @@
 | skill-generator | `skill-generator/{chat,sessions/*,files/*,attachments,download/*}` | skill 生成 playground 后端 |
 | eval | `eval/{config/*,evaluation,rejudge,settings,trajectory/*}` | 数据集配置、评测运行、轨迹评测 |
 | debug | `debug/{batch-tasks/*,grayscale-tasks/*,execute/*,history/*}` | 批量与灰度（A/B）执行编排 |
-| observe | `observe/{data,session,task-stats,infra/*,executions/[executionId]/*}` | 可观测性数据、infra 观测与单次执行分析 |
+| observe | `observe/{data,session,task-stats,infra/*,executions/[executionId]/*,version-analysis/*}` | Observability data, infra observation, execution analysis, Trace tag binding, and version-analysis aggregation |
+| tags | `tags`、`tags/[id]` | Trace 用户标签定义 CRUD（版本标签 / 业务标签） |
 | fault | `fault/diagnosis/{session,stream}` | 故障诊断对话（agent-debug） |
 | misc | `agents`、`agent-datasets/*`、`auth/*`、`dashboard/stats`、`guide`、`user-evaluators`、`background-tasks`、`evaluation/*` | 注册表、数据集、认证、仪表盘、引导 |

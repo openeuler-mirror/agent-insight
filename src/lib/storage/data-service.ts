@@ -37,6 +37,11 @@ import { getAdapter } from '@/lib/ingest/adapters/registry';
 import { normalizeInteractions } from '@/lib/shared/interaction-utils';
 import { buildPrismaWhere } from '@/lib/filters/to-prisma';
 import type { FilterClause } from '@/lib/filters/types';
+import {
+    findExecutionIdsByBusinessTags,
+    getTraceTagsByExecutionIds,
+    type TraceTagDto,
+} from '@/lib/trace-tags';
 
 export interface InvokedSkill {
     name: string;
@@ -284,6 +289,7 @@ export interface ExecutionRecord {
     skill_version?: number | null;
     label?: string | null;
     user?: string | null;
+    userTags?: TraceTagDto[];
     model?: string | null;
     /** 真实推理源 URL（scheme://host:port），session↔infra 关联键。 */
     endpoint?: string | null;
@@ -1158,6 +1164,8 @@ interface ReadRecordFilters {
      * (execution / observedAgents);skill / 计算列(status/ownership)由各自既有通道处理。
      */
     clauses?: FilterClause[];
+    /** business 标签筛选，值为 Tag.id，支持多个 OR 命中 */
+    businessTagIds?: string[];
 }
 
 interface ReadRecordsOptions {
@@ -1170,6 +1178,8 @@ interface ReadRecordsOptions {
      * 把每条记录从 KB–MB 降到几百字节,根治非分页路径的 next-server 堆 OOM(仅 SQLite/Prisma 路径正确)。
      */
     lightweight?: boolean;
+    /** 是否批量附加用户标签；默认关闭，避免旧列表无谓 join */
+    includeTags?: boolean;
 }
 
 export async function listObservedAgentNames(user?: string): Promise<string[]> {
@@ -1417,16 +1427,23 @@ async function hydrateAndNormalizeBatch(
         user?: string;
         light: boolean;
         attachEvaluations: boolean;
+        includeTags: boolean;
         getConfigsForEvaluationUser: (evaluationUser?: string | null) => Promise<ConfigItem[]>;
     },
 ): Promise<ExecutionRecord[]> {
-    const { user, light, attachEvaluations, getConfigsForEvaluationUser } = ctx;
+    const { user, light, attachEvaluations, includeTags, getConfigsForEvaluationUser } = ctx;
 
     // heavy: dedup pass 走 light 投影未取 finalResult,这里按本批 id 回取。
     // skills/invokedSkills/rootSkill 一律从 ExecutionSkill(写入时已按 agent 作用域算好并定格版本)批量取,
     // agents 从 denormalize 的 observedAgents 列还原 —— 两者都不再逐行加载/解析 session interactions。
     // 这是列表页"频繁大量重复解析 → 卡死"的根因;去掉后 hydrate 与数据量解耦,light/heavy 仅差 finalResult。
     const execIds = batch.map((r: any) => r.id);
+    const tagsByExec = includeTags
+        ? await getTraceTagsByExecutionIds(execIds, user).catch((e: unknown) => {
+            console.warn('[readRecords] trace tag batch fetch failed:', e);
+            return new Map<string, TraceTagDto[]>();
+        })
+        : new Map<string, TraceTagDto[]>();
     const finalResultRows = (!light && execIds.length > 0)
         ? await db.findExecutions({ id: { in: execIds } }, undefined, { id: true, finalResult: true })
         : [];
@@ -1617,6 +1634,7 @@ async function hydrateAndNormalizeBatch(
             failures: r.failures ? JSON.parse(r.failures) : undefined,
             label: r.label ?? null,
             user: r.user ?? null,
+            userTags: tagsByExec.get(r.id) ?? [],
             skill_issues: r.skillIssues ? JSON.parse(r.skillIssues) : [],
             skill_version: r.skillVersion ?? null,
             model,
@@ -1778,6 +1796,21 @@ async function readRecordsInternal(
         where.agentName = filters.agentName;
     }
 
+    const businessTagIds = Array.from(new Set((filters?.businessTagIds ?? []).map(v => String(v || '').trim()).filter(Boolean)));
+    if (businessTagIds.length > 0) {
+        const taggedExecutionIds = await findExecutionIdsByBusinessTags(user, businessTagIds).catch((e: unknown) => {
+            console.warn('[readRecords] business tag filter failed:', e);
+            return [] as string[];
+        });
+        if (taggedExecutionIds) {
+            const current = Array.isArray(where.id?.in) ? where.id.in.map((v: unknown) => String(v)) : null;
+            const next = current
+                ? current.filter((id: string) => taggedExecutionIds.includes(id))
+                : taggedExecutionIds;
+            where.id = { in: next };
+        }
+    }
+
     // 统一过滤器(operator 模型)下推:FilterClause[] → Prisma where,AND 进主查询。
     // 只下推 pushable 实列(execution/observedAgents);skill(executionSkill)/计算列(status/ownership)
     // buildPrismaWhere 会放进 deferred,这里忽略——它们仍走各自既有通道(skillFilterActive / 前端二次过滤)。
@@ -1839,6 +1872,7 @@ async function readRecordsInternal(
             user,
             light,
             attachEvaluations,
+            includeTags: options?.includeTags === true,
             getConfigsForEvaluationUser,
         });
         out.push(...normalizedBatch);
