@@ -88,6 +88,7 @@ export default function DashboardPage() {
     const [tErr, setTErr] = useState<string | null>(null);
     const [bErr, setBErr] = useState<string | null>(null);
     const [bLoading, setBLoading] = useState(false);
+    const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
 
     // 系统趋势 + KPI：随窗口即时加载。作用域=当前登录用户（带 ?user=）。
     useEffect(() => {
@@ -180,15 +181,18 @@ export default function DashboardPage() {
                         {tab !== 'trends' && (
                             bErr ? <ErrBox msg={bErr} />
                                 : bLoading || !bd ? <Placeholder text="加载中…" />
-                                    : tab === 'reliability' ? <ReliabilityTab bd={bd} />
+                                    : tab === 'reliability' ? <ReliabilityTab bd={bd} onAgentClick={setSelectedAgent} />
                                         : tab === 'model' ? <ModelTab bd={bd} />
                                             : tab === 'tool' ? <ToolTab bd={bd} />
-                                                : tab === 'agent' ? <AgentTab bd={bd} />
-                                                    : <OrchestrationTab bd={bd} />
+                                                : tab === 'agent' ? <AgentTab bd={bd} onAgentClick={setSelectedAgent} />
+                                                    : <OrchestrationTab bd={bd} onAgentClick={setSelectedAgent} />
                         )}
                     </>
                 )}
             </div>
+            {selectedAgent && user && (
+                <AgentDetailDrawer name={selectedAgent} win={win} user={user} onClose={() => setSelectedAgent(null)} />
+            )}
         </div>
     );
 }
@@ -278,12 +282,12 @@ function TrendsTab({ data }: { data: TrendsResp }) {
 }
 
 // ═══ 页签：③ 可靠性与性能 ═════════════════════════════════════════════════════
-function ReliabilityTab({ bd }: { bd: BreakdownsResp }) {
+function ReliabilityTab({ bd, onAgentClick }: { bd: BreakdownsResp; onAgentClick: (name: string) => void }) {
     const r = bd.reliability;
     return (
         <Grid>
-            <Panel title="失败热点 · Agent" hint="错误率 TOP10（失败/总调用）">
-                <HBar data={r.failAgents.map((a) => ({ name: a.name, value: a.errorRate }))} color="var(--error)" unit="%" />
+            <Panel title="失败热点 · Agent" hint="错误率 TOP10（失败/总调用）· 点击下钻">
+                <HBar data={r.failAgents.map((a) => ({ name: a.name, value: a.errorRate }))} color="var(--error)" unit="%" onClick={onAgentClick} />
             </Panel>
             <Panel title="端到端时延分布" hint="per-trace 对数桶（秒）">
                 <Histogram data={r.latHist} color="var(--warning)" />
@@ -343,7 +347,7 @@ function ToolTab({ bd }: { bd: BreakdownsResp }) {
 }
 
 // ═══ 页签：⑥ Agent 监控 ══════════════════════════════════════════════════════
-function AgentTab({ bd }: { bd: BreakdownsResp }) {
+function AgentTab({ bd, onAgentClick }: { bd: BreakdownsResp; onAgentClick: (name: string) => void }) {
     const c = useThemeColors();
     const a = bd.agent;
     return (
@@ -360,11 +364,11 @@ function AgentTab({ bd }: { bd: BreakdownsResp }) {
                     </LineChart>
                 </ResponsiveContainer>
             </Panel>
-            <Panel title="Agent Token 消耗（self）" hint="按 Agent 自身 token TOP10">
-                <HBar data={a.tokenRank.map((x) => ({ name: x.name, value: x.tokens }))} color="var(--warning)" fmt={fmtTok} />
+            <Panel title="Agent Token 消耗（self）" hint="按 Agent 自身 token TOP10 · 点击下钻">
+                <HBar data={a.tokenRank.map((x) => ({ name: x.name, value: x.tokens }))} color="var(--warning)" fmt={fmtTok} onClick={onAgentClick} />
             </Panel>
-            <Panel title="Agent 调用排行" hint="distinct trace 出现数 TOP10">
-                <HBar data={a.callRank.map((x) => ({ name: x.name, value: x.traces }))} color="var(--primary)" />
+            <Panel title="Agent 调用排行" hint="distinct trace 出现数 TOP10 · 点击下钻">
+                <HBar data={a.callRank.map((x) => ({ name: x.name, value: x.traces }))} color="var(--primary)" onClick={onAgentClick} />
             </Panel>
             <Panel title="Skill 调用排行" hint="调用次数 TOP10（成功率色深待 skill-call state）">
                 {a.skillRank.length ? <HBar data={a.skillRank.map((x) => ({ name: x.skill, value: x.calls }))} color={TEAL} />
@@ -375,7 +379,7 @@ function AgentTab({ bd }: { bd: BreakdownsResp }) {
 }
 
 // ═══ 页签：⑦ 多智能体编排 ════════════════════════════════════════════════════
-function OrchestrationTab({ bd }: { bd: BreakdownsResp }) {
+function OrchestrationTab({ bd, onAgentClick }: { bd: BreakdownsResp; onAgentClick: (name: string) => void }) {
     const col = bd.orchestration.collab;
     return (
         <Grid>
@@ -385,11 +389,11 @@ function OrchestrationTab({ bd }: { bd: BreakdownsResp }) {
             <Panel
                 title="全局协作网络"
                 info="边来自 buildAgentCallTree 还原的 parent→child 派发关系（谁 spawn 了谁），跨当前窗口内所有 trace 聚合，边权=派发次数、节点大小=中心度。非 send_message 点对点消息（该口径四框架均无数据源），但同样能识别通信枢纽 Agent。"
-                hint={`节点大小=中心度 · 边=派发(from→to) · ${col.traceCount} 条多 Agent trace${col.truncated ? '（已截断）' : ''}`}
+                hint={`节点大小=中心度 · 边=派发(from→to) · 点击节点下钻 · ${col.traceCount} 条多 Agent trace${col.truncated ? '（已截断）' : ''}`}
                 wide
             >
                 {col.nodes.length
-                    ? <CollabNetwork data={col} />
+                    ? <CollabNetwork data={col} onNodeClick={onAgentClick} />
                     : <Placeholder text="窗口内无多 Agent 协作数据" />}
             </Panel>
         </Grid>
@@ -399,7 +403,7 @@ function OrchestrationTab({ bd }: { bd: BreakdownsResp }) {
 // 全局协作网络：ECharts 力导向，对齐高保真原型 tab-7(graph/force + 可拖拽缩放 roam + 邻接高亮)。
 // 节点大小=中心度、边宽=派发次数、曲线边;节点色按中心度分档(PRD 设计色 navy→teal→terra→gold→muted)。
 const NET_PALETTE = ['#1D2B45', '#2C7A6B', '#C8553D', '#B5811F', '#76705f'];
-function CollabNetwork({ data }: { data: BreakdownsResp['orchestration']['collab'] }) {
+function CollabNetwork({ data, onNodeClick }: { data: BreakdownsResp['orchestration']['collab']; onNodeClick?: (name: string) => void }) {
     const c = useThemeColors();
     const ref = React.useRef<HTMLDivElement>(null);
     React.useEffect(() => {
@@ -447,13 +451,17 @@ function CollabNetwork({ data }: { data: BreakdownsResp['orchestration']['collab
             });
             onResize = () => chart?.resize();
             window.addEventListener('resize', onResize);
+            if (onNodeClick) {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                chart.on('click', (p: any) => { if (p?.dataType === 'node' && p.name) onNodeClick(String(p.name)); });
+            }
         });
         return () => {
             disposed = true;
             if (onResize) window.removeEventListener('resize', onResize);
             if (chart) chart.dispose();
         };
-    }, [data, c]);
+    }, [data, c, onNodeClick]);
     return <div ref={ref} style={{ width: '100%', height: 440 }} />;
 }
 
@@ -506,7 +514,7 @@ function Delta({ cur, prev, goodWhenUp }: { cur: number; prev: number; goodWhenU
 }
 
 // ─── 图表 helper ──────────────────────────────────────────────────────────────
-function HBar({ data, color, unit, fmt }: { data: { name: string; value: number }[]; color: string; unit?: string; fmt?: (n: number) => string }) {
+function HBar({ data, color, unit, fmt, onClick }: { data: { name: string; value: number }[]; color: string; unit?: string; fmt?: (n: number) => string; onClick?: (name: string) => void }) {
     const c = useThemeColors();
     if (!data.length) return <Placeholder text="暂无数据" />;
     const h = CHART_H;
@@ -517,7 +525,9 @@ function HBar({ data, color, unit, fmt }: { data: { name: string; value: number 
                 <XAxis type="number" stroke={c.fgMuted} tick={ax} unit={unit} tickFormatter={fmt} />
                 <YAxis type="category" dataKey="name" stroke={c.fgMuted} tick={{ fontSize: 10 }} width={118} />
                 <Tooltip contentStyle={tipStyle} formatter={(v) => (fmt ? fmt(Number(v)) : String(v))} />
-                <Bar dataKey="value" fill={color} radius={[0, 3, 3, 0]} />
+                <Bar dataKey="value" fill={color} radius={[0, 3, 3, 0]} cursor={onClick ? 'pointer' : undefined}
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    onClick={onClick ? ((d: any) => { const nm = d?.name ?? d?.payload?.name; if (nm) onClick(String(nm)); }) : undefined} />
             </BarChart>
         </ResponsiveContainer>
     );
@@ -612,6 +622,96 @@ function Placeholder({ text }: { text: string }) {
 }
 function ErrBox({ msg }: { msg: string }) {
     return <div style={{ padding: 16, borderRadius: 10, background: 'var(--error-subtle)', border: '1px solid var(--error-subtle-border)', color: 'var(--error)', fontSize: 13 }}>取数失败：{msg}</div>;
+}
+
+// ─── Agent 下钻抽屉 ────────────────────────────────────────────────────────────
+interface AgentStats {
+    traces: number; executions: number; successRate: number;
+    p50Latency: number; p95Latency: number; avgLatency: number;
+    totalTokens: number; inputTokens: number; outputTokens: number;
+    cost: number; toolCalls: number; toolErrorRate: number; llmCalls: number;
+}
+interface AgentResp {
+    name: string; window: string; currency: string; found: boolean;
+    stats: AgentStats;
+    trend: { label: string; calls: number; tokens: number; latencyP95: number; cost: number }[];
+    topModels: { model: string; calls: number; tokens: number }[];
+}
+function AgentDetailDrawer({ name, win, user, onClose }: { name: string; win: string; user: string; onClose: () => void }) {
+    const c = useThemeColors();
+    const [data, setData] = useState<AgentResp | null>(null);
+    const [err, setErr] = useState<string | null>(null);
+    useEffect(() => {
+        let live = true; setData(null); setErr(null);
+        apiFetch(`/api/fleet/agent?name=${encodeURIComponent(name)}&window=${win}&user=${encodeURIComponent(user)}`)
+            .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+            .then((d) => { if (live) setData(d); })
+            .catch((e) => { if (live) setErr(e instanceof Error ? e.message : '取数失败'); });
+        return () => { live = false; };
+    }, [name, win, user]);
+    const s = data?.stats;
+    return (
+        <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.3)', zIndex: 60, display: 'flex', justifyContent: 'flex-end' }}>
+            <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(560px, 92vw)', height: '100%', background: 'var(--background)', borderLeft: '1px solid var(--border)', overflowY: 'auto', boxShadow: '-8px 0 30px rgba(0,0,0,.15)' }}>
+                <div style={{ position: 'sticky', top: 0, background: 'var(--background)', borderBottom: '1px solid var(--border)', padding: '14px 18px', display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: 10.5, color: 'var(--foreground-muted)' }}>Agent 详情 · {WINDOWS.find((w) => w.key === win)?.label}</div>
+                        <div style={{ fontSize: 15, fontWeight: 800, color: 'var(--foreground)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</div>
+                    </div>
+                    <span style={{ flex: 1 }} />
+                    <a href={getApiUrl(`/trace?agent=${encodeURIComponent(name)}`)} style={{ fontSize: 11.5, color: 'var(--primary)', textDecoration: 'none', border: '1px solid var(--border)', borderRadius: 7, padding: '5px 10px', whiteSpace: 'nowrap' }}>查看 trace →</a>
+                    <button onClick={onClose} style={{ border: 'none', background: 'transparent', color: 'var(--foreground-muted)', fontSize: 20, cursor: 'pointer', lineHeight: 1 }}>×</button>
+                </div>
+                <div style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 16 }}>
+                    {err && <div style={{ color: 'var(--error)', fontSize: 13 }}>取数失败：{err}</div>}
+                    {!data && !err && <div style={{ color: 'var(--foreground-muted)', fontSize: 13 }}>加载中…</div>}
+                    {data && !data.found && <div style={{ color: 'var(--foreground-muted)', fontSize: 13 }}>该窗口内无此 Agent 的数据</div>}
+                    {s && data?.found && (
+                        <>
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 8 }}>
+                                <Mini label="参与 Trace" v={fmtInt(s.traces)} />
+                                <Mini label="执行次数" v={fmtInt(s.executions)} />
+                                <Mini label="成功率" v={`${s.successRate}%`} tone="good" />
+                                <Mini label="P95 时延" v={`${s.p95Latency}s`} tone="latency" />
+                                <Mini label="Token(self)" v={fmtInt(s.totalTokens)} />
+                                <Mini label={`成本(${data.currency})`} v={fmtCost(s.cost)} tone="latency" />
+                                <Mini label="工具调用" v={fmtInt(s.toolCalls)} />
+                                <Mini label="模型调用" v={fmtInt(s.llmCalls)} />
+                            </div>
+                            <Panel title="趋势" hint="调用次数(柱) + P95 时延(线)">
+                                <ResponsiveContainer width="100%" height={220}>
+                                    <ComposedChart data={data.trend} margin={mgn}>
+                                        <CartesianGrid strokeDasharray="3 3" stroke={c.border} vertical={false} />
+                                        <XAxis dataKey="label" stroke={c.fgMuted} tick={ax} interval="preserveStartEnd" />
+                                        <YAxis yAxisId="c" width={40} stroke={c.fgMuted} tick={ax} allowDecimals={false} />
+                                        <YAxis yAxisId="l" orientation="right" width={44} stroke={c.fgMuted} tick={ax} unit="s" />
+                                        <Tooltip contentStyle={tipStyle} />
+                                        <Legend verticalAlign="top" align="right" wrapperStyle={lg} />
+                                        <Bar yAxisId="c" dataKey="calls" name="调用次数（左轴）" fill={c.primary} radius={[2, 2, 0, 0]} />
+                                        <Line yAxisId="l" type="monotone" dataKey="latencyP95" name="P95 时延 s（右轴）" stroke={c.warning} strokeWidth={2} dot={false} />
+                                    </ComposedChart>
+                                </ResponsiveContainer>
+                            </Panel>
+                            {data.topModels.length > 0 && (
+                                <Panel title="常用模型" hint="按 token 占用">
+                                    <HBar data={data.topModels.map((m) => ({ name: m.model, value: m.tokens }))} color={TEAL} fmt={fmtTok} />
+                                </Panel>
+                            )}
+                        </>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+}
+function Mini({ label, v, tone }: { label: string; v: string; tone?: 'good' | 'latency' }) {
+    const color = tone === 'good' ? 'var(--success)' : tone === 'latency' ? 'var(--warning)' : 'var(--foreground)';
+    return (
+        <div style={{ background: 'var(--card-bg)', border: '1px solid var(--card-border)', borderRadius: 9, padding: '9px 11px' }}>
+            <div style={{ fontSize: 10.5, color: 'var(--foreground-muted)' }}>{label}</div>
+            <div style={{ fontSize: 17, fontWeight: 800, color, fontFamily: 'var(--font-mono, monospace)' }}>{v}</div>
+        </div>
+    );
 }
 
 // ─── shared style tokens ──────────────────────────────────────────────────────
