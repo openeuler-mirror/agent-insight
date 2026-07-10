@@ -2860,7 +2860,7 @@ export function projectAgentNodeExecution(node: AgentNode, interactions: any[]):
         reasoningTokens: node.stats.reasoningTokens,
         cacheReadInputTokens: node.stats.cacheReadTokens,
         cacheCreationInputTokens: node.stats.cacheWriteTokens,
-        latency: node.stats.durationMs ?? null,
+        latency: node.stats.durationMs != null ? node.stats.durationMs / 1000 : null,
         llmCallCount: meteredLlmEvents.length || fallbackLlmCalls,
         toolCallCount: toolEvents.length,
         toolCallErrorCount: toolEvents.filter(isFailedAgentToolEvent).length,

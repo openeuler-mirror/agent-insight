@@ -1,5 +1,6 @@
 import { prismaRaw } from '@/lib/storage/prisma';
 import { ensureTraceTagTables, TraceTagError, type TraceTagDto } from '@/lib/trace-tags';
+import { latencySecondsToMs } from '@/lib/latency-format';
 
 export type VersionAnalysisTrace = {
   id: string;
@@ -139,13 +140,6 @@ function questionLabel(query?: string | null): string {
   return normalized || 'Untitled question';
 }
 
-function toDisplayLatencyMs(latency: number | null, framework?: string | null): number | null {
-  if (latency == null || !Number.isFinite(latency)) return null;
-  const fw = String(framework || '').toLowerCase();
-  if ((fw === 'opencode' || fw === 'openhands' || fw === 'claude' || fw === 'claudecode') && latency > 0 && latency < 1000) return latency * 1000;
-  return latency;
-}
-
 function effectiveTokens(execution: any): number | null {
   const tokens = toNumber(execution.tokens);
   if (tokens != null) return tokens;
@@ -205,7 +199,7 @@ function toTrace(row: any, sessionEndByTaskId: Map<string, string>): VersionAnal
   const execution = row.execution;
   const taskId = execution.taskId ?? null;
   const completedAt = taskId ? sessionEndByTaskId.get(taskId) ?? null : null;
-  const latencyMs = toDisplayLatencyMs(toNumber(execution.latency), execution.framework);
+  const latencyMs = latencySecondsToMs(toNumber(execution.latency));
   return {
     id: execution.id,
     taskId,

@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `0ab6374fbb789b77321be8901a7ca24d46b3e9b4` (`0ab6374f`) |
+| Commit | `e699809b6fb664eb318b12be7a6c7fe3623c9081` (`e699809b`) |
 | Branch | `develop0228` |
-| Date | 2026-07-07T16:43:24+08:00 |
+| Date | 2026-07-09T19:30:22+08:00 |
 | Author | ljnkirito |
-| Subject | `feat: 完成标签化版本管理 MVP` |
+| Subject | `fix: 统一链路耗时单位换算` |
 
-**如何更新：** `git diff 0ab6374f HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff e699809b HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。

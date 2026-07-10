@@ -58,6 +58,7 @@ import { TruncateText } from '@/components/text/TruncateText';
 import { RelativeTime } from '@/components/text/RelativeTime';
 import { Term } from '@/components/text/Term';
 import { cn } from '@/lib/utils';
+import { formatDurationMs, formatLatencySeconds, latencySecondsToMs } from '@/lib/latency-format';
 
 const basePath = process.env.NEXT_PUBLIC_URL_PREFIX || '';
 
@@ -146,7 +147,7 @@ const DEFAULT_COLUMN_WIDTHS: Record<ResizableColKey, number> = {
     traceId:    130,
     agent:      170,
     status:     110,
-    userTags:   260,
+    userTags:   220,
     systemTags: 220,
     tokens:     110,
     time:       120,
@@ -224,19 +225,6 @@ function getFrameworkLabel(framework?: string | null): string {
         default:
             return value;
     }
-}
-
-function fmtSec(ms: number): string {
-    if (!ms || !Number.isFinite(ms)) return '-';
-    if (ms < 1000) return `${Math.round(ms)}ms`;
-    if (ms < 60000) return `${(ms / 1000).toFixed(2)}s`;
-    return `${(ms / 60000).toFixed(1)}m`;
-}
-
-function toDisplayLatencyMs(latency: number, framework?: string): number {
-    const fw = (framework || '').toLowerCase();
-    if ((fw === 'opencode' || fw === 'openhands' || fw === 'claude' || fw === 'claudecode') && latency > 0 && latency < 1000) return latency * 1000;
-    return latency;
 }
 
 function formatTimestampForDisplay(ts: number): string {
@@ -639,7 +627,7 @@ function TracePageContent() {
                         break;
                     }
                     case 'latency':
-                        cmp = toDisplayLatencyMs(a.latency || 0, a.framework) - toDisplayLatencyMs(b.latency || 0, b.framework);
+                        cmp = (latencySecondsToMs(a.latency) ?? 0) - (latencySecondsToMs(b.latency) ?? 0);
                         break;
                     case 'tokens':
                         cmp = (a.tokens || 0) - (b.tokens || 0);
@@ -670,7 +658,7 @@ function TracePageContent() {
     const stats = useMemo(() => {
         const total = filtered.length;
         const failedCount = filtered.filter(e => getExecStatus(e) === 'failed').length;
-        const avgLatencyMs = total ? filtered.reduce((s, e) => s + toDisplayLatencyMs(e.latency || 0, e.framework), 0) / total : 0;
+        const avgLatencyMs = total ? filtered.reduce((s, e) => s + (latencySecondsToMs(e.latency) ?? 0), 0) / total : 0;
         const errorCount = filtered.reduce((s, e) => s + (e.tool_call_error_count || 0), 0);
         const totalTools = filtered.reduce((s, e) => s + (e.tool_call_count || 0), 0);
         const errRate = totalTools ? Math.round((errorCount / totalTools) * 1000) / 10 : 0;
@@ -750,7 +738,7 @@ function TracePageContent() {
                                 value={String(stats.failedCount)}
                                 accent={stats.failedCount > 0 ? 'error' : undefined}
                             />
-                            <StatCard label={t('tracePage.statAvgLatency')} value={fmtSec(stats.avgLatency)} />
+                            <StatCard label={t('tracePage.statAvgLatency')} value={formatDurationMs(stats.avgLatency)} />
                             <StatCard
                                 label={<Term id="tool-error-rate" label={t('tracePage.statToolErrorRate')} align="end" />}
                                 value={`${stats.errRate}%`}
@@ -1137,7 +1125,7 @@ function TraceDetailView({
                     <MetricPill label={<Term id="tokens" label={t('tracePage.metricTokens')} />} value={tokens.toLocaleString()} />
                 )}
                 {typeof latency === 'number' && latency > 0 && (
-                    <MetricPill label={t('tracePage.metricDuration')} value={fmtSec(toDisplayLatencyMs(latency, framework))} />
+                    <MetricPill label={t('tracePage.metricDuration')} value={formatLatencySeconds(latency)} />
                 )}
                 {typeof cost === 'number' && cost > 0 && (
                     <MetricPill label={t('tracePage.metricCost')} value={`$${cost.toFixed(4)}`} />
@@ -1616,15 +1604,15 @@ function TraceTagCell({
     ) : (
         <button
             type="button"
-            className="flex min-h-8 w-full min-w-0 items-center gap-2 rounded-md border border-primary-subtle bg-primary-subtle px-2 py-1 text-left hover:border-primary hover:bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="flex min-h-7 w-full min-w-0 items-center gap-1.5 rounded-sm px-1 py-0.5 text-left hover:bg-background-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            title={t('tracePage.editTags')}
             onClick={ev => ev.stopPropagation()}
         >
             <span className="flex min-w-0 flex-1 flex-wrap gap-1">
                 {selectedTags.map(tag => <UserTagChip key={tag.id} tag={tag} />)}
             </span>
-            <span className="inline-flex h-6 shrink-0 items-center gap-1 rounded-sm bg-card px-1.5 text-xs font-medium text-primary shadow-sm">
+            <span className="inline-flex size-6 shrink-0 items-center justify-center rounded-sm text-foreground-muted">
                 <Plus className="size-3.5" aria-hidden />
-                {t('tracePage.createTag')}
             </span>
         </button>
     );
