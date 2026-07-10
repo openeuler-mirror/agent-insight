@@ -21,7 +21,9 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 RUN npm init -y \
-    && npm install --omit=dev --registry=https://registry.npmjs.org/ "agent-insight@${AGENT_INSIGHT_VERSION}"
+    && npm install --omit=dev --registry=https://registry.npmjs.org/ "agent-insight@${AGENT_INSIGHT_VERSION}" \
+    && npm cache clean --force \
+    && rm -rf "$HOME/.npm" "$HOME/.cache/prisma"
 
 RUN test -x /app/node_modules/.bin/opencode
 
@@ -29,7 +31,13 @@ COPY scripts/docker-entrypoint.sh /usr/local/bin/agent-insight-entrypoint
 
 RUN chmod +x /usr/local/bin/agent-insight-entrypoint \
     && mkdir -p /data/agent-insight \
-    && chown -R node:node /app /data/agent-insight
+    && for path in \
+        /app/node_modules/agent-insight/node_modules/.prisma \
+        /app/node_modules/agent-insight/node_modules/@prisma/client \
+        /app/node_modules/agent-insight/.next/standalone/node_modules/.prisma \
+        /app/node_modules/agent-insight/.next/standalone/node_modules/@prisma/client; \
+        do [ ! -e "$path" ] || chown -R node:node "$path"; done \
+    && chown -R node:node /data/agent-insight
 
 USER node
 

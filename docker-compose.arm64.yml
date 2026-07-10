@@ -1,0 +1,10 @@
+services:
+  agent-insight:
+    image: karaggagent/agent-insight:0.5.3-arm64
+    container_name: agent-insight
+    platform: linux/arm64
+    restart: unless-stopped
+    ports:
+      - "3033:3000"
+    volumes:
+      - ${HOME}/.agent-insight:/data/agent-insight
