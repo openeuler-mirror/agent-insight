@@ -113,6 +113,8 @@ export async function runAgentDebugDiagnosis(args: {
     workspaceTag,
     sessionTitle: `agent-debug · ${executionId}`,
     systemAgentName: FAULT_DIAGNOSIS_AGENT_NAME,
+    recordTraceAs: FAULT_DIAGNOSIS_AGENT_NAME,
+    tagSkill: AGENT_DEBUG_SKILL_NAME,
     interactionPolicy: 'auto-allow',
     agent: 'build',
     timeoutMs: Number(process.env.AGENT_DEBUG_AGENT_TIMEOUT_MS || 110_000),

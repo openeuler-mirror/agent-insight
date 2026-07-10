@@ -408,6 +408,8 @@ export async function POST(request: Request) {
           workspaceTag,
           sessionTitle: executionId ? `fault-diagnosis · ${executionId}` : 'fault-diagnosis',
           systemAgentName: 'fault-diagnosis-agent',
+          recordTraceAs: 'fault-diagnosis-agent',
+          tagSkill: 'fault-diagnosis',
           interactionPolicy: 'auto-deny',
           agent: 'plan',
           handlers,
