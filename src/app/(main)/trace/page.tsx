@@ -191,17 +191,9 @@ function getInvokedSkillNames(execution: Execution): string[] {
     return Array.from(names);
 }
 
-function getExecutionAgentNames(execution: Execution): string[] {
-    const names = new Set<string>();
-    const primary = execution.agentName?.trim() || getPrimaryExecutionAgentName(execution);
-    if (primary) names.add(primary);
-    if (Array.isArray(execution.agents)) {
-        execution.agents.forEach(agent => {
-            const name = agent?.trim();
-            if (name) names.add(name);
-        });
-    }
-    return Array.from(names);
+/** 主 Agent 名：优先 Execution.agentName，退回首个非评估器 agent。用于「按主 Agent 筛选」。 */
+function getMainAgentName(execution: Execution): string {
+    return execution.agentName?.trim() || getPrimaryExecutionAgentName(execution);
 }
 
 function getExecStatus(e: Execution): 'running' | 'success' | 'failed' {
@@ -592,7 +584,8 @@ function TracePageContent() {
         return data
             .filter(d => {
                 if (agentFilter !== 'all' && agentFilter !== '') {
-                    if (!getExecutionAgentNames(d).includes(agentFilter)) return false;
+                    // 只按**主 Agent**(agentName)匹配,而非 trace 涉及的任意 agent。
+                    if (getMainAgentName(d) !== agentFilter) return false;
                 }
                 if (winMs !== Infinity) {
                     const ts = typeof d.timestamp === 'string' ? Date.parse(d.timestamp) : Number(d.timestamp);
@@ -694,6 +687,16 @@ function TracePageContent() {
         return Array.from(set).sort();
     }, [data]);
 
+    // 主 Agent 下拉选项从当前工作集推导(去重、按名排序)。
+    const mainAgents = useMemo(() => {
+        const set = new Set<string>();
+        data.forEach(d => {
+            const name = getMainAgentName(d);
+            if (name) set.add(name);
+        });
+        return Array.from(set).sort((a, b) => a.localeCompare(b));
+    }, [data]);
+
     // Filter dropdown option sets
     const ownershipOptions: SelectOption[] = [
         { value: 'all', label: t('nav.allOwnership') },
@@ -716,6 +719,11 @@ function TracePageContent() {
     const frameworkOptions: SelectOption[] = [
         { value: 'all', label: t('common.all') },
         ...frameworks.map(f => ({ value: f, label: f })),
+    ];
+    // 主 Agent 下拉选项(全部主 Agent + 当前工作集里出现过的每个主 Agent)。
+    const mainAgentOptions: SelectOption[] = [
+        { value: 'all', label: t('tracePage.filterMainAgentAll') },
+        ...mainAgents.map(a => ({ value: a, label: a })),
     ];
     return (
         <>
@@ -762,7 +770,10 @@ function TracePageContent() {
                                 <SlidersHorizontal className="size-3.5" />
                                 {showFilters ? (locale === 'zh' ? '隐藏过滤' : 'Hide filters') : (locale === 'zh' ? '过滤' : 'Show filters')}
                             </Button>
-                            <Separator orientation="vertical" className="h-5" />
+                            {/* 固定高度竖分隔:不能用 <Separator orientation="vertical">——它带
+                                data-[orientation=vertical]:h-full 会拉伸满行高,在 flex-wrap 行里撑坏换行
+                                行盒(第二行下拉溢出、与下方列表标题重叠)。用定高 span 规避。 */}
+                            <span aria-hidden className="h-5 w-px shrink-0 self-center bg-border" />
                             <Select
                                 label={t('nav.filterAgentOwnership')}
                                 value={ownershipFilter}
@@ -797,6 +808,13 @@ function TracePageContent() {
                                 onChange={setBusinessTagFilter}
                                 options={businessTagOptions}
                                 active={businessTagFilter !== 'all'}
+                            />
+                            <Select
+                                label={t('tracePage.filterMainAgent')}
+                                value={agentFilter}
+                                onChange={setAgentFilter}
+                                options={mainAgentOptions}
+                                active={agentFilter !== 'all'}
                             />
                             <Select
                                 label={locale === 'zh' ? '范围' : 'Scope'}
