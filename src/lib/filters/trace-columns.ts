@@ -23,7 +23,7 @@ export const TRACE_FILTER_COLUMNS: readonly FilterColumn[] = [
 
   // —— 数值(可区间)——
   // ⚠️ latency 单位=**秒**:DB 原始列即秒(claude=durationMs/1000、jiuwen=ns/1e9)。
-  //    过滤值与原始列同单位,直接比较;不要标 ms(展示侧 toDisplayLatencyMs 的 ms 是另一套换算)。
+  //    过滤值与原始列同单位,直接比较;展示侧统一用 latency-format 做 ms/s/m/h 换算。
   { column: 'latency', type: 'number', label: '耗时', description: '执行时长(秒)', unit: 's', nullable: true },
   { column: 'tokens', type: 'number', label: 'Tokens', description: '总 token 数', nullable: true },
   { column: 'inputTokens', type: 'number', label: '输入 Tokens', description: '输入 token 数', nullable: true },

@@ -35,6 +35,7 @@ import { apiFetch } from '@/lib/client/api';
 import { Term } from '@/components/text/Term';
 import { formatDuration, type AgentEvent, type RawInteraction } from '@/lib/engine/observability/agent-trace';
 import { buildFaultPathSteps, type FailureTraceAnchor } from '@/lib/engine/observability/fault-path';
+import { formatLatencySeconds } from '@/lib/latency-format';
 
 const basePath = process.env.NEXT_PUBLIC_URL_PREFIX || '';
 const PAGE_SIZE_OPTIONS = [20, 50, 100] as const;
@@ -823,7 +824,7 @@ function FaultDetailView({ execution, locale, user, onBack }: { execution: Execu
                     <SessionStat label="LLM" value={String(execution.llm_call_count ?? '—')} />
                     <SessionStat label={locale === 'zh' ? '故障节点' : 'Faults'} value={String(faultSummary.faultNodeCount)} valueColor={faultSummary.faultNodeCount > 0 ? 'var(--warning,#d97706)' : undefined} />
                     <SessionStat label="Token" value={execution.tokens ? fmtTokens(execution.tokens) : '—'} />
-                    <SessionStat label={locale === 'zh' ? '耗时' : 'Duration'} value={fmtSec(toDisplayLatencyMs(execution.latency || 0, execution.framework))} />
+                    <SessionStat label={locale === 'zh' ? '耗时' : 'Duration'} value={formatLatencySeconds(execution.latency)} />
                 </div>
                 <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
                     <Link href={`${basePath}/trace?taskId=${taskId}`} className="ai-btn-s" style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
@@ -2307,19 +2308,6 @@ function pageNumbers(current: number, total: number): (number | '...')[] {
     if (current <= 3) return [1, 2, 3, 4, '...', total];
     if (current >= total - 2) return [1, '...', total - 3, total - 2, total - 1, total];
     return [1, '...', current - 1, current, current + 1, '...', total];
-}
-
-function fmtSec(ms: number): string {
-    if (!ms || !Number.isFinite(ms)) return '-';
-    if (ms < 1000) return `${Math.round(ms)}ms`;
-    if (ms < 60000) return `${(ms / 1000).toFixed(2)}s`;
-    return `${(ms / 60000).toFixed(1)}m`;
-}
-
-function toDisplayLatencyMs(latency: number, framework?: string): number {
-    const fw = (framework || '').toLowerCase();
-    if ((fw === 'opencode' || fw === 'openhands' || fw === 'claude') && latency > 0 && latency < 1000) return latency * 1000;
-    return latency;
 }
 
 function truncateText(input: string, max: number): string {

@@ -6,6 +6,7 @@ import { apiFetch } from '@/lib/client/api';
 import { useAuth } from '@/lib/auth/auth-context';
 import { useLocale } from '@/lib/client/locale-context';
 import { parseEvaluationItemsFromReason } from '@/lib/engine/evaluation/evaluation-parser';
+import { formatLatencySeconds } from '@/lib/latency-format';
 
 const basePath = process.env.NEXT_PUBLIC_URL_PREFIX || '';
 
@@ -162,7 +163,7 @@ export function SingleExecutionMetrics({ taskId }: Props) {
             {/* Performance KPIs */}
             <SectionTitle text={locale === 'zh' ? '性能指标' : 'Performance metrics'} />
             <div style={kpiGrid}>
-                <Kpi label={locale === 'zh' ? '延迟' : 'Latency'} value={fmtSec(toDisplayLatencyMs(record.latency, record.framework))} />
+                <Kpi label={locale === 'zh' ? '延迟' : 'Latency'} value={formatLatencySeconds(record.latency)} />
                 <Kpi label={locale === 'zh' ? '总 Token' : 'Total tokens'} value={fmtNum(record.tokens)} />
                 <Kpi label={locale === 'zh' ? '成本' : 'Cost'} value={typeof record.cost === 'number' && record.cost > 0 ? `$${record.cost.toFixed(4)}` : '--'} />
                 <Kpi label={locale === 'zh' ? 'LLM 调用' : 'LLM calls'} value={fmtNum(record.llm_call_count)} />
@@ -370,20 +371,6 @@ const kpiGrid: React.CSSProperties = {
     gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
     gap: 8,
 };
-
-function fmtSec(ms?: number): string {
-    if (!ms || !Number.isFinite(ms)) return '-';
-    if (ms < 1000) return `${Math.round(ms)}ms`;
-    if (ms < 60000) return `${(ms / 1000).toFixed(2)}s`;
-    return `${(ms / 60000).toFixed(1)}m`;
-}
-
-function toDisplayLatencyMs(latency?: number, framework?: string): number | undefined {
-    if (latency == null) return undefined;
-    const fw = (framework || '').toLowerCase();
-    if ((fw === 'opencode' || fw === 'openhands' || fw === 'claude') && latency > 0 && latency < 1000) return latency * 1000;
-    return latency;
-}
 
 function fmtNum(n?: number): string {
     return typeof n === 'number' ? n.toLocaleString() : '-';
