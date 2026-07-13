@@ -271,6 +271,63 @@ test("OTel traces: aggregates Langfuse LangGraph spans into skill, tool, and sub
   assert.equal(calls.some((call: any) => call.function.name === "write_report" && call.output === "report path"), true)
 })
 
+test("OTel traces: Langfuse LangGraph extracts generations from non-ChatOpenAI wrappers (ChatDeepSeek)", () => {
+  // 回归保护：generation 的识别不能再硬编码 name === "ChatOpenAI"，否则 ChatDeepSeek /
+  // ChatTongyi 等 wrapper 的 LLM 调用会被全部漏掉，trace 里只剩一个占位 user、无内容。
+  const sessionId = "langfuse-langgraph-chatdeepseek"
+  const events: OtelTraceEvent[] = [
+    traceEvent({
+      sessionId,
+      traceId: "trace-deepseek",
+      spanId: "root",
+      name: "agent-run",
+      kind: "span",
+      serviceName: "langfuse-langgraph",
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+      latencyMs: 1000,
+      startTimeMs: 1000,
+      attributes: {
+        "langfuse.internal.is_app_root": true,
+        "langfuse.observation.type": "span",
+        "langfuse.observation.input": JSON.stringify({ input: "深圳有活动吗" }),
+      },
+    }),
+    traceEvent({
+      sessionId,
+      traceId: "trace-deepseek",
+      spanId: "llm-1",
+      parentSpanId: "root",
+      name: "ChatDeepSeek",
+      kind: "llm",
+      serviceName: "langfuse-langgraph",
+      model: "deepseek-chat",
+      usage: { input_tokens: 20, output_tokens: 8, total_tokens: 28 },
+      latencyMs: 800,
+      startTimeMs: 1100,
+      attributes: {
+        "langfuse.observation.type": "generation",
+        "langfuse.observation.output": JSON.stringify({
+          role: "assistant",
+          content: "路由到 query_agent",
+        }),
+      },
+    }),
+  ]
+
+  const record = aggregateOtelTraceEvents(sessionId, events)
+
+  assert.ok(record)
+  assert.equal(record.framework, "langfuse-langgraph")
+  // 关键：ChatDeepSeek 的 generation 必须被识别（旧代码硬编码 ChatOpenAI 时这里会是 0）
+  assert.equal(record.llm_call_count, 1)
+  assert.ok((record.tokens ?? 0) > 0)
+  assert.equal(record.query, "深圳有活动吗")
+  const assistant = record.interactions?.find((interaction: any) => interaction.role === "assistant")
+  assert.ok(assistant, "应提取出 assistant 回复")
+  assert.equal(assistant.content, "路由到 query_agent")
+  assert.equal(record.final_result, "路由到 query_agent")
+})
+
 test("OTel traces: Langfuse LangGraph falls back to AI message names for unnamed internal agent spans", () => {
   const sessionId = "legacy-langgraph-agent-name"
   const events: OtelTraceEvent[] = [
