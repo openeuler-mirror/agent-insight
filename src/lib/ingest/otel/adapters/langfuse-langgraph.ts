@@ -373,7 +373,9 @@ export function aggregateLangfuseLangGraphTraceEvents(sessionId: string, events:
     DEFAULT_REPORT_SUBAGENT;
   const agentName = mainAgentName(root, input, ordered, isUnderSubagent);
 
-  const generationEvents = ordered.filter((event) => event.kind === 'llm' && event.name === 'ChatOpenAI');
+  // 任何 LLM 调用都算，不限定 chat model wrapper 的名字（ChatOpenAI / ChatDeepSeek / ChatTongyi …）。
+  // kind === 'llm' 精确对应 Langfuse 的 observation.type === 'generation'，不会误纳入 chain/tool。
+  const generationEvents = ordered.filter((event) => event.kind === 'llm');
   const interactions: AnyObj[] = [];
   const query = firstText(
     input.input,
