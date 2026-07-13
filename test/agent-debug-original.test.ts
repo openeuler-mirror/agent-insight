@@ -180,6 +180,17 @@ test('agent-debug runner uses executable opencode agent mode', () => {
   assert.doesNotMatch(runner, /agent:\s*'plan'/);
 });
 
+test('fault diagnosis trace persistence uses one mode-specific skill label', () => {
+  const generalRunner = fs.readFileSync(path.join(process.cwd(), 'src', 'lib', 'engine', 'general-agent', 'runner.ts'), 'utf-8');
+  const agentDebugRunner = fs.readFileSync(path.join(process.cwd(), 'src', 'lib', 'engine', 'agent-debug', 'runner.ts'), 'utf-8');
+  const diagnosisRoute = fs.readFileSync(path.join(process.cwd(), 'src', 'app', 'api', 'fault', 'diagnosis', 'stream', 'route.ts'), 'utf-8');
+
+  assert.ok(generalRunner.includes('const effectiveTraceSkill = skillMeta?.name ?? input.skill ?? input.tagSkill ?? systemAgentDefinition?.traceSkill'));
+  assert.equal(generalRunner.match(/skill: effectiveTraceSkill/g)?.length, 2);
+  assert.match(agentDebugRunner, /tagSkill: AGENT_DEBUG_SKILL_NAME/);
+  assert.match(diagnosisRoute, /tagSkill: 'fault-diagnosis'/);
+});
+
 test('agent-debug runner falls back to final report file', () => {
   const runner = fs.readFileSync(path.join(process.cwd(), 'src', 'lib', 'engine', 'agent-debug', 'runner.ts'), 'utf-8');
   assert.match(runner, /readAgentDebugFinalReport\(workspaceDir\)/);

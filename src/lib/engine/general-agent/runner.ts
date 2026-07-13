@@ -141,8 +141,8 @@ export interface RunGeneralAgentInput {
    * 但 trace 在逻辑上跟 B 侧被测 skill 配对, 应该归属到那个 skill。
    * 用例分析卡的 mode='batch' 也可以传, 但通常用户已经选了 input.skill, 不需要 tagSkill。
    *
-   * 优先级 (写入 internal-agent-tag.skill 时):
-   *   def?.traceSkill (SYSTEM_AGENTS 静态绑定) > input.skill > input.tagSkill
+   * 优先级 (写入 internal-agent-tag.skill 与主动落库时共用):
+   *   skillMeta.name（实际解析的 skill） > input.skill > input.tagSkill > SYSTEM_AGENTS 静态 traceSkill
    */
   tagSkill?: string;
   system?: string;
@@ -350,19 +350,18 @@ async function runGeneralAgentWithClient(
 
   // 给这条 opencode session 打"我们是哪个内部系统 Agent"的标签，让用户机器上的 plugin
   // 把会话上报到 /api/ingest/upload 时，路由能识别并填正确的 agentName/agentId/skill。
+  const systemAgentDefinition = input.systemAgentName
+    ? findSystemAgentDefinition('opencode', input.systemAgentName)
+    : undefined;
+  const effectiveTraceSkill = skillMeta?.name ?? input.skill ?? input.tagSkill ?? systemAgentDefinition?.traceSkill;
+
   if (input.systemAgentName) {
     const agentId = await getSystemAgentId('opencode', input.systemAgentName);
-    const def = findSystemAgentDefinition('opencode', input.systemAgentName);
     tagOpencodeSession(sessionId, {
       agentName: input.systemAgentName,
       agentId,
-      // skill 标签优先级:
-      //   1. def?.traceSkill — SYSTEM_AGENTS 静态绑定的内置 skill (skill-generator-agent
-      //      → 'skill-generator' 等); 跟 file-based system prompt 配对, 最权威。
-      //   2. input.skill — 运行时实际加载部署的用户 skill (A/B grayscale-skill-agent / 用例分析
-      //      mode='batch' 等场景), 让"从 Trace"按 skill 过滤能搜到这条 trace。
-      //   3. input.tagSkill — 纯标签兜底, 给 baseline (不加载 skill 但归属某 skill 对照) 用。
-      skill: def?.traceSkill || input.skill || input.tagSkill,
+      // 显式运行或归属标签优先；SYSTEM_AGENTS.traceSkill 仅在 caller 未指定时兜底。
+      skill: effectiveTraceSkill,
       displayQuery: query,
       user,
     });
@@ -499,7 +498,7 @@ async function runGeneralAgentWithClient(
         // 跟 tagOpencodeSession 同一份 skill 解析逻辑, 让 plugin 上报路径和
         // 主动写库路径填出来的 skill 字段一致——baseline 那侧也能归到对照 skill 下,
         // 从 Trace 视图按 skill 过滤能搜到。
-        skill: skillMeta?.name ?? input.skill ?? input.tagSkill,
+        skill: effectiveTraceSkill,
         skillVersion: skillMeta?.version ?? input.skillVersion,
         fallbackOutput: result.text,
       });
