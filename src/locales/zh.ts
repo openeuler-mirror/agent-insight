@@ -232,6 +232,8 @@ export const zh = {
     filterTime: '时间',
     filterPlatform: '平台',
     filterFramework: '框架',
+    filterMainAgent: '主 Agent',
+    filterMainAgentAll: '全部主 Agent',
     resetFilters: '重置',
     activeFiltersLabel: '已筛选',
     pageSize: '{{n}} 条/页',

@@ -418,19 +418,29 @@ export default function TraceFilterBar({ clauses, onChange, search, onSearchChan
                       onConfirm={commitValueStage}
                     />
                   ) : (
-                    <div className="flex gap-2">
-                      <Input
-                        autoFocus
-                        type={col.type === 'number' ? 'number' : col.type === 'datetime' ? 'datetime-local' : 'text'}
-                        value={valueText}
-                        onChange={(e) => setValueText(e.target.value)}
-                        onKeyDown={(e) => e.key === 'Enter' && commitValueStage()}
-                        placeholder={col.unit ? `值（${col.unit}）` : '值…'}
-                        className="h-8 text-sm"
+                    <div>
+                      <div className="flex gap-2">
+                        <Input
+                          autoFocus
+                          type={col.type === 'number' ? 'number' : col.type === 'datetime' ? 'datetime-local' : 'text'}
+                          value={valueText}
+                          onChange={(e) => setValueText(e.target.value)}
+                          onKeyDown={(e) => e.key === 'Enter' && commitValueStage()}
+                          placeholder={col.unit ? `值（${col.unit}）` : '值…'}
+                          className="h-8 text-sm"
+                        />
+                        <Button size="sm" className="h-8 text-xs shrink-0" onClick={commitValueStage}>
+                          添加
+                        </Button>
+                      </div>
+                      {/* FACETED 的文本列(agentName/model):输入下方给「实际存在的值 + 件数」建议,
+                          随输入实时过滤(搜索引擎式)。点击=按当前操作符直接成 chip,免手打全名。
+                          facet 已由上方 effect 拉取;非 FACETED 文本列 facet 为空,自然不渲染。 */}
+                      <ValueSuggestions
+                        facet={facet}
+                        query={valueText}
+                        onPick={(v) => addClause({ column: col.column, operator: op, value: v })}
                       />
-                      <Button size="sm" className="h-8 text-xs shrink-0" onClick={commitValueStage}>
-                        添加
-                      </Button>
                     </div>
                   )}
                 </div>
@@ -439,6 +449,45 @@ export default function TraceFilterBar({ clauses, onChange, search, onSearchChan
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/** 文本值录入下方的建议列表:facet 值按输入实时子串过滤(不区分大小写),点击直接提交。 */
+function ValueSuggestions({
+  facet,
+  query,
+  onPick,
+}: {
+  facet: { value: string; count: number }[];
+  query: string;
+  onPick: (value: string) => void;
+}) {
+  const q = query.trim().toLowerCase();
+  const matches = useMemo(
+    () => facet.filter((f) => !q || f.value.toLowerCase().includes(q)).slice(0, 8),
+    [facet, q],
+  );
+  if (matches.length === 0) return null;
+  return (
+    <div className="mt-2">
+      <div className="px-1 pb-1 text-[11px] font-medium uppercase tracking-wide text-foreground-muted">
+        建议
+      </div>
+      <ul className="max-h-48 overflow-auto">
+        {matches.map((f) => (
+          <li key={f.value}>
+            <button
+              type="button"
+              onClick={() => onPick(f.value)}
+              className="flex w-full items-center justify-between gap-3 rounded px-2 py-1.5 text-left text-sm hover:bg-background-secondary"
+            >
+              <span className="truncate">{f.value}</span>
+              <span className="shrink-0 text-xs tabular-nums text-foreground-muted">{f.count}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
