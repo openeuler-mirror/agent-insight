@@ -499,6 +499,19 @@ test("OTel traces: Langfuse LangGraph supervisor multi-agent — query from requ
   // 纯文本工具输出里的 \uXXXX 转义被解码还原成中文
   const sqlCall = calls.find((c: any) => c.function.name === "synthesize_sql")
   assert.equal(sqlCall?.output, "共 0 条，全部展示")
+  // 路由型子 agent 合成 task 锚点：主流程 assistant 上应有两个 task 调用
+  const taskCalls = (record.interactions || [])
+    .flatMap((i: any) => (i.tool_calls || []).filter((c: any) => c.function?.name === "task"))
+  assert.equal(taskCalls.length, 2)
+  const taskArgs = taskCalls.map((c: any) => JSON.parse(c.function.arguments))
+  assert.deepEqual(taskArgs.map((a: any) => a.subagent_type).sort(), ["qa_agent", "query_agent"])
+  assert.ok(taskArgs.every((a: any) => a.subagent_session_id), "task 锚点应带 subagent_session_id")
+  // 终极验证：详情页的 agent 树真能开出两个子节点（此前只有 multi-agent 标签、树上无子节点）
+  const tree = buildAgentCallTree(record.interactions as any[])
+  assert.ok(tree)
+  assert.equal(tree.children.length, 2)
+  assert.deepEqual(tree.children.map((c: any) => c.subagentType).sort(), ["qa_agent", "query_agent"])
+  assert.deepEqual(tree.children.map((c: any) => c.agentName).sort(), ["qa_agent", "query_agent"])
 })
 
 test("OTel traces: Langfuse LangGraph falls back to AI message names for unnamed internal agent spans", () => {

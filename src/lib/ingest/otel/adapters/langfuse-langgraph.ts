@@ -488,7 +488,8 @@ export function aggregateLangfuseLangGraphTraceEvents(sessionId: string, events:
     DEFAULT_REPORT_SUBAGENT;
   const legacySubagentSessionId = legacySubagentTool ? stableSubagentSession(sessionId, legacySubagentTool) : undefined;
 
-  const subagentScopes = new Map<string, { name: string; sessionId: string }>();
+  type SubagentScope = { name: string; sessionId: string; origin: 'agent-span' | 'legacy-tool' };
+  const subagentScopes = new Map<string, SubagentScope>();
   for (const span of ordered) {
     if (span.kind !== 'agent' || !span.spanId) continue;
     if (!isBusinessAgentName(span.name)) continue;
@@ -496,17 +497,19 @@ export function aggregateLangfuseLangGraphTraceEvents(sessionId: string, events:
     subagentScopes.set(span.spanId, {
       name: firstText(span.name) || DEFAULT_REPORT_SUBAGENT,
       sessionId: stableSubagentSession(sessionId, span),
+      origin: 'agent-span',
     });
   }
   if (legacySubagentTool?.spanId && legacySubagentSessionId) {
     subagentScopes.set(legacySubagentTool.spanId, {
       name: legacySubagentName,
       sessionId: legacySubagentSessionId,
+      origin: 'legacy-tool',
     });
   }
 
   // 就近原则：一个事件属于「最近的子 agent 祖先」的作用域
-  const subagentScopeFor = (event: OtelTraceEvent): { name: string; sessionId: string } | undefined => {
+  const subagentScopeFor = (event: OtelTraceEvent): SubagentScope | undefined => {
     let current = event.parentSpanId ? byId.get(event.parentSpanId) : undefined;
     const seen = new Set<string>();
     while (current?.spanId && !seen.has(current.spanId)) {
@@ -542,6 +545,7 @@ export function aggregateLangfuseLangGraphTraceEvents(sessionId: string, events:
   });
 
   const seenScopeSystems = new Set<string>();
+  const spawnedScopes = new Set<string>();
   for (const event of generationEvents) {
     const scope = subagentScopeFor(event);
     // 每个作用域第一次出现 generation 时，把它入参里的系统提示词插为 role=system 消息
@@ -557,6 +561,47 @@ export function aggregateLangfuseLangGraphTraceEvents(sessionId: string, events:
           scope,
         }));
       }
+    }
+    // 路由型子 agent（supervisor 转移，无真实工具调用）合成一个 task 锚点：
+    // agent 树（buildAgentCallTree）只在看到 task 调用时才会开出子节点，随后用
+    // arguments.subagent_session_id 与 role=subagent 的消息配对。legacy 的
+    // call_report_subagent 已由 normalizeToolCall 映射成 task，不重复合成。
+    if (scope && scope.origin === 'agent-span' && !spawnedScopes.has(scope.sessionId)) {
+      spawnedScopes.add(scope.sessionId);
+      const taskCall: AnyObj = {
+        id: `task-${scope.sessionId}`,
+        type: 'function',
+        state: 'success',
+        function: {
+          name: 'task',
+          arguments: JSON.stringify({
+            subagent_type: scope.name,
+            description: `route to ${scope.name}`,
+            subagent_session_id: scope.sessionId,
+            source_tool: 'langgraph_route',
+          }),
+        },
+      };
+      let anchor: AnyObj | undefined;
+      for (let i = interactions.length - 1; i >= 0; i--) {
+        if (interactions[i].role === 'assistant') {
+          anchor = interactions[i];
+          break;
+        }
+      }
+      if (!anchor) {
+        anchor = {
+          role: 'assistant',
+          content: '',
+          agent: agentName,
+          timestamp: toIso(eventStart(event)),
+          timeInfo: { created: toIso(eventStart(event)), completed: toIso(eventStart(event)) },
+          traceId: event.traceId,
+          spanId: `${scope.sessionId}:spawn`,
+        };
+        interactions.push(anchor);
+      }
+      anchor.tool_calls = Array.isArray(anchor.tool_calls) ? [...anchor.tool_calls, taskCall] : [taskCall];
     }
     interactions.push(interactionFromGeneration({
       event,
