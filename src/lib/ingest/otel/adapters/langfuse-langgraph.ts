@@ -106,6 +106,36 @@ function parsedGenerationOutput(event: OtelTraceEvent): AnyObj {
   return objectFromJson(attr(event, 'langfuse.observation.output'));
 }
 
+function normalizeMessageRole(value: any): string {
+  const role = (firstText(value) || 'user').toLowerCase();
+  if (role === 'human') return 'user';
+  if (role === 'ai') return 'assistant';
+  return role;
+}
+
+// generation 的完整入参消息（系统提示词 + 上下文历史），转成 {role, content} 列表。
+// Langfuse 的 generation input 是 [{role,content},...]（或 {messages:[...]}）。
+function requestMessagesFromGeneration(event: OtelTraceEvent): AnyObj[] {
+  const parsed = parseJson(attr(event, 'langfuse.observation.input'));
+  const list = Array.isArray(parsed)
+    ? parsed
+    : Array.isArray(parsed?.messages) ? parsed.messages : [];
+  const out: AnyObj[] = [];
+  for (const message of list) {
+    if (!message || typeof message !== 'object' || Array.isArray(message)) continue;
+    const content = text(message.content);
+    if (!content) continue;
+    out.push({ role: normalizeMessageRole(message.role ?? message.type), content });
+  }
+  return out;
+}
+
+// 从入参消息里拼出系统提示词文本（可能有多条 system，拼接）
+function systemTextFromMessages(messages: AnyObj[]): string | undefined {
+  const parts = messages.filter((m) => m.role === 'system').map((m) => m.content);
+  return parts.length ? parts.join('\n\n---\n\n') : undefined;
+}
+
 function parsedToolOutput(event: OtelTraceEvent): any {
   return parseJson(attr(event, 'langfuse.observation.output'));
 }
@@ -292,7 +322,32 @@ function interactionFromGeneration(args: {
     interaction.subagent_session_id = subagentSessionId;
   }
   if (toolCalls.length) interaction.tool_calls = toolCalls;
+  // 完整入参消息（含系统提示词/上下文），下载与详情里可见，避免只剩 output 一层皮
+  const requestMessages = requestMessagesFromGeneration(event);
+  if (requestMessages.length) interaction.requestMessages = requestMessages;
   return interaction;
+}
+
+// 每个作用域（主流程 / 各子 agent）首个 generation 的系统提示词，产一条 role=system 的
+// interaction 进对话流（与 hermes adapter 的 makeSystemInteraction 形态对齐，前端据此展示）。
+function makeSystemInteraction(args: {
+  event: OtelTraceEvent;
+  content: string;
+  agent: string;
+  scope?: { name: string; sessionId: string };
+}): AnyObj {
+  const created = eventStart(args.event);
+  return {
+    role: 'system',
+    agent: args.agent,
+    content: args.content,
+    system_prompt_length: args.content.length,
+    timestamp: toIso(created),
+    timeInfo: { created: toIso(created), completed: toIso(created) },
+    traceId: args.event.traceId,
+    spanId: `${args.event.spanId || 'llm'}:system`,
+    ...(args.scope ? { subagent_name: args.scope.name, subagent_session_id: args.scope.sessionId } : {}),
+  };
 }
 
 function findRoot(events: OtelTraceEvent[]): OtelTraceEvent | undefined {
@@ -462,8 +517,23 @@ export function aggregateLangfuseLangGraphTraceEvents(sessionId: string, events:
     timeInfo: { created: toIso(eventStart(root)) },
   });
 
+  const seenScopeSystems = new Set<string>();
   for (const event of generationEvents) {
     const scope = subagentScopeFor(event);
+    // 每个作用域第一次出现 generation 时，把它入参里的系统提示词插为 role=system 消息
+    const scopeKey = scope?.sessionId || 'main';
+    if (!seenScopeSystems.has(scopeKey)) {
+      seenScopeSystems.add(scopeKey);
+      const systemText = systemTextFromMessages(requestMessagesFromGeneration(event));
+      if (systemText) {
+        interactions.push(makeSystemInteraction({
+          event,
+          content: systemText,
+          agent: scope?.name || agentName,
+          scope,
+        }));
+      }
+    }
     interactions.push(interactionFromGeneration({
       event,
       skillName,

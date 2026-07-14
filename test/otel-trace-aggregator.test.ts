@@ -372,6 +372,10 @@ test("OTel traces: Langfuse LangGraph supervisor multi-agent — query from requ
       latencyMs: 500,
       attributes: {
         "langfuse.observation.type": "generation",
+        "langfuse.observation.input": JSON.stringify([
+          { role: "system", content: "你是一个智能知识助手的意图识别器。" },
+          { role: "user", content: "盖宇行发布了哪些文章？" },
+        ]),
         "langfuse.observation.output": JSON.stringify({ role: "assistant", content: "{\"next\": \"query_agent\"}" }),
       },
     }),
@@ -396,6 +400,10 @@ test("OTel traces: Langfuse LangGraph supervisor multi-agent — query from requ
       latencyMs: 800,
       attributes: {
         "langfuse.observation.type": "generation",
+        "langfuse.observation.input": JSON.stringify([
+          { role: "system", content: "你是「结构化查询助手」。根据用户中文诉求调度工具。" },
+          { role: "user", content: "盖宇行发布了哪些文章？" },
+        ]),
         "langfuse.observation.output": JSON.stringify({
           role: "assistant",
           content: "",
@@ -436,6 +444,11 @@ test("OTel traces: Langfuse LangGraph supervisor multi-agent — query from requ
       latencyMs: 700,
       attributes: {
         "langfuse.observation.type": "generation",
+        // type=human/system 变体（LangChain 序列化消息形态）
+        "langfuse.observation.input": JSON.stringify([
+          { type: "system", content: "你是一个知识问答助手。根据用户问题检索文档内容并给出准确回答。" },
+          { type: "human", content: "盖宇行 发布 文章" },
+        ]),
         "langfuse.observation.output": JSON.stringify({ role: "assistant", content: "在知识库和数据库中均未查询到相关文章。" }),
       },
     }),
@@ -464,6 +477,17 @@ test("OTel traces: Langfuse LangGraph supervisor multi-agent — query from requ
   // 子 agent 内的 tool_call 正常挂上输出
   const calls = subs.flatMap((i: any) => i.tool_calls || [])
   assert.equal(calls.some((c: any) => c.function.name === "synthesize_sql" && c.state === "success"), true)
+  // 系统提示词进对话流：主流程 + 两个子 agent 各一条 role=system
+  const systems = record.interactions?.filter((i: any) => i.role === "system") || []
+  assert.equal(systems.length, 3)
+  assert.ok(systems.some((i: any) => i.content.includes("意图识别器") && !i.subagent_session_id), "主流程系统提示词")
+  assert.ok(systems.some((i: any) => i.subagent_name === "query_agent" && i.content.includes("结构化查询助手")), "query_agent 系统提示词")
+  assert.ok(systems.some((i: any) => i.subagent_name === "qa_agent" && i.content.includes("知识问答助手")), "qa_agent 系统提示词（type=system 变体）")
+  // 每条 generation interaction 挂完整入参消息（含 system + 上下文）
+  assert.equal(supervisor.requestMessages?.[0]?.role, "system")
+  assert.equal(supervisor.requestMessages?.[1]?.role, "user")
+  const qaInteraction = subs.find((i: any) => i.subagent_name === "qa_agent")
+  assert.equal(qaInteraction?.requestMessages?.[1]?.role, "user", "type=human 应归一成 user")
 })
 
 test("OTel traces: Langfuse LangGraph falls back to AI message names for unnamed internal agent spans", () => {
