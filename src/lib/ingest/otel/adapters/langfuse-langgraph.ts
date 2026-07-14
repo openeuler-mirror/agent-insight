@@ -136,8 +136,21 @@ function systemTextFromMessages(messages: AnyObj[]): string | undefined {
   return parts.length ? parts.join('\n\n---\n\n') : undefined;
 }
 
+// Python json.dumps 默认 ensure_ascii=True，中文会变成 在技 形态的转义；
+// 凡是没再经过 JSON.parse 的展示文本，这里解码一遍还原成可读中文。
+function decodeUnicodeEscapes(value: string | undefined): string | undefined {
+  if (!value || !/\\u[0-9a-fA-F]{4}/.test(value)) return value;
+  try {
+    return value.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+  } catch {
+    return value;
+  }
+}
+
 function parsedToolOutput(event: OtelTraceEvent): any {
-  return parseJson(attr(event, 'langfuse.observation.output'));
+  const parsed = parseJson(attr(event, 'langfuse.observation.output'));
+  // parse 成功的对象/已还原字符串没问题；parse 不动的纯文本可能还带 \uXXXX 转义
+  return typeof parsed === 'string' ? decodeUnicodeEscapes(parsed) : parsed;
 }
 
 function toolCallArgs(call: AnyObj): AnyObj {
@@ -304,9 +317,16 @@ function interactionFromGeneration(args: {
   const toolCalls = Array.isArray(output.tool_calls)
     ? output.tool_calls.map((call: AnyObj) => normalizeToolCall(call, skillName, subagentSessionId, subagentName))
     : [];
+  // content 取值：
+  // 1) output.content（parse 过，中文正常）；
+  // 2) 纯工具调用（content 空 + 有 tool_calls）→ 留空，工具卡片已承载信息，
+  //    不再把整个 output JSON 原文塞进来（那正是界面出现 \uXXXX 乱码的来源）；
+  // 3) 其余兜底原始 output 文本，但先解码 \uXXXX。
+  const contentText = firstText(output.content)
+    || (toolCalls.length ? '' : decodeUnicodeEscapes(text(attr(event, 'langfuse.observation.output'))) || '');
   const interaction: AnyObj = {
     role: isSubagent ? 'subagent' : 'assistant',
-    content: firstText(output.content, attr(event, 'langfuse.observation.output')) || '',
+    content: contentText,
     agent: isSubagent ? subagentName : mainAgentName,
     model: event.model,
     usage: usage(event),
@@ -322,6 +342,10 @@ function interactionFromGeneration(args: {
     interaction.subagent_session_id = subagentSessionId;
   }
   if (toolCalls.length) interaction.tool_calls = toolCalls;
+  // DeepSeek 等模型的思考过程（additional_kwargs.reasoning_content）单独提出来，
+  // 挂到 parts[type='reasoning']（trace UI 的思考块约定，与 claude-otel adapter 对齐）
+  const reasoning = text(output?.additional_kwargs?.reasoning_content);
+  if (reasoning) interaction.parts = [{ type: 'reasoning', text: reasoning }];
   // 完整入参消息（含系统提示词/上下文），下载与详情里可见，避免只剩 output 一层皮
   const requestMessages = requestMessagesFromGeneration(event);
   if (requestMessages.length) interaction.requestMessages = requestMessages;

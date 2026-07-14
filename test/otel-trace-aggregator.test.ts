@@ -408,6 +408,7 @@ test("OTel traces: Langfuse LangGraph supervisor multi-agent — query from requ
           role: "assistant",
           content: "",
           tool_calls: [{ name: "synthesize_sql", args: { question: "盖宇行发布了哪些文章？" }, id: "t1", type: "tool_call" }],
+          additional_kwargs: { reasoning_content: "用户询问盖宇行发布的文章，需要调用SQL工具查询。" },
         }),
       },
     }),
@@ -420,7 +421,8 @@ test("OTel traces: Langfuse LangGraph supervisor multi-agent — query from requ
       latencyMs: 300,
       attributes: {
         "langfuse.observation.type": "tool",
-        "langfuse.observation.output": JSON.stringify({ sql: "SELECT 1", valid: true }),
+        // 纯文本工具输出，带 Python ensure_ascii 的 \uXXXX 转义（parse 不动 → 走解码兜底）
+        "langfuse.observation.output": "\\u5171 0 \\u6761\\uff0c\\u5168\\u90e8\\u5c55\\u793a",
       },
     }),
     // 子 agent 2：qa_agent（具名 kind=agent），产出最终回答
@@ -488,6 +490,15 @@ test("OTel traces: Langfuse LangGraph supervisor multi-agent — query from requ
   assert.equal(supervisor.requestMessages?.[1]?.role, "user")
   const qaInteraction = subs.find((i: any) => i.subagent_name === "qa_agent")
   assert.equal(qaInteraction?.requestMessages?.[1]?.role, "user", "type=human 应归一成 user")
+  // 纯工具调用的 assistant：content 留空，不再把原始 output JSON（\uXXXX 乱码来源）塞进去
+  const qLlm = subs.find((i: any) => i.spanId === "q-llm")
+  assert.equal(qLlm?.content, "")
+  // DeepSeek 思考过程提取到 parts[type=reasoning]（trace UI 思考块约定）
+  assert.equal(qLlm?.parts?.[0]?.type, "reasoning")
+  assert.ok(qLlm?.parts?.[0]?.text.includes("盖宇行"))
+  // 纯文本工具输出里的 \uXXXX 转义被解码还原成中文
+  const sqlCall = calls.find((c: any) => c.function.name === "synthesize_sql")
+  assert.equal(sqlCall?.output, "共 0 条，全部展示")
 })
 
 test("OTel traces: Langfuse LangGraph falls back to AI message names for unnamed internal agent spans", () => {
