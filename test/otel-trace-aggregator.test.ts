@@ -514,6 +514,66 @@ test("OTel traces: Langfuse LangGraph supervisor multi-agent — query from requ
   assert.deepEqual(tree.children.map((c: any) => c.agentName).sort(), ["qa_agent", "query_agent"])
 })
 
+test("OTel traces: pure Langfuse SDK traces (non-LangGraph) take the langfuse adapter and get a completion time", () => {
+  // 按真实"一直执行中"trace 建模：非 LangGraph 的纯 Langfuse SDK 埋点服务调用
+  // （serviceName='langfuse'，chain root + 1 个 generation）。此前落 generic 兜底：
+  // 不产 trace_completed_at（Session.endTime 恒空 → 界面永远"执行中"）、query 兜底
+  // 'OTel Session'、chain 被当 tool。
+  const sessionId = "pure-langfuse-observe"
+  const events: OtelTraceEvent[] = [
+    traceEvent({
+      sessionId,
+      traceId: "trace-pure-lf",
+      spanId: "svc-root",
+      name: "AssistantService.trending",
+      kind: "chain",
+      serviceName: "langfuse",
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+      startTimeMs: 1000,
+      latencyMs: 8000,
+      attributes: {
+        "langfuse.observation.type": "chain",
+        "langfuse.observation.input": JSON.stringify({ request: { uid: "1011", limit: 10 } }),
+      },
+    }),
+    traceEvent({
+      sessionId,
+      traceId: "trace-pure-lf",
+      spanId: "svc-llm",
+      parentSpanId: "svc-root",
+      name: "ChatDeepSeek",
+      kind: "llm",
+      serviceName: "langfuse",
+      model: "Qwen3.5-122B-A10B",
+      usage: { input_tokens: 3159, output_tokens: 194, total_tokens: 3353 },
+      startTimeMs: 2000,
+      latencyMs: 4000,
+      attributes: {
+        "langfuse.observation.type": "generation",
+        "langfuse.observation.input": JSON.stringify([
+          { role: "system", content: "你是推荐问题生成器。" },
+          { role: "user", content: "生成10个热门问题" },
+        ]),
+        "langfuse.observation.output": JSON.stringify({ role: "assistant", content: "1. 什么是KV缓存…" }),
+      },
+    }),
+  ]
+
+  const record = aggregateOtelTraceEvents(sessionId, events)
+
+  assert.ok(record)
+  // 走 langfuse 专用 adapter，但 framework 保留真实来源（不冒充 langfuse-langgraph）
+  assert.equal(record.framework, "langfuse")
+  // 关键：有完成时间 → Session.endTime 能写上 → 不再永远"执行中"
+  assert.ok(record.trace_completed_at)
+  // query 从 LLM 入参深挖，不再是 generic 的 'OTel Session'
+  assert.equal(record.query, "生成10个热门问题")
+  assert.equal(record.final_result, "1. 什么是KV缓存…")
+  // chain 结构 span 不再被当成 tool
+  assert.equal(record.tool_call_count, 0)
+  assert.equal(record.llm_call_count, 1)
+})
+
 test("OTel traces: Langfuse LangGraph falls back to AI message names for unnamed internal agent spans", () => {
   const sessionId = "legacy-langgraph-agent-name"
   const events: OtelTraceEvent[] = [

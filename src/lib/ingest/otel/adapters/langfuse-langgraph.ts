@@ -632,7 +632,8 @@ export function aggregateLangfuseLangGraphTraceEvents(sessionId: string, events:
   return {
     task_id: sessionId,
     query,
-    framework: LANGFUSE_LANGGRAPH_FRAMEWORK,
+    // 保留真实来源区分：langgraph 集成标 langfuse-langgraph，纯 Langfuse SDK 埋点标 langfuse
+    framework: firstText(ordered.find((event) => event.serviceName)?.serviceName) || LANGFUSE_LANGGRAPH_FRAMEWORK,
     model: firstText(input.model, metadata(root, 'model'), modelEvent?.model) || 'unknown',
     tokens: usageEvents.reduce((sum, event) => sum + tokenTotal(event), 0),
     latency: Math.max(0, end - start),
@@ -641,7 +642,7 @@ export function aggregateLangfuseLangGraphTraceEvents(sessionId: string, events:
     trace_completed_at: toIso(end),
     force_query_update: true,
     session_merge_strategy: 'snapshot-replace',
-    label: LANGFUSE_LANGGRAPH_FRAMEWORK,
+    label: firstText(ordered.find((event) => event.serviceName)?.serviceName) || LANGFUSE_LANGGRAPH_FRAMEWORK,
     user: ordered.find((event) => event.user)?.user || 'anonymous',
     interactions,
     skill: skillName,
@@ -661,6 +662,10 @@ export function aggregateLangfuseLangGraphTraceEvents(sessionId: string, events:
 
 export const langfuseLangGraphOtelTraceAdapter: OtelTraceAdapter = {
   id: LANGFUSE_LANGGRAPH_FRAMEWORK,
-  matches: (events) => events.some((event) => event.serviceName === LANGFUSE_LANGGRAPH_FRAMEWORK),
+  // 所有 Langfuse 语义的数据都走本 adapter：非 LangGraph 的纯 Langfuse SDK 埋点
+  // （serviceName='langfuse'）此前落到 generic 兜底——不产 trace_completed_at（Session.endTime
+  // 恒空，界面永远"执行中"），且把 chain span 当 tool、arguments 塞原始属性。
+  matches: (events) => events.some((event) =>
+    event.serviceName === LANGFUSE_LANGGRAPH_FRAMEWORK || event.serviceName === 'langfuse'),
   aggregate: aggregateLangfuseLangGraphTraceEvents,
 };
