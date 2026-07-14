@@ -559,7 +559,18 @@ function interactionToEvents(it: RawInteraction, idx: number): AgentEvent[] {
     // tool calls orphan-attach to an earlier turn, and the LLM steps disappear
     // from the timeline entirely.
     const isAssistantLike = it.role === 'assistant' || it.role === 'subagent' || it.role === 'opencode';
-    const llmSummary = contentText.trim() ? contentText : extractPartsText(it.parts, 'reasoning');
+    // Summary fallback chain: visible text → reasoning → tool names. Tool-only turns
+    // with no reasoning (content deliberately left empty by adapters) otherwise render
+    // a blank LLM row in the timeline while the right-hand output panel has content.
+    const toolNamesSummary = () => {
+        const names = calls
+            .map((c: any) => c?.function?.name || c?.name)
+            .filter(Boolean);
+        return names.length ? `调用工具：${names.join('、')}` : '';
+    };
+    const llmSummary = contentText.trim()
+        ? contentText
+        : extractPartsText(it.parts, 'reasoning') || toolNamesSummary();
 
     if (calls.length === 0) {
         // Pure LLM response with no tool calls — emit an llm event if it produced
