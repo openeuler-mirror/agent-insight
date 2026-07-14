@@ -514,6 +514,22 @@ test("OTel traces: Langfuse LangGraph supervisor multi-agent — query from requ
   assert.deepEqual(tree.children.map((c: any) => c.agentName).sort(), ["qa_agent", "query_agent"])
 })
 
+test("Agent tree: tool-only LLM turns without reasoning fall back to tool-name summary", () => {
+  // 纯工具调用轮次：content 为空（adapter 防乱码故意留空）且无 reasoning——
+  // 时间线上的 LLM 行摘要不能空白，应兜底显示工具名。
+  const tree = buildAgentCallTree([
+    { role: "user", content: "查一下", agent: "a", timestamp: "2026-07-14T00:00:00.000Z" },
+    {
+      role: "assistant", content: "", agent: "a", timestamp: "2026-07-14T00:00:01.000Z",
+      tool_calls: [{ id: "t1", type: "function", state: "success", function: { name: "synthesize_sql", arguments: "{}" } }],
+    },
+  ] as any[])
+  assert.ok(tree)
+  const llmEvents = (tree.events || []).filter((e: any) => e.kind === "llm")
+  assert.equal(llmEvents.length, 1)
+  assert.ok(llmEvents[0].summary.includes("synthesize_sql"), "空 content 无 reasoning 时摘要应含工具名")
+})
+
 test("OTel traces: pure Langfuse SDK traces (non-LangGraph) take the langfuse adapter and get a completion time", () => {
   // 按真实"一直执行中"trace 建模：非 LangGraph 的纯 Langfuse SDK 埋点服务调用
   // （serviceName='langfuse'，chain root + 1 个 generation）。此前落 generic 兜底：
