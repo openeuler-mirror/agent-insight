@@ -130,6 +130,38 @@ function subagentNameFromTool(tool: OtelTraceEvent | undefined): string | undefi
   return subagentNameFromArgs(objectFromJson(attr(tool, 'langfuse.observation.input')));
 }
 
+function userMessageText(message: any): string | undefined {
+  if (!message || typeof message !== 'object' || Array.isArray(message)) return undefined;
+  const role = String(message.role ?? message.type ?? '').toLowerCase();
+  if (role !== 'user' && role !== 'human') return undefined;
+  return text(message.content);
+}
+
+// 在应用私有的 root input 结构里深挖「最后一条用户消息」作为 query。
+// 兼容 {messages:[...]}（LangChain 序列化，type=human）与 {request:{history:[...]}}（业务网关，role=user）
+// 等嵌套结构；数组从后往前找，保证多轮会话取的是当前这一轮的问题。
+function lastUserMessageText(value: any, depth = 0): string | undefined {
+  if (value == null || depth > 8) return undefined;
+  if (Array.isArray(value)) {
+    for (let i = value.length - 1; i >= 0; i--) {
+      const hit = userMessageText(value[i]) ?? lastUserMessageText(value[i], depth + 1);
+      if (hit) return hit;
+    }
+    return undefined;
+  }
+  if (typeof value !== 'object') return undefined;
+  for (const key of ['history', 'messages']) {
+    const hit = lastUserMessageText((value as AnyObj)[key], depth + 1);
+    if (hit) return hit;
+  }
+  for (const [key, child] of Object.entries(value)) {
+    if (key === 'history' || key === 'messages') continue;
+    const hit = lastUserMessageText(child, depth + 1);
+    if (hit) return hit;
+  }
+  return undefined;
+}
+
 function normalizeToolCall(
   call: AnyObj,
   skillName: string | undefined,
@@ -362,15 +394,51 @@ export function aggregateLangfuseLangGraphTraceEvents(sessionId: string, events:
     metadata(root, 'skill'),
     ordered.map((event) => metadata(event, 'skill')).find(Boolean),
   );
-  const subagentTool = ordered.find((event) => event.kind === 'tool' && event.name === 'call_report_subagent');
-  const subagentSessionId = subagentTool ? stableSubagentSession(sessionId, subagentTool) : undefined;
-  const isUnderSubagent = (event: OtelTraceEvent) =>
+  // 子 agent 识别，两种机制并存：
+  // 1) 通用：具名的 kind=agent span（LangGraph supervisor/多 agent 模式，如 query_agent、qa_agent）。
+  //    要求非 root 且父 span 可解析，避免把单 agent 应用的顶层 agent span 误判成子 agent；
+  //    内部结构节点（name='agent' 等 INTERNAL_LANGGRAPH_NAMES）由 isBusinessAgentName 过滤。
+  // 2) 兼容旧路径：call_report_subagent 工具 span（demo/server-troubleshooter 形态）。
+  const legacySubagentTool = ordered.find((event) => event.kind === 'tool' && event.name === 'call_report_subagent');
+  const legacyIsUnder = (event: OtelTraceEvent) =>
     hasAncestor(event, byId, (ancestor) => ancestor.kind === 'tool' && ancestor.name === 'call_report_subagent');
-  const subagentName =
-    subagentNameFromTool(subagentTool) ||
-    graphSpanName(ordered, isUnderSubagent) ||
-    outputAgentName(ordered, isUnderSubagent) ||
+  const legacySubagentName =
+    subagentNameFromTool(legacySubagentTool) ||
+    graphSpanName(ordered, legacyIsUnder) ||
+    outputAgentName(ordered, legacyIsUnder) ||
     DEFAULT_REPORT_SUBAGENT;
+  const legacySubagentSessionId = legacySubagentTool ? stableSubagentSession(sessionId, legacySubagentTool) : undefined;
+
+  const subagentScopes = new Map<string, { name: string; sessionId: string }>();
+  for (const span of ordered) {
+    if (span.kind !== 'agent' || !span.spanId) continue;
+    if (!isBusinessAgentName(span.name)) continue;
+    if (span === root || !span.parentSpanId || !byId.has(span.parentSpanId)) continue;
+    subagentScopes.set(span.spanId, {
+      name: firstText(span.name) || DEFAULT_REPORT_SUBAGENT,
+      sessionId: stableSubagentSession(sessionId, span),
+    });
+  }
+  if (legacySubagentTool?.spanId && legacySubagentSessionId) {
+    subagentScopes.set(legacySubagentTool.spanId, {
+      name: legacySubagentName,
+      sessionId: legacySubagentSessionId,
+    });
+  }
+
+  // 就近原则：一个事件属于「最近的子 agent 祖先」的作用域
+  const subagentScopeFor = (event: OtelTraceEvent): { name: string; sessionId: string } | undefined => {
+    let current = event.parentSpanId ? byId.get(event.parentSpanId) : undefined;
+    const seen = new Set<string>();
+    while (current?.spanId && !seen.has(current.spanId)) {
+      const scope = subagentScopes.get(current.spanId);
+      if (scope) return scope;
+      seen.add(current.spanId);
+      current = current.parentSpanId ? byId.get(current.parentSpanId) : undefined;
+    }
+    return undefined;
+  };
+  const isUnderSubagent = (event: OtelTraceEvent) => !!subagentScopeFor(event);
   const agentName = mainAgentName(root, input, ordered, isUnderSubagent);
 
   // 任何 LLM 调用都算，不限定 chat model wrapper 的名字（ChatOpenAI / ChatDeepSeek / ChatTongyi …）。
@@ -380,6 +448,10 @@ export function aggregateLangfuseLangGraphTraceEvents(sessionId: string, events:
   const query = firstText(
     input.input,
     metadata(root, 'input'),
+    // 应用私有 root input（如 {request:{history:[{role:'user',...}]}}）里深挖用户问题
+    lastUserMessageText(input),
+    // 再退一步：从第一个 LLM 调用的入参消息里找用户问题
+    lastUserMessageText(parseJson(attr(generationEvents[0], 'langfuse.observation.input'))),
     attr(generationEvents[0], 'langfuse.trace.metadata.input'),
   ) || 'Langfuse LangGraph Session';
   interactions.push({
@@ -391,22 +463,26 @@ export function aggregateLangfuseLangGraphTraceEvents(sessionId: string, events:
   });
 
   for (const event of generationEvents) {
+    const scope = subagentScopeFor(event);
     interactions.push(interactionFromGeneration({
       event,
       skillName,
       mainAgentName: agentName,
-      isSubagent: isUnderSubagent(event),
-      subagentSessionId,
-      subagentName,
+      isSubagent: !!scope,
+      // 主流程 generation 里若出现 call_report_subagent tool_call，仍用 legacy 会话 id 关联
+      subagentSessionId: scope?.sessionId ?? legacySubagentSessionId,
+      subagentName: scope?.name ?? legacySubagentName,
     }));
   }
 
   attachToolOutputs(interactions, ordered.filter((event) => event.kind === 'tool'));
 
-  const finalRootGeneration = [...generationEvents].reverse().find((event) => !isUnderSubagent(event));
+  // 最终回复：优先 root 显式声明的 final_output；否则取时间上最后一个 generation 的内容——
+  // supervisor 模式下最终回答往往出自某个子 agent（如 qa_agent），不能只看主流程。
+  const lastGeneration = generationEvents[generationEvents.length - 1];
   const finalResult = firstText(
     output.final_output,
-    finalRootGeneration ? parsedGenerationOutput(finalRootGeneration).content : undefined,
+    lastGeneration ? parsedGenerationOutput(lastGeneration).content : undefined,
   ) || '';
   const usageEvents = generationEvents.filter((event) => tokenTotal(event) > 0);
   const modelEvent = generationEvents.find((event) => event.model);
@@ -440,7 +516,7 @@ export function aggregateLangfuseLangGraphTraceEvents(sessionId: string, events:
     input_tokens: usageEvents.reduce((sum, event) => sum + event.usage.input_tokens, 0),
     output_tokens: usageEvents.reduce((sum, event) => sum + event.usage.output_tokens, 0),
     reasoning_tokens: usageEvents.reduce((sum, event) => sum + (event.usage.reasoning_tokens || 0), 0) || undefined,
-    subagentCount: subagentTool ? 1 : 0,
+    subagentCount: subagentScopes.size,
   };
 }
 

@@ -328,6 +328,144 @@ test("OTel traces: Langfuse LangGraph extracts generations from non-ChatOpenAI w
   assert.equal(record.final_result, "路由到 query_agent")
 })
 
+test("OTel traces: Langfuse LangGraph supervisor multi-agent — query from request.history, kind=agent subagents", () => {
+  // 按真实业务 trace 建模（supervisor 意图路由 → query_agent / qa_agent 两个具名 kind=agent 子 agent）：
+  // 1) 用户问题埋在 root input 的 request.history[].content（业务网关结构），不能退化成兜底串；
+  // 2) 子 agent 不再依赖 call_report_subagent 工具名，凡具名 kind=agent span 都构成子 agent 作用域；
+  // 3) 最终回复出自 qa_agent（子 agent）内的最后一个 generation。
+  const sessionId = "langfuse-supervisor-multiagent"
+  const mk = (over: Partial<OtelTraceEvent>) => traceEvent({
+    sessionId,
+    traceId: "trace-supervisor",
+    serviceName: "langfuse-langgraph",
+    usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+    ...over,
+  })
+  const events: OtelTraceEvent[] = [
+    mk({
+      spanId: "root",
+      name: "AssistantService.chat",
+      kind: "chain",
+      startTimeMs: 1000,
+      latencyMs: 20000,
+      attributes: {
+        "langfuse.observation.type": "chain",
+        "langfuse.observation.input": JSON.stringify({
+          request: {
+            uid: "1032082625425629184",
+            session_id: "1295544694416965632",
+            selected_entities: [],
+            history: [{ role: "user", content: "盖宇行发布了哪些文章？" }],
+          },
+        }),
+      },
+    }),
+    // supervisor 意图路由（主流程 LLM）
+    mk({
+      spanId: "sup-llm",
+      parentSpanId: "root",
+      name: "ChatDeepSeek",
+      kind: "llm",
+      model: "Qwen3.5-122B-A10B",
+      usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+      startTimeMs: 2000,
+      latencyMs: 500,
+      attributes: {
+        "langfuse.observation.type": "generation",
+        "langfuse.observation.output": JSON.stringify({ role: "assistant", content: "{\"next\": \"query_agent\"}" }),
+      },
+    }),
+    // 子 agent 1：query_agent（具名 kind=agent）
+    mk({
+      spanId: "agent-query",
+      parentSpanId: "root",
+      name: "query_agent",
+      kind: "agent",
+      startTimeMs: 3000,
+      latencyMs: 5000,
+      attributes: { "langfuse.observation.type": "agent" },
+    }),
+    mk({
+      spanId: "q-llm",
+      parentSpanId: "agent-query",
+      name: "ChatDeepSeek",
+      kind: "llm",
+      model: "Qwen3.5-122B-A10B",
+      usage: { input_tokens: 20, output_tokens: 6, total_tokens: 26 },
+      startTimeMs: 3500,
+      latencyMs: 800,
+      attributes: {
+        "langfuse.observation.type": "generation",
+        "langfuse.observation.output": JSON.stringify({
+          role: "assistant",
+          content: "",
+          tool_calls: [{ name: "synthesize_sql", args: { question: "盖宇行发布了哪些文章？" }, id: "t1", type: "tool_call" }],
+        }),
+      },
+    }),
+    mk({
+      spanId: "tool-sql",
+      parentSpanId: "agent-query",
+      name: "synthesize_sql",
+      kind: "tool",
+      startTimeMs: 4500,
+      latencyMs: 300,
+      attributes: {
+        "langfuse.observation.type": "tool",
+        "langfuse.observation.output": JSON.stringify({ sql: "SELECT 1", valid: true }),
+      },
+    }),
+    // 子 agent 2：qa_agent（具名 kind=agent），产出最终回答
+    mk({
+      spanId: "agent-qa",
+      parentSpanId: "root",
+      name: "qa_agent",
+      kind: "agent",
+      startTimeMs: 9000,
+      latencyMs: 6000,
+      attributes: { "langfuse.observation.type": "agent" },
+    }),
+    mk({
+      spanId: "qa-llm",
+      parentSpanId: "agent-qa",
+      name: "ChatDeepSeek",
+      kind: "llm",
+      model: "Qwen3.5-122B-A10B",
+      usage: { input_tokens: 30, output_tokens: 9, total_tokens: 39 },
+      startTimeMs: 9500,
+      latencyMs: 700,
+      attributes: {
+        "langfuse.observation.type": "generation",
+        "langfuse.observation.output": JSON.stringify({ role: "assistant", content: "在知识库和数据库中均未查询到相关文章。" }),
+      },
+    }),
+  ]
+
+  const record = aggregateOtelTraceEvents(sessionId, events)
+
+  assert.ok(record)
+  assert.equal(record.framework, "langfuse-langgraph")
+  // query 从 request.history 深挖出来，不再是兜底串
+  assert.equal(record.query, "盖宇行发布了哪些文章？")
+  assert.equal(record.interactions?.[0]?.content, "盖宇行发布了哪些文章？")
+  // 最终回复 = 最后一个 generation（在 qa_agent 子 agent 内）
+  assert.equal(record.final_result, "在知识库和数据库中均未查询到相关文章。")
+  // 两个具名 kind=agent 子 agent 都识别出来
+  assert.equal(record.subagentCount, 2)
+  const subs = record.interactions?.filter((interaction: any) => interaction.role === "subagent") || []
+  assert.deepEqual([...new Set(subs.map((i: any) => i.subagent_name))].sort(), ["qa_agent", "query_agent"])
+  assert.ok(subs.every((i: any) => i.subagent_session_id), "子 agent 交互都应带 subagent_session_id")
+  const subSessions = new Set(subs.map((i: any) => i.subagent_session_id))
+  assert.equal(subSessions.size, 2, "两个子 agent 应各有独立的 subagent_session_id")
+  // supervisor 的路由 LLM 属于主流程 assistant
+  const supervisor = record.interactions?.find((i: any) => i.role === "assistant")
+  assert.ok(supervisor)
+  assert.equal(supervisor.spanId, "sup-llm")
+  // 子 agent 内的 tool_call 正常挂上输出
+  const calls = subs.flatMap((i: any) => i.tool_calls || [])
+  assert.equal(calls.some((c: any) => c.function.name === "synthesize_sql" && c.state === "success"), true)
+})
+
 test("OTel traces: Langfuse LangGraph falls back to AI message names for unnamed internal agent spans", () => {
   const sessionId = "legacy-langgraph-agent-name"
   const events: OtelTraceEvent[] = [
