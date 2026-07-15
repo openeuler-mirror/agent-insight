@@ -143,3 +143,14 @@
 | `AgentInbox` / `HITLRequest` / `ActionRequest` | interface | `src/components/thread/agent-inbox/types.ts` | human-in-the-loop UI |
 
 完整的按模块清单（lib: 232、components: 42、server: 10、app: 9、prompts: 2）见分析输出。CLI 入口点来自 `package.json` 的 `bin`（`skill-insight` → `bin/cli.js`）。
+
+
+
+
+## Trace Bundle 导入导出契约
+
+- `GET /api/observe/traces/export?executionId=<id>`：校验当前用户可见性；若传入子 Agent Execution，则先解析到根 Execution，再导出整棵树。响应为 `agent-insight.trace-bundle` v1 JSON，并设置下载文件名。
+- `POST /api/observe/traces/import`：请求体为 `{ user?, fileName?, bundle }`。服务端限制 50 MB、500 个 Execution 节点，校验格式版本、根节点、父节点存在性、`rootExecutionId` 一致性、重复 ID 和环。成功返回原始 `originalRootExecutionId`、导入后的 `rootExecutionId` / `rootTaskId`、Execution/子 Agent 数量和 `remappedIds`。
+- v1 Bundle 顶层字段为 `format`、`version`、`exportedAt`、`rootExecutionId`、`executions`；每个节点包含 portable Execution 与可空 Session。Session `interactions` 保留规范化原始值，不做面向展示的时间格式化。
+- `Execution.id` 与 Execution/Session `taskId` 共享冲突检测空间。无冲突 ID 原样保留；有冲突 ID 才生成 `import_<uuid>`，并同步更新父子 ID、root ID、`agentSessionId` 及 interactions 中已知的 session/execution 引用。OTel `traceId` / `spanId` / `parentSpanId` 不参与重映射。
+- 导入只创建 Execution、Session 和可重算的 ExecutionSkill；不迁移 Evaluation、TraceEvaluation、AgentDebugReport、ExecutionTag 或基础设施关联，也不调度 LLM 评测。
