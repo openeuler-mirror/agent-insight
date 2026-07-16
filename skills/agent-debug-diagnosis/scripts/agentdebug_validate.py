@@ -33,9 +33,11 @@ NATURAL_KEYS = {
 def main() -> None:
     parser = argparse.ArgumentParser(description="校验 AgentDebug 诊断报告 JSON。")
     parser.add_argument("--input", required=True, help="最终报告 JSON 路径")
+    parser.add_argument("--static", dest="static_path", help="静态分析 JSON 路径")
     args = parser.parse_args()
 
     report = read_json(args.input)
+    static = read_json(args.static_path) if args.static_path else None
     errors: List[str] = []
     warnings: List[str] = []
 
@@ -53,6 +55,29 @@ def main() -> None:
     validate_issues(report.get("issues", []), errors, warnings)
     validate_findings(report.get("findings"), report.get("issues", []), errors, warnings)
     validate_root_cause(report.get("rootCause"), errors, warnings)
+    if static is not None:
+        final_records = report.get("stepRecords") if isinstance(report.get("stepRecords"), list) else []
+        static_records = static.get("stepRecords") if isinstance(static.get("stepRecords"), list) else []
+        if len(final_records) != len(static_records):
+            errors.append(f"最终 stepRecords 数量 {len(final_records)} 与静态结果 {len(static_records)} 不一致。")
+
+        final_issues = report.get("issues") if isinstance(report.get("issues"), list) else []
+        static_issues = static.get("issues") if isinstance(static.get("issues"), list) else []
+        final_by_id = {str(issue.get("id")): issue for issue in final_issues if isinstance(issue, dict) and issue.get("id")}
+        for issue in static_issues:
+            if not isinstance(issue, dict) or not issue.get("id"):
+                continue
+            issue_id = str(issue["id"])
+            final_issue = final_by_id.get(issue_id)
+            if final_issue is None:
+                errors.append(f"最终 issues 删除了静态 issue：{issue_id}")
+            elif final_issue.get("evidence") != issue.get("evidence"):
+                errors.append(f"最终 issue {issue_id} 修改了静态 evidence；应保留证据并通过 resolution 标记误报或恢复。")
+
+        final_cells = {phase1_key(cell) for cell in report.get("phase1Grid", []) if isinstance(cell, dict)}
+        for cell in static.get("phase1Grid", []):
+            if isinstance(cell, dict) and phase1_key(cell) not in final_cells:
+                errors.append(f"最终 phase1Grid 丢失静态单元格：{phase1_key(cell)}")
     scan_language(report, warnings)
 
     result = {"ok": not errors, "errors": errors, "warnings": warnings}
@@ -60,6 +85,9 @@ def main() -> None:
     if errors:
         sys.exit(1)
 
+
+def phase1_key(cell: Dict[str, Any]) -> str:
+    return f"{cell.get('traceStepIndex') or cell.get('step')}:{cell.get('module')}:{cell.get('errorType')}"
 
 def require_object(value: Any, name: str, errors: List[str]) -> None:
     if not isinstance(value, dict):

@@ -87,6 +87,7 @@ export async function POST(
     executionId: execution.id,
     user,
     interactionsHash,
+    generator: AGENT_DEBUG_GENERATOR,
   });
 
   setActiveAgentDebugBackgroundJob({

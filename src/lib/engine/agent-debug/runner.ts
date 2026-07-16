@@ -26,7 +26,7 @@ import type {
   DebugTurn,
 } from './types';
 
-export const AGENT_DEBUG_GENERATOR = 'agent-debug-diagnosis-skill@0.1';
+export const AGENT_DEBUG_GENERATOR = 'agent-debug-diagnosis-skill@0.2';
 
 const AGENT_DEBUG_SKILL_NAME = 'agent-debug-diagnosis';
 const FAULT_DIAGNOSIS_AGENT_NAME = 'fault-diagnosis-agent';
@@ -251,29 +251,29 @@ function buildAgentQuery(args: {
   };
 
   return [
-    '请对下面的 Agent Insight 执行记录运行 AgentDebug 四模块认知根因诊断。',
+    '请对下面的 Agent Insight 执行记录运行 AgentDebug 五模块诊断（Memory、Reflection、Planning、Action、System）。',
     '',
     '要求：',
     '- 先按 agent-debug-diagnosis Skill 的 Required References 读取并执行完整诊断规程。',
     `- 必须先运行 skill 脚本生成静态分析：python3 ${args.skillMountPath || `./.${AGENT_DEBUG_SKILL_NAME}`}/scripts/agentdebug_static.py --input ${args.inputRelPath} --output ${AGENT_DEBUG_STATIC_REPORT_REL_PATH}`,
-    `- 返回前必须运行校验脚本：python3 ${args.skillMountPath || `./.${AGENT_DEBUG_SKILL_NAME}`}/scripts/agentdebug_validate.py --input ${AGENT_DEBUG_FINAL_REPORT_REL_PATH}`,
+    `- 静态分析后必须运行统一查询脚本获取全局摘要：python3 ${args.skillMountPath || `./.${AGENT_DEBUG_SKILL_NAME}`}/scripts/agentdebug_inspect.py summary --input ${args.inputRelPath} --static ${AGENT_DEBUG_STATIC_REPORT_REL_PATH}`,
+    `- 返回前必须对照静态结果运行校验脚本：python3 ${args.skillMountPath || `./.${AGENT_DEBUG_SKILL_NAME}`}/scripts/agentdebug_validate.py --input ${AGENT_DEBUG_FINAL_REPORT_REL_PATH} --static ${AGENT_DEBUG_STATIC_REPORT_REL_PATH}`,
     `- 最终回复仍必须是 ${AGENT_DEBUG_FINAL_REPORT_REL_PATH} 的完整 JSON 对象，不要只回复摘要或诊断完成说明。`,
     '- 按 agent-debug-diagnosis Skill 输出严格 JSON。',
     '- Memory / Reflection / Planning / Action 都允许留白；空模块不是错误。',
     '- Action 必须基于真实 tool call；不要从 Action 失败倒推 Planning 一定错误。',
     '- 不使用候选窗口；必须基于输入文件中的全部 turns 运行拆分、静态检测和 Phase 1 分析。',
     '- 用户界面只展示左侧真实 trace 节点；所有 issue/root/cascade 必须尽量带 anchorId、traceStepIndex、traceNodeLabel。',
-    '- 如果归一化 Step 摘要证据不足，可读取 Trace 资料包里的 manifest/index/nodes。',
+    '- 不要使用 read + offset 顺序读取大型 JSON，也不要临时编写 python3 -c 查询；使用 Skill 的 agentdebug_inspect.py 获取 summary/tail/range/search/repeated-calls。',
+    '- 需要核对超长节点输入或输出时，使用 agentdebug_inspect.py search --scope artifact 定位完整 artifact 中的证据。',
     '- AgentDebug 主诊断必须只基于 trace、静态检测和 AgentDebug 诊断规程；不要读取或推断 Skills 关键动作分析结果。',
     '',
     '## 执行记录',
     compactJson(executionBrief, 8000),
     '',
-    '## 归一化 Step 摘要',
-    compactJson(args.turns.map(turnToPromptRecord), 40_000),
-    '',
-    '## Trace 资料包',
+    '## 数据范围与文件',
     [
+      `归一化 turn 数：${args.turns.length}`,
       `AgentDebug 输入文件：${args.inputRelPath}`,
       `静态分析输出文件：${AGENT_DEBUG_STATIC_REPORT_REL_PATH}`,
       `最终报告临时文件：${AGENT_DEBUG_FINAL_REPORT_REL_PATH}`,
@@ -321,32 +321,6 @@ function writeAgentDebugInput(args: {
   return relPath.split(path.sep).join('/');
 }
 
-function turnToPromptRecord(turn: DebugTurn) {
-  return {
-    step: turn.turnIndex,
-    traceStepIndex: turn.traceStepIndex,
-    traceNodeLabel: turn.traceNodeLabel,
-    traceNodeKind: turn.traceNodeKind,
-    sourceInteractionIndex: turn.sourceInteractionIndex,
-    role: turn.role,
-    agentName: turn.agentName,
-    inputContext: truncate(turn.requestContextPreview || '', 1000),
-    text: truncate(turn.text, 1800),
-    reasoningText: truncate(turn.reasoningText || '', 1800),
-    toolCalls: turn.toolCalls.map(tool => ({
-      name: tool.name,
-      status: tool.status,
-      args: truncate(compactJson(tool.args, 1200), 1200),
-      output: truncate(compactJson(tool.output, 1200), 1200),
-      rawError: tool.rawError,
-      anchorId: tool.anchorId,
-      traceStepIndex: tool.traceStepIndex,
-      traceNodeLabel: tool.traceNodeLabel,
-      traceNodeKind: tool.traceNodeKind,
-    })),
-    anchorIds: turn.anchorIds,
-  };
-}
 
 function normalizeStepRecords(value: unknown, turns: DebugTurn[]): AgentDebugStepRecord[] {
   if (!Array.isArray(value)) {

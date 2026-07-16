@@ -15,6 +15,7 @@ description: >
 ```text
 输入 JSON
   -> scripts/agentdebug_static.py 进行确定性拆分和规则检测
+  -> scripts/agentdebug_inspect.py 提供有界的全局摘要与按需证据查询
   -> 智能诊断 agent 补充语义检测和 Phase 2 根因归因
   -> scripts/agentdebug_validate.py 校验最终报告
   -> 输出一个中文 JSON 对象
@@ -47,7 +48,15 @@ python3 .agent-debug-diagnosis/scripts/agentdebug_static.py \
   --output .agent-insight/agent-debug-static.json
 ```
 
-然后读取 `.agent-insight/agent-debug-static.json`。如果脚本失败，不要继续凭空诊断；返回一个结构化失败报告，说明脚本失败原因。
+然后必须运行统一查询脚本获取全局摘要：
+
+```bash
+python3 .agent-debug-diagnosis/scripts/agentdebug_inspect.py summary \
+  --input .agent-insight/agent-debug-input.json \
+  --static .agent-insight/agent-debug-static.json
+```
+
+根据五模块候选信号，继续使用 `tail`、`range`、`search`、`repeated-calls` 拉取小块证据。不要顺序读取大型 JSON，也不要临时编写 `python3 -c` 查询。静态或查询脚本失败时，不要继续凭空诊断；返回结构化失败报告。
 
 最终回答前，先把准备返回的 JSON 写入：
 
@@ -59,7 +68,8 @@ python3 .agent-debug-diagnosis/scripts/agentdebug_static.py \
 
 ```bash
 python3 .agent-debug-diagnosis/scripts/agentdebug_validate.py \
-  --input .agent-insight/agent-debug-final.json
+  --input .agent-insight/agent-debug-final.json \
+  --static .agent-insight/agent-debug-static.json
 ```
 
 如果校验报错，先修正 JSON 再重新校验。校验只警告时，可以返回最终 JSON，但应优先修正明显的英文说明和缺失证据。
@@ -76,6 +86,10 @@ python3 .agent-debug-diagnosis/scripts/agentdebug_validate.py \
 - 用户可见自然语言里默认使用“关键发现”“潜在问题”“过程风险”，不要把已恢复或未造成任务失败的问题写成“根因”。只有 trace 明确失败且该问题直接导致失败时，才可以使用“根因”。
 - `findings[].summary` 和 `rootCause.summary` 只写 1-2 句结论；原始报错、命令、节点、重复模式和长推理放入 `evidence`、`issueRefs`、`cascadingChain` 或 `correctionGuidance`，不要堆在 summary 里。
 - 不使用候选窗口，不要只分析局部 trace；必须对输入文件里的全部 step 执行拆分和 Phase 1 检测。
+- `agentdebug_static.py` 必须覆盖全部 turn；智能诊断 agent 根据 `summary` 中 Memory、Reflection、Planning、Action、System 五模块候选信号按需核查语义证据。
+- 不允许使用 read + offset 顺序读取大型 JSON，也不允许临时编写 `python3 -c`；只使用 `agentdebug_inspect.py` 查询。
+- 需要核对超过节点内联阈值的输入或输出时，使用 `search --scope artifact` 查询完整 artifact。
+- 最终报告必须保留静态 `stepRecords`、`phase1Grid` 和 `issues`；误报通过 `resolution=non_blocking` 说明，不能删除或改写原始 evidence。
 - System 是外部环境证据，不属于四个认知模块，但可以参与根因归因。
 - Memory、Reflection、Planning、Action 都允许留白。
 - 留白模块不是错误，不能因为空模块本身选择根因。
@@ -87,17 +101,18 @@ python3 .agent-debug-diagnosis/scripts/agentdebug_validate.py \
 
 1. 读取输入文件路径、skill 挂载目录、静态输出路径和最终报告路径。
 2. 读取上述四份 references，确认拆分、词表、Phase 1、Phase 2 和输出协议。
-3. 运行 `agentdebug_static.py`，拿到静态 `stepRecords`、`triage`、`phase1Grid` 和 `issues`。
-4. 读取 `triage` 作为 Phase 0 静态预检提示。即使静态预检命中了系统性风险，也必须继续完整执行四模块语义判断和 Phase 2；不要因为静态命中直接跳过认知诊断。
-5. 基于静态结果补充语义判断：
+3. 运行 `agentdebug_static.py`，对全部 turn 生成静态 `stepRecords`、`triage`、`phase1Grid` 和 `issues`。
+4. 运行 `agentdebug_inspect.py summary`，读取全局统计、头尾记录和 Memory、Reflection、Planning、Action、System 五模块候选信号。
+5. 根据候选信号使用 `tail`、`range`、`search`、`repeated-calls` 核查 prior facts、相邻步骤、重复动作与工具结果；需要完整长文本时使用 `search --scope artifact`。
+6. 读取 `triage`，继续完成语义补充：
    - Memory：检查幻觉、召回失败、过度简化、遗忘用户约束。
    - Reflection：检查误读工具结果、假成功声明、漏掉测试失败、过早完成。
    - Planning：检查违反约束、不可能动作、低效计划、计划和动作不一致。
    - Action：脚本已覆盖大多数静态错误；只在必要时补充 `tool_misuse`。
-6. 合并脚本发现和语义发现，形成 Phase 1 错误网格。
-7. 执行 Phase 2：从 Phase 1 网格中聚合一组最值得用户关注的 `findings`；如果任务确实失败，再说明最关键 finding 的失败根因。`rootCause` 仅作为 `findings[0]` 的历史兼容投影。
-8. 写入 `.agent-insight/agent-debug-final.json` 并运行校验脚本。
-9. 返回校验后的最终 JSON。
+   - System：复核超时、认证、上下文限制和系统性工具失败是否属于外部原因。
+7. 保留全部静态事实并追加语义问题，形成 Phase 1 错误网格。
+8. 执行 Phase 2，聚合最值得用户关注的 `findings`；`rootCause` 仅作为 `findings[0]` 的历史兼容投影。
+9. 写入 `.agent-insight/agent-debug-final.json`，使用 `--static` 对照校验后返回最终 JSON。
 
 ## 输出要求
 
