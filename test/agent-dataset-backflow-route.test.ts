@@ -56,6 +56,16 @@ test('rejects new fields that collide with an existing dataset field', () => {
   );
 });
 
+test('rejects duplicate field names even when internal keys differ', () => {
+  assert.throws(
+    () => parseBackflowFields([
+      { key: 'score_a', label: '评分', type: 'number' },
+      { key: 'score_b', label: '评分', type: 'text' },
+    ]),
+    /field name 评分 already exists/,
+  );
+});
+
 test('rejects an invalid new dataset schema before writing cases', async () => {
   const response = await POST(new Request('http://localhost/api/agent-datasets/backflow', {
     method: 'POST',

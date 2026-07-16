@@ -159,6 +159,17 @@ export function normalizeFields(value: unknown, kind: DatasetKind): DatasetField
   return fields.length > 0 ? fields : defaultDatasetFields(kind);
 }
 
+export function duplicateDatasetFieldName(fields: DatasetField[]): string | null {
+  const seen = new Set<string>();
+  for (const field of fields) {
+    const label = field.label.trim();
+    const normalized = label.toLocaleLowerCase();
+    if (seen.has(normalized)) return label;
+    seen.add(normalized);
+  }
+  return null;
+}
+
 export function normalizeCase(item: unknown): DatasetCase {
   const obj = (item || {}) as Partial<DatasetCase>;
   const values = normalizeValues((obj as { values?: unknown }).values);

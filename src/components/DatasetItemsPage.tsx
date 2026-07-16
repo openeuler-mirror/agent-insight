@@ -12,6 +12,7 @@ import {
   type DatasetField,
   type DatasetFieldType,
   createEmptyCase,
+  nextDatasetFieldKey,
   parseDatasetNumberValue,
   TRAJECTORY_PLACEHOLDER,
 } from '@/lib/agent-dataset-model';
@@ -174,8 +175,7 @@ export default function DatasetItemsPage() {
   const [saving, setSaving] = useState(false);
   const [rowEditor, setRowEditor] = useState<{ mode: 'add' | 'edit'; row: DatasetCase } | null>(null);
   const [fieldEditorOpen, setFieldEditorOpen] = useState(false);
-  const [fieldDraft, setFieldDraft] = useState<{ key: string; label: string; type: DatasetFieldType }>({
-    key: '',
+  const [fieldDraft, setFieldDraft] = useState<{ label: string; type: DatasetFieldType }>({
     label: '',
     type: 'text',
   });
@@ -320,27 +320,23 @@ export default function DatasetItemsPage() {
 
   const addField = async () => {
     if (!dataset) return;
-    const key = fieldDraft.key.trim();
     const label = fieldDraft.label.trim();
-    if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(key)) {
-      setFieldError('字段 key 需以字母开头，且只能包含字母、数字和下划线');
-      return;
-    }
     if (!label) {
       setFieldError('请输入字段名称');
       return;
     }
-    if (dataset.fields.some(field => field.key === key)) {
-      setFieldError('字段 key 已存在');
+    if (dataset.fields.some(field => field.label.trim().toLocaleLowerCase() === label.toLocaleLowerCase())) {
+      setFieldError('字段名称已存在');
       return;
     }
+    const key = nextDatasetFieldKey(dataset.fields.map(field => field.key));
     const ok = await persistFields([
       ...dataset.fields,
       { id: crypto.randomUUID(), key, label, type: fieldDraft.type },
     ]);
     if (ok) {
       setFieldEditorOpen(false);
-      setFieldDraft({ key: '', label: '', type: 'text' });
+      setFieldDraft({ label: '', type: 'text' });
       setFieldError('');
     }
   };
@@ -797,10 +793,6 @@ export default function DatasetItemsPage() {
                 <span style={{ fontSize: 12, color: 'var(--foreground-muted)' }}>字段名称</span>
                 <Input value={fieldDraft.label} onChange={e => setFieldDraft({ ...fieldDraft, label: e.target.value })} />
               </label>
-              <label style={{ display: 'grid', gap: 5 }}>
-                <span style={{ fontSize: 12, color: 'var(--foreground-muted)' }}>字段 key</span>
-                <Input value={fieldDraft.key} onChange={e => setFieldDraft({ ...fieldDraft, key: e.target.value })} placeholder="scenario" />
-              </label>
               <div style={{ display: 'grid', gap: 5 }}>
                 <span style={{ fontSize: 12, color: 'var(--foreground-muted)' }}>字段类型</span>
                 <Select
@@ -813,6 +805,8 @@ export default function DatasetItemsPage() {
                     { value: 'json', label: 'JSON' },
                   ]}
                   size="md"
+                  className="w-full justify-between"
+                  contentClassName="z-[1200]"
                   aria-label="字段类型"
                 />
               </div>

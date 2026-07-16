@@ -18,7 +18,11 @@ const FIELD_TYPES = new Set<DatasetFieldType>(['text', 'number', 'boolean', 'jso
 
 export function parseBackflowFields(
   value: unknown,
-  options: { existingKeys?: Iterable<string>; allowEmpty?: boolean } = {},
+  options: {
+    existingKeys?: Iterable<string>;
+    existingLabels?: Iterable<string>;
+    allowEmpty?: boolean;
+  } = {},
 ): DatasetField[] {
   if (!Array.isArray(value)) throw new Error('fields are required');
   if (value.length === 0) {
@@ -26,6 +30,9 @@ export function parseBackflowFields(
     throw new Error('at least one field is required');
   }
   const seen = new Set(options.existingKeys || []);
+  const seenLabels = new Set(
+    [...(options.existingLabels || [])].map(label => label.trim().toLocaleLowerCase()),
+  );
   return value.map((item, index) => {
     if (!item || typeof item !== 'object' || Array.isArray(item)) {
       throw new Error(`field ${index + 1} is invalid`);
@@ -38,7 +45,10 @@ export function parseBackflowFields(
     if (!label) throw new Error(`field ${index + 1} label is required`);
     if (!FIELD_TYPES.has(type)) throw new Error(`field ${index + 1} type is invalid`);
     if (seen.has(key)) throw new Error(`field key ${key} already exists`);
+    const normalizedLabel = label.toLocaleLowerCase();
+    if (seenLabels.has(normalizedLabel)) throw new Error(`field name ${label} already exists`);
     seen.add(key);
+    seenLabels.add(normalizedLabel);
     return {
       id: String(raw.id || key).trim() || key,
       key,
@@ -112,6 +122,7 @@ export async function POST(request: Request) {
         if (!current) return NextResponse.json({ error: 'dataset not found' }, { status: 404 });
         const newFields = parseBackflowFields(body.newFields || [], {
           existingKeys: current.fields.map(field => field.key),
+          existingLabels: current.fields.map(field => field.label),
           allowEmpty: true,
         });
         fields = [...current.fields, ...newFields];

@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { ChevronLeft, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { apiFetch } from '@/lib/client/api';
+import { nextDatasetFieldKey } from '@/lib/agent-dataset-model';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import {
@@ -256,14 +257,14 @@ export function TraceBackflowDialog(props: {
   };
 
   const addField = () => {
-    const usedKeys = new Set(fields.map(field => field.key));
+    const key = nextDatasetFieldKey(fields.map(field => field.key));
+    const usedLabels = new Set(fields.map(field => field.label.trim().toLocaleLowerCase()));
     let index = 1;
-    while (usedKeys.has(`custom_field_${index}`)) index += 1;
-    const key = `custom_field_${index}`;
+    while (usedLabels.has(`新字段 ${index}`.toLocaleLowerCase())) index += 1;
     setFields(current => [...current, {
       id: `new-${key}`,
       key,
-      label: '新字段',
+      label: `新字段 ${index}`,
       type: 'text',
       source: 'none',
       origin: 'new',
@@ -297,23 +298,31 @@ export function TraceBackflowDialog(props: {
       setError('请至少保留一个字段');
       return;
     }
-    const seen = new Set<string>();
+    const seenKeys = new Set<string>();
+    const seenLabels = new Set<string>();
     for (let index = 0; index < fields.length; index += 1) {
       const field = fields[index];
       const key = field.key.trim();
-      if (!field.label.trim()) {
+      const label = field.label.trim();
+      if (!label) {
         setError(`第 ${index + 1} 个字段缺少字段名称`);
         return;
       }
       if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(key)) {
-        setError(`字段 key「${key || '空'}」格式不正确`);
+        setError('字段内部标识异常，请删除后重新新增该字段');
         return;
       }
-      if (seen.has(key)) {
-        setError(`字段 key「${key}」重复`);
+      if (seenKeys.has(key)) {
+        setError('字段内部标识重复，请删除后重新新增该字段');
         return;
       }
-      seen.add(key);
+      const normalizedLabel = label.toLocaleLowerCase();
+      if (seenLabels.has(normalizedLabel)) {
+        setError(`字段名称「${label}」重复`);
+        return;
+      }
+      seenKeys.add(key);
+      seenLabels.add(normalizedLabel);
     }
     if (!fields.some(field => field.source !== 'none')) {
       setError('请至少将一个字段映射到 Trace 数据');
@@ -380,7 +389,7 @@ export function TraceBackflowDialog(props: {
         <DialogHeader>
           <DialogTitle>加入评测数据集</DialogTitle>
           <DialogDescription>
-            将任务输入、任务输出和原始 Trace JSON 映射到目标数据集，确认预览后再写入。
+            将原始用户输入、最终输出和原始 Trace JSON 映射到目标数据集，确认预览后再写入。
           </DialogDescription>
         </DialogHeader>
 
@@ -486,10 +495,9 @@ export function TraceBackflowDialog(props: {
                   <span className="text-foreground-muted">{fields.length} 个字段 · {drafts.length} 条 Trace</span>
                 </div>
                 <div className="overflow-x-auto border-y border-border">
-                  <div className="min-w-[760px]">
-                    <div className="grid grid-cols-[minmax(140px,1fr)_minmax(130px,1fr)_110px_minmax(190px,1.2fr)_40px] gap-3 bg-background-secondary px-3 py-2 text-xs font-medium text-foreground-muted">
+                  <div className="min-w-[620px]">
+                    <div className="grid grid-cols-[minmax(180px,1fr)_110px_minmax(190px,1.2fr)_40px] gap-3 bg-background-secondary px-3 py-2 text-xs font-medium text-foreground-muted">
                       <span>字段名称</span>
-                      <span>字段 key</span>
                       <span>类型</span>
                       <span>Trace source</span>
                       <span />
@@ -500,16 +508,13 @@ export function TraceBackflowDialog(props: {
                         <div
                           key={field.id}
                           className={cn(
-                            'grid grid-cols-[minmax(140px,1fr)_minmax(130px,1fr)_110px_minmax(190px,1.2fr)_40px] items-center gap-3 px-3 py-2',
+                            'grid grid-cols-[minmax(180px,1fr)_110px_minmax(190px,1.2fr)_40px] items-center gap-3 px-3 py-2',
                             index > 0 && 'border-t border-border',
                           )}
                         >
                           {editable ? (
                             <Input value={field.label} onChange={event => updateField(field.id, { label: event.target.value })} aria-label="字段名称" />
                           ) : <span className="truncate text-sm text-foreground">{field.label}</span>}
-                          {editable ? (
-                            <Input value={field.key} onChange={event => updateField(field.id, { key: event.target.value })} aria-label="字段 key" />
-                          ) : <code className="truncate text-xs text-foreground-muted">{field.key}</code>}
                           {editable ? (
                             <Select
                               value={field.type}

@@ -1,13 +1,68 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { parseDatasetNumberValue } from '@/lib/agent-dataset-model';
+import {
+  nextDatasetFieldKey,
+  parseDatasetNumberValue,
+} from '@/lib/agent-dataset-model';
+import { extractTaskArtifacts } from '@/lib/engine/evaluation/task-artifacts';
+import { POST as saveDataset } from '@/app/api/agent-datasets/route';
 
 import {
+  duplicateDatasetFieldName,
   normalizeCase,
   normalizeFields,
   validateCasesForKind,
 } from '@/server/agent_datasets_storage';
+
+test('trace backflow keeps the original user input and final output', async () => {
+  const artifacts = await extractTaskArtifacts({
+    rawInput: '  原始用户输入  ',
+    fallbackOutput: '  Agent 最终输出  ',
+    interactions: [{ role: 'user', content: '原始用户输入' }],
+  });
+
+  assert.equal(artifacts.input, '  原始用户输入  ');
+  assert.equal(artifacts.output, '  Agent 最终输出  ');
+});
+
+test('generates stable internal keys without exposing them as field input', () => {
+  assert.equal(nextDatasetFieldKey([]), 'custom_field_1');
+  assert.equal(
+    nextDatasetFieldKey(['input', 'custom_field_1', 'custom_field_3']),
+    'custom_field_2',
+  );
+});
+
+test('detects duplicate dataset field names case-insensitively', () => {
+  assert.equal(duplicateDatasetFieldName([
+    { id: 'a', key: 'a', label: 'Score', type: 'number' },
+    { id: 'b', key: 'b', label: 'score', type: 'text' },
+  ]), 'score');
+  assert.equal(duplicateDatasetFieldName([
+    { id: 'a', key: 'a', label: '输入', type: 'text' },
+    { id: 'b', key: 'b', label: '输出', type: 'text' },
+  ]), null);
+});
+
+test('rejects duplicate field names through the dataset API', async () => {
+  const response = await saveDataset(new Request('http://localhost/api/agent-datasets', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      user: 'test-user',
+      name: 'duplicate field names',
+      fields: [
+        { key: 'score_a', label: '评分', type: 'number' },
+        { key: 'score_b', label: '评分', type: 'text' },
+      ],
+      cases: [],
+    }),
+  }));
+
+  assert.equal(response.status, 400);
+  assert.deepEqual(await response.json(), { error: 'field name 评分 already exists' });
+});
 
 test('parses dataset number fields without silently converting invalid input to null', () => {
   assert.equal(parseDatasetNumberValue('12.34'), 12.34);

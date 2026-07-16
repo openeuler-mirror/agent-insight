@@ -8,6 +8,7 @@ import {
   normalizeDatasetKind,
   normalizeTags,
   normalizeFields,
+  duplicateDatasetFieldName,
   normalizeCases,
   prepareDatasetCasesForPersistence,
   validateCasesForKind,
@@ -55,6 +56,14 @@ export async function POST(request: Request) {
     }
 
     const datasetKind = normalizeDatasetKind(body.datasetKind);
+    const fields = normalizeFields(body.fields, datasetKind);
+    const duplicateFieldName = duplicateDatasetFieldName(fields);
+    if (duplicateFieldName) {
+      return NextResponse.json(
+        { error: `field name ${duplicateFieldName} already exists` },
+        { status: 400 },
+      );
+    }
     const normalizedCases = normalizeCases(body.cases);
     const validationErrors = validateCasesForKind(normalizedCases, datasetKind);
     if (validationErrors.length > 0) {
@@ -77,7 +86,7 @@ export async function POST(request: Request) {
       targetAgent: String(body.targetAgent || '').trim(),
       targetSkill: String(body.targetSkill || '').trim(),
       tags: normalizeTags(body.tags),
-      fields: normalizeFields(body.fields, datasetKind),
+      fields,
       cases,
       datasetKind,
       createdAt: now,
@@ -114,6 +123,16 @@ export async function PATCH(request: Request) {
 
     const nextDatasetKind =
       body.datasetKind !== undefined ? normalizeDatasetKind(body.datasetKind) : current.datasetKind;
+    const nextFields = body.fields !== undefined
+      ? normalizeFields(body.fields, nextDatasetKind)
+      : current.fields;
+    const duplicateFieldName = duplicateDatasetFieldName(nextFields);
+    if (duplicateFieldName) {
+      return NextResponse.json(
+        { error: `field name ${duplicateFieldName} already exists` },
+        { status: 400 },
+      );
+    }
     const inputCases = body.cases !== undefined ? normalizeCases(body.cases) : current.cases;
 
     // datasetKind 或 cases 任一变化时都要重新校验：
@@ -144,7 +163,7 @@ export async function PATCH(request: Request) {
       targetAgent: body.targetAgent !== undefined ? String(body.targetAgent || '').trim() : current.targetAgent,
       targetSkill: body.targetSkill !== undefined ? String(body.targetSkill || '').trim() : current.targetSkill,
       tags: body.tags !== undefined ? normalizeTags(body.tags) : current.tags,
-      fields: body.fields !== undefined ? normalizeFields(body.fields, nextDatasetKind) : current.fields,
+      fields: nextFields,
       cases: preparedCasesResult.cases,
       datasetKind: nextDatasetKind,
       updatedAt: new Date().toISOString(),

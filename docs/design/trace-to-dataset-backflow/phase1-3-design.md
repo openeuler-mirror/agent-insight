@@ -16,12 +16,12 @@ Agent-Insight 已经具备链路采集、Trace 查看、质量监控、Trace 评
 
 当前实现围绕以上三个能力形成闭环，并覆盖 Trace 列表批量回流与回流字段映射。质量监控自动推荐、数据集版本化、自定义评估器字段映射等属于后续增强。
 
-Trace 回流时，系统自动抽取并处理 `input`、`output`，并把调用 `summarizeTrace` 之前的 interactions 数组作为原始 JSON `trace`，允许用户预览和编辑后写入目标数据集，同时保留来源 Trace 的基本追溯信息。
+Trace 回流时，系统直接使用原始用户输入作为 `input`、Agent 最终输出作为 `output`，并把调用 `summarizeTrace` 之前的 interactions 数组作为原始 JSON `trace`，允许用户预览和编辑后写入目标数据集，同时保留来源 Trace 的基本追溯信息。
 
 用户提出的最小字段是 `input`、`output`、`trace`，其中：
 
-- `input`：经过处理后的任务输入，不是简单照搬原始消息。
-- `output`：经过处理后的任务输出，来自链路里 agent 的最终交付结果，不是简单照搬最后一条消息。
+- `input`：直接使用 `Execution.query`；缺失时回退 `Session.query`。
+- `output`：直接使用 `Execution.finalResult`。
 - `trace`：链路跟踪里的 Trace 本体。
 
 评测数据集不再只使用写死的 case 属性，而是支持用户新增字段、编辑字段定义，以及为每条 case 新增、补齐、修改或清空字段值。字段定义与字段值是两个独立层次：给数据集增加字段后，用户可以逐条维护该字段在各 case 中的值。`reference_output` 与其他业务字段一样是可选扩展，不属于 Trace 回流的前置条件。
@@ -30,10 +30,10 @@ Trace 回流时，系统自动抽取并处理 `input`、`output`，并把调用 
 
 | 回流概念 | 默认字段 key | 说明 |
 |-|-|-|
-| 任务输入 | `input` | 经过数据处理后的任务输入，用于匹配 case 与投递评估器。 |
-| 任务输出 | `output` | 经过数据处理后的 agent 实际任务输出，用于复盘和作为评估对象。 |
+| 任务输入 | `input` | 原始用户输入，用于匹配 case 与投递评估器。 |
+| 任务输出 | `output` | Agent 最终输出，用于复盘和作为评估对象。 |
 | Trace | `trace` | 链路 Session 中、调用 `summarizeTrace` 之前的 interactions JSON 数组。 |
-| 自定义字段 | 用户自定义 key | 例如 `rubric`、`scenario`、`difficulty`、`expectedToolCalls`、`humanLabel`。 |
+| 自定义字段 | 系统生成 key | 用户只填写唯一字段名称，内部 key 自动生成并保持稳定。 |
 
 ## 2. 参考产品与取舍
 
@@ -246,7 +246,7 @@ export interface DatasetCaseTraceSource {
 `traceSource.sourceHash` 用于判重。推荐 hash 输入为：
 
 ```text
-sha256(user + executionId + taskId + processedInput + processedSourceOutput + traceSchemaVersion)
+sha256(user + executionId + taskId + rawInput + finalOutput + traceSchemaVersion)
 ```
 
 ### 6.4 Trace 字段 schema
@@ -276,26 +276,19 @@ sha256(user + executionId + taskId + processedInput + processedSourceOutput + tr
 
 ## 7. Trace 回流的数据处理与映射
 
-### 7.1 复用现有“任务工件提取”能力
+### 7.1 原始输入输出
 
-回流不直接把 `Execution.query` 和 `Execution.finalResult` 原样写进数据集，而是先把原始 Trace 处理为可评测的任务工件。现有 Trace 评测执行链路已具备两段应复用的能力：
-
-- `src/lib/engine/evaluation/semantic-dataset-match.ts` 的 `extractRealUserInput`：从原始 query 中提取真正的用户任务，识别并移除运行模式前缀等非任务内容；模型不可用或提取失败时回退原文，并保留置信度、忽略片段和原因。
-- `src/lib/engine/evaluation/result-artifact-extractor.ts` 的 `extractTaskResultArtifact`：从 Trace 的候选 LLM 产物及其后续工具上下文中定位真正交付给用户的结果；不能定位时才回退 `execution.finalResult`，并记录来源、置信度和回退原因。
-
-实现时将二者封装成评测执行与回流共用的 `extractTaskArtifacts` 服务，不把提取逻辑复制到回流 API。现有 `src/app/api/eval/trajectory/run/route.ts` 改为调用该共享服务，回流 API 调用同一入口。这样同一条 Trace 在“直接评测”与“回流后再评测”中得到一致的任务输入和任务输出，也能统一复用缓存、超时、置信度和降级策略。
+Trace 回流不再调用 `extractRealUserInput` 或 `extractTaskResultArtifact`。草稿直接读取 `Execution.query` 和 `Execution.finalResult`，避免模型处理改变生产 Trace 的原始输入输出；只有 `Execution.query` 为空时才使用 `Session.query`。
 
 ```ts
 extractTaskArtifacts({
-  user,
-  execution,
   interactions,
+  rawInput: execution.query,
   fallbackOutput: execution.finalResult,
 }): Promise<{
-  processedInput: string;
-  processedSourceOutput: string;
-  inputMeta: DatasetValueMeta['extraction'];
-  outputMeta: DatasetValueMeta['extraction'];
+  input: string;
+  output: string;
+  trace: unknown[];
   warnings: DatasetBackflowWarning[];
 }>
 ```
@@ -305,8 +298,8 @@ extractTaskArtifacts({
 ```mermaid
 flowchart LR
   A[原始 Execution + Session interactions] --> B[归一化 interactions]
-  B --> C[提取处理后任务输入]
-  B --> D[提取处理后任务输出]
+  A --> C[读取原始用户输入]
+  A --> D[读取最终输出]
   B --> E[保留原始 Trace JSON]
   C --> F[脱敏与长度控制]
   D --> F
@@ -318,8 +311,8 @@ flowchart LR
 各阶段的职责如下：
 
 1. 解析 execution 与对应 session，使用现有 interaction 归一化逻辑处理不同框架格式。
-2. 输入处理：调用 `extractRealUserInput`，产出 `input`；保留提取方式、置信度、忽略片段和回退说明，但不将未脱敏原文重复写入数据集。
-3. 输出处理：调用 `extractTaskResultArtifact`，产出 `output`；保存候选定位方式、置信度、是否回退 `execution.finalResult` 和来源引用。
+2. 输入读取：直接使用 `Execution.query`，为空时回退 `Session.query`。
+3. 输出读取：直接使用 `Execution.finalResult`。
 4. Trace 处理：不调用 `summarizeTrace` / `buildAgentCallTree`；直接把归一化后的完整 interactions 数组作为结构化 JSON 值写入 `trace`。
 5. 脱敏和大小控制：对三个产物统一执行策略，再生成 `sourceHash`。用户可在预览中逐字段修改。
 6. 按目标数据集 `fieldsJson` 映射写入 `values`。没有对应角色的字段时，提示用户新增字段或选择另一个数据集，绝不静默丢弃。
@@ -391,13 +384,9 @@ buildDatasetCaseDraftFromExecution(args: {
 {
   "draft": {
     "values": {
-      "input": "处理后的任务输入",
-      "output": "处理后的来源任务输出",
+      "input": "原始用户输入",
+      "output": "Agent 最终输出",
       "trace": [{ "role": "user", "content": "..." }]
-    },
-    "valueMeta": {
-      "input": { "origin": "trace-extracted", "extraction": { "method": "extractRealUserInput", "confidence": 0.92 } },
-      "output": { "origin": "trace-extracted", "extraction": { "method": "extractTaskResultArtifact", "confidence": 0.87 } }
     },
     "source": "trace-backflow",
     "traceSource": {
@@ -430,8 +419,8 @@ buildDatasetCaseDraftFromExecution(args: {
   "cases": [
     {
       "values": {
-        "input": "处理后的任务输入",
-        "output": "处理后的来源任务输出",
+        "input": "原始用户输入",
+        "output": "Agent 最终输出",
         "trace": "{...}"
       },
       "valueMeta": { "...": "..." },
@@ -508,7 +497,7 @@ buildDatasetCaseDraftFromExecution(args: {
 弹窗采用三步流程：
 
 1. **选择数据集**：用户明确选择“添加到已有数据集”或“新建数据集”。已有数据集下拉初始为空；新建模式填写名称和描述。
-2. **字段映射**：已有字段可选择处理后的任务输入、任务输出、Trace 或不写入，并可追加新字段；新建模式默认 `input`、`output`、`trace`，任意默认字段均可删除或修改。
+2. **字段映射**：已有字段可选择原始用户输入、最终输出、Trace 或不写入，并可追加新字段；新建模式默认 `input`、`output`、`trace`，任意默认字段均可删除或修改。用户只编辑唯一字段名称，内部 key 由系统维护。
 3. **数据预览**：按最终 schema 展示映射值，批量场景可逐条切换和编辑；同时汇总处理失败数、写入数和新增字段数。
 
 交互原则：
@@ -525,7 +514,7 @@ buildDatasetCaseDraftFromExecution(args: {
 数据集详情使用 schema 驱动的表格，而不是写死列：
 
 - 工具栏提供“新增字段”，在侧边面板填写名称、key、类型、评测角色、是否必填、默认值和 select 选项。
-- 表头菜单可编辑字段名称/说明、调整显示顺序、隐藏字段、归档自定义字段；字段 key 与系统字段删除受前述规则约束。
+- 表头菜单可编辑字段名称/说明、调整显示顺序、隐藏字段、归档自定义字段；内部 key 不在界面中暴露，系统字段删除受前述规则约束。
 - 单元格按类型编辑：文本、数字、开关、下拉、标签、JSON/Trace 编辑器；编辑后即时校验并标记未保存状态。
 - 支持“新增样本”和“批量编辑字段值”。新增字段不会强制历史样本立即补全，空值按字段和评估器语义在运行时处理。
 

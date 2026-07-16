@@ -43,7 +43,6 @@ export async function POST(request: Request) {
     interactions = inferSubagentNamesFromInteractions(interactions as Record<string, unknown>[]);
 
     const artifacts = await extractTaskArtifacts({
-      user,
       rawInput: String(execution.query || session.query || ''),
       fallbackOutput: String(execution.finalResult || ''),
       interactions,
@@ -57,7 +56,6 @@ export async function POST(request: Request) {
           executionId: String(execution.id || '') || undefined,
           capturedAt: new Date().toISOString(),
         },
-        extraction: artifacts.extraction,
       },
       warnings: artifacts.warnings,
     });

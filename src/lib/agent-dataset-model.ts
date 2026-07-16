@@ -20,6 +20,13 @@ export interface DatasetField {
   system?: boolean;
 }
 
+export function nextDatasetFieldKey(existingKeys: Iterable<string>): string {
+  const used = new Set(existingKeys);
+  let index = 1;
+  while (used.has(`custom_field_${index}`)) index += 1;
+  return `custom_field_${index}`;
+}
+
 export function parseDatasetNumberValue(value: unknown): number | '' {
   if (value === '' || value === null || value === undefined) return '';
   const normalized = typeof value === 'string' ? value.trim() : value;
