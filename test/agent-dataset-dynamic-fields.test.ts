@@ -12,6 +12,7 @@ import {
   duplicateDatasetFieldName,
   normalizeCase,
   normalizeFields,
+  validateDatasetFieldKeysForWrite,
   validateCasesForKind,
 } from '@/server/agent_datasets_storage';
 
@@ -62,6 +63,58 @@ test('rejects duplicate field names through the dataset API', async () => {
 
   assert.equal(response.status, 400);
   assert.deepEqual(await response.json(), { error: 'field name 评分 already exists' });
+});
+
+test('strict write validation rejects duplicate or invalid field keys', () => {
+  assert.equal(validateDatasetFieldKeysForWrite([
+    { key: 'input', label: '输入 1' },
+    { key: 'input', label: '输入 2' },
+  ]), 'field key input already exists');
+  assert.equal(validateDatasetFieldKeysForWrite([
+    { key: 'bad-key', label: '无效字段' },
+  ]), 'field 1 key is invalid');
+  assert.equal(validateDatasetFieldKeysForWrite([
+    null,
+  ]), 'field 1 is invalid');
+  assert.equal(validateDatasetFieldKeysForWrite([]), null);
+  assert.equal(validateDatasetFieldKeysForWrite(undefined), null);
+});
+
+test('dataset API rejects duplicate keys instead of silently dropping fields', async () => {
+  const response = await saveDataset(new Request('http://localhost/api/agent-datasets', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      user: 'test-user',
+      name: 'duplicate field keys',
+      fields: [
+        { key: 'input', label: '输入 1', type: 'text' },
+        { key: 'input', label: '输入 2', type: 'text' },
+      ],
+      cases: [],
+    }),
+  }));
+
+  assert.equal(response.status, 400);
+  assert.deepEqual(await response.json(), { error: 'field key input already exists' });
+});
+
+test('dataset API rejects invalid keys instead of falling back to default fields', async () => {
+  const response = await saveDataset(new Request('http://localhost/api/agent-datasets', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      user: 'test-user',
+      name: 'invalid field keys',
+      fields: [
+        { key: 'bad-key', label: '无效字段', type: 'text' },
+      ],
+      cases: [],
+    }),
+  }));
+
+  assert.equal(response.status, 400);
+  assert.deepEqual(await response.json(), { error: 'field 1 key is invalid' });
 });
 
 test('parses dataset number fields without silently converting invalid input to null', () => {

@@ -8,6 +8,7 @@ import {
   normalizeDatasetKind,
   normalizeTags,
   normalizeFields,
+  validateDatasetFieldKeysForWrite,
   duplicateDatasetFieldName,
   normalizeCases,
   prepareDatasetCasesForPersistence,
@@ -56,6 +57,10 @@ export async function POST(request: Request) {
     }
 
     const datasetKind = normalizeDatasetKind(body.datasetKind);
+    const fieldKeyError = validateDatasetFieldKeysForWrite(body.fields);
+    if (fieldKeyError) {
+      return NextResponse.json({ error: fieldKeyError }, { status: 400 });
+    }
     const fields = normalizeFields(body.fields, datasetKind);
     const duplicateFieldName = duplicateDatasetFieldName(fields);
     if (duplicateFieldName) {
@@ -123,6 +128,10 @@ export async function PATCH(request: Request) {
 
     const nextDatasetKind =
       body.datasetKind !== undefined ? normalizeDatasetKind(body.datasetKind) : current.datasetKind;
+    const fieldKeyError = validateDatasetFieldKeysForWrite(body.fields);
+    if (fieldKeyError) {
+      return NextResponse.json({ error: fieldKeyError }, { status: 400 });
+    }
     const nextFields = body.fields !== undefined
       ? normalizeFields(body.fields, nextDatasetKind)
       : current.fields;

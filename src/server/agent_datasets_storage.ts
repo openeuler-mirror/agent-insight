@@ -159,6 +159,25 @@ export function normalizeFields(value: unknown, kind: DatasetKind): DatasetField
   return fields.length > 0 ? fields : defaultDatasetFields(kind);
 }
 
+export function validateDatasetFieldKeysForWrite(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  if (!Array.isArray(value)) return 'fields must be an array';
+  const seen = new Set<string>();
+  for (let index = 0; index < value.length; index += 1) {
+    const item = value[index];
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      return `field ${index + 1} is invalid`;
+    }
+    const key = String((item as Record<string, unknown>).key || '').trim();
+    if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(key)) {
+      return `field ${index + 1} key is invalid`;
+    }
+    if (seen.has(key)) return `field key ${key} already exists`;
+    seen.add(key);
+  }
+  return null;
+}
+
 export function duplicateDatasetFieldName(fields: DatasetField[]): string | null {
   const seen = new Set<string>();
   for (const field of fields) {
