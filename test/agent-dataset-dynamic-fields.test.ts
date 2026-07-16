@@ -1,11 +1,24 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { parseDatasetNumberValue } from '@/lib/agent-dataset-model';
+
 import {
   normalizeCase,
   normalizeFields,
   validateCasesForKind,
 } from '@/server/agent_datasets_storage';
+
+test('parses dataset number fields without silently converting invalid input to null', () => {
+  assert.equal(parseDatasetNumberValue('12.34'), 12.34);
+  assert.equal(parseDatasetNumberValue('-2'), -2);
+  assert.equal(parseDatasetNumberValue(''), '');
+  assert.equal(parseDatasetNumberValue('   '), '');
+  assert.throws(() => parseDatasetNumberValue('123abc'), /invalid number/);
+  assert.throws(() => parseDatasetNumberValue('12.34.56'), /invalid number/);
+  assert.throws(() => parseDatasetNumberValue('-'), /invalid number/);
+  assert.throws(() => parseDatasetNumberValue(Number.NaN), /invalid number/);
+});
 
 test('normalizes legacy dataset cases into editable values', () => {
   const row = normalizeCase({

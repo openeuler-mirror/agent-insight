@@ -12,6 +12,7 @@ import {
   type DatasetField,
   type DatasetFieldType,
   createEmptyCase,
+  parseDatasetNumberValue,
   TRAJECTORY_PLACEHOLDER,
 } from '@/lib/agent-dataset-model';
 import {
@@ -362,6 +363,15 @@ export default function DatasetItemsPage() {
     const values = { ...(rowEditor.row.values || {}) };
     for (const field of dataset.fields) {
       const value = values[field.key];
+      if (field.type === 'number') {
+        try {
+          values[field.key] = parseDatasetNumberValue(value);
+        } catch {
+          toast.error(`${field.label} 不是有效的数字`);
+          return;
+        }
+        continue;
+      }
       if (field.type !== 'json' || typeof value !== 'string' || !value.trim()) continue;
       try {
         values[field.key] = JSON.parse(value);
@@ -847,10 +857,7 @@ export default function DatasetItemsPage() {
                   ) : (
                     <textarea
                       value={fieldText(rowEditor.row, field.key)}
-                      onChange={e => setEditorFieldValue(
-                        field,
-                        field.type === 'number' && e.target.value !== '' ? Number(e.target.value) : e.target.value,
-                      )}
+                      onChange={e => setEditorFieldValue(field, e.target.value)}
                       rows={field.type === 'json' ? 6 : 3}
                       spellCheck={field.type !== 'json'}
                       placeholder={field.key === 'trajectory' ? TRAJECTORY_PLACEHOLDER : undefined}

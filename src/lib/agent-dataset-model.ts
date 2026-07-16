@@ -20,6 +20,15 @@ export interface DatasetField {
   system?: boolean;
 }
 
+export function parseDatasetNumberValue(value: unknown): number | '' {
+  if (value === '' || value === null || value === undefined) return '';
+  const normalized = typeof value === 'string' ? value.trim() : value;
+  if (normalized === '') return '';
+  const parsed = typeof normalized === 'number' ? normalized : Number(normalized);
+  if (!Number.isFinite(parsed)) throw new Error('invalid number');
+  return parsed;
+}
+
 export interface DatasetCase {
   id: string;
   input: string;
