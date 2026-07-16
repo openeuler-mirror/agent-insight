@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import AgentTraceView from '@/components/observe/AgentTraceView';
+import { copyText } from '@/lib/copy-text';
 import { useLocale } from '@/lib/client/locale-context';
 import { apiFetch } from '@/lib/client/api';
 import { formatLatencySeconds } from '@/lib/latency-format';
@@ -118,6 +119,41 @@ export default function TraceDrawer({ open, execution, onClose }: TraceDrawerPro
     );
 }
 
+// query 一键复制:hover 图标按钮,成功变 ✓;走共享 copyText(http 部署可用)
+function CopyQueryButton({ query, locale }: { query: string; locale: string }) {
+    const [copied, setCopied] = useState(false);
+    const onCopy = async () => {
+        try {
+            await copyText(query);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+        } catch { /* ignore */ }
+    };
+    return (
+        <button
+            onClick={onCopy}
+            title={locale === 'zh' ? '复制问题' : 'Copy query'}
+            style={{
+                flexShrink: 0,
+                width: 22,
+                height: 22,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                background: 'transparent',
+                border: '1px solid var(--border)',
+                borderRadius: 5,
+                color: copied ? 'var(--primary)' : 'var(--foreground-muted)',
+                cursor: 'pointer',
+                fontSize: 11,
+                lineHeight: 1,
+            }}
+        >
+            {copied ? '✓' : '⧉'}
+        </button>
+    );
+}
+
 function Header({ execution, onClose, locale }: { execution: TraceDrawerExecutionMeta | null; onClose: () => void; locale: string }) {
     if (!execution) return null;
     const { taskId, query, framework, model, latency, tokens, cost, score, isAnswerCorrect, timestamp } = execution;
@@ -139,19 +175,23 @@ function Header({ execution, onClose, locale }: { execution: TraceDrawerExecutio
                         <span style={{ fontFamily: 'var(--font-mono)' }}>{taskId}</span>
                         {timestamp && <span>· {new Date(timestamp).toLocaleString()}</span>}
                     </div>
-                    <div
-                        style={{
-                            fontSize: 13.5,
-                            fontWeight: 500,
-                            color: 'var(--foreground)',
-                            display: '-webkit-box',
-                            WebkitLineClamp: 2,
-                            WebkitBoxOrient: 'vertical' as any,
-                            overflow: 'hidden',
-                        }}
-                        title={query}
-                    >
-                        {query || (locale === 'zh' ? '(无问题)' : '(no query)')}
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
+                        <div
+                            style={{
+                                fontSize: 13.5,
+                                fontWeight: 500,
+                                color: 'var(--foreground)',
+                                display: '-webkit-box',
+                                WebkitLineClamp: 2,
+                                WebkitBoxOrient: 'vertical' as any,
+                                overflow: 'hidden',
+                                minWidth: 0,
+                            }}
+                            title={query}
+                        >
+                            {query || (locale === 'zh' ? '(无问题)' : '(no query)')}
+                        </div>
+                        {query && <CopyQueryButton query={query} locale={locale} />}
                     </div>
                 </div>
                 <div style={{ display: 'flex', gap: 6, flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
