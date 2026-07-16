@@ -919,11 +919,12 @@ function TracePageContent() {
                                     <table className="w-full table-fixed text-sm" style={{ minWidth: tableMinWidth }}>
                                         <colgroup>
                                             {columnVisibility.traceId && <col style={{ width: widths.traceId }} />}
+                                            {/* 任务内容放第二列：用户最关心的信息 */}
+                                            {columnVisibility.task && <col />}
                                             {columnVisibility.agent && <col style={{ width: widths.agent }} />}
                                             {columnVisibility.status && <col style={{ width: widths.status }} />}
                                             {columnVisibility.userTags && <col style={{ width: widths.userTags }} />}
                                             {columnVisibility.systemTags && <col style={{ width: widths.systemTags }} />}
-                                            {columnVisibility.task && <col />}
                                             {columnVisibility.tokens && <col style={{ width: widths.tokens }} />}
                                             {columnVisibility.time && <col style={{ width: widths.time }} />}
                                             {columnVisibility.actions && <col style={{ width: widths.actions }} />}
@@ -935,6 +936,7 @@ function TracePageContent() {
                                                         <Term id="trace" label={t('tracePage.columnTraceId')} />
                                                     </Th>
                                                 )}
+                                                {columnVisibility.task && <Th>{t('tracePage.columnTask')}</Th>}
                                                 {columnVisibility.agent && (
                                                     <SortableTh sortKey="agent" currentKey={sortKey as SortKey} dir={sortDir as SortDir} onSort={handleSort} colKey="agent" currentWidth={widths.agent} onResize={setColumnWidth}>
                                                         <Term id="agent" label={t('tracePage.columnAgent')} />
@@ -947,7 +949,6 @@ function TracePageContent() {
                                                 )}
                                                 {columnVisibility.userTags && <Th colKey="userTags" currentWidth={widths.userTags} onResize={setColumnWidth}>{t('tracePage.columnUserTags')}</Th>}
                                                 {columnVisibility.systemTags && <Th colKey="systemTags" currentWidth={widths.systemTags} onResize={setColumnWidth}>{t('tracePage.columnSystemTags')}</Th>}
-                                                {columnVisibility.task && <Th>{t('tracePage.columnTask')}</Th>}
                                                 {columnVisibility.tokens && (
                                                     <SortableTh sortKey="tokens" currentKey={sortKey as SortKey} dir={sortDir as SortDir} onSort={handleSort} colKey="tokens" currentWidth={widths.tokens} onResize={setColumnWidth}>
                                                         <Term id="tokens" label={t('tracePage.columnTokens')} />
@@ -1410,6 +1411,13 @@ function Row({
                     <IdChip value={id} head={6} tail={4} />
                 </Td>
             )}
+            {columnVisibility.task && (
+                <Td>
+                    <TruncateText className="text-foreground text-sm">
+                        {e.query || t('tracePage.noQuery')}
+                    </TruncateText>
+                </Td>
+            )}
             {columnVisibility.agent && (
                 <Td>
                     <TruncateText className="text-foreground text-sm">
@@ -1452,13 +1460,6 @@ function Row({
                             <Tag variant="framework" icon={Terminal}>{getFrameworkLabel(e.framework)}</Tag>
                         )}
                     </div>
-                </Td>
-            )}
-            {columnVisibility.task && (
-                <Td>
-                    <TruncateText className="text-foreground text-sm">
-                        {e.query || t('tracePage.noQuery')}
-                    </TruncateText>
                 </Td>
             )}
             {columnVisibility.tokens && (

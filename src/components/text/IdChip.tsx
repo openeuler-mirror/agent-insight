@@ -6,6 +6,7 @@ import { Check, Copy } from 'lucide-react';
 import { toast } from 'sonner';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
+import { copyText } from '@/lib/copy-text';
 
 interface IdChipProps {
   value: string;
@@ -26,7 +27,8 @@ export function IdChip({ value, head = 6, tail = 4, copy = true, className, onCl
   const doCopy = async (e: React.MouseEvent) => {
     e.stopPropagation();
     try {
-      await navigator.clipboard.writeText(value);
+      // http 部署下 navigator.clipboard 不可用,copyText 内部带 execCommand fallback
+      await copyText(value);
       setCopied(true);
       toast.success('Copied');
       setTimeout(() => setCopied(false), 1500);

@@ -115,17 +115,36 @@ function normalizeMessageRole(value: any): string {
 
 // generation 的完整入参消息（系统提示词 + 上下文历史），转成 {role, content} 列表。
 // Langfuse 的 generation input 是 [{role,content},...]（或 {messages:[...]}）。
+//
+// 体积护栏：每个 generation 都带全量历史，第 n 轮带前 n-1 轮 → interactions JSON
+// 平方级膨胀（长会话可到几十 MB），详情页加载/入库都被拖垮。这里对单条消息截长、
+// 对条数封顶（保留开头的 system + 最近的历史）；原始 span 仍完整在 spool 里。
+const REQUEST_MESSAGE_MAX_CHARS = 4_000;
+const REQUEST_MESSAGES_MAX_COUNT = 60;
+
 function requestMessagesFromGeneration(event: OtelTraceEvent): AnyObj[] {
   const parsed = parseJson(attr(event, 'langfuse.observation.input'));
   const list = Array.isArray(parsed)
     ? parsed
     : Array.isArray(parsed?.messages) ? parsed.messages : [];
-  const out: AnyObj[] = [];
+  let out: AnyObj[] = [];
   for (const message of list) {
     if (!message || typeof message !== 'object' || Array.isArray(message)) continue;
     const content = text(message.content);
     if (!content) continue;
-    out.push({ role: normalizeMessageRole(message.role ?? message.type), content });
+    const clipped = content.length > REQUEST_MESSAGE_MAX_CHARS
+      ? `${content.slice(0, REQUEST_MESSAGE_MAX_CHARS)}\n…[已截断,原文 ${content.length} 字]`
+      : content;
+    out.push({ role: normalizeMessageRole(message.role ?? message.type), content: clipped });
+  }
+  if (out.length > REQUEST_MESSAGES_MAX_COUNT) {
+    const head = out.slice(0, 2);
+    const tail = out.slice(-(REQUEST_MESSAGES_MAX_COUNT - head.length - 1));
+    out = [
+      ...head,
+      { role: 'system', content: `…[省略 ${out.length - head.length - tail.length} 条历史消息]` },
+      ...tail,
+    ];
   }
   return out;
 }

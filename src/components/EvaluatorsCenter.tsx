@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
+import { copyText } from '@/lib/copy-text';
 import { useRouter } from 'next/navigation';
 import { Info } from 'lucide-react';
 import { apiFetch } from '@/lib/client/api';
@@ -652,7 +653,7 @@ function PresetInspectModal({
 
   async function copyPrompt() {
     try {
-      if (promptText) await navigator.clipboard.writeText(promptText);
+      if (promptText) await copyText(promptText);
     } catch {
       /* ignore */
     }
