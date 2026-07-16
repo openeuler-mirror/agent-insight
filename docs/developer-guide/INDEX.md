@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `e699809b6fb664eb318b12be7a6c7fe3623c9081` (`e699809b`) |
-| Branch | `develop0228` |
-| Date | 2026-07-09T19:30:22+08:00 |
-| Author | ljnkirito |
-| Subject | `fix: 统一链路耗时单位换算` |
+| Commit | `1690c46b419faa50130d052badc91a7f25fec190` (`1690c46`) |
+| Branch | `new-dev-07-10` |
+| Date | 2026-07-13T19:59:24+08:00 |
+| Author | openeuler-ci-bot |
+| Subject | `!193 fix: langfuse-langgraph adapter 不再硬编码 ChatOpenAI，兼容 ChatDeepSeek 等 LLM wrapper` |
 
-**如何更新：** `git diff e699809b HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff 1690c46 HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。

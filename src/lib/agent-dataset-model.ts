@@ -7,7 +7,34 @@ import type {
 export type DatasetKind = 'ideal_output' | 'trajectory';
 
 /** Case 来源；'user' = 用户手填，'skill-gen-draft' = skill 生成时自动起草。 */
-export type DatasetCaseSource = 'user' | 'skill-gen-draft';
+export type DatasetCaseSource = 'user' | 'skill-gen-draft' | 'trace-backflow';
+
+export type DatasetFieldType = 'text' | 'number' | 'boolean' | 'json';
+
+export interface DatasetField {
+  id: string;
+  key: string;
+  label: string;
+  type: DatasetFieldType;
+  description?: string;
+  system?: boolean;
+}
+
+export function nextDatasetFieldKey(existingKeys: Iterable<string>): string {
+  const used = new Set(existingKeys);
+  let index = 1;
+  while (used.has(`custom_field_${index}`)) index += 1;
+  return `custom_field_${index}`;
+}
+
+export function parseDatasetNumberValue(value: unknown): number | '' {
+  if (value === '' || value === null || value === undefined) return '';
+  const normalized = typeof value === 'string' ? value.trim() : value;
+  if (normalized === '') return '';
+  const parsed = typeof normalized === 'number' ? normalized : Number(normalized);
+  if (!Number.isFinite(parsed)) throw new Error('invalid number');
+  return parsed;
+}
 
 export interface DatasetCase {
   id: string;
@@ -16,6 +43,12 @@ export interface DatasetCase {
   evaluationFocus: string;
   tags: string[];
   trajectory: string;
+  values?: Record<string, unknown>;
+  traceSource?: {
+    taskId: string;
+    executionId?: string;
+    capturedAt: string;
+  };
   /** 默认 'user'；存量数据无此字段时按 'user' 兜底。 */
   source?: DatasetCaseSource;
   /** 隐藏缓存字段：预先从 expectedOutput 提取出的关键观点。 */
@@ -33,6 +66,7 @@ export interface AgentDataset {
   targetSkill: string;
   tags: string[];
   datasetKind: DatasetKind;
+  fields: DatasetField[];
   cases: DatasetCase[];
   createdAt: string;
   updatedAt: string;
@@ -119,6 +153,7 @@ export function createEmptyCase(source: DatasetCaseSource = 'user'): DatasetCase
     evaluationFocus: '',
     tags: [],
     trajectory: '',
+    values: {},
     source,
   };
 }

@@ -4,7 +4,7 @@ import { useCallback, useMemo, useState, useEffect, useRef, startTransition, typ
 import { useRouter } from 'next/navigation';
 import { ClipboardList, Pencil, PlayCircle, Trash2 } from 'lucide-react';
 import { apiFetch } from '@/lib/client/api';
-import { type DatasetKind, type AgentDataset, type DatasetCase, schemaColumnTags, defaultFieldsForKind, type DatasetDefaultFieldDef } from '@/lib/agent-dataset-model';
+import { type DatasetKind, type AgentDataset, type DatasetCase, type DatasetField, schemaColumnTags, defaultFieldsForKind, type DatasetDefaultFieldDef } from '@/lib/agent-dataset-model';
 import { parseBatchFromFileContent, readFileAsText } from '@/lib/dataset-batch-import';
 import { useAuth } from '@/lib/auth/auth-context';
 
@@ -15,6 +15,7 @@ interface DatasetDraft {
   targetAgent: string;
   tagsText: string;
   datasetKind: DatasetKind;
+  fields: DatasetField[];
   cases: DatasetCase[];
 }
 
@@ -24,6 +25,7 @@ const emptyDraft: DatasetDraft = {
   targetAgent: '',
   tagsText: '',
   datasetKind: 'ideal_output',
+  fields: [],
   cases: [],
 };
 
@@ -35,6 +37,7 @@ function toDraft(dataset: AgentDataset): DatasetDraft {
     targetAgent: dataset.targetAgent || '',
     tagsText: (dataset.tags || []).join(', '),
     datasetKind: dataset.datasetKind === 'trajectory' ? 'trajectory' : 'ideal_output',
+    fields: dataset.fields || [],
     cases: (dataset.cases || []).map(item => ({
       ...item,
       tags: item.tags || [],
@@ -402,6 +405,7 @@ export default function AgentDatasetCenter() {
       description: draft.description.slice(0, 200).trim(),
       tags: parseTags(draft.tagsText),
       datasetKind: draft.datasetKind,
+      fields: draft.fields,
       cases: draft.cases.map(item => ({
         id: item.id,
         input: item.input.trim(),
@@ -409,6 +413,9 @@ export default function AgentDatasetCenter() {
         evaluationFocus: '',
         tags: [] as string[],
         trajectory: draft.datasetKind === 'trajectory' ? item.trajectory.trim() : '',
+        values: item.values,
+        source: item.source,
+        traceSource: item.traceSource,
       })),
     };
 
