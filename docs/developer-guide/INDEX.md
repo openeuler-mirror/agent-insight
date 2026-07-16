@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `e699809b6fb664eb318b12be7a6c7fe3623c9081` (`e699809b`) |
-| Branch | `develop0228` |
-| Date | 2026-07-09T19:30:22+08:00 |
+| Commit | `dfa8c56ceda672e72f65dc712db5d3c0cd86d640` (`dfa8c56c`) |
+| Branch | `develop0226` |
+| Date | 2026-07-16T17:38:34+08:00 |
 | Author | ljnkirito |
-| Subject | `fix: 统一链路耗时单位换算` |
+| Subject | `feat: 优化 AgentDebug 结构化查询流程` |
 
-**如何更新：** `git diff e699809b HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff dfa8c56c HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
