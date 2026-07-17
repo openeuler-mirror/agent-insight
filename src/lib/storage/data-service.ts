@@ -33,6 +33,7 @@ import { mergeSessionInteractionsMonotonic } from '@/lib/engine/observability/se
 import { buildAgentCallTree, inferSubagentType, walkTree, type AgentNode } from '@/lib/engine/observability/agent-trace';
 import { isEvaluatorAgentName } from '@/lib/evaluator-agent';
 import { isInternalSystemAgentTrace } from '@/lib/system-agent-names';
+import { SYSTEM_AGENT_NAMES } from '@/lib/system-agent-names';
 import { getAdapter } from '@/lib/ingest/adapters/registry';
 import { normalizeInteractions } from '@/lib/shared/interaction-utils';
 import { buildPrismaWhere } from '@/lib/filters/to-prisma';
@@ -1166,6 +1167,12 @@ interface ReadRecordFilters {
     clauses?: FilterClause[];
     /** business 标签筛选，值为 Tag.id，支持多个 OR 命中 */
     businessTagIds?: string[];
+    /** Trace 列表顶部时间筛选换算后的起始时间。 */
+    timestampFrom?: Date;
+    /** Trace 列表 Agent 归属筛选；按现有 RegisteredAgent + 内置系统 Agent 规则下推。 */
+    ownership?: 'user' | 'system';
+    /** Trace 列表兼容 agentName 为空、名称仅存在于 observedAgents 的历史记录。 */
+    observedAgentFallback?: boolean;
 }
 
 interface ReadRecordsOptions {
@@ -1180,20 +1187,89 @@ interface ReadRecordsOptions {
     lightweight?: boolean;
     /** 是否批量附加用户标签；默认关闭，避免旧列表无谓 join */
     includeTags?: boolean;
+    /** 数据库排序字段；仅允许 Execution 标量列白名单。 */
+    sortKey?: 'timestamp' | 'agentName' | 'latency' | 'tokens' | 'cost';
+    sortDir?: 'asc' | 'desc';
+    /** Trace 列表显式启用；其他 readRecordPage 调用方保持原有全量去重后分页语义。 */
+    databasePagination?: boolean;
 }
 
-export async function listObservedAgentNames(user?: string): Promise<string[]> {
+export interface ReadRecordPageStats {
+    total: number;
+    failedCount: number;
+    avgLatencyMs: number;
+    toolErrorRate: number;
+}
+
+async function appendExecutionOwnershipWhere(
+    where: Record<string, any>,
+    ownership?: 'user' | 'system',
+): Promise<void> {
+    if (!ownership) return;
+    const registeredSystemIdentities: any[] = [];
+    try {
+        const registeredSystemAgents = await prismaRaw.registeredAgent.findMany({
+            where: { agentOwnership: 'system' },
+            select: { platform: true, name: true },
+        });
+        for (const item of registeredSystemAgents) {
+            if (!item.platform || !item.name) continue;
+            registeredSystemIdentities.push({ framework: item.platform, agentName: item.name });
+        }
+    } catch (e) {
+        console.warn('[readRecords] system agent ownership lookup failed:', (e as Error)?.message);
+    }
+    const ownershipWhere = ownership === 'system'
+        ? {
+            OR: [
+                { agentName: { in: [...SYSTEM_AGENT_NAMES] } },
+                ...registeredSystemIdentities,
+            ],
+        }
+        : {
+            AND: [
+                {
+                    OR: [
+                        { agentName: null },
+                        { agentName: { notIn: [...SYSTEM_AGENT_NAMES] } },
+                    ],
+                },
+                ...(registeredSystemIdentities.length > 0
+                    ? [{
+                        OR: [
+                            { framework: null },
+                            { agentName: null },
+                            { NOT: { OR: registeredSystemIdentities } },
+                        ],
+                    }]
+                    : []),
+            ],
+        };
+    where.AND = [...((where.AND as any[]) ?? []), ownershipWhere];
+}
+
+export async function listObservedAgentNames(user?: string, observedAgentFallback = false): Promise<string[]> {
     const where: any = { isSubagent: false };
     if (user) {
         // 只看 user=自己；无主(null)不可见(与 trace 列表口径一致)。
         where.user = user;
     }
 
-    const records = await db.findExecutions(where, { timestamp: 'desc' });
+    const records = await db.findExecutions(
+        where,
+        { timestamp: 'desc' },
+        { agentName: true, observedAgents: true },
+    );
     const names: string[] = [];
     const seen = new Set<string>();
     for (const record of records) {
-        const name = String(record?.agentName || '').trim();
+        const name = String(
+            record?.agentName
+            || (observedAgentFallback
+                ? parseObservedAgents(record?.observedAgents).find(agent => !isEvaluatorAgentName(agent))
+                : '')
+            || '',
+        ).trim();
         if (!name || seen.has(name) || isEvaluatorAgentName(name)) continue;
         seen.add(name);
         names.push(name);
@@ -1702,7 +1778,7 @@ async function readRecordsInternal(
     user?: string,
     filters?: ReadRecordFilters,
     options?: ReadRecordsOptions
-): Promise<{ records: ExecutionRecord[]; total: number }> {
+): Promise<{ records: ExecutionRecord[]; total: number; stats: ReadRecordPageStats }> {
     const light = options?.lightweight === true;
     // light 强制不附评测快照(routing/outcome_evaluation 需 final_result/judge 等重上下文,与轻量语义冲突;
     // 迁移的调用方今天也没开 includeEvaluations,故零行为变化,且连带省掉 configsData 与每条快照查询)。
@@ -1792,9 +1868,29 @@ async function readRecordsInternal(
         if (filters?.skillVersion !== undefined) where.skillVersion = filters.skillVersion;
     }
 
-    if (filters?.agentName !== undefined) {
+    if (filters?.agentName !== undefined && filters.observedAgentFallback) {
+        where.AND = [
+            ...((where.AND as any[]) ?? []),
+            {
+                OR: [
+                    { agentName: filters.agentName },
+                    {
+                        AND: [
+                            { agentName: null },
+                            { observedAgents: { contains: JSON.stringify(filters.agentName) } },
+                        ],
+                    },
+                ],
+            },
+        ];
+    } else if (filters?.agentName !== undefined) {
         where.agentName = filters.agentName;
     }
+    if (filters?.timestampFrom) {
+        where.timestamp = { gte: filters.timestampFrom };
+    }
+
+    await appendExecutionOwnershipWhere(where, filters?.ownership);
 
     const businessTagIds = Array.from(new Set((filters?.businessTagIds ?? []).map(v => String(v || '').trim()).filter(Boolean)));
     if (businessTagIds.length > 0) {
@@ -1824,19 +1920,43 @@ async function readRecordsInternal(
         }
     }
 
-    // dedup pass 统一走 light 投影(不取大字段 finalResult):heavy 模式的 finalResult 由
-    // hydrateAndNormalizeBatch 按批回取,避免把全量 finalResult 一次性拉进内存(分页路径尤甚)。
-    const records = await db.findExecutions(where, { timestamp: 'desc' }, LIGHT_EXECUTION_SELECT);
-    const { keepIds, byTaskId } = selectKeepIdsByTaskId(records);
+    const sortKey = options?.sortKey ?? 'timestamp';
+    const sortDir = options?.sortDir ?? 'desc';
+    const orderBy = [{ [sortKey]: sortDir }, { id: sortDir }];
+    let total = 0;
+    let paged: any[] = [];
+    let byTaskId = new Map<string, any[]>();
+    let keepIds = new Set<string>();
 
-    const filtered = records.filter((r: any) => {
-        if (!r.taskId) return true;
-        return keepIds.has(r.id);
-    });
-    const total = filtered.length;
-    const paged = pageSize > 0
-        ? filtered.slice((page - 1) * pageSize, (page - 1) * pageSize + pageSize)
-        : filtered;
+    if (pageSize > 0 && options?.databasePagination === true && !process.env.DB_HOST) {
+        // SQLite/Prisma 主路径：过滤、排序、分页都在数据库中完成。列表后续的标签、状态、
+        // 评测补充只处理当前页，避免“全量 hydrate 后再 slice”的假分页。
+        [total, paged] = await prismaRaw.$transaction([
+            prismaRaw.execution.count({ where }),
+            prismaRaw.execution.findMany({
+                where,
+                orderBy,
+                skip: (page - 1) * pageSize,
+                take: pageSize,
+                select: LIGHT_EXECUTION_SELECT as any,
+            }),
+        ]);
+    } else {
+        // OpenGauss 适配器和非分页旧调用保持原行为；本次不扩展其它页面/数据库适配层。
+        const records = await db.findExecutions(
+            where,
+            process.env.DB_HOST ? { timestamp: 'desc' } : orderBy,
+            LIGHT_EXECUTION_SELECT,
+        );
+        const dedup = selectKeepIdsByTaskId(records);
+        keepIds = dedup.keepIds;
+        byTaskId = dedup.byTaskId;
+        const filtered = records.filter((r: any) => !r.taskId || keepIds.has(r.id));
+        total = filtered.length;
+        paged = pageSize > 0
+            ? filtered.slice((page - 1) * pageSize, (page - 1) * pageSize + pageSize)
+            : filtered;
+    }
 
     for (const [tid, group] of byTaskId.entries()) {
         if (group.length <= 1) continue;
@@ -1877,7 +1997,39 @@ async function readRecordsInternal(
         });
         out.push(...normalizedBatch);
     }
-    return { records: out, total };
+    let stats: ReadRecordPageStats;
+    if (pageSize > 0 && !process.env.DB_HOST) {
+        const aggregate = await prismaRaw.execution.aggregate({
+            where,
+            _avg: { latency: true },
+            _sum: { toolCallCount: true, toolCallErrorCount: true },
+        });
+        const totalTools = aggregate._sum.toolCallCount ?? 0;
+        const totalToolErrors = aggregate._sum.toolCallErrorCount ?? 0;
+        stats = {
+            total,
+            // 当前生命周期读路径只产出 running/success；failed 保留在 API enrichment 后兼容计算。
+            failedCount: 0,
+            avgLatencyMs: (aggregate._avg.latency ?? 0) * 1000,
+            toolErrorRate: totalTools > 0
+                ? Math.round((totalToolErrors / totalTools) * 1000) / 10
+                : 0,
+        };
+    } else {
+        const totalTools = out.reduce((sum, item) => sum + (item.tool_call_count ?? 0), 0);
+        const totalToolErrors = out.reduce((sum, item) => sum + (item.tool_call_error_count ?? 0), 0);
+        stats = {
+            total,
+            failedCount: 0,
+            avgLatencyMs: out.length > 0
+                ? out.reduce((sum, item) => sum + ((item.latency ?? 0) * 1000), 0) / out.length
+                : 0,
+            toolErrorRate: totalTools > 0
+                ? Math.round((totalToolErrors / totalTools) * 1000) / 10
+                : 0,
+        };
+    }
+    return { records: out, total, stats };
 }
 
 export async function readRecords(
@@ -1893,7 +2045,7 @@ export async function readRecordPage(
     user?: string,
     filters?: ReadRecordFilters,
     options?: ReadRecordsOptions
-): Promise<{ records: ExecutionRecord[]; total: number }> {
+): Promise<{ records: ExecutionRecord[]; total: number; stats: ReadRecordPageStats }> {
     return readRecordsInternal(user, filters, options);
 }
 

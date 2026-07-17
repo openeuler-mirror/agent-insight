@@ -329,6 +329,10 @@ const TraceCtx = React.createContext<TraceCtxValue>(defaultCtx);
 
 export interface AgentTraceViewProps {
     interactions: RawInteraction[];
+    /** 按 interaction index 读取完整原文；未提供时保持旧的一次性完整数据行为。 */
+    loadInteraction?: (index: number) => Promise<RawInteraction>;
+    /** 搜索或 Prompt/Timeline 需要完整上下文时按需读取全部 interactions。 */
+    loadAllInteractions?: () => Promise<RawInteraction[]>;
     /**
      * 点击 sub-agent 节点旁的跳转按钮触发。
      * sessionId 即 sub-agent 的 sessionID，等同于 Execution.taskId。
@@ -340,9 +344,67 @@ export interface AgentTraceViewProps {
     rootExecutionId?: string;
 }
 
-export default function AgentTraceView({ interactions, onSubagentNavigate, rootExecutionId }: AgentTraceViewProps) {
+export default function AgentTraceView({
+    interactions: sourceInteractions,
+    loadInteraction,
+    loadAllInteractions,
+    onSubagentNavigate,
+    rootExecutionId,
+}: AgentTraceViewProps) {
     const { user } = useAuth();
     const { t: tt } = useLocale();
+    const [interactions, setInteractions] = useState<RawInteraction[]>(sourceInteractions);
+    const [interactionLoadError, setInteractionLoadError] = useState<string | null>(null);
+    const fullLoadPromiseRef = React.useRef<Promise<RawInteraction[]> | null>(null);
+    const previousRootExecutionIdRef = React.useRef(rootExecutionId);
+
+    useEffect(() => {
+        const traceChanged = previousRootExecutionIdRef.current !== rootExecutionId;
+        previousRootExecutionIdRef.current = rootExecutionId;
+        fullLoadPromiseRef.current = null;
+        setInteractionLoadError(null);
+        setInteractions(previous => {
+            if (traceChanged) return sourceInteractions;
+            return sourceInteractions.map((item, index) => {
+                const loaded = previous[index] as (RawInteraction & { _payloadDeferred?: boolean }) | undefined;
+                return loaded && !loaded._payloadDeferred ? loaded : item;
+            });
+        });
+    }, [sourceInteractions, rootExecutionId]);
+
+    const ensureInteractionLoaded = React.useCallback(async (index: number) => {
+        const current = interactions[index] as (RawInteraction & { _payloadDeferred?: boolean }) | undefined;
+        if (!current?._payloadDeferred || !loadInteraction) return;
+        const requestedTraceId = previousRootExecutionIdRef.current;
+        setInteractionLoadError(null);
+        try {
+            const loaded = await loadInteraction(index);
+            if (previousRootExecutionIdRef.current !== requestedTraceId) return;
+            setInteractions(previous => previous.map((item, itemIndex) => itemIndex === index ? loaded : item));
+        } catch (error) {
+            setInteractionLoadError(error instanceof Error ? error.message : 'Failed to load interaction');
+        }
+    }, [interactions, loadInteraction]);
+
+    const ensureAllInteractionsLoaded = React.useCallback(async () => {
+        if (!loadAllInteractions) return interactions;
+        if (!interactions.some(item => (item as RawInteraction & { _payloadDeferred?: boolean })._payloadDeferred)) {
+            return interactions;
+        }
+        if (!fullLoadPromiseRef.current) {
+            const requestedTraceId = previousRootExecutionIdRef.current;
+            fullLoadPromiseRef.current = loadAllInteractions()
+                .then(loaded => {
+                    if (previousRootExecutionIdRef.current === requestedTraceId) setInteractions(loaded);
+                    return loaded;
+                })
+                .finally(() => {
+                    fullLoadPromiseRef.current = null;
+                });
+        }
+        return fullLoadPromiseRef.current;
+    }, [interactions, loadAllInteractions]);
+
     const tree = useMemo(() => buildAgentCallTree(interactions || []), [interactions]);
     const nodeMap = useMemo(() => tree ? buildNodeMap(tree) : new Map<string, AgentNode>(), [tree]);
     const traceSkillCalls = useMemo(() => collectTraceSkillCalls(interactions || []), [interactions]);
@@ -444,6 +506,19 @@ export default function AgentTraceView({ interactions, onSubagentNavigate, rootE
         () => resolveTraceSkillUsages(selectedTraceSkillCalls, managedSkillAssets),
         [selectedTraceSkillCalls, managedSkillAssets],
     );
+    const selectedEventPayloadDeferred = Boolean(
+        (selectedEvent?.interaction as (RawInteraction & { _payloadDeferred?: boolean }) | undefined)?._payloadDeferred,
+    );
+
+    useEffect(() => {
+        if (selectedEvent) void ensureInteractionLoaded(selectedEvent.interactionIndex);
+    }, [selectedEvent, ensureInteractionLoaded]);
+
+    useEffect(() => {
+        if (activeDetailTab === 'prompt' || activeDetailTab === 'timeline' || searchQuery.trim()) {
+            void ensureAllInteractionsLoaded();
+        }
+    }, [activeDetailTab, searchQuery, ensureAllInteractionsLoaded]);
 
     const toggleKey = (key: string) => {
         setExpandedKeys(s => {
@@ -788,7 +863,25 @@ export default function AgentTraceView({ interactions, onSubagentNavigate, rootE
 
                 {/* ─── Right: Detail Panel ─── */}
                 <div className="rounded-lg border border-card-border bg-card flex flex-col h-full min-h-0 overflow-hidden">
-                    {selectedEvent ? (
+                    {selectedEvent && selectedEventPayloadDeferred && !interactionLoadError ? (
+                        <div className="p-4 space-y-3">
+                            <div className="h-5 w-1/3 rounded bg-background-tertiary animate-pulse" />
+                            <div className="h-24 w-full rounded bg-background-tertiary animate-pulse" />
+                            <div className="h-24 w-full rounded bg-background-tertiary animate-pulse" />
+                        </div>
+                    ) : selectedEvent && interactionLoadError ? (
+                        <div className="m-4 rounded-md border border-error-border bg-error-subtle p-4 text-sm text-error">
+                            <p>{interactionLoadError}</p>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className="mt-3"
+                                onClick={() => void ensureInteractionLoaded(selectedEvent.interactionIndex)}
+                            >
+                                重试
+                            </Button>
+                        </div>
+                    ) : selectedEvent ? (
                         <EventDetailPanel event={selectedEvent} node={selectedAgentNode} interactions={interactions} />
                     ) : selectedAgentNode ? (
                         <AgentDetail

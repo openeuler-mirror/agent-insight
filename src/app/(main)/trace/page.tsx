@@ -33,7 +33,6 @@ import type { FilterClause } from '@/lib/filters/types';
 import { useAuth } from '@/lib/auth/auth-context';
 import { useLocale } from '@/lib/client/locale-context';
 import { apiFetch } from '@/lib/client/api';
-import { getPrimaryExecutionAgentName } from '@/lib/evaluator-agent';
 
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
@@ -60,7 +59,7 @@ import { TruncateText } from '@/components/text/TruncateText';
 import { RelativeTime } from '@/components/text/RelativeTime';
 import { Term } from '@/components/text/Term';
 import { cn } from '@/lib/utils';
-import { formatDurationMs, formatLatencySeconds, latencySecondsToMs } from '@/lib/latency-format';
+import { formatDurationMs, formatLatencySeconds } from '@/lib/latency-format';
 
 const basePath = process.env.NEXT_PUBLIC_URL_PREFIX || '';
 
@@ -120,21 +119,28 @@ interface Execution {
     userTags?: TraceUserTag[];
 }
 
-type TimeFilter = '30m' | '1h' | '3h' | '24h' | '7d' | '30d' | 'all';
+interface TraceListStats {
+    total: number;
+    failedCount: number;
+    avgLatencyMs: number;
+    toolErrorRate: number;
+}
+
+interface TracePageResponse {
+    records: Execution[];
+    total: number;
+    page: number;
+    pageSize: number;
+    stats?: TraceListStats;
+}
+
+interface FacetValueRow {
+    value?: string | null;
+    count?: number;
+}
+
 type SortKey = 'timestamp' | 'agent' | 'status' | 'latency' | 'tokens' | 'cost';
 type SortDir = 'asc' | 'desc';
-type AnomalyFilter = 'all' | 'running' | 'success' | 'failed';
-type OwnershipFilter = 'all' | 'user' | 'system';
-
-const TIME_WIN_MS: Record<TimeFilter, number> = {
-    '30m': 1.8e6,
-    '1h': 3.6e6,
-    '3h': 1.08e7,
-    '24h': 8.64e7,
-    '7d': 6.048e8,
-    '30d': 2.592e9,
-    'all': Infinity,
-};
 
 const PAGE_SIZE_OPTIONS = [20, 50, 100] as const;
 const REFRESH_INTERVAL_OPTIONS = [5, 10, 30, 60] as const;
@@ -191,11 +197,6 @@ function getInvokedSkillNames(execution: Execution): string[] {
         if (name) names.add(name);
     });
     return Array.from(names);
-}
-
-/** 主 Agent 名：优先 Execution.agentName，退回首个非评估器 agent。用于「按主 Agent 筛选」。 */
-function getMainAgentName(execution: Execution): string {
-    return execution.agentName?.trim() || getPrimaryExecutionAgentName(execution);
 }
 
 function getExecStatus(e: Execution): 'running' | 'success' | 'failed' {
@@ -430,11 +431,20 @@ function TracePageContent() {
     const { user } = useAuth();
     const { t, locale } = useLocale();
     const [data, setData] = useState<Execution[]>([]);
+    const [total, setTotal] = useState(0);
+    const [stats, setStats] = useState<TraceListStats>({
+        total: 0,
+        failedCount: 0,
+        avgLatencyMs: 0,
+        toolErrorRate: 0,
+    });
     const [loading, setLoading] = useState(true);
     const [selectedExecution, setSelectedExecution] = useState<Execution | null>(null);
-    const [selectedTraceKeys, setSelectedTraceKeys] = useState<Set<string>>(() => new Set());
+    const [selectedTracesByKey, setSelectedTracesByKey] = useState<Map<string, Execution>>(() => new Map());
     const [batchBackflowOpen, setBatchBackflowOpen] = useState(false);
     const [availableTags, setAvailableTags] = useState<TraceUserTag[]>([]);
+    const [frameworks, setFrameworks] = useState<string[]>([]);
+    const [mainAgents, setMainAgents] = useState<string[]>([]);
 
     // URL-persisted filter / sort / paging state (docs/design/patterns.md §1 + §11).
     const [timeFilter, setTimeFilter] = useQueryState('time', parseAsString.withDefault('all'));
@@ -482,6 +492,30 @@ function TracePageContent() {
     useEffect(() => {
         loadAvailableTags();
     }, [loadAvailableTags]);
+
+    useEffect(() => {
+        if (!user) {
+            setFrameworks([]);
+            setMainAgents([]);
+            return;
+        }
+        Promise.all([
+            apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&facet=values&column=framework`)
+                .then(r => r.ok ? r.json() : []),
+            apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&summary=agents&databasePagination=1`)
+                .then(r => r.ok ? r.json() : { agents: [] }),
+        ]).then(([frameworkRows, agentRows]) => {
+            setFrameworks(Array.isArray(frameworkRows)
+                ? (frameworkRows as FacetValueRow[]).map(item => String(item?.value || '')).filter(Boolean)
+                : []);
+            setMainAgents(Array.isArray(agentRows?.agents)
+                ? agentRows.agents.map((item: unknown) => String(item || '')).filter(Boolean)
+                : []);
+        }).catch(() => {
+            setFrameworks([]);
+            setMainAgents([]);
+        });
+    }, [user]);
 
     const handleTraceTagsChanged = useCallback((executionId: string, tags: TraceUserTag[]) => {
         setData(prev => prev.map(item => (
@@ -574,68 +608,45 @@ function TracePageContent() {
         const searchParam = search ? `&query=${encodeURIComponent(search)}` : '';
         const filtersParam = clauses.length ? `&filters=${encodeURIComponent(JSON.stringify(clauses))}` : '';
         const bizTagParam = businessTagFilter !== 'all' ? `&bizTag=${encodeURIComponent(businessTagFilter)}` : '';
-        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&includeEvaluations=0&fields=light&includeTags=1&skipAutoEvalReady=1${scopeParam}${skillParam}${searchParam}${filtersParam}${bizTagParam}`)
+        const frameworkParam = frameworkFilter !== 'all' ? `&framework=${encodeURIComponent(frameworkFilter)}` : '';
+        const agentParam = agentFilter !== 'all' ? `&agentName=${encodeURIComponent(agentFilter)}` : '';
+        const ownershipParam = ownershipFilter !== 'all' ? `&ownership=${encodeURIComponent(ownershipFilter)}` : '';
+        apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&paginated=1&databasePagination=1&page=${page}&pageSize=${pageSize}&sort=${encodeURIComponent(sortKey)}&dir=${encodeURIComponent(sortDir)}&time=${encodeURIComponent(timeFilter)}&status=${encodeURIComponent(anomalyFilter)}&includeEvaluations=0&fields=light&includeTags=1&skipAutoEvalReady=1${scopeParam}${skillParam}${searchParam}${filtersParam}${bizTagParam}${frameworkParam}${agentParam}${ownershipParam}`)
             .then(r => r.json())
-            .then((d: Execution[]) => setData(Array.isArray(d) ? d : []))
-            .catch(() => setData([]))
-            .finally(() => setLoading(false));
-    }, [user, agentScopeFilter, skillFilter, businessTagFilter, search, clausesRaw]);
-
-
-    const filtered = useMemo(() => {
-        const now = Date.now();
-        const winMs = TIME_WIN_MS[timeFilter as TimeFilter] ?? Infinity;
-        return data
-            .filter(d => {
-                if (agentFilter !== 'all' && agentFilter !== '') {
-                    // 只按**主 Agent**(agentName)匹配,而非 trace 涉及的任意 agent。
-                    if (getMainAgentName(d) !== agentFilter) return false;
-                }
-                if (winMs !== Infinity) {
-                    const ts = typeof d.timestamp === 'string' ? Date.parse(d.timestamp) : Number(d.timestamp);
-                    if (now - ts > winMs) return false;
-                }
-                if (frameworkFilter !== 'all' && d.framework !== frameworkFilter) return false;
-                if (anomalyFilter !== 'all') {
-                    const status = getExecStatus(d);
-                    if (anomalyFilter !== status) return false;
-                }
-                if (ownershipFilter !== 'all') {
-                    const ownership = d.agentOwnership ?? 'user';
-                    if (ownership !== ownershipFilter) return false;
-                }
-                return true;
+            .then((response: TracePageResponse) => {
+                const records = Array.isArray(response?.records) ? response.records : [];
+                setData(records);
+                setTotal(typeof response?.total === 'number' ? response.total : 0);
+                setStats(response?.stats ?? {
+                    total: typeof response?.total === 'number' ? response.total : 0,
+                    failedCount: 0,
+                    avgLatencyMs: 0,
+                    toolErrorRate: 0,
+                });
             })
-            .sort((a, b) => {
-                let cmp = 0;
-                switch (sortKey as SortKey) {
-                    case 'timestamp': {
-                        const ta = typeof a.timestamp === 'string' ? Date.parse(a.timestamp) : Number(a.timestamp);
-                        const tb = typeof b.timestamp === 'string' ? Date.parse(b.timestamp) : Number(b.timestamp);
-                        cmp = ta - tb;
-                        break;
-                    }
-                    case 'agent':
-                        cmp = (a.agent || '').localeCompare(b.agent || '');
-                        break;
-                    case 'status': {
-                        const order = { running: 0, failed: 1, success: 2 };
-                        cmp = order[getExecStatus(a)] - order[getExecStatus(b)];
-                        break;
-                    }
-                    case 'latency':
-                        cmp = (latencySecondsToMs(a.latency) ?? 0) - (latencySecondsToMs(b.latency) ?? 0);
-                        break;
-                    case 'tokens':
-                        cmp = (a.tokens || 0) - (b.tokens || 0);
-                        break;
-                    case 'cost':
-                        cmp = (a.cost || 0) - (b.cost || 0);
-                        break;
-                }
-                return sortDir === 'asc' ? cmp : -cmp;
-            });
-    }, [data, timeFilter, frameworkFilter, anomalyFilter, agentFilter, ownershipFilter, sortKey, sortDir]);
+            .catch(() => {
+                setData([]);
+                setTotal(0);
+                setStats({ total: 0, failedCount: 0, avgLatencyMs: 0, toolErrorRate: 0 });
+            })
+            .finally(() => setLoading(false));
+    }, [
+        user,
+        agentScopeFilter,
+        skillFilter,
+        businessTagFilter,
+        search,
+        clausesRaw,
+        frameworkFilter,
+        agentFilter,
+        ownershipFilter,
+        anomalyFilter,
+        timeFilter,
+        sortKey,
+        sortDir,
+        page,
+        pageSize,
+    ]);
 
     useEffect(() => {
         if (page !== 1) setPage(1);
@@ -652,24 +663,16 @@ function TracePageContent() {
         }
     };
 
-    const stats = useMemo(() => {
-        const total = filtered.length;
-        const failedCount = filtered.filter(e => getExecStatus(e) === 'failed').length;
-        const avgLatencyMs = total ? filtered.reduce((s, e) => s + (latencySecondsToMs(e.latency) ?? 0), 0) / total : 0;
-        const errorCount = filtered.reduce((s, e) => s + (e.tool_call_error_count || 0), 0);
-        const totalTools = filtered.reduce((s, e) => s + (e.tool_call_count || 0), 0);
-        const errRate = totalTools ? Math.round((errorCount / totalTools) * 1000) / 10 : 0;
-        return { total, failedCount, avgLatency: avgLatencyMs, errRate };
-    }, [filtered]);
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const pageItems = data;
 
-    const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
-    const pageItems = useMemo(
-        () => filtered.slice((page - 1) * pageSize, page * pageSize),
-        [filtered, page, pageSize],
+    const selectedTraceKeys = useMemo(
+        () => new Set(selectedTracesByKey.keys()),
+        [selectedTracesByKey],
     );
     const selectedTraces = useMemo(
-        () => data.filter(item => selectedTraceKeys.has(getExecutionRowKey(item))),
-        [data, selectedTraceKeys],
+        () => Array.from(selectedTracesByKey.values()),
+        [selectedTracesByKey],
     );
     const pageTraceKeys = useMemo(
         () => pageItems.map(getExecutionRowKey).filter(Boolean),
@@ -682,22 +685,33 @@ function TracePageContent() {
     const toggleTraceSelection = useCallback((execution: Execution) => {
         const key = getExecutionRowKey(execution);
         if (!key) return;
-        setSelectedTraceKeys(previous => {
-            const next = new Set(previous);
+        setSelectedTracesByKey(previous => {
+            const next = new Map(previous);
             if (next.has(key)) next.delete(key);
-            else next.add(key);
+            else next.set(key, execution);
             return next;
         });
     }, []);
 
     const toggleCurrentPage = useCallback(() => {
-        setSelectedTraceKeys(previous => {
-            const next = new Set(previous);
+        setSelectedTracesByKey(previous => {
+            const next = new Map(previous);
             const shouldSelect = pageTraceKeys.some(key => !next.has(key));
-            pageTraceKeys.forEach(key => shouldSelect ? next.add(key) : next.delete(key));
+            pageItems.forEach(execution => {
+                const key = getExecutionRowKey(execution);
+                if (!key) return;
+                if (shouldSelect) next.set(key, execution);
+                else next.delete(key);
+            });
             return next;
         });
-    }, [pageTraceKeys]);
+    }, [pageItems, pageTraceKeys]);
+
+    const clearTraceSelection = useCallback(() => setSelectedTracesByKey(new Map()), []);
+
+    useEffect(() => {
+        if (page > totalPages) setPage(totalPages);
+    }, [page, totalPages, setPage]);
 
     const hasActiveFilters = ownershipFilter !== 'all' || agentFilter !== 'all' || skillFilter !== 'all' || businessTagFilter !== 'all'
         || anomalyFilter !== 'all' || timeFilter !== 'all' || frameworkFilter !== 'all'
@@ -715,22 +729,6 @@ function TracePageContent() {
         setSearch(null);
         setClauses([]);
     };
-
-    const frameworks = useMemo(() => {
-        const set = new Set<string>();
-        data.forEach(d => d.framework && set.add(d.framework));
-        return Array.from(set).sort();
-    }, [data]);
-
-    // 主 Agent 下拉选项从当前工作集推导(去重、按名排序)。
-    const mainAgents = useMemo(() => {
-        const set = new Set<string>();
-        data.forEach(d => {
-            const name = getMainAgentName(d);
-            if (name) set.add(name);
-        });
-        return Array.from(set).sort((a, b) => a.localeCompare(b));
-    }, [data]);
 
     // Filter dropdown option sets
     const ownershipOptions: SelectOption[] = [
@@ -781,10 +779,10 @@ function TracePageContent() {
                                 value={String(stats.failedCount)}
                                 accent={stats.failedCount > 0 ? 'error' : undefined}
                             />
-                            <StatCard label={t('tracePage.statAvgLatency')} value={formatDurationMs(stats.avgLatency)} />
+                            <StatCard label={t('tracePage.statAvgLatency')} value={formatDurationMs(stats.avgLatencyMs)} />
                             <StatCard
                                 label={<Term id="tool-error-rate" label={t('tracePage.statToolErrorRate')} align="end" />}
-                                value={`${stats.errRate}%`}
+                                value={`${stats.toolErrorRate}%`}
                             />
                         </div>
 
@@ -899,14 +897,14 @@ function TracePageContent() {
                                             ? (locale === 'zh' ? '取消当前页' : 'Deselect page')
                                             : (locale === 'zh' ? '全选当前页' : 'Select page')}
                                     </Button>
-                                    <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => setSelectedTraceKeys(new Set())}>
+                                    <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={clearTraceSelection}>
                                         {locale === 'zh' ? '清空选择' : 'Clear'}
                                     </Button>
                                 </div>
                             ) : (
                                 <h2 className="text-sm font-semibold text-foreground">
                                     {t('tracePage.listTitle')}
-                                    <span className="ml-2 text-foreground-muted font-normal tabular-nums">{filtered.length}</span>
+                                    <span className="ml-2 text-foreground-muted font-normal tabular-nums">{total}</span>
                                 </h2>
                             )}
                             <div className="flex items-center gap-3">
@@ -1047,13 +1045,13 @@ function TracePageContent() {
                             </div>
                         </PageContent>
 
-                        {filtered.length > 0 && (
+                        {total > 0 && (
                             <PageFooter className="border-0 mt-3 pt-0 shrink-0">
                                 <Pagination
                                     className="w-full"
                                     page={page}
                                     pageSize={pageSize}
-                                    total={filtered.length}
+                                    total={total}
                                     onPageChange={setPage}
                                     onPageSizeChange={setPageSize}
                                     pageSizes={PAGE_SIZE_OPTIONS}
@@ -1076,7 +1074,7 @@ function TracePageContent() {
                                     executionId: item.upload_id,
                                     label: item.query || item.task_id || item.upload_id || 'Trace',
                                 }))}
-                                onSaved={() => setSelectedTraceKeys(new Set())}
+                                onSaved={clearTraceSelection}
                             />
                         )}
                             </div>
@@ -1140,7 +1138,7 @@ function TraceDetailView({
         if (!taskId) return;
         const isInitial = !sessionRef.current;
         if (!silent && isInitial) setLoading(true);
-        apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}`)
+        apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}&view=structure`)
             .then(r => r.ok ? r.json() : { error: 'Fetch failed' })
             .then(j => { setSession(j); setSecondsSinceRefresh(0); })
             .catch(() => { if (!silent && isInitial) setSession({ error: 'Network error' }); })
@@ -1160,14 +1158,33 @@ function TraceDetailView({
         return () => clearInterval(id);
     }, []);
 
+    const loadInteraction = useCallback(async (index: number) => {
+        const response = await apiFetch(
+            `/api/observe/session?taskId=${encodeURIComponent(taskId)}&view=interaction&index=${index}`,
+        );
+        if (!response.ok) throw new Error(await readApiError(response));
+        const body = await response.json();
+        return body?.interaction;
+    }, [taskId]);
+
+    const loadFullInteractions = useCallback(async () => {
+        const response = await apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}&view=interactions`);
+        if (!response.ok) throw new Error(await readApiError(response));
+        const body = await response.json();
+        return Array.isArray(body?.interactions) ? body.interactions : [];
+    }, [taskId]);
+
     const { framework, latency, tokens, cost } = execution;
     const isRunning = execStatus === 'running';
     const canDownloadSession = !loading && !!session && !session.error;
 
-    const downloadSessionJson = () => {
+    const downloadSessionJson = async () => {
         if (!session || session.error) return;
         try {
-            const formatted = formatSessionForDisplay(session);
+            const response = await apiFetch(`/api/observe/session?taskId=${encodeURIComponent(taskId)}&view=full`);
+            if (!response.ok) throw new Error(await readApiError(response));
+            const fullSession = await response.json();
+            const formatted = formatSessionForDisplay(fullSession);
             const blob = new Blob([JSON.stringify(formatted, null, 2)], { type: 'application/json;charset=utf-8' });
             const url = URL.createObjectURL(blob);
             const link = document.createElement('a');
@@ -1338,6 +1355,8 @@ function TraceDetailView({
                 ) : session?.interactions?.length > 0 ? (
                     <AgentTraceView
                         interactions={session.interactions}
+                        loadInteraction={loadInteraction}
+                        loadAllInteractions={loadFullInteractions}
                         onSubagentNavigate={navigateToTaskId}
                         rootExecutionId={execution.upload_id || execution.task_id}
                     />
