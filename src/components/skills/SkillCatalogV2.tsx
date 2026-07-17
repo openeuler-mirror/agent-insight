@@ -15,6 +15,7 @@
 
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
+import { copyText } from '@/lib/copy-text';
 import { STATIC_EVAL_STANDARDS } from '@/components/evaluation';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
@@ -2838,7 +2839,7 @@ function TabRuns({
                                     className="sk-mono"
                                     style={{ color: 'var(--sk-fg3)', fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: r.trace_id ? 'copy' : 'default' }}
                                     title={r.trace_id || ''}
-                                    onClick={() => { if (r.trace_id) navigator.clipboard?.writeText(r.trace_id).catch(() => {}); }}
+                                    onClick={() => { if (r.trace_id) copyText(r.trace_id).catch(() => {}); }}
                                 >
                                     {r.trace_id || '—'}
                                 </div>

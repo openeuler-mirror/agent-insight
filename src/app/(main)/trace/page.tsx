@@ -19,6 +19,7 @@ import {
     Columns3,
     Plus,
     Check,
+    Database,
 } from 'lucide-react';
 import { parseAsInteger, parseAsString, useQueryState } from 'nuqs';
 import { toast } from 'sonner';
@@ -28,6 +29,7 @@ import { PageContainer, PageContent, PageFooter } from '@/components/shell/PageC
 import AgentTraceView from '@/components/observe/AgentTraceView';
 import TraceFilterBar from '@/components/observe/TraceFilterBar';
 import TraceFilterSidebar from '@/components/observe/TraceFilterSidebar';
+import { TraceBackflowDialog } from '@/components/observe/TraceBackflowDialog';
 import type { FilterClause } from '@/lib/filters/types';
 import { useAuth } from '@/lib/auth/auth-context';
 import { useLocale } from '@/lib/client/locale-context';
@@ -403,6 +405,8 @@ function TracePageContent() {
     const [data, setData] = useState<Execution[]>([]);
     const [loading, setLoading] = useState(true);
     const [selectedExecution, setSelectedExecution] = useState<Execution | null>(null);
+    const [selectedTraceKeys, setSelectedTraceKeys] = useState<Set<string>>(() => new Set());
+    const [batchBackflowOpen, setBatchBackflowOpen] = useState(false);
     const [availableTags, setAvailableTags] = useState<TraceUserTag[]>([]);
     const importInputRef = useRef<HTMLInputElement>(null);
     const [importing, setImporting] = useState(false);
@@ -499,7 +503,7 @@ function TracePageContent() {
         const fixedWidth = (Object.keys(DEFAULT_COLUMN_WIDTHS) as ResizableColKey[])
             .filter(key => columnVisibility[key])
             .reduce((sum, key) => sum + widths[key], 0);
-        return fixedWidth + (columnVisibility.task ? TASK_COL_MIN_PX : 0);
+        return 44 + fixedWidth + (columnVisibility.task ? TASK_COL_MIN_PX : 0);
     }, [widths, columnVisibility]);
 
     const handleSelectExecution = useCallback((e: Execution | null) => {
@@ -672,6 +676,37 @@ function TracePageContent() {
         () => filtered.slice((page - 1) * pageSize, page * pageSize),
         [filtered, page, pageSize],
     );
+    const selectedTraces = useMemo(
+        () => data.filter(item => selectedTraceKeys.has(getExecutionRowKey(item))),
+        [data, selectedTraceKeys],
+    );
+    const pageTraceKeys = useMemo(
+        () => pageItems.map(getExecutionRowKey).filter(Boolean),
+        [pageItems],
+    );
+    const selectedPageCount = pageTraceKeys.filter(key => selectedTraceKeys.has(key)).length;
+    const allPageSelected = pageTraceKeys.length > 0 && selectedPageCount === pageTraceKeys.length;
+    const somePageSelected = selectedPageCount > 0 && !allPageSelected;
+
+    const toggleTraceSelection = useCallback((execution: Execution) => {
+        const key = getExecutionRowKey(execution);
+        if (!key) return;
+        setSelectedTraceKeys(previous => {
+            const next = new Set(previous);
+            if (next.has(key)) next.delete(key);
+            else next.add(key);
+            return next;
+        });
+    }, []);
+
+    const toggleCurrentPage = useCallback(() => {
+        setSelectedTraceKeys(previous => {
+            const next = new Set(previous);
+            const shouldSelect = pageTraceKeys.some(key => !next.has(key));
+            pageTraceKeys.forEach(key => shouldSelect ? next.add(key) : next.delete(key));
+            return next;
+        });
+    }, [pageTraceKeys]);
 
     const hasActiveFilters = ownershipFilter !== 'all' || agentFilter !== 'all' || skillFilter !== 'all' || businessTagFilter !== 'all'
         || anomalyFilter !== 'all' || timeFilter !== 'all' || frameworkFilter !== 'all'
@@ -871,12 +906,37 @@ function TracePageContent() {
                             )}
                             <div className="flex-1 min-w-0 flex flex-col">
 
-                        <div className="flex items-center justify-between mb-2">
-                            <h2 className="text-sm font-semibold text-foreground">
-                                {t('tracePage.listTitle')}
-                                <span className="ml-2 text-foreground-muted font-normal tabular-nums">{filtered.length}</span>
-                            </h2>
+                        <div className={cn(
+                            'sticky top-0 z-20 flex min-h-9 flex-wrap items-center justify-between gap-3 mb-2 rounded-md',
+                            selectedTraces.length > 0 && 'border border-primary-border bg-primary-subtle px-3 py-1.5',
+                        )}>
+                            {selectedTraces.length > 0 ? (
+                                <div className="flex min-w-0 flex-wrap items-center gap-3">
+                                    <span className="text-sm font-semibold text-primary">
+                                        {locale === 'zh' ? `已选择 ${selectedTraces.length} 条` : `${selectedTraces.length} selected`}
+                                    </span>
+                                    <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={toggleCurrentPage}>
+                                        {allPageSelected
+                                            ? (locale === 'zh' ? '取消当前页' : 'Deselect page')
+                                            : (locale === 'zh' ? '全选当前页' : 'Select page')}
+                                    </Button>
+                                    <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => setSelectedTraceKeys(new Set())}>
+                                        {locale === 'zh' ? '清空选择' : 'Clear'}
+                                    </Button>
+                                </div>
+                            ) : (
+                                <h2 className="text-sm font-semibold text-foreground">
+                                    {t('tracePage.listTitle')}
+                                    <span className="ml-2 text-foreground-muted font-normal tabular-nums">{filtered.length}</span>
+                                </h2>
+                            )}
                             <div className="flex items-center gap-3">
+                                {selectedTraces.length > 0 && (
+                                    <Button size="sm" className="h-7 gap-1.5 text-xs" onClick={() => setBatchBackflowOpen(true)}>
+                                        <Database className="size-3.5" aria-hidden />
+                                        {locale === 'zh' ? '加入评测数据集' : 'Add to dataset'}
+                                    </Button>
+                                )}
                                 {(isCustomized || isVisibilityCustomized) && (
                                     <Button
                                         variant="ghost"
@@ -939,23 +999,34 @@ function TracePageContent() {
                                 ) : (
                                     <table className="w-full table-fixed text-sm" style={{ minWidth: tableMinWidth }}>
                                         <colgroup>
+                                            <col style={{ width: 44 }} />
                                             {columnVisibility.traceId && <col style={{ width: widths.traceId }} />}
+                                            {/* 任务内容放第二列：用户最关心的信息 */}
+                                            {columnVisibility.task && <col />}
                                             {columnVisibility.agent && <col style={{ width: widths.agent }} />}
                                             {columnVisibility.status && <col style={{ width: widths.status }} />}
                                             {columnVisibility.userTags && <col style={{ width: widths.userTags }} />}
                                             {columnVisibility.systemTags && <col style={{ width: widths.systemTags }} />}
-                                            {columnVisibility.task && <col />}
                                             {columnVisibility.tokens && <col style={{ width: widths.tokens }} />}
                                             {columnVisibility.time && <col style={{ width: widths.time }} />}
                                             {columnVisibility.actions && <col style={{ width: widths.actions }} />}
                                         </colgroup>
                                         <thead className="sticky top-0 z-10">
                                             <tr className="bg-background-secondary text-left">
+                                                <Th>
+                                                    <SelectionCheckbox
+                                                        checked={allPageSelected}
+                                                        indeterminate={somePageSelected}
+                                                        onChange={toggleCurrentPage}
+                                                        ariaLabel={locale === 'zh' ? '选择当前页 Trace' : 'Select traces on this page'}
+                                                    />
+                                                </Th>
                                                 {columnVisibility.traceId && (
                                                     <Th colKey="traceId" currentWidth={widths.traceId} onResize={setColumnWidth}>
                                                         <Term id="trace" label={t('tracePage.columnTraceId')} />
                                                     </Th>
                                                 )}
+                                                {columnVisibility.task && <Th>{t('tracePage.columnTask')}</Th>}
                                                 {columnVisibility.agent && (
                                                     <SortableTh sortKey="agent" currentKey={sortKey as SortKey} dir={sortDir as SortDir} onSort={handleSort} colKey="agent" currentWidth={widths.agent} onResize={setColumnWidth}>
                                                         <Term id="agent" label={t('tracePage.columnAgent')} />
@@ -968,7 +1039,6 @@ function TracePageContent() {
                                                 )}
                                                 {columnVisibility.userTags && <Th colKey="userTags" currentWidth={widths.userTags} onResize={setColumnWidth}>{t('tracePage.columnUserTags')}</Th>}
                                                 {columnVisibility.systemTags && <Th colKey="systemTags" currentWidth={widths.systemTags} onResize={setColumnWidth}>{t('tracePage.columnSystemTags')}</Th>}
-                                                {columnVisibility.task && <Th>{t('tracePage.columnTask')}</Th>}
                                                 {columnVisibility.tokens && (
                                                     <SortableTh sortKey="tokens" currentKey={sortKey as SortKey} dir={sortDir as SortDir} onSort={handleSort} colKey="tokens" currentWidth={widths.tokens} onResize={setColumnWidth}>
                                                         <Term id="tokens" label={t('tracePage.columnTokens')} />
@@ -988,6 +1058,8 @@ function TracePageContent() {
                                                     onTagsChanged={handleTraceTagsChanged}
                                                     onTagCreated={handleTraceTagCreated}
                                                     onClick={() => handleSelectExecution(e)}
+                                                    selected={selectedTraceKeys.has(getExecutionRowKey(e))}
+                                                    onSelectedChange={() => toggleTraceSelection(e)}
                                                 />
                                             ))}
                                         </tbody>
@@ -1014,6 +1086,19 @@ function TracePageContent() {
                                     })}
                                 />
                             </PageFooter>
+                        )}
+                        {user && (
+                            <TraceBackflowDialog
+                                open={batchBackflowOpen}
+                                onOpenChange={setBatchBackflowOpen}
+                                user={user}
+                                sources={selectedTraces.map(item => ({
+                                    taskId: item.task_id || item.upload_id || '',
+                                    executionId: item.upload_id,
+                                    label: item.query || item.task_id || item.upload_id || 'Trace',
+                                }))}
+                                onSaved={() => setSelectedTraceKeys(new Set())}
+                            />
                         )}
                             </div>
                         </div>
@@ -1072,6 +1157,7 @@ function TraceDetailView({
     const [session, setSession] = useState<any | null>(null);
     const [loading, setLoading] = useState(false);
     const [exporting, setExporting] = useState(false);
+    const [backflowOpen, setBackflowOpen] = useState(false);
     const taskId = execution.task_id || execution.upload_id || '';
     const execAny = execution as any;
     const isSubagentTrace: boolean = !!execAny.is_subagent;
@@ -1257,6 +1343,16 @@ function TraceDetailView({
                     </Button>
 
                     <Separator orientation="vertical" className="h-5" />
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setBackflowOpen(true)}
+                        disabled={!user || !taskId}
+                        className="h-7 text-xs"
+                    >
+                        <Database className="size-3.5" aria-hidden />
+                        {locale === 'zh' ? '加入评测集' : 'Add to dataset'}
+                    </Button>
                     <Button variant="default" size="sm" asChild className="h-7 text-xs">
                         <Link href={`${basePath}/fault?taskId=${taskId}`}>{t('tracePage.diagnosis')}</Link>
                     </Button>
@@ -1277,6 +1373,19 @@ function TraceDetailView({
                     </Button>
                 </div>
             </div>
+
+            {user && (
+                <TraceBackflowDialog
+                    open={backflowOpen}
+                    onOpenChange={setBackflowOpen}
+                    user={user}
+                    sources={[{
+                        taskId,
+                        executionId: execution.upload_id,
+                        label: execution.query || taskId,
+                    }]}
+                />
+            )}
 
             {execStatus === 'failed' && execution.failures && execution.failures.length > 0 && (
                 <FailureCard failures={execution.failures} />
@@ -1400,6 +1509,35 @@ function Th({
     );
 }
 
+function SelectionCheckbox({
+    checked,
+    indeterminate = false,
+    onChange,
+    ariaLabel,
+}: {
+    checked: boolean;
+    indeterminate?: boolean;
+    onChange: () => void;
+    ariaLabel: string;
+}) {
+    const inputRef = useRef<HTMLInputElement>(null);
+
+    useEffect(() => {
+        if (inputRef.current) inputRef.current.indeterminate = indeterminate;
+    }, [indeterminate]);
+
+    return (
+        <input
+            ref={inputRef}
+            type="checkbox"
+            checked={checked}
+            onChange={onChange}
+            aria-label={ariaLabel}
+            className="size-4 cursor-pointer accent-primary"
+        />
+    );
+}
+
 function SortableTh({
     children, sortKey, currentKey, dir, onSort,
     colKey, currentWidth, onResize,
@@ -1447,6 +1585,8 @@ function Row({
     onTagsChanged,
     onTagCreated,
     onClick,
+    selected,
+    onSelectedChange,
 }: {
     execution: Execution;
     columnVisibility: Record<TraceColumnKey, boolean>;
@@ -1454,8 +1594,10 @@ function Row({
     onTagsChanged: (executionId: string, tags: TraceUserTag[]) => void;
     onTagCreated: (tag: TraceUserTag) => void;
     onClick: () => void;
+    selected: boolean;
+    onSelectedChange: () => void;
 }) {
-    const { t } = useLocale();
+    const { t, locale } = useLocale();
     const id = e.task_id || e.upload_id || '';
     const status = getExecStatus(e);
     const skillCount = getInvokedSkillNames(e).length;
@@ -1473,11 +1615,30 @@ function Row({
             tabIndex={0}
             role="button"
             aria-label={`${t('tracePage.columnTraceId')} ${id}`}
-            className="border-b border-border hover:bg-background-secondary focus-visible:outline-none focus-visible:bg-background-secondary focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset cursor-pointer transition-colors"
+            className={cn(
+                'border-b border-border hover:bg-background-secondary focus-visible:outline-none focus-visible:bg-background-secondary focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset cursor-pointer transition-colors',
+                selected && 'bg-primary-subtle',
+            )}
         >
+            <Td>
+                <div onClick={ev => ev.stopPropagation()} onKeyDown={ev => ev.stopPropagation()}>
+                    <SelectionCheckbox
+                        checked={selected}
+                        onChange={onSelectedChange}
+                        ariaLabel={`${locale === 'zh' ? '选择' : 'Select'} Trace ${id}`}
+                    />
+                </div>
+            </Td>
             {columnVisibility.traceId && (
                 <Td>
                     <IdChip value={id} head={6} tail={4} />
+                </Td>
+            )}
+            {columnVisibility.task && (
+                <Td>
+                    <TruncateText className="text-foreground text-sm">
+                        {e.query || t('tracePage.noQuery')}
+                    </TruncateText>
                 </Td>
             )}
             {columnVisibility.agent && (
@@ -1522,13 +1683,6 @@ function Row({
                             <Tag variant="framework" icon={Terminal}>{getFrameworkLabel(e.framework)}</Tag>
                         )}
                     </div>
-                </Td>
-            )}
-            {columnVisibility.task && (
-                <Td>
-                    <TruncateText className="text-foreground text-sm">
-                        {e.query || t('tracePage.noQuery')}
-                    </TruncateText>
                 </Td>
             )}
             {columnVisibility.tokens && (

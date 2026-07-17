@@ -36,7 +36,18 @@ export type DatasetKind = 'ideal_output' | 'trajectory';
  * Case 来源标记。'user' = 用户手填 / 手编辑（默认）；'skill-gen-draft' = skill 生成
  * pipeline 自动起草。区分用于 UI 提示 + 用户改动率埋点。
  */
-export type DatasetCaseSource = 'user' | 'skill-gen-draft';
+export type DatasetCaseSource = 'user' | 'skill-gen-draft' | 'trace-backflow';
+
+export type DatasetFieldType = 'text' | 'number' | 'boolean' | 'json';
+
+export interface DatasetField {
+  id: string;
+  key: string;
+  label: string;
+  type: DatasetFieldType;
+  description?: string;
+  system?: boolean;
+}
 
 export interface DatasetCase {
   id: string;
@@ -45,6 +56,12 @@ export interface DatasetCase {
   evaluationFocus: string;
   tags: string[];
   trajectory: string;
+  values?: Record<string, unknown>;
+  traceSource?: {
+    taskId: string;
+    executionId?: string;
+    capturedAt: string;
+  };
   /** 默认 'user'；存量数据无此字段时按 'user' 兜底。 */
   source?: DatasetCaseSource;
   rootCauses?: RootCauseItem[];
@@ -64,6 +81,7 @@ export interface AgentDatasetRecord {
   targetSkill: string;
   tags: string[];
   cases: DatasetCase[];
+  fields: DatasetField[];
   datasetKind: DatasetKind;
   createdAt: string;
   updatedAt: string;
@@ -91,26 +109,135 @@ export function normalizeTags(value: unknown): string[] {
 }
 
 function normalizeCaseSource(value: unknown): DatasetCaseSource {
-  return value === 'skill-gen-draft' ? 'skill-gen-draft' : 'user';
+  if (value === 'skill-gen-draft' || value === 'trace-backflow') return value;
+  return 'user';
+}
+
+function normalizeValues(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+      key,
+      typeof item === 'string' ? item.trim() : item,
+    ]),
+  );
+}
+
+export function defaultDatasetFields(kind: DatasetKind): DatasetField[] {
+  const fields: DatasetField[] = [
+    { id: 'input', key: 'input', label: '输入', type: 'text', system: true },
+    { id: 'reference_output', key: 'reference_output', label: '预期输出', type: 'text', system: true },
+  ];
+  if (kind === 'trajectory') {
+    fields.push({ id: 'trajectory', key: 'trajectory', label: '轨迹', type: 'json', system: true });
+  }
+  return fields;
+}
+
+export function normalizeFields(value: unknown, kind: DatasetKind): DatasetField[] {
+  if (!Array.isArray(value) || value.length === 0) return defaultDatasetFields(kind);
+  const seen = new Set<string>();
+  const fields = value.flatMap((item): DatasetField[] => {
+    if (!item || typeof item !== 'object') return [];
+    const obj = item as Record<string, unknown>;
+    const key = String(obj.key || '').trim();
+    if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(key) || seen.has(key)) return [];
+    seen.add(key);
+    const rawType = String(obj.type || 'text');
+    const type: DatasetFieldType = ['number', 'boolean', 'json'].includes(rawType)
+      ? rawType as DatasetFieldType
+      : 'text';
+    return [{
+      id: String(obj.id || key).trim() || key,
+      key,
+      label: String(obj.label || key).trim() || key,
+      type,
+      description: String(obj.description || '').trim() || undefined,
+      system: Boolean(obj.system),
+    }];
+  });
+  return fields.length > 0 ? fields : defaultDatasetFields(kind);
+}
+
+export function validateDatasetFieldKeysForWrite(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  if (!Array.isArray(value)) return 'fields must be an array';
+  const seen = new Set<string>();
+  for (let index = 0; index < value.length; index += 1) {
+    const item = value[index];
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      return `field ${index + 1} is invalid`;
+    }
+    const key = String((item as Record<string, unknown>).key || '').trim();
+    if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(key)) {
+      return `field ${index + 1} key is invalid`;
+    }
+    if (seen.has(key)) return `field key ${key} already exists`;
+    seen.add(key);
+  }
+  return null;
+}
+
+export function duplicateDatasetFieldName(fields: DatasetField[]): string | null {
+  const seen = new Set<string>();
+  for (const field of fields) {
+    const label = field.label.trim();
+    const normalized = label.toLocaleLowerCase();
+    if (seen.has(normalized)) return label;
+    seen.add(normalized);
+  }
+  return null;
 }
 
 export function normalizeCase(item: unknown): DatasetCase {
   const obj = (item || {}) as Partial<DatasetCase>;
+  const values = normalizeValues((obj as { values?: unknown }).values);
+  const hasInput = Object.prototype.hasOwnProperty.call(obj, 'input');
+  const hasInputValue = Object.prototype.hasOwnProperty.call(values, 'input');
+  const hasExpectedOutput = Object.prototype.hasOwnProperty.call(obj, 'expectedOutput');
+  const hasTrajectory = Object.prototype.hasOwnProperty.call(obj, 'trajectory');
+  const input = String(hasInput ? obj.input ?? '' : values.input ?? '').trim();
+  const expectedOutput = String(
+    hasExpectedOutput ? obj.expectedOutput ?? '' : values.reference_output ?? '',
+  ).trim();
+  const traceValue = values.trace;
   const trajectoryRaw = (obj as { trajectory?: unknown }).trajectory;
   const trajectory =
-    trajectoryRaw === null || trajectoryRaw === undefined
-      ? ''
-      : typeof trajectoryRaw === 'string'
-      ? trajectoryRaw.trim()
-      : JSON.stringify(trajectoryRaw);
+    hasTrajectory
+      ? trajectoryRaw === null || trajectoryRaw === undefined
+        ? ''
+        : typeof trajectoryRaw === 'string'
+          ? trajectoryRaw.trim()
+          : JSON.stringify(trajectoryRaw)
+      : traceValue !== undefined
+      ? (typeof traceValue === 'string' ? traceValue.trim() : JSON.stringify(traceValue))
+      : '';
   return {
     id: obj.id && String(obj.id).trim() ? String(obj.id).trim() : randomUUID(),
-    input: String(obj.input || '').trim(),
-    expectedOutput: String(obj.expectedOutput || '').trim(),
+    input,
+    expectedOutput,
     evaluationFocus: String(obj.evaluationFocus || '').trim(),
     tags: normalizeTags(obj.tags),
     trajectory,
+    values: {
+      ...values,
+      ...(hasInput || hasInputValue ? { input } : {}),
+      ...(expectedOutput || Object.hasOwn(values, 'reference_output') ? { reference_output: expectedOutput } : {}),
+      ...(trajectory && !Object.hasOwn(values, 'trace') ? { trajectory } : {}),
+    },
     source: normalizeCaseSource((obj as { source?: unknown }).source),
+    traceSource: (() => {
+      const source = (obj as { traceSource?: unknown }).traceSource;
+      if (!source || typeof source !== 'object' || Array.isArray(source)) return undefined;
+      const raw = source as Record<string, unknown>;
+      const taskId = String(raw.taskId || '').trim();
+      if (!taskId) return undefined;
+      return {
+        taskId,
+        executionId: String(raw.executionId || '').trim() || undefined,
+        capturedAt: String(raw.capturedAt || '').trim() || new Date().toISOString(),
+      };
+    })(),
     rootCauses: normalizeRootCauseItems((obj as { rootCauses?: unknown }).rootCauses),
     rootCauseMeta: normalizeRootCauseMeta((obj as { rootCauseMeta?: unknown }).rootCauseMeta),
   };
@@ -126,6 +253,7 @@ export function normalizeCases(value: unknown): DatasetCase[] {
         item.expectedOutput ||
         item.evaluationFocus ||
         item.trajectory ||
+        Object.values(item.values || {}).some(v => v !== '' && v !== null && v !== undefined) ||
         item.tags.length > 0,
     );
 }
@@ -138,43 +266,14 @@ export interface CaseValidationError {
   message: string;
 }
 
-/**
- * 按 datasetKind 校验 case 必填项与字段格式：
- * - 任意类型：input 必填
- * - ideal_output：expectedOutput 必填
- * - trajectory：trajectory 为可选文本
- *
- * 仅对 normalizeCases 之后剩余的非空 case 生效；空数组合法（允许新建后再补 case）。
- */
+/** 数据集只负责保存结构化样本；具体评测所需字段由评测执行入口校验。 */
 export function validateCasesForKind(
   cases: DatasetCase[],
   kind: DatasetKind,
 ): CaseValidationError[] {
-  const errors: CaseValidationError[] = [];
-  cases.forEach((c, idx) => {
-    const rowLabel = `第 ${idx + 1} 行`;
-    if (!c.input) {
-      errors.push({
-        caseIndex: idx,
-        caseId: c.id,
-        field: 'input',
-        code: 'required',
-        message: `${rowLabel}：input（输入）不能为空`,
-      });
-    }
-    if (kind === 'ideal_output') {
-      if (!c.expectedOutput) {
-        errors.push({
-          caseIndex: idx,
-          caseId: c.id,
-          field: 'expectedOutput',
-          code: 'required',
-          message: `${rowLabel}：expectedOutput（理想输出）不能为空（理想输出评测集要求）`,
-        });
-      }
-    }
-  });
-  return errors;
+  void cases;
+  void kind;
+  return [];
 }
 
 function normalizeStoredDataset(raw: Record<string, unknown>): AgentDatasetRecord {
@@ -186,6 +285,7 @@ function normalizeStoredDataset(raw: Record<string, unknown>): AgentDatasetRecor
     targetAgent: String(raw.targetAgent || ''),
     targetSkill: String(raw.targetSkill || ''),
     tags: normalizeTags(raw.tags),
+    fields: normalizeFields(raw.fields, normalizeDatasetKind(raw.datasetKind)),
     cases: Array.isArray(raw.cases) ? (raw.cases as unknown[]).map(normalizeCase) : [],
     datasetKind: normalizeDatasetKind(raw.datasetKind),
     createdAt: String(raw.createdAt || ''),
@@ -201,6 +301,7 @@ function recordFromDbRow(row: {
   targetAgent: string;
   targetSkill?: string;
   tagsJson: string;
+  fieldsJson: string;
   casesJson: string;
   datasetKind: string;
   createdAt: Date;
@@ -208,10 +309,16 @@ function recordFromDbRow(row: {
 }): AgentDatasetRecord {
   let tags: unknown = [];
   let casesRaw: unknown = [];
+  let fieldsRaw: unknown = [];
   try {
     tags = JSON.parse(row.tagsJson || '[]');
   } catch {
     tags = [];
+  }
+  try {
+    fieldsRaw = JSON.parse(row.fieldsJson || '[]');
+  } catch {
+    fieldsRaw = [];
   }
   try {
     casesRaw = JSON.parse(row.casesJson || '[]');
@@ -226,6 +333,7 @@ function recordFromDbRow(row: {
     targetAgent: row.targetAgent,
     targetSkill: row.targetSkill ?? '',
     tags: normalizeTags(tags),
+    fields: normalizeFields(fieldsRaw, normalizeDatasetKind(row.datasetKind)),
     cases: normalizeCases(casesRaw),
     datasetKind: normalizeDatasetKind(row.datasetKind),
     createdAt: row.createdAt.toISOString(),
@@ -300,6 +408,7 @@ async function migrateLegacyJsonIfNeeded(prisma: PrismaClient): Promise<void> {
           targetAgent: r.targetAgent,
           targetSkill: r.targetSkill ?? '',
           tagsJson: JSON.stringify(r.tags),
+          fieldsJson: JSON.stringify(r.fields),
           casesJson: JSON.stringify(r.cases),
           datasetKind: r.datasetKind,
           createdAt: r.createdAt ? new Date(r.createdAt) : new Date(),
@@ -356,6 +465,7 @@ export async function createAgentDatasetRecord(record: AgentDatasetRecord): Prom
         targetAgent: record.targetAgent,
         targetSkill: record.targetSkill ?? '',
         tagsJson: JSON.stringify(record.tags),
+        fieldsJson: JSON.stringify(record.fields),
         casesJson: JSON.stringify(record.cases),
         datasetKind: record.datasetKind,
         createdAt: new Date(record.createdAt),
@@ -382,6 +492,7 @@ export async function updateAgentDatasetRecord(updated: AgentDatasetRecord): Pro
         targetAgent: updated.targetAgent,
         targetSkill: updated.targetSkill ?? '',
         tagsJson: JSON.stringify(updated.tags),
+        fieldsJson: JSON.stringify(updated.fields),
         casesJson: JSON.stringify(updated.cases),
         datasetKind: updated.datasetKind,
         updatedAt: new Date(updated.updatedAt),

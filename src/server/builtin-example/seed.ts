@@ -174,6 +174,7 @@ export async function seedBuiltinExampleForUser(user: string): Promise<void> {
       targetAgent: String(fixtures.dataset.targetAgent || ''),
       targetSkill: demoSkillName || String(fixtures.dataset.targetSkill || ''),
       tags: Array.from(new Set([...safeTags(fixtures.dataset.tagsJson), '内置示例'])),
+      fields: [],
       cases,
       datasetKind: ((fixtures.dataset.datasetKind as DatasetKind) || 'ideal_output'),
       createdAt: nowIso,

@@ -27,12 +27,15 @@ import {
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { AppTopBar } from '@/components/shell/AppTopBar';
+import { PageContainer, PageToolbar } from '@/components/shell/PageContainer';
 import { AgentDebugCard, type TraceExplicitError } from '@/components/observe/AgentDebugCard';
 import { StatusBadge } from '@/components/feedback/StatusBadge';
 import { useAuth } from '@/lib/auth/auth-context';
 import { useLocale } from '@/lib/client/locale-context';
 import { apiFetch } from '@/lib/client/api';
 import { Term } from '@/components/text/Term';
+import { Button } from '@/components/ui/button';
+import { Select } from '@/components/ui/select';
 import { formatDuration, type AgentEvent, type RawInteraction } from '@/lib/engine/observability/agent-trace';
 import { buildFaultPathSteps, type FailureTraceAnchor } from '@/lib/engine/observability/fault-path';
 import { formatLatencySeconds } from '@/lib/latency-format';
@@ -334,7 +337,7 @@ function FaultPageContent() {
     return (
         <>
             <AppTopBar title={<Term id="fault-diagnosis" label={t('nav.fault')} />} showDefaultActions={false} />
-            <div style={{ flex: 1, overflowY: 'auto', padding: '18px 20px' }}>
+            <PageContainer>
                 {selectedExecution ? (
                     <FaultDetailView
                         execution={selectedExecution}
@@ -358,172 +361,100 @@ function FaultPageContent() {
                             </div>
                         </div>
 
-                        <div
-                            style={{
-                                background: 'var(--background-secondary)',
-                                border: '1px solid var(--border)',
-                                borderRadius: 8,
-                                marginBottom: 12,
-                                overflow: 'hidden',
-                            }}
-                        >
-                            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, padding: '7px 10px' }}>
-                                {/* ── 归属 ── */}
-                                <FilterChip
-                                    label={t('nav.filterAgentOwnership')}
-                                    active={ownershipFilter !== 'all'}
-                                    value={ownershipFilter}
-                                    onChange={v => { setPage(1); setOwnershipFilter(v); }}
-                                >
-                                    <option value="all">{t('nav.allOwnership')}</option>
-                                    <option value="user">{t('nav.userAgent')}</option>
-                                    <option value="system">{t('nav.systemAgent')}</option>
-                                </FilterChip>
+                        <PageToolbar className="border border-border bg-background-secondary rounded-md p-2 mb-3">
+                            {/* ── 归属 ── */}
+                            <Select
+                                label={t('nav.filterAgentOwnership')}
+                                value={ownershipFilter}
+                                onChange={setOwnershipFilter}
+                                options={[
+                                    { value: 'all', label: t('nav.allOwnership') },
+                                    { value: 'user', label: t('nav.userAgent') },
+                                    { value: 'system', label: t('nav.systemAgent') },
+                                ]}
+                                active={ownershipFilter !== 'all'}
+                            />
 
-                                {/* ── Agent ── */}
-                                {availableAgents.length > 0 && (
-                                    <FilterChip
-                                        label="Agent"
-                                        active={agentFilter !== 'all' && agentFilter !== ''}
-                                        value={agentFilter}
-                                        onChange={v => { setPage(1); setAgentFilter(v); }}
-                                    >
-                                        <option value="all">{t('common.all')}</option>
-                                        {availableAgents.map(a => <option key={a} value={a}>{a}</option>)}
-                                    </FilterChip>
-                                )}
-
-                                {/* ── Skill ── */}
-                                {availableSkills.length > 0 && (
-                                    <FilterChip
-                                        label="Skill"
-                                        active={skillFilter !== 'all'}
-                                        value={skillFilter}
-                                        onChange={v => { setPage(1); setSkillFilter(v); }}
-                                    >
-                                        <option value="all">{t('common.all')}</option>
-                                        {availableSkills.map(s => <option key={s} value={s}>{s}</option>)}
-                                    </FilterChip>
-                                )}
-
-                                <FilterDivider />
-
-                                {/* ── 执行异常（智能诊断额外保留）── */}
-                                <FilterChip
-                                    label={locale === 'zh' ? '执行异常' : 'Anomaly'}
-                                    active={anomalyFilter !== 'all'}
-                                    value={anomalyFilter}
-                                    onChange={v => setAnomalyFilter(v as any)}
-                                >
-                                    <option value="all">{t('common.all')}</option>
-                                    <option value="yes">{locale === 'zh' ? '是' : 'Yes'}</option>
-                                    <option value="no">{locale === 'zh' ? '否' : 'No'}</option>
-                                </FilterChip>
-
-                                {/* ── 时间范围 ── */}
-                                <FilterChip
-                                    label={locale === 'zh' ? '时间' : 'Time'}
-                                    active={timeFilter !== 'all'}
-                                    value={timeFilter}
-                                    onChange={v => setTimeFilter(v as TimeFilter)}
-                                >
-                                    <option value="all">{t('common.allTime')}</option>
-                                    <option value="7d">{t('nav.last7Days')}</option>
-                                    <option value="24h">{t('topbar.last24h')}</option>
-                                    <option value="1h">{t('nav.last1Hour')}</option>
-                                </FilterChip>
-
-                                {/* ── 平台（条件显示）── */}
-                                {frameworks.length > 1 && (
-                                    <FilterChip
-                                        label={locale === 'zh' ? '平台' : 'Platform'}
-                                        active={frameworkFilter !== 'all'}
-                                        value={frameworkFilter}
-                                        onChange={v => setFrameworkFilter(v)}
-                                    >
-                                        <option value="all">{t('common.all')}</option>
-                                        {frameworks.map(f => <option key={f} value={f}>{f}</option>)}
-                                    </FilterChip>
-                                )}
-
-                                {/* ── 重置 ── */}
-                                {(ownershipFilter !== 'all' || agentFilter !== 'all' || skillFilter !== 'all' || anomalyFilter !== 'all' || timeFilter !== 'all' || frameworkFilter !== 'all') && (
-                                    <button
-                                        onClick={() => {
-                                            setOwnershipFilter('all');
-                                            setAgentFilter('all');
-                                            setSkillFilter('all');
-                                            setAnomalyFilter('all');
-                                            setTimeFilter('all');
-                                            setFrameworkFilter('all');
-                                        }}
-                                        style={{
-                                            marginLeft: 6,
-                                            display: 'inline-flex',
-                                            alignItems: 'center',
-                                            gap: 4,
-                                            padding: '3px 10px',
-                                            fontSize: 11,
-                                            borderRadius: 5,
-                                            border: '1px solid var(--border)',
-                                            background: 'transparent',
-                                            color: 'var(--foreground-muted)',
-                                            cursor: 'pointer',
-                                            lineHeight: 1.4,
-                                        }}
-                                    >
-                                        <svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"><path d="M2 2l6 6M8 2l-6 6"/></svg>
-                                        {locale === 'zh' ? '重置' : 'Reset'}
-                                    </button>
-                                )}
-                            </div>
-
-                            {/* Active filter tags row */}
-                            {(ownershipFilter !== 'all' || timeFilter !== 'all' || anomalyFilter !== 'all' || frameworkFilter !== 'all' || (agentFilter !== 'all' && agentFilter !== '') || skillFilter !== 'all') && (
-                                <div style={{
-                                    display: 'flex',
-                                    flexWrap: 'wrap',
-                                    gap: 5,
-                                    alignItems: 'center',
-                                    padding: '5px 10px 7px',
-                                    borderTop: '1px solid var(--border)',
-                                }}>
-                                    <span style={{ fontSize: 10.5, color: 'var(--foreground-muted)', flexShrink: 0, marginRight: 2 }}>
-                                        {locale === 'zh' ? '已筛选' : 'Active'}
-                                    </span>
-                                    {ownershipFilter !== 'all' && (
-                                        <ActiveFilterTag
-                                            label={`${t('nav.filterAgentOwnership')}: ${ownershipFilter === 'system' ? t('nav.systemAgent') : t('nav.userAgent')}`}
-                                            onRemove={() => setOwnershipFilter('all')}
-                                        />
-                                    )}
-                                    {agentFilter !== 'all' && agentFilter !== '' && (
-                                        <ActiveFilterTag label={`Agent: ${agentFilter}`} onRemove={() => setAgentFilter('all')} />
-                                    )}
-                                    {skillFilter !== 'all' && (
-                                        <ActiveFilterTag label={`Skill: ${skillFilter}`} onRemove={() => setSkillFilter('all')} />
-                                    )}
-                                    {anomalyFilter !== 'all' && (
-                                        <ActiveFilterTag
-                                            label={`${locale === 'zh' ? '执行异常' : 'Anomaly'}: ${anomalyFilter === 'yes' ? (locale === 'zh' ? '是' : 'Yes') : (locale === 'zh' ? '否' : 'No')}`}
-                                            onRemove={() => setAnomalyFilter('all')}
-                                        />
-                                    )}
-                                    {timeFilter !== 'all' && (
-                                        <ActiveFilterTag
-                                            label={`${locale === 'zh' ? '时间' : 'Time'}: ${timeFilter === '1h' ? (locale === 'zh' ? '1小时内' : 'Last 1h') : timeFilter === '24h' ? (locale === 'zh' ? '24小时内' : 'Last 24h') : timeFilter === '7d' ? (locale === 'zh' ? '近7天' : 'Last 7d') : timeFilter}`}
-                                            onRemove={() => setTimeFilter('all')}
-                                        />
-                                    )}
-                                    {frameworkFilter !== 'all' && (
-                                        <ActiveFilterTag
-                                            label={`${locale === 'zh' ? '平台' : 'Platform'}: ${frameworkFilter}`}
-                                            onRemove={() => setFrameworkFilter('all')}
-                                        />
-                                    )}
-                                </div>
+                            {/* ── Agent ── */}
+                            {availableAgents.length > 0 && (
+                                <Select
+                                    label="Agent"
+                                    value={agentFilter}
+                                    onChange={setAgentFilter}
+                                    options={[{ value: 'all', label: t('common.all') }, ...availableAgents.map(a => ({ value: a, label: a }))]}
+                                    active={agentFilter !== 'all' && agentFilter !== ''}
+                                />
                             )}
-                        </div>
+
+                            {/* ── Skill ── */}
+                            {availableSkills.length > 0 && (
+                                <Select
+                                    label="Skill"
+                                    value={skillFilter}
+                                    onChange={setSkillFilter}
+                                    options={[{ value: 'all', label: t('common.all') }, ...availableSkills.map(s => ({ value: s, label: s }))]}
+                                    active={skillFilter !== 'all'}
+                                />
+                            )}
+
+                            {/* ── 执行异常（智能诊断额外保留）── */}
+                            <Select
+                                label={locale === 'zh' ? '执行异常' : 'Anomaly'}
+                                value={anomalyFilter}
+                                onChange={setAnomalyFilter}
+                                options={[
+                                    { value: 'all', label: t('common.all') },
+                                    { value: 'yes', label: locale === 'zh' ? '是' : 'Yes' },
+                                    { value: 'no', label: locale === 'zh' ? '否' : 'No' },
+                                ]}
+                                active={anomalyFilter !== 'all'}
+                            />
+
+                            {/* ── 时间范围 ── */}
+                            <Select
+                                label={locale === 'zh' ? '时间' : 'Time'}
+                                value={timeFilter}
+                                onChange={setTimeFilter}
+                                options={[
+                                    { value: 'all', label: t('common.allTime') },
+                                    { value: '7d', label: t('nav.last7Days') },
+                                    { value: '24h', label: t('topbar.last24h') },
+                                    { value: '1h', label: t('nav.last1Hour') },
+                                ]}
+                                active={timeFilter !== 'all'}
+                            />
+
+                            {/* ── 平台（条件显示）── */}
+                            {frameworks.length > 1 && (
+                                <Select
+                                    label={locale === 'zh' ? '平台' : 'Platform'}
+                                    value={frameworkFilter}
+                                    onChange={setFrameworkFilter}
+                                    options={[{ value: 'all', label: t('common.all') }, ...frameworks.map(f => ({ value: f, label: f }))]}
+                                    active={frameworkFilter !== 'all'}
+                                />
+                            )}
+
+                            {/* ── 重置 ── */}
+                            {(ownershipFilter !== 'all' || agentFilter !== 'all' || skillFilter !== 'all' || anomalyFilter !== 'all' || timeFilter !== 'all' || frameworkFilter !== 'all') && (
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => {
+                                        setOwnershipFilter('all');
+                                        setAgentFilter('all');
+                                        setSkillFilter('all');
+                                        setAnomalyFilter('all');
+                                        setTimeFilter('all');
+                                        setFrameworkFilter('all');
+                                    }}
+                                    className="ml-auto text-xs text-foreground-muted h-7"
+                                >
+                                    <X className="size-3" />
+                                    {locale === 'zh' ? '重置' : 'Reset'}
+                                </Button>
+                            )}
+                        </PageToolbar>
 
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 9 }}>
                             <span className="ai-section-title">
@@ -585,7 +516,7 @@ function FaultPageContent() {
                         )}
                     </>
                 )}
-            </div>
+            </PageContainer>
         </>
     );
 }
@@ -2052,104 +1983,6 @@ function StatCard({ label, value, sub, accent, truncate }: { label: string; valu
             </div>
             {sub && <div className="ai-stat-d" style={{ color: 'var(--foreground-muted)' }}>{sub}</div>}
         </div>
-    );
-}
-
-function FilterChip({
-    label, active, value, onChange, children,
-}: {
-    label: string;
-    active: boolean;
-    value: string;
-    onChange: (v: string) => void;
-    children: React.ReactNode;
-}) {
-    return (
-        <div style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            borderRadius: 6,
-            border: `1px solid ${active ? 'var(--primary-subtle-border, rgba(59,130,246,0.35))' : 'var(--border)'}`,
-            background: active ? 'var(--primary-subtle, rgba(59,130,246,0.06))' : 'var(--card-bg)',
-            overflow: 'hidden',
-            height: 28,
-            transition: 'border-color .15s, background .15s',
-        }}>
-            <span style={{
-                padding: '0 7px 0 9px',
-                fontSize: 10.5,
-                fontWeight: 600,
-                color: active ? 'var(--primary, #3b82f6)' : 'var(--foreground-muted)',
-                whiteSpace: 'nowrap',
-                userSelect: 'none',
-                borderRight: `1px solid ${active ? 'var(--primary-subtle-border, rgba(59,130,246,0.25))' : 'var(--border)'}`,
-                lineHeight: '26px',
-            }}>
-                {label}
-            </span>
-            <select
-                value={value}
-                onChange={e => onChange(e.target.value)}
-                style={{
-                    height: '100%',
-                    border: 'none',
-                    outline: 'none',
-                    background: 'transparent',
-                    fontSize: 11,
-                    color: active ? 'var(--primary, #3b82f6)' : 'var(--foreground)',
-                    fontWeight: active ? 600 : 400,
-                    padding: '0 20px 0 7px',
-                    cursor: 'pointer',
-                    appearance: 'none',
-                    WebkitAppearance: 'none',
-                    backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'%3E%3Cpath d='M2 3.5l3 3 3-3' stroke='%23999' stroke-width='1.4' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")`,
-                    backgroundRepeat: 'no-repeat',
-                    backgroundPosition: 'right 5px center',
-                    minWidth: 52,
-                }}
-            >
-                {children}
-            </select>
-        </div>
-    );
-}
-
-function FilterDivider() {
-    return (
-        <div style={{
-            width: 1,
-            height: 18,
-            background: 'var(--border)',
-            margin: '0 6px',
-            flexShrink: 0,
-        }} />
-    );
-}
-
-function ActiveFilterTag({ label, onRemove }: { label: string; onRemove: () => void }) {
-    return (
-        <span style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 4,
-            padding: '2px 8px',
-            fontSize: 11,
-            borderRadius: 4,
-            background: 'var(--primary-subtle, rgba(59,130,246,0.08))',
-            border: '1px solid var(--primary-subtle-border, rgba(59,130,246,0.2))',
-            color: 'var(--primary, #3b82f6)',
-            fontWeight: 500,
-            whiteSpace: 'nowrap',
-        }}>
-            {label}
-            <button
-                onClick={onRemove}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, lineHeight: 1, color: 'inherit', opacity: 0.7, fontSize: 12, display: 'flex', alignItems: 'center' }}
-                aria-label="remove filter"
-            >
-                ×
-            </button>
-        </span>
     );
 }
 

@@ -527,7 +527,7 @@ test("Agent tree: tool-only LLM turns without reasoning fall back to tool-name s
   assert.ok(tree)
   const llmEvents = (tree.events || []).filter((e: any) => e.kind === "llm")
   assert.equal(llmEvents.length, 1)
-  assert.ok(llmEvents[0].summary.includes("synthesize_sql"), "空 content 无 reasoning 时摘要应含工具名")
+  assert.ok(llmEvents[0]?.summary?.includes("synthesize_sql"), "空 content 无 reasoning 时摘要应含工具名")
 })
 
 test("OTel traces: pure Langfuse SDK traces (non-LangGraph) take the langfuse adapter and get a completion time", () => {

@@ -3,11 +3,17 @@
 import Link from 'next/link';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { Plus } from 'lucide-react';
+import { toast } from 'sonner';
 import { apiFetch } from '@/lib/client/api';
 import {
   type AgentDataset,
   type DatasetCase,
+  type DatasetField,
+  type DatasetFieldType,
   createEmptyCase,
+  nextDatasetFieldKey,
+  parseDatasetNumberValue,
   TRAJECTORY_PLACEHOLDER,
 } from '@/lib/agent-dataset-model';
 import {
@@ -16,6 +22,8 @@ import {
   readFileAsText,
 } from '@/lib/dataset-batch-import';
 import { useAuth } from '@/lib/auth/auth-context';
+import { Input } from '@/components/ui/input';
+import { Select } from '@/components/ui/select';
 import styles from '@/components/DatasetItemsPage.module.css';
 
 function IconRefresh({ size = 15 }: { size?: number }) {
@@ -135,6 +143,21 @@ function shorten(s: string, n: number) {
   return t.length <= n ? t : `${t.slice(0, n)}…`;
 }
 
+function fieldValue(row: DatasetCase, key: string): unknown {
+  if (row.values && Object.hasOwn(row.values, key)) return row.values[key];
+  if (key === 'input') return row.input;
+  if (key === 'reference_output') return row.expectedOutput;
+  if (key === 'trajectory' || key === 'trace') return row.trajectory;
+  return '';
+}
+
+function fieldText(row: DatasetCase, key: string): string {
+  const value = fieldValue(row, key);
+  if (value === null || value === undefined || value === '') return '';
+  if (typeof value === 'string') return value;
+  return JSON.stringify(value, null, 2);
+}
+
 export default function DatasetItemsPage() {
   const params = useParams();
   const router = useRouter();
@@ -151,6 +174,12 @@ export default function DatasetItemsPage() {
   const [highlightActive, setHighlightActive] = useState(false);
   const [saving, setSaving] = useState(false);
   const [rowEditor, setRowEditor] = useState<{ mode: 'add' | 'edit'; row: DatasetCase } | null>(null);
+  const [fieldEditorOpen, setFieldEditorOpen] = useState(false);
+  const [fieldDraft, setFieldDraft] = useState<{ label: string; type: DatasetFieldType }>({
+    label: '',
+    type: 'text',
+  });
+  const [fieldError, setFieldError] = useState('');
   const [batchModalOpen, setBatchModalOpen] = useState(false);
   const [batchImportMethod, setBatchImportMethod] = useState<'paste' | 'file'>('paste');
   const [batchPasteText, setBatchPasteText] = useState('');
@@ -178,6 +207,7 @@ export default function DatasetItemsPage() {
         targetSkill: d.targetSkill || '',
         tags: d.tags || [],
         datasetKind: d.datasetKind === 'trajectory' ? 'trajectory' : 'ideal_output',
+        fields: Array.isArray(d.fields) ? d.fields : [],
         cases: Array.isArray(d.cases) ? d.cases : [],
         createdAt: d.createdAt,
         updatedAt: d.updatedAt,
@@ -221,11 +251,21 @@ export default function DatasetItemsPage() {
         id: dataset.id,
         cases: cases.map(item => ({
           id: item.id,
-          input: item.input.trim(),
-          expectedOutput: item.expectedOutput.trim(),
+          input: fieldText(item, 'input').trim(),
+          expectedOutput: fieldText(item, 'reference_output').trim(),
           evaluationFocus: item.evaluationFocus?.trim() || '',
           tags: item.tags || [],
-          trajectory: dataset.datasetKind === 'trajectory' ? item.trajectory.trim() : '',
+          trajectory: dataset.datasetKind === 'trajectory'
+            ? (dataset.fields.some(field => field.key === 'trace') ? fieldText(item, 'trace') : fieldText(item, 'trajectory')).trim()
+            : '',
+          values: Object.fromEntries(
+            Object.entries(item.values || {}).map(([key, value]) => [
+              key,
+              typeof value === 'string' ? value.trim() : value,
+            ]),
+          ),
+          source: item.source,
+          traceSource: item.traceSource,
         })),
       };
       const res = await apiFetch('/api/agent-datasets', {
@@ -253,7 +293,58 @@ export default function DatasetItemsPage() {
   };
 
   const openEdit = (row: DatasetCase) => {
-    setRowEditor({ mode: 'edit', row: { ...row } });
+    setRowEditor({ mode: 'edit', row: { ...row, values: { ...(row.values || {}) } } });
+  };
+
+  const persistFields = async (fields: DatasetField[]) => {
+    if (!user || !dataset) return false;
+    setSaving(true);
+    setError('');
+    try {
+      const res = await apiFetch('/api/agent-datasets', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user, id: dataset.id, fields }),
+      });
+      const result = await res.json();
+      if (!res.ok || !result?.success) throw new Error(result?.error || '字段保存失败');
+      await load();
+      return true;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '字段保存失败');
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const addField = async () => {
+    if (!dataset) return;
+    const label = fieldDraft.label.trim();
+    if (!label) {
+      setFieldError('请输入字段名称');
+      return;
+    }
+    if (dataset.fields.some(field => field.label.trim().toLocaleLowerCase() === label.toLocaleLowerCase())) {
+      setFieldError('字段名称已存在');
+      return;
+    }
+    const key = nextDatasetFieldKey(dataset.fields.map(field => field.key));
+    const ok = await persistFields([
+      ...dataset.fields,
+      { id: crypto.randomUUID(), key, label, type: fieldDraft.type },
+    ]);
+    if (ok) {
+      setFieldEditorOpen(false);
+      setFieldDraft({ label: '', type: 'text' });
+      setFieldError('');
+    }
+  };
+
+  const setEditorFieldValue = (field: DatasetField, value: unknown) => {
+    if (!rowEditor) return;
+    const values = { ...(rowEditor.row.values || {}), [field.key]: value };
+    setRowEditor({ ...rowEditor, row: { ...rowEditor.row, values } });
   };
 
   const removeRow = async (rowId: string) => {
@@ -264,7 +355,28 @@ export default function DatasetItemsPage() {
 
   const saveRowFromModal = async () => {
     if (!rowEditor || !dataset) return;
-    const { mode, row } = rowEditor;
+    const { mode } = rowEditor;
+    const values = { ...(rowEditor.row.values || {}) };
+    for (const field of dataset.fields) {
+      const value = values[field.key];
+      if (field.type === 'number') {
+        try {
+          values[field.key] = parseDatasetNumberValue(value);
+        } catch {
+          toast.error(`${field.label} 不是有效的数字`);
+          return;
+        }
+        continue;
+      }
+      if (field.type !== 'json' || typeof value !== 'string' || !value.trim()) continue;
+      try {
+        values[field.key] = JSON.parse(value);
+      } catch {
+        toast.error(`${field.label} 不是有效的 JSON`);
+        return;
+      }
+    }
+    const row = { ...rowEditor.row, values };
     const next =
       mode === 'add'
         ? [...dataset.cases, row]
@@ -427,6 +539,15 @@ export default function DatasetItemsPage() {
               <span className={styles.toolbarMeta}>{dataset.cases.length} 条</span>
             </div>
             <div className={styles.toolbarRight}>
+              <button
+                type="button"
+                className={styles.refreshGhost}
+                onClick={() => setFieldEditorOpen(true)}
+                disabled={saving}
+              >
+                <Plus size={15} aria-hidden />
+                新增字段
+              </button>
               <button type="button" className={styles.refreshGhost} onClick={() => void load()} disabled={saving}>
                 <IconRefresh />
                 刷新
@@ -456,15 +577,15 @@ export default function DatasetItemsPage() {
             <table className={styles.dataTable}>
               <thead>
                 <tr>
-                  {['ID', '输入', '预期输出', ...(isTraj ? ['轨迹 trajectory'] : []), '操作'].map(h => (
-                    <th key={h}>{h}</th>
-                  ))}
+                  <th>ID</th>
+                  {dataset.fields.map(field => <th key={field.id}>{field.label}</th>)}
+                  <th>操作</th>
                 </tr>
               </thead>
               <tbody>
                 {dataset.cases.length === 0 ? (
                   <tr>
-                    <td colSpan={isTraj ? 5 : 4} style={{ padding: 36, textAlign: 'center', color: 'var(--foreground-muted)' }}>
+                    <td colSpan={dataset.fields.length + 2} style={{ padding: 36, textAlign: 'center', color: 'var(--foreground-muted)' }}>
                       暂无数据，使用右侧「批量导入」或「单个添加」录入。
                     </td>
                   </tr>
@@ -484,23 +605,20 @@ export default function DatasetItemsPage() {
                       <td title={row.id}>
                         <span className={styles.idTag}>{shorten(row.id, 10)}</span>
                       </td>
-                      <TooltipCell
-                        shortText={shorten(row.input, 80)}
-                        fullText={row.input}
-                        tdStyle={{ maxWidth: 260 }}
-                      />
-                      <TooltipCell
-                        shortText={shorten(row.expectedOutput, 80)}
-                        fullText={row.expectedOutput}
-                        tdStyle={{ maxWidth: 260 }}
-                      />
-                      {isTraj && (
+                      {dataset.fields.map(field => {
+                        const fullText = fieldText(row, field.key);
+                        return (
                         <TooltipCell
-                          shortText={shorten(row.trajectory, 40)}
-                          fullText={row.trajectory}
-                          tdStyle={{ maxWidth: 200, fontFamily: 'ui-monospace, monospace', fontSize: 12 }}
+                          key={field.id}
+                          shortText={shorten(fullText, field.type === 'json' ? 40 : 80)}
+                          fullText={fullText}
+                          tdStyle={{
+                            maxWidth: field.type === 'json' ? 220 : 260,
+                            ...(field.type === 'json' ? { fontFamily: 'ui-monospace, monospace', fontSize: 12 } : {}),
+                          }}
                         />
-                      )}
+                        );
+                      })}
                       <td style={{ whiteSpace: 'nowrap' }}>
                         <button type="button" className={styles.linkBtn} onClick={() => openEdit(row)}>
                           编辑
@@ -664,6 +782,44 @@ export default function DatasetItemsPage() {
         </div>
       )}
 
+      {fieldEditorOpen && (
+        <div role="presentation" className={styles.modalBackdrop} onClick={() => !saving && setFieldEditorOpen(false)}>
+          <div role="dialog" aria-modal aria-labelledby="add-field-title" className={styles.modalPanel} onClick={e => e.stopPropagation()}>
+            <div className={styles.modalHeader}>
+              <div id="add-field-title" className={styles.modalTitle}>新增字段</div>
+            </div>
+            <div className={styles.modalBody} style={{ display: 'grid', gap: 14 }}>
+              <label style={{ display: 'grid', gap: 5 }}>
+                <span style={{ fontSize: 12, color: 'var(--foreground-muted)' }}>字段名称</span>
+                <Input value={fieldDraft.label} onChange={e => setFieldDraft({ ...fieldDraft, label: e.target.value })} />
+              </label>
+              <div style={{ display: 'grid', gap: 5 }}>
+                <span style={{ fontSize: 12, color: 'var(--foreground-muted)' }}>字段类型</span>
+                <Select
+                  value={fieldDraft.type}
+                  onChange={type => setFieldDraft({ ...fieldDraft, type })}
+                  options={[
+                    { value: 'text', label: '文本' },
+                    { value: 'number', label: '数字' },
+                    { value: 'boolean', label: '布尔值' },
+                    { value: 'json', label: 'JSON' },
+                  ]}
+                  size="md"
+                  className="w-full justify-between"
+                  contentClassName="z-[1200]"
+                  aria-label="字段类型"
+                />
+              </div>
+              {fieldError && <div className={styles.modalError}>{fieldError}</div>}
+            </div>
+            <div className={styles.modalFooter}>
+              <button type="button" className={styles.btnGhost} onClick={() => setFieldEditorOpen(false)} disabled={saving}>取消</button>
+              <button type="button" className={styles.btnPrimary} onClick={() => void addField()} disabled={saving}>{saving ? '保存中…' : '新增'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {rowEditor && (
         <div
           role="presentation"
@@ -679,50 +835,37 @@ export default function DatasetItemsPage() {
           }}
           onClick={() => setRowEditor(null)}
         >
-          <div className="ai-card" style={{ width: '100%', maxWidth: 560, padding: 16 }} onClick={e => e.stopPropagation()}>
+          <div className="ai-card" style={{ width: '100%', maxWidth: 560, maxHeight: '90vh', overflowY: 'auto', padding: 16 }} onClick={e => e.stopPropagation()}>
             <div style={{ fontWeight: 600, marginBottom: 12 }}>{rowEditor.mode === 'add' ? '添加数据' : '编辑数据'}</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                <span style={{ fontSize: 11, color: 'var(--foreground-muted)' }}>input</span>
-                <textarea
-                  value={rowEditor.row.input}
-                  onChange={e => setRowEditor({ ...rowEditor, row: { ...rowEditor.row, input: e.target.value } })}
-                  rows={3}
-                  style={{ borderRadius: 7, border: '1px solid var(--input-border)', padding: 8, fontSize: 14, width: '100%', boxSizing: 'border-box' }}
-                />
-              </label>
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                <span style={{ fontSize: 11, color: 'var(--foreground-muted)' }}>reference_output</span>
-                <textarea
-                  value={rowEditor.row.expectedOutput}
-                  onChange={e =>
-                    setRowEditor({ ...rowEditor, row: { ...rowEditor.row, expectedOutput: e.target.value } })
-                  }
-                  rows={4}
-                  style={{ borderRadius: 7, border: '1px solid var(--input-border)', padding: 8, fontSize: 14, width: '100%', boxSizing: 'border-box' }}
-                />
-              </label>
-              {isTraj && (
-                <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                  <span style={{ fontSize: 11, color: 'var(--foreground-muted)' }}>trajectory（可留空）</span>
-                  <textarea
-                    value={rowEditor.row.trajectory}
-                    onChange={e =>
-                      setRowEditor({ ...rowEditor, row: { ...rowEditor.row, trajectory: e.target.value } })
-                    }
-                    rows={6}
-                    spellCheck={false}
-                    placeholder={TRAJECTORY_PLACEHOLDER}
-                    style={{
-                      fontFamily: 'ui-monospace, monospace',
-                      borderRadius: 7,
-                      border: '1px solid var(--input-border)',
-                      padding: 8,
-                      fontSize: 12,
-                    }}
-                  />
+              {dataset.fields.map(field => (
+                <label key={field.id} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <span style={{ fontSize: 11, color: 'var(--foreground-muted)' }}>{field.label} · {field.key}</span>
+                  {field.type === 'boolean' ? (
+                    <input
+                      type="checkbox"
+                      checked={Boolean(fieldValue(rowEditor.row, field.key))}
+                      onChange={e => setEditorFieldValue(field, e.target.checked)}
+                      style={{ width: 18, height: 18 }}
+                    />
+                  ) : (
+                    <textarea
+                      value={fieldText(rowEditor.row, field.key)}
+                      onChange={e => setEditorFieldValue(field, e.target.value)}
+                      rows={field.type === 'json' ? 6 : 3}
+                      spellCheck={field.type !== 'json'}
+                      placeholder={field.key === 'trajectory' ? TRAJECTORY_PLACEHOLDER : undefined}
+                      style={{
+                        fontFamily: field.type === 'json' ? 'ui-monospace, monospace' : undefined,
+                        borderRadius: 7,
+                        border: '1px solid var(--input-border)',
+                        padding: 8,
+                        fontSize: field.type === 'json' ? 12 : 14,
+                      }}
+                    />
+                  )}
                 </label>
-              )}
+              ))}
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
               <button type="button" className="ai-btn-s" onClick={() => setRowEditor(null)}>

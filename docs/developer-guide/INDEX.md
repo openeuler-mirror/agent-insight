@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `57b0daec4e8b928389f2c58381b2b354860db33b` (`57b0daec`) |
-| Branch | `develop0228` |
-| Date | 2026-07-14T21:13:13+08:00 |
+| Commit | `a858063661ad9877de6e1085ef275a98a2331a1a` (`a8580636`) |
+| Branch | `master` |
+| Date | 2026-07-16T21:11:02+08:00 |
 | Author | openeuler-ci-bot |
-| Subject | `!194 fix: langfuse trace 解析全面修复——supervisor 多 agent、系统提示词、乱码、恒"执行中"等 6 项` |
+| Subject | `!199 Trace沉淀为评测数据集` |
 
-**如何更新：** `git diff 57b0daec HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff a8580636 HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。

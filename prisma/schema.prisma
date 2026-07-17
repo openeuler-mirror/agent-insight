@@ -536,6 +536,7 @@ model AgentEvalDataset {
   /// 自动起草的行为评测集会填这个字段（用 Skill.name）。
   targetSkill  String   @default("")
   tagsJson     String   @default("[]")
+  fieldsJson   String   @default("[]")
   casesJson    String   @default("[]")
   datasetKind  String   @default("ideal_output")
   createdAt    DateTime @default(now())
