@@ -43,7 +43,7 @@ export async function GET(
       errorMessage: STOPPED_MESSAGE,
     });
   }
-  const report = row?.status === 'done' && row.generator === AGENT_DEBUG_GENERATOR ? parseReportPayload(row) : null;
+  const report = row?.status === 'done' ? parseReportPayload(row) : null;
   return NextResponse.json({
     report,
     row: summarizeRow(row),

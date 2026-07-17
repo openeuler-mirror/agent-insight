@@ -198,6 +198,13 @@ test('agent-debug runner falls back to final report file', () => {
   assert.match(runner, /不要只回复摘要或诊断完成说明/);
 });
 
+test('agent-debug GET exposes completed reports from older generators', () => {
+  const route = fs.readFileSync(path.join(process.cwd(), 'src', 'app', 'api', 'observe', 'executions', '[executionId]', 'agent-debug', 'route.ts'), 'utf-8');
+
+  assert.match(route, /const report = row\?\.status === 'done' \? parseReportPayload\(row\) : null/);
+  assert.match(route, /existing\?\.status === 'done' && existing\.generator === AGENT_DEBUG_GENERATOR/);
+});
+
 test('agent-debug no longer uses candidate windows for analysis', () => {
   const runner = fs.readFileSync(path.join(process.cwd(), 'src', 'lib', 'engine', 'agent-debug', 'runner.ts'), 'utf-8');
   const skill = fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf-8');
