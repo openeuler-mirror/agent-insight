@@ -8,3 +8,4 @@ services:
       - "3033:3000"
     volumes:
       - ${HOME}/.agent-insight:/data/agent-insight
+      - ${HOME}/.agent-insight:/home/node/.agent-insight

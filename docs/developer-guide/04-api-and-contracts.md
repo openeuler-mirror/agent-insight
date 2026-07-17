@@ -100,7 +100,7 @@
 | `Session` | 原始接入的 session | `taskId`（唯一）、`interactions`（JSON） |
 | `UserSettings` | 按用户维度的设置 | `settingsJson`（ServerSettingsV2） |
 | `ParsedFlow` / `ExecutionMatch` | skill 流程 + 静态/动态对齐 | `flowJson`/`mermaidCode`；`matchJson`、`staticMermaid`、`dynamicMermaid` |
-| `AgentEvalDataset` | 行为评测数据集 | `casesJson`、`datasetKind`、`targetSkill` |
+| `AgentEvalDataset` | 行为评测数据集 | `fieldsJson` 保存动态字段 schema；`casesJson` 保存固定兼容字段与 `values`；另有 `datasetKind`、`targetSkill` |
 | `BatchEvalTask` / `GrayscaleTask` | 批量与 A/B 编排状态 | `configJson`、`caseStatesJson` |
 | `DebugJobResult` / `DebugHistory` | 调试/运行任务结果 | `output`、`sessionId` |
 | `TrajectoryEvalResult` | 一条轨迹评测结果 | `trajectoryScore`、`dimensionScoresJson`、`deviationStepsJson`、`evaluatorRunId` |
@@ -118,6 +118,7 @@
 - **Ingest / records** — `ExecutionRecord`（`storage/data-service.ts`）：`{ upload_id; task_id; query; framework; tokens; cost; latency; endpoint; final_result; trace_completed_at; skill; invokedSkills: InvokedSkill[]; userTags: TraceTagDto[]; is_skill_correct; is_answer_correct; ... }`；`latency` 统一以秒落库，前端展示通过 `latency-format.ts` 换算为 ms/s/m/h；`endpoint` 归一为 `scheme://host:port`，用于 session 与 infra 源关联；`RoutingEvaluationSnapshot`、`OutcomeEvaluationSnapshot`、`ConfigItem`、`InvokedSkill { name; version }`。
 - **Framework adapters** — `FrameworkAdapter`（`ingest/adapters/types.ts`）：`{ descriptor; extractSkills?; normalizeForStorage? }`；`FrameworkDescriptor { id; aliases?; label; onboard; platform? }`。
 - **Evaluation** — `EvaluationResult`（`evaluation/evaluation-types.ts`）：维度得分（`functionalScore`/`efficiencyScore`/`practicalityScore`/`economicScore`：`DimensionScore`）+ `overallScore`/`weightedScore`；`JudgmentResult { is_correct; score; reason }`、`JudgeCriteria`、`TrajectoryEvalInput/Output`、`ABExperiment`、`TestCase`、`QualityBenchmark`。
+- **Agent dataset** — `AgentDatasetRecord` / `DatasetCase` / `DatasetField`（`server/agent_datasets_storage.ts`）：字段 schema 存于 `fields`，样本值存于 `values`。字段名称在单个数据集内唯一，用户新增字段时 key 由前端生成；`POST/PATCH /api/agent-datasets` 在归一化前严格拒绝非法或重复 key，避免写入请求被静默裁剪，历史数据读取仍使用宽松归一化保证兼容。归一化时只同步实际存在的 `input`、`reference_output → expectedOutput`、`trace → trajectory`。数据集存储不强制 `input`，具体评测所需字段由执行入口校验。`POST /api/agent-datasets/trace-drafts` 直接使用 `Execution.query` 作为 input、`Execution.finalResult` 作为 output，并返回调用 `summarizeTrace` 之前的 interactions JSON 数组作为 `trace`；不再调用任务输入/输出提取器。前端以并发度 3 批量调用。`POST /api/agent-datasets/backflow` 要求明确的 `mode`；新建模式接收完整 `fields`，已有模式接收 `datasetId + newFields`，两种模式都接收映射并预览后的 `cases[].values`，JSON 字段会解析为结构化值，字段 schema 与 cases 通过一次存储更新写入。旧的单条 `values + traceSource` 形状仍可兼容，但不会自动补字段。
 - **Result quality** — `evaluateResultQuality(executionId)` / `scheduleResultEvaluation(executionId)`（`evaluation/result-quality-evaluator.ts`）返回忠实度、指令遵循、答案质量、准确性四个 `ResultEvalResult`。忠实度由 `faithfulness-evaluator.ts` 复用 `buildAgentCallTree + walkTree`，只把最终交付生成 Agent 可见且有 output 的 TOOL 事件转成 `RetrievedContext`；先独立提取原子 claims，再对短 context 全量验证、对长 context 按行切块和逐 claim Top-K 召回后分批验证。`supported/contradicted` 引用必须命中允许的 context ID 且摘录属于原文，代码计算支持比例；无工具证据或无可验证主张为 N/A。指令遵循 `evidence` 保存 `constraints`、逐项 `verdicts`、两阶段置信度和专属原因；答案质量保存 statements/requirements、相关性与完整性 verdict、连贯性 rubric 结果、三个子分和专属原因。各项在 `evidence.calls` 保留子调用的 stage、状态、耗时和结构化响应；失败时已完成的调用诊断也会落库。四项使用独立 evaluator version 与输入 hash。`TraceLite.resultMetrics` 为质量报告读模型，`MetricScore` 附带 `confidence`/`methodBreakdown`/`naReason`/`evidence`；其中 `MetricScore.evidence[].detail` 保留单条 trace 的结构化 `evidenceJson`，供质量监控页的评测详情表格展示。
 - **A/B scoring** — `AbScoringResult` / `AbScoringPolicy` / `AbScoreBreakdown`（`skill-analysis/ab-scoring.ts`）：评级、决策、`allowRelease`。
 - **Agent debug** — `AgentDebugReportPayload`、`AgentDebugIssue`、`AgentDebugRootCause`、`AgentDebugTriage`、`AgentDebugSkillsAnalysis`、`AgentDebugSkillsAnalysisRow`、`DebugTurn`、`DebugToolCall`（`engine/agent-debug/types.ts`）。
@@ -143,3 +144,14 @@
 | `AgentInbox` / `HITLRequest` / `ActionRequest` | interface | `src/components/thread/agent-inbox/types.ts` | human-in-the-loop UI |
 
 完整的按模块清单（lib: 232、components: 42、server: 10、app: 9、prompts: 2）见分析输出。CLI 入口点来自 `package.json` 的 `bin`（`skill-insight` → `bin/cli.js`）。
+
+
+
+
+## Trace Bundle 导入导出契约
+
+- `GET /api/observe/traces/export?executionId=<id>`：校验当前用户可见性；若传入子 Agent Execution，则先解析到根 Execution，再导出整棵树。响应为 `agent-insight.trace-bundle` v1 JSON，并设置下载文件名。
+- `POST /api/observe/traces/import`：请求体为 `{ user?, fileName?, bundle }`。服务端限制 50 MB、500 个 Execution 节点，校验格式版本、根节点、父节点存在性、`rootExecutionId` 一致性、重复 ID 和环。成功返回原始 `originalRootExecutionId`、导入后的 `rootExecutionId` / `rootTaskId`、Execution/子 Agent 数量和 `remappedIds`。
+- v1 Bundle 顶层字段为 `format`、`version`、`exportedAt`、`rootExecutionId`、`executions`；每个节点包含 portable Execution 与可空 Session。Session `interactions` 保留规范化原始值，不做面向展示的时间格式化。
+- `Execution.id` 与 Execution/Session `taskId` 共享冲突检测空间。无冲突 ID 原样保留；有冲突 ID 才生成 `import_<uuid>`，并同步更新父子 ID、root ID、`agentSessionId` 及 interactions 中已知的 session/execution 引用。OTel `traceId` / `spanId` / `parentSpanId` 不参与重映射。
+- 导入只创建 Execution、Session 和可重算的 ExecutionSkill；不迁移 Evaluation、TraceEvaluation、AgentDebugReport、ExecutionTag 或基础设施关联，也不调度 LLM 评测。
