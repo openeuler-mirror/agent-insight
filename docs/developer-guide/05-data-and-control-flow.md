@@ -129,3 +129,23 @@ flowchart TD
 
 ## 跨模块流程说明
 每条后端流水线都跨越 `app`（路由）→ `lib`（引擎/存储），并经常涉及 `prompts`（LLM 模板）和 `server`（Prisma 仓库）。`lib ↔ server` 循环（见 [01-architecture.md](01-architecture.md#layering--pattern)）意味着存储辅助函数与仓库会相互调用；应将它们视为同一个持久化核心。
+
+
+
+
+## 后端流水线：Trace Bundle 回放
+
+```mermaid
+flowchart LR
+    detail["Trace 详情导出"] --> exportApi["GET /api/observe/traces/export"]
+    exportApi --> resolveRoot["定位根 Execution + 全部子 Agent"]
+    resolveRoot --> bundle["Trace Bundle v1 JSON"]
+    bundle --> importApi["POST /api/observe/traces/import"]
+    importApi --> validate["大小 / 版本 / 树结构校验"]
+    validate --> collision["Execution + task ID 冲突检测"]
+    collision --> remap["仅重映射冲突 ID 与内部引用"]
+    remap --> persist["按父节点优先写 Execution / Session"]
+    persist --> skills["重算 ExecutionSkill，不触发 LLM 评测"]
+```
+
+实现入口为 `src/lib/trace-transfer.ts`（Bundle 校验、排序与 ID 重映射）和 `src/lib/trace-transfer-service.ts`（所有权、完整树查询、持久化与失败清理）。导入目标 user 始终取当前请求身份，不信任 Bundle 中的来源用户。任一节点写入或 Skill 重算失败时，服务会清理本次已创建的 Session 与 Execution，避免保留可见的半棵树。

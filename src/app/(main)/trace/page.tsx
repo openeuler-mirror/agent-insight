@@ -6,6 +6,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState, Suspense } fr
 import {
     ArrowLeft,
     Download,
+    Upload,
     RefreshCw,
     X as XIcon,
     XCircle,
@@ -43,6 +44,7 @@ import { Select, type SelectOption } from '@/components/ui/select';
 import { Pagination } from '@/components/ui/pagination';
 import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import {
     DropdownMenu,
     DropdownMenuCheckboxItem,
@@ -77,6 +79,16 @@ interface TraceUserTag {
     color: string;
     createdAt?: string;
     usageCount?: number;
+}
+
+interface TraceImportResult {
+    fileName: string | null;
+    originalRootExecutionId: string;
+    rootExecutionId: string;
+    rootTaskId: string | null;
+    executionCount: number;
+    subagentCount: number;
+    remappedIds: Array<{ original: string; imported: string }>;
 }
 
 interface Execution {
@@ -219,45 +231,6 @@ function getFrameworkLabel(framework?: string | null): string {
         default:
             return value;
     }
-}
-
-function formatTimestampForDisplay(ts: number): string {
-    if (!ts && ts !== 0) return '-';
-    const d = new Date(ts);
-    return d.getFullYear() + '/' +
-        String(d.getMonth() + 1).padStart(2, '0') + '/' +
-        String(d.getDate()).padStart(2, '0') + ' ' +
-        String(d.getHours()).padStart(2, '0') + ':' +
-        String(d.getMinutes()).padStart(2, '0') + ':' +
-        String(d.getSeconds()).padStart(2, '0') + '.' +
-        String(d.getMilliseconds()).padStart(3, '0');
-}
-
-function formatSessionForDisplay(session: any): any {
-    if (!session) return session;
-    const formatted = JSON.parse(JSON.stringify(session));
-
-    if (formatted.startTime) {
-        formatted.startTime = formatTimestampForDisplay(formatted.startTime);
-    }
-
-    if (Array.isArray(formatted.interactions)) {
-        formatted.interactions = formatted.interactions.map((interaction: any) => {
-            const formattedInteraction = { ...interaction };
-            if (formattedInteraction.timestamp) {
-                formattedInteraction.timestamp = formatTimestampForDisplay(formattedInteraction.timestamp);
-            }
-            if (formattedInteraction.message?.timestamp) {
-                formattedInteraction.message.timestamp = formatTimestampForDisplay(formattedInteraction.message.timestamp);
-            }
-            if (formattedInteraction.timeInfo?.created) {
-                formattedInteraction.timeInfo.created = formatTimestampForDisplay(formattedInteraction.timeInfo.created);
-            }
-            return formattedInteraction;
-        });
-    }
-
-    return formatted;
 }
 
 function safeFilenameSegment(value: string): string {
@@ -435,6 +408,10 @@ function TracePageContent() {
     const [selectedTraceKeys, setSelectedTraceKeys] = useState<Set<string>>(() => new Set());
     const [batchBackflowOpen, setBatchBackflowOpen] = useState(false);
     const [availableTags, setAvailableTags] = useState<TraceUserTag[]>([]);
+    const importInputRef = useRef<HTMLInputElement>(null);
+    const [importing, setImporting] = useState(false);
+    const [importResult, setImportResult] = useState<TraceImportResult | null>(null);
+    const [reloadKey, setReloadKey] = useState(0);
 
     // URL-persisted filter / sort / paging state (docs/design/patterns.md §1 + §11).
     const [timeFilter, setTimeFilter] = useQueryState('time', parseAsString.withDefault('all'));
@@ -579,8 +556,40 @@ function TracePageContent() {
             .then((d: Execution[]) => setData(Array.isArray(d) ? d : []))
             .catch(() => setData([]))
             .finally(() => setLoading(false));
-    }, [user, agentScopeFilter, skillFilter, businessTagFilter, search, clausesRaw]);
+    }, [user, agentScopeFilter, skillFilter, businessTagFilter, search, clausesRaw, reloadKey]);
 
+
+    const handleImportFile = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0];
+        event.target.value = '';
+        if (!file || !user) return;
+        if (file.size > 50 * 1024 * 1024) {
+            toast.error(locale === 'zh' ? 'Trace 文件不能超过 50 MB' : 'Trace file must be 50 MB or smaller');
+            return;
+        }
+        setImporting(true);
+        try {
+            let bundle: unknown;
+            try {
+                bundle = JSON.parse(await file.text());
+            } catch {
+                throw new Error(locale === 'zh' ? '文件不是有效的 JSON' : 'The file is not valid JSON');
+            }
+            const response = await apiFetch('/api/observe/traces/import', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user, fileName: file.name, bundle }),
+            });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(payload?.error || (locale === 'zh' ? '导入 Trace 失败' : 'Failed to import trace'));
+            setImportResult(payload as TraceImportResult);
+            setReloadKey(value => value + 1);
+        } catch (error) {
+            toast.error(error instanceof Error ? error.message : (locale === 'zh' ? '导入 Trace 失败' : 'Failed to import trace'));
+        } finally {
+            setImporting(false);
+        }
+    }, [locale, user]);
 
     const filtered = useMemo(() => {
         const now = Date.now();
@@ -762,7 +771,19 @@ function TracePageContent() {
     ];
     return (
         <>
-            <AppTopBar title={<Term id="trace" label={t('nav.trace')} />} actions={undefined} showDefaultActions={false} />
+            <AppTopBar
+                title={<Term id="trace" label={t('nav.trace')} />}
+                actions={!selectedExecution ? (
+                    <>
+                        <input ref={importInputRef} type="file" accept="application/json,.json" className="hidden" onChange={handleImportFile} />
+                        <Button variant="outline" size="sm" disabled={!user || importing} onClick={() => importInputRef.current?.click()}>
+                            <Download className="size-3.5" aria-hidden />
+                            {importing ? (locale === 'zh' ? '导入中…' : 'Importing…') : (locale === 'zh' ? '导入 Trace' : 'Import Trace')}
+                        </Button>
+                    </>
+                ) : undefined}
+                showDefaultActions={false}
+            />
             <PageContainer>
                 {selectedExecution ? (
                     <TraceDetailView
@@ -1084,6 +1105,40 @@ function TracePageContent() {
                     </>
                 )}
             </PageContainer>
+            <Dialog open={!!importResult} onOpenChange={open => !open && setImportResult(null)}>
+                <DialogContent className="sm:max-w-lg">
+                    <DialogHeader>
+                        <DialogTitle>{locale === 'zh' ? 'Trace 导入成功' : 'Trace imported'}</DialogTitle>
+                        <DialogDescription>{locale === 'zh' ? '完整链路已写入当前用户空间。' : 'The complete trace tree was added to your workspace.'}</DialogDescription>
+                    </DialogHeader>
+                    {importResult && (
+                        <div className="rounded-md border border-border bg-background-secondary p-3 text-sm">
+                            <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-2">
+                                <dt className="text-foreground-muted">{locale === 'zh' ? '文件' : 'File'}</dt>
+                                <dd className="min-w-0 truncate font-mono text-xs">{importResult.fileName || '—'}</dd>
+                                <dt className="text-foreground-muted">{locale === 'zh' ? '原 Trace ID' : 'Original trace ID'}</dt>
+                                <dd className="min-w-0 break-all font-mono text-xs">{importResult.originalRootExecutionId}</dd>
+                                <dt className="text-foreground-muted">{locale === 'zh' ? '新 Trace ID' : 'New trace ID'}</dt>
+                                <dd className="min-w-0 break-all font-mono text-xs">{importResult.rootExecutionId}</dd>
+                                <dt className="text-foreground-muted">{locale === 'zh' ? '节点' : 'Nodes'}</dt>
+                                <dd>{importResult.executionCount} ({locale === 'zh' ? '子 Agent' : 'subagents'}: {importResult.subagentCount})</dd>
+                                <dt className="text-foreground-muted">{locale === 'zh' ? 'ID 重映射' : 'ID remaps'}</dt>
+                                <dd>{importResult.remappedIds.length}</dd>
+                            </dl>
+                        </div>
+                    )}
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => setImportResult(null)}>{locale === 'zh' ? '关闭' : 'Close'}</Button>
+                        <Button disabled={!importResult?.rootTaskId && !importResult?.rootExecutionId} onClick={() => {
+                            const targetId = importResult?.rootTaskId || importResult?.rootExecutionId;
+                            setImportResult(null);
+                            if (targetId) void setTaskIdParam(targetId);
+                        }}>
+                            {locale === 'zh' ? '打开 Trace' : 'Open Trace'}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
         </>
     );
 }
@@ -1101,6 +1156,7 @@ function TraceDetailView({
     const searchParams = useSearchParams();
     const [session, setSession] = useState<any | null>(null);
     const [loading, setLoading] = useState(false);
+    const [exporting, setExporting] = useState(false);
     const [backflowOpen, setBackflowOpen] = useState(false);
     const taskId = execution.task_id || execution.upload_id || '';
     const execAny = execution as any;
@@ -1162,25 +1218,38 @@ function TraceDetailView({
 
     const { framework, latency, tokens, cost } = execution;
     const isRunning = execStatus === 'running';
-    const canDownloadSession = !loading && !!session && !session.error;
+    const canDownloadSession = !exporting && !!user && !!taskId;
 
-    const downloadSessionJson = () => {
-        if (!session || session.error) return;
+    const downloadSessionJson = async () => {
+        if (!canDownloadSession || !user) return;
+        setExporting(true);
         try {
-            const formatted = formatSessionForDisplay(session);
-            const blob = new Blob([JSON.stringify(formatted, null, 2)], { type: 'application/json;charset=utf-8' });
+            const query = new URLSearchParams({
+                executionId: execution.upload_id || execution.task_id || '',
+                user,
+            });
+            const response = await apiFetch('/api/observe/traces/export?' + query.toString());
+            if (!response.ok) {
+                const payload = await response.json().catch(() => ({}));
+                throw new Error(payload?.error || (locale === 'zh' ? '导出 Trace 失败' : 'Failed to export trace'));
+            }
+            const blob = await response.blob();
+            const disposition = response.headers.get('Content-Disposition') || '';
+            const filenameMatch = /filename="?([^";]+)"?/i.exec(disposition);
             const url = URL.createObjectURL(blob);
             const link = document.createElement('a');
             link.href = url;
-            link.download = `trace-${safeFilenameSegment(taskId)}-session.json`;
+            link.download = filenameMatch?.[1] || ('trace-' + safeFilenameSegment(taskId) + '.json');
             document.body.appendChild(link);
             link.click();
             link.remove();
             URL.revokeObjectURL(url);
-            toast.success(locale === 'zh' ? 'JSON 已开始下载' : 'JSON download started');
+            toast.success(locale === 'zh' ? '完整 Trace 已开始下载' : 'Trace bundle download started');
         } catch (error) {
-            console.error('[trace] download session json failed:', error);
-            toast.error(locale === 'zh' ? '下载 JSON 失败' : 'Failed to download JSON');
+            console.error('[trace] export trace bundle failed:', error);
+            toast.error(error instanceof Error ? error.message : (locale === 'zh' ? '导出 Trace 失败' : 'Failed to export trace'));
+        } finally {
+            setExporting(false);
         }
     };
 
@@ -1294,13 +1363,13 @@ function TraceDetailView({
                         disabled={!canDownloadSession}
                         title={
                             canDownloadSession
-                                ? (locale === 'zh' ? '下载会话数据（原始 JSON）' : 'Download session data raw JSON')
-                                : (locale === 'zh' ? '会话数据加载后可下载' : 'Download available after session data loads')
+                                ? (locale === 'zh' ? '下载完整 Trace Bundle' : 'Download complete trace bundle')
+                                : (locale === 'zh' ? 'Trace 暂不可导出' : 'Trace export is currently unavailable')
                         }
                         className="h-7 text-xs"
                     >
-                        <Download className="size-3.5" aria-hidden />
-                        {locale === 'zh' ? '保存trace' : 'Save trace'}
+                        <Upload className="size-3.5" aria-hidden />
+                        {locale === 'zh' ? '导出 Trace' : 'Export Trace'}
                     </Button>
                 </div>
             </div>
