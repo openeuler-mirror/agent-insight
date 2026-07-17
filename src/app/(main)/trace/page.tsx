@@ -549,6 +549,37 @@ function TracePageContent() {
     // Resolve selectedExecution from URL on data load or URL change.
     //   - data 列表里没这条(比如系统 agent grayscale-* 被前端过滤掉)
     const fetchGuardRef = useRef<string | null>(null);
+    const listRequestIdRef = useRef(0);
+    const listFilterKey = useMemo(() => JSON.stringify([
+        agentScopeFilter,
+        skillFilter,
+        businessTagFilter,
+        search,
+        clausesRaw,
+        frameworkFilter,
+        agentFilter,
+        ownershipFilter,
+        anomalyFilter,
+        timeFilter,
+        sortKey,
+        sortDir,
+        pageSize,
+    ]), [
+        agentScopeFilter,
+        skillFilter,
+        businessTagFilter,
+        search,
+        clausesRaw,
+        frameworkFilter,
+        agentFilter,
+        ownershipFilter,
+        anomalyFilter,
+        timeFilter,
+        sortKey,
+        sortDir,
+        pageSize,
+    ]);
+    const previousListFilterKeyRef = useRef(listFilterKey);
     useEffect(() => {
         if (!taskIdParam) {
             if (selectedExecution) setSelectedExecution(null);
@@ -574,6 +605,13 @@ function TracePageContent() {
     }, [taskIdParam, data]);
 
     useEffect(() => {
+        const requestId = ++listRequestIdRef.current;
+        const filtersChanged = previousListFilterKeyRef.current !== listFilterKey;
+        previousListFilterKeyRef.current = listFilterKey;
+        if (filtersChanged && page !== 1) {
+            void setPage(1);
+            return;
+        }
         if (!user) return;
         setLoading(true);
         const scopeParam = agentScopeFilter === 'subagent'
@@ -591,6 +629,7 @@ function TracePageContent() {
         apiFetch(`/api/observe/data?user=${encodeURIComponent(user)}&paginated=1&databasePagination=1&page=${page}&pageSize=${pageSize}&sort=${encodeURIComponent(sortKey)}&dir=${encodeURIComponent(sortDir)}&time=${encodeURIComponent(timeFilter)}&status=${encodeURIComponent(anomalyFilter)}&includeEvaluations=0&fields=light&includeTags=1&skipAutoEvalReady=1${scopeParam}${skillParam}${searchParam}${filtersParam}${bizTagParam}${frameworkParam}${agentParam}${ownershipParam}`)
             .then(r => r.json())
             .then((response: TracePageResponse) => {
+                if (listRequestIdRef.current !== requestId) return;
                 const records = Array.isArray(response?.records) ? response.records : [];
                 setData(records);
                 setTotal(typeof response?.total === 'number' ? response.total : 0);
@@ -602,11 +641,14 @@ function TracePageContent() {
                 });
             })
             .catch(() => {
+                if (listRequestIdRef.current !== requestId) return;
                 setData([]);
                 setTotal(0);
                 setStats({ total: 0, failedCount: 0, avgLatencyMs: 0, toolErrorRate: 0 });
             })
-            .finally(() => setLoading(false));
+            .finally(() => {
+                if (listRequestIdRef.current === requestId) setLoading(false);
+            });
     }, [
         user,
         agentScopeFilter,
@@ -624,6 +666,8 @@ function TracePageContent() {
         page,
         pageSize,
         reloadKey,
+        listFilterKey,
+        setPage,
     ]);
 
     const handleImportFile = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -657,12 +701,6 @@ function TracePageContent() {
             setImporting(false);
         }
     }, [locale, user]);
-
-    useEffect(() => {
-        if (page !== 1) setPage(1);
-        // page reset on filter / sort change
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [timeFilter, frameworkFilter, anomalyFilter, agentFilter, skillFilter, businessTagFilter, ownershipFilter, search, clausesRaw, sortKey, sortDir, pageSize]);
 
     const handleSort = (key: SortKey) => {
         if (key === sortKey) {

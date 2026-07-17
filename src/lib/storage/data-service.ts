@@ -1826,10 +1826,8 @@ async function readRecordsInternal(
 
     if (filters?.taskIds && filters.taskIds.length > 0) {
         where.taskId = { in: filters.taskIds };
-        if (filters.framework) where.framework = filters.framework;
     } else if (!filters?.query && filters?.taskId) {
         where.taskId = filters.taskId;
-        if (filters.framework) where.framework = filters.framework;
     } else if (filters?.query) {
         const term = filters.query.trim();
         if (term) {
@@ -1845,8 +1843,8 @@ async function readRecordsInternal(
                 { taskId: { contains: term } },
             ];
         }
-        if (filters.framework) where.framework = filters.framework;
     }
+    if (filters?.framework) where.framework = filters.framework;
 
     if (skillFilterActive) {
         // 反查 ExecutionSkill 得到真正用到这些 skill(+可选版本)的 executionId 集合,再交给 Execution 主查询。

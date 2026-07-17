@@ -355,6 +355,7 @@ export default function AgentTraceView({
     const { t: tt } = useLocale();
     const [interactions, setInteractions] = useState<RawInteraction[]>(sourceInteractions);
     const [interactionLoadError, setInteractionLoadError] = useState<string | null>(null);
+    const [fullInteractionLoadError, setFullInteractionLoadError] = useState<string | null>(null);
     const fullLoadPromiseRef = React.useRef<Promise<RawInteraction[]> | null>(null);
     const previousRootExecutionIdRef = React.useRef(rootExecutionId);
 
@@ -363,6 +364,7 @@ export default function AgentTraceView({
         previousRootExecutionIdRef.current = rootExecutionId;
         fullLoadPromiseRef.current = null;
         setInteractionLoadError(null);
+        setFullInteractionLoadError(null);
         setInteractions(previous => {
             if (traceChanged) return sourceInteractions;
             return sourceInteractions.map((item, index) => {
@@ -393,14 +395,23 @@ export default function AgentTraceView({
         }
         if (!fullLoadPromiseRef.current) {
             const requestedTraceId = previousRootExecutionIdRef.current;
-            fullLoadPromiseRef.current = loadAllInteractions()
+            setFullInteractionLoadError(null);
+            let promise: Promise<RawInteraction[]>;
+            promise = loadAllInteractions()
                 .then(loaded => {
                     if (previousRootExecutionIdRef.current === requestedTraceId) setInteractions(loaded);
                     return loaded;
                 })
+                .catch(error => {
+                    if (previousRootExecutionIdRef.current === requestedTraceId) {
+                        setFullInteractionLoadError(error instanceof Error ? error.message : 'Failed to load full trace');
+                    }
+                    return interactions;
+                })
                 .finally(() => {
-                    fullLoadPromiseRef.current = null;
+                    if (fullLoadPromiseRef.current === promise) fullLoadPromiseRef.current = null;
                 });
+            fullLoadPromiseRef.current = promise;
         }
         return fullLoadPromiseRef.current;
     }, [interactions, loadAllInteractions]);
@@ -693,6 +704,14 @@ export default function AgentTraceView({
     return (
         <TraceCtx.Provider value={ctxValue}>
         <div className="flex flex-col gap-2.5">
+            {fullInteractionLoadError && (
+                <div className="flex items-center justify-between gap-3 rounded-md border border-error-border bg-error-subtle px-3 py-2 text-sm text-error" role="alert">
+                    <span>{fullInteractionLoadError}</span>
+                    <Button variant="outline" size="sm" onClick={() => void ensureAllInteractionsLoaded()}>
+                        重试
+                    </Button>
+                </div>
+            )}
             {/* Stats bar */}
             {totalStats && (
                 <div className="flex flex-wrap items-center gap-3 px-3.5 py-2 rounded-md border border-border bg-background-secondary text-xs">
