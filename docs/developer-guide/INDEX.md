@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `1690c46b419faa50130d052badc91a7f25fec190` (`1690c46`) |
-| Branch | `new-dev-07-10` |
-| Date | 2026-07-13T19:59:24+08:00 |
+| Commit | `a858063661ad9877de6e1085ef275a98a2331a1a` (`a8580636`) |
+| Branch | `master` |
+| Date | 2026-07-16T21:11:02+08:00 |
 | Author | openeuler-ci-bot |
-| Subject | `!193 fix: langfuse-langgraph adapter 不再硬编码 ChatOpenAI，兼容 ChatDeepSeek 等 LLM wrapper` |
+| Subject | `!199 Trace沉淀为评测数据集` |
 
-**如何更新：** `git diff 1690c46 HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff a8580636 HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
