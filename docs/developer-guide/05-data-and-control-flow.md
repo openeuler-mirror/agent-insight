@@ -82,6 +82,26 @@ flowchart TD
     readRecords --> execution[(Execution)]
 ```
 
+### OTel Ingest 数据流
+
+OpenClaw 及其他 OTLP 客户端通过 `POST /api/ingest/otel/v1/traces` 上报 trace。该端点：
+
+1. 从 `x-witty-api-key` Header 解析身份（关联 Workspace）
+2. 按 Content-Type 选择解码路径：`application/x-protobuf` 经 `decodeOtlpProtobuf` 解码，`application/json` 直接 JSON parse
+3. 调用 `normalizeClaudeOtlpTraces` 将 OTLP 数据归一化为内部 Event 格式
+4. `appendOtelTraceEvents` 将 events 写入 JSONL spool（指定目录，按 session/trace 分片）
+5. 返回 `{ status: 'accepted', received, sessions }`，不阻塞
+
+Logs 经由 `POST /api/ingest/otel/v1/logs`（仅 JSON），流程同上（`normalizeClaudeOtlpLogs` + `appendClaudeOtelEvents`）。
+
+后台 `OtelSpoolConsumer`（`startOtelSpoolConsumer` / `runOtelSpoolConsumerTick`）按 checkpoint 增量消费 spool：
+- **短 debounce**（`OTEL_CONSUMER_SHORT_MS`，默认 3s）：有数据时快速落库
+- **长 debounce**（`OTEL_CONSUMER_LONG_MS`，默认 30s）：静默后触发评估
+
+消费流程调用 `getAdapter(framework)` 确定解析器后，依次执行 `buildAgentCallTree`（构建 Span 树）、`deriveSubagentExecutions`（拆分父子 Execution）、`saveExecutionRecord`（持久化到 Prisma）。
+
+OTLP 属性契约详见 [09-otlp-attribute-contract.md](09-otlp-attribute-contract.md)。
+
 ## 后端流水线：评测（Config → Execution → Decision）
 数据集 `Config` 提供真值；将执行记录进行匹配并评分；结果转化为 `Evaluation` + `SkillIssue` 行。
 
