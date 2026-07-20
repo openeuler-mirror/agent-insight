@@ -99,7 +99,7 @@ export async function POST(req: Request) {
       if (!authenticatedUser) {
         return NextResponse.json({ error: 'Invalid Langfuse credentials' }, { status: 401 });
       }
-      console.log(`[OTel] Langfuse Authenticated User: ${authenticatedUser}`);
+      console.log('[OTel] Langfuse Authenticated User:', authenticatedUser);
     }
 
     // jiuwen (openJiuwen / JiuwenSwarm via agent-core) emits a nested agent.*/team.*
@@ -108,6 +108,7 @@ export async function POST(req: Request) {
     if (jiuwenServiceName(body) === 'jiuwenswarm') {
       const { received, sessions } = await ingestJiuwenOtlp(body, { user: authenticatedUser });
       return NextResponse.json({ status: 'accepted', framework: 'jiuwenswarm', received, sessions });
+    }
     }
 
     const receivedAt = new Date().toISOString();

@@ -1,3 +1,4 @@
+import { guardAttribution } from '@/lib/ingest/claude-otel/attribution-guard';
 import { readNewLinesSince, type SpoolCursor } from '@/lib/ingest/claude-otel/spool';
 import { saveExecutionRecord, type ExecutionRecord } from '@/lib/storage/data-service';
 import {
@@ -90,7 +91,7 @@ function createState(options: OtelSpoolConsumerOptions = {}): OtelSpoolConsumerS
     sourcesById: new Map(sources.map((source) => [source.id, source])),
     pendingFiles: new Map(),
     sessions: new Map(),
-    saveExecution: options.saveExecution || saveExecutionRecord,
+    saveExecution: wrapSaveExecutionWithAttributionGuard(options.saveExecution || saveExecutionRecord, options.log || console.log),
     scheduleResultEvaluation: options.scheduleResultEvaluation || scheduleQualityResultEvaluation,
     shortMs: options.shortMs ?? envNumber('AGENT_INSIGHT_OTEL_CONSUMER_SHORT_MS', 3000),
     longMs: options.longMs ?? envNumber('AGENT_INSIGHT_OTEL_CONSUMER_LONG_MS', 30000),
@@ -101,6 +102,37 @@ function createState(options: OtelSpoolConsumerOptions = {}): OtelSpoolConsumerS
     seedOnStart: options.seedOnStart ?? true,
     log: options.log || console.log,
     warn: options.warn || console.warn,
+  };
+}
+
+/**
+ * 在 saveExecution 外层包裹归属防线。
+ * 对所有 OTLP 框架生效，不修改端点鉴权语义。
+ * 若 user 无法解析到真实用户，直接丢弃（不落库）+ 结构化日志。
+ */
+function wrapSaveExecutionWithAttributionGuard(
+  inner: SaveExecution,
+  log: (...args: any[]) => void,
+): SaveExecution {
+  return async (data) => {
+    const result = guardAttribution({
+      user: data.user,
+      taskId: data.task_id,
+      framework: data.framework,
+    });
+
+    if (!result.pass) {
+      log('[AttributionGuard] dropping unattributed session', {
+        taskId: result.taskId,
+        framework: result.framework,
+        eventCount: result.eventCount,
+        reason: result.reason,
+      });
+      // 丢弃不可恢复 — 仍返回 success 以避免消费者重试循环
+      return { success: true, record: data };
+    }
+
+    return inner(data);
   };
 }
 
