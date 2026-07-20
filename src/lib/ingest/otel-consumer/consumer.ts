@@ -33,6 +33,9 @@ type SessionState = {
   shortTimer?: TimerHandle;
   longTimer?: TimerHandle;
   maxTimer?: TimerHandle;
+  /** 上一轮聚合结束时刻/耗时——聚合冷却的依据(见 aggregateCooldownRemaining) */
+  lastAggregateEndedAt?: number;
+  lastAggregateCostMs?: number;
 };
 
 export type OtelSpoolConsumerState = {
@@ -51,6 +54,14 @@ export type OtelSpoolConsumerState = {
   parkAfter: number;
   retentionDays: number;
   seedOnStart: boolean;
+  aggCooldownFactor: number;
+  aggCooldownCapMs: number;
+  aggGlobalFactor: number;
+  /** 全局(跨 session)最近一轮聚合的结束时刻/耗时——多会话并发时的总量闸 */
+  lastGlobalAggEndedAt?: number;
+  lastGlobalAggCostMs?: number;
+  /** 有聚合正在进行(含 await 写库)。并发到期的其他会话顺延重试,聚合全局串行。 */
+  aggInFlight: boolean;
   log: (...args: any[]) => void;
   warn: (...args: any[]) => void;
 };
@@ -66,6 +77,9 @@ export type OtelSpoolConsumerOptions = {
   parkAfter?: number;
   retentionDays?: number;
   seedOnStart?: boolean;
+  aggCooldownFactor?: number;
+  aggCooldownCapMs?: number;
+  aggGlobalFactor?: number;
   log?: (...args: any[]) => void;
   warn?: (...args: any[]) => void;
 };
@@ -99,6 +113,15 @@ function createState(options: OtelSpoolConsumerOptions = {}): OtelSpoolConsumerS
     parkAfter: options.parkAfter ?? envNumber('AGENT_INSIGHT_OTEL_CONSUMER_PARK_AFTER', 3),
     retentionDays: options.retentionDays ?? envNumber('AGENT_INSIGHT_OTEL_SPOOL_RETENTION_DAYS', 7),
     seedOnStart: options.seedOnStart ?? true,
+    // 聚合冷却:下一轮聚合至少要等 上轮耗时×factor(封顶 cap)。上轮聚合花 5s → 至少歇 50s,
+    // 把"活跃大 session 每来一批数据就全量重聚合"的 CPU 占比压到 ~1/factor 以内。
+    aggCooldownFactor: options.aggCooldownFactor ?? envNumber('AGENT_INSIGHT_OTEL_AGG_COOLDOWN_FACTOR', 10),
+    aggCooldownCapMs: options.aggCooldownCapMs ?? envNumber('AGENT_INSIGHT_OTEL_AGG_COOLDOWN_CAP_MS', 300000),
+    // 全局闸:任意两轮聚合(跨 session)之间至少歇 上轮耗时×globalFactor。
+    // per-session 冷却管单会话独占,这个管"几十个并发会话各自 10% 叠满单核"(线上 22 并发实测)。
+    // 总 CPU 占比上限 ≈ 1/(1+globalFactor),默认 3 → ~25%。
+    aggGlobalFactor: options.aggGlobalFactor ?? envNumber('AGENT_INSIGHT_OTEL_AGG_GLOBAL_FACTOR', 3),
+    aggInFlight: false,
     log: options.log || console.log,
     warn: options.warn || console.warn,
   };
@@ -196,26 +219,76 @@ function handleSessionFailure(state: OtelSpoolConsumerState, sessionId: string, 
   }
 }
 
+/** 距离允许下一轮聚合还要等多久 = max(本会话冷却, 全局冷却)。冷却 = min(cap, 上轮耗时 × factor)。 */
+function aggregateCooldownRemaining(state: OtelSpoolConsumerState, session: SessionState): number {
+  const now = Date.now();
+  let wait = 0;
+  if (session.lastAggregateEndedAt && session.lastAggregateCostMs) {
+    const cooldown = Math.min(state.aggCooldownCapMs, session.lastAggregateCostMs * state.aggCooldownFactor);
+    wait = Math.max(wait, session.lastAggregateEndedAt + cooldown - now);
+  }
+  if (state.lastGlobalAggEndedAt && state.lastGlobalAggCostMs) {
+    const globalCooldown = Math.min(state.aggCooldownCapMs, state.lastGlobalAggCostMs * state.aggGlobalFactor);
+    wait = Math.max(wait, state.lastGlobalAggEndedAt + globalCooldown - now);
+  }
+  return Math.max(0, wait);
+}
+
+/** 记录一轮聚合的耗时(会话级 + 全局);聚合明显偏慢时打 warn,给未来的排查留证据。 */
+function finishAggregateRound(state: OtelSpoolConsumerState, session: SessionState, startedAt: number): void {
+  session.lastAggregateEndedAt = Date.now();
+  session.lastAggregateCostMs = session.lastAggregateEndedAt - startedAt;
+  state.lastGlobalAggEndedAt = session.lastAggregateEndedAt;
+  state.lastGlobalAggCostMs = session.lastAggregateCostMs;
+  if (session.lastAggregateCostMs > 1000) {
+    state.warn('[OTelConsumer] slow aggregate', {
+      sessionId: session.sessionId,
+      costMs: session.lastAggregateCostMs,
+      nextAllowedInMs: Math.min(state.aggCooldownCapMs, session.lastAggregateCostMs * state.aggCooldownFactor),
+    });
+  }
+}
+
 async function saveFast(state: OtelSpoolConsumerState, sessionId: string): Promise<void> {
   const session = state.sessions.get(sessionId);
   if (!session || session.parked) return;
 
-  for (const sourceId of Array.from(session.sourceIds)) {
-    const source = state.sourcesById.get(sourceId);
-    if (!source) continue;
-    try {
-      const result = source.aggregate(sessionId);
-      if (result.record) {
-        await state.saveExecution({
-          ...result.record,
-          skip_evaluation: source.defaultSkipEvaluation(),
-        });
-      }
-      session.failures = 0;
-      markSourceDone(state, sessionId, sourceId);
-    } catch (err) {
-      handleSessionFailure(state, sessionId, err);
+  // 冷却未过 / 有别的聚合在途:不立刻聚合,顺延重试(timer 槽空着才排,避免叠加)。
+  const cooldownMs = aggregateCooldownRemaining(state, session);
+  const deferMs = state.aggInFlight ? Math.max(cooldownMs, 50) : cooldownMs;
+  if (deferMs > 0) {
+    if (!session.shortTimer) {
+      session.shortTimer = setTimeout(() => {
+        session.shortTimer = undefined;
+        void saveFast(state, sessionId);
+      }, deferMs);
     }
+    return;
+  }
+
+  const startedAt = Date.now();
+  state.aggInFlight = true;
+  try {
+    for (const sourceId of Array.from(session.sourceIds)) {
+      const source = state.sourcesById.get(sourceId);
+      if (!source) continue;
+      try {
+        const result = source.aggregate(sessionId);
+        if (result.record) {
+          await state.saveExecution({
+            ...result.record,
+            skip_evaluation: source.defaultSkipEvaluation(),
+          });
+        }
+        session.failures = 0;
+        markSourceDone(state, sessionId, sourceId);
+      } catch (err) {
+        handleSessionFailure(state, sessionId, err);
+      }
+    }
+  } finally {
+    state.aggInFlight = false;
+    finishAggregateRound(state, session, startedAt);
   }
 }
 
@@ -223,26 +296,45 @@ async function saveEvaluated(state: OtelSpoolConsumerState, sessionId: string): 
   const session = state.sessions.get(sessionId);
   if (!session || session.parked) return;
 
-  for (const sourceId of Array.from(session.sourceIds)) {
-    const source = state.sourcesById.get(sourceId);
-    if (!source) continue;
-    try {
-      const result = source.aggregate(sessionId);
-      if (!result.record) continue;
-      const saved = await state.saveExecution({
-        ...result.record,
-        skip_evaluation: false,
-        skip_internal_judgment: true,
-        force_judgment: true,
-      });
-      const executionId = saved.record.upload_id || saved.record.task_id;
-      if (executionId && result.record.trace_completed_at && result.record.final_result) {
-        await state.scheduleResultEvaluation(executionId, result.record.user);
-      }
-      session.failures = 0;
-    } catch (err) {
-      handleSessionFailure(state, sessionId, err);
+  const cooldownMs = aggregateCooldownRemaining(state, session);
+  const deferMs = state.aggInFlight ? Math.max(cooldownMs, 50) : cooldownMs;
+  if (deferMs > 0) {
+    if (!session.longTimer) {
+      session.longTimer = setTimeout(() => {
+        session.longTimer = undefined;
+        void saveEvaluated(state, sessionId);
+      }, deferMs);
     }
+    return;
+  }
+
+  const startedAt = Date.now();
+  state.aggInFlight = true;
+  try {
+    for (const sourceId of Array.from(session.sourceIds)) {
+      const source = state.sourcesById.get(sourceId);
+      if (!source) continue;
+      try {
+        const result = source.aggregate(sessionId);
+        if (!result.record) continue;
+        const saved = await state.saveExecution({
+          ...result.record,
+          skip_evaluation: false,
+          skip_internal_judgment: true,
+          force_judgment: true,
+        });
+        const executionId = saved.record.upload_id || saved.record.task_id;
+        if (executionId && result.record.trace_completed_at && result.record.final_result) {
+          await state.scheduleResultEvaluation(executionId, result.record.user);
+        }
+        session.failures = 0;
+      } catch (err) {
+        handleSessionFailure(state, sessionId, err);
+      }
+    }
+  } finally {
+    state.aggInFlight = false;
+    finishAggregateRound(state, session, startedAt);
   }
 }
 
@@ -258,7 +350,12 @@ export async function runOtelSpoolConsumerTick(state: OtelSpoolConsumerState): P
       const files = source.listFiles();
       for (const file of files) {
         const relPath = toCheckpointRelPath(spoolDir, file);
-        const cursor = getFileCursor(spoolDir, relPath);
+        const fileKey = `${source.id}:${relPath}`;
+        const inflight = state.pendingFiles.get(fileKey);
+        // 活跃文件优先用内存读位增量读。磁盘 cursor 只在聚合完成后推进,若每 tick 都
+        // 从磁盘位重读,聚合冷却期间会反复 parse 整段未落盘 backlog(大会话 = 每秒
+        // 重复 parse 几十 MB,CPU 直接烧满——线上踩过)。崩溃重启后从磁盘位重放一次,语义不变。
+        const cursor = inflight ? inflight.nextCursor : getFileCursor(spoolDir, relPath);
         const read = readNewLinesSince<any>(file, cursor);
         parseErrors += read.parseErrors;
         if (read.lineCount === 0) continue;
@@ -270,12 +367,17 @@ export async function runOtelSpoolConsumerTick(state: OtelSpoolConsumerState): P
         );
 
         if (sessionIds.size === 0) {
-          saveFileCursor(spoolDir, relPath, read.nextCursor);
+          if (inflight) {
+            // 在途文件的新增量不含 session:只推进内存读位;磁盘 cursor 必须等
+            // 聚合完成后统一推进,否则会越过尚未聚合的数据。
+            inflight.nextCursor = read.nextCursor;
+          } else {
+            saveFileCursor(spoolDir, relPath, read.nextCursor);
+          }
           continue;
         }
 
-        const fileKey = `${source.id}:${relPath}`;
-        let pending = state.pendingFiles.get(fileKey);
+        let pending = inflight;
         let resetTimers = false;
         if (!pending) {
           pending = {
