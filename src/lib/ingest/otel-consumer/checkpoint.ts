@@ -20,15 +20,32 @@ export function toCheckpointRelPath(spoolDir: string, file: string): string {
   return path.relative(spoolDir, file).split(path.sep).join('/');
 }
 
+// 每 spoolDir 一份内存缓存。consumer tick 每秒对"每个 spool 文件"各查一次游标,
+// 若每次都 readFileSync + JSON.parse 整个 checkpoint(几百条目),几百个文件时
+// tick 固定开销 = 每秒几十上百 MB 的 JSON 解析,单核被烧满(线上事故实锤)。
+// 写路径保持"每次落盘"(频率 = 聚合完成次数,很低),缓存与磁盘同步更新。
+// 注意:进程外直接改 checkpoint 文件(如运维置 0 游标触发重放)后必须重启服务,
+// 否则内存缓存感知不到——运维重放流程本来就以 restart 收尾,语义不变。
+const checkpointCache = new Map<string, ConsumerCheckpoint>();
+
+export function invalidateCheckpointCache(spoolDir?: string): void {
+  if (spoolDir === undefined) checkpointCache.clear();
+  else checkpointCache.delete(spoolDir);
+}
+
 export function loadCheckpoint(spoolDir: string): ConsumerCheckpoint {
+  const cached = checkpointCache.get(spoolDir);
+  if (cached) return cached;
   const file = checkpointFilePath(spoolDir);
+  let checkpoint: ConsumerCheckpoint = { version: 1, files: {} };
   try {
     const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
     if (parsed?.version === 1 && parsed.files && typeof parsed.files === 'object') {
-      return { version: 1, files: parsed.files };
+      checkpoint = { version: 1, files: parsed.files };
     }
   } catch {}
-  return { version: 1, files: {} };
+  checkpointCache.set(spoolDir, checkpoint);
+  return checkpoint;
 }
 
 function writeCheckpoint(spoolDir: string, checkpoint: ConsumerCheckpoint): void {
@@ -37,6 +54,7 @@ function writeCheckpoint(spoolDir: string, checkpoint: ConsumerCheckpoint): void
   const temp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(temp, `${JSON.stringify(checkpoint, null, 2)}\n`, 'utf8');
   fs.renameSync(temp, file);
+  checkpointCache.set(spoolDir, checkpoint);
 }
 
 export function getFileCursor(spoolDir: string, relPath: string): SpoolCursor {
