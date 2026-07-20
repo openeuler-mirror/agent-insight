@@ -144,6 +144,76 @@ export function normalizeClaudeOtlpLogs(
   return events;
 }
 
+export type SpanClassification = {
+  recognized: boolean;
+  skip: boolean;
+  kind: 'llm' | 'tool' | 'agent';
+  degraded: boolean;
+};
+
+/**
+ * 识别 span 的分类：标准 GenAI/工具 span、openclaw 语义 span、生命周期 span、降级 span。
+ *
+ * 检测层次：
+ * 1. gen_ai.span.kind（LLM→llm, TOOL→tool, AGENT/ENTRY→agent boundary）
+ * 2. gen_ai.* / llm.* 前缀（既有标准检测）
+ * 3. tool.name 存在
+ * 4. span 命名（chat→llm, execute_tool→tool, invoke_agent→agent）
+ * 5. 生命周期 span（session_start/end, gateway_start/stop, enter_openclaw_system）→ skip
+ * 6. 其他有效调用但无标准语义 → degraded
+ */
+function classifyOtelSpan(span: any, attributes: Record<string, any>): SpanClassification {
+  const name = (span?.name || '').toLowerCase();
+  const spanKind = attributes['gen_ai.span.kind'];
+ 
+  // 生命周期 / 基础设施 span（openclaw 特有）
+  const lifecyclePatterns = [
+    'session_start', 'session_end', 'session.start', 'session.end',
+    'gateway_start', 'gateway_stop', 'gateway.start', 'gateway.stop',
+    'enter_openclaw_system',
+  ];
+  if (lifecyclePatterns.includes(name)) {
+    return { recognized: false, skip: true, kind: 'llm', degraded: false };
+  }
+
+  // gen_ai.span.kind 检测（openclaw 插件路径、aliyun exporter）
+  if (spanKind) {
+    const sk = String(spanKind).toLowerCase();
+    if (sk === 'llm') return { recognized: true, skip: false, kind: 'llm', degraded: false };
+    if (sk === 'tool') return { recognized: true, skip: false, kind: 'tool', degraded: false };
+    if (sk === 'agent' || sk === 'entry') {
+      return { recognized: true, skip: false, kind: 'agent', degraded: false };
+    }
+  }
+
+  // span 命名检测（补充 openclaw 内置导出路径）
+  if (name === 'chat') return { recognized: true, skip: false, kind: 'llm', degraded: false };
+  if (name === 'execute_tool') return { recognized: true, skip: false, kind: 'tool', degraded: false };
+  if (name === 'invoke_agent') {
+    return { recognized: true, skip: false, kind: 'agent', degraded: false };
+  }
+
+  // 标准 GenAI 属性前缀检测（既有逻辑）
+  const hasGenAiPrefix = Object.keys(attributes).some(k => k.startsWith('gen_ai.') || k.startsWith('llm.'));
+  if (hasGenAiPrefix) {
+    return { recognized: true, skip: false, kind: 'llm', degraded: false };
+  }
+
+  // tool.name 存在
+  if (attributes['tool.name'] !== undefined) {
+    return { recognized: true, skip: false, kind: 'tool', degraded: false };
+  }
+
+  // 有效调用但无标准语义 → 降级保留
+  if (span?.traceId || span?.spanId) {
+    // 有 trace/span id 的结构化 span，可能携带了有效信息
+    return { recognized: false, skip: false, kind: 'llm', degraded: true };
+  }
+
+  // 无法识别的 span → 跳过
+  return { recognized: false, skip: true, kind: 'llm', degraded: false };
+}
+
 export function normalizeClaudeOtlpTraces(
   body: any,
   opts: { receivedAt?: string; authenticatedUser?: string } = {},
@@ -171,9 +241,10 @@ export function normalizeClaudeOtlpTraces(
       for (const span of spans) {
         try {
           const attributes = otelAttrsToObject(span?.attributes || []);
-          const isGenAI = Object.keys(attributes).some((key) => key.startsWith('gen_ai.') || key.startsWith('llm.'));
-          const isTool = attributes['tool.name'] !== undefined;
-          if (!isGenAI && !isTool) continue;
+          const classification = classifyOtelSpan(span, attributes);
+
+          // 跳过生命周期 / 基础设施 span
+          if (classification.skip) continue;
 
           const traceId = asOptionalString(span?.traceId);
           const explicitSessionId = firstOptionalString(
@@ -213,6 +284,12 @@ export function normalizeClaudeOtlpTraces(
             : 0;
           const startTimeMs = Number(startTimeNano / BigInt(1_000_000));
 
+          // 降级标记
+          const eventAttributes = { ...attributes };
+          if (classification.degraded) {
+            eventAttributes['_degraded'] = true;
+          }
+
           events.push({
             receivedAt,
             sessionId,
@@ -220,7 +297,7 @@ export function normalizeClaudeOtlpTraces(
             spanId: asOptionalString(span?.spanId),
             parentSpanId: asOptionalString(span?.parentSpanId),
             name: asOptionalString(span?.name),
-            kind: isTool ? 'tool' : 'llm',
+            kind: classification.kind === 'tool' ? 'tool' : 'llm',
             serviceName,
             user: resourceUser,
             model: firstOptionalString(
@@ -237,7 +314,7 @@ export function normalizeClaudeOtlpTraces(
             },
             latencyMs,
             startTimeMs,
-            attributes,
+            attributes: eventAttributes,
           });
         } catch {}
       }
