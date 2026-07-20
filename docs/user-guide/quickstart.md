@@ -244,6 +244,9 @@ Agent 名称要和客户端中的实际名称一致，例如 `opencode` 默认�
 
 安装命令会自动写入当前平台地址和 API Key，比手动配置更直接。
 
+你也可以选择 **OpenClaw** 作为客户端集成方式（CLI sidecar 模式），它会自动包裹你的 Agent 进程并按 OTLP/HTTP 协议上报 Trace，无需手动埋点。
+安装脚本末尾会输出纯配置环境变量块（env block），按指引设置即可启用 OpenClaw OTel 上报。
+
 
 ---
 
