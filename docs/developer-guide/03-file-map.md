@@ -33,7 +33,7 @@
 | `engine/skill-issues/static-evaluator/index.ts` | skill-issues | `runStaticEvaluation`；`RunArgs`、`RunResult` |
 | `engine/skill-issues/static-evaluator/{linter,llm-evaluator,content-loader}.ts` | skill-issues | 静态合规扫描 |
 | `engine/agent-debug/types.ts` | agent-debug | `AgentDebugReportPayload`、`AgentDebugIssue`、`AgentDebugRootCause`、`DebugTurn` |
-| `engine/agent-debug/runner.ts` / `trace-adapter.ts` | agent-debug | 调试报告生成 |
+| `engine/agent-debug/runner.ts` / `trace-adapter.ts`；`skills/agent-debug-diagnosis/scripts/{agentdebug_static,agentdebug_inspect,agentdebug_validate}.py` | agent-debug | 调试报告生成 |
 | `engine/observability/agent-trace.ts` | observability | `buildAgentCallTree`、`walkTree`、`findNode`、`formatTokens`；`AgentNode`、`AgentEvent`、`ToolCall` |
 | `engine/observability/flow-parser.ts` | observability | `ParsedFlowResult`、`TraceSkillAlignment`、`ExecutionMatchResult`（skill 流程对齐） |
 | `engine/observability/{claude-parser,openclaw-parser}.ts` | observability | 特定平台的 trace 解析 |

@@ -22,7 +22,7 @@ export async function ensureAgentDebugReportTable() {
       "issueCount" INTEGER NOT NULL DEFAULT 0,
       "llmCallCount" INTEGER NOT NULL DEFAULT 0,
       "durationMs" INTEGER,
-      "generator" TEXT NOT NULL DEFAULT 'agent-debug-diagnosis-skill@0.1',
+      "generator" TEXT NOT NULL DEFAULT 'agent-debug-diagnosis-skill@0.2',
       "ranAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
@@ -63,6 +63,7 @@ export async function upsertRunningAgentDebugReport(args: {
   executionId: string;
   user?: string | null;
   interactionsHash: string;
+  generator: string;
 }): Promise<AgentDebugReportRow> {
   await ensureAgentDebugReportTable();
   const existing = await findAgentDebugReport(args.executionId);
@@ -72,6 +73,7 @@ export async function upsertRunningAgentDebugReport(args: {
       `UPDATE "AgentDebugReport"
        SET "user" = ?,
            "interactionsHash" = ?,
+           "generator" = ?,
            "status" = 'running',
            "errorMessage" = NULL,
            "reportJson" = NULL,
@@ -83,17 +85,19 @@ export async function upsertRunningAgentDebugReport(args: {
        WHERE "executionId" = ?`,
       args.user ?? null,
       args.interactionsHash,
+      args.generator,
       now,
       args.executionId,
     );
   } else {
     await prismaRaw.$executeRawUnsafe(
-      `INSERT INTO "AgentDebugReport" ("id", "executionId", "user", "interactionsHash", "status", "ranAt", "updatedAt")
-       VALUES (?, ?, ?, ?, 'running', ?, ?)`,
+      `INSERT INTO "AgentDebugReport" ("id", "executionId", "user", "interactionsHash", "generator", "status", "ranAt", "updatedAt")
+       VALUES (?, ?, ?, ?, ?, 'running', ?, ?)`,
       crypto.randomUUID(),
       args.executionId,
       args.user ?? null,
       args.interactionsHash,
+      args.generator,
       now,
       now,
     );

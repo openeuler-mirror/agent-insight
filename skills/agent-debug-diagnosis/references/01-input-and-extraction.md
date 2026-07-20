@@ -1,4 +1,4 @@
-# 01 输入协议与四模块拆分
+# 01 输入协议与五模块拆分
 
 本文定义如何把 Agent Insight 输入转成 AgentDebug 的 step 记录。执行时必须先运行 `scripts/agentdebug_static.py`，再由智能诊断 agent 对脚本结果做语义补充。
 
@@ -120,8 +120,20 @@ Planning 表示 Agent 对下一步的计划、策略、todo 或工具意图：
 - LLM 语义抽取：`0.5-0.75`。
 - 留白：`0`。
 
+## 大文件查询协议
+
+不要把 `agent-debug-input.json` 或 `agent-debug-static.json` 按 offset 顺序读入上下文。先运行 `agentdebug_inspect.py summary`，再根据五模块候选信号使用：
+
+- `tail`：检查执行尾部。
+- `range`：检查指定 trace step 区间。
+- `search`：在 turn 文本、reasoning、工具参数或输出中搜索，并按需携带相邻 turn。
+- `repeated-calls`：按规范化工具参数聚合重复调用。
+- `search --scope artifact`：在外置的完整长文本中搜索。
+
+查询结果是候选证据，不是 issue。Memory、Reflection、Planning 需要与 prior facts、相邻 Action/System 或任务约束对照后才能判错。
+
 ## 全量分析要求
 
-不要使用候选窗口裁剪 trace。脚本和智能诊断 agent 必须对输入文件中的全部 `turns` 建立 `stepRecords`，并对全部记录做 Phase 1 检测。
+不要使用候选窗口裁剪 trace。`agentdebug_static.py` 必须对输入文件中的全部 `turns` 建立 `stepRecords` 并执行确定性 Phase 1 检测；智能诊断 agent 基于全局候选信号按需核查语义证据，不要求输出覆盖范围清单。
 
 原始故障类报告中的 failures 只能作为任务背景和最终对照，不应限制分析范围，也不应决定根因。
