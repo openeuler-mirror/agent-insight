@@ -70,7 +70,14 @@ export function Select<T extends string = string>({
                 <span className="truncate max-w-[14rem]">{current?.label ?? value}</span>
                 <ChevronDown className="size-3 shrink-0 text-foreground-muted" aria-hidden />
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" sideOffset={4} className={cn('min-w-[10rem]', contentClassName)}>
+            <DropdownMenuContent
+                align="start"
+                sideOffset={4}
+                className={cn(
+                    'min-w-[10rem] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto',
+                    contentClassName,
+                )}
+            >
                 <DropdownMenuRadioGroup value={value} onValueChange={v => onChange(v as T)}>
                     {options.map(opt => (
                         <DropdownMenuRadioItem
