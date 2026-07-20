@@ -52,3 +52,30 @@ test("OTel checkpoint: file cursors can move backward after file recreation and 
     fs.rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test("checkpoint: in-memory cache serves reads and stays coherent with API writes", async () => {
+  const { loadCheckpoint, saveFileCursor, invalidateCheckpointCache, checkpointFilePath } = await import("@/lib/ingest/otel-consumer/checkpoint")
+  const fs = await import("node:fs")
+  const os = await import("node:os")
+  const path = await import("node:path")
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "otel-checkpoint-cache-"))
+  try {
+    invalidateCheckpointCache(dir)
+    saveFileCursor(dir, "a.jsonl", { bytes: 11 })
+    assert.equal(loadCheckpoint(dir).files["a.jsonl"]?.bytes, 11)
+
+    // 进程外直写磁盘(模拟运维脚本改游标):缓存感知不到——这是约定行为,重放需重启
+    const file = checkpointFilePath(dir)
+    const onDisk = JSON.parse(fs.readFileSync(file, "utf8"))
+    onDisk.files["a.jsonl"].bytes = 0
+    fs.writeFileSync(file, JSON.stringify(onDisk), "utf8")
+    assert.equal(loadCheckpoint(dir).files["a.jsonl"]?.bytes, 11, "缓存命中,不读磁盘")
+
+    // 失效后读到磁盘新值(重启等价物)
+    invalidateCheckpointCache(dir)
+    assert.equal(loadCheckpoint(dir).files["a.jsonl"]?.bytes, 0)
+  } finally {
+    invalidateCheckpointCache(dir)
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
