@@ -37,7 +37,7 @@ export function createGeneratorAgent(opts: {
     skills: [skillsDir],
     subagents: [skillCreator],
     tools: [...fsTools],
-    checkpointer: new MemorySaver(),
+    checkpointer: new MemorySaver() as any,
     interruptOn: {
       skill_write_file: {
         allowedDecisions: ["approve", "reject"],
