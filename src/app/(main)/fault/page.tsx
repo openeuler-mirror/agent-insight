@@ -468,7 +468,7 @@ function FaultPageContent() {
                             </span>
                         </div>
 
-                        <div className="ai-card" style={{ overflowX: 'auto' }}>
+                        <div className="ai-card shrink-0" style={{ overflowX: 'auto' }}>
                             {loading ? (
                                 <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--foreground-muted)', fontSize: 12 }}>
                                     {locale === 'zh' ? '加载中...' : 'Loading...'}
