@@ -13,6 +13,15 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+// 登录后回跳目标：仅接受站内路径（防 open redirect），排除 /login 自身（防循环）。
+// 从 window.location.search 读而不用 useSearchParams()，避免给全局 Provider 引入 Suspense 边界要求。
+export function getSafeReturnTo(): string | null {
+  if (typeof window === 'undefined') return null;
+  const raw = new URLSearchParams(window.location.search).get('returnTo');
+  if (raw && raw.startsWith('/') && !raw.startsWith('//') && !raw.startsWith('/login')) return raw;
+  return null;
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState<string | null>(null);
@@ -60,7 +69,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         .catch(err => console.error('Organization auth failed:', err))
         .finally(() => setIsOrgLoading(false));
     } else if (pathname !== '/login') {
-      router.push('/login');
+      // 记下来路（含查询串，如 /trace?taskId=xxx），登录成功后由 login() 回跳。
+      // search 直接取自 window.location：useSearchParams 会要求 Suspense 边界，且 pathname 已由 usePathname 去掉 basePath。
+      const returnTo = `${pathname}${window.location.search}`;
+      router.push(`/login?returnTo=${encodeURIComponent(returnTo)}`);
     }
   }, [pathname, router, isOrgMode, isOrgLoading, orgModeChecked]);
 
@@ -71,7 +83,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         localStorage.setItem('api_key', key);
         setApiKey(key);
     }
-    router.replace('/trace');
+    // 深链进入（如客户系统跳转 /trace?taskId=xxx）被登录页拦截时，登录后回原页；直接访问登录页则维持原行为落 /trace。
+    router.replace(getSafeReturnTo() || '/trace');
   };
 
   const logout = () => {

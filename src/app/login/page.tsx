@@ -1,6 +1,6 @@
 'use client';
 
-import { useAuth } from '@/lib/auth/auth-context';
+import { getSafeReturnTo, useAuth } from '@/lib/auth/auth-context';
 import { useRouter } from 'next/navigation';
 import { useState, useEffect } from 'react';
 import { useTheme } from '@/lib/client/theme-context';
@@ -46,7 +46,8 @@ export default function LoginPage() {
         const data = await res.json();
         if (!cancelled && data?.username) {
           login(data.username, data.apiKey);
-          router.replace('/');
+          // login() 已按 returnTo 回跳；仅在无 returnTo 时维持企业模式原有的落 / 行为。
+          if (!getSafeReturnTo()) router.replace('/');
         }
       } catch (e) {
         if (!cancelled) {
