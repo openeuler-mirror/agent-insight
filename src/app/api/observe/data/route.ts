@@ -187,7 +187,7 @@ function inferOpencodeCliExitedFromExistingTelemetry(taskId: string): boolean | 
 export const QUIET_WINDOW_INFERRED_FRAMEWORKS = new Set(['claudecode', 'jiuwenswarm', 'opencode', 'hermes']);
 
 export function hasAssistantOutput(interactions: TimestampCarrier[]): boolean {
-    return interactions.some((interaction: any) => {
+    return interactions.some((interaction) => {
         const role = String(interaction?.role || '').toLowerCase();
         if (role !== 'assistant' && role !== 'subagent') return false;
         return Boolean(String(interaction?.content || '').trim());
@@ -299,8 +299,34 @@ export async function GET(request: Request) {
     const framework = searchParams.get('framework') || undefined;
     const skill = searchParams.get('skill') || undefined;
     const agentName = searchParams.get('agentName') || undefined;
+    const ownershipParam = searchParams.get('ownership') || '';
+    const ownership: 'user' | 'system' | undefined = ownershipParam === 'user' || ownershipParam === 'system'
+        ? ownershipParam
+        : undefined;
+    const statusParam = searchParams.get('status') || 'all';
+    const sortParam = searchParams.get('sort') || 'timestamp';
+    const sortDirParam = searchParams.get('dir') === 'asc' ? 'asc' : 'desc';
+    const sortKey = sortParam === 'agent'
+        ? 'agentName'
+        : (sortParam === 'latency' || sortParam === 'tokens' || sortParam === 'cost')
+            ? sortParam
+            : 'timestamp';
+    const timeParam = searchParams.get('time') || 'all';
+    const timeWindowMs: Record<string, number> = {
+        '30m': 30 * 60 * 1000,
+        '1h': 60 * 60 * 1000,
+        '3h': 3 * 60 * 60 * 1000,
+        '24h': 24 * 60 * 60 * 1000,
+        '7d': 7 * 24 * 60 * 60 * 1000,
+        '30d': 30 * 24 * 60 * 60 * 1000,
+    };
+    const timestampFrom = timeWindowMs[timeParam]
+        ? new Date(Date.now() - timeWindowMs[timeParam])
+        : undefined;
     const summary = searchParams.get('summary') || undefined;
     const paginated = searchParams.get('paginated') === '1' || searchParams.get('paginated') === 'true';
+    const databasePagination = searchParams.get('databasePagination') === '1'
+        || searchParams.get('databasePagination') === 'true';
     // 轻量返回:只给 denormalized 元数据,不读 finalResult/不解析 session,根治非分页路径堆 OOM。
     const lightweight = searchParams.get('fields') === 'light' || searchParams.get('lightweight') === '1';
     const page = parsePositiveInt(searchParams.get('page'), 1);
@@ -364,7 +390,7 @@ export async function GET(request: Request) {
     }
 
     if (summary === 'agents') {
-        const agents = await listObservedAgentNames(user);
+        const agents = await listObservedAgentNames(user, databasePagination);
         return NextResponse.json({ agents });
     }
     if (summary === 'traceIds') {
@@ -397,9 +423,29 @@ export async function GET(request: Request) {
         parentExecutionId,
         clauses,
         businessTagIds: businessTagIds.length > 0 ? businessTagIds : undefined,
+        timestampFrom,
+        ownership,
+        observedAgentFallback: databasePagination,
     };
-    const pageResult = paginated
-        ? await readRecordPage(user, recordFilters, { attachEvaluations, page, pageSize, lightweight, includeTags })
+    // status 是读时生命周期字段，cost 是按模型价格计算的展示字段，二者无法保证与 Execution
+    // 原始列直接等价；只有用户主动使用这些过滤/排序时保留兼容全量路径。默认列表及其它过滤
+    // 走真正数据库分页。
+    const requiresComputedPass = paginated && databasePagination && (
+        statusParam !== 'all'
+        || sortParam === 'status'
+        || sortParam === 'cost'
+    );
+    const pageResult = paginated && !requiresComputedPass
+        ? await readRecordPage(user, recordFilters, {
+            attachEvaluations,
+            page,
+            pageSize,
+            lightweight,
+            includeTags,
+            sortKey,
+            sortDir: sortDirParam,
+            databasePagination,
+        })
         : null;
     const data = pageResult
         ? pageResult.records
@@ -505,15 +551,55 @@ export async function GET(request: Request) {
         };
     }));
     
-    if (enrichedData.length > 0) {
-        console.log(`[Data-API] 📤 Sending ${enrichedData.length} records. Top record skills: ${JSON.stringify(enrichedData[0].skills)}, is_evaluating: ${enrichedData[0].is_evaluating}`);
+    let responseRecords = enrichedData;
+    let responseTotal = pageResult?.total ?? enrichedData.length;
+    let responseStats = pageResult?.stats ?? null;
+    if (requiresComputedPass) {
+        const statusFiltered = statusParam === 'all'
+            ? enrichedData
+            : enrichedData.filter((record) => String(record.trace_status ?? record.traceStatus ?? '') === statusParam);
+        const statusOrder: Record<string, number> = { running: 0, failed: 1, success: 2 };
+        statusFiltered.sort((a, b) => {
+            let cmp = 0;
+            if (sortParam === 'status') {
+                cmp = (statusOrder[String(a.trace_status ?? a.traceStatus ?? 'running')] ?? 0)
+                    - (statusOrder[String(b.trace_status ?? b.traceStatus ?? 'running')] ?? 0);
+            } else if (sortParam === 'agent') {
+                cmp = String(a.agentName ?? a.agent ?? '').localeCompare(String(b.agentName ?? b.agent ?? ''));
+            } else if (sortParam === 'latency' || sortParam === 'tokens' || sortParam === 'cost') {
+                const field = sortParam as 'latency' | 'tokens' | 'cost';
+                cmp = Number(a[field] ?? 0) - Number(b[field] ?? 0);
+            } else {
+                cmp = new Date(a.timestamp ?? 0).getTime() - new Date(b.timestamp ?? 0).getTime();
+            }
+            return sortDirParam === 'asc' ? cmp : -cmp;
+        });
+        responseTotal = statusFiltered.length;
+        responseRecords = statusFiltered.slice((page - 1) * pageSize, page * pageSize);
+        const totalTools = statusFiltered.reduce((sum, item) => sum + (item.tool_call_count ?? 0), 0);
+        const totalToolErrors = statusFiltered.reduce((sum, item) => sum + (item.tool_call_error_count ?? 0), 0);
+        responseStats = {
+            total: responseTotal,
+            failedCount: statusFiltered.filter(item => String(item.trace_status ?? item.traceStatus) === 'failed').length,
+            avgLatencyMs: responseTotal > 0
+                ? statusFiltered.reduce((sum, item) => sum + ((item.latency ?? 0) * 1000), 0) / responseTotal
+                : 0,
+            toolErrorRate: totalTools > 0
+                ? Math.round((totalToolErrors / totalTools) * 1000) / 10
+                : 0,
+        };
     }
-    if (pageResult) {
+
+    if (responseRecords.length > 0) {
+        console.log(`[Data-API] 📤 Sending ${responseRecords.length} records. Top record skills: ${JSON.stringify(responseRecords[0].skills)}, is_evaluating: ${responseRecords[0].is_evaluating}`);
+    }
+    if (paginated) {
         return NextResponse.json({
-            records: enrichedData,
-            total: pageResult.total,
+            records: responseRecords,
+            total: responseTotal,
             page,
             pageSize,
+            stats: responseStats,
         });
     }
     return NextResponse.json(enrichedData);

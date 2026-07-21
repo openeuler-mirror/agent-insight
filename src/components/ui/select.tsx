@@ -30,6 +30,7 @@ interface SelectProps<T extends string = string> {
     active?: boolean;
     size?: 'sm' | 'md';
     className?: string;
+    contentClassName?: string;
     'aria-label'?: string;
 }
 
@@ -41,6 +42,7 @@ export function Select<T extends string = string>({
     active,
     size = 'sm',
     className,
+    contentClassName,
     'aria-label': ariaLabel,
 }: SelectProps<T>) {
     const current = options.find(o => o.value === value);
@@ -68,7 +70,7 @@ export function Select<T extends string = string>({
                 <span className="truncate max-w-[14rem]">{current?.label ?? value}</span>
                 <ChevronDown className="size-3 shrink-0 text-foreground-muted" aria-hidden />
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" sideOffset={4} className="min-w-[10rem]">
+            <DropdownMenuContent align="start" sideOffset={4} className={cn('min-w-[10rem]', contentClassName)}>
                 <DropdownMenuRadioGroup value={value} onValueChange={v => onChange(v as T)}>
                     {options.map(opt => (
                         <DropdownMenuRadioItem

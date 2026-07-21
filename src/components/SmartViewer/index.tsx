@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import { copyText } from '@/lib/copy-text';
 import { detect } from './detector';
 import { unescapeText } from './unescape';
 import { CodeRenderer } from './renderers/CodeRenderer';
@@ -45,7 +46,7 @@ export function SmartViewer({
 
     const onCopy = async () => {
         try {
-            await navigator.clipboard.writeText(processed);
+            await copyText(processed);
             setCopied(true);
             setTimeout(() => setCopied(false), 1500);
         } catch { }

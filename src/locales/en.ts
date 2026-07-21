@@ -232,6 +232,8 @@ export const en = {
     filterTime: 'Time',
     filterPlatform: 'Platform',
     filterFramework: 'Framework',
+    filterMainAgent: 'Main agent',
+    filterMainAgentAll: 'All main agents',
     resetFilters: 'Reset',
     activeFiltersLabel: 'Active',
     pageSize: '{{n}} / page',

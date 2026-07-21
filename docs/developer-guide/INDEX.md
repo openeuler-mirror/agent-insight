@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `e699809b6fb664eb318b12be7a6c7fe3623c9081` (`e699809b`) |
-| Branch | `develop0228` |
-| Date | 2026-07-09T19:30:22+08:00 |
-| Author | ljnkirito |
-| Subject | `fix: 统一链路耗时单位换算` |
+| Commit | `a858063661ad9877de6e1085ef275a98a2331a1a` (`a8580636`) |
+| Branch | `master` |
+| Date | 2026-07-16T21:11:02+08:00 |
+| Author | openeuler-ci-bot |
+| Subject | `!199 Trace沉淀为评测数据集` |
 
-**如何更新：** `git diff e699809b HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff a8580636 HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。

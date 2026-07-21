@@ -2,6 +2,7 @@
 
 import "./markdown-styles.css";
 
+import { copyText } from "@/lib/copy-text";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeKatex from "rehype-katex";
@@ -30,10 +31,10 @@ const useCopyToClipboard = ({
   const copyToClipboard = (value: string) => {
     if (!value) return;
 
-    navigator.clipboard.writeText(value).then(() => {
+    copyText(value).then(() => {
       setIsCopied(true);
       setTimeout(() => setIsCopied(false), copiedDuration);
-    });
+    }).catch(() => { /* ignore */ });
   };
 
   return { isCopied, copyToClipboard };

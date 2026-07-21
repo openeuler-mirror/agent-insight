@@ -52,7 +52,19 @@ Phase 1 输入是 `stepRecords`。每个 step 的模块分开判断：
 - `issues`
 - `staticSummary`
 
-其中 `phase1Grid` 和 `issues` 只包含脚本确定发现的问题。智能诊断 agent 可以追加语义问题，但不能删除脚本的事实证据，除非证据明显来自正常文档内容误判。
+其中 `phase1Grid` 和 `issues` 只包含脚本确定发现的问题。智能诊断 agent 可以追加语义问题，但不能删除脚本的事实证据或改写原始 evidence。明显误判应保留并标记 `resolution=non_blocking`，同时在 `resolutionEvidence` 中说明原因。
+
+## 结构化查询与候选信号
+
+运行 `agentdebug_inspect.py summary` 获取 Memory、Reflection、Planning、Action、System 五模块候选信号。候选信号只负责决定下一步查询：
+
+- Memory：查询 prior facts、用户约束、压缩或重读声明、文件读写历史。
+- Reflection：查询上一步工具状态、测试结果、警告和后续未完成动作。
+- Planning：查询约束、计划与真实 Action、重复调用组和验证步骤。
+- Action：查询真实工具参数、状态、重复签名和目标路径。
+- System：查询超时、认证、上下文限制、系统性工具失败以及完整 artifact。
+
+使用 `search`、`range`、`tail`、`repeated-calls` 拉取有界证据；不要将候选计数直接写成 issue。
 
 ## Memory 语义检测
 

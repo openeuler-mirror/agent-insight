@@ -195,6 +195,7 @@
 - 证据要短而具体。
 - 不要用 `S2` 这类内部诊断编号作为用户可见 ID；ID 可使用 `N<traceStepIndex>-...`。
 - `resolution` 可选值为 `unresolved`、`recovered`、`non_blocking`。它用于 Phase 2 判断该 issue 是否应提升为 finding。
+- 最终校验必须传入 `--static`；静态 issue 与 Phase 1 单元格必须保留，误报只能通过 `resolution=non_blocking` 和 `resolutionEvidence` 解释。
 
 ## findings
 

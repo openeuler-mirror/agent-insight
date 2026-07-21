@@ -139,47 +139,8 @@ interface LlmPromptSnapshot {
 const agentKey = (id: string) => `a:${id}`;
 const eventKey = (nodeId: string, idx: number) => `e:${nodeId}:${idx}`;
 
-/**
- * 复制文本到剪贴板,带 fallback。
- *
- * navigator.clipboard.writeText 会在以下场景 throw:
- *   - document 没 focus (用户 focus 在 DevTools / 别的窗口) → NotAllowedError
- *   - 非 secure context (HTTP, 非 localhost) → 接口 undefined
- *   - 某些 iframe 嵌套场景
- *
- * fallback: 隐藏 textarea + document.execCommand('copy') —— deprecated 但
- * 兼容性极好 (所有浏览器都支持,不依赖 secure context / focus 状态)。
- */
-async function copyText(text: string): Promise<void> {
-  // 先试 modern clipboard API
-  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-    try {
-      await navigator.clipboard.writeText(text);
-      return;
-    } catch (e) {
-      // 常见 root cause: 'Document is not focused' (DevTools 抢焦点 / 弹窗丢焦点 等)
-      console.warn('[copyText] clipboard.writeText failed, fallback to execCommand:',
-        (e as Error)?.message || e);
-    }
-  }
-  // Fallback: 隐藏 textarea + execCommand
-  if (typeof document === 'undefined') throw new Error('no document available');
-  const ta = document.createElement('textarea');
-  ta.value = text;
-  ta.style.position = 'fixed';
-  ta.style.top = '0';
-  ta.style.left = '0';
-  ta.style.opacity = '0';
-  ta.setAttribute('readonly', '');
-  document.body.appendChild(ta);
-  ta.select();
-  try {
-    const ok = document.execCommand('copy');
-    if (!ok) throw new Error('execCommand("copy") returned false');
-  } finally {
-    document.body.removeChild(ta);
-  }
-}
+// 复制统一走共享 util(modern clipboard + execCommand fallback,兼容 http 部署)
+import { copyText } from '@/lib/copy-text';
 
 // Build nodeId → AgentNode map for the whole tree
 function buildNodeMap(root: AgentNode): Map<string, AgentNode> {
@@ -368,6 +329,10 @@ const TraceCtx = React.createContext<TraceCtxValue>(defaultCtx);
 
 export interface AgentTraceViewProps {
     interactions: RawInteraction[];
+    /** 按 interaction index 读取完整原文；未提供时保持旧的一次性完整数据行为。 */
+    loadInteraction?: (index: number) => Promise<RawInteraction>;
+    /** 搜索或 Prompt/Timeline 需要完整上下文时按需读取全部 interactions。 */
+    loadAllInteractions?: () => Promise<RawInteraction[]>;
     /**
      * 点击 sub-agent 节点旁的跳转按钮触发。
      * sessionId 即 sub-agent 的 sessionID，等同于 Execution.taskId。
@@ -379,9 +344,78 @@ export interface AgentTraceViewProps {
     rootExecutionId?: string;
 }
 
-export default function AgentTraceView({ interactions, onSubagentNavigate, rootExecutionId }: AgentTraceViewProps) {
+export default function AgentTraceView({
+    interactions: sourceInteractions,
+    loadInteraction,
+    loadAllInteractions,
+    onSubagentNavigate,
+    rootExecutionId,
+}: AgentTraceViewProps) {
     const { user } = useAuth();
     const { t: tt } = useLocale();
+    const [interactions, setInteractions] = useState<RawInteraction[]>(sourceInteractions);
+    const [interactionLoadError, setInteractionLoadError] = useState<string | null>(null);
+    const [fullInteractionLoadError, setFullInteractionLoadError] = useState<string | null>(null);
+    const fullLoadPromiseRef = React.useRef<Promise<RawInteraction[]> | null>(null);
+    const previousRootExecutionIdRef = React.useRef(rootExecutionId);
+
+    useEffect(() => {
+        const traceChanged = previousRootExecutionIdRef.current !== rootExecutionId;
+        previousRootExecutionIdRef.current = rootExecutionId;
+        fullLoadPromiseRef.current = null;
+        setInteractionLoadError(null);
+        setFullInteractionLoadError(null);
+        setInteractions(previous => {
+            if (traceChanged) return sourceInteractions;
+            return sourceInteractions.map((item, index) => {
+                const loaded = previous[index] as (RawInteraction & { _payloadDeferred?: boolean }) | undefined;
+                return loaded && !loaded._payloadDeferred ? loaded : item;
+            });
+        });
+    }, [sourceInteractions, rootExecutionId]);
+
+    const ensureInteractionLoaded = React.useCallback(async (index: number) => {
+        const current = interactions[index] as (RawInteraction & { _payloadDeferred?: boolean }) | undefined;
+        if (!current?._payloadDeferred || !loadInteraction) return;
+        const requestedTraceId = previousRootExecutionIdRef.current;
+        setInteractionLoadError(null);
+        try {
+            const loaded = await loadInteraction(index);
+            if (previousRootExecutionIdRef.current !== requestedTraceId) return;
+            setInteractions(previous => previous.map((item, itemIndex) => itemIndex === index ? loaded : item));
+        } catch (error) {
+            setInteractionLoadError(error instanceof Error ? error.message : 'Failed to load interaction');
+        }
+    }, [interactions, loadInteraction]);
+
+    const ensureAllInteractionsLoaded = React.useCallback(async () => {
+        if (!loadAllInteractions) return interactions;
+        if (!interactions.some(item => (item as RawInteraction & { _payloadDeferred?: boolean })._payloadDeferred)) {
+            return interactions;
+        }
+        if (!fullLoadPromiseRef.current) {
+            const requestedTraceId = previousRootExecutionIdRef.current;
+            setFullInteractionLoadError(null);
+            let promise: Promise<RawInteraction[]>;
+            promise = loadAllInteractions()
+                .then(loaded => {
+                    if (previousRootExecutionIdRef.current === requestedTraceId) setInteractions(loaded);
+                    return loaded;
+                })
+                .catch(error => {
+                    if (previousRootExecutionIdRef.current === requestedTraceId) {
+                        setFullInteractionLoadError(error instanceof Error ? error.message : 'Failed to load full trace');
+                    }
+                    return interactions;
+                })
+                .finally(() => {
+                    if (fullLoadPromiseRef.current === promise) fullLoadPromiseRef.current = null;
+                });
+            fullLoadPromiseRef.current = promise;
+        }
+        return fullLoadPromiseRef.current;
+    }, [interactions, loadAllInteractions]);
+
     const tree = useMemo(() => buildAgentCallTree(interactions || []), [interactions]);
     const nodeMap = useMemo(() => tree ? buildNodeMap(tree) : new Map<string, AgentNode>(), [tree]);
     const traceSkillCalls = useMemo(() => collectTraceSkillCalls(interactions || []), [interactions]);
@@ -483,6 +517,19 @@ export default function AgentTraceView({ interactions, onSubagentNavigate, rootE
         () => resolveTraceSkillUsages(selectedTraceSkillCalls, managedSkillAssets),
         [selectedTraceSkillCalls, managedSkillAssets],
     );
+    const selectedEventPayloadDeferred = Boolean(
+        (selectedEvent?.interaction as (RawInteraction & { _payloadDeferred?: boolean }) | undefined)?._payloadDeferred,
+    );
+
+    useEffect(() => {
+        if (selectedEvent) void ensureInteractionLoaded(selectedEvent.interactionIndex);
+    }, [selectedEvent, ensureInteractionLoaded]);
+
+    useEffect(() => {
+        if (activeDetailTab === 'prompt' || activeDetailTab === 'timeline' || searchQuery.trim()) {
+            void ensureAllInteractionsLoaded();
+        }
+    }, [activeDetailTab, searchQuery, ensureAllInteractionsLoaded]);
 
     const toggleKey = (key: string) => {
         setExpandedKeys(s => {
@@ -657,6 +704,14 @@ export default function AgentTraceView({ interactions, onSubagentNavigate, rootE
     return (
         <TraceCtx.Provider value={ctxValue}>
         <div className="flex flex-col gap-2.5">
+            {fullInteractionLoadError && (
+                <div className="flex items-center justify-between gap-3 rounded-md border border-error-border bg-error-subtle px-3 py-2 text-sm text-error" role="alert">
+                    <span>{fullInteractionLoadError}</span>
+                    <Button variant="outline" size="sm" onClick={() => void ensureAllInteractionsLoaded()}>
+                        重试
+                    </Button>
+                </div>
+            )}
             {/* Stats bar */}
             {totalStats && (
                 <div className="flex flex-wrap items-center gap-3 px-3.5 py-2 rounded-md border border-border bg-background-secondary text-xs">
@@ -827,7 +882,25 @@ export default function AgentTraceView({ interactions, onSubagentNavigate, rootE
 
                 {/* ─── Right: Detail Panel ─── */}
                 <div className="rounded-lg border border-card-border bg-card flex flex-col h-full min-h-0 overflow-hidden">
-                    {selectedEvent ? (
+                    {selectedEvent && selectedEventPayloadDeferred && !interactionLoadError ? (
+                        <div className="p-4 space-y-3">
+                            <div className="h-5 w-1/3 rounded bg-background-tertiary animate-pulse" />
+                            <div className="h-24 w-full rounded bg-background-tertiary animate-pulse" />
+                            <div className="h-24 w-full rounded bg-background-tertiary animate-pulse" />
+                        </div>
+                    ) : selectedEvent && interactionLoadError ? (
+                        <div className="m-4 rounded-md border border-error-border bg-error-subtle p-4 text-sm text-error">
+                            <p>{interactionLoadError}</p>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className="mt-3"
+                                onClick={() => void ensureInteractionLoaded(selectedEvent.interactionIndex)}
+                            >
+                                重试
+                            </Button>
+                        </div>
+                    ) : selectedEvent ? (
                         <EventDetailPanel event={selectedEvent} node={selectedAgentNode} interactions={interactions} />
                     ) : selectedAgentNode ? (
                         <AgentDetail
@@ -1314,48 +1387,60 @@ const PREVIEW_CHARS = 300;
 
 function CompactSection({ label, raw, modalTitle, emptyText, accentColor }: { label: string; raw: string | null; modalTitle?: string; emptyText?: string; accentColor?: string }) {
     const [showModal, setShowModal] = useState(false);
+    const [copied, setCopied] = useState(false);
     if (raw == null) return null;
     const trimmed = raw.trim();
-    const preview = trimmed.slice(0, PREVIEW_CHARS);
-    const isTruncated = trimmed.length > PREVIEW_CHARS;
+    const onCopy = async () => {
+        try {
+            await copyText(trimmed);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+        } catch { /* ignore */ }
+    };
     return (
         <>
             <div>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.375rem' }}>
                     <SectionTitle accentColor={accentColor}>{label}</SectionTitle>
                     {trimmed && (
-                        <button
-                            onClick={() => setShowModal(true)}
-                            style={{ fontSize: '0.5625rem', color: 'var(--primary)', background: 'none', border: 'none', cursor: 'pointer', padding: '0 0 0.375rem', fontWeight: 500 }}
-                        >
-                            查看全部 ›
-                        </button>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.625rem' }}>
+                            {/* 一键复制:Message(query)/Input/Output 全文 */}
+                            <button
+                                onClick={onCopy}
+                                title="复制全文"
+                                style={{ fontSize: '0.5625rem', color: copied ? 'var(--primary)' : 'var(--foreground-muted)', background: 'none', border: 'none', cursor: 'pointer', padding: '0 0 0.375rem', fontWeight: 500 }}
+                            >
+                                {copied ? '✓ 已复制' : '⧉ 复制'}
+                            </button>
+                            <button
+                                onClick={() => setShowModal(true)}
+                                style={{ fontSize: '0.5625rem', color: 'var(--primary)', background: 'none', border: 'none', cursor: 'pointer', padding: '0 0 0.375rem', fontWeight: 500 }}
+                            >
+                                查看全部 ›
+                            </button>
+                        </div>
                     )}
                 </div>
                 {trimmed ? (
-                    <div
-                        onClick={() => setShowModal(true)}
-                        style={{
-                            padding: '0.5rem 0.75rem',
-                            background: 'var(--background-secondary)',
-                            border: '1px solid var(--border)',
-                            borderRadius: 6,
-                            fontSize: '0.75rem',
-                            lineHeight: 1.6,
-                            color: 'var(--foreground)',
-                            whiteSpace: 'pre-wrap',
-                            wordBreak: 'break-word',
-                            cursor: 'pointer',
-                            maxHeight: 110,
-                            overflow: 'hidden',
-                            position: 'relative',
-                            userSelect: 'none',
-                        }}
-                    >
-                        {preview}{isTruncated && ' …'}
-                        {isTruncated && (
-                            <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 32, background: 'linear-gradient(transparent, var(--background-secondary))' }} />
-                        )}
+                    // 预览区走 SmartViewer:JSON → 可交互树(嵌套 JSON 字符串自动展开)、
+                    // Markdown → 渲染、其余纯文本(真实换行,不再满屏 \n 字面)。
+                    // 展开节点等交互留给 SmartViewer,弹窗入口在头部"查看全部"。
+                    <div style={{
+                        background: 'var(--background-secondary)',
+                        border: '1px solid var(--border)',
+                        borderRadius: 6,
+                        maxHeight: 180,
+                        overflow: 'auto',
+                        position: 'relative',
+                    }}>
+                        <SmartViewer
+                            text={trimmed}
+                            toolbar={false}
+                            maxHeight="none"
+                            theme="light"
+                            unescape={false}
+                            className="sv-inline sv-compact"
+                        />
                     </div>
                 ) : (
                     <div style={{ fontSize: '0.75rem', color: 'var(--foreground-muted)', fontStyle: 'italic' }}>{emptyText || '(空)'}</div>

@@ -106,6 +106,8 @@ Trace 列表支持两类标签列：**用户标签**默认显示，用于维护�
 
 上图展示了详情页的典型结构：顶部是 Trace 摘要与统计指标，中部按标签页聚合不同调用维度，左侧是 Span 列表，中央是时间轴，右侧是当前选中节点的摘要信息。
 
+当 Trace 较长时，页面会先加载节点结构、时间和统计信息；选中具体节点后，再按需加载该节点的完整 message、reasoning、工具输入和工具输出。按需加载只改变加载时机，不会截断或丢弃 Trace 原文；保存 Trace 时仍会导出完整 Session。
+
 ### 详情页主要区域
 
 #### 1. 顶部摘要区
@@ -303,3 +305,14 @@ Task Spawn 表示当前执行过程中派生出的新任务数量。在多 Agent
 - 想看整体健康趋势： [质量监控](./quality-monitoring)
 - 想把典型 Trace 转成数据集： [从 Trace 构建数据集](../evaluation/dataset-from-trace)
 - 想回到运行观测总览： [运行观测](./index)
+
+
+
+
+## Trace Bundle 导入与导出
+
+- 在 Trace 详情页点击「导出 Trace」，下载的是版本化 Trace Bundle。即使当前打开的是子 Agent，导出范围仍是根 Trace 与全部子 Agent 节点。
+- 在链路追踪列表右上角点击「导入 Trace」，选择平台导出的 JSON 文件。导入上限为 50 MB、500 个执行节点。
+- 导入归属当前用户。原 Execution ID、task ID 没有冲突时保持不变；只有目标库中已存在的 ID 才会生成新 ID，并同步改写父子关系与 session 引用。OTel trace/span ID 保持原值。
+- 成功弹窗会显示文件名、原 Trace ID、新 Trace ID、节点数和 ID 重映射数量，可直接打开导入后的 Trace。原、新 Trace ID 无论是否发生冲突都会显示；弹窗不展开完整 ID 重映射明细。
+- Bundle 只迁移 Trace 展示所需的 Execution、Session 与 interactions；不会迁移用户标签、评测结果、智能诊断报告或基础设施关联，也不会自动触发 LLM 评测。
