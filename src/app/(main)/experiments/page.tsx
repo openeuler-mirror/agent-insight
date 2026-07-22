@@ -1,0 +1,181 @@
+'use client';
+
+// 实验列表 —— 评测「实验化」第一切片（本期仅单组实验）。
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { FlaskConical, Plus } from 'lucide-react';
+
+import { AppTopBar } from '@/components/shell/AppTopBar';
+import { PageContainer } from '@/components/shell/PageContainer';
+import { Button } from '@/components/ui/button';
+import { EmptyState } from '@/components/feedback/EmptyState';
+import { useAuth } from '@/lib/auth/auth-context';
+import { apiFetch } from '@/lib/client/api';
+
+interface ExperimentRow {
+  id: string;
+  name: string;
+  type: string;
+  agentName: string;
+  status: string;
+  caseCount: number;
+  evaluatorCount: number;
+  createdAt: string;
+}
+
+const PAGE_SIZE = 20;
+
+const STATUS_META: Record<string, { label: string; bg: string; fg: string }> = {
+  draft: { label: '草稿', bg: 'var(--background-secondary)', fg: 'var(--foreground-secondary)' },
+  running: { label: '运行中', bg: 'var(--tag-amber-bg)', fg: 'var(--tag-amber-fg)' },
+  done: { label: '已完成', bg: 'var(--tag-green-bg)', fg: 'var(--tag-green-fg)' },
+  failed: { label: '失败', bg: 'var(--tag-red-bg)', fg: 'var(--tag-red-fg)' },
+};
+
+function StatusChip({ status }: { status: string }) {
+  const meta = STATUS_META[status] ?? STATUS_META.draft;
+  return (
+    <span style={{
+      fontSize: 11, padding: '2px 8px', borderRadius: 10, fontWeight: 500,
+      background: meta.bg, color: meta.fg, whiteSpace: 'nowrap',
+    }}>
+      {meta.label}
+    </span>
+  );
+}
+
+function TypeChip() {
+  return (
+    <span style={{
+      fontSize: 11, padding: '2px 8px', borderRadius: 10, fontWeight: 500,
+      background: 'var(--primary-subtle)', color: 'var(--primary)', whiteSpace: 'nowrap',
+    }}>
+      单组实验
+    </span>
+  );
+}
+
+const TH: React.CSSProperties = {
+  textAlign: 'left', padding: '8px 12px', fontSize: 11, fontWeight: 600,
+  color: 'var(--foreground-muted)', borderBottom: '1px solid var(--border)',
+  whiteSpace: 'nowrap',
+};
+const TD: React.CSSProperties = {
+  padding: '9px 12px', fontSize: 12, color: 'var(--foreground)',
+  borderBottom: '1px solid var(--border)', verticalAlign: 'middle',
+};
+
+export default function ExperimentsPage() {
+  const router = useRouter();
+  const { user } = useAuth();
+  const [rows, setRows] = useState<ExperimentRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(1);
+
+  const load = useCallback(async () => {
+    if (!user) return;
+    setLoading(true);
+    try {
+      const res = await apiFetch(`/api/experiments?user=${encodeURIComponent(user)}`);
+      const data = await res.json();
+      setRows(Array.isArray(data?.items) ? data.items : []);
+    } catch {
+      setRows([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [user]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+  const pageRows = useMemo(
+    () => rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
+    [rows, page],
+  );
+
+  return (
+    <>
+      <AppTopBar
+        title="实验"
+        actions={
+          <Button size="sm" onClick={() => router.push('/experiments/new')}>
+            <Plus className="size-3.5" />
+            新建实验
+          </Button>
+        }
+      />
+      <PageContainer>
+        <div style={{
+          background: 'var(--card-bg)', border: '1px solid var(--card-border)',
+          borderRadius: 10, overflow: 'hidden',
+        }}>
+          {loading ? (
+            <div style={{ padding: 32, textAlign: 'center', fontSize: 12, color: 'var(--foreground-muted)' }}>
+              加载中…
+            </div>
+          ) : rows.length === 0 ? (
+            <EmptyState
+              icon={FlaskConical}
+              title="还没有实验"
+              description="实验 = 一批 case × 一组评估器。从「新建实验」开始：选 Agent → 圈选 Trace →（可选）标注预期答案 → 挑评估器。"
+              action={
+                <Button size="sm" onClick={() => router.push('/experiments/new')}>
+                  <Plus className="size-3.5" />
+                  新建实验
+                </Button>
+              }
+            />
+          ) : (
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>
+                  <th style={TH}>实验</th>
+                  <th style={TH}>待评测 Agent</th>
+                  <th style={TH}>实验类型</th>
+                  <th style={{ ...TH, textAlign: 'right' }}>Case</th>
+                  <th style={{ ...TH, textAlign: 'right' }}>评估器</th>
+                  <th style={TH}>状态</th>
+                  <th style={TH}>创建</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pageRows.map((r) => (
+                  <tr
+                    key={r.id}
+                    onClick={() => router.push(`/experiments/${r.id}`)}
+                    style={{ cursor: 'pointer', transition: 'background 0.12s' }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--background-secondary)'; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                  >
+                    <td style={{ ...TD, fontWeight: 500 }}>{r.name}</td>
+                    <td style={{ ...TD, color: 'var(--foreground-secondary)' }}>{r.agentName || '—'}</td>
+                    <td style={TD}><TypeChip /></td>
+                    <td style={{ ...TD, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r.caseCount}</td>
+                    <td style={{ ...TD, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r.evaluatorCount}</td>
+                    <td style={TD}><StatusChip status={r.status} /></td>
+                    <td style={{ ...TD, color: 'var(--foreground-muted)', whiteSpace: 'nowrap' }}>
+                      {new Date(r.createdAt).toLocaleString('zh-CN', { hour12: false })}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        {!loading && rows.length > PAGE_SIZE && (
+          <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8, marginTop: 12, fontSize: 12 }}>
+            <Button size="sm" variant="outline" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
+              上一页
+            </Button>
+            <span style={{ color: 'var(--foreground-muted)' }}>{page} / {totalPages}</span>
+            <Button size="sm" variant="outline" disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>
+              下一页
+            </Button>
+          </div>
+        )}
+      </PageContainer>
+    </>
+  );
+}
