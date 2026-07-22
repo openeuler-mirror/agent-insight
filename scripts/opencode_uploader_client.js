@@ -639,17 +639,31 @@ function subtreeRecordCount(state, rootSid) {
 // 「同一条 assistant message 内部反复更新 tool part」，前 5 位一个都不会变
 // （消息条数不涨 / 无新终稿文本 / message 时间戳不动），导致整个循环期间
 // 每轮都命中 checkpoint 被 skip，数据要等 CLI 退出才第一次上报。
-function buildSignature({ interactionCount, finalResultLength, lastTs, traceCompletedAt, cliCompleted, toolCallCount, tokens, recordCount }) {
-  return [
+function buildSignature({ interactionCount, finalResultLength, lastTs, traceCompletedAt, cliCompleted, toolCallCount, tokens, recordCount, completed }) {
+  const base = [
     interactionCount,
     finalResultLength,
     lastTs,
     traceCompletedAt || "",
     cliCompleted ? 1 : 0,
-    toolCallCount || 0,
-    tokens || 0,
-    recordCount || 0,
-  ].join("|")
+  ]
+  // 会话已结束就不再附加单调量：它们的作用是识别"还在推进"，对已完成的 trace 只会
+  // 因为 spool 里的杂事件而无谓地翻新指纹，触发重传 + 重跑 LLM 分析。
+  if (completed) return base.join("|")
+  return [...base, toolCallCount || 0, tokens || 0, recordCount || 0].join("|")
+}
+
+// 本轮对话是否已经跑完：有终稿输出，且这次 idle 发生在最后一次活动之后。
+//
+// 只判「有终稿 && 有过 idle」是不够的 —— 多轮会话里第 1 轮答完就有终稿和 idle，
+// 第 2 轮陷入工具循环时这两个条件依然成立，会把进行中的快照误判成已结束，
+// 让服务端对每一次心跳快照都跑一整轮 LLM 分析。
+const ROUND_IDLE_TOLERANCE_MS = 2000
+function isRoundCompleted({ finalResult, idleMs, lastTs }) {
+  if (!finalResult) return false
+  if (!(idleMs > 0)) return false
+  // 容差吸收 idle 事件与消息完成时间之间的顺序抖动；循环场景里两者相差远大于容差。
+  return idleMs + ROUND_IDLE_TOLERANCE_MS >= (lastTs || 0)
 }
 
 // 升级兼容：老 checkpoint 里存的是 5 段式 sig。若直接跟 8 段式比对必然失配，
@@ -1070,7 +1084,14 @@ async function main() {
     const opencodeCliCompleted = state.cliCompletedSessions.has(rootSid)
       || (pids.length > 0 && pids.every((pid) => !isPidAlive(pid)))
     const idleMs = state.sessionIdleAt.get(rootSid) || 0
-    const traceCompletedAt = derived.final_result && idleMs > 0
+    let lastTs = 0
+    for (const m of interactions) {
+      const t1 = toMsTimestamp(m.timestamp) || 0
+      const t2 = toMsTimestamp(m.timeInfo?.completed) || 0
+      const t3 = toMsTimestamp(m.timeInfo?.created) || 0
+      lastTs = Math.max(lastTs, t1, t2, t3)
+    }
+    const traceCompletedAt = isRoundCompleted({ finalResult: derived.final_result, idleMs, lastTs })
       ? new Date(idleMs).toISOString()
       : undefined
     const payload = {
@@ -1098,13 +1119,6 @@ async function main() {
       timestamp: new Date().toISOString(),
     }
 
-    let lastTs = 0
-    for (const m of interactions) {
-      const t1 = toMsTimestamp(m.timestamp) || 0
-      const t2 = toMsTimestamp(m.timeInfo?.completed) || 0
-      const t3 = toMsTimestamp(m.timeInfo?.created) || 0
-      lastTs = Math.max(lastTs, t1, t2, t3)
-    }
     const lastAssistant = String(payload.final_result || "")
     const sig = buildSignature({
       interactionCount: interactions.length,
@@ -1115,6 +1129,10 @@ async function main() {
       toolCallCount: derived.tool_call_count,
       tokens: derived.tokens,
       recordCount: subtreeRecordCount(state, rootSid),
+      // 已结束的会话回到旧的 5 段式指纹：单调量只在"进行中"才需要。否则一条已完成的
+      // trace 只要 spool 里再落进任何杂事件（recordCount+1）就会重传，而它带着
+      // trace_completed_at，服务端会再跑一整轮 LLM 分析。
+      completed: Boolean(payload.trace_completed_at) || Boolean(payload.opencode_cli_completed),
     })
     appendUploaderLog(
       `session.prepare task_id=${rootSid} interactions=${interactions.length} query=${String(query).slice(0, 120).replace(/\s+/g, " ")} ` +
@@ -1175,6 +1193,7 @@ export {
   buildSignature,
   buildState,
   collectSessionSubtree,
+  isRoundCompleted,
   isSignatureUnchanged,
   subtreeRecordCount,
   deriveFields,

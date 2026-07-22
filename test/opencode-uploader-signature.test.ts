@@ -120,6 +120,48 @@ test("opencode uploader: 旧 5 段式 checkpoint 不触发全量重传", async (
   assert.equal(uploader.isSignatureUnchanged("", sig), false)
 })
 
+// 回归护栏：多轮会话里，第 1 轮答完（有终稿 + 有 idle）后第 2 轮陷入工具循环时，
+// 若只判「有终稿 && 有过 idle」会把进行中的快照误判成已结束，服务端便对每一次心跳
+// 快照都跑一整轮 LLM 分析——轻通道的收益被完全抵消。
+test("opencode uploader: 第 2 轮循环中不能因为第 1 轮的终稿被判成已结束", async () => {
+  const uploader: any = await uploaderPromise
+  // 第 1 轮答完：idle 晚于最后活动
+  assert.equal(uploader.isRoundCompleted({ finalResult: "今天是星期三", idleMs: 2500, lastTs: 2000 }), true)
+  // 第 2 轮循环中：最后活动远晚于那次 idle
+  assert.equal(uploader.isRoundCompleted({ finalResult: "今天是星期三", idleMs: 2500, lastTs: 9500 }), false)
+})
+
+test("opencode uploader: 无终稿 / 从未 idle 一律判未结束", async () => {
+  const uploader: any = await uploaderPromise
+  assert.equal(uploader.isRoundCompleted({ finalResult: "", idleMs: 5000, lastTs: 1000 }), false)
+  assert.equal(uploader.isRoundCompleted({ finalResult: "答案", idleMs: 0, lastTs: 1000 }), false)
+  // 容差：idle 略早于最后一条消息的完成时间（时钟抖动）仍视为已结束
+  assert.equal(uploader.isRoundCompleted({ finalResult: "答案", idleMs: 5000, lastTs: 5001 }), true)
+})
+
+// 回归护栏：已结束的 trace 指纹必须稳定，否则 spool 里再落进任何杂事件都会让它重传，
+// 而它带着 trace_completed_at，服务端会再跑一整轮 LLM 分析。
+test("opencode uploader: 已结束会话的 sig 不含单调量，杂事件不触发重传", async () => {
+  const uploader: any = await uploaderPromise
+  const base = {
+    interactionCount: 4,
+    finalResultLength: 15,
+    lastTs: 2000,
+    traceCompletedAt: "2026-07-22T06:28:56.839Z",
+    cliCompleted: false,
+    completed: true,
+  }
+  const before = uploader.buildSignature({ ...base, toolCallCount: 3, tokens: 100, recordCount: 49 })
+  const afterStrayEvents = uploader.buildSignature({ ...base, toolCallCount: 3, tokens: 100, recordCount: 61 })
+  assert.equal(before, afterStrayEvents, "已结束的 trace 不该因 recordCount 变化而重传")
+  assert.equal(before.split("|").length, 5, "已结束回到 5 段式")
+  assert.equal(uploader.isSignatureUnchanged(before, afterStrayEvents), true)
+
+  // 进行中仍然带单调量
+  const running = uploader.buildSignature({ ...base, completed: false, toolCallCount: 3, tokens: 100, recordCount: 49 })
+  assert.equal(running.split("|").length, 8)
+})
+
 test("opencode uploader: 子会话的记录数计入 root 的 sig", async () => {
   const uploader: any = await uploaderPromise
   const records = [
