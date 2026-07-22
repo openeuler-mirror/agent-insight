@@ -1,13 +1,21 @@
 'use client';
 
-// TODO(M6): 实验详情页最小壳 —— 执行引擎与结果呈现（ExperimentEvalResult）
-// 落地后本页会重做为「按评估器 × case 的结果矩阵 + 类目均分」形态。
-import { use, useCallback, useEffect, useState } from 'react';
+// 单组实验详情正式版：状态条 → 整体表现（综合均分）→ 评估器分解（单色条 + N/M 计入）
+// → Case 明细表（综合/结果/轨迹得分 + sticky 操作列：详情 / 重评失败行）。
+// 聚合口径统一走 src/lib/engine/experiment/detail-agg.ts（有分才入均分）。
+import Link from 'next/link';
+import { use, useCallback, useEffect, useMemo, useState } from 'react';
 
+import { useEvaluatorLookup } from '@/components/eval/useEvaluatorLookup';
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { PageContainer } from '@/components/shell/PageContainer';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
+import {
+  caseScore,
+  evaluatorBreakdown,
+  overallAverage,
+} from '@/lib/engine/experiment/detail-agg';
 
 interface ExperimentDetail {
   id: string;
@@ -55,6 +63,9 @@ const TD: React.CSSProperties = {
   padding: '9px 12px', fontSize: 12, color: 'var(--foreground)',
   borderBottom: '1px solid var(--border)', verticalAlign: 'top',
 };
+const CARD: React.CSSProperties = {
+  background: 'var(--card-bg)', border: '1px solid var(--card-border)', borderRadius: 10,
+};
 
 function truncate(text: string | null | undefined, max: number): string {
   const t = (text || '').replace(/\s+/g, ' ').trim();
@@ -62,14 +73,22 @@ function truncate(text: string | null | undefined, max: number): string {
   return t.length > max ? `${t.slice(0, max)}…` : t;
 }
 
+function fmtScore(v: number | null): string {
+  return typeof v === 'number' ? String(v) : '—';
+}
+
+const PAGE_SIZE = 10;
+
 export default function ExperimentDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const { user } = useAuth();
+  const lookup = useEvaluatorLookup(user);
   const [detail, setDetail] = useState<ExperimentDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [starting, setStarting] = useState(false);
-  const [retryingId, setRetryingId] = useState('');
+  const [retryingCaseId, setRetryingCaseId] = useState('');
+  const [page, setPage] = useState(1);
 
   const load = useCallback(async (silent = false) => {
     if (!user) return;
@@ -117,25 +136,50 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
     }
   }, [user, id, starting, load]);
 
-  const retryResult = useCallback(async (resultId: string) => {
-    if (!user || retryingId) return;
-    setRetryingId(resultId);
+  // 重评：逐行重试该 case 下所有 failed 结果行
+  const retryCase = useCallback(async (caseId: string) => {
+    if (!user || retryingCaseId || !detail) return;
+    const failedRows = detail.results.filter((r) => r.caseId === caseId && r.status === 'failed');
+    if (!failedRows.length) return;
+    setRetryingCaseId(caseId);
     try {
-      const res = await apiFetch(
-        `/api/experiments/${encodeURIComponent(id)}/results/${encodeURIComponent(resultId)}/retry?user=${encodeURIComponent(user)}`,
-        { method: 'POST' },
-      );
-      const data = await res.json();
-      if (!res.ok) throw new Error(String(data?.error || '重评失败'));
+      for (const row of failedRows) {
+        const res = await apiFetch(
+          `/api/experiments/${encodeURIComponent(id)}/results/${encodeURIComponent(row.id)}/retry?user=${encodeURIComponent(user)}`,
+          { method: 'POST' },
+        );
+        const data = await res.json();
+        if (!res.ok) throw new Error(String(data?.error || '重评失败'));
+      }
       await load(true);
     } catch (e: any) {
       setError(e?.message || '重评失败');
     } finally {
-      setRetryingId('');
+      setRetryingCaseId('');
     }
-  }, [user, id, retryingId, load]);
+  }, [user, id, retryingCaseId, detail, load]);
 
   const status = STATUS_META[detail?.status ?? 'draft'] ?? STATUS_META.draft;
+
+  const overall = useMemo(
+    () => (detail ? overallAverage(detail.results) : null),
+    [detail],
+  );
+  const breakdown = useMemo(
+    () => (detail ? evaluatorBreakdown(detail.results) : []),
+    [detail],
+  );
+  const caseRows = useMemo(() => {
+    if (!detail) return [];
+    return detail.cases.map((c) => ({
+      ...c,
+      scores: caseScore(detail.results.filter((r) => r.caseId === c.id), lookup.categoryOf),
+    }));
+  }, [detail, lookup]);
+
+  const totalPages = Math.max(1, Math.ceil(caseRows.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const pagedRows = caseRows.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
 
   return (
     <>
@@ -143,13 +187,19 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
       <PageContainer>
         {loading ? (
           <div style={{ padding: 32, textAlign: 'center', fontSize: 12, color: 'var(--foreground-muted)' }}>加载中…</div>
-        ) : error || !detail ? (
-          <div style={{ padding: 32, textAlign: 'center', fontSize: 12, color: 'var(--error)' }}>{error || '实验不存在'}</div>
+        ) : error && !detail ? (
+          <div style={{ padding: 32, textAlign: 'center', fontSize: 12, color: 'var(--error)' }}>{error}</div>
+        ) : !detail ? (
+          <div style={{ padding: 32, textAlign: 'center', fontSize: 12, color: 'var(--error)' }}>实验不存在</div>
         ) : (
           <>
+            {error && (
+              <div style={{ ...CARD, padding: 10, marginBottom: 12, fontSize: 12, color: 'var(--error)' }}>{error}</div>
+            )}
+
+            {/* 顶部状态条 */}
             <div style={{
-              background: 'var(--card-bg)', border: '1px solid var(--card-border)',
-              borderRadius: 10, padding: 16, marginBottom: 14,
+              ...CARD, padding: 16, marginBottom: 14,
               display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap', fontSize: 12,
             }}>
               <span style={{
@@ -185,99 +235,163 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
               )}
             </div>
 
-            <div style={{
-              background: 'var(--card-bg)', border: '1px solid var(--card-border)',
-              borderRadius: 10, overflow: 'hidden',
-            }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr>
-                    <th style={TH}>任务输入</th>
-                    <th style={TH}>参考输出</th>
-                    <th style={TH}>实际输出</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {detail.cases.map((c) => (
-                    <tr key={c.id}>
-                      <td style={{ ...TD, maxWidth: 320 }}>{truncate(c.input, 90)}</td>
-                      <td style={TD}>
-                        <span style={{
-                          fontSize: 11, padding: '1px 7px', borderRadius: 8, fontWeight: 500,
-                          background: c.referenceOutput ? 'var(--tag-green-bg)' : 'var(--background-secondary)',
-                          color: c.referenceOutput ? 'var(--tag-green-fg)' : 'var(--foreground-muted)',
-                        }}>
-                          {c.referenceOutput ? '已标注' : '未标注'}
-                        </span>
-                      </td>
-                      <td style={{ ...TD, maxWidth: 380, color: 'var(--foreground-secondary)' }}>
-                        {truncate(c.actualOutput, 110)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            {/* 整体表现卡（整行） */}
+            <div style={{ ...CARD, padding: '18px 20px', marginBottom: 14 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--foreground-secondary)', marginBottom: 8 }}>
+                整体表现 · {detail.cases.length} 个 case
+              </div>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+                <span style={{ fontSize: 34, fontWeight: 700, lineHeight: 1, color: 'var(--accent)' }}>
+                  {fmtScore(overall)}
+                </span>
+                <span style={{ fontSize: 11, color: 'var(--foreground-muted)' }}>综合均分（仅计入评估成功且有分的结果）</span>
+              </div>
             </div>
 
-            {detail.results.length > 0 && (
-              <div style={{
-                background: 'var(--card-bg)', border: '1px solid var(--card-border)',
-                borderRadius: 10, overflow: 'hidden', marginTop: 14,
-              }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            {/* 评估器分解 */}
+            {breakdown.length > 0 && (
+              <div style={{ ...CARD, marginBottom: 14 }}>
+                <div style={{
+                  padding: '11px 16px', borderBottom: '1px solid var(--border)',
+                  fontSize: 12.5, fontWeight: 600,
+                }}>
+                  评估器分解
+                </div>
+                <div style={{ padding: '12px 16px', display: 'grid', gap: 12 }}>
+                  {breakdown.map((row) => (
+                    <div key={row.evaluatorId} style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                      <div style={{ width: 240, minWidth: 0 }}>
+                        <div style={{ fontSize: 12, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {lookup.nameOf(row.evaluatorId)}
+                        </div>
+                        <div style={{ fontSize: 10.5, color: 'var(--foreground-muted)', marginTop: 2 }}>
+                          {lookup.tagsOf(row.evaluatorId).join(' · ') || row.evaluatorId}
+                        </div>
+                      </div>
+                      <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <div style={{ flex: 1, height: 8, borderRadius: 5, background: 'var(--background-secondary)', overflow: 'hidden' }}>
+                          <div style={{
+                            width: `${row.avg ?? 0}%`, height: '100%', borderRadius: 5,
+                            background: 'var(--accent)',
+                          }} />
+                        </div>
+                        <span style={{ width: 44, textAlign: 'right', fontSize: 13, fontWeight: 700, color: 'var(--accent)' }}>
+                          {fmtScore(row.avg)}
+                        </span>
+                      </div>
+                      <span style={{ width: 90, fontSize: 10.5, color: 'var(--foreground-muted)', textAlign: 'right' }}>
+                        {row.scored}/{row.total} 项计入
+                        {row.failed > 0 && (
+                          <span style={{ display: 'block', color: 'var(--error)' }}>{row.failed} 项评估失败</span>
+                        )}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Case 明细表 */}
+            <div style={{ ...CARD, overflow: 'hidden' }}>
+              <div style={{ padding: '11px 16px', borderBottom: '1px solid var(--border)', fontSize: 12.5, fontWeight: 600 }}>
+                Case 明细
+              </div>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 960 }}>
                   <thead>
                     <tr>
-                      <th style={TH}>Case</th>
-                      <th style={TH}>评估器</th>
-                      <th style={TH}>状态</th>
-                      <th style={TH}>得分</th>
-                      <th style={TH}>说明</th>
-                      <th style={TH}></th>
+                      <th style={TH}>输入</th>
+                      <th style={TH}>参考输出</th>
+                      <th style={TH}>实际输出</th>
+                      <th style={{ ...TH, width: 72 }}>综合得分</th>
+                      <th style={{ ...TH, width: 72 }}>结果得分</th>
+                      <th style={{ ...TH, width: 72 }}>轨迹得分</th>
+                      <th style={{ ...TH, position: 'sticky', right: 0, background: 'var(--card-bg)', boxShadow: '-6px 0 8px -6px rgba(0,0,0,.18)' }}>操作</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {detail.results.map((r) => {
-                      const caseRow = detail.cases.find((c) => c.id === r.caseId);
-                      const rs = STATUS_META[r.status === 'pending' || r.status === 'running' ? 'running' : r.status] ?? STATUS_META.draft;
-                      return (
-                        <tr key={r.id}>
-                          <td style={{ ...TD, maxWidth: 240 }}>{truncate(caseRow?.input, 60)}</td>
-                          <td style={TD}>{r.evaluatorId}</td>
-                          <td style={TD}>
-                            <span style={{
-                              fontSize: 11, padding: '1px 7px', borderRadius: 8, fontWeight: 500,
-                              background: rs.bg, color: rs.fg,
-                            }}>
-                              {r.status === 'pending' ? '待执行' : r.status === 'running' ? '执行中' : rs.label}
-                            </span>
-                          </td>
-                          <td style={TD}>{typeof r.score === 'number' ? r.score : '—'}</td>
-                          <td style={{ ...TD, maxWidth: 320, color: r.errorMessage ? 'var(--error)' : 'var(--foreground-secondary)' }}>
-                            {truncate(r.errorMessage, 90)}
-                          </td>
-                          <td style={TD}>
-                            {r.status === 'failed' && (
-                              <button
-                                onClick={() => retryResult(r.id)}
-                                disabled={!!retryingId}
-                                style={{
-                                  fontSize: 11, padding: '3px 10px', borderRadius: 6,
-                                  border: '1px solid var(--border)', background: 'var(--background-secondary)',
-                                  color: 'var(--foreground)', cursor: retryingId ? 'default' : 'pointer',
-                                  opacity: retryingId && retryingId !== r.id ? 0.5 : 1,
-                                }}
-                              >
-                                {retryingId === r.id ? '重评中…' : '重评'}
-                              </button>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
+                    {pagedRows.map((c) => (
+                      <tr key={c.id}>
+                        <td style={{ ...TD, maxWidth: 280 }}>{truncate(c.input, 80)}</td>
+                        <td style={{ ...TD, maxWidth: 220 }}>
+                          {c.referenceOutput
+                            ? truncate(c.referenceOutput, 60)
+                            : <span style={{ color: 'var(--foreground-muted)', fontSize: 11 }}>未标注</span>}
+                        </td>
+                        <td style={{ ...TD, maxWidth: 280, color: 'var(--foreground-secondary)' }}>
+                          {truncate(c.actualOutput, 80)}
+                        </td>
+                        <td style={{ ...TD, fontWeight: 700 }}>{fmtScore(c.scores.overall)}</td>
+                        <td style={TD}>{fmtScore(c.scores.res)}</td>
+                        <td style={TD}>{fmtScore(c.scores.traj)}</td>
+                        <td style={{
+                          ...TD, whiteSpace: 'nowrap', position: 'sticky', right: 0,
+                          background: 'var(--card-bg)', boxShadow: '-6px 0 8px -6px rgba(0,0,0,.18)',
+                        }}>
+                          <Link
+                            href={`/experiments/${encodeURIComponent(id)}/cases/${encodeURIComponent(c.id)}`}
+                            style={{ fontSize: 12, color: 'var(--accent)', textDecoration: 'none', marginRight: 10 }}
+                          >
+                            详情
+                          </Link>
+                          {c.scores.failed > 0 && (
+                            <button
+                              onClick={() => retryCase(c.id)}
+                              disabled={!!retryingCaseId}
+                              style={{
+                                fontSize: 11, padding: '2px 9px', borderRadius: 6,
+                                border: '1px solid var(--border)', background: 'var(--background-secondary)',
+                                color: 'var(--foreground)', cursor: retryingCaseId ? 'default' : 'pointer',
+                                opacity: retryingCaseId && retryingCaseId !== c.id ? 0.5 : 1,
+                              }}
+                            >
+                              {retryingCaseId === c.id ? '重评中…' : '重评'}
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                    {pagedRows.length === 0 && (
+                      <tr>
+                        <td colSpan={7} style={{ ...TD, textAlign: 'center', color: 'var(--foreground-muted)' }}>暂无 case</td>
+                      </tr>
+                    )}
                   </tbody>
                 </table>
               </div>
-            )}
+              {caseRows.length > PAGE_SIZE && (
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 8, padding: '9px 16px',
+                  borderTop: '1px solid var(--border)', fontSize: 11, color: 'var(--foreground-muted)',
+                }}>
+                  共 {caseRows.length} 个 case · 每页 {PAGE_SIZE} 条
+                  <span style={{ flex: 1 }} />
+                  <button
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    disabled={safePage <= 1}
+                    style={{
+                      fontSize: 11, padding: '2px 9px', borderRadius: 6, border: '1px solid var(--border)',
+                      background: 'var(--background-secondary)', color: 'var(--foreground)',
+                      cursor: safePage <= 1 ? 'default' : 'pointer', opacity: safePage <= 1 ? 0.5 : 1,
+                    }}
+                  >
+                    上一页
+                  </button>
+                  <span>{safePage} / {totalPages}</span>
+                  <button
+                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                    disabled={safePage >= totalPages}
+                    style={{
+                      fontSize: 11, padding: '2px 9px', borderRadius: 6, border: '1px solid var(--border)',
+                      background: 'var(--background-secondary)', color: 'var(--foreground)',
+                      cursor: safePage >= totalPages ? 'default' : 'pointer', opacity: safePage >= totalPages ? 0.5 : 1,
+                    }}
+                  >
+                    下一页
+                  </button>
+                </div>
+              )}
+            </div>
           </>
         )}
       </PageContainer>

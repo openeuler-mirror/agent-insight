@@ -247,7 +247,9 @@ export default function EvaluatorsCenter() {
   const stats = useMemo(() => ({
     presetCount: presetEvaluators.length,
     customCount: customEvaluators.length,
-    readyCount: customEvaluators.filter(item => item.status === 'ready').length,
+    // 可用 = 预置 + 自建中状态为 ready 的评估器（预置全部 ready，此前漏算导致卡片恒为自建数）
+    readyCount: presetEvaluators.filter(item => item.status === 'ready').length
+      + customEvaluators.filter(item => item.status === 'ready').length,
   }), [customEvaluators]);
 
   const openLlmCreateFlow = () => {
