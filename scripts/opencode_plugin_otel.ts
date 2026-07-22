@@ -231,6 +231,28 @@ function extractTextFromParts(parts: any): string {
   }
 }
 
+/**
+ * 心跳决策（纯函数，便于单测）。
+ *
+ * 返回 "start-clock" 时**只能**写心跳自己的时钟，绝不能写 kickUploader 的节流表
+ * (lastUploadKickBySession)。曾经为图省事复用了节流表当计时起点，等于伪造一次
+ * "刚上报过"，导致紧随其后的 session.idle 上报落进冷却期被吞掉 —— 15 秒内做完的
+ * 短任务因此一次都不上报。test/opencode-plugin-heartbeat.test.ts 有回归护栏。
+ */
+export function computeHeartbeatDecision(args: {
+  now: number
+  heartbeatMs: number
+  /** 真实发生过的上一次 kick 时间（idle 或心跳触发），没有则 0/undefined */
+  lastKickAt?: number
+  /** 心跳自己的计时起点 */
+  heartbeatClockAt?: number
+}): "none" | "start-clock" | "kick" {
+  if (!(args.heartbeatMs > 0)) return "none"
+  const since = args.lastKickAt || args.heartbeatClockAt || 0
+  if (since <= 0) return "start-clock"
+  return args.now - since >= args.heartbeatMs ? "kick" : "none"
+}
+
 export default async function WittySkillInsightOtelPlugin() {
   const env = loadSkillInsightEnv()
   const enabled = asBool(env.AGENT_INSIGHT_OPENCODE_OTEL_ENABLE ?? env.OPENCODE_MIN_CAPTURE_ENABLE ?? "true")
@@ -250,6 +272,10 @@ export default async function WittySkillInsightOtelPlugin() {
   // 0 或负数 = 关闭心跳，回到"仅 idle 触发"的旧行为。
   const heartbeatMs = asInt(env.AGENT_INSIGHT_OPENCODE_HEARTBEAT_MS, 60000)
   const lastUploadKickBySession = new Map<string, number>()
+  // 心跳的计时起点，必须与 lastUploadKickBySession 分开。
+  // 后者是 kickUploader 的节流依据，往里写"还没真正 kick 过"的时间戳会把紧随其后的
+  // session.idle 上报误判成冷却期内而吞掉 —— 短任务（15s 内做完）会因此一次都不上报。
+  const heartbeatClockBySession = new Map<string, number>()
   const activeSessionIds = new Set<string>()
 
   const logDir = path.join(getPreferredInsightDir(), "logs")
@@ -555,19 +581,24 @@ export default async function WittySkillInsightOtelPlugin() {
             kickUploader(sid, false, `event:${type}`)
           } else if (heartbeatMs > 0 && sessionID) {
             // 心跳：会话还在产生事件、但迟迟不 idle 时，按固定间隔推一次进行中快照。
-            // 只在有事件流入时才评估，会话真正空闲下来不会白跑；节流沿用
-            // lastUploadKickBySession，所以和 idle 触发共用同一条时间线，不会叠加。
+            // 只在有事件流入时才评估，会话真正空闲下来不会白跑。
+            //
+            // 计时起点走独立的 heartbeatClockBySession，绝不能写 lastUploadKickBySession
+            // —— 那是 kickUploader 的节流依据，写进去等于伪造"刚上报过"，会让紧随其后的
+            // session.idle 上报落进冷却期被吞掉，短任务因此一次都不上报。
             const sid = String(sessionID)
-            const prev = lastUploadKickBySession.get(sid) || 0
-            if (prev === 0) {
-              // 该 session 还没 kick 过（没 idle 过的长任务就是这种），先起表，
-              // 否则 prev 永远是 0、心跳永远不触发。
-              lastUploadKickBySession.set(sid, Date.now())
-            } else if (Date.now() - prev >= heartbeatMs) {
+            const now = Date.now()
+            const lastKickAt = lastUploadKickBySession.get(sid) || 0
+            const heartbeatClockAt = heartbeatClockBySession.get(sid) || 0
+            const decision = computeHeartbeatDecision({ now, heartbeatMs, lastKickAt, heartbeatClockAt })
+            if (decision === "start-clock") {
+              heartbeatClockBySession.set(sid, now)
+            } else if (decision === "kick") {
               appendLogLine(
                 pluginLogPath,
-                `event.heartbeat type=${type} sessionID=${sid} sinceLastMs=${Date.now() - prev} heartbeatMs=${heartbeatMs}`,
+                `event.heartbeat type=${type} sessionID=${sid} sinceLastMs=${now - (lastKickAt || heartbeatClockAt)} heartbeatMs=${heartbeatMs}`,
               )
+              heartbeatClockBySession.set(sid, now)
               kickUploader(sid, false, "heartbeat")
             }
           }
