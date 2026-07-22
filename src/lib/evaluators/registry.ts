@@ -28,6 +28,12 @@ const PRESET_META: Record<string, EvaluatorMeta> = {
   'preset-agent-task-completion': { category: 'res', requires: ['reference'] },
   // 轨迹质量：只看执行过程，不依赖参考数据
   'preset-agent-trace-quality': { category: 'traj', requires: [] },
+  // 预置代码评估器（独立能力单元，零配置、不依赖参考数据，全部读执行过程 → traj）
+  'preset-code-tool-reliability': { category: 'traj', requires: [] },
+  'preset-code-latency-budget': { category: 'traj', requires: [] },
+  'preset-code-cost-budget': { category: 'traj', requires: [] },
+  'preset-code-redundancy-loop': { category: 'traj', requires: [] },
+  'preset-code-token-efficiency': { category: 'traj', requires: [] },
 };
 
 const DEFAULT_META: EvaluatorMeta = { category: 'res', requires: [] };
