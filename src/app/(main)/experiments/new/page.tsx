@@ -46,6 +46,8 @@ interface DatasetOption {
 const STEPS = ['实验设计', '关联 Trace', '预期答案', '评估器'];
 const NEXT_LABELS = ['下一步：关联 Trace →', '下一步：预期答案 →', '下一步：评估器 →', '🚀 开始实验'];
 const PAGE_SIZE = 10;
+/** 跨页全选安全上限：避免一次圈选过多 case 拖垮后续评测 */
+const SELECT_ALL_CAP = 500;
 
 // ── 高保真样式常量（对照 评测实验-高保真.html） ──
 const PANEL: React.CSSProperties = {
@@ -232,6 +234,7 @@ export default function NewExperimentPage() {
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [tracesLoading, setTracesLoading] = useState(false);
+  const [selectingAll, setSelectingAll] = useState(false);
   const [selected, setSelected] = useState<Map<string, SelectedCase>>(new Map());
 
   // ③ 预期答案
@@ -290,6 +293,57 @@ export default function NewExperimentPage() {
   const goTo = (s: number) => {
     setStep(s);
     setMaxVisited((m) => Math.max(m, s));
+  };
+
+  // 全选：表头复选框控当前页；总数超过一页时另给「选择全部 N 条」跨页入口
+  const toSelectedCase = (t: TraceItem): SelectedCase => ({
+    executionId: t.id,
+    taskId: t.taskId,
+    input: t.query || '',
+    actualOutput: t.finalResult || '',
+    referenceOutput: null,
+  });
+
+  const pageAllSelected = traces.length > 0 && traces.every((t) => selected.has(t.id));
+  const pageSomeSelected = traces.some((t) => selected.has(t.id));
+
+  const togglePageAll = () => {
+    setSelected((prev) => {
+      const next = new Map(prev);
+      // 当前页已全选 → 取消当前页；否则补齐当前页（不动其它页已选项）
+      if (pageAllSelected) traces.forEach((t) => next.delete(t.id));
+      else traces.forEach((t) => { if (!next.has(t.id)) next.set(t.id, toSelectedCase(t)); });
+      return next;
+    });
+  };
+
+  const selectAllPages = async () => {
+    if (!user || !agentName) return;
+    setSelectingAll(true);
+    try {
+      // API 单页上限 100（服务端保护），分批拉到 SELECT_ALL_CAP 为止
+      const target = Math.min(total, SELECT_ALL_CAP);
+      const batch = 100;
+      const all: TraceItem[] = [];
+      for (let p = 1; all.length < target; p++) {
+        const res = await apiFetch(
+          `/api/experiments/traces?user=${encodeURIComponent(user)}&agent=${encodeURIComponent(agentName)}&page=${p}&pageSize=${batch}`,
+        );
+        if (!res.ok) break;
+        const data = await res.json();
+        const items: TraceItem[] = Array.isArray(data.items) ? data.items : [];
+        if (!items.length) break;
+        all.push(...items);
+        if (items.length < batch) break;
+      }
+      setSelected((prev) => {
+        const next = new Map(prev);
+        all.slice(0, target).forEach((t) => { if (!next.has(t.id)) next.set(t.id, toSelectedCase(t)); });
+        return next;
+      });
+    } finally {
+      setSelectingAll(false);
+    }
   };
 
   const toggleTrace = (t: TraceItem) => {
@@ -550,6 +604,21 @@ export default function NewExperimentPage() {
               <span style={{ fontSize: 12, color: 'var(--foreground-muted)' }}>Agent：</span>
               <span style={{ ...CHIP_MUT, color: 'var(--foreground)', fontWeight: 700 }}>{agentName}</span>
               <span style={{ flex: 1 }} />
+              {total > traces.length && (
+                <button
+                  style={{ ...BTN_OUTLINE_SM, opacity: selectingAll ? 0.6 : 1 }}
+                  disabled={selectingAll}
+                  onClick={selectAllPages}
+                  title={total > SELECT_ALL_CAP ? `跨页全选，最多 ${SELECT_ALL_CAP} 条（共 ${total} 条）` : '选中全部页的 trace'}
+                >
+                  {selectingAll ? '选择中…' : `选择全部 ${Math.min(total, SELECT_ALL_CAP)} 条`}
+                </button>
+              )}
+              {selected.size > 0 && (
+                <button style={BTN_OUTLINE_SM} onClick={() => setSelected(new Map())} title="清空已选">
+                  清空
+                </button>
+              )}
               <span style={{ fontSize: 12, color: 'var(--primary)', fontWeight: 700 }}>
                 已选 {selected.size} 条
               </span>
@@ -559,7 +628,17 @@ export default function NewExperimentPage() {
               <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
                 <thead>
                   <tr>
-                    <th style={{ ...TH, width: 36 }} />
+                    <th style={{ ...TH, width: 36 }}>
+                      <input
+                        type="checkbox"
+                        checked={pageAllSelected}
+                        ref={(el) => { if (el) el.indeterminate = !pageAllSelected && pageSomeSelected; }}
+                        onChange={togglePageAll}
+                        disabled={traces.length === 0}
+                        title={pageAllSelected ? '取消选择本页' : '全选本页'}
+                        style={{ cursor: traces.length ? 'pointer' : 'not-allowed' }}
+                      />
+                    </th>
                     <th style={TH}>Trace ID</th>
                     <th style={TH}>任务输入</th>
                     <th style={TH}>状态</th>
