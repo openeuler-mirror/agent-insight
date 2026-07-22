@@ -83,7 +83,7 @@ export interface RawInteraction {
     parts?: InteractionPart[];
 }
 
-export type CallKind = 'llm' | 'tool' | 'skill' | 'task' | 'user';
+export type CallKind = 'llm' | 'tool' | 'skill' | 'task' | 'chain' | 'user';
 
 export interface AgentEvent {
     kind: CallKind;
@@ -95,6 +95,12 @@ export interface AgentEvent {
     output?: any;
     /** Stable source call id for tool/skill/task events. */
     toolCallId?: string;
+    /** Langfuse-only source span identity used to preserve observation nesting. */
+    sourceSpanId?: string;
+    /** Langfuse-only visible parent span after framework wrappers are collapsed. */
+    parentSourceSpanId?: string;
+    /** Structural link rendered through its child node instead of as a duplicate row. */
+    treeHidden?: boolean;
     /** Adapter-provided tool state, for example success/error/completed. */
     toolStatus?: string;
     /** ms since epoch */

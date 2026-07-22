@@ -38,6 +38,7 @@ export type ChartColor = (typeof CHART_PALETTE)[number]['name'];
 export const SPAN_KIND_COLOR: Record<string, ChartColor | 'neutral'> = {
   agent: 'indigo',
   task:  'sky',
+  chain: 'teal',
   tool:  'emerald',
   llm:   'violet',
   skill: 'pink',
@@ -57,6 +58,11 @@ export const SPAN_KIND_CLASSES: Record<string, { chip: string; bar: string; text
     chip: 'bg-sky-50 text-sky-700 border-sky-200 dark:bg-sky-500/10 dark:text-sky-300 dark:border-sky-400/30',
     bar:  'bg-sky-500 dark:bg-sky-400',
     text: 'text-sky-700 dark:text-sky-300',
+  },
+  chain: {
+    chip: 'bg-teal-50 text-teal-700 border-teal-200 dark:bg-teal-500/10 dark:text-teal-300 dark:border-teal-400/30',
+    bar:  'bg-teal-500 dark:bg-teal-400',
+    text: 'text-teal-700 dark:text-teal-300',
   },
   tool: {
     chip: 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-300 dark:border-emerald-400/30',

@@ -112,6 +112,7 @@ TABLE_DEFINITIONS = {
             ("startTime", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
             ("endTime", "TIMESTAMP"),
             ("interactions", "TEXT"),
+            ("langfuseTraceNodes", "TEXT"),
             ("user", "TEXT"),
             ("model", "TEXT"),
         ],

@@ -328,6 +328,7 @@ model Session {
   startTime    DateTime @default(now())
   endTime      DateTime?
   interactions String?  // JSON array of interactions
+  langfuseTraceNodes String? // Lossless Langfuse observation tree JSON
   user         String?
   model        String?
 }

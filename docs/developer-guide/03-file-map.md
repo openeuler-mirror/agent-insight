@@ -52,7 +52,8 @@
 | `ingest/adapters/{registry,types,opencode,claude,openclaw,hermes,langfuse-langgraph}.ts` | ingest | `getAdapter`、`resolveFrameworkId`、`listFrameworks`；`FrameworkAdapter`、`FrameworkDescriptor` |
 | `ingest/routing-signature.ts` | ingest | `RoutingSemanticSignature`、`RoutingSemanticMatch` |
 | `ingest/claude-otel/` / `ingest/otel-consumer/` / `openclaw-watcher.ts` | ingest | 特定框架的接入与 OTel spool 消费 |
-| `ingest/otel/langfuse.ts` / `ingest/otel/adapters/langfuse-langgraph.ts` | ingest | Langfuse Python SDK / LangGraph OTLP span tree 归属转换；`follow_skill`→skill、`call_report_subagent`→task/subagent |
+| `ingest/otel/langfuse.ts` / `ingest/otel/adapters/{langfuse-langgraph,langfuse-trace}.ts` | ingest | Langfuse Python SDK / LangGraph OTLP 归属转换；现有 interactions 投影与无损 `LangfuseTraceNode` 投影并行生成 |
+| `engine/observability/langfuse-agent-trace.ts` | engine | Langfuse 可见 observation → 原 Agent Trace 节点/事件模型；不含业务节点名称规则 |
 | `ingest/otel/adapters/hermes.ts` / `scripts/hermes_agent_insight_plugin.py` | ingest | Hermes span tree 归属转换；Hermes hooks 到累计 OTLP JSON snapshot |
 | `shared/model-config.ts` / `default-model-config.ts` | shared | `ModelPricing`，定价/上下文窗口查询 |
 | `shared/interaction-utils.ts` | shared | `InvokedSkill`，交互解析 |
@@ -87,7 +88,7 @@
 | `eval/Dashboard.tsx` | 评测仪表盘（最大的 UI 流程） |
 | `eval/TrajectoryEvalCenter.tsx`、`eval/TrajectoryDetailView.tsx` | 轨迹评测 UI |
 | `eval/SkillEvaluation.tsx`、`eval/EvaluationRunDetailView.tsx` | skill 评测视图 |
-| `observe/AgentTraceView.tsx`、`observe/TraceDrawer.tsx`、`observe/AgentDebugCard.tsx` | trace 可视化 + 调试 |
+| `observe/{AgentTraceView,TraceDrawer,AgentDebugCard}.tsx` | trace 可视化 + 调试；Langfuse observation 经专用投影进入原 Agent Trace 界面，其余框架继续使用 interactions 树 |
 | `AgentDatasetCenter.tsx`、`DatasetItemsPage.tsx`、`EvaluatorsCenter.tsx` | 数据集与评测器管理 |
 | `config/ModelConfigManager.tsx`、`config/WebSearchConfig.tsx` | 模型/搜索配置 |; Trace tag management page: `app/(main)/version-management/page.tsx` |
 | `shell/{AppSidebar,AppTopBar,PageContainer,PageHeader}.tsx` | 应用外壳 |

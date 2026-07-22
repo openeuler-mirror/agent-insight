@@ -2,6 +2,7 @@ import type { ExecutionRecord } from '@/lib/storage/data-service';
 import type { OtelTraceEvent } from '../types';
 import { LANGFUSE_LANGGRAPH_FRAMEWORK } from '../langfuse';
 import type { OtelTraceAdapter } from './types';
+import { buildLangfuseTraceNodes } from './langfuse-trace';
 
 type AnyObj = Record<string, any>;
 const DEFAULT_REPORT_SUBAGENT = 'report-generator';
@@ -664,6 +665,7 @@ export function aggregateLangfuseLangGraphTraceEvents(sessionId: string, events:
     label: firstText(ordered.find((event) => event.serviceName)?.serviceName) || LANGFUSE_LANGGRAPH_FRAMEWORK,
     user: ordered.find((event) => event.user)?.user || 'anonymous',
     interactions,
+    langfuseTraceNodes: buildLangfuseTraceNodes(ordered),
     skill: skillName,
     invokedSkills: skillName ? [{ name: skillName, version: null }] : [],
     skills: skillName ? [skillName] : [],

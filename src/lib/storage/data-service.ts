@@ -38,6 +38,7 @@ import { getAdapter } from '@/lib/ingest/adapters/registry';
 import { normalizeInteractions } from '@/lib/shared/interaction-utils';
 import { buildPrismaWhere } from '@/lib/filters/to-prisma';
 import type { FilterClause } from '@/lib/filters/types';
+import { mergeLangfuseTraceNodes, type LangfuseTraceNode } from '@/lib/ingest/otel/adapters/langfuse-trace';
 import {
     findExecutionIdsByBusinessTags,
     getTraceTagsByExecutionIds,
@@ -270,6 +271,7 @@ export interface ExecutionRecord {
     invokedSkills?: InvokedSkill[];
     invoked_skills?: InvokedSkill[];
     agents?: string[];
+    langfuseTraceNodes?: LangfuseTraceNode[];
 
     is_skill_correct?: boolean;
     is_answer_correct?: boolean;
@@ -2853,6 +2855,20 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
         && Number.isFinite(traceCompletedAtForSession.getTime());
 
     if (targetRecord.task_id && mergedInteractionsForSession) {
+        const isLangfuseTrace = targetRecord.framework === 'langfuse' || targetRecord.framework === 'langfuse-langgraph';
+        let langfuseTraceNodesJson: string | undefined;
+        if (isLangfuseTrace && Array.isArray(targetRecord.langfuseTraceNodes)) {
+            const existingSession = await db.findSessionByTaskId(targetRecord.task_id);
+            let existingNodes: LangfuseTraceNode[] = [];
+            if (typeof existingSession?.langfuseTraceNodes === 'string' && existingSession.langfuseTraceNodes.trim()) {
+                try {
+                    const parsed = JSON.parse(existingSession.langfuseTraceNodes);
+                    if (Array.isArray(parsed)) existingNodes = parsed;
+                } catch {}
+            }
+            targetRecord.langfuseTraceNodes = mergeLangfuseTraceNodes(existingNodes, targetRecord.langfuseTraceNodes);
+            langfuseTraceNodesJson = JSON.stringify(targetRecord.langfuseTraceNodes);
+        }
         await db.upsertSession(
             targetRecord.task_id,
             {
@@ -2862,6 +2878,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
                 user: targetRecord.user,
                 model: targetRecord.model,
                 interactions: JSON.stringify(mergedInteractionsForSession),
+                ...(langfuseTraceNodesJson !== undefined ? { langfuseTraceNodes: langfuseTraceNodesJson } : {}),
                 ...(hasTraceCompletion ? { endTime: traceCompletedAtForSession } : {}),
             },
             {
@@ -2870,6 +2887,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
                 user: targetRecord.user,
                 model: targetRecord.model,
                 interactions: JSON.stringify(mergedInteractionsForSession),
+                ...(langfuseTraceNodesJson !== undefined ? { langfuseTraceNodes: langfuseTraceNodesJson } : {}),
             }
         );
         if (hasTraceCompletion) {

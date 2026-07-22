@@ -8,6 +8,7 @@ import { CartesianGrid, Line, LineChart, ReferenceArea, ResponsiveContainer, Too
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { SmartViewer } from '@/components/SmartViewer';
+import type { LangfuseTraceNode } from '@/lib/ingest/otel/adapters/langfuse-trace';
 import { SkillLink } from '@/components/skills/SkillLink';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
@@ -26,6 +27,7 @@ import {
     ToolCall,
     walkTree,
 } from '@/lib/engine/observability/agent-trace';
+import { buildLangfuseAgentTrace } from '@/lib/engine/observability/langfuse-agent-trace';
 import {
     extractSkillsWithVersionsFromClaudeSession,
     extractSkillsWithVersionsFromHermesSession,
@@ -60,6 +62,7 @@ const STATUS_DOT: Record<NodeStatus, string> = {
 const KIND_META: Record<string, { label: string; chip: string; bar: string; text: string }> = {
     agent: { label: 'AGENT', ...SPAN_KIND_CLASSES.agent },
     task:  { label: 'TASK',  ...SPAN_KIND_CLASSES.task },
+    chain: { label: 'CHAIN', ...SPAN_KIND_CLASSES.chain },
     tool:  { label: 'TOOL',  ...SPAN_KIND_CLASSES.tool },
     skill: { label: 'SKILL', ...SPAN_KIND_CLASSES.skill },
     llm:   { label: 'LLM',   ...SPAN_KIND_CLASSES.llm },
@@ -85,7 +88,7 @@ function KindBadge({ kind, size = 'xs', className }: { kind: string; size?: 'xs'
 }
 
 type DetailTab = 'timeline' | 'prompt' | 'overview' | 'skills' | 'infra';
-type EventTypeFilter = 'all' | 'llm' | 'tool' | 'skill' | 'task' | 'user';
+type EventTypeFilter = 'all' | 'llm' | 'tool' | 'skill' | 'task' | 'chain' | 'user';
 
 interface TraceSkillCall {
     name: string;
@@ -139,6 +142,28 @@ interface LlmPromptSnapshot {
 const agentKey = (id: string) => `a:${id}`;
 const eventKey = (nodeId: string, idx: number) => `e:${nodeId}:${idx}`;
 
+interface AgentEventTreeEntry {
+    event: AgentEvent;
+    eventIndex: number;
+    children: AgentEventTreeEntry[];
+}
+
+function buildAgentEventTree(events: AgentEvent[]): AgentEventTreeEntry[] {
+    const entries = events.map((event, eventIndex) => ({ event, eventIndex, children: [] as AgentEventTreeEntry[] }));
+    const bySpanId = new Map(entries
+        .filter(entry => entry.event.sourceSpanId)
+        .map(entry => [entry.event.sourceSpanId as string, entry]));
+    const roots: AgentEventTreeEntry[] = [];
+    for (const entry of entries) {
+        const parent = entry.event.parentSourceSpanId
+            ? bySpanId.get(entry.event.parentSourceSpanId)
+            : undefined;
+        if (parent && parent !== entry) parent.children.push(entry);
+        else roots.push(entry);
+    }
+    return roots;
+}
+
 // 复制统一走共享 util(modern clipboard + execCommand fallback,兼容 http 部署)
 import { copyText } from '@/lib/copy-text';
 
@@ -154,11 +179,13 @@ function buildDefaultExpandedKeys(root: AgentNode): Set<string> {
     const keys = new Set<string>();
     const visit = (node: AgentNode, depth: number) => {
         keys.add(agentKey(node.id));
-        if (depth <= 1) {
-            node.events.forEach((ev, idx) => {
-                if (ev.kind === 'task' && ev.spawnedChildId) keys.add(eventKey(node.id, idx));
-            });
-        }
+        const visitEvent = (entry: AgentEventTreeEntry) => {
+            if (!entry.event.treeHidden && (entry.children.length > 0 || entry.event.spawnedChildId)) {
+                if (entry.event.kind === 'chain' || depth <= 1) keys.add(eventKey(node.id, entry.eventIndex));
+            }
+            entry.children.forEach(visitEvent);
+        };
+        buildAgentEventTree(node.events).forEach(visitEvent);
         node.children.forEach(c => visit(c, depth + 1));
     };
     visit(root, 0);
@@ -329,6 +356,7 @@ const TraceCtx = React.createContext<TraceCtxValue>(defaultCtx);
 
 export interface AgentTraceViewProps {
     interactions: RawInteraction[];
+    langfuseTraceNodes?: LangfuseTraceNode[];
     /** 按 interaction index 读取完整原文；未提供时保持旧的一次性完整数据行为。 */
     loadInteraction?: (index: number) => Promise<RawInteraction>;
     /** 搜索或 Prompt/Timeline 需要完整上下文时按需读取全部 interactions。 */
@@ -346,6 +374,7 @@ export interface AgentTraceViewProps {
 
 export default function AgentTraceView({
     interactions: sourceInteractions,
+    langfuseTraceNodes,
     loadInteraction,
     loadAllInteractions,
     onSubagentNavigate,
@@ -358,6 +387,10 @@ export default function AgentTraceView({
     const [fullInteractionLoadError, setFullInteractionLoadError] = useState<string | null>(null);
     const fullLoadPromiseRef = React.useRef<Promise<RawInteraction[]> | null>(null);
     const previousRootExecutionIdRef = React.useRef(rootExecutionId);
+    const langfuseProjection = useMemo(
+        () => langfuseTraceNodes?.length ? buildLangfuseAgentTrace(langfuseTraceNodes) : null,
+        [langfuseTraceNodes],
+    );
 
     useEffect(() => {
         const traceChanged = previousRootExecutionIdRef.current !== rootExecutionId;
@@ -375,6 +408,7 @@ export default function AgentTraceView({
     }, [sourceInteractions, rootExecutionId]);
 
     const ensureInteractionLoaded = React.useCallback(async (index: number) => {
+        if (langfuseProjection) return;
         const current = interactions[index] as (RawInteraction & { _payloadDeferred?: boolean }) | undefined;
         if (!current?._payloadDeferred || !loadInteraction) return;
         const requestedTraceId = previousRootExecutionIdRef.current;
@@ -386,9 +420,10 @@ export default function AgentTraceView({
         } catch (error) {
             setInteractionLoadError(error instanceof Error ? error.message : 'Failed to load interaction');
         }
-    }, [interactions, loadInteraction]);
+    }, [interactions, langfuseProjection, loadInteraction]);
 
     const ensureAllInteractionsLoaded = React.useCallback(async () => {
+        if (langfuseProjection) return langfuseProjection.interactions;
         if (!loadAllInteractions) return interactions;
         if (!interactions.some(item => (item as RawInteraction & { _payloadDeferred?: boolean })._payloadDeferred)) {
             return interactions;
@@ -414,11 +449,15 @@ export default function AgentTraceView({
             fullLoadPromiseRef.current = promise;
         }
         return fullLoadPromiseRef.current;
-    }, [interactions, loadAllInteractions]);
+    }, [interactions, langfuseProjection, loadAllInteractions]);
 
-    const tree = useMemo(() => buildAgentCallTree(interactions || []), [interactions]);
+    const displayInteractions = langfuseProjection?.interactions || interactions;
+    const tree = useMemo(
+        () => langfuseProjection?.tree || buildAgentCallTree(interactions || []),
+        [interactions, langfuseProjection],
+    );
     const nodeMap = useMemo(() => tree ? buildNodeMap(tree) : new Map<string, AgentNode>(), [tree]);
-    const traceSkillCalls = useMemo(() => collectTraceSkillCalls(interactions || []), [interactions]);
+    const traceSkillCalls = useMemo(() => collectTraceSkillCalls(displayInteractions || []), [displayInteractions]);
     const [managedSkillAssets, setManagedSkillAssets] = useState<ManagedSkillAsset[]>([]);
 
     const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -473,16 +512,17 @@ export default function AgentTraceView({
 
     const totalStats = useMemo(() => {
         if (!tree) return null;
-        let agents = 0, tasks = 0, tools = 0, skills = 0, llm = 0, tokens = 0;
+        let agents = 0, tasks = 0, chains = 0, tools = 0, skills = 0, llm = 0, tokens = 0;
         walkTree(tree, n => {
             agents++;
             tasks += n.stats.taskCalls;
+            chains += n.events.filter(event => event.kind === 'chain').length;
             tools += n.stats.toolCalls;
             skills += n.stats.skillCalls;
             llm += n.stats.llmCalls;
             tokens += n.stats.totalTokens;
         });
-        return { agents, tasks, tools, skills, llm, tokens };
+        return { agents, tasks, chains, tools, skills, llm, tokens };
     }, [tree]);
 
     const totalStart = tree?.startedAt;
@@ -509,8 +549,8 @@ export default function AgentTraceView({
     }, [selectedKey, nodeMap, tree]);
 
     const selectedTraceSkillCalls = useMemo(
-        () => collectTraceSkillCalls(interactions || [], selectedAgentNode),
-        [interactions, selectedAgentNode],
+        () => collectTraceSkillCalls(displayInteractions || [], selectedAgentNode),
+        [displayInteractions, selectedAgentNode],
     );
 
     const selectedTraceSkillUsages = useMemo(
@@ -540,15 +580,19 @@ export default function AgentTraceView({
         });
     };
 
-    // 树中所有「可展开」的行 key(Agent 行 + 会派生子 Agent 的 TASK 行),供展开/收起开关复用。
+    // 树中所有可展开的 Agent、子 Agent 调用和 Langfuse CHAIN。
     const allExpandableKeys = useMemo(() => {
         const keys = new Set<string>();
         if (tree) {
             walkTree(tree, n => {
                 keys.add(agentKey(n.id));
-                n.events.forEach((ev, idx) => {
-                    if (ev.kind === 'task' && ev.spawnedChildId) keys.add(eventKey(n.id, idx));
-                });
+                const visitEvent = (entry: AgentEventTreeEntry) => {
+                    if (!entry.event.treeHidden && (entry.children.length > 0 || entry.event.spawnedChildId)) {
+                        keys.add(eventKey(n.id, entry.eventIndex));
+                    }
+                    entry.children.forEach(visitEvent);
+                };
+                buildAgentEventTree(n.events).forEach(visitEvent);
             });
         }
         return keys;
@@ -593,14 +637,24 @@ export default function AgentTraceView({
                 parentKeys,
             });
             const myParents = [...parentKeys, aKey];
-            node.events.forEach((ev, idx) => {
-                const evKey = eventKey(node.id, idx);
+            const handledChildIds = new Set<string>();
+            const visitEvent = (entry: AgentEventTreeEntry, eventParents: string[]) => {
+                const ev = entry.event;
+                const idx = entry.eventIndex;
                 const childNode = ev.spawnedChildId ? nodeMap.get(ev.spawnedChildId) : undefined;
+                if (ev.treeHidden) {
+                    if (childNode) {
+                        handledChildIds.add(childNode.id);
+                        visit(childNode, eventParents);
+                    }
+                    return;
+                }
+                const evKey = eventKey(node.id, idx);
                 const dur = childNode
                     ? childNode.stats.durationMs ?? undefined
                     : (ev.startedAt != null && ev.completedAt != null) ? ev.completedAt - ev.startedAt : undefined;
                 const tok = ev.usage?.total || 0;
-                const label = ev.kind === 'task'
+                const label = ev.kind === 'task' && ev.spawnedChildId
                     ? `spawn → ${ev.args?.subagent_type || childNode?.agentName || 'subagent'}`
                     : ev.name || ev.summary?.split('\n')[0]?.slice(0, 60) || ev.kind;
                 spans.push({
@@ -611,10 +665,17 @@ export default function AgentTraceView({
                         ev.args ? (typeof ev.args === 'string' ? ev.args : JSON.stringify(ev.args)).slice(0, 300) : '',
                         ev.output ? (typeof ev.output === 'string' ? ev.output : JSON.stringify(ev.output)).slice(0, 100) : '',
                     ].filter(Boolean).join(' ').toLowerCase(),
-                    parentKeys: myParents,
+                    parentKeys: eventParents,
                 });
-            });
-            node.children.forEach(c => visit(c, myParents));
+                const childParents = [...eventParents, evKey];
+                entry.children.forEach(child => visitEvent(child, childParents));
+                if (childNode) {
+                    handledChildIds.add(childNode.id);
+                    visit(childNode, childParents);
+                }
+            };
+            buildAgentEventTree(node.events).forEach(entry => visitEvent(entry, myParents));
+            node.children.filter(child => !handledChildIds.has(child.id)).forEach(child => visit(child, myParents));
         };
         visit(tree, []);
         return spans;
@@ -718,6 +779,7 @@ export default function AgentTraceView({
                     <StatChip label="AGENTS" value={totalStats.agents} />
                     <Sep />
                     <StatChip label="TASK SPAWNS" value={totalStats.tasks} accentClass={KIND_META.task.text} isActive={eventTypeFilter === 'task'} onClick={() => handleStatChipClick('task')} hint={tt('traceTree.filterType') + ' Task'} />
+                    {totalStats.chains > 0 && <StatChip label="CHAIN SPANS" value={totalStats.chains} accentClass={KIND_META.chain.text} isActive={eventTypeFilter === 'chain'} onClick={() => handleStatChipClick('chain')} hint={tt('traceTree.filterType') + ' Chain'} />}
                     <StatChip label="TOOL CALLS"  value={totalStats.tools} accentClass={KIND_META.tool.text}  isActive={eventTypeFilter === 'tool'}  onClick={() => handleStatChipClick('tool')}  hint={tt('traceTree.filterType') + ' Tool'} />
                     <StatChip label="SKILL CALLS" value={totalStats.skills} accentClass={KIND_META.skill.text} isActive={eventTypeFilter === 'skill'} onClick={() => handleStatChipClick('skill')} hint={tt('traceTree.filterType') + ' Skill'} />
                     <StatChip label="LLM TURNS"   value={totalStats.llm}   accentClass={KIND_META.llm.text}   isActive={eventTypeFilter === 'llm'}   onClick={() => handleStatChipClick('llm')}   hint={tt('traceTree.filterType') + ' LLM'} />
@@ -828,6 +890,7 @@ export default function AgentTraceView({
                                 { value: 'llm', label: 'LLM', accentClass: KIND_META.llm.text },
                                 { value: 'tool', label: 'Tool', accentClass: KIND_META.tool.text },
                                 { value: 'task', label: 'Task', accentClass: KIND_META.task.text },
+                                ...((totalStats?.chains || 0) > 0 ? [{ value: 'chain', label: 'Chain', accentClass: KIND_META.chain.text }] : []),
                                 { value: 'skill', label: 'Skill', accentClass: KIND_META.skill.text },
                                 { value: 'user', label: 'User' },
                             ]} onChange={setTreeKindFilter} />
@@ -901,7 +964,7 @@ export default function AgentTraceView({
                             </Button>
                         </div>
                     ) : selectedEvent ? (
-                        <EventDetailPanel event={selectedEvent} node={selectedAgentNode} interactions={interactions} />
+                        <EventDetailPanel event={selectedEvent} node={selectedAgentNode} interactions={displayInteractions} />
                     ) : selectedAgentNode ? (
                         <AgentDetail
                             node={selectedAgentNode}
@@ -915,7 +978,7 @@ export default function AgentTraceView({
                                 const n = findNode(tree, id);
                                 if (n) setSelectedKey(agentKey(n.id));
                             }}
-                            interactions={interactions}
+                            interactions={displayInteractions}
                             traceSkills={selectedTraceSkillUsages}
                             currentUser={user}
                             rootExecutionId={rootExecutionId}
@@ -1068,10 +1131,99 @@ function UnifiedSpanTree({
     const { matchedKeys, activeMatchKey, searchQuery, treeKindFilter, minDurationMs, minTokenK, slowOnly: ctxSlowOnly } = ctx;
 
     const events = node.events;
+    const eventTree = buildAgentEventTree(events);
     const hasContent = events.length > 0;
 
     const isSearchMatch = searchQuery ? matchedKeys.has(aKey) : false;
     const isActiveMatch = activeMatchKey === aKey;
+
+    const renderEventEntry = (
+        entry: AgentEventTreeEntry,
+        eventDepth: number,
+        eventIsLast: boolean,
+        eventPrefixBits: boolean[],
+    ): ReactNode => {
+        const ev = entry.event;
+        const evIdx = entry.eventIndex;
+        const evKey = eventKey(node.id, evIdx);
+        const childNode = ev.spawnedChildId ? nodeMap.get(ev.spawnedChildId) : undefined;
+
+        if (ev.treeHidden) {
+            if (!childNode) return null;
+            return (
+                <UnifiedSpanTree
+                    key={`hidden-${evIdx}`}
+                    node={childNode}
+                    nodeMap={nodeMap}
+                    expandedKeys={expandedKeys}
+                    onToggleKey={onToggleKey}
+                    selectedKey={selectedKey}
+                    onSelect={onSelect}
+                    totalStart={totalStart}
+                    totalDuration={totalDuration}
+                    depth={eventDepth}
+                    isLast={eventIsLast}
+                    prefixBits={eventPrefixBits}
+                />
+            );
+        }
+
+        const hasChildren = entry.children.length > 0 || !!childNode;
+        const isEvExpanded = hasChildren && expandedKeys.has(evKey);
+        const evDur = childNode
+            ? childNode.stats.durationMs
+            : (ev.startedAt != null && ev.completedAt != null) ? ev.completedAt - ev.startedAt : undefined;
+        const evTok = ev.usage?.total || 0;
+        const evIsSlow = (evDur ?? 0) > SLOW_MS;
+        if (treeKindFilter !== 'all' && ev.kind !== treeKindFilter) return null;
+        if (minDurationMs > 0 && (evDur == null || evDur < minDurationMs)) return null;
+        if (minTokenK > 0 && evTok < minTokenK * 1000) return null;
+        if (ctxSlowOnly && !evIsSlow) return null;
+        if (searchQuery && !matchedKeys.has(evKey)) return null;
+
+        const descendantPrefixBits = [...eventPrefixBits, !eventIsLast];
+        return (
+            <div key={ev.sourceSpanId || evIdx}>
+                <UnifiedEventRow
+                    event={ev}
+                    evIdx={evIdx}
+                    parentNodeId={node.id}
+                    childNode={childNode}
+                    depth={eventDepth}
+                    isLast={eventIsLast && !isEvExpanded}
+                    prefixBits={eventPrefixBits}
+                    isExpanded={isEvExpanded}
+                    hasChildren={hasChildren}
+                    isSelected={selectedKey === evKey}
+                    onSelect={() => onSelect(evKey)}
+                    onToggle={hasChildren ? () => onToggleKey(evKey) : undefined}
+                    totalStart={totalStart}
+                    totalDuration={totalDuration}
+                />
+                {isEvExpanded && entry.children.map((child, childIndex) => renderEventEntry(
+                    child,
+                    eventDepth + 1,
+                    childIndex === entry.children.length - 1 && !childNode,
+                    descendantPrefixBits,
+                ))}
+                {childNode && isEvExpanded && (
+                    <UnifiedSpanTree
+                        node={childNode}
+                        nodeMap={nodeMap}
+                        expandedKeys={expandedKeys}
+                        onToggleKey={onToggleKey}
+                        selectedKey={selectedKey}
+                        onSelect={onSelect}
+                        totalStart={totalStart}
+                        totalDuration={totalDuration}
+                        depth={eventDepth + 1}
+                        isLast
+                        prefixBits={descendantPrefixBits}
+                    />
+                )}
+            </div>
+        );
+    };
 
     return (
         <div>
@@ -1184,62 +1336,12 @@ function UnifiedSpanTree({
             {/* Events */}
             {hasContent && isExpanded && (
                 <div>
-                    {events.map((ev, evIdx) => {
-                        const evKey = eventKey(node.id, evIdx);
-                        const childNode = ev.kind === 'task' && ev.spawnedChildId ? nodeMap.get(ev.spawnedChildId) : undefined;
-                        const hasChildren = !!childNode;
-                        const isEvExpanded = hasChildren && expandedKeys.has(evKey);
-                        const isLastEv = evIdx === events.length - 1;
-                        const childPrefixBits = depth === 0 ? [] : [...prefixBits, !isLast];
-
-                        // ── Context-driven filters ──
-                        const evDur = childNode
-                            ? childNode.stats.durationMs
-                            : (ev.startedAt != null && ev.completedAt != null) ? ev.completedAt - ev.startedAt : undefined;
-                        const evTok = ev.usage?.total || 0;
-                        const evIsSlow = (evDur ?? 0) > SLOW_MS;
-                        if (treeKindFilter !== 'all' && ev.kind !== treeKindFilter) return null;
-                        if (minDurationMs > 0 && (evDur == null || evDur < minDurationMs)) return null;
-                        if (minTokenK > 0 && evTok < minTokenK * 1000) return null;
-                        if (ctxSlowOnly && !evIsSlow) return null;
-                        if (searchQuery && !matchedKeys.has(evKey)) return null;
-
-                        return (
-                            <div key={evIdx}>
-                                <UnifiedEventRow
-                                    event={ev}
-                                    evIdx={evIdx}
-                                    parentNodeId={node.id}
-                                    childNode={childNode}
-                                    depth={depth + 1}
-                                    isLast={isLastEv && !isEvExpanded}
-                                    prefixBits={childPrefixBits}
-                                    isExpanded={isEvExpanded}
-                                    hasChildren={hasChildren}
-                                    isSelected={selectedKey === evKey}
-                                    onSelect={() => onSelect(evKey)}
-                                    onToggle={hasChildren ? () => onToggleKey(evKey) : undefined}
-                                    totalStart={totalStart}
-                                    totalDuration={totalDuration}
-                                />
-                                {childNode && isEvExpanded && (
-                                    <UnifiedSpanTree
-                                        node={childNode}
-                                        nodeMap={nodeMap}
-                                        expandedKeys={expandedKeys}
-                                        onToggleKey={onToggleKey}
-                                        selectedKey={selectedKey}
-                                        onSelect={onSelect}
-                                        totalStart={totalStart}
-                                        totalDuration={totalDuration}
-                                        depth={depth + 2}
-                                        isLast={isLastEv}
-                                        prefixBits={[...childPrefixBits, !isLastEv]}
-                                    />
-                                )}
-                            </div>
-                        );
-                    })}
+                    {eventTree.map((entry, entryIndex) => renderEventEntry(
+                        entry,
+                        depth + 1,
+                        entryIndex === eventTree.length - 1,
+                        depth === 0 ? [] : [...prefixBits, !isLast],
+                    ))}
                 </div>
             )}
         </div>
@@ -1287,14 +1389,14 @@ function UnifiedEventRow({
     const isActiveSearchMatch = ctxActiveMatchKey === evKey;
 
     // Primary label
-    const primaryLabel = event.kind === 'task'
+    const primaryLabel = event.kind === 'task' && event.spawnedChildId
         ? `spawn → ${event.args?.subagent_type || childNode?.agentName || 'subagent'}`
         : event.kind === 'llm'
             ? (event.summary ? event.summary.split('\n')[0].slice(0, 60) : 'LLM')
             : event.name || event.summary?.slice(0, 50) || event.kind;
 
     // Secondary label
-    const secondaryLabel = event.kind === 'task'
+    const secondaryLabel = event.kind === 'task' && event.spawnedChildId
         ? (event.args?.description ? String(event.args.description).slice(0, 55) : undefined)
         : event.kind === 'llm'
             ? undefined
@@ -2559,10 +2661,19 @@ function EventDetailPanel({ event, node, interactions }: { event: AgentEvent; no
                 )}
 
                 {/* ── Task spawn ── */}
-                {event.kind === 'task' && (
+                {event.kind === 'task' && event.spawnedChildId && (
                     <div style={{ fontSize: '0.8125rem', color: 'var(--foreground-muted)', padding: '0.75rem', background: 'var(--background-secondary)', border: '1px solid var(--border)', borderRadius: 6 }}>
                         已生成子 Agent — 在左侧树中展开 TASK 行查看详情。
                     </div>
+                )}
+
+                {/* ── Captured task / chain observation ── */}
+                {((event.kind === 'task' && !event.spawnedChildId) || event.kind === 'chain') && (
+                    <>
+                        <CompactSection label="Input" raw={argsStr} modalTitle={`${title} — Input`} />
+                        <CompactSection label="Output" raw={outputStr} modalTitle={`${title} — Output`} />
+                        {argsStr == null && outputStr == null && <EmptyDetail />}
+                    </>
                 )}
             </div>
         </div>
@@ -2915,10 +3026,11 @@ function AgentDetail({
 }) {
     const status = getStatus(node);
     const hasPrompt = !!(node.systemPrompts && node.systemPrompts.length > 0);
+    const visibleEvents = node.events.filter(event => !event.treeHidden);
 
     const tabs: { id: DetailTab; label: string; count?: number }[] = [
         { id: 'overview', label: '概览' },
-        { id: 'timeline', label: '时间线', count: node.events.length },
+        { id: 'timeline', label: '时间线', count: visibleEvents.length },
         { id: 'skills', label: 'Skills', count: traceSkills.length },
         ...(hasPrompt ? [{ id: 'prompt' as DetailTab, label: 'System Prompt', count: node.systemPrompts!.length }] : []),
         { id: 'infra' as DetailTab, label: 'Infra' },
@@ -2987,7 +3099,7 @@ function AgentDetail({
                 {activeTab === 'overview' && <OverviewTab node={node} status={status} onSelectChild={onSelectChild} />}
                 {activeTab === 'timeline' && (
                     <TimelineTab
-                        events={node.events}
+                        events={visibleEvents}
                         eventTypeFilter={eventTypeFilter}
                         onEventTypeFilterChange={onEventTypeFilterChange}
                         onSelectChild={onSelectChild}
@@ -3588,7 +3700,7 @@ function TimelineTab({ events, eventTypeFilter, onEventTypeFilterChange, onSelec
     interactions: RawInteraction[];
 }) {
     const counts = useMemo(() => {
-        const c: Record<string, number> = { llm: 0, tool: 0, skill: 0, task: 0, user: 0 };
+        const c: Record<string, number> = { llm: 0, tool: 0, skill: 0, task: 0, chain: 0, user: 0 };
         events.forEach(ev => { if (c[ev.kind] != null) c[ev.kind]++; });
         return c;
     }, [events]);
@@ -3603,6 +3715,7 @@ function TimelineTab({ events, eventTypeFilter, onEventTypeFilterChange, onSelec
         { kind: 'llm', label: 'LLM' },
         { kind: 'tool', label: 'Tool' },
         { kind: 'task', label: 'Task' },
+        { kind: 'chain', label: 'Chain' },
         { kind: 'skill', label: 'Skill' },
         { kind: 'user', label: 'User' },
     ];
