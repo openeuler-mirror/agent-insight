@@ -10,6 +10,7 @@ import { AppTopBar } from '@/components/shell/AppTopBar';
 import { PageContainer } from '@/components/shell/PageContainer';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
+import { matchDatasetCases, describeMatchResult, toDatasetCases } from '@/lib/engine/experiment/dataset-match';
 import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
 import type { EvaluatorCard } from '@/lib/evaluators/custom-evaluator-model';
 import { deriveEvaluatorTags, gateEvaluator, getEvaluatorMeta } from '@/lib/evaluators/registry';
@@ -33,6 +34,13 @@ interface SelectedCase {
   input: string;
   actualOutput: string;
   referenceOutput: string | null;
+}
+
+interface DatasetOption {
+  id: string;
+  name: string;
+  targetAgent?: string;
+  cases?: Array<{ input?: string; expectedOutput?: string }>;
 }
 
 const STEPS = ['实验设计', '关联 Trace', '预期答案', '评估器'];
@@ -73,6 +81,15 @@ const BTN: React.CSSProperties = {
   cursor: 'pointer', border: '1px solid transparent', whiteSpace: 'nowrap',
 };
 const BTN_PRIMARY: React.CSSProperties = { ...BTN, background: 'var(--primary)', color: '#fff' };
+const MODAL_OV: React.CSSProperties = {
+  position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)', zIndex: 220,
+  display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24,
+};
+const MODAL: React.CSSProperties = {
+  width: 560, maxWidth: '92vw', maxHeight: '86vh', overflowY: 'auto',
+  background: 'var(--background)', border: '1px solid var(--border)', borderRadius: 14,
+  padding: '18px 20px', boxShadow: '0 24px 80px rgba(0,0,0,.35)',
+};
 const BTN_GHOST: React.CSSProperties = {
   ...BTN, background: 'none', color: 'var(--foreground-secondary)', border: 'none',
 };
@@ -220,6 +237,13 @@ export default function NewExperimentPage() {
   // ③ 预期答案
   const [expandedCase, setExpandedCase] = useState<string | null>(null);
   const [draftRef, setDraftRef] = useState('');
+  // ③ 与数据集互通：导入（按输入精确匹配回填）/ 存为数据集（标注成果沉淀）
+  const [datasets, setDatasets] = useState<DatasetOption[]>([]);
+  const [importOpen, setImportOpen] = useState(false);
+  const [saveOpen, setSaveOpen] = useState(false);
+  const [datasetName, setDatasetName] = useState('');
+  const [datasetBusy, setDatasetBusy] = useState(false);
+  const [datasetHint, setDatasetHint] = useState('');
 
   // ④ 评估器
   const [customEvaluators, setCustomEvaluators] = useState<EvaluatorCard[]>([]);
@@ -296,6 +320,67 @@ export default function NewExperimentPage() {
       if (c) next.set(executionId, { ...c, referenceOutput: value && value.trim() ? value : null });
       return next;
     });
+  };
+
+  // ③ 从数据集导入：按输入精确匹配回填参考输出，已标注的默认跳过（保护人工标注）
+  const openImport = () => {
+    setDatasetHint('');
+    setImportOpen(true);
+    if (!user) return;
+    apiFetch(`/api/agent-datasets?user=${encodeURIComponent(user)}`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then((d) => setDatasets(Array.isArray(d) ? d : []))
+      .catch(() => setDatasets([]));
+  };
+
+  const importFromDataset = (ds: DatasetOption) => {
+    const result = matchDatasetCases(
+      selectedList.map((c) => ({ key: c.executionId, input: c.input, referenceOutput: c.referenceOutput })),
+      (ds.cases ?? []).map((x) => ({ input: String(x.input ?? ''), expectedOutput: String(x.expectedOutput ?? '') })),
+    );
+    setSelected((prev) => {
+      const next = new Map(prev);
+      for (const [key, ref] of Object.entries(result.updates)) {
+        const c = next.get(key);
+        if (c) next.set(key, { ...c, referenceOutput: ref });
+      }
+      return next;
+    });
+    setDatasetHint(describeMatchResult(result));
+    if (result.matched > 0) setTimeout(() => setImportOpen(false), 900);
+  };
+
+  // ③ 存为数据集：已标注的 case 沉淀为评测数据集（数据集是实验副产品）
+  const saveAsDataset = async () => {
+    const cases = toDatasetCases(selectedList);
+    if (!cases.length || !user) return;
+    setDatasetBusy(true);
+    setDatasetHint('');
+    try {
+      const res = await apiFetch('/api/agent-datasets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user,
+          name: datasetName.trim() || `${name.trim() || '实验'}-预期答案`,
+          description: `由实验「${name.trim() || '未命名'}」的预期答案标注沉淀`,
+          targetAgent: agentName,
+          datasetKind: 'ideal_output',
+          cases,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setDatasetHint(`保存失败：${err.error || res.status}`);
+        return;
+      }
+      setDatasetHint(`已存为数据集，共 ${cases.length} 条——可在「评测数据集」页管理`);
+      setTimeout(() => setSaveOpen(false), 1200);
+    } catch (e) {
+      setDatasetHint(`保存失败：${e instanceof Error ? e.message : '未知错误'}`);
+    } finally {
+      setDatasetBusy(false);
+    }
   };
 
   // ④ 门控输入：每条已选 case 的参考标注情况
@@ -590,6 +675,19 @@ export default function NewExperimentPage() {
                   已标注 <b style={{ color: 'var(--primary)' }}>{annotated}</b>/{selectedList.length}
                 </span>
               </span>
+              <span style={{ display: 'flex', gap: 8 }}>
+                <button style={BTN_OUTLINE_SM} onClick={openImport} title="按任务输入精确匹配，回填参考输出；已标注的条目跳过">
+                  📥 从数据集导入匹配
+                </button>
+                <button
+                  style={{ ...BTN_OUTLINE_SM, opacity: annotated > 0 ? 1 : 0.5, cursor: annotated > 0 ? 'pointer' : 'not-allowed' }}
+                  disabled={annotated === 0}
+                  onClick={() => { setDatasetHint(''); setDatasetName(''); setSaveOpen(true); }}
+                  title={annotated > 0 ? '把已标注的预期答案沉淀为评测数据集' : '尚无已标注的 case'}
+                >
+                  💾 存为数据集
+                </button>
+              </span>
             </div>
 
             <div style={PANEL_B}>
@@ -751,6 +849,85 @@ export default function NewExperimentPage() {
                 nextLabel: submitting ? '创建中…' : '🚀 开始实验',
                 onNext: submit,
               })}
+            </div>
+          </div>
+        )}
+
+        {/* ③ 从数据集导入：选一个数据集，按输入精确匹配回填 */}
+        {importOpen && (
+          <div style={MODAL_OV} onClick={(e) => { if (e.target === e.currentTarget) setImportOpen(false); }}>
+            <div style={MODAL}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+                <b style={{ fontSize: 14.5 }}>从数据集导入匹配</b>
+                <span style={{ flex: 1 }} />
+                <button style={BTN_GHOST} onClick={() => setImportOpen(false)}>✕ 关闭</button>
+              </div>
+              <div style={{ fontSize: 11.5, color: 'var(--foreground-muted)', marginBottom: 12, lineHeight: 1.6 }}>
+                按<b style={{ color: 'var(--foreground-secondary)' }}>任务输入精确匹配</b>回填参考输出；已标注的 case 会跳过，不覆盖人工标注。
+              </div>
+              {datasets.length === 0 ? (
+                <div style={{ padding: 22, textAlign: 'center', fontSize: 12, color: 'var(--foreground-muted)', border: '1px dashed var(--border-dark)', borderRadius: 10 }}>
+                  暂无可用数据集
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 320, overflowY: 'auto' }}>
+                  {datasets.map((ds) => (
+                    <button
+                      key={ds.id}
+                      onClick={() => importFromDataset(ds)}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 10, textAlign: 'left', cursor: 'pointer',
+                        border: '1px solid var(--border)', borderRadius: 10, padding: '10px 12px',
+                        background: 'var(--card-bg)', color: 'var(--foreground)', fontFamily: 'inherit',
+                      }}
+                    >
+                      <span style={{ fontSize: 12.5, fontWeight: 700, flex: 1 }}>{ds.name}</span>
+                      {ds.targetAgent && <span style={CHIP_MUT}>{ds.targetAgent}</span>}
+                      <span style={{ fontSize: 10.5, color: 'var(--foreground-muted)' }}>{(ds.cases ?? []).length} 条</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {datasetHint && (
+                <div style={{ marginTop: 12, fontSize: 12, color: 'var(--primary)' }}>{datasetHint}</div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ③ 存为数据集：已标注成果沉淀 */}
+        {saveOpen && (
+          <div style={MODAL_OV} onClick={(e) => { if (e.target === e.currentTarget) setSaveOpen(false); }}>
+            <div style={MODAL}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+                <b style={{ fontSize: 14.5 }}>存为数据集</b>
+                <span style={{ flex: 1 }} />
+                <button style={BTN_GHOST} onClick={() => setSaveOpen(false)}>✕ 关闭</button>
+              </div>
+              <div style={{ fontSize: 11.5, color: 'var(--foreground-muted)', marginBottom: 12, lineHeight: 1.6 }}>
+                将 <b style={{ color: 'var(--primary)' }}>{annotated}</b> 条已标注的预期答案存为评测数据集，后续实验可直接导入复用。
+              </div>
+              <label style={FIELDLBL}>数据集名称</label>
+              <input
+                value={datasetName}
+                onChange={(e) => setDatasetName(e.target.value)}
+                placeholder={`${name.trim() || '实验'}-预期答案`}
+                style={{
+                  width: '100%', height: 34, borderRadius: 8, border: '1px solid var(--input-border)',
+                  background: 'var(--input-bg)', color: 'var(--foreground)', padding: '0 11px', fontSize: 13, outline: 'none',
+                }}
+              />
+              {datasetHint && (
+                <div style={{ marginTop: 12, fontSize: 12, color: datasetHint.startsWith('保存失败') ? 'var(--error)' : 'var(--primary)' }}>
+                  {datasetHint}
+                </div>
+              )}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 9, marginTop: 16 }}>
+                <button style={BTN_GHOST} onClick={() => setSaveOpen(false)}>取消</button>
+                <button style={{ ...BTN_PRIMARY, opacity: datasetBusy ? 0.6 : 1 }} disabled={datasetBusy} onClick={saveAsDataset}>
+                  {datasetBusy ? '保存中…' : '保存数据集'}
+                </button>
+              </div>
             </div>
           </div>
         )}
