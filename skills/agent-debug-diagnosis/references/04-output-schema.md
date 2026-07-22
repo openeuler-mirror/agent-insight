@@ -248,7 +248,9 @@
 
 ## detectorFindings
 
-`detectorFindings` 只保存未与 AgentDebug `findings` 重复的专项发现。重复结果必须把有效证据并入 AgentDebug finding 后从本列表移除，且不保留专项来源。独立结果使用通用字段：`id`、`kind`、`severity`、`summary`、`facts`、`mechanism`、`faultChain`、`anchors`、`correctionGuidance`、`confidence`、`details`。前端不得依赖具体诊断器名称渲染。
+`detectorFindings` 由后端在第二阶段完成后加入最终报告；第一阶段 AgentDebug 主报告不生成该字段。它只保存未与 core `findings` 重复的专项结果。独立结果使用通用字段：`id`、`kind`、`severity`、`summary`、`facts`、`mechanism`、`faultChain`、`anchors`、`correctionGuidance`、`confidence`、`details`，以及可选的 `relatedFindingId`。前端不得依赖具体诊断器名称渲染，也不展示任何来源类标签。
+
+重复结果从 `detectorFindings` 移除，并由通用代码把原始 `summary`、`severity`、`facts`、`mechanism`、`faultChain`、`anchors`、`correctionGuidance`、`confidence`、`details` 无损写入目标 finding 的 `supplementalEvidence`。合并后的 finding 不保存诊断器名称或来源字段。
 
 专项结果中的确定性字段（计数、区间、比例、锚点）不得被语义富化或查重步骤改写。
 

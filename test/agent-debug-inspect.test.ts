@@ -171,7 +171,7 @@ test('agent-debug runner sends metadata and paths instead of a long turn summary
   assert.doesNotMatch(runner, /归一化 Step 摘要/);
   assert.doesNotMatch(runner, /turnToPromptRecord/);
   assert.doesNotMatch(runner, /40_000/);
-  assert.match(runner, /agent-debug-diagnosis-skill@0\.3/);
+  assert.match(runner, /agent-debug-diagnosis-skill@0\.4/);
   assert.match(reportStore, /"generator" = \?/);
   assert.match(route, /generator: AGENT_DEBUG_GENERATOR/);
 });

@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
+import { AgentDebugSupplementalEvidenceBlock } from '@/components/observe/AgentDebugSupplementalEvidence';
 import { StatusBadge } from '@/components/feedback/StatusBadge';
 import { ExpandableText } from '@/components/text/ExpandableText';
 import { TermPopover } from '@/components/text/TermPopover';
@@ -597,6 +598,7 @@ function ReportView({ report, zh, executionId, user, traceExplicitErrors, onNode
                 finding={finding}
                 index={findings.length + i}
                 zh={zh}
+                relatedFinding={findings.find(candidate => candidate.id === finding.relatedFindingId)}
                 expanded={expandedFindingIds.has(finding.id)}
                 onToggle={() => {
                   setExpandedFindingIds(prev => {
@@ -625,10 +627,11 @@ function ReportView({ report, zh, executionId, user, traceExplicitErrors, onNode
     </div>
   );
 }
-function DetectorFindingRow({ finding, index, zh, expanded, onToggle, onNodeRefClick }: {
+function DetectorFindingRow({ finding, index, zh, relatedFinding, expanded, onToggle, onNodeRefClick }: {
   finding: AgentDebugDetectorFinding;
   index: number;
   zh: boolean;
+  relatedFinding?: AgentDebugFinding;
   expanded: boolean;
   onToggle: () => void;
   onNodeRefClick?: (nodeId: string) => void;
@@ -656,10 +659,8 @@ function DetectorFindingRow({ finding, index, zh, expanded, onToggle, onNodeRefC
         <div className="min-w-0 flex-1">
           <div className="text-[13px] font-semibold leading-6 text-foreground">{sanitizeConclusionText(finding.summary)}</div>
           <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-foreground-muted">
-            <span className="inline-flex items-center gap-1 rounded bg-error-subtle px-1 py-0.5 text-error">
-              <Sparkles className="size-3" />{zh ? '专项发现' : 'Specialized finding'}
-            </span>
             {detailText && <span>{detailText}</span>}
+            {relatedFinding && <span>{zh ? '关联：' : 'Related: '}{sanitizeConclusionText(relatedFinding.summary)}</span>}
           </div>
         </div>
         {expanded ? <ChevronDown className="mt-1 size-3.5 shrink-0 text-foreground-muted" /> : <ChevronRight className="mt-1 size-3.5 shrink-0 text-foreground-muted" />}
@@ -867,6 +868,14 @@ function FindingCard({ finding, index, report, zh, expanded, traceExplicitErrors
                     {sanitizeReportText(finding.evidence)}
                   </p>
                 )}
+                {finding.supplementalEvidence?.map((evidence, evidenceIndex) => (
+                  <AgentDebugSupplementalEvidenceBlock
+                    key={evidenceIndex}
+                    evidence={evidence}
+                    zh={zh}
+                    onNodeRefClick={onNodeRefClick}
+                  />
+                ))}
                 <div className="grid gap-2 md:grid-cols-2">
                   {modules.map(module => (
                     <EvidenceModuleCard

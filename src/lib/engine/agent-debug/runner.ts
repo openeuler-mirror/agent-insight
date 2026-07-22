@@ -5,7 +5,9 @@ import { ensureTraceBundle } from '@/lib/engine/observability/trace-bundle';
 import fs from 'node:fs';
 import path from 'node:path';
 import { buildDebugTurns, hashInteractions } from './trace-adapter';
-import { normalizeDetectorFinding, runSkillDetectors } from './detector-runtime';
+import { runSkillDetectors } from './detector-runtime';
+import { reconcileDetectorFindings } from './finding-reconciler';
+import { requestDetectorMergeDecisions, writeDetectorAudit } from './detector-reconciliation';
 import { enrichDetectorFindings } from './finding-enricher';
 import { numberField, parseJsonObject, stringField } from './json';
 import type {
@@ -27,7 +29,7 @@ import type {
   DebugTurn,
 } from './types';
 
-export const AGENT_DEBUG_GENERATOR = 'agent-debug-diagnosis-skill@0.3';
+export const AGENT_DEBUG_GENERATOR = 'agent-debug-diagnosis-skill@0.4';
 
 const AGENT_DEBUG_SKILL_NAME = 'agent-debug-diagnosis';
 const FAULT_DIAGNOSIS_AGENT_NAME = 'fault-diagnosis-agent';
@@ -92,16 +94,10 @@ export async function runAgentDebugDiagnosis(args: {
   const inputRelPath = writeAgentDebugInput({
     workspaceDir,
     execution: args.execution,
-      executionId,
-      turns,
-      traceBundle,
-    });
-  const rawDetectorFindings = await runSkillDetectors({
-    inputPath: path.join(workspaceDir, inputRelPath),
-    mode: 'one_click',
+    executionId,
+    turns,
+    traceBundle,
   });
-  const enrichedDetectorFindings = await enrichDetectorFindings(rawDetectorFindings, turns, args.user);
-
   const result = await runGeneralAgent({
     user: args.user,
     query: buildAgentQuery({
@@ -111,7 +107,6 @@ export async function runAgentDebugDiagnosis(args: {
       traceBundle,
       inputRelPath,
       skillMountPath: mounted.mountPoint ? './.' + AGENT_DEBUG_SKILL_NAME : null,
-      detectorFindings: enrichedDetectorFindings,
     }),
     system,
     workspaceTag,
@@ -134,12 +129,35 @@ export async function runAgentDebugDiagnosis(args: {
   const phase1Grid = normalizePhase1Grid(parsed.phase1Grid);
   const issues = normalizeIssues(parsed.issues, phase1Grid);
   const parsedRootCause = normalizeRootCause(parsed.rootCause);
-  const findings = normalizeFindings(parsed.findings, issues, parsedRootCause);
-  const rootCause = parsedRootCause || projectFindingToRootCause(findings[0], issues);
+  const coreFindings = normalizeFindings(parsed.findings, issues, parsedRootCause);
   const triage = normalizeTriage(parsed.triage);
-  const detectorFindings = Array.isArray(parsed.detectorFindings)
-    ? parsed.detectorFindings.map(normalizeDetectorFinding).filter((finding): finding is AgentDebugDetectorFinding => Boolean(finding))
-    : enrichedDetectorFindings;
+  const rawDetectorFindings = await runSkillDetectors({
+    inputPath: path.join(workspaceDir, inputRelPath),
+    mode: 'one_click',
+  });
+  const enrichedDetectorFindings = await enrichDetectorFindings(rawDetectorFindings, turns, args.user);
+  const mergeDecisions = await requestDetectorMergeDecisions({
+    user: args.user,
+    sessionId: result.sessionId,
+    workspaceTag,
+    skillPrompt,
+    coreFindings,
+    detectorFindings: enrichedDetectorFindings,
+  });
+  const reconciled = reconcileDetectorFindings({
+    coreFindings,
+    detectorFindings: enrichedDetectorFindings,
+    decisions: mergeDecisions,
+  });
+  const findings = reconciled.findings;
+  const detectorFindings = reconciled.detectorFindings;
+  const rootCause = projectFindingToRootCause(findings[0], issues) || parsedRootCause;
+  writeDetectorAudit({
+    workspaceDir,
+    detectorFindings: enrichedDetectorFindings,
+    requestedDecisions: mergeDecisions,
+    appliedDecisions: reconciled.decisions,
+  });
 
   return {
     schemaVersion: 3,
@@ -162,7 +180,7 @@ export async function runAgentDebugDiagnosis(args: {
       stepCount: stepRecords.length || turns.length,
       candidateWindowCount: candidateWindows.length,
       issueCount: issues.length,
-      llmCallCount: 1,
+      llmCallCount: 1 + (enrichedDetectorFindings.length > 0 ? 1 : 0),
       durationMs: Date.now() - startedAt,
     },
   };
@@ -246,7 +264,6 @@ function buildAgentQuery(args: {
   traceBundle: ReturnType<typeof ensureTraceBundle>;
   inputRelPath: string;
   skillMountPath: string | null;
-  detectorFindings: AgentDebugDetectorFinding[];
 }): string {
   const executionBrief = {
     id: args.execution.id,
@@ -271,12 +288,8 @@ function buildAgentQuery(args: {
     '- 用户界面只展示左侧真实 trace 节点；所有 issue/root/cascade 必须尽量带 anchorId、traceStepIndex、traceNodeLabel。',
     '- 不要使用 read + offset 顺序读取大型 JSON，也不要临时编写 python3 -c 查询；使用 Skill 的 agentdebug_inspect.py 获取 summary/tail/range/search/repeated-calls。',
     '- 需要核对超长节点输入或输出时，使用 agentdebug_inspect.py search --scope artifact 定位完整 artifact 中的证据。',
-    '- AgentDebug 主诊断必须只基于 trace、静态检测和 AgentDebug 诊断规程；不要读取或推断 Skills 关键动作分析结果。',
-    '- 对下方已富化的专项诊断发现执行语义查重和关联：与 AgentDebug finding 重复时，把有效证据并入 AgentDebug finding，并从 detectorFindings 删除；不要保留专项来源。',
-    '- 仅将不重复且有独立价值的专项发现原样放入 detectorFindings；不得修改其中的计数、区间、比例和锚点。',
-    '',
-    '## 已富化的专项诊断发现',
-    compactJson(args.detectorFindings, 16000),
+    '- AgentDebug 主诊断必须只基于 trace、静态检测和 AgentDebug 诊断规程；不要读取或推断 Skills 关键动作分析、专项诊断器或后续合并结果。',
+    '- 本阶段生成的是冻结的 core findings；先完整保留所有机制和修复方向不同的 AgentDebug 发现，专项诊断将在本阶段完成后单独处理。',
     '',
     '## 执行记录',
     compactJson(executionBrief, 8000),

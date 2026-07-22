@@ -28,6 +28,7 @@ const RUNTIME_SYSTEM_SKILLS = {
     path.join('references', '05-one-click-workflow.md'),
     path.join('references', '06-follow-up-workflow.md'),
     path.join('references', '07-targeted-workflow.md'),
+    path.join('references', '08-detector-reconciliation.md'),
     path.join('scripts', 'detector_runner.py'),
     path.join('scripts', 'detector_validate.py'),
     path.join('scripts', 'agentdebug_inspect.py'),

@@ -83,6 +83,19 @@ export interface AgentDebugFinding {
   issueRefs: AgentDebugFindingIssueRef[];
   correctionGuidance: string;
   confidence: number;
+  supplementalEvidence?: AgentDebugSupplementalEvidence[];
+}
+
+export interface AgentDebugSupplementalEvidence {
+  summary: string;
+  severity: AgentDebugSeverity;
+  facts: string[];
+  mechanism: string;
+  faultChain: string[];
+  anchors: AgentDebugTrajectoryAnchor[];
+  correctionGuidance: string;
+  confidence: number;
+  details: Record<string, unknown>;
 }
 
 export type AgentDebugTrajectoryPattern = 'non_termination' | 'no_progress' | 'oscillation' | 'runaway_repetition';
@@ -151,6 +164,20 @@ export interface AgentDebugDetectorFinding {
   details: Record<string, unknown>;
   detector?: string;
   llmEnriched?: boolean;
+  relatedFindingId?: string;
+}
+
+export interface AgentDebugDetectorMergeDecision {
+  detectorFindingId: string;
+  action: 'merge' | 'independent';
+  targetFindingId?: string;
+  relatedFindingId?: string;
+  reason?: string;
+  patch?: {
+    severity?: AgentDebugSeverity;
+    impact?: AgentDebugFindingImpact;
+    confidence?: number;
+  };
 }
 
 export interface AgentDebugRootCause {

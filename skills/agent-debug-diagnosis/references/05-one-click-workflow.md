@@ -1,12 +1,22 @@
 # 一键诊断流程
 
-一键诊断运行现有 AgentDebug 五模块流程，同时接收服务端通用运行时已经执行和富化的专项诊断结果。
+一键诊断按顺序执行两个阶段，两个阶段都由同一个 AgentDebug Agent 完成。
 
-完成 Phase 2 后，对 `findings` 与专项结果做语义查重和关联：
+## 阶段一：冻结主诊断
 
-- 若是同一个问题，将专项结果中有效的事实和证据并入对应 AgentDebug finding，并从 `detectorFindings` 删除该专项结果；合并后的用户可见内容不保留专项来源。
-- 若不是同一个问题但存在因果关系，在 finding 的 evidence 或修复建议中建立关联。
-- 只有不重复且具有独立诊断价值的结果才写入 `detectorFindings`。
-- 不得改写专项结果里的确定性计数、区间、比例和证据锚点。
+先运行现有 AgentDebug 五模块流程。该阶段不能看到专项诊断结果，只根据 trace、静态检测和 AgentDebug 规程生成 `findings`。
 
-这里不增加新的结果编排 Agent；查重和关联是现有 AgentDebug Phase 2 的最后一步。
+机制或修复方向不同的问题必须保留为不同 finding；存在触发或上下游关系时使用 `issueRefs` 和故障链关联，不能为了压缩卡片数量而合并。阶段一返回的 `findings` 是冻结的 core findings。
+
+## 阶段二：专项结果查重与关联
+
+服务端通用运行时执行并富化适用的专项诊断器，然后把冻结的 core findings 与专项结果返回给同一个 AgentDebug Agent。该阶段只按 `references/08-detector-reconciliation.md` 输出合并决策，不重新运行五模块，不重新生成完整报告。
+
+通用代码应用决策：
+
+- 重复结果合入目标 core finding，原始计数、区间、比例和锚点无损保留；合并后的用户卡片不展示专项来源。
+- 只有因果关系但机制或修复方向不同的结果保持独立，可建立关联。
+- 未返回有效决策或目标 finding 不存在时，专项结果默认独立保留，不能静默消失。
+- 任何 core finding 都不能因为专项诊断介入而被删除。
+
+这里不增加新的结果编排 Agent；第二阶段是现有 AgentDebug Agent 的后续判断，结果由确定性通用代码应用。

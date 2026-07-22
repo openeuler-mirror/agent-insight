@@ -24,14 +24,14 @@ description: >
 
 ```text
 输入 JSON
-  -> scripts/agentdebug_static.py 进行确定性拆分和规则检测
-  -> scripts/agentdebug_inspect.py 提供有界的全局摘要与按需证据查询
-  -> 智能诊断 agent 补充语义检测和 Phase 2 根因归因
-  -> scripts/agentdebug_validate.py 校验最终报告
-  -> 输出一个中文 JSON 对象
+  -> AgentDebug 静态检测、五模块与 Phase 2
+  -> 冻结 core findings
+  -> 同一个 AgentDebug Agent 比较已富化专项结果
+  -> 输出 merge / independent 决策
+  -> 通用代码无损应用决策并生成最终报告
 ```
 
-项目后端只负责挂载 skill、提供输入文件和保存最终报告。拆分规则、检测规则、词表、校验逻辑都归这个 skill 管理。
+项目后端负责挂载 skill、提供输入、执行通用诊断器运行与富化、无损应用合并决策并保存报告。拆分规则、检测规则、词表、查重判定规则和校验逻辑都归这个 skill 管理。
 
 ## 一键诊断必须读取的资料
 
@@ -42,6 +42,7 @@ description: >
 3. `references/03-phase-analysis.md`
 4. `references/04-output-schema.md`
 5. 根据当前路线读取 `references/05-one-click-workflow.md`、`06-follow-up-workflow.md` 或 `07-targeted-workflow.md`
+6. 一键诊断第二阶段必须读取 `references/08-detector-reconciliation.md`
 
 ## 一键诊断必须执行的脚本
 
@@ -122,8 +123,9 @@ python3 .agent-debug-diagnosis/scripts/agentdebug_validate.py \
    - Action：脚本已覆盖大多数静态错误；只在必要时补充 `tool_misuse`。
    - System：复核超时、认证、上下文限制和系统性工具失败是否属于外部原因。
 7. 保留全部静态事实并追加语义问题，形成 Phase 1 错误网格。
-8. 执行 Phase 2，聚合最值得用户关注的 `findings`；`rootCause` 仅作为 `findings[0]` 的历史兼容投影。
-9. 写入 `.agent-insight/agent-debug-final.json`，使用 `--static` 对照校验后返回最终 JSON。
+8. 执行 Phase 2，聚合最值得用户关注的 core `findings`；机制或修复方向不同的问题不得合并。`rootCause` 仅作为 `findings[0]` 的历史兼容投影。
+9. 写入 `.agent-insight/agent-debug-final.json`，使用 `--static` 对照校验后返回冻结的主诊断 JSON。
+10. 后端随后发起第二阶段；只按 `08-detector-reconciliation.md` 比较 core findings 与专项结果并返回 decisions。
 
 ## 一键诊断输出要求
 
@@ -135,7 +137,6 @@ python3 .agent-debug-diagnosis/scripts/agentdebug_validate.py \
 - `issues`
 - `findings`
 - `rootCause`
-- `detectorFindings`（仅保留与 AgentDebug findings 不重复的专项发现）
 - `humanSummary`
 
 字段结构以 `references/04-output-schema.md` 为准。

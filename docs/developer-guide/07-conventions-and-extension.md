@@ -43,7 +43,7 @@
 
 ### 新增专项诊断器
 
-在 `skills/agent-debug-diagnosis/detectors/<name>/` 新增 `detector.json`、入口脚本和说明文件。清单声明唯一名称、版本、支持的 `one_click` / `targeted` 模式、症状关键词和入口文件。运行 `python3 skills/agent-debug-diagnosis/scripts/detector_validate.py` 校验；公共 runner 会自动发现，不修改服务端 TS 注册表、追问路由或前端组件。输出必须符合通用 detector finding 契约，诊断器特有数据放在 `details`。
+在 `skills/agent-debug-diagnosis/detectors/<name>/` 新增 `detector.json`、入口脚本和说明文件。清单声明唯一名称、版本、支持的 `one_click` / `targeted` 模式、症状关键词和入口文件。运行 `python3 skills/agent-debug-diagnosis/scripts/detector_validate.py` 校验；公共 runner 会自动发现，不修改服务端 TS 注册表、追问路由或前端组件。输出必须符合通用 detector finding 契约：用户可读的确定性事实放入 `facts`，原始计数、区间、比例等机器字段放入 `details`，证据节点放入 `anchors`。一键诊断的第二阶段只让 AgentDebug 返回合并决策，通用 reconciler 会保留原始结构化字段；新增诊断器不得要求 Agent 修改主报告字段，也不得依赖前端来源标签或专属组件。
 
 ## Boundaries — change with care
 - **生成物**：`node_modules/.prisma`、`.next/`、`next-env.d.ts`——绝不手工编辑。
