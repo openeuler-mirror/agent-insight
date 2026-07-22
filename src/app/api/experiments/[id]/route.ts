@@ -1,4 +1,5 @@
-// 实验详情：实验 + cases。results 现阶段恒为空数组（执行引擎后续里程碑写入）。
+// 实验详情：实验 + cases + results（执行引擎写入的每行 status/score/points/evidence）
+// 与进度统计 progress = {total, done, failed, pending}（running 计入 pending 口径）。
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/storage/prisma';
 import { resolveUser } from '@/lib/auth/auth';
@@ -16,7 +17,12 @@ export async function GET(
 
     const experiment = await prisma.experiment.findFirst({
       where: { id, ...(username ? { user: username } : {}) },
-      include: { cases: { orderBy: { createdAt: 'asc' } } },
+      include: {
+        cases: {
+          orderBy: { createdAt: 'asc' },
+          include: { results: { orderBy: { createdAt: 'asc' } } },
+        },
+      },
     });
     if (!experiment) {
       return NextResponse.json({ error: 'experiment not found' }, { status: 404 });
@@ -27,6 +33,31 @@ export async function GET(
       const parsed = JSON.parse(experiment.evaluatorIdsJson || '[]');
       if (Array.isArray(parsed)) evaluatorIds = parsed.map(String);
     } catch { /* 忽略脏数据 */ }
+
+    const parseJson = (s: string | null): unknown => {
+      if (!s) return null;
+      try { return JSON.parse(s); } catch { return null; }
+    };
+    const results = experiment.cases.flatMap((c: any) =>
+      c.results.map((r: any) => ({
+        id: r.id,
+        caseId: r.caseId,
+        evaluatorId: r.evaluatorId,
+        status: r.status,
+        score: r.score,
+        points: parseJson(r.pointsJson),
+        evidence: parseJson(r.evidenceJson),
+        errorMessage: r.errorMessage,
+        attempts: r.attempts,
+        durationMs: r.durationMs,
+      })),
+    );
+    const progress = {
+      total: results.length,
+      done: results.filter((r: any) => r.status === 'done').length,
+      failed: results.filter((r: any) => r.status === 'failed').length,
+      pending: results.filter((r: any) => r.status === 'pending' || r.status === 'running').length,
+    };
 
     return NextResponse.json({
       id: experiment.id,
@@ -44,8 +75,8 @@ export async function GET(
         actualOutput: c.actualOutput,
         referenceOutput: c.referenceOutput,
       })),
-      // 执行引擎未接入：详情先恒空，字段留位。
-      results: [],
+      results,
+      progress,
     });
   } catch (error) {
     console.error('[Experiment Detail Error]', error);
