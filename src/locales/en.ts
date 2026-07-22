@@ -199,6 +199,7 @@ export const en = {
     columnSettings: 'Columns',
     filterBusinessTag: 'Business tag',
     editTags: 'Edit tags',
+    addTag: 'Tag',
     noUserTags: 'No tags',
     noTagsAvailable: 'No tags available',
     newTagPlaceholder: 'New tag name',

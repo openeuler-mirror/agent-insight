@@ -826,6 +826,9 @@ function TracePageContent() {
                     <TraceDetailView
                         execution={selectedExecution}
                         onBack={() => handleSelectExecution(null)}
+                        availableTags={availableTags}
+                        onTagsChanged={handleTraceTagsChanged}
+                        onTagCreated={handleTraceTagCreated}
                     />
                 ) : (
                     <>
@@ -1183,9 +1186,15 @@ function TracePageContent() {
 function TraceDetailView({
     execution,
     onBack,
+    availableTags,
+    onTagsChanged,
+    onTagCreated,
 }: {
     execution: Execution;
     onBack: () => void;
+    availableTags: TraceUserTag[];
+    onTagsChanged: (executionId: string, tags: TraceUserTag[]) => void;
+    onTagCreated: (tag: TraceUserTag) => void;
 }) {
     const { t, locale } = useLocale();
     const { user } = useAuth();
@@ -1344,6 +1353,15 @@ function TraceDetailView({
                     }
                 />
                 {framework && <Tag variant="framework" icon={Terminal}>{getFrameworkLabel(framework)}</Tag>}
+
+                {/* 用户标签：在详情页原地打标，不必退回列表 */}
+                <TraceTagCell
+                    execution={execution}
+                    availableTags={availableTags}
+                    onTagsChanged={onTagsChanged}
+                    onTagCreated={onTagCreated}
+                    mode="button"
+                />
 
                 {(typeof tokens === 'number' && tokens > 0) || (typeof latency === 'number' && latency > 0) || (typeof cost === 'number' && cost > 0) ? (
                     <Separator orientation="vertical" className="h-5" />
@@ -1795,8 +1813,17 @@ function tagKindLabel(kind: TraceUserTag['kind'], locale: string): string {
 
 function UserTagChip({ tag, removable }: { tag: TraceUserTag; removable?: boolean }) {
     return (
-        <span className="inline-flex max-w-full items-center gap-1 rounded-sm border border-border bg-background px-1.5 py-0.5 text-xs text-foreground-secondary leading-none">
-            <span className="size-2 rounded-full shrink-0" style={{ backgroundColor: tag.color }} aria-hidden />
+        <span
+            title={tag.name}
+            className="inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-0.5 text-xs text-foreground leading-none"
+            // 标签色只用于描边/淡底，文字保持前景色：用户可自选任意颜色，
+            // 直接拿它当文字色在深浅主题下都可能读不清。
+            style={{
+                borderColor: `color-mix(in srgb, ${tag.color} 40%, transparent)`,
+                backgroundColor: `color-mix(in srgb, ${tag.color} 12%, transparent)`,
+            }}
+        >
+            <span className="size-1.5 rounded-full shrink-0" style={{ backgroundColor: tag.color }} aria-hidden />
             <span className="truncate">{tag.name}</span>
             {removable && <XIcon className="size-3 shrink-0 text-foreground-muted" aria-hidden />}
         </span>
@@ -1887,31 +1914,54 @@ function TraceTagCell({
     const versionTags = availableTags.filter(tag => tag.kind === 'version');
     const businessTags = availableTags.filter(tag => tag.kind === 'business');
 
+    // 列宽有限（默认 220px），超出的标签折叠成 +N，避免 wrap 撑高表格行
+    const visibleTags = selectedTags.slice(0, 2);
+    const overflowCount = selectedTags.length - visibleTags.length;
+    const allTagNames = selectedTags.map(tag => tag.name).join(locale === 'zh' ? '、' : ', ');
+
     const trigger = mode === 'button' ? (
-        <Button
+        <button
             type="button"
-            variant="outline"
-            size="sm"
-            className="h-7 gap-1.5 px-2 text-xs"
-            title={t('tracePage.editTags')}
+            title={selectedTags.length > 0 ? allTagNames : t('tracePage.editTags')}
             onClick={ev => ev.stopPropagation()}
+            className="group/tag inline-flex min-h-7 items-center gap-1.5 rounded-md border border-border-dark bg-card px-2 py-0.5 text-xs hover:bg-background-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-            <Plus className="size-3.5" aria-hidden />
-            {t('tracePage.editTags')}
-        </Button>
+            {selectedTags.length > 0 && (
+                <span className="flex flex-wrap items-center gap-1">
+                    {selectedTags.map(tag => <UserTagChip key={tag.id} tag={tag} />)}
+                </span>
+            )}
+            <span className="inline-flex items-center gap-1 text-foreground-muted group-hover/tag:text-primary">
+                <Plus className="size-3.5" aria-hidden />
+                {selectedTags.length === 0 && t('tracePage.addTag')}
+            </span>
+        </button>
     ) : (
         <button
             type="button"
-            className="flex min-h-7 w-full min-w-0 items-center gap-1.5 rounded-sm px-1 py-0.5 text-left hover:bg-background-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            title={t('tracePage.editTags')}
+            className="group/tag flex min-h-7 w-full min-w-0 items-center gap-1 rounded-sm px-1 py-0.5 text-left hover:bg-background-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            title={selectedTags.length > 0 ? allTagNames : t('tracePage.editTags')}
             onClick={ev => ev.stopPropagation()}
         >
-            <span className="flex min-w-0 flex-1 flex-wrap gap-1">
-                {selectedTags.map(tag => <UserTagChip key={tag.id} tag={tag} />)}
-            </span>
-            <span className="inline-flex size-6 shrink-0 items-center justify-center rounded-sm text-foreground-muted">
-                <Plus className="size-3.5" aria-hidden />
-            </span>
+            {selectedTags.length === 0 ? (
+                // 空态给一个虚线占位，而不是让一个孤立的 + 图标浮在列宽最右侧
+                <span className="inline-flex items-center gap-1 rounded-full border border-dashed border-border-dark px-2 py-0.5 text-xs text-foreground-muted group-hover/tag:border-primary group-hover/tag:text-primary">
+                    <Plus className="size-3" aria-hidden />
+                    {t('tracePage.addTag')}
+                </span>
+            ) : (
+                <>
+                    <span className="flex min-w-0 items-center gap-1">
+                        {visibleTags.map(tag => <UserTagChip key={tag.id} tag={tag} />)}
+                        {overflowCount > 0 && (
+                            <span className="shrink-0 rounded-full border border-border px-1.5 py-0.5 text-xs tabular-nums text-foreground-muted">
+                                +{overflowCount}
+                            </span>
+                        )}
+                    </span>
+                    <Plus className="size-3.5 shrink-0 text-foreground-muted opacity-0 transition-opacity group-hover/tag:opacity-100" aria-hidden />
+                </>
+            )}
         </button>
     );
 
