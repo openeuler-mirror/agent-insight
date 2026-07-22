@@ -13,6 +13,27 @@ import { getInternalAgentTag } from '@/lib/internal-agent-tag';
 import { triggerTrajectoryAutoWatchForTask } from '@/lib/engine/evaluation/trajectory-auto-watch';
 import { NextResponse } from 'next/server';
 
+/**
+ * 这一发 opencode 上报是不是"进行中快照"——是的话只落库，不跑异步 LLM 分析。
+ *
+ * 判定依据必须是**本轮对话是否跑完**，不能用 CLI 是否退出：opencode 正常交互式使用时
+ * CLI 会一直开着，拿 opencode_cli_completed 当门会把每一条 trace 都判成进行中，评分 /
+ * 诊断 / 流程图要等用户退出 opencode 才出，属于严重倒退（曾经上线过一版，已修）。
+ *
+ * trace_completed_at 由 uploader 在「已产出终稿 && 会话已 idle」时写入，正是本轮结束的
+ * 信号；工具死循环的心跳快照两个条件都不满足，自然落进轻通道。
+ */
+export function isInProgressOpencodeSnapshot(data: {
+    framework?: unknown;
+    trace_completed_at?: unknown;
+    opencode_cli_completed?: unknown;
+}): boolean {
+    if (String(data.framework ?? '').toLowerCase() !== 'opencode') return false;
+    if (data.opencode_cli_completed === true) return false;
+    if (String(data.trace_completed_at ?? '').trim()) return false;
+    return true;
+}
+
 export async function POST(request: Request) {
   try {
     const rawBody = await request.text();
@@ -270,7 +291,7 @@ export async function POST(request: Request) {
     // 若每次都跑完整分析：① 成本随任务时长线性叠加，输入还是越来越大的全量 trace；
     // ② 对一个尚未产出终稿的半截 trace，打分和失败归因本身没有意义，还会用中间态结论
     // 覆盖掉最终那次的正确结论。等 CLI 真正退出（opencode_cli_completed=true）再评一次。
-    const isInProgressOpencode = data.framework === 'opencode' && data.opencode_cli_completed !== true;
+    const isInProgressOpencode = isInProgressOpencodeSnapshot(data);
     if (isInProgressOpencode) {
         console.log(`[Upload-API] ⏳ In-progress opencode snapshot, saved without analysis: task_id=${data.task_id}`);
         return NextResponse.json({
