@@ -109,7 +109,6 @@ export async function POST(req: Request) {
       const { received, sessions } = await ingestJiuwenOtlp(body, { user: authenticatedUser });
       return NextResponse.json({ status: 'accepted', framework: 'jiuwenswarm', received, sessions });
     }
-    }
 
     const receivedAt = new Date().toISOString();
     const events = normalizeOtlpTraces(body, { receivedAt, authenticatedUser });
