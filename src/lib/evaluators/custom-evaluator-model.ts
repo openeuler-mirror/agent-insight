@@ -48,6 +48,10 @@ export interface EvaluatorCard {
   description: string;
   evaluatorType: EvaluatorType;
   source: EvaluatorSource;
+  /** 类目（注册时元数据，运行时不可变）：res=结果评测 / traj=轨迹评测。
+   *  决定该评估器结果在 Trace 评测详情的呈现板块与实验类目均分归属。
+   *  预置评估器由 registry 声明；自建评估器由创建表单填入。缺省视为 'res'。 */
+  category?: 'res' | 'traj';
   targetTypes: string[];
   objectives: string[];
   scenarios: string[];
