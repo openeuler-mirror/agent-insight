@@ -10,8 +10,9 @@ import { prisma } from '@/lib/storage/prisma';
 import { resolveUser } from '@/lib/auth/auth';
 import {
     normalizeWindow, planOf, bucketStarts, bucketLabel, pct,
-    isSuccess, rowTokens, rowCost, assignBuckets, type FleetRow,
+    isSuccess, rowTokens, rowCost, rowCacheSaved, concurrencyPerBucket, assignBuckets, type FleetRow,
 } from '@/lib/fleet/agg';
+import { parseCallStats } from '@/lib/fleet/call-stats';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,11 +23,13 @@ function aggregate(rows: FleetRow[], missing: Set<string>) {
     const toolCalls = rows.reduce((s, r) => s + (r.toolCallCount ?? 0), 0);
     const toolErrors = rows.reduce((s, r) => s + (r.toolCallErrorCount ?? 0), 0);
     const llmCalls = rows.reduce((s, r) => s + (r.llmCallCount ?? 0), 0);
-    let inputTok = 0, outputTok = 0, totalTok = 0, cost = 0;
+    let inputTok = 0, outputTok = 0, totalTok = 0, cost = 0, cacheRead = 0, cacheSaved = 0;
     for (const r of rows) {
         const tk = rowTokens(r);
         inputTok += tk.input; outputTok += tk.output; totalTok += tk.total;
         cost += rowCost(r, missing);
+        cacheRead += r.cacheReadInputTokens ?? 0;
+        cacheSaved += rowCacheSaved(r, missing);
     }
     return {
         traces: n,
@@ -41,6 +44,9 @@ function aggregate(rows: FleetRow[], missing: Set<string>) {
         inputTokens: inputTok,
         outputTokens: outputTok,
         totalCost: Math.round(cost * 1e6) / 1e6,
+        // 缓存命中率 = cacheRead ÷ (input + cacheRead)：走缓存的输入 token 占比（无 cache 埋点的行计 0 命中）。
+        cacheHitRate: (inputTok + cacheRead) ? Math.round((cacheRead / (inputTok + cacheRead)) * 1000) / 10 : 0,
+        cacheSavedUsd: Math.round(cacheSaved * 1e6) / 1e6,
     };
 }
 
@@ -66,10 +72,10 @@ export async function GET(req: Request) {
                 timestamp: true, latency: true, isAnswerCorrect: true,
                 toolCallCount: true, toolCallErrorCount: true, llmCallCount: true, failures: true,
                 inputTokens: true, outputTokens: true, tokens: true,
-                cacheReadInputTokens: true, cacheCreationInputTokens: true,
-                model: true, agentName: true, taskId: true,
+                cacheReadInputTokens: true, cacheCreationInputTokens: true, reasoningTokens: true,
+                model: true, agentName: true, taskId: true, callStats: true,
             },
-        })) as FleetRow[];
+        })) as (FleetRow & { callStats?: string | null })[];
 
         const missing = new Set<string>();
         const curRows = rows.filter((r) => r.timestamp.getTime() >= currentFrom);
@@ -82,17 +88,33 @@ export async function GET(req: Request) {
         const prev = aggregate(prevRows, missing);
 
         const bucketed = assignBuckets(curRows, starts, plan.step);
+        // 并发活跃 trace（区间重叠口径，只看 root trace——curRows 本身已过滤 isSubagent:false）
+        const concur = concurrencyPerBucket(curRows, starts, plan.step);
+        // B 档：per-trace 模型总耗时 / 开销残差（端到端 − 模型 − 工具，钳 ≥0）。
+        // 值来自 callStats 摘要的 sumMs（精确，非直方图估算）；无摘要的 trace 不参与分位。
+        const traceTimes = (r: FleetRow & { callStats?: string | null }) => {
+            const s = parseCallStats(r.callStats);
+            if (!s || (r.latency ?? 0) <= 0) return null;
+            let llmMs = 0, toolMs = 0;
+            for (const st of Object.values(s.llm)) llmMs += st.sumMs;
+            for (const st of Object.values(s.tool)) toolMs += st.sumMs;
+            const wallMs = (r.latency as number) * 1000;
+            return { llmMs, overheadMs: Math.max(0, wallMs - llmMs - toolMs) };
+        };
         const buckets = starts.map((start, i) => {
             const inb = bucketed[i];
             const n = inb.length;
             const success = inb.filter(isSuccess).length;
             const fail = n - success;
             const latencies = inb.map((r) => r.latency).filter((v): v is number => v != null && v > 0);
-            let inputTok = 0, outputTok = 0, cost = 0;
+            let inputTok = 0, outputTok = 0, cost = 0, cacheRead = 0, cacheSaved = 0, reasonTok = 0;
             for (const r of inb) {
                 const tk = rowTokens(r);
                 inputTok += tk.input; outputTok += tk.output;
                 cost += rowCost(r, missing);
+                cacheRead += r.cacheReadInputTokens ?? 0;
+                cacheSaved += rowCacheSaved(r, missing);
+                reasonTok += r.reasoningTokens ?? 0;
             }
             const totalTok = inputTok + outputTok;
             return {
@@ -107,6 +129,27 @@ export async function GET(req: Request) {
                 cost: Math.round(cost * 1e6) / 1e6,
                 avgTokens: n ? Math.round(totalTok / n) : 0,
                 avgCost: n ? Math.round((cost / n) * 1e6) / 1e6 : 0,
+                cacheHitRate: (inputTok + cacheRead) ? Math.round((cacheRead / (inputTok + cacheRead)) * 1000) / 10 : 0,
+                cacheSavedUsd: Math.round(cacheSaved * 1e6) / 1e6,
+                reasoningTokens: reasonTok,
+                visibleOutputTokens: Math.max(0, outputTok - reasonTok),
+                concurrencyPeak: concur[i].peak,
+                concurrencyAvg: concur[i].avg,
+                ...(() => {
+                    const tt = inb.map((r) => traceTimes(r as FleetRow & { callStats?: string | null }))
+                        .filter((x): x is { llmMs: number; overheadMs: number } => x != null);
+                    const llmS = tt.map((x) => x.llmMs / 1000), ovhS = tt.map((x) => x.overheadMs / 1000);
+                    const r2 = (v: number) => Math.round(v * 100) / 100;
+                    return {
+                        modelTimeP50: tt.length ? r2(pct(llmS, 0.5)) : null,
+                        modelTimeP95: tt.length ? r2(pct(llmS, 0.95)) : null,
+                        modelTimeP99: tt.length ? r2(pct(llmS, 0.99)) : null,
+                        overheadP50: tt.length ? r2(pct(ovhS, 0.5)) : null,
+                        overheadP95: tt.length ? r2(pct(ovhS, 0.95)) : null,
+                        overheadP99: tt.length ? r2(pct(ovhS, 0.99)) : null,
+                        statTraces: tt.length,
+                    };
+                })(),
             };
         });
 

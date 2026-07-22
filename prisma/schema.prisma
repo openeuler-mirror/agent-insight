@@ -98,6 +98,9 @@ model Execution {
   // 写入时从 trace interactions 预解析的 agent 名列表(JSON string[],来自 extractObservedAgentNames)。
   // 让轻量列表(fields=light)无需加载/解析 session interactions 即可拿到完整 agents,根治堆 OOM 又不丢数据。
   observedAgents       String?
+  // 写入时预解析的 per-call 统计摘要(固定体积对数桶直方图,大盘 B 档面板消费,
+  // 结构见 src/lib/fleet/call-stats.ts / docs/design/fleet-dashboard-tier-b-preparse-risk.md)。
+  callStats            String?
 
   // --- 多 Agent 拆分字段 ---
   // 一次主 agent 的 trace 会被拆成 1 条 root execution + N 条 sub-agent execution，
