@@ -1,5 +1,7 @@
 import crypto from 'node:crypto';
 
+import { migrateAgentDebugReport } from './report-migration';
+
 import { prismaRaw } from '@/lib/storage/prisma';
 import type {
   AgentDebugReportPayload,
@@ -275,7 +277,7 @@ export async function deleteAgentDebugSkillsAnalysis(executionId: string) {
 export function parseReportPayload(row: AgentDebugReportRow | null): AgentDebugReportPayload | null {
   if (!row?.reportJson) return null;
   try {
-    return stripEmbeddedSkillsAnalysis(JSON.parse(row.reportJson) as AgentDebugReportPayload);
+    return migrateAgentDebugReport(stripEmbeddedSkillsAnalysis(JSON.parse(row.reportJson) as AgentDebugReportPayload));
   } catch {
     return null;
   }

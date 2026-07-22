@@ -5,12 +5,13 @@ import { ensureTraceBundle } from '@/lib/engine/observability/trace-bundle';
 import fs from 'node:fs';
 import path from 'node:path';
 import { buildDebugTurns, hashInteractions } from './trace-adapter';
-import { detectTrajectoryFindings } from './trajectory-detector';
-import { enrichTrajectoryFindings } from './trajectory-enricher';
+import { normalizeDetectorFinding, runSkillDetectors } from './detector-runtime';
+import { enrichDetectorFindings } from './finding-enricher';
 import { numberField, parseJsonObject, stringField } from './json';
 import type {
   AgentDebugIssue,
   AgentDebugCandidateWindow,
+  AgentDebugDetectorFinding,
   AgentDebugFinding,
   AgentDebugFindingImpact,
   AgentDebugFindingIssueRole,
@@ -26,7 +27,7 @@ import type {
   DebugTurn,
 } from './types';
 
-export const AGENT_DEBUG_GENERATOR = 'agent-debug-diagnosis-skill@0.2';
+export const AGENT_DEBUG_GENERATOR = 'agent-debug-diagnosis-skill@0.3';
 
 const AGENT_DEBUG_SKILL_NAME = 'agent-debug-diagnosis';
 const FAULT_DIAGNOSIS_AGENT_NAME = 'fault-diagnosis-agent';
@@ -52,13 +53,10 @@ export async function runAgentDebugDiagnosis(args: {
   const interactionHash = hashInteractions(interactions);
   const turns = buildDebugTurns(interactions);
   const candidateWindows: AgentDebugCandidateWindow[] = [];
-  // 轨迹诊断器：确定性、零 LLM 成本，直接在完整 turns 上找循环 / 无进展，
-  // 与逐-step 认知诊断并行，结果并入报告 trajectoryFindings。
-  const trajectoryFindings = detectTrajectoryFindings(turns);
 
   if (turns.length === 0) {
     return {
-      schemaVersion: 2,
+      schemaVersion: 3,
       generator: AGENT_DEBUG_GENERATOR,
       executionId,
       interactionHash,
@@ -68,7 +66,7 @@ export async function runAgentDebugDiagnosis(args: {
       rootCause: null,
       issues: [],
       findings: [],
-      trajectoryFindings,
+      detectorFindings: [],
       phase1Grid: [],
       stepRecords: [],
       candidateWindows,
@@ -98,6 +96,11 @@ export async function runAgentDebugDiagnosis(args: {
       turns,
       traceBundle,
     });
+  const rawDetectorFindings = await runSkillDetectors({
+    inputPath: path.join(workspaceDir, inputRelPath),
+    mode: 'one_click',
+  });
+  const enrichedDetectorFindings = await enrichDetectorFindings(rawDetectorFindings, turns, args.user);
 
   const result = await runGeneralAgent({
     user: args.user,
@@ -107,7 +110,8 @@ export async function runAgentDebugDiagnosis(args: {
       turns,
       traceBundle,
       inputRelPath,
-      skillMountPath: mounted.mountPoint ? `./.${AGENT_DEBUG_SKILL_NAME}` : null,
+      skillMountPath: mounted.mountPoint ? './.' + AGENT_DEBUG_SKILL_NAME : null,
+      detectorFindings: enrichedDetectorFindings,
     }),
     system,
     workspaceTag,
@@ -133,12 +137,12 @@ export async function runAgentDebugDiagnosis(args: {
   const findings = normalizeFindings(parsed.findings, issues, parsedRootCause);
   const rootCause = parsedRootCause || projectFindingToRootCause(findings[0], issues);
   const triage = normalizeTriage(parsed.triage);
-  // 把确定性检测到的循环 finding 统一交给 LLM 富化（基于真实证据写机制/故障链/建议）；
-  // 一次调用处理全部；失败则降级回确定性文案。
-  const enrichedTrajectoryFindings = await enrichTrajectoryFindings(trajectoryFindings, turns, args.user);
+  const detectorFindings = Array.isArray(parsed.detectorFindings)
+    ? parsed.detectorFindings.map(normalizeDetectorFinding).filter((finding): finding is AgentDebugDetectorFinding => Boolean(finding))
+    : enrichedDetectorFindings;
 
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     generator: AGENT_DEBUG_GENERATOR,
     executionId,
     interactionHash,
@@ -148,7 +152,7 @@ export async function runAgentDebugDiagnosis(args: {
     rootCause,
     issues,
     findings,
-    trajectoryFindings: enrichedTrajectoryFindings,
+    detectorFindings,
     phase1Grid,
     stepRecords,
     candidateWindows,
@@ -242,6 +246,7 @@ function buildAgentQuery(args: {
   traceBundle: ReturnType<typeof ensureTraceBundle>;
   inputRelPath: string;
   skillMountPath: string | null;
+  detectorFindings: AgentDebugDetectorFinding[];
 }): string {
   const executionBrief = {
     id: args.execution.id,
@@ -267,6 +272,11 @@ function buildAgentQuery(args: {
     '- 不要使用 read + offset 顺序读取大型 JSON，也不要临时编写 python3 -c 查询；使用 Skill 的 agentdebug_inspect.py 获取 summary/tail/range/search/repeated-calls。',
     '- 需要核对超长节点输入或输出时，使用 agentdebug_inspect.py search --scope artifact 定位完整 artifact 中的证据。',
     '- AgentDebug 主诊断必须只基于 trace、静态检测和 AgentDebug 诊断规程；不要读取或推断 Skills 关键动作分析结果。',
+    '- 对下方已富化的专项诊断发现执行语义查重和关联：与 AgentDebug finding 重复时，把有效证据并入 AgentDebug finding，并从 detectorFindings 删除；不要保留专项来源。',
+    '- 仅将不重复且有独立价值的专项发现原样放入 detectorFindings；不得修改其中的计数、区间、比例和锚点。',
+    '',
+    '## 已富化的专项诊断发现',
+    compactJson(args.detectorFindings, 16000),
     '',
     '## 执行记录',
     compactJson(executionBrief, 8000),

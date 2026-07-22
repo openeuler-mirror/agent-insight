@@ -136,6 +136,23 @@ export interface AgentDebugTrajectoryFinding {
   llmEnriched?: boolean;
 }
 
+export interface AgentDebugDetectorFinding {
+  id: string;
+  kind: string;
+  pattern?: string;
+  severity: AgentDebugSeverity;
+  summary: string;
+  facts: string[];
+  mechanism: string;
+  faultChain: string[];
+  anchors: AgentDebugTrajectoryAnchor[];
+  correctionGuidance: string;
+  confidence: number;
+  details: Record<string, unknown>;
+  detector?: string;
+  llmEnriched?: boolean;
+}
+
 export interface AgentDebugRootCause {
   criticalStep: number | null;
   criticalTraceStepIndex?: number | null;
@@ -248,7 +265,7 @@ export interface AgentDebugSkillsAnalysis {
 }
 
 export interface AgentDebugReportPayload {
-  schemaVersion: 1 | 2;
+  schemaVersion: 1 | 2 | 3;
   generator: string;
   executionId: string;
   interactionHash: string;
@@ -258,8 +275,10 @@ export interface AgentDebugReportPayload {
   rootCause: AgentDebugRootCause | null;
   issues: AgentDebugIssue[];
   findings?: AgentDebugFinding[];
-  /** 轨迹诊断器产出的循环 / 无进展类 finding，与认知 findings 并列（确定性、零 LLM 成本）。 */
+  /** 旧报告兼容：读取时会迁移为 detectorFindings。 */
   trajectoryFindings?: AgentDebugTrajectoryFinding[];
+  /** 未与 AgentDebug findings 重复、需要单独展示的专项诊断发现。 */
+  detectorFindings?: AgentDebugDetectorFinding[];
   phase1Grid?: AgentDebugPhase1Cell[];
   stepRecords?: AgentDebugStepRecord[];
   candidateWindows: AgentDebugCandidateWindow[];

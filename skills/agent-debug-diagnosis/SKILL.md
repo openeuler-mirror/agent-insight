@@ -1,16 +1,26 @@
 ---
 name: agent-debug-diagnosis
 description: >
-  用 AgentDebug v0.4 风格的规则加算法诊断 Agent Insight 执行轨迹。适用于智能诊断、
-  执行失败、工具调用异常、结果偏差、认知根因分析。该 skill 必须先运行 scripts 下的
-  Python 静态分析脚本，再由智能诊断 agent 补充语义判断和根因归因，最后输出中文 JSON 报告。
+  统一处理 Agent Insight 的一键诊断、普通诊断追问和定向查因。一键诊断运行 AgentDebug
+  五模块及适用的专项诊断器；普通追问保持现有问答；定向查因仅额外调用命中的专项诊断器，
+  不运行五模块。专项诊断器通过 detectors/*/detector.json 自注册。
 ---
 
 # agent-debug-diagnosis
 
 ## 任务目标
 
-对 Agent Insight 的一次执行记录运行 AgentDebug 认知诊断流水线：
+用同一个 Skill 承载三条互斥路线：一键诊断、普通追问、定向查因。
+
+## 路由边界
+
+1. **一键诊断**：请求明确来自一键诊断入口。运行现有 AgentDebug 五模块，并执行所有支持 `one_click` 的专项诊断器。详见 `references/05-one-click-workflow.md`。
+2. **普通追问**：用户问题未命中专项诊断器。保持现有追问流程，不运行五模块和专项诊断器。详见 `references/06-follow-up-workflow.md`。
+3. **定向查因**：用户问题命中 `detectors/*/detector.json` 中的症状关键词。在普通追问基础上使用匹配诊断器的结果，不运行五模块。详见 `references/07-targeted-workflow.md`。
+
+诊断器注册机制：每个诊断器目录必须包含 `detector.json`；公共 `scripts/detector_runner.py` 扫描这些清单完成发现、匹配和执行。服务端不维护诊断器名称列表，也不包含诊断器业务规则。
+
+一键诊断的 AgentDebug 认知诊断流水线：
 
 ```text
 输入 JSON
@@ -23,16 +33,17 @@ description: >
 
 项目后端只负责挂载 skill、提供输入文件和保存最终报告。拆分规则、检测规则、词表、校验逻辑都归这个 skill 管理。
 
-## 必须读取的资料
+## 一键诊断必须读取的资料
 
-诊断前必须按需读取这些文件。不要只凭本文件自由发挥。
+仅一键诊断需要按需读取这些文件。普通追问和定向查因只读取各自路线文件，不执行下述 AgentDebug 脚本。
 
 1. `references/01-input-and-extraction.md`
 2. `references/02-error-taxonomy.md`
 3. `references/03-phase-analysis.md`
 4. `references/04-output-schema.md`
+5. 根据当前路线读取 `references/05-one-click-workflow.md`、`06-follow-up-workflow.md` 或 `07-targeted-workflow.md`
 
-## 必须执行的脚本
+## 一键诊断必须执行的脚本
 
 后端会在提示中给出输入文件路径，通常是：
 
@@ -74,7 +85,7 @@ python3 .agent-debug-diagnosis/scripts/agentdebug_validate.py \
 
 如果校验报错，先修正 JSON 再重新校验。校验只警告时，可以返回最终 JSON，但应优先修正明显的英文说明和缺失证据。
 
-## 不可违反的规则
+## 一键诊断不可违反的规则
 
 - 最终回答只能是一个 JSON 对象，不能有 Markdown 代码块，不能有额外解释。
 - 所有自然语言报告字段必须用中文；枚举值保留英文。
@@ -97,7 +108,7 @@ python3 .agent-debug-diagnosis/scripts/agentdebug_validate.py \
 - 不要修改用户项目文件，不要重新执行被诊断的用户任务。
 - 只允许执行本 skill 的分析/校验脚本，以及读取 trace 资料包。
 
-## 诊断流程
+## 一键诊断流程
 
 1. 读取输入文件路径、skill 挂载目录、静态输出路径和最终报告路径。
 2. 读取上述四份 references，确认拆分、词表、Phase 1、Phase 2 和输出协议。
@@ -114,7 +125,7 @@ python3 .agent-debug-diagnosis/scripts/agentdebug_validate.py \
 8. 执行 Phase 2，聚合最值得用户关注的 `findings`；`rootCause` 仅作为 `findings[0]` 的历史兼容投影。
 9. 写入 `.agent-insight/agent-debug-final.json`，使用 `--static` 对照校验后返回最终 JSON。
 
-## 输出要求
+## 一键诊断输出要求
 
 必须返回这些顶层字段：
 
@@ -124,6 +135,7 @@ python3 .agent-debug-diagnosis/scripts/agentdebug_validate.py \
 - `issues`
 - `findings`
 - `rootCause`
+- `detectorFindings`（仅保留与 AgentDebug findings 不重复的专项发现）
 - `humanSummary`
 
 字段结构以 `references/04-output-schema.md` 为准。

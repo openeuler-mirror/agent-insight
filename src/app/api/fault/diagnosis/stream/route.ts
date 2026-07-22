@@ -13,6 +13,8 @@ import {
   parseSkillsAnalysisPayload,
 } from '@/lib/engine/agent-debug/report-store';
 import { hashInteractions } from '@/lib/engine/agent-debug/trace-adapter';
+import { runTargetedDiagnosis } from '@/lib/engine/agent-debug/interactive-diagnosis';
+import { loadFileBasedSkillPrompt, mountFileBasedSkillResources } from '@/lib/engine/general-agent/skills-fs-loader';
 import type { AgentDebugReportPayload, AgentDebugSkillsAnalysis } from '@/lib/engine/agent-debug/types';
 
 export const dynamic = 'force-dynamic';
@@ -75,6 +77,10 @@ trace 资料包读取规则：
 - 如果证据不足，明确说"当前证据不足"，然后列出需要补充的日志或字段。
 - 不要编造不存在的接口、文件路径、日志行或配置项。
 - 默认用中文回答，除非用户明确要求其他语言。`;
+
+function buildFaultDiagnosisSystemPrompt(): string {
+  return [SYSTEM_PROMPT, loadFileBasedSkillPrompt('agent-debug-diagnosis')].join('\n\n');
+}
 
 function compactJson(value: unknown, max = 12_000): string {
   let text = '';
@@ -317,6 +323,8 @@ export async function POST(request: Request) {
   const executionBrief = compactJson(body.executionBrief, 14_000);
   const agentDebugContext = await formatAgentDebugContext(executionId, interactions);
   const conversationHistory = formatConversationHistory(previousMessages);
+  mountFileBasedSkillResources('agent-debug-diagnosis', workspaceDir);
+  const targetedFindings = await runTargetedDiagnosis({ workspaceDir, interactions, query: message, user });
   const query = [
     '下面是用户当前打开的故障记录上下文，请只基于这些证据和后续用户问题作答。',
     '',
@@ -345,6 +353,14 @@ export async function POST(request: Request) {
       '4. 如果 nodeFile 的 input/output 带 artifactPath，只在需要原文证据时读取对应 artifacts/*.txt。',
       '5. 回答引用节点时使用 @[nodeId:nodeLabel] 格式。',
     ].join('\n'),
+    '',
+    targetedFindings.length ? '## 定向查因补充结果' : '## 追问路由',
+    targetedFindings.length
+      ? compactJson(targetedFindings, 12000)
+      : '未匹配到专项诊断器；按普通追问流程作答。',
+    targetedFindings.length
+      ? '这些结果来自确定性专项诊断。结合现有上下文回答用户，但不要运行 AgentDebug 五模块；不得改变计数、区间、比例和锚点。'
+      : '不要调用专项诊断器，也不要运行 AgentDebug 五模块。',
     '',
     '## 用户问题',
     message,
@@ -403,13 +419,13 @@ export async function POST(request: Request) {
         () => runGeneralAgent({
           user,
           query,
-          system: SYSTEM_PROMPT,
+          system: buildFaultDiagnosisSystemPrompt(),
           sessionId,
           workspaceTag,
           sessionTitle: executionId ? `fault-diagnosis · ${executionId}` : 'fault-diagnosis',
           systemAgentName: 'fault-diagnosis-agent',
           recordTraceAs: 'fault-diagnosis-agent',
-          tagSkill: 'fault-diagnosis',
+          tagSkill: 'agent-debug-diagnosis',
           interactionPolicy: 'auto-deny',
           agent: 'plan',
           handlers,
