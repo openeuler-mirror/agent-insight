@@ -1,6 +1,6 @@
 // 舰队大盘 · 共享聚合口径（单一来源，保证 AC-G7 各端点口径一致）。
 // 时间窗分桶、分位、成功判定、token/成本口径统一放这里，trends / breakdowns 端点共用。
-import { getModelPricing, calculateCost } from '@/lib/shared/model-config';
+import { getModelPricing, calculateCost, DEFAULT_CACHE_READ_RATIO } from '@/lib/shared/model-config';
 
 export type WindowKind = '1d' | '1w' | '1m';
 export const HOUR_MS = 3_600_000;
@@ -59,6 +59,8 @@ export interface FleetRow {
     tokens?: number | null;
     cacheReadInputTokens?: number | null;
     cacheCreationInputTokens?: number | null;
+    reasoningTokens?: number | null;
+    maxSingleCallTokens?: number | null;
     model?: string | null;
     agentName?: string | null;
     observedAgents?: string | null;
@@ -101,6 +103,47 @@ export function rowCost(e: FleetRow, missing: Set<string>): number {
         e.cacheReadInputTokens ?? 0,
         e.cacheCreationInputTokens ?? 0,
     );
+}
+
+/**
+ * 缓存节省成本（USD）：cacheRead × (输入价 − 缓存读价)。
+ * = 「这些 token 若未命中缓存、按全价 input 计费」相对实际缓存价的差额。单价缺失按 0 计（与 rowCost 同口径）。
+ */
+export function rowCacheSaved(e: FleetRow, missing: Set<string>): number {
+    const cacheRead = e.cacheReadInputTokens ?? 0;
+    if (cacheRead <= 0) return 0;
+    const model = e.model || '';
+    const pr = getModelPricing(model);
+    if (!pr) { if (model) missing.add(model); return 0; }
+    const readPrice = pr.pricing.cacheReadInputTokenPrice ?? pr.pricing.inputTokenPrice * DEFAULT_CACHE_READ_RATIO;
+    return Math.max(0, cacheRead * (pr.pricing.inputTokenPrice - readPrice)) / 1_000_000;
+}
+
+/**
+ * 并发活跃 trace：把每条 trace 视为区间 [timestamp, timestamp+latency)（timestamp=最早事件时间，即开始时间）。
+ * 每桶返回 peak（桶内瞬时并发峰值，扫描线）与 avg（Σ桶内活跃时长 ÷ 桶长，即时间加权平均并发）。
+ */
+export function concurrencyPerBucket(
+    rows: FleetRow[], starts: number[], step: number,
+): { peak: number; avg: number }[] {
+    const intervals = rows
+        .filter((r) => (r.latency ?? 0) > 0)
+        .map((r) => { const s = r.timestamp.getTime(); return [s, s + (r.latency as number) * 1000] as const; });
+    return starts.map((bStart) => {
+        const bEnd = bStart + step;
+        let overlapMs = 0;
+        const events: [number, number][] = [];
+        for (const [s, e] of intervals) {
+            const from = Math.max(s, bStart), to = Math.min(e, bEnd);
+            if (to <= from) continue;
+            overlapMs += to - from;
+            events.push([from, 1], [to, -1]);
+        }
+        events.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+        let cur = 0, peak = 0;
+        for (const [, d] of events) { cur += d; if (cur > peak) peak = cur; }
+        return { peak, avg: Math.round((overlapMs / step) * 10) / 10 };
+    });
 }
 
 /** 一条 root trace 参与的 distinct agent 数（编排复杂度用）。 */

@@ -3,6 +3,7 @@ import path from 'path';
 import { resolveAgentInsightDataPath } from '@/lib/env';
 import { judgeAnswer } from '@/lib/engine/evaluation/judge';
 import { normalizeEndpointUrl } from '@/lib/infra/endpoint-resolve';
+import { computeCallStats } from '@/lib/fleet/call-stats';
 import { db, prisma, prismaRaw } from '@/lib/storage/prisma';
 import { getModelPricing, calculateCost, getModelContextWindow, DEFAULT_CACHE_READ_RATIO, DEFAULT_CACHE_CREATION_RATIO } from '@/lib/shared/model-config';
 import {
@@ -2877,6 +2878,27 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
         }
         if (targetRecord.framework === 'opencode' && targetRecord.opencode_cli_completed === true) {
             await db.updateSession(targetRecord.task_id, { endTime: new Date() });
+        }
+    }
+
+    // 大盘 B 档：基于内存中的全量 merged interactions 预解析 per-call 摘要（零额外 JSON.parse，
+    // 单遍 O(n)，全量重算幂等覆盖）。失败降级 null，绝不阻断主写入。
+    if (Array.isArray(mergedInteractionsForSession)) {
+        let callStatsJson: string | null = null;
+        try {
+            callStatsJson = JSON.stringify(computeCallStats(mergedInteractionsForSession, {
+                fallbackModel: targetRecord.model ?? null,
+                failures: targetRecord.failures ? JSON.stringify(targetRecord.failures) : null,
+            }));
+        } catch (e) {
+            console.warn(`[Data-Service] computeCallStats failed for ${recordId}:`, e);
+        }
+        if (callStatsJson) {
+            try {
+                await prismaRaw.execution.update({ where: { id: recordId }, data: { callStats: callStatsJson } });
+            } catch (e) {
+                console.warn(`[Data-Service] callStats persist failed for ${recordId}:`, e);
+            }
         }
     }
 
