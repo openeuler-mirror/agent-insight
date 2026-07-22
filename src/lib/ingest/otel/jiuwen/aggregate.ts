@@ -4,7 +4,7 @@
  * agent-core's built-in OTLP exporter pushes its OTEL spans straight to
  * /api/ingest/otel/v1/traces; the route branches on resource service.name ===
  * "jiuwenswarm" and calls this aggregator. This is the TS port of the validated
- * Python bridge (`docs/designs/agents/jiuwenswarm-tracing/assets/insight_bridge.py`):
+ * Python bridge (`docs/design/jiuwenswarm-tracing/assets/insight_bridge.py`):
  * it rebuilds the agent tree from the (single-trace, nested) span set agent-core
  * emits since the develop rework (8b2a384) and maps it to an ExecutionRecord.
  *

@@ -5,7 +5,7 @@ status: validated
 created: 2026-06-13
 spike_dir: .spike/jiuwenswarm-tracing/
 related_code: []   # 落地后填：bridge / exporter 的最终位置
-human_summary: ../../humans/jiuwenswarm-tracing/index.html
+human_summary: ./index.html
 ---
 
 # 把 agent-insight 接入 openJiuwen / JiuwenSwarm —— 一次执行的端到端追踪（OTEL seam）

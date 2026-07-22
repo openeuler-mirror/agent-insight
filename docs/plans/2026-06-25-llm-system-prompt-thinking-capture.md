@@ -95,7 +95,7 @@ adapter 需要在 assistant 交互上挂一个 `parts` 数组，其中含 `type:
 ### 3.4 JiuwenSwarm —— 系统提示词已采到未解析；思考过程需确认上游
 
 - **系统提示词**：每个 `llm.call` span 都带 indexed 的 `gen_ai.prompt.{n}.role` / `gen_ai.prompt.{n}.content`，system 就在 `role=system` 那条。`userPromptContent` 已在遍历这些属性，但只为找 user query，遇到 system 直接跳过：[`jiuwen/aggregate.ts:171`](../../src/lib/ingest/otel/jiuwen/aggregate.ts#L171)。
-- **思考过程**：`completion()` 只读 `gen_ai.completion.0.content`，对 reasoning 零处理：[`jiuwen/aggregate.ts:108`](../../src/lib/ingest/otel/jiuwen/aggregate.ts#L108)。设计文档已规划**新增 `llm.reasoning` span（挂 llm.call 下）**：[`design.md:171`](../designs/agents/jiuwenswarm-tracing/design.md#L171)，但当前 TS bridge 不读取它，且需确认线上 agent-core 是否真的 emit 了 reasoning 正文。
+- **思考过程**：`completion()` 只读 `gen_ai.completion.0.content`，对 reasoning 零处理：[`jiuwen/aggregate.ts:108`](../../src/lib/ingest/otel/jiuwen/aggregate.ts#L108)。设计文档已规划**新增 `llm.reasoning` span（挂 llm.call 下）**：[`design.md:171`](../design/jiuwenswarm-tracing/design.md#L171)，但当前 TS bridge 不读取它，且需确认线上 agent-core 是否真的 emit 了 reasoning 正文。
 
 ---
 
@@ -177,4 +177,4 @@ Claude Code 的 thinking 和系统提示词一样：原始体已落盘（`OTEL_L
 | Hermes 插件抽可见文本 | [`hermes_agent_insight_plugin.py:98`](../../scripts/hermes_agent_insight_plugin.py#L98)、[`:664`](../../scripts/hermes_agent_insight_plugin.py#L664) |
 | Hermes adapter 只取 user | [`otel/adapters/hermes.ts:205`](../../src/lib/ingest/otel/adapters/hermes.ts#L205) |
 | Jiuwen prompt/completion 解析 | [`jiuwen/aggregate.ts:108`](../../src/lib/ingest/otel/jiuwen/aggregate.ts#L108)、[`:171`](../../src/lib/ingest/otel/jiuwen/aggregate.ts#L171) |
-| Jiuwen `llm.reasoning` span 规划 | [`design.md:171`](../designs/agents/jiuwenswarm-tracing/design.md#L171) |
+| Jiuwen `llm.reasoning` span 规划 | [`design.md:171`](../design/jiuwenswarm-tracing/design.md#L171) |
