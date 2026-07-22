@@ -8,7 +8,6 @@ import { useRouter } from 'next/navigation';
 
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { PageContainer } from '@/components/shell/PageContainer';
-import { Button } from '@/components/ui/button';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
 import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
@@ -37,28 +36,66 @@ interface SelectedCase {
 }
 
 const STEPS = ['实验设计', '关联 Trace', '预期答案', '评估器'];
+const NEXT_LABELS = ['下一步：关联 Trace →', '下一步：预期答案 →', '下一步：评估器 →', '🚀 开始实验'];
 const PAGE_SIZE = 10;
 
-const TH: React.CSSProperties = {
-  textAlign: 'left', padding: '7px 10px', fontSize: 11, fontWeight: 600,
-  color: 'var(--foreground-muted)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap',
-};
-const TD: React.CSSProperties = {
-  padding: '8px 10px', fontSize: 12, color: 'var(--foreground)',
-  borderBottom: '1px solid var(--border)', verticalAlign: 'middle',
-};
-const CARD: React.CSSProperties = {
+// ── 高保真样式常量（对照 评测实验-高保真.html） ──
+const PANEL: React.CSSProperties = {
   background: 'var(--card-bg)', border: '1px solid var(--card-border)',
-  borderRadius: 10, padding: 16,
+  borderRadius: 12, marginBottom: 14, overflow: 'hidden',
 };
-const LABEL: React.CSSProperties = {
-  display: 'block', fontSize: 12, fontWeight: 500,
-  color: 'var(--foreground-secondary)', marginBottom: 6,
+const PANEL_H: React.CSSProperties = {
+  padding: '11px 16px', borderBottom: '1px solid var(--border)',
+  display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+};
+const PANEL_B: React.CSSProperties = { padding: '13px 15px' };
+const FIELDLBL: React.CSSProperties = {
+  display: 'block', fontSize: 10.5, fontWeight: 700, color: 'var(--foreground-muted)',
+  textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 7,
 };
 const INPUT: React.CSSProperties = {
-  width: '100%', padding: '7px 10px', fontSize: 12.5, borderRadius: 7,
-  border: '1px solid var(--border)', background: 'var(--background)',
+  width: '100%', height: 34, padding: '0 10px', fontSize: 13, borderRadius: 8,
+  border: '1px solid var(--input-border)', background: 'var(--input-bg)',
   color: 'var(--foreground)', outline: 'none',
+};
+const TH: React.CSSProperties = {
+  textAlign: 'left', fontSize: 10.5, fontWeight: 600, textTransform: 'uppercase',
+  letterSpacing: '0.045em', color: 'var(--foreground-muted)', padding: '9px 12px',
+  borderBottom: '1px solid var(--border)', background: 'var(--background-secondary)', whiteSpace: 'nowrap',
+};
+const TD: React.CSSProperties = {
+  padding: '9px 12px', fontSize: 12.5, color: 'var(--foreground-secondary)',
+  borderBottom: '1px solid var(--border)', verticalAlign: 'middle',
+};
+const BTN: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+  height: 30, padding: '0 14px', borderRadius: 8, fontSize: 12, fontWeight: 600,
+  cursor: 'pointer', border: '1px solid transparent', whiteSpace: 'nowrap',
+};
+const BTN_PRIMARY: React.CSSProperties = { ...BTN, background: 'var(--primary)', color: '#fff' };
+const BTN_GHOST: React.CSSProperties = {
+  ...BTN, background: 'none', color: 'var(--foreground-secondary)', border: 'none',
+};
+const BTN_OUTLINE_SM: React.CSSProperties = {
+  ...BTN, height: 26, padding: '0 9px', fontSize: 11.5,
+  background: 'var(--card-bg)', color: 'var(--foreground)', border: '1px solid var(--border-dark)',
+};
+const CHIP: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', gap: 5, height: 20, padding: '0 8px',
+  borderRadius: 6, fontSize: 10.5, fontWeight: 600, whiteSpace: 'nowrap',
+};
+const CHIP_MUT: React.CSSProperties = {
+  ...CHIP, background: 'var(--background-secondary)', color: 'var(--foreground-secondary)',
+};
+const PAGER_BTN: React.CSSProperties = {
+  minWidth: 24, height: 24, padding: '0 7px', borderRadius: 6,
+  border: '1px solid var(--border)', background: 'var(--card-bg)',
+  color: 'var(--foreground-secondary)', fontSize: 11, fontWeight: 600, cursor: 'pointer',
+};
+const FCHIP: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', gap: 6, height: 28, padding: '0 12px',
+  borderRadius: 20, fontSize: 11.5, fontWeight: 600,
+  border: '1px solid var(--border)', background: 'var(--card-bg)', color: 'var(--foreground-secondary)',
 };
 
 function truncate(text: string | null | undefined, max: number): string {
@@ -67,40 +104,92 @@ function truncate(text: string | null | undefined, max: number): string {
   return t.length > max ? `${t.slice(0, max)}…` : t;
 }
 
-function Stepper({ step, maxVisited, onJump }: { step: number; maxVisited: number; onJump: (s: number) => void }) {
+function pageNumbers(current: number, total: number): (number | '…')[] {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+  const wanted = new Set([1, total, current - 1, current, current + 1]);
+  const nums = [...wanted].filter((n) => n >= 1 && n <= total).sort((a, b) => a - b);
+  const out: (number | '…')[] = [];
+  let prev = 0;
+  for (const n of nums) {
+    if (n - prev > 1) out.push('…');
+    out.push(n);
+    prev = n;
+  }
+  return out;
+}
+
+function CheckMark({ size = 10 }: { size?: number }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3.2} style={{ width: size, height: size }}>
+      <path d="m5 13 4 4L19 7" />
+    </svg>
+  );
+}
+
+function Stepper({ step, maxVisited, summaries, onJump }: {
+  step: number;
+  maxVisited: number;
+  summaries: string[];
+  onJump: (s: number) => void;
+}) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 6,
+      background: 'var(--card-bg)', border: '1px solid var(--card-border)',
+      borderRadius: 12, padding: '9px 14px', marginBottom: 16,
+    }}>
       {STEPS.map((label, i) => {
         const idx = i + 1;
         const active = idx === step;
+        const done = idx < step;
         const reachable = idx <= maxVisited;
         return (
-          <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0 }}>
             <button
               onClick={() => reachable && onJump(idx)}
               disabled={!reachable}
               style={{
-                display: 'flex', alignItems: 'center', gap: 7,
-                padding: '5px 12px', borderRadius: 16, fontSize: 12,
-                border: `1px solid ${active ? 'var(--primary)' : 'var(--border)'}`,
-                background: active ? 'var(--primary-subtle)' : 'var(--card-bg)',
-                color: active ? 'var(--primary)' : reachable ? 'var(--foreground-secondary)' : 'var(--foreground-muted)',
-                fontWeight: active ? 600 : 400,
+                display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0,
+                padding: '4px 8px', borderRadius: 8, border: 'none', textAlign: 'left',
+                background: active ? 'var(--primary-subtle)' : 'none',
                 cursor: reachable ? 'pointer' : 'default',
               }}
             >
               <span style={{
-                width: 16, height: 16, borderRadius: '50%', fontSize: 10.5,
-                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                background: active ? 'var(--primary)' : 'var(--background-secondary)',
-                color: active ? '#fff' : 'var(--foreground-muted)', fontWeight: 600,
+                width: 22, height: 22, borderRadius: '50%', flexShrink: 0,
+                display: 'inline-grid', placeItems: 'center', fontSize: 11, fontWeight: 800,
+                background: active ? 'var(--primary)' : done ? 'transparent' : 'var(--background-secondary)',
+                border: done ? '1.5px solid var(--primary)' : '1.5px solid transparent',
+                color: active ? '#fff' : done ? 'var(--primary)' : 'var(--foreground-muted)',
               }}>
-                {idx}
+                {done ? <CheckMark size={11} /> : idx}
               </span>
-              {label}
+              <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', minWidth: 0 }}>
+                <span style={{
+                  fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap',
+                  color: active ? 'var(--primary)' : reachable ? 'var(--foreground)' : 'var(--foreground-muted)',
+                }}>
+                  {label}
+                  {idx === 3 && (
+                    <span style={{
+                      fontSize: 8.5, fontWeight: 700, padding: '1px 5px', borderRadius: 4,
+                      background: 'var(--background-secondary)', color: 'var(--foreground-muted)',
+                      marginLeft: 4, verticalAlign: 1,
+                    }}>
+                      可选
+                    </span>
+                  )}
+                </span>
+                <span style={{
+                  fontSize: 10, color: 'var(--foreground-muted)', whiteSpace: 'nowrap',
+                  overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%',
+                }}>
+                  {summaries[i]}
+                </span>
+              </span>
             </button>
             {idx < STEPS.length && (
-              <span style={{ width: 18, height: 1, background: 'var(--border)' }} />
+              <span style={{ width: 20, height: 1, flexShrink: 0, background: 'var(--border-dark)' }} />
             )}
           </div>
         );
@@ -257,20 +346,33 @@ export default function NewExperimentPage() {
   const step2Valid = selected.size >= 1;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
+  const stepSummaries = [
+    `${name.trim() || '未命名'} · 单组`,
+    `已选 ${selected.size} 条 trace`,
+    `已标注 ${annotated}/${selectedList.length}`,
+    `已选 ${selectedEvaluators.size} 个`,
+  ];
+
+  // 各步 panel 内底部 footer：分隔线 + 右对齐 上一步/下一步
   const footer = (opts: { nextDisabled?: boolean; nextLabel?: string; onNext?: () => void }) => (
-    <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 16 }}>
-      <div>
-        {step > 1 && (
-          <Button size="sm" variant="outline" onClick={() => goTo(step - 1)}>上一步</Button>
-        )}
-      </div>
-      <Button
-        size="sm"
+    <div style={{
+      display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8,
+      marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)',
+    }}>
+      {step > 1 && (
+        <button style={BTN_GHOST} onClick={() => goTo(step - 1)}>← 上一步</button>
+      )}
+      <button
         disabled={opts.nextDisabled}
         onClick={opts.onNext ?? (() => goTo(step + 1))}
+        style={{
+          ...BTN_PRIMARY,
+          opacity: opts.nextDisabled ? 0.5 : 1,
+          cursor: opts.nextDisabled ? 'not-allowed' : 'pointer',
+        }}
       >
-        {opts.nextLabel ?? '下一步'}
-      </Button>
+        {opts.nextLabel ?? NEXT_LABELS[step - 1]}
+      </button>
     </div>
   );
 
@@ -278,70 +380,101 @@ export default function NewExperimentPage() {
     <>
       <AppTopBar title="新建实验" />
       <PageContainer>
-        <Stepper step={step} maxVisited={maxVisited} onJump={goTo} />
+        {/* 页头 */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '2px 0 12px' }}>
+          <button
+            style={{ ...BTN_GHOST, height: 26, padding: '0 9px', fontSize: 11.5 }}
+            onClick={() => router.push('/experiments')}
+          >
+            ‹ 返回
+          </button>
+          <h1 style={{ fontSize: 16, fontWeight: 800, letterSpacing: '-0.02em', margin: 0 }}>新建实验</h1>
+        </div>
+
+        <Stepper step={step} maxVisited={maxVisited} summaries={stepSummaries} onJump={goTo} />
 
         {step === 1 && (
-          <div style={{ ...CARD, maxWidth: 560 }}>
-            <div style={{ marginBottom: 14 }}>
-              <label style={LABEL}>实验名称</label>
-              <input
-                style={INPUT}
-                value={name}
-                placeholder="如：客服 Agent 回答质量基线"
-                onChange={(e) => setName(e.target.value)}
-              />
-            </div>
-            <div style={{ marginBottom: 14 }}>
-              <label style={LABEL}>待评测 Agent</label>
-              <select
-                style={{ ...INPUT, cursor: 'pointer' }}
-                value={agentName}
-                onChange={(e) => {
-                  setAgentName(e.target.value);
-                  // 换 Agent 意味换 trace 池，已圈选 case 一并作废
-                  setSelected(new Map());
-                  setPage(1);
-                }}
-              >
-                <option value="">请选择 Agent…</option>
-                {agents.map((a) => (
-                  <option key={a.name} value={a.name}>{a.name}（{a.traces} 条 trace）</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label style={LABEL}>实验类型</label>
-              <span style={{
-                display: 'inline-block', fontSize: 12, padding: '4px 10px', borderRadius: 8,
-                background: 'var(--primary-subtle)', color: 'var(--primary)', fontWeight: 500,
+          <div style={PANEL}>
+            <div style={PANEL_B}>
+              <div style={{
+                display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+                gap: 14, marginBottom: 16,
               }}>
-                无变量 · 单组
-              </span>
+                <div>
+                  <label style={FIELDLBL}>实验名称</label>
+                  <input
+                    style={INPUT}
+                    value={name}
+                    placeholder="如：客服 Agent 回答质量基线"
+                    onChange={(e) => setName(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label style={FIELDLBL}>待评测 Agent</label>
+                  <select
+                    style={{ ...INPUT, cursor: 'pointer' }}
+                    value={agentName}
+                    onChange={(e) => {
+                      setAgentName(e.target.value);
+                      // 换 Agent 意味换 trace 池，已圈选 case 一并作废
+                      setSelected(new Map());
+                      setPage(1);
+                    }}
+                  >
+                    <option value="">请选择 Agent…</option>
+                    {agents.map((a) => (
+                      <option key={a.name} value={a.name}>{a.name}（{a.traces} 条 trace）</option>
+                    ))}
+                  </select>
+                  <div style={{ fontSize: 10, color: 'var(--foreground-muted)', marginTop: 5 }}>
+                    实验所评测的对象——trace 圈选与评估都作用于它
+                  </div>
+                </div>
+              </div>
+              <label style={FIELDLBL}>实验类型</label>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                <span style={{
+                  ...FCHIP,
+                  background: 'var(--primary-subtle)', border: '1px solid var(--primary-subtle-border)',
+                  color: 'var(--primary)', cursor: 'default',
+                }}>
+                  🎯 无变量 · 单组
+                </span>
+                {['LLM 对比', 'Agent 框架对比', 'Skill 版本对比'].map((t) => (
+                  <span
+                    key={t}
+                    title="即将支持"
+                    style={{
+                      ...FCHIP,
+                      background: 'var(--background-secondary)', color: 'var(--foreground-muted)',
+                      cursor: 'not-allowed', border: '1px dashed var(--border)',
+                    }}
+                  >
+                    {t}
+                  </span>
+                ))}
+              </div>
+              {footer({ nextDisabled: !step1Valid })}
             </div>
-            {footer({ nextDisabled: !step1Valid })}
           </div>
         )}
 
         {step === 2 && (
-          <div style={CARD}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, fontSize: 12 }}>
-              <span style={{ color: 'var(--foreground-muted)' }}>Agent：</span>
-              <span style={{
-                padding: '2px 8px', borderRadius: 8, background: 'var(--background-secondary)',
-                color: 'var(--foreground)', fontWeight: 500,
-              }}>
-                {agentName}
-              </span>
-              <span style={{ marginLeft: 'auto', color: 'var(--primary)', fontWeight: 600 }}>
+          <div style={PANEL}>
+            <div style={PANEL_H}>
+              <span style={{ fontSize: 12, color: 'var(--foreground-muted)' }}>Agent：</span>
+              <span style={{ ...CHIP_MUT, color: 'var(--foreground)', fontWeight: 700 }}>{agentName}</span>
+              <span style={{ flex: 1 }} />
+              <span style={{ fontSize: 12, color: 'var(--primary)', fontWeight: 700 }}>
                 已选 {selected.size} 条
               </span>
             </div>
 
-            <div style={{ border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
                 <thead>
                   <tr>
-                    <th style={{ ...TH, width: 34 }} />
+                    <th style={{ ...TH, width: 36 }} />
                     <th style={TH}>Trace ID</th>
                     <th style={TH}>任务输入</th>
                     <th style={TH}>状态</th>
@@ -352,203 +485,273 @@ export default function NewExperimentPage() {
                 </thead>
                 <tbody>
                   {tracesLoading ? (
-                    <tr><td colSpan={7} style={{ ...TD, textAlign: 'center', color: 'var(--foreground-muted)' }}>加载中…</td></tr>
+                    <tr><td colSpan={7} style={{ ...TD, borderBottom: 'none', textAlign: 'center', color: 'var(--foreground-muted)' }}>加载中…</td></tr>
                   ) : traces.length === 0 ? (
-                    <tr><td colSpan={7} style={{ ...TD, textAlign: 'center', color: 'var(--foreground-muted)' }}>该 Agent 暂无 trace</td></tr>
-                  ) : traces.map((t) => (
-                    <tr
-                      key={t.id}
-                      onClick={() => toggleTrace(t)}
-                      style={{ cursor: 'pointer', background: selected.has(t.id) ? 'var(--primary-subtle)' : 'transparent' }}
-                    >
-                      <td style={TD}>
-                        <input type="checkbox" readOnly checked={selected.has(t.id)} style={{ cursor: 'pointer' }} />
-                      </td>
-                      <td style={{ ...TD, fontFamily: 'monospace', fontSize: 11, whiteSpace: 'nowrap' }}>
-                        {truncate(t.taskId || t.id, 18)}
-                      </td>
-                      <td style={{ ...TD, maxWidth: 320 }}>{truncate(t.query, 60)}</td>
-                      <td style={TD}>
-                        <span style={{
-                          fontSize: 11, padding: '1px 7px', borderRadius: 8, fontWeight: 500,
-                          background: t.ok ? 'var(--tag-green-bg)' : 'var(--tag-red-bg)',
-                          color: t.ok ? 'var(--tag-green-fg)' : 'var(--tag-red-fg)',
-                        }}>
-                          {t.ok ? '成功' : '异常'}
-                        </span>
-                      </td>
-                      <td style={{ ...TD, textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
-                        {t.latency != null ? `${t.latency.toFixed(1)}s` : '—'}
-                      </td>
-                      <td style={{ ...TD, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-                        {t.tokens != null ? t.tokens.toLocaleString() : '—'}
-                      </td>
-                      <td style={{ ...TD, color: 'var(--foreground-muted)', whiteSpace: 'nowrap' }}>
-                        {new Date(t.timestamp).toLocaleString('zh-CN', { hour12: false })}
-                      </td>
-                    </tr>
-                  ))}
+                    <tr><td colSpan={7} style={{ ...TD, borderBottom: 'none', textAlign: 'center', color: 'var(--foreground-muted)' }}>该 Agent 暂无 trace</td></tr>
+                  ) : traces.map((t, i) => {
+                    const last = i === traces.length - 1;
+                    const td: React.CSSProperties = last ? { ...TD, borderBottom: 'none' } : TD;
+                    return (
+                      <tr
+                        key={t.id}
+                        onClick={() => toggleTrace(t)}
+                        style={{ cursor: 'pointer', background: selected.has(t.id) ? 'var(--primary-subtle)' : 'transparent' }}
+                      >
+                        <td style={td}>
+                          <input type="checkbox" readOnly checked={selected.has(t.id)} style={{ cursor: 'pointer' }} />
+                        </td>
+                        <td style={{ ...td, fontFamily: 'var(--font-mono, ui-monospace, monospace)', fontSize: 11, whiteSpace: 'nowrap' }}>
+                          {truncate(t.taskId || t.id, 18)}
+                        </td>
+                        <td style={{ ...td, maxWidth: 320, color: 'var(--foreground)' }}>{truncate(t.query, 60)}</td>
+                        <td style={td}>
+                          <span style={{
+                            ...CHIP,
+                            background: t.ok ? 'var(--tag-green-bg)' : 'var(--tag-red-bg)',
+                            color: t.ok ? 'var(--tag-green-fg)' : 'var(--tag-red-fg)',
+                          }}>
+                            {t.ok ? '成功' : '异常'}
+                          </span>
+                        </td>
+                        <td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                          {t.latency != null ? `${t.latency.toFixed(1)}s` : '—'}
+                        </td>
+                        <td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                          {t.tokens != null ? t.tokens.toLocaleString() : '—'}
+                        </td>
+                        <td style={{ ...td, color: 'var(--foreground-muted)', whiteSpace: 'nowrap' }}>
+                          {new Date(t.timestamp).toLocaleString('zh-CN', { hour12: false })}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
 
-            <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8, marginTop: 10, fontSize: 12 }}>
-              <Button size="sm" variant="outline" disabled={page <= 1 || tracesLoading} onClick={() => loadTraces(page - 1)}>
-                上一页
-              </Button>
-              <span style={{ color: 'var(--foreground-muted)' }}>{page} / {totalPages}</span>
-              <Button size="sm" variant="outline" disabled={page >= totalPages || tracesLoading} onClick={() => loadTraces(page + 1)}>
-                下一页
-              </Button>
+            {/* 分页条 */}
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 4, padding: '9px 14px',
+              borderTop: '1px solid var(--border)', fontSize: 11, color: 'var(--foreground-muted)', flexWrap: 'wrap',
+            }}>
+              共 {total} 条 · 每页 {PAGE_SIZE}
+              <span style={{ flex: 1 }} />
+              <button
+                style={{ ...PAGER_BTN, opacity: page <= 1 || tracesLoading ? 0.4 : 1, cursor: page <= 1 || tracesLoading ? 'not-allowed' : 'pointer' }}
+                disabled={page <= 1 || tracesLoading}
+                onClick={() => loadTraces(page - 1)}
+              >
+                ‹
+              </button>
+              {pageNumbers(page, totalPages).map((p, i) => p === '…' ? (
+                <span key={`d${i}`} style={{ padding: '0 2px' }}>…</span>
+              ) : (
+                <button
+                  key={p}
+                  disabled={tracesLoading}
+                  onClick={() => p !== page && loadTraces(p)}
+                  style={p === page
+                    ? { ...PAGER_BTN, background: 'var(--primary)', border: '1px solid var(--primary)', color: '#fff' }
+                    : PAGER_BTN}
+                >
+                  {p}
+                </button>
+              ))}
+              <button
+                style={{ ...PAGER_BTN, opacity: page >= totalPages || tracesLoading ? 0.4 : 1, cursor: page >= totalPages || tracesLoading ? 'not-allowed' : 'pointer' }}
+                disabled={page >= totalPages || tracesLoading}
+                onClick={() => loadTraces(page + 1)}
+              >
+                ›
+              </button>
             </div>
 
-            {footer({ nextDisabled: !step2Valid })}
+            <div style={{ ...PANEL_B, paddingTop: 0 }}>
+              {footer({ nextDisabled: !step2Valid })}
+            </div>
           </div>
         )}
 
         {step === 3 && (
-          <div style={CARD}>
-            <div style={{ display: 'flex', alignItems: 'center', marginBottom: 12, fontSize: 12 }}>
-              <span style={{ color: 'var(--foreground-secondary)' }}>
+          <div style={PANEL}>
+            <div style={PANEL_H}>
+              <span style={{ fontSize: 12, color: 'var(--foreground-secondary)', flex: 1, minWidth: 260, lineHeight: 1.6 }}>
                 预期答案为可选标注——不标注也可直接下一步；依赖参考数据的评估器将按标注情况在第 ④ 步门控。
               </span>
-              <span style={{ marginLeft: 'auto', color: 'var(--primary)', fontWeight: 600, whiteSpace: 'nowrap' }}>
-                已标注 {annotated}/{selectedList.length}
+              <span style={{ display: 'flex', alignItems: 'center', gap: 9, minWidth: 200 }}>
+                <span style={{ flex: 1, height: 7, borderRadius: 4, background: 'var(--background-secondary)', overflow: 'hidden' }}>
+                  <span style={{
+                    display: 'block', height: '100%', borderRadius: 4, background: 'var(--primary)',
+                    width: `${selectedList.length > 0 ? Math.round((annotated / selectedList.length) * 100) : 0}%`,
+                    transition: 'width 0.2s',
+                  }} />
+                </span>
+                <span style={{ fontSize: 10.5, color: 'var(--foreground-muted)', whiteSpace: 'nowrap' }}>
+                  已标注 <b style={{ color: 'var(--primary)' }}>{annotated}</b>/{selectedList.length}
+                </span>
               </span>
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {selectedList.map((c) => {
-                const open = expandedCase === c.executionId;
-                return (
-                  <div key={c.executionId} style={{ border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px' }}>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 12, fontWeight: 500, marginBottom: 2 }}>{truncate(c.input, 70)}</div>
-                        <div style={{ fontSize: 11, color: 'var(--foreground-muted)' }}>
-                          实际输出：{truncate(c.actualOutput, 80)}
+            <div style={PANEL_B}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {selectedList.map((c) => {
+                  const open = expandedCase === c.executionId;
+                  return (
+                    <div key={c.executionId} style={{ border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 13px' }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 2, color: 'var(--foreground)' }}>
+                            {truncate(c.input, 70)}
+                          </div>
+                          <div style={{ fontSize: 11, color: 'var(--foreground-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            实际输出：{truncate(c.actualOutput, 90)}
+                          </div>
+                          {c.referenceOutput && !open && (
+                            <div style={{ fontSize: 11, color: 'var(--success)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginTop: 2 }}>
+                              参考答案：{truncate(c.referenceOutput, 90)}
+                            </div>
+                          )}
                         </div>
+                        <span style={c.referenceOutput
+                          ? { ...CHIP, background: 'var(--success-subtle)', color: 'var(--success)', border: '1px solid var(--success-subtle-border)' }
+                          : CHIP_MUT}>
+                          {c.referenceOutput ? '已标注' : '未标注'}
+                        </span>
+                        <button
+                          style={BTN_OUTLINE_SM}
+                          onClick={() => {
+                            if (open) {
+                              setExpandedCase(null);
+                            } else {
+                              setExpandedCase(c.executionId);
+                              // 预填：已有参考输出 > 实际输出
+                              setDraftRef(c.referenceOutput ?? c.actualOutput);
+                            }
+                          }}
+                        >
+                          {open ? '收起' : '✏️ 标注'}
+                        </button>
                       </div>
-                      <span style={{
-                        fontSize: 11, padding: '1px 7px', borderRadius: 8, fontWeight: 500, whiteSpace: 'nowrap',
-                        background: c.referenceOutput ? 'var(--tag-green-bg)' : 'var(--background-secondary)',
-                        color: c.referenceOutput ? 'var(--tag-green-fg)' : 'var(--foreground-muted)',
-                      }}>
-                        {c.referenceOutput ? '已标注' : '未标注'}
-                      </span>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => {
-                          if (open) {
-                            setExpandedCase(null);
-                          } else {
-                            setExpandedCase(c.executionId);
-                            // 预填：已有参考输出 > 实际输出
-                            setDraftRef(c.referenceOutput ?? c.actualOutput);
-                          }
-                        }}
-                      >
-                        {open ? '收起' : '标注'}
-                      </Button>
+                      {open && (
+                        <div style={{ padding: '0 13px 12px', borderTop: '1px solid var(--border)', background: 'var(--background-secondary)' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '10px 0 7px' }}>
+                            <label style={{ ...FIELDLBL, marginBottom: 0 }}>参考输出（预期答案）</label>
+                            <span style={{ flex: 1 }} />
+                            <button
+                              style={{ ...BTN_OUTLINE_SM, height: 22, fontSize: 10.5 }}
+                              onClick={() => setDraftRef(c.actualOutput)}
+                            >
+                              预填实际输出
+                            </button>
+                          </div>
+                          <textarea
+                            style={{ ...INPUT, height: 'auto', minHeight: 96, padding: '8px 10px', fontSize: 12.5, resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.6 }}
+                            value={draftRef}
+                            onChange={(e) => setDraftRef(e.target.value)}
+                          />
+                          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                            <button
+                              style={{ ...BTN_PRIMARY, height: 26, padding: '0 11px', fontSize: 11.5 }}
+                              onClick={() => {
+                                setReference(c.executionId, draftRef);
+                                setExpandedCase(null);
+                              }}
+                            >
+                              保存
+                            </button>
+                            <button
+                              style={BTN_OUTLINE_SM}
+                              onClick={() => {
+                                setReference(c.executionId, null);
+                                setExpandedCase(null);
+                              }}
+                            >
+                              清除标注
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
-                    {open && (
-                      <div style={{ padding: '0 12px 12px', borderTop: '1px solid var(--border)' }}>
-                        <label style={{ ...LABEL, marginTop: 10 }}>参考输出（预期答案）</label>
-                        <textarea
-                          style={{ ...INPUT, minHeight: 96, resize: 'vertical', fontFamily: 'inherit' }}
-                          value={draftRef}
-                          onChange={(e) => setDraftRef(e.target.value)}
-                        />
-                        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                          <Button
-                            size="sm"
-                            onClick={() => {
-                              setReference(c.executionId, draftRef);
-                              setExpandedCase(null);
-                            }}
-                          >
-                            保存
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => {
-                              setReference(c.executionId, null);
-                              setExpandedCase(null);
-                            }}
-                          >
-                            清除标注
-                          </Button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+                  );
+                })}
+              </div>
 
-            {footer({})}
+              {footer({})}
+            </div>
           </div>
         )}
 
         {step === 4 && (
-          <div style={CARD}>
-            <div style={{ fontSize: 12, color: 'var(--foreground-secondary)', marginBottom: 12 }}>
-              为本次实验挑选评估器（可多选）。依赖参考数据的评估器要求所有已选 case 均已标注预期答案。
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 10 }}>
-              {allEvaluators.map((card) => {
-                const meta = getEvaluatorMeta(card);
-                const gate = gateEvaluator(meta, gateCases);
-                const checked = selectedEvaluators.has(card.id);
-                return (
-                  <div
-                    key={card.id}
-                    title={gate.usable ? undefined : gate.reason}
-                    onClick={() => gate.usable && toggleEvaluator(card.id)}
-                    style={{
-                      border: `1px solid ${checked ? 'var(--primary)' : 'var(--border)'}`,
-                      borderRadius: 9, padding: '10px 12px',
-                      background: checked ? 'var(--primary-subtle)' : 'var(--background)',
-                      opacity: gate.usable ? 1 : 0.45,
-                      cursor: gate.usable ? 'pointer' : 'not-allowed',
-                      transition: 'all 0.12s',
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                      <input type="checkbox" readOnly checked={checked} disabled={!gate.usable} />
-                      <span style={{ fontSize: 12.5, fontWeight: 600, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {card.name}
-                      </span>
-                    </div>
-                    <div style={{ fontSize: 11, color: 'var(--foreground-muted)', marginBottom: 8, minHeight: 28 }}>
-                      {truncate(card.description, 64)}
-                    </div>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                      {deriveEvaluatorTags(card).map((tag) => (
-                        <span key={tag} style={{
-                          fontSize: 10.5, padding: '1px 6px', borderRadius: 7,
-                          background: 'var(--background-secondary)', color: 'var(--foreground-secondary)',
+          <div style={PANEL}>
+            <div style={PANEL_B}>
+              <div style={{ fontSize: 12, color: 'var(--foreground-secondary)', marginBottom: 12, lineHeight: 1.6 }}>
+                为本次实验挑选评估器（可多选）。依赖参考数据的评估器要求所有已选 case 均已标注预期答案。
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(290px, 1fr))', gap: 10 }}>
+                {allEvaluators.map((card) => {
+                  const meta = getEvaluatorMeta(card);
+                  const gate = gateEvaluator(meta, gateCases);
+                  const checked = selectedEvaluators.has(card.id);
+                  return (
+                    <div
+                      key={card.id}
+                      title={gate.usable ? undefined : gate.reason}
+                      onClick={() => gate.usable && toggleEvaluator(card.id)}
+                      style={{
+                        border: `1px solid ${checked ? 'var(--primary)' : 'var(--border)'}`,
+                        borderRadius: 11, padding: '13px 15px',
+                        background: checked ? 'var(--primary-subtle)' : 'var(--card-bg)',
+                        boxShadow: checked ? '0 8px 24px var(--shadow-primary)' : 'none',
+                        opacity: gate.usable ? 1 : 0.55,
+                        cursor: gate.usable ? 'pointer' : 'not-allowed',
+                        transition: 'all 0.12s',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{
+                          fontSize: 13, fontWeight: 800, flex: 1, minWidth: 0,
+                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                          color: checked ? 'var(--primary)' : 'var(--foreground)',
                         }}>
-                          {tag}
+                          {card.name}
                         </span>
-                      ))}
+                        <span style={{
+                          width: 15, height: 15, borderRadius: 4, flexShrink: 0,
+                          display: 'inline-grid', placeItems: 'center',
+                          border: `1.5px solid ${checked ? 'var(--primary)' : 'var(--border-dark)'}`,
+                          background: checked ? 'var(--primary)' : 'transparent',
+                          color: '#fff',
+                        }}>
+                          {checked && <CheckMark size={10} />}
+                        </span>
+                      </div>
+                      <div style={{
+                        fontSize: 11, color: 'var(--foreground-muted)', marginTop: 5, lineHeight: 1.5,
+                        display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+                        overflow: 'hidden', minHeight: 33,
+                      }}>
+                        {card.description}
+                      </div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 8 }}>
+                        {deriveEvaluatorTags(card).map((tag) => (
+                          <span key={tag} style={CHIP_MUT}>{tag}</span>
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                );
+                  );
+                })}
+              </div>
+
+              {submitError && (
+                <div style={{ marginTop: 12, fontSize: 12, color: 'var(--error)' }}>{submitError}</div>
+              )}
+
+              {footer({
+                nextDisabled: selectedEvaluators.size < 1 || submitting,
+                nextLabel: submitting ? '创建中…' : '🚀 开始实验',
+                onNext: submit,
               })}
             </div>
-
-            {submitError && (
-              <div style={{ marginTop: 12, fontSize: 12, color: 'var(--error)' }}>{submitError}</div>
-            )}
-
-            {footer({
-              nextDisabled: selectedEvaluators.size < 1 || submitting,
-              nextLabel: submitting ? '创建中…' : '开始实验',
-              onNext: submit,
-            })}
           </div>
         )}
       </PageContainer>
