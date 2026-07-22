@@ -245,6 +245,10 @@ export default async function WittySkillInsightOtelPlugin() {
 
   const uploaderPath = env.AGENT_INSIGHT_OPENCODE_UPLOADER || path.join(getExistingInsightDir(), "opencode_uploader_client.js")
   const uploaderCooldownMs = asInt(env.AGENT_INSIGHT_OPENCODE_UPLOAD_COOLDOWN_MS, 15000)
+  // 进行中会话的心跳上报间隔。之前只有 session.idle 会触发上报，一个长时间不 idle 的
+  // 任务（典型是工具死循环）整个执行期间零上报，只能等 CLI 退出才第一次落库。
+  // 0 或负数 = 关闭心跳，回到"仅 idle 触发"的旧行为。
+  const heartbeatMs = asInt(env.AGENT_INSIGHT_OPENCODE_HEARTBEAT_MS, 60000)
   const lastUploadKickBySession = new Map<string, number>()
   const activeSessionIds = new Set<string>()
 
@@ -326,6 +330,9 @@ export default async function WittySkillInsightOtelPlugin() {
         env: {
           ...process.env,
           ...(force ? { AGENT_INSIGHT_UPLOADER_FORCE: "1" } : {}),
+          // 强推限定到本 session：FORCE 是进程级开关，不限定的话 uploader 会把
+          // spool 里保留期内的所有历史会话一并重传。
+          ...(force && sessionID ? { AGENT_INSIGHT_UPLOADER_FORCE_SESSION: sessionID } : {}),
         },
       })
       child.unref()
@@ -546,6 +553,23 @@ export default async function WittySkillInsightOtelPlugin() {
               `event.idle type=${type} status=${status || "(none)"} sessionID=${sid || "(none)"}`,
             )
             kickUploader(sid, false, `event:${type}`)
+          } else if (heartbeatMs > 0 && sessionID) {
+            // 心跳：会话还在产生事件、但迟迟不 idle 时，按固定间隔推一次进行中快照。
+            // 只在有事件流入时才评估，会话真正空闲下来不会白跑；节流沿用
+            // lastUploadKickBySession，所以和 idle 触发共用同一条时间线，不会叠加。
+            const sid = String(sessionID)
+            const prev = lastUploadKickBySession.get(sid) || 0
+            if (prev === 0) {
+              // 该 session 还没 kick 过（没 idle 过的长任务就是这种），先起表，
+              // 否则 prev 永远是 0、心跳永远不触发。
+              lastUploadKickBySession.set(sid, Date.now())
+            } else if (Date.now() - prev >= heartbeatMs) {
+              appendLogLine(
+                pluginLogPath,
+                `event.heartbeat type=${type} sessionID=${sid} sinceLastMs=${Date.now() - prev} heartbeatMs=${heartbeatMs}`,
+              )
+              kickUploader(sid, false, "heartbeat")
+            }
           }
         } catch {}
 

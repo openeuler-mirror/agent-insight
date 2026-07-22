@@ -454,6 +454,9 @@ function buildState(records) {
   const cliCompletedSessions = new Set()
   const sessionPids = new Map()
   const sessionIdleAt = new Map()
+  // 每个 session 落到 spool 的原始记录条数。只增不减，是"这个会话还在干活"的唯一
+  // 可靠信号——工具死循环时消息条数/终稿文本/时间戳全都不变，只有它会涨。
+  const sessionRecordCounts = new Map()
 
   const ensureSession = (sid) => {
     if (!sessions.has(sid)) sessions.set(sid, { sessionID: sid, messageIDs: new Set() })
@@ -483,6 +486,8 @@ function buildState(records) {
 
   for (const r of records) {
     const kind = r?.kind
+    const recordSid = typeof r?.sessionID === "string" ? r.sessionID : ""
+    if (recordSid) sessionRecordCounts.set(recordSid, (sessionRecordCounts.get(recordSid) || 0) + 1)
     if (kind === "plugin.shutdown") {
       const sid = r.sessionID
       if (sid) {
@@ -600,7 +605,68 @@ function buildState(records) {
     }
   }
 
-  return { sessions, sessionParent, sessionAgent, children, msgInfo, msgParts, partText, userTextByMsg, sysPrompts, cliCompletedSessions, sessionPids, sessionIdleAt }
+  return { sessions, sessionParent, sessionAgent, children, msgInfo, msgParts, partText, userTextByMsg, sysPrompts, cliCompletedSessions, sessionPids, sessionIdleAt, sessionRecordCounts }
+}
+
+// 一个 root 会话的所有 session id（含 task 工具派生的子会话）。sig 里的记录数要按整棵
+// 树求和，否则子 agent 里的工具循环不会体现在 root 的指纹上。
+function collectSessionSubtree(state, rootSid) {
+  const out = []
+  const stack = [rootSid]
+  const seen = new Set()
+  while (stack.length) {
+    const sid = stack.pop()
+    if (!sid || seen.has(sid)) continue
+    seen.add(sid)
+    out.push(sid)
+    const next = state.children?.get(sid)
+    if (next) for (const c of Array.from(next)) stack.push(c)
+  }
+  return out
+}
+
+function subtreeRecordCount(state, rootSid) {
+  let total = 0
+  for (const sid of collectSessionSubtree(state, rootSid)) {
+    total += state.sessionRecordCounts?.get(sid) || 0
+  }
+  return total
+}
+
+// sig = 内容指纹，checkpoint 用它判断"跟上次上报比有没有变化"。
+//
+// 前 5 位是历史格式，后 3 位是本次新增的单调量。新增的原因：工具死循环发生在
+// 「同一条 assistant message 内部反复更新 tool part」，前 5 位一个都不会变
+// （消息条数不涨 / 无新终稿文本 / message 时间戳不动），导致整个循环期间
+// 每轮都命中 checkpoint 被 skip，数据要等 CLI 退出才第一次上报。
+function buildSignature({ interactionCount, finalResultLength, lastTs, traceCompletedAt, cliCompleted, toolCallCount, tokens, recordCount }) {
+  return [
+    interactionCount,
+    finalResultLength,
+    lastTs,
+    traceCompletedAt || "",
+    cliCompleted ? 1 : 0,
+    toolCallCount || 0,
+    tokens || 0,
+    recordCount || 0,
+  ].join("|")
+}
+
+// 升级兼容：老 checkpoint 里存的是 5 段式 sig。若直接跟 8 段式比对必然失配，
+// 会把 spool 里保留期内（默认 3 天）的所有历史会话重传一遍，并在服务端触发
+// 一整轮 LLM 分析风暴。所以老格式只比对公共的前 5 段，相等就视为未变化。
+//
+// 注意配套逻辑：命中这条兼容分支时，main() 会把 checkpoint 原地升级成新格式再 skip。
+// 否则一个正处在工具循环中的会话（前 5 段恒定不变）会被这条兼容规则永久压住 ——
+// 而它恰恰是本次要救的对象。升级后下一轮扫描 recordCount/toolCallCount 已推进，
+// 立即放行，代价只有一个心跳周期。
+function isSignatureUnchanged(prevSig, nextSig) {
+  if (!prevSig) return false
+  if (prevSig === nextSig) return true
+  const prev = String(prevSig).split("|")
+  if (prev.length >= 8) return false
+  const next = String(nextSig).split("|")
+  return prev.length === 5 && prev.join("|") === next.slice(0, 5).join("|")
 }
 
 // Join all text-type parts of a message into one string. Prefers the
@@ -907,6 +973,13 @@ async function main() {
   // 同时兼容旧前缀 SKILL_INSIGHT_RETENTION_DAYS(部署的 .env 里用的是这个,旧版只读 AGENT_INSIGHT_ → 没生效)。
   const retentionDays = env.AGENT_INSIGHT_RETENTION_DAYS || env.SKILL_INSIGHT_RETENTION_DAYS || "3"
   const deletedSessionIds = loadDeletedSessionIds(env)
+  // 需要无视 checkpoint 强推的 session（plugin shutdown / 人工排障时按 id 指定）。
+  const forceSessions = new Set(
+    String(process.env.AGENT_INSIGHT_UPLOADER_FORCE_SESSION || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
+  )
   appendUploaderLog(
     `main.config spoolDir=${spoolDir} checkpoint=${checkpointFile} retentionDays=${retentionDays} deletedSessions=${deletedSessionIds.size}`,
   )
@@ -1033,7 +1106,16 @@ async function main() {
       lastTs = Math.max(lastTs, t1, t2, t3)
     }
     const lastAssistant = String(payload.final_result || "")
-    const sig = `${interactions.length}|${lastAssistant.length}|${lastTs}|${payload.trace_completed_at || ""}|${payload.opencode_cli_completed ? 1 : 0}`
+    const sig = buildSignature({
+      interactionCount: interactions.length,
+      finalResultLength: lastAssistant.length,
+      lastTs,
+      traceCompletedAt: payload.trace_completed_at,
+      cliCompleted: payload.opencode_cli_completed,
+      toolCallCount: derived.tool_call_count,
+      tokens: derived.tokens,
+      recordCount: subtreeRecordCount(state, rootSid),
+    })
     appendUploaderLog(
       `session.prepare task_id=${rootSid} interactions=${interactions.length} query=${String(query).slice(0, 120).replace(/\s+/g, " ")} ` +
       `traceCompletedAt=${payload.trace_completed_at || "(none)"} cliCompleted=${payload.opencode_cli_completed ? "1" : "0"} sig=${sig}`,
@@ -1052,8 +1134,18 @@ async function main() {
       continue
     }
 
-    if (ckpt[rootSid] && ckpt[rootSid] === sig) {
-      appendUploaderLog(`session.skip checkpoint task_id=${rootSid} sig=${sig}`)
+    // 强推信号之前只绕过 fastSkip，到这里照样被 checkpoint 拦掉，Ctrl+C 兜底和手动
+    // 排障都推不上去。这里放行，但**只对指定 session**——FORCE=1 是进程级的，如果让它
+    // 绕过所有 session 的 checkpoint，shutdown 那一次强推会把 spool 里保留期内的所有
+    // 历史会话重传一遍，并在服务端触发一整轮 LLM 分析。
+    if (!forceSessions.has(rootSid) && isSignatureUnchanged(ckpt[rootSid], sig)) {
+      appendUploaderLog(`session.skip checkpoint task_id=${rootSid} sig=${sig} prevSig=${ckpt[rootSid]}`)
+      // 老格式 checkpoint 原地升级成新格式（见 isSignatureUnchanged 的注释）。
+      if (ckpt[rootSid] !== sig) {
+        ckpt[rootSid] = sig
+        saveCheckpoint(checkpointFile, ckpt)
+        appendUploaderLog(`session.checkpointUpgraded task_id=${rootSid} sig=${sig}`)
+      }
       continue
     }
 
@@ -1080,7 +1172,11 @@ async function main() {
 
 export {
   buildMessagesForSession,
+  buildSignature,
   buildState,
+  collectSessionSubtree,
+  isSignatureUnchanged,
+  subtreeRecordCount,
   deriveFields,
   extractSessionIdFromText,
   extractTaskChildSessionId,
