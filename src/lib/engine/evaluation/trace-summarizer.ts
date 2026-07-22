@@ -96,7 +96,7 @@ export function summarizeTrace(interactions: any[], opts: SummarizeOptions = {})
                 index: stepIdx++,
                 agent: n.depth > 0 ? n.agentName : undefined,
                 depth: n.depth,
-                kind: ev.kind,
+                kind: ev.kind === 'chain' ? 'task' : ev.kind,
                 name: ev.name,
                 argsSummary,
                 outputSummary,

@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `a858063661ad9877de6e1085ef275a98a2331a1a` (`a8580636`) |
-| Branch | `master` |
-| Date | 2026-07-16T21:11:02+08:00 |
+| Commit | `147f4ac1b98765c067e46c77480a89bc7ab01b6c` (`147f4ac`) |
+| Branch | `new-dev-07-16` |
+| Date | 2026-07-20T20:31:54+08:00 |
 | Author | openeuler-ci-bot |
-| Subject | `!199 Trace沉淀为评测数据集` |
+| Subject | `!202 fix: consumer 摄取管线性能三连修——聚合三重闸 + tick 增量读 + checkpoint 内存缓存` |
 
-**如何更新：** `git diff a8580636 HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff 147f4ac HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
