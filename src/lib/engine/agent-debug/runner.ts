@@ -5,12 +5,11 @@ import { ensureTraceBundle } from '@/lib/engine/observability/trace-bundle';
 import fs from 'node:fs';
 import path from 'node:path';
 import { buildDebugTurns, hashInteractions } from './trace-adapter';
-import { detectTrajectoryFindings } from './trajectory-detector';
-import { enrichTrajectoryFindings } from './trajectory-enricher';
 import { numberField, parseJsonObject, stringField } from './json';
 import type {
   AgentDebugIssue,
   AgentDebugCandidateWindow,
+  AgentDebugDetectorFinding,
   AgentDebugFinding,
   AgentDebugFindingImpact,
   AgentDebugFindingIssueRole,
@@ -22,11 +21,12 @@ import type {
   AgentDebugRootCause,
   AgentDebugSeverity,
   AgentDebugStepRecord,
+  AgentDebugSupplementalEvidence,
   AgentDebugTriage,
   DebugTurn,
 } from './types';
 
-export const AGENT_DEBUG_GENERATOR = 'agent-debug-diagnosis-skill@0.2';
+export const AGENT_DEBUG_GENERATOR = 'agent-debug-diagnosis-skill@0.5';
 
 const AGENT_DEBUG_SKILL_NAME = 'agent-debug-diagnosis';
 const FAULT_DIAGNOSIS_AGENT_NAME = 'fault-diagnosis-agent';
@@ -52,13 +52,10 @@ export async function runAgentDebugDiagnosis(args: {
   const interactionHash = hashInteractions(interactions);
   const turns = buildDebugTurns(interactions);
   const candidateWindows: AgentDebugCandidateWindow[] = [];
-  // 轨迹诊断器：确定性、零 LLM 成本，直接在完整 turns 上找循环 / 无进展，
-  // 与逐-step 认知诊断并行，结果并入报告 trajectoryFindings。
-  const trajectoryFindings = detectTrajectoryFindings(turns);
 
   if (turns.length === 0) {
     return {
-      schemaVersion: 2,
+      schemaVersion: 3,
       generator: AGENT_DEBUG_GENERATOR,
       executionId,
       interactionHash,
@@ -68,7 +65,7 @@ export async function runAgentDebugDiagnosis(args: {
       rootCause: null,
       issues: [],
       findings: [],
-      trajectoryFindings,
+      detectorFindings: [],
       phase1Grid: [],
       stepRecords: [],
       candidateWindows,
@@ -94,11 +91,10 @@ export async function runAgentDebugDiagnosis(args: {
   const inputRelPath = writeAgentDebugInput({
     workspaceDir,
     execution: args.execution,
-      executionId,
-      turns,
-      traceBundle,
-    });
-
+    executionId,
+    turns,
+    traceBundle,
+  });
   const result = await runGeneralAgent({
     user: args.user,
     query: buildAgentQuery({
@@ -107,7 +103,7 @@ export async function runAgentDebugDiagnosis(args: {
       turns,
       traceBundle,
       inputRelPath,
-      skillMountPath: mounted.mountPoint ? `./.${AGENT_DEBUG_SKILL_NAME}` : null,
+      skillMountPath: mounted.mountPoint ? './.' + AGENT_DEBUG_SKILL_NAME : null,
     }),
     system,
     workspaceTag,
@@ -131,14 +127,12 @@ export async function runAgentDebugDiagnosis(args: {
   const issues = normalizeIssues(parsed.issues, phase1Grid);
   const parsedRootCause = normalizeRootCause(parsed.rootCause);
   const findings = normalizeFindings(parsed.findings, issues, parsedRootCause);
-  const rootCause = parsedRootCause || projectFindingToRootCause(findings[0], issues);
+  const detectorFindings = normalizeDetectorFindings(parsed.detectorFindings, new Set(findings.map(finding => finding.id)));
   const triage = normalizeTriage(parsed.triage);
-  // 把确定性检测到的循环 finding 统一交给 LLM 富化（基于真实证据写机制/故障链/建议）；
-  // 一次调用处理全部；失败则降级回确定性文案。
-  const enrichedTrajectoryFindings = await enrichTrajectoryFindings(trajectoryFindings, turns, args.user);
+  const rootCause = projectFindingToRootCause(findings[0], issues) || parsedRootCause;
 
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     generator: AGENT_DEBUG_GENERATOR,
     executionId,
     interactionHash,
@@ -148,7 +142,7 @@ export async function runAgentDebugDiagnosis(args: {
     rootCause,
     issues,
     findings,
-    trajectoryFindings: enrichedTrajectoryFindings,
+    detectorFindings,
     phase1Grid,
     stepRecords,
     candidateWindows,
@@ -257,7 +251,9 @@ function buildAgentQuery(args: {
     '- 先按 agent-debug-diagnosis Skill 的 Required References 读取并执行完整诊断规程。',
     `- 必须先运行 skill 脚本生成静态分析：python3 ${args.skillMountPath || `./.${AGENT_DEBUG_SKILL_NAME}`}/scripts/agentdebug_static.py --input ${args.inputRelPath} --output ${AGENT_DEBUG_STATIC_REPORT_REL_PATH}`,
     `- 静态分析后必须运行统一查询脚本获取全局摘要：python3 ${args.skillMountPath || `./.${AGENT_DEBUG_SKILL_NAME}`}/scripts/agentdebug_inspect.py summary --input ${args.inputRelPath} --static ${AGENT_DEBUG_STATIC_REPORT_REL_PATH}`,
-    `- 返回前必须对照静态结果运行校验脚本：python3 ${args.skillMountPath || `./.${AGENT_DEBUG_SKILL_NAME}`}/scripts/agentdebug_validate.py --input ${AGENT_DEBUG_FINAL_REPORT_REL_PATH} --static ${AGENT_DEBUG_STATIC_REPORT_REL_PATH}`,
+    `- 五模块主诊断完成后先写入冻结 core 报告：.agent-insight/agent-debug-core.json`,
+    `- 必须由当前 Agent 运行专项诊断器：python3 ${args.skillMountPath || `./.${AGENT_DEBUG_SKILL_NAME}`}/scripts/detector_runner.py run-all --mode one_click --input ${args.inputRelPath} --output .agent-insight/agent-debug-detectors.json`,
+    `- 返回前必须运行无损校验：python3 ${args.skillMountPath || `./.${AGENT_DEBUG_SKILL_NAME}`}/scripts/agentdebug_validate.py --input ${AGENT_DEBUG_FINAL_REPORT_REL_PATH} --static ${AGENT_DEBUG_STATIC_REPORT_REL_PATH} --core .agent-insight/agent-debug-core.json --detectors .agent-insight/agent-debug-detectors.json`,
     `- 最终回复仍必须是 ${AGENT_DEBUG_FINAL_REPORT_REL_PATH} 的完整 JSON 对象，不要只回复摘要或诊断完成说明。`,
     '- 按 agent-debug-diagnosis Skill 输出严格 JSON。',
     '- Memory / Reflection / Planning / Action 都允许留白；空模块不是错误。',
@@ -266,7 +262,8 @@ function buildAgentQuery(args: {
     '- 用户界面只展示左侧真实 trace 节点；所有 issue/root/cascade 必须尽量带 anchorId、traceStepIndex、traceNodeLabel。',
     '- 不要使用 read + offset 顺序读取大型 JSON，也不要临时编写 python3 -c 查询；使用 Skill 的 agentdebug_inspect.py 获取 summary/tail/range/search/repeated-calls。',
     '- 需要核对超长节点输入或输出时，使用 agentdebug_inspect.py search --scope artifact 定位完整 artifact 中的证据。',
-    '- AgentDebug 主诊断必须只基于 trace、静态检测和 AgentDebug 诊断规程；不要读取或推断 Skills 关键动作分析结果。',
+    '- AgentDebug 五模块主诊断只能基于 trace、静态检测和 AgentDebug 诊断规程；先把结果写入冻结的 core 报告，再由同一个 Agent 按 Skill 调用专项诊断器。',
+    '- 专项诊断器、语义富化、查重与关联都必须在这一次 Skill 执行中完成；不要等待服务端二次调用。',
     '',
     '## 执行记录',
     compactJson(executionBrief, 8000),
@@ -478,11 +475,76 @@ function normalizeFindings(value: unknown, issues: AgentDebugIssue[], root: Agen
         issueRefs: dedupedRefs,
         correctionGuidance: stringField(item, 'correctionGuidance', ''),
         confidence: clamp(numberField(item, 'confidence', 0.5)),
+        supplementalEvidence: normalizeSupplementalEvidence(item.supplementalEvidence),
       });
     }
   }
   if (normalized.length > 0) return normalized;
   return root ? [findingFromRootCause(root, issues)] : [];
+}
+
+function normalizeSupplementalEvidence(value: unknown): AgentDebugSupplementalEvidence[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const normalized = value
+    .map(item => item && typeof item === 'object' ? item as Record<string, unknown> : null)
+    .filter((item): item is Record<string, unknown> => Boolean(item))
+    .map(item => ({
+      summary: stringField(item, 'summary', ''),
+      severity: normalizeSeverity(stringField(item, 'severity', 'medium')),
+      facts: stringArrayField(item, 'facts'),
+      mechanism: stringField(item, 'mechanism', ''),
+      faultChain: stringArrayField(item, 'faultChain'),
+      anchors: normalizeDetectorAnchors(item.anchors),
+      correctionGuidance: stringField(item, 'correctionGuidance', ''),
+      confidence: clamp(numberField(item, 'confidence', 0.5)),
+      details: item.details && typeof item.details === 'object'
+        ? structuredClone(item.details as Record<string, unknown>)
+        : {},
+    }))
+    .filter(item => item.summary || item.facts.length > 0 || item.anchors.length > 0);
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeDetectorFindings(value: unknown, coreFindingIds: Set<string>): AgentDebugDetectorFinding[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map(item => item && typeof item === 'object' ? item as Record<string, unknown> : null)
+    .filter((item): item is Record<string, unknown> => Boolean(item))
+    .map((item, index) => ({
+      id: stringField(item, 'id', 'detector-finding-' + (index + 1)),
+      kind: stringField(item, 'kind', 'specialized'),
+      pattern: optionalStringField(item, 'pattern'),
+      severity: normalizeSeverity(stringField(item, 'severity', 'medium')),
+      summary: stringField(item, 'summary', ''),
+      facts: stringArrayField(item, 'facts'),
+      mechanism: stringField(item, 'mechanism', ''),
+      faultChain: stringArrayField(item, 'faultChain'),
+      anchors: normalizeDetectorAnchors(item.anchors),
+      correctionGuidance: stringField(item, 'correctionGuidance', ''),
+      confidence: clamp(numberField(item, 'confidence', 0.5)),
+      details: item.details && typeof item.details === 'object'
+        ? structuredClone(item.details as Record<string, unknown>)
+        : {},
+      llmEnriched: Boolean(item.llmEnriched),
+      relatedFindingId: coreFindingIds.has(stringField(item, 'relatedFindingId', ''))
+        ? stringField(item, 'relatedFindingId', '')
+        : undefined,
+    }))
+    .filter(item => item.summary);
+}
+
+function normalizeDetectorAnchors(value: unknown): AgentDebugDetectorFinding['anchors'] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map(anchor => anchor && typeof anchor === 'object' ? anchor as Record<string, unknown> : null)
+    .filter((anchor): anchor is Record<string, unknown> => Boolean(anchor))
+    .map(anchor => ({
+      traceStepIndex: optionalNumberField(anchor, 'traceStepIndex'),
+      traceNodeLabel: optionalStringField(anchor, 'traceNodeLabel'),
+      anchorId: optionalStringField(anchor, 'anchorId'),
+      sourceInteractionIndex: optionalNumberField(anchor, 'sourceInteractionIndex'),
+      note: optionalStringField(anchor, 'note'),
+    }));
 }
 
 function findingFromRootCause(root: AgentDebugRootCause, issues: AgentDebugIssue[]): AgentDebugFinding {

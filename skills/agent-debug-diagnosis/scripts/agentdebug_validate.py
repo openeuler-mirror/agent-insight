@@ -34,10 +34,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="校验 AgentDebug 诊断报告 JSON。")
     parser.add_argument("--input", required=True, help="最终报告 JSON 路径")
     parser.add_argument("--static", dest="static_path", help="静态分析 JSON 路径")
+    parser.add_argument("--core", dest="core_path", help="专项诊断前冻结的 core 报告路径")
+    parser.add_argument("--detectors", dest="detectors_path", help="detector_runner.py 的原始输出路径")
     args = parser.parse_args()
 
     report = read_json(args.input)
     static = read_json(args.static_path) if args.static_path else None
+    core = read_json(args.core_path) if args.core_path else None
+    detectors = read_json(args.detectors_path) if args.detectors_path else None
     errors: List[str] = []
     warnings: List[str] = []
 
@@ -78,6 +82,10 @@ def main() -> None:
         for cell in static.get("phase1Grid", []):
             if isinstance(cell, dict) and phase1_key(cell) not in final_cells:
                 errors.append(f"最终 phase1Grid 丢失静态单元格：{phase1_key(cell)}")
+    if core is not None:
+        validate_core_preservation(report, core, errors)
+    if detectors is not None:
+        validate_detector_reconciliation(report, detectors, errors)
     scan_language(report, warnings)
 
     result = {"ok": not errors, "errors": errors, "warnings": warnings}
@@ -272,6 +280,64 @@ def validate_trace_location(item: Dict[str, Any], path: str, warnings: List[str]
         warnings.append(f"{path} 缺少 traceStepIndex，前端只能使用兼容编号。")
     if not item.get("traceNodeLabel") and not item.get("criticalTraceNodeLabel"):
         warnings.append(f"{path} 缺少 traceNodeLabel，前端节点标签会变弱。")
+
+
+def validate_core_preservation(report: Dict[str, Any], core: Dict[str, Any], errors: List[str]) -> None:
+    final_findings = report.get("findings") if isinstance(report.get("findings"), list) else []
+    final_by_id = {str(item.get("id")): item for item in final_findings if isinstance(item, dict) and item.get("id")}
+    for item in core.get("findings", []):
+        if not isinstance(item, dict) or not item.get("id"):
+            continue
+        finding_id = str(item["id"])
+        final = final_by_id.get(finding_id)
+        if final is None:
+            errors.append(f"最终 findings 删除了冻结的 core finding：{finding_id}")
+            continue
+        for key in ("summary", "evidence", "issueRefs", "correctionGuidance"):
+            if final.get(key) != item.get(key):
+                errors.append(f"最终 finding {finding_id} 修改了冻结字段 {key}；专项结果只能追加 supplementalEvidence。")
+
+
+def detector_signature(item: Dict[str, Any]) -> str:
+    payload = {
+        "facts": item.get("facts") if isinstance(item.get("facts"), list) else [],
+        "anchors": item.get("anchors") if isinstance(item.get("anchors"), list) else [],
+        "details": item.get("details") if isinstance(item.get("details"), dict) else {},
+    }
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def validate_detector_reconciliation(report: Dict[str, Any], detectors: Dict[str, Any], errors: List[str]) -> None:
+    raw_findings = detectors.get("findings") if isinstance(detectors.get("findings"), list) else []
+    independent = report.get("detectorFindings") if isinstance(report.get("detectorFindings"), list) else []
+    independent_by_id = {str(item.get("id")): item for item in independent if isinstance(item, dict) and item.get("id")}
+    supplemental_signatures: Dict[str, int] = {}
+    for finding in report.get("findings", []):
+        if not isinstance(finding, dict):
+            continue
+        for item in finding.get("supplementalEvidence", []):
+            if not isinstance(item, dict):
+                continue
+            signature = detector_signature(item)
+            supplemental_signatures[signature] = supplemental_signatures.get(signature, 0) + 1
+
+    consumed_signatures: Dict[str, int] = {}
+    for item in raw_findings:
+        if not isinstance(item, dict) or not item.get("id"):
+            continue
+        finding_id = str(item["id"])
+        signature = detector_signature(item)
+        final = independent_by_id.get(finding_id)
+        if final is not None:
+            if detector_signature(final) != signature:
+                errors.append(f"独立专项结果 {finding_id} 改写了 facts、anchors 或 details。")
+            continue
+        used = consumed_signatures.get(signature, 0)
+        available = supplemental_signatures.get(signature, 0)
+        if used >= available:
+            errors.append(f"专项结果 {finding_id} 既未独立保留，也未无损合入 core finding。")
+            continue
+        consumed_signatures[signature] = used + 1
 
 
 def scan_language(value: Any, warnings: List[str], path: str = "$") -> None:

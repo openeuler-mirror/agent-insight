@@ -83,6 +83,19 @@ export interface AgentDebugFinding {
   issueRefs: AgentDebugFindingIssueRef[];
   correctionGuidance: string;
   confidence: number;
+  supplementalEvidence?: AgentDebugSupplementalEvidence[];
+}
+
+export interface AgentDebugSupplementalEvidence {
+  summary: string;
+  severity: AgentDebugSeverity;
+  facts: string[];
+  mechanism: string;
+  faultChain: string[];
+  anchors: AgentDebugTrajectoryAnchor[];
+  correctionGuidance: string;
+  confidence: number;
+  details: Record<string, unknown>;
 }
 
 export type AgentDebugTrajectoryPattern = 'non_termination' | 'no_progress' | 'oscillation' | 'runaway_repetition';
@@ -135,6 +148,25 @@ export interface AgentDebugTrajectoryFinding {
   /** summary / mechanism / faultChain / correctionGuidance 是否已由 LLM 基于真实证据重写（否则为确定性兜底文案） */
   llmEnriched?: boolean;
 }
+
+export interface AgentDebugDetectorFinding {
+  id: string;
+  kind: string;
+  pattern?: string;
+  severity: AgentDebugSeverity;
+  summary: string;
+  facts: string[];
+  mechanism: string;
+  faultChain: string[];
+  anchors: AgentDebugTrajectoryAnchor[];
+  correctionGuidance: string;
+  confidence: number;
+  details: Record<string, unknown>;
+  detector?: string;
+  llmEnriched?: boolean;
+  relatedFindingId?: string;
+}
+
 
 export interface AgentDebugRootCause {
   criticalStep: number | null;
@@ -248,7 +280,7 @@ export interface AgentDebugSkillsAnalysis {
 }
 
 export interface AgentDebugReportPayload {
-  schemaVersion: 1 | 2;
+  schemaVersion: 1 | 2 | 3;
   generator: string;
   executionId: string;
   interactionHash: string;
@@ -258,8 +290,10 @@ export interface AgentDebugReportPayload {
   rootCause: AgentDebugRootCause | null;
   issues: AgentDebugIssue[];
   findings?: AgentDebugFinding[];
-  /** 轨迹诊断器产出的循环 / 无进展类 finding，与认知 findings 并列（确定性、零 LLM 成本）。 */
+  /** 旧报告兼容：读取时会迁移为 detectorFindings。 */
   trajectoryFindings?: AgentDebugTrajectoryFinding[];
+  /** 未与 AgentDebug findings 重复、需要单独展示的专项诊断发现。 */
+  detectorFindings?: AgentDebugDetectorFinding[];
   phase1Grid?: AgentDebugPhase1Cell[];
   stepRecords?: AgentDebugStepRecord[];
   candidateWindows: AgentDebugCandidateWindow[];

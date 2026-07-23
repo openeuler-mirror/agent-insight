@@ -156,7 +156,7 @@ test('agent-debug supports multi finding protocol and blocks eval pollution', ()
   assert.match(validator, /validate_findings/);
   assert.match(validator, /role=root/);
   assert.match(runner, /normalizeFindings/);
-  assert.match(runner, /schemaVersion:\s*2/);
+  assert.match(runner, /schemaVersion:\s*3/);
   assert.doesNotMatch(runner, /answerScore/);
   assert.doesNotMatch(runner, /judgmentReason/);
   assert.doesNotMatch(runner, /parseFailures/);
@@ -188,7 +188,7 @@ test('fault diagnosis trace persistence uses one mode-specific skill label', () 
   assert.ok(generalRunner.includes('const effectiveTraceSkill = skillMeta?.name ?? input.skill ?? input.tagSkill ?? systemAgentDefinition?.traceSkill'));
   assert.equal(generalRunner.match(/skill: effectiveTraceSkill/g)?.length, 2);
   assert.match(agentDebugRunner, /tagSkill: AGENT_DEBUG_SKILL_NAME/);
-  assert.match(diagnosisRoute, /tagSkill: 'fault-diagnosis'/);
+  assert.match(diagnosisRoute, /tagSkill: 'agent-debug-diagnosis'/);
 });
 
 test('agent-debug runner falls back to final report file', () => {
@@ -230,4 +230,21 @@ test('fault detail exposes AgentDebug diagnosis for every trace', () => {
   assert.doesNotMatch(card, /TraceExplicitErrorCard/);
   assert.doesNotMatch(card, /TraceExplicitErrorsSection/);
   assert.doesNotMatch(card, /原始 Trace 报错/);
+});
+
+
+test("specialized diagnosis orchestration stays inside the unified Skill", () => {
+  const root = process.cwd();
+  const runner = fs.readFileSync(path.join(root, "src", "lib", "engine", "agent-debug", "runner.ts"), "utf8");
+  const diagnosisRoute = fs.readFileSync(path.join(root, "src", "app", "api", "fault", "diagnosis", "stream", "route.ts"), "utf8");
+
+  assert.equal((runner.match(/await runGeneralAgent\(/g) || []).length, 1);
+  assert.doesNotMatch(runner, /runSkillDetectors|enrichDetectorFindings|requestDetectorMergeDecisions|reconcileDetectorFindings/);
+  assert.doesNotMatch(diagnosisRoute, /runTargetedDiagnosis|targetedFindings/);
+  assert.match(diagnosisRoute, /detector_runner\.py run-all --mode targeted/);
+  assert.match(diagnosisRoute, /interactionPolicy: .auto-allow./);
+  assert.match(diagnosisRoute, /agent: .build./);
+  for (const file of ["detector-runtime.ts", "interactive-diagnosis.ts", "detector-reconciliation.ts", "finding-reconciler.ts", "finding-enricher.ts"]) {
+    assert.equal(fs.existsSync(path.join(root, "src", "lib", "engine", "agent-debug", file)), false);
+  }
 });
