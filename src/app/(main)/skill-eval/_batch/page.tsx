@@ -7,6 +7,7 @@ import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
 import { SectionShell, FindingsGrouped } from '@/components/evaluation';
 import { NewEvaluationBatchDialog, type NewBatchCreated } from '@/components/eval/NewEvaluationBatchDialog';
+import { drillTraceEvalUrl } from '@/lib/client/drill-trace-eval';
 import { ConfigMultiSelect } from '@/components/skills/ConfigMultiSelect';
 import { EvalTaskPicker } from '@/components/eval/EvalTaskPicker';
 import { ExecutionRecordsTable, type EvalRecordRow } from '@/components/eval/ExecutionRecordsTable';
@@ -1201,7 +1202,7 @@ export function BatchEvaluation({
                         persistCaseStateUpdate(next);
                         return next;
                     });
-                    router.push(`/eval/trajectory/${encodeURIComponent(sessionId)}`);
+                    void drillTraceEvalUrl(user || '', sessionId).then(url => router.push(url));
                 } else if (result.status === 'failed') {
                     clearInterval(evalPollIntervalsRef.current[caseId]);
                     delete evalPollIntervalsRef.current[caseId];
@@ -1526,7 +1527,7 @@ export function BatchEvaluation({
                         persistTraceEvalUpdate(next);
                         return next;
                     });
-                    router.push(`/eval/trajectory/${encodeURIComponent(taskId)}`);
+                    void drillTraceEvalUrl(user || '', taskId).then(url => router.push(url));
                 } else if (result.status === 'failed') {
                     clearInterval(evalPollIntervalsRef.current[`tr_${key}`]);
                     delete evalPollIntervalsRef.current[`tr_${key}`];
@@ -2380,7 +2381,7 @@ export function BatchEvaluation({
                     failedCount={failedCount}
                     pendingCount={pendingCount}
                     evaluatingCount={evaluatingCount}
-                    onDrillTrace={sessionId => router.push(`/eval/trajectory/${sessionId}`)}
+                    onDrillTrace={sessionId => { void drillTraceEvalUrl(user || '', sessionId).then(url => router.push(url)); }}
                 />
             </SectionShell>{/* /③ 结果 */}
             </>)}{/* /受控模式隐藏 BE 自带 ②/③ */}

@@ -108,7 +108,8 @@ export function NewEvaluationBatchDialog({
     const trimmedTitle = title.trim();
     const finalTitle = trimmedTitle || defaultTaskTitle();
 
-    const canSubmit = finalIds.length > 0 && finalIds.length <= 5 && !submitting;
+    // 上限从 5 放开——预置评估器现有 6 个(2 LLM 忠实版 + 4 结果评测)，卡在 5 会让「创建任务」恒置灰。
+    const canSubmit = finalIds.length > 0 && !submitting;
 
     const handleSubmit = async () => {
         if (!canSubmit) return;
