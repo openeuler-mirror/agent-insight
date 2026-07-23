@@ -1,5 +1,6 @@
 import { db } from '@/lib/storage/prisma';
 import { triggerTrajectoryAutoWatchForTask } from '@/lib/engine/evaluation/trajectory-auto-watch';
+import { triggerExperimentWatchForTask } from '@/lib/engine/experiment/experiment-watch';
 import { NextResponse } from 'next/server';
 
 export async function POST(request: Request) {
@@ -51,6 +52,7 @@ export async function POST(request: Request) {
         }
 
         void triggerTrajectoryAutoWatchForTask(autoWatchUser, taskId, new URL(request.url).origin);
+        void triggerExperimentWatchForTask(autoWatchUser, taskId);
 
         return NextResponse.json({ success: true, task_id: taskId, endTime: safeCompletedAt.toISOString() });
     } catch (error) {

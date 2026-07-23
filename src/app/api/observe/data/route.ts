@@ -4,6 +4,7 @@ import { db, prismaRaw as prisma } from '@/lib/storage/prisma';
 import { NextResponse } from 'next/server';
 import { isActive } from '@/lib/evaluation-task-manager';
 import { triggerTrajectoryAutoWatchForTask } from '@/lib/engine/evaluation/trajectory-auto-watch';
+import { triggerExperimentWatchForTask } from '@/lib/engine/experiment/experiment-watch';
 import { buildOpencodeTelemetryIndex } from '@/lib/observe/opencode-telemetry-index';
 import { listTraceTags } from '@/lib/trace-tags';
 import fs from 'fs';
@@ -254,6 +255,7 @@ async function getAutoEvalReadiness(record: Record<string, unknown>, baseUrl?: s
         try {
             await db.updateSession(taskId, { endTime: new Date() });
             void triggerTrajectoryAutoWatchForTask(String(record.user || ''), taskId, baseUrl);
+            void triggerExperimentWatchForTask(String(record.user || ''), taskId);
         } catch (error) {
             console.warn(`[Data-API] Failed to persist inferred opencode completion for ${taskId}`, error);
         }

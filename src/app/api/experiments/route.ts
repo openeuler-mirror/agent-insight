@@ -61,6 +61,7 @@ export async function POST(req: Request) {
 
     const name = String(body.name || '').trim();
     const agentName = String(body.agentName || '').trim();
+    const watchMode = body.watchMode === true;
     const cases: CaseInput[] = Array.isArray(body.cases) ? body.cases : [];
     const evaluatorIds: string[] = Array.isArray(body.evaluatorIds)
       ? body.evaluatorIds.map((id: unknown) => String(id)).filter(Boolean)
@@ -69,8 +70,12 @@ export async function POST(req: Request) {
     if (!name) {
       return NextResponse.json({ error: 'name is required' }, { status: 400 });
     }
-    if (cases.length < 1) {
+    // 监听模式允许 0 条 case 起步（纯监听，后续该 Agent 新 trace 自动进来评）
+    if (!watchMode && cases.length < 1) {
       return NextResponse.json({ error: 'at least one case is required' }, { status: 400 });
+    }
+    if (watchMode && !agentName) {
+      return NextResponse.json({ error: 'watch mode requires agentName' }, { status: 400 });
     }
     if (evaluatorIds.length < 1) {
       return NextResponse.json({ error: 'at least one evaluator is required' }, { status: 400 });
@@ -84,6 +89,8 @@ export async function POST(req: Request) {
         agentName,
         evaluatorIdsJson: JSON.stringify(evaluatorIds),
         status: 'draft',
+        watchMode,
+        watchEnabledAt: watchMode ? new Date() : null,
         cases: {
           create: cases.map((c) => ({
             executionId: c.executionId ? String(c.executionId) : null,

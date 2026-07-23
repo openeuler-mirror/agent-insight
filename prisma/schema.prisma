@@ -840,30 +840,35 @@ model InfraMetricSample {
 /// ─── 评测「实验」域（本期仅单组实验；对比实验后续在此扩展分组字段）───
 /// 实验 = 一批 case × 一组评估器。单组实验为原「评测执行」的演进形态。
 model Experiment {
-  id               String   @id @default(cuid())
+  id               String    @id @default(cuid())
   user             String
   name             String
   /// 'single'（本期）| 'llm' | 'framework' | 'skill'（对比实验预留）
-  type             String   @default("single")
+  type             String    @default("single")
   /// 待评测 Agent（Execution.agentName）
-  agentName        String   @default("")
+  agentName        String    @default("")
   /// 选中的评估器 id 列表（JSON string[]；预置/自建统一 id 空间）
-  evaluatorIdsJson String   @default("[]")
+  evaluatorIdsJson String    @default("[]")
   /// draft | running | done | failed
-  status           String   @default("draft")
+  status           String    @default("draft")
   /// 来源标记：''=用户手建；'skill-case-analysis'=skill 用例分析评测后端；
   /// 'grayscale-ab'=A/B 灰度评测后端；'batch'=批次评测后端。供评测任务列表按来源过滤。
-  scope            String   @default("")
+  scope            String    @default("")
   /// backing 实验绑定的 skill（评测任务列表按 skill 过滤显示用；来自 eval-traces 落库）
-  skillName        String   @default("")
+  skillName        String    @default("")
   skillVersion     Int?
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  /// 监听模式：开启后 agentName 指定的 Agent 新上报的 trace 自动进本实验评测（取代旧 autoWatch）
+  watchMode        Boolean   @default(false)
+  /// 监听开启时刻——只自动评此后新产生的 trace，避免把历史 trace 全灌进来
+  watchEnabledAt   DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
   cases ExperimentCase[]
 
   @@index([user, createdAt])
   @@index([user, scope, skillName])
+  @@index([watchMode, agentName])
 }
 
 /// 实验内一条 case：绑定一条已有 trace。referenceOutput=③ 步标注的参考输出，
