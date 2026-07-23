@@ -1,8 +1,10 @@
-// 实验详情：实验 + cases + results（执行引擎写入的每行 status/score/points/evidence）
-// 与进度统计 progress = {total, done, failed, pending}（running 计入 pending 口径）。
+// 实验详情：实验元信息 + 服务端聚合（整体均分 overall / 评估器分解 breakdown /
+// 进度 progress，均由全量结果算出）+ 服务端分页的 case 列表（cases 及其 results，
+// 仅当前页）。case 多（尤其监听实验会持续累积）时不再一次拉全量。
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/storage/prisma';
 import { resolveUser } from '@/lib/auth/auth';
+import { overallAverage, evaluatorBreakdown } from '@/lib/engine/experiment/detail-agg';
 
 export const dynamic = 'force-dynamic';
 
@@ -13,15 +15,16 @@ export async function GET(
   try {
     const { id } = await params;
     const url = new URL(req.url);
-    const { username } = await resolveUser(req, url.searchParams.get('user'));
+    const q = url.searchParams;
+    const { username } = await resolveUser(req, q.get('user'));
+    const casePageSize = Math.min(Math.max(Number(q.get('casePageSize')) || 20, 1), 100);
+    const casePageRaw = Math.max(Number(q.get('casePage')) || 1, 1);
 
     const experiment = await prisma.experiment.findFirst({
       where: { id, ...(username ? { user: username } : {}) },
-      include: {
-        cases: {
-          orderBy: { createdAt: 'asc' },
-          include: { results: { orderBy: { createdAt: 'asc' } } },
-        },
+      select: {
+        id: true, name: true, type: true, agentName: true, status: true,
+        watchMode: true, watchEnabledAt: true, evaluatorIdsJson: true, createdAt: true,
       },
     });
     if (!experiment) {
@@ -34,11 +37,37 @@ export async function GET(
       if (Array.isArray(parsed)) evaluatorIds = parsed.map(String);
     } catch { /* 忽略脏数据 */ }
 
+    // 聚合口径按全量结果算（轻量选列，不取 points/evidence）
+    const allResults = await prisma.experimentEvalResult.findMany({
+      where: { experimentId: id },
+      select: { caseId: true, evaluatorId: true, status: true, score: true },
+    });
+    const progress = {
+      total: allResults.length,
+      done: allResults.filter((r: { status: string }) => r.status === 'done').length,
+      failed: allResults.filter((r: { status: string }) => r.status === 'failed').length,
+      pending: allResults.filter((r: { status: string }) => r.status === 'pending' || r.status === 'running').length,
+    };
+    const overall = overallAverage(allResults);
+    const breakdown = evaluatorBreakdown(allResults);
+
+    // case 列表服务端分页（每页 case 连同其 results 一起返回，供逐 case 得分/重评）
+    const caseTotal = await prisma.experimentCase.count({ where: { experimentId: id } });
+    const casePages = Math.max(1, Math.ceil(caseTotal / casePageSize));
+    const casePage = Math.min(casePageRaw, casePages);
+    const pagedCases = await prisma.experimentCase.findMany({
+      where: { experimentId: id },
+      orderBy: { createdAt: 'asc' },
+      skip: (casePage - 1) * casePageSize,
+      take: casePageSize,
+      include: { results: { orderBy: { createdAt: 'asc' } } },
+    });
+
     const parseJson = (s: string | null): unknown => {
       if (!s) return null;
       try { return JSON.parse(s); } catch { return null; }
     };
-    const results = experiment.cases.flatMap((c: any) =>
+    const results = pagedCases.flatMap((c: any) =>
       c.results.map((r: any) => ({
         id: r.id,
         caseId: r.caseId,
@@ -52,12 +81,6 @@ export async function GET(
         durationMs: r.durationMs,
       })),
     );
-    const progress = {
-      total: results.length,
-      done: results.filter((r: any) => r.status === 'done').length,
-      failed: results.filter((r: any) => r.status === 'failed').length,
-      pending: results.filter((r: any) => r.status === 'pending' || r.status === 'running').length,
-    };
 
     return NextResponse.json({
       id: experiment.id,
@@ -69,7 +92,9 @@ export async function GET(
       watchEnabledAt: experiment.watchEnabledAt,
       evaluatorIds,
       createdAt: experiment.createdAt,
-      cases: experiment.cases.map((c: any) => ({
+      overall,
+      breakdown,
+      cases: pagedCases.map((c: any) => ({
         id: c.id,
         executionId: c.executionId,
         taskId: c.taskId,
@@ -79,6 +104,9 @@ export async function GET(
       })),
       results,
       progress,
+      caseTotal,
+      casePage,
+      casePageSize,
     });
   } catch (error) {
     console.error('[Experiment Detail Error]', error);

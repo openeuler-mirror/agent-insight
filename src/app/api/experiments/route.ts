@@ -17,14 +17,23 @@ interface CaseInput {
 export async function GET(req: Request) {
   try {
     const url = new URL(req.url);
-    const { username } = await resolveUser(req, url.searchParams.get('user'));
+    const q = url.searchParams;
+    const { username } = await resolveUser(req, q.get('user'));
     const userFilter = username ? { user: username } : {};
 
-    const rows = await prisma.experiment.findMany({
-      where: userFilter,
-      orderBy: { createdAt: 'desc' },
-      include: { _count: { select: { cases: true } } },
-    });
+    const limit = Math.min(Math.max(Number(q.get('limit')) || 20, 1), 100);
+    const offset = Math.max(Number(q.get('offset')) || 0, 0);
+
+    const [total, rows] = await Promise.all([
+      prisma.experiment.count({ where: userFilter }),
+      prisma.experiment.findMany({
+        where: userFilter,
+        orderBy: { createdAt: 'desc' },
+        skip: offset,
+        take: limit,
+        include: { _count: { select: { cases: true } } },
+      }),
+    ]);
 
     const items = rows.map((r: any) => {
       let evaluatorCount = 0;
@@ -45,7 +54,7 @@ export async function GET(req: Request) {
       };
     });
 
-    return NextResponse.json({ items });
+    return NextResponse.json({ items, total, limit, offset });
   } catch (error) {
     console.error('[Experiments GET Error]', error);
     return NextResponse.json({ error: 'Failed to load experiments' }, { status: 500 });

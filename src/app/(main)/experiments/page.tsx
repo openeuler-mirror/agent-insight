@@ -1,7 +1,7 @@
 'use client';
 
 // 实验列表 —— 评测「实验化」第一切片（本期仅单组实验）。
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { FlaskConical, Plus } from 'lucide-react';
 
@@ -24,7 +24,7 @@ interface ExperimentRow {
   createdAt: string;
 }
 
-const PAGE_SIZE = 20;
+const PAGE_SIZE_OPTIONS = [20, 50, 100];
 
 const STATUS_META: Record<string, { label: string; bg: string; fg: string }> = {
   draft: { label: '草稿', bg: 'var(--background-secondary)', fg: 'var(--foreground-secondary)' },
@@ -91,28 +91,35 @@ export default function ExperimentsPage() {
   const [rows, setRows] = useState<ExperimentRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [total, setTotal] = useState(0);
 
   const load = useCallback(async () => {
     if (!user) return;
     setLoading(true);
     try {
-      const res = await apiFetch(`/api/experiments?user=${encodeURIComponent(user)}`);
+      const offset = (page - 1) * pageSize;
+      const res = await apiFetch(
+        `/api/experiments?user=${encodeURIComponent(user)}&limit=${pageSize}&offset=${offset}`,
+      );
       const data = await res.json();
       setRows(Array.isArray(data?.items) ? data.items : []);
+      setTotal(typeof data?.total === 'number' ? data.total : 0);
     } catch {
       setRows([]);
+      setTotal(0);
     } finally {
       setLoading(false);
     }
-  }, [user]);
+  }, [user, page, pageSize]);
 
   useEffect(() => { load(); }, [load]);
 
-  const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
-  const pageRows = useMemo(
-    () => rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
-    [rows, page],
-  );
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  // 页码/每页条数变化后若越界（如切大页码后减小 pageSize），回夹到末页
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
 
   return (
     <>
@@ -134,7 +141,7 @@ export default function ExperimentsPage() {
             <div style={{ padding: 32, textAlign: 'center', fontSize: 12, color: 'var(--foreground-muted)' }}>
               加载中…
             </div>
-          ) : rows.length === 0 ? (
+          ) : total === 0 ? (
             <EmptyState
               icon={FlaskConical}
               title="还没有实验"
@@ -160,7 +167,7 @@ export default function ExperimentsPage() {
                 </tr>
               </thead>
               <tbody>
-                {pageRows.map((r) => (
+                {rows.map((r) => (
                   <tr
                     key={r.id}
                     onClick={() => router.push(`/experiments/${r.id}`)}
@@ -189,13 +196,28 @@ export default function ExperimentsPage() {
           )}
         </div>
 
-        {!loading && rows.length > PAGE_SIZE && (
-          <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8, marginTop: 12, fontSize: 12 }}>
-            <Button size="sm" variant="outline" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
+        {!loading && total > 0 && (
+          <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 12, marginTop: 12, fontSize: 12, color: 'var(--foreground-muted)' }}>
+            <span>共 {total} 个实验</span>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              每页
+              <select
+                value={pageSize}
+                onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}
+                style={{
+                  fontSize: 12, padding: '3px 6px', borderRadius: 6,
+                  border: '1px solid var(--border)', background: 'var(--card-bg)', color: 'var(--foreground)',
+                }}
+              >
+                {PAGE_SIZE_OPTIONS.map((n) => <option key={n} value={n}>{n}</option>)}
+              </select>
+              条
+            </label>
+            <Button size="sm" variant="outline" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
               上一页
             </Button>
-            <span style={{ color: 'var(--foreground-muted)' }}>{page} / {totalPages}</span>
-            <Button size="sm" variant="outline" disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>
+            <span>{page} / {totalPages}</span>
+            <Button size="sm" variant="outline" disabled={page >= totalPages} onClick={() => setPage((p) => Math.min(totalPages, p + 1))}>
               下一页
             </Button>
           </div>

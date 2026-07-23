@@ -11,11 +11,7 @@ import { AppTopBar } from '@/components/shell/AppTopBar';
 import { PageContainer } from '@/components/shell/PageContainer';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
-import {
-  caseScore,
-  evaluatorBreakdown,
-  overallAverage,
-} from '@/lib/engine/experiment/detail-agg';
+import { caseScore, type EvaluatorBreakdownRow } from '@/lib/engine/experiment/detail-agg';
 
 interface ExperimentDetail {
   id: string;
@@ -48,6 +44,11 @@ interface ExperimentDetail {
     durationMs: number | null;
   }>;
   progress: { total: number; done: number; failed: number; pending: number };
+  overall: number | null;
+  breakdown: EvaluatorBreakdownRow[];
+  caseTotal: number;
+  casePage: number;
+  casePageSize: number;
 }
 
 const STATUS_META: Record<string, { label: string; bg: string; fg: string }> = {
@@ -79,7 +80,7 @@ function fmtScore(v: number | null): string {
   return typeof v === 'number' ? String(v) : '—';
 }
 
-const PAGE_SIZE = 10;
+const CASE_PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
 
 export default function ExperimentDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -90,13 +91,16 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
   const [error, setError] = useState('');
   const [starting, setStarting] = useState(false);
   const [retryingCaseId, setRetryingCaseId] = useState('');
-  const [page, setPage] = useState(1);
+  const [casePage, setCasePage] = useState(1);
+  const [casePageSize, setCasePageSize] = useState(20);
 
   const load = useCallback(async (silent = false) => {
     if (!user) return;
     if (!silent) setLoading(true);
     try {
-      const res = await apiFetch(`/api/experiments/${encodeURIComponent(id)}?user=${encodeURIComponent(user)}`);
+      const res = await apiFetch(
+        `/api/experiments/${encodeURIComponent(id)}?user=${encodeURIComponent(user)}&casePage=${casePage}&casePageSize=${casePageSize}`,
+      );
       const data = await res.json();
       if (!res.ok) throw new Error(String(data?.error || '加载实验失败'));
       setDetail(data);
@@ -109,7 +113,7 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
     } finally {
       if (!silent) setLoading(false);
     }
-  }, [user, id]);
+  }, [user, id, casePage, casePageSize]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -183,14 +187,10 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
 
   const status = STATUS_META[detail?.status ?? 'draft'] ?? STATUS_META.draft;
 
-  const overall = useMemo(
-    () => (detail ? overallAverage(detail.results) : null),
-    [detail],
-  );
-  const breakdown = useMemo(
-    () => (detail ? evaluatorBreakdown(detail.results) : []),
-    [detail],
-  );
+  // 聚合口径（整体均分/评估器分解）由服务端按全量结果算好返回
+  const overall = detail?.overall ?? null;
+  const breakdown = detail?.breakdown ?? [];
+  // caseRows = 当前页 case（服务端已分页）+ 逐 case 得分（用本页结果算）
   const caseRows = useMemo(() => {
     if (!detail) return [];
     return detail.cases.map((c) => ({
@@ -199,9 +199,13 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
     }));
   }, [detail, lookup]);
 
-  const totalPages = Math.max(1, Math.ceil(caseRows.length / PAGE_SIZE));
-  const safePage = Math.min(page, totalPages);
-  const pagedRows = caseRows.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+  const caseTotal = detail?.caseTotal ?? 0;
+  const totalPages = Math.max(1, Math.ceil(caseTotal / casePageSize));
+  const pagedRows = caseRows;
+  // 服务端页码越界（如减小每页条数后当前页超出）时回夹到末页
+  useEffect(() => {
+    if (casePage > totalPages) setCasePage(totalPages);
+  }, [casePage, totalPages]);
 
   return (
     <>
@@ -276,7 +280,7 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
                 {status.label}
               </span>
               <span><span style={{ color: 'var(--foreground-muted)' }}>待评测 Agent：</span>{detail.agentName || '—'}</span>
-              <span><span style={{ color: 'var(--foreground-muted)' }}>Case：</span>{detail.cases.length}</span>
+              <span><span style={{ color: 'var(--foreground-muted)' }}>Case：</span>{detail.caseTotal}</span>
               <span><span style={{ color: 'var(--foreground-muted)' }}>评估器：</span>{detail.evaluatorIds.length}</span>
               <span style={{ color: 'var(--foreground-muted)' }}>
                 创建于 {new Date(detail.createdAt).toLocaleString('zh-CN', { hour12: false })}
@@ -305,7 +309,7 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
             {/* 整体表现卡（整行） */}
             <div style={{ ...CARD, padding: '18px 20px', marginBottom: 14 }}>
               <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--foreground-secondary)', marginBottom: 8 }}>
-                整体表现 · {detail.cases.length} 个 case
+                整体表现 · {detail.caseTotal} 个 case
               </div>
               <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
                 <span style={{ fontSize: 34, fontWeight: 700, lineHeight: 1, color: 'var(--accent)' }}>
@@ -426,32 +430,46 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
                   </tbody>
                 </table>
               </div>
-              {caseRows.length > PAGE_SIZE && (
+              {caseTotal > casePageSize && (
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: 8, padding: '9px 16px',
                   borderTop: '1px solid var(--border)', fontSize: 11, color: 'var(--foreground-muted)',
                 }}>
-                  共 {caseRows.length} 个 case · 每页 {PAGE_SIZE} 条
+                  共 {caseTotal} 个 case
+                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, marginLeft: 6 }}>
+                    每页
+                    <select
+                      value={casePageSize}
+                      onChange={(e) => { setCasePageSize(Number(e.target.value)); setCasePage(1); }}
+                      style={{
+                        fontSize: 11, padding: '2px 5px', borderRadius: 6,
+                        border: '1px solid var(--border)', background: 'var(--card-bg)', color: 'var(--foreground)',
+                      }}
+                    >
+                      {CASE_PAGE_SIZE_OPTIONS.map((n) => <option key={n} value={n}>{n}</option>)}
+                    </select>
+                    条
+                  </label>
                   <span style={{ flex: 1 }} />
                   <button
-                    onClick={() => setPage((p) => Math.max(1, p - 1))}
-                    disabled={safePage <= 1}
+                    onClick={() => setCasePage((p) => Math.max(1, p - 1))}
+                    disabled={casePage <= 1}
                     style={{
                       fontSize: 11, padding: '2px 9px', borderRadius: 6, border: '1px solid var(--border)',
                       background: 'var(--background-secondary)', color: 'var(--foreground)',
-                      cursor: safePage <= 1 ? 'default' : 'pointer', opacity: safePage <= 1 ? 0.5 : 1,
+                      cursor: casePage <= 1 ? 'default' : 'pointer', opacity: casePage <= 1 ? 0.5 : 1,
                     }}
                   >
                     上一页
                   </button>
-                  <span>{safePage} / {totalPages}</span>
+                  <span>{casePage} / {totalPages}</span>
                   <button
-                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                    disabled={safePage >= totalPages}
+                    onClick={() => setCasePage((p) => Math.min(totalPages, p + 1))}
+                    disabled={casePage >= totalPages}
                     style={{
                       fontSize: 11, padding: '2px 9px', borderRadius: 6, border: '1px solid var(--border)',
                       background: 'var(--background-secondary)', color: 'var(--foreground)',
-                      cursor: safePage >= totalPages ? 'default' : 'pointer', opacity: safePage >= totalPages ? 0.5 : 1,
+                      cursor: casePage >= totalPages ? 'default' : 'pointer', opacity: casePage >= totalPages ? 0.5 : 1,
                     }}
                   >
                     下一页
