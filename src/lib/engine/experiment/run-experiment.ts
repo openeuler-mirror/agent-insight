@@ -123,7 +123,7 @@ async function loadCaseRuntime(caseRow: {
   input: string;
   actualOutput: string;
   referenceOutput: string | null;
-}): Promise<CaseRuntime> {
+}, user: string): Promise<CaseRuntime> {
   const execution = caseRow.executionId
     ? await prisma.execution.findUnique({ where: { id: caseRow.executionId } })
     : null;
@@ -215,6 +215,12 @@ async function loadCaseRuntime(caseRow: {
     interactions: rawInteractions,
     taskId,
     executionId: caseRow.executionId,
+    user,
+    execution: execution ? {
+      id: execution.id, taskId: execution.taskId, query: execution.query, finalResult: execution.finalResult,
+      skill: execution.skill, skillVersion: execution.skillVersion,
+      invokedSkills: execution.invokedSkills, skills: execution.skills,
+    } : null,
   };
 
   return { codeCtx, judgeCtx, faithfulCtx };
@@ -294,7 +300,7 @@ export async function executeResultRow(user: string, resultId: string): Promise<
   let localAttempts = 0;
   let lastError: unknown = null;
 
-  const runtime = await loadCaseRuntime(row.case);
+  const runtime = await loadCaseRuntime(row.case, user);
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     localAttempts = attempt;

@@ -29,6 +29,14 @@ export interface FaithfulPresetContext {
   interactions: unknown[];
   taskId: string | null;
   executionId: string | null;
+  /** trace 归属用户（skill 记录按 user 查找） */
+  user?: string | null;
+  /** case 对应的 Execution 记录（含 skill/skillVersion/invokedSkills）——
+   *  用于检测 skill 上下文做 skill 归因；与单组/对比无关，取决于 trace 用没用 skill。 */
+  execution?: {
+    id?: string | null; taskId?: string | null; query?: string | null; finalResult?: string | null;
+    skill?: string | null; skillVersion?: number | null; invokedSkills?: string | null; skills?: string | null;
+  } | null;
 }
 
 /** 测试注入点：跳过真实 opencode 调用，直接返回给定输出（同 judge-llm 的 setJudgeLlmCallerForTest）。 */
@@ -79,14 +87,21 @@ function stepsToAnchors(steps: unknown): string[] | undefined {
 
 async function runTaskCompletion(user: string, ctx: FaithfulPresetContext): Promise<EvaluatorOutput> {
   const { evaluateTaskCompletionViaOpencode } = await import('../evaluation/opencode-task-completion-evaluator');
+  // skill 归因取决于 trace 用没用 skill（与单组/对比无关）：检测 execution 的 skill 目标，
+  // 有则组 SKILL.md 上下文走 skill-aware 分支，无则 no-skill——与评测执行 run route 一致。
+  const { loadTaskCompletionSkillContext, getPrimaryExecutionSkillTargets } = await import('../evaluation/key-action-trace-analysis');
+  const skillTargets = getPrimaryExecutionSkillTargets(ctx.execution ?? null, ctx.interactions);
+  const skillContext = skillTargets.length
+    ? await loadTaskCompletionSkillContext(ctx.execution ?? null, ctx.interactions, ctx.user ?? user)
+    : undefined;
   const out = await evaluateTaskCompletionViaOpencode(
     {
       caseInput: ctx.caseInput,
       expectedOutput: ctx.referenceOutput ?? '',
       actualOutput: ctx.actualOutput,
       traceSummaryText: ctx.traceSummaryText ?? undefined,
-      // 实验单组本期无 skill 上下文——走无 Skill 分支（禁止输出 skill 归因）
-      skillAttributionMode: 'no-skill',
+      skillAttributionMode: skillTargets.length ? 'skill-aware' : 'no-skill',
+      skillContext,
     },
     user,
   );
@@ -139,6 +154,13 @@ async function runTrajectoryQuality(user: string, ctx: FaithfulPresetContext): P
   const { summarizeTrace, formatTraceForLLM } = await import('../evaluation/trace-summarizer');
   const summary = summarizeTrace(ctx.interactions, { maxSteps: 80, maxTextLen: 400 });
   const extractedSteps = summary.steps.map((step) => ({ ...step, step_index: step.index, stepIndex: step.index }));
+
+  // skill 归因：trace 用了 skill 且能取到关键动作参考 → skill_key_actions 模式（含 skill 改进建议），
+  // 否则 trace_only。与评测执行 run route 一致，跟单组/对比无关。
+  const { buildSkillKeyActionReference } = await import('../evaluation/key-action-trace-analysis');
+  const keyActionRef = await buildSkillKeyActionReference(ctx.execution ?? null, ctx.user ?? user, ctx.interactions);
+  const hasKeyActions = keyActionRef.status === 'ok' && extractedSteps.length > 0;
+
   const out = await evaluateTrajectoryViaOpencode(
     {
       caseId: ctx.executionId ?? ctx.taskId ?? 'exp-case',
@@ -146,7 +168,11 @@ async function runTrajectoryQuality(user: string, ctx: FaithfulPresetContext): P
       actualInteractions: ctx.interactions,
       actualExtractedSteps: extractedSteps,
       actualExtractedStepsText: formatTraceForLLM(summary),
-      comparisonMode: 'trace_only',
+      comparisonMode: hasKeyActions ? 'skill_key_actions' : 'trace_only',
+      ...(hasKeyActions ? {
+        referenceKeyActionsText: keyActionRef.referenceKeyActionsText,
+        referenceKeyActions: keyActionRef.referenceKeyActions ?? [],
+      } : {}),
       taskId: ctx.taskId ?? undefined,
       executionId: ctx.executionId ?? undefined,
     },
