@@ -24,14 +24,14 @@ description: >
 
 ```text
 输入 JSON
-  -> AgentDebug 静态检测、五模块与 Phase 2
-  -> 冻结 core findings
-  -> 同一个 AgentDebug Agent 比较已富化专项结果
-  -> 输出 merge / independent 决策
-  -> 通用代码无损应用决策并生成最终报告
+  -> 同一个 Agent 执行静态检测、五模块与 Phase 2
+  -> 写入并冻结 core 报告
+  -> 同一个 Agent 调用 Skill-local 专项诊断器
+  -> 同一个 Agent 富化、语义查重与关联
+  -> 校验无损约束并返回完整最终报告
 ```
 
-项目后端负责挂载 skill、提供输入、执行通用诊断器运行与富化、无损应用合并决策并保存报告。拆分规则、检测规则、词表、查重判定规则和校验逻辑都归这个 skill 管理。
+项目后端只负责挂载 Skill、准备输入与 trace 资料包、启动 Agent、存储和流式转发。诊断器运行、通用富化、查重关联和最终报告生成都由执行该 Skill 的同一个 Agent 完成；确定性脚本负责发现诊断器、产出结构化事实和校验最终结果。
 
 ## 一键诊断必须读取的资料
 
@@ -70,18 +70,29 @@ python3 .agent-debug-diagnosis/scripts/agentdebug_inspect.py summary \
 
 根据五模块候选信号，继续使用 `tail`、`range`、`search`、`repeated-calls` 拉取小块证据。不要顺序读取大型 JSON，也不要临时编写 `python3 -c` 查询。静态或查询脚本失败时，不要继续凭空诊断；返回结构化失败报告。
 
-最终回答前，先把准备返回的 JSON 写入：
+五模块主诊断完成后，先把不含专项结果的完整报告写入：
 
 ```text
-.agent-insight/agent-debug-final.json
+.agent-insight/agent-debug-core.json
 ```
 
-再运行校验脚本：
+再运行所有支持 `one_click` 的 Skill-local 诊断器：
+
+```bash
+python3 .agent-debug-diagnosis/scripts/detector_runner.py run-all \
+  --mode one_click \
+  --input .agent-insight/agent-debug-input.json \
+  --output .agent-insight/agent-debug-detectors.json
+```
+
+当前 Agent 读取专项事实后完成富化、查重与关联，把完整最终报告写入 `.agent-insight/agent-debug-final.json`，再运行：
 
 ```bash
 python3 .agent-debug-diagnosis/scripts/agentdebug_validate.py \
   --input .agent-insight/agent-debug-final.json \
-  --static .agent-insight/agent-debug-static.json
+  --static .agent-insight/agent-debug-static.json \
+  --core .agent-insight/agent-debug-core.json \
+  --detectors .agent-insight/agent-debug-detectors.json
 ```
 
 如果校验报错，先修正 JSON 再重新校验。校验只警告时，可以返回最终 JSON，但应优先修正明显的英文说明和缺失证据。
@@ -97,6 +108,9 @@ python3 .agent-debug-diagnosis/scripts/agentdebug_validate.py \
 - 每条 `finding` 必须通过 `issueRefs` 引用实际存在的 `issues`，并且恰好有一个 `role=root`；下游症状使用 `role=downstream`，不要重复提升成另一条 finding。
 - 用户可见自然语言里默认使用“关键发现”“潜在问题”“过程风险”，不要把已恢复或未造成任务失败的问题写成“根因”。只有 trace 明确失败且该问题直接导致失败时，才可以使用“根因”。
 - `findings[].summary` 和 `rootCause.summary` 只写 1-2 句结论；原始报错、命令、节点、重复模式和长推理放入 `evidence`、`issueRefs`、`cascadingChain` 或 `correctionGuidance`，不要堆在 summary 里。
+- 同一次一键诊断只能启动一次 Agent；不得要求服务端二次运行诊断器、富化器或合并模型。
+- 冻结的 core finding 的 `id`、`summary`、`evidence`、`issueRefs` 和 `correctionGuidance` 不得被专项阶段改写或删除。
+- 每条专项结果必须独立保留或无损写入一条 core finding 的 `supplementalEvidence`，不得静默丢失。
 - 不使用候选窗口，不要只分析局部 trace；必须对输入文件里的全部 step 执行拆分和 Phase 1 检测。
 - `agentdebug_static.py` 必须覆盖全部 turn；智能诊断 agent 根据 `summary` 中 Memory、Reflection、Planning、Action、System 五模块候选信号按需核查语义证据。
 - 不允许使用 read + offset 顺序读取大型 JSON，也不允许临时编写 `python3 -c`；只使用 `agentdebug_inspect.py` 查询。
@@ -124,8 +138,11 @@ python3 .agent-debug-diagnosis/scripts/agentdebug_validate.py \
    - System：复核超时、认证、上下文限制和系统性工具失败是否属于外部原因。
 7. 保留全部静态事实并追加语义问题，形成 Phase 1 错误网格。
 8. 执行 Phase 2，聚合最值得用户关注的 core `findings`；机制或修复方向不同的问题不得合并。`rootCause` 仅作为 `findings[0]` 的历史兼容投影。
-9. 写入 `.agent-insight/agent-debug-final.json`，使用 `--static` 对照校验后返回冻结的主诊断 JSON。
-10. 后端随后发起第二阶段；只按 `08-detector-reconciliation.md` 比较 core findings 与专项结果并返回 decisions。
+9. 把完整主诊断写入 `.agent-insight/agent-debug-core.json`，此时不得包含专项结果。
+10. 运行 `detector_runner.py run-all --mode one_click`，读取 `.agent-insight/agent-debug-detectors.json`；诊断器失败必须保留 `errors`，不得伪造结果。
+11. 当前 Agent 基于真实 trace 样本富化专项结果的说明文字，不得改变 `facts`、`anchors`、`details` 中的计数、区间、比例和锚点。
+12. 按 `08-detector-reconciliation.md` 直接生成完整最终报告：重复结果写入 core finding 的 `supplementalEvidence`；不重复结果写入 `detectorFindings`；仅相关结果可设置 `relatedFindingId`。
+13. 写入 `.agent-insight/agent-debug-final.json`，同时传入 `--static`、`--core`、`--detectors` 校验；修正错误后返回该完整 JSON。
 
 ## 一键诊断输出要求
 
@@ -134,6 +151,7 @@ python3 .agent-debug-diagnosis/scripts/agentdebug_validate.py \
 - `triage`
 - `stepRecords`
 - `phase1Grid`
+- `detectorFindings`（没有独立专项发现时为空数组）
 - `issues`
 - `findings`
 - `rootCause`

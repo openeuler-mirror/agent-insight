@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -101,4 +101,63 @@ test('detects a repeated assistant-message loop through the generic runner', () 
   assert.equal(findings[0].pattern, 'non_termination');
   const details = findings[0].details as Record<string, unknown>;
   assert.ok(Number(details.cycleCount) >= 10);
+});
+
+
+test("targeted run-all reads the query from the Skill input file", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-debug-targeted-input-"));
+  const input = path.join(dir, "input.json");
+  try {
+    fs.writeFileSync(input, JSON.stringify({ query: "为什么一直重复调用工具，像死循环？", turns: [] }), "utf8");
+    const payload = run(["run-all", "--mode", "targeted", "--input", input]);
+    assert.deepEqual((payload.runs as Array<{ detector: { name: string } }>).map(item => item.detector.name), ["trajectory-loop"]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("final validator requires every detector fact to stay independent or merge losslessly", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-debug-final-validator-"));
+  const corePath = path.join(dir, "core.json");
+  const detectorsPath = path.join(dir, "detectors.json");
+  const finalPath = path.join(dir, "final.json");
+  const issue = {
+    id: "N1-action-redundant_call", step: 1, traceStepIndex: 1, module: "action",
+    errorType: "redundant_call", severity: "medium", evidence: "重复调用", reasoning: "无进展", confidence: 0.8,
+  };
+  const coreFinding = {
+    id: "finding-loop", severity: "medium", impact: "quality_degrading", summary: "存在重复调用。",
+    evidence: "节点 1 出现重复。", issueRefs: [{ issueId: issue.id, role: "root" }],
+    correctionGuidance: "增加终止条件。", confidence: 0.8,
+  };
+  const detectorFinding = {
+    id: "trajectory-1-8", kind: "trajectory", severity: "high", summary: "调用未终止。",
+    facts: ["连续 8 次重复调用。"], mechanism: "缺少终止条件", faultChain: ["重复调用"],
+    anchors: [{ traceStepIndex: 1, anchorId: "anchor-1" }], correctionGuidance: "限制重试次数。",
+    confidence: 0.9, details: { cycleCount: 8 }, detector: "trajectory-loop@1.0.0",
+  };
+  const core = { triage: {}, stepRecords: [], phase1Grid: [], issues: [issue], findings: [coreFinding], rootCause: null, humanSummary: "主诊断" };
+  const final = {
+    ...core,
+    findings: [{ ...coreFinding, supplementalEvidence: [{
+      summary: detectorFinding.summary, severity: detectorFinding.severity, facts: detectorFinding.facts,
+      mechanism: detectorFinding.mechanism, faultChain: detectorFinding.faultChain, anchors: detectorFinding.anchors,
+      correctionGuidance: detectorFinding.correctionGuidance, confidence: detectorFinding.confidence, details: detectorFinding.details,
+    }] }],
+    detectorFindings: [],
+  };
+  try {
+    fs.writeFileSync(corePath, JSON.stringify(core), "utf8");
+    fs.writeFileSync(detectorsPath, JSON.stringify({ findings: [detectorFinding] }), "utf8");
+    fs.writeFileSync(finalPath, JSON.stringify(final), "utf8");
+    const validator = path.join(process.cwd(), "skills", "agent-debug-diagnosis", "scripts", "agentdebug_validate.py");
+    execFileSync("python3", [validator, "--input", finalPath, "--core", corePath, "--detectors", detectorsPath], { encoding: "utf8" });
+
+    fs.writeFileSync(finalPath, JSON.stringify({ ...final, findings: [coreFinding] }), "utf8");
+    const rejected = spawnSync("python3", [validator, "--input", finalPath, "--core", corePath, "--detectors", detectorsPath], { encoding: "utf8" });
+    assert.equal(rejected.status, 1);
+    assert.match(rejected.stdout, /既未独立保留，也未无损合入/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

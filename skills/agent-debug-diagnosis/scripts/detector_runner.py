@@ -73,6 +73,14 @@ def select_manifests(manifests: list[dict[str, Any]], mode: str, query: str) -> 
     return [row[3] for row in scored]
 
 
+def query_from_input(query: str, input_path: str) -> str:
+    if query.strip():
+        return query
+    payload = json.loads(Path(input_path).read_text(encoding="utf-8"))
+    value = payload.get("query")
+    return value if isinstance(value, str) else ""
+
+
 def run_detector(manifest: dict[str, Any], input_path: str) -> dict[str, Any]:
     proc = subprocess.run(
         [sys.executable, manifest["entrypointPath"], "--input", input_path, "--manifest", manifest["manifestPath"]],
@@ -147,7 +155,8 @@ def main() -> int:
         result = run_detector(manifest, args.input)
         write_result({"findings": result["findings"], "runs": [result]}, args.output)
         return 0
-    selected = select_manifests(manifests, args.mode, args.query)
+    query = query_from_input(args.query, args.input) if args.mode == "targeted" else args.query
+    selected = select_manifests(manifests, args.mode, query)
     runs = []
     errors = []
     for item in selected:

@@ -167,18 +167,6 @@ export interface AgentDebugDetectorFinding {
   relatedFindingId?: string;
 }
 
-export interface AgentDebugDetectorMergeDecision {
-  detectorFindingId: string;
-  action: 'merge' | 'independent';
-  targetFindingId?: string;
-  relatedFindingId?: string;
-  reason?: string;
-  patch?: {
-    severity?: AgentDebugSeverity;
-    impact?: AgentDebugFindingImpact;
-    confidence?: number;
-  };
-}
 
 export interface AgentDebugRootCause {
   criticalStep: number | null;

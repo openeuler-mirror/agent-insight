@@ -231,3 +231,20 @@ test('fault detail exposes AgentDebug diagnosis for every trace', () => {
   assert.doesNotMatch(card, /TraceExplicitErrorsSection/);
   assert.doesNotMatch(card, /原始 Trace 报错/);
 });
+
+
+test("specialized diagnosis orchestration stays inside the unified Skill", () => {
+  const root = process.cwd();
+  const runner = fs.readFileSync(path.join(root, "src", "lib", "engine", "agent-debug", "runner.ts"), "utf8");
+  const diagnosisRoute = fs.readFileSync(path.join(root, "src", "app", "api", "fault", "diagnosis", "stream", "route.ts"), "utf8");
+
+  assert.equal((runner.match(/await runGeneralAgent\(/g) || []).length, 1);
+  assert.doesNotMatch(runner, /runSkillDetectors|enrichDetectorFindings|requestDetectorMergeDecisions|reconcileDetectorFindings/);
+  assert.doesNotMatch(diagnosisRoute, /runTargetedDiagnosis|targetedFindings/);
+  assert.match(diagnosisRoute, /detector_runner\.py run-all --mode targeted/);
+  assert.match(diagnosisRoute, /interactionPolicy: .auto-allow./);
+  assert.match(diagnosisRoute, /agent: .build./);
+  for (const file of ["detector-runtime.ts", "interactive-diagnosis.ts", "detector-reconciliation.ts", "finding-reconciler.ts", "finding-enricher.ts"]) {
+    assert.equal(fs.existsSync(path.join(root, "src", "lib", "engine", "agent-debug", file)), false);
+  }
+});

@@ -3,6 +3,8 @@ import { withBackgroundOpencodeSlot } from '@/lib/engine/general-agent/concurren
 import type { ChatHandlers } from '@/lib/engine/skill-generation/opencode-agent-cli/opencode-client';
 import { ensureSessionWorkspace } from '@/lib/engine/general-agent/workspace';
 import { ensureTraceBundle } from '@/lib/engine/observability/trace-bundle';
+import fs from 'node:fs';
+import path from 'node:path';
 import { inferSubagentNamesFromInteractions } from '@/lib/engine/observability/subagent-inference';
 import { normalizeClaudeCodeInteractionsForStorage } from '@/lib/shared/interaction-content';
 import { db, prismaRaw } from '@/lib/storage/prisma';
@@ -12,8 +14,7 @@ import {
   parseReportPayload,
   parseSkillsAnalysisPayload,
 } from '@/lib/engine/agent-debug/report-store';
-import { hashInteractions } from '@/lib/engine/agent-debug/trace-adapter';
-import { runTargetedDiagnosis } from '@/lib/engine/agent-debug/interactive-diagnosis';
+import { buildDebugTurns, hashInteractions } from '@/lib/engine/agent-debug/trace-adapter';
 import { loadFileBasedSkillPrompt, mountFileBasedSkillResources } from '@/lib/engine/general-agent/skills-fs-loader';
 import type { AgentDebugReportPayload, AgentDebugSkillsAnalysis } from '@/lib/engine/agent-debug/types';
 
@@ -106,6 +107,14 @@ function formatConversationHistory(messages: Array<{ role: string; content: stri
     })
     .join('\n\n---\n\n');
   return compactText(text, max);
+}
+
+function writeFollowUpDiagnosisInput(args: { workspaceDir: string; interactions: unknown[]; query: string }): string {
+  const relPath = path.join('.agent-insight', 'follow-up-diagnosis-input.json');
+  const filePath = path.join(args.workspaceDir, relPath);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify({ schemaVersion: 1, query: args.query, turns: buildDebugTurns(args.interactions) }, null, 2) + '\n', 'utf8');
+  return relPath.split(path.sep).join('/');
 }
 
 function summarizeAgentDebugReport(report: AgentDebugReportPayload, hashState: string, skillsAnalysis: AgentDebugSkillsAnalysis | null) {
@@ -324,7 +333,8 @@ export async function POST(request: Request) {
   const agentDebugContext = await formatAgentDebugContext(executionId, interactions);
   const conversationHistory = formatConversationHistory(previousMessages);
   mountFileBasedSkillResources('agent-debug-diagnosis', workspaceDir);
-  const targetedFindings = await runTargetedDiagnosis({ workspaceDir, interactions, query: message, user });
+  const diagnosisInputRelPath = writeFollowUpDiagnosisInput({ workspaceDir, interactions, query: message });
+  const skillMountPath = './.agent-debug-diagnosis';
   const query = [
     '下面是用户当前打开的故障记录上下文，请只基于这些证据和后续用户问题作答。',
     '',
@@ -354,15 +364,15 @@ export async function POST(request: Request) {
       '5. 回答引用节点时使用 @[nodeId:nodeLabel] 格式。',
     ].join('\n'),
     '',
-    targetedFindings.length ? '## 定向查因补充结果' : '## 追问路由',
-    targetedFindings.length
-      ? compactJson(targetedFindings, 12000)
-      : '未匹配到专项诊断器；按普通追问流程作答。',
-    targetedFindings.length
-      ? '这些结果来自确定性专项诊断。结合现有上下文回答用户，但不要运行 AgentDebug 五模块；不得改变计数、区间、比例和锚点。'
-      : '不要调用专项诊断器，也不要运行 AgentDebug 五模块。',
-    '',
-    '## 用户问题',
+    "## 统一 Skill 路由",
+    "追问输入文件：" + diagnosisInputRelPath,
+    "Skill 挂载目录：" + skillMountPath,
+    "当前请求来自诊断追问入口。必须按 agent-debug-diagnosis Skill 的追问路由执行：先运行 detector_runner.py 的 targeted 模式，由脚本从输入文件的 query 自动匹配并只执行命中的诊断器。",
+    "命令：python3 " + skillMountPath + "/scripts/detector_runner.py run-all --mode targeted --input " + diagnosisInputRelPath + " --output .agent-insight/targeted-detectors.json",
+    "如果 runs 为空，按普通追问回答；如果有 findings，则由当前这个 Agent 在本次回答中完成语义富化和定向查因解释。两种情况都不得运行 AgentDebug 五模块。",
+    "诊断器给出的计数、区间、比例、锚点、facts 和 details 是确定性事实，不得改写。",
+    "",
+    "## 用户问题",
     message,
   ].join('\n');
 
@@ -426,8 +436,8 @@ export async function POST(request: Request) {
           systemAgentName: 'fault-diagnosis-agent',
           recordTraceAs: 'fault-diagnosis-agent',
           tagSkill: 'agent-debug-diagnosis',
-          interactionPolicy: 'auto-deny',
-          agent: 'plan',
+          interactionPolicy: 'auto-allow',
+          agent: 'build',
           handlers,
           timeoutMs: typeof body.timeoutMs === 'number' ? body.timeoutMs : 5 * 60 * 1000,
           modelOptions: { temperature: 0.2, maxTokens: 2400 },
