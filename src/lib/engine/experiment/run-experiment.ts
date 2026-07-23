@@ -40,6 +40,7 @@ import {
   runFaithfulPreset,
   type FaithfulPresetContext,
 } from './faithful-preset-evaluators';
+import { isResultPresetId, runResultPreset } from './result-preset-evaluators';
 
 /** 引擎参数（测试可改小重试退避/超时；生产用默认值）。 */
 export const experimentEngineConfig = {
@@ -252,6 +253,10 @@ async function evaluateOnce(
   // 忠实版预置 LLM 评估器：复用原 opencode 评估器逻辑（口径与评测执行一致 + 归因字段）
   if (isFaithfulPresetId(evaluatorId)) {
     return runFaithfulPreset(evaluatorId, user, runtime.faithfulCtx);
+  }
+  // 结果评测预置评估器：复用可靠性页同一 canonical 结果评估能力
+  if (isResultPresetId(evaluatorId)) {
+    return runResultPreset(evaluatorId, user, runtime.faithfulCtx);
   }
   const card = await resolveEvaluatorCard(user, evaluatorId);
   if (!card) throw new Error(`未找到评估器 ${evaluatorId}（可能已被删除）`);

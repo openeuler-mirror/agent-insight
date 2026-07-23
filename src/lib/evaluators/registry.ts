@@ -34,6 +34,11 @@ const PRESET_META: Record<string, EvaluatorMeta> = {
   'preset-code-cost-budget': { category: 'traj', requires: [] },
   'preset-code-redundancy-loop': { category: 'traj', requires: [] },
   'preset-code-token-efficiency': { category: 'traj', requires: [] },
+  // 结果评测评估器（抽取自可靠性页；看结果 → res）。仅准确性依赖参考数据。
+  'preset-result-accuracy': { category: 'res', requires: ['reference'] },
+  'preset-result-answer': { category: 'res', requires: [] },
+  'preset-result-faithfulness': { category: 'res', requires: [] },
+  'preset-result-instruction': { category: 'res', requires: [] },
 };
 
 const DEFAULT_META: EvaluatorMeta = { category: 'res', requires: [] };
