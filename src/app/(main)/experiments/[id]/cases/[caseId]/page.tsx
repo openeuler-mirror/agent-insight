@@ -91,6 +91,7 @@ const TH: React.CSSProperties = {
 const TD: React.CSSProperties = {
   padding: '8px 10px', fontSize: 12, color: 'var(--foreground)',
   borderBottom: '1px solid var(--border)', verticalAlign: 'top',
+  wordBreak: 'break-word', overflowWrap: 'anywhere',
 };
 
 const CATEGORY_LABEL: Record<EvaluatorCategory, string> = {
@@ -313,12 +314,12 @@ export default function TraceEvalDetailPage({ params }: { params: Promise<{ id: 
                             </>
                           ) : points.length > 0 ? (
                             /* 卡体：评分点表（评分点 / 得分 / 证据） */
-                            <div style={{ marginTop: 9, overflowX: 'auto' }}>
-                              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                            <div style={{ marginTop: 9 }}>
+                              <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
                                 <thead>
                                   <tr>
-                                    <th style={{ ...TH, width: 210 }}>评分点</th>
-                                    <th style={{ ...TH, width: 64 }}>得分</th>
+                                    <th style={{ ...TH, width: 180 }}>评分点</th>
+                                    <th style={{ ...TH, width: 52 }}>得分</th>
                                     <th style={TH}>证据</th>
                                   </tr>
                                 </thead>
@@ -345,7 +346,7 @@ export default function TraceEvalDetailPage({ params }: { params: Promise<{ id: 
                                         )}
                                       </td>
                                       <td style={{ ...TD, verticalAlign: 'top' }}>{typeof p.score === 'number' ? p.score : '—'}</td>
-                                      <td style={{ ...TD, minWidth: 220, verticalAlign: 'top' }}>
+                                      <td style={{ ...TD, verticalAlign: 'top', overflow: 'hidden' }}>
                                         {p.evidence ? <EvidenceBlock evidence={p.evidence} /> : null}
                                         {p.suggestion && (
                                           <div style={{ marginTop: p.evidence ? 6 : 0, fontSize: 11, color: 'var(--primary)' }}>
