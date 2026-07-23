@@ -39,8 +39,6 @@ interface LlmEvaluatorDraft {
   /** 类目（注册时元数据）：res=看结果 / traj=看轨迹 */
   category: 'res' | 'traj';
   systemPrompt: string;
-  userPrompt: string;
-  userPromptEnabled: boolean;
   /** 评分点清单（可选）：保存时收集非空行存入 card.pointsDef */
   points: Array<{ label: string; note: string }>;
 }
@@ -76,8 +74,6 @@ const blankLlmDraft = (): LlmEvaluatorDraft => ({
   description: '',
   category: 'res',
   systemPrompt: '',
-  userPrompt: '',
-  userPromptEnabled: false,
   points: [],
 });
 
@@ -277,10 +273,11 @@ export default function EvaluatorsCenter() {
     // 模型：用平台当前激活的评测模型（用户在 settings/eval 那边切换）；评估器自身不绑定具体模型，
     // 只承载 prompt 配置。activeModel 还没就绪时存空字符串占位，运行时由 trajectory-eval 后端
     // fallback 到默认模型。
+    // 新建评估器只保留单一提示词（systemPrompt）——判官场景 System/User 边界无语义意义；
+    // userPrompt 字段仅为兼容旧执行路径/编辑页而保留在类型里，新建不再写入（omit → 编辑页也不显示该块）。
     const llmConfig: LlmEvaluatorConfig = {
       model: activeModel?.model || '',
       systemPrompt: llmDraft.systemPrompt.trim(),
-      userPrompt: llmDraft.userPrompt.trim(),
     };
 
     const item: EvaluatorCard = {
@@ -887,7 +884,7 @@ function LlmEvaluatorCreatePanel({
     });
   };
 
-  const promptText = `${draft.systemPrompt}\n${draft.userPromptEnabled ? draft.userPrompt : ''}`;
+  const promptText = draft.systemPrompt;
   const usedPlaceholders = placeholderButtons.filter(p => promptText.includes(p.token));
   const usesReference = promptText.includes('{{reference_output}}');
 
@@ -993,7 +990,7 @@ function LlmEvaluatorCreatePanel({
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 16 }}>
           <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--foreground)' }}>
             <span style={{ color: 'var(--error)' }}>* </span>
-            Prompt · System
+            评估提示词
           </span>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
             {placeholderButtons.map(p => (
@@ -1049,78 +1046,6 @@ function LlmEvaluatorCreatePanel({
               </span>
             ) : null}
           </div>
-        </div>
-
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--foreground)' }}>User Prompt</span>
-          {draft.userPromptEnabled ? (
-            <div
-              style={{
-                border: '1px solid var(--input-border)',
-                borderRadius: 10,
-                overflow: 'hidden',
-                background: 'var(--background)',
-              }}
-            >
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: 10,
-                  padding: '10px 14px',
-                  borderBottom: '1px solid var(--border)',
-                  background: 'color-mix(in srgb, var(--foreground) 2%, var(--background))',
-                }}
-              >
-                <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--foreground-muted)', letterSpacing: '0.04em' }}>User</span>
-                <button
-                  type="button"
-                  className="ai-btn-s"
-                  style={{ border: 'none', background: 'transparent', padding: 0, color: 'var(--foreground-muted)' }}
-                  onClick={() => onChange({ ...draft, userPrompt: '', userPromptEnabled: false })}
-                >
-                  清空
-                </button>
-              </div>
-              <textarea
-                value={draft.userPrompt}
-                onChange={e => onChange({ ...draft, userPrompt: e.target.value })}
-                placeholder="请输入可选的 user prompt"
-                rows={4}
-                style={{
-                  width: '100%',
-                  border: 'none',
-                  outline: 'none',
-                  background: 'transparent',
-                  color: 'var(--foreground)',
-                  padding: '12px 14px',
-                  fontSize: 12.5,
-                  lineHeight: 1.6,
-                  resize: 'vertical',
-                  boxSizing: 'border-box',
-                }}
-              />
-            </div>
-          ) : (
-            <button
-              type="button"
-              className="ai-btn-s"
-              style={{
-                width: '100%',
-                minHeight: 44,
-                border: '1px dashed var(--input-border)',
-                borderRadius: 10,
-                background: 'color-mix(in srgb, var(--foreground) 4%, var(--background))',
-                color: 'var(--foreground-secondary)',
-                fontSize: 13,
-                fontWeight: 600,
-              }}
-              onClick={() => onChange({ ...draft, userPromptEnabled: true })}
-            >
-              + 添加 User Prompt
-            </button>
-          )}
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 16 }}>

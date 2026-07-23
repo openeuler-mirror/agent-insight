@@ -182,10 +182,22 @@ async function runTrajectoryQuality(user: string, ctx: FaithfulPresetContext): P
   const dims = out.dimensionScores ?? { completeness: null, toolChoice: 0, redundancy: 0 };
   const deviations = Array.isArray(out.deviationSteps) ? out.deviationSteps : [];
 
+  // 每维度说明文本：评估器 dimension_details[factor].explanation（无 deviation 明细时作为证据兜底，
+  // 确保完整性/工具选择/冗余度三张评分点都带判断依据，而非空证据列）
+  const rawDetails = (out.rawAnalysis && typeof out.rawAnalysis === 'object'
+    ? (out.rawAnalysis as Record<string, unknown>).dimension_details
+    : undefined);
+  const explanationOf = (factor: string): string => {
+    const d = rawDetails && typeof rawDetails === 'object' ? (rawDetails as Record<string, unknown>)[factor] : undefined;
+    const ex = d && typeof d === 'object' ? (d as Record<string, unknown>).explanation : undefined;
+    return typeof ex === 'string' ? ex.trim() : '';
+  };
+
   // 固定三维度作为评分点，deviation 按 factor 归到对应维度，填 evidence/suggestion/anchors
   const points: EvalPoint[] = DIM_LABELS.map(({ key, label, factor }) => {
     const dimDevs = deviations.filter((d) => (d.factor ?? 'other') === factor);
-    const md = dimDevs.map((d) => `[${d.severity}] ${d.deviation}`).join('\n');
+    const devMd = dimDevs.map((d) => `[${d.severity}] ${d.deviation}`).join('\n');
+    const md = devMd || explanationOf(factor); // 优先 deviation 明细，否则该维度整体说明
     const attributable = dimDevs.find((d) => d.isSkillAttributable && d.improvementSuggestion);
     const anchors = dimDevs.map((d) => `step-${d.stepIndex}`).filter(Boolean);
     const pt: EvalPoint = { label };
@@ -198,7 +210,7 @@ async function runTrajectoryQuality(user: string, ctx: FaithfulPresetContext): P
     }
     if (anchors.length) pt.anchors = anchors;
     return pt;
-  }).filter((p) => p.score !== undefined || p.evidence); // 完整性可能为 null 且无 deviation → 略去空维度
+  }).filter((p) => p.score !== undefined || p.evidence); // 空维度（无分且无任何说明）才略去
 
   // keyActionResults（有参考关键观点时）追加为评分点，携带 coverage/skill 建议
   const keyActions = Array.isArray(out.keyActionResults) ? out.keyActionResults : [];

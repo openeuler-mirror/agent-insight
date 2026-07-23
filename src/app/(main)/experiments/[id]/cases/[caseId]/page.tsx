@@ -118,6 +118,15 @@ export default function TraceEvalDetailPage({ params }: { params: Promise<{ id: 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [retryingId, setRetryingId] = useState('');
+  // 评估器卡片默认折叠——只展示卡头（名称+标签+得分），点击展开评分点/证据
+  const [expandedCards, setExpandedCards] = useState<Set<string>>(new Set());
+  const toggleCard = useCallback((id: string) => {
+    setExpandedCards((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
 
   const load = useCallback(async (silent = false) => {
     if (!user) return;
@@ -215,19 +224,19 @@ export default function TraceEvalDetailPage({ params }: { params: Promise<{ id: 
               )}
             </div>
 
-            {/* 任务输入 / 参考答案 / 实际输出 三框 */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 14 }}>
+            {/* 任务输入 / 参考答案 / 实际输出 三框（等高：grid 行拉伸 + 内框 flex 填满） */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 14, alignItems: 'stretch' }}>
               {([
                 { label: '任务输入', value: caseRow.input, missing: '' },
                 { label: '参考答案', value: caseRow.referenceOutput || '', missing: '未标注参考答案' },
                 { label: '实际输出', value: caseRow.actualOutput, missing: '' },
               ] as const).map((box) => (
-                <div key={box.label}>
+                <div key={box.label} style={{ display: 'flex', flexDirection: 'column' }}>
                   <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--foreground-muted)', marginBottom: 5 }}>
                     {box.label}
                   </div>
                   <div style={{
-                    ...CARD, padding: '9px 11px', fontSize: 12, lineHeight: 1.6, minHeight: 58,
+                    ...CARD, flex: 1, padding: '9px 11px', fontSize: 12, lineHeight: 1.6, minHeight: 58,
                     maxHeight: 180, overflowY: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
                     color: box.value ? 'var(--foreground)' : 'var(--foreground-muted)',
                   }}>
@@ -263,13 +272,28 @@ export default function TraceEvalDetailPage({ params }: { params: Promise<{ id: 
                       const failed = r.status === 'failed';
                       const pendingLike = r.status === 'pending' || r.status === 'running';
                       const points = parsePoints(r.points);
+                      const open = expandedCards.has(r.id);
+                      const hasBody = failed || points.length > 0 || !!r.evidence;
                       return (
                         <div key={r.id} style={{
                           border: '1px solid var(--border)', borderRadius: 9,
                           padding: '11px 13px', opacity: failed ? 0.85 : 1,
                         }}>
-                          {/* 卡头：评估器名 + 标签 + 得分 / 失败 chip */}
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
+                          {/* 卡头：折叠箭头 + 评估器名 + 标签 + 得分 / 失败 chip（点击整行展开/折叠卡体） */}
+                          <div
+                            onClick={() => hasBody && toggleCard(r.id)}
+                            style={{
+                              display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap',
+                              cursor: hasBody ? 'pointer' : 'default', userSelect: 'none',
+                            }}
+                          >
+                            {hasBody && (
+                              <span style={{
+                                fontSize: 12, color: 'var(--foreground-muted)', lineHeight: 1,
+                                display: 'inline-block', transition: 'transform .15s',
+                                transform: open ? 'rotate(90deg)' : 'none',
+                              }}>›</span>
+                            )}
                             <span style={{ fontSize: 12.5, fontWeight: 600 }}>{lookup.nameOf(r.evaluatorId)}</span>
                             {tags.map((t) => <TagChip key={t} text={t} />)}
                             <span style={{ flex: 1 }} />
@@ -291,8 +315,8 @@ export default function TraceEvalDetailPage({ params }: { params: Promise<{ id: 
                             )}
                           </div>
 
-                          {/* 失败卡：原因 + 单项重评 */}
-                          {failed ? (
+                          {/* 卡体（默认折叠，展开后显示）：失败原因 / 评分点表 / 卡级证据 */}
+                          {open && (failed ? (
                             <>
                               <div style={{ marginTop: 7, fontSize: 11.5, color: 'var(--foreground-secondary)' }}>
                                 {r.errorMessage || '评估未产出结果——不记 0 分、不入类目均分。'}
@@ -381,7 +405,7 @@ export default function TraceEvalDetailPage({ params }: { params: Promise<{ id: 
                             <div style={{ marginTop: 9 }}>
                               <EvidenceBlock evidence={r.evidence} />
                             </div>
-                          ) : null}
+                          ) : null)}
                         </div>
                       );
                     })}
