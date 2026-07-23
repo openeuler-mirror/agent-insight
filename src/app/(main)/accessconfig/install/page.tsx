@@ -142,8 +142,8 @@ export default function AccessInstallPage() {
                                     <span style={introDot} />
                                     <span>
                                         {isZh
-                                            ? <><b style={descStrong}>命令行 Agent</b>(Claude Code / opencode 等):运行下方一键脚本,自动配置 <code style={inlineCode}>AGENT_INSIGHT_HOST</code> 与 <code style={inlineCode}>AGENT_INSIGHT_API_KEY</code>。</>
-                                            : <><b style={descStrong}>Command-line agents</b> (Claude Code, opencode, …): run the one-liner below — it auto-configures <code style={inlineCode}>AGENT_INSIGHT_HOST</code> and <code style={inlineCode}>AGENT_INSIGHT_API_KEY</code>.</>}
+                                            ? <><b style={descStrong}>命令行 Agent</b>(Claude Code / OpenCode / OpenClaw 等):运行下方一键脚本,自动配置 <code style={inlineCode}>AGENT_INSIGHT_HOST</code> 与 <code style={inlineCode}>AGENT_INSIGHT_API_KEY</code>。</>
+                                            : <><b style={descStrong}>Command-line agents</b> (Claude Code, OpenCode, OpenClaw, …): run the one-liner below — it auto-configures <code style={inlineCode}>AGENT_INSIGHT_HOST</code> and <code style={inlineCode}>AGENT_INSIGHT_API_KEY</code>.</>}
                                     </span>
                                 </li>
                                 <li style={introItem}>
@@ -167,10 +167,10 @@ export default function AccessInstallPage() {
                                 <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--foreground)' }}>
                                     {isZh ? '命令行 Agent 安装' : 'Command-line Agents'}
                                 </span>
-                                <span style={countPill}>2</span>
+                                <span style={countPill}>3</span>
                                 <span style={{ flex: 1 }} />
                                 <span style={{ fontSize: 11.5, color: 'var(--foreground-muted)' }}>
-                                    {isZh ? 'Claude Code / opencode 等,按系统二选一' : 'Claude Code, opencode … — pick your OS'}
+                                    {isZh ? 'Claude Code / OpenCode / OpenClaw 等,按系统二选一' : 'Claude Code, OpenCode, OpenClaw … — pick your OS'}
                                 </span>
                             </div>
 

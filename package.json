@@ -94,6 +94,7 @@
     "openai": "^6.16.0",
     "opencode-ai": "1.14.39",
     "pdf-parse": "^1.1.4",
+    "protobufjs": "^7.4.0",
     "pg": "^8.19.0",
     "prisma": "5.22.0",
     "react": "19.2.3",

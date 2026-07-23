@@ -37,6 +37,7 @@ test("OTel consumer: runs one loop, fast-saves, evaluates, and advances checkpoi
     const calls: ExecutionRecord[] = []
     const source = makeSource(dir, file, {
       task_id: "session-a",
+      user: "test-user",
       query: "hello",
       framework: "test",
       final_result: "done",

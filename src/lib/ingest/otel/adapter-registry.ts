@@ -1,4 +1,5 @@
 import { genericOtelTraceAdapter } from './adapters/generic';
+import { openclawOtelTraceAdapter } from './adapters/openclaw';
 import { hermesOtelTraceAdapter } from './adapters/hermes';
 import { langfuseLangGraphOtelTraceAdapter } from './adapters/langfuse-langgraph';
 import type { OtelTraceAdapter } from './adapters/types';
@@ -7,6 +8,7 @@ import type { OtelTraceEvent } from './types';
 const adapters: readonly OtelTraceAdapter[] = [
   langfuseLangGraphOtelTraceAdapter,
   hermesOtelTraceAdapter,
+  openclawOtelTraceAdapter,
   genericOtelTraceAdapter,
 ];
 
