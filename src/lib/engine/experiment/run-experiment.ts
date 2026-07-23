@@ -498,7 +498,10 @@ export async function ensureEvalExperiment(params: {
       type: 'single',
       agentName: params.agentName ?? '',
       evaluatorIdsJson: JSON.stringify(params.evaluatorIds),
-      status: 'running',
+      // 建出来时还没有任何 case/结果，不是「运行中」——空评测任务(createOnly 0 trace)
+      // 若建成 running 会永久卡住(settleExperimentStatus 只在评完某 case 后才落终态)。
+      // 真正评估时每个 case 评完经 settleExperimentStatus 落到 done/failed。
+      status: 'draft',
       scope: params.scope ?? '',
       skillName: params.skillName ?? '',
       skillVersion: params.skillVersion ?? null,
