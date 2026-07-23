@@ -474,6 +474,11 @@ export default function NewExperimentPage() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(String(data?.error || '创建实验失败'));
+      // 「开始实验」= 创建后立即真跑评估器；详情页落地即 running 状态并自动轮询进度。
+      // run 触发失败不阻塞跳转——详情页仍可手动「开始执行」兜底。
+      await apiFetch(`/api/experiments/${encodeURIComponent(data.id)}/run?user=${encodeURIComponent(user)}`, {
+        method: 'POST',
+      }).catch(() => { /* 忽略：详情页兜底 */ });
       router.push(`/experiments/${data.id}`);
     } catch (e: any) {
       setSubmitError(e?.message || '创建实验失败');
