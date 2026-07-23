@@ -134,11 +134,18 @@ const DIM_LABELS: Array<{ key: 'completeness' | 'toolChoice' | 'redundancy'; lab
 
 async function runTrajectoryQuality(user: string, ctx: FaithfulPresetContext): Promise<EvaluatorOutput> {
   const { evaluateTrajectoryViaOpencode } = await import('../evaluation/opencode-trajectory-evaluator');
+  // 直连轨迹路径用的是 actualExtractedSteps/Text（预提取的扁平步骤），不是 actualInteractions。
+  // 与 run route 的 buildTrajectoryTraceEvidence 同款：summarizeTrace → formatTraceForLLM → step_index 映射。
+  const { summarizeTrace, formatTraceForLLM } = await import('../evaluation/trace-summarizer');
+  const summary = summarizeTrace(ctx.interactions, { maxSteps: 80, maxTextLen: 400 });
+  const extractedSteps = summary.steps.map((step) => ({ ...step, step_index: step.index, stepIndex: step.index }));
   const out = await evaluateTrajectoryViaOpencode(
     {
       caseId: ctx.executionId ?? ctx.taskId ?? 'exp-case',
       caseInput: ctx.caseInput,
       actualInteractions: ctx.interactions,
+      actualExtractedSteps: extractedSteps,
+      actualExtractedStepsText: formatTraceForLLM(summary),
       comparisonMode: 'trace_only',
       taskId: ctx.taskId ?? undefined,
       executionId: ctx.executionId ?? undefined,
