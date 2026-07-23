@@ -94,7 +94,7 @@ export function EvalTaskPicker({
             {selectedRunId && (
                 <button
                     type="button"
-                    onClick={() => window.open(`/eval/run/${encodeURIComponent(selectedRunId)}`, '_blank')}
+                    onClick={() => window.open(`/experiments/${encodeURIComponent(selectedRunId)}`, '_blank')}
                     style={{ padding: '7px 14px', background: '#EEF2FF', border: '1px solid rgba(79,70,229,.25)', borderRadius: 7, fontSize: 13.5, fontWeight: 700, color: '#4F46E5', cursor: 'pointer', whiteSpace: 'nowrap', flex: '0 0 auto' }}
                     title={zh ? '打开评测任务详情' : 'Open eval task'}
                 >
