@@ -3,7 +3,6 @@ import type { FilterClause } from '@/lib/filters/types';
 import { db, prismaRaw as prisma } from '@/lib/storage/prisma';
 import { NextResponse } from 'next/server';
 import { isActive } from '@/lib/evaluation-task-manager';
-import { triggerTrajectoryAutoWatchForTask } from '@/lib/engine/evaluation/trajectory-auto-watch';
 import { triggerExperimentWatchForTask } from '@/lib/engine/experiment/experiment-watch';
 import { buildOpencodeTelemetryIndex } from '@/lib/observe/opencode-telemetry-index';
 import { listTraceTags } from '@/lib/trace-tags';
@@ -209,7 +208,7 @@ export function inferQuietWindowTraceCompletedAt(args: {
     return new Date(latestActivityMs).toISOString();
 }
 
-async function getAutoEvalReadiness(record: Record<string, unknown>, baseUrl?: string | null) {
+async function getAutoEvalReadiness(record: Record<string, unknown>) {
     const framework = String(record.framework ?? '').toLowerCase();
     const hasFinalResult = Boolean(String(record.final_result ?? record.finalResult ?? '').trim());
     if (!hasFinalResult && !QUIET_WINDOW_INFERRED_FRAMEWORKS.has(framework)) {
@@ -254,7 +253,6 @@ async function getAutoEvalReadiness(record: Record<string, unknown>, baseUrl?: s
     if (framework === 'opencode' && !explicitCompleted && opencodeCliExited === true && taskId) {
         try {
             await db.updateSession(taskId, { endTime: new Date() });
-            void triggerTrajectoryAutoWatchForTask(String(record.user || ''), taskId, baseUrl);
             void triggerExperimentWatchForTask(String(record.user || ''), taskId);
         } catch (error) {
             console.warn(`[Data-API] Failed to persist inferred opencode completion for ${taskId}`, error);
@@ -543,7 +541,7 @@ export async function GET(request: Request) {
             const traceLifecycle = baseTraceLifecycle.traceStatus === 'success'
                 ? baseTraceLifecycle
                 : QUIET_WINDOW_INFERRED_FRAMEWORKS.has(String(record.framework ?? '').toLowerCase())
-                    ? getTraceLifecycle((await getAutoEvalReadiness(record, new URL(request.url).origin)).traceCompletedAt)
+                    ? getTraceLifecycle((await getAutoEvalReadiness(record)).traceCompletedAt)
                     : baseTraceLifecycle;
             return {
                 ...record,
@@ -560,7 +558,7 @@ export async function GET(request: Request) {
                 traceStatusReason: traceLifecycle.traceStatusReason,
             };
         }
-        const readiness = await getAutoEvalReadiness(record, new URL(request.url).origin);
+        const readiness = await getAutoEvalReadiness(record);
         const traceLifecycle = baseTraceLifecycle.traceStatus === 'success'
             ? baseTraceLifecycle
             : getTraceLifecycle(readiness.traceCompletedAt);

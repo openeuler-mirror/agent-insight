@@ -1564,58 +1564,6 @@ async function executeSingleAgentRun(args: {
     }
 }
 
-async function startSingleEvaluation(
-    origin: string,
-    user: string,
-    config: GrayscaleConfig,
-    pair: { caseId: string; taskId: string },
-    datasetId?: string,
-    evaluatorId?: string,
-    evaluatorIds?: string[],
-    grayscaleBinding?: GrayscaleBinding,
-    options: { appendToBatch?: boolean } = {},
-) {
-    // 透传评测任务关联: 用户在 A/B 配置卡通过「+ 新增评测任务」对话框创建了批次,
-    // 此 ID 存在 config.evaluationBatchId。这里走 append 模式让 trace 落到同一批次,
-    // 而不是每次启动评测都新建一个 evaluatorRunId (修 "2 case × 3 round 拆成 6 个批次" 问题)。
-    //
-    // evaluator 字段:
-    //   - 关联了批次: 不传, 让后端继承批次创建时配置的 selectedEvaluators (多评估器)。
-    //     这是用户在「新增评测任务」对话框里多选的评估器列表, 应该统一应用。
-    //   - 没关联批次: 沿用老逻辑, 传单 evaluator 让后端新建批次 (向后兼容)。
-    const body: Record<string, unknown> = {
-        user,
-        ...(datasetId ? { datasetId } : {}),
-        ...(getConfiguredDatasetIds(config).length > 0 ? { datasetIds: getConfiguredDatasetIds(config) } : {}),
-        pairs: [pair],
-        ...(grayscaleBinding ? { grayscaleBinding } : {}),
-        // 让评测批次名与 A/B 任务名一致: 建批次时后端用它当批次标题(append 到已有批次时后端忽略)。
-        ...(config.evaluationBatchTitle ? { taskTitle: config.evaluationBatchTitle } : {}),
-    };
-    if (config.evaluationBatchId && options.appendToBatch !== false) {
-        body.evaluatorRunId = config.evaluationBatchId;
-    } else {
-        body.evaluators = normalizeAbEvaluators(evaluatorIds || config.evaluators, evaluatorId || config.evaluatorId);
-    }
-    const res = await fetch(`${origin}/api/eval/trajectory/run`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok || !data.evaluatorRunId) {
-        throw new Error(data.error || 'failed to start trajectory evaluation');
-    }
-    const created = Array.isArray(data.created) ? data.created : [];
-    const evaluationResultId = created.length > 0 ? String(created[0]?.id || '').trim() : '';
-    if (!evaluationResultId) {
-        throw new Error('failed to bind trajectory evaluation result');
-    }
-    return {
-        evaluatorRunId: String(data.evaluatorRunId),
-        evaluationResultId,
-    };
-}
 
 /**
  * "no valid tasks to run" 不是一次真正的评测结果——它是派发器去重判定"这条 trace 已经评过、
@@ -1894,111 +1842,6 @@ function isTerminalTrajectoryStatus(status: TrajectoryResultStatus | undefined):
     return status === 'done' || status === 'failed';
 }
 
-async function waitAndApplyEvaluationResult(args: {
-    taskId: string;
-    user: string;
-    origin: string;
-    config: GrayscaleConfig;
-    states: CaseStates;
-    caseId: string;
-    side: Side;
-    run: RunResult;
-    evaluationResultId: string;
-    evaluatorRunId: string;
-    expectedEvaluationClaimId: string;
-}): Promise<boolean> {
-    const timeoutMessage = 'evaluation timed out';
-    for (let i = 0; i < 180; i++) {
-        const res = await fetch(`${args.origin}/api/eval/trajectory/results/${encodeURIComponent(args.evaluationResultId)}?user=${encodeURIComponent(args.user)}`);
-        const result = await res.json().catch(() => ({})) as TrajectoryApiResult & { error?: string };
-        if (res.ok) {
-            const binding = readGrayscaleBindingFromRaw(result.rawAnalysis);
-            if (String(result.id || '').trim() !== args.evaluationResultId) {
-                throw new Error(`evaluation result id mismatch: expected ${args.evaluationResultId}, got ${String(result.id || '').trim() || 'N/A'}`);
-            }
-            if (String(result.taskId || '').trim() !== String(args.run.sessionId || '').trim()) {
-                throw new Error(`evaluation result trace mismatch: expected ${String(args.run.sessionId || '').trim() || 'N/A'}, got ${String(result.taskId || '').trim() || 'N/A'}`);
-            }
-            if (!matchesGrayscaleBinding(binding, {
-                taskId: args.taskId,
-                caseId: args.caseId,
-                side: args.side,
-                run: args.run,
-                expectedClaimId: args.expectedEvaluationClaimId,
-            })) {
-                throw new Error('evaluation result binding mismatch');
-            }
-            if (isTerminalTrajectoryStatus(result.status)) {
-                const rowLike: TrajectoryResultRow = {
-                    id: result.id,
-                    evaluatorRunId: result.evaluatorRunId || args.evaluatorRunId,
-                    status: result.status,
-                    taskId: result.taskId,
-                    trajectoryScore: result.trajectoryScore,
-                    errorMessage: result.errorMessage,
-                    rawAnalysisJson: JSON.stringify(result.rawAnalysis || {}),
-                    updatedAt: result.updatedAt ? new Date(result.updatedAt) : undefined,
-                };
-                applyTrajectoryRowToRun(args.run, rowLike, args.evaluatorRunId);
-                await persistRunStatePatch({
-                    taskId: args.taskId,
-                    user: args.user,
-                    config: args.config,
-                    states: args.states,
-                    caseId: args.caseId,
-                    side: args.side,
-                    nextRun: args.run,
-                    expectedEvaluationClaimId: args.expectedEvaluationClaimId,
-                    sidePatch: { evaluatorRunId: args.evaluatorRunId },
-                    touchLatestResultAt: true,
-                });
-                return true;
-            }
-        } else if (res.status !== 404) {
-            throw new Error(result.error || 'failed to load trajectory evaluation result');
-        }
-        await new Promise(resolve => setTimeout(resolve, 2000));
-    }
-    try {
-        const res = await fetch(`${args.origin}/api/eval/trajectory/results/${encodeURIComponent(args.evaluationResultId)}?user=${encodeURIComponent(args.user)}`);
-        const result = await res.json().catch(() => ({})) as TrajectoryApiResult & { error?: string };
-        if (res.ok && !isTerminalTrajectoryStatus(result.status)) {
-            return false;
-        }
-    } catch {
-        // ignore: fall through to timeout failure below
-    }
-    await markEvaluatorRowsFailed(args.user, [args.evaluationResultId], timeoutMessage);
-    if (args.run.status === 'evaluating' || args.run.status === 'running') {
-        args.run.status = 'fail';
-        args.run.output = timeoutMessage;
-        args.run.evaluations = mergeRunEvaluations(
-            args.run.evaluations,
-            normalizeAbEvaluators(args.run.evaluations?.map(item => item.evaluatorId) || []).map(id => ({
-                evaluatorId: id,
-                evaluatorName: AB_EVALUATOR_NAMES[id] || id,
-                status: 'failed',
-                evaluatorRunId: args.evaluatorRunId,
-                evaluationResultId: args.evaluationResultId,
-                errorMessage: timeoutMessage,
-            })),
-        );
-        markRunCompleted(args.run);
-        await persistRunStatePatch({
-            taskId: args.taskId,
-            user: args.user,
-            config: args.config,
-            states: args.states,
-            caseId: args.caseId,
-            side: args.side,
-            nextRun: args.run,
-            expectedEvaluationClaimId: args.expectedEvaluationClaimId,
-            sidePatch: { evaluatorRunId: args.evaluatorRunId },
-            touchLatestResultAt: true,
-        }).catch(() => {});
-    }
-    throw new Error(timeoutMessage);
-}
 
 // 把稳定批次 id 落到 task.configJson.evaluationBatchId。只更新 configJson(不碰 caseStatesJson),
 // 避免覆盖并发进行的 case 状态写入。落库后,本任务后续所有评测(全量/补评/重试/重启续跑)都能
@@ -2079,7 +1922,7 @@ async function evaluateRunsWithConcurrency(args: {
                         evaluatorIds: target.evaluatorIds,
                         // 一旦本任务有了稳定批次(config.evaluationBatchId),所有 target——含补评/行级重试——
                         // 都 append 到同一批;没有批次时(seed 那一条)config.evaluationBatchId 为空,
-                        // startSingleEvaluation 自然走"建批次"分支,append 标志不影响。
+                        // 评测入口(/api/eval/trajectory/run)自然走"建批次"分支,append 标志不影响。
                         appendToBatch: true,
                     }),
                     {
