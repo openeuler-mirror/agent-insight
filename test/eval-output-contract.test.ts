@@ -49,6 +49,36 @@ describe('评估器输出统一契约 normalizeEvaluatorOutput', () => {
     assert.deepEqual(out.evidence, { json: { verdict: 'hit', matched: [] } });
   });
 
+  it('评分点归因字段：status/skillAttributable/suggestion/anchors 归一化', () => {
+    const out = normalizeEvaluatorOutput({
+      points: [{
+        label: '完整性', score: 30,
+        status: 'partial', skillAttributable: true,
+        suggestion: '  补齐 trace 埋点  ', anchors: ['step-3', ' step-7 ', ''],
+      }],
+    });
+    const p = out.points![0];
+    assert.equal(p.status, 'partial');
+    assert.equal(p.skillAttributable, true);
+    assert.equal(p.suggestion, '补齐 trace 埋点');
+    assert.deepEqual(p.anchors, ['step-3', 'step-7']);
+    assert.doesNotThrow(() => EvaluatorOutputSchema.parse(out));
+  });
+
+  it('归因字段全可选：不填则完全不出现（向后兼容）', () => {
+    const out = normalizeEvaluatorOutput({ points: [{ label: '仅名字与分', score: 88 }] });
+    assert.deepEqual(out.points![0], { label: '仅名字与分', score: 88 });
+  });
+
+  it('status 容忍原评估器 coverage 词汇与中文；not_applicable/未知→不设', () => {
+    const mk = (s: string) => normalizeEvaluatorOutput({ points: [{ label: 'x', status: s }] }).points![0].status;
+    assert.equal(mk('covered'), 'covered');
+    assert.equal(mk('已覆盖'), 'covered');
+    assert.equal(mk('missing'), 'missing');
+    assert.equal(mk('not_applicable'), undefined);
+    assert.equal(mk('garbage'), undefined);
+  });
+
   it('averageScore：无分不进分母，全无分返回 null', () => {
     assert.equal(averageScore([{ score: 96 }, { score: 100 }, { score: undefined }]), 98);
     assert.equal(averageScore([{ score: null }, {}]), null);

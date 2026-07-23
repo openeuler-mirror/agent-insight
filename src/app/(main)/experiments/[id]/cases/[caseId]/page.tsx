@@ -44,9 +44,13 @@ interface PointRow {
   label: string;
   score?: number;
   evidence?: unknown;
+  status?: 'covered' | 'partial' | 'missing';
+  skillAttributable?: boolean;
+  suggestion?: string;
+  anchors?: string[];
 }
 
-/** 宽容解析结果行的 points（脏数据逐条丢弃）。 */
+/** 宽容解析结果行的 points（脏数据逐条丢弃）。归因字段全可选。 */
 function parsePoints(raw: unknown): PointRow[] {
   if (!Array.isArray(raw)) return [];
   const out: PointRow[] = [];
@@ -54,14 +58,28 @@ function parsePoints(raw: unknown): PointRow[] {
     if (!p || typeof p !== 'object') continue;
     const r = p as Record<string, unknown>;
     if (typeof r.label !== 'string' || !r.label.trim()) continue;
-    out.push({
+    const row: PointRow = {
       label: r.label,
       score: typeof r.score === 'number' ? r.score : undefined,
       evidence: r.evidence,
-    });
+    };
+    if (r.status === 'covered' || r.status === 'partial' || r.status === 'missing') row.status = r.status;
+    if (typeof r.skillAttributable === 'boolean') row.skillAttributable = r.skillAttributable;
+    if (typeof r.suggestion === 'string' && r.suggestion.trim()) row.suggestion = r.suggestion.trim();
+    if (Array.isArray(r.anchors)) {
+      const a = r.anchors.filter((x): x is string => typeof x === 'string' && x.trim() !== '');
+      if (a.length) row.anchors = a;
+    }
+    out.push(row);
   }
   return out;
 }
+
+const STATUS_CHIP: Record<'covered' | 'partial' | 'missing', { label: string; bg: string; fg: string }> = {
+  covered: { label: '已覆盖', bg: 'var(--tag-green-bg, var(--success-subtle))', fg: 'var(--tag-green-fg, var(--success))' },
+  partial: { label: '部分覆盖', bg: 'var(--tag-amber-bg, var(--warning-subtle))', fg: 'var(--tag-amber-fg, var(--warning))' },
+  missing: { label: '未覆盖', bg: 'var(--background-secondary)', fg: 'var(--foreground-muted)' },
+};
 
 const CARD: React.CSSProperties = {
   background: 'var(--card-bg)', border: '1px solid var(--card-border)', borderRadius: 10,
@@ -307,10 +325,50 @@ export default function TraceEvalDetailPage({ params }: { params: Promise<{ id: 
                                 <tbody>
                                   {points.map((p, i) => (
                                     <tr key={i}>
-                                      <td style={{ ...TD, fontWeight: 600, fontSize: 11.5 }}>{p.label}</td>
-                                      <td style={TD}>{typeof p.score === 'number' ? p.score : '—'}</td>
-                                      <td style={{ ...TD, minWidth: 220 }}>
+                                      <td style={{ ...TD, fontWeight: 600, fontSize: 11.5, verticalAlign: 'top' }}>
+                                        {p.label}
+                                        {(p.status || p.skillAttributable) && (
+                                          <div style={{ marginTop: 4, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                                            {p.status && (
+                                              <span style={{
+                                                fontSize: 10, padding: '1px 7px', borderRadius: 6, fontWeight: 500,
+                                                background: STATUS_CHIP[p.status].bg, color: STATUS_CHIP[p.status].fg,
+                                              }}>{STATUS_CHIP[p.status].label}</span>
+                                            )}
+                                            {p.skillAttributable && (
+                                              <span style={{
+                                                fontSize: 10, padding: '1px 7px', borderRadius: 6, fontWeight: 500,
+                                                background: 'var(--primary-subtle)', color: 'var(--primary)',
+                                              }}>可归因 skill</span>
+                                            )}
+                                          </div>
+                                        )}
+                                      </td>
+                                      <td style={{ ...TD, verticalAlign: 'top' }}>{typeof p.score === 'number' ? p.score : '—'}</td>
+                                      <td style={{ ...TD, minWidth: 220, verticalAlign: 'top' }}>
                                         {p.evidence ? <EvidenceBlock evidence={p.evidence} /> : null}
+                                        {p.suggestion && (
+                                          <div style={{ marginTop: p.evidence ? 6 : 0, fontSize: 11, color: 'var(--primary)' }}>
+                                            ↗ 建议：{p.suggestion}
+                                          </div>
+                                        )}
+                                        {p.anchors && p.anchors.length > 0 && (
+                                          <div style={{ marginTop: 5, fontSize: 10.5, color: 'var(--foreground-muted)' }}>
+                                            相关步骤：{p.anchors.map((a) => (
+                                              <a
+                                                key={a}
+                                                href={caseRow.taskId ? `/trace?taskId=${encodeURIComponent(caseRow.taskId)}` : undefined}
+                                                style={{
+                                                  fontFamily: 'var(--font-mono, monospace)', fontSize: 10.5,
+                                                  background: 'var(--background-secondary)', border: '1px solid var(--border)',
+                                                  borderRadius: 4, padding: '0 5px', marginRight: 5,
+                                                  color: 'var(--foreground-secondary)', textDecoration: 'none',
+                                                  cursor: caseRow.taskId ? 'pointer' : 'default',
+                                                }}
+                                              >{a}</a>
+                                            ))}
+                                          </div>
+                                        )}
                                       </td>
                                     </tr>
                                   ))}

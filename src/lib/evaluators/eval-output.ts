@@ -21,11 +21,28 @@ export const EvidenceSchema = z.union([
 ]);
 export type Evidence = z.infer<typeof EvidenceSchema>;
 
-/** 评分点：label 必填；score 可选（纯定性判断点）；evidence 可选。 */
+/** 评分点覆盖/严重状态：已覆盖 / 部分覆盖 / 未覆盖（用于渲染状态 chip）。 */
+export const EvalPointStatusSchema = z.enum(['covered', 'partial', 'missing']);
+export type EvalPointStatus = z.infer<typeof EvalPointStatusSchema>;
+
+/**
+ * 评分点：label 必填；其余全部可选、任意组合合法。
+ * - score：0-100，纯定性判断点可省
+ * - evidence：证据 {md}|{json}
+ * - status：覆盖/严重状态 → 状态 chip
+ * - skillAttributable：能否归因到某 skill → 「可归因 skill」标签（skill 优化闭环据此挑 finding）
+ * - suggestion：改进建议文本 → 证据展开后的建议行
+ * - anchors：相关步骤锚点（step-N）→ 展开后可点跳链路观测
+ * 归因四字段是 skill 侧（derive-skill-opt-points）读取用，代码评估器不填则一切不变。
+ */
 export const EvalPointSchema = z.object({
   label: z.string().min(1).max(120),
   score: z.number().min(0).max(100).optional(),
   evidence: EvidenceSchema.optional(),
+  status: EvalPointStatusSchema.optional(),
+  skillAttributable: z.boolean().optional(),
+  suggestion: z.string().optional(),
+  anchors: z.array(z.string()).max(32).optional(),
 });
 export type EvalPoint = z.infer<typeof EvalPointSchema>;
 
@@ -62,6 +79,12 @@ export function normalizeEvaluatorOutput(raw: unknown): EvaluatorOutput {
       if (ps !== undefined) pt.score = ps;
       const ev = coerceEvidence(pr.evidence);
       if (ev) pt.evidence = ev;
+      const st = coerceStatus(pr.status);
+      if (st) pt.status = st;
+      if (typeof pr.skillAttributable === 'boolean') pt.skillAttributable = pr.skillAttributable;
+      if (typeof pr.suggestion === 'string' && pr.suggestion.trim()) pt.suggestion = pr.suggestion.trim();
+      const anchors = coerceAnchors(pr.anchors);
+      if (anchors) pt.anchors = anchors;
       pts.push(pt);
     }
     if (pts.length) out.points = pts;
@@ -80,6 +103,24 @@ function coerceScore(v: unknown): number | undefined {
   // 兼容旧评估器 0.0~1.0 输出约定：小数量纲放大到 0-100
   if (n > 0 && n <= 1 && !Number.isInteger(n)) n = n * 100;
   return Math.min(100, Math.max(0, Math.round(n * 10) / 10));
+}
+
+// 状态归一化：容忍原评估器的 coverage 词汇（covered/partial/missing/not_applicable）
+// 与中文（已覆盖/部分覆盖/未覆盖），未识别或 not_applicable → 不设 status。
+function coerceStatus(v: unknown): EvalPointStatus | undefined {
+  if (typeof v !== 'string') return undefined;
+  const s = v.trim().toLowerCase();
+  if (s === 'covered' || s === '已覆盖') return 'covered';
+  if (s === 'partial' || s === '部分覆盖') return 'partial';
+  if (s === 'missing' || s === '未覆盖') return 'missing';
+  return undefined;
+}
+
+function coerceAnchors(v: unknown): string[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const out = v.map((x) => (typeof x === 'string' ? x.trim() : String(x ?? '').trim()))
+    .filter(Boolean).slice(0, 32);
+  return out.length ? out : undefined;
 }
 
 function coerceEvidence(v: unknown): Evidence | undefined {
