@@ -50,7 +50,9 @@ export async function POST(req: Request) {
           .filter((p: Pair) => p.taskId)
       : [];
     const taskIds = asStrArr(body.taskIds);
-    if (pairs.length === 0 && taskIds.length === 0) {
+    // createOnly（含旧 placeholderOnly 别名）：只建/复用空 backing 实验、不评测——用于「+ 新增评测任务」预建容器
+    const createOnly = body.createOnly === true || body.placeholderOnly === true;
+    if (!createOnly && pairs.length === 0 && taskIds.length === 0) {
       return NextResponse.json({ error: 'taskIds or pairs is required' }, { status: 400 });
     }
 
@@ -69,6 +71,10 @@ export async function POST(req: Request) {
       skillName,
       skillVersion,
     });
+
+    if (createOnly) {
+      return NextResponse.json({ success: true, experimentId, results: [] });
+    }
 
     // 目标列表：pairs（带 caseId → 参考答案）优先；否则 taskIds（trace 模式，引擎按 taskId 兜底解析）
     const targets = pairs.length

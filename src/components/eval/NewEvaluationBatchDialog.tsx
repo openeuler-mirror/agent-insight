@@ -115,35 +115,35 @@ export function NewEvaluationBatchDialog({
         setSubmitting(true);
         setError('');
         try {
-            const res = await apiFetch('/api/eval/trajectory/run', {
+            // 评测任务 = 一个空的 backing 实验（createOnly：只建不评）；返回的 experimentId 作任务 id。
+            const res = await apiFetch('/api/experiments/eval-traces', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     user,
-                    // 关键: 触发后端 watchPlaceholder 路径但带 placeholderOnly 标记, 仅创建 1 行空批次
-                    placeholderOnly: true,
+                    createOnly: true,
+                    name: finalTitle,
+                    evaluators: finalIds,
+                    scope: taskScope || 'skill-case-analysis',
                     ...(taskScope ? {
-                        taskScope,
                         skillName: taskSkillName,
                         skillVersion: taskSkillVersion,
                     } : {}),
-                    evaluators: finalIds,
-                    taskTitle: finalTitle,
-                    taskDescription: desc.trim(),
                 }),
             });
             const data = await res.json().catch(() => ({}));
-            if (!res.ok || !data.evaluatorRunId) {
+            if (!res.ok || !data.experimentId) {
                 setError(data?.error || `创建失败 (${res.status})`);
                 setSubmitting(false);
                 return;
             }
             onCreated({
-                evaluatorRunId: String(data.evaluatorRunId),
+                // 字段名沿用 evaluatorRunId（父组件当作不透明的"批次 id"用），值现在是 experimentId
+                evaluatorRunId: String(data.experimentId),
                 taskTitle: finalTitle,
                 taskDescription: desc.trim(),
-                selectedEvaluators: Array.isArray(data.evaluators) ? data.evaluators : finalIds,
-                selectedEvaluatorNames: Array.isArray(data.evaluatorNames) ? data.evaluatorNames : [],
+                selectedEvaluators: finalIds,
+                selectedEvaluatorNames: [],
             });
         } catch (err) {
             setError(err instanceof Error ? err.message : String(err));
