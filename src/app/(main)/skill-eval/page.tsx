@@ -751,7 +751,7 @@ function SkillAnalysisPage() {
             });
             const includeRunId = options?.includeRunId || traceEvaluationBatchId;
             if (includeRunId) params.set('includeRunId', includeRunId);
-            const res = await apiFetch(`/api/eval/trajectory/runs?${params.toString()}`);
+            const res = await apiFetch(`/api/experiments/eval-runs?${params.toString()}`);
             const data = await res.json();
             if (Array.isArray(data?.runs)) {
                 setCaseEvalTasks(data.runs.map((r: {
@@ -1294,26 +1294,25 @@ function SkillAnalysisPage() {
         // 算出统一轨迹分（0.45/0.35/0.20）。两者并发时会因 last-write-wins 互相覆盖、口径不稳。
         const resultErrors: string[] = [];
         try {
-            // 透传评测任务关联: 用户在配置区关联了批次时走 append 模式, 不再每次新建批次。
-            // 关联后不传 evaluators (后端用批次原配置), 没关联时沿用老逻辑。
-            const body: Record<string, unknown> = { user, taskIds };
-            // 数据集作参考集: 收窄后端 trace↔case 匹配范围 (空 = 沿用全量 auto-match)。
+            // 评测走实验：eval-traces 同步建/复用 backing 实验评测这批 trace。复用已关联批次时传 experimentId。
+            const body: Record<string, unknown> = {
+                user, taskIds, name: '用例分析 · 批量',
+                // 评估器：多选决定调用哪些；未选兜底任务完成度（复用实验时以实验存的为准，此处仅供校验/新建）
+                evaluators: caseEvaluatorIds.length > 0 ? caseEvaluatorIds : ['preset-agent-task-completion'],
+            };
+            // 数据集作参考集: 反查 case 参考答案（pairs 缺省时 eval-traces 用 taskIds，datasetIds 仅用于取参考）。
             if (caseDatasetIds.length > 0) body.datasetIds = caseDatasetIds;
-            if (traceEvaluationBatchId) {
-                body.evaluatorRunId = traceEvaluationBatchId;
-            } else {
-                // 评估器多选决定本次评测调用哪些评估器; 未选时兜底任务完成度。
-                body.evaluators = caseEvaluatorIds.length > 0 ? caseEvaluatorIds : ['preset-agent-task-completion'];
-            }
-            const res = await apiFetch('/api/eval/trajectory/run', {
+            if (traceEvaluationBatchId) body.experimentId = traceEvaluationBatchId;
+            const res = await apiFetch('/api/experiments/eval-traces', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body),
             });
-            if (!res.ok) {
-                const data = await res.json().catch(() => ({}));
-                throw new Error(data?.error || `结果评估入队失败 (HTTP ${res.status})`);
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || !data.success) {
+                throw new Error(data?.error || `结果评估失败 (HTTP ${res.status})`);
             }
+            if (typeof data.experimentId === 'string') setTraceEvaluationBatchId(data.experimentId);
         } catch (e) {
             resultErrors.push(String(e instanceof Error ? e.message : e));
         }
@@ -1949,7 +1948,7 @@ function AnalysisOverview({
         }
         let cancelled = false;
         apiFetch(
-            `/api/eval/trajectory/results?user=${encodeURIComponent(user)}&taskId=${encodeURIComponent(selectedTraceId)}&limit=1`,
+            `/api/experiments/eval-results?user=${encodeURIComponent(user)}&taskId=${encodeURIComponent(selectedTraceId)}&limit=1`,
             { cache: 'no-store' },
         )
             .then(res => res.ok ? res.json() : null)
@@ -2301,13 +2300,17 @@ function AnalysisOverview({
             throw new Error('用例分析当前缺少可执行 Trace 或主 Skill 信息。');
         }
         const resultPromise = (async () => {
-            const res = await apiFetch('/api/eval/trajectory/run', {
+            // 评测走实验：eval-traces 同步建实验+评测已产生的 trace，返回后结果即就绪（trace 列表随即显示）
+            const res = await apiFetch('/api/experiments/eval-traces', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     user,
                     taskIds: [selectedTraceId],
                     evaluators: ['preset-agent-task-completion'],
+                    name: `用例分析 · ${tracePrimarySkill.name}`,
+                    skillName: tracePrimarySkill.name,
+                    skillVersion: selectedVersion,
                 }),
             });
             const data = await res.json().catch(() => ({}));
@@ -3309,7 +3312,7 @@ function TraceDeviationPanel({
         }
         try {
             const res = await apiFetch(
-                `/api/eval/trajectory/results?user=${encodeURIComponent(user)}&taskId=${encodeURIComponent(selectedTraceId)}&limit=1`,
+                `/api/experiments/eval-results?user=${encodeURIComponent(user)}&taskId=${encodeURIComponent(selectedTraceId)}&limit=1`,
             );
             const data = await res.json();
             const latest = (Array.isArray(data?.results) ? data.results : [])[0] as TrajectoryEvalRow | undefined;
@@ -3352,10 +3355,9 @@ function TraceDeviationPanel({
         let cancelled = false;
         (async () => {
             try {
-                const runScope = traceEvaluationBatchId
-                    ? `&runId=${encodeURIComponent(traceEvaluationBatchId)}&latestByCase=1`
-                    : '';
-                const res = await apiFetch(`/api/eval/trajectory/results?user=${encodeURIComponent(user)}${runScope}&limit=500`);
+                // 评测走实验(同步)后无"进行中"评测待恢复；仅在关联了批次(experimentId)时按批次回填历史状态
+                if (!traceEvaluationBatchId) return;
+                const res = await apiFetch(`/api/experiments/eval-results?user=${encodeURIComponent(user)}&runId=${encodeURIComponent(traceEvaluationBatchId)}&latestByCase=1&limit=500`);
                 if (!res.ok) return;
                 const data = await res.json();
                 type EvalRow = {

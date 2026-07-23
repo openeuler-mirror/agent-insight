@@ -472,7 +472,7 @@ export async function GET(request: Request) {
             console.warn('[Data-API] failed to fetch session lifecycle status:', (e as Error)?.message);
         }
     }
-    const lastEvalByTaskId = new Map<string, { status: string; errorMessage: string | null; trajectoryScore: number | null }>();
+    const lastEvalByTaskId = new Map<string, { status: string; errorMessage: string | null; trajectoryScore: number | null; at: number }>();
     if (user && recordTaskIdsForEvalLookup.length > 0) {
         try {
             const recentEvalRows = await prisma.trajectoryEvalResult.findMany({
@@ -480,7 +480,7 @@ export async function GET(request: Request) {
                 orderBy: { createdAt: 'desc' },
                 // 方案A: 带上 trajectoryScore（已是代码侧聚合层算出的统一轨迹分），让 trace 行/列表/概览
                 // 直接显示统一口径，而不是只读 matchJson.overallScore(对齐覆盖率 = completeness 单维)。
-                select: { taskId: true, status: true, errorMessage: true, trajectoryScore: true },
+                select: { taskId: true, status: true, errorMessage: true, trajectoryScore: true, createdAt: true },
             });
             for (const row of recentEvalRows) {
                 if (row.taskId && !lastEvalByTaskId.has(row.taskId)) {
@@ -488,6 +488,37 @@ export async function GET(request: Request) {
                         status: row.status,
                         errorMessage: row.errorMessage,
                         trajectoryScore: typeof row.trajectoryScore === 'number' ? row.trajectoryScore : null,
+                        at: row.createdAt instanceof Date ? row.createdAt.getTime() : 0,
+                    });
+                }
+            }
+            // 评测走实验后，评测结果落 ExperimentEvalResult：也按 taskId 取每个 case 最近一次，
+            // 与上面的 TrajectoryEvalResult 取「更新的」那条（无感兼容历史 + 新数据）。
+            const expCases = await prisma.experimentCase.findMany({
+                where: { taskId: { in: recordTaskIdsForEvalLookup }, experiment: { user } },
+                orderBy: { createdAt: 'desc' },
+                select: { taskId: true, createdAt: true, results: { select: { evaluatorId: true, status: true, score: true, errorMessage: true } } },
+            });
+            const seenExpTask = new Set<string>();
+            for (const c of expCases) {
+                if (!c.taskId || seenExpTask.has(c.taskId)) continue;
+                seenExpTask.add(c.taskId);
+                const rs = c.results;
+                if (!rs.length) continue;
+                const traj = rs.find((r: { evaluatorId: string }) => r.evaluatorId === 'preset-agent-trace-quality');
+                const anyRunning = rs.some((r: { status: string }) => r.status === 'pending' || r.status === 'running');
+                const anyFailed = rs.some((r: { status: string }) => r.status === 'failed');
+                const allDone = rs.every((r: { status: string }) => r.status === 'done');
+                const status = anyRunning ? 'running' : allDone ? 'done' : anyFailed ? 'failed' : 'pending';
+                const at = c.createdAt instanceof Date ? c.createdAt.getTime() : 0;
+                const prev = lastEvalByTaskId.get(c.taskId);
+                if (!prev || at >= prev.at) {
+                    lastEvalByTaskId.set(c.taskId, {
+                        status,
+                        errorMessage: rs.find((r: { errorMessage: string | null }) => r.errorMessage)?.errorMessage ?? null,
+                        // 实验分 0-100 → 0-1，与 TrajectoryEvalResult.trajectoryScore 同刻度
+                        trajectoryScore: typeof traj?.score === 'number' ? Math.round((traj.score / 100) * 1000) / 1000 : (prev?.trajectoryScore ?? null),
+                        at,
                     });
                 }
             }
