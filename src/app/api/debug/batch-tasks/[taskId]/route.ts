@@ -395,6 +395,9 @@ async function startBatchTaskInBackground(origin: string, taskId: string, user: 
         agentName: skillName || '',
         evaluatorIds,
         existingId: config.evalExperimentId,
+        scope: 'skill-case-analysis',
+        skillName: skillName || '',
+        skillVersion: skillVersion ?? null,
     });
     if (config.evalExperimentId !== evalExperimentId) {
         config.evalExperimentId = evalExperimentId;
@@ -621,11 +624,16 @@ async function startTraceEvaluateInBackground(origin: string, taskId: string, us
 
     // 评测走实验：建/复用 backing 实验（trace 模式直接评已有 trace，无 dataset 参考答案）
     const traceEvaluatorIds = resolveBatchEvaluatorIds(config);
+    const { skillName: traceSkillName, skillVersion: traceSkillVersion } = await resolveBatchSkillContext(user, config).catch(() => ({ skillName: undefined, skillVersion: undefined }));
     const traceExpId = await ensureEvalExperiment({
         user,
         name: `用例分析(trace) · ${taskId.slice(0, 8)}`,
+        agentName: traceSkillName || '',
         evaluatorIds: traceEvaluatorIds,
         existingId: config.evalExperimentId,
+        scope: 'skill-case-analysis',
+        skillName: traceSkillName || '',
+        skillVersion: traceSkillVersion ?? null,
     });
     if (config.evalExperimentId !== traceExpId) {
         config.evalExperimentId = traceExpId;
@@ -792,6 +800,7 @@ async function retryBatchCase(origin: string, taskId: string, user: string, case
                     config.evalExperimentId = await ensureEvalExperiment({
                         user, name: `用例分析 · ${skillName || 'baseline'} · ${taskId.slice(0, 8)}`,
                         agentName: skillName || '', evaluatorIds: resolveBatchEvaluatorIds(config),
+                        scope: 'skill-case-analysis', skillName: skillName || '', skillVersion: skillVersion ?? null,
                     });
                     await (prisma as unknown as { batchEvalTask: { update: (a: unknown) => Promise<unknown> } }).batchEvalTask.update({
                         where: { id: taskId, user }, data: { configJson: JSON.stringify(config) },

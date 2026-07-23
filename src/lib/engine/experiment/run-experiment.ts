@@ -472,13 +472,17 @@ export interface EvalCaseResultRow {
   errorMessage: string | null;
 }
 
-/** 建/取一个作评测后端的单组实验（给定 existingId 且属本人则复用，否则新建 running 态）。 */
+/** 建/取一个作评测后端的单组实验（给定 existingId 且属本人则复用，否则新建 running 态）。
+ *  scope/skillName/skillVersion 用于评测任务列表按来源+skill 过滤（见 /api/experiments/eval-runs）。 */
 export async function ensureEvalExperiment(params: {
   user: string;
   name: string;
   agentName?: string | null;
   evaluatorIds: string[];
   existingId?: string | null;
+  scope?: string;
+  skillName?: string | null;
+  skillVersion?: number | null;
 }): Promise<string> {
   if (params.existingId) {
     const found = await prisma.experiment.findFirst({
@@ -495,6 +499,9 @@ export async function ensureEvalExperiment(params: {
       agentName: params.agentName ?? '',
       evaluatorIdsJson: JSON.stringify(params.evaluatorIds),
       status: 'running',
+      scope: params.scope ?? '',
+      skillName: params.skillName ?? '',
+      skillVersion: params.skillVersion ?? null,
     },
     select: { id: true },
   });

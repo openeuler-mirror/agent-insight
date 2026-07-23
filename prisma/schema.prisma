@@ -851,12 +851,19 @@ model Experiment {
   evaluatorIdsJson String   @default("[]")
   /// draft | running | done | failed
   status           String   @default("draft")
+  /// 来源标记：''=用户手建；'skill-case-analysis'=skill 用例分析评测后端；
+  /// 'grayscale-ab'=A/B 灰度评测后端；'batch'=批次评测后端。供评测任务列表按来源过滤。
+  scope            String   @default("")
+  /// backing 实验绑定的 skill（评测任务列表按 skill 过滤显示用；来自 eval-traces 落库）
+  skillName        String   @default("")
+  skillVersion     Int?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
   cases ExperimentCase[]
 
   @@index([user, createdAt])
+  @@index([user, scope, skillName])
 }
 
 /// 实验内一条 case：绑定一条已有 trace。referenceOutput=③ 步标注的参考输出，

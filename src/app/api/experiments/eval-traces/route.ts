@@ -56,12 +56,18 @@ export async function POST(req: Request) {
 
     const expectedMap = datasetIds.length ? await buildExpectedMap(username, datasetIds) : new Map<string, string>();
 
+    const skillName = typeof body.skillName === 'string' ? body.skillName : '';
+    const skillVersion = typeof body.skillVersion === 'number' ? body.skillVersion
+      : (body.skillVersion != null && !Number.isNaN(Number(body.skillVersion)) ? Number(body.skillVersion) : null);
     const experimentId = await ensureEvalExperiment({
       user: username,
-      name: String(body.name || '用例分析') + ` · ${new URL(req.url).searchParams.get('t') || ''}`.trimEnd(),
-      agentName: typeof body.agentName === 'string' ? body.agentName : '',
+      name: String(body.name || '用例分析'),
+      agentName: typeof body.agentName === 'string' ? body.agentName : skillName,
       evaluatorIds: evaluators,
       existingId: typeof body.experimentId === 'string' ? body.experimentId : null,
+      scope: typeof body.scope === 'string' && body.scope ? body.scope : 'skill-case-analysis',
+      skillName,
+      skillVersion,
     });
 
     // 目标列表：pairs（带 caseId → 参考答案）优先；否则 taskIds（trace 模式，引擎按 taskId 兜底解析）

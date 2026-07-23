@@ -2192,6 +2192,9 @@ async function runGrayscaleTask(args: {
         agentName: task.skillName || '',
         evaluatorIds: config.evaluators,
         existingId: config.evalExperimentId,
+        scope: 'grayscale-ab',
+        skillName: task.skillName || '',
+        skillVersion: typeof task.skillVersion === 'number' ? task.skillVersion : null,
     });
     const configuredDatasetIds = getConfiguredDatasetIds(config);
     if (configuredDatasetIds.length === 0) throw new Error('dataset is required');
