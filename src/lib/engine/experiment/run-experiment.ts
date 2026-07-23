@@ -117,8 +117,12 @@ async function loadCaseRuntime(caseRow: {
   actualOutput: string;
   referenceOutput: string | null;
 }, user: string): Promise<CaseRuntime> {
+  // executionId 优先；skill 评测接入只带 taskId(=sessionId) 时按 taskId 兜底解析 Execution，
+  // 以拿到 skill 上下文与 finalResult（actualOutput 兜底）。
   const execution = caseRow.executionId
     ? await prisma.execution.findUnique({ where: { id: caseRow.executionId } })
+    : caseRow.taskId
+    ? await prisma.execution.findFirst({ where: { taskId: caseRow.taskId } })
     : null;
 
   // interactions 工具序列（Session 按 taskId 关联）；拿不到 → undefined，冗余检测自然降级无分
@@ -154,16 +158,21 @@ async function loadCaseRuntime(caseRow: {
     trajectory = `工具调用序列（共 ${toolCallNames.length} 次）：\n${lines.join('\n')}${fails}`;
   }
 
+  // input/actualOutput 兜底：ExperimentCase 字段为空时（skill 评测接入只传 taskId）
+  // 用 Execution.query / Execution.finalResult 兜底（trace 模式无 dataset case）。
+  const caseInput = caseRow.input || execution?.query || '';
+  const actualOutput = caseRow.actualOutput || execution?.finalResult || '';
+
   const judgeCtx: JudgeCaseContext = {
-    input: caseRow.input,
-    output: caseRow.actualOutput,
+    input: caseInput,
+    output: actualOutput,
     referenceOutput: caseRow.referenceOutput,
     trajectory,
   };
 
   const faithfulCtx: FaithfulPresetContext = {
-    caseInput: caseRow.input,
-    actualOutput: caseRow.actualOutput,
+    caseInput,
+    actualOutput,
     referenceOutput: caseRow.referenceOutput,
     traceSummaryText: trajectory,
     interactions: rawInteractions,
@@ -445,4 +454,114 @@ export async function retryResultRow(
   const status = await executeResultRow(user, resultId);
   await settleExperimentStatus(experimentId);
   return status;
+}
+
+// ── Skill 评测接入：把一次评测会话建成/复用一个单组实验（纯评测后端）──────────
+// 设计（与产品对齐）：运行 Agent（跑 skill 版本）与 A/B 对比聚合仍由 skill 侧负责；
+// 实验只承担「评测」这一段——trace 产生后逐个作为 case 加入同一 backing experiment，
+// 复用 executeResultRow 同步跑评估器、读回结果供 skill 侧回填自己的状态。不改 schema、
+// 不做对比、不执行 Agent；一个批次/AB 任务 ↔ 一个实验。
+
+/** 单个 case 评测读回结构（每个评估器一行）。 */
+export interface EvalCaseResultRow {
+  evaluatorId: string;
+  status: string;
+  score: number | null;
+  pointsJson: string | null;
+  evidenceJson: string | null;
+  errorMessage: string | null;
+}
+
+/** 建/取一个作评测后端的单组实验（给定 existingId 且属本人则复用，否则新建 running 态）。 */
+export async function ensureEvalExperiment(params: {
+  user: string;
+  name: string;
+  agentName?: string | null;
+  evaluatorIds: string[];
+  existingId?: string | null;
+}): Promise<string> {
+  if (params.existingId) {
+    const found = await prisma.experiment.findFirst({
+      where: { id: params.existingId, user: params.user },
+      select: { id: true },
+    });
+    if (found) return found.id;
+  }
+  const exp = await prisma.experiment.create({
+    data: {
+      user: params.user,
+      name: params.name,
+      type: 'single',
+      agentName: params.agentName ?? '',
+      evaluatorIdsJson: JSON.stringify(params.evaluatorIds),
+      status: 'running',
+    },
+    select: { id: true },
+  });
+  return exp.id;
+}
+
+/** 往评测实验加一个 case（trace 已产生），返回 caseId。 */
+export async function addEvalExperimentCase(
+  experimentId: string,
+  c: {
+    executionId?: string | null;
+    taskId?: string | null;
+    input: string;
+    actualOutput: string;
+    referenceOutput?: string | null;
+  },
+): Promise<string> {
+  const row = await prisma.experimentCase.create({
+    data: {
+      experimentId,
+      executionId: c.executionId ?? null,
+      taskId: c.taskId ?? null,
+      input: c.input,
+      actualOutput: c.actualOutput,
+      referenceOutput: c.referenceOutput ?? null,
+    },
+    select: { id: true },
+  });
+  return row.id;
+}
+
+/** 评测一个 case（× 实验的全部 evaluatorIds），同步跑完并读回每个评估器的结果行。 */
+export async function evaluateEvalExperimentCase(
+  experimentId: string,
+  caseId: string,
+  user: string,
+): Promise<EvalCaseResultRow[]> {
+  const experiment = await prisma.experiment.findFirst({
+    where: { id: experimentId, user },
+    select: { evaluatorIdsJson: true },
+  });
+  if (!experiment) throw new Error(`实验 ${experimentId} 不存在`);
+  let evaluatorIds: string[] = [];
+  try {
+    const parsed = JSON.parse(experiment.evaluatorIdsJson || '[]');
+    if (Array.isArray(parsed)) evaluatorIds = parsed.map(String).filter(Boolean);
+  } catch { /* 忽略脏数据 */ }
+
+  const out: EvalCaseResultRow[] = [];
+  for (const evaluatorId of evaluatorIds) {
+    const rowRec = await prisma.experimentEvalResult.upsert({
+      where: { caseId_evaluatorId: { caseId, evaluatorId } },
+      create: { experimentId, caseId, evaluatorId, status: 'pending' },
+      update: {
+        status: 'pending', score: null, pointsJson: null,
+        evidenceJson: null, errorMessage: null, durationMs: null,
+      },
+      select: { id: true },
+    });
+    // executeResultRow 内部已把失败写成 failed 终态，这里吞掉抛出、按落库状态读回
+    try { await executeResultRow(user, rowRec.id); } catch { /* 终态已落库 */ }
+    const done = await prisma.experimentEvalResult.findUnique({
+      where: { id: rowRec.id },
+      select: { evaluatorId: true, status: true, score: true, pointsJson: true, evidenceJson: true, errorMessage: true },
+    });
+    if (done) out.push(done);
+  }
+  await settleExperimentStatus(experimentId);
+  return out;
 }

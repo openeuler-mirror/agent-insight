@@ -17,6 +17,9 @@ import {
   startExperimentRun,
   retryResultRow,
   extractToolCallNames,
+  ensureEvalExperiment,
+  addEvalExperimentCase,
+  evaluateEvalExperimentCase,
 } from '@/lib/engine/experiment/run-experiment';
 
 const TEST_USER = `exp-engine-${Date.now()}`;
@@ -256,5 +259,46 @@ test('engine: 预置 task-completion/trace-quality 走忠实版通道，归因�
   assert.equal(p.skillAttributable, true);
   assert.equal(p.suggestion, '在 SKILL.md 补校验清单');
   assert.deepEqual(p.anchors, ['step-3']);
+  setFaithfulPresetRunnerForTest(null);
+});
+
+test('engine: skill 评测接入——ensure/add/evaluate 单 case 走实验后端', async () => {
+  setFaithfulPresetRunnerForTest(async () => ({
+    score: 77,
+    points: [{ label: '目标达成', score: 77, evidence: { md: '判断依据' } }],
+    evidence: { md: '总体判断' },
+  }));
+  const executionId = await createExecution();
+
+  // 1) 建评测后端实验（单组）
+  const expId = await ensureEvalExperiment({
+    user: TEST_USER, name: '用例分析·测试', evaluatorIds: ['preset-agent-task-completion'],
+  });
+  // ensure 幂等：给回 existingId 复用同一实验
+  const sameId = await ensureEvalExperiment({
+    user: TEST_USER, name: '用例分析·测试', evaluatorIds: ['preset-agent-task-completion'], existingId: expId,
+  });
+  assert.equal(sameId, expId);
+
+  // 2) 加 case（trace 已产生）
+  const caseId = await addEvalExperimentCase(expId, {
+    executionId, input: '请回答 X', actualOutput: '答案 42', referenceOutput: 'ref',
+  });
+
+  // 3) 逐 case 评测，读回结果
+  const rows = await evaluateEvalExperimentCase(expId, caseId, TEST_USER);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].evaluatorId, 'preset-agent-task-completion');
+  assert.equal(rows[0].status, 'done');
+  assert.equal(rows[0].score, 77);
+
+  // 落库校验：实验为 single、结果行入 ExperimentEvalResult、实验终态 done
+  const exp = await prisma.experiment.findUnique({ where: { id: expId } });
+  assert.equal(exp!.type, 'single');
+  assert.equal(exp!.status, 'done');
+  const stored = await prisma.experimentEvalResult.findFirst({ where: { caseId } });
+  assert.equal(stored!.score, 77);
+  assert.equal(JSON.parse(stored!.pointsJson!)[0].label, '目标达成');
+
   setFaithfulPresetRunnerForTest(null);
 });
