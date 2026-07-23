@@ -83,10 +83,10 @@ const EVAL_TREE: NavItem = {
     labelKey: 'nav.evalCenter',
     iconPath: ICON_EVAL,
     children: [
+        // 实验取代评测执行成为评测中心主入口；评测执行页/接口保留（Skill 评测仍依赖），仅从导航移除
+        { key: 'experiments', href: '/experiments', labelKey: 'nav.experiments', iconPath: ICON_EXPERIMENT, matchPrefixes: ['/experiments'] },
         { key: 'dataset', href: '/dataset', labelKey: 'nav.evalDataset', iconPath: ICON_DATASET },
         { key: 'metrics', href: '/metrics', labelKey: 'nav.evalMetrics', iconPath: ICON_METRICS },
-        { key: 'eval', href: '/eval', labelKey: 'nav.evalExecute', iconPath: ICON_EVAL },
-        { key: 'experiments', href: '/experiments', labelKey: 'nav.experiments', iconPath: ICON_EXPERIMENT, matchPrefixes: ['/experiments'] },
         // { key: 'memory', href: '/memory', labelKey: 'nav.memory', iconPath: ICON_MEMORY },
     ],
 };

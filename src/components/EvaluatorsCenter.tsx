@@ -242,13 +242,6 @@ export default function EvaluatorsCenter() {
     return customEvaluators.filter(card => matchesCustomToolbar(card, customToolbar, user));
   }, [activeTab, customEvaluators, filters, customToolbar, user]);
 
-  const stats = useMemo(() => ({
-    presetCount: presetEvaluators.length,
-    // 可用 = 预置 + 自建中状态为 ready 的评估器（预置全部 ready，此前漏算导致卡片恒为自建数）
-    readyCount: presetEvaluators.filter(item => item.status === 'ready').length
-      + customEvaluators.filter(item => item.status === 'ready').length,
-  }), [customEvaluators]);
-
   const openLlmCreateFlow = () => {
     setLlmDraft(blankLlmDraft());
     setCustomCreate('llm');
@@ -385,13 +378,6 @@ export default function EvaluatorsCenter() {
           </div>
         )}
       </div>
-
-      {activeTab === 'preset' && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(160px, 1fr))', gap: 10, marginBottom: 14 }}>
-          <SummaryCard label="预置评估器" value={String(stats.presetCount)} detail="LLM 评估器模板" />
-          <SummaryCard label="可用评估器" value={String(stats.readyCount)} detail="状态为已就绪" />
-        </div>
-      )}
 
       {customCreate === null && (
         <div style={{ borderBottom: '1px solid var(--border)', marginBottom: 0, display: 'flex', gap: 2 }}>
@@ -575,16 +561,6 @@ export default function EvaluatorsCenter() {
   );
 }
 
-function SummaryCard({ label, value, detail }: { label: string; value: string; detail: string }) {
-  return (
-    <div className="ai-stat" style={{ minHeight: 74 }}>
-      <div className="ai-stat-lbl">{label}</div>
-      <div className="ai-stat-val">{value}</div>
-      <div className="ai-stat-d" style={{ color: 'var(--foreground-muted)' }}>{detail}</div>
-    </div>
-  );
-}
-
 function TabButton({ active, children, onClick }: { active: boolean; children: ReactNode; onClick: () => void }) {
   return (
     <button
@@ -665,7 +641,6 @@ function EvaluatorCardView({
   onModelConfigClick?: () => void;
   onDeleteCustom?: (card: EvaluatorCard) => void;
 }) {
-  const router = useRouter();
   const openInspect = () => onInspect?.(card);
 
   return (
@@ -790,22 +765,6 @@ function EvaluatorCardView({
               }}
             >
               删除
-            </button>
-          ) : null}
-          {card.runtimeHref ? (
-            <button
-              type="button"
-              className="ai-btn-sp"
-              onClick={e => {
-                e.stopPropagation();
-                // 附加查询参数，告诉执行页默认选中该评估器
-                const url = new URL(card.runtimeHref!, window.location.origin);
-                url.searchParams.set('evaluatorId', card.id);
-                router.push(url.pathname + url.search);
-              }}
-              style={{ whiteSpace: 'nowrap' }}
-            >
-              前往评测执行 →
             </button>
           ) : null}
         </div>

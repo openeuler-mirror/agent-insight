@@ -197,6 +197,20 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
               <div style={{ ...CARD, padding: 10, marginBottom: 12, fontSize: 12, color: 'var(--error)' }}>{error}</div>
             )}
 
+            {/* 返回实验列表 */}
+            <div style={{ marginBottom: 14 }}>
+              <Link
+                href="/experiments"
+                style={{
+                  fontSize: 12, color: 'var(--foreground-secondary)', textDecoration: 'none',
+                  padding: '4px 10px', borderRadius: 7, border: '1px solid var(--border)',
+                  background: 'var(--background-secondary)',
+                }}
+              >
+                ‹ 返回实验列表
+              </Link>
+            </div>
+
             {/* 顶部状态条 */}
             <div style={{
               ...CARD, padding: 16, marginBottom: 14,
