@@ -6,6 +6,12 @@ import { shouldRetryGrayscaleEval } from '@/lib/engine/evaluation/eval-run-guard
 import { reconcileStaleGrayscaleRun } from '@/lib/grayscale/stale-run-reconcile';
 import { findAgentDataset, type DatasetCase } from '@/server/agent_datasets_storage';
 import { saveExecutionRecord } from '@/lib/storage/data-service';
+import {
+    ensureEvalExperiment,
+    addEvalExperimentCase,
+    evaluateEvalExperimentCase,
+    type EvalCaseResultRow,
+} from '@/lib/engine/experiment/run-experiment';
 
 export const dynamic = 'force-dynamic';
 
@@ -34,6 +40,8 @@ interface GrayscaleConfig {
     evaluationBatchId?: string;
     evaluationBatchTitle?: string;
     evaluationBatchEvaluators?: string[];
+    /** 评测走实验：本 A/B 任务绑定的单组 backing 实验 id（每条 trace 作 case 评测，结果回填双侧）。 */
+    evalExperimentId?: string;
 }
 
 function withDefaultConfig(config: GrayscaleConfig): GrayscaleConfig {
@@ -927,6 +935,38 @@ function applyTrajectoryRowToRun(run: RunResult, row: TrajectoryResultRow, fallb
     }
 }
 
+/**
+ * 把实验引擎同步评测的结果行（EvalCaseResultRow[]）落到 run，逻辑对齐 applyTrajectoryRowToRun：
+ * 实验契约分已是 0-100（无需 ×100）；任一评估器失败 → run 失败，全 done → pass + tier。
+ */
+function applyExpRowsToRun(run: RunResult, rows: EvalCaseResultRow[], evalExperimentId?: string) {
+    const incoming: RunEvaluation[] = rows.map(r => ({
+        evaluatorId: r.evaluatorId,
+        evaluatorName: AB_EVALUATOR_NAMES[r.evaluatorId] || r.evaluatorId,
+        status: r.status === 'done' ? 'done' : 'failed',
+        evaluatorRunId: evalExperimentId,
+        score: typeof r.score === 'number' ? Math.round(r.score) : undefined,
+        errorMessage: r.status !== 'done' ? (r.errorMessage || '评测失败') : undefined,
+    }));
+    const nextEvaluations = mergeRunEvaluations(run.evaluations, incoming);
+    const nextScore = aggregateEvaluationScore(nextEvaluations);
+    const hasFailed = nextEvaluations.some(item => item.status === 'failed');
+    run.evaluatorRunId = evalExperimentId || run.evaluatorRunId;
+    run.evaluations = nextEvaluations;
+    run.status = hasFailed ? 'fail' : typeof nextScore === 'number' ? 'pass' : 'fail';
+    if (typeof nextScore === 'number') {
+        run.score = nextScore;
+        run.tier = scoreTier(nextScore);
+    } else {
+        delete run.score;
+        delete run.tier;
+    }
+    if (run.status === 'fail') {
+        run.output = nextEvaluations.find(item => item.status === 'failed')?.errorMessage || run.output || '评测失败';
+    }
+    markRunCompleted(run);
+}
+
 function validateTaskSkillBinding(task: Awaited<ReturnType<typeof loadTask>>) {
     if (!task?.skillId || !task.skillName || !task.skillVersionId || typeof task.skillVersion !== 'number') {
         throw new Error('task is not bound to a skill version');
@@ -1758,34 +1798,22 @@ async function evaluateSingleRunTarget(args: {
         touchLatestResultAt: true,
     });
 
-    let rehydratedFromExisting = false;
     try {
-        const binding: GrayscaleBinding = {
-            source: 'grayscale-ab',
-            grayscaleTaskId: args.taskId,
-            caseId: target.caseId,
-            side: target.side,
-            runIndex: target.run.runIndex,
-            roundIndex: target.run.roundIndex,
-            executionTraceId: target.run.sessionId!,
-            evaluationClaimId,
-            evaluationAttempt,
-        };
-        const createdEvaluation = await startSingleEvaluation(
-            args.origin,
-            args.user,
-            args.config,
-            { caseId: target.caseId, taskId: target.run.sessionId! },
-            args.caseDatasetIdByCaseId?.get(target.caseId),
-            args.evaluatorId,
-            effectiveEvaluatorIds,
-            binding,
-            { appendToBatch: args.appendToBatch },
-        );
-        evaluatorRunId = createdEvaluation.evaluatorRunId;
-        evaluationResultId = createdEvaluation.evaluationResultId;
-        target.run.evaluatorRunId = evaluatorRunId;
-        target.run.evaluationResultId = evaluationResultId;
+        if (!args.config.evalExperimentId) throw new Error('评测实验未初始化');
+        // 参考答案：A/B 数据集驱动，任务完成度评估器需要（按 case 归属数据集反查 expectedOutput）
+        const datasetId = args.caseDatasetIdByCaseId?.get(target.caseId);
+        let referenceOutput: string | null = null;
+        if (datasetId) {
+            const ds = await findAgentDataset(args.user, datasetId).catch(() => null);
+            referenceOutput = ds?.cases.find(c => c.id === target.caseId)?.expectedOutput ?? null;
+        }
+        // trace 已产生：作为 case 加入 backing 实验、同步跑评估器（引擎按 sessionId 解析 input/output/skill 上下文）
+        const expCaseId = await addEvalExperimentCase(args.config.evalExperimentId, {
+            taskId: target.run.sessionId!, input: '', actualOutput: '', referenceOutput,
+        });
+        const rows = await evaluateEvalExperimentCase(args.config.evalExperimentId, expCaseId, args.user);
+        evaluatorRunId = args.config.evalExperimentId;
+        applyExpRowsToRun(target.run, rows, evaluatorRunId);
         args.states[target.caseId][target.side].evaluatorRunId = evaluatorRunId;
         await persistRunStatePatch({
             taskId: args.taskId,
@@ -1799,62 +1827,22 @@ async function evaluateSingleRunTarget(args: {
             sidePatch: { evaluatorRunId },
             touchLatestResultAt: true,
         });
-
-        const settled = await waitAndApplyEvaluationResult({
-            taskId: args.taskId,
-            user: args.user,
-            origin: args.origin,
-            states: args.states,
-            caseId: target.caseId,
-            side: target.side,
-            run: target.run,
-            evaluationResultId,
-            evaluatorRunId,
-            expectedEvaluationClaimId: evaluationClaimId,
-            config: args.config,
-        });
-        if (settled) {
-            await hydrateExecutionMetrics(args.states);
-        } else {
-            target.run.status = 'evaluating';
-            target.run.output = undefined;
-        }
+        await hydrateExecutionMetrics(args.states);
     } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        // "no valid tasks to run" 不是失败 —— 是去重判定"这条 trace 已经评过、没有新任务可派发"。
-        // 不写失败, 而是从库里把这条 trace 最近一条真正的评测结果回填到 run(详见 rehydrateRunFromExistingEval)。
-        if (/no valid tasks to run/i.test(message) && target.run.sessionId) {
-            rehydratedFromExisting = await rehydrateRunFromExistingEval({
-                user: args.user,
-                run: target.run,
-                sessionId: target.run.sessionId,
-                evaluatorRunId: args.config.evaluationBatchId || evaluatorRunId || undefined,
-            }).catch(() => false);
-        }
-        if (rehydratedFromExisting) {
-            target.run.evalRetryPending = false;
-        } else {
-            // 真失败(评测器真的跑了且失败 / 或确实找不到任何历史结果)→ 照实标失败、可重试。
-            if (evaluationResultId) {
-                await markEvaluatorRowsFailed(args.user, [evaluationResultId], message).catch(() => {});
-            } else if (evaluatorRunId) {
-                await markEvaluatorTasksFailed(args.user, evaluatorRunId, target.run.sessionId ? [target.run.sessionId] : [], message).catch(() => {});
-            }
-            target.run.status = 'fail';
-            target.run.evaluations = mergeRunEvaluations(
-                target.run.evaluations,
-                effectiveEvaluatorIds.map(id => ({
-                    evaluatorId: id,
-                    evaluatorName: AB_EVALUATOR_NAMES[id] || id,
-                    status: 'failed',
-                    evaluatorRunId,
-                    evaluationResultId,
-                    errorMessage: message,
-                })),
-            );
-            target.run.output = message;
-            markRunCompleted(target.run);
-        }
+        target.run.status = 'fail';
+        target.run.evaluations = mergeRunEvaluations(
+            target.run.evaluations,
+            effectiveEvaluatorIds.map(id => ({
+                evaluatorId: id,
+                evaluatorName: AB_EVALUATOR_NAMES[id] || id,
+                status: 'failed',
+                evaluatorRunId,
+                errorMessage: message,
+            })),
+        );
+        target.run.output = message;
+        markRunCompleted(target.run);
         await persistRunStatePatch({
             taskId: args.taskId,
             user: args.user,
@@ -1871,9 +1859,7 @@ async function evaluateSingleRunTarget(args: {
     // C+D: 评测失败若"可重试且还有重试次数",不进终态——回到「评测中/重试中」并标 evalRetryPending,
     // 让下面的重试循环挑它重跑。失败只在"最终确切失败(不可重试/重试用尽)"时出现,且此后不再变化。
     // 仅对"评测失败"生效:run.failureType 是执行失败(另有语义),不在此列。
-    // rehydratedFromExisting 时跳过:run 已用历史真实结果回填(pass/真失败),不该再被自动重跑(否则
-    // 又派发→又 no valid tasks→又回填,空转)。真失败要重试由用户手动点。
-    if (!rehydratedFromExisting && target.run.status === 'fail' && !target.run.failureType) {
+    if (target.run.status === 'fail' && !target.run.failureType) {
         const failMsg = target.run.output
             || target.run.evaluations?.find(e => e.status === 'failed')?.errorMessage
             || '';
@@ -2199,6 +2185,14 @@ async function runGrayscaleTask(args: {
         // 评测批次标题默认用 A/B 任务名, 让「评测结果」里的批次跟 A/B 任务同名、好对应。
         evaluationBatchTitle: task.configJson.evaluationBatchTitle || task.taskName,
     };
+    // 评测走实验：建/复用 backing 单组实验（每条 A/B trace 作 case 评测，结果回填双侧；对比仍在 GrayscaleTask 层）
+    config.evalExperimentId = await ensureEvalExperiment({
+        user,
+        name: `A/B · ${task.skillName || 'skill'} · ${taskId.slice(0, 8)}`,
+        agentName: task.skillName || '',
+        evaluatorIds: config.evaluators,
+        existingId: config.evalExperimentId,
+    });
     const configuredDatasetIds = getConfiguredDatasetIds(config);
     if (configuredDatasetIds.length === 0) throw new Error('dataset is required');
     const caseConfigMap = await loadConfiguredCaseMap(user, config);
