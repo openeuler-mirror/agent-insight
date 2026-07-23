@@ -21,19 +21,12 @@ export interface EvaluatorMeta {
   requires: EvaluatorRequirement[];
 }
 
-/** 预置评估器元数据（id 与 preset-evaluators.ts 一一对应）。
- *  M2 新增的代码类预置评估器在此登记 category/requires。 */
+/** 预置评估器元数据（id 与 preset-evaluators.ts 一一对应）。 */
 const PRESET_META: Record<string, EvaluatorMeta> = {
   // 任务完成度：对照参考答案判定目标达成（团队评审确定为依赖参考数据）
   'preset-agent-task-completion': { category: 'res', requires: ['reference'] },
   // 轨迹质量：只看执行过程，不依赖参考数据
   'preset-agent-trace-quality': { category: 'traj', requires: [] },
-  // 预置代码评估器（独立能力单元，零配置、不依赖参考数据，全部读执行过程 → traj）
-  'preset-code-tool-reliability': { category: 'traj', requires: [] },
-  'preset-code-latency-budget': { category: 'traj', requires: [] },
-  'preset-code-cost-budget': { category: 'traj', requires: [] },
-  'preset-code-redundancy-loop': { category: 'traj', requires: [] },
-  'preset-code-token-efficiency': { category: 'traj', requires: [] },
   // 结果评测评估器（抽取自可靠性页；看结果 → res）。仅准确性依赖参考数据。
   'preset-result-accuracy': { category: 'res', requires: ['reference'] },
   'preset-result-answer': { category: 'res', requires: [] },

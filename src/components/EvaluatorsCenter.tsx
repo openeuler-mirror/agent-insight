@@ -31,7 +31,6 @@ interface FilterState {
 interface CustomToolbarState {
   nameQuery: string;
   creator: '' | 'all' | 'mine';
-  typeFilter: '' | EvaluatorType;
 }
 
 interface LlmEvaluatorDraft {
@@ -46,11 +45,11 @@ interface LlmEvaluatorDraft {
   points: Array<{ label: string; note: string }>;
 }
 
-// 类型筛选：LLM（judge 形态）与 Code（预置代码评估器已上线）；Custom RPC 模板仍未上线，
+// 类型筛选：当前预置与自建评估器均为 LLM（judge 形态）；Code / Custom RPC 模板未上线，
 // 不放进选项避免用户点了发现没结果。
-const evaluatorTypes: EvaluatorType[] = ['LLM', 'Code'];
+const evaluatorTypes: EvaluatorType[] = ['LLM'];
 // 标签筛选选项（与 deriveEvaluatorTags 派生值对齐；「预置/自建」由 tab 承担，不进筛选）
-const tagFilterOptions = ['LLM Judge', '代码', '看结果', '看轨迹', '依赖参考数据'];
+const tagFilterOptions = ['LLM Judge', '看结果', '看轨迹', '依赖参考数据'];
 // 场景：评估对象——"结果" 指评估 agent 最终答复的质量，"轨迹" 指评估 agent 内部执行链路。
 // 老词是 'Agent'，含义模糊（agent 既可指评估主体也可指被评估面），统一改成"结果"避免歧义。
 const targetTypes = Array.from(new Set(presetEvaluators.flatMap(card => card.targetTypes)));
@@ -93,7 +92,7 @@ function emptyFilters(): FilterState {
 }
 
 function emptyCustomToolbar(): CustomToolbarState {
-  return { nameQuery: '', creator: 'all', typeFilter: '' };
+  return { nameQuery: '', creator: 'all' };
 }
 
 function matchesFilter(card: EvaluatorCard, filters: FilterState) {
@@ -114,7 +113,6 @@ function matchesCustomToolbar(card: EvaluatorCard, bar: CustomToolbarState, user
   const q = bar.nameQuery.trim().toLowerCase();
   const haystack = `${card.name} ${card.description} ${card.mappedMetrics.join(' ')}`.toLowerCase();
   if (q && !haystack.includes(q)) return false;
-  if (bar.typeFilter && card.evaluatorType !== bar.typeFilter) return false;
   if (bar.creator === 'mine' && user && card.creator !== user) return false;
   return true;
 }
@@ -246,7 +244,6 @@ export default function EvaluatorsCenter() {
 
   const stats = useMemo(() => ({
     presetCount: presetEvaluators.length,
-    customCount: customEvaluators.length,
     // 可用 = 预置 + 自建中状态为 ready 的评估器（预置全部 ready，此前漏算导致卡片恒为自建数）
     readyCount: presetEvaluators.filter(item => item.status === 'ready').length
       + customEvaluators.filter(item => item.status === 'ready').length,
@@ -390,21 +387,22 @@ export default function EvaluatorsCenter() {
       </div>
 
       {activeTab === 'preset' && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(160px, 1fr))', gap: 10, marginBottom: 14 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(160px, 1fr))', gap: 10, marginBottom: 14 }}>
           <SummaryCard label="预置评估器" value={String(stats.presetCount)} detail="LLM 评估器模板" />
-          <SummaryCard label="自建评估器" value={String(stats.customCount)} detail="已保存至账号" />
           <SummaryCard label="可用评估器" value={String(stats.readyCount)} detail="状态为已就绪" />
         </div>
       )}
 
-      <div style={{ borderBottom: '1px solid var(--border)', marginBottom: 0, display: 'flex', gap: 2 }}>
-        <TabButton active={activeTab === 'custom'} onClick={() => onTabChange('custom')}>
-          自建评估器
-        </TabButton>
-        <TabButton active={activeTab === 'preset'} onClick={() => onTabChange('preset')}>
-          预置评估器
-        </TabButton>
-      </div>
+      {customCreate === null && (
+        <div style={{ borderBottom: '1px solid var(--border)', marginBottom: 0, display: 'flex', gap: 2 }}>
+          <TabButton active={activeTab === 'custom'} onClick={() => onTabChange('custom')}>
+            自建评估器
+          </TabButton>
+          <TabButton active={activeTab === 'preset'} onClick={() => onTabChange('preset')}>
+            预置评估器
+          </TabButton>
+        </div>
+      )}
 
       {activeTab === 'custom' && customCreate === 'llm' ? (
         <LlmEvaluatorCreatePanel
@@ -443,24 +441,6 @@ export default function EvaluatorsCenter() {
                   fontSize: 12.5,
                 }}
               />
-              <select
-                value={customToolbar.typeFilter}
-                onChange={e => setCustomToolbar(prev => ({ ...prev, typeFilter: e.target.value as CustomToolbarState['typeFilter'] }))}
-                style={{
-                  height: 34,
-                  borderRadius: 8,
-                  border: '1px solid var(--input-border)',
-                  background: 'var(--input-bg)',
-                  color: 'var(--foreground)',
-                  padding: '0 10px',
-                  fontSize: 12.5,
-                  minWidth: 140,
-                }}
-              >
-                <option value="">请选择类型</option>
-                <option value="LLM">LLM</option>
-                <option value="Code">Code</option>
-              </select>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <button type="button" className="ai-btn-s" title="刷新" onClick={() => window.location.reload()}>

@@ -1,5 +1,5 @@
-// 实验执行引擎测试：不真调 LLM——通过 setJudgeLlmCallerForTest 注入 fake judge。
-// 覆盖：代码评估器行真实执行（db 造 Execution 假行）/ LLM 行成功解析落库 /
+// 实验执行引擎测试：不真调 LLM——通过 setJudgeLlmCallerForTest / setFaithfulPresetRunnerForTest 注入 fake。
+// 覆盖：忠实版预置行 + 自建 LLM 行成功解析落库 /
 // 解析失败重试用尽→failed+errorMessage / 单项 retry 成功 / 实验终态流转 / 防重入。
 // 落仓库 data/witty_insight.db（同 experiments-api.test.ts：钉住 DATABASE_URL）。
 import path from 'node:path';
@@ -102,11 +102,16 @@ test.after(async () => {
   setFaithfulPresetRunnerForTest(null);
 });
 
-test('engine: 代码评估器 + LLM 行成功解析落库，实验终态 done', async () => {
+test('engine: 忠实版预置 + 自建 LLM 两行成功落库，实验终态 done', async () => {
   setJudgeLlmCallerForTest(async () => VALID_JUDGE_JSON);
+  setFaithfulPresetRunnerForTest(async () => ({
+    score: 73,
+    points: [{ label: '目标达成', score: 73, evidence: { md: '忠实版判断' } }],
+    evidence: { md: '忠实版总体判断' },
+  }));
   const executionId = await createExecution();
   const { experimentId, caseId } = await createExperiment(executionId, [
-    'preset-code-tool-reliability',
+    'preset-agent-task-completion',
     CUSTOM_LLM_ID,
   ]);
 
@@ -121,14 +126,11 @@ test('engine: 代码评估器 + LLM 行成功解析落库，实验终态 done', 
   const rows = await prisma.experimentEvalResult.findMany({ where: { experimentId } });
   assert.equal(rows.length, 2);
 
-  // 代码评估器：4 次调用 1 次错误 → (1-0.25)*100 = 75，evidence 为 JSON
-  const codeRow = rows.find((r: { evaluatorId: string }) => r.evaluatorId === 'preset-code-tool-reliability')!;
-  assert.equal(codeRow.status, 'done');
-  assert.equal(codeRow.score, 75);
-  const codeEvidence = JSON.parse(codeRow.evidenceJson!);
-  assert.equal(codeEvidence.json.toolCalls, 4);
-  assert.equal(codeEvidence.json.toolErrors, 1);
-  assert.equal(codeRow.caseId, caseId);
+  // 忠实版预置评估器：注入 runner 的输出被落库
+  const presetRow = rows.find((r: { evaluatorId: string }) => r.evaluatorId === 'preset-agent-task-completion')!;
+  assert.equal(presetRow.status, 'done');
+  assert.equal(presetRow.score, 73);
+  assert.equal(presetRow.caseId, caseId);
 
   // LLM 评估器：fake judge 的合法 JSON 被解析归一化落库
   const llmRow = rows.find((r: { evaluatorId: string }) => r.evaluatorId === CUSTOM_LLM_ID)!;
@@ -140,6 +142,7 @@ test('engine: 代码评估器 + LLM 行成功解析落库，实验终态 done', 
   assert.equal(JSON.parse(llmRow.evidenceJson!).md, '整体判断依据');
   assert.equal(llmRow.attempts, 1);
   assert.ok(typeof llmRow.durationMs === 'number');
+  setFaithfulPresetRunnerForTest(null);
 });
 
 test('engine: judge 输出非法 JSON → 重试用尽 → failed + errorMessage，全失败实验终态 failed', async () => {

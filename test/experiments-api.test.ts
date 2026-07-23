@@ -34,7 +34,7 @@ test('experiments API: POST create -> GET list -> GET detail', async (t) => {
       { executionId: 'exec-1', taskId: 'task-1', input: 'q1', actualOutput: 'a1', referenceOutput: 'ref1' },
       { executionId: 'exec-2', taskId: 'task-2', input: 'q2', actualOutput: 'a2' },
     ],
-    evaluatorIds: ['preset-code-tool-reliability', 'preset-agent-task-completion'],
+    evaluatorIds: ['preset-agent-trace-quality', 'preset-agent-task-completion'],
   }));
   assert.equal(createRes.status, 200);
   const { id } = await createRes.json();
@@ -63,7 +63,7 @@ test('experiments API: POST create -> GET list -> GET detail', async (t) => {
   const detail = await detailRes.json();
   assert.equal(detail.name, '冒烟实验');
   assert.equal(detail.agentName, 'smoke-agent');
-  assert.deepEqual(detail.evaluatorIds, ['preset-code-tool-reliability', 'preset-agent-task-completion']);
+  assert.deepEqual(detail.evaluatorIds, ['preset-agent-trace-quality', 'preset-agent-task-completion']);
   assert.equal(detail.cases.length, 2);
   assert.equal(detail.cases[0].referenceOutput, 'ref1');
   assert.equal(detail.cases[1].referenceOutput, null);

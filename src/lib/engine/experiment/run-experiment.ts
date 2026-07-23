@@ -7,9 +7,9 @@
  * running 时（内存 running 集合或 DB status）重复调用直接返回当前状态。
  *
  * 单行执行：
- * - 代码评估器（isCodeEvaluatorId）→ 从 Execution 行 + 单价加权成本（rowCost 同口径）
- *   + 可选 Session.interactions 工具序列构建 CodeEvalContext，同步计算；
- * - LLM 评估器 → buildJudgePrompt → callJudgeLlm（薄封装，测试可注入 fake）
+ * - 忠实版预置 LLM 评估器（任务完成度/轨迹质量）→ 复用原 opencode 评估器；
+ * - 结果评测预置评估器 → 复用可靠性页 canonical 结果评估能力；
+ * - 自建 LLM 评估器 → buildJudgePrompt → callJudgeLlm（薄封装，测试可注入 fake）
  *   → parseJudgeText → normalizeEvaluatorOutput。
  *
  * 失败处理：异常写 status='failed' + errorMessage + attempts；JudgeOutputParseError /
@@ -17,11 +17,6 @@
  * 单行超时 5 分钟。
  */
 import { prisma } from '@/lib/storage/prisma';
-import {
-  isCodeEvaluatorId,
-  runCodeEvaluator,
-  type CodeEvalContext,
-} from '@/lib/evaluators/code-evaluators';
 import {
   buildJudgePrompt,
   parseJudgeText,
@@ -32,7 +27,6 @@ import type { EvaluatorOutput } from '@/lib/evaluators/eval-output';
 import type { EvaluatorCard } from '@/lib/evaluators/custom-evaluator-model';
 import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
 import { readUserCustomEvaluators } from '@/server/user_evaluators_storage';
-import { getModelPricing, calculateCost } from '@/lib/shared/model-config';
 import { createSimpleAsyncLimiter } from '@/lib/engine/evaluation/eval-run-guards';
 import { callJudgeLlm } from './judge-llm';
 import {
@@ -67,7 +61,6 @@ async function resolveEvaluatorCard(user: string, evaluatorId: string): Promise<
 // ── case 运行时上下文（Execution + 可选 interactions 工具序列）─────────────
 
 interface CaseRuntime {
-  codeCtx: CodeEvalContext;
   judgeCtx: JudgeCaseContext;
   /** 忠实版预置评估器（复用原 opencode 评估器）所需的原始上下文。 */
   faithfulCtx: FaithfulPresetContext;
@@ -150,52 +143,13 @@ async function loadCaseRuntime(caseRow: {
     }
   }
 
-  // 成本：模型单价加权（rowCost 同口径）；单价缺失 → costMissing，评估器诚实无分
-  let costUsd: number | null = null;
-  let costMissing = true;
-  if (execution?.model) {
-    const pr = getModelPricing(execution.model);
-    if (pr) {
-      costMissing = false;
-      costUsd = calculateCost(
-        execution.inputTokens ?? 0,
-        execution.outputTokens ?? 0,
-        pr.pricing,
-        execution.cacheReadInputTokens ?? 0,
-        execution.cacheCreationInputTokens ?? 0,
-      );
-    }
-  }
-
-  const totalTokens = (() => {
-    if (!execution) return null;
-    const sum = (execution.inputTokens ?? 0) + (execution.outputTokens ?? 0);
-    if (sum > 0) return sum;
-    return execution.tokens ?? null;
-  })();
-
-  const codeCtx: CodeEvalContext = {
-    latencySec: execution?.latency ?? null,
-    toolCallCount: execution?.toolCallCount ?? null,
-    toolCallErrorCount: execution?.toolCallErrorCount ?? null,
-    llmCallCount: execution?.llmCallCount ?? null,
-    totalTokens,
-    inputTokens: execution?.inputTokens ?? null,
-    outputTokens: execution?.outputTokens ?? null,
-    maxSingleCallTokens: execution?.maxSingleCallTokens ?? null,
-    model: execution?.model ?? null,
-    costUsd,
-    costMissing,
-    failureSummaries: parseFailureSummaries(execution?.failures),
-    toolCallNames,
-  };
-
   // judge 轨迹文本：工具序列 + 失败摘要的紧凑序列化（引擎侧提取）
+  const failureSummaries = parseFailureSummaries(execution?.failures);
   let trajectory: string | null = null;
   if (toolCallNames && toolCallNames.length) {
     const lines = toolCallNames.slice(0, 200).map((n, i) => `${i + 1}. ${n}`);
-    const fails = codeCtx.failureSummaries?.length
-      ? `\n失败项：${codeCtx.failureSummaries.join('、')}`
+    const fails = failureSummaries.length
+      ? `\n失败项：${failureSummaries.join('、')}`
       : '';
     trajectory = `工具调用序列（共 ${toolCallNames.length} 次）：\n${lines.join('\n')}${fails}`;
   }
@@ -223,7 +177,7 @@ async function loadCaseRuntime(caseRow: {
     } : null,
   };
 
-  return { codeCtx, judgeCtx, faithfulCtx };
+  return { judgeCtx, faithfulCtx };
 }
 
 // ── 单行执行（含重试/超时）────────────────────────────────────────────────
@@ -251,11 +205,6 @@ async function evaluateOnce(
   evaluatorId: string,
   runtime: CaseRuntime,
 ): Promise<EvaluatorOutput> {
-  if (isCodeEvaluatorId(evaluatorId)) {
-    const out = runCodeEvaluator(evaluatorId, runtime.codeCtx);
-    if (!out) throw new Error(`未知代码评估器：${evaluatorId}`);
-    return out;
-  }
   // 忠实版预置 LLM 评估器：复用原 opencode 评估器逻辑（口径与评测执行一致 + 归因字段）
   if (isFaithfulPresetId(evaluatorId)) {
     return runFaithfulPreset(evaluatorId, user, runtime.faithfulCtx);
