@@ -807,7 +807,8 @@ export default function AgentDatasetCenter() {
                     onClick={event => {
                       stopActionPropagation(event);
                       if (item.datasetKind === 'trajectory') {
-                        router.push(`/eval/trajectory?datasetId=${encodeURIComponent(item.id)}`);
+                        // 评测数据集 → 新建实验（在向导 ③ 步可从该数据集导入参考答案）
+                        router.push('/experiments/new');
                       } else {
                         // 非轨迹评测集暂时仍引导到评估器目录页选评估器
                         router.push('/metrics');
