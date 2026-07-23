@@ -132,7 +132,11 @@ export default function TraceEvalDetailPage({ params }: { params: Promise<{ id: 
     if (!user) return;
     if (!silent) setLoading(true);
     try {
-      const res = await apiFetch(`/api/experiments/${encodeURIComponent(id)}?user=${encodeURIComponent(user)}`);
+      // 带 caseId：让详情 API 精确返回这一条 case（不受 case 列表分页影响，
+      // 否则该 case 不在第 1 页时这里 find 不到 → 详情空白）。
+      const res = await apiFetch(
+        `/api/experiments/${encodeURIComponent(id)}?user=${encodeURIComponent(user)}&caseId=${encodeURIComponent(caseId)}`,
+      );
       const data = await res.json();
       if (!res.ok) throw new Error(String(data?.error || '加载实验失败'));
       setDetail(data);

@@ -19,6 +19,8 @@ export async function GET(
     const { username } = await resolveUser(req, q.get('user'));
     const casePageSize = Math.min(Math.max(Number(q.get('casePageSize')) || 20, 1), 100);
     const casePageRaw = Math.max(Number(q.get('casePage')) || 1, 1);
+    // caseId：精确取单条 case（Trace 评测详情页下钻用，绕过 case 列表分页）
+    const wantCaseId = q.get('caseId') || '';
 
     const experiment = await prisma.experiment.findFirst({
       where: { id, ...(username ? { user: username } : {}) },
@@ -51,15 +53,15 @@ export async function GET(
     const overall = overallAverage(allResults);
     const breakdown = evaluatorBreakdown(allResults);
 
-    // case 列表服务端分页（每页 case 连同其 results 一起返回，供逐 case 得分/重评）
+    // case 列表服务端分页（每页 case 连同其 results 一起返回，供逐 case 得分/重评）；
+    // 指定 caseId 时只取该单条（下钻详情用，不受分页影响）。
     const caseTotal = await prisma.experimentCase.count({ where: { experimentId: id } });
     const casePages = Math.max(1, Math.ceil(caseTotal / casePageSize));
     const casePage = Math.min(casePageRaw, casePages);
     const pagedCases = await prisma.experimentCase.findMany({
-      where: { experimentId: id },
+      where: wantCaseId ? { id: wantCaseId, experimentId: id } : { experimentId: id },
       orderBy: { createdAt: 'asc' },
-      skip: (casePage - 1) * casePageSize,
-      take: casePageSize,
+      ...(wantCaseId ? {} : { skip: (casePage - 1) * casePageSize, take: casePageSize }),
       include: { results: { orderBy: { createdAt: 'asc' } } },
     });
 
