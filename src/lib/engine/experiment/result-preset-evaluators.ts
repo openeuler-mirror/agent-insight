@@ -1,0 +1,164 @@
+/**
+ * 实验侧结果评测预置评估器：把可靠性与性能页的四个「结果评测」分析能力
+ *   preset-result-accuracy    结果准确性（依赖参考数据）
+ *   preset-result-answer      答案质量
+ *   preset-result-faithfulness 忠实度（幻觉检测）
+ *   preset-result-instruction 指令遵循
+ * 抽取进实验统一契约。与可靠性页共用同一 canonical 能力（runSingleResultMetric）与
+ * 同一直连传输（createResultInvoke，seed=42/temp=0/严格 schema）——两侧口径逐位一致。
+ *
+ * 依赖 result-quality-evaluator（server-only：prisma/openai/dataset），故惰性 import，
+ * 与 faithful-preset-evaluators 同策略——测试注入时零加载。
+ */
+import { normalizeEvaluatorOutput, type EvaluatorOutput, type EvalPoint, type EvalPointStatus } from '../../evaluators/eval-output';
+import type { FaithfulPresetContext } from './faithful-preset-evaluators';
+
+export const RESULT_PRESET_IDS = [
+  'preset-result-accuracy',
+  'preset-result-answer',
+  'preset-result-faithfulness',
+  'preset-result-instruction',
+] as const;
+export type ResultPresetId = (typeof RESULT_PRESET_IDS)[number];
+
+export function isResultPresetId(id: string): id is ResultPresetId {
+  return (RESULT_PRESET_IDS as readonly string[]).includes(id);
+}
+
+/** 测试注入点（同 faithful/judge-llm）：跳过真实 LLM 调用直接返回。 */
+type ResultRunner = (id: ResultPresetId, user: string, ctx: FaithfulPresetContext) => Promise<EvaluatorOutput>;
+let testRunner: ResultRunner | null = null;
+export function setResultPresetRunnerForTest(fn: ResultRunner | null): void {
+  testRunner = fn;
+}
+
+const ID_TO_METRIC: Record<ResultPresetId, 'accuracy' | 'answer-quality' | 'faithfulness' | 'instruction-adherence'> = {
+  'preset-result-accuracy': 'accuracy',
+  'preset-result-answer': 'answer-quality',
+  'preset-result-faithfulness': 'faithfulness',
+  'preset-result-instruction': 'instruction-adherence',
+};
+
+export async function runResultPreset(
+  id: ResultPresetId,
+  user: string,
+  ctx: FaithfulPresetContext,
+): Promise<EvaluatorOutput> {
+  if (testRunner) return testRunner(id, user, ctx);
+
+  const {
+    createResultInvoke, runSingleResultMetric, extractRelevantSystemInstructions,
+  } = await import('../evaluation/result-quality-evaluator');
+
+  const invoke = await createResultInvoke(user);
+  const metric = ID_TO_METRIC[id];
+  const query = ctx.caseInput;
+  const finalResult = ctx.actualOutput;
+
+  if (metric === 'accuracy') {
+    // GT 来源：实验直接用 referenceOutput（可靠性页走数据集匹配，此处不同源同评估器）。
+    const expectedOutput = (ctx.referenceOutput ?? '').trim();
+    if (!expectedOutput) {
+      // 依赖参考数据但未标注——④ 步门控应已拦截，此处兜底为无分。
+      return { evidence: { md: '未标注参考答案，无法评估结果准确性——不记分。' } };
+    }
+    const { extractRootCausesFromExpected } = await import('../evaluation/root-cause-extractor');
+    const { normalizeAccuracyKeyPoints } = await import('../evaluation/result-accuracy-evaluator');
+    const rootCauses = await extractRootCausesFromExpected(query, expectedOutput, user);
+    const keyPoints = normalizeAccuracyKeyPoints(rootCauses);
+    if (!keyPoints.length) {
+      return { evidence: { md: '参考答案未提取到可评测的关键观点——不记分。' } };
+    }
+    const r = await runSingleResultMetric('accuracy', { query, finalResult, expectedOutput, keyPoints }, invoke);
+    return mapAccuracy(r);
+  }
+
+  if (metric === 'faithfulness') {
+    const r = await runSingleResultMetric('faithfulness', { query, finalResult, interactions: ctx.interactions }, invoke);
+    return mapFaithfulness(r);
+  }
+
+  if (metric === 'instruction-adherence') {
+    const systems = extractRelevantSystemInstructions(ctx.interactions);
+    const r = await runSingleResultMetric('instruction-adherence', { query, finalResult, relevantSystemInstructions: systems }, invoke);
+    return mapInstruction(r);
+  }
+
+  // answer-quality
+  const r = await runSingleResultMetric('answer-quality', { query, finalResult }, invoke);
+  return mapAnswerQuality(r);
+}
+
+// ── 各指标 evidence → 统一契约 points 的映射 ──────────────────────────────────
+
+interface LeafResult { score: number | null; evidence: Record<string, unknown>; note?: string }
+
+const asArr = (v: unknown): Record<string, unknown>[] =>
+  Array.isArray(v) ? v.filter((x): x is Record<string, unknown> => !!x && typeof x === 'object') : [];
+const str = (v: unknown): string => (typeof v === 'string' ? v : '');
+const joinMd = (...parts: unknown[]) => parts.map(str).filter((s) => s.trim()).join('\n');
+
+/** 准确性：keyPointFindings → points（correct/partially_correct/wrong/not_mentioned → 状态） */
+function mapAccuracy(r: LeafResult): EvaluatorOutput {
+  const findings = asArr(r.evidence.keyPointFindings);
+  const statusMap: Record<string, EvalPointStatus | undefined> = {
+    correct: 'covered', partially_correct: 'partial', wrong: 'missing', not_mentioned: 'missing',
+  };
+  const points: EvalPoint[] = findings.map((f) => {
+    const pt: EvalPoint = { label: str(f.content).slice(0, 120) || '关键观点' };
+    // finding.score 为 0-1 量纲，契约要 0-100 → ×100（normalizeEvaluatorOutput 只放大非整数小数，1 需显式 ×100）
+    if (typeof f.score === 'number') pt.score = Math.round(f.score * 1000) / 10;
+    const st = statusMap[str(f.status)];
+    if (st) pt.status = st;
+    const md = joinMd(f.reason, f.actualEvidence && `实际：${str(f.actualEvidence)}`, f.expectedEvidence && `预期：${str(f.expectedEvidence)}`);
+    if (md) pt.evidence = { md };
+    return pt;
+  }).filter((p) => p.label);
+  return normalizeEvaluatorOutput({ score: r.score ?? undefined, points: points.length ? points : undefined, evidence: r.evidence.reason ? { md: str(r.evidence.reason) } : undefined });
+}
+
+/** 答案质量：relevance/completeness/coherence 三子分 → points */
+function mapAnswerQuality(r: LeafResult): EvaluatorOutput {
+  const sub = (r.evidence.subScores ?? {}) as Record<string, unknown>;
+  const dims: Array<[string, string]> = [['relevance', '相关性'], ['completeness', '完整性'], ['coherence', '连贯性']];
+  const points: EvalPoint[] = dims
+    .filter(([k]) => typeof sub[k] === 'number')
+    .map(([k, label]) => ({ label, score: sub[k] as number }));
+  return normalizeEvaluatorOutput({ score: r.score ?? undefined, points: points.length ? points : undefined, evidence: r.evidence.reason ? { md: str(r.evidence.reason) } : undefined });
+}
+
+/** 忠实度：claims/verdicts → points（supported/contradicted/not_covered → 状态；citations → 证据） */
+function mapFaithfulness(r: LeafResult): EvaluatorOutput {
+  const claims = asArr(r.evidence.verdicts).length ? asArr(r.evidence.verdicts) : asArr(r.evidence.claims);
+  const statusMap: Record<string, EvalPointStatus | undefined> = { supported: 'covered', contradicted: 'missing', not_covered: 'missing' };
+  const points: EvalPoint[] = claims.map((c) => {
+    const pt: EvalPoint = { label: (str(c.claim) || str(c.sourceQuote) || '主张').slice(0, 120) };
+    const st = statusMap[str(c.status)];
+    if (st) pt.status = st;
+    const cites = asArr(c.citations).map((ci) => str(ci.evidenceQuote)).filter(Boolean);
+    const md = joinMd(c.reason, cites.length && `证据：${cites.join('；')}`);
+    if (md) pt.evidence = { md };
+    return pt;
+  }).filter((p) => p.label);
+  return normalizeEvaluatorOutput({ score: r.score ?? undefined, points: points.length ? points : undefined, evidence: r.evidence.reason ? { md: str(r.evidence.reason) } : undefined });
+}
+
+/** 指令遵循：verdicts → points（met/not_met/not_applicable → 状态；not_applicable 略去） */
+function mapInstruction(r: LeafResult): EvaluatorOutput {
+  const verdicts = asArr(r.evidence.verdicts);
+  const constraints = asArr(r.evidence.constraints);
+  const cById = new Map(constraints.map((c) => [str(c.id), str(c.text)]));
+  const statusMap: Record<string, EvalPointStatus | undefined> = { met: 'covered', not_met: 'missing' };
+  const points: EvalPoint[] = verdicts
+    .filter((v) => str(v.status) !== 'not_applicable')
+    .map((v) => {
+      const label = (cById.get(str(v.constraintId)) || str(v.constraintId) || '约束').slice(0, 120);
+      const pt: EvalPoint = { label };
+      const st = statusMap[str(v.status)];
+      if (st) pt.status = st;
+      const md = joinMd(v.reason, v.evidenceQuote && `引用：${str(v.evidenceQuote)}`);
+      if (md) pt.evidence = { md };
+      return pt;
+    });
+  return normalizeEvaluatorOutput({ score: r.score ?? undefined, points: points.length ? points : undefined, evidence: r.evidence.reason ? { md: str(r.evidence.reason) } : undefined });
+}

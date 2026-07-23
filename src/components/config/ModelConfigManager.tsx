@@ -220,6 +220,7 @@ export function ModelConfigManager({}: ModelConfigManagerProps = {}) {
             const testData = await testRes.json();
             if (!testData.success) {
                 setStatus({ type: 'error', msg: (locale === 'zh' ? '连接测试失败：' : 'Connection test failed: ') + testData.error });
+                setTimeout(() => setStatus(null), 1500);
                 setIsSaving(false);
                 return;
             }
@@ -241,9 +242,11 @@ export function ModelConfigManager({}: ModelConfigManagerProps = {}) {
             } else {
                 const err = await res.json().catch(() => ({}));
                 setStatus({ type: 'error', msg: (locale === 'zh' ? '保存失败：' : 'Save failed: ') + (err.error || res.statusText) });
+                setTimeout(() => setStatus(null), 1500);
             }
         } catch (e: any) {
             setStatus({ type: 'error', msg: `Error: ${e.message}` });
+            setTimeout(() => setStatus(null), 1500);
         } finally {
             setIsSaving(false);
         }

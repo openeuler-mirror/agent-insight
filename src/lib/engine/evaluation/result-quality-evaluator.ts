@@ -245,6 +245,58 @@ function methodForMetric(key: ResultMetricStorageKey): ResultEvalResult['method'
   return 'self-rubric';
 }
 
+// ── canonical 结果评估能力（可靠性页 evaluateResultQuality 与实验引擎共用）──────
+// runSingleResultMetric = 传输/存储无关的单指标分发器：给定已构建的 inputs + 注入的
+// invoke，调对应叶子评估器（口径由叶子评估器决定）。GT 来源（数据集匹配 / referenceOutput）
+// 由调用方组装成 inputs.keyPoints 后传入，本函数不感知。
+export interface ResultMetricInputs {
+  query: string;
+  finalResult: string;
+  interactions?: unknown[];                    // faithfulness
+  relevantSystemInstructions?: string[];       // instruction-adherence
+  expectedOutput?: string;                     // accuracy
+  keyPoints?: ReturnType<typeof normalizeAccuracyKeyPoints>; // accuracy
+}
+
+export async function runSingleResultMetric(
+  key: ResultMetricStorageKey,
+  inputs: ResultMetricInputs,
+  invoke: StructuredResultInvoker,
+): Promise<ResultEvalResult> {
+  switch (key) {
+    case 'faithfulness': {
+      const r = await evaluateFaithfulness({
+        query: inputs.query, finalResult: inputs.finalResult,
+        interactions: inputs.interactions ?? [], invoke,
+      });
+      return { ...r, method: 'grounding' };
+    }
+    case 'instruction-adherence': {
+      const r = await evaluateInstructionAdherence({
+        query: inputs.query, relevantSystemInstructions: inputs.relevantSystemInstructions ?? [],
+        finalResult: inputs.finalResult, invoke,
+      });
+      return { ...r, method: 'self-rubric' };
+    }
+    case 'answer-quality': {
+      const r = await evaluateAnswerQuality({ query: inputs.query, finalResult: inputs.finalResult, invoke });
+      return { ...r, method: 'self-rubric' };
+    }
+    case 'accuracy': {
+      const r = await evaluateResultAccuracy({
+        query: inputs.query, expectedOutput: inputs.expectedOutput ?? '',
+        actualOutput: inputs.finalResult, keyPoints: inputs.keyPoints ?? [], invoke,
+      });
+      return { score: r.score, method: 'gt-rubric', confidence: r.confidence, note: r.note, evidence: r.evidence };
+    }
+  }
+}
+
+/** 直连-OpenAI 的结构化 invoke 工厂（seed=42/temp=0/严格 schema）——两侧共用同一传输，保证口径逐位一致。 */
+export async function createResultInvoke(user?: string | null): Promise<StructuredResultInvoker> {
+  return async (prompt, schema) => invokeStructured(user, prompt, schema);
+}
+
 function metricFromRow(row: {
   score: number | null;
   method: string;
@@ -342,46 +394,20 @@ export async function evaluateResultQuality(executionId: string): Promise<Result
   const producers: Partial<Record<ResultMetricStorageKey, () => Promise<ResultEvalResult>>> = {};
   if (keysToRun.includes('faithfulness')) {
     producers.faithfulness = async () => {
-      const result = await evaluateFaithfulness({
-        query,
-        finalResult,
-        interactions,
-        invoke: trackedInvoker('faithfulness'),
-      });
-      return {
-        ...result,
-        method: 'grounding',
-        evidence: { ...result.evidence, calls: callDiagnostics.faithfulness ?? [] },
-      };
+      const result = await runSingleResultMetric('faithfulness', { query, finalResult, interactions }, trackedInvoker('faithfulness'));
+      return { ...result, evidence: { ...result.evidence, calls: callDiagnostics.faithfulness ?? [] } };
     };
   }
   if (keysToRun.includes('instruction-adherence')) {
     producers['instruction-adherence'] = async () => {
-      const result = await evaluateInstructionAdherence({
-        query,
-        relevantSystemInstructions: systems,
-        finalResult,
-        invoke: trackedInvoker('instruction-adherence'),
-      });
-      return {
-        ...result,
-        method: 'self-rubric',
-        evidence: { ...result.evidence, calls: callDiagnostics['instruction-adherence'] ?? [] },
-      };
+      const result = await runSingleResultMetric('instruction-adherence', { query, finalResult, relevantSystemInstructions: systems }, trackedInvoker('instruction-adherence'));
+      return { ...result, evidence: { ...result.evidence, calls: callDiagnostics['instruction-adherence'] ?? [] } };
     };
   }
   if (keysToRun.includes('answer-quality')) {
     producers['answer-quality'] = async () => {
-      const result = await evaluateAnswerQuality({
-        query,
-        finalResult,
-        invoke: trackedInvoker('answer-quality'),
-      });
-      return {
-        ...result,
-        method: 'self-rubric',
-        evidence: { ...result.evidence, calls: callDiagnostics['answer-quality'] ?? [] },
-      };
+      const result = await runSingleResultMetric('answer-quality', { query, finalResult }, trackedInvoker('answer-quality'));
+      return { ...result, evidence: { ...result.evidence, calls: callDiagnostics['answer-quality'] ?? [] } };
     };
   }
   if (keysToRun.includes('accuracy')) {
@@ -442,13 +468,12 @@ export async function evaluateResultQuality(executionId: string): Promise<Result
         });
       }
 
-      const judged = await evaluateResultAccuracy({
+      const judged = await runSingleResultMetric('accuracy', {
         query,
         expectedOutput: caseEntry.expectedOutput,
-        actualOutput: finalResult,
+        finalResult,
         keyPoints,
-        invoke: trackedInvoker('accuracy'),
-      });
+      }, trackedInvoker('accuracy'));
       return {
         score: judged.score,
         method: 'gt-rubric',
