@@ -35,6 +35,11 @@ import { readUserCustomEvaluators } from '@/server/user_evaluators_storage';
 import { getModelPricing, calculateCost } from '@/lib/shared/model-config';
 import { createSimpleAsyncLimiter } from '@/lib/engine/evaluation/eval-run-guards';
 import { callJudgeLlm } from './judge-llm';
+import {
+  isFaithfulPresetId,
+  runFaithfulPreset,
+  type FaithfulPresetContext,
+} from './faithful-preset-evaluators';
 
 /** 引擎参数（测试可改小重试退避/超时；生产用默认值）。 */
 export const experimentEngineConfig = {
@@ -46,63 +51,14 @@ export const experimentEngineConfig = {
   concurrency: 4,
 };
 
-// ── 预置 LLM 评估器的内置提示词 ─────────────────────────────────────────────
-// preset-agent-task-completion / preset-agent-trace-quality 卡片没有 llmConfig，
-// 本期不接原 opencode 专用链路——统一走 judge-assembly 通用三段式。这里为这两个 id
-// 提供引擎内置 systemPrompt（素材取自 preset-evaluator-details.ts 的 prompt 文本，
-// 占位符对齐 {{input}}/{{output}}/{{reference_output}}/{{trajectory}}）。
-const BUILTIN_PRESET_JUDGE_SYSTEM_PROMPTS: Record<string, string> = {
-  'preset-agent-task-completion': [
-    '你是一位Agent任务评估助手，你的任务是评估一个 Agent 是否成功、完整地实现了用户的目标。',
-    '',
-    '<输入>',
-    '[用户输入]: {{input}}',
-    '[Agent 响应]: {{output}}',
-    '[参考答案]: {{reference_output}}',
-    '</输入>',
-    '',
-    '<评分标准>',
-    '请对照参考答案，根据任务完成程度给出一个 0-100 的得分：',
-    '- 100: 完全完成任务，与参考答案实质一致，表述清晰且完整。',
-    '- 50: 基本完成任务，但内容不够清楚或与参考答案有出入。',
-    '- 0: Agent没有完成任务。即使解释合理，但实质上未完成用户任务也得 0 分。',
-    '</评分标准>',
-    '',
-    '<思考指导>',
-    '首先，请通过查看输入的上下文理解用户的真实意图。如果输入中没有明确表达意图，请尝试从上下文或消息内容中合理推断。一旦你理解了目标，请开始判断 Agent 最终策略是否成功完成了目标，然后依照评分标准，按照完成任务的程度给出最终得分。',
-    '</思考指导>',
-  ].join('\n'),
-  'preset-agent-trace-quality': [
-    '你是 Agent 轨迹质量评测助手。请根据给定的执行轨迹，判断规划、工具调用与中间推理是否一致、稳健、可复现。',
-    '',
-    '<输入>',
-    '[用户目标]: {{input}}',
-    '[执行轨迹]: {{trajectory}}',
-    '[最终回答片段（可选）]: {{output}}',
-    '</输入>',
-    '',
-    '<评分标准>',
-    '输出 0-100：',
-    '- 100：轨迹与目标强一致；关键步骤无缺失；无明显循环/反复失败。',
-    '- 50：大体完成但有冗余调用、次序不佳或次要信息缺失。',
-    '- 0：关键步骤错误或轨迹与目标相悖。',
-    '</评分标准>',
-    '',
-    '请先概括用户目标与轨迹主干，再按标准给分。',
-  ].join('\n'),
-};
-
 // ── 评估器卡解析 ────────────────────────────────────────────────────────────
+// preset-agent-task-completion / preset-agent-trace-quality 由忠实版适配器
+// （faithful-preset-evaluators.ts）复用原 opencode 评估器处理，不走本函数。
+// 本函数只解析：其它预置卡 + 自建 LLM 评估器。
 
 async function resolveEvaluatorCard(user: string, evaluatorId: string): Promise<EvaluatorCard | null> {
   const preset = presetEvaluators.find((p) => p.id === evaluatorId);
-  if (preset) {
-    if (preset.evaluatorType === 'LLM' && !preset.llmConfig) {
-      const sys = BUILTIN_PRESET_JUDGE_SYSTEM_PROMPTS[preset.id];
-      if (sys) return { ...preset, llmConfig: { model: '', systemPrompt: sys } };
-    }
-    return preset;
-  }
+  if (preset) return preset;
   const items = (await readUserCustomEvaluators(user)) as EvaluatorCard[];
   return items.find((it) => it && typeof it === 'object' && it.id === evaluatorId) ?? null;
 }
@@ -112,6 +68,8 @@ async function resolveEvaluatorCard(user: string, evaluatorId: string): Promise<
 interface CaseRuntime {
   codeCtx: CodeEvalContext;
   judgeCtx: JudgeCaseContext;
+  /** 忠实版预置评估器（复用原 opencode 评估器）所需的原始上下文。 */
+  faithfulCtx: FaithfulPresetContext;
 }
 
 function parseFailureSummaries(failures: string | null | undefined): string[] {
@@ -171,6 +129,7 @@ async function loadCaseRuntime(caseRow: {
 
   // interactions 工具序列（Session 按 taskId 关联）；拿不到 → undefined，冗余检测自然降级无分
   let toolCallNames: string[] | undefined;
+  let rawInteractions: unknown[] = []; // 忠实版轨迹评估器需要原始 interactions
   const taskId = caseRow.taskId || execution?.taskId || null;
   if (taskId) {
     try {
@@ -180,7 +139,10 @@ async function loadCaseRuntime(caseRow: {
       });
       if (session?.interactions) {
         const parsed = JSON.parse(session.interactions);
-        if (Array.isArray(parsed)) toolCallNames = extractToolCallNames(parsed);
+        if (Array.isArray(parsed)) {
+          rawInteractions = parsed;
+          toolCallNames = extractToolCallNames(parsed);
+        }
       }
     } catch {
       toolCallNames = undefined;
@@ -244,7 +206,17 @@ async function loadCaseRuntime(caseRow: {
     trajectory,
   };
 
-  return { codeCtx, judgeCtx };
+  const faithfulCtx: FaithfulPresetContext = {
+    caseInput: caseRow.input,
+    actualOutput: caseRow.actualOutput,
+    referenceOutput: caseRow.referenceOutput,
+    traceSummaryText: trajectory,
+    interactions: rawInteractions,
+    taskId,
+    executionId: caseRow.executionId,
+  };
+
+  return { codeCtx, judgeCtx, faithfulCtx };
 }
 
 // ── 单行执行（含重试/超时）────────────────────────────────────────────────
@@ -276,6 +248,10 @@ async function evaluateOnce(
     const out = runCodeEvaluator(evaluatorId, runtime.codeCtx);
     if (!out) throw new Error(`未知代码评估器：${evaluatorId}`);
     return out;
+  }
+  // 忠实版预置 LLM 评估器：复用原 opencode 评估器逻辑（口径与评测执行一致 + 归因字段）
+  if (isFaithfulPresetId(evaluatorId)) {
+    return runFaithfulPreset(evaluatorId, user, runtime.faithfulCtx);
   }
   const card = await resolveEvaluatorCard(user, evaluatorId);
   if (!card) throw new Error(`未找到评估器 ${evaluatorId}（可能已被删除）`);

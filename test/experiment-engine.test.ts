@@ -10,6 +10,8 @@ import test from 'node:test';
 
 import { prisma } from '@/lib/storage/prisma';
 import { setJudgeLlmCallerForTest } from '@/lib/engine/experiment/judge-llm';
+import { setFaithfulPresetRunnerForTest } from '@/lib/engine/experiment/faithful-preset-evaluators';
+import { writeUserCustomEvaluators } from '@/server/user_evaluators_storage';
 import {
   experimentEngineConfig,
   startExperimentRun,
@@ -21,6 +23,10 @@ const TEST_USER = `exp-engine-${Date.now()}`;
 
 // 测试不等真实退避
 experimentEngineConfig.retryDelaysMs = [0, 0];
+
+// 通用 judge 路径（parse/retry/失败）由自建 LLM 评估器承接——预置 task-completion/
+// trace-quality 现走忠实版（原 opencode 逻辑），不经 judge-llm。
+const CUSTOM_LLM_ID = 'custom-engine-test-judge';
 
 const VALID_JUDGE_JSON = JSON.stringify({
   score: 88,
@@ -78,11 +84,22 @@ async function createExperiment(
 async function cleanup() {
   await prisma.experiment.deleteMany({ where: { user: TEST_USER } });
   await prisma.execution.deleteMany({ where: { user: TEST_USER } });
+  await prisma.customEvaluatorList.deleteMany({ where: { user: TEST_USER } });
 }
+
+test.before(async () => {
+  await writeUserCustomEvaluators(TEST_USER, [{
+    id: CUSTOM_LLM_ID, name: 'engine-test-judge', description: '', evaluatorType: 'LLM',
+    source: 'custom', targetTypes: [], objectives: [], scenarios: [], runMode: '', scoreRange: '',
+    popularity: 0, mappedMetrics: [], status: 'ready', category: 'res',
+    llmConfig: { model: 'engine-test', systemPrompt: '评估 {{output}} 对照 {{reference_output}}' },
+  }]);
+});
 
 test.after(async () => {
   await cleanup();
   setJudgeLlmCallerForTest(null);
+  setFaithfulPresetRunnerForTest(null);
 });
 
 test('engine: 代码评估器 + LLM 行成功解析落库，实验终态 done', async () => {
@@ -90,7 +107,7 @@ test('engine: 代码评估器 + LLM 行成功解析落库，实验终态 done', 
   const executionId = await createExecution();
   const { experimentId, caseId } = await createExperiment(executionId, [
     'preset-code-tool-reliability',
-    'preset-agent-task-completion',
+    CUSTOM_LLM_ID,
   ]);
 
   const start = await startExperimentRun(experimentId, TEST_USER);
@@ -114,7 +131,7 @@ test('engine: 代码评估器 + LLM 行成功解析落库，实验终态 done', 
   assert.equal(codeRow.caseId, caseId);
 
   // LLM 评估器：fake judge 的合法 JSON 被解析归一化落库
-  const llmRow = rows.find((r: { evaluatorId: string }) => r.evaluatorId === 'preset-agent-task-completion')!;
+  const llmRow = rows.find((r: { evaluatorId: string }) => r.evaluatorId === CUSTOM_LLM_ID)!;
   assert.equal(llmRow.status, 'done');
   assert.equal(llmRow.score, 88);
   const points = JSON.parse(llmRow.pointsJson!);
@@ -130,7 +147,7 @@ test('engine: judge 输出非法 JSON → 重试用尽 → failed + errorMessage
   setJudgeLlmCallerForTest(async () => { calls++; return '这不是 JSON，judge 抽风了'; });
 
   const executionId = await createExecution();
-  const { experimentId } = await createExperiment(executionId, ['preset-agent-task-completion']);
+  const { experimentId } = await createExperiment(executionId, [CUSTOM_LLM_ID]);
 
   const start = await startExperimentRun(experimentId, TEST_USER);
   await start!.completion;
@@ -171,7 +188,7 @@ test('engine: 非可重试异常不重试；同实验 running 时重复触发直
   });
 
   const executionId = await createExecution();
-  const { experimentId } = await createExperiment(executionId, ['preset-agent-task-completion']);
+  const { experimentId } = await createExperiment(executionId, [CUSTOM_LLM_ID]);
 
   const start = await startExperimentRun(experimentId, TEST_USER);
   assert.equal(start!.status, 'running');
@@ -208,4 +225,33 @@ test('engine: interactions 工具序列提取（tool_calls 优先，parts 兜底
     null,
   ]);
   assert.deepEqual(names, ['read_file', 'read_file', 'bash']);
+});
+
+test('engine: 预置 task-completion/trace-quality 走忠实版通道，归因字段落库', async () => {
+  // 忠实版注入 fake runner（真实调 opencode 在此不加载），产出带归因字段的评分点
+  setFaithfulPresetRunnerForTest(async (id) => ({
+    score: 82,
+    points: [{
+      label: id === 'preset-agent-trace-quality' ? '完整性' : '目标达成',
+      score: 70, status: 'partial', skillAttributable: true,
+      suggestion: '在 SKILL.md 补校验清单', anchors: ['step-3'],
+      evidence: { md: '判断依据' },
+    }],
+    evidence: { md: '总体判断' },
+  }));
+  const executionId = await createExecution();
+  const { experimentId } = await createExperiment(executionId, ['preset-agent-trace-quality']);
+  const start = await startExperimentRun(experimentId, TEST_USER);
+  await start!.completion;
+
+  const row = (await prisma.experimentEvalResult.findMany({ where: { experimentId } }))[0];
+  assert.equal(row.status, 'done');
+  assert.equal(row.score, 82);
+  const p = JSON.parse(row.pointsJson!)[0];
+  assert.equal(p.label, '完整性');
+  assert.equal(p.status, 'partial');
+  assert.equal(p.skillAttributable, true);
+  assert.equal(p.suggestion, '在 SKILL.md 补校验清单');
+  assert.deepEqual(p.anchors, ['step-3']);
+  setFaithfulPresetRunnerForTest(null);
 });
