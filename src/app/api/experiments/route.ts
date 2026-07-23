@@ -38,6 +38,7 @@ export async function GET(req: Request) {
         type: r.type,
         agentName: r.agentName,
         status: r.status,
+        watchMode: r.watchMode,
         caseCount: r._count.cases,
         evaluatorCount,
         createdAt: r.createdAt,

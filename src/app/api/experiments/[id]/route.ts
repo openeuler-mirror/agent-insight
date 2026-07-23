@@ -65,6 +65,8 @@ export async function GET(
       type: experiment.type,
       agentName: experiment.agentName,
       status: experiment.status,
+      watchMode: experiment.watchMode,
+      watchEnabledAt: experiment.watchEnabledAt,
       evaluatorIds,
       createdAt: experiment.createdAt,
       cases: experiment.cases.map((c: any) => ({
@@ -81,5 +83,38 @@ export async function GET(
   } catch (error) {
     console.error('[Experiment Detail Error]', error);
     return NextResponse.json({ error: 'Failed to load experiment' }, { status: 500 });
+  }
+}
+
+// 停止监听：把监听实验的 watchMode 置回 false（触发查询 where watchMode=true 即不再命中，
+// 该 Agent 后续新 trace 不再自动进来评；已评结果全部保留）。目前仅支持关闭。
+export async function PATCH(
+  req: Request,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  try {
+    const { id } = await params;
+    const body = await req.json().catch(() => ({}));
+    const { username } = await resolveUser(req, body?.user);
+    if (!username) return NextResponse.json({ error: 'user is required' }, { status: 400 });
+
+    if (body?.watchMode !== false) {
+      return NextResponse.json({ error: 'only supports watchMode:false (stop watching)' }, { status: 400 });
+    }
+
+    const exp = await prisma.experiment.findFirst({
+      where: { id, user: username },
+      select: { id: true },
+    });
+    if (!exp) return NextResponse.json({ error: 'experiment not found' }, { status: 404 });
+
+    await prisma.experiment.update({
+      where: { id },
+      data: { watchMode: false, watchEnabledAt: null },
+    });
+    return NextResponse.json({ success: true, watchMode: false });
+  } catch (error) {
+    console.error('[Experiment PATCH Error]', error);
+    return NextResponse.json({ error: 'Failed to update experiment' }, { status: 500 });
   }
 }

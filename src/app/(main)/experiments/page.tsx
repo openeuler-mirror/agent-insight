@@ -18,6 +18,7 @@ interface ExperimentRow {
   type: string;
   agentName: string;
   status: string;
+  watchMode?: boolean;
   caseCount: number;
   evaluatorCount: number;
   createdAt: string;
@@ -40,6 +41,25 @@ function StatusChip({ status }: { status: string }) {
       background: meta.bg, color: meta.fg, whiteSpace: 'nowrap',
     }}>
       {meta.label}
+    </span>
+  );
+}
+
+function WatchChip() {
+  return (
+    <span
+      title="监听模式：该 Agent 新上报的 trace 会自动进本实验评测"
+      style={{
+        fontSize: 11, padding: '2px 8px', borderRadius: 10, fontWeight: 500,
+        background: 'var(--tag-green-bg)', color: 'var(--tag-green-fg)', whiteSpace: 'nowrap',
+        display: 'inline-flex', alignItems: 'center', gap: 4,
+      }}
+    >
+      <span style={{
+        width: 6, height: 6, borderRadius: '50%', background: 'var(--tag-green-fg)',
+        display: 'inline-block',
+      }} />
+      监听中
     </span>
   );
 }
@@ -153,7 +173,12 @@ export default function ExperimentsPage() {
                     <td style={TD}><TypeChip /></td>
                     <td style={{ ...TD, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r.caseCount}</td>
                     <td style={{ ...TD, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r.evaluatorCount}</td>
-                    <td style={TD}><StatusChip status={r.status} /></td>
+                    <td style={TD}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                        <StatusChip status={r.status} />
+                        {r.watchMode && <WatchChip />}
+                      </span>
+                    </td>
                     <td style={{ ...TD, color: 'var(--foreground-muted)', whiteSpace: 'nowrap' }}>
                       {new Date(r.createdAt).toLocaleString('zh-CN', { hour12: false })}
                     </td>

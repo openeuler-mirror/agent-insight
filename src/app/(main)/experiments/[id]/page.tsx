@@ -23,6 +23,8 @@ interface ExperimentDetail {
   type: string;
   agentName: string;
   status: string;
+  watchMode?: boolean;
+  watchEnabledAt?: string | null;
   evaluatorIds: string[];
   createdAt: string;
   cases: Array<{
@@ -159,6 +161,26 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
     }
   }, [user, id, retryingCaseId, detail, load]);
 
+  const [stoppingWatch, setStoppingWatch] = useState(false);
+  const stopWatch = useCallback(async () => {
+    if (!user || stoppingWatch) return;
+    if (!window.confirm('停止监听后，该 Agent 后续新上报的 trace 将不再自动进本实验评测（已评结果全部保留）。确认停止？')) return;
+    setStoppingWatch(true);
+    try {
+      const res = await apiFetch(
+        `/api/experiments/${encodeURIComponent(id)}`,
+        { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user, watchMode: false }) },
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(String(data?.error || '停止监听失败'));
+      await load(true);
+    } catch (e: any) {
+      setError(e?.message || '停止监听失败');
+    } finally {
+      setStoppingWatch(false);
+    }
+  }, [user, id, stoppingWatch, load]);
+
   const status = STATUS_META[detail?.status ?? 'draft'] ?? STATUS_META.draft;
 
   const overall = useMemo(
@@ -210,6 +232,37 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
                 ‹ 返回实验列表
               </Link>
             </div>
+
+            {/* 监听中横幅 */}
+            {detail.watchMode && (
+              <div style={{
+                ...CARD, padding: '12px 16px', marginBottom: 14,
+                display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', fontSize: 12,
+                background: 'var(--tag-green-bg)', borderColor: 'var(--tag-green-fg)',
+              }}>
+                <span style={{
+                  width: 8, height: 8, borderRadius: '50%', background: 'var(--tag-green-fg)',
+                  display: 'inline-block', flex: '0 0 auto',
+                }} />
+                <span style={{ fontWeight: 600, color: 'var(--tag-green-fg)' }}>监听中</span>
+                <span style={{ color: 'var(--foreground-secondary)' }}>
+                  Agent <b style={{ color: 'var(--foreground)' }}>{detail.agentName || '—'}</b> 新上报的 trace 会自动进本实验评测
+                  {detail.watchEnabledAt && `（自 ${new Date(detail.watchEnabledAt).toLocaleString('zh-CN', { hour12: false })} 起）`}
+                </span>
+                <button
+                  onClick={stopWatch}
+                  disabled={stoppingWatch}
+                  style={{
+                    marginLeft: 'auto', fontSize: 12, padding: '5px 14px', borderRadius: 7,
+                    border: '1px solid var(--tag-green-fg)', background: 'var(--card-bg)',
+                    color: 'var(--tag-green-fg)', cursor: stoppingWatch ? 'default' : 'pointer',
+                    opacity: stoppingWatch ? 0.6 : 1, fontWeight: 600, whiteSpace: 'nowrap',
+                  }}
+                >
+                  {stoppingWatch ? '停止中…' : '停止监听'}
+                </button>
+              </div>
+            )}
 
             {/* 顶部状态条 */}
             <div style={{
