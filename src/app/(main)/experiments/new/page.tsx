@@ -230,6 +230,8 @@ export default function NewExperimentPage() {
   const [agents, setAgents] = useState<AgentOption[]>([]);
 
   // ② 关联 Trace
+  // 监听模式：开启后本实验绑定该 Agent，其新上报的 trace 自动进来评测（圈选已有 trace 变可选）
+  const [watchMode, setWatchMode] = useState(false);
   const [traces, setTraces] = useState<TraceItem[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -456,6 +458,18 @@ export default function NewExperimentPage() {
     });
   };
 
+  // 监听模式开启时，剔除已选的依赖参考数据的评估器（方案A：监听 trace 无参考答案）
+  useEffect(() => {
+    if (!watchMode) return;
+    setSelectedEvaluators((prev) => {
+      const next = new Set(prev);
+      for (const card of allEvaluators) {
+        if (getEvaluatorMeta(card).requires.includes('reference')) next.delete(card.id);
+      }
+      return next.size === prev.size ? prev : next;
+    });
+  }, [watchMode, allEvaluators]);
+
   const submit = async () => {
     if (!user || submitting) return;
     setSubmitting(true);
@@ -468,6 +482,7 @@ export default function NewExperimentPage() {
           user,
           name,
           agentName,
+          watchMode,
           cases: selectedList,
           evaluatorIds: Array.from(selectedEvaluators),
         }),
@@ -487,7 +502,8 @@ export default function NewExperimentPage() {
   };
 
   const step1Valid = name.trim() !== '' && agentName !== '';
-  const step2Valid = selected.size >= 1;
+  // 监听模式允许 0 条已选 trace 起步（纯监听后续新 trace）
+  const step2Valid = watchMode || selected.size >= 1;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   const stepSummaries = [
@@ -605,6 +621,18 @@ export default function NewExperimentPage() {
 
         {step === 2 && (
           <div style={PANEL}>
+            <label style={{
+              display: 'flex', alignItems: 'center', gap: 10, padding: '11px 13px', marginBottom: 12,
+              borderRadius: 10, border: `1px solid ${watchMode ? 'var(--primary)' : 'var(--border)'}`,
+              background: watchMode ? 'var(--primary-subtle)' : 'var(--card-bg)', cursor: 'pointer',
+            }}>
+              <input type="checkbox" checked={watchMode} onChange={(e) => setWatchMode(e.target.checked)} />
+              <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--foreground)' }}>监听模式</span>
+              <span style={{ fontSize: 12, color: 'var(--foreground-secondary)', lineHeight: 1.5 }}>
+                开启后本实验绑定「{agentName || '该 Agent'}」——其新上报的 trace 自动进来评测；下方圈选已有 trace 变为可选，可 0 条起步。
+                <span style={{ color: 'var(--foreground-muted)' }}>（监听 trace 无参考答案，第 ④ 步依赖参考数据的评估器不可选）</span>
+              </span>
+            </label>
             <div style={PANEL_H}>
               <span style={{ fontSize: 12, color: 'var(--foreground-muted)' }}>Agent：</span>
               <span style={{ ...CHIP_MUT, color: 'var(--foreground)', fontWeight: 700 }}>{agentName}</span>
@@ -872,7 +900,10 @@ export default function NewExperimentPage() {
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(290px, 1fr))', gap: 10 }}>
                 {allEvaluators.map((card) => {
                   const meta = getEvaluatorMeta(card);
-                  const gate = gateEvaluator(meta, gateCases);
+                  // 监听模式：新 trace 无逐条参考答案 → 依赖参考数据的评估器不可用（方案A）
+                  const gate = watchMode && meta.requires.includes('reference')
+                    ? { usable: false, reason: '监听模式下新 trace 无参考答案——依赖参考数据的评估器不可用' }
+                    : gateEvaluator(meta, gateCases);
                   const checked = selectedEvaluators.has(card.id);
                   return (
                     <div
