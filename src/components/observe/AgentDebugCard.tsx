@@ -14,12 +14,12 @@ import {
   Loader2,
   MessageSquare,
   RefreshCw,
-  RotateCcw,
   Sparkles,
   Zap,
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
+import { AgentDebugSupplementalEvidenceBlock } from '@/components/observe/AgentDebugSupplementalEvidence';
 import { StatusBadge } from '@/components/feedback/StatusBadge';
 import { ExpandableText } from '@/components/text/ExpandableText';
 import { TermPopover } from '@/components/text/TermPopover';
@@ -32,7 +32,7 @@ import type {
   AgentDebugRootCause,
   AgentDebugSkillsAnalysis,
   AgentDebugTraceLocation,
-  AgentDebugTrajectoryFinding,
+  AgentDebugDetectorFinding,
 } from '@/lib/engine/agent-debug/types';
 
 interface AgentDebugCardProps {
@@ -503,13 +503,13 @@ function ReportView({ report, zh, executionId, user, traceExplicitErrors, onNode
   onRerun: () => void;
 }) {
   const findings = useMemo(() => normalizeReportFindings(report), [report]);
-  const trajectoryFindings = useMemo(
-    () => (Array.isArray(report.trajectoryFindings) ? report.trajectoryFindings : []),
+  const detectorFindings = useMemo(
+    () => (Array.isArray(report.detectorFindings) ? report.detectorFindings : []),
     [report],
   );
   const [expandedFindingIds, setExpandedFindingIds] = useState<Set<string>>(() => new Set(findings[0] ? [findings[0].id] : []));
   const issueCount = report.issues.length + traceExplicitErrors.length;
-  const totalFindings = findings.length + trajectoryFindings.length;
+  const totalFindings = findings.length + detectorFindings.length;
 
   useEffect(() => {
     setExpandedFindingIds(new Set(findings[0] ? [findings[0].id] : []));
@@ -592,12 +592,13 @@ function ReportView({ report, zh, executionId, user, traceExplicitErrors, onNode
                 onNodeRefClick={onNodeRefClick}
               />
             ))}
-            {trajectoryFindings.map((finding, i) => (
-              <TrajectoryFindingRow
+            {detectorFindings.map((finding, i) => (
+              <DetectorFindingRow
                 key={finding.id}
                 finding={finding}
                 index={findings.length + i}
                 zh={zh}
+                relatedFinding={findings.find(candidate => candidate.id === finding.relatedFindingId)}
                 expanded={expandedFindingIds.has(finding.id)}
                 onToggle={() => {
                   setExpandedFindingIds(prev => {
@@ -626,17 +627,24 @@ function ReportView({ report, zh, executionId, user, traceExplicitErrors, onNode
     </div>
   );
 }
-function TrajectoryFindingRow({ finding, index, zh, expanded, onToggle, onNodeRefClick }: {
-  finding: AgentDebugTrajectoryFinding;
+function DetectorFindingRow({ finding, index, zh, relatedFinding, expanded, onToggle, onNodeRefClick }: {
+  finding: AgentDebugDetectorFinding;
   index: number;
   zh: boolean;
+  relatedFinding?: AgentDebugFinding;
   expanded: boolean;
   onToggle: () => void;
   onNodeRefClick?: (nodeId: string) => void;
 }) {
-  const spanText = finding.span.fromStep != null && finding.span.toStep != null
-    ? `#${finding.span.fromStep}–#${finding.span.toStep}`
-    : (zh ? `${finding.span.turnCount} 个 turn` : `${finding.span.turnCount} turns`);
+  const span = finding.details.span && typeof finding.details.span === 'object'
+    ? finding.details.span as Record<string, unknown>
+    : null;
+  const fromStep = typeof span?.fromStep === 'number' ? span.fromStep : null;
+  const toStep = typeof span?.toStep === 'number' ? span.toStep : null;
+  const turnCount = typeof span?.turnCount === 'number' ? span.turnCount : null;
+  const detailText = fromStep != null && toStep != null
+    ? '#' + fromStep + '–#' + toStep
+    : turnCount != null ? String(turnCount) + (zh ? ' 个 turn' : ' turns') : null;
   return (
     <div className="rounded-lg border border-border bg-background-secondary p-3">
       <button
@@ -651,10 +659,8 @@ function TrajectoryFindingRow({ finding, index, zh, expanded, onToggle, onNodeRe
         <div className="min-w-0 flex-1">
           <div className="text-[13px] font-semibold leading-6 text-foreground">{sanitizeConclusionText(finding.summary)}</div>
           <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-foreground-muted">
-            <span className="inline-flex items-center gap-1 rounded bg-error-subtle px-1 py-0.5 text-error">
-              <RotateCcw className="size-3" />{zh ? '疑似循环' : 'Suspected loop'}
-            </span>
-            <span>{zh ? '区间' : 'span'} {spanText}</span>
+            {detailText && <span>{detailText}</span>}
+            {relatedFinding && <span>{zh ? '关联：' : 'Related: '}{sanitizeConclusionText(relatedFinding.summary)}</span>}
           </div>
         </div>
         {expanded ? <ChevronDown className="mt-1 size-3.5 shrink-0 text-foreground-muted" /> : <ChevronRight className="mt-1 size-3.5 shrink-0 text-foreground-muted" />}
@@ -678,10 +684,16 @@ function TrajectoryFindingRow({ finding, index, zh, expanded, onToggle, onNodeRe
             </section>
           )}
 
-          <section>
-            <div className="mb-1 text-[10.5px] font-bold tracking-wider text-foreground-muted">{zh ? '无进展证据' : 'No-progress evidence'}</div>
-            <div className="text-[12px] leading-6 text-foreground-muted">{sanitizeReportText(finding.noProgressEvidence)}</div>
-          </section>
+          {finding.facts.length > 0 && (
+            <section>
+              <div className="mb-1 text-[10.5px] font-bold tracking-wider text-foreground-muted">{zh ? '诊断事实' : 'Diagnostic facts'}</div>
+              <ul className="space-y-0.5">
+                {finding.facts.map((fact, i) => (
+                  <li key={i} className="text-[12px] leading-6 text-foreground-muted">• {sanitizeReportText(fact)}</li>
+                ))}
+              </ul>
+            </section>
+          )}
 
           {finding.anchors.length > 0 && (
             <section className="flex flex-wrap items-center gap-1.5">
@@ -856,6 +868,14 @@ function FindingCard({ finding, index, report, zh, expanded, traceExplicitErrors
                     {sanitizeReportText(finding.evidence)}
                   </p>
                 )}
+                {finding.supplementalEvidence?.map((evidence, evidenceIndex) => (
+                  <AgentDebugSupplementalEvidenceBlock
+                    key={evidenceIndex}
+                    evidence={evidence}
+                    zh={zh}
+                    onNodeRefClick={onNodeRefClick}
+                  />
+                ))}
                 <div className="grid gap-2 md:grid-cols-2">
                   {modules.map(module => (
                     <EvidenceModuleCard

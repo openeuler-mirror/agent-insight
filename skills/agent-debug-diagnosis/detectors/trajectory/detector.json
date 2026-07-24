@@ -1,0 +1,22 @@
+{
+  "name": "trajectory-loop",
+  "version": "1.0.0",
+  "description": "检测执行轨迹中的未终止循环、重复动作和长时间无进展区间。",
+  "enabled": true,
+  "modes": ["one_click", "targeted"],
+  "entrypoint": "detect.py",
+  "instructions": "instructions.md",
+  "intents": [
+    {
+      "name": "loop_or_no_progress",
+      "keywords": ["循环", "死循环", "反复", "重复", "不收敛", "无进展", "卡住", "一直调用", "为什么停不下来"]
+    }
+  ],
+  "outputSchemaVersion": 1,
+  "config": {
+    "minRepeats": 4,
+    "minRegionTurns": 10,
+    "dominanceRatio": 0.6,
+    "maxFindings": 5
+  }
+}

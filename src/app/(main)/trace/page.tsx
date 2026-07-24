@@ -1458,9 +1458,10 @@ function TraceDetailView({
                     <div className="rounded-md border border-error-border bg-error-subtle text-error p-4 text-sm" role="alert">
                         {session.error}
                     </div>
-                ) : session?.interactions?.length > 0 ? (
+                ) : (session?.interactions?.length || 0) > 0 || (session?.langfuseTraceNodes?.length || 0) > 0 ? (
                     <AgentTraceView
-                        interactions={session.interactions}
+                        interactions={session.interactions || []}
+                        langfuseTraceNodes={session.langfuseTraceNodes}
                         loadInteraction={loadInteraction}
                         loadAllInteractions={loadFullInteractions}
                         onSubagentNavigate={navigateToTaskId}

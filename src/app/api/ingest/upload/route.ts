@@ -13,6 +13,27 @@ import { getInternalAgentTag } from '@/lib/internal-agent-tag';
 import { triggerExperimentWatchForTask } from '@/lib/engine/experiment/experiment-watch';
 import { NextResponse } from 'next/server';
 
+/**
+ * 这一发 opencode 上报是不是"进行中快照"——是的话只落库，不跑异步 LLM 分析。
+ *
+ * 判定依据必须是**本轮对话是否跑完**，不能用 CLI 是否退出：opencode 正常交互式使用时
+ * CLI 会一直开着，拿 opencode_cli_completed 当门会把每一条 trace 都判成进行中，评分 /
+ * 诊断 / 流程图要等用户退出 opencode 才出，属于严重倒退（曾经上线过一版，已修）。
+ *
+ * trace_completed_at 由 uploader 在「已产出终稿 && 会话已 idle」时写入，正是本轮结束的
+ * 信号；工具死循环的心跳快照两个条件都不满足，自然落进轻通道。
+ */
+export function isInProgressOpencodeSnapshot(data: {
+    framework?: unknown;
+    trace_completed_at?: unknown;
+    opencode_cli_completed?: unknown;
+}): boolean {
+    if (String(data.framework ?? '').toLowerCase() !== 'opencode') return false;
+    if (data.opencode_cli_completed === true) return false;
+    if (String(data.trace_completed_at ?? '').trim()) return false;
+    return true;
+}
+
 export async function POST(request: Request) {
   try {
     const rawBody = await request.text();
@@ -247,7 +268,39 @@ export async function POST(request: Request) {
             console.log(`[Upload-API] Quick save with skills: ${JSON.stringify(quickSkillsWithVersions)}`);
         }
     } catch (e) {
-        console.warn(`[Upload-API] Quick initial save failed:`, e);
+        // 之前这里只 warn 然后照常返回 200 success。后果是"落库失败但客户端以为成功"：
+        // opencode uploader 会把这次的 sig 写进 checkpoint，之后内容没大变化就再也不重传，
+        // 这条 trace 永久丢失且两端都无感。改成 5xx，让客户端不记 checkpoint、下轮自动重试。
+        console.error(
+            `[Upload-API] ❌ Quick initial save failed (HTTP 500): task_id=${data.task_id}, framework=${data.framework || 'unknown'}, user=${username}\n`,
+            e,
+        );
+        return NextResponse.json(
+            {
+                error: 'Failed to persist execution record',
+                detail: '上报已收到但落库失败，客户端请勿标记为已上传，稍后重试。',
+                upload_id: data.task_id,
+            },
+            { status: 500 },
+        );
+    }
+
+    // 进行中的 opencode 快照走轻通道：只落库（上面的 quick save 已完成），跳过异步分析。
+    // 异步分析包含三次 LLM 调用（flow-parser 流程图 / result-quality judge 打分 /
+    // analyzeFailures 失败归因）。心跳上报开启后，一个长任务会每分钟推一次快照，
+    // 若每次都跑完整分析：① 成本随任务时长线性叠加，输入还是越来越大的全量 trace；
+    // ② 对一个尚未产出终稿的半截 trace，打分和失败归因本身没有意义，还会用中间态结论
+    // 覆盖掉最终那次的正确结论。等 CLI 真正退出（opencode_cli_completed=true）再评一次。
+    const isInProgressOpencode = isInProgressOpencodeSnapshot(data);
+    if (isInProgressOpencode) {
+        console.log(`[Upload-API] ⏳ In-progress opencode snapshot, saved without analysis: task_id=${data.task_id}`);
+        return NextResponse.json({
+            success: true,
+            message: 'In-progress snapshot saved; analysis deferred until session completes',
+            upload_id: data.task_id,
+            auto_evaluation: false,
+            in_progress: true,
+        }, { status: 200 });
     }
 
     const userSettings = await getUserSettings(username);

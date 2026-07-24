@@ -48,6 +48,8 @@
 
 状态表面遵循一致的 `{subtle-bg, subtle-border, text}` 三元组（例如琥珀色标签 `#92400E` 配 `#FFFBEB` = **6.84:1** ✓；红色标签 **5.91:1** ✓；绿色标签 **4.79:1** ✓）。暗色主题将强调色提亮为 `#818CF8`，并把状态色切换为 `400` 级色相，配以半透明填充。
 
+Trace 类型色由 `src/lib/charts/palette.ts` 统一管理：AGENT=indigo、TASK=sky、CHAIN=teal、TOOL=emerald、LLM=violet、SKILL=pink、USER=neutral。CHAIN 仅表示 Langfuse 业务链路，不复用告警或错误状态色。
+
 ## 3. Typography
 
 - **字族**：sans = `Inter`（通过 `--font-inter`）配系统兜底；mono = `ui-monospace, SFMono-Regular, ...`。`font-feature-settings: 'cv02','cv03','cv04','cv11'` 启用 Inter 的风格替代字形。

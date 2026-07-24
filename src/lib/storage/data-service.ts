@@ -39,11 +39,15 @@ import { getAdapter } from '@/lib/ingest/adapters/registry';
 import { normalizeInteractions } from '@/lib/shared/interaction-utils';
 import { buildPrismaWhere } from '@/lib/filters/to-prisma';
 import type { FilterClause } from '@/lib/filters/types';
+import { mergeLangfuseTraceNodes, type LangfuseTraceNode } from '@/lib/ingest/otel/adapters/langfuse-trace';
 import {
     findExecutionIdsByBusinessTags,
     getTraceTagsByExecutionIds,
     type TraceTagDto,
 } from '@/lib/trace-tags';
+
+/** 允许派生子 Agent 树的框架集合。先落地者集合化，后落地者仅加值。 */
+const SUBAGENT_TREE_FRAMEWORKS = new Set(['opencode', 'openclaw', 'hermes', 'langfuse-langgraph']);
 
 export interface InvokedSkill {
     name: string;
@@ -271,6 +275,7 @@ export interface ExecutionRecord {
     invokedSkills?: InvokedSkill[];
     invoked_skills?: InvokedSkill[];
     agents?: string[];
+    langfuseTraceNodes?: LangfuseTraceNode[];
 
     is_skill_correct?: boolean;
     is_answer_correct?: boolean;
@@ -2819,7 +2824,9 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
     // 通过 parentExecutionId 与 root 建立父子关系。列表/聚合默认 filter isSubagent=false，
     // 详情页可下钻到 sub-agent。历史上这里曾对相同 taskId 的 child Execution 做 dedup 删除，
     // 现在反过来——保留它们，并补齐父子链接。
-    if ((targetRecord.framework === 'opencode' || targetRecord.framework === 'hermes' || targetRecord.framework === 'langfuse-langgraph') && targetRecord.task_id && Array.isArray(mergedInteractionsForSession)) {
+    // framework 是可选字段（string | undefined），Set.has 要求 string —— 合入上游时补一处收窄
+    // 让本分支可编译（空串不在集合内，语义等价）。上游 MR !216 也在修同一处，合入后可去掉。
+    if (SUBAGENT_TREE_FRAMEWORKS.has(targetRecord.framework ?? '') && targetRecord.task_id && Array.isArray(mergedInteractionsForSession)) {
         try {
             await deriveSubagentExecutions({
                 parentExecutionId: recordId,
@@ -2854,6 +2861,20 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
         && Number.isFinite(traceCompletedAtForSession.getTime());
 
     if (targetRecord.task_id && mergedInteractionsForSession) {
+        const isLangfuseTrace = targetRecord.framework === 'langfuse' || targetRecord.framework === 'langfuse-langgraph';
+        let langfuseTraceNodesJson: string | undefined;
+        if (isLangfuseTrace && Array.isArray(targetRecord.langfuseTraceNodes)) {
+            const existingSession = await db.findSessionByTaskId(targetRecord.task_id);
+            let existingNodes: LangfuseTraceNode[] = [];
+            if (typeof existingSession?.langfuseTraceNodes === 'string' && existingSession.langfuseTraceNodes.trim()) {
+                try {
+                    const parsed = JSON.parse(existingSession.langfuseTraceNodes);
+                    if (Array.isArray(parsed)) existingNodes = parsed;
+                } catch {}
+            }
+            targetRecord.langfuseTraceNodes = mergeLangfuseTraceNodes(existingNodes, targetRecord.langfuseTraceNodes);
+            langfuseTraceNodesJson = JSON.stringify(targetRecord.langfuseTraceNodes);
+        }
         await db.upsertSession(
             targetRecord.task_id,
             {
@@ -2863,6 +2884,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
                 user: targetRecord.user,
                 model: targetRecord.model,
                 interactions: JSON.stringify(mergedInteractionsForSession),
+                ...(langfuseTraceNodesJson !== undefined ? { langfuseTraceNodes: langfuseTraceNodesJson } : {}),
                 ...(hasTraceCompletion ? { endTime: traceCompletedAtForSession } : {}),
             },
             {
@@ -2871,6 +2893,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
                 user: targetRecord.user,
                 model: targetRecord.model,
                 interactions: JSON.stringify(mergedInteractionsForSession),
+                ...(langfuseTraceNodesJson !== undefined ? { langfuseTraceNodes: langfuseTraceNodesJson } : {}),
             }
         );
         if (hasTraceCompletion) {

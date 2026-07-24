@@ -6,11 +6,13 @@ import { copyText } from '@/lib/copy-text';
 import { useLocale } from '@/lib/client/locale-context';
 import { apiFetch } from '@/lib/client/api';
 import { formatLatencySeconds } from '@/lib/latency-format';
+import type { LangfuseTraceNode } from '@/lib/ingest/otel/adapters/langfuse-trace';
 
 const basePath = process.env.NEXT_PUBLIC_URL_PREFIX || '';
 
 interface SessionPayload {
     interactions?: any[];
+    langfuseTraceNodes?: LangfuseTraceNode[];
     error?: string;
 }
 
@@ -298,10 +300,10 @@ function Body({
                     {session.error}
                 </div>
             )}
-            {!loading && session && !session.error && Array.isArray(session.interactions) && session.interactions.length > 0 && (
-                <AgentTraceView interactions={session.interactions} />
+            {!loading && session && !session.error && ((session.interactions?.length || 0) > 0 || (session.langfuseTraceNodes?.length || 0) > 0) && (
+                <AgentTraceView interactions={session.interactions || []} langfuseTraceNodes={session.langfuseTraceNodes} />
             )}
-            {!loading && session && !session.error && (!session.interactions || session.interactions.length === 0) && (
+            {!loading && session && !session.error && (!session.interactions || session.interactions.length === 0) && (!session.langfuseTraceNodes || session.langfuseTraceNodes.length === 0) && (
                 <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--foreground-muted)', fontSize: 12 }}>
                     {locale === 'zh' ? '该执行没有可用的 interaction 数据' : 'No interaction data for this execution'}
                 </div>

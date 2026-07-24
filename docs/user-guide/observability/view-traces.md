@@ -108,6 +108,8 @@ Trace 列表支持两类标签列：**用户标签**默认显示，用于维护�
 
 当 Trace 较长时，页面会先加载节点结构、时间和统计信息；选中具体节点后，再按需加载该节点的完整 message、reasoning、工具输入和工具输出。按需加载只改变加载时机，不会截断或丢弃 Trace 原文；保存 Trace 时仍会导出完整 Session。
 
+Langfuse / LangGraph Trace 继续使用原有的 Agent Trace 界面，并把根请求中的用户问题和完整 observation 投影为其中的 USER、AGENT、CHAIN、LLM 和 TOOL 行。CHAIN 保留业务步骤的父子关系和展开层级，不再混入 TASK；点击后可在右侧查看输入和输出。平台保留该 trace 中每个 span 的名称、类型、原始父节点、状态、耗时和 token；`summarizer`、业务检索等有正文的节点即使耗时为 0 也会显示。`LangGraph`、`model`、`tools` 等有子节点的重复包装层默认折叠，其可见子节点会提升到最近的业务父节点；没有子节点但包含独立 input/output 的包装节点仍会显示。该展示规则只作用于 Langfuse 数据，不改变其他框架的 Trace。
+
 ### 详情页主要区域
 
 #### 1. 顶部摘要区
@@ -132,6 +134,7 @@ Trace 列表支持两类标签列：**用户标签**默认显示，用于维护�
 
 - **AGENTS**：参与当前执行的 Agent 数量
 - **TASK SPAWNS**：执行过程中派生的新任务数量
+- **CHAIN SPANS**：Langfuse Trace 中保留的业务链路节点数量
 - **TOOL CALLS**：工具调用次数
 - **SKILL CALLS**：Skill 触发次数
 - **LLM TURNS**：模型交互轮次
@@ -148,6 +151,7 @@ Trace 列表支持两类标签列：**用户标签**默认显示，用于维护�
 左侧列表按时间顺序展示执行节点。每一行通常代表一个 Span，常见类型包括：
 
 - **AGENT**：Agent 层级的总任务或子任务
+- **CHAIN**：Langfuse 采集的业务步骤或链路容器，可继续展开其子节点
 - **LLM**：一次模型请求或模型输出
 - **TOOL**：一次工具调用
 - **SKILL**：一次 Skill 触发

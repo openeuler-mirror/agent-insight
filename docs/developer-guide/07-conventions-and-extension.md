@@ -41,6 +41,10 @@
 - **新增框架接入路径**：在 `src/lib/ingest/*` 下加 parser/watcher 或 OTel 聚合器，并在 `src/lib/ingest/adapters/` 注册 `FrameworkAdapter`（descriptor、skill 抽取、必要的 `normalizeForStorage`）。路由层不要再手写框架分支；通过 `saveExecutionRecord` 归一化为 `Execution`。安装脚本框架清单仍是后续治理范围。
 - **流程闸门**（`AGENTS.md` §4）：对 **Prisma schema** 的任何改动，或任何**新增 API 路由**，都需要先在 `docs/plans/YYYY-MM-DD-<topic>-design.md` 下产出一份 Plan 文档，对齐后再编码。
 
+### 新增专项诊断器
+
+在 `skills/agent-debug-diagnosis/detectors/<name>/` 新增 `detector.json`、入口脚本和说明文件。清单声明唯一名称、版本、支持的 `one_click` / `targeted` 模式、症状关键词和入口文件。运行 `python3 skills/agent-debug-diagnosis/scripts/detector_validate.py` 校验；Skill-local runner 会自动发现，不修改服务端 TS 注册表、追问路由或前端组件。输出必须符合通用 detector finding 契约：用户可读的确定性事实放入 `facts`，原始计数、区间、比例等机器字段放入 `details`，证据节点放入 `anchors`。执行统一 Skill 的同一个 Agent 负责富化、查重和关联，并直接生成最终报告；`agentdebug_validate.py --core --detectors` 保证冻结 core 字段和专项结构化事实不丢失。新增诊断器不得依赖服务端包装文件、独立富化模型、前端来源标签或专属组件。
+
 ## Boundaries — change with care
 - **生成物**：`node_modules/.prisma`、`.next/`、`next-env.d.ts`——绝不手工编辑。
 - **高扇入核心**（改动它们会大范围波及）：`src/lib/utils.ts`（`cn`，入边 103）、`src/lib/client/api.ts`（`apiFetch`，58）、`src/lib/client/locale-context.tsx`（`useLocale`，48）、`src/lib/auth/auth.ts`（`resolveUser`，24）、`src/lib/storage/db-interface.ts`（`OpenGaussAdapter.query`，32）、`src/lib/storage/server-config.ts`（`getActiveConfig`，21）、`src/lib/engine/evaluation/config-target.ts`（`normalizeConfigSkillName`，24）。

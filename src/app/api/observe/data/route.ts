@@ -184,7 +184,7 @@ function inferOpencodeCliExitedFromExistingTelemetry(taskId: string): boolean | 
 // 缺少可靠结束信号时的读侧兜底:轨迹已产出 assistant 输出后,静默超过稳定窗口即视为结束。
 // Claude Code / jiuwenswarm single-agent 没有 root span;Hermes/OpenCode 有显式完成信号,
 // 但旧接入或异常退出可能漏写 Session.endTime,需要 quiet-window 防止已完成 trace 长期停在"执行中"。
-export const QUIET_WINDOW_INFERRED_FRAMEWORKS = new Set(['claudecode', 'jiuwenswarm', 'opencode', 'hermes']);
+export const QUIET_WINDOW_INFERRED_FRAMEWORKS = new Set(['claudecode', 'jiuwenswarm', 'opencode', 'hermes', 'openclaw']);
 
 export function hasAssistantOutput(interactions: TimestampCarrier[]): boolean {
     return interactions.some((interaction) => {

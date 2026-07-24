@@ -5,10 +5,12 @@ import { db } from '@/lib/storage/prisma';
 import { inferSubagentNamesFromInteractions } from '@/lib/engine/observability/subagent-inference';
 import { normalizeClaudeCodeInteractionsForStorage } from '@/lib/shared/interaction-content';
 import { NextResponse } from 'next/server';
+import type { LangfuseTraceNode } from '@/lib/ingest/otel/adapters/langfuse-trace';
 
 type ParsedSession = {
     session: any;
     interactions: any[];
+    langfuseTraceNodes: LangfuseTraceNode[];
 };
 
 const SESSION_CACHE_TTL_MS = 45_000;
@@ -20,7 +22,9 @@ const parsedSessionCache = new Map<string, {
 }>();
 
 function sessionSignature(session: any, framework: unknown): string {
-    const raw = typeof session?.interactions === 'string' ? session.interactions : '';
+    const raw = [session?.interactions, session?.langfuseTraceNodes]
+        .map(value => typeof value === 'string' ? value : '')
+        .join('\n');
     return `${String(framework || '')}:${createHash('sha1').update(raw).digest('base64url')}`;
 }
 
@@ -51,11 +55,16 @@ async function loadParsedSession(taskId: string): Promise<ParsedSession | null> 
     }
 
     const rawInteractions = session.interactions ? JSON.parse(session.interactions) : [];
+    let langfuseTraceNodes: LangfuseTraceNode[] = [];
+    try {
+        const parsed = session.langfuseTraceNodes ? JSON.parse(session.langfuseTraceNodes) : [];
+        if (Array.isArray(parsed)) langfuseTraceNodes = parsed;
+    } catch {}
     const sessionInteractions = framework === 'claudecode'
         ? normalizeClaudeCodeInteractionsForStorage(rawInteractions)
         : rawInteractions;
     const interactions = inferSubagentNamesFromInteractions(sessionInteractions);
-    const value = { session, interactions };
+    const value = { session, interactions, langfuseTraceNodes };
     rememberParsedSession(taskId, signature, value);
     return value;
 }
@@ -200,7 +209,7 @@ export async function GET(request: Request) {
         if (!parsed) {
             return NextResponse.json({ error: 'Session not found' }, { status: 404 });
         }
-        const { session, interactions } = parsed;
+        const { session, interactions, langfuseTraceNodes } = parsed;
 
         if (view === 'interaction') {
             const index = Number.parseInt(String(searchParams.get('index') || ''), 10);
@@ -223,6 +232,7 @@ export async function GET(request: Request) {
                 startTime: session.startTime.getTime(),
                 interactionCount: interactions.length,
                 interactions: toTraceStructureInteractions(interactions),
+                ...(langfuseTraceNodes.length ? { langfuseTraceNodes } : {}),
             });
         }
 
@@ -253,6 +263,7 @@ export async function GET(request: Request) {
             user: session.user,
             startTime: session.startTime.getTime(),
             interactions,
+            ...(langfuseTraceNodes.length ? { langfuseTraceNodes } : {}),
         });
     } catch (e) {
         console.error('Error reading session from DB:', e);

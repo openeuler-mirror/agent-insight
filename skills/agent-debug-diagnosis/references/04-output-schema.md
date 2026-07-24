@@ -246,6 +246,14 @@
 - 每条 finding 必须提供独立的 `correctionGuidance`。
 - findings 按严重度、因果重要性和用户关注价值排序，最重要的放第一条。
 
+## detectorFindings
+
+`detectorFindings` 由执行统一 Skill 的同一个 Agent 在专项阶段加入最终报告；冻结的 core 报告不生成该字段。它只保存未与 core `findings` 重复的专项结果。独立结果使用通用字段：`id`、`kind`、`severity`、`summary`、`facts`、`mechanism`、`faultChain`、`anchors`、`correctionGuidance`、`confidence`、`details`，以及可选的 `relatedFindingId`。前端不得依赖具体诊断器名称渲染，也不展示任何来源类标签。
+
+重复结果不写入 `detectorFindings`，而由当前 Agent 把原始 `summary`、`severity`、`facts`、`mechanism`、`faultChain`、`anchors`、`correctionGuidance`、`confidence`、`details` 无损写入目标 core finding 的 `supplementalEvidence`。合并后的 finding 不保存诊断器名称或来源字段。
+
+专项结果中的确定性字段（计数、区间、比例、锚点）不得被语义富化或查重步骤改写。
+
 ## rootCause
 
 字段名 `rootCause` 为历史兼容。用户可见语义是“关键诊断发现”：没有明确关键发现时使用 `null`。当 trace 明确失败时，它可以表示失败根因；当 trace 最终完成或问题已恢复时，它应表示潜在问题或过程风险，不能在自然语言里写成“根因”。

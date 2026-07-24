@@ -75,7 +75,7 @@ export function invalidateFileBasedSkillCache(skillName?: string): void {
 }
 
 /**
- * 把 skills/<name>/ 下的辅助资源（references / scripts / templates）软链接到 workspace 的
+ * 把 skills/<name>/ 下的辅助资源（references / scripts / detectors / templates）软链接到 workspace 的
  * `.<name>/` 子目录。SKILL.md 本身已经作为 system prompt 注入，无需再放进去。
  *
  * 为什么用 symlink 而不是 copy：
@@ -109,7 +109,7 @@ export function mountFileBasedSkillResources(
   }
 
   // 链接 SKILL.md（便于 agent reread）+ 所有子目录
-  const candidates = ['SKILL.md', 'references', 'scripts', 'templates'];
+  const candidates = ['SKILL.md', 'references', 'scripts', 'detectors', 'templates'];
   const mounted: string[] = [];
   
   for (const name of candidates) {
