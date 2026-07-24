@@ -278,3 +278,30 @@ export function extractSkillsFromOpenClawSession(interactions: any[]): string[] 
 export function extractSkillsFromHermesSession(interactions: any[]): string[] {
   return extractSkillsWithVersionsFromHermesSession(interactions).map((s) => s.name)
 }
+
+export function extractSkillsWithVersionsFromTraeSession(interactions: any[]): InvokedSkill[] {
+  const seen = new Set<string>()
+  const skills: InvokedSkill[] = []
+  const skillNamePattern = /^[a-zA-Z0-9_\-\.]+$/
+  for (const msg of interactions) {
+    const toolCalls = msg?.tool_calls || msg?.payload?.toolCalls || []
+    for (const tc of toolCalls) {
+      const toolName = String(tc?.function?.name ?? tc?.name ?? tc?.toolName ?? "").toLowerCase()
+      if (toolName !== "skill" && toolName !== "load_skill") continue
+      const args = tc?.function?.arguments ?? tc?.arguments ?? tc?.toolInput ?? {}
+      const rawName = args?.name ?? args?.skill_name ?? args?.skillName ?? args?.skill
+      if (rawName == null || !String(rawName).trim()) continue
+      const name = String(rawName).trim()
+      if (!skillNamePattern.test(name) || seen.has(name)) continue
+      seen.add(name)
+      const rawVersion = args?.version
+      const version = rawVersion != null ? Number(rawVersion) : null
+      skills.push({ name, version: version !== null && !Number.isNaN(version) ? version : null })
+    }
+  }
+  return skills
+}
+
+export function extractSkillsFromTraeSession(interactions: any[]): string[] {
+  return extractSkillsWithVersionsFromTraeSession(interactions).map((s) => s.name)
+}
