@@ -65,6 +65,27 @@ export async function GET(
       include: { results: { orderBy: { createdAt: 'asc' } } },
     });
 
+    // input/actualOutput 兜底：trace/监听模式建的 case 这两字段存空，从对应 Execution
+    // 的 query/finalResult 兜底（与评估时 loadCaseRuntime 口径一致），否则详情页显示为 "-"。
+    const needExecTaskIds = Array.from(new Set(
+      pagedCases
+        .filter((c: any) => c.taskId && (!c.input || !c.actualOutput))
+        .map((c: any) => c.taskId as string),
+    ));
+    const execFallback = new Map<string, { query: string; finalResult: string }>();
+    if (needExecTaskIds.length) {
+      const execs = await prisma.execution.findMany({
+        where: { taskId: { in: needExecTaskIds } },
+        orderBy: { timestamp: 'desc' },
+        select: { taskId: true, query: true, finalResult: true },
+      });
+      for (const e of execs) {
+        if (e.taskId && !execFallback.has(e.taskId)) {
+          execFallback.set(e.taskId, { query: e.query || '', finalResult: e.finalResult || '' });
+        }
+      }
+    }
+
     const parseJson = (s: string | null): unknown => {
       if (!s) return null;
       try { return JSON.parse(s); } catch { return null; }
@@ -96,14 +117,17 @@ export async function GET(
       createdAt: experiment.createdAt,
       overall,
       breakdown,
-      cases: pagedCases.map((c: any) => ({
-        id: c.id,
-        executionId: c.executionId,
-        taskId: c.taskId,
-        input: c.input,
-        actualOutput: c.actualOutput,
-        referenceOutput: c.referenceOutput,
-      })),
+      cases: pagedCases.map((c: any) => {
+        const ex = c.taskId ? execFallback.get(c.taskId) : undefined;
+        return {
+          id: c.id,
+          executionId: c.executionId,
+          taskId: c.taskId,
+          input: c.input || ex?.query || '',
+          actualOutput: c.actualOutput || ex?.finalResult || '',
+          referenceOutput: c.referenceOutput,
+        };
+      }),
       results,
       progress,
       caseTotal,
