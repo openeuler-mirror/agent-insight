@@ -384,7 +384,7 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
                       <th style={{ ...TH, width: 72 }}>综合得分</th>
                       <th style={{ ...TH, width: 72 }}>结果得分</th>
                       <th style={{ ...TH, width: 72 }}>轨迹得分</th>
-                      <th style={{ ...TH, width: 128, textAlign: 'right', position: 'sticky', right: 0, background: 'var(--card-bg)', boxShadow: '-6px 0 8px -6px rgba(0,0,0,.18)' }}>操作</th>
+                      <th style={{ ...TH, width: 128, textAlign: 'center', position: 'sticky', right: 0, background: 'var(--card-bg)', boxShadow: '-6px 0 8px -6px rgba(0,0,0,.18)' }}>操作</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -406,7 +406,7 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
                           ...TD, width: 128, whiteSpace: 'nowrap', position: 'sticky', right: 0,
                           background: 'var(--card-bg)', boxShadow: '-6px 0 8px -6px rgba(0,0,0,.18)',
                         }}>
-                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
                             <Link
                               href={`/experiments/${encodeURIComponent(id)}/cases/${encodeURIComponent(c.id)}`}
                               style={{ ...ACTION_BTN, color: 'var(--accent)', borderColor: 'var(--accent)' }}
