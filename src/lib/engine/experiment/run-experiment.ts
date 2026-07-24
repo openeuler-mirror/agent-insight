@@ -511,7 +511,9 @@ export async function ensureEvalExperiment(params: {
   return exp.id;
 }
 
-/** 往评测实验加一个 case（trace 已产生），返回 caseId。 */
+/** 往评测实验加一个 case（trace 已产生），返回 caseId。
+ * 按 taskId 幂等：同一实验内该 trace 已有 case 就复用（并回填新拿到的参考答案），
+ * 避免同一 trace 被重复评测时建出重复 case。 */
 export async function addEvalExperimentCase(
   experimentId: string,
   c: {
@@ -522,6 +524,22 @@ export async function addEvalExperimentCase(
     referenceOutput?: string | null;
   },
 ): Promise<string> {
+  if (c.taskId) {
+    const existing = await prisma.experimentCase.findFirst({
+      where: { experimentId, taskId: c.taskId },
+      select: { id: true },
+    });
+    if (existing) {
+      // 复用已有 case；若这次拿到了参考答案而旧值为空则回填
+      if (c.referenceOutput != null && String(c.referenceOutput).trim()) {
+        await prisma.experimentCase.update({
+          where: { id: existing.id },
+          data: { referenceOutput: c.referenceOutput },
+        });
+      }
+      return existing.id;
+    }
+  }
   const row = await prisma.experimentCase.create({
     data: {
       experimentId,

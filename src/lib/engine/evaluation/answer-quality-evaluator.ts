@@ -47,7 +47,11 @@ const answerCompletenessSchema = z.object({
   confidence: z.number().min(0).max(1).default(0),
 });
 
-const issueSchema = z.object({ quote: z.string().min(1), reason: z.string().default('') });
+// LLM 有时把 issue 直接返回成字符串（而非 {quote,reason} 对象）——宽容转成对象，避免整次评估因此 schema 失败
+const issueSchema = z.preprocess(
+  (v) => (typeof v === 'string' ? { quote: v } : v),
+  z.object({ quote: z.string().min(1), reason: z.string().default('') }),
+);
 const answerCoherenceSchema = z.object({
   rating: z.number().int().min(0).max(4),
   checks: z.object({

@@ -5,12 +5,14 @@
 // 运行 Agent、A/B 对比、流程图对齐(analyze-match) 都不在这里；这里只做「评测」。
 import { NextResponse } from 'next/server';
 import { resolveUser } from '@/lib/auth/auth';
+import { prisma } from '@/lib/storage/prisma';
 import {
   ensureEvalExperiment,
   addEvalExperimentCase,
   evaluateEvalExperimentCase,
 } from '@/lib/engine/experiment/run-experiment';
 import { findAgentDataset } from '@/server/agent_datasets_storage';
+import { matchAgentDatasetCase } from '@/lib/engine/evaluation/dataset-case-match';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,6 +33,31 @@ async function buildExpectedMap(user: string, datasetIds: string[]): Promise<Map
     }
   }
   return map;
+}
+
+/**
+ * trace 模式（选已有 Trace，无 pairs）按输入把 trace 匹配到数据集 case，取其 expectedOutput
+ * 作参考答案——否则 accuracy/任务完成度等依赖参考的评估器拿不到标准答案会失败/判"未标注"。
+ * 与前端「系统会将 trace 输入与数据集 case 自动匹配」的承诺对齐。取不到返回 null。
+ */
+async function resolveTraceReference(user: string, taskId: string, datasetIds: string[]): Promise<string | null> {
+  if (!datasetIds.length || !taskId) return null;
+  const exec = await prisma.execution.findFirst({
+    where: { taskId, OR: [{ user }, { user: null }] },
+    orderBy: { timestamp: 'desc' },
+    select: { query: true },
+  });
+  const query = String(exec?.query || '').trim();
+  if (!query) return null;
+  try {
+    const m = await matchAgentDatasetCase({
+      user, traceQuery: query, allowedDatasetIds: datasetIds, requireExpectedOutput: true,
+    });
+    const ref = m.match?.caseEntry.expectedOutput;
+    return ref && String(ref).trim() ? String(ref) : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function POST(req: Request) {
@@ -76,10 +103,14 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: true, experimentId, results: [] });
     }
 
-    // 目标列表：pairs（带 caseId → 参考答案）优先；否则 taskIds（trace 模式，引擎按 taskId 兜底解析）
+    // 目标列表：pairs（带 caseId → 参考答案）优先；否则 taskIds（trace 模式，按输入匹配数据集取参考答案）
     const targets = pairs.length
       ? pairs.map((p) => ({ taskId: p.taskId, caseId: p.caseId, referenceOutput: expectedMap.get(p.caseId) ?? null }))
-      : taskIds.map((t) => ({ taskId: t, caseId: undefined as string | undefined, referenceOutput: null as string | null }));
+      : await Promise.all(taskIds.map(async (t) => ({
+          taskId: t,
+          caseId: undefined as string | undefined,
+          referenceOutput: await resolveTraceReference(username, t, datasetIds),
+        })));
 
     const results = [];
     for (const t of targets) {
