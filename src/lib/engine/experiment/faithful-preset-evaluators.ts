@@ -193,7 +193,28 @@ async function runTrajectoryQuality(user: string, ctx: FaithfulPresetContext): P
     return typeof ex === 'string' ? ex.trim() : '';
   };
 
-  // 固定三维度作为评分点，deviation 按 factor 归到对应维度，填 evidence/suggestion/anchors
+  // 关键动作覆盖明细——「完整性」分本就是这些 covered/partial/missing 覆盖判定的汇总，
+  // 故作为完整性的构成子项 children 下挂，而不是与三维度并列成独立评分点。
+  const keyActions = Array.isArray(out.keyActionResults) ? out.keyActionResults : [];
+  const keyActionPoints: EvalPoint[] = [];
+  for (const ka of keyActions) {
+    if (!ka || !ka.actionContent) continue;
+    if (ka.coverage === 'not_applicable') continue;
+    const status = coverageToStatus(ka.coverage);
+    const anchors = Array.isArray(ka.matchedTraceSteps)
+      ? ka.matchedTraceSteps.map((n) => `step-${n}`) : undefined;
+    keyActionPoints.push({
+      label: String(ka.actionContent).slice(0, 120),
+      ...(status ? { status } : {}),
+      ...(ka.hasSkillImprovement ? { skillAttributable: true } : {}),
+      ...(ka.skillImprovementSuggestion?.trim() ? { suggestion: ka.skillImprovementSuggestion.trim() } : {}),
+      ...(ka.traceComparisonAnalysis ? { evidence: { md: ka.traceComparisonAnalysis } } : {}),
+      ...(anchors && anchors.length ? { anchors } : {}),
+    });
+  }
+
+  // 固定三维度作为评分点，deviation 按 factor 归到对应维度，填 evidence/suggestion/anchors；
+  // 完整性额外挂上关键动作覆盖明细作 children。
   const points: EvalPoint[] = DIM_LABELS.map(({ key, label, factor }) => {
     const dimDevs = deviations.filter((d) => (d.factor ?? 'other') === factor);
     const devMd = dimDevs.map((d) => `[${d.severity}] ${d.deviation}`).join('\n');
@@ -209,26 +230,10 @@ async function runTrajectoryQuality(user: string, ctx: FaithfulPresetContext): P
       pt.suggestion = attributable.improvementSuggestion;
     }
     if (anchors.length) pt.anchors = anchors;
+    if (key === 'completeness' && keyActionPoints.length) pt.children = keyActionPoints;
     return pt;
-  }).filter((p) => p.score !== undefined || p.evidence); // 空维度（无分且无任何说明）才略去
-
-  // keyActionResults（有参考关键观点时）追加为评分点，携带 coverage/skill 建议
-  const keyActions = Array.isArray(out.keyActionResults) ? out.keyActionResults : [];
-  for (const ka of keyActions) {
-    if (!ka || !ka.actionContent) continue;
-    const status = coverageToStatus(ka.coverage);
-    if (ka.coverage === 'not_applicable') continue;
-    const anchors = Array.isArray(ka.matchedTraceSteps)
-      ? ka.matchedTraceSteps.map((n) => `step-${n}`) : undefined;
-    points.push({
-      label: String(ka.actionContent).slice(0, 120),
-      ...(status ? { status } : {}),
-      ...(ka.hasSkillImprovement ? { skillAttributable: true } : {}),
-      ...(ka.skillImprovementSuggestion?.trim() ? { suggestion: ka.skillImprovementSuggestion.trim() } : {}),
-      ...(ka.traceComparisonAnalysis ? { evidence: { md: ka.traceComparisonAnalysis } } : {}),
-      ...(anchors && anchors.length ? { anchors } : {}),
-    });
-  }
+    // 空维度（无分、无说明、无子项）才略去
+  }).filter((p) => p.score !== undefined || p.evidence || (p.children && p.children.length));
 
   return normalizeEvaluatorOutput({
     score: to100(out.trajectoryScore),

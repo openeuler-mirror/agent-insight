@@ -35,7 +35,7 @@ export type EvalPointStatus = z.infer<typeof EvalPointStatusSchema>;
  * - anchors：相关步骤锚点（step-N）→ 展开后可点跳链路观测
  * 归因四字段是 skill 侧（derive-skill-opt-points）读取用，代码评估器不填则一切不变。
  */
-export const EvalPointSchema = z.object({
+const EvalPointBaseSchema = z.object({
   label: z.string().min(1).max(120),
   score: z.number().min(0).max(100).optional(),
   evidence: EvidenceSchema.optional(),
@@ -43,6 +43,14 @@ export const EvalPointSchema = z.object({
   skillAttributable: z.boolean().optional(),
   suggestion: z.string().optional(),
   anchors: z.array(z.string()).max(32).optional(),
+});
+/**
+ * 评分点：可带一层子项 children——用于「汇总维度 + 其构成明细」的场景，
+ * 如轨迹质量的「完整性」分是关键动作覆盖率的汇总，各关键动作(covered/partial/missing)
+ * 作为它的 children 下挂，而不是与完整性并列成独立评分点。children 不再嵌套。
+ */
+export const EvalPointSchema = EvalPointBaseSchema.extend({
+  children: z.array(EvalPointBaseSchema).max(64).optional(),
 });
 export type EvalPoint = z.infer<typeof EvalPointSchema>;
 
@@ -70,21 +78,14 @@ export function normalizeEvaluatorOutput(raw: unknown): EvaluatorOutput {
   if (Array.isArray(r.points)) {
     const pts: EvalPoint[] = [];
     for (const p of r.points.slice(0, 64)) {
-      if (!p || typeof p !== 'object') continue;
+      const pt = coercePoint(p);
+      if (!pt) continue;
+      // children（一层）：如「完整性」下挂的各关键动作覆盖明细
       const pr = p as Record<string, unknown>;
-      const label = typeof pr.label === 'string' ? pr.label.trim().slice(0, 120) : '';
-      if (!label) continue;
-      const pt: EvalPoint = { label };
-      const ps = coerceScore(pr.score);
-      if (ps !== undefined) pt.score = ps;
-      const ev = coerceEvidence(pr.evidence);
-      if (ev) pt.evidence = ev;
-      const st = coerceStatus(pr.status);
-      if (st) pt.status = st;
-      if (typeof pr.skillAttributable === 'boolean') pt.skillAttributable = pr.skillAttributable;
-      if (typeof pr.suggestion === 'string' && pr.suggestion.trim()) pt.suggestion = pr.suggestion.trim();
-      const anchors = coerceAnchors(pr.anchors);
-      if (anchors) pt.anchors = anchors;
+      if (Array.isArray(pr.children)) {
+        const kids = pr.children.slice(0, 64).map(coercePoint).filter((x): x is EvalPoint => !!x);
+        if (kids.length) pt.children = kids;
+      }
       pts.push(pt);
     }
     if (pts.length) out.points = pts;
@@ -93,6 +94,26 @@ export function normalizeEvaluatorOutput(raw: unknown): EvaluatorOutput {
   const ev = coerceEvidence(r.evidence);
   if (ev) out.evidence = ev;
   return out;
+}
+
+/** 宽容解析单个评分点（不含 children）；非法（无 label）返回 null。 */
+function coercePoint(p: unknown): EvalPoint | null {
+  if (!p || typeof p !== 'object') return null;
+  const pr = p as Record<string, unknown>;
+  const label = typeof pr.label === 'string' ? pr.label.trim().slice(0, 120) : '';
+  if (!label) return null;
+  const pt: EvalPoint = { label };
+  const ps = coerceScore(pr.score);
+  if (ps !== undefined) pt.score = ps;
+  const ev = coerceEvidence(pr.evidence);
+  if (ev) pt.evidence = ev;
+  const st = coerceStatus(pr.status);
+  if (st) pt.status = st;
+  if (typeof pr.skillAttributable === 'boolean') pt.skillAttributable = pr.skillAttributable;
+  if (typeof pr.suggestion === 'string' && pr.suggestion.trim()) pt.suggestion = pr.suggestion.trim();
+  const anchors = coerceAnchors(pr.anchors);
+  if (anchors) pt.anchors = anchors;
+  return pt;
 }
 
 function coerceScore(v: unknown): number | undefined {

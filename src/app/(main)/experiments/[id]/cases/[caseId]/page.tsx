@@ -4,7 +4,7 @@
 // （类目均分 · N/M 项计入）→ 每个评估器一张全宽卡（评分点表 + 证据折叠 md/json 渲染；
 // 失败卡 = 「评估失败」chip + 原因 + 单项重评）。类目归属来自 registry 元数据。
 import Link from 'next/link';
-import { use, useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, use, useCallback, useEffect, useMemo, useState } from 'react';
 
 import { EvidenceBlock } from '@/components/eval/EvidenceBlock';
 import { useEvaluatorLookup } from '@/components/eval/useEvaluatorLookup';
@@ -48,27 +48,41 @@ interface PointRow {
   skillAttributable?: boolean;
   suggestion?: string;
   anchors?: string[];
+  /** 一层子项：如「完整性」下挂的各关键动作覆盖明细 */
+  children?: PointRow[];
 }
 
-/** 宽容解析结果行的 points（脏数据逐条丢弃）。归因字段全可选。 */
+/** 解析单个评分点（不含 children）；非法（无 label）返回 null。 */
+function parseOnePoint(p: unknown): PointRow | null {
+  if (!p || typeof p !== 'object') return null;
+  const r = p as Record<string, unknown>;
+  if (typeof r.label !== 'string' || !r.label.trim()) return null;
+  const row: PointRow = {
+    label: r.label,
+    score: typeof r.score === 'number' ? r.score : undefined,
+    evidence: r.evidence,
+  };
+  if (r.status === 'covered' || r.status === 'partial' || r.status === 'missing') row.status = r.status;
+  if (typeof r.skillAttributable === 'boolean') row.skillAttributable = r.skillAttributable;
+  if (typeof r.suggestion === 'string' && r.suggestion.trim()) row.suggestion = r.suggestion.trim();
+  if (Array.isArray(r.anchors)) {
+    const a = r.anchors.filter((x): x is string => typeof x === 'string' && x.trim() !== '');
+    if (a.length) row.anchors = a;
+  }
+  return row;
+}
+
+/** 宽容解析结果行的 points（脏数据逐条丢弃）。归因字段全可选，含一层 children。 */
 function parsePoints(raw: unknown): PointRow[] {
   if (!Array.isArray(raw)) return [];
   const out: PointRow[] = [];
   for (const p of raw) {
-    if (!p || typeof p !== 'object') continue;
-    const r = p as Record<string, unknown>;
-    if (typeof r.label !== 'string' || !r.label.trim()) continue;
-    const row: PointRow = {
-      label: r.label,
-      score: typeof r.score === 'number' ? r.score : undefined,
-      evidence: r.evidence,
-    };
-    if (r.status === 'covered' || r.status === 'partial' || r.status === 'missing') row.status = r.status;
-    if (typeof r.skillAttributable === 'boolean') row.skillAttributable = r.skillAttributable;
-    if (typeof r.suggestion === 'string' && r.suggestion.trim()) row.suggestion = r.suggestion.trim();
-    if (Array.isArray(r.anchors)) {
-      const a = r.anchors.filter((x): x is string => typeof x === 'string' && x.trim() !== '');
-      if (a.length) row.anchors = a;
+    const row = parseOnePoint(p);
+    if (!row) continue;
+    const kids = (p as Record<string, unknown>).children;
+    if (Array.isArray(kids)) {
+      const parsed = kids.map(parseOnePoint).filter((x): x is PointRow => !!x);
+      if (parsed.length) row.children = parsed;
     }
     out.push(row);
   }
@@ -98,6 +112,58 @@ const CATEGORY_LABEL: Record<EvaluatorCategory, string> = {
   res: '结果评测',
   traj: '轨迹评测',
 };
+
+/** 评分点的「状态 / 可归因 skill」标签组（评分点与子项复用）。 */
+function PointBadges({ point }: { point: PointRow }) {
+  if (!point.status && !point.skillAttributable) return null;
+  return (
+    <div style={{ marginTop: 4, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+      {point.status && (
+        <span style={{
+          fontSize: 10, padding: '1px 7px', borderRadius: 6, fontWeight: 500,
+          background: STATUS_CHIP[point.status].bg, color: STATUS_CHIP[point.status].fg,
+        }}>{STATUS_CHIP[point.status].label}</span>
+      )}
+      {point.skillAttributable && (
+        <span style={{
+          fontSize: 10, padding: '1px 7px', borderRadius: 6, fontWeight: 500,
+          background: 'var(--primary-subtle)', color: 'var(--primary)',
+        }}>可归因 skill</span>
+      )}
+    </div>
+  );
+}
+
+/** 评分点「证据」列内容：证据块 + 建议 + 相关步骤锚点（评分点与子项复用）。 */
+function PointEvidence({ point, taskId }: { point: PointRow; taskId: string | null }) {
+  return (
+    <>
+      {point.evidence ? <EvidenceBlock evidence={point.evidence} /> : null}
+      {point.suggestion && (
+        <div style={{ marginTop: point.evidence ? 6 : 0, fontSize: 11, color: 'var(--primary)' }}>
+          ↗ 建议：{point.suggestion}
+        </div>
+      )}
+      {point.anchors && point.anchors.length > 0 && (
+        <div style={{ marginTop: 5, fontSize: 10.5, color: 'var(--foreground-muted)' }}>
+          相关步骤：{point.anchors.map((a) => (
+            <a
+              key={a}
+              href={taskId ? `/trace?taskId=${encodeURIComponent(taskId)}` : undefined}
+              style={{
+                fontFamily: 'var(--font-mono, monospace)', fontSize: 10.5,
+                background: 'var(--background-secondary)', border: '1px solid var(--border)',
+                borderRadius: 4, padding: '0 5px', marginRight: 5,
+                color: 'var(--foreground-secondary)', textDecoration: 'none',
+                cursor: taskId ? 'pointer' : 'default',
+              }}
+            >{a}</a>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
 
 function TagChip({ text }: { text: string }) {
   return (
@@ -353,53 +419,42 @@ export default function TraceEvalDetailPage({ params }: { params: Promise<{ id: 
                                 </thead>
                                 <tbody>
                                   {points.map((p, i) => (
-                                    <tr key={i}>
-                                      <td style={{ ...TD, fontWeight: 600, fontSize: 11.5, verticalAlign: 'top' }}>
-                                        {p.label}
-                                        {(p.status || p.skillAttributable) && (
-                                          <div style={{ marginTop: 4, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                                            {p.status && (
-                                              <span style={{
-                                                fontSize: 10, padding: '1px 7px', borderRadius: 6, fontWeight: 500,
-                                                background: STATUS_CHIP[p.status].bg, color: STATUS_CHIP[p.status].fg,
-                                              }}>{STATUS_CHIP[p.status].label}</span>
-                                            )}
-                                            {p.skillAttributable && (
-                                              <span style={{
-                                                fontSize: 10, padding: '1px 7px', borderRadius: 6, fontWeight: 500,
-                                                background: 'var(--primary-subtle)', color: 'var(--primary)',
-                                              }}>可归因 skill</span>
-                                            )}
-                                          </div>
-                                        )}
-                                      </td>
-                                      <td style={{ ...TD, verticalAlign: 'top' }}>{typeof p.score === 'number' ? p.score : '—'}</td>
-                                      <td style={{ ...TD, verticalAlign: 'top', overflow: 'hidden' }}>
-                                        {p.evidence ? <EvidenceBlock evidence={p.evidence} /> : null}
-                                        {p.suggestion && (
-                                          <div style={{ marginTop: p.evidence ? 6 : 0, fontSize: 11, color: 'var(--primary)' }}>
-                                            ↗ 建议：{p.suggestion}
-                                          </div>
-                                        )}
-                                        {p.anchors && p.anchors.length > 0 && (
-                                          <div style={{ marginTop: 5, fontSize: 10.5, color: 'var(--foreground-muted)' }}>
-                                            相关步骤：{p.anchors.map((a) => (
-                                              <a
-                                                key={a}
-                                                href={caseRow.taskId ? `/trace?taskId=${encodeURIComponent(caseRow.taskId)}` : undefined}
-                                                style={{
-                                                  fontFamily: 'var(--font-mono, monospace)', fontSize: 10.5,
-                                                  background: 'var(--background-secondary)', border: '1px solid var(--border)',
-                                                  borderRadius: 4, padding: '0 5px', marginRight: 5,
-                                                  color: 'var(--foreground-secondary)', textDecoration: 'none',
-                                                  cursor: caseRow.taskId ? 'pointer' : 'default',
-                                                }}
-                                              >{a}</a>
-                                            ))}
-                                          </div>
-                                        )}
-                                      </td>
-                                    </tr>
+                                    <Fragment key={i}>
+                                      <tr>
+                                        <td style={{ ...TD, fontWeight: 600, fontSize: 11.5, verticalAlign: 'top' }}>
+                                          {p.label}
+                                          <PointBadges point={p} />
+                                        </td>
+                                        <td style={{ ...TD, verticalAlign: 'top', fontWeight: 700 }}>{typeof p.score === 'number' ? p.score : '—'}</td>
+                                        <td style={{ ...TD, verticalAlign: 'top', overflow: 'hidden' }}>
+                                          <PointEvidence point={p} taskId={caseRow.taskId} />
+                                        </td>
+                                      </tr>
+                                      {/* children：如「完整性」下挂的各关键动作覆盖明细，缩进为子行 */}
+                                      {p.children?.map((ch, j) => (
+                                        <tr key={`${i}-${j}`}>
+                                          <td style={{
+                                            ...TD, fontSize: 11, verticalAlign: 'top',
+                                            paddingLeft: 24, color: 'var(--foreground-secondary)',
+                                            borderBottom: j === (p.children!.length - 1) ? TD.borderBottom : 'none',
+                                          }}>
+                                            <span style={{ color: 'var(--foreground-muted)', marginRight: 6 }}>└</span>
+                                            {ch.label}
+                                            <PointBadges point={ch} />
+                                          </td>
+                                          <td style={{
+                                            ...TD, verticalAlign: 'top', color: 'var(--foreground-muted)',
+                                            borderBottom: j === (p.children!.length - 1) ? TD.borderBottom : 'none',
+                                          }}>{typeof ch.score === 'number' ? ch.score : '—'}</td>
+                                          <td style={{
+                                            ...TD, verticalAlign: 'top', overflow: 'hidden',
+                                            borderBottom: j === (p.children!.length - 1) ? TD.borderBottom : 'none',
+                                          }}>
+                                            <PointEvidence point={ch} taskId={caseRow.taskId} />
+                                          </td>
+                                        </tr>
+                                      ))}
+                                    </Fragment>
                                   ))}
                                 </tbody>
                               </table>
