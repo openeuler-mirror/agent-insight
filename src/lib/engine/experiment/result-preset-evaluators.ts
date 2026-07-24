@@ -62,14 +62,8 @@ export async function runResultPreset(
       // 依赖参考数据但未标注——④ 步门控应已拦截，此处兜底为无分。
       return { evidence: { md: '未标注参考答案，无法评估结果准确性——不记分。' } };
     }
-    const { extractRootCausesFromExpected } = await import('../evaluation/root-cause-extractor');
-    const { normalizeAccuracyKeyPoints } = await import('../evaluation/result-accuracy-evaluator');
-    const rootCauses = await extractRootCausesFromExpected(query, expectedOutput, user);
-    const keyPoints = normalizeAccuracyKeyPoints(rootCauses);
-    if (!keyPoints.length) {
-      return { evidence: { md: '参考答案未提取到可评测的关键观点——不记分。' } };
-    }
-    const r = await runSingleResultMetric('accuracy', { query, finalResult, expectedOutput, keyPoints }, invoke);
+    // 主张从实际输出抽（与忠实度共用同一批 claim），逐条对参考答案判对错——精确率口径
+    const r = await runSingleResultMetric('accuracy', { query, finalResult, expectedOutput }, invoke);
     return mapAccuracy(r);
   }
 
@@ -98,19 +92,29 @@ const asArr = (v: unknown): Record<string, unknown>[] =>
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
 const joinMd = (...parts: unknown[]) => parts.map(str).filter((s) => s.trim()).join('\n');
 
-/** 准确性：keyPointFindings → points（correct/partially_correct/wrong/not_mentioned → 状态） */
+/** 准确性：claimFindings → points（实际输出的每条主张 × 对参考答案的判定，说错的直接 0 分拉低均分） */
 function mapAccuracy(r: LeafResult): EvaluatorOutput {
-  const findings = asArr(r.evidence.keyPointFindings);
+  const findings = asArr(r.evidence.claimFindings);
   const statusMap: Record<string, EvalPointStatus | undefined> = {
-    correct: 'covered', partially_correct: 'partial', wrong: 'missing', not_mentioned: 'missing',
+    correct: 'covered', partially_correct: 'partial', wrong: 'missing',
+    // not_in_reference：参考未涉及、不计入分母 —— 不给状态 chip，靠证据文字说明
+  };
+  const statusText: Record<string, string> = {
+    correct: '与参考一致', partially_correct: '部分一致', wrong: '与参考冲突',
+    not_in_reference: '参考答案未涉及此主张——不计入准确性分母',
   };
   const points: EvalPoint[] = findings.map((f) => {
-    const pt: EvalPoint = { label: str(f.content).slice(0, 120) || '关键观点' };
-    // finding.score 为 0-1 量纲，契约要 0-100 → ×100（normalizeEvaluatorOutput 只放大非整数小数，1 需显式 ×100）
+    const pt: EvalPoint = { label: str(f.claim).slice(0, 120) || '主张' };
+    // finding.score 为 0-1 量纲，契约要 0-100 → ×100（null=参考未涉及，不给分）
     if (typeof f.score === 'number') pt.score = Math.round(f.score * 1000) / 10;
     const st = statusMap[str(f.status)];
     if (st) pt.status = st;
-    const md = joinMd(f.reason, f.actualEvidence && `实际：${str(f.actualEvidence)}`, f.expectedEvidence && `预期：${str(f.expectedEvidence)}`);
+    const md = joinMd(
+      statusText[str(f.status)],
+      f.reason,
+      f.sourceQuote && `实际输出原文：${str(f.sourceQuote)}`,
+      f.expectedEvidence && `参考依据：${str(f.expectedEvidence)}`,
+    );
     if (md) pt.evidence = { md };
     return pt;
   }).filter((p) => p.label);

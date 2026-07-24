@@ -371,6 +371,40 @@ export function validateFaithfulnessVerdicts(input: {
   }
 }
 
+/**
+ * 从「实际输出」抽取可验证主张——准确性(逐条对**参考答案**判对错)与忠实度(逐条对
+ * **trace 证据**判有无依据)用的是同一批 claim，故抽取只做一次、两处复用。
+ * 抽取提示词只吃 (query, finalResult)，因此按二者哈希缓存：同一 case 内两个评估器
+ * 先后执行时第二个直接命中，不重复调模型。
+ */
+const outputClaimCache = new Map<string, { claims: FaithfulnessClaim[]; confidence: number }>();
+
+export async function extractOutputClaims(input: {
+  query: string;
+  finalResult: string;
+  invoke: StructuredResultInvoker;
+}): Promise<{ claims: FaithfulnessClaim[]; confidence: number }> {
+  const key = createHash('sha256')
+    .update(`${input.query} ${input.finalResult}`)
+    .digest('hex');
+  const hit = outputClaimCache.get(key);
+  if (hit) return hit;
+
+  const extracted = await invokeWithRepair({
+    prompt: generateFaithfulnessClaimExtractionPrompt({ query: input.query, finalResult: input.finalResult }),
+    schema: claimExtractionSchema,
+    invoke: input.invoke,
+    validate: (response) => validateFaithfulnessClaims(limitFaithfulnessClaims(response.claims)),
+  });
+  const out = {
+    claims: limitFaithfulnessClaims(extracted.claims),
+    confidence: extracted.confidence,
+  };
+  if (outputClaimCache.size > 200) outputClaimCache.clear(); // 朴素上限，防长驻进程内存增长
+  outputClaimCache.set(key, out);
+  return out;
+}
+
 export function scoreFaithfulnessClaims(claims: Array<{ status: string }>): number | null {
   if (!claims.length) return null;
   return clampScore((claims.filter((item) => item.status === 'supported').length / claims.length) * 100);
@@ -425,13 +459,13 @@ export async function evaluateFaithfulness(input: {
     };
   }
 
-  const extracted = await invokeWithRepair({
-    prompt: generateFaithfulnessClaimExtractionPrompt({ query: input.query, finalResult: input.finalResult }),
-    schema: claimExtractionSchema,
+  // 与准确性共用同一批主张（抽取带缓存，谁先跑谁抽）
+  const extracted = await extractOutputClaims({
+    query: input.query,
+    finalResult: input.finalResult,
     invoke: input.invoke,
-    validate: (response) => validateFaithfulnessClaims(limitFaithfulnessClaims(response.claims)),
   });
-  const extractedClaims = limitFaithfulnessClaims(extracted.claims);
+  const extractedClaims = extracted.claims;
   if (!extractedClaims.length) {
     return {
       score: null,

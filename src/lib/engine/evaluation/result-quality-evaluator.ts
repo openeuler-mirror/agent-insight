@@ -5,19 +5,14 @@ import { prisma } from '@/lib/storage/prisma';
 import { getActiveConfig } from '@/lib/storage/server-config';
 import { getProxyConfig } from '@/lib/ingest/proxy-config';
 import { withBackgroundOpencodeSlot } from '@/lib/engine/general-agent/concurrency-limiter';
-import { canReuseRootCauseCache, hashExpectedOutput } from '@/lib/dataset-case-root-causes';
+import { hashExpectedOutput } from '@/lib/dataset-case-root-causes';
 import { extractTaskResultArtifact } from './result-artifact-extractor';
 import {
   hashAgentDatasetScope,
   loadUserAgentDatasets,
   matchAgentDatasetCase,
 } from './dataset-case-match';
-import { extractRootCausesFromExpected } from './root-cause-extractor';
-import {
-  evaluateResultAccuracy,
-  hashAccuracyKeyPoints,
-  normalizeAccuracyKeyPoints,
-} from './result-accuracy-evaluator';
+import { evaluateResultAccuracy } from './result-accuracy-evaluator';
 import {
   evaluateInstructionAdherence,
   type StructuredJudgePrompt,
@@ -41,7 +36,9 @@ export const RESULT_METRIC_VERSIONS: Record<ResultMetricStorageKey, string> = {
   faithfulness: '2.0.1',
   'instruction-adherence': '2.0.1',
   'answer-quality': '2.0.1',
-  accuracy: '2.0.1',
+  // 3.0.0：口径由「参考关键观点被覆盖了多少」改为「实际输出的主张对不对」(精确率)，
+  // 与旧分不可比，版本号升主版本让历史缓存失效重算。
+  accuracy: '3.0.0',
 };
 
 export interface ResultEvalResult {
@@ -254,8 +251,7 @@ export interface ResultMetricInputs {
   finalResult: string;
   interactions?: unknown[];                    // faithfulness
   relevantSystemInstructions?: string[];       // instruction-adherence
-  expectedOutput?: string;                     // accuracy
-  keyPoints?: ReturnType<typeof normalizeAccuracyKeyPoints>; // accuracy
+  expectedOutput?: string;                     // accuracy（主张来自实际输出，无需再传关键观点）
 }
 
 export async function runSingleResultMetric(
@@ -285,7 +281,7 @@ export async function runSingleResultMetric(
     case 'accuracy': {
       const r = await evaluateResultAccuracy({
         query: inputs.query, expectedOutput: inputs.expectedOutput ?? '',
-        actualOutput: inputs.finalResult, keyPoints: inputs.keyPoints ?? [], invoke,
+        actualOutput: inputs.finalResult, invoke,
       });
       return { score: r.score, method: 'gt-rubric', confidence: r.confidence, note: r.note, evidence: r.evidence };
     }
@@ -437,18 +433,8 @@ export async function evaluateResultQuality(executionId: string): Promise<Result
       }
 
       const { dataset, caseEntry, matchedBy, matchConfidence, matchReason } = matchResult.match;
-      const cacheReusable = canReuseRootCauseCache(caseEntry.expectedOutput, caseEntry.rootCauseMeta);
-      let keyPointSource: 'dataset-cache' | 'live-extract' | 'dataset-empty' = 'live-extract';
-      let rootCauses = [] as Array<{ content: string; weight: number }>;
-      if (cacheReusable && caseEntry.rootCauseMeta?.status === 'ready') {
-        rootCauses = caseEntry.rootCauses ?? [];
-        keyPointSource = 'dataset-cache';
-      } else if (cacheReusable && caseEntry.rootCauseMeta?.status === 'empty') {
-        keyPointSource = 'dataset-empty';
-      } else {
-        rootCauses = await extractRootCausesFromExpected(query, caseEntry.expectedOutput, execution.user);
-      }
-      const keyPoints = normalizeAccuracyKeyPoints(rootCauses);
+      // 准确性改为「实际输出抽主张 → 逐条对参考答案判」，不再需要从预期输出抽关键观点，
+      // 故这里只保留数据集匹配的溯源信息（省掉一次 root-cause 抽取调用）。
       const matchEvidence = {
         datasetId: dataset.id,
         datasetName: dataset.name,
@@ -458,21 +444,12 @@ export async function evaluateResultQuality(executionId: string): Promise<Result
         matchReason,
         datasetScopeHash: accuracyDatasetScopeHash,
         expectedOutputHash: hashExpectedOutput(caseEntry.expectedOutput),
-        keyPointsHash: hashAccuracyKeyPoints(keyPoints),
-        keyPointSource,
       };
-      if (!keyPoints.length) {
-        return na('gt-rubric', '预期输出未提取到可用关键观点', {
-          accuracyStatus: 'no_ground_truth',
-          ...matchEvidence,
-        });
-      }
 
       const judged = await runSingleResultMetric('accuracy', {
         query,
         expectedOutput: caseEntry.expectedOutput,
         finalResult,
-        keyPoints,
       }, trackedInvoker('accuracy'));
       return {
         score: judged.score,
