@@ -120,10 +120,51 @@ function mapAccuracy(r: LeafResult): EvaluatorOutput {
 /** 答案质量：relevance/completeness/coherence 三子分 → points */
 function mapAnswerQuality(r: LeafResult): EvaluatorOutput {
   const sub = (r.evidence.subScores ?? {}) as Record<string, unknown>;
+  const rel = (r.evidence.relevance ?? {}) as Record<string, unknown>;
+  const comp = (r.evidence.completeness ?? {}) as Record<string, unknown>;
+  const coh = (r.evidence.coherence ?? {}) as Record<string, unknown>;
+  const cohChecks = (coh.checks ?? {}) as Record<string, unknown>;
+  const countBy = (rows: Record<string, unknown>[], key: string, val: string) =>
+    rows.filter((x) => str(x[key]) === val).length;
+
+  // 逐维度把底层判定汇总成证据 md——否则三个子项「有分无据」，用户无法核验
+  const relVerdicts = asArr(rel.verdicts);
+  const relMd = relVerdicts.length
+    ? joinMd(
+        `${relVerdicts.length} 条陈述：相关 ${countBy(relVerdicts, 'verdict', 'relevant')}、间接支撑 ${countBy(relVerdicts, 'verdict', 'supporting')}、无关 ${countBy(relVerdicts, 'verdict', 'irrelevant')}`,
+        relVerdicts.filter((v) => str(v.verdict) === 'irrelevant')
+          .map((v) => `- 无关：${str(v.reason) || str(v.statement) || str(v.statementId)}`).join('\n'),
+      )
+    : '';
+
+  const compVerdicts = asArr(comp.verdicts);
+  const compMd = compVerdicts.length
+    ? joinMd(
+        `${compVerdicts.length} 项必答要点：覆盖 ${countBy(compVerdicts, 'status', 'covered')}、部分 ${countBy(compVerdicts, 'status', 'partial')}、缺失 ${countBy(compVerdicts, 'status', 'missing')}`,
+        compVerdicts.filter((v) => str(v.status) !== 'covered')
+          .map((v) => `- ${str(v.status) === 'partial' ? '部分' : '缺失'}：${str(v.reason) || str(v.requirementId)}`).join('\n'),
+      )
+    : '';
+
+  const cohMd = joinMd(
+    typeof coh.rating === 'number' ? `连贯性评级 ${coh.rating}/4` : '',
+    str(coh.reason),
+    [
+      ...asArr(cohChecks.contradictions).map((x) => `- 矛盾：${str(x.quote)}`),
+      ...asArr(cohChecks.repetitions).map((x) => `- 重复：${str(x.quote)}`),
+      ...asArr(cohChecks.abruptTransitions).map((x) => `- 跳跃：${str(x.quote)}`),
+    ].join('\n'),
+  );
+
+  const mdByKey: Record<string, string> = { relevance: relMd, completeness: compMd, coherence: cohMd };
   const dims: Array<[string, string]> = [['relevance', '相关性'], ['completeness', '完整性'], ['coherence', '连贯性']];
   const points: EvalPoint[] = dims
     .filter(([k]) => typeof sub[k] === 'number')
-    .map(([k, label]) => ({ label, score: sub[k] as number }));
+    .map(([k, label]) => {
+      const pt: EvalPoint = { label, score: sub[k] as number };
+      if (mdByKey[k]) pt.evidence = { md: mdByKey[k] };
+      return pt;
+    });
   return normalizeEvaluatorOutput({ score: r.score ?? undefined, points: points.length ? points : undefined, evidence: r.evidence.reason ? { md: str(r.evidence.reason) } : undefined });
 }
 
