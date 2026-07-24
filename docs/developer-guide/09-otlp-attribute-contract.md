@@ -9,7 +9,7 @@
 | 协议 | OTLP/HTTP (JSON 或 Protobuf) | gRPC 不支持 |
 | 端点 | `POST /api/ingest/otel/v1/traces` | Traces |
 | | `POST /api/ingest/otel/v1/logs` | Logs (仅 JSON) |
-| | `POST /api/ingest/otel/v1/metrics` | Metrics (桩) |
+| | `POST /api/ingest/otel/v1/metrics` | Metrics（vLLM 指标；CodeAgent 来源丢弃） |
 | 认证 | `x-witty-api-key` Header | 用于关联 Workspace |
 | Content-Type | `application/json` 或 `application/x-protobuf` | |
 
@@ -128,6 +128,20 @@ Root Span (agent)                  → Execution (rootExecutionId = NULL)
 1. `x-witty-api-key` Header → 查找 `ApiKey` 记录 → 关联 Workspace
 2. `resource.attributes["service.name"]` → `"openclaw"` 或 `"claude-code"` 决定解析器
 3. `witty.agent.name` → 创建/匹配 Agent 记录
+
+## CodeAgent 兼容契约
+
+CodeAgent 使用自己的 LogRecord 协议而非上述通用 span 属性。服务端用 resource attribute `service.name=CodeAgentOC` 识别该来源，并执行 signal 级分流：
+
+| Signal | 服务端行为 |
+|------|------|
+| Logs | 仅支持 OTLP/HTTP JSON；写入 `otel_data/codeagent`，按 `session.id` 聚合 |
+| Traces | JSON/Protobuf 解码后返回 `accepted + ignored`，不写 trace spool |
+| Metrics | JSON/Protobuf 解码后返回 `accepted + ignored`，不创建 InfraSource/InfraMetricSample |
+
+Logs 中的 `api_request` / `api_response`、`tool_request` / `tool_response`、`agent.start` / `agent.finish` 是 CodeAgent Execution 的权威输入。工具事件通过 `tool_call_id` 与 `inference_id` 关联；`execution.agent_run_id` 与 `execution.parent_agent_run_id` 表达父子运行关系；root 与 child 的 Agent 名称优先读取 `agent_name`，其次读取 `execution.agent_id`，仅在两者都缺失时使用框架兜底名；没有独立 `user_prompt` 事件时，接收端从 root 首个 `api_request.request_text` 提取用户消息并补成 `role=user` interaction；`skill_name` 及 Skill 参数表达技能调用。接收端将 `Skill` 规范化为 `skill`，将 `Agent` / `Task` 规范化为 `task`，再复用统一 Execution 树与 Skill 归属逻辑。
+
+setup wrapper 只设置 `CODEAGENT3_ENABLE_TELEMETRY=1`、OTLP base endpoint、JSON protocol 和认证 header，不写 `OTEL_TRACES_EXPORTER=none` / `OTEL_METRICS_EXPORTER=none`；CodeAgent 当前会覆盖这类关闭变量。
 
 ## 环境变量 (OpenClaw 侧)
 
