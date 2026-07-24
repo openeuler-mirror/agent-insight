@@ -66,6 +66,13 @@ const TD: React.CSSProperties = {
   padding: '9px 12px', fontSize: 12, color: 'var(--foreground)',
   borderBottom: '1px solid var(--border)', verticalAlign: 'top',
 };
+// 操作列按钮：详情/重评同尺寸同形状，只用颜色区分主次
+const ACTION_BTN: React.CSSProperties = {
+  fontSize: 11.5, padding: '3px 10px', borderRadius: 6, lineHeight: 1.5,
+  border: '1px solid var(--border)', background: 'var(--card-bg)',
+  cursor: 'pointer', textDecoration: 'none', whiteSpace: 'nowrap',
+  display: 'inline-flex', alignItems: 'center',
+};
 const CARD: React.CSSProperties = {
   background: 'var(--card-bg)', border: '1px solid var(--card-border)', borderRadius: 10,
 };
@@ -377,7 +384,7 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
                       <th style={{ ...TH, width: 72 }}>综合得分</th>
                       <th style={{ ...TH, width: 72 }}>结果得分</th>
                       <th style={{ ...TH, width: 72 }}>轨迹得分</th>
-                      <th style={{ ...TH, position: 'sticky', right: 0, background: 'var(--card-bg)', boxShadow: '-6px 0 8px -6px rgba(0,0,0,.18)' }}>操作</th>
+                      <th style={{ ...TH, width: 128, textAlign: 'right', position: 'sticky', right: 0, background: 'var(--card-bg)', boxShadow: '-6px 0 8px -6px rgba(0,0,0,.18)' }}>操作</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -396,29 +403,30 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
                         <td style={TD}>{fmtScore(c.scores.res)}</td>
                         <td style={TD}>{fmtScore(c.scores.traj)}</td>
                         <td style={{
-                          ...TD, whiteSpace: 'nowrap', position: 'sticky', right: 0,
+                          ...TD, width: 128, whiteSpace: 'nowrap', position: 'sticky', right: 0,
                           background: 'var(--card-bg)', boxShadow: '-6px 0 8px -6px rgba(0,0,0,.18)',
                         }}>
-                          <Link
-                            href={`/experiments/${encodeURIComponent(id)}/cases/${encodeURIComponent(c.id)}`}
-                            style={{ fontSize: 12, color: 'var(--accent)', textDecoration: 'none', marginRight: 10 }}
-                          >
-                            详情
-                          </Link>
-                          {c.scores.failed > 0 && (
-                            <button
-                              onClick={() => retryCase(c.id)}
-                              disabled={!!retryingCaseId}
-                              style={{
-                                fontSize: 11, padding: '2px 9px', borderRadius: 6,
-                                border: '1px solid var(--border)', background: 'var(--background-secondary)',
-                                color: 'var(--foreground)', cursor: retryingCaseId ? 'default' : 'pointer',
-                                opacity: retryingCaseId && retryingCaseId !== c.id ? 0.5 : 1,
-                              }}
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6 }}>
+                            <Link
+                              href={`/experiments/${encodeURIComponent(id)}/cases/${encodeURIComponent(c.id)}`}
+                              style={{ ...ACTION_BTN, color: 'var(--accent)', borderColor: 'var(--accent)' }}
                             >
-                              {retryingCaseId === c.id ? '重评中…' : '重评'}
-                            </button>
-                          )}
+                              详情
+                            </Link>
+                            {c.scores.failed > 0 && (
+                              <button
+                                onClick={() => retryCase(c.id)}
+                                disabled={!!retryingCaseId}
+                                style={{
+                                  ...ACTION_BTN, color: 'var(--foreground)',
+                                  cursor: retryingCaseId ? 'default' : 'pointer',
+                                  opacity: retryingCaseId && retryingCaseId !== c.id ? 0.5 : 1,
+                                }}
+                              >
+                                {retryingCaseId === c.id ? '重评中…' : '重评'}
+                              </button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     ))}
