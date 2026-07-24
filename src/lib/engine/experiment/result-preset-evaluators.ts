@@ -172,16 +172,23 @@ function mapAnswerQuality(r: LeafResult): EvaluatorOutput {
   return normalizeEvaluatorOutput({ score: r.score ?? undefined, points: points.length ? points : undefined, evidence: r.evidence.reason ? { md: str(r.evidence.reason) } : undefined });
 }
 
-/** 忠实度：claims/verdicts → points（supported/contradicted/not_covered → 状态；citations → 证据） */
+/** 忠实度：claims/verdicts → points（逐条主张对 trace 证据判有无依据；无依据即 0 分拉低均分） */
 function mapFaithfulness(r: LeafResult): EvaluatorOutput {
   const claims = asArr(r.evidence.verdicts).length ? asArr(r.evidence.verdicts) : asArr(r.evidence.claims);
   const statusMap: Record<string, EvalPointStatus | undefined> = { supported: 'covered', contradicted: 'missing', not_covered: 'missing' };
+  // 单点分与卡片总分同源：总分 = 有依据数/主张总数，等价于此处逐点 100/0 的平均
+  const scoreMap: Record<string, number | undefined> = { supported: 100, contradicted: 0, not_covered: 0 };
+  const statusText: Record<string, string> = {
+    supported: '有工具证据支持', contradicted: '与工具证据矛盾', not_covered: '工具证据未覆盖此主张',
+  };
   const points: EvalPoint[] = claims.map((c) => {
     const pt: EvalPoint = { label: (str(c.claim) || str(c.sourceQuote) || '主张').slice(0, 120) };
     const st = statusMap[str(c.status)];
     if (st) pt.status = st;
+    const sc = scoreMap[str(c.status)];
+    if (typeof sc === 'number') pt.score = sc;
     const cites = asArr(c.citations).map((ci) => str(ci.evidenceQuote)).filter(Boolean);
-    const md = joinMd(c.reason, cites.length && `证据：${cites.join('；')}`);
+    const md = joinMd(statusText[str(c.status)], c.reason, cites.length && `证据：${cites.join('；')}`);
     if (md) pt.evidence = { md };
     return pt;
   }).filter((p) => p.label);
