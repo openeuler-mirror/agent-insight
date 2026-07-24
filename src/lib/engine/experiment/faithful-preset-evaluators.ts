@@ -194,31 +194,30 @@ async function runTrajectoryQuality(user: string, ctx: FaithfulPresetContext): P
   };
 
   // 关键动作覆盖明细——「完整性」分本就是这些 covered/partial/missing 覆盖判定的汇总，
-  // 故作为完整性的构成子项 children 下挂，而不是与三维度并列成独立评分点。
+  // 故拼进「完整性」的证据 md（与其它评分点证据统一的 markdown 呈现），而不是与三维度
+  // 并列成独立评分点。
   const keyActions = Array.isArray(out.keyActionResults) ? out.keyActionResults : [];
-  const keyActionPoints: EvalPoint[] = [];
+  const COVERAGE_MARK: Record<EvalPointStatus, string> = {
+    covered: '✅ 已覆盖', partial: '⚠️ 部分覆盖', missing: '❌ 未覆盖',
+  };
+  const kaLines: string[] = [];
   for (const ka of keyActions) {
     if (!ka || !ka.actionContent) continue;
     if (ka.coverage === 'not_applicable') continue;
     const status = coverageToStatus(ka.coverage);
-    const anchors = Array.isArray(ka.matchedTraceSteps)
-      ? ka.matchedTraceSteps.map((n) => `step-${n}`) : undefined;
-    keyActionPoints.push({
-      label: String(ka.actionContent).slice(0, 120),
-      ...(status ? { status } : {}),
-      ...(ka.hasSkillImprovement ? { skillAttributable: true } : {}),
-      ...(ka.skillImprovementSuggestion?.trim() ? { suggestion: ka.skillImprovementSuggestion.trim() } : {}),
-      ...(ka.traceComparisonAnalysis ? { evidence: { md: ka.traceComparisonAnalysis } } : {}),
-      ...(anchors && anchors.length ? { anchors } : {}),
-    });
+    const mark = status ? COVERAGE_MARK[status] : '';
+    const analysis = ka.traceComparisonAnalysis?.trim() ? ` —— ${ka.traceComparisonAnalysis.trim()}` : '';
+    kaLines.push(`- ${mark} · **${String(ka.actionContent).trim()}**${analysis}`);
   }
+  const keyActionMd = kaLines.length ? `**关键动作覆盖明细**\n${kaLines.join('\n')}` : '';
 
   // 固定三维度作为评分点，deviation 按 factor 归到对应维度，填 evidence/suggestion/anchors；
-  // 完整性额外挂上关键动作覆盖明细作 children。
+  // 完整性把关键动作覆盖明细拼进证据 md。
   const points: EvalPoint[] = DIM_LABELS.map(({ key, label, factor }) => {
     const dimDevs = deviations.filter((d) => (d.factor ?? 'other') === factor);
     const devMd = dimDevs.map((d) => `[${d.severity}] ${d.deviation}`).join('\n');
-    const md = devMd || explanationOf(factor); // 优先 deviation 明细，否则该维度整体说明
+    let md = devMd || explanationOf(factor); // 优先 deviation 明细，否则该维度整体说明
+    if (key === 'completeness' && keyActionMd) md = md ? `${md}\n\n${keyActionMd}` : keyActionMd;
     const attributable = dimDevs.find((d) => d.isSkillAttributable && d.improvementSuggestion);
     const anchors = dimDevs.map((d) => `step-${d.stepIndex}`).filter(Boolean);
     const pt: EvalPoint = { label };
@@ -230,10 +229,8 @@ async function runTrajectoryQuality(user: string, ctx: FaithfulPresetContext): P
       pt.suggestion = attributable.improvementSuggestion;
     }
     if (anchors.length) pt.anchors = anchors;
-    if (key === 'completeness' && keyActionPoints.length) pt.children = keyActionPoints;
     return pt;
-    // 空维度（无分、无说明、无子项）才略去
-  }).filter((p) => p.score !== undefined || p.evidence || (p.children && p.children.length));
+  }).filter((p) => p.score !== undefined || p.evidence); // 空维度（无分且无任何说明）才略去
 
   return normalizeEvaluatorOutput({
     score: to100(out.trajectoryScore),

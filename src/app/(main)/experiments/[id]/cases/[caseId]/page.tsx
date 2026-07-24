@@ -4,7 +4,7 @@
 // （类目均分 · N/M 项计入）→ 每个评估器一张全宽卡（评分点表 + 证据折叠 md/json 渲染；
 // 失败卡 = 「评估失败」chip + 原因 + 单项重评）。类目归属来自 registry 元数据。
 import Link from 'next/link';
-import { Fragment, use, useCallback, useEffect, useMemo, useState } from 'react';
+import { use, useCallback, useEffect, useMemo, useState } from 'react';
 
 import { EvidenceBlock } from '@/components/eval/EvidenceBlock';
 import { useEvaluatorLookup } from '@/components/eval/useEvaluatorLookup';
@@ -48,11 +48,9 @@ interface PointRow {
   skillAttributable?: boolean;
   suggestion?: string;
   anchors?: string[];
-  /** 一层子项：如「完整性」下挂的各关键动作覆盖明细 */
-  children?: PointRow[];
 }
 
-/** 解析单个评分点（不含 children）；非法（无 label）返回 null。 */
+/** 解析单个评分点；非法（无 label）返回 null。 */
 function parseOnePoint(p: unknown): PointRow | null {
   if (!p || typeof p !== 'object') return null;
   const r = p as Record<string, unknown>;
@@ -72,19 +70,13 @@ function parseOnePoint(p: unknown): PointRow | null {
   return row;
 }
 
-/** 宽容解析结果行的 points（脏数据逐条丢弃）。归因字段全可选，含一层 children。 */
+/** 宽容解析结果行的 points（脏数据逐条丢弃）。归因字段全可选。 */
 function parsePoints(raw: unknown): PointRow[] {
   if (!Array.isArray(raw)) return [];
   const out: PointRow[] = [];
   for (const p of raw) {
     const row = parseOnePoint(p);
-    if (!row) continue;
-    const kids = (p as Record<string, unknown>).children;
-    if (Array.isArray(kids)) {
-      const parsed = kids.map(parseOnePoint).filter((x): x is PointRow => !!x);
-      if (parsed.length) row.children = parsed;
-    }
-    out.push(row);
+    if (row) out.push(row);
   }
   return out;
 }
@@ -419,42 +411,16 @@ export default function TraceEvalDetailPage({ params }: { params: Promise<{ id: 
                                 </thead>
                                 <tbody>
                                   {points.map((p, i) => (
-                                    <Fragment key={i}>
-                                      <tr>
-                                        <td style={{ ...TD, fontWeight: 600, fontSize: 11.5, verticalAlign: 'top' }}>
-                                          {p.label}
-                                          <PointBadges point={p} />
-                                        </td>
-                                        <td style={{ ...TD, verticalAlign: 'top', fontWeight: 700 }}>{typeof p.score === 'number' ? p.score : '—'}</td>
-                                        <td style={{ ...TD, verticalAlign: 'top', overflow: 'hidden' }}>
-                                          <PointEvidence point={p} taskId={caseRow.taskId} />
-                                        </td>
-                                      </tr>
-                                      {/* children：如「完整性」下挂的各关键动作覆盖明细，缩进为子行 */}
-                                      {p.children?.map((ch, j) => (
-                                        <tr key={`${i}-${j}`}>
-                                          <td style={{
-                                            ...TD, fontSize: 11, verticalAlign: 'top',
-                                            paddingLeft: 24, color: 'var(--foreground-secondary)',
-                                            borderBottom: j === (p.children!.length - 1) ? TD.borderBottom : 'none',
-                                          }}>
-                                            <span style={{ color: 'var(--foreground-muted)', marginRight: 6 }}>└</span>
-                                            {ch.label}
-                                            <PointBadges point={ch} />
-                                          </td>
-                                          <td style={{
-                                            ...TD, verticalAlign: 'top', color: 'var(--foreground-muted)',
-                                            borderBottom: j === (p.children!.length - 1) ? TD.borderBottom : 'none',
-                                          }}>{typeof ch.score === 'number' ? ch.score : '—'}</td>
-                                          <td style={{
-                                            ...TD, verticalAlign: 'top', overflow: 'hidden',
-                                            borderBottom: j === (p.children!.length - 1) ? TD.borderBottom : 'none',
-                                          }}>
-                                            <PointEvidence point={ch} taskId={caseRow.taskId} />
-                                          </td>
-                                        </tr>
-                                      ))}
-                                    </Fragment>
+                                    <tr key={i}>
+                                      <td style={{ ...TD, fontWeight: 600, fontSize: 11.5, verticalAlign: 'top' }}>
+                                        {p.label}
+                                        <PointBadges point={p} />
+                                      </td>
+                                      <td style={{ ...TD, verticalAlign: 'top', fontWeight: 700 }}>{typeof p.score === 'number' ? p.score : '—'}</td>
+                                      <td style={{ ...TD, verticalAlign: 'top', overflow: 'hidden' }}>
+                                        <PointEvidence point={p} taskId={caseRow.taskId} />
+                                      </td>
+                                    </tr>
                                   ))}
                                 </tbody>
                               </table>
