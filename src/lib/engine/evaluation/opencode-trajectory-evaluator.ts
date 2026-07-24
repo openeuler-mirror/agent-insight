@@ -102,8 +102,15 @@ const COORDINATOR_SYSTEM_PROMPT = `你是 Agent Insight 的「关键动作轨迹
 【三维分】
 - comparison_mode=skill_key_actions 时，completeness 表示关键动作覆盖完整性。主要基于 key_action_results 的 coverage 和必要顺序，0.0 到 1.0。
 - comparison_mode=trace_only 时，completeness 必须为 null，dimension_details.completeness.not_scored 必须为 true，explanation 说明：当前 trace 未关联 Skill，没有可用于覆盖判断的关键动作，因此完整性不参与轨迹评分。
-- tool_choice：工具/Skill 选择合理性。基于 actual_flat_trace_steps 中的工具/Skill 调用是否符合关键动作意图，0.0 到 1.0。
-- redundancy：冗余程度。基于 actual_flat_trace_steps 中是否有明显重复、绕路、高频无效调用，0.0 到 1.0。
+- tool_choice：工具/Skill 选择合理性。**只能取三档之一**，按判据对号入座，不要给中间值：
+  · 1.0 合理 —— 工具/Skill 调用都符合关键动作意图；该用 Skill 脚本的地方用了，无明显错误选择。
+  · 0.5 部分合理 —— 大体正确，但有个别偏差，如该用 Skill 脚本却用了裸命令、或个别调用与意图不符。
+  · 0.0 不合理 —— 多数调用跑偏、用错工具、或完全绕过 Skill 推荐方式。
+- redundancy：路径简洁度（**分越高越不冗余**）。**只能取三档之一**：
+  · 1.0 无冗余 —— 无明显重复、绕路或高频无效调用，路径紧凑。
+  · 0.5 一定冗余 —— 存在部分重复或绕路，但未形成连续重复调用。
+  · 0.0 冗余严重 —— 大量重复调用、明显绕路，或连续同类无效调用。
+- tool_choice / redundancy 的 dimension_scores 与 dimension_details.score 必须是 0.0 / 0.5 / 1.0 之一；explanation 必须写清落在哪一档、依据是什么。
 - dimension_details 中必须给出每个维度的 score 和 explanation；如有具体问题，放入 missing_steps / problematic_steps / heavy_repeated_calls 等数组，供前端展开。
 - dimension_details.redundancy.consecutive_same_runs 每项必须包含 name、count、from、to；heavy_repeated_calls 每项必须包含 call、count。name/call 必须来自 actual_flat_trace_steps 的 name 字段，不能留空。
 - reason_text 是前端顶部「执行路径分析」绿色框的正文，必须总结完整性、工具选择、冗余，以及关键偏差；不要只写关键动作覆盖数量。
@@ -120,10 +127,10 @@ const COORDINATOR_SYSTEM_PROMPT = `你是 Agent Insight 的「关键动作轨迹
     "missing_count": 1,
     "not_applicable_count": 0
   },
-  "reason_text": "完整性(0.60)：5 个关键动作中 2 个覆盖、1 个部分覆盖、2 个缺失，缺失项会影响主流程闭环。工具选择(0.65)：大多数工具调用与任务相关，但缺少验证类调用。冗余(0.50)：存在部分重复或绕路，未形成连续重复调用。关键偏差：存在 high 严重度关键动作缺失，应优先修正。",
+  "reason_text": "完整性(0.60)：5 个关键动作中 2 个覆盖、1 个部分覆盖、2 个缺失，缺失项会影响主流程闭环。工具选择(0.5 部分合理)：大多数工具调用与任务相关，但个别该用 Skill 脚本处用了裸命令。冗余(0.5 一定冗余)：存在部分重复或绕路，未形成连续重复调用。关键偏差：存在 high 严重度关键动作缺失，应优先修正。",
   "dimension_scores": {
     "completeness": 0.6,
-    "tool_choice": 0.65,
+    "tool_choice": 0.5,
     "redundancy": 0.5
   },
   "dimension_details": {
@@ -136,11 +143,11 @@ const COORDINATOR_SYSTEM_PROMPT = `你是 Agent Insight 的「关键动作轨迹
       "explanation": "5 个关键动作中 2 个覆盖、1 个部分覆盖、2 个缺失，因此完整性为 0.6。"
     },
     "tool_choice": {
-      "score": 0.65,
+      "score": 0.5,
       "problematic_steps": [
         { "step_index": 3, "name": "bash", "issue": "缺少与关键动作匹配的验证命令", "severity": "medium" }
       ],
-      "explanation": "多数工具调用与任务相关，但缺少验证类调用。"
+      "explanation": "落在 0.5 部分合理：多数工具调用与任务相关，但个别该用 Skill 脚本处用了裸命令。"
     },
     "redundancy": {
       "score": 0.5,
@@ -150,7 +157,7 @@ const COORDINATOR_SYSTEM_PROMPT = `你是 Agent Insight 的「关键动作轨迹
       "heavy_repeated_calls": [
         { "call": "read", "count": 8 }
       ],
-      "explanation": "存在部分重复或绕路，但未形成连续重复调用。"
+      "explanation": "落在 0.5 一定冗余：存在部分重复或绕路，但未形成连续重复调用。"
     }
   },
   "key_action_results": [
@@ -228,6 +235,18 @@ function clamp01(n: number): number {
     return Math.max(0, Math.min(1, n));
 }
 
+/**
+ * 三档吸附：工具选择/冗余度是锚定的三档评分（合理/部分/不合理），LLM 只应输出
+ * 0 / 0.5 / 1；这里把任何漂移的连续值吸附到最近一档，作安全网。完整性是覆盖率
+ * 汇总（连续），不走这个。
+ */
+function snap3(n: number): number {
+    const c = clamp01(n);
+    if (c < 0.25) return 0;
+    if (c < 0.75) return 0.5;
+    return 1;
+}
+
 function toNumber(v: unknown): number {
     if (typeof v === 'number') return v;
     if (typeof v === 'string') {
@@ -302,8 +321,9 @@ function pickDimensionScores(parsed: JsonRecord, fallbackScore: number, traceOnl
             : Number.isFinite(completeness)
             ? clamp01(completeness)
             : fallbackScore,
-        toolChoice: Number.isFinite(toolChoice) ? clamp01(toolChoice) : 1,
-        redundancy: Number.isFinite(redundancy) ? clamp01(redundancy) : 1,
+        // 工具选择/冗余度是三档锚定评分 → 吸附到 0 / 0.5 / 1
+        toolChoice: Number.isFinite(toolChoice) ? snap3(toolChoice) : 1,
+        redundancy: Number.isFinite(redundancy) ? snap3(redundancy) : 1,
     };
 }
 
