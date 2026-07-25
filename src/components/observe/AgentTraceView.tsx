@@ -387,6 +387,8 @@ export default function AgentTraceView({
     const [fullInteractionLoadError, setFullInteractionLoadError] = useState<string | null>(null);
     const fullLoadPromiseRef = React.useRef<Promise<RawInteraction[]> | null>(null);
     const previousRootExecutionIdRef = React.useRef(rootExecutionId);
+    /** 置位表示下一次 tree 重建源于「同一条 trace 补数据」，重置选中态的 effect 应跳过一次。 */
+    const sameTraceReloadRef = React.useRef(false);
     const langfuseProjection = useMemo(
         () => langfuseTraceNodes?.length ? buildLangfuseAgentTrace(langfuseTraceNodes) : null,
         [langfuseTraceNodes],
@@ -416,6 +418,8 @@ export default function AgentTraceView({
         try {
             const loaded = await loadInteraction(index);
             if (previousRootExecutionIdRef.current !== requestedTraceId) return;
+            // 同一条 trace 内补数据，不是换 trace —— 别让下面的重置 effect 清掉用户的选中
+            sameTraceReloadRef.current = true;
             setInteractions(previous => previous.map((item, itemIndex) => itemIndex === index ? loaded : item));
         } catch (error) {
             setInteractionLoadError(error instanceof Error ? error.message : 'Failed to load interaction');
@@ -434,7 +438,11 @@ export default function AgentTraceView({
             let promise: Promise<RawInteraction[]>;
             promise = loadAllInteractions()
                 .then(loaded => {
-                    if (previousRootExecutionIdRef.current === requestedTraceId) setInteractions(loaded);
+                    if (previousRootExecutionIdRef.current === requestedTraceId) {
+                        // 同上：整条 trace 补全正文（切到 Prompt/时间线 或搜索时触发），同样保留选中
+                        sameTraceReloadRef.current = true;
+                        setInteractions(loaded);
+                    }
                     return loaded;
                 })
                 .catch(error => {
@@ -504,8 +512,18 @@ export default function AgentTraceView({
         };
     }, [traceSkillCalls.length, user]);
 
+    // tree 由 interactions 派生，为同一条 trace 补数据（懒加载单条 / 补全全部）也会产生新的
+    // interactions 数组 → 新 tree 对象。若无条件跟着 tree 重置，首次点击 span 触发懒加载后
+    // 会被弹回根 Agent，必须点第二次才留得住（手动展开的节点同样会被清掉）。
+    // 这里只跳过「同一条 trace 补数据」这一种已知来源，其余 tree 变化（换 trace、自动刷新、
+    // langfuse 投影变化）一律照旧重置 —— TraceDrawer / TrajectoryTraceView 不传 rootExecutionId，
+    // 不能用它作为 trace 身份来判定。
     useEffect(() => {
         if (!tree) return;
+        if (sameTraceReloadRef.current) {
+            sameTraceReloadRef.current = false;
+            return;
+        }
         setSelectedKey(agentKey(tree.id));
         setExpandedKeys(defaultExpandedKeys);
     }, [tree, defaultExpandedKeys]);
@@ -964,7 +982,15 @@ export default function AgentTraceView({
                             </Button>
                         </div>
                     ) : selectedEvent ? (
-                        <EventDetailPanel event={selectedEvent} node={selectedAgentNode} interactions={displayInteractions} />
+                        <EventDetailPanel
+                            event={selectedEvent}
+                            node={selectedAgentNode}
+                            interactions={displayInteractions}
+                            onSelectChild={(id) => {
+                                const n = findNode(tree, id);
+                                if (n) setSelectedKey(agentKey(n.id));
+                            }}
+                        />
                     ) : selectedAgentNode ? (
                         <AgentDetail
                             node={selectedAgentNode}
@@ -2603,12 +2629,137 @@ function HierarchicalSpanSnapshot({
 }
 
 // ─── EventDetailPanel (right panel – event selected) ─────────────────────────
-function EventDetailPanel({ event, node, interactions }: { event: AgentEvent; node: AgentNode; interactions: RawInteraction[] }) {
+/** 工具/技能调用是否失败。判定口径与 faithfulness-evaluator 的 status 归类一致。 */
+function isErrorToolStatus(status?: string): boolean {
+    return /error|fail|cancel/i.test(status ?? '');
+}
+
+/** 毫秒级时钟。span 详情用,便于与后端日志、Infra 曲线对时。 */
+function formatClockMs(ts?: number): string | null {
+    if (ts == null) return null;
+    const d = new Date(ts);
+    if (Number.isNaN(d.getTime())) return null;
+    return `${d.toLocaleTimeString('zh-CN', { hour12: false })}.${String(d.getMilliseconds()).padStart(3, '0')}`;
+}
+
+/** 可点击复制的 id 芯片(toolCallId 等)。 */
+function CopyableId({ label, value }: { label: string; value: string }) {
+    const [copied, setCopied] = useState(false);
+    return (
+        <button
+            type="button"
+            title={`复制 ${label}`}
+            onClick={async () => {
+                try {
+                    await copyText(value);
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 1500);
+                } catch { /* ignore */ }
+            }}
+            className="font-mono text-[0.625rem] px-1.5 py-px rounded-sm border border-border bg-background-secondary text-foreground-secondary hover:border-primary hover:text-primary cursor-pointer shrink-0"
+        >
+            {value} {copied ? '✓' : '⧉'}
+        </button>
+    );
+}
+
+/** 失败 span 的错误区块。数据源为 event.toolStatus + 工具输出(错误正文通常就在 output 里)。 */
+function SpanErrorBlock({ status, text }: { status?: string; text: string | null }) {
+    const [copied, setCopied] = useState(false);
+    const body = (text ?? '').trim();
+    return (
+        <div className="rounded-md border border-error-border bg-error-subtle overflow-hidden">
+            <div className="flex items-center gap-2 px-2.5 py-1.5 border-b border-error-border">
+                <span className="size-1.5 rounded-full bg-error shrink-0" />
+                <span className="text-xs font-bold text-error">执行失败</span>
+                {status && <span className="font-mono text-[0.625rem] text-error/75">toolStatus: {status}</span>}
+                <span className="flex-1" />
+                {body && (
+                    <button
+                        type="button"
+                        title="复制错误信息"
+                        onClick={async () => {
+                            try {
+                                await copyText(body);
+                                setCopied(true);
+                                setTimeout(() => setCopied(false), 1500);
+                            } catch { /* ignore */ }
+                        }}
+                        className="text-[0.625rem] text-error/70 hover:text-error bg-transparent border-none cursor-pointer p-0"
+                    >
+                        {copied ? '✓ 已复制' : '⧉ 复制'}
+                    </button>
+                )}
+            </div>
+            {body ? (
+                <pre className="m-0 px-2.5 py-2 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap break-words text-error max-h-72 overflow-auto">{body}</pre>
+            ) : (
+                <div className="px-2.5 py-2 text-xs text-error/80 italic">调用被标记为失败,但未记录错误正文。</div>
+            )}
+        </div>
+    );
+}
+
+/** task span 的子 Agent 汇总卡 —— 不离开面板即可看到子 Agent 概况。 */
+function SpawnedChildSummary({ child, onSelectChild }: { child: AgentNode; onSelectChild?: (id: string) => void }) {
+    const ctx = React.useContext(TraceCtx);
+    const status = getStatus(child);
+    const s = child.stats;
+    return (
+        <div className="rounded-md border border-border p-2.5 flex flex-col gap-2">
+            <div className="flex items-center gap-2">
+                <KindBadge kind="agent" size="sm" />
+                <span className="flex-1 text-sm font-semibold truncate">{child.agentName}</span>
+                {child.sessionId && ctx.onSubagentNavigate && (
+                    <button
+                        type="button"
+                        title="在独立 Trace 视图中打开此 Sub-Agent"
+                        onClick={() => ctx.onSubagentNavigate?.(child.sessionId!)}
+                        className="px-2 py-0.5 text-xs font-semibold rounded-sm border border-primary text-primary bg-primary/10 hover:bg-primary/20 cursor-pointer shrink-0"
+                    >
+                        查看子 Trace ↗
+                    </button>
+                )}
+                {onSelectChild && (
+                    <button
+                        type="button"
+                        title="在左侧树中选中该子 Agent"
+                        onClick={() => onSelectChild(child.id)}
+                        className="px-2 py-0.5 text-xs font-semibold rounded-sm border border-border text-foreground-secondary hover:bg-background-secondary cursor-pointer shrink-0"
+                    >
+                        定位
+                    </button>
+                )}
+            </div>
+            <div className="flex flex-wrap gap-x-3.5 gap-y-1 text-xs text-foreground-muted">
+                {status !== 'ok' && (
+                    <span className="inline-flex items-center gap-1.5">
+                        状态 <span className={cn('size-1.5 rounded-full', STATUS_DOT[status])} />
+                        <b className="font-semibold text-foreground">{status === 'error' ? '失败' : '慢'}</b>
+                    </span>
+                )}
+                <span>耗时 <b className="font-semibold text-foreground tabular-nums">{formatDuration(s.durationMs)}</b></span>
+                <span>Token <b className="font-semibold text-foreground tabular-nums">{formatTokens(s.totalTokens)}</b></span>
+                <span>LLM 调用 <b className="font-semibold text-foreground tabular-nums">{s.llmCalls}</b></span>
+                <span>工具调用 <b className="font-semibold text-foreground tabular-nums">{s.toolCalls}</b></span>
+                {s.skillCalls > 0 && <span>Skill <b className="font-semibold text-foreground tabular-nums">{s.skillCalls}</b></span>}
+                {child.children.length > 0 && <span>子 Agent <b className="font-semibold text-foreground tabular-nums">{child.children.length}</b></span>}
+            </div>
+        </div>
+    );
+}
+
+function EventDetailPanel({ event, node, interactions, onSelectChild }: { event: AgentEvent; node: AgentNode; interactions: RawInteraction[]; onSelectChild?: (id: string) => void }) {
     const km = KIND_META[event.kind] ?? KIND_META.tool;
     const dur = (event.startedAt != null && event.completedAt != null)
         ? formatDuration(event.completedAt - event.startedAt) : null;
-    const time = event.startedAt != null ? new Date(event.startedAt).toLocaleTimeString() : '';
+    const startClock = formatClockMs(event.startedAt);
+    const endClock = formatClockMs(event.completedAt);
     const title = event.name || event.summary?.split('\n')[0]?.slice(0, 60) || km.label;
+    const hasError = isErrorToolStatus(event.toolStatus);
+    const spawnedChild = event.kind === 'task' && event.spawnedChildId
+        ? node.children.find(c => c.id === event.spawnedChildId)
+        : undefined;
 
     const responseText =
         event.kind === 'llm' ? (event.interaction?.content || event.summary || '')
@@ -2631,10 +2782,18 @@ function EventDetailPanel({ event, node, interactions }: { event: AgentEvent; no
                     <span className="flex-1 text-base font-semibold truncate text-foreground">{title}</span>
                 </div>
                 <div style={{ display: 'flex', gap: 12, fontSize: '0.6875rem', color: 'var(--foreground-muted)', flexWrap: 'wrap', alignItems: 'center' }}>
-                    {time && <span>{time}</span>}
                     {dur && <span style={{ fontVariantNumeric: 'tabular-nums' }}>{dur}</span>}
                     {event.usage?.total ? <span style={{ fontVariantNumeric: 'tabular-nums' }}>{formatTokens(event.usage.total)} tok</span> : null}
+                    {/* 毫秒级绝对时间:对时后端日志 / Infra 曲线时需要 */}
+                    {startClock && <span style={{ fontVariantNumeric: 'tabular-nums' }}>开始 {startClock}</span>}
+                    {endClock && <span style={{ fontVariantNumeric: 'tabular-nums' }}>结束 {endClock}</span>}
                     <span style={{ opacity: 0.6 }}>from: {node.agentName}</span>
+                    {event.toolStatus && !hasError && (
+                        <span className="inline-flex items-center gap-1 text-success font-semibold">
+                            <span className="size-1.5 rounded-full bg-success" />{event.toolStatus}
+                        </span>
+                    )}
+                    {event.toolCallId && <CopyableId label="toolCallId" value={event.toolCallId} />}
                 </div>
             </div>
 
@@ -2654,25 +2813,36 @@ function EventDetailPanel({ event, node, interactions }: { event: AgentEvent; no
                 {/* ── Tool / Skill ── */}
                 {(event.kind === 'tool' || event.kind === 'skill') && (
                     <>
+                        {/* 失败时错误正文置顶;此时 output 就是错误信息,不再重复渲染 Output */}
+                        {hasError && <SpanErrorBlock status={event.toolStatus} text={outputStr} />}
                         <CompactSection label="Input" raw={argsStr} modalTitle={`${title} — Input`} />
-                        <CompactSection label="Output" raw={outputStr} modalTitle={`${title} — Output`} />
-                        {argsStr == null && outputStr == null && <EmptyDetail />}
+                        {!hasError && <CompactSection label="Output" raw={outputStr} modalTitle={`${title} — Output`} />}
+                        {!hasError && argsStr == null && outputStr == null && <EmptyDetail />}
                     </>
                 )}
 
                 {/* ── Task spawn ── */}
                 {event.kind === 'task' && event.spawnedChildId && (
-                    <div style={{ fontSize: '0.8125rem', color: 'var(--foreground-muted)', padding: '0.75rem', background: 'var(--background-secondary)', border: '1px solid var(--border)', borderRadius: 6 }}>
-                        已生成子 Agent — 在左侧树中展开 TASK 行查看详情。
-                    </div>
+                    <>
+                        {hasError && <SpanErrorBlock status={event.toolStatus} text={outputStr} />}
+                        <CompactSection label="派生指令" raw={argsStr} modalTitle={`${title} — 派生指令`} />
+                        {spawnedChild ? (
+                            <SpawnedChildSummary child={spawnedChild} onSelectChild={onSelectChild} />
+                        ) : (
+                            <div style={{ fontSize: '0.8125rem', color: 'var(--foreground-muted)', padding: '0.75rem', background: 'var(--background-secondary)', border: '1px solid var(--border)', borderRadius: 6 }}>
+                                已生成子 Agent — 在左侧树中展开 TASK 行查看详情。
+                            </div>
+                        )}
+                    </>
                 )}
 
                 {/* ── Captured task / chain observation ── */}
                 {((event.kind === 'task' && !event.spawnedChildId) || event.kind === 'chain') && (
                     <>
+                        {hasError && <SpanErrorBlock status={event.toolStatus} text={outputStr} />}
                         <CompactSection label="Input" raw={argsStr} modalTitle={`${title} — Input`} />
-                        <CompactSection label="Output" raw={outputStr} modalTitle={`${title} — Output`} />
-                        {argsStr == null && outputStr == null && <EmptyDetail />}
+                        {!hasError && <CompactSection label="Output" raw={outputStr} modalTitle={`${title} — Output`} />}
+                        {!hasError && argsStr == null && outputStr == null && <EmptyDetail />}
                     </>
                 )}
             </div>
