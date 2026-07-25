@@ -1,5 +1,7 @@
 import { appendClaudeOtelEvents } from '@/lib/ingest/claude-otel/spool';
-import { normalizeClaudeOtlpLogs } from '@/lib/ingest/claude-otel/otlp-json';
+import { normalizeOtlpLogs } from '@/lib/ingest/claude-otel/otlp-json';
+import { appendCodeAgentOtelEvents } from '@/lib/ingest/codeagent-otel/spool';
+import { isCodeAgentOtelEvent } from '@/lib/ingest/codeagent-otel/detect';
 import { db } from '@/lib/storage/prisma';
 import { NextResponse } from 'next/server';
 
@@ -23,16 +25,33 @@ export async function POST(req: Request) {
 
     const body = await req.json();
     const receivedAt = new Date().toISOString();
-    const events = normalizeClaudeOtlpLogs(body, { receivedAt, authenticatedUser });
-    const { dirtySessionIds } = appendClaudeOtelEvents(events);
+    const events = normalizeOtlpLogs(body, { receivedAt, authenticatedUser });
+    const codeAgentEvents = events.filter(isCodeAgentOtelEvent);
+    const otherEvents = events.filter((event) => !isCodeAgentOtelEvent(event));
+    const codeAgentResult = appendCodeAgentOtelEvents(codeAgentEvents);
+    const otherResult = appendClaudeOtelEvents(otherEvents);
+    const dirtySessionIds = Array.from(new Set([
+      ...codeAgentResult.dirtySessionIds,
+      ...otherResult.dirtySessionIds,
+    ]));
 
     return NextResponse.json({
       status: 'accepted',
       received: events.length,
       sessions: dirtySessionIds,
+      frameworks: {
+        codeagent: {
+          received: codeAgentEvents.length,
+          sessions: codeAgentResult.dirtySessionIds,
+        },
+        other: {
+          received: otherEvents.length,
+          sessions: otherResult.dirtySessionIds,
+        },
+      },
     });
   } catch (err: any) {
-    console.error('[Claude OTel Logs] Handler Error:', err);
+    console.error('[OTel Logs] Handler Error:', err);
     return NextResponse.json({ status: 'error', message: err.message }, { status: 500 });
   }
 }

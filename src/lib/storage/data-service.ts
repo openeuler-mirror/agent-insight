@@ -47,7 +47,7 @@ import {
 } from '@/lib/trace-tags';
 
 /** 允许派生子 Agent 树的框架集合。先落地者集合化，后落地者仅加值。 */
-const SUBAGENT_TREE_FRAMEWORKS = new Set(['opencode', 'openclaw', 'hermes', 'langfuse-langgraph']);
+const SUBAGENT_TREE_FRAMEWORKS = new Set(['opencode', 'openclaw', 'hermes', 'langfuse-langgraph', 'codeagent']);
 
 export interface InvokedSkill {
     name: string;
@@ -184,7 +184,7 @@ async function persistExecutionSkills(
  */
 export function computeOwnSkills(framework: string | null | undefined, interactions: any[]): InvokedSkill[] {
     if (!Array.isArray(interactions) || interactions.length === 0) return [];
-    if (framework === 'opencode' || framework === 'hermes' || framework === 'langfuse-langgraph') {
+    if (framework === 'opencode' || framework === 'hermes' || framework === 'langfuse-langgraph' || framework === 'codeagent') {
         const tree = buildAgentCallTree(interactions as any);
         return tree ? extractExplicitSkillsFromNode(tree) : [];
     }
@@ -2824,7 +2824,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
     // 通过 parentExecutionId 与 root 建立父子关系。列表/聚合默认 filter isSubagent=false，
     // 详情页可下钻到 sub-agent。历史上这里曾对相同 taskId 的 child Execution 做 dedup 删除，
     // 现在反过来——保留它们，并补齐父子链接。
-    if (targetRecord.framework && SUBAGENT_TREE_FRAMEWORKS.has(targetRecord.framework) && targetRecord.task_id && Array.isArray(mergedInteractionsForSession)) {
+    if (typeof targetRecord.framework === 'string' && SUBAGENT_TREE_FRAMEWORKS.has(targetRecord.framework) && targetRecord.task_id && Array.isArray(mergedInteractionsForSession)) {
         try {
             await deriveSubagentExecutions({
                 parentExecutionId: recordId,

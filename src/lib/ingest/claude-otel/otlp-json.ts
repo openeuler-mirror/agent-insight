@@ -323,3 +323,5 @@ export function normalizeClaudeOtlpTraces(
 
   return events;
 }
+
+export const normalizeOtlpLogs = normalizeClaudeOtlpLogs;
