@@ -2824,9 +2824,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
     // 通过 parentExecutionId 与 root 建立父子关系。列表/聚合默认 filter isSubagent=false，
     // 详情页可下钻到 sub-agent。历史上这里曾对相同 taskId 的 child Execution 做 dedup 删除，
     // 现在反过来——保留它们，并补齐父子链接。
-    // framework 是可选字段（string | undefined），Set.has 要求 string —— 合入上游时补一处收窄
-    // 让本分支可编译（空串不在集合内，语义等价）。上游 MR !216 也在修同一处，合入后可去掉。
-    if (SUBAGENT_TREE_FRAMEWORKS.has(targetRecord.framework ?? '') && targetRecord.task_id && Array.isArray(mergedInteractionsForSession)) {
+    if (targetRecord.framework && SUBAGENT_TREE_FRAMEWORKS.has(targetRecord.framework) && targetRecord.task_id && Array.isArray(mergedInteractionsForSession)) {
         try {
             await deriveSubagentExecutions({
                 parentExecutionId: recordId,
