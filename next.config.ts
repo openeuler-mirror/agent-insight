@@ -25,17 +25,15 @@ const nextConfig: NextConfig = {
       'data/**',
     ],
   },
-  // 显式锁定 workspace root，避免 Next.js 在多 lockfile 时选错根
-  // （家目录如果也存在 package-lock.json 会被误识别为 monorepo 根）。
   // git worktree 场景：cwd 在 <main>/.claude/worktrees/<id>，依赖装在主仓库 node_modules，
   // worktree 本地 node_modules 不完整——root 必须指向主仓库根，turbopack 才解析得到 next。
-  turbopack: {
-    root: (() => {
-      const cwd = path.resolve('.');
-      const m = cwd.match(/^(.*)\/\.claude\/worktrees\/[^/]+$/);
-      return m ? m[1] : cwd;
-    })(),
-  },
+  // 非 worktree 场景：不显式设置 root。Windows 上把 root 设为绝对路径会触发 Turbopack
+  // 的 "Invalid distDirRoot" panic（distDir .next 被判为逃出 projectPath），默认值反而安全。
+  turbopack: (() => {
+    const cwd = path.resolve('.');
+    const m = cwd.match(/^(.*)[/\\]\.claude[/\\]worktrees[/\\][^/\\]+$/);
+    return m ? { root: m[1] } : {};
+  })(),
   experimental: {
       serverActions: {
           allowedOrigins: ["*"] //
