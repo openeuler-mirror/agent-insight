@@ -477,34 +477,30 @@ fi
 if [ "$INSTALL_CODEAGENT" = "true" ]; then
     cat > "$HOME/.agent-insight/codeagent_otel_env.sh" << 'CODEAGENT_OTEL_EOF'
 # Agent-Insight CodeAgent OpenTelemetry integration
-codeagent_insight() {
+unalias codeagent 2>/dev/null || true
+
+_skill_insight_codeagent_load_env() {
   if [ -f "$HOME/.agent-insight/.env" ]; then
     set -a
     . "$HOME/.agent-insight/.env"
     set +a
   fi
+}
+
+codeagent() {
+  _skill_insight_codeagent_load_env
   local _si_host="\${AGENT_INSIGHT_HOST:-127.0.0.1:3000}"
   case "$_si_host" in http://*|https://*) ;; *) _si_host="http://$_si_host" ;; esac
   _si_host="\${_si_host%/}"
-  local _ca_bin="\${CODEAGENTCLI_BIN:-}"
-  if [ -z "$_ca_bin" ]; then
-    for _candidate in "$PWD/codeagentcli" "$PWD/codeagentcli-dev" "$PWD/dist/codeagentcli"; do
-      if [ -x "$_candidate" ]; then _ca_bin="$_candidate"; break; fi
-    done
-  fi
-  if [ -z "$_ca_bin" ]; then _ca_bin=$(command -v codeagentcli 2>/dev/null || true); fi
-  if [ -z "$_ca_bin" ]; then
-    echo "CodeAgent executable not found. Run from its build directory or set CODEAGENTCLI_BIN." >&2
-    return 127
-  fi
   env \
     CODEAGENT3_ENABLE_TELEMETRY=1 \
     OTEL_EXPORTER_OTLP_ENDPOINT="$_si_host/api/ingest/otel" \
     OTEL_EXPORTER_OTLP_PROTOCOL=http/json \
     OTEL_EXPORTER_OTLP_LOGS_PROTOCOL=http/json \
     OTEL_EXPORTER_OTLP_HEADERS="x-witty-api-key=\${AGENT_INSIGHT_API_KEY:-}" \
-    "$_ca_bin" "$@"
+    codeagent "$@"
 }
+
 CODEAGENT_OTEL_EOF
     SHELL_RC="$HOME/.zshrc"
     [ -f "$HOME/.bashrc" ] && SHELL_RC="$HOME/.bashrc"
@@ -514,7 +510,7 @@ CODEAGENT_OTEL_EOF
         echo "source \"$HOME/.agent-insight/codeagent_otel_env.sh\"" >> "$SHELL_RC"
     fi
     echo "✅ CodeAgent OTel env installed at $HOME/.agent-insight/codeagent_otel_env.sh"
-    echo "   Restart your terminal, then run: codeagent_insight"
+    echo "   Restart your terminal, then run: codeagent"
     echo "   CodeAgent may still send traces/metrics; Agent Insight accepts and discards those signals."
 fi
 
@@ -641,7 +637,7 @@ if [ "$INSTALL_CLAUDE" = "true" ]; then
     echo "  2. Restart terminal, then run: claude"
 fi
 if [ "$INSTALL_CODEAGENT" = "true" ]; then
-    echo "  3. Restart terminal, then run: codeagent_insight"
+    echo "  3. Restart terminal, then run: codeagent"
 fi
 if [ "$INSTALL_HERMES" = "true" ]; then
     echo "  3. Restart Hermes or start a new Hermes conversation"
@@ -1063,21 +1059,11 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '  $env:OTEL_EXPORTER_OTLP_PROTOCOL = "http/json"',
         '  $env:OTEL_EXPORTER_OTLP_LOGS_PROTOCOL = "http/json"',
         '  $env:OTEL_EXPORTER_OTLP_HEADERS = "x-witty-api-key=$($env:AGENT_INSIGHT_API_KEY)"',
-        '  $binary = $env:CODEAGENTCLI_BIN',
-        '  if (-not $binary) {',
-        '    @("codeagentcli.exe", "codeagentcli", "codeagentcli-dev.exe", "codeagentcli-dev", "dist\\codeagentcli.exe", "dist\\codeagentcli") | ForEach-Object {',
-        '      $candidate = Join-Path (Get-Location) $_',
-        '      if (-not $binary -and (Test-Path $candidate)) { $binary = $candidate }',
-        '    }',
-        '  }',
-        '  if (-not $binary) {',
-        '    $command = Get-Command codeagentcli -CommandType Application, ExternalScript -ErrorAction SilentlyContinue | Select-Object -First 1',
-        '    if ($command) { $binary = $command.Source }',
-        '  }',
-        '  if (-not $binary) { throw "CodeAgent executable not found. Run from its build directory or set CODEAGENTCLI_BIN." }',
-        '  & $binary @args',
+        '  $command = Get-Command codeagent -CommandType Application, ExternalScript -ErrorAction SilentlyContinue | Select-Object -First 1',
+        '  if (-not $command) { throw "CodeAgent executable not found in PATH." }',
+        '  & $command.Source @args',
         '}',
-        'Set-Alias codeagent-insight Invoke-AgentInsightCodeAgent',
+        'Set-Alias codeagent Invoke-AgentInsightCodeAgent',
         '\'@',
         '    $codeAgentOtelPath = Join-Path $skillInsightDir "codeagent_otel_env.ps1"',
         '    Set-Content -Path $codeAgentOtelPath -Value $codeAgentOtelScript -Encoding UTF8',
@@ -1089,7 +1075,7 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '        Add-Content -Path $PROFILE -Value ". `"$codeAgentOtelPath`""',
         '    }',
         '    Write-Host "✅ CodeAgent OTel env installed at $codeAgentOtelPath"',
-        '    Write-Host "   Restart PowerShell, then run: codeagent-insight"',
+        '    Write-Host "   Restart PowerShell, then run: codeagent"',
         '    Write-Host "   CodeAgent may still send traces/metrics; Agent Insight accepts and discards those signals."',
         '}',
         '',
@@ -1205,7 +1191,7 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    Write-Host "  2. Restart PowerShell, then run: claude"',
         '}',
         'if ($INSTALL_CODEAGENT) {',
-        '    Write-Host "  3. Restart PowerShell, then run: codeagent-insight"',
+        '    Write-Host "  3. Restart PowerShell, then run: codeagent"',
         '}',
         'if ($INSTALL_HERMES) {',
         '    Write-Host "  3. Restart Hermes or start a new Hermes conversation"',
