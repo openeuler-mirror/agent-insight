@@ -106,7 +106,9 @@ export async function persistAlignmentAttribution(
   // 若该行已被轨迹质量评估器写入了 tool_choice / redundancy 单项分（existingRaw.dimension_scores），
   // 则把 alignment 覆盖率作为 completeness，走代码侧聚合层算统一轨迹分（0.45/0.35/0.20），
   // 与 dataset 模式同一口径；否则（纯轨迹分析模式，没跑评估器）保持 alignment 即轨迹分（旧行为）。
-  const llmDims = readLlmToolRedundancy(existingRaw);
+  // 评测走实验后，轨迹质量的 tool_choice/redundancy 单项分落在 ExperimentEvalResult（轨迹质量评分点）；
+  // 旧 TrajectoryEvalResult.dimension_scores 取不到时，从实验侧兜底取，保持统一轨迹分口径不变。
+  const llmDims = readLlmToolRedundancy(existingRaw) ?? await readExpToolRedundancy(user, taskId);
   let trajectoryScore: number | null = score;
   let dimensionScoresPayload: Record<string, unknown> = {
     alignment: score,
@@ -403,6 +405,35 @@ function readLlmToolRedundancy(raw: Record<string, unknown> | null | undefined):
   const rd = Number(ds.redundancy);
   if (!Number.isFinite(tc) || !Number.isFinite(rd)) return null;
   return { toolChoice: tc, redundancy: rd };
+}
+
+/**
+ * 评测走实验后的兜底：从该 taskId 最近一次实验评测的「轨迹质量」评分点里读工具选择/冗余度
+ * （评分点分 0-100 → 0-1），供统一轨迹分聚合，取代读旧 TrajectoryEvalResult.dimension_scores。
+ */
+async function readExpToolRedundancy(user: string, taskId: string): Promise<{ toolChoice: number; redundancy: number } | null> {
+  if (!user || !taskId) return null;
+  try {
+    const c = await prisma.experimentCase.findFirst({
+      where: { taskId, experiment: { user } },
+      orderBy: { createdAt: 'desc' },
+      select: { results: { where: { evaluatorId: 'preset-agent-trace-quality', status: 'done' }, select: { pointsJson: true } } },
+    });
+    const pj = c?.results?.[0]?.pointsJson;
+    if (!pj) return null;
+    const points = JSON.parse(pj);
+    if (!Array.isArray(points)) return null;
+    const pick = (label: string): number | null => {
+      const p = points.find((x) => x && typeof x === 'object' && x.label === label);
+      return p && typeof p.score === 'number' ? p.score / 100 : null;
+    };
+    const toolChoice = pick('工具选择');
+    const redundancy = pick('冗余度');
+    if (toolChoice == null || redundancy == null) return null;
+    return { toolChoice, redundancy };
+  } catch {
+    return null;
+  }
 }
 
 function mergeStrings(a: string[], b: string[]): string[] {

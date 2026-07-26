@@ -34,6 +34,7 @@ import type { FilterClause } from '@/lib/filters/types';
 import { useAuth } from '@/lib/auth/auth-context';
 import { useLocale } from '@/lib/client/locale-context';
 import { apiFetch } from '@/lib/client/api';
+import { drillTraceEvalUrl } from '@/lib/client/drill-trace-eval';
 
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
@@ -1672,6 +1673,8 @@ function Row({
     onSelectedChange: () => void;
 }) {
     const { t, locale } = useLocale();
+    const router = useRouter();
+    const { user } = useAuth();
     const id = e.task_id || e.upload_id || '';
     const status = getExecStatus(e);
     const skillCount = getInvokedSkillNames(e).length;
@@ -1784,11 +1787,15 @@ function Row({
                                 {t('tracePage.rowAnalysis')}
                             </Link>
                         </Button>
-                        <Button variant="ghost" size="sm" asChild className="h-7 px-2 text-xs">
-                            <Link href={`${basePath}/eval/trajectory/${id}`}>
-                                <Wrench className="size-3" />
-                                {t('tracePage.rowEval')}
-                            </Link>
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 px-2 text-xs"
+                            title={t('tracePage.rowEval')}
+                            onClick={() => { void drillTraceEvalUrl(user || '', id).then(url => router.push(url)); }}
+                        >
+                            <Wrench className="size-3" />
+                            {t('tracePage.rowEval')}
                         </Button>
                     </div>
                 </Td>

@@ -10,7 +10,7 @@ import { debounceByKey } from '@/lib/ingest/upload-analysis-debouncer';
 import { getUserSettings } from '@/lib/storage/server-config';
 import { assertActive, finish, startOrReplace, EvaluationCancelledError } from '@/lib/evaluation-task-manager';
 import { getInternalAgentTag } from '@/lib/internal-agent-tag';
-import { triggerTrajectoryAutoWatchForTask } from '@/lib/engine/evaluation/trajectory-auto-watch';
+import { triggerExperimentWatchForTask } from '@/lib/engine/experiment/experiment-watch';
 import { NextResponse } from 'next/server';
 
 /**
@@ -262,7 +262,7 @@ export async function POST(request: Request) {
         await saveExecutionRecord(quickData);
         if (data.framework === 'opencode' && data.opencode_cli_completed && data.task_id) {
             await db.updateSession(String(data.task_id), { endTime: new Date() });
-            void triggerTrajectoryAutoWatchForTask(username, String(data.task_id), requestOrigin);
+            void triggerExperimentWatchForTask(username, String(data.task_id));
         }
         if (quickSkills.length > 0) {
             console.log(`[Upload-API] Quick save with skills: ${JSON.stringify(quickSkillsWithVersions)}`);
@@ -487,7 +487,7 @@ async function processUploadAsync(data: any, username: any, normalized: any, int
     if (taskId && shouldMarkSessionEnded) {
         try {
             await db.updateSession(taskId, { endTime: new Date() });
-            void triggerTrajectoryAutoWatchForTask(username, taskId, requestOrigin);
+            void triggerExperimentWatchForTask(username, taskId);
         } catch (e) {
             console.warn(`[Upload-Async] Failed to mark session ended for ${taskId}:`, e);
         }

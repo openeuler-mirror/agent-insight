@@ -50,7 +50,8 @@ export function useBatchEvalResults(
             const currentSequence = ++requestSequence;
             try {
                 const latestParam = latestByCase ? '&latestByCase=1' : '';
-                const res = await apiFetch(`/api/eval/trajectory/results?user=${encodeURIComponent(user)}&runId=${encodeURIComponent(evaluatorRunId)}${latestParam}&limit=500`);
+                // 评测走实验后，runId = experimentId，读实验侧 eval-results（形状与旧 trajectory/results 对齐）
+                const res = await apiFetch(`/api/experiments/eval-results?user=${encodeURIComponent(user)}&runId=${encodeURIComponent(evaluatorRunId)}${latestParam}&limit=500`);
                 const data = await res.json();
                 const rows = Array.isArray(data?.results) ? data.results : [];
                 const m = new Map<string, BatchEvalResultMeta>();
