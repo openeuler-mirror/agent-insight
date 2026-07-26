@@ -253,6 +253,85 @@ export function computeHeartbeatDecision(args: {
   return args.now - since >= args.heartbeatMs ? "kick" : "none"
 }
 
+export type UploaderRuntime = {
+  cmd: string
+  argsPrefix: string[]
+}
+
+const COMMON_UPLOADER_RUNTIMES = [
+  "/usr/local/bin/node",
+  "/usr/bin/node",
+  "/bin/node",
+  "/opt/homebrew/bin/node",
+  "/usr/local/bin/bun",
+  "/usr/bin/bun",
+  "/opt/homebrew/bin/bun",
+]
+
+function runtimeFromExecutable(executable: string, platform: NodeJS.Platform): UploaderRuntime | null {
+  const pathApi = platform === "win32" ? path.win32 : path.posix
+  const name = pathApi.basename(executable).toLowerCase().replace(/\.exe$/, "")
+  if (name === "node") return { cmd: executable, argsPrefix: [] }
+  if (name === "bun") return { cmd: executable, argsPrefix: ["run"] }
+  return null
+}
+
+export function resolveUploaderRuntime(options: {
+  platform?: NodeJS.Platform
+  pathEnv?: string
+  execPath?: string
+  commonPaths?: string[]
+  exists?: (candidate: string) => boolean
+} = {}): UploaderRuntime | null {
+  const platform = options.platform ?? process.platform
+  const pathApi = platform === "win32" ? path.win32 : path.posix
+  const delimiter = platform === "win32" ? ";" : ":"
+  const extensions = platform === "win32" ? [".exe", ".cmd", ".bat", ""] : [""]
+  const exists = options.exists ?? fs.existsSync
+  const pathEnv = options.pathEnv ?? process.env.PATH ?? ""
+
+  const findInPath = (name: string): string | null => {
+    for (const dir of pathEnv.split(delimiter).filter(Boolean)) {
+      for (const extension of extensions) {
+        const candidate = pathApi.join(dir, name + extension)
+        try {
+          if (exists(candidate)) return candidate
+        } catch {}
+      }
+    }
+    return null
+  }
+
+  const nodePath = findInPath("node")
+  if (nodePath) return { cmd: nodePath, argsPrefix: [] }
+
+  const bunPath = findInPath("bun")
+  if (bunPath) return { cmd: bunPath, argsPrefix: ["run"] }
+
+  for (const candidate of options.commonPaths ?? COMMON_UPLOADER_RUNTIMES) {
+    try {
+      if (!exists(candidate)) continue
+    } catch {
+      continue
+    }
+    const runtime = runtimeFromExecutable(candidate, platform)
+    if (runtime) return runtime
+  }
+
+  return runtimeFromExecutable(options.execPath ?? process.execPath ?? "", platform)
+}
+
+export function formatUploaderRuntimeForLog(runtime: UploaderRuntime | null): {
+  command: string
+  argsPrefix: string
+} {
+  if (!runtime) return { command: "(unavailable)", argsPrefix: "(none)" }
+  return {
+    command: runtime.cmd,
+    argsPrefix: runtime.argsPrefix.join(" ") || "(none)",
+  }
+}
+
 export default async function WittySkillInsightOtelPlugin() {
   const env = loadSkillInsightEnv()
   const enabled = asBool(env.AGENT_INSIGHT_OPENCODE_OTEL_ENABLE ?? env.OPENCODE_MIN_CAPTURE_ENABLE ?? "true")
@@ -282,35 +361,12 @@ export default async function WittySkillInsightOtelPlugin() {
   const pluginLogPath = path.join(logDir, "opencode_plugin.log")
   const uploaderLogPath = path.join(logDir, "opencode_uploader.log")
 
-  // Pick a runtime that can execute a plain .js file. Opencode bundles bun, so
-  // process.execPath points at *bun* — but `bun /path/to/file.js` is interpreted
-  // as `cd <path>` (errors with "Failed to change directory"). To run JS we
-  // either need system `node` (preferred), or `bun run <path>` form. Resolve
-  // once at plugin load and cache.
-  const findInPath = (name: string): string | null => {
-    const exts = process.platform === "win32" ? [".exe", ".cmd", ".bat", ""] : [""]
-    const dirs = (process.env.PATH || "").split(path.delimiter)
-    for (const dir of dirs) {
-      for (const ext of exts) {
-        const full = path.join(dir, name + ext)
-        try {
-          if (fs.existsSync(full)) return full
-        } catch {}
-      }
-    }
-    return null
-  }
-  const nodePath = findInPath("node")
-  const bunPath = findInPath("bun")
-  const runtime: { cmd: string; argsPrefix: string[] } = nodePath
-    ? { cmd: nodePath, argsPrefix: [] }
-    : bunPath
-    ? { cmd: bunPath, argsPrefix: ["run"] }
-    : { cmd: process.execPath || "node", argsPrefix: ["run"] }
+  const runtime = resolveUploaderRuntime()
+  const runtimeLog = formatUploaderRuntimeForLog(runtime)
 
   appendLogLine(
     pluginLogPath,
-    `plugin.init enabled=${enabled} spoolDir=${spoolDir} uploaderPath=${uploaderPath} runtime=${runtime.cmd} argsPrefix=${runtime.argsPrefix.join(" ")} host=${env.AGENT_INSIGHT_HOST || "(missing)"} apiKeyPresent=${apiKey ? "yes" : "no"}`,
+    `plugin.init enabled=${enabled} spoolDir=${spoolDir} uploaderPath=${uploaderPath} runtime=${runtimeLog.command} argsPrefix=${runtimeLog.argsPrefix} host=${env.AGENT_INSIGHT_HOST || "(missing)"} apiKeyPresent=${apiKey ? "yes" : "no"}`,
   )
 
   const kickUploader = (sessionID: string, force = false, reason = "unspecified"): void => {
@@ -319,6 +375,13 @@ export default async function WittySkillInsightOtelPlugin() {
         appendLogLine(
           pluginLogPath,
           `kickUploader.skip reason=${reason} sessionID=${sessionID || "(none)"} uploaderMissing=${uploaderPath}`,
+        )
+        return
+      }
+      if (!runtime) {
+        appendLogLine(
+          pluginLogPath,
+          `kickUploader.skip reason=${reason} sessionID=${sessionID || "(none)"} runtimeUnavailable=1 hostExecPath=${process.execPath || "(empty)"}`,
         )
         return
       }
