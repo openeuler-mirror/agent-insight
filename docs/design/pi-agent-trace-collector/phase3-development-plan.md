@@ -39,48 +39,49 @@
 
 ## 3. 逐条 AC 验收矩阵
 
-| AC | 实现位置 | 自动测试 | 真实运行证据 | 当前状态（2026-07-27） |
+| AC | 实现位置 | 自动测试 | 真实运行证据 | 当前状态（2026-07-28） |
 |---|---|---|---|---|
-| AC1 | Pi package + setup installer | package manifest/installer test | `pi list`、启动加载日志、首个 span | openEuler 安装/list/load/self-check通过；首个模型 span 待 provider |
-| AC2 | local package 手工安装流程 | manual config validation test | `pi install <path>` 后真实会话 | openEuler Pi 0.82.1 本地安装通过；公开 Extension-core 夹具会话已入库 |
+| AC1 | Pi package + setup installer | package manifest/installer test | `pi list`、启动加载日志、首个 span | openEuler 安装/list/load/self-check通过；MiniMax-M3 首个真实模型 span 已入库 |
+| AC2 | local package 手工安装流程 | manual config validation test | `pi install <path>` 后真实会话 | openEuler Pi 0.82.1 本地安装通过；真实模型与公开 Extension-core 夹具会话均已入库 |
 | AC3 | transport spool initializer | directory/permission test | `~/.agent-insight/otel_data/pi-agent/` 树 | openEuler 真实 spool/checkpoint 已用于主会话、恢复和重装 |
 | AC4 | API Key SHA-256 namespace | two-key isolation test | 两个 key 独立目录/checkpoint | openEuler managed layout 写入两个独立 namespace；scoped purge 后另一 key spool 哈希不变 |
-| AC5 | Agent state + Adapter | Agent golden test | 一次真实 Pi 会话 ExecutionRecord | 公开 Extension-core 夹具 root + 8 child 已在真实服务端入库 |
-| AC6 | SubAgent result parser | single child fixture | 父/子 traceId 展示 | 单子 Agent 自动测试通过；openEuler 夹具子树已持久化 |
+| AC5 | Agent state + Adapter | Agent golden test | 一次真实 Pi 会话 ExecutionRecord | 四个真实模型 ExecutionRecord 与夹具 root + 8 child 均已在真实服务端入库 |
+| AC6 | SubAgent result parser | single child fixture | 父/子 traceId 展示 | 官方 SubAgent 扩展真实启动独立 Pi 子进程，父子记录与 4252 child tokens 已持久化 |
 | AC7 | recursive `details.results` | three-level fixture | A->B->C 真实/夹具报告 | openEuler 公开接口夹具已持久化三层 A->B->C |
 | AC8 | result index stable IDs | five-parallel fixture | 五子树同父且互不串联 | openEuler 公开接口夹具已持久化五个同级 worker |
-| AC9 | Skill state machine | explicit/automatic fixture | 两种 Skill 触发报告 | `fixture-skill@3` 已入库；模型驱动 automatic 仍待 provider |
-| AC10 | active Skill parentSpanId | Skill nested Tool/LLM test | Skill 子节点树 | 自动 parentSpan 断言通过；openEuler 六类结构已持久化 |
-| AC11 | Tool classifier | shell/file/MCP/search fixture | 标准任务五类 Tool | openEuler 夹具持久化 6 Tool；provider 驱动五类任务待验证 |
+| AC9 | Skill state machine | explicit/automatic fixture | 两种 Skill 触发报告 | `fixture-skill@3` 与模型自动读取的 `zephyr-checksum` 均已入库 |
+| AC10 | active Skill parentSpanId | Skill nested Tool/LLM test | Skill 子节点树 | automatic Skill 的 read Tool 与 LLM 子树已采集；自动 parentSpan 断言通过 |
+| AC11 | Tool classifier | shell/file/MCP/search fixture | 标准任务五类 Tool | 模型真实调用 MCP Tool；夹具持久化 6 Tool，单一 provider 任务覆盖全部非 MCP Tool 类仍待验证 |
 | AC12 | Tool start/end pairing | success/error/exit fixture | 参数、耗时、exit/error 样本 | openEuler 夹具持久化 6 Tool、1 error；配对自动断言通过 |
 | AC13 | Tool owner resolver | parentSpan golden test | Agent-Tool 树 | openEuler 子树持久化，parentSpan 自动图校验通过 |
-| AC14 | recursive redactor | credential corpus test | 去敏 spool 抽检 | 递归脱敏自动测试通过；真实 spool 抽检待验证 |
-| AC15 | assistant message LLM span | multi-provider fixture | 真实 LLM span | openEuler 夹具持久化 9 个 LLM call；真实 provider 待验证 |
-| AC16 | Pi native usage mapping | exact usage test | 与 Pi usage 输出对照 | 夹具 token/cache usage 精确入库；真实 provider usage 对照待验证 |
+| AC14 | recursive redactor | credential corpus test | 去敏 spool 抽检 | 递归脱敏自动测试通过；2 个真实 spool 文件中 provider key 与 Agent Insight key 均 0 命中 |
+| AC15 | assistant message LLM span | multi-provider fixture | 真实 LLM span | MiniMax-M3 四个真实任务 LLM span 与夹具 9 个 LLM call 均已持久化 |
+| AC16 | Pi native usage mapping | exact usage test | 与 Pi usage 输出对照 | 基础真实任务六项 usage 精确一致：289 input/45 output/256 cache-read/0 cache-write/34 reasoning/590 total |
 | AC17 | `model_select` handling | model switch test | 两模型真实会话 | 模型切换自动测试通过；两模型实测待验证 |
 | AC18 | Unicode truncator | >2000 code point test | 超长 prompt/response 样本 | Unicode code-point 截断通过；真实超长样本待验证 |
-| AC19 | MCP naming/metadata parser | MCP success fixture | MCP fixture extension 调用 | openEuler 夹具持久化 `mcp__fixture__lookup` success |
+| AC19 | MCP naming/metadata parser | MCP success fixture | MCP fixture extension 调用 | MiniMax-M3 真实调用 `mcp__fixture__lookup`，持久化 server `fixture` / tool `lookup` |
 | AC20 | MCP error mapping | MCP failure fixture | error span | MCP 错误夹具通过；真实错误 span 待验证 |
 | AC21 | timer + settled flush | fake timer/upload test | 会话结束 3 秒内请求 | settled flush 自动测试通过；openEuler 已上传，真实时延未单独计量 |
 | AC22 | shutdown bounded flush | shutdown test | 退出前 checkpoint/spool 对照 | bounded shutdown 自动测试通过；openEuler 卸载保留 spool |
 | AC23 | checkpoint + stable event ID | disconnect/replay test | 断网恢复且服务端无重复 | openEuler HTTP 500 时 checkpoint 不变，恢复上传 1，重放 0 |
 | AC24 | exponential backoff | fake clock four-failure test | 500 注入重试时间线 | openEuler 500/恢复通过；四次退避时间线由 fake clock 覆盖 |
 | AC25 | lazy extension startup | startup benchmark harness | 20 次 baseline/installed median/P95 | openEuler 20 次 median 529.952/534.719 ms，增量 4.767 ms |
-| AC26 | no remote wait in prompt path | handler timing test | 30 次 TTFT 对照 | prompt路径无远程等待；30次真实 TTFT 待 openEuler/模型 |
-| AC27 | bounded buffers/timers | queue bound test | idle/active RSS 增量 | bounded batch/lock通过；openEuler RPC RSS 点样 164600 KB，非扩展增量 |
+| AC26 | no remote wait in prompt path | handler timing test | 30 次 TTFT 对照 | MiniMax-M3 30+30 次：median 2271.518/2326.948 ms，安装态增量 55.431 ms |
+| AC27 | bounded buffers/timers | queue bound test | idle/active RSS 增量 | 61.2 秒匹配 RPC 进程稳态差分 1824 KB，11 点 baseline/installed growth 均 0 KB；非 V8 heap 归因 |
 | AC28 | async I/O + cleanup | timer/lock leak test | 8 小时 soak 曲线 | soak harness 已实现；8小时实跑待验证 |
-| AC29 | `pi remove` integration | settings removal test | 卸载后无新事件 | openEuler managed `--purge` 后 `pi list` 无 package；无模型条件下卸载后事件检查受限 |
+| AC29 | `pi remove` integration | settings removal test | 卸载后无新事件 | 真实 TTFT 完成后执行 remove，`pi list` 无 package 且无遗留 Pi 进程 |
 | AC30 | purge-scoped cleanup | uninstall path safety test | 当前 key 目录与配置清理 | openEuler managed `uninstall.cjs --purge` 删除当前 key namespace，保留另一 key namespace |
 | AC31 | framework path allowlist | negative path test | 其他 collector checksum 不变 | scoped purge 前后另一 key spool 与 Codex sentinel SHA-256 均不变 |
 | AC32 | reinstall idempotency | install/remove/install test | 重装后新会话上报 | openEuler 重装 self-check 通过并新增持久化 session |
-| AC33 | canonical six-kind batch | standardized fixture test | 标准任务完整报告 | openEuler 公开接口夹具六类 Trace 已在服务端持久化 |
+| AC33 | canonical six-kind batch | standardized fixture test | 标准任务完整报告 | 四个真实模型任务合计覆盖六类 Trace；公开接口夹具在单一标准批次覆盖六类并持久化 |
 | AC34 | explicit parent graph validator | cycle/orphan validator test | 全图 0 orphan/0 cycle | 三层/五兄弟自动图校验通过；openEuler 持久化 root + 8 child |
-| AC35 | leaf LLM token sum | exact token golden test | 与 Pi 内置 usage 误差计算 | 夹具 32 total/18 input/14 output 精确入库；provider 对照待验证 |
+| AC35 | leaf LLM token sum | exact token golden test | 与 Pi 内置 usage 误差计算 | 基础真实任务 Pi native/collector 六项 usage 逐项相等；夹具 token 也精确入库 |
 | AC36 | deterministic structure projection | three-run snapshot test | 相同任务三次结构 diff | deterministic fixture通过；三次真实任务待验证 |
-| AC37 | Pi Adapter | ExecutionRecord golden test | 服务端入库结果 | openEuler 隔离 SQLite 已持久化 3 root session 和 11 session |
+| AC37 | Pi Adapter | ExecutionRecord golden test | 服务端入库结果 | 真实模型隔离 SQLite 持久化 4 个 Execution；确定性 E2E 数据库另持久化 3 root 和 11 session |
 
-上述 openEuler 结构证据来自确定性的公开 Extension-core 夹具，不等同于真实 Pi
-provider/model 推理；真实模型、30 次 TTFT、扩展 RSS 增量和 8 小时 soak 仍保持为门禁。
+真实模型、automatic Skill、MCP、单 SubAgent、native usage、30+30 次 TTFT 和短时
+匹配进程 RSS 差分已闭合。三层/五同级 provider-backed SubAgent、第二真实模型、
+真实 MCP error、三次真实任务结构 diff、V8 heap 归因和 8 小时 soak 仍保持为门禁。
 
 ## 4. 关键测试场景
 

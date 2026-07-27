@@ -1,6 +1,6 @@
 # Pi Agent collector automated verification
 
-Date: 2026-07-27
+Date: 2026-07-28
 
 ## Environment
 
@@ -12,6 +12,8 @@ Date: 2026-07-27
   `87c99c9afebfe6a51d965413fc9c71e5775d442a`
 - Post-rebase verification HEAD:
   `e7841ce0cbe5978d6c1e00fc37f4dfed1513b1ec`
+- Final implementation verification HEAD:
+  `cbc5372d9169864b997866b9b28cdb5f0d41fb16`
 - Upstream `master`: `ea206c9fd442600238f9c1e26cd7e5611b672ea6`
 
 The upstream lockfile was not installable as-is: it resolved
@@ -46,13 +48,13 @@ node --import tsx --test \
 | Pi/shared CommonJS syntax checks | passed |
 | Production build | passed |
 | `git diff --check` | passed |
-| Shared transport equality with issue #159 branch | passed; SHA-256 `8EB1D524F09D7CB42C00511813E2341860661BBDC298A3FB9D9F47FC5E41F868` |
+| Shared transport equality with issue #159 branch | passed; SHA-256 `DF9C6F22083B86C2B133241EB1DE1AEC4B08F46C979263DCC39DE07486F08139` |
 
 After upstream `master` advanced, the branch was rebased and the shared OTel
 adapter-order assertion was resolved by preserving upstream `openclaw` before
 `pi-agent`. The targeted 48-test selection, added-file ESLint, CommonJS syntax,
 `git diff --check`, Prisma initialization, and production build were rerun at
-the post-rebase verification HEAD and passed.
+the final implementation verification HEAD and passed.
 
 ## Repository-wide test
 
@@ -61,17 +63,20 @@ A fresh SQLite database and isolated HOME were used:
 | Command | Result |
 | --- | --- |
 | `npm test` | 699 tests: 689 passed, 9 failed, 1 skipped |
+| `npm run lint` | failed: 1,972 problems (1,684 errors, 288 warnings) |
 
 The 9 failures are shared with the Codex branch and are outside the Pi target
 selection. They are the existing experiment-engine suite and experiment API
 tests, which pin a repository-local database path that was not initialized by
 the isolated `DATABASE_URL`. The Pi target suites, added-file lint, syntax
-checks, and production build are clean.
+checks, and production build are clean. Repository-wide lint also fails
+identically on both branches, primarily on pre-existing
+`@typescript-eslint/no-explicit-any` findings outside this change set.
 
 ## Runtime evidence
 
-The openEuler E2E covered real Pi package installation, listing, Extension
-loading without a provider, removal, reinstall, self-check, server persistence,
-HTTP 500 recovery, replay idempotency, a 20-sample startup comparison, and one
-RSS point sample. Details and remaining gates are recorded in
-`test/pi-agent-trace/reports/e2e.md`.
+The openEuler E2E covered real Pi package lifecycle, MiniMax-M3 inference,
+exact native usage, automatic Skill, MCP, a provider-backed child process,
+server persistence, HTTP 500 recovery, scoped purge, 20-sample startup,
+30+30 real TTFT, and short matched-process RSS curves. Details and remaining
+gates are recorded in `test/pi-agent-trace/reports/e2e.md`.
