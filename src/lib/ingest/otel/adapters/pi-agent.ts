@@ -298,9 +298,6 @@ export function aggregatePiAgentTraceEvents(
         provider: content(attrs(event)['llm.provider']),
         usage: eventUsage(event),
         stop_reason: content(attrs(event)['pi.stop_reason']),
-        requestMessages: eventInput(event)
-          ? [{ role: 'user', content: eventInput(event) }]
-          : undefined,
       });
       continue;
     }

@@ -7,6 +7,7 @@ import { getAdapter } from "../src/lib/ingest/adapters/registry"
 import { aggregateOtelTraceEvents } from "../src/lib/ingest/otel/aggregate"
 import { getOtelTraceAdapter } from "../src/lib/ingest/otel/adapter-registry"
 import { normalizeOtlpTraces } from "../src/lib/ingest/otel/normalize"
+import { computeOwnSkills } from "../src/lib/storage/data-service"
 
 const require = createRequire(import.meta.url)
 const { canonicalEventsToOtlp } = require("../scripts/agent-trace-collectors/shared/trace-transport.cjs")
@@ -127,6 +128,10 @@ test("Pi adapter aggregates Agent, Skill, LLM, Tool, MCP, and exact leaf usage",
   assert.equal(record.tool_call_count, 2)
   assert.equal(record.tool_call_error_count, 1)
   assert.deepEqual(record.invokedSkills, [{ name: "fixture", version: 3 }])
+  assert.deepEqual(computeOwnSkills("pi-agent", record.interactions), [{
+    name: "fixture",
+    version: 3,
+  }])
   assert.equal(record.user, "alice")
   assert.equal(record.interactions.some((item: { mcp?: { server_name?: string } }) => item.mcp?.server_name === "fixture"), true)
 })
