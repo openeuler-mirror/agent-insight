@@ -111,7 +111,36 @@ API Key 决定客户端上报数据的身份归属与接入上下文。错误的
 
 Agent Insight 会按 Langfuse traceId 生成执行记录；Langfuse `session_id` 只是跨 trace 的会话归组字段，不参与生成 Agent Insight 执行 ID。Langfuse 兼容上报会校验 `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`：public key 必须是 Agent Insight 用户名，secret key 必须是该用户的 Agent Insight API Key。
 
-### 流程四：排查“无数据上报”
+### 流程四：接入 Pi Agent
+
+Pi Agent 采集器支持 `@earendil-works/pi-coding-agent` 0.82.x，并要求 Node.js 22.19.0
+或更高版本。在运行 Pi 的 Linux 或 macOS 终端执行：
+
+```bash
+export AGENT_INSIGHT_API_KEY="<当前账号 API Key>"
+curl -fsSL "http://<Agent Insight 地址>/api/ingest/setup/pi-agent" | sh
+```
+
+安装脚本从当前 Agent Insight 服务下载固定 allowlist 中的 Extension、collector core 和共享
+transport，写入 `~/.agent-insight/collectors/`，再执行 `pi install` 与 self-check。API Key
+只写入权限为 `0600` 的本地 `config.json`，不会出现在资产下载 URL 中。
+
+手工安装时可直接把 `pi-agent` package 和相邻的 `shared/trace-transport.cjs` 放入
+`~/.agent-insight/collectors/`，创建同样的 `config.json`，再执行：
+
+```bash
+pi install "$HOME/.agent-insight/collectors/pi-agent"
+node "$HOME/.agent-insight/collectors/pi-agent/scripts/self-check.cjs"
+```
+
+普通卸载保留本地 spool。`--purge` 只删除当前 API Key 对应的 Pi spool；删除所有 Pi
+spool 必须显式追加 `--purge-all --yes`：
+
+```bash
+node "$HOME/.agent-insight/collectors/pi-agent/scripts/uninstall.cjs"
+```
+
+### 流程五：排查“无数据上报”
 
 1. 回到安装指导页确认当前账号、API Key 与平台地址。
 2. 确认执行命令的机器就是目标 Agent 实际运行环境。

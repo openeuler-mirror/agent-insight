@@ -68,6 +68,12 @@ Qoder CLI、Desktop、JetBrains 通过 `scripts/qoder_setup.mjs` 共享 session�
 
 OTel spool 新写入按 day + session 分片：ClaudeCode logs 使用 `otel_data/claude/YYYY-MM-DD/sessions/<safe-session>/logs.jsonl`，CodeAgent logs 使用 `otel_data/codeagent/YYYY-MM-DD/sessions/<safe-session>/logs.jsonl`，Hermes/通用 traces 使用 `otel_data/traces/YYYY-MM-DD/sessions/<safe-session>/traces.jsonl`。Consumer 递归发现 JSONL shard，并继续兼容旧的 `YYYY-MM-DD/logs.jsonl` / `YYYY-MM-DD/traces.jsonl` 日文件。
 
+Pi Agent 是通用 traces 之外的第一方专用路径：Extension 将事件写入
+`~/.agent-insight/otel_data/pi-agent/<api-key-hash>/YYYY-MM-DD/events.jsonl`，独立 uploader
+再通过同一 OTLP/HTTP traces endpoint 发送。服务端 `otel/adapters/pi-agent.ts` 按
+`agent.insight.kind` 恢复 Agent、SubAgent、Skill、LLM、Tool 和 MCP，随后转交统一
+`buildAgentCallTree` 与 `deriveSubagentExecutions`；Pi 的上传失败不会阻塞 Hook 事件路径。
+
 ```mermaid
 flowchart TD
     client["client plugin/uploader/OTel"] --> route["POST /api/ingest/{upload,otel/*}"]
