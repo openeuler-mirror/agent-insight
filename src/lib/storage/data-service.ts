@@ -57,6 +57,7 @@ const SUBAGENT_TREE_FRAMEWORKS = new Set([
     'codeagent',
     'claudecode',
     'llamaindex',
+    'pi-agent',
 ]);
 
 export interface InvokedSkill {
