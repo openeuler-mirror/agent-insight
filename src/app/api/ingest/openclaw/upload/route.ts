@@ -10,6 +10,12 @@ function randomHex(len: number): string {
 /**
  * Bridge endpoint for OpenClaw watcher uploads.
  * Accepts the watcher's legacy format and converts to OTel trace events.
+ *
+ * 路径必须留在 openclaw 自己的命名空间下。这个 handler 曾经挂在 /api/upload，
+ * 而 /api/upload 是老的通用上报端点、重构后由 next.config 的兼容别名指向
+ * /api/ingest/upload；真实路由优先级高于 rewrite(afterFiles)，于是别名被静默
+ * 遮蔽，opencode uploader 的整包 record（含 interactions）全被这里的转换丢掉，
+ * 只剩一条合成的 chat span。
  */
 export async function POST(request: Request) {
   try {

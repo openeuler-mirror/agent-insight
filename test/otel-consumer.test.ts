@@ -11,6 +11,15 @@ import type { ExecutionRecord } from "@/lib/storage/data-service"
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
+/** 等条件成立，最多等 timeoutMs。用来替掉"刚好够用"的定长 sleep（整套测试并发跑时会偶发落空）。 */
+async function waitFor(predicate: () => boolean, timeoutMs = 3000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (predicate()) return
+    await wait(5)
+  }
+}
+
 function makeSource(dir: string, file: string, record: ExecutionRecord): SpoolSource {
   return {
     id: "test-source",
@@ -72,7 +81,11 @@ test("OTel consumer: runs one loop, fast-saves, evaluates, and advances checkpoi
       warn: () => {},
     })
 
-    await wait(90)
+    // 断言的是"快存 + 到点判定两段都会发生"，不是"必须在 90ms 内发生"——定长 sleep 在
+    // 机器负载高时会偶发落空（跑全量测试时实测复现）。条件成立即停，仍然只允许各发生一次。
+    await waitFor(() =>
+      calls.some((call) => call.skip_evaluation === true)
+      && calls.some((call) => call.force_judgment === true))
     stopOtelSpoolConsumer()
 
     assert.equal(calls.filter((call) => call.skip_evaluation === true).length, 1)
@@ -101,6 +114,9 @@ test("OTel consumer: aggregate cooldown throttles rapid re-aggregation of active
     const callTimes: number[] = []
     const source = makeSource(dir, file, {
       task_id: "session-hot",
+      // user 必填：consumer 的 saveExecution 外面裹了 attribution guard，无归属的记录
+      // 会被直接丢弃（防跨用户串数据），夹具漏了它就永远等不到聚合。
+      user: "test-user",
       query: "hot",
       framework: "test",
       final_result: "done",
@@ -169,7 +185,8 @@ test("OTel consumer: global cooldown serializes and throttles aggregates across 
       aggregate: (sessionId) => ({
         sessionId,
         eventCount: 1,
-        record: { task_id: sessionId, query: "q", framework: "test", final_result: "done" },
+        // user 必填，理由同上（attribution guard 会丢掉无归属记录）
+        record: { task_id: sessionId, user: "test-user", query: "q", framework: "test", final_result: "done" },
       }),
       defaultSkipEvaluation: () => true,
     }

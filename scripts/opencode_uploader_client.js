@@ -1192,6 +1192,7 @@ export {
   buildMessagesForSession,
   buildSignature,
   buildState,
+  getRequestOptions,
   collectSessionSubtree,
   isRoundCompleted,
   isSignatureUnchanged,
