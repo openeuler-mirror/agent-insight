@@ -80,6 +80,10 @@ test("Pi adapter aggregates Agent, Skill, LLM, Tool, MCP, and exact leaf usage",
       model: "model-a",
       provider: "provider-a",
       usage: { input: 10, output: 6, reasoning: 2, total: 16 },
+      attributes: {
+        "pi.usage.cache_read": 3,
+        "pi.usage.cache_write": 1,
+      },
     }),
     canonical({
       eventId: "tool",
@@ -116,6 +120,9 @@ test("Pi adapter aggregates Agent, Skill, LLM, Tool, MCP, and exact leaf usage",
   assert.equal(record.input_tokens, 10)
   assert.equal(record.output_tokens, 6)
   assert.equal(record.reasoning_tokens, 2)
+  assert.equal(record.cache_read_input_tokens, 3)
+  assert.equal(record.cache_creation_input_tokens, 1)
+  assert.equal(record.max_single_call_tokens, 16)
   assert.equal(record.llm_call_count, 1)
   assert.equal(record.tool_call_count, 2)
   assert.equal(record.tool_call_error_count, 1)

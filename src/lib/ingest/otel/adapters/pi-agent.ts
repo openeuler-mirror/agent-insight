@@ -336,11 +336,27 @@ export function aggregatePiAgentTraceEvents(
   const inputTokens = llmEvents.reduce((sum, event) => sum + (event.usage.input_tokens || 0), 0);
   const outputTokens = llmEvents.reduce((sum, event) => sum + (event.usage.output_tokens || 0), 0);
   const reasoningTokens = llmEvents.reduce((sum, event) => sum + (event.usage.reasoning_tokens || 0), 0);
+  const cacheReadInputTokens = llmEvents.reduce(
+    (sum, event) => sum + (Number(attrs(event)['pi.usage.cache_read']) || 0),
+    0,
+  );
+  const cacheCreationInputTokens = llmEvents.reduce(
+    (sum, event) => sum + (Number(attrs(event)['pi.usage.cache_write']) || 0),
+    0,
+  );
   const tokens = llmEvents.reduce((sum, event) => sum + (
     event.usage.total_tokens ||
     event.usage.input_tokens +
     event.usage.output_tokens
   ), 0);
+  const maxSingleCallTokens = Math.max(
+    0,
+    ...llmEvents.map((event) => (
+      event.usage.total_tokens ||
+      event.usage.input_tokens +
+      event.usage.output_tokens
+    )),
+  );
   const model = llmEvents.map(eventModel).find(Boolean) || agentEvents.map(eventModel).find(Boolean) || 'unknown';
 
   return {
@@ -371,6 +387,9 @@ export function aggregatePiAgentTraceEvents(
     input_tokens: inputTokens,
     output_tokens: outputTokens,
     reasoning_tokens: reasoningTokens || undefined,
+    cache_read_input_tokens: cacheReadInputTokens || undefined,
+    cache_creation_input_tokens: cacheCreationInputTokens || undefined,
+    max_single_call_tokens: maxSingleCallTokens || undefined,
   };
 }
 
