@@ -2111,12 +2111,23 @@ function buildInputMessagesForLlmIndex(node: AgentNode, interactions: RawInterac
     };
 }
 
+/** Same tool calls on both turns? An opencode tool-use turn carries empty
+ *  `content`, so on role+content alone every one of them looks alike — the
+ *  name+args pairs are what actually tell two of them apart. */
+function samePromptToolCalls(a: PromptSnapshotMessage, b: PromptSnapshotMessage): boolean {
+    const x = a.toolCalls || [];
+    const y = b.toolCalls || [];
+    if (x.length !== y.length) return false;
+    return x.every((t, i) => t.name === y[i].name && t.args === y[i].args);
+}
+
 function countRepeatedPromptPrefix(prev: PromptSnapshotMessage[], current: PromptSnapshotMessage[]): number {
     let count = 0;
     const max = Math.min(prev.length, current.length);
     while (count < max) {
         if (prev[count].role !== current[count].role) break;
         if ((prev[count].content || '').trim() !== (current[count].content || '').trim()) break;
+        if (!samePromptToolCalls(prev[count], current[count])) break;
         count++;
     }
     return count;
@@ -2129,8 +2140,14 @@ function buildLlmPromptSnapshot(event: AgentEvent, node: AgentNode, interactions
         .filter(ev => ev.kind === 'llm' && ev.interactionIndex < eventIdx)
         .sort((a, b) => a.interactionIndex - b.interactionIndex);
     const prevEvent = previousLlmEvents[previousLlmEvents.length - 1];
+    // The previous call's OUTPUT is part of this call's input, so it belongs to
+    // History — not "本轮新增". Moving the cutoff one interaction further (`+ 1`)
+    // folds that turn into the compared prefix. Only valid for a pure-text reply:
+    // a tool-use turn's interaction also carries the tool result, which genuinely
+    // IS new input this call, so that one has to stay in Current input.
+    const prevReplyIsPureOutput = !!prevEvent && (prevEvent.interaction.tool_calls?.length ?? 0) === 0;
     const prevMessages = prevEvent
-        ? buildInputMessagesForLlmIndex(node, interactions, prevEvent.interactionIndex).inputMessages
+        ? buildInputMessagesForLlmIndex(node, interactions, prevEvent.interactionIndex + (prevReplyIsPureOutput ? 1 : 0)).inputMessages
         : [];
 
     return {
@@ -2535,6 +2552,19 @@ function HierarchicalSpanSnapshot({
     // re-receives every call), so History = system prompt(s) + prior turns.
     const historyAndSystem = [...systemMessages, ...historyMessages];
     const inputCount = historyAndSystem.length + currentInput.length;
+    // History can be thin (or absent) for two very different reasons, and saying
+    // which one it is beats a block that silently shrinks: either this is the
+    // node's first call (nothing came before), or the prefix failed to line up
+    // with the previous call so the prior turns spilled into Current input.
+    const isFirstCall = snapshot.llmOrdinal === 1;
+    const historySubtitle = historyMessages.length
+        ? (systemMessages.length ? 'system + 历史上下文 · 已折叠' : '历史上下文 · 已折叠')
+        : isFirstCall
+            ? '仅 system prompt · 本轮为首次调用，无历史上下文'
+            : '仅 system prompt · 未能与上次调用对齐，历史已并入 Current input';
+    const emptyHistoryHint = isFirstCall
+        ? '本轮为首次调用，无历史上下文；该 agent 的 system prompt 也未上报'
+        : '未采集到 system prompt，且未能与上次调用对齐 —— 历史已并入 Current input';
     const spanId = `llm_call_${snapshot.llmOrdinal}`;
     const threadId = node.sessionId || 'TOP';
 
@@ -2575,14 +2605,18 @@ function HierarchicalSpanSnapshot({
 
             {/* INPUT — two collapsible groups: History (system + prior turns) and Current input */}
             <SnapshotSection label="Input" count={inputCount} defaultOpen>
-                {historyAndSystem.length > 0 && (
+                {historyAndSystem.length > 0 ? (
                     <FoldedMessagesBlock
                         messages={historyAndSystem}
                         label="History"
-                        subtitle="system + 历史上下文 · 已折叠"
+                        subtitle={historySubtitle}
                         modalTitle={`${title} — history`}
                     />
-                )}
+                ) : currentInput.length > 0 ? (
+                    <div className="border-t border-border first:border-t-0 px-3 py-2 text-xs text-foreground-muted">
+                        {emptyHistoryHint}
+                    </div>
+                ) : null}
                 {currentInput.length > 0 ? (
                     <FoldedMessagesBlock
                         messages={currentInput}
@@ -2594,7 +2628,7 @@ function HierarchicalSpanSnapshot({
                 ) : (
                     <div className="border-t border-border first:border-t-0 px-3 py-2 text-xs text-foreground-muted">
                         {historyAndSystem.length
-                            ? '本轮无新增输入（上下文与上次相同）'
+                            ? '本轮无新增外部输入 —— 没有新的用户消息或工具结果，上一轮的模型回复已归入 History'
                             : 'No input messages captured for this span.'}
                     </div>
                 )}
