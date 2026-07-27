@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* eslint-disable @typescript-eslint/no-require-imports */
 "use strict";
 
 const { selfCheck } = require("../lib/pi-trace-core.cjs");
