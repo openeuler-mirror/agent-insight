@@ -39,45 +39,45 @@
 
 ## 3. 逐条 AC 验收矩阵
 
-| AC | 实现位置 | 自动测试 | 真实运行证据 | 初始状态 |
+| AC | 实现位置 | 自动测试 | 真实运行证据 | 当前状态（2026-07-27） |
 |---|---|---|---|---|
-| AC1 | Pi package + setup installer | package manifest/installer test | `pi list`、启动加载日志、首个 span | 待实现 |
-| AC2 | local package 手工安装流程 | manual config validation test | `pi install <path>` 后真实会话 | 待实现 |
-| AC3 | transport spool initializer | directory/permission test | `~/.agent-insight/otel_data/pi-agent/` 树 | 待实现 |
-| AC4 | API Key SHA-256 namespace | two-key isolation test | 两个 key 独立目录/checkpoint | 待实现 |
-| AC5 | Agent state + Adapter | Agent golden test | 一次真实 Pi 会话 ExecutionRecord | 待实现 |
-| AC6 | SubAgent result parser | single child fixture | 父/子 traceId 展示 | 待实现 |
-| AC7 | recursive `details.results` | three-level fixture | A->B->C 真实/夹具报告 | 待实现 |
-| AC8 | result index stable IDs | five-parallel fixture | 五子树同父且互不串联 | 待实现 |
-| AC9 | Skill state machine | explicit/automatic fixture | 两种 Skill 触发报告 | 待实现 |
-| AC10 | active Skill parentSpanId | Skill nested Tool/LLM test | Skill 子节点树 | 待实现 |
-| AC11 | Tool classifier | shell/file/MCP/search fixture | 标准任务五类 Tool | 待实现 |
-| AC12 | Tool start/end pairing | success/error/exit fixture | 参数、耗时、exit/error 样本 | 待实现 |
-| AC13 | Tool owner resolver | parentSpan golden test | Agent-Tool 树 | 待实现 |
-| AC14 | recursive redactor | credential corpus test | 去敏 spool 抽检 | 待实现 |
-| AC15 | assistant message LLM span | multi-provider fixture | 真实 LLM span | 待实现 |
-| AC16 | Pi native usage mapping | exact usage test | 与 Pi usage 输出对照 | 待实现 |
-| AC17 | `model_select` handling | model switch test | 两模型真实会话 | 待实现 |
-| AC18 | Unicode truncator | >2000 code point test | 超长 prompt/response 样本 | 待实现 |
-| AC19 | MCP naming/metadata parser | MCP success fixture | MCP fixture extension 调用 | 待实现 |
-| AC20 | MCP error mapping | MCP failure fixture | error span | 待实现 |
-| AC21 | timer + settled flush | fake timer/upload test | 会话结束 3 秒内请求 | 待实现 |
-| AC22 | shutdown bounded flush | shutdown test | 退出前 checkpoint/spool 对照 | 待实现 |
-| AC23 | checkpoint + stable event ID | disconnect/replay test | 断网恢复且服务端无重复 | 待实现 |
-| AC24 | exponential backoff | fake clock four-failure test | 500 注入重试时间线 | 待实现 |
-| AC25 | lazy extension startup | startup benchmark harness | 20 次 baseline/installed median/P95 | 待 openEuler |
-| AC26 | no remote wait in prompt path | handler timing test | 30 次 TTFT 对照 | 待 openEuler |
-| AC27 | bounded buffers/timers | queue bound test | idle/active RSS 增量 | 待 openEuler |
-| AC28 | async I/O + cleanup | timer/lock leak test | 8 小时 soak 曲线 | 待 openEuler |
-| AC29 | `pi remove` integration | settings removal test | 卸载后无新事件 | 待实现 |
-| AC30 | purge-scoped cleanup | uninstall path safety test | 当前 key 目录与配置清理 | 待实现 |
-| AC31 | framework path allowlist | negative path test | 其他 collector checksum 不变 | 待实现 |
-| AC32 | reinstall idempotency | install/remove/install test | 重装后新会话上报 | 待实现 |
-| AC33 | canonical six-kind batch | standardized fixture test | 标准任务完整报告 | 待实现 |
-| AC34 | explicit parent graph validator | cycle/orphan validator test | 全图 0 orphan/0 cycle | 待实现 |
-| AC35 | leaf LLM token sum | exact token golden test | 与 Pi 内置 usage 误差计算 | 待 openEuler |
-| AC36 | deterministic structure projection | three-run snapshot test | 相同任务三次结构 diff | 待实现 |
-| AC37 | Pi Adapter | ExecutionRecord golden test | 服务端入库结果 | 待实现 |
+| AC1 | Pi package + setup installer | package manifest/installer test | `pi list`、启动加载日志、首个 span | Windows 安装/list/load通过；首个真实 span 待 openEuler/模型 |
+| AC2 | local package 手工安装流程 | manual config validation test | `pi install <path>` 后真实会话 | Pi 0.82.1 本地安装通过；真实推理会话待验证 |
+| AC3 | transport spool initializer | directory/permission test | `~/.agent-insight/otel_data/pi-agent/` 树 | 路径/权限逻辑自动测试通过；真实 spool 树待 openEuler |
+| AC4 | API Key SHA-256 namespace | two-key isolation test | 两个 key 独立目录/checkpoint | 双 key 隔离自动测试通过；真实双 key 目录待验证 |
+| AC5 | Agent state + Adapter | Agent golden test | 一次真实 Pi 会话 ExecutionRecord | collector/Adapter golden通过；真实入库待验证 |
+| AC6 | SubAgent result parser | single child fixture | 父/子 traceId 展示 | 单子 Agent 夹具通过；真实链路待验证 |
+| AC7 | recursive `details.results` | three-level fixture | A->B->C 真实/夹具报告 | 三层夹具通过；真实 A->B->C 待验证 |
+| AC8 | result index stable IDs | five-parallel fixture | 五子树同父且互不串联 | 五并发夹具通过；真实并发待验证 |
+| AC9 | Skill state machine | explicit/automatic fixture | 两种 Skill 触发报告 | 显式/自动 Skill 夹具通过；真实触发待验证 |
+| AC10 | active Skill parentSpanId | Skill nested Tool/LLM test | Skill 子节点树 | Skill 子树自动测试通过；真实树待验证 |
+| AC11 | Tool classifier | shell/file/MCP/search fixture | 标准任务五类 Tool | 分类夹具通过；真实五类 Tool 待验证 |
+| AC12 | Tool start/end pairing | success/error/exit fixture | 参数、耗时、exit/error 样本 | 成败/exit 夹具通过；真实样本待验证 |
+| AC13 | Tool owner resolver | parentSpan golden test | Agent-Tool 树 | parentSpan golden通过；真实树待验证 |
+| AC14 | recursive redactor | credential corpus test | 去敏 spool 抽检 | 递归脱敏自动测试通过；真实 spool 抽检待验证 |
+| AC15 | assistant message LLM span | multi-provider fixture | 真实 LLM span | LLM span 夹具通过；真实模型待验证 |
+| AC16 | Pi native usage mapping | exact usage test | 与 Pi usage 输出对照 | exact usage 夹具通过；真实 usage 对照待验证 |
+| AC17 | `model_select` handling | model switch test | 两模型真实会话 | 模型切换自动测试通过；两模型实测待验证 |
+| AC18 | Unicode truncator | >2000 code point test | 超长 prompt/response 样本 | Unicode code-point 截断通过；真实超长样本待验证 |
+| AC19 | MCP naming/metadata parser | MCP success fixture | MCP fixture extension 调用 | MCP 成功映射夹具通过；真实扩展调用待验证 |
+| AC20 | MCP error mapping | MCP failure fixture | error span | MCP 错误夹具通过；真实错误 span 待验证 |
+| AC21 | timer + settled flush | fake timer/upload test | 会话结束 3 秒内请求 | timer/settled flush 自动测试通过；真实 <3 秒待验证 |
+| AC22 | shutdown bounded flush | shutdown test | 退出前 checkpoint/spool 对照 | bounded shutdown 路径通过；真实退出对照待验证 |
+| AC23 | checkpoint + stable event ID | disconnect/replay test | 断网恢复且服务端无重复 | checkpoint/500恢复自动测试通过；真实断网待验证 |
+| AC24 | exponential backoff | fake clock four-failure test | 500 注入重试时间线 | 退避上限/确定性自动测试通过；真实时间线待验证 |
+| AC25 | lazy extension startup | startup benchmark harness | 20 次 baseline/installed median/P95 | Windows 20次 median 985.57/987.43 ms；正式 openEuler 待验证 |
+| AC26 | no remote wait in prompt path | handler timing test | 30 次 TTFT 对照 | prompt路径无远程等待；30次真实 TTFT 待 openEuler/模型 |
+| AC27 | bounded buffers/timers | queue bound test | idle/active RSS 增量 | bounded batch/lock自动测试通过；RSS 待 openEuler |
+| AC28 | async I/O + cleanup | timer/lock leak test | 8 小时 soak 曲线 | soak harness 已实现；8小时实跑待 openEuler |
+| AC29 | `pi remove` integration | settings removal test | 卸载后无新事件 | Pi remove通过；卸载后真实事件检查待模型 |
+| AC30 | purge-scoped cleanup | uninstall path safety test | 当前 key 目录与配置清理 | managed-path/purge范围自动测试通过；真实 purge 待验证 |
+| AC31 | framework path allowlist | negative path test | 其他 collector checksum 不变 | allowlist/源码路径拒绝通过；其他 collector 实测待验证 |
+| AC32 | reinstall idempotency | install/remove/install test | 重装后新会话上报 | Pi remove/reinstall通过且仅一条包记录；新会话待模型 |
+| AC33 | canonical six-kind batch | standardized fixture test | 标准任务完整报告 | Agent/SubAgent/Skill/LLM/Tool/MCP夹具通过；真实报告待验证 |
+| AC34 | explicit parent graph validator | cycle/orphan validator test | 全图 0 orphan/0 cycle | 三层/五兄弟夹具0 orphan/0 cycle；真实图待验证 |
+| AC35 | leaf LLM token sum | exact token golden test | 与 Pi 内置 usage 误差计算 | exact leaf usage夹具通过；真实误差计算待 openEuler |
+| AC36 | deterministic structure projection | three-run snapshot test | 相同任务三次结构 diff | deterministic fixture通过；三次真实任务待验证 |
+| AC37 | Pi Adapter | ExecutionRecord golden test | 服务端入库结果 | Adapter golden通过；真实服务端入库待验证 |
 
 ## 4. 关键测试场景
 
