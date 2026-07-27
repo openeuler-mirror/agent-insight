@@ -44,7 +44,7 @@
 | AC1 | Pi package + setup installer | package manifest/installer test | `pi list`、启动加载日志、首个 span | openEuler 安装/list/load/self-check通过；首个模型 span 待 provider |
 | AC2 | local package 手工安装流程 | manual config validation test | `pi install <path>` 后真实会话 | openEuler Pi 0.82.1 本地安装通过；公开 Extension-core 夹具会话已入库 |
 | AC3 | transport spool initializer | directory/permission test | `~/.agent-insight/otel_data/pi-agent/` 树 | openEuler 真实 spool/checkpoint 已用于主会话、恢复和重装 |
-| AC4 | API Key SHA-256 namespace | two-key isolation test | 两个 key 独立目录/checkpoint | 双 key 隔离自动测试通过；真实双 key 目录待验证 |
+| AC4 | API Key SHA-256 namespace | two-key isolation test | 两个 key 独立目录/checkpoint | openEuler managed layout 写入两个独立 namespace；scoped purge 后另一 key spool 哈希不变 |
 | AC5 | Agent state + Adapter | Agent golden test | 一次真实 Pi 会话 ExecutionRecord | 公开 Extension-core 夹具 root + 8 child 已在真实服务端入库 |
 | AC6 | SubAgent result parser | single child fixture | 父/子 traceId 展示 | 单子 Agent 自动测试通过；openEuler 夹具子树已持久化 |
 | AC7 | recursive `details.results` | three-level fixture | A->B->C 真实/夹具报告 | openEuler 公开接口夹具已持久化三层 A->B->C |
@@ -69,9 +69,9 @@
 | AC26 | no remote wait in prompt path | handler timing test | 30 次 TTFT 对照 | prompt路径无远程等待；30次真实 TTFT 待 openEuler/模型 |
 | AC27 | bounded buffers/timers | queue bound test | idle/active RSS 增量 | bounded batch/lock通过；openEuler RPC RSS 点样 164600 KB，非扩展增量 |
 | AC28 | async I/O + cleanup | timer/lock leak test | 8 小时 soak 曲线 | soak harness 已实现；8小时实跑待验证 |
-| AC29 | `pi remove` integration | settings removal test | 卸载后无新事件 | openEuler `pi remove` 通过；无模型条件下卸载后事件检查受限 |
-| AC30 | purge-scoped cleanup | uninstall path safety test | 当前 key 目录与配置清理 | managed-path/purge范围自动测试通过；真实 purge 待验证 |
-| AC31 | framework path allowlist | negative path test | 其他 collector checksum 不变 | openEuler 卸载前后 Codex sentinel hash 不变 |
+| AC29 | `pi remove` integration | settings removal test | 卸载后无新事件 | openEuler managed `--purge` 后 `pi list` 无 package；无模型条件下卸载后事件检查受限 |
+| AC30 | purge-scoped cleanup | uninstall path safety test | 当前 key 目录与配置清理 | openEuler managed `uninstall.cjs --purge` 删除当前 key namespace，保留另一 key namespace |
+| AC31 | framework path allowlist | negative path test | 其他 collector checksum 不变 | scoped purge 前后另一 key spool 与 Codex sentinel SHA-256 均不变 |
 | AC32 | reinstall idempotency | install/remove/install test | 重装后新会话上报 | openEuler 重装 self-check 通过并新增持久化 session |
 | AC33 | canonical six-kind batch | standardized fixture test | 标准任务完整报告 | openEuler 公开接口夹具六类 Trace 已在服务端持久化 |
 | AC34 | explicit parent graph validator | cycle/orphan validator test | 全图 0 orphan/0 cycle | 三层/五兄弟自动图校验通过；openEuler 持久化 root + 8 child |
