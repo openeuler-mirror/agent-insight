@@ -1,0 +1,24 @@
+{
+  "name": "@agent-insight/pi-agent-trace-collector",
+  "version": "0.1.0",
+  "description": "First-party Pi Agent trace collector for Agent Insight",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "agent-insight",
+    "opentelemetry"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/pi-agent-insight.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.82.1 <0.83.0"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    }
+  }
+}
