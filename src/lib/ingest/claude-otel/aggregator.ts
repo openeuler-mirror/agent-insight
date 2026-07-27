@@ -514,6 +514,12 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
   const emittedSystemScopes = new Set<string>();
 
   const pendingRequestsByPrompt = new Map<string, ClaudeOtelEvent[]>();
+  // assistant_response 兜底路径(见下方主循环)要用同一批 api_request 取 usage/时间。
+  // 单独一份队列各自消耗,免得两条路径互相打乱配对顺序。
+  const fallbackRequestsByPrompt = new Map<string, ClaudeOtelEvent[]>();
+  // 每个 prompt 下"正文真的读到了"的 api_response_body 条数,决定兜底要不要出手。
+  const usableResponseCountByPrompt = new Map<string, number>();
+  const assistantResponseSeenByPrompt = new Map<string, number>();
   for (const event of ordered) {
     if (event.eventName === 'api_request_body') {
       const body = readBodyPayload(event.attributes || {});
@@ -529,12 +535,16 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
       const queue = pendingRequestsByPrompt.get(key) || [];
       queue.push(event);
       pendingRequestsByPrompt.set(key, queue);
+      const fallbackQueue = fallbackRequestsByPrompt.get(key) || [];
+      fallbackQueue.push(event);
+      fallbackRequestsByPrompt.set(key, fallbackQueue);
       continue;
     }
     if (event.eventName !== 'api_response_body') continue;
     const body = readBodyPayload(event.attributes || {});
     if (!body) continue;
     const key = promptKey(event);
+    usableResponseCountByPrompt.set(key, (usableResponseCountByPrompt.get(key) || 0) + 1);
     const request = pendingRequestsByPrompt.get(key)?.shift();
     const content = contentBlocksFromResponseBody(body);
     responseMetaByKey.set(eventKey(event), { request, body, content });
@@ -626,6 +636,40 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
       continue;
     }
 
+    // assistant_response 自带完整回复正文(attributes.response),和 api_response_body
+    // 是同一次 LLM 调用的两份记录。api_response_body 的正文走 body_ref 指向【客户端
+    // 本机磁盘】,服务端与客户端不同机时(远端部署 / 容器 / 不同用户)永远读不到 ——
+    // 那条路径会 return 掉整条助手消息,trace 只剩 user、`trace_completed_at` 永远推不出来,
+    // 前端就一直显示"执行中"。所以这里在"本 prompt 没有可用 api_response_body"时兜底,
+    // 保证回复正文与可收敛的完成状态不依赖跨机文件。
+    // 局限(受事件本身所限,非本兜底可解):不含 tool_use 块,故拿不到 subagent 层级;
+    // 系统提示词只存在于 api_request_body 的正文里,同样缺失。
+    if (event.eventName === 'assistant_response') {
+      const key = promptKey(event);
+      const seen = assistantResponseSeenByPrompt.get(key) || 0;
+      assistantResponseSeenByPrompt.set(key, seen + 1);
+      // 队列按 assistant_response 的出现顺序对齐消耗,跳过时也要 shift,否则混合场景错配
+      const requestEvent = fallbackRequestsByPrompt.get(key)?.shift();
+      // 生成会话标题是 Claude Code 的内部 LLM 调用,不是对话内容
+      if (attrs.query_source === 'generate_session_title') continue;
+      if (seen < (usableResponseCountByPrompt.get(key) || 0)) continue;
+      const text = asString(attrs.response);
+      if (!text.trim()) continue;
+      finalResult = text;
+      if (attrs.model) model = String(attrs.model);
+      interactions.push({
+        role: 'assistant',
+        content: text,
+        timestamp: eventTime(event),
+        timeInfo: interactionTimeInfo(requestEvent, event),
+        agent: ROOT_AGENT_NAME,
+        prompt_id: event.promptId,
+        model: attrs.model,
+        usage: normalizeUsage(undefined, requestEvent?.attributes || {}),
+      });
+      continue;
+    }
+
     if (event.eventName === 'tool_result') {
       toolCallCount += 1;
       if (String(attrs.success) === 'false') toolCallErrorCount += 1;
@@ -636,7 +680,15 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
         : undefined;
       const toolCall = buildToolCallFromResult(event, toolUse, readToolResultOutput(event, fallbackOutput));
       let target = interactions.find((m) => Array.isArray(m.tool_calls) && m.tool_calls.some((tc: any) => tc.id === toolCall.id));
-      if (!target && !toolCall.id) target = [...interactions].reverse().find((m) => m.role === 'assistant');
+      // 读不到 api_response_body 的正文就拿不到 tool_use 块,tool_use_id 永远匹配不上,
+      // 工具调用会全部滞留在 pendingToolResultById 里被丢掉(trace 只有对话没有工具)。
+      // 这种情况按时间就近挂到当前最后一条助手消息 —— 主循环按事件时间推进,那条正是
+      // 发起本次调用的一轮。正文可读的正常路径不能这么挂:那边 tool_result 先到、
+      // assistant 后产出,提前挂会挂到上一轮,所以仍走 pending 等合并。
+      const responseBodyUsable = (usableResponseCountByPrompt.get(promptKey(event)) || 0) > 0;
+      if (!target && (!toolCall.id || !responseBodyUsable)) {
+        target = [...interactions].reverse().find((m) => m.role === 'assistant');
+      }
       if (target) {
         mergeToolCallIntoInteraction(target, toolCall);
       } else if (toolCall.id) {
