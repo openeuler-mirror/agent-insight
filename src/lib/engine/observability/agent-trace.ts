@@ -804,6 +804,23 @@ export function totalNodeCount(root: AgentNode): number {
     return count;
 }
 
+/**
+ * 时间线/详情标题只放得下一行，取正文的**第一条非空行**。
+ *
+ * 不能直接 `split('\n')[0]`：推理模型在 thinking 结束后普遍先吐 `\n\n` 再出正文
+ * （实测 Qwen3.5 的 text part 就是 `"\n\n你好！…"`），首行是空串，而 summary 整体
+ * 非空、走不到调用方的兜底文案 —— 界面上就是「LLM 图标后面什么都没有」，右侧详情
+ * 却有完整的 think 和 response。
+ */
+export function firstMeaningfulLine(text?: string, maxChars = 60): string {
+    if (!text) return '';
+    for (const line of text.split('\n')) {
+        const trimmed = line.trim();
+        if (trimmed) return trimmed.slice(0, maxChars);
+    }
+    return '';
+}
+
 /** Format milliseconds as "1h 1m 46s" / "1m 46s" / "1.2s" / "350ms" */
 export function formatDuration(ms?: number): string {
     if (ms == null || !Number.isFinite(ms)) return '-';
