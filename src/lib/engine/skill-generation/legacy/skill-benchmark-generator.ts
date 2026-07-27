@@ -154,6 +154,7 @@ async function createConfiguredClient(user: string): Promise<{ client: OpenAI; m
     client: new OpenAI({
       apiKey: settings.apiKey || 'no-api-key-required',
       baseURL: settings.baseUrl || 'https://api.deepseek.com',
+      defaultHeaders: settings.headers,
       fetch: customFetch,
     }),
     model: settings.model || 'deepseek-chat',

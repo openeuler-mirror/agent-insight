@@ -15,7 +15,7 @@ export async function POST(request: Request) {
         const { settings, user } = await request.json();
         if (!user) return NextResponse.json({ error: 'User is required' }, { status: 400 });
         await saveUserSettings(user, settings);
-        return NextResponse.json(settings);
+        return NextResponse.json(maskUserSettings(await getUserSettings(user)));
     } catch (e: any) {
         return NextResponse.json({ error: e.message }, { status: 500 });
     }

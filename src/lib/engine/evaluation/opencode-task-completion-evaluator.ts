@@ -308,6 +308,7 @@ function makeDirectModel(config: ModelConfig) {
         model: config.model || 'deepseek-chat',
         configuration: {
             baseURL: config.baseUrl || 'https://api.deepseek.com',
+            defaultHeaders: config.headers,
         },
         temperature: 0,
         topP: 1,
@@ -448,6 +449,7 @@ export async function evaluateTaskCompletionViaOpencode(
             modelID,
             apiKey: activeModel?.apiKey || config.apiKey,
             baseURL: activeModel?.baseURL || config.baseUrl,
+            headers: activeModel?.headers || config.headers,
         },
         modelOptions: {
             temperature: 0,

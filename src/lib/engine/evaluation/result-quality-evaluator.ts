@@ -164,6 +164,7 @@ async function createClient(user?: string | null): Promise<{ client: OpenAI; mod
     client: new OpenAI({
       apiKey: config.apiKey || 'no-api-key-required',
       baseURL: String(config.baseUrl || 'https://api.deepseek.com').replace(/\/chat\/completions\/?$/, ''),
+      defaultHeaders: config.headers,
       fetch: customFetch,
       timeout: Number(process.env.RESULT_QUALITY_TIMEOUT_MS || process.env.JUDGMENT_TIMEOUT_MS || 300000),
     }),

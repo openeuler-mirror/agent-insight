@@ -81,6 +81,7 @@
 ### `getActiveConfig(user?): Promise<ModelConfig | null>`  {#get-active-config}
 ### `getUserSettings(user?): Promise<UserSettings>` · `saveUserSettings(user, settings): Promise<void>`
 - **Location**: `src/lib/storage/server-config.ts` —— 按用户维度的模型注册表与设置。
+- **Model connection contract**: `ModelConfig.headers?: Record<string, string>` 仅对 `provider=custom`（含 Local AI 与 Custom OpenAI Compatible）开放；这类配置以 `baseUrl + model` 判定连接完整，`apiKey` 与 `headers` 均可选。服务端持久化前校验请求头，返回浏览器时掩码所有 Header 值，实际 OpenAI-compatible 调用通过 `defaultHeaders` 透传。
 
 ## Persistent data model (Prisma — `prisma/schema.prisma`)
 默认使用 SQLite（`data/witty_insight.db`）；可通过 `DatabaseAdapter` 切换。字符串化的 JSON 列很常见（见下方标注）。

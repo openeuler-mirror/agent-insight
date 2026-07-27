@@ -30,6 +30,7 @@ import {
   normalizeProviderID,
 } from '@/lib/engine/general-agent/server-model-config';
 import { getUserSettings } from '@/lib/storage/server-config';
+import { isModelConnectionReady } from '@/lib/shared/model-connection';
 import { prismaRaw } from '@/lib/storage/prisma';
 import { tagOpencodeSession } from '@/lib/internal-agent-tag';
 import { getSystemAgentId } from '@/lib/system-agents';
@@ -217,7 +218,7 @@ async function evalOne(
   args: {
     query: string;
     targetSkillName: string;
-    modelConfig: { providerID: string; modelID: string; apiKey: string; baseURL?: string };
+    modelConfig: { providerID: string; modelID: string; apiKey?: string; baseURL?: string; headers?: Record<string, string> };
     workspaceRoot: string;
     timeoutMs: number;
     sessionTitle: string;
@@ -284,6 +285,7 @@ async function evalOne(
           modelID: args.modelConfig.modelID,
           apiKey: args.modelConfig.apiKey,
           baseURL: args.modelConfig.baseURL,
+          headers: args.modelConfig.headers,
         },
         directory: args.workspaceRoot,
         // permission 已在上面 createSession 时传过；这里**不要**再传，会被 opencode 忽略
@@ -452,15 +454,16 @@ async function resolveOpencodeModelForUser(
 ): Promise<{
   providerID: string;
   modelID: string;
-  apiKey: string;
+  apiKey?: string;
   baseURL?: string;
+  headers?: Record<string, string>;
   source: 'explicit' | 'active' | 'env';
 }> {
   // Step 1: 显式 id
   if (modelConfigId) {
     const settings = await getUserSettings(user);
     const cfg = settings.configs.find(c => c.id === modelConfigId);
-    if (cfg && cfg.apiKey) {
+    if (cfg && isModelConnectionReady(cfg)) {
       const explicitProvider = (cfg as { provider?: string }).provider;
       const providerID = normalizeProviderID(
         explicitProvider || inferProviderFromBaseUrl(cfg.baseUrl),
@@ -470,6 +473,7 @@ async function resolveOpencodeModelForUser(
         modelID: cfg.model || 'deepseek-chat',
         apiKey: cfg.apiKey,
         baseURL: cfg.baseUrl,
+        headers: cfg.headers,
         source: 'explicit',
       };
     }
@@ -481,12 +485,13 @@ async function resolveOpencodeModelForUser(
 
   // Step 2: active config
   const active = await loadServerModelForUser(user);
-  if (active && active.apiKey) {
+  if (active) {
     return {
       providerID: active.providerID,
       modelID: active.modelID,
       apiKey: active.apiKey,
       baseURL: active.baseURL,
+      headers: active.headers,
       source: 'active',
     };
   }
