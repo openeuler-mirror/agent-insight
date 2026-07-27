@@ -8,7 +8,11 @@ Date: 2026-07-27
 - Node.js: 22.23.1
 - npm: 10.9.8
 - Pi Agent: 0.82.1
-- Source HEAD under test: `87c99c9afebfe6a51d965413fc9c71e5775d442a`
+- Initial openEuler E2E source HEAD:
+  `87c99c9afebfe6a51d965413fc9c71e5775d442a`
+- Post-rebase verification HEAD:
+  `e7841ce0cbe5978d6c1e00fc37f4dfed1513b1ec`
+- Upstream `master`: `ea206c9fd442600238f9c1e26cd7e5611b672ea6`
 
 The upstream lockfile was not installable as-is: it resolved
 `protobufjs@8.0.1` where the package graph requires `7.6.5`. Validation used an
@@ -44,19 +48,25 @@ node --import tsx --test \
 | `git diff --check` | passed |
 | Shared transport equality with issue #159 branch | passed; SHA-256 `8EB1D524F09D7CB42C00511813E2341860661BBDC298A3FB9D9F47FC5E41F868` |
 
+After upstream `master` advanced, the branch was rebased and the shared OTel
+adapter-order assertion was resolved by preserving upstream `openclaw` before
+`pi-agent`. The targeted 48-test selection, added-file ESLint, CommonJS syntax,
+`git diff --check`, Prisma initialization, and production build were rerun at
+the post-rebase verification HEAD and passed.
+
 ## Repository-wide test
 
 A fresh SQLite database and isolated HOME were used:
 
 | Command | Result |
 | --- | --- |
-| `npm test` | 689 tests: 673 passed, 15 failed, 1 skipped |
+| `npm test` | 699 tests: 689 passed, 9 failed, 1 skipped |
 
-The 15 failures are shared with the Codex branch and are outside the Pi target
-selection. They cover existing setup-wrapper assertions, experiment-engine and
-experiment API database initialization, trace lifecycle assertions, and OTel
-consumer cooldown timing. The Pi target suites, target lint, and production
-build are clean.
+The 9 failures are shared with the Codex branch and are outside the Pi target
+selection. They are the existing experiment-engine suite and experiment API
+tests, which pin a repository-local database path that was not initialized by
+the isolated `DATABASE_URL`. The Pi target suites, added-file lint, syntax
+checks, and production build are clean.
 
 ## Runtime evidence
 
