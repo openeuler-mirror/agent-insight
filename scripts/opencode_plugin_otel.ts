@@ -121,6 +121,42 @@ function loadSkillInsightEnv(): Record<string, string | undefined> {
   return env
 }
 
+/**
+ * .env 里写了、却被进程环境里的同名变量压住的键（值不同才算）。
+ *
+ * 上面那句 `if (env[k] === undefined)` 是「环境变量优先」——保留它是为了让一次性覆盖
+ * （`AGENT_INSIGHT_HOST=... opencode`）继续可用。代价是重跑 setup 把 .env 指向新平台后，
+ * 旧终端里残留的 export 会让上报**继续发往老地址**，而且此前全程无任何提示：日志里的
+ * host 与 .env 明明不一致也没人吭声，只能靠翻日志倒推。这里把它显式喊出来。
+ */
+export function findShadowedEnvKeys(): Array<{ key: string; fromFile: string; actual: string }> {
+  const out: Array<{ key: string; fromFile: string; actual: string }> = []
+  try {
+    for (const file of getInsightEnvCandidates()) {
+      if (!fs.existsSync(file)) continue
+      const parsed = parseDotEnvText(fs.readFileSync(file, "utf8"))
+      for (const [k, v] of Object.entries(parsed)) {
+        const actual = process.env[k]
+        if (actual === undefined || actual === v) continue
+        if (out.some((x) => x.key === k)) continue
+        out.push({ key: k, fromFile: v, actual })
+      }
+    }
+  } catch {}
+  return out
+}
+
+/** 拼成一行日志。含 KEY/TOKEN/SECRET 的键只报键名，不打值。 */
+export function describeShadowedEnv(entries: Array<{ key: string; fromFile: string; actual: string }>): string {
+  return entries
+    .map(({ key, fromFile, actual }) =>
+      /KEY|TOKEN|SECRET|PASSWORD/i.test(key)
+        ? `${key}(值不同,已隐藏)`
+        : `${key}(.env=${fromFile} 实际=${actual})`,
+    )
+    .join(" ")
+}
+
 function asBool(v: any): boolean {
   const s = String(v ?? "").toLowerCase().trim()
   return s === "1" || s === "true" || s === "yes" || s === "on"
@@ -312,6 +348,15 @@ export default async function WittySkillInsightOtelPlugin() {
     pluginLogPath,
     `plugin.init enabled=${enabled} spoolDir=${spoolDir} uploaderPath=${uploaderPath} runtime=${runtime.cmd} argsPrefix=${runtime.argsPrefix.join(" ")} host=${env.AGENT_INSIGHT_HOST || "(missing)"} apiKeyPresent=${apiKey ? "yes" : "no"}`,
   )
+
+  const shadowed = findShadowedEnvKeys()
+  if (shadowed.length) {
+    appendLogLine(
+      pluginLogPath,
+      `plugin.env.shadowed 进程环境里的同名变量压过了 .env,重跑 setup 改的配置在本进程不生效: ${describeShadowedEnv(shadowed)}` +
+      ` → 在启动 opencode 的终端里 unset 这些变量(或新开终端)后重启 opencode`,
+    )
+  }
 
   const kickUploader = (sessionID: string, force = false, reason = "unspecified"): void => {
     try {

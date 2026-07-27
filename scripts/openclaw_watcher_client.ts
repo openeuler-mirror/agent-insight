@@ -265,7 +265,10 @@ async function uploadExecutionRecord(record: any): Promise<void> {
     const options: http.RequestOptions = {
         hostname: parsedUrl.hostname,
         port: parsedUrl.port || (isHttps ? 443 : 80),
-        path: `${basePath}/api/upload`,
+        // 专用桥接端点。不能用 /api/upload——那是老的通用上报路径，现在由
+        // next.config 的兼容别名指向 /api/ingest/upload（opencode uploader 等
+        // 存量客户端仍在打它）。桥接一旦占用同名真实路由就会把别名整个遮蔽掉。
+        path: `${basePath}/api/ingest/openclaw/upload`,
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
