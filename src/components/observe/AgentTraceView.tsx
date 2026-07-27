@@ -20,6 +20,7 @@ import {
     AgentNode,
     buildAgentCallTree,
     findNode,
+    firstMeaningfulLine,
     formatDuration,
     formatTokens,
     InteractionUsage,
@@ -674,7 +675,7 @@ export default function AgentTraceView({
                 const tok = ev.usage?.total || 0;
                 const label = ev.kind === 'task' && ev.spawnedChildId
                     ? `spawn → ${ev.args?.subagent_type || childNode?.agentName || 'subagent'}`
-                    : ev.name || ev.summary?.split('\n')[0]?.slice(0, 60) || ev.kind;
+                    : ev.name || firstMeaningfulLine(ev.summary) || ev.kind;
                 spans.push({
                     key: evKey, label, kind: ev.kind,
                     durationMs: dur, tokens: tok || undefined,
@@ -1418,7 +1419,7 @@ function UnifiedEventRow({
     const primaryLabel = event.kind === 'task' && event.spawnedChildId
         ? `spawn → ${event.args?.subagent_type || childNode?.agentName || 'subagent'}`
         : event.kind === 'llm'
-            ? (event.summary ? event.summary.split('\n')[0].slice(0, 60) : 'LLM')
+            ? (firstMeaningfulLine(event.summary) || 'LLM')
             : event.name || event.summary?.slice(0, 50) || event.kind;
 
     // Secondary label
@@ -2755,7 +2756,7 @@ function EventDetailPanel({ event, node, interactions, onSelectChild }: { event:
         ? formatDuration(event.completedAt - event.startedAt) : null;
     const startClock = formatClockMs(event.startedAt);
     const endClock = formatClockMs(event.completedAt);
-    const title = event.name || event.summary?.split('\n')[0]?.slice(0, 60) || km.label;
+    const title = event.name || firstMeaningfulLine(event.summary) || km.label;
     const hasError = isErrorToolStatus(event.toolStatus);
     const spawnedChild = event.kind === 'task' && event.spawnedChildId
         ? node.children.find(c => c.id === event.spawnedChildId)
@@ -2895,7 +2896,7 @@ function LLMEventBody({ event, responseText, interactions, node }: {
         [event, node, interactions],
     );
 
-    const title = event.name || event.summary?.split('\n')[0]?.slice(0, 60) || 'LLM';
+    const title = event.name || firstMeaningfulLine(event.summary) || 'LLM';
 
     return (
         <>
