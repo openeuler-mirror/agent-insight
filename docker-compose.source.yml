@@ -1,0 +1,35 @@
+# 源码挂载模式：容器启动时按挂载进来的源码重新构建再运行，改完代码只需重启容器。
+#
+# 服务器上的使用步骤：
+#   1) 准备镜像：docker pull karaggagent/agent-insight:latest
+#      离线场景改为 docker load -i <离线包>.tar.gz，并把下面的 image 换成实际 tag
+#   2) git clone <仓库地址> /srv/agent-insight        # 或换成你自己的源码路径，同步改下面的挂载
+#   3) mkdir -p ~/.agent-insight/data && chown -R 1000:1000 ~/.agent-insight
+#      必须在首次启动前做：容器内是 uid 1000 的 node 用户，目录由 Docker 自动创建时属主是 root，
+#      会导致 prisma 建表报 "attempt to write a readonly database"
+#   4) docker compose -f docker-compose.source.yml up -d
+#
+# 更新代码：
+#   cd /srv/agent-insight && git pull
+#   docker compose -f docker-compose.source.yml restart
+#   （用 restart 而不是 up -d：配置没变时 up -d 不会重启容器，也就不会重新构建）
+#
+# 改了 package.json 依赖时：依赖是烤在镜像里的，必须重新构建镜像，容器启动日志会打印缺失依赖告警。
+services:
+  agent-insight:
+    image: karaggagent/agent-insight:latest    # 离线导入的镜像改成 docker images 里看到的实际 tag
+    container_name: agent-insight
+    restart: unless-stopped
+    ports:
+      - "3000:3000"                              # 端口按需改，仓库里其它 compose 用的是 3033
+    environment:
+      - AGENT_INSIGHT_SOURCE_DIR=/src            # 关键：配了才走源码模式，去掉即回到镜像内置版本
+      - NODE_OPTIONS=--max-old-space-size=2048   # 小内存机器上防止 next build 被 OOM kill
+    volumes:
+      - /srv/agent-insight:/src:ro               # 源码，只读即可
+      - ${HOME}/.agent-insight:/data/agent-insight
+      - ${HOME}/.agent-insight:/home/node/.agent-insight
+      - agent-insight-build:/app/source          # 容器内构建目录，让 .next/cache 跨容器重建保留
+
+volumes:
+  agent-insight-build:
