@@ -56,6 +56,14 @@ test("transport redacts recursively before Unicode code-point truncation", () =>
   assert.equal(redacted.api_key, "[REDACTED]")
   assert.equal(redacted.nested.Authorization, "[REDACTED]")
   assert.doesNotMatch(redacted.nested.text, /sk-test/)
+  const otlp = transport.redactValue({
+    attributes: [
+      { key: "user.email", value: { stringValue: "collector@example.invalid" } },
+      { key: "input_token_count", value: { intValue: "123" } },
+    ],
+  })
+  assert.equal(otlp.attributes[0].value.stringValue, "[REDACTED]")
+  assert.equal(otlp.attributes[1].value.intValue, "123")
 
   const unicode = "🙂".repeat(2001)
   const truncated = transport.truncateCodePoints(unicode, 2000)

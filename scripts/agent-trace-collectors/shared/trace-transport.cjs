@@ -13,7 +13,9 @@ const DEFAULT_RETENTION_DAYS = 7;
 const RETRYABLE_STATUS = new Set([409, 429, 500, 501, 502, 503, 504]);
 
 const SENSITIVE_KEY_PATTERN =
-  /(?:^|[-_.])(api[-_]?key|authorization|auth|token|secret|password|passwd|private[-_]?key|cookie)(?:$|[-_.])/i;
+  /(?:^|[-_.])(api[-_]?key|authorization|auth|token|secret|password|passwd|private[-_]?key|cookie|email|account[-_]?id|user[-_]?id)(?:$|[-_.])/i;
+const TOKEN_USAGE_KEY_PATTERN =
+  /(?:^|[-_.])(input|output|cached|cache[-_]?read|cache[-_]?write|reasoning|tool|total)[-_.]?tokens?(?:[-_.]?count)?(?:$|[-_.])/i;
 const STRING_PATTERNS = [
   /\bBearer\s+[A-Za-z0-9._~+/=-]+\b/gi,
   /\b(?:sk|pk|api)[-_][A-Za-z0-9_-]{12,}\b/g,
@@ -72,6 +74,10 @@ function redactString(value) {
   return result;
 }
 
+function isSensitiveKey(value) {
+  return SENSITIVE_KEY_PATTERN.test(value) && !TOKEN_USAGE_KEY_PATTERN.test(value);
+}
+
 function redactValue(value, seen = new WeakSet()) {
   if (typeof value === "string") return redactString(value);
   if (value === null || value === undefined || typeof value !== "object") return value;
@@ -84,9 +90,21 @@ function redactValue(value, seen = new WeakSet()) {
     return result;
   }
 
+  const sensitivePair =
+    typeof value.key === "string" &&
+    Object.prototype.hasOwnProperty.call(value, "value") &&
+    isSensitiveKey(value.key);
   const result = {};
   for (const [key, item] of Object.entries(value)) {
-    result[key] = SENSITIVE_KEY_PATTERN.test(key) ? "[REDACTED]" : redactValue(item, seen);
+    if (isSensitiveKey(key)) {
+      result[key] = "[REDACTED]";
+    } else if (sensitivePair && key === "value") {
+      result[key] = item && typeof item === "object"
+        ? { stringValue: "[REDACTED]" }
+        : "[REDACTED]";
+    } else {
+      result[key] = redactValue(item, seen);
+    }
   }
   seen.delete(value);
   return result;

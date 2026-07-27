@@ -75,7 +75,7 @@ function ttftOnce(baseArgs, withoutExtensions) {
     const started = performance.now()
     const child = spawn(piCommand, args, { stdio: ["ignore", "pipe", "pipe"], ...spawnOptions })
     let buffer = ""
-    let measured = false
+    let ttftMs = null
     let stderr = ""
     child.stdout.setEncoding("utf8")
     child.stderr.setEncoding("utf8")
@@ -93,21 +93,30 @@ function ttftOnce(baseArgs, withoutExtensions) {
           continue
         }
         const delta = event?.assistantMessageEvent?.delta
-        if (!measured && event?.type === "message_update" && typeof delta === "string" && delta) {
-          measured = true
-          resolve(performance.now() - started)
+        if (ttftMs === null && event?.type === "message_update" && typeof delta === "string" && delta) {
+          ttftMs = performance.now() - started
         }
       }
     })
     child.on("error", reject)
     child.on("exit", (code) => {
-      if (!measured) reject(new Error(stderr || `Pi exited with ${code} before a text delta`))
+      if (code !== 0) {
+        reject(new Error(stderr || `Pi exited with ${code}`))
+      } else if (ttftMs === null) {
+        reject(new Error(stderr || "Pi exited before a text delta"))
+      } else {
+        resolve(ttftMs)
+      }
     })
   })
 }
 
 async function ttft() {
   const args = parseArgs("PI_BENCH_ARGS_JSON")
+  const arg = (name) => {
+    const index = args.indexOf(name)
+    return index >= 0 ? args[index + 1] : undefined
+  }
   const baseline = []
   const installed = []
   for (let index = 0; index < 30; index += 1) {
@@ -116,6 +125,10 @@ async function ttft() {
   }
   await writeReport("ttft", {
     environment: { platform: os.platform(), node: process.version },
+    inference: {
+      provider: arg("--provider"),
+      model: arg("--model"),
+    },
     baseline: summary(baseline),
     installed: summary(installed),
     overheadMedianMs: summary(installed).medianMs - summary(baseline).medianMs,
