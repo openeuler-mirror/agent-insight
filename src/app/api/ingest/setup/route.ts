@@ -1,5 +1,22 @@
 import { NextResponse } from 'next/server';
 
+// 安装页可预选的框架。value 会被拼进生成脚本，所以只接受白名单内的值——
+// 不能把 query 参数原样带进 shell/PowerShell 字符串。
+const FRAMEWORKS: { value: string; label: string }[] = [
+    { value: 'opencode', label: 'OpenCode' },
+    { value: 'openclaw', label: 'OpenClaw' },
+    { value: 'claude', label: 'Claude Code' },
+    { value: 'codeagent', label: 'CodeAgent' },
+    { value: 'hermes', label: 'Hermes' },
+    { value: 'jiuwen', label: 'JiuwenSwarm' },
+];
+
+function parseFrameworks(raw: string | null): { value: string; label: string }[] {
+    if (!raw) return [];
+    const wanted = new Set(raw.split(',').map(s => s.trim().toLowerCase()).filter(Boolean));
+    return FRAMEWORKS.filter(f => wanted.has(f.value));
+}
+
 function detectPlatform(request: Request): 'windows' | 'unix' {
     const userAgent = request.headers.get('user-agent') || '';
     const platformHeader = request.headers.get('x-platform') || '';
@@ -23,7 +40,7 @@ function powerShellDoubleQuoted(value: string): string {
     return value.replace(/`/g, '``').replace(/"/g, '`"').replace(/\$/g, '`$');
 }
 
-function generateBashScript(host: string, baseUrl: string, apiKey: string): string {
+function generateBashScript(host: string, baseUrl: string, apiKey: string, preselected: { value: string; label: string }[]): string {
     const lines = [
         '#!/bin/bash',
         '# =============================================================================',
@@ -73,7 +90,16 @@ function generateBashScript(host: string, baseUrl: string, apiKey: string): stri
         '    echo "⚠️  Skipped example messages log download (non-fatal)"',
         'fi',
         '',
-        '# 2. Interactive Framework Selection with inquirer',
+        // 安装页勾选了框架时，SELECTED_FRAMEWORKS 直接写死，跳过下面整段交互式选择——
+        // 那段要 npm install inquirer/tsx + npx，内网/离线环境访问不到 registry 就卡死在这里。
+        '# 2. Framework selection',
+        'SELECTED_FRAMEWORKS="' + preselected.map(f => f.value).join(',') + '"',
+        'if [ -n "$SELECTED_FRAMEWORKS" ]; then',
+        '    echo ""',
+        '    echo "✅ 将安装以下组件: ' + bashDoubleQuoted(preselected.map(f => f.label).join('、')) + '"',
+        '    echo ""',
+        'else',
+        '# 2b. Interactive Framework Selection with inquirer',
         'echo ""',
         '',
         'SELECTOR_SCRIPT="$HOME/.agent-insight/framework_selector.mjs"',
@@ -161,6 +187,7 @@ function generateBashScript(host: string, baseUrl: string, apiKey: string): stri
         '    rm -f "$SELECTOR_RESULT"',
         'else',
         '    SELECTED_FRAMEWORKS=""',
+        'fi',
         'fi',
         '',
         '# Set installation flags based on selection',
@@ -676,7 +703,7 @@ function generateBashScript(host: string, baseUrl: string, apiKey: string): stri
     return lines.join('\n');
 }
 
-function generatePowerShellScript(host: string, baseUrl: string, apiKey: string): string {
+function generatePowerShellScript(host: string, baseUrl: string, apiKey: string, preselected: { value: string; label: string }[]): string {
     const lines = [
         '# =============================================================================',
         '# Agent-insight One-Click Setup (PowerShell)',
@@ -717,7 +744,15 @@ function generatePowerShellScript(host: string, baseUrl: string, apiKey: string)
         'New-Item -ItemType Directory -Force -Path ".opencode\\skills" | Out-Null',
         'Write-Host "📂 Created necessary directories"',
         '',
-        '# 2. Interactive Framework Selection with inquirer',
+        // 同 bash 侧：安装页勾选后跳过 inquirer 交互，免去 npm registry 依赖。
+        '# 2. Framework selection',
+        '$SELECTED_FRAMEWORKS = "' + preselected.map(f => f.value).join(',') + '"',
+        'if ($SELECTED_FRAMEWORKS) {',
+        '    Write-Host ""',
+        '    Write-Host "✅ 将安装以下组件: ' + powerShellDoubleQuoted(preselected.map(f => f.label).join('、')) + '"',
+        '    Write-Host ""',
+        '} else {',
+        '# 2b. Interactive Framework Selection with inquirer',
         'Write-Host ""',
         '',
         '$SELECTOR_SCRIPT = "$homeDir\\.agent-insight\\framework_selector.mjs"',
@@ -808,6 +843,7 @@ function generatePowerShellScript(host: string, baseUrl: string, apiKey: string)
         '    Remove-Item $SELECTOR_RESULT -Force',
         '} else {',
         '    $SELECTED_FRAMEWORKS = ""',
+        '}',
         '}',
         '',
         '# Set installation flags based on selection',
@@ -1280,18 +1316,21 @@ export async function GET(request: Request) {
     const baseUrl = `${protocol}://${host}${urlPrefix}`;
     const skillInsightHost = baseUrl;
     const apiKey = requestUrl.searchParams.get('key') || requestUrl.searchParams.get('apiKey') || '';
+    // ?frameworks=opencode,claude —— 安装页勾选后带上，脚本据此跳过终端内的交互选择。
+    // 不传（老命令）时行为不变，仍在终端里问一遍。
+    const preselected = parseFrameworks(requestUrl.searchParams.get('frameworks'));
 
     const platform = detectPlatform(request);
 
     if (platform === 'windows') {
-        const script = generatePowerShellScript(skillInsightHost, baseUrl, apiKey);
+        const script = generatePowerShellScript(skillInsightHost, baseUrl, apiKey, preselected);
         return new NextResponse(script, {
             headers: {
                 'Content-Type': 'text/plain; charset=utf-8',
             },
         });
     } else {
-        const script = generateBashScript(skillInsightHost, baseUrl, apiKey);
+        const script = generateBashScript(skillInsightHost, baseUrl, apiKey, preselected);
         return new NextResponse(script, {
             headers: {
                 'Content-Type': 'text/x-shellscript',
