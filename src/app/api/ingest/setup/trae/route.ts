@@ -27,13 +27,12 @@ export async function GET() {
                 '3. 点击右上角 ··· > 从 VSIX 安装',
                 '4. 选择下载的 agent-insight-trae-collector-0.1.0.vsix',
                 '5. 重启 TRAE IDE',
-                '6. 在设置中配置 AGENT_INSIGHT_HOST 和 AGENT_INSIGHT_API_KEY',
+                '6. Ctrl+Shift+, 打开设置 → 搜索 Agent Insight → 填入 Host 和 API Key',
             ],
-            hook_install: '运行 ~/.agent-insight/trae-hooks/setup.sh 安装 Hook 脚本',
+            hook_install: '插件激活时自动部署 Hook 脚本到 ~/.agent-insight/trae-hooks/',
             config: {
-                AGENT_INSIGHT_HOST: '${host}/api/ingest/otel/v1/traces',
+                AGENT_INSIGHT_HOST: '${host}',
                 AGENT_INSIGHT_API_KEY: '${apiKey}',
-                OTEL_SERVICE_NAME: 'trae',
             },
         });
     }

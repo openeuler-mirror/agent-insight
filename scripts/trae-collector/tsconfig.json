@@ -3,8 +3,7 @@
     "module": "Node16",
     "target": "ES2022",
     "lib": ["ES2022"],
-    "outDir": "out",
-    "rootDir": "src",
+    "noEmit": true,
     "sourceMap": true,
     "strict": true,
     "esModuleInterop": true,
@@ -14,5 +13,5 @@
     "declaration": true
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "out", ".vscode-test"]
+  "exclude": ["node_modules", "dist", ".vscode-test"]
 }

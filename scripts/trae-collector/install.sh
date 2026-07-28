@@ -113,6 +113,15 @@ else
   exit 1
 fi
 
+# Remove stale cached copies from Trae IDE bin/ to prevent version mismatch
+TRAE_SERVER_DIR="${HOME}/.trae-cn-server"
+if [ -d "$TRAE_SERVER_DIR/bin" ]; then
+  for STALE_DIR in $(find "$TRAE_SERVER_DIR/bin" -maxdepth 3 -type d -name "agent-insight*" 2>/dev/null); do
+    echo "  Cleaning stale cache: $STALE_DIR"
+    rm -rf "$STALE_DIR"
+  done
+fi
+
 # Step 3: Configure .env
 echo ""
 echo "[3/3] Configuration..."

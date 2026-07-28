@@ -31,5 +31,5 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": ["node_modules", "scripts/opencode_tui_plugin.tsx", "opencode/**", "exclude/**", "data/**", "src/example/**", "3rd-pro/**"]
+  "exclude": ["node_modules", "scripts/opencode_tui_plugin.tsx", "opencode/**", "exclude/**", "data/**", "src/example/**", "3rd-pro/**", "scripts/trae-collector/**"]
 }

@@ -283,20 +283,43 @@ export function extractSkillsWithVersionsFromTraeSession(interactions: any[]): I
   const seen = new Set<string>()
   const skills: InvokedSkill[] = []
   const skillNamePattern = /^[a-zA-Z0-9_\-\.]+$/
-  for (const msg of interactions) {
-    const toolCalls = msg?.tool_calls || msg?.payload?.toolCalls || []
+
+  const collectFromMsg = (msg: any) => {
+    if (!msg) return
+    const toolCalls = msg?.tool_calls || msg?.toolCalls || msg?.payload?.toolCalls || []
     for (const tc of toolCalls) {
       const toolName = String(tc?.function?.name ?? tc?.name ?? tc?.toolName ?? "").toLowerCase()
       if (toolName !== "skill" && toolName !== "load_skill") continue
-      const args = tc?.function?.arguments ?? tc?.arguments ?? tc?.toolInput ?? {}
-      const rawName = args?.name ?? args?.skill_name ?? args?.skillName ?? args?.skill
-      if (rawName == null || !String(rawName).trim()) continue
-      const name = String(rawName).trim()
-      if (!skillNamePattern.test(name) || seen.has(name)) continue
-      seen.add(name)
-      const rawVersion = args?.version
-      const version = rawVersion != null ? Number(rawVersion) : null
-      skills.push({ name, version: version !== null && !Number.isNaN(version) ? version : null })
+      const rawArgs = tc?.function?.arguments ?? tc?.arguments ?? tc?.toolInput ?? {}
+      try {
+        const args = typeof rawArgs === "string" ? JSON.parse(rawArgs) : rawArgs
+        const rawName = args?.name ?? args?.skill_name ?? args?.skillName ?? args?.skill
+        if (rawName == null || !String(rawName).trim()) continue
+        const name = String(rawName).trim().replace(/^['"]+|['"]+$/g, "")
+        if (!skillNamePattern.test(name) || seen.has(name)) continue
+        seen.add(name)
+        const rawVersion = args?.version
+        const version = rawVersion != null ? Number(rawVersion) : null
+        skills.push({ name, version: version !== null && !Number.isNaN(version) ? version : null })
+      } catch {}
+    }
+  }
+
+  for (const interaction of interactions) {
+    // Handle normalized interaction structure (requestMessages/responseMessage)
+    if (interaction.responseMessage) {
+      collectFromMsg(interaction.responseMessage)
+    }
+    if (interaction.requestMessages && Array.isArray(interaction.requestMessages)) {
+      for (const m of interaction.requestMessages) {
+        if (m.role === "assistant" || m.role === "subagent") {
+          collectFromMsg(m)
+        }
+      }
+    }
+    // Also handle raw message format for backward compatibility
+    if (!interaction.requestMessages && !interaction.responseMessage) {
+      collectFromMsg(interaction)
     }
   }
   return skills

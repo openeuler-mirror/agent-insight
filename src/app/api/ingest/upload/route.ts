@@ -274,6 +274,7 @@ export async function POST(request: Request) {
                     startTime: data.timestamp ? new Date(data.timestamp) : new Date(),
                     user: username || undefined,
                     model: data.model || undefined,
+                    interactions: Array.isArray(data.interactions) ? JSON.stringify(data.interactions) : undefined,
                 }, {});
             } catch (e) {
                 console.warn(`[Upload-API] Session upsert failed for ${data.framework}:`, e);

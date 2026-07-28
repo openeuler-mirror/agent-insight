@@ -28,14 +28,14 @@ SENSITIVE_KEY_PATTERNS=(
 # Usage: redact_json <json_string>
 redact_json() {
   local input="$1"
-  echo "$input" | python3 -c "
+  echo "$input" | python3 -c '
 import sys, json, re
 
 SENSITIVE_PATTERNS = [
-    'api[_-]?key', 'apikey', 'token', 'secret', 'password', 'passwd',
-    'authorization', 'auth', 'access[_-]?token', 'refresh[_-]?token',
-    'client[_-]?secret', 'private[_-]?key', 'ssh[_-]?key',
-    'session[_-]?token', 'bearer', 'credential', 'jwt'
+    "api[_-]?key", "apikey", "token", "secret", "password", "passwd",
+    "authorization", "auth", "access[_-]?token", "refresh[_-]?token",
+    "client[_-]?secret", "private[_-]?key", "ssh[_-]?key",
+    "session[_-]?token", "bearer", "credential", "jwt"
 ]
 
 def is_sensitive_key(key):
@@ -56,20 +56,20 @@ def redact_value(v):
         out = {}
         for k, val in v.items():
             if is_sensitive_key(k):
-                out[k] = '***'
+                out[k] = "***"
             else:
                 out[k] = redact_value(val)
         return out
     return v
 
 try:
-    data = json.loads('''$input''') if '$input' else {}
+    data = json.loads(sys.stdin.read())
     if not isinstance(data, dict):
         data = {}
     print(json.dumps(redact_value(data), ensure_ascii=False))
 except:
-    print('{}')
-" 2>/dev/null || echo "{}"
+    print("{}")
+' 2>/dev/null || echo "{}"
 }
 
 # Redact sensitive patterns from plain text

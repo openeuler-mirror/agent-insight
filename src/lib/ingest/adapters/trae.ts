@@ -14,4 +14,5 @@ export const traeAdapter: FrameworkAdapter = {
     subagentTree: true,
   },
   sessionMergeStrategy: "snapshot-replace",
+  extractSkills: extractSkillsWithVersionsFromTraeSession,
 }

@@ -23,9 +23,20 @@ async function run(cmd) {
 
 async function build() {
   try {
-    // Compile TypeScript
-    console.log('🔧 Compiling TypeScript...')
-    await run('npx tsc -p ./tsconfig.json')
+    // Bundle with esbuild (replaces tsc — Trae IDE requires a single bundled file)
+    console.log('🔧 Bundling with esbuild...')
+    await run('npx esbuild src/extension.ts ' +
+      '--bundle ' +
+      '--platform=node ' +
+      '--target=node16 ' +
+      '--format=cjs ' +
+      '--outfile=dist/extension.js ' +
+      '--external:vscode ' +
+      '--external:fs ' +
+      '--external:path ' +
+      '--external:os ' +
+      '--external:child_process ' +
+      '--sourcemap')
 
     // Package VSIX
     console.log('\n📦 Packaging VSIX...')
@@ -40,6 +51,9 @@ async function build() {
     console.error('\n❌ Build failed:', err.message)
     if (err.message.includes('vsce')) {
       console.error('   Try: npm install -g @vscode/vsce')
+    }
+    if (err.message.includes('esbuild')) {
+      console.error('   Try: npm install esbuild')
     }
     process.exit(1)
   }

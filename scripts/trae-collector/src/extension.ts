@@ -1,21 +1,21 @@
 import * as vscode from 'vscode'
 import { UploadEngine } from './uploader/upload-engine'
 import { SpoolReader } from './uploader/spool'
-import { LlmTraceCollector } from './collectors/llm-trace'
 import * as path from 'path'
 import * as fs from 'fs'
 import * as os from 'os'
 
 let statusBarItem: vscode.StatusBarItem | undefined
 let uploadEngine: UploadEngine | undefined
-let llmCollector: LlmTraceCollector | undefined
 let uploadTimer: NodeJS.Timeout | undefined
 let outputChannel: vscode.OutputChannel | undefined
 let envWatcher: fs.FSWatcher | undefined
 let spoolWatcher: fs.FSWatcher | undefined
-let isSyncing = false // Prevent circular sync
+let isSyncing = false
 let sessionEndDebounce: NodeJS.Timeout | undefined
-
+let heartbeatTimer: NodeJS.Timeout | undefined
+let lastSpoolActivity = 0
+let lastHeartbeatAt = 0
 export interface TraeConfig {
   enabled: boolean
   host: string
@@ -28,6 +28,9 @@ export interface TraeConfig {
   llmPollIntervalMs: number
   logLevel: string
   spoolDir: string
+  heartbeatEnabled: boolean
+  heartbeatIntervalMs: number
+  modelName: string
 }
 
 function getConfig(): TraeConfig {
@@ -55,7 +58,7 @@ function getConfig(): TraeConfig {
     enabled: cfg.get<boolean>('enabled', true),
     host: host,
     apiKey: apiKey,
-    uploadIntervalMs: cfg.get<number>('uploadIntervalMs', 300000),
+    uploadIntervalMs: cfg.get<number>('uploadIntervalMs', 30000),
     requestTimeoutMs: cfg.get<number>('requestTimeoutMs', 15000),
     maxRetries: cfg.get<number>('maxRetries', 3),
     retryBaseDelayMs: cfg.get<number>('retryBaseDelayMs', 10000),
@@ -63,9 +66,11 @@ function getConfig(): TraeConfig {
     llmPollIntervalMs: cfg.get<number>('llmPollIntervalMs', 30000),
     logLevel: cfg.get<string>('logLevel', 'info'),
     spoolDir: (cfg.get<string>('spoolDir', '') || '').replace(/^~/, os.homedir()),
+    heartbeatEnabled: cfg.get<boolean>('heartbeatEnabled', true),
+    heartbeatIntervalMs: cfg.get<number>('heartbeatIntervalMs', 30000),
+    modelName: cfg.get<string>('modelName', ''),
   }
 }
-
 function getEnvFilePath(): string {
   return path.join(os.homedir(), '.agent-insight', '.env')
 }
@@ -200,15 +205,20 @@ function startSpoolWatcher() {
     
     spoolWatcher = fs.watch(spoolDir, { recursive: true }, (eventType: string, filename: string | null) => {
       if (!filename || !filename.endsWith('.jsonl')) return
+      // Record activity for heartbeat
+      lastSpoolActivity = Date.now()
       
-      // Check if this is likely a session end event by checking if file was modified
-      // We use debounce to avoid triggering too frequently during active sessions
+      // Debounce to avoid triggering too frequently
       if (sessionEndDebounce) clearTimeout(sessionEndDebounce)
       sessionEndDebounce = setTimeout(() => {
         const cfg = getConfig()
         if (cfg.enabled && cfg.host && cfg.apiKey) {
           log('spool file changed, triggering upload...')
           flushSpool()
+          // Start heartbeat for active sessions
+          if (cfg.heartbeatEnabled) {
+            startHeartbeat()
+          }
         }
       }, 3000) // 3 second debounce
     })
@@ -225,6 +235,99 @@ function stopSpoolWatcher() {
       log('spool watcher stopped')
     } catch {}
     spoolWatcher = undefined
+  }
+}
+
+// AC29: 清理 spool 目录和配置文件
+function cleanupOnUninstall() {
+  try {
+    const cfg = getConfig()
+    const spoolDir = cfg.spoolDir || path.join(os.homedir(), '.agent-insight', 'otel_data', 'trae')
+    
+    // AC22: 先尝试上传所有未上传的数据
+    flushSpool().catch(() => {})
+    
+    // 清理 spool 目录（保留最近24小时的文件）
+    if (fs.existsSync(spoolDir)) {
+      const now = Date.now()
+      const keepAfter = now - 24 * 60 * 60 * 1000 // 24小时
+      const files = fs.readdirSync(spoolDir, { recursive: true, encoding: 'utf8' }) as string[]
+      files.forEach(filePath => {
+        const fullPath = path.join(spoolDir, filePath)
+        if (fs.statSync(fullPath).isFile()) {
+          const mtime = fs.statSync(fullPath).mtime.getTime()
+          if (mtime < keepAfter) {
+            fs.unlinkSync(fullPath)
+          }
+        }
+      })
+      log('spool directory cleaned up')
+    }
+    
+    // 清理 hooks 目录
+    const hooksDir = path.join(os.homedir(), '.agent-insight', 'trae-hooks')
+    if (fs.existsSync(hooksDir)) {
+      try {
+        fs.rmSync(hooksDir, { recursive: true, force: true })
+        log('hooks directory cleaned up')
+      } catch {}
+    }
+    
+    // 清理 checkpoint 文件
+    const checkpointFile = path.join(os.homedir(), '.agent-insight', 'trae_uploader_checkpoint.json')
+    if (fs.existsSync(checkpointFile)) {
+      fs.unlinkSync(checkpointFile)
+      log('checkpoint file cleaned up')
+    }
+    
+    // AC30: 不清理 .env 文件（可能被其他采集器使用）
+  } catch (err) {
+    log(`cleanup error: ${err instanceof Error ? err.message : String(err)}`, 'warn')
+  }
+}
+
+// AC27: 内存泄漏检测 - 定期检查 EventEmitter 监听器数量
+function startMemoryMonitor() {
+  if (process.env.NODE_ENV !== 'development') return
+  
+  setInterval(() => {
+    const eventListeners = (process as any).eventNames?.().length || 0
+    const heapUsed = process.memoryUsage().heapUsed / 1024 / 1024
+    log(`memory: ${heapUsed.toFixed(2)}MB, eventListeners: ${eventListeners}`, 'debug')
+    
+    // AC27: 检测异常内存增长
+    if (heapUsed > 200) {
+      log(`memory warning: ${heapUsed.toFixed(2)}MB exceeded threshold`, 'warn')
+    }
+  }, 60000)
+}
+
+function startHeartbeat() {
+  const cfg = getConfig()
+  if (!cfg.heartbeatEnabled) return
+  const interval = cfg.heartbeatIntervalMs
+  if (heartbeatTimer) clearInterval(heartbeatTimer)
+  heartbeatTimer = setInterval(() => {
+    const now = Date.now()
+    // Only heartbeat if spool has had recent activity (within 3x interval)
+    if (now - lastSpoolActivity > interval * 3) {
+      stopHeartbeat()
+      return
+    }
+    // Rate-limit: don't heartbeat more often than the configured interval
+    if (now - lastHeartbeatAt < interval) return
+    lastHeartbeatAt = now
+    log('heartbeat: triggering upload')
+    flushSpool()
+  }, interval)
+  log('heartbeat started: interval=' + interval + 'ms')
+}
+
+function stopHeartbeat() {
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer)
+    heartbeatTimer = undefined
+    log('heartbeat stopped')
   }
 }
 
@@ -282,22 +385,23 @@ async function flushSpool() {
 
 export function activate(context: vscode.ExtensionContext) {
   outputChannel = vscode.window.createOutputChannel('Agent Insight TRAE')
-  context.subscriptions.push(outputChannel)
   log('activating...')
 
-  // --- Auto-deploy Hook scripts if missing ---
+  // --- Auto-deploy Hook scripts (always run to ensure updates) ---
   try {
     const { execSync } = require('child_process')
-    const hookCheckPath = path.join(os.homedir(), '.agent-insight', 'trae-hooks', 'scripts', 'session-start.sh')
-    if (!fs.existsSync(hookCheckPath)) {
-      log('Hook scripts not found, auto-deploying...')
-      const setupScript = path.join(context.extensionPath, 'setup.sh')
-      if (fs.existsSync(setupScript)) {
-        execSync('bash "' + setupScript + '"', { timeout: 30000, stdio: 'pipe' })
-        log('Hook scripts auto-deployed successfully')
+    const isWindows = process.platform === 'win32'
+    const setupScript = path.join(context.extensionPath, isWindows ? 'setup.ps1' : 'setup.sh')
+    if (fs.existsSync(setupScript)) {
+      log('Auto-deploying hook scripts (setup ' + (isWindows ? 'ps1' : 'sh') + ')...')
+      if (isWindows) {
+        execSync('powershell -ExecutionPolicy Bypass -File "' + setupScript + '"', { timeout: 30000, stdio: 'pipe' })
       } else {
-        log('setup.sh not found at: ' + setupScript, 'warn')
+        execSync('bash "' + setupScript + '"', { timeout: 30000, stdio: 'pipe' })
       }
+      log('Hook scripts auto-deployed successfully')
+    } else {
+      log('setup script not found at: ' + setupScript, 'warn')
     }
   } catch (e) {
     log('auto-deploy hook scripts failed: ' + (e instanceof Error ? e.message : String(e)), 'warn')
@@ -310,12 +414,12 @@ export function activate(context: vscode.ExtensionContext) {
       const envText = fs.readFileSync(envFile, 'utf8')
       const cfg = vscode.workspace.getConfiguration('agentInsight.trae')
       const hostMatch = envText.match(/^AGENT_INSIGHT_HOST=(.+)$/m)
-      if (hostMatch && !cfg.get('host')) {
+      if (hostMatch && cfg.get('host') !== hostMatch[1].trim()) {
         cfg.update('host', hostMatch[1].trim(), vscode.ConfigurationTarget.Global)
         autoConfigured = true
       }
       const keyMatch = envText.match(/^AGENT_INSIGHT_API_KEY=(.+)$/m)
-      if (keyMatch && !cfg.get('apiKey')) {
+      if (keyMatch && cfg.get('apiKey') !== keyMatch[1].trim()) {
         cfg.update('apiKey', keyMatch[1].trim(), vscode.ConfigurationTarget.Global)
         autoConfigured = true
       }
@@ -336,13 +440,8 @@ export function activate(context: vscode.ExtensionContext) {
   uploadEngine = new UploadEngine(spoolReader, log, getConfig())
   context.subscriptions.push(uploadEngine)
 
-  // --- LLM Trace Collector ---
-  if (getConfig().llmEnabled) {
-    llmCollector = new LlmTraceCollector(log, getConfig())
-    context.subscriptions.push(llmCollector)
-  } else {
-    log('LLM collector disabled by config')
-  }
+  // --- LLM Trace Collector (disabled — TRAE DB is encrypted) ---
+  log('LLM collector disabled (TRAE database is encrypted, model/token unavailable from DB)')
 
   // --- Commands ---
   context.subscriptions.push(
@@ -375,11 +474,24 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('agent-insight-trae.openLogs', () => {
       outputChannel?.show()
     }),
+
+    // AC29: 卸载清理命令
+    vscode.commands.registerCommand('agent-insight-trae.cleanup', async () => {
+      const confirm = await vscode.window.showWarningMessage(
+        '确定要清理所有 TRAE 采集器数据吗？这将删除 spool 目录、hooks 脚本和 checkpoint 文件。',
+        { modal: true },
+        '确定清理'
+      )
+      if (confirm === '确定清理') {
+        cleanupOnUninstall()
+        vscode.window.showInformationMessage('清理完成')
+      }
+    }),
   )
 
   // --- Config Change Listener ---
   context.subscriptions.push(
-    vscode.workspace.onDidChangeConfiguration((e) => {
+    vscode.workspace.onDidChangeConfiguration((e: vscode.ConfigurationChangeEvent) => {
       if (e.affectsConfiguration('agentInsight.trae')) {
         updateStatusBar()
         restartUploadTimer()
@@ -402,16 +514,25 @@ export function activate(context: vscode.ExtensionContext) {
     restartUploadTimer()
   }
 
-  // --- Deactivation Handler ---
+  // --- Deactivation Handler (best-effort shutdown entry) ---
   context.subscriptions.push({
-    dispose: async () => {
-      log('extension deactivating, flushing spool...')
-      if (uploadTimer) clearInterval(uploadTimer)
-      if (sessionEndDebounce) clearTimeout(sessionEndDebounce)
-      stopSpoolWatcher()
-      try { await flushSpool() } catch {}
+    dispose: () => {
+      try {
+        const entry = JSON.stringify({
+          t: new Date().toISOString(),
+          kind: 'plugin.shutdown',
+          sessionID: 'all',
+          payload: { reason: 'extension-deactivate', pid: process.pid }
+        }) + '\n'
+        const dir = getConfig().spoolDir || path.join(os.homedir(), '.agent-insight', 'otel_data', 'trae')
+        fs.mkdirSync(dir, { recursive: true })
+        fs.appendFileSync(path.join(dir, 'plugin-shutdown.jsonl'), entry, 'utf8')
+      } catch {}
     },
   })
+
+  // Push outputChannel AFTER dispose callback so it's disposed last
+  context.subscriptions.push(outputChannel)
 
   // --- Env File Watcher ---
   startEnvWatcher()
@@ -419,12 +540,18 @@ export function activate(context: vscode.ExtensionContext) {
   // --- Spool Directory Watcher ---
   startSpoolWatcher()
 
+  // AC27: 启动内存监控
+  startMemoryMonitor()
+
   log('activated')
 }
 
-export function deactivate() {
+export async function deactivate() {
+  stopHeartbeat()
   stopEnvWatcher()
   stopSpoolWatcher()
+  if (uploadTimer) clearInterval(uploadTimer)
   if (sessionEndDebounce) clearTimeout(sessionEndDebounce)
+  try { await flushSpool() } catch {}
   log('deactivated')
 }

@@ -16,8 +16,9 @@ _load_trae_env() {
       AGENT_INSIGHT_TRAE_MAX_CONTENT_LENGTH) [ -z "${AGENT_INSIGHT_TRAE_MAX_CONTENT_LENGTH:-}" ] && export AGENT_INSIGHT_TRAE_MAX_CONTENT_LENGTH="$value" ;;
       AGENT_INSIGHT_TRAE_MAX_TOOL_IO_SIZE)   [ -z "${AGENT_INSIGHT_TRAE_MAX_TOOL_IO_SIZE:-}" ] && export AGENT_INSIGHT_TRAE_MAX_TOOL_IO_SIZE="$value" ;;
       AGENT_INSIGHT_TRAE_SPOOL_RETENTION_DAYS) [ -z "${AGENT_INSIGHT_TRAE_SPOOL_RETENTION_DAYS:-}" ] && export AGENT_INSIGHT_TRAE_SPOOL_RETENTION_DAYS="$value" ;;
+      TRAE_DEBUG_RAW)                        [ -z "${TRAE_DEBUG_RAW:-}" ] && export TRAE_DEBUG_RAW="$value" ;;
     esac
-  done < <(grep -E '^AGENT_INSIGHT_TRAE_' "$env_file" 2>/dev/null || true)
+  done < <(grep -E '^AGENT_INSIGHT_TRAE_|^TRAE_DEBUG_RAW=' "$env_file" 2>/dev/null || true)
 }
 _load_trae_env
 # ============================================================================
@@ -139,16 +140,22 @@ write_spool() {
   local trace_id="$3"
   local parent_id="$4"
   local payload="$5"
-  local ts; ts=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
+  local agent_id="$6"
+  local agent_type="$7"
+  local ts; ts=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)
   local spool_file; spool_file=$(get_spool_file)
 
-  kind="$kind" session_id="$session_id" trace_id="$trace_id" parent_id="$parent_id" payload="$payload" ts="$ts" python3 -c '
+  kind="$kind" session_id="$session_id" trace_id="$trace_id" parent_id="$parent_id" payload="$payload" agent_id="$agent_id" agent_type="$agent_type" ts="$ts" python3 -c '
 import os, json
 entry = {"t": os.environ["ts"], "kind": os.environ["kind"], "sessionID": os.environ["session_id"]}
 trace = os.environ.get("trace_id", "")
 parent = os.environ.get("parent_id", "")
+agent_id = os.environ.get("agent_id", "")
+agent_type = os.environ.get("agent_type", "")
 if trace: entry["trace_id"] = trace
 if parent: entry["parent_id"] = parent
+if agent_id: entry["agent_id"] = agent_id
+if agent_type: entry["agent_type"] = agent_type
 try: entry["payload"] = json.loads(os.environ["payload"])
 except: entry["payload"] = {}
 spool = os.environ.get("spool_file", "")
@@ -167,6 +174,61 @@ import sys, json
 line = sys.stdin.read()
 sys.stdout.write(json.dumps(line, ensure_ascii=False)[1:-1])
 " 2>/dev/null || printf '%s' "$1"
+}
+
+# --- Skill 调用专用函数 ---
+# AC8: 记录 Skill 调用事件
+write_skill_spool() {
+  local kind="$1"
+  local session_id="$2"
+  local trace_id="$3"
+  local parent_id="$4"
+  local skill_name="$5"
+  local skill_version="$6"
+  local trigger_mode="$7"
+  local payload="$8"
+  local agent_id="$9"
+  local agent_type="${10}"
+  
+  # Build skill-specific payload
+  local skill_payload="{\"skillName\": \"$(json_escape "$skill_name")\""
+  if [ -n "$skill_version" ]; then
+    skill_payload="$skill_payload, \"skillVersion\": \"$(json_escape "$skill_version")\""
+  fi
+  if [ -n "$trigger_mode" ]; then
+    skill_payload="$skill_payload, \"triggerMode\": \"$(json_escape "$trigger_mode")\""
+  fi
+  if [ -n "$payload" ]; then
+    # Merge additional payload
+    skill_payload="$skill_payload, $(echo "$payload" | sed 's/^{//;s/}$//')"
+  fi
+  skill_payload="$skill_payload}"
+  
+  write_spool "$kind" "$session_id" "$trace_id" "$parent_id" "$skill_payload" "$agent_id" "$agent_type"
+}
+
+# --- MCP 调用专用函数 ---
+# AC18: 记录 MCP 调用事件
+write_mcp_spool() {
+  local kind="$1"
+  local session_id="$2"
+  local trace_id="$3"
+  local parent_id="$4"
+  local server_name="$5"
+  local tool_name="$6"
+  local payload="$7"
+  local agent_id="$8"
+  local agent_type="${9}"
+  
+  # Build MCP-specific payload
+  local mcp_payload="{\"serverName\": \"$(json_escape "$server_name")\", \"toolName\": \"$(json_escape "$tool_name")\""
+  if [ -n "$payload" ]; then
+    # Merge additional payload
+    mcp_payload="$mcp_payload, $(echo "$payload" | sed 's/^{//;s/}$//')"
+  fi
+  mcp_payload="$mcp_payload}"
+  
+  write_spool "$kind" "$session_id" "$trace_id" "$parent_id" "$mcp_payload" "$agent_id" "$agent_type"
 }
 
 # --- Spool Cleanup ---
@@ -191,3 +253,50 @@ cleanup_spool() {
 
 # Run cleanup on source (won't be called directly from Hook, but available)
 cleanup_spool $_SPOOL_RETENTION_DAYS
+
+# 从 mcp__<server>__<tool> 格式提取 serverName 和 toolName
+_parse_mcp_name() {
+  local raw="$1"
+  local without_prefix="${raw#mcp__}"
+  # serverName = 从开头到第二个 __  之前
+  MCP_SERVER_NAME="${without_prefix%%__*}"
+  # toolName = 第二个 __ 之后
+  MCP_TOOL_NAME="${without_prefix#*__}"
+  # 如果 toolName 仍有 __，取最后一段
+  case "$MCP_TOOL_NAME" in
+    *__*) MCP_TOOL_NAME="${MCP_TOOL_NAME##*__}" ;;
+  esac
+  [ -z "$MCP_TOOL_NAME" ] && MCP_TOOL_NAME="${LLM_TOOL_NAME:-$raw}"
+}
+
+# ============================================================================
+# Raw Debug Logging — 保存 Hook 原始输入用于调试
+# 启用方式: export TRAE_DEBUG_RAW=1
+# 日志位置: ~/.agent-insight/otel_data/trae/_debug_raw/<yyyy-mm-dd>.jsonl
+# ============================================================================
+debug_raw_input() {
+  [ "${TRAE_DEBUG_RAW:-0}" = "1" ] || return 0
+  local raw_input="$1"
+  local hook_name="${2:-unknown}"
+  local ts; ts=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)
+  local debug_base="${AGENT_INSIGHT_DIR:-$HOME/.agent-insight}/otel_data/trae/_debug_raw"
+  local debug_file="$debug_base/$(date -u +%Y-%m-%d).jsonl"
+  mkdir -p "$(dirname "$debug_file")" 2>/dev/null
+  # 写入一行 JSON：元数据 + 原始输入
+  python3 -c "
+import os, sys, json
+entry = {
+    't': os.environ.get('_DBG_TS', ''),
+    'hook': os.environ.get('_DBG_HOOK', ''),
+    'sessionID': os.environ.get('_DBG_SID', ''),
+    'raw': json.loads(sys.stdin.read()) if sys.stdin.read(1) else {}
+}
+" 2>/dev/null <<RAW_INPUT
+$raw_input
+RAW_INPUT
+  # 用更简单的方式：直接把 raw_input 和元数据拼接写入
+  local session_id
+  session_id=$(echo "$raw_input" | json_extract_string ".session_id" 2>/dev/null || echo "")
+  local entry="{\"t\":\"$ts\",\"hook\":\"$hook_name\",\"sessionID\":\"$session_id\",\"raw\":$raw_input}"
+  echo "$entry" >> "$debug_file" 2>/dev/null
+}
