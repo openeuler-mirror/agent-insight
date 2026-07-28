@@ -43,6 +43,7 @@ const FRAMEWORKS: { value: string; label: string }[] = [
     { value: 'codeagent', label: 'CodeAgent' },
     { value: 'hermes', label: 'Hermes' },
     { value: 'jiuwen', label: 'JiuwenSwarm' },
+    { value: 'qoder', label: 'Qoder CN product family' },
 ];
 
 function parseFrameworks(raw: string | null): { value: string; label: string }[] {

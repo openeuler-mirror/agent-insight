@@ -92,6 +92,21 @@ test("Qoder Desktop VSIX and JetBrains ZIP are exposed as fixed attachment downl
   }
 })
 
+test("install guide appends Qoder to the existing framework choices", () => {
+  const source = fs.readFileSync(
+    path.join(process.cwd(), "src", "app", "(main)", "accessconfig", "install", "page.tsx"),
+    "utf8",
+  )
+  const start = source.indexOf("const FRAMEWORK_OPTIONS")
+  const end = source.indexOf("];", start)
+
+  assert.notEqual(start, -1, "install guide must define framework choices")
+  assert.notEqual(end, -1, "install guide framework choices must terminate")
+  const options = [...source.slice(start, end).matchAll(/value: '([^']+)'/g)].map((match) => match[1])
+
+  assert.deepEqual(options, ["opencode", "claude", "codeagent", "openclaw", "hermes", "jiuwen", "qoder"])
+})
+
 test("curl setup appends Qoder without changing existing framework entries", async () => {
   for (const platform of ["unix", "windows"] as const) {
     const script = await setupScript(platform)

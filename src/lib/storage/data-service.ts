@@ -258,6 +258,11 @@ export async function recomputeExecutionSkills(
 }
 
 export interface ExecutionRecord {
+    /**
+     * Internal ingest provenance. This is consumed before persistence and is
+     * intentionally not stored in the Execution table.
+     */
+    authenticated_ingest?: boolean;
     upload_id?: string;
     task_id?: string;
     query?: string;

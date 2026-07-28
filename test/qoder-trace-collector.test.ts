@@ -304,7 +304,7 @@ test("Qoder collector builds deterministic OTLP snapshots with LLM, tool, errors
   assert.match(serialized, /<redacted>/)
 })
 
-test("Qoder collector attributes service-account uploads by irreversible API key hash", () => {
+test("Qoder collector keeps authenticated ownership while retaining the API key hash for spool isolation", () => {
   const accountHash = "0123456789abcdef"
   const payload = buildQoderOtlpPayload({
     ...sampleCapture(),
@@ -326,7 +326,8 @@ test("Qoder collector attributes service-account uploads by irreversible API key
     authenticatedUser: "admin",
   })
   const serviceRecord = aggregateOtelTraceEvents(SESSION_ID, serviceEvents)
-  assert.equal(serviceRecord?.user, `qoder-account-${accountHash}`)
+  assert.equal(serviceRecord?.user, "admin")
+  assert.equal(serviceRecord?.authenticated_ingest, true)
 
   const userEvents = normalizeOtlpTraces(payload, {
     receivedAt: "2026-07-21T12:00:04.000Z",
@@ -334,6 +335,14 @@ test("Qoder collector attributes service-account uploads by irreversible API key
   })
   const userRecord = aggregateOtelTraceEvents(SESSION_ID, userEvents)
   assert.equal(userRecord?.user, "alice")
+  assert.equal(userRecord?.authenticated_ingest, true)
+
+  const unauthenticatedEvents = normalizeOtlpTraces(payload, {
+    receivedAt: "2026-07-21T12:00:04.000Z",
+  })
+  const unauthenticatedRecord = aggregateOtelTraceEvents(SESSION_ID, unauthenticatedEvents)
+  assert.equal(unauthenticatedRecord?.user, "anonymous")
+  assert.equal(unauthenticatedRecord?.authenticated_ingest, false)
 })
 
 test("Qoder tool duration falls back to transcript timestamps when async hooks collapse to zero", () => {
