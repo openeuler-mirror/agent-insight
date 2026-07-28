@@ -1609,7 +1609,8 @@ function ContentModal({ title, raw, onClose }: { title: string; raw: string; onC
     return (
         <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
             <DialogContent className="max-w-[800px] max-h-[88vh] flex flex-col p-0 gap-0">
-                <DialogHeader className="flex-row items-center gap-3 p-4 border-b border-border space-y-0">
+                {/* pr-12 给 DialogContent 右上角那颗绝对定位的关闭按钮留出车道，否则和 Copy 按钮叠在一起 */}
+                <DialogHeader className="flex-row items-center gap-3 p-4 pr-12 border-b border-border space-y-0">
                     <DialogTitle className="text-sm font-semibold text-foreground">{title}</DialogTitle>
                     <div className="flex-1" />
                     <span className="text-xs text-foreground-muted tabular-nums">{raw.length.toLocaleString()} chars</span>
@@ -2282,7 +2283,7 @@ function ToolBadge({ call, modalTitle }: {
             >
                 {call.name}
             </button>
-            {open && <ContentModal title={`${modalTitle} — ${call.name}`} raw={raw} onClose={() => setOpen(false)} />}
+            {open && <ContentModal title={`${modalTitle} · ${call.name}`} raw={raw} onClose={() => setOpen(false)} />}
         </>
     );
 }
@@ -2347,6 +2348,8 @@ function SnapshotMessageRow({
     // open the Response bar too so the answer is visible without an extra click.
     const responseDefaultOpen = !!defaultExpanded;
     const roleLabel = message.role === 'compaction' ? 'summary' : message.role;
+    // 结构化标题：调用方给到「Input · History」，这里补上「第几条 + 角色」，块级弹窗再往后接 thinking / response / 工具名
+    const rowTitle = `${modalTitle} · #${message.position} ${roleLabel}`;
     const roleClasses = message.role === 'compaction'
         ? 'border-warning-border bg-warning-subtle text-warning'
         : message.role === 'system'
@@ -2388,7 +2391,7 @@ function SnapshotMessageRow({
                                 text={reasoning}
                                 tokens={message.reasoningTokens}
                                 durationLabel={message.reasoningDurationLabel}
-                                modalTitle={`${modalTitle} — thinking`}
+                                modalTitle={`${rowTitle} · thinking`}
                             />
                         )}
                         {trimmed ? (
@@ -2400,7 +2403,7 @@ function SnapshotMessageRow({
                                     text={trimmed}
                                     tone="normal"
                                     defaultOpen={responseDefaultOpen}
-                                    modalTitle={`${modalTitle} — response`}
+                                    modalTitle={`${rowTitle} · response`}
                                 />
                             ) : (
                                 <>
@@ -2418,7 +2421,7 @@ function SnapshotMessageRow({
                             )
                         ) : null}
                         {hasToolCalls && (
-                            <ToolCallList calls={toolCalls} modalTitle={modalTitle} />
+                            <ToolCallList calls={toolCalls} modalTitle={rowTitle} />
                         )}
                         {!trimmed && !hasToolCalls && reasoning ? (
                             <div className="border-t border-border px-3 py-2 text-xs text-foreground-muted">
@@ -2429,7 +2432,7 @@ function SnapshotMessageRow({
                 )}
             </div>
             {showModal && (
-                <ContentModal title={modalTitle} raw={trimmed} onClose={() => setShowModal(false)} />
+                <ContentModal title={rowTitle} raw={trimmed} onClose={() => setShowModal(false)} />
             )}
         </>
     );
@@ -2458,6 +2461,9 @@ function FoldedMessagesBlock({
     const raw = messages
         .map(m => `#${m.position} [${m.role}]\n${m.content}`)
         .join('\n\n---\n\n');
+    // 弹窗标题只走「区块 · 分组 · 第几条」这条结构路径，不带正文首句 ——
+    // 正文首句当标题会被读成「这个弹窗讲的是这句话」，而它其实是整组消息。
+    const groupTitle = `${modalTitle} · ${label}`;
 
     return (
         <>
@@ -2479,7 +2485,7 @@ function FoldedMessagesBlock({
                                 key={`${message.role}-${message.position}-${index}`}
                                 message={message}
                                 defaultExpanded={expandLast && index === messages.length - 1}
-                                modalTitle={`${modalTitle} — #${message.position}`}
+                                modalTitle={groupTitle}
                             />
                         ))}
                         <div className="border-t border-border px-3 py-1.5 text-right">
@@ -2491,7 +2497,7 @@ function FoldedMessagesBlock({
                 )}
             </div>
             {showModal && (
-                <ContentModal title={`${modalTitle} — ${label}`} raw={raw} onClose={() => setShowModal(false)} />
+                <ContentModal title={groupTitle} raw={raw} onClose={() => setShowModal(false)} />
             )}
         </>
     );
@@ -2531,13 +2537,11 @@ function SnapshotSection({ label, count, subtitle, defaultOpen = true, children 
 }
 
 function HierarchicalSpanSnapshot({
-    title,
     node,
     event,
     snapshot,
     responseText,
 }: {
-    title: string;
     node: AgentNode;
     event: AgentEvent;
     snapshot: LlmPromptSnapshot;
@@ -2626,7 +2630,7 @@ function HierarchicalSpanSnapshot({
                         messages={historyAndSystem}
                         label="History"
                         subtitle={historySubtitle}
-                        modalTitle={`${title} — history`}
+                        modalTitle="Input"
                     />
                 ) : currentInput.length > 0 ? (
                     <div className="border-t border-border first:border-t-0 px-3 py-2 text-xs text-foreground-muted">
@@ -2638,7 +2642,7 @@ function HierarchicalSpanSnapshot({
                         messages={currentInput}
                         label="Current input"
                         subtitle="本轮新增"
-                        modalTitle={`${title} — current input`}
+                        modalTitle="Input"
                         defaultOpen
                     />
                 ) : (
@@ -2666,7 +2670,7 @@ function HierarchicalSpanSnapshot({
                             source: 'history',
                             position: 1,
                         }}
-                        modalTitle={`${title} — output`}
+                        modalTitle="Output"
                     />
                 ) : (
                     <div className="px-3 py-2 text-xs text-foreground-muted">
@@ -2857,7 +2861,7 @@ function EventDetailPanel({ event, node, interactions, onSelectChild }: { event:
 
                 {/* ── User message ── */}
                 {event.kind === 'user' && (
-                    <CompactSection label="Message" raw={responseText || null} modalTitle={`${title} — Message`} />
+                    <CompactSection label="Message" raw={responseText || null} />
                 )}
 
                 {/* ── Tool / Skill ── */}
@@ -2945,8 +2949,6 @@ function LLMEventBody({ event, responseText, interactions, node }: {
         [event, node, interactions],
     );
 
-    const title = event.name || firstMeaningfulLine(event.summary) || 'LLM';
-
     return (
         <>
             {/* Compact meta row: model + params + token counts */}
@@ -3007,7 +3009,6 @@ function LLMEventBody({ event, responseText, interactions, node }: {
             )}
 
             <HierarchicalSpanSnapshot
-                title={title}
                 node={node}
                 event={event}
                 snapshot={snapshot}
@@ -3018,7 +3019,7 @@ function LLMEventBody({ event, responseText, interactions, node }: {
                 <CompactSection
                     label={`Compaction Folded Originals (${snapshot.foldedOriginalCount})`}
                     raw={snapshot.foldedOriginalRaw}
-                    modalTitle={`${title} — Compaction Folded Originals`}
+                    modalTitle="Compaction Folded Originals"
                     emptyText="(empty)"
                 />
             )}
@@ -4163,7 +4164,7 @@ function SystemPromptModal({ prompt, index, total, onClose }: { prompt: NonNulla
     return (
         <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
             <DialogContent className="max-w-[780px] max-h-[88vh] flex flex-col p-0 gap-0">
-                <DialogHeader className="flex-row items-center gap-3 p-4 border-b border-border space-y-0 flex-wrap">
+                <DialogHeader className="flex-row items-center gap-3 p-4 pr-12 border-b border-border space-y-0 flex-wrap">
                     <DialogTitle className="text-xs font-bold uppercase tracking-wider text-foreground-muted bg-background-secondary border border-border rounded-sm px-2 py-0.5">SYSTEM PROMPT</DialogTitle>
                     {total > 1 && <span className="text-xs text-foreground-muted">{index + 1} / {total}</span>}
                     <div className="flex-1" />
@@ -4194,7 +4195,7 @@ function EventDetailModal({ event, dur, time, onClose, node, interactions }: {
     return (
         <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
             <DialogContent className="max-w-[700px] max-h-[82vh] flex flex-col p-0 gap-0">
-                <DialogHeader className="flex-row items-center gap-2 p-4 border-b border-border space-y-0">
+                <DialogHeader className="flex-row items-center gap-2 p-4 pr-12 border-b border-border space-y-0">
                     <KindBadge kind={event.kind} size="sm" />
                     <DialogTitle className="flex-1 font-semibold text-sm truncate text-foreground">{title}</DialogTitle>
                     <div className="flex gap-3 items-center shrink-0 text-xs text-foreground-muted">
