@@ -39,6 +39,7 @@ const FRAMEWORK_OPTIONS: { value: string; label: string }[] = [
     { value: 'openclaw', label: 'OpenClaw' },
     { value: 'hermes', label: 'Hermes' },
     { value: 'jiuwen', label: 'JiuwenSwarm' },
+    { value: 'trae', label: 'TRAE AI IDE' },
 ];
 
 export default function AccessInstallPage() {
