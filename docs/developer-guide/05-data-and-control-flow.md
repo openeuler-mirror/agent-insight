@@ -223,3 +223,4 @@ flowchart LR
 ```
 
 实现入口为 `src/lib/trace-transfer.ts`（Bundle 校验、排序与 ID 重映射）和 `src/lib/trace-transfer-service.ts`（所有权、完整树查询、持久化与失败清理）。Session 的 `interactions` 随树迁移；Langfuse Session 同时迁移完整 `langfuseTraceNodes`，冲突重映射只改其中的 `subagentSessionId`，保留 OTel trace/span 父子标识。导入目标 user 始终取当前请求身份，不信任 Bundle 中的来源用户。任一节点写入或 Skill 重算失败时，服务会清理本次已创建的 Session 与 Execution，避免保留可见的半棵树。
+<!-- Codex trace collector contract: Hook and native OTel Logs are merged by the loopback relay; the Codex adapter uses the latest snapshot for a duplicated span without changing other framework dedupe semantics. -->

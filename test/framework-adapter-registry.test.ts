@@ -35,7 +35,7 @@ test("registry resolves framework ids and aliases", () => {
 test("registry exposes the framework descriptor list", () => {
   assert.deepEqual(
     listFrameworks().map((descriptor) => descriptor.id),
-    ["opencode", "claude", "codeagent", "openclaw", "hermes", "jiuwenswarm", "langfuse-langgraph", "llamaindex", "qoder", "trae", "actrail", "pi-agent"],
+    ["opencode", "claude", "codeagent", "openclaw", "hermes", "codex", "jiuwenswarm", "langfuse-langgraph", "llamaindex", "qoder", "trae", "actrail", "pi-agent"],
   )
 })
 
@@ -55,10 +55,12 @@ test("registry adapters keep direct references to existing functions", () => {
   assert.equal(getAdapter("openclaw").extractSkills, extractSkillsWithVersionsFromOpenClawSession)
   assert.equal(getAdapter("openclaw").capabilities?.subagentTree, true)
   assert.equal(getAdapter("openclaw").capabilities?.skillScope, "session")
-    assert.equal(getAdapter("claude").capabilities?.skillScope, "session")
-    assert.equal(getAdapter("llamaindex").capabilities?.skillScope, "agent-tree")
-    assert.equal(getAdapter("pi-agent").capabilities?.subagentTree, true)
-    assert.equal(getAdapter("pi-agent").capabilities?.skills, true)
+  assert.equal(getAdapter("codex").capabilities?.skills, true)
+  assert.equal(getAdapter("codex").capabilities?.subagentTree, true)
+  assert.equal(getAdapter("claude").capabilities?.skillScope, "session")
+  assert.equal(getAdapter("llamaindex").capabilities?.skillScope, "agent-tree")
+  assert.equal(getAdapter("pi-agent").capabilities?.subagentTree, true)
+  assert.equal(getAdapter("pi-agent").capabilities?.skills, true)
   assert.equal(getAdapter("jiuwen").capabilities?.subagentTree, undefined)
   assert.equal(getAdapter("qoder").capabilities?.subagentTree, true)
   assert.equal(getAdapter("qoder").capabilities?.skillScope, "agent-tree")

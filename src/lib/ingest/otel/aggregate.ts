@@ -37,9 +37,14 @@ function shouldReplaceSnapshot(existing: OtelTraceEvent, candidate: OtelTraceEve
 }
 
 export function aggregateOtelTraceEvents(sessionId: string, events: OtelTraceEvent[]) {
+  const sessionEvents = events.filter((event) => event.sessionId === sessionId);
+  if (!sessionEvents.length) return null;
+  const adapter = getOtelTraceAdapter(sessionEvents);
+  const prepared = adapter.preprocessEvents
+    ? adapter.preprocessEvents(sessionEvents)
+    : sessionEvents;
   const selected = new Map<string, OtelTraceEvent>();
-  for (const event of events) {
-    if (event.sessionId !== sessionId) continue;
+  for (const event of prepared) {
     const key = dedupeKey(event);
     const existing = selected.get(key);
     // AcTrail emits revised events for a span. Other span-less legacy events
@@ -50,7 +55,6 @@ export function aggregateOtelTraceEvents(sessionId: string, events: OtelTraceEve
   const retained = Array.from(selected.values());
   const sorted = retained.sort((a, b) => (a.startTimeMs || 0) - (b.startTimeMs || 0));
   if (!sorted.length) return null;
-  const adapter = getOtelTraceAdapter(sorted);
   // Keep a foreign framework's raw spool for the server that owns its adapter.
   return adapter?.aggregate(sessionId, sorted) || null;
 }

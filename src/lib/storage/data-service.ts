@@ -57,6 +57,7 @@ const SUBAGENT_TREE_FRAMEWORKS = new Set([
     'langfuse-langgraph',
     'codeagent',
     'claudecode',
+    'codex',
     'llamaindex',
     'pi-agent',
 ]);

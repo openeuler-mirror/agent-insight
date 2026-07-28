@@ -6,6 +6,7 @@ import { langfuseLangGraphOtelTraceAdapter } from './adapters/langfuse-langgraph
 import { llamaIndexOtelTraceAdapter } from './adapters/llamaindex';
 import { piAgentOtelTraceAdapter } from './adapters/pi-agent';
 import { qoderOtelTraceAdapter } from './adapters/qoder';
+import { codexOtelTraceAdapter } from './adapters/codex';
 import type { OtelTraceAdapter } from './adapters/types';
 import type { OtelTraceEvent } from './types';
 
@@ -14,6 +15,7 @@ const frameworkAdapters: readonly OtelTraceAdapter[] = [
   langfuseLangGraphOtelTraceAdapter,
   hermesOtelTraceAdapter,
   openclawOtelTraceAdapter,
+  codexOtelTraceAdapter,
   llamaIndexOtelTraceAdapter,
   qoderOtelTraceAdapter,
   piAgentOtelTraceAdapter,
