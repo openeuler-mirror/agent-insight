@@ -27,6 +27,7 @@ public final class CollectorInstaller {
             "qoder_trace_collector.mjs",
             "qoder_uploader_client.mjs",
             "qoder_setup.mjs",
+            "qoder_token_usage_env.mjs",
             "qoder_jetbrains_uninstall.mjs"
     );
 

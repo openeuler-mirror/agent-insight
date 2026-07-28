@@ -64,7 +64,7 @@ function atomicWrite(file, content) {
 function prepareRuntime(context) {
   const runtime = runtimeDirectory()
   fs.mkdirSync(runtime, { recursive: true })
-  for (const file of ["qoder_trace_collector.mjs", "qoder_uploader_client.mjs", "qoder_setup.mjs"]) {
+  for (const file of ["qoder_trace_collector.mjs", "qoder_uploader_client.mjs", "qoder_setup.mjs", "qoder_token_usage_env.mjs"]) {
     fs.copyFileSync(path.join(context.extensionPath, "collector", file), path.join(runtime, file))
   }
   return path.join(runtime, "qoder_setup.mjs")

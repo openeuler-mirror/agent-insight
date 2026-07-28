@@ -4,6 +4,10 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
+import {
+  ensureQoderTokenUsageEnvironment,
+  releaseQoderTokenUsageEnvironment,
+} from "./qoder_token_usage_env.mjs"
 
 export const QODER_HOOK_EVENTS = [
   "SessionStart",
@@ -308,6 +312,14 @@ export function installQoderCollector(options = {}) {
   atomicWrite(targetSettings, `${JSON.stringify(settings, null, 2)}\n`)
   const markerPath = ownerMarkerPath(insightDir, owner)
   atomicWrite(markerPath, `${JSON.stringify({ owner, product, scope, settingsPath: targetSettings }, null, 2)}\n`)
+  const tokenUsageEnvironment = product === "cli" && (options.configureTokenUsageEnvironment ?? options.homeDir === undefined)
+    ? ensureQoderTokenUsageEnvironment({
+        homeDir,
+        insightDir,
+        owner: "cli",
+        adapter: options.tokenUsageEnvironmentAdapter,
+      })
+    : undefined
 
   const configFile = path.join(insightDir, "config")
   let configText = ""
@@ -320,7 +332,7 @@ export function installQoderCollector(options = {}) {
   }))
 
   const uploaderPid = options.startUploader === false ? undefined : startUploader(uploaderPath, spoolDir, host, apiKey)
-  return { settingsPath: targetSettings, collectorPath, uploaderPath, spoolDir, accountHash, product, owner, markerPath, uploaderPid }
+  return { settingsPath: targetSettings, collectorPath, uploaderPath, spoolDir, accountHash, product, owner, markerPath, tokenUsageEnvironment, uploaderPid }
 }
 
 /** @param {any} options */
@@ -350,6 +362,14 @@ export function uninstallQoderCollector(options = {}) {
   const spoolMatch = configText.match(/^AGENT_INSIGHT_QODER_SPOOL_DIR=(.+)$/m)
   const spoolDir = spoolMatch?.[1]?.trim()
   const stoppedUploaderPids = stopQoderUploaders(insightDir, product)
+  const tokenUsageEnvironment = product === "cli"
+    ? releaseQoderTokenUsageEnvironment({
+        homeDir,
+        insightDir,
+        owner: "cli",
+        adapter: options.tokenUsageEnvironmentAdapter,
+      })
+    : undefined
   if (!remainingOwners.length && configText) atomicWrite(configFile, updateEnvText(configText, {}, CONFIG_KEYS))
 
   if (!remainingOwners.length) {
@@ -373,6 +393,7 @@ export function uninstallQoderCollector(options = {}) {
     owner,
     remainingOwners: remainingOwners.map((marker) => marker.owner),
     stoppedUploaderPids,
+    tokenUsageEnvironment,
     purged: Boolean(options.purge),
   }
 }

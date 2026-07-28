@@ -20,7 +20,7 @@ foreach ($Target in @($Stage, $Distribution)) {
 
 New-Item -ItemType Directory -Force -Path $Stage, (Join-Path $Stage "collector"), $DistributionRoot | Out-Null
 Copy-Item -LiteralPath (Join-Path $IntegrationRoot "package.json"), (Join-Path $IntegrationRoot "extension.js"), (Join-Path $IntegrationRoot "uninstall-watcher.mjs"), (Join-Path $RepositoryRoot "LICENSE") -Destination $Stage
-Copy-Item -LiteralPath (Join-Path $RepositoryRoot "scripts\qoder_trace_collector.mjs"), (Join-Path $RepositoryRoot "scripts\qoder_uploader_client.mjs"), (Join-Path $RepositoryRoot "scripts\qoder_setup.mjs") -Destination (Join-Path $Stage "collector")
+Copy-Item -LiteralPath (Join-Path $RepositoryRoot "scripts\qoder_trace_collector.mjs"), (Join-Path $RepositoryRoot "scripts\qoder_uploader_client.mjs"), (Join-Path $RepositoryRoot "scripts\qoder_setup.mjs"), (Join-Path $RepositoryRoot "scripts\qoder_token_usage_env.mjs") -Destination (Join-Path $Stage "collector")
 
 Push-Location $Stage
 try {

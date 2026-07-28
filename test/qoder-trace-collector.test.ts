@@ -44,6 +44,11 @@ import {
   removeQoderWorkHooks,
   uninstallQoderWorkCollector,
 } from "../scripts/qoder_work_setup.mjs"
+import {
+  ensureQoderTokenUsageEnvironment,
+  QODERCN_TOKEN_USAGE_ENV,
+  releaseQoderTokenUsageEnvironment,
+} from "../scripts/qoder_token_usage_env.mjs"
 
 const SESSION_ID = "qoder-session-1"
 
@@ -2456,6 +2461,121 @@ test("Qoder setup installs account-isolated files and supports scoped purge", ()
     assert.doesNotMatch(uninstalledConfig, /AGENT_INSIGHT_QODER/)
     assert.match(uninstalledConfig, /^AGENT_INSIGHT_HOST=http:\/\/localhost:3000$/m)
     assert.match(uninstalledConfig, /^AGENT_INSIGHT_API_KEY=account-a$/m)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("Qoder CN CLI and Work share the managed exact-token environment without clobbering the user value", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "qoder-token-env-"))
+  let storedValue: string | undefined = "user-value"
+  const adapter = {
+    read: () => storedValue,
+    set: (_name: string, value: string) => { storedValue = value },
+    restore: (_name: string, value: string | undefined) => { storedValue = value },
+  }
+  try {
+    const cli = ensureQoderTokenUsageEnvironment({
+      homeDir: root,
+      insightDir: path.join(root, ".agent-insight"),
+      owner: "cli",
+      adapter,
+    })
+    assert.equal(cli.name, QODERCN_TOKEN_USAGE_ENV)
+    assert.equal(storedValue, "1")
+    assert.deepEqual(cli.owners, ["cli"])
+
+    const work = ensureQoderTokenUsageEnvironment({
+      homeDir: root,
+      insightDir: path.join(root, ".agent-insight"),
+      owner: "work",
+      adapter,
+    })
+    assert.deepEqual(work.owners, ["cli", "work"])
+
+    const cliRemoved = releaseQoderTokenUsageEnvironment({
+      homeDir: root,
+      insightDir: path.join(root, ".agent-insight"),
+      owner: "cli",
+      adapter,
+    })
+    assert.deepEqual(cliRemoved.owners, ["work"])
+    assert.equal(cliRemoved.restored, false)
+    assert.equal(storedValue, "1")
+
+    const workRemoved = releaseQoderTokenUsageEnvironment({
+      homeDir: root,
+      insightDir: path.join(root, ".agent-insight"),
+      owner: "work",
+      adapter,
+    })
+    assert.deepEqual(workRemoved.owners, [])
+    assert.equal(workRemoved.restored, true)
+    assert.equal(storedValue, "user-value")
+    assert.equal(fs.existsSync(workRemoved.statePath), false)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("Qoder CN CLI and Work installers register shared exact-token environment owners", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "qoder-token-env-install-"))
+  const insightDir = path.join(root, ".agent-insight")
+  const sourceDir = path.join(process.cwd(), "scripts")
+  const workHome = path.join(root, ".qoderworkcn")
+  let storedValue: string | undefined
+  const adapter = {
+    read: () => storedValue,
+    set: (_name: string, value: string) => { storedValue = value },
+    restore: (_name: string, value: string | undefined) => { storedValue = value },
+  }
+  try {
+    fs.mkdirSync(workHome, { recursive: true })
+    fs.writeFileSync(path.join(workHome, "settings.json"), "{}")
+    const cli = installQoderCollector({
+      homeDir: root,
+      insightDir,
+      sourceDir,
+      host: "http://localhost:3000",
+      apiKey: "account-a",
+      product: "cli",
+      owner: "cli",
+      startUploader: false,
+      configureTokenUsageEnvironment: true,
+      tokenUsageEnvironmentAdapter: adapter,
+    })
+    assert.deepEqual(cli.tokenUsageEnvironment?.owners, ["cli"])
+    assert.equal(storedValue, "1")
+
+    const work = installQoderWorkCollector({
+      homeDir: root,
+      insightDir,
+      qoderWorkHome: workHome,
+      sourceDir,
+      startUploader: false,
+      configureTokenUsageEnvironment: true,
+      tokenUsageEnvironmentAdapter: adapter,
+    })
+    assert.deepEqual(work.tokenUsageEnvironment?.owners, ["cli", "work"])
+
+    const cliRemoved = uninstallQoderCollector({
+      homeDir: root,
+      insightDir,
+      product: "cli",
+      owner: "cli",
+      tokenUsageEnvironmentAdapter: adapter,
+    })
+    assert.deepEqual(cliRemoved.tokenUsageEnvironment?.owners, ["work"])
+    assert.equal(storedValue, "1")
+
+    const workRemoved = uninstallQoderWorkCollector({
+      homeDir: root,
+      insightDir,
+      qoderWorkHome: workHome,
+      tokenUsageEnvironmentAdapter: adapter,
+    })
+    assert.equal(workRemoved.tokenUsageEnvironment?.restored, true)
+    assert.equal(storedValue, undefined)
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }

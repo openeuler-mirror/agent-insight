@@ -42,7 +42,7 @@ if ($LASTEXITCODE -ne 0) { throw "JetBrains plugin compilation failed." }
 Copy-Item -Path (Join-Path $Classes "*") -Destination $JarRoot -Recurse -Force
 Copy-Item -Path (Join-Path $PSScriptRoot "src\main\resources\*") -Destination $JarRoot -Recurse -Force
 $Scripts = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\..\scripts"))
-Copy-Item -LiteralPath (Join-Path $Scripts "qoder_trace_collector.mjs"), (Join-Path $Scripts "qoder_uploader_client.mjs"), (Join-Path $Scripts "qoder_setup.mjs") -Destination (Join-Path $JarRoot "collector") -Force
+Copy-Item -LiteralPath (Join-Path $Scripts "qoder_trace_collector.mjs"), (Join-Path $Scripts "qoder_uploader_client.mjs"), (Join-Path $Scripts "qoder_setup.mjs"), (Join-Path $Scripts "qoder_token_usage_env.mjs") -Destination (Join-Path $JarRoot "collector") -Force
 
 $Jar = Join-Path $PluginRoot "lib\agent-insight-qoder-jetbrains-$PluginVersion.jar"
 $JarArchive = "$Jar.zip"

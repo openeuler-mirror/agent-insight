@@ -107,7 +107,7 @@ test("Qoder Desktop deactivation awaits a forced collector flush", async () => {
     const fixtureExtension = path.join(root, "extension")
     const collectorDir = path.join(fixtureExtension, "collector")
     fs.mkdirSync(collectorDir, { recursive: true })
-    for (const file of ["qoder_trace_collector.mjs", "qoder_uploader_client.mjs", "qoder_setup.mjs"]) {
+    for (const file of ["qoder_trace_collector.mjs", "qoder_uploader_client.mjs", "qoder_setup.mjs", "qoder_token_usage_env.mjs"]) {
       fs.writeFileSync(path.join(collectorDir, file), "")
     }
     const source = fs.readFileSync(path.join(extensionRoot, "extension.js"), "utf8")

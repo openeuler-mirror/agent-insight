@@ -4,6 +4,10 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
+import {
+  ensureQoderTokenUsageEnvironment,
+  releaseQoderTokenUsageEnvironment,
+} from "./qoder_token_usage_env.mjs"
 
 export const QODER_WORK_HOOK_EVENTS = [
   "SessionStart",
@@ -219,8 +223,16 @@ export function installQoderWorkCollector(options = {}) {
   const settingsPath = path.join(qoderWorkHome, "settings.json")
   const settings = mergeQoderWorkHooks(readJson(settingsPath), { nodePath: process.execPath, collectorPath })
   atomicWrite(settingsPath, `${JSON.stringify(settings, null, 2)}\n`)
+  const tokenUsageEnvironment = (options.configureTokenUsageEnvironment ?? options.homeDir === undefined)
+    ? ensureQoderTokenUsageEnvironment({
+        homeDir,
+        insightDir,
+        owner: "work",
+        adapter: options.tokenUsageEnvironmentAdapter,
+      })
+    : undefined
   const uploaderPid = options.startUploader === false ? undefined : startUploader(uploaderPath, spoolDir, host, apiKey)
-  return { settingsPath, qoderWorkHome, collectorPath, uploaderPath, spoolDir, accountHash, uploaderPid }
+  return { settingsPath, qoderWorkHome, collectorPath, uploaderPath, spoolDir, accountHash, tokenUsageEnvironment, uploaderPid }
 }
 
 /** @param {any} options */
@@ -233,6 +245,12 @@ export function uninstallQoderWorkCollector(options = {}) {
     atomicWrite(settingsPath, `${JSON.stringify(removeQoderWorkHooks(readJson(settingsPath)), null, 2)}\n`)
   }
   const stoppedUploaderPids = stopQoderWorkUploaders(insightDir)
+  const tokenUsageEnvironment = releaseQoderTokenUsageEnvironment({
+    homeDir,
+    insightDir,
+    owner: "work",
+    adapter: options.tokenUsageEnvironmentAdapter,
+  })
   const runtimeDir = path.resolve(insightDir, WORK_RUNTIME_DIR)
   const spoolRoot = path.resolve(insightDir, "otel_data", "qoder", "work")
   const legacySpoolRoot = path.resolve(insightDir, "otel_data", "qoder-work")
@@ -243,7 +261,7 @@ export function uninstallQoderWorkCollector(options = {}) {
       if (root.startsWith(insightRoot)) fs.rmSync(root, { recursive: true, force: true })
     }
   }
-  return { settingsPath, runtimeDir, spoolRoot, stoppedUploaderPids, purged: Boolean(options.purge) }
+  return { settingsPath, runtimeDir, spoolRoot, stoppedUploaderPids, tokenUsageEnvironment, purged: Boolean(options.purge) }
 }
 
 function parseArgs(args) {

@@ -47,5 +47,6 @@ tasks {
         from("../../scripts/qoder_trace_collector.mjs") { into("collector") }
         from("../../scripts/qoder_uploader_client.mjs") { into("collector") }
         from("../../scripts/qoder_setup.mjs") { into("collector") }
+        from("../../scripts/qoder_token_usage_env.mjs") { into("collector") }
     }
 }
