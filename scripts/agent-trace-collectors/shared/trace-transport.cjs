@@ -22,7 +22,7 @@ const STRING_PATTERNS = [
   /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g,
   /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/g,
 ];
-const INLINE_SECRET_ASSIGNMENT = /\b([A-Za-z][A-Za-z0-9_-]*(?:api[-_]?key|token|secret|password|passwd))\b\s*([=:])\s*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;]+)/gi;
+const INLINE_SECRET_ASSIGNMENT = /\b((?:api[-_]?key|token|secret|password|passwd)|[A-Za-z][A-Za-z0-9_-]*?(?:ApiKey|Token|Secret|Password|Passwd))\b\s*([=:])\s*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;]+)/gi;
 const LOCAL_PATH_PATTERNS = [
   /\b[A-Za-z]:[\\/][^\s"'`<>|*?]+/g,
   /\\\\[^\s"'`<>|*?]+(?:\\[^\s"'`<>|*?]+)+/g,

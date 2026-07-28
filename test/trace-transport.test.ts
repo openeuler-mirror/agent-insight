@@ -50,12 +50,14 @@ test("transport redacts recursively before Unicode code-point truncation", () =>
     api_key: "secret-value",
     nested: {
       Authorization: "Bearer abc.def.ghi",
-      text: "token sk-test_123456789012345 more",
+      text: "token sk-test_123456789012345 apiKey=plain-secret C:\\Users\\alice\\project \\\\server\\share\\secret /home/alice/private",
     },
   })
   assert.equal(redacted.api_key, "[REDACTED]")
   assert.equal(redacted.nested.Authorization, "[REDACTED]")
   assert.doesNotMatch(redacted.nested.text, /sk-test/)
+  assert.doesNotMatch(redacted.nested.text, /plain-secret|alice|server\\share/)
+  assert.match(redacted.nested.text, /apiKey=\[REDACTED\].*\[LOCAL_PATH\]/)
   const camelCase = transport.redactValue({
     authToken: "auth-token-value",
     accessToken: "access-token-value",
@@ -87,14 +89,14 @@ test("transport redacts recursively before Unicode code-point truncation", () =>
 
   const privateText = transport.redactString([
     "AGENT_INSIGHT_API_KEY=private-value",
+    "apiKey=plain-secret",
     ["C:", "Users", "alice", "project", "secret.txt"].join("\\"),
     ["", "home", "alice", ".pi", "settings.json"].join("/"),
     ["", "", "wsl.localhost", "Ubuntu", "home", "alice", "collector"].join("\\"),
   ].join(" "))
   assert.match(privateText, /AGENT_INSIGHT_API_KEY=\[REDACTED\]/)
   assert.match(privateText, /\[LOCAL_PATH\]/)
-  assert.doesNotMatch(privateText, /alice|private-value|C:\\Users|\/home\/alice|wsl\.localhost/)
-
+  assert.doesNotMatch(privateText, /alice|private-value|plain-secret|C:\\Users|\/home\/alice|wsl\.localhost/)
   const unicode = "🙂".repeat(2001)
   const truncated = transport.truncateCodePoints(unicode, 2000)
   assert.equal(Array.from(truncated.slice(0, 4000)).length, 2000)
