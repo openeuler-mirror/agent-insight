@@ -147,7 +147,7 @@ export function normalizeClaudeOtlpLogs(
 export type SpanClassification = {
   recognized: boolean;
   skip: boolean;
-  kind: 'llm' | 'tool' | 'agent';
+  kind: 'llm' | 'tool' | 'agent' | 'chain';
   degraded: boolean;
 };
 
@@ -165,6 +165,7 @@ export type SpanClassification = {
 function classifyOtelSpan(span: any, attributes: Record<string, any>): SpanClassification {
   const name = (span?.name || '').toLowerCase();
   const spanKind = attributes['gen_ai.span.kind'];
+  const qoderSpanType = asOptionalString(attributes['qoder.span.type'])?.toLowerCase();
  
   // 生命周期 / 基础设施 span（openclaw 特有）
   const lifecyclePatterns = [
@@ -174,6 +175,19 @@ function classifyOtelSpan(span: any, attributes: Record<string, any>): SpanClass
   ];
   if (lifecyclePatterns.includes(name)) {
     return { recognized: false, skip: true, kind: 'llm', degraded: false };
+  }
+
+  if (qoderSpanType) {
+    if (qoderSpanType === 'tool') {
+      return { recognized: true, skip: false, kind: 'tool', degraded: false };
+    }
+    if (qoderSpanType === 'quest') {
+      return { recognized: true, skip: false, kind: 'chain', degraded: false };
+    }
+    if (qoderSpanType === 'agent' || qoderSpanType === 'subagent') {
+      return { recognized: true, skip: false, kind: 'agent', degraded: false };
+    }
+    return { recognized: true, skip: false, kind: 'llm', degraded: false };
   }
 
   // gen_ai.span.kind 检测（openclaw 插件路径、aliyun exporter）
@@ -297,7 +311,11 @@ export function normalizeClaudeOtlpTraces(
             spanId: asOptionalString(span?.spanId),
             parentSpanId: asOptionalString(span?.parentSpanId),
             name: asOptionalString(span?.name),
-            kind: classification.kind === 'tool' ? 'tool' : 'llm',
+            kind: classification.kind === 'tool'
+              ? 'tool'
+              : classification.kind === 'chain'
+                ? 'chain'
+                : 'llm',
             serviceName,
             user: resourceUser,
             model: firstOptionalString(

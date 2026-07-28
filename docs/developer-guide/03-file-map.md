@@ -49,12 +49,14 @@
 | `storage/server-config.ts` | storage | `getActiveConfig`、`getUserSettings`、`saveUserSettings`；`ModelConfig`、`UserSettings` |
 | `auth/auth.ts` | auth | `resolveUser`、`canAccessSkill`；`AuthResult` |
 | `ingest/proxy-config.ts` / `proxy-store.ts` | ingest | `getProxyConfig`；`ProxyConfig`、`SessionData` |
-| `ingest/adapters/{registry,types,opencode,claude,codeagent,openclaw,hermes,langfuse-langgraph}.ts` | ingest | `getAdapter`、`resolveFrameworkId`、`listFrameworks`；`FrameworkAdapter`、`FrameworkDescriptor` |
+| `ingest/adapters/{registry,types,opencode,claude,codeagent,openclaw,hermes,langfuse-langgraph,qoder}.ts` | ingest | `getAdapter`、`resolveFrameworkId`、`listFrameworks`；`FrameworkAdapter`、`FrameworkDescriptor` |
 | `ingest/routing-signature.ts` | ingest | `RoutingSemanticSignature`、`RoutingSemanticMatch` |
 | `ingest/claude-otel/` / `ingest/codeagent-otel/` / `ingest/otel-consumer/` / `openclaw-watcher.ts` | ingest | 特定框架的接入与 OTel spool 消费 |
 | `ingest/otel/langfuse.ts` / `ingest/otel/adapters/{langfuse-langgraph,langfuse-trace}.ts` | ingest | Langfuse Python SDK / LangGraph OTLP 归属转换；现有 interactions 投影与无损 `LangfuseTraceNode` 投影并行生成 |
 | `engine/observability/langfuse-agent-trace.ts` | engine | Langfuse 可见 observation → 原 Agent Trace 节点/事件模型；不含业务节点名称规则 |
 | `ingest/otel/adapters/hermes.ts` / `scripts/hermes_agent_insight_plugin.py` | ingest | Hermes span tree 归属转换；Hermes hooks 到累计 OTLP JSON snapshot |
+| `ingest/otel/adapters/qoder.ts` / `scripts/qoder_{trace_collector,uploader_client,setup,work_setup}.mjs` | ingest | Qoder CN 家族 hooks、产品/账号隔离 spool、异步上传及 Qoder OTLP snapshot 转换 |
+| `integrations/qoder-desktop/` / `integrations/qoder-jetbrains/` | integration | Qoder Desktop VSIX 与 JetBrains 插件的状态栏、设置、owner 安装和卸载清理 |
 | `shared/model-config.ts` / `default-model-config.ts` | shared | `ModelPricing`，定价/上下文窗口查询 |
 | `shared/interaction-utils.ts` | shared | `InvokedSkill`，交互解析 |
 | `client/api.ts` | client | `apiFetch`（标准的客户端 fetch 封装） |

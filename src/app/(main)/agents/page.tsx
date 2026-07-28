@@ -18,10 +18,15 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
+import {
+    AGENT_PLATFORMS,
+    normalizeAgentPlatform,
+    type AgentPlatform,
+} from '@/lib/engine/observability/agent-platform';
 
 type AgentOwnership = 'system' | 'user';
 type AgentLayer = 'main' | 'subagent';
-type PlatformFilter = 'all' | 'opencode' | 'openclaw' | 'hermes';
+type PlatformFilter = 'all' | AgentPlatform;
 type ExecutionTimeFilter = 'all' | '1h' | '24h' | '7d' | 'exact';
 type SortOption = 'lastExecutedDesc' | 'lastExecutedAsc' | 'platformAsc' | 'nameAsc';
 type AgentLayerFilter = 'all' | AgentLayer;
@@ -32,7 +37,7 @@ interface Agent {
     name: string;
     ownership: AgentOwnership;
     layer: AgentLayer;
-    platform: Exclude<PlatformFilter, 'all'>;
+    platform: AgentPlatform;
     version: string;
     framework: string;
     status: 'running' | 'idle';
@@ -135,11 +140,6 @@ function sortAgents(agents: Agent[], sortBy: SortOption) {
     });
 
     return sorted;
-}
-
-function normalizePlatform(value: string): Exclude<PlatformFilter, 'all'> {
-    if (value === 'openclaw' || value === 'hermes') return value;
-    return 'opencode';
 }
 
 function normalizeOwnership(value: string): AgentOwnership {
@@ -482,7 +482,7 @@ function AgentsPageInner() {
                     name: a.name,
                     ownership: normalizeOwnership(a.agentOwnership || a.ownership || 'user'),
                     layer: normalizeLayer(a.agentType || a.layer || 'main'),
-                    platform: normalizePlatform(a.platform),
+                    platform: normalizeAgentPlatform(a.platform),
                     version: a.version || 'v1.0',
                     framework: a.framework || 'Custom',
                     status: 'idle',
@@ -659,9 +659,7 @@ function AgentsPageInner() {
     const filterOptions = {
         platforms: [
             { value: 'all', label: t('nav.filterDefaultOption') },
-            { value: 'opencode', label: 'opencode' },
-            { value: 'openclaw', label: 'openclaw' },
-            { value: 'hermes', label: 'hermes' },
+            ...AGENT_PLATFORMS.map(value => ({ value, label: value })),
         ],
         executionTimes: [
             { value: 'all', label: t('nav.filterDefaultOption') },

@@ -95,6 +95,12 @@ exclude/
 *.iml
 .agents
 .codex
+.qoder/
+
+# JetBrains plugin builds
+**/.gradle/
+**/build/
+**/.intellijPlatform/
 
 # local docs backup
 docs_backup/

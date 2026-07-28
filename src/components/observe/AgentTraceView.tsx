@@ -545,6 +545,10 @@ export default function AgentTraceView({
         });
         return { agents, tasks, chains, tools, skills, llm, tokens };
     }, [tree]);
+    const tokenUsageEstimated = useMemo(
+        () => interactions.some(interaction => interaction.usage?.estimated === true),
+        [interactions],
+    );
 
     const totalStart = tree?.startedAt;
     const totalDuration = tree?.stats.durationMs;
@@ -805,7 +809,11 @@ export default function AgentTraceView({
                     <StatChip label="SKILL CALLS" value={totalStats.skills} accentClass={KIND_META.skill.text} isActive={eventTypeFilter === 'skill'} onClick={() => handleStatChipClick('skill')} hint={tt('traceTree.filterType') + ' Skill'} />
                     <StatChip label="LLM TURNS"   value={totalStats.llm}   accentClass={KIND_META.llm.text}   isActive={eventTypeFilter === 'llm'}   onClick={() => handleStatChipClick('llm')}   hint={tt('traceTree.filterType') + ' LLM'} />
                     <Sep />
-                    <StatChip label="TOKENS" value={formatTokens(totalStats.tokens)} />
+                    <StatChip
+                        label="TOKENS"
+                        value={`${tokenUsageEstimated && totalStats.tokens > 0 ? '≈' : ''}${formatTokens(totalStats.tokens)}`}
+                        hint={tokenUsageEstimated ? 'Local estimate from visible transcript; hidden context is not included' : undefined}
+                    />
                     {eventTypeFilter !== 'all' && (
                         <Button variant="ghost" size="sm" onClick={() => setEventTypeFilter('all')} className="ml-auto h-6 text-xs">
                             <XIcon className="size-3" />{tt('traceTree.clearFilter')}
@@ -1402,6 +1410,9 @@ function UnifiedEventRow({
     const spanTokens = event.kind === 'task' && childNode
         ? childNode.stats.totalTokens
         : event.usage?.total || 0;
+    const spanTokensEstimated = event.kind === 'task' && childNode
+        ? childNode.events.some(childEvent => childEvent.usage?.estimated === true)
+        : event.usage?.estimated === true;
 
     // Gantt bar: for task events use child agent start
     const spanStart = event.kind === 'task' && childNode ? childNode.startedAt : event.startedAt;
@@ -1504,7 +1515,7 @@ function UnifiedEventRow({
                 {formatDuration(spanDurationMs)}
             </span>
             <span className="w-11 text-right ml-1 text-xs text-foreground-muted tabular-nums font-mono shrink-0">
-                {spanTokens ? formatTokens(spanTokens) : ''}
+                {spanTokens ? `${spanTokensEstimated ? '≈' : ''}${formatTokens(spanTokens)}` : ''}
             </span>
             <span className="w-2 ml-1 flex items-center justify-center">
                 {isSlow && <span className="size-1.5 rounded-full bg-warning" />}
@@ -2512,7 +2523,14 @@ function EventDetailPanel({ event, node, interactions, onSelectChild }: { event:
                 </div>
                 <div style={{ display: 'flex', gap: 12, fontSize: '0.6875rem', color: 'var(--foreground-muted)', flexWrap: 'wrap', alignItems: 'center' }}>
                     {dur && <span style={{ fontVariantNumeric: 'tabular-nums' }}>{dur}</span>}
-                    {event.usage?.total ? <span style={{ fontVariantNumeric: 'tabular-nums' }}>{exactTokens(event.usage.total)} tok</span> : null}
+                    {event.usage?.total ? (
+                        <span
+                            title={event.usage.estimated ? 'Local estimate from visible transcript; hidden context is not included' : undefined}
+                            style={{ fontVariantNumeric: 'tabular-nums' }}
+                        >
+                            {event.usage.estimated ? '≈' : ''}{exactTokens(event.usage.total)} tok
+                        </span>
+                    ) : null}
                     {/* 毫秒级绝对时间:对时后端日志 / Infra 曲线时需要 */}
                     {startClock && <span style={{ fontVariantNumeric: 'tabular-nums' }}>开始 {startClock}</span>}
                     {endClock && <span style={{ fontVariantNumeric: 'tabular-nums' }}>结束 {endClock}</span>}
