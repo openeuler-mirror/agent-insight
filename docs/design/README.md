@@ -25,6 +25,7 @@
 | Langfuse Trace 完整展示 | [langfuse-trace-fidelity](langfuse-trace-fidelity/) | 为 Langfuse OTLP 增加独立完整节点快照，保留业务 CHAIN/AGENT/TOOL 与真实时序，同时保持其他框架和现有 interactions 行为不变 | Bugfix | 2026-07-21 | 🟡 代码与自动化验证已完成，浏览器验收待确认 | —（待补） |
 | JiuwenSwarm 接入追踪（OTEL seam） | [jiuwenswarm-tracing](jiuwenswarm-tracing/) | 把 agent-insight 接入 openJiuwen / JiuwenSwarm，通过 OTEL seam 端到端追踪一次执行；含持久化 span spool 与 token 归属边界记录 | Feature | 2026-06-13 | ✅ 已验证（spike 结论已落地，见 design.md status: validated） | —（待补） |
 | 链路追踪搜索/过滤改造（langfuse operator 模型） | [langfuse-style-trace-search](langfuse-style-trace-search/) | `/trace` 列表的搜索与过滤对齐 langfuse 的 operator 模型（搜索栏 + 左侧 facet 侧栏） | Feature | 2026-06-15 | 🟡 实现中（front-half 已落地：搜索栏 + facet 侧栏 + skill 接线） | —（待补） |
+| LlamaIndex Trace 采集器 | [llamaindex-trace-collector](llamaindex-trace-collector/) | 通过 Python instrumentation 插件采集 Agent、子 Agent、Tool、LLM、RAG 与 Workflow Trace，以可靠本地 spool 异步上传至现有 OTLP 接口，并提供服务端直接部署、配置和隔离清理能力 | Feature | 2026-07-25 | 🟡 实现中 | —（待补） |
 
 ## 字段口径
 

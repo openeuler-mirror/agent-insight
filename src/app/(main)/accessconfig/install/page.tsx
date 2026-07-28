@@ -148,6 +148,86 @@ export default function AccessInstallPage() {
         `LANGFUSE_PUBLIC_KEY=${langfuseUser}`,
         `LANGFUSE_SECRET_KEY=${langfuseSecret}`,
     ].join('\n');
+    const llamaIndexEndpoint = host || 'http://localhost:3000';
+    const llamaIndexCollectorUrl = `${llamaIndexEndpoint}${getApiUrl('/api/ingest/setup/llamaindex-collector')}`;
+    const llamaIndexApiKey = apiKey || (isZh ? '<你的 Agent Insight API Key>' : '<your Agent Insight API key>');
+    const llamaIndexUnixCmd = [
+        'set -euo pipefail',
+        'LLAMAINDEX_PYTHON="${AGENT_INSIGHT_LLAMAINDEX_PYTHON:-python}"',
+        'LLAMAINDEX_ROOT="$HOME/.agent-insight/collectors/llamaindex"',
+        'LLAMAINDEX_COLLECTOR_DIR="$LLAMAINDEX_ROOT/current"',
+        'LLAMAINDEX_NONCE="$(date +%s)-$$-${RANDOM:-0}"',
+        'LLAMAINDEX_STAGING="$LLAMAINDEX_ROOT/.manual-install-$LLAMAINDEX_NONCE"',
+        'LLAMAINDEX_BACKUP="$LLAMAINDEX_ROOT/.manual-previous-$LLAMAINDEX_NONCE"',
+        'LLAMAINDEX_ARCHIVE="${TMPDIR:-/tmp}/agent-insight-llamaindex-$LLAMAINDEX_NONCE.zip"',
+        'cleanup_llamaindex_install() { rm -f "$LLAMAINDEX_ARCHIVE"; rm -rf "$LLAMAINDEX_STAGING"; }',
+        'trap cleanup_llamaindex_install EXIT',
+        'command -v "$LLAMAINDEX_PYTHON" >/dev/null',
+        '"$LLAMAINDEX_PYTHON" -c \'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)\'',
+        '"$LLAMAINDEX_PYTHON" -c \'import llama_index.core\'',
+        'mkdir -p "$LLAMAINDEX_ROOT"',
+        'rm -rf "$LLAMAINDEX_STAGING" "$LLAMAINDEX_BACKUP"',
+        'mkdir -p "$LLAMAINDEX_STAGING"',
+        `curl -sSf "${llamaIndexCollectorUrl}" -o "$LLAMAINDEX_ARCHIVE"`,
+        '"$LLAMAINDEX_PYTHON" -m zipfile -e "$LLAMAINDEX_ARCHIVE" "$LLAMAINDEX_STAGING"',
+        'test -f "$LLAMAINDEX_STAGING/agent_insight_llamaindex/__init__.py"',
+        '[ ! -d "$LLAMAINDEX_COLLECTOR_DIR" ] || mv "$LLAMAINDEX_COLLECTOR_DIR" "$LLAMAINDEX_BACKUP"',
+        'if ! mv "$LLAMAINDEX_STAGING" "$LLAMAINDEX_COLLECTOR_DIR"; then',
+        '  [ ! -d "$LLAMAINDEX_BACKUP" ] || mv "$LLAMAINDEX_BACKUP" "$LLAMAINDEX_COLLECTOR_DIR"',
+        '  exit 1',
+        'fi',
+        'rm -rf "$LLAMAINDEX_BACKUP"',
+        'case ":${PYTHONPATH:-}:" in',
+        '  *":$LLAMAINDEX_COLLECTOR_DIR:"*) ;;',
+        '  *) export PYTHONPATH="$LLAMAINDEX_COLLECTOR_DIR${PYTHONPATH:+:$PYTHONPATH}" ;;',
+        'esac',
+        `export AGENT_INSIGHT_API_KEY="${llamaIndexApiKey}"`,
+        `"$LLAMAINDEX_PYTHON" -m agent_insight_llamaindex.cli configure --endpoint "${llamaIndexEndpoint}"`,
+        '"$LLAMAINDEX_PYTHON" -m agent_insight_llamaindex.cli run -- "$LLAMAINDEX_PYTHON" app.py',
+    ].join('\n');
+    const llamaIndexWindowsCmd = [
+        '$ErrorActionPreference = "Stop"',
+        '$llamaIndexPython = if ($env:AGENT_INSIGHT_LLAMAINDEX_PYTHON) { $env:AGENT_INSIGHT_LLAMAINDEX_PYTHON } else { (Get-Command python -ErrorAction Stop).Source }',
+        '$llamaIndexRoot = "$HOME\\.agent-insight\\collectors\\llamaindex"',
+        '$llamaIndexCollectorDir = Join-Path $llamaIndexRoot "current"',
+        '$llamaIndexNonce = [Guid]::NewGuid().ToString("N")',
+        '$llamaIndexStaging = Join-Path $llamaIndexRoot ".manual-install-$llamaIndexNonce"',
+        '$llamaIndexBackup = Join-Path $llamaIndexRoot ".manual-previous-$llamaIndexNonce"',
+        '$llamaIndexArchive = Join-Path ([System.IO.Path]::GetTempPath()) "agent-insight-llamaindex-$llamaIndexNonce.zip"',
+        '$llamaIndexActivated = $false',
+        'try {',
+        '  & $llamaIndexPython -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"',
+        '  if ($LASTEXITCODE -ne 0) { throw "$llamaIndexPython must be Python 3.10 or newer" }',
+        '  & $llamaIndexPython -c "import llama_index.core"',
+        '  if ($LASTEXITCODE -ne 0) { throw "LlamaIndex is not available in $llamaIndexPython" }',
+        '  New-Item -ItemType Directory -Path $llamaIndexRoot, $llamaIndexStaging -Force | Out-Null',
+        `  Invoke-WebRequest -Uri "${llamaIndexCollectorUrl}" -OutFile $llamaIndexArchive`,
+        '  & $llamaIndexPython -m zipfile -e $llamaIndexArchive $llamaIndexStaging',
+        '  if ($LASTEXITCODE -ne 0 -or -not (Test-Path (Join-Path $llamaIndexStaging "agent_insight_llamaindex\\__init__.py"))) { throw "Invalid collector archive" }',
+        '  if (Test-Path -LiteralPath $llamaIndexCollectorDir) { Move-Item -LiteralPath $llamaIndexCollectorDir -Destination $llamaIndexBackup }',
+        '  try {',
+        '    Move-Item -LiteralPath $llamaIndexStaging -Destination $llamaIndexCollectorDir',
+        '  } catch {',
+        '    if (-not (Test-Path -LiteralPath $llamaIndexCollectorDir) -and (Test-Path -LiteralPath $llamaIndexBackup)) { Move-Item -LiteralPath $llamaIndexBackup -Destination $llamaIndexCollectorDir }',
+        '    throw',
+        '  }',
+        '  Remove-Item -LiteralPath $llamaIndexBackup -Recurse -Force -ErrorAction SilentlyContinue',
+        '  $llamaIndexActivated = $true',
+        '} finally {',
+        '  Remove-Item -LiteralPath $llamaIndexArchive -Force -ErrorAction SilentlyContinue',
+        '  Remove-Item -LiteralPath $llamaIndexStaging -Recurse -Force -ErrorAction SilentlyContinue',
+        '  if ($llamaIndexActivated) { Remove-Item -LiteralPath $llamaIndexBackup -Recurse -Force -ErrorAction SilentlyContinue }',
+        '}',
+        'if ($env:PYTHONPATH) {',
+        '  $llamaIndexPaths = $env:PYTHONPATH -split [IO.Path]::PathSeparator',
+        '  if ($llamaIndexPaths -notcontains $llamaIndexCollectorDir) { $env:PYTHONPATH = "$llamaIndexCollectorDir$([IO.Path]::PathSeparator)$env:PYTHONPATH" }',
+        '} else { $env:PYTHONPATH = $llamaIndexCollectorDir }',
+        `$env:AGENT_INSIGHT_API_KEY = "${llamaIndexApiKey}"`,
+        `& $llamaIndexPython -m agent_insight_llamaindex.cli configure --endpoint "${llamaIndexEndpoint}"`,
+        'if ($LASTEXITCODE -ne 0) { throw "Unable to configure the LlamaIndex collector" }',
+        '& $llamaIndexPython -m agent_insight_llamaindex.cli run -- $llamaIndexPython app.py',
+    ].join('\n');
+    const llamaIndexSetupCode = 'import agent_insight_llamaindex; agent_insight_llamaindex.setup()';
 
     return (
         <>
@@ -169,6 +249,14 @@ export default function AccessInstallPage() {
                                         {isZh
                                             ? <><b style={descStrong}>命令行 Agent</b>(Claude Code / OpenCode / OpenClaw 等):运行下方一键脚本,自动配置 <code style={inlineCode}>AGENT_INSIGHT_HOST</code> 与 <code style={inlineCode}>AGENT_INSIGHT_API_KEY</code>。</>
                                             : <><b style={descStrong}>Command-line agents</b> (Claude Code, OpenCode, OpenClaw, …): run the one-liner below — it auto-configures <code style={inlineCode}>AGENT_INSIGHT_HOST</code> and <code style={inlineCode}>AGENT_INSIGHT_API_KEY</code>.</>}
+                                    </span>
+                                </li>
+                                <li style={introItem}>
+                                    <span style={introDot} />
+                                    <span>
+                                        {isZh
+                                            ? <><b style={descStrong}>LlamaIndex</b> Python 项目:在一键脚本中勾选 Trace Collector,或使用下方命令直接部署采集器。</>
+                                            : <><b style={descStrong}>LlamaIndex</b> Python projects: select Trace Collector in the one-click setup, or deploy it directly with the commands below.</>}
                                     </span>
                                 </li>
                                 <li style={introItem}>
@@ -242,6 +330,50 @@ export default function AccessInstallPage() {
                                 envText={langfuseEnv}
                                 copied={copied === 'langfuse-env'}
                                 onCopy={() => handleCopy(langfuseEnv, 'langfuse-env')}
+                                locale={locale}
+                            />
+
+                            <div style={{ ...sectionHeading, marginTop: 8 }}>
+                                <Terminal size={14} strokeWidth={2.2} style={{ color: 'var(--primary)' }} />
+                                <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--foreground)' }}>
+                                    LlamaIndex Trace Collector
+                                </span>
+                                <span style={countPill}>{isZh ? '直接部署' : 'direct deploy'}</span>
+                                <span style={{ flex: 1 }} />
+                                <span style={{ fontSize: 11.5, color: 'var(--foreground-muted)' }}>
+                                    {isZh ? '一键脚本中可直接勾选,也可按系统手动安装' : 'Available in one-click setup or as a manual install'}
+                                </span>
+                            </div>
+
+                            <CommandCard
+                                icon={<Terminal size={14} strokeWidth={2.2} />}
+                                label={isZh ? '手动安装 · Linux / macOS' : 'Manual install · Linux / macOS'}
+                                hint={isZh ? '在 LlamaIndex 项目的 Python 环境中运行' : 'Run in the LlamaIndex project Python environment'}
+                                cmd={llamaIndexUnixCmd}
+                                copied={copied === 'llamaindex-unix'}
+                                onCopy={() => handleCopy(llamaIndexUnixCmd, 'llamaindex-unix')}
+                                locale={locale}
+                            />
+
+                            <CommandCard
+                                icon={<SquareTerminal size={14} strokeWidth={2.2} />}
+                                label={isZh ? '手动安装 · Windows' : 'Manual install · Windows'}
+                                hint={isZh ? '在项目 PowerShell / 虚拟环境中运行' : 'Run in the project PowerShell / virtual environment'}
+                                cmd={llamaIndexWindowsCmd}
+                                copied={copied === 'llamaindex-windows'}
+                                onCopy={() => handleCopy(llamaIndexWindowsCmd, 'llamaindex-windows')}
+                                locale={locale}
+                            />
+
+                            <CommandCard
+                                icon={<Terminal size={14} strokeWidth={2.2} />}
+                                label={isZh ? '应用代码 · 一行注册' : 'Application code · one-line setup'}
+                                hint={isZh
+                                    ? '已执行 configure 时，将这一行放在 LlamaIndex 应用入口顶部'
+                                    : 'After configure, place this line near the top of the LlamaIndex entry point'}
+                                cmd={llamaIndexSetupCode}
+                                copied={copied === 'llamaindex-setup'}
+                                onCopy={() => handleCopy(llamaIndexSetupCode, 'llamaindex-setup')}
                                 locale={locale}
                             />
 
@@ -783,13 +915,17 @@ const commandBox: CSSProperties = {
     border: '1px solid var(--border)',
     borderRadius: 8,
     padding: '10px 12px',
+    maxHeight: 320,
+    overflow: 'auto',
 };
 
 const commandCode: CSSProperties = {
     color: 'var(--foreground)',
     fontSize: 12,
     fontFamily: 'var(--font-mono, ui-monospace, monospace)',
-    wordBreak: 'break-all',
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
+    overflowWrap: 'anywhere',
     display: 'block',
     lineHeight: 1.6,
 };

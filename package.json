@@ -10,8 +10,13 @@
   "files": [
     "bin/",
     "scripts/",
+    "!scripts/llamaindex_extension/**/__pycache__/**",
+    "!scripts/llamaindex_extension/**/*.pyc",
+    "!scripts/llamaindex_extension/**/*.pyo",
+    "!scripts/llamaindex_extension/pyproject.toml",
     "prisma/",
     "public/",
+    "!scripts/llamaindex_extension/tests/**",
     ".next/standalone/",
     ".next/static/",
     ".env.example"

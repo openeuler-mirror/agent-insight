@@ -81,3 +81,15 @@ Hermes 插件会把 hook 数据编码为标准 OTLP/HTTP JSON，并直接上报�
 普通交互版 setup 和 auto setup 都支持选择 CodeAgent。setup 不修改 CodeAgent 源码，而是在 `~/.agent-insight/codeagent_otel_env.sh`（PowerShell 为 `codeagent_otel_env.ps1`）安装同名 `codeagent` 启动函数，并通过 shell profile 持久加载。重启终端后继续使用原来的 `codeagent` 命令即可，函数只为 CodeAgent 子进程注入 OTel 配置。
 
 CodeAgent 当前会同时发出 Logs、Traces 和 Metrics，且内部配置会覆盖常规 exporter 关闭变量。Agent Insight 因此只把 `service.name=CodeAgentOC` 的 Logs 写入 `~/.agent-insight/otel_data/codeagent` 并聚合为 `framework=codeagent`；同来源的 Traces/Metrics 返回成功后直接丢弃，不写 trace spool、InfraSource 或指标样本。Skill 调用会映射为标准 `skill` 事件；`Agent`/`Task` 调用会映射为 `task`，用于生成子 Agent Trace 和按节点隔离 Skill。
+
+## LlamaIndex 接入
+
+LlamaIndex 项目使用由 Agent Insight 服务端直接分发的 Python 模块 `agent_insight_llamaindex`，并利用 LlamaIndex 原生 instrumentation dispatcher 采集 Agent、子 Agent、Tool、LLM、Retriever、Synthesizer 和 Workflow span。插件使用持久化 spool 与后台上传线程，支持进程重启续传、事件/定时上传及指数退避，不在业务调用线程执行网络请求。
+
+普通 setup 和 auto setup 的 Linux/Windows 安装选择中均包含 `LlamaIndex Trace Collector`。安装器从当前 Agent Insight 实例下载运行时归档，直接部署到 `~/.agent-insight/collectors/llamaindex/current/`，并生成独立环境入口和卸载脚本；不会调用 pip 或写入 `site-packages`。项目使用虚拟环境时，先设置 `AGENT_INSIGHT_LLAMAINDEX_PYTHON` 为该虚拟环境的 Python 路径，用于确认 LlamaIndex 可用并执行配置。npm 负责安装 Agent Insight 服务端并携带采集器源码。
+
+采集器为每个 Workflow Context 和 Agent 名称生成实例 ID，同名并发 Agent 不会在 Trace 树中合并。`python -m agent_insight_llamaindex.cli run` 默认读取 `~/.agent-insight/llamaindex.env` 中的模型变量，但不会覆盖调用进程已经设置的值。
+
+LlamaIndex、模型 SDK 和 MCP Tool 依赖继续由业务项目管理。FunctionTool、QueryEngineTool 与由 `McpToolSpec` 创建的 MCP Tool 均沿同一 Tool Trace 路径采集参数、返回值、状态和耗时。
+
+完整安装、手动接入、正文截断和卸载说明见 [`scripts/llamaindex_extension/README.md`](../../../scripts/llamaindex_extension/README.md)。

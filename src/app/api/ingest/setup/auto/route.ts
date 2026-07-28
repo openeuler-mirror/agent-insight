@@ -108,7 +108,8 @@ const frameworks = [
     { name: 'CodeAgent', value: 'codeagent' },
     { name: 'Hermes', value: 'hermes' },
     { name: 'OpenClaw', value: 'openclaw' },
-    { name: 'JiuwenSwarm', value: 'jiuwen' }
+    { name: 'JiuwenSwarm', value: 'jiuwen' },
+    { name: 'LlamaIndex Trace Collector', value: 'llamaindex' }
 ];
 
 async function select() {
@@ -180,6 +181,8 @@ INSTALL_CODEAGENT=false
 INSTALL_HERMES=false
 INSTALL_OPENCLAW=false
 INSTALL_JIUWEN=false
+INSTALL_LLAMAINDEX=false
+LLAMAINDEX_READY=false
 
 if [[ "$SELECTED_FRAMEWORKS" == *"opencode"* ]]; then
     INSTALL_OPENCODE=true
@@ -199,9 +202,12 @@ fi
 if [[ "$SELECTED_FRAMEWORKS" == *"jiuwen"* ]]; then
     INSTALL_JIUWEN=true
 fi
+if [[ "$SELECTED_FRAMEWORKS" == *"llamaindex"* ]]; then
+    INSTALL_LLAMAINDEX=true
+fi
 
 # Exit if nothing selected
-if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ]; then
+if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_LLAMAINDEX" = "false" ]; then
     echo "⚠️  未选择任何框架组件，将跳过插件安装。"
     echo "   继续执行配置步骤..."
     echo ""
@@ -307,6 +313,80 @@ JIUWEN_EXT_EOF
     echo "✅ JiuwenSwarm extension installed at $JW_EXT_DIR"
 fi
 
+if [ "$INSTALL_LLAMAINDEX" = "true" ]; then
+    LLAMAINDEX_PYTHON="\${AGENT_INSIGHT_LLAMAINDEX_PYTHON:-}"
+    if [ -z "$LLAMAINDEX_PYTHON" ]; then
+        if command -v python3 >/dev/null 2>&1; then LLAMAINDEX_PYTHON=$(command -v python3); elif command -v python >/dev/null 2>&1; then LLAMAINDEX_PYTHON=$(command -v python); fi
+    fi
+    if [ -z "$LLAMAINDEX_PYTHON" ]; then
+        echo "❌ Python 3.10+ is required for the LlamaIndex collector."
+    elif ! "$LLAMAINDEX_PYTHON" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"; then
+        echo "❌ $LLAMAINDEX_PYTHON must be Python 3.10 or newer."
+    elif ! "$LLAMAINDEX_PYTHON" -c "import llama_index.core" >/dev/null 2>&1; then
+        echo "❌ LlamaIndex is not available in $LLAMAINDEX_PYTHON. Select the Python used by the observed project with AGENT_INSIGHT_LLAMAINDEX_PYTHON."
+    else
+        LLAMAINDEX_ARCHIVE=$(mktemp "\${TMPDIR:-/tmp}/agent-insight-llamaindex.XXXXXX.zip")
+        LLAMAINDEX_PACKAGE_URL="$AGENT_INSIGHT_BASE_URL/api/ingest/setup/llamaindex-collector"
+        LLAMAINDEX_ROOT="$HOME/.agent-insight/collectors/llamaindex"
+        LLAMAINDEX_SOURCE_DIR="$LLAMAINDEX_ROOT/current"
+        LLAMAINDEX_STAGING="$LLAMAINDEX_ROOT/.install-$$"
+        LLAMAINDEX_BACKUP="$LLAMAINDEX_ROOT/.previous-$$"
+        mkdir -p "$LLAMAINDEX_ROOT"
+        rm -rf "$LLAMAINDEX_STAGING" "$LLAMAINDEX_BACKUP"
+        mkdir -p "$LLAMAINDEX_STAGING"
+        if curl -sSf "$LLAMAINDEX_PACKAGE_URL" -o "$LLAMAINDEX_ARCHIVE" && "$LLAMAINDEX_PYTHON" -m zipfile -e "$LLAMAINDEX_ARCHIVE" "$LLAMAINDEX_STAGING" && [ -f "$LLAMAINDEX_STAGING/agent_insight_llamaindex/__init__.py" ]; then
+            [ ! -d "$LLAMAINDEX_SOURCE_DIR" ] || mv "$LLAMAINDEX_SOURCE_DIR" "$LLAMAINDEX_BACKUP"
+            if mv "$LLAMAINDEX_STAGING" "$LLAMAINDEX_SOURCE_DIR"; then
+                rm -rf "$LLAMAINDEX_BACKUP"
+                LLAMAINDEX_READY=true
+                echo "✅ LlamaIndex Trace Collector deployed at $LLAMAINDEX_SOURCE_DIR"
+            else
+                [ ! -d "$LLAMAINDEX_BACKUP" ] || mv "$LLAMAINDEX_BACKUP" "$LLAMAINDEX_SOURCE_DIR"
+                echo "❌ Unable to activate the downloaded LlamaIndex collector."
+            fi
+        else
+            echo "❌ Unable to download or extract the LlamaIndex collector."
+        fi
+        rm -f "$LLAMAINDEX_ARCHIVE"
+        rm -rf "$LLAMAINDEX_STAGING" "$LLAMAINDEX_BACKUP"
+        if [ "$LLAMAINDEX_READY" = "true" ]; then
+            cat > "$HOME/.agent-insight/llamaindex_env.sh" << 'LLAMAINDEX_ENV_EOF'
+# Agent Insight LlamaIndex collector path (direct deployment)
+LLAMAINDEX_COLLECTOR_DIR="$HOME/.agent-insight/collectors/llamaindex/current"
+case ":\${PYTHONPATH:-}:" in
+  *":$LLAMAINDEX_COLLECTOR_DIR:"*) ;;
+  *) export PYTHONPATH="$LLAMAINDEX_COLLECTOR_DIR\${PYTHONPATH:+:$PYTHONPATH}" ;;
+esac
+LLAMAINDEX_ENV_EOF
+            case "\${SHELL:-}" in */zsh) SHELL_RC="$HOME/.zshrc" ;; *) SHELL_RC="$HOME/.bashrc" ;; esac
+            touch "$SHELL_RC"
+            if ! grep -q "\\.agent-insight/llamaindex_env\\.sh" "$SHELL_RC"; then
+                echo "source \"$HOME/.agent-insight/llamaindex_env.sh\"" >> "$SHELL_RC"
+            fi
+            cat > "$HOME/.agent-insight/uninstall_llamaindex_collector.sh" << 'LLAMAINDEX_UNINSTALL_EOF'
+#!/bin/bash
+set -e
+if [ "\${1:-}" = "--purge" ]; then
+  rm -rf "$HOME/.agent-insight/otel_data/llamaindex"
+  rm -f "$HOME/.agent-insight/llamaindex.json" "$HOME/.agent-insight/llamaindex.env"
+fi
+rm -rf "$HOME/.agent-insight/collectors/llamaindex"
+rm -f "$HOME/.agent-insight/llamaindex_env.sh"
+for SHELL_RC in "$HOME/.bashrc" "$HOME/.zshrc"; do
+  if [ -f "$SHELL_RC" ]; then
+    CLEANED_RC="\${SHELL_RC}.agent-insight-llamaindex.$$"
+    grep -v "\\.agent-insight/llamaindex_env\\.sh" "$SHELL_RC" > "$CLEANED_RC" || true
+    mv "$CLEANED_RC" "$SHELL_RC"
+  fi
+done
+rm -f "$HOME/.agent-insight/uninstall_llamaindex_collector.sh"
+echo "LlamaIndex collector removed. Restart running Python processes to unload existing handlers."
+LLAMAINDEX_UNINSTALL_EOF
+            chmod +x "$HOME/.agent-insight/uninstall_llamaindex_collector.sh"
+        fi
+    fi
+fi
+
 # 4. Configure ~/.agent-insight/.env (Auto mode - no interaction)
 AGENT_INSIGHT_CONFIG_FILE="$HOME/.agent-insight/.env"
 FINAL_SHOW_TASK_STATS="true"
@@ -359,6 +439,13 @@ echo "AGENT_INSIGHT_OPENCODE_UPLOAD_COOLDOWN_MS=15000" >> "$AGENT_INSIGHT_CONFIG
 echo "✅ Configuration updated at $AGENT_INSIGHT_CONFIG_FILE"
 echo "   AGENT_INSIGHT_HOST=$AGENT_INSIGHT_HOST"
 echo "   AGENT_INSIGHT_API_KEY=********"
+
+if [ "$LLAMAINDEX_READY" = "true" ]; then
+    if ! PYTHONPATH="$LLAMAINDEX_SOURCE_DIR\${PYTHONPATH:+:$PYTHONPATH}" AGENT_INSIGHT_API_KEY="$AGENT_INSIGHT_API_KEY" "$LLAMAINDEX_PYTHON" -m agent_insight_llamaindex.cli configure --endpoint "$AGENT_INSIGHT_HOST"; then
+        echo "❌ Unable to configure the LlamaIndex collector."
+        LLAMAINDEX_READY=false
+    fi
+fi
 
 # 6.4 Configure Agent Insight Hermes plugin
 if [ "$INSTALL_HERMES" = "true" ]; then
@@ -615,6 +702,9 @@ fi
 if [ "$INSTALL_JIUWEN" = "true" ]; then
     echo "  ✅ JiuwenSwarm Extension: \${JIUWENSWARM_DATA_DIR:-$HOME/.jiuwenswarm}/extensions/agent-insight-observability (telemetry in config/.env)"
 fi
+if [ "$LLAMAINDEX_READY" = "true" ]; then
+    echo "  ✅ LlamaIndex Trace Collector: $LLAMAINDEX_SOURCE_DIR"
+fi
 
 if [ "$NEEDS_WATCHER_SCRIPTS" = "true" ]; then
     echo ""
@@ -647,6 +737,9 @@ if [ "$INSTALL_OPENCLAW" = "true" ]; then
 fi
 if [ "$INSTALL_JIUWEN" = "true" ]; then
     echo "  5. Restart JiuwenSwarm (agentserver), then start a conversation"
+fi
+if [ "$LLAMAINDEX_READY" = "true" ]; then
+    echo "  6. Restart terminal, then run: $LLAMAINDEX_PYTHON -m agent_insight_llamaindex.cli run -- $LLAMAINDEX_PYTHON app.py"
 fi
 echo "------------------------------------------------"
 `;
@@ -728,7 +821,8 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    "    { name: \'CodeAgent\', value: \'codeagent\' },"',
         '    "    { name: \'Hermes\', value: \'hermes\' },"',
         '    "    { name: \'OpenClaw\', value: \'openclaw\' },"',
-        '    "    { name: \'JiuwenSwarm\', value: \'jiuwen\' }"',
+        '    "    { name: \'JiuwenSwarm\', value: \'jiuwen\' },"',
+        '    "    { name: \'LlamaIndex Trace Collector\', value: \'llamaindex\' }"',
         '    "];"',
         '    ""',
         '    "async function select() {"',
@@ -802,6 +896,8 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '$INSTALL_HERMES = $false',
         '$INSTALL_OPENCLAW = $false',
         '$INSTALL_JIUWEN = $false',
+        '$INSTALL_LLAMAINDEX = $false',
+        '$LLAMAINDEX_READY = $false',
         '',
         'if ($SELECTED_FRAMEWORKS -match "opencode") {',
         '    $INSTALL_OPENCODE = $true',
@@ -821,9 +917,12 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         'if ($SELECTED_FRAMEWORKS -match "jiuwen") {',
         '    $INSTALL_JIUWEN = $true',
         '}',
+        'if ($SELECTED_FRAMEWORKS -match "llamaindex") {',
+        '    $INSTALL_LLAMAINDEX = $true',
+        '}',
         '',
         '# Exit if nothing selected',
-        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_CODEAGENT -and -not $INSTALL_HERMES -and -not $INSTALL_OPENCLAW -and -not $INSTALL_JIUWEN) {',
+        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_CODEAGENT -and -not $INSTALL_HERMES -and -not $INSTALL_OPENCLAW -and -not $INSTALL_JIUWEN -and -not $INSTALL_LLAMAINDEX) {',
         '    Write-Host "⚠️  未选择任何框架组件，将跳过插件安装。"',
         '    Write-Host "   继续执行配置步骤..."',
         '    Write-Host ""',
@@ -894,6 +993,74 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    Write-Host "✅ JiuwenSwarm extension installed at $jwExtDir"',
         '}',
         '',
+        'if ($INSTALL_LLAMAINDEX) {',
+        '    $llamaIndexPython = if ($env:AGENT_INSIGHT_LLAMAINDEX_PYTHON) { $env:AGENT_INSIGHT_LLAMAINDEX_PYTHON } else { $pythonCommand = Get-Command python -ErrorAction SilentlyContinue; if ($pythonCommand) { $pythonCommand.Source } }',
+        '    if (-not $llamaIndexPython) {',
+        '        Write-Host "❌ Python 3.10+ is required for the LlamaIndex collector." -ForegroundColor Red',
+        '    } else {',
+        '        $llamaIndexNonce = [Guid]::NewGuid().ToString("N")',
+        '        $llamaIndexArchive = Join-Path ([System.IO.Path]::GetTempPath()) "agent-insight-llamaindex-$llamaIndexNonce.zip"',
+        '        $llamaIndexPackageUrl = "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/llamaindex-collector"',
+        '        $llamaIndexRoot = Join-Path $env:USERPROFILE ".agent-insight\\collectors\\llamaindex"',
+        '        $llamaIndexSourceDir = Join-Path $llamaIndexRoot "current"',
+        '        $llamaIndexStaging = Join-Path $llamaIndexRoot ".install-$llamaIndexNonce"',
+        '        $llamaIndexBackup = Join-Path $llamaIndexRoot ".previous-$llamaIndexNonce"',
+        '        try {',
+        '            & $llamaIndexPython -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"',
+        '            if ($LASTEXITCODE -ne 0) { throw "$llamaIndexPython must be Python 3.10 or newer" }',
+        '            & $llamaIndexPython -c "import llama_index.core"',
+        '            if ($LASTEXITCODE -ne 0) { throw "LlamaIndex is not available in $llamaIndexPython" }',
+        '            New-Item -ItemType Directory -Path $llamaIndexRoot, $llamaIndexStaging -Force | Out-Null',
+        '            Invoke-WebRequest -Uri $llamaIndexPackageUrl -OutFile $llamaIndexArchive',
+        '            & $llamaIndexPython -m zipfile -e $llamaIndexArchive $llamaIndexStaging',
+        '            if ($LASTEXITCODE -ne 0 -or -not (Test-Path (Join-Path $llamaIndexStaging "agent_insight_llamaindex\\__init__.py"))) { throw "downloaded collector archive is invalid" }',
+        '            if (Test-Path -LiteralPath $llamaIndexSourceDir) { Move-Item -LiteralPath $llamaIndexSourceDir -Destination $llamaIndexBackup }',
+        '            Move-Item -LiteralPath $llamaIndexStaging -Destination $llamaIndexSourceDir',
+        '            Remove-Item -LiteralPath $llamaIndexBackup -Recurse -Force -ErrorAction SilentlyContinue',
+        '            $LLAMAINDEX_READY = $true',
+        '            Write-Host "✅ LlamaIndex Trace Collector deployed at $llamaIndexSourceDir"',
+        '        } catch {',
+        '            if (-not (Test-Path -LiteralPath $llamaIndexSourceDir) -and (Test-Path -LiteralPath $llamaIndexBackup)) { Move-Item -LiteralPath $llamaIndexBackup -Destination $llamaIndexSourceDir }',
+        '            Write-Host "❌ Unable to deploy the LlamaIndex collector: $($_.Exception.Message)" -ForegroundColor Red',
+        '        } finally {',
+        '            Remove-Item -LiteralPath $llamaIndexArchive -Force -ErrorAction SilentlyContinue',
+        '            Remove-Item -LiteralPath $llamaIndexStaging -Recurse -Force -ErrorAction SilentlyContinue',
+        '            if ($LLAMAINDEX_READY) { Remove-Item -LiteralPath $llamaIndexBackup -Recurse -Force -ErrorAction SilentlyContinue }',
+        '        }',
+        '        if ($LLAMAINDEX_READY) {',
+        '            $llamaIndexEnvPath = Join-Path $env:USERPROFILE ".agent-insight\\llamaindex_env.ps1"',
+        '            $llamaIndexEnvScript = @\'',
+        '$llamaIndexCollectorDir = Join-Path $HOME ".agent-insight\\collectors\\llamaindex\\current"',
+        'if ($env:PYTHONPATH) {',
+        '  $llamaIndexPaths = $env:PYTHONPATH -split [IO.Path]::PathSeparator',
+        '  if ($llamaIndexPaths -notcontains $llamaIndexCollectorDir) { $env:PYTHONPATH = "$llamaIndexCollectorDir$([IO.Path]::PathSeparator)$env:PYTHONPATH" }',
+        '} else { $env:PYTHONPATH = $llamaIndexCollectorDir }',
+        '\'@',
+        '            Set-Content -Path $llamaIndexEnvPath -Value $llamaIndexEnvScript -Encoding UTF8',
+        '            if (-not (Test-Path $PROFILE)) { New-Item -ItemType File -Path $PROFILE -Force | Out-Null }',
+        '            if (-not ((Get-Content $PROFILE -Raw) -match "llamaindex_env.ps1")) { Add-Content -Path $PROFILE -Value ". `"$llamaIndexEnvPath`"" }',
+        '            . $llamaIndexEnvPath',
+        '            $llamaIndexUninstallPath = Join-Path $env:USERPROFILE ".agent-insight\\uninstall_llamaindex_collector.ps1"',
+        '            $llamaIndexUninstallScript = @\'',
+        'param([switch]$Purge)',
+        '$agentInsightHome = Join-Path $HOME ".agent-insight"',
+        'if ($Purge) {',
+        '  Remove-Item -LiteralPath (Join-Path $agentInsightHome "otel_data\\llamaindex") -Recurse -Force -ErrorAction SilentlyContinue',
+        '  Remove-Item -LiteralPath (Join-Path $agentInsightHome "llamaindex.json"), (Join-Path $agentInsightHome "llamaindex.env") -Force -ErrorAction SilentlyContinue',
+        '}',
+        'Remove-Item -LiteralPath (Join-Path $agentInsightHome "collectors\\llamaindex") -Recurse -Force -ErrorAction SilentlyContinue',
+        'Remove-Item -LiteralPath (Join-Path $agentInsightHome "llamaindex_env.ps1") -Force -ErrorAction SilentlyContinue',
+        'if (Test-Path $PROFILE) {',
+        '  @(Get-Content $PROFILE | Where-Object { $_ -notmatch "llamaindex_env\\.ps1" }) | Set-Content $PROFILE',
+        '}',
+        'Write-Host "LlamaIndex collector removed. Restart running Python processes to unload existing handlers."',
+        'Remove-Item -LiteralPath $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue',
+        '\'@',
+        '            Set-Content -Path $llamaIndexUninstallPath -Value $llamaIndexUninstallScript -Encoding UTF8',
+        '        }',
+        '    }',
+        '}',
+        '',
         '# 4. Configure ~/.agent-insight/.env (Auto mode - no interaction)',
         '$AGENT_INSIGHT_CONFIG_FILE = Join-Path $skillInsightDir ".env"',
         '',
@@ -942,6 +1109,15 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         'Write-Host "✅ Configuration updated at $AGENT_INSIGHT_CONFIG_FILE"',
         'Write-Host "   AGENT_INSIGHT_HOST=$AGENT_INSIGHT_HOST"',
         'Write-Host "   AGENT_INSIGHT_API_KEY=********"',
+        '',
+        'if ($LLAMAINDEX_READY) {',
+        '    $env:AGENT_INSIGHT_API_KEY = $AGENT_INSIGHT_API_KEY',
+        '    & $llamaIndexPython -m agent_insight_llamaindex.cli configure --endpoint $AGENT_INSIGHT_HOST',
+        '    if ($LASTEXITCODE -ne 0) {',
+        '        Write-Host "❌ Unable to configure the LlamaIndex collector." -ForegroundColor Red',
+        '        $LLAMAINDEX_READY = $false',
+        '    }',
+        '}',
         '',
         '# 6.4 Configure Agent Insight Hermes plugin',
         'if ($INSTALL_HERMES) {',
@@ -1169,6 +1345,7 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    Write-Host "  ✅ OpenClaw Watcher: ~/.agent-insight/openclaw_watcher_client.ts"',
         '}',
         'if ($INSTALL_JIUWEN) { $summaryJwHome = if ($env:JIUWENSWARM_DATA_DIR) { $env:JIUWENSWARM_DATA_DIR } else { Join-Path $env:USERPROFILE ".jiuwenswarm" }; Write-Host "  ✅ JiuwenSwarm Extension: $summaryJwHome\\extensions\\agent-insight-observability (telemetry in config\\.env)" }',
+        'if ($LLAMAINDEX_READY) { Write-Host "  ✅ LlamaIndex Trace Collector: $llamaIndexSourceDir" }',
         '',
         'if ($NEEDS_WATCHER_SCRIPTS) {',
         '    Write-Host ""',
@@ -1201,6 +1378,9 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '}',
         'if ($INSTALL_JIUWEN) {',
         '    Write-Host "  5. Restart JiuwenSwarm (agentserver), then start a conversation"',
+        '}',
+        'if ($LLAMAINDEX_READY) {',
+        '    Write-Host "  6. Restart PowerShell, then run: $llamaIndexPython -m agent_insight_llamaindex.cli run -- $llamaIndexPython app.py"',
         '}',
         'Write-Host "------------------------------------------------"',
     ].join('\n');
