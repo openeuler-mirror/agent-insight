@@ -3,12 +3,9 @@ loadAgentInsightEnv();
 
 import { PrismaClient } from '@prisma/client';
 import { getDatabaseAdapter, DatabaseAdapter } from '@/lib/storage/db-interface';
+import { createPrismaClient, ExtendedPrismaClient } from '@/lib/storage/prisma-client';
 
-const globalForPrisma = global as unknown as { prisma: PrismaClient };
-
-function createPrismaClient(): PrismaClient {
-  return new PrismaClient();
-}
+const globalForPrisma = global as unknown as { prisma: ExtendedPrismaClient };
 
 export const prismaRaw = globalForPrisma.prisma || createPrismaClient();
 

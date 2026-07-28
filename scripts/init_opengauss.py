@@ -61,7 +61,12 @@ TABLE_DEFINITIONS = {
             ("taskId", "TEXT"),
             ("query", "TEXT"),
             ("framework", "TEXT"),
-            ("tokens", "INTEGER"),
+            # 下面几列（tokens/inputTokens/outputTokens/cacheRead*/cacheCreation*）是整个
+            # session 累计求和，长命 session 会突破 int4 的 2,147,483,647，故用 BIGINT，
+            # 与 prisma/schema.prisma 的 BigInt 保持一致。
+            # 注意：本脚本只建新表 / 给缺失列做 ADD COLUMN，不会改已存在列的类型。已经建过库的
+            # openGauss 实例需要手动 ALTER TABLE "Execution" ALTER COLUMN "<列>" TYPE BIGINT。
+            ("tokens", "BIGINT"),
             ("cost", "FLOAT"),
             ("latency", "FLOAT"),
             ("timestamp", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
@@ -81,11 +86,12 @@ TABLE_DEFINITIONS = {
             ("user", "TEXT"),
             ("toolCallCount", "INTEGER"),
             ("llmCallCount", "INTEGER"),
-            ("inputTokens", "INTEGER"),
-            ("outputTokens", "INTEGER"),
+            ("inputTokens", "BIGINT"),
+            ("outputTokens", "BIGINT"),
             ("toolCallErrorCount", "INTEGER"),
-            ("cacheReadInputTokens", "INTEGER"),
-            ("cacheCreationInputTokens", "INTEGER"),
+            ("cacheReadInputTokens", "BIGINT"),
+            ("cacheCreationInputTokens", "BIGINT"),
+            # 单次调用取 max、不累计，到不了 int4 上限，保持 INTEGER。
             ("maxSingleCallTokens", "INTEGER"),
         ],
         "unique_constraints": []
