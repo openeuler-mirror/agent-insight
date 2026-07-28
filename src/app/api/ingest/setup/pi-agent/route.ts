@@ -11,12 +11,14 @@ function publicOrigin(request: Request): string {
 }
 
 export async function GET(request: Request) {
+  const isWindows = request.headers.get('x-platform')?.toLowerCase() === 'windows' ||
+    request.headers.get('user-agent')?.toLowerCase().includes('windows');
   const installerPath = path.join(
     process.cwd(),
     'scripts',
     'agent-trace-collectors',
     'pi-agent',
-    'install.sh',
+    isWindows ? 'install.ps1' : 'install.sh',
   );
   try {
     const source = await readFile(installerPath, 'utf8');
@@ -24,6 +26,7 @@ export async function GET(request: Request) {
     return new NextResponse(script, {
       headers: {
         'Content-Type': 'text/x-shellscript; charset=utf-8',
+        ...(isWindows ? { 'Content-Type': 'application/x-powershell; charset=utf-8' } : {}),
         'Cache-Control': 'no-store',
         'X-Content-Type-Options': 'nosniff',
       },

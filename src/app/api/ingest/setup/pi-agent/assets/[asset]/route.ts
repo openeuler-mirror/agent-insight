@@ -25,6 +25,10 @@ const ASSETS: Record<string, { path: string[]; contentType: string }> = {
     path: ['pi-agent', 'scripts', 'uninstall.cjs'],
     contentType: 'text/javascript; charset=utf-8',
   },
+  'install.cjs': {
+    path: ['pi-agent', 'install.cjs'],
+    contentType: 'text/javascript; charset=utf-8',
+  },
   'trace-transport.cjs': {
     path: ['shared', 'trace-transport.cjs'],
     contentType: 'text/javascript; charset=utf-8',

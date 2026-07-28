@@ -13,6 +13,7 @@ const ASSETS = [
   "pi-trace-core.cjs",
   "self-check.cjs",
   "uninstall.cjs",
+  "install.cjs",
   "trace-transport.cjs",
 ]
 
@@ -21,14 +22,27 @@ test("Pi installer is self-contained, version-gated, and does not put secrets in
   const source = await response.text()
   assert.equal(response.status, 200)
   assert.match(source, /Node\.js.*>=22\.19\.0/)
-  assert.match(source, /0\.82\.\*/)
   assert.match(source, /AGENT_INSIGHT_API_KEY/)
-  assert.match(source, /pi install "\$PACKAGE_DIR"/)
-  assert.match(source, /scripts\/self-check\.cjs/)
+  assert.match(source, /install\.cjs/)
+  assert.match(source, /--source-dir/)
   assert.match(source, /AGENT_INSIGHT_BASE_URL:-https:\/\/insight\.example/)
   assert.match(source, /ASSET_URL="\$BASE_URL\/api\/ingest\/setup\/pi-agent\/assets"/)
   assert.doesNotMatch(source, /apiKey=/)
   assert.doesNotMatch(source, /github\.com/)
+})
+
+test("Pi setup route returns the PowerShell staging installer for Windows", async () => {
+  const response = await getInstaller(new Request(
+    "https://insight.example/api/ingest/setup/pi-agent",
+    { headers: { "x-platform": "windows" } },
+  ))
+  const source = await response.text()
+  assert.equal(response.status, 200)
+  assert.equal(response.headers.get("content-type"), "application/x-powershell; charset=utf-8")
+  assert.match(source, /install\.cjs/)
+  assert.match(source, /Invoke-WebRequest/)
+  assert.match(source, /--source-dir/)
+  assert.doesNotMatch(source, /apiKey=/)
 })
 
 test("Pi setup asset route serves only the fixed first-party allowlist", async () => {

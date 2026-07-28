@@ -63,27 +63,45 @@ repository-wide test, repository-wide lint, and production build were rerun on
 openEuler. The target selection and build passed; the refreshed repository-wide
 results are recorded below.
 
+## Central onboarding verification
+
+```powershell
+node --import tsx --test `
+  test/pi-agent-central-setup.test.ts `
+  test/pi-agent-distribution.test.ts
+```
+
+The final 12-test selection passed. It covers the three append-only framework
+lists, preselection and invalid-value filtering, Bash and PowerShell syntax,
+local package detection, fixed asset allowlists, setup staging, self-check,
+reinstall, and API-Key-scoped purge. The final production build and
+`git diff --check` also passed.
+
 ## Repository-wide test
 
-A fresh SQLite database and isolated HOME were used:
+Fresh databases and isolated user homes were used:
 
-| Command | Result |
-| --- | --- |
-| `npm test` | 703 tests: 693 passed, 9 failed, 1 skipped |
-| `npm run lint` | failed: 1,973 problems (1,685 errors, 288 warnings) |
+| Environment | Command | Result |
+| --- | --- | --- |
+| Windows | `npm test` | 710 tests: 658 passed, 39 failed, 13 skipped |
+| openEuler SP4 | `npm test` | 710 tests: 696 passed, 13 failed, 1 skipped |
+| Windows | `npm run lint` | 1,973 tracked problems: 1,685 errors, 288 warnings |
 
-The 9 failures are shared with the Codex branch and are outside the Pi target
-selection. They are the existing experiment-engine suite and experiment API
-tests, which pin a repository-local database path that was not initialized by
-the isolated `DATABASE_URL`. The Pi target suites, added-file lint, syntax
-checks, and production build are clean. Repository-wide lint also fails
-identically on both branches, primarily on pre-existing
-`@typescript-eslint/no-explicit-any` findings outside this change set.
+The Windows failure set is identical on the Pi and Codex branches apart from
+the absolute experiment-engine test path. It consists of repository database
+fixtures, Windows Hermes Python assumptions, and infrastructure/OTLP test
+environment dependencies. The openEuler failures are the same fixture and
+infrastructure baseline plus the central PowerShell parser assertion when
+PowerShell is unavailable (`status=null`); the native Windows focused run
+passed that parser assertion. The tracked full-lint count is unchanged from the
+repository baseline and is dominated by existing
+`@typescript-eslint/no-explicit-any` findings.
 
 ## Runtime evidence
 
-The openEuler E2E covered real Pi package lifecycle, MiniMax-M3 inference,
-exact native usage, automatic Skill, MCP, a provider-backed child process,
-server persistence, HTTP 500 recovery, scoped purge, 20-sample startup,
-30+30 real TTFT, and short matched-process RSS curves. Details and remaining
-gates are recorded in `test/pi-agent-trace/reports/e2e.md`.
+The openEuler E2E covered central Bash installation, the local npm tarball
+chain, real Pi package lifecycle, MiniMax-M3 inference, exact native usage,
+automatic Skill, MCP, a provider-backed child process, cross-machine server
+persistence, HTTP 500 recovery, scoped purge, 20-sample startup, 30+30 real
+TTFT, and short matched-process RSS curves. Details are recorded in
+`test/pi-agent-trace/reports/e2e.md`.

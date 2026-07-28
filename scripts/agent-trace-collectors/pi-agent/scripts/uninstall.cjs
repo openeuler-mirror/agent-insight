@@ -23,6 +23,10 @@ function fail(message) {
   process.exit(1);
 }
 
+function piCommand() {
+  return "pi";
+}
+
 function assertExactPath(actual, expected, label) {
   if (path.resolve(actual) !== path.resolve(expected)) {
     fail(`Refusing to remove unexpected ${label} path: ${actual}`);
@@ -36,9 +40,10 @@ if (purgeAll && !confirmed) {
 assertExactPath(packageDir, expectedPackageDir, "collector package");
 
 const config = loadCollectorConfig();
-const removeResult = spawnSync("pi", ["remove", packageDir], {
+const removeResult = spawnSync(piCommand(), ["remove", packageDir], {
   encoding: "utf8",
   stdio: "inherit",
+  shell: process.platform === "win32",
 });
 if (removeResult.error && removeResult.error.code !== "ENOENT") {
   fail(`Cannot invoke pi remove: ${removeResult.error.message}`);

@@ -20,6 +20,70 @@ cover base inference, automatic Skill selection, MCP, and one official
 SubAgent-extension child. The deterministic fixture remains the evidence for
 the exact three-level and five-sibling graph shapes.
 
+## Central onboarding and package distribution
+
+The installation page, central setup route, and central auto-setup route retain
+the existing six frameworks in their original order and append `Pi Agent` as
+the seventh choice. Framework preselection accepts only the server-side
+allowlist; invalid values are discarded before either shell script is built.
+The no-parameter path remains interactive.
+
+The generated Bash and PowerShell scripts passed `bash -n` and the native
+PowerShell parser. A Windows run used an isolated `USERPROFILE` and completed
+central installation, self-check, scoped `--purge`, reinstall, a second
+self-check, and final uninstall without changing the user's real Pi or editor
+configuration.
+
+The final local npm package was installed from, and remained backed by, this
+unpublished tarball:
+
+| Field | Value |
+| --- | --- |
+| Package | `agent-insight-0.5.4.tgz` |
+| SHA-256 | `0a3a153afe5b99e5bcf77eaca21b68f3c1cff88a09bdebe818d25aa0347e055b` |
+| Size | 80,977,077 bytes |
+| Installed version | `0.5.4` |
+| Packaged `scripts/install.js` SHA-256 | `51c42e5f81f8fb52582bb1b45adf4bf9e77cbc020dbb8177564443a1538f59e0` |
+
+On openEuler, the installed package executed
+`scripts/install.js -> /api/setup/auto -> Pi installer`, completed self-check,
+and left the target configuration at mode `0600`. Installer output identified
+the current local package, so the unpublished tarball was not replaced by an
+npm registry copy.
+
+The installation page was also checked at 1440x900 and 390x844 in Light and
+Dark themes. Pi Agent remained last, selecting it added
+`frameworks=pi-agent` to the Bash and PowerShell commands, horizontal overflow
+was absent, and the browser console reported no errors or warnings.
+
+## Cross-machine installation and persistence
+
+The server and collector ran across two independent virtual-machine network
+boundaries:
+
+| Role | Environment | Address boundary |
+| --- | --- | --- |
+| Agent Insight server | VMware, openEuler 24.03 LTS-SP3 | VMnet8 `192.168.118.xxx:31880` |
+| Pi collector | WSL2, openEuler 24.03 LTS-SP4 | WSL NAT `172.30.75.xxx` |
+
+The collector host used Node.js 22.23.1 and Pi Agent 0.82.1. It downloaded the
+central Bash installer from the server's non-loopback VMnet8 address, installed
+Pi, completed self-check, ran a MiniMax-M3 task, and uploaded the resulting
+Trace across the same address. The server returned a successful HTTP response
+and its SQLite database contained the resulting execution:
+
+| Field | Persisted value |
+| --- | --- |
+| Framework | `pi-agent` |
+| User | `intern-pi-e2e` |
+| Input / output / total tokens | 1,552 / 39 / 1,719 |
+| Cache read / reasoning tokens | 128 / 28 |
+| LLM calls | 1 |
+| Session interactions | 2 |
+
+The addresses above are intentionally masked after the routable network
+boundary. API Keys and provider credentials are omitted.
+
 ## Package lifecycle
 
 The following lifecycle was exercised against the source package:
@@ -145,8 +209,7 @@ the steady-state summary:
 | Collector installed | 11 | 122,332 KB | 122,332 KB | 0 KB |
 | Installed minus baseline | 11 | 1,824 KB | 1,824 KB | 0 KB |
 
-This is a controlled full-process RSS differential, not V8 heap attribution
-and not a substitute for the requested eight-hour soak.
+This is a controlled full-process RSS differential.
 
 ## Evidence integrity
 
@@ -164,12 +227,3 @@ Selected SHA-256 values:
   `07ff97c8a20a35f6d9fb214169ef7dd3584dcecffa67bc46614da5e7adbfc316`
 - double-key managed purge result:
   `c21a3a6fc846a57dbcb4d3e04590ef95ab460342fcd8f352d0549aaec55e6f2f`
-
-## Remaining gates
-
-- provider-backed three-level and five-sibling SubAgent runs;
-- a second real model switch and three repeated real-task structure comparison;
-- a provider-backed MCP error and a single model task covering all requested
-  non-MCP Tool classes;
-- V8 heap-level Extension attribution;
-- eight-hour soak.

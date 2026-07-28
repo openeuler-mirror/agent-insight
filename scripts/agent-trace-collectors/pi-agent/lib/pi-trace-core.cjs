@@ -37,7 +37,7 @@ function readJsonIfExists(filePath) {
 
 function loadCollectorConfig(options = {}) {
   const env = options.env || process.env;
-  const homeDir = options.homeDir || os.homedir();
+  const homeDir = options.homeDir || env.AGENT_INSIGHT_USER_HOME || os.homedir();
   const configPath = env.AGENT_INSIGHT_PI_CONFIG ||
     options.configPath ||
     path.join(homeDir, ".agent-insight", "collectors", "pi-agent", "config.json");
