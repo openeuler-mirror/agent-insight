@@ -516,6 +516,7 @@ function connectorToolIdentity(mcpTool) {
  *   localTokenUsage?: Array<any>,
  *   expertAgents?: Array<any>,
  *   product?: string,
+ *   accountHash?: string,
  *   estimateVisibleTokens?: boolean,
  *   maxContentChars?: number,
  *   capturedAt?: string
@@ -528,6 +529,7 @@ export function buildQoderOtlpPayload({
   localTokenUsage = [],
   expertAgents = [],
   product,
+  accountHash,
   estimateVisibleTokens = false,
   maxContentChars = DEFAULT_MAX_CONTENT_CHARS,
   capturedAt,
@@ -603,6 +605,7 @@ export function buildQoderOtlpPayload({
     "qoder.snapshot.id": snapshotId,
     "qoder.snapshot.completed_at_ms": endMs,
     "qoder.session.id": sessionId,
+    "qoder.account.hash": firstString(accountHash),
   }
 
   const spans = [otlpSpan({
@@ -1119,6 +1122,7 @@ export function buildQoderOtlpPayload({
           "session.id": sessionId,
           "qoder.product": productName,
           "qoder.distribution": "cn",
+          "qoder.account.hash": firstString(accountHash),
         }),
       },
       scopeSpans: [{
@@ -1499,6 +1503,7 @@ export async function collectQoderHook(event, options = {}) {
       localTokenUsage,
       expertAgents,
       product,
+      accountHash: apiKeyHash,
       estimateVisibleTokens: ["1", "true", "yes", "on"].includes(String(config.AGENT_INSIGHT_QODER_ESTIMATE_VISIBLE_TOKENS || "").trim().toLowerCase()),
       maxContentChars: Number(config.AGENT_INSIGHT_QODER_MAX_CONTENT_CHARS) || DEFAULT_MAX_CONTENT_CHARS,
       capturedAt,

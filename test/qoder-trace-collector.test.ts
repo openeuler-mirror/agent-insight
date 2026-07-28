@@ -304,6 +304,38 @@ test("Qoder collector builds deterministic OTLP snapshots with LLM, tool, errors
   assert.match(serialized, /<redacted>/)
 })
 
+test("Qoder collector attributes service-account uploads by irreversible API key hash", () => {
+  const accountHash = "0123456789abcdef"
+  const payload = buildQoderOtlpPayload({
+    ...sampleCapture(),
+    accountHash,
+  })
+  const rootSpan = payload.resourceSpans[0].scopeSpans[0].spans.find(
+    (span: any) => span.name === "qoder.agent",
+  )
+  const rootAttributes = Object.fromEntries(
+    rootSpan.attributes.map((attribute: any) => [
+      attribute.key,
+      attribute.value.stringValue ?? attribute.value.intValue ?? attribute.value.boolValue,
+    ]),
+  )
+  assert.equal(rootAttributes["qoder.account.hash"], accountHash)
+
+  const serviceEvents = normalizeOtlpTraces(payload, {
+    receivedAt: "2026-07-21T12:00:04.000Z",
+    authenticatedUser: "admin",
+  })
+  const serviceRecord = aggregateOtelTraceEvents(SESSION_ID, serviceEvents)
+  assert.equal(serviceRecord?.user, `qoder-account-${accountHash}`)
+
+  const userEvents = normalizeOtlpTraces(payload, {
+    receivedAt: "2026-07-21T12:00:04.000Z",
+    authenticatedUser: "alice",
+  })
+  const userRecord = aggregateOtelTraceEvents(SESSION_ID, userEvents)
+  assert.equal(userRecord?.user, "alice")
+})
+
 test("Qoder tool duration falls back to transcript timestamps when async hooks collapse to zero", () => {
   const toolUseId = "mcp-zero-hook-duration"
   const payload = buildQoderOtlpPayload({

@@ -22,6 +22,27 @@ function firstText(...values: unknown[]): string | undefined {
   return undefined;
 }
 
+function qoderExecutionOwner(owner: unknown, attrs: AnyObj): string {
+  const current = firstText(owner, 'anonymous') || 'anonymous';
+  const serviceOwners = new Set([
+    ...(process.env.TRACE_SERVICE_OWNERS || 'admin,anonymous')
+      .split(',')
+      .map(value => value.trim())
+      .filter(Boolean),
+    '',
+    'debug-user',
+    'anonymous',
+  ]);
+  if (!serviceOwners.has(current)) return current;
+
+  // The uploader API key is hashed inside the Qoder collector. Namespacing the
+  // fallback owner by that irreversible hash makes service-account uploads
+  // attributable without allowing a client to impersonate a real username.
+  const accountHash = firstText(attrs['qoder.account.hash']);
+  const safeHash = accountHash?.match(/^[a-f0-9]{8,64}$/i)?.[0].toLowerCase();
+  return safeHash ? `qoder-account-${safeHash}` : current;
+}
+
 function parseJson(value: unknown): unknown {
   if (typeof value !== 'string') return value;
   const trimmed = value.trim();
@@ -365,7 +386,7 @@ export function aggregateQoderOtelTraceEvents(sessionId: string, allEvents: Otel
     timestamp: new Date(rootStarted),
     trace_completed_at: rootAttrs['qoder.trace.completed'] ? new Date(rootCompleted) : null,
     label: `${rootAgent}${isExperts ? ' Experts' : ''}`,
-    user: root.user || 'anonymous',
+    user: qoderExecutionOwner(root.user, rootAttrs),
     interactions,
     qoder_quest: questEvents.length ? {
       mode: firstText(rootAttrs['qoder.session.mode'], questEvents[0]?.attributes?.['qoder.quest.mode']),
