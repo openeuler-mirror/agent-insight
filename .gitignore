@@ -97,10 +97,11 @@ exclude/
 .codex
 .qoder/
 
-# JetBrains plugin builds
-**/.gradle/
-**/build/
-**/.intellijPlatform/
+# Qoder collector plugin builds
+integrations/qoder-desktop/build/
+integrations/qoder-jetbrains/.gradle/
+integrations/qoder-jetbrains/build/
+integrations/qoder-jetbrains/.intellijPlatform/
 
 # local docs backup
 docs_backup/
