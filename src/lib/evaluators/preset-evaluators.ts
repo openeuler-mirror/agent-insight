@@ -1,5 +1,20 @@
 import type { EvaluatorCard } from './custom-evaluator-model';
 
+/**
+ * 「用例分析」「批量测试」里默认勾选的评估器。
+ *
+ * **必须是显式列表，不要改回从 `status === 'ready'` 派生。** 派生的话，每新增一个预置
+ * 评估器，「用户什么都没点就点评测」的默认行为就会多跑一个 LLM judge——而通用 judge
+ * 每调一次会起一个临时 opencode server（`judge-llm.ts`），后台并发上限只有 5。
+ * 参见 `eval-run-guards.ts` 记录的那次「并行跑多个评测任务 → next-server 堆 OOM」事故。
+ *
+ * 下拉框仍然列出全部 ready 的评估器，用户可以自行加勾——这里只管默认值。
+ */
+export const DEFAULT_SELECTED_PRESET_IDS: readonly string[] = [
+  'preset-agent-task-completion',
+  'preset-agent-trace-quality',
+];
+
 export const presetEvaluators: EvaluatorCard[] = [
   {
     id: 'preset-agent-task-completion',

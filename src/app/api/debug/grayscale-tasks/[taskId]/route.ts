@@ -12,6 +12,13 @@ import {
     evaluateEvalExperimentCase,
     type EvalCaseResultRow,
 } from '@/lib/engine/experiment/run-experiment';
+import {
+    abEvaluatorName,
+    forLegacyRowProjection,
+    normalizeAbEvaluators,
+    TASK_COMPLETION_EVALUATOR_ID,
+    TRACE_EVALUATOR_ID,
+} from '@/lib/grayscale/ab-evaluator-selection';
 
 export const dynamic = 'force-dynamic';
 
@@ -252,13 +259,6 @@ declare global {
 }
 
 const NONE_VERSION_ID = '__NONE__';
-const TASK_COMPLETION_EVALUATOR_ID = 'preset-agent-task-completion';
-const TRACE_EVALUATOR_ID = 'preset-agent-trace-quality';
-const SUPPORTED_AB_EVALUATORS = new Set([TASK_COMPLETION_EVALUATOR_ID, TRACE_EVALUATOR_ID]);
-const AB_EVALUATOR_NAMES: Record<string, string> = {
-    [TASK_COMPLETION_EVALUATOR_ID]: 'Agent 任务完成度',
-    [TRACE_EVALUATOR_ID]: 'Agent 轨迹质量',
-};
 const STALE_EVALUATION_MS = 15 * 60 * 1000;
 // 本次 next.js server 进程的启动时间。TrajectoryEvalResult.updatedAt 早于此
 // 时间但还停在 pending/running 的, 必然是上一个 server 生命周期遗留的孤儿
@@ -437,18 +437,6 @@ function scoreTier(score: number): 'good' | 'warn' | 'poor' {
     return score >= 80 ? 'good' : score >= 50 ? 'warn' : 'poor';
 }
 
-function normalizeAbEvaluators(value: unknown, fallback?: string): string[] {
-    const raw = Array.isArray(value) ? value : value ? [value] : [];
-    const ids = Array.from(new Set(
-        raw.map(item => String(item || '').trim())
-            .map(item => item === 'trace-quality-evaluator' ? TRACE_EVALUATOR_ID : item)
-            .filter(item => SUPPORTED_AB_EVALUATORS.has(item)),
-    ));
-    if (ids.length > 0) return ids;
-    const fallbackId = fallback === 'trace-quality-evaluator' ? TRACE_EVALUATOR_ID : String(fallback || '').trim();
-    return SUPPORTED_AB_EVALUATORS.has(fallbackId) ? [fallbackId] : [];
-}
-
 function getConfiguredDatasetIds(config: GrayscaleConfig): string[] {
     return Array.from(new Set([
         ...(Array.isArray(config.linkedDatasetIds) ? config.linkedDatasetIds : []),
@@ -524,11 +512,13 @@ function pickTraceEvaluationTraceId(rawAnalysisJson: string | null | undefined):
 }
 
 function buildRunEvaluationsFromRow(row: TrajectoryResultRow, requestedEvaluatorIds?: string[]): RunEvaluation[] {
-    const selected = normalizeAbEvaluators(
+    // 只投影 legacy 行能表达的两个评估器（见 ab-evaluator-selection.ts 的 LEGACY_ROW_EVALUATORS）：
+    // 其余评估器的分在 ExperimentEvalResult 里，由 applyExpRowsToRun 落。
+    const selected = forLegacyRowProjection(normalizeAbEvaluators(
         requestedEvaluatorIds && requestedEvaluatorIds.length > 0
             ? requestedEvaluatorIds
             : selectedEvaluators(row.rawAnalysisJson),
-    );
+    ));
     const resultScore = pickEvaluationResultScore(row.rawAnalysisJson);
     const resultError = pickResultEvaluationError(row.rawAnalysisJson);
     const resultTraceId = pickEvaluationTraceId(row.rawAnalysisJson);
@@ -538,7 +528,7 @@ function buildRunEvaluationsFromRow(row: TrajectoryResultRow, requestedEvaluator
         if (row.status === 'pending' || row.status === 'running') {
             return {
                 evaluatorId,
-                evaluatorName: AB_EVALUATOR_NAMES[evaluatorId] || evaluatorId,
+                evaluatorName: abEvaluatorName(evaluatorId),
                 status: row.status === 'running' ? 'running' : 'pending',
                 evaluatorRunId: row.evaluatorRunId,
                 evaluationResultId: row.id,
@@ -549,7 +539,7 @@ function buildRunEvaluationsFromRow(row: TrajectoryResultRow, requestedEvaluator
             const failed = row.status === 'failed' || typeof score !== 'number';
             return {
                 evaluatorId,
-                evaluatorName: AB_EVALUATOR_NAMES[evaluatorId],
+                evaluatorName: abEvaluatorName(evaluatorId),
                 status: failed ? 'failed' : 'done',
                 evaluatorRunId: row.evaluatorRunId,
                 evaluationResultId: row.id,
@@ -562,7 +552,7 @@ function buildRunEvaluationsFromRow(row: TrajectoryResultRow, requestedEvaluator
         const failed = row.status === 'failed' || typeof score !== 'number';
         return {
             evaluatorId,
-            evaluatorName: AB_EVALUATOR_NAMES[evaluatorId] || evaluatorId,
+            evaluatorName: abEvaluatorName(evaluatorId),
             status: failed ? 'failed' : 'done',
             evaluatorRunId: row.evaluatorRunId,
             evaluationResultId: row.id,
@@ -582,8 +572,9 @@ function isNewerTrajectoryRow(candidate: TrajectoryResultRow, current: Trajector
 
 function mergeRunEvaluations(existing: RunEvaluation[] | undefined, incoming: RunEvaluation[]): RunEvaluation[] {
     const byId = new Map<string, RunEvaluation>();
+    // 保留全部历史条目：这里曾按 2 个 legacy id 过滤，会把实验路径产出的其余评估器结果丢掉。
     for (const item of existing || []) {
-        if (SUPPORTED_AB_EVALUATORS.has(item.evaluatorId)) byId.set(item.evaluatorId, item);
+        if (item.evaluatorId) byId.set(item.evaluatorId, item);
     }
     for (const item of incoming) byId.set(item.evaluatorId, item);
     return Array.from(byId.values());
@@ -942,7 +933,7 @@ function applyTrajectoryRowToRun(run: RunResult, row: TrajectoryResultRow, fallb
 function applyExpRowsToRun(run: RunResult, rows: EvalCaseResultRow[], evalExperimentId?: string) {
     const incoming: RunEvaluation[] = rows.map(r => ({
         evaluatorId: r.evaluatorId,
-        evaluatorName: AB_EVALUATOR_NAMES[r.evaluatorId] || r.evaluatorId,
+        evaluatorName: abEvaluatorName(r.evaluatorId),
         status: r.status === 'done' ? 'done' : 'failed',
         evaluatorRunId: evalExperimentId,
         score: typeof r.score === 'number' ? Math.round(r.score) : undefined,
@@ -1725,7 +1716,7 @@ async function evaluateSingleRunTarget(args: {
         target.run.evaluations,
         effectiveEvaluatorIds.map(id => ({
             evaluatorId: id,
-            evaluatorName: AB_EVALUATOR_NAMES[id] || id,
+            evaluatorName: abEvaluatorName(id),
             status: 'running',
         })),
     );
@@ -1783,7 +1774,7 @@ async function evaluateSingleRunTarget(args: {
             target.run.evaluations,
             effectiveEvaluatorIds.map(id => ({
                 evaluatorId: id,
-                evaluatorName: AB_EVALUATOR_NAMES[id] || id,
+                evaluatorName: abEvaluatorName(id),
                 status: 'failed',
                 evaluatorRunId,
                 errorMessage: message,
@@ -2028,6 +2019,9 @@ async function runGrayscaleTask(args: {
         // 评测批次标题默认用 A/B 任务名, 让「评测结果」里的批次跟 A/B 任务同名、好对应。
         evaluationBatchTitle: task.configJson.evaluationBatchTitle || task.taskName,
     };
+    // 空评估器列表必须在这里截住：往下走会建出 0 个评估器的 backing 实验 → 评测 0 行 →
+    // 每个 run 落 status='fail'、output='评测失败'，用户看不到任何原因。
+    if (config.evaluators.length === 0) throw new Error('evaluators are required');
     // 评测走实验：建/复用 backing 单组实验（每条 A/B trace 作 case 评测，结果回填双侧；对比仍在 GrayscaleTask 层）
     config.evalExperimentId = await ensureEvalExperiment({
         user,

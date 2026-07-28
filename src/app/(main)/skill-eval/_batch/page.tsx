@@ -137,11 +137,11 @@ interface BatchEvalTask {
     traceEvalStatesJson?: Record<string, TraceEvalStateInfo>;
 }
 
-import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
+import { DEFAULT_SELECTED_PRESET_IDS, presetEvaluators } from '@/lib/evaluators/preset-evaluators';
 
-// 内置评估器选项 —— 跟 src/components/EvaluatorsCenter.tsx 的 presetEvaluators 保持同步。
-// 仅列「有真实后端运行时」的预置评估器（status='ready'）；后端 SUPPORTED_TRAJECTORY_EVALUATORS 
-// 也认这三个 id。漏 preset-agent-task-completion 会让用户没法跑结果对照。
+// 内置评估器选项 —— 从 presetEvaluators 派生，列出全部 status='ready' 的预置评估器。
+// 评测走 /api/experiments/eval-traces → 实验引擎，引擎认全部已登记的预置评估器，
+// 这里不做能力过滤。默认勾选哪几个见 DEFAULT_SELECTED_PRESET_IDS。
 const BUILT_IN_EVALUATORS = [
     ...presetEvaluators.filter(e => e.status === 'ready').map(e => ({ id: e.id, name: e.name }))
 ];
@@ -248,10 +248,11 @@ export function BatchEvaluation({
     // Evaluator
     const [userEvaluators, setUserEvaluators] = useState<Array<{id: string; name: string}>>([]);
     const [selectedEvaluatorId, setSelectedEvaluatorId] = useState('preset-agent-trace-quality');
-    // 评估器多选 (AB 式配置): 默认勾选全部预置 ready 评估器; 与 selectedEvaluatorId(老单选) 并存,
-    // 启动评测时以这个数组为准 (透传 evaluators)。
+    // 评估器多选 (AB 式配置): 默认只勾任务完成度 + 轨迹质量; 与 selectedEvaluatorId(老单选) 并存,
+    // 启动评测时以这个数组为准 (透传 evaluators)。下拉框仍列出全部 ready, 用户可自行加勾。
+    // 别改回按 status 派生——见 DEFAULT_SELECTED_PRESET_IDS 的注释。
     const [selectedEvaluatorIds, setSelectedEvaluatorIds] = useState<string[]>(
-        () => BUILT_IN_EVALUATORS.map(e => e.id),
+        () => [...DEFAULT_SELECTED_PRESET_IDS],
     );
     const [showEvalDropdown, setShowEvalDropdown] = useState(false);
 

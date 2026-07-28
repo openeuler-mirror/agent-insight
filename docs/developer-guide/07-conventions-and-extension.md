@@ -38,6 +38,7 @@
 - **新增存储后端**：与 `OpenGaussAdapter` 并列实现 `DatabaseAdapter`（`db-interface.ts`）。
 - **新增 LLM provider**：扩展 `src/lib/llm-providers.ts` 中的 `LlmProvider` 注册表。
 - **新增自定义评测器**：用 `LlmEvaluatorConfig` / `CodeEvaluatorConfig`（`src/lib/evaluators/custom-evaluator-model.ts`）建模；通过 `src/server/user_evaluators_storage.ts` 持久化。
+- **新增预置评估器**：实现放 `src/lib/engine/experiment/<族>-preset-evaluators.ts`（一族一文件），另需在卡片/元数据/分发/守卫测试四处登记。落点、命名与打分方法论见 [10-evaluator-development.md](./10-evaluator-development.md)——**动手前必读**，这条路径上的坑基本都记在那里了。
 - **新增框架接入路径**：在 `src/lib/ingest/*` 下加 parser/watcher 或 OTel 聚合器，并在 `src/lib/ingest/adapters/` 注册 `FrameworkAdapter`（descriptor、skill 抽取、必要的 `normalizeForStorage`）。路由层不要再手写框架分支；通过 `saveExecutionRecord` 归一化为 `Execution`。安装脚本框架清单仍是后续治理范围。
 - **流程闸门**（`AGENTS.md` §4）：对 **Prisma schema** 的任何改动，或任何**新增 API 路由**，都需要先在 `docs/plans/YYYY-MM-DD-<topic>-design.md` 下产出一份 Plan 文档，对齐后再编码。
 
