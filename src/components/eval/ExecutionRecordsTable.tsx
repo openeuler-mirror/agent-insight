@@ -310,7 +310,8 @@ export function ExecutionRecordsTable({
                                         if (!rec.evaluatorRunId || !rec.executionTraceId || !rec.resultId) {
                                             return <span style={{ color: '#B8B6AE', fontSize: 11 }}>—</span>;
                                         }
-                                        const resultUrl = `/eval/trajectory/${encodeURIComponent(rec.executionTraceId)}?runId=${encodeURIComponent(rec.evaluatorRunId)}${rec.datasetId ? `&datasetId=${encodeURIComponent(rec.datasetId)}` : ''}&resultId=${encodeURIComponent(rec.resultId)}`;
+                                        // 评测走实验后：evaluatorRunId=experimentId、resultId=ExperimentCase.id → 跳实验的 Trace 评测详情
+                                        const resultUrl = `/experiments/${encodeURIComponent(rec.evaluatorRunId)}/cases/${encodeURIComponent(rec.resultId)}`;
                                         return (
                                             <button
                                                 className="v2-action-btn"

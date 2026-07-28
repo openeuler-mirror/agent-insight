@@ -13,7 +13,7 @@
  * replay) re-reads the on-disk spool and snapshot-replace overwrites with the
  * complete trace again. Memory stays bounded: each re-aggregation loads only the
  * spans of the touched group, then releases them — the old unbounded in-memory Map
- * is gone. See spool.ts and docs/designs/agents/jiuwenswarm-tracing/durable-span-spool.md.
+ * is gone. See spool.ts and docs/design/jiuwenswarm-tracing/durable-span-spool.md.
  *
  * Why key by traceId, not agentteam.session.id: single-agent runs reuse a
  * process-wide session id (the ACP CLI hard-codes "acp_cli_session"), so keying

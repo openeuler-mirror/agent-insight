@@ -20,6 +20,7 @@ import {
     AgentNode,
     buildAgentCallTree,
     findNode,
+    firstMeaningfulLine,
     formatDuration,
     formatTokens,
     InteractionUsage,
@@ -68,6 +69,15 @@ const KIND_META: Record<string, { label: string; chip: string; bar: string; text
     llm:   { label: 'LLM',   ...SPAN_KIND_CLASSES.llm },
     user:  { label: 'USER',  ...SPAN_KIND_CLASSES.user },
 };
+
+/** Exact token count, down to the unit. The left-hand span tree keeps the
+ *  abbreviated `formatTokens` (fixed-width columns), but that form rounds to the
+ *  nearest 1k above 10k — so a turn-over-turn delta of a few dozen tokens reads
+ *  as "no change", which is exactly what someone opening a span wants to see.
+ *  Every token figure in the right-hand detail panel uses this instead. */
+function exactTokens(n: number): string {
+    return n.toLocaleString();
+}
 
 // Single source of truth for span-type chips (replaces the legacy inline-styled span badges).
 function KindBadge({ kind, size = 'xs', className }: { kind: string; size?: 'xs' | 'sm'; className?: string }) {
@@ -387,6 +397,8 @@ export default function AgentTraceView({
     const [fullInteractionLoadError, setFullInteractionLoadError] = useState<string | null>(null);
     const fullLoadPromiseRef = React.useRef<Promise<RawInteraction[]> | null>(null);
     const previousRootExecutionIdRef = React.useRef(rootExecutionId);
+    /** 置位表示下一次 tree 重建源于「同一条 trace 补数据」，重置选中态的 effect 应跳过一次。 */
+    const sameTraceReloadRef = React.useRef(false);
     const langfuseProjection = useMemo(
         () => langfuseTraceNodes?.length ? buildLangfuseAgentTrace(langfuseTraceNodes) : null,
         [langfuseTraceNodes],
@@ -416,6 +428,8 @@ export default function AgentTraceView({
         try {
             const loaded = await loadInteraction(index);
             if (previousRootExecutionIdRef.current !== requestedTraceId) return;
+            // 同一条 trace 内补数据，不是换 trace —— 别让下面的重置 effect 清掉用户的选中
+            sameTraceReloadRef.current = true;
             setInteractions(previous => previous.map((item, itemIndex) => itemIndex === index ? loaded : item));
         } catch (error) {
             setInteractionLoadError(error instanceof Error ? error.message : 'Failed to load interaction');
@@ -434,7 +448,11 @@ export default function AgentTraceView({
             let promise: Promise<RawInteraction[]>;
             promise = loadAllInteractions()
                 .then(loaded => {
-                    if (previousRootExecutionIdRef.current === requestedTraceId) setInteractions(loaded);
+                    if (previousRootExecutionIdRef.current === requestedTraceId) {
+                        // 同上：整条 trace 补全正文（切到 Prompt/时间线 或搜索时触发），同样保留选中
+                        sameTraceReloadRef.current = true;
+                        setInteractions(loaded);
+                    }
                     return loaded;
                 })
                 .catch(error => {
@@ -504,8 +522,18 @@ export default function AgentTraceView({
         };
     }, [traceSkillCalls.length, user]);
 
+    // tree 由 interactions 派生，为同一条 trace 补数据（懒加载单条 / 补全全部）也会产生新的
+    // interactions 数组 → 新 tree 对象。若无条件跟着 tree 重置，首次点击 span 触发懒加载后
+    // 会被弹回根 Agent，必须点第二次才留得住（手动展开的节点同样会被清掉）。
+    // 这里只跳过「同一条 trace 补数据」这一种已知来源，其余 tree 变化（换 trace、自动刷新、
+    // langfuse 投影变化）一律照旧重置 —— TraceDrawer / TrajectoryTraceView 不传 rootExecutionId，
+    // 不能用它作为 trace 身份来判定。
     useEffect(() => {
         if (!tree) return;
+        if (sameTraceReloadRef.current) {
+            sameTraceReloadRef.current = false;
+            return;
+        }
         setSelectedKey(agentKey(tree.id));
         setExpandedKeys(defaultExpandedKeys);
     }, [tree, defaultExpandedKeys]);
@@ -656,7 +684,7 @@ export default function AgentTraceView({
                 const tok = ev.usage?.total || 0;
                 const label = ev.kind === 'task' && ev.spawnedChildId
                     ? `spawn → ${ev.args?.subagent_type || childNode?.agentName || 'subagent'}`
-                    : ev.name || ev.summary?.split('\n')[0]?.slice(0, 60) || ev.kind;
+                    : ev.name || firstMeaningfulLine(ev.summary) || ev.kind;
                 spans.push({
                     key: evKey, label, kind: ev.kind,
                     durationMs: dur, tokens: tok || undefined,
@@ -964,7 +992,15 @@ export default function AgentTraceView({
                             </Button>
                         </div>
                     ) : selectedEvent ? (
-                        <EventDetailPanel event={selectedEvent} node={selectedAgentNode} interactions={displayInteractions} />
+                        <EventDetailPanel
+                            event={selectedEvent}
+                            node={selectedAgentNode}
+                            interactions={displayInteractions}
+                            onSelectChild={(id) => {
+                                const n = findNode(tree, id);
+                                if (n) setSelectedKey(agentKey(n.id));
+                            }}
+                        />
                     ) : selectedAgentNode ? (
                         <AgentDetail
                             node={selectedAgentNode}
@@ -1392,7 +1428,7 @@ function UnifiedEventRow({
     const primaryLabel = event.kind === 'task' && event.spawnedChildId
         ? `spawn → ${event.args?.subagent_type || childNode?.agentName || 'subagent'}`
         : event.kind === 'llm'
-            ? (event.summary ? event.summary.split('\n')[0].slice(0, 60) : 'LLM')
+            ? (firstMeaningfulLine(event.summary) || 'LLM')
             : event.name || event.summary?.slice(0, 50) || event.kind;
 
     // Secondary label
@@ -2085,12 +2121,23 @@ function buildInputMessagesForLlmIndex(node: AgentNode, interactions: RawInterac
     };
 }
 
+/** Same tool calls on both turns? An opencode tool-use turn carries empty
+ *  `content`, so on role+content alone every one of them looks alike — the
+ *  name+args pairs are what actually tell two of them apart. */
+function samePromptToolCalls(a: PromptSnapshotMessage, b: PromptSnapshotMessage): boolean {
+    const x = a.toolCalls || [];
+    const y = b.toolCalls || [];
+    if (x.length !== y.length) return false;
+    return x.every((t, i) => t.name === y[i].name && t.args === y[i].args);
+}
+
 function countRepeatedPromptPrefix(prev: PromptSnapshotMessage[], current: PromptSnapshotMessage[]): number {
     let count = 0;
     const max = Math.min(prev.length, current.length);
     while (count < max) {
         if (prev[count].role !== current[count].role) break;
         if ((prev[count].content || '').trim() !== (current[count].content || '').trim()) break;
+        if (!samePromptToolCalls(prev[count], current[count])) break;
         count++;
     }
     return count;
@@ -2103,8 +2150,14 @@ function buildLlmPromptSnapshot(event: AgentEvent, node: AgentNode, interactions
         .filter(ev => ev.kind === 'llm' && ev.interactionIndex < eventIdx)
         .sort((a, b) => a.interactionIndex - b.interactionIndex);
     const prevEvent = previousLlmEvents[previousLlmEvents.length - 1];
+    // The previous call's OUTPUT is part of this call's input, so it belongs to
+    // History — not "本轮新增". Moving the cutoff one interaction further (`+ 1`)
+    // folds that turn into the compared prefix. Only valid for a pure-text reply:
+    // a tool-use turn's interaction also carries the tool result, which genuinely
+    // IS new input this call, so that one has to stay in Current input.
+    const prevReplyIsPureOutput = !!prevEvent && (prevEvent.interaction.tool_calls?.length ?? 0) === 0;
     const prevMessages = prevEvent
-        ? buildInputMessagesForLlmIndex(node, interactions, prevEvent.interactionIndex).inputMessages
+        ? buildInputMessagesForLlmIndex(node, interactions, prevEvent.interactionIndex + (prevReplyIsPureOutput ? 1 : 0)).inputMessages
         : [];
 
     return {
@@ -2190,7 +2243,7 @@ function ThinkingBlock({ text, tokens, durationLabel, modalTitle }: {
     if (!trimmed) return null;
     const summaryLabel = durationLabel ? `Thought for ${durationLabel}` : 'Thought process';
     const meta = [
-        tokens && tokens > 0 ? `${formatTokens(tokens)} tokens` : '',
+        tokens && tokens > 0 ? `${exactTokens(tokens)} tokens` : '',
         `${trimmed.length.toLocaleString()} chars`,
     ].filter(Boolean).join(' · ');
     return (
@@ -2509,8 +2562,19 @@ function HierarchicalSpanSnapshot({
     // re-receives every call), so History = system prompt(s) + prior turns.
     const historyAndSystem = [...systemMessages, ...historyMessages];
     const inputCount = historyAndSystem.length + currentInput.length;
-    const spanId = `llm_call_${snapshot.llmOrdinal}`;
-    const threadId = node.sessionId || 'TOP';
+    // History can be thin (or absent) for two very different reasons, and saying
+    // which one it is beats a block that silently shrinks: either this is the
+    // node's first call (nothing came before), or the prefix failed to line up
+    // with the previous call so the prior turns spilled into Current input.
+    const isFirstCall = snapshot.llmOrdinal === 1;
+    const historySubtitle = historyMessages.length
+        ? (systemMessages.length ? 'system + 历史上下文 · 已折叠' : '历史上下文 · 已折叠')
+        : isFirstCall
+            ? '仅 system prompt · 本轮为首次调用，无历史上下文'
+            : '仅 system prompt · 未能与上次调用对齐，历史已并入 Current input';
+    const emptyHistoryHint = isFirstCall
+        ? '本轮为首次调用，无历史上下文；该 agent 的 system prompt 也未上报'
+        : '未采集到 system prompt，且未能与上次调用对齐 —— 历史已并入 Current input';
 
     // An LLM turn has two content blocks: the model's reasoning ("thinking") and
     // its visible response ("content"). OpenCode carries reasoning in `reasoning`
@@ -2535,28 +2599,40 @@ function HierarchicalSpanSnapshot({
 
     return (
         <div className="flex flex-col gap-3">
-            {/* span identity */}
+            {/* span identity — which call this is and whose it is. `llm_call_N` /
+                `thread_id TOP` read like OTel ids but are neither: the ordinal is
+                computed here and TOP is a placeholder. The agent name is what a
+                reader actually needs. `event #N` stays — it is the index into the
+                exported bundle's `session.interactions`, the only anchor back to
+                the raw payload. */}
             <div>
-                <SectionTitle>Trace / Span Snapshot</SectionTitle>
+                <SectionTitle>本次调用</SectionTitle>
                 <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-background-secondary px-2.5 py-2">
                     <KindBadge kind="llm" />
-                    <span className="text-sm font-semibold text-foreground">{spanId}</span>
-                    <span className="text-xs text-foreground-muted">thread_id</span>
-                    <span className="rounded-sm border border-border bg-card px-1.5 py-0.5 font-mono text-xs text-foreground">{threadId}</span>
+                    <span className="text-sm font-semibold text-foreground">第 {snapshot.llmOrdinal} 次模型调用</span>
+                    <span className="text-xs text-foreground-muted">来自 Agent</span>
+                    <span className="rounded-sm border border-border bg-card px-1.5 py-0.5 text-xs font-medium text-foreground">{node.agentName}</span>
+                    {node.subagentType && (
+                        <span className="text-xs text-foreground-muted">{node.subagentType}</span>
+                    )}
                     <span className="ml-auto text-xs text-foreground-muted">event #{event.interactionIndex}</span>
                 </div>
             </div>
 
             {/* INPUT — two collapsible groups: History (system + prior turns) and Current input */}
             <SnapshotSection label="Input" count={inputCount} defaultOpen>
-                {historyAndSystem.length > 0 && (
+                {historyAndSystem.length > 0 ? (
                     <FoldedMessagesBlock
                         messages={historyAndSystem}
                         label="History"
-                        subtitle="system + 历史上下文 · 已折叠"
+                        subtitle={historySubtitle}
                         modalTitle={`${title} — history`}
                     />
-                )}
+                ) : currentInput.length > 0 ? (
+                    <div className="border-t border-border first:border-t-0 px-3 py-2 text-xs text-foreground-muted">
+                        {emptyHistoryHint}
+                    </div>
+                ) : null}
                 {currentInput.length > 0 ? (
                     <FoldedMessagesBlock
                         messages={currentInput}
@@ -2568,7 +2644,7 @@ function HierarchicalSpanSnapshot({
                 ) : (
                     <div className="border-t border-border first:border-t-0 px-3 py-2 text-xs text-foreground-muted">
                         {historyAndSystem.length
-                            ? '本轮无新增输入（上下文与上次相同）'
+                            ? '本轮无新增外部输入 —— 没有新的用户消息或工具结果，上一轮的模型回复已归入 History'
                             : 'No input messages captured for this span.'}
                     </div>
                 )}
@@ -2603,12 +2679,137 @@ function HierarchicalSpanSnapshot({
 }
 
 // ─── EventDetailPanel (right panel – event selected) ─────────────────────────
-function EventDetailPanel({ event, node, interactions }: { event: AgentEvent; node: AgentNode; interactions: RawInteraction[] }) {
+/** 工具/技能调用是否失败。判定口径与 faithfulness-evaluator 的 status 归类一致。 */
+function isErrorToolStatus(status?: string): boolean {
+    return /error|fail|cancel/i.test(status ?? '');
+}
+
+/** 毫秒级时钟。span 详情用,便于与后端日志、Infra 曲线对时。 */
+function formatClockMs(ts?: number): string | null {
+    if (ts == null) return null;
+    const d = new Date(ts);
+    if (Number.isNaN(d.getTime())) return null;
+    return `${d.toLocaleTimeString('zh-CN', { hour12: false })}.${String(d.getMilliseconds()).padStart(3, '0')}`;
+}
+
+/** 可点击复制的 id 芯片(toolCallId 等)。 */
+function CopyableId({ label, value }: { label: string; value: string }) {
+    const [copied, setCopied] = useState(false);
+    return (
+        <button
+            type="button"
+            title={`复制 ${label}`}
+            onClick={async () => {
+                try {
+                    await copyText(value);
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 1500);
+                } catch { /* ignore */ }
+            }}
+            className="font-mono text-[0.625rem] px-1.5 py-px rounded-sm border border-border bg-background-secondary text-foreground-secondary hover:border-primary hover:text-primary cursor-pointer shrink-0"
+        >
+            {value} {copied ? '✓' : '⧉'}
+        </button>
+    );
+}
+
+/** 失败 span 的错误区块。数据源为 event.toolStatus + 工具输出(错误正文通常就在 output 里)。 */
+function SpanErrorBlock({ status, text }: { status?: string; text: string | null }) {
+    const [copied, setCopied] = useState(false);
+    const body = (text ?? '').trim();
+    return (
+        <div className="rounded-md border border-error-border bg-error-subtle overflow-hidden">
+            <div className="flex items-center gap-2 px-2.5 py-1.5 border-b border-error-border">
+                <span className="size-1.5 rounded-full bg-error shrink-0" />
+                <span className="text-xs font-bold text-error">执行失败</span>
+                {status && <span className="font-mono text-[0.625rem] text-error/75">toolStatus: {status}</span>}
+                <span className="flex-1" />
+                {body && (
+                    <button
+                        type="button"
+                        title="复制错误信息"
+                        onClick={async () => {
+                            try {
+                                await copyText(body);
+                                setCopied(true);
+                                setTimeout(() => setCopied(false), 1500);
+                            } catch { /* ignore */ }
+                        }}
+                        className="text-[0.625rem] text-error/70 hover:text-error bg-transparent border-none cursor-pointer p-0"
+                    >
+                        {copied ? '✓ 已复制' : '⧉ 复制'}
+                    </button>
+                )}
+            </div>
+            {body ? (
+                <pre className="m-0 px-2.5 py-2 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap break-words text-error max-h-72 overflow-auto">{body}</pre>
+            ) : (
+                <div className="px-2.5 py-2 text-xs text-error/80 italic">调用被标记为失败,但未记录错误正文。</div>
+            )}
+        </div>
+    );
+}
+
+/** task span 的子 Agent 汇总卡 —— 不离开面板即可看到子 Agent 概况。 */
+function SpawnedChildSummary({ child, onSelectChild }: { child: AgentNode; onSelectChild?: (id: string) => void }) {
+    const ctx = React.useContext(TraceCtx);
+    const status = getStatus(child);
+    const s = child.stats;
+    return (
+        <div className="rounded-md border border-border p-2.5 flex flex-col gap-2">
+            <div className="flex items-center gap-2">
+                <KindBadge kind="agent" size="sm" />
+                <span className="flex-1 text-sm font-semibold truncate">{child.agentName}</span>
+                {child.sessionId && ctx.onSubagentNavigate && (
+                    <button
+                        type="button"
+                        title="在独立 Trace 视图中打开此 Sub-Agent"
+                        onClick={() => ctx.onSubagentNavigate?.(child.sessionId!)}
+                        className="px-2 py-0.5 text-xs font-semibold rounded-sm border border-primary text-primary bg-primary/10 hover:bg-primary/20 cursor-pointer shrink-0"
+                    >
+                        查看子 Trace ↗
+                    </button>
+                )}
+                {onSelectChild && (
+                    <button
+                        type="button"
+                        title="在左侧树中选中该子 Agent"
+                        onClick={() => onSelectChild(child.id)}
+                        className="px-2 py-0.5 text-xs font-semibold rounded-sm border border-border text-foreground-secondary hover:bg-background-secondary cursor-pointer shrink-0"
+                    >
+                        定位
+                    </button>
+                )}
+            </div>
+            <div className="flex flex-wrap gap-x-3.5 gap-y-1 text-xs text-foreground-muted">
+                {status !== 'ok' && (
+                    <span className="inline-flex items-center gap-1.5">
+                        状态 <span className={cn('size-1.5 rounded-full', STATUS_DOT[status])} />
+                        <b className="font-semibold text-foreground">{status === 'error' ? '失败' : '慢'}</b>
+                    </span>
+                )}
+                <span>耗时 <b className="font-semibold text-foreground tabular-nums">{formatDuration(s.durationMs)}</b></span>
+                <span>Token <b className="font-semibold text-foreground tabular-nums">{exactTokens(s.totalTokens)}</b></span>
+                <span>LLM 调用 <b className="font-semibold text-foreground tabular-nums">{s.llmCalls}</b></span>
+                <span>工具调用 <b className="font-semibold text-foreground tabular-nums">{s.toolCalls}</b></span>
+                {s.skillCalls > 0 && <span>Skill <b className="font-semibold text-foreground tabular-nums">{s.skillCalls}</b></span>}
+                {child.children.length > 0 && <span>子 Agent <b className="font-semibold text-foreground tabular-nums">{child.children.length}</b></span>}
+            </div>
+        </div>
+    );
+}
+
+function EventDetailPanel({ event, node, interactions, onSelectChild }: { event: AgentEvent; node: AgentNode; interactions: RawInteraction[]; onSelectChild?: (id: string) => void }) {
     const km = KIND_META[event.kind] ?? KIND_META.tool;
     const dur = (event.startedAt != null && event.completedAt != null)
         ? formatDuration(event.completedAt - event.startedAt) : null;
-    const time = event.startedAt != null ? new Date(event.startedAt).toLocaleTimeString() : '';
-    const title = event.name || event.summary?.split('\n')[0]?.slice(0, 60) || km.label;
+    const startClock = formatClockMs(event.startedAt);
+    const endClock = formatClockMs(event.completedAt);
+    const title = event.name || firstMeaningfulLine(event.summary) || km.label;
+    const hasError = isErrorToolStatus(event.toolStatus);
+    const spawnedChild = event.kind === 'task' && event.spawnedChildId
+        ? node.children.find(c => c.id === event.spawnedChildId)
+        : undefined;
 
     const responseText =
         event.kind === 'llm' ? (event.interaction?.content || event.summary || '')
@@ -2631,10 +2832,18 @@ function EventDetailPanel({ event, node, interactions }: { event: AgentEvent; no
                     <span className="flex-1 text-base font-semibold truncate text-foreground">{title}</span>
                 </div>
                 <div style={{ display: 'flex', gap: 12, fontSize: '0.6875rem', color: 'var(--foreground-muted)', flexWrap: 'wrap', alignItems: 'center' }}>
-                    {time && <span>{time}</span>}
                     {dur && <span style={{ fontVariantNumeric: 'tabular-nums' }}>{dur}</span>}
-                    {event.usage?.total ? <span style={{ fontVariantNumeric: 'tabular-nums' }}>{formatTokens(event.usage.total)} tok</span> : null}
+                    {event.usage?.total ? <span style={{ fontVariantNumeric: 'tabular-nums' }}>{exactTokens(event.usage.total)} tok</span> : null}
+                    {/* 毫秒级绝对时间:对时后端日志 / Infra 曲线时需要 */}
+                    {startClock && <span style={{ fontVariantNumeric: 'tabular-nums' }}>开始 {startClock}</span>}
+                    {endClock && <span style={{ fontVariantNumeric: 'tabular-nums' }}>结束 {endClock}</span>}
                     <span style={{ opacity: 0.6 }}>from: {node.agentName}</span>
+                    {event.toolStatus && !hasError && (
+                        <span className="inline-flex items-center gap-1 text-success font-semibold">
+                            <span className="size-1.5 rounded-full bg-success" />{event.toolStatus}
+                        </span>
+                    )}
+                    {event.toolCallId && <CopyableId label="toolCallId" value={event.toolCallId} />}
                 </div>
             </div>
 
@@ -2654,25 +2863,36 @@ function EventDetailPanel({ event, node, interactions }: { event: AgentEvent; no
                 {/* ── Tool / Skill ── */}
                 {(event.kind === 'tool' || event.kind === 'skill') && (
                     <>
+                        {/* 失败时错误正文置顶;此时 output 就是错误信息,不再重复渲染 Output */}
+                        {hasError && <SpanErrorBlock status={event.toolStatus} text={outputStr} />}
                         <CompactSection label="Input" raw={argsStr} modalTitle={`${title} — Input`} />
-                        <CompactSection label="Output" raw={outputStr} modalTitle={`${title} — Output`} />
-                        {argsStr == null && outputStr == null && <EmptyDetail />}
+                        {!hasError && <CompactSection label="Output" raw={outputStr} modalTitle={`${title} — Output`} />}
+                        {!hasError && argsStr == null && outputStr == null && <EmptyDetail />}
                     </>
                 )}
 
                 {/* ── Task spawn ── */}
                 {event.kind === 'task' && event.spawnedChildId && (
-                    <div style={{ fontSize: '0.8125rem', color: 'var(--foreground-muted)', padding: '0.75rem', background: 'var(--background-secondary)', border: '1px solid var(--border)', borderRadius: 6 }}>
-                        已生成子 Agent — 在左侧树中展开 TASK 行查看详情。
-                    </div>
+                    <>
+                        {hasError && <SpanErrorBlock status={event.toolStatus} text={outputStr} />}
+                        <CompactSection label="派生指令" raw={argsStr} modalTitle={`${title} — 派生指令`} />
+                        {spawnedChild ? (
+                            <SpawnedChildSummary child={spawnedChild} onSelectChild={onSelectChild} />
+                        ) : (
+                            <div style={{ fontSize: '0.8125rem', color: 'var(--foreground-muted)', padding: '0.75rem', background: 'var(--background-secondary)', border: '1px solid var(--border)', borderRadius: 6 }}>
+                                已生成子 Agent — 在左侧树中展开 TASK 行查看详情。
+                            </div>
+                        )}
+                    </>
                 )}
 
                 {/* ── Captured task / chain observation ── */}
                 {((event.kind === 'task' && !event.spawnedChildId) || event.kind === 'chain') && (
                     <>
+                        {hasError && <SpanErrorBlock status={event.toolStatus} text={outputStr} />}
                         <CompactSection label="Input" raw={argsStr} modalTitle={`${title} — Input`} />
-                        <CompactSection label="Output" raw={outputStr} modalTitle={`${title} — Output`} />
-                        {argsStr == null && outputStr == null && <EmptyDetail />}
+                        {!hasError && <CompactSection label="Output" raw={outputStr} modalTitle={`${title} — Output`} />}
+                        {!hasError && argsStr == null && outputStr == null && <EmptyDetail />}
                     </>
                 )}
             </div>
@@ -2725,7 +2945,7 @@ function LLMEventBody({ event, responseText, interactions, node }: {
         [event, node, interactions],
     );
 
-    const title = event.name || event.summary?.split('\n')[0]?.slice(0, 60) || 'LLM';
+    const title = event.name || firstMeaningfulLine(event.summary) || 'LLM';
 
     return (
         <>
@@ -2768,11 +2988,11 @@ function LLMEventBody({ event, responseText, interactions, node }: {
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem 1rem', alignItems: 'baseline' }}>
                             {hasUsage && (
                                 <span style={{ fontSize: '0.625rem', color: 'var(--foreground-muted)' }}>
-                                    {usage!.input != null && usage!.input > 0 && <span>in <b style={{ color: 'var(--foreground)' }}>{formatTokens(usage!.input)}</b> </span>}
-                                    {usage!.output != null && usage!.output > 0 && <span>out <b style={{ color: 'var(--primary)' }}>{formatTokens(usage!.output)}</b> </span>}
-                                    {usage!.cache?.read != null && usage!.cache.read > 0 && <span>cache <b style={{ color: 'var(--success)' }}>{formatTokens(usage!.cache.read)}</b> </span>}
-                                    {usage!.reasoning != null && usage!.reasoning > 0 && <span>think <b style={{ color: 'var(--foreground-secondary)' }}>{formatTokens(usage!.reasoning)}</b> </span>}
-                                    {usage!.total != null && usage!.total > 0 && <span>total <b style={{ color: 'var(--foreground)', fontWeight: 700 }}>{formatTokens(usage!.total)}</b></span>}
+                                    {usage!.input != null && usage!.input > 0 && <span>in <b style={{ color: 'var(--foreground)' }}>{exactTokens(usage!.input)}</b> </span>}
+                                    {usage!.output != null && usage!.output > 0 && <span>out <b style={{ color: 'var(--primary)' }}>{exactTokens(usage!.output)}</b> </span>}
+                                    {usage!.cache?.read != null && usage!.cache.read > 0 && <span>cache <b style={{ color: 'var(--success)' }}>{exactTokens(usage!.cache.read)}</b> </span>}
+                                    {usage!.reasoning != null && usage!.reasoning > 0 && <span>think <b style={{ color: 'var(--foreground-secondary)' }}>{exactTokens(usage!.reasoning)}</b> </span>}
+                                    {usage!.total != null && usage!.total > 0 && <span>total <b style={{ color: 'var(--foreground)', fontWeight: 700 }}>{exactTokens(usage!.total)}</b></span>}
                                 </span>
                             )}
                             {callLatencyMs != null && (
@@ -3556,12 +3776,18 @@ function OverviewTab({ node, status, onSelectChild }: { node: AgentNode; status:
                         { label: 'Cache Read', value: stats.cacheReadTokens },
                         { label: 'Cache Write', value: stats.cacheWriteTokens },
                         { label: 'Total',  value: stats.totalTokens },
-                    ].filter(({ value, label }) => value > 0 || label === 'Total').map(({ label, value }) => (
-                        <div key={label} style={{ padding: '0.5rem 0.75rem', background: 'var(--background-secondary)', border: '1px solid var(--border)', borderRadius: 6, textAlign: 'center' }}>
-                            <div style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--foreground)', fontVariantNumeric: 'tabular-nums' }}>{formatTokens(value)}</div>
-                            <div style={{ fontSize: '0.5625rem', color: 'var(--foreground-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginTop: 2 }}>{label}</div>
-                        </div>
-                    ))}
+                    ].filter(({ value, label }) => value > 0 || label === 'Total').map(({ label, value }) => {
+                        const text = exactTokens(value);
+                        // Five fixed columns: an exact 7-figure count ("1,594,375") overruns the
+                        // cell at 1rem, so step the size down once it gets that long.
+                        const size = text.length > 8 ? '0.75rem' : text.length > 6 ? '0.875rem' : '1rem';
+                        return (
+                            <div key={label} style={{ padding: '0.5rem 0.5rem', minWidth: 0, background: 'var(--background-secondary)', border: '1px solid var(--border)', borderRadius: 6, textAlign: 'center' }}>
+                                <div style={{ fontSize: size, fontWeight: 700, color: 'var(--foreground)', fontVariantNumeric: 'tabular-nums' }}>{text}</div>
+                                <div style={{ fontSize: '0.5625rem', color: 'var(--foreground-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginTop: 2 }}>{label}</div>
+                            </div>
+                        );
+                    })}
                 </div>
             </div>
 
@@ -3586,7 +3812,7 @@ function OverviewTab({ node, status, onSelectChild }: { node: AgentNode; status:
                                         {childStatus !== 'ok' && <span className={cn('size-1.5 rounded-full shrink-0', STATUS_DOT[childStatus])} />}
                                         <span className="flex-1 text-sm font-medium truncate">{child.agentName}</span>
                                         <span className={cn('text-xs tabular-nums shrink-0 font-mono', childStatus === 'slow' ? 'text-warning' : 'text-foreground-muted')}>{formatDuration(child.stats.durationMs)}</span>
-                                        <span className="text-xs text-foreground-muted tabular-nums shrink-0 font-mono">{formatTokens(child.stats.totalTokens)}</span>
+                                        <span className="text-xs text-foreground-muted tabular-nums shrink-0 font-mono">{exactTokens(child.stats.totalTokens)}</span>
                                         {child.sessionId && overviewCtx.onSubagentNavigate && (
                                             <button
                                                 type="button"
@@ -3664,7 +3890,7 @@ function TopNPanel() {
                         <div className="p-3 text-sm text-foreground-muted text-center italic">No data</div>
                     ) : items.map((span, i) => {
                         const metric = tab === 'tokens'
-                            ? (span.tokens ? formatTokens(span.tokens) : '-')
+                            ? (span.tokens ? exactTokens(span.tokens) : '-')
                             : (span.durationMs ? formatDuration(span.durationMs) : '-');
                         const isWarn = tab === 'slow' || span.isSlow;
                         return (
@@ -3858,7 +4084,7 @@ function TimelineEventRow({ event, hasChildren, isExpanded, onToggle, onSelectCh
                     <div className="text-xs text-foreground-muted mt-0.5 flex flex-wrap gap-2 items-center">
                         {time && <span>{time}</span>}
                         {dur && <span className="tabular-nums">{dur}</span>}
-                        {event.usage?.total ? <span className="tabular-nums">{formatTokens(event.usage.total)} tok</span> : null}
+                        {event.usage?.total ? <span className="tabular-nums">{exactTokens(event.usage.total)} tok</span> : null}
                         {event.spawnedChildId && (
                             <button
                                 onClick={e => { e.stopPropagation(); onSelectChild(event.spawnedChildId!); }}
@@ -3974,7 +4200,7 @@ function EventDetailModal({ event, dur, time, onClose, node, interactions }: {
                     <div className="flex gap-3 items-center shrink-0 text-xs text-foreground-muted">
                         {time && <span>{time}</span>}
                         {dur && <span className="tabular-nums">{dur}</span>}
-                        {event.usage?.total ? <span className="tabular-nums">{formatTokens(event.usage.total)} tok</span> : null}
+                        {event.usage?.total ? <span className="tabular-nums">{exactTokens(event.usage.total)} tok</span> : null}
                     </div>
                 </DialogHeader>
                 <div className="overflow-auto p-4 flex flex-col gap-4">

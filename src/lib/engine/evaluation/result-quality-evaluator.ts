@@ -5,19 +5,14 @@ import { prisma } from '@/lib/storage/prisma';
 import { getActiveConfig } from '@/lib/storage/server-config';
 import { getProxyConfig } from '@/lib/ingest/proxy-config';
 import { withBackgroundOpencodeSlot } from '@/lib/engine/general-agent/concurrency-limiter';
-import { canReuseRootCauseCache, hashExpectedOutput } from '@/lib/dataset-case-root-causes';
+import { hashExpectedOutput } from '@/lib/dataset-case-root-causes';
 import { extractTaskResultArtifact } from './result-artifact-extractor';
 import {
   hashAgentDatasetScope,
   loadUserAgentDatasets,
   matchAgentDatasetCase,
 } from './dataset-case-match';
-import { extractRootCausesFromExpected } from './root-cause-extractor';
-import {
-  evaluateResultAccuracy,
-  hashAccuracyKeyPoints,
-  normalizeAccuracyKeyPoints,
-} from './result-accuracy-evaluator';
+import { evaluateResultAccuracy } from './result-accuracy-evaluator';
 import {
   evaluateInstructionAdherence,
   type StructuredJudgePrompt,
@@ -41,7 +36,9 @@ export const RESULT_METRIC_VERSIONS: Record<ResultMetricStorageKey, string> = {
   faithfulness: '2.0.1',
   'instruction-adherence': '2.0.1',
   'answer-quality': '2.0.1',
-  accuracy: '2.0.1',
+  // 3.0.0：口径由「参考关键观点被覆盖了多少」改为「实际输出的主张对不对」(精确率)，
+  // 与旧分不可比，版本号升主版本让历史缓存失效重算。
+  accuracy: '3.0.0',
 };
 
 export interface ResultEvalResult {
@@ -245,6 +242,57 @@ function methodForMetric(key: ResultMetricStorageKey): ResultEvalResult['method'
   return 'self-rubric';
 }
 
+// ── canonical 结果评估能力（可靠性页 evaluateResultQuality 与实验引擎共用）──────
+// runSingleResultMetric = 传输/存储无关的单指标分发器：给定已构建的 inputs + 注入的
+// invoke，调对应叶子评估器（口径由叶子评估器决定）。GT 来源（数据集匹配 / referenceOutput）
+// 由调用方组装成 inputs.keyPoints 后传入，本函数不感知。
+export interface ResultMetricInputs {
+  query: string;
+  finalResult: string;
+  interactions?: unknown[];                    // faithfulness
+  relevantSystemInstructions?: string[];       // instruction-adherence
+  expectedOutput?: string;                     // accuracy（主张来自实际输出，无需再传关键观点）
+}
+
+export async function runSingleResultMetric(
+  key: ResultMetricStorageKey,
+  inputs: ResultMetricInputs,
+  invoke: StructuredResultInvoker,
+): Promise<ResultEvalResult> {
+  switch (key) {
+    case 'faithfulness': {
+      const r = await evaluateFaithfulness({
+        query: inputs.query, finalResult: inputs.finalResult,
+        interactions: inputs.interactions ?? [], invoke,
+      });
+      return { ...r, method: 'grounding' };
+    }
+    case 'instruction-adherence': {
+      const r = await evaluateInstructionAdherence({
+        query: inputs.query, relevantSystemInstructions: inputs.relevantSystemInstructions ?? [],
+        finalResult: inputs.finalResult, invoke,
+      });
+      return { ...r, method: 'self-rubric' };
+    }
+    case 'answer-quality': {
+      const r = await evaluateAnswerQuality({ query: inputs.query, finalResult: inputs.finalResult, invoke });
+      return { ...r, method: 'self-rubric' };
+    }
+    case 'accuracy': {
+      const r = await evaluateResultAccuracy({
+        query: inputs.query, expectedOutput: inputs.expectedOutput ?? '',
+        actualOutput: inputs.finalResult, invoke,
+      });
+      return { score: r.score, method: 'gt-rubric', confidence: r.confidence, note: r.note, evidence: r.evidence };
+    }
+  }
+}
+
+/** 直连-OpenAI 的结构化 invoke 工厂（seed=42/temp=0/严格 schema）——两侧共用同一传输，保证口径逐位一致。 */
+export async function createResultInvoke(user?: string | null): Promise<StructuredResultInvoker> {
+  return async (prompt, schema) => invokeStructured(user, prompt, schema);
+}
+
 function metricFromRow(row: {
   score: number | null;
   method: string;
@@ -342,46 +390,20 @@ export async function evaluateResultQuality(executionId: string): Promise<Result
   const producers: Partial<Record<ResultMetricStorageKey, () => Promise<ResultEvalResult>>> = {};
   if (keysToRun.includes('faithfulness')) {
     producers.faithfulness = async () => {
-      const result = await evaluateFaithfulness({
-        query,
-        finalResult,
-        interactions,
-        invoke: trackedInvoker('faithfulness'),
-      });
-      return {
-        ...result,
-        method: 'grounding',
-        evidence: { ...result.evidence, calls: callDiagnostics.faithfulness ?? [] },
-      };
+      const result = await runSingleResultMetric('faithfulness', { query, finalResult, interactions }, trackedInvoker('faithfulness'));
+      return { ...result, evidence: { ...result.evidence, calls: callDiagnostics.faithfulness ?? [] } };
     };
   }
   if (keysToRun.includes('instruction-adherence')) {
     producers['instruction-adherence'] = async () => {
-      const result = await evaluateInstructionAdherence({
-        query,
-        relevantSystemInstructions: systems,
-        finalResult,
-        invoke: trackedInvoker('instruction-adherence'),
-      });
-      return {
-        ...result,
-        method: 'self-rubric',
-        evidence: { ...result.evidence, calls: callDiagnostics['instruction-adherence'] ?? [] },
-      };
+      const result = await runSingleResultMetric('instruction-adherence', { query, finalResult, relevantSystemInstructions: systems }, trackedInvoker('instruction-adherence'));
+      return { ...result, evidence: { ...result.evidence, calls: callDiagnostics['instruction-adherence'] ?? [] } };
     };
   }
   if (keysToRun.includes('answer-quality')) {
     producers['answer-quality'] = async () => {
-      const result = await evaluateAnswerQuality({
-        query,
-        finalResult,
-        invoke: trackedInvoker('answer-quality'),
-      });
-      return {
-        ...result,
-        method: 'self-rubric',
-        evidence: { ...result.evidence, calls: callDiagnostics['answer-quality'] ?? [] },
-      };
+      const result = await runSingleResultMetric('answer-quality', { query, finalResult }, trackedInvoker('answer-quality'));
+      return { ...result, evidence: { ...result.evidence, calls: callDiagnostics['answer-quality'] ?? [] } };
     };
   }
   if (keysToRun.includes('accuracy')) {
@@ -411,18 +433,8 @@ export async function evaluateResultQuality(executionId: string): Promise<Result
       }
 
       const { dataset, caseEntry, matchedBy, matchConfidence, matchReason } = matchResult.match;
-      const cacheReusable = canReuseRootCauseCache(caseEntry.expectedOutput, caseEntry.rootCauseMeta);
-      let keyPointSource: 'dataset-cache' | 'live-extract' | 'dataset-empty' = 'live-extract';
-      let rootCauses = [] as Array<{ content: string; weight: number }>;
-      if (cacheReusable && caseEntry.rootCauseMeta?.status === 'ready') {
-        rootCauses = caseEntry.rootCauses ?? [];
-        keyPointSource = 'dataset-cache';
-      } else if (cacheReusable && caseEntry.rootCauseMeta?.status === 'empty') {
-        keyPointSource = 'dataset-empty';
-      } else {
-        rootCauses = await extractRootCausesFromExpected(query, caseEntry.expectedOutput, execution.user);
-      }
-      const keyPoints = normalizeAccuracyKeyPoints(rootCauses);
+      // 准确性改为「实际输出抽主张 → 逐条对参考答案判」，不再需要从预期输出抽关键观点，
+      // 故这里只保留数据集匹配的溯源信息（省掉一次 root-cause 抽取调用）。
       const matchEvidence = {
         datasetId: dataset.id,
         datasetName: dataset.name,
@@ -432,23 +444,13 @@ export async function evaluateResultQuality(executionId: string): Promise<Result
         matchReason,
         datasetScopeHash: accuracyDatasetScopeHash,
         expectedOutputHash: hashExpectedOutput(caseEntry.expectedOutput),
-        keyPointsHash: hashAccuracyKeyPoints(keyPoints),
-        keyPointSource,
       };
-      if (!keyPoints.length) {
-        return na('gt-rubric', '预期输出未提取到可用关键观点', {
-          accuracyStatus: 'no_ground_truth',
-          ...matchEvidence,
-        });
-      }
 
-      const judged = await evaluateResultAccuracy({
+      const judged = await runSingleResultMetric('accuracy', {
         query,
         expectedOutput: caseEntry.expectedOutput,
-        actualOutput: finalResult,
-        keyPoints,
-        invoke: trackedInvoker('accuracy'),
-      });
+        finalResult,
+      }, trackedInvoker('accuracy'));
       return {
         score: judged.score,
         method: 'gt-rubric',

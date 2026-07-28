@@ -105,6 +105,7 @@ import fs from 'fs';
 const frameworks = [
     { name: 'OpenCode', value: 'opencode' },
     { name: 'Claude Code', value: 'claude' },
+    { name: 'CodeAgent', value: 'codeagent' },
     { name: 'Hermes', value: 'hermes' },
     { name: 'OpenClaw', value: 'openclaw' },
     { name: 'JiuwenSwarm', value: 'jiuwen' },
@@ -176,6 +177,7 @@ fi
 # Set installation flags based on selection
 INSTALL_OPENCODE=false
 INSTALL_CLAUDE=false
+INSTALL_CODEAGENT=false
 INSTALL_HERMES=false
 INSTALL_OPENCLAW=false
 INSTALL_JIUWEN=false
@@ -186,6 +188,9 @@ if [[ "$SELECTED_FRAMEWORKS" == *"opencode"* ]]; then
 fi
 if [[ "$SELECTED_FRAMEWORKS" == *"claude"* ]]; then
     INSTALL_CLAUDE=true
+fi
+if [[ "$SELECTED_FRAMEWORKS" == *"codeagent"* ]]; then
+    INSTALL_CODEAGENT=true
 fi
 if [[ "$SELECTED_FRAMEWORKS" == *"hermes"* ]]; then
     INSTALL_HERMES=true
@@ -201,7 +206,7 @@ if [[ "$SELECTED_FRAMEWORKS" == *"trae"* ]]; then
 fi
 
 # Exit if nothing selected
-if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_TRAE" = "false" ]; then
+if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_TRAE" = "false" ]; then
     echo "⚠️  未选择任何框架组件，将跳过插件安装。"
     echo "   继续执行配置步骤..."
     echo ""
@@ -436,7 +441,7 @@ echo "⚙️  Updating configuration..."
 touch "$AGENT_INSIGHT_CONFIG_FILE"
 if [ -f "$AGENT_INSIGHT_CONFIG_FILE" ]; then
     cp "$AGENT_INSIGHT_CONFIG_FILE" "\${AGENT_INSIGHT_CONFIG_FILE}.bak"
-    grep -v "^AGENT_INSIGHT_HOST=" "\${AGENT_INSIGHT_CONFIG_FILE}.bak" | grep -v "^AGENT_INSIGHT_API_KEY=" | grep -v "^AGENT_INSIGHT_SHOW_TASK_STATS=" | grep -v "^AGENT_INSIGHT_RETENTION_DAYS=" | grep -v "^AGENT_INSIGHT_OPENCODE_OTEL_ENABLE=" | grep -v "^AGENT_INSIGHT_OPENCODE_SPOOL_DIR=" | grep -v "^AGENT_INSIGHT_OPENCODE_UPLOADER=" | grep -v "^AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR=" | grep -v "^AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES=" | grep -v "^AGENT_INSIGHT_MAX_TOOL_IO=" | grep -v "^AGENT_INSIGHT_MAX_EVENT_STRING=" | grep -v "^AGENT_INSIGHT_OPENCODE_UPLOAD_COOLDOWN_MS=" | grep -v "^AGENT_INSIGHT_CLIENT_KEY_HASH=" | grep -v "^AGENT_INSIGHT_OPENCODE_CHECKPOINT=" | grep -v "^AGENT_INSIGHT_OPENCODE_UPLOAD_SINCE_MS=" > "$AGENT_INSIGHT_CONFIG_FILE"
+    grep -v "^AGENT_INSIGHT_HOST=" "\${AGENT_INSIGHT_CONFIG_FILE}.bak" | grep -v "^AGENT_INSIGHT_API_KEY=" | grep -v "^AGENT_INSIGHT_SHOW_TASK_STATS=" | grep -v "^AGENT_INSIGHT_RETENTION_DAYS=" | grep -v "^AGENT_INSIGHT_OPENCODE_OTEL_ENABLE=" | grep -v "^AGENT_INSIGHT_OPENCODE_SPOOL_DIR=" | grep -v "^AGENT_INSIGHT_OPENCODE_UPLOADER=" | grep -v "^AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR=" | grep -v "^AGENT_INSIGHT_CODEAGENT_OTEL_SPOOL_DIR=" | grep -v "^AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES=" | grep -v "^AGENT_INSIGHT_MAX_TOOL_IO=" | grep -v "^AGENT_INSIGHT_MAX_EVENT_STRING=" | grep -v "^AGENT_INSIGHT_OPENCODE_UPLOAD_COOLDOWN_MS=" | grep -v "^AGENT_INSIGHT_CLIENT_KEY_HASH=" | grep -v "^AGENT_INSIGHT_OPENCODE_CHECKPOINT=" | grep -v "^AGENT_INSIGHT_OPENCODE_UPLOAD_SINCE_MS=" > "$AGENT_INSIGHT_CONFIG_FILE"
     rm "\${AGENT_INSIGHT_CONFIG_FILE}.bak"
 fi
 echo "AGENT_INSIGHT_HOST=$AGENT_INSIGHT_HOST" >> "$AGENT_INSIGHT_CONFIG_FILE"
@@ -451,6 +456,7 @@ echo "AGENT_INSIGHT_OPENCODE_UPLOAD_SINCE_MS=$UPLOAD_SINCE_MS" >> "$AGENT_INSIGH
 echo "AGENT_INSIGHT_OPENCODE_UPLOADER=$HOME/.agent-insight/opencode_uploader_client.js" >> "$AGENT_INSIGHT_CONFIG_FILE"
 echo "AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR=$HOME/.agent-insight/otel_data/claude" >> "$AGENT_INSIGHT_CONFIG_FILE"
 echo "AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES=file:$HOME/.agent-insight/claude_raw_bodies" >> "$AGENT_INSIGHT_CONFIG_FILE"
+echo "AGENT_INSIGHT_CODEAGENT_OTEL_SPOOL_DIR=$HOME/.agent-insight/otel_data/codeagent" >> "$AGENT_INSIGHT_CONFIG_FILE"
 echo "AGENT_INSIGHT_MAX_TOOL_IO=4000" >> "$AGENT_INSIGHT_CONFIG_FILE"
 echo "AGENT_INSIGHT_MAX_EVENT_STRING=20000" >> "$AGENT_INSIGHT_CONFIG_FILE"
 echo "AGENT_INSIGHT_OPENCODE_UPLOAD_COOLDOWN_MS=15000" >> "$AGENT_INSIGHT_CONFIG_FILE"
@@ -571,6 +577,47 @@ CLAUDE_OTEL_EOF
     echo "🧹 Removed legacy Claude session-file watcher if it was installed."
 fi
 
+# 6.6 Configure CodeAgent OpenTelemetry wrapper
+if [ "$INSTALL_CODEAGENT" = "true" ]; then
+    cat > "$HOME/.agent-insight/codeagent_otel_env.sh" << 'CODEAGENT_OTEL_EOF'
+# Agent-Insight CodeAgent OpenTelemetry integration
+unalias codeagent 2>/dev/null || true
+
+_skill_insight_codeagent_load_env() {
+  if [ -f "$HOME/.agent-insight/.env" ]; then
+    set -a
+    . "$HOME/.agent-insight/.env"
+    set +a
+  fi
+}
+
+codeagent() {
+  _skill_insight_codeagent_load_env
+  local _si_host="\${AGENT_INSIGHT_HOST:-127.0.0.1:3000}"
+  case "$_si_host" in http://*|https://*) ;; *) _si_host="http://$_si_host" ;; esac
+  _si_host="\${_si_host%/}"
+  env \
+    CODEAGENT3_ENABLE_TELEMETRY=1 \
+    OTEL_EXPORTER_OTLP_ENDPOINT="$_si_host/api/ingest/otel" \
+    OTEL_EXPORTER_OTLP_PROTOCOL=http/json \
+    OTEL_EXPORTER_OTLP_LOGS_PROTOCOL=http/json \
+    OTEL_EXPORTER_OTLP_HEADERS="x-witty-api-key=\${AGENT_INSIGHT_API_KEY:-}" \
+    codeagent "$@"
+}
+
+CODEAGENT_OTEL_EOF
+    SHELL_RC="$HOME/.zshrc"
+    [ -f "$HOME/.bashrc" ] && SHELL_RC="$HOME/.bashrc"
+    if [ -f "$SHELL_RC" ] && ! grep -q "\.agent-insight/codeagent_otel_env\.sh" "$SHELL_RC"; then
+        echo "" >> "$SHELL_RC"
+        echo "# Agent-Insight CodeAgent OTel" >> "$SHELL_RC"
+        echo "source \"$HOME/.agent-insight/codeagent_otel_env.sh\"" >> "$SHELL_RC"
+    fi
+    echo "✅ CodeAgent OTel env installed at $HOME/.agent-insight/codeagent_otel_env.sh"
+    echo "   Restart your terminal, then run: codeagent"
+    echo "   CodeAgent may still send traces/metrics; Agent Insight accepts and discards those signals."
+fi
+
 # 7. Create Watcher Startup/Stop Scripts
 NEEDS_WATCHER_SCRIPTS=false
 if [ "$INSTALL_OPENCLAW" = "true" ]; then
@@ -660,6 +707,9 @@ fi
 if [ "$INSTALL_CLAUDE" = "true" ]; then
     echo "  ✅ Claude Code OTel: ~/.agent-insight/claude_otel_env.sh"
 fi
+if [ "$INSTALL_CODEAGENT" = "true" ]; then
+    echo "  ✅ CodeAgent OTel: ~/.agent-insight/codeagent_otel_env.sh"
+fi
 if [ "$INSTALL_HERMES" = "true" ]; then
     echo "  ✅ Agent Insight Hermes Plugin: \${HERMES_HOME:-$HOME/.hermes}/plugins/agent_insight_hermes/config.json"
 fi
@@ -692,6 +742,9 @@ if [ "$INSTALL_OPENCODE" = "true" ]; then
 fi
 if [ "$INSTALL_CLAUDE" = "true" ]; then
     echo "  2. Restart terminal, then run: claude"
+fi
+if [ "$INSTALL_CODEAGENT" = "true" ]; then
+    echo "  3. Restart terminal, then run: codeagent"
 fi
 if [ "$INSTALL_HERMES" = "true" ]; then
     echo "  3. Restart Hermes or start a new Hermes conversation"
@@ -780,6 +833,7 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    "const frameworks = ["',
         '    "    { name: \'OpenCode\', value: \'opencode\' },"',
         '    "    { name: \'Claude Code\', value: \'claude\' },"',
+        '    "    { name: \'CodeAgent\', value: \'codeagent\' },"',
         '    "    { name: \'Hermes\', value: \'hermes\' },"',
         '    "    { name: \'OpenClaw\', value: \'openclaw\' },"',
         '    "    { name: \'JiuwenSwarm\', value: \'jiuwen\' },",',
@@ -853,6 +907,7 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '# Set installation flags based on selection',
         '$INSTALL_OPENCODE = $false',
         '$INSTALL_CLAUDE = $false',
+        '$INSTALL_CODEAGENT = $false',
         '$INSTALL_HERMES = $false',
         '$INSTALL_OPENCLAW = $false',
         '$INSTALL_JIUWEN = $false',
@@ -863,6 +918,9 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '}',
         'if ($SELECTED_FRAMEWORKS -match "claude") {',
         '    $INSTALL_CLAUDE = $true',
+        '}',
+        'if ($SELECTED_FRAMEWORKS -match "codeagent") {',
+        '    $INSTALL_CODEAGENT = $true',
         '}',
         'if ($SELECTED_FRAMEWORKS -match "hermes") {',
         '    $INSTALL_HERMES = $true',
@@ -878,7 +936,7 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '}',
         '',
         '# Exit if nothing selected',
-        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_HERMES -and -not $INSTALL_OPENCLAW -and -not $INSTALL_JIUWEN -and -not $INSTALL_TRAE) {',
+        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_CODEAGENT -and -not $INSTALL_HERMES -and -not $INSTALL_OPENCLAW -and -not $INSTALL_JIUWEN -and -not $INSTALL_TRAE) {',
         '    Write-Host "⚠️  未选择任何框架组件，将跳过插件安装。"',
         '    Write-Host "   继续执行配置步骤..."',
         '    Write-Host ""',
@@ -1094,27 +1152,28 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    $existingShow = ($existingContent | Where-Object { $_ -match "^AGENT_INSIGHT_SHOW_TASK_STATS=" } | Select-Object -First 1)',
         '    $showValue = "true"',
         '    if ($existingShow) { $showValue = ($existingShow -split "=", 2)[1] }',
-        '    $envLines = @($existingContent | Where-Object { $_ -notmatch "^AGENT_INSIGHT_HOST=" -and $_ -notmatch "^AGENT_INSIGHT_API_KEY=" -and $_ -notmatch "^AGENT_INSIGHT_SHOW_TASK_STATS=" -and $_ -notmatch "^AGENT_INSIGHT_RETENTION_DAYS=" -and $_ -notmatch "^AGENT_INSIGHT_OPENCODE_OTEL_ENABLE=" -and $_ -notmatch "^AGENT_INSIGHT_OPENCODE_SPOOL_DIR=" -and $_ -notmatch "^AGENT_INSIGHT_OPENCODE_UPLOADER=" -and $_ -notmatch "^AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR=" -and $_ -notmatch "^AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES=" -and $_ -notmatch "^AGENT_INSIGHT_MAX_TOOL_IO=" -and $_ -notmatch "^AGENT_INSIGHT_MAX_EVENT_STRING=" -and $_ -notmatch "^AGENT_INSIGHT_OPENCODE_UPLOAD_COOLDOWN_MS=" -and $_ -notmatch "^AGENT_INSIGHT_CLIENT_KEY_HASH=" -and $_ -notmatch "^AGENT_INSIGHT_OPENCODE_CHECKPOINT=" -and $_ -notmatch "^AGENT_INSIGHT_OPENCODE_UPLOAD_SINCE_MS=" })',
+        '    $filteredContent = $existingContent | Where-Object { $_ -notmatch "^AGENT_INSIGHT_HOST=" -and $_ -notmatch "^AGENT_INSIGHT_API_KEY=" -and $_ -notmatch "^AGENT_INSIGHT_SHOW_TASK_STATS=" -and $_ -notmatch "^AGENT_INSIGHT_RETENTION_DAYS=" -and $_ -notmatch "^AGENT_INSIGHT_OPENCODE_OTEL_ENABLE=" -and $_ -notmatch "^AGENT_INSIGHT_OPENCODE_SPOOL_DIR=" -and $_ -notmatch "^AGENT_INSIGHT_OPENCODE_UPLOADER=" -and $_ -notmatch "^AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR=" -and $_ -notmatch "^AGENT_INSIGHT_CODEAGENT_OTEL_SPOOL_DIR=" -and $_ -notmatch "^AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES=" -and $_ -notmatch "^AGENT_INSIGHT_MAX_TOOL_IO=" -and $_ -notmatch "^AGENT_INSIGHT_MAX_EVENT_STRING=" -and $_ -notmatch "^AGENT_INSIGHT_OPENCODE_UPLOAD_COOLDOWN_MS=" -and $_ -notmatch "^AGENT_INSIGHT_CLIENT_KEY_HASH=" -and $_ -notmatch "^AGENT_INSIGHT_OPENCODE_CHECKPOINT=" -and $_ -notmatch "^AGENT_INSIGHT_OPENCODE_UPLOAD_SINCE_MS=" }',
+        '    Set-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value $filteredContent',
         '} else {',
         '    $envLines = @()',
         '    $showValue = "true"',
         '}',
-        '$envLines += "AGENT_INSIGHT_HOST=$AGENT_INSIGHT_HOST"',
-        '$envLines += "AGENT_INSIGHT_API_KEY=$AGENT_INSIGHT_API_KEY"',
-        '$envLines += "AGENT_INSIGHT_SHOW_TASK_STATS=$showValue"',
-        '$envLines += "AGENT_INSIGHT_RETENTION_DAYS=10"',
-        '$envLines += "AGENT_INSIGHT_OPENCODE_OTEL_ENABLE=true"',
-        '$envLines += "AGENT_INSIGHT_CLIENT_KEY_HASH=$CLIENT_KEY_HASH"',
-        '$envLines += "AGENT_INSIGHT_OPENCODE_SPOOL_DIR=$skillInsightDir\\otel_data\\opencode\\$CLIENT_KEY_HASH"',
-        '$envLines += "AGENT_INSIGHT_OPENCODE_CHECKPOINT=$skillInsightDir\\opencode_uploader_checkpoint_$CLIENT_KEY_HASH.json"',
-        '$envLines += "AGENT_INSIGHT_OPENCODE_UPLOAD_SINCE_MS=$UPLOAD_SINCE_MS"',
-        '$envLines += "AGENT_INSIGHT_OPENCODE_UPLOADER=$skillInsightDir\\opencode_uploader_client.js"',
-        '$envLines += "AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR=$skillInsightDir\\otel_data\\claude"',
-        '$envLines += "AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES=file:$skillInsightDir\\claude_raw_bodies"',
-        '$envLines += "AGENT_INSIGHT_MAX_TOOL_IO=4000"',
-        '$envLines += "AGENT_INSIGHT_MAX_EVENT_STRING=20000"',
-        '$envLines += "AGENT_INSIGHT_OPENCODE_UPLOAD_COOLDOWN_MS=15000"',
-        'Set-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value $envLines -Encoding UTF8',
+        'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_HOST=$AGENT_INSIGHT_HOST"',
+        'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_API_KEY=$AGENT_INSIGHT_API_KEY"',
+        'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_SHOW_TASK_STATS=$showValue"',
+        'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_RETENTION_DAYS=10"',
+        'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_OPENCODE_OTEL_ENABLE=true"',
+        'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_CLIENT_KEY_HASH=$CLIENT_KEY_HASH"',
+        'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_OPENCODE_SPOOL_DIR=$skillInsightDir\\otel_data\\opencode\\$CLIENT_KEY_HASH"',
+        'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_OPENCODE_CHECKPOINT=$skillInsightDir\\opencode_uploader_checkpoint_$CLIENT_KEY_HASH.json"',
+        'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_OPENCODE_UPLOAD_SINCE_MS=$UPLOAD_SINCE_MS"',
+        'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_OPENCODE_UPLOADER=$skillInsightDir\\opencode_uploader_client.js"',
+        'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR=$skillInsightDir\\otel_data\\claude"',
+        'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES=file:$skillInsightDir\\claude_raw_bodies"',
+        'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_CODEAGENT_OTEL_SPOOL_DIR=$skillInsightDir\\otel_data\\codeagent"',
+        'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_MAX_TOOL_IO=4000"',
+        'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_MAX_EVENT_STRING=20000"',
+        'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_OPENCODE_UPLOAD_COOLDOWN_MS=15000"',
         'Write-Host "✅ Configuration updated at $AGENT_INSIGHT_CONFIG_FILE"',
         'Write-Host "   AGENT_INSIGHT_HOST=$AGENT_INSIGHT_HOST"',
         'Write-Host "   AGENT_INSIGHT_API_KEY=********"',
@@ -1217,6 +1276,44 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    Write-Host "🧹 Removed legacy Claude session-file watcher if it was installed."',
         '}',
         '',
+        '# 6.6a Configure CodeAgent OpenTelemetry wrapper',
+        'if ($INSTALL_CODEAGENT) {',
+        '    $codeAgentOtelScript = @\'',
+        'function Invoke-AgentInsightCodeAgent {',
+        '  $envFile = Join-Path (Join-Path $env:USERPROFILE ".agent-insight") ".env"',
+        '  if (Test-Path $envFile) {',
+        '    Get-Content $envFile | ForEach-Object {',
+        '      if ($_ -match "^([^#=]+)=(.*)$") { [Environment]::SetEnvironmentVariable($matches[1], $matches[2], "Process") }',
+        '    }',
+        '  }',
+        '  $siHost = if ($env:AGENT_INSIGHT_HOST) { $env:AGENT_INSIGHT_HOST } else { "127.0.0.1:3000" }',
+        '  if ($siHost -notmatch "^https?://") { $siHost = "http://$siHost" }',
+        '  $siHost = $siHost.TrimEnd("/")',
+        '  $env:CODEAGENT3_ENABLE_TELEMETRY = "1"',
+        '  $env:OTEL_EXPORTER_OTLP_ENDPOINT = "$siHost/api/ingest/otel"',
+        '  $env:OTEL_EXPORTER_OTLP_PROTOCOL = "http/json"',
+        '  $env:OTEL_EXPORTER_OTLP_LOGS_PROTOCOL = "http/json"',
+        '  $env:OTEL_EXPORTER_OTLP_HEADERS = "x-witty-api-key=$($env:AGENT_INSIGHT_API_KEY)"',
+        '  $command = Get-Command codeagent -CommandType Application, ExternalScript -ErrorAction SilentlyContinue | Select-Object -First 1',
+        '  if (-not $command) { throw "CodeAgent executable not found in PATH." }',
+        '  & $command.Source @args',
+        '}',
+        'Set-Alias codeagent Invoke-AgentInsightCodeAgent',
+        '\'@',
+        '    $codeAgentOtelPath = Join-Path $skillInsightDir "codeagent_otel_env.ps1"',
+        '    Set-Content -Path $codeAgentOtelPath -Value $codeAgentOtelScript -Encoding UTF8',
+        '    $profileDir = Split-Path $PROFILE -Parent',
+        '    if ($profileDir) { New-Item -ItemType Directory -Path $profileDir -Force | Out-Null }',
+        '    if (-not (Test-Path $PROFILE) -or -not ((Get-Content $PROFILE -Raw) -match "codeagent_otel_env.ps1")) {',
+        '        Add-Content -Path $PROFILE -Value ""',
+        '        Add-Content -Path $PROFILE -Value "# Agent-Insight CodeAgent OTel"',
+        '        Add-Content -Path $PROFILE -Value ". `"$codeAgentOtelPath`""',
+        '    }',
+        '    Write-Host "✅ CodeAgent OTel env installed at $codeAgentOtelPath"',
+        '    Write-Host "   Restart PowerShell, then run: codeagent"',
+        '    Write-Host "   CodeAgent may still send traces/metrics; Agent Insight accepts and discards those signals."',
+        '}',
+        '',
         '# 7. Create Watcher Startup/Stop Scripts',
         '$NEEDS_WATCHER_SCRIPTS = $INSTALL_OPENCLAW',
         '',
@@ -1296,6 +1393,9 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         'if ($INSTALL_CLAUDE) {',
         '    Write-Host "  ✅ Claude Code OTel: ~/.agent-insight/claude_otel_env.ps1"',
         '}',
+        'if ($INSTALL_CODEAGENT) {',
+        '    Write-Host "  ✅ CodeAgent OTel: ~/.agent-insight/codeagent_otel_env.ps1"',
+        '}',
         'if ($INSTALL_HERMES) {',
         '    $summaryHermesHome = if ($env:HERMES_HOME) { $env:HERMES_HOME } else { Join-Path $env:USERPROFILE ".hermes" }',
         '    Write-Host "  ✅ Agent Insight Hermes Plugin: $summaryHermesHome\\plugins\\agent_insight_hermes\\config.json"',
@@ -1327,6 +1427,9 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '}',
         'if ($INSTALL_CLAUDE) {',
         '    Write-Host "  2. Restart PowerShell, then run: claude"',
+        '}',
+        'if ($INSTALL_CODEAGENT) {',
+        '    Write-Host "  3. Restart PowerShell, then run: codeagent"',
         '}',
         'if ($INSTALL_HERMES) {',
         '    Write-Host "  3. Restart Hermes or start a new Hermes conversation"',

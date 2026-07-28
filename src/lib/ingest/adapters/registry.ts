@@ -1,5 +1,6 @@
 import { traeAdapter } from "./trae"
 import { claudeAdapter } from "./claude"
+import { codeagentAdapter } from "./codeagent"
 import { hermesAdapter } from "./hermes"
 import { jiuwenAdapter } from "./jiuwen"
 import { langfuseLangGraphAdapter } from "./langfuse-langgraph"
@@ -7,7 +8,7 @@ import { openclawAdapter } from "./openclaw"
 import { opencodeAdapter } from "./opencode"
 import type { FrameworkAdapter, FrameworkDescriptor } from "./types"
 
-const adapters = [opencodeAdapter, claudeAdapter, openclawAdapter, hermesAdapter, jiuwenAdapter, langfuseLangGraphAdapter, traeAdapter] as const
+const adapters = [opencodeAdapter, claudeAdapter, codeagentAdapter, openclawAdapter, hermesAdapter, jiuwenAdapter, langfuseLangGraphAdapter, traeAdapter] as const
 
 const fallbackAdapter: FrameworkAdapter = {
   descriptor: {

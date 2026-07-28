@@ -199,6 +199,7 @@ export const zh = {
     columnSettings: '列设置',
     filterBusinessTag: '业务标签',
     editTags: '编辑标签',
+    addTag: '打标',
     noUserTags: '无标签',
     noTagsAvailable: '暂无可用标签',
     newTagPlaceholder: '新建标签名',

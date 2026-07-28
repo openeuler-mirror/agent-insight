@@ -33,7 +33,7 @@ test("registry resolves framework ids and aliases", () => {
 test("registry exposes the framework descriptor list", () => {
   assert.deepEqual(
     listFrameworks().map((descriptor) => descriptor.id),
-    ["opencode", "claude", "openclaw", "hermes", "jiuwenswarm", "langfuse-langgraph", "trae"],
+    ["opencode", "claude", "codeagent", "openclaw", "hermes", "jiuwenswarm", "langfuse-langgraph", "trae"],
   )
 })
 
@@ -41,6 +41,8 @@ test("registry adapters keep direct references to existing functions", () => {
   assert.equal(getAdapter("opencode").extractSkills, extractSkillsWithVersionsFromOpencodeSession)
   assert.equal(getAdapter("claude").extractSkills, extractSkillsWithVersionsFromClaudeSession)
   assert.equal(getAdapter("claude").normalizeForStorage, normalizeClaudeCodeInteractionsForStorage)
+  assert.equal(getAdapter("codeagent").extractSkills, extractSkillsWithVersionsFromOpencodeSession)
+  assert.equal(getAdapter("codeagent").capabilities?.subagentTree, true)
   assert.equal(getAdapter("openclaw").extractSkills, extractSkillsWithVersionsFromOpenClawSession)
 })
 

@@ -13,6 +13,7 @@ import {
     CircleCheck,
     Cloud,
     UserCircle,
+    Boxes,
 } from 'lucide-react';
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { useAuth } from '@/lib/auth/auth-context';
@@ -26,6 +27,19 @@ import { Term } from '@/components/text/Term';
  * 视觉/交互语言对齐 ModelConfigManager(registry 页):pageWrap/pageInner 骨架、
  * introRow(描述)、双列网格(主区 + 300px sidebar)、panelCard、lucide 图标统一。
  */
+
+/**
+ * 可勾选的采集端框架。value 必须与 /api/ingest/setup 的白名单一致——
+ * 勾选结果以 ?frameworks=a,b 传给脚本，脚本据此跳过终端内的交互选择。
+ */
+const FRAMEWORK_OPTIONS: { value: string; label: string }[] = [
+    { value: 'opencode', label: 'OpenCode' },
+    { value: 'claude', label: 'Claude Code' },
+    { value: 'codeagent', label: 'CodeAgent' },
+    { value: 'openclaw', label: 'OpenClaw' },
+    { value: 'hermes', label: 'Hermes' },
+    { value: 'jiuwen', label: 'JiuwenSwarm' },
+];
 
 export default function AccessInstallPage() {
     const { t, locale } = useLocale();
@@ -68,16 +82,27 @@ export default function AccessInstallPage() {
     const [linuxCmd, setLinuxCmd] = useState('');
     const [windowsCmd, setWindowsCmd] = useState('');
     const [host, setHost] = useState('');
+    // 默认勾选 OpenCode——与脚本内交互选择器的默认项保持一致。
+    const [frameworks, setFrameworks] = useState<string[]>(['opencode']);
     useEffect(() => {
         const protocol = window.location.protocol;
         const h = window.location.host;
         const baseUrl = `${protocol}//${h}`;
         const setupUrl = getApiUrl('/api/ingest/setup');
-        const keyQuery = apiKey ? `?key=${encodeURIComponent(apiKey)}` : '';
-        setLinuxCmd(`curl -sSf "${baseUrl}${setupUrl}${keyQuery}" | bash`);
-        setWindowsCmd(`irm "${baseUrl}${setupUrl}${keyQuery}" | iex`);
+        // 逗号在 query 里合法，不编码——命令行里可读性更好。
+        const query = [
+            apiKey ? `key=${encodeURIComponent(apiKey)}` : '',
+            frameworks.length ? `frameworks=${frameworks.join(',')}` : '',
+        ].filter(Boolean).join('&');
+        const suffix = query ? `?${query}` : '';
+        setLinuxCmd(`curl -sSf "${baseUrl}${setupUrl}${suffix}" | bash`);
+        setWindowsCmd(`irm "${baseUrl}${setupUrl}${suffix}" | iex`);
         setHost(baseUrl);
-    }, [apiKey]);
+    }, [apiKey, frameworks]);
+
+    const toggleFramework = (value: string) => {
+        setFrameworks(prev => prev.includes(value) ? prev.filter(v => v !== value) : [...prev, value]);
+    };
 
     const handleCopy = async (text: string, key: string) => {
         // 不弹任何提示——成功就让按钮变绿,失败也静默
@@ -142,8 +167,8 @@ export default function AccessInstallPage() {
                                     <span style={introDot} />
                                     <span>
                                         {isZh
-                                            ? <><b style={descStrong}>命令行 Agent</b>(Claude Code / opencode 等):运行下方一键脚本,自动配置 <code style={inlineCode}>AGENT_INSIGHT_HOST</code> 与 <code style={inlineCode}>AGENT_INSIGHT_API_KEY</code>。</>
-                                            : <><b style={descStrong}>Command-line agents</b> (Claude Code, opencode, …): run the one-liner below — it auto-configures <code style={inlineCode}>AGENT_INSIGHT_HOST</code> and <code style={inlineCode}>AGENT_INSIGHT_API_KEY</code>.</>}
+                                            ? <><b style={descStrong}>命令行 Agent</b>(Claude Code / OpenCode / OpenClaw 等):运行下方一键脚本,自动配置 <code style={inlineCode}>AGENT_INSIGHT_HOST</code> 与 <code style={inlineCode}>AGENT_INSIGHT_API_KEY</code>。</>
+                                            : <><b style={descStrong}>Command-line agents</b> (Claude Code, OpenCode, OpenClaw, …): run the one-liner below — it auto-configures <code style={inlineCode}>AGENT_INSIGHT_HOST</code> and <code style={inlineCode}>AGENT_INSIGHT_API_KEY</code>.</>}
                                     </span>
                                 </li>
                                 <li style={introItem}>
@@ -167,12 +192,19 @@ export default function AccessInstallPage() {
                                 <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--foreground)' }}>
                                     {isZh ? '命令行 Agent 安装' : 'Command-line Agents'}
                                 </span>
-                                <span style={countPill}>2</span>
+                                <span style={countPill}>{frameworks.length}</span>
                                 <span style={{ flex: 1 }} />
                                 <span style={{ fontSize: 11.5, color: 'var(--foreground-muted)' }}>
-                                    {isZh ? 'Claude Code / opencode 等,按系统二选一' : 'Claude Code, opencode … — pick your OS'}
+                                    {isZh ? '先勾选框架,再按系统二选一' : 'Pick your frameworks, then your OS'}
                                 </span>
                             </div>
+
+                            <FrameworkPicker
+                                options={FRAMEWORK_OPTIONS}
+                                selected={frameworks}
+                                onToggle={toggleFramework}
+                                locale={locale}
+                            />
 
                             <CommandCard
                                 icon={<Terminal size={14} strokeWidth={2.2} />}
@@ -248,6 +280,57 @@ export default function AccessInstallPage() {
 }
 
 /* ====================== Sub-components ====================== */
+
+function FrameworkPicker({
+    options, selected, onToggle, locale,
+}: {
+    options: { value: string; label: string }[];
+    selected: string[];
+    onToggle: (value: string) => void;
+    locale: string;
+}) {
+    const isZh = locale === 'zh';
+    return (
+        <article style={commandCard}>
+            <header style={commandCardHeader}>
+                <span style={commandIconBox}><Boxes size={14} strokeWidth={2.2} /></span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--foreground)', letterSpacing: '-0.01em' }}>
+                        {isZh ? '选择要接入的框架' : 'Frameworks to integrate'}
+                    </div>
+                    <div style={{ fontSize: 11.5, color: 'var(--foreground-muted)', marginTop: 1 }}>
+                        {isZh ? '可多选,下方命令会跟着变' : 'Multi-select — the commands below update accordingly'}
+                    </div>
+                </div>
+            </header>
+            <div style={chipRow}>
+                {options.map(o => {
+                    const active = selected.includes(o.value);
+                    return (
+                        <button
+                            key={o.value}
+                            type="button"
+                            onClick={() => onToggle(o.value)}
+                            style={active ? frameworkChipActive : frameworkChip}
+                        >
+                            {active && <Check size={12} strokeWidth={2.6} />}
+                            {o.label}
+                        </button>
+                    );
+                })}
+            </div>
+            <div style={langfuseNote}>
+                {selected.length === 0
+                    ? (isZh
+                        ? '未勾选任何框架 —— 命令不带 frameworks 参数,脚本会在终端里让你交互选择(该步骤需要访问 npm 源)。'
+                        : 'Nothing selected — the command omits the frameworks parameter and the script prompts inside the terminal (that step needs npm registry access).')
+                    : (isZh
+                        ? '已勾选的框架会写进命令,脚本跳过终端内的交互选择 —— 内网/离线环境无需访问 npm 源。'
+                        : 'Selected frameworks are baked into the command, so the script skips the terminal prompt — no npm registry access needed on offline or intranet machines.')}
+            </div>
+        </article>
+    );
+}
 
 function CommandCard({
     icon, label, hint, cmd, copied, onCopy, locale,
@@ -661,6 +744,38 @@ const commandIconBox: CSSProperties = {
     placeItems: 'center',
     color: 'var(--foreground-secondary)',
     flexShrink: 0,
+};
+
+const chipRow: CSSProperties = {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: 8,
+};
+
+const frameworkChip: CSSProperties = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 5,
+    padding: '6px 13px',
+    background: 'var(--background-secondary)',
+    color: 'var(--foreground-secondary)',
+    borderWidth: 1,
+    borderStyle: 'solid',
+    borderColor: 'var(--border)',
+    borderRadius: 999,
+    fontSize: 12.5,
+    fontWeight: 500,
+    cursor: 'pointer',
+    transition: 'all .12s ease',
+    lineHeight: 1.4,
+};
+
+const frameworkChipActive: CSSProperties = {
+    ...frameworkChip,
+    background: 'var(--primary-subtle)',
+    color: 'var(--primary)',
+    borderColor: 'var(--primary-subtle-border)',
+    fontWeight: 600,
 };
 
 const commandBox: CSSProperties = {

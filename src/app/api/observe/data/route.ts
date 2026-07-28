@@ -3,7 +3,7 @@ import type { FilterClause } from '@/lib/filters/types';
 import { db, prismaRaw as prisma } from '@/lib/storage/prisma';
 import { NextResponse } from 'next/server';
 import { isActive } from '@/lib/evaluation-task-manager';
-import { triggerTrajectoryAutoWatchForTask } from '@/lib/engine/evaluation/trajectory-auto-watch';
+import { triggerExperimentWatchForTask } from '@/lib/engine/experiment/experiment-watch';
 import { buildOpencodeTelemetryIndex } from '@/lib/observe/opencode-telemetry-index';
 import { listTraceTags } from '@/lib/trace-tags';
 import fs from 'fs';
@@ -184,7 +184,7 @@ function inferOpencodeCliExitedFromExistingTelemetry(taskId: string): boolean | 
 // 缺少可靠结束信号时的读侧兜底:轨迹已产出 assistant 输出后,静默超过稳定窗口即视为结束。
 // Claude Code / jiuwenswarm single-agent 没有 root span;Hermes/OpenCode 有显式完成信号,
 // 但旧接入或异常退出可能漏写 Session.endTime,需要 quiet-window 防止已完成 trace 长期停在"执行中"。
-export const QUIET_WINDOW_INFERRED_FRAMEWORKS = new Set(['claudecode', 'jiuwenswarm', 'opencode', 'hermes']);
+export const QUIET_WINDOW_INFERRED_FRAMEWORKS = new Set(['claudecode', 'jiuwenswarm', 'opencode', 'hermes', 'openclaw']);
 
 export function hasAssistantOutput(interactions: TimestampCarrier[]): boolean {
     return interactions.some((interaction) => {
@@ -208,7 +208,7 @@ export function inferQuietWindowTraceCompletedAt(args: {
     return new Date(latestActivityMs).toISOString();
 }
 
-async function getAutoEvalReadiness(record: Record<string, unknown>, baseUrl?: string | null) {
+async function getAutoEvalReadiness(record: Record<string, unknown>) {
     const framework = String(record.framework ?? '').toLowerCase();
     const hasFinalResult = Boolean(String(record.final_result ?? record.finalResult ?? '').trim());
     if (!hasFinalResult && !QUIET_WINDOW_INFERRED_FRAMEWORKS.has(framework)) {
@@ -253,7 +253,7 @@ async function getAutoEvalReadiness(record: Record<string, unknown>, baseUrl?: s
     if (framework === 'opencode' && !explicitCompleted && opencodeCliExited === true && taskId) {
         try {
             await db.updateSession(taskId, { endTime: new Date() });
-            void triggerTrajectoryAutoWatchForTask(String(record.user || ''), taskId, baseUrl);
+            void triggerExperimentWatchForTask(String(record.user || ''), taskId);
         } catch (error) {
             console.warn(`[Data-API] Failed to persist inferred opencode completion for ${taskId}`, error);
         }
@@ -472,7 +472,7 @@ export async function GET(request: Request) {
             console.warn('[Data-API] failed to fetch session lifecycle status:', (e as Error)?.message);
         }
     }
-    const lastEvalByTaskId = new Map<string, { status: string; errorMessage: string | null; trajectoryScore: number | null }>();
+    const lastEvalByTaskId = new Map<string, { status: string; errorMessage: string | null; trajectoryScore: number | null; at: number }>();
     if (user && recordTaskIdsForEvalLookup.length > 0) {
         try {
             const recentEvalRows = await prisma.trajectoryEvalResult.findMany({
@@ -480,7 +480,7 @@ export async function GET(request: Request) {
                 orderBy: { createdAt: 'desc' },
                 // 方案A: 带上 trajectoryScore（已是代码侧聚合层算出的统一轨迹分），让 trace 行/列表/概览
                 // 直接显示统一口径，而不是只读 matchJson.overallScore(对齐覆盖率 = completeness 单维)。
-                select: { taskId: true, status: true, errorMessage: true, trajectoryScore: true },
+                select: { taskId: true, status: true, errorMessage: true, trajectoryScore: true, createdAt: true },
             });
             for (const row of recentEvalRows) {
                 if (row.taskId && !lastEvalByTaskId.has(row.taskId)) {
@@ -488,6 +488,37 @@ export async function GET(request: Request) {
                         status: row.status,
                         errorMessage: row.errorMessage,
                         trajectoryScore: typeof row.trajectoryScore === 'number' ? row.trajectoryScore : null,
+                        at: row.createdAt instanceof Date ? row.createdAt.getTime() : 0,
+                    });
+                }
+            }
+            // 评测走实验后，评测结果落 ExperimentEvalResult：也按 taskId 取每个 case 最近一次，
+            // 与上面的 TrajectoryEvalResult 取「更新的」那条（无感兼容历史 + 新数据）。
+            const expCases = await prisma.experimentCase.findMany({
+                where: { taskId: { in: recordTaskIdsForEvalLookup }, experiment: { user } },
+                orderBy: { createdAt: 'desc' },
+                select: { taskId: true, createdAt: true, results: { select: { evaluatorId: true, status: true, score: true, errorMessage: true } } },
+            });
+            const seenExpTask = new Set<string>();
+            for (const c of expCases) {
+                if (!c.taskId || seenExpTask.has(c.taskId)) continue;
+                seenExpTask.add(c.taskId);
+                const rs = c.results;
+                if (!rs.length) continue;
+                const traj = rs.find((r: { evaluatorId: string }) => r.evaluatorId === 'preset-agent-trace-quality');
+                const anyRunning = rs.some((r: { status: string }) => r.status === 'pending' || r.status === 'running');
+                const anyFailed = rs.some((r: { status: string }) => r.status === 'failed');
+                const allDone = rs.every((r: { status: string }) => r.status === 'done');
+                const status = anyRunning ? 'running' : allDone ? 'done' : anyFailed ? 'failed' : 'pending';
+                const at = c.createdAt instanceof Date ? c.createdAt.getTime() : 0;
+                const prev = lastEvalByTaskId.get(c.taskId);
+                if (!prev || at >= prev.at) {
+                    lastEvalByTaskId.set(c.taskId, {
+                        status,
+                        errorMessage: rs.find((r: { errorMessage: string | null }) => r.errorMessage)?.errorMessage ?? null,
+                        // 实验分 0-100 → 0-1，与 TrajectoryEvalResult.trajectoryScore 同刻度
+                        trajectoryScore: typeof traj?.score === 'number' ? Math.round((traj.score / 100) * 1000) / 1000 : (prev?.trajectoryScore ?? null),
+                        at,
                     });
                 }
             }
@@ -510,7 +541,7 @@ export async function GET(request: Request) {
             const traceLifecycle = baseTraceLifecycle.traceStatus === 'success'
                 ? baseTraceLifecycle
                 : QUIET_WINDOW_INFERRED_FRAMEWORKS.has(String(record.framework ?? '').toLowerCase())
-                    ? getTraceLifecycle((await getAutoEvalReadiness(record, new URL(request.url).origin)).traceCompletedAt)
+                    ? getTraceLifecycle((await getAutoEvalReadiness(record)).traceCompletedAt)
                     : baseTraceLifecycle;
             return {
                 ...record,
@@ -527,7 +558,7 @@ export async function GET(request: Request) {
                 traceStatusReason: traceLifecycle.traceStatusReason,
             };
         }
-        const readiness = await getAutoEvalReadiness(record, new URL(request.url).origin);
+        const readiness = await getAutoEvalReadiness(record);
         const traceLifecycle = baseTraceLifecycle.traceStatus === 'success'
             ? baseTraceLifecycle
             : getTraceLifecycle(readiness.traceCompletedAt);

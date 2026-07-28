@@ -1,14 +1,14 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { copyText } from '@/lib/copy-text';
 import { useRouter } from 'next/navigation';
 import { Info } from 'lucide-react';
 import { apiFetch } from '@/lib/client/api';
 import { useAuth } from '@/lib/auth/auth-context';
-import { getPresetEvaluatorDetail, type PresetEvaluatorDetail } from '@/lib/evaluators/preset-evaluator-details';
 import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
+import { deriveEvaluatorTags } from '@/lib/evaluators/registry';
+import EvaluatorDetailModal from '@/components/eval/EvaluatorDetailModal';
 import {
   type EvaluatorCard,
   type EvaluatorType,
@@ -24,29 +24,42 @@ interface FilterState {
   evaluatorTypes: EvaluatorType[];
   targetTypes: string[];
   objectives: string[];
+  /** 按派生标签多选筛选（AND 语义：卡片须同时具备所有选中标签） */
+  tags: string[];
 }
 
 interface CustomToolbarState {
   nameQuery: string;
   creator: '' | 'all' | 'mine';
-  typeFilter: '' | EvaluatorType;
 }
 
 interface LlmEvaluatorDraft {
   name: string;
   description: string;
+  /** 类目（注册时元数据）：res=看结果 / traj=看轨迹 */
+  category: 'res' | 'traj';
   systemPrompt: string;
-  userPrompt: string;
-  userPromptEnabled: boolean;
+  /** 评分点清单（可选）：保存时收集非空行存入 card.pointsDef */
+  points: Array<{ label: string; note: string }>;
 }
 
-// 类型筛选目前只暴露 LLM——预置评估器都是 LLM-judge 形态；Code / Custom RPC 模板暂未上线，
-// 不放进选项避免用户点了发现没结果。卡片 data 里仍保留各自 evaluatorType，未来上线再扩展。
+// 类型筛选：当前预置与自建评估器均为 LLM（judge 形态）；Code / Custom RPC 模板未上线，
+// 不放进选项避免用户点了发现没结果。
 const evaluatorTypes: EvaluatorType[] = ['LLM'];
+// 标签筛选选项（与 deriveEvaluatorTags 派生值对齐；「预置/自建」由 tab 承担，不进筛选）
+const tagFilterOptions = ['LLM Judge', '看结果', '看轨迹', '依赖参考数据'];
 // 场景：评估对象——"结果" 指评估 agent 最终答复的质量，"轨迹" 指评估 agent 内部执行链路。
 // 老词是 'Agent'，含义模糊（agent 既可指评估主体也可指被评估面），统一改成"结果"避免歧义。
 const targetTypes = Array.from(new Set(presetEvaluators.flatMap(card => card.targetTypes)));
 const objectives = Array.from(new Set(presetEvaluators.flatMap(card => card.objectives)));
+
+/** System Prompt 占位符插入按钮（与 CUSTOM_EVALUATOR_ALLOWED_VARIABLES 对齐） */
+const placeholderButtons = [
+  { token: '{{input}}', label: '任务输入' },
+  { token: '{{output}}', label: '实际输出' },
+  { token: '{{reference_output}}', label: '参考输出' },
+  { token: '{{trajectory}}', label: '执行轨迹' },
+];
 
 const systemPromptPlaceholder = `请编写评估器的 system prompt。可引用以下字段：
 {{input}}：任务输入
@@ -59,9 +72,9 @@ const systemPromptPlaceholder = `请编写评估器的 system prompt。可引用
 const blankLlmDraft = (): LlmEvaluatorDraft => ({
   name: '',
   description: '',
+  category: 'res',
   systemPrompt: '',
-  userPrompt: '',
-  userPromptEnabled: false,
+  points: [],
 });
 
 function emptyFilters(): FilterState {
@@ -70,11 +83,12 @@ function emptyFilters(): FilterState {
     evaluatorTypes: [],
     targetTypes: [],
     objectives: [],
+    tags: [],
   };
 }
 
 function emptyCustomToolbar(): CustomToolbarState {
-  return { nameQuery: '', creator: 'all', typeFilter: '' };
+  return { nameQuery: '', creator: 'all' };
 }
 
 function matchesFilter(card: EvaluatorCard, filters: FilterState) {
@@ -84,6 +98,10 @@ function matchesFilter(card: EvaluatorCard, filters: FilterState) {
   if (filters.evaluatorTypes.length > 0 && !filters.evaluatorTypes.includes(card.evaluatorType)) return false;
   if (filters.targetTypes.length > 0 && !filters.targetTypes.some(item => card.targetTypes.includes(item))) return false;
   if (filters.objectives.length > 0 && !filters.objectives.some(item => card.objectives.includes(item))) return false;
+  if (filters.tags.length > 0) {
+    const cardTags = deriveEvaluatorTags(card);
+    if (!filters.tags.every(tag => cardTags.includes(tag))) return false;
+  }
   return true;
 }
 
@@ -91,7 +109,6 @@ function matchesCustomToolbar(card: EvaluatorCard, bar: CustomToolbarState, user
   const q = bar.nameQuery.trim().toLowerCase();
   const haystack = `${card.name} ${card.description} ${card.mappedMetrics.join(' ')}`.toLowerCase();
   if (q && !haystack.includes(q)) return false;
-  if (bar.typeFilter && card.evaluatorType !== bar.typeFilter) return false;
   if (bar.creator === 'mine' && user && card.creator !== user) return false;
   return true;
 }
@@ -113,7 +130,8 @@ export default function EvaluatorsCenter() {
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [presetInspectCard, setPresetInspectCard] = useState<EvaluatorCard | null>(null);
+  /** 详情弹窗当前查看的卡片（预置 / 自建通用） */
+  const [inspectCard, setInspectCard] = useState<EvaluatorCard | null>(null);
   /** 用户当前激活的评测模型，所有可执行评估器（含轨迹评估器）的运行模型 */
   const [activeModel, setActiveModel] = useState<{ id: string; name: string; model: string } | null>(null);
 
@@ -220,12 +238,6 @@ export default function EvaluatorsCenter() {
     return customEvaluators.filter(card => matchesCustomToolbar(card, customToolbar, user));
   }, [activeTab, customEvaluators, filters, customToolbar, user]);
 
-  const stats = useMemo(() => ({
-    presetCount: presetEvaluators.length,
-    customCount: customEvaluators.length,
-    readyCount: customEvaluators.filter(item => item.status === 'ready').length,
-  }), [customEvaluators]);
-
   const openLlmCreateFlow = () => {
     setLlmDraft(blankLlmDraft());
     setCustomCreate('llm');
@@ -252,13 +264,20 @@ export default function EvaluatorsCenter() {
       return;
     }
 
+    // 评分点：收集非空行（判定说明可选）
+    const pointsDef = llmDraft.points
+      .map(p => ({ label: p.label.trim(), note: p.note.trim() }))
+      .filter(p => p.label)
+      .map(p => (p.note ? { label: p.label, note: p.note } : { label: p.label }));
+
     // 模型：用平台当前激活的评测模型（用户在 settings/eval 那边切换）；评估器自身不绑定具体模型，
     // 只承载 prompt 配置。activeModel 还没就绪时存空字符串占位，运行时由 trajectory-eval 后端
     // fallback 到默认模型。
+    // 新建评估器只保留单一提示词（systemPrompt）——判官场景 System/User 边界无语义意义；
+    // userPrompt 字段仅为兼容旧执行路径/编辑页而保留在类型里，新建不再写入（omit → 编辑页也不显示该块）。
     const llmConfig: LlmEvaluatorConfig = {
       model: activeModel?.model || '',
       systemPrompt: llmDraft.systemPrompt.trim(),
-      userPrompt: llmDraft.userPrompt.trim(),
     };
 
     const item: EvaluatorCard = {
@@ -267,7 +286,8 @@ export default function EvaluatorsCenter() {
       description: llmDraft.description.trim() || '自建 LLM 评估器。',
       evaluatorType: 'LLM',
       source: 'custom',
-      targetTypes: ['结果'],
+      category: llmDraft.category,
+      targetTypes: [llmDraft.category === 'traj' ? '轨迹' : '结果'],
       objectives: ['任务完成', '内容质量'],
       scenarios: ['Agent通用评测'],
       runMode: 'LLM Judge',
@@ -276,6 +296,7 @@ export default function EvaluatorsCenter() {
       mappedMetrics: llmConfig.model ? ['LLM 评测', llmConfig.model] : ['LLM 评测'],
       status: 'draft',
       creator: user || undefined,
+      pointsDef: pointsDef.length > 0 ? pointsDef : undefined,
       llmConfig,
     };
 
@@ -289,7 +310,7 @@ export default function EvaluatorsCenter() {
   const onTabChange = (tab: TabKey) => {
     setActiveTab(tab);
     setCustomCreate(null);
-    setPresetInspectCard(null);
+    setInspectCard(null);
   };
 
   const deleteCustomEvaluator = async (card: EvaluatorCard) => {
@@ -341,7 +362,7 @@ export default function EvaluatorsCenter() {
           {customCreate === null && (
             <p style={{ margin: '6px 0 0', color: 'var(--foreground-secondary)', fontSize: 12.5, maxWidth: 820 }}>
               {activeTab === 'custom'
-                ? '管理自建 LLM 评估器，配置会保存到服务端。点击卡片可进入详情编辑。'
+                ? '管理自建 LLM 评估器，配置会保存到服务端。点击卡片查看详情，详情内可进入编辑。'
                 : '预置评估器模板库：按类型与场景筛选，点击可查看详情与执行入口。'}
             </p>
           )}
@@ -355,22 +376,16 @@ export default function EvaluatorsCenter() {
         )}
       </div>
 
-      {activeTab === 'preset' && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(160px, 1fr))', gap: 10, marginBottom: 14 }}>
-          <SummaryCard label="预置评估器" value={String(stats.presetCount)} detail="LLM 评估器模板" />
-          <SummaryCard label="自建评估器" value={String(stats.customCount)} detail="已保存至账号" />
-          <SummaryCard label="可用评估器" value={String(stats.readyCount)} detail="状态为已就绪" />
+      {customCreate === null && (
+        <div style={{ borderBottom: '1px solid var(--border)', marginBottom: 0, display: 'flex', gap: 2 }}>
+          <TabButton active={activeTab === 'custom'} onClick={() => onTabChange('custom')}>
+            自建评估器
+          </TabButton>
+          <TabButton active={activeTab === 'preset'} onClick={() => onTabChange('preset')}>
+            预置评估器
+          </TabButton>
         </div>
       )}
-
-      <div style={{ borderBottom: '1px solid var(--border)', marginBottom: 0, display: 'flex', gap: 2 }}>
-        <TabButton active={activeTab === 'custom'} onClick={() => onTabChange('custom')}>
-          自建评估器
-        </TabButton>
-        <TabButton active={activeTab === 'preset'} onClick={() => onTabChange('preset')}>
-          预置评估器
-        </TabButton>
-      </div>
 
       {activeTab === 'custom' && customCreate === 'llm' ? (
         <LlmEvaluatorCreatePanel
@@ -409,23 +424,6 @@ export default function EvaluatorsCenter() {
                   fontSize: 12.5,
                 }}
               />
-              <select
-                value={customToolbar.typeFilter}
-                onChange={e => setCustomToolbar(prev => ({ ...prev, typeFilter: e.target.value as CustomToolbarState['typeFilter'] }))}
-                style={{
-                  height: 34,
-                  borderRadius: 8,
-                  border: '1px solid var(--input-border)',
-                  background: 'var(--input-bg)',
-                  color: 'var(--foreground)',
-                  padding: '0 10px',
-                  fontSize: 12.5,
-                  minWidth: 140,
-                }}
-              >
-                <option value="">请选择类型</option>
-                <option value="LLM">LLM</option>
-              </select>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <button type="button" className="ai-btn-s" title="刷新" onClick={() => window.location.reload()}>
@@ -444,7 +442,7 @@ export default function EvaluatorsCenter() {
                 className="ai-btn-p"
                 onClick={openLlmCreateFlow}
               >
-                + 新建评估器
+                + 新建自定义评估器
               </button>
             </div>
           </div>
@@ -458,6 +456,7 @@ export default function EvaluatorsCenter() {
                   key={card.id}
                   card={card}
                   activeTab={activeTab}
+                  onInspect={setInspectCard}
                   activeModel={activeModel}
                   onModelConfigClick={() => router.push('/modelconfig/defaults')}
                   onDeleteCustom={deleteCustomEvaluator}
@@ -470,7 +469,7 @@ export default function EvaluatorsCenter() {
                 <EvaluatorListRow
                   key={card.id}
                   card={card}
-                  onOpen={() => router.push(`/metrics/evaluators/${encodeURIComponent(card.id)}`)}
+                  onOpen={() => setInspectCard(card)}
                   onDeleteCustom={deleteCustomEvaluator}
                 />
               ))}
@@ -504,6 +503,12 @@ export default function EvaluatorsCenter() {
               values={filters.objectives}
               onToggle={value => setFilters(prev => ({ ...prev, objectives: toggleFilter(prev.objectives, value) }))}
             />
+            <FilterGroup
+              title="标签"
+              options={tagFilterOptions}
+              values={filters.tags}
+              onToggle={value => setFilters(prev => ({ ...prev, tags: toggleFilter(prev.tags, value) }))}
+            />
           </aside>
 
           <main style={{ padding: 16 }}>
@@ -534,7 +539,7 @@ export default function EvaluatorsCenter() {
                     key={card.id}
                     card={card}
                     activeTab={activeTab}
-                    onInspectPreset={setPresetInspectCard}
+                    onInspect={setInspectCard}
                     activeModel={activeModel}
                     onModelConfigClick={() => router.push('/modelconfig/defaults')}
                     onDeleteCustom={deleteCustomEvaluator}
@@ -546,23 +551,9 @@ export default function EvaluatorsCenter() {
         </div>
       )}
 
-      {presetInspectCard && getPresetEvaluatorDetail(presetInspectCard.id) ? (
-        <PresetInspectModal
-          card={presetInspectCard}
-          detail={getPresetEvaluatorDetail(presetInspectCard.id)!}
-          onClose={() => setPresetInspectCard(null)}
-        />
+      {inspectCard ? (
+        <EvaluatorDetailModal card={inspectCard} onClose={() => setInspectCard(null)} />
       ) : null}
-    </div>
-  );
-}
-
-function SummaryCard({ label, value, detail }: { label: string; value: string; detail: string }) {
-  return (
-    <div className="ai-stat" style={{ minHeight: 74 }}>
-      <div className="ai-stat-lbl">{label}</div>
-      <div className="ai-stat-val">{value}</div>
-      <div className="ai-stat-d" style={{ color: 'var(--foreground-muted)' }}>{detail}</div>
     </div>
   );
 }
@@ -632,218 +623,36 @@ function FilterGroup<T extends string>({
   );
 }
 
-function PresetInspectModal({
-  card,
-  detail,
-  onClose,
-}: {
-  card: EvaluatorCard;
-  detail: PresetEvaluatorDetail;
-  onClose: () => void;
-}) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
-  const promptText = detail.systemPrompt ?? '';
-
-  async function copyPrompt() {
-    try {
-      if (promptText) await copyText(promptText);
-    } catch {
-      /* ignore */
-    }
-  }
-
-  const tagSet = [...(detail.mediaTags ?? []), card.evaluatorType, ...card.objectives.slice(0, 2), ...card.scenarios.slice(0, 1)];
-
-  return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="preset-inspect-title"
-      style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 100,
-        display: 'flex',
-        alignItems: 'flex-start',
-        justifyContent: 'center',
-        padding: '24px 16px',
-        overflowY: 'auto',
-        background: 'rgba(0,0,0,0.45)',
-      }}
-      onClick={onClose}
-    >
-      <div
-        className="ai-card"
-        style={{
-          width: '100%',
-          maxWidth: 720,
-          marginTop: 12,
-          marginBottom: 40,
-          padding: 22,
-          position: 'relative',
-          maxHeight: '92vh',
-          overflowY: 'auto',
-          boxShadow: 'var(--shadow)',
-        }}
-        onClick={e => e.stopPropagation()}
-      >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 16 }}>
-          <h2 id="preset-inspect-title" style={{ margin: 0, fontSize: 18, fontWeight: 650, color: 'var(--foreground)' }}>
-            {card.name}
-          </h2>
-          <button type="button" className="ai-btn-s" aria-label="关闭" onClick={onClose}>
-            ×
-          </button>
-        </div>
-
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 14 }}>
-          {tagSet.map((t, i) => (
-            <span key={`${t}-${i}`} style={{ background: 'var(--background-tertiary)', color: 'var(--foreground-secondary)', borderRadius: 6, padding: '4px 9px', fontSize: 11 }}>
-              {t}
-            </span>
-          ))}
-        </div>
-
-        <section style={{ marginBottom: 18 }}>
-          <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 8, color: 'var(--foreground)' }}>应用场景</div>
-          <p style={{ margin: 0, fontSize: 13, lineHeight: 1.65, color: 'var(--foreground-secondary)' }}>{detail.applicationScenario}</p>
-        </section>
-
-        {detail.kind === 'llm' && promptText ? (
-          <section style={{ marginBottom: 18 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--foreground)' }}>Prompt</span>
-              <button type="button" className="ai-btn-s" onClick={() => copyPrompt()}>复制 System</button>
-            </div>
-            <div
-              style={{
-                border: '1px solid var(--border)',
-                borderRadius: 8,
-                background: 'var(--background-secondary)',
-                padding: '12px 14px',
-              }}
-            >
-              <div style={{ fontSize: 11, color: 'var(--foreground-muted)', marginBottom: 8 }}>System</div>
-              <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 12.5, lineHeight: 1.55, color: 'var(--foreground)', fontFamily: 'ui-monospace, monospace' }}>
-                {promptText}
-              </pre>
-            </div>
-
-            {(detail.variables?.length ?? 0) > 0 ? (
-              <div style={{ marginTop: 12 }}>
-                <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6, color: 'var(--foreground)' }}>Variables</div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                  {detail.variables!.map(v => (
-                    <code key={v} style={{ fontSize: 12, padding: '4px 8px', borderRadius: 6, background: 'var(--background-tertiary)', color: 'var(--primary)' }}>{`{{${v}}}`}</code>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-          </section>
-        ) : null}
-
-        {(detail.kind === 'code' || detail.kind === 'rpc') && (
-          <section style={{ marginBottom: 18 }}>
-            <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 8, color: 'var(--foreground)' }}>
-              {detail.kind === 'code' ? '规则 / 脚本说明' : 'RPC 契约'}
-            </div>
-            {detail.implementationNote ? (
-              <p style={{ margin: '0 0 12px', fontSize: 13, lineHeight: 1.65, color: 'var(--foreground-secondary)' }}>{detail.implementationNote}</p>
-            ) : null}
-            {detail.codeOrContractExample ? (
-              <pre
-                style={{
-                  margin: 0,
-                  padding: '12px 14px',
-                  borderRadius: 8,
-                  border: '1px solid var(--border)',
-                  background: 'var(--input-bg)',
-                  fontSize: 12,
-                  lineHeight: 1.45,
-                  overflowX: 'auto',
-                  whiteSpace: 'pre-wrap',
-                  wordBreak: 'break-word',
-                  fontFamily: 'ui-monospace, monospace',
-                }}
-              >
-                {detail.codeOrContractExample}
-              </pre>
-            ) : null}
-          </section>
-        )}
-
-        <section style={{ marginBottom: 18, padding: 14, borderRadius: 8, background: 'var(--background-secondary)', border: '1px solid var(--border)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
-            <span style={{ fontSize: 12.5, fontWeight: 600 }}>输出</span>
-          </div>
-          <p style={{ margin: '0 0 10px', fontSize: 12.5, lineHeight: 1.65, color: 'var(--foreground-secondary)' }}>
-            <strong style={{ color: 'var(--foreground)' }}>得分：</strong>
-            {detail.outputScoreText}
-          </p>
-          <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.65, color: 'var(--foreground-secondary)' }}>
-            <strong style={{ color: 'var(--foreground)' }}>原因：</strong>
-            {detail.outputReasonText}
-          </p>
-        </section>
-
-        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-          <button type="button" className="ai-btn-s" onClick={onClose}>关闭</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function EvaluatorCardView({
   card,
   activeTab,
-  onInspectPreset,
+  onInspect,
   activeModel,
   onModelConfigClick,
   onDeleteCustom,
 }: {
   card: EvaluatorCard;
   activeTab: TabKey;
-  onInspectPreset?: (card: EvaluatorCard) => void;
+  onInspect?: (card: EvaluatorCard) => void;
   activeModel?: { id: string; name: string; model: string } | null;
   onModelConfigClick?: () => void;
   onDeleteCustom?: (card: EvaluatorCard) => void;
 }) {
-  const router = useRouter();
-  const presetHasDetail = card.source === 'preset' && Boolean(getPresetEvaluatorDetail(card.id));
-  const openInspect = () => {
-    if (activeTab === 'preset' && presetHasDetail) onInspectPreset?.(card);
-  };
-  const openCustomDetail = () => {
-    if (activeTab === 'custom') router.push(`/metrics/evaluators/${encodeURIComponent(card.id)}`);
-  };
-
-  const cardInteractive =
-    (activeTab === 'preset' && presetHasDetail) || activeTab === 'custom';
+  const openInspect = () => onInspect?.(card);
 
   return (
     <article
       className="ai-card"
-      role={cardInteractive ? 'button' : undefined}
-      tabIndex={cardInteractive ? 0 : undefined}
+      role="button"
+      tabIndex={0}
       onClick={e => {
         if ((e.target as HTMLElement).closest('button')) return;
-        if (activeTab === 'preset' && presetHasDetail) openInspect();
-        else if (activeTab === 'custom') openCustomDetail();
+        openInspect();
       }}
       onKeyDown={e => {
-        if (!cardInteractive) return;
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
-          if (activeTab === 'preset' && presetHasDetail) openInspect();
-          else if (activeTab === 'custom') openCustomDetail();
+          openInspect();
         }
       }}
       style={{
@@ -852,19 +661,14 @@ function EvaluatorCardView({
         display: 'flex',
         flexDirection: 'column',
         gap: 12,
-        cursor: cardInteractive ? 'pointer' : undefined,
+        cursor: 'pointer',
       }}
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}>
         <div>
           <h3 style={{ margin: 0, color: 'var(--foreground)', fontSize: 15.5, fontWeight: 600 }}>{card.name}</h3>
           <p style={{ margin: '8px 0 0', color: 'var(--foreground-secondary)', fontSize: 12.5, lineHeight: 1.6 }}>{card.description}</p>
-          {activeTab === 'preset' && presetHasDetail ? (
-            <p style={{ margin: '4px 0 0', fontSize: 11, color: 'var(--foreground-muted)' }}>点击查看详情</p>
-          ) : null}
-          {activeTab === 'custom' ? (
-            <p style={{ margin: '4px 0 0', fontSize: 11, color: 'var(--foreground-muted)' }}>点击查看或编辑</p>
-          ) : null}
+          <p style={{ margin: '4px 0 0', fontSize: 11, color: 'var(--foreground-muted)' }}>点击查看详情</p>
         </div>
         <span className={`ai-badge ${card.evaluatorType === 'Code' ? 'ai-badge-b' : card.evaluatorType === 'Custom RPC' ? 'ai-badge-g' : 'ai-badge-gr'}`} style={{ height: 22, whiteSpace: 'nowrap' }}>
           {card.evaluatorType}
@@ -872,7 +676,22 @@ function EvaluatorCardView({
       </div>
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-        {[card.runMode, ...card.targetTypes, ...card.objectives, ...card.scenarios.slice(0, 2)].map(tag => (
+        {deriveEvaluatorTags(card).map(tag => (
+          <span
+            key={tag}
+            style={{
+              background: 'var(--primary-subtle)',
+              border: '1px solid var(--primary-subtle-border)',
+              color: 'var(--primary)',
+              borderRadius: 4,
+              padding: '3px 7px',
+              fontSize: 11,
+            }}
+          >
+            {tag}
+          </span>
+        ))}
+        {[...card.objectives, ...card.scenarios.slice(0, 2)].map(tag => (
           <span key={tag} style={{ background: 'var(--background-tertiary)', color: 'var(--foreground-secondary)', borderRadius: 4, padding: '3px 7px', fontSize: 11 }}>
             {tag}
           </span>
@@ -945,22 +764,6 @@ function EvaluatorCardView({
               删除
             </button>
           ) : null}
-          {card.runtimeHref ? (
-            <button
-              type="button"
-              className="ai-btn-sp"
-              onClick={e => {
-                e.stopPropagation();
-                // 附加查询参数，告诉执行页默认选中该评估器
-                const url = new URL(card.runtimeHref!, window.location.origin);
-                url.searchParams.set('evaluatorId', card.id);
-                router.push(url.pathname + url.search);
-              }}
-              style={{ whiteSpace: 'nowrap' }}
-            >
-              前往评测执行 →
-            </button>
-          ) : null}
         </div>
       </div>
     </article>
@@ -1001,6 +804,23 @@ function EvaluatorListRow({
       <div style={{ minWidth: 200, flex: 1 }}>
         <div style={{ fontWeight: 600, color: 'var(--foreground)' }}>{card.name}</div>
         <div style={{ fontSize: 12, color: 'var(--foreground-muted)', marginTop: 4 }}>{card.description}</div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+          {deriveEvaluatorTags(card).map(tag => (
+            <span
+              key={tag}
+              style={{
+                background: 'var(--primary-subtle)',
+                border: '1px solid var(--primary-subtle-border)',
+                color: 'var(--primary)',
+                borderRadius: 4,
+                padding: '2px 7px',
+                fontSize: 11,
+              }}
+            >
+              {tag}
+            </span>
+          ))}
+        </div>
       </div>
       <span className={`ai-badge ${card.evaluatorType === 'Code' ? 'ai-badge-b' : card.evaluatorType === 'Custom RPC' ? 'ai-badge-g' : 'ai-badge-gr'}`}>
         {card.evaluatorType}
@@ -1047,6 +867,27 @@ function LlmEvaluatorCreatePanel({
   onBack: () => void;
   onSubmit: () => void;
 }) {
+  const systemPromptRef = useRef<HTMLTextAreaElement | null>(null);
+
+  /** 在 systemPrompt 光标处插入占位符，并把光标移到插入内容之后 */
+  const insertPlaceholder = (token: string) => {
+    const el = systemPromptRef.current;
+    const value = draft.systemPrompt;
+    const start = el?.selectionStart ?? value.length;
+    const end = el?.selectionEnd ?? start;
+    onChange({ ...draft, systemPrompt: value.slice(0, start) + token + value.slice(end) });
+    requestAnimationFrame(() => {
+      if (!el) return;
+      el.focus();
+      const pos = start + token.length;
+      el.setSelectionRange(pos, pos);
+    });
+  };
+
+  const promptText = draft.systemPrompt;
+  const usedPlaceholders = placeholderButtons.filter(p => promptText.includes(p.token));
+  const usesReference = promptText.includes('{{reference_output}}');
+
   return (
     <div style={{ paddingTop: 20, maxWidth: 800 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 24 }}>
@@ -1059,7 +900,7 @@ function LlmEvaluatorCreatePanel({
         >
           ←
         </button>
-        <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600, color: 'var(--foreground)' }}>新建评估器</h2>
+        <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600, color: 'var(--foreground)' }}>新建自定义评估器</h2>
       </div>
 
       <section style={{ marginBottom: 28 }}>
@@ -1087,6 +928,41 @@ function LlmEvaluatorCreatePanel({
           <span style={{ fontSize: 11, color: 'var(--foreground-muted)' }}>名称会作为链路追踪中的 agent 名称，仅支持英文、数字、下划线、连字符，且必须以英文字母开头。</span>
           <span style={{ fontSize: 11, color: 'var(--foreground-muted)', textAlign: 'right' }}>{draft.name.length}/50</span>
         </label>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 14 }}>
+          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--foreground)' }}>
+            <span style={{ color: 'var(--error)' }}>* </span>
+            类目
+          </span>
+          <div style={{ display: 'flex', gap: 8 }}>
+            {([
+              { value: 'res', label: '看结果' },
+              { value: 'traj', label: '看轨迹' },
+            ] as const).map(opt => {
+              const selected = draft.category === opt.value;
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => onChange({ ...draft, category: opt.value })}
+                  style={{
+                    minHeight: 34,
+                    padding: '0 18px',
+                    borderRadius: 8,
+                    border: `1px solid ${selected ? 'var(--primary-subtle-border)' : 'var(--border)'}`,
+                    background: selected ? 'var(--primary-subtle)' : 'var(--background)',
+                    color: selected ? 'var(--primary)' : 'var(--foreground-secondary)',
+                    fontWeight: selected ? 600 : 400,
+                    cursor: 'pointer',
+                    fontSize: 12.5,
+                  }}
+                >
+                  {opt.label}
+                </button>
+              );
+            })}
+          </div>
+          <span style={{ fontSize: 11, color: 'var(--foreground-muted)' }}>类目为注册时元数据，决定结果呈现在「结果评测」还是「轨迹评测」板块，运行时不可变更。</span>
+        </div>
         <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--foreground)' }}>描述</span>
           <textarea
@@ -1111,12 +987,27 @@ function LlmEvaluatorCreatePanel({
 
       <section style={{ marginBottom: 28 }}>
         <div className="ai-section-title" style={{ marginBottom: 14 }}>配置信息</div>
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 16 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 16 }}>
           <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--foreground)' }}>
             <span style={{ color: 'var(--error)' }}>* </span>
-            Prompt · System
+            评估提示词
           </span>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {placeholderButtons.map(p => (
+              <button
+                key={p.token}
+                type="button"
+                className="ai-btn-s"
+                title={`插入 ${p.token}`}
+                onClick={() => insertPlaceholder(p.token)}
+                style={{ fontSize: 11, fontFamily: 'var(--font-mono, ui-monospace, monospace)' }}
+              >
+                {p.token} {p.label}
+              </button>
+            ))}
+          </div>
           <textarea
+            ref={systemPromptRef}
             value={draft.systemPrompt}
             onChange={e => onChange({ ...draft, systemPrompt: e.target.value })}
             placeholder={systemPromptPlaceholder}
@@ -1133,78 +1024,93 @@ function LlmEvaluatorCreatePanel({
               resize: 'vertical',
             }}
           />
-        </label>
-
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--foreground)' }}>User Prompt</span>
-          {draft.userPromptEnabled ? (
-            <div
-              style={{
-                border: '1px solid var(--input-border)',
-                borderRadius: 10,
-                overflow: 'hidden',
-                background: 'var(--background)',
-              }}
-            >
-              <div
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, minHeight: 18 }}>
+            <span style={{ fontSize: 11, color: 'var(--foreground-muted)' }}>
+              已使用占位符：
+              {usedPlaceholders.length > 0
+                ? usedPlaceholders.map(p => p.token).join('、')
+                : '无'}
+            </span>
+            {usesReference ? (
+              <span
                 style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: 10,
-                  padding: '10px 14px',
-                  borderBottom: '1px solid var(--border)',
-                  background: 'color-mix(in srgb, var(--foreground) 2%, var(--background))',
+                  fontSize: 11,
+                  color: 'var(--primary)',
+                  background: 'var(--primary-subtle)',
+                  border: '1px solid var(--primary-subtle-border)',
+                  borderRadius: 4,
+                  padding: '1px 7px',
                 }}
               >
-                <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--foreground-muted)', letterSpacing: '0.04em' }}>User</span>
-                <button
-                  type="button"
-                  className="ai-btn-s"
-                  style={{ border: 'none', background: 'transparent', padding: 0, color: 'var(--foreground-muted)' }}
-                  onClick={() => onChange({ ...draft, userPrompt: '', userPromptEnabled: false })}
-                >
-                  清空
-                </button>
-              </div>
-              <textarea
-                value={draft.userPrompt}
-                onChange={e => onChange({ ...draft, userPrompt: e.target.value })}
-                placeholder="请输入可选的 user prompt"
-                rows={4}
+                将自动打标 依赖参考数据
+              </span>
+            ) : null}
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 16 }}>
+          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--foreground)' }}>评分点（可选）</span>
+          {draft.points.map((point, index) => (
+            <div key={index} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <input
+                value={point.label}
+                maxLength={50}
+                onChange={e => {
+                  const points = draft.points.slice();
+                  points[index] = { ...points[index], label: e.target.value };
+                  onChange({ ...draft, points });
+                }}
+                placeholder="评分点名称"
                 style={{
-                  width: '100%',
-                  border: 'none',
-                  outline: 'none',
-                  background: 'transparent',
+                  flex: '0 0 200px',
+                  height: 32,
+                  borderRadius: 8,
+                  border: '1px solid var(--input-border)',
+                  background: 'var(--input-bg)',
                   color: 'var(--foreground)',
-                  padding: '12px 14px',
+                  padding: '0 10px',
                   fontSize: 12.5,
-                  lineHeight: 1.6,
-                  resize: 'vertical',
-                  boxSizing: 'border-box',
                 }}
               />
+              <input
+                value={point.note}
+                maxLength={200}
+                onChange={e => {
+                  const points = draft.points.slice();
+                  points[index] = { ...points[index], note: e.target.value };
+                  onChange({ ...draft, points });
+                }}
+                placeholder="判定说明（可选）"
+                style={{
+                  flex: 1,
+                  height: 32,
+                  borderRadius: 8,
+                  border: '1px solid var(--input-border)',
+                  background: 'var(--input-bg)',
+                  color: 'var(--foreground)',
+                  padding: '0 10px',
+                  fontSize: 12.5,
+                }}
+              />
+              <button
+                type="button"
+                className="ai-btn-s"
+                aria-label="删除评分点"
+                style={{ color: 'var(--error)', minWidth: 30, padding: '4px 8px' }}
+                onClick={() => onChange({ ...draft, points: draft.points.filter((_, i) => i !== index) })}
+              >
+                ×
+              </button>
             </div>
-          ) : (
-            <button
-              type="button"
-              className="ai-btn-s"
-              style={{
-                width: '100%',
-                minHeight: 44,
-                border: '1px dashed var(--input-border)',
-                borderRadius: 10,
-                background: 'color-mix(in srgb, var(--foreground) 4%, var(--background))',
-                color: 'var(--foreground-secondary)',
-                fontSize: 13,
-                fontWeight: 600,
-              }}
-              onClick={() => onChange({ ...draft, userPromptEnabled: true })}
-            >
-              + 添加 User Prompt
-            </button>
-          )}
+          ))}
+          <button
+            type="button"
+            className="ai-btn-s"
+            style={{ alignSelf: 'flex-start' }}
+            onClick={() => onChange({ ...draft, points: [...draft.points, { label: '', note: '' }] })}
+          >
+            ＋ 添加评分点
+          </button>
         </div>
       </section>
 
@@ -1251,10 +1157,10 @@ function CustomEmptyState({ onCreateLlm }: { onCreateLlm: () => void }) {
     <div style={{ border: '1px dashed var(--border-dark)', borderRadius: 8, padding: '48px 28px', textAlign: 'center', background: 'var(--background-secondary)' }}>
       <div style={{ color: 'var(--foreground)', fontWeight: 500, marginBottom: 8, fontSize: 15 }}>暂无自建评估器</div>
       <div style={{ color: 'var(--foreground-muted)', fontSize: 12.5, marginBottom: 18 }}>
-        点击右上角「+ 新建评估器」开始配置 LLM 评估器。
+        点击右上角「+ 新建自定义评估器」开始配置 LLM 评估器。
       </div>
       <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
-        <button type="button" className="ai-btn-p" onClick={onCreateLlm}>新建 LLM 评估器</button>
+        <button type="button" className="ai-btn-p" onClick={onCreateLlm}>新建自定义评估器</button>
       </div>
     </div>
   );

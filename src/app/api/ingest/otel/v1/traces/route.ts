@@ -4,6 +4,7 @@ import { decodeOtlpRequest, OtlpDecodeError } from '@/lib/ingest/otel/decode';
 import { isLangfuseOtlpTraceBody } from '@/lib/ingest/otel/langfuse';
 import { jiuwenServiceName } from '@/lib/ingest/otel/jiuwen/aggregate';
 import { ingestJiuwenOtlp } from '@/lib/ingest/otel/jiuwen/ingest';
+import { partitionCodeAgentOtlpPayload } from '@/lib/ingest/codeagent-otel/detect';
 import { db } from '@/lib/storage/prisma';
 import { NextResponse } from 'next/server';
 
@@ -69,6 +70,10 @@ async function authenticateLangfuseCredentials(req: Request): Promise<string | u
   return userRecord.username;
 }
 
+function ignoredCodeAgentSpans(resourceSpans: number): Record<string, any> {
+  return resourceSpans > 0 ? { ignored: { codeagent: { resourceSpans } } } : {};
+}
+
 export async function POST(req: Request) {
   try {
     const apiKey = req.headers.get('x-witty-api-key');
@@ -83,6 +88,7 @@ export async function POST(req: Request) {
         console.warn(`[OTel] Invalid API Key provided: ${apiKey}`);
       }
     }
+
     let body: any;
     try {
       body = await decodeOtlpRequest(req, 'traces');
@@ -94,20 +100,37 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Invalid Payload' }, { status: 400 });
     }
 
+    const codeAgentPartition = partitionCodeAgentOtlpPayload(body, 'traces');
+    if (codeAgentPartition.codeAgentResourceCount > 0 && !codeAgentPartition.hasRemainingResources) {
+      return NextResponse.json({
+        status: 'accepted',
+        framework: 'codeagent',
+        ignored: true,
+        ignoredResourceSpans: codeAgentPartition.codeAgentResourceCount,
+        received: 0,
+        sessions: [],
+      });
+    }
+    body = codeAgentPartition.remainingBody;
+
     if (!authenticatedUser && isLangfuseOtlpTraceBody(body)) {
       authenticatedUser = await authenticateLangfuseCredentials(req);
       if (!authenticatedUser) {
         return NextResponse.json({ error: 'Invalid Langfuse credentials' }, { status: 401 });
       }
-      console.log(`[OTel] Langfuse Authenticated User: ${authenticatedUser}`);
+      console.log('[OTel] Langfuse Authenticated User:', authenticatedUser);
     }
 
-    // jiuwen (openJiuwen / JiuwenSwarm via agent-core) emits a nested agent.*/team.*
-    // span tree whose structural spans the flat claude-otel normalizer would drop,
-    // so it takes a self-contained raw-span path that rebuilds the agent tree.
+    // Jiuwen 的结构 span 需要走自包含的 raw-span 聚合路径。
     if (jiuwenServiceName(body) === 'jiuwenswarm') {
       const { received, sessions } = await ingestJiuwenOtlp(body, { user: authenticatedUser });
-      return NextResponse.json({ status: 'accepted', framework: 'jiuwenswarm', received, sessions });
+      return NextResponse.json({
+        status: 'accepted',
+        framework: 'jiuwenswarm',
+        received,
+        sessions,
+        ...ignoredCodeAgentSpans(codeAgentPartition.codeAgentResourceCount),
+      });
     }
 
     const receivedAt = new Date().toISOString();
@@ -118,6 +141,7 @@ export async function POST(req: Request) {
       status: 'accepted',
       received: events.length,
       sessions: dirtySessionIds,
+      ...ignoredCodeAgentSpans(codeAgentPartition.codeAgentResourceCount),
     });
   } catch (err: any) {
     console.error('[OTel] Trace ingest handler error:', err);

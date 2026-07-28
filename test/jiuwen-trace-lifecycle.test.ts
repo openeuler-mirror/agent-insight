@@ -48,9 +48,12 @@ test('jiuwen trace lifecycle: active or explicitly completed jiuwen traces are n
     );
 });
 
-test('jiuwen trace lifecycle: frameworks with an explicit end signal never use the quiet-window rule', () => {
+// opencode / hermes 曾经在这份名单里（"有显式结束信号，不需要静默窗兜底"），后来
+// 62be255「修复opencode执行状态并增加兜底逻辑」把它们加进了白名单：显式信号仍然优先
+// （explicitCompleted=true 依旧返回 null，见上一条用例），静默窗只做信号缺失时的兜底。
+test('jiuwen trace lifecycle: 白名单之外的框架不套 quiet-window 规则', () => {
     const latestActivityMs = Date.parse('2026-06-17T07:03:13.399Z');
-    for (const framework of ['opencode', 'hermes', 'direct_llm', 'generic', undefined]) {
+    for (const framework of ['direct_llm', 'generic', 'langfuse-langgraph', undefined]) {
         assert.equal(
             inferQuietWindowTraceCompletedAt({
                 framework,

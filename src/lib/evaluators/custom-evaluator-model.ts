@@ -48,6 +48,10 @@ export interface EvaluatorCard {
   description: string;
   evaluatorType: EvaluatorType;
   source: EvaluatorSource;
+  /** 类目（注册时元数据，运行时不可变）：res=结果评测 / traj=轨迹评测。
+   *  决定该评估器结果在 Trace 评测详情的呈现板块与实验类目均分归属。
+   *  预置评估器由 registry 声明；自建评估器由创建表单填入。缺省视为 'res'。 */
+  category?: 'res' | 'traj';
   targetTypes: string[];
   objectives: string[];
   scenarios: string[];
@@ -57,6 +61,11 @@ export interface EvaluatorCard {
   mappedMetrics: string[];
   status: 'ready' | 'draft' | 'template';
   creator?: string;
+  /** 自建 LLM 评估器的评分点清单（可选）。留空=自由模式（Judge 自行提取评分点）；
+   *  填写=清单模式（平台在 judge 请求中注入"按清单逐条给分"指令并以结构化输出锁定
+   *  points.label，输出必含这些评分点）。清单不拼接进用户提示词——运行时三段式组装，
+   *  见 judge-assembly.ts。 */
+  pointsDef?: Array<{ label: string; note?: string }>;
   llmConfig?: LlmEvaluatorConfig;
   codeConfig?: CodeEvaluatorConfig;
   /** 当评估器有真实运行实现时，给出"前往评测执行"的页面路由。

@@ -4,7 +4,7 @@
  * 输入：skillName + user（从 DB 拉 active SKILL.md 内容）。
  * 输出：~18 条 TriggerItem 草稿（9 正例 + 9 反例 near-miss），落给上游写入 DB。
  *
- * Prompt 模板：docs/designs/agents/skill-eval-datasets/assets/trigger-draft-prompt-template.md。
+ * Prompt 模板：docs/design/skill-eval-datasets/assets/trigger-draft-prompt-template.md。
  * 实证参考：assets/sample-trigger-draft-skill-generator.json。
  *
  * 重点：

@@ -144,6 +144,32 @@ docker run -d \
   karaggagent/agent-insight:0.5.0
 ```
 
+**用法三：挂载源码运行，代码更新后重启即可生效**
+
+适用于服务器要跟着最新代码跑、又不想每次改动都重新打镜像的场景。给容器加一个 `AGENT_INSIGHT_SOURCE_DIR` 环境变量，指向挂载进来的源码目录：
+
+```bash
+git clone https://gitcode.com/openeuler/agent-insight.git /srv/agent-insight
+
+docker run -d \
+  --name agent-insight \
+  --restart unless-stopped \
+  -p 3000:3000 \
+  -e AGENT_INSIGHT_SOURCE_DIR=/src \
+  -v /srv/agent-insight:/src:ro \
+  -v ~/.agent-insight:/data/agent-insight \
+  karaggagent/agent-insight:latest
+```
+
+之后更新代码只需要 `git pull` 加一次重启，容器会按最新源码重新构建再启动：
+
+```bash
+cd /srv/agent-insight && git pull
+docker restart agent-insight
+```
+
+不配置 `AGENT_INSIGHT_SOURCE_DIR` 时行为与之前完全一致，仍然直接运行镜像里打好的 `agent-insight` npm 包。依赖用的是镜像预装的那一份，所以源码改了 `package.json` 新增依赖时需要重新构建镜像，详见 [5 分钟上手](docs/user-guide/quickstart.md)。
+
 容器内 `/data/agent-insight` 对应宿主机当前用户的 `~/.agent-insight`，默认 SQLite 数据库位于 `~/.agent-insight/data/witty_insight.db`。升级镜像时保留这个挂载目录即可复用数据。
 
 更多部署、升级和排查说明见 [5 分钟上手](docs/user-guide/quickstart.md)。

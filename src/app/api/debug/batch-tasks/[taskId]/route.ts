@@ -2,6 +2,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/storage/prisma';
 import { runGeneralAgent } from '@/lib/engine/general-agent';
 import { withBackgroundOpencodeSlot } from '@/lib/engine/general-agent/concurrency-limiter';
+import {
+    ensureEvalExperiment,
+    addEvalExperimentCase,
+    evaluateEvalExperimentCase,
+} from '@/lib/engine/experiment/run-experiment';
 
 /**
  * BatchEvalTask 用例分析的核心状态机 (跟 grayscale 对齐, 单 side):
@@ -48,6 +53,18 @@ interface BatchEvalConfig {
     evaluationBatchId?: string;
     evaluationBatchTitle?: string;
     evaluationBatchEvaluators?: string[];
+    /** 评测走实验：本批次绑定的 backing 实验 id（一个批次 ↔ 一个单组实验，评测结果落 ExperimentEvalResult）。 */
+    evalExperimentId?: string;
+}
+
+/** 从批次 config 推导评测走实验时的评估器列表（优先级：关联评测任务快照 > 多选 > 单选 > 默认）。 */
+function resolveBatchEvaluatorIds(config: BatchEvalConfig): string[] {
+    if (config.evaluationBatchId && Array.isArray(config.evaluationBatchEvaluators) && config.evaluationBatchEvaluators.length) {
+        return config.evaluationBatchEvaluators;
+    }
+    if (Array.isArray(config.evaluators) && config.evaluators.length) return config.evaluators;
+    if (config.evaluatorId) return [config.evaluatorId];
+    return ['preset-agent-task-completion'];
 }
 
 interface BatchEvalTaskRow {
@@ -251,8 +268,8 @@ export async function POST(
 
 /**
  * 在 config.datasetIds 指向的"仍存在"数据集里找出包含指定 caseId 的数据集 id。
- * 多选数据集后不能再假设 case 一定属于 datasetIds[0]——评测需带上 case 真正归属的 datasetId,
- * 否则 /api/eval/trajectory/run 在该数据集里找不到这个 case 会跳过评测。
+ * 多选数据集后不能再假设 case 一定属于 datasetIds[0]——评测需按 case 真正归属的数据集取预期输出，
+ * 否则跨数据集勾选的 case 会取不到 referenceOutput。
  */
 async function findCaseDatasetId(user: string, datasetIds: string[] | undefined, caseId: string): Promise<string | undefined> {
     const ids = (datasetIds || []).filter(Boolean);
@@ -265,6 +282,21 @@ async function findCaseDatasetId(user: string, datasetIds: string[] | undefined,
         if (cases.some(c => c.id === caseId)) return d.id;
     }
     return undefined;
+}
+
+/** 反查某 case 在其数据集里的预期输出（评测走实验时作为 ExperimentCase.referenceOutput）。 */
+async function findCaseExpectedOutput(user: string, datasetIds: string[] | undefined, caseId: string): Promise<string | null> {
+    const ids = (datasetIds || []).filter(Boolean);
+    if (ids.length === 0) return null;
+    const rows = await (prisma as unknown as { agentEvalDataset: { findMany: (a: unknown) => Promise<Array<{ casesJson: string }>> } }).agentEvalDataset.findMany({
+        where: { id: { in: ids }, user },
+    });
+    for (const d of rows) {
+        const cases = JSON.parse(d.casesJson || '[]') as Array<{ id: string; expectedOutput?: string }>;
+        const hit = cases.find(c => c.id === caseId);
+        if (hit) return hit.expectedOutput ?? null;
+    }
+    return null;
 }
 
 async function resolveBatchSkillContext(user: string, config: BatchEvalConfig): Promise<{
@@ -345,14 +377,35 @@ async function startBatchTaskInBackground(origin: string, taskId: string, user: 
         where: { id: { in: datasetIds }, user },
     });
     if (datasetRows.length === 0) throw new Error('dataset not found');
-    const caseMap = new Map<string, { id: string; input?: string; datasetId: string }>();
+    const caseMap = new Map<string, { id: string; input?: string; expectedOutput?: string; datasetId: string }>();
     for (const d of datasetRows) {
-        for (const c of JSON.parse(d.casesJson || '[]') as Array<{ id: string; input?: string }>) {
-            caseMap.set(c.id, { id: c.id, input: c.input, datasetId: d.id });
+        for (const c of JSON.parse(d.casesJson || '[]') as Array<{ id: string; input?: string; expectedOutput?: string }>) {
+            caseMap.set(c.id, { id: c.id, input: c.input, expectedOutput: c.expectedOutput, datasetId: d.id });
         }
     }
-    const targets = caseIds.map(id => caseMap.get(id)).filter((c): c is { id: string; input?: string; datasetId: string } => !!c);
+    const targets = caseIds.map(id => caseMap.get(id)).filter((c): c is { id: string; input?: string; expectedOutput?: string; datasetId: string } => !!c);
     if (targets.length === 0) throw new Error('no valid cases selected');
+
+    // 评测走实验：为本批次建/复用一个单组 backing 实验（评测那一段交给实验引擎，结果落 ExperimentEvalResult；
+    // 一个批次 ↔ 一个实验；运行 Agent 仍由本编排的 opencode 负责）。
+    const evaluatorIds = resolveBatchEvaluatorIds(config);
+    const evalExperimentId = await ensureEvalExperiment({
+        user,
+        name: `用例分析 · ${skillName || 'baseline'} · ${taskId.slice(0, 8)}`,
+        agentName: skillName || '',
+        evaluatorIds,
+        existingId: config.evalExperimentId,
+        scope: 'skill-case-analysis',
+        skillName: skillName || '',
+        skillVersion: skillVersion ?? null,
+    });
+    if (config.evalExperimentId !== evalExperimentId) {
+        config.evalExperimentId = evalExperimentId;
+        await (prisma as unknown as { batchEvalTask: { update: (a: unknown) => Promise<unknown> } }).batchEvalTask.update({
+            where: { id: taskId, user },
+            data: { configJson: JSON.stringify(config) },
+        });
+    }
 
     // 4. 初始化状态 pending, persist
     for (const c of targets) {
@@ -379,7 +432,7 @@ async function runBatchTaskBackground(
     origin: string,
     taskId: string,
     user: string,
-    targets: Array<{ id: string; input?: string; datasetId?: string }>,
+    targets: Array<{ id: string; input?: string; expectedOutput?: string; datasetId?: string }>,
     config: BatchEvalConfig,
     states: Record<string, BatchCaseState>,
     skillName: string | undefined,
@@ -412,7 +465,7 @@ async function runOneBatchCase(
     origin: string,
     taskId: string,
     user: string,
-    c: { id: string; input?: string; datasetId?: string },
+    c: { id: string; input?: string; expectedOutput?: string; datasetId?: string },
     config: BatchEvalConfig,
     states: Record<string, BatchCaseState>,
     skillName: string | undefined,
@@ -473,48 +526,48 @@ async function runOneBatchCase(
         return;
     }
 
-    // autoEval: 接评测 (透传 evaluationBatchId append 模式)
-    if (config.autoEval !== false && sessionId && !signal.aborted) {
+    // autoEval: 评测走实验——把已产生的 trace 作为 case 加入本批次的 backing 实验、同步跑评估器、读回分数。
+    // 运行 Agent（上面 opencode）与本批次自身的展示状态仍归本编排；实验只承担「评测」这一段。
+    if (config.autoEval !== false && sessionId && !signal.aborted && config.evalExperimentId) {
         states[c.id] = { ...states[c.id], status: 'evaluating' };
         await persistStates(taskId, user, states);
         try {
-            const evalBody: Record<string, unknown> = {
-                user,
-                // 多选数据集时 case 不一定属于 datasetIds[0], 用执行阶段记录的归属 datasetId, 否则评测会找不到 case。
-                datasetId: c.datasetId ?? config.datasetIds?.[0],
-                pairs: [{ caseId: c.id, taskId: sessionId }],
-            };
-            if (config.evaluationBatchId) {
-                evalBody.evaluatorRunId = config.evaluationBatchId;
-            } else if (Array.isArray(config.evaluators) && config.evaluators.length > 0) {
-                evalBody.evaluators = config.evaluators;
-            } else {
-                evalBody.evaluator = config.evaluatorId || 'preset-agent-task-completion';
-            }
-            const evalRes = await fetch(`${origin}/api/eval/trajectory/run`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(evalBody),
-                signal,
+            const caseId = await addEvalExperimentCase(config.evalExperimentId, {
+                taskId: sessionId,           // sessionId = trace，引擎按 taskId 兜底解析 Execution/finalResult/skill 上下文
+                input: c.input || '',
+                actualOutput: '',            // 留空 → 引擎用 Execution.finalResult 兜底
+                referenceOutput: c.expectedOutput ?? null,
             });
-            const data = await evalRes.json().catch(() => ({}));
-            if (!evalRes.ok || !data.evaluatorRunId) {
-                throw new Error(data.error || 'failed to start evaluation');
+            const rows = await evaluateEvalExperimentCase(config.evalExperimentId, caseId, user);
+            if (signal.aborted) {
+                states[c.id] = { ...states[c.id], status: 'fail', error: '用户终止', completedAt: Date.now() };
+                await persistStates(taskId, user, states);
+                return;
             }
-            const evaluatorRunId = String(data.evaluatorRunId);
-            states[c.id] = {
-                ...states[c.id],
-                evaluatorRunId,
-            };
+            const done = rows.filter(r => r.status === 'done' && typeof r.score === 'number');
+            const allFailed = rows.length > 0 && done.length === 0;
+            if (allFailed) {
+                const firstErr = rows.find(r => r.errorMessage)?.errorMessage || '评测失败';
+                states[c.id] = { ...states[c.id], status: 'fail', error: String(firstErr), completedAt: Date.now() };
+            } else {
+                // 综合分 = 各已完成评估器分数均值（实验契约分已是 0-100）
+                const score = done.length
+                    ? Math.round(done.reduce((s, r) => s + (r.score as number), 0) / done.length)
+                    : undefined;
+                states[c.id] = {
+                    ...states[c.id],
+                    status: 'pass',
+                    completedAt: Date.now(),
+                    ...(score != null ? { score } as Partial<BatchCaseState> : {}),
+                };
+            }
             await persistStates(taskId, user, states);
-            // 等评测异步完成, 回写 pass/fail (跟 grayscale waitAndApplyEvaluation 同思路)
-            await waitAndApplyBatchEvaluation(origin, user, taskId, c.id, sessionId, evaluatorRunId, states, signal);
         } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             states[c.id] = {
                 ...states[c.id],
                 status: 'fail',
-                error: signal.aborted ? '用户终止' : `评测启动失败: ${msg}`,
+                error: signal.aborted ? '用户终止' : `评测失败: ${msg}`,
                 completedAt: Date.now(),
             };
             await persistStates(taskId, user, states);
@@ -522,79 +575,6 @@ async function runOneBatchCase(
     }
 }
 
-/**
- * 评测异步完成等待 + 回写: 跟 grayscale waitAndApplyEvaluation 同思路, 简化版 (单 case 单 sessionId)。
- * 启动评测后 batch 这一侧 polling /api/eval/trajectory/results, 找匹配 taskId=sessionId 的 result,
- * 状态 done/failed 后回写 caseStatesJson.status = 'pass'/'fail' + 分数。
- *
- * 超时 = 360s (180 次 × 2s), 超时后 case 标 fail。多评估器场景下当前实现取**第一个 done**, Step 1.3
- * 多评估器 fan out 时换成"所有 evaluator 都 done 再算 pass"。
- */
-async function waitAndApplyBatchEvaluation(
-    origin: string,
-    user: string,
-    taskId: string,
-    caseId: string,
-    sessionId: string,
-    evaluatorRunId: string,
-    states: Record<string, BatchCaseState>,
-    signal: AbortSignal,
-) {
-    for (let i = 0; i < 180; i++) {
-        if (signal.aborted) {
-            states[caseId] = { ...states[caseId], status: 'fail', error: '用户终止', completedAt: Date.now() };
-            await persistStates(taskId, user, states);
-            return;
-        }
-        const res = await fetch(`${origin}/api/eval/trajectory/results?user=${encodeURIComponent(user)}&runId=${encodeURIComponent(evaluatorRunId)}&latestByCase=1&limit=500`).catch(() => null);
-        const data = res ? await res.json().catch(() => ({})) : {};
-        const results = Array.isArray((data as { results?: unknown }).results) ? (data as { results: Array<Record<string, unknown>> }).results : [];
-        // 找匹配本 case sessionId 的 result (评测里 taskId 字段 = agent sessionId)
-        const matched = results.find(r => String(r.taskId || '') === sessionId);
-        if (matched) {
-            const status = String(matched.status || '');
-            if (status === 'done') {
-                // 综合分: trajectoryScore + resultEvaluationScore 平均 (跟 grayscale compositeScore 简化版)
-                const traj = typeof matched.trajectoryScore === 'number' ? matched.trajectoryScore : null;
-                const ra = matched.rawAnalysis as Record<string, unknown> | undefined;
-                const resultEval = ra && typeof ra.resultEvaluation === 'object' && ra.resultEvaluation
-                    ? Number((ra.resultEvaluation as { score?: unknown }).score)
-                    : NaN;
-                const combined = traj != null && Number.isFinite(resultEval)
-                    ? Math.round(((traj + resultEval) / 2) * 100)
-                    : traj != null ? Math.round(traj * 100)
-                    : Number.isFinite(resultEval) ? Math.round(resultEval * 100)
-                    : null;
-                states[caseId] = {
-                    ...states[caseId],
-                    status: 'pass',
-                    completedAt: Date.now(),
-                    ...(combined != null ? { score: combined } as Partial<BatchCaseState> : {}),
-                };
-                await persistStates(taskId, user, states);
-                return;
-            } else if (status === 'failed') {
-                states[caseId] = {
-                    ...states[caseId],
-                    status: 'fail',
-                    error: String(matched.errorMessage || '评测失败'),
-                    completedAt: Date.now(),
-                };
-                await persistStates(taskId, user, states);
-                return;
-            }
-        }
-        await new Promise(r => setTimeout(r, 2000));
-    }
-    // 超时
-    states[caseId] = {
-        ...states[caseId],
-        status: 'fail',
-        error: '评测超时 (>360s)',
-        completedAt: Date.now(),
-    };
-    await persistStates(taskId, user, states);
-}
 
 async function persistStates(taskId: string, user: string, states: Record<string, BatchCaseState>) {
     await (prisma as unknown as { batchEvalTask: { update: (a: unknown) => Promise<unknown> } }).batchEvalTask.update({
@@ -641,6 +621,27 @@ async function startTraceEvaluateInBackground(origin: string, taskId: string, us
     if (!task) throw new Error('task not found');
     const config: BatchEvalConfig = JSON.parse(task.configJson || '{}');
     const states: Record<string, BatchCaseState> = JSON.parse(task.caseStatesJson || '{}');
+
+    // 评测走实验：建/复用 backing 实验（trace 模式直接评已有 trace，无 dataset 参考答案）
+    const traceEvaluatorIds = resolveBatchEvaluatorIds(config);
+    const { skillName: traceSkillName, skillVersion: traceSkillVersion } = await resolveBatchSkillContext(user, config).catch(() => ({ skillName: undefined, skillVersion: undefined }));
+    const traceExpId = await ensureEvalExperiment({
+        user,
+        name: `用例分析(trace) · ${taskId.slice(0, 8)}`,
+        agentName: traceSkillName || '',
+        evaluatorIds: traceEvaluatorIds,
+        existingId: config.evalExperimentId,
+        scope: 'skill-case-analysis',
+        skillName: traceSkillName || '',
+        skillVersion: traceSkillVersion ?? null,
+    });
+    if (config.evalExperimentId !== traceExpId) {
+        config.evalExperimentId = traceExpId;
+        await (prisma as unknown as { batchEvalTask: { update: (a: unknown) => Promise<unknown> } }).batchEvalTask.update({
+            where: { id: taskId, user },
+            data: { configJson: JSON.stringify(config) },
+        });
+    }
 
     // 初始化每条 trace 状态 pending
     for (const traceTaskId of traceTaskIds) {
@@ -709,29 +710,31 @@ async function evaluateOneTrace(
     states[traceTaskId] = { ...states[traceTaskId], status: 'evaluating' };
     await persistStates(taskId, user, states);
     try {
-        const evalBody: Record<string, unknown> = {
-            user,
-            taskIds: [traceTaskId], // trace 模式用 taskIds 而不是 pairs
-        };
-        if (config.evaluationBatchId) {
-            evalBody.evaluatorRunId = config.evaluationBatchId;
-        } else {
-            evalBody.evaluator = config.evaluatorId || 'preset-agent-task-completion';
-        }
-        const evalRes = await fetch(`${origin}/api/eval/trajectory/run`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(evalBody),
-            signal,
+        if (!config.evalExperimentId) throw new Error('评测实验未初始化');
+        // trace 模式：input/actualOutput 由引擎按 taskId 从 Execution(query/finalResult) 兜底解析
+        const caseId = await addEvalExperimentCase(config.evalExperimentId, {
+            taskId: traceTaskId, input: '', actualOutput: '', referenceOutput: null,
         });
-        const data = await evalRes.json().catch(() => ({}));
-        if (!evalRes.ok || !data.evaluatorRunId) {
-            throw new Error(data.error || 'failed to start trace evaluation');
+        const rows = await evaluateEvalExperimentCase(config.evalExperimentId, caseId, user);
+        if (signal.aborted) {
+            states[traceTaskId] = { ...states[traceTaskId], status: 'fail', error: '用户终止', completedAt: Date.now() };
+            await persistStates(taskId, user, states);
+            return;
         }
-        const evaluatorRunId = String(data.evaluatorRunId);
-        states[traceTaskId] = { ...states[traceTaskId], evaluatorRunId };
+        const done = rows.filter(r => r.status === 'done' && typeof r.score === 'number');
+        if (rows.length > 0 && done.length === 0) {
+            const firstErr = rows.find(r => r.errorMessage)?.errorMessage || '评测失败';
+            states[traceTaskId] = { ...states[traceTaskId], status: 'fail', error: String(firstErr), completedAt: Date.now() };
+        } else {
+            const score = done.length
+                ? Math.round(done.reduce((s, r) => s + (r.score as number), 0) / done.length)
+                : undefined;
+            states[traceTaskId] = {
+                ...states[traceTaskId], status: 'pass', completedAt: Date.now(),
+                ...(score != null ? { score } as Partial<BatchCaseState> : {}),
+            };
+        }
         await persistStates(taskId, user, states);
-        await waitAndApplyBatchEvaluation(origin, user, taskId, traceTaskId, traceTaskId, evaluatorRunId, states, signal);
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         states[traceTaskId] = {
@@ -789,41 +792,48 @@ async function retryBatchCase(origin: string, taskId: string, user: string, case
     const abortController = new AbortController();
     void (async () => {
         if (evaluateOnly) {
-            // 跳过 runGeneralAgent, 直接调评测路径 (用 existing.sessionId)
+            // 跳过 runGeneralAgent, 只重跑评测（走实验：sessionId 作为 case 加入 backing 实验再评）
             const sessionId = existing.sessionId!;
             try {
-                const evalBody: Record<string, unknown> = {
-                    user,
-                    // 多选数据集时按 caseId 反查真正归属的 datasetId, 写死 datasetIds[0] 会导致评测找不到 case。
-                    datasetId: (await findCaseDatasetId(user, config.datasetIds, caseId)) ?? config.datasetIds?.[0],
-                    pairs: [{ caseId, taskId: sessionId }],
-                };
-                if (config.evaluationBatchId) {
-                    evalBody.evaluatorRunId = config.evaluationBatchId;
-                } else {
-                    evalBody.evaluator = config.evaluatorId || 'preset-agent-task-completion';
+                if (!config.evalExperimentId) {
+                    // 极端情况下（历史批次无 backing 实验）建一个
+                    config.evalExperimentId = await ensureEvalExperiment({
+                        user, name: `用例分析 · ${skillName || 'baseline'} · ${taskId.slice(0, 8)}`,
+                        agentName: skillName || '', evaluatorIds: resolveBatchEvaluatorIds(config),
+                        scope: 'skill-case-analysis', skillName: skillName || '', skillVersion: skillVersion ?? null,
+                    });
+                    await (prisma as unknown as { batchEvalTask: { update: (a: unknown) => Promise<unknown> } }).batchEvalTask.update({
+                        where: { id: taskId, user }, data: { configJson: JSON.stringify(config) },
+                    });
                 }
-                const evalRes = await fetch(`${origin}/api/eval/trajectory/run`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(evalBody),
+                const referenceOutput = await findCaseExpectedOutput(user, config.datasetIds, caseId);
+                const expCaseId = await addEvalExperimentCase(config.evalExperimentId, {
+                    taskId: sessionId, input: baseInput, actualOutput: '', referenceOutput,
                 });
-                const data = await evalRes.json().catch(() => ({}));
-                if (!evalRes.ok || !data.evaluatorRunId) {
-                    throw new Error(data.error || 'failed to start retry evaluation');
+                const rows = await evaluateEvalExperimentCase(config.evalExperimentId, expCaseId, user);
+                const done = rows.filter(r => r.status === 'done' && typeof r.score === 'number');
+                if (rows.length > 0 && done.length === 0) {
+                    const firstErr = rows.find(r => r.errorMessage)?.errorMessage || '评测失败';
+                    states[caseId] = { ...states[caseId], status: 'fail', error: String(firstErr), completedAt: Date.now() };
+                } else {
+                    const score = done.length
+                        ? Math.round(done.reduce((s, r) => s + (r.score as number), 0) / done.length)
+                        : undefined;
+                    states[caseId] = {
+                        ...states[caseId], status: 'pass', completedAt: Date.now(),
+                        ...(score != null ? { score } as Partial<BatchCaseState> : {}),
+                    };
                 }
-                const evaluatorRunId = String(data.evaluatorRunId);
-                states[caseId] = { ...states[caseId], evaluatorRunId };
                 await persistStates(taskId, user, states);
-                await waitAndApplyBatchEvaluation(origin, user, taskId, caseId, sessionId, evaluatorRunId, states, abortController.signal);
             } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
                 states[caseId] = { ...states[caseId], status: 'fail', error: `重试评测失败: ${msg}`, completedAt: Date.now() };
                 await persistStates(taskId, user, states);
             }
         } else {
-            // 走完整 runOneBatchCase 路径
-            await runOneBatchCase(origin, taskId, user, { id: caseId, input: baseInput }, config, states, skillName, skillVersion, abortController.signal);
+            // 走完整 runOneBatchCase 路径（补上 expectedOutput 供评测参考）
+            const expectedOutput = (await findCaseExpectedOutput(user, config.datasetIds, caseId)) ?? undefined;
+            await runOneBatchCase(origin, taskId, user, { id: caseId, input: baseInput, expectedOutput }, config, states, skillName, skillVersion, abortController.signal);
         }
     })().catch(err => console.error(`[BATCH_TASKS_RETRY] case=${caseId} crashed:`, err));
 }
