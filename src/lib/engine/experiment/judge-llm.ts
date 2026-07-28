@@ -1,10 +1,12 @@
 /**
  * 实验引擎的 LLM Judge 薄封装：发一段 system+user prompt，拿回完整文本。
  *
- * - 默认实现仿照 runCustomLlmEvaluator（custom-llm-evaluator.ts）的 opencode 调用方式：
- *   AgentInsight client + createSession + insight.chat 流式 + 超时；重依赖全部 lazy import，
- *   避免单测（node --test）拉起 server-only 模块。
+ * - 主路径：直连 LLM（ChatOpenAI.invoke），不起 opencode 进程，省 ~1.6s 固定开销/次，
+ *   且避免 opencode 环境兼容性问题（Windows XDG_CONFIG_HOME 等）。
+ * - fallback：opencode（AgentInsight client + createSession + insight.chat 流式 + 超时）。
+ *   仅当直连失败时启用。
  * - 可注入：测试通过 setJudgeLlmCallerForTest 注入 fake judge（不真调 LLM）。
+ * - 重依赖全部 lazy import，避免单测（node --test）拉起 server-only 模块。
  */
 
 import { isModelConnectionReady } from '@/lib/shared/model-connection';
@@ -13,7 +15,6 @@ export interface JudgeLlmRequest {
   system: string;
   user: string;
   timeoutMs?: number;
-  /** opencode session 标题（可观测性用），缺省自动生成 */
   sessionTitle?: string;
 }
 
@@ -23,15 +24,47 @@ const DEFAULT_TIMEOUT_MS = Number(process.env.EXPERIMENT_JUDGE_TIMEOUT_MS || 120
 
 let injectedCaller: JudgeLlmCaller | null = null;
 
-/** 测试注入点：传 null 恢复默认 opencode 实现。 */
 export function setJudgeLlmCallerForTest(fn: JudgeLlmCaller | null): void {
   injectedCaller = fn;
 }
 
-/** 统一入口：引擎只认这一个函数，实现可被测试替换。 */
 export async function callJudgeLlm(username: string, req: JudgeLlmRequest): Promise<string> {
-  return (injectedCaller ?? opencodeJudgeCaller)(username, req);
+  if (injectedCaller) return injectedCaller(username, req);
+
+  try {
+    return await directJudgeCaller(username, req);
+  } catch (directErr) {
+    console.warn('[judge-llm] direct LLM path failed, falling back to opencode transport:', (directErr as Error)?.message || directErr);
+  }
+  return opencodeJudgeCaller(username, req);
 }
+
+/** 直连 LLM：一次 ChatOpenAI.invoke，拿回完整文本（对齐 faithful 族 primary path）。 */
+const directJudgeCaller: JudgeLlmCaller = async (username, req) => {
+  const [{ ChatOpenAI }, { HumanMessage, SystemMessage }, { getActiveConfig }] = await Promise.all([
+    import('@langchain/openai'),
+    import('@langchain/core/messages'),
+    import('@/lib/storage/server-config'),
+  ]);
+
+  const config = await getActiveConfig(username);
+  if (!config || !config.apiKey) throw new Error('未配置可用的评测模型');
+
+  const model = new ChatOpenAI({
+    apiKey: config.apiKey,
+    model: config.model || 'deepseek-chat',
+    configuration: { baseURL: config.baseUrl || 'https://api.deepseek.com' },
+    temperature: 0, topP: 1,
+    timeout: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    maxRetries: 2,
+    modelKwargs: { seed: 42 },
+  });
+
+  const response = await model.invoke([new SystemMessage(req.system), new HumanMessage(req.user)]);
+  const text = typeof response.content === 'string' ? response.content : JSON.stringify(response.content);
+  if (!text.trim()) throw new Error('judge 未返回任何文本输出');
+  return text;
+};
 
 /** 默认实现：per-call 临时 opencode server，跑完即杀（与自建评估器运行时同型）。 */
 const opencodeJudgeCaller: JudgeLlmCaller = async (username, req) => {
