@@ -14,7 +14,9 @@ Date: 2026-07-28
   `e7841ce0cbe5978d6c1e00fc37f4dfed1513b1ec`
 - Final implementation verification HEAD:
   `cbc5372d9169864b997866b9b28cdb5f0d41fb16`
-- Upstream `master`: `ea206c9fd442600238f9c1e26cd7e5611b672ea6`
+- Latest upstream rebase verification source HEAD:
+  `87f4e6e7aa8484fcf2a3a205fd7e23a3402a2868`
+- Upstream `master`: `1c6eaf7f7b7c833ab99ce44472f26f50cd422be3`
 
 The upstream lockfile was not installable as-is: it resolved
 `protobufjs@8.0.1` where the package graph requires `7.6.5`. Validation used an
@@ -56,14 +58,19 @@ adapter-order assertion was resolved by preserving upstream `openclaw` before
 `git diff --check`, Prisma initialization, and production build were rerun at
 the final implementation verification HEAD and passed.
 
+After the later rebase to upstream `1c6eaf7f`, the 48-test target selection,
+repository-wide test, repository-wide lint, and production build were rerun on
+openEuler. The target selection and build passed; the refreshed repository-wide
+results are recorded below.
+
 ## Repository-wide test
 
 A fresh SQLite database and isolated HOME were used:
 
 | Command | Result |
 | --- | --- |
-| `npm test` | 699 tests: 689 passed, 9 failed, 1 skipped |
-| `npm run lint` | failed: 1,972 problems (1,684 errors, 288 warnings) |
+| `npm test` | 703 tests: 693 passed, 9 failed, 1 skipped |
+| `npm run lint` | failed: 1,973 problems (1,685 errors, 288 warnings) |
 
 The 9 failures are shared with the Codex branch and are outside the Pi target
 selection. They are the existing experiment-engine suite and experiment API

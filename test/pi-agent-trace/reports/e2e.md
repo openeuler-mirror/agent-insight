@@ -9,7 +9,9 @@ Date: 2026-07-28
 - Pi Agent: 0.82.1
 - Provider: TokenMP
 - Model: MiniMax-M3
-- Collector source: `cbc5372d9169864b997866b9b28cdb5f0d41fb16`
+- Runtime evidence source: `cbc5372d9169864b997866b9b28cdb5f0d41fb16`
+- Latest upstream rebase verification source:
+  `87f4e6e7aa8484fcf2a3a205fd7e23a3402a2868`
 - Agent Insight storage: isolated SQLite databases
 
 The run combined real Pi package lifecycle checks, real provider-backed model
