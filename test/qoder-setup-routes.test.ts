@@ -96,7 +96,7 @@ test("curl setup appends Qoder without changing existing framework entries", asy
   for (const platform of ["unix", "windows"] as const) {
     const script = await setupScript(platform)
     assertGeneratedScriptSyntax(script, platform)
-    assert.deepEqual(frameworkValues(script), ["opencode", "claude", "hermes", "jiuwen", "qoder"])
+    assert.deepEqual(frameworkValues(script), ["opencode", "openclaw", "claude", "codeagent", "hermes", "jiuwen", "qoder"])
     assert.match(script, /INSTALL_QODER/)
     assert.match(script, /qoder_setup\.mjs/)
     assert.match(script, /qoder_token_usage_env\.mjs/)
@@ -115,7 +115,7 @@ test("local npm auto setup appends Qoder without changing existing framework ent
   for (const platform of ["unix", "windows"] as const) {
     const script = await autoSetupScript(platform)
     assertGeneratedScriptSyntax(script, platform)
-    assert.deepEqual(frameworkValues(script), ["opencode", "claude", "hermes", "openclaw", "jiuwen", "qoder"])
+    assert.deepEqual(frameworkValues(script), ["opencode", "claude", "codeagent", "hermes", "openclaw", "jiuwen", "qoder"])
     assert.match(script, /INSTALL_QODER/)
     assert.match(script, /qoder_setup\.mjs/)
     assert.match(script, /qoder_token_usage_env\.mjs/)
