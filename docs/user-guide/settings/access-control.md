@@ -118,8 +118,15 @@ Pi Agent 采集器支持 `@earendil-works/pi-coding-agent` 0.82.x，并要求 No
 
 ```bash
 export AGENT_INSIGHT_API_KEY="<当前账号 API Key>"
-curl -fsSL "http://<Agent Insight 地址>/api/ingest/setup/pi-agent" | sh
+installer="$(mktemp)"
+curl --fail --show-error --location --proto '=https' --tlsv1.2 \
+  "https://<Agent Insight 地址>/api/ingest/setup/pi-agent" --output "$installer"
+sed -n '1,160p' "$installer"  # 先检查下载的脚本内容
+sh "$installer"
+rm -f "$installer"
 ```
+
+生产部署请使用受信任证书的 HTTPS 地址；下载完成后先检查脚本内容，再执行。
 
 安装脚本从当前 Agent Insight 服务下载固定 allowlist 中的 Extension、collector core 和共享
 transport，写入 `~/.agent-insight/collectors/`，再执行 `pi install` 与 self-check。API Key

@@ -45,6 +45,29 @@ test("Pi setup route returns the PowerShell staging installer for Windows", asyn
   assert.doesNotMatch(source, /apiKey=/)
 })
 
+test("Pi setup route escapes forwarded origins before embedding them in shell scripts", async () => {
+  for (const platform of ["unix", "windows"] as const) {
+    const response = await getInstaller(new Request(
+      "https://insight.example/api/ingest/setup/pi-agent",
+      {
+        headers: {
+          "x-platform": platform,
+          "x-forwarded-proto": "https",
+          "x-forwarded-host": "insight.example$(touch PWN)\"`$HOME",
+        },
+      },
+    ))
+    const source = await response.text()
+    assert.equal(response.status, 200)
+    assert.match(
+      source,
+      platform === "windows"
+        ? /insight\.example`\$\(touch PWN\)`"/
+        : /insight\.example\\\$\(touch PWN\)\\"\\`\\\$HOME/,
+    )
+  }
+})
+
 test("Pi setup asset route serves only the fixed first-party allowlist", async () => {
   for (const asset of ASSETS) {
     const response = await getAsset(

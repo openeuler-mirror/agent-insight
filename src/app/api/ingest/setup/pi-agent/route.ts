@@ -10,6 +10,14 @@ function publicOrigin(request: Request): string {
   return `${protocol}://${host}`;
 }
 
+function bashDoubleQuoted(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$').replace(/`/g, '\\`');
+}
+
+function powerShellDoubleQuoted(value: string): string {
+  return value.replace(/`/g, '``').replace(/"/g, '`"').replace(/\$/g, '`$');
+}
+
 export async function GET(request: Request) {
   const isWindows = request.headers.get('x-platform')?.toLowerCase() === 'windows' ||
     request.headers.get('user-agent')?.toLowerCase().includes('windows');
@@ -22,7 +30,11 @@ export async function GET(request: Request) {
   );
   try {
     const source = await readFile(installerPath, 'utf8');
-    const script = source.replaceAll('__AGENT_INSIGHT_BASE_URL__', publicOrigin(request));
+    const origin = publicOrigin(request);
+    const script = source.replaceAll(
+      '__AGENT_INSIGHT_BASE_URL__',
+      isWindows ? powerShellDoubleQuoted(origin) : bashDoubleQuoted(origin),
+    );
     return new NextResponse(script, {
       headers: {
         'Content-Type': 'text/x-shellscript; charset=utf-8',
