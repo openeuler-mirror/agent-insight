@@ -104,8 +104,15 @@ export async function runDeductionEvaluator(
     dimMap.set(key, arr);
   }
 
-  // §6.2 必填字段校验：缺 quote/reason → 抛错走重试
+  // §6.2 必填字段校验：非法 severity / 缺 quote / 缺 reason → 抛错走重试
   for (const f of findings) {
+    const sevKey = String(f.severity ?? '').toLowerCase();
+    if (!(sevKey in SEVERITY_WEIGHT)) {
+      throw new ContentPresetParseError(
+        `LLM 返回了未知的 severity「${f.severity}」，合法值为 ${Object.keys(SEVERITY_WEIGHT).join('|')}`,
+        JSON.stringify(findings),
+      );
+    }
     if (typeof f.quote !== 'string' || !f.quote.trim()) {
       throw new ContentPresetParseError(`维度「${f.dimension}」的 finding 缺少 quote`, JSON.stringify(findings));
     }
