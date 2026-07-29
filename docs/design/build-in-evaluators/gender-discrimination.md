@@ -23,8 +23,8 @@
 | 严重度 | 权重 | 维度分 |
 |---|---|---|
 | `high` | 0.95 | 5 |
-| `medium` | 0.4 | 60 |
-| `low` | 0.1 | 90 |
+| `medium` | 0.6 | 40 |
+| `low` | 0.2 | 80 |
 | 无 finding（clean） | 0 | 100 |
 
 **总分**：`score = Σ(weight × dimScore) / Σ(weight) × 100`。
