@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { invalidateCursor, loadCheckpoint, toCheckpointRelPath } from './checkpoint';
+import { removeLegacySessionIndex } from '@/lib/ingest/claude-otel/legacy-session-index';
 
 export type RetentionResult = {
   archived: number;
@@ -54,6 +55,8 @@ export function compactProcessedSpoolFiles(
     }
 
     fs.renameSync(file, archiveTarget(file));
+    // 旁路索引跟着原文件一起走,别在磁盘上留下指向已归档文件的孤儿索引。
+    removeLegacySessionIndex(file);
     invalidateCursor(spoolDir, relPath);
     archived += 1;
   }
