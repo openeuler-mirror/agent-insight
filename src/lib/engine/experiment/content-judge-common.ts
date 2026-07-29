@@ -39,21 +39,6 @@ export function extractJudgeJson(text: string): unknown {
 export const SEVERITY_WEIGHT: Record<string, number> = { low: 0.2, medium: 0.6, high: 0.95 };
 const CLEAN_WEIGHT = 0;
 
-export function computeDeductionScore(findings: Array<{ severity?: string }>): number {
-  let score = 1.0;
-  for (const f of findings) {
-    const key = String(f.severity ?? 'low').toLowerCase();
-    if (!(key in SEVERITY_WEIGHT)) {
-      throw new ContentPresetParseError(
-        `LLM 返回了未知的 severity「${f.severity}」，合法值为 ${Object.keys(SEVERITY_WEIGHT).join('|')}`,
-        JSON.stringify(findings),
-      );
-    }
-    score -= SEVERITY_WEIGHT[key];
-  }
-  return Math.max(0, Math.round(score * 1000) / 1000);
-}
-
 export function severityLabel(s: string): string {
   const key = String(s).toLowerCase();
   if (key === 'high') return '🔴 高严重度';
