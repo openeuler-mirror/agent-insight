@@ -4,6 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import test from "node:test"
 
+import { loadCheckpoint, toCheckpointRelPath } from "@/lib/ingest/otel-consumer/checkpoint"
 import {
   getOtelSpoolConsumerForTest,
   startOtelSpoolConsumer,
@@ -171,6 +172,89 @@ test("数据没变时 evaluated 复用 fast 的聚合快照，且会话处理完
 
     await waitFor(() => (getOtelSpoolConsumerForTest()?.sessions.size ?? 1) === 0, 2000)
     assert.equal(getOtelSpoolConsumerForTest()?.sessions.size, 0, "处理完的会话应从内存里摘掉，避免无界增长")
+  } finally {
+    stopOtelSpoolConsumer()
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("存量积压：fast 与 evaluated 同时到点而跳过 fast 时，checkpoint 仍必须推进", async () => {
+  // 回归：存量积压重启后，成百上千个会话在第一个 tick 全被发现，长 debounce 内根本处理不完，
+  // 于是 fast 和 evaluated 双双到点、dispatcher 直接跑 evaluated 跳过 fast。
+  // 若只有 fast 分支做文件归属簿记，pendingFiles 永不减、checkpoint 游标永不推进 ——
+  // 这些 spool 文件每次重启都要重读，retention 也永远归档不掉。实测 backlog 卡在 520 不动。
+  const { dir, files } = makeSpool("otel-backlog-bookkeeping-", ["session-backlog"])
+  stopOtelSpoolConsumer()
+  try {
+    const saves: any[] = []
+    startOtelSpoolConsumer({
+      sources: [makeSource(dir, files)],
+      saveExecution: async (data) => {
+        saves.push(data)
+        return { success: true, record: data }
+      },
+      shortMs: 5,     // 两个到点时刻挤在一起 = 模拟"积压里等太久，两段都过期了"
+      longMs: 5,
+      maxWaitMs: 5,
+      tickMs: 5,
+      seedOnStart: false,
+      log: () => {},
+      warn: () => {},
+    })
+
+    await waitFor(() => saves.some((s) => s.force_judgment === true), 4000)
+    assert.equal(saves.filter((s) => s.force_judgment === true).length, 1, "evaluated 保存一次")
+    assert.equal(saves.filter((s) => s.skip_evaluation === true).length, 0, "fast 被跳过（两段同时到点时只跑终态那次）")
+
+    await waitFor(() => (getOtelSpoolConsumerForTest()?.pendingFiles.size ?? 1) === 0, 3000)
+    assert.equal(getOtelSpoolConsumerForTest()?.pendingFiles.size, 0, "backlog 必须减下去")
+
+    const relPath = toCheckpointRelPath(dir, files[0])
+    assert.equal(
+      loadCheckpoint(dir).files[relPath]?.bytes,
+      fs.statSync(files[0]).size,
+      "checkpoint 游标必须推进到文件末尾，否则重启会重读、retention 永远归档不掉",
+    )
+  } finally {
+    stopOtelSpoolConsumer()
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("一个文件里的几百个会话，文件处理完后必须整批回收，不能只回收当前那个", async () => {
+  // 旧格式整日平铺文件一个文件里就有几百个会话。文件完成时只回收"刚跑完的那个"，
+  // 其余会话对象会永久留在内存里（实测 legacy 文件处理完后 sessions 长期停在 420 不降）。
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "otel-multi-session-file-"))
+  stopOtelSpoolConsumer()
+  try {
+    const dayDir = path.join(dir, new Date().toISOString().slice(0, 10))
+    fs.mkdirSync(dayDir, { recursive: true })
+    const file = path.join(dayDir, "traces.jsonl")
+    const sessionIds = Array.from({ length: 30 }, (_, i) => `multi-${i}`)
+    fs.writeFileSync(file, sessionIds.map((sid) => `{"sessionId":"${sid}"}`).join("\n") + "\n", "utf8")
+
+    const saved = new Set<string>()
+    startOtelSpoolConsumer({
+      sources: [makeSource(dir, [file])],
+      saveExecution: async (data) => {
+        saved.add(String(data.task_id))
+        return { success: true, record: data }
+      },
+      shortMs: 5,
+      longMs: 5,
+      maxWaitMs: 5,
+      tickMs: 5,
+      seedOnStart: false,
+      log: () => {},
+      warn: () => {},
+    })
+
+    await waitFor(() => saved.size >= sessionIds.length, 8000)
+    assert.equal(saved.size, sessionIds.length, "所有会话都要入库")
+
+    await waitFor(() => (getOtelSpoolConsumerForTest()?.pendingFiles.size ?? 1) === 0, 3000)
+    await waitFor(() => (getOtelSpoolConsumerForTest()?.sessions.size ?? 1) === 0, 3000)
+    assert.equal(getOtelSpoolConsumerForTest()?.sessions.size, 0, "文件完成后这一整批会话都该被回收")
   } finally {
     stopOtelSpoolConsumer()
     fs.rmSync(dir, { recursive: true, force: true })

@@ -264,7 +264,12 @@ function markSourceDone(state: OtelSpoolConsumerState, sessionId: string, source
       state.pendingFiles.delete(fileKey);
       for (const sid of pending.sessions) {
         const other = state.sessions.get(sid);
-        other?.pendingFileKeys.delete(fileKey);
+        if (!other) continue;
+        other.pendingFileKeys.delete(fileKey);
+        // 一个文件里有几百个会话时(旧格式整日平铺文件就是这样),文件完成的那一刻这些会话
+        // 才真正闲下来。只回收"当前这个"会有几百个会话对象永久留在内存里(实测 legacy 文件
+        // 处理完后 sessions 长期停在 420 不降)。
+        evictIdleSession(state, other);
       }
     }
   }
@@ -486,7 +491,7 @@ async function runJob(state: OtelSpoolConsumerState, session: SessionState, mode
     try {
       const result = aggregateForSession(state, session, source);
       if (!result.record) {
-        if (mode === 'fast') markSourceDone(state, session.sessionId, sourceId);
+        markSourceDone(state, session.sessionId, sourceId);
         continue;
       }
 
@@ -504,12 +509,17 @@ async function runJob(state: OtelSpoolConsumerState, session: SessionState, mode
           skip_internal_judgment: true,
           force_judgment: true,
         });
+        session.failures = 0;
+        // 存量积压场景下 fast 和 evaluated 会同时到点，dispatcher 直接跑 evaluated 跳过 fast，
+        // 所以这里必须也推进文件归属簿记 —— 否则 pendingFiles 永远不减、checkpoint 游标永不推进，
+        // 那些 spool 文件每次重启都要重读，retention 也永远归档不掉（实测 backlog 卡在 520 不动）。
+        markSourceDone(state, session.sessionId, sourceId);
+        session.lastAggregate = undefined;
+
         const executionId = saved.record.upload_id || saved.record.task_id;
         if (executionId && result.record.trace_completed_at && result.record.final_result) {
           await state.scheduleResultEvaluation(executionId, result.record.user);
         }
-        session.failures = 0;
-        session.lastAggregate = undefined;
       }
     } catch (err) {
       handleSessionFailure(state, session.sessionId, err);
