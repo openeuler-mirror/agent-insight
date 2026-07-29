@@ -18,16 +18,17 @@ function canonical(overrides: Record<string, unknown>) {
   }
 }
 
+function otelKind(semanticKind: string): string {
+  if (semanticKind === "llm") return "llm"
+  if (semanticKind === "tool" || semanticKind === "mcp") return "tool"
+  if (semanticKind === "skill") return "chain"
+  return "agent"
+}
+
 function normalize(events: Record<string, unknown>[]) {
   return events.map((event: any) => {
     const semanticKind = String(event.kind || "span")
-    const kind = semanticKind === "llm"
-      ? "llm"
-      : semanticKind === "tool" || semanticKind === "mcp"
-        ? "tool"
-        : semanticKind === "skill"
-          ? "chain"
-          : "agent"
+    const kind = otelKind(semanticKind)
     const attributes = {
       "agent.insight.framework": "codex",
       "agent.insight.kind": semanticKind,
@@ -276,6 +277,40 @@ test("Codex adapter preserves three-level SubAgent ancestry and five parallel si
   const workers = tree.children.filter((node) => node.agentName.startsWith("worker-"))
   assert.equal(workers.length, 5)
   assert.equal(new Set(workers.map((node) => node.sessionId)).size, 5)
+})
+
+test("Codex adapter retains direct SubAgent parents and normalizes failed spawn outcomes", () => {
+  const root = "1".repeat(16)
+  const parent = "2".repeat(16)
+  const child = "3".repeat(16)
+  const record = aggregateOtelTraceEvents("codex-session", normalize([
+    canonical({ eventId: "root", spanId: root, kind: "agent", name: "agent.codex" }),
+    canonical({
+      eventId: "parent",
+      spanId: parent,
+      parentSpanId: root,
+      kind: "subagent",
+      name: "agent.parent",
+      attributes: { "codex.agent.name": "parent" },
+    }),
+    canonical({
+      eventId: "child",
+      spanId: child,
+      parentSpanId: parent,
+      kind: "subagent",
+      name: "agent.child",
+      status: "Failed",
+      attributes: { "codex.agent.name": "child" },
+    }),
+  ]))
+  assert.ok(record)
+  const childSpawn = record.interactions.find((item) => item.spanId === `${child}:spawn`)
+  assert.equal(childSpawn?.role, "subagent")
+  assert.equal(childSpawn?.subagent_session_id, parent)
+  assert.equal(childSpawn?.tool_calls?.[0]?.state, "error")
+
+  const tree = buildAgentCallTree(record.interactions)
+  assert.equal(tree?.children.find((node) => node.agentName === "parent")?.children[0]?.agentName, "child")
 })
 
 test("Codex adapter output is deterministic for the same canonical structure", () => {

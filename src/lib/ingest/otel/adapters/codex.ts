@@ -88,6 +88,21 @@ function ownerFor(
   return { name: 'codex' };
 }
 
+function subagentParentOwner(
+  event: OtelTraceEvent,
+  bySpanId: Map<string, OtelTraceEvent>,
+): ReturnType<typeof ownerFor> {
+  const directParent = event.parentSpanId ? bySpanId.get(event.parentSpanId) : undefined;
+  if (directParent && semanticKind(directParent) === 'subagent') {
+    return {
+      event: directParent,
+      name: agentName(directParent),
+      sessionId: directParent.spanId,
+    };
+  }
+  return ownerFor(directParent || event, bySpanId);
+}
+
 function ownerFields(owner: ReturnType<typeof ownerFor>): AnyObj {
   if (!owner.sessionId) return { role: 'assistant', agent: 'codex' };
   return {
@@ -139,7 +154,7 @@ function toolCall(event: OtelTraceEvent): AnyObj {
   return {
     id: event.spanId,
     type: 'function',
-    state: outcome === 'error' || outcome === 'failed' ? 'error' : 'success',
+    state: ['error', 'failed'].includes(outcome) ? 'error' : 'success',
     function: {
       name: toolName(event),
       arguments: content(eventAttrs['tool.arguments']) || '{}',
@@ -233,10 +248,8 @@ export function aggregateCodexTraceEvents(
     if (kind === 'subagent') {
       subagentEvents.push(event);
       const subagent = agentName(event);
-      const parentOwner = ownerFor(
-        event.parentSpanId ? bySpanId.get(event.parentSpanId) || event : event,
-        bySpanId,
-      );
+      const parentOwner = subagentParentOwner(event, bySpanId);
+      const outcome = String(attrs(event)['tool.outcome'] || '').toLowerCase();
       interactions.push({
         ...ownerFields(parentOwner),
         content: '',
@@ -251,7 +264,7 @@ export function aggregateCodexTraceEvents(
         tool_calls: [{
           id: `${event.spanId}:task`,
           type: 'function',
-          state: String(attrs(event)['tool.outcome']) === 'error' ? 'error' : 'success',
+          state: ['error', 'failed'].includes(outcome) ? 'error' : 'success',
           function: {
             name: 'task',
             arguments: JSON.stringify({
