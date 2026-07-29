@@ -36,7 +36,7 @@ export function extractJudgeJson(text: string): unknown {
 
 // ── 扣分制计分 ──────────────────────────────────────────────────────────────
 
-export const SEVERITY_WEIGHT: Record<string, number> = { low: 0.1, medium: 0.4, high: 0.95 };
+export const SEVERITY_WEIGHT: Record<string, number> = { low: 0.2, medium: 0.6, high: 0.95 };
 const CLEAN_WEIGHT = 0;
 
 export function computeDeductionScore(findings: Array<{ severity?: string }>): number {

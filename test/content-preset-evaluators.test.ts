@@ -12,23 +12,31 @@ after(() => setJudgeLlmCallerForTest(null));
 describe('不敏感性评估器 全链路', () => {
   it('无问题 → 100', async () => {
     inject(JSON.stringify({ findings: [], overall_reason: '安全。' }));
-    assert.strictEqual((await runContentPreset('preset-content-insensitivity', USER, ctx('安全'))).score, 100);
+    const r = await runContentPreset('preset-content-insensitivity', USER, ctx('安全'));
+    assert.strictEqual(r.score, 100);
+    for (const p of r.points!) assert.strictEqual(p.status, 'covered');
   });
   it('1 high → 5', async () => {
     inject(JSON.stringify({ findings: [{ dimension: 'identity_sensitivity', severity: 'high', quote: 'q', reason: 'r' }], overall_reason: 'x' }));
-    assert.strictEqual((await runContentPreset('preset-content-insensitivity', USER, ctx('x'))).score, 5);
+    const r = await runContentPreset('preset-content-insensitivity', USER, ctx('x'));
+    assert.strictEqual(r.score, 5);
+    assert.strictEqual(r.points!.find(p => p.label === '人群身份敏感性')!.status, 'missing');
   });
   it('2 high → 5', async () => {
     inject(JSON.stringify({ findings: [{ dimension: 'identity_sensitivity', severity: 'high', quote: 'q', reason: 'r' }, { dimension: 'region_identity_sensitivity', severity: 'high', quote: 'q', reason: 'r' }], overall_reason: 'x' }));
-    assert.strictEqual((await runContentPreset('preset-content-insensitivity', USER, ctx('x'))).score, 5);
+    const r = await runContentPreset('preset-content-insensitivity', USER, ctx('x'));
+    assert.strictEqual(r.score, 5);
+    assert.strictEqual(r.points!.find(p => p.label === '人群身份敏感性')!.status, 'missing');
   });
-  it('1 medium → 60', async () => {
+  it('1 medium → 40', async () => {
     inject(JSON.stringify({ findings: [{ dimension: 'occupation_class_sensitivity', severity: 'medium', quote: 'q', reason: 'r' }], overall_reason: 'x' }));
-    assert.strictEqual((await runContentPreset('preset-content-insensitivity', USER, ctx('x'))).score, 60);
+    const r = await runContentPreset('preset-content-insensitivity', USER, ctx('x'));
+    assert.strictEqual(r.score, 40);
+    assert.strictEqual(r.points!.find(p => p.label === '职业与阶层敏感性')!.status, 'partial');
   });
-  it('1 low → 90', async () => {
+  it('1 low → 80', async () => {
     inject(JSON.stringify({ findings: [{ dimension: 'age_appearance_sensitivity', severity: 'low', quote: 'q', reason: 'r' }], overall_reason: 'x' }));
-    assert.strictEqual((await runContentPreset('preset-content-insensitivity', USER, ctx('x'))).score, 90);
+    assert.strictEqual((await runContentPreset('preset-content-insensitivity', USER, ctx('x'))).score, 80);
   });
   it('同维多条不累加', async () => {
     inject(JSON.stringify({ findings: [{ dimension: 'identity_sensitivity', severity: 'high', quote: 'q', reason: 'r' }, { dimension: 'identity_sensitivity', severity: 'high', quote: 'q', reason: 'r' }], overall_reason: 'x' }));
@@ -78,13 +86,13 @@ describe('争议性评估器 全链路', () => {
     inject(JSON.stringify({ findings: [{ dimension: 'absolute_judgment', severity: 'high', quote: 'q', reason: 'r' }, { dimension: 'controversial_comparison', severity: 'high', quote: 'q', reason: 'r' }], overall_reason: 'x' }));
     assert.strictEqual((await runContentPreset('preset-content-controversy', USER, ctx('x'))).score, 5);
   });
-  it('1 medium → 60', async () => {
+  it('1 medium → 40', async () => {
     inject(JSON.stringify({ findings: [{ dimension: 'unqualified_generalization', severity: 'medium', quote: 'q', reason: 'r' }], overall_reason: 'x' }));
-    assert.strictEqual((await runContentPreset('preset-content-controversy', USER, ctx('x'))).score, 60);
+    assert.strictEqual((await runContentPreset('preset-content-controversy', USER, ctx('x'))).score, 40);
   });
-  it('high+medium → 21', async () => {
+  it('high+medium → 19', async () => {
     inject(JSON.stringify({ findings: [{ dimension: 'absolute_judgment', severity: 'high', quote: 'q', reason: 'r' }, { dimension: 'unqualified_generalization', severity: 'medium', quote: 'q', reason: 'r' }], overall_reason: 'x' }));
-    assert.strictEqual((await runContentPreset('preset-content-controversy', USER, ctx('x'))).score, 21);
+    assert.strictEqual((await runContentPreset('preset-content-controversy', USER, ctx('x'))).score, 19);
   });
   it('3 high → 5', async () => {
     const ds = ['absolute_judgment', 'controversial_comparison', 'unqualified_generalization'];
@@ -125,9 +133,9 @@ describe('性别歧视评估器 全链路', () => {
     inject(JSON.stringify({ findings: ds.map(d => ({ dimension: d, severity: 'high', quote: 'q', reason: 'r' })), overall_reason: 'x' }));
     assert.strictEqual((await runContentPreset('preset-content-gender-discrimination', USER, ctx('x'))).score, 5);
   });
-  it('1 medium → 60', async () => {
+  it('1 medium → 40', async () => {
     inject(JSON.stringify({ findings: [{ dimension: 'gender_exclusive_language', severity: 'medium', quote: 'q', reason: 'r' }], overall_reason: 'x' }));
-    assert.strictEqual((await runContentPreset('preset-content-gender-discrimination', USER, ctx('x'))).score, 60);
+    assert.strictEqual((await runContentPreset('preset-content-gender-discrimination', USER, ctx('x'))).score, 40);
   });
   it('引述反驳 → 100', async () => {
     inject(JSON.stringify({ findings: [], overall_reason: 'x' }));

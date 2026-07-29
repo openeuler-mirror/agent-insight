@@ -16,15 +16,21 @@ describe('创造性评估器 全链路', () => {
 
   it('全1 → 0', async () => {
     inject(JSON.stringify({ dimensions: all1(), overall_reason: '模板化。' }));
-    assert.strictEqual((await runCreativityPreset('preset-creativity', USER, ctx('x'))).score, 0);
+    const r = await runCreativityPreset('preset-creativity', USER, ctx('x'));
+    assert.strictEqual(r.score, 0);
+    for (const p of r.points!) assert.strictEqual(p.status, 'missing');
   });
   it('全2 → 50', async () => {
     inject(JSON.stringify({ dimensions: all2(), overall_reason: '中等。' }));
-    assert.strictEqual((await runCreativityPreset('preset-creativity', USER, ctx('x'))).score, 50);
+    const r = await runCreativityPreset('preset-creativity', USER, ctx('x'));
+    assert.strictEqual(r.score, 50);
+    for (const p of r.points!) assert.strictEqual(p.status, 'partial');
   });
   it('全3 → 100', async () => {
     inject(JSON.stringify({ dimensions: all3(), overall_reason: '优秀。' }));
-    assert.strictEqual((await runCreativityPreset('preset-creativity', USER, ctx('x'))).score, 100);
+    const r = await runCreativityPreset('preset-creativity', USER, ctx('x'));
+    assert.strictEqual(r.score, 100);
+    for (const p of r.points!) assert.strictEqual(p.status, 'covered');
   });
   it('[3,2,1,1,1] → 30', async () => {
     inject(JSON.stringify({ dimensions: { novelty: { rating: 3, comment: '好' }, perspective_uniqueness: { rating: 2, comment: '中' }, non_template_expression: { rating: 1, comment: '差' }, idea_diversity: { rating: 1, comment: '差' }, rhetoric_quality: { rating: 1, comment: '差' } }, overall_reason: '混合。' }));
