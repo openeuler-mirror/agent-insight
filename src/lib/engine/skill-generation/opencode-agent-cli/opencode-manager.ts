@@ -8,6 +8,7 @@ import path from 'node:path'
 import { createOpencodeClient, type OpencodeClient } from '@opencode-ai/sdk'
 import { resolveAgentInsightDataPath } from '@/lib/env'
 import { db } from '@/lib/storage/prisma'
+import { isModelConnectionReady } from '@/lib/shared/model-connection'
 
 // ── 类型 ─────────────────────────────────────────────────────────────
 
@@ -219,10 +220,10 @@ function stableHash(input: string): string {
  */
 async function buildProviderEntryFromUserConfig(
   user: string,
-): Promise<{ providerID: string; entry: Record<string, unknown>; modelID: string; raw: { apiKey: string; baseURL?: string } } | null> {
+): Promise<{ providerID: string; entry: Record<string, unknown>; modelID: string; raw: { apiKey?: string; baseURL?: string; headers?: Record<string, string> } } | null> {
   if (!user || user === ANONYMOUS_USER_KEY) return null
-  let serverModel: { providerID: string; modelID: string; apiKey?: string; baseURL?: string } | null = null
-  let allConfigs: Array<{ id: string; name: string; provider?: string; apiKey: string; baseUrl?: string; model?: string }> = []
+  let serverModel: { providerID: string; modelID: string; apiKey?: string; baseURL?: string; headers?: Record<string, string> } | null = null
+  let allConfigs: Array<{ id: string; name: string; provider?: string; apiKey: string; baseUrl?: string; model?: string; headers?: Record<string, string> }> = []
   try {
     const modA = await import('../../general-agent/server-model-config')
     serverModel = await modA.loadServerModelForUser(user)
@@ -230,7 +231,7 @@ async function buildProviderEntryFromUserConfig(
     // 进 opencode，让"换模型评测"在不重启 opencode 的前提下也能 work。
     const modB = await import('../../../storage/server-config')
     const settings = await modB.getUserSettings(user)
-    allConfigs = (settings.configs ?? []).filter(c => c.apiKey)
+    allConfigs = (settings.configs ?? []).filter(isModelConnectionReady)
   } catch (err) {
     // 模块加载/DB 查询失败不阻塞，退到全局配置 fallback
     console.warn(
@@ -239,7 +240,7 @@ async function buildProviderEntryFromUserConfig(
     )
     return null
   }
-  if (!serverModel || !serverModel.apiKey) return null
+  if (!serverModel) return null
 
   // 收集同 providerID 下所有 user-registered model 名 ── 让 opencode 注册多模型，
   // 后续请求里 SendPromptPayload.model.modelID 可以在它们之间切换不重启。
@@ -267,8 +268,9 @@ async function buildProviderEntryFromUserConfig(
   }
   const entry: Record<string, unknown> = {
     options: {
-      apiKey: serverModel.apiKey,
+      ...(serverModel.apiKey ? { apiKey: serverModel.apiKey } : {}),
       ...(serverModel.baseURL ? { baseURL: serverModel.baseURL } : {}),
+      ...(serverModel.headers ? { headers: serverModel.headers } : {}),
     },
     models,
   }
@@ -287,7 +289,7 @@ async function buildProviderEntryFromUserConfig(
     providerID: serverModel.providerID,
     entry,
     modelID: serverModel.modelID,
-    raw: { apiKey: serverModel.apiKey, baseURL: serverModel.baseURL },
+    raw: { apiKey: serverModel.apiKey, baseURL: serverModel.baseURL, headers: serverModel.headers },
   }
 }
 
@@ -428,12 +430,15 @@ async function buildIsolatedOpencodeConfig(user: string): Promise<{
       permission: OPENCODE_CONFIG_PERMISSION,
     }
     if (mcpEntry) cfg.mcp = mcpEntry.mcp
-    // hash 包含 apiKey、baseURL、mcp seed、permission——下次 ensure 时检测变更
+    const headersSeed = JSON.stringify(
+      Object.entries(fromUser.raw.headers ?? {}).sort(([a], [b]) => a.localeCompare(b)),
+    )
+    // hash 包含鉴权、baseURL、mcp seed、permission——下次 ensure 时检测变更
     const hash = stableHash(
-      `${fromUser.providerID}|${fromUser.modelID}|${fromUser.raw.apiKey}|${fromUser.raw.baseURL ?? ''}|${mcpEntry?.hashSeed ?? ''}|${permissionSeed}`,
+      `${fromUser.providerID}|${fromUser.modelID}|${fromUser.raw.apiKey ?? ''}|${fromUser.raw.baseURL ?? ''}|${headersSeed}|${mcpEntry?.hashSeed ?? ''}|${permissionSeed}`,
     )
     console.log(
-      `[opencode:${user}] using apiKey from DB UserSettings (provider=${fromUser.providerID}, model=${fromUser.modelID}, mcp=${mcpEntry ? 'web-search' : 'none'})`,
+      `[opencode:${user}] using model connection from DB UserSettings (provider=${fromUser.providerID}, model=${fromUser.modelID}, customHeaders=${Object.keys(fromUser.raw.headers ?? {}).length}, mcp=${mcpEntry ? 'web-search' : 'none'})`,
     )
     return { config: cfg, configHash: hash }
   }

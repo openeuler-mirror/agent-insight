@@ -379,11 +379,11 @@ async function runGeneralAgentWithClient(
     hasApiKey: !!model.apiKey,
     apiKeyPrefix: model.apiKey ? model.apiKey.slice(0, 8) + '...' : '(none)',
   });
-  if (!model.apiKey) {
+  if (!model.apiKey && !model.headers && !model.baseURL) {
     throw new Error(
-      'model.apiKey missing: configure an active model in your user settings, ' +
+      'model connection missing: configure an active model in your user settings, ' +
         'or set GENERAL_AGENT_API_KEY / OPENCODE_API_KEY / DEEPSEEK_API_KEY env, ' +
-        'or pass model.apiKey explicitly',
+        'or pass model connection options explicitly',
     );
   }
 

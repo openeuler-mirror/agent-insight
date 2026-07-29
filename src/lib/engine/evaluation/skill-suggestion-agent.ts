@@ -279,7 +279,7 @@ async function runSuggestionViaOpencode(args: {
   executionId: string;
 }): Promise<string> {
   const model = await loadServerModelForUser(args.user);
-  if (!model?.apiKey) {
+  if (!model) {
     throw new Error('未配置评测模型，请先在「模型配置」中激活一个模型。');
   }
 

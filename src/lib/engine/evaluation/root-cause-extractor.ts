@@ -13,6 +13,7 @@ async function makeDirectModel(user?: string | null) {
     model: config.model || 'deepseek-chat',
     configuration: {
       baseURL: config.baseUrl || 'https://api.deepseek.com',
+      defaultHeaders: config.headers,
     },
     temperature: 0,
     topP: 1,

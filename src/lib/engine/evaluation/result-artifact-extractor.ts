@@ -87,6 +87,7 @@ async function getLlmClient(user?: string | null) {
     client: new OpenAI({
       apiKey: config.apiKey || 'no-api-key-required',
       baseURL: normalizeBaseUrl(config.baseUrl || 'https://api.deepseek.com'),
+      defaultHeaders: config.headers,
       fetch: customFetch,
       timeout: getTimeoutMs(),
     }),
