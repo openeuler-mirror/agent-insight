@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `eb9c55fd419460dfb7fc2f67cb2cea4d81887c64` (`eb9c55f`) |
+| Commit | `c1685d1a72c098cd708b11d0e8324627aa288bd8` (`c1685d1`) |
 | Branch | `master` |
-| Date | 2026-07-27T09:36:56+08:00 |
+| Date | 2026-07-29T16:13:50+08:00 |
 | Author | openeuler-ci-bot |
-| Subject | `!209 chore(docs): 合并 docs/designs 到 docs/design——消除重复的设计文档目录` |
+| Subject | `!240 fix(otel): 修 trace 上报积压——读路径按 session 定向 + 限流加绝对上限` |
 
-**如何更新：** `git diff eb9c55f HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff c1685d1 HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
