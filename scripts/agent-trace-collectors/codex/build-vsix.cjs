@@ -25,7 +25,7 @@ function crc32(buffer) {
   return (value ^ 0xffffffff) >>> 0;
 }
 
-function dosDateTime(date = new Date()) {
+function dosDateTime(date = new Date(Date.UTC(1980, 0, 1))) {
   const year = Math.max(1980, date.getFullYear());
   return {
     time: (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2),
@@ -33,11 +33,11 @@ function dosDateTime(date = new Date()) {
   };
 }
 
-function createStoredZip(entries) {
+function createStoredZip(entries, timestamp) {
   const localParts = [];
   const centralParts = [];
   let offset = 0;
-  const stamp = dosDateTime();
+  const stamp = dosDateTime(timestamp);
   for (const entry of entries) {
     const name = Buffer.from(entry.name.replaceAll("\\", "/"), "utf8");
     const data = Buffer.isBuffer(entry.data) ? entry.data : Buffer.from(entry.data);
@@ -112,7 +112,7 @@ async function buildVsix(options = {}) {
       data: await fs.readFile(path.join(sourceDir, sourceName)),
     });
   }
-  const archive = createStoredZip(entries);
+  const archive = createStoredZip(entries, options.timestamp);
   await fs.mkdir(path.dirname(outputPath), { recursive: true });
   await fs.writeFile(outputPath, archive);
   return { outputPath, entries: entries.map((entry) => entry.name), bytes: archive.length };

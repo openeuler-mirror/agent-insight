@@ -227,9 +227,15 @@ test("Hook and native OTel merge exact Token, TTFT, and Tool facts by stable ids
 
   const tools = writer.events.filter((event) => event.kind === "tool")
   const llms = writer.events.filter((event) => event.kind === "llm")
-  const llm = llms[0]
+  const llm = llms.at(-1)
   assert.equal(tools.length, 2)
-  assert.equal(llms.length, 1)
+  assert.equal(llms.length, 2)
+  assert.deepEqual(llms[0]?.usage, {
+    input: 999,
+    output: 0,
+    reasoning: 0,
+    total: 999,
+  })
   assert.equal(new Set(tools.map((event) => event.spanId)).size, 1)
   assert.equal(tools.at(-1)?.tool?.arguments?.command, "pwd")
   assert.equal(tools.at(-1)?.tool?.result, "otel output")
@@ -392,6 +398,46 @@ test("relay rejects unauthenticated loopback writers", async (t) => {
     hook("SessionStart"),
   )
   assert.equal(response.status, 401)
+})
+
+test("relay continues processing raw OTel after a prior queue failure", async (t) => {
+  const dir = await tempDir(t)
+  let attempts = 0
+  const core = {
+    async processOtel() {
+      attempts += 1
+      if (attempts === 1) throw new Error("fixture processing failure")
+    },
+    snapshot() {
+      return { version: 1 }
+    },
+    status() {
+      return { version: 1 }
+    },
+  }
+  const relay = await createRelay({
+    config: {
+      apiKey: "test-key",
+      endpoint: "http://127.0.0.1:1/api/ingest/otel/v1/traces",
+      installSecret: "relay-secret",
+      relayPort: 43191,
+      uploadIntervalMs: 300_000,
+      homeDir: dir,
+    },
+    stateDir: dir,
+    core,
+    writer: new MemoryWriter(),
+    uploader: new MemoryUploader(),
+    port: 0,
+  })
+  const address = await relay.start()
+  t.after(() => relay.stop().catch(() => {}))
+
+  const first = await httpJson(address.port, "/v1/logs", "relay-secret", { first: true })
+  const second = await httpJson(address.port, "/v1/logs", "relay-secret", { second: true })
+  assert.equal(first.status, 500)
+  assert.equal(second.status, 200)
+  assert.equal(attempts, 2)
 })
 
 test("raw replay processes only complete JSONL lines and leaves a torn tail", async (t) => {

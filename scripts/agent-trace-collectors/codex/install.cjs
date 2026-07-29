@@ -61,6 +61,10 @@ function parseCodexVersion(output) {
   } : undefined;
 }
 
+function isSupportedCodexVersion(version) {
+  return Boolean(version && (version.major > 0 || version.minor >= 145));
+}
+
 function assertSupportedRuntime(options = {}) {
   if (Number(process.versions.node.split(".")[0]) < 20) {
     throw new Error(`Node.js >=20 is required; found ${process.versions.node}`);
@@ -74,10 +78,10 @@ function assertSupportedRuntime(options = {}) {
   });
   const version = parseCodexVersion(`${result.stdout || ""}\n${result.stderr || ""}`);
   if (!version || result.status !== 0) {
-    throw new Error("Codex CLI 0.145.x is required and must be available on PATH");
+    throw new Error("Codex CLI >=0.145.0 is required and must be available on PATH");
   }
-  if (version.major !== 0 || version.minor !== 145) {
-    throw new Error(`Codex CLI >=0.145.0 <0.146.0 is required; found ${version.raw}`);
+  if (!isSupportedCodexVersion(version)) {
+    throw new Error(`Codex CLI >=0.145.0 is required; found ${version.raw}`);
   }
   return version;
 }
@@ -308,6 +312,7 @@ module.exports = {
   install,
   installCollectorFiles,
   installEditorExtensions,
+  isSupportedCodexVersion,
   parseArgs,
   parseCodexVersion,
 };

@@ -24,6 +24,7 @@ const {
 } = require("../scripts/agent-trace-collectors/codex/config-core.cjs")
 const {
   install,
+  isSupportedCodexVersion,
   parseCodexVersion,
 } = require("../scripts/agent-trace-collectors/codex/install.cjs")
 const {
@@ -371,7 +372,9 @@ test("source uninstaller removes a config.toml created by installation", async (
 test("VSIX builder creates the standard manifest and extension payload", async (t) => {
   const dir = await tempDir(t)
   const outputPath = path.join(dir, "collector.vsix")
+  const repeatedOutputPath = path.join(dir, "collector-repeat.vsix")
   const result = await buildVsix({ outputPath })
+  await buildVsix({ outputPath: repeatedOutputPath })
   assert.deepEqual(result.entries, [
     "extension.vsixmanifest",
     "[Content_Types].xml",
@@ -384,6 +387,7 @@ test("VSIX builder creates the standard manifest and extension payload", async (
   for (const entry of result.entries) {
     assert.ok(archive.includes(Buffer.from(entry)), entry)
   }
+  assert.deepEqual(archive, await fsp.readFile(repeatedOutputPath))
 })
 
 test("setup route is self-contained and assets use a fixed allowlist", async () => {
@@ -428,13 +432,17 @@ test("setup route returns the PowerShell staging installer for Windows", async (
   assert.doesNotMatch(source, /apiKey=/)
 })
 
-test("Codex version parser enforces the pinned 0.145.x compatibility line", () => {
-  assert.deepEqual(parseCodexVersion("codex-cli 0.145.0"), {
+test("Codex version parser accepts the minimum compatible version and later releases", () => {
+  const minimum = parseCodexVersion("codex-cli 0.145.0")
+  assert.deepEqual(minimum, {
     major: 0,
     minor: 145,
     patch: 0,
     raw: "codex-cli 0.145.0",
   })
+  assert.equal(isSupportedCodexVersion(minimum), true)
+  assert.equal(isSupportedCodexVersion(parseCodexVersion("codex-cli 0.146.0")), true)
+  assert.equal(isSupportedCodexVersion(parseCodexVersion("codex-cli 0.144.9")), false)
   assert.equal(parseCodexVersion("not a version"), undefined)
 })
 

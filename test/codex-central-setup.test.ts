@@ -131,6 +131,8 @@ test("central setup preselects only Codex and keeps no-parameter installs intera
     assert.match(script, /FRAMEWORKS_PRESELECTED="true"/)
     assert.match(script, /api\/ingest\/setup\/codex/)
     assert.match(script, /INSTALL_CODEX=true/)
+    assert.match(script, /CODEX_INSTALLER="\$\(mktemp\)"/)
+    assert.doesNotMatch(script, /setup\/codex"\s*\|\s*sh/)
   }
 
   assert.match(await centralScript("unix"), /FRAMEWORKS_PRESELECTED="false"/)
@@ -179,6 +181,13 @@ test("CLI exposes framework preselection and detects the installed local package
   })
   assert.equal(help.status, 0, help.stderr)
   assert.match(help.stdout, /--frameworks <list>/)
+
+  const invalid = spawnSync(process.execPath, ["bin/cli.js", "install", "--frameworks", "codex,unknown"], {
+    cwd: ROOT,
+    encoding: "utf8",
+  })
+  assert.notEqual(invalid.status, 0)
+  assert.match(invalid.stderr, /Invalid framework list/)
 
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-insight-local-package-"))
   const linkPath = path.join(tempDir, "node_modules", "agent-insight")

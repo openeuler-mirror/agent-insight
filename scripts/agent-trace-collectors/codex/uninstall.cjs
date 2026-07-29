@@ -136,8 +136,12 @@ async function uninstall(options, homeDir = os.homedir()) {
       "otel_data",
       "codex",
     );
-    const candidate = path.resolve(namespaceRoot, apiKeyHash(config.apiKey));
-    if (path.dirname(candidate) !== namespaceRoot) {
+    const keyNamespace = apiKeyHash(config.apiKey);
+    if (!/^[a-f0-9]{12}$/.test(keyNamespace)) {
+      throw new Error("Refusing to purge an invalid API-key spool namespace");
+    }
+    const candidate = path.resolve(namespaceRoot, keyNamespace);
+    if (path.dirname(candidate) !== namespaceRoot || path.basename(candidate) !== keyNamespace) {
       throw new Error(`Refusing to purge unexpected spool path: ${candidate}`);
     }
     await fsp.rm(candidate, { recursive: true, force: true });

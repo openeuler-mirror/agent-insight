@@ -663,33 +663,38 @@ class CodexTraceCore {
             timestampMs: record.timestampMs,
           });
           resolvedTurn.llmSequence += 1;
-          const inputTokens = asNumber(firstDefined(attrs, [
+          const inputTokenValue = firstDefined(attrs, [
             "input_token_count",
             "input_tokens",
             "gen_ai.usage.input_tokens",
-          ])) || 0;
-          const outputTokens = asNumber(firstDefined(attrs, [
+          ]);
+          const outputTokenValue = firstDefined(attrs, [
             "output_token_count",
             "output_tokens",
             "gen_ai.usage.output_tokens",
-          ])) || 0;
-          const reasoningTokens = asNumber(firstDefined(attrs, [
+          ]);
+          const reasoningTokenValue = firstDefined(attrs, [
             "reasoning_token_count",
             "reasoning_tokens",
             "gen_ai.usage.reasoning_tokens",
-          ])) || 0;
-          if (outputTokens === 0 && reasoningTokens === 0) continue;
+          ]);
+          const totalTokenValue = firstDefined(attrs, [
+            "total_token_count",
+            "total_tokens",
+            "gen_ai.usage.total_tokens",
+          ]);
+          if ([inputTokenValue, outputTokenValue, reasoningTokenValue, totalTokenValue]
+            .every((value) => asNumber(value) === undefined)) continue;
+          const inputTokens = asNumber(inputTokenValue) || 0;
+          const outputTokens = asNumber(outputTokenValue) || 0;
+          const reasoningTokens = asNumber(reasoningTokenValue) || 0;
           const cacheTokens = asNumber(firstDefined(attrs, [
             "cached_input_token_count",
             "cached_token_count",
             "cache_read_token_count",
             "cached_tokens",
           ])) || 0;
-          const total = asNumber(firstDefined(attrs, [
-            "total_token_count",
-            "total_tokens",
-            "gen_ai.usage.total_tokens",
-          ])) || inputTokens + outputTokens;
+          const total = asNumber(totalTokenValue) || inputTokens + outputTokens;
           const responseId = asString(firstDefined(attrs, [
             "response.id",
             "response_id",

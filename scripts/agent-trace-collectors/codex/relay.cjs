@@ -209,7 +209,7 @@ async function createRelay(options = {}) {
       }
 
       if (url.pathname === "/v1/logs") {
-        rawPending = rawPending.then(async () => {
+        const persistRawOtel = async () => {
           const filePath = rawFileFor(stateDir);
           await appendJsonl(filePath, {
             receivedAt: new Date().toISOString(),
@@ -224,7 +224,8 @@ async function createRelay(options = {}) {
           checkpoint.files[relative] = { bytes: stat.size };
           await atomicWriteJson(checkpointPath, checkpoint);
           await persistState();
-        });
+        };
+        rawPending = rawPending.catch(() => {}).then(persistRawOtel);
         await rawPending;
         writeJson(response, 200, { partialSuccess: {} });
         return;

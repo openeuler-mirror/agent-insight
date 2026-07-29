@@ -671,7 +671,10 @@ if [ "$INSTALL_CODEX" = "true" ]; then
     echo "⏬ Installing Codex collector..."
     export AGENT_INSIGHT_API_KEY
     export AGENT_INSIGHT_BASE_URL
-    curl -fsSL "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/codex" | sh
+    CODEX_INSTALLER="$(mktemp)"
+    curl -fsSL "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/codex" -o "$CODEX_INSTALLER"
+    if ! sh "$CODEX_INSTALLER"; then rm -f "$CODEX_INSTALLER"; exit 1; fi
+    rm -f "$CODEX_INSTALLER"
 fi
 
 if [ "$LLAMAINDEX_READY" = "true" ]; then
