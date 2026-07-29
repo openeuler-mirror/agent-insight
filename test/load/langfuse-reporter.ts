@@ -18,8 +18,9 @@ import crypto from 'node:crypto';
 
 const CONFIG = {
   target: process.env.LOAD_TARGET || 'http://127.0.0.1:3100/api/ingest/otel/v1/traces',
-  publicKey: process.env.LOAD_PUBLIC_KEY || 'pk-loadtest',
-  secretKey: process.env.LOAD_SECRET_KEY || 'sk-loadtest-secret',
+  // 凭据不给默认值：压测器要打的是真实鉴权端点，硬编码一个形似密钥的字符串没必要也不合适。
+  publicKey: process.env.LOAD_PUBLIC_KEY || '',
+  secretKey: process.env.LOAD_SECRET_KEY || '',
   ratePerSec: Number(process.env.LOAD_RATE || 30),
   durationSec: Number(process.env.LOAD_DURATION || 180),
   spansPerTrace: Number(process.env.LOAD_SPANS || 5),
@@ -27,6 +28,11 @@ const CONFIG = {
   maxInflight: Number(process.env.LOAD_MAX_INFLIGHT || 200),
   outDir: process.env.LOAD_OUT || path.join(process.cwd(), 'load-results'),
 };
+
+if (!CONFIG.publicKey || !CONFIG.secretKey) {
+  console.error('需要 LOAD_PUBLIC_KEY / LOAD_SECRET_KEY（对应目标实例上某个用户的 username / apiKey）');
+  process.exit(1);
+}
 
 fs.mkdirSync(CONFIG.outDir, { recursive: true });
 const sentStream = fs.createWriteStream(path.join(CONFIG.outDir, 'sent-traces.jsonl'), { flags: 'a' });
