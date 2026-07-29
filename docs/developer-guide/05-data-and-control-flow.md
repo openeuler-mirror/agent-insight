@@ -9,6 +9,7 @@
 | `POST/OPTIONS` OTel | `src/app/api/ingest/otel/v1/{logs,metrics,traces}/route.ts` | HTTP |
 | `POST` agent run/stream | `src/app/api/agent/{run,stream}/route.ts` | HTTP |
 | `POST` trajectory eval | `src/app/api/eval/trajectory/run/route.ts` | HTTP |
+| `GET` experiment Trace candidates | `src/app/api/experiments/traces/route.ts` | HTTP |
 | `POST` grayscale tasks | `src/app/api/debug/grayscale-tasks/[taskId]/route.ts` | HTTP |
 | `POST` skill-generator chat | `src/app/api/skill-generator/chat/route.ts` | HTTP |
 | `POST` skill-opt chat | `src/app/api/skill-opt/chat/route.ts` | HTTP |
@@ -68,16 +69,20 @@ flowchart TD
 关键函数：接入路由处理器（`processUploadAsync`、`proxyFetch`、OTel `POST`）→ CodeAgent logs 的 `codeagent-otel/{detect,spool,aggregator}.ts` → `otel-consumer/sources.ts`，或 OTel traces 路由的 `decodeOtlpRequest` → `otel/normalize.ts:normalizeOtlpTraces` + `otel/spool.ts:appendOtelTraceEvents` → `otel-consumer/consumer.ts:startOtelSpoolConsumer` / `runOtelSpoolConsumerTick` → `otel/aggregate.ts:aggregateOtelTraceEvents` → `otel/adapter-registry.ts:getOtelTraceAdapter` → `otel/adapters/{langfuse-langgraph,hermes,generic}.ts` → `ingest/adapters/registry.ts:getAdapter` / `storage/data-service.ts:extractInvokedSkillsFromSessionInteractions` → `agent-trace.ts:buildAgentCallTree` → `storage/data-service.ts:saveExecutionRecord` / `deriveSubagentExecutions`。OTel trace adapter 负责 transport-normalized span 到 `ExecutionRecord` 的纯转换，FrameworkAdapter 负责框架能力、skill 抽取和存储合并策略，两者都不直接写库。
 
 ## 后端流水线：Trace 标签
-Trace 用户标签分为版本标签和业务标签。标签定义写入 `Tag`，Trace 绑定写入 `ExecutionTag`；系统标签不持久化为 `Tag`，由前端根据 `Execution` 派生。`GET/POST /api/tags` 与 `PUT/DELETE /api/tags/[id]` 维护标签定义；`GET/PUT/POST/DELETE /api/observe/executions/[executionId]/tags` 维护单条 Trace 的绑定。`GET /api/observe/data?includeTags=1` 在 `readRecords` 批量 hydrate 阶段通过 `getTraceTagsByExecutionIds` 附加 `ExecutionRecord.userTags`；`bizTag=<tagId>` 会先经 `ExecutionTag` 反查 executionId，再与其它 where 条件取交集。`facet=tags&kind=business` 返回业务标签及使用次数，供 Trace 页快捷筛选。
+Trace 用户标签分为版本标签和业务标签。标签定义写入 `Tag`，Trace 绑定写入 `ExecutionTag`；系统标签不持久化为 `Tag`，由前端根据 `Execution` 派生。`GET/POST /api/tags` 与 `PUT/DELETE /api/tags/[id]` 维护标签定义；`GET/PUT/POST/DELETE /api/observe/executions/[executionId]/tags` 维护单条 Trace 的绑定。`GET /api/observe/data?includeTags=1` 在 `readRecords` 批量 hydrate 阶段通过 `getTraceTagsByExecutionIds` 附加 `ExecutionRecord.userTags`；`bizTag=<tagId>` 会先经 `ExecutionTag` 反查 executionId，再与其它 where 条件取交集。`facet=tags&kind=business` 返回业务标签及使用次数，供 Trace 页快捷筛选。实验向导的 `GET /api/experiments/traces` 同时接受版本标签与业务标签，并为每个所选标签生成一个带用户与标签类型约束的 `Execution.executionTags.some` 关系条件；这些条件以 AND 合并，再与 Agent、root-only、文本和时间条件一起进入 Prisma 分页查询。
 
 ```mermaid
 flowchart TD
     ui["TracePage 标签列 / 业务标签筛选"] --> tagsApi["/api/tags"]
     ui --> bindApi["/api/observe/executions/:executionId/tags"]
     ui --> dataApi["/api/observe/data?includeTags=1&bizTag=..."]
+    experimentUi["Experiment Wizard / 关联 Trace"] --> experimentApi["/api/experiments/traces?search&from&to&tagIds"]
     tagsApi --> tagTable[(Tag)]
     bindApi --> linkTable[(ExecutionTag)]
     dataApi --> readRecords["readRecords / hydrateAndNormalizeBatch"]
+    experimentApi --> allTags["Execution.executionTags.some × N\nAND 语义"]
+    allTags --> linkTable
+    experimentApi --> execution
     readRecords --> linkTable
     readRecords --> execution[(Execution)]
 ```

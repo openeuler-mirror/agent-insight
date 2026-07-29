@@ -3,11 +3,21 @@
 // 新建实验 —— 四步向导（单组形态）：
 // ① 实验设计 → ② 关联 Trace（圈选 case）→ ③ 预期答案（可选标注）→ ④ 评估器（硬门控）
 // 对照仓库根目录「评测实验-高保真.html」的单组流程。
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { ChevronDown, Search, X } from 'lucide-react';
 
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { PageContainer } from '@/components/shell/PageContainer';
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
 import { matchDatasetCases, describeMatchResult, toDatasetCases } from '@/lib/engine/experiment/dataset-match';
@@ -26,6 +36,14 @@ interface TraceItem {
   tokens: number | null;
   timestamp: string;
   ok: boolean;
+}
+
+interface TraceTagOption {
+  id: string;
+  name: string;
+  kind: 'version' | 'business';
+  color: string;
+  usageCount: number;
 }
 
 interface SelectedCase {
@@ -48,6 +66,19 @@ const NEXT_LABELS = ['下一步：关联 Trace →', '下一步：预期答案 �
 const PAGE_SIZE = 10;
 /** 跨页全选安全上限：避免一次圈选过多 case 拖垮后续评测 */
 const SELECT_ALL_CAP = 500;
+const MAX_TRACE_TAG_FILTERS = 20;
+const TIME_PRESETS = [
+  { value: '30m', label: '过去 30 分钟', ms: 30 * 60 * 1000 },
+  { value: '1h', label: '过去 1 小时', ms: 60 * 60 * 1000 },
+  { value: '6h', label: '过去 6 小时', ms: 6 * 60 * 60 * 1000 },
+  { value: '1d', label: '过去 1 天', ms: 24 * 60 * 60 * 1000 },
+  { value: '3d', label: '过去 3 天', ms: 3 * 24 * 60 * 60 * 1000 },
+  { value: '7d', label: '过去 7 天', ms: 7 * 24 * 60 * 60 * 1000 },
+  { value: '14d', label: '过去 14 天', ms: 14 * 24 * 60 * 60 * 1000 },
+  { value: '30d', label: '过去 30 天', ms: 30 * 24 * 60 * 60 * 1000 },
+  { value: '90d', label: '过去 90 天', ms: 90 * 24 * 60 * 60 * 1000 },
+] as const;
+type TimePreset = typeof TIME_PRESETS[number]['value'] | 'all' | 'custom';
 
 // ── 高保真样式常量（对照 评测实验-高保真.html） ──
 const PANEL: React.CSSProperties = {
@@ -121,6 +152,11 @@ function truncate(text: string | null | undefined, max: number): string {
   const t = (text || '').replace(/\s+/g, ' ').trim();
   if (!t) return '—';
   return t.length > max ? `${t.slice(0, max)}…` : t;
+}
+
+function toLocalDateTimeInput(date: Date): string {
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
 }
 
 function pageNumbers(current: number, total: number): (number | '…')[] {
@@ -238,6 +274,17 @@ export default function NewExperimentPage() {
   const [tracesLoading, setTracesLoading] = useState(false);
   const [selectingAll, setSelectingAll] = useState(false);
   const [selected, setSelected] = useState<Map<string, SelectedCase>>(new Map());
+  const [traceSearchDraft, setTraceSearchDraft] = useState('');
+  const [traceSearch, setTraceSearch] = useState('');
+  const [timePreset, setTimePreset] = useState<TimePreset>('7d');
+  const [timePresetAppliedAt, setTimePresetAppliedAt] = useState(() => Date.now());
+  const [customTimeOpen, setCustomTimeOpen] = useState(false);
+  const [customFromDraft, setCustomFromDraft] = useState(() => toLocalDateTimeInput(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)));
+  const [customToDraft, setCustomToDraft] = useState(() => toLocalDateTimeInput(new Date()));
+  const [customRange, setCustomRange] = useState<{ from: string; to: string } | null>(null);
+  const [traceTags, setTraceTags] = useState<TraceTagOption[]>([]);
+  const [selectedTagIds, setSelectedTagIds] = useState<Set<string>>(new Set());
+  const traceRequestIdRef = useRef(0);
 
   // ③ 预期答案
   const [expandedCase, setExpandedCase] = useState<string | null>(null);
@@ -266,31 +313,65 @@ export default function NewExperimentPage() {
       .then((r) => r.json())
       .then((d) => setCustomEvaluators(Array.isArray(d) ? d : []))
       .catch(() => setCustomEvaluators([]));
+    apiFetch(`/api/tags?user=${encodeURIComponent(user)}`)
+      .then((r) => r.ok ? r.json() : [])
+      .then((d) => setTraceTags(Array.isArray(d) ? d : []))
+      .catch(() => setTraceTags([]));
   }, [user]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setTraceSearch(traceSearchDraft.trim()), 300);
+    return () => window.clearTimeout(timer);
+  }, [traceSearchDraft]);
+
+  const appendTraceFilters = useCallback((params: URLSearchParams) => {
+    if (traceSearch) params.set('search', traceSearch);
+    if (timePreset === 'custom' && customRange) {
+      params.set('from', customRange.from);
+      params.set('to', customRange.to);
+    } else {
+      const preset = TIME_PRESETS.find((item) => item.value === timePreset);
+      if (preset) params.set('from', new Date(timePresetAppliedAt - preset.ms).toISOString());
+    }
+    if (selectedTagIds.size > 0) params.set('tagIds', Array.from(selectedTagIds).join(','));
+  }, [customRange, selectedTagIds, timePreset, timePresetAppliedAt, traceSearch]);
+
+  const traceQuery = useCallback((p: number, pageSize: number) => {
+    const params = new URLSearchParams({
+      user: user || '',
+      agent: agentName,
+      page: String(p),
+      pageSize: String(pageSize),
+    });
+    appendTraceFilters(params);
+    return `/api/experiments/traces?${params.toString()}`;
+  }, [agentName, appendTraceFilters, user]);
 
   const loadTraces = useCallback(async (p: number) => {
     if (!user || !agentName) return;
+    const requestId = ++traceRequestIdRef.current;
     setTracesLoading(true);
     try {
-      const res = await apiFetch(
-        `/api/experiments/traces?user=${encodeURIComponent(user)}&agent=${encodeURIComponent(agentName)}&page=${p}&pageSize=${PAGE_SIZE}`,
-      );
+      const res = await apiFetch(traceQuery(p, PAGE_SIZE));
       const data = await res.json();
+      if (traceRequestIdRef.current !== requestId) return;
       setTraces(Array.isArray(data?.items) ? data.items : []);
       setTotal(Number(data?.total) || 0);
       setPage(p);
     } catch {
+      if (traceRequestIdRef.current !== requestId) return;
       setTraces([]);
       setTotal(0);
     } finally {
-      setTracesLoading(false);
+      if (traceRequestIdRef.current === requestId) setTracesLoading(false);
     }
-  }, [user, agentName]);
+  }, [agentName, traceQuery, user]);
 
   useEffect(() => {
-    if (step === 2) loadTraces(page);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step]);
+    if (step !== 2) return;
+    const timer = window.setTimeout(() => void loadTraces(1), 0);
+    return () => window.clearTimeout(timer);
+  }, [loadTraces, step]);
 
   const goTo = (s: number) => {
     setStep(s);
@@ -308,6 +389,48 @@ export default function NewExperimentPage() {
 
   const pageAllSelected = traces.length > 0 && traces.every((t) => selected.has(t.id));
   const pageSomeSelected = traces.some((t) => selected.has(t.id));
+  const timeLabel = timePreset === 'custom'
+    ? '自定义时间'
+    : timePreset === 'all'
+      ? '全部时间'
+      : TIME_PRESETS.find((item) => item.value === timePreset)?.label || '时间';
+  const hasActiveTraceFilters = !!traceSearch || timePreset !== 'all' || selectedTagIds.size > 0;
+  const versionTags = traceTags.filter((tag) => tag.kind === 'version');
+  const businessTags = traceTags.filter((tag) => tag.kind === 'business');
+  const selectedTraceTags = traceTags.filter((tag) => selectedTagIds.has(tag.id));
+  const tagFilterLabel = selectedTraceTags.length > 0
+    ? `用户标签：${selectedTraceTags[0].name}${selectedTraceTags.length > 1 ? ` +${selectedTraceTags.length - 1}` : ''}`
+    : '用户标签';
+  const customFromDate = new Date(customFromDraft);
+  const customToDate = new Date(customToDraft);
+  const customRangeValid = !Number.isNaN(customFromDate.getTime())
+    && !Number.isNaN(customToDate.getTime())
+    && customFromDate <= customToDate;
+
+  const toggleTagFilter = (tagId: string) => {
+    setSelectedTagIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(tagId)) next.delete(tagId);
+      else if (next.size < MAX_TRACE_TAG_FILTERS) next.add(tagId);
+      return next;
+    });
+  };
+
+  const resetTraceFilters = () => {
+    setTraceSearchDraft('');
+    setTraceSearch('');
+    setTimePreset('all');
+    setTimePresetAppliedAt(Date.now());
+    setCustomRange(null);
+    setSelectedTagIds(new Set());
+  };
+
+  const applyCustomRange = () => {
+    if (!customRangeValid) return;
+    setCustomRange({ from: customFromDate.toISOString(), to: customToDate.toISOString() });
+    setTimePreset('custom');
+    setCustomTimeOpen(false);
+  };
 
   const togglePageAll = () => {
     setSelected((prev) => {
@@ -328,9 +451,7 @@ export default function NewExperimentPage() {
       const batch = 100;
       const all: TraceItem[] = [];
       for (let p = 1; all.length < target; p++) {
-        const res = await apiFetch(
-          `/api/experiments/traces?user=${encodeURIComponent(user)}&agent=${encodeURIComponent(agentName)}&page=${p}&pageSize=${batch}`,
-        );
+        const res = await apiFetch(traceQuery(p, batch));
         if (!res.ok) break;
         const data = await res.json();
         const items: TraceItem[] = Array.isArray(data.items) ? data.items : [];
@@ -362,6 +483,14 @@ export default function NewExperimentPage() {
           referenceOutput: null,
         });
       }
+      return next;
+    });
+  };
+
+  const removeSelectedTrace = (executionId: string) => {
+    setSelected((prev) => {
+      const next = new Map(prev);
+      next.delete(executionId);
       return next;
     });
   };
@@ -461,13 +590,16 @@ export default function NewExperimentPage() {
   // 监听模式开启时，剔除已选的依赖参考数据的评估器（方案A：监听 trace 无参考答案）
   useEffect(() => {
     if (!watchMode) return;
-    setSelectedEvaluators((prev) => {
-      const next = new Set(prev);
-      for (const card of allEvaluators) {
-        if (getEvaluatorMeta(card).requires.includes('reference')) next.delete(card.id);
-      }
-      return next.size === prev.size ? prev : next;
-    });
+    const timer = window.setTimeout(() => {
+      setSelectedEvaluators((prev) => {
+        const next = new Set(prev);
+        for (const card of allEvaluators) {
+          if (getEvaluatorMeta(card).requires.includes('reference')) next.delete(card.id);
+        }
+        return next.size === prev.size ? prev : next;
+      });
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [watchMode, allEvaluators]);
 
   const submit = async () => {
@@ -495,8 +627,8 @@ export default function NewExperimentPage() {
         method: 'POST',
       }).catch(() => { /* 忽略：详情页兜底 */ });
       router.push(`/experiments/${data.id}`);
-    } catch (e: any) {
-      setSubmitError(e?.message || '创建实验失败');
+    } catch (e: unknown) {
+      setSubmitError(e instanceof Error ? e.message : '创建实验失败');
       setSubmitting(false);
     }
   };
@@ -647,15 +779,244 @@ export default function NewExperimentPage() {
                   {selectingAll ? '选择中…' : `选择全部 ${Math.min(total, SELECT_ALL_CAP)} 条`}
                 </button>
               )}
-              {selected.size > 0 && (
-                <button style={BTN_OUTLINE_SM} onClick={() => setSelected(new Map())} title="清空已选">
-                  清空
+            </div>
+
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+              padding: '10px 14px', borderBottom: '1px solid var(--border)',
+              background: 'var(--background-secondary)',
+            }}>
+              <div style={{ position: 'relative', flex: '1 1 280px', maxWidth: 440 }}>
+                <Search
+                  size={15}
+                  style={{ position: 'absolute', left: 10, top: 9, color: 'var(--foreground-muted)', pointerEvents: 'none' }}
+                />
+                <input
+                  style={{ ...INPUT, height: 32, paddingLeft: 32, paddingRight: traceSearchDraft ? 32 : 10 }}
+                  value={traceSearchDraft}
+                  maxLength={200}
+                  placeholder="模糊搜索 Trace ID 或任务输入…"
+                  onChange={(e) => setTraceSearchDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') setTraceSearch(traceSearchDraft.trim());
+                  }}
+                />
+                {traceSearchDraft && (
+                  <button
+                    type="button"
+                    aria-label="清空搜索"
+                    onClick={() => {
+                      setTraceSearchDraft('');
+                      setTraceSearch('');
+                    }}
+                    style={{
+                      position: 'absolute', right: 7, top: 6, width: 20, height: 20,
+                      display: 'grid', placeItems: 'center', border: 'none', background: 'none',
+                      color: 'var(--foreground-muted)', cursor: 'pointer',
+                    }}
+                  >
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
+
+              <Popover open={customTimeOpen} onOpenChange={setCustomTimeOpen}>
+                <PopoverTrigger asChild>
+                  <button type="button" style={{ ...BTN_OUTLINE_SM, height: 32, gap: 7 }}>
+                    {timeLabel}
+                    <ChevronDown size={13} />
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent align="start" className="w-80" style={{ padding: 8 }}>
+                  <div style={{ maxHeight: 230, overflowY: 'auto' }}>
+                    {[{ value: 'all' as const, label: '全部时间' }, ...TIME_PRESETS].map((item) => (
+                      <button
+                        key={item.value}
+                        type="button"
+                        onClick={() => {
+                          setTimePreset(item.value);
+                          setTimePresetAppliedAt(Date.now());
+                          setCustomTimeOpen(false);
+                        }}
+                        style={{
+                          width: '100%', display: 'flex', alignItems: 'center', gap: 8,
+                          padding: '7px 9px', border: 'none', borderRadius: 6, cursor: 'pointer',
+                          background: timePreset === item.value ? 'var(--primary-subtle)' : 'transparent',
+                          color: timePreset === item.value ? 'var(--primary)' : 'var(--foreground)',
+                          textAlign: 'left', fontSize: 12,
+                        }}
+                      >
+                        <span style={{ width: 31, color: 'var(--foreground-muted)', fontSize: 10.5 }}>
+                          {item.value === 'all' ? '∞' : item.value}
+                        </span>
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div style={{ height: 1, background: 'var(--border)', margin: '7px 0 10px' }} />
+                  <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--foreground)', marginBottom: 7 }}>自定义时间</div>
+                  <label style={{ ...FIELDLBL, marginBottom: 4 }}>开始时间</label>
+                  <input
+                    type="datetime-local"
+                    style={{ ...INPUT, height: 30, marginBottom: 8, fontSize: 11.5 }}
+                    value={customFromDraft}
+                    onChange={(e) => setCustomFromDraft(e.target.value)}
+                  />
+                  <label style={{ ...FIELDLBL, marginBottom: 4 }}>结束时间</label>
+                  <input
+                    type="datetime-local"
+                    style={{ ...INPUT, height: 30, marginBottom: 10, fontSize: 11.5 }}
+                    value={customToDraft}
+                    onChange={(e) => setCustomToDraft(e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    disabled={!customRangeValid}
+                    style={{ ...BTN_PRIMARY, width: '100%', height: 30, opacity: customRangeValid ? 1 : 0.45 }}
+                    onClick={applyCustomRange}
+                  >
+                    应用自定义时间
+                  </button>
+                </PopoverContent>
+              </Popover>
+
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button type="button" style={{ ...BTN_OUTLINE_SM, height: 32, gap: 7, maxWidth: 220 }}>
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{tagFilterLabel}</span>
+                    <ChevronDown size={13} />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-72 max-h-80 overflow-y-auto">
+                  <DropdownMenuLabel>同时包含全部所选标签（AND，最多 {MAX_TRACE_TAG_FILTERS} 个）</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuLabel>版本标签</DropdownMenuLabel>
+                  {versionTags.length === 0
+                    ? <DropdownMenuLabel>暂无版本标签</DropdownMenuLabel>
+                    : versionTags.map((tag) => (
+                        <DropdownMenuCheckboxItem
+                          key={tag.id}
+                          checked={selectedTagIds.has(tag.id)}
+                          disabled={!selectedTagIds.has(tag.id) && selectedTagIds.size >= MAX_TRACE_TAG_FILTERS}
+                          onCheckedChange={() => toggleTagFilter(tag.id)}
+                          onSelect={(event) => event.preventDefault()}
+                        >
+                          <span style={{ width: 7, height: 7, borderRadius: '50%', background: tag.color, flexShrink: 0 }} />
+                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{tag.name}</span>
+                        </DropdownMenuCheckboxItem>
+                      ))}
+                  <DropdownMenuSeparator />
+                  <DropdownMenuLabel>业务标签</DropdownMenuLabel>
+                  {businessTags.length === 0
+                    ? <DropdownMenuLabel>暂无业务标签</DropdownMenuLabel>
+                    : businessTags.map((tag) => (
+                        <DropdownMenuCheckboxItem
+                          key={tag.id}
+                          checked={selectedTagIds.has(tag.id)}
+                          disabled={!selectedTagIds.has(tag.id) && selectedTagIds.size >= MAX_TRACE_TAG_FILTERS}
+                          onCheckedChange={() => toggleTagFilter(tag.id)}
+                          onSelect={(event) => event.preventDefault()}
+                        >
+                          <span style={{ width: 7, height: 7, borderRadius: '50%', background: tag.color, flexShrink: 0 }} />
+                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{tag.name}</span>
+                        </DropdownMenuCheckboxItem>
+                      ))}
+                  {selectedTagIds.size > 0 && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <button
+                        type="button"
+                        onClick={() => setSelectedTagIds(new Set())}
+                        style={{
+                          width: '100%', border: 'none', borderRadius: 5, padding: '6px 8px',
+                          background: 'transparent', color: 'var(--foreground-secondary)',
+                          fontSize: 11.5, textAlign: 'left', cursor: 'pointer',
+                        }}
+                      >
+                        清除标签筛选
+                      </button>
+                    </>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
+
+              {hasActiveTraceFilters && (
+                <button type="button" style={{ ...BTN_GHOST, height: 32, padding: '0 8px' }} onClick={resetTraceFilters}>
+                  重置筛选
                 </button>
               )}
-              <span style={{ fontSize: 12, color: 'var(--primary)', fontWeight: 700 }}>
-                已选 {selected.size} 条
+              <span style={{ marginLeft: 'auto', fontSize: 11.5, color: 'var(--foreground-muted)' }}>
+                找到 {total} 条{watchMode ? ' · 筛选仅影响已有 Trace' : ''}
               </span>
             </div>
+
+            {selected.size > 0 && (
+              <div style={{
+                margin: '10px 14px', border: '1px solid var(--border)', borderRadius: 10,
+                background: 'var(--card-bg)', overflow: 'hidden',
+              }}>
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+                  padding: '8px 10px', borderBottom: '1px solid var(--border)',
+                  background: 'var(--background-secondary)',
+                }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--foreground)' }}>已选 Trace</span>
+                  <span style={{ ...CHIP_MUT, color: 'var(--primary)' }}>{selected.size} 条</span>
+                  <span style={{ fontSize: 11, color: 'var(--foreground-muted)' }}>跨搜索、跨分页持续保留</span>
+                  <span style={{ flex: 1 }} />
+                  <button
+                    type="button"
+                    style={{ ...BTN_GHOST, height: 26, padding: '0 8px' }}
+                    onClick={() => setSelected(new Map())}
+                  >
+                    清空已选
+                  </button>
+                </div>
+                <div style={{ maxHeight: 112, overflowY: 'auto' }}>
+                  {selectedList.map((item, index) => (
+                    <div
+                      key={item.executionId}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '7px 10px',
+                        borderTop: index === 0 ? 'none' : '1px solid var(--border)',
+                      }}
+                    >
+                      <span
+                        title={item.taskId || item.executionId}
+                        style={{
+                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                          flex: '0 1 190px',
+                          fontFamily: 'var(--font-mono, ui-monospace, monospace)', fontSize: 11,
+                          color: 'var(--foreground-secondary)',
+                        }}
+                      >
+                        {item.taskId || item.executionId}
+                      </span>
+                      <span
+                        title={item.input || '无任务输入'}
+                        style={{
+                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                          flex: '1 1 220px',
+                          fontSize: 11.5, color: item.input ? 'var(--foreground)' : 'var(--foreground-muted)',
+                        }}
+                      >
+                        {item.input || '无任务输入'}
+                      </span>
+                      <button
+                        type="button"
+                        aria-label={`移除 Trace ${item.taskId || item.executionId}`}
+                        title="从已选 Trace 中移除"
+                        style={{ ...BTN_GHOST, height: 24, padding: '0 6px', marginLeft: 'auto', color: 'var(--foreground-muted)' }}
+                        onClick={() => removeSelectedTrace(item.executionId)}
+                      >
+                        <X size={13} />
+                        移除
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
@@ -684,7 +1045,9 @@ export default function NewExperimentPage() {
                   {tracesLoading ? (
                     <tr><td colSpan={7} style={{ ...TD, borderBottom: 'none', textAlign: 'center', color: 'var(--foreground-muted)' }}>加载中…</td></tr>
                   ) : traces.length === 0 ? (
-                    <tr><td colSpan={7} style={{ ...TD, borderBottom: 'none', textAlign: 'center', color: 'var(--foreground-muted)' }}>该 Agent 暂无 trace</td></tr>
+                    <tr><td colSpan={7} style={{ ...TD, borderBottom: 'none', textAlign: 'center', color: 'var(--foreground-muted)' }}>
+                      {hasActiveTraceFilters ? '没有符合当前筛选条件的 Trace' : '该 Agent 暂无 Trace'}
+                    </td></tr>
                   ) : traces.map((t, i) => {
                     const last = i === traces.length - 1;
                     const td: React.CSSProperties = last ? { ...TD, borderBottom: 'none' } : TD;
