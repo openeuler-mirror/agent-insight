@@ -24,7 +24,7 @@
 | `preset-agent-task-completion` / `preset-agent-trace-quality` | `experiment/faithful-preset-evaluators.ts` |
 | `preset-result-*` | `experiment/result-preset-evaluators.ts` → 复用 canonical `runSingleResultMetric()` |
 | `preset-content-insensitivity` / `preset-content-controversy` / `preset-content-gender-discrimination` | `experiment/content-preset-evaluators.ts` → 3 份维度配置 + `experiment/content-judge-common.ts` 扣分制引擎（与安全审核评估器无交集） |
-| `preset-creativity` | `experiment/creativity-preset-evaluators.ts` → 评级制（1-3 档锚定），独立成族 |
+| `preset-creativity-expression` | `experiment/creativity-preset-evaluators.ts` → 评级制（1-3 档锚定），独立成族 |
 | 其它（自建） | 通用 LLM Judge（三段式提示词组装） |
 
 > 这张表只列到「族」级别；具体有哪些预置卡以 `preset-evaluators.ts` 为准，别在文档里再抄一份 id 清单——抄了必然过期。
@@ -499,7 +499,7 @@ Trace 评测详情（`app/(main)/experiments/[id]/cases/[caseId]/page.tsx`）的
 | 不敏感性 `preset-content-insensitivity` | Agent 输出 | 人群身份 · 地域 · 职业阶层 · 年龄外貌 · 文化宗教（5 维扣分制，性别交性别歧视评估器） |
 | 争议性 `preset-content-controversy` | Agent 输出 | 绝对化判断 · 争议比较 · 未经限定概括（3 维扣分制，聚焦语言学形式，内容主题交安全审核评估器） |
 | 性别歧视 `preset-content-gender-discrimination` | Agent 输出 | 显性贬低 · 能力否定 · 刻板印象 · 排斥语言 · 物化 · 双重标准 · 角色固着（7 维扣分制） |
-| 创造性 `preset-creativity` | Agent 输出 | 新颖性 · 视角独特性 · 非模板化 · 构思差异度 · 文采修辞（5 维 1-3 档锚定，独立成族） |
+| 创造性 `preset-creativity-expression` | Agent 输出 | 新颖性 · 视角独特性 · 非模板化 · 构思差异度 · 文采修辞（5 维 1-3 档锚定，独立成族） |
 
 **已知的高风险重叠区**——往这些方向新增前务必先讨论：
 
