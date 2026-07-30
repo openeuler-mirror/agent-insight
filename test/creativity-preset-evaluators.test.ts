@@ -16,56 +16,56 @@ describe('创造性评估器 全链路', () => {
 
   it('全1 → 0', async () => {
     inject(JSON.stringify({ dimensions: all1(), overall_reason: '模板化。' }));
-    const r = await runCreativityPreset('preset-creativity', USER, ctx('x'));
+    const r = await runCreativityPreset('preset-creativity-expression', USER, ctx('x'));
     assert.strictEqual(r.score, 0);
     for (const p of r.points!) assert.strictEqual(p.status, 'missing');
   });
   it('全2 → 50', async () => {
     inject(JSON.stringify({ dimensions: all2(), overall_reason: '中等。' }));
-    const r = await runCreativityPreset('preset-creativity', USER, ctx('x'));
+    const r = await runCreativityPreset('preset-creativity-expression', USER, ctx('x'));
     assert.strictEqual(r.score, 50);
     for (const p of r.points!) assert.strictEqual(p.status, 'partial');
   });
   it('全3 → 100', async () => {
     inject(JSON.stringify({ dimensions: all3(), overall_reason: '优秀。' }));
-    const r = await runCreativityPreset('preset-creativity', USER, ctx('x'));
+    const r = await runCreativityPreset('preset-creativity-expression', USER, ctx('x'));
     assert.strictEqual(r.score, 100);
     for (const p of r.points!) assert.strictEqual(p.status, 'covered');
   });
   it('[3,2,1,1,1] → 30', async () => {
     inject(JSON.stringify({ dimensions: { novelty: { rating: 3, comment: '好' }, perspective_uniqueness: { rating: 2, comment: '中' }, non_template_expression: { rating: 1, comment: '差' }, idea_diversity: { rating: 1, comment: '差' }, rhetoric_quality: { rating: 1, comment: '差' } }, overall_reason: '混合。' }));
-    assert.strictEqual((await runCreativityPreset('preset-creativity', USER, ctx('x'))).score, 30);
+    assert.strictEqual((await runCreativityPreset('preset-creativity-expression', USER, ctx('x'))).score, 30);
   });
   it('[3,3,1,2,2] → 60', async () => {
     inject(JSON.stringify({ dimensions: { novelty: { rating: 3, comment: '好' }, perspective_uniqueness: { rating: 3, comment: '好' }, non_template_expression: { rating: 1, comment: '差' }, idea_diversity: { rating: 2, comment: '中' }, rhetoric_quality: { rating: 2, comment: '中' } }, overall_reason: '混合。' }));
-    assert.strictEqual((await runCreativityPreset('preset-creativity', USER, ctx('x'))).score, 60);
+    assert.strictEqual((await runCreativityPreset('preset-creativity-expression', USER, ctx('x'))).score, 60);
   });
   it('string rating → parse', async () => {
     inject(JSON.stringify({ dimensions: { novelty: { rating: '3', comment: '好' }, perspective_uniqueness: { rating: 3, comment: '好' }, non_template_expression: { rating: 3, comment: '好' }, idea_diversity: { rating: 3, comment: '好' }, rhetoric_quality: { rating: 3, comment: '好' } }, overall_reason: 'x' }));
-    assert.strictEqual((await runCreativityPreset('preset-creativity', USER, ctx('x'))).score, 100);
+    assert.strictEqual((await runCreativityPreset('preset-creativity-expression', USER, ctx('x'))).score, 100);
   });
   it('缺维度 → throw', async () => {
     inject(JSON.stringify({ dimensions: { novelty: { rating: 2, comment: 'x' } }, overall_reason: 'x' }));
-    await assert.rejects(() => runCreativityPreset('preset-creativity', USER, ctx('x')), (e: Error) => e.name === 'ContentPresetParseError');
+    await assert.rejects(() => runCreativityPreset('preset-creativity-expression', USER, ctx('x')), (e: Error) => e.name === 'ContentPresetParseError');
   });
   it('rating>3 → throw', async () => {
     const d = all3(); d.novelty.rating = 9;
     inject(JSON.stringify({ dimensions: d, overall_reason: 'x' }));
-    await assert.rejects(() => runCreativityPreset('preset-creativity', USER, ctx('x')), (e: Error) => e.name === 'ContentPresetParseError');
+    await assert.rejects(() => runCreativityPreset('preset-creativity-expression', USER, ctx('x')), (e: Error) => e.name === 'ContentPresetParseError');
   });
   it('rating<1 → throw', async () => {
     const d = all3(); d.novelty.rating = 0;
     inject(JSON.stringify({ dimensions: d, overall_reason: 'x' }));
-    await assert.rejects(() => runCreativityPreset('preset-creativity', USER, ctx('x')), (e: Error) => e.name === 'ContentPresetParseError');
+    await assert.rejects(() => runCreativityPreset('preset-creativity-expression', USER, ctx('x')), (e: Error) => e.name === 'ContentPresetParseError');
   });
   it('comment 空 → throw', async () => {
     const d = all3(); d.novelty.comment = '';
     inject(JSON.stringify({ dimensions: d, overall_reason: 'x' }));
-    await assert.rejects(() => runCreativityPreset('preset-creativity', USER, ctx('x')), (e: Error) => e.name === 'ContentPresetParseError');
+    await assert.rejects(() => runCreativityPreset('preset-creativity-expression', USER, ctx('x')), (e: Error) => e.name === 'ContentPresetParseError');
   });
   it('overall_reason 写入 evidence', async () => {
     inject(JSON.stringify({ dimensions: all3(), overall_reason: '高度创造性。' }));
-    const r = await runCreativityPreset('preset-creativity', USER, ctx('x'));
+    const r = await runCreativityPreset('preset-creativity-expression', USER, ctx('x'));
     assert.ok(((r.evidence as { md?: string } | undefined)?.md ?? '').includes('高度创造性'));
   });
 });

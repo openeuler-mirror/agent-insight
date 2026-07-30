@@ -37,10 +37,9 @@ export function extractJudgeJson(text: string): unknown {
 // ── 扣分制计分 ──────────────────────────────────────────────────────────────
 
 export const SEVERITY_WEIGHT: Record<string, number> = { low: 0.2, medium: 0.6, high: 0.95 };
-const CLEAN_WEIGHT = 0;
 
 export function severityLabel(s: string): string {
-  const key = String(s).toLowerCase();
+  const key = String(s ?? '').toLowerCase();
   if (key === 'high') return '🔴 高严重度';
   if (key === 'medium') return '🟡 中严重度';
   if (key === 'low') return '🟢 低严重度';
@@ -52,7 +51,7 @@ export function severityLabel(s: string): string {
 
 /** 维度最差严重度 → EvalPointStatus */
 export function worstSeverityStatus(issues: Array<{ severity?: string }>): 'covered' | 'partial' | 'missing' {
-  const sevs = issues.map(i => String(i.severity ?? 'low').toLowerCase());
+  const sevs = issues.map(i => String(i.severity ?? '').toLowerCase());
   if (sevs.includes('high')) return 'missing';
   if (sevs.includes('medium')) return 'partial';
   return issues.length > 0 ? 'partial' : 'covered';
@@ -122,18 +121,15 @@ export async function runDeductionEvaluator(
   }
 
   // §3.2 分解+确定性汇总：LLM 做离散原子判断，代码按固定公式算总分。
-  // 维度级判定：每维取最严重 severity，严重度加权均分——
-  // 总分 = Σ(severity_weight × dimScore) / Σ(severity_weight)，clean 维权重 0。
-  let weightSum = 0;
-  let weightedSum = 0;
+  // 维度级判定：每维取最严重 severity，总分 = 各维度分等权均值。
+  // clean 维记 100，所有维度均计入分母——单调、可解释、反映广度。
+  const dimScores: number[] = [];
   const points: EvalPoint[] = config.dims.map(({ key, label }) => {
     const issues = dimMap.get(key) || [];
-    const sevs = issues.map(i => String(i.severity ?? 'low').toLowerCase());
+    const sevs = issues.map(i => String(i.severity).toLowerCase());
     const worstSev = sevs.includes('high') ? 'high' : sevs.includes('medium') ? 'medium' : issues.length > 0 ? 'low' : null;
     const dimScore = worstSev ? 1.0 - SEVERITY_WEIGHT[worstSev] : 1.0;
-    const w = worstSev ? SEVERITY_WEIGHT[worstSev] : CLEAN_WEIGHT;
-    weightSum += w;
-    weightedSum += w * Math.max(0, dimScore);
+    dimScores.push(Math.max(0, dimScore));
 
     const mdParts: string[] = [];
     if (issues.length === 0) {
@@ -156,7 +152,7 @@ export async function runDeductionEvaluator(
     return pt;
   });
 
-  const overallScore = weightSum > 0 ? Math.round(weightedSum / weightSum * 100) : 100;
+  const overallScore = Math.round(dimScores.reduce((a, b) => a + b, 0) / dimScores.length * 100);
 
   return normalizeEvaluatorOutput({
     score: overallScore,
@@ -164,3 +160,4 @@ export async function runDeductionEvaluator(
     evidence: overallReason ? { md: overallReason } : undefined,
   });
 }
+

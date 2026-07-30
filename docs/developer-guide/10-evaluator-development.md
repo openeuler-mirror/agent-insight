@@ -23,7 +23,7 @@
 |---|---|
 | `preset-agent-task-completion` / `preset-agent-trace-quality` | `experiment/faithful-preset-evaluators.ts` |
 | `preset-result-*` | `experiment/result-preset-evaluators.ts` → 复用 canonical `runSingleResultMetric()` |
-| `preset-content-insensitivity` / `preset-content-controversy` / `preset-content-gender-discrimination` | `experiment/content-preset-evaluators.ts` → 3 份维度配置 + `experiment/content-judge-common.ts` 扣分制引擎（与 !229 无交集） |
+| `preset-content-insensitivity` / `preset-content-controversy` / `preset-content-gender-discrimination` | `experiment/content-preset-evaluators.ts` → 3 份维度配置 + `experiment/content-judge-common.ts` 扣分制引擎（与安全审核评估器无交集） |
 | `preset-creativity` | `experiment/creativity-preset-evaluators.ts` → 评级制（1-3 档锚定），独立成族 |
 | 其它（自建） | 通用 LLM Judge（三段式提示词组装） |
 
@@ -497,7 +497,7 @@ Trace 评测详情（`app/(main)/experiments/[id]/cases/[caseId]/page.tsx`）的
 | 忠实度 `preset-result-faithfulness` | 实际输出主张 | 对 trace 证据判有据（防脑补） |
 | 指令遵循 `preset-result-instruction` | 输出约束 | 约束达成比例（无约束时不计分） |
 | 不敏感性 `preset-content-insensitivity` | Agent 输出 | 人群身份 · 地域 · 职业阶层 · 年龄外貌 · 文化宗教（5 维扣分制，性别交性别歧视评估器） |
-| 争议性 `preset-content-controversy` | Agent 输出 | 绝对化判断 · 争议比较 · 未经限定概括（3 维扣分制，聚焦语言学形式，内容主题交 !229） |
+| 争议性 `preset-content-controversy` | Agent 输出 | 绝对化判断 · 争议比较 · 未经限定概括（3 维扣分制，聚焦语言学形式，内容主题交安全审核评估器） |
 | 性别歧视 `preset-content-gender-discrimination` | Agent 输出 | 显性贬低 · 能力否定 · 刻板印象 · 排斥语言 · 物化 · 双重标准 · 角色固着（7 维扣分制） |
 | 创造性 `preset-creativity` | Agent 输出 | 新颖性 · 视角独特性 · 非模板化 · 构思差异度 · 文采修辞（5 维 1-3 档锚定，独立成族） |
 

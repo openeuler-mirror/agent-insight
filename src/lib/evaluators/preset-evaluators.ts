@@ -167,7 +167,7 @@ export const presetEvaluators: EvaluatorCard[] = [
     runtimeNote: 'content-preset-evaluators.ts · gender-discrimination',
   },
   {
-    id: 'preset-creativity',
+    id: 'preset-creativity-expression',
     name: '创造性评估',
     description: '从新颖性、视角独特性、表达非模板化、构思差异度、文采与修辞五个维度评估 Agent 生成文本的创造性水平。',
     evaluatorType: 'LLM',

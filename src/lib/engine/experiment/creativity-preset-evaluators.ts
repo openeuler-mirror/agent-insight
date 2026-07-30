@@ -27,11 +27,13 @@ const CREATIVITY_SYSTEM = [
   '【评估维度与标准（1-3 评级，对齐系统三档口径）——必须逐一审查全部 5 个维度】',
   '',
   '1. 新颖性（novelty）：文本是否提供了新的观点、角度或信息，而非重复常见套路。',
-  '   1 分（低）：内容完全来自常见模板或套话。典型表现：产品介绍只列"性能好/价格低/外观美"等万金油卖点；分析类只提"推动经济发展/改变生活方式"等教科书式论点',
+  '   1 分（低）：内容完全来自常见模板或套话，无任何超出预期的信息',
+  '   2 分（中）：有一些新意或尝试跳出套话，但整体仍偏保守、可预见',
   '   3 分（高）：提供了独特的新视角或突破性观点，超出预期',
   '',
   '2. 视角独特性（perspective_uniqueness）：文本是否采用了独特的思考角度或表达视角。',
   '   1 分（低）：仅从最显而易见的角度切入，视角单一，无任何转折或层次递进',
+  '   2 分（中）：尝试了不同角度但展开不深，或偶有独特观察但整体仍主流',
   '   3 分（高）：多角度、多层次分析，有出人意料的观察或联想',
   '',
   '3. 表达非模板化（non_template_expression）：语言表达是否摆脱了常见模板和套话。',
@@ -42,14 +44,17 @@ const CREATIVITY_SYSTEM = [
   '     - AI 衔接模板："值得注意的是""不可否认""毫无疑问""在当今…时代/背景下""可以说""不言而喻"',
   '     - 空泛总结："具有重要意义""值得推荐""正在深刻影响"',
   '     - 万能结尾："我们需要重视/关注""是未来的发展方向"',
+  '   2 分（中）：出现 1-2 个模板标志，部分表达自然但仍有套路痕迹',
   '   3 分（高）：表达自然流畅，无模板化套路，句式变化丰富',
   '',
   '4. 构思差异度（idea_diversity）：文本中不同构思之间的差异程度和丰富性。',
   '   1 分（低）：全文围绕单一观点反复展开，信息密度低。即使列出"第一/第二/第三"，如果只是同义反复或浅层枚举，仍判 1 分',
+  '   2 分（中）：有两到三个不同角度或论据类型，但深度不足',
   '   3 分（高）：多角度构思丰富，论据类型多样，信息密度高',
   '',
   '5. 文采与修辞（rhetoric_quality）：语言运用上的艺术性和表现力。',
   '   1 分（低）：语言平铺直叙，用词贫乏，缺乏节奏感。典型表现：全是简单句堆砌，无任何修辞手法',
+  '   2 分（中）：用词尚可，偶有亮点但整体缺乏感染力和记忆点',
   '   3 分（高）：修辞手法运用恰当（比喻、排比、类比等），语言有感染力和记忆点',
   '',
   '【工作流程——按顺序执行，不可跳过任何一步】',
@@ -59,7 +64,6 @@ const CREATIVITY_SYSTEM = [
   '第四步：对 5 个维度逐一打分。模板化文本通常 novelty 和 non_template_expression 同时低分',
   '',
   '【特殊场景】',
-  '- 简单事实查询（如"2024 年世界杯冠军是谁"→"阿根廷"）：不需要创造性，所有维度给 3 分（不适用扣分）',
   '- 重复常见名言或引用作为核心创意：新颖性应偏低',
   '',
   '【输出格式】只输出一个 JSON 对象，不要额外文字：',
@@ -101,7 +105,7 @@ const coerceRating = (key: string, v: unknown, rawText: string): number => {
 // 入口
 // ═══════════════════════════════════════════════════════════════════════════════
 
-export const CREATIVITY_PRESET_IDS = ['preset-creativity'] as const;
+export const CREATIVITY_PRESET_IDS = ['preset-creativity-expression'] as const;
 export type CreativityPresetId = (typeof CREATIVITY_PRESET_IDS)[number];
 
 export function isCreativityPresetId(id: string): id is CreativityPresetId {
@@ -113,7 +117,7 @@ export async function runCreativityPreset(
   user: string,
   ctx: FaithfulPresetContext,
 ): Promise<EvaluatorOutput> {
-  if (id !== 'preset-creativity') throw new ContentPresetParseError(`未知的 creativity id：${id}`, id);
+  if (id !== 'preset-creativity-expression') throw new ContentPresetParseError(`未知的 creativity id：${id}`, id);
   return runCreativity(user, ctx);
 }
 
