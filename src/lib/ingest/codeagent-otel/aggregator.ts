@@ -48,6 +48,11 @@ type ToolEntry = {
   startedAt?: string;
 };
 
+const HIDDEN_BACKGROUND_QUERY_SOURCES = new Set([
+  'extract_memories',
+  'auto_dream',
+]);
+
 function asString(value: any): string | undefined {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
@@ -97,6 +102,20 @@ function eventAgentName(event: CodeAgentOtelEvent, runId: string, sessionId: str
   return asString(attributes.agent_name) ||
     asString(attributes['execution.agent_id']) ||
     (runId === sessionId ? 'CodeAgent' : 'Subagent');
+}
+
+function hiddenBackgroundRunIds(events: CodeAgentOtelEvent[], sessionId: string): Set<string> {
+  const runIds = new Set<string>();
+  for (const event of events) {
+    if (event.eventName !== 'api_request') continue;
+    const attributes = event.attributes || {};
+    const querySource = asString(attributes.query_source);
+    if (!querySource || !HIDDEN_BACKGROUND_QUERY_SOURCES.has(querySource)) continue;
+    const runId = eventRunId(event, sessionId);
+    const parentRunId = asString(attributes['execution.parent_agent_run_id']);
+    if (runId !== sessionId && parentRunId === sessionId) runIds.add(runId);
+  }
+  return runIds;
 }
 
 function eventKey(event: CodeAgentOtelEvent): string {
@@ -188,7 +207,9 @@ export function aggregateCodeAgentOtelEvents(
   sessionId: string,
   inputEvents: CodeAgentOtelEvent[],
 ): ExecutionRecord | null {
-  const events = dedupeAndSort(inputEvents.filter((event) => event.sessionId === sessionId));
+  const sessionEvents = dedupeAndSort(inputEvents.filter((event) => event.sessionId === sessionId));
+  const hiddenRunIds = hiddenBackgroundRunIds(sessionEvents, sessionId);
+  const events = sessionEvents.filter((event) => !hiddenRunIds.has(eventRunId(event, sessionId)));
   if (events.length === 0) return null;
 
   const agentNames = new Map<string, string>();
