@@ -207,3 +207,80 @@ test("端到端(同机):有可读响应体时 subagent_map 完全不插手", () 
 
   fs.rmSync(SPOOL_DIR, { recursive: true, force: true })
 })
+
+// 形状照抄远程真实会话 779eba81(多 prompt 交互 + async Task):
+//   - 会话先有一轮闲聊(p1),之后才下达子 agent 任务(p2)
+//   - async Task 的 tool_result 在**启动时**就到(interim "Async agent launched"),
+//     早于发起轮自己的 assistant_response,也早于子 agent 的全部轮次
+// 两个回归点:
+//   ① task 调用必须挂在 p2 的发起轮上,不能挂到 p1 的闲聊回复(实测踩过:UI 上
+//     "调用子 agent"跑到了用户下任务之前);
+//   ② 有逐轮映射时不得再保留合成轮(实测踩过:合成判定在 tool_result 时刻做,
+//     async 形状下映射轮次都在其后,判空必然误判,"Async agent launched"样板混进子节点)。
+test("端到端(跨机·多 prompt·async):task 挂对发起轮,合成轮让位给映射轮次", () => {
+  const SID = "e2e-submap-async"
+  const rec2 = (eventName: string, ts: string, promptId: string, attrs: Record<string, any>, sequence: number) => ({
+    body: { stringValue: `claude_code.${eventName}` },
+    attributes: [
+      attr("event.name", eventName), attr("event.timestamp", ts), attr("event.sequence", sequence),
+      attr("session.id", SID), attr("prompt.id", promptId),
+      ...Object.entries(attrs).map(([key, value]) => attr(key, value)),
+    ],
+  })
+  const events = normalizeClaudeOtlpLogs({
+    resourceLogs: [{
+      resource: { attributes: [attr("service.name", "claude-code")] },
+      scopeLogs: [{
+        logRecords: [
+          // p1:闲聊
+          rec2("user_prompt", t(0), "p1", { prompt: "你好" }, 0),
+          rec2("api_request_body", t(1), "p1", { body_ref: `${REMOTE_ONLY}/a.json`, body_length: 100 }, 1),
+          rec2("api_response_body", t(1), "p1", { body_ref: `${REMOTE_ONLY}/b.json`, body_length: 100 }, 2),
+          rec2("assistant_response", t(1), "p1", { response: "你好！有什么可以帮你的吗？", "message.uuid": "uuid-p1" }, 3),
+          // p2:下任务;async Task 启动即返回 interim tool_result(先于一切后续轮次)
+          rec2("user_prompt", t(10), "p2", { prompt: "启动一个子Agent算 1+1" }, 4),
+          rec2("tool_result", t(11), "p2", {
+            tool_name: "Agent", tool_use_id: "call_async_1", success: "true", duration_ms: 5,
+            tool_input: JSON.stringify({ subagent_type: "general-purpose", prompt: "1+1" }),
+          }, 5),
+          rec2("assistant_response", t(12), "p2", { response: "2", "message.uuid": "uuid-async-sub" }, 6),
+          rec2("assistant_response", t(13), "p2", { response: "子 Agent 已启动,正在计算。", "message.uuid": "uuid-p2-main" }, 7),
+          // p3:task-notification 后主 agent 收尾
+          rec2("user_prompt", t(20), "p3", { prompt: "<task-notification>…</task-notification>" }, 8),
+          rec2("assistant_response", t(21), "p3", { response: "结果是 2。", "message.uuid": "uuid-p3-main" }, 9),
+        ],
+      }],
+    }],
+  }, { receivedAt: t(30), authenticatedUser: "e2e@example.com" })
+  appendClaudeOtelEvents(events)
+  appendClaudeOtelEvents(buildContextSupplementEvents(SID, [
+    {
+      kind: "subagent_map",
+      toolUseId: "call_async_1",
+      text: JSON.stringify({ toolUseId: "call_async_1", agentType: "general-purpose", spawnDepth: 1, messageUuids: ["uuid-async-sub"], toolUseIds: [] }),
+      hash: "h-map-async", capturedAt: t(30),
+    },
+    // async Task 的输出只是 interim 样板 —— 绝不该变成子 agent 的一轮
+    { kind: "tool_output", toolUseId: "call_async_1", text: "Async agent launched successfully. (interim)", hash: "h-async-out", capturedAt: t(11) },
+  ], { receivedAt: t(30), maxTextChars: 64000 }).events)
+
+  const record = aggregateClaudeOtelSession(SID).record!
+  const interactions = record.interactions as any[]
+
+  // ① task 调用挂在 p2 的发起轮,而不是 p1 的闲聊回复
+  const p1Turn = interactions.find((item) => item.role === "assistant" && /你好！/.test(item.content))
+  const p2Turn = interactions.find((item) => item.role === "assistant" && /已启动/.test(item.content))
+  assert.equal((p1Turn.tool_calls || []).length, 0, "p1 闲聊回复上不能有 task 调用")
+  assert.equal(p2Turn.tool_calls?.[0]?.id, "call_async_1", "task 调用挂在 p2 发起轮")
+
+  // ② 子 agent 只有映射来的那一轮,没有 interim 样板合成轮
+  const subTurns = interactions.filter((item) => item.role === "subagent")
+  assert.equal(subTurns.length, 1)
+  assert.equal(subTurns[0].content, "2")
+  assert.ok(!interactions.some((item) => /Async agent launched/.test(String(item.content))), "interim 样板不出现在任何轮次正文里")
+
+  // 树:一个 general-purpose 子节点,认领正常
+  const tree = buildAgentCallTree(interactions)!
+  assert.equal(tree.children.length, 1)
+  assert.equal(tree.stats.taskCalls, 1)
+})

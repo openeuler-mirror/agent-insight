@@ -888,12 +888,15 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
       let target = interactions.find((m) => Array.isArray(m.tool_calls) && m.tool_calls.some((tc: any) => tc.id === toolCall.id));
       // 读不到 api_response_body 的正文就拿不到 tool_use 块,tool_use_id 永远匹配不上,
       // 工具调用会全部滞留在 pendingToolResultById 里被丢掉(trace 只有对话没有工具)。
-      // 这种情况按时间就近挂到当前最后一条助手消息 —— 主循环按事件时间推进,那条正是
-      // 发起本次调用的一轮。正文可读的正常路径不能这么挂:那边 tool_result 先到、
-      // assistant 后产出,提前挂会挂到上一轮,所以仍走 pending 等合并。
+      // 这种情况就近挂到**同一个 prompt** 里最后一条助手消息。必须限定同 prompt:
+      // tool_result 常先于发起轮自己的 assistant_response 到达(async Task 启动即返回
+      // interim 结果、普通工具在消息流式输出中途完成),不限定就会挂到上一个 prompt 的
+      // 轮次上 —— 实测多轮会话里"启动子 agent"挂到了前一轮闲聊的回复上。
+      // 本 prompt 还没有助手轮就先 pending,发起轮落地时(fallback 分支)收口。
+      // 正文可读的正常路径不能这么挂:那边有 tool_use 块可精确匹配,仍走 pending 等合并。
       const responseBodyUsable = (usableResponseCountByPrompt.get(promptKey(event)) || 0) > 0;
       if (!target && (!toolCall.id || !responseBodyUsable)) {
-        target = [...interactions].reverse().find((m) => m.role === 'assistant');
+        target = [...interactions].reverse().find((m) => m.role === 'assistant' && m.prompt_id === event.promptId);
       }
       if (target) {
         mergeToolCallIntoInteraction(target, toolCall);
@@ -912,10 +915,10 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
         typeof toolId === 'string' &&
         !toolUse &&
         !subagentOutputByToolId.has(toolId) &&
-        !emittedSupplementSubagents.has(toolId) &&
-        // 逐轮映射已经把该子 agent 的真实轮次(含结论轮)归了位,再合成一条就是双份。
-        // 子 agent 的轮次事件先于它的 Task tool_result 到达,此处判空是可靠的。
-        !supplementTurnsByScope.get(`${event.sessionId}:${toolId}`)?.length
+        !emittedSupplementSubagents.has(toolId)
+        // 注意:这里**不能**用"scope 里已有映射轮次"当免合成判据 —— async Task 的
+        // tool_result 在启动时就到(interim 结果),映射轮次都在它之后,判空必然误判。
+        // 合成轮要不要保留,统一延到主循环结束后裁决(见下方追加处的过滤)。
       ) {
         const text = textFromContent(supplementToolOutputById.get(toolId) ?? toolCall.output);
         if (text.trim()) {
@@ -950,7 +953,12 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
 
   // 补传出来的子 agent 轮次统一放在最后:此时父轮上的 task 调用一定已经就位,建树能认领到。
   // (落库合并侧已改为"incoming 顺序优先",这里摆好的顺序能原样存进库。)
-  interactions.push(...pendingSupplementSubagents);
+  // 合成轮只在该 scope **没有**逐轮映射轮次时保留:有映射时子 agent 的真实轮次已齐,
+  // 合成轮的内容(Task 输出,async 时只是"launched"的 interim 样板)是纯噪声。
+  const keptSupplementSubagents = pendingSupplementSubagents.filter(
+    (turn) => !supplementTurnsByScope.get(turn.subagent_session_id)?.length,
+  );
+  interactions.push(...keptSupplementSubagents);
 
   // 逐轮归属的子 agent 轮次:按 spawnDepth 升序追加 —— depth 2 的认领要靠 depth 1
   // 轮次里挂的 task 调用先出现;同深度按首轮时间,保持时间线可读。
@@ -967,7 +975,7 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
   // 有映射、有内部工具事件,却始终没等来任何轮次(轮次日志丢失):挂到该 scope 合成的
   // 兜底轮上(有 Task 输出补传就有它),别让这批工具调用凭空消失。两头都没有才真丢。
   for (const [scope, calls] of pendingScopeToolCalls) {
-    const fallbackTurn = pendingSupplementSubagents.find((turn) => turn.subagent_session_id === scope);
+    const fallbackTurn = keptSupplementSubagents.find((turn) => turn.subagent_session_id === scope);
     if (!fallbackTurn) continue;
     for (const pendingCall of calls) mergeToolCallIntoInteraction(fallbackTurn, pendingCall);
   }
