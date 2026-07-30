@@ -518,7 +518,16 @@ async function runJob(state: OtelSpoolConsumerState, session: SessionState, mode
 
         const executionId = saved.record.upload_id || saved.record.task_id;
         if (executionId && result.record.trace_completed_at && result.record.final_result) {
-          await state.scheduleResultEvaluation(executionId, result.record.user);
+          // 只触发,不等它。结果质量评估本身就是后台任务(自己要过 withBackgroundOpencodeSlot 限流),
+          // 而裁判模型一次调用可能要几分钟。在单飞调度器里同步 await 它,等于让一条 trace 的评估
+          // 把所有人的入库都堵住 —— 包括刚上报进来的新 trace 的 fast save。
+          // 线上实测:单轮 10~29 分钟、吞吐掉到 ~6 条/小时,而 CPU 只有 7%(全在等网络)。
+          void state.scheduleResultEvaluation(executionId, result.record.user).catch((err) => {
+            state.warn('[OTelConsumer] result evaluation failed', {
+              executionId,
+              message: (err as Error)?.message || String(err),
+            });
+          });
         }
       }
     } catch (err) {
