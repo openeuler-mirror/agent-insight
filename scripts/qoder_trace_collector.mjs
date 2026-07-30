@@ -1612,7 +1612,9 @@ async function main() {
   await collectQoderHook(JSON.parse(raw.replace(/^\uFEFF/, "")))
 }
 
-const invokedPath = process.argv[1] ? pathToFileURL(path.resolve(process.argv[1])).href : ""
+const invokedPath = process.argv[1]
+  ? pathToFileURL(fs.realpathSync(path.resolve(process.argv[1]))).href
+  : ""
 if (import.meta.url === invokedPath) {
   main().catch((error) => {
     process.stderr.write(`agent-insight-qoder: ${error?.message || String(error)}\n`)

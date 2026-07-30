@@ -8,5 +8,10 @@ export const opencodeAdapter: FrameworkAdapter = {
     onboard: "plugin",
     platform: "opencode",
   },
+  capabilities: {
+    skills: true,
+    subagentTree: true,
+    skillScope: "agent-tree",
+  },
   extractSkills: extractSkillsWithVersionsFromOpencodeSession,
 }

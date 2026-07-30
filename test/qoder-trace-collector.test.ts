@@ -1553,6 +1553,62 @@ test("Qoder uploader deletes acknowledged snapshots and persists exponential ret
   }
 })
 
+test("Qoder uploader starts when its executable path crosses a symbolic link", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "qoder-uploader-realpath-"))
+  const canonicalRoot = fs.realpathSync(root)
+  const linkRoot = path.join(path.dirname(canonicalRoot), `${path.basename(canonicalRoot)}-link`)
+  const uploaderName = "qoder_uploader_client.mjs"
+  const uploaderPath = path.join(canonicalRoot, uploaderName)
+  const spoolDir = path.join(canonicalRoot, "spool")
+  let uploaderPid: number | undefined
+
+  try {
+    fs.copyFileSync(path.join(process.cwd(), "scripts", uploaderName), uploaderPath)
+    fs.mkdirSync(spoolDir, { recursive: true })
+    try {
+      fs.symlinkSync(
+        canonicalRoot,
+        linkRoot,
+        process.platform === "win32" ? "junction" : "dir",
+      )
+    } catch (error: any) {
+      if (error?.code === "EPERM" || error?.code === "EACCES") {
+        context.skip(`symbolic links are unavailable: ${error.code}`)
+        return
+      }
+      throw error
+    }
+
+    const uploader = spawn(
+      process.execPath,
+      [path.join(linkRoot, uploaderName), "--watch", "--interval-ms=60000"],
+      {
+        env: {
+          ...process.env,
+          AGENT_INSIGHT_HOST: "http://127.0.0.1:9",
+          AGENT_INSIGHT_QODER_SPOOL_DIR: spoolDir,
+        },
+        stdio: "ignore",
+        windowsHide: true,
+      },
+    )
+    uploaderPid = uploader.pid
+    assert.ok(uploaderPid)
+    await waitForCondition(
+      () => fs.existsSync(path.join(spoolDir, "uploader.lock")),
+      5_000,
+    )
+    assert.equal(testProcessIsAlive(uploaderPid), true)
+  } finally {
+    if (testProcessIsAlive(uploaderPid)) {
+      try { process.kill(Number(uploaderPid), "SIGTERM") } catch {}
+      await waitForCondition(() => !testProcessIsAlive(uploaderPid), 5_000).catch(() => {})
+    }
+    try { fs.unlinkSync(linkRoot) } catch {}
+    fs.rmSync(canonicalRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+  }
+})
+
 test("Qoder deactivation flush snapshots active sessions and uploads pending data", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "qoder-flush-"))
   try {

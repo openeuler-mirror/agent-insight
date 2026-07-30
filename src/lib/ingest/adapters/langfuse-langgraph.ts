@@ -11,6 +11,7 @@ export const langfuseLangGraphAdapter: FrameworkAdapter = {
   capabilities: {
     skills: true,
     subagentTree: true,
+    skillScope: "agent-tree",
   },
   sessionMergeStrategy: "snapshot-replace",
   extractSkills: extractSkillsWithVersionsFromOpencodeSession,

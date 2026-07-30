@@ -292,7 +292,9 @@ function main() {
   process.stdout.write("       node qoder_work_setup.mjs uninstall [--purge]\n")
 }
 
-const invokedPath = process.argv[1] ? pathToFileURL(path.resolve(process.argv[1])).href : ""
+const invokedPath = process.argv[1]
+  ? pathToFileURL(fs.realpathSync(path.resolve(process.argv[1]))).href
+  : ""
 if (import.meta.url === invokedPath) {
   try {
     main()

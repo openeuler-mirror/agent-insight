@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
 import fs from "node:fs"
+import os from "node:os"
 import path from "node:path"
 import test from "node:test"
 
@@ -130,6 +131,39 @@ test("Qoder JetBrains download serves only a compiled plugin ZIP cached by sourc
     assert.ok(new AdmZip(jarEntry!.getData()).getEntry("META-INF/plugin.xml"))
   } finally {
     fs.rmSync(info.cachePath, { force: true })
+  }
+})
+
+test("Qoder JetBrains download returns an actionable 503 without a build environment", async () => {
+  const info = await getQoderPluginPackageBuildInfo("jetbrains")
+  const emptyPath = fs.mkdtempSync(path.join(os.tmpdir(), "qoder-no-java-"))
+  const previousPath = process.env.PATH
+  const previousJetBrainsHome = process.env.JETBRAINS_HOME
+  const previousConsoleError = console.error
+  fs.rmSync(info.cachePath, { force: true })
+
+  try {
+    process.env.PATH = emptyPath
+    delete process.env.JETBRAINS_HOME
+    console.error = () => {}
+
+    const response = await getQoderJetBrainsPlugin()
+
+    assert.equal(response.status, 503)
+    assert.equal(response.headers.get("content-type"), "text/plain; charset=utf-8")
+    assert.equal(
+      await response.text(),
+      "Qoder JetBrains plugin build requires JETBRAINS_HOME or a Java/Gradle build environment",
+    )
+    assert.equal(fs.existsSync(info.cachePath), false)
+  } finally {
+    console.error = previousConsoleError
+    if (previousPath === undefined) delete process.env.PATH
+    else process.env.PATH = previousPath
+    if (previousJetBrainsHome === undefined) delete process.env.JETBRAINS_HOME
+    else process.env.JETBRAINS_HOME = previousJetBrainsHome
+    fs.rmSync(info.cachePath, { force: true })
+    fs.rmSync(emptyPath, { recursive: true, force: true })
   }
 })
 

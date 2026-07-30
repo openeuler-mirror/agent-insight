@@ -120,6 +120,9 @@ export function buildDesktopVsix(outputPath) {
 
 if (process.argv.includes("--help")) {
   process.stdout.write("Usage: node build-vsix.mjs [--output <path>]\n")
-} else if (path.resolve(process.argv[1] || "") === fileURLToPath(import.meta.url)) {
+} else if (
+  process.argv[1]
+  && fs.realpathSync(path.resolve(process.argv[1])) === fs.realpathSync(fileURLToPath(import.meta.url))
+) {
   process.stdout.write(`${buildDesktopVsix(argumentValue("--output"))}\n`)
 }

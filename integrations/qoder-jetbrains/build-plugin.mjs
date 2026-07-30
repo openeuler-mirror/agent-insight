@@ -170,7 +170,10 @@ if (process.argv.includes("--help")) {
       "",
     ].join("\n"),
   )
-} else if (path.resolve(process.argv[1] || "") === fileURLToPath(import.meta.url)) {
+} else if (
+  process.argv[1]
+  && fs.realpathSync(path.resolve(process.argv[1])) === fs.realpathSync(fileURLToPath(import.meta.url))
+) {
   const destination = buildJetBrainsPlugin({
     ideHome: argumentValue("--ide-home"),
     outputPath: argumentValue("--output"),

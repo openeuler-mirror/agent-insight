@@ -24,6 +24,7 @@ export const qoderAdapter: FrameworkAdapter = {
   capabilities: {
     skills: true,
     subagentTree: true,
+    skillScope: "agent-tree",
     allowSnapshotShrink: true,
   },
   sessionMergeStrategy: "snapshot-replace",

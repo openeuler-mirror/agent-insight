@@ -138,9 +138,10 @@ async function resolvePackage(kind: QoderPluginPackage): Promise<{
 
   try {
     return { content: await pending, info }
-  } catch (error) {
-    buildPromises.delete(cacheKey)
-    throw error
+  } finally {
+    if (buildPromises.get(cacheKey) === pending) {
+      buildPromises.delete(cacheKey)
+    }
   }
 }
 
