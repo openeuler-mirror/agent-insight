@@ -2134,7 +2134,7 @@ test("Qoder OTLP adapter replaces an older session snapshot with the latest comp
   assert.equal(record.final_result, "第二次完成")
   assert.equal(record.latency, 60)
   assert.equal(record.force_query_update, true)
-  assert.equal(record.allow_snapshot_shrink, true)
+  assert.equal(Object.hasOwn(record, "allow_snapshot_shrink"), false)
 })
 
 test("Qoder Task and Subagent hooks restore multi-level parent-child relationships", () => {
@@ -2397,6 +2397,7 @@ test("Qoder framework and OTLP registries expose plugin onboarding and snapshot 
   assert.equal(framework.sessionMergeStrategy, "snapshot-replace")
   assert.equal(framework.capabilities?.skills, true)
   assert.equal(framework.capabilities?.subagentTree, true)
+  assert.equal(framework.capabilities?.allowSnapshotShrink, true)
   assert.deepEqual(listOtelTraceAdapters().map((adapter) => adapter.id), ["langfuse-langgraph", "hermes", "openclaw", "qoder", "generic"])
 })
 

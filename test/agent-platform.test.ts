@@ -12,9 +12,11 @@ test('Agent management recognizes Qoder as a supported platform', () => {
   assert.equal(normalizeAgentPlatform(' Qoder '), 'qoder');
 });
 
-test('Agent management preserves existing platforms and keeps the legacy fallback', () => {
+test('Agent management preserves existing platforms and labels unregistered platforms as unknown', () => {
   assert.equal(normalizeAgentPlatform('opencode'), 'opencode');
   assert.equal(normalizeAgentPlatform('openclaw'), 'openclaw');
   assert.equal(normalizeAgentPlatform('hermes'), 'hermes');
-  assert.equal(normalizeAgentPlatform('unknown'), 'opencode');
+  assert.equal(normalizeAgentPlatform('unknown'), 'unknown');
+  assert.equal(normalizeAgentPlatform('future-agent'), 'unknown');
+  assert.equal(normalizeAgentPlatform(null), 'unknown');
 });

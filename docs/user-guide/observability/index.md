@@ -86,7 +86,7 @@ CodeAgent 当前会同时发出 Logs、Traces 和 Metrics，且内部配置会�
 
 四种产品形态使用同一套 OTLP Trace 结构，但安装入口和 spool 相互隔离。CLI、Desktop、JetBrains 和 Work 的数据统一位于 `~/.agent-insight/otel_data/qoder/<product>/<api-key-hash>/`。切换 API Key 后会自动使用新的摘要子目录，不会混用不同产品、不同账号的 pending、retry 或 uploader lock。升级前的 `qoder-{product}` 目录只作为兼容清理目标，不再写入新数据。
 
-在平台的“安装指导”中执行 curl/PowerShell 安装命令，或使用本地制作的 Agent Insight npm 包执行 `npx agent-insight install` 时，可在不影响原有框架选项的前提下勾选 **Qoder CN product family**。安装器会配置 CLI、Desktop、JetBrains 和 Work 的 Hook、运行脚本及上传器。安装成功后会输出 Desktop VSIX 和 JetBrains ZIP 的服务端下载地址及安装步骤；本地 npm 包会通过 `public/qoder-plugins/` 携带这两个安装包。
+在平台的“安装指导”中执行 curl/PowerShell 安装命令，或使用本地制作的 Agent Insight npm 包执行 `npx agent-insight install` 时，可在不影响原有框架选项的前提下勾选 **Qoder CN product family**。安装器会配置 CLI、Desktop、JetBrains 和 Work 的 Hook、运行脚本及上传器。安装成功后会输出 Desktop VSIX 和 JetBrains ZIP 的服务端下载地址及安装步骤。服务端从 `integrations/qoder-desktop/` 和 `integrations/qoder-jetbrains/` 源码构建安装包，并按源码修改时间缓存到 `.next/cache/qoder-plugins/`，仓库及本地 npm 包不再携带预编译二进制。
 
 ### Qoder CN Desktop
 
@@ -100,6 +100,12 @@ http://<Agent-Insight-Host>/api/ingest/setup/qoder-desktop-vsix
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File integrations/qoder-desktop/build-vsix.ps1
+```
+
+Linux/macOS 使用同一 Node 构建器：
+
+```bash
+integrations/qoder-desktop/build-vsix.sh
 ```
 
 在 Qoder CN Desktop 的 Extensions 面板选择 **Install from VSIX**，安装 `integrations/qoder-desktop/build/distributions/agent-insight-qoder-desktop-<version>.vsix`。安装后状态栏出现 `Agent Insight`，Settings 中出现 `Agent Insight Qoder CN Collector`。点击状态栏可配置服务地址和 API Key；API Key 写入扩展 SecretStorage，同时同步给本机采集进程。扩展把用户级 Hook 写入 `~/.qoder-cn/settings.json`，读取 `~/.qoder-cn/cache/projects/.../conversation-history/` 会话记录，并在 Windows 上只读查询 `%APPDATA%/QoderCN/SharedClientCache/cache/db/local.db` 的精确 Token。通过 `/skill-name` 手动触发的 Skill 会从 Qoder CN transcript 的 slash-command 元数据还原，在 Trace 中显示 Skill 名称、版本、触发方式、参数和结果。扩展停用或 Qoder CN Desktop 退出时，会把尚未结束的活动会话生成最后一份 snapshot，并等待一次强制上传；网络失败时 pending 文件仍保留在 spool，下一次启动继续重试。卸载监视器只清理 Desktop owner 与 `qoder/desktop` spool；CLI、JetBrains、Work 不受影响。
@@ -122,7 +128,7 @@ node scripts/qoder_setup.mjs uninstall --scope=user --product=cli --owner=cli --
 
 ### Qoder for JetBrains
 
-可从 `http://<Agent-Insight-Host>/api/ingest/setup/qoder-jetbrains-plugin` 下载 ZIP，或使用 `integrations/qoder-jetbrains/build-plugin.ps1 -IdeHome <JetBrains-IDE目录>` 从源码构建。然后在 JetBrains IDE 的 Plugins 页面选择 **Install Plugin from Disk**，选择下载的 ZIP 并重启 IDE。插件安装后显示 Agent Insight 状态栏和设置项，并通过 IDE 进程 marker 将共享 Qoder transcript 标记为 `Qoder for JetBrains`。IDE 关闭、应用服务销毁或插件动态卸载前，插件都会先执行同样的活动会话 snapshot 与强制上传；失败数据继续留在 pending spool。插件动态卸载完成后只移除 `jetbrains` owner、marker、运行目录与 `qoder/jetbrains` spool。
+可从 `http://<Agent-Insight-Host>/api/ingest/setup/qoder-jetbrains-plugin` 下载 ZIP，或在 Windows 使用 `integrations/qoder-jetbrains/build-plugin.ps1 -IdeHome <JetBrains-IDE目录>`、在 Linux/macOS 使用 `JETBRAINS_HOME=<JetBrains-IDE目录> integrations/qoder-jetbrains/build-plugin.sh` 从源码构建。JetBrains 插件必须依赖 IntelliJ Platform SDK 编译 Java 并生成插件 JAR，不能把 Java 源码直接压缩成可安装 ZIP；服务端缺少 `JETBRAINS_HOME` 或 Java/Gradle 构建环境时，下载接口会返回明确的 503 提示。然后在 JetBrains IDE 的 Plugins 页面选择 **Install Plugin from Disk**，选择下载的 ZIP 并重启 IDE。插件安装后显示 Agent Insight 状态栏和设置项，并通过 IDE 进程 marker 将共享 Qoder transcript 标记为 `Qoder for JetBrains`。IDE 关闭、应用服务销毁或插件动态卸载前，插件都会先执行同样的活动会话 snapshot 与强制上传；失败数据继续留在 pending spool。插件动态卸载完成后只移除 `jetbrains` owner、marker、运行目录与 `qoder/jetbrains` spool。
 
 ### Qoder Work CN
 

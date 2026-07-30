@@ -46,6 +46,8 @@ test("registry adapters keep direct references to existing functions", () => {
   assert.equal(getAdapter("codeagent").extractSkills, extractSkillsWithVersionsFromOpencodeSession)
   assert.equal(getAdapter("codeagent").capabilities?.subagentTree, true)
   assert.equal(getAdapter("openclaw").extractSkills, extractSkillsWithVersionsFromOpenClawSession)
+  assert.equal(getAdapter("qoder").capabilities?.subagentTree, true)
+  assert.equal(getAdapter("qoder").capabilities?.allowSnapshotShrink, true)
 })
 
 test("registry adapters match golden skill extraction outputs", () => {

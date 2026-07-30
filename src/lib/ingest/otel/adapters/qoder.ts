@@ -405,7 +405,6 @@ export function aggregateQoderOtelTraceEvents(sessionId: string, allEvents: Otel
     // Each upload is the current turn snapshot, so it must be allowed to replace
     // a larger previous turn and refresh the stored query.
     force_query_update: true,
-    allow_snapshot_shrink: true,
     session_merge_strategy: 'snapshot-replace',
   };
 }

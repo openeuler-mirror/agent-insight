@@ -14,6 +14,7 @@ export interface FrameworkDescriptor {
 export interface FrameworkCapabilities {
   skills?: boolean
   subagentTree?: boolean
+  allowSnapshotShrink?: boolean
 }
 
 export interface FrameworkAdapter {

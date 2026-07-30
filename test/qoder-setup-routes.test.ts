@@ -4,10 +4,13 @@ import fs from "node:fs"
 import path from "node:path"
 import test from "node:test"
 
+import AdmZip from "adm-zip"
+
 import { GET as getSetup } from "@/app/api/ingest/setup/route"
 import { GET as getAutoSetup } from "@/app/api/ingest/setup/auto/route"
 import { GET as getQoderDesktopVsix } from "@/app/api/ingest/setup/qoder-desktop-vsix/route"
 import { GET as getQoderJetBrainsPlugin } from "@/app/api/ingest/setup/qoder-jetbrains-plugin/route"
+import { getQoderPluginPackageBuildInfo } from "@/lib/ingest/qoder-plugin-package"
 
 const QODER_COMPONENTS = [
   "qoder_setup.mjs",
@@ -64,32 +67,124 @@ test("Qoder setup components are served from an explicit allowlist", async () =>
   assert.equal(rejected.status, 404)
 })
 
-test("Qoder Desktop VSIX and JetBrains ZIP are exposed as fixed attachment downloads", async () => {
-  const packages = [
+test("Qoder Desktop VSIX is built from source and served from the source-mtime cache", async () => {
+  const info = await getQoderPluginPackageBuildInfo("desktop")
+  fs.rmSync(info.cachePath, { force: true })
+
+  try {
+    const response = await getQoderDesktopVsix()
+    const actual = Buffer.from(await response.arrayBuffer())
+    const archive = new AdmZip(actual)
+    const entries = new Set(archive.getEntries().map((entry) => entry.entryName))
+
+    assert.equal(response.status, 200)
+    assert.equal(response.headers.get("content-type"), "application/octet-stream")
+    assert.equal(response.headers.get("content-disposition"), `attachment; filename="${info.filename}"`)
+    assert.equal(response.headers.get("content-length"), String(actual.byteLength))
+    assert.equal(response.headers.get("x-content-type-options"), "nosniff")
+    assert.ok(entries.has("extension.vsixmanifest"))
+    assert.ok(entries.has("extension/package.json"))
+    assert.ok(entries.has("extension/extension.js"))
+    assert.ok(entries.has("extension/collector/qoder_trace_collector.mjs"))
+    assert.ok(entries.has("extension/collector/qoder_uploader_client.mjs"))
+    assert.equal(fs.existsSync(info.cachePath), true)
+    assert.ok(fs.statSync(info.cachePath).mtimeMs >= info.sourceMtimeMs)
+  } finally {
+    fs.rmSync(info.cachePath, { force: true })
+  }
+})
+
+test("Qoder JetBrains download serves only a compiled plugin ZIP cached by source mtime", async () => {
+  const info = await getQoderPluginPackageBuildInfo("jetbrains")
+  fs.mkdirSync(path.dirname(info.cachePath), { recursive: true })
+  fs.rmSync(info.cachePath, { force: true })
+
+  try {
+    const compiledJar = new AdmZip()
+    compiledJar.addFile(
+      "META-INF/plugin.xml",
+      Buffer.from("<idea-plugin><id>org.openeuler.agentinsight.qoder.jetbrains</id></idea-plugin>"),
+    )
+    const pluginArchive = new AdmZip()
+    pluginArchive.addFile(
+      "agent-insight-qoder-jetbrains/lib/agent-insight-qoder-jetbrains.jar",
+      compiledJar.toBuffer(),
+    )
+    pluginArchive.writeZip(info.cachePath)
+    const freshTime = new Date(info.sourceMtimeMs + 1_000)
+    fs.utimesSync(info.cachePath, freshTime, freshTime)
+
+    const response = await getQoderJetBrainsPlugin()
+    const actual = Buffer.from(await response.arrayBuffer())
+    const archive = new AdmZip(actual)
+    const jarEntry = archive.getEntry(
+      "agent-insight-qoder-jetbrains/lib/agent-insight-qoder-jetbrains.jar",
+    )
+
+    assert.equal(response.status, 200)
+    assert.equal(response.headers.get("content-type"), "application/zip")
+    assert.equal(response.headers.get("content-disposition"), `attachment; filename="${info.filename}"`)
+    assert.equal(response.headers.get("content-length"), String(actual.byteLength))
+    assert.equal(response.headers.get("x-content-type-options"), "nosniff")
+    assert.ok(jarEntry, "JetBrains package must contain a compiled plugin JAR")
+    assert.ok(new AdmZip(jarEntry!.getData()).getEntry("META-INF/plugin.xml"))
+  } finally {
+    fs.rmSync(info.cachePath, { force: true })
+  }
+})
+
+test("Qoder plugin builders expose platform-neutral Node and shell entry points", () => {
+  const packageManifest = JSON.parse(
+    fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8"),
+  )
+  assert.ok(packageManifest.files.includes("integrations/qoder-desktop/build-vsix.mjs"))
+  assert.ok(packageManifest.files.includes("integrations/qoder-desktop/extension.js"))
+  assert.ok(packageManifest.files.includes("integrations/qoder-jetbrains/build-plugin.mjs"))
+  assert.ok(packageManifest.files.includes("integrations/qoder-jetbrains/src/"))
+  assert.equal(
+    packageManifest.files.some((entry: string) => entry.includes("/build/")),
+    false,
+    "npm package must not include precompiled plugin artifacts",
+  )
+
+  const builders = [
     {
-      get: getQoderDesktopVsix,
-      filename: "agent-insight-qoder-desktop-0.1.12.vsix",
-      contentType: "application/octet-stream",
+      root: "qoder-desktop",
+      script: "build-vsix.mjs",
+      expected: /Usage: node build-vsix\.mjs/,
     },
     {
-      get: getQoderJetBrainsPlugin,
-      filename: "agent-insight-qoder-jetbrains-0.1.9.zip",
-      contentType: "application/zip",
+      root: "qoder-jetbrains",
+      script: "build-plugin.mjs",
+      expected: /JBR compiler[\s\S]*Gradle buildPlugin/,
     },
   ]
 
-  for (const pluginPackage of packages) {
-    const response = await pluginPackage.get()
-    const expected = fs.readFileSync(path.join(process.cwd(), "public", "qoder-plugins", pluginPackage.filename))
-    const actual = Buffer.from(await response.arrayBuffer())
+  for (const builder of builders) {
+    const integrationRoot = path.join(process.cwd(), "integrations", builder.root)
+    const nodeResult = spawnSync(
+      process.execPath,
+      [path.join(integrationRoot, builder.script), "--help"],
+      { encoding: "utf8" },
+    )
+    assert.equal(nodeResult.status, 0, nodeResult.stderr || nodeResult.stdout)
+    assert.match(nodeResult.stdout, builder.expected)
 
-    assert.equal(response.status, 200)
-    assert.equal(response.headers.get("content-type"), pluginPackage.contentType)
-    assert.equal(response.headers.get("content-disposition"), `attachment; filename="${pluginPackage.filename}"`)
-    assert.equal(response.headers.get("content-length"), String(expected.byteLength))
-    assert.equal(response.headers.get("x-content-type-options"), "nosniff")
-    assert.deepEqual(actual, expected)
+    const shellScript = path.join(
+      integrationRoot,
+      builder.root === "qoder-desktop" ? "build-vsix.sh" : "build-plugin.sh",
+    )
+    const shellResult = spawnSync("bash", ["-n", shellScript], { encoding: "utf8" })
+    assert.equal(shellResult.status, 0, shellResult.stderr || shellResult.stdout)
   }
+
+  const jetBrainsBuilder = fs.readFileSync(
+    path.join(process.cwd(), "integrations", "qoder-jetbrains", "build-plugin.mjs"),
+    "utf8",
+  )
+  assert.match(jetBrainsBuilder, /javac/)
+  assert.match(jetBrainsBuilder, /buildPlugin/)
+  assert.doesNotMatch(jetBrainsBuilder, /src\/main\/java[\s\S]*writeZip/)
 })
 
 test("install guide appends Qoder to the existing framework choices", () => {
