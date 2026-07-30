@@ -39,10 +39,11 @@ export async function GET(
       if (Array.isArray(parsed)) evaluatorIds = parsed.map(String);
     } catch { /* 忽略脏数据 */ }
 
-    // 聚合口径按全量结果算（轻量选列，不取 points/evidence）
+    // 聚合口径按全量结果算（轻量选列，不取 points/evidence）。
+    // humanScore 必须一起取——聚合走生效分（humanScore ?? score），漏了它人工修正就不生效。
     const allResults = await prisma.experimentEvalResult.findMany({
       where: { experimentId: id },
-      select: { caseId: true, evaluatorId: true, status: true, score: true },
+      select: { caseId: true, evaluatorId: true, status: true, score: true, humanScore: true },
     });
     const progress = {
       total: allResults.length,
@@ -96,9 +97,15 @@ export async function GET(
         caseId: r.caseId,
         evaluatorId: r.evaluatorId,
         status: r.status,
+        verdict: r.verdict,
+        summary: r.summary,
         score: r.score,
         points: parseJson(r.pointsJson),
         evidence: parseJson(r.evidenceJson),
+        humanScore: r.humanScore,
+        humanReason: r.humanReason,
+        humanBy: r.humanBy,
+        humanAt: r.humanAt,
         errorMessage: r.errorMessage,
         attempts: r.attempts,
         durationMs: r.durationMs,

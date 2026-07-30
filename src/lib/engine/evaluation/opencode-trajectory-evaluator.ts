@@ -114,6 +114,12 @@ const COORDINATOR_SYSTEM_PROMPT = `你是 Agent Insight 的「关键动作轨迹
 - dimension_details 中必须给出每个维度的 score 和 explanation；如有具体问题，放入 missing_steps / problematic_steps / heavy_repeated_calls 等数组，供前端展开。
 - dimension_details.redundancy.consecutive_same_runs 每项必须包含 name、count、from、to；heavy_repeated_calls 每项必须包含 call、count。name/call 必须来自 actual_flat_trace_steps 的 name 字段，不能留空。
 - reason_text 是前端顶部「执行路径分析」绿色框的正文，必须总结完整性、工具选择、冗余，以及关键偏差；不要只写关键动作覆盖数量。
+- conclusion 是**给人看的一句话结论**（另一处界面默认只展示它、明细全部折叠），与 reason_text 分工不同：
+  · 说人话，不要出现"完整性(0.60)""维度""冗余度"这类分数与术语，就当是在跟同事口头汇报这条执行路径怎么样；
+  · 先说这次执行靠不靠谱，再说最要命的那一个问题；只讲一条，别把三个维度都复述一遍；
+  · 讲具体的（漏了哪一步、该用什么却用了什么、哪个调用重复刷屏），不要"存在一定冗余"这种空话；
+  · ≤80 字。反例：「完整性 0.6，工具选择部分合理，存在一定冗余。」——等于什么都没说。
+    正例：「该查的日志基本查全了，但漏了统计来源 IP 那一步，而且同一个 grep 连着跑了 7 次在空转。」
 
 【最终输出】只输出下面 schema 对应的严格 JSON：
 \`\`\`json
@@ -128,6 +134,7 @@ const COORDINATOR_SYSTEM_PROMPT = `你是 Agent Insight 的「关键动作轨迹
     "not_applicable_count": 0
   },
   "reason_text": "完整性(0.60)：5 个关键动作中 2 个覆盖、1 个部分覆盖、2 个缺失，缺失项会影响主流程闭环。工具选择(0.5 部分合理)：大多数工具调用与任务相关，但个别该用 Skill 脚本处用了裸命令。冗余(0.5 一定冗余)：存在部分重复或绕路，未形成连续重复调用。关键偏差：存在 high 严重度关键动作缺失，应优先修正。",
+  "conclusion": "该查的日志基本查全了，但漏了统计来源 IP 那一步，而且同一个 grep 连着跑了 7 次在空转。",
   "dimension_scores": {
     "completeness": 0.6,
     "tool_choice": 0.5,
@@ -446,6 +453,8 @@ function normalizeOutput(
     );
     const reasonText = String(parsed.reason_text || parsed.reasonText || '').trim()
         || buildFallbackReasonText(parsed, dimensionScores, scoreAggregation);
+    // 一句话结论：实验卡头用它；模型没给就留空，由消费方回落 reasonText
+    const conclusionText = String(parsed.conclusion || parsed.conclusionText || '').trim() || undefined;
 
     const deviationSteps: TrajectoryDeviationStep[] = [];
 
@@ -457,6 +466,7 @@ function normalizeOutput(
         deviationSteps,
         keyActionResults,
         reasonText,
+        conclusionText,
         rawAnalysis: {
             ...parsed,
             schema_version: parsed.schema_version || (traceOnly ? 'trace-only-analysis@1.0' : 'key-action-trace-analysis@1.0'),

@@ -1,11 +1,13 @@
 'use client';
 
 // 单组实验详情正式版：状态条 → 整体表现（综合均分）→ 评估器分解（单色条 + N/M 计入）
-// → Case 明细表（综合/结果/轨迹得分 + sticky 操作列：详情 / 重评失败行）。
-// 聚合口径统一走 src/lib/engine/experiment/detail-agg.ts（有分才入均分）。
+// → Case 明细表（综合/结果/轨迹得分 + sticky 操作列：详情 / 重评失败行）→ 实验级评论。
+// 聚合口径统一走 src/lib/engine/experiment/detail-agg.ts（有分才入均分，分 = humanScore ?? score）。
 import Link from 'next/link';
 import { use, useCallback, useEffect, useMemo, useState } from 'react';
 
+import { AddExperimentCasesDialog } from '@/components/eval/AddExperimentCasesDialog';
+import { EvalComments, filterComments, type EvalCommentRow } from '@/components/eval/EvalComments';
 import { useEvaluatorLookup } from '@/components/eval/useEvaluatorLookup';
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { PageContainer } from '@/components/shell/PageContainer';
@@ -39,6 +41,7 @@ interface ExperimentDetail {
     score: number | null;
     points: unknown;
     evidence: unknown;
+    humanScore: number | null;
     errorMessage: string | null;
     attempts: number;
     durationMs: number | null;
@@ -100,6 +103,24 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
   const [retryingCaseId, setRetryingCaseId] = useState('');
   const [casePage, setCasePage] = useState(1);
   const [casePageSize, setCasePageSize] = useState(20);
+  const [addCasesOpen, setAddCasesOpen] = useState(false);
+  const [notice, setNotice] = useState('');
+  const [comments, setComments] = useState<EvalCommentRow[]>([]);
+
+  const loadComments = useCallback(async () => {
+    if (!user) return;
+    try {
+      const res = await apiFetch(
+        `/api/experiments/${encodeURIComponent(id)}/comments?user=${encodeURIComponent(user)}&scope=all`,
+      );
+      const data = await res.json();
+      setComments(Array.isArray(data?.items) ? data.items : []);
+    } catch {
+      setComments([]);
+    }
+  }, [user, id]);
+
+  useEffect(() => { loadComments(); }, [loadComments]);
 
   const load = useCallback(async (silent = false) => {
     if (!user) return;
@@ -205,6 +226,12 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
       scores: caseScore(detail.results.filter((r) => r.caseId === c.id), lookup.categoryOf),
     }));
   }, [detail, lookup]);
+
+  // 本实验是否含依赖参考数据的评估器——新增 case 时据此提示"不标注参考答案会不记分"
+  const needsReference = useMemo(
+    () => (detail?.evaluatorIds ?? []).some((eid) => lookup.requiresReference(eid)),
+    [detail, lookup],
+  );
 
   const caseTotal = detail?.caseTotal ?? 0;
   const totalPages = Math.max(1, Math.ceil(caseTotal / casePageSize));
@@ -362,6 +389,9 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
                         {row.failed > 0 && (
                           <span style={{ display: 'block', color: 'var(--error)' }}>{row.failed} 项评估失败</span>
                         )}
+                        {row.adjusted > 0 && (
+                          <span style={{ display: 'block', color: 'var(--warning)' }}>{row.adjusted} 项人工修正</span>
+                        )}
                       </span>
                     </div>
                   ))}
@@ -371,8 +401,23 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
 
             {/* Case 明细表 */}
             <div style={{ ...CARD, overflow: 'hidden' }}>
-              <div style={{ padding: '11px 16px', borderBottom: '1px solid var(--border)', fontSize: 12.5, fontWeight: 600 }}>
-                Case 明细
+              <div style={{
+                padding: '11px 16px', borderBottom: '1px solid var(--border)',
+                display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+              }}>
+                <span style={{ fontSize: 12.5, fontWeight: 600 }}>Case 明细</span>
+                {notice && (
+                  <span style={{ fontSize: 11.5, color: 'var(--success, var(--accent))' }}>{notice}</span>
+                )}
+                <span style={{ flex: 1 }} />
+                <button
+                  onClick={() => { setNotice(''); setAddCasesOpen(true); }}
+                  style={{
+                    ...ACTION_BTN, color: 'var(--accent)', borderColor: 'var(--accent)', fontWeight: 600,
+                  }}
+                >
+                  + 新增 Case
+                </button>
               </div>
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 960 }}>
@@ -399,7 +444,17 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
                         <td style={{ ...TD, maxWidth: 280, color: 'var(--foreground-secondary)' }}>
                           {truncate(c.actualOutput, 80)}
                         </td>
-                        <td style={{ ...TD, fontWeight: 700 }}>{fmtScore(c.scores.overall)}</td>
+                        <td style={{ ...TD, fontWeight: 700 }}>
+                          {fmtScore(c.scores.overall)}
+                          {c.scores.adjusted > 0 && (
+                            <span
+                              title={`${c.scores.adjusted} 项评估被人工修正，该分数按人工分算`}
+                              style={{ marginLeft: 4, fontSize: 10, fontWeight: 600, color: 'var(--warning)' }}
+                            >
+                              人工
+                            </span>
+                          )}
+                        </td>
                         <td style={TD}>{fmtScore(c.scores.res)}</td>
                         <td style={TD}>{fmtScore(c.scores.traj)}</td>
                         <td style={{
@@ -485,6 +540,32 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
                 </div>
               )}
             </div>
+
+            {/* 实验级评论（针对单个 case / 单个评估器的意见留在各自详情页） */}
+            {user && (
+              <div style={{ ...CARD, padding: '14px 16px', marginTop: 14 }}>
+                <EvalComments
+                  experimentId={id}
+                  user={user}
+                  comments={filterComments(comments, {})}
+                  onChanged={loadComments}
+                  title="本次评测的评论"
+                  placeholder="对这次评测整体结果的意见或建议…"
+                />
+              </div>
+            )}
+
+            {/* 条件挂载：每次打开都是新实例，勾选/标注状态自动重置 */}
+            {user && addCasesOpen && (
+              <AddExperimentCasesDialog
+                onClose={() => setAddCasesOpen(false)}
+                onAdded={(msg) => { setNotice(msg); load(true); }}
+                experimentId={id}
+                agentName={detail.agentName}
+                user={user}
+                needsReference={needsReference}
+              />
+            )}
           </>
         )}
       </PageContainer>

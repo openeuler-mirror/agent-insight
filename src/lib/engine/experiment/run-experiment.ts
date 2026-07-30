@@ -36,6 +36,28 @@ import {
 } from './faithful-preset-evaluators';
 import { isResultPresetId, runResultPreset } from './result-preset-evaluators';
 
+/**
+ * 重跑/重评前把结果行清回 pending 的字段集。
+ *
+ * 人工修正分一并清除：它修正的是**那一次**评估结果，重评产出的是新结果——留着旧
+ * 修正会算出错误的均分（机器改判 85 时，按当初对 60 分做的 80 分修正反而把分拉低）。
+ * 入口需向用户明示「重评会清除该行的人工修正」。
+ */
+const RESET_RESULT_FIELDS = {
+  status: 'pending',
+  verdict: null,
+  summary: null,
+  score: null,
+  pointsJson: null,
+  evidenceJson: null,
+  humanScore: null,
+  humanReason: null,
+  humanBy: null,
+  humanAt: null,
+  errorMessage: null,
+  durationMs: null,
+} as const;
+
 /** 引擎参数（测试可改小重试退避/超时；生产用默认值）。 */
 export const experimentEngineConfig = {
   /** 可重试失败的退避序列；长度 = 最大重试次数（默认 2 次重试 → 最多 3 次尝试） */
@@ -271,6 +293,10 @@ export async function executeResultRow(user: string, resultId: string): Promise<
         where: { id: resultId },
         data: {
           status: 'done',
+          // 结论：评估器没上报 verdict 就存 null，呈现层按 deriveVerdict(score) 派生，
+          // 这样调整阈值口径不需要重刷历史数据。
+          verdict: out.verdict ?? null,
+          summary: out.summary ?? null,
           score: out.score ?? null,
           pointsJson: out.points ? JSON.stringify(out.points) : null,
           evidenceJson: out.evidence ? JSON.stringify(out.evidence) : null,
@@ -374,14 +400,7 @@ export async function startExperimentRun(
         const row = await prisma.experimentEvalResult.upsert({
           where: { caseId_evaluatorId: { caseId: c.id, evaluatorId } },
           create: { experimentId, caseId: c.id, evaluatorId, status: 'pending' },
-          update: {
-            status: 'pending',
-            score: null,
-            pointsJson: null,
-            evidenceJson: null,
-            errorMessage: null,
-            durationMs: null,
-          },
+          update: { ...RESET_RESULT_FIELDS },
           select: { id: true },
         });
         resultIds.push(row.id);
@@ -442,14 +461,7 @@ export async function retryResultRow(
 
   await prisma.experimentEvalResult.update({
     where: { id: resultId },
-    data: {
-      status: 'pending',
-      score: null,
-      pointsJson: null,
-      evidenceJson: null,
-      errorMessage: null,
-      durationMs: null,
-    },
+    data: { ...RESET_RESULT_FIELDS },
   });
   const status = await executeResultRow(user, resultId);
   await settleExperimentStatus(experimentId);
@@ -576,10 +588,7 @@ export async function evaluateEvalExperimentCase(
     const rowRec = await prisma.experimentEvalResult.upsert({
       where: { caseId_evaluatorId: { caseId, evaluatorId } },
       create: { experimentId, caseId, evaluatorId, status: 'pending' },
-      update: {
-        status: 'pending', score: null, pointsJson: null,
-        evidenceJson: null, errorMessage: null, durationMs: null,
-      },
+      update: { ...RESET_RESULT_FIELDS },
       select: { id: true },
     });
     // executeResultRow 内部已把失败写成 failed 终态，这里吞掉抛出、按落库状态读回

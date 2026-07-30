@@ -12,7 +12,7 @@
 ```
 实验(Experiment)
   └─ case(ExperimentCase：一条 trace + 输入/实际输出/参考答案)
-       └─ × 每个评估器 → ExperimentEvalResult(status/score/points/evidence)
+       └─ × 每个评估器 → ExperimentEvalResult(status/verdict/summary/score/points/evidence)
 ```
 
 - 一个 case × 一个评估器 = 一行结果，互不影响；单行失败不拖垮其它行，可单独重评。
@@ -37,7 +37,7 @@
 
 | 契约 | 是什么 | 改不动的原因 |
 |---|---|---|
-| **① 输出契约** | 交出 `{ score?, points?, evidence? }` | 前端按它渲染；改格式 = 所有评估器一起改 |
+| **① 输出契约** | 交出 `{ verdict?, summary?, score?, points?, evidence? }` | 前端按它渲染；改格式 = 所有评估器一起改 |
 | **② evaluatorId** | 标识这个评估器的字符串 | 已写进历史结果，改名 = 历史数据变孤儿 |
 | **③ 注册元数据** | `category`（看结果/看轨迹）+ `requires`（要不要参考答案） | 注册时确定、**运行时不可变**；已出的分按旧类目归属 |
 
@@ -45,10 +45,12 @@
 
 ### 2.1 输出契约
 
-定义在 `src/lib/evaluators/eval-output.ts`，三个字段**全可选**、任意组合合法：
+定义在 `src/lib/evaluators/eval-output.ts`，五个字段**全可选**、任意组合合法：
 
 ```ts
 EvaluatorOutput = {
+  verdict?: 'pass' | 'warn' | 'fail'  // 结论判定 → 卡头 chip（达成/部分达成/未达成）
+  summary?: string        // 一句话结论，≤200 字（提示词里要求 ≤80）→ 卡头正文
   score?: number          // 0-100，卡片总分。纯定性评估器可省
   points?: EvalPoint[]    // 评分点（最多 64）
   evidence?: {md} | {json} // 卡级证据
@@ -65,11 +67,48 @@ EvalPoint = {
 }
 ```
 
+**`verdict` / `summary` 是呈现层的主信息，请务必上报。** Trace 评测详情是**两级折叠**：
+
+```
+卡片（默认）    结论 chip + 一句话结论 + 得分
+  └ 展开卡片    完整判断依据（与结论重复则不渲染）+ 人工修正 + 评论
+       └ 再展开  评分点明细表
+```
+
+也就是说，**大多数使用者只会看到 `summary` 那一句**。评分点写得再细，不点两次展不开。
+不给结论，卡片就只剩一个孤零零的数字。
+
+- `summary` 的要求是**说人话、讲具体问题**，让人看完不用再翻明细就知道发生了什么：
+  不要用"覆盖率/维度/评分点/整体完成度偏低"这类评测术语，不要罗列各维度，只讲最要命的
+  那一条，讲具体的东西（少了哪个数、答错成什么、漏了哪一步），≤80 字。
+  反例：「关键观点覆盖率偏低，多个维度未达标。」正例：「攻击类型判对了，但没给出来源 IP，
+  也漏了 root 爆破次数，运维拿着没法直接处置。」各预置评估器的提示词里都写了这条约束，
+  新写评估器时照抄。
+- `verdict` 不填时呈现层按 `deriveVerdict(score)` 派生（≥80 pass / ≥60 warn / 其余 fail）。
+  派生值**不落库**，所以调整阈值口径不需要重刷历史数据。有比分数更准的达成判定时（例如
+  任务完成度评估器的 `isCorrect`）应显式上报，别让它退化成分数分档。
+- `summary` 不填时呈现层回退到 `evidence.md` 的首段（`displaySummary()`）——这是给存量数据
+  留的兼容路径，新评估器别依赖它。
+- 若 `evidence.md` 与 `summary` 逐字相同，展开区不再重复渲染证据（`isEvidenceRedundant()`）。
+  想让展开后有额外信息可看，`evidence` 就要比 `summary` 多写点东西，而不是把同一句复制两遍。
+
+> 已有评估器的结论字段来源：任务完成度 = `reason`（同时写进 `Execution.judgmentReason`）；
+> 轨迹质量 = 专设的 `conclusion` 字段，**不是** `reason_text` —— 后者是「执行路径分析」绿框的
+> 正文，有固定的完整性/工具选择/冗余分段结构，当结论读着费劲，故两者分开、取不到才回落。
+
 **归一化 `normalizeEvaluatorOutput()` 的行为**（务必知道，否则会被"吞字段"坑到）：
 
 - `score` 越界 clamp 到 [0,100]；非数值丢弃。
 - **0-1 量纲自动放大**：`score ∈ (0,1]` 且非整数时 ×100。所以要给 100 分必须显式写 `100`，写 `1` 会被当成 1 分。
+- `verdict` 容忍英文别名与中文说法（`passed`/`达成`/`partial`/`未通过`…），**未识别的值直接丢弃**而不报错。
+- `summary` 压平换行并截断到 200 字（超出补 `…`）。
 - 非法评分点逐条丢弃，不会让整次评估失败。
+
+> **人工修正分不属于本契约。** 用户可以在详情页把某一行的分改掉，写的是平台侧的
+> `ExperimentEvalResult.humanScore`（连同必填的 `humanReason`），机器分 `score` 原样只读留存，
+> 聚合按**生效分 = `humanScore ?? score`** 算（`detail-agg.ts` 的 `effectiveScore`）。
+> 评估器只管上报自己的判断，不需要、也不应该感知人工意见——两者的差值正是校准评估器的依据。
+> 注意重评会清除该行的人工修正（`run-experiment.ts` 的 `RESET_RESULT_FIELDS`）。
 
 ### 2.2 `evaluatorId` 是永久契约，命名一次定死
 
@@ -242,8 +281,8 @@ return normalizeEvaluatorOutput({ score: snap3(toolChoice) * 100 });
 async function runYourEvaluator(user: string, ctx: FaithfulPresetContext): Promise<EvaluatorOutput> {
   // 1) 取输入。注意 input/actualOutput 在 trace 模式下由引擎从 Execution 兜底解析
   // 2) 调模型做**离散判断**（见 §3.2/§3.3），别让它直接给连续分
-  // 3) 代码汇总成 score + points
-  return normalizeEvaluatorOutput({ score, points, evidence });
+  // 3) 代码汇总成 score + points，并给出**结论**（verdict/summary，见 §2.1）
+  return normalizeEvaluatorOutput({ verdict, summary, score, points, evidence });
 }
 ```
 
@@ -251,7 +290,7 @@ async function runYourEvaluator(user: string, ctx: FaithfulPresetContext): Promi
 
 #### 前提：评估器之间**不需要**共享实现
 
-平台的约束只有 §2 那三处（输出契约 / id / 注册元数据）。评估器内部怎么组提示词、怎么解析、怎么汇总，完全自由——只要最后交出 `{ score?, points?, evidence? }`，前端就能渲染。**不要为了"和别人保持一致"去复用不合身的代码。**
+平台的约束只有 §2 那三处（输出契约 / id / 注册元数据）。评估器内部怎么组提示词、怎么解析、怎么汇总，完全自由——只要最后交出 `{ verdict?, summary?, score?, points?, evidence? }`，前端就能渲染。**不要为了"和别人保持一致"去复用不合身的代码。**
 
 既有代码里那两组"共享"是两种各不相同的历史成因，**别当成设计要求照抄**：
 
