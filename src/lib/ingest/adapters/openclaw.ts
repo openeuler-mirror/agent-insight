@@ -9,6 +9,7 @@ export const openclawAdapter: FrameworkAdapter = {
     onboard: "plugin",
     platform: "openclaw",
   },
+  capabilities: { ownSkillsFromTree: false },
   extractSkills: extractSkillsWithVersionsFromOpenClawSession,
   normalizeForStorage: (interactions: CanonicalInteraction[]) => {
     if (!Array.isArray(interactions)) return interactions;

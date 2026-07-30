@@ -43,7 +43,11 @@ test("registry adapters keep direct references to existing functions", () => {
   assert.equal(getAdapter("claude").normalizeForStorage, normalizeClaudeCodeInteractionsForStorage)
   assert.equal(getAdapter("codeagent").extractSkills, extractSkillsWithVersionsFromOpencodeSession)
   assert.equal(getAdapter("codeagent").capabilities?.subagentTree, true)
+  assert.equal(getAdapter("codeagent").capabilities?.ownSkillsFromTree, true)
   assert.equal(getAdapter("openclaw").extractSkills, extractSkillsWithVersionsFromOpenClawSession)
+  assert.equal(getAdapter("openclaw").capabilities?.ownSkillsFromTree, false)
+  assert.equal(getAdapter("claude").capabilities?.ownSkillsFromTree, false)
+  assert.equal(getAdapter("llamaindex").capabilities?.ownSkillsFromTree, true)
 })
 
 test("registry adapters match golden skill extraction outputs", () => {

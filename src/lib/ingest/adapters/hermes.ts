@@ -11,6 +11,7 @@ export const hermesAdapter: FrameworkAdapter = {
   capabilities: {
     skills: true,
     subagentTree: true,
+    ownSkillsFromTree: true,
   },
   sessionMergeStrategy: "snapshot-replace",
   extractSkills: extractSkillsWithVersionsFromHermesSession,

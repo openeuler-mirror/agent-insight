@@ -3,6 +3,10 @@ import test from 'node:test';
 
 import { buildAgentCallTree, walkTree, type AgentNode } from '@/lib/engine/observability/agent-trace';
 import {
+    openclawExpectedSkills,
+    openclawSkillMessages,
+} from './fixtures/framework-skill-fixtures';
+import {
     computeOwnSkills,
     extractExplicitSkillsFromNode,
     extractInvokedSkillsFromSessionInteractions,
@@ -72,6 +76,13 @@ test('binding: LlamaIndex root ownSkills 不包含子 Agent skill', () => {
     const names = computeOwnSkills('llamaindex', nestedFixture()).map(s => s.name).sort();
     assert.deepEqual(names, ['skill-a', 'skill-c']);
     assert.ok(!names.includes('skill-b'), 'LlamaIndex parent must NOT inherit the sub-agent skill');
+});
+
+test('binding: OpenClaw ownSkills keeps its content-block extractor', () => {
+    assert.deepEqual(
+        computeOwnSkills('openclaw', openclawSkillMessages as any[]),
+        openclawExpectedSkills,
+    );
 });
 
 test('binding: 一层 agent 可绑多个 skill,版本随调用带出(没带版本则 null)', () => {

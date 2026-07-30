@@ -8,5 +8,6 @@ export const opencodeAdapter: FrameworkAdapter = {
     onboard: "plugin",
     platform: "opencode",
   },
+  capabilities: { ownSkillsFromTree: true },
   extractSkills: extractSkillsWithVersionsFromOpencodeSession,
 }

@@ -10,6 +10,7 @@ export const claudeAdapter: FrameworkAdapter = {
     onboard: "watcher",
     platform: "claude",
   },
+  capabilities: { ownSkillsFromTree: false },
   normalizeForStorage: normalizeClaudeCodeInteractionsForStorage,
   extractSkills: extractSkillsWithVersionsFromClaudeSession,
 }

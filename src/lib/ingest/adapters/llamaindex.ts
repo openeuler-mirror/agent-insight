@@ -12,6 +12,7 @@ export const llamaIndexAdapter: FrameworkAdapter = {
   capabilities: {
     skills: true,
     subagentTree: true,
+    ownSkillsFromTree: true,
   },
   // The OTel consumer re-aggregates the complete session spool on every pass.
   // Replacing the snapshot prevents corrected or disappeared spans from being
