@@ -132,8 +132,14 @@ async function runTaskCompletion(user: string, ctx: FaithfulPresetContext): Prom
     });
   }
 
+  // 结论：原评估器的 reason 本就是"先说任务是否完成、再说核心差异"的一句话总结，
+  // 直接作 summary（此前只塞进 evidence，而详情页有评分点时不渲染卡级证据 → 写了看不到）。
+  // verdict 用 isCorrect 而非分数阈值——它是评估器自己的达成判定，比 deriveVerdict 更准。
+  const score100 = to100(out.score);
   return normalizeEvaluatorOutput({
-    score: to100(out.score),
+    verdict: out.isCorrect ? 'pass' : (typeof score100 === 'number' && score100 >= 60 ? 'warn' : 'fail'),
+    summary: out.reason,
+    score: score100,
     points: points.length ? points : undefined,
     evidence: out.reason ? { md: out.reason } : undefined,
   });
@@ -232,7 +238,11 @@ async function runTrajectoryQuality(user: string, ctx: FaithfulPresetContext): P
     return pt;
   }).filter((p) => p.score !== undefined || p.evidence); // 空维度（无分且无任何说明）才略去
 
+  // 轨迹评估器没有 isCorrect 之类的达成判定，verdict 留空由呈现层按分数派生。
+  // summary 取 conclusionText（说人话的一句话结论）；模型没给才回落 reasonText——
+  // 后者是「执行路径分析」绿框的正文，带完整性/工具选择/冗余分段结构，当结论读着费劲。
   return normalizeEvaluatorOutput({
+    summary: out.conclusionText || out.reasonText,
     score: to100(out.trajectoryScore),
     points: points.length ? points : undefined,
     evidence: out.reasonText ? { md: out.reasonText } : undefined,

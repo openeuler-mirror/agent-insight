@@ -1,11 +1,13 @@
 // 实验详情聚合口径（detail-agg.ts 纯函数）：
-// 有分/无分混合（failed/pending 不入均分）、类目归组、全失败 case、N/M 标注口径。
+// 有分/无分混合（failed/pending 不入均分）、类目归组、全失败 case、N/M 标注口径，
+// 以及人工修正分的生效口径（生效分 = humanScore ?? score，全部聚合跟随）。
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
   caseScore,
   categorySummary,
+  effectiveScore,
   evaluatorBreakdown,
   groupByCategory,
   overallAverage,
@@ -89,7 +91,7 @@ test('caseScore：某类目无分 → 该项 null；全失败 case → 全 null 
     row({ evaluatorId: 'ev-res-a', status: 'failed' }),
     row({ evaluatorId: 'ev-traj-a', status: 'failed' }),
   ], categoryOf);
-  assert.deepEqual(allFailed, { overall: null, res: null, traj: null, failed: 2 });
+  assert.deepEqual(allFailed, { overall: null, res: null, traj: null, failed: 2, adjusted: 0 });
 });
 
 test('groupByCategory：按类目归组；未知评估器回退 res', () => {
@@ -113,9 +115,51 @@ test('categorySummary：N=有分行 / M=类目结果行总数；空类目与全�
   assert.equal(s.scored, 2);
   assert.equal(s.total, 3);
 
-  assert.deepEqual(categorySummary([]), { avg: null, scored: 0, total: 0 });
+  assert.deepEqual(categorySummary([]), { avg: null, scored: 0, total: 0, adjusted: 0 });
   assert.deepEqual(
     categorySummary([row({ evaluatorId: 'ev-res-a', status: 'failed' })]),
-    { avg: null, scored: 0, total: 1 },
+    { avg: null, scored: 0, total: 1, adjusted: 0 },
+  );
+});
+
+// ── 人工修正分：生效分 = humanScore ?? score，全部聚合口径跟随 ────────────────
+
+test('effectiveScore：人工分优先于机器分，未修正回落机器分', () => {
+  assert.equal(effectiveScore(row({ evaluatorId: 'ev-res-a', score: 60, humanScore: 80 })), 80);
+  assert.equal(effectiveScore(row({ evaluatorId: 'ev-res-a', score: 60 })), 60);
+  assert.equal(effectiveScore(row({ evaluatorId: 'ev-res-a', score: null })), null);
+  // 人工判 0 分是有效判断，不能被 ?? 之外的假值判断吃掉
+  assert.equal(effectiveScore(row({ evaluatorId: 'ev-res-a', score: 90, humanScore: 0 })), 0);
+});
+
+test('人工修正后综合/类目/评估器/单 case 均分全部按人工分重算', () => {
+  const rows: ResultRowLike[] = [
+    row({ evaluatorId: 'ev-res-a', score: 60, humanScore: 80 }), // 机器 60 → 人工 80
+    row({ evaluatorId: 'ev-traj-a', score: 60 }),
+  ];
+  assert.equal(overallAverage(rows), 70);          // (80+60)/2，而非 (60+60)/2
+
+  const s = caseScore(rows, categoryOf);
+  assert.equal(s.overall, 70);
+  assert.equal(s.res, 80);
+  assert.equal(s.traj, 60);
+  assert.equal(s.adjusted, 1);
+
+  const [resRow] = evaluatorBreakdown([rows[0]]);
+  assert.equal(resRow.avg, 80);
+  assert.equal(resRow.adjusted, 1);
+
+  const cat = categorySummary([rows[0]]);
+  assert.equal(cat.avg, 80);
+  assert.equal(cat.adjusted, 1);
+});
+
+test('机器未产分但人工给了分 → 该行进均分；失败行即便有人工分也不计', () => {
+  // done 且机器无分：人工分让它重新进入分母
+  assert.equal(overallAverage([row({ evaluatorId: 'ev-res-a', score: null, humanScore: 75 })]), 75);
+  // failed 行不参与聚合（口径同机器分：先重评拿到结果再修正）
+  assert.equal(
+    overallAverage([row({ evaluatorId: 'ev-res-a', status: 'failed', score: null, humanScore: 75 })]),
+    null,
   );
 });
