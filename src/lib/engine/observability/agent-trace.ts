@@ -87,9 +87,9 @@ export interface RawInteraction {
     trace_output?: unknown;
     trace_status?: string;
     trace_synthetic?: boolean;
-    trace_framework?: string;
     status?: string;
     error?: string | { message?: string };
+    error_summary?: string;
 }
 
 export type CallKind = 'llm' | 'tool' | 'skill' | 'task' | 'chain' | 'user';
@@ -600,13 +600,9 @@ function interactionToEvents(it: RawInteraction, idx: number): AgentEvent[] {
             .filter(Boolean);
         return names.length ? `调用工具：${names.join('、')}` : '';
     };
-    const errorSummary = it.trace_framework === 'llamaindex'
-        && String(it.status || '').toLowerCase() === 'error'
-        ? (typeof it.error === 'string' ? it.error : it.error?.message) || 'LLM 调用失败'
-        : '';
     const llmSummary = contentText.trim()
         ? contentText
-        : extractPartsText(it.parts, 'reasoning') || toolNamesSummary() || errorSummary;
+        : extractPartsText(it.parts, 'reasoning') || toolNamesSummary() || errorSummaryOf(it);
 
     if (calls.length === 0) {
         // Pure LLM response with no tool calls — emit an llm event if it produced
@@ -680,6 +676,15 @@ function interactionToEvents(it: RawInteraction, idx: number): AgentEvent[] {
     }
 
     return out;
+}
+
+/** Framework-neutral display fallback for failed normalized interactions. */
+function errorSummaryOf(it: RawInteraction): string {
+    if (String(it.status || '').toLowerCase() !== 'error') return '';
+    const normalized = typeof it.error_summary === 'string' ? it.error_summary.trim() : '';
+    if (normalized) return normalized;
+    const raw = typeof it.error === 'string' ? it.error : it.error?.message;
+    return String(raw || '').trim() || 'LLM 调用失败';
 }
 
 function toMsTimestamp(v: any): number | undefined {

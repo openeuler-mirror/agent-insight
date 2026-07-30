@@ -415,7 +415,6 @@ export function aggregateLlamaIndexTraceEvents(sessionId: string, source: OtelTr
       const interaction: Interaction = {
         ...ownerFields(owner, relationships.primary, relationships.sessionByAgent),
         ...baseInteraction(event),
-        trace_framework: 'llamaindex',
         content: text(output) || '',
         model: logical.model,
         provider: logical.provider,
@@ -428,7 +427,11 @@ export function aggregateLlamaIndexTraceEvents(sessionId: string, source: OtelTr
         ...(messages.length
           ? { requestMessages: messages }
           : prompt ? { requestMessages: [{ role: 'user', content: prompt }] } : {}),
-        ...(logical.failed ? { status: 'error', error: { message: logical.errorMessage } } : {}),
+        ...(logical.failed ? {
+          status: 'error',
+          error: { message: logical.errorMessage },
+          error_summary: logical.errorMessage || 'LLM 调用失败',
+        } : {}),
       };
       interactions.push(interaction);
       llmInteractions.push({ event, owner, interaction });

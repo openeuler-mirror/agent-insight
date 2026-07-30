@@ -178,13 +178,13 @@ async function persistExecutionSkills(
 
 /**
  * 给定一条 Execution(= 某一层 agent)的 session interactions,算出**本层 agent 自己显式调用**的 skill。
- *   - opencode：在该切片上重建 agent-call-tree,取其根节点(= 这一层 agent 自己)的显式 skill,剥离子 agent。
+ *   - 支持子 Agent 树的框架：在该切片上重建 agent-call-tree,取其根节点(= 这一层 agent 自己)的显式 skill,剥离子 agent。
  *     (root 行的 session 是全量;sub-agent 行的 session 是它自己的切片——两者切片的 tree 根都恰是该层 agent。)
- *   - claude / openclaw：单 agent,既有显式抽取即本层口径。
+ *   - 其余框架：既有显式抽取即本层口径。
  */
 export function computeOwnSkills(framework: string | null | undefined, interactions: any[]): InvokedSkill[] {
     if (!Array.isArray(interactions) || interactions.length === 0) return [];
-    if (framework === 'opencode' || framework === 'hermes' || framework === 'langfuse-langgraph' || framework === 'codeagent') {
+    if (typeof framework === 'string' && SUBAGENT_TREE_FRAMEWORKS.has(framework)) {
         const tree = buildAgentCallTree(interactions as any);
         return tree ? extractExplicitSkillsFromNode(tree) : [];
     }

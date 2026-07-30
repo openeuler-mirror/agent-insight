@@ -68,6 +68,12 @@ test('binding: root 只绑自己显式调用的 skill,不含子 agent 的 skill'
     assert.ok(!names.includes('skill-b'), 'parent must NOT be bound to the sub-agent skill');
 });
 
+test('binding: LlamaIndex root ownSkills 不包含子 Agent skill', () => {
+    const names = computeOwnSkills('llamaindex', nestedFixture()).map(s => s.name).sort();
+    assert.deepEqual(names, ['skill-a', 'skill-c']);
+    assert.ok(!names.includes('skill-b'), 'LlamaIndex parent must NOT inherit the sub-agent skill');
+});
+
 test('binding: 一层 agent 可绑多个 skill,版本随调用带出(没带版本则 null)', () => {
     const own = computeOwnSkills('opencode', nestedFixture());
     const byName = new Map(own.map(s => [s.name, s.version]));

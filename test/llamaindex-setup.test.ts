@@ -15,7 +15,10 @@ import AdmZip from 'adm-zip';
 
 import { GET as getSetup } from '@/app/api/ingest/setup/route';
 import { GET as getAutoSetup } from '@/app/api/ingest/setup/auto/route';
-import { GET as getCollectorArchive } from '@/app/api/ingest/setup/llamaindex-collector/route';
+import {
+  GET as getCollectorArchive,
+} from '@/app/api/ingest/setup/llamaindex-collector/route';
+import { collectorArchive } from '@/app/api/ingest/setup/llamaindex-collector/archive';
 
 const routes = [
   {
@@ -115,6 +118,14 @@ test('install guide exposes one-click and manual LlamaIndex onboarding', () => {
   assert.match(page, /maxHeight: 320/);
 });
 
+test('agents page preserves LlamaIndex platform and does not mislabel unknown frameworks', () => {
+  const page = readFileSync('src/app/(main)/agents/page.tsx', 'utf8');
+  assert.match(page, /value === 'llamaindex'/);
+  assert.match(page, /\{ value: 'llamaindex', label: 'llamaindex' \}/);
+  assert.match(page, /return 'unknown'/);
+  assert.match(page, /\{ value: 'unknown', label: '未知' \}/);
+});
+
 test('collector endpoint serves a directly deployable Python runtime archive', async () => {
   const response = await getCollectorArchive();
   const bytes = new Uint8Array(await response.arrayBuffer());
@@ -131,6 +142,30 @@ test('collector endpoint serves a directly deployable Python runtime archive', a
   assert.ok(!entries.includes('bootstrap/sitecustomize.py'));
   assert.ok(!entries.some((name) => name.includes('__pycache__') || name.endsWith('.pyc')));
   assert.ok(!entries.includes('src/agent_insight_llamaindex/auto_instrumentation.py'));
+});
+
+test('collector archive cache invalidates when bundled source changes', (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), 'llamaindex-archive-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const packageRoot = path.join(root, 'src', 'agent_insight_llamaindex');
+  mkdirSync(packageRoot, { recursive: true });
+  const modulePath = path.join(packageRoot, '__init__.py');
+  writeFileSync(modulePath, 'VERSION = "before"\n');
+  writeFileSync(path.join(root, 'README.md'), 'collector fixture\n');
+
+  const before = collectorArchive(root, true);
+  writeFileSync(modulePath, 'VERSION = "after-cache-invalidation"\n');
+  const after = collectorArchive(root, true);
+
+  assert.equal(
+    new AdmZip(before).readAsText('agent_insight_llamaindex/__init__.py'),
+    'VERSION = "before"\n',
+  );
+  assert.equal(
+    new AdmZip(after).readAsText('agent_insight_llamaindex/__init__.py'),
+    'VERSION = "after-cache-invalidation"\n',
+  );
+  assert.notDeepEqual(before, after);
 });
 
 test('local npm server package carries collector source without Python package metadata', () => {

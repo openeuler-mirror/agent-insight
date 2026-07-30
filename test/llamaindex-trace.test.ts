@@ -116,7 +116,10 @@ test('aggregates an error-only LLM trace without an Agent span', () => {
   assert.equal(record.agentName, 'LlamaIndex Agent');
   assert.equal(record.query, 'failing prompt');
   assert.equal(record.llm_call_count, 1);
-  assert.equal(record.interactions.find((item: RawInteraction) => item.role === 'assistant')?.status, 'error');
+  const failedInteraction = record.interactions.find((item: RawInteraction) => item.role === 'assistant');
+  assert.equal(failedInteraction?.status, 'error');
+  assert.equal(failedInteraction?.error_summary, 'Insufficient Balance');
+  assert.equal('trace_framework' in (failedInteraction || {}), false);
   assert.ok(record.trace_completed_at);
   assert.equal(record.failures?.[0]?.failure_type, 'llm_error');
   const tree = buildAgentCallTree(record.interactions);

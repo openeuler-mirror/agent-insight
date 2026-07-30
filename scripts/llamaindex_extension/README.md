@@ -28,6 +28,9 @@ Agent Insight 服务端通过 npm 安装；LlamaIndex 可观测插件源码随�
 接口直接部署，不发布到 pip 或 npm 仓库。本地开发环境先构建并安装 Agent Insight 服务端 tarball
 （不要执行 `npm publish`）：
 
+> 运行时归档是直接部署制品，不是 Python wheel/sdist，并有意不包含 `pyproject.toml`。
+> 请勿对下载的 zip 执行 `pip install`；`pip` 仍只用于业务项目自行管理 LlamaIndex 及模型 SDK 依赖。
+
 ```bash
 npm run build
 mkdir -p dist-local

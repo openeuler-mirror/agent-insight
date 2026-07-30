@@ -137,6 +137,23 @@
 - **Config / models** — `ModelConfig`、`UserSettings`（`storage/server-config.ts`）、`LlmProvider`（`lib/llm-providers.ts`）、`ModelPricing`（`shared/model-config.ts`）。
 - **Skill gen/opt bridges** — `StreamSkillGeneratorOpts/Result`、`StreamSkillOptOpts/Result`（`lib/skill-generator-opencode-bridge.ts`、`lib/skill-opt-bridge.ts`）。
 
+### `RawInteraction` 归一化字段约定
+
+`RawInteraction` 是各框架 adapter 与共享 Trace 树构建器之间的内部契约。框架差异必须在 adapter 中完成归一化；共享渲染与树构建代码不得按框架名分支。所有字段都是可选增量，未提供时不得改变其他 adapter 的既有行为。
+
+| 字段 | 统一语义 | 填写方与约束 |
+|---|---|---|
+| `status` | 当前 interaction 的执行状态；错误统一写为 `error` | 任意 adapter；不得用它表示整个 session 状态 |
+| `error` | 原始或结构化错误，当前支持字符串或 `{ message }` | 任意 adapter；供详情与通用兜底读取 |
+| `error_summary` | 已脱敏、可直接展示的错误摘要 | adapter 在框架原始错误需要归一化时填写；共享渲染器只消费，不解释框架结构 |
+| `trace_kind` | 结构 Trace 的类别；当前 `chain` 表示非 LLM/Tool 的链路节点 | 产生 Workflow/RAG/Chain 节点的 adapter |
+| `trace_name` | 结构节点的稳定显示名称 | 与 `trace_kind` 同时填写 |
+| `trace_args` / `trace_output` | 结构节点的归一化输入与输出 | adapter 应在此之前完成截断、脱敏和框架格式解析 |
+| `trace_status` | 结构节点状态 | 仅描述对应 `trace_kind` 节点，不替代 session 状态 |
+| `trace_synthetic` | 此 interaction 是 adapter 为表达父子/结构关系生成的占位节点，不代表一次真实 LLM turn | 仅结构归一化 adapter 可设为 `true`；共享树构建器会禁止把它计作 LLM 调用，但仍解析其 Tool/Task 关系 |
+
+例如 LlamaIndex adapter 将 dispatcher span 的失败信息归一到 `status/error/error_summary`，将 Retriever、Synthesizer 与 Workflow step 归一到 `trace_*`；共享 `agent-trace.ts` 只按上述字段生成通用事件。新增 adapter 应复用这些语义，而不是增加框架名判断或重新定义字段含义。
+
 ## Extension points
 分析器报告了约 290 个导出的接口/抽象类（潜在的实现/扩展点）。其中影响力最大的几个：
 

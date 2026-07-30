@@ -88,6 +88,8 @@ LlamaIndex 项目使用由 Agent Insight 服务端直接分发的 Python 模块 
 
 普通 setup 和 auto setup 的 Linux/Windows 安装选择中均包含 `LlamaIndex Trace Collector`。安装器从当前 Agent Insight 实例下载运行时归档，直接部署到 `~/.agent-insight/collectors/llamaindex/current/`，并生成独立环境入口和卸载脚本；不会调用 pip 或写入 `site-packages`。项目使用虚拟环境时，先设置 `AGENT_INSIGHT_LLAMAINDEX_PYTHON` 为该虚拟环境的 Python 路径，用于确认 LlamaIndex 可用并执行配置。npm 负责安装 Agent Insight 服务端并携带采集器源码。
 
+该运行时 zip 不是可执行 `pip install` 的 Python 发布包，并有意不包含 `pyproject.toml`。采集器由安装指导脚本直接部署和更新；LlamaIndex、模型 SDK 与 MCP Tool 等业务依赖仍由项目自己的 Python 环境管理。
+
 采集器为每个 Workflow Context 和 Agent 名称生成实例 ID，同名并发 Agent 不会在 Trace 树中合并。`python -m agent_insight_llamaindex.cli run` 默认读取 `~/.agent-insight/llamaindex.env` 中的模型变量，但不会覆盖调用进程已经设置的值。
 
 LlamaIndex、模型 SDK 和 MCP Tool 依赖继续由业务项目管理。FunctionTool、QueryEngineTool 与由 `McpToolSpec` 创建的 MCP Tool 均沿同一 Tool Trace 路径采集参数、返回值、状态和耗时。
