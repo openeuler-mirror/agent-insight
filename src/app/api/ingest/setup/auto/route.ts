@@ -468,6 +468,19 @@ CLAUDE_OTEL_EOF
     fi
     echo "✅ Claude Code OTel env installed at $HOME/.agent-insight/claude_otel_env.sh"
     echo "   Restart your terminal or run: source $HOME/.agent-insight/claude_otel_env.sh"
+    # 上下文补传器:system prompt 与 hook additionalContext 只在客户端本机磁盘上,
+    # OTel 事件里没有(详见脚本头部注释),靠这个 SessionEnd hook 在会话结束时补发。
+    echo "⏬ Downloading Claude Code context uploader..."
+    if curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/claude-context-uploader" -o "$HOME/.agent-insight/claude_context_uploader.js"; then
+        if command -v node &> /dev/null; then
+            node "$HOME/.agent-insight/claude_context_uploader.js" --install-hook || \
+                echo "⚠️  注册 SessionEnd hook 失败,可稍后手动执行:node $HOME/.agent-insight/claude_context_uploader.js --install-hook"
+        else
+            echo "⚠️  未找到 node,跳过 SessionEnd hook 注册(装好 node 后执行:node $HOME/.agent-insight/claude_context_uploader.js --install-hook)"
+        fi
+    else
+        echo "⚠️  下载上下文补传器失败,system prompt / hook 上下文将无法跨机上报"
+    fi
     pkill -f "claude_watcher_client.ts" 2>/dev/null || true
     rm -f "$HOME/.agent-insight/claude_watcher_client.ts" "$HOME/.agent-insight/start_claude_watcher.sh" "$HOME/.agent-insight/stop_claude_watcher.sh" "$HOME/.agent-insight/claude_watcher.pid"
     echo "🧹 Removed legacy Claude session-file watcher if it was installed."
@@ -1036,6 +1049,18 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    }',
         '    Write-Host "✅ Claude Code OTel env installed at $claudeOtelPath"',
         '    Write-Host "   Restart PowerShell or run: . `"$claudeOtelPath`""',
+        '    # 上下文补传器:system prompt 与 hook additionalContext 只在客户端本机磁盘上,OTel 事件里没有。',
+        '    $claudeContextUploader = Join-Path $skillInsightDir "claude_context_uploader.js"',
+        '    try {',
+        '        Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/setup/claude-context-uploader" -OutFile $claudeContextUploader',
+        '        if (Get-Command node -ErrorAction SilentlyContinue) {',
+        '            & node $claudeContextUploader --install-hook',
+        '        } else {',
+        '            Write-Host "⚠️  未找到 node,跳过 SessionEnd hook 注册(装好 node 后执行:node `"$claudeContextUploader`" --install-hook)"',
+        '        }',
+        '    } catch {',
+        '        Write-Host "⚠️  下载上下文补传器失败,system prompt / hook 上下文将无法跨机上报"',
+        '    }',
         '    Get-Process | Where-Object { $_.CommandLine -like "*claude_watcher_client.ts*" } | Stop-Process -Force -ErrorAction SilentlyContinue',
         '    Remove-Item (Join-Path $skillInsightDir "claude_watcher_client.ts"), (Join-Path $skillInsightDir "start_claude_watcher.ps1"), (Join-Path $skillInsightDir "stop_claude_watcher.ps1"), (Join-Path $skillInsightDir "claude_watcher.pid") -Force -ErrorAction SilentlyContinue',
         '    Write-Host "🧹 Removed legacy Claude session-file watcher if it was installed."',

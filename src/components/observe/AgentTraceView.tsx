@@ -90,7 +90,7 @@ function KindBadge({ kind, size = 'xs', className }: { kind: string; size?: 'xs'
     );
 }
 
-type DetailTab = 'timeline' | 'prompt' | 'overview' | 'skills' | 'infra';
+type DetailTab = 'timeline' | 'prompt' | 'hooks' | 'overview' | 'skills' | 'infra';
 type EventTypeFilter = 'all' | 'llm' | 'tool' | 'skill' | 'task' | 'chain' | 'user';
 
 interface TraceSkillCall {
@@ -2731,6 +2731,7 @@ function AgentDetail({
 }) {
     const status = getStatus(node);
     const hasPrompt = !!(node.systemPrompts && node.systemPrompts.length > 0);
+    const hasHookContexts = !!(node.hookContexts && node.hookContexts.length > 0);
     const visibleEvents = node.events.filter(event => !event.treeHidden);
 
     const tabs: { id: DetailTab; label: string; count?: number }[] = [
@@ -2738,6 +2739,7 @@ function AgentDetail({
         { id: 'timeline', label: '时间线', count: visibleEvents.length },
         { id: 'skills', label: 'Skills', count: traceSkills.length },
         ...(hasPrompt ? [{ id: 'prompt' as DetailTab, label: 'System Prompt', count: node.systemPrompts!.length }] : []),
+        ...(hasHookContexts ? [{ id: 'hooks' as DetailTab, label: 'Hook 上下文', count: node.hookContexts!.length }] : []),
         { id: 'infra' as DetailTab, label: 'Infra' },
     ];
 
@@ -2814,6 +2816,7 @@ function AgentDetail({
                 )}
                 {activeTab === 'skills' && <SkillsTab skills={traceSkills} currentUser={currentUser} />}
                 {activeTab === 'prompt' && hasPrompt && <SystemPromptsBlock prompts={node.systemPrompts!} />}
+                {activeTab === 'hooks' && hasHookContexts && <HookContextsBlock entries={node.hookContexts!} />}
                 {activeTab === 'infra' && <InfraTab executionId={rootExecutionId} />}
             </div>
         </div>
@@ -3628,8 +3631,61 @@ function SystemPromptsBlock({ prompts }: { prompts: NonNullable<AgentNode['syste
     );
 }
 
+// ─── HookContextsBlock ────────────────────────────────────────────────────────
+// Claude Code hooks 通过 hookSpecificOutput.additionalContext 注入的上下文。它不进
+// 官方 OTel 事件,由客户端补传采集(见 /api/ingest/claude/context),这里和 System Prompt
+// 一样按「喂给模型的上下文」展示,不混进时间线。
+function HookContextsBlock({ entries }: { entries: NonNullable<AgentNode['hookContexts']> }) {
+    const [modalIdx, setModalIdx] = useState<number | null>(null);
+    const active = modalIdx !== null ? entries[modalIdx] : null;
+
+    return (
+        <>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                {entries.map((entry, i) => {
+                    const chars = entry.length ?? entry.text.length;
+                    const firstLine = entry.text.split('\n').find(l => l.trim()) ?? '';
+                    const label = firstLine.length > 72 ? firstLine.slice(0, 72) + '…' : firstLine;
+                    return (
+                        <div key={i} onClick={() => setModalIdx(i)}
+                            style={{ display: 'flex', alignItems: 'center', gap: '0.625rem', padding: '0.5rem 0.75rem', background: 'var(--background-secondary)', border: '1px solid var(--border)', borderRadius: 6, cursor: 'pointer', transition: 'background 0.1s' }}
+                            onMouseEnter={e => (e.currentTarget.style.background = 'var(--background-tertiary)')}
+                            onMouseLeave={e => (e.currentTarget.style.background = 'var(--background-secondary)')}
+                        >
+                            <span style={{ fontSize: '0.75rem', color: 'var(--foreground-muted)', flexShrink: 0 }}>🪝</span>
+                            {entry.hookEvent && (
+                                <span style={{ fontSize: '0.625rem', padding: '0.125rem 0.375rem', background: 'var(--background-tertiary)', border: '1px solid var(--border)', color: 'var(--foreground-muted)', borderRadius: 4, flexShrink: 0 }}>{entry.hookEvent}</span>
+                            )}
+                            <span style={{ flex: 1, fontSize: '0.8125rem', color: 'var(--foreground)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label || 'Hook Context'}</span>
+                            <span style={{ fontSize: '0.625rem', color: 'var(--foreground-muted)', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{chars.toLocaleString()} chars</span>
+                            <span style={{ fontSize: '0.625rem', color: 'var(--foreground-muted)', flexShrink: 0 }}>查看 ›</span>
+                        </div>
+                    );
+                })}
+            </div>
+            {active && (
+                <SystemPromptModal
+                    prompt={{ text: active.text, length: active.length }}
+                    index={modalIdx!}
+                    total={entries.length}
+                    onClose={() => setModalIdx(null)}
+                    title={active.hookName ? `HOOK CONTEXT · ${active.hookName}` : 'HOOK CONTEXT'}
+                    badge={active.hookEvent}
+                />
+            )}
+        </>
+    );
+}
+
 // ─── SystemPromptModal ────────────────────────────────────────────────────────
-function SystemPromptModal({ prompt, index, total, onClose }: { prompt: NonNullable<AgentNode['systemPrompts']>[number]; index: number; total: number; onClose: () => void }) {
+function SystemPromptModal({ prompt, index, total, onClose, title = 'SYSTEM PROMPT', badge }: {
+    prompt: { text: string; length?: number; sha256?: string; modelID?: string };
+    index: number;
+    total: number;
+    onClose: () => void;
+    title?: string;
+    badge?: string;
+}) {
     const [copied, setCopied] = useState(false);
     const copy = async () => {
         try {
@@ -3649,7 +3705,8 @@ function SystemPromptModal({ prompt, index, total, onClose }: { prompt: NonNulla
         <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
             <DialogContent className="max-w-[780px] max-h-[88vh] flex flex-col p-0 gap-0">
                 <DialogHeader className="flex-row items-center gap-3 p-4 pr-12 border-b border-border space-y-0 flex-wrap">
-                    <DialogTitle className="text-xs font-bold uppercase tracking-wider text-foreground-muted bg-background-secondary border border-border rounded-sm px-2 py-0.5">SYSTEM PROMPT</DialogTitle>
+                    <DialogTitle className="text-xs font-bold uppercase tracking-wider text-foreground-muted bg-background-secondary border border-border rounded-sm px-2 py-0.5">{title}</DialogTitle>
+                    {badge && <span className="text-xs text-foreground-muted">{badge}</span>}
                     {total > 1 && <span className="text-xs text-foreground-muted">{index + 1} / {total}</span>}
                     <div className="flex-1" />
                     <span className="text-xs text-foreground-muted tabular-nums">{chars.toLocaleString()} chars</span>
