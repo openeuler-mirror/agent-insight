@@ -471,12 +471,12 @@ CLAUDE_OTEL_EOF
     # 上下文补传器:system prompt 与 hook additionalContext 只在客户端本机磁盘上,
     # OTel 事件里没有(详见脚本头部注释),靠这个 SessionEnd hook 在会话结束时补发。
     echo "⏬ Downloading Claude Code context uploader..."
-    if curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/claude-context-uploader" -o "$HOME/.agent-insight/claude_context_uploader.js"; then
+    if curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/claude-context-uploader" -o "$HOME/.agent-insight/claude_context_uploader.cjs"; then
         if command -v node &> /dev/null; then
-            node "$HOME/.agent-insight/claude_context_uploader.js" --install-hook || \
-                echo "⚠️  注册 SessionEnd hook 失败,可稍后手动执行:node $HOME/.agent-insight/claude_context_uploader.js --install-hook"
+            node "$HOME/.agent-insight/claude_context_uploader.cjs" --install-hook || \
+                echo "⚠️  注册 SessionEnd hook 失败,可稍后手动执行:node $HOME/.agent-insight/claude_context_uploader.cjs --install-hook"
         else
-            echo "⚠️  未找到 node,跳过 SessionEnd hook 注册(装好 node 后执行:node $HOME/.agent-insight/claude_context_uploader.js --install-hook)"
+            echo "⚠️  未找到 node,跳过 SessionEnd hook 注册(装好 node 后执行:node $HOME/.agent-insight/claude_context_uploader.cjs --install-hook)"
         fi
     else
         echo "⚠️  下载上下文补传器失败,system prompt / hook 上下文将无法跨机上报"
@@ -1050,7 +1050,7 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    Write-Host "✅ Claude Code OTel env installed at $claudeOtelPath"',
         '    Write-Host "   Restart PowerShell or run: . `"$claudeOtelPath`""',
         '    # 上下文补传器:system prompt 与 hook additionalContext 只在客户端本机磁盘上,OTel 事件里没有。',
-        '    $claudeContextUploader = Join-Path $skillInsightDir "claude_context_uploader.js"',
+        '    $claudeContextUploader = Join-Path $skillInsightDir "claude_context_uploader.cjs"',
         '    try {',
         '        Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/setup/claude-context-uploader" -OutFile $claudeContextUploader',
         '        if (Get-Command node -ErrorAction SilentlyContinue) {',

@@ -509,11 +509,14 @@ function postJson(url, apiKey, payload, timeoutMs) {
 // ─── hook 注册(幂等,不覆盖用户已有配置)────────────────────────────────────────
 function hookCommand() {
   const node = process.execPath && path.basename(process.execPath).startsWith('node') ? process.execPath : 'node';
-  return `${JSON.stringify(node)} ${JSON.stringify(path.join(BASE_DIR, 'claude_context_uploader.js'))}`;
+  // 注册**当前运行的这份**的路径。安装名是 .cjs:~/.agent-insight/ 里有 package.json
+  // 且 "type":"module"(装机脚本历史产物),.js 会被 node 当 ESM 跑,require 直接崩。
+  return `${JSON.stringify(node)} ${JSON.stringify(__filename)}`;
 }
 
 function isOurHook(entry) {
-  return !!entry && typeof entry.command === 'string' && entry.command.includes('claude_context_uploader.js');
+  // 不带扩展名匹配:老版本注册的是 .js,升级到 .cjs 后要能认出并替换/摘除它
+  return !!entry && typeof entry.command === 'string' && entry.command.includes('claude_context_uploader');
 }
 
 function mutateSettings(mutate) {
