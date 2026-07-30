@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import * as fs from "fs"
 import * as path from "path"
 import * as os from "os"
-import { SpoolReader, SessionState } from "../scripts/trae-collector/src/uploader/spool"
+import { SpoolReader, SessionState } from "../src/uploader/spool"
 
 const realSpoolDir = path.join(os.homedir(), ".agent-insight", "otel_data", "trae")
 

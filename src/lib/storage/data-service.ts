@@ -47,7 +47,7 @@ import {
 } from '@/lib/trace-tags';
 
 /** 允许派生子 Agent 树的框架集合。先落地者集合化，后落地者仅加值。 */
-const SUBAGENT_TREE_FRAMEWORKS = new Set(['opencode', 'openclaw', 'hermes', 'langfuse-langgraph', 'codeagent']);
+const SUBAGENT_TREE_FRAMEWORKS = new Set(['opencode', 'openclaw', 'hermes', 'langfuse-langgraph', 'codeagent', 'trae']);
 
 export interface InvokedSkill {
     name: string;

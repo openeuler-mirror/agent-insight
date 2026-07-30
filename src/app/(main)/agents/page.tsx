@@ -21,7 +21,7 @@ import { apiFetch } from '@/lib/client/api';
 
 type AgentOwnership = 'system' | 'user';
 type AgentLayer = 'main' | 'subagent';
-type PlatformFilter = 'all' | 'opencode' | 'openclaw' | 'hermes' | 'trae';
+type PlatformFilter = 'all' | 'opencode' | 'openclaw' | 'hermes' | 'trae' | 'unknown';
 type ExecutionTimeFilter = 'all' | '1h' | '24h' | '7d' | 'exact';
 type SortOption = 'lastExecutedDesc' | 'lastExecutedAsc' | 'platformAsc' | 'nameAsc';
 type AgentLayerFilter = 'all' | AgentLayer;
@@ -138,8 +138,8 @@ function sortAgents(agents: Agent[], sortBy: SortOption) {
 }
 
 function normalizePlatform(value: string): Exclude<PlatformFilter, 'all'> {
-    if (value === 'openclaw' || value === 'hermes' || value === 'trae') return value;
-    return 'opencode';
+    if (value === 'opencode' || value === 'openclaw' || value === 'hermes' || value === 'trae') return value;
+    return 'unknown';
 }
 
 function normalizeOwnership(value: string): AgentOwnership {

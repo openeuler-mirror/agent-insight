@@ -264,22 +264,6 @@ export async function POST(request: Request) {
             await db.updateSession(String(data.task_id), { endTime: new Date() });
             void triggerExperimentWatchForTask(username, String(data.task_id));
         }
-        // Create/update session for non-opencode frameworks (e.g. trae)
-        if (data.framework !== 'opencode' && data.task_id && data.query) {
-            try {
-                await db.upsertSession(String(data.task_id), {
-                    id: String(data.task_id),
-                    taskId: String(data.task_id),
-                    query: data.query || '',
-                    startTime: data.timestamp ? new Date(data.timestamp) : new Date(),
-                    user: username || undefined,
-                    model: data.model || undefined,
-                    interactions: Array.isArray(data.interactions) ? JSON.stringify(data.interactions) : undefined,
-                }, {});
-            } catch (e) {
-                console.warn(`[Upload-API] Session upsert failed for ${data.framework}:`, e);
-            }
-        }
         if (quickSkills.length > 0) {
             console.log(`[Upload-API] Quick save with skills: ${JSON.stringify(quickSkillsWithVersions)}`);
         }
