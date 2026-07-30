@@ -220,14 +220,15 @@ export const CONTENT_PRESET_IDS = [
   'preset-content-controversy',
   'preset-content-gender-discrimination',
 ] as const;
-export type ContentPresetId = (typeof CONTENT_PRESET_IDS)[number];
 
 /** 旧 ID → 新 ID 别名映射，兼容数据库历史数据 */
-const CONTENT_PRESET_ALIASES: Record<string, ContentPresetId> = {
+const CONTENT_PRESET_ALIASES = {
   'preset-insensitivity': 'preset-content-insensitivity',
   'preset-controversy': 'preset-content-controversy',
   'preset-gender-discrimination': 'preset-content-gender-discrimination',
-};
+} as const;
+
+export type ContentPresetId = (typeof CONTENT_PRESET_IDS)[number] | keyof typeof CONTENT_PRESET_ALIASES;
 
 export function isContentPresetId(id: string): id is ContentPresetId {
   if ((CONTENT_PRESET_IDS as readonly string[]).includes(id)) return true;
