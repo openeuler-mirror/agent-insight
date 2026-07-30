@@ -27,7 +27,7 @@
 | `low` | 0.2 | 80 |
 | 无 finding（clean） | 0 | 100 |
 
-**总分**：`score = Σ(weight × dimScore) / Σ(weight) × 100`，clean 维权重 0。全 clean → 100。
+**总分**：`score = Σ(每维度分) / 维度数 × 100`，同维取最严重度不累加，clean 维记 100。全 clean → 100。
 
 ## 4. 方法论
 
