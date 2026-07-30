@@ -41,7 +41,7 @@ test('Unix setup offers, installs, and configures the LlamaIndex collector', asy
     const script = await response.text();
 
     assert.equal(response.status, 200, route.name);
-    assert.match(script, /LlamaIndex Trace Collector[^\n]+llamaindex/);
+    assert.match(script, /LlamaIndex[^\n]+llamaindex/);
     assert.match(script, /INSTALL_LLAMAINDEX=false/);
     assert.match(script, /AGENT_INSIGHT_LLAMAINDEX_PYTHON/);
     assert.match(script, /api\/ingest\/setup\/llamaindex-collector/);
@@ -58,6 +58,7 @@ test('Unix setup offers, installs, and configures the LlamaIndex collector', asy
     assert.match(script, /Unable to configure the LlamaIndex collector/);
     assert.match(script, /PYTHONPATH="\$LLAMAINDEX_SOURCE_DIR/);
     assert.match(script, /agent_insight_llamaindex\.cli run --/);
+    assert.match(script, /deployment will continue/);
 
     const syntax = spawnSync('bash', ['-n'], { input: script, encoding: 'utf8' });
     assert.equal(syntax.status, 0, `${route.name}: ${syntax.stderr}`);
@@ -72,7 +73,7 @@ test('Windows setup offers the same LlamaIndex installation path', async () => {
     const script = await response.text();
 
     assert.equal(response.status, 200, route.name);
-    assert.match(script, /LlamaIndex Trace Collector[^\n]+llamaindex/);
+    assert.match(script, /LlamaIndex[^\n]+llamaindex/);
     assert.match(script, /\$INSTALL_LLAMAINDEX = \$false/);
     assert.match(script, /AGENT_INSIGHT_LLAMAINDEX_PYTHON/);
     assert.match(script, /api\/ingest\/setup\/llamaindex-collector/);
@@ -88,34 +89,65 @@ test('Windows setup offers the same LlamaIndex installation path', async () => {
     assert.match(script, /\$LASTEXITCODE -ne 0/);
     assert.match(script, /Unable to configure the LlamaIndex collector/);
     assert.match(script, /agent_insight_llamaindex\.cli run --/);
+    assert.match(script, /deployment will continue/);
   }
 });
 
-test('install guide exposes one-click and manual LlamaIndex onboarding', () => {
+test('install guide exposes LlamaIndex through the shared one-line installer', () => {
   const page = readFileSync('src/app/(main)/accessconfig/install/page.tsx', 'utf8');
-  assert.match(page, /LlamaIndex Trace Collector/);
-  assert.match(page, /api\/ingest\/setup\/llamaindex-collector/);
-  assert.match(page, /LLAMAINDEX_PYTHON.*-m zipfile -e/);
-  assert.match(page, /llamaIndexPython -m zipfile -e/);
-  assert.match(page, /direct deploy/);
+  assert.match(page, /value: 'llamaindex', label: 'LlamaIndex'/);
+  assert.match(page, /value: 'llamaindex'/);
+  assert.match(page, /getApiUrl\('\/api\/ingest\/setup'\)/);
+  assert.match(page, /frameworks=\$\{frameworks\.join\(','\)\}/);
+  assert.match(page, /curl -sSf/);
+  assert.match(page, /\| bash/);
+  assert.match(page, /irm/);
+  assert.match(page, /\| iex/);
+  assert.doesNotMatch(page, /api\/ingest\/setup\/llamaindex-collector/);
+  assert.doesNotMatch(page, /zipfile -e/);
   assert.doesNotMatch(page, /python -m pip/);
-  assert.match(page, /AGENT_INSIGHT_API_KEY/);
   assert.doesNotMatch(page, /npm bundle/);
-  assert.match(page, /agent_insight_llamaindex\.cli run -- .*app\.py/);
   assert.match(page, /agent_insight_llamaindex; agent_insight_llamaindex\.setup\(\)/);
-  assert.match(page, /llamaindex-unix/);
-  assert.match(page, /llamaindex-windows/);
-  assert.match(page, /set -euo pipefail/);
-  assert.match(page, /LLAMAINDEX_BACKUP/);
-  assert.match(page, /trap cleanup_llamaindex_install EXIT/);
-  assert.match(page, /if ! mv .*LLAMAINDEX_STAGING.*LLAMAINDEX_COLLECTOR_DIR/);
-  assert.match(page, /\$ErrorActionPreference = "Stop"/);
-  assert.match(page, /\[Guid\]::NewGuid\(\)/);
-  assert.match(page, /\$llamaIndexBackup/);
-  assert.match(page, /\} finally \{/);
-  assert.match(page, /Unable to configure the LlamaIndex collector/);
+  assert.doesNotMatch(page, /llamaindex-unix/);
+  assert.doesNotMatch(page, /llamaindex-windows/);
   assert.match(page, /whiteSpace: 'pre-wrap'/);
   assert.match(page, /maxHeight: 320/);
+});
+
+test('one-line setup preselects LlamaIndex without falling back to the interactive picker', async () => {
+  for (const platform of ['unix', 'windows']) {
+    const response = await getSetup(new Request(
+      'http://localhost/api/ingest/setup?key=test-key&frameworks=llamaindex',
+      { headers: { 'x-platform': platform, host: 'localhost:3000' } },
+    ));
+    const script = await response.text();
+
+    assert.equal(response.status, 200, platform);
+    assert.match(script, /SELECTED_FRAMEWORKS(?:=| = )"llamaindex"/);
+    assert.match(script, platform === 'windows'
+      ? /\$INSTALL_LLAMAINDEX = \$true/
+      : /INSTALL_LLAMAINDEX=true/);
+    assert.match(script, /LlamaIndex-only setup: Node\.js check skipped/);
+    assert.doesNotMatch(script, /Agent-insight requires Node\.js 20 or higher/);
+    if (platform === 'unix') {
+      assert.match(script, /CAN_PROMPT=false/);
+      assert.match(script, /Non-interactive shell: using the new Host/);
+      const syntax = spawnSync('bash', ['-n'], { input: script, encoding: 'utf8' });
+      assert.equal(syntax.status, 0, syntax.stderr);
+    }
+  }
+});
+
+test('mixed one-line setup retains the Node.js requirement for command-line agents', async () => {
+  const response = await getSetup(new Request(
+    'http://localhost/api/ingest/setup?key=test-key&frameworks=opencode,llamaindex',
+    { headers: { 'x-platform': 'unix', host: 'localhost:3000' } },
+  ));
+  const script = await response.text();
+
+  assert.equal(response.status, 200);
+  assert.match(script, /SELECTED_FRAMEWORKS="opencode,llamaindex"/);
+  assert.match(script, /Agent-insight requires Node\.js 20 or higher/);
 });
 
 test('agents page preserves LlamaIndex platform and does not mislabel unknown frameworks', () => {

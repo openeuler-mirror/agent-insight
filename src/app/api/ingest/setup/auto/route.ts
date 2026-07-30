@@ -109,7 +109,7 @@ const frameworks = [
     { name: 'Hermes', value: 'hermes' },
     { name: 'OpenClaw', value: 'openclaw' },
     { name: 'JiuwenSwarm', value: 'jiuwen' },
-    { name: 'LlamaIndex Trace Collector', value: 'llamaindex' }
+    { name: 'LlamaIndex', value: 'llamaindex' }
 ];
 
 async function select() {
@@ -322,9 +322,10 @@ if [ "$INSTALL_LLAMAINDEX" = "true" ]; then
         echo "❌ Python 3.10+ is required for the LlamaIndex collector."
     elif ! "$LLAMAINDEX_PYTHON" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"; then
         echo "❌ $LLAMAINDEX_PYTHON must be Python 3.10 or newer."
-    elif ! "$LLAMAINDEX_PYTHON" -c "import llama_index.core" >/dev/null 2>&1; then
-        echo "❌ LlamaIndex is not available in $LLAMAINDEX_PYTHON. Select the Python used by the observed project with AGENT_INSIGHT_LLAMAINDEX_PYTHON."
     else
+        if ! "$LLAMAINDEX_PYTHON" -c "import llama_index.core" >/dev/null 2>&1; then
+            echo "ℹ️  LlamaIndex is not installed in $LLAMAINDEX_PYTHON; deployment will continue. Activate the observed project environment before running the Agent."
+        fi
         LLAMAINDEX_ARCHIVE=$(mktemp "\${TMPDIR:-/tmp}/agent-insight-llamaindex.XXXXXX.zip")
         LLAMAINDEX_PACKAGE_URL="$AGENT_INSIGHT_BASE_URL/api/ingest/setup/llamaindex-collector"
         LLAMAINDEX_ROOT="$HOME/.agent-insight/collectors/llamaindex"
@@ -739,7 +740,7 @@ if [ "$INSTALL_JIUWEN" = "true" ]; then
     echo "  5. Restart JiuwenSwarm (agentserver), then start a conversation"
 fi
 if [ "$LLAMAINDEX_READY" = "true" ]; then
-    echo "  6. Restart terminal, then run: $LLAMAINDEX_PYTHON -m agent_insight_llamaindex.cli run -- $LLAMAINDEX_PYTHON app.py"
+    echo "  6. Restart terminal, activate the project environment, then run: python -m agent_insight_llamaindex.cli run -- python app.py"
 fi
 echo "------------------------------------------------"
 `;
@@ -822,7 +823,7 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    "    { name: \'Hermes\', value: \'hermes\' },"',
         '    "    { name: \'OpenClaw\', value: \'openclaw\' },"',
         '    "    { name: \'JiuwenSwarm\', value: \'jiuwen\' },"',
-        '    "    { name: \'LlamaIndex Trace Collector\', value: \'llamaindex\' }"',
+        '    "    { name: \'LlamaIndex\', value: \'llamaindex\' }"',
         '    "];"',
         '    ""',
         '    "async function select() {"',
@@ -1009,7 +1010,7 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '            & $llamaIndexPython -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"',
         '            if ($LASTEXITCODE -ne 0) { throw "$llamaIndexPython must be Python 3.10 or newer" }',
         '            & $llamaIndexPython -c "import llama_index.core"',
-        '            if ($LASTEXITCODE -ne 0) { throw "LlamaIndex is not available in $llamaIndexPython" }',
+        '            if ($LASTEXITCODE -ne 0) { Write-Host "ℹ️  LlamaIndex is not installed in $llamaIndexPython; deployment will continue. Activate the observed project environment before running the Agent." }',
         '            New-Item -ItemType Directory -Path $llamaIndexRoot, $llamaIndexStaging -Force | Out-Null',
         '            Invoke-WebRequest -Uri $llamaIndexPackageUrl -OutFile $llamaIndexArchive',
         '            & $llamaIndexPython -m zipfile -e $llamaIndexArchive $llamaIndexStaging',
@@ -1380,7 +1381,7 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    Write-Host "  5. Restart JiuwenSwarm (agentserver), then start a conversation"',
         '}',
         'if ($LLAMAINDEX_READY) {',
-        '    Write-Host "  6. Restart PowerShell, then run: $llamaIndexPython -m agent_insight_llamaindex.cli run -- $llamaIndexPython app.py"',
+        '    Write-Host "  6. Restart PowerShell, activate the project environment, then run: python -m agent_insight_llamaindex.cli run -- python app.py"',
         '}',
         'Write-Host "------------------------------------------------"',
     ].join('\n');

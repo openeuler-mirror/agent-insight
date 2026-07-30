@@ -39,7 +39,7 @@ npm install --global ./dist-local/agent-insight-0.5.4.tgz
 agent-insight start
 ```
 
-然后打开 Agent Insight 的“安装指导”页面，在一键脚本中选择 `LlamaIndex Trace Collector`。
+然后打开 Agent Insight 的“安装指导”页面，在一键脚本中选择 `LlamaIndex`。
 安装器从当前 Agent Insight 实例下载只包含采集器模块的 zip，并部署到：
 
 ```text
@@ -52,7 +52,8 @@ agent-insight start
 `~/.agent-insight/llamaindex_env.sh/.ps1`，仅把上述唯一模块目录加入 `PYTHONPATH`；采集器仍需
 通过 `setup()` 或专用 `cli run` 显式启用，不会自动影响其他 Python 应用或采集器。
 
-若 LlamaIndex 位于虚拟环境，执行安装指导命令前指定该环境的 Python：
+一行安装不要求系统 Python 已安装 LlamaIndex；安装完成后激活项目自己的虚拟环境，再启动
+Agent 即可。若希望安装器使用项目虚拟环境完成解压和配置，可在执行安装指导命令前指定：
 
 ```bash
 export AGENT_INSIGHT_LLAMAINDEX_PYTHON=/path/to/venv/bin/python
@@ -62,7 +63,8 @@ export AGENT_INSIGHT_LLAMAINDEX_PYTHON=/path/to/venv/bin/python
 $env:AGENT_INSIGHT_LLAMAINDEX_PYTHON = "C:\path\to\venv\Scripts\python.exe"
 ```
 
-这个 Python 只用于确认 Python 3.10+、检查项目已安装 LlamaIndex、解压归档和写入配置；
+这个 Python 只用于确认 Python 3.10+、解压归档和写入配置；未安装 LlamaIndex 时安装器会提示，
+但不会中止部署。运行时仍由项目环境提供 LlamaIndex、模型 SDK 和 MCP 等业务依赖。
 安装器不会替项目安装或升级 LlamaIndex 依赖。零代码 `run` 只对子进程注入包内 bootstrap，
 不注册全局 `sitecustomize`、不改写其他采集器配置，也不删除其他框架目录。
 

@@ -86,7 +86,7 @@ CodeAgent 当前会同时发出 Logs、Traces 和 Metrics，且内部配置会�
 
 LlamaIndex 项目使用由 Agent Insight 服务端直接分发的 Python 模块 `agent_insight_llamaindex`，并利用 LlamaIndex 原生 instrumentation dispatcher 采集 Agent、子 Agent、Tool、LLM、Retriever、Synthesizer 和 Workflow span。插件使用持久化 spool 与后台上传线程，支持进程重启续传、事件/定时上传及指数退避，不在业务调用线程执行网络请求。
 
-普通 setup 和 auto setup 的 Linux/Windows 安装选择中均包含 `LlamaIndex Trace Collector`。安装器从当前 Agent Insight 实例下载运行时归档，直接部署到 `~/.agent-insight/collectors/llamaindex/current/`，并生成独立环境入口和卸载脚本；不会调用 pip 或写入 `site-packages`。项目使用虚拟环境时，先设置 `AGENT_INSIGHT_LLAMAINDEX_PYTHON` 为该虚拟环境的 Python 路径，用于确认 LlamaIndex 可用并执行配置。npm 负责安装 Agent Insight 服务端并携带采集器源码。
+“安装指导”页面把 `LlamaIndex` 与其他框架放在同一选择器中；勾选后直接运行页面生成的 `curl ... | bash` 或 `irm ... | iex` 一行命令。普通 setup 和 auto setup 的 Linux/Windows 安装选择均支持该采集器。安装器从当前 Agent Insight 实例下载运行时归档，直接部署到 `~/.agent-insight/collectors/llamaindex/current/`，并生成独立环境入口和卸载脚本；不会调用 pip 或写入 `site-packages`。安装时不要求系统 Python 已安装 LlamaIndex；运行 Agent 前激活项目自己的 Python 环境即可。也可设置 `AGENT_INSIGHT_LLAMAINDEX_PYTHON`，让安装器使用指定的 Python 完成解压和配置。npm 负责安装 Agent Insight 服务端并携带采集器源码。
 
 该运行时 zip 不是可执行 `pip install` 的 Python 发布包，并有意不包含 `pyproject.toml`。采集器由安装指导脚本直接部署和更新；LlamaIndex、模型 SDK 与 MCP Tool 等业务依赖仍由项目自己的 Python 环境管理。
 
