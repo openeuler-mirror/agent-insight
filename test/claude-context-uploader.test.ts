@@ -227,3 +227,54 @@ test("uploader: host 归一化(补协议 / 去尾斜杠)", () => {
   assert.equal(uploader.normalizeHost("https://example.com/"), "https://example.com")
   assert.equal(uploader.normalizeHost(""), "http://127.0.0.1:3000")
 })
+
+test("uploader: 子 agent 归属映射——meta.toolUseId 连父侧,uuid/内部工具都采齐,内部输出并入", () => {
+  const dir = tmpdir("subagents")
+  const transcript = path.join(dir, `${SESSION}.jsonl`)
+  fs.writeFileSync(transcript, JSON.stringify({ type: "user", message: { role: "user", content: "问题" } }) + "\n", "utf8")
+  const subDir = path.join(dir, SESSION, "subagents")
+  fs.mkdirSync(subDir, { recursive: true })
+  // 真实形状:agent-<id>.meta.json 的 toolUseId 直连父侧那条 Agent tool_use
+  fs.writeFileSync(path.join(subDir, "agent-a1.meta.json"),
+    JSON.stringify({ agentType: "Explore", description: "查配置", toolUseId: "call_task_1", spawnDepth: 1 }), "utf8")
+  fs.writeFileSync(path.join(subDir, "agent-a1.jsonl"), [
+    JSON.stringify({ type: "user", uuid: "u-sub-0", isSidechain: true, message: { role: "user", content: "找配置" } }),
+    JSON.stringify({ type: "assistant", uuid: "u-sub-1", isSidechain: true, message: { role: "assistant", content: [
+      { type: "text", text: "我先看目录" },
+      { type: "tool_use", id: "call_inner_ls", name: "Bash", input: { command: "ls" } },
+    ] } }),
+    JSON.stringify({ type: "user", uuid: "u-sub-2", isSidechain: true, timestamp: "2026-07-29T12:00:03.000Z",
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: "call_inner_ls", content: "port.txt timeout.txt" }] } }),
+    JSON.stringify({ type: "assistant", uuid: "u-sub-3", isSidechain: true, message: { role: "assistant", content: [
+      { type: "text", text: "结论:端口 8931" },
+    ] } }),
+  ].join("\n") + "\n", "utf8")
+  // 没有 toolUseId 的 meta:挂不回任何调用,应跳过
+  fs.writeFileSync(path.join(subDir, "agent-a2.meta.json"), JSON.stringify({ agentType: "Explore" }), "utf8")
+  fs.writeFileSync(path.join(subDir, "agent-a2.jsonl"),
+    JSON.stringify({ type: "assistant", uuid: "u-orphan", message: { role: "assistant", content: [] } }) + "\n", "utf8")
+
+  const result = uploader.collectSubagentMaps(transcript, SESSION, uploader.LIMITS)
+  assert.equal(result.items.length, 1)
+  const item = result.items[0]
+  assert.equal(item.kind, "subagent_map")
+  assert.equal(item.toolUseId, "call_task_1")
+  const payload = JSON.parse(item.text)
+  assert.deepEqual(payload.messageUuids, ["u-sub-1", "u-sub-3"])
+  assert.deepEqual(payload.toolUseIds, ["call_inner_ls"])
+  assert.equal(payload.agentType, "Explore")
+  assert.equal(payload.spawnDepth, 1)
+  // 内部工具输出只在子 agent jsonl 里,主 transcript 扫不到 —— 必须从这里带出
+  assert.equal(result.outputs.get("call_inner_ls")?.text, "port.txt timeout.txt")
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
+test("uploader: 没有 subagents 目录时安静返回空(绝不抛错影响会话)", () => {
+  const dir = tmpdir("nosub")
+  const transcript = path.join(dir, `${SESSION}.jsonl`)
+  fs.writeFileSync(transcript, "", "utf8")
+  const result = uploader.collectSubagentMaps(transcript, SESSION, uploader.LIMITS)
+  assert.equal(result.items.length, 0)
+  assert.equal(result.outputs.size, 0)
+  fs.rmSync(dir, { recursive: true, force: true })
+})

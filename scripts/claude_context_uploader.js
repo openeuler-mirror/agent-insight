@@ -47,6 +47,9 @@ const LIMITS = {
   hookItems: 50,
   toolOutputs: 200,          // 一个会话最多传几条工具输出
   toolOutputChars: 4000,     // 单条工具输出上限(和 AGENT_INSIGHT_MAX_TOOL_IO 同口径)
+  subagentMaps: 30,          // 一个会话最多传几个子 agent 的归属映射
+  subagentMapIds: 400,       // 单个映射里 uuid / tool_use_id 各自的条数上限
+  subagentFileBytes: 16 * 1024 * 1024,
   textChars: 64000,
   transcriptBytes: 64 * 1024 * 1024,
   requestTimeoutMs: 10000,
@@ -340,6 +343,106 @@ async function collectToolOutputs(transcriptPath, limits) {
   return toolOutputItems(await scanTranscript(transcriptPath, limits), limits);
 }
 
+/**
+ * 子 agent 归属映射。子 agent 的轮次**不在主 transcript 里**,单独存在
+ * `<transcript 同目录>/<sessionId>/subagents/agent-<id>.jsonl`,配套的
+ * `agent-<id>.meta.json` 里 `toolUseId` 直连父侧那条 Task/Agent tool_use。
+ *
+ * OTel 事件里没有任何 agent 标识(实测 attributes 只有 session.id / prompt.id 等),
+ * 但 assistant_response 带 message.uuid、tool_result 带 tool_use_id ——
+ * 与子 agent jsonl 里的 uuid / tool_use.id 恰好一一对应(且与主 transcript 不相交)。
+ * 把这两组 id 连同 meta.toolUseId 传上去,服务端就能把平铺在 root 的子 agent
+ * 内部轮次逐轮归还给对应的子 agent 节点。
+ */
+function collectSubagentMaps(transcriptPath, sessionId, limits) {
+  const items = [];
+  const outputs = new Map();      // 子 agent 内部工具的输出:tool_use_id → { text, isError, capturedAt }
+  const agentToolIds = new Set(); // 内部再 spawn(depth 2)的 Task 调用,输出优先保留
+  const result = { items, outputs, agentToolIds };
+  if (!transcriptPath || !sessionId) return result;
+  const dir = path.join(path.dirname(transcriptPath), sessionId, 'subagents');
+  let metaNames;
+  try {
+    metaNames = fs.readdirSync(dir).filter((name) => /^agent-.*\.meta\.json$/.test(name)).sort();
+  } catch {
+    return result; // 没有 subagents 目录 = 本会话没 spawn 过子 agent
+  }
+
+  for (const metaName of metaNames.slice(0, limits.subagentMaps)) {
+    try {
+      const meta = JSON.parse(fs.readFileSync(path.join(dir, metaName), 'utf8'));
+      const toolUseId = typeof meta.toolUseId === 'string' ? meta.toolUseId.trim() : '';
+      if (!toolUseId) continue; // 挂不回任何一次 Task 调用,传了也没用
+
+      const jsonlPath = path.join(dir, metaName.replace(/\.meta\.json$/, '.jsonl'));
+      const stat = fs.statSync(jsonlPath);
+      if (stat.size > limits.subagentFileBytes) continue;
+
+      const messageUuids = [];
+      const toolUseIds = [];
+      for (const line of fs.readFileSync(jsonlPath, 'utf8').split('\n')) {
+        if (!line.trim()) continue;
+        let entry;
+        try {
+          entry = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        const content = entry.message && Array.isArray(entry.message.content) ? entry.message.content : [];
+        if (entry.type === 'assistant') {
+          if (typeof entry.uuid === 'string' && messageUuids.length < limits.subagentMapIds) {
+            messageUuids.push(entry.uuid);
+          }
+          for (const block of content) {
+            if (!block || block.type !== 'tool_use' || typeof block.id !== 'string') continue;
+            if (toolUseIds.length < limits.subagentMapIds) toolUseIds.push(block.id);
+            if (block.name === 'Agent' || block.name === 'Task') agentToolIds.add(block.id);
+          }
+          continue;
+        }
+        // 内部工具输出只存在于这份 jsonl(主 transcript 里没有),与 scanTranscript 同口径拍平
+        for (const block of content) {
+          if (!block || block.type !== 'tool_result') continue;
+          const id = block.tool_use_id || block.toolUseId || block.id;
+          if (!id) continue;
+          const text = flattenToolOutput(block.content !== undefined ? block.content : block.output);
+          if (!text.trim()) continue;
+          outputs.set(String(id), {
+            text: text.slice(0, limits.toolOutputChars),
+            isError: block.is_error === true,
+            capturedAt: entry.timestamp,
+          });
+        }
+        if (entry.toolUseResult !== undefined && entry.toolUseID && !outputs.has(String(entry.toolUseID))) {
+          const text = flattenToolOutput(entry.toolUseResult);
+          if (text.trim()) {
+            outputs.set(String(entry.toolUseID), { text: text.slice(0, limits.toolOutputChars), isError: false, capturedAt: entry.timestamp });
+          }
+        }
+      }
+      if (messageUuids.length === 0 && toolUseIds.length === 0) continue;
+
+      const payload = {
+        toolUseId,
+        agentType: typeof meta.agentType === 'string' ? meta.agentType : undefined,
+        spawnDepth: Number.isFinite(meta.spawnDepth) ? meta.spawnDepth : undefined,
+        messageUuids,
+        toolUseIds,
+      };
+      const text = JSON.stringify(payload);
+      items.push({
+        kind: 'subagent_map',
+        toolUseId,
+        text,
+        hash: sha256(`subagent_map:${text}`), // 会话继续跑、映射长大 → 新 hash → 重传全量映射,服务端取并集
+        capturedAt: new Date(stat.mtimeMs).toISOString(),
+      });
+    } catch {}
+  }
+  log(`subagent maps: ${items.length}, inner tool outputs: ${outputs.size} from ${dir}`);
+  return result;
+}
+
 function checkpointPath(apiKey) {
   const suffix = apiKey ? sha256(apiKey).slice(0, 16) : 'anonymous';
   return path.join(BASE_DIR, `claude_context_checkpoint_${suffix}.json`);
@@ -511,7 +614,17 @@ async function main() {
   if (wantHooks || wantTools) {
     const scan = await scanTranscript(payload.transcript_path, limits);  // 只扫一遍 transcript
     if (wantHooks) items.push(...scan.hookContexts);
-    if (wantTools) items.push(...toolOutputItems(scan, limits));
+    if (wantTools) {
+      // 子 agent 归属映射跟工具输出同一开关:两者都是为了把子 agent 子树建出来。
+      // 内部工具输出并进同一个 outputs 池,让全局上限与"优先保 Task 输出"一并生效。
+      const sub = collectSubagentMaps(payload.transcript_path, sessionId, limits);
+      for (const [id, value] of sub.outputs) {
+        if (!scan.outputs.has(id)) scan.outputs.set(id, value);
+      }
+      for (const id of sub.agentToolIds) scan.agentToolIds.add(id);
+      items.push(...toolOutputItems(scan, limits));
+      items.push(...sub.items);
+    }
   }
   if (dryRun) {
     // 只报"会传什么",绝不外发,也不动 checkpoint —— 支持同学排障用得上。
@@ -570,6 +683,7 @@ module.exports = {
   collectSystemPrompts,
   collectHookContexts,
   collectToolOutputs,
+  collectSubagentMaps,
   scanTranscript,
   toolOutputItems,
   flattenSystem,

@@ -90,3 +90,27 @@ test("mergeSessionInteractionsMonotonic 工具输出只增不减:后到的空值
     full,
   )
 })
+
+// 回归:排序语义 —— incoming(完整快照)的相对顺序是权威,不能整体按 timestamp 重排。
+// 聚合器会刻意把补传合成的子 agent 轮次追加到父轮 task 调用之后(建树认领是顺序敏感的),
+// 而这类轮次的 timestamp 常早于 task 调用挂上去的那一轮;按 ts 重排会毁掉认领顺序。
+test("mergeSessionInteractionsMonotonic 保 incoming 顺序,existing 独有条目按时间插入", () => {
+  const incoming = [
+    { role: "user", content: "q", timestamp: "2026-01-01T00:00:00.000Z" },
+    { role: "assistant", content: "a", timestamp: "2026-01-01T00:00:08.000Z" },
+    // 聚合器刻意放在最后,但时间戳更早
+    { role: "subagent", subagent_session_id: "s:t1", content: "sub", timestamp: "2026-01-01T00:00:05.000Z" },
+  ]
+  const existing = [
+    { role: "user", content: "q", timestamp: "2026-01-01T00:00:00.000Z" },
+    // incoming 里没有的旧条目(如乱序上传的子会话):按时间插到中间
+    { role: "assistant", content: "old-only", timestamp: "2026-01-01T00:00:03.000Z" },
+  ]
+
+  const merged = mergeSessionInteractionsMonotonic(existing as any[], incoming as any[])
+  assert.deepEqual(
+    merged.map((m: any) => m.content),
+    ["q", "old-only", "a", "sub"],
+    "incoming 顺序原样保留(sub 仍在最后),old-only 按 ts 插进骨架",
+  )
+})

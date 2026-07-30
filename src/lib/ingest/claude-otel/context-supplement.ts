@@ -10,9 +10,20 @@ import type { ClaudeOtelEvent } from './types';
 export const CONTEXT_SUPPLEMENT_EVENT = 'context_supplement';
 export const MAX_CONTEXT_ITEMS = 200;
 export const DEFAULT_MAX_TEXT_CHARS = 64_000;
+/** subagent_map 的 text 是结构化 JSON,截一刀就整段废了 —— 不参与 maxTextChars,超这个硬上限直接整条丢弃 */
+export const MAX_SUBAGENT_MAP_CHARS = 128_000;
 
-/** 支持的补传类型。都只在客户端本机磁盘上,OTel 事件里拿不到。 */
-export const SUPPLEMENT_KINDS = ['system_prompt', 'hook_context', 'tool_output'] as const;
+/**
+ * 支持的补传类型。都只在客户端本机磁盘上,OTel 事件里拿不到。
+ *
+ * subagent_map:子 agent 归属映射。text 是一段 JSON:
+ * `{toolUseId, agentType, spawnDepth, messageUuids[], toolUseIds[]}` ——
+ * 来自客户端 `<transcript 同目录>/<sessionId>/subagents/agent-*.jsonl` 及配套 meta.json。
+ * OTel 事件不带 agent 标识,聚合器靠 messageUuids 匹配 assistant_response 的
+ * message.uuid、靠 toolUseIds 匹配 tool_result 的 tool_use_id,把平铺在 root 的
+ * 子 agent 内部轮次逐轮归还给 `<session>:<toolUseId>` 那个子 agent 节点。
+ */
+export const SUPPLEMENT_KINDS = ['system_prompt', 'hook_context', 'tool_output', 'subagent_map'] as const;
 export type SupplementKind = (typeof SUPPLEMENT_KINDS)[number];
 
 export type ContextSupplementItem = {
@@ -63,10 +74,13 @@ export function buildContextSupplementEvents(
     if (!(SUPPLEMENT_KINDS as readonly string[]).includes(kind)) return;
     const rawText = typeof item.text === 'string' ? item.text : '';
     if (!rawText.trim()) return;
-    // 工具输出没有 tool_use_id 就挂不回任何一次调用,直接丢弃
+    // 工具输出/子 agent 映射没有 tool_use_id 就挂不回任何一次调用,直接丢弃
     const toolUseId = asTrimmedString(item.toolUseId);
-    if (kind === 'tool_output' && !toolUseId) return;
-    const text = rawText.length > options.maxTextChars ? rawText.slice(0, options.maxTextChars) : rawText;
+    if ((kind === 'tool_output' || kind === 'subagent_map') && !toolUseId) return;
+    if (kind === 'subagent_map' && rawText.length > MAX_SUBAGENT_MAP_CHARS) return;
+    const text = kind === 'subagent_map' || rawText.length <= options.maxTextChars
+      ? rawText
+      : rawText.slice(0, options.maxTextChars);
     const wasTruncated = text.length < rawText.length;
     if (wasTruncated) truncated += 1;
 
@@ -87,7 +101,7 @@ export function buildContextSupplementEvents(
         content_hash: asTrimmedString(item.hash) || undefined,
         hook_event: kind === 'hook_context' ? asTrimmedString(item.hookEvent) || undefined : undefined,
         hook_name: kind === 'hook_context' ? asTrimmedString(item.hookName) || undefined : undefined,
-        tool_use_id: kind === 'tool_output' ? toolUseId : undefined,
+        tool_use_id: kind === 'tool_output' || kind === 'subagent_map' ? toolUseId : undefined,
         is_error: kind === 'tool_output' ? item.isError === true : undefined,
       },
     });

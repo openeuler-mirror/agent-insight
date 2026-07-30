@@ -580,6 +580,16 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
   const supplementToolOutputById = new Map<string, any>();
   const emittedSupplementSubagents = new Set<string>();
   const pendingSupplementSubagents: any[] = [];
+  // 子 agent 归属映射(kind=subagent_map):OTel 事件不带 agent 标识,客户端把子 agent
+  // transcript(subagents/agent-*.jsonl)里的 message uuid 与内部 tool_use_id 传上来,
+  // 聚合器据此把 fallback 路径的轮次逐轮归还给 `<session>:<toolUseId>` 那个子 agent。
+  const subagentMapByToolId = new Map<string, { agentType?: string; spawnDepth?: number }>();
+  const uuidToSubagentToolId = new Map<string, string>();
+  const innerToolIdToSubagentToolId = new Map<string, string>();
+  // 逐轮归属出的子 agent 轮次,按 scope(父侧 toolUseId)攒着,主循环后统一追加
+  const supplementTurnsByScope = new Map<string, any[]>();
+  // 内部工具的 tool_result 先于该 scope 第一轮到达时的暂存
+  const pendingScopeToolCalls = new Map<string, any[]>();
 
   const pendingRequestsByPrompt = new Map<string, ClaudeOtelEvent[]>();
   // assistant_response 兜底路径(见下方主循环)要用同一批 api_request 取 usage/时间。
@@ -608,6 +618,23 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
         const toolUseId = asString(attrs.tool_use_id);
         const output = normalizeToolResultOutput(attrs.text);
         if (toolUseId && output !== undefined) supplementToolOutputById.set(toolUseId, output);
+      } else if (attrs.kind === 'subagent_map') {
+        // 重传的映射(会话继续跑、映射长大)取并集,晚到的 agentType 覆盖
+        const parsed = parseJsonMaybe(attrs.text);
+        const toolUseId = asString(parsed?.toolUseId) || asString(attrs.tool_use_id);
+        if (parsed && toolUseId) {
+          const prev = subagentMapByToolId.get(toolUseId) || {};
+          subagentMapByToolId.set(toolUseId, {
+            agentType: asString(parsed.agentType) || prev.agentType,
+            spawnDepth: Number.isFinite(parsed.spawnDepth) ? parsed.spawnDepth : prev.spawnDepth,
+          });
+          for (const uuid of Array.isArray(parsed.messageUuids) ? parsed.messageUuids : []) {
+            if (typeof uuid === 'string' && uuid) uuidToSubagentToolId.set(uuid, toolUseId);
+          }
+          for (const innerId of Array.isArray(parsed.toolUseIds) ? parsed.toolUseIds : []) {
+            if (typeof innerId === 'string' && innerId) innerToolIdToSubagentToolId.set(innerId, toolUseId);
+          }
+        }
       }
       continue;
     }
@@ -761,6 +788,38 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
       if (seen < (usableResponseCountByPrompt.get(key) || 0)) continue;
       const text = asString(attrs.response);
       if (!text.trim()) continue;
+      // 子 agent 内部轮次(message.uuid 命中补传映射):归到对应 scope,不算 root 的一轮。
+      // 只有 fallback 路径会走到这里,同机部署(有可读响应体)在上面 seen<usable 就跳过了,
+      // 行为不受影响。不动 finalResult / model / root system / root pending —— 那些都是 root 的。
+      const mappedToolId = uuidToSubagentToolId.get(asString(attrs['message.uuid']));
+      if (mappedToolId) {
+        const map = subagentMapByToolId.get(mappedToolId) || {};
+        const subagentName = normalizeSubagentType(map.agentType);
+        agentNames.add(subagentName);
+        const scope = `${event.sessionId}:${mappedToolId}`;
+        const turn = {
+          role: 'subagent',
+          content: text,
+          timestamp: eventTime(event),
+          timeInfo: interactionTimeInfo(requestEvent, event),
+          agent: subagentName,
+          subagent_name: subagentName,
+          subagent_session_id: scope,
+          prompt_id: event.promptId,
+          model: attrs.model,
+          usage: normalizeUsage(undefined, requestEvent?.attributes || {}),
+          subagent_source: 'client-supplement',
+        };
+        const turns = supplementTurnsByScope.get(scope) || [];
+        turns.push(turn);
+        supplementTurnsByScope.set(scope, turns);
+        // 早于本轮到达的内部工具调用,现在有轮可挂了
+        for (const pendingCall of pendingScopeToolCalls.get(scope) || []) {
+          mergeToolCallIntoInteraction(turn, pendingCall);
+        }
+        pendingScopeToolCalls.delete(scope);
+        continue;
+      }
       finalResult = text;
       if (attrs.model) model = String(attrs.model);
       // 跨机场景只有这条兜底路径会跑,system prompt 得在这里发射(root scope —— 本事件
@@ -809,6 +868,23 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
             : subagentOutputByToolId.get(toolId))
         : undefined;
       const toolCall = buildToolCallFromResult(event, toolUse, readToolResultOutput(event, fallbackOutput));
+      // 子 agent 内部工具(tool_use_id 命中补传映射):挂到该 scope 最新一轮,而不是 root。
+      // `!toolUse` 兜住同机:读得到响应体正文时 tool_use 块存在,走正常路径,这里不插手。
+      const innerScope = typeof toolId === 'string' && !toolUse ? innerToolIdToSubagentToolId.get(toolId) : undefined;
+      if (innerScope) {
+        const scope = `${event.sessionId}:${innerScope}`;
+        const turns = supplementTurnsByScope.get(scope);
+        if (turns?.length) {
+          mergeToolCallIntoInteraction(turns[turns.length - 1], toolCall);
+        } else {
+          const buf = pendingScopeToolCalls.get(scope) || [];
+          buf.push(toolCall);
+          pendingScopeToolCalls.set(scope, buf);
+        }
+        const innerSkill = parseJsonMaybe(attrs.tool_parameters)?.skill_name || parseJsonMaybe(attrs.tool_input)?.skill;
+        if (typeof innerSkill === 'string' && innerSkill.trim()) skills.add(innerSkill.trim());
+        continue;
+      }
       let target = interactions.find((m) => Array.isArray(m.tool_calls) && m.tool_calls.some((tc: any) => tc.id === toolCall.id));
       // 读不到 api_response_body 的正文就拿不到 tool_use 块,tool_use_id 永远匹配不上,
       // 工具调用会全部滞留在 pendingToolResultById 里被丢掉(trace 只有对话没有工具)。
@@ -836,7 +912,10 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
         typeof toolId === 'string' &&
         !toolUse &&
         !subagentOutputByToolId.has(toolId) &&
-        !emittedSupplementSubagents.has(toolId)
+        !emittedSupplementSubagents.has(toolId) &&
+        // 逐轮映射已经把该子 agent 的真实轮次(含结论轮)归了位,再合成一条就是双份。
+        // 子 agent 的轮次事件先于它的 Task tool_result 到达,此处判空是可靠的。
+        !supplementTurnsByScope.get(`${event.sessionId}:${toolId}`)?.length
       ) {
         const text = textFromContent(supplementToolOutputById.get(toolId) ?? toolCall.output);
         if (text.trim()) {
@@ -870,7 +949,28 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
   }
 
   // 补传出来的子 agent 轮次统一放在最后:此时父轮上的 task 调用一定已经就位,建树能认领到。
+  // (落库合并侧已改为"incoming 顺序优先",这里摆好的顺序能原样存进库。)
   interactions.push(...pendingSupplementSubagents);
+
+  // 逐轮归属的子 agent 轮次:按 spawnDepth 升序追加 —— depth 2 的认领要靠 depth 1
+  // 轮次里挂的 task 调用先出现;同深度按首轮时间,保持时间线可读。
+  const scopeGroups = [...supplementTurnsByScope.entries()].sort(([scopeA, turnsA], [scopeB, turnsB]) => {
+    const depthOf = (scope: string) => subagentMapByToolId.get(scope.slice(scope.lastIndexOf(':') + 1))?.spawnDepth ?? 1;
+    const depthDiff = depthOf(scopeA) - depthOf(scopeB);
+    if (depthDiff !== 0) return depthDiff;
+    const tsOf = (turns: any[]) => Date.parse(turns[0]?.timestamp || '') || 0;
+    return tsOf(turnsA) - tsOf(turnsB);
+  });
+  for (const [, turns] of scopeGroups) {
+    interactions.push(...turns);
+  }
+  // 有映射、有内部工具事件,却始终没等来任何轮次(轮次日志丢失):挂到该 scope 合成的
+  // 兜底轮上(有 Task 输出补传就有它),别让这批工具调用凭空消失。两头都没有才真丢。
+  for (const [scope, calls] of pendingScopeToolCalls) {
+    const fallbackTurn = pendingSupplementSubagents.find((turn) => turn.subagent_session_id === scope);
+    if (!fallbackTurn) continue;
+    for (const pendingCall of calls) mergeToolCallIntoInteraction(fallbackTurn, pendingCall);
+  }
 
   if (!query) query = `Claude Code Session ${sessionId}`;
 

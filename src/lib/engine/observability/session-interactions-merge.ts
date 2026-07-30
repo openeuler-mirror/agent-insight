@@ -123,46 +123,65 @@ function mergeInteractionFields(existing: AnyObj, incoming: AnyObj): AnyObj {
   return out
 }
 
+function interactionTs(v: AnyObj): number {
+  return (
+    toMsTimestamp(v.timestamp) ??
+    toMsTimestamp(v.timeInfo?.created) ??
+    toMsTimestamp(v.timeInfo?.completed) ??
+    0
+  )
+}
+
 export function mergeSessionInteractionsMonotonic(existing: AnyObj[], incoming: AnyObj[]) {
   const base = Array.isArray(existing) ? existing : []
   const inc = Array.isArray(incoming) ? incoming : []
 
   const map = new Map<string, AnyObj>()
-  const orderHint = new Map<string, number>()
-  let idx = 0
+  const incomingKeys: string[] = [] // 骨架:incoming 里出现过的 key,保持 incoming 顺序
 
   for (const m of base) {
     if (!m) continue
     const k = getInteractionKey(m)
-    if (!map.has(k)) {
-      map.set(k, m)
-      orderHint.set(k, idx++)
-    }
+    if (!map.has(k)) map.set(k, m)
   }
 
   for (const m of inc) {
     if (!m) continue
     const k = getInteractionKey(m)
     const prev = map.get(k)
-    if (!prev) {
-      map.set(k, m)
-      orderHint.set(k, idx++)
-    } else {
-      map.set(k, mergeInteractionFields(prev, m))
-    }
+    map.set(k, prev ? mergeInteractionFields(prev, m) : m)
+    incomingKeys.push(k)
   }
 
-  const items = Array.from(map.entries()).map(([k, v]) => ({
-    k,
-    v,
-    ts:
-      toMsTimestamp(v.timestamp) ??
-      toMsTimestamp(v.timeInfo?.created) ??
-      toMsTimestamp(v.timeInfo?.completed) ??
-      0,
-    order: orderHint.get(k) ?? 0,
-  }))
+  // 排序语义:incoming 的相对顺序是权威,只有 existing 独有的条目按 timestamp 插入。
+  //
+  // 不能整体按 timestamp 重排:聚合器每批都产出完整快照,且会**刻意**把补传合成的
+  // 子 agent 轮次追加到父轮 task 调用之后 —— buildAgentCallTree 的认领是顺序敏感的,
+  // 子 agent 轮次先于父轮 task 调用出现就认领不到、子节点塌回 root。而这类轮次的
+  // timestamp(子 agent 真实完成时间)常常早于"task 调用挂上去的那一轮",按 ts 重排
+  // 正好把它排回前面,一次落库合并就把聚合器摆好的顺序毁掉(生产时间戳各不相同,必中)。
+  // 对本来就按时间产出的快照(绝大多数框架),incoming 顺序 == 时间顺序,行为不变。
+  const result: AnyObj[] = []
+  const placed = new Set<string>()
+  for (const k of incomingKeys) {
+    if (placed.has(k)) continue
+    placed.add(k)
+    result.push(map.get(k)!)
+  }
 
-  items.sort((a, b) => (a.ts - b.ts) || (a.order - b.order))
-  return items.map((x) => x.v)
+  // existing 独有的条目(incoming 缺了它们,如乱序上传丢失的子会话):按 timestamp
+  // 插到骨架里第一个"时间更晚"的条目之前,彼此保持原有相对顺序。
+  for (const m of base) {
+    if (!m) continue
+    const k = getInteractionKey(m)
+    if (placed.has(k)) continue
+    placed.add(k)
+    const v = map.get(k)!
+    const ts = interactionTs(v)
+    const at = result.findIndex((item) => interactionTs(item) > ts)
+    if (at < 0) result.push(v)
+    else result.splice(at, 0, v)
+  }
+
+  return result
 }
