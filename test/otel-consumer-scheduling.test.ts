@@ -35,6 +35,28 @@ function makeSpool(prefix: string, sessionIds: string[]): { dir: string; files: 
   return { dir, files }
 }
 
+/** 带 trace_completed_at 的 source —— 只有这两个字段都有值，consumer 才会触发结果质量评估。 */
+function makeEvaluatableSource(dir: string, files: string[]): SpoolSource {
+  return {
+    id: "test-source",
+    spoolDir: () => dir,
+    listFiles: () => files,
+    aggregate: (sessionId) => ({
+      sessionId,
+      eventCount: 1,
+      record: {
+        task_id: sessionId,
+        user: "test-user",
+        query: "q",
+        framework: "test",
+        final_result: "done",
+        trace_completed_at: new Date().toISOString(),
+      },
+    }),
+    defaultSkipEvaluation: () => true,
+  }
+}
+
 function makeSource(dir: string, files: string[], onAggregate?: (sessionId: string) => void): SpoolSource {
   return {
     id: "test-source",
@@ -255,6 +277,51 @@ test("一个文件里的几百个会话，文件处理完后必须整批回收�
     await waitFor(() => (getOtelSpoolConsumerForTest()?.pendingFiles.size ?? 1) === 0, 3000)
     await waitFor(() => (getOtelSpoolConsumerForTest()?.sessions.size ?? 1) === 0, 3000)
     assert.equal(getOtelSpoolConsumerForTest()?.sessions.size, 0, "文件完成后这一整批会话都该被回收")
+  } finally {
+    stopOtelSpoolConsumer()
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("结果质量评估永久 pending 时，consumer 必须继续处理后续 trace", async () => {
+  // 线上事故回归（2026-07-30）：evaluated 阶段原来同步 await 结果质量评估，
+  // 而裁判模型一次调用要 3 分钟、4 个维度里 accuracy 还是串起来的两段。
+  // 单飞调度器被一条 trace 的评估占住，连刚上报进来的新 trace 的 fast save 都排在后面，
+  // 实测单轮 10~29 分钟、吞吐掉到 ~6 条/小时（CPU 只有 7%，全在等网络）。
+  const sessions = Array.from({ length: 6 }, (_, i) => `eval-block-${i}`)
+  const { dir, files } = makeSpool("otel-eval-block-", sessions)
+  stopOtelSpoolConsumer()
+  try {
+    const saved: string[] = []
+    let scheduled = 0
+    startOtelSpoolConsumer({
+      sources: [makeEvaluatableSource(dir, files)],
+      saveExecution: async (data) => {
+        saved.push(String(data.task_id))
+        return { success: true, record: data }
+      },
+      // 永不 resolve —— 模拟裁判模型卡住
+      scheduleResultEvaluation: () => {
+        scheduled += 1
+        return new Promise<never>(() => {})
+      },
+      shortMs: 5,
+      longMs: 5,
+      maxWaitMs: 5,
+      tickMs: 5,
+      seedOnStart: false,
+      log: () => {},
+      warn: () => {},
+    })
+
+    await waitFor(() => new Set(saved).size >= sessions.length, 8000)
+    assert.equal(new Set(saved).size, sessions.length,
+      `评估卡住不能拖住入库，实际只入库 ${new Set(saved).size}/${sessions.length} 条`)
+    assert.ok(scheduled >= 1, "评估仍然要被触发，只是不等它")
+
+    // 簿记也要照常推进，否则重启会重读、retention 归档不掉
+    await waitFor(() => (getOtelSpoolConsumerForTest()?.pendingFiles.size ?? 1) === 0, 3000)
+    assert.equal(getOtelSpoolConsumerForTest()?.pendingFiles.size, 0, "backlog 必须排空")
   } finally {
     stopOtelSpoolConsumer()
     fs.rmSync(dir, { recursive: true, force: true })
