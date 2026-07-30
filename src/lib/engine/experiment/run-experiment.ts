@@ -281,6 +281,8 @@ export async function executeResultRow(user: string, resultId: string): Promise<
         where: { id: resultId },
         data: {
           status: 'done',
+          verdict: out.verdict ?? null,
+          summary: out.summary ?? null,
           score: out.score ?? null,
           pointsJson: out.points ? JSON.stringify(out.points) : null,
           evidenceJson: out.evidence ? JSON.stringify(out.evidence) : null,
@@ -386,11 +388,17 @@ export async function startExperimentRun(
           create: { experimentId, caseId: c.id, evaluatorId, status: 'pending' },
           update: {
             status: 'pending',
+            verdict: null,
+            summary: null,
             score: null,
             pointsJson: null,
             evidenceJson: null,
             errorMessage: null,
             durationMs: null,
+            humanScore: null,
+            humanReason: null,
+            humanBy: null,
+            humanAt: null,
           },
           select: { id: true },
         });
@@ -454,11 +462,17 @@ export async function retryResultRow(
     where: { id: resultId },
     data: {
       status: 'pending',
+      verdict: null,
+      summary: null,
       score: null,
       pointsJson: null,
       evidenceJson: null,
       errorMessage: null,
       durationMs: null,
+      humanScore: null,
+      humanReason: null,
+      humanBy: null,
+      humanAt: null,
     },
   });
   const status = await executeResultRow(user, resultId);
@@ -587,8 +601,10 @@ export async function evaluateEvalExperimentCase(
       where: { caseId_evaluatorId: { caseId, evaluatorId } },
       create: { experimentId, caseId, evaluatorId, status: 'pending' },
       update: {
-        status: 'pending', score: null, pointsJson: null,
+        status: 'pending', verdict: null, summary: null,
+        score: null, pointsJson: null,
         evidenceJson: null, errorMessage: null, durationMs: null,
+        humanScore: null, humanReason: null, humanBy: null, humanAt: null,
       },
       select: { id: true },
     });

@@ -152,7 +152,9 @@ export async function runDeductionEvaluator(
     return pt;
   });
 
-  const overallScore = Math.round(dimScores.reduce((a, b) => a + b, 0) / dimScores.length * 100);
+  const overallScore = dimScores.length > 0
+    ? Math.round(dimScores.reduce((a, b) => a + b, 0) / dimScores.length * 100)
+    : 100;
 
   return normalizeEvaluatorOutput({
     score: overallScore,

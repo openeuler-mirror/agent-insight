@@ -1,4 +1,4 @@
-# 创造性评估器（preset-creativity，独立成族）— 设计文档
+# 创造性评估器（preset-creativity-expression，独立成族）— 设计文档
 
 > 阶段：Phase2 需求设计 ｜ 状态：✅ 已实现 ｜ 关联 issue：[#160](https://gitcode.com/openeuler/opensource-intern/issues/160)
 
@@ -42,7 +42,7 @@
 
 | 字段 | 值 |
 |---|---|
-| id | `preset-creativity` |
+| id | `preset-creativity-expression` |
 | category | `res` |
 | requires | `[]` |
 | 关联文件 | `src/lib/engine/experiment/creativity-preset-evaluators.ts` |
