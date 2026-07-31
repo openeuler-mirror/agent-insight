@@ -71,7 +71,7 @@ const OTLP_BODY = {
   }],
 }
 
-/** 客户端补传器在 SessionEnd 时会发的四条。 */
+/** 客户端补传器在每轮 Stop 后会发的四条(SessionEnd 仍会幂等兜底)。 */
 const SUPPLEMENT_ITEMS = [
   { kind: "system_prompt", text: "You are Claude Code.\n项目规范：master 只能走 MR。", hash: "h-sys", capturedAt: TS },
   { kind: "hook_context", text: "【hook 注入】当前分支保护策略", hookEvent: "UserPromptSubmit", hookName: "repo-policy", hash: "h-hook", capturedAt: TS },

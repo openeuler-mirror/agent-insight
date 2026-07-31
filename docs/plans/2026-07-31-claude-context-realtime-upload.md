@@ -2,7 +2,7 @@
 
 > **Goal:** 让 Claude Code 跨机上下文补传在每轮结束后自动发生，并以异步队列、失败重试和增量扫描保证交互体验与可靠性。
 
-**Architecture:** `Stop`、`SubagentStop`、`StopFailure` hook 仅把 session 任务原子写入本地队列并启动 detached worker；worker 串行调用现有抽取/上传逻辑。`SessionEnd` 保持同步兜底。checkpoint 在内容 hash 基础上记录 transcript 成功偏移。
+**Architecture:** `Stop`、`SubagentStop`、`StopFailure` hook 仅把 session 任务原子写入本地队列并启动 detached worker；worker 串行调用现有抽取/上传逻辑。`SessionEnd` 写入同一队列并在无活动 worker 时同步排空。checkpoint 在内容 hash 基础上记录 transcript 成功偏移。
 
 **Tech Stack:** Node.js CommonJS uploader、Claude Code hooks、Node test runner、TypeScript tests、Next.js setup routes。
 

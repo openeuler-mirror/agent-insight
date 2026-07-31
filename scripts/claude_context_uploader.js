@@ -11,10 +11,12 @@
  *   2. hook 注入的 additionalContext:压根不进 OTel 事件,只落在本机会话 transcript。
  *   3. 工具输出:tool_result 事件通常只给 metadata / 大小,正文要回读请求体 —— 同样跨机拿不到。
  *      顺带解决子 agent:Task 调用的输出补上后,服务端就能重建出子 agent 节点。
- * 三者都只存在于【客户端本机磁盘】,所以由本脚本在会话结束时捞出来发给平台。
+ * 三者都只存在于【客户端本机磁盘】,所以由本脚本在每轮结束后捞出来发给平台。
  *
  * 用法:
- *   node claude_context_uploader.js              # 作为 Claude Code hook 运行(从 stdin 读 hook 负载)
+ *   node claude_context_uploader.js              # SessionEnd 入队并排空兜底(从 stdin 读 hook 负载)
+ *   node claude_context_uploader.js --enqueue    # Stop/SubagentStop/StopFailure 快速入队
+ *   node claude_context_uploader.js --drain-queue # 后台排空队列
  *   node claude_context_uploader.js --install-hook  # 幂等地把自己注册进 ~/.claude/settings.json
  *   node claude_context_uploader.js --uninstall-hook
  *   echo '{"session_id":"…","transcript_path":"…"}' | node claude_context_uploader.js --dry-run
@@ -32,12 +34,15 @@ const os = require('os');
 const crypto = require('crypto');
 const http = require('http');
 const https = require('https');
-const readline = require('readline');
+const childProcess = require('child_process');
 
 const HOME = os.homedir();
 const BASE_DIR = path.join(HOME, '.agent-insight');
 const ENV_FILE = path.join(BASE_DIR, '.env');
 const CLAUDE_SETTINGS = path.join(HOME, '.claude', 'settings.json');
+const QUEUE_DIR = path.join(BASE_DIR, 'claude_context_queue');
+const REALTIME_HOOK_EVENTS = ['Stop', 'SubagentStop', 'StopFailure'];
+const ALL_HOOK_EVENTS = [...REALTIME_HOOK_EVENTS, 'SessionEnd'];
 
 // —— 有界扫描的上限(都可用环境变量覆盖)——
 const LIMITS = {
@@ -220,41 +225,56 @@ function flattenToolOutput(value, depth = 0) {
 
 /**
  * 单趟流式扫 transcript,同时收 hook 注入上下文与工具输出。
- * 只扫一遍是刻意的:大会话动辄几十万行、上百 MB,读两遍不值当。
+ * startOffset 必须是上一次成功处理到的字节位置;读取上限落在半行时不推进那一行,
+ * 下一轮会从完整 JSONL 行头重读,不会因 UTF-8 字符宽度或分块边界丢数据。
  */
-function scanTranscript(transcriptPath, limits) {
+function scanTranscript(transcriptPath, limits, options = {}) {
   return new Promise((resolve) => {
     const hookContexts = [];
     const outputs = new Map();      // tool_use_id → { text, isError, capturedAt }
     const agentToolIds = new Set(); // Task/Agent 调用的 tool_use_id,选取时优先保留
-    const done = () => resolve({ hookContexts, outputs, agentToolIds });
+    let settled = false;
+    let processedOffset = 0;
+    const done = (nextOffset = processedOffset) => {
+      if (settled) return;
+      settled = true;
+      resolve({ hookContexts, outputs, agentToolIds, nextOffset });
+    };
 
-    if (!transcriptPath || !fs.existsSync(transcriptPath)) return done();
-
-    let bytes = 0;
-    let stream;
+    if (!transcriptPath) return done(0);
+    let stat;
     try {
-      stream = fs.createReadStream(transcriptPath, { encoding: 'utf8' });
+      stat = fs.statSync(transcriptPath);
     } catch {
-      return done();
+      return done(0);
     }
-    const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
-    const finish = () => { try { rl.close(); stream.destroy(); } catch {} done(); };
 
-    rl.on('line', (line) => {
-      bytes += line.length;
-      if (bytes > limits.transcriptBytes) return finish();
+    let startOffset = Math.max(0, Math.floor(Number(options.startOffset) || 0));
+    if (startOffset > stat.size) startOffset = 0; // transcript 被轮转/截短
+    processedOffset = startOffset;
+    if (startOffset === stat.size) return done(stat.size);
+
+    const maxBytes = Math.max(1, Math.floor(Number(limits.transcriptBytes) || LIMITS.transcriptBytes));
+    const endExclusive = Math.min(stat.size, startOffset + maxBytes);
+    let pending = Buffer.alloc(0);
+    let stream;
+
+    const processLine = (lineBuffer) => {
+      if (lineBuffer.length > 0 && lineBuffer[lineBuffer.length - 1] === 13) {
+        lineBuffer = lineBuffer.subarray(0, lineBuffer.length - 1);
+      }
+      const line = lineBuffer.toString('utf8');
       // 子串预筛,避免对每一行都 JSON.parse
       const hasHook = line.indexOf('"hook_additional_context"') !== -1;
       const hasToolResult = line.indexOf('"tool_result"') !== -1 || line.indexOf('"toolUseResult"') !== -1;
       const hasToolUse = line.indexOf('"tool_use"') !== -1;
-      if (!hasHook && !hasToolResult && !hasToolUse) return;
+      if (!hasHook && !hasToolResult && !hasToolUse) return true;
 
       let entry;
       try {
         entry = JSON.parse(line);
       } catch {
-        return;
+        return false;
       }
 
       // ① hook 注入的 additionalContext
@@ -304,10 +324,36 @@ function scanTranscript(transcriptPath, limits) {
           }
         }
       }
+      return true;
+    };
+
+    try {
+      stream = fs.createReadStream(transcriptPath, { start: startOffset, end: endExclusive - 1 });
+    } catch {
+      return done(startOffset);
+    }
+    stream.on('data', (chunk) => {
+      pending = pending.length === 0 ? chunk : Buffer.concat([pending, chunk]);
+      let newline;
+      while ((newline = pending.indexOf(10)) !== -1) {
+        const line = pending.subarray(0, newline);
+        processLine(line); // 有换行的损坏记录可安全跳过,否则会永久卡住 checkpoint
+        pending = pending.subarray(newline + 1);
+        processedOffset += newline + 1;
+      }
     });
-    rl.on('close', done);
-    rl.on('error', done);
-    stream.on('error', done);
+    stream.on('end', () => {
+      if (endExclusive === stat.size && pending.length > 0) {
+        // 没有换行的最后一条可能正被 Claude Code 写入;只有完整 JSON 才推进 checkpoint。
+        try {
+          JSON.parse(pending.toString('utf8'));
+          processLine(pending);
+          processedOffset += pending.length;
+        } catch {}
+      }
+      done(processedOffset);
+    });
+    stream.on('error', () => done(processedOffset));
   });
 }
 
@@ -465,8 +511,7 @@ function saveCheckpoint(file, checkpoint, limits) {
         .slice(0, ids.length - limits.checkpointSessions)
         .forEach((id) => delete checkpoint.sessions[id]);
     }
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, JSON.stringify(checkpoint), 'utf8');
+    atomicWriteJson(file, checkpoint);
   } catch {}
 }
 
@@ -519,80 +564,317 @@ function isOurHook(entry) {
   return !!entry && typeof entry.command === 'string' && entry.command.includes('claude_context_uploader');
 }
 
-function mutateSettings(mutate) {
+function mutateSettings(mutate, settingsPath = CLAUDE_SETTINGS) {
   let settings = {};
   try {
-    settings = JSON.parse(fs.readFileSync(CLAUDE_SETTINGS, 'utf8')) || {};
+    settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')) || {};
   } catch {}
   if (!settings.hooks || typeof settings.hooks !== 'object') settings.hooks = {};
   const changed = mutate(settings);
   if (!changed) return false;
-  fs.mkdirSync(path.dirname(CLAUDE_SETTINGS), { recursive: true });
-  fs.writeFileSync(CLAUDE_SETTINGS, `${JSON.stringify(settings, null, 2)}\n`, 'utf8');
+  fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+  fs.writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, 'utf8');
   return true;
 }
 
-function installHook() {
-  const command = hookCommand();
-  const changed = mutateSettings((settings) => {
-    const list = Array.isArray(settings.hooks.SessionEnd) ? settings.hooks.SessionEnd : [];
-    for (const matcher of list) {
-      const hooks = Array.isArray(matcher && matcher.hooks) ? matcher.hooks : [];
-      const mine = hooks.find(isOurHook);
-      if (mine) {
-        if (mine.command === command) return false;  // 已是最新,零改动
-        mine.command = command;                      // 只更新自己那条(比如 node 路径变了)
-        return true;
+function upsertHook(settings, event, command, timeout) {
+  const list = Array.isArray(settings.hooks[event]) ? settings.hooks[event] : [];
+  let found = false;
+  let changed = false;
+  const kept = [];
+  for (const matcher of list) {
+    const hooks = Array.isArray(matcher && matcher.hooks) ? matcher.hooks : [];
+    const nextHooks = [];
+    for (const hook of hooks) {
+      if (!isOurHook(hook)) {
+        nextHooks.push(hook);
+        continue;
       }
+      if (found) {
+        changed = true; // 清理重复的旧安装项
+        continue;
+      }
+      found = true;
+      const next = { ...hook, type: 'command', command, timeout };
+      if (JSON.stringify(next) !== JSON.stringify(hook)) changed = true;
+      nextHooks.push(next);
     }
-    list.push({ hooks: [{ type: 'command', command, timeout: 30 }] });
-    settings.hooks.SessionEnd = list;
-    return true;
-  });
-  console.log(changed
-    ? `✅ Claude Code SessionEnd hook 已注册到 ${CLAUDE_SETTINGS}`
-    : `✅ Claude Code SessionEnd hook 已是最新(${CLAUDE_SETTINGS})`);
+    if (nextHooks.length > 0 || hooks.length === 0) kept.push({ ...matcher, hooks: nextHooks });
+    else changed = true;
+  }
+  if (!found) {
+    kept.push({ hooks: [{ type: 'command', command, timeout }] });
+    changed = true;
+  }
+  settings.hooks[event] = kept;
+  return changed;
 }
 
-function uninstallHook() {
+function installHook(options = {}) {
+  const command = options.command || hookCommand();
+  const settingsPath = options.settingsPath || CLAUDE_SETTINGS;
   const changed = mutateSettings((settings) => {
-    const list = Array.isArray(settings.hooks.SessionEnd) ? settings.hooks.SessionEnd : [];
     let touched = false;
-    const kept = [];
-    for (const matcher of list) {
-      const hooks = Array.isArray(matcher && matcher.hooks) ? matcher.hooks : [];
-      const remaining = hooks.filter((hook) => !isOurHook(hook));
-      if (remaining.length !== hooks.length) touched = true;
-      if (remaining.length > 0) kept.push({ ...matcher, hooks: remaining });
-      else if (remaining.length === 0 && hooks.length === 0) kept.push(matcher);
+    for (const event of REALTIME_HOOK_EVENTS) {
+      if (upsertHook(settings, event, `${command} --enqueue`, 5)) touched = true;
     }
-    if (!touched) return false;
-    if (kept.length > 0) settings.hooks.SessionEnd = kept;
-    else delete settings.hooks.SessionEnd;
+    if (upsertHook(settings, 'SessionEnd', command, 30)) touched = true;
+    return touched;
+  }, settingsPath);
+  if (!options.quiet) {
+    console.log(changed
+      ? `✅ Claude Code 每轮异步补传 hook 与 SessionEnd 兜底已注册到 ${settingsPath}`
+      : `✅ Claude Code 上下文补传 hook 已是最新(${settingsPath})`);
+  }
+  return changed;
+}
+
+function uninstallHook(options = {}) {
+  const settingsPath = options.settingsPath || CLAUDE_SETTINGS;
+  const changed = mutateSettings((settings) => {
+    let touched = false;
+    for (const event of ALL_HOOK_EVENTS) {
+      const list = Array.isArray(settings.hooks[event]) ? settings.hooks[event] : [];
+      const kept = [];
+      for (const matcher of list) {
+        const hooks = Array.isArray(matcher && matcher.hooks) ? matcher.hooks : [];
+        const remaining = hooks.filter((hook) => !isOurHook(hook));
+        if (remaining.length !== hooks.length) touched = true;
+        if (remaining.length > 0) kept.push({ ...matcher, hooks: remaining });
+        else if (hooks.length === 0) kept.push(matcher);
+      }
+      if (kept.length > 0) settings.hooks[event] = kept;
+      else if (list.length > 0) delete settings.hooks[event];
+    }
+    return touched;
+  }, settingsPath);
+  if (!options.quiet) {
+    console.log(changed ? '✅ 已从 settings.json 摘除本 hook' : 'ℹ️  settings.json 里没有本 hook');
+  }
+  return changed;
+}
+
+// ─── 每轮补传队列(实时 hook 只落盘,网络由 detached worker 处理)────────────────
+function atomicWriteJson(file, value) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const temp = `${file}.tmp-${process.pid}-${crypto.randomBytes(6).toString('hex')}`;
+  try {
+    fs.writeFileSync(temp, JSON.stringify(value), { encoding: 'utf8', mode: 0o600 });
+    fs.renameSync(temp, file);
+  } finally {
+    try {
+      if (fs.existsSync(temp)) fs.unlinkSync(temp);
+    } catch {}
+  }
+}
+
+function queueFile(queueDir, sessionId) {
+  return path.join(queueDir, `job-${sha256(sessionId).slice(0, 32)}.json`);
+}
+
+function spawnDetachedWorker() {
+  try {
+    const child = childProcess.spawn(process.execPath || 'node', [__filename, '--drain-queue'], {
+      detached: true,
+      stdio: 'ignore',
+      env: process.env,
+    });
+    child.unref();
     return true;
-  });
-  console.log(changed ? '✅ 已从 settings.json 摘除本 hook' : 'ℹ️  settings.json 里没有本 hook');
+  } catch (error) {
+    log(`spawn queue worker failed: ${error && error.message}`);
+    return false;
+  }
+}
+
+function enqueuePayload(payload, options = {}) {
+  const sessionId = String(payload && payload.session_id || '').trim();
+  if (!sessionId) return false;
+  const queueDir = options.queueDir || QUEUE_DIR;
+  const normalized = {
+    session_id: sessionId,
+    transcript_path: String(payload.transcript_path || '').trim(),
+    hook_event_name: String(payload.hook_event_name || '').trim() || undefined,
+    agent_id: String(payload.agent_id || '').trim() || undefined,
+    agent_type: String(payload.agent_type || '').trim() || undefined,
+    queued_at: new Date().toISOString(),
+  };
+  try {
+    atomicWriteJson(queueFile(queueDir, sessionId), normalized);
+  } catch (error) {
+    log(`enqueue failed for ${sessionId}: ${error && error.message}`);
+    return false;
+  }
+  const spawnWorker = options.spawnWorker || spawnDetachedWorker;
+  try {
+    spawnWorker();
+  } catch (error) {
+    log(`start worker failed for ${sessionId}: ${error && error.message}`);
+  }
+  return true;
+}
+
+function isProcessAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return !!error && error.code === 'EPERM';
+  }
+}
+
+function acquireQueueLock(lockFile) {
+  fs.mkdirSync(path.dirname(lockFile), { recursive: true });
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let fd;
+    try {
+      fd = fs.openSync(lockFile, 'wx', 0o600);
+      fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }), 'utf8');
+      fs.closeSync(fd);
+      return true;
+    } catch (error) {
+      try {
+        if (fd !== undefined) fs.closeSync(fd);
+      } catch {}
+      if (!error || error.code !== 'EEXIST') return false;
+      let owner = {};
+      let ageMs = Infinity;
+      try {
+        owner = JSON.parse(fs.readFileSync(lockFile, 'utf8'));
+        ageMs = Date.now() - fs.statSync(lockFile).mtimeMs;
+      } catch {}
+      if (isProcessAlive(Number(owner.pid))) return false;
+      // 刚创建但尚未写完的空锁可能属于活 worker,留一个短暂保护窗。
+      if (!owner.pid && ageMs < 30000) return false;
+      try {
+        fs.unlinkSync(lockFile);
+      } catch {
+        return false;
+      }
+    }
+  }
+  return false;
+}
+
+function listQueueJobs(queueDir) {
+  try {
+    return fs.readdirSync(queueDir)
+      .filter((name) => /^job-[a-f0-9]+\.json$/.test(name))
+      .map((name) => path.join(queueDir, name))
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+function recoverClaimedJobs(queueDir) {
+  let names;
+  try {
+    names = fs.readdirSync(queueDir);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    const match = /^(job-[a-f0-9]+\.json)\.processing-/.exec(name);
+    if (!match) continue;
+    const claimed = path.join(queueDir, name);
+    const original = path.join(queueDir, match[1]);
+    try {
+      if (fs.existsSync(original)) fs.unlinkSync(claimed); // 新任务已覆盖它
+      else fs.renameSync(claimed, original);
+    } catch {}
+  }
+}
+
+async function drainQueue(options = {}) {
+  const queueDir = options.queueDir || QUEUE_DIR;
+  const lockFile = options.lockFile || path.join(queueDir, '.drain.lock');
+  const processPayload = options.processPayload || uploadPayload;
+  const spawnWorker = options.spawnWorker || spawnDetachedWorker;
+  const summary = { processed: 0, failed: 0, locked: false };
+  if (!acquireQueueLock(lockFile)) {
+    summary.locked = true;
+    return summary;
+  }
+
+  const attempted = new Set();
+  const deferredFailures = new Map();
+  try {
+    recoverClaimedJobs(queueDir);
+    while (true) {
+      const next = listQueueJobs(queueDir).find((file) => !attempted.has(file));
+      if (!next) break;
+      attempted.add(next);
+      const claimed = `${next}.processing-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
+      try {
+        fs.renameSync(next, claimed);
+      } catch {
+        continue;
+      }
+
+      let payload;
+      let ok = false;
+      try {
+        payload = JSON.parse(fs.readFileSync(claimed, 'utf8'));
+        ok = await processPayload(payload);
+      } catch (error) {
+        log(`queue job failed: ${error && error.message}`);
+      }
+
+      if (ok) {
+        summary.processed += 1;
+        try {
+          fs.unlinkSync(claimed);
+        } catch {}
+        continue;
+      }
+
+      summary.failed += 1;
+      try {
+        if (fs.existsSync(next)) fs.unlinkSync(claimed); // 新任务更新,它已覆盖旧任务
+        else {
+          fs.renameSync(claimed, next);
+          deferredFailures.set(next, String(payload && payload.queued_at || ''));
+        }
+      } catch {}
+    }
+  } finally {
+    try {
+      fs.unlinkSync(lockFile);
+    } catch {}
+    // 只为并发新任务补 worker;本轮失败后原样放回的任务留给下一次 hook,避免离线时自旋。
+    const shouldContinue = listQueueJobs(queueDir).some((file) => {
+      if (!deferredFailures.has(file)) return true;
+      try {
+        const current = JSON.parse(fs.readFileSync(file, 'utf8'));
+        return String(current.queued_at || '') !== deferredFailures.get(file);
+      } catch {
+        return false;
+      }
+    });
+    if (shouldContinue) {
+      try {
+        spawnWorker();
+      } catch {}
+    }
+  }
+  return summary;
 }
 
 // ─── 主流程 ───────────────────────────────────────────────────────────────────
-async function main() {
-  const arg = process.argv[2];
-  if (arg === '--install-hook') return installHook();
-  if (arg === '--uninstall-hook') return uninstallHook();
-  const dryRun = arg === '--dry-run';
-
+async function uploadPayload(payload, options = {}) {
+  const dryRun = options.dryRun === true;
   const env = readEnvFile();
-  if (isOff(conf(env, 'AGENT_INSIGHT_CLAUDE_CONTEXT_ENABLE', 'true'))) return log('disabled by config');
-
-  const raw = await readStdin();
-  let payload = {};
-  try {
-    payload = JSON.parse(raw || '{}');
-  } catch {
-    return log('stdin is not JSON, skip');
+  if (isOff(conf(env, 'AGENT_INSIGHT_CLAUDE_CONTEXT_ENABLE', 'true'))) {
+    log('disabled by config');
+    return true;
   }
   const sessionId = String(payload.session_id || '').trim();
-  if (!sessionId) return log('no session_id in hook payload, skip');
+  if (!sessionId) {
+    log('no session_id in hook payload, skip');
+    return true;
+  }
 
   const limits = {
     ...LIMITS,
@@ -609,18 +891,29 @@ async function main() {
 
   const wantHooks = !isOff(conf(env, 'AGENT_INSIGHT_CLAUDE_CONTEXT_HOOKS', 'true'));
   const wantTools = !isOff(conf(env, 'AGENT_INSIGHT_CLAUDE_CONTEXT_TOOLS', 'true'));
+  const apiKey = String(conf(env, 'AGENT_INSIGHT_API_KEY', ''));
+  const file = checkpointPath(apiKey);
+  const checkpoint = loadCheckpoint(file);
+  const previous = checkpoint.sessions[sessionId] || {};
+  const transcriptPath = String(payload.transcript_path || '').trim();
+  const canResume = !dryRun
+    && previous.transcriptPath === transcriptPath
+    && Number.isFinite(previous.transcriptOffset);
+  const startOffset = canResume ? previous.transcriptOffset : 0;
 
   const items = [];
+  let scan;
   if (!isOff(conf(env, 'AGENT_INSIGHT_CLAUDE_CONTEXT_SYSTEM', 'true'))) {
     items.push(...collectSystemPrompts(rawBodyDir, sessionId, limits));
   }
   if (wantHooks || wantTools) {
-    const scan = await scanTranscript(payload.transcript_path, limits);  // 只扫一遍 transcript
+    scan = await scanTranscript(transcriptPath, limits, { startOffset }); // 只扫新增 transcript
+    for (const id of previous.agentToolIds || []) scan.agentToolIds.add(id);
     if (wantHooks) items.push(...scan.hookContexts);
     if (wantTools) {
       // 子 agent 归属映射跟工具输出同一开关:两者都是为了把子 agent 子树建出来。
       // 内部工具输出并进同一个 outputs 池,让全局上限与"优先保 Task 输出"一并生效。
-      const sub = collectSubagentMaps(payload.transcript_path, sessionId, limits);
+      const sub = collectSubagentMaps(transcriptPath, sessionId, limits);
       for (const [id, value] of sub.outputs) {
         if (!scan.outputs.has(id)) scan.outputs.set(id, value);
       }
@@ -636,6 +929,8 @@ async function main() {
       host: normalizeHost(conf(env, 'AGENT_INSIGHT_HOST', 'http://127.0.0.1:3000')),
       rawBodyDir,
       transcript: payload.transcript_path,
+      transcriptStartOffset: startOffset,
+      transcriptNextOffset: scan && scan.nextOffset,
       items: items.map((item) => ({
         kind: item.kind,
         chars: item.text.length,
@@ -646,17 +941,11 @@ async function main() {
         preview: item.text.slice(0, 80).replace(/\s+/g, ' '),
       })),
     }, null, 2));
-    return;
+    return true;
   }
 
-  if (items.length === 0) return log(`nothing to supplement for ${sessionId}`);
-
-  const apiKey = String(conf(env, 'AGENT_INSIGHT_API_KEY', ''));
-  const file = checkpointPath(apiKey);
-  const checkpoint = loadCheckpoint(file);
-  const known = new Set((checkpoint.sessions[sessionId] || {}).hashes || []);
+  const known = new Set(previous.hashes || []);
   const fresh = items.filter((item) => !known.has(item.hash));
-  if (fresh.length === 0) return log(`all ${items.length} items already uploaded for ${sessionId}`);
 
   const host = normalizeHost(conf(env, 'AGENT_INSIGHT_HOST', 'http://127.0.0.1:3000'));
   const url = `${host}/api/ingest/claude/context`;
@@ -671,13 +960,60 @@ async function main() {
     if (!result.ok) break;  // 失败就停,剩下的留给下次(hash 没进 checkpoint,不会漏)
     uploaded.push(...batch);
   }
-  if (uploaded.length === 0) return;
 
-  checkpoint.sessions[sessionId] = {
+  const allUploaded = uploaded.length === fresh.length;
+  const nextState = {
+    ...previous,
     hashes: [...known, ...uploaded.map((item) => item.hash)].slice(-500),
     updatedAt: new Date().toISOString(),
   };
+  if (allUploaded && scan) {
+    nextState.transcriptPath = transcriptPath;
+    nextState.transcriptOffset = scan.nextOffset;
+    nextState.agentToolIds = [...scan.agentToolIds].slice(-limits.subagentMapIds);
+  }
+  checkpoint.sessions[sessionId] = nextState;
   saveCheckpoint(file, checkpoint, limits);
+  if (items.length === 0) log(`nothing to supplement for ${sessionId}`);
+  else if (fresh.length === 0) log(`all ${items.length} items already uploaded for ${sessionId}`);
+  return allUploaded;
+}
+
+async function readHookPayload() {
+  const raw = await readStdin();
+  try {
+    return JSON.parse(raw || '{}');
+  } catch {
+    log('stdin is not JSON, skip');
+    return null;
+  }
+}
+
+async function handleSessionEnd(payload, options = {}) {
+  const queueDir = options.queueDir || QUEUE_DIR;
+  const queued = enqueuePayload(payload, { queueDir, spawnWorker: () => {} });
+  if (!queued) {
+    // 本地队列不可写时仍尽力直传;这是唯一绕过队列锁的降级路径。
+    const ok = await (options.processPayload || uploadPayload)(payload);
+    return { processed: ok ? 1 : 0, failed: ok ? 0 : 1, locked: false };
+  }
+  return drainQueue({ ...options, queueDir });
+}
+
+async function main() {
+  const arg = process.argv[2];
+  if (arg === '--install-hook') return installHook();
+  if (arg === '--uninstall-hook') return uninstallHook();
+  if (arg === '--drain-queue') return drainQueue();
+
+  const payload = await readHookPayload();
+  if (!payload) return;
+  if (arg === '--enqueue') {
+    enqueuePayload(payload);
+    return;
+  }
+  if (arg === '--dry-run') return uploadPayload(payload, { dryRun: true });
+  return handleSessionEnd(payload);
 }
 
 // 被 require 时只导出纯函数(供单测直接验抽取逻辑);只有直接执行才跑主流程。
@@ -693,6 +1029,12 @@ module.exports = {
   flattenToolOutput,
   sessionIdOfBody,
   normalizeHost,
+  installHook,
+  uninstallHook,
+  enqueuePayload,
+  drainQueue,
+  uploadPayload,
+  handleSessionEnd,
 };
 
 if (require.main === module) {

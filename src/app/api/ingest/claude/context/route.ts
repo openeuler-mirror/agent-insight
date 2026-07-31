@@ -12,7 +12,8 @@ import { NextResponse } from 'next/server';
  *     inline 模式实测有 ~60KB 硬截断(body_truncated=true),JSON 不完整同样解析不出。
  *  2. hook 注入的 additionalContext —— 压根不进 OTel 事件,只落在客户端的会话 transcript。
  *
- * 客户端(claude_context_uploader.js,SessionEnd hook)把这两样从本机磁盘捞出来发到这里,
+ * 客户端 claude_context_uploader.js 在每轮 Stop/SubagentStop/StopFailure 后异步补传,
+ * 并用 SessionEnd 做最终兜底。它把这些内容从本机磁盘捞出来发到这里,
  * 服务端写进【同一份 claude spool 的 logs.jsonl】,消费者按增量字节自然发现并重聚合该 session,
  * 不新增 spool 源、不改消费者。
  */

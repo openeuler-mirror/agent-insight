@@ -3,9 +3,11 @@
 // transcript 里 hook 注入上下文是 type=attachment / attachment.type=hook_additional_context。
 import assert from "node:assert/strict"
 import fs from "node:fs"
+import http from "node:http"
 import os from "node:os"
 import path from "node:path"
 import test from "node:test"
+import { spawn } from "node:child_process"
 import { createRequire } from "node:module"
 
 const requireCjs = createRequire(path.join(process.cwd(), "package.json"))
@@ -28,6 +30,34 @@ function writeRequestBody(dir: string, file: string, sessionId: string, system: 
     }),
     "utf8",
   )
+}
+
+async function waitUntil(predicate: () => boolean, message: string, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (predicate()) return
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+  assert.fail(message)
+}
+
+function runUploaderChild(script: string, args: string[], payload: unknown, env: NodeJS.ProcessEnv) {
+  return new Promise<void>((resolve, reject) => {
+    const child = spawn(process.execPath, [script, ...args], {
+      cwd: process.cwd(),
+      env,
+      stdio: ["pipe", "ignore", "pipe"],
+    })
+    let stderr = ""
+    child.stderr.setEncoding("utf8")
+    child.stderr.on("data", (chunk) => { stderr += chunk })
+    child.on("error", reject)
+    child.on("exit", (code) => {
+      if (code === 0) resolve()
+      else reject(new Error(`uploader exited ${code}: ${stderr}`))
+    })
+    child.stdin.end(JSON.stringify(payload))
+  })
 }
 
 test("uploader: 按 metadata.session_id 精确捞 system prompt,并按内容去重", () => {
@@ -277,4 +307,393 @@ test("uploader: 没有 subagents 目录时安静返回空(绝不抛错影响会�
   assert.equal(result.items.length, 0)
   assert.equal(result.outputs.size, 0)
   fs.rmSync(dir, { recursive: true, force: true })
+})
+
+test("uploader: 安装四类 hook 且幂等,升级旧 SessionEnd 时不覆盖用户 hook", () => {
+  const dir = tmpdir("hooks")
+  const settingsPath = path.join(dir, "settings.json")
+  fs.writeFileSync(settingsPath, JSON.stringify({
+    hooks: {
+      Stop: [{ matcher: "user", hooks: [{ type: "command", command: "echo user-stop" }] }],
+      SessionEnd: [{ hooks: [{ type: "command", command: "node /old/claude_context_uploader.js", timeout: 30 }] }],
+    },
+  }), "utf8")
+
+  const command = '"/usr/bin/node" "/tmp/claude_context_uploader.cjs"'
+  assert.equal(uploader.installHook({ settingsPath, command, quiet: true }), true)
+
+  const installed = JSON.parse(fs.readFileSync(settingsPath, "utf8"))
+  for (const event of ["Stop", "SubagentStop", "StopFailure"]) {
+    const ours = installed.hooks[event]
+      .flatMap((matcher: any) => matcher.hooks || [])
+      .filter((hook: any) => hook.command?.includes("claude_context_uploader"))
+    assert.equal(ours.length, 1, `${event} 应只有一条补传 hook`)
+    assert.equal(ours[0].command, `${command} --enqueue`)
+    assert.equal(ours[0].timeout, 5)
+  }
+  const finalHooks = installed.hooks.SessionEnd
+    .flatMap((matcher: any) => matcher.hooks || [])
+    .filter((hook: any) => hook.command?.includes("claude_context_uploader"))
+  assert.equal(finalHooks.length, 1)
+  assert.equal(finalHooks[0].command, command)
+  assert.equal(finalHooks[0].timeout, 30)
+  assert.ok(installed.hooks.Stop.some((matcher: any) =>
+    (matcher.hooks || []).some((hook: any) => hook.command === "echo user-stop")))
+
+  assert.equal(uploader.installHook({ settingsPath, command, quiet: true }), false, "重复安装必须零改动")
+
+  assert.equal(uploader.uninstallHook({ settingsPath, quiet: true }), true)
+  const uninstalled = JSON.parse(fs.readFileSync(settingsPath, "utf8"))
+  assert.ok(uninstalled.hooks.Stop.some((matcher: any) =>
+    (matcher.hooks || []).some((hook: any) => hook.command === "echo user-stop")))
+  for (const event of ["Stop", "SubagentStop", "StopFailure", "SessionEnd"]) {
+    const commands = (uninstalled.hooks[event] || [])
+      .flatMap((matcher: any) => matcher.hooks || [])
+      .map((hook: any) => hook.command || "")
+    assert.equal(commands.some((value: string) => value.includes("claude_context_uploader")), false)
+  }
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
+test("uploader: 实时 hook 只做本地原子入队,同 session 合并为最新任务", () => {
+  const dir = tmpdir("queue")
+  let spawned = 0
+  const options = { queueDir: dir, spawnWorker: () => { spawned += 1 } }
+
+  assert.equal(uploader.enqueuePayload({
+    session_id: SESSION,
+    transcript_path: "/tmp/old.jsonl",
+    hook_event_name: "Stop",
+  }, options), true)
+  assert.equal(uploader.enqueuePayload({
+    session_id: SESSION,
+    transcript_path: "/tmp/new.jsonl",
+    hook_event_name: "SubagentStop",
+    last_assistant_message: "不应复制进队列".repeat(1000),
+  }, options), true)
+
+  const jobs = fs.readdirSync(dir).filter((name) => name.endsWith(".json"))
+  assert.equal(jobs.length, 1)
+  const payload = JSON.parse(fs.readFileSync(path.join(dir, jobs[0]), "utf8"))
+  assert.equal(payload.session_id, SESSION)
+  assert.equal(payload.transcript_path, "/tmp/new.jsonl")
+  assert.equal(payload.hook_event_name, "SubagentStop")
+  assert.equal("last_assistant_message" in payload, false)
+  assert.equal(spawned, 2)
+  assert.equal(fs.readdirSync(dir).some((name) => name.includes(".tmp-")), false)
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
+test("uploader: worker 成功删除任务,失败保留并可由下一次 drain 重试", async () => {
+  const dir = tmpdir("drain-retry")
+  const enqueueOptions = { queueDir: dir, spawnWorker: () => {} }
+  uploader.enqueuePayload({ session_id: SESSION, transcript_path: "/tmp/a.jsonl" }, enqueueOptions)
+
+  let attempts = 0
+  const failed = await uploader.drainQueue({
+    queueDir: dir,
+    processPayload: async () => {
+      attempts += 1
+      return false
+    },
+    spawnWorker: () => {},
+  })
+  assert.equal(failed.failed, 1)
+  assert.equal(fs.readdirSync(dir).filter((name) => name.endsWith(".json")).length, 1)
+
+  const succeeded = await uploader.drainQueue({
+    queueDir: dir,
+    processPayload: async () => {
+      attempts += 1
+      return true
+    },
+    spawnWorker: () => {},
+  })
+  assert.equal(succeeded.processed, 1)
+  assert.equal(succeeded.failed, 0)
+  assert.equal(fs.readdirSync(dir).filter((name) => name.endsWith(".json")).length, 0)
+  assert.equal(attempts, 2)
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
+test("uploader: 旧任务上传失败时并发到达的新 Stop 会补起 worker,不会卡到再下一轮", async () => {
+  const dir = tmpdir("drain-failure-race")
+  uploader.enqueuePayload({ session_id: SESSION, transcript_path: "/tmp/old.jsonl" }, {
+    queueDir: dir,
+    spawnWorker: () => {},
+  })
+  let spawned = 0
+  const result = await uploader.drainQueue({
+    queueDir: dir,
+    processPayload: async () => {
+      uploader.enqueuePayload({ session_id: SESSION, transcript_path: "/tmp/new.jsonl" }, {
+        queueDir: dir,
+        spawnWorker: () => {}, // 模拟它起的 worker 看到当前锁后立即退出
+      })
+      return false
+    },
+    spawnWorker: () => { spawned += 1 },
+  })
+
+  assert.equal(result.failed, 1)
+  assert.equal(spawned, 1, "持锁 worker 释放锁后必须为并发新任务补起 worker")
+  const jobs = fs.readdirSync(dir).filter((name) => name.endsWith(".json"))
+  assert.equal(jobs.length, 1)
+  const payload = JSON.parse(fs.readFileSync(path.join(dir, jobs[0]), "utf8"))
+  assert.equal(payload.transcript_path, "/tmp/new.jsonl")
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
+test("uploader: SessionEnd 也走同一队列锁,不会与 Stop worker 并发覆盖 checkpoint", async () => {
+  const dir = tmpdir("session-end-lock")
+  uploader.enqueuePayload({ session_id: SESSION, transcript_path: "/tmp/old.jsonl" }, {
+    queueDir: dir,
+    spawnWorker: () => {},
+  })
+
+  let releaseFirst: (() => void) | undefined
+  let markStarted: (() => void) | undefined
+  const firstStarted = new Promise<void>((resolve) => { markStarted = resolve })
+  const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve })
+  let active = 0
+  let maxActive = 0
+  let followupSpawns = 0
+  const firstDrain = uploader.drainQueue({
+    queueDir: dir,
+    processPayload: async () => {
+      active += 1
+      maxActive = Math.max(maxActive, active)
+      markStarted!()
+      await firstGate
+      active -= 1
+      return true
+    },
+    spawnWorker: () => { followupSpawns += 1 },
+  })
+  await firstStarted
+
+  let sessionEndUploads = 0
+  const sessionEnd = await uploader.handleSessionEnd({
+    session_id: SESSION,
+    transcript_path: "/tmp/final.jsonl",
+  }, {
+    queueDir: dir,
+    processPayload: async () => {
+      sessionEndUploads += 1
+      return true
+    },
+    spawnWorker: () => { followupSpawns += 1 },
+  })
+  assert.equal(sessionEnd.locked, true)
+  assert.equal(sessionEndUploads, 0, "持锁 worker 未结束时 SessionEnd 不得并发上传")
+
+  releaseFirst!()
+  await firstDrain
+  assert.equal(maxActive, 1)
+  assert.equal(followupSpawns, 1, "原 worker 释放锁后应为已落盘的 SessionEnd 任务补 worker")
+
+  const finalDrain = await uploader.drainQueue({
+    queueDir: dir,
+    processPayload: async (payload: any) => {
+      sessionEndUploads += 1
+      assert.equal(payload.transcript_path, "/tmp/final.jsonl")
+      return true
+    },
+    spawnWorker: () => {},
+  })
+  assert.equal(finalDrain.processed, 1)
+  assert.equal(sessionEndUploads, 1)
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
+test("uploader: worker 能回收已退出进程留下的陈旧锁", async () => {
+  const dir = tmpdir("drain-stale-lock")
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(path.join(dir, ".drain.lock"), JSON.stringify({
+    pid: 99999999,
+    createdAt: "2000-01-01T00:00:00.000Z",
+  }), "utf8")
+  uploader.enqueuePayload({ session_id: SESSION, transcript_path: "/tmp/a.jsonl" }, {
+    queueDir: dir,
+    spawnWorker: () => {},
+  })
+
+  const result = await uploader.drainQueue({
+    queueDir: dir,
+    processPayload: async () => true,
+    spawnWorker: () => {},
+  })
+  assert.equal(result.processed, 1)
+  assert.equal(fs.existsSync(path.join(dir, ".drain.lock")), false)
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
+test("uploader: worker 崩溃后遗留的 processing 任务会被下一任 worker 回收", async () => {
+  const dir = tmpdir("drain-orphan")
+  uploader.enqueuePayload({ session_id: SESSION, transcript_path: "/tmp/a.jsonl" }, {
+    queueDir: dir,
+    spawnWorker: () => {},
+  })
+  const job = fs.readdirSync(dir).find((name) => name.endsWith(".json"))
+  assert.ok(job)
+  fs.renameSync(path.join(dir, job), path.join(dir, `${job}.processing-dead-worker`))
+
+  const result = await uploader.drainQueue({
+    queueDir: dir,
+    processPayload: async () => true,
+    spawnWorker: () => {},
+  })
+  assert.equal(result.processed, 1)
+  assert.equal(fs.readdirSync(dir).some((name) => name.includes(".processing-")), false)
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
+test("uploader: checkpoint 字节偏移后只扫描 transcript 新增 JSONL", async () => {
+  const dir = tmpdir("incremental")
+  const file = path.join(dir, "session.jsonl")
+  const initial = [
+    JSON.stringify({
+      type: "attachment",
+      timestamp: "2026-07-29T10:00:01.000Z",
+      attachment: { type: "hook_additional_context", content: ["中文注入"], hookEvent: "SessionStart" },
+    }),
+    JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "完成" }] } }),
+  ].join("\n") + "\n"
+  fs.writeFileSync(file, initial, "utf8")
+
+  const first = await uploader.scanTranscript(file, uploader.LIMITS)
+  assert.equal(first.hookContexts.length, 1)
+  assert.equal(first.nextOffset, Buffer.byteLength(initial))
+
+  const appended = JSON.stringify({
+    type: "user",
+    timestamp: "2026-07-29T10:00:02.000Z",
+    message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_new", content: "新增输出" }] },
+  }) + "\n"
+  fs.appendFileSync(file, appended, "utf8")
+
+  const second = await uploader.scanTranscript(file, uploader.LIMITS, { startOffset: first.nextOffset })
+  assert.equal(second.hookContexts.length, 0, "旧 hook 不应被重复扫描")
+  assert.equal(second.outputs.size, 1)
+  assert.equal(second.outputs.get("toolu_new")?.text, "新增输出")
+  assert.equal(second.nextOffset, Buffer.byteLength(initial + appended))
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
+test("uploader: transcript 尾部正在写的半条 JSON 不推进 checkpoint", async () => {
+  const dir = tmpdir("partial-jsonl")
+  const file = path.join(dir, "session.jsonl")
+  const complete = JSON.stringify({ type: "assistant", message: { role: "assistant", content: "完成" } }) + "\n"
+  const finalLine = JSON.stringify({
+    type: "user",
+    message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_partial", content: "完整输出" }] },
+  })
+  const split = Math.floor(finalLine.length / 2)
+  fs.writeFileSync(file, complete + finalLine.slice(0, split), "utf8")
+
+  const whileWriting = await uploader.scanTranscript(file, uploader.LIMITS)
+  assert.equal(whileWriting.nextOffset, Buffer.byteLength(complete))
+  assert.equal(whileWriting.outputs.size, 0)
+
+  fs.appendFileSync(file, finalLine.slice(split) + "\n", "utf8")
+  const afterWrite = await uploader.scanTranscript(file, uploader.LIMITS, { startOffset: whileWriting.nextOffset })
+  assert.equal(afterWrite.outputs.get("toolu_partial")?.text, "完整输出")
+  assert.equal(afterWrite.nextOffset, fs.statSync(file).size)
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
+test("uploader: --enqueue 子进程不等待网络,detached worker 每轮上传且第二轮只发增量", async (t) => {
+  const dir = tmpdir("worker-e2e")
+  let server: ReturnType<typeof http.createServer> | undefined
+  t.after(async () => {
+    if (server?.listening) await new Promise<void>((resolve) => server!.close(() => resolve()))
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+  const insightDir = path.join(dir, ".agent-insight")
+  const rawDir = path.join(insightDir, "claude_raw_bodies")
+  const transcript = path.join(dir, `${SESSION}.jsonl`)
+  fs.mkdirSync(rawDir, { recursive: true })
+  writeRequestBody(rawDir, "turn-1.request.json", SESSION, [{ type: "text", text: "实时 system" }])
+  fs.writeFileSync(transcript, [
+    JSON.stringify({
+      type: "attachment",
+      timestamp: "2026-07-29T10:00:01.000Z",
+      attachment: { type: "hook_additional_context", content: ["实时 hook"], hookEvent: "UserPromptSubmit" },
+    }),
+    JSON.stringify({
+      type: "assistant",
+      message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_turn_1", name: "Read", input: {} }] },
+    }),
+    JSON.stringify({
+      type: "user",
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_turn_1", content: "第一轮输出" }] },
+    }),
+  ].join("\n") + "\n", "utf8")
+
+  const requests: any[] = []
+  let releaseFirstResponse: (() => void) | undefined
+  const firstResponseGate = new Promise<void>((resolve) => { releaseFirstResponse = resolve })
+  server = http.createServer((req, res) => {
+    let body = ""
+    req.setEncoding("utf8")
+    req.on("data", (chunk) => { body += chunk })
+    req.on("end", async () => {
+      requests.push(JSON.parse(body))
+      if (requests.length === 1) await firstResponseGate
+      res.statusCode = 200
+      res.end("{}")
+    })
+  })
+  await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", resolve))
+  const address = server.address()
+  assert.ok(address && typeof address === "object")
+  fs.writeFileSync(path.join(insightDir, ".env"), [
+    `AGENT_INSIGHT_HOST=http://127.0.0.1:${address.port}`,
+    "AGENT_INSIGHT_API_KEY=test-key",
+    `AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES=file:${rawDir}`,
+  ].join("\n") + "\n", "utf8")
+
+  const script = path.join(process.cwd(), "scripts", "claude_context_uploader.js")
+  const childEnv = { ...process.env, HOME: dir, USERPROFILE: dir }
+  const hookPayload = { session_id: SESSION, transcript_path: transcript, hook_event_name: "Stop" }
+
+  // 服务端故意不响应;若 --enqueue 仍同步等网络,这个子进程就不会先退出。
+  await runUploaderChild(script, ["--enqueue"], hookPayload, childEnv)
+  await waitUntil(() => requests.length === 1, "detached worker 未收到第一轮任务")
+  releaseFirstResponse!()
+  const queueDir = path.join(insightDir, "claude_context_queue")
+  await waitUntil(
+    () => fs.existsSync(queueDir)
+      && fs.readdirSync(queueDir).filter((name) => name.endsWith(".json") || name.includes(".processing-")).length === 0,
+    "第一轮成功后队列任务未删除",
+  )
+
+  const firstKinds = requests[0].items.map((item: any) => item.kind).sort()
+  assert.deepEqual(firstKinds, ["hook_context", "system_prompt", "tool_output"])
+  const checkpointName = fs.readdirSync(insightDir).find((name) => name.startsWith("claude_context_checkpoint_"))
+  assert.ok(checkpointName)
+  assert.equal(fs.statSync(path.join(insightDir, checkpointName)).mode & 0o777, 0o600)
+
+  fs.appendFileSync(transcript, [
+    JSON.stringify({
+      type: "assistant",
+      message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_turn_2", name: "Bash", input: {} }] },
+    }),
+    JSON.stringify({
+      type: "user",
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_turn_2", content: "第二轮输出" }] },
+    }),
+  ].join("\n") + "\n", "utf8")
+  await runUploaderChild(script, ["--enqueue"], hookPayload, childEnv)
+  await waitUntil(() => requests.length === 2, "detached worker 未收到第二轮任务")
+  assert.deepEqual(requests[1].items.map((item: any) => item.kind), ["tool_output"])
+  assert.equal(requests[1].items[0].toolUseId, "toolu_turn_2")
+  await waitUntil(
+    () => fs.readdirSync(queueDir).filter((name) => name.endsWith(".json") || name.includes(".processing-")).length === 0,
+    "第二轮 worker 未完成 checkpoint 与队列收尾",
+  )
+  const finalCheckpoint = JSON.parse(fs.readFileSync(path.join(insightDir, checkpointName), "utf8"))
+  assert.equal(finalCheckpoint.sessions[SESSION].transcriptOffset, fs.statSync(transcript).size)
+
+  await new Promise<void>((resolve) => server!.close(() => resolve()))
 })

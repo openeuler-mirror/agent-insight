@@ -43,7 +43,7 @@ test("mergeSessionInteractionsMonotonic never overwrites non-empty content with 
 })
 
 // 回归:Claude Code 跨机补传实跑发现的缺陷。OTel 日志边跑边上报,消费者先聚合出一版
-// 「工具调用有 id、没 output」的快照落库;SessionEnd 的补传到达后重聚合,这一版才带上
+// 「工具调用有 id、没 output」的快照落库;每轮异步补传到达后重聚合,这一版才带上
 // output。按 id 去重时若整份保留库里那条旧记录,补传的正文就永远落不了地(实测 DB 里
 // output 恒为空,而聚合器直出是有的)。
 test("mergeSessionInteractionsMonotonic 用后到的工具输出补全已有的同一次调用", () => {

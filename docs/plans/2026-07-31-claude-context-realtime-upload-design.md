@@ -11,7 +11,7 @@
 - hook 快速返回，不把网络延迟叠加到 Claude Code 交互上。
 - 上传失败后保留任务，后续 hook 或 `SessionEnd` 自动重试。
 - 长会话只扫描 transcript 新增部分，避免每轮全量扫描。
-- 保留 `SessionEnd` 同步补传作为最终兜底。
+- 保留 `SessionEnd` 持久入队并在无活动 worker 时同步排空，作为最终兜底。
 
 本次不修改服务端补传 API、数据库结构和现有正文长度上限；超长正文分片属于独立的数据契约改造。
 
@@ -26,7 +26,7 @@
 | `Stop` | 快速入队 | 主 Agent 每轮完成后补传 |
 | `SubagentStop` | 快速入队 | 子 Agent 完成后尽快补传映射和内部工具输出 |
 | `StopFailure` | 快速入队 | API 错误结束本轮时仍补传已落盘内容 |
-| `SessionEnd` | 同步抽取并上传 | 会话退出前最终兜底 |
+| `SessionEnd` | 持久入队并尝试同步排空 | 会话退出前最终兜底；已有 worker 时由其串行接续 |
 
 `Stop` 不使用 `PostToolUse`：工具调用产生在同一轮内，主 Agent 的 `Stop` 已能在轮末一次性收齐，避免每次工具调用都启动上传器。
 
@@ -55,8 +55,8 @@ worker 使用进程锁串行排空队列。任务上传成功后删除；失败�
 - hook 输入无效：安静退出，不影响 Claude Code。
 - worker 已存在：新任务留在队列，由现有 worker 或退出后的补偿 worker处理。
 - 网络失败：本次任务保留；已成功批次写入 hash checkpoint，未成功批次下次重试。
-- 进程异常退出：锁包含 PID；后续 worker 会回收无存活进程持有的陈旧锁。
-- `SessionEnd`：仍直接执行上传；即使后台队列尚未处理，hash checkpoint 也保证幂等。
+- 进程异常退出：锁包含 PID；后续 worker 会回收无存活进程持有的陈旧锁和未完成的 `processing` 任务。
+- `SessionEnd`：先写入同一队列；没有活动 worker 时同步排空，已有 worker 时由它串行接续，避免并发覆盖 checkpoint。
 
 ## 验证范围
 
