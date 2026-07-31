@@ -118,6 +118,44 @@ test('Langfuse trace snapshots merge monotonically by span id', () => {
   assert.equal(merged.find(node => node.spanId === 'child')?.durationMs, 2000);
 });
 
+test('Langfuse incremental snapshot waits for a real root instead of promoting intent-agent', () => {
+  const intentAgent = event({
+    spanId: 'intent',
+    parentSpanId: 'root-not-arrived-yet',
+    name: 'intent-agent',
+    kind: 'agent',
+    attributes: {},
+  });
+
+  assert.equal(
+    aggregateOtelTraceEvents('langfuse-session', [intentAgent]),
+    null,
+    'missing parent must not be persisted as a provisional root',
+  );
+
+  const root = event({
+    spanId: 'root-not-arrived-yet',
+    name: 'AssistantService.chat',
+    kind: 'chain',
+  });
+  const completed = aggregateOtelTraceEvents('langfuse-session', [intentAgent, root]);
+  assert.equal(completed?.agentName, 'AssistantService.chat');
+  assert.equal(completed?.subagentCount, 1);
+});
+
+test('Langfuse without the private app-root marker still accepts a top-level span', () => {
+  const root = event({
+    name: 'plain-langfuse-root',
+    parentSpanId: undefined,
+    attributes: {
+      'langfuse.observation.input': '{"query":"hello"}',
+      'langfuse.observation.output': '{"final_output":"done"}',
+    },
+  });
+
+  assert.equal(aggregateOtelTraceEvents('langfuse-session', [root])?.agentName, 'plain-langfuse-root');
+});
+
 test('Langfuse observations project into the existing agent tree without business-name rules', () => {
   const events = [
     event({
