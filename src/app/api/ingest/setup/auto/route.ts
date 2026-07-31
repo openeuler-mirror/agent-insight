@@ -1,5 +1,13 @@
 import { NextResponse } from 'next/server';
 
+function bashDoubleQuoted(value: string): string {
+    return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$').replace(/`/g, '\\`');
+}
+
+function powerShellDoubleQuoted(value: string): string {
+    return value.replace(/`/g, '``').replace(/"/g, '`"').replace(/\$/g, '`$');
+}
+
 function detectPlatform(request: Request): 'windows' | 'unix' {
     const userAgent = request.headers.get('user-agent') || '';
     const platformHeader = request.headers.get('x-platform') || '';
@@ -19,6 +27,14 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const apiKey = searchParams.get('apiKey');
     const hostParam = searchParams.get('host');
+    const llamaIndexVenv = (searchParams.get('llamaindexVenv') || '')
+        .replace(/[\0\r\n]/g, '')
+        .trim()
+        .slice(0, 2048);
+    const requestedPythonMode = searchParams.get('llamaindexPython');
+    const llamaIndexPythonMode = requestedPythonMode === 'global' || requestedPythonMode === 'venv'
+        ? requestedPythonMode
+        : 'auto';
 
     if (!apiKey || !hostParam) {
         return new NextResponse('Missing required parameters: apiKey and host', {
@@ -40,13 +56,13 @@ export async function GET(request: Request) {
     const platform = detectPlatform(request);
 
     if (platform === 'windows') {
-        return generatePowerShellScript(baseUrl, hostParam, apiKey);
+        return generatePowerShellScript(baseUrl, hostParam, apiKey, llamaIndexVenv, llamaIndexPythonMode);
     }
     
-    return generateBashScript(baseUrl, hostParam, apiKey);
+    return generateBashScript(baseUrl, hostParam, apiKey, llamaIndexVenv, llamaIndexPythonMode);
 }
 
-function generateBashScript(baseUrl: string, hostParam: string, apiKey: string): NextResponse {
+function generateBashScript(baseUrl: string, hostParam: string, apiKey: string, llamaIndexVenv: string, llamaIndexPythonMode: string): NextResponse {
     const script = `#!/bin/bash
 # =============================================================================
 # Agent-insight Auto Setup (Non-Interactive)
@@ -314,15 +330,36 @@ JIUWEN_EXT_EOF
 fi
 
 if [ "$INSTALL_LLAMAINDEX" = "true" ]; then
-    LLAMAINDEX_PYTHON="\${AGENT_INSIGHT_LLAMAINDEX_PYTHON:-}"
-    if [ -z "$LLAMAINDEX_PYTHON" ]; then
+    LLAMAINDEX_CONFIGURED_VENV="${bashDoubleQuoted(llamaIndexVenv)}"
+    LLAMAINDEX_CONFIGURED_MODE="${bashDoubleQuoted(llamaIndexPythonMode)}"
+    LLAMAINDEX_VENV=""
+    LLAMAINDEX_PYTHON=""
+    if [ "$LLAMAINDEX_CONFIGURED_MODE" = "venv" ]; then
+        LLAMAINDEX_VENV="$LLAMAINDEX_CONFIGURED_VENV"
+    elif [ "$LLAMAINDEX_CONFIGURED_MODE" = "global" ]; then
+        LLAMAINDEX_PYTHON_MODE="global PATH"
+    else
+        LLAMAINDEX_PYTHON="\${AGENT_INSIGHT_LLAMAINDEX_PYTHON:-}"
+        if [ -z "$LLAMAINDEX_PYTHON" ]; then LLAMAINDEX_VENV="\${AGENT_INSIGHT_LLAMAINDEX_VENV:-$LLAMAINDEX_CONFIGURED_VENV}"; fi
+    fi
+    case "$LLAMAINDEX_VENV" in
+        "~") LLAMAINDEX_VENV="$HOME" ;;
+        "~/"*) LLAMAINDEX_VENV="$HOME/\${LLAMAINDEX_VENV#\~/}" ;;
+    esac
+    LLAMAINDEX_PYTHON_MODE="\${LLAMAINDEX_PYTHON_MODE:-explicit interpreter}"
+    if [ -z "$LLAMAINDEX_PYTHON" ] && [ -n "$LLAMAINDEX_VENV" ]; then
+        LLAMAINDEX_PYTHON_MODE="virtual environment"
+        if [ -x "$LLAMAINDEX_VENV/bin/python" ]; then LLAMAINDEX_PYTHON="$LLAMAINDEX_VENV/bin/python"; elif [ -x "$LLAMAINDEX_VENV/Scripts/python.exe" ]; then LLAMAINDEX_PYTHON="$LLAMAINDEX_VENV/Scripts/python.exe"; fi
+    elif [ -z "$LLAMAINDEX_PYTHON" ]; then
+        LLAMAINDEX_PYTHON_MODE="global PATH"
         if command -v python3 >/dev/null 2>&1; then LLAMAINDEX_PYTHON=$(command -v python3); elif command -v python >/dev/null 2>&1; then LLAMAINDEX_PYTHON=$(command -v python); fi
     fi
     if [ -z "$LLAMAINDEX_PYTHON" ]; then
-        echo "❌ Python 3.10+ is required for the LlamaIndex collector."
+        if [ -n "$LLAMAINDEX_VENV" ]; then echo "❌ No Python interpreter found in virtual environment: $LLAMAINDEX_VENV"; else echo "❌ Python 3.10+ is required for the LlamaIndex collector."; fi
     elif ! "$LLAMAINDEX_PYTHON" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"; then
         echo "❌ $LLAMAINDEX_PYTHON must be Python 3.10 or newer."
     else
+        echo "🐍 LlamaIndex Python ($LLAMAINDEX_PYTHON_MODE): $LLAMAINDEX_PYTHON"
         if ! "$LLAMAINDEX_PYTHON" -c "import llama_index.core" >/dev/null 2>&1; then
             echo "ℹ️  LlamaIndex is not installed in $LLAMAINDEX_PYTHON; deployment will continue. Activate the observed project environment before running the Agent."
         fi
@@ -359,6 +396,10 @@ case ":\${PYTHONPATH:-}:" in
   *) export PYTHONPATH="$LLAMAINDEX_COLLECTOR_DIR\${PYTHONPATH:+:$PYTHONPATH}" ;;
 esac
 LLAMAINDEX_ENV_EOF
+            printf 'export AGENT_INSIGHT_LLAMAINDEX_PYTHON=%q\n' "$LLAMAINDEX_PYTHON" >> "$HOME/.agent-insight/llamaindex_env.sh"
+            if [ -n "$LLAMAINDEX_VENV" ]; then printf 'export AGENT_INSIGHT_LLAMAINDEX_VENV=%q\n' "$LLAMAINDEX_VENV" >> "$HOME/.agent-insight/llamaindex_env.sh"; fi
+            if [ -z "$LLAMAINDEX_VENV" ]; then echo 'unset AGENT_INSIGHT_LLAMAINDEX_VENV' >> "$HOME/.agent-insight/llamaindex_env.sh"; fi
+            . "$HOME/.agent-insight/llamaindex_env.sh"
             case "\${SHELL:-}" in */zsh) SHELL_RC="$HOME/.zshrc" ;; *) SHELL_RC="$HOME/.bashrc" ;; esac
             touch "$SHELL_RC"
             if ! grep -q "\\.agent-insight/llamaindex_env\\.sh" "$SHELL_RC"; then
@@ -740,7 +781,7 @@ if [ "$INSTALL_JIUWEN" = "true" ]; then
     echo "  5. Restart JiuwenSwarm (agentserver), then start a conversation"
 fi
 if [ "$LLAMAINDEX_READY" = "true" ]; then
-    echo "  6. Restart terminal, activate the project environment, then run: python -m agent_insight_llamaindex.cli run -- python app.py"
+    echo "  6. Restart terminal, then run: \"$AGENT_INSIGHT_LLAMAINDEX_PYTHON\" -m agent_insight_llamaindex.cli run -- \"$AGENT_INSIGHT_LLAMAINDEX_PYTHON\" app.py"
 fi
 echo "------------------------------------------------"
 `;
@@ -752,7 +793,7 @@ echo "------------------------------------------------"
     });
 }
 
-function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: string): NextResponse {
+function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: string, llamaIndexVenv: string, llamaIndexPythonMode: string): NextResponse {
     const script = [
         '# =============================================================================',
         '# Skill-insight Auto Setup (Non-Interactive) - PowerShell',
@@ -995,9 +1036,42 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '}',
         '',
         'if ($INSTALL_LLAMAINDEX) {',
-        '    $llamaIndexPython = if ($env:AGENT_INSIGHT_LLAMAINDEX_PYTHON) { $env:AGENT_INSIGHT_LLAMAINDEX_PYTHON } else { $pythonCommand = Get-Command python -ErrorAction SilentlyContinue; if ($pythonCommand) { $pythonCommand.Source } }',
+        '    $llamaIndexConfiguredVenv = "' + powerShellDoubleQuoted(llamaIndexVenv) + '"',
+        '    $llamaIndexConfiguredMode = "' + powerShellDoubleQuoted(llamaIndexPythonMode) + '"',
+        '    $llamaIndexVenv = ""',
+        '    $llamaIndexPython = ""',
+        '    if ($llamaIndexConfiguredMode -eq "venv") {',
+        '        $llamaIndexVenv = $llamaIndexConfiguredVenv',
+        '    } elseif ($llamaIndexConfiguredMode -eq "global") {',
+        '        $llamaIndexPythonMode = "global PATH"',
+        '    } else {',
+        '        $llamaIndexPython = $env:AGENT_INSIGHT_LLAMAINDEX_PYTHON',
+        '        if (-not $llamaIndexPython) { $llamaIndexVenv = if ($env:AGENT_INSIGHT_LLAMAINDEX_VENV) { $env:AGENT_INSIGHT_LLAMAINDEX_VENV } else { $llamaIndexConfiguredVenv } }',
+        '    }',
+        '    if ($llamaIndexVenv) {',
+        '        $llamaIndexVenv = [Environment]::ExpandEnvironmentVariables($llamaIndexVenv)',
+        '        if ($llamaIndexVenv -eq "~") { $llamaIndexVenv = $env:USERPROFILE } elseif ($llamaIndexVenv.StartsWith("~\\")) { $llamaIndexVenv = Join-Path $env:USERPROFILE $llamaIndexVenv.Substring(2) }',
+        '    }',
+        '    if (-not $llamaIndexPythonMode) { $llamaIndexPythonMode = "explicit interpreter" }',
+        '    if (-not $llamaIndexPython -and $llamaIndexVenv) {',
+        '        $llamaIndexPythonMode = "virtual environment"',
+        '        $venvPython = Join-Path $llamaIndexVenv "Scripts\\python.exe"',
+        '        $posixVenvPython = Join-Path $llamaIndexVenv "bin\\python"',
+        '        if (Test-Path -LiteralPath $venvPython -PathType Leaf) { $llamaIndexPython = $venvPython } elseif (Test-Path -LiteralPath $posixVenvPython -PathType Leaf) { $llamaIndexPython = $posixVenvPython }',
+        '    } elseif (-not $llamaIndexPython) {',
+        '        $llamaIndexPythonMode = "global PATH"',
+        '        $pyLauncher = Get-Command py -CommandType Application -ErrorAction SilentlyContinue',
+        '        if ($pyLauncher) {',
+        '            $detectedPython = & $pyLauncher.Source -3 -c "import sys; print(sys.executable)" 2>$null',
+        '            if ($LASTEXITCODE -eq 0 -and $detectedPython) { $llamaIndexPython = [string]($detectedPython | Select-Object -First 1) }',
+        '        }',
+        '        if (-not $llamaIndexPython) {',
+        '            $pythonCommand = Get-Command python -CommandType Application -ErrorAction SilentlyContinue',
+        '            if ($pythonCommand) { $llamaIndexPython = $pythonCommand.Source }',
+        '        }',
+        '    }',
         '    if (-not $llamaIndexPython) {',
-        '        Write-Host "❌ Python 3.10+ is required for the LlamaIndex collector." -ForegroundColor Red',
+        '        if ($llamaIndexVenv) { Write-Host "❌ No Python interpreter found in virtual environment: $llamaIndexVenv" -ForegroundColor Red } else { Write-Host "❌ Python 3.10+ is required for the LlamaIndex collector." -ForegroundColor Red }',
         '    } else {',
         '        $llamaIndexNonce = [Guid]::NewGuid().ToString("N")',
         '        $llamaIndexArchive = Join-Path ([System.IO.Path]::GetTempPath()) "agent-insight-llamaindex-$llamaIndexNonce.zip"',
@@ -1009,7 +1083,8 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '        try {',
         '            & $llamaIndexPython -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"',
         '            if ($LASTEXITCODE -ne 0) { throw "$llamaIndexPython must be Python 3.10 or newer" }',
-        '            & $llamaIndexPython -c "import llama_index.core"',
+        '            Write-Host "🐍 LlamaIndex Python ($llamaIndexPythonMode): $llamaIndexPython"',
+        '            & $llamaIndexPython -c "import llama_index.core" 2>$null',
         '            if ($LASTEXITCODE -ne 0) { Write-Host "ℹ️  LlamaIndex is not installed in $llamaIndexPython; deployment will continue. Activate the observed project environment before running the Agent." }',
         '            New-Item -ItemType Directory -Path $llamaIndexRoot, $llamaIndexStaging -Force | Out-Null',
         '            Invoke-WebRequest -Uri $llamaIndexPackageUrl -OutFile $llamaIndexArchive',
@@ -1037,6 +1112,13 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '  if ($llamaIndexPaths -notcontains $llamaIndexCollectorDir) { $env:PYTHONPATH = "$llamaIndexCollectorDir$([IO.Path]::PathSeparator)$env:PYTHONPATH" }',
         '} else { $env:PYTHONPATH = $llamaIndexCollectorDir }',
         '\'@',
+        '            $llamaIndexPythonLiteral = $llamaIndexPython.Replace(([string][char]39), [string]::Concat([char]39, [char]39))',
+        '            $llamaIndexEnvScript += [Environment]::NewLine + "`$env:AGENT_INSIGHT_LLAMAINDEX_PYTHON = \'$llamaIndexPythonLiteral\'"',
+        '            if ($llamaIndexVenv) {',
+        '                $llamaIndexVenvLiteral = $llamaIndexVenv.Replace(([string][char]39), [string]::Concat([char]39, [char]39))',
+        '                $llamaIndexEnvScript += [Environment]::NewLine + "`$env:AGENT_INSIGHT_LLAMAINDEX_VENV = \'$llamaIndexVenvLiteral\'"',
+        '            }',
+        '            if (-not $llamaIndexVenv) { $llamaIndexEnvScript += [Environment]::NewLine + \'Remove-Item Env:AGENT_INSIGHT_LLAMAINDEX_VENV -ErrorAction SilentlyContinue\' }',
         '            Set-Content -Path $llamaIndexEnvPath -Value $llamaIndexEnvScript -Encoding UTF8',
         '            if (-not (Test-Path $PROFILE)) { New-Item -ItemType File -Path $PROFILE -Force | Out-Null }',
         '            if (-not ((Get-Content $PROFILE -Raw) -match "llamaindex_env.ps1")) { Add-Content -Path $PROFILE -Value ". `"$llamaIndexEnvPath`"" }',
@@ -1381,7 +1463,7 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    Write-Host "  5. Restart JiuwenSwarm (agentserver), then start a conversation"',
         '}',
         'if ($LLAMAINDEX_READY) {',
-        '    Write-Host "  6. Restart PowerShell, activate the project environment, then run: python -m agent_insight_llamaindex.cli run -- python app.py"',
+        '    Write-Host "  6. Restart PowerShell, then run: & `"$env:AGENT_INSIGHT_LLAMAINDEX_PYTHON`" -m agent_insight_llamaindex.cli run -- `"$env:AGENT_INSIGHT_LLAMAINDEX_PYTHON`" app.py"',
         '}',
         'Write-Host "------------------------------------------------"',
     ].join('\n');

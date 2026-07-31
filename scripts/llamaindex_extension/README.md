@@ -49,11 +49,25 @@ agent-insight start
 `curl | bash` / `irm | iex` 一键安装由 `/api/ingest/setup` 生成；本地 npm 服务端安装后的自动
 配置使用 `/api/ingest/setup/auto`。两个入口采用相同的直接下载、暂存解压和目录替换流程，
 不会调用 pip，也不会写入 Python `site-packages`。安装器生成专属的
-`~/.agent-insight/llamaindex_env.sh/.ps1`，仅把上述唯一模块目录加入 `PYTHONPATH`；采集器仍需
+`~/.agent-insight/llamaindex_env.sh/.ps1`，把上述唯一模块目录加入 `PYTHONPATH`，并记录安装时
+最终选中的 Python 解释器；采集器仍需
 通过 `setup()` 或专用 `cli run` 显式启用，不会自动影响其他 Python 应用或采集器。
 
-一行安装不要求系统 Python 已安装 LlamaIndex；安装完成后激活项目自己的虚拟环境，再启动
-Agent 即可。若希望安装器使用项目虚拟环境完成解压和配置，可在执行安装指导命令前指定：
+运行安装指导页的一行命令后，普通 setup 脚本会询问是否使用 LlamaIndex 虚拟环境；直接回车
+默认使用全局 `python3`/`python`。选择虚拟环境后输入其根目录（例如
+`/workspace/app/.venv` 或 `C:\workspace\app\.venv`），脚本自动解析 Linux/macOS 的
+`bin/python` 或 Windows 的 `Scripts/python.exe`。auto setup 保持非交互，未预设环境时默认
+使用全局 Python。两类脚本也都支持提前设置：
+
+```bash
+export AGENT_INSIGHT_LLAMAINDEX_VENV=/path/to/venv
+```
+
+```powershell
+$env:AGENT_INSIGHT_LLAMAINDEX_VENV = "C:\path\to\venv"
+```
+
+若不通过安装指导页、而是直接运行旧版或手写安装命令，也可直接指定解释器文件：
 
 ```bash
 export AGENT_INSIGHT_LLAMAINDEX_PYTHON=/path/to/venv/bin/python
@@ -63,8 +77,11 @@ export AGENT_INSIGHT_LLAMAINDEX_PYTHON=/path/to/venv/bin/python
 $env:AGENT_INSIGHT_LLAMAINDEX_PYTHON = "C:\path\to\venv\Scripts\python.exe"
 ```
 
-这个 Python 只用于确认 Python 3.10+、解压归档和写入配置；未安装 LlamaIndex 时安装器会提示，
-但不会中止部署。运行时仍由项目环境提供 LlamaIndex、模型 SDK 和 MCP 等业务依赖。
+普通 setup 重新执行时会再次询问，因此可切换 `global`/`venv`；切回全局模式也会清除旧的
+venv 设置。最终解释器会写入
+`llamaindex_env.sh/.ps1`，后续加载该环境入口时继续使用同一个 Python。
+这个 Python 用于确认 Python 3.10+、解压归档、写入配置和启动采集命令；未安装 LlamaIndex 时
+安装器会提示，但不会中止部署。运行时仍由所选环境提供 LlamaIndex、模型 SDK 和 MCP 等业务依赖。
 安装器不会替项目安装或升级 LlamaIndex 依赖。零代码 `run` 只对子进程注入包内 bootstrap，
 不注册全局 `sitecustomize`、不改写其他采集器配置，也不删除其他框架目录。
 
@@ -302,7 +319,8 @@ python -c "import agent_insight_llamaindex; print(agent_insight_llamaindex.__fil
 ```
 
 Windows PowerShell 使用 `. "$HOME\.agent-insight\llamaindex_env.ps1"`。虚拟环境变化后，
-重新设置 `AGENT_INSIGHT_LLAMAINDEX_PYTHON` 并运行一键安装即可；不需要安装
+重新运行一键安装并在脚本提示中输入新的虚拟环境根目录，或重新设置 `AGENT_INSIGHT_LLAMAINDEX_VENV`/
+`AGENT_INSIGHT_LLAMAINDEX_PYTHON` 并运行一键安装即可；不需要安装
 `opentelemetry-instrument` 或任何 Agent Insight Python 包。
 
 ### spool 长期存在 `.ready`
