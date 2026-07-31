@@ -10,9 +10,10 @@ TRAE AI IDE 通过 VS Code 插件方式接入 Agent Insight 平台。插件安�
 ## 前置条件
 
 - 已部署并访问 Agent Insight 看板
-- 已在平台注册 Agent（参见 [5 分钟上手](../quickstart)）
 - TRAE AI IDE 已安装且版本兼容
 - 平台服务端与 TRAE IDE 所在机器网络互通
+- **TRAE IDE 需启用全局 Hooks**：在 TRAE 设置中搜索 `Hooks` 并开启**全局 Hooks**（否则 Hook 事件不会触发，插件无法采集数据）
+- **Hooks 命令运行方式需设为「本地自动运行」**：在 Hooks 设置中将命令运行环境（ExecEnv）设为 `host`（本地），确保 Hook 脚本在本地环境自动执行、可访问本机 spool 目录；若设为容器/远程环境，脚本将无法写入采集数据
 
 ## 接入步骤
 
@@ -76,10 +77,10 @@ Select the frameworks to install (use space to select, enter to confirm):
 
 如果 30 秒后仍无数据，按以下顺序排查：
 
-1. 查看状态栏中的 Agent Insight 图标（绿色 = 已连接，红色 = 异常）
+1. 查看状态栏中的 Agent Insight 图标是否存在
 2. 检查 IDE 输出面板中的 `Agent Insight` 频道日志
 3. 确认 `~/.agent-insight/trae-hooks/` 下的 Hook 脚本已正确部署
-4. 检查 `~/.agent-insight/logs/trae_uploader.log` 查看上传状态
+4. 确认 `~/.agent-insight/otel_data/trae/` 下有 spool 数据产生（Hook 采集成功的标志）
 
 ## Hook 事件说明
 
@@ -114,18 +115,15 @@ Select the frameworks to install (use space to select, enter to confirm):
 如果遇到数据上报异常，可以使用插件内置的调试视图：
 
 1. 打开命令面板：`Ctrl+Shift+P`（macOS: `Cmd+Shift+P`）
-2. 搜索 `Agent Insight: Debug View`
+2. 搜索 `Agent Insight TRAE：查看日志`
 3. 查看实时事件流、spool 队列状态和上传日志
 
-也可以直接查看本地日志：
+插件日志输出到 IDE 的 **Agent Insight 频道**（输出面板：`Ctrl+Shift+U` → 选择 `Agent Insight`）：
 
-```bash
-# Linux / macOS
-tail -f ~/.agent-insight/logs/trae_uploader.log
-
-# Windows
-Get-Content $env:USERPROFILE\.agent-insight\logs\trae_uploader.log -Wait
-```
+> **Note**
+> 当前版本日志仅输出到 IDE 输出面板，**不写入本地日志文件**。
+> `~/.agent-insight/logs/` 下的 `trae_collector.log` / `trae_hook.log` 为旧版本遗留文件，新版本不再生成，可安全删除。
+> 若输出面板为空，检查插件是否已激活（状态栏图标存在）。
 
 ## 卸载
 
@@ -133,12 +131,14 @@ Get-Content $env:USERPROFILE\.agent-insight\logs\trae_uploader.log -Wait
 2. 点击 **卸载**
 3. 重启 IDE
 
-卸载后 Hook 脚本会被自动清理，`~/.agent-insight/trae-hooks/` 目录将被移除。如需完全清理（包括历史 spool 数据）：
+卸载后 Hook 脚本会被自动清理（VS Code `vscode:uninstall` 钩子执行清理脚本），`~/.agent-insight/trae-hooks/` 目录将被移除。如需完全清理（包括历史 spool 数据与 checkpoint）：
 
 ```bash
-# Linux / macOS
-bash ~/.agent-insight/trae-hooks/uninstall.sh --clean
-
-# Windows (PowerShell)
-& $env:USERPROFILE\.agent-insight\trae-hooks\uninstall.ps1 -Clean
+# 清理 spool 数据、checkpoint、hooks（插件源码自带卸载脚本）
+bash scripts/trae-collector/uninstall.sh
+# 或手动删除采集数据目录
+rm -rf ~/.agent-insight/otel_data/trae ~/.agent-insight/trae_uploader_checkpoint.json
 ```
+
+> **Note**
+> 若在 Extensions 面板卸载后旧数据仍残留（钩子未触发），可手动执行上述清理命令。
