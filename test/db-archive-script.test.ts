@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import {
+  copyFileSync,
   existsSync,
   mkdtempSync,
   readFileSync,
@@ -32,6 +33,55 @@ function runScript(args: string[]): string {
     env: { ...process.env, TZ: 'Asia/Shanghai' },
   });
 }
+
+test('archive script runs independently outside the repository', {
+  skip: !canRun,
+}, () => {
+  const tempRoot = mkdtempSync(path.join(os.tmpdir(), 'agent-insight-standalone-archive-'));
+  try {
+    const standaloneScript = path.join(tempRoot, 'db_archive.sh');
+    const sourceDb = path.join(tempRoot, 'source.sqlite');
+    const archiveFile = path.join(tempRoot, 'traces.sqlite.gz');
+    copyFileSync(archiveScript, standaloneScript);
+    sqlite(sourceDb, traceSchema());
+    sqlite(sourceDb, `
+      INSERT INTO "Execution"
+        (id, taskId, timestamp, user, parentExecutionId, rootExecutionId, isSubagent)
+      VALUES ('old-root', 'old-task', 1577836800000, 'alice', NULL, NULL, 0);
+      INSERT INTO "Session" (id, taskId, startTime)
+      VALUES ('session-old-root', 'old-task', 1577836800000);
+    `);
+
+    execFileSync('bash', [
+      standaloneScript,
+      'create',
+      '--database', sourceDb,
+      '--scope', 'traces',
+      '--before', '2025-01-01',
+      '--output', archiveFile,
+    ], {
+      cwd: tempRoot,
+      encoding: 'utf8',
+      env: { ...process.env, TZ: 'Asia/Shanghai' },
+    });
+
+    assert.equal(existsSync(archiveFile), true);
+    assert.equal(sqlite(sourceDb, 'SELECT COUNT(*) FROM "Execution";'), '0');
+    execFileSync('bash', [
+      standaloneScript,
+      'import',
+      '--database', sourceDb,
+      '--input', archiveFile,
+    ], {
+      cwd: tempRoot,
+      encoding: 'utf8',
+      env: { ...process.env, TZ: 'Asia/Shanghai' },
+    });
+    assert.equal(sqlite(sourceDb, 'SELECT COUNT(*) FROM "Execution";'), '1');
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
 
 function traceSchema(): string {
   return `
