@@ -266,6 +266,7 @@ export interface ExecutionRecord {
     cost?: number;
     latency?: number;
     timestamp?: string | Date;
+    trace_started_at?: string | Date | null;
     trace_completed_at?: string | Date | null;
     final_result?: string;
     skill?: string;
@@ -2838,6 +2839,11 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
         }
     }
 
+    const explicitTraceStartedAt = targetRecord.trace_started_at
+        ? new Date(targetRecord.trace_started_at)
+        : null;
+    const hasExplicitTraceStart = explicitTraceStartedAt != null
+        && Number.isFinite(explicitTraceStartedAt.getTime());
     const explicitTraceCompletedAt = targetRecord.trace_completed_at
         ? new Date(targetRecord.trace_completed_at)
         : null;
@@ -2856,7 +2862,8 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
         targetRecord.trace_completed_at = inferredHermesTraceCompletedAt;
     }
     const hasTraceCompletion = traceCompletedAtForSession != null
-        && Number.isFinite(traceCompletedAtForSession.getTime());
+        && Number.isFinite(traceCompletedAtForSession.getTime())
+        && (!hasExplicitTraceStart || traceCompletedAtForSession.getTime() >= explicitTraceStartedAt.getTime());
 
     if (targetRecord.task_id && mergedInteractionsForSession) {
         const isLangfuseTrace = targetRecord.framework === 'langfuse' || targetRecord.framework === 'langfuse-langgraph';
@@ -2883,6 +2890,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
                 model: targetRecord.model,
                 interactions: JSON.stringify(mergedInteractionsForSession),
                 ...(langfuseTraceNodesJson !== undefined ? { langfuseTraceNodes: langfuseTraceNodesJson } : {}),
+                ...(hasExplicitTraceStart ? { startTime: explicitTraceStartedAt } : {}),
                 ...(hasTraceCompletion ? { endTime: traceCompletedAtForSession } : {}),
             },
             {
@@ -2892,6 +2900,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
                 model: targetRecord.model,
                 interactions: JSON.stringify(mergedInteractionsForSession),
                 ...(langfuseTraceNodesJson !== undefined ? { langfuseTraceNodes: langfuseTraceNodesJson } : {}),
+                ...(hasExplicitTraceStart ? { startTime: explicitTraceStartedAt } : {}),
             }
         );
         if (hasTraceCompletion) {

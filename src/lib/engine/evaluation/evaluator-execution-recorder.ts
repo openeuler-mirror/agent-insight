@@ -1,4 +1,4 @@
-import { saveExecutionRecord } from '@/lib/storage/data-service';
+import { saveExecutionRecord, type ExecutionRecord } from '@/lib/storage/data-service';
 
 interface MessageListClientLike {
   listMessages(sessionId: string): Promise<unknown[]>;
@@ -336,7 +336,11 @@ export interface DirectEvaluatorTraceInput {
   /** 从 LLM 响应里抽出的 token 用量；total 缺省时按 input+output 估算。 */
   usage?: { input?: number; output?: number; total?: number } | null;
   modelID?: string | null;
-  /** 注入式时间戳（ISO），仅供测试做确定性断言；不传则取当前时间。 */
+  /** 本次直连模型调用开始时间。 */
+  startedAtISO?: string;
+  /** 本次直连模型调用完成时间。 */
+  completedAtISO?: string;
+  /** 兼容旧测试的单点时间戳；未提供起止时间时作为两者的回退值。 */
   timestampISO?: string;
 }
 
@@ -357,18 +361,23 @@ export interface RecordDirectEvaluatorExecutionInput extends DirectEvaluatorTrac
 export function buildDirectEvaluatorInteractions(
   input: DirectEvaluatorTraceInput,
 ): EvaluatorTraceInteraction[] {
-  const now = input.timestampISO || new Date().toISOString();
+  const fallbackMs = toTimestamp(input.timestampISO) ?? Date.now();
+  const startedAtMs = toTimestamp(input.startedAtISO) ?? fallbackMs;
+  const candidateCompletedAtMs = toTimestamp(input.completedAtISO) ?? startedAtMs;
+  const completedAtMs = Math.max(startedAtMs, candidateCompletedAtMs);
+  const startedAt = new Date(startedAtMs).toISOString();
+  const completedAt = new Date(completedAtMs).toISOString();
   const interactions: EvaluatorTraceInteraction[] = [];
 
   // system rubric 在最前——与 opencode trace 对齐，链路详情页能看到评测器的判分依据。
   const systemContent = String(input.systemPrompt || '').trim();
   if (systemContent) {
-    interactions.push({ role: 'system', content: systemContent, timestamp: now });
+    interactions.push({ role: 'system', content: systemContent, timestamp: startedAt });
   }
 
   const userContent = String(input.userMessage || input.query || '').trim();
   if (userContent) {
-    interactions.push({ role: 'user', content: userContent, timestamp: now });
+    interactions.push({ role: 'user', content: userContent, timestamp: startedAt });
   }
 
   const assistant = String(input.assistantOutput || '').trim();
@@ -386,7 +395,11 @@ export function buildDirectEvaluatorInteractions(
     interactions.push({
       role: 'assistant',
       content: assistant,
-      timestamp: now,
+      timestamp: startedAt,
+      timeInfo: {
+        created: startedAt,
+        completed: completedAt,
+      },
       agent: input.agentName || undefined,
       modelID: input.modelID || undefined,
       usage,
@@ -397,20 +410,22 @@ export function buildDirectEvaluatorInteractions(
 }
 
 /**
- * 把一次直连 LLM 评测落成一条 Execution/Session trace —— 不需要 opencode client。
- * 返回写入的 interaction 条数（0 表示缺少 taskId/agentName 或内容为空，未落库）。
+ * 纯函数：把直连评测输入转换为 saveExecutionRecord 契约，供计时字段回归测试。
  */
-export async function recordDirectEvaluatorExecution(
+export function buildDirectEvaluatorExecutionRecord(
   input: RecordDirectEvaluatorExecutionInput,
-): Promise<number> {
+): ExecutionRecord | null {
   const taskId = String(input.taskId || '').trim();
   const agentName = String(input.agentName || '').trim();
-  if (!taskId || !agentName) return 0;
+  if (!taskId || !agentName) return null;
 
   const interactions = buildDirectEvaluatorInteractions(input);
-  if (interactions.length === 0) return 0;
+  if (interactions.length === 0) return null;
+  const traceStartedAt = inferTimestampFromInteractions(interactions);
+  const traceCompletedAt = inferCompletionTimestampFromInteractions(interactions);
+  const latencySeconds = Math.max(0, traceCompletedAt.getTime() - traceStartedAt.getTime()) / 1000;
 
-  await saveExecutionRecord({
+  return {
     task_id: taskId,
     upload_id: taskId,
     query: String(input.query || '').trim() || undefined,
@@ -423,16 +438,31 @@ export async function recordDirectEvaluatorExecution(
     skill: input.skill ?? undefined,
     skill_version: input.skillVersion ?? undefined,
     interactions,
-    timestamp: inferTimestampFromInteractions(interactions),
+    latency: latencySeconds,
+    timestamp: traceStartedAt,
+    trace_started_at: traceStartedAt,
     skip_evaluation: true,
     skip_internal_judgment: true,
     failures: [],
     skill_issues: [],
     force_query_update: true,
-    trace_completed_at: inferCompletionTimestampFromInteractions(interactions),
-  });
+    trace_completed_at: traceCompletedAt,
+  };
+}
 
-  return interactions.length;
+/**
+ * 把一次直连 LLM 评测落成一条 Execution/Session trace —— 不需要 opencode client。
+ * 返回写入的 interaction 条数（0 表示缺少 taskId/agentName 或内容为空，未落库）。
+ */
+export async function recordDirectEvaluatorExecution(
+  input: RecordDirectEvaluatorExecutionInput,
+): Promise<number> {
+  const record = buildDirectEvaluatorExecutionRecord(input);
+  if (!record) return 0;
+
+  await saveExecutionRecord(record);
+
+  return Array.isArray(record.interactions) ? record.interactions.length : 0;
 }
 
 /**

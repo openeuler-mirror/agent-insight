@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { LangfuseTraceNode } from '@/lib/ingest/otel/adapters/langfuse-trace';
 
 export const TRACE_BUNDLE_FORMAT = 'agent-insight.trace-bundle' as const;
 export const TRACE_BUNDLE_VERSION = 1 as const;
@@ -48,6 +49,7 @@ export interface PortableTraceSession {
     startTime: string;
     endTime: string | null;
     interactions: unknown[];
+    langfuseTraceNodes?: LangfuseTraceNode[];
     model: string | null;
 }
 
@@ -117,6 +119,9 @@ function assertPortableSession(value: unknown, execution: PortableTraceExecution
     }
     if (session.endTime != null && !validDateString(session.endTime)) {
         throw new TraceBundleValidationError(`executions[${index}].session.endTime is invalid`);
+    }
+    if (session.langfuseTraceNodes != null && !Array.isArray(session.langfuseTraceNodes)) {
+        throw new TraceBundleValidationError(`executions[${index}].session.langfuseTraceNodes is invalid`);
     }
     if (execution.taskId !== session.taskId) {
         throw new TraceBundleValidationError(`executions[${index}] execution.taskId must equal session.taskId`);
@@ -290,6 +295,12 @@ export function remapTraceBundle(bundle: TraceBundleV1, identityMap: Map<string,
                 ...node.session,
                 taskId: mapped(node.session.taskId) as string,
                 interactions: rewriteInteractionValue(node.session.interactions, identityMap) as unknown[],
+                ...(node.session.langfuseTraceNodes ? {
+                    langfuseTraceNodes: rewriteInteractionValue(
+                        node.session.langfuseTraceNodes,
+                        identityMap,
+                    ) as LangfuseTraceNode[],
+                } : {}),
             } : null,
         })),
     };
