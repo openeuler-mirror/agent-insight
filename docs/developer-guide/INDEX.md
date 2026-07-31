@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `147f4ac1b98765c067e46c77480a89bc7ab01b6c` (`147f4ac`) |
-| Branch | `new-dev-07-16` |
-| Date | 2026-07-20T20:31:54+08:00 |
-| Author | openeuler-ci-bot |
-| Subject | `!202 fix: consumer 摄取管线性能三连修——聚合三重闸 + tick 增量读 + checkpoint 内存缓存` |
+| Commit | `127481a614bba6f7573943255a94f56314c09d89` (`127481a`) |
+| Branch | `feat/claude-context-supplement` |
+| Date | 2026-07-31T02:46:52-07:00 |
+| Author | gyctl |
+| Subject | `fix: Claude 上下文按轮异步补传` |
 
-**如何更新：** `git diff 147f4ac HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff 127481a HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
