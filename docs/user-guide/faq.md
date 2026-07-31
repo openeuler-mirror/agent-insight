@@ -165,6 +165,8 @@ description: "高频问题集中解答"
 
 SQLite 部署可以使用仓库内置的 `scripts/db_archive.sh`。默认读取
 `~/.agent-insight/data/witty_insight.db`，也可以用 `--database` 指定数据库文件。
+脚本可以单独复制到服务器运行，不依赖仓库、Node.js 或 `package.json`；服务器只需提供
+`bash`、`sqlite3`、`gzip`，以及 `sha256sum` 或 `shasum`。
 
 先预览将被选中的数据：
 

@@ -70,8 +70,10 @@
 
 `scripts/db_archive.sh` 是 SQLite-only 的逻辑归档入口，支持 `create`、`inspect`、`import`
 三个命令。它不经过 `DatabaseAdapter`，也不支持设置了 `DB_HOST` 的 OpenGauss 部署。
+脚本是可脱离仓库复制运行的单文件工具，不读取 `package.json` 或其他项目文件，运行时
+只依赖 `bash`、`sqlite3`、`gzip` 和可用的 SHA-256 命令。
 未显式传 `--database` 时，数据库解析规则与应用默认值保持一致：
-`~/.agent-insight/data/witty_insight.db`；其他 `file:` URL 相对 `prisma/` 解析。
+`~/.agent-insight/data/witty_insight.db`；其他相对 `file:` URL 从脚本运行目录解析。
 
 归档格式为 gzip 压缩的裁剪 SQLite 数据库，内部通过 `_ai_archive_manifest`、
 `_ai_archive_counts` 和 `_ai_selected_*` 表记录格式版本、schema hash、时间窗口、逐表数量
@@ -96,9 +98,9 @@
 - `.sqlite.gz.sha256` 用于传输完整性验证；`.sqlite.gz.purged` 是成功清理源库后的收据。
   外部附件不属于数据库归档范围。
 
-端到端契约测试位于 `test/db-archive-script.test.ts`，覆盖完整执行树、关联行、冲突回滚、
-幂等恢复和指标半开时间窗口。新增 archive policy 时，需要同时补齐复制条件、purge guard、
-删除顺序、导入顺序和往返测试。
+端到端契约测试位于 `test/db-archive-script.test.ts`，覆盖仓库外单文件执行、完整执行树、
+关联行、冲突回滚、幂等恢复和指标半开时间窗口。新增 archive policy 时，需要同时补齐
+复制条件、purge guard、删除顺序、导入顺序和往返测试。
 
 ## Key implementation entry points
 > 重型逻辑所在之处（被调用最多的函数）。仅作指引——需要看实现时再打开文件。

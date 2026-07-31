@@ -172,7 +172,7 @@ const DEFAULT_COLUMN_WIDTHS: Record<ResizableColKey, number> = {
     userTags:   220,
     systemTags: 220,
     tokens:     110,
-    time:       120,
+    time:       176,
     actions:    220,
 };
 const MIN_COLUMN_WIDTH: Record<ResizableColKey, number> = {
@@ -183,7 +183,7 @@ const MIN_COLUMN_WIDTH: Record<ResizableColKey, number> = {
     userTags:   150,
     systemTags: 140,
     tokens:     70,
-    time:       80,
+    time:       160,
     actions:    160,
 };
 const DEFAULT_COLUMN_VISIBILITY: Record<TraceColumnKey, boolean> = {
@@ -1838,7 +1838,7 @@ function Row({
             )}
             {columnVisibility.time && (
                 <Td>
-                    <RelativeTime value={e.timestamp} className="text-xs text-foreground-secondary font-mono whitespace-nowrap" />
+                    <RelativeTime value={e.timestamp} display="absolute" className="text-xs text-foreground-secondary font-mono whitespace-nowrap" />
                 </Td>
             )}
             {columnVisibility.actions && (
