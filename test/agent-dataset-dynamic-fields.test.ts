@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  defaultTraceBackflowSourceForField,
   nextDatasetFieldKey,
   parseDatasetNumberValue,
+  sortTraceBackflowDatasetsByRecency,
 } from '@/lib/agent-dataset-model';
 import { extractTaskArtifacts } from '@/lib/engine/evaluation/task-artifacts';
 import { POST as saveDataset } from '@/app/api/agent-datasets/route';
@@ -33,6 +35,24 @@ test('generates stable internal keys without exposing them as field input', () =
     nextDatasetFieldKey(['input', 'custom_field_1', 'custom_field_3']),
     'custom_field_2',
   );
+});
+
+test('maps standard dataset fields to trace backflow artifacts by default', () => {
+  assert.equal(defaultTraceBackflowSourceForField('input'), 'input');
+  assert.equal(defaultTraceBackflowSourceForField('reference_output'), 'output');
+  assert.equal(defaultTraceBackflowSourceForField('expected_output'), 'output');
+  assert.equal(defaultTraceBackflowSourceForField('trajectory'), 'trace');
+  assert.equal(defaultTraceBackflowSourceForField('custom_field_1'), 'none');
+});
+
+test('selects the most recently updated dataset first for trace backflow', () => {
+  const datasets = sortTraceBackflowDatasetsByRecency([
+    { id: 'older', updatedAt: '2026-07-01T00:00:00.000Z' },
+    { id: 'latest', updatedAt: '2026-07-30T00:00:00.000Z' },
+    { id: 'unknown' },
+  ]);
+
+  assert.deepEqual(datasets.map(dataset => dataset.id), ['latest', 'older', 'unknown']);
 });
 
 test('detects duplicate dataset field names case-insensitively', () => {
