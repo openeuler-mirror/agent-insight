@@ -75,7 +75,8 @@ function redactString(value) {
 }
 
 function isSensitiveKey(value) {
-  return SENSITIVE_KEY_PATTERN.test(value) && !TOKEN_USAGE_KEY_PATTERN.test(value);
+  const normalized = String(value).replace(/([a-z0-9])([A-Z])/g, "$1_$2");
+  return SENSITIVE_KEY_PATTERN.test(normalized) && !TOKEN_USAGE_KEY_PATTERN.test(normalized);
 }
 
 function redactValue(value, seen = new WeakSet()) {

@@ -140,8 +140,9 @@ test("generated Pi Bash and PowerShell setup scripts pass native syntax parsers"
     await centralScript("windows", "pi-agent"),
     await autoScript("windows", "pi-agent"),
   ]) {
-    assert.match(script, /\$piSetup\.Content -is \[byte\[\]\]/)
-    assert.match(script, /\[Text\.Encoding\]::UTF8\.GetString\(\$piSetup\.Content\)/)
+    assert.match(script, /-OutFile \$piInstaller/)
+    assert.match(script, /& \$piInstaller/)
+    assert.doesNotMatch(script, /\[scriptblock\]::Create/)
   }
 })
 

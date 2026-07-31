@@ -40,7 +40,7 @@ export async function GET(
   { params }: { params: Promise<{ asset: string }> },
 ) {
   const { asset } = await params;
-  const descriptor = ASSETS[asset];
+  const descriptor = Object.prototype.hasOwnProperty.call(ASSETS, asset) ? ASSETS[asset] : undefined;
   if (!descriptor) {
     return NextResponse.json({ error: 'Unknown Pi Agent collector asset.' }, { status: 404 });
   }

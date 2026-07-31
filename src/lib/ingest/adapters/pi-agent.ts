@@ -11,6 +11,7 @@ export const piAgentAdapter: FrameworkAdapter = {
   capabilities: {
     skills: true,
     subagentTree: true,
+    skillScope: "agent-tree",
   },
   sessionMergeStrategy: "monotonic",
   extractSkills: extractSkillsWithVersionsFromOpencodeSession,

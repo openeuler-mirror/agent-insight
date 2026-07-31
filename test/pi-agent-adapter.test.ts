@@ -145,6 +145,8 @@ test("Pi adapter preserves three-level SubAgent ancestry and five parallel sibli
   const nestedToolTwo = "6".repeat(16)
   const levelThree = "7".repeat(16)
   const parallelTool = "8".repeat(16)
+  const rootSkill = "e".repeat(16)
+  const childSkill = "f".repeat(16)
   const parallel = Array.from({ length: 5 }, (_, index) => (index + 9).toString(16).repeat(16))
   const events = [
     canonical({
@@ -154,6 +156,14 @@ test("Pi adapter preserves three-level SubAgent ancestry and five parallel sibli
       name: "agent.pi",
       input: "delegate",
       output: "done",
+    }),
+    canonical({
+      eventId: "root-skill",
+      spanId: rootSkill,
+      parentSpanId: rootAgent,
+      kind: "skill",
+      name: "skill.root",
+      skill: { name: "root-skill", version: "1" },
     }),
     canonical({
       eventId: "root-tool",
@@ -172,6 +182,14 @@ test("Pi adapter preserves three-level SubAgent ancestry and five parallel sibli
       input: "one",
       output: "one done",
       attributes: { "pi.subagent.name": "level-one", "pi.subagent.exit_code": 0 },
+    }),
+    canonical({
+      eventId: "child-skill",
+      spanId: childSkill,
+      parentSpanId: levelOne,
+      kind: "skill",
+      name: "skill.child",
+      skill: { name: "child-skill", version: "2" },
     }),
     canonical({
       eventId: "nested-tool",
@@ -239,6 +257,7 @@ test("Pi adapter preserves three-level SubAgent ancestry and five parallel sibli
   const workers = tree.children.filter((node) => node.agentName.startsWith("worker-"))
   assert.equal(workers.length, 5)
   assert.equal(new Set(workers.map((node) => node.sessionId)).size, 5)
+  assert.deepEqual(computeOwnSkills("pi-agent", record.interactions).map((skill) => skill.name), ["root-skill"])
 })
 
 test("Pi adapter output is deterministic for the same canonical structure", () => {

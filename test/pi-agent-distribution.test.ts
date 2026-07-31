@@ -84,6 +84,11 @@ test("Pi setup asset route serves only the fixed first-party allowlist", async (
     { params: Promise.resolve({ asset: "../../package.json" }) },
   )
   assert.equal(denied.status, 404)
+  const prototypeAsset = await getAsset(
+    new Request("https://insight.example/assets/constructor"),
+    { params: Promise.resolve({ asset: "constructor" }) },
+  )
+  assert.equal(prototypeAsset.status, 404)
 })
 
 test("Pi package manifest declares the real Extension entry and compatible Pi range", () => {

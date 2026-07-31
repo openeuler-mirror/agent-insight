@@ -56,6 +56,26 @@ test("transport redacts recursively before Unicode code-point truncation", () =>
   assert.equal(redacted.api_key, "[REDACTED]")
   assert.equal(redacted.nested.Authorization, "[REDACTED]")
   assert.doesNotMatch(redacted.nested.text, /sk-test/)
+  const camelCase = transport.redactValue({
+    authToken: "auth-token-value",
+    accessToken: "access-token-value",
+    sessionToken: "session-token-value",
+    refreshToken: "refresh-token-value",
+    bearerToken: "bearer-token-value",
+    clientSecret: "client-secret-value",
+    dbPassword: "database-password-value",
+    githubToken: "github-token-value",
+    openaiApiKey: "openai-api-key-value",
+    userEmail: "collector@example.invalid",
+    inputTokens: 123,
+  })
+  for (const key of [
+    "authToken", "accessToken", "sessionToken", "refreshToken", "bearerToken",
+    "clientSecret", "dbPassword", "githubToken", "openaiApiKey", "userEmail",
+  ]) {
+    assert.equal(camelCase[key], "[REDACTED]", key)
+  }
+  assert.equal(camelCase.inputTokens, 123)
   const otlp = transport.redactValue({
     attributes: [
       { key: "user.email", value: { stringValue: "collector@example.invalid" } },
