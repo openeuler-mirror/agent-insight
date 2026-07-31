@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `127481a614bba6f7573943255a94f56314c09d89` (`127481a`) |
-| Branch | `feat/claude-context-supplement` |
-| Date | 2026-07-31T02:46:52-07:00 |
-| Author | gyctl |
-| Subject | `fix: Claude 上下文按轮异步补传` |
+| Commit | `c1685d1a72c098cd708b11d0e8324627aa288bd8` (`c1685d1`) |
+| Branch | `master` |
+| Date | 2026-07-29T16:13:50+08:00 |
+| Author | openeuler-ci-bot |
+| Subject | `!240 fix(otel): 修 trace 上报积压——读路径按 session 定向 + 限流加绝对上限` |
 
-**如何更新：** `git diff 127481a HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff c1685d1 HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。

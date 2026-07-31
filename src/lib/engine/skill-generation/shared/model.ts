@@ -8,6 +8,7 @@ export interface ModelOptions {
   modelId?: string;
   apiKey?: string;
   baseUrl?: string;
+  headers?: Record<string, string>;
   temperature?: number;
   /**
    * Explicit provider id from the saved ModelConfig (`anthropic` | `openai` |
@@ -62,7 +63,9 @@ export function createModel(opts: ModelOptions) {
     return new ChatOpenAI({
       modelName: modelId,
       apiKey: opts.apiKey,
-      configuration: baseURL ? { baseURL } : undefined,
+      configuration: baseURL || opts.headers
+        ? { ...(baseURL ? { baseURL } : {}), ...(opts.headers ? { defaultHeaders: opts.headers } : {}) }
+        : undefined,
       temperature,
       streaming: true,
     });

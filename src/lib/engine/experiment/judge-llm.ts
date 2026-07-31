@@ -7,6 +7,8 @@
  * - 可注入：测试通过 setJudgeLlmCallerForTest 注入 fake judge（不真调 LLM）。
  */
 
+import { isModelConnectionReady } from '@/lib/shared/model-connection';
+
 export interface JudgeLlmRequest {
   system: string;
   user: string;
@@ -53,8 +55,8 @@ const opencodeJudgeCaller: JudgeLlmCaller = async (username, req) => {
   return withBackgroundOpencodeSlot(async () =>
     runWithEphemeralOpencodeServer({ user: username, verbose: false, isolateHome: true }, async (serverUrl: string) => {
       const config = await getActiveConfig(username);
-      if (!config || !config.apiKey) {
-        throw new Error('未配置可用的评测模型，请到「配置」页设置 API Key');
+      if (!config || !isModelConnectionReady(config)) {
+        throw new Error('未配置可用的评测模型，请到「模型注册」页完善连接信息');
       }
       const activeModel = await loadServerModelForUser(username);
       const providerID =
@@ -88,6 +90,7 @@ const opencodeJudgeCaller: JudgeLlmCaller = async (username, req) => {
                 modelID,
                 apiKey: config.apiKey,
                 baseURL: config.baseUrl,
+                headers: config.headers,
               },
               system: req.system,
               permission: buildEvaluatorPermissions(),

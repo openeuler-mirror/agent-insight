@@ -77,14 +77,20 @@ function buildCoordinatorSystemPrompt(mode: NonNullable<TaskCompletionEvalInput[
 1. 你必须自己逐条检查每个关键观点是否被实际输出覆盖，不要跳过任何一条。
 2. 禁止派发、调用或生成任何 subagent / task；本次评测只能由你这个主评估器独立完成。
 3. 综合预期结果、实际输出、关键观点覆盖情况，判断任务完成度。
-4. 原因 reason 只写总体判断，不要把每个关键观点逐条塞进 reason。
+4. 原因 reason 是**给人看的一句话结论**，界面上默认只展示它、明细全部折叠，所以它必须能独立说清问题：
+   - 说人话，不要用"覆盖率/维度/评分点/整体完成度偏低"这类评测术语，就当是在跟同事口头汇报；
+   - 先说任务到底成没成，再说卡在哪；问题只挑最要命的一条讲，不要把每个关键观点逐条塞进来（那些进 key_point_findings）；
+   - 讲具体的东西（少了哪个数、答错成什么、漏了哪一步），不要"不够完整""质量欠佳"这种空话；
+   - ≤80 字，不要复述任务描述，不要解释你的打分过程。
+   反例：「关键观点覆盖率偏低，多个维度未达标，整体任务完成度不足。」——等于什么都没说。
+   正例：「攻击类型判对了，但没给出来源 IP，也漏了 root 爆破次数，运维拿着没法直接处置。」
 5. 把关键观点覆盖情况、覆盖依据、未覆盖根因放进独立字段 key_point_findings，供前端单独展示。
 6. 只输出严格 JSON，不要输出 Markdown 或额外解释：
 
 {
   "score": 0.86,
   "is_correct": true,
-  "reason": "中文说明。先说任务是否完成，再说实际输出与预期结果的核心差异，最后一句收束。",
+  "reason": "一句话中文结论，说人话、讲具体问题，≤80 字（见工作流程第 4 条）。",
   "key_point_findings": [
     {
       "content": "...",
@@ -308,6 +314,7 @@ function makeDirectModel(config: ModelConfig) {
         model: config.model || 'deepseek-chat',
         configuration: {
             baseURL: config.baseUrl || 'https://api.deepseek.com',
+            defaultHeaders: config.headers,
         },
         temperature: 0,
         topP: 1,
@@ -355,10 +362,12 @@ async function evaluateTaskCompletionDirectAndRecord(
     const model = makeDirectModel(config);
     const userMsg = buildUserMessage(input, rootCauses);
     const systemPrompt = buildCoordinatorSystemPrompt(input.skillAttributionMode || 'skill-aware');
+    const startedAt = new Date();
     const response = await model.invoke([
         new SystemMessage(systemPrompt),
         new HumanMessage(userMsg),
     ]);
+    const completedAt = new Date();
     const assistantText = typeof response.content === 'string'
         ? response.content
         : JSON.stringify(response.content);
@@ -380,6 +389,8 @@ async function evaluateTaskCompletionDirectAndRecord(
         usage: extractLangchainUsage(response),
         modelID: config.model,
         skill: def?.traceSkill ?? null,
+        startedAtISO: startedAt.toISOString(),
+        completedAtISO: completedAt.toISOString(),
     }).catch((err) => {
         console.warn('[opencode-task-completion] failed to record direct evaluator trace:', (err as Error)?.message || err);
     });
@@ -448,6 +459,7 @@ export async function evaluateTaskCompletionViaOpencode(
             modelID,
             apiKey: activeModel?.apiKey || config.apiKey,
             baseURL: activeModel?.baseURL || config.baseUrl,
+            headers: activeModel?.headers || config.headers,
         },
         modelOptions: {
             temperature: 0,

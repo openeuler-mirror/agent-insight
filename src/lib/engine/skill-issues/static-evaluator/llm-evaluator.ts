@@ -335,6 +335,7 @@ export async function runLlmStaticEvaluation(args: {
   const client = new OpenAI({
     apiKey: config.apiKey || 'no-api-key-required',
     baseURL: config.baseUrl || 'https://api.deepseek.com',
+    defaultHeaders: config.headers,
     fetch: customFetch as any,
   });
   const model = config.model || 'deepseek-chat';

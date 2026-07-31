@@ -1,5 +1,14 @@
 import { getProxyConfig } from '@/lib/ingest/proxy-config';
-import { getUserSettings, isMaskedApiKey } from '@/lib/storage/server-config';
+import {
+    getUserSettings,
+    isMaskedApiKey,
+    restoreMaskedHeaders,
+} from '@/lib/storage/server-config';
+import {
+    getOpenAICompatibleClientConfig,
+    normalizeCustomHeaders,
+    supportsCustomHeaders,
+} from '@/lib/shared/model-connection';
 import { NextResponse } from 'next/server';
 import { OpenAI } from "openai";
 
@@ -9,6 +18,7 @@ export async function POST(request: Request) {
         const apiKey = body.apiKey || body.evalApiKey;
         const provider = body.provider || body.evalProvider;
         const model = body.model || body.evalModel;
+        const requestedHeaders = body.headers as Record<string, string> | undefined;
 
         const baseUrl = body.baseUrl || body.evalBaseUrl;
         let normalizedBaseUrl = baseUrl;
@@ -30,18 +40,34 @@ export async function POST(request: Request) {
         // Never send a mask sentinel to the provider; treat unresolved masks as empty.
         if (isMaskedApiKey(resolvedKey)) resolvedKey = '';
 
-        // Allow empty API Key for services that don't require authentication
-        // Use a placeholder if not provided
-        const finalApiKey = resolvedKey || 'no-api-key-required';
+        let resolvedHeaders = requestedHeaders;
+        if (requestedHeaders && body.user && body.configId) {
+            const settings = await getUserSettings(body.user);
+            const storedHeaders = settings.configs.find((c) => c.id === body.configId)?.headers ?? {};
+            resolvedHeaders = restoreMaskedHeaders(requestedHeaders, storedHeaders);
+        }
+        if (resolvedHeaders && !supportsCustomHeaders({ provider })) {
+            return NextResponse.json(
+                { success: false, error: 'Custom headers are only supported for Custom (OpenAI Compatible) models' },
+                { status: 400 },
+            );
+        }
+        resolvedHeaders = normalizeCustomHeaders(resolvedHeaders);
 
         const { customFetch } = getProxyConfig();
+        const connection = getOpenAICompatibleClientConfig({
+            provider,
+            apiKey: resolvedKey,
+            baseUrl: normalizedBaseUrl ||
+                (provider === 'deepseek-official' || provider === 'deepseek' ? "https://api.deepseek.com" :
+                 provider === 'siliconflow' ? "https://api.siliconflow.cn/v1" :
+                 undefined),
+            model,
+            headers: resolvedHeaders,
+        });
 
         const client = new OpenAI({
-             apiKey: finalApiKey,
-             baseURL: normalizedBaseUrl ||
-                      (provider === 'deepseek-official' || provider === 'deepseek' ? "https://api.deepseek.com" :
-                       provider === 'siliconflow' ? "https://api.siliconflow.cn/v1" :
-                       undefined),
+             ...connection,
              fetch: customFetch,
              timeout: 10000
         });

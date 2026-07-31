@@ -56,8 +56,17 @@ function buildPointsInstruction(pointsDef?: EvaluatorCard['pointsDef']): string 
 
 const OUTPUT_INSTRUCTION = [
   '【输出要求】只输出一个 JSON 对象，不要 Markdown 代码块、不要任何其他文字，结构如下：',
-  '{"score": <0-100 整体得分>, "points": [{"label": "评分点名", "score": <0-100>, "evidence": {"md": "该点判断依据"}}], "evidence": {"md": "整体判断依据（Markdown）"}}',
-  'score/points/evidence 均可按实际情况省略；判断依据要引用具体内容而非空泛评价。',
+  '{"verdict": "pass|warn|fail", "summary": "<一句话结论>", "score": <0-100 整体得分>, "points": [{"label": "评分点名", "score": <0-100>, "evidence": {"md": "该点判断依据"}}], "evidence": {"md": "整体判断依据（Markdown）"}}',
+  'verdict 与 summary 必填，它们是使用者唯一一定会看的内容：',
+  '- verdict：pass=达成、warn=部分达成、fail=未达成；',
+  '- summary：**一句话说清问题是什么**，让人看完不用再翻明细就知道发生了什么。要求：',
+  '  · 说人话：不要用"覆盖率/维度/评分点/得分偏低/整体表现"这类评测术语，就当是在跟同事口头汇报；',
+  '  · 先说结果、再说卡在哪，问题只讲最要命的那一条，不要罗列；',
+  '  · 讲具体的东西（少了哪个数、答错成什么、漏了哪一步），不要"不够完整""质量欠佳"这种空话；',
+  '  · 不要复述任务描述，不要解释你的打分过程，≤80 字。',
+  '  反例：「关键观点覆盖率偏低，多个维度未达标，整体任务完成度不足。」——等于什么都没说。',
+  '  正例：「攻击类型判对了，但没给出来源 IP，也漏了 root 爆破的次数，运维拿着没法直接处置。」',
+  'score/points/evidence 可按实际情况省略；判断依据要引用具体内容而非空泛评价。',
 ].join('\n');
 
 export interface AssembledJudgePrompt {

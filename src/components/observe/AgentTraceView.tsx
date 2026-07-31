@@ -371,6 +371,8 @@ export interface AgentTraceViewProps {
      * 不传则不渲染跳转按钮。
      */
     onSubagentNavigate?: (sessionId: string) => void;
+    /** 当前 trace 对应的 Session.taskId；用于兼容未保存 subagentSessionId 的历史 Langfuse 节点。 */
+    rootSessionId?: string;
     /** 当前 trace 对应的 Execution.id（= upload_id）。用于 Infra tab 做会话级 infra 关联；不传则该 tab 提示无法关联。 */
     rootExecutionId?: string;
 }
@@ -381,6 +383,7 @@ export default function AgentTraceView({
     loadInteraction,
     loadAllInteractions,
     onSubagentNavigate,
+    rootSessionId,
     rootExecutionId,
 }: AgentTraceViewProps) {
     const { user } = useAuth();
@@ -393,8 +396,8 @@ export default function AgentTraceView({
     /** 置位表示下一次 tree 重建源于「同一条 trace 补数据」，重置选中态的 effect 应跳过一次。 */
     const sameTraceReloadRef = React.useRef(false);
     const langfuseProjection = useMemo(
-        () => langfuseTraceNodes?.length ? buildLangfuseAgentTrace(langfuseTraceNodes) : null,
-        [langfuseTraceNodes],
+        () => langfuseTraceNodes?.length ? buildLangfuseAgentTrace(langfuseTraceNodes, rootSessionId) : null,
+        [langfuseTraceNodes, rootSessionId],
     );
 
     useEffect(() => {

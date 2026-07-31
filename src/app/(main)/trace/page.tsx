@@ -595,12 +595,23 @@ function TracePageContent() {
         if (fetchGuardRef.current === taskIdParam) return;
         fetchGuardRef.current = taskIdParam;
         apiFetch(`/api/observe/data?taskId=${encodeURIComponent(taskIdParam)}&includeEvaluations=0&skipAutoEvalReady=1`)
-            .then(r => r.json())
-            .then((d: Execution[]) => {
-                if (Array.isArray(d) && d.length > 0) setSelectedExecution(d[0]);
+            .then(async r => ({ ok: r.ok, status: r.status, body: await r.json() }))
+            .then(({ ok, status, body }) => {
+                if (fetchGuardRef.current !== taskIdParam) return;
+                if (!ok && status !== 404) throw new Error('Trace lookup failed');
+                const d = body as Execution[];
+                if (Array.isArray(d) && d.length > 0) {
+                    setSelectedExecution(d[0]);
+                    return;
+                }
+                setSelectedExecution(null);
+                void setTaskIdParam(null);
+                toast.error(locale === 'zh' ? '未找到对应的子 Agent Trace' : 'Sub-agent trace not found');
             })
             .catch(() => {
-                if (fetchGuardRef.current === taskIdParam) fetchGuardRef.current = null;
+                if (fetchGuardRef.current !== taskIdParam) return;
+                fetchGuardRef.current = null;
+                toast.error(locale === 'zh' ? '子 Agent Trace 加载失败' : 'Failed to load sub-agent trace');
             });
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [taskIdParam, data]);
@@ -1483,6 +1494,7 @@ function TraceDetailView({
                         loadInteraction={loadInteraction}
                         loadAllInteractions={loadFullInteractions}
                         onSubagentNavigate={navigateToTaskId}
+                        rootSessionId={taskId}
                         rootExecutionId={execution.upload_id || execution.task_id}
                     />
                 ) : (

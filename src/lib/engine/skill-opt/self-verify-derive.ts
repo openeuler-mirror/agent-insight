@@ -12,6 +12,7 @@
 import { OpenAI } from 'openai';
 import { getActiveConfig } from '@/lib/storage/server-config';
 import { getProxyConfig } from '@/lib/ingest/proxy-config';
+import { isModelConnectionReady } from '@/lib/shared/model-connection';
 import type { DatasetCase } from '@/server/agent_datasets_storage';
 import { makeYearAssertion, makeNumericAssertion, type ScriptAssertion } from './self-verify-structural';
 
@@ -36,15 +37,20 @@ function parseLoose(t: string): Record<string, unknown> {
   return {};
 }
 
-function newClient(config: { apiKey?: string; baseUrl?: string }) {
+function newClient(config: { apiKey?: string; baseUrl?: string; headers?: Record<string, string> }) {
   const { customFetch } = getProxyConfig();
-  return new OpenAI({ apiKey: config.apiKey || 'x', baseURL: config.baseUrl || 'https://api.deepseek.com', fetch: customFetch });
+  return new OpenAI({
+    apiKey: config.apiKey || 'no-api-key-required',
+    baseURL: config.baseUrl || 'https://api.deepseek.com',
+    defaultHeaders: config.headers,
+    fetch: customFetch,
+  });
 }
 
 /** LLM 从标准答案里抽出「该看护的事实」（未经护栏过滤的原始提议）。 */
 export async function extractGuardableFacts(cases: DatasetCase[], user: string): Promise<FactSpec[]> {
   const config = await getActiveConfig(user);
-  if (!config?.apiKey) return [];
+  if (!config || !isModelConnectionReady(config)) return [];
   const expected = cases.map((c, i) => `【用例${i + 1}】${(c.expectedOutput || '').slice(0, 700)}`).join('\n').slice(0, 7000);
   try {
     const r = await newClient(config).chat.completions.create({
@@ -84,7 +90,7 @@ const REVIEW_K = Number(process.env.SKILL_OPT_REVIEW_K) || 3; // reviewer 跑几
 async function reviewFacts(facts: FactSpec[], scriptSample: string, cases: DatasetCase[], user: string): Promise<FactSpec[]> {
   if (!facts.length) return [];
   const config = await getActiveConfig(user);
-  if (!config?.apiKey) return facts;
+  if (!config || !isModelConnectionReady(config)) return facts;
   // 给每条事实**溯源**：它的值来自哪条用例的标准答案 + 那条用例问的是什么 + 在几条用例出现。
   // 这是判 scope 的关键信号——「总数=200」听着全局，但若来源用例问的是某时间窗/子集，它就是 per-case 子范围。
   const factsText = facts.map((f, i) => {

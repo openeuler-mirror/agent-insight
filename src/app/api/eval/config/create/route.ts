@@ -231,6 +231,7 @@ async function processConfigAsync(
         const openaiClient = new OpenAI({
             apiKey: settings.apiKey || 'no-api-key-required',
             baseURL: settings.baseUrl || 'https://api.deepseek.com',
+            defaultHeaders: settings.headers,
             fetch: customFetch,
         });
         const modelName = settings.model || 'deepseek-chat';

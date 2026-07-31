@@ -5,6 +5,7 @@ export type LangfuseTraceNodeKind = 'llm' | 'tool' | 'agent' | 'chain' | 'span';
 export interface LangfuseTraceNode {
   traceId: string;
   spanId: string;
+  subagentSessionId?: string;
   parentSpanId: string | null;
   sourceParentSpanId: string | null;
   displayParentSpanId: string | null;
@@ -29,6 +30,10 @@ export interface LangfuseTraceNode {
   toolCallId?: string;
   linkedGenerationSpanId?: string;
   orphanTool?: boolean;
+}
+
+export function langfuseSubagentSessionId(rootSessionId: string, spanId: string): string {
+  return `${rootSessionId}:subagent:${spanId}`;
 }
 
 const LANGFUSE_LANGGRAPH_WRAPPERS = new Set([
