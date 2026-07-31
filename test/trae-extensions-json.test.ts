@@ -88,7 +88,7 @@ function step4Logic(existingJson: string, target: string, extName: string) {
 
 // ─── Tests ──────────────────────────────────────────────────────────────
 
-test("2 pre-existing → 3 total", () => {
+test("AC31: 2 pre-existing → 3 total", () => {
   const r = step4Logic(JSON.stringify(typicalExtensions), "C:\\Users\\win11\\.trae-cn\\extensions\\agent-insight.agent-insight-trae-collector-0.1.0", "agent-insight.agent-insight-trae-collector-0.1.0")
   assert.equal(r.valid, true)
   assert.equal(r.count, 3)
@@ -96,21 +96,21 @@ test("2 pre-existing → 3 total", () => {
   assert.equal(r.hasMid, true)
 })
 
-test("1 pre-existing → 2 total (scalar-collapse edge case)", () => {
+test("AC31: 1 pre-existing → 2 total (scalar-collapse edge case)", () => {
   const r = step4Logic(JSON.stringify(singleExtension), "C:\\Target\\ext", "agent-insight.agent-insight-trae-collector-0.1.0")
   assert.equal(r.valid, true)
   assert.equal(r.count, 2)
   assert.equal(r.hasOurs, true)
 })
 
-test("idempotent: reinstall removes old, adds new → same count", () => {
+test("AC31: idempotent: reinstall removes old, adds new → same count", () => {
   const r = step4Logic(JSON.stringify(withExistingAgentInsight()), "C:\\Target\\ext", "agent-insight.agent-insight-trae-collector-0.1.0")
   assert.equal(r.valid, true)
   assert.equal(r.count, 3)
   assert.equal(r.hasOurs, true)
 })
 
-test("corrupted JSON → reset and produce valid output", () => {
+test("AC31: corrupted JSON → reset and produce valid output", () => {
   assert.throws(() => JSON.parse(corruptedJson()))
   const r = step4Logic(corruptedJson(), "C:\\Target\\ext", "agent-insight.agent-insight-trae-collector-0.1.0")
   assert.equal(r.valid, true)
@@ -118,7 +118,7 @@ test("corrupted JSON → reset and produce valid output", () => {
   assert.equal(r.hasOurs, true)
 })
 
-test("empty string → 1 extension", () => {
+test("AC31: empty string → 1 extension", () => {
   const r = step4Logic("", "C:\\Target\\ext", "agent-insight.agent-insight-trae-collector-0.1.0")
   assert.equal(r.valid, true)
   assert.equal(r.count, 1)
@@ -127,7 +127,7 @@ test("empty string → 1 extension", () => {
 
 // ─── PS script structure check (requires running server) ─────────────────
 
-test("PS script: no old buggy patterns, has new patterns", { skip: !process.env.TEST_FULL }, async () => {
+test("AC31: PS script: no old buggy patterns, has new patterns", { skip: !process.env.TEST_FULL }, async () => {
   const res = await fetch("http://localhost:3000/api/ingest/setup?framework=trae", {
     headers: { "user-agent": "Windows PowerShell", "x-platform": "windows" }
   })
@@ -135,8 +135,8 @@ test("PS script: no old buggy patterns, has new patterns", { skip: !process.env.
   const script = await res.text()
 
   assert.ok(!script.includes("ForEach-Object { $_ | ConvertTo-Json"), "old ForEach-Object pattern removed")
-  assert.ok(script.includes("Add-Member -NotePropertyName '$mid'"), "$mid via Add-Member present")
-  assert.ok(script.includes("$exts | ConvertTo-Json -Depth 10 | Set-Content"), "single ConvertTo-Json on array")
+  assert.ok(script.includes('location: { "$mid": 1'), "$mid via literal object present")
+  assert.ok(script.includes("JSON.stringify(exts, null, 2)"), "single serialization on array")
   assert.ok(script.includes('try {'), "try-catch present")
-  assert.ok(script.includes("resetting corrupted extensions.json"), "corruption recovery present")
+  assert.ok(script.includes("Recreated extensions.json"), "corruption recovery present")
 })

@@ -15,7 +15,7 @@ WORKSPACE_ROOTS=$(echo "$INPUT" | json_extract_string ".workspace_roots")
 
 [ -z "$SESSION_ID" ] && exit 0
 
-PARENT_ID=$(register_session "$SESSION_ID")
+PARENT_ID=$(register_session "$SESSION_ID" "$AGENT_TYPE")
 
 PAYLOAD="{\"source\": \"$(json_extract_string '.source' <<< "$INPUT")\", \"pid\": $$"
 if [ -n "$CWD" ]; then

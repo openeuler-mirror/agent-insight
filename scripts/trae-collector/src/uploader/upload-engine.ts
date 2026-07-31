@@ -251,15 +251,16 @@ export class UploadEngine implements vscode.Disposable {
           cwd: allPrompts[i].payload?.cwd || undefined,
         })
       }
-      if (allEnds[i]) {
-        const ttt = toolCallsForAssistant.filter(tc => {
-          const ts = toolCalls.find(s => s.trace_id === tc.id)
-          if (!ts) return false
-          const s2 = allPrompts[i]?.t || '0001-01-01'
-          const e2 = allEnds[i]?.t || '9999-12-31'
-          return ts.t >= s2 && ts.t <= e2
-        })
+      // 工具时间窗口：本轮 prompt ~ 本轮 end；无 end（中断轮）时延伸到下一轮 prompt 或最后事件
+      const ttt = toolCallsForAssistant.filter(tc => {
+        const ts = toolCalls.find(s => s.trace_id === tc.id)
+        if (!ts) return false
+        const s2 = allPrompts[i]?.t || '0001-01-01'
+        const e2 = allEnds[i]?.t || allPrompts[i + 1]?.t || '9999-12-31'
+        return ts.t >= s2 && ts.t <= e2
+      })
 
+      if (allEnds[i]) {
         // Separate main agent tools from subagent tools
         const mainTools: any[] = []
         const subagentTools = new Map<string, { subagentId: string; subagentType: string; tools: any[] }>()
@@ -336,6 +337,27 @@ export class UploadEngine implements vscode.Disposable {
             tool_call_error_count: sg.tools.filter(t => t.state === 'error').length,
           })
         }
+      } else if (ttt.length > 0) {
+        // 中断轮兜底：无 response 但本轮有工具调用（对话中断/异常终止）时，
+        // 合成"进行中"的 assistant turn 承载工具，避免工具信息丢失（此前 tools 只挂在有 end 的轮次）
+        interactions.push({
+          role: 'assistant',
+          content: '',
+          timeInfo: {
+            created: new Date(allPrompts[i]?.t || ttt[0]?.timing?.started_at || Date.now()).getTime(),
+            completed: new Date(ttt[ttt.length - 1]?.timing?.completed_at || Date.now()).getTime(),
+          },
+          timestamp: ttt[0]?.timing?.started_at || allPrompts[i]?.t,
+          parts: [{ type: 'text', text: '' }],
+          agent: sessionAgent,
+          agentName: sessionAgent,
+          model: firstLlm?.model || configModel || sessionAgent,
+          usage: usageTokens,
+          finish_reason: 'interrupted',
+          tool_calls: ttt,
+          tool_call_count: ttt.length,
+          tool_call_error_count: ttt.filter(t => t.state === 'error').length,
+        })
       }
     }
     // Detect Skill calls from tool events

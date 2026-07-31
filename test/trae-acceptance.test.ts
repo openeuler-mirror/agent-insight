@@ -408,7 +408,7 @@ test("AC17: tool response is truncated at 4000 characters by default", () => {
 // ============================================================================
 // MCP tool detection
 // ============================================================================
-test("MCP tool detection: BrowserTabs with snake_case llm_tool_name classified as mcp", () => {
+test("AC18: MCP tool detection: BrowserTabs with snake_case llm_tool_name classified as mcp", () => {
   const { tempSpoolDir, tempEnvFile, tempToolStateDir } = setupTest()
   try {
     const preInput = JSON.stringify({
@@ -430,7 +430,7 @@ test("MCP tool detection: BrowserTabs with snake_case llm_tool_name classified a
   }
 })
 
-test("MCP tool detection: built-in tools not misclassified as mcp", () => {
+test("AC18: MCP tool detection: built-in tools not misclassified as mcp", () => {
   const { tempSpoolDir, tempEnvFile, tempToolStateDir } = setupTest()
   try {
     const builtins = ["Read", "Write", "Glob", "Grep", "LS", "Bash", "Edit"]
@@ -457,7 +457,7 @@ test("MCP tool detection: built-in tools not misclassified as mcp", () => {
 // ============================================================================
 // post-tool-use.sh: inline Skill/MCP trace generation
 // ============================================================================
-test("post-tool-use.sh generates mcp.call.end for MCP tool calls", () => {
+test("AC18: post-tool-use.sh generates mcp.call.end for MCP tool calls", () => {
   const { tempSpoolDir, tempEnvFile, tempToolStateDir } = setupTest()
   try {
     const sessionId = "ac-mcp-inline"
@@ -527,9 +527,188 @@ test("AC19: mcp.call.end records error on failure", () => {
 })
 
 // ============================================================================
+// AC18: mcp__<server>__<tool> 前缀解析（TRAE MCP 真实命名形态）
+// ============================================================================
+test("AC18: mcp__ 前缀解析出 serverName/toolName（真实命名形态）", () => {
+  const { tempSpoolDir, tempEnvFile, tempToolStateDir } = setupTest()
+  try {
+    const sessionId = "ac18-mcp-prefix"
+    const toolName = "mcp__context7__resolve-library-id"
+
+    runHookScript("pre-tool-use.sh", JSON.stringify({
+      session_id: sessionId, hook_event_name: "PreToolUse",
+      tool_use_id: "call_mcp_prefix", tool_name: toolName,
+      llm_tool_name: "mcp_context7_resolve-library-id",
+      tool_input: { args: { query: "Next.js", libraryName: "Next.js" } },
+      agent_id: "solo_agent", agent_type: "solo_agent",
+    }), tempEnvFile)
+
+    runHookScript("post-tool-use.sh", JSON.stringify({
+      session_id: sessionId, hook_event_name: "PostToolUse",
+      tool_use_id: "call_mcp_prefix", tool_name: toolName,
+      llm_tool_name: "mcp_context7_resolve-library-id",
+      tool_input: { args: { query: "Next.js", libraryName: "Next.js" } },
+      tool_response: { content: [{ type: "text", text: "Library found" }], isError: null },
+      agent_id: "solo_agent", agent_type: "solo_agent",
+    }), tempEnvFile)
+
+    const events = readSpoolEvents(tempSpoolDir)
+
+    const mcpEvent = events.find(e => e.kind === "mcp.call.end")
+    assert.ok(mcpEvent, "mcp.call.end should be generated")
+    assert.equal(mcpEvent.payload.serverName, "context7", "AC18: serverName 应从 mcp__ 前缀解析")
+    assert.equal(mcpEvent.payload.toolName, "resolve-library-id", "AC18: toolName 应为干净工具名")
+    assert.ok(mcpEvent.payload.params, "AC18: params 应保留")
+    assert.ok(mcpEvent.payload.result, "AC18: result 应保留")
+  } finally {
+    cleanupTest(tempSpoolDir, tempEnvFile, tempToolStateDir)
+  }
+})
+
+// ============================================================================
+// AC19: MCP 标准失败形态 isError=true（错误内容在 content[].text）
+// ============================================================================
+test("AC19: isError=true 时从 content 提取错误信息", () => {
+  const { tempSpoolDir, tempEnvFile, tempToolStateDir } = setupTest()
+  try {
+    const sessionId = "ac19-mcp-iserror"
+    const toolName = "mcp__context7__query-docs"
+
+    runHookScript("pre-tool-use.sh", JSON.stringify({
+      session_id: sessionId, hook_event_name: "PreToolUse",
+      tool_use_id: "call_mcp_iserr", tool_name: toolName,
+      llm_tool_name: "mcp_context7_query-docs",
+      tool_input: { args: { libraryId: "/bad/lib" } },
+      agent_id: "solo_agent", agent_type: "solo_agent",
+    }), tempEnvFile)
+
+    runHookScript("post-tool-use.sh", JSON.stringify({
+      session_id: sessionId, hook_event_name: "PostToolUse",
+      tool_use_id: "call_mcp_iserr", tool_name: toolName,
+      llm_tool_name: "mcp_context7_query-docs",
+      tool_input: { args: { libraryId: "/bad/lib" } },
+      tool_response: { content: [{ type: "text", text: "Library not found: /bad/lib" }], isError: true },
+      agent_id: "solo_agent", agent_type: "solo_agent",
+    }), tempEnvFile)
+
+    const events = readSpoolEvents(tempSpoolDir)
+    const mcpEvent = events.find(e => e.kind === "mcp.call.end")
+    assert.ok(mcpEvent, "mcp.call.end should be generated")
+    assert.ok(mcpEvent.payload.error, "AC19: isError=true 应记录 error")
+    assert.ok(mcpEvent.payload.error.includes("Library not found"), "AC19: error 应包含 content 文本")
+  } finally {
+    cleanupTest(tempSpoolDir, tempEnvFile, tempToolStateDir)
+  }
+})
+
+// ============================================================================
+// AC11: TRAE web 工具（WebSearch/WebFetch）失败时 error 在 error_code/error_msg 字段
+// ============================================================================
+test("AC11: web 工具失败时从 error_msg 提取错误信息", () => {
+  const { tempSpoolDir, tempEnvFile, tempToolStateDir } = setupTest()
+  try {
+    const sessionId = "ac11-web-error"
+
+    runHookScript("pre-tool-use.sh", JSON.stringify({
+      session_id: sessionId, hook_event_name: "PreToolUse",
+      tool_use_id: "call_web_err", tool_name: "WebSearch",
+      llm_tool_name: "WebSearch",
+      tool_input: { query: "不存在的搜索" },
+      agent_id: "solo_agent", agent_type: "solo_agent",
+    }), tempEnvFile)
+
+    runHookScript("post-tool-use.sh", JSON.stringify({
+      session_id: sessionId, hook_event_name: "PostToolUse",
+      tool_use_id: "call_web_err", tool_name: "WebSearch",
+      llm_tool_name: "WebSearch",
+      tool_input: { query: "不存在的搜索" },
+      tool_response: { references: [], status: "Failed", error_code: 500, error_msg: "Search service unavailable" },
+      agent_id: "solo_agent", agent_type: "solo_agent",
+    }), tempEnvFile)
+
+    const events = readSpoolEvents(tempSpoolDir)
+    const toolEnd = events.find(e => e.kind === "tool.call.end" && e.trace_id === "tool_call_web_err")
+    assert.ok(toolEnd, "tool.call.end should be generated")
+    assert.ok(toolEnd.payload.error, "AC11: web 工具失败应记录 error")
+    assert.ok(toolEnd.payload.error.includes("Search service unavailable"), "AC11: error 应包含 error_msg 内容")
+  } finally {
+    cleanupTest(tempSpoolDir, tempEnvFile, tempToolStateDir)
+  }
+})
+
+// ============================================================================
+// AC11: 失败命令无 stderr 时的兜底（stdout → 合成失败提示）
+// ============================================================================
+test("AC11: exit≠0 无 stderr 时 stdout 兜底为 error", () => {
+  const { tempSpoolDir, tempEnvFile, tempToolStateDir } = setupTest()
+  try {
+    const sessionId = "ac11-no-stderr"
+
+    runHookScript("pre-tool-use.sh", JSON.stringify({
+      session_id: sessionId, hook_event_name: "PreToolUse",
+      tool_use_id: "call_nostderr", tool_name: "RunCommand",
+      llm_tool_name: "RunCommand",
+      tool_input: { command: "failing-cmd" },
+      agent_id: "solo_agent", agent_type: "solo_agent",
+    }), tempEnvFile)
+
+    // TRAE 实测形态：exit_code=1 但无 stderr 键（stdout 有内容）
+    runHookScript("post-tool-use.sh", JSON.stringify({
+      session_id: sessionId, hook_event_name: "PostToolUse",
+      tool_use_id: "call_nostderr", tool_name: "RunCommand",
+      llm_tool_name: "RunCommand",
+      tool_input: { command: "failing-cmd" },
+      tool_response: { exit_code: 1, status: "Exited", stdout: "error: cannot find module" },
+      agent_id: "solo_agent", agent_type: "solo_agent",
+    }), tempEnvFile)
+
+    const events = readSpoolEvents(tempSpoolDir)
+    const toolEnd = events.find(e => e.kind === "tool.call.end" && e.trace_id === "tool_call_nostderr")
+    assert.ok(toolEnd)
+    assert.equal(toolEnd.payload.exitCode, 1)
+    assert.ok(toolEnd.payload.error, "AC11: 无 stderr 时应从 stdout 兜底")
+    assert.ok(toolEnd.payload.error.includes("cannot find module"), "AC11: error 应含 stdout 内容")
+  } finally {
+    cleanupTest(tempSpoolDir, tempEnvFile, tempToolStateDir)
+  }
+})
+
+test("AC11: exit≠0 且 stdout 也空时合成失败提示", () => {
+  const { tempSpoolDir, tempEnvFile, tempToolStateDir } = setupTest()
+  try {
+    const sessionId = "ac11-empty-err"
+
+    runHookScript("pre-tool-use.sh", JSON.stringify({
+      session_id: sessionId, hook_event_name: "PreToolUse",
+      tool_use_id: "call_emptyerr", tool_name: "RunCommand",
+      llm_tool_name: "RunCommand",
+      tool_input: { command: "silent-fail" },
+      agent_id: "solo_agent", agent_type: "solo_agent",
+    }), tempEnvFile)
+
+    runHookScript("post-tool-use.sh", JSON.stringify({
+      session_id: sessionId, hook_event_name: "PostToolUse",
+      tool_use_id: "call_emptyerr", tool_name: "RunCommand",
+      llm_tool_name: "RunCommand",
+      tool_input: { command: "silent-fail" },
+      tool_response: { exit_code: 2, status: "Exited" },
+      agent_id: "solo_agent", agent_type: "solo_agent",
+    }), tempEnvFile)
+
+    const events = readSpoolEvents(tempSpoolDir)
+    const toolEnd = events.find(e => e.kind === "tool.call.end" && e.trace_id === "tool_call_emptyerr")
+    assert.ok(toolEnd)
+    assert.equal(toolEnd.payload.exitCode, 2)
+    assert.equal(toolEnd.payload.error, "command failed (exit code: 2)", "AC11: 全空时应合成失败提示")
+  } finally {
+    cleanupTest(tempSpoolDir, tempEnvFile, tempToolStateDir)
+  }
+})
+
+// ============================================================================
 // stop.sh: agent.session.stop + llm.call events
 // ============================================================================
-test("stop.sh generates agent.session.stop event", () => {
+test("AC5/AC15: stop.sh generates agent.session.stop event", () => {
   const { tempSpoolDir, tempEnvFile } = setupTest()
   try {
     const sessionId = "ac-session-stop"
@@ -542,6 +721,12 @@ test("stop.sh generates agent.session.stop event", () => {
       source: "startup",
     })
     runHookScript("session-start.sh", startInput, tempEnvFile)
+
+    // User prompt（写入语言感知估算状态文件）
+    runHookScript("prompt-submit.sh", JSON.stringify({
+      session_id: sessionId, hook_event_name: "UserPromptSubmit",
+      prompt: "Hello", agent_id: "solo_agent", agent_type: "solo_agent",
+    }), tempEnvFile)
 
     // Then simulate Stop hook
     const stopInput = JSON.stringify({
@@ -565,8 +750,42 @@ test("stop.sh generates agent.session.stop event", () => {
     assert.ok(llmEvent, "llm.call should be generated from stop hook")
     assert.equal(llmEvent.payload.estimated, true)
     assert.equal(llmEvent.payload.estimationMethod, "language-aware")
-    assert.ok(llmEvent.payload.promptTokens > 0)
+    assert.equal(llmEvent.payload.promptTokens, 1, "AC15: prompt token 应走语言感知估算（Hello = 1 词 × 1.3 → 1，非 completion/2 兜底）")
     assert.ok(llmEvent.payload.completionTokens > 0)
+    // 状态文件应被 stop.sh 消费删除（一次性）
+    assert.ok(!fs.existsSync(path.join(tempSpoolDir, "trae-prompt-state-ac-session-stop.json")),
+      "prompt 状态文件应在 stop 后被消费删除")
+  } finally {
+    cleanupTest(tempSpoolDir, tempEnvFile)
+  }
+})
+
+// ============================================================================
+// AC15 兜底路径: 无 prompt-submit 状态文件时 promptTokens 走 completion/2
+// ============================================================================
+test("AC15: 无状态文件时 prompt token 走 completion/2 兜底", () => {
+  const { tempSpoolDir, tempEnvFile } = setupTest()
+  try {
+    const sessionId = "ac15-fallback"
+    runHookScript("session-start.sh", JSON.stringify({
+      session_id: sessionId, hook_event_name: "SessionStart",
+      cwd: "/tmp", workspace_roots: ["/tmp"],
+      agent_id: "solo_agent", agent_type: "solo_agent", source: "startup",
+    }), tempEnvFile)
+    // 无 prompt-submit → 无状态文件
+    runHookScript("stop.sh", JSON.stringify({
+      session_id: sessionId, hook_event_name: "Stop",
+      text_content: "ok done", last_assistant_message: "ok done",
+      loop_count: 1, stop_hook_active: false,
+      agent_id: "solo_agent", agent_type: "solo_agent",
+    }), tempEnvFile)
+
+    const events = readSpoolEvents(tempSpoolDir)
+    const llmEvent = events.find(e => e.kind === "llm.call")
+    assert.ok(llmEvent)
+    // "ok done" = 2 词 → completion = int(2×1.3)=2 → 兜底 prompt = 2/2 = 1
+    assert.equal(llmEvent.payload.promptTokens, 1, "AC15: 无状态文件时 prompt = completion/2")
+    assert.equal(llmEvent.payload.completionTokens, 2)
   } finally {
     cleanupTest(tempSpoolDir, tempEnvFile)
   }
@@ -696,7 +915,7 @@ test("AC8: Skill trace generated from post-tool-use contains all required fields
       tool_input: { name: "deep-analyzer" },
       tool_response: {
         skill_path: "/home/.trae-cn/builtin_skills/deep-analyzer",
-        skill_detail: "# Deep Analyzer\n\nAnalyzes code deeply.",
+        skill_detail: "# Deep Analyzer\n\nversion: 1.2.0\n\nAnalyzes code deeply.",
         skill_type: "skill",
       },
       agent_id: "solo_agent", agent_type: "solo_agent",
@@ -707,6 +926,7 @@ test("AC8: Skill trace generated from post-tool-use contains all required fields
 
     assert.ok(skillEvent, "AC8: skill trace generated")
     assert.ok(skillEvent.payload.skillName, "AC8: skillName present")
+    assert.equal(skillEvent.payload.skillVersion, "1.2.0", "AC8: skillVersion present")
     assert.ok(skillEvent.payload.triggerMode, "AC8: triggerMode present")
     assert.ok(skillEvent.payload.params, "AC8: params present")
     assert.ok(skillEvent.payload.skillPath, "AC8: skillPath present")
@@ -719,7 +939,7 @@ test("AC8: Skill trace generated from post-tool-use contains all required fields
 // ============================================================================
 // 调试: TRAE_DEBUG_RAW=1 原始输入保存
 // ============================================================================
-test("调试: TRAE_DEBUG_RAW=1 时保存原始 Hook 输入", () => {
+test("DEBUG: TRAE_DEBUG_RAW=1 时保存原始 Hook 输入", () => {
   const { tempSpoolDir, tempEnvFile } = setupTest()
   try {
     const debugEnvFile = path.join(os.tmpdir(), `trae-debug-env-${Math.random().toString(36).slice(2)}.sh`)
@@ -769,7 +989,7 @@ export AGENT_INSIGHT_API_KEY=test-key-debug
   }
 })
 
-test("调试: 默认情况下 TRAE_DEBUG_RAW 不产生日志", () => {
+test("DEBUG: 默认情况下 TRAE_DEBUG_RAW 不产生日志", () => {
   const { tempSpoolDir, tempEnvFile } = setupTest()
   try {
     // 显式覆盖全局 .env 中的 TRAE_DEBUG_RAW=1
@@ -856,7 +1076,7 @@ test("AC11: post-tool-use.sh records exitCode and error info", () => {
       tool_use_id: "call_ac11_ok", tool_name: "Bash",
       llm_tool_name: "Bash",
       tool_input: { command: "ls" },
-      tool_response: { exit_code: 0, stdout: "file1.txt\nfile2.txt" },
+      tool_response: { exit_code: 0, stdout: "file1.txt\nfile2.txt", command_start_ms: 1700000000000, command_end_ms: 1700000001500 },
       agent_id: "solo_agent", agent_type: "solo_agent",
     }), tempEnvFile)
 
@@ -874,7 +1094,7 @@ test("AC11: post-tool-use.sh records exitCode and error info", () => {
       tool_use_id: "call_ac11_err", tool_name: "Bash",
       llm_tool_name: "Bash",
       tool_input: { command: "nonexistent" },
-      tool_response: { exit_code: 127, stderr: "command not found" },
+      tool_response: { exit_code: 127, stderr: "command not found", command_start_ms: 1700000000000, command_end_ms: 1700000002200 },
       agent_id: "solo_agent", agent_type: "solo_agent",
     }), tempEnvFile)
 
@@ -883,10 +1103,12 @@ test("AC11: post-tool-use.sh records exitCode and error info", () => {
     const okEnd = events.find(e => e.trace_id === "tool_call_ac11_ok" && e.kind === "tool.call.end")
     assert.ok(okEnd)
     assert.equal(okEnd.payload.exitCode, 0)
+    assert.equal(okEnd.payload.latencyMs, 1500, "AC11: 应从 command_start_ms/end_ms 计算真实耗时")
 
     const errEnd = events.find(e => e.trace_id === "tool_call_ac11_err" && e.kind === "tool.call.end")
     assert.ok(errEnd)
     assert.equal(errEnd.payload.exitCode, 127)
+    assert.equal(errEnd.payload.latencyMs, 2200, "AC11: 失败工具也应记录真实耗时")
     assert.ok(errEnd.payload.error, "should record error from stderr")
   } finally {
     cleanupTest(tempSpoolDir, tempEnvFile, tempToolStateDir)
@@ -958,6 +1180,36 @@ test("AC7: multi-level nested subagent relationships are tracked", () => {
     const sub2 = sessions.get("sub-level2")!
     assert.ok(sub1.subagentOf, "level 1 has parent")
     assert.ok(sub2.subagentOf, "level 2 has parent")
+  } finally {
+    cleanupTest(tempSpoolDir, tempEnvFile)
+  }
+})
+
+// ============================================================================
+// 修复回归：快速连续新建多个 solo_agent 会话时，
+// 后建会话不应被误判为前一会话的子 agent（subagent-detect 时序误判）
+// ============================================================================
+test("AC6: 连续两个 solo_agent 会话互不误判为子 agent", () => {
+  const { tempSpoolDir, tempEnvFile } = setupTest()
+  try {
+    runHookScript("session-start.sh", JSON.stringify({
+      session_id: "solo-s1", hook_event_name: "SessionStart",
+      cwd: "/tmp", workspace_roots: ["/tmp"],
+      agent_id: "solo_agent", agent_type: "solo_agent", source: "startup",
+    }), tempEnvFile)
+
+    // 快速连续第二个 solo_agent 会话（修复前会被误判为 solo-s1 的子 agent）
+    runHookScript("session-start.sh", JSON.stringify({
+      session_id: "solo-s2", hook_event_name: "SessionStart",
+      cwd: "/tmp", workspace_roots: ["/tmp"],
+      agent_id: "solo_agent", agent_type: "solo_agent", source: "startup",
+    }), tempEnvFile)
+
+    const events = readSpoolEvents(tempSpoolDir)
+    const s2start = events.find(e => e.sessionID === "solo-s2" && e.kind === "agent.session.start")
+    const s2sub = events.find(e => e.sessionID === "solo-s2" && e.kind === "agent.subagent.start")
+    assert.ok(s2start, "第二个 solo_agent 会话应为 agent.session.start")
+    assert.ok(!s2sub, "第二个 solo_agent 会话不应被误判为子 agent")
   } finally {
     cleanupTest(tempSpoolDir, tempEnvFile)
   }

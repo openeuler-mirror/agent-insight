@@ -113,12 +113,14 @@ test("AC10/AC11/AC12: collects tool call events with types and error info", () =
   assert.equal(successToolStart.payload.llm_tool_name, "WriteFile")
   assert.equal(successToolStart.payload.toolUseId, "call_001")
   assert.equal(successToolEnd.payload.exitCode, 0)
+  assert.equal(successToolEnd.payload.latencyMs, 500, "AC11: tool 执行耗时应记录")
   
   const errorTool = state.tools.find(t => t.trace_id === "tool-def")!
   assert.equal(errorTool.payload.toolName, "RunCommand")
   assert.equal(errorTool.payload.toolType, "terminal")
   assert.equal(errorTool.payload.exitCode, 1)
   assert.equal(errorTool.payload.error, "Build failed: syntax error")
+  assert.equal(errorTool.payload.latencyMs, 1500, "AC11: 失败工具耗时也应记录")
 })
 
 // ============================================================================
@@ -140,10 +142,12 @@ test("AC14/AC15/AC16: collects LLM calls with model switching detection", () => 
   assert.equal(firstLlm.payload.promptTokens, 100)
   assert.equal(firstLlm.payload.completionTokens, 50)
   assert.equal(firstLlm.payload.totalTokens, 150)
+  assert.equal(firstLlm.payload.latencyMs, 2000, "AC15: LLM 推理延迟应记录")
   assert.equal(firstLlm.payload.modelSwitched, false)
   
   const switchedLlm = state.llms.find(l => l.payload.model === "claude-3-5-sonnet")!
   assert.equal(switchedLlm.payload.provider, "anthropic")
+  assert.equal(switchedLlm.payload.latencyMs, 1500, "AC15: 切换后模型延迟也应记录")
   assert.equal(switchedLlm.payload.modelSwitched, true)
   assert.equal(switchedLlm.payload.previousModel, "gpt-4o")
 })
@@ -201,7 +205,7 @@ test("AC33: parent-child trace relationships are correct", () => {
 // ============================================================================
 // 完整会话测试
 // ============================================================================
-test("builds complete session state with all event types", () => {
+test("AC32: builds complete session state with all event types", () => {
   const reader = new SpoolReader(tempDir)
   const sessions = reader.buildSessionState(traeCompleteSessionEvents)
 
@@ -222,20 +226,20 @@ test("builds complete session state with all event types", () => {
 // ============================================================================
 // 边界测试: 空数据 / 损坏数据 / 缺失事件
 // ============================================================================
-test("handles empty events list gracefully", () => {
+test("AC32: handles empty events list gracefully", () => {
   const reader = new SpoolReader(tempDir)
   const sessions = reader.buildSessionState([])
   assert.equal(sessions.size, 0)
 })
 
-test("handles empty spool directory", () => {
+test("AC32: handles empty spool directory", () => {
   const emptyDir = path.join(tempDir, "empty-dir")
   fs.mkdirSync(emptyDir, { recursive: true })
   const reader = new SpoolReader(emptyDir)
   assert.equal(reader.listJsonlFiles().length, 0)
 })
 
-test("handles corrupt JSONL lines without crashing", () => {
+test("AC32: handles corrupt JSONL lines without crashing", () => {
   const corruptDir = path.join(tempDir, "corrupt-test")
   fs.mkdirSync(corruptDir, { recursive: true })
   const corruptFile = path.join(corruptDir, "corrupt.jsonl")
@@ -253,7 +257,7 @@ test("handles corrupt JSONL lines without crashing", () => {
   assert.equal(events.length, 0, "all lines are invalid JSON, should return empty")
 })
 
-test("buildSessionState skips events with empty sessionID", () => {
+test("AC32: buildSessionState skips events with empty sessionID", () => {
   const events: any[] = [
     { t: "2024-01-01T00:00:00Z", kind: "agent.session.start", sessionID: "s1", payload: {} },
     { t: "2024-01-01T00:00:01Z", kind: "orphan", sessionID: "", payload: {} },
@@ -265,7 +269,7 @@ test("buildSessionState skips events with empty sessionID", () => {
   assert.equal(sessions.get("s1")!.prompts.length, 1)
 })
 
-test("session with prompts but no responses has zero ends", () => {
+test("AC32: session with prompts but no responses has zero ends", () => {
   const events: any[] = [
     { t: "2024-01-01T00:00:00Z", kind: "agent.session.start", sessionID: "s-early", trace_id: "t1", payload: {} },
     { t: "2024-01-01T00:00:01Z", kind: "agent.prompt", sessionID: "s-early", trace_id: "t1", payload: { query: "help" } },

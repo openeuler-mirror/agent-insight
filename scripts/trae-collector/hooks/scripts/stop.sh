@@ -57,14 +57,14 @@ other = len(re.sub(r'[A-Za-z0-9_\s\u3400-\u9fff]', '', text))
 print(max(1, int(cjk * 1.2 + latin * 1.3 + other * 0.5)))
 " 2>/dev/null || echo $(( ${#FULL_MSG} / 3 )))
 
-# Prompt tokens: 优先从 TRAE_ENV_FILE 读取（prompt-submit.sh 写的），兜底估算
+# Prompt tokens: 优先读 prompt-submit.sh 写的语言感知估算状态文件（与 completion 同公式），
+# 状态文件缺失/损坏时兜底 completion/2（旧 TRAE_ENV_FILE 方案无设置方，已废弃）
 PROMPT_TOKENS=0
-if [ -n "${TRAE_ENV_FILE:-}" ] && [ -f "$TRAE_ENV_FILE" ]; then
-  PROMPT_LEN=$(grep '^AGENT_INSIGHT_PROMPT_LENGTH=' "$TRAE_ENV_FILE" 2>/dev/null | cut -d= -f2 || echo "0")
-  if [ "$PROMPT_LEN" -gt 0 ] 2>/dev/null; then
-    PROMPT_TOKENS=$(( PROMPT_LEN / 3 ))
-    PROMPT_TOKENS=$(( PROMPT_TOKENS > 0 ? PROMPT_TOKENS : 1 ))
-  fi
+SAFE_SESSION_ID=$(echo "$SESSION_ID" | tr -cd '[:alnum:]_-')
+PROMPT_STATE_FILE="${AGENT_INSIGHT_DIR:-$HOME/.agent-insight}/trae-prompt-state-${SAFE_SESSION_ID}.json"
+if [ -n "$SAFE_SESSION_ID" ] && [ -f "$PROMPT_STATE_FILE" ]; then
+  PROMPT_TOKENS=$(python3 -c "import json;print(json.load(open('$PROMPT_STATE_FILE')).get('prompt_tokens',0))" 2>/dev/null || echo "0")
+  rm -f "$PROMPT_STATE_FILE" 2>/dev/null
 fi
 # 兜底：用 completion token 比例反推
 if [ "$PROMPT_TOKENS" -eq 0 ] 2>/dev/null; then

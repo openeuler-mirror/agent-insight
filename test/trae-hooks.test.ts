@@ -65,7 +65,7 @@ function readSpoolEvents(tempSpoolDir: string): any[] {
   return events
 }
 
-test("session-start.sh generates session trace from TRAE Hook SessionStart event", () => {
+test("AC5: session-start.sh generates session trace from TRAE Hook SessionStart event", () => {
   const { tempSpoolDir, tempEnvFile } = setupTest()
   try {
     const mainInput = JSON.stringify({
@@ -111,7 +111,7 @@ test("session-start.sh generates session trace from TRAE Hook SessionStart event
   }
 })
 
-test("pre-tool-use.sh generates tool trace with correct tool types", () => {
+test("AC10: pre-tool-use.sh generates tool trace with correct tool types", () => {
   const { tempSpoolDir, tempEnvFile } = setupTest()
   try {
     const fileWriteInput = JSON.stringify({

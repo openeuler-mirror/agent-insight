@@ -43,7 +43,9 @@ _cleanup_stale() {
 import sys, json
 data = json.load(sys.stdin)
 active = data.get('activeSessions', {})
-stale = [sid for sid, ts in active.items() if ts < $cutoff]
+def ts_of(v):
+    return v if isinstance(v, (int, float)) else v.get('ts', 0) if isinstance(v, dict) else 0
+stale = [sid for sid, v in active.items() if ts_of(v) < $cutoff]
 for sid in stale:
     del active[sid]
 data['activeSessions'] = active
@@ -68,61 +70,39 @@ register_session() {
 import sys, json
 data = json.load(sys.stdin)
 data.setdefault('activeSessions', {})
-data['activeSessions']['$session_id'] = $now_ts
+# 状态升级为 dict：{ts, agent_type}（旧格式为纯数字，读取处兼容）
+data['activeSessions']['$session_id'] = {'ts': $now_ts, 'agent_type': '$agent_type'}
 json.dump(data, sys.stdout)
 " 2>/dev/null)
 
   local parent=""
-  # Tier 1: agent_type heuristic — find most recent active session whose
-  # agent_type does NOT end with '_agent' (i.e., only main agents can be parents)
-  local typed_parent=""
-  typed_parent=$(echo "$state" | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-active = data.get('activeSessions', {})
-rels = data.get('relationships', [])
-# Get sessions sorted by timestamp descending
-sorted_sessions = sorted(active.items(), key=lambda x: x[1], reverse=True)
-for sid, ts in sorted_sessions:
-    if sid == '$session_id':
-        continue
-    # Check if this session is already a child of someone
-    is_child = any(r.get('child') == sid for r in rels)
-    if is_child:
-        continue
-    # Find the agent_type for this session
-    # We don't have agent_type stored per-session in state, so we rely on timing
-    # The most recent non-child active session (other than self) is the parent
-    parent_sid = sid
-    print(parent_sid)
-    break
-" 2>/dev/null)
-
-  if [ -n "$typed_parent" ] && [ "$typed_parent" != "$session_id" ]; then
-    parent="$typed_parent"
+  # 主会话（solo_agent 或非 *_agent 结尾）永远是 root，不需要 parent。
+  # 修复：此前对任何会话都做时序 parent 判定，快速连续新建多个主会话时
+  # 后建会话被误判为前一会话的子 agent（实测 3 连开会话 2/3 被标 subagent.start）
+  if [ -z "$agent_type" ] || [ "$agent_type" = "solo_agent" ] || ! echo "$agent_type" | grep -q '_agent$'; then
+    echo "$state" > "$SUBAGENT_STATE_FILE" 2>/dev/null
+    echo ""
+    return 0
   fi
 
-  # Tier 2: Timing fallback (if agent_type not provided)
-  if [ -z "$parent" ] && [ "$agent_type" != "solo_agent" ] && echo "$agent_type" | grep -q '_agent$'; then
-    # This is a subagent by type — find parent by timing
-    parent=$(echo "$state" | python3 -c "
+  # 子 agent 类型（*_agent 结尾）：按时序找最近 active 非 child 会话作 parent
+  parent=$(echo "$state" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
 active = data.get('activeSessions', {})
 rels = data.get('relationships', [])
-# Get sessions sorted by timestamp descending
-sorted_sessions = sorted(active.items(), key=lambda x: x[1], reverse=True)
-for sid, ts in sorted_sessions:
+def ts_of(v):
+    return v if isinstance(v, (int, float)) else v.get('ts', 0) if isinstance(v, dict) else 0
+sorted_sessions = sorted(active.items(), key=lambda x: ts_of(x[1]), reverse=True)
+for sid, v in sorted_sessions:
     if sid == '$session_id':
         continue
-    # Check if this session is already a child of someone
     is_child = any(r.get('child') == sid for r in rels)
     if is_child:
         continue
     print(sid)
     break
 " 2>/dev/null)
-  fi
 
   if [ -n "$parent" ] && [ "$parent" != "$session_id" ]; then
     final_state=$(echo "$state" | python3 -c "

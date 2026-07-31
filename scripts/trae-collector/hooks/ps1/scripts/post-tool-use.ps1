@@ -105,12 +105,28 @@ $safeResponse = Get-TruncatedPayload -Json $safeResponse -MaxLen $MaxToolIoSize
 # Extract exit code / error
 $exitCode = ''
 $errorMsg = ''
+$toolLatencyMs = $null
 if ($responseJson -and $responseJson -ne '{}') {
     try {
         $respObj = $responseJson | ConvertFrom-JsonSafe
         if ($respObj.exit_code) { $exitCode = [string]$respObj.exit_code }
         if ($respObj.error) { $errorMsg = [string]$respObj.error }
         if (-not $errorMsg -and $respObj.stderr) { $errorMsg = [string]$respObj.stderr }
+        # TRAE web 工具（WebSearch/WebFetch）失败时用 error_code/error_msg 指示（成功时 null）
+        if (-not $errorMsg -and $respObj.error_msg) { $errorMsg = [string]$respObj.error_msg }
+        # 失败命令（exit_code≠0）且无 stderr/error_msg 时：stdout 兜底；仍空则合成失败提示
+        if (-not $errorMsg -and $exitCode -and $exitCode -ne '0') {
+            if ($respObj.stdout) { $errorMsg = [string]$respObj.stdout }
+        }
+        if (-not $errorMsg -and $exitCode -and $exitCode -ne '0') {
+            $errorMsg = "command failed (exit code: $exitCode)"
+        }
+        # TRAE RunCommand 响应带真实执行窗口，优先写入 latencyMs
+        if ($respObj.command_start_ms -and $respObj.command_end_ms) {
+            $cmdStart = [long]$respObj.command_start_ms
+            $cmdEnd = [long]$respObj.command_end_ms
+            if ($cmdEnd -ge $cmdStart) { $toolLatencyMs = $cmdEnd - $cmdStart }
+        }
     } catch {}
 }
 
@@ -125,6 +141,9 @@ if ($llmToolName) {
 }
 if ($exitCode) {
     $endPayload.exitCode = if ($exitCode -match '^\d+$') { [int]$exitCode } else { $exitCode }
+}
+if ($null -ne $toolLatencyMs) {
+    $endPayload.latencyMs = $toolLatencyMs
 }
 if ($errorMsg) {
     $safeError = Redact-Text -Text $errorMsg
@@ -260,9 +279,16 @@ if ($toolType -eq 'mcp') {
         try {
             $respObj = $safeResponse | ConvertFrom-JsonSafe
             $mcpPayload.result = $respObj
+            # AC19: MCP 标准失败指示 isError=true（错误内容在 content[].text）
+            if ($respObj.isError -eq $true -and $respObj.content) {
+                $errTexts = @($respObj.content | Where-Object { $_.type -eq 'text' } | ForEach-Object { $_.text })
+                $errMsg = ($errTexts -join ' ')
+                if (-not $errMsg) { $errMsg = 'MCP call failed (isError=true)' }
+                $mcpPayload.error = Get-TruncatedString -Str (Redact-Text -Text $errMsg) -MaxLen $MaxContentLength
+            }
         } catch {}
     }
-    if ($errorMsg) {
+    if (-not $mcpPayload.ContainsKey('error') -and $errorMsg) {
         $safeError = Redact-Text -Text $errorMsg
         $safeError = Get-TruncatedString -Str $safeError -MaxLen $MaxContentLength
         $mcpPayload.error = $safeError

@@ -91,16 +91,19 @@ $otherCount = $otherText.Length
 $completionTokens = [Math]::Max(1, [int]($cjkCount * 1.2 + $latinWordCount * 1.3 + $otherCount * 0.5))
 
 $promptTokens = 0
-if ($env:TRAE_ENV_FILE -and (Test-Path $env:TRAE_ENV_FILE -PathType Leaf)) {
-    $envContent = Get-Content $env:TRAE_ENV_FILE -Encoding UTF8 -ErrorAction SilentlyContinue
-    foreach ($line in $envContent) {
-        if ($line -match '^AGENT_INSIGHT_PROMPT_LENGTH=(\d+)') {
-            $promptLen = [int]$matches[1]
-            if ($promptLen -gt 0) {
-                $promptTokens = [Math]::Max(1, [int]($promptLen / 3))
+# 优先读 prompt-submit.ps1 写的语言感知估算状态文件（与 completion 同公式）；用后即删
+$safeSessionId = ($sessionId -replace '[^a-zA-Z0-9_-]', '')
+if ($safeSessionId) {
+    $stateDir = if ($env:AGENT_INSIGHT_DIR) { $env:AGENT_INSIGHT_DIR } else { "$env:USERPROFILE\.agent-insight" }
+    $promptStateFile = Join-Path $stateDir "trae-prompt-state-$safeSessionId.json"
+    if (Test-Path $promptStateFile -PathType Leaf) {
+        try {
+            $state = Get-Content $promptStateFile -Encoding UTF8 -Raw | ConvertFrom-Json
+            if ($state.prompt_tokens -and [int]$state.prompt_tokens -gt 0) {
+                $promptTokens = [int]$state.prompt_tokens
             }
-            break
-        }
+        } catch {}
+        try { Remove-Item $promptStateFile -Force -ErrorAction SilentlyContinue } catch {}
     }
 }
 

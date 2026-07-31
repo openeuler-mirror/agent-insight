@@ -7,20 +7,20 @@ import { getAdapter, listFrameworks } from "../src/lib/ingest/adapters/registry"
 // ============================================================================
 // Adapter 注册测试
 // ============================================================================
-test("traeAdapter is registered in adapter registry", () => {
+test("AC36: traeAdapter is registered in adapter registry", () => {
   const adapter = getAdapter("trae")
   assert.equal(adapter.descriptor.id, "trae")
   assert.equal(adapter.descriptor.label, "TRAE AI IDE")
   assert.equal(adapter.descriptor.onboard, "plugin")
 })
 
-test("traeAdapter aliases work correctly", () => {
+test("AC36: traeAdapter aliases work correctly", () => {
   assert.equal(getAdapter("trae-cn").descriptor.id, "trae")
   assert.equal(getAdapter("trae-ide").descriptor.id, "trae")
   assert.equal(getAdapter("trae-ai").descriptor.id, "trae")
 })
 
-test("traeAdapter is listed in frameworks", () => {
+test("AC36: traeAdapter is listed in frameworks", () => {
   const frameworks = listFrameworks()
   const traeFramework = frameworks.find(f => f.id === "trae")
   assert.ok(traeFramework)
@@ -81,7 +81,7 @@ test("AC8: extractSkillsWithVersionsFromTraeSession extracts skills correctly", 
   assert.ok(skills.find(s => s.name === "security-scan" && s.version === null))
 })
 
-test("traeAdapter.extractSkills uses extractSkillsWithVersionsFromTraeSession", () => {
+test("AC8/AC36: traeAdapter.extractSkills uses extractSkillsWithVersionsFromTraeSession", () => {
   const messages = [
     { role: "user", content: "Analyze code" },
     {
@@ -111,7 +111,7 @@ test("traeAdapter.extractSkills uses extractSkillsWithVersionsFromTraeSession", 
 // ============================================================================
 // Adapter capabilities 测试
 // ============================================================================
-test("traeAdapter declares correct capabilities", () => {
+test("AC36: traeAdapter declares correct capabilities", () => {
   assert.ok(traeAdapter.capabilities)
   assert.equal(traeAdapter.capabilities?.skills, true)
   assert.equal(traeAdapter.capabilities?.subagentTree, true)
@@ -120,6 +120,6 @@ test("traeAdapter declares correct capabilities", () => {
 // ============================================================================
 // Session merge strategy 测试
 // ============================================================================
-test("traeAdapter uses snapshot-replace merge strategy", () => {
+test("AC36: traeAdapter uses snapshot-replace merge strategy", () => {
   assert.equal(traeAdapter.sessionMergeStrategy, "snapshot-replace")
 })

@@ -43,7 +43,15 @@ function _Read-StateFile {
             }
             if ($parsed.activeSessions) {
                 foreach ($prop in $parsed.activeSessions.PSObject.Properties) {
-                    $state.activeSessions[$prop.Name] = [int64]$prop.Value
+                    # 兼容旧格式（纯数字 ts）与新格式（{ts, agent_type}）→ 统一转为 dict
+                    if ($prop.Value -is [int64] -or $prop.Value -is [int] -or $prop.Value -is [double]) {
+                        $state.activeSessions[$prop.Name] = @{ ts = [int64]$prop.Value; agent_type = '' }
+                    } else {
+                        $state.activeSessions[$prop.Name] = @{
+                            ts = if ($prop.Value.ts) { [int64]$prop.Value.ts } else { 0 }
+                            agent_type = if ($prop.Value.agent_type) { $prop.Value.agent_type.ToString() } else { '' }
+                        }
+                    }
                 }
             }
             if ($parsed.relationships) {
@@ -98,7 +106,8 @@ function _Cleanup-StaleSessions {
     $cutoff = (Get-UnixTimestamp) - $script:SubagentStaleSeconds
     $staleKeys = @()
     foreach ($key in $State.activeSessions.Keys) {
-        if ($State.activeSessions[$key] -lt $cutoff) {
+        $ts = if ($State.activeSessions[$key] -is [hashtable]) { [int64]$State.activeSessions[$key].ts } else { [int64]$State.activeSessions[$key] }
+        if ($ts -lt $cutoff) {
             $staleKeys += $key
         }
     }
@@ -119,14 +128,23 @@ function Register-Session {
     $state = _Cleanup-StaleSessions -State $state
 
     $nowTs = Get-UnixTimestamp
-    $state.activeSessions[$SessionId] = $nowTs
+    # 状态升级为 dict：{ts, agent_type}（与 sh 版一致）
+    $state.activeSessions[$SessionId] = @{ ts = $nowTs; agent_type = $AgentType }
 
     $parent = ''
-    $sortedSessions = $state.activeSessions.GetEnumerator() |
-        Sort-Object { $_.Value } -Descending
 
-    # --- Tier 1: Find the most recent active session that is NOT already a child of someone else ---
-    $typedParent = ''
+    # 主会话（solo_agent 或非 *_agent 结尾）永远是 root，不需要 parent。
+    # 修复：此前对任何会话都做时序 parent 判定，快速连续新建多个主会话时
+    # 后建会话被误判为前一会话的子 agent（与 sh 版同 bug）。
+    if (-not $AgentType -or $AgentType -eq 'solo_agent' -or $AgentType -notmatch '_agent$') {
+        _Write-StateFile -State $state
+        return ''
+    }
+
+    $sortedSessions = $state.activeSessions.GetEnumerator() |
+        Sort-Object { $_.Value.ts } -Descending
+
+    # --- 子 agent 类型（*_agent 结尾）：按时序找最近 active 非 child 会话作 parent ---
     foreach ($entry in $sortedSessions) {
         if ($entry.Key -eq $SessionId) { continue }
         $isChild = $false
@@ -137,34 +155,8 @@ function Register-Session {
             }
         }
         if (-not $isChild) {
-            $typedParent = $entry.Key
+            $parent = $entry.Key
             break
-        }
-    }
-
-    if ($typedParent -and ($typedParent -ne $SessionId)) {
-        $parent = $typedParent
-    }
-
-    # --- Tier 2: Agent type heuristic fallback ---
-    # If agent_type ends with '_agent' (and is not 'solo_agent'), this session is a subagent.
-    # Find parent by timing if Tier 1 did not find one.
-    if ((-not $parent) -and
-        ($AgentType -ne 'solo_agent') -and
-        ($AgentType -match '_agent$')) {
-        foreach ($entry in $sortedSessions) {
-            if ($entry.Key -eq $SessionId) { continue }
-            $isChild = $false
-            foreach ($rel in $state.relationships) {
-                if ($rel.child -eq $entry.Key) {
-                    $isChild = $true
-                    break
-                }
-            }
-            if (-not $isChild) {
-                $parent = $entry.Key
-                break
-            }
         }
     }
 
