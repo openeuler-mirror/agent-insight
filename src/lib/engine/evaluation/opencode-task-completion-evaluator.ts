@@ -362,10 +362,12 @@ async function evaluateTaskCompletionDirectAndRecord(
     const model = makeDirectModel(config);
     const userMsg = buildUserMessage(input, rootCauses);
     const systemPrompt = buildCoordinatorSystemPrompt(input.skillAttributionMode || 'skill-aware');
+    const startedAt = new Date();
     const response = await model.invoke([
         new SystemMessage(systemPrompt),
         new HumanMessage(userMsg),
     ]);
+    const completedAt = new Date();
     const assistantText = typeof response.content === 'string'
         ? response.content
         : JSON.stringify(response.content);
@@ -387,6 +389,8 @@ async function evaluateTaskCompletionDirectAndRecord(
         usage: extractLangchainUsage(response),
         modelID: config.model,
         skill: def?.traceSkill ?? null,
+        startedAtISO: startedAt.toISOString(),
+        completedAtISO: completedAt.toISOString(),
     }).catch((err) => {
         console.warn('[opencode-task-completion] failed to record direct evaluator trace:', (err as Error)?.message || err);
     });

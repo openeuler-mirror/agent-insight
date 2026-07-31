@@ -2,7 +2,7 @@ import type { ExecutionRecord } from '@/lib/storage/data-service';
 import type { OtelTraceEvent } from '../types';
 import { LANGFUSE_LANGGRAPH_FRAMEWORK } from '../langfuse';
 import type { OtelTraceAdapter } from './types';
-import { buildLangfuseTraceNodes } from './langfuse-trace';
+import { buildLangfuseTraceNodes, langfuseSubagentSessionId } from './langfuse-trace';
 
 type AnyObj = Record<string, any>;
 const DEFAULT_REPORT_SUBAGENT = 'report-generator';
@@ -89,7 +89,7 @@ function metadata(event: OtelTraceEvent | undefined, key: string): string | unde
 }
 
 function stableSubagentSession(sessionId: string, tool: OtelTraceEvent | undefined): string {
-  return `${sessionId}:subagent:${tool?.spanId || DEFAULT_REPORT_SUBAGENT}`;
+  return langfuseSubagentSessionId(sessionId, tool?.spanId || DEFAULT_REPORT_SUBAGENT);
 }
 
 function hasAncestor(event: OtelTraceEvent, byId: Map<string, OtelTraceEvent>, predicate: (event: OtelTraceEvent) => boolean): boolean {
@@ -648,6 +648,10 @@ export function aggregateLangfuseLangGraphTraceEvents(sessionId: string, events:
   const start = Math.min(...ordered.map(eventStart));
   const end = Math.max(...ordered.map(eventEnd));
   const toolEvents = ordered.filter((event) => event.kind === 'tool');
+  const langfuseTraceNodes = buildLangfuseTraceNodes(ordered).map((node) => {
+    const subagentSessionId = subagentScopes.get(node.spanId)?.sessionId;
+    return subagentSessionId ? { ...node, subagentSessionId } : node;
+  });
 
   return {
     task_id: sessionId,
@@ -665,7 +669,7 @@ export function aggregateLangfuseLangGraphTraceEvents(sessionId: string, events:
     label: firstText(ordered.find((event) => event.serviceName)?.serviceName) || LANGFUSE_LANGGRAPH_FRAMEWORK,
     user: ordered.find((event) => event.user)?.user || 'anonymous',
     interactions,
-    langfuseTraceNodes: buildLangfuseTraceNodes(ordered),
+    langfuseTraceNodes,
     skill: skillName,
     invokedSkills: skillName ? [{ name: skillName, version: null }] : [],
     skills: skillName ? [skillName] : [],

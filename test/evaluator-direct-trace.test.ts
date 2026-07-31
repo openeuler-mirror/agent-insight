@@ -3,12 +3,14 @@ import test from 'node:test';
 
 import { buildAgentCallTree } from '@/lib/engine/observability/agent-trace';
 import {
+  buildDirectEvaluatorExecutionRecord,
   buildDirectEvaluatorInteractions,
   inferCompletionTimestampFromInteractions,
   shouldForceOpencodeEvalTransport,
 } from '@/lib/engine/evaluation/evaluator-execution-recorder';
 
 const TS = '2026-06-10T00:00:00.000Z';
+const COMPLETED_TS = '2026-06-10T00:00:03.000Z';
 
 test('synthesizes user + assistant interactions for a single-shot LLM judge', () => {
   const interactions = buildDirectEvaluatorInteractions({
@@ -73,6 +75,68 @@ test('renders as a 1-LLM-call / 0-tool-call trace (matches what a judge actually
   assert.ok(tree);
   assert.equal(tree?.stats.llmCalls, 1);
   assert.equal(tree?.stats.toolCalls, 0);
+});
+
+test('uses one model invocation window for root trace and LLM duration', () => {
+  const interactions = buildDirectEvaluatorInteractions({
+    agentName: 'task-completion-evaluator',
+    systemPrompt: 'judge',
+    userMessage: 'task',
+    assistantOutput: '{"score":0.9}',
+    startedAtISO: TS,
+    completedAtISO: COMPLETED_TS,
+  });
+
+  assert.equal(interactions[0]?.timestamp, TS);
+  assert.equal(interactions[2]?.timestamp, TS);
+  assert.deepEqual(interactions[2]?.timeInfo, {
+    created: TS,
+    completed: COMPLETED_TS,
+  });
+
+  const tree = buildAgentCallTree(
+    interactions as unknown as Parameters<typeof buildAgentCallTree>[0],
+  );
+  const llmEvent = tree?.events.find(event => event.kind === 'llm');
+  assert.equal(tree?.stats.durationMs, 3000);
+  assert.equal((llmEvent?.completedAt ?? 0) - (llmEvent?.startedAt ?? 0), 3000);
+  assert.equal(inferCompletionTimestampFromInteractions(interactions).toISOString(), COMPLETED_TS);
+});
+
+test('persists the invocation window as Execution and Session lifecycle fields', () => {
+  const record = buildDirectEvaluatorExecutionRecord({
+    taskId: 'task-completion-evaluator-test',
+    agentName: 'task-completion-evaluator',
+    userMessage: 'task',
+    assistantOutput: '{"score":0.9}',
+    startedAtISO: TS,
+    completedAtISO: COMPLETED_TS,
+  });
+
+  assert.ok(record);
+  assert.equal(record.latency, 3);
+  assert.equal(new Date(record.timestamp!).toISOString(), TS);
+  assert.equal(new Date(record.trace_started_at!).toISOString(), TS);
+  assert.equal(new Date(record.trace_completed_at!).toISOString(), COMPLETED_TS);
+});
+
+test('clamps an invalid completion time to the invocation start', () => {
+  const interactions = buildDirectEvaluatorInteractions({
+    agentName: 'trace-quality-evaluator',
+    userMessage: 'task',
+    assistantOutput: '{}',
+    startedAtISO: COMPLETED_TS,
+    completedAtISO: TS,
+  });
+
+  assert.deepEqual(interactions[1]?.timeInfo, {
+    created: COMPLETED_TS,
+    completed: COMPLETED_TS,
+  });
+  const tree = buildAgentCallTree(
+    interactions as unknown as Parameters<typeof buildAgentCallTree>[0],
+  );
+  assert.equal(tree?.stats.durationMs, 0);
 });
 
 test('explicit usage.total wins over input+output sum', () => {
