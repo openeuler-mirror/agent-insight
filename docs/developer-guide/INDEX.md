@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `c1685d1a72c098cd708b11d0e8324627aa288bd8` (`c1685d1`) |
-| Branch | `master` |
-| Date | 2026-07-29T16:13:50+08:00 |
-| Author | openeuler-ci-bot |
-| Subject | `!240 fix(otel): 修 trace 上报积压——读路径按 session 定向 + 限流加绝对上限` |
+| Commit | `7c7ea713d80dc747c66f3a11b5fc1c8ee36c0367` (`7c7ea71`) |
+| Branch | `new-dev-7-30` |
+| Date | 2026-07-30T18:30:03+08:00 |
+| Author | mintuyang |
+| Subject | `修复子agent点击trace可跳转` |
 
-**如何更新：** `git diff c1685d1 HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff 7c7ea71 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
@@ -50,7 +50,7 @@
 - **Execution / trace**：接入平台的一次 Agent 运行（Prisma `Execution`）。一次主运行被拆分为一个根执行 + N 个子 Agent 执行，通过 `parentExecutionId` / `rootExecutionId` 关联。
 - **Trajectory evaluation**：针对某次执行的工具/Skill 路径，对照预期流程逐步打分（`evaluateTrajectory`、`TrajectoryEvalResult`）。
 - **Outcome vs Routing evaluation**：结果评测 = 最终答案是否与标准答案匹配；路由评测 = Agent 是否调用了预期的 Skill。参见 `ConfigDatasetType`、`RoutingEvaluationSnapshot`、`OutcomeEvaluationSnapshot`。
-- **Result quality evaluation**：质量监控的结果维评测，将最终交付拆为忠实度、指令遵循、答案质量和准确性，按 trace 写入 `TraceEvaluation`。
+- **Preset result evaluators**：评测中心提供准确性、答案质量、忠实度和指令遵循四个结果类预置评估器，只在用户主动运行实验时执行；质量监控不再包含结果维评测。
 - **Grayscale (A/B)**：在一个数据集上对两个 Skill 版本进行对比（`GrayscaleTask`、`ab-scoring.ts`）。
 - **Config (dataset config)**：某个查询的标准答案记录——预期 Skill、标准答案、根因、关键动作（Prisma `Config`、`ConfigItem`）。
 - **General agent / deepagents**：内部的 LangGraph/deepagents 运行时（`runGeneralAgent`），为 Skill 生成、优化和 LLM 评测器提供支撑。

@@ -1,20 +1,36 @@
 import { NextResponse } from 'next/server';
 import { resolveUser } from '@/lib/auth/auth';
 import { readRecords } from '@/lib/storage/data-service';
-import { prisma } from '@/lib/storage/prisma';
+import { DEFAULT_POLICY } from '@/lib/engine/quality-monitoring/config';
 
 export const dynamic = 'force-dynamic';
 
-interface ResultEvalRow {
-    executionId: string;
-    metricKey: string;
-    status: string;
-    score: number | null;
-    confidence: number;
-    method: string;
-    note: string | null;
-    evidenceJson: string | null;
-    errorMessage: string | null;
+const SECURITY = /(inject|越权|未授权|unauthorized|pii|敏感|泄露|leak)/i;
+
+function operationalScore(record: any): number {
+    const parts: number[] = [];
+    const failures = Array.isArray(record.failures) ? record.failures : [];
+    const unsafe = failures.some((failure: any) =>
+        SECURITY.test(`${failure?.failure_type ?? ''} ${failure?.description ?? ''}`),
+    );
+    parts.push(unsafe ? 0 : 100);
+
+    const calls = Number(record.tool_call_count ?? 0);
+    if (calls > 0) {
+        const errors = Number(record.tool_call_error_count ?? 0);
+        parts.push(Math.max(0, Math.min(100, (1 - errors / calls) * 100)));
+    }
+
+    const ratios: number[] = [];
+    if (record.latency != null) ratios.push(Number(record.latency) / DEFAULT_POLICY.costBudget.latencyMs);
+    if (record.tokens != null) ratios.push(Number(record.tokens) / DEFAULT_POLICY.costBudget.tokens);
+    const steps = Number(record.tool_call_count ?? 0) + Number(record.llm_call_count ?? 0);
+    if (steps > 0) ratios.push(steps / DEFAULT_POLICY.costBudget.steps);
+    if (ratios.length) {
+        parts.push(Math.max(0, Math.min(100, (1 - Math.max(...ratios)) * 100)));
+    }
+
+    return Math.round((parts.reduce((sum, value) => sum + value, 0) / parts.length) * 10) / 10;
 }
 
 /** 执行记录评分表 / 桶下钻数据源（FR-016 / S-003）。复用 readRecords + 时间窗内存过滤 + 分页。 */
@@ -52,26 +68,8 @@ export async function GET(req: Request) {
 
         const total = windowed.length;
         const slice = windowed.slice((page - 1) * pageSize, page * pageSize);
-        const executionIds = slice.map((r) => r.upload_id).filter((id): id is string => Boolean(id));
-        const evalRows: ResultEvalRow[] = executionIds.length ? await prisma.traceEvaluation.findMany({
-            where: { executionId: { in: executionIds }, evaluatorId: 'result-quality' },
-            select: { executionId: true, metricKey: true, status: true, score: true, confidence: true, method: true, note: true, evidenceJson: true, errorMessage: true },
-        }) as ResultEvalRow[] : [];
-        const evalByExecution = new Map<string, ResultEvalRow[]>();
-        for (const row of evalRows) {
-            const list = evalByExecution.get(row.executionId) ?? [];
-            list.push(row);
-            evalByExecution.set(row.executionId, list);
-        }
 
         const rows = slice.map((r) => {
-            const metrics = evalByExecution.get(r.upload_id || '') ?? [];
-            const scored = metrics.filter((metric) => metric.status === 'done' && metric.score != null);
-            const resultScore = scored.length ? Math.round((scored.reduce((sum: number, metric: ResultEvalRow) => sum + (metric.score as number), 0) / scored.length) * 10) / 10 : null;
-            const statuses = new Set(metrics.map((metric) => metric.status));
-            const resultEvalStatus = statuses.has('running') || statuses.has('pending') ? 'running'
-                : statuses.has('failed') ? 'failed'
-                    : metrics.length ? 'done' : 'missing';
             return {
                 id: r.upload_id || r.task_id || '',          // 下钻 /fault?executionId 用
                 task_id: r.task_id,
@@ -79,20 +77,14 @@ export async function GET(req: Request) {
                 query: r.query,
                 agent: r.agent || r.agentName,
                 timestamp: r.timestamp,
-                answer_score: r.answer_score ?? null,
-                is_answer_correct: r.is_answer_correct ?? null,
                 tool_call_count: r.tool_call_count ?? 0,
+                llm_call_count: r.llm_call_count ?? 0,
                 tool_call_error_count: r.tool_call_error_count ?? 0,
                 failures: Array.isArray(r.failures) ? r.failures : [],
                 tokens: r.tokens ?? null,
                 cost: r.cost ?? null,
                 latency: r.latency ?? null,
-                result_score: resultScore,
-                result_eval_status: resultEvalStatus,
-                result_metrics: Object.fromEntries(metrics.map((metric) => {
-                    let evidence = null; try { evidence = metric.evidenceJson ? JSON.parse(metric.evidenceJson) : null; } catch { /* ignore */ }
-                    return [metric.metricKey, { score: metric.score, status: metric.status, confidence: metric.confidence, method: metric.method, note: metric.note, evidence, error: metric.errorMessage }];
-                })),
+                quality_score: operationalScore(r),
             };
         });
 

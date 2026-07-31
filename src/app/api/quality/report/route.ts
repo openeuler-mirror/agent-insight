@@ -1,12 +1,11 @@
 import { NextResponse } from 'next/server';
 import { resolveUser } from '@/lib/auth/auth';
 import { buildQualityReport, resolveWindowRange } from '@/lib/engine/quality-monitoring';
-import type { WindowKind, QualityStatus } from '@/lib/engine/quality-monitoring/types';
+import type { WindowKind } from '@/lib/engine/quality-monitoring/types';
 
 export const dynamic = 'force-dynamic';
 
 const WINDOWS: WindowKind[] = ['1d', '1w', '1m', 'custom'];
-const STATUSES: QualityStatus[] = ['达标', '关注', '异常'];
 
 export async function GET(req: Request) {
     try {
@@ -26,8 +25,6 @@ export async function GET(req: Request) {
         }
 
         const skill = url.searchParams.get('skill') || undefined;
-        const statusParam = url.searchParams.get('status') as QualityStatus | null;
-        const status = statusParam && STATUSES.includes(statusParam) ? statusParam : undefined;
 
         const { from, to } = resolveWindowRange(window, new Date(), fromISO, toISO);
         if (from.getTime() > to.getTime()) {
@@ -40,7 +37,7 @@ export async function GET(req: Request) {
             window,
             from,
             to,
-            filters: (skill || status) ? { skill, status } : undefined,
+            filters: skill ? { skill } : undefined,
         });
 
         return NextResponse.json(report);

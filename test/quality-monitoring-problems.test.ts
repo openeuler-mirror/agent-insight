@@ -75,7 +75,7 @@ test('BR-013 影响度排序 + 帕累托累计占比', () => {
     const problems = [
         { key: 'a', desc: 'low', source: '评测' as const, affectedDimensions: ['过程'], frequency: 2, severity: 'low' as const, attribution: 'agent逻辑' as const, relatedTraces: [], impact: 0 },
         { key: 'b', desc: 'high', source: '错误' as const, affectedDimensions: ['过程'], frequency: 10, severity: 'high' as const, attribution: '工具&infra' as const, relatedTraces: [], impact: 0 },
-        { key: 'c', desc: 'mid', source: '评测' as const, affectedDimensions: ['结果', '过程'], frequency: 6, severity: 'medium' as const, attribution: '模型能力' as const, relatedTraces: [], impact: 0 },
+        { key: 'c', desc: 'mid', source: '评测' as const, affectedDimensions: ['过程'], frequency: 6, severity: 'medium' as const, attribution: '模型能力' as const, relatedTraces: [], impact: 0 },
     ];
     const ranked = rankProblems(problems);
     assert.equal(ranked[0].key, 'b', '高频高严重度应排第一');
@@ -110,7 +110,7 @@ test('tableSkillIssueProblems：同 dedupKey 聚合、带 skillRef/suggestedFix/
     assert.equal(k1.suggestedFix, '补充参数示例');
     assert.equal(k1.relatedTraces.length, 2);
     const k2 = items.find((p) => p.key.includes('k2'))!;
-    assert.deepEqual(k2.affectedDimensions, ['结果'], '观点遗漏 → 结果维');
+    assert.deepEqual(k2.affectedDimensions, ['过程'], '质量监控不再暴露结果维');
 });
 
 test('buildSkillDrag：按 skill 聚合未解决数/受影响面/拖累分排序', () => {
@@ -197,11 +197,10 @@ test('summarizeDiagnoses：模块指纹分布 + 诊断覆盖', () => {
 
 test('lowScoreProblems：低分维度转问题项', () => {
     const dims = {
-        result: { score: 92, status: '达标', coverage: 1, n: 10 } as DimScore,
         process: { score: 55, status: '异常', coverage: 0.8, n: 8, signal: '工具错误偏高' } as DimScore,
         cost: { score: 75, status: '关注', coverage: 1, n: 10 } as DimScore,
     };
     const out = lowScoreProblems(dims, 70);
     assert.ok(out.some((p) => p.affectedDimensions[0] === '过程' && p.severity === 'high'), '异常维 → high');
-    assert.ok(!out.some((p) => p.affectedDimensions[0] === '结果'), '达标维不生成问题');
+    assert.ok(!out.some((p) => p.affectedDimensions[0] === '结果'), '结果维已从质量监控移除');
 });

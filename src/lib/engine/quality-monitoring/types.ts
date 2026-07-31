@@ -4,7 +4,7 @@
 
 import type { FailureItem, SkillImprovementItem } from '@/lib/engine/evaluation/judge';
 
-/** 四维之一 / 综合状态：按绝对阈值判定（不含任何百分位/同类）。 */
+/** 质量维度 / 综合状态：按绝对阈值判定（不含任何百分位/同类）。 */
 export type QualityStatus = '达标' | '关注' | '异常';
 
 /** 优先级分层：综合分按 P0/P1/P2 加权（BR-010）。 */
@@ -16,23 +16,8 @@ export type Attribution = 'agent逻辑' | '模型能力' | '工具&infra' | '外
 /** 严重度。 */
 export type Severity = 'high' | 'medium' | 'low';
 
-export type ResultMetricKey = 'faithfulness' | 'instructionAdherence' | 'answerQuality' | 'accuracy';
-
-export interface ResultMetricLite {
-    key: ResultMetricKey;
-    status: 'pending' | 'running' | 'done' | 'failed';
-    evaluatorVersion?: string;
-    inputHash?: string;
-    score: number | null;
-    method: string;
-    confidence: number;
-    note?: string;
-    evidence?: Record<string, unknown>;
-    errorMessage?: string;
-}
-
 /**
- * TraceLite —— collectTraces 产出、四个聚合函数共同消费的中心契约（投影 DTO）。
+ * TraceLite —— collectTraces 产出、聚合函数共同消费的中心契约（投影 DTO）。
  * 缺失字段保持 undefined，不臆造（NFR-002）。
  */
 export interface TraceLite {
@@ -44,10 +29,6 @@ export interface TraceLite {
     model?: string;
     query?: string;
 
-    // 结果维（持久化的四项结果评测）
-    resultMetrics?: Partial<Record<ResultMetricKey, ResultMetricLite>>;
-    isAnswerCorrect?: boolean | null;
-    answerScore?: number | null;       // 0–1，judge（已落库），可空
     toolCallErrorCount?: number;
     failures?: FailureItem[];          // 解析自 Execution.failures(JSON)
 
@@ -128,7 +109,7 @@ export interface CompositeScore {
 export interface TrendBucket {
     bucket_ts: string;
     n_traces: number;
-    ratios: Record<string, number | null>;                            // 0–100；null = 该桶无有效结果评测
+    ratios: Record<string, number | null>;                            // 0–100；null = 该桶无有效观测数据
     percentiles: Record<string, { p50: number; p90: number; p95: number }>;
     composite: number;
     errorCount: number;
@@ -199,7 +180,6 @@ export interface SkillDragItem {
 export interface QualityReport {
     composite: CompositeScore;
     dimensions: {
-        result: DimScore;
         process: DimScore;
         cost: DimScore;
         error: DimScore;
@@ -216,10 +196,8 @@ export interface QualityReport {
     moduleFingerprint: { module: string; count: number; pct: number }[];
     /** 诊断覆盖：T 中已诊断 trace 数 / 含错误信号的 trace 数。 */
     diagnosisCoverage: { diagnosed: number; errorish: number };
-    coverage: { judged: number; total: number; perDimension: Record<string, number> };
     meta: {
         n: number;
-        passRate: number;             // 达标率：有效结果评测 trace 中结果均分达标的占比（0–100）
         empty: boolean;
         lowSample: boolean;
         window: string;
@@ -237,7 +215,7 @@ export interface QualityReportInput {
     window: WindowKind;
     from: Date;
     to: Date;
-    filters?: { skill?: string; status?: QualityStatus };
+    filters?: { skill?: string };
 }
 
 export type WindowKind = '1d' | '1w' | '1m' | 'custom';
@@ -249,7 +227,6 @@ export interface ScoringPolicy {
     thetaSample: number;
     bucket: { min: number; max: number };
     slaRefreshMs: number;
-    sample: { rate: number; budget: number };
     /** 成本归一基线（预算/SLO 上限），超过即 0 分（"是否失控烧钱"）。 */
     costBudget: { latencyMs: number; tokens: number; steps: number };
 }

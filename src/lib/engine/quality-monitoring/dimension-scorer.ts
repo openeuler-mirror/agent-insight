@@ -1,4 +1,4 @@
-// dimension-scorer — 四维评分 + P0/P1/P2 加权综合分 + 绝对状态（FR-002~007 / BR-001/004/005/010）。
+// dimension-scorer — 过程/成本/错误三维评分 + P0/P1/P2 加权综合分 + 绝对状态。
 // 纯函数，可单测。覆盖率优先、确定性打底；占比型 N/A 不入分母（BR-005）；
 // 安全 0 容忍触发综合分封顶降级（BR-004）；状态纯绝对阈值，无任何百分位/同类（BR-006）。
 
@@ -15,8 +15,7 @@ export interface ErrorSummaryForScore {
 
 export interface ScoreResult {
     composite: CompositeScore;
-    dimensions: { result: DimScore; process: DimScore; cost: DimScore; error: DimScore };
-    coverage: { judged: number; total: number; perDimension: Record<string, number> };
+    dimensions: { process: DimScore; cost: DimScore; error: DimScore };
 }
 
 function clamp01(n: number): number {
@@ -47,10 +46,6 @@ function statusOf(score: number, policy: ScoringPolicy): QualityStatus {
 type PerTrace = (t: TraceLite, policy: ScoringPolicy) => number | null;
 
 const EXTRACTORS: Record<MetricKey, PerTrace> = {
-    faithfulness: (t) => t.resultMetrics?.faithfulness?.status === 'done' ? t.resultMetrics.faithfulness.score : null,
-    instructionAdherence: (t) => t.resultMetrics?.instructionAdherence?.status === 'done' ? t.resultMetrics.instructionAdherence.score : null,
-    answerQuality: (t) => t.resultMetrics?.answerQuality?.status === 'done' ? t.resultMetrics.answerQuality.score : null,
-    accuracy: (t) => t.resultMetrics?.accuracy?.status === 'done' ? t.resultMetrics.accuracy.score : null,
     safety: (t) => (detectSecurityHit(t) ? 0 : 100),
     toolCorrectness: (t) => {
         const calls = t.toolCallCount ?? 0;
@@ -97,27 +92,6 @@ function scoreMetric(key: MetricKey, traces: TraceLite[], policy: ScoringPolicy)
     }
     const n = vals.length;
     const total = traces.length || 1;
-    const resultRows = traces
-        .map((t) => t.resultMetrics?.[key as keyof typeof t.resultMetrics])
-        .filter((row): row is NonNullable<typeof row> => Boolean(row?.status === 'done'));
-    const methods = new Map<string, number>();
-    for (const row of resultRows) methods.set(row.method, (methods.get(row.method) ?? 0) + 1);
-    const confidences = resultRows.map((row) => row.confidence).filter(Number.isFinite);
-    const evidence = traces.flatMap((t) => {
-        const row = t.resultMetrics?.[key as keyof typeof t.resultMetrics];
-        if (!row?.evidence) return [];
-        const reason = String(row.evidence.reason ?? row.note ?? '').trim();
-        return reason ? [{
-            executionId: t.executionId,
-            reason,
-            score: row.score,
-            confidence: row.confidence,
-            detail: row.evidence,
-        }] : [];
-    }).slice(0, 3);
-    const naReason = n === 0
-        ? traces.map((t) => t.resultMetrics?.[key as keyof typeof t.resultMetrics]?.note).find(Boolean)
-        : undefined;
     return {
         key,
         label: reg.label,
@@ -125,10 +99,6 @@ function scoreMetric(key: MetricKey, traces: TraceLite[], policy: ScoringPolicy)
         score: n ? round1(mean(vals)) : null,
         coverage: round1(n / total) ,
         n,
-        confidence: confidences.length ? round1(mean(confidences)) : undefined,
-        methodBreakdown: Object.fromEntries(methods),
-        naReason,
-        evidence,
     };
 }
 
@@ -175,14 +145,7 @@ export function scoreDimensions(
         m.constraintAdherence.note = 'N/A · 窗口内无 skill 触发';
     }
 
-    // 四维
-    const result = dimFrom([m.faithfulness, m.instructionAdherence, m.answerQuality, m.accuracy], policy, (mm) => {
-        const valid = mm.filter((x) => x.score != null).sort((a, b) => (a.score as number) - (b.score as number));
-        if (!valid.length) return '尚无结果评测覆盖';
-        return valid[0].score! < policy.status.达标
-            ? `${valid[0].label} ${round1(valid[0].score!)} 是结果维主要短板`
-            : '四项结果指标整体稳健';
-    });
+    // 过程 / 成本 / 错误三维
     const process = dimFrom([m.toolCorrectness, m.planEfficiency, m.constraintAdherence, m.toolGrounding], policy);
     const cost = dimFrom([m.cost], policy, () => '成本须看 p95 长尾，详见趋势');
 
@@ -223,21 +186,8 @@ export function scoreDimensions(
 
     const status: QualityStatus = capped ? '异常' : statusOf(composite, policy);
 
-    // 覆盖率：judged = 至少有一项有效结果评测的 trace 数。
-    const judged = traces.filter((t) => Object.values(t.resultMetrics ?? {}).some((r) => r?.status === 'done' && r.score != null)).length;
-
     return {
         composite: { score: composite, status, p0, p1, p2, capped, cappedReason },
-        dimensions: { result, process, cost, error },
-        coverage: {
-            judged,
-            total,
-            perDimension: {
-                result: result.coverage,
-                process: process.coverage,
-                cost: cost.coverage,
-                error: error.coverage,
-            },
-        },
+        dimensions: { process, cost, error },
     };
 }

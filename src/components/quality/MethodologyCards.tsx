@@ -1,24 +1,19 @@
 'use client';
 
 import React from 'react';
-import { CheckCircle2, GitBranch, Coins, AlertTriangle, ArrowDown, Sparkles } from 'lucide-react';
+import { GitBranch, Coins, AlertTriangle, ArrowDown, Sparkles } from 'lucide-react';
 import { useLocale } from '@/lib/client/locale-context';
 import { Term } from '@/components/text/Term';
 import type { QualityReport, DimScore } from '@/lib/engine/quality-monitoring/types';
 import { scoreColor, statusColor, fmtNum } from './quality-ui';
 
-const ICONS = { result: CheckCircle2, process: GitBranch, cost: Coins, error: AlertTriangle };
+const ICONS = { process: GitBranch, cost: Coins, error: AlertTriangle };
 
 export function MethodologyCards({ report, onAnchor }: { report: QualityReport; onAnchor: (id: string) => void }) {
     const { t } = useLocale();
     const { dimensions } = report;
 
-    const cards: { key: 'result' | 'process' | 'cost' | 'error'; name: string; q: string; anchor: string; score: string; status: string; signal: string; go: string }[] = [
-        {
-            key: 'result', name: t('quality.dim.result'), q: t('quality.dim.resultQ'), anchor: 'result',
-            score: dimensions.result.coverage ? fmtNum(dimensions.result.score) : 'N/A', status: dimensions.result.status,
-            signal: dimensions.result.signal || '', go: t('quality.dim.viewResult'),
-        },
+    const cards: { key: 'process' | 'cost' | 'error'; name: string; q: string; anchor: string; score: string; status: string; signal: string; go: string }[] = [
         {
             key: 'process', name: t('quality.dim.process'), q: t('quality.dim.processQ'), anchor: 'process',
             score: fmtNum(dimensions.process.score), status: dimensions.process.status,
@@ -51,22 +46,22 @@ export function MethodologyCards({ report, onAnchor }: { report: QualityReport; 
                 {/* 方法论 + 状态基准线 */}
                 <div style={{ fontSize: 11, color: 'var(--foreground-muted)', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                     <span>{t('quality.analysis.method')}</span>
-                    {[t('quality.dim.result'), t('quality.dim.process'), t('quality.dim.cost'), t('quality.dim.error')].map((m, i) => (
+                    {[t('quality.dim.process'), t('quality.dim.cost'), t('quality.dim.error')].map((m, i) => (
                         <React.Fragment key={m}>
                             <span style={{ fontWeight: 600, color: 'var(--foreground-secondary)' }}><b style={{ color: 'var(--foreground)' }}>{m}</b></span>
-                            {i < 3 && <span style={{ color: 'var(--border-dark)' }}>×</span>}
+                            {i < 2 && <span style={{ color: 'var(--border-dark)' }}>×</span>}
                         </React.Fragment>
                     ))}
                     <span style={{ flex: 1 }} />
                     <span style={{ fontSize: 10.5 }}>{t('quality.analysis.baseline')}</span>
                 </div>
 
-                {/* 四卡 */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
+                {/* 三卡 */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
                     {cards.map((c) => {
                         const Icon = ICONS[c.key];
                         const dim = dimensions[c.key];
-                        const noCoverage = c.key === 'result' && dim.coverage === 0;
+                        const noCoverage = dim.coverage === 0;
                         const color = noCoverage ? 'var(--foreground-muted)' : scoreColor(dim.score);
                         const badgeColor = noCoverage ? 'var(--foreground-muted)' : statusColor(dim.status);
                         return (
