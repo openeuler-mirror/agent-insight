@@ -5,6 +5,7 @@ import { buildAgentCallTree } from "../src/lib/engine/observability/agent-trace"
 import { getAdapter } from "../src/lib/ingest/adapters/registry"
 import { aggregateOtelTraceEvents } from "../src/lib/ingest/otel/aggregate"
 import { getOtelTraceAdapter } from "../src/lib/ingest/otel/adapter-registry"
+import { computeOwnSkills } from "../src/lib/storage/data-service"
 
 function canonical(overrides: Record<string, unknown>) {
   return {
@@ -183,6 +184,8 @@ test("Codex adapter preserves three-level SubAgent ancestry and five parallel si
   const nestedToolTwo = "6".repeat(16)
   const levelThree = "7".repeat(16)
   const parallelTool = "8".repeat(16)
+  const rootSkill = "e".repeat(16)
+  const childSkill = "f".repeat(16)
   const parallel = Array.from({ length: 5 }, (_, index) => (index + 9).toString(16).repeat(16))
   const events = [
     canonical({
@@ -192,6 +195,14 @@ test("Codex adapter preserves three-level SubAgent ancestry and five parallel si
       name: "agent.codex",
       input: "delegate",
       output: "done",
+    }),
+    canonical({
+      eventId: "root-skill",
+      spanId: rootSkill,
+      parentSpanId: rootAgent,
+      kind: "skill",
+      name: "skill.root",
+      skill: { name: "root-skill", version: "1" },
     }),
     canonical({
       eventId: "root-tool",
@@ -210,6 +221,14 @@ test("Codex adapter preserves three-level SubAgent ancestry and five parallel si
       input: "one",
       output: "one done",
       attributes: { "codex.agent.name": "level-one", "codex.agent.id": "level-one" },
+    }),
+    canonical({
+      eventId: "child-skill",
+      spanId: childSkill,
+      parentSpanId: levelOne,
+      kind: "skill",
+      name: "skill.child",
+      skill: { name: "child-skill", version: "2" },
     }),
     canonical({
       eventId: "nested-tool",
@@ -277,6 +296,7 @@ test("Codex adapter preserves three-level SubAgent ancestry and five parallel si
   const workers = tree.children.filter((node) => node.agentName.startsWith("worker-"))
   assert.equal(workers.length, 5)
   assert.equal(new Set(workers.map((node) => node.sessionId)).size, 5)
+  assert.deepEqual(computeOwnSkills("codex", record.interactions).map((skill) => skill.name), ["root-skill"])
 })
 
 test("Codex adapter retains direct SubAgent parents and normalizes failed spawn outcomes", () => {
