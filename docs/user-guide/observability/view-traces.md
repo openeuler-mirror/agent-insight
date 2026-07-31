@@ -243,7 +243,7 @@ Task Spawn 表示当前执行过程中派生出的新任务数量。在多 Agent
 > **Note**
 > 通过 OTel `logs` / `traces` 端点接入的数据是异步可见的：端点返回成功表示平台已受理并写入本地 spool（`traces` 支持 OTLP JSON 与 protobuf），后台消费者会在短暂 debounce 后落库，随后在会话空闲后再补充结果评估。因此刚发完上报后，列表页可能需要等待几秒才出现新 Trace，评估分数可能再稍后更新。
 > Claude Code 接入需要通过安装脚本生成的 OTel wrapper 开启 `OTEL_LOG_TOOL_DETAILS=1`，并将 `OTEL_LOG_RAW_API_BODIES` 配成 `file:<dir>`。`OTEL_LOG_RAW_API_BODIES=1` 的 inline body 会被 Claude Code 截断到 60 KB，长会话里可能拿不到工具结果正文；`OTEL_LOG_TOOL_CONTENT=1` 只影响 tracing span events，需要启用 traces。
-> CodeAgent 接入后重启终端，继续使用原来的 `codeagent` 命令即可；setup 安装的同名函数会自动为该进程注入 OTel 配置。CodeAgent Logs 异步写入 `~/.agent-insight/otel_data/codeagent` 并生成 `framework=codeagent` 的 Trace；其 Traces/Metrics 请求会收到成功响应，但平台不会保存这两类信号。
+> CodeAgent 接入后重启终端或加载对应环境脚本，继续使用原来的 `codeagent` 命令即可。Unix setup 安装 `~/.agent-insight/bin/codeagent`，Windows setup 安装 `%USERPROFILE%\.agent-insight\bin\codeagent.cmd` 和 `codeagent-wrapper.ps1` 并持久化用户级 PATH；继承该 PATH 的终端及 Shell、PowerShell、CMD、Python、Node 子脚本会自动注入 OTel 配置。cron、systemd、容器、Windows 服务等独立环境需要显式配置包装器目录。CodeAgent Logs 异步写入 `~/.agent-insight/otel_data/codeagent` 并生成 `framework=codeagent` 的 Trace；其 Traces/Metrics 请求会收到成功响应，但平台不会保存这两类信号。
 
 ### 场景二：排查失败问题
 
