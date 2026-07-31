@@ -451,7 +451,7 @@ export class UploadEngine implements vscode.Disposable {
 
 }
   private async postJson(host: string, apiKey: string, payload: any): Promise<UploadResult> {
-    const base = host.replace(/\/+$/, '')
+    const base = (host.match(/^https?:\/\//) ? host : `http://${host}`).replace(/\/+$/, '')
     const fullUrl = base + '/api/ingest/upload'
     const body = JSON.stringify(payload)
     const timeoutMs = this.config.requestTimeoutMs

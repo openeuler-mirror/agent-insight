@@ -109,7 +109,7 @@ const frameworks = [
     { name: 'Hermes', value: 'hermes' },
     { name: 'OpenClaw', value: 'openclaw' },
     { name: 'JiuwenSwarm', value: 'jiuwen' },
-    { name: 'TRAE AI IDE', value: 'trae' ,
+    { name: 'TRAE AI IDE', value: 'trae' },
 ];
 
 async function select() {
@@ -748,7 +748,9 @@ if [ "$INSTALL_CODEAGENT" = "true" ]; then
 fi
 if [ "$INSTALL_HERMES" = "true" ]; then
     echo "  3. Restart Hermes or start a new Hermes conversation"
-        'if [ "$INSTALL_TRAE" = "true" ]; then echo "  6. Restart TRAE IDE to activate the collector"; fi',
+fi
+if [ "$INSTALL_TRAE" = "true" ]; then
+    echo "  6. Restart TRAE IDE to activate the collector"
 fi
 if [ "$INSTALL_OPENCLAW" = "true" ]; then
     echo "  4. OpenClaw will automatically monitor and upload telemetry"
