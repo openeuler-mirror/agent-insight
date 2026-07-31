@@ -169,8 +169,9 @@ test("generated Codex Bash and PowerShell setup scripts pass native syntax parse
     await centralScript("windows", "codex"),
     await autoScript("windows", "codex"),
   ]) {
-    assert.match(script, /\$codexSetup\.Content -is \[byte\[\]\]/)
-    assert.match(script, /\[Text\.Encoding\]::UTF8\.GetString\(\$codexSetup\.Content\)/)
+    assert.match(script, /-OutFile \$codexInstaller/)
+    assert.match(script, /& \$codexInstaller/)
+    assert.doesNotMatch(script, /\[scriptblock\]::Create/)
   }
 })
 

@@ -416,6 +416,11 @@ test("setup route is self-contained and assets use a fixed allowlist", async () 
     { params: Promise.resolve({ asset: "../../package.json" }) },
   )
   assert.equal(denied.status, 404)
+  const prototypeAsset = await getAsset(
+    new Request("https://insight.example/assets/constructor"),
+    { params: Promise.resolve({ asset: "constructor" }) },
+  )
+  assert.equal(prototypeAsset.status, 404)
 })
 
 test("setup route returns the PowerShell staging installer for Windows", async () => {
