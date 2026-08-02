@@ -56,7 +56,25 @@ function collectorStateDir(framework, apiKey, homeDir = os.homedir()) {
   if (!/^[a-z0-9][a-z0-9-]*$/.test(safeFramework)) {
     throw new Error(`Invalid collector framework: ${framework}`);
   }
-  return path.join(homeDir, ".agent-insight", "otel_data", safeFramework, apiKeyHash(apiKey));
+  const suppliedHome = String(homeDir || "");
+  if (!path.isAbsolute(suppliedHome)) {
+    throw new Error(`Collector home directory must be absolute: ${homeDir}`);
+  }
+  const namespaceRoot = path.resolve(
+    suppliedHome,
+    ".agent-insight",
+    "otel_data",
+    safeFramework,
+  );
+  const keyNamespace = apiKeyHash(apiKey);
+  if (!/^[a-f0-9]{12}$/.test(keyNamespace)) {
+    throw new Error("Invalid API-key spool namespace");
+  }
+  const stateDir = path.resolve(namespaceRoot, keyNamespace);
+  if (path.dirname(stateDir) !== namespaceRoot) {
+    throw new Error(`Refusing to use unexpected collector state directory: ${stateDir}`);
+  }
+  return stateDir;
 }
 
 function truncateCodePoints(value, maxChars = DEFAULT_MAX_CONTENT_CHARS) {

@@ -9,6 +9,10 @@ const commands = {
   install: () => require('../scripts/install.js')
 }
 
+const INSTALLABLE_FRAMEWORKS = new Set([
+  'opencode', 'openclaw', 'claude', 'codeagent', 'hermes', 'jiuwen', 'codex',
+])
+
 function parseOptions(args) {
   const options = {}
   for (let i = 0; i < args.length; i++) {
@@ -26,7 +30,13 @@ function parseOptions(args) {
         console.error('Missing framework list. Use --frameworks <comma-list>.')
         process.exit(1)
       }
-      options.frameworks = frameworks
+      const selected = frameworks.split(',').map((item) => item.trim().toLowerCase()).filter(Boolean)
+      const invalid = selected.filter((item) => !INSTALLABLE_FRAMEWORKS.has(item))
+      if (selected.length === 0 || invalid.length > 0) {
+        console.error(`Invalid framework list: ${invalid.join(',') || frameworks}`)
+        process.exit(1)
+      }
+      options.frameworks = [...new Set(selected)].join(',')
       i++
     } else if (args[i] === '--help' || args[i] === '-h') {
       options.help = true

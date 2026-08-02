@@ -139,8 +139,15 @@ function isCurrentPackageInstalledInCwd() {
   const installedRoot = path.join(process.cwd(), 'node_modules', 'agent-insight')
   try {
     return fs.realpathSync(packageRoot) === fs.realpathSync(installedRoot)
-  } catch {
-    return false
+  } catch (error) {
+    if (!['ENOSYS', 'EPERM', 'EACCES'].includes(error?.code)) return false
+    try {
+      const packageStat = fs.statSync(packageRoot)
+      const installedStat = fs.statSync(installedRoot)
+      return packageStat.dev === installedStat.dev && packageStat.ino === installedStat.ino
+    } catch {
+      return path.resolve(packageRoot) === path.resolve(installedRoot)
+    }
   }
 }
 
