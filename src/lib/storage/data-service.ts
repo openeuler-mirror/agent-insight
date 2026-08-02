@@ -73,6 +73,13 @@ const EXECUTION_SKILL_ENABLED = !process.env.DB_HOST;
 
 const SKILL_NAME_PATTERN = /^[a-zA-Z0-9_\-\.]+$/;
 
+/** semver 如 "1.0.0"（skill frontmatter 常用格式）解析为整数主版本号；无法解析返回 null。 */
+function numericSemverMajor(value: unknown): number | null {
+    if (value === undefined || value === null || value === '') return null;
+    const semver = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(String(value).trim());
+    return semver ? Number(semver[1]) : null;
+}
+
 export function inferUserQueryFromInteractions(interactions: unknown): string | undefined {
     if (!Array.isArray(interactions)) return undefined;
     for (const interaction of interactions) {
@@ -115,7 +122,7 @@ export function extractExplicitSkillsFromNode(node: AgentNode): InvokedSkill[] {
         if (!SKILL_NAME_PATTERN.test(s) || seen.has(s)) continue;
         seen.add(s);
         const v = a.version != null ? Number(a.version) : null;
-        out.push({ name: s, version: v !== null && !isNaN(v) ? v : null });
+        out.push({ name: s, version: v !== null && !isNaN(v) ? v : numericSemverMajor(a.version) });
     }
     return out;
 }
