@@ -116,7 +116,7 @@ test("Codex adapter aggregates Agent, Skill, LLM, Tool, MCP, and exact leaf usag
       parentSpanId: agent,
       kind: "skill",
       name: "skill.fixture",
-      skill: { name: "fixture", version: "3", triggerMode: "explicit" },
+      skill: { name: "fixture", version: "1.0.0", triggerMode: "explicit" },
     }),
     canonical({
       eventId: "llm",
@@ -170,7 +170,7 @@ test("Codex adapter aggregates Agent, Skill, LLM, Tool, MCP, and exact leaf usag
   assert.equal(record.llm_call_count, 1)
   assert.equal(record.tool_call_count, 2)
   assert.equal(record.tool_call_error_count, 1)
-  assert.deepEqual(record.invokedSkills, [{ name: "fixture", version: 3 }])
+  assert.deepEqual(record.invokedSkills, [{ name: "fixture", version: 1 }])
   assert.equal(record.user, "alice")
   assert.equal(record.interactions.some((item: { mcp?: { server_name?: string } }) => item.mcp?.server_name === "fixture"), true)
 })

@@ -177,7 +177,10 @@ function toolCall(event: OtelTraceEvent): AnyObj {
 function numericSkillVersion(value: unknown): number | null {
   if (value === undefined || value === null || value === '') return null;
   const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
+  if (Number.isFinite(parsed)) return parsed;
+  // semver 如 "1.0.0"（skill frontmatter 常用格式）解析为整数主版本号
+  const semver = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(String(value).trim());
+  return semver ? Number(semver[1]) : null;
 }
 
 export function keepLatestCodexSpanSnapshots(events: OtelTraceEvent[]): OtelTraceEvent[] {
