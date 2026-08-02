@@ -231,6 +231,17 @@ test("source installer roundtrip preserves unrelated hooks and restores config",
   const installedHooks = await fsp.readFile(hooksPath, "utf8")
   assert.doesNotMatch(installedHooks, /test-api-key/)
   assert.match(await fsp.readFile(configPath, "utf8"), /AGENT INSIGHT CODEX OTEL/)
+  const collectorConfig = JSON.parse(await fsp.readFile(
+    path.join(homeDir, ".agent-insight", "collectors", "codex", "config.json"),
+    "utf8",
+  ))
+  assert.equal(collectorConfig.apiKey, "test-api-key")
+  if (process.platform !== "win32") {
+    const configStat = await fsp.stat(
+      path.join(homeDir, ".agent-insight", "collectors", "codex", "config.json"),
+    )
+    assert.equal(configStat.mode & 0o777, 0o600)
+  }
 
   const managedUninstaller = path.join(
     homeDir,

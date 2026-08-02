@@ -34,7 +34,7 @@ function readStdin(limit = MAX_STDIN_BYTES, input = process.stdin) {
   });
 }
 
-function postHook(config, payload, timeoutMs = 150) {
+function postHook(config, payload, timeoutMs = 500) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify(payload);
     const request = http.request({
@@ -85,7 +85,7 @@ async function deliverHook(config, payload, options = {}) {
   let lastError;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
-      await postHook(config, payload, options.timeoutMs || 150);
+      await postHook(config, payload, options.timeoutMs || 500);
       return;
     } catch (error) {
       lastError = error;
