@@ -159,6 +159,114 @@ description: "高频问题集中解答"
 
 如果跳过真实样本，后面的评测很容易变成脱离业务的“空跑”。
 
+## 数据归档与恢复
+
+### 怎样归档指定时间之前的历史数据？
+
+SQLite 部署可以使用仓库内置的 `scripts/db_archive.sh`。默认读取
+`~/.agent-insight/data/witty_insight.db`，也可以用 `--database` 指定数据库文件。
+脚本可以单独复制到服务器运行，不依赖仓库、Node.js 或 `package.json`；服务器只需提供
+`bash`、`sqlite3`、`gzip`，以及 `sha256sum` 或 `shasum`。
+
+先预览将被选中的数据：
+
+```bash
+bash scripts/db_archive.sh create \
+  --scope traces \
+  --user 'alice' \
+  --before '2026-01-01T00:00:00+08:00' \
+  --output /data/agent-insight-archive \
+  --dry-run
+```
+
+确认后执行归档。归档文件完成校验后，脚本会默认事务性删除源数据：
+
+```bash
+bash scripts/db_archive.sh create \
+  --scope traces \
+  --user 'alice' \
+  --before '2026-01-01T00:00:00+08:00' \
+  --output /data/agent-insight-archive
+```
+
+如果只想导出副本、不删除数据库数据，必须明确传入 `--keep-source`：
+
+```bash
+bash scripts/db_archive.sh create \
+  --scope traces \
+  --user 'alice' \
+  --before '2026-01-01T00:00:00+08:00' \
+  --output /data/agent-insight-archive \
+  --keep-source
+```
+
+`traces` 提供 `--user` 时，只从 `Execution.user` 与指定账号完全一致的根 Trace 开始
+筛选；不提供 `--user` 时归档时间窗口内所有账号的数据，manifest 中记录为
+`<all-users>`。两种范围都不区分用户 Agent 和系统 Agent，并始终归档选中 Trace 的完整
+主/子 Agent 树及其 Session、评测、标签绑定、诊断和实验结果。即使某个子 Agent 的时间
+落在窗口外，只要根 Trace 被选中，它仍会一起归档。
+
+归档所有账号时直接省略 `--user`：
+
+```bash
+bash scripts/db_archive.sh create \
+  --scope traces \
+  --before '2026-01-01' \
+  --output /data/agent-insight-archive/all-users.sqlite.gz
+```
+
+### 怎样归档一个时间区间或基础设施指标？
+
+时间区间使用 `[from, to)` 语义，即包含起点、不包含终点。可以只写
+`YYYY-MM-DD`，此时按运行脚本机器的本地时区解释为当天 `00:00:00`；写到分秒时必须带
+`Z` 或数字时区：
+
+```bash
+bash scripts/db_archive.sh create \
+  --scope traces \
+  --user 'alice' \
+  --from '2025-01-01T00:00:00+08:00' \
+  --to '2026-01-01T00:00:00+08:00' \
+  --output /data/agent-insight-archive
+```
+
+基础设施采样使用 `infra-metrics` scope，并按 `InfraMetricSample.tsMs` 筛选：
+
+```bash
+bash scripts/db_archive.sh create \
+  --scope infra-metrics \
+  --before '2026-01-01T00:00:00+08:00' \
+  --output /data/agent-insight-archive
+```
+
+`InfraMetricSample` 没有账号字段，因此 `infra-metrics` 不接受 `--user`。
+
+### 怎样检查和恢复归档？
+
+归档由 `.sqlite.gz`、`.sqlite.gz.sha256` 组成；成功清理源数据后还会生成
+`.sqlite.gz.purged` 收据。请把这些文件一起保存；存在 `.purged` 表示该归档对应的
+源数据已经成功清理。
+
+```bash
+bash scripts/db_archive.sh inspect \
+  --input /data/agent-insight-archive/traces-xxx.sqlite.gz
+
+bash scripts/db_archive.sh import \
+  --input /data/agent-insight-archive/traces-xxx.sqlite.gz \
+  --dry-run
+
+bash scripts/db_archive.sh import \
+  --input /data/agent-insight-archive/traces-xxx.sqlite.gz
+```
+
+导入要求目标数据库 schema 与归档一致。相同主键且内容相同的数据会被幂等跳过；
+相同主键但内容不同会终止并回滚整个导入。
+
+该脚本目前仅支持 SQLite。归档只包含数据库行，不包含 `SkillVersion.assetPath` 等字段
+指向的外部文件。创建一致性快照需要临时磁盘空间，高写入期间执行
+默认清理可能因数据在导出后发生变化而安全中止；这种情况下保留已生成的归档，
+重新执行即可。
+
 ## 下一步
 
 - 想先跑通接入： [5 分钟上手](./quickstart)

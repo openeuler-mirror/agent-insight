@@ -36,7 +36,7 @@ const SUMMARY_MAX = 200;
 
 /**
  * 由分数派生结论——评估器没上报 verdict 时呈现层的兜底。
- * 80 分线沿用平台既有的「答对」口径（见 result-quality-evaluator 的 isAnswerCorrect）。
+ * 80 分线沿用平台既有的「答对」口径。
  * 仅用于展示，不落库：改这里的阈值即可让全部历史数据跟随新口径。
  */
 export function deriveVerdict(score: number | null | undefined): EvalVerdict | undefined {

@@ -4,10 +4,10 @@
  *   preset-result-answer      答案质量
  *   preset-result-faithfulness 忠实度（幻觉检测）
  *   preset-result-instruction 指令遵循
- * 抽取进实验统一契约。与可靠性页共用同一 canonical 能力（runSingleResultMetric）与
- * 同一直连传输（createResultInvoke，seed=42/temp=0/严格 schema）——两侧口径逐位一致。
+ * 抽取进实验统一契约。四个评估器共用同一 canonical 能力（runSingleResultMetric）与
+ * 同一直连传输（createResultInvoke，seed=42/temp=0/严格 schema）。
  *
- * 依赖 result-quality-evaluator（server-only：prisma/openai/dataset），故惰性 import，
+ * 依赖 result-metric-evaluator（server-only：openai/model config），故惰性 import，
  * 与 faithful-preset-evaluators 同策略——测试注入时零加载。
  */
 import { normalizeEvaluatorOutput, type EvaluatorOutput, type EvalPoint, type EvalPointStatus } from '../../evaluators/eval-output';
@@ -48,7 +48,7 @@ export async function runResultPreset(
 
   const {
     createResultInvoke, runSingleResultMetric, extractRelevantSystemInstructions,
-  } = await import('../evaluation/result-quality-evaluator');
+  } = await import('../evaluation/result-metric-evaluator');
 
   const invoke = await createResultInvoke(user);
   const metric = ID_TO_METRIC[id];

@@ -17,12 +17,9 @@ function percentile(values: number[], p: number): number {
 
 function successRate(traces: TraceLite[]): number {
     if (!traces.length) return 0;
-    const ok = traces.filter((t) => {
-        if (t.isAnswerCorrect != null) return t.isAnswerCorrect;
-        if (t.toolCallErrorCount != null && t.toolCallErrorCount > 0) return false;
-        if (t.failures && t.failures.length > 0) return false;
-        return true;
-    }).length;
+    const ok = traces.filter((t) =>
+        (t.toolCallErrorCount ?? 0) === 0 && (t.failures?.length ?? 0) === 0,
+    ).length;
     return round1((ok / traces.length) * 100);
 }
 
@@ -36,26 +33,13 @@ function costScore(t: TraceLite, policy: ScoringPolicy): number | null {
     return clamp01(1 - Math.max(...ratios)) * 100;
 }
 
-function resultScore(t: TraceLite): number | null {
-    const vals = Object.values(t.resultMetrics ?? {})
-        .filter((r) => r?.status === 'done' && r.score != null)
-        .map((r) => r!.score as number);
-    return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
-}
-
-/** 桶级综合分（自身趋势用，确定性可算）：完成 × 成本 的简化合成。 */
+/** 桶级综合分（自身趋势用，确定性可算）：无错误完成率 × 成本 的简化合成。 */
 function bucketComposite(traces: TraceLite[], policy: ScoringPolicy): number {
     if (!traces.length) return 0;
-    const vals = traces.map((t) => {
-        const parts: number[] = [];
-        const result = resultScore(t);
-        if (result != null) parts.push(result);
-        const c = costScore(t, policy);
-        if (c != null) parts.push(c);
-        return parts.length ? parts.reduce((a, b) => a + b, 0) / parts.length : null;
-    }).filter((v): v is number => v != null);
-    if (!vals.length) return 0;
-    return round1(vals.reduce((a, b) => a + b, 0) / vals.length);
+    const completion = successRate(traces);
+    const costs = traces.map((t) => costScore(t, policy)).filter((v): v is number => v != null);
+    if (!costs.length) return completion;
+    return round1((completion + costs.reduce((a, b) => a + b, 0) / costs.length) / 2);
 }
 
 function errorCountOf(traces: TraceLite[]): number {
@@ -138,9 +122,6 @@ export function bucketTrends(input: BucketTrendsInput): { granularity: TrendGran
             : 0;
         const costScores = inBucket.map((t) => costScore(t, policy)).filter((v): v is number => v != null);
         const costRatio = costScores.length ? round1(costScores.reduce((a, b) => a + b, 0) / costScores.length) : 0;
-        const resultScores = inBucket.map(resultScore).filter((v): v is number => v != null);
-        const resultRatio = resultScores.length ? round1(resultScores.reduce((a, b) => a + b, 0) / resultScores.length) : null;
-
         const mkPct = (vals: number[]) => ({ p50: round1(percentile(vals, 0.5)), p90: round1(percentile(vals, 0.9)), p95: round1(percentile(vals, 0.95)) });
 
         return {
@@ -148,7 +129,6 @@ export function bucketTrends(input: BucketTrendsInput): { granularity: TrendGran
             n_traces: inBucket.length,
             ratios: {
                 completion: successRate(inBucket),
-                result: resultRatio,
                 safety: safeRate,
                 toolCorrect,
                 cost: costRatio,

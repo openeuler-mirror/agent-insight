@@ -402,7 +402,13 @@ function findRoot(events: OtelTraceEvent[]): OtelTraceEvent | undefined {
     attr(event, 'langfuse.internal.is_app_root') === 'true',
   ));
   if (appRoot) return appRoot;
-  return byLatestEnd(events.filter((event) => event.kind === 'span')) || byLatestEnd(events);
+
+  // Langfuse 按「已结束 span」增量导出：子 agent 往往先结束并先到，真正的应用根
+  // span 最后才出现。父 span 尚未到达时不能把具名 agent 当作临时 root，否则它会
+  // 以 isSubagent=false 短暂进入主 Agent 列表，待根 span 到达后又“消失”。
+  const topLevel = events.filter((event) => !event.parentSpanId);
+  return byLatestEnd(topLevel.filter((event) => event.kind === 'span'))
+    || byLatestEnd(topLevel);
 }
 
 function isSyntheticRunName(value: any): boolean {
@@ -477,6 +483,7 @@ export function aggregateLangfuseLangGraphTraceEvents(sessionId: string, events:
   if (!sessionEvents.length) return null;
 
   const selectedRoot = findRoot(sessionEvents);
+  if (!selectedRoot) return null;
   const selectedTraceId = selectedRoot?.traceId;
   const ordered = (selectedTraceId
     ? sessionEvents.filter((event) => event.traceId === selectedTraceId)
@@ -530,6 +537,10 @@ export function aggregateLangfuseLangGraphTraceEvents(sessionId: string, events:
 
   // 就近原则：一个事件属于「最近的子 agent 祖先」的作用域
   const subagentScopeFor = (event: OtelTraceEvent): SubagentScope | undefined => {
+    if (event.spanId) {
+      const ownScope = subagentScopes.get(event.spanId);
+      if (ownScope) return ownScope;
+    }
     let current = event.parentSpanId ? byId.get(event.parentSpanId) : undefined;
     const seen = new Set<string>();
     while (current?.spanId && !seen.has(current.spanId)) {
