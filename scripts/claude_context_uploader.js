@@ -60,6 +60,7 @@ const LIMITS = {
   requestTimeoutMs: 10000,
   uploadBatchSize: 100,      // 服务端单次最多收 200 条,这里分批发,避免被截断丢数据
   checkpointSessions: 200,
+  subagentScopeMtimeMs: 30 * 1000,
 };
 
 function log(msg) {
@@ -148,7 +149,19 @@ function flattenSystem(system) {
   return '';
 }
 
-function collectSystemPrompts(rawBodyDir, sessionId, limits) {
+function flattenRequestMessages(messages) {
+  if (!Array.isArray(messages)) return '';
+  return messages
+    .map((message) => flattenToolOutput(message && message.content))
+    .filter(Boolean)
+    .join('\n');
+}
+
+function isInternalTitleSystem(text) {
+  return /^Generate a concise, sentence-case title\b/i.test(String(text || '').trim());
+}
+
+function collectSystemPrompts(rawBodyDir, sessionId, limits, context = {}) {
   const out = [];
   let entries;
   try {
@@ -168,6 +181,21 @@ function collectSystemPrompts(rawBodyDir, sessionId, limits) {
   }
   stats.sort((a, b) => b.mtimeMs - a.mtimeMs);
 
+  const agentCalls = context.agentCalls instanceof Map ? context.agentCalls : new Map();
+  const scopeByToolId = new Map();
+  for (const scope of Array.isArray(context.subagentScopes) ? context.subagentScopes : []) {
+    if (!scope || !scope.toolUseId) continue;
+    scopeByToolId.set(String(scope.toolUseId), { ...scope, toolUseId: String(scope.toolUseId) });
+  }
+  for (const [toolUseId, call] of agentCalls) {
+    const current = scopeByToolId.get(String(toolUseId)) || { toolUseId: String(toolUseId) };
+    scopeByToolId.set(String(toolUseId), {
+      ...current,
+      prompt: typeof call?.prompt === 'string' ? call.prompt.trim() : current.prompt,
+      agentType: typeof call?.agentType === 'string' ? call.agentType : current.agentType,
+    });
+  }
+  const usedScopes = new Set();
   const seen = new Set();
   let scanned = 0;
   for (const entry of stats) {
@@ -181,16 +209,44 @@ function collectSystemPrompts(rawBodyDir, sessionId, limits) {
     }
     if (sessionIdOfBody(body) !== sessionId) continue;
     const text = flattenSystem(body.system);
-    if (!text) continue;
+    if (!text || isInternalTitleSystem(text)) continue;
+
+    let scope;
+    if (text.includes('cc_is_subagent=true')) {
+      const requestText = flattenRequestMessages(body.messages);
+      const available = [...scopeByToolId.values()].filter((candidate) => !usedScopes.has(candidate.toolUseId));
+      const exact = available
+        .filter((candidate) => candidate.prompt && requestText.includes(candidate.prompt))
+        .sort((a, b) => b.prompt.length - a.prompt.length);
+      scope = exact[0];
+      if (!scope) {
+        const maxDelta = Number(limits.subagentScopeMtimeMs) || LIMITS.subagentScopeMtimeMs;
+        scope = available
+          .filter((candidate) => Number.isFinite(candidate.mtimeMs))
+          .map((candidate) => ({ candidate, delta: Math.abs(entry.mtimeMs - candidate.mtimeMs) }))
+          .filter(({ delta }) => delta <= maxDelta)
+          .sort((a, b) => a.delta - b.delta)[0]?.candidate;
+      }
+      if (!scope) continue;
+      usedScopes.add(scope.toolUseId);
+    }
+
     const hash = sha256(text);
-    if (seen.has(hash)) continue;
-    seen.add(hash);
-    out.push({
+    const dedupeKey = `${scope?.toolUseId || 'root'}:${hash}`;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    const item = {
       kind: 'system_prompt',
       text: text.slice(0, limits.textChars),
       hash,
       capturedAt: new Date(entry.mtimeMs).toISOString(),
-    });
+    };
+    if (scope) {
+      item.toolUseId = scope.toolUseId;
+      if (scope.agentType) item.agentType = scope.agentType;
+      item.hash = sha256(`${scope.toolUseId}:${text}`);
+    }
+    out.push(item);
   }
   log(`system prompts: scanned=${scanned} matched=${out.length} session=${sessionId}`);
   return out;
@@ -233,12 +289,13 @@ function scanTranscript(transcriptPath, limits, options = {}) {
     const hookContexts = [];
     const outputs = new Map();      // tool_use_id → { text, isError, capturedAt }
     const agentToolIds = new Set(); // Task/Agent 调用的 tool_use_id,选取时优先保留
+    const agentCalls = new Map();   // tool_use_id → { prompt, agentType },给 child system prompt 定位
     let settled = false;
     let processedOffset = 0;
     const done = (nextOffset = processedOffset) => {
       if (settled) return;
       settled = true;
-      resolve({ hookContexts, outputs, agentToolIds, nextOffset });
+      resolve({ hookContexts, outputs, agentToolIds, agentCalls, nextOffset });
     };
 
     if (!transcriptPath) return done(0);
@@ -299,7 +356,13 @@ function scanTranscript(transcriptPath, limits, options = {}) {
       // ② 助手轮里的 tool_use:记住哪些是子 agent 调用(它们的输出优先保留)
       for (const block of content) {
         if (!block || block.type !== 'tool_use' || !block.id) continue;
-        if (block.name === 'Agent' || block.name === 'Task') agentToolIds.add(block.id);
+        if (block.name === 'Agent' || block.name === 'Task') {
+          agentToolIds.add(block.id);
+          agentCalls.set(String(block.id), {
+            prompt: typeof block.input?.prompt === 'string' ? block.input.prompt.trim() : '',
+            agentType: typeof block.input?.subagent_type === 'string' ? block.input.subagent_type : undefined,
+          });
+        }
       }
 
       // ③ 工具输出:用户轮里的 tool_result 块是主源,entry.toolUseResult 是兜底
@@ -404,7 +467,8 @@ function collectSubagentMaps(transcriptPath, sessionId, limits) {
   const items = [];
   const outputs = new Map();      // 子 agent 内部工具的输出:tool_use_id → { text, isError, capturedAt }
   const agentToolIds = new Set(); // 内部再 spawn(depth 2)的 Task 调用,输出优先保留
-  const result = { items, outputs, agentToolIds };
+  const scopes = [];              // 父 tool_use_id → agentType / meta mtime,给 raw body 有界兜底
+  const result = { items, outputs, agentToolIds, scopes };
   if (!transcriptPath || !sessionId) return result;
   const dir = path.join(path.dirname(transcriptPath), sessionId, 'subagents');
   let metaNames;
@@ -416,9 +480,16 @@ function collectSubagentMaps(transcriptPath, sessionId, limits) {
 
   for (const metaName of metaNames.slice(0, limits.subagentMaps)) {
     try {
-      const meta = JSON.parse(fs.readFileSync(path.join(dir, metaName), 'utf8'));
+      const metaPath = path.join(dir, metaName);
+      const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
       const toolUseId = typeof meta.toolUseId === 'string' ? meta.toolUseId.trim() : '';
       if (!toolUseId) continue; // 挂不回任何一次 Task 调用,传了也没用
+      const metaStat = fs.statSync(metaPath);
+      scopes.push({
+        toolUseId,
+        agentType: typeof meta.agentType === 'string' ? meta.agentType : undefined,
+        mtimeMs: metaStat.mtimeMs,
+      });
 
       const jsonlPath = path.join(dir, metaName.replace(/\.meta\.json$/, '.jsonl'));
       const stat = fs.statSync(jsonlPath);
@@ -891,6 +962,7 @@ async function uploadPayload(payload, options = {}) {
 
   const wantHooks = !isOff(conf(env, 'AGENT_INSIGHT_CLAUDE_CONTEXT_HOOKS', 'true'));
   const wantTools = !isOff(conf(env, 'AGENT_INSIGHT_CLAUDE_CONTEXT_TOOLS', 'true'));
+  const wantSystem = !isOff(conf(env, 'AGENT_INSIGHT_CLAUDE_CONTEXT_SYSTEM', 'true'));
   const apiKey = String(conf(env, 'AGENT_INSIGHT_API_KEY', ''));
   const file = checkpointPath(apiKey);
   const checkpoint = loadCheckpoint(file);
@@ -903,17 +975,21 @@ async function uploadPayload(payload, options = {}) {
 
   const items = [];
   let scan;
-  if (!isOff(conf(env, 'AGENT_INSIGHT_CLAUDE_CONTEXT_SYSTEM', 'true'))) {
-    items.push(...collectSystemPrompts(rawBodyDir, sessionId, limits));
-  }
-  if (wantHooks || wantTools) {
+  let sub;
+  if (wantHooks || wantTools || wantSystem) {
     scan = await scanTranscript(transcriptPath, limits, { startOffset }); // 只扫新增 transcript
     for (const id of previous.agentToolIds || []) scan.agentToolIds.add(id);
+    if (wantTools || wantSystem) sub = collectSubagentMaps(transcriptPath, sessionId, limits);
+    if (wantSystem) {
+      items.push(...collectSystemPrompts(rawBodyDir, sessionId, limits, {
+        agentCalls: scan.agentCalls,
+        subagentScopes: sub?.scopes,
+      }));
+    }
     if (wantHooks) items.push(...scan.hookContexts);
     if (wantTools) {
       // 子 agent 归属映射跟工具输出同一开关:两者都是为了把子 agent 子树建出来。
       // 内部工具输出并进同一个 outputs 池,让全局上限与"优先保 Task 输出"一并生效。
-      const sub = collectSubagentMaps(transcriptPath, sessionId, limits);
       for (const [id, value] of sub.outputs) {
         if (!scan.outputs.has(id)) scan.outputs.set(id, value);
       }

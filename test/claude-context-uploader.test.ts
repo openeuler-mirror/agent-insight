@@ -32,6 +32,29 @@ function writeRequestBody(dir: string, file: string, sessionId: string, system: 
   )
 }
 
+function writeScopedRequestBody(
+  dir: string,
+  file: string,
+  sessionId: string,
+  system: unknown,
+  userText: string,
+  mtimeMs: number,
+) {
+  const target = path.join(dir, file)
+  fs.writeFileSync(
+    target,
+    JSON.stringify({
+      model: "claude-sonnet-4-6",
+      messages: [{ role: "user", content: [{ type: "text", text: userText }] }],
+      system,
+      metadata: { user_id: JSON.stringify({ device_id: "d", account_uuid: "a", session_id: sessionId }) },
+    }),
+    "utf8",
+  )
+  const mtime = new Date(mtimeMs)
+  fs.utimesSync(target, mtime, mtime)
+}
+
 async function waitUntil(predicate: () => boolean, message: string, timeoutMs = 5000) {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
@@ -72,6 +95,125 @@ test("uploader: 按 metadata.session_id 精确捞 system prompt,并按内容去�
   assert.equal(items[0].kind, "system_prompt")
   assert.equal(items[0].text, "系统提示词 A")
   assert.ok(items[0].hash)
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
+test("uploader: 内部标题请求的 system prompt 全部隐藏", () => {
+  const dir = tmpdir("rawbody-title")
+  writeRequestBody(
+    dir,
+    "title.request.json",
+    SESSION,
+    "Generate a concise, sentence-case title (2-4 words) for this conversation.",
+  )
+
+  assert.deepEqual(uploader.collectSystemPrompts(dir, SESSION, uploader.LIMITS), [])
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
+test("uploader: system prompt 按任务 prompt 精确归属 root 与两个子 Agent", async () => {
+  const dir = tmpdir("rawbody-scopes")
+  const transcript = path.join(dir, `${SESSION}.jsonl`)
+  const now = Date.now()
+  fs.writeFileSync(transcript, [
+    JSON.stringify({
+      type: "assistant",
+      message: { role: "assistant", content: [{
+        type: "tool_use",
+        id: "call_child_1",
+        name: "Agent",
+        input: { prompt: "计算 3+3", subagent_type: "general-purpose" },
+      }] },
+    }),
+    JSON.stringify({
+      type: "assistant",
+      message: { role: "assistant", content: [{
+        type: "tool_use",
+        id: "call_child_2",
+        name: "Task",
+        input: { prompt: "计算 4×5", subagent_type: "general-purpose" },
+      }] },
+    }),
+  ].join("\n") + "\n", "utf8")
+
+  const subDir = path.join(dir, SESSION, "subagents")
+  fs.mkdirSync(subDir, { recursive: true })
+  for (const [id, toolUseId, timestamp] of [
+    ["a1", "call_child_1", now + 1_000],
+    ["a2", "call_child_2", now + 2_000],
+  ] as const) {
+    const metaPath = path.join(subDir, `agent-${id}.meta.json`)
+    fs.writeFileSync(metaPath, JSON.stringify({ agentType: "general-purpose", toolUseId }), "utf8")
+    fs.utimesSync(metaPath, new Date(timestamp), new Date(timestamp))
+    fs.writeFileSync(
+      path.join(subDir, `agent-${id}.jsonl`),
+      JSON.stringify({ type: "assistant", uuid: `uuid-${id}`, message: { role: "assistant", content: [] } }) + "\n",
+      "utf8",
+    )
+  }
+
+  writeScopedRequestBody(dir, "root.request.json", SESSION, "root system", "用户问题", now)
+  writeScopedRequestBody(
+    dir,
+    "child-1.request.json",
+    SESSION,
+    "child system\ncc_is_subagent=true",
+    "前置提醒\n计算 3+3",
+    now + 1_000,
+  )
+  writeScopedRequestBody(
+    dir,
+    "child-2.request.json",
+    SESSION,
+    "child system\ncc_is_subagent=true",
+    "前置提醒\n计算 4×5",
+    now + 2_000,
+  )
+
+  const scan = await uploader.scanTranscript(transcript, uploader.LIMITS)
+  const subagents = uploader.collectSubagentMaps(transcript, SESSION, uploader.LIMITS)
+  const items = uploader.collectSystemPrompts(dir, SESSION, uploader.LIMITS, {
+    agentCalls: scan.agentCalls,
+    subagentScopes: subagents.scopes,
+  })
+  assert.equal(items.length, 3, "两个正文相同的 child system 也必须按 toolUseId 各传一份")
+  const root = items.find((item: any) => !item.toolUseId)
+  assert.equal(root?.text, "root system")
+  const children = items.filter((item: any) => item.toolUseId).sort((a: any, b: any) => a.toolUseId.localeCompare(b.toolUseId))
+  assert.deepEqual(children.map((item: any) => [item.toolUseId, item.agentType]), [
+    ["call_child_1", "general-purpose"],
+    ["call_child_2", "general-purpose"],
+  ])
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
+test("uploader: 子 Agent system prompt 仅在有界 mtime 内兜底且不误挂 root", () => {
+  const dir = tmpdir("rawbody-scope-fallback")
+  const now = Date.now()
+  writeScopedRequestBody(
+    dir,
+    "near.request.json",
+    SESSION,
+    "near child\ncc_is_subagent=true",
+    "没有可精确匹配的正文",
+    now + 5_000,
+  )
+  writeScopedRequestBody(
+    dir,
+    "far.request.json",
+    SESSION,
+    "far child\ncc_is_subagent=true",
+    "仍然无法匹配",
+    now + 120_000,
+  )
+
+  const items = uploader.collectSystemPrompts(dir, SESSION, uploader.LIMITS, {
+    agentCalls: new Map(),
+    subagentScopes: [{ toolUseId: "call_near", agentType: "Explore", mtimeMs: now }],
+  })
+  assert.deepEqual(items.map((item: any) => [item.text, item.toolUseId]), [
+    ["near child\ncc_is_subagent=true", "call_near"],
+  ])
   fs.rmSync(dir, { recursive: true, force: true })
 })
 
