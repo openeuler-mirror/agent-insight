@@ -14,6 +14,8 @@ interface InfraSource {
   memBandwidthGBs: number | null;
   scrapeIntervalMs: number;
   enabled: boolean;
+  /** 鉴权摘要（接口不回显凭证真值，只说配了哪些 header）。 */
+  auth?: { keys: string[]; hasAuth: boolean };
 }
 interface Candidate {
   endpoint: string;
@@ -48,8 +50,13 @@ function SourceRow({ s, onChanged }: { s: InfraSource; onChanged: () => void }) 
   const [intervalMs, setIntervalMs] = useState(s.scrapeIntervalMs);
   const [enabled, setEnabled] = useState(s.enabled);
   const [saving, setSaving] = useState(false);
+  // 凭证不回显：空 = 不改动已存的；填了 = 覆盖；点「清除」= 显式置空。
+  const [auth, setAuth] = useState('');
+  const [clearAuth, setClearAuth] = useState(false);
+  const hasAuth = !!s.auth?.hasAuth;
 
-  const dirty = kind !== s.kind || intervalMs !== s.scrapeIntervalMs || enabled !== s.enabled;
+  const dirty = kind !== s.kind || intervalMs !== s.scrapeIntervalMs || enabled !== s.enabled
+    || auth.trim() !== '' || clearAuth;
 
   const save = useCallback(async () => {
     setSaving(true);
@@ -57,13 +64,19 @@ function SourceRow({ s, onChanged }: { s: InfraSource; onChanged: () => void }) 
       await fetch('/api/observe/infra/sources', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: s.id, kind, scrapeIntervalMs: intervalMs, enabled }),
+        body: JSON.stringify({
+          id: s.id, kind, scrapeIntervalMs: intervalMs, enabled,
+          // undefined 不进 JSON → 后端「不改动」；'' → 清除
+          authHeaders: clearAuth ? '' : (auth.trim() || undefined),
+        }),
       });
+      setAuth('');
+      setClearAuth(false);
       onChanged();
     } finally {
       setSaving(false);
     }
-  }, [s.id, kind, intervalMs, enabled, onChanged]);
+  }, [s.id, kind, intervalMs, enabled, auth, clearAuth, onChanged]);
 
   const remove = useCallback(async () => {
     await fetch(`/api/observe/infra/sources?id=${encodeURIComponent(s.id)}`, { method: 'DELETE' });
@@ -71,35 +84,63 @@ function SourceRow({ s, onChanged }: { s: InfraSource; onChanged: () => void }) 
   }, [s.id, onChanged]);
 
   return (
-    <div style={{ ...card, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-      <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} title="启用" />
-      <span style={{ fontWeight: 600 }}>{s.endpoint}</span>
-      <span style={{ fontSize: 12, color: 'var(--foreground-muted)' }}>{s.model ?? 'model n/a'}{s.hardwareName ? ` · ${s.hardwareName}` : ''}</span>
-      <span style={{ flex: 1 }} />
+    <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} title="启用" />
+        <span style={{ fontWeight: 600 }}>{s.endpoint}</span>
+        <span style={{ fontSize: 12, color: 'var(--foreground-muted)' }}>{s.model ?? 'model n/a'}{s.hardwareName ? ` · ${s.hardwareName}` : ''}</span>
+        {hasAuth && <span style={{ fontSize: 11.5, color: 'var(--success)' }} title={`已配置：${s.auth?.keys.join(', ')}`}>🔒 已鉴权</span>}
+        <span style={{ flex: 1 }} />
 
-      <label style={{ fontSize: 12, color: 'var(--foreground-muted)' }}>采集方式</label>
-      <select value={kind} onChange={(e) => setKind(e.target.value)} style={field}>
-        <option value="pull">主动拉取 (PULL)</option>
-        <option value="push">Collector 推送 (PUSH)</option>
-      </select>
+        <label style={{ fontSize: 12, color: 'var(--foreground-muted)' }}>采集方式</label>
+        <select value={kind} onChange={(e) => setKind(e.target.value)} style={field}>
+          <option value="pull">主动拉取 (PULL)</option>
+          <option value="push">Collector 推送 (PUSH)</option>
+        </select>
+
+        {kind === 'pull' && (
+          <>
+            <label style={{ fontSize: 12, color: 'var(--foreground-muted)' }}>采集间隔</label>
+            <input
+              type="number" min={1000} step={1000} value={intervalMs}
+              onChange={(e) => setIntervalMs(Number(e.target.value))}
+              style={{ ...field, width: 92 }} title="毫秒，>=1000"
+            />
+            <span style={{ fontSize: 12, color: 'var(--foreground-muted)' }}>ms（{(intervalMs / 1000).toFixed(0)}s）</span>
+          </>
+        )}
+
+        <button onClick={save} disabled={!dirty || saving} style={btn(dirty ? 'var(--primary)' : 'var(--background-secondary)', dirty ? 'var(--primary-foreground)' : 'var(--foreground-muted)')}>
+          {saving ? '保存中…' : '保存'}
+        </button>
+        <a href={`/infra?target=${encodeURIComponent(s.endpoint)}`} style={{ color: 'var(--primary)', fontSize: 13 }}>诊断</a>
+        <button onClick={remove} style={btn('transparent', 'var(--error)')}>删除</button>
+      </div>
+
+      {/* 抓取地址与源身份不一定相同（网关托管的源带实例路径）→ 显式列出，多实例才分得清 */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 12, color: 'var(--foreground-muted)' }}>
+        <span>抓取地址</span>
+        <code style={{ fontSize: 11.5 }}>{s.scrapeUrl || `${s.endpoint}/metrics`}</code>
+      </div>
 
       {kind === 'pull' && (
-        <>
-          <label style={{ fontSize: 12, color: 'var(--foreground-muted)' }}>采集间隔</label>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <label style={{ fontSize: 12, color: 'var(--foreground-muted)', minWidth: 84 }}>Authorization</label>
           <input
-            type="number" min={1000} step={1000} value={intervalMs}
-            onChange={(e) => setIntervalMs(Number(e.target.value))}
-            style={{ ...field, width: 92 }} title="毫秒，>=1000"
+            value={clearAuth ? '' : auth}
+            disabled={clearAuth}
+            onChange={(e) => setAuth(e.target.value)}
+            placeholder={hasAuth ? '已配置（留空则不改动）' : '如 bearer xxx，无鉴权可留空'}
+            style={{ ...field, flex: 1, minWidth: 220 }}
           />
-          <span style={{ fontSize: 12, color: 'var(--foreground-muted)' }}>ms（{(intervalMs / 1000).toFixed(0)}s）</span>
-        </>
+          {hasAuth && (
+            <label style={{ fontSize: 12, color: 'var(--foreground-muted)', display: 'flex', alignItems: 'center', gap: 4 }}>
+              <input type="checkbox" checked={clearAuth} onChange={(e) => { setClearAuth(e.target.checked); if (e.target.checked) setAuth(''); }} />
+              清除鉴权
+            </label>
+          )}
+        </div>
       )}
-
-      <button onClick={save} disabled={!dirty || saving} style={btn(dirty ? 'var(--primary)' : 'var(--background-secondary)', dirty ? 'var(--primary-foreground)' : 'var(--foreground-muted)')}>
-        {saving ? '保存中…' : '保存'}
-      </button>
-      <a href={`/infra?target=${encodeURIComponent(s.endpoint)}`} style={{ color: 'var(--primary)', fontSize: 13 }}>诊断</a>
-      <button onClick={remove} style={btn('transparent', 'var(--error)')}>删除</button>
     </div>
   );
 }
@@ -115,6 +156,7 @@ export default function InfraSourcesPage() {
   const [newUrl, setNewUrl] = useState('');
   const [newKind, setNewKind] = useState('pull');
   const [newInterval, setNewInterval] = useState(1000);
+  const [newAuth, setNewAuth] = useState('');
   const [testing, setTesting] = useState(false);
   const [testRes, setTestRes] = useState<{ ok: boolean; message: string } | null>(null);
 
@@ -123,7 +165,12 @@ export default function InfraSourcesPage() {
     setTesting(true);
     setTestRes(null);
     try {
-      const res = await fetch(`/api/observe/infra/sources/test?mode=pull&endpoint=${encodeURIComponent(newUrl)}`);
+      // POST 而非 GET：凭证放 body，避免 token 落进访问日志/浏览器历史
+      const res = await fetch('/api/observe/infra/sources/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ endpoint: newUrl, authHeaders: newAuth.trim() || undefined }),
+      });
       const body = await res.json();
       setTestRes({ ok: !!body.ok, message: body.message || body.error || '检测失败' });
     } catch (e) {
@@ -131,7 +178,7 @@ export default function InfraSourcesPage() {
     } finally {
       setTesting(false);
     }
-  }, [newUrl]);
+  }, [newUrl, newAuth]);
 
   const loadSources = useCallback(async () => {
     const res = await fetch('/api/observe/infra/sources');
@@ -169,16 +216,23 @@ export default function InfraSourcesPage() {
       const res = await fetch('/api/observe/infra/sources', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ endpoint: newUrl, kind: newKind, scrapeIntervalMs: newInterval }),
+        body: JSON.stringify({
+          endpoint: newUrl,
+          kind: newKind,
+          scrapeIntervalMs: newInterval,
+          authHeaders: newAuth.trim() || undefined,
+        }),
       });
       const body = await res.json();
       if (!res.ok) { setMsg(body.message || body.error || '添加失败'); return; }
       setNewUrl('');
+      setNewAuth('');
+      setTestRes(null);
       await loadSources();
     } finally {
       setBusy(null);
     }
-  }, [newUrl, newKind, newInterval, loadSources]);
+  }, [newUrl, newKind, newInterval, newAuth, loadSources]);
 
   const importSource = useCallback(async (c: Candidate) => {
     setBusy(c.endpoint);
@@ -225,7 +279,7 @@ export default function InfraSourcesPage() {
         {/* 手动新增 */}
         <div style={{ ...card, marginBottom: 18 }}>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <input value={newUrl} onChange={(e) => { setNewUrl(e.target.value); setTestRes(null); }} placeholder="新增源 URL，如 http://host:8000" style={{ ...field, flex: 1, minWidth: 240 }} />
+            <input value={newUrl} onChange={(e) => { setNewUrl(e.target.value); setTestRes(null); }} placeholder="新增源 URL，如 http://host:8000 或 https://gw/spark/qwen35/metrics" style={{ ...field, flex: 1, minWidth: 240 }} />
             <select value={newKind} onChange={(e) => { setNewKind(e.target.value); setTestRes(null); }} style={field}>
               <option value="pull">主动拉取 (PULL)</option>
               <option value="push">Collector 推送 (PUSH)</option>
@@ -247,13 +301,26 @@ export default function InfraSourcesPage() {
               {busy === 'add' ? '添加中…' : '添加源'}
             </button>
           </div>
+          {newKind === 'pull' && (
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
+              <label style={{ fontSize: 12, color: 'var(--foreground-muted)', minWidth: 84 }}>Authorization</label>
+              <input
+                value={newAuth}
+                onChange={(e) => { setNewAuth(e.target.value); setTestRes(null); }}
+                placeholder="如 bearer <token>（对方 /metrics 要鉴权时填，否则留空）"
+                style={{ ...field, flex: 1, minWidth: 260 }}
+              />
+            </div>
+          )}
           {newKind === 'pull' && testRes && (
             <div style={{ marginTop: 8, fontSize: 12.5, color: testRes.ok ? 'var(--success)' : 'var(--error)' }}>
               {testRes.ok ? '✓ ' : '✗ '}{testRes.message}
             </div>
           )}
           {newKind === 'pull' && !testRes && (
-            <div style={{ marginTop: 8, fontSize: 12, color: 'var(--foreground-muted)' }}>主动拉取：先「测试连接」探测 /metrics，通过后才能添加。</div>
+            <div style={{ marginTop: 8, fontSize: 12, color: 'var(--foreground-muted)' }}>
+              主动拉取：先「测试连接」探测 /metrics，通过后才能添加。网关托管的源请直接粘完整的 /metrics 地址，实例路径会保留。
+            </div>
           )}
           {newKind === 'push' && (
             <div style={{ marginTop: 8, fontSize: 12, color: 'var(--foreground-muted)' }}>推送模式：添加后到该源详情页拿生成的 collector 配置，启动 collector 后用「检测推送」确认收到数据。</div>

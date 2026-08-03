@@ -1,16 +1,19 @@
-// 接入源注册表 CRUD。endpoint 归一为 scheme://host:port 作主键。
+// 接入源注册表 CRUD。endpoint 由 normalizeEndpoint 归一作主键（裸机源=scheme://host:port，
+// 网关托管源保留实例路径）。authHeaders 含明文凭证 → GET 一律脱敏后返回。
 
 import { NextResponse } from 'next/server';
 
+import { redactSource, toAuthHeadersJson } from '@/lib/infra/auth-headers';
 import { ensureSource } from '@/lib/infra/store';
-import { normalizeEndpoint } from '@/lib/ingest/vllm/scrape';
+import { metricsUrl, normalizeEndpoint } from '@/lib/ingest/vllm/scrape';
 import { prismaRaw } from '@/lib/storage/prisma';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
   const sources = await prismaRaw.infraSource.findMany({ orderBy: { createdAt: 'desc' } });
-  return NextResponse.json({ sources });
+  // 绝不把 authHeaders 原样吐出去：这个接口没有任何鉴权，谁打开页面谁就能读。
+  return NextResponse.json({ sources: sources.map(redactSource) });
 }
 
 export async function POST(req: Request) {
@@ -22,14 +25,17 @@ export async function POST(req: Request) {
     const endpoint = normalizeEndpoint(body.endpoint);
     const src = await ensureSource({
       endpoint,
-      scrapeUrl: body.scrapeUrl || `${endpoint}/metrics`,
+      // 兜底必须从用户填的原始 URL 推，不能用归一后的 endpoint —— 后者已经把实例路径剥掉了，
+      // 拼出来的 `${endpoint}/metrics` 对网关托管的源是个不存在的地址。
+      scrapeUrl: body.scrapeUrl || metricsUrl(body.endpoint),
       kind: body.kind === 'push' ? 'push' : 'pull',
       model: body.model ?? null,
       hardwareName: body.hardwareName ?? null,
       memBandwidthGBs: body.memBandwidthGBs != null ? Number(body.memBandwidthGBs) : null,
       scrapeIntervalMs: body.scrapeIntervalMs != null ? Number(body.scrapeIntervalMs) : undefined,
+      authHeaders: toAuthHeadersJson(body.authHeaders),
     });
-    return NextResponse.json({ source: src });
+    return NextResponse.json({ source: redactSource(src) });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ status: 'error', message }, { status: 400 });
@@ -58,9 +64,13 @@ export async function PATCH(req: Request) {
       data.memBandwidthGBs = body.memBandwidthGBs != null ? Number(body.memBandwidthGBs) : null;
     }
     if (body.model !== undefined) data.model = body.model || null;
+    // undefined = 不改（前端不回填真值，所以「没动那个框」不能把已存的凭证抹掉）；
+    // '' / null = 显式清除。
+    const nextAuth = toAuthHeadersJson(body.authHeaders);
+    if (nextAuth !== undefined) data.authHeaders = nextAuth;
 
     const source = await prismaRaw.infraSource.update({ where: { id: body.id }, data });
-    return NextResponse.json({ source });
+    return NextResponse.json({ source: redactSource(source) });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ status: 'error', message }, { status: 400 });

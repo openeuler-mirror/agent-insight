@@ -12,6 +12,8 @@ export interface InfraSourceInput {
   hardwareName?: string | null;
   memBandwidthGBs?: number | null;
   scrapeIntervalMs?: number;
+  /** 拉取时附加的鉴权 header（JSON 对象字符串）。undefined = 不改动，null = 清除。 */
+  authHeaders?: string | null;
 }
 
 export interface InfraSampleRow {
@@ -70,6 +72,8 @@ export async function ensureSource(input: InfraSourceInput) {
     hardwareName: input.hardwareName ?? null,
     memBandwidthGBs: input.memBandwidthGBs ?? null,
     scrapeIntervalMs: input.scrapeIntervalMs ?? 1000,
+    // undefined 时整个 key 不出现 → upsert 不动库里已存的凭证（重新探测/导入不会把 token 抹掉）。
+    ...(input.authHeaders !== undefined ? { authHeaders: input.authHeaders } : {}),
   };
   return prismaRaw.infraSource.upsert({
     where: { endpoint: input.endpoint },
