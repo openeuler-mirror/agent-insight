@@ -9,8 +9,8 @@
 | 需求名称 | 目录 | 需求描述 | 类型 | 创建时间 | 是否实现 |
 |-|-|-|-|-|-|
 | 包级需求与开发计划 | [package-baseline](package-baseline/) | agent_ras 包级 IR（需求分析）与 SDD 开发计划 | Baseline | 2026-07-25 | ✅ 文档已沉淀 |
-| 同进程迁入与环内监控 | [inproc-package-migration](inproc-package-migration/) | 将 agent_ras 整包迁入仓根；同进程 runtime；anomaly/actions 经 `/api/ingest/ras` 落库并在可靠性观测展示 | Feature | 2026-07-25 | ✅ inproc 已实现 |
-| AgentRAS 可靠性独立页面 | [reliability-standalone-ui](reliability-standalone-ui/) | 独立导航「AgentRAS 可靠性」；可靠性追踪 + 故障注入与评测 | Feature | 2026-07-28 | ⬜ 未实现 |
+| 同进程迁入与环内监控 | [inproc-package-migration](inproc-package-migration/) | 将 agent_ras 整包迁入仓根；同进程 runtime；anomaly/actions 经 `/api/ingest/ras-events` 落库并在可靠性观测展示 | Feature | 2026-07-25 | ✅ inproc 已实现 |
+| AgentRAS 可靠性独立页面 | [reliability-standalone-ui](reliability-standalone-ui/) | 独立导航「AgentRAS 可靠性」；可靠性追踪 + 故障模式 + 故障注入与评测（注入页本期 mock） | Feature | 2026-07-28 | ✅ 已实现 |
 | Agent 可靠性开源生态调研 | [open-source-ecosystem-survey](open-source-ecosystem-survey/) | 对照开源检测/恢复仓库，产出能力矩阵与定位 | Research | 2026-07-29 | ✅ 已完成 |
 | LLM 过度思考（Analysis Paralysis）二阶段检测 | [detector-analysis-paralysis](detector-analysis-paralysis/) | 触发词 Stage1 + LLM 语义 Stage2；复用 L3 Skill 通道 | Feature | 2026-07-29 | ⬜ 未实现（方案设计） |
 | LLM Agent 规划错误（Planning Error）检测 | [detector-planning-error](detector-planning-error/) | 策略层规划错误；依赖外部信息包分层检测与恢复 | Feature | 2026-07-30 | ⬜ 未实现（方案设计） |

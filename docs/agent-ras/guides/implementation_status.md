@@ -32,3 +32,13 @@ out-of-process 配置、Messager Rail 和 service 均位于 `openjiuwen.harness.
 ## 应用接入
 
 jiuwenclaw 只负责将 YAML 转换为 `AgentRASConfig` 并透传给 core factory，不访问 Rail 或 Monitor 私有字段。本地 editable dependency 覆盖不得写入项目 `pyproject.toml`。
+
+## Agent Insight 看板侧（本仓产品面）
+
+环内 runtime 之外，本仓还提供：
+
+- 旁路 ingest：`POST /api/ingest/ras-events`（见 [`../contracts/`](../contracts/) 与 developer-guide API 契约）
+- 独立导航「AgentRAS 可靠性」：`/agent-ras/trace`、`/agent-ras/fault-modes`、`/agent-ras/fault-injection`
+- 安装：`npx agent-insight install-ras` / 安装指导内嵌同版本安装器
+
+产品面实现状态以全仓与 [`../design/README.md`](../design/README.md) 清单为准；普通 `/trace` **不**再挂 RAS 徽章。

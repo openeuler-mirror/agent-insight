@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `c048a80e7ca5df7dd717ab9e69ea953e23872f73` (`c048a80`) |
+| Commit | `2dfa1bc888083e42f79065e78c488f96a6448a2c` (`2dfa1bc`) |
 | Branch | `dev_agent_ras` |
-| Date | 2026-07-29 |
-| Author | (local WIP: agent-ras inproc migration docs sync) |
-| Subject | `docs: RAS 安装链与 npm 分发（相对 c048a80 的本地 WIP）` |
+| Date | 2026-08-03 |
+| Author | iceory |
+| Subject | `feat(ras): 迁入 Agent RAS 并接入可靠性观测` |
 
-**如何更新：** `git diff c048a80 HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff 2dfa1bc HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
