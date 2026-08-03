@@ -1,7 +1,7 @@
 // buildQualityReport — 报告编排入口。
 // 调用序（设计 §6.2）：collectTraces → buildProblemSummary（先于错误维）
 //   → scoreDimensions（消费问题汇总产出错误维）→ bucketTrends → 组装 QualityReport。
-// 请求路径只读，绝不触发采样/回填（解耦，见 sampling.ts）。
+// 请求路径只读，不触发任何评测。
 
 import { prisma } from '@/lib/storage/prisma';
 import type { QualityReport, QualityReportInput, WindowKind, ScoringPolicy, DimScore } from './types';
@@ -20,7 +20,7 @@ const EMPTY_DIM: DimScore = { score: 0, status: '异常', coverage: 0, n: 0 };
 function emptyReport(input: QualityReportInput): QualityReport {
     return {
         composite: { score: 0, status: '异常', p0: 0, p1: 0, p2: null, capped: false },
-        dimensions: { result: EMPTY_DIM, process: EMPTY_DIM, cost: EMPTY_DIM, error: EMPTY_DIM },
+        dimensions: { process: EMPTY_DIM, cost: EMPTY_DIM, error: EMPTY_DIM },
         trend: { granularity: input.window === '1d' ? 'hour' : 'day', buckets: [] },
         problems: [],
         errorNodeDistribution: [],
@@ -28,9 +28,8 @@ function emptyReport(input: QualityReportInput): QualityReport {
         problemCounts: { error: 0, eval: 0, total: 0, errorEvents: 0 },
         moduleFingerprint: [],
         diagnosisCoverage: { diagnosed: 0, errorish: 0 },
-        coverage: { judged: 0, total: 0, perDimension: {} },
         meta: {
-            n: 0, passRate: 0, empty: true, lowSample: true, window: input.window,
+            n: 0, empty: true, lowSample: true, window: input.window,
             from: input.from.toISOString(), to: input.to.toISOString(),
             agent: input.agent, filters: input.filters,
         },
@@ -153,7 +152,7 @@ export async function buildQualityReport(
     const skillDrag = buildSkillDrag(skillIssueRows, traces);
     const { moduleFingerprint, diagnosisCoverage } = summarizeDiagnoses(traces, diagnosesByTrace);
 
-    // 4. 四维 + 综合（错误维由问题汇总反哺）
+    // 4. 过程 / 成本 / 错误三维 + 综合（错误维由问题汇总反哺）
     const scored = scoreDimensions(traces, policy, summary.errorSummary);
 
     // 5. 追加低分维度问题 → 统一排序 + 帕累托；按影响度封顶返回，全量计数单独带回
@@ -171,15 +170,6 @@ export async function buildQualityReport(
     const trend = bucketTrends({ traces, window: input.window, from: input.from, to: input.to, policy });
 
     const n = traces.length;
-    const perTraceResultScores = traces.map((trace) => {
-        const values = Object.values(trace.resultMetrics ?? {})
-            .filter((metric) => metric?.status === 'done' && metric.score != null)
-            .map((metric) => metric!.score as number);
-        return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
-    }).filter((score): score is number => score != null);
-    const passRate = perTraceResultScores.length
-        ? Math.round((perTraceResultScores.filter((score) => score >= policy.status.达标).length / perTraceResultScores.length) * 1000) / 10
-        : 0;
     return {
         composite: scored.composite,
         dimensions: scored.dimensions,
@@ -190,10 +180,8 @@ export async function buildQualityReport(
         problemCounts,
         moduleFingerprint,
         diagnosisCoverage,
-        coverage: scored.coverage,
         meta: {
             n,
-            passRate,
             empty: false,
             lowSample: n < policy.thetaSample,
             window: input.window,

@@ -10,6 +10,39 @@ export type DatasetKind = 'ideal_output' | 'trajectory';
 export type DatasetCaseSource = 'user' | 'skill-gen-draft' | 'trace-backflow';
 
 export type DatasetFieldType = 'text' | 'number' | 'boolean' | 'json';
+export type TraceBackflowArtifactSource = 'input' | 'output' | 'trace' | 'none';
+
+export function defaultTraceBackflowSourceForField(key: string): TraceBackflowArtifactSource {
+  switch (key.trim().toLocaleLowerCase()) {
+    case 'input':
+      return 'input';
+    case 'output':
+    case 'expected_output':
+    case 'expectedoutput':
+    case 'reference_output':
+      return 'output';
+    case 'trace':
+    case 'trajectory':
+      return 'trace';
+    default:
+      return 'none';
+  }
+}
+
+export function sortTraceBackflowDatasetsByRecency<T extends { createdAt?: string; updatedAt?: string }>(
+  datasets: readonly T[],
+): T[] {
+  return datasets
+    .map((dataset, index) => ({ dataset, index }))
+    .sort((left, right) => {
+      const leftTime = Date.parse(left.dataset.updatedAt || left.dataset.createdAt || '');
+      const rightTime = Date.parse(right.dataset.updatedAt || right.dataset.createdAt || '');
+      const normalizedLeft = Number.isFinite(leftTime) ? leftTime : Number.NEGATIVE_INFINITY;
+      const normalizedRight = Number.isFinite(rightTime) ? rightTime : Number.NEGATIVE_INFINITY;
+      return normalizedRight - normalizedLeft || left.index - right.index;
+    })
+    .map(item => item.dataset);
+}
 
 export interface DatasetField {
   id: string;

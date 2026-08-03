@@ -197,7 +197,7 @@ function evalProblems(traces: TraceLite[]): ProblemItem[] {
     for (const [key, e] of byType) {
         out.push({
             key: `eval:fail:${key}`, desc: e.desc, source: '评测',
-            affectedDimensions: ['结果'], frequency: e.count, severity: severityFromCount(e.count),
+            affectedDimensions: ['过程'], frequency: e.count, severity: severityFromCount(e.count),
             attribution: e.attr, relatedTraces: [...e.traces], impact: 0,
         });
     }
@@ -228,13 +228,6 @@ function parseSeverity(s: string | null | undefined): Severity {
     return s === 'high' || s === 'medium' || s === 'low' ? s : 'medium';
 }
 
-/** SkillIssue.category → 受影响维度（粗映射）。 */
-function dimsOfCategory(category: string | null | undefined): string[] {
-    if (!category) return ['过程'];
-    if (/观点遗漏|事实错误|结果/.test(category)) return ['结果'];
-    return ['过程']; // 轨迹偏差 / 工具误用 / 关键动作执行不足 / 静态扫描 / 触发评测 等
-}
-
 /**
  * 来源B'：SkillIssue 表（按 dedupKey 聚合 = 同一问题跨评测的身份键）。
  * 相比 Execution.skillIssues JSON 快照：有真实严重度、suggestedFix、生命周期(只取未解决)、skill 归属。
@@ -260,7 +253,7 @@ export function tableSkillIssueProblems(rows: SkillIssueRowLite[]): ProblemItem[
             key: `skilltbl:${key}`,
             desc: clip(first.summary, 80),
             source: '评测',
-            affectedDimensions: dimsOfCategory(first.category),
+            affectedDimensions: ['过程'],
             frequency: e.rows.length,                  // T 范围内的 prevalence
             severity: sev,
             attribution: 'agent逻辑',                   // skill 问题定义上归 agent 逻辑，路由到 skill-opt
@@ -372,7 +365,7 @@ export function buildProblemSummary(input: ProblemSummaryInput): ProblemSummaryR
         // 否则列表里看起来像重复项。
         desc: c.object && c.object !== '—' ? `${c.errorCode} · ${clip(c.object, 32)}` : c.errorCode,
         source: '错误',
-        affectedDimensions: c.node === 'LLM 推理' ? ['结果', '过程'] : ['过程'],
+        affectedDimensions: ['过程'],
         frequency: c.count,
         severity: severityFromCount(c.count),
         attribution: c.attribution,
@@ -408,24 +401,9 @@ export function buildProblemSummary(input: ProblemSummaryInput): ProblemSummaryR
     };
 }
 
-/** 由四维分追加「低分/失败维度」评测问题（编排序：score 之后）。 */
-export function lowScoreProblems(dims: { result: DimScore; process: DimScore; cost: DimScore }, statusFloor: number): ProblemItem[] {
+/** 由过程/成本低分追加问题（编排序：score 之后）。 */
+export function lowScoreProblems(dims: { process: DimScore; cost: DimScore }, statusFloor: number): ProblemItem[] {
     const out: ProblemItem[] = [];
-    for (const metric of dims.result.metrics ?? []) {
-        if (metric.score == null || metric.score >= statusFloor) continue;
-        const deficit = Math.max(1, Math.round(metric.n * (statusFloor - metric.score) / 100));
-        out.push({
-            key: `result-metric:${metric.key}`,
-            desc: `${metric.label}偏弱（${metric.score}）${metric.evidence?.[0]?.reason ? '：' + metric.evidence[0].reason : ''}`,
-            source: '评测',
-            affectedDimensions: ['结果'],
-            frequency: deficit,
-            severity: metric.score < statusFloor - 15 ? 'high' : 'medium',
-            attribution: '模型能力',
-            relatedTraces: metric.evidence?.map((item) => item.executionId) ?? [],
-            impact: 0,
-        });
-    }
     const entries: [string, DimScore, Attribution][] = [
         ['过程', dims.process, 'agent逻辑'],
         ['成本', dims.cost, '工具&infra'],

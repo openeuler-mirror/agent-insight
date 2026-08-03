@@ -50,8 +50,8 @@ export const presetEvaluators: EvaluatorCard[] = [
     runtimeHref: '/eval/trajectory',
     runtimeNote: 'opencode-trajectory-evaluator.ts (single opencode agent)',
   },
-  // ── 结果评测评估器（抽取自「可靠性与性能」的结果评测分析能力，与其共用同一 canonical 实现）──
-  // 实现：result-preset-evaluators.ts（复用 result-quality-evaluator 的 runSingleResultMetric）
+  // ── 结果评测评估器（评测中心独立能力，共用同一 canonical 实现）──
+  // 实现：result-preset-evaluators.ts（复用 result-metric-evaluator 的 runSingleResultMetric）
   {
     id: 'preset-result-accuracy',
     name: '结果准确性',

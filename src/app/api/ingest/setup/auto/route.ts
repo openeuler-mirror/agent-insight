@@ -1,4 +1,8 @@
 import { NextResponse } from 'next/server';
+import {
+  CODEAGENT_UNIX_SETUP_BLOCK,
+  CODEAGENT_WINDOWS_SETUP_BLOCK,
+} from '../codeagent-setup';
 
 function bashDoubleQuoted(value: string): string {
     return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$').replace(/`/g, '\\`');
@@ -602,46 +606,7 @@ CLAUDE_OTEL_EOF
     echo "🧹 Removed legacy Claude session-file watcher if it was installed."
 fi
 
-# 6.6 Configure CodeAgent OpenTelemetry wrapper
-if [ "$INSTALL_CODEAGENT" = "true" ]; then
-    cat > "$HOME/.agent-insight/codeagent_otel_env.sh" << 'CODEAGENT_OTEL_EOF'
-# Agent-Insight CodeAgent OpenTelemetry integration
-unalias codeagent 2>/dev/null || true
-
-_skill_insight_codeagent_load_env() {
-  if [ -f "$HOME/.agent-insight/.env" ]; then
-    set -a
-    . "$HOME/.agent-insight/.env"
-    set +a
-  fi
-}
-
-codeagent() {
-  _skill_insight_codeagent_load_env
-  local _si_host="\${AGENT_INSIGHT_HOST:-127.0.0.1:3000}"
-  case "$_si_host" in http://*|https://*) ;; *) _si_host="http://$_si_host" ;; esac
-  _si_host="\${_si_host%/}"
-  env \
-    CODEAGENT3_ENABLE_TELEMETRY=1 \
-    OTEL_EXPORTER_OTLP_ENDPOINT="$_si_host/api/ingest/otel" \
-    OTEL_EXPORTER_OTLP_PROTOCOL=http/json \
-    OTEL_EXPORTER_OTLP_LOGS_PROTOCOL=http/json \
-    OTEL_EXPORTER_OTLP_HEADERS="x-witty-api-key=\${AGENT_INSIGHT_API_KEY:-}" \
-    codeagent "$@"
-}
-
-CODEAGENT_OTEL_EOF
-    SHELL_RC="$HOME/.zshrc"
-    [ -f "$HOME/.bashrc" ] && SHELL_RC="$HOME/.bashrc"
-    if [ -f "$SHELL_RC" ] && ! grep -q "\.agent-insight/codeagent_otel_env\.sh" "$SHELL_RC"; then
-        echo "" >> "$SHELL_RC"
-        echo "# Agent-Insight CodeAgent OTel" >> "$SHELL_RC"
-        echo "source \"$HOME/.agent-insight/codeagent_otel_env.sh\"" >> "$SHELL_RC"
-    fi
-    echo "✅ CodeAgent OTel env installed at $HOME/.agent-insight/codeagent_otel_env.sh"
-    echo "   Restart your terminal, then run: codeagent"
-    echo "   CodeAgent may still send traces/metrics; Agent Insight accepts and discards those signals."
-fi
+${CODEAGENT_UNIX_SETUP_BLOCK}
 
 # 7. Create Watcher Startup/Stop Scripts
 NEEDS_WATCHER_SCRIPTS=false
@@ -1300,43 +1265,7 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    Write-Host "🧹 Removed legacy Claude session-file watcher if it was installed."',
         '}',
         '',
-        '# 6.6a Configure CodeAgent OpenTelemetry wrapper',
-        'if ($INSTALL_CODEAGENT) {',
-        '    $codeAgentOtelScript = @\'',
-        'function Invoke-AgentInsightCodeAgent {',
-        '  $envFile = Join-Path (Join-Path $env:USERPROFILE ".agent-insight") ".env"',
-        '  if (Test-Path $envFile) {',
-        '    Get-Content $envFile | ForEach-Object {',
-        '      if ($_ -match "^([^#=]+)=(.*)$") { [Environment]::SetEnvironmentVariable($matches[1], $matches[2], "Process") }',
-        '    }',
-        '  }',
-        '  $siHost = if ($env:AGENT_INSIGHT_HOST) { $env:AGENT_INSIGHT_HOST } else { "127.0.0.1:3000" }',
-        '  if ($siHost -notmatch "^https?://") { $siHost = "http://$siHost" }',
-        '  $siHost = $siHost.TrimEnd("/")',
-        '  $env:CODEAGENT3_ENABLE_TELEMETRY = "1"',
-        '  $env:OTEL_EXPORTER_OTLP_ENDPOINT = "$siHost/api/ingest/otel"',
-        '  $env:OTEL_EXPORTER_OTLP_PROTOCOL = "http/json"',
-        '  $env:OTEL_EXPORTER_OTLP_LOGS_PROTOCOL = "http/json"',
-        '  $env:OTEL_EXPORTER_OTLP_HEADERS = "x-witty-api-key=$($env:AGENT_INSIGHT_API_KEY)"',
-        '  $command = Get-Command codeagent -CommandType Application, ExternalScript -ErrorAction SilentlyContinue | Select-Object -First 1',
-        '  if (-not $command) { throw "CodeAgent executable not found in PATH." }',
-        '  & $command.Source @args',
-        '}',
-        'Set-Alias codeagent Invoke-AgentInsightCodeAgent',
-        '\'@',
-        '    $codeAgentOtelPath = Join-Path $skillInsightDir "codeagent_otel_env.ps1"',
-        '    Set-Content -Path $codeAgentOtelPath -Value $codeAgentOtelScript -Encoding UTF8',
-        '    $profileDir = Split-Path $PROFILE -Parent',
-        '    if ($profileDir) { New-Item -ItemType Directory -Path $profileDir -Force | Out-Null }',
-        '    if (-not (Test-Path $PROFILE) -or -not ((Get-Content $PROFILE -Raw) -match "codeagent_otel_env.ps1")) {',
-        '        Add-Content -Path $PROFILE -Value ""',
-        '        Add-Content -Path $PROFILE -Value "# Agent-Insight CodeAgent OTel"',
-        '        Add-Content -Path $PROFILE -Value ". `"$codeAgentOtelPath`""',
-        '    }',
-        '    Write-Host "✅ CodeAgent OTel env installed at $codeAgentOtelPath"',
-        '    Write-Host "   Restart PowerShell, then run: codeagent"',
-        '    Write-Host "   CodeAgent may still send traces/metrics; Agent Insight accepts and discards those signals."',
-        '}',
+        ...CODEAGENT_WINDOWS_SETUP_BLOCK.split('\n'),
         '',
         '# 7. Create Watcher Startup/Stop Scripts',
         '$NEEDS_WATCHER_SCRIPTS = $INSTALL_OPENCLAW',
@@ -1451,7 +1380,7 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    Write-Host "  2. Restart PowerShell, then run: claude"',
         '}',
         'if ($INSTALL_CODEAGENT) {',
-        '    Write-Host "  3. Restart PowerShell, then run: codeagent"',
+        '    Write-Host "  3. Start a new terminal, then run: codeagent"',
         '}',
         'if ($INSTALL_HERMES) {',
         '    Write-Host "  3. Restart Hermes or start a new Hermes conversation"',

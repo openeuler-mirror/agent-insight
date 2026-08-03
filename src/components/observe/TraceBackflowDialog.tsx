@@ -1,11 +1,15 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
 import { ChevronLeft, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { apiFetch } from '@/lib/client/api';
-import { nextDatasetFieldKey } from '@/lib/agent-dataset-model';
+import {
+  defaultTraceBackflowSourceForField,
+  nextDatasetFieldKey,
+  sortTraceBackflowDatasetsByRecency,
+  type TraceBackflowArtifactSource,
+} from '@/lib/agent-dataset-model';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import {
@@ -21,7 +25,7 @@ import { Select } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 
 type FieldType = 'text' | 'number' | 'boolean' | 'json';
-type ArtifactSource = 'input' | 'output' | 'trace' | 'none';
+type ArtifactSource = TraceBackflowArtifactSource;
 type TargetMode = 'existing' | 'new';
 type DialogStep = 'target' | 'mapping' | 'preview';
 
@@ -38,6 +42,8 @@ interface DatasetOption {
   id: string;
   name: string;
   fields: DatasetFieldOption[];
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 interface ConfiguredField extends DatasetFieldOption {
@@ -109,9 +115,12 @@ async function settleWithConcurrency<T, R>(
   return results;
 }
 
-function defaultSourceForField(key: string): ArtifactSource {
-  if (key === 'input' || key === 'output' || key === 'trace') return key;
-  return 'none';
+function configureExistingFields(dataset?: DatasetOption): ConfiguredField[] {
+  return (dataset?.fields || []).map(field => ({
+    ...field,
+    source: defaultTraceBackflowSourceForField(field.key),
+    origin: 'existing',
+  }));
 }
 
 function fieldPayload(field: ConfiguredField): DatasetFieldOption {
@@ -132,7 +141,6 @@ export function TraceBackflowDialog(props: {
   sources: TraceBackflowSource[];
   onSaved?: () => void;
 }) {
-  const router = useRouter();
   const sourceKey = JSON.stringify(props.sources.map(source => ({
     taskId: source.taskId,
     executionId: source.executionId,
@@ -200,17 +208,27 @@ export function TraceBackflowDialog(props: {
           }),
         ]);
         if (cancelled) return;
-        const options = datasetList.map((item: DatasetOption) => ({
+        const options = sortTraceBackflowDatasetsByRecency(datasetList.map((item: DatasetOption) => ({
           id: item.id,
           name: item.name,
           fields: Array.isArray(item.fields) ? item.fields : [],
-        }));
+          createdAt: item.createdAt,
+          updatedAt: item.updatedAt,
+        })));
         const successful = prepared
           .filter((result): result is PromiseFulfilledResult<PreparedDraft> => result.status === 'fulfilled')
           .map(result => result.value);
         setDatasets(options);
         setDrafts(successful);
         setFailedCount(prepared.length - successful.length);
+        if (options.length > 0) {
+          setMode('existing');
+          setDatasetId(options[0].id);
+          setFields(configureExistingFields(options[0]));
+        } else {
+          setMode('new');
+          setFields(DEFAULT_NEW_FIELDS.map(field => ({ ...field })));
+        }
         if (successful.length === 0) setError('所选 Trace 均处理失败，请稍后重试');
       } catch (reason) {
         if (!cancelled) setError(reason instanceof Error ? reason.message : 'Trace 回流准备失败');
@@ -244,11 +262,7 @@ export function TraceBackflowDialog(props: {
     setDatasetId(nextId);
     setError('');
     const dataset = datasets.find(item => item.id === nextId);
-    setFields((dataset?.fields || []).map(field => ({
-      ...field,
-      source: defaultSourceForField(field.key),
-      origin: 'existing',
-    })));
+    setFields(configureExistingFields(dataset));
   };
 
   const updateField = (id: string, patch: Partial<ConfiguredField>) => {
@@ -374,8 +388,6 @@ export function TraceBackflowDialog(props: {
       toast.success(`${result.inserted || previewRows.length} 条 Trace 已加入评测数据集`);
       props.onSaved?.();
       props.onOpenChange(false);
-      const caseId = result.caseIds?.[0] || result.caseId;
-      router.push(`/dataset/${encodeURIComponent(result.datasetId)}${caseId ? `?case=${encodeURIComponent(caseId)}` : ''}`);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '回流保存失败');
     } finally {
