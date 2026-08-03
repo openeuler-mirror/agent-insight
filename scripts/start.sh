@@ -34,7 +34,7 @@ if [ ! -f "$AGENT_INSIGHT_ENV_FILE" ] && [ -f .env.example ]; then
     echo "# >>> 本文件由 scripts/start.sh 于 $(date '+%Y-%m-%d %H:%M:%S') 从 .env.example 自动生成 <<<"
     echo "# 这是 agent-insight 当前生效的环境配置；要改配置请直接编辑本文件。"
     echo "# 项目根目录的 .env.example 只是模板，改它不会影响已生成的本文件。"
-    echo "# 注意：AGENT_INSIGHT_HOST / AGENT_INSIGHT_API_KEY 每次启动会被 sync_admin_api_key.js 自动同步覆盖。"
+    echo "# 注意：启动会同步 AGENT_INSIGHT_HOST；AGENT_INSIGHT_API_KEY 仅在缺失时初始化，安装指导注册的用户 Key 会保留。"
     echo "#"
     cat .env.example
   } > "$AGENT_INSIGHT_ENV_FILE"
@@ -155,6 +155,12 @@ echo "Clearing Next.js build cache (.next)..."
 rm -rf .next
 
 echo "Syncing database schema..."
+if [[ "${DATABASE_URL:-}" == file:* ]]; then
+  if ! node scripts/prepare-ras-sqlite-schema.js; then
+    echo "  ⛔ Agent RAS SQLite schema 预检失败，已停止启动以避免重复事件被错误合并。"
+    exit 1
+  fi
+fi
 if ! npx prisma db push; then
   echo ""
   echo "  ⛔ prisma db push 失败 —— 数据库 schema 没同步成功。"

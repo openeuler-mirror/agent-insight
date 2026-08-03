@@ -1,4 +1,9 @@
 import { NextResponse } from 'next/server';
+import {
+    getAgentInsightBashDownloadHelper,
+    getAgentInsightClientPackageSpec,
+    getAgentInsightRasBashInstaller,
+} from '@/lib/ingest/setup-package';
 
 function detectPlatform(request: Request): 'windows' | 'unix' {
     const userAgent = request.headers.get('user-agent') || '';
@@ -13,6 +18,14 @@ function detectPlatform(request: Request): 'windows' | 'unix' {
     }
     
     return 'unix';
+}
+
+function bashDoubleQuoted(value: string): string {
+    return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$').replace(/`/g, '\\`');
+}
+
+function powerShellDoubleQuoted(value: string): string {
+    return value.replace(/`/g, '``').replace(/"/g, '`"').replace(/\$/g, '`$');
 }
 
 export async function GET(request: Request) {
@@ -34,27 +47,33 @@ export async function GET(request: Request) {
     
     // Detect base path from request URL
     const requestUrl = new URL(request.url);
-    const basePath = requestUrl.pathname.replace(/\/api\/setup\/auto\/?$/, '');
+    const basePath = requestUrl.pathname.replace(/\/api\/ingest\/setup\/auto\/?$/, '');
     
     const baseUrl = `${protocol}://${requestHost}${basePath}`;
     const platform = detectPlatform(request);
+    const packageSpec = getAgentInsightClientPackageSpec();
 
     if (platform === 'windows') {
-        return generatePowerShellScript(baseUrl, hostParam, apiKey);
+        return generatePowerShellScript(baseUrl, hostParam, apiKey, packageSpec);
     }
     
-    return generateBashScript(baseUrl, hostParam, apiKey);
+    return generateBashScript(baseUrl, hostParam, apiKey, packageSpec);
 }
 
-function generateBashScript(baseUrl: string, hostParam: string, apiKey: string): NextResponse {
+function generateBashScript(baseUrl: string, hostParam: string, apiKey: string, packageSpec: string): NextResponse {
     const script = `#!/bin/bash
 # =============================================================================
 # Agent-insight Auto Setup (Non-Interactive)
 # =============================================================================
 
-AGENT_INSIGHT_HOST="${hostParam}"
-AGENT_INSIGHT_BASE_URL="${baseUrl}"
-AGENT_INSIGHT_API_KEY="${apiKey}"
+AGENT_INSIGHT_HOST="${bashDoubleQuoted(hostParam)}"
+AGENT_INSIGHT_BASE_URL="${bashDoubleQuoted(baseUrl)}"
+AGENT_INSIGHT_API_KEY="${bashDoubleQuoted(apiKey)}"
+AGENT_INSIGHT_PACKAGE_SPEC="${bashDoubleQuoted(packageSpec)}"
+
+${getAgentInsightBashDownloadHelper()}
+
+${getAgentInsightRasBashInstaller()}
 
 echo "🚀 Fetching Agent-insight telemetry components from $AGENT_INSIGHT_BASE_URL..."
 
@@ -204,19 +223,22 @@ fi
 
 # 3. Download Components
 if [ "$INSTALL_OPENCODE" = "true" ]; then
+    OPENCODE_SETUP_OK=true
     OPENCODE_CONFIG_DIR="\${XDG_CONFIG_HOME:-$HOME/.config}/opencode"
     mkdir -p "$OPENCODE_CONFIG_DIR/plugins"
     echo "⏬ Downloading OpenCode Plugin..."
     rm -f "$OPENCODE_CONFIG_DIR/plugins/Skill-Insight.ts" "$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.ts" 2>/dev/null || true
     rm -f "$HOME/.opencode/plugins/Skill-Insight.ts" "$HOME/.opencode/plugins/Witty-Skill-Insight.ts" 2>/dev/null || true
-    curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/opencode" -o "$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.ts"
+    download_agent_insight_component "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/opencode" "$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.ts" "OpenCode plugin" || OPENCODE_SETUP_OK=false
     echo "⏬ Downloading OpenCode Uploader..."
-    curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/opencode-uploader" -o "$HOME/.agent-insight/opencode_uploader_client.js"
+    download_agent_insight_component "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/opencode-uploader" "$HOME/.agent-insight/opencode_uploader_client.js" "OpenCode uploader" || OPENCODE_SETUP_OK=false
     echo "⏬ Installing OpenCode commands..."
-    mkdir -p "$OPENCODE_CONFIG_DIR/commands"
-    curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/opencode-commands/si-optimizer" -o "$OPENCODE_CONFIG_DIR/commands/si-optimizer.md"
+    download_agent_insight_component "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/opencode-commands/si-optimizer" "$OPENCODE_CONFIG_DIR/commands/si-optimizer.md" "OpenCode si-optimizer command" || OPENCODE_SETUP_OK=false
     echo "⏬ Downloading OpenCode TUI Plugin..."
-    curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/opencode-tui" -o "$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.tui.tsx"
+    download_agent_insight_component "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/opencode-tui" "$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.tui.tsx" "OpenCode TUI plugin" || OPENCODE_SETUP_OK=false
+    if [ "$OPENCODE_SETUP_OK" != "true" ]; then
+        echo "❌ OpenCode telemetry components were not installed completely."
+    fi
     export TUI_PLUGIN_PATH="$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.tui.tsx"
     export TUI_CONFIG_FILE="$OPENCODE_CONFIG_DIR/tui.json"
     if command -v node &> /dev/null; then
@@ -253,7 +275,7 @@ if [ "$INSTALL_HERMES" = "true" ]; then
     HERMES_HOME="\${HERMES_HOME:-$HOME/.hermes}"
     HERMES_PLUGIN_DIR="$HERMES_HOME/plugins/agent_insight_hermes"
     mkdir -p "$HERMES_PLUGIN_DIR"
-    curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/hermes-plugin" -o "$HERMES_PLUGIN_DIR/__init__.py"
+    curl -sSf "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/hermes-plugin" -o "$HERMES_PLUGIN_DIR/__init__.py"
     cat > "$HERMES_PLUGIN_DIR/plugin.yaml" <<'HERMES_PLUGIN_EOF'
 name: agent_insight_hermes
 version: 0.2.0
@@ -279,7 +301,7 @@ fi
 
 if [ "$INSTALL_OPENCLAW" = "true" ]; then
     echo "⏬ Downloading OpenClaw Watcher..."
-    curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/openclaw-watcher" -o "$HOME/.agent-insight/openclaw_watcher_client.ts"
+    curl -sSf "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/openclaw-watcher" -o "$HOME/.agent-insight/openclaw_watcher_client.ts"
 fi
 
 if [ "$INSTALL_JIUWEN" = "true" ]; then
@@ -287,7 +309,7 @@ if [ "$INSTALL_JIUWEN" = "true" ]; then
     JW_HOME="\${JIUWENSWARM_DATA_DIR:-$HOME/.jiuwenswarm}"
     JW_EXT_DIR="$JW_HOME/extensions/agent-insight-observability"
     mkdir -p "$JW_EXT_DIR" "$JW_HOME/config"
-    curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/jiuwen-extension" -o "$JW_EXT_DIR/extension.py"
+    curl -sSf "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/jiuwen-extension" -o "$JW_EXT_DIR/extension.py"
     cat > "$JW_EXT_DIR/extension.yaml" <<'JIUWEN_EXT_EOF'
 id: agent-insight-observability
 name: agent-insight-observability
@@ -353,6 +375,11 @@ echo "AGENT_INSIGHT_OPENCODE_UPLOAD_COOLDOWN_MS=15000" >> "$AGENT_INSIGHT_CONFIG
 echo "✅ Configuration updated at $AGENT_INSIGHT_CONFIG_FILE"
 echo "   AGENT_INSIGHT_HOST=$AGENT_INSIGHT_HOST"
 echo "   AGENT_INSIGHT_API_KEY=********"
+
+if [ "$INSTALL_OPENCODE" = "true" ] || [ "$INSTALL_HERMES" = "true" ] || [ "$INSTALL_OPENCLAW" = "true" ]; then
+    echo "🛡️  Installing Agent RAS runtime (OpenCode / Hermes / OpenClaw)..."
+    install_agent_insight_ras "$AGENT_INSIGHT_HOST" "$AGENT_INSIGHT_API_KEY" || echo "⚠️  Agent RAS installation failed; telemetry setup will continue."
+fi
 
 # 6.4 Configure Agent Insight Hermes plugin
 if [ "$INSTALL_HERMES" = "true" ]; then
@@ -546,12 +573,17 @@ fi
 
 # 10. Final Summary
 echo ""
-echo "🌟 Agent-Insight Telemetry: READY"
+SETUP_STATUS="READY"
+if [ "$INSTALL_OPENCODE" = "true" ] && [ "\${OPENCODE_SETUP_OK:-false}" != "true" ]; then SETUP_STATUS="PARTIAL"; fi
+echo "🌟 Agent-Insight Telemetry: $SETUP_STATUS"
 echo "------------------------------------------------"
 echo "Installed Components:"
-if [ "$INSTALL_OPENCODE" = "true" ]; then
+if [ "$INSTALL_OPENCODE" = "true" ] && [ "\${OPENCODE_SETUP_OK:-false}" = "true" ]; then
     echo "  ✅ OpenCode Plugin: $OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.ts"
     echo "  ✅ OpenCode Command: ~/.config/opencode/commands/si-optimizer.md"
+fi
+if [ "$INSTALL_OPENCODE" = "true" ] && [ "\${OPENCODE_SETUP_OK:-false}" != "true" ]; then
+    echo "  ❌ OpenCode telemetry installation incomplete"
 fi
 if [ "$INSTALL_CLAUDE" = "true" ]; then
     echo "  ✅ Claude Code OTel: ~/.agent-insight/claude_otel_env.sh"
@@ -605,7 +637,7 @@ echo "------------------------------------------------"
     });
 }
 
-function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: string): NextResponse {
+function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: string, packageSpec: string): NextResponse {
     const script = [
         '# =============================================================================',
         '# Skill-insight Auto Setup (Non-Interactive) - PowerShell',
@@ -614,6 +646,7 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '$AGENT_INSIGHT_HOST = "' + hostParam + '"',
         '$AGENT_INSIGHT_BASE_URL = "' + baseUrl + '"',
         '$AGENT_INSIGHT_API_KEY = "' + apiKey + '"',
+        '$AGENT_INSIGHT_PACKAGE_SPEC = "' + powerShellDoubleQuoted(packageSpec) + '"',
         '',
         'Write-Host "🚀 Fetching Skill-insight telemetry components from $AGENT_INSIGHT_BASE_URL..."',
         '',
@@ -780,12 +813,12 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    Remove-Item -Path (Join-Path $opencodeConfigDir "plugins\\Witty-Skill-Insight.ts") -Force -ErrorAction SilentlyContinue',
         '    Remove-Item -Path (Join-Path $opencodePluginsDir "Skill-Insight.ts") -Force -ErrorAction SilentlyContinue',
         '    Remove-Item -Path (Join-Path $opencodePluginsDir "Witty-Skill-Insight.ts") -Force -ErrorAction SilentlyContinue',
-        '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/setup/opencode" -OutFile (Join-Path $opencodeConfigDir "plugins\\Witty-Skill-Insight.ts")',
+        '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/opencode" -OutFile (Join-Path $opencodeConfigDir "plugins\\Witty-Skill-Insight.ts")',
         '    Write-Host "⏬ Downloading OpenCode Uploader..."',
-        '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/setup/opencode-uploader" -OutFile (Join-Path $skillInsightDir "opencode_uploader_client.js")',
+        '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/opencode-uploader" -OutFile (Join-Path $skillInsightDir "opencode_uploader_client.js")',
         '    Write-Host "⏬ Downloading OpenCode TUI Plugin..."',
         '    $tuiPluginPath = Join-Path $opencodeConfigDir "plugins\\Witty-Skill-Insight.tui.tsx"',
-        '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/setup/opencode-tui" -OutFile $tuiPluginPath',
+        '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/opencode-tui" -OutFile $tuiPluginPath',
         '    $tuiConfigFile = Join-Path $opencodeConfigDir "tui.json"',
         '    try {',
         '        $data = @{}',
@@ -810,7 +843,7 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    $hermesHome = if ($env:HERMES_HOME) { $env:HERMES_HOME } else { Join-Path $env:USERPROFILE ".hermes" }',
         '    $hermesPluginDir = Join-Path $hermesHome "plugins\\agent_insight_hermes"',
         '    New-Item -ItemType Directory -Path $hermesPluginDir -Force | Out-Null',
-        '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/setup/hermes-plugin" -OutFile (Join-Path $hermesPluginDir "__init__.py")',
+        '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/hermes-plugin" -OutFile (Join-Path $hermesPluginDir "__init__.py")',
         '    @("name: agent_insight_hermes", "version: 0.2.0", "description: Agent Insight telemetry for Hermes", "provides_hooks:", "  - pre_llm_call", "  - post_llm_call", "  - pre_api_request", "  - post_api_request", "  - api_request_error", "  - pre_tool_call", "  - post_tool_call", "  - subagent_start", "  - subagent_stop", "  - on_session_end") | Set-Content -Path (Join-Path $hermesPluginDir "plugin.yaml") -Encoding UTF8',
         '    $hermesCmd = Get-Command hermes -ErrorAction SilentlyContinue',
         '    if ($hermesCmd) {',
@@ -822,7 +855,7 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '',
         'if ($INSTALL_OPENCLAW) {',
         '    Write-Host "⏬ Downloading OpenClaw Watcher..."',
-        '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/setup/openclaw-watcher" -OutFile (Join-Path $skillInsightDir "openclaw_watcher_client.ts")',
+        '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/openclaw-watcher" -OutFile (Join-Path $skillInsightDir "openclaw_watcher_client.ts")',
         '}',
         '',
         'if ($INSTALL_JIUWEN) {',
@@ -831,7 +864,7 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    $jwExtDir = Join-Path $jwHome "extensions\\agent-insight-observability"',
         '    New-Item -ItemType Directory -Path $jwExtDir -Force | Out-Null',
         '    New-Item -ItemType Directory -Path (Join-Path $jwHome "config") -Force | Out-Null',
-        '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/setup/jiuwen-extension" -OutFile (Join-Path $jwExtDir "extension.py")',
+        '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/jiuwen-extension" -OutFile (Join-Path $jwExtDir "extension.py")',
         '    @(\'id: agent-insight-observability\', \'name: agent-insight-observability\', \'version: 0.1.0\', \'description: Zero-code observability onboarding for JiuwenSwarm via agent-core OTLP.\', \'author: agent-insight\', \'min_jiuwenswarm_version: "0.2.0"\', \'dependencies: {}\', \'config_schema:\', \'  type: object\') | Set-Content -Path (Join-Path $jwExtDir "extension.yaml") -Encoding UTF8',
         '    Write-Host "✅ JiuwenSwarm extension installed at $jwExtDir"',
         '}',
@@ -883,6 +916,11 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         'Write-Host "✅ Configuration updated at $AGENT_INSIGHT_CONFIG_FILE"',
         'Write-Host "   AGENT_INSIGHT_HOST=$AGENT_INSIGHT_HOST"',
         'Write-Host "   AGENT_INSIGHT_API_KEY=********"',
+        '',
+        'if ($INSTALL_OPENCODE -or $INSTALL_HERMES -or $INSTALL_OPENCLAW) {',
+        '    Write-Host "🛡️  Agent RAS inproc currently requires Linux/macOS; use WSL on Windows."',
+        '    Write-Host "⚠️  Agent RAS [unsupported]: installation skipped; telemetry setup will continue."',
+        '}',
         '',
         '# 6.4 Configure Agent Insight Hermes plugin',
         'if ($INSTALL_HERMES) {',

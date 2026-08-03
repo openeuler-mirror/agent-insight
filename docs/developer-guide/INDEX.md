@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `147f4ac1b98765c067e46c77480a89bc7ab01b6c` (`147f4ac`) |
-| Branch | `new-dev-07-16` |
-| Date | 2026-07-20T20:31:54+08:00 |
-| Author | openeuler-ci-bot |
-| Subject | `!202 fix: consumer 摄取管线性能三连修——聚合三重闸 + tick 增量读 + checkpoint 内存缓存` |
+| Commit | `c048a80e7ca5df7dd717ab9e69ea953e23872f73` (`c048a80`) |
+| Branch | `dev_agent_ras` |
+| Date | 2026-07-29 |
+| Author | (local WIP: agent-ras inproc migration docs sync) |
+| Subject | `docs: RAS 安装链与 npm 分发（相对 c048a80 的本地 WIP）` |
 
-**如何更新：** `git diff 147f4ac HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff c048a80 HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
@@ -29,7 +29,9 @@
 - [08-design-system.md](08-design-system.md)：视觉设计语言、设计令牌、排版、控件尺寸、UI/UX 审计与漂移检测。机器可读的令牌：[design-tokens.json](design-tokens.json)。
 - [docker-image-release.md](docker-image-release.md)：维护者发布 Docker Hub 多架构镜像、验证 manifest、导出离线 `.tar` 镜像包的流程。
 
-- [09-otlp-attribute-contract.md](09-otlp-attribute-contract.md)：OTLP 属性契约（FR-011），定义 OpenClaw 及其他 OTLP 客户端上报 trace/log 时必须遵守的属性规范。
+- [09-otlp-attribute-contract.md](09-otlp-attribute-contract.md)：OTLP 属性契约（FR-011），定义 OpenClaw 及其他 OTLP 客户端上报 trace/log 时必须遵守的属性规范；含 RAS 旁路 ingest（非 OTLP）说明。
+- 仓根 [`agent_ras/`](../../agent_ras/)：环内可靠性同进程真源（OpenCode L3 inproc）；统一安装入口见 [`scripts/install-ras.js`](../../scripts/install-ras.js)。
+- Agent RAS 文档统一入口：[`docs/agent-ras/`](../agent-ras/README.md)（架构 / 需求设计 / 专题）。
 
 ## Quick lookup
 | 我想要... | 前往 |

@@ -60,9 +60,33 @@
 
 ## Build / test / run
 - **Install**：`npm install`（会运行 `scripts/postinstall.js`）。
-- **Dev**：`bash scripts/restart_dev.sh`（规范方式）或 `npm run dev`——端口 3000。
+- **Agent RAS install**：`node scripts/install-ras.js`（对外命令
+  `npx agent-insight install-ras`）。发布包携带 `agent_ras/` 的功能源码和全部平台适配器，
+  排除测试、缓存、日志与内部设计资料；安装器将运行所需文件复制到
+  `~/.agent-insight/ras/runtime/<fingerprint>/`，再幂等配置 OpenCode。生产安装只装
+  Python 基础包；RAS 开发测试使用 `pip install -e "agent_ras[dev]"`。平台 `start`
+  与源码启动脚本不检查、不安装 Agent 主机 RAS；OpenCode 安装指导是唯一自动安装入口。
+  setup 脚本默认绑定 `${package.name}@${package.version}`，源码/私有包联调可通过
+  `AGENT_INSIGHT_CLIENT_PACKAGE_SPEC` 指向 Agent 主机可访问的 `.tgz` URL。setup
+  使用隔离 cache 的 `npm pack --ignore-scripts` 获取 tarball，校验
+  `scripts/install-ras.js` 与 `agent_ras/pyproject.toml` 后直接运行安装器，避免
+  `npx` 解析整套应用依赖和共享 `_npx` 锁竞争；安装成功后以当前用户 Key 对 RAS GET
+  端点做只读预检。
+- **Client identity**：平台启动仍生成内部 admin key 并保存到 `.admin_api_key`，但只在
+  `~/.agent-insight/.env` 缺少客户端 Key 时初始化它。安装指导已经注册的邮箱用户 Key
+  必须保留，普通 OpenCode telemetry 与 RAS config 使用同一个身份。
+- **RAS SQLite schema preflight**：源码、npm 与 Docker 启动入口在 `prisma db push`
+  前统一执行 `scripts/prepare-ras-sqlite-schema.js`。旧数据库缺少
+  `RasAnomalyEvent.deliveryId` 时，仅补充 nullable 列，并在确认
+  `(taskId, deliveryId)` 无重复数据后创建唯一索引；发现冲突会明确失败，不使用
+  `--accept-data-loss` 绕过迁移警告。
+- **Dev**：`bash scripts/develop_start.sh`——端口 3000。脚本启动 Next 进程后会继续等待
+  `/api/auth/apikey` 真正可用并完成客户端身份同步，默认最长等待 600 秒；冷启动较慢时
+  不会提前把“进程存在”误报成“服务已就绪”。可用
+  `AGENT_INSIGHT_STARTUP_TIMEOUT_SECONDS` 和
+  `AGENT_INSIGHT_STARTUP_REQUEST_TIMEOUT_MS` 调整总等待时间与单次探测超时。
 - **Build**：`npm run build` · **Start (prod)**：`bash scripts/restart.sh` 或 `npm run start`。
-- **Test**：`npm run test`（`node --import tsx --test "test/**/*.test.ts"`）。Skill 生成测试：`npm run test:skill`。
+- **Test**：`npm run test`（`node --import tsx --test "test/**/*.test.ts"`）。Skill 生成测试：`npm run test:skill`。真实模型 E2E 默认跳过；仅在隔离环境中同时设置 `RUN_LIVE_E2E=1` 与对应 API Key 后显式执行，避免默认测试产生外部调用、费用或工作区写入。
 - **Note (environment)**：测试/构建需要 Node ≥ 20（本环境通过 nvm 锁定到 Node 22.17.1；Windows 侧的 Node 会在 esbuild 上失败——请在 WSL 内运行）。
 
 ## Key implementation entry points

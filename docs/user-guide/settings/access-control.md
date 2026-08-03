@@ -18,6 +18,7 @@ description: "生成客户端接入命令并获取当前账号 API Key"
 - 提供当前账号对应的 API Key
 - 展示服务端地址与上报路径等接入参数
 - 为链路采集与数据归属提供统一入口
+- 选择 OpenCode 时，在 Agent 主机安装普通观测插件与同进程 Agent RAS
 
 ## 页面结构
 
@@ -86,9 +87,14 @@ API Key 决定客户端上报数据的身份归属与接入上下文。错误的
 3. 在安装命令区选择目标操作系统。
 4. 复制对应的一键接入命令。
 5. 在目标 Agent 所在运行环境执行该命令。
-6. 按流程提示填入当前 API Key。
+6. 脚本写入当前账号 API Key；选择 OpenCode 时同时安装普通观测插件和 Agent RAS。
 7. 触发一次最小执行。
 8. 在 [链路追踪](../observability/view-traces) 中确认首条 Trace 是否生成。
+
+接入脚本会绑定生成它的 Agent Insight 服务端版本，不直接跟随 npm `latest`。因此普通
+Trace 与 RAS 事件来自同一套客户端组件，并使用同一个账号 API Key。OpenCode 尚未安装时
+也可以先执行接入命令；配置和插件会预先落位，之后安装 OpenCode 即可加载。之后重启
+Agent Insight 只会同步平台地址；已写入的客户端 API Key 不会被内部 `admin` Key 覆盖。
 
 ### 流程二：重新部署或迁移客户端
 

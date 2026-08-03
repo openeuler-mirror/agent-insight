@@ -49,7 +49,7 @@ push 前先 `git remote -v` 确认 fork remote 的实际名（不要假设是 `o
 
 两个层级：
 
-- **必须写设计文档**：涉及数据模型变更（Prisma schema）或新增 API 路由。落到 [`docs/design/<topic>/`](docs/design/)（按 `phase1 需求分析 / phase2 需求设计 / phase3 开发计划` 组织），并在 [需求清单](docs/design/README.md) 追加一行，对齐后再动手。
+- **必须写设计文档**：涉及数据模型变更（Prisma schema）或新增 API 路由。落到 [`docs/design/<topic>/`](docs/design/)（按 `phase1 需求分析 / phase2 需求设计 / phase3 开发计划` 组织），并在 [需求清单](docs/design/README.md) 追加一行，对齐后再动手。**Agent RAS 相关需求**写到 [`docs/agent-ras/design/<topic>/`](docs/agent-ras/design/)，并在 [`docs/agent-ras/design/README.md`](docs/agent-ras/design/README.md) 与全仓 [需求清单](docs/design/README.md) 同步登记。
 - **先讲思路对齐**（不一定写文档）：实现路径有多种合理选择、跨多个模块、需要引入新抽象、或自己感到"这事不止改几行"—— 先简述方案 + 列 trade-off，等用户确认再写代码。用户也会主动说"这是大需求"作为信号。
 
 小改动（bug fix、文案、单文件局部调整）直接动手，事后说明即可。
@@ -94,6 +94,7 @@ push 前先 `git remote -v` 确认 fork remote 的实际名（不要假设是 `o
 
 - `skills/` —— 内置 Skill 定义，每个 skill 一个子目录，含 `SKILL.md`。
 - `docs/developer-guide/` —— 面向开发者 / LLM 的架构与契约指南（入口 [`INDEX.md`](docs/developer-guide/INDEX.md)）；`docs/user-guide/` —— 面向使用者的操作指南；`docs/design/` —— 需求 / 设计文档（见 [需求清单](docs/design/README.md)）。
+- `docs/agent-ras/` —— Agent RAS 文档统一入口（架构、需求设计、专题、参考与示例）；源码在仓根 `agent_ras/`。
 - `features/` —— 单 feature 的设计草稿（比 plan 更轻量）。
 - `scripts/develop_start.sh` —— 验证流程要用，不要换别的方式启 dev server。
 

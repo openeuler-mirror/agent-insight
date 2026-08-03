@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-ras"
+version = "0.1.0"
+description = "Agent RAS — in-loop reliability detection and recovery"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["pydantic>=2,<3"]
+
+[project.optional-dependencies]
+openjiuwen = [
+  # Provided by the openjiuwen / agent-core environment; declared for docs.
+]
+dev = ["pytest>=7", "pytest-asyncio>=0.21"]
+
+[tool.setuptools.packages.find]
+include = ["core*", "platform_adapter*", "ras_embed*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]
+filterwarnings = [
+  "ignore:Support for class-based `config` is deprecated.*:pydantic.warnings.PydanticDeprecatedSince20:openjiuwen\\..*",
+]

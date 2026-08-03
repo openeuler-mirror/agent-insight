@@ -138,6 +138,14 @@ docker build --pull --build-arg AGENT_INSIGHT_VERSION=0.5.0 -t agent-insight:0.5
 
 容器只负责运行 Agent Insight 服务端。OpenCode、Claude Code、OpenClaw、LangChain 等框架的接入命令仍应在对应 Agent 实际运行的机器或容器里执行。当前仓库里的这份 `Dockerfile` 走 **SQLite 优先** 路线，不内置 OpenGauss 运行时依赖。
 
+OpenCode 接入命令还会在 Agent 所在机器使用与服务端匹配的 Agent Insight 包版本执行
+`install-ras`，把 Agent RAS runtime 安装到 `~/.agent-insight/ras/runtime/`。
+安装脚本通过隔离的 npm cache 只下载发布 `.tgz`，不会用 `npx` 临时安装整套看板依赖；
+安装完成后还会只读预检 RAS 事件接收地址，提前完成源码开发服务的路由编译并验证当前
+API Key。预检失败会明确告警，但不会阻断普通链路插件和看板服务。
+容器化部署看板时，不要在看板容器内安装 OpenCode RAS 插件；插件必须和 OpenCode
+位于同一运行环境。
+
 如果你要使用 `opencode-live` 触发分析、轨迹评测等会由服务端**本机拉起 opencode** 的能力，请确保当前 `Dockerfile` 构建出的镜像完整保留 npm 依赖，并让容器能够访问模型提供商网络；这些评测不会复用外部宿主机上另开的 opencode 进程。
 
 ---
@@ -158,6 +166,12 @@ docker build --pull --build-arg AGENT_INSIGHT_VERSION=0.5.0 -t agent-insight:0.5
 > 如果你是开发者，且希望直接在代码里手工埋点，可以直接查看文末的
 > “可选：通过 SDK 直接接入” 一节。
 
+> **Agent RAS 前置条件**
+>
+> Linux、WSL 或 macOS 上需要 Python 3.10+、pip 和共享 libpython。OpenCode 安装指导
+> 默认安装 RAS，可设置 `AGENT_INSIGHT_RAS=0` 跳过。原生 Windows 暂不启用 inproc，
+> 请在 WSL 中运行 OpenCode 和安装命令。
+
 ---
 
 ## 步骤一：登录并确认 Workspace
@@ -168,7 +182,11 @@ docker build --pull --build-arg AGENT_INSIGHT_VERSION=0.5.0 -t agent-insight:0.5
      <img src="../images/home.png" alt="Agent Insight 看板首页" style="width: 100%; max-width: 1120px; height: auto; border: 1px solid #e5e7eb; border-radius: 12px; background: #ffffff;" />
    </p>
 
-2. 完成登录，进入默认 Workspace。
+2. 使用邮箱完成登录，进入默认 Workspace。
+   OpenCode 上报使用的 API Key 必须属于这个邮箱账号，否则普通链路与可靠性链路都会因
+   用户归属不同而不可见。本地 keyless 开发模式如设置
+   `AGENT_INSIGHT_DEFAULT_INGEST_USER`，其值也应使用同一个邮箱，不要填无法在登录页使用的
+   `admin` 别名。
 3. 确认左侧导航中可以看到以下模块：
    - **Agent 管理**
    - **运行观测**
@@ -243,6 +261,9 @@ Agent 名称要和客户端中的实际名称一致，例如 `opencode` 默认�
    </p>
 
 安装命令会自动写入当前平台地址和 API Key，比手动配置更直接。
+选择 OpenCode 时，同一个脚本会继续安装普通链路采集插件和 Agent RAS；两者使用同一个
+当前登录账号 API Key。之后重启 Agent Insight 只会同步平台地址，不会把这个客户端
+身份覆盖成内部 `admin` 账号。
 
 你也可以选择 **OpenClaw** 作为客户端集成方式（CLI sidecar 模式），它会自动包裹你的 Agent 进程并按 OTLP/HTTP 协议上报 Trace，无需手动埋点。
 安装脚本末尾会输出纯配置环境变量块（env block），按指引设置即可启用 OpenClaw OTel 上报。

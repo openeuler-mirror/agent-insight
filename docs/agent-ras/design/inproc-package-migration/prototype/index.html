@@ -1,0 +1,49 @@
+<!--
+  原型 v3.4 — 独立 AgentRAS 可靠性分组；Trace 上不再标识 RAS
+-->
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Agent Insight — 对照原型</title>
+  <link rel="stylesheet" href="styles.css?v=3.3" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-brand">
+        <img class="brand-logo light" src="assets/brand/logo-horizontal-light.svg" alt="Agent Insight" width="180" height="45" />
+        <img class="brand-logo dark" src="assets/brand/logo-horizontal-dark.svg" alt="Agent Insight" width="180" height="45" />
+      </div>
+
+      <div class="sidebar-scroll" id="sidebarNav"></div>
+
+      <div class="sidebar-footer">
+        <div class="footer-btns">
+          <button type="button" class="chip-btn" id="btnTheme" title="切换主题">☾</button>
+          <button type="button" class="chip-btn" id="btnLocale" title="语言">EN</button>
+        </div>
+        <div class="user-chip">
+          <span class="avatar">D</span>
+          <span class="user-name">demo</span>
+        </div>
+      </div>
+    </aside>
+
+    <div class="content-col">
+      <div id="viewRoot" class="view-root"></div>
+    </div>
+  </div>
+
+  <div class="proto-banner" title="静态对照原型 · 假数据">
+    PROTOTYPE v3.4
+    <button type="button" id="btnRel" title="显示/隐藏与 RAS 对照说明">对照 OFF</button>
+    <a href="../phase2-requirements-design.md">方案</a>
+  </div>
+
+  <script src="ui.js?v=3.4"></script>
+  <script src="pages.js?v=3.4"></script>
+  <script src="app.js?v=3.4"></script>
+</body>
+</html>

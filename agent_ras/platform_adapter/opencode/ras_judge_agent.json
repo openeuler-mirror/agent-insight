@@ -1,0 +1,21 @@
+{
+  "ras-judge": {
+    "description": "Agent RAS L3 semantic judge (JSON only, no tools)",
+    "mode": "subagent",
+    "hidden": true,
+    "steps": 2,
+    "temperature": 0.1,
+    "permission": {
+      "edit": "deny",
+      "bash": "deny",
+      "task": "deny",
+      "skill": "deny",
+      "read": "deny",
+      "glob": "deny",
+      "grep": "deny",
+      "list": "deny",
+      "webfetch": "deny",
+      "websearch": "deny"
+    }
+  }
+}

@@ -820,6 +820,35 @@ model InfraSource {
   @@index([endpoint])
 }
 
+/// RAS 环内事件旁路落库（对齐 ingest 规范；不进 OTLP spool）。
+/// taskId = witty.session.id = Execution.taskId / Session.taskId。
+model RasAnomalyEvent {
+  id            String   @id @default(cuid())
+  deliveryId    String
+  type          String
+  taskId        String
+  rasSessionKey String?
+  platform      String?
+  framework     String?
+  anomalyKind   String?
+  severity      String?
+  summary       String?
+  actionTypes   String?
+  payloadJson   String
+  executionId   String?
+  ts            DateTime
+  user          String?
+  createdAt     DateTime @default(now())
+
+  @@unique([taskId, deliveryId])
+  @@index([taskId, ts])
+  @@index([user, ts])
+  @@index([anomalyKind, ts])
+  @@index([severity, ts])
+  @@index([type, ts])
+  @@index([executionId])
+}
+
 // 一次采样 = 某源在 T 时刻的状态。counters 存累计值（查询时算 rate），histogram 存 buckets/sum/count。
 // gauges/counters/histograms/waitingByReason 都以 JSON 字符串落库（SQLite 无 JSON 列）。
 model InfraMetricSample {

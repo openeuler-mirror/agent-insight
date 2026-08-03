@@ -58,6 +58,7 @@ const ICON_WEBHOOK = (<><circle cx="3.5" cy="10" r="1.6" /><circle cx="10.5" cy=
 const ICON_HEALTH = <path d="M2 7h2.5l1.5-3 2 6 1.5-3H12" />;
 const ICON_INSTALL = (<><path d="M7 1.5v7M4 6l3 3 3-3" /><path d="M2 11h10" /></>);
 const ICON_WEB = (<><circle cx="7" cy="7" r="5" /><path d="M2 7h10M7 2a8 8 0 0 1 0 10M7 2a8 8 0 0 0 0 10" /></>);
+const ICON_RAS = <path d="M7 1.5L2 4v4.5c0 3 2.5 4.5 5 5 2.5-.5 5-2 5-5V4L7 1.5z" />;
 
 const SKILLS_TREE: NavItem = {
     key: 'skills',
@@ -68,6 +69,17 @@ const SKILLS_TREE: NavItem = {
         { key: 'skill-generator', href: '/skill-generator', labelKey: 'nav.skillGenerator', iconPath: ICON_PLAYGROUND },
         { key: 'skill-eval', href: '/skill-eval', labelKey: 'nav.skillEval', iconPath: ICON_DEBUG },
         { key: 'skill-opt', href: '/skill-opt', labelKey: 'nav.skillOpt', iconPath: ICON_SKILLS },
+    ],
+};
+
+const RAS_TREE: NavItem = {
+    key: 'agent-ras',
+    labelKey: 'nav.groupAgentRas',
+    iconPath: ICON_RAS,
+    children: [
+        { key: 'agent-ras-trace', href: '/agent-ras/trace', labelKey: 'nav.rasTrace', iconPath: ICON_TRACE, matchPrefixes: ['/agent-ras/trace'] },
+        { key: 'agent-ras-fault-modes', href: '/agent-ras/fault-modes', labelKey: 'nav.rasFaultModes', iconPath: ICON_FAULT, matchPrefixes: ['/agent-ras/fault-modes'] },
+        { key: 'agent-ras-fault-injection', href: '/agent-ras/fault-injection', labelKey: 'nav.rasFaultInjection', iconPath: ICON_FAULT, matchPrefixes: ['/agent-ras/fault-injection'] },
     ],
 };
 
@@ -105,6 +117,7 @@ const AGENT_GROUP: NavGroup = {
         { key: 'dashboard', href: '/dashboard', labelKey: 'nav.dashboard', iconPath: ICON_DASHBOARD },
         { key: 'agents', href: '/agents', labelKey: 'nav.agents', iconPath: ICON_AGENT },
         OBSERVE_TREE,
+        RAS_TREE,
         EVAL_TREE,
         SKILLS_TREE,
     ],
@@ -154,7 +167,7 @@ export function AppSidebar() {
     const { isCollapsed } = useSidebar();
     const [showUserMenu, setShowUserMenu] = useState(false);
     const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
-    const [expandedTrees, setExpandedTrees] = useState<Set<string>>(new Set(['skills', 'eval-center', 'observe']));
+    const [expandedTrees, setExpandedTrees] = useState<Set<string>>(new Set(['skills', 'eval-center', 'observe', 'agent-ras']));
 
     useEffect(() => {
         setExpandedTrees(prev => {

@@ -47,6 +47,7 @@ export interface InteractionPart {
 }
 
 export interface RawInteraction {
+    messageID?: string;
     role: InteractionRole;
     content?: string;
     timestamp?: number | string;
@@ -83,7 +84,7 @@ export interface RawInteraction {
     parts?: InteractionPart[];
 }
 
-export type CallKind = 'llm' | 'tool' | 'skill' | 'task' | 'chain' | 'user';
+export type CallKind = 'llm' | 'tool' | 'skill' | 'task' | 'chain' | 'user' | 'ras';
 
 export interface AgentEvent {
     kind: CallKind;

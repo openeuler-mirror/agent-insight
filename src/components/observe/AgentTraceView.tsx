@@ -1,6 +1,6 @@
 'use client';
 
-import React, { ReactNode, useEffect, useMemo, useState } from 'react';
+import React, { ReactNode, useEffect, useMemo, useState, useCallback } from 'react';
 import { Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Copy as CopyIcon, Search as SearchIcon, X as XIcon, AlertTriangle as AlertIcon, SlidersHorizontal as FiltersIcon, Brain as BrainIcon, MessageSquare as MessageIcon, Wrench as WrenchIcon } from 'lucide-react';
 import { parseAsString, useQueryState } from 'nuqs';
 import { toast } from 'sonner';
@@ -28,6 +28,11 @@ import {
     walkTree,
 } from '@/lib/engine/observability/agent-trace';
 import { buildLangfuseAgentTrace } from '@/lib/engine/observability/langfuse-agent-trace';
+import {
+    findRasMarkersForEvent,
+    type RasTraceMarker,
+} from '@/lib/ingest/ras/trace-markers';
+import { interleaveRasActions } from '@/lib/ingest/ras/delivery-link';
 import {
     extractSkillsWithVersionsFromClaudeSession,
     extractSkillsWithVersionsFromHermesSession,
@@ -67,6 +72,12 @@ const KIND_META: Record<string, { label: string; chip: string; bar: string; text
     skill: { label: 'SKILL', ...SPAN_KIND_CLASSES.skill },
     llm:   { label: 'LLM',   ...SPAN_KIND_CLASSES.llm },
     user:  { label: 'USER',  ...SPAN_KIND_CLASSES.user },
+    ras: {
+        label: 'RAS',
+        chip: 'bg-error-subtle text-error border-error-border',
+        bar: 'bg-error',
+        text: 'text-error',
+    },
 };
 
 // Single source of truth for span-type chips (replaces the legacy inline-styled span badges).
@@ -87,8 +98,179 @@ function KindBadge({ kind, size = 'xs', className }: { kind: string; size?: 'xs'
     );
 }
 
+function rasSeverityClass(severity: string): string {
+    if (severity === 'critical' || severity === 'high') {
+        return 'border-error-border bg-error-subtle text-error';
+    }
+    if (severity === 'medium') {
+        return 'border-warning-border bg-warning-subtle text-warning';
+    }
+    return 'border-border bg-background-secondary text-foreground-secondary';
+}
+
+function RasNodeBadge({
+    markers,
+    compact = false,
+    className,
+}: {
+    markers: RasAnomalyMarker[];
+    compact?: boolean;
+    className?: string;
+}) {
+    const first = markers[0];
+    if (!first) return null;
+    const title = markers
+        .map(marker => `${marker.label} (${marker.severity})${marker.summary ? `: ${marker.summary}` : ''}`)
+        .join('\n');
+    return (
+        <span
+            title={title}
+            aria-label={title}
+            className={cn(
+                'inline-flex max-w-44 items-center gap-1 rounded-sm border px-1.5 py-0.5 align-middle text-[10px] font-semibold leading-none',
+                rasSeverityClass(first.severity),
+                className,
+            )}
+        >
+            <AlertIcon className="size-3 shrink-0" aria-hidden />
+            <span className="truncate">
+                {compact ? 'RAS' : `RAS · ${first.label}`}
+            </span>
+            {markers.length > 1 && <span className="shrink-0 tabular-nums">+{markers.length - 1}</span>}
+        </span>
+    );
+}
+
+function RasReliabilityDetails({ markers }: { markers: RasAnomalyMarker[] }) {
+    const { t: tt } = useLocale();
+    if (!markers.length) return null;
+    return (
+        <section
+            className="rounded-md border border-error-border bg-error-subtle p-3"
+            aria-label={tt('traceTree.rasEvents')}
+        >
+            <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-error">
+                <AlertIcon className="size-4" aria-hidden />
+                {tt('traceTree.rasEvents')}
+                <span className="rounded-full bg-background px-1.5 py-0.5 text-[10px] tabular-nums text-foreground-secondary">
+                    {markers.length}
+                </span>
+            </div>
+            <div className="space-y-2.5">
+                {markers.map(marker => {
+                    const steps = interleaveRasActions(marker.actions, marker.actionResults);
+                    return (
+                    <article key={marker.id} className="rounded-md border border-error-border bg-card p-2.5">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                            <RasNodeBadge markers={[marker]} />
+                            <span className="text-[11px] text-foreground-muted">
+                                {new Date(marker.ts).toLocaleString()}
+                            </span>
+                        </div>
+                        {marker.summary && (
+                            <p className="mt-2 text-xs leading-relaxed text-foreground-secondary">
+                                {marker.summary}
+                            </p>
+                        )}
+                        {steps.length > 0 && (
+                            <div className="mt-2 space-y-1.5">
+                                <div className="text-[10px] font-semibold uppercase tracking-wider text-foreground-muted">
+                                    {tt('traceTree.rasRequestedActions')}
+                                </div>
+                                {steps.map((step, index) => (
+                                    step.kind === 'action' ? (
+                                        <div
+                                            key={`action-${step.action.type}-${index}`}
+                                            className="rounded-md border border-border bg-background-secondary p-2"
+                                        >
+                                            <code className="text-[11px] font-semibold text-foreground">
+                                                {step.action.type}
+                                            </code>
+                                            {step.action.message && (
+                                                <pre className="mt-1.5 max-h-48 overflow-auto whitespace-pre-wrap break-words font-sans text-xs leading-relaxed text-foreground-secondary">
+                                                    {step.action.message}
+                                                </pre>
+                                            )}
+                                        </div>
+                                    ) : (
+                                        <div
+                                            key={`result-${step.result.action}-${step.result.ts}-${index}`}
+                                            className="flex flex-wrap items-center gap-1.5 text-xs text-foreground-secondary pl-1"
+                                        >
+                                            {step.result.ok
+                                                ? <Check className="size-3.5 text-success" aria-hidden />
+                                                : <XIcon className="size-3.5 text-error" aria-hidden />}
+                                            <code>{step.result.action}</code>
+                                            <span>
+                                                {step.result.ok
+                                                    ? tt('traceTree.rasActionSucceeded')
+                                                    : tt('traceTree.rasActionFailed')}
+                                            </span>
+                                            {step.result.channel && (
+                                                <span className="text-foreground-muted">· {step.result.channel}</span>
+                                            )}
+                                            {step.result.error && (
+                                                <span className="basis-full pl-5 text-error">{step.result.error}</span>
+                                            )}
+                                        </div>
+                                    )
+                                ))}
+                            </div>
+                        )}
+                    </article>
+                    );
+                })}
+            </div>
+        </section>
+    );
+}
+
+function deliveryActionTypeByMessageId(markers: RasTraceMarker[]): Map<string, string> {
+    const map = new Map<string, string>();
+    for (const marker of markers) {
+        for (const result of marker.actionResults) {
+            if (result.deliveryMessageId) {
+                map.set(result.deliveryMessageId, result.action);
+            }
+        }
+        for (const messageId of marker.deliveryMessageIds) {
+            if (!map.has(messageId)) map.set(messageId, 'emit_notice');
+        }
+    }
+    return map;
+}
+
+function reclassifyRasDeliveryEvents(
+    node: AgentNode,
+    deliveryIds: Set<string>,
+    actionByMessageId: Map<string, string>,
+): AgentNode {
+    return {
+        ...node,
+        events: node.events.map((event) => {
+            const messageId = event.interaction?.messageID;
+            if (
+                (event.kind === 'user' || event.kind === 'ras')
+                && messageId
+                && deliveryIds.has(messageId)
+            ) {
+                const actionType = actionByMessageId.get(messageId) || 'emit_notice';
+                return {
+                    ...event,
+                    kind: 'ras' as const,
+                    name: actionType,
+                    summary: event.summary || event.interaction.content || actionType,
+                };
+            }
+            return event;
+        }),
+        children: node.children.map((child) =>
+            reclassifyRasDeliveryEvents(child, deliveryIds, actionByMessageId)),
+    };
+}
+
 type DetailTab = 'timeline' | 'prompt' | 'overview' | 'skills' | 'infra';
-type EventTypeFilter = 'all' | 'llm' | 'tool' | 'skill' | 'task' | 'chain' | 'user';
+type EventTypeFilter = 'all' | 'llm' | 'tool' | 'skill' | 'task' | 'chain' | 'user' | 'ras';
 
 interface TraceSkillCall {
     name: string;
@@ -337,6 +519,9 @@ interface TraceCtxValue {
     minDurationMs: number;
     minTokenK: number;
     slowOnly: boolean;
+    anomalyOnly: boolean;
+    findEventAnomalies?: (event: AgentEvent) => RasAnomalyMarker[];
+    findNodeAnomalies?: (node: AgentNode) => RasAnomalyMarker[];
     onJumpToKey: (key: string) => void;
     topNDuration: SpanInfo[];
     topNTokens: SpanInfo[];
@@ -347,12 +532,22 @@ interface TraceCtxValue {
 
 const defaultCtx: TraceCtxValue = {
     searchQuery: '', matchedKeys: new Set(), activeMatchKey: null,
-    treeKindFilter: 'all', minDurationMs: 0, minTokenK: 0, slowOnly: false,
+    treeKindFilter: 'all', minDurationMs: 0, minTokenK: 0, slowOnly: false, anomalyOnly: false,
     onJumpToKey: () => {},
     topNDuration: [], topNTokens: [], slowNodesList: [],
     onSubagentNavigate: undefined,
 };
 const TraceCtx = React.createContext<TraceCtxValue>(defaultCtx);
+
+export type RasAnomalyMarker = RasTraceMarker;
+
+export interface RasTimelineEvent {
+    ts: number;
+    type: string;
+    label: string;
+    summary?: string;
+    payload?: unknown;
+}
 
 export interface AgentTraceViewProps {
     interactions: RawInteraction[];
@@ -370,6 +565,17 @@ export interface AgentTraceViewProps {
     onSubagentNavigate?: (sessionId: string) => void;
     /** 当前 trace 对应的 Execution.id（= upload_id）。用于 Infra tab 做会话级 infra 关联；不传则该 tab 提示无法关联。 */
     rootExecutionId?: string;
+    /**
+     * Stable identity for selection + lazy-load coalescing.
+     * Prefer taskId when rootExecutionId may flip (e.g. RAS page first passes taskId,
+     * then swaps to Execution cuid once ras-events returns) — that flip used to reset
+     * selectedKey back to the root node after every early click.
+     */
+    traceKey?: string;
+    /** RAS 异常事件标记列表，用于在链路中高亮异常节点 */
+    anomalies?: RasAnomalyMarker[];
+    /** RAS 告警、处置请求和处置结果，合并到根 Agent 行为时间线 */
+    reliabilityEvents?: RasTimelineEvent[];
 }
 
 export default function AgentTraceView({
@@ -379,6 +585,9 @@ export default function AgentTraceView({
     loadAllInteractions,
     onSubagentNavigate,
     rootExecutionId,
+    traceKey,
+    anomalies,
+    reliabilityEvents,
 }: AgentTraceViewProps) {
     const { user } = useAuth();
     const { t: tt } = useLocale();
@@ -386,15 +595,18 @@ export default function AgentTraceView({
     const [interactionLoadError, setInteractionLoadError] = useState<string | null>(null);
     const [fullInteractionLoadError, setFullInteractionLoadError] = useState<string | null>(null);
     const fullLoadPromiseRef = React.useRef<Promise<RawInteraction[]> | null>(null);
-    const previousRootExecutionIdRef = React.useRef(rootExecutionId);
+    const stableTraceKey = traceKey
+        ?? rootExecutionId
+        ?? `anon:${sourceInteractions[0]?.timestamp ?? ''}:${sourceInteractions.length}`;
+    const previousTraceKeyRef = React.useRef(stableTraceKey);
     const langfuseProjection = useMemo(
         () => langfuseTraceNodes?.length ? buildLangfuseAgentTrace(langfuseTraceNodes) : null,
         [langfuseTraceNodes],
     );
 
     useEffect(() => {
-        const traceChanged = previousRootExecutionIdRef.current !== rootExecutionId;
-        previousRootExecutionIdRef.current = rootExecutionId;
+        const traceChanged = previousTraceKeyRef.current !== stableTraceKey;
+        previousTraceKeyRef.current = stableTraceKey;
         fullLoadPromiseRef.current = null;
         setInteractionLoadError(null);
         setFullInteractionLoadError(null);
@@ -405,17 +617,17 @@ export default function AgentTraceView({
                 return loaded && !loaded._payloadDeferred ? loaded : item;
             });
         });
-    }, [sourceInteractions, rootExecutionId]);
+    }, [sourceInteractions, stableTraceKey]);
 
     const ensureInteractionLoaded = React.useCallback(async (index: number) => {
         if (langfuseProjection) return;
         const current = interactions[index] as (RawInteraction & { _payloadDeferred?: boolean }) | undefined;
         if (!current?._payloadDeferred || !loadInteraction) return;
-        const requestedTraceId = previousRootExecutionIdRef.current;
+        const requestedTraceId = previousTraceKeyRef.current;
         setInteractionLoadError(null);
         try {
             const loaded = await loadInteraction(index);
-            if (previousRootExecutionIdRef.current !== requestedTraceId) return;
+            if (previousTraceKeyRef.current !== requestedTraceId) return;
             setInteractions(previous => previous.map((item, itemIndex) => itemIndex === index ? loaded : item));
         } catch (error) {
             setInteractionLoadError(error instanceof Error ? error.message : 'Failed to load interaction');
@@ -429,16 +641,15 @@ export default function AgentTraceView({
             return interactions;
         }
         if (!fullLoadPromiseRef.current) {
-            const requestedTraceId = previousRootExecutionIdRef.current;
+            const requestedTraceId = previousTraceKeyRef.current;
             setFullInteractionLoadError(null);
-            let promise: Promise<RawInteraction[]>;
-            promise = loadAllInteractions()
+            const promise: Promise<RawInteraction[]> = loadAllInteractions()
                 .then(loaded => {
-                    if (previousRootExecutionIdRef.current === requestedTraceId) setInteractions(loaded);
+                    if (previousTraceKeyRef.current === requestedTraceId) setInteractions(loaded);
                     return loaded;
                 })
                 .catch(error => {
-                    if (previousRootExecutionIdRef.current === requestedTraceId) {
+                    if (previousTraceKeyRef.current === requestedTraceId) {
                         setFullInteractionLoadError(error instanceof Error ? error.message : 'Failed to load full trace');
                     }
                     return interactions;
@@ -452,10 +663,42 @@ export default function AgentTraceView({
     }, [interactions, langfuseProjection, loadAllInteractions]);
 
     const displayInteractions = langfuseProjection?.interactions || interactions;
-    const tree = useMemo(
-        () => langfuseProjection?.tree || buildAgentCallTree(interactions || []),
-        [interactions, langfuseProjection],
-    );
+    const tree = useMemo(() => {
+        let baseTree = langfuseProjection?.tree || buildAgentCallTree(interactions || []);
+        if (baseTree && anomalies?.length) {
+            const deliveryIds = new Set(
+                anomalies.flatMap((marker) => marker.deliveryMessageIds || []),
+            );
+            if (deliveryIds.size) {
+                baseTree = reclassifyRasDeliveryEvents(
+                    baseTree,
+                    deliveryIds,
+                    deliveryActionTypeByMessageId(anomalies),
+                );
+            }
+        }
+        if (!baseTree || !reliabilityEvents?.length) return baseTree;
+        const rasEvents: AgentEvent[] = reliabilityEvents.map((event) => ({
+            kind: 'ras',
+            name: event.label,
+            summary: event.summary || event.label,
+            args: event.payload,
+            startedAt: event.ts,
+            completedAt: event.ts,
+            interaction: {
+                role: 'ras',
+                content: event.summary || event.label,
+                timestamp: event.ts,
+            },
+            interactionIndex: -1,
+        }));
+        return {
+            ...baseTree,
+            events: [...baseTree.events, ...rasEvents].sort(
+                (a, b) => (a.startedAt || 0) - (b.startedAt || 0),
+            ),
+        };
+    }, [anomalies, interactions, langfuseProjection, reliabilityEvents]);
     const nodeMap = useMemo(() => tree ? buildNodeMap(tree) : new Map<string, AgentNode>(), [tree]);
     const traceSkillCalls = useMemo(() => collectTraceSkillCalls(displayInteractions || []), [displayInteractions]);
     const [managedSkillAssets, setManagedSkillAssets] = useState<ManagedSkillAsset[]>([]);
@@ -472,6 +715,9 @@ export default function AgentTraceView({
         setSlowOnlyParam(next ? '1' : null);
     };
 
+    // RAS anomaly-only filter (not persisted to URL; local-only toggle)
+    const [anomalyOnly, setAnomalyOnly] = useState(false);
+
     // ── Search + extended filter state ──────────────────────────────────────
     const [searchQuery, setSearchQuery] = useState('');
     const [searchMatchIdx, setSearchMatchIdx] = useState(0);
@@ -482,6 +728,10 @@ export default function AgentTraceView({
     const searchInputRef = React.useRef<HTMLInputElement>(null);
 
     const defaultExpandedKeys = useMemo(() => tree ? buildDefaultExpandedKeys(tree) : new Set<string>(), [tree]);
+    // Only reset selection/expansion when stableTraceKey changes — not when `tree`
+    // is rebuilt (lazy payload hydrate / RAS delivery reclassify), and not when
+    // rootExecutionId later upgrades from taskId → Execution cuid.
+    const initializedTraceScopeRef = React.useRef<string | null>(null);
 
     useEffect(() => {
         if (traceSkillCalls.length === 0) {
@@ -505,14 +755,19 @@ export default function AgentTraceView({
     }, [traceSkillCalls.length, user]);
 
     useEffect(() => {
-        if (!tree) return;
+        if (!tree) {
+            initializedTraceScopeRef.current = null;
+            return;
+        }
+        if (initializedTraceScopeRef.current === stableTraceKey) return;
+        initializedTraceScopeRef.current = stableTraceKey;
         setSelectedKey(agentKey(tree.id));
         setExpandedKeys(defaultExpandedKeys);
-    }, [tree, defaultExpandedKeys]);
+    }, [tree, defaultExpandedKeys, stableTraceKey]);
 
     const totalStats = useMemo(() => {
         if (!tree) return null;
-        let agents = 0, tasks = 0, chains = 0, tools = 0, skills = 0, llm = 0, tokens = 0;
+        let agents = 0, tasks = 0, chains = 0, tools = 0, skills = 0, llm = 0, ras = 0, tokens = 0;
         walkTree(tree, n => {
             agents++;
             tasks += n.stats.taskCalls;
@@ -520,9 +775,10 @@ export default function AgentTraceView({
             tools += n.stats.toolCalls;
             skills += n.stats.skillCalls;
             llm += n.stats.llmCalls;
+            ras += n.events.filter(event => event.kind === 'ras').length;
             tokens += n.stats.totalTokens;
         });
-        return { agents, tasks, chains, tools, skills, llm, tokens };
+        return { agents, tasks, chains, tools, skills, llm, ras, tokens };
     }, [tree]);
 
     const totalStart = tree?.startedAt;
@@ -616,6 +872,43 @@ export default function AgentTraceView({
         if (tree) walkTree(tree, node => { if (getStatus(node) !== 'ok') n++; });
         return n;
     }, [tree]);
+
+    // ── RAS anomaly markers ──────────────────────────────────────────────────
+    const findAnomaliesInRange = useCallback((startMs?: number, endMs?: number): RasAnomalyMarker[] => {
+        if (!anomalies?.length || !startMs) return [];
+        return anomalies.filter((anomaly) => {
+            if (anomaly.messageId || anomaly.partId || anomaly.callId) return false;
+            const end = (endMs != null && endMs > startMs) ? endMs : startMs + 1000;
+            return anomaly.ts >= startMs && anomaly.ts <= end;
+        });
+    }, [anomalies]);
+
+    const findEventAnomalies = useCallback((event: AgentEvent): RasAnomalyMarker[] => {
+        if (!anomalies?.length) return [];
+        const exact = findRasMarkersForEvent(event, anomalies);
+        const fallback = findAnomaliesInRange(event.startedAt, event.completedAt);
+        return [...new Map([...exact, ...fallback].map(marker => [marker.id, marker])).values()];
+    }, [anomalies, findAnomaliesInRange]);
+
+    const findNodeAnomalies = useCallback((node: AgentNode): RasAnomalyMarker[] => {
+        const matches = new Map<string, RasAnomalyMarker>();
+        for (const event of node.events) {
+            for (const marker of findEventAnomalies(event)) matches.set(marker.id, marker);
+        }
+        for (const marker of findAnomaliesInRange(node.startedAt, node.endedAt)) {
+            matches.set(marker.id, marker);
+        }
+        return [...matches.values()];
+    }, [findAnomaliesInRange, findEventAnomalies]);
+
+    const anomalyCount = useMemo(() => {
+        if (!tree || !anomalies?.length) return 0;
+        let n = 0;
+        walkTree(tree, node => {
+            if (findNodeAnomalies(node).length) n++;
+        });
+        return n;
+    }, [tree, anomalies, findNodeAnomalies]);
 
     const handleStatChipClick = (kind: EventTypeFilter) => {
         setActiveDetailTab('timeline');
@@ -747,12 +1040,14 @@ export default function AgentTraceView({
 
     const ctxValue: TraceCtxValue = {
         searchQuery, matchedKeys, activeMatchKey,
-        treeKindFilter, minDurationMs, minTokenK, slowOnly,
+        treeKindFilter, minDurationMs, minTokenK, slowOnly, anomalyOnly,
+        findEventAnomalies,
+        findNodeAnomalies,
         onJumpToKey, topNDuration, topNTokens, slowNodesList,
         onSubagentNavigate,
     };
 
-    const hasActiveFilters = treeKindFilter !== 'all' || minDurationMs > 0 || minTokenK > 0 || slowOnly;
+    const hasActiveFilters = treeKindFilter !== 'all' || minDurationMs > 0 || minTokenK > 0 || slowOnly || anomalyOnly;
 
     if (!tree || !selectedAgentNode) {
         return (
@@ -783,6 +1078,7 @@ export default function AgentTraceView({
                     <StatChip label="TOOL CALLS"  value={totalStats.tools} accentClass={KIND_META.tool.text}  isActive={eventTypeFilter === 'tool'}  onClick={() => handleStatChipClick('tool')}  hint={tt('traceTree.filterType') + ' Tool'} />
                     <StatChip label="SKILL CALLS" value={totalStats.skills} accentClass={KIND_META.skill.text} isActive={eventTypeFilter === 'skill'} onClick={() => handleStatChipClick('skill')} hint={tt('traceTree.filterType') + ' Skill'} />
                     <StatChip label="LLM TURNS"   value={totalStats.llm}   accentClass={KIND_META.llm.text}   isActive={eventTypeFilter === 'llm'}   onClick={() => handleStatChipClick('llm')}   hint={tt('traceTree.filterType') + ' LLM'} />
+                    {totalStats.ras > 0 && <StatChip label="RAS EVENTS" value={totalStats.ras} accentClass={KIND_META.ras.text} isActive={eventTypeFilter === 'ras'} onClick={() => handleStatChipClick('ras')} hint={tt('traceTree.filterType') + ' RAS'} />}
                     <Sep />
                     <StatChip label="TOKENS" value={formatTokens(totalStats.tokens)} />
                     {eventTypeFilter !== 'all' && (
@@ -870,6 +1166,29 @@ export default function AgentTraceView({
                             )}
                         </Button>
 
+                        {/* RAS anomaly filter (only shown when anomalies exist) */}
+                        {anomalyCount > 0 && (
+                            <Button
+                                variant={anomalyOnly ? 'default' : 'outline'}
+                                size="sm"
+                                onClick={() => setAnomalyOnly(b => !b)}
+                                className={cn(
+                                    'h-7 text-xs px-2 gap-1',
+                                    anomalyOnly && 'bg-error text-error-foreground hover:bg-error/90 border-error',
+                                )}
+                                aria-pressed={anomalyOnly}
+                            >
+                                <AlertIcon className="size-3" />
+                                {tt('traceTree.anomalyFilter')}
+                                <span className={cn(
+                                    'ml-0.5 px-1 rounded-full text-xs font-semibold tabular-nums min-w-[16px] text-center',
+                                    anomalyOnly ? 'bg-error-foreground text-error' : 'bg-background-tertiary text-foreground-muted',
+                                )}>
+                                    {anomalyCount}
+                                </span>
+                            </Button>
+                        )}
+
                         {/* Extended filter toggle */}
                         <Button
                             variant={showFilters || hasActiveFilters ? 'default' : 'outline'}
@@ -892,6 +1211,7 @@ export default function AgentTraceView({
                                 { value: 'task', label: 'Task', accentClass: KIND_META.task.text },
                                 ...((totalStats?.chains || 0) > 0 ? [{ value: 'chain', label: 'Chain', accentClass: KIND_META.chain.text }] : []),
                                 { value: 'skill', label: 'Skill', accentClass: KIND_META.skill.text },
+                                ...((totalStats?.ras || 0) > 0 ? [{ value: 'ras', label: 'RAS', accentClass: KIND_META.ras.text }] : []),
                                 { value: 'user', label: 'User' },
                             ]} onChange={setTreeKindFilter} />
                             <span className="w-px h-3.5 bg-border shrink-0" />
@@ -1137,6 +1457,10 @@ function UnifiedSpanTree({
     const isSearchMatch = searchQuery ? matchedKeys.has(aKey) : false;
     const isActiveMatch = activeMatchKey === aKey;
 
+    // RAS anomaly marker for this agent node
+    const anomalyHits = ctx.findNodeAnomalies?.(node) ?? [];
+    if (ctx.anomalyOnly && anomalyHits.length === 0) return null;
+
     const renderEventEntry = (
         entry: AgentEventTreeEntry,
         eventDepth: number,
@@ -1271,6 +1595,14 @@ function UnifiedSpanTree({
                     depth === 0 ? 'font-semibold' : 'font-medium',
                 )}>
                     {node.agentName}
+                    {/* RAS anomaly severity indicator */}
+                    {anomalyHits.length > 0 && (
+                        <RasNodeBadge
+                            markers={anomalyHits}
+                            compact
+                            className="ml-1.5"
+                        />
+                    )}
                     {node.subagentType && (
                         <span className="ml-1.5 text-xs text-foreground-muted font-normal">{node.subagentType}</span>
                     )}
@@ -1388,6 +1720,11 @@ function UnifiedEventRow({
     const isSearchMatch = ctxSearch ? ctxMatchedKeys.has(evKey) : false;
     const isActiveSearchMatch = ctxActiveMatchKey === evKey;
 
+    // RAS anomaly marker for this event
+    const { anomalyOnly: ctxAnomalyOnly, findEventAnomalies } = React.useContext(TraceCtx);
+    const evAnomalyHits = findEventAnomalies?.(event) ?? [];
+    if (ctxAnomalyOnly && evAnomalyHits.length === 0) return null;
+
     // Primary label
     const primaryLabel = event.kind === 'task' && event.spawnedChildId
         ? `spawn → ${event.args?.subagent_type || childNode?.agentName || 'subagent'}`
@@ -1401,7 +1738,10 @@ function UnifiedEventRow({
         : event.kind === 'llm'
             ? undefined
             : (event.name && event.summary && event.summary !== event.name)
-                ? event.summary.slice(event.name.length).replace(/^[:\s]+/, '').slice(0, 50)
+                ? (event.summary.startsWith(event.name)
+                    ? event.summary.slice(event.name.length).replace(/^[:\s]+/, '')
+                    : event.summary
+                ).slice(0, 50)
                 : undefined;
 
     return (
@@ -1447,6 +1787,10 @@ function UnifiedEventRow({
                 event.kind === 'task' ? 'font-medium' : 'font-normal',
             )}>
                 {primaryLabel}
+                {/* RAS anomaly indicator for event */}
+                {evAnomalyHits.length > 0 && (
+                    <RasNodeBadge markers={evAnomalyHits} className="ml-1.5" />
+                )}
                 {secondaryLabel && (
                     <span className="ml-1.5 text-xs text-foreground-muted">{secondaryLabel}</span>
                 )}
@@ -2604,6 +2948,8 @@ function HierarchicalSpanSnapshot({
 
 // ─── EventDetailPanel (right panel – event selected) ─────────────────────────
 function EventDetailPanel({ event, node, interactions }: { event: AgentEvent; node: AgentNode; interactions: RawInteraction[] }) {
+    const { findEventAnomalies } = React.useContext(TraceCtx);
+    const eventAnomalies = findEventAnomalies?.(event) ?? [];
     const km = KIND_META[event.kind] ?? KIND_META.tool;
     const dur = (event.startedAt != null && event.completedAt != null)
         ? formatDuration(event.completedAt - event.startedAt) : null;
@@ -2640,6 +2986,7 @@ function EventDetailPanel({ event, node, interactions }: { event: AgentEvent; no
 
             {/* Body — all sections use CompactSection for consistent truncated-preview + modal pattern */}
             <div style={{ flex: 1, overflowY: 'scroll', padding: '0.875rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
+                <RasReliabilityDetails markers={eventAnomalies} />
 
                 {/* ── LLM ── */}
                 {event.kind === 'llm' && (
@@ -2674,6 +3021,10 @@ function EventDetailPanel({ event, node, interactions }: { event: AgentEvent; no
                         <CompactSection label="Output" raw={outputStr} modalTitle={`${title} — Output`} />
                         {argsStr == null && outputStr == null && <EmptyDetail />}
                     </>
+                )}
+
+                {event.kind === 'ras' && (
+                    <CompactSection label="Message" raw={responseText || null} modalTitle={`${title} — Message`} />
                 )}
             </div>
         </div>
@@ -3700,7 +4051,7 @@ function TimelineTab({ events, eventTypeFilter, onEventTypeFilterChange, onSelec
     interactions: RawInteraction[];
 }) {
     const counts = useMemo(() => {
-        const c: Record<string, number> = { llm: 0, tool: 0, skill: 0, task: 0, chain: 0, user: 0 };
+        const c: Record<string, number> = { llm: 0, tool: 0, skill: 0, task: 0, chain: 0, user: 0, ras: 0 };
         events.forEach(ev => { if (c[ev.kind] != null) c[ev.kind]++; });
         return c;
     }, [events]);
@@ -3718,6 +4069,7 @@ function TimelineTab({ events, eventTypeFilter, onEventTypeFilterChange, onSelec
         { kind: 'chain', label: 'Chain' },
         { kind: 'skill', label: 'Skill' },
         { kind: 'user', label: 'User' },
+        { kind: 'ras', label: 'RAS' },
     ];
 
     return (
@@ -3768,7 +4120,7 @@ function groupEventsAsTree(events: AgentEvent[]): TimelineNode[] {
     const roots: TimelineNode[] = [];
     let currentParent: TimelineNode | null = null;
     events.forEach((ev, i) => {
-        if (ev.kind === 'user' || ev.kind === 'llm') {
+        if (ev.kind === 'user' || ev.kind === 'llm' || ev.kind === 'ras') {
             const node: TimelineNode = { event: ev, children: [], index: i };
             roots.push(node);
             currentParent = node;
@@ -3783,7 +4135,7 @@ function groupEventsAsTree(events: AgentEvent[]): TimelineNode[] {
 function TimelineTree({ events, onSelectChild, node, interactions }: { events: AgentEvent[]; onSelectChild: (id: string) => void; node: AgentNode; interactions: RawInteraction[]; }) {
     const [expandedIdx, setExpandedIdx] = useState<Set<number>>(() => {
         const s = new Set<number>();
-        events.forEach((ev, i) => { if (ev.kind === 'llm' || ev.kind === 'user') s.add(i); });
+        events.forEach((ev, i) => { if (ev.kind === 'llm' || ev.kind === 'user' || ev.kind === 'ras') s.add(i); });
         return s;
     });
     const tree = useMemo(() => groupEventsAsTree(events), [events]);
@@ -3821,6 +4173,8 @@ function TimelineEventRow({ event, hasChildren, isExpanded, onToggle, onSelectCh
     indent: number; isLast: boolean; showVerticalLine: boolean;
     node: AgentNode; interactions: RawInteraction[];
 }) {
+    const { findEventAnomalies } = React.useContext(TraceCtx);
+    const eventAnomalies = findEventAnomalies?.(event) ?? [];
     const [modalOpen, setModalOpen] = useState(false);
     const meta = KIND_META[event.kind] ?? KIND_META.tool;
     const dur = (event.startedAt != null && event.completedAt != null) ? formatDuration(event.completedAt - event.startedAt) : null;
@@ -3855,6 +4209,9 @@ function TimelineEventRow({ event, hasChildren, isExpanded, onToggle, onSelectCh
                     <div className="text-sm text-foreground line-clamp-2 break-words leading-snug">
                         {summaryText}
                     </div>
+                    {eventAnomalies.length > 0 && (
+                        <RasNodeBadge markers={eventAnomalies} className="mt-1" />
+                    )}
                     <div className="text-xs text-foreground-muted mt-0.5 flex flex-wrap gap-2 items-center">
                         {time && <span>{time}</span>}
                         {dur && <span className="tabular-nums">{dur}</span>}
@@ -3962,6 +4319,8 @@ function EventDetailModal({ event, dur, time, onClose, node, interactions }: {
     dur: string | null; time: string; onClose: () => void;
     node: AgentNode; interactions: RawInteraction[];
 }) {
+    const { findEventAnomalies } = React.useContext(TraceCtx);
+    const eventAnomalies = findEventAnomalies?.(event) ?? [];
     const km = KIND_META[event.kind] ?? KIND_META.tool;
     const title = event.name || event.summary?.slice(0, 60) || km.label;
 
@@ -3978,6 +4337,7 @@ function EventDetailModal({ event, dur, time, onClose, node, interactions }: {
                     </div>
                 </DialogHeader>
                 <div className="overflow-auto p-4 flex flex-col gap-4">
+                    <RasReliabilityDetails markers={eventAnomalies} />
                     {event.kind === 'llm' && (
                         <LLMEventBody
                             event={event}

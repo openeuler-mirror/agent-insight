@@ -48,6 +48,7 @@ if [ -n "${DB_HOST:-}" ]; then
   echo "Unset DB_HOST (use SQLite), or build a dedicated OpenGauss-enabled image." >&2
   exit 1
 else
+  node scripts/prepare-ras-sqlite-schema.js
   npx prisma db push
 fi
 

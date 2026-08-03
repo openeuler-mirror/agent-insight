@@ -1,4 +1,9 @@
 import { NextResponse } from 'next/server';
+import {
+    getAgentInsightBashDownloadHelper,
+    getAgentInsightClientPackageSpec,
+    getAgentInsightRasBashInstaller,
+} from '@/lib/ingest/setup-package';
 
 function detectPlatform(request: Request): 'windows' | 'unix' {
     const userAgent = request.headers.get('user-agent') || '';
@@ -23,7 +28,7 @@ function powerShellDoubleQuoted(value: string): string {
     return value.replace(/`/g, '``').replace(/"/g, '`"').replace(/\$/g, '`$');
 }
 
-function generateBashScript(host: string, baseUrl: string, apiKey: string): string {
+function generateBashScript(host: string, baseUrl: string, apiKey: string, packageSpec: string): string {
     const lines = [
         '#!/bin/bash',
         '# =============================================================================',
@@ -33,7 +38,12 @@ function generateBashScript(host: string, baseUrl: string, apiKey: string): stri
         'AGENT_INSIGHT_HOST="' + bashDoubleQuoted(host) + '"',
         'AGENT_INSIGHT_BASE_URL="' + bashDoubleQuoted(baseUrl) + '"',
         'AGENT_INSIGHT_SETUP_API_KEY="' + bashDoubleQuoted(apiKey) + '"',
+        'AGENT_INSIGHT_PACKAGE_SPEC="' + bashDoubleQuoted(packageSpec) + '"',
         'OPENCODE_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/opencode"',
+        '',
+        getAgentInsightBashDownloadHelper(),
+        '',
+        getAgentInsightRasBashInstaller(),
         '',
         'echo "🚀 Fetching Agent-insight telemetry components from $AGENT_INSIGHT_BASE_URL..."',
         '',
@@ -67,7 +77,7 @@ function generateBashScript(host: string, baseUrl: string, apiKey: string): stri
         'echo "📂 Created necessary directories"',
         '',
         '# 1b. Download built-in example messages log (for the bundled "messages 日志分析" dataset / demo traces)',
-        'if curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/example-messages" -o "$HOME/.agent-insight/example/messages"; then',
+        'if download_agent_insight_component "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/example-messages" "$HOME/.agent-insight/example/messages" "example messages log"; then',
         '    echo "📄 Example log ready at $HOME/.agent-insight/example/messages"',
         'else',
         '    echo "⚠️  Skipped example messages log download (non-fatal)"',
@@ -184,19 +194,22 @@ function generateBashScript(host: string, baseUrl: string, apiKey: string): stri
         '',
         '# 3. Download Components',
         'if [ "$INSTALL_OPENCODE" = "true" ]; then',
+        '    OPENCODE_SETUP_OK=true',
         '    echo "⏬ Downloading OpenCode Plugin..."',
         '    rm -f "$OPENCODE_CONFIG_DIR/plugins/Skill-Insight.ts" "$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.ts" 2>/dev/null || true',
         '    rm -f "$HOME/.opencode/plugins/Skill-Insight.ts" "$HOME/.opencode/plugins/Witty-Skill-Insight.ts" 2>/dev/null || true',
-        '    curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/opencode" -o "$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.ts"',
+        '    download_agent_insight_component "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/opencode" "$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.ts" "OpenCode plugin" || OPENCODE_SETUP_OK=false',
         '    cp "$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.ts" "$HOME/.opencode/plugins/Witty-Skill-Insight.ts" 2>/dev/null || true',
         '    echo "⏬ Downloading OpenCode Uploader..."',
-        '    curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/opencode-uploader" -o "$HOME/.agent-insight/opencode_uploader_client.js"',
+        '    download_agent_insight_component "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/opencode-uploader" "$HOME/.agent-insight/opencode_uploader_client.js" "OpenCode uploader" || OPENCODE_SETUP_OK=false',
         '    echo "⏬ Installing OpenCode commands..."',
-        '    mkdir -p "$OPENCODE_CONFIG_DIR/commands"',
-        '    curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/opencode-commands/si-optimizer" -o "$OPENCODE_CONFIG_DIR/commands/si-optimizer.md"',
+        '    download_agent_insight_component "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/opencode-commands/si-optimizer" "$OPENCODE_CONFIG_DIR/commands/si-optimizer.md" "OpenCode si-optimizer command" || OPENCODE_SETUP_OK=false',
         '    echo "⏬ Downloading OpenCode TUI Plugin..."',
-        '    curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/opencode-tui" -o "$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.tui.tsx"',
+        '    download_agent_insight_component "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/opencode-tui" "$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.tui.tsx" "OpenCode TUI plugin" || OPENCODE_SETUP_OK=false',
         '    cp "$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.tui.tsx" "$HOME/.opencode/plugins/Witty-Skill-Insight.tui.tsx" 2>/dev/null || true',
+        '    if [ "$OPENCODE_SETUP_OK" != "true" ]; then',
+        '        echo "❌ OpenCode telemetry components were not installed completely."',
+        '    fi',
         '    export TUI_PLUGIN_PATH="$OPENCODE_CONFIG_DIR/plugins/Witty-Skill-Insight.tui.tsx"',
         '    export TUI_CONFIG_FILE="$OPENCODE_CONFIG_DIR/tui.json"',
         '    if command -v node &> /dev/null; then',
@@ -294,6 +307,11 @@ function generateBashScript(host: string, baseUrl: string, apiKey: string): stri
         'echo "AGENT_INSIGHT_OPENCODE_UPLOAD_COOLDOWN_MS=15000" >> "$AGENT_INSIGHT_CONFIG_FILE"',
         'rm "${AGENT_INSIGHT_CONFIG_FILE}.bak"',
         'echo "✅ Configuration updated at $AGENT_INSIGHT_CONFIG_FILE"',
+        '',
+        'if [ "$INSTALL_OPENCODE" = "true" ] || [ "$INSTALL_HERMES" = "true" ] || [ "$INSTALL_OPENCLAW" = "true" ]; then',
+        '    echo "🛡️  Installing Agent RAS runtime (OpenCode / Hermes / OpenClaw)..."',
+        '    install_agent_insight_ras "$FINAL_HOST" "$FINAL_KEY" || echo "⚠️  Agent RAS installation failed; telemetry setup will continue."',
+        'fi',
         '',
         '# 6.5 Configure Claude Code official OTel logs',
         'if [ "$INSTALL_CLAUDE" = "true" ]; then',
@@ -410,7 +428,7 @@ function generateBashScript(host: string, baseUrl: string, apiKey: string): stri
         '',
         '# 7. Create Watcher Startup/Stop Scripts',
         'NEEDS_WATCHER_SCRIPTS=false',
-        'if [ "$INSTALL_OPENCODE" = "true" ]; then',
+        'if [ "$INSTALL_OPENCODE" = "true" ] && [ "${OPENCODE_SETUP_OK:-false}" = "true" ]; then',
         '    NEEDS_WATCHER_SCRIPTS=true',
         'fi',
         '',
@@ -493,12 +511,15 @@ function generateBashScript(host: string, baseUrl: string, apiKey: string): stri
         '',
         '# 10. Final Summary',
         'echo ""',
-        'echo "🌟 Agent-Insight Telemetry: READY"',
+        'SETUP_STATUS="READY"',
+        'if [ "$INSTALL_OPENCODE" = "true" ] && [ "${OPENCODE_SETUP_OK:-false}" != "true" ]; then SETUP_STATUS="PARTIAL"; fi',
+        'echo "🌟 Agent-Insight Telemetry: $SETUP_STATUS"',
         'echo "------------------------------------------------"',
         'echo "Installed Components:"',
-        'if [ "$INSTALL_OPENCODE" = "true" ]; then echo "  ✅ OpenCode Plugin: ~/.opencode/plugins/Witty-Skill-Insight.ts"; fi',
-        'if [ "$INSTALL_OPENCODE" = "true" ]; then echo "  ✅ OpenCode Command: ~/.config/opencode/commands/si-optimizer.md"; fi',
-        'if [ "$INSTALL_OPENCODE" = "true" ]; then echo "  ✅ OpenCode Uploader Daemon: ~/.agent-insight/opencode_uploader_client.js (5-min poll)"; fi',
+        'if [ "$INSTALL_OPENCODE" = "true" ] && [ "${OPENCODE_SETUP_OK:-false}" = "true" ]; then echo "  ✅ OpenCode Plugin: ~/.opencode/plugins/Witty-Skill-Insight.ts"; fi',
+        'if [ "$INSTALL_OPENCODE" = "true" ] && [ "${OPENCODE_SETUP_OK:-false}" = "true" ]; then echo "  ✅ OpenCode Command: ~/.config/opencode/commands/si-optimizer.md"; fi',
+        'if [ "$INSTALL_OPENCODE" = "true" ] && [ "${OPENCODE_SETUP_OK:-false}" = "true" ]; then echo "  ✅ OpenCode Uploader Daemon: ~/.agent-insight/opencode_uploader_client.js (5-min poll)"; fi',
+        'if [ "$INSTALL_OPENCODE" = "true" ] && [ "${OPENCODE_SETUP_OK:-false}" != "true" ]; then echo "  ❌ OpenCode telemetry installation incomplete"; fi',
         'if [ "$INSTALL_CLAUDE" = "true" ]; then echo "  ✅ Claude Code OTel: ~/.agent-insight/claude_otel_env.sh"; fi',
         'if [ "$INSTALL_OPENCLAW" = "true" ]; then echo "  ✅ OpenClaw OTel: ~/.agent-insight/openclaw_otel_env.sh"; fi',
         '',
@@ -520,7 +541,7 @@ function generateBashScript(host: string, baseUrl: string, apiKey: string): stri
     return lines.join('\n');
 }
 
-function generatePowerShellScript(host: string, baseUrl: string, apiKey: string): string {
+function generatePowerShellScript(host: string, baseUrl: string, apiKey: string, packageSpec: string): string {
     const lines = [
         '# =============================================================================',
         '# Agent-insight One-Click Setup (PowerShell)',
@@ -529,6 +550,7 @@ function generatePowerShellScript(host: string, baseUrl: string, apiKey: string)
         '$AGENT_INSIGHT_HOST = "' + powerShellDoubleQuoted(host) + '"',
         '$AGENT_INSIGHT_BASE_URL = "' + powerShellDoubleQuoted(baseUrl) + '"',
         '$AGENT_INSIGHT_SETUP_API_KEY = "' + powerShellDoubleQuoted(apiKey) + '"',
+        '$AGENT_INSIGHT_PACKAGE_SPEC = "' + powerShellDoubleQuoted(packageSpec) + '"',
         '',
         'Write-Host "🚀 Fetching Agent-insight telemetry components from $AGENT_INSIGHT_BASE_URL..."',
         '',
@@ -682,13 +704,13 @@ function generatePowerShellScript(host: string, baseUrl: string, apiKey: string)
         '    Remove-Item -Path (Join-Path $opencodeConfigDir "plugins\\Witty-Skill-Insight.ts") -Force -ErrorAction SilentlyContinue',
         '    Remove-Item -Path (Join-Path $homeDir ".opencode\\plugins\\Skill-Insight.ts") -Force -ErrorAction SilentlyContinue',
         '    Remove-Item -Path (Join-Path $homeDir ".opencode\\plugins\\Witty-Skill-Insight.ts") -Force -ErrorAction SilentlyContinue',
-        '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/setup/opencode" -OutFile (Join-Path $opencodeConfigDir "plugins\\Witty-Skill-Insight.ts")',
+        '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/opencode" -OutFile (Join-Path $opencodeConfigDir "plugins\\Witty-Skill-Insight.ts")',
         '    Copy-Item (Join-Path $opencodeConfigDir "plugins\\Witty-Skill-Insight.ts") "$homeDir\\.opencode\\plugins\\Witty-Skill-Insight.ts" -Force -ErrorAction SilentlyContinue',
         '    Write-Host "⏬ Downloading OpenCode Uploader..."',
-        '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/setup/opencode-uploader" -OutFile (Join-Path $homeDir ".agent-insight\\opencode_uploader_client.js")',
+        '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/opencode-uploader" -OutFile (Join-Path $homeDir ".agent-insight\\opencode_uploader_client.js")',
         '    Write-Host "⏬ Downloading OpenCode TUI Plugin..."',
         '    $tuiPluginPath = (Join-Path $opencodeConfigDir "plugins\\Witty-Skill-Insight.tui.tsx")',
-        '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/setup/opencode-tui" -OutFile $tuiPluginPath',
+        '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/opencode-tui" -OutFile $tuiPluginPath',
         '    Copy-Item $tuiPluginPath "$homeDir\\.opencode\\plugins\\Witty-Skill-Insight.tui.tsx" -Force -ErrorAction SilentlyContinue',
         '    $tuiConfigFile = (Join-Path $opencodeConfigDir "tui.json")',
         '    try {',
@@ -786,6 +808,11 @@ function generatePowerShellScript(host: string, baseUrl: string, apiKey: string)
         'Add-Content $AGENT_INSIGHT_CONFIG_FILE "AGENT_INSIGHT_OPENCODE_UPLOAD_COOLDOWN_MS=15000"',
         'Remove-Item "$AGENT_INSIGHT_CONFIG_FILE.bak" -Force',
         'Write-Host "✅ Configuration updated at $AGENT_INSIGHT_CONFIG_FILE"',
+        '',
+        'if ($INSTALL_OPENCODE) {',
+        '    Write-Host "🛡️  Agent RAS inproc currently requires Linux/macOS; use WSL on Windows."',
+        '    Write-Host "⚠️  Agent RAS [unsupported]: installation skipped; telemetry setup will continue."',
+        '}',
         '',
         '# 6.5 Configure Claude Code official OTel logs',
         'if ($INSTALL_CLAUDE) {',
@@ -1006,18 +1033,19 @@ export async function GET(request: Request) {
     const baseUrl = `${protocol}://${host}${urlPrefix}`;
     const skillInsightHost = baseUrl;
     const apiKey = requestUrl.searchParams.get('key') || requestUrl.searchParams.get('apiKey') || '';
+    const packageSpec = getAgentInsightClientPackageSpec();
 
     const platform = detectPlatform(request);
 
     if (platform === 'windows') {
-        const script = generatePowerShellScript(skillInsightHost, baseUrl, apiKey);
+        const script = generatePowerShellScript(skillInsightHost, baseUrl, apiKey, packageSpec);
         return new NextResponse(script, {
             headers: {
                 'Content-Type': 'text/plain; charset=utf-8',
             },
         });
     } else {
-        const script = generateBashScript(skillInsightHost, baseUrl, apiKey);
+        const script = generateBashScript(skillInsightHost, baseUrl, apiKey, packageSpec);
         return new NextResponse(script, {
             headers: {
                 'Content-Type': 'text/x-shellscript',
