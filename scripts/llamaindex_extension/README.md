@@ -1,12 +1,13 @@
 # agent-insight-llamaindex
 
-`agent-insight-llamaindex` 是 Agent Insight 的 LlamaIndex Trace 采集器。它通过
-LlamaIndex instrumentation dispatcher 采集 Agent、子 Agent、Tool、LLM、RAG 和
-Workflow 调用链，先将数据持久化到本地 spool，再由后台线程异步上传到 Agent
-Insight。
+`agent-insight-llamaindex` 是 Agent Insight 的 LlamaIndex Trace 采集器。它复用官方
+`llama-index-observability-otel`，通过 LlamaIndex instrumentation dispatcher 和官方
+OpenTelemetry Span/Event Handler 采集 Agent、子 Agent、Tool、LLM、RAG 和 Workflow
+调用链，先将数据持久化到本地 spool，再由后台线程异步上传到 Agent Insight。
 
-采集器不修改 LlamaIndex 业务对象。业务线程只执行有界序列化和非阻塞入队，文件写入与
-网络上传由后台线程处理。
+采集器不修改 LlamaIndex 业务对象，也不替换进程全局 OpenTelemetry `TracerProvider`。
+它创建隔离 Provider，使用官方 OTel Handler 生成 span/context，再由轻量
+`SimpleSpanProcessor` 把已结束 span 非阻塞送入有界队列；文件写入与网络上传由后台线程处理。
 
 ## 支持范围
 
@@ -29,7 +30,8 @@ Agent Insight 服务端通过 npm 安装；LlamaIndex 可观测插件源码随�
 （不要执行 `npm publish`）：
 
 > 运行时归档是直接部署制品，不是 Python wheel/sdist，并有意不包含 `pyproject.toml`。
-> 请勿对下载的 zip 执行 `pip install`；`pip` 仍只用于业务项目自行管理 LlamaIndex 及模型 SDK 依赖。
+> 请勿对下载的 zip 执行 `pip install`。安装脚本只用 `pip` 在选定的 Python 环境中安装固定版本
+> `llama-index-observability-otel==0.6.4`；LlamaIndex、模型 SDK 和 MCP 等业务依赖仍由项目自行管理。
 
 ```bash
 npm run build
@@ -47,8 +49,9 @@ agent-insight start
 ```
 
 `curl | bash` / `irm | iex` 一键安装由 `/api/ingest/setup` 生成；本地 npm 服务端安装后的自动
-配置使用 `/api/ingest/setup/auto`。两个入口采用相同的直接下载、暂存解压和目录替换流程，
-不会调用 pip，也不会写入 Python `site-packages`。安装器生成专属的
+配置使用 `/api/ingest/setup/auto`。两个入口采用相同的直接下载、暂存解压和目录替换流程。
+采集器源码不会写入 Python `site-packages`；安装器会调用所选解释器的 `pip` 安装官方
+`llama-index-observability-otel==0.6.4` 及其 OpenTelemetry SDK 依赖。随后生成专属的
 `~/.agent-insight/llamaindex_env.sh/.ps1`，把上述唯一模块目录加入 `PYTHONPATH`，并记录安装时
 最终选中的 Python 解释器；采集器仍需
 通过 `setup()` 或专用 `cli run` 显式启用，不会自动影响其他 Python 应用或采集器。
@@ -82,7 +85,7 @@ venv 设置。最终解释器会写入
 `llamaindex_env.sh/.ps1`，后续加载该环境入口时继续使用同一个 Python。
 这个 Python 用于确认 Python 3.10+、解压归档、写入配置和启动采集命令；未安装 LlamaIndex 时
 安装器会提示，但不会中止部署。运行时仍由所选环境提供 LlamaIndex、模型 SDK 和 MCP 等业务依赖。
-安装器不会替项目安装或升级 LlamaIndex 依赖。零代码 `run` 只对子进程注入包内 bootstrap，
+安装器不会替项目安装或升级 LlamaIndex、模型 SDK 或 MCP 依赖。零代码 `run` 只对子进程注入包内 bootstrap，
 不注册全局 `sitecustomize`、不改写其他采集器配置，也不删除其他框架目录。
 
 ## 快速开始
@@ -289,9 +292,10 @@ shutdown(timeout=5.0)
 - spool 包含 ready、uploading 和 rejected 文件在内最多 512 MiB；
 - 正文、集合长度和序列化深度均有上限。
 
-目标机加速实验中，连续处理 120,000 个 span 后未发现 `open_spans` 或 identity 残留；
-默认队列按每条 10,000 字符的保守负载填满时，RSS 增量约 21.43 MiB。该结果不能替代
-生产环境 8 小时或更长时间的 soak test。
+2026-08-03 的受控性能用例中，固定延迟测试 LLM 的中位延迟增幅为 `1.2792%`，采集器常驻
+RSS 增量为 `5.836 MiB`；40 个异步提交在一个耗时 1000 ms 的上传仍进行时于
+`231.933 ms` 内完成，验证网络上传未阻塞业务提交。另有 120,000 Span 加速实验未发现
+`open_spans` 或 identity 状态残留。短时实验不能替代生产环境长期 soak test。
 
 ## 状态检查与故障排查
 
@@ -320,8 +324,8 @@ python -c "import agent_insight_llamaindex; print(agent_insight_llamaindex.__fil
 
 Windows PowerShell 使用 `. "$HOME\.agent-insight\llamaindex_env.ps1"`。虚拟环境变化后，
 重新运行一键安装并在脚本提示中输入新的虚拟环境根目录，或重新设置 `AGENT_INSIGHT_LLAMAINDEX_VENV`/
-`AGENT_INSIGHT_LLAMAINDEX_PYTHON` 并运行一键安装即可；不需要安装
-`opentelemetry-instrument` 或任何 Agent Insight Python 包。
+`AGENT_INSIGHT_LLAMAINDEX_PYTHON` 并运行一键安装即可。无需安装 `opentelemetry-instrument`；
+安装器会自动安装官方 `llama-index-observability-otel`，Agent Insight 模块仍由服务端归档直接部署。
 
 ### spool 长期存在 `.ready`
 
@@ -367,7 +371,8 @@ Windows PowerShell：
 & "$HOME\.agent-insight\uninstall_llamaindex_collector.ps1" -Purge
 ```
 
-卸载脚本只处理 `collectors/llamaindex`、LlamaIndex 环境入口以及可选的 LlamaIndex
+卸载脚本不会卸载共享的 `llama-index-observability-otel` 或 OpenTelemetry SDK，避免影响同一
+Python 环境中的其他观测组件。它只处理 `collectors/llamaindex`、LlamaIndex 环境入口以及可选的 LlamaIndex
 config/spool，不删除共享 `~/.agent-insight/.env`，也不处理 OpenCode、Claude Code、Hermes、
 Jiuwen 或其他框架采集器的数据。
 
@@ -385,6 +390,20 @@ python -m mypy src
 当前自动化测试覆盖配置优先级、正文脱敏与截断、并发父子关系、Agent/Tool/LLM/RAG/
 Workflow、MCP Tool、spool 原子写入和恢复、容量保护、上传重试、进程退出、重复注册卸载、
 以及同一 Agent 任务三次执行的结构一致性。
+
+采集器单测当前为 `41 passed`；服务端 LlamaIndex 定向测试为 `23 passed, 1 platform skip`。
+仓库外的标准化验收用例位于开发工作区 `demos/`，覆盖 AC5～AC34。每个用例启动前都通过
+`llamaindex_case_bootstrap.ps1` 选择当前源码或已部署采集器，并由
+`llamaindex_case_common.py` 断言以下运行时信息：
+
+- `collectorVersion=0.2.0`；
+- `mechanism=llama-index-observability-otel`；
+- `officialOtelVersion=0.6.4`；
+- Span/Event Handler 是官方兼容 Handler 的子类且已注册到 dispatcher；
+- exporter 为 `AgentInsightSpanExporter`。
+
+这样可以避免用旧采集器或旧回调机制跑出表面通过但实现基线不正确的结果。验收脚本和真实
+DeepSeek 结果不随 npm/collector ZIP 分发，也不得包含 API Key。
 
 ## 许可证
 

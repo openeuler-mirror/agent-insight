@@ -2,29 +2,33 @@ from __future__ import annotations
 
 import inspect
 import re
-import secrets
-import time
 from collections.abc import Callable
 from typing import Any
 
-from llama_index_instrumentation.span import BaseSpan
-from llama_index_instrumentation.span_handlers import BaseSpanHandler
+from llama_index.observability.otel.base import OTelCompatibleSpanHandler
+from llama_index_instrumentation.span import SimpleSpan
+from opentelemetry import context as otel_context
+from opentelemetry import trace
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.trace import set_span_in_context
 from pydantic import Field
 
 from .config import CollectorConfig
 from .context import trace_metadata
+from .exporter import AgentInsightSpanExporter
 from .model import SpanRecord
 from .serialization import add_content_attribute, extract_nodes
 
 
-class CollectorSpan(BaseSpan):
+class CollectorSpan(SimpleSpan):
     trace_id: str
     otel_span_id: str
     otel_parent_span_id: str | None = None
     session_id: str
     name: str
     kind: str = "span"
-    start_time_ns: int = Field(default_factory=time.time_ns)
     attributes: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -58,12 +62,18 @@ def _kind(name: str, instance: Any, arguments: dict[str, Any]) -> str:
     event_name = type(event).__name__.lower() if event is not None else ""
     if method in {"chat", "achat", "stream_chat", "astream_chat", "complete", "acomplete"}:
         return "llm"
+    if method == "call_tool" or event_name == "toolcall":
+        return "tool"
+    # A @step method may have a domain-oriented name such as
+    # ``retrieve_documents`` or ``call_tool_with_retry``.  The Workflow event
+    # argument is the authoritative signal; classify it before method-name
+    # heuristics so every decorated step remains visible as a Workflow Step.
+    if event_name and event_name != "toolcall":
+        return "workflow_step"
     if "retriev" in method or "retriever" in class_name:
         return "retriever"
     if method in {"synthesize", "asynthesize", "get_response", "aget_response"}:
         return "synthesizer"
-    if method == "call_tool" or event_name == "toolcall":
-        return "tool"
     if method == "run" and "agent" in class_name:
         return "agent"
     if method == "run" and "workflow" in class_name:
@@ -81,34 +91,56 @@ def _kind(name: str, instance: Any, arguments: dict[str, Any]) -> str:
     return "span"
 
 
-class LlamaIndexSpanHandler(BaseSpanHandler[CollectorSpan]):
+class LlamaIndexSpanHandler(OTelCompatibleSpanHandler):
     config: CollectorConfig = Field(default=None)  # type: ignore[assignment]
-    emit: Callable[[SpanRecord], bool] = Field(default=None)  # type: ignore[assignment]
     identities: dict[str, tuple[str, str, str]] = Field(default_factory=dict)
     dropped_open_spans: int = 0
 
     def __init__(
         self,
         config: CollectorConfig,
-        emit: Callable[[SpanRecord], bool],
+        tracer: trace.Tracer | None = None,
+        tracer_provider: TracerProvider | None = None,
+        emit: Callable[[SpanRecord], bool] | None = None,
+        debug: bool = False,
         **kwargs: Any,
     ) -> None:
-        super().__init__(**kwargs)
+        provider = tracer_provider
+        if tracer is None:
+            provider = provider or TracerProvider(resource=Resource.create())
+            if emit is not None:
+                provider.add_span_processor(
+                    SimpleSpanProcessor(AgentInsightSpanExporter(emit))
+                )
+            tracer = provider.get_tracer("agent-insight-llamaindex.tests")
+        super().__init__(
+            tracer=tracer,
+            tracer_provider=provider,
+            debug=debug,
+            **kwargs,
+        )
         self.config = config
-        self.emit = emit
 
     def close(self) -> None:
-        """Release unfinished spans when instrumentation is removed.
+        empty = inspect.signature(lambda: None).bind()
+        for span_id in list(self.open_spans):
+            self.span_drop(
+                span_id,
+                empty,
+                err=RuntimeError("collector shutdown"),
+            )
+        self.identities.clear()
+        self.current_span_ids.clear()
+        self._events_by_span.clear()
+        super().close()
 
-        LlamaIndex normally balances every span_enter with span_exit/span_drop. A
-        cancelled task or third-party instrumentation bug can leave an open span,
-        however. Clearing these references prevents repeated setup/unsetup cycles
-        and long-lived worker processes from retaining arbitrary prompt/tool data.
-        """
-        with self.lock:
-            self.open_spans.clear()
-            self.identities.clear()
-            self.current_span_ids.clear()
+    def _get_parent_context(self, parent_span_id: str | None) -> otel_context.Context:
+        if parent_span_id is not None and parent_span_id in self.all_spans:
+            return set_span_in_context(self.all_spans[parent_span_id])
+        current = trace.get_current_span()
+        if parent_span_id is None and current in self.all_spans.values():
+            return otel_context.Context()
+        return super()._get_parent_context(parent_span_id)
 
     def new_span(
         self,
@@ -121,24 +153,33 @@ class LlamaIndexSpanHandler(BaseSpanHandler[CollectorSpan]):
     ) -> CollectorSpan:
         self._bound_open_spans()
         name = _span_name(id_)
+        simple_span = super().new_span(
+            id_, bound_args, instance, parent_span_id, tags, **kwargs
+        )
+        otel_span = self.all_spans[id_]
+        otel_span.update_name(name)
+        otel_span_context = otel_span.get_span_context()
         parent = self.identities.get(parent_span_id or "")
         metadata = trace_metadata.get() or {}
-        trace_id = parent[0] if parent else secrets.token_hex(16)
+        trace_id = f"{otel_span_context.trace_id:032x}"
+        otel_span_id = f"{otel_span_context.span_id:016x}"
         otel_parent = parent[1] if parent else None
         session_id = str(metadata.get("session_id") or (parent[2] if parent else trace_id))
         span = CollectorSpan(
-            id_=id_,
-            parent_id=parent_span_id,
+            id_=simple_span.id_,
+            parent_id=simple_span.parent_id,
+            tags=simple_span.tags,
+            start_time=simple_span.start_time,
             trace_id=trace_id,
-            otel_span_id=secrets.token_hex(8),
+            otel_span_id=otel_span_id,
             otel_parent_span_id=otel_parent,
             session_id=session_id,
             name=name,
             kind=_kind(name, instance, bound_args.arguments),
-            tags=tags or {},
         )
-        self.identities[id_] = (trace_id, span.otel_span_id, session_id)
+        self.identities[id_] = (trace_id, otel_span_id, session_id)
         self._capture_input(span, bound_args.arguments, instance)
+        self._apply_attributes(span)
         return span
 
     def _bound_open_spans(self) -> None:
@@ -149,11 +190,30 @@ class LlamaIndexSpanHandler(BaseSpanHandler[CollectorSpan]):
                 return
             oldest_id = min(
                 self.open_spans,
-                key=lambda item: self.open_spans[item].start_time_ns,
+                key=lambda item: self.open_spans[item].start_time,
             )
-            self.open_spans.pop(oldest_id, None)
-            self.identities.pop(oldest_id, None)
-            self.dropped_open_spans += 1
+        empty = inspect.signature(lambda: None).bind()
+        self.span_drop(
+            oldest_id,
+            empty,
+            err=RuntimeError("maximum open span limit exceeded"),
+        )
+        self.dropped_open_spans += 1
+
+    def _apply_attributes(self, span: CollectorSpan) -> None:
+        span.attributes.update(
+            {
+                "agent.insight.framework": "llamaindex",
+                "agent.insight.span.kind": span.kind,
+                "session.id": span.session_id,
+            }
+        )
+        otel_span = self.all_spans.get(span.id_)
+        if otel_span is None:
+            return
+        for key, value in span.attributes.items():
+            if value is not None:
+                otel_span.set_attribute(key, value)
 
     def _capture_input(
         self, span: CollectorSpan, arguments: dict[str, Any], instance: Any
@@ -270,6 +330,7 @@ class LlamaIndexSpanHandler(BaseSpanHandler[CollectorSpan]):
                     if value is not None:
                         add_content_attribute(span.attributes, "input.value", value, self.config)
                         break
+            self._apply_attributes(span)
 
     @staticmethod
     def _model_from_event(event: Any) -> tuple[str | None, str | None]:
@@ -300,10 +361,15 @@ class LlamaIndexSpanHandler(BaseSpanHandler[CollectorSpan]):
         span = self.open_spans.get(id_)
         if span is None:
             return None
+        assert isinstance(span, CollectorSpan)
         self._capture_result(span, result)
-        self._emit(span, "success", None)
+        self._apply_attributes(span)
+        completed = super().prepare_to_exit_span(
+            id_, bound_args, instance, result, **kwargs
+        )
         self.identities.pop(id_, None)
-        return span
+        self.completed_spans.clear()
+        return completed
 
     def prepare_to_drop_span(
         self,
@@ -316,12 +382,17 @@ class LlamaIndexSpanHandler(BaseSpanHandler[CollectorSpan]):
         span = self.open_spans.get(id_)
         if span is None:
             return None
+        assert isinstance(span, CollectorSpan)
         if err is not None:
             span.attributes["error.type"] = type(err).__name__
             add_content_attribute(span.attributes, "error.message", str(err), self.config)
-        self._emit(span, "error", str(err) if err else "span dropped")
+        self._apply_attributes(span)
+        dropped = super().prepare_to_drop_span(
+            id_, bound_args, instance, err, **kwargs
+        )
         self.identities.pop(id_, None)
-        return span
+        self.dropped_spans.clear()
+        return dropped
 
     def _capture_result(self, span: CollectorSpan, result: Any) -> None:
         if result is None:
@@ -343,20 +414,3 @@ class LlamaIndexSpanHandler(BaseSpanHandler[CollectorSpan]):
                     extract_nodes(nodes, self.config),
                     self.config,
                 )
-
-    def _emit(self, span: CollectorSpan, status: str, message: str | None) -> None:
-        self.emit(
-            SpanRecord(
-                trace_id=span.trace_id,
-                span_id=span.otel_span_id,
-                parent_span_id=span.otel_parent_span_id,
-                session_id=span.session_id,
-                name=span.name,
-                kind=span.kind,
-                start_time_ns=span.start_time_ns,
-                end_time_ns=time.time_ns(),
-                status=status,
-                status_message=message,
-                attributes=dict(span.attributes),
-            )
-        )

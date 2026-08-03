@@ -123,7 +123,7 @@ class CollectorRuntime:
                 headers={
                     "Content-Type": "application/json",
                     "x-witty-api-key": self.config.api_key,
-                    "User-Agent": "agent-insight-llamaindex/0.1.0",
+                    "User-Agent": "agent-insight-llamaindex/0.2.0",
                 },
             )
             with urllib.request.urlopen(

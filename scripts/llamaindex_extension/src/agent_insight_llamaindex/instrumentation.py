@@ -5,10 +5,9 @@ import threading
 from dataclasses import dataclass
 from typing import Any
 
-from llama_index_instrumentation import get_dispatcher
-
 from .config import CollectorConfig
 from .event_handler import LlamaIndexEventHandler
+from .otel_integration import AgentInsightOpenTelemetry
 from .span_handler import LlamaIndexSpanHandler
 from .uploader import CollectorRuntime
 
@@ -17,7 +16,7 @@ from .uploader import CollectorRuntime
 class InstrumentationState:
     config: CollectorConfig
     runtime: CollectorRuntime
-    dispatcher: Any
+    instrumentor: AgentInsightOpenTelemetry
     span_handler: LlamaIndexSpanHandler
     event_handler: LlamaIndexEventHandler
 
@@ -38,18 +37,22 @@ def instrument(
         if not resolved.ready:
             return None
         runtime = CollectorRuntime(resolved)
-        span_handler = LlamaIndexSpanHandler(config=resolved, emit=runtime.submit)
-        event_handler = LlamaIndexEventHandler(span_handler=span_handler)
-        dispatcher = get_dispatcher()
-        dispatcher.add_span_handler(span_handler)
-        dispatcher.add_event_handler(event_handler)
         runtime.start()
+        instrumentor: AgentInsightOpenTelemetry | None = None
+        try:
+            instrumentor = AgentInsightOpenTelemetry(resolved, runtime)
+            instrumentor.start_registering()
+        except BaseException:
+            if instrumentor is not None:
+                instrumentor.unregister()
+            runtime.close(1.0)
+            raise
         _state = InstrumentationState(
             config=resolved,
             runtime=runtime,
-            dispatcher=dispatcher,
-            span_handler=span_handler,
-            event_handler=event_handler,
+            instrumentor=instrumentor,
+            span_handler=instrumentor.span_handler,
+            event_handler=instrumentor.event_handler,
         )
         if not _atexit_registered:
             atexit.register(shutdown)
@@ -60,7 +63,10 @@ def instrument(
 def flush(timeout: float = 10.0) -> bool:
     with _lock:
         state = _state
-    return True if state is None else state.runtime.flush(timeout)
+    if state is None:
+        return True
+    state.instrumentor.force_flush(max(1, int(timeout * 1000)))
+    return state.runtime.flush(timeout)
 
 
 def uninstrument(*, flush_timeout: float = 10.0) -> None:
@@ -70,17 +76,7 @@ def uninstrument(*, flush_timeout: float = 10.0) -> None:
         if state is None:
             return
         _state = None
-        state.dispatcher.span_handlers = [
-            handler
-            for handler in state.dispatcher.span_handlers
-            if handler is not state.span_handler
-        ]
-        state.dispatcher.event_handlers = [
-            handler
-            for handler in state.dispatcher.event_handlers
-            if handler is not state.event_handler
-        ]
-        state.span_handler.close()
+        state.instrumentor.unregister()
     state.runtime.flush(flush_timeout)
     state.runtime.close(flush_timeout)
 

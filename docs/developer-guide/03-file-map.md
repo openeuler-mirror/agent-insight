@@ -55,7 +55,7 @@
 | `ingest/otel/langfuse.ts` / `ingest/otel/adapters/{langfuse-langgraph,langfuse-trace}.ts` | ingest | Langfuse Python SDK / LangGraph OTLP 归属转换；现有 interactions 投影与无损 `LangfuseTraceNode` 投影并行生成 |
 | `engine/observability/langfuse-agent-trace.ts` | engine | Langfuse 可见 observation → 原 Agent Trace 节点/事件模型；不含业务节点名称规则 |
 | `ingest/otel/adapters/hermes.ts` / `scripts/hermes_agent_insight_plugin.py` | ingest | Hermes span tree 归属转换；Hermes hooks 到累计 OTLP JSON snapshot |
-| `ingest/otel/{llamaindex,adapters/llamaindex}.ts` / `scripts/llamaindex_extension/` | ingest | LlamaIndex OTLP 识别与 Agent/Tool/LLM/RAG/Workflow 聚合；Python dispatcher 插桩、持久 spool 与异步上传 |
+| `ingest/otel/{llamaindex,adapters/llamaindex}.ts` / `scripts/llamaindex_extension/` | ingest | LlamaIndex OTLP 识别与 Agent/Tool/LLM/RAG/Workflow 聚合；复用官方 `llama-index-observability-otel` Handler、隔离 TracerProvider、持久 spool 与异步上传 |
 | `shared/model-config.ts` / `default-model-config.ts` | shared | `ModelPricing`，定价/上下文窗口查询 |
 | `shared/interaction-utils.ts` | shared | `InvokedSkill`，交互解析 |
 | `client/api.ts` | client | `apiFetch`（标准的客户端 fetch 封装） |

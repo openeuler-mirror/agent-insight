@@ -9,13 +9,15 @@
 
 | Field | Value |
 |---|---|
-| Commit | `7c7ea713d80dc747c66f3a11b5fc1c8ee36c0367` (`7c7ea71`) |
-| Branch | `new-dev-7-30` |
-| Date | 2026-07-30T18:30:03+08:00 |
-| Author | mintuyang |
-| Subject | `修复子agent点击trace可跳转` |
+| Commit | `f697803ca19b7092eb095bd77f3387867a82bb13` (`f697803`) |
+| Branch | `feat/llamaindex-trace-collector` |
+| Date | 2026-08-03T14:16:37+08:00 |
+| Author | JZ Chen |
+| Subject | `Merge remote-tracking branch 'gitcode/master' into feat/llamaindex-trace-collector` |
 
-**如何更新：** `git diff 7c7ea71 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+本轮 LlamaIndex 官方 OTel 迁移仍位于该 commit 之后的工作树中；提交后应把本区块更新为功能提交，并重新执行受影响页面的差异审查。
+
+**如何更新：** `git diff f697803 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。

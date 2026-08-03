@@ -4,8 +4,9 @@
 
 ```text
 LlamaIndex Dispatcher
-  ├─ SpanHandler：run/step/tool 等结构与父子关系
-  └─ EventHandler：LLM/Retrieval/Synthesis/legacy Agent 语义富化
+  ├─ 官方 OTelCompatibleSpanHandler 子类：标准 OTel span/context + 结构语义
+  └─ 官方 OTelCompatibleEventHandler 子类：LLM/Retrieval/Synthesis/Agent 语义富化
+          ↓ 隔离 TracerProvider + SimpleSpanProcessor + 自定义 SpanExporter
           ↓ bounded queue（业务线程只入队）
   OTLP encoder → immutable spool batch → uploader worker
           ↓ POST + x-witty-api-key
@@ -16,14 +17,16 @@ LlamaIndex Dispatcher
 
 ## 2. Python 采集器
 
-源码目录为 `scripts/llamaindex_extension/`，与第三方框架采集标准中的 `scripts/<framework>_extension/` 路径一致；模块名为 `agent_insight_llamaindex`。Agent Insight npm tarball 安装服务端并携带采集器源码，setup API 将运行时归档直接部署到 `~/.agent-insight/collectors/llamaindex/current/`，不使用 Python 包管理器。
+源码目录为 `scripts/llamaindex_extension/`，与第三方框架采集标准中的 `scripts/<framework>_extension/` 路径一致；模块名为 `agent_insight_llamaindex`。Agent Insight npm tarball 安装服务端并携带采集器源码，setup API 将运行时归档直接部署到 `~/.agent-insight/collectors/llamaindex/current/`。运行时归档本身不通过 pip 安装；setup 会在所选 Python 环境中安装固定版本 `llama-index-observability-otel==0.6.4`。
 
 | 模块 | 职责 |
 |-|-|
 | `config.py` | 环境变量、显式配置、默认目录、校验 |
 | `serialization.py` | 安全序列化、模型/usage/node 提取、内容截断 |
-| `span_handler.py` | LlamaIndex span → 内部 span draft；exit/drop 后入队 |
-| `event_handler.py` | 将 start/end event 富化到所属 span |
+| `span_handler.py` | 扩展官方 OTel span handler，补充 Agent Insight 语义与并发父子修正 |
+| `event_handler.py` | 扩展官方 OTel event handler，将原始事件富化到所属 span |
+| `otel_integration.py` | 配置隔离 TracerProvider 并注册官方 Handler 子类 |
+| `exporter.py` | 官方 ReadableSpan → 内部 SpanRecord；非阻塞入队 |
 | `otlp.py` | 内部 span → OTLP/HTTP JSON |
 | `spool.py` | 原子写 immutable batch、容量约束、恢复和 ACK 删除 |
 | `uploader.py` | writer/uploader 后台线程、触发策略、指数退避 |
@@ -32,10 +35,10 @@ LlamaIndex Dispatcher
 
 ### 2.1 关联策略
 
-- 直接使用 Dispatcher 传入的 `id_`、`parent_id`；内部为每个 LlamaIndex span 创建稳定 OTel spanId，根 span 创建 traceId。
+- 直接使用 Dispatcher 传入的 `id_`、`parent_id`；traceId/spanId 由官方 OTel Handler 与 SDK 创建。显式 `parent_id` 优先于环境中的其他活动 LlamaIndex span，避免并发 root 交错时误关联。
 - `active_span_id` 基于 ContextVar，async task 与 FunctionTool 的线程执行器会复制上下文；因此并发 Tool/子 Workflow 自动挂到正确父节点。
-- workflow run span 是会话根；若用户调用的是无 Workflow 的独立 Retriever/LLM，则创建隐式 session 根。
-- `session.id` 优先取 `instrument(session_id=...)`/环境上下文，其次取 workflow run id，最后取 traceId。
+- Workflow/Agent run span 通常形成会话根；独立 Retriever/LLM 不额外伪造根 Span，而是保留其真实 OTel 根节点并由服务端按 session 聚合。
+- `session.id` 优先取 `trace_context(session_id=...)` 提供的业务上下文，其次继承父 Span 的 session，最后使用 OTel traceId。
 - Multi-Agent handoff 按 `current_agent_name` 切分 agent segment；agents-as-tools/nested workflow 保留真实嵌套父子关系。
 
 ### 2.2 Span 语义
@@ -55,8 +58,8 @@ LlamaIndex Dispatcher
 - uploader 逐个读取 `.ready`，成功 HTTP 2xx 后删除；失败保留原文件。文件名包含创建时间、进程随机前缀和递增序号，多个进程不会覆盖。
 - 重启即扫描历史 `.ready`，构成批次级断点续传；服务端按稳定 traceId/spanId 去重。
 - 触发：batch 数量、flush interval、session end/显式 flush、进程 shutdown。
-- 重试：`min(max_delay, base * 2^attempt)` 加 full jitter；401/403 进入低频重试并记录鉴权错误，其他 4xx 按配置隔离为 `.rejected`，5xx/网络错误继续重试。
-- 容量：按最老优先清理已拒绝文件；未上传 `.ready` 默认不丢，超过硬上限后新事件降级丢弃并增加 drop counter。
+- 重试：前三次失败使用基础间隔，第 4 次起按 `base * 2^(attempt-3)` 增长并受最大值限制，每次等待加入 full jitter。401/403、408、429、5xx 与网络错误保留 claim 并重试；其他 4xx 隔离为 `.rejected`。
+- 容量：`.ready`、`.uploading-*` 与 `.rejected` 都计入总量；达到硬上限后拒绝新批次并增加 drop counter，不自动删除任何未确认数据。
 
 ## 4. 服务端
 
@@ -82,10 +85,10 @@ LlamaIndex Dispatcher
 
 ## 5. 安装与清理
 
-- 安装：`/api/ingest/setup` 与 `/api/ingest/setup/auto` 下载服务端提供的运行时归档，经暂存目录校验后替换 `~/.agent-insight/collectors/llamaindex/current/`；指定 Python 只用于版本、LlamaIndex 可用性检查、解压和配置。
+- 安装：`/api/ingest/setup` 与 `/api/ingest/setup/auto` 先在指定 Python 中安装 `llama-index-observability-otel==0.6.4`，再下载服务端提供的运行时归档，经暂存目录校验后替换 `~/.agent-insight/collectors/llamaindex/current/`。
 - 配置：CLI `configure` 写 `~/.agent-insight/llamaindex.json`（0600）；`run -- python app.py` 只为子进程注入专用 bootstrap。
 - 资源：`/api/ingest/setup/llamaindex-collector` 只读返回白名单内的采集器源文件，不包含测试、缓存或 npm 外部资源。
-- 卸载：安装器生成 `uninstall_llamaindex_collector.sh/.ps1`，默认删除 LlamaIndex 采集器源码、环境入口和 profile 注册并保留 Trace；`--purge`/`-Purge` 额外删除 LlamaIndex config/spool，不操作共享 `.env` 或其他采集器。
+- 卸载：安装器生成 `uninstall_llamaindex_collector.sh/.ps1`，默认删除 LlamaIndex 采集器源码、环境入口和 profile 注册并保留 Trace；`--purge`/`-Purge` 额外删除 LlamaIndex config/spool，不操作共享 `.env` 或其他采集器，也不卸载同 Python 环境可能共用的官方 OTel 包。
 
 ## 6. 安全与性能
 

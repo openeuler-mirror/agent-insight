@@ -60,13 +60,13 @@ def encode_batch(records: list[SpanRecord], config: CollectorConfig) -> dict[str
                             "user.id": config.user,
                             "telemetry.sdk.name": "agent-insight-llamaindex",
                             "telemetry.sdk.language": "python",
-                            "telemetry.sdk.version": "0.1.0",
+                            "telemetry.sdk.version": "0.2.0",
                         }
                     )
                 },
                 "scopeSpans": [
                     {
-                        "scope": {"name": "agent-insight-llamaindex", "version": "0.1.0"},
+                        "scope": {"name": "agent-insight-llamaindex", "version": "0.2.0"},
                         "spans": spans,
                     }
                 ],

@@ -18,9 +18,11 @@ from llama_index.core.embeddings import MockEmbedding
 from llama_index.core.llms import MockLLM
 from llama_index.core.tools import FunctionTool, QueryEngineTool
 from llama_index.core.workflow import StartEvent, StopEvent, Workflow, step
+from llama_index.observability.otel.base import OTelCompatibleSpanHandler
 from llama_index.tools.mcp import McpToolSpec
 from llama_index_instrumentation import get_dispatcher
 from mcp.types import CallToolResult, ListToolsResult, TextContent, Tool
+from opentelemetry import trace as otel_trace
 from pydantic import PrivateAttr
 from pytest import MonkeyPatch
 
@@ -29,6 +31,7 @@ from agent_insight_llamaindex import cli
 from agent_insight_llamaindex.config import CollectorConfig
 from agent_insight_llamaindex.event_handler import LlamaIndexEventHandler
 from agent_insight_llamaindex.model import SpanRecord
+from agent_insight_llamaindex.otel_integration import AgentInsightOpenTelemetry
 from agent_insight_llamaindex.otlp import encode_batch
 from agent_insight_llamaindex.serialization import extract_usage, safe_value
 from agent_insight_llamaindex.span_handler import LlamaIndexSpanHandler
@@ -78,6 +81,21 @@ def test_default_user_is_not_anonymous(monkeypatch: MonkeyPatch) -> None:
 
 def test_setup_is_one_line_instrumentation_alias() -> None:
     assert collector.setup is collector.instrument
+
+
+def test_collector_reuses_official_otel_without_replacing_global_provider(
+    tmp_path: Path,
+) -> None:
+    value = config(tmp_path)
+    runtime = CollectorRuntime(value)
+    global_provider = otel_trace.get_tracer_provider()
+    instrumentor = AgentInsightOpenTelemetry(value, runtime)
+    instrumentor.start_registering()
+    try:
+        assert isinstance(instrumentor.span_handler, OTelCompatibleSpanHandler)
+        assert otel_trace.get_tracer_provider() is global_provider
+    finally:
+        instrumentor.unregister()
 
 
 def test_default_spool_is_isolated_by_api_key(
@@ -606,6 +624,9 @@ def test_real_react_agent_workflow_keeps_one_stable_agent_instance(tmp_path: Pat
     assert len(agent_instances) == 1
     assert {"workflow_step", "llm"}.issubset({item.kind for item in emitted})
     assert not span_handler.identities
+    assert not span_handler.all_spans
+    assert not span_handler.completed_spans
+    assert not span_handler.dropped_spans
 
 
 def test_same_agent_task_three_times_has_consistent_trace_structure(tmp_path: Path) -> None:
@@ -698,6 +719,59 @@ def test_real_rag_pipeline_captures_retrieval_synthesis_and_llm(tmp_path: Path) 
     assert {"retriever", "synthesizer", "llm"}.issubset(kinds)
     retrieval = next(item for item in emitted if item.kind == "retriever")
     assert "Agent Insight" in retrieval.attributes["retrieval.nodes"]
+
+
+def test_workflow_step_name_does_not_get_reclassified_as_retriever(
+    tmp_path: Path,
+) -> None:
+    class RetrieveWorkflow(Workflow):
+        def __init__(self, retriever: object) -> None:
+            super().__init__(timeout=10)
+            self.retriever = retriever
+
+        @step
+        async def retrieve_documents(self, ev: StartEvent) -> StopEvent:
+            nodes = await self.retriever.aretrieve(str(ev.get("query") or ""))
+            return StopEvent(result=len(nodes))
+
+    emitted: list[SpanRecord] = []
+    span_handler = LlamaIndexSpanHandler(
+        config=config(tmp_path), emit=lambda item: not emitted.append(item)
+    )
+    event_handler = LlamaIndexEventHandler(span_handler=span_handler)
+    dispatcher = get_dispatcher()
+    dispatcher.add_span_handler(span_handler)
+    dispatcher.add_event_handler(event_handler)
+    index = VectorStoreIndex.from_documents(
+        [Document(text="Agent Insight observes workflow retrieval.")],
+        embed_model=MockEmbedding(embed_dim=8),
+    )
+
+    async def run() -> object:
+        return await RetrieveWorkflow(index.as_retriever()).run(
+            query="workflow retrieval"
+        )
+
+    try:
+        result = asyncio.run(run())
+    finally:
+        dispatcher.span_handlers = [
+            item for item in dispatcher.span_handlers if item is not span_handler
+        ]
+        dispatcher.event_handlers = [
+            item for item in dispatcher.event_handlers if item is not event_handler
+        ]
+
+    assert result == 1
+    step_span = next(
+        item for item in emitted if item.name.endswith(".retrieve_documents")
+    )
+    assert step_span.kind == "workflow_step"
+    assert step_span.attributes["workflow.step.name"] == "retrieve_documents"
+    assert any(
+        item.kind == "retriever" and "VectorIndexRetriever" in item.name
+        for item in emitted
+    )
 
 
 def test_real_react_function_tool_captures_arguments_output_and_status(tmp_path: Path) -> None:
