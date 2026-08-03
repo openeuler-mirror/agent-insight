@@ -23,8 +23,6 @@
 |---|---|
 | `preset-agent-task-completion` / `preset-agent-trace-quality` | `experiment/faithful-preset-evaluators.ts` |
 | `preset-result-*` | `experiment/result-preset-evaluators.ts` → 复用 canonical `runSingleResultMetric()` |
-| `preset-content-insensitivity` / `preset-content-controversy` / `preset-content-gender-discrimination` | `experiment/content-preset-evaluators.ts` → 3 份维度配置 + `experiment/content-judge-common.ts` 扣分制引擎（与安全审核评估器无交集） |
-| `preset-creativity-expression` | `experiment/creativity-preset-evaluators.ts` → 评级制（1-3 档锚定），独立成族 |
 | 其它（自建） | 通用 LLM Judge（三段式提示词组装） |
 
 > 这张表只列到「族」级别；具体有哪些预置卡以 `preset-evaluators.ts` 为准，别在文档里再抄一份 id 清单——抄了必然过期。
