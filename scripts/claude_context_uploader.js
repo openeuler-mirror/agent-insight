@@ -41,6 +41,8 @@ const BASE_DIR = path.join(HOME, '.agent-insight');
 const ENV_FILE = path.join(BASE_DIR, '.env');
 const CLAUDE_SETTINGS = path.join(HOME, '.claude', 'settings.json');
 const QUEUE_DIR = path.join(BASE_DIR, 'claude_context_queue');
+const WORKER_START_TOKEN = '.worker-starting';
+const WORKER_START_TOKEN_STALE_MS = 30 * 1000;
 const REALTIME_HOOK_EVENTS = ['Stop', 'SubagentStop', 'StopFailure'];
 const ALL_HOOK_EVENTS = [...REALTIME_HOOK_EVENTS, 'SessionEnd'];
 
@@ -758,6 +760,67 @@ function spawnDetachedWorker() {
   }
 }
 
+function workerStartTokenPath(queueDir) {
+  return path.join(queueDir, WORKER_START_TOKEN);
+}
+
+function releaseWorkerStartToken(queueDir) {
+  try {
+    fs.unlinkSync(workerStartTokenPath(queueDir));
+  } catch {}
+}
+
+function claimWorkerStartToken(queueDir, staleMs = WORKER_START_TOKEN_STALE_MS) {
+  fs.mkdirSync(queueDir, { recursive: true });
+  const token = workerStartTokenPath(queueDir);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let fd;
+    try {
+      fd = fs.openSync(token, 'wx', 0o600);
+      fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }), 'utf8');
+      fs.closeSync(fd);
+      return true;
+    } catch (error) {
+      try {
+        if (fd !== undefined) fs.closeSync(fd);
+      } catch {}
+      if (!error || error.code !== 'EEXIST') return false;
+      let ageMs = Infinity;
+      try {
+        ageMs = Date.now() - fs.statSync(token).mtimeMs;
+      } catch {}
+      if (ageMs < staleMs) return false;
+
+      // drain worker 仍活着时不抢令牌;长上传只需要一个 worker。
+      try {
+        const owner = JSON.parse(fs.readFileSync(path.join(queueDir, '.drain.lock'), 'utf8'));
+        if (isProcessAlive(Number(owner.pid))) return false;
+      } catch {}
+      try {
+        fs.unlinkSync(token);
+      } catch {
+        return false;
+      }
+    }
+  }
+  return false;
+}
+
+function scheduleWorker(queueDir, spawnWorker) {
+  if (!claimWorkerStartToken(queueDir)) return false;
+  try {
+    const started = spawnWorker();
+    if (started === false) {
+      releaseWorkerStartToken(queueDir);
+      return false;
+    }
+    return true;
+  } catch (error) {
+    releaseWorkerStartToken(queueDir);
+    throw error;
+  }
+}
+
 function enqueuePayload(payload, options = {}) {
   const sessionId = String(payload && payload.session_id || '').trim();
   if (!sessionId) return false;
@@ -778,7 +841,7 @@ function enqueuePayload(payload, options = {}) {
   }
   const spawnWorker = options.spawnWorker || spawnDetachedWorker;
   try {
-    spawnWorker();
+    scheduleWorker(queueDir, spawnWorker);
   } catch (error) {
     log(`start worker failed for ${sessionId}: ${error && error.message}`);
   }
@@ -868,6 +931,9 @@ async function drainQueue(options = {}) {
     summary.locked = true;
     return summary;
   }
+  // 直接 SessionEnd drain 或测试调用可能没有前置 enqueue 持令牌;持锁期间也补上，
+  // 避免并发 Stop 每条都拉起一个注定抢不到 .drain.lock 的进程。
+  claimWorkerStartToken(queueDir);
 
   const attempted = new Set();
   const deferredFailures = new Map();
@@ -914,6 +980,7 @@ async function drainQueue(options = {}) {
     try {
       fs.unlinkSync(lockFile);
     } catch {}
+    releaseWorkerStartToken(queueDir);
     // 只为并发新任务补 worker;本轮失败后原样放回的任务留给下一次 hook,避免离线时自旋。
     const shouldContinue = listQueueJobs(queueDir).some((file) => {
       if (!deferredFailures.has(file)) return true;
@@ -926,7 +993,7 @@ async function drainQueue(options = {}) {
     });
     if (shouldContinue) {
       try {
-        spawnWorker();
+        scheduleWorker(queueDir, spawnWorker);
       } catch {}
     }
   }

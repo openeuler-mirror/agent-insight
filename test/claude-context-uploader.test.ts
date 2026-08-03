@@ -521,8 +521,85 @@ test("uploader: 实时 hook 只做本地原子入队,同 session 合并为最新
   assert.equal(payload.transcript_path, "/tmp/new.jsonl")
   assert.equal(payload.hook_event_name, "SubagentStop")
   assert.equal("last_assistant_message" in payload, false)
-  assert.equal(spawned, 2)
+  assert.equal(spawned, 1)
   assert.equal(fs.readdirSync(dir).some((name) => name.includes(".tmp-")), false)
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
+test("uploader: 300 次 burst 入队只启动一个 worker 且保留每个 Session 最新任务", () => {
+  const dir = tmpdir("queue-burst")
+  let spawned = 0
+  const options = { queueDir: dir, spawnWorker: () => { spawned += 1; return true } }
+
+  for (let i = 0; i < 300; i++) {
+    const sessionId = `burst-session-${i}`
+    uploader.enqueuePayload({ session_id: sessionId, transcript_path: `/tmp/${i}-old.jsonl` }, options)
+    uploader.enqueuePayload({ session_id: sessionId, transcript_path: `/tmp/${i}-latest.jsonl` }, options)
+  }
+
+  assert.equal(spawned, 1)
+  const jobs = fs.readdirSync(dir).filter((name) => /^job-.*\.json$/.test(name))
+  assert.equal(jobs.length, 300)
+  const paths = jobs.map((name) => JSON.parse(fs.readFileSync(path.join(dir, name), "utf8")).transcript_path)
+  assert.ok(paths.every((value: string) => value.endsWith("-latest.jsonl")))
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
+test("uploader: worker 结束释放启动令牌后新 enqueue 可再次启动", async () => {
+  const dir = tmpdir("queue-worker-release")
+  let spawned = 0
+  const spawnWorker = () => { spawned += 1; return true }
+  uploader.enqueuePayload({ session_id: SESSION, transcript_path: "/tmp/first.jsonl" }, { queueDir: dir, spawnWorker })
+  assert.equal(spawned, 1)
+
+  const drained = await uploader.drainQueue({ queueDir: dir, processPayload: async () => true, spawnWorker })
+  assert.equal(drained.processed, 1)
+  assert.equal(fs.existsSync(path.join(dir, ".worker-starting")), false)
+
+  uploader.enqueuePayload({ session_id: SESSION, transcript_path: "/tmp/second.jsonl" }, { queueDir: dir, spawnWorker })
+  assert.equal(spawned, 2)
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
+test("uploader: 新鲜 worker 启动令牌不可抢占,超时令牌可恢复", () => {
+  const freshDir = tmpdir("queue-worker-fresh")
+  fs.writeFileSync(path.join(freshDir, ".worker-starting"), "{}", "utf8")
+  let freshSpawns = 0
+  uploader.enqueuePayload({ session_id: SESSION, transcript_path: "/tmp/fresh.jsonl" }, {
+    queueDir: freshDir,
+    spawnWorker: () => { freshSpawns += 1; return true },
+  })
+  assert.equal(freshSpawns, 0)
+  fs.rmSync(freshDir, { recursive: true, force: true })
+
+  const staleDir = tmpdir("queue-worker-stale")
+  const token = path.join(staleDir, ".worker-starting")
+  fs.writeFileSync(token, "{}", "utf8")
+  const staleTime = new Date(Date.now() - 60_000)
+  fs.utimesSync(token, staleTime, staleTime)
+  let staleSpawns = 0
+  uploader.enqueuePayload({ session_id: SESSION, transcript_path: "/tmp/stale.jsonl" }, {
+    queueDir: staleDir,
+    spawnWorker: () => { staleSpawns += 1; return true },
+  })
+  assert.equal(staleSpawns, 1)
+  assert.ok(fs.statSync(token).mtimeMs > staleTime.getTime())
+  fs.rmSync(staleDir, { recursive: true, force: true })
+})
+
+test("uploader: worker spawn 失败立即释放令牌,下一次 hook 能重试", () => {
+  const dir = tmpdir("queue-worker-spawn-failure")
+  let attempts = 0
+  const spawnWorker = () => {
+    attempts += 1
+    return attempts > 1
+  }
+
+  uploader.enqueuePayload({ session_id: SESSION, transcript_path: "/tmp/failed.jsonl" }, { queueDir: dir, spawnWorker })
+  assert.equal(fs.existsSync(path.join(dir, ".worker-starting")), false)
+  uploader.enqueuePayload({ session_id: SESSION, transcript_path: "/tmp/retry.jsonl" }, { queueDir: dir, spawnWorker })
+  assert.equal(attempts, 2)
+  assert.equal(fs.existsSync(path.join(dir, ".worker-starting")), true)
   fs.rmSync(dir, { recursive: true, force: true })
 })
 
