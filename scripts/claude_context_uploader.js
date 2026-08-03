@@ -160,7 +160,7 @@ function flattenRequestMessages(messages) {
 }
 
 function isInternalTitleSystem(text) {
-  return /^Generate a concise, sentence-case title\b/i.test(String(text || '').trim());
+  return /\bGenerate a concise, sentence-case title\b/i.test(String(text || ''));
 }
 
 function collectSystemPrompts(rawBodyDir, sessionId, limits, context = {}) {

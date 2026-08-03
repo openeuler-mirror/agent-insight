@@ -19,6 +19,10 @@ function isInternalClaudeQuerySource(value: any): boolean {
   return INTERNAL_CLAUDE_QUERY_SOURCES.has(asString(value).trim().toLowerCase());
 }
 
+function isInternalClaudeSystemPrompt(value: any): boolean {
+  return /\bGenerate a concise, sentence-case title\b/i.test(asString(value));
+}
+
 function asNumber(value: any, fallback = 0): number {
   if (value === undefined || value === null || value === '') return fallback;
   const n = Number(value);
@@ -633,7 +637,9 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
       if (body) {
         collectToolResultOutputsFromRequestBody(body, requestBodyToolOutputById);
         const systemText = stringifyAnthropicSystem(body.system);
-        if (systemText) systemByPromptKey.set(promptKey(event), systemText);
+        if (systemText && !isInternalClaudeSystemPrompt(systemText)) {
+          systemByPromptKey.set(promptKey(event), systemText);
+        }
       }
       continue;
     }
@@ -642,6 +648,7 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
       const attrs = event.attributes || {};
       if (attrs.kind === 'system_prompt') {
         const text = asString(attrs.text).trim();
+        if (isInternalClaudeSystemPrompt(text)) continue;
         const toolUseId = asString(attrs.tool_use_id);
         if (text && toolUseId) {
           const scoped = supplementSystemTextsByToolId.get(toolUseId) || [];

@@ -147,6 +147,22 @@ test("补传:Claude 内部 assistant response 全部隐藏且普通响应保留"
   assert.equal(record!.final_result, "真实回答")
 })
 
+test("补传:已进入 spool 的带公共前缀标题 system prompt 仍会被服务端隐藏", () => {
+  const internalTitleSystem = [
+    "x-anthropic-billing-header: cc_version=2.1.220.de9; cc_entrypoint=cli;",
+    "You are Claude Code, Anthropic's official CLI for Claude.",
+    "Generate a concise, sentence-case title (3-7 words) for this conversation.",
+  ].join("\n")
+  const record = aggregateClaudeOtelEvents(SESSION, [
+    ...crossMachineEvents(),
+    supplement("system_prompt", internalTitleSystem, {}, 5),
+    supplement("system_prompt", "真实 root system", {}, 6),
+  ])
+
+  const systems = (record!.interactions as any[]).filter((item) => item.role === "system")
+  assert.deepEqual(systems.map((item) => item.content), ["真实 root system"])
+})
+
 test("补传:没有补传时,跨机 trace 依旧只有 user + assistant(证明回归基线)", () => {
   const record = aggregateClaudeOtelEvents(SESSION, crossMachineEvents())
   const roles = (record!.interactions as any[]).map((item) => item.role)

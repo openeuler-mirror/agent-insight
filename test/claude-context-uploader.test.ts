@@ -104,7 +104,11 @@ test("uploader: 内部标题请求的 system prompt 全部隐藏", () => {
     dir,
     "title.request.json",
     SESSION,
-    "Generate a concise, sentence-case title (2-4 words) for this conversation.",
+    [
+      "x-anthropic-billing-header: cc_version=2.1.220.de9; cc_entrypoint=cli;",
+      "You are Claude Code, Anthropic's official CLI for Claude.",
+      "Generate a concise, sentence-case title (3-7 words) for this conversation.",
+    ].join("\n"),
   )
 
   assert.deepEqual(uploader.collectSystemPrompts(dir, SESSION, uploader.LIMITS), [])
