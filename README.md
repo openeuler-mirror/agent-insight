@@ -101,7 +101,8 @@ npx agent-insight install
 git clone https://gitcode.com/openeuler/agent-insight.git
 cd agent-insight
 npm install
-cd agent-insight/scripts/trae-collector && npm install && npm run build
+# 构建 Trae IDE 采集器插件（生成 scripts/trae-collector/agent-insight-trae-collector-0.1.0.vsix）
+cd scripts/trae-collector && npm install && npm run build
 ```
 
 #### 方式三：使用 Docker 镜像部署
