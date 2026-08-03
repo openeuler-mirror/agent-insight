@@ -98,7 +98,7 @@
 ## API routes (`src/app/api/`) — grouped
 | Group | Route files (under `api/`) | Purpose |
 |---|---|---|
-| ingest | `ingest/otel/v1/{logs,metrics,traces}`、`ingest/upload`、`ingest/proxy/[taskId]/*`、`ingest/setup/*`（含 `setup/hermes-plugin`）、`ingest/sync/*`、`ingest/opencode/session-complete`、`ingest/parse-document`、`ingest/v1/[...path]` | 接收并归一化 agent 运行数据；下发客户端安装脚本与 Hermes 插件源码 |
+| ingest | `ingest/otel/v1/{logs,metrics,traces}`、`ingest/upload`、`ingest/proxy/[taskId]/*`、`ingest/setup/*`（含共享的 `setup/codeagent-setup.ts` 与 `setup/hermes-plugin`）、`ingest/sync/*`、`ingest/opencode/session-complete`、`ingest/parse-document`、`ingest/v1/[...path]` | 接收并归一化 agent 运行数据；下发客户端安装脚本、跨平台 CodeAgent PATH 包装器与 Hermes 插件源码 |
 | agent | `agent/{run,respond,stream}` | 驱动内部的通用 agent |
 | skills | `skills`、`skills/[id]/*`、`skills/by-name/*`、`skills/{publish,upload,automation/*,sync-enterprise,logs}` | skill 增删改查、版本、发布、企业同步 |
 | skill-eval | `skill-eval/trigger/[skillName]/*` | 触发评测集/评测运行 |
