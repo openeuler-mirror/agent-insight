@@ -1,14 +1,14 @@
 # TRAE Collector 架构说明
 
-> TRAE AI IDE 采集器的内部架构、数据流与关键设计决策。面向维护 `scripts/trae-collector/` 的开发者。
+> Trae IDE 采集器的内部架构、数据流与关键设计决策。面向维护 `scripts/trae-collector/` 的开发者。
 
 ## 概述
 
-TRAE Collector 是一个 **VS Code Extension**，安装在 TRAE AI IDE 中以采集 Agent 运行数据并上报到 Agent Insight 平台。它通过 TRAE IDE 内置的 **Hook 系统** 监听生命周期事件，将事件序列化为 JSONL 格式写入本地 spool 目录，再由内置的 `UploadEngine` 按 checkpoint 增量上传到平台。
+TRAE Collector 是一个 **VS Code Extension**，安装在 Trae IDE 中以采集 Agent 运行数据并上报到 Agent Insight 平台。它通过 TRAE IDE 内置的 **Hook 系统** 监听生命周期事件，将事件序列化为 JSONL 格式写入本地 spool 目录，再由内置的 `UploadEngine` 按 checkpoint 增量上传到平台。
 
 ```
 ┌─────────────────────────────────────────────┐
-│              TRAE AI IDE                     │
+│              Trae IDE                     │
 │  ┌──────────────────────────────────────┐   │
 │  │   Agent Insight VS Code Extension    │   │
 │  │                                      │   │

@@ -231,7 +231,7 @@ function getFrameworkLabel(framework?: string | null): string {
         case 'hermes':
             return 'Hermes';
         case 'trae':
-            return 'TRAE AI IDE';
+            return 'Trae IDE';
         default:
             return value;
     }

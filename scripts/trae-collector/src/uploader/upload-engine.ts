@@ -5,6 +5,13 @@ import * as vscode from 'vscode'
 import { SpoolReader, SpoolEvent, CheckpointState } from './spool'
 import { TraeConfig } from '../extension'
 
+// js-tiktoken: BPE token counting for accurate token estimates.
+// Lazy-loaded (see countTokens) — the cl100k_base ranks file is ~1MB and only
+// needed when building usage; falls back to language-aware estimation if the
+// model registry is unavailable.
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const tiktoken = require('js-tiktoken')
+
 export interface UploadResult { ok: boolean; status: number; body: string }
 
 export class UploadEngine implements vscode.Disposable {
@@ -166,6 +173,20 @@ export class UploadEngine implements vscode.Disposable {
     return Math.max(1, Math.ceil(cjkCount * 1.2 + latinWordCount * 1.3 + otherChars * 0.5))
   }
 
+  private tiktokenEncoder: any = null
+
+  private countTokens(text: string): number {
+    if (!text) return 0
+    try {
+      if (!this.tiktokenEncoder) {
+        this.tiktokenEncoder = tiktoken.encodingForModel('gpt-4o')
+      }
+      return this.tiktokenEncoder.encode(text).length
+    } catch (e) {
+      return this.estimateTokens(text)
+    }
+  }
+
   private buildPayload(sessionId: string, events: SpoolEvent[], state?: any): any {
     const startEvent = events.find(e => e.kind === 'agent.session.start' || e.kind === 'agent.subagent.start')
     // Multi-turn support: use arrays from SessionState, fall back to filtering events
@@ -217,21 +238,39 @@ export class UploadEngine implements vscode.Disposable {
     const configModel = this.config?.modelName || ''
     const allPromptTexts = allPrompts.map((p: any) => p.payload?.query || '').filter(Boolean)
     const allResponseTexts = allEnds.map((e: any) => e.payload?.finalResult || '').filter(Boolean)
-    const combinedPrompt = allPromptTexts.join(' ')
+    // 输入侧还包含工具调用本身及其结果（工具结果会回填给模型作为后续推理上下文），
+    // 与 LLM API 的 input token 计费口径一致；subagent 的工具由子会话单独统计，这里跳过。
+    const toolContextTexts = toolResults
+      .map((e: any) => {
+        const start = toolCalls.find(s => s.trace_id === e.trace_id)
+        if (start?.payload?.subagentId) return ''
+        const parts: string[] = []
+        if (start?.payload?.toolInput) parts.push(JSON.stringify(start.payload.toolInput))
+        if (e.payload?.toolResponse) parts.push(JSON.stringify(e.payload.toolResponse))
+        return parts.join(' ')
+      })
+      .filter(Boolean)
+    const combinedPrompt = [...allPromptTexts, ...toolContextTexts].join(' ')
     const combinedResponse = allResponseTexts.join(' ')
     const hasLlmData = llmCalls.length > 0 && (firstLlm?.tokens || firstLlm?.totalTokens)
     const estimatedTokens = hasLlmData ? undefined : {
-      input: this.estimateTokens(combinedPrompt),
-      output: this.estimateTokens(combinedResponse),
-      total: this.estimateTokens(combinedPrompt) + this.estimateTokens(combinedResponse),
+      input: this.countTokens(combinedPrompt),
+      output: this.countTokens(combinedResponse),
+      total: this.countTokens(combinedPrompt) + this.countTokens(combinedResponse),
       estimated: true,
     }
-    const usageTokens = firstLlm ? {
-      input: firstLlm.promptTokens || 0,
-      output: firstLlm.completionTokens || 0,
-      total: firstLlm.totalTokens || (firstLlm.promptTokens || 0) + (firstLlm.completionTokens || 0),
-    } : estimatedTokens
-    const totalTokens = firstLlm ? (firstLlm.tokens || firstLlm.totalTokens || 0) : (estimatedTokens?.total || 0)
+    // 按轮次取 llm.call：第 i 轮（prompt[i]→end[i]）对应 llmCalls[i]，而不是全局复用第一条。
+    // 多轮会话里每轮 token 不同，全局 firstLlm 会让所有轮次共享第一轮的 usage。
+    const turnUsage = (i: number) => {
+      const llm = llmCalls[i]?.payload || firstLlm
+      if (!llm) return estimatedTokens
+      return {
+        input: llm.promptTokens || 0,
+        output: llm.completionTokens || 0,
+        total: llm.totalTokens || (llm.promptTokens || 0) + (llm.completionTokens || 0),
+      }
+    }
+    const turnModel = (i: number) => (llmCalls[i]?.payload || firstLlm)?.model || configModel || sessionAgent
 
     // Agent name for interactions
     const sessionAgent = startEvent?.agent_id || allPrompts.find((p: any) => p?.agent_id)?.agent_id || allEnds.find((e: any) => e?.agent_id)?.agent_id || 'solo_agent'
@@ -239,6 +278,9 @@ export class UploadEngine implements vscode.Disposable {
     // Build user+assistant pairs for each turn
     // Reference: opencode_uploader_client.js buildMessagesForSession
     const maxTurns = Math.max(allPrompts.length, allEnds.length)
+    // subagent 用量累加（循环内填充，顶层汇总时并入主会话 tokens）
+    let subagentInputTokens = 0
+    let subagentOutputTokens = 0
     for (let i = 0; i < maxTurns; i++) {
       if (allPrompts[i]) {
         interactions.push({ 
@@ -299,8 +341,8 @@ export class UploadEngine implements vscode.Disposable {
           parts: [{ type: 'text', text: allEnds[i].payload?.finalResult || '' }],
           agent: sessionAgent,
           agentName: sessionAgent,
-          model: firstLlm?.model || configModel || sessionAgent,
-          usage: usageTokens,
+          model: turnModel(i),
+          usage: turnUsage(i),
           finish_reason: 'stop',
           tool_calls: mainTools.length > 0 ? mainTools : undefined,
           tool_call_count: ttt.length,
@@ -310,14 +352,23 @@ export class UploadEngine implements vscode.Disposable {
         // Create subagent interactions (each becomes a child AGENT node)
         for (const [sai, sg] of subagentTools) {
           const childSessionId = `${sessionId}__${sg.subagentId}`
-          // Estimate subagent token usage from tool I/O via gpt-tokenizer
-          let subInput = 0, subOutput = 0
+          // Estimate subagent token usage from tool INPUTS only.
+          // tool outputs are raw tool data (file contents, search results), NOT
+          // model-generated text — counting them as output tokens inflates the
+          // session's token totals by orders of magnitude (observed 18k+ fake
+          // tokens from a few Read calls). TRAE gives no per-subagent response
+          // text, so output stays at the tiny protocol-overhead placeholder.
+          let subInput = 0
           for (const tc of sg.tools) {
-            subInput += this.estimateTokens(tc.function?.arguments || '')
-            subOutput += this.estimateTokens(tc.output ? JSON.stringify(tc.output) : '')
+            subInput += this.countTokens(tc.function?.arguments || '')
+            subInput += this.countTokens(tc.output ? JSON.stringify(tc.output) : '')
           }
           // +30 protocol overhead per tool message
           const protoOverhead = sg.tools.length * 30
+          // 累加 subagent 用量到主会话顶层汇总：列表 TOKENS 列（顶层 tokens）
+          // 与详情页树（递归累加子节点 usage）必须同口径，否则两处显示不一致
+          subagentInputTokens += subInput + protoOverhead
+          subagentOutputTokens += protoOverhead
           interactions.push({
             role: 'subagent',
             content: `Executed ${sg.tools.length} tool(s): ${sg.tools.map(t => t.function?.name).join(', ')}`,
@@ -331,7 +382,7 @@ export class UploadEngine implements vscode.Disposable {
             subagent_name: sg.subagentType,
             subagent_session_id: childSessionId,
             model: firstLlm?.model || configModel || sessionAgent,
-            usage: { input: subInput + protoOverhead, output: subOutput, total: subInput + subOutput + protoOverhead },
+            usage: { input: subInput + protoOverhead, output: protoOverhead, total: subInput + protoOverhead * 2, estimated: true },
             tool_calls: sg.tools,
             tool_call_count: sg.tools.length,
             tool_call_error_count: sg.tools.filter(t => t.state === 'error').length,
@@ -351,8 +402,8 @@ export class UploadEngine implements vscode.Disposable {
           parts: [{ type: 'text', text: '' }],
           agent: sessionAgent,
           agentName: sessionAgent,
-          model: firstLlm?.model || configModel || sessionAgent,
-          usage: usageTokens,
+          model: turnModel(i),
+          usage: turnUsage(i),
           finish_reason: 'interrupted',
           tool_calls: ttt,
           tool_call_count: ttt.length,
@@ -391,6 +442,12 @@ export class UploadEngine implements vscode.Disposable {
       totalInputTokens = estimatedTokens.input || 0
       totalOutputTokens = estimatedTokens.output || 0
     }
+    // 并入 subagent 用量：详情页树递归累加子节点，列表顶层必须同口径
+    totalInputTokens += subagentInputTokens
+    totalOutputTokens += subagentOutputTokens
+    // tokens 必须与 input+output 同口径（全量累加），否则多轮会话（多条 llm.call）
+    // 时 UI 列表的 TOKENS 列（取顶层 tokens）与详情（input+output）数值不一致
+    const totalTokens = (totalInputTokens + totalOutputTokens) || (estimatedTokens?.total || 0)
 
     const skillNames = skillCalls.map(s => {
       const startEvent = toolCalls.find(ts => ts.trace_id === s.trace_id)

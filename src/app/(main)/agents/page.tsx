@@ -662,7 +662,7 @@ function AgentsPageInner() {
             { value: 'opencode', label: 'opencode' },
             { value: 'openclaw', label: 'openclaw' },
             { value: 'hermes', label: 'hermes' },
-            { value: 'trae', label: 'TRAE AI IDE' },
+            { value: 'trae', label: 'Trae IDE' },
         ],
         executionTimes: [
             { value: 'all', label: t('nav.filterDefaultOption') },

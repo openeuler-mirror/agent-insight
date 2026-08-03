@@ -19,7 +19,7 @@ export async function GET() {
         // Fallback: return setup instructions as JSON
         return NextResponse.json({
             framework: 'trae',
-            name: 'TRAE AI IDE',
+            name: 'Trae IDE',
             version: '0.1.0',
             install_steps: [
                 '1. 下载 VSIX 文件后，打开 TRAE IDE',

@@ -109,7 +109,7 @@ const frameworks = [
     { name: 'Hermes', value: 'hermes' },
     { name: 'OpenClaw', value: 'openclaw' },
     { name: 'JiuwenSwarm', value: 'jiuwen' },
-    { name: 'TRAE AI IDE', value: 'trae' },
+    { name: 'Trae IDE', value: 'trae' },
 ];
 
 async function select() {
@@ -312,7 +312,7 @@ JIUWEN_EXT_EOF
     echo "✅ JiuwenSwarm extension installed at $JW_EXT_DIR"
 fi
 if [ "$INSTALL_TRAE" = "true" ]; then
-    echo "Installing TRAE AI IDE collector..."
+    echo "Installing Trae IDE collector..."
     echo "  Step 1: Downloading VSIX..."
     TMP_VSIX="/tmp/trae-collector.vsix"
     curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/trae" -o "$TMP_VSIX"
@@ -407,7 +407,7 @@ TRAE_PYEOF
         fi
     done
 
-    echo "  [OK] TRAE AI IDE collector installed"
+    echo "  [OK] Trae IDE collector installed"
     echo "  [NOTE] Restart TRAE IDE to activate"
 fi
 
@@ -720,7 +720,7 @@ if [ "$INSTALL_JIUWEN" = "true" ]; then
     echo "  ✅ JiuwenSwarm Extension: \${JIUWENSWARM_DATA_DIR:-$HOME/.jiuwenswarm}/extensions/agent-insight-observability (telemetry in config/.env)"
 fi
 if [ "$INSTALL_TRAE" = "true" ]; then
-    echo "  [OK] TRAE AI IDE Collector: installed"
+    echo "  [OK] Trae IDE Collector: installed"
 fi
 
 if [ "$NEEDS_WATCHER_SCRIPTS" = "true" ]; then
@@ -839,7 +839,7 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    "    { name: \'Hermes\', value: \'hermes\' },"',
         '    "    { name: \'OpenClaw\', value: \'openclaw\' },"',
         '    "    { name: \'JiuwenSwarm\', value: \'jiuwen\' },",',
-        '    "    { name: \'TRAE AI IDE\', value: \'trae\' }",',
+        '    "    { name: \'Trae IDE\', value: \'trae\' }",',
         '    "];"',
         '    ""',
         '    "async function select() {"',
@@ -1010,7 +1010,7 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '}',
         '',
         'if ($INSTALL_TRAE) {',
-        '    Write-Host "Installing TRAE AI IDE collector..."',
+        '    Write-Host "Installing Trae IDE collector..."',
         '    $tmpVsix = Join-Path $env:TEMP "trae-collector.vsix"',
         '    Write-Host "  Step 1: Downloading VSIX..."',
         '    (New-Object System.Net.WebClient).DownloadFile("$AGENT_INSIGHT_BASE_URL/api/setup/trae", $tmpVsix)',
@@ -1127,7 +1127,7 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '        Write-Host "  [WARN] setup.ps1 not found"',
         '    }',
         '',
-        '    Write-Host "  [OK] TRAE AI IDE collector installed"',
+        '    Write-Host "  [OK] Trae IDE collector installed"',
         '    Write-Host "  [NOTE] Restart TRAE IDE to activate"',
         '}',
         '',
@@ -1407,7 +1407,7 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '}',
         'if ($INSTALL_JIUWEN) { $summaryJwHome = if ($env:JIUWENSWARM_DATA_DIR) { $env:JIUWENSWARM_DATA_DIR } else { Join-Path $env:USERPROFILE ".jiuwenswarm" }; Write-Host "  ✅ JiuwenSwarm Extension: $summaryJwHome\\extensions\\agent-insight-observability (telemetry in config\\.env)" }',
                 'if (\$INSTALL_TRAE) {',
-                '    Write-Host "  [OK] TRAE AI IDE Collector: ~/.trae-cn-server/extensions/agent-insight.agent-insight-trae-collector-0.1.0"',
+                '    Write-Host "  [OK] Trae IDE Collector: ~/.trae-cn-server/extensions/agent-insight.agent-insight-trae-collector-0.1.0"',
                 '}',
         '',
         'if ($NEEDS_WATCHER_SCRIPTS) {',

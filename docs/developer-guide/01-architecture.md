@@ -23,7 +23,7 @@
 2. **Skill 质量参差不齐** —— 缺乏系统化的方式评测和迭代 Skill。
 3. **Agent 经验无法沉淀** —— 每次优化都从零开始。
 
-**Agent-Insight** 是一个**框架无关、完全自托管**的 Agent 工程底座，让运行在 OpenCode、Claude Code、TRAE AI IDE、OpenClaw、LangChain 等任意框架上的 Agent 都能被持续观测、系统评测和自主优化，并将 **Skill（Agent 能力）作为一等公民**，提供从生成、A/B 测试到优化的完整闭环。
+**Agent-Insight** 是一个**框架无关、完全自托管**的 Agent 工程底座，让运行在 OpenCode、Claude Code、Trae IDE、OpenClaw、LangChain 等任意框架上的 Agent 都能被持续观测、系统评测和自主优化，并将 **Skill（Agent 能力）作为一等公民**，提供从生成、A/B 测试到优化的完整闭环。
 
 **形态判断** `[确证]`：这是一个 **Next.js 16 全栈 Web 应用**（前端仪表盘 + 后端 API 路由同进程），辅以一个 **CLI 安装器**（`bin/cli.js`，npm 包 `@witty-ai/skill-insight`）和一组**分发到 Agent 宿主机的客户端接入脚本**（`scripts/*watcher*`、`scripts/opencode_plugin*`、`scripts/trae-collector/`、`public/sync_skills.ts`）。`package.json` 声明了 `bin`，但主体是 Web 服务而非 CLI。
 
@@ -120,7 +120,7 @@ flowchart TB
     subgraph hosts["Agent 宿主机（外部）"]
         oc["OpenCode 运行时"]
         cc["Claude Code"]
-        trae["TRAE AI IDE"]
+        trae["Trae IDE"]
         ocl["OpenClaw / LangChain"]
     end
     user["开发者 / 团队<br/>（浏览器）"]

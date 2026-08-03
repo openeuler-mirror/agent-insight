@@ -5,7 +5,7 @@ export const traeAdapter: FrameworkAdapter = {
   descriptor: {
     id: "trae",
     aliases: ["trae-cn", "trae-ide", "trae-ai"],
-    label: "TRAE AI IDE",
+    label: "Trae IDE",
     onboard: "plugin",
     platform: "trae",
   },
