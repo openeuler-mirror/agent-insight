@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `e429afc276dc9978e8b00930378405cf8444617e` (`e429afc`) |
+| Commit | `a1086fa6500e21f9e52de3c5922388aaee171ab5` (`a1086fa`) |
 | Branch | `feat/claude-context-supplement` |
-| Date | 2026-08-03T09:47:02+08:00 |
+| Date | 2026-08-03T10:08:57+08:00 |
 | Author | gyctl |
-| Subject | `perf: 合并 Claude 高频补传 worker` |
+| Subject | `fix: 隐藏带前缀的 Claude 标题提示词` |
 
-**如何更新：** `git diff e429afc HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff a1086fa HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
