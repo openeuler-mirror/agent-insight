@@ -179,7 +179,7 @@ TRAE 通过 Hooks 机制暴露的数据面有限，以下信息**无法从 TRAE 
 
 1. 在 Trae IDE 插件市场中找到 Agent Insight 插件
 2. 点击 **卸载**
-3. 重启 IDE
+3. **重启 Trae IDE**——卸载后必须重启，以清理 IDE 的旧插件缓存（bin 缓存、扩展注册信息），否则残留的旧插件代码可能继续运行或与新安装版本冲突
 
 卸载后 Hook 脚本会被自动清理（VS Code `vscode:uninstall` 钩子执行清理脚本），`~/.agent-insight/trae-hooks/` 目录将被移除。如需完全清理（包括历史 spool 数据与 checkpoint）：
 
@@ -194,3 +194,15 @@ rm -rf ~/.agent-insight/otel_data/trae ~/.agent-insight/trae_uploader_checkpoint
 > 若在 Extensions 面板卸载后旧数据仍残留（钩子未触发），可手动执行上述清理命令。
 
 ![卸载清理说明](../../images/agent/observability/trae-uninstall.png)
+
+## 更新插件
+
+升级到新版本插件（含采集逻辑修复、新功能）时，**必须先卸载旧插件、重启 IDE、再安装新插件**，否则旧插件进程可能继续运行旧代码，新版本不会生效：
+
+1. 在 Trae IDE 插件市场中卸载 Agent Insight 插件
+2. **重启 Trae IDE**（清理旧插件缓存与运行中的插件进程）
+3. 通过 [接入步骤](#接入步骤) 中的任一方式重新安装最新版插件（或手动安装新 VSIX）
+
+> **Note**
+> 更新后可在 IDE 输出面板的 **Agent Insight TRAE** 频道确认插件已重新激活；
+> 若新版本数据表现与旧版不一致（如 Token 统计口径变化），属预期行为。

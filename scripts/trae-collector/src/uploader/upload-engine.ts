@@ -261,13 +261,17 @@ export class UploadEngine implements vscode.Disposable {
     }
     // 按轮次取 llm.call：第 i 轮（prompt[i]→end[i]）对应 llmCalls[i]，而不是全局复用第一条。
     // 多轮会话里每轮 token 不同，全局 firstLlm 会让所有轮次共享第一轮的 usage。
+    const toolContextTokenCount = this.countTokens(toolContextTexts.join(' '))
     const turnUsage = (i: number) => {
       const llm = llmCalls[i]?.payload || firstLlm
       if (!llm) return estimatedTokens
+      const promptTokens = llm.promptTokens || 0
+      // 工具上下文（参数+结果）回填给模型作为输入，与计费口径一致；
+      // llm.call 的 promptTokens 只估算用户 prompt，需补上工具部分
       return {
-        input: llm.promptTokens || 0,
+        input: promptTokens + toolContextTokenCount,
         output: llm.completionTokens || 0,
-        total: llm.totalTokens || (llm.promptTokens || 0) + (llm.completionTokens || 0),
+        total: promptTokens + toolContextTokenCount + (llm.completionTokens || 0),
       }
     }
     const turnModel = (i: number) => (llmCalls[i]?.payload || firstLlm)?.model || configModel || sessionAgent
@@ -442,6 +446,8 @@ export class UploadEngine implements vscode.Disposable {
       totalInputTokens = estimatedTokens.input || 0
       totalOutputTokens = estimatedTokens.output || 0
     }
+    // 并入工具上下文（与 turnUsage 同口径）：llm.call 的 promptTokens 只估算用户 prompt
+    totalInputTokens += toolContextTokenCount
     // 并入 subagent 用量：详情页树递归累加子节点，列表顶层必须同口径
     totalInputTokens += subagentInputTokens
     totalOutputTokens += subagentOutputTokens
