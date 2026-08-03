@@ -35,6 +35,8 @@ export type ContextSupplementItem = {
   hookName?: unknown;
   /** tool_output 专属:对应的 tool_use_id,服务端据此把输出挂回那次工具调用 */
   toolUseId?: unknown;
+  /** system_prompt 专属:子 Agent 类型,和 toolUseId 一起限定 system prompt scope */
+  agentType?: unknown;
   isError?: unknown;
   capturedAt?: unknown;
 };
@@ -101,7 +103,8 @@ export function buildContextSupplementEvents(
         content_hash: asTrimmedString(item.hash) || undefined,
         hook_event: kind === 'hook_context' ? asTrimmedString(item.hookEvent) || undefined : undefined,
         hook_name: kind === 'hook_context' ? asTrimmedString(item.hookName) || undefined : undefined,
-        tool_use_id: kind === 'tool_output' || kind === 'subagent_map' ? toolUseId : undefined,
+        tool_use_id: kind === 'system_prompt' || kind === 'tool_output' || kind === 'subagent_map' ? toolUseId || undefined : undefined,
+        agent_type: kind === 'system_prompt' ? asTrimmedString(item.agentType) || undefined : undefined,
         is_error: kind === 'tool_output' ? item.isError === true : undefined,
       },
     });

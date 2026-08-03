@@ -53,6 +53,100 @@ test("补传:跨机读不到 body_ref 时,system prompt 由客户端补传补上
   assert.equal(interactions.filter((item) => item.role === "assistant").length, 1)
 })
 
+test("补传:root 与两个子 Agent 的 system prompt 分别落到自己的 scope", () => {
+  const { events: supplementEvents } = buildContextSupplementEvents(
+    SESSION,
+    [
+      { kind: "system_prompt", text: "root system", hash: "sys-root" },
+      { kind: "system_prompt", text: "child system", hash: "sys-child-1", toolUseId: "call_child_1", agentType: "general-purpose" },
+      { kind: "system_prompt", text: "child system", hash: "sys-child-2", toolUseId: "call_child_2", agentType: "general-purpose" },
+      {
+        kind: "subagent_map",
+        toolUseId: "call_child_1",
+        text: JSON.stringify({ toolUseId: "call_child_1", agentType: "general-purpose", messageUuids: ["uuid-child-1"], toolUseIds: [] }),
+      },
+      {
+        kind: "subagent_map",
+        toolUseId: "call_child_2",
+        text: JSON.stringify({ toolUseId: "call_child_2", agentType: "general-purpose", messageUuids: ["uuid-child-2"], toolUseIds: [] }),
+      },
+    ],
+    { receivedAt: "2026-07-29T10:00:10.000Z", maxTextChars: 64_000 },
+  )
+  assert.equal(supplementEvents[1].attributes.tool_use_id, "call_child_1")
+  assert.equal(supplementEvents[1].attributes.agent_type, "general-purpose")
+
+  const record = aggregateClaudeOtelEvents(SESSION, [
+    event("user_prompt", { prompt: "让两个子 Agent 做计算" }, { sequence: 0 }),
+    event("api_request", { input_tokens: 10, output_tokens: 2 }, { sequence: 1 }),
+    event("assistant_response", { response: "开始分派", query_source: "repl_main_thread", "message.uuid": "uuid-root" }, { sequence: 2 }),
+    event("tool_result", {
+      tool_name: "Agent",
+      tool_use_id: "call_child_1",
+      success: "true",
+      tool_input: JSON.stringify({ prompt: "计算 3+3" }),
+    }, { sequence: 3 }),
+    event("assistant_response", { response: "6", query_source: "repl_main_thread", "message.uuid": "uuid-child-1" }, { sequence: 4 }),
+    event("tool_result", {
+      tool_name: "Agent",
+      tool_use_id: "call_child_2",
+      success: "true",
+      tool_input: JSON.stringify({ prompt: "计算 4×5" }),
+    }, { sequence: 5 }),
+    event("assistant_response", { response: "20", query_source: "repl_main_thread", "message.uuid": "uuid-child-2" }, { sequence: 6 }),
+    ...supplementEvents,
+  ])
+
+  assert.ok(record)
+  const interactions = record!.interactions as any[]
+  const systems = interactions.filter((item) => item.role === "system")
+  assert.equal(systems.length, 3)
+  assert.equal(systems.find((item) => !item.subagent_session_id)?.content, "root system")
+  assert.deepEqual(
+    systems.filter((item) => item.subagent_session_id).map((item) => item.subagent_session_id).sort(),
+    [`${SESSION}:call_child_1`, `${SESSION}:call_child_2`],
+  )
+
+  const parentCalls = interactions.flatMap((item) => item.role === "assistant" ? item.tool_calls || [] : [])
+  assert.deepEqual(
+    parentCalls.map((call: any) => JSON.parse(call.arguments).subagent_type),
+    ["general-purpose", "general-purpose"],
+  )
+  const tree = buildAgentCallTree(interactions)!
+  assert.equal(tree.children.length, 2)
+  assert.ok(tree.children.every((child) => child.subagentType === "general-purpose"))
+  assert.ok(tree.children.every((child) => child.systemPrompts?.[0]?.text === "child system"))
+  assert.ok(tree.events.filter((item) => item.kind === "task").every((item) => item.spawnedChildId))
+})
+
+test("补传:Claude 内部 assistant response 全部隐藏且普通响应保留", () => {
+  const internalSources = [
+    "generate_session_title",
+    "prompt_suggestion",
+    "prompt_suggestion_generate",
+    "away_summary",
+    "agent_summary",
+  ]
+  const record = aggregateClaudeOtelEvents(SESSION, [
+    event("user_prompt", { prompt: "真实问题" }, { sequence: 0 }),
+    ...internalSources.map((querySource, index) => event(
+      "assistant_response",
+      { response: `内部内容 ${querySource}`, query_source: querySource },
+      { sequence: index + 1, promptId: `internal-${index}` },
+    )),
+    event(
+      "assistant_response",
+      { response: "真实回答", query_source: "repl_main_thread" },
+      { sequence: 20, promptId: "normal" },
+    ),
+  ])
+
+  assert.ok(record)
+  const assistants = (record!.interactions as any[]).filter((item) => item.role === "assistant")
+  assert.deepEqual(assistants.map((item) => item.content), ["真实回答"])
+  assert.equal(record!.final_result, "真实回答")
+})
+
 test("补传:没有补传时,跨机 trace 依旧只有 user + assistant(证明回归基线)", () => {
   const record = aggregateClaudeOtelEvents(SESSION, crossMachineEvents())
   const roles = (record!.interactions as any[]).map((item) => item.role)

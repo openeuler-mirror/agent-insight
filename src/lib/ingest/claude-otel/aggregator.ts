@@ -7,6 +7,17 @@ import { readClaudeOtelEventsForSession } from './spool';
 import type { ClaudeOtelAggregationResult, ClaudeOtelEvent } from './types';
 
 const ROOT_AGENT_NAME = 'Claude Code';
+const INTERNAL_CLAUDE_QUERY_SOURCES = new Set([
+  'generate_session_title',
+  'prompt_suggestion',
+  'prompt_suggestion_generate',
+  'away_summary',
+  'agent_summary',
+]);
+
+function isInternalClaudeQuerySource(value: any): boolean {
+  return INTERNAL_CLAUDE_QUERY_SOURCES.has(asString(value).trim().toLowerCase());
+}
 
 function asNumber(value: any, fallback = 0): number {
   if (value === undefined || value === null || value === '') return fallback;
@@ -364,6 +375,18 @@ function mergeToolCall(existing: any, incoming: any): any {
   return merged;
 }
 
+function applyMappedSubagentType(toolCall: any, agentType?: string): any {
+  if (toolCall?.name !== 'task' || !agentType?.trim()) return toolCall;
+  const args = parseJsonMaybe(toolCall.arguments) || {};
+  args.subagent_type = normalizeSubagentType(agentType);
+  const serialized = JSON.stringify(args);
+  return {
+    ...toolCall,
+    arguments: serialized,
+    function: { ...(toolCall.function || {}), name: 'task', arguments: serialized },
+  };
+}
+
 function mergeToolCallIntoInteraction(target: any, toolCall: any): void {
   const existing = Array.isArray(target.tool_calls) ? target.tool_calls : [];
   const idx = existing.findIndex((tc: any) => tc.id === toolCall.id);
@@ -418,8 +441,10 @@ function dedupeEvents(events: ClaudeOtelEvent[]): ClaudeOtelEvent[] {
 
 type SystemPromptState = {
   systemByPromptKey: Map<string, string>;
-  /** 客户端补传的 system prompt(会话级,raw body 里没有 promptId 可归)。 */
+  /** 客户端补传的 root system prompt。 */
   supplementSystemTexts: string[];
+  /** 客户端补传的 child system prompt,按父侧 Agent tool_use_id 隔离。 */
+  supplementSystemTextsByToolId: Map<string, string[]>;
   emittedSystemScopes: Set<string>;
 };
 
@@ -427,9 +452,10 @@ type SystemPromptState = {
  * 该 prompt 要吐出的 system prompt 正文。**真实请求体永远优先**:只有本机读不到
  * `body_ref`(跨机部署)时才回落到客户端补传,所以同机部署的行为一字不变。
  */
-function resolveSystemTexts(state: SystemPromptState, key: string): string[] {
+function resolveSystemTexts(state: SystemPromptState, key: string, toolUseId?: string): string[] {
   const real = state.systemByPromptKey.get(key);
   if (real) return [real];
+  if (toolUseId) return state.supplementSystemTextsByToolId.get(toolUseId) || [];
   return state.supplementSystemTexts;
 }
 
@@ -476,6 +502,7 @@ function appendAssistantFromApiResponse(
     subagentSessionByToolId: Map<string, string>;
     systemByPromptKey: Map<string, string>;
     supplementSystemTexts: string[];
+    supplementSystemTextsByToolId: Map<string, string[]>;
     emittedSystemScopes: Set<string>;
   },
 ): void {
@@ -503,7 +530,7 @@ function appendAssistantFromApiResponse(
   const key = promptKey(event);
   const supplemented = !state.systemByPromptKey.has(key);
   const resolvedSubSession = isSubagentResponse ? subagentSessionId || `${event.sessionId}:${linkedToolId}` : undefined;
-  for (const systemText of resolveSystemTexts(state, key)) {
+  for (const systemText of resolveSystemTexts(state, key, isSubagentResponse ? linkedToolId : undefined)) {
     pushSystemInteraction(interactions, state, systemText, {
       event,
       requestEvent,
@@ -575,6 +602,7 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
   const emittedSystemScopes = new Set<string>();
   // 客户端补传:system prompt 走会话级(raw body 里没有 promptId),hook 注入上下文按内容去重。
   const supplementSystemTexts: string[] = [];
+  const supplementSystemTextsByToolId = new Map<string, string[]>();
   const emittedHookContexts = new Set<string>();
   // 工具输出补传:tool_use_id → 输出正文。跨机时请求体读不到,这是唯一来源。
   const supplementToolOutputById = new Map<string, any>();
@@ -600,6 +628,7 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
   const assistantResponseSeenByPrompt = new Map<string, number>();
   for (const event of ordered) {
     if (event.eventName === 'api_request_body') {
+      if (isInternalClaudeQuerySource(event.attributes?.query_source)) continue;
       const body = readBodyPayload(event.attributes || {});
       if (body) {
         collectToolResultOutputsFromRequestBody(body, requestBodyToolOutputById);
@@ -613,7 +642,14 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
       const attrs = event.attributes || {};
       if (attrs.kind === 'system_prompt') {
         const text = asString(attrs.text).trim();
-        if (text && !supplementSystemTexts.includes(text)) supplementSystemTexts.push(text);
+        const toolUseId = asString(attrs.tool_use_id);
+        if (text && toolUseId) {
+          const scoped = supplementSystemTextsByToolId.get(toolUseId) || [];
+          if (!scoped.includes(text)) scoped.push(text);
+          supplementSystemTextsByToolId.set(toolUseId, scoped);
+        } else if (text && !supplementSystemTexts.includes(text)) {
+          supplementSystemTexts.push(text);
+        }
       } else if (attrs.kind === 'tool_output') {
         const toolUseId = asString(attrs.tool_use_id);
         const output = normalizeToolResultOutput(attrs.text);
@@ -649,6 +685,7 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
       continue;
     }
     if (event.eventName !== 'api_response_body') continue;
+    if (isInternalClaudeQuerySource(event.attributes?.query_source)) continue;
     const body = readBodyPayload(event.attributes || {});
     if (!body) continue;
     const key = promptKey(event);
@@ -753,7 +790,8 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
     }
 
     if (event.eventName === 'api_response_body') {
-      const state = { finalResult, model, responseMetaByKey, responseToToolId, toolUseById, subagentSessionByToolId, systemByPromptKey, supplementSystemTexts, emittedSystemScopes };
+      if (isInternalClaudeQuerySource(attrs.query_source)) continue;
+      const state = { finalResult, model, responseMetaByKey, responseToToolId, toolUseById, subagentSessionByToolId, systemByPromptKey, supplementSystemTexts, supplementSystemTextsByToolId, emittedSystemScopes };
       appendAssistantFromApiResponse(event, interactions, state);
       finalResult = state.finalResult;
       model = state.model || model;
@@ -783,8 +821,7 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
       assistantResponseSeenByPrompt.set(key, seen + 1);
       // 队列按 assistant_response 的出现顺序对齐消耗,跳过时也要 shift,否则混合场景错配
       const requestEvent = fallbackRequestsByPrompt.get(key)?.shift();
-      // 生成会话标题是 Claude Code 的内部 LLM 调用,不是对话内容
-      if (attrs.query_source === 'generate_session_title') continue;
+      if (isInternalClaudeQuerySource(attrs.query_source)) continue;
       if (seen < (usableResponseCountByPrompt.get(key) || 0)) continue;
       const text = asString(attrs.response);
       if (!text.trim()) continue;
@@ -797,6 +834,17 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
         const subagentName = normalizeSubagentType(map.agentType);
         agentNames.add(subagentName);
         const scope = `${event.sessionId}:${mappedToolId}`;
+        const systemState = { systemByPromptKey, supplementSystemTexts, supplementSystemTextsByToolId, emittedSystemScopes };
+        for (const systemText of resolveSystemTexts(systemState, key, mappedToolId)) {
+          pushSystemInteraction(interactions, systemState, systemText, {
+            event,
+            requestEvent,
+            subSession: scope,
+            agent: subagentName,
+            model: attrs.model,
+            supplemented: !systemByPromptKey.has(key),
+          });
+        }
         const turn = {
           role: 'subagent',
           content: text,
@@ -824,7 +872,7 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
       if (attrs.model) model = String(attrs.model);
       // 跨机场景只有这条兜底路径会跑,system prompt 得在这里发射(root scope —— 本事件
       // 不带 tool_use,分不出子 agent)。同机部署走上面的 api_response_body 路径,不受影响。
-      const systemState = { systemByPromptKey, supplementSystemTexts, emittedSystemScopes };
+      const systemState = { systemByPromptKey, supplementSystemTexts, supplementSystemTextsByToolId, emittedSystemScopes };
       for (const systemText of resolveSystemTexts(systemState, key)) {
         pushSystemInteraction(interactions, systemState, systemText, {
           event,
@@ -867,7 +915,10 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
           : supplementToolOutputById.has(toolId) ? supplementToolOutputById.get(toolId)
             : subagentOutputByToolId.get(toolId))
         : undefined;
-      const toolCall = buildToolCallFromResult(event, toolUse, readToolResultOutput(event, fallbackOutput));
+      const toolCall = applyMappedSubagentType(
+        buildToolCallFromResult(event, toolUse, readToolResultOutput(event, fallbackOutput)),
+        typeof toolId === 'string' && !toolUse ? subagentMapByToolId.get(toolId)?.agentType : undefined,
+      );
       // 子 agent 内部工具(tool_use_id 命中补传映射):挂到该 scope 最新一轮,而不是 root。
       // `!toolUse` 兜住同机:读得到响应体正文时 tool_use 块存在,走正常路径,这里不插手。
       const innerScope = typeof toolId === 'string' && !toolUse ? innerToolIdToSubagentToolId.get(toolId) : undefined;
@@ -926,6 +977,16 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
           const subagentName = subagentNameFromToolCall(toolCall);
           agentNames.add(subagentName);
           const timing = toolTimingFromResult(event);
+          const scope = `${event.sessionId}:${toolId}`;
+          const systemState = { systemByPromptKey, supplementSystemTexts, supplementSystemTextsByToolId, emittedSystemScopes };
+          for (const systemText of resolveSystemTexts(systemState, promptKey(event), toolId)) {
+            pushSystemInteraction(interactions, systemState, systemText, {
+              event,
+              subSession: scope,
+              agent: subagentName,
+              supplemented: !systemByPromptKey.has(promptKey(event)),
+            });
+          }
           // 攒着,主循环结束后再追加:建树时子 agent 那一轮要认领父轮上的 task 调用,
           // 而跨机的 task 调用可能到本轮助手消息落地时才挂上去(见上面的 pending 收口)。
           // 先于父轮出现就认领不到,子节点会塌回 root。
@@ -938,7 +999,7 @@ export function aggregateClaudeOtelEvents(sessionId: string, events: ClaudeOtelE
             timeInfo: { created: timing.started_at || eventTime(event), completed: timing.completed_at },
             agent: subagentName,
             subagent_name: subagentName,
-            subagent_session_id: `${event.sessionId}:${toolId}`,
+            subagent_session_id: scope,
             prompt_id: event.promptId,
             subagent_source: 'client-supplement',
           });
