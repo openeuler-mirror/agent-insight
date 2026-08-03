@@ -77,9 +77,7 @@ function renderMd(md: string): ReactNode {
 
 function preview(ev: EvidenceLike): string {
   if (ev.md) {
-    // 过滤引用块（> 开头的原文引用行），折叠预览只留判断结论，展开后仍可见完整内容
     return ev.md.replace(/[*`#]/g, '').split('\n')
-      .filter((x) => !x.trim().startsWith('>'))
       .map((x) => x.trim().replace(/^-\s*/, '')).filter(Boolean).join('；');
   }
   const j = ev.json;

@@ -20,7 +20,7 @@ import { PageContainer } from '@/components/shell/PageContainer';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
 import { categorySummary, effectiveScore, groupByCategory } from '@/lib/engine/experiment/detail-agg';
-import { deriveVerdict, displaySummary, VERDICT_LABELS, type EvalVerdict } from '@/lib/evaluators/eval-output';
+import { deriveVerdict, displaySummary, isEvidenceRedundant, VERDICT_LABELS, type EvalVerdict } from '@/lib/evaluators/eval-output';
 import type { EvaluatorCategory } from '@/lib/evaluators/registry';
 
 interface ResultRow {
@@ -642,6 +642,14 @@ export default function TraceEvalDetailPage({ params }: { params: Promise<{ id: 
                                   </button>
                                 </div>
                               )}
+
+                              {/* 完整判断依据：与卡头那句结论逐字相同就不重复渲染。
+                                  （此前这段在有评分点时被 else 分支吃掉，永远显示不出来。） */}
+                              {r.evidence && !isEvidenceRedundant(r.summary, r.evidence) ? (
+                                <div style={{ marginTop: 9 }}>
+                                  <EvidenceBlock evidence={r.evidence} />
+                                </div>
+                              ) : null}
 
                               {/* 评分点明细：二级折叠，默认收起，标题上直接标出有几项没达标 */}
                               {points.length > 0 && (
