@@ -160,6 +160,7 @@ async function runCreativity(user: string, ctx: FaithfulPresetContext): Promise<
   });
 
   return normalizeEvaluatorOutput({
+    summary: overallReason || undefined,
     score: Math.round(((totalRating - 5) / 10) * 100),
     points,
     evidence: overallReason ? { md: overallReason } : undefined,

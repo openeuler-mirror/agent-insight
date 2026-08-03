@@ -12,7 +12,7 @@
 ```
 实验(Experiment)
   └─ case(ExperimentCase：一条 trace + 输入/实际输出/参考答案)
-       └─ × 每个评估器 → ExperimentEvalResult(status/score/points/evidence)
+       └─ × 每个评估器 → ExperimentEvalResult(status/verdict/summary/score/points/evidence)
 ```
 
 - 一个 case × 一个评估器 = 一行结果，互不影响；单行失败不拖垮其它行，可单独重评。
@@ -29,7 +29,7 @@
 
 > 这张表只列到「族」级别；具体有哪些预置卡以 `preset-evaluators.ts` 为准，别在文档里再抄一份 id 清单——抄了必然过期。
 
-> **canonical 提醒**：`result-*` 系列的实现体在 `engine/evaluation/result-quality-evaluator.ts`，**「可靠性与性能」页与质量监控管线共用同一份**。改它的口径 = 两个产品面同时变，必须同步升 `RESULT_METRIC_VERSIONS`（见 §6.5）。
+> **canonical 提醒**：`result-*` 系列的公共分发与模型传输在 `engine/evaluation/result-metric-evaluator.ts`，只服务评测中心的主动实验。质量监控与 trace 上传不调用这套能力。
 
 ---
 
@@ -39,7 +39,7 @@
 
 | 契约 | 是什么 | 改不动的原因 |
 |---|---|---|
-| **① 输出契约** | 交出 `{ score?, points?, evidence? }` | 前端按它渲染；改格式 = 所有评估器一起改 |
+| **① 输出契约** | 交出 `{ verdict?, summary?, score?, points?, evidence? }` | 前端按它渲染；改格式 = 所有评估器一起改 |
 | **② evaluatorId** | 标识这个评估器的字符串 | 已写进历史结果，改名 = 历史数据变孤儿 |
 | **③ 注册元数据** | `category`（看结果/看轨迹）+ `requires`（要不要参考答案） | 注册时确定、**运行时不可变**；已出的分按旧类目归属 |
 
@@ -47,10 +47,12 @@
 
 ### 2.1 输出契约
 
-定义在 `src/lib/evaluators/eval-output.ts`，三个字段**全可选**、任意组合合法：
+定义在 `src/lib/evaluators/eval-output.ts`，五个字段**全可选**、任意组合合法：
 
 ```ts
 EvaluatorOutput = {
+  verdict?: 'pass' | 'warn' | 'fail'  // 结论判定 → 卡头 chip（达成/部分达成/未达成）
+  summary?: string        // 一句话结论，≤200 字（提示词里要求 ≤80）→ 卡头正文
   score?: number          // 0-100，卡片总分。纯定性评估器可省
   points?: EvalPoint[]    // 评分点（最多 64）
   evidence?: {md} | {json} // 卡级证据
@@ -67,11 +69,48 @@ EvalPoint = {
 }
 ```
 
+**`verdict` / `summary` 是呈现层的主信息，请务必上报。** Trace 评测详情是**两级折叠**：
+
+```
+卡片（默认）    结论 chip + 一句话结论 + 得分
+  └ 展开卡片    完整判断依据（与结论重复则不渲染）+ 人工修正 + 评论
+       └ 再展开  评分点明细表
+```
+
+也就是说，**大多数使用者只会看到 `summary` 那一句**。评分点写得再细，不点两次展不开。
+不给结论，卡片就只剩一个孤零零的数字。
+
+- `summary` 的要求是**说人话、讲具体问题**，让人看完不用再翻明细就知道发生了什么：
+  不要用"覆盖率/维度/评分点/整体完成度偏低"这类评测术语，不要罗列各维度，只讲最要命的
+  那一条，讲具体的东西（少了哪个数、答错成什么、漏了哪一步），≤80 字。
+  反例：「关键观点覆盖率偏低，多个维度未达标。」正例：「攻击类型判对了，但没给出来源 IP，
+  也漏了 root 爆破次数，运维拿着没法直接处置。」各预置评估器的提示词里都写了这条约束，
+  新写评估器时照抄。
+- `verdict` 不填时呈现层按 `deriveVerdict(score)` 派生（≥80 pass / ≥60 warn / 其余 fail）。
+  派生值**不落库**，所以调整阈值口径不需要重刷历史数据。有比分数更准的达成判定时（例如
+  任务完成度评估器的 `isCorrect`）应显式上报，别让它退化成分数分档。
+- `summary` 不填时呈现层回退到 `evidence.md` 的首段（`displaySummary()`）——这是给存量数据
+  留的兼容路径，新评估器别依赖它。
+- 若 `evidence.md` 与 `summary` 逐字相同，展开区不再重复渲染证据（`isEvidenceRedundant()`）。
+  想让展开后有额外信息可看，`evidence` 就要比 `summary` 多写点东西，而不是把同一句复制两遍。
+
+> 已有评估器的结论字段来源：任务完成度 = `reason`（同时写进 `Execution.judgmentReason`）；
+> 轨迹质量 = 专设的 `conclusion` 字段，**不是** `reason_text` —— 后者是「执行路径分析」绿框的
+> 正文，有固定的完整性/工具选择/冗余分段结构，当结论读着费劲，故两者分开、取不到才回落。
+
 **归一化 `normalizeEvaluatorOutput()` 的行为**（务必知道，否则会被"吞字段"坑到）：
 
 - `score` 越界 clamp 到 [0,100]；非数值丢弃。
 - **0-1 量纲自动放大**：`score ∈ (0,1]` 且非整数时 ×100。所以要给 100 分必须显式写 `100`，写 `1` 会被当成 1 分。
+- `verdict` 容忍英文别名与中文说法（`passed`/`达成`/`partial`/`未通过`…），**未识别的值直接丢弃**而不报错。
+- `summary` 压平换行并截断到 200 字（超出补 `…`）。
 - 非法评分点逐条丢弃，不会让整次评估失败。
+
+> **人工修正分不属于本契约。** 用户可以在详情页把某一行的分改掉，写的是平台侧的
+> `ExperimentEvalResult.humanScore`（连同必填的 `humanReason`），机器分 `score` 原样只读留存，
+> 聚合按**生效分 = `humanScore ?? score`** 算（`detail-agg.ts` 的 `effectiveScore`）。
+> 评估器只管上报自己的判断，不需要、也不应该感知人工意见——两者的差值正是校准评估器的依据。
+> 注意重评会清除该行的人工修正（`run-experiment.ts` 的 `RESET_RESULT_FIELDS`）。
 
 ### 2.2 `evaluatorId` 是永久契约，命名一次定死
 
@@ -244,8 +283,8 @@ return normalizeEvaluatorOutput({ score: snap3(toolChoice) * 100 });
 async function runYourEvaluator(user: string, ctx: FaithfulPresetContext): Promise<EvaluatorOutput> {
   // 1) 取输入。注意 input/actualOutput 在 trace 模式下由引擎从 Execution 兜底解析
   // 2) 调模型做**离散判断**（见 §3.2/§3.3），别让它直接给连续分
-  // 3) 代码汇总成 score + points
-  return normalizeEvaluatorOutput({ score, points, evidence });
+  // 3) 代码汇总成 score + points，并给出**结论**（verdict/summary，见 §2.1）
+  return normalizeEvaluatorOutput({ verdict, summary, score, points, evidence });
 }
 ```
 
@@ -253,14 +292,14 @@ async function runYourEvaluator(user: string, ctx: FaithfulPresetContext): Promi
 
 #### 前提：评估器之间**不需要**共享实现
 
-平台的约束只有 §2 那三处（输出契约 / id / 注册元数据）。评估器内部怎么组提示词、怎么解析、怎么汇总，完全自由——只要最后交出 `{ score?, points?, evidence? }`，前端就能渲染。**不要为了"和别人保持一致"去复用不合身的代码。**
+平台的约束只有 §2 那三处（输出契约 / id / 注册元数据）。评估器内部怎么组提示词、怎么解析、怎么汇总，完全自由——只要最后交出 `{ verdict?, summary?, score?, points?, evidence? }`，前端就能渲染。**不要为了"和别人保持一致"去复用不合身的代码。**
 
 既有代码里那两组"共享"是两种各不相同的历史成因，**别当成设计要求照抄**：
 
 | 组 | 表面上共用一个文件 | 实际共享了什么 |
 |---|---|---|
 | `faithful-preset-evaluators.ts` | 2 个评估器 | 几乎没有。`runFaithfulPreset` 只是 `if/else` 转发到两个**完全独立**的实现，各自跑各自的 opencode agent；只共用 `coverageToStatus` / `stepsToAnchors` 两个 20 行小工具。它们在一起的真正原因是「都是遗留 opencode 评估器的适配层」——实现历史，不是逻辑复用 |
-| `result-preset-evaluators.ts` | 4 个评估器 | 真共享，但那是 canonical 层的事：这 4 个本来就是**同一个** `result-quality-evaluator` 的 4 个 metric，且要与「可靠性与性能」页、质量监控管线共用同一份口径（见 §1 canonical 提醒）。这个文件本身只是 ID→metric 映射 + 薄适配 |
+| `result-preset-evaluators.ts` | 4 个评估器 | 共享 `result-metric-evaluator.ts` 的指标分发与结构化模型传输；这个文件本身只负责 ID→metric 映射、实验输入适配和统一输出映射 |
 
 #### 唯一硬约束：接分发时「一批只加一行」
 
@@ -326,11 +365,11 @@ test/<族>-preset-evaluators.test.ts                      ← 测试（必建）
 | 目录 | 放什么 | 判据 |
 |---|---|---|
 | `engine/experiment/` | **实验域的薄适配层**：组提示词、解析 judge 输出、按固定公式汇总成 `EvaluatorOutput` | 只有实验/评测中心用 |
-| `engine/evaluation/` | **canonical 打分能力**：被多个产品面共用的实现体 | 「可靠性与性能」页、质量监控管线等也要用同一份口径 |
+| `engine/evaluation/` | **canonical 打分能力**：叶子评估算法或同一产品面内多个评估器共用的实现体 | 需要稳定的公共输入/输出与模型传输 |
 
 大多数新评估器属于第一类，**直接写在 `engine/experiment/` 就行**，不需要碰 `engine/evaluation/`。
 
-只有当这个口径要被实验以外的产品面复用时，才把实现体放 `engine/evaluation/`、在 `engine/experiment/` 留一层适配（`result-preset-evaluators.ts` 就是范例）。这么做的代价是改口径要同步升 `RESULT_METRIC_VERSIONS`、两个产品面一起回归（§6.5），别无谓地给自己揽这个包袱。
+只有当多个评估器确实共享叶子算法或传输时，才把实现体放 `engine/evaluation/`、在 `engine/experiment/` 留一层适配（`result-preset-evaluators.ts` 就是范例）。质量监控不属于该复用边界。
 
 > **`engine/experiment/` 的文件顶层只许 import 轻量模块**（`eval-output` 及类型）。`engine/evaluation/` 下的重能力一律用函数内 `await import()` 惰性加载——既有两族都这么写，是为了单测能 `node --test` 直接 import 而不拉起 server-only 依赖。
 
@@ -425,17 +464,9 @@ score -= SEVERITY_WEIGHT[f.severity] ?? 0.1;
 
 准确性与忠实度都需要「从实际输出抽主张」。抽取只依赖 `(query, finalResult)`，因此统一走 `faithfulness-evaluator.ts` 的 `extractOutputClaims()`——它按二者哈希缓存，同一 case 内谁先跑谁抽，另一个直接命中。新增评估器如果也要主张列表，复用它，别再写一份。
 
-### 6.5 改 canonical 口径要升版本号
+### 6.5 改 canonical 口径要同步回归四个预置评估器
 
-`result-*` 系列共用 `RESULT_METRIC_VERSIONS`（`result-quality-evaluator.ts`）。**口径变了就升主版本**，否则历史缓存会被当成"可复用"直接返回旧分：
-
-```ts
-// 3.0.0：口径由「参考关键观点被覆盖了多少」改为「实际输出的主张对不对」(精确率)，
-// 与旧分不可比，升主版本让历史缓存失效重算。
-accuracy: '3.0.0',
-```
-
-并且要意识到：**旧数据不会自动重算**。页面上没重评过的 case 仍是旧口径结果，排查问题时先确认这条 case 是什么时候评的。
+`result-*` 系列共用 `result-metric-evaluator.ts` 及其叶子评估器。改公共输入、结构化传输或叶子 evidence 形状时，必须同时回归准确性、答案质量、忠实度和指令遵循的实验输出映射。历史 `ExperimentEvalResult` 不会自动重算；需要新口径结果时应主动重跑实验。
 
 ### 6.6 前端呈现约定
 

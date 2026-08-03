@@ -157,6 +157,7 @@ export async function runDeductionEvaluator(
     : 100;
 
   return normalizeEvaluatorOutput({
+    summary: overallReason || undefined,
     score: overallScore,
     points,
     evidence: overallReason ? { md: overallReason } : undefined,
