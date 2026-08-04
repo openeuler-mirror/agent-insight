@@ -96,10 +96,10 @@ model Execution {
   skillTriggerRate         Float?
   // 写入时从 trace interactions 预解析的 agent 名列表(JSON string[],来自 extractObservedAgentNames)。
   // 让轻量列表(fields=light)无需加载/解析 session interactions 即可拿到完整 agents,根治堆 OOM 又不丢数据。
-  observedAgents       String?
+  observedAgents           String?
   // 写入时预解析的 per-call 统计摘要(固定体积对数桶直方图,大盘 B 档面板消费,
   // 结构见 src/lib/fleet/call-stats.ts / docs/design/fleet-dashboard-tier-b-preparse-risk.md)。
-  callStats            String?
+  callStats                String?
 
   // --- 多 Agent 拆分字段 ---
   // 一次主 agent 的 trace 会被拆成 1 条 root execution + N 条 sub-agent execution，
@@ -324,16 +324,16 @@ model Config {
 }
 
 model Session {
-  id           String    @id @default(cuid())
-  taskId       String    @unique
-  label        String?
-  query        String?
-  startTime    DateTime  @default(now())
-  endTime      DateTime?
-  interactions String?  // JSON array of interactions
+  id                 String    @id @default(cuid())
+  taskId             String    @unique
+  label              String?
+  query              String?
+  startTime          DateTime  @default(now())
+  endTime            DateTime?
+  interactions       String? // JSON array of interactions
   langfuseTraceNodes String? // Lossless Langfuse observation tree JSON
-  user         String?
-  model        String?
+  user               String?
+  model              String?
 }
 
 model UserSettings {
@@ -951,4 +951,40 @@ model ExperimentEvalComment {
   @@index([experimentId, createdAt])
   @@index([caseId, createdAt])
   @@index([resultId, createdAt])
+}
+
+/// 平台用量原始事件：默认保留 365 天，只用于短期回溯，不参与"全部"范围统计。
+/// user 存字符串不建外键 —— 与 Execution.user 口径一致，避免用户删除导致历史统计丢失。
+model PlatformUsageEvent {
+  id         String   @id @default(cuid())
+  eventId    String   @unique
+  occurredAt DateTime
+  dateKey    String
+  user       String
+  featureKey String
+  eventKey   String
+  source     String
+  route      String?
+  createdAt  DateTime @default(now())
+
+  @@index([occurredAt])
+  @@index([dateKey, featureKey])
+  @@index([user, dateKey, featureKey])
+}
+
+/// 平台用量日聚合：永久保留，"全部"范围只读这张表，因此不受原始事件清理影响。
+model PlatformUsageDaily {
+  dateKey         String
+  user            String
+  featureKey      String
+  eventKey        String
+  count           Int      @default(0)
+  firstOccurredAt DateTime
+  lastOccurredAt  DateTime
+  updatedAt       DateTime @updatedAt
+
+  @@id([dateKey, user, featureKey, eventKey])
+  @@index([dateKey, featureKey])
+  @@index([featureKey, dateKey])
+  @@index([user, dateKey])
 }

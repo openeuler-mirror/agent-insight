@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { deleteAgentDataset, findAgentDataset } from '@/server/agent_datasets_storage';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 
 export const dynamic = 'force-dynamic';
 
@@ -38,6 +39,8 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
     if (!removed) {
       return NextResponse.json({ error: 'dataset not found' }, { status: 404 });
     }
+
+    recordUsageEvent({ user, featureKey: 'dataset', eventKey: 'dataset.delete' });
 
     return NextResponse.json({ success: true });
   } catch (error) {

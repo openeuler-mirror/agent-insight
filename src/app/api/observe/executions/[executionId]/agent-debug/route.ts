@@ -18,6 +18,7 @@ import {
 import { hashInteractions } from '@/lib/engine/agent-debug/trace-adapter';
 import { resolveAgentDebugExecution } from '@/lib/engine/agent-debug/execution-resolver';
 import { withBackgroundOpencodeSlot } from '@/lib/engine/general-agent/concurrency-limiter';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 600;
@@ -107,6 +108,8 @@ export async function POST(
       return markAgentDebugReportFailed({ executionId: execution.id, interactionsHash, errorMessage: message });
     })
     .finally(() => clearActiveAgentDebugBackgroundJob('agent-debug', execution.id, interactionsHash));
+
+  recordUsageEvent({ user, featureKey: 'trace', eventKey: 'trace.agent.debug' });
 
   return NextResponse.json({ reportId: runningRow.id, row: summarizeRow(runningRow), status: 'running', cached: false }, { status: 202 });
 }

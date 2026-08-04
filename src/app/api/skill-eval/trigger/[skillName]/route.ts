@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import {
   findLatestTriggerEvalSet,
   findTriggerEvalSetById,
@@ -98,6 +99,8 @@ export async function POST(
     if (!updated) {
       return NextResponse.json({ error: 'failed to update items' }, { status: 500 });
     }
+    recordUsageEvent({ user, featureKey: 'skill-eval', eventKey: 'skill.eval.trigger.save' });
+
     return NextResponse.json({ success: true, set: updated });
   } catch (error) {
     console.error('skill-eval/trigger POST error:', error);

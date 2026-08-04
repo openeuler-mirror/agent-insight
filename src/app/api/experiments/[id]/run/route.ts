@@ -2,6 +2,7 @@
 import { NextResponse } from 'next/server';
 import { resolveUser } from '@/lib/auth/auth';
 import { startExperimentRun } from '@/lib/engine/experiment/run-experiment';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 
 export const dynamic = 'force-dynamic';
 
@@ -25,6 +26,11 @@ export async function POST(
     result.completion?.catch((e) => {
       console.error('[Experiment Run Error]', e);
     });
+    // 只在真正创建了一次实验时计数；命中"已在运行"是同一次用户意图，不重复计。
+    if (!result.alreadyRunning) {
+      recordUsageEvent({ user: username, featureKey: 'experiments', eventKey: 'experiment.run' });
+    }
+
     return NextResponse.json({
       status: result.status,
       ...(result.alreadyRunning ? { alreadyRunning: true } : {}),

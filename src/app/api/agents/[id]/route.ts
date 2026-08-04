@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
 import { prismaRaw } from '@/lib/storage/prisma';
 import { addDeletedOpencodeSessionIds } from '@/lib/ingest/opencode-deleted-sessions';
+import { resolveUser } from '@/lib/auth/auth';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
+import { isUsageEnabled } from '@/lib/usage-analytics/config';
 
 export const dynamic = 'force-dynamic';
 
@@ -87,6 +90,17 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
 
     await (prismaRaw as any).$transaction(transaction);
     const tombstoned = addDeletedOpencodeSessionIds(deletedOpencodeSessionIds);
+
+    // 删除已经成功；解析身份只为打统计，绝不能让它把成功结果变成 500，
+    // 因此单独 try 包住，并且只在统计开启时才多做这一次查询。
+    if (isUsageEnabled()) {
+      try {
+        const { username } = await resolveUser(request);
+        recordUsageEvent({ user: username, featureKey: 'agents', eventKey: 'agent.delete' });
+      } catch (e) {
+        console.warn('[agents][DELETE] usage record skipped:', e);
+      }
+    }
 
     return NextResponse.json({ success: true, deletedTraces: executionIds.length, tombstonedSessions: tombstoned });
   } catch (error) {

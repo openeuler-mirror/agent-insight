@@ -1,5 +1,6 @@
 
 import { canAccessSkill, resolveUser } from '@/lib/auth/auth';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { db } from '@/lib/storage/prisma';
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -40,6 +41,9 @@ export async function POST(
         const updatedSkill = await db.updateSkill(id, { activeVersion: Number(version) });
 
         console.log(`Success: Skill ${id} activeVersion set to ${updatedSkill.activeVersion}`);
+
+        recordUsageEvent({ user: username, featureKey: 'skill', eventKey: 'skill.activate' });
+
         return NextResponse.json(updatedSkill);
     } catch (error: any) {
         console.error('Activate Exception:', error);

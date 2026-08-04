@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, BarChart3, Download, Loader2, Tag } from 'lucide-react';
 import {
   CartesianGrid,
@@ -15,6 +15,7 @@ import {
 import { toast } from 'sonner';
 
 import { AppTopBar } from '@/components/shell/AppTopBar';
+import { reportClientUsage } from '@/lib/usage-analytics/client-events';
 import { PageContainer, PageHeader, PageToolbar } from '@/components/shell/PageContainer';
 import { Button } from '@/components/ui/button';
 import { Select, type SelectOption } from '@/components/ui/select';
@@ -335,14 +336,25 @@ export default function VersionAnalysisPage() {
       .catch(() => setFrameworks([]));
   }, [user]);
 
+  // 首次自动加载不算有效使用；只有用户改了对比条件、拿到新结果才计一次。
+  const comparedOnceRef = useRef<string | null>(null);
+
   const loadCompare = useCallback(async () => {
     if (!user) return;
     setLoading(true);
     try {
-      const res = await apiFetch(`/api/observe/version-analysis/compare?${buildParams().toString()}`);
+      const paramsKey = buildParams().toString();
+      const res = await apiFetch(`/api/observe/version-analysis/compare?${paramsKey}`);
       if (!res.ok) throw new Error(await readApiError(res, copy.loadFailed));
       const json = await res.json();
       setData(json);
+
+      if (comparedOnceRef.current === null) {
+        comparedOnceRef.current = paramsKey;
+      } else if (comparedOnceRef.current !== paramsKey) {
+        comparedOnceRef.current = paramsKey;
+        reportClientUsage('version-analysis', 'version.compare');
+      }
     } catch (error: any) {
       toast.error(error?.message || copy.loadFailed);
       setData(null);

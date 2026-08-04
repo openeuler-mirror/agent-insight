@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { extractTaskArtifacts } from '@/lib/engine/evaluation/task-artifacts';
 import { inferSubagentNamesFromInteractions } from '@/lib/engine/observability/subagent-inference';
 import { db } from '@/lib/storage/prisma';
@@ -47,6 +48,8 @@ export async function POST(request: Request) {
       fallbackOutput: String(execution.finalResult || ''),
       interactions,
     });
+
+    recordUsageEvent({ user, featureKey: 'trace', eventKey: 'trace.draft.save' });
 
     return NextResponse.json({
       draft: {

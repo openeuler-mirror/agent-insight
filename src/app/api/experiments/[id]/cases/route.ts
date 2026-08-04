@@ -10,6 +10,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/storage/prisma';
 import { resolveUser } from '@/lib/auth/auth';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { addEvalExperimentCase, evaluateEvalExperimentCase } from '@/lib/engine/experiment/run-experiment';
 
 export const dynamic = 'force-dynamic';
@@ -124,6 +125,8 @@ export async function POST(
         }
       })();
     }
+
+    recordUsageEvent({ user: username, featureKey: 'experiments', eventKey: 'experiment.case.create' });
 
     return NextResponse.json({
       added: caseIds.length - reused,

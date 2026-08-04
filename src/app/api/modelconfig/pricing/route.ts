@@ -5,6 +5,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/storage/prisma';
 import { resolveUser } from '@/lib/auth/auth';
 import { isAdminUser } from '@/lib/auth/admin';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import {
     BUILTIN_MODEL_PRICING, BUILTIN_CONTEXT_WINDOWS,
     getCustomModels, writeCustomModels, getModelPricing,
@@ -97,6 +98,8 @@ export async function PUT(req: Request) {
         }
 
         writeCustomModels(clean);
+        recordUsageEvent({ user: username, featureKey: 'model-registry', eventKey: 'model.pricing.save' });
+
         return NextResponse.json({ ok: true, count: Object.keys(clean).length });
     } catch (error) {
         console.error('[ModelPricing PUT]', error);

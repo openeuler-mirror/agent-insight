@@ -183,6 +183,19 @@ export async function updateTraceTag(userInput: string, id: string, payload: Rec
   }
 }
 
+export async function getTraceTagKind(userInput: string, id: string): Promise<string | null> {
+  try {
+    await ensureTraceTagTables();
+    const row = await (prismaRaw as any).tag.findFirst({
+      where: { id, user: cleanUser(userInput) },
+      select: { kind: true },
+    });
+    return row?.kind ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export async function deleteTraceTag(userInput: string, id: string): Promise<void> {
   assertTagsSupported();
   await ensureTraceTagTables();

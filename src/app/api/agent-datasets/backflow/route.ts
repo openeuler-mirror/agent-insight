@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import { NextResponse } from 'next/server';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import {
   createAgentDatasetRecord,
   findAgentDataset,
@@ -205,6 +206,11 @@ export async function POST(request: Request) {
     }
 
     const caseIds = rows.map(row => row.id);
+
+    // 回流一次同时构成"链路追踪→回流"与"数据集→Trace 回流"两个功能的有效使用。
+    recordUsageEvent({ user, featureKey: 'trace', eventKey: 'trace.backflow' });
+    recordUsageEvent({ user, featureKey: 'dataset', eventKey: 'dataset.backflow' });
+
     return NextResponse.json({
       success: true,
       datasetId: dataset.id,

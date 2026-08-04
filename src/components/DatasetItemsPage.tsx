@@ -22,6 +22,7 @@ import {
   readFileAsText,
 } from '@/lib/dataset-batch-import';
 import { useAuth } from '@/lib/auth/auth-context';
+import { reportClientUsage } from '@/lib/usage-analytics/client-events';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import styles from '@/components/DatasetItemsPage.module.css';
@@ -436,6 +437,9 @@ export default function DatasetItemsPage() {
         setBatchModalError('保存失败，请查看上方错误提示');
         return;
       }
+      // 一次导入记 1 次，不按样本数重复；与编辑样本共用 PATCH 接口，
+      // 服务端无从区分，因此在这个只有导入会走到的分支上报。
+      reportClientUsage('dataset', 'dataset.import');
       closeBatchModal();
     } catch (e) {
       setBatchModalError(e instanceof Error ? e.message : '导入失败');

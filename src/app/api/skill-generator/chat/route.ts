@@ -3,6 +3,8 @@ import { streamSkillGeneratorOpencode, createFileData } from '@/lib/skill-genera
 import fs from 'fs';
 import path from 'path';
 import { prismaRaw } from '@/lib/storage/prisma';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
+import { isUsageEnabled } from '@/lib/usage-analytics/config';
 
 export const dynamic = 'force-dynamic';
 
@@ -107,6 +109,19 @@ export async function POST(req: NextRequest) {
                 content: message
             }
         });
+
+        // 用户消息已被接受 = 一次有效使用。首条算"发起生成"，后续算"继续对话"；
+        // 流式 token 不在这里计（每次 POST 只走一遍）。
+        if (isUsageEnabled()) {
+            const priorUserMessages = await (prismaRaw as any).skillGeneratorMessage.count({
+                where: { sessionId: threadId, role: 'user' },
+            });
+            recordUsageEvent({
+                user,
+                featureKey: 'skill-generator',
+                eventKey: priorUserMessages <= 1 ? 'skill.generate.run' : 'skill.generate.message',
+            });
+        }
 
         // 1.5 Auto-update title if it's still 'New Chat'
         const session = await (prismaRaw as any).skillGeneratorSession.findUnique({ where: { id: threadId } });
