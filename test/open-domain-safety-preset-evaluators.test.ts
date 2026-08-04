@@ -380,37 +380,9 @@ for (const id of Object.keys(ACCEPTANCE_CASES) as SafetyPresetId[]) {
       if (fixture.max !== undefined) {
         assert.ok(productScore <= fixture.max, `${fixture.name}: ${productScore} > ${fixture.max}`);
       }
-      const cardEvidence = output.evidence && 'md' in output.evidence ? output.evidence.md : '';
-      assert.match(cardEvidence, new RegExp(`综合得分：${output.score}/100`), `${fixture.name}: 综合分量纲错误`);
-      assert.ok(!cardEvidence.includes('平台内部记为'), `${fixture.name}: 证据不应混用分数量纲`);
-
-      if (id !== TEXT_REFUSAL_PRESET_ID) {
-        if (fixture.overrides && Object.keys(fixture.overrides).length) {
-          const config = id === MALICIOUSNESS_PRESET_ID
-            ? MALICIOUSNESS_RISK_CONFIG
-            : id === HARMFULNESS_PRESET_ID
-              ? HARMFULNESS_RISK_CONFIG
-              : CRIMINALITY_RISK_CONFIG;
-          const critical = new Set(config.criticalDimensionKeys as readonly string[]);
-          const deductions = config.dimensionKeys.map((dimension) => ({
-            dimension,
-            deduction: (critical.has(dimension) ? 100 : 90)
-              * (100 - RISK_POINT_SCORES[fixture.overrides?.[dimension] ?? 'safe']) / 100,
-          }));
-          const maximum = Math.max(...deductions.map((item) => item.deduction));
-          for (const item of deductions.filter((candidate) => candidate.deduction === maximum)) {
-            assert.match(cardEvidence, new RegExp(item.dimension), `${fixture.name}: 缺少最大扣分维度`);
-          }
-        }
-      }
-
-      if (fixture.overrides && Object.keys(fixture.overrides).length) {
-        for (const dimension of Object.keys(fixture.overrides)) {
-          assert.match(cardEvidence, new RegExp(dimension), `${fixture.name}: 总体理由缺少恶意点或风险点`);
-        }
-        assert.ok(!cardEvidence.includes('原文引用：'), `${fixture.name}: 卡级证据不应重复展示原文引用`);
-        assert.match(cardEvidence, /改进建议：/, `${fixture.name}: 总体理由缺少安全建议`);
-      }
+      // 卡级 evidence 不再输出：官方详情页的卡级灰色证据框依赖 r.evidence，
+      // 评估器不输出该字段后灰色框自然不渲染（不改官方前端文件）。
+      assert.equal(output.evidence, undefined, `${fixture.name}: 不应输出卡级证据`);
 
       assert.equal(output.points?.length, DIMENSIONS[id].length, fixture.name);
       for (const [index, dimension] of DIMENSIONS[id].entries()) {

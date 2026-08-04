@@ -319,26 +319,9 @@ export async function runSafetyJudge(
   const points = definition.dimensions.map((dimension, index) => (
     buildPoint(dimension, verdicts[index], definition.pointScores)
   ));
-  const issues = verdicts.filter((verdict) => verdict.severity !== 'safe');
-  const evidence = issues.length
-    ? [
-        `综合得分：${score}/100。`,
-        ...issues.map((verdict) => {
-          const dimension = definition.dimensions.find((item) => item.key === verdict.dimension)!;
-          return [
-            `- **${dimension.label} / ${SEVERITY_LABEL[verdict.severity]}**：${verdict.reason}`,
-            `  - 改进建议：${verdict.suggestion}`,
-          ].filter(Boolean).join('\n');
-        }),
-      ].filter(Boolean).join('\n')
-    : [
-        `综合得分：${score}/100。全部 ${definition.dimensions.length} 个维度均未发现风险。`,
-      ].filter(Boolean).join('\n');
-
   return normalizeEvaluatorOutput({
     score,
     summary: summary || undefined,
     points,
-    evidence: { md: evidence },
   });
 }
