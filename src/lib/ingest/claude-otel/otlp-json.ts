@@ -186,6 +186,13 @@ function classifyOtelSpan(span: any, attributes: Record<string, any>): SpanClass
     }
   }
 
+  if (attributes['witty.tool.name'] !== undefined || attributes['witty.skill.name'] !== undefined) {
+    return { recognized: true, skip: false, kind: 'tool', degraded: false };
+  }
+  if (attributes['witty.agent.name'] !== undefined || attributes['witty.agent.id'] !== undefined) {
+    return { recognized: true, skip: false, kind: 'agent', degraded: false };
+  }
+
   // span 命名检测（补充 openclaw 内置导出路径）
   if (name === 'chat') return { recognized: true, skip: false, kind: 'llm', degraded: false };
   if (name === 'execute_tool') return { recognized: true, skip: false, kind: 'tool', degraded: false };
@@ -225,11 +232,14 @@ export function normalizeClaudeOtlpTraces(
   for (const resourceSpan of resourceSpans) {
     const resource = otelAttrsToObject(resourceSpan?.resource?.attributes || []);
     const serviceName = asOptionalString(resource['service.name']) || 'unknown-service';
-    const resourceUser = opts.authenticatedUser ||
-      asOptionalString(resource['user.id']) ||
-      asOptionalString(resource['enduser.id']);
+    const resourceUser = firstOptionalString(
+      resource['witty.user.id'],
+      resource['user.id'],
+      resource['enduser.id'],
+    );
     const serviceInstanceId = asOptionalString(resource['service.instance.id']);
     const resourceSessionId = firstOptionalString(
+      resource['witty.session.id'],
       resource['session.id'],
       resource['session_id'],
       resource['hermes.session_id'],
@@ -248,6 +258,7 @@ export function normalizeClaudeOtlpTraces(
 
           const traceId = asOptionalString(span?.traceId);
           const explicitSessionId = firstOptionalString(
+            attributes['witty.session.id'],
             resourceSessionId,
             attributes['session.id'],
             attributes['session_id'],
@@ -260,11 +271,15 @@ export function normalizeClaudeOtlpTraces(
 
           const inputTokens = asNumber(firstDefined(
             attributes['gen_ai.usage.input_tokens'],
+            attributes['gen_ai.usage.prompt_tokens'],
+            attributes['gen_ai.response.usage.input_tokens'],
             attributes['llm.usage.prompt_tokens'],
             attributes['llm.token_count.prompt'],
           ));
           const outputTokens = asNumber(firstDefined(
             attributes['gen_ai.usage.output_tokens'],
+            attributes['gen_ai.usage.completion_tokens'],
+            attributes['gen_ai.response.usage.output_tokens'],
             attributes['llm.usage.completion_tokens'],
             attributes['llm.token_count.completion'],
           ));
@@ -274,6 +289,7 @@ export function normalizeClaudeOtlpTraces(
           ));
           const explicitTotalTokens = asOptionalNumber(firstDefined(
             attributes['gen_ai.usage.total_tokens'],
+            attributes['gen_ai.response.usage.total_tokens'],
             attributes['llm.usage.total_tokens'],
             attributes['llm.token_count.total'],
           ));
@@ -297,9 +313,9 @@ export function normalizeClaudeOtlpTraces(
             spanId: asOptionalString(span?.spanId),
             parentSpanId: asOptionalString(span?.parentSpanId),
             name: asOptionalString(span?.name),
-            kind: classification.kind === 'tool' ? 'tool' : 'llm',
+            kind: classification.kind,
             serviceName,
-            user: resourceUser,
+            user: opts.authenticatedUser || asOptionalString(attributes['witty.user.id']) || resourceUser,
             model: firstOptionalString(
               attributes['gen_ai.request.model'],
               attributes['llm.request.model'],
