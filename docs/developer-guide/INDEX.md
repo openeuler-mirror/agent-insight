@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `a1086fa6500e21f9e52de3c5922388aaee171ab5` (`a1086fa`) |
+| Commit | `528a92cae9dcb53dad2f0c732b6eec7156e3524e` (`528a92c`) |
 | Branch | `feat/claude-context-supplement` |
-| Date | 2026-08-03T10:08:57+08:00 |
+| Date | 2026-08-04T12:01:49+08:00 |
 | Author | gyctl |
-| Subject | `fix: 隐藏带前缀的 Claude 标题提示词` |
+| Subject | `chore: 合并 master 并解决文档冲突` |
 
-**如何更新：** `git diff a1086fa HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff 528a92c HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
