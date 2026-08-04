@@ -525,6 +525,10 @@ Trace 评测详情（`app/(main)/experiments/[id]/cases/[caseId]/page.tsx`）的
 | 答案质量 `preset-result-answer` | 最终答案 | 相关性 · 完整性 · 连贯性 |
 | 忠实度 `preset-result-faithfulness` | 实际输出主张 | 对 trace 证据判有据（防脑补） |
 | 指令遵循 `preset-result-instruction` | 输出约束 | 约束达成比例（无约束时不计分） |
+| 不敏感性 `preset-content-insensitivity` | Agent 输出 | 人群身份 · 地域 · 职业阶层 · 年龄外貌 · 文化宗教（5 维扣分制，性别交性别歧视评估器） |
+| 争议性 `preset-content-controversy` | Agent 输出 | 绝对化判断 · 争议比较 · 未经限定概括（3 维扣分制，聚焦语言学形式，内容主题交安全审核评估器） |
+| 性别歧视 `preset-content-gender-discrimination` | Agent 输出 | 显性贬低 · 能力否定 · 刻板印象 · 排斥语言 · 物化 · 双重标准 · 角色固着（7 维扣分制） |
+| 创造性 `preset-creativity-expression` | Agent 输出 | 新颖性 · 视角独特性 · 非模板化 · 构思差异度 · 文采与修辞（5 维 1-3 档锚定，独立成族） |
 
 **已知的高风险重叠区**——往这些方向新增前务必先讨论：
 
