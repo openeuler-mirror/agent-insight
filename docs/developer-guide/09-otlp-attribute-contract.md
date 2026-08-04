@@ -8,10 +8,12 @@
 |------|-----|------|
 | 协议 | OTLP/HTTP (JSON 或 Protobuf) | gRPC 不支持 |
 | 端点 | `POST /api/ingest/otel/v1/traces` | Traces |
-| | `POST /api/ingest/otel/v1/logs` | Logs (仅 JSON) |
+| | `POST /api/ingest/otel/v1/logs` | Logs（仅 JSON） |
 | | `POST /api/ingest/otel/v1/metrics` | Metrics（vLLM 指标；CodeAgent 来源丢弃） |
 | 认证 | `x-witty-api-key` Header | 用于关联 Workspace |
-| Content-Type | `application/json` 或 `application/x-protobuf` | |
+| Content-Type | Traces: `application/json` 或 `application/x-protobuf`；Logs: `application/json` | |
+
+OpenClaw 应直接访问自己的模型供应商；Agent Insight 只接收遥测。历史 URL `POST /api/proxy/v1/chat/completions` 仅返回 410，不是 OTLP 链路，也不会代转模型请求。
 
 ## 资源属性 (Resource)
 
@@ -19,7 +21,7 @@
 
 | 属性 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `service.name` | string | 是 | 固定为 `"openclaw"`；服务端据此区分 OpenClaw 与 Claude Code 上报 |
+| `service.name` | string | 是 | 建议固定为 `"openclaw"`；兼容 `"openclaw-agent"`，服务端据此选择 OpenClaw adapter |
 | `service.version` | string | 否 | OpenClaw 版本号 |
 | `telemetry.sdk.name` | string | 否 | SDK 标识，如 `"opentelemetry"` |
 | `telemetry.sdk.language` | string | 否 | 如 `"nodejs"`、`"python"` |
@@ -34,14 +36,13 @@
 | 属性 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `witty.agent.name` | string | 是 | Agent 名称，如 `"plan"`、`"build"` |
-| `witty.agent.id` | string | 是 | Agent 唯一标识，如 `"opencode-plan"` |
+| `witty.agent.id` | string | 是 | Agent 运行标识；子 Agent 用它生成稳定的 `subagent_session_id` |
 | `witty.session.id` | string | 是 | 一次对话/任务的 session ID |
-| `witty.trace.id` | string | 是 | Trace ID (与 OTLP `trace_id` 一致) |
 | `witty.user.id` | string | 否 | 用户标识 |
 | `gen_ai.system` | string | 推荐 | 如 `"opencode"`、`"custom"` |
 | `gen_ai.request.model` | string | 推荐 | 本次执行使用的模型，如 `"gpt-4"` |
 
-Span 名称约定：`"agent {agent_name}"`，如 `"agent plan"`。
+Span 名称建议使用 `"agent {agent_name}"`；服务端以 `witty.agent.*` 或 `gen_ai.span.kind=agent|entry` 分类，不依赖这一种名称。Trace ID 必须使用 OTLP span 自带的 `traceId`，父子关系必须使用 OTLP `parentSpanId`。
 
 ### Skill 调用 Span
 
@@ -53,7 +54,7 @@ Span 名称约定：`"agent {agent_name}"`，如 `"agent plan"`。
 | `witty.skill.version` | string | 否 | Skill 版本标识 |
 | `witty.skill.trigger_type` | string | 推荐 | 触发方式：`"auto"`、`"user_request"`、`"sub_agent"` |
 
-Span 名称约定：`"skill {skill_name}"`。
+Span 名称建议使用 `"skill {skill_name}"`；`witty.skill.name` 存在时服务端会将它归为工具类事件，并保留为 Skill 调用。
 
 ### 工具调用 Span
 
@@ -66,7 +67,7 @@ Span 名称约定：`"skill {skill_name}"`。
 | `witty.tool.result` | string | 否 | 工具调用输出摘要 |
 | `witty.tool.error` | boolean | 否 | 是否发生错误 |
 
-Span 名称约定：`"tool {tool_name}"`。
+Span 名称建议使用 `"tool {tool_name}"`；同时兼容 `tool.name`、`tool.arguments`、`tool.result` / `tool.output` 与标准 `error.*` 属性。
 
 ### LLM 请求 Span
 
@@ -77,8 +78,9 @@ Span 名称约定：`"tool {tool_name}"`。
 | `gen_ai.system` | string | 是 | 模型平台，如 `"openai"`、`"anthropic"` |
 | `gen_ai.request.model` | string | 是 | 模型名称 |
 | `gen_ai.response.model` | string | 否 | 实际响应模型（可能与请求不同） |
-| `gen_ai.usage.prompt_tokens` | int | 推荐 | 输入 Token 数 |
-| `gen_ai.usage.completion_tokens` | int | 推荐 | 输出 Token 数 |
+| `gen_ai.usage.input_tokens` / `gen_ai.usage.prompt_tokens` | int | 推荐 | 输入 Token 数；前者优先 |
+| `gen_ai.usage.output_tokens` / `gen_ai.usage.completion_tokens` | int | 推荐 | 输出 Token 数；前者优先 |
+| `gen_ai.usage.reasoning_tokens` | int | 否 | 推理 Token 数 |
 | `gen_ai.usage.total_tokens` | int | 推荐 | 总 Token 数 |
 
 Span 名称约定：`"llm {model_name}"`。
@@ -91,7 +93,7 @@ Span 名称约定：`"llm {model_name}"`。
 |------|------|------|------|
 | `witty.agent.name` | string | 是 | 子 Agent 名称 |
 | `witty.agent.id` | string | 是 | 子 Agent 唯一标识 |
-| `witty.parent_span_id` | string | 是 | 父 Span ID (通过 OTLP parentSpanId 表达) |
+| OTLP `parentSpanId` | string | 是 | 直接使用 OTLP span 字段表达父子关系，不另写 `witty.parent_span_id` |
 
 Span 名称约定：`"sub_agent {agent_name}"`。
 
@@ -124,10 +126,22 @@ Root Span (agent)                  → Execution (rootExecutionId = NULL)
 
 ### 身份识别
 
-服务端通过以下优先级识别客户端身份：
-1. `x-witty-api-key` Header → 查找 `ApiKey` 记录 → 关联 Workspace
-2. `resource.attributes["service.name"]` → `"openclaw"` 或 `"claude-code"` 决定解析器
-3. `witty.agent.name` → 创建/匹配 Agent 记录
+服务端按以下层次识别和归属数据：
+1. `x-witty-api-key` Header → 查找用户记录；认证用户优先于载荷内的 `witty.user.id`
+2. `resource.attributes["service.name"]` → `"openclaw"` / `"openclaw-agent"` 选择 OpenClaw adapter
+3. Session ID 依次取 span `witty.session.id`、resource `witty.session.id`、`session.id` / `session_id` 等兼容属性、`service.instance.id`、OTLP `traceId`
+4. Agent 名称依次取 `witty.agent.name`、`gen_ai.agent.name`、`agent.name`，缺失时回退为 `openclaw`
+
+OpenClaw adapter 按 `traceId + spanId` 去重后重建 agent/LLM/tool/skill 与子 Agent 树。只有 LLM span 计入 Token 与 LLM 调用数；tool/skill span 计入工具调用数，`witty.tool.error=true` 或标准错误属性计入工具错误数。聚合输出采用 snapshot replace，重复消费同一批 span 不会重复累计。
+
+## Watcher 兼容路径
+
+OpenClaw watcher 与 OTel 是两种互斥接入方式：
+
+- 当前 watcher 将完整 record 直接上报到 `POST /api/ingest/upload`。
+- 旧 watcher 的 `POST /api/ingest/openclaw/upload` 直接委托同一个通用 handler，完整保留 interactions。
+- 缺少可归属身份返回 400，错误 `x-witty-api-key` 返回 401；兼容入口不会返回假成功。
+- 不要在同一 OpenClaw 实例同时启用 watcher 和 OTel，否则同一次运行会形成两份 Trace。
 
 ## CodeAgent 兼容契约
 
@@ -153,13 +167,16 @@ setup wrapper 只设置 `CODEAGENT3_ENABLE_TELEMETRY=1`、OTLP base endpoint、J
 | `OTEL_LOGS_EXPORTER` | Logs 导出器 | `otlp` |
 | `OTEL_EXPORTER_OTLP_LOGS_PROTOCOL` | Logs 传输协议 | `http/json` |
 | `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` | Logs 端点 URL | `http://<host>:3000/api/ingest/otel/v1/logs` |
-| `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` | Traces 传输协议 | `http/protobuf` |
+| `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` | Traces 传输协议 | `http/json`（也接受 `http/protobuf`） |
 | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Traces 端点 URL | `http://<host>:3000/api/ingest/otel/v1/traces` |
 | `OTEL_EXPORTER_OTLP_HEADERS` | 公共 Headers | `x-witty-api-key=<your-api-key>` |
 | `OTEL_SERVICE_NAME` | OTel service.name | `openclaw` |
+
+setup 生成的同名 `openclaw` 包装函数和末尾纯配置块都使用 `http/json`，Logs 与 Traces 分别指向 `/v1/logs`、`/v1/traces`。两者只是两种配置呈现方式，不应与 watcher 同时启用。
 
 ## 版本记录
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
+| 1.1 | 2026-08-04 | 对齐实际 OpenClaw JSON/Protobuf 归一化、幂等聚合、watcher 兼容和停用模型代理语义 |
 | 1.0 | 2026-07-14 | 初版，定义 OTLP 属性契约 (FR-011) |

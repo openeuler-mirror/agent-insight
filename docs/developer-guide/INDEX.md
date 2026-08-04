@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `528a92cae9dcb53dad2f0c732b6eec7156e3524e` (`528a92c`) |
-| Branch | `feat/claude-context-supplement` |
-| Date | 2026-08-04T12:01:49+08:00 |
+| Commit | `f92f5d9a451f8f93d148753b3d03fd415df7e485` (`f92f5d9a`) |
+| Branch | `codex/openclaw-otel-rebuild` |
+| Date | 2026-08-04T16:53:48+08:00 |
 | Author | gyctl |
-| Subject | `chore: 合并 master 并解决文档冲突` |
+| Subject | `fix: 重建 OpenClaw OTel 并恢复接入兼容` |
 
-**如何更新：** `git diff 528a92c HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff f92f5d9 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
