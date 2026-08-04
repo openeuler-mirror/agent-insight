@@ -1,12 +1,19 @@
 import { execFile } from "node:child_process"
-import { mkdir, readFile, readdir, stat } from "node:fs/promises"
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises"
 import path from "node:path"
 import process from "node:process"
 import { promisify } from "node:util"
 
+import AdmZip from "adm-zip"
 import { NextResponse } from "next/server"
 
+import {
+  configuredQoderJetBrainsPackageUrl,
+  QODER_JETBRAINS_PACKAGE_URL_ENV,
+} from "@/lib/ingest/qoder-plugin-release"
+
 const execFileAsync = promisify(execFile)
+const MAX_REMOTE_PACKAGE_BYTES = 50 * 1024 * 1024
 
 const QODER_PLUGIN_PACKAGES = {
   desktop: {
@@ -96,6 +103,110 @@ async function readFreshCache(info: QoderPluginPackageBuildInfo): Promise<Buffer
   return null
 }
 
+async function readValidCache(info: QoderPluginPackageBuildInfo): Promise<Buffer | null> {
+  try {
+    const content = await readFile(info.cachePath)
+    assertJetBrainsPluginPackage(content, info.cachePath)
+    return content
+  } catch {}
+  return null
+}
+
+function assertZipPackage(content: Buffer, source: string): void {
+  if (content.byteLength < 4 || content[0] !== 0x50 || content[1] !== 0x4b) {
+    throw new Error(`Qoder plugin package from ${source} is not a ZIP archive`)
+  }
+}
+
+function assertJetBrainsPluginPackage(content: Buffer, source: string): void {
+  assertZipPackage(content, source)
+  try {
+    const pluginArchive = new AdmZip(content)
+    const pluginJar = pluginArchive.getEntries().find((entry) =>
+      !entry.isDirectory && /(^|\/)lib\/[^/]+\.jar$/i.test(entry.entryName)
+    )
+    if (!pluginJar) throw new Error("compiled plugin JAR is missing")
+    const jarArchive = new AdmZip(pluginJar.getData())
+    if (!jarArchive.getEntry("META-INF/plugin.xml")) {
+      throw new Error("META-INF/plugin.xml is missing from the plugin JAR")
+    }
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    throw new Error(`Qoder JetBrains package from ${source} is invalid: ${reason}`)
+  }
+}
+
+async function writeCacheAtomically(cachePath: string, content: Buffer): Promise<void> {
+  await mkdir(path.dirname(cachePath), { recursive: true })
+  const temporaryPath = `${cachePath}.${process.pid}.${Date.now()}.tmp`
+  try {
+    await writeFile(temporaryPath, content)
+    await rm(cachePath, { force: true })
+    await rename(temporaryPath, cachePath)
+  } finally {
+    await rm(temporaryPath, { force: true })
+  }
+}
+
+async function downloadConfiguredPackage(
+  kind: QoderPluginPackage,
+  info: QoderPluginPackageBuildInfo,
+): Promise<Buffer | null> {
+  if (kind !== "jetbrains") return null
+
+  const configuredUrl = configuredQoderJetBrainsPackageUrl()
+  if (!configuredUrl) return null
+
+  let packageUrl: URL
+  try {
+    packageUrl = new URL(configuredUrl)
+  } catch {
+    throw new Error(`${QODER_JETBRAINS_PACKAGE_URL_ENV} must be a valid HTTP(S) URL`)
+  }
+  if (packageUrl.protocol !== "http:" && packageUrl.protocol !== "https:") {
+    throw new Error(`${QODER_JETBRAINS_PACKAGE_URL_ENV} must use HTTP or HTTPS`)
+  }
+
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 60_000)
+  try {
+    const response = await fetch(packageUrl, {
+      redirect: "follow",
+      signal: controller.signal,
+    })
+    if (!response.ok) {
+      throw new Error(`Release attachment returned HTTP ${response.status}`)
+    }
+
+    const declaredLength = Number(response.headers.get("content-length") || 0)
+    if (declaredLength > MAX_REMOTE_PACKAGE_BYTES) {
+      throw new Error(`Release attachment exceeds ${MAX_REMOTE_PACKAGE_BYTES} bytes`)
+    }
+    if (!response.body) throw new Error("Release attachment response has no body")
+
+    const chunks: Buffer[] = []
+    let totalBytes = 0
+    const reader = response.body.getReader()
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      totalBytes += value.byteLength
+      if (totalBytes > MAX_REMOTE_PACKAGE_BYTES) {
+        await reader.cancel()
+        throw new Error(`Release attachment exceeds ${MAX_REMOTE_PACKAGE_BYTES} bytes`)
+      }
+      chunks.push(Buffer.from(value))
+    }
+
+    const content = Buffer.concat(chunks, totalBytes)
+    assertJetBrainsPluginPackage(content, configuredUrl)
+    await writeCacheAtomically(info.cachePath, content)
+    return content
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
 async function buildPackage(
   kind: QoderPluginPackage,
   info: QoderPluginPackageBuildInfo,
@@ -132,7 +243,26 @@ async function resolvePackage(kind: QoderPluginPackage): Promise<{
     for (const key of buildPromises.keys()) {
       if (key.startsWith(`${kind}:`)) buildPromises.delete(key)
     }
-    pending = buildPackage(kind, info)
+    pending = (async () => {
+      const cached = await readFreshCache(info)
+      if (cached) return cached
+
+      if (kind === "jetbrains" && configuredQoderJetBrainsPackageUrl()) {
+        try {
+          const downloaded = await downloadConfiguredPackage(kind, info)
+          if (downloaded) return downloaded
+        } catch (error) {
+          console.warn(
+            `[qoder-plugin-package] configured JetBrains package download failed; `
+              + "falling back to cache/source build:",
+            error,
+          )
+          const cached = await readValidCache(info)
+          if (cached) return cached
+        }
+      }
+      return buildPackage(kind, info)
+    })()
     buildPromises.set(cacheKey, pending)
   }
 

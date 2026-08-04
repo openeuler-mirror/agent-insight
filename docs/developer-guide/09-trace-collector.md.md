@@ -364,9 +364,41 @@ return NextResponse.json({
 
 ## 八、Qoder CN 产品家族已实现链路
 
-普通 setup 与 auto setup 的 Unix/Windows 安装脚本均在原有框架列表末尾追加 `Qoder CN product family`。选中后，从 `setup/route.ts` 的固定白名单下载 `qoder_setup.mjs`、`qoder_trace_collector.mjs`、`qoder_uploader_client.mjs` 和 `qoder_work_setup.mjs`，再分别安装 CLI、Desktop、JetBrains owner 与 Work 采集器；请求任意非白名单组件返回 404。`test/qoder-setup-routes.test.ts` 固定断言两个入口原有框架名称、值和顺序不变，Qoder 仅作为末尾新增项，同时校验四个组件分发及生成的 Bash 安装脚本语法。Desktop VSIX 与 JetBrains ZIP 的界面 marker 插件仍使用各自本地分发包安装。
+普通 setup 与 auto setup 的 Unix/Windows 安装脚本均在原有框架列表末尾追加 `Qoder CN product family`。选中后，从 `setup/route.ts` 的固定白名单下载 `qoder_setup.mjs`、`qoder_trace_collector.mjs`、`qoder_uploader_client.mjs` 和 `qoder_work_setup.mjs`，再分别安装 CLI、Desktop、JetBrains owner 与 Work 采集器；请求任意非白名单组件返回 404。安装完成后，脚本使用临时文件从两个 Qoder 插件下载接口拉取 Desktop VSIX 与 JetBrains ZIP，成功后原子替换到 `~/.agent-insight/packages/qoder/`；插件包不可用或网络失败只产生警告，不回滚已安装的采集运行时。Desktop 接口从源码动态构建；JetBrains 接口使用 `src/lib/ingest/qoder-plugin-release.ts` 中的默认 Release 附件地址，并允许服务端环境变量 `AGENT_INSIGHT_QODER_JETBRAINS_PACKAGE_URL` 覆盖。下载时限制协议、超时和最大 50MB，并校验 ZIP、编译后插件 JAR 与 `META-INF/plugin.xml`，失败后依次回退本地缓存和 IntelliJ/Java 源码构建。当前默认值是贡献分支的临时 Release 附件，正式发布后应迁移为 openEuler 官方附件。`test/qoder-setup-routes.test.ts` 固定断言两个入口原有框架名称、值和顺序不变，Qoder 仅作为末尾新增项，同时校验四个组件分发、默认/覆盖 Release 下载、自动下载命令及生成的 Bash/PowerShell 安装脚本语法。界面 marker 插件仍需在对应 IDE 中从下载文件安装。
+
+生成的四种安装脚本（setup/auto × Bash/PowerShell）还会把当前生效的 Release 直链（环境变量覆盖值或源码默认值）嵌入脚本：服务端插件接口失败时先显示直链并自动重试，二次失败后输出平台对应的手动下载命令、目标 ZIP 路径和 `Install Plugin from Disk` 操作步骤；默认地址无需管理员预先配置，部署方需要切换制品来源时再设置环境变量并重启服务。
+
+### Qoder for JetBrains Release 制品维护声明
+
+Qoder for JetBrains 的 Java 源码必须经过 IntelliJ Platform SDK/JDK 编译，并封装为“插件 ZIP → `lib/*.jar` → `META-INF/plugin.xml` 与编译后 class”的标准结构。仓库以 `integrations/qoder-jetbrains/` 和共享 `scripts/qoder_*.mjs` 为源码事实来源，`integrations/qoder-jetbrains/build/` 仅存放本地构建结果且被 `.gitignore` 排除；不得把 VSIX/ZIP 二进制重新提交到 Git 源码目录。
+
+当前默认 Release 下载地址集中定义在 `src/lib/ingest/qoder-plugin-release.ts`，不要在 setup、auto setup 或下载 route 中重复写死。该模块同时保留 `AGENT_INSIGHT_QODER_JETBRAINS_PACKAGE_URL` 环境变量覆盖能力。服务端通过 `/api/ingest/setup/qoder-jetbrains-plugin` 对外分发，生成的 Bash/PowerShell 安装脚本会把当前生效地址写入安装流程，客户端最终下载到 `~/.agent-insight/packages/qoder/agent-insight-qoder-jetbrains.zip`。当前默认值指向贡献者仓库 `qoder-cn-collector-test-v0.1.0` Release 的临时附件；PR 合入且 openEuler 发布正式附件后，必须把默认值迁移到官方 Release，个人 Release 不作为长期生产制品源。
+
+Windows 维护者可执行：
+
+```powershell
+node integrations/qoder-jetbrains/build-plugin.mjs --ide-home "<JetBrains IDE 安装目录>" --output integrations/qoder-jetbrains/build/distributions/agent-insight-qoder-jetbrains-0.1.9.zip
+```
+
+Linux/macOS 维护者可执行：
+
+```bash
+JETBRAINS_HOME="<JetBrains IDE 安装目录>" \
+  node integrations/qoder-jetbrains/build-plugin.mjs \
+  --output integrations/qoder-jetbrains/build/distributions/agent-insight-qoder-jetbrains-0.1.9.zip
+```
+
+每次修改 `integrations/qoder-jetbrains/`、`scripts/qoder_trace_collector.mjs`、`scripts/qoder_uploader_client.mjs`、`scripts/qoder_setup.mjs` 或 `scripts/qoder_token_usage_env.mjs` 后，都必须重新构建 ZIP。发布前应确认：外层 ZIP 含 `lib/*.jar`；JAR 含 `META-INF/plugin.xml`、编译后的 class 和当前版本的四个 collector/setup 脚本；插件可通过 **Settings → Plugins → Install Plugin from Disk** 安装并重启；Qoder for JetBrains Trace 能正常上报；最后记录附件 SHA-256，并运行：
+
+```bash
+node --import tsx --test test/qoder-setup-routes.test.ts
+```
+
+维护流程为：完成源码修改与测试 → 构建新 ZIP → 本地安装冒烟验证 → 上传到受信任的 Release/制品仓 → 若 tag 或文件名变化则更新 `DEFAULT_QODER_JETBRAINS_PACKAGE_URL` → 验证分发接口和一键安装 → 再提交源码。替换同一 Release 的同名附件时也必须重新验证下载接口；在官方地址尚未就绪或需要灰度切换时，通过环境变量覆盖，不要临时改动多个 route。Release 附件必须与当前源码一致，否则 JetBrains 插件启动时可能用内嵌旧脚本覆盖共享 collector，造成平台名称、Token 或 Trace 结构回退。
 
 Qoder CN CLI 与 Qoder CN Desktop 的用户级 Hook 写入 `~/.qoder-cn/settings.json`；项目级配置仍遵循产品约定写入项目内 `.qoder/settings.json` 或 `.qoder/settings.local.json`。JetBrains 保持其已经验收的 `~/.qoder/settings.json` 接入，Qoder Work 使用独立的 `.qoderworkcn`/`.qoderwork` 设置和运行目录。各端均覆盖 `SessionStart`、`UserPromptSubmit`、`PreToolUse`、`PostToolUse`、`PostToolUseFailure`、`SubagentStart`、`SubagentStop`、`Stop` 与 `SessionEnd` Hook。Hook 保持异步、stdout 静默且异常退出码为 0，避免影响 Qoder 主流程。Desktop 的 Quest/Experts、并发 Agent 工具以及 JetBrains 会话由 transcript、diagnostics、Experts cache 和 IDE 进程 marker 共同还原。
+
+产品来源与根 Agent 名称是两个独立维度：Desktop 和 JetBrains 的普通根 Agent 统一为 `Qoder`，CLI 为 `Qoder CLI`，Work 为 `Qoder Work`；Quest/专家团模式分别为 `Quest Agent`/`Experts Agent`，用户显式创建的具名 Agent 保留原名。产品来源仍分别记录为 `Qoder CN Desktop`、`Qoder for JetBrains`、`Qoder CN CLI` 和 `Qoder Work`，不得用产品形态名称覆盖 Agent 名称，也不得因根 Agent 同名而丢失产品归属。
 
 数据处理顺序为：Hook JSON 原子落盘 → Stop/SessionEnd 读取 transcript、diagnostics 与适用的本地 Token 数据 → 生成完整 OTLP snapshot → 写入账号隔离 pending 目录 → 立即拉起一次 one-shot uploader 上传 `/api/ingest/otel/v1/traces` → 服务端 Qoder adapter 选择最新 snapshot 并生成 `ExecutionRecord`。该事件触发路径不等待常驻 uploader 的定时扫描；自动化验收使用真实本地 HTTP 接收端，硬性断言 SessionEnd 到 OTLP 请求到达小于 3000ms。Tool 依靠 `tool_use_id` 配对而不是文件顺序；通常使用 Pre/Post Hook 计算耗时，异步 Hook 的采集时间戳重合为零时回退到 transcript 的 `tool_use/tool_result` 时间戳，避免把真实 MCP 等短调用显示为 `0ms`。Qoder CN Desktop 通过 `/skill-name` 触发 Skill 时不产生独立 Skill Tool Hook，采集器读取 transcript 的 `session_meta/slash_command`（`content.type=skill`）合成 Skill Span；Qoder CN CLI 对应读取 `system/informational` 的 `Skill **name** activated.` 记录。两种形式都还原 name、version、triggerMode、params 和 result，并避免与显式 Skill Tool 重复。Task 的 `subagent_type` 与输出中的 child session id 用于还原多层 Subagent 调用树；Qoder CN CLI 的 `agent-result` 使用驼峰字段 `agentId`、`agentType`、`transcriptPath`，采集器以真实 `agentId` 合成子 Agent Span，并保留状态、结果和 transcript 路径，支持多个并发 Agent 的稳定关联。Qoder Work 的 `qw_mcp_call` 会解包为真实 MCP server/tool/arguments；`builtin_*` 服务同时标记为 `connector`，保留连接器名称、工具、参数、结果、错误和耗时。
 

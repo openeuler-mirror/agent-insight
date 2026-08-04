@@ -40,7 +40,7 @@ flowchart LR
 | 机器 A | Collector 主机 | 安装并运行 Qoder CN 产品 |
 | 机器 B | Server 主机 | 运行 Agent Insight 服务端 |
 | 服务端地址 | `http://<SERVER_IP>:3000` | 必须是机器 A 可访问的地址，不能填 `localhost` |
-| 功能分支 | `feat/qoder-cn-collector` | 按实际交付分支替换 |
+| 代码版本 | openEuler `master` 或待验收 PR 的源分支 | 两台机器应记录实际 commit |
 | Node.js | `>= 20` | 两台机器均建议确认 |
 | API Key | `<TEMP_API_KEY>` | 从机器 B 的 Agent Insight 安装指导页面取得 |
 
@@ -52,13 +52,23 @@ flowchart LR
 
 建议新建独立目录，避免影响机器 B 上其他开发分支：
 
+已合入上游时使用：
+
 ```powershell
-git clone -b feat/qoder-cn-collector https://gitcode.com/wangxin-2026/agent-insight.git agent-insight-qoder-cross-host
+git clone https://gitcode.com/openeuler/agent-insight.git agent-insight-qoder-cross-host
 Set-Location .\agent-insight-qoder-cross-host
 git log -1 --oneline
 ```
 
-确认输出的分支和提交包含 Qoder CN 采集器代码。本次交付的基线提交为 `3298474`；若分支已有后续修复，使用更新的提交即可。
+验收尚未合入的 PR 时，将下面两个占位符替换为 PR 的源仓库和源分支：
+
+```powershell
+git clone -b <PR-source-branch> <PR-source-repository-url> agent-insight-qoder-cross-host
+Set-Location .\agent-insight-qoder-cross-host
+git log -1 --oneline
+```
+
+确认输出的分支和提交与待验收 PR 一致，并在验收记录中保存 commit id。不要长期依赖贡献者个人仓库或固定的历史提交。
 
 ### 4.2 安装依赖
 
@@ -189,7 +199,7 @@ irm "$serverBase/api/ingest/setup?key=$encodedKey" | iex
 
 其中 `<accountHash>` 用于 API Key/账号隔离。
 
-> 一键安装会配置共享 Hook、collector 和 uploader，并在安装结果中输出 Desktop VSIX 与 JetBrains ZIP 的服务端下载地址。两个界面插件仍需在对应产品内完成本地安装；只验证跨机器网络上报时，使用 Qoder CN CLI 即可完成最小闭环。
+> 一键安装会配置共享 Hook、collector 和 uploader，并自动把 Desktop VSIX 与 JetBrains ZIP 下载到机器 A 的 `~/.agent-insight/packages/qoder/`。无 JDK 的机器 B 默认使用源码内置的 Release 附件地址获取已编译 JetBrains ZIP；迁移到官方 Release、内网镜像或私有制品仓时，可在启动 Agent Insight 前设置 `AGENT_INSIGHT_QODER_JETBRAINS_PACKAGE_URL=<受信任的 Release 附件直链>` 覆盖默认值。两个界面插件仍需在对应产品内从下载文件完成本地安装；只验证跨机器网络上报时，使用 Qoder CN CLI 即可完成最小闭环。
 
 需要验证 Desktop 或 JetBrains 时，在机器 A 浏览器打开安装结果中的地址：
 
@@ -300,7 +310,7 @@ http://<SERVER_IP>:3000/trace
 刷新页面并搜索第 8 节生成的唯一标识。检查：
 
 - 执行记录出现在机器 B，而不是只出现在机器 A 的本地服务。
-- `AGENT` 为对应产品，例如 `Qoder CN CLI` 或 `Qoder CN Desktop`。
+- 产品来源与实际客户端一致；默认根 Agent 名称为：Desktop/JetBrains → `Qoder`，CLI → `Qoder CLI`，Work → `Qoder Work`。Quest/专家团模式分别显示 `Quest Agent`/`Experts Agent`，用户显式创建的具名 Agent 保留其名称。
 - 状态为成功。
 - 详情页包含 USER、LLM、TOOL 等链路。
 - Token、耗时和最终结果能够展示。

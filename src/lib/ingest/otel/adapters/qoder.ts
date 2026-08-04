@@ -22,6 +22,26 @@ function firstText(...values: unknown[]): string | undefined {
   return undefined;
 }
 
+function isQoderProductSurfaceName(value: unknown): boolean {
+  const name = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ');
+  return new Set([
+    'qoder',
+    'qoder desktop',
+    'qoder cn desktop',
+    'qoder jetbrains',
+    'qoder for jetbrains',
+    'qoder cli',
+    'qoder cn cli',
+    'qoder work',
+    'qoder work cn',
+    'qoder cn work',
+  ]).has(name);
+}
+
 function parseJson(value: unknown): unknown {
   if (typeof value !== 'string') return value;
   const trimmed = value.trim();
@@ -206,15 +226,23 @@ export function aggregateQoderOtelTraceEvents(sessionId: string, allEvents: Otel
   const interactions: AnyObj[] = [];
   const rootAttrs = root.attributes || {};
   const product = (firstText(rootAttrs['qoder.product'], root.serviceName?.replace(/^qoder-(?:cn-)?/, ''), 'cli') || 'cli').toLowerCase();
-  const productAgent = product.includes('desktop') || product === 'ide'
-    ? 'Qoder CN Desktop'
-    : product.includes('jetbrains')
-      ? 'Qoder for JetBrains'
-      : product.includes('work')
-        ? 'Qoder Work'
-        : 'Qoder CN CLI';
-  const rootAgent = firstText(rootAttrs['qoder.agent.name'], productAgent) || productAgent;
   const sessionMode = firstText(rootAttrs['qoder.session.mode']);
+  const productAgent = product.includes('work')
+    ? 'Qoder Work'
+    : product.includes('cli')
+      ? 'Qoder CLI'
+      : 'Qoder';
+  const normalizedMode = sessionMode?.trim().toLowerCase();
+  const modeAgent = normalizedMode === 'plan' || normalizedMode === 'quest'
+    ? 'Quest Agent'
+    : normalizedMode === 'experts'
+      ? 'Experts Agent'
+      : undefined;
+  const attributedRootAgent = firstText(rootAttrs['qoder.agent.name']);
+  const explicitRootAgent = attributedRootAgent && !isQoderProductSurfaceName(attributedRootAgent)
+    ? attributedRootAgent
+    : undefined;
+  const rootAgent = firstText(explicitRootAgent, modeAgent, productAgent) || productAgent;
   const explicitExpertEvents = subagentEvents.filter((event) => Boolean(firstText(
     event.attributes?.['qoder.expert.name'],
     event.attributes?.['qoder.expert.role'],
@@ -241,7 +269,11 @@ export function aggregateQoderOtelTraceEvents(sessionId: string, allEvents: Otel
     const started = event.startTimeMs || Date.parse(event.receivedAt) || Date.now();
     const completed = eventEndMs(event) || started;
     const subagentSessionId = firstText(attrs['qoder.subagent.session_id']);
-    const agentName = firstText(attrs['qoder.expert.name'], attrs['qoder.subagent.name'], attrs['qoder.agent.name'], rootAgent) || rootAgent;
+    const attributedAgent = firstText(attrs['qoder.agent.name']);
+    const explicitAgent = attributedAgent && !isQoderProductSurfaceName(attributedAgent)
+      ? attributedAgent
+      : undefined;
+    const agentName = firstText(attrs['qoder.expert.name'], attrs['qoder.subagent.name'], explicitAgent, rootAgent) || rootAgent;
     const interaction: AnyObj = {
       role: subagentSessionId ? 'subagent' : 'assistant',
       content: firstText(attrs['output.value'], attrs['gen_ai.completion'], '') || '',

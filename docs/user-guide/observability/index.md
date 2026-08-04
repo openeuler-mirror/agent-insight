@@ -86,7 +86,20 @@ CodeAgent 当前会同时发出 Logs、Traces 和 Metrics，且内部配置会�
 
 四种产品形态使用同一套 OTLP Trace 结构，但安装入口和 spool 相互隔离。CLI、Desktop、JetBrains 和 Work 的数据统一位于 `~/.agent-insight/otel_data/qoder/<product>/<api-key-hash>/`。切换 API Key 后会自动使用新的摘要子目录，不会混用不同产品、不同账号的 pending、retry 或 uploader lock。升级前的 `qoder-{product}` 目录只作为兼容清理目标，不再写入新数据。
 
-在平台的“安装指导”中执行 curl/PowerShell 安装命令，或使用本地制作的 Agent Insight npm 包执行 `npx agent-insight install` 时，可在不影响原有框架选项的前提下勾选 **Qoder CN product family**。安装器会配置 CLI、Desktop、JetBrains 和 Work 的 Hook、运行脚本及上传器。安装成功后会输出 Desktop VSIX 和 JetBrains ZIP 的服务端下载地址及安装步骤。服务端从 `integrations/qoder-desktop/` 和 `integrations/qoder-jetbrains/` 源码构建安装包，并按源码修改时间缓存到 `.next/cache/qoder-plugins/`，仓库及本地 npm 包不再携带预编译二进制。
+平台把“产品来源”和“Agent 名称”分开记录。默认命名如下：
+
+| 产品/模式 | 产品来源 | 根 Agent 名称 |
+|---|---|---|
+| Qoder CN Desktop | `Qoder CN Desktop` | `Qoder` |
+| Qoder for JetBrains | `Qoder for JetBrains` | `Qoder` |
+| Qoder CN CLI | `Qoder CN CLI` | `Qoder CLI` |
+| Qoder Work CN | `Qoder Work` | `Qoder Work` |
+| Quest 模式 | 保留实际产品来源 | `Quest Agent` |
+| 专家团模式 | 保留实际产品来源 | `Experts Agent` |
+
+用户显式选择或创建具名 Agent 时，平台保留该名称。列表中的 `AGENT` 列展示 Agent 名称；产品来源可在 Trace 详情和来源属性中确认，因此 Desktop/JetBrains 的普通根 Agent 显示为 `Qoder` 是预期行为。
+
+在平台的“安装指导”中执行 curl/PowerShell 安装命令，或使用本地制作的 Agent Insight npm 包执行 `npx agent-insight install` 时，可在不影响原有框架选项的前提下勾选 **Qoder CN product family**。安装器会配置 CLI、Desktop、JetBrains 和 Work 的 Hook、运行脚本及上传器，并自动把 Desktop VSIX 与 JetBrains ZIP 下载到 `~/.agent-insight/packages/qoder/`。单个插件包下载失败只会显示警告，不会撤销已经完成的采集器安装；可在服务端补齐插件包来源或构建环境后重新执行安装命令。Desktop VSIX 由服务端从 `integrations/qoder-desktop/` 源码构建；JetBrains ZIP 可由服务端从受信任的 Release 附件下载，或在有 IntelliJ/Java 构建环境时从 `integrations/qoder-jetbrains/` 源码构建。两类产物都缓存到 `.next/cache/qoder-plugins/`，仓库及本地 npm 包不携带预编译二进制。
 
 ### Qoder CN Desktop
 
@@ -108,7 +121,7 @@ Linux/macOS 使用同一 Node 构建器：
 integrations/qoder-desktop/build-vsix.sh
 ```
 
-在 Qoder CN Desktop 的 Extensions 面板选择 **Install from VSIX**，安装 `integrations/qoder-desktop/build/distributions/agent-insight-qoder-desktop-<version>.vsix`。安装后状态栏出现 `Agent Insight`，Settings 中出现 `Agent Insight Qoder CN Collector`。点击状态栏可配置服务地址和 API Key；API Key 写入扩展 SecretStorage，同时同步给本机采集进程。扩展把用户级 Hook 写入 `~/.qoder-cn/settings.json`，读取 `~/.qoder-cn/cache/projects/.../conversation-history/` 会话记录，并在 Windows 上只读查询 `%APPDATA%/QoderCN/SharedClientCache/cache/db/local.db` 的精确 Token。通过 `/skill-name` 手动触发的 Skill 会从 Qoder CN transcript 的 slash-command 元数据还原，在 Trace 中显示 Skill 名称、版本、触发方式、参数和结果。扩展停用或 Qoder CN Desktop 退出时，会把尚未结束的活动会话生成最后一份 snapshot，并等待一次强制上传；网络失败时 pending 文件仍保留在 spool，下一次启动继续重试。卸载监视器只清理 Desktop owner 与 `qoder/desktop` spool；CLI、JetBrains、Work 不受影响。
+一键安装后，在 Qoder CN Desktop 的 Extensions 面板选择 **Install from VSIX**，安装 `~/.agent-insight/packages/qoder/agent-insight-qoder-desktop.vsix`；从源码单独构建时则选择 `integrations/qoder-desktop/build/distributions/agent-insight-qoder-desktop-<version>.vsix`。安装后状态栏出现 `Agent Insight`，Settings 中出现 `Agent Insight Qoder CN Collector`。点击状态栏可配置服务地址和 API Key；API Key 写入扩展 SecretStorage，同时同步给本机采集进程。扩展把用户级 Hook 写入 `~/.qoder-cn/settings.json`，读取 `~/.qoder-cn/cache/projects/.../conversation-history/` 会话记录，并在 Windows 上只读查询 `%APPDATA%/QoderCN/SharedClientCache/cache/db/local.db` 的精确 Token。通过 `/skill-name` 手动触发的 Skill 会从 Qoder CN transcript 的 slash-command 元数据还原，在 Trace 中显示 Skill 名称、版本、触发方式、参数和结果。扩展停用或 Qoder CN Desktop 退出时，会把尚未结束的活动会话生成最后一份 snapshot，并等待一次强制上传；网络失败时 pending 文件仍保留在 spool，下一次启动继续重试。卸载监视器只清理 Desktop owner 与 `qoder/desktop` spool；CLI、JetBrains、Work 不受影响。
 
 ### Qoder CN CLI
 
@@ -128,7 +141,19 @@ node scripts/qoder_setup.mjs uninstall --scope=user --product=cli --owner=cli --
 
 ### Qoder for JetBrains
 
-可从 `http://<Agent-Insight-Host>/api/ingest/setup/qoder-jetbrains-plugin` 下载 ZIP，或在 Windows 使用 `integrations/qoder-jetbrains/build-plugin.ps1 -IdeHome <JetBrains-IDE目录>`、在 Linux/macOS 使用 `JETBRAINS_HOME=<JetBrains-IDE目录> integrations/qoder-jetbrains/build-plugin.sh` 从源码构建。JetBrains 插件必须依赖 IntelliJ Platform SDK 编译 Java 并生成插件 JAR，不能把 Java 源码直接压缩成可安装 ZIP；服务端缺少 `JETBRAINS_HOME` 或 Java/Gradle 构建环境时，下载接口会返回明确的 503 提示。然后在 JetBrains IDE 的 Plugins 页面选择 **Install Plugin from Disk**，选择下载的 ZIP 并重启 IDE。插件安装后显示 Agent Insight 状态栏和设置项，并通过 IDE 进程 marker 将共享 Qoder transcript 标记为 `Qoder for JetBrains`。IDE 关闭、应用服务销毁或插件动态卸载前，插件都会先执行同样的活动会话 snapshot 与强制上传；失败数据继续留在 pending spool。插件动态卸载完成后只移除 `jetbrains` owner、marker、运行目录与 `qoder/jetbrains` spool。
+一键安装会尝试从 `http://<Agent-Insight-Host>/api/ingest/setup/qoder-jetbrains-plugin` 下载 ZIP 到 `~/.agent-insight/packages/qoder/agent-insight-qoder-jetbrains.zip`。源码内置了经过校验的贡献分支 Release 附件默认地址，因此无 JDK/Gradle 的标准部署无需额外配置。正式迁移到 openEuler Release、内网镜像或私有制品仓时，可在 Agent Insight 服务进程中覆盖该地址：
+
+```text
+AGENT_INSIGHT_QODER_JETBRAINS_PACKAGE_URL=https://<release-attachment-download-url>
+```
+
+接口先复用与当前源码 mtime 匹配的新鲜缓存；缓存不存在或已过期时，优先使用环境变量覆盖值，否则使用源码默认附件。校验为 ZIP 且包含编译后的插件 JAR 与 `META-INF/plugin.xml` 后，才原子写入服务端缓存；远端暂时不可用时回退仍可验证的缓存，最后才尝试源码构建。也可在 Windows 使用 `integrations/qoder-jetbrains/build-plugin.ps1 -IdeHome <JetBrains-IDE目录>`、在 Linux/macOS 使用 `JETBRAINS_HOME=<JetBrains-IDE目录> integrations/qoder-jetbrains/build-plugin.sh` 从源码构建。JetBrains 插件必须依赖 IntelliJ Platform SDK 编译 Java 并生成插件 JAR，不能把 Java 源码直接压缩成可安装 ZIP；默认/覆盖 Release 均不可用且缺少 `JETBRAINS_HOME` 或 Java/Gradle 构建环境时，自动下载会显示警告，直接访问接口则返回明确的 503 提示。然后在 JetBrains IDE 的 Plugins 页面选择 **Install Plugin from Disk**，选择下载的 ZIP 并重启 IDE。插件安装后显示 Agent Insight 状态栏和设置项，并通过 IDE 进程 marker 将共享 Qoder transcript 标记为 `Qoder for JetBrains`。IDE 关闭、应用服务销毁或插件动态卸载前，插件都会先执行同样的活动会话 snapshot 与强制上传；失败数据继续留在 pending spool。插件动态卸载完成后只移除 `jetbrains` owner、marker、运行目录与 `qoder/jetbrains` spool。
+
+安装脚本请求本机插件接口失败时，会在终端显示当前生效的 **Release attachment direct URL**（环境变量覆盖值或源码默认值）并自动从该直链重试下载。若直链下载仍失败，终端会继续输出可复制的 `curl -fL ... -o ...`（Linux/macOS）或 `Invoke-WebRequest -Uri ... -OutFile ...`（Windows）命令、目标 ZIP 路径 `~/.agent-insight/packages/qoder/agent-insight-qoder-jetbrains.zip`，以及 **Settings → Plugins → 齿轮 → Install Plugin from Disk** 的安装步骤。源码默认值集中定义在 `src/lib/ingest/qoder-plugin-release.ts`；当前为贡献分支的临时 Release 附件，合入上游并发布正式制品后应改为 openEuler 官方附件地址，部署方也可随时通过 `AGENT_INSIGHT_QODER_JETBRAINS_PACKAGE_URL` 覆盖并重启 Agent Insight。
+
+#### Qoder for JetBrains 制品来源声明
+
+Qoder for JetBrains 插件必须先由 IntelliJ Platform SDK/JDK 编译为包含插件 JAR 的 ZIP，不能直接安装 Java 源码。仓库只保存可审查的插件源码，不提交预编译 ZIP；标准部署从 Release 附件获取已编译制品。当前源码默认地址可在 `src/lib/ingest/qoder-plugin-release.ts` 查看，服务端实际分发入口为 `/api/ingest/setup/qoder-jetbrains-plugin`，一键安装后的本地文件位于 `~/.agent-insight/packages/qoder/agent-insight-qoder-jetbrains.zip`。当前默认附件发布在贡献者仓库的 `qoder-cn-collector-test-v0.1.0` Release 中，属于合入前的临时制品；上游发布正式附件后，维护者应把默认地址迁移到 openEuler 官方 Release。部署方需要提前切换制品源时，可设置 `AGENT_INSIGHT_QODER_JETBRAINS_PACKAGE_URL` 覆盖默认地址。完整构建、校验、替换和维护步骤见开发者指南“Qoder for JetBrains Release 制品维护声明”。
 
 ### Qoder Work CN
 
@@ -144,6 +169,6 @@ node scripts/qoder_work_setup.mjs install
 node scripts/qoder_work_setup.mjs uninstall --purge
 ```
 
-所有形态默认截断正文到 2000 字符，并对 API Key、token、authorization、cookie、password 等字段脱敏。工具耗时通常取 Pre/Post Hook；异步 Hook 时间戳重合时自动回退到 transcript 的真实调用与返回时间，避免短 MCP 调用误显示为 `0ms`。采集器按 `diagnostics/Hook 精确值 > Desktop/JetBrains 本地 SQLite 精确值 > 可见 transcript 估算 > 不可用` 选择 Token 来源。CLI 与 Work 依赖安装器配置的 `QODERCN_EXPOSE_TOKEN_USAGE=1` 保留 diagnostics 精确值；Desktop 自动只读查询 `%APPDATA%/QoderCN/SharedClientCache/cache/db/local.db`，JetBrains 自动只读查询 `~/.qoder/shared_client/cache/db/local.db`。SQLite 读取仅访问 `chat_message` 的会话、请求、模型和 `token_info` 字段，不修改 Qoder 数据。SQLite Schema 与 Token 暴露开关都属于 Qoder 客户端内部接口；版本不兼容、数据库忙、变量未被客户端进程继承或当前 Node 不支持内置 SQLite 时会安全回退为 Token 不可用。
+所有形态默认截断正文到 2000 字符，并对 API Key、token、authorization、cookie、password 等字段脱敏。工具耗时通常取 Pre/Post Hook；异步 Hook 时间戳重合时自动回退到 transcript 的真实调用与返回时间，避免短 MCP 调用误显示为 `0ms`。采集器按 `diagnostics/Hook 精确值 > Desktop/JetBrains 本地 SQLite 精确值 >（显式开启时）Desktop/JetBrains 可见 transcript 估算 > 不可用` 选择 Token 来源。CLI 与 Work 依赖安装器配置的 `QODERCN_EXPOSE_TOKEN_USAGE=1` 保留 diagnostics 精确值；Desktop 自动只读查询 `%APPDATA%/QoderCN/SharedClientCache/cache/db/local.db`，JetBrains 自动只读查询 `~/.qoder/shared_client/cache/db/local.db`。SQLite 读取仅访问 `chat_message` 的会话、请求、模型和 `token_info` 字段，不修改 Qoder 数据。SQLite Schema 与 Token 暴露开关都属于 Qoder 客户端内部接口；版本不兼容、数据库忙、变量未被客户端进程继承或当前 Node 不支持内置 SQLite 时会安全回退为 Token 不可用。
 
 仅在前两种精确来源都不可用时，才可在 `~/.agent-insight/config` 中显式设置 `AGENT_INSIGHT_QODER_ESTIMATE_VISIBLE_TOKENS=1`，实验性地估算当前轮 transcript 中可见的用户消息、助手输出、工具参数和工具结果。Trace 详情以 `≈` 标识，并记录 `local_visible_transcript`、`visible_transcript` 和 `missing_context=true`。估算不包含客户端隐藏的 system prompt、Rules、Skill/MCP schema、内部推理与被压缩上下文，在真实 Agent 会话中可能严重低估，因此不能用于账单核对，也不会填充执行记录的精确 input/output Token 字段。CLI/Work 未提供 usage 时仍显示不可用，不启用该兜底。

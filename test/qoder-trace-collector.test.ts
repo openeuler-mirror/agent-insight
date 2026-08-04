@@ -772,7 +772,7 @@ test("AC33 one standardized Qoder task emits Agent, Subagent, Quest, Expert, Ski
   const record = aggregateOtelTraceEvents(SESSION_ID, events) as Record<string, any>
   assert.ok(record)
   assert.equal(record.framework, "qoder")
-  assert.equal(record.agentName, "Qoder CN Desktop")
+  assert.equal(record.agentName, "Quest Agent")
   assert.equal(record.llm_call_count, 2)
   assert.equal(record.tokens, 65)
   assert.equal(record.qoder_quest.goals[0].id, "ac33-quest")
@@ -1040,7 +1040,7 @@ test("Qoder Desktop groups id-less transcript blocks into turns and reports its 
 
   assert.equal(resourceAttrs["service.name"], "qoder-cn-desktop")
   assert.equal(resourceAttrs["qoder.product"], "desktop")
-  assert.equal(rootAttrs["qoder.agent.name"], "Qoder CN Desktop")
+  assert.equal(rootAttrs["qoder.agent.name"], "Qoder")
   assert.equal(llmSpans.length, 2)
   assert.ok(llmSpans.every((span) => BigInt(span.endTimeUnixNano) > BigInt(span.startTimeUnixNano)))
 
@@ -1049,8 +1049,59 @@ test("Qoder Desktop groups id-less transcript blocks into turns and reports its 
     authenticatedUser: "alice",
   })
   const record = aggregateOtelTraceEvents(SESSION_ID, events)
-  assert.equal(record?.label, "Qoder CN Desktop")
-  assert.equal(record?.agentName, "Qoder CN Desktop")
+  assert.equal(record?.label, "Qoder")
+  assert.equal(record?.agentName, "Qoder")
+})
+
+test("Qoder default main Agent names are independent from the product surface", () => {
+  const expectedNames = new Map<string, { expected: string; legacy: string }>([
+    ["desktop", { expected: "Qoder", legacy: "Qoder CN Desktop" }],
+    ["jetbrains", { expected: "Qoder", legacy: "Qoder for JetBrains" }],
+    ["cli", { expected: "Qoder CLI", legacy: "Qoder CN CLI" }],
+    ["work", { expected: "Qoder Work", legacy: "Qoder Work CN" }],
+  ])
+
+  for (const [product, { expected: expectedName, legacy }] of expectedNames) {
+    const capture = sampleCapture()
+    capture.transcriptRecords.unshift({
+      type: "session_meta",
+      sessionId: SESSION_ID,
+      timestamp: "2026-07-21T11:59:59.000Z",
+      data: { meta_type: "session_info", content: { mode: "agent", agentName: legacy } },
+    })
+    const payload = buildQoderOtlpPayload({ ...capture, product })
+    const rootSpan = payload.resourceSpans[0].scopeSpans[0].spans[0]
+    const rootAttrs = Object.fromEntries(rootSpan.attributes.map(
+      (attribute: { key: string; value: { stringValue?: string } }) => [attribute.key, attribute.value.stringValue],
+    ))
+    assert.equal(rootAttrs["qoder.agent.name"], expectedName)
+
+    const events = normalizeOtlpTraces(payload, {
+      receivedAt: "2026-07-21T12:00:05.000Z",
+      authenticatedUser: `agent-name-${product}`,
+    })
+    assert.equal(aggregateOtelTraceEvents(SESSION_ID, events)?.agentName, expectedName)
+
+    const legacyAttribute = rootSpan.attributes.find(
+      (attribute: { key: string }) => attribute.key === "qoder.agent.name",
+    )
+    assert.ok(legacyAttribute)
+    legacyAttribute.value = { stringValue: legacy }
+    const legacyEvents = normalizeOtlpTraces(payload, {
+      receivedAt: "2026-07-21T12:00:05.000Z",
+      authenticatedUser: `agent-name-legacy-${product}`,
+    })
+    assert.equal(aggregateOtelTraceEvents(SESSION_ID, legacyEvents)?.agentName, expectedName)
+
+    rootSpan.attributes = rootSpan.attributes.filter(
+      (attribute: { key: string }) => attribute.key !== "qoder.agent.name",
+    )
+    const fallbackEvents = normalizeOtlpTraces(payload, {
+      receivedAt: "2026-07-21T12:00:05.000Z",
+      authenticatedUser: `agent-name-fallback-${product}`,
+    })
+    assert.equal(aggregateOtelTraceEvents(SESSION_ID, fallbackEvents)?.agentName, expectedName)
+  }
 })
 
 test("Qoder Desktop Quest emits a goal and stable step spans from plan transcripts", () => {
@@ -1116,6 +1167,40 @@ test("Qoder Desktop Quest emits a goal and stable step spans from plan transcrip
   assert.equal(record.tool_call_count, 3)
 })
 
+test("Qoder keeps the product source separate from an explicit main Agent name", () => {
+  const hookEvents = [
+    hook("2026-07-22T06:40:00.000Z", { hook_event_name: "UserPromptSubmit", prompt: "Read package.json" }),
+    hook("2026-07-22T06:40:03.000Z", { hook_event_name: "Stop", last_assistant_message: "done" }),
+  ]
+  const transcriptRecords = [
+    {
+      type: "session_meta",
+      sessionId: SESSION_ID,
+      timestamp: "2026-07-22T06:39:59.900Z",
+      data: {
+        meta_type: "session_info",
+        content: { mode: "agent", session_type: "assistant", agentName: "Repository Analyst" },
+      },
+    },
+    { type: "user", sessionId: SESSION_ID, timestamp: "2026-07-22T06:40:00.000Z", message: { content: "Read package.json" } },
+    { type: "assistant", sessionId: SESSION_ID, timestamp: "2026-07-22T06:40:02.900Z", message: { content: [{ type: "text", text: "done" }] } },
+  ]
+
+  const payload = buildQoderOtlpPayload({ hookEvents, transcriptRecords, product: "desktop" })
+  const resourceAttrs = Object.fromEntries(payload.resourceSpans[0].resource.attributes.map(
+    (attribute: { key: string; value: { stringValue?: string } }) => [attribute.key, attribute.value.stringValue],
+  ))
+  const rootAttrs = Object.fromEntries(payload.resourceSpans[0].scopeSpans[0].spans[0].attributes.map(
+    (attribute: { key: string; value: { stringValue?: string } }) => [attribute.key, attribute.value.stringValue],
+  ))
+  assert.equal(resourceAttrs["qoder.product"], "desktop")
+  assert.equal(rootAttrs["qoder.agent.name"], "Repository Analyst")
+
+  const events = normalizeOtlpTraces(payload, { receivedAt: "2026-07-22T06:40:04.000Z", authenticatedUser: "alice" })
+  const record = aggregateOtelTraceEvents(SESSION_ID, events)
+  assert.equal(record?.agentName, "Repository Analyst")
+})
+
 test("Qoder Desktop Experts restores member names, roles, completion output, and mode", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "qoder-experts-"))
   try {
@@ -1157,6 +1242,7 @@ test("Qoder Desktop Experts restores member names, roles, completion output, and
     const events = normalizeOtlpTraces(payload, { receivedAt: "2026-07-22T07:00:06.000Z", authenticatedUser: "alice" })
     const record = aggregateOtelTraceEvents(SESSION_ID, events)
     assert.ok(record)
+    assert.equal(record.agentName, "Experts Agent")
     assert.equal((record.interactions as any[])[0].qoder_mode, "experts")
     assert.equal(record.qoder_experts?.members?.[0]?.name, "Alex")
     assert.equal(record.qoder_experts?.members?.[0]?.role, "researcher")
@@ -2135,7 +2221,7 @@ test("Qoder CN Desktop normalizes conversation-history rows and joins exact SQLi
     authenticatedUser: "alice",
   })
   const record = aggregateOtelTraceEvents(SESSION_ID, events)
-  assert.equal(record?.agentName, "Qoder CN Desktop")
+  assert.equal(record?.agentName, "Qoder")
   assert.equal(record?.tokens, 56_317)
   assert.equal(record?.final_result, "name: agent-insight; version: 0.5.4")
 })

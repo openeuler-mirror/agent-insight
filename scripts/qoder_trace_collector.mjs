@@ -427,11 +427,35 @@ function normalizeQoderProduct(value) {
   return "cli"
 }
 
-function qoderAgentName(product) {
-  if (product === "desktop") return "Qoder CN Desktop"
-  if (product === "jetbrains") return "Qoder for JetBrains"
-  if (product === "work") return "Qoder Work"
-  return "Qoder CN CLI"
+function isQoderProductSurfaceName(value) {
+  const name = String(value || "").trim().toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ")
+  return new Set([
+    "qoder",
+    "qoder desktop",
+    "qoder cn desktop",
+    "qoder jetbrains",
+    "qoder for jetbrains",
+    "qoder cli",
+    "qoder cn cli",
+    "qoder work",
+    "qoder work cn",
+    "qoder cn work",
+  ]).has(name)
+}
+
+function qoderAgentName(mode, explicitName, product) {
+  const configuredName = firstString(explicitName)
+  // Older collectors used the product surface as the Agent name. Treat those
+  // values as defaults so they cannot override Quest/Experts or a canonical
+  // product-independent main Agent name. Genuine user-created names survive.
+  if (configuredName && !isQoderProductSurfaceName(configuredName)) return configuredName
+  const normalizedMode = String(mode || "").trim().toLowerCase()
+  if (["plan", "quest"].includes(normalizedMode)) return "Quest Agent"
+  if (normalizedMode === "experts") return "Experts Agent"
+  const normalizedProduct = normalizeQoderProduct(product)
+  if (normalizedProduct === "cli") return "Qoder CLI"
+  if (normalizedProduct === "work") return "Qoder Work"
+  return "Qoder"
 }
 
 function qoderServiceName(product) {
@@ -579,12 +603,26 @@ export function buildQoderOtlpPayload({
   const rootSpanId = stableHex(["qoder", sessionId, snapshotId, "agent"], 16)
   const productInfo = asObject(stop?.event?.parent_business_info)
   const productName = normalizeQoderProduct(firstString(product, productInfo.product))
-  const agentName = qoderAgentName(productName)
   const sessionMeta = [...allTranscript].reverse().find((record) =>
     record?.type === "session_meta"
     && record?.data?.meta_type === "session_info"
     && (!currentTurnStartMs || toMs(record?.timestamp, currentTurnStartMs) <= currentTurnStartMs))
-  const sessionMode = firstString(sessionMeta?.data?.content?.mode, stop?.event?.mode, prompt?.event?.mode)
+  const sessionInfo = asObject(sessionMeta?.data?.content)
+  const sessionMode = firstString(sessionInfo.mode, stop?.event?.mode, prompt?.event?.mode)
+  const agentName = qoderAgentName(sessionMode, firstString(
+    sessionInfo.agentName,
+    sessionInfo.agent_name,
+    sessionInfo.assistantName,
+    sessionInfo.assistant_name,
+    sessionInfo.profileName,
+    sessionInfo.profile_name,
+    stop?.event?.agentName,
+    stop?.event?.agent_name,
+    prompt?.event?.agentName,
+    prompt?.event?.agent_name,
+    productInfo.agentName,
+    productInfo.agent_name,
+  ), productName)
   const isQuest = ["plan", "quest"].includes(String(sessionMode || "").toLowerCase())
   const expertsMode = String(sessionMode || "").toLowerCase() === "experts"
   const expertList = Array.isArray(expertAgents) ? expertAgents : []

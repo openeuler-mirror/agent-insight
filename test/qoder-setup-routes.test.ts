@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
 import fs from "node:fs"
+import { createServer } from "node:http"
 import os from "node:os"
 import path from "node:path"
 import test from "node:test"
@@ -12,6 +13,9 @@ import { GET as getAutoSetup } from "@/app/api/ingest/setup/auto/route"
 import { GET as getQoderDesktopVsix } from "@/app/api/ingest/setup/qoder-desktop-vsix/route"
 import { GET as getQoderJetBrainsPlugin } from "@/app/api/ingest/setup/qoder-jetbrains-plugin/route"
 import { getQoderPluginPackageBuildInfo } from "@/lib/ingest/qoder-plugin-package"
+import {
+  DEFAULT_QODER_JETBRAINS_PACKAGE_URL,
+} from "@/lib/ingest/qoder-plugin-release"
 
 const QODER_COMPONENTS = [
   "qoder_setup.mjs",
@@ -134,17 +138,69 @@ test("Qoder JetBrains download serves only a compiled plugin ZIP cached by sourc
   }
 })
 
-test("Qoder JetBrains download returns an actionable 503 without a build environment", async () => {
+test("Qoder JetBrains download can use a configured Release attachment without a build environment", async () => {
+  const info = await getQoderPluginPackageBuildInfo("jetbrains")
+  const compiledJar = new AdmZip()
+  compiledJar.addFile(
+    "META-INF/plugin.xml",
+    Buffer.from("<idea-plugin><id>org.openeuler.agentinsight.qoder.jetbrains</id></idea-plugin>"),
+  )
+  const pluginArchive = new AdmZip()
+  pluginArchive.addFile(
+    "agent-insight-qoder-jetbrains/lib/agent-insight-qoder-jetbrains.jar",
+    compiledJar.toBuffer(),
+  )
+  const releasePackage = pluginArchive.toBuffer()
+  const server = createServer((_request, response) => {
+    response.writeHead(200, {
+      "Content-Length": String(releasePackage.byteLength),
+      "Content-Type": "application/zip",
+    })
+    response.end(releasePackage)
+  })
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+
+  const address = server.address()
+  assert.ok(address && typeof address !== "string")
+  const previousPackageUrl = process.env.AGENT_INSIGHT_QODER_JETBRAINS_PACKAGE_URL
+  fs.rmSync(info.cachePath, { force: true })
+
+  try {
+    process.env.AGENT_INSIGHT_QODER_JETBRAINS_PACKAGE_URL =
+      `http://127.0.0.1:${address.port}/agent-insight-qoder-jetbrains.zip`
+
+    const response = await getQoderJetBrainsPlugin()
+    const actual = Buffer.from(await response.arrayBuffer())
+
+    assert.equal(response.status, 200)
+    assert.deepEqual(actual, releasePackage)
+    assert.deepEqual(fs.readFileSync(info.cachePath), releasePackage)
+  } finally {
+    if (previousPackageUrl === undefined) {
+      delete process.env.AGENT_INSIGHT_QODER_JETBRAINS_PACKAGE_URL
+    } else {
+      process.env.AGENT_INSIGHT_QODER_JETBRAINS_PACKAGE_URL = previousPackageUrl
+    }
+    fs.rmSync(info.cachePath, { force: true })
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve())
+    })
+  }
+})
+
+test("Qoder JetBrains download returns an actionable 503 without a usable Release or build environment", async () => {
   const info = await getQoderPluginPackageBuildInfo("jetbrains")
   const emptyPath = fs.mkdtempSync(path.join(os.tmpdir(), "qoder-no-java-"))
   const previousPath = process.env.PATH
   const previousJetBrainsHome = process.env.JETBRAINS_HOME
+  const previousPackageUrl = process.env.AGENT_INSIGHT_QODER_JETBRAINS_PACKAGE_URL
   const previousConsoleError = console.error
   fs.rmSync(info.cachePath, { force: true })
 
   try {
     process.env.PATH = emptyPath
     delete process.env.JETBRAINS_HOME
+    process.env.AGENT_INSIGHT_QODER_JETBRAINS_PACKAGE_URL = "file:///not-a-release.zip"
     console.error = () => {}
 
     const response = await getQoderJetBrainsPlugin()
@@ -162,6 +218,8 @@ test("Qoder JetBrains download returns an actionable 503 without a build environ
     else process.env.PATH = previousPath
     if (previousJetBrainsHome === undefined) delete process.env.JETBRAINS_HOME
     else process.env.JETBRAINS_HOME = previousJetBrainsHome
+    if (previousPackageUrl === undefined) delete process.env.AGENT_INSIGHT_QODER_JETBRAINS_PACKAGE_URL
+    else process.env.AGENT_INSIGHT_QODER_JETBRAINS_PACKAGE_URL = previousPackageUrl
     fs.rmSync(info.cachePath, { force: true })
     fs.rmSync(emptyPath, { recursive: true, force: true })
   }
@@ -250,6 +308,13 @@ test("curl setup appends Qoder without changing existing framework entries", asy
     assert.match(script, /--product=jetbrains/)
     assert.match(script, /\/api\/ingest\/setup\/qoder-desktop-vsix/)
     assert.match(script, /\/api\/ingest\/setup\/qoder-jetbrains-plugin/)
+    assert.match(script, /packages[\\\\/]qoder/)
+    assert.match(script, /agent-insight-qoder-desktop\.vsix/)
+    assert.match(script, /agent-insight-qoder-jetbrains\.zip/)
+    assert.match(script, platform === "unix" ? /curl -fsSL/ : /Invoke-WebRequest/)
+    assert.match(script, /Release attachment direct URL/)
+    assert.match(script, /AGENT_INSIGHT_QODER_JETBRAINS_PACKAGE_URL/)
+    assert.match(script, /JetBrains package path/)
     assert.match(script, /Install from VSIX/)
     assert.match(script, /Install Plugin from Disk/)
   }
@@ -269,7 +334,66 @@ test("local npm auto setup appends Qoder without changing existing framework ent
     assert.match(script, /--product=jetbrains/)
     assert.match(script, /\/api\/ingest\/setup\/qoder-desktop-vsix/)
     assert.match(script, /\/api\/ingest\/setup\/qoder-jetbrains-plugin/)
+    assert.match(script, /packages[\\\\/]qoder/)
+    assert.match(script, /agent-insight-qoder-desktop\.vsix/)
+    assert.match(script, /agent-insight-qoder-jetbrains\.zip/)
+    assert.match(script, platform === "unix" ? /curl -fsSL/ : /Invoke-WebRequest/)
+    assert.match(script, /Release attachment direct URL/)
+    assert.match(script, /AGENT_INSIGHT_QODER_JETBRAINS_PACKAGE_URL/)
+    assert.match(script, /JetBrains package path/)
     assert.match(script, /Install from VSIX/)
     assert.match(script, /Install Plugin from Disk/)
+  }
+})
+
+test("Qoder setup embeds the configured Release attachment fallback and manual download command", async () => {
+  const previousPackageUrl = process.env.AGENT_INSIGHT_QODER_JETBRAINS_PACKAGE_URL
+  const releaseUrl = "https://releases.example.test/qoder/agent-insight-qoder-jetbrains.zip"
+
+  try {
+    process.env.AGENT_INSIGHT_QODER_JETBRAINS_PACKAGE_URL = releaseUrl
+
+    for (const generate of [setupScript, autoSetupScript]) {
+      for (const platform of ["unix", "windows"] as const) {
+        const script = await generate(platform)
+
+        assert.match(script, new RegExp(releaseUrl.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))
+        assert.match(script, /Retrying from the Release attachment/)
+        assert.match(script, platform === "unix" ? /curl -fL/ : /Invoke-WebRequest -Uri/)
+        assert.match(script, /agent-insight-qoder-jetbrains\.zip/)
+        assert.match(script, /Install Plugin from Disk -> select the ZIP above/)
+      }
+    }
+  } finally {
+    if (previousPackageUrl === undefined) {
+      delete process.env.AGENT_INSIGHT_QODER_JETBRAINS_PACKAGE_URL
+    } else {
+      process.env.AGENT_INSIGHT_QODER_JETBRAINS_PACKAGE_URL = previousPackageUrl
+    }
+  }
+})
+
+test("Qoder setup embeds the built-in JetBrains Release attachment when no override is configured", async () => {
+  const previousPackageUrl = process.env.AGENT_INSIGHT_QODER_JETBRAINS_PACKAGE_URL
+
+  try {
+    delete process.env.AGENT_INSIGHT_QODER_JETBRAINS_PACKAGE_URL
+
+    for (const generate of [setupScript, autoSetupScript]) {
+      for (const platform of ["unix", "windows"] as const) {
+        const script = await generate(platform)
+        assert.match(
+          script,
+          new RegExp(DEFAULT_QODER_JETBRAINS_PACKAGE_URL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+        )
+        assert.match(script, /Retrying from the Release attachment/)
+      }
+    }
+  } finally {
+    if (previousPackageUrl === undefined) {
+      delete process.env.AGENT_INSIGHT_QODER_JETBRAINS_PACKAGE_URL
+    } else {
+      process.env.AGENT_INSIGHT_QODER_JETBRAINS_PACKAGE_URL = previousPackageUrl
+    }
   }
 })
