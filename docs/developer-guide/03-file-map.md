@@ -53,7 +53,7 @@
 | `ingest/routing-signature.ts` | ingest | `RoutingSemanticSignature`、`RoutingSemanticMatch` |
 | `ingest/claude-otel/` / `ingest/otel-consumer/` / `openclaw-watcher.ts` | ingest | 特定框架的接入与 OTel spool 消费 |
 | `ingest/otel/langfuse.ts` / `ingest/otel/adapters/{langfuse-langgraph,langfuse-trace}.ts` | ingest | Langfuse Python SDK / LangGraph OTLP 归属转换；现有 interactions 投影与无损 `LangfuseTraceNode` 投影并行生成 |
-| `ingest/ras/{normalize,store,delivery-link,trace-markers,sort-traces,fault-mode-catalog,fault-mode-label-store}.ts` | ingest / observe | RAS 环内事件归一化与落库（`RasAnomalyEvent`）；delivery 关联、详情 marker、列表排序、故障模式目录与本地标签 |
+| `ingest/ras/{normalize,store,delivery-link,trace-markers,sort-traces,fault-mode-catalog,fault-mode-label-store,capability-config,capability-config-store}.ts` | ingest / observe | RAS 环内事件归一化与落库（`RasAnomalyEvent`）；delivery 关联、详情 marker、列表排序、故障模式目录与本地标签；能力配置校验与用户级持久化 |
 | `ingest/setup-package.ts` | ingest setup | 将客户端 RAS 安装绑定到服务端 npm 包版本；支持私有 `.tgz` package spec 覆盖 |
 | `engine/observability/langfuse-agent-trace.ts` | engine | Langfuse 可见 observation → 原 Agent Trace 节点/事件模型；不含业务节点名称规则 |
 | `ingest/otel/adapters/hermes.ts` / `scripts/hermes_agent_insight_plugin.py` | ingest | Hermes span tree 归属转换；Hermes hooks 到累计 OTLP JSON snapshot |
@@ -100,7 +100,7 @@
 ## API routes (`src/app/api/`) — grouped
 | Group | Route files (under `api/`) | Purpose |
 |---|---|---|
-| ingest | `ingest/otel/v1/{logs,metrics,traces}`、`ingest/ras-events`、`ingest/upload`、`ingest/proxy/[taskId]/*`、`ingest/setup/*`（含 `setup/hermes-plugin`）、`ingest/sync/*`、`ingest/opencode/session-complete`、`ingest/parse-document`、`ingest/v1/[...path]` | 接收并归一化 agent 运行数据（含 RAS 旁路）；下发客户端安装脚本与 Hermes 插件源码 |
+| ingest | `ingest/otel/v1/{logs,metrics,traces}`、`ingest/ras-events`、`ingest/ras-config`、`ingest/upload`、`ingest/proxy/[taskId]/*`、`ingest/setup/*`（含 `setup/hermes-plugin`）、`ingest/sync/*`、`ingest/opencode/session-complete`、`ingest/parse-document`、`ingest/v1/[...path]` | 接收并归一化 agent 运行数据（含 RAS 旁路与能力配置拉取）；下发客户端安装脚本与 Hermes 插件源码 |
 | agent | `agent/{run,respond,stream}` | 驱动内部的通用 agent |
 | skills | `skills`、`skills/[id]/*`、`skills/by-name/*`、`skills/{publish,upload,automation/*,sync-enterprise,logs}` | skill 增删改查、版本、发布、企业同步 |
 | skill-eval | `skill-eval/trigger/[skillName]/*` | 触发评测集/评测运行 |

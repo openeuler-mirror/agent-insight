@@ -68,7 +68,7 @@ export const zh = {
     groupObserve: '运行观测',
     groupAgentRas: 'AgentRAS 可靠性',
     rasTrace: '可靠性观测',
-    rasFaultModes: '故障模式',
+    rasFaultModes: '可靠性能力',
     rasFaultInjection: '故障注入与评测',
     skillsAsset: '资产',
     skillsDevDebug: '开发与调测',

@@ -18,6 +18,9 @@ _PLATFORM_CAPABILITIES: dict[str, dict[str, Any]] = {
     "openclaw": {
         "supports_host_skill_judge": False,
     },
+    "xiaoo": {
+        "supports_host_skill_judge": False,
+    },
 }
 
 

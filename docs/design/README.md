@@ -5,7 +5,7 @@
 
 > 说明:子目录里的设计文档**只描述设计意图,不记录实现进度**。「是否实现」这类执行状态统一在本清单跟踪。
 >
-> **Agent RAS** 相关设计见 [`docs/agent-ras/`](../agent-ras/README.md)（本表 RAS 行链接指向该处）。
+> **Agent RAS** 相关设计见 [`docs/agent-ras/`](../agent-ras/README.md)（本表 RAS 行链接指向该处 designs/features 或 guides）；使用指南见 [`docs/agent-ras/guides/`](../agent-ras/guides/)。
 
 ## 清单
 
@@ -21,13 +21,17 @@
 | Openclaw 平台适配 | [openclaw-adapter](openclaw-adapter/) | (待补充:定义 Openclaw 平台的接入适配设计,包括链路数据上报、解析及面板呈现等) | Feature | 2026-06-17 | ⬜ 未实现（设计起草中） | —（待补） |
 | Trace Bundle 导入导出 | [trace-bundle-import-export](trace-bundle-import-export/) | 将链路追踪详情导出的 Trace 作为版本化 Bundle 重新导入平台，保留无冲突 ID，并完整恢复多 Agent 父子树 | Feature | 2026-07-15 | 🟡 实现中（代码与自动化验证已完成，浏览器验收待确认） | —（待补） |
 | Langfuse Trace 完整展示 | [langfuse-trace-fidelity](langfuse-trace-fidelity/) | 为 Langfuse OTLP 增加独立完整节点快照，保留业务 CHAIN/AGENT/TOOL 与真实时序，同时保持其他框架和现有 interactions 行为不变 | Bugfix | 2026-07-21 | 🟡 代码与自动化验证已完成，浏览器验收待确认 | —（待补） |
-| agent_ras 迁入与环内监控 | [../agent-ras/design/inproc-package-migration](../agent-ras/design/inproc-package-migration/) | 将 agent_ras 整包迁入仓根 `agent_ras/`；只保留同进程 runtime；anomaly/actions 经 **`/api/ingest/ras-events`** 落库并在 **可靠性观测**及详情展示（不进 OTLP 热路径） | Feature | 2026-07-25 | ✅ inproc 已实现 | 安装器 + 可靠性链路 + ingest API |
-| AgentRAS 可靠性独立页面 | [../agent-ras/design/reliability-standalone-ui](../agent-ras/design/reliability-standalone-ui/) | 将 RAS 从链路追踪中剥离，新建独立导航分组"AgentRAS 可靠性"（与运行观测同级）；子页面：可靠性追踪（故障统计 + Trace 列表 + 详情 + 节点跳转）、故障模式、故障注入与评测（UI + mock） | Feature | 2026-07-28 | ✅ 已实现（故障注入页本期为 mock） | —（待补） |
-| LLM 过度思考（Analysis Paralysis）二阶段检测 | [../agent-ras/design/detector-analysis-paralysis](../agent-ras/design/detector-analysis-paralysis/) | 新增触发词库 Stage1 + LLM 语义判定 Stage2 的二阶段检测，识别 agent 在推理中反复自我质疑、方案摇摆但语义停滞的分析瘫痪模式；复用现有 L3 Skill 检测通道 | Feature | 2026-07-29 | ⬜ 未实现（方案设计阶段） | —（待补） |
-| LLM Agent 规划错误（Planning Error）检测 | [../agent-ras/design/detector-planning-error](../agent-ras/design/detector-planning-error/) | 识别策略层规划错误（约束忽略、不可行动作、低效计划、错误工具选择等）；判定依赖任务约束/环境状态/工具契约等外部信息，按信息完备度分层检测与恢复 | Feature | 2026-07-30 | ⬜ 未实现（方案设计阶段） | —（待补） |
-| LLM Agent 领域认知偏差（Domain Cognitive Bias） | [../agent-ras/design/detector-domain-cognitive-bias](../agent-ras/design/detector-domain-cognitive-bias/) | 六类信念层故障场景说明书 + 业界检测/恢复/故障注入调研；与分析瘫痪、规划错误形成认知层三角覆盖 | Research / Feature | 2026-07-30 | ⬜ 未实现（调研与方案设计阶段） | —（待补） |
-| Agent 可靠性开源生态调研 | [../agent-ras/design/open-source-ecosystem-survey](../agent-ras/design/open-source-ecosystem-survey/) | 调研与 agent_ras 可对照的 agent 检测/恢复/可靠性开源仓库（不含安全审计类），产出能力矩阵 + 定位分析 | Research | 2026-07-29 | ✅ 已完成（调研报告） | —（待补） |
-| RAS ingest 契约收紧（兼容层破除） | [../agent-ras/design/ras-ingest-contract-purge](../agent-ras/design/ras-ingest-contract-purge/) | flat+必填 deliveryId+浅路径唯一契约；删除 rewrite/rasEventId/正文兜底；旧 RasAnomalyEvent 可清 | Refactor | 2026-07-31 | ✅ 已实现 | —（待补） |
+| agent_ras 环内 runtime | [`../agent-ras/designs/architecture.md`](../agent-ras/designs/architecture.md) | 仓根 `agent_ras/` 同进程检测与恢复；旁路经 **`/api/ingest/ras-events`**（见 developer-guide） | Feature | 2026-07-25 | ✅ inproc 已实现 | 安装器 + 可靠性链路 + ingest API |
+| AgentRAS 可靠性独立页面 | [reliability-standalone-ui](reliability-standalone-ui/) | 独立导航「AgentRAS 可靠性」；可靠性追踪 + 故障模式 + 故障注入与评测（UI + mock） | Feature | 2026-07-28 | ✅ 已实现（故障注入页本期为 mock） | —（待补） |
+| LLM 过度思考（Analysis Paralysis）二阶段检测 | [`../agent-ras/designs/features/analysis-paralysis.md`](../agent-ras/designs/features/analysis-paralysis.md) | 触发词 Stage1 + LLM 语义 Stage2；复用 L3 Skill 通道 | Feature | 2026-07-29 | ⬜ 未实现（规划中） | —（待补） |
+| LLM Agent 规划错误（Planning Error）检测 | [`../agent-ras/designs/features/planning-error.md`](../agent-ras/designs/features/planning-error.md) | 策略层规划错误；按信息完备度分层检测与恢复 | Feature | 2026-07-30 | ⬜ 未实现（规划中） | —（待补） |
+| LLM Agent 领域认知偏差（Domain Cognitive Bias） | [`../agent-ras/designs/features/domain-cognitive-bias.md`](../agent-ras/designs/features/domain-cognitive-bias.md) | 六类信念层故障；认知层三角覆盖 | Research / Feature | 2026-07-30 | ⬜ 未实现（规划中） | —（待补） |
+| Agent 可靠性开源生态调研 | [`../agent-ras/designs/features/ecosystem-survey.md`](../agent-ras/designs/features/ecosystem-survey.md) | 开源检测/恢复对照与定位 | Research | 2026-07-29 | ✅ 已完成 | —（待补） |
+| RAS 能力配置与可选同步 | [`../agent-ras/designs/features/capability-config-sync.md`](../agent-ras/designs/features/capability-config-sync.md) | 故障模式页内按 AgentRASConfig 粒度多平台配置；可选同步到 OpenCode 客户端 | Feature | 2026-08-04 | ✅ 已实现（API/同步/浏览器验收通过） | —（待补） |
+| 需求名称 | 目录 | 需求描述 | 类型 | 创建时间 | 是否实现 | 对应 issue |
+|-|-|-|-|-|-|-|
+| xiaoO 平台 RAS 适配 | [`../agent-ras/designs/features/xiaoo-adapter.md`](../agent-ras/designs/features/xiaoo-adapter.md) | 协议 inproc / 入口无关；复用 common+ras_embed；移除 HTTP/SSE | Feature | 2026-08-04 | 🟢 已落地（inproc/CLI E2E；xiaoO shared 注入） | —（待补） |
+| RAS ingest 契约收紧 | [`../developer-guide/09-otlp-attribute-contract.md`](../developer-guide/09-otlp-attribute-contract.md) | flat+必填 deliveryId+浅路径；见 developer-guide RAS 旁路 | Refactor | 2026-07-31 | ✅ 已实现 | —（待补） |
 
 ## 字段口径
 

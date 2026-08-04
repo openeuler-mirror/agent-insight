@@ -1,7 +1,8 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { Search } from 'lucide-react';
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { PageContainer } from '@/components/shell/PageContainer';
 import { useLocale } from '@/lib/client/locale-context';
@@ -10,10 +11,13 @@ import { apiFetch } from '@/lib/client/api';
 import { FaultStatsPanel } from '@/components/agent-ras/FaultStatsPanel';
 import { RasTraceList } from '@/components/agent-ras/RasTraceList';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Select } from '@/components/ui/select';
 import {
   sortRasTracesByTime,
   type RasTraceTimeSortDir,
 } from '@/lib/ingest/ras/sort-traces';
+import { getPlatformLabel } from '@/lib/ingest/ras/platform-label';
 
 export interface SeverityCounts {
   critical: number;
@@ -35,6 +39,7 @@ interface RasTraceItem {
   traceStatusReason: string;
   detectionLevel: 'L1' | 'L2' | 'L3' | null;
   completedAt: string | null;
+  platform?: string | null;
   framework: string | null;
   agentName: string | null;
   hasFault?: boolean;
@@ -62,6 +67,48 @@ function filterBySeverity(traces: RasTraceItem[], severity: string | null): RasT
   return traces.filter(t => t.severity?.toLowerCase() === severity);
 }
 
+function tracePlatformKey(item: RasTraceItem): string {
+  return String(item.platform || item.framework || '').trim().toLowerCase();
+}
+
+function filterTraces(
+  traces: RasTraceItem[],
+  opts: {
+    severity: string | null;
+    platform: string;
+    status: string;
+    search: string;
+  },
+): RasTraceItem[] {
+  let next = filterBySeverity(traces, opts.severity);
+  if (opts.platform !== 'all') {
+    const want = opts.platform.toLowerCase();
+    next = next.filter(t => tracePlatformKey(t) === want);
+  }
+  if (opts.status !== 'all') {
+    next = next.filter(t => t.traceStatus === opts.status);
+  }
+  const q = opts.search.trim().toLowerCase();
+  if (q) {
+    next = next.filter((t) => {
+      const hay = [
+        t.taskId,
+        t.summary,
+        t.anomalyKind,
+        t.agentName,
+        t.platform,
+        t.framework,
+        getPlatformLabel(t.platform || t.framework),
+      ]
+        .filter(Boolean)
+        .join('\u0001')
+        .toLowerCase();
+      return hay.includes(q);
+    });
+  }
+  return next;
+}
+
 export default function AgentRasTracePage() {
   const { locale } = useLocale();
   const { user, apiKey } = useAuth();
@@ -72,6 +119,9 @@ export default function AgentRasTracePage() {
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedSeverity, setSelectedSeverity] = useState<string | null>(null);
+  const [platformFilter, setPlatformFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [search, setSearch] = useState('');
   const [timeSortDir, setTimeSortDir] = useState<RasTraceTimeSortDir>('desc');
   const [page, setPage] = useState(1);
   const pageSize = 20;
@@ -150,7 +200,35 @@ export default function AgentRasTracePage() {
     setPage(1);
   };
 
-  const filteredTraces = filterBySeverity(allTraces, selectedSeverity);
+  const platformOptions = useMemo(() => {
+    const keys = new Set<string>();
+    for (const t of allTraces) {
+      const key = tracePlatformKey(t);
+      if (key) keys.add(key);
+    }
+    const sorted = [...keys].sort((a, b) => a.localeCompare(b));
+    return [
+      { value: 'all', label: locale === 'zh' ? '全部' : 'All' },
+      ...sorted.map(value => ({
+        value,
+        label: getPlatformLabel(value),
+      })),
+    ];
+  }, [allTraces, locale]);
+
+  const statusOptions = useMemo(() => ([
+    { value: 'all', label: locale === 'zh' ? '全部' : 'All' },
+    { value: 'running', label: locale === 'zh' ? '执行中' : 'Running' },
+    { value: 'success', label: locale === 'zh' ? '正常完成' : 'Completed' },
+    { value: 'failed', label: locale === 'zh' ? '执行失败' : 'Failed' },
+  ]), [locale]);
+
+  const filteredTraces = filterTraces(allTraces, {
+    severity: selectedSeverity,
+    platform: platformFilter,
+    status: statusFilter,
+    search,
+  });
   const sortedTraces = sortRasTracesByTime(filteredTraces, timeSortDir);
   const pagedTraces = sortedTraces.slice((page - 1) * pageSize, page * pageSize);
 
@@ -165,7 +243,7 @@ export default function AgentRasTracePage() {
             size="sm"
             onClick={() => router.push('/agent-ras/fault-modes')}
           >
-            {locale === 'zh' ? '故障模式' : 'Fault Modes'}
+            {locale === 'zh' ? '可靠性能力' : 'Reliability Capabilities'}
           </Button>
         }
       />
@@ -190,6 +268,46 @@ export default function AgentRasTracePage() {
           onSeverityClick={handleSeverityClick}
           loading={loading}
         />
+
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <div className="relative min-w-[14rem] flex-1 max-w-md">
+            <Search
+              className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-foreground-muted"
+              aria-hidden
+            />
+            <Input
+              value={search}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                setPage(1);
+              }}
+              placeholder={locale === 'zh' ? '搜索 Trace ID / 摘要 / 平台…' : 'Search Trace ID / summary / platform…'}
+              className="h-7 pl-8 text-xs shadow-none"
+              aria-label={locale === 'zh' ? '搜索可靠性链路' : 'Search reliability traces'}
+            />
+          </div>
+          <Select
+            label={locale === 'zh' ? '平台' : 'Platform'}
+            value={platformFilter}
+            onChange={(v) => {
+              setPlatformFilter(v);
+              setPage(1);
+            }}
+            options={platformOptions}
+            active={platformFilter !== 'all'}
+          />
+          <Select
+            label={locale === 'zh' ? '状态' : 'Status'}
+            value={statusFilter}
+            onChange={(v) => {
+              setStatusFilter(v);
+              setPage(1);
+            }}
+            options={statusOptions}
+            active={statusFilter !== 'all'}
+          />
+        </div>
+
         <RasTraceList
           traces={pagedTraces}
           total={filteredTraces.length}

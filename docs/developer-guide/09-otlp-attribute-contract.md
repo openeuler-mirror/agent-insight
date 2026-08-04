@@ -13,7 +13,7 @@
 | 认证 | `x-witty-api-key` Header | 用于关联 Workspace |
 | Content-Type | `application/json` 或 `application/x-protobuf` | |
 
-> **RAS 旁路（非 OTLP）**：环内 Agent RAS 事件走 `POST /api/ingest/ras-events`（flat JSON：`taskId` / `type` / **必填** `deliveryId`；同鉴权头、与 OTel `Execution.taskId` 对齐），**禁止**写入 OTLP traces/logs spool。属性约定见下文「RAS 旁路属性」；可靠性观测页以当前用户的普通根 `Execution` 为主表左连接这些事件，详情将异常和动作结果合并进 Agent 时间线。详见 [`../agent-ras/architecture/message_path_modularity.md`](../agent-ras/architecture/message_path_modularity.md)。
+> **RAS 旁路（非 OTLP）**：环内 Agent RAS 事件走 `POST /api/ingest/ras-events`（flat JSON：`taskId` / `type` / **必填** `deliveryId`；同鉴权头、与 OTel `Execution.taskId` 对齐），**禁止**写入 OTLP traces/logs spool。属性约定见下文「RAS 旁路属性」；可靠性观测页以当前用户的普通根 `Execution` 为主表左连接这些事件，详情将异常和动作结果合并进 Agent 时间线。环内分层与旁路边界见 [`../agent-ras/designs/modules/ras-embed.md`](../agent-ras/designs/modules/ras-embed.md)；本文件为 Insight ingest **契约真源**。
 
 ## 资源属性 (Resource)
 

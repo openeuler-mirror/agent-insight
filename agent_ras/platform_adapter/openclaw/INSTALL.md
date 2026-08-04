@@ -41,4 +41,4 @@ Agent Insight setup may run `install-ras` when OpenClaw is selected.
 
 ## Capability
 
-See [docs/agent-ras/architecture/capability_matrix.md](../../../docs/agent-ras/architecture/capability_matrix.md).
+See [docs/agent-ras/designs/modules/platform-adapter.md](../../../docs/agent-ras/designs/modules/platform-adapter.md).

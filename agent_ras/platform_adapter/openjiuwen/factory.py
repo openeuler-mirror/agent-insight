@@ -8,7 +8,7 @@ drops that monitor in ``after_invoke``; HITL resume state stays on session.state
 """
 from __future__ import annotations
 
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 from openjiuwen.core.foundation.llm.model import Model
 
@@ -20,8 +20,10 @@ from platform_adapter.openjiuwen.deep_agent_adapter import (
 from core.agents.ras_agents import RASAgents
 from core.config import AgentRASConfig
 from core.detectors.base import Detector
-from core.detectors.llm_thinking_loop import LlmThinkingLoopDetector
-from core.detectors.repeat_tool import RepeatToolCallDetector
+from core.detectors.registry import (
+    DETECTOR_BUILDERS,
+    build_member_detectors,
+)
 from core.monitor import AgentRASMonitor
 from platform_adapter.openjiuwen.rail import AgentRASRail
 from core.recovery.engine import (
@@ -30,6 +32,15 @@ from core.recovery.engine import (
     RecoveryPolicy,
 )
 from core.reporter import AnomalyReporter
+
+# Re-export for callers that imported builders from this module.
+__all__ = [
+    "DETECTOR_BUILDERS",
+    "build_member_detectors",
+    "build_agent_adapter",
+    "build_agent_ras_components",
+    "build_agent_ras_rail",
+]
 
 
 def build_agent_adapter(
@@ -44,49 +55,6 @@ def build_agent_adapter(
     if model is not None:
         return DeepAgentAdapter(cfg=adapter_cfg, model=model)
     return NoOpAgentAdapter()
-
-
-def _build_repeat_tool(
-    config: AgentRASConfig,
-    agents: RASAgents,
-) -> Detector | None:
-    if not config.detectors.repeat_tool.enabled:
-        return None
-    return RepeatToolCallDetector(config.detectors.repeat_tool)
-
-
-def _build_llm_thinking_loop(
-    config: AgentRASConfig,
-    agents: RASAgents,
-) -> Detector | None:
-    if not config.detectors.llm_thinking_loop.enabled:
-        return None
-    return LlmThinkingLoopDetector(
-        config.detectors.llm_thinking_loop,
-        agents=agents,
-    )
-
-
-DETECTOR_BUILDERS: list[
-    tuple[str, Callable[[AgentRASConfig, RASAgents], Detector | None]]
-] = [
-    ("repeat_tool", _build_repeat_tool),
-    ("llm_thinking_loop", _build_llm_thinking_loop),
-]
-
-
-def build_member_detectors(
-    config: AgentRASConfig,
-    agents: RASAgents | None = None,
-) -> list[Detector]:
-    """Build enabled detectors via the registry."""
-    agents = agents or RASAgents(NoOpAgentAdapter())
-    detectors: list[Detector] = []
-    for _name, build in DETECTOR_BUILDERS:
-        detector = build(config, agents)
-        if detector is not None:
-            detectors.append(detector)
-    return detectors
 
 
 def _build_policy(config: AgentRASConfig) -> RecoveryPolicy:

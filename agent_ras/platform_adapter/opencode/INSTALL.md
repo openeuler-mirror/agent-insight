@@ -2,7 +2,7 @@
 
 ## Capability
 
-See [docs/capability_matrix.md](../../docs/capability_matrix.md) and [docs/ras_architecture.md](../../docs/ras_architecture.md).
+See [docs/agent-ras/designs/modules/platform-adapter.md](../../../docs/agent-ras/designs/modules/platform-adapter.md) and [docs/agent-ras/designs/architecture.md](../../../docs/agent-ras/designs/architecture.md).
 
 - **Has**: `message.part.updated` / tool hooks → `ras_embed`/`core`（L1/L2）；恢复经 L3 [`host_control.js`](./host_control.js)：
   - `abort_stream` → `session.abort`（兼容 SDK **v2** `{ sessionID }` 与 **v1** `{ path: { id } }`，按序尝试）+ 可选 `session.interrupt` API + 双次 `tui.executeCommand(session.interrupt)`；限频重试与升级告警

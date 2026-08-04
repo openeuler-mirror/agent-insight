@@ -8,26 +8,25 @@ Agent RAS（Reliability / Anomaly / Stewardship）：环内异常检测 + 恢复
 core/                         # L0 平台无关核 + HostControl
 ras_embed/                    # L1 同进程门面
 platform_adapter/
-  common/                     # L2 ras_client (js/py)
+  common/                     # L2 ras_client + protocol_client
   openjiuwen/                 # L3 深适配
   opencode/                   # L3 薄插件
-  openclaw/ hermes/           # L3 骨架
+  xiaoo/                      # L3 Hooker + stream bridge
+  openclaw/ hermes/           # L3 骨架（薄封装 shared factory）
 tests/
 pyproject.toml
 ```
 
 ## 文档
 
-统一入口：**[`docs/agent-ras/`](../docs/agent-ras/README.md)**（架构、需求设计、专题、参考与示例）。
+统一入口：**[`docs/agent-ras/`](../docs/agent-ras/README.md)**
 
 | 文档 | 说明 |
 |------|------|
-| [docs/agent-ras/architecture/ras_architecture.md](../docs/agent-ras/architecture/ras_architecture.md) | **整体架构（四层）** |
-| [docs/agent-ras/architecture/capability_matrix.md](../docs/agent-ras/architecture/capability_matrix.md) | 多平台能力矩阵 |
-| [docs/agent-ras/design/package-baseline/](../docs/agent-ras/design/package-baseline/) | 包级需求分析与开发计划 |
-| [docs/agent-ras/design/inproc-package-migration/](../docs/agent-ras/design/inproc-package-migration/) | 迁入 AgentInsight 设计与清单 |
-| [docs/agent-ras/design/](../docs/agent-ras/design/README.md) | 全部需求设计索引 |
-| [docs/agent-ras/guides/implementation_status.md](../docs/agent-ras/guides/implementation_status.md) | 实现状态（权威） |
+| [designs/architecture.md](../docs/agent-ras/designs/architecture.md) | 整体架构 |
+| [designs/modules/](../docs/agent-ras/designs/modules/) | 模块设计 |
+| [docs/agent-ras/README.md](../docs/agent-ras/README.md) | 文档入口与清单 |
+| [guides/getting-started.md](../docs/agent-ras/guides/getting-started.md) | 使用入门 |
 
 ## 使用
 
@@ -39,18 +38,23 @@ pyproject.toml
 from platform_adapter.openjiuwen.factory import build_agent_ras_rail
 ```
 
-### OpenCode
+详见 [guides/platform-openjiuwen.md](../docs/agent-ras/guides/platform-openjiuwen.md)。
 
-在 Agent Insight 仓库根目录执行以下命令安装 OpenCode 插件（bun:ffi inproc 模式）：
+### OpenCode
 
 ```bash
 node scripts/install-ras.js
 ```
 
-npm 用户使用 `npx agent-insight install-ras`。安装器会把运行时复制到
-`~/.agent-insight/ras/runtime/`，不会让 OpenCode 引用源码仓或临时 npx 缓存。
-RAS 只以同进程方式运行；不会启动本地服务、监听端口或创建独立守护进程。
-详见 [platform_adapter/opencode/INSTALL.md](platform_adapter/opencode/INSTALL.md)。
+或 `npx agent-insight install-ras`。详见 [guides/platform-opencode.md](../docs/agent-ras/guides/platform-opencode.md) 与 [platform_adapter/opencode/INSTALL.md](platform_adapter/opencode/INSTALL.md)。
+
+### xiaoO
+
+```bash
+node scripts/install-ras.js   # 同时写入 xiaoo hooker + config.toml
+```
+
+详见 [guides/platform-xiaoo.md](../docs/agent-ras/guides/platform-xiaoo.md)。
 
 ## 测试
 

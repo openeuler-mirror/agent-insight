@@ -25,7 +25,7 @@ export const FAULT_TYPES: FaultType[] = [
     label: '思考循环',
     description: 'Agent 陷入无限思考循环，反复生成相似内容但不调用工具',
     severity: 'critical',
-    platforms: ['openjiuwen', 'opencode', 'hermes', 'openclaw'],
+    platforms: ['openjiuwen', 'opencode', 'hermes', 'openclaw', 'xiaoo'],
     params: [{ key: 'max_iter', label: '最大循环次数', type: 'number', defaultValue: '3', placeholder: '3' }],
   },
   {
@@ -45,7 +45,7 @@ export const FAULT_TYPES: FaultType[] = [
     label: '幻觉漂移',
     description: 'Agent 生成的内容逐渐偏离事实，产生幻觉输出',
     severity: 'warning',
-    platforms: ['openjiuwen', 'opencode', 'hermes', 'openclaw'],
+    platforms: ['openjiuwen', 'opencode', 'hermes', 'openclaw', 'xiaoo'],
     params: [{ key: 'drift_ratio', label: '漂移比率', type: 'text', defaultValue: '0.3', placeholder: '0.3' }],
   },
   {
@@ -55,7 +55,7 @@ export const FAULT_TYPES: FaultType[] = [
     label: '工具超时',
     description: 'Agent 调用工具时超时未返回结果',
     severity: 'critical',
-    platforms: ['openjiuwen', 'opencode', 'hermes', 'openclaw'],
+    platforms: ['openjiuwen', 'opencode', 'hermes', 'openclaw', 'xiaoo'],
     params: [{ key: 'timeout_ms', label: '超时毫秒数', type: 'number', defaultValue: '30000', placeholder: '30000' }],
   },
   {
@@ -65,7 +65,7 @@ export const FAULT_TYPES: FaultType[] = [
     label: '工具错误',
     description: 'Agent 调用工具时返回异常错误',
     severity: 'critical',
-    platforms: ['openjiuwen', 'opencode', 'hermes', 'openclaw'],
+    platforms: ['openjiuwen', 'opencode', 'hermes', 'openclaw', 'xiaoo'],
     params: [
       { key: 'error_rate', label: '错误率（0-1）', type: 'text', defaultValue: '0.5', placeholder: '0.5' },
       { key: 'error_code', label: '错误码', type: 'text', defaultValue: '500', placeholder: '500' },
@@ -78,7 +78,7 @@ export const FAULT_TYPES: FaultType[] = [
     label: '工具重复调用',
     description: 'Agent 短时间内重复调用同一工具且参数未发生有效变化',
     severity: 'warning',
-    platforms: ['openjiuwen', 'opencode', 'hermes', 'openclaw'],
+    platforms: ['openjiuwen', 'opencode', 'hermes', 'openclaw', 'xiaoo'],
     params: [{ key: 'repeat_count', label: '重复次数', type: 'number', defaultValue: '3', placeholder: '3' }],
   },
   {
@@ -98,7 +98,7 @@ export const FAULT_TYPES: FaultType[] = [
     label: '连接丢失',
     description: 'Agent 与外部服务的连接中断',
     severity: 'critical',
-    platforms: ['openjiuwen', 'opencode', 'hermes', 'openclaw'],
+    platforms: ['openjiuwen', 'opencode', 'hermes', 'openclaw', 'xiaoo'],
     params: [{ key: 'reconnect_attempts', label: '重连尝试次数', type: 'number', defaultValue: '3', placeholder: '3' }],
   },
   {
@@ -108,7 +108,7 @@ export const FAULT_TYPES: FaultType[] = [
     label: 'API 限流',
     description: 'Agent 调用外部 API 时触发频率限制',
     severity: 'warning',
-    platforms: ['openjiuwen', 'opencode', 'hermes', 'openclaw'],
+    platforms: ['openjiuwen', 'opencode', 'hermes', 'openclaw', 'xiaoo'],
     params: [{ key: 'retry_after', label: '重试等待秒数', type: 'number', defaultValue: '60', placeholder: '60' }],
   },
   {
@@ -128,7 +128,7 @@ export const FAULT_TYPES: FaultType[] = [
     label: '上下文溢出',
     description: 'Agent 的上下文窗口超出模型限制',
     severity: 'warning',
-    platforms: ['openjiuwen', 'opencode', 'hermes', 'openclaw'],
+    platforms: ['openjiuwen', 'opencode', 'hermes', 'openclaw', 'xiaoo'],
     params: [{ key: 'max_tokens', label: '最大 tokens', type: 'number', defaultValue: '128000', placeholder: '128000' }],
   },
   {

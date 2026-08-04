@@ -33,4 +33,4 @@ Python 3.10+ and `pip install -e .`. Agent Insight setup may run
 
 ## Capability
 
-See [docs/agent-ras/architecture/capability_matrix.md](../../../docs/agent-ras/architecture/capability_matrix.md).
+See [docs/agent-ras/designs/modules/platform-adapter.md](../../../docs/agent-ras/designs/modules/platform-adapter.md).

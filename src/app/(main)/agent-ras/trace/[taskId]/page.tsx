@@ -10,6 +10,7 @@ import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
 import { rasKindLabel, rasSeverityLabel, severityToStatusKind, type RasEventRow } from '@/lib/ingest/ras/normalize';
 import AgentTraceView from '@/components/observe/AgentTraceView';
+import { RasOnlyEventTimeline } from '@/components/agent-ras/RasOnlyEventTimeline';
 import type { RawInteraction } from '@/lib/engine/observability/agent-trace';
 import type { LangfuseTraceNode } from '@/lib/ingest/otel/adapters/langfuse-trace';
 import { StatusBadge } from '@/components/feedback/StatusBadge';
@@ -238,23 +239,22 @@ function RasTraceDetailContent({ taskId }: { taskId: string }) {
 
           <Separator />
 
-          {/* Full Trace View */}
+          {/* Full Trace View (or RAS-only timeline) */}
           <div className="flex-1 min-h-0 flex flex-col">
             <h2 className="text-sm font-semibold text-foreground mb-3">
-              {locale === 'zh' ? '完整链路追踪' : 'Full Trace'}
+              {!sessionLoading && !rasLoading
+                && !(interactions.length > 0 || langfuseTraceNodes.length > 0)
+                && (rasEvents?.length ?? 0) > 0
+                ? (locale === 'zh' ? 'RAS 处置时间线' : 'RAS Recovery Timeline')
+                : (locale === 'zh' ? '完整链路追踪' : 'Full Trace')}
             </h2>
 
-            {sessionLoading ? (
+            {sessionLoading || rasLoading ? (
               <div className="rounded-md border border-card-border bg-card p-4 space-y-2">
                 <Skeleton className="h-6 w-1/2" />
                 <Skeleton className="h-6 w-3/4" />
                 <Skeleton className="h-6 w-2/3" />
               </div>
-            ) : sessionError ? (
-              <EmptyState
-                title={locale === 'zh' ? '无法加载 Trace' : 'Unable to Load Trace'}
-                description={locale === 'zh' ? '该 Trace 可能尚未同步到观测系统' : 'This trace may not be synced to the observability system yet'}
-              />
             ) : interactions.length > 0 || langfuseTraceNodes.length > 0 ? (
               <div className="flex-1 min-h-0 rounded-md border border-card-border bg-card overflow-auto">
                 <AgentTraceView
@@ -272,10 +272,24 @@ function RasTraceDetailContent({ taskId }: { taskId: string }) {
                   reliabilityEvents={reliabilityEvents}
                 />
               </div>
+            ) : (rasEvents?.length ?? 0) > 0 ? (
+              <RasOnlyEventTimeline
+                events={rasEvents || []}
+                locale={locale === 'zh' ? 'zh' : 'en'}
+              />
+            ) : sessionError ? (
+              <EmptyState
+                title={locale === 'zh' ? '无法加载 Trace' : 'Unable to Load Trace'}
+                description={locale === 'zh' ? '该 Trace 可能尚未同步到观测系统' : 'This trace may not be synced to the observability system yet'}
+              />
             ) : (
               <EmptyState
                 title={locale === 'zh' ? '无 Trace 数据' : 'No Trace Data'}
-                description={locale === 'zh' ? '该 Trace 暂无交互记录' : 'No interaction records for this trace'}
+                description={
+                  locale === 'zh'
+                    ? '该任务既无平台对话链路（Execution / OTel），也无 RAS 环内事件'
+                    : 'No Execution/OTel conversation and no RAS in-loop events for this task'
+                }
               />
             )}
           </div>

@@ -88,6 +88,52 @@ function mergeOpenCodeConfig(existing) {
   return output
 }
 
+function installXiaooHooker(runtimeRoot, rasRoot, home = os.homedir()) {
+  const sourceHooker = path.join(runtimeRoot, 'platform_adapter', 'xiaoo', 'hooker')
+  if (!fs.existsSync(sourceHooker)) {
+    return { ok: false, error: `missing xiaoo hooker at ${sourceHooker}` }
+  }
+  const destRoot = path.join(rasRoot, 'xiaoo', 'hooker')
+  fs.mkdirSync(destRoot, { recursive: true })
+  for (const name of fs.readdirSync(sourceHooker)) {
+    const src = path.join(sourceHooker, name)
+    const dst = path.join(destRoot, name)
+    if (fs.statSync(src).isFile()) {
+      fs.copyFileSync(src, dst)
+    }
+  }
+  const hookerMain = path.join(destRoot, 'hooker_main.py')
+  const pluginPath = path.join(destRoot, 'plugin.json')
+  const entries = [
+    ['agent_ras_chat_received', '*.Chat.message.received', 'chat_received'],
+    ['agent_ras_tool_post', '*.Tool.*.post', 'tool_post'],
+    ['agent_ras_session_state', '*.Session.lifecycle.state', 'session_state'],
+  ]
+  const pluginFixed = entries.map(([id, hook_point, op]) => ({
+    id,
+    hook_point,
+    command: `python3 "${hookerMain}" ${op}`,
+  }))
+  fs.writeFileSync(pluginPath, `${JSON.stringify(pluginFixed, null, 2)}\n`, 'utf8')
+
+  const xdg = process.env.XDG_CONFIG_HOME || path.join(home, '.config')
+  const configPath = path.join(xdg, 'xiaoo', 'config.toml')
+  fs.mkdirSync(path.dirname(configPath), { recursive: true })
+  let toml = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : ''
+  const pluginLine = `"${pluginPath.replace(/\\/g, '/')}"`
+  if (!toml.includes(pluginPath) && !toml.includes(pluginPath.replace(/\\/g, '/'))) {
+    if (!/\[hooker\]/.test(toml)) {
+      toml += `\n[hooker]\nplugins = [${pluginLine}]\n`
+    } else if (/plugins\s*=\s*\[/.test(toml)) {
+      toml = toml.replace(/plugins\s*=\s*\[/, (m) => `${m}${pluginLine}, `)
+    } else {
+      toml = toml.replace(/\[hooker\]/, `[hooker]\nplugins = [${pluginLine}]`)
+    }
+    fs.writeFileSync(configPath, toml, 'utf8')
+  }
+  return { ok: true, pluginPath, destRoot, configPath }
+}
+
 function readJsonWithBackup(filePath, label) {
   if (!fs.existsSync(filePath)) return {}
   try {
@@ -387,6 +433,11 @@ function installRas(options = {}) {
     }
     fs.writeFileSync(openCodeConfigPath, `${JSON.stringify(openCodeConfig, null, 2)}\n`, 'utf8')
 
+    const xiaoo = installXiaooHooker(runtimeRoot, rasRoot, options.home || os.homedir())
+    if (!xiaoo.ok) {
+      console.warn(`⚠️  xiaoO hooker install skipped: ${xiaoo.error}`)
+    }
+
     fs.writeFileSync(
       markerPath,
       `${JSON.stringify({
@@ -411,6 +462,7 @@ function installRas(options = {}) {
       configPath,
       runtimeRoot,
       wrapperPath,
+      xiaooPluginPath: xiaoo.ok ? xiaoo.pluginPath : undefined,
     })
   } catch (error) {
     return statusResult('failed', error.message)
@@ -446,6 +498,7 @@ module.exports = {
   getDataRoot,
   hashRuntime,
   installRas,
+  installXiaooHooker,
   isSupportedPythonVersion,
   mergeOpenCodeConfig,
   mergeRasConfig,

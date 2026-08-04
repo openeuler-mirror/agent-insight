@@ -5,6 +5,7 @@ import { useLocale } from '@/lib/client/locale-context';
 const PLATFORMS = [
   { key: 'openjiuwen', label: 'openjiuwen', mode: 'full' },
   { key: 'opencode', label: 'OpenCode', mode: 'thin' },
+  { key: 'xiaoo', label: 'xiaoO', mode: 'thin' },
   { key: 'hermes', label: 'Hermes', mode: 'skeleton' },
   { key: 'openclaw', label: 'OpenClaw', mode: 'skeleton' },
 ] as const;

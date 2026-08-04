@@ -9,6 +9,7 @@ import { createRasClient } from "../common/ras_client.js"
 import { applyActions } from "../common/host_actions.js"
 import { createOpenCodeHost } from "./host_control.js"
 import { runSkillJudge } from "./skill_judge.js"
+import { syncCapabilityConfigFromInsight } from "./config_sync.js"
 import { existsSync, readFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
@@ -167,6 +168,17 @@ export const AgentRasPlugin = async ({ client, directory, serverUrl }) => {
   const observeInFlight = new Set()
   /** assistant message ids that already produced an anomaly */
   const handledAnomalyMessages = new Set()
+  // OpenCode paints stderr red — only use console.error for real failures.
+  // Set RAS_DEBUG=1 (or agent_ras.debug) for success breadcrumbs.
+  const rasDebugEarly =
+    process.env.RAS_DEBUG === "1" || process.env.RAS_DEBUG === "true"
+  const rasLogEarly = (...args) => {
+    if (rasDebugEarly) console.error(...args)
+  }
+
+  // Optional Insight → local config sync (fail-open). Must run before loadThinkingConfig.
+  await syncCapabilityConfigFromInsight({ log: rasLogEarly })
+
   const thinkingConfig = loadThinkingConfig()
   const detectionStart = thinkingConfig.detection_start_chars
   const hostApi = createOpenCodeHost({
@@ -178,12 +190,8 @@ export const AgentRasPlugin = async ({ client, directory, serverUrl }) => {
       Boolean(process.stdout?.isTTY || process.stderr?.isTTY),
   })
 
-  // OpenCode paints stderr red — only use console.error for real failures.
-  // Set RAS_DEBUG=1 (or agent_ras.debug) for success breadcrumbs.
   const rasDebug =
-    process.env.RAS_DEBUG === "1" ||
-    process.env.RAS_DEBUG === "true" ||
-    Boolean(thinkingConfig.debug)
+    rasDebugEarly || Boolean(thinkingConfig.debug)
 
   const rasLog = (...args) => {
     if (rasDebug) console.error(...args)

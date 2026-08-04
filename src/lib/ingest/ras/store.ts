@@ -1,5 +1,6 @@
 import { prismaRaw } from "@/lib/storage/prisma"
 import type { RasIngestRecord } from "@/lib/ingest/ras/normalize"
+import { resolveTracePlatform } from "@/lib/ingest/ras/platform-label"
 
 type RasEventForDedupe = {
   id: string
@@ -46,6 +47,8 @@ export type ReliabilityTraceItem = {
   recoveryStarted: boolean
   recoveryOutcome: RecoveryOutcome
   abortedStream: boolean
+  /** Prefer RasAnomalyEvent.platform, else Execution.framework. */
+  platform: string | null
   framework: string | null
   agentName: string | null
 }
@@ -296,28 +299,68 @@ export async function listReliabilityTraces(opts: {
   user: string
   limit?: number
 }): Promise<ReliabilityTraceItem[]> {
-  const executions = await prismaRaw.execution.findMany({
-    where: {
-      user: opts.user,
-      isSubagent: false,
-      taskId: { not: null },
-    },
-    orderBy: { timestamp: "desc" },
-    take: opts.limit ?? 200,
-    select: {
-      id: true,
-      taskId: true,
-      timestamp: true,
-      framework: true,
-      agentName: true,
-      query: true,
-      finalResult: true,
-      failures: true,
-    },
-  })
-  const taskIds = executions
-    .map(row => row.taskId)
-    .filter((taskId): taskId is string => Boolean(taskId))
+  const limit = opts.limit ?? 200
+
+  const [executions, rasMetaRows] = await Promise.all([
+    prismaRaw.execution.findMany({
+      where: {
+        user: opts.user,
+        isSubagent: false,
+        taskId: { not: null },
+      },
+      orderBy: { timestamp: "desc" },
+      take: limit,
+      select: {
+        id: true,
+        taskId: true,
+        timestamp: true,
+        framework: true,
+        agentName: true,
+        query: true,
+        finalResult: true,
+        failures: true,
+      },
+    }),
+    prismaRaw.rasAnomalyEvent.findMany({
+      where: { user: opts.user },
+      orderBy: { ts: "desc" },
+      take: Math.max(limit * 10, 500),
+      select: {
+        taskId: true,
+        platform: true,
+        framework: true,
+        ts: true,
+      },
+    }),
+  ])
+
+  const platformByTaskId = new Map<string, string>()
+  const rasOnlyOrder: string[] = []
+  const rasSeen = new Set<string>()
+  for (const row of rasMetaRows) {
+    if (!platformByTaskId.has(row.taskId)) {
+      const platform = resolveTracePlatform({
+        eventPlatform: row.platform,
+        eventFramework: row.framework,
+      })
+      if (platform) platformByTaskId.set(row.taskId, platform)
+    }
+    if (!rasSeen.has(row.taskId)) {
+      rasSeen.add(row.taskId)
+      rasOnlyOrder.push(row.taskId)
+    }
+  }
+
+  const execByTaskId = new Map<string, (typeof executions)[number]>()
+  for (const execution of executions) {
+    if (!execution.taskId || execByTaskId.has(execution.taskId)) continue
+    execByTaskId.set(execution.taskId, execution)
+  }
+
+  const taskIds = [
+    ...execByTaskId.keys(),
+    ...rasOnlyOrder.filter(id => !execByTaskId.has(id)),
+  ]
   if (!taskIds.length) return []
 
   const [sessions, summaries] = await Promise.all([
@@ -329,9 +372,9 @@ export async function listReliabilityTraces(opts: {
   ])
   const sessionByTaskId = new Map(sessions.map(session => [session.taskId, session]))
 
-  return executions.flatMap((execution) => {
-    const taskId = execution.taskId
-    if (!taskId) return []
+  const items: ReliabilityTraceItem[] = []
+
+  for (const [taskId, execution] of execByTaskId.entries()) {
     const anomaly = summaries[taskId]
     const session = sessionByTaskId.get(taskId)
     const completedAt = session?.endTime?.toISOString() || null
@@ -340,8 +383,12 @@ export async function listReliabilityTraces(opts: {
       finalResult: execution.finalResult,
       failures: execution.failures,
     })
+    const platform = resolveTracePlatform({
+      eventPlatform: platformByTaskId.get(taskId),
+      executionFramework: execution.framework,
+    })
 
-    return [{
+    items.push({
       taskId,
       executionId: execution.id,
       latestTs: anomaly?.latestTs || execution.timestamp.toISOString(),
@@ -357,10 +404,41 @@ export async function listReliabilityTraces(opts: {
       recoveryStarted: anomaly?.recoveryStarted ?? false,
       recoveryOutcome: anomaly?.recoveryOutcome ?? "none",
       abortedStream: anomaly?.abortedStream ?? false,
+      platform,
       framework: execution.framework,
       agentName: execution.agentName,
-    }]
-  })
+    })
+  }
+
+  for (const taskId of rasOnlyOrder) {
+    if (execByTaskId.has(taskId)) continue
+    const anomaly = summaries[taskId]
+    if (!anomaly || anomaly.count <= 0) continue
+    const platform = platformByTaskId.get(taskId) || null
+    items.push({
+      taskId,
+      executionId: "",
+      latestTs: anomaly.latestTs || new Date(0).toISOString(),
+      completedAt: null,
+      anomalyKind: anomaly.kinds[0] || "",
+      detectionLevel: anomaly.detectionLevel || null,
+      severity: anomaly.maxSeverity || null,
+      summary: anomaly.summaries[0] || null,
+      eventCount: anomaly.count,
+      traceStatus: "success",
+      traceStatusReason: "ras-events-only",
+      hasFault: anomaly.hasFault,
+      recoveryStarted: anomaly.recoveryStarted,
+      recoveryOutcome: anomaly.recoveryOutcome,
+      abortedStream: anomaly.abortedStream,
+      platform,
+      framework: platform,
+      agentName: null,
+    })
+  }
+
+  items.sort((a, b) => String(b.latestTs).localeCompare(String(a.latestTs)))
+  return items.slice(0, limit)
 }
 
 export async function listAllTasksWithRasEvents(opts: {
@@ -400,7 +478,7 @@ export async function deleteReliabilityTraces(opts: {
     return { taskIds: [], deleted: { ras: 0, executions: 0, sessions: 0 } }
   }
 
-  const owned = await prismaRaw.execution.findMany({
+  const ownedExec = await prismaRaw.execution.findMany({
     where: {
       taskId: { in: requested },
       user: opts.user,
@@ -408,9 +486,18 @@ export async function deleteReliabilityTraces(opts: {
     },
     select: { taskId: true },
   })
-  const ownedTaskIds = [...new Set(
-    owned.map(row => row.taskId).filter((taskId): taskId is string => Boolean(taskId)),
-  )]
+  const ownedRas = await prismaRaw.rasAnomalyEvent.findMany({
+    where: {
+      taskId: { in: requested },
+      OR: [{ user: opts.user }, { user: null }],
+    },
+    select: { taskId: true },
+    distinct: ["taskId"],
+  })
+  const ownedTaskIds = [...new Set([
+    ...ownedExec.map(row => row.taskId).filter((taskId): taskId is string => Boolean(taskId)),
+    ...ownedRas.map(row => row.taskId).filter(Boolean),
+  ])]
   if (!ownedTaskIds.length) {
     return { taskIds: [], deleted: { ras: 0, executions: 0, sessions: 0 } }
   }

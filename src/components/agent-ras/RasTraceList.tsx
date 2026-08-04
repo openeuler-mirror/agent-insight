@@ -21,6 +21,7 @@ import { EmptyState } from '@/components/feedback/EmptyState';
 import { Term } from '@/components/text/Term';
 import { cn } from '@/lib/utils';
 import type { RasTraceTimeSortDir } from '@/lib/ingest/ras/sort-traces';
+import { getPlatformLabel } from '@/lib/ingest/ras/platform-label';
 
 interface RasTraceItem {
   taskId: string;
@@ -34,6 +35,7 @@ interface RasTraceItem {
   traceStatusReason: string;
   detectionLevel: 'L1' | 'L2' | 'L3' | null;
   completedAt: string | null;
+  platform?: string | null;
   framework: string | null;
   agentName: string | null;
   hasFault?: boolean;
@@ -235,11 +237,12 @@ export function RasTraceList({
       </div>
 
       <div className="rounded-md border border-card-border bg-card overflow-auto">
-        <table className="w-full min-w-[1500px] table-fixed text-sm">
+        <table className="w-full min-w-[1620px] table-fixed text-sm">
           <colgroup>
             <col style={{ width: 44 }} />
-            <col style={{ width: 280 }} />
-            <col style={{ width: 'clamp(200px, 24vw, 320px)' }} />
+            <col style={{ width: 260 }} />
+            <col style={{ width: 110 }} />
+            <col style={{ width: 'clamp(180px, 22vw, 300px)' }} />
             <col style={{ width: 145 }} />
             <col style={{ width: 110 }} />
             <col style={{ width: 220 }} />
@@ -260,6 +263,9 @@ export function RasTraceList({
               </th>
               <th className="px-3 py-2 text-xs font-medium text-foreground-muted border-b border-border whitespace-nowrap">
                 <Term id="trace" label="Trace ID" />
+              </th>
+              <th className="px-3 py-2 text-xs font-medium text-foreground-muted border-b border-border whitespace-nowrap">
+                {locale === 'zh' ? '平台' : 'Platform'}
               </th>
               <th className="px-3 py-2 text-xs font-medium text-foreground-muted border-b border-border whitespace-nowrap">
                 {locale === 'zh' ? '摘要' : 'Summary'}
@@ -342,6 +348,11 @@ export function RasTraceList({
                 </td>
                 <td className="px-3 py-2 text-sm text-foreground">
                   <IdChip value={item.taskId} head={64} tail={0} className="whitespace-nowrap" />
+                </td>
+                <td className="px-3 py-2 text-sm text-foreground">
+                  <span className="text-xs text-foreground-secondary whitespace-nowrap">
+                    {getPlatformLabel(item.platform || item.framework)}
+                  </span>
                 </td>
                 <td className="px-3 py-2 text-sm text-foreground">
                   {item.summary ? (

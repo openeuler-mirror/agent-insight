@@ -68,7 +68,7 @@ export const en = {
     groupObserve: 'Observability',
     groupAgentRas: 'AgentRAS Reliability',
     rasTrace: 'Reliability Observing',
-    rasFaultModes: 'Fault Modes',
+    rasFaultModes: 'Reliability Capabilities',
     rasFaultInjection: 'Fault Injection & Eval',
     skillsAsset: 'Asset',
     skillsDevDebug: 'Develop & Debug',

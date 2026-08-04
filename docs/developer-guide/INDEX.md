@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `2dfa1bc888083e42f79065e78c488f96a6448a2c` (`2dfa1bc`) |
+| Commit | `d9d4b93ac271eaaf9ea96bd696a839041e707dbe` (`d9d4b93`) |
 | Branch | `dev_agent_ras` |
 | Date | 2026-08-03 |
 | Author | iceory |
-| Subject | `feat(ras): 迁入 Agent RAS 并接入可靠性观测` |
+| Subject | `docs: 同步 RAS 实现状态与过时路径描述` |
 
-**如何更新：** `git diff 2dfa1bc HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff d9d4b93 HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
@@ -31,7 +31,7 @@
 
 - [09-otlp-attribute-contract.md](09-otlp-attribute-contract.md)：OTLP 属性契约（FR-011），定义 OpenClaw 及其他 OTLP 客户端上报 trace/log 时必须遵守的属性规范；含 RAS 旁路 ingest（非 OTLP）说明。
 - 仓根 [`agent_ras/`](../../agent_ras/)：环内可靠性同进程真源（OpenCode L3 inproc）；统一安装入口见 [`scripts/install-ras.js`](../../scripts/install-ras.js)。
-- Agent RAS 文档统一入口：[`docs/agent-ras/`](../agent-ras/README.md)（架构 / 需求设计 / 专题）。
+- Agent RAS 文档统一入口：[`docs/agent-ras/`](../agent-ras/README.md)（[designs](../agent-ras/designs/) / [guides](../agent-ras/guides/)）。
 
 ## Quick lookup
 | 我想要... | 前往 |

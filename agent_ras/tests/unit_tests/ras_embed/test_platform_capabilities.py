@@ -9,6 +9,7 @@ def test_supports_host_skill_judge_opencode_only():
     assert supports_host_skill_judge("hermes") is False
     assert supports_host_skill_judge("openclaw") is False
     assert supports_host_skill_judge("openjiuwen") is False
+    assert supports_host_skill_judge("xiaoo") is False
     assert supports_host_skill_judge("") is False
 
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Any
 
 from .session_hub import PROTOCOL_VERSION
@@ -20,8 +21,19 @@ def call(op: str, session_id: str, payload_json: str = "{}") -> str:
     Synchronous JSON in/out entry for JS FFI.
 
     op: health | hello | observe | reset | action_result | skill_result | bye
+
+    When a long-lived IPC worker is available (subprocess hook hosts), route
+    through it so SessionHub state is shared. Worker sets
+    ``RAS_EMBED_IPC_FORCE_LOCAL=1`` to avoid recursion.
     """
     try:
+        if _should_use_ipc():
+            from .ipc import call_ipc
+
+            payload = _parse_payload(payload_json)
+            result = call_ipc(str(op or ""), str(session_id or ""), payload)
+            append_trail(str(op or ""), str(session_id or ""), result)
+            return json.dumps(result, ensure_ascii=False)
         result = _dispatch(str(op or ""), str(session_id or ""), payload_json)
         append_trail(str(op or ""), str(session_id or ""), result)
         return json.dumps(result, ensure_ascii=False)
@@ -30,6 +42,24 @@ def call(op: str, session_id: str, payload_json: str = "{}") -> str:
         err = {"error": str(exc), "op": op, "session_id": session_id}
         append_trail(str(op or ""), str(session_id or ""), err)
         return json.dumps(err)
+
+
+def _should_use_ipc() -> bool:
+    if (os.environ.get("RAS_EMBED_IPC_FORCE_LOCAL") or "").strip() in {
+        "1",
+        "true",
+        "yes",
+    }:
+        return False
+    prefer = (os.environ.get("RAS_EMBED_USE_IPC") or "").strip().lower()
+    if prefer in {"0", "false", "no"}:
+        return False
+    try:
+        from .ipc import ipc_available
+
+        return ipc_available()
+    except Exception:
+        return False
 
 
 def _parse_payload(payload_json: str | None) -> dict[str, Any]:

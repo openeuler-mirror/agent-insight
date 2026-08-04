@@ -15,6 +15,7 @@ from core.agents.host_callback_adapter import HostCallbackAgentAdapter
 from core.agents.ras_agents import RASAgents
 from core.config import AgentRASConfig, LlmThinkingLoopConfig, RepeatToolConfig, coerce_message_locale
 from core.detectors.llm_thinking_loop import LlmThinkingLoopDetector
+from core.detectors.registry import build_member_detectors
 from core.detectors.repeat_tool import RepeatToolCallDetector
 from core.models import Anomaly, Signal, SignalKind
 from core.recovery.engine import LocalAutoRecovery, RecoveryPolicy
@@ -99,10 +100,15 @@ class SessionState:
             agents = RASAgents(host_adapter)
         else:
             agents = RASAgents(NoOpAgentAdapter())
-        thinking = LlmThinkingLoopDetector(loop_cfg, agents=agents)
-        repeat = None
-        if config.detectors.repeat_tool.enabled:
-            repeat = RepeatToolCallDetector(config.detectors.repeat_tool)
+        # Protocol path historically always installs thinking-loop detector.
+        detectors = build_member_detectors(
+            config, agents=agents, force_thinking_loop=True
+        )
+        thinking = next(d for d in detectors if isinstance(d, LlmThinkingLoopDetector))
+        repeat = next(
+            (d for d in detectors if isinstance(d, RepeatToolCallDetector)),
+            None,
+        )
         policy = RecoveryPolicy.from_config(config.policy)
         auto = LocalAutoRecovery(policy, locale=locale)
         state = cls(

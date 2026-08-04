@@ -126,6 +126,7 @@ const frameworks = [
     { name: 'Claude Code', value: 'claude' },
     { name: 'Hermes', value: 'hermes' },
     { name: 'OpenClaw', value: 'openclaw' },
+    { name: 'xiaoO', value: 'xiaoo' },
     { name: 'JiuwenSwarm', value: 'jiuwen' }
 ];
 
@@ -196,6 +197,7 @@ INSTALL_OPENCODE=false
 INSTALL_CLAUDE=false
 INSTALL_HERMES=false
 INSTALL_OPENCLAW=false
+INSTALL_XIAOO=false
 INSTALL_JIUWEN=false
 
 if [[ "$SELECTED_FRAMEWORKS" == *"opencode"* ]]; then
@@ -210,12 +212,15 @@ fi
 if [[ "$SELECTED_FRAMEWORKS" == *"openclaw"* ]]; then
     INSTALL_OPENCLAW=true
 fi
+if [[ "$SELECTED_FRAMEWORKS" == *"xiaoo"* ]]; then
+    INSTALL_XIAOO=true
+fi
 if [[ "$SELECTED_FRAMEWORKS" == *"jiuwen"* ]]; then
     INSTALL_JIUWEN=true
 fi
 
 # Exit if nothing selected
-if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ]; then
+if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_XIAOO" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ]; then
     echo "⚠️  未选择任何框架组件，将跳过插件安装。"
     echo "   继续执行配置步骤..."
     echo ""
@@ -376,8 +381,8 @@ echo "✅ Configuration updated at $AGENT_INSIGHT_CONFIG_FILE"
 echo "   AGENT_INSIGHT_HOST=$AGENT_INSIGHT_HOST"
 echo "   AGENT_INSIGHT_API_KEY=********"
 
-if [ "$INSTALL_OPENCODE" = "true" ] || [ "$INSTALL_HERMES" = "true" ] || [ "$INSTALL_OPENCLAW" = "true" ]; then
-    echo "🛡️  Installing Agent RAS runtime (OpenCode / Hermes / OpenClaw)..."
+if [ "$INSTALL_OPENCODE" = "true" ] || [ "$INSTALL_HERMES" = "true" ] || [ "$INSTALL_OPENCLAW" = "true" ] || [ "$INSTALL_XIAOO" = "true" ]; then
+    echo "🛡️  Installing Agent RAS runtime (OpenCode / Hermes / OpenClaw / xiaoO)..."
     install_agent_insight_ras "$AGENT_INSIGHT_HOST" "$AGENT_INSIGHT_API_KEY" || echo "⚠️  Agent RAS installation failed; telemetry setup will continue."
 fi
 
