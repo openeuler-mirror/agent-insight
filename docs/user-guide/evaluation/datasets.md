@@ -227,9 +227,9 @@ input,expected_output
 4. 统一配置目标数据集和字段映射；来源下拉使用 `input`、`output`、`trace`、`none`，在预览页逐条切换并修改最终字段值。较长内容在固定高度编辑框内通过右侧滚动条查看。
 5. 确认后，所有准备成功的样本通过一次数据集更新写入，避免批次只写入一部分。
 
-添加到已有数据集时，标准字段会自动映射：`input → input`、`reference_output` / `expected_output → output`、`trajectory → trace`。你仍可把原始用户输入、最终输出和原始 Trace JSON 改映射到任意现有字段，也可以在弹窗中新增字段；未映射字段写入空值。新建数据集默认提供 `input`、`output`、`trace`，三者均可删除、重命名或更改类型，也可以增加其他字段。同一数据集内字段名称必须唯一，内部 key 由系统维护，不需要用户填写。数据集至少保留一个字段，但不强制存在 `input` 或 `reference_output`。
+添加到已有数据集时，标准字段会自动映射：`input ← input`、`reference_output ← output`、`trajectory ← trace`。你仍可把原始用户输入、最终输出和原始 Trace JSON 改映射到任意现有字段，也可以在弹窗中新增字段；未映射字段写入空值。新建数据集默认使用标准字段 `input`、`reference_output`、`trajectory`，分别承接 Trace 的输入、经确认的最终输出和原始轨迹；三者均可删除、重命名或更改类型，也可以增加其他字段。同一数据集内字段名称必须唯一，内部 key 由系统维护，不需要用户填写。数据集至少保留一个字段，但不强制存在 `input` 或 `reference_output`。
 
-`trace` 保存链路 Session 中、调用 `summarizeTrace` 之前的 interactions JSON 数组，包含对话、工具调用及其参数和结果等原始交互字段，不再保存步骤摘要。回流到标准数据集时，实际输出默认写入 `reference_output`，原始 Trace 默认写入 `trajectory`；可在字段映射步骤手动调整。字段新增与样本追加在一次数据集更新中完成。
+原始 Trace 保存链路 Session 中、调用 `summarizeTrace` 之前的 interactions JSON 数组，包含对话、工具调用及其参数和结果等原始交互字段，不再保存步骤摘要。执行回流表示该 Trace 已被确认为好样例，因此其最终输出默认写入 `reference_output` 并作为预期输出，原始 Trace 默认写入 `trajectory`；可在字段映射步骤手动调整。字段新增与样本追加在一次数据集更新中完成。历史回流数据中的 `output` / `trace` 仍会兼容读取为预期输出和轨迹。
 
 ## 数据项字段说明
 

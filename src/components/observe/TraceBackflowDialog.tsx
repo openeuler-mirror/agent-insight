@@ -89,9 +89,9 @@ const SOURCE_OPTIONS = [
 ] as const;
 
 const DEFAULT_NEW_FIELDS: ConfiguredField[] = [
-  { id: 'input', key: 'input', label: '任务输入', type: 'text', system: true, source: 'input', origin: 'new' },
-  { id: 'output', key: 'output', label: '任务输出', type: 'text', system: true, source: 'output', origin: 'new' },
-  { id: 'trace', key: 'trace', label: 'Trace', type: 'json', system: true, source: 'trace', origin: 'new' },
+  { id: 'input', key: 'input', label: '输入', type: 'text', system: true, source: 'input', origin: 'new' },
+  { id: 'reference_output', key: 'reference_output', label: '预期输出', type: 'text', system: true, source: 'output', origin: 'new' },
+  { id: 'trajectory', key: 'trajectory', label: '轨迹', type: 'json', system: true, source: 'trace', origin: 'new' },
 ];
 
 async function settleWithConcurrency<T, R>(
@@ -380,6 +380,7 @@ export function TraceBackflowDialog(props: {
           newFields: mode === 'existing'
             ? fields.filter(field => field.origin === 'new').map(fieldPayload)
             : undefined,
+          fieldMappings: fields.map(field => ({ key: field.key.trim(), source: field.source })),
           cases: previewRows.map(row => ({ values: row.values, traceSource: row.traceSource })),
         }),
       });
