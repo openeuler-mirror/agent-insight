@@ -55,6 +55,13 @@ export interface RawInteraction {
     subagent_name?: string;
     subagent_session_id?: string;
     tool_calls?: ToolCall[];
+    requestMessages?: Array<{
+        role?: string;
+        content?: unknown;
+        tool_calls?: unknown[];
+        tool_call_id?: string;
+        name?: string;
+    }>;
     usage?: InteractionUsage;
     // LLM request parameters (present when captured via proxy or enriched SDK)
     model?: string;

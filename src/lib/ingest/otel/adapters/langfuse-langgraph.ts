@@ -2,7 +2,12 @@ import type { ExecutionRecord } from '@/lib/storage/data-service';
 import type { OtelTraceEvent } from '../types';
 import { LANGFUSE_LANGGRAPH_FRAMEWORK } from '../langfuse';
 import type { OtelTraceAdapter } from './types';
-import { buildLangfuseTraceNodes, langfuseSubagentSessionId } from './langfuse-trace';
+import {
+  buildLangfuseTraceNodes,
+  langfuseSubagentSessionId,
+  normalizeLangfuseRequestMessages,
+  type LangfuseRequestMessage,
+} from './langfuse-trace';
 
 type AnyObj = Record<string, any>;
 const DEFAULT_REPORT_SUBAGENT = 'report-generator';
@@ -107,51 +112,12 @@ function parsedGenerationOutput(event: OtelTraceEvent): AnyObj {
   return objectFromJson(attr(event, 'langfuse.observation.output'));
 }
 
-function normalizeMessageRole(value: any): string {
-  const role = (firstText(value) || 'user').toLowerCase();
-  if (role === 'human') return 'user';
-  if (role === 'ai') return 'assistant';
-  return role;
-}
-
-// generation 的完整入参消息（系统提示词 + 上下文历史），转成 {role, content} 列表。
-// Langfuse 的 generation input 是 [{role,content},...]（或 {messages:[...]}）。
-//
-// 体积护栏：每个 generation 都带全量历史，第 n 轮带前 n-1 轮 → interactions JSON
-// 平方级膨胀（长会话可到几十 MB），详情页加载/入库都被拖垮。这里对单条消息截长、
-// 对条数封顶（保留开头的 system + 最近的历史）；原始 span 仍完整在 spool 里。
-const REQUEST_MESSAGE_MAX_CHARS = 4_000;
-const REQUEST_MESSAGES_MAX_COUNT = 60;
-
-function requestMessagesFromGeneration(event: OtelTraceEvent): AnyObj[] {
-  const parsed = parseJson(attr(event, 'langfuse.observation.input'));
-  const list = Array.isArray(parsed)
-    ? parsed
-    : Array.isArray(parsed?.messages) ? parsed.messages : [];
-  let out: AnyObj[] = [];
-  for (const message of list) {
-    if (!message || typeof message !== 'object' || Array.isArray(message)) continue;
-    const content = text(message.content);
-    if (!content) continue;
-    const clipped = content.length > REQUEST_MESSAGE_MAX_CHARS
-      ? `${content.slice(0, REQUEST_MESSAGE_MAX_CHARS)}\n…[已截断,原文 ${content.length} 字]`
-      : content;
-    out.push({ role: normalizeMessageRole(message.role ?? message.type), content: clipped });
-  }
-  if (out.length > REQUEST_MESSAGES_MAX_COUNT) {
-    const head = out.slice(0, 2);
-    const tail = out.slice(-(REQUEST_MESSAGES_MAX_COUNT - head.length - 1));
-    out = [
-      ...head,
-      { role: 'system', content: `…[省略 ${out.length - head.length - tail.length} 条历史消息]` },
-      ...tail,
-    ];
-  }
-  return out;
+function requestMessagesFromGeneration(event: OtelTraceEvent): LangfuseRequestMessage[] {
+  return normalizeLangfuseRequestMessages(attr(event, 'langfuse.observation.input'));
 }
 
 // 从入参消息里拼出系统提示词文本（可能有多条 system，拼接）
-function systemTextFromMessages(messages: AnyObj[]): string | undefined {
+function systemTextFromMessages(messages: LangfuseRequestMessage[]): string | undefined {
   const parts = messages.filter((m) => m.role === 'system').map((m) => m.content);
   return parts.length ? parts.join('\n\n---\n\n') : undefined;
 }

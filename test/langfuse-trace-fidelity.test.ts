@@ -5,8 +5,12 @@ import { aggregateOtelTraceEvents } from '@/lib/ingest/otel/aggregate';
 import {
   buildLangfuseTraceNodes,
   mergeLangfuseTraceNodes,
+  normalizeLangfuseRequestMessages,
 } from '@/lib/ingest/otel/adapters/langfuse-trace';
-import { buildLangfuseAgentTrace } from '@/lib/engine/observability/langfuse-agent-trace';
+import {
+  buildLangfuseAgentTrace,
+  langfusePromptHistoryCount,
+} from '@/lib/engine/observability/langfuse-agent-trace';
 import type { OtelTraceEvent } from '@/lib/ingest/otel/types';
 
 function event(overrides: Partial<OtelTraceEvent>): OtelTraceEvent {
@@ -246,7 +250,8 @@ test('Langfuse observations project into the existing agent tree without busines
   assert.deepEqual(childEvents[0].output, { answer: 'keep this too' });
   assert.equal(childEvents[1].interaction.model, 'model-z');
   assert.equal(childEvents[1].usage?.total, 19);
-  assert.equal(projected.interactions.some(item => item.content?.includes('prompt body')), true);
+  assert.equal(childEvents[1].interaction.requestMessages?.[0]?.content, 'prompt body');
+  assert.equal(projected.interactions.some(item => item.content?.includes('prompt body')), false);
   assert.equal(projected.interactions.some(item => item.content?.includes('response body')), true);
 
   const record = aggregateOtelTraceEvents('langfuse-session', events);
@@ -254,4 +259,152 @@ test('Langfuse observations project into the existing agent tree without busines
   assert.equal(storedWorker?.subagentSessionId, 'langfuse-session:subagent:worker');
   const storedProjection = buildLangfuseAgentTrace(record?.langfuseTraceNodes || [], 'different-root');
   assert.equal(storedProjection.tree?.children[0]?.sessionId, 'langfuse-session:subagent:worker');
+});
+
+test('Langfuse LLM input keeps message roles and excludes chain outputs from prompt history', () => {
+  const events = [
+    event({}),
+    event({
+      spanId: 'summarizer',
+      parentSpanId: 'root',
+      name: 'summarizer',
+      startTimeMs: 1010,
+      attributes: {
+        'langfuse.observation.output': '{"summary":"not a chat message"}',
+      },
+    }),
+    event({
+      spanId: 'generation',
+      parentSpanId: 'summarizer',
+      name: 'ChatDeepSeek',
+      kind: 'llm',
+      startTimeMs: 1020,
+      attributes: {
+        'langfuse.observation.input': JSON.stringify([
+          { role: 'system', content: 'router prompt' },
+          { role: 'user', content: 'older question' },
+          { role: 'assistant', content: 'older answer' },
+          { role: 'user', content: 'current question' },
+          { role: 'assistant', content: '' },
+          { role: 'user', content: 'current question' },
+        ]),
+        'langfuse.observation.output': '{"role":"assistant","content":"route result"}',
+      },
+    }),
+  ];
+
+  const projected = buildLangfuseAgentTrace(buildLangfuseTraceNodes(events));
+  const llm = projected.tree?.events.find(item => item.kind === 'llm');
+  const requestMessages = llm?.interaction.requestMessages || [];
+  assert.deepEqual(requestMessages.map(message => message.role), [
+    'system',
+    'user',
+    'assistant',
+    'user',
+    'user',
+  ]);
+  assert.equal(llm?.interaction.content, 'route result');
+  assert.equal(requestMessages.some(message => String(message.content).includes('not a chat message')), false);
+  assert.equal(langfusePromptHistoryCount(requestMessages), 4);
+  assert.equal(requestMessages[4]?.content, 'current question');
+});
+
+test('Langfuse request message normalization supports messages wrappers and LangChain roles', () => {
+  const messages = normalizeLangfuseRequestMessages({
+    messages: [
+      { type: 'system', content: 'system prompt' },
+      { type: 'human', content: 'question' },
+      { type: 'ai', content: 'answer' },
+      { type: 'ai', content: '', tool_calls: [{ name: 'search', args: { q: 'x' } }] },
+      {
+        role: 'tool',
+        content: {
+          type: 'function',
+          function: { name: 'search', description: 'available tool schema', parameters: { type: 'object' } },
+        },
+      },
+    ],
+  });
+  assert.deepEqual(messages.map(message => message.role), ['system', 'user', 'assistant', 'assistant']);
+  assert.equal(messages[3]?.tool_calls?.length, 1);
+  assert.equal(messages.some(message => String(message.content).includes('available tool schema')), false);
+});
+
+test('Langfuse tool-call turns keep only the real tool result in Current input', () => {
+  const system = { role: 'system', content: 'query agent prompt' };
+  const user = { role: 'user', content: 'count posts' };
+  const synthesizeCall = {
+    name: 'synthesize_sql',
+    args: { question: 'count posts' },
+    id: 'call-sql',
+    type: 'tool_call',
+  };
+  const events = [
+    event({}),
+    event({
+      spanId: 'first-generation',
+      parentSpanId: 'root',
+      name: 'ChatDeepSeek',
+      kind: 'llm',
+      startTimeMs: 1010,
+      attributes: {
+        'langfuse.observation.input': JSON.stringify([system, user]),
+        'langfuse.observation.output': JSON.stringify({ role: 'assistant', content: '', tool_calls: [synthesizeCall] }),
+      },
+    }),
+    event({
+      spanId: 'second-generation',
+      parentSpanId: 'root',
+      name: 'ChatDeepSeek',
+      kind: 'llm',
+      startTimeMs: 1030,
+      attributes: {
+        'langfuse.observation.input': JSON.stringify([
+          system,
+          user,
+          { role: 'assistant', content: '', tool_calls: [synthesizeCall] },
+          { role: 'tool', content: '{"sql":"SELECT COUNT(*)"}', tool_call_id: 'call-sql' },
+          {
+            role: 'tool',
+            content: {
+              type: 'function',
+              function: { name: 'synthesize_sql', description: 'schema one', parameters: {} },
+            },
+          },
+          {
+            role: 'tool',
+            content: {
+              type: 'function',
+              function: { name: 'execute_query', description: 'schema two', parameters: {} },
+            },
+          },
+        ]),
+        'langfuse.observation.output': JSON.stringify({
+          role: 'assistant',
+          content: '',
+          tool_calls: [{
+            name: 'execute_query',
+            args: { sql: 'SELECT COUNT(*)', params: '{}' },
+            id: 'call-execute',
+            type: 'tool_call',
+          }],
+        }),
+      },
+    }),
+  ];
+
+  const projected = buildLangfuseAgentTrace(buildLangfuseTraceNodes(events));
+  const llms = projected.tree?.events.filter(item => item.kind === 'llm') || [];
+  const first = llms[0]?.interaction;
+  const second = llms[1]?.interaction;
+  assert.equal(first?.tool_calls?.[0]?.function?.name, 'synthesize_sql');
+  assert.equal(second?.tool_calls?.[0]?.function?.name, 'execute_query');
+  assert.equal(second?.requestMessages?.length, 4);
+  assert.deepEqual(second?.requestMessages?.map(message => message.role), ['system', 'user', 'assistant', 'tool']);
+  assert.equal(langfusePromptHistoryCount(
+    second?.requestMessages || [],
+    first?.requestMessages || [],
+    first?.content || '',
+    first?.tool_calls || [],
+  ), 3);
 });

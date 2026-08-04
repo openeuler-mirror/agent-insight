@@ -32,6 +32,14 @@ export interface LangfuseTraceNode {
   orphanTool?: boolean;
 }
 
+export interface LangfuseRequestMessage {
+  role: string;
+  content: string;
+  tool_calls?: unknown[];
+  tool_call_id?: string;
+  name?: string;
+}
+
 export function langfuseSubagentSessionId(rootSessionId: string, spanId: string): string {
   return `${rootSessionId}:subagent:${spanId}`;
 }
@@ -65,6 +73,81 @@ function attr(event: OtelTraceEvent, key: string): unknown {
 
 function text(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+const REQUEST_MESSAGE_MAX_CHARS = 4_000;
+const REQUEST_MESSAGES_MAX_COUNT = 60;
+
+function requestMessageRole(value: unknown): string {
+  const role = String(value || 'user').trim().toLowerCase();
+  if (role === 'human') return 'user';
+  if (role === 'ai') return 'assistant';
+  return role || 'user';
+}
+
+function requestMessageContent(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (value == null) return '';
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function isToolDefinitionMessage(message: Record<string, unknown>, role: string): boolean {
+  if (role !== 'tool' || text(message.tool_call_id)) return false;
+  const content = parseJson(message.content);
+  if (!content || typeof content !== 'object' || Array.isArray(content)) return false;
+  const definition = content as Record<string, unknown>;
+  const fn = definition.function;
+  if (String(definition.type || '').toLowerCase() !== 'function' || !fn || typeof fn !== 'object' || Array.isArray(fn)) {
+    return false;
+  }
+  const functionDefinition = fn as Record<string, unknown>;
+  return !!text(functionDefinition.name)
+    && (text(functionDefinition.description) != null || functionDefinition.parameters != null);
+}
+
+export function normalizeLangfuseRequestMessages(value: unknown): LangfuseRequestMessage[] {
+  const parsed = parseJson(value) as Record<string, unknown> | unknown[] | undefined;
+  const list = Array.isArray(parsed)
+    ? parsed
+    : parsed && typeof parsed === 'object' && Array.isArray(parsed.messages)
+      ? parsed.messages
+      : [];
+  let messages: LangfuseRequestMessage[] = [];
+  for (const item of list) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    const message = item as Record<string, unknown>;
+    const role = requestMessageRole(message.role ?? message.type);
+    if (isToolDefinitionMessage(message, role)) continue;
+    const content = requestMessageContent(message.content);
+    const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : undefined;
+    const toolCallId = text(message.tool_call_id);
+    if (!content.trim() && !toolCalls?.length && !toolCallId) continue;
+    const clipped = content.length > REQUEST_MESSAGE_MAX_CHARS
+      ? `${content.slice(0, REQUEST_MESSAGE_MAX_CHARS)}\n…[已截断,原文 ${content.length} 字]`
+      : content;
+    const name = text(message.name);
+    messages.push({
+      role,
+      content: clipped,
+      ...(toolCalls?.length ? { tool_calls: toolCalls } : {}),
+      ...(toolCallId ? { tool_call_id: toolCallId } : {}),
+      ...(name ? { name } : {}),
+    });
+  }
+  if (messages.length > REQUEST_MESSAGES_MAX_COUNT) {
+    const head = messages.slice(0, 2);
+    const tail = messages.slice(-(REQUEST_MESSAGES_MAX_COUNT - head.length - 1));
+    messages = [
+      ...head,
+      { role: 'system', content: `…[省略 ${messages.length - head.length - tail.length} 条历史消息]` },
+      ...tail,
+    ];
+  }
+  return messages;
 }
 
 function toolCallIdFromEvent(event: OtelTraceEvent): string | undefined {
