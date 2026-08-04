@@ -16,6 +16,7 @@ interface ResultRow {
   id: string;
   status: string;
   score: number | null;
+  humanScore: number | null;
   errorMessage: string | null;
   evaluatorId: string;
 }
@@ -28,6 +29,9 @@ function buildCaseResult(caseRow: { id: string; taskId: string | null; execution
   const anyFailed = rows.some((r) => r.status === 'failed');
   const allDone = rows.length > 0 && rows.every((r) => r.status === 'done');
   const status = anyRunning ? 'running' : allDone ? 'done' : anyFailed ? 'failed' : (rows[0]?.status ?? 'pending');
+  // 生效分：人工修正优先（与实验详情同口径，见 detail-agg.effectiveScore），再折回 0-1。
+  const eff = (r: ResultRow | undefined) =>
+    r ? (typeof r.humanScore === 'number' ? r.humanScore : r.score) : null;
   const to01 = (s: number | null | undefined) => (typeof s === 'number' ? Math.round((s / 100) * 1000) / 1000 : null);
   const firstErr = rows.find((r) => r.errorMessage)?.errorMessage ?? null;
   return {
@@ -39,10 +43,10 @@ function buildCaseResult(caseRow: { id: string; taskId: string | null; execution
     taskId: caseRow.taskId ?? undefined,
     status,
     errorMessage: firstErr,
-    trajectoryScore: to01(traj?.score),                 // 0-1（前端 ×100）
-    resultEvaluationScore: to01(result?.score),         // 0-1（前端 ×100）
+    trajectoryScore: to01(eff(traj)),                   // 0-1（前端 ×100）
+    resultEvaluationScore: to01(eff(result)),           // 0-1（前端 ×100）
     rawAnalysis: {
-      resultEvaluation: result ? { score: to01(result.score) } : undefined,
+      resultEvaluation: result ? { score: to01(eff(result)) } : undefined,
       resultEvaluationError: result?.status === 'failed' ? (result.errorMessage ?? undefined) : undefined,
       trajectoryError: traj?.status === 'failed' ? (traj.errorMessage ?? undefined) : undefined,
     },
@@ -73,14 +77,14 @@ export async function GET(req: Request) {
       take: taskId && !runId ? 1 : limit,
       select: {
         id: true, taskId: true, executionId: true, createdAt: true, experimentId: true,
-        results: { select: { evaluatorId: true, status: true, score: true, errorMessage: true, updatedAt: true } },
+        results: { select: { evaluatorId: true, status: true, score: true, humanScore: true, errorMessage: true, updatedAt: true } },
       },
     });
 
-    type CaseRes = { evaluatorId: string; status: string; score: number | null; errorMessage: string | null; updatedAt: Date };
+    type CaseRes = { evaluatorId: string; status: string; score: number | null; humanScore: number | null; errorMessage: string | null; updatedAt: Date };
     type CaseWithRes = { id: string; taskId: string | null; executionId: string | null; createdAt: Date; experimentId: string; results: CaseRes[] };
     const results = cases.map((c: CaseWithRes) => {
-      const rows: ResultRow[] = c.results.map((r: CaseRes) => ({ id: c.id, evaluatorId: r.evaluatorId, status: r.status, score: r.score, errorMessage: r.errorMessage }));
+      const rows: ResultRow[] = c.results.map((r: CaseRes) => ({ id: c.id, evaluatorId: r.evaluatorId, status: r.status, score: r.score, humanScore: r.humanScore, errorMessage: r.errorMessage }));
       const updatedAt = c.results.reduce((mx: Date, r: CaseRes) => (r.updatedAt > mx ? r.updatedAt : mx), c.createdAt);
       const row = buildCaseResult(c, rows, updatedAt);
       row.evaluatorRunId = c.experimentId;

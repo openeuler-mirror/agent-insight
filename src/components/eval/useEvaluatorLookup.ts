@@ -14,6 +14,8 @@ export interface EvaluatorLookup {
   nameOf: (evaluatorId: string) => string;
   tagsOf: (evaluatorId: string) => string[];
   categoryOf: (evaluatorId: string) => EvaluatorCategory;
+  /** 是否依赖参考数据（新增 case 时据此提示"不标注会不记分"）；找不到卡片按 false。 */
+  requiresReference: (evaluatorId: string) => boolean;
 }
 
 export function useEvaluatorLookup(user: string | null | undefined): EvaluatorLookup {
@@ -45,6 +47,10 @@ export function useEvaluatorLookup(user: string | null | undefined): EvaluatorLo
       categoryOf: (id: string) => {
         const card = byId.get(id);
         return card ? getEvaluatorMeta(card).category : 'res';
+      },
+      requiresReference: (id: string) => {
+        const card = byId.get(id);
+        return card ? getEvaluatorMeta(card).requires.includes('reference') : false;
       },
     };
   }, [customCards]);

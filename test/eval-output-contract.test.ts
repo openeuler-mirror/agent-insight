@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import {
   normalizeEvaluatorOutput,
   averageScore,
+  deriveVerdict,
+  displaySummary,
+  isEvidenceRedundant,
   EvaluatorOutputSchema,
 } from '../src/lib/evaluators/eval-output';
 import { getEvaluatorMeta, deriveEvaluatorTags, gateEvaluator } from '../src/lib/evaluators/registry';
@@ -82,6 +85,70 @@ describe('评估器输出统一契约 normalizeEvaluatorOutput', () => {
   it('averageScore：无分不进分母，全无分返回 null', () => {
     assert.equal(averageScore([{ score: 96 }, { score: 100 }, { score: undefined }]), 98);
     assert.equal(averageScore([{ score: null }, {}]), null);
+  });
+});
+
+describe('结论字段 verdict / summary', () => {
+  it('verdict 容忍英文别名与中文说法；未识别 → 不设（呈现层按分数派生）', () => {
+    const mk = (v: unknown) => normalizeEvaluatorOutput({ verdict: v }).verdict;
+    assert.equal(mk('pass'), 'pass');
+    assert.equal(mk('PASSED'), 'pass');
+    assert.equal(mk('达成'), 'pass');
+    assert.equal(mk('partial'), 'warn');
+    assert.equal(mk('部分达成'), 'warn');
+    assert.equal(mk('not_met'), 'fail');
+    assert.equal(mk('未通过'), 'fail');
+    assert.equal(mk('garbage'), undefined);
+    assert.equal(mk(42), undefined);
+  });
+
+  it('summary 压平换行并截断；空白视为未提供', () => {
+    assert.equal(
+      normalizeEvaluatorOutput({ summary: '  任务已完成，\n但漏了第三步。 ' }).summary,
+      '任务已完成， 但漏了第三步。',
+    );
+    assert.equal(normalizeEvaluatorOutput({ summary: '   ' }).summary, undefined);
+    const long = normalizeEvaluatorOutput({ summary: 'x'.repeat(500) }).summary!;
+    assert.equal(long.length, 200);
+    assert.ok(long.endsWith('…'));
+  });
+
+  it('结论字段可选，且不破坏既有退化组合', () => {
+    const out = normalizeEvaluatorOutput({ verdict: 'warn', summary: '差一步', score: 65 });
+    assert.deepEqual(out, { verdict: 'warn', summary: '差一步', score: 65 });
+    assert.doesNotThrow(() => EvaluatorOutputSchema.parse(out));
+    assert.deepEqual(normalizeEvaluatorOutput({ score: 72 }), { score: 72 });
+  });
+
+  it('deriveVerdict：80/60 分档，无分不派生', () => {
+    assert.equal(deriveVerdict(100), 'pass');
+    assert.equal(deriveVerdict(80), 'pass');
+    assert.equal(deriveVerdict(79.9), 'warn');
+    assert.equal(deriveVerdict(60), 'warn');
+    assert.equal(deriveVerdict(59), 'fail');
+    assert.equal(deriveVerdict(0), 'fail');
+    assert.equal(deriveVerdict(null), undefined);
+    assert.equal(deriveVerdict(undefined), undefined);
+  });
+
+  it('isEvidenceRedundant：证据与结论逐字相同才判重；证据更长时仍要展示', () => {
+    // 预置评估器普遍把同一段 reason 既作 summary 又作 evidence
+    assert.equal(isEvidenceRedundant('任务没完成，漏了来源 IP。', { md: '任务没完成，漏了来源 IP。' }), true);
+    // 证据比结论长（summary 被截断过）→ 不判重，否则会把多出来的内容一起藏掉
+    assert.equal(isEvidenceRedundant('任务没完成。', { md: '任务没完成。\n\n### 明细\n- 漏了来源 IP' }), false);
+    assert.equal(isEvidenceRedundant('一句话结论', { json: { a: 1 } }), false);
+    assert.equal(isEvidenceRedundant(null, null), false);
+  });
+
+  it('displaySummary：优先 summary，存量数据回退证据首段', () => {
+    assert.equal(displaySummary('一句话结论', { md: '很长的证据' }), '一句话结论');
+    // 契约加 summary 之前，结论一直被塞在 evidence.md 里
+    assert.equal(
+      displaySummary(null, { md: '任务未完成，缺少校验步骤。\n\n### 明细\n- 第一点\n- 第二点' }),
+      '任务未完成，缺少校验步骤。',
+    );
+    assert.equal(displaySummary(null, { json: { a: 1 } }), undefined);
+    assert.equal(displaySummary(null, null), undefined);
   });
 });
 

@@ -2,7 +2,7 @@ import type { ExecutionRecord } from '@/lib/storage/data-service';
 import type { OtelTraceEvent } from '../types';
 import { LANGFUSE_LANGGRAPH_FRAMEWORK } from '../langfuse';
 import type { OtelTraceAdapter } from './types';
-import { buildLangfuseTraceNodes } from './langfuse-trace';
+import { buildLangfuseTraceNodes, langfuseSubagentSessionId } from './langfuse-trace';
 
 type AnyObj = Record<string, any>;
 const DEFAULT_REPORT_SUBAGENT = 'report-generator';
@@ -89,7 +89,7 @@ function metadata(event: OtelTraceEvent | undefined, key: string): string | unde
 }
 
 function stableSubagentSession(sessionId: string, tool: OtelTraceEvent | undefined): string {
-  return `${sessionId}:subagent:${tool?.spanId || DEFAULT_REPORT_SUBAGENT}`;
+  return langfuseSubagentSessionId(sessionId, tool?.spanId || DEFAULT_REPORT_SUBAGENT);
 }
 
 function hasAncestor(event: OtelTraceEvent, byId: Map<string, OtelTraceEvent>, predicate: (event: OtelTraceEvent) => boolean): boolean {
@@ -402,7 +402,13 @@ function findRoot(events: OtelTraceEvent[]): OtelTraceEvent | undefined {
     attr(event, 'langfuse.internal.is_app_root') === 'true',
   ));
   if (appRoot) return appRoot;
-  return byLatestEnd(events.filter((event) => event.kind === 'span')) || byLatestEnd(events);
+
+  // Langfuse 按「已结束 span」增量导出：子 agent 往往先结束并先到，真正的应用根
+  // span 最后才出现。父 span 尚未到达时不能把具名 agent 当作临时 root，否则它会
+  // 以 isSubagent=false 短暂进入主 Agent 列表，待根 span 到达后又“消失”。
+  const topLevel = events.filter((event) => !event.parentSpanId);
+  return byLatestEnd(topLevel.filter((event) => event.kind === 'span'))
+    || byLatestEnd(topLevel);
 }
 
 function isSyntheticRunName(value: any): boolean {
@@ -477,6 +483,7 @@ export function aggregateLangfuseLangGraphTraceEvents(sessionId: string, events:
   if (!sessionEvents.length) return null;
 
   const selectedRoot = findRoot(sessionEvents);
+  if (!selectedRoot) return null;
   const selectedTraceId = selectedRoot?.traceId;
   const ordered = (selectedTraceId
     ? sessionEvents.filter((event) => event.traceId === selectedTraceId)
@@ -530,6 +537,10 @@ export function aggregateLangfuseLangGraphTraceEvents(sessionId: string, events:
 
   // 就近原则：一个事件属于「最近的子 agent 祖先」的作用域
   const subagentScopeFor = (event: OtelTraceEvent): SubagentScope | undefined => {
+    if (event.spanId) {
+      const ownScope = subagentScopes.get(event.spanId);
+      if (ownScope) return ownScope;
+    }
     let current = event.parentSpanId ? byId.get(event.parentSpanId) : undefined;
     const seen = new Set<string>();
     while (current?.spanId && !seen.has(current.spanId)) {
@@ -648,6 +659,10 @@ export function aggregateLangfuseLangGraphTraceEvents(sessionId: string, events:
   const start = Math.min(...ordered.map(eventStart));
   const end = Math.max(...ordered.map(eventEnd));
   const toolEvents = ordered.filter((event) => event.kind === 'tool');
+  const langfuseTraceNodes = buildLangfuseTraceNodes(ordered).map((node) => {
+    const subagentSessionId = subagentScopes.get(node.spanId)?.sessionId;
+    return subagentSessionId ? { ...node, subagentSessionId } : node;
+  });
 
   return {
     task_id: sessionId,
@@ -665,7 +680,7 @@ export function aggregateLangfuseLangGraphTraceEvents(sessionId: string, events:
     label: firstText(ordered.find((event) => event.serviceName)?.serviceName) || LANGFUSE_LANGGRAPH_FRAMEWORK,
     user: ordered.find((event) => event.user)?.user || 'anonymous',
     interactions,
-    langfuseTraceNodes: buildLangfuseTraceNodes(ordered),
+    langfuseTraceNodes,
     skill: skillName,
     invokedSkills: skillName ? [{ name: skillName, version: null }] : [],
     skills: skillName ? [skillName] : [],

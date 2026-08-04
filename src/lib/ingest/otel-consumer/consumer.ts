@@ -1,5 +1,6 @@
+import path from 'node:path';
 import { guardAttribution } from '@/lib/ingest/claude-otel/attribution-guard';
-import { readNewLinesSince, type SpoolCursor } from '@/lib/ingest/claude-otel/spool';
+import { currentSpoolDay, readNewLinesSince, type SpoolCursor } from '@/lib/ingest/claude-otel/spool';
 import { saveExecutionRecord, type ExecutionRecord } from '@/lib/storage/data-service';
 import {
   getFileCursor,
@@ -8,13 +9,11 @@ import {
   toCheckpointRelPath,
 } from './checkpoint';
 import { compactProcessedSpoolFiles } from './retention';
-import { listSources, type SpoolSource } from './sources';
-import { scheduleResultEvaluation as scheduleQualityResultEvaluation } from '@/lib/engine/evaluation/result-quality-evaluator';
+import { listSources, type SpoolAggregationResult, type SpoolSource } from './sources';
 
 type TimerHandle = ReturnType<typeof setTimeout>;
 type IntervalHandle = ReturnType<typeof setInterval>;
 type SaveExecution = (data: ExecutionRecord) => Promise<{ success: boolean; record: ExecutionRecord }>;
-type ScheduleResultEvaluation = (executionId: string, user?: string | null) => Promise<unknown>;
 
 type PendingFile = {
   source: SpoolSource;
@@ -25,18 +24,34 @@ type PendingFile = {
   done: Set<string>;
 };
 
+type AggregateSnapshot = {
+  sourceId: string;
+  signature: string;
+  result: SpoolAggregationResult;
+};
+
 type SessionState = {
   sessionId: string;
   pendingFileKeys: Set<string>;
   sourceIds: Set<string>;
   failures: number;
   parked: boolean;
-  shortTimer?: TimerHandle;
-  longTimer?: TimerHandle;
-  maxTimer?: TimerHandle;
-  /** 上一轮聚合结束时刻/耗时——聚合冷却的依据(见 aggregateCooldownRemaining) */
+  /** 到点时刻。取代原来的三个 per-session timer——调度统一由中央 dispatcher 决定。 */
+  fastDueAt?: number;
+  evaluatedDueAt?: number;
+  maxDueAt?: number;
+  /** 最近一次收到新数据的时刻,用于 live/recovery 公平调度。 */
+  lastDataAt: number;
+  /** 上一轮聚合结束时刻/耗时——本会话冷却的依据(见 sessionCooldownRemaining) */
   lastAggregateEndedAt?: number;
   lastAggregateCostMs?: number;
+  /** fast 阶段的聚合快照:evaluated 阶段若数据没变就直接复用,不重复聚合。 */
+  lastAggregate?: AggregateSnapshot;
+};
+
+type FileListCache = {
+  files: string[];
+  fullScanAt: number;
 };
 
 export type OtelSpoolConsumerState = {
@@ -46,8 +61,8 @@ export type OtelSpoolConsumerState = {
   sourcesById: Map<string, SpoolSource>;
   pendingFiles: Map<string, PendingFile>;
   sessions: Map<string, SessionState>;
+  fileLists: Map<string, FileListCache>;
   saveExecution: SaveExecution;
-  scheduleResultEvaluation: ScheduleResultEvaluation;
   shortMs: number;
   longMs: number;
   maxWaitMs: number;
@@ -58,11 +73,26 @@ export type OtelSpoolConsumerState = {
   aggCooldownFactor: number;
   aggCooldownCapMs: number;
   aggGlobalFactor: number;
+  /** 全局冷却的绝对上限。没有它,一次慢聚合会按倍数把整条流水线冻住(2026-07-28 事故)。 */
+  aggGlobalMaxWaitMs: number;
+  /** backlog 到这个量级就进排空模式:此时的聚合是必要工作而非重复劳动,再限流只会加剧积压。 */
+  drainBacklog: number;
+  draining: boolean;
+  liveWindowMs: number;
+  liveQuota: number;
+  historyScanMs: number;
+  maxTrackedSessions: number;
+  stallMs: number;
   /** 全局(跨 session)最近一轮聚合的结束时刻/耗时——多会话并发时的总量闸 */
   lastGlobalAggEndedAt?: number;
   lastGlobalAggCostMs?: number;
-  /** 有聚合正在进行(含 await 写库)。并发到期的其他会话顺延重试,聚合全局串行。 */
-  aggInFlight: boolean;
+  /** 中央调度:同一时刻只允许一轮聚合(含 await 写库),SQLite 保持单写。 */
+  dispatching: boolean;
+  dispatchTimer?: TimerHandle;
+  activeSessionId?: string;
+  activeStartedAt?: number;
+  lastStallWarnAt?: number;
+  liveServed: number;
   log: (...args: any[]) => void;
   warn: (...args: any[]) => void;
 };
@@ -70,7 +100,6 @@ export type OtelSpoolConsumerState = {
 export type OtelSpoolConsumerOptions = {
   sources?: SpoolSource[];
   saveExecution?: SaveExecution;
-  scheduleResultEvaluation?: ScheduleResultEvaluation;
   shortMs?: number;
   longMs?: number;
   maxWaitMs?: number;
@@ -81,6 +110,13 @@ export type OtelSpoolConsumerOptions = {
   aggCooldownFactor?: number;
   aggCooldownCapMs?: number;
   aggGlobalFactor?: number;
+  aggGlobalMaxWaitMs?: number;
+  drainBacklog?: number;
+  liveWindowMs?: number;
+  liveQuota?: number;
+  historyScanMs?: number;
+  maxTrackedSessions?: number;
+  stallMs?: number;
   log?: (...args: any[]) => void;
   warn?: (...args: any[]) => void;
 };
@@ -105,8 +141,8 @@ function createState(options: OtelSpoolConsumerOptions = {}): OtelSpoolConsumerS
     sourcesById: new Map(sources.map((source) => [source.id, source])),
     pendingFiles: new Map(),
     sessions: new Map(),
+    fileLists: new Map(),
     saveExecution: wrapSaveExecutionWithAttributionGuard(options.saveExecution || saveExecutionRecord, options.log || console.log),
-    scheduleResultEvaluation: options.scheduleResultEvaluation || scheduleQualityResultEvaluation,
     shortMs: options.shortMs ?? envNumber('AGENT_INSIGHT_OTEL_CONSUMER_SHORT_MS', 3000),
     longMs: options.longMs ?? envNumber('AGENT_INSIGHT_OTEL_CONSUMER_LONG_MS', 30000),
     maxWaitMs: options.maxWaitMs ?? envNumber('AGENT_INSIGHT_OTEL_CONSUMER_MAX_WAIT_MS', 120000),
@@ -117,12 +153,22 @@ function createState(options: OtelSpoolConsumerOptions = {}): OtelSpoolConsumerS
     // 聚合冷却:下一轮聚合至少要等 上轮耗时×factor(封顶 cap)。上轮聚合花 5s → 至少歇 50s,
     // 把"活跃大 session 每来一批数据就全量重聚合"的 CPU 占比压到 ~1/factor 以内。
     aggCooldownFactor: options.aggCooldownFactor ?? envNumber('AGENT_INSIGHT_OTEL_AGG_COOLDOWN_FACTOR', 10),
-    aggCooldownCapMs: options.aggCooldownCapMs ?? envNumber('AGENT_INSIGHT_OTEL_AGG_COOLDOWN_CAP_MS', 300000),
+    aggCooldownCapMs: options.aggCooldownCapMs ?? envNumber('AGENT_INSIGHT_OTEL_AGG_COOLDOWN_CAP_MS', 60000),
     // 全局闸:任意两轮聚合(跨 session)之间至少歇 上轮耗时×globalFactor。
     // per-session 冷却管单会话独占,这个管"几十个并发会话各自 10% 叠满单核"(线上 22 并发实测)。
-    // 总 CPU 占比上限 ≈ 1/(1+globalFactor),默认 3 → ~25%。
     aggGlobalFactor: options.aggGlobalFactor ?? envNumber('AGENT_INSIGHT_OTEL_AGG_GLOBAL_FACTOR', 3),
-    aggInFlight: false,
+    // 但倍数必须封顶:2026-07-28 线上单轮 51s × 3 = 全局冻结 153s,吞吐塌到 0.3 条/分钟。
+    // 有了绝对上限,无论单轮多慢,全局吞吐都不会低于 1/(cost+cap)。
+    aggGlobalMaxWaitMs: options.aggGlobalMaxWaitMs ?? envNumber('AGENT_INSIGHT_OTEL_AGG_GLOBAL_MAX_WAIT_MS', 2000),
+    drainBacklog: options.drainBacklog ?? envNumber('AGENT_INSIGHT_OTEL_AGG_DRAIN_BACKLOG', 200),
+    draining: false,
+    liveWindowMs: options.liveWindowMs ?? envNumber('AGENT_INSIGHT_OTEL_CONSUMER_LIVE_WINDOW_MS', 60000),
+    liveQuota: options.liveQuota ?? envNumber('AGENT_INSIGHT_OTEL_CONSUMER_LIVE_QUOTA', 3),
+    historyScanMs: options.historyScanMs ?? envNumber('AGENT_INSIGHT_OTEL_CONSUMER_HISTORY_SCAN_MS', 60000),
+    maxTrackedSessions: options.maxTrackedSessions ?? envNumber('AGENT_INSIGHT_OTEL_CONSUMER_MAX_SESSIONS', 20000),
+    stallMs: options.stallMs ?? envNumber('AGENT_INSIGHT_OTEL_CONSUMER_STALL_MS', 15000),
+    dispatching: false,
+    liveServed: 0,
     log: options.log || console.log,
     warn: options.warn || console.warn,
   };
@@ -168,19 +214,23 @@ function getSession(state: OtelSpoolConsumerState, sessionId: string): SessionSt
       sourceIds: new Set(),
       failures: 0,
       parked: false,
+      lastDataAt: Date.now(),
     };
     state.sessions.set(sessionId, session);
   }
   return session;
 }
 
-function clearSessionTimers(session: SessionState): void {
-  if (session.shortTimer) clearTimeout(session.shortTimer);
-  if (session.longTimer) clearTimeout(session.longTimer);
-  if (session.maxTimer) clearTimeout(session.maxTimer);
-  session.shortTimer = undefined;
-  session.longTimer = undefined;
-  session.maxTimer = undefined;
+/**
+ * 会话彻底闲下来(没有待处理文件、没有到点任务)就从表里摘掉。
+ * 原实现只增不删,长跑进程里 sessions 无界增长;现在还要缓存聚合快照,更不能留着。
+ */
+function evictIdleSession(state: OtelSpoolConsumerState, session: SessionState): void {
+  if (session.pendingFileKeys.size > 0) return;
+  if (session.fastDueAt !== undefined || session.evaluatedDueAt !== undefined || session.maxDueAt !== undefined) return;
+  if (session.parked) return;
+  session.lastAggregate = undefined;
+  state.sessions.delete(session.sessionId);
 }
 
 function scheduleSession(state: OtelSpoolConsumerState, sessionId: string, source: SpoolSource, fileKey: string, resetTimers: boolean): void {
@@ -189,32 +239,11 @@ function scheduleSession(state: OtelSpoolConsumerState, sessionId: string, sourc
   session.sourceIds.add(source.id);
   if (session.parked || !resetTimers) return;
 
-  if (session.shortTimer) clearTimeout(session.shortTimer);
-  session.shortTimer = setTimeout(() => {
-    session.shortTimer = undefined;
-    void saveFast(state, sessionId);
-  }, state.shortMs);
-
-  if (session.longTimer) clearTimeout(session.longTimer);
-  session.longTimer = setTimeout(() => {
-    session.longTimer = undefined;
-    if (session.maxTimer) {
-      clearTimeout(session.maxTimer);
-      session.maxTimer = undefined;
-    }
-    void saveEvaluated(state, sessionId);
-  }, state.longMs);
-
-  if (!session.maxTimer) {
-    session.maxTimer = setTimeout(() => {
-      session.maxTimer = undefined;
-      if (session.longTimer) {
-        clearTimeout(session.longTimer);
-        session.longTimer = undefined;
-      }
-      void saveEvaluated(state, sessionId);
-    }, state.maxWaitMs);
-  }
+  const now = Date.now();
+  session.lastDataAt = now;
+  session.fastDueAt = now + state.shortMs;
+  session.evaluatedDueAt = now + state.longMs;
+  if (session.maxDueAt === undefined) session.maxDueAt = now + state.maxWaitMs;
 }
 
 function markSourceDone(state: OtelSpoolConsumerState, sessionId: string, sourceId: string): void {
@@ -230,7 +259,12 @@ function markSourceDone(state: OtelSpoolConsumerState, sessionId: string, source
       state.pendingFiles.delete(fileKey);
       for (const sid of pending.sessions) {
         const other = state.sessions.get(sid);
-        other?.pendingFileKeys.delete(fileKey);
+        if (!other) continue;
+        other.pendingFileKeys.delete(fileKey);
+        // 一个文件里有几百个会话时(旧格式整日平铺文件就是这样),文件完成的那一刻这些会话
+        // 才真正闲下来。只回收"当前这个"会有几百个会话对象永久留在内存里(实测 legacy 文件
+        // 处理完后 sessions 长期停在 420 不降)。
+        evictIdleSession(state, other);
       }
     }
   }
@@ -246,24 +280,39 @@ function handleSessionFailure(state: OtelSpoolConsumerState, sessionId: string, 
   });
   if (session.failures >= state.parkAfter) {
     session.parked = true;
-    clearSessionTimers(session);
+    session.fastDueAt = undefined;
+    session.evaluatedDueAt = undefined;
+    session.maxDueAt = undefined;
     state.warn('[OTelConsumer] parked poisoned session', { sessionId, failures: session.failures });
   }
 }
 
-/** 距离允许下一轮聚合还要等多久 = max(本会话冷却, 全局冷却)。冷却 = min(cap, 上轮耗时 × factor)。 */
-function aggregateCooldownRemaining(state: OtelSpoolConsumerState, session: SessionState): number {
-  const now = Date.now();
-  let wait = 0;
-  if (session.lastAggregateEndedAt && session.lastAggregateCostMs) {
-    const cooldown = Math.min(state.aggCooldownCapMs, session.lastAggregateCostMs * state.aggCooldownFactor);
-    wait = Math.max(wait, session.lastAggregateEndedAt + cooldown - now);
+/** 本会话距离允许下一轮聚合还要等多久 = min(cap, 上轮耗时 × factor)。 */
+function sessionCooldownRemaining(state: OtelSpoolConsumerState, session: SessionState, now: number): number {
+  if (!session.lastAggregateEndedAt || !session.lastAggregateCostMs) return 0;
+  const cooldown = Math.min(state.aggCooldownCapMs, session.lastAggregateCostMs * state.aggCooldownFactor);
+  return Math.max(0, session.lastAggregateEndedAt + cooldown - now);
+}
+
+/**
+ * 全局闸距离放行还要多久。
+ *
+ * 与旧实现的区别有两点,都是 2026-07-28 事故的直接教训:
+ *   1) 倍数封顶到 aggGlobalMaxWaitMs —— 慢聚合不再能把整条流水线按比例冻住;
+ *   2) backlog 越过阈值进排空模式 —— 此时单飞已经把 CPU 锁在 1 核以内,再节流只会让积压更久。
+ */
+function globalGateRemaining(state: OtelSpoolConsumerState, now: number): number {
+  const backlog = state.pendingFiles.size;
+  if (state.draining) {
+    if (backlog < state.drainBacklog / 2) state.draining = false;
+  } else if (backlog >= state.drainBacklog) {
+    state.draining = true;
   }
-  if (state.lastGlobalAggEndedAt && state.lastGlobalAggCostMs) {
-    const globalCooldown = Math.min(state.aggCooldownCapMs, state.lastGlobalAggCostMs * state.aggGlobalFactor);
-    wait = Math.max(wait, state.lastGlobalAggEndedAt + globalCooldown - now);
-  }
-  return Math.max(0, wait);
+  if (state.draining) return 0;
+
+  if (!state.lastGlobalAggEndedAt || !state.lastGlobalAggCostMs) return 0;
+  const cooldown = Math.min(state.aggGlobalMaxWaitMs, state.lastGlobalAggCostMs * state.aggGlobalFactor);
+  return Math.max(0, state.lastGlobalAggEndedAt + cooldown - now);
 }
 
 /** 记录一轮聚合的耗时(会话级 + 全局);聚合明显偏慢时打 warn,给未来的排查留证据。 */
@@ -276,98 +325,218 @@ function finishAggregateRound(state: OtelSpoolConsumerState, session: SessionSta
     state.warn('[OTelConsumer] slow aggregate', {
       sessionId: session.sessionId,
       costMs: session.lastAggregateCostMs,
-      nextAllowedInMs: Math.min(state.aggCooldownCapMs, session.lastAggregateCostMs * state.aggCooldownFactor),
+      backlog: state.pendingFiles.size,
+      draining: state.draining,
     });
   }
 }
 
-async function saveFast(state: OtelSpoolConsumerState, sessionId: string): Promise<void> {
-  const session = state.sessions.get(sessionId);
-  if (!session || session.parked) return;
+type Job = { session: SessionState; mode: 'fast' | 'evaluated' };
 
-  // 冷却未过 / 有别的聚合在途:不立刻聚合,顺延重试(timer 槽空着才排,避免叠加)。
-  const cooldownMs = aggregateCooldownRemaining(state, session);
-  const deferMs = state.aggInFlight ? Math.max(cooldownMs, 50) : cooldownMs;
-  if (deferMs > 0) {
-    if (!session.shortTimer) {
-      session.shortTimer = setTimeout(() => {
-        session.shortTimer = undefined;
-        void saveFast(state, sessionId);
-      }, deferMs);
+function evaluatedDueAt(session: SessionState): number | undefined {
+  if (session.evaluatedDueAt === undefined) return session.maxDueAt;
+  if (session.maxDueAt === undefined) return session.evaluatedDueAt;
+  return Math.min(session.evaluatedDueAt, session.maxDueAt);
+}
+
+/**
+ * 选下一个要处理的任务。live(最近还在上报) 与 recovery(历史积压) 按 liveQuota:1 轮转,
+ * 保证 backlog 有上千条时新来的 trace 也能很快入库,而不是排在队尾。
+ */
+function pickJob(state: OtelSpoolConsumerState, now: number): { job: Job | null; nextWakeAt: number } {
+  let nextWakeAt = Number.POSITIVE_INFINITY;
+  let live: Job | null = null;
+  let liveDueAt = Number.POSITIVE_INFINITY;
+  let recovery: Job | null = null;
+  let recoveryDueAt = Number.POSITIVE_INFINITY;
+
+  for (const session of state.sessions.values()) {
+    if (session.parked) continue;
+
+    const fastAt = session.fastDueAt;
+    const evalAt = evaluatedDueAt(session);
+    let dueAt: number | undefined;
+    let mode: 'fast' | 'evaluated' = 'fast';
+    // evaluated 到点优先:它是这个会话的终态处理,fast 只是提前让用户看到。
+    if (evalAt !== undefined && evalAt <= now) {
+      dueAt = evalAt;
+      mode = 'evaluated';
+    } else if (fastAt !== undefined && fastAt <= now) {
+      dueAt = fastAt;
+      mode = 'fast';
+    } else {
+      const soonest = Math.min(fastAt ?? Number.POSITIVE_INFINITY, evalAt ?? Number.POSITIVE_INFINITY);
+      if (soonest < nextWakeAt) nextWakeAt = soonest;
+      continue;
     }
+
+    const cooldown = sessionCooldownRemaining(state, session, now);
+    if (cooldown > 0) {
+      if (now + cooldown < nextWakeAt) nextWakeAt = now + cooldown;
+      continue;
+    }
+
+    const candidate: Job = { session, mode };
+    if (now - session.lastDataAt <= state.liveWindowMs) {
+      if (dueAt < liveDueAt) { live = candidate; liveDueAt = dueAt; }
+    } else if (dueAt < recoveryDueAt) {
+      recovery = candidate;
+      recoveryDueAt = dueAt;
+    }
+  }
+
+  let job: Job | null = null;
+  if (live && recovery) {
+    if (state.liveServed >= state.liveQuota) {
+      job = recovery;
+      state.liveServed = 0;
+    } else {
+      job = live;
+      state.liveServed += 1;
+    }
+  } else {
+    job = live || recovery;
+    if (job && live) state.liveServed += 1;
+  }
+
+  return { job, nextWakeAt };
+}
+
+function armDispatch(state: OtelSpoolConsumerState, delayMs: number): void {
+  if (state.dispatchTimer) clearTimeout(state.dispatchTimer);
+  state.dispatchTimer = setTimeout(() => {
+    state.dispatchTimer = undefined;
+    void pumpDispatch(state);
+  }, Math.max(1, Math.min(delayMs, state.tickMs)));
+}
+
+/**
+ * 中央调度泵:全局只有这一个入口驱动聚合。
+ *
+ * 旧实现是每个 session 各自持有 timer,聚合在途时全体按 50ms 重排——backlog 上千时
+ * 就是每 50ms 上千次无效唤醒,且先到先得没有公平性。现在唤醒次数是 O(1)/次调度。
+ */
+async function pumpDispatch(state: OtelSpoolConsumerState): Promise<void> {
+  if (state.dispatching) return;
+
+  const now = Date.now();
+  const gate = globalGateRemaining(state, now);
+  if (gate > 0) {
+    armDispatch(state, gate);
     return;
   }
 
-  const startedAt = Date.now();
-  state.aggInFlight = true;
+  const { job, nextWakeAt } = pickJob(state, now);
+  if (!job) {
+    if (Number.isFinite(nextWakeAt)) armDispatch(state, Math.max(1, nextWakeAt - now));
+    return;
+  }
+
+  state.dispatching = true;
+  state.activeSessionId = job.session.sessionId;
+  state.activeStartedAt = now;
+  const startedAt = now;
+  const { session, mode } = job;
+
+  if (mode === 'evaluated') {
+    session.evaluatedDueAt = undefined;
+    session.maxDueAt = undefined;
+    session.fastDueAt = undefined;
+  } else {
+    session.fastDueAt = undefined;
+  }
+
   try {
-    for (const sourceId of Array.from(session.sourceIds)) {
-      const source = state.sourcesById.get(sourceId);
-      if (!source) continue;
-      try {
-        const result = source.aggregate(sessionId);
-        if (result.record) {
-          await state.saveExecution({
-            ...result.record,
-            skip_evaluation: source.defaultSkipEvaluation(),
-          });
-        }
-        session.failures = 0;
-        markSourceDone(state, sessionId, sourceId);
-      } catch (err) {
-        handleSessionFailure(state, sessionId, err);
-      }
-    }
+    await runJob(state, session, mode);
+  } catch (err) {
+    handleSessionFailure(state, session.sessionId, err);
   } finally {
-    state.aggInFlight = false;
     finishAggregateRound(state, session, startedAt);
+    state.dispatching = false;
+    state.activeSessionId = undefined;
+    state.activeStartedAt = undefined;
+    evictIdleSession(state, session);
+    armDispatch(state, 1);
   }
 }
 
-async function saveEvaluated(state: OtelSpoolConsumerState, sessionId: string): Promise<void> {
-  const session = state.sessions.get(sessionId);
-  if (!session || session.parked) return;
-
-  const cooldownMs = aggregateCooldownRemaining(state, session);
-  const deferMs = state.aggInFlight ? Math.max(cooldownMs, 50) : cooldownMs;
-  if (deferMs > 0) {
-    if (!session.longTimer) {
-      session.longTimer = setTimeout(() => {
-        session.longTimer = undefined;
-        void saveEvaluated(state, sessionId);
-      }, deferMs);
-    }
-    return;
+/** 取聚合结果:数据指纹没变就复用 fast 阶段的快照,避免同一份数据聚合两次。 */
+function aggregateForSession(
+  state: OtelSpoolConsumerState,
+  session: SessionState,
+  source: SpoolSource,
+): SpoolAggregationResult {
+  const signature = source.statSession?.(session.sessionId);
+  if (signature !== undefined && session.lastAggregate
+    && session.lastAggregate.sourceId === source.id
+    && session.lastAggregate.signature === signature) {
+    return session.lastAggregate.result;
   }
+  const result = source.aggregate(session.sessionId);
+  if (signature !== undefined) {
+    session.lastAggregate = { sourceId: source.id, signature, result };
+  }
+  return result;
+}
 
-  const startedAt = Date.now();
-  state.aggInFlight = true;
-  try {
-    for (const sourceId of Array.from(session.sourceIds)) {
-      const source = state.sourcesById.get(sourceId);
-      if (!source) continue;
-      try {
-        const result = source.aggregate(sessionId);
-        if (!result.record) continue;
+async function runJob(state: OtelSpoolConsumerState, session: SessionState, mode: 'fast' | 'evaluated'): Promise<void> {
+  for (const sourceId of Array.from(session.sourceIds)) {
+    const source = state.sourcesById.get(sourceId);
+    if (!source) continue;
+    try {
+      const result = aggregateForSession(state, session, source);
+      if (!result.record) {
+        markSourceDone(state, session.sessionId, sourceId);
+        continue;
+      }
+
+      if (mode === 'fast') {
+        await state.saveExecution({
+          ...result.record,
+          skip_evaluation: source.defaultSkipEvaluation(),
+        });
+        session.failures = 0;
+        markSourceDone(state, session.sessionId, sourceId);
+      } else {
         const saved = await state.saveExecution({
           ...result.record,
           skip_evaluation: false,
           skip_internal_judgment: true,
           force_judgment: true,
         });
-        const executionId = saved.record.upload_id || saved.record.task_id;
-        if (executionId && result.record.trace_completed_at && result.record.final_result) {
-          await state.scheduleResultEvaluation(executionId, result.record.user);
-        }
         session.failures = 0;
-      } catch (err) {
-        handleSessionFailure(state, sessionId, err);
+        // 存量积压场景下 fast 和 evaluated 会同时到点，dispatcher 直接跑 evaluated 跳过 fast，
+        // 所以这里必须也推进文件归属簿记 —— 否则 pendingFiles 永远不减、checkpoint 游标永不推进，
+        // 那些 spool 文件每次重启都要重读，retention 也永远归档不掉（实测 backlog 卡在 520 不动）。
+        markSourceDone(state, session.sessionId, sourceId);
+        session.lastAggregate = undefined;
+
       }
+    } catch (err) {
+      handleSessionFailure(state, session.sessionId, err);
     }
-  } finally {
-    state.aggInFlight = false;
-    finishAggregateRound(state, session, startedAt);
   }
+}
+
+/**
+ * 分层列文件:当天目录每 tick 扫,历史目录每 historyScanMs 扫一次。
+ * 线上有几千个会话分片时,每秒全量递归遍历本身就是常态 CPU 开销。
+ */
+function sourceFiles(state: OtelSpoolConsumerState, source: SpoolSource): string[] {
+  const now = Date.now();
+  const cached = state.fileLists.get(source.id);
+  if (!cached || now - cached.fullScanAt >= state.historyScanMs || !source.listFilesForDay) {
+    const files = source.listFiles();
+    state.fileLists.set(source.id, { files, fullScanAt: now });
+    return files;
+  }
+
+  const day = currentSpoolDay();
+  const dayPrefix = path.join(source.spoolDir(), day) + path.sep;
+  const historical = cached.files.filter((file) => !file.startsWith(dayPrefix));
+  const files = [...historical, ...source.listFilesForDay(day)].sort();
+  state.fileLists.set(source.id, { files, fullScanAt: cached.fullScanAt });
+  return files;
 }
 
 export async function runOtelSpoolConsumerTick(state: OtelSpoolConsumerState): Promise<void> {
@@ -379,7 +548,7 @@ export async function runOtelSpoolConsumerTick(state: OtelSpoolConsumerState): P
   try {
     for (const source of state.sources) {
       const spoolDir = source.spoolDir();
-      const files = source.listFiles();
+      const files = sourceFiles(state, source);
       for (const file of files) {
         const relPath = toCheckpointRelPath(spoolDir, file);
         const fileKey = `${source.id}:${relPath}`;
@@ -443,6 +612,7 @@ export async function runOtelSpoolConsumerTick(state: OtelSpoolConsumerState): P
             source: source.id,
             archived: retention.archived,
           });
+          state.fileLists.delete(source.id);
         }
       } catch (err) {
         state.warn('[OTelConsumer] retention failed', {
@@ -455,16 +625,33 @@ export async function runOtelSpoolConsumerTick(state: OtelSpoolConsumerState): P
     state.ticking = false;
   }
 
+  void pumpDispatch(state);
+
   const parked = [...state.sessions.values()].filter((session) => session.parked).length;
   const failed = [...state.sessions.values()].filter((session) => session.failures > 0).length;
   if (discovered || state.pendingFiles.size || parked || failed || parseErrors) {
     state.log('[OTelConsumer] tick', {
       discovered,
       backlog: state.pendingFiles.size,
+      sessions: state.sessions.size,
+      draining: state.draining,
       parked,
       failed,
       parseErrors,
     });
+  }
+
+  // 卡住告警:同一个在途任务每分钟最多一条,不按 tick 刷屏。
+  if (state.dispatching && state.activeStartedAt) {
+    const age = Date.now() - state.activeStartedAt;
+    if (age >= state.stallMs && (!state.lastStallWarnAt || Date.now() - state.lastStallWarnAt >= 60000)) {
+      state.lastStallWarnAt = Date.now();
+      state.warn('[OTelConsumer] stalled dispatch', {
+        sessionId: state.activeSessionId,
+        ageMs: age,
+        backlog: state.pendingFiles.size,
+      });
+    }
   }
 }
 
@@ -497,7 +684,7 @@ export function stopOtelSpoolConsumer(): void {
   const state = globalThis.__otelSpoolConsumer;
   if (!state) return;
   if (state.interval) clearInterval(state.interval);
-  for (const session of state.sessions.values()) clearSessionTimers(session);
+  if (state.dispatchTimer) clearTimeout(state.dispatchTimer);
   globalThis.__otelSpoolConsumer = undefined;
 }
 

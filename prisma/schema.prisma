@@ -801,12 +801,16 @@ model SessionInfraLink {
 }
 
 // 已注册的「AI 推理 infra 源」（任意暴露 Prometheus /metrics 的 vLLM/OpenAI 兼容服务）。
-// endpoint = scheme://host:port，既是展示身份也是 session↔infra 的关联键。
+// endpoint = 源身份键，既是展示身份也是 session↔infra 的关联键。裸机源是 scheme://host:port；
+// 网关托管的源（如 https://gw/spark/qwen35）保留实例路径，见 normalizeEndpoint。
 model InfraSource {
   id               String   @id @default(cuid())
   endpoint         String   @unique
   scrapeUrl        String
   kind             String   @default("pull") // pull | push
+  // 拉取时附加的鉴权 header，JSON 对象字符串如 {"Authorization":"bearer xxx"}。
+  // 仅 pull 模式使用；含明文凭证，GET 接口必须脱敏后再返回（见 lib/infra/auth-headers.ts）。
+  authHeaders      String?
   model            String?
   hardwareName     String?
   memBandwidthGBs  Float?
@@ -865,7 +869,8 @@ model Experiment {
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
-  cases ExperimentCase[]
+  cases    ExperimentCase[]
+  comments ExperimentEvalComment[]
 
   @@index([user, createdAt])
   @@index([user, scope, skillName])
@@ -893,7 +898,8 @@ model ExperimentCase {
 }
 
 /// 一行 = 一个 case × 一个评估器，按统一契约落库（见 src/lib/evaluators/eval-output.ts）：
-/// score（0-100 可选，无分不入均分）+ pointsJson（评分点）+ evidenceJson（{md}|{json}）。
+/// verdict/summary（结论，卡头默认展示）+ score（0-100 可选，无分不入均分）
+/// + pointsJson（评分点）+ evidenceJson（{md}|{json}）。
 /// 评估失败（status=failed）由平台调用层记录（errorMessage），支持按行单项重评。
 model ExperimentEvalResult {
   id           String         @id @default(cuid())
@@ -903,9 +909,20 @@ model ExperimentEvalResult {
   evaluatorId  String
   /// pending | running | done | failed
   status       String         @default("pending")
+  /// 结论判定：pass | warn | fail。评估器未上报时前端按 score 派生（deriveVerdict），
+  /// 故此处为空不代表"没有结论"——不落派生值，口径调整后老数据自动跟随。
+  verdict      String?
+  /// 一句话结论（评估器上报，≤200 字），呈现层的主信息；评分点/证据是它的展开明细。
+  summary      String?
   score        Float?
   pointsJson   String?
   evidenceJson String?
+  /// ── 人工修正分（分层存储：机器分 score 只读保留，聚合取 humanScore ?? score）──
+  /// 机器分与人工分的差值是校准评估器的依据，故绝不就地覆盖 score。
+  humanScore   Float?
+  humanReason  String?
+  humanBy      String?
+  humanAt      DateTime?
   errorMessage String?
   attempts     Int            @default(0)
   durationMs   Int?
@@ -914,4 +931,24 @@ model ExperimentEvalResult {
 
   @@unique([caseId, evaluatorId])
   @@index([experimentId, evaluatorId])
+}
+
+/// 评测评论：对一次评测结果的意见/建议，三粒度共用一张表——
+/// 只有 experimentId = 实验级；带 caseId = 该 case 级；带 resultId = 该评估器结果行级。
+/// 与 ExperimentEvalResult.humanReason 分开：那个是"改分必填的结构化理由"，
+/// 这里是自由的多条讨论。caseId/resultId 不设 FK（实验级联删除已覆盖清理）。
+model ExperimentEvalComment {
+  id           String     @id @default(cuid())
+  experimentId String
+  experiment   Experiment @relation(fields: [experimentId], references: [id], onDelete: Cascade)
+  caseId       String?
+  resultId     String?
+  /// 评论作者（= 工作区用户名）
+  user         String
+  body         String
+  createdAt    DateTime   @default(now())
+
+  @@index([experimentId, createdAt])
+  @@index([caseId, createdAt])
+  @@index([resultId, createdAt])
 }

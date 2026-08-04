@@ -16,7 +16,7 @@ test('AC-006 1w → 恰 7 个按天桶', () => {
     const traces: TraceLite[] = [];
     for (let d = 0; d < 7; d++) {
         for (let k = 0; k < 3; k++) {
-            traces.push(trace(new Date(now.getTime() - d * 86_400_000 - k * 3_600_000), { latency: 1000, tokens: 500, stepCount: 5, isAnswerCorrect: true }));
+            traces.push(trace(new Date(now.getTime() - d * 86_400_000 - k * 3_600_000), { latency: 1000, tokens: 500, stepCount: 5 }));
         }
     }
     const { granularity, buckets } = bucketTrends({ traces, window: '1w', from, to: now, policy: DEFAULT_POLICY });
@@ -39,7 +39,12 @@ test('AC-006 1d → 恰 24 个按小时桶', () => {
 test('BR-009 连续量含 p50/p90/p95，二值含比率', () => {
     const now = new Date('2026-06-09T12:00:00Z');
     const from = new Date(now.getTime() - 86_400_000);
-    const traces = Array.from({ length: 20 }, (_, i) => trace(new Date(now.getTime() - 1_000_000), { latency: (i + 1) * 1000, tokens: 100, stepCount: 2, isAnswerCorrect: i % 2 === 0 }));
+    const traces = Array.from({ length: 20 }, (_, i) => trace(new Date(now.getTime() - 1_000_000), {
+        latency: (i + 1) * 1000,
+        tokens: 100,
+        stepCount: 2,
+        toolCallErrorCount: i % 2,
+    }));
     const { buckets } = bucketTrends({ traces, window: '1d', from, to: now, policy: DEFAULT_POLICY });
     const hit = buckets.find((b) => b.n_traces > 0);
     assert.ok(hit, '应有非空桶');

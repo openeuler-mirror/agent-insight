@@ -36,6 +36,17 @@ const PRESET_META: Record<string, EvaluatorMeta> = {
 
 const DEFAULT_META: EvaluatorMeta = { category: 'res', requires: [] };
 
+/**
+ * 已登记元数据的预置 id。
+ *
+ * getEvaluatorMeta 对未登记的预置 id 会静默回退 DEFAULT_META（category='res'、无门控），
+ * 漏登记不会报错、只会让卡片归错类目并绕过 ④ 步门控——所以需要一个能从外部查证的出口，
+ * 供 test/preset-registry-consistency.test.ts 断言"每张预置卡都登记了元数据"。
+ */
+export function hasPresetMeta(id: string): boolean {
+  return Object.prototype.hasOwnProperty.call(PRESET_META, id);
+}
+
 /** 自建 LLM 评估器：requires 由提示词占位符推导。 */
 function deriveCustomRequires(card: EvaluatorCard): EvaluatorRequirement[] {
   const text = `${card.llmConfig?.systemPrompt ?? ''}\n${card.llmConfig?.userPrompt ?? ''}`;

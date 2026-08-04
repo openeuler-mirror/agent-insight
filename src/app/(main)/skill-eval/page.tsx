@@ -20,7 +20,7 @@ import { NewEvaluationBatchDialog, type NewBatchCreated } from '@/components/eva
 import { formatPValueLabel, welchTTestPValue } from '@/lib/skill-analysis/ab-significance';
 import { BatchEvaluation } from './_batch/page';
 import { GrayscaleEvaluation } from './grayscale/page';
-import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
+import { DEFAULT_SELECTED_PRESET_IDS, presetEvaluators } from '@/lib/evaluators/preset-evaluators';
 import { ConfigMultiSelect } from '@/components/skills/ConfigMultiSelect';
 import { ExecutionRecordsTable, type EvalRecordRow } from '@/components/eval/ExecutionRecordsTable';
 import { EvalTaskPicker } from '@/components/eval/EvalTaskPicker';
@@ -700,8 +700,10 @@ function SkillAnalysisPage() {
     const [caseDatasets, setCaseDatasets] = useState<Array<{ id: string; name: string; cases?: unknown[] }>>([]);
     const [caseUserEvaluators, setCaseUserEvaluators] = useState<Array<{ id: string; name: string }>>([]);
     const [caseDatasetIds, setCaseDatasetIds] = useState<string[]>([]);
+    // 默认只勾任务完成度 + 轨迹质量；下拉框仍列出全部 ready，用户可自行加勾。
+    // 别改回按 status 派生——见 DEFAULT_SELECTED_PRESET_IDS 的注释。
     const [caseEvaluatorIds, setCaseEvaluatorIds] = useState<string[]>(
-        () => presetEvaluators.filter(e => e.status === 'ready').map(e => e.id),
+        () => [...DEFAULT_SELECTED_PRESET_IDS],
     );
     const selectedSkill = useMemo(
         () => skills.find(s => s.id === selectedSkillId) || null,

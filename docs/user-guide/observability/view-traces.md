@@ -44,7 +44,7 @@ description: "查看、筛选并分析一次执行的完整 Trace"
 
 筛选区用于快速收敛问题范围，截图中可见的筛选维度包括：
 
-- **Agent 范围**：区分只看主 Agent、只看子 Agent，或同时查看两者
+- **Agent 范围**：区分只看主 Agent、只看子 Agent，或同时查看两者；该范围是硬筛选，与 Skill 等内容筛选组合时也不会混入其它层级
 - **Agent**：按具体执行主体过滤，适合定位到某个注册 Agent
 - **Skill**：按 Skill 触发情况收敛样本
 - **业务标签**：按用户维护的业务标签收敛样本，例如回归测试、P0、线上复现
@@ -67,7 +67,7 @@ description: "查看、筛选并分析一次执行的完整 Trace"
 - **用户标签**：用户维护的版本标签和业务标签，可在列表内直接添加或移除
 - **系统标签**：系统从 Trace 派生的只读标签，例如 Multi-Agent、Skills、SUB 和框架名，默认隐藏
 - **任务内容**：本次执行的任务摘要或问题内容
-- **执行时间**：发生时间，用于回溯事件窗口
+- **执行时间**：以浏览器本地时区显示完整发生时间（`YYYY-MM-DD HH:mm:ss`），用于回溯事件窗口；悬停可查看相对时间
 - **操作**：继续进入详情、分析或评测流程
 
 其中，**执行状态**只表示 Trace 生命周期：平台收到明确完成信号后显示成功；尚未收到完成信号时显示运行中。它不等同于评测状态；部分接入会在有最终回答且能从 Trace 时间戳推断完成点时补齐完成时间，例如 Hermes 可使用根 span/交互时间，OpenCode 可使用 `session.idle`；Hermes/OpenCode 的旧记录或漏写完成信号时还会用 60 秒静默窗口兜底，但不会只凭回答文本判定完成。
@@ -76,13 +76,13 @@ description: "查看、筛选并分析一次执行的完整 Trace"
 
 #### 4. 标签与列设置
 
-Trace 列表支持两类标签列：**用户标签**默认显示，用于维护版本标签和业务标签；**系统标签**默认隐藏，只展示由数据派生的只读事实。点击用户标签列中的带加号标签入口可以打开标签编辑器，按“版本 / 业务”分组勾选已有标签，也可以在弹层中快速新建标签并立即绑定到当前 Trace；弹层右上角提供关闭按钮。
+Trace 列表支持两类标签列：**用户标签**默认显示，用于维护版本标签和业务标签；**系统标签**默认隐藏，只展示由数据派生的只读事实。点击用户标签列中的带加号标签入口可以打开标签编辑器：标签先按“版本 / 业务”分区，再按名称中首个 `_` 或 `-` 之前的前缀逐行聚类，不含分隔符的标签进入“未分组”；每行标签横向排列并在空间不足时自动换行。点击标签即可添加或移除，也可以在弹层中快速新建标签并立即绑定到当前 Trace；弹层右上角提供关闭按钮。
 
-右上角的列设置菜单可以显示或隐藏 Trace ID、Agent、状态、用户标签、系统标签、任务内容、Token、时间和操作列；列显隐与列宽会保存在浏览器本地。隐藏用户标签列后，操作列不再展示标签编辑入口；需要继续打标时，请先在列设置中重新显示用户标签列。
+右上角的列设置菜单可以显示或隐藏 Trace ID、Agent、状态、用户标签、系统标签、任务内容、Token、时间和操作列；列显隐与列宽会保存在浏览器本地。拖动表头分隔线时，被调整列会沿拖动方向伸缩，空间不足时表格支持横向滚动。用户标签单元格固定保留打标加号，并根据当前列宽尽可能展示更多标签；只有剩余空间不足时才以 `+N` 折叠，较长名称会显示省略号，完整名称可通过悬停查看。隐藏用户标签列后，操作列不再展示标签编辑入口；需要继续打标时，请先在列设置中重新显示用户标签列。
 
 #### 5. 版本管理与版本分析
 
-版本标签和业务标签在「配置 / 版本管理」中维护。版本标签用于版本分析的分组维度；业务标签用于链路追踪列表筛选。两类标签都可以从 Trace 列表的用户标签列绑定到具体 Trace。编辑标签会同步影响链路追踪、版本分析和业务筛选中的展示，不会丢失已绑定 Trace；删除标签是硬删除，会移除对应 Trace 绑定，其中版本标签会影响版本分析，业务标签会影响筛选条件。
+版本标签和业务标签在「配置 / 版本管理」中维护。版本标签用于版本分析的分组维度；业务标签用于链路追踪列表筛选。管理页分别按标签名称中首个 `_` 或 `-` 之前的前缀聚类为卡片，不含分隔符的标签进入“未分组”；卡片汇总标签数与 Trace 绑定数，并支持预填同前缀快速新建。两类标签都可以从 Trace 列表的用户标签列绑定到具体 Trace。编辑标签会同步影响链路追踪、版本分析和业务筛选中的展示，不会丢失已绑定 Trace；删除标签是硬删除，会移除对应 Trace 绑定，其中版本标签会影响版本分析，业务标签会影响筛选条件。
 
 版本分析位于「观测 / 版本分析」。它只统计 root Trace，只消费版本标签；准确率来自 Execution.answerScore，运行成功率由 Trace 完成状态派生，不是独立存储的 successRate 字段。页面顶端会展示当前 Agent、框架和时间窗口下的版本总览；时间窗口是全局参数，会同时影响顶端统计、版本对比和版本详情。图表默认查看「平均 Token」，指标切换位于图表标题栏右侧；Token 会按 k/M 紧凑展示，时延会按 ms/s/m/h 展示；p95 时延表示 95% 的 Trace 耗时不超过该值，用于观察长尾慢请求。版本对比里的单问题下钻只影响对比图和对比表，不改变顶端总览。页面支持按当前筛选导出聚合数据，版本分析内按业务标签二次过滤仍作为未来优化点保留。
 
@@ -108,7 +108,11 @@ Trace 列表支持两类标签列：**用户标签**默认显示，用于维护�
 
 当 Trace 较长时，页面会先加载节点结构、时间和统计信息；选中具体节点后，再按需加载该节点的完整 message、reasoning、工具输入和工具输出。按需加载只改变加载时机，不会截断或丢弃 Trace 原文；保存 Trace 时仍会导出完整 Session。
 
-Langfuse / LangGraph Trace 继续使用原有的 Agent Trace 界面，并把根请求中的用户问题和完整 observation 投影为其中的 USER、AGENT、CHAIN、LLM 和 TOOL 行。CHAIN 保留业务步骤的父子关系和展开层级，不再混入 TASK；点击后可在右侧查看输入和输出。平台保留该 trace 中每个 span 的名称、类型、原始父节点、状态、耗时和 token；`summarizer`、业务检索等有正文的节点即使耗时为 0 也会显示。`LangGraph`、`model`、`tools` 等有子节点的重复包装层默认折叠，其可见子节点会提升到最近的业务父节点；没有子节点但包含独立 input/output 的包装节点仍会显示。该展示规则只作用于 Langfuse 数据，不改变其他框架的 Trace。
+任务完成度、轨迹质量等预置评估器生成的 `direct-llm` Trace，会以本次评估模型请求发出前和响应返回后的时间作为起止点。根 Agent、LLM Span、Session 和列表耗时使用同一次请求的时间窗口，因此新产生的评估 Trace 不会再因写库时间代替模型调用时间而显示为 `0ms`。修复前已经保存且缺少原始起止时间的历史 Trace 无法可靠反推真实耗时，不会自动补算。
+
+Langfuse / LangGraph Trace 继续使用原有的 Agent Trace 界面，并把根请求中的用户问题和完整 observation 投影为其中的 USER、AGENT、CHAIN、LLM 和 TOOL 行。CHAIN 保留业务步骤的父子关系和展开层级，不再混入 TASK；点击后可在右侧查看输入和输出。子 Agent 行和右侧“子 Agent”卡片上的 **Trace** 按钮可直接进入该子 Agent 的独立执行详情；目标执行不存在时，页面会提示未找到，而不会继续停留在父 Trace 造成无响应的错觉。平台保留该 trace 中每个 span 的名称、类型、原始父节点、状态、耗时和 token；`summarizer`、业务检索等有正文的节点即使耗时为 0 也会显示。`LangGraph`、`model`、`tools` 等有子节点的重复包装层默认折叠，其可见子节点会提升到最近的业务父节点；没有子节点但包含独立 input/output 的包装节点仍会显示。该展示规则只作用于 Langfuse 数据，不改变其他框架的 Trace。
+
+Langfuse 按已结束 span 增量上报时，子 Agent 可能早于应用根 span 到达。平台会等待可确认的顶层 span 后再生成主 Trace，避免把 `intent-agent` 等子 Agent 临时显示为主 Agent。
 
 ### 详情页主要区域
 
@@ -242,8 +246,8 @@ Task Spawn 表示当前执行过程中派生出的新任务数量。在多 Agent
 
 > **Note**
 > 通过 OTel `logs` / `traces` 端点接入的数据是异步可见的：端点返回成功表示平台已受理并写入本地 spool（`traces` 支持 OTLP JSON 与 protobuf），后台消费者会在短暂 debounce 后落库，随后在会话空闲后再补充结果评估。因此刚发完上报后，列表页可能需要等待几秒才出现新 Trace，评估分数可能再稍后更新。
-> Claude Code 接入需要通过安装脚本生成的 OTel wrapper 开启 `OTEL_LOG_TOOL_DETAILS=1`，并将 `OTEL_LOG_RAW_API_BODIES` 配成 `file:<dir>`。`OTEL_LOG_RAW_API_BODIES=1` 的 inline body 会被 Claude Code 截断到 60 KB，长会话里可能拿不到工具结果正文；`OTEL_LOG_TOOL_CONTENT=1` 只影响 tracing span events，需要启用 traces。
-> CodeAgent 接入后重启终端，继续使用原来的 `codeagent` 命令即可；setup 安装的同名函数会自动为该进程注入 OTel 配置。CodeAgent Logs 异步写入 `~/.agent-insight/otel_data/codeagent` 并生成 `framework=codeagent` 的 Trace；其 Traces/Metrics 请求会收到成功响应，但平台不会保存这两类信号。
+> Claude Code 接入需要通过安装脚本生成的 OTel wrapper 开启 `OTEL_LOG_TOOL_DETAILS=1`，并将 `OTEL_LOG_RAW_API_BODIES` 配成 `file:<dir>`。安装脚本还会注册仅供 Claude Code 使用的上下文补传器：主 Agent 每轮结束、子 Agent 结束或本轮 API 失败后会在后台补传系统提示词、hook 上下文、工具输出和子 Agent 映射，不需要执行 `/exit`；`SessionEnd` 仅作为最终兜底。系统提示词会分别归到 root 和对应子 Agent；Trace 列表使用首条真实用户输入，Claude Code 自己的标题生成、输入建议、离开摘要和 Agent 摘要不会显示为业务对话。高频 hook 会先按 Session 合并本地任务并共用一个上传 worker；这能避免 30 个 hook 事件/s 重复拉起进程，但 30 个全新完整 Session/s 是否能实时清空仍取决于网络和服务端容量，出现积压时任务会保留在本地队列等待后续重试。`OTEL_LOG_RAW_API_BODIES=1` 的 inline body 会被 Claude Code 截断到 60 KB，长会话里可能拿不到工具结果正文；`OTEL_LOG_TOOL_CONTENT=1` 只影响 tracing span events，需要启用 traces。
+> CodeAgent 接入后重启终端或加载对应环境脚本，继续使用原来的 `codeagent` 命令即可。Unix setup 安装 `~/.agent-insight/bin/codeagent`，Windows setup 安装 `%USERPROFILE%\.agent-insight\bin\codeagent.cmd` 和 `codeagent-wrapper.ps1` 并持久化用户级 PATH；继承该 PATH 的终端及 Shell、PowerShell、CMD、Python、Node 子脚本会自动注入 OTel 配置。cron、systemd、容器、Windows 服务等独立环境需要显式配置包装器目录。CodeAgent Logs 异步写入 `~/.agent-insight/otel_data/codeagent` 并生成 `framework=codeagent` 的 Trace；其 Traces/Metrics 请求会收到成功响应，但平台不会保存这两类信号。
 
 ### 场景二：排查失败问题
 

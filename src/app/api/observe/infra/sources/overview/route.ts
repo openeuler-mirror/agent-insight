@@ -2,6 +2,7 @@
 
 import { NextResponse } from 'next/server';
 
+import { redactSource } from '@/lib/infra/auth-headers';
 import { aggregate, diagnose } from '@/lib/infra/diagnose';
 import { latestSamples, listSourceModels } from '@/lib/infra/store';
 import { prismaRaw } from '@/lib/storage/prisma';
@@ -30,7 +31,7 @@ export async function GET() {
       const lastMs = samples.length ? samples[samples.length - 1].tsMs : null;
       const stalePush = s.kind === 'push' && (lastMs == null || Date.now() - lastMs > 60_000);
       if (samples.length === 0) {
-        return { source: s, hasData: false, lastSampleMs: null, verdict: null, bottleneck: null, slis: null, models, primaryModel, stalePush };
+        return { source: redactSource(s), hasData: false, lastSampleMs: null, verdict: null, bottleneck: null, slis: null, models, primaryModel, stalePush };
       }
       const hw: HardwareProfile | undefined = s.memBandwidthGBs != null
         ? { name: s.hardwareName ?? 'custom', memBandwidthGBs: s.memBandwidthGBs }
@@ -38,7 +39,7 @@ export async function GET() {
       const res = diagnose(aggregate(samples), hw);
       const a = res.inputs;
       return {
-        source: s,
+        source: redactSource(s),
         hasData: true,
         models,
         primaryModel,

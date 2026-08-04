@@ -339,6 +339,162 @@ test('CodeAgent Skill and Agent fields map to skill ownership and a child trace'
   assert.deepEqual(record.invokedSkills, [{ name: 'otel-smoke-skill', version: 2 }]);
 });
 
+test('CodeAgent aggregation hides automatic memory runs without removing real subagents', () => {
+  const sessionId = 'codeagent-memory-filter';
+  const childId = 'codeagent-real-child';
+  const memoryRunId = 'codeagent-extract-memories';
+  const dreamRunId = 'codeagent-auto-dream';
+  const root = {
+    'execution.agent_run_id': sessionId,
+    'execution.agent_id': 'main',
+    agent_name: 'main',
+  };
+  const child = {
+    'execution.agent_run_id': childId,
+    'execution.parent_agent_run_id': sessionId,
+    'execution.agent_id': 'explore',
+    agent_name: 'Explore',
+  };
+  const background = (runId: string) => ({
+    'execution.agent_run_id': runId,
+    'execution.parent_agent_run_id': sessionId,
+    'execution.agent_id': 'subagent',
+  });
+  const events = [
+    event(sessionId, 'user_prompt', 1, { ...root, prompt: 'inspect the project' }),
+    event(sessionId, 'api_request', 2, { ...root, inference_id: 'root-1' }),
+    event(sessionId, 'api_response', 3, {
+      ...root,
+      inference_id: 'root-1',
+      response_text: '',
+      input_token_count: 10,
+      output_token_count: 2,
+      total_token_count: 12,
+    }),
+    event(sessionId, 'tool_request', 4, {
+      ...root,
+      inference_id: 'root-1',
+      tool_call_id: 'agent-1',
+      function_name: 'Agent',
+      function_args: JSON.stringify({ subagent_type: 'Explore', prompt: 'inspect' }),
+    }),
+    event(sessionId, 'agent.start', 5, child),
+    event(sessionId, 'api_request', 6, { ...child, inference_id: 'child-1' }),
+    event(sessionId, 'api_response', 7, {
+      ...child,
+      inference_id: 'child-1',
+      response_text: 'child result',
+      input_token_count: 20,
+      output_token_count: 3,
+      total_token_count: 23,
+    }),
+    event(sessionId, 'tool_response', 8, {
+      ...root,
+      tool_call_id: 'agent-1',
+      response_body: JSON.stringify({ agentId: childId, content: 'child result' }),
+      result_status: 'completed',
+    }),
+    event(sessionId, 'api_request', 9, { ...root, inference_id: 'root-2' }),
+    event(sessionId, 'api_response', 10, {
+      ...root,
+      inference_id: 'root-2',
+      response_text: 'root final',
+      input_token_count: 4,
+      output_token_count: 1,
+      total_token_count: 5,
+    }),
+    event(sessionId, 'api_request', 11, {
+      ...background(memoryRunId),
+      query_source: 'extract_memories',
+      inference_id: 'memory-1',
+    }),
+    event(sessionId, 'api_response', 12, {
+      ...background(memoryRunId),
+      inference_id: 'memory-1',
+      response_text: '',
+      input_token_count: 100,
+      output_token_count: 10,
+      total_token_count: 110,
+    }),
+    event(sessionId, 'tool_request', 13, {
+      ...background(memoryRunId),
+      inference_id: 'memory-1',
+      tool_call_id: 'memory-write',
+      function_name: 'Write',
+      function_args: JSON.stringify({ file_path: '~/.cac/memory/MEMORY.md' }),
+    }),
+    event(sessionId, 'tool_response', 14, {
+      ...background(memoryRunId),
+      tool_call_id: 'memory-write',
+      response_body: 'memory saved',
+      result_status: 'completed',
+    }),
+    event(sessionId, 'api_request', 15, {
+      ...background(dreamRunId),
+      query_source: 'auto_dream',
+      inference_id: 'dream-1',
+    }),
+    event(sessionId, 'api_response', 16, {
+      ...background(dreamRunId),
+      inference_id: 'dream-1',
+      response_text: 'dream complete',
+      input_token_count: 80,
+      output_token_count: 8,
+      total_token_count: 88,
+    }),
+    event(sessionId, 'tool_request', 17, {
+      ...background(dreamRunId),
+      inference_id: 'dream-1',
+      tool_call_id: 'dream-read',
+      function_name: 'Read',
+      function_args: JSON.stringify({ file_path: '~/.cac/memory/MEMORY.md' }),
+    }),
+    event(sessionId, 'tool_response', 18, {
+      ...background(dreamRunId),
+      tool_call_id: 'dream-read',
+      response_body: 'memory content',
+      result_status: 'completed',
+    }),
+  ];
+
+  const record = aggregateCodeAgentOtelEvents(sessionId, events);
+  assert.ok(record);
+  assert.equal(record.final_result, 'root final');
+  assert.equal(record.tokens, 40);
+  assert.equal(record.llm_call_count, 3);
+  assert.equal(record.tool_call_count, 1);
+  assert.equal(record.trace_completed_at, '2026-07-24T01:00:10.000Z');
+  assert.deepEqual(record.agents, ['main', 'Explore']);
+  assert.equal(JSON.stringify(record.interactions).includes('MEMORY.md'), false);
+  assert.ok(findNode(buildAgentCallTree(record.interactions as any[])!, childId));
+});
+
+test('CodeAgent background marker never removes the root run', () => {
+  const sessionId = 'codeagent-memory-root-guard';
+  const root = {
+    'execution.agent_run_id': sessionId,
+    'execution.agent_id': 'main',
+  };
+  const record = aggregateCodeAgentOtelEvents(sessionId, [
+    event(sessionId, 'api_request', 1, {
+      ...root,
+      query_source: 'extract_memories',
+      inference_id: 'root-1',
+      request_text: JSON.stringify([{ role: 'user', content: 'keep root' }]),
+    }),
+    event(sessionId, 'api_response', 2, {
+      ...root,
+      inference_id: 'root-1',
+      response_text: 'root stays visible',
+      total_token_count: 2,
+    }),
+  ]);
+
+  assert.ok(record);
+  assert.equal(record.final_result, 'root stays visible');
+  assert.equal(record.llm_call_count, 1);
+});
+
 test('CodeAgent spool source is registered ahead of generic OTel sources', () => {
   assert.deepEqual(
     listSources().map((source) => source.id),

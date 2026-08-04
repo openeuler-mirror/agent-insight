@@ -118,6 +118,44 @@ test('Langfuse trace snapshots merge monotonically by span id', () => {
   assert.equal(merged.find(node => node.spanId === 'child')?.durationMs, 2000);
 });
 
+test('Langfuse incremental snapshot waits for a real root instead of promoting intent-agent', () => {
+  const intentAgent = event({
+    spanId: 'intent',
+    parentSpanId: 'root-not-arrived-yet',
+    name: 'intent-agent',
+    kind: 'agent',
+    attributes: {},
+  });
+
+  assert.equal(
+    aggregateOtelTraceEvents('langfuse-session', [intentAgent]),
+    null,
+    'missing parent must not be persisted as a provisional root',
+  );
+
+  const root = event({
+    spanId: 'root-not-arrived-yet',
+    name: 'AssistantService.chat',
+    kind: 'chain',
+  });
+  const completed = aggregateOtelTraceEvents('langfuse-session', [intentAgent, root]);
+  assert.equal(completed?.agentName, 'AssistantService.chat');
+  assert.equal(completed?.subagentCount, 1);
+});
+
+test('Langfuse without the private app-root marker still accepts a top-level span', () => {
+  const root = event({
+    name: 'plain-langfuse-root',
+    parentSpanId: undefined,
+    attributes: {
+      'langfuse.observation.input': '{"query":"hello"}',
+      'langfuse.observation.output': '{"final_output":"done"}',
+    },
+  });
+
+  assert.equal(aggregateOtelTraceEvents('langfuse-session', [root])?.agentName, 'plain-langfuse-root');
+});
+
 test('Langfuse observations project into the existing agent tree without business-name rules', () => {
   const events = [
     event({
@@ -184,7 +222,7 @@ test('Langfuse observations project into the existing agent tree without busines
   ];
 
   const nodes = buildLangfuseTraceNodes(events);
-  const projected = buildLangfuseAgentTrace(nodes);
+  const projected = buildLangfuseAgentTrace(nodes, 'langfuse-session');
   const root = projected.tree!;
   assert.equal(root.agentName, 'workflow_root_unseen_before');
   assert.equal(root.id.includes(':'), false);
@@ -192,6 +230,7 @@ test('Langfuse observations project into the existing agent tree without busines
   assert.equal(root.events[0].summary, 'current user question');
   assert.equal(root.children.length, 1);
   assert.equal(root.children[0].agentName, 'arbitrary_worker_42');
+  assert.equal(root.children[0].sessionId, 'langfuse-session:subagent:worker');
   assert.equal(root.events.some(item => item.name === 'LangGraph'), false);
   assert.equal(root.events.some(item => item.spawnedChildId === root.children[0].id), true);
   assert.equal(root.events.find(item => item.spawnedChildId === root.children[0].id)?.treeHidden, true);
@@ -209,4 +248,10 @@ test('Langfuse observations project into the existing agent tree without busines
   assert.equal(childEvents[1].usage?.total, 19);
   assert.equal(projected.interactions.some(item => item.content?.includes('prompt body')), true);
   assert.equal(projected.interactions.some(item => item.content?.includes('response body')), true);
+
+  const record = aggregateOtelTraceEvents('langfuse-session', events);
+  const storedWorker = record?.langfuseTraceNodes?.find(node => node.spanId === 'worker');
+  assert.equal(storedWorker?.subagentSessionId, 'langfuse-session:subagent:worker');
+  const storedProjection = buildLangfuseAgentTrace(record?.langfuseTraceNodes || [], 'different-root');
+  assert.equal(storedProjection.tree?.children[0]?.sessionId, 'langfuse-session:subagent:worker');
 });

@@ -1,4 +1,7 @@
-import type { LangfuseTraceNode } from '@/lib/ingest/otel/adapters/langfuse-trace';
+import {
+    langfuseSubagentSessionId,
+    type LangfuseTraceNode,
+} from '@/lib/ingest/otel/adapters/langfuse-trace';
 import type {
     AgentEvent,
     AgentNode,
@@ -180,6 +183,7 @@ function finalizeNode(node: AgentNode, depth: number) {
  */
 export function buildLangfuseAgentTrace(
     sourceNodes: LangfuseTraceNode[],
+    rootSessionId?: string,
 ): LangfuseAgentTraceProjection {
     const nodes = sourceNodes
         .filter(node => node.visibility === 'visible')
@@ -196,9 +200,11 @@ export function buildLangfuseAgentTrace(
 
     for (const observation of nodes) {
         if (observation.kind !== 'agent' || agentBySpanId.has(observation.spanId)) continue;
+        const sessionId = observation.subagentSessionId
+            || (rootSessionId ? langfuseSubagentSessionId(rootSessionId, observation.spanId) : observation.spanId);
         agentBySpanId.set(
             observation.spanId,
-            makeAgentNode(`lf-agent-${observation.spanId}`, observation.name, observation.spanId, root.id),
+            makeAgentNode(`lf-agent-${observation.spanId}`, observation.name, sessionId, root.id),
         );
     }
 

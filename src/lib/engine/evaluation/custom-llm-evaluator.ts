@@ -15,6 +15,7 @@ import { runWithEphemeralOpencodeServer } from '@/lib/engine/skill-generation/op
 import { withBackgroundOpencodeSlot } from '@/lib/engine/general-agent/concurrency-limiter';
 import { buildEvaluatorPermissions } from '@/lib/engine/general-agent/workspace';
 import { getActiveConfig, type ModelConfig } from '@/lib/storage/server-config';
+import { isModelConnectionReady } from '@/lib/shared/model-connection';
 import {
     inferProviderFromBaseUrl,
     loadServerModelForUser,
@@ -389,7 +390,7 @@ export async function runCustomLlmEvaluator(
     }
 
     const config = await getActiveConfig(user);
-    if (!config || !config.apiKey) {
+    if (!config || !isModelConnectionReady(config)) {
         return {
             evaluatorId: bundle.id,
             evaluatorName: bundle.name,
@@ -398,7 +399,7 @@ export async function runCustomLlmEvaluator(
             rawResponse: '',
             model: bundle.config.model || '',
             durationMs: Date.now() - startedAt,
-            error: '未配置可用的评测模型，请到「配置」页设置 API Key',
+            error: '未配置可用的评测模型，请到「模型注册」页完善连接信息',
         };
     }
 
@@ -443,6 +444,7 @@ export async function runCustomLlmEvaluator(
             modelID: model,
             apiKey: config.apiKey,
             baseURL: config.baseUrl,
+            headers: config.headers,
         },
         system: buildSystemPrompt(bundle.config, input),
         // 用统一的评测器权限基线：read/bash/webfetch 显式 allow + question/plan_* deny + 写允许 /tmp/*。

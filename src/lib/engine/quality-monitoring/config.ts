@@ -15,8 +15,6 @@ export const DEFAULT_POLICY: ScoringPolicy = {
     bucket: { min: 20, max: 40 },
     // 重算响应时延目标（NFR-003）；待标定。
     slaRefreshMs: 3000,
-    // judge/轨迹采样率与预算（NFR-001）；待标定。
-    sample: { rate: 0.2, budget: 20 },
     // 成本归一基线（预算/SLO 固定上限）：超过即成本 0 分（"失控烧钱"）。待标定。
     costBudget: { latencyMs: 120_000, tokens: 200_000, steps: 60 },
 };
@@ -24,13 +22,12 @@ export const DEFAULT_POLICY: ScoringPolicy = {
 /**
  * 指标 → 维度 + 优先级 映射。
  * - 综合分按 priority 分层加权（P0/P1/P2）；
- * - 四维卡片按 dim 分组（result/process/cost/error）。
- * MVP 落地：P0 全部可由确定性信号 + 已落库 judge 给分；P1（轨迹细分）依赖 join，覆盖率随之标注；
+ * - 维度卡片按 dim 分组（process/cost/error）。
+ * MVP 落地：P0 由确定性信号给分；P1（轨迹细分）依赖 join，覆盖率随之标注；
  * P2（用户挫败）第二阶段补全（§8.3）。
  */
 export type MetricKey =
-    | 'faithfulness' | 'instructionAdherence' | 'answerQuality' | 'accuracy' // result / P0
-    | 'safety'                            // 综合分硬降级条件，不进结果子指标
+    | 'safety'                            // 综合分硬降级条件
     | 'toolCorrectness'                  // process / P0
     | 'cost'                             // cost / P0
     | 'planEfficiency'                   // process / P1（轨迹冗余/完整性派生）
@@ -38,13 +35,9 @@ export type MetricKey =
     | 'toolGrounding';                   // process / P1（轨迹归因派生）
 
 export const METRIC_REGISTRY: Record<MetricKey, {
-    label: string; labelEn: string; dim: 'result' | 'process' | 'cost'; priority: Priority;
+    label: string; labelEn: string; dim: 'process' | 'cost'; priority: Priority;
 }> = {
-    faithfulness:        { label: '忠实度', labelEn: 'Faithfulness', dim: 'result', priority: 'P0' },
-    instructionAdherence:{ label: '指令遵循', labelEn: 'Instruction Adherence', dim: 'result', priority: 'P0' },
-    answerQuality:       { label: '答案质量', labelEn: 'Answer Quality', dim: 'result', priority: 'P0' },
-    accuracy:            { label: '准确性', labelEn: 'Accuracy', dim: 'result', priority: 'P0' },
-    safety:              { label: '安全',       labelEn: 'Safety',               dim: 'result',  priority: 'P0' },
+    safety:              { label: '安全',       labelEn: 'Safety',               dim: 'process', priority: 'P0' },
     toolCorrectness:     { label: '工具选择与参数正确性', labelEn: 'Tool Selection + Args', dim: 'process', priority: 'P0' },
     cost:                { label: '成本',       labelEn: 'Cost',                 dim: 'cost',    priority: 'P0' },
     planEfficiency:      { label: '计划遵循与步骤效率', labelEn: 'Plan + Step Efficiency', dim: 'process', priority: 'P1' },

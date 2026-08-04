@@ -1,5 +1,6 @@
 import { getActiveConfig } from '@/lib/storage/server-config';
 import type { ModelConfig as OpencodeModelConfig } from '@/lib/engine/skill-generation/opencode-agent-cli/opencode-client';
+import { isModelConnectionReady } from '@/lib/shared/model-connection';
 
 /**
  * 服务端 ModelConfig（用户在 settings 里维护）→ opencode SDK 需要的 ModelConfig 形态。
@@ -16,7 +17,7 @@ export async function loadServerModelForUser(
   user: string,
 ): Promise<OpencodeModelConfig | null> {
   const cfg = await getActiveConfig(user);
-  if (!cfg || !cfg.apiKey) return null;
+  if (!cfg || !isModelConnectionReady(cfg)) return null;
 
   // provider 字段只在 default 配置上存在；强转读一下
   const explicitProvider = (cfg as { provider?: string }).provider;
@@ -28,6 +29,7 @@ export async function loadServerModelForUser(
     modelID,
     apiKey: cfg.apiKey,
     baseURL: cfg.baseUrl || defaultBaseUrlForProvider(providerID),
+    headers: cfg.headers,
   };
 }
 

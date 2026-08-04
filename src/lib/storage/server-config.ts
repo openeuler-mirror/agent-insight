@@ -1,5 +1,9 @@
 import { db } from '@/lib/storage/prisma';
 import { loadDefaultModelConfigs } from '@/lib/shared/default-model-config';
+import {
+    normalizeCustomHeaders,
+    supportsCustomHeaders,
+} from '@/lib/shared/model-connection';
 
 export interface ModelConfig {
     id: string;
@@ -8,6 +12,7 @@ export interface ModelConfig {
     apiKey: string;
     baseUrl?: string;
     model?: string;
+    headers?: Record<string, string>;
 }
 
 export interface UserSettings {
@@ -43,6 +48,24 @@ export function maskApiKey(key: string | null | undefined): string {
     return `${key.slice(0, 4)}${MASK_CHAR.repeat(8)}${key.slice(-4)}`;
 }
 
+export function restoreMaskedHeaders(
+    incoming: Record<string, string> | null | undefined,
+    existing: Record<string, string> | null | undefined,
+): Record<string, string> | undefined {
+    if (!incoming) return undefined;
+    const existingHeaderByLowerName = new Map(
+        Object.entries(existing ?? {}).map(([name, value]) => [name.toLowerCase(), value]),
+    );
+    return Object.fromEntries(
+        Object.entries(incoming).map(([name, value]) => [
+            name,
+            isMaskedApiKey(value)
+                ? (existingHeaderByLowerName.get(name.toLowerCase()) ?? '')
+                : value,
+        ]),
+    );
+}
+
 /**
  * Return a copy of settings with every model config's apiKey AND the web-search
  * apiKey masked. Use this for any client-facing response — the browser must
@@ -51,7 +74,13 @@ export function maskApiKey(key: string | null | undefined): string {
 export function maskUserSettings(settings: UserSettings): UserSettings {
     return {
         ...settings,
-        configs: settings.configs.map(c => ({ ...c, apiKey: maskApiKey(c.apiKey) })),
+        configs: settings.configs.map(c => ({
+            ...c,
+            apiKey: maskApiKey(c.apiKey),
+            headers: c.headers
+                ? Object.fromEntries(Object.entries(c.headers).map(([name, value]) => [name, maskApiKey(value)]))
+                : undefined,
+        })),
         searchApiKey: maskApiKey(settings.searchApiKey),
     };
 }
@@ -116,9 +145,19 @@ export async function saveUserSettings(user: string, settings: UserSettings): Pr
     // stored original for those, so saving never clobbers a real key with a mask.
     const existing = await getUserSettings(user);
     const existingKeyById = new Map(existing.configs.map(c => [c.id, c.apiKey]));
-    const restoredConfigs = settings.configs.map(c =>
-        isMaskedApiKey(c.apiKey) ? { ...c, apiKey: existingKeyById.get(c.id) ?? '' } : c
-    );
+    const existingHeadersById = new Map(existing.configs.map(c => [c.id, c.headers ?? {}]));
+    const restoredConfigs = settings.configs.map(c => {
+        const existingHeaders = existingHeadersById.get(c.id) ?? {};
+        const restoredHeaders = restoreMaskedHeaders(c.headers, existingHeaders);
+        if (restoredHeaders && !supportsCustomHeaders(c)) {
+            throw new Error('Custom headers are only supported for Custom (OpenAI Compatible) models');
+        }
+        return {
+            ...c,
+            apiKey: isMaskedApiKey(c.apiKey) ? (existingKeyById.get(c.id) ?? '') : c.apiKey,
+            headers: normalizeCustomHeaders(restoredHeaders),
+        };
+    });
 
     // Same protection for the web-search key: a masked value means "unchanged".
     const restoredSearchApiKey = isMaskedApiKey(settings.searchApiKey)

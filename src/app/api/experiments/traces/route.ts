@@ -3,8 +3,25 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/storage/prisma';
 import { resolveUser } from '@/lib/auth/auth';
+import { ensureTraceTagTables } from '@/lib/trace-tags';
+import {
+  buildExperimentTraceWhere,
+  parseExperimentTraceFilters,
+} from '@/lib/engine/experiment/trace-filters';
 
 export const dynamic = 'force-dynamic';
+
+interface ExperimentTraceRow {
+  id: string;
+  taskId: string | null;
+  query: string | null;
+  finalResult: string | null;
+  latency: number | null;
+  tokens: number | null;
+  timestamp: Date;
+  toolCallErrorCount: number | null;
+  failures: string | null;
+}
 
 function isOk(row: { toolCallErrorCount: number | null; failures: string | null }): boolean {
   if ((row.toolCallErrorCount ?? 0) > 0) return false;
@@ -25,12 +42,9 @@ export async function GET(req: Request) {
     const agent = (url.searchParams.get('agent') || '').trim();
     const page = Math.max(1, parseInt(url.searchParams.get('page') || '1', 10) || 1);
     const pageSize = Math.min(100, Math.max(1, parseInt(url.searchParams.get('pageSize') || '20', 10) || 20));
-
-    const where = {
-      ...(username ? { user: username } : {}),
-      isSubagent: false,
-      ...(agent ? { agentName: agent } : {}),
-    };
+    const filters = parseExperimentTraceFilters(url.searchParams);
+    if (filters.tagIds.length > 0) await ensureTraceTagTables();
+    const where = buildExperimentTraceWhere(username, agent, filters);
 
     const [total, rows] = await Promise.all([
       prisma.execution.count({ where }),
@@ -51,7 +65,7 @@ export async function GET(req: Request) {
       total,
       page,
       pageSize,
-      items: rows.map((r: any) => ({
+      items: rows.map((r: ExperimentTraceRow) => ({
         id: r.id,
         taskId: r.taskId,
         query: r.query,

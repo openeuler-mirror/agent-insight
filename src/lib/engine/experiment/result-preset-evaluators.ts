@@ -4,10 +4,10 @@
  *   preset-result-answer      答案质量
  *   preset-result-faithfulness 忠实度（幻觉检测）
  *   preset-result-instruction 指令遵循
- * 抽取进实验统一契约。与可靠性页共用同一 canonical 能力（runSingleResultMetric）与
- * 同一直连传输（createResultInvoke，seed=42/temp=0/严格 schema）——两侧口径逐位一致。
+ * 抽取进实验统一契约。四个评估器共用同一 canonical 能力（runSingleResultMetric）与
+ * 同一直连传输（createResultInvoke，seed=42/temp=0/严格 schema）。
  *
- * 依赖 result-quality-evaluator（server-only：prisma/openai/dataset），故惰性 import，
+ * 依赖 result-metric-evaluator（server-only：openai/model config），故惰性 import，
  * 与 faithful-preset-evaluators 同策略——测试注入时零加载。
  */
 import { normalizeEvaluatorOutput, type EvaluatorOutput, type EvalPoint, type EvalPointStatus } from '../../evaluators/eval-output';
@@ -48,7 +48,7 @@ export async function runResultPreset(
 
   const {
     createResultInvoke, runSingleResultMetric, extractRelevantSystemInstructions,
-  } = await import('../evaluation/result-quality-evaluator');
+  } = await import('../evaluation/result-metric-evaluator');
 
   const invoke = await createResultInvoke(user);
   const metric = ID_TO_METRIC[id];
@@ -60,7 +60,10 @@ export async function runResultPreset(
     const expectedOutput = (ctx.referenceOutput ?? '').trim();
     if (!expectedOutput) {
       // 依赖参考数据但未标注——④ 步门控应已拦截，此处兜底为无分。
-      return { evidence: { md: '未标注参考答案，无法评估结果准确性——不记分。' } };
+      return {
+        summary: '未标注参考答案，无法评估结果准确性——不记分。',
+        evidence: { md: '未标注参考答案，无法评估结果准确性——不记分。' },
+      };
     }
     // 主张从实际输出抽（与忠实度共用同一批 claim），逐条对参考答案判对错——精确率口径
     const r = await runSingleResultMetric('accuracy', { query, finalResult, expectedOutput }, invoke);
@@ -118,7 +121,7 @@ function mapAccuracy(r: LeafResult): EvaluatorOutput {
     if (md) pt.evidence = { md };
     return pt;
   }).filter((p) => p.label);
-  return normalizeEvaluatorOutput({ score: r.score ?? undefined, points: points.length ? points : undefined, evidence: r.evidence.reason ? { md: str(r.evidence.reason) } : undefined });
+  return normalizeEvaluatorOutput({ summary: str(r.evidence.reason), score: r.score ?? undefined, points: points.length ? points : undefined, evidence: r.evidence.reason ? { md: str(r.evidence.reason) } : undefined });
 }
 
 /** 答案质量：relevance/completeness/coherence 三子分 → points */
@@ -169,7 +172,7 @@ function mapAnswerQuality(r: LeafResult): EvaluatorOutput {
       if (mdByKey[k]) pt.evidence = { md: mdByKey[k] };
       return pt;
     });
-  return normalizeEvaluatorOutput({ score: r.score ?? undefined, points: points.length ? points : undefined, evidence: r.evidence.reason ? { md: str(r.evidence.reason) } : undefined });
+  return normalizeEvaluatorOutput({ summary: str(r.evidence.reason), score: r.score ?? undefined, points: points.length ? points : undefined, evidence: r.evidence.reason ? { md: str(r.evidence.reason) } : undefined });
 }
 
 /** 忠实度：claims/verdicts → points（逐条主张对 trace 证据判有无依据；无依据即 0 分拉低均分） */
@@ -192,7 +195,7 @@ function mapFaithfulness(r: LeafResult): EvaluatorOutput {
     if (md) pt.evidence = { md };
     return pt;
   }).filter((p) => p.label);
-  return normalizeEvaluatorOutput({ score: r.score ?? undefined, points: points.length ? points : undefined, evidence: r.evidence.reason ? { md: str(r.evidence.reason) } : undefined });
+  return normalizeEvaluatorOutput({ summary: str(r.evidence.reason), score: r.score ?? undefined, points: points.length ? points : undefined, evidence: r.evidence.reason ? { md: str(r.evidence.reason) } : undefined });
 }
 
 /** 指令遵循：verdicts → points（met/not_met/not_applicable → 状态；not_applicable 略去） */
@@ -212,5 +215,5 @@ function mapInstruction(r: LeafResult): EvaluatorOutput {
       if (md) pt.evidence = { md };
       return pt;
     });
-  return normalizeEvaluatorOutput({ score: r.score ?? undefined, points: points.length ? points : undefined, evidence: r.evidence.reason ? { md: str(r.evidence.reason) } : undefined });
+  return normalizeEvaluatorOutput({ summary: str(r.evidence.reason), score: r.score ?? undefined, points: points.length ? points : undefined, evidence: r.evidence.reason ? { md: str(r.evidence.reason) } : undefined });
 }

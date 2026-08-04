@@ -74,7 +74,7 @@ AGENT WORKSPACE  (nav.groupAgentWorkspace)
 
 | 状态 | 路由 | 说明 |
 |---|---|---|
-| ✅ 导航可达 | `/dashboard` `/agents` `/trace` `/fault` `/quality` `/dataset` `/metrics` `/eval` `/skills` `/skill-generator` `/skill-eval` `/skill-opt` `/modelconfig/registry` `/modelconfig/web-search` `/accessconfig/install` | 侧边栏直达；`/quality` 的 `QualityPage` 含 `ResultPanel` 结果明细 |
+| ✅ 导航可达 | `/dashboard` `/agents` `/trace` `/fault` `/quality` `/dataset` `/metrics` `/eval` `/skills` `/skill-generator` `/skill-eval` `/skill-opt` `/modelconfig/registry` `/modelconfig/web-search` `/accessconfig/install` | 侧边栏直达；`/quality` 的 `QualityPage` 展示过程、成本和错误三维运行质量 |
 | 🔁 间接可达 | `/skill-history` `/skill-detail`（经 Skills Hub）、`/details`（经链路追踪）、`/eval/run/[runId]`、`/skill-opt/[name]/[version]` 等子路由 | 由父页面跳转，无独立 nav 项 |
 | 🚫 存在但未挂导航 | `/memory` `/optapi` `/security` `/skill-release` `/modelconfig`(index) `/accessconfig/{channels,webhooks,health}` | nav 中注释或未引用；多为半成品/已下线，源码保留 |
 
@@ -87,6 +87,7 @@ AGENT WORKSPACE  (nav.groupAgentWorkspace)
 - **可观测性** — `observe/{AgentTraceView,TraceDrawer,AgentDebugCard}.tsx`（trace 树由 `buildAgentCallTree` 渲染）。Trace 列表主体在 `app/(main)/trace/page.tsx`，列宽存 `trace.columnWidths.v1`，列显隐存 `trace.columnVisibility.v1`；用户标签列默认显示，系统标签列默认隐藏；隐藏用户标签列后，操作列不再提供标签编辑入口。Version Analysis page: `app/(main)/version-analysis/page.tsx`; Version Management page: `app/(main)/version-management/page.tsx`。
 - **Skills** — `skills/*`（`SkillCatalogV2`、`SkillDiagnosis`、`SkillRegistry`）、`skill-generator/*`。
 - **数据集 / 评测器** — `AgentDatasetCenter.tsx`、`DatasetItemsPage.tsx`、`EvaluatorsCenter.tsx`。
+- **实验向导** — `app/(main)/experiments/new/page.tsx` 的第 ② 步通过 `/api/experiments/traces` 服务端分页选择 root Trace；搜索同时匹配 `Execution.id`、`taskId` 与 `query`，时间支持预设窗口和自定义起止时间，用户标签多选使用 AND 语义。筛选栏下方的独立已选区读取跨页 `selected` Map，支持单条移除和全部清空；筛选状态不清空跨页已选 case，跨页全选沿用当前筛选参数并受 500 条上限保护。这些筛选不持久化为监听模式规则。
 - **聊天 / agent UI** — `thread/*`、`chat/*`、`ai-elements/*`，通过 `src/providers/{Stream,Thread}.tsx` 中的 assistant-ui providers 接线。
 - **基础组件（复用，不要重建）** — `ui/*`（button、card、dialog、select、switch……）、`feedback/{EmptyState,ErrorState,StatusBadge}.tsx`、`text/*`（`MetricValue`、`RelativeTime`、`TruncateText`）、`SmartViewer/*`。
 
