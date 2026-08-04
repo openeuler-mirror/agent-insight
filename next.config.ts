@@ -15,6 +15,11 @@ const nextConfig: NextConfig = {
   // 1GB+ of local logs, bloating the npm package non-deterministically per machine).
   outputFileTracingExcludes: {
     '*': [
+      '.git/**',
+      'tmp/**',
+      '*.tar',
+      '*.tar.*',
+      '*.zip',
       'exclude/**',
       'tests/**',
       'test/**',

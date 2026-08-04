@@ -9,7 +9,7 @@ import { useLocale } from '@/lib/client/locale-context';
 import { useThemeColors } from '@/lib/client/theme-context';
 import type { QualityReport, TrendBucket, TrendGranularity } from '@/lib/engine/quality-monitoring/types';
 
-type DimKey = 'comp' | 'res' | 'proc' | 'cost';
+type DimKey = 'comp' | 'proc' | 'cost';
 
 function bucketLabel(ts: string, g: TrendGranularity): string {
     const d = new Date(ts);
@@ -25,16 +25,15 @@ export function QualityTrendChart({ report, onBucketClick, collapsed, onToggleCo
 }) {
     const { t } = useLocale();
     const c = useThemeColors();
-    const [active, setActive] = useState<Record<DimKey, boolean>>({ comp: true, res: false, proc: false, cost: true });
+    const [active, setActive] = useState<Record<DimKey, boolean>>({ comp: true, proc: false, cost: true });
 
-    const COLORS: Record<DimKey, string> = { comp: c.primary, res: c.success, proc: '#2c6bd1', cost: c.warning };
-    const NAMES: Record<DimKey, string> = { comp: t('quality.trend.comp'), res: t('quality.trend.res'), proc: t('quality.trend.proc'), cost: t('quality.trend.cost') };
+    const COLORS: Record<DimKey, string> = { comp: c.primary, proc: '#2c6bd1', cost: c.warning };
+    const NAMES: Record<DimKey, string> = { comp: t('quality.trend.comp'), proc: t('quality.trend.proc'), cost: t('quality.trend.cost') };
     const g = report.trend.granularity;
 
     const data = useMemo(() => report.trend.buckets.map((b) => ({
         label: bucketLabel(b.bucket_ts, g),
         comp: b.composite,
-        res: b.ratios.result,
         proc: b.ratios.toolCorrect ?? 0,
         cost: b.ratios.cost ?? 0,
         n: b.n_traces,
@@ -64,7 +63,7 @@ export function QualityTrendChart({ report, onBucketClick, collapsed, onToggleCo
                 <span style={{ flex: 1 }} />
                 {!collapsed && (
                     <div style={{ display: 'flex', gap: 6 }} onClick={(e) => e.stopPropagation()}>
-                        {(['comp', 'res', 'proc', 'cost'] as DimKey[]).map((k) => (
+                        {(['comp', 'proc', 'cost'] as DimKey[]).map((k) => (
                             <button key={k} onClick={() => setActive((s) => ({ ...s, [k]: !s[k] }))}
                                 style={{
                                     fontSize: 11, fontWeight: 600, padding: '5px 10px', borderRadius: 7, cursor: 'pointer',
@@ -108,7 +107,6 @@ export function QualityTrendChart({ report, onBucketClick, collapsed, onToggleCo
                                 {data.map((d, i) => <Cell key={i} fill={d.anomaly ? 'color-mix(in srgb, var(--error) 35%, transparent)' : c.border} />)}
                             </Bar>
                             {active.cost && <Line yAxisId="score" type="monotone" dataKey="cost" stroke={COLORS.cost} strokeWidth={2} strokeDasharray="5 4" dot={false} />}
-                            {active.res && <Line yAxisId="score" type="monotone" dataKey="res" stroke={COLORS.res} strokeWidth={2} dot={false} />}
                             {active.proc && <Line yAxisId="score" type="monotone" dataKey="proc" stroke={COLORS.proc} strokeWidth={2} dot={false} />}
                             {active.comp && <Line yAxisId="score" type="monotone" dataKey="comp" stroke={COLORS.comp} strokeWidth={2.6} dot={{ r: 2 }} activeDot={{ r: 5 }} />}
                         </ComposedChart>
@@ -137,7 +135,7 @@ function TrendTip({ activeDims, payload, label, names, colors, t }: TrendTipProp
             fontSize: 11, boxShadow: '0 6px 24px rgba(20,22,30,.12)', minWidth: 130,
         }}>
             <div style={{ fontWeight: 700, marginBottom: 6 }}>{label}{p?.anomaly ? ` · ⚠ ${t('quality.trend.anomaly')}` : ''}</div>
-            {(['comp', 'res', 'proc', 'cost'] as const).filter((k) => activeDims[k]).map((k) => (
+            {(['comp', 'proc', 'cost'] as const).filter((k) => activeDims[k]).map((k) => (
                 <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 6, margin: '3px 0', color: 'var(--foreground-secondary)' }}>
                     <span style={{ width: 8, height: 8, borderRadius: 2, background: colors[k] }} />{names[k]}
                     <b style={{ marginLeft: 'auto', color: 'var(--foreground)' }}>{Math.round(p[k] * 10) / 10}</b>

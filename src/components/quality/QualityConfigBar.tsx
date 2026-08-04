@@ -10,7 +10,6 @@ export interface ConfigState {
     agent: string;
     window: WindowKind;
     skill: string;
-    status: string;
 }
 
 export function QualityConfigBar({
@@ -82,18 +81,10 @@ export function QualityConfigBar({
                 </div>
             </div>
 
-            {/* 次级过滤：Skill / 状态 */}
+            {/* 次级过滤：Skill */}
             <SecondarySelect label={t('quality.config.skill')} value={value.skill}
                 onChange={(v) => onChange({ skill: v })}
                 options={[{ value: 'all', label: t('quality.config.all') }, ...skills.map((s) => ({ value: s, label: s }))]} />
-            <SecondarySelect label={t('quality.config.status')} value={value.status}
-                onChange={(v) => onChange({ status: v })}
-                options={[
-                    { value: 'all', label: t('quality.config.all') },
-                    { value: '达标', label: t('quality.status.达标') },
-                    { value: '关注', label: t('quality.status.关注') },
-                    { value: '异常', label: t('quality.status.异常') },
-                ]} />
 
             <div style={{ flex: 1, minWidth: 40 }} />
         </section>

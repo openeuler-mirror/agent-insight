@@ -9,7 +9,6 @@ import { getActiveConfig } from '@/lib/storage/server-config';
 import { resolveFrameworkId } from '@/lib/ingest/adapters/registry';
 import { NextResponse } from 'next/server';
 import type { InvokedSkill } from '@/lib/shared/interaction-utils';
-import { scheduleResultEvaluation } from '@/lib/engine/evaluation/result-quality-evaluator';
 
 import { SKILLS_EXTRACT_PROMPT } from '@/prompts/skills-prompt';
 
@@ -277,10 +276,6 @@ export async function POST(
          console.warn(`[End] No primarySkillName extracted. Attribution will be skipped.`);
     }
 
-    let evaluation: { is_skill_correct: boolean; is_answer_correct: boolean | null; answer_score: number | null; judgment_reason: string | null } = {
-      is_skill_correct: false, is_answer_correct: null, answer_score: null, judgment_reason: null,
-    };
-    
     if (session.query) analysis.query = session.query;
     if (analysis.query) analysis.query = analysis.query.trim().replace(/^['"]+|['"]+$/g, '').trim();
     if (primarySkillName) analysis.skill = primarySkillName;
@@ -373,27 +368,13 @@ export async function POST(
         console.log(`[End] Skipping analyzeFailures for evaluator trace ${taskId} (agent=${evaluatorAgentName || 'unknown'}) — evaluator output describes evaluated case, not this session`);
         failureAnalysis = { failures: [], skill_issues: [] };
     } else {
-        try {
-            const resultRun = await scheduleResultEvaluation(executionId, session.user);
-            const accuracy = resultRun.metrics.accuracy;
-            if (accuracy.score != null) {
-                evaluation = {
-                    is_skill_correct: false,
-                    is_answer_correct: accuracy.score >= 80,
-                    answer_score: accuracy.score / 100,
-                    judgment_reason: String(accuracy.evidence.reason || '结果准确性评测'),
-                };
-            }
-        } catch (error) {
-            console.warn(`[End] Result quality evaluation failed for ${executionId}:`, error);
-        }
-        console.log(`[End] Calling analyzeFailures: skillName=${primarySkillName || 'none'}, skillDef=${skillDef ? 'present' : 'absent'}, answerScore=${evaluation.answer_score}`);
+        console.log(`[End] Calling analyzeFailures: skillName=${primarySkillName || 'none'}, skillDef=${skillDef ? 'present' : 'absent'}`);
         failureAnalysis = await analyzeFailures(
             session.interactions,
             primarySkillName,
             skillDef,
-            evaluation.answer_score ?? undefined,
-            String(evaluation.judgment_reason || ""),
+            undefined,
+            '',
             analysis.query,
             analysis.final_result,
             session.user
@@ -401,12 +382,9 @@ export async function POST(
         console.log(`[End] analyzeFailures result: ${failureAnalysis.failures.length} failures, ${failureAnalysis.skill_issues?.length || 0} skill issues`);
     }
 
-    // --- Update execution record with evaluation results ---
+    // --- Update execution record with failure analysis ---
     try {
         await db.updateExecution(executionId, {
-            isAnswerCorrect: evaluation.is_answer_correct,
-            answerScore: evaluation.answer_score,
-            judgmentReason: evaluation.judgment_reason,
             failures: JSON.stringify(failureAnalysis.failures),
             skillIssues: JSON.stringify(failureAnalysis.skill_issues || []),
         });
@@ -427,7 +405,7 @@ export async function POST(
       upload_result: result,
     });
 
-    console.log(`[Proxy-End] ✅ Task completed: task_id=${taskId}, framework=${framework}, score=${evaluation.answer_score}, duration=${duration.toFixed(1)}s`);
+    console.log(`[Proxy-End] ✅ Task completed: task_id=${taskId}, framework=${framework}, duration=${duration.toFixed(1)}s`);
     return response;
   } catch (e) {
     console.error('[Proxy-End] ❌ Error:', e);
