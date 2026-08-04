@@ -110,7 +110,7 @@ Trace 列表支持两类标签列：**用户标签**默认显示，用于维护�
 
 任务完成度、轨迹质量等预置评估器生成的 `direct-llm` Trace，会以本次评估模型请求发出前和响应返回后的时间作为起止点。根 Agent、LLM Span、Session 和列表耗时使用同一次请求的时间窗口，因此新产生的评估 Trace 不会再因写库时间代替模型调用时间而显示为 `0ms`。修复前已经保存且缺少原始起止时间的历史 Trace 无法可靠反推真实耗时，不会自动补算。
 
-Langfuse / LangGraph Trace 继续使用原有的 Agent Trace 界面，并把根请求中的用户问题和完整 observation 投影为其中的 USER、AGENT、CHAIN、LLM 和 TOOL 行。CHAIN 保留业务步骤的父子关系和展开层级，不再混入 TASK；点击后可在右侧查看输入和输出。子 Agent 行和右侧“子 Agent”卡片上的 **Trace** 按钮可直接进入该子 Agent 的独立执行详情；目标执行不存在时，页面会提示未找到，而不会继续停留在父 Trace 造成无响应的错觉。平台保留该 trace 中每个 span 的名称、类型、原始父节点、状态、耗时和 token；`summarizer`、业务检索等有正文的节点即使耗时为 0 也会显示。`LangGraph`、`model`、`tools` 等有子节点的重复包装层默认折叠，其可见子节点会提升到最近的业务父节点；没有子节点但包含独立 input/output 的包装节点仍会显示。该展示规则只作用于 Langfuse 数据，不改变其他框架的 Trace。
+Langfuse / LangGraph Trace 继续使用原有的 Agent Trace 界面，并把根请求中的用户问题和完整 observation 投影为其中的 USER、AGENT、CHAIN、LLM 和 TOOL 行。CHAIN 保留业务步骤的父子关系和展开层级，不再混入 TASK；点击后可在右侧查看输入和输出。`langfuse-langgraph` Trace 详情中所有识别为 JSON 的内容默认展开全部对象和数组层级，仍可手动收起；其他框架沿用默认折叠深度。点击 LLM 节点时，Input 直接使用该 generation 上报的 request messages：`system`、`user`、`assistant` 和真实工具结果会按原始角色与顺序分开显示，旧轮次放入 History，本轮新增用户消息或工具结果放入 Current input；被上报为 `role=tool` 的可用工具 schema 不会冒充工具结果，LLM Output 中的真实工具调用则会以 Assistant 工具调用及参数展示。相邻 CHAIN 节点的 input/output 不会被当成模型对话历史。子 Agent 行和右侧“子 Agent”卡片上的 **Trace** 按钮可直接进入该子 Agent 的独立执行详情；目标执行不存在时，页面会提示未找到，而不会继续停留在父 Trace 造成无响应的错觉。平台保留该 trace 中每个 span 的名称、类型、原始父节点、状态、耗时和 token；`summarizer`、业务检索等有正文的节点即使耗时为 0 也会显示。`LangGraph`、`model`、`tools` 等有子节点的重复包装层默认折叠，其可见子节点会提升到最近的业务父节点；没有子节点但包含独立 input/output 的包装节点仍会显示。该展示规则只作用于 Langfuse 数据，不改变其他框架的 Trace。
 
 Langfuse 按已结束 span 增量上报时，子 Agent 可能早于应用根 span 到达。平台会等待可确认的顶层 span 后再生成主 Trace，避免把 `intent-agent` 等子 Agent 临时显示为主 Agent。
 
@@ -246,7 +246,7 @@ Task Spawn 表示当前执行过程中派生出的新任务数量。在多 Agent
 
 > **Note**
 > 通过 OTel `logs` / `traces` 端点接入的数据是异步可见的：端点返回成功表示平台已受理并写入本地 spool（`traces` 支持 OTLP JSON 与 protobuf），后台消费者会在短暂 debounce 后落库，随后在会话空闲后再补充结果评估。因此刚发完上报后，列表页可能需要等待几秒才出现新 Trace，评估分数可能再稍后更新。
-> Claude Code 接入需要通过安装脚本生成的 OTel wrapper 开启 `OTEL_LOG_TOOL_DETAILS=1`，并将 `OTEL_LOG_RAW_API_BODIES` 配成 `file:<dir>`。`OTEL_LOG_RAW_API_BODIES=1` 的 inline body 会被 Claude Code 截断到 60 KB，长会话里可能拿不到工具结果正文；`OTEL_LOG_TOOL_CONTENT=1` 只影响 tracing span events，需要启用 traces。
+> Claude Code 接入需要通过安装脚本生成的 OTel wrapper 开启 `OTEL_LOG_TOOL_DETAILS=1`，并将 `OTEL_LOG_RAW_API_BODIES` 配成 `file:<dir>`。安装脚本还会注册仅供 Claude Code 使用的上下文补传器：主 Agent 每轮结束、子 Agent 结束或本轮 API 失败后会在后台补传系统提示词、hook 上下文、工具输出和子 Agent 映射，不需要执行 `/exit`；`SessionEnd` 仅作为最终兜底。系统提示词会分别归到 root 和对应子 Agent；Trace 列表使用首条真实用户输入，Claude Code 自己的标题生成、输入建议、离开摘要和 Agent 摘要不会显示为业务对话。高频 hook 会先按 Session 合并本地任务并共用一个上传 worker；这能避免 30 个 hook 事件/s 重复拉起进程，但 30 个全新完整 Session/s 是否能实时清空仍取决于网络和服务端容量，出现积压时任务会保留在本地队列等待后续重试。`OTEL_LOG_RAW_API_BODIES=1` 的 inline body 会被 Claude Code 截断到 60 KB，长会话里可能拿不到工具结果正文；`OTEL_LOG_TOOL_CONTENT=1` 只影响 tracing span events，需要启用 traces。
 > CodeAgent 接入后重启终端或加载对应环境脚本，继续使用原来的 `codeagent` 命令即可。Unix setup 安装 `~/.agent-insight/bin/codeagent`，Windows setup 安装 `%USERPROFILE%\.agent-insight\bin\codeagent.cmd` 和 `codeagent-wrapper.ps1` 并持久化用户级 PATH；继承该 PATH 的终端及 Shell、PowerShell、CMD、Python、Node 子脚本会自动注入 OTel 配置。cron、systemd、容器、Windows 服务等独立环境需要显式配置包装器目录。CodeAgent Logs 异步写入 `~/.agent-insight/otel_data/codeagent` 并生成 `framework=codeagent` 的 Trace；其 Traces/Metrics 请求会收到成功响应，但平台不会保存这两类信号。
 
 ### 场景二：排查失败问题

@@ -7,7 +7,7 @@ import { toast } from 'sonner';
 import { CartesianGrid, Line, LineChart, ReferenceArea, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from 'recharts';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { SmartViewer } from '@/components/SmartViewer';
+import { SmartViewer, SmartViewerConfigProvider } from '@/components/SmartViewer';
 import type { LangfuseTraceNode } from '@/lib/ingest/otel/adapters/langfuse-trace';
 import { SkillLink } from '@/components/skills/SkillLink';
 import { useAuth } from '@/lib/auth/auth-context';
@@ -26,7 +26,10 @@ import {
     RawInteraction,
     walkTree,
 } from '@/lib/engine/observability/agent-trace';
-import { buildLangfuseAgentTrace } from '@/lib/engine/observability/langfuse-agent-trace';
+import {
+    buildLangfuseAgentTrace,
+    langfusePromptHistoryCount,
+} from '@/lib/engine/observability/langfuse-agent-trace';
 import {
     extractSkillsWithVersionsFromClaudeSession,
     extractSkillsWithVersionsFromHermesSession,
@@ -90,7 +93,7 @@ function KindBadge({ kind, size = 'xs', className }: { kind: string; size?: 'xs'
     );
 }
 
-type DetailTab = 'timeline' | 'prompt' | 'overview' | 'skills' | 'infra';
+type DetailTab = 'timeline' | 'prompt' | 'hooks' | 'overview' | 'skills' | 'infra';
 type EventTypeFilter = 'all' | 'llm' | 'tool' | 'skill' | 'task' | 'chain' | 'user';
 
 interface TraceSkillCall {
@@ -333,6 +336,7 @@ interface SpanInfo {
 }
 
 interface TraceCtxValue {
+    framework?: string;
     searchQuery: string;
     matchedKeys: Set<string>;
     activeMatchKey: string | null;
@@ -359,6 +363,7 @@ const TraceCtx = React.createContext<TraceCtxValue>(defaultCtx);
 
 export interface AgentTraceViewProps {
     interactions: RawInteraction[];
+    framework?: string;
     langfuseTraceNodes?: LangfuseTraceNode[];
     /** 按 interaction index 读取完整原文；未提供时保持旧的一次性完整数据行为。 */
     loadInteraction?: (index: number) => Promise<RawInteraction>;
@@ -379,6 +384,7 @@ export interface AgentTraceViewProps {
 
 export default function AgentTraceView({
     interactions: sourceInteractions,
+    framework,
     langfuseTraceNodes,
     loadInteraction,
     loadAllInteractions,
@@ -770,6 +776,7 @@ export default function AgentTraceView({
     };
 
     const ctxValue: TraceCtxValue = {
+        framework: framework?.trim().toLowerCase(),
         searchQuery, matchedKeys, activeMatchKey,
         treeKindFilter, minDurationMs, minTokenK, slowOnly,
         onJumpToKey, topNDuration, topNTokens, slowNodesList,
@@ -787,8 +794,9 @@ export default function AgentTraceView({
     }
 
     return (
-        <TraceCtx.Provider value={ctxValue}>
-        <div className="flex flex-col gap-2.5">
+        <SmartViewerConfigProvider jsonCollapsed={framework?.trim().toLowerCase() === 'langfuse-langgraph' ? false : 2}>
+            <TraceCtx.Provider value={ctxValue}>
+            <div className="flex flex-col gap-2.5">
             {fullInteractionLoadError && (
                 <div className="flex items-center justify-between gap-3 rounded-md border border-error-border bg-error-subtle px-3 py-2 text-sm text-error" role="alert">
                     <span>{fullInteractionLoadError}</span>
@@ -1018,8 +1026,9 @@ export default function AgentTraceView({
                     ) : null}
                 </div>
             </div>
-        </div>
-        </TraceCtx.Provider>
+            </div>
+            </TraceCtx.Provider>
+        </SmartViewerConfigProvider>
     );
 }
 
@@ -1822,13 +1831,76 @@ function countRepeatedPromptPrefix(prev: PromptSnapshotMessage[], current: Promp
     return count;
 }
 
-function buildLlmPromptSnapshot(event: AgentEvent, node: AgentNode, interactions: RawInteraction[]): LlmPromptSnapshot {
+function requestMessageContent(value: unknown): string {
+    if (typeof value === 'string') return value;
+    if (value == null) return '';
+    try {
+        return JSON.stringify(value, null, 2);
+    } catch {
+        return String(value);
+    }
+}
+
+function requestMessageToolCalls(message: NonNullable<RawInteraction['requestMessages']>[number]): PromptSnapshotMessage['toolCalls'] {
+    if (!Array.isArray(message.tool_calls)) return undefined;
+    return message.tool_calls
+        .filter((call): call is Record<string, unknown> => !!call && typeof call === 'object' && !Array.isArray(call))
+        .map(call => {
+            const fn = call.function && typeof call.function === 'object'
+                ? call.function as Record<string, unknown>
+                : undefined;
+            const name = String(call.name ?? fn?.name ?? 'tool');
+            const rawArgs = call.args ?? call.arguments ?? fn?.arguments;
+            return {
+                name,
+                args: typeof rawArgs === 'string' ? rawArgs : (rawArgs == null ? '' : JSON.stringify(rawArgs)),
+                output: '',
+            };
+        });
+}
+
+function promptMessagesFromRequest(requestMessages: NonNullable<RawInteraction['requestMessages']>): PromptSnapshotMessage[] {
+    return requestMessages.map((message, index) => ({
+        role: normalizePromptRole(message.role),
+        content: requestMessageContent(message.content),
+        toolCalls: requestMessageToolCalls(message),
+        source: message.role === 'system' ? 'system' : 'history',
+        position: index + 1,
+    }));
+}
+
+function buildLlmPromptSnapshot(
+    event: AgentEvent,
+    node: AgentNode,
+    interactions: RawInteraction[],
+    useLangfuseRequestMessages: boolean,
+): LlmPromptSnapshot {
     const eventIdx = event.interactionIndex;
-    const current = buildInputMessagesForLlmIndex(node, interactions, eventIdx);
     const previousLlmEvents = node.events
         .filter(ev => ev.kind === 'llm' && ev.interactionIndex < eventIdx)
         .sort((a, b) => a.interactionIndex - b.interactionIndex);
     const prevEvent = previousLlmEvents[previousLlmEvents.length - 1];
+    const requestMessages = event.interaction.requestMessages;
+    if (useLangfuseRequestMessages && Array.isArray(requestMessages) && requestMessages.length > 0) {
+        const previousRequest = Array.isArray(prevEvent?.interaction.requestMessages)
+            ? prevEvent.interaction.requestMessages
+            : [];
+        return {
+            inputMessages: promptMessagesFromRequest(requestMessages),
+            repeatedPrefixCount: langfusePromptHistoryCount(
+                requestMessages,
+                previousRequest,
+                typeof prevEvent?.interaction.content === 'string' ? prevEvent.interaction.content : '',
+                prevEvent?.interaction.tool_calls || [],
+            ),
+            activeCompaction: null,
+            foldedOriginalRaw: null,
+            foldedOriginalCount: 0,
+            llmOrdinal: previousLlmEvents.length + 1,
+        };
+    }
+
+    const current = buildInputMessagesForLlmIndex(node, interactions, eventIdx);
     // The previous call's OUTPUT is part of this call's input, so it belongs to
     // History — not "本轮新增". Moving the cutoff one interaction further (`+ 1`)
     // folds that turn into the compared prefix. Only valid for a pure-text reply:
@@ -2589,6 +2661,7 @@ function LLMEventBody({ event, responseText, interactions, node }: {
     interactions: RawInteraction[];
     node: AgentNode;
 }) {
+    const { framework } = React.useContext(TraceCtx);
     const it = event.interaction as RawInteraction & {
         model?: string;
         modelID?: string;
@@ -2623,8 +2696,8 @@ function LLMEventBody({ event, responseText, interactions, node }: {
         || topP != null || freqPenalty != null || presPenalty != null || hasUsage || finishReason || callLatencyMs != null;
 
     const snapshot = useMemo(
-        () => buildLlmPromptSnapshot(event, node, interactions),
-        [event, node, interactions],
+        () => buildLlmPromptSnapshot(event, node, interactions, framework === 'langfuse-langgraph'),
+        [event, node, interactions, framework],
     );
 
     return (
@@ -2734,6 +2807,7 @@ function AgentDetail({
 }) {
     const status = getStatus(node);
     const hasPrompt = !!(node.systemPrompts && node.systemPrompts.length > 0);
+    const hasHookContexts = !!(node.hookContexts && node.hookContexts.length > 0);
     const visibleEvents = node.events.filter(event => !event.treeHidden);
 
     const tabs: { id: DetailTab; label: string; count?: number }[] = [
@@ -2741,6 +2815,7 @@ function AgentDetail({
         { id: 'timeline', label: '时间线', count: visibleEvents.length },
         { id: 'skills', label: 'Skills', count: traceSkills.length },
         ...(hasPrompt ? [{ id: 'prompt' as DetailTab, label: 'System Prompt', count: node.systemPrompts!.length }] : []),
+        ...(hasHookContexts ? [{ id: 'hooks' as DetailTab, label: 'Hook 上下文', count: node.hookContexts!.length }] : []),
         { id: 'infra' as DetailTab, label: 'Infra' },
     ];
 
@@ -2817,6 +2892,7 @@ function AgentDetail({
                 )}
                 {activeTab === 'skills' && <SkillsTab skills={traceSkills} currentUser={currentUser} />}
                 {activeTab === 'prompt' && hasPrompt && <SystemPromptsBlock prompts={node.systemPrompts!} />}
+                {activeTab === 'hooks' && hasHookContexts && <HookContextsBlock entries={node.hookContexts!} />}
                 {activeTab === 'infra' && <InfraTab executionId={rootExecutionId} />}
             </div>
         </div>
@@ -3631,8 +3707,61 @@ function SystemPromptsBlock({ prompts }: { prompts: NonNullable<AgentNode['syste
     );
 }
 
+// ─── HookContextsBlock ────────────────────────────────────────────────────────
+// Claude Code hooks 通过 hookSpecificOutput.additionalContext 注入的上下文。它不进
+// 官方 OTel 事件,由客户端补传采集(见 /api/ingest/claude/context),这里和 System Prompt
+// 一样按「喂给模型的上下文」展示,不混进时间线。
+function HookContextsBlock({ entries }: { entries: NonNullable<AgentNode['hookContexts']> }) {
+    const [modalIdx, setModalIdx] = useState<number | null>(null);
+    const active = modalIdx !== null ? entries[modalIdx] : null;
+
+    return (
+        <>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                {entries.map((entry, i) => {
+                    const chars = entry.length ?? entry.text.length;
+                    const firstLine = entry.text.split('\n').find(l => l.trim()) ?? '';
+                    const label = firstLine.length > 72 ? firstLine.slice(0, 72) + '…' : firstLine;
+                    return (
+                        <div key={i} onClick={() => setModalIdx(i)}
+                            style={{ display: 'flex', alignItems: 'center', gap: '0.625rem', padding: '0.5rem 0.75rem', background: 'var(--background-secondary)', border: '1px solid var(--border)', borderRadius: 6, cursor: 'pointer', transition: 'background 0.1s' }}
+                            onMouseEnter={e => (e.currentTarget.style.background = 'var(--background-tertiary)')}
+                            onMouseLeave={e => (e.currentTarget.style.background = 'var(--background-secondary)')}
+                        >
+                            <span style={{ fontSize: '0.75rem', color: 'var(--foreground-muted)', flexShrink: 0 }}>🪝</span>
+                            {entry.hookEvent && (
+                                <span style={{ fontSize: '0.625rem', padding: '0.125rem 0.375rem', background: 'var(--background-tertiary)', border: '1px solid var(--border)', color: 'var(--foreground-muted)', borderRadius: 4, flexShrink: 0 }}>{entry.hookEvent}</span>
+                            )}
+                            <span style={{ flex: 1, fontSize: '0.8125rem', color: 'var(--foreground)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label || 'Hook Context'}</span>
+                            <span style={{ fontSize: '0.625rem', color: 'var(--foreground-muted)', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{chars.toLocaleString()} chars</span>
+                            <span style={{ fontSize: '0.625rem', color: 'var(--foreground-muted)', flexShrink: 0 }}>查看 ›</span>
+                        </div>
+                    );
+                })}
+            </div>
+            {active && (
+                <SystemPromptModal
+                    prompt={{ text: active.text, length: active.length }}
+                    index={modalIdx!}
+                    total={entries.length}
+                    onClose={() => setModalIdx(null)}
+                    title={active.hookName ? `HOOK CONTEXT · ${active.hookName}` : 'HOOK CONTEXT'}
+                    badge={active.hookEvent}
+                />
+            )}
+        </>
+    );
+}
+
 // ─── SystemPromptModal ────────────────────────────────────────────────────────
-function SystemPromptModal({ prompt, index, total, onClose }: { prompt: NonNullable<AgentNode['systemPrompts']>[number]; index: number; total: number; onClose: () => void }) {
+function SystemPromptModal({ prompt, index, total, onClose, title = 'SYSTEM PROMPT', badge }: {
+    prompt: { text: string; length?: number; sha256?: string; modelID?: string };
+    index: number;
+    total: number;
+    onClose: () => void;
+    title?: string;
+    badge?: string;
+}) {
     const [copied, setCopied] = useState(false);
     const copy = async () => {
         try {
@@ -3652,7 +3781,8 @@ function SystemPromptModal({ prompt, index, total, onClose }: { prompt: NonNulla
         <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
             <DialogContent className="max-w-[780px] max-h-[88vh] flex flex-col p-0 gap-0">
                 <DialogHeader className="flex-row items-center gap-3 p-4 pr-12 border-b border-border space-y-0 flex-wrap">
-                    <DialogTitle className="text-xs font-bold uppercase tracking-wider text-foreground-muted bg-background-secondary border border-border rounded-sm px-2 py-0.5">SYSTEM PROMPT</DialogTitle>
+                    <DialogTitle className="text-xs font-bold uppercase tracking-wider text-foreground-muted bg-background-secondary border border-border rounded-sm px-2 py-0.5">{title}</DialogTitle>
+                    {badge && <span className="text-xs text-foreground-muted">{badge}</span>}
                     {total > 1 && <span className="text-xs text-foreground-muted">{index + 1} / {total}</span>}
                     <div className="flex-1" />
                     <span className="text-xs text-foreground-muted tabular-nums">{chars.toLocaleString()} chars</span>

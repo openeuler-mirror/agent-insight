@@ -1,0 +1,91 @@
+FROM node:20-bookworm-slim AS builder
+
+ENV NEXT_TELEMETRY_DISABLED=1 \
+    AGENT_INSIGHT_DATA_DIR=/tmp/agent-insight-build
+
+WORKDIR /src
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends openssl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY package.json package-lock.json ./
+COPY scripts ./scripts
+COPY prisma ./prisma
+COPY .env.example ./
+
+# 本地工作区可能正处于调整依赖、lockfile 尚未同步的中间状态；只在 builder 内解析，
+# 不会回写宿主机。正式发布前仍应同步 package-lock.json 并通过 npm ci。
+RUN npm install --no-audit --no-fund
+
+COPY . .
+
+RUN npm run build \
+    && npm pack --pack-destination /tmp
+
+
+FROM node:20-bookworm-slim
+
+ARG LOCAL_BUILD_ID=local
+
+LABEL org.opencontainers.image.title="Agent Insight local build" \
+      org.opencontainers.image.version="${LOCAL_BUILD_ID}" \
+      org.opencontainers.image.source="local-worktree"
+
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
+    PORT=3000 \
+    HOSTNAME=0.0.0.0 \
+    AGENT_INSIGHT_DATA_DIR=/data/agent-insight \
+    AGENT_INSIGHT_BUILD_ID=${LOCAL_BUILD_ID} \
+    PATH=/app/node_modules/.bin:$PATH \
+    OPENCODE_BIN=/app/node_modules/.bin/opencode
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        openssl \
+        python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN npm init -y
+
+COPY --from=builder /src/node_modules /app/node_modules
+COPY --from=builder /tmp/agent-insight-*.tgz /tmp/agent-insight.tgz
+
+RUN mkdir -p /app/node_modules/agent-insight \
+    && tar -xzf /tmp/agent-insight.tgz --strip-components=1 -C /app/node_modules/agent-insight \
+    && node /app/node_modules/agent-insight/scripts/postinstall.js \
+    && rm -f /tmp/agent-insight.tgz \
+    && rm -rf "$HOME/.npm" "$HOME/.cache/prisma"
+
+RUN test -x /app/node_modules/.bin/opencode
+
+COPY scripts/docker-entrypoint.sh /usr/local/bin/agent-insight-entrypoint
+
+RUN chmod +x /usr/local/bin/agent-insight-entrypoint \
+    && mkdir -p /data/agent-insight /app/node_modules/.prisma /app/node_modules/.cache \
+    && for path in \
+        /app/node_modules/agent-insight/node_modules/.prisma \
+        /app/node_modules/agent-insight/node_modules/@prisma/client \
+        /app/node_modules/agent-insight/.next/standalone/node_modules/.prisma \
+        /app/node_modules/agent-insight/.next/standalone/node_modules/@prisma/client \
+        /app/node_modules/.prisma \
+        /app/node_modules/.cache \
+        /app/node_modules/@prisma/client; \
+        do [ ! -e "$path" ] || chown -R node:node "$path"; done \
+    && chown node:node /app \
+    && chown -R node:node /data/agent-insight
+
+USER node
+
+VOLUME ["/data/agent-insight"]
+EXPOSE 3000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=600s --retries=3 \
+    CMD node -e "const port=process.env.PORT||3000;require('http').get({host:'127.0.0.1',port,path:'/'},res=>process.exit(res.statusCode<500?0:1)).on('error',()=>process.exit(1))"
+
+CMD ["agent-insight-entrypoint"]
