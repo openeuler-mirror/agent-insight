@@ -246,7 +246,7 @@ Task Spawn 表示当前执行过程中派生出的新任务数量。在多 Agent
 
 > **Note**
 > 通过 OTel `logs` / `traces` 端点接入的数据是异步可见的：端点返回成功表示平台已受理并写入本地 spool（`traces` 支持 OTLP JSON 与 protobuf），后台消费者会在短暂 debounce 后落库，随后在会话空闲后再补充结果评估。因此刚发完上报后，列表页可能需要等待几秒才出现新 Trace，评估分数可能再稍后更新。
-> Claude Code 接入需要通过安装脚本生成的 OTel wrapper 开启 `OTEL_LOG_TOOL_DETAILS=1`，并将 `OTEL_LOG_RAW_API_BODIES` 配成 `file:<dir>`。`OTEL_LOG_RAW_API_BODIES=1` 的 inline body 会被 Claude Code 截断到 60 KB，长会话里可能拿不到工具结果正文；`OTEL_LOG_TOOL_CONTENT=1` 只影响 tracing span events，需要启用 traces。
+> Claude Code 接入需要通过安装脚本生成的 OTel wrapper 开启 `OTEL_LOG_TOOL_DETAILS=1`，并将 `OTEL_LOG_RAW_API_BODIES` 配成 `file:<dir>`。安装脚本还会注册仅供 Claude Code 使用的上下文补传器：主 Agent 每轮结束、子 Agent 结束或本轮 API 失败后会在后台补传系统提示词、hook 上下文、工具输出和子 Agent 映射，不需要执行 `/exit`；`SessionEnd` 仅作为最终兜底。系统提示词会分别归到 root 和对应子 Agent；Trace 列表使用首条真实用户输入，Claude Code 自己的标题生成、输入建议、离开摘要和 Agent 摘要不会显示为业务对话。高频 hook 会先按 Session 合并本地任务并共用一个上传 worker；这能避免 30 个 hook 事件/s 重复拉起进程，但 30 个全新完整 Session/s 是否能实时清空仍取决于网络和服务端容量，出现积压时任务会保留在本地队列等待后续重试。`OTEL_LOG_RAW_API_BODIES=1` 的 inline body 会被 Claude Code 截断到 60 KB，长会话里可能拿不到工具结果正文；`OTEL_LOG_TOOL_CONTENT=1` 只影响 tracing span events，需要启用 traces。
 > CodeAgent 接入后重启终端或加载对应环境脚本，继续使用原来的 `codeagent` 命令即可。Unix setup 安装 `~/.agent-insight/bin/codeagent`，Windows setup 安装 `%USERPROFILE%\.agent-insight\bin\codeagent.cmd` 和 `codeagent-wrapper.ps1` 并持久化用户级 PATH；继承该 PATH 的终端及 Shell、PowerShell、CMD、Python、Node 子脚本会自动注入 OTel 配置。cron、systemd、容器、Windows 服务等独立环境需要显式配置包装器目录。CodeAgent Logs 异步写入 `~/.agent-insight/otel_data/codeagent` 并生成 `framework=codeagent` 的 Trace；其 Traces/Metrics 请求会收到成功响应，但平台不会保存这两类信号。
 
 ### 场景二：排查失败问题

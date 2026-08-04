@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `7c7ea713d80dc747c66f3a11b5fc1c8ee36c0367` (`7c7ea71`) |
-| Branch | `new-dev-7-30` |
-| Date | 2026-07-30T18:30:03+08:00 |
-| Author | mintuyang |
-| Subject | `修复子agent点击trace可跳转` |
+| Commit | `528a92cae9dcb53dad2f0c732b6eec7156e3524e` (`528a92c`) |
+| Branch | `feat/claude-context-supplement` |
+| Date | 2026-08-04T12:01:49+08:00 |
+| Author | gyctl |
+| Subject | `chore: 合并 master 并解决文档冲突` |
 
-**如何更新：** `git diff 7c7ea71 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff 528a92c HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
