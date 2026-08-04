@@ -104,6 +104,9 @@ const TH: React.CSSProperties = {
   letterSpacing: '0.045em', color: 'var(--foreground-muted)', padding: '9px 12px',
   borderBottom: '1px solid var(--border)', background: 'var(--background-secondary)', whiteSpace: 'nowrap',
 };
+const STICKY_TH: React.CSSProperties = {
+  ...TH, position: 'sticky', top: 0, zIndex: 1,
+};
 const TD: React.CSSProperties = {
   padding: '9px 12px', fontSize: 12.5, color: 'var(--foreground-secondary)',
   borderBottom: '1px solid var(--border)', verticalAlign: 'middle',
@@ -671,7 +674,7 @@ export default function NewExperimentPage() {
   return (
     <>
       <AppTopBar title="新建实验" />
-      <PageContainer>
+      <PageContainer className="[&>*]:shrink-0">
         {/* 页头 */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '2px 0 12px' }}>
           <button
@@ -1018,11 +1021,11 @@ export default function NewExperimentPage() {
               </div>
             )}
 
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
+            <div style={{ maxHeight: 'min(42vh, 420px)', overflow: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1080 }}>
                 <thead>
                   <tr>
-                    <th style={{ ...TH, width: 36 }}>
+                    <th style={{ ...STICKY_TH, width: 36 }}>
                       <input
                         type="checkbox"
                         checked={pageAllSelected}
@@ -1033,12 +1036,12 @@ export default function NewExperimentPage() {
                         style={{ cursor: traces.length ? 'pointer' : 'not-allowed' }}
                       />
                     </th>
-                    <th style={TH}>Trace ID</th>
-                    <th style={TH}>任务输入</th>
-                    <th style={TH}>状态</th>
-                    <th style={{ ...TH, textAlign: 'right' }}>耗时</th>
-                    <th style={{ ...TH, textAlign: 'right' }}>Token</th>
-                    <th style={TH}>时间</th>
+                    <th style={STICKY_TH}>Trace ID</th>
+                    <th style={STICKY_TH}>任务输入</th>
+                    <th style={STICKY_TH}>状态</th>
+                    <th style={{ ...STICKY_TH, textAlign: 'right' }}>耗时</th>
+                    <th style={{ ...STICKY_TH, textAlign: 'right' }}>Token</th>
+                    <th style={STICKY_TH}>时间</th>
                   </tr>
                 </thead>
                 <tbody>
