@@ -12,6 +12,8 @@ export const codexAdapter: FrameworkAdapter = {
     skills: true,
     subagentTree: true,
   },
-  sessionMergeStrategy: "monotonic",
+  // Codex relay re-aggregates every execution from its complete durable spool.
+  // Merging snapshots duplicates child turns and can corrupt their ownership.
+  sessionMergeStrategy: "snapshot-replace",
   extractSkills: extractSkillsWithVersionsFromOpencodeSession,
 }

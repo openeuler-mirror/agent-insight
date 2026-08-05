@@ -15,6 +15,7 @@ import { apiFetch } from '@/lib/client/api';
 import { useLocale } from '@/lib/client/locale-context';
 import { SPAN_KIND_CLASSES } from '@/lib/charts/palette';
 import { cn } from '@/lib/utils';
+import { resolveTraceTimelineDurationMs } from '@/lib/latency-format';
 import { getAgentDisplayName, getAgentNodeDisplayLabel } from '@/lib/engine/observability/agent-registration';
 import {
     AgentEvent,
@@ -366,6 +367,11 @@ export interface AgentTraceViewProps {
     interactions: RawInteraction[];
     framework?: string;
     langfuseTraceNodes?: LangfuseTraceNode[];
+    /**
+     * Persisted execution elapsed time. It can exceed the root Agent span when
+     * a delegated child continues after the parent's last direct event.
+     */
+    executionDurationMs?: number;
     /** 按 interaction index 读取完整原文；未提供时保持旧的一次性完整数据行为。 */
     loadInteraction?: (index: number) => Promise<RawInteraction>;
     /** 搜索或 Prompt/Timeline 需要完整上下文时按需读取全部 interactions。 */
@@ -387,6 +393,7 @@ export default function AgentTraceView({
     interactions: sourceInteractions,
     framework,
     langfuseTraceNodes,
+    executionDurationMs,
     loadInteraction,
     loadAllInteractions,
     onSubagentNavigate,
@@ -561,7 +568,7 @@ export default function AgentTraceView({
     );
 
     const totalStart = tree?.startedAt;
-    const totalDuration = tree?.stats.durationMs;
+    const totalDuration = resolveTraceTimelineDurationMs(tree?.stats.durationMs, executionDurationMs);
 
     // Resolve selected node/event for right panel
     const { selectedAgentNode, selectedEvent } = useMemo(() => {

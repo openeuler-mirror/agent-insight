@@ -23,14 +23,21 @@ function content(value: unknown): string | undefined {
 }
 
 function eventInput(event: OtelTraceEvent): string | undefined {
-  return content(attrs(event)['input.value']);
+  const value = content(attrs(event)['input.value'] ?? (event as AnyObj).input);
+  // Codex emits this placeholder for lifecycle events when a prompt is not
+  // exported. It is not a user task boundary and must not create a root.
+  return value?.trim() === '[REDACTED]' ? undefined : value;
 }
 
 function eventOutput(event: OtelTraceEvent): string | undefined {
-  return content(attrs(event)['output.value'] ?? attrs(event)['tool.result']);
+  const raw = event as AnyObj;
+  return content(attrs(event)['output.value'] ?? attrs(event)['tool.result'] ?? raw.output ??
+    (raw.tool as AnyObj | undefined)?.result);
 }
 
 function eventEndMs(event: OtelTraceEvent): number {
+  const rawEnd = Number((event as AnyObj).endTimeMs);
+  if (Number.isFinite(rawEnd) && rawEnd > 0) return rawEnd;
   return (event.startTimeMs || 0) + Math.max(0, event.latencyMs || 0);
 }
 
@@ -43,18 +50,21 @@ function eventModel(event: OtelTraceEvent): string | undefined {
 }
 
 function eventUsage(event: OtelTraceEvent) {
+  const usage = (event.usage || {}) as AnyObj;
+  const number = (snake: string, canonical: string) =>
+    Number(usage[snake] ?? usage[canonical]) || 0;
   return {
-    input: event.usage.input_tokens || 0,
-    output: event.usage.output_tokens || 0,
-    reasoning: event.usage.reasoning_tokens || 0,
-    total: event.usage.total_tokens || 0,
+    input: number('input_tokens', 'input'),
+    output: number('output_tokens', 'output'),
+    reasoning: number('reasoning_tokens', 'reasoning'),
+    total: number('total_tokens', 'total'),
     cache: {
       read: Number(attrs(event)['codex.usage.cache_read']) || 0,
       write: 0,
     },
-    input_tokens: event.usage.input_tokens || 0,
-    output_tokens: event.usage.output_tokens || 0,
-    reasoning_tokens: event.usage.reasoning_tokens || 0,
+    input_tokens: number('input_tokens', 'input'),
+    output_tokens: number('output_tokens', 'output'),
+    reasoning_tokens: number('reasoning_tokens', 'reasoning'),
   };
 }
 
@@ -65,7 +75,7 @@ function agentName(event: OtelTraceEvent): string {
 }
 
 function toolName(event: OtelTraceEvent): string {
-  return content(attrs(event)['tool.name']) ||
+  return content(attrs(event)['tool.name'] ?? ((event as AnyObj).tool as AnyObj | undefined)?.name) ||
     String(event.name || '').replace(/^tool\./, '') ||
     'tool';
 }
@@ -107,7 +117,9 @@ function ownerFields(owner: ReturnType<typeof ownerFor>): AnyObj {
   if (!owner.sessionId) return { role: 'assistant', agent: 'codex' };
   return {
     role: 'subagent',
-    agent: owner.name,
+    // Keep the framework identity stable for filtering. The specialised
+    // execution role belongs in subagent_name, not in the Agent field.
+    agent: 'codex',
     subagent_name: owner.name,
     subagent_session_id: owner.sessionId,
   };
@@ -145,11 +157,37 @@ function interactionBase(event: OtelTraceEvent, owner: ReturnType<typeof ownerFo
   };
 }
 
+function finalReplyInteraction(
+  event: OtelTraceEvent,
+  reply: string,
+  model?: string,
+): AnyObj {
+  const completedAt = eventEndMs(event) || event.startTimeMs || Date.parse(event.receivedAt) || Date.now();
+  return {
+    role: 'assistant',
+    agent: 'codex',
+    content: reply,
+    timestamp: toIso(completedAt),
+    timeInfo: {
+      created: toIso(completedAt),
+      completed: toIso(completedAt),
+    },
+    traceId: event.traceId,
+    spanId: `${event.spanId || event.traceId || 'codex-root'}:output`,
+    parentSpanId: event.spanId,
+    name: 'llm.final',
+    source: 'hook-final-reply',
+    turn_id: attrs(event)['codex.turn.id'],
+    model: model || eventModel(event),
+  };
+}
+
 function toolCall(event: OtelTraceEvent): AnyObj {
   const eventAttrs = attrs(event);
+  const rawTool = (event as AnyObj).tool as AnyObj | undefined;
   const startedAt = event.startTimeMs || Date.parse(event.receivedAt) || Date.now();
   const completedAt = eventEndMs(event) || startedAt;
-  const outcome = String(eventAttrs['tool.outcome'] || '').toLowerCase();
+  const outcome = String(eventAttrs['tool.outcome'] || (event as AnyObj).status || '').toLowerCase();
   const output = eventOutput(event);
   return {
     id: event.spanId,
@@ -157,7 +195,7 @@ function toolCall(event: OtelTraceEvent): AnyObj {
     state: ['error', 'failed'].includes(outcome) ? 'error' : 'success',
     function: {
       name: toolName(event),
-      arguments: content(eventAttrs['tool.arguments']) || '{}',
+      arguments: content(eventAttrs['tool.arguments'] ?? rawTool?.arguments) || '{}',
     },
     output,
     result: output,
@@ -183,6 +221,102 @@ function numericSkillVersion(value: unknown): number | null {
   return semver ? Number(semver[1]) : null;
 }
 
+function toolFamily(event: OtelTraceEvent): string {
+  const normalized = toolName(event).toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (['bash', 'exec', 'execcommand', 'powershell', 'pwsh', 'shellcommand', 'terminal']
+    .includes(normalized)) {
+    return 'shell';
+  }
+  return normalized;
+}
+
+function normalizedToolOutput(event: OtelTraceEvent): string {
+  return (eventOutput(event) || '').replace(/\s+/g, ' ').trim();
+}
+
+function toolSource(event: OtelTraceEvent): string {
+  return content(attrs(event)['codex.tool.source']) || '';
+}
+
+function hasToolSource(event: OtelTraceEvent, source: 'hook' | 'otel'): boolean {
+  return toolSource(event).split('+').includes(source);
+}
+
+function isHookOtelToolPair(left: OtelTraceEvent, right: OtelTraceEvent): boolean {
+  if (!['tool', 'mcp'].includes(semanticKind(left)) ||
+    !['tool', 'mcp'].includes(semanticKind(right))) return false;
+  const leftHasHook = hasToolSource(left, 'hook');
+  const rightHasHook = hasToolSource(right, 'hook');
+  const leftHasOtel = hasToolSource(left, 'otel');
+  const rightHasOtel = hasToolSource(right, 'otel');
+  if (!((leftHasHook && !rightHasHook && rightHasOtel) ||
+    (rightHasHook && !leftHasHook && leftHasOtel))) return false;
+  if (left.sessionId !== right.sessionId || left.parentSpanId !== right.parentSpanId) return false;
+  if (toolFamily(left) !== toolFamily(right)) return false;
+
+  const leftStart = left.startTimeMs || 0;
+  const rightStart = right.startTimeMs || 0;
+  const leftEnd = eventEndMs(left);
+  const rightEnd = eventEndMs(right);
+  if (Math.abs(leftStart - rightStart) > 2_000 || Math.abs(leftEnd - rightEnd) > 3_000) return false;
+  if (Math.max(leftStart, rightStart) > Math.min(leftEnd, rightEnd) + 250) return false;
+
+  const leftOutput = normalizedToolOutput(left);
+  const rightOutput = normalizedToolOutput(right);
+  return Boolean(leftOutput && rightOutput &&
+    (leftOutput.includes(rightOutput) || rightOutput.includes(leftOutput)));
+}
+
+function mergeHookOtelTool(hook: OtelTraceEvent, otel: OtelTraceEvent): OtelTraceEvent {
+  const startedAt = Math.min(hook.startTimeMs || 0, otel.startTimeMs || 0);
+  const completedAt = Math.max(eventEndMs(hook), eventEndMs(otel));
+  const merged = {
+    ...otel,
+    ...hook,
+    startTimeMs: startedAt,
+    latencyMs: Math.max(0, completedAt - startedAt),
+    attributes: {
+      ...attrs(otel),
+      ...attrs(hook),
+      'codex.tool.source': 'hook+otel',
+      'codex.otel.call.id': attrs(otel)['codex.call.id'],
+    },
+  };
+  (merged as AnyObj).endTimeMs = completedAt;
+  return merged;
+}
+
+function mergeDirectCallIdTools(events: OtelTraceEvent[]): OtelTraceEvent[] {
+  const groups = new Map<string, OtelTraceEvent[]>();
+  for (const event of events) {
+    if (!['tool', 'mcp'].includes(semanticKind(event))) continue;
+    const callId = content(attrs(event)['codex.call.id']);
+    if (!callId) continue;
+    const key = [event.sessionId, event.parentSpanId || '', toolFamily(event), callId].join('|');
+    const group = groups.get(key) || [];
+    group.push(event);
+    groups.set(key, group);
+  }
+
+  const replacements = new Map<OtelTraceEvent, OtelTraceEvent>();
+  const removed = new Set<OtelTraceEvent>();
+  for (const group of groups.values()) {
+    const hooks = group.filter((event) => hasToolSource(event, 'hook'));
+    const otels = group.filter((event) => hasToolSource(event, 'otel'));
+    if (hooks.length === 0 || otels.length === 0) continue;
+    const hook = [...hooks].sort((left, right) => eventEndMs(right) - eventEndMs(left))[0];
+    const merged = otels.reduce((current, otel) => mergeHookOtelTool(current, otel), hook);
+    replacements.set(hook, merged);
+    for (const event of group) if (event !== hook) removed.add(event);
+  }
+
+  return events.flatMap((event) => {
+    const merged = replacements.get(event);
+    if (merged) return [merged];
+    return removed.has(event) ? [] : [event];
+  });
+}
+
 export function keepLatestCodexSpanSnapshots(events: OtelTraceEvent[]): OtelTraceEvent[] {
   const latest = new Map<string, OtelTraceEvent>();
   const withoutSpan: OtelTraceEvent[] = [];
@@ -194,22 +328,94 @@ export function keepLatestCodexSpanSnapshots(events: OtelTraceEvent[]): OtelTrac
     const existing = latest.get(event.spanId);
     if (!existing || eventEndMs(event) >= eventEndMs(existing)) latest.set(event.spanId, event);
   }
-  return [...latest.values(), ...withoutSpan]
+  const snapshots = mergeDirectCallIdTools([...latest.values(), ...withoutSpan]);
+  const hookTools = snapshots.filter((event) =>
+    hasToolSource(event, 'hook') &&
+    ['tool', 'mcp'].includes(semanticKind(event)));
+  const otelTools = snapshots.filter((event) =>
+    !hasToolSource(event, 'hook') && hasToolSource(event, 'otel') &&
+    ['tool', 'mcp'].includes(semanticKind(event)));
+  const hookMatches = new Map<OtelTraceEvent, OtelTraceEvent[]>();
+  const otelMatches = new Map<OtelTraceEvent, OtelTraceEvent[]>();
+  for (const hook of hookTools) {
+    const matches = otelTools.filter((otel) => isHookOtelToolPair(hook, otel));
+    hookMatches.set(hook, matches);
+    for (const otel of matches) {
+      const reverse = otelMatches.get(otel) || [];
+      reverse.push(hook);
+      otelMatches.set(otel, reverse);
+    }
+  }
+
+  const mergedHooks = new Map<OtelTraceEvent, OtelTraceEvent>();
+  const mergedOtels = new Set<OtelTraceEvent>();
+  for (const [hook, matches] of hookMatches) {
+    if (matches.length !== 1) continue;
+    const otel = matches[0];
+    if ((otelMatches.get(otel) || []).length !== 1) continue;
+    mergedHooks.set(hook, mergeHookOtelTool(hook, otel));
+    mergedOtels.add(otel);
+  }
+
+  return snapshots
+    .flatMap((event) => {
+      const merged = mergedHooks.get(event);
+      if (merged) return [merged];
+      return mergedOtels.has(event) ? [] : [event];
+    })
     .sort((left, right) =>
       (left.startTimeMs || 0) - (right.startTimeMs || 0) ||
       String(left.spanId).localeCompare(String(right.spanId)));
+}
+
+function orderCodexEvents(events: OtelTraceEvent[]): OtelTraceEvent[] {
+  const compare = (left: OtelTraceEvent, right: OtelTraceEvent) =>
+    (left.startTimeMs || 0) - (right.startTimeMs || 0) ||
+    String(left.spanId).localeCompare(String(right.spanId));
+  const chronological = [...events].sort(compare);
+  const spanIds = new Set(chronological.flatMap((event) => event.spanId ? [event.spanId] : []));
+  const children = new Map<string, OtelTraceEvent[]>();
+  const roots: OtelTraceEvent[] = [];
+
+  for (const event of chronological) {
+    const parentId = event.parentSpanId;
+    if (!parentId || parentId === event.spanId || !spanIds.has(parentId)) {
+      roots.push(event);
+      continue;
+    }
+    const siblings = children.get(parentId) || [];
+    siblings.push(event);
+    children.set(parentId, siblings);
+  }
+
+  for (const siblings of children.values()) siblings.sort(compare);
+  const ordered: OtelTraceEvent[] = [];
+  const visited = new Set<OtelTraceEvent>();
+  const visit = (event: OtelTraceEvent) => {
+    if (visited.has(event)) return;
+    visited.add(event);
+    ordered.push(event);
+    if (event.spanId) for (const child of children.get(event.spanId) || []) visit(child);
+  };
+
+  // Parent spans must precede their child spans even when independently
+  // timestamped Hook and OTel streams have a few milliseconds of clock skew.
+  for (const event of roots) visit(event);
+  for (const event of chronological) visit(event); // malformed cycles: keep all evidence
+  return ordered;
 }
 
 export function aggregateCodexTraceEvents(
   sessionId: string,
   events: OtelTraceEvent[],
 ): ExecutionRecord | null {
-  const ordered = events
-    .filter((event) => event.sessionId === sessionId)
-    .sort((left, right) =>
-      (left.startTimeMs || 0) - (right.startTimeMs || 0) ||
-      String(left.spanId).localeCompare(String(right.spanId)));
+  const ordered = orderCodexEvents(events.filter((event) => event.sessionId === sessionId));
   if (ordered.length === 0) return null;
+  // An automatic unit without a unique/direct parent is retained in the spool
+  // for a later correlated replay, but must never become a visible root task.
+  if (ordered.every((event) => attrs(event)['codex.association.pending'] === 'true')) {
+    return null;
+  }
 
   const bySpanId = new Map(
     ordered.filter((event) => event.spanId).map((event) => [event.spanId!, event]),
@@ -221,6 +427,8 @@ export function aggregateCodexTraceEvents(
   const toolEvents: OtelTraceEvent[] = [];
   const rootEvents: OtelTraceEvent[] = [];
   const subagentEvents: OtelTraceEvent[] = [];
+  const rootLlmEvents: OtelTraceEvent[] = [];
+  const rootLlmInteractions: AnyObj[] = [];
   let toolErrors = 0;
 
   for (const event of ordered) {
@@ -329,13 +537,18 @@ export function aggregateCodexTraceEvents(
 
     if (kind === 'llm') {
       llmEvents.push(event);
-      interactions.push({
+      const interaction = {
         ...interactionBase(event, owner),
         content: eventOutput(event) || '',
         model: eventModel(event),
         provider: content(attrs(event)['llm.provider']),
         usage: eventUsage(event),
-      });
+      };
+      interactions.push(interaction);
+      if (!owner.sessionId) {
+        rootLlmEvents.push(event);
+        rootLlmInteractions.push(interaction);
+      }
       continue;
     }
 
@@ -357,38 +570,75 @@ export function aggregateCodexTraceEvents(
     }
   }
 
+  const delegated = ordered.some((event) =>
+    attrs(event)['codex.delegated.session'] === 'true');
+  const hasMeaningfulRootSignal = rootEvents.some((event) =>
+    Boolean(eventInput(event) || eventOutput(event)));
+  if (!hasMeaningfulRootSignal && llmEvents.length === 0 && toolEvents.length === 0 &&
+    invokedSkills.length === 0 && subagentEvents.length === 0) {
+    return null;
+  }
   const first = ordered[0];
-  const startedAt = Math.min(...ordered.map((event) =>
+  // Execution 已按 turn 边界拆分；从根 agent 的开始到该 execution 内最后一个
+  // child event 的结束，才能覆盖真实的 LLM、Tool、Skill 与子 Agent 链路。
+  // 不能只取根生命周期 snapshot 的结束时间，否则根节点可能短于实际执行数分钟。
+  const rootStarted = rootEvents
+    .map((event) => event.startTimeMs || Date.parse(event.receivedAt) || Date.now())
+    .sort((a, b) => a - b)[0];
+  const startedAt = rootStarted ?? Math.min(...ordered.map((event) =>
     event.startTimeMs || Date.parse(event.receivedAt) || Date.now()));
   const endedAt = Math.max(...ordered.map(eventEndMs));
   const query = rootEvents.map(eventInput).find(Boolean) ||
     llmEvents.map(eventInput).find(Boolean) ||
-    'Codex Session';
-  const finalResult = [...rootEvents].reverse().map(eventOutput).find(Boolean) ||
-    [...llmEvents].reverse().map(eventOutput).find(Boolean) ||
-    '';
-  const inputTokens = llmEvents.reduce((sum, event) => sum + (event.usage.input_tokens || 0), 0);
-  const outputTokens = llmEvents.reduce((sum, event) => sum + (event.usage.output_tokens || 0), 0);
+    subagentEvents.map(eventInput).find(Boolean) ||
+    (toolEvents.length > 0 ? `Codex tool: ${toolName(toolEvents[0])}` : 'Codex execution');
+  const finalRootEvent = [...rootEvents].reverse().find((event) => Boolean(eventOutput(event)));
+  const finalLlmEvent = [...rootLlmEvents].reverse().find((event) => Boolean(eventOutput(event)));
+  const finalResult = finalRootEvent
+    ? eventOutput(finalRootEvent) || ''
+    : finalLlmEvent
+      ? eventOutput(finalLlmEvent) || ''
+      : '';
+  if (finalResult) {
+    const finalRootLlm = rootLlmInteractions[rootLlmInteractions.length - 1];
+    const finalRootLlmIndex = finalRootLlm ? interactions.lastIndexOf(finalRootLlm) : -1;
+    const existingReply = content(finalRootLlm?.content);
+    if (finalRootLlm && finalRootLlmIndex === interactions.length - 1 && !existingReply) {
+      // Native Codex OTel provides the final response timing/usage but not its
+      // visible text. Hook Stop carries that text on the root Agent snapshot,
+      // so complete the existing final LLM interaction instead of inventing a
+      // second model call or changing its token/timing metrics.
+      finalRootLlm.content = finalResult;
+    } else if (!existingReply || existingReply.trim() !== finalResult.trim()) {
+      // If no root LLM can safely own the reply (for example only a subagent
+      // emitted LLM telemetry, or a Tool follows the last root LLM), retain the
+      // canonical root answer as a stable terminal assistant interaction.
+      const finalReplySource = finalRootEvent || finalLlmEvent || rootEvents[rootEvents.length - 1] || first;
+      const finalRootLlmEvent = rootLlmEvents[rootLlmEvents.length - 1];
+      const finalReplyModel = finalRootLlmEvent ? eventModel(finalRootLlmEvent) : undefined;
+      interactions.push(finalReplyInteraction(finalReplySource, finalResult, finalReplyModel));
+    }
+  }
+  const inputTokens = llmEvents.reduce((sum, event) => sum + eventUsage(event).input, 0);
+  const outputTokens = llmEvents.reduce((sum, event) => sum + eventUsage(event).output, 0);
   const reasoningTokens = llmEvents.reduce(
-    (sum, event) => sum + (event.usage.reasoning_tokens || 0),
+    (sum, event) => sum + eventUsage(event).reasoning,
     0,
   );
   const cacheReadInputTokens = llmEvents.reduce(
     (sum, event) => sum + (Number(attrs(event)['codex.usage.cache_read']) || 0),
     0,
   );
-  const tokens = llmEvents.reduce((sum, event) => sum + (
-    event.usage.total_tokens ||
-    event.usage.input_tokens +
-    event.usage.output_tokens
-  ), 0);
+  const tokens = llmEvents.reduce((sum, event) => {
+    const usage = eventUsage(event);
+    return sum + (usage.total || usage.input + usage.output);
+  }, 0);
   const maxSingleCallTokens = Math.max(
     0,
-    ...llmEvents.map((event) => (
-      event.usage.total_tokens ||
-      event.usage.input_tokens +
-      event.usage.output_tokens
-    )),
+    ...llmEvents.map((event) => {
+      const usage = eventUsage(event);
+      return usage.total || usage.input + usage.output;
+    }),
   );
   const model = llmEvents.map(eventModel).find(Boolean) ||
     rootEvents.map(eventModel).find(Boolean) ||
@@ -403,7 +653,13 @@ export function aggregateCodexTraceEvents(
     latency: Math.max(0, endedAt - startedAt),
     final_result: finalResult,
     timestamp: new Date(startedAt),
+    trace_started_at: new Date(startedAt),
     trace_completed_at: new Date(endedAt),
+    session_merge_strategy: 'snapshot-replace',
+    // The Codex relay reads the entire execution spool before aggregation. A
+    // deduplicated rebuild may legitimately contain fewer interactions than a
+    // stale pre-fix row, so it is safe to replace that row precisely.
+    complete_session_snapshot: true,
     label: 'codex',
     user: first.user || 'anonymous',
     interactions,
@@ -412,7 +668,10 @@ export function aggregateCodexTraceEvents(
     skills: invokedSkills.map((skill) => skill.name),
     agent: 'codex',
     agentName: 'codex',
-    agents: [...new Set(['codex', ...subagentEvents.map(agentName)])],
+    agents: ['codex'],
+    // spawn_agent 委派产生的 fork session：标记为子代理（不显示为独立主任务，
+    // 见 issue-159-codex-open.md Bug 8）。parent 由后续关联或 UI 处理。
+    ...(delegated ? { isSubagent: true, subagentName: 'subagent' } : {}),
     llm_call_count: llmEvents.length,
     tool_call_count: toolEvents.length,
     tool_call_error_count: toolErrors,
@@ -429,7 +688,8 @@ export const codexOtelTraceAdapter: OtelTraceAdapter = {
   matches: (events) => events.some((event) => (
     event.serviceName === 'codex' ||
     event.serviceName === 'codex-cli' ||
-    attrs(event)['agent.insight.framework'] === 'codex'
+    attrs(event)['agent.insight.framework'] === 'codex' ||
+    (event as AnyObj).framework === 'codex'
   )),
   preprocessEvents: keepLatestCodexSpanSnapshots,
   aggregate: aggregateCodexTraceEvents,
