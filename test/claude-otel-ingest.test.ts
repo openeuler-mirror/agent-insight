@@ -7,7 +7,7 @@ import test from "node:test"
 import { aggregateClaudeOtelEvents } from "@/lib/ingest/claude-otel/aggregator"
 import { buildAgentCallTree } from "@/lib/engine/observability/agent-trace"
 import { ClaudeParser } from "@/lib/engine/observability/claude-parser"
-import { normalizeClaudeOtlpLogs } from "@/lib/ingest/claude-otel/otlp-json"
+import { normalizeClaudeOtlpLogs, normalizeClaudeOtlpTraces } from "@/lib/ingest/claude-otel/otlp-json"
 import { normalizeClaudeCodeInteractionsForStorage } from "@/lib/shared/interaction-content"
 
 const attr = (key: string, value: any) => ({
@@ -664,4 +664,33 @@ test("Claude parser: maps tool_result blocks back onto tool_calls output", async
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test("Claude OTel: classifies Pi agent.insight.kind spans correctly", () => {
+  // Pi 采集器上传的 agent 事件（agent.insight.kind=agent）不应被降级当 llm
+  const record = normalizeClaudeOtlpTraces({
+    resourceSpans: [{
+      resource: { attributes: [{ key: "service.name", value: { stringValue: "pi-agent" } }] },
+      scopeSpans: [{
+        scope: { name: "agent-insight-pi-agent" },
+        spans: [{
+          traceId: "a".repeat(32),
+          spanId: "1".repeat(16),
+          name: "agent.pi",
+          kind: 1,
+          startTimeUnixNano: "1700000000000000000",
+          endTimeUnixNano: "1700000001000000000",
+          attributes: [
+            { key: "session.id", value: { stringValue: "session-pi" } },
+            { key: "agent.insight.kind", value: { stringValue: "agent" } },
+            { key: "agent.insight.framework", value: { stringValue: "pi-agent" } },
+            { key: "openinference.span.kind", value: { stringValue: "AGENT" } },
+          ],
+        }],
+      }],
+    }],
+  }, { receivedAt: new Date().toISOString() })
+  const agentEvent = record.find((ev: any) => ev.name === "agent.pi")
+  assert.ok(agentEvent, "agent event present")
+  assert.equal(agentEvent.kind, "agent")
 })

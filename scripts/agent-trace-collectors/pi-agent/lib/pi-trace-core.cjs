@@ -124,6 +124,24 @@ function resultText(result) {
   return messageText(result) || safeContent(result?.content) || safeContent(result) || "";
 }
 
+// Pi 0.82.x 的 subagent/skill 委派工具会 spawn 一个独立 `pi` 进程执行子任务：
+//   pi --mode json -p --no-session [--model ..] [--tools ..] "Task: <task>"
+// 该 worker 进程同样加载本采集器并独立上传一份事件，与主进程 subagent 事件的
+// 派生记录重复（同一个 worker 被记成两条、且出现 "Task: " 前缀的假主记录）。
+// 主进程的 subagent 事件已携带 worker 的完整 messages/usage，跳过 worker 进程
+// 采集不影响数据完整性。识别条件用 worker 独有的组合：json 模式 + 非交互 +
+// 不保存会话 + 以 "Task: " 前缀的 message 参数。
+function isSubagentWorkerProcess(argv = process.argv) {
+  const args = Array.isArray(argv) ? argv.map(String) : [];
+  const hasFlag = (flag) => args.includes(flag);
+  const modeIndex = args.indexOf("--mode");
+  const jsonMode = modeIndex !== -1 && args[modeIndex + 1] === "json";
+  const nonInteractive = hasFlag("-p") || hasFlag("--print");
+  const noSession = hasFlag("--no-session");
+  if (!(jsonMode && nonInteractive && noSession)) return false;
+  return args.some((arg) => arg.startsWith("Task: "));
+}
+
 function minMessageTime(messages, fallback) {
   const times = (Array.isArray(messages) ? messages : [])
     .map((message) => Number(message?.timestamp))
@@ -168,6 +186,10 @@ class PiTraceCollector {
   }
 
   startSession(sessionId) {
+    // Pi 的 sessionId 在整个交互会话内保持不变；若多个 agent 任务共享同一
+    // sessionId，服务端会把多任务事件聚合成一条 ExecutionRecord 并相互覆盖。
+    // 这里保存基 sessionId，并在 beginAgent 时为每个任务派生独立子 sessionId。
+    this.baseSessionId = String(sessionId);
     this.sessionId = String(sessionId);
     this.traceId = stableTraceId("pi-agent", this.sessionId);
     this.uploader.start(this.config.uploadIntervalMs);
@@ -186,6 +208,12 @@ class PiTraceCollector {
 
   beginAgent(event, ctx) {
     if (!this.sessionId) this.startSession(ctx.sessionManager.getSessionId());
+    // 每个 agent 任务独立 sessionId（基于 Pi 会话 sessionId + agent 序号），
+    // 使服务端按 session 聚合出独立 ExecutionRecord，避免多任务相互覆盖。
+    if (this.baseSessionId) {
+      this.sessionId = `${this.baseSessionId}__task${this.turnSequence}`;
+      this.traceId = stableTraceId("pi-agent", this.sessionId);
+    }
     const startedAt = this.now();
     const spanId = stableSpanId(this.sessionId, "agent", this.turnSequence);
     this.turnSequence += 1;
@@ -230,6 +258,31 @@ class PiTraceCollector {
         : Promise.resolve("unknown"),
     };
     this.activeSkills.push(span);
+    // Skill 的版本解析可能读取磁盘，不能把「开始」事件拖到整个 Agent 收口时才写出。
+    // 先以稳定 spanId 写入 running 快照；settleAgent 会用同一 eventId 写入完整快照，
+    // 服务端按 spanId 收敛为最后状态，实时链路仍能保持真实的开始顺序。
+    this.append({
+      eventId: stableEventId(this.sessionId, span.spanId),
+      sessionId: this.sessionId,
+      traceId: this.traceId,
+      spanId: span.spanId,
+      parentSpanId: this.currentAgent.spanId,
+      kind: "skill",
+      name: `skill.${span.name}`,
+      startTimeMs: span.startedAt,
+      endTimeMs: span.startedAt,
+      status: "running",
+      input: this.currentAgent.input,
+      output: "",
+      skill: {
+        name: span.name,
+        version: "unknown",
+        triggerMode: span.triggerMode,
+      },
+    });
+    this.writer.flush()
+      .then(() => this.uploader.flushOnce())
+      .catch((error) => this.errors.push(error));
     return span;
   }
 
@@ -390,11 +443,17 @@ class PiTraceCollector {
 
       let lastLlmSpanId = childSpanId;
       let assistantIndex = 0;
+      // worker 的 assistant 消息只有完成时间戳、没有独立的开始时间。用相邻消息
+      // 时间戳推算 LLM 时长：第 i 条 LLM 的 [start, end] = [上一条 assistant 的
+      // 完成时刻, 本条完成时刻]；首条从工具开始时刻（fallbackStartedAt）算起，
+      // 保证早于首条消息完成时刻、时长非 0。多条 LLM 时长合起来覆盖整个 span。
+      let prevAssistantTs = fallbackStartedAt;
       for (const message of messages) {
         if (message?.role === "assistant") {
           const llmSpanId = stableSpanId(childSpanId, "llm", assistantIndex);
           assistantIndex += 1;
           const assistantUsage = usageFrom(message);
+          const completedAt = Number(message.timestamp) || endedAt;
           this.append({
             eventId: stableEventId(this.sessionId, llmSpanId),
             sessionId: this.sessionId,
@@ -403,8 +462,8 @@ class PiTraceCollector {
             parentSpanId: childSpanId,
             kind: "llm",
             name: `llm.${message.responseModel || message.model || result?.model || "unknown"}`,
-            startTimeMs: Number(message.timestamp) || startedAt,
-            endTimeMs: Number(message.timestamp) || endedAt,
+            startTimeMs: prevAssistantTs,
+            endTimeMs: completedAt,
             status: message.stopReason === "error" ? "error" : "success",
             error: message.errorMessage,
             output: messageText(message),
@@ -413,6 +472,7 @@ class PiTraceCollector {
             usage: assistantUsage,
           });
           lastLlmSpanId = llmSpanId;
+          prevAssistantTs = completedAt;
           continue;
         }
         if (message?.role !== "toolResult") continue;
@@ -524,6 +584,7 @@ class PiTraceCollector {
 function createCollector(options = {}) {
   const config = options.config || loadCollectorConfig(options);
   if (!config.enabled) return null;
+  if (isSubagentWorkerProcess(options.argv)) return null;
   return new PiTraceCollector({ ...options, config });
 }
 
@@ -556,6 +617,7 @@ module.exports = {
   PiTraceCollector,
   classifyTool,
   createCollector,
+  isSubagentWorkerProcess,
   loadCollectorConfig,
   messageText,
   parseMcpIdentity,

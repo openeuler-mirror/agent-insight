@@ -4,6 +4,9 @@ import test from "node:test"
 import {
   extractObservedAgentNames,
   extractObservedAgentRegistrations,
+  getAgentDisplayName,
+  getAgentNodeDisplayLabel,
+  getFrameworkPrimaryAgentName,
   getPrimaryObservedAgentName,
 } from "@/lib/engine/observability/agent-registration"
 
@@ -39,6 +42,28 @@ test("extractObservedAgentNames returns subagent_name for trace filtering", () =
       { role: "subagent", subagent_name: "Fuxi-Sub (Diagnostic Planner Subagent)" },
     ]),
     ["Fuxi-Sub (Diagnostic Planner Subagent)"],
+  )
+})
+
+test("Codex and Pi keep delegated role names out of platform Agent registration", () => {
+  const interactions = [
+    { role: "assistant", agent: "pi-agent", content: "delegate" },
+    { role: "subagent", agent: "worker", subagent_name: "worker", content: "done" },
+  ]
+
+  assert.equal(getFrameworkPrimaryAgentName("codex"), "codex")
+  assert.equal(getFrameworkPrimaryAgentName("pi-agent"), "pi-agent")
+  assert.equal(getAgentDisplayName("codex"), "Codex")
+  assert.equal(getAgentDisplayName("pi-agent"), "Pi")
+  assert.equal(getAgentNodeDisplayLabel("pi-agent", "worker"), "Pi · worker")
+  assert.equal(getAgentNodeDisplayLabel("codex", "Memory Agent"), "Codex · Memory Agent")
+  assert.deepEqual(
+    extractObservedAgentRegistrations(interactions, "pi-agent", { includeSubagents: false }),
+    [{ name: "pi-agent", agentType: "main" }],
+  )
+  assert.deepEqual(
+    extractObservedAgentNames(interactions, "pi-agent", { includeSubagents: false }),
+    ["pi-agent"],
   )
 })
 

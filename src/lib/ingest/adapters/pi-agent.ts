@@ -13,6 +13,8 @@ export const piAgentAdapter: FrameworkAdapter = {
     subagentTree: true,
     skillScope: "agent-tree",
   },
-  sessionMergeStrategy: "monotonic",
+  // Pi 的 OTLP consumer 每次都会从同一 task 的完整 spool 重聚合。保存时必须以完整
+  // 快照替换旧结果，才能清除 Generic adapter 留下的 agent.pi/subagent 假 Tool。
+  sessionMergeStrategy: "snapshot-replace",
   extractSkills: extractSkillsWithVersionsFromOpencodeSession,
 }

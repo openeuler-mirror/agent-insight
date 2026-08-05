@@ -1333,6 +1333,27 @@ test("OTel traces: LlamaIndex adapter maps required fields and system prompts", 
   assert.equal(record.interactions?.find((item: any) => item.role === "assistant")?.provider, "deepseek")
 });
 
+test("OTel trace adapter registry leaves a foreign Codex trace for its owning server", () => {
+  const foreignEvent = traceEvent({
+    serviceName: "codex",
+    attributes: { "agent.insight.framework": "codex" },
+  });
+
+  assert.equal(getOtelTraceAdapter([foreignEvent]), undefined);
+  assert.equal(aggregateOtelTraceEvents(foreignEvent.sessionId, [foreignEvent]), null);
+});
+
+test("OTel trace adapter registry leaves a top-level foreign Codex spool event untouched", () => {
+  const foreignEvent = traceEvent({
+    sessionId: "foreign-codex-canonical",
+    framework: "codex",
+    attributes: {},
+  });
+
+  assert.equal(getOtelTraceAdapter([foreignEvent]), undefined);
+  assert.equal(aggregateOtelTraceEvents(foreignEvent.sessionId, [foreignEvent]), null);
+});
+
 test("OTel traces: Hermes adapter preserves subagent ownership and builds a child tree", () => {
   const rootSessionId = "hermes-root";
   const childSessionId = "hermes-child";

@@ -33,7 +33,9 @@ export function aggregateOtelTraceEvents(sessionId: string, events: OtelTraceEve
   const ordered = dedupeEvents(events.filter((event) => event.sessionId === sessionId))
     .sort((a, b) => (a.startTimeMs || 0) - (b.startTimeMs || 0));
   if (!ordered.length) return null;
-  return getOtelTraceAdapter(ordered).aggregate(sessionId, ordered);
+  const adapter = getOtelTraceAdapter(ordered);
+  // Keep a foreign framework's raw spool for the server that owns its adapter.
+  return adapter?.aggregate(sessionId, ordered) || null;
 }
 
 export function aggregateOtelTraceSession(sessionId: string, spoolDir?: string): OtelTraceAggregationResult {

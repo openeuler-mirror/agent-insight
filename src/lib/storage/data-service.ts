@@ -2411,7 +2411,8 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
                 // 永久丢失等），一个偏小的快照会把库里更完整的记录盖没。这里比较 interaction 数：incoming
                 // 严格更小则判为退化快照，保留库里现有记录、不覆盖。Qoder 的完整 turn
                 // 快照允许缩小；Jiuwen 仅可由服务端环境开关显式放行。
-                const allowShrink = allowsSnapshotShrinkForFramework(targetRecord.framework);
+                const allowShrink = allowsSnapshotShrinkForFramework(targetRecord.framework)
+                    || targetRecord.complete_session_snapshot === true;
                 if (!allowShrink) {
                     const existingSession = await db.findSessionByTaskId(targetRecord.task_id);
                     let existingInteractions = existingSession?.interactions

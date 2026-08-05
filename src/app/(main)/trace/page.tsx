@@ -65,7 +65,8 @@ import { TruncateText } from '@/components/text/TruncateText';
 import { RelativeTime } from '@/components/text/RelativeTime';
 import { Term } from '@/components/text/Term';
 import { cn } from '@/lib/utils';
-import { formatDurationMs, formatLatencySeconds } from '@/lib/latency-format';
+import { formatDurationMs } from '@/lib/latency-format';
+import { getAgentDisplayName } from '@/lib/engine/observability/agent-registration';
 
 const basePath = process.env.NEXT_PUBLIC_URL_PREFIX || '';
 const MAX_TRACE_TAG_FILTERS = 20;
@@ -882,7 +883,7 @@ function TracePageContent() {
     // 主 Agent 下拉选项(全部主 Agent + 当前工作集里出现过的每个主 Agent)。
     const mainAgentOptions: SelectOption[] = [
         { value: 'all', label: t('tracePage.filterMainAgentAll') },
-        ...mainAgents.map(a => ({ value: a, label: a })),
+        ...mainAgents.map(a => ({ value: a, label: getAgentDisplayName(a) })),
     ];
     return (
         <>
@@ -1460,7 +1461,7 @@ function TraceDetailView({
                     <MetricPill label={<Term id="tokens" label={t('tracePage.metricTokens')} />} value={tokens.toLocaleString()} />
                 )}
                 {typeof latency === 'number' && latency > 0 && (
-                    <MetricPill label={t('tracePage.metricDuration')} value={formatLatencySeconds(latency)} />
+                    <MetricPill label={t('tracePage.metricDuration')} value={formatDurationMs(latency)} />
                 )}
                 {typeof cost === 'number' && cost > 0 && (
                     <MetricPill label={t('tracePage.metricCost')} value={`$${cost.toFixed(4)}`} />
@@ -1812,7 +1813,7 @@ function Row({
             {columnVisibility.agent && (
                 <Td>
                     <TruncateText className="text-foreground text-sm">
-                        {e.agent || (e.agents && e.agents.length > 0 ? e.agents[0] : null) || e.framework || '-'}
+                        {getAgentDisplayName(e.agent || (e.agents && e.agents.length > 0 ? e.agents[0] : null) || e.framework || '-')}
                     </TruncateText>
                 </Td>
             )}

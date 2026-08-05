@@ -119,7 +119,10 @@ function ownerFields(owner: ReturnType<typeof ownerFor>): AnyObj {
   if (!owner.sessionId) return { role: 'assistant', agent: 'pi-agent' };
   return {
     role: 'subagent',
-    agent: owner.name,
+    // `agent` is the stable platform identity used by filtering and the AGENT
+    // label. The delegated runtime name belongs only to `subagent_name`; using
+    // it for both fields renders as e.g. "workerworker" in the call tree.
+    agent: 'pi-agent',
     subagent_name: owner.name,
     subagent_session_id: owner.sessionId,
   };
@@ -325,8 +328,22 @@ export function aggregatePiAgentTraceEvents(
   }
 
   const first = ordered[0];
-  const startedAt = Math.min(...ordered.map((event) => event.startTimeMs || Date.parse(event.receivedAt) || Date.now()));
-  const endedAt = Math.max(...ordered.map(eventEndMs));
+  // latency 用根 agent 事件（真实一次任务的跨度），避免整个 session 多个 agent
+  // 事件首尾被算成一次任务（sessionId 覆盖时会产生跨任务的天级 latency）。
+  // 根 agent = 按时间最早的 agent 事件（同 session 多个任务时各 agent 都是根，
+  // 取第一个代表本次聚合的任务）。
+  const sortedAgents = [...agentEvents].sort(
+    (a, b) => (a.startTimeMs || Date.parse(a.receivedAt) || 0) - (b.startTimeMs || Date.parse(b.receivedAt) || 0),
+  );
+  const rootAgentEvents = sortedAgents.slice(0, 1);
+  const startCandidates = rootAgentEvents.length
+    ? rootAgentEvents.map((event) => event.startTimeMs || Date.parse(event.receivedAt) || Date.now())
+    : ordered.map((event) => event.startTimeMs || Date.parse(event.receivedAt) || Date.now());
+  const endCandidates = rootAgentEvents.length
+    ? rootAgentEvents.map(eventEndMs)
+    : ordered.map(eventEndMs);
+  const startedAt = Math.min(...startCandidates);
+  const endedAt = Math.max(...endCandidates);
   const query = agentEvents.map(eventInput).find(Boolean) ||
     llmEvents.map(eventInput).find(Boolean) ||
     'Pi Agent Session';
@@ -369,6 +386,10 @@ export function aggregatePiAgentTraceEvents(
     final_result: finalResult,
     timestamp: new Date(startedAt),
     trace_completed_at: new Date(endedAt),
+    // Pi 事件是从 task 全量 spool 重聚合的规范快照。显式标记允许历史 Generic 污染
+    // 被更小但更正确的树替换，而不是被单调合并永久保留。
+    session_merge_strategy: 'snapshot-replace',
+    complete_session_snapshot: true,
     label: 'pi-agent',
     user: first.user || 'anonymous',
     interactions,
@@ -377,10 +398,7 @@ export function aggregatePiAgentTraceEvents(
     skills: invokedSkills.map((skill) => skill.name),
     agent: 'pi-agent',
     agentName: 'pi-agent',
-    agents: [...new Set([
-      'pi-agent',
-      ...ordered.filter((event) => semanticKind(event) === 'subagent').map(agentName),
-    ])],
+    agents: ['pi-agent'],
     llm_call_count: llmEvents.length,
     tool_call_count: toolEvents.length,
     tool_call_error_count: toolErrors,

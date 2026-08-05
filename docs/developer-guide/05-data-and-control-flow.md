@@ -74,6 +74,13 @@ Pi Agent 是通用 traces 之外的第一方专用路径：Extension 将事件�
 `agent.insight.kind` 恢复 Agent、SubAgent、Skill、LLM、Tool 和 MCP，随后转交统一
 `buildAgentCallTree` 与 `deriveSubagentExecutions`；Pi 的上传失败不会阻塞 Hook 事件路径。
 
+Codex 与 Pi 的 `default`、`worker` 等是一次委派的子任务角色名，而不是独立的平台
+Agent 身份。二者的根/子 `Execution.agentName`、`observedAgents` 和 `RegisteredAgent`
+均归一为 `codex` 或 `pi-agent`（界面展示 Codex/Pi）；角色名只保留在
+`Execution.subagentName` 和 interaction 的 `subagent_name`，供链路树、详情与子任务筛选
+使用。每次写入这两个框架的 trace 时，存储层会对同一用户/平台的历史记录做幂等归一，
+清除遗留的角色名注册；其他框架继续沿用多 Agent 注册语义。
+
 ```mermaid
 flowchart TD
     client["client plugin/uploader/OTel"] --> route["POST /api/ingest/{upload,otel/*}"]

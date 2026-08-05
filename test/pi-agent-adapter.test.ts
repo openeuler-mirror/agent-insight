@@ -114,6 +114,8 @@ test("Pi adapter aggregates Agent, Skill, LLM, Tool, MCP, and exact leaf usage",
   const record = aggregateOtelTraceEvents("pi-session", events)
   assert.ok(record)
   assert.equal(record.framework, "pi-agent")
+  assert.equal(record.session_merge_strategy, "snapshot-replace")
+  assert.equal(record.complete_session_snapshot, true)
   assert.equal(record.query, "diagnose the repository")
   assert.equal(record.final_result, "root result")
   assert.equal(record.model, "model-a")
@@ -134,6 +136,11 @@ test("Pi adapter aggregates Agent, Skill, LLM, Tool, MCP, and exact leaf usage",
   }])
   assert.equal(record.user, "alice")
   assert.equal(record.interactions.some((item: { mcp?: { server_name?: string } }) => item.mcp?.server_name === "fixture"), true)
+})
+
+test("Pi adapter registry uses complete snapshot replacement", () => {
+  const adapter = getAdapter("pi-agent")
+  assert.equal(adapter.sessionMergeStrategy, "snapshot-replace")
 })
 
 test("Pi adapter preserves three-level SubAgent ancestry and five parallel siblings", () => {
@@ -249,14 +256,22 @@ test("Pi adapter preserves three-level SubAgent ancestry and five parallel sibli
 
   const record = aggregateOtelTraceEvents("pi-session", normalize(events))
   assert.ok(record)
+  assert.deepEqual(record.agents, ["pi-agent"])
   const tree = buildAgentCallTree(record.interactions)
   assert.ok(tree)
-  const levelOneNode = tree.children.find((node) => node.agentName === "level-one")
-  assert.equal(levelOneNode?.children[0]?.agentName, "level-two")
-  assert.equal(levelOneNode?.children[0]?.children[0]?.agentName, "level-three")
-  const workers = tree.children.filter((node) => node.agentName.startsWith("worker-"))
+  const levelOneNode = tree.children.find((node) => node.subagentType === "level-one")
+  assert.equal(levelOneNode?.agentName, "pi-agent")
+  assert.equal(levelOneNode?.children[0]?.agentName, "pi-agent")
+  assert.equal(levelOneNode?.children[0]?.subagentType, "level-two")
+  assert.equal(levelOneNode?.children[0]?.children[0]?.agentName, "pi-agent")
+  assert.equal(levelOneNode?.children[0]?.children[0]?.subagentType, "level-three")
+  const workers = tree.children.filter((node) => node.subagentType?.startsWith("worker-"))
   assert.equal(workers.length, 5)
+  assert.ok(workers.every((node) => node.agentName === "pi-agent"))
   assert.equal(new Set(workers.map((node) => node.sessionId)).size, 5)
+  const delegated = record.interactions.filter((item: any) => item.role === "subagent")
+  assert.ok(delegated.every((item: any) => item.agent === "pi-agent"))
+  assert.ok(delegated.some((item: any) => item.subagent_name === "worker-0"))
   assert.deepEqual(computeOwnSkills("pi-agent", record.interactions).map((skill) => skill.name), ["root-skill"])
 })
 
@@ -283,4 +298,34 @@ test("Pi adapter output is deterministic for the same canonical structure", () =
   const first = aggregateOtelTraceEvents("pi-session", normalize(source))
   const second = aggregateOtelTraceEvents("pi-session", normalize(source))
   assert.deepEqual(first, second)
+})
+
+test("Pi adapter latency uses the root agent span, not the whole session span", () => {
+  // 模拟旧 bug：同一 session 多个 agent 任务（sessionId 覆盖前），首尾跨多任务
+  const events = normalize([
+    canonical({
+      eventId: "agent-1",
+      spanId: "1".repeat(16),
+      kind: "agent",
+      name: "agent.pi",
+      input: "first task",
+      output: "first result",
+      startTimeMs: 1_700_000_000_000,
+      endTimeMs: 1_700_000_000_100,
+    }),
+    canonical({
+      eventId: "agent-2",
+      spanId: "2".repeat(16),
+      kind: "agent",
+      name: "agent.pi",
+      input: "second task",
+      output: "second result",
+      startTimeMs: 1_700_000_010_000,
+      endTimeMs: 1_700_000_010_100,
+    }),
+  ])
+  const record = aggregateOtelTraceEvents("pi-session", events)
+  assert.ok(record)
+  // latency 应为根 agent（第一个）的跨度 100ms，而非整个 session 的 10100ms
+  assert.equal(record.latency, 100)
 })

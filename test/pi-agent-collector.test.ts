@@ -9,15 +9,21 @@ const require = createRequire(import.meta.url)
 const {
   PiTraceCollector,
   classifyTool,
+  createCollector,
+  isSubagentWorkerProcess,
   loadCollectorConfig,
   parseMcpIdentity,
   skillVersion,
 } = require("../scripts/agent-trace-collectors/pi-agent/lib/pi-trace-core.cjs")
 
 type CapturedEvent = {
+  eventId?: string
   kind: string
   spanId: string
   parentSpanId?: string
+  status?: string
+  startTimeMs?: number
+  endTimeMs?: number
   tool?: { name?: string }
   usage?: {
     input: number
@@ -162,15 +168,24 @@ test("Pi collector records explicit Skill, exact native usage, Tool ownership, a
   instance.recordAgentEnd({ messages: [assistant()] })
   await instance.settleAgent()
 
-  assert.deepEqual(writer.events.map((event) => event.kind).sort(), ["agent", "llm", "skill", "tool"])
-  const skillEvent = writer.events.find((event) => event.kind === "skill")
+  assert.deepEqual(writer.events.map((event) => event.kind).sort(), ["agent", "llm", "skill", "skill", "tool"])
+  const skillEvents = writer.events.filter((event) => event.kind === "skill")
+  const skillStart = skillEvents.find((event) => event.status === "running")
+  const skillEvent = skillEvents.find((event) => event.status === "success")
   const toolEvent = writer.events.find((event) => event.kind === "tool")
   const llmEvent = writer.events.find((event) => event.kind === "llm")
+  assert.ok(skillStart)
   assert.ok(skillEvent)
   assert.ok(toolEvent)
   assert.ok(llmEvent)
   assert.equal(skillEvent.skill.version, "2.4.0")
   assert.equal(skillEvent.skill.triggerMode, "explicit")
+  assert.equal(skillStart.eventId, skillEvent.eventId)
+  assert.equal(skillStart.spanId, skillEvent.spanId)
+  assert.equal(skillStart.startTimeMs, skillStart.endTimeMs)
+  assert.ok(writer.events.indexOf(skillStart) < writer.events.indexOf(toolEvent))
+  await Promise.resolve()
+  assert.ok(uploader.flushed >= 1)
   assert.equal(toolEvent.parentSpanId, skillEvent.spanId)
   assert.equal(llmEvent.parentSpanId, skillEvent.spanId)
   assert.deepEqual(llmEvent.usage, {
@@ -181,7 +196,8 @@ test("Pi collector records explicit Skill, exact native usage, Tool ownership, a
     cacheWrite: 1,
     total: 16,
   })
-  assert.equal(uploader.flushed, 1)
+  // Skill 的 running 快照和最终聚合快照都应各触发一次上传。
+  assert.ok(uploader.flushed >= 2)
   assertAcyclic(writer.events)
 })
 
@@ -207,7 +223,7 @@ test("Pi collector detects automatic Skill invocation from a loaded SKILL.md rea
   })
   await instance.settleAgent()
 
-  const skillEvent = writer.events.find((event) => event.kind === "skill")
+  const skillEvent = writer.events.find((event) => event.kind === "skill" && event.status === "success")
   const readEvent = writer.events.find((event) => event.tool?.name === "read")
   assert.ok(skillEvent)
   assert.ok(readEvent)
@@ -367,4 +383,133 @@ test("collector config honors environment precedence and remains disabled withou
     env: {},
   })
   assert.equal(disabled.enabled, false)
+})
+
+test("Pi collector derives a distinct session id per agent task within one Pi session", async (t) => {
+  const { instance, writer } = collector()
+  // 任务 1
+  instance.recordInput("task one")
+  instance.beginAgent({ prompt: "task one", systemPromptOptions: {} }, context())
+  instance.recordMessage(assistant())
+  instance.recordAgentEnd({ messages: [assistant()] })
+  await instance.settleAgent()
+  // 任务 2
+  instance.recordInput("task two")
+  instance.beginAgent({ prompt: "task two", systemPromptOptions: {} }, context())
+  instance.recordMessage(assistant())
+  instance.recordAgentEnd({ messages: [assistant()] })
+  await instance.settleAgent()
+
+  const agentEvents = writer.events.filter((event) => event.kind === "agent")
+  assert.equal(agentEvents.length, 2)
+  const sessions = agentEvents.map((event) => event.sessionId)
+  assert.notEqual(sessions[0], sessions[1])
+  assert.match(sessions[0], /session-a__task\d+/)
+  assert.match(sessions[1], /session-a__task\d+/)
+  // 每个任务的 agent 事件归属各自 session
+  assert.equal(agentEvents[0].sessionId, sessions[0])
+  assert.equal(agentEvents[1].sessionId, sessions[1])
+})
+
+test("isSubagentWorkerProcess detects only delegation worker processes", () => {
+  // subagent/skill 扩展 spawn 的 worker：--mode json -p --no-session "Task: <task>"
+  assert.equal(
+    isSubagentWorkerProcess(["pi", "--mode", "json", "-p", "--no-session", "Task: read the file"]),
+    true,
+  )
+  assert.equal(
+    isSubagentWorkerProcess([
+      "pi", "--mode", "json", "--print", "--no-session",
+      "--model", "deepseek-v4-pro", "--tools", "read,write",
+      "Task: compute the checksum",
+    ]),
+    true,
+  )
+  // 交互 TUI：不应命中
+  assert.equal(isSubagentWorkerProcess(["pi"]), false)
+  // 演示 text 模式（--print 但无 --mode json）：不应命中
+  assert.equal(
+    isSubagentWorkerProcess(["pi", "--print", "--no-session", "read the file"]),
+    false,
+  )
+  // json 模式但没有 "Task: " 前缀 message：不应命中
+  assert.equal(
+    isSubagentWorkerProcess(["pi", "--mode", "json", "-p", "--no-session", "read the file"]),
+    false,
+  )
+  // 缺 --no-session：不应命中
+  assert.equal(
+    isSubagentWorkerProcess(["pi", "--mode", "json", "-p", "Task: read the file"]),
+    false,
+  )
+})
+
+test("createCollector skips collection inside a subagent worker process", () => {
+  const base = {
+    config: {
+      enabled: true,
+      apiKey: "key",
+      endpoint: "http://127.0.0.1/otel",
+      homeDir: os.tmpdir(),
+      uploadIntervalMs: 300_000,
+      shutdownTimeoutMs: 100,
+    },
+  }
+  assert.equal(
+    createCollector({ ...base, argv: ["pi", "--mode", "json", "-p", "--no-session", "Task: read the file"] }),
+    null,
+  )
+  // 正常进程不受影响
+  assert.ok(createCollector({ ...base, argv: ["pi"] }) instanceof PiTraceCollector)
+})
+
+test("Pi collector derives worker subagent LLM spans with non-zero durations", async () => {
+  const { instance, writer } = collector()
+  instance.recordInput("delegate")
+  instance.beginAgent({ prompt: "delegate", systemPromptOptions: { skills: [] } }, context())
+  instance.beginTool({ toolCallId: "sub-1", toolName: "subagent", args: { task: "worker" } })
+  instance.endTool({
+    toolCallId: "sub-1",
+    toolName: "subagent",
+    isError: false,
+    result: {
+      content: [{ type: "text", text: "done" }],
+      details: {
+        results: [{
+          agent: "worker",
+          task: "worker",
+          exitCode: 0,
+          model: "model-a",
+          usage: { input: 5, output: 2, totalTokens: 7 },
+          messages: [
+            assistant({ content: [{ type: "text", text: "first" }], timestamp: 1_700_000_000_100 }),
+            {
+              role: "toolResult",
+              toolCallId: "t-1",
+              toolName: "read",
+              content: [{ type: "text", text: "file" }],
+              timestamp: 1_700_000_000_500,
+            },
+            assistant({ content: [{ type: "text", text: "second" }], timestamp: 1_700_000_001_000 }),
+          ],
+        }],
+      },
+    },
+  })
+  await instance.settleAgent()
+
+  const subagentEvent = writer.events.find((e) => e.kind === "subagent")
+  assert.ok(subagentEvent, "subagent event exists")
+  // worker 子代理下的 LLM span：parentSpanId 指向 subagent span
+  const workerLlm = writer.events.filter((e) => e.kind === "llm" && e.parentSpanId === subagentEvent.spanId)
+  assert.equal(workerLlm.length, 2)
+  // 第一条：从 subagent span 起点（首条消息 timestamp 之前）到第一条 assistant 完成
+  assert.ok(workerLlm[0].startTimeMs != null && workerLlm[0].endTimeMs != null)
+  assert.ok((workerLlm[0].endTimeMs! - workerLlm[0].startTimeMs!) > 0, "first worker LLM should have non-zero duration")
+  // 第二条：从第一条 assistant 完成到第二条 assistant 完成
+  assert.equal(workerLlm[1].startTimeMs, 1_700_000_000_100)
+  assert.equal(workerLlm[1].endTimeMs, 1_700_000_001_000)
+  assert.ok((workerLlm[1].endTimeMs! - workerLlm[1].startTimeMs!) === 900, "second worker LLM duration spans gap")
+  // 整体与 subagent span 对齐：最后一条 end 不应超过 subagent span 的 end
+  assert.ok((workerLlm[1].endTimeMs!) <= (subagentEvent.endTimeMs!), "last LLM end within subagent span")
 })

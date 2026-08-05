@@ -124,7 +124,7 @@
 | `DebugJobResult` / `DebugHistory` | 调试/运行任务结果 | `output`、`sessionId` |
 | `TrajectoryEvalResult` | 一条轨迹评测结果 | `trajectoryScore`、`dimensionScoresJson`、`deviationStepsJson`、`evaluatorRunId` |
 | `TraceEvaluation` | 历史 trace 结果评测数据（兼容保留） | 当前质量监控与上传链路均不读写；未做物理迁移或历史数据清理 |
-| `RegisteredAgent` | 已知的 agent 身份 | `platform`+`name`+`user` 唯一、`agentType`、`agentOwnership` |
+| `RegisteredAgent` | 可筛选的实际 agent 身份 | `platform`+`name`+`user` 唯一、`agentType`、`agentOwnership`；Codex/Pi 的委派角色名不登记为 Agent |
 | `FaultDiagnosisSession` / `Message` | 故障诊断对话 | 关联到 `executionId` |
 | `AgentDebugReport` | 存储的 AgentDebug 主诊断报告 | `reportJson`、`interactionsHash`、`status`；不再承载 Skills 分析 |
 | `AgentDebugSkillsAnalysis` | AgentDebug 专用 Skills 步骤核验缓存 | `analysisJson`、`interactionsHash`、`status`、`keyActionCount` |

@@ -9,7 +9,7 @@ import { qoderOtelTraceAdapter } from './adapters/qoder';
 import type { OtelTraceAdapter } from './adapters/types';
 import type { OtelTraceEvent } from './types';
 
-const adapters: readonly OtelTraceAdapter[] = [
+const frameworkAdapters: readonly OtelTraceAdapter[] = [
   actrailOtelTraceAdapter,
   langfuseLangGraphOtelTraceAdapter,
   hermesOtelTraceAdapter,
@@ -17,11 +17,23 @@ const adapters: readonly OtelTraceAdapter[] = [
   llamaIndexOtelTraceAdapter,
   qoderOtelTraceAdapter,
   piAgentOtelTraceAdapter,
+];
+
+const adapters: readonly OtelTraceAdapter[] = [
+  ...frameworkAdapters,
   genericOtelTraceAdapter,
 ];
 
-export function getOtelTraceAdapter(events: OtelTraceEvent[]): OtelTraceAdapter {
-  return adapters.find((adapter) => adapter.matches(events)) || genericOtelTraceAdapter;
+function claimsFrameworkSpecificOwnership(events: OtelTraceEvent[]): boolean {
+  return events.some((event) => {
+    const claims = [event.framework, event.attributes?.['agent.insight.framework']];
+    return claims.some((claim) => typeof claim === 'string' && claim.trim().length > 0);
+  });
+}
+
+export function getOtelTraceAdapter(events: OtelTraceEvent[]): OtelTraceAdapter | undefined {
+  return frameworkAdapters.find((adapter) => adapter.matches(events)) ||
+    (claimsFrameworkSpecificOwnership(events) ? undefined : genericOtelTraceAdapter);
 }
 
 export function listOtelTraceAdapters(): readonly OtelTraceAdapter[] {

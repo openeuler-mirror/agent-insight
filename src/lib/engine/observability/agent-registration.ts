@@ -7,17 +7,51 @@ export interface ObservedAgentRegistration {
     agentType: 'main' | 'subagent';
 }
 
+export interface ObservedAgentRegistrationOptions {
+    includeSubagents?: boolean;
+}
+
+const FRAMEWORK_PRIMARY_AGENT_NAMES: Record<string, string> = {
+    codex: 'codex',
+    'pi-agent': 'pi-agent',
+};
+
 function cleanAgentName(value: unknown): string {
     return typeof value === 'string' ? value.trim() : '';
+}
+
+export function getFrameworkPrimaryAgentName(framework: unknown): string | undefined {
+    const key = typeof framework === 'string' ? framework.trim().toLowerCase() : '';
+    return FRAMEWORK_PRIMARY_AGENT_NAMES[key];
+}
+
+export function getAgentDisplayName(name: unknown): string {
+    const value = cleanAgentName(name);
+    if (value === 'codex') return 'Codex';
+    if (value === 'pi-agent') return 'Pi';
+    return value;
+}
+
+/**
+ * Display a stable platform Agent together with its delegated role. The role is
+ * intentionally kept out of the primary Agent name because it powers filtering
+ * and registration, but it remains essential context in a task tree.
+ */
+export function getAgentNodeDisplayLabel(agent: unknown, subagentName?: unknown): string {
+    const displayAgent = getAgentDisplayName(agent);
+    const role = cleanAgentName(subagentName);
+    return role ? `${displayAgent} · ${role}` : displayAgent;
 }
 
 export function extractObservedAgentRegistrations(
     interactions: InteractionLike[] | null | undefined,
     primaryAgentName?: string | null,
+    options?: ObservedAgentRegistrationOptions,
 ): ObservedAgentRegistration[] {
     const out: ObservedAgentRegistration[] = [];
     const seen = new Set<string>();
     const primary = cleanAgentName(primaryAgentName);
+    const includeSubagents = options?.includeSubagents ?? true;
 
     const add = (name: string, agentType: ObservedAgentRegistration['agentType']) => {
         const cleaned = cleanAgentName(name);
@@ -37,12 +71,12 @@ export function extractObservedAgentRegistrations(
         const agent = cleanAgentName(m.agent);
 
         if (subagentName) {
-            add(subagentName, 'subagent');
+            if (includeSubagents) add(subagentName, 'subagent');
             continue;
         }
 
         if ((role === 'subagent' || role === 'opencode') && agent && agent !== primary) {
-            add(agent, 'subagent');
+            if (includeSubagents) add(agent, 'subagent');
         } else if (!primary && agent) {
             add(agent, 'main');
         }
@@ -51,8 +85,12 @@ export function extractObservedAgentRegistrations(
     return out;
 }
 
-export function extractObservedAgentNames(interactions: InteractionLike[] | null | undefined): string[] {
-    return extractObservedAgentRegistrations(interactions).map(agent => agent.name);
+export function extractObservedAgentNames(
+    interactions: InteractionLike[] | null | undefined,
+    primaryAgentName?: string | null,
+    options?: ObservedAgentRegistrationOptions,
+): string[] {
+    return extractObservedAgentRegistrations(interactions, primaryAgentName, options).map(agent => agent.name);
 }
 
 export function getPrimaryObservedAgentName(

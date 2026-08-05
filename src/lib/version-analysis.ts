@@ -1,6 +1,5 @@
 import { prismaRaw } from '@/lib/storage/prisma';
 import { ensureTraceTagTables, TraceTagError, type TraceTagDto } from '@/lib/trace-tags';
-import { latencySecondsToMs } from '@/lib/latency-format';
 
 export type VersionAnalysisTrace = {
   id: string;
@@ -297,7 +296,10 @@ function toTrace(
   const execution = row.execution;
   const taskId = execution.taskId ?? null;
   const completedAt = taskId ? sessionEndByTaskId.get(taskId) ?? null : null;
-  const latencyMs = latencySecondsToMs(toNumber(execution.latency));
+  // Execution.latency 已是毫秒（全链路统一口径），直接使用；
+  // 此前误用 latencySecondsToMs 会把它再放大 1000 倍（见
+  // docs/tasks/bugs/issue-158-pi-agent-open.md Bug 4）。
+  const latencyMs = toNumber(execution.latency);
   return {
     id: execution.id,
     taskId,
