@@ -97,7 +97,7 @@ LlamaIndex 项目使用由 Agent Insight 服务端直接分发的 Python 模块 
 
 LlamaIndex、模型 SDK 和 MCP Tool 依赖继续由业务项目管理。FunctionTool、QueryEngineTool 与由 `McpToolSpec` 创建的 MCP Tool 均沿同一 Tool Trace 路径采集参数、返回值、状态和耗时。
 
-运行时的数据路径是：LlamaIndex dispatcher 发出 Span 生命周期回调和原始 Event；自定义 Handler 对同一次回调先调用官方 OTel 基类创建 Span/context，再读取原始 Event、参数和返回值补充 Agent Insight 语义；自定义 exporter 将结束的 Span 非阻塞送入有界队列，后台线程再写入按 API Key 隔离的 spool 并上传。Agent Insight 接收 OTLP 后由 LlamaIndex Adapter 合并会话、去除同一逻辑 LLM 调用的包装 Span，并生成统一 ExecutionRecord。独立 Retriever 或 LLM 调用不会为了展示而伪造 Agent 根节点；它们保留真实 OTel 根节点，并以 traceId 作为缺省 sessionId。
+运行时的数据路径是：LlamaIndex dispatcher 发出 Span 生命周期回调和原始 Event；自定义 Handler 对同一次回调先调用官方 OTel 基类创建 Span/context，再读取原始 Event、参数和返回值补充 Agent Insight 语义；自定义 exporter 将结束的 Span 非阻塞送入有界队列，后台线程再写入按 API Key 隔离的 spool 并上传。Agent Insight 接收 OTLP 后由 LlamaIndex Adapter 合并会话、去除同一逻辑 LLM 调用的包装 Span，并生成统一 ExecutionRecord。Adapter 还会从 Completion/Chat 响应包装中提取可读 LLM 正文，把 ReAct 的 Action/Action Input 留给独立 Tool/Skill 节点，规范化 Tool/Skill 摘要，并过滤低价值的 Workflow 运行时包装步骤；共享 Trace 渲染器不包含 LlamaIndex 框架分支。独立 Retriever 或 LLM 调用不会为了展示而伪造 Agent 根节点；它们保留真实 OTel 根节点，并以 traceId 作为缺省 sessionId。
 
 接入后可先执行 `python -m agent_insight_llamaindex.cli status` 检查 endpoint、账号隔离目录和待上传批次，再运行一个包含真实 LLM 与 Tool 的任务并在“链路追踪”页核对 model、Token、耗时和父子关系。Provider 未返回 usage 时 Token 可能为 0，这不代表 Span 未采集。
 

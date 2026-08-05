@@ -5,6 +5,17 @@ import type { OtelTraceAdapter } from './types';
 
 type Interaction = Record<string, any>;
 
+const HIDDEN_RUNTIME_STEPS = new Set([
+  'init_run',
+  'setup_agent',
+  'parse_agent_output',
+  'aggregate_tool_results',
+]);
+
+const WORKFLOW_STEP_LABELS: Record<string, string> = {
+  run_agent_step: 'Run agent step',
+};
+
 type LogicalLlmCall = {
   event: OtelTraceEvent;
   family: OtelTraceEvent[];
@@ -64,6 +75,54 @@ function messageContent(value: any): string | undefined {
   return text(value);
 }
 
+function readableLlmText(value: any): string | undefined {
+  const parsed = content(value);
+  const seen = new Set<any>();
+
+  const visit = (candidate: any, depth = 0): string | undefined => {
+    if (candidate == null || depth > 8) return undefined;
+    if (typeof candidate === 'string') return candidate.trim() || undefined;
+    if (typeof candidate !== 'object') return String(candidate);
+    if (seen.has(candidate)) return undefined;
+    seen.add(candidate);
+    if (Array.isArray(candidate)) {
+      const combined = candidate.map(item => visit(item, depth + 1)).filter(Boolean).join('\n');
+      return combined || undefined;
+    }
+
+    // CompletionResponse exposes `text`; ChatResponse exposes
+    // `message.content`/`message.blocks`. OpenAI-compatible providers can use
+    // choices/candidates/delta. Prefer those semantic fields over serializing
+    // the whole framework response object into the LLM row.
+    for (const key of ['text', 'content']) {
+      const nested = visit(candidate[key], depth + 1);
+      if (nested) return nested;
+    }
+    for (const key of ['message', 'response', 'output', 'delta', 'blocks', 'choices', 'candidates']) {
+      const nested = visit(candidate[key], depth + 1);
+      if (nested) return nested;
+    }
+    return undefined;
+  };
+
+  const directMessage = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+    ? messageContent(parsed.message ?? parsed.response ?? parsed.output)
+    : undefined;
+  const extracted = directMessage || visit(parsed) || text(parsed);
+  if (!extracted) return undefined;
+
+  // ReAct encodes tool decisions as text even though the following Tool span
+  // already carries Action and Action Input. Keep the human-readable thought
+  // for tool turns and the actual Answer for terminal turns, matching the
+  // native message-part view used by OpenCode.
+  const answer = extracted.match(/(?:^|\n)\s*Answer:\s*([\s\S]+)$/i)?.[1]?.trim();
+  if (answer) return answer;
+  const thought = extracted.match(
+    /(?:^|\n)\s*Thought:\s*([\s\S]*?)(?=\n\s*(?:Action|Action Input|Answer|Observation):|$)/i,
+  )?.[1]?.trim();
+  return thought || extracted;
+}
+
 function promptMessages(value: any): PromptMessage[] {
   const parsed = content(value);
   const candidates = Array.isArray(parsed)
@@ -114,6 +173,43 @@ function directAgentIdentity(event: OtelTraceEvent | undefined): AgentIdentity |
 
 function spanSemanticKind(event: OtelTraceEvent): string {
   return String(attr(event, 'agent.insight.span.kind') || event.kind || 'span').toLowerCase();
+}
+
+function functionName(event: OtelTraceEvent): string {
+  return text(attr(event, 'workflow.step.name'))
+    || text(attr(event, 'code.function'))
+    || text(event.name)?.split('.').at(-1)
+    || 'step';
+}
+
+function humanizeIdentifier(value: string): string {
+  const spaced = value
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[._-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return spaced ? spaced[0].toUpperCase() + spaced.slice(1) : 'Step';
+}
+
+function isHiddenRuntimeStep(event: OtelTraceEvent, semantic: string): boolean {
+  return semantic === 'workflow_step' && HIDDEN_RUNTIME_STEPS.has(functionName(event).toLowerCase());
+}
+
+function readableChainName(event: OtelTraceEvent, semantic: string): string {
+  const step = functionName(event);
+  if (semantic === 'retriever') return 'Retrieve context';
+  if (semantic === 'synthesizer') return 'Synthesize response';
+  if (semantic === 'workflow') return 'Run workflow';
+  if (semantic === 'workflow_step') {
+    return WORKFLOW_STEP_LABELS[step.toLowerCase()] || humanizeIdentifier(step);
+  }
+  if (semantic === 'chain' && /^(a?query)$/i.test(step)) return 'Query pipeline';
+  return humanizeIdentifier(step);
+}
+
+function readableToolName(event: OtelTraceEvent): string {
+  const raw = text(attr(event, 'tool.name')) || event.name || 'tool';
+  return raw.replace(/^(?:FunctionTool|QueryEngineTool)\./i, '') || 'tool';
 }
 
 /**
@@ -302,7 +398,7 @@ function toolCall(event: OtelTraceEvent): Interaction {
     type: 'function',
     state: status(event),
     function: {
-      name: text(attr(event, 'tool.name')) || event.name || 'tool',
+      name: readableToolName(event),
       arguments: text(attr(event, 'tool.arguments') ?? attr(event, 'input.value')) || '{}',
     },
     output,
@@ -398,7 +494,6 @@ export function aggregateLlamaIndexTraceEvents(sessionId: string, source: OtelTr
     if (event.kind === 'llm') {
       const logical = logicalLlmBySpan.get(event.spanId);
       if (!logical) continue;
-      const output = content(logical.output);
       const prompt = content(logical.prompt);
       const messages = promptMessages(logical.prompt);
       for (const message of messages.filter(candidate => candidate.role === 'system')) {
@@ -415,7 +510,7 @@ export function aggregateLlamaIndexTraceEvents(sessionId: string, source: OtelTr
       const interaction: Interaction = {
         ...ownerFields(owner, relationships.primary, relationships.sessionByAgent),
         ...baseInteraction(event),
-        content: text(output) || '',
+        content: readableLlmText(logical.output) || '',
         model: logical.model,
         provider: logical.provider,
         usage: {
@@ -454,6 +549,8 @@ export function aggregateLlamaIndexTraceEvents(sessionId: string, source: OtelTr
       continue;
     }
     if (event.kind === 'chain') {
+      if (isHiddenRuntimeStep(event, semantic)) continue;
+      const displayName = readableChainName(event, semantic);
       interactions.push({
         role: 'trace',
         agent: owner.name,
@@ -462,11 +559,9 @@ export function aggregateLlamaIndexTraceEvents(sessionId: string, source: OtelTr
           subagent_session_id: relationships.sessionByAgent.get(owner.key),
         }),
         ...baseInteraction(event),
-        content: event.name || semantic,
+        content: displayName,
         trace_kind: 'chain',
-        trace_name: semantic === 'workflow_step'
-          ? text(attr(event, 'workflow.step.name')) || event.name
-          : semantic === 'chain' ? event.name || semantic : semantic,
+        trace_name: displayName,
         trace_args: content(attr(event, 'retrieval.query') ?? attr(event, 'input.value')),
         trace_output: content(attr(event, 'retrieval.nodes') ?? attr(event, 'output.value')),
         trace_status: status(event),
@@ -486,7 +581,7 @@ export function aggregateLlamaIndexTraceEvents(sessionId: string, source: OtelTr
   );
   const finalEvent = [...events].reverse().find(event => event.kind === 'agent') || events.at(-1);
   const finalResult = rootOutputs.at(-1)?.interaction.content
-    || text(finalEvent ? attr(finalEvent, 'output.value') : undefined)
+    || readableLlmText(finalEvent ? attr(finalEvent, 'output.value') : undefined)
     || '';
   const started = Math.min(...events.map(event => event.startTimeMs || Date.now()));
   const completed = Math.max(...events.map(eventEnd));

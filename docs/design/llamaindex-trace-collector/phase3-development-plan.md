@@ -48,15 +48,19 @@
 - Git 工作树只包含本功能文件，不提交 API Key、spool、构建产物或虚拟环境。
 - 未经用户进一步授权不 push、不创建 MR、不启动常驻 dev server。
 
-## 5. 验证记录（2026-08-03）
+## 5. 验证记录（更新于 2026-08-05）
 
-- Python collector 测试 `41 passed`；服务端 LlamaIndex 定向测试 `23 passed, 1 platform skip`。
+- Python collector 测试 `42 passed`；服务端 LlamaIndex 定向测试
+  `38 passed, 1 platform skip`。
 - 所有外部验收 case 均确认实际加载 collector `0.2.0`、官方 `llama-index-observability-otel 0.6.4`、官方兼容 Handler 子类和 `AgentInsightSpanExporter`，不是旧版回调实现。
 - 真实 DeepSeek Agent/Tool/LLM/RAG/Workflow 用例全部通过；`LLAMAINDEX-UI-SMOKE` 同时覆盖 Multi-Agent、Skill、FunctionTool 和 MCP Tool，并已成功进入本地 Agent Insight。
 - AC23 的受控 LLM 中位延迟增幅为 `1.2792%`；AC24 RSS 增量为 `5.836 MiB`；AC25 在一个 1000 ms 上传仍进行时，40 个异步提交于 `231.933 ms` 内完成。
 - AC31 父子关联正确率为 `100%`；AC32 三次真实 DeepSeek Token 对比误差均为 `0%`；AC33 三次规范化结构一致，SHA-256 为 `711714064ea4c710ce7c0436db43968ff223032aaea0d664f90d85b571219013`；AC34 三次 ExecutionRecord 均通过契约校验。
 - AC26/AC27/AC29 的停止采集、显式 purge 和重新安装流程通过；卸载不移除同 Python 环境中可能被其他组件复用的官方 OTel 依赖。
 - 历史兼容实验还覆盖 LlamaIndex Core `0.12.52.post1`、`0.13.6` 与 `0.14.23`。当前标准验收基线为 `0.14.23`。
+- UI 可读性实验确认 LLM 不再显示 Completion/Chat JSON 或 ReAct Action 协议；Skill 节点显示
+  名称、版本和 Markdown 正文，自定义 Tool 节点显示安全参数摘要；Skill→Tool case 的 CHAIN
+  从 12 个运行时/业务混合节点收敛为 3 个 `Run agent step` 业务步骤。
 
 外部验收脚本保存在工作区 `demos/`，不进入项目源码或 npm 制品。`llamaindex_case_bootstrap.ps1` 负责选择当前源码/部署目录和 Python；`llamaindex_case_common.py` 提供官方 OTel 运行时断言；每组 case 都包含执行脚本、结果 JSON、验证器和独立说明。
 

@@ -72,9 +72,14 @@ LlamaIndex Dispatcher
 新增 `otel/adapters/llamaindex.ts`：
 
 - root agent/workflow span确定 query、final result、起止时间与模型。
-- LLM span映射 assistant interaction；Tool span附着到父 LLM/Agent interaction。
+- LLM span映射 assistant interaction；从 Completion/Chat 响应包装提取正文，ReAct 的 Action 和
+  Action Input 只由 Tool/Skill interaction 承载；Tool span附着到父 LLM/Agent interaction。
 - 子 Agent 映射为 `task` tool call + `role=subagent` interaction，复用 `deriveSubagentExecutions` 建树。
-- Retriever/Synthesizer/Workflow step 映射为 `role=trace, trace_kind=chain`，复用 UI 已有 Chain 展示。
+- Retriever/Synthesizer/业务 Workflow step 映射为 `role=trace, trace_kind=chain`，复用 UI 已有
+  Chain 展示；`init_run`、`setup_agent`、`parse_agent_output`、`aggregate_tool_results` 等纯运行时
+  包装步骤不进入展示投影，`run_agent_step` 和自定义 Workflow Step 保留。
+- LlamaIndex Adapter 规范化 FunctionTool/QueryEngineTool 包装名；共享 renderer 为 Skill 版本和
+  经过敏感字段过滤的 Tool 标量参数生成简短摘要。
 - Token 只累计叶子 LLM span，避免 agent/workflow 容器重复统计。
 
 新增 framework adapter descriptor：`id=llamaindex`、`onboard=plugin`、`skills/subagentTree=true`。`data-service` 的子树允许集合加入 `llamaindex`。

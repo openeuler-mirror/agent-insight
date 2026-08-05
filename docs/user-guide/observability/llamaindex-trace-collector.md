@@ -299,6 +299,29 @@ shutdown(timeout=5.0)
 
 关闭正文采集不会关闭名称、状态、耗时、Token 和父子关系采集。
 
+## Trace 页面可读性
+
+服务端 LlamaIndex Adapter 会先把框架响应归一化，再交给共享 Trace 渲染器。页面因此展示
+业务语义，而不是直接展示 LlamaIndex/Pydantic 响应对象：
+
+- `CompletionResponse.text`、`ChatResponse.message.content`、`message.blocks` 以及兼容
+  Provider 的 `choices`、`candidates`、`delta` 会被提取为 LLM 正文；
+- ReAct 工具轮次只在 LLM 节点保留可读 `Thought`，`Action` 和 `Action Input` 由后续
+  Tool/Skill 节点承载；终止轮次优先显示 `Answer`；
+- `FunctionTool.search`、`QueryEngineTool.query` 等包装名称会在 LlamaIndex Adapter 中
+  归一为简洁工具名；自定义 Tool 在树中可显示不超过两个安全标量参数，例如
+  `multiply(a=6, b=7)`；
+- `skill`、`load_skill`、`skill_view` 和 `skill_tool` 统一显示 Skill 名称与版本，例如
+  `calculation-workflow@3`，右侧 Output 渲染采集到的 Skill Markdown 正文；
+- `init_run`、`setup_agent`、`parse_agent_output`、`aggregate_tool_results` 等低价值运行时
+  包装步骤不投影为页面 Interaction；`run_agent_step`、自定义 Workflow Step、Retriever 和
+  Synthesizer 仍保留为可读 CHAIN 节点。
+
+敏感字段过滤早于摘要生成，API Key、authorization、password、secret、token 等值不会进入
+Tool 的行内参数预览。上述过滤只影响服务端展示投影，原始 OTLP 事件仍按服务端 spool 保留策略
+存储。已经入库的历史 ExecutionRecord 不会自动重写；需要重新运行任务或重新摄取对应会话后，
+页面才会使用新的归一化结果。
+
 ## 性能与资源上限
 
 采集路径使用非阻塞有界队列；队列满时优先保证 LlamaIndex 业务继续运行，而不是等待网络。
@@ -410,13 +433,14 @@ python -m mypy src
 Workflow、MCP Tool、spool 原子写入和恢复、容量保护、上传重试、进程退出、重复注册卸载、
 以及同一 Agent 任务三次执行的结构一致性。
 
-采集器单测当前为 `41 passed`；服务端 LlamaIndex 专项测试为 `35 passed, 1 platform skip`。
+采集器单测当前为 `42 passed`；服务端 LlamaIndex 专项测试为
+`38 passed, 1 platform skip`。
 仓库外的标准化验收用例位于开发工作区 `demos/`，覆盖 AC5～AC34。每个用例启动前都通过
 `llamaindex_case_bootstrap.ps1` 选择当前源码或已部署采集器，并由
 `llamaindex_case_common.py` 断言以下运行时信息：
 
 - `collectorVersion=0.2.0`；
-- `mechanism=llama-index-observability-otel`；
+- `mechanism=llama-index-instrumentation + llama-index-observability-otel`；
 - `officialOtelVersion=0.6.4`；
 - Span/Event Handler 是官方兼容 Handler 的子类且已注册到 dispatcher；
 - exporter 为 `AgentInsightSpanExporter`。

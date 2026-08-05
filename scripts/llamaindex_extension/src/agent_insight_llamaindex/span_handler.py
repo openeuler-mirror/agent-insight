@@ -55,6 +55,38 @@ def _workflow_context_identity(context: Any) -> int:
     return id(run_state if run_state is not None else face)
 
 
+def _tool_result_value(tool_output: Any) -> Any:
+    """Return the runtime value without LlamaIndex's ToolOutput envelope.
+
+    OpenCode and Hermes expose a tool's actual result as the trace output.  A
+    LlamaIndex ``ToolOutput`` additionally contains duplicated metadata such as
+    ``tool_name``, ``raw_input``, ``blocks`` and ``is_error``.  Keep those in
+    their dedicated trace fields and surface only the value returned by the
+    tool so Skill output remains readable (for example, the loaded SKILL.md).
+    """
+
+    missing = object()
+    raw_output = getattr(tool_output, "raw_output", missing)
+    if raw_output is not missing and raw_output is not None:
+        return raw_output
+
+    content = getattr(tool_output, "content", missing)
+    if content is not missing and content is not None:
+        return content
+
+    blocks = getattr(tool_output, "blocks", None)
+    if isinstance(blocks, (list, tuple)):
+        texts = [
+            text
+            for block in blocks
+            if isinstance((text := getattr(block, "text", None)), str) and text
+        ]
+        if texts:
+            return "\n".join(texts)
+
+    return tool_output
+
+
 def _kind(name: str, instance: Any, arguments: dict[str, Any]) -> str:
     method = _method(name)
     class_name = type(instance).__name__.lower() if instance is not None else name.lower()
@@ -402,7 +434,12 @@ class LlamaIndexSpanHandler(OTelCompatibleSpanHandler):
             span.attributes["tool.status"] = (
                 "error" if getattr(tool_output, "is_error", False) else "success"
             )
-            add_content_attribute(span.attributes, "tool.output", tool_output, self.config)
+            add_content_attribute(
+                span.attributes,
+                "tool.output",
+                _tool_result_value(tool_output),
+                self.config,
+            )
         else:
             add_content_attribute(span.attributes, "output.value", result, self.config)
         if span.kind == "retriever":

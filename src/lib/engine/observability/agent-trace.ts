@@ -843,17 +843,32 @@ export function inferSubagentType(it: RawInteraction): string | null {
 
 function summarizeToolCall(name: string, args: any): string {
     if (!args || typeof args !== 'object') return name;
-    if (name === 'task') {
+    const normalizedName = name.toLowerCase();
+    if (normalizedName === 'task') {
         const desc = args.description || args.subagent_type || '';
         const subType = args.subagent_type ? `[${args.subagent_type}]` : '';
         return `task ${subType} ${desc}`.trim();
     }
-    if (name === 'skill') return `skill: ${args.name || ''}`;
-    if (name === 'bash') return `bash: ${(args.command || '').slice(0, 80)}`;
-    if (name === 'read') return `read: ${args.path || args.file_path || ''}`;
-    if (name === 'write') return `write: ${args.path || args.file_path || ''}`;
-    if (name === 'glob') return `glob: ${args.pattern || ''}`;
-    return name;
+    if (['skill', 'load_skill', 'skill_view', 'skill_tool'].includes(normalizedName)) {
+        const skillName = args.name || args.skill_name || args.skill || '';
+        const version = args.version ?? args.skill_version;
+        return `skill: ${skillName}${version != null && version !== '' ? `@${version}` : ''}`;
+    }
+    if (normalizedName === 'bash') return `bash: ${(args.command || '').slice(0, 80)}`;
+    if (normalizedName === 'read') return `read: ${args.path || args.file_path || ''}`;
+    if (normalizedName === 'write') return `write: ${args.path || args.file_path || ''}`;
+    if (normalizedName === 'glob') return `glob: ${args.pattern || ''}`;
+
+    const preview = Object.entries(args)
+        .filter(([key, value]) =>
+            value != null
+            && ['string', 'number', 'boolean'].includes(typeof value)
+            && !/(?:api[_-]?key|authorization|password|secret|token)$/i.test(key)
+        )
+        .slice(0, 2)
+        .map(([key, value]) => `${key}=${String(value).slice(0, 40)}`)
+        .join(', ');
+    return preview ? `${name} (${preview})` : name;
 }
 
 /** Walk the tree depth-first. */

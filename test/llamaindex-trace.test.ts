@@ -164,6 +164,58 @@ test('counts nested LLM wrappers as one provider call and does not duplicate usa
   assert.equal(record.interactions.filter((item: RawInteraction) => item.role === 'assistant').length, 3);
 });
 
+test('renders CompletionResponse and ChatResponse as readable LLM text', () => {
+  const body = payload();
+  const llmSpans = body.resourceSpans[0].scopeSpans[0].spans.filter(item =>
+    item.attributes.some(attribute =>
+      attribute.key === 'agent.insight.span.kind'
+      && attribute.value.stringValue === 'llm'
+    )
+  );
+  assert.equal(llmSpans.length, 3);
+
+  const replaceOutput = (target: typeof llmSpans[number], output: string) => {
+    const attribute = target.attributes.find(item => item.key === 'output.value');
+    assert.ok(attribute);
+    attribute.value = value(output);
+  };
+  replaceOutput(llmSpans[0], JSON.stringify({
+    text: 'Thought: 先加载路由 Skill\nAction: skill\nAction Input: {"name":"coordinator-routing","version":1}',
+    additional_kwargs: {},
+  }));
+  replaceOutput(llmSpans[1], JSON.stringify({
+    message: {
+      role: 'assistant',
+      blocks: [{ block_type: 'text', text: '研究证据已经整理完成。' }],
+    },
+  }));
+  replaceOutput(llmSpans[2], JSON.stringify({
+    text: 'Thought: complete\nAnswer: 已完成汇总。',
+  }));
+
+  const normalized = normalizeLlamaIndexOtlpTraces(body, { authenticatedUser: 'alice' });
+  const normalizedOutputs = normalized
+    .filter(event => event.kind === 'llm')
+    .map(event => event.attributes['output.value']);
+  assert.equal(normalizedOutputs.length, 3);
+  assert.match(String(normalizedOutputs[1]), /研究证据已经整理完成/);
+  const record = aggregateLlamaIndexTraceEvents('li-session', normalized);
+  assert.ok(record);
+  const contents = (record.interactions as RawInteraction[])
+    .filter(interaction =>
+      (interaction.role === 'assistant' || interaction.role === 'subagent')
+      && !interaction.trace_synthetic
+    )
+    .map(interaction => interaction.content);
+  assert.deepEqual(contents, [
+    '先加载路由 Skill',
+    '研究证据已经整理完成。',
+    '已完成汇总。',
+  ]);
+  assert.equal(record.final_result, '已完成汇总。');
+  assert.ok(contents.every(item => !String(item).startsWith('{')));
+});
+
 test('aggregates Agent, subagent, tool, LLM, RAG and workflow data', () => {
   const events = normalizeLlamaIndexOtlpTraces(payload(), { authenticatedUser: 'alice' });
   const record = aggregateLlamaIndexTraceEvents('li-session', events);
@@ -181,14 +233,53 @@ test('aggregates Agent, subagent, tool, LLM, RAG and workflow data', () => {
     record.interactions.find((item: RawInteraction) => item.role === 'assistant')?.requestMessages?.[0]?.role,
     'system',
   );
-  assert.ok(record.interactions.some((item: RawInteraction) => item.trace_kind === 'chain' && item.trace_name === 'retriever'));
-  assert.ok(record.interactions.some((item: RawInteraction) => item.trace_kind === 'chain' && item.trace_name === 'finalize'));
+  assert.ok(record.interactions.some((item: RawInteraction) => item.trace_kind === 'chain' && item.trace_name === 'Retrieve context'));
+  assert.ok(record.interactions.some((item: RawInteraction) => item.trace_kind === 'chain' && item.trace_name === 'Synthesize response'));
+  assert.ok(record.interactions.some((item: RawInteraction) => item.trace_kind === 'chain' && item.trace_name === 'Finalize'));
   const tree = buildAgentCallTree(record.interactions);
   assert.ok(tree);
   assert.equal(tree.agentName, 'Coordinator');
   assert.equal(tree.children.length, 1);
   assert.equal(tree.children[0].agentName, 'Researcher');
   assert.ok(tree.children[0].events.some(event => event.kind === 'chain'));
+  assert.ok(tree.events.some(event => event.kind === 'tool' && event.name === 'search' && event.summary === 'search (q=evidence)'));
+});
+
+test('hides low-value LlamaIndex runtime wrappers and keeps meaningful workflow steps', () => {
+  const body = payload();
+  const spans = body.resourceSpans[0].scopeSpans[0].spans;
+  spans.push(
+    span({ id: 'init', parent: 'root', name: 'AgentWorkflow.init_run', kind: 'workflow_step', start: 1001, attributes: { 'workflow.step.name': 'init_run', 'code.function': 'init_run' } }),
+    span({ id: 'setup', parent: 'root', name: 'AgentWorkflow.setup_agent', kind: 'workflow_step', start: 1002, attributes: { 'workflow.step.name': 'setup_agent', 'code.function': 'setup_agent' } }),
+    span({ id: 'parse', parent: 'root', name: 'AgentWorkflow.parse_agent_output', kind: 'workflow_step', start: 1210, attributes: { 'workflow.step.name': 'parse_agent_output', 'code.function': 'parse_agent_output' } }),
+    span({ id: 'aggregate', parent: 'root', name: 'AgentWorkflow.aggregate_tool_results', kind: 'workflow_step', start: 1211, attributes: { 'workflow.step.name': 'aggregate_tool_results', 'code.function': 'aggregate_tool_results' } }),
+  );
+
+  const events = normalizeLlamaIndexOtlpTraces(body, { authenticatedUser: 'alice' });
+  const record = aggregateLlamaIndexTraceEvents('li-session', events);
+  assert.ok(record);
+  const chainNames = record.interactions
+    .filter((item: RawInteraction) => item.trace_kind === 'chain')
+    .map((item: RawInteraction) => item.trace_name);
+  assert.ok(chainNames.includes('Run agent step'));
+  assert.ok(chainNames.includes('Retrieve context'));
+  assert.ok(chainNames.includes('Synthesize response'));
+  assert.ok(chainNames.includes('Finalize'));
+  assert.ok(!chainNames.some((name: string) => /Initialize|Setup|Parse agent output|Aggregate tool results/i.test(name)));
+});
+
+test('summarizes LlamaIndex Skill versions and custom Tool arguments', () => {
+  const tree = buildAgentCallTree([{
+    role: 'assistant',
+    content: '执行计算流程',
+    tool_calls: [
+      { function: { name: 'skill', arguments: '{"name":"calculation-workflow","version":1}' } },
+      { function: { name: 'multiply', arguments: '{"a":6,"b":7,"api_key":"redacted"}' } },
+    ],
+  }]);
+  assert.ok(tree);
+  assert.equal(tree.events.find(event => event.kind === 'skill')?.summary, 'skill: calculation-workflow@1');
+  assert.equal(tree.events.find(event => event.kind === 'tool')?.summary, 'multiply (a=6, b=7)');
 });
 
 test('merges a context-only root name into its explicit Agent instance', () => {

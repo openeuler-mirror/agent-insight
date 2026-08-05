@@ -198,6 +198,42 @@ def test_tool_span_captures_arguments_result_and_error(tmp_path: Path) -> None:
     assert "answer" in emitted[0].attributes["tool.output"]
 
 
+def test_tool_span_unwraps_runtime_output_for_skill_body(tmp_path: Path) -> None:
+    emitted: list[SpanRecord] = []
+    handler = LlamaIndexSpanHandler(
+        config=config(tmp_path), emit=lambda item: not emitted.append(item)
+    )
+    event = SimpleNamespace(
+        tool_name="skill",
+        tool_kwargs={"name": "coordinator-routing", "version": 1},
+    )
+    args = bound(ev=event)
+    span = handler.new_span("AgentWorkflow.call_tool-aabbccdd", args, SimpleNamespace())
+    handler.open_spans[span.id_] = span
+    body = (
+        "Skill: coordinator-routing\n"
+        "Base directory: /tmp/skills/coordinator-routing\n\n"
+        "# Coordinator Routing\n\nDelegate research to the Researcher agent."
+    )
+    tool_output = SimpleNamespace(
+        blocks=[SimpleNamespace(block_type="text", text=body)],
+        tool_name="skill",
+        raw_input={"name": "coordinator-routing", "version": 1},
+        raw_output=body,
+        content=body,
+        is_error=False,
+    )
+    handler.prepare_to_exit_span(
+        span.id_, args, result=SimpleNamespace(tool_output=tool_output)
+    )
+
+    attributes = emitted[0].attributes
+    assert attributes["tool.output"] == body
+    assert attributes["tool.status"] == "success"
+    assert '"raw_input"' not in attributes["tool.output"]
+    assert '"raw_output"' not in attributes["tool.output"]
+
+
 def test_span_handler_releases_completed_and_dropped_identities(tmp_path: Path) -> None:
     handler = LlamaIndexSpanHandler(config=config(tmp_path), emit=lambda _: True)
     args = bound()
