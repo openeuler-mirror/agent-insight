@@ -20,8 +20,9 @@ from ...exceptions import (
     ToolInstallationError,
 )
 from ...fault_inject.installer import InstallSession
-from ...fault_inject.injection_tools import InjectionContext, apply_injection_plan
-from ...fault_inject.injection_tools.runtime_plan import (
+from ...fault_inject.apply_plan import apply_injection_plan
+from ...fault_inject.injection_tools import InjectionContext
+from ...fault_inject.runtime_env import (
     filter_runtime_steps_for_submode,
     runtime_plan_to_json,
 )

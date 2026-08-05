@@ -427,7 +427,7 @@ class JudgeResponseTests(unittest.TestCase):
             (FaultOutcome.OCCURRED, FaultContainmentStatus.UNRESOLVED),
             (FaultOutcome.OCCURRED, FaultContainmentStatus.RECOVERED),
             (FaultOutcome.NOT_OCCURRED, FaultContainmentStatus.PREVENTED),
-            (FaultOutcome.NOT_OCCURRED, FaultContainmentStatus.NO_TRACE),
+            (FaultOutcome.NOT_OCCURRED, FaultContainmentStatus.INCONCLUSIVE),
         )
         for outcome, containment in classifications:
             with self.subTest(outcome=outcome, containment=containment):
@@ -450,14 +450,30 @@ class JudgeResponseTests(unittest.TestCase):
         result = parse_judge_response(
             "```json\n"
             '{"outcome":"not_occurred",'
-            '"fault_containment_status":"no_trace",'
+            '"fault_containment_status":"inconclusive",'
             '"reason":"normal"}\n'
             "```"
         )
         self.assertEqual(result.outcome, FaultOutcome.NOT_OCCURRED)
         self.assertEqual(
             result.fault_containment_status,
-            FaultContainmentStatus.NO_TRACE,
+            FaultContainmentStatus.INCONCLUSIVE,
+        )
+
+    def test_parses_legacy_no_trace_as_inconclusive(self) -> None:
+        result = parse_judge_response(
+            json.dumps(
+                {
+                    "outcome": "not_occurred",
+                    "fault_containment_status": "no_trace",
+                    "reason": "legacy",
+                }
+            )
+        )
+        self.assertEqual(result.outcome, FaultOutcome.NOT_OCCURRED)
+        self.assertEqual(
+            result.fault_containment_status,
+            FaultContainmentStatus.INCONCLUSIVE,
         )
 
     def test_rejects_invalid_classification_combination(self) -> None:

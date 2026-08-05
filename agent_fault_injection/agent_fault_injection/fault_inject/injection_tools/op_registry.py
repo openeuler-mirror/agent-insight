@@ -1,4 +1,4 @@
-"""Primitive registry for structural injection tools."""
+"""Registry of structural injection ops (Command + Registry pattern)."""
 
 from __future__ import annotations
 
@@ -13,6 +13,8 @@ _REGISTRY: dict[str, InjectionOp] = {}
 
 
 def register(op_name: str, func: InjectionOp) -> InjectionOp:
+    """Register a structural op implementation under its fault.json op id."""
+
     _REGISTRY[op_name] = func
     return func
 

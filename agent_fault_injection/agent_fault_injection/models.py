@@ -32,7 +32,7 @@ class FaultContainmentStatus(StrEnum):
     UNRESOLVED = "unresolved"
     RECOVERED = "recovered"
     PREVENTED = "prevented"
-    NO_TRACE = "no_trace"
+    INCONCLUSIVE = "inconclusive"
 
 
 class TerminationReason(StrEnum):

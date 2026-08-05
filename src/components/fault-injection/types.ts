@@ -117,7 +117,10 @@ export const CONTAINMENT_LABELS: Record<string, string> = {
   unresolved: '未恢复',
   recovered: '已恢复',
   prevented: '已阻断',
-  no_trace: '无轨迹',
+  // Insufficient containment evidence — not "missing execution trajectory".
+  inconclusive: '证据不足',
+  // Legacy stored results (pre-rename).
+  no_trace: '证据不足',
 }
 
 export const RUN_STATUS_LABELS: Record<string, string> = {

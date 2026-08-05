@@ -44,6 +44,8 @@
 | [analysis-paralysis.md](designs/features/analysis-paralysis.md) | 分析瘫痪二阶段检测 | 规划中 |
 | [planning-error.md](designs/features/planning-error.md) | 策略层规划错误检测 | 规划中 |
 | [domain-cognitive-bias.md](designs/features/domain-cognitive-bias.md) | 领域认知偏差六类场景 | 规划中 |
+| [memory-file-loss.md](designs/features/memory-file-loss.md) | 记忆丢失/损坏 FI 方案（`memory-file-loss` Skill 已落地） | FI-P0 已落地；检测规划中 |
+| [memory-noise-interference.md](designs/features/memory-noise-interference.md) | 记忆噪声干扰 FI（S1–S3 Skill 已落地，S4 未做） | FI S1–S3 已落地 |
 | [xiaoo-adapter.md](designs/features/xiaoo-adapter.md) | xiaoO 协议 inproc / 入口无关（无 HTTP/SSE） | 已落地（inproc E2E） |
 | [xiaoo-observe-ingest.md](designs/features/xiaoo-observe-ingest.md) | xiaoO OTel 观测（现网 OTLP + RAS join；Insight 最小侵入） | 已落地 |
 

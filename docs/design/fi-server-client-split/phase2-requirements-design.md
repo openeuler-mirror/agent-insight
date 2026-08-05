@@ -209,12 +209,9 @@ sequenceDiagram
     S->>DB: Task_plus_Runs_queued
     S-->>U: taskId
 
-    loop poll
-        W->>S: heartbeat_plus_inventory
-        W->>S: claim_n
-        S->>DB: queued_to_collecting
-        S-->>W: runs
-    end
+    W->>S: claim
+    S->>DB: queued_to_collecting
+    S-->>W: runs
 
     W->>CLI: run_runId
     CLI-->>W: collect_result_json
@@ -234,7 +231,7 @@ sequenceDiagram
 
     U->>S: POST_tasks_stop
     S->>S: mark_stopRequested
-    W->>S: commands_or_heartbeat
+    W->>S: 拉取停命令
     S-->>W: stop_runIds
     W->>W: kill_process_group
     W->>S: report_stopped_or_collect_partial

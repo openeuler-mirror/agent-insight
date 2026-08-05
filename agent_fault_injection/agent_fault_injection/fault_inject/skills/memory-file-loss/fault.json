@@ -12,11 +12,6 @@
         "from_asset": "MEMORY.md"
       },
       {
-        "op": "artifacts.record",
-        "path": "MEMORY.md",
-        "label": "before_mut"
-      },
-      {
         "op": "file.delete",
         "path": "MEMORY.md",
         "when_submode": "1"
@@ -26,15 +21,6 @@
         "path": "MEMORY.md",
         "heading": "## 约束",
         "when_submode": "2"
-      },
-      {
-        "op": "artifacts.record",
-        "path": "MEMORY.md",
-        "label": "after_mut"
-      },
-      {
-        "op": "events.emit",
-        "kind": "file_loss"
       }
     ]
   }

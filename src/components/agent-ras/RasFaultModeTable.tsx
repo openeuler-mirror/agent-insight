@@ -144,6 +144,15 @@ function SubModeCell({
   );
 }
 
+function promptActionLabel(prompt: RasRecoveryPrompt, locale: 'zh' | 'en'): string {
+  if (prompt.label) return prompt.label[locale];
+  const roleLabel = PROMPT_ROLE_LABEL[prompt.role][locale];
+  const band = prompt.severityBand
+    ? rasSeverityLabel(prompt.severityBand, locale)
+    : null;
+  return band ? `${roleLabel} (${band})` : roleLabel;
+}
+
 function RecoveryCell({
   item,
   locale,
@@ -158,24 +167,17 @@ function RecoveryCell({
     <div className="space-y-1.5 min-w-0">
       <p className="text-sm text-foreground-secondary leading-snug">{summary}</p>
       {item.prompts.length > 0 && (
-        <div className="flex flex-wrap gap-x-3 gap-y-1">
-          {item.prompts.map((prompt) => {
-            const roleLabel = PROMPT_ROLE_LABEL[prompt.role][locale];
-            const band = prompt.severityBand
-              ? rasSeverityLabel(prompt.severityBand, locale)
-              : null;
-            const label = band ? `${roleLabel} (${band})` : roleLabel;
-            return (
-              <button
-                key={`${prompt.key}-${prompt.severityBand || 'default'}`}
-                type="button"
-                className="text-sm text-primary underline-offset-4 hover:underline"
-                onClick={() => onOpenPrompt(item, prompt)}
-              >
-                {label}
-              </button>
-            );
-          })}
+        <div className="flex flex-wrap gap-1.5">
+          {item.prompts.map((prompt) => (
+            <button
+              key={`${prompt.key}-${prompt.severityBand || 'default'}`}
+              type="button"
+              className="inline-flex items-center rounded-md border border-border bg-background-secondary px-2 py-0.5 text-xs font-medium text-foreground-secondary transition-colors hover:border-foreground-muted hover:bg-background hover:text-foreground"
+              onClick={() => onOpenPrompt(item, prompt)}
+            >
+              {promptActionLabel(prompt, locale)}
+            </button>
+          ))}
         </div>
       )}
     </div>
@@ -275,7 +277,7 @@ export function RasFaultModeTable() {
           <DialogHeader className="flex-row items-center gap-3 p-4 border-b border-border space-y-0">
             <DialogTitle className="text-sm font-semibold text-foreground">
               {activePrompt
-                ? PROMPT_ROLE_LABEL[activePrompt.role][locale]
+                ? promptActionLabel(activePrompt, locale)
                 : (locale === 'zh' ? '恢复提示词' : 'Recovery prompt')}
               {activeItem && (
                 <span className="ml-2 font-normal text-foreground-muted">

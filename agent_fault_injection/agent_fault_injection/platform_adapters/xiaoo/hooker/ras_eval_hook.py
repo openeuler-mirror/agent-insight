@@ -19,14 +19,15 @@ _SRC_ROOT = Path(__file__).resolve().parents[4]
 if str(_SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(_SRC_ROOT))
 
-from agent_fault_injection.fault_inject.injection_tools.runtime_plan import (  # noqa: E402
+from agent_fault_injection.fault_inject.injection_tools import (  # noqa: E402
     apply_assistant_text_rewrite,
     apply_messages_rewrite,
     apply_system_rewrite,
     apply_tool_result_rewrite,
+)
+from agent_fault_injection.fault_inject.runtime_env import parse_runtime_plan_json  # noqa: E402
+from agent_fault_injection.platform_adapters.xiaoo.call_counter import (  # noqa: E402
     next_tool_call_index,
-    parse_runtime_plan_json,
-    write_runtime_rewrite_artifacts,
 )
 
 
@@ -235,38 +236,21 @@ def _handle_tool_pre(
     }
 
 
-def _artifacts_dir(raw_dir: Path) -> Path:
-    artifacts_env = os.environ.get("AGENT_RAS_INJECTION_ARTIFACTS", "").strip()
-    return Path(artifacts_env) if artifacts_env else raw_dir / "injection"
-
-
 def _record_rewrite(
     *,
     run_id: str,
     raw_dir: Path,
     kind: str,
-    label: str,
-    index: int,
-    before: str,
-    after: str,
     meta: dict[str, Any],
-) -> dict[str, str]:
-    paths = write_runtime_rewrite_artifacts(
-        _artifacts_dir(raw_dir),
-        kind=kind,
-        label=label,
-        index=index,
-        before=before,
-        after=after,
-        meta=dict(meta),
-    )
+) -> None:
+    """Record that a runtime rewrite applied (platform event only; no self-proof files)."""
+
     _append_event(
         run_id=run_id,
         raw_dir=raw_dir,
         kind="fault.injection.applied",
-        payload={"kind": kind, **meta, **paths},
+        payload={"kind": kind, **meta},
     )
-    return paths
 
 
 def _handle_system_transform(
@@ -292,18 +276,12 @@ def _handle_system_transform(
         parts.append(injection)
     plan = parse_runtime_plan_json(os.environ.get("AGENT_RAS_INJECTION_RUNTIME"))
     if plan:
-        before = "\n".join(parts)
         parts, meta = apply_system_rewrite(plan, system_parts=parts)
         if meta.get("applied"):
-            after = "\n".join(parts)
             _record_rewrite(
                 run_id=run_id,
                 raw_dir=raw_dir,
                 kind="prompt",
-                label="system",
-                index=1,
-                before=before,
-                after=after,
                 meta=dict(meta),
             )
     _ensure_activation_started(
@@ -372,10 +350,6 @@ def _handle_llm_pre(
             run_id=run_id,
             raw_dir=raw_dir,
             kind="messages",
-            label="history",
-            index=1,
-            before=before,
-            after=after,
             meta=dict(meta),
         )
     modified = dict(request)
@@ -426,11 +400,7 @@ def _handle_llm_post(
         run_id=run_id,
         raw_dir=raw_dir,
         kind="assistant",
-        label="text",
-        index=call_index,
-        before=text,
-        after=rewritten,
-        meta=dict(meta),
+        meta={**dict(meta), "call_index": call_index},
     )
     modified_message = dict(message)
     modified_message["text"] = rewritten
@@ -462,14 +432,10 @@ def _maybe_rewrite_tool_output(
     if not meta.get("applied"):
         return output, False
 
-    paths = _record_rewrite(
+    _record_rewrite(
         run_id=run_id,
         raw_dir=raw_dir,
         kind="tool_result",
-        label=tool_name,
-        index=call_index,
-        before=output,
-        after=rewritten,
         meta={
             **dict(meta),
             "tool": tool_name,
@@ -478,7 +444,6 @@ def _maybe_rewrite_tool_output(
             "to": meta.get("to"),
         },
     )
-    _ = paths
     return rewritten, True
 
 

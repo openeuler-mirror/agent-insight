@@ -17,8 +17,8 @@ import {
   saveFaultModeSubLabelOverrides,
 } from '@/lib/ingest/ras/fault-mode-label-store';
 
-test('fault-mode catalog covers the nine implemented sub-modes', () => {
-  assert.equal(RAS_FAULT_MODE_CATALOG.length, 9);
+test('fault-mode catalog covers the seven implemented sub-modes', () => {
+  assert.equal(RAS_FAULT_MODE_CATALOG.length, 7);
   assert.deepEqual(
     RAS_FAULT_MODE_CATALOG.map((row) => row.id).sort(),
     [...RAS_FAULT_MODE_IDS].sort(),
@@ -66,26 +66,26 @@ function memoryStorage(seed: Record<string, string> = {}) {
 test('fault-mode label store saves and loads overrides', () => {
   const storage = memoryStorage();
   saveFaultModeSubLabelOverrides(
-    { text_degradation: '输出崩溃（自定义）', ping_pong: '  ' },
+    { plan_execution: '规划执行（自定义）', ping_pong: '  ' },
     storage,
   );
   const loaded = loadFaultModeSubLabelOverrides(storage);
-  assert.equal(loaded.text_degradation, '输出崩溃（自定义）');
+  assert.equal(loaded.plan_execution, '规划执行（自定义）');
   assert.equal(loaded.ping_pong, undefined);
   assert.equal(
     storage._map.get(FAULT_MODE_SUB_LABEL_STORAGE_KEY),
-    JSON.stringify({ text_degradation: '输出崩溃（自定义）' }),
+    JSON.stringify({ plan_execution: '规划执行（自定义）' }),
   );
 });
 
 test('fault-mode label store resets to catalog default', () => {
   const storage = memoryStorage();
-  const id = 'semantic_deadlock' as RasFaultModeId;
+  const id = 'plan_execution' as RasFaultModeId;
   let overrides = { [id]: '自定义逻辑死循环' };
   saveFaultModeSubLabelOverrides(overrides, storage);
   overrides = resetFaultModeSubLabel(id, overrides, storage);
   assert.equal(overrides[id], undefined);
-  assert.equal(resolveFaultModeSubLabel(id, 'zh', overrides), '输出崩溃-规划执行死锁');
+  assert.equal(resolveFaultModeSubLabel(id, 'zh', overrides), '规划执行语义判定');
   assert.equal(storage._map.has(FAULT_MODE_SUB_LABEL_STORAGE_KEY), false);
 });
 

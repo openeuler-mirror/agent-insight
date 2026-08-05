@@ -124,6 +124,25 @@ def parse_skill_submodes(skill_file: Path) -> list[dict[str, str]]:
     return _parse_headings(lines)
 
 
+def normalize_submode(value: str | None) -> str | None:
+    """Normalize UI/CLI submode labels to a comparable id.
+
+    Accepts ``"1"``, ``"场景1"``, ``"case1"`` style by extracting digits when
+    present; otherwise returns the stripped text. Used by structural and
+    runtime injection filters so both layers agree on the active submode.
+    """
+
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    digits = "".join(ch for ch in text if ch.isdigit())
+    if digits:
+        return digits.lstrip("0") or "0"
+    return text
+
+
 def find_submode(
     submodes: list[dict[str, str]], submode_id: str | None
 ) -> dict[str, str] | None:

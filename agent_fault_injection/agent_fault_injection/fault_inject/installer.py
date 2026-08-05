@@ -27,7 +27,7 @@ class InstallSession:
         self.directories.extend(reversed(missing))
 
     def _backup_existing(self, destination: Path) -> None:
-        if not destination.exists():
+        if not destination.exists() or destination.is_dir():
             return
         if destination not in self.files and destination not in self.backups:
             self.backups[destination] = destination.read_bytes()
@@ -88,14 +88,18 @@ class InstallSession:
         )
 
     def delete_path(self, destination: Path) -> None:
-        """Delete a path; restore pre-experiment bytes on cleanup when needed."""
+        """Delete a path; restore pre-experiment file bytes on cleanup when needed.
+
+        Pre-existing directories are removed without byte restore (rmtree only).
+        """
+
+        if destination.is_dir():
+            shutil.rmtree(destination)
+            return
 
         if destination.exists():
             self._backup_existing(destination)
-            if destination.is_dir():
-                shutil.rmtree(destination)
-            else:
-                destination.unlink(missing_ok=True)
+            destination.unlink(missing_ok=True)
 
         if destination in self.backups:
             if destination not in self.files:

@@ -9,7 +9,7 @@
 
 ## 一句话
 
-Insight **远程服务端**负责任务下发、状态/结果展示与 Judge；用户本机经 **curl / `install-fault-injection`** 安装 **FI Worker**，负责注入编排与 `agent_fault_injection` 能力；协议为 heartbeat + claim + collect-result（对齐 agent-ras 的「本机安装 + HTTP」，FI 因实验生命周期需要常驻 Worker）。
+Insight **服务端**负责任务下发、状态/结果展示与 Judge；用户本机扮演 **FI Client** 角色（认领、注入编排、回传），由本机安装面启用，并驱动 `agent_fault_injection`；主路径为 claim → collect-result（租约续命等控制面细节见 phase2）。
 
 ## 目标拓扑
 
@@ -17,19 +17,19 @@ Insight **远程服务端**负责任务下发、状态/结果展示与 Judge；�
 flowchart TB
   subgraph remote [Insight_Server]
     UI[Browser_UI]
-    API[FI_BFF]
+    API[Insight_FI_API]
     DB[(Prisma)]
     Judge[Judge]
   end
   subgraph userHost [User_Machine]
     Install[install_curl_or_npx]
-    Worker[FI_Worker]
+    Worker[FI_Client]
     CLI[agent_fault_injection]
     Agents[opencode_xiaoo]
   end
   Install --> Worker
   UI --> API --> DB
-  Worker -->|claim_heartbeat| API
+  Worker -->|claim| API
   Worker --> CLI --> Agents
   Worker -->|collect_result| API
   API --> Judge
@@ -37,7 +37,7 @@ flowchart TB
 
 ## 废弃
 
-旧「Next 同机 spawn collector」路径已删除；单机调试 = Next + Worker 两进程。
+旧「Next 同机 spawn collector」路径已删除；单机调试 = Insight 服务端 + FI Client 两角色。
 
 ## 安装
 

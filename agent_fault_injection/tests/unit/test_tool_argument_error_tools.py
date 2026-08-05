@@ -27,7 +27,6 @@ class ToolArgumentErrorToolTests(unittest.TestCase):
         cls.tools = {path.name: path for path in cls.fault.tool_files}
         cls.plugin_source = (
             Path(__file__).parents[2]
-            / "src"
             / "agent_fault_injection"
             / "platform_adapters"
             / "opencode"

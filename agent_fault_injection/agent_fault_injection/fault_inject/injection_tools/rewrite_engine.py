@@ -1,52 +1,13 @@
-"""Runtime middleware injection plan helpers (tool/model rewrite recipes)."""
+"""Strategy-style rewriters for runtime middleware ops (tool/system/messages/assistant)."""
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
-from pathlib import Path
 from typing import Any
 
 from ..models import InjectionStep
-
-
-def filter_runtime_steps_for_submode(
-    steps: tuple[InjectionStep, ...] | list[InjectionStep],
-    submode: str | None,
-) -> tuple[InjectionStep, ...]:
-    """Drop runtime steps whose when_submode does not match the active submode."""
-
-    active = str(submode).strip() if submode is not None else "1"
-    selected: list[InjectionStep] = []
-    for step in steps:
-        if step.when_submode is None:
-            selected.append(step)
-            continue
-        if str(step.when_submode).strip() == active:
-            selected.append(step)
-    return tuple(selected)
-
-
-def runtime_plan_to_json(steps: tuple[InjectionStep, ...] | list[InjectionStep]) -> str:
-    payload: list[dict[str, Any]] = []
-    for step in steps:
-        item: dict[str, Any] = {"op": step.op, "args": step.arg_map()}
-        if step.when:
-            item["when"] = dict(step.when)
-        if step.when_submode is not None:
-            item["when_submode"] = step.when_submode
-        payload.append(item)
-    return json.dumps(payload, ensure_ascii=False)
-
-
-def parse_runtime_plan_json(raw: str | None) -> list[dict[str, Any]]:
-    if not raw or not raw.strip():
-        return []
-    value = json.loads(raw)
-    if not isinstance(value, list):
-        raise ValueError("AGENT_RAS_INJECTION_RUNTIME must be a JSON array")
-    return [item for item in value if isinstance(item, dict)]
+from ..runtime_env import plan_as_dicts
 
 
 def _tool_matches(pattern: str | None, tool: str) -> bool:
@@ -79,13 +40,7 @@ def apply_tool_result_rewrite(
 ) -> tuple[str, dict[str, Any]]:
     """Apply the first matching tool_result.* step; return (output, meta)."""
 
-    steps: list[dict[str, Any]]
-    if plan and isinstance(plan[0], InjectionStep):
-        steps = json.loads(runtime_plan_to_json(plan))  # type: ignore[arg-type]
-    else:
-        steps = list(plan)  # type: ignore[arg-type]
-
-    for step in steps:
+    for step in plan_as_dicts(plan):
         op = str(step.get("op") or "")
         if not op.startswith("tool_result."):
             continue
@@ -112,84 +67,6 @@ def apply_tool_result_rewrite(
     return output, {"applied": False, "op": None}
 
 
-def next_tool_call_index(counts_file: Path, tool: str) -> int:
-    """Atomically-ish bump a durable per-tool call counter (1-based).
-
-    xiaoO invokes the hooker as a fresh process per hook, so counters must
-    live on disk under the run's raw/artifacts directory.
-    """
-
-    counts_file.parent.mkdir(parents=True, exist_ok=True)
-    counts: dict[str, int] = {}
-    if counts_file.is_file():
-        try:
-            loaded = json.loads(counts_file.read_text(encoding="utf-8"))
-            if isinstance(loaded, dict):
-                for key, value in loaded.items():
-                    if isinstance(value, int) and not isinstance(value, bool):
-                        counts[str(key)] = value
-        except (OSError, json.JSONDecodeError, TypeError, ValueError):
-            counts = {}
-    index = int(counts.get(tool, 0)) + 1
-    counts[tool] = index
-    counts_file.write_text(
-        json.dumps(counts, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    return index
-
-
-def sha256_text(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def write_runtime_rewrite_artifacts(
-    artifacts_dir: Path,
-    *,
-    kind: str,
-    label: str,
-    index: int,
-    before: str,
-    after: str,
-    meta: dict[str, Any],
-) -> dict[str, str]:
-    """Persist before/after snapshots for Judge audit."""
-
-    artifacts_dir.mkdir(parents=True, exist_ok=True)
-    safe_kind = re.sub(r"[^A-Za-z0-9._-]+", "_", kind) or "runtime"
-    safe_label = re.sub(r"[^A-Za-z0-9._-]+", "_", label) or "item"
-    stem = f"runtime-{safe_kind}-{safe_label}-{index}"
-    before_path = artifacts_dir / f"{stem}.before.txt"
-    after_path = artifacts_dir / f"{stem}.after.txt"
-    meta_path = artifacts_dir / f"{stem}.meta.json"
-    before_path.write_text(before, encoding="utf-8")
-    after_path.write_text(after, encoding="utf-8")
-    record = {
-        **meta,
-        "before_sha256": sha256_text(before),
-        "after_sha256": sha256_text(after),
-        "before_path": str(before_path),
-        "after_path": str(after_path),
-    }
-    meta_path.write_text(
-        json.dumps(record, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    return {
-        "before_path": str(before_path),
-        "after_path": str(after_path),
-        "meta_path": str(meta_path),
-    }
-
-
-def _plan_as_dicts(
-    plan: list[dict[str, Any]] | tuple[InjectionStep, ...],
-) -> list[dict[str, Any]]:
-    if plan and isinstance(plan[0], InjectionStep):
-        return json.loads(runtime_plan_to_json(plan))  # type: ignore[arg-type]
-    return list(plan)  # type: ignore[arg-type]
-
-
 def apply_system_rewrite(
     plan: list[dict[str, Any]] | tuple[InjectionStep, ...],
     *,
@@ -198,14 +75,16 @@ def apply_system_rewrite(
     """Apply first matching system.* step to system prompt parts."""
 
     parts = list(system_parts)
-    for step in _plan_as_dicts(plan):
+    for step in plan_as_dicts(plan):
         op = str(step.get("op") or "")
         args = step.get("args") if isinstance(step.get("args"), dict) else {}
         if op == "system.append":
             text = args.get("text")
             if not isinstance(text, str) or not text.strip():
                 continue
-            parts.append(text)
+            joined = "\n".join(parts)
+            if text not in joined:
+                parts.append(text)
             return parts, {"applied": True, "op": op, "kind": "prompt"}
         if op == "system.replace_text":
             source = args.get("from")
@@ -234,7 +113,7 @@ def apply_assistant_text_rewrite(
 ) -> tuple[str, dict[str, Any]]:
     """Apply first matching assistant.* text rewrite."""
 
-    for step in _plan_as_dicts(plan):
+    for step in plan_as_dicts(plan):
         op = str(step.get("op") or "")
         if not op.startswith("assistant."):
             continue
@@ -284,7 +163,7 @@ def apply_messages_rewrite(
     """Apply first matching messages.* rewrite (history drop / inject)."""
 
     current = list(messages)
-    for step in _plan_as_dicts(plan):
+    for step in plan_as_dicts(plan):
         op = str(step.get("op") or "")
         args = step.get("args") if isinstance(step.get("args"), dict) else {}
         if op == "messages.history.drop":
@@ -293,7 +172,6 @@ def apply_messages_rewrite(
                 continue
             if len(current) <= count:
                 continue
-            # Prefer dropping trailing non-system messages.
             drop_idx: list[int] = []
             for index in range(len(current) - 1, -1, -1):
                 role = str(current[index].get("role") or "").lower()
@@ -345,8 +223,6 @@ def apply_messages_rewrite(
                     return
                 message["content"] = prefix
 
-            # Prefer merging into the first matching user turn so platform-native
-            # message envelopes (OpenCode info/parts) keep validating.
             if position in {"merge_user", "prepend", "append"}:
                 blob = json.dumps(current, ensure_ascii=False)
                 if text.strip() in blob:

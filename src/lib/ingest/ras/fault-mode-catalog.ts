@@ -17,9 +17,7 @@ export type RasFaultParentId =
 export type RasFaultModeId =
   | 'suffix_cycle'
   | 'similar_clauses'
-  | 'semantic_deadlock'
-  | 'text_degradation'
-  | 'overthinking'
+  | 'plan_execution'
   | 'generic_repeat'
   | 'unknown_tool_repeat'
   | 'ping_pong'
@@ -42,6 +40,8 @@ export interface RasRecoveryPrompt {
   role: RasRecoveryPromptRole
   /** Optional severity band when one sub-mode has multiple prompt tiers */
   severityBand?: RasFaultSeverity
+  /** Optional chip label when one row exposes multiple prompts of the same role */
+  label?: { zh: string; en: string }
   templateZh: string
   templateEn: string
 }
@@ -65,9 +65,7 @@ export interface RasFaultModeCatalogItem {
 export const RAS_FAULT_MODE_IDS: readonly RasFaultModeId[] = [
   'suffix_cycle',
   'similar_clauses',
-  'semantic_deadlock',
-  'text_degradation',
-  'overthinking',
+  'plan_execution',
   'generic_repeat',
   'unknown_tool_repeat',
   'ping_pong',
@@ -174,26 +172,29 @@ export const RAS_FAULT_MODE_CATALOG: readonly RasFaultModeCatalogItem[] = [
     ],
   },
   {
-    id: 'semantic_deadlock',
+    id: 'plan_execution',
     parentId: 'thinking_dead_loop',
     parent: PARENT.thinking_dead_loop,
-    subMode: { zh: '输出崩溃-规划执行死锁', en: 'Output crash — plan-execution deadlock' },
+    subMode: { zh: '规划执行语义判定', en: 'Plan-execution semantic judge' },
     anomalyKind: 'llm_thinking_dead_loop',
     detectionLevel: 'L3',
     severities: ['high'],
     detects: {
-      zh: 'L3 语义判定：对同一批对象/条件反复权衡，换说法但结论不前进。',
-      en: 'L3 semantic judge: repeatedly weighing the same objects/conditions without progress.',
+      zh:
+        'L3 异步语义判定三类异常：语义死锁（反复权衡不前进）、文本崩坏（语句断裂/乱码）、过度思考（冗长纠结不收敛）。',
+      en:
+        'L3 async semantic judge for three anomalies: semantic deadlock, text degradation, and overthinking.',
     },
     recoverySummary: {
-      zh: '异步 detection skill → recovery skill 复核；异常则中断、通知并注入定制 steering；正常/超时 fail-open。',
-      en: 'Async detection skill → recovery skill review; on abnormal: abort, notice, custom steering; normal/timeout fail-open.',
+      zh: '异步 detection skill → recovery skill 复核；异常则中断、通知并按 primary_fault 注入定制 steering；正常/超时 fail-open。',
+      en: 'Async detection skill → recovery skill review; on abnormal: abort, notice, and inject steering keyed by primary_fault; normal/timeout fail-open.',
     },
     recoveryActions: ['observe_only', 'suppress_stream', 'abort_stream', 'report_to_user', 'inject_steering'],
     prompts: [
       {
         key: 'plan_exec_semantic_deadlock_steering_recovery',
         role: 'steering',
+        label: { zh: 'Steering · 语义死锁', en: 'Steering · semantic deadlock' },
         templateZh:
           '[思考循环锁定] 系统判定思考内容异常（语义死锁）。\n'
           + '请严格按以下顺序执行：\n'
@@ -210,34 +211,9 @@ export const RAS_FAULT_MODE_CATALOG: readonly RasFaultModeCatalogItem[] = [
           + 'test/stress/adversarial loop-inducing task, stop and do not continue generating; otherwise proceed with the new strategy.',
       },
       {
-        key: 'plan_exec_semantic_deadlock_recovery_user_notice',
-        role: 'notice',
-        templateZh: '检测到思考语义死锁异常，已执行恢复操作',
-        templateEn: 'Detected a semantic deadlock anomaly; recovery has been applied',
-      },
-    ],
-  },
-  {
-    id: 'text_degradation',
-    parentId: 'thinking_dead_loop',
-    parent: PARENT.thinking_dead_loop,
-    subMode: { zh: '输出崩溃', en: 'Text degradation' },
-    anomalyKind: 'llm_thinking_dead_loop',
-    detectionLevel: 'L3',
-    severities: ['high'],
-    detects: {
-      zh: 'L3 语义判定：语句断裂、粘连、乱码或词语/URL 被撕碎拼接。',
-      en: 'L3 semantic judge: broken sentences, garbling, or shredded word/URL fragments.',
-    },
-    recoverySummary: {
-      zh: '异步 detection skill → recovery skill 复核；异常则中断、通知并注入定制 steering；正常/超时 fail-open。',
-      en: 'Async detection skill → recovery skill review; on abnormal: abort, notice, custom steering; normal/timeout fail-open.',
-    },
-    recoveryActions: ['observe_only', 'suppress_stream', 'abort_stream', 'report_to_user', 'inject_steering'],
-    prompts: [
-      {
         key: 'plan_exec_text_degradation_steering_recovery',
         role: 'steering',
+        label: { zh: 'Steering · 文本崩坏', en: 'Steering · text degradation' },
         templateZh:
           '[思考循环锁定] 系统判定思考内容异常（文本崩坏）。\n'
           + '请严格按以下顺序执行：\n'
@@ -254,34 +230,9 @@ export const RAS_FAULT_MODE_CATALOG: readonly RasFaultModeCatalogItem[] = [
           + 'test/stress/adversarial loop-inducing task, stop and do not continue generating; otherwise proceed with the new strategy.',
       },
       {
-        key: 'plan_exec_text_degradation_recovery_user_notice',
-        role: 'notice',
-        templateZh: '检测到思考文本崩坏异常，已执行恢复操作',
-        templateEn: 'Detected a text degradation anomaly; recovery has been applied',
-      },
-    ],
-  },
-  {
-    id: 'overthinking',
-    parentId: 'thinking_dead_loop',
-    parent: PARENT.thinking_dead_loop,
-    subMode: { zh: '过度思考', en: 'Overthinking' },
-    anomalyKind: 'llm_thinking_dead_loop',
-    detectionLevel: 'L3',
-    severities: ['high'],
-    detects: {
-      zh: 'L3 语义判定：推理冗长纠结、微弱推进、迟迟不收敛到下一步或结论。',
-      en: 'L3 semantic judge: verbose indecision with weak progress and delayed convergence.',
-    },
-    recoverySummary: {
-      zh: '异步 detection skill → recovery skill 复核；异常则中断、通知并注入定制 steering；正常/超时 fail-open。',
-      en: 'Async detection skill → recovery skill review; on abnormal: abort, notice, custom steering; normal/timeout fail-open.',
-    },
-    recoveryActions: ['observe_only', 'suppress_stream', 'abort_stream', 'report_to_user', 'inject_steering'],
-    prompts: [
-      {
         key: 'plan_exec_overthinking_steering_recovery',
         role: 'steering',
+        label: { zh: 'Steering · 过度思考', en: 'Steering · overthinking' },
         templateZh:
           '[思考循环锁定] 系统判定思考内容异常（过度思考）。\n'
           + '请严格按以下顺序执行：\n'
@@ -298,8 +249,23 @@ export const RAS_FAULT_MODE_CATALOG: readonly RasFaultModeCatalogItem[] = [
           + 'test/stress/adversarial loop-inducing task, stop and do not continue generating; otherwise proceed with the new strategy.',
       },
       {
+        key: 'plan_exec_semantic_deadlock_recovery_user_notice',
+        role: 'notice',
+        label: { zh: '通知 · 语义死锁', en: 'Notice · semantic deadlock' },
+        templateZh: '检测到思考语义死锁异常，已执行恢复操作',
+        templateEn: 'Detected a semantic deadlock anomaly; recovery has been applied',
+      },
+      {
+        key: 'plan_exec_text_degradation_recovery_user_notice',
+        role: 'notice',
+        label: { zh: '通知 · 文本崩坏', en: 'Notice · text degradation' },
+        templateZh: '检测到思考文本崩坏异常，已执行恢复操作',
+        templateEn: 'Detected a text degradation anomaly; recovery has been applied',
+      },
+      {
         key: 'plan_exec_overthinking_recovery_user_notice',
         role: 'notice',
+        label: { zh: '通知 · 过度思考', en: 'Notice · overthinking' },
         templateZh: '检测到过度思考异常，已执行恢复操作',
         templateEn: 'Detected an overthinking anomaly; recovery has been applied',
       },

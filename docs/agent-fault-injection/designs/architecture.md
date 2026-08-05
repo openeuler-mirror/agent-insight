@@ -36,7 +36,7 @@
 
 ```text
 Browser → Next /api/fault-injection（建任务 queued / 展示 / Judge）
-本机 FI Worker → heartbeat + claim → Python CLI(inject+collect)
+本机 FI Worker → claim → Python CLI(inject+collect)
        → POST /runs/:runId/collect-result
        → Session.interactions + Run.injectionEvidenceJson
        → server judge → RasAnomalyEvent bridge（dry-run 不写）
@@ -51,4 +51,24 @@ Dry-run：仅服务端 stub，不经 Worker。
 
 `skill_inject` | `file_tamper` | `prompt_modify` | `tool_result_tamper` | `intercept_rewrite` | `route_manipulate`(不实现)
 
-详见 [fault-inject.md](modules/fault-inject.md)。
+详见 [fault-inject.md](modules/fault-inject.md) · [fault-catalog.md](fault-catalog.md) · [runtime-middleware-fault-injection.md](runtime-middleware-fault-injection.md)。
+
+## 注入能力分层（三维）
+
+| 轴 | 含义 | 落点 |
+|----|------|------|
+| **注入方式** | 怎么注入 | catalog `injection_method` |
+| **故障类型** | 注入什么语义 | `fault_inject/skills/*` |
+| **变异模式** | Structure vs Semantic | runtime op（P0 多为 Structure） |
+
+代码分层：
+
+```text
+catalog / fault.json     → 定义 injection_plan + injection_runtime
+apply_plan / runtime_env → 薄胶水（跑 plan / 序列化 AGENT_RAS_INJECTION_RUNTIME）
+injection_tools          → 能力：file_ops + rewrite_engine（只做副作用，不写自证快照）
+Adapter plugin/hooker    → 挂点执行 + fault.injection.applied 事件
+collect_payload          → interactions + 可选 injectionEvidence → Insight Judge
+```
+
+Judge 以**轨迹 / 终答 / 终态 workspace**为主；`injectionEvidence` 缺省非必要。containment 含 `inconclusive`（历史 `no_trace` 读路径兼容）。

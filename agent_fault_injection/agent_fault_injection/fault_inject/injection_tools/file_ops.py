@@ -1,12 +1,33 @@
-"""File-structure injection primitives (fault-agnostic)."""
+"""Structural injection Commands: file.* only (no evidence self-logging)."""
 
 from __future__ import annotations
 
+import hashlib
 import re
+from pathlib import Path
 from typing import Any
 
-from . import artifacts, events, registry
 from .context import InjectionContext
+from . import op_registry
+
+
+def _sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _read_optional_bytes(path: Path) -> bytes | None:
+    if not path.exists() or path.is_dir():
+        return None
+    return path.read_bytes()
+
+
+def _snapshot_info(path: Path, data: bytes | None) -> dict[str, Any]:
+    return {
+        "path": str(path),
+        "exists": data is not None,
+        "sha256": _sha256_bytes(data) if data is not None else None,
+        "size": len(data) if data is not None else 0,
+    }
 
 
 def _require_path(args: dict[str, Any]) -> str:
@@ -36,20 +57,20 @@ def file_write(ctx: InjectionContext, args: dict[str, Any]) -> dict[str, Any]:
     return {
         "op": "file.write",
         "path": relative,
-        **artifacts.snapshot_info(target, data),
+        **_snapshot_info(target, data),
     }
 
 
 def file_delete(ctx: InjectionContext, args: dict[str, Any]) -> dict[str, Any]:
     relative = _require_path(args)
     target = ctx.resolve_workspace_path(relative)
-    before = artifacts.read_optional_bytes(target)
+    before = _read_optional_bytes(target)
     ctx.installation.delete_path(target)
     return {
         "op": "file.delete",
         "path": relative,
-        "before": artifacts.snapshot_info(target, before),
-        "after": artifacts.snapshot_info(target, None),
+        "before": _snapshot_info(target, before),
+        "after": _snapshot_info(target, None),
     }
 
 
@@ -69,7 +90,11 @@ def _delete_markdown_section(text: str, heading: str) -> str:
             continue
         current = f"{match.group(1)} {match.group(2).strip()}"
         alt = match.group(0).strip()
-        if current == heading or alt == heading or match.group(2).strip() == heading.lstrip("# ").strip():
+        if (
+            current == heading
+            or alt == heading
+            or match.group(2).strip() == heading.lstrip("# ").strip()
+        ):
             start = index
             level = len(match.group(1))
             break
@@ -94,7 +119,7 @@ def file_delete_section(
     if not isinstance(heading, str) or not heading.strip():
         raise ValueError("file.delete_section requires heading")
     target = ctx.resolve_workspace_path(relative)
-    before = artifacts.read_optional_bytes(target)
+    before = _read_optional_bytes(target)
     if before is None:
         raise FileNotFoundError(f"Cannot delete section; file missing: {relative}")
     text = before.decode("utf-8")
@@ -105,15 +130,15 @@ def file_delete_section(
         "op": "file.delete_section",
         "path": relative,
         "heading": heading.strip(),
-        "before": artifacts.snapshot_info(target, before),
-        "after": artifacts.snapshot_info(target, data),
+        "before": _snapshot_info(target, before),
+        "after": _snapshot_info(target, data),
     }
 
 
 def file_truncate(ctx: InjectionContext, args: dict[str, Any]) -> dict[str, Any]:
     relative = _require_path(args)
     target = ctx.resolve_workspace_path(relative)
-    before = artifacts.read_optional_bytes(target)
+    before = _read_optional_bytes(target)
     if before is None:
         raise FileNotFoundError(f"Cannot truncate missing file: {relative}")
 
@@ -138,8 +163,8 @@ def file_truncate(ctx: InjectionContext, args: dict[str, Any]) -> dict[str, Any]
     return {
         "op": "file.truncate",
         "path": relative,
-        "before": artifacts.snapshot_info(target, before),
-        "after": artifacts.snapshot_info(target, data),
+        "before": _snapshot_info(target, before),
+        "after": _snapshot_info(target, data),
     }
 
 
@@ -149,7 +174,7 @@ def file_replace_text(
 ) -> dict[str, Any]:
     relative = _require_path(args)
     target = ctx.resolve_workspace_path(relative)
-    before = artifacts.read_optional_bytes(target)
+    before = _read_optional_bytes(target)
     if before is None:
         raise FileNotFoundError(f"Cannot replace text in missing file: {relative}")
     text = before.decode("utf-8")
@@ -179,77 +204,17 @@ def file_replace_text(
         "op": "file.replace_text",
         "path": relative,
         "replacements": applied,
-        "before": artifacts.snapshot_info(target, before),
-        "after": artifacts.snapshot_info(target, data),
+        "before": _snapshot_info(target, before),
+        "after": _snapshot_info(target, data),
     }
-
-
-def artifacts_record(
-    ctx: InjectionContext,
-    args: dict[str, Any],
-) -> dict[str, Any]:
-    relative = _require_path(args)
-    label = args.get("label")
-    if not isinstance(label, str) or not label.strip():
-        raise ValueError("artifacts.record requires label")
-    target = ctx.resolve_workspace_path(relative)
-    data = artifacts.read_optional_bytes(target)
-    text = None if data is None else data.decode("utf-8", errors="replace")
-    artifacts.write_text_snapshot(
-        ctx.artifacts_dir,
-        label=label.strip(),
-        relative_path=relative,
-        text=text,
-    )
-    info = artifacts.snapshot_info(target, data)
-    ctx.snapshots[label.strip()] = {
-        "relative_path": relative,
-        "text": text,
-        **info,
-    }
-    before = ctx.snapshots.get("before_mut")
-    after = ctx.snapshots.get("after_mut")
-    if before is not None and after is not None and label.strip() == "after_mut":
-        artifacts.write_diff(
-            ctx.artifacts_dir,
-            before=before.get("text"),
-            after=after.get("text"),
-        )
-    return {"op": "artifacts.record", "label": label.strip(), **info}
-
-
-def events_emit(ctx: InjectionContext, args: dict[str, Any]) -> dict[str, Any]:
-    kind = args.get("kind", "structural")
-    if not isinstance(kind, str) or not kind.strip():
-        raise ValueError("events.emit kind must be a non-empty string")
-    payload = {
-        "kind": kind.strip(),
-        "submode": ctx.submode,
-        "ops": list(ctx.last_ops),
-        "snapshots": {
-            key: {
-                "path": value.get("relative_path"),
-                "exists": value.get("exists"),
-                "sha256": value.get("sha256"),
-                "size": value.get("size"),
-            }
-            for key, value in ctx.snapshots.items()
-        },
-    }
-    events.append_event(ctx.events_file, "fault.injection.applied", payload)
-    # Also emit memory-oriented alias used by memory fault docs.
-    events.append_event(ctx.events_file, "memory.fault.injected", payload)
-    return {"op": "events.emit", "kind": kind.strip()}
 
 
 def _register_builtins() -> None:
-    registry.register("file.write", file_write)
-    registry.register("file.delete", file_delete)
-    registry.register("file.delete_section", file_delete_section)
-    registry.register("file.truncate", file_truncate)
-    registry.register("file.replace_text", file_replace_text)
-    registry.register("artifacts.record", artifacts_record)
-    registry.register("events.emit", events_emit)
+    op_registry.register("file.write", file_write)
+    op_registry.register("file.delete", file_delete)
+    op_registry.register("file.delete_section", file_delete_section)
+    op_registry.register("file.truncate", file_truncate)
+    op_registry.register("file.replace_text", file_replace_text)
 
 
 _register_builtins()

@@ -1,7 +1,7 @@
 """Contract tests for OpenCode plugin skill-name normalization.
 
 The pure function below MUST stay in sync with normalizeSkillName in
-src/agent_fault_injection/platform_adapters/opencode/plugin/agent-fault-injection.ts.
+agent_fault_injection/platform_adapters/opencode/plugin/agent-fault-injection.ts.
 """
 
 from __future__ import annotations
@@ -22,7 +22,6 @@ def normalize_skill_name(name: str) -> str:
 
 PLUGIN_PATH = (
     Path(__file__).resolve().parents[2]
-    / "src"
     / "agent_fault_injection"
     / "platform_adapters"
     / "opencode"

@@ -37,16 +37,16 @@ strong{color:#e2e8f0}
 <body><div class="container">
 <header>
 <div class="header-row"><div class="pulse"></div><h1>Agent Insight · RAS · FI 关系设计说明</h1></div>
-<p class="sub">图示约定：功能·模块名；实线=主动调用，虚线=claim 回程；②③ 由 FI Worker 发起</p>
-<p class="lead"><strong>agent-insight</strong> = UI / 协议 / DB / Judge。<strong>agent-ras</strong> / <strong>agent-fi</strong> = 用户本机功能实现模块，不含前端与数据契约。</p>
+<p class="sub">图示约定：功能·角色/模块名；优先角色；②③ 由 FI Client 发起</p>
+<p class="lead"><strong>Insight 服务端</strong> = UI / 协议 / DB / Judge。<strong>FI Client</strong> = 本机 FI 角色。<strong>agent-ras / agent-fi</strong> = 实现模块。</p>
 <p class="verdict">新增前端与数据库能力一律划入 Insight；RAS/FI 只按 Insight 协议上报。</p>
 <nav class="toc">
-<a href="#s0">0. 边界</a><a href="#s1">1. 部署</a><a href="#s5">5. 上报</a><a href="#md">全文 Markdown</a>
+<a href="#s0">0. 边界</a><a href="#s1">1. 部署</a><a href="#s5">5. 上报</a><a href="#otel">⓪ OTel</a><a href="#topo">拓扑对照</a><a href="./agent-insight-ras-fi-logic.html">三产品逻辑图</a><a href="#md">全文 Markdown</a>
 </nav>
 </header>
 
 <section id="s0"><h2>0. 边界总图</h2>
-<p class="legend">用户本机下：宿主共享；RAS / FI 分属两个功能模块大框</p>
+<p class="legend">用户本机下：宿主共享；agent-ras 模块框 vs FI Client 角色框</p>
 <div class="box"><svg viewBox="0 0 1000 480" xmlns="http://www.w3.org/2000/svg">
 <defs><pattern id="g" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0 L0 0 0 40" fill="none" stroke="#1e293b" stroke-width=".5"/></pattern>
 <marker id="ar" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#64748b"/></marker>
@@ -59,7 +59,7 @@ strong{color:#e2e8f0}
 <text x="160" y="115" fill="#94a3b8" font-size="8" text-anchor="middle">· Insight 前端 UI</text>
 <rect x="280" y="58" width="210" height="90" rx="6" fill="#0f172a"/><rect x="280" y="58" width="210" height="90" rx="6" fill="rgba(6,78,59,.4)" stroke="#34d399" stroke-width="1.5"/>
 <text x="385" y="95" fill="#fff" font-size="10" font-weight="600" text-anchor="middle">接收任务下发与数据上报</text>
-<text x="385" y="115" fill="#94a3b8" font-size="8" text-anchor="middle">· Insight BFF / 协议</text>
+<text x="385" y="115" fill="#94a3b8" font-size="8" text-anchor="middle">· Insight API / 协议</text>
 <rect x="510" y="58" width="200" height="90" rx="6" fill="#0f172a"/><rect x="510" y="58" width="200" height="90" rx="6" fill="rgba(76,29,149,.4)" stroke="#a78bfa" stroke-width="1.5"/>
 <text x="610" y="95" fill="#fff" font-size="10" font-weight="600" text-anchor="middle">权威业务落库</text>
 <text x="610" y="115" fill="#94a3b8" font-size="8" text-anchor="middle">· Prisma</text>
@@ -77,10 +77,10 @@ strong{color:#e2e8f0}
 <text x="270" y="370" fill="#fff" font-size="10" font-weight="600" text-anchor="middle">环内异常检测与自动恢复</text>
 <text x="270" y="390" fill="#94a3b8" font-size="8" text-anchor="middle">· Detector / Recovery / ras_embed</text>
 <rect x="520" y="298" width="420" height="140" rx="10" fill="none" stroke="#34d399" stroke-width="1.8"/>
-<text x="536" y="320" fill="#34d399" font-size="11" font-weight="600">功能模块 · agent-fi</text>
+<text x="536" y="320" fill="#34d399" font-size="11" font-weight="600">角色 · FI Client</text>
 <rect x="540" y="338" width="180" height="80" rx="6" fill="#0f172a"/><rect x="540" y="338" width="180" height="80" rx="6" fill="rgba(6,78,59,.4)" stroke="#34d399" stroke-width="1.5"/>
 <text x="630" y="366" fill="#fff" font-size="9" font-weight="600" text-anchor="middle">认领 / 回传 / 拉停</text>
-<text x="630" y="386" fill="#94a3b8" font-size="8" text-anchor="middle">· FI Worker</text>
+<text x="630" y="386" fill="#94a3b8" font-size="8" text-anchor="middle">· FI Client</text>
 <rect x="740" y="338" width="180" height="80" rx="6" fill="#0f172a"/><rect x="740" y="338" width="180" height="80" rx="6" fill="rgba(6,78,59,.4)" stroke="#34d399" stroke-width="1.5"/>
 <text x="830" y="366" fill="#fff" font-size="9" font-weight="600" text-anchor="middle">注入与轨迹采集</text>
 <text x="830" y="386" fill="#94a3b8" font-size="8" text-anchor="middle">· CLI/Adapter</text>
@@ -94,7 +94,7 @@ strong{color:#e2e8f0}
 </section>
 
 <section id="s1"><h2>1. 部署全景</h2>
-<p class="legend">同机部署，但 agent-ras / agent-fi 是两个独立功能模块大框，不混在一个「功能实现」框里</p>
+<p class="legend">同机部署；左侧 Insight 服务端，右侧本机：agent-ras 模块 vs FI Client 角色，分框不混装</p>
 <div class="box"><svg viewBox="0 0 1000 620" xmlns="http://www.w3.org/2000/svg">
 <defs><pattern id="g2" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0 L0 0 0 40" fill="none" stroke="#1e293b" stroke-width=".5"/></pattern>
 <marker id="ac" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#22d3ee"/></marker>
@@ -109,7 +109,7 @@ strong{color:#e2e8f0}
 <text x="230" y="108" fill="#94a3b8" font-size="8" text-anchor="middle">· 浏览器 UI</text>
 <rect x="50" y="145" width="360" height="60" rx="6" fill="#0f172a"/><rect x="50" y="145" width="360" height="60" rx="6" fill="rgba(6,78,59,.4)" stroke="#34d399" stroke-width="1.5"/>
 <text x="230" y="170" fill="#fff" font-size="11" font-weight="600" text-anchor="middle">编排任务 / 鉴权 / 收上报</text>
-<text x="230" y="188" fill="#94a3b8" font-size="8" text-anchor="middle">· Insight BFF</text>
+<text x="230" y="188" fill="#94a3b8" font-size="8" text-anchor="middle">· Insight API</text>
 <rect x="50" y="225" width="360" height="60" rx="6" fill="#0f172a"/><rect x="50" y="225" width="360" height="60" rx="6" fill="rgba(76,29,149,.4)" stroke="#a78bfa" stroke-width="1.5"/>
 <text x="230" y="250" fill="#fff" font-size="11" font-weight="600" text-anchor="middle">持久化任务·轨迹·异常事件</text>
 <text x="230" y="268" fill="#94a3b8" font-size="8" text-anchor="middle">· Prisma 权威库</text>
@@ -127,10 +127,10 @@ strong{color:#e2e8f0}
 <text x="715" y="205" fill="#fff" font-size="11" font-weight="600" text-anchor="middle">检测异常并自动恢复</text>
 <text x="715" y="228" fill="#94a3b8" font-size="8" text-anchor="middle">· Detector / Recovery / ras_embed</text>
 <rect x="480" y="300" width="470" height="190" rx="10" fill="none" stroke="#34d399" stroke-width="1.8"/>
-<text x="496" y="322" fill="#34d399" font-size="11" font-weight="600">功能模块 · agent-fi</text>
+<text x="496" y="322" fill="#34d399" font-size="11" font-weight="600">角色 · FI Client</text>
 <rect x="500" y="338" width="430" height="60" rx="6" fill="#0f172a"/><rect x="500" y="338" width="430" height="60" rx="6" fill="rgba(6,78,59,.35)" stroke="#34d399" stroke-width="1.5"/>
 <text x="715" y="362" fill="#fff" font-size="10" font-weight="600" text-anchor="middle">认领 FI 任务、停杀、回传结果</text>
-<text x="715" y="382" fill="#94a3b8" font-size="8" text-anchor="middle">· FI Worker（Insight 客户端，本机进程）</text>
+<text x="715" y="382" fill="#94a3b8" font-size="8" text-anchor="middle">· FI Client</text>
 <rect x="500" y="412" width="430" height="60" rx="6" fill="#0f172a"/><rect x="500" y="412" width="430" height="60" rx="6" fill="rgba(6,78,59,.4)" stroke="#34d399" stroke-width="1.5"/>
 <text x="715" y="436" fill="#fff" font-size="10" font-weight="600" text-anchor="middle">执行注入并写出采集包</text>
 <text x="715" y="456" fill="#94a3b8" font-size="8" text-anchor="middle">· agent-fi CLI / Adapter</text>
@@ -150,12 +150,93 @@ strong{color:#e2e8f0}
 <table>
 <thead><tr><th>#</th><th>功能</th><th>实现侧</th><th>Insight 入口</th></tr></thead>
 <tbody>
-<tr><td>①</td><td>旁路上报异常事件</td><td>检测恢复 · agent-ras</td><td>接收 RAS 事件 · ingest API</td></tr>
-<tr><td>②</td><td>心跳认领 / 停命令</td><td>FI Worker 发起请求 / 拉取停命令</td><td>FI 编排 · /worker/*</td></tr>
-<tr><td>③</td><td>上传采集轨迹包</td><td>FI Worker 读 agent-fi 产物后上传</td><td>入库评判 · collect-result</td></tr>
+<tr><td>⓪</td><td>OTel 主观测链路</td><td>宿主 / 框架插件 exporter</td><td>OTLP → spool → Prisma Execution</td></tr>
+<tr><td>①</td><td>旁路上报异常事件</td><td>检测恢复 · agent-ras</td><td>ras-events（非 OTLP）</td></tr>
+<tr><td>②</td><td>心跳认领 / 停命令</td><td>FI Client</td><td>FI 编排 · /worker/*</td></tr>
+<tr><td>③</td><td>上传采集轨迹包</td><td>FI Client 读 agent-fi 产物</td><td>collect-result（非 OTLP）</td></tr>
 <tr><td>④</td><td>桥接进观测列表</td><td>Insight 内部</td><td>ras-bridge → RasAnomalyEvent</td></tr>
 </tbody></table>
-<div class="callout amber">协议与表结构属 Insight；RAS/FI 只按契约填数据。全文见 Markdown。</div>
+<div class="callout amber">OTel = 进水管；Prisma = 权威库。RAS/FI 不替代 OTel，也不替代 Prisma。详册见 Markdown §5.0。</div>
+</section>
+
+<section id="otel"><h2>⓪ OTel → Prisma</h2>
+<p class="legend">Insight 既有主链路；与 RAS/FI 并列汇入 Prisma</p>
+<div class="box"><svg viewBox="0 0 1000 220" xmlns="http://www.w3.org/2000/svg">
+<defs>
+<marker id="ot" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#22d3ee"/></marker>
+</defs>
+<rect width="1000" height="220" fill="#020617"/>
+<rect x="40" y="70" width="180" height="80" rx="8" fill="#0f172a" stroke="#22d3ee" stroke-width="1.4"/>
+<text x="130" y="105" fill="#fff" font-size="11" font-weight="600" text-anchor="middle">宿主 / 插件</text>
+<text x="130" y="125" fill="#94a3b8" font-size="8" text-anchor="middle">OTLP exporter</text>
+<rect x="280" y="70" width="180" height="80" rx="8" fill="#0f172a" stroke="#34d399" stroke-width="1.4"/>
+<text x="370" y="105" fill="#fff" font-size="11" font-weight="600" text-anchor="middle">OTel ingest</text>
+<text x="370" y="125" fill="#94a3b8" font-size="8" text-anchor="middle">/api/ingest/otel/v1/*</text>
+<rect x="520" y="70" width="180" height="80" rx="8" fill="#0f172a" stroke="#fb923c" stroke-width="1.4"/>
+<text x="610" y="105" fill="#fff" font-size="11" font-weight="600" text-anchor="middle">spool JSONL</text>
+<text x="610" y="125" fill="#94a3b8" font-size="8" text-anchor="middle">otel_data/ …</text>
+<rect x="760" y="70" width="200" height="80" rx="8" fill="#0f172a" stroke="#a78bfa" stroke-width="1.4"/>
+<text x="860" y="105" fill="#fff" font-size="11" font-weight="600" text-anchor="middle">Prisma</text>
+<text x="860" y="125" fill="#94a3b8" font-size="8" text-anchor="middle">Execution / Session</text>
+<line x1="220" y1="110" x2="275" y2="110" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ot)"/>
+<line x1="460" y1="110" x2="515" y2="110" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ot)"/>
+<line x1="700" y1="110" x2="755" y2="110" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#ot)"/>
+<text x="500" y="45" fill="#67e8f9" font-size="11" font-weight="600" text-anchor="middle">⓪ 接受成功 ≠ 立即可见 · consumer 落库后才是权威</text>
+</svg></div>
+</section>
+
+<section id="topo"><h2>交互拓扑对照</h2>
+<p class="legend">左：RAS ↔ Insight（旁路 ①）；右：FI Client ↔ Insight（控制面 ② + 结果 ③）</p>
+<div class="box"><svg viewBox="0 0 1000 420" xmlns="http://www.w3.org/2000/svg">
+<defs>
+<marker id="tpv" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#a78bfa"/></marker>
+<marker id="tpc" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#22d3ee"/></marker>
+</defs>
+<rect width="1000" height="420" fill="#020617"/>
+<!-- RAS -->
+<rect x="20" y="20" width="460" height="380" rx="12" fill="none" stroke="#a78bfa" stroke-width="1.5" stroke-dasharray="8,4"/>
+<text x="36" y="45" fill="#a78bfa" font-size="12" font-weight="600">RAS 拓扑 · Insight ↔ agent-ras</text>
+<rect x="40" y="60" width="200" height="55" rx="6" fill="#0f172a" stroke="#fbbf24" stroke-width="1.2"/>
+<text x="140" y="82" fill="#fff" font-size="10" font-weight="600" text-anchor="middle">Trace UI 只读</text>
+<text x="140" y="100" fill="#94a3b8" font-size="8" text-anchor="middle">· Insight</text>
+<rect x="260" y="60" width="200" height="55" rx="6" fill="#0f172a" stroke="#34d399" stroke-width="1.2"/>
+<text x="360" y="82" fill="#fff" font-size="10" font-weight="600" text-anchor="middle">ingest API</text>
+<text x="360" y="100" fill="#94a3b8" font-size="8" text-anchor="middle">· ras-events</text>
+<rect x="40" y="150" width="420" height="55" rx="6" fill="#0f172a" stroke="#a78bfa" stroke-width="1.2"/>
+<text x="250" y="172" fill="#fff" font-size="10" font-weight="600" text-anchor="middle">RasAnomalyEvent</text>
+<text x="250" y="190" fill="#94a3b8" font-size="8" text-anchor="middle">· Prisma</text>
+<rect x="40" y="240" width="200" height="70" rx="6" fill="#0f172a" stroke="#22d3ee" stroke-width="1.2"/>
+<text x="140" y="268" fill="#fff" font-size="10" font-weight="600" text-anchor="middle">宿主会话</text>
+<text x="140" y="288" fill="#94a3b8" font-size="8" text-anchor="middle">· opencode/xiaoo</text>
+<rect x="260" y="240" width="200" height="70" rx="6" fill="#0f172a" stroke="#a78bfa" stroke-width="1.2"/>
+<text x="360" y="268" fill="#fff" font-size="10" font-weight="600" text-anchor="middle">环内检测恢复</text>
+<text x="360" y="288" fill="#94a3b8" font-size="8" text-anchor="middle">· agent-ras</text>
+<text x="140" y="340" fill="#c4b5fd" font-size="9" text-anchor="middle">事件进 / 恢复出（环内）</text>
+<line x1="360" y1="240" x2="360" y2="215" stroke="#a78bfa" stroke-width="1.4" marker-end="url(#tpv)"/>
+<text x="380" y="230" fill="#c4b5fd" font-size="8">① fail-open</text>
+<text x="250" y="380" fill="#64748b" font-size="8" text-anchor="middle">无 claim；Insight 不决策恢复</text>
+<!-- FI -->
+<rect x="520" y="20" width="460" height="380" rx="12" fill="none" stroke="#34d399" stroke-width="1.5" stroke-dasharray="8,4"/>
+<text x="536" y="45" fill="#34d399" font-size="12" font-weight="600">FI 拓扑 · Insight ↔ FI Client</text>
+<rect x="540" y="60" width="200" height="55" rx="6" fill="#0f172a" stroke="#fbbf24" stroke-width="1.2"/>
+<text x="640" y="82" fill="#fff" font-size="10" font-weight="600" text-anchor="middle">FI UI + Judge</text>
+<text x="640" y="100" fill="#94a3b8" font-size="8" text-anchor="middle">· Insight 服务端</text>
+<rect x="760" y="60" width="200" height="55" rx="6" fill="#0f172a" stroke="#34d399" stroke-width="1.2"/>
+<text x="860" y="82" fill="#fff" font-size="10" font-weight="600" text-anchor="middle">FI API</text>
+<text x="860" y="100" fill="#94a3b8" font-size="8" text-anchor="middle">· claim / collect</text>
+<rect x="540" y="150" width="420" height="55" rx="6" fill="#0f172a" stroke="#a78bfa" stroke-width="1.2"/>
+<text x="750" y="172" fill="#fff" font-size="10" font-weight="600" text-anchor="middle">Task / Run / Session</text>
+<text x="750" y="190" fill="#94a3b8" font-size="8" text-anchor="middle">· Prisma + 可选 ④ bridge</text>
+<rect x="540" y="240" width="200" height="70" rx="6" fill="#0f172a" stroke="#34d399" stroke-width="1.2"/>
+<text x="640" y="268" fill="#fff" font-size="10" font-weight="600" text-anchor="middle">FI Client</text>
+<text x="640" y="288" fill="#94a3b8" font-size="8" text-anchor="middle">· 认领 / 回传</text>
+<rect x="760" y="240" width="200" height="70" rx="6" fill="#0f172a" stroke="#22d3ee" stroke-width="1.2"/>
+<text x="860" y="268" fill="#fff" font-size="10" font-weight="600" text-anchor="middle">agent-fi + 宿主</text>
+<text x="860" y="288" fill="#94a3b8" font-size="8" text-anchor="middle">· 注入采集</text>
+<line x1="640" y1="240" x2="820" y2="115" stroke="#22d3ee" stroke-width="1.4" marker-end="url(#tpc)"/>
+<text x="680" y="175" fill="#67e8f9" font-size="8">②③</text>
+<text x="750" y="380" fill="#64748b" font-size="8" text-anchor="middle">Insight 编排；Client 驱动注入</text>
+</svg></div>
 </section>
 
 <p id="md"><a style="color:#67e8f9" href="./ras-fi-insight-relationship.md">打开完整 Markdown</a></p>

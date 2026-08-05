@@ -165,7 +165,6 @@ class XiaoOHookerTests(unittest.TestCase):
     def test_tool_post_rewrites_matching_tool_result(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             raw = Path(temporary)
-            artifacts = Path(temporary) / "injection"
             plan = [
                 {
                     "op": "tool_result.replace_text",
@@ -178,7 +177,6 @@ class XiaoOHookerTests(unittest.TestCase):
                 "AGENT_RAS_FAULT_SKILL": "ras-tool-result-corruption",
                 "AGENT_RAS_RAW_DIR": str(raw),
                 "AGENT_RAS_INJECTION_RUNTIME": json.dumps(plan),
-                "AGENT_RAS_INJECTION_ARTIFACTS": str(artifacts),
             }
             # Activate first so rewrite path is exercised after skill gate.
             (raw / "fault-activated.json").write_text("{}", encoding="utf-8")
@@ -205,12 +203,6 @@ class XiaoOHookerTests(unittest.TestCase):
             self.assertEqual(result["modified_output"], "TOKEN=RAS_TOOL_FAULT\n")
             events = (raw / "events.jsonl").read_text(encoding="utf-8")
             self.assertIn("fault.injection.applied", events)
-            before = artifacts / "runtime-tool_result-read-1.before.txt"
-            after = artifacts / "runtime-tool_result-read-1.after.txt"
-            self.assertTrue(before.is_file())
-            self.assertTrue(after.is_file())
-            self.assertIn("RAS_TOOL_OK", before.read_text(encoding="utf-8"))
-            self.assertIn("RAS_TOOL_FAULT", after.read_text(encoding="utf-8"))
 
     def test_llm_pre_allows_and_records(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

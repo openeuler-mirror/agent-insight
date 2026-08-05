@@ -1,4 +1,4 @@
-"""Injection execution context."""
+"""Sandbox handles for file-op capabilities (workspace + installer)."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from ..installer import InstallSession
 
 @dataclass(slots=True)
 class InjectionContext:
-    """Runtime context for applying a structural injection plan."""
+    """Sandbox + artifact handles for applying a structural injection plan."""
 
     workspace: Path
     artifacts_dir: Path
@@ -28,12 +28,24 @@ class InjectionContext:
             raise ValueError(f"Injection path must be relative: {relative}")
         if ".." in path.parts:
             raise ValueError(f"Injection path must not contain '..': {relative}")
-        return (self.workspace / path).resolve()
+        workspace = self.workspace.resolve()
+        target = (workspace / path).resolve()
+        if not target.is_relative_to(workspace):
+            raise ValueError(f"Injection path escapes workspace: {relative}")
+        return target
 
     def resolve_asset(self, name: str) -> Path:
         if self.assets_root is None:
             raise FileNotFoundError("Fault has no assets/ directory")
-        asset = self.assets_root / name
+        asset_path = Path(name)
+        if asset_path.is_absolute():
+            raise ValueError(f"Injection asset must be relative: {name}")
+        if ".." in asset_path.parts:
+            raise ValueError(f"Injection asset must not contain '..': {name}")
+        root = self.assets_root.resolve()
+        asset = (root / asset_path).resolve()
+        if not asset.is_relative_to(root):
+            raise ValueError(f"Injection asset escapes assets/: {name}")
         if not asset.is_file():
             raise FileNotFoundError(f"Injection asset not found: {asset}")
         return asset

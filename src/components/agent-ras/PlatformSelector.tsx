@@ -9,14 +9,12 @@ import {
 type PlatformMeta = {
   key: RasCapabilityPlatformId
   label: string
-  /** full = deep mount; thin = plugin/sidecar */
-  mode: 'full' | 'thin'
 }
 
 const PLATFORMS: PlatformMeta[] = [
-  { key: 'openjiuwen', label: 'openjiuwen', mode: 'full' },
-  { key: 'opencode', label: 'OpenCode', mode: 'thin' },
-  { key: 'xiaoo', label: 'xiaoO', mode: 'thin' },
+  { key: 'openjiuwen', label: 'openjiuwen' },
+  { key: 'opencode', label: 'OpenCode' },
+  { key: 'xiaoo', label: 'xiaoO' },
 ]
 
 interface Props {
@@ -75,19 +73,6 @@ export function PlatformSelector({ selected, onSelect }: Props) {
               }}
             >
               <span>{p.label}</span>
-              {p.mode !== 'full' && (
-                <span
-                  style={{
-                    fontSize: 9,
-                    padding: '1px 5px',
-                    borderRadius: 10,
-                    background: 'var(--tag-blue-bg)',
-                    color: 'var(--tag-blue-fg)',
-                  }}
-                >
-                  {zh ? '薄插件' : 'thin plugin'}
-                </span>
-              )}
             </button>
           )
         })}

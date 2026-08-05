@@ -53,7 +53,7 @@ describe('fault-injection judge-result', () => {
   it('builds skipped result', () => {
     const skipped = skippedJudgeResult('not activated')
     assert.equal(skipped.outcome, 'not_occurred')
-    assert.equal(skipped.fault_containment_status, 'no_trace')
+    assert.equal(skipped.fault_containment_status, 'inconclusive')
   })
 })
 

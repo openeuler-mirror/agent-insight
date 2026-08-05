@@ -8,11 +8,9 @@ from pathlib import Path
 from unittest import TestCase
 
 from agent_fault_injection.fault_inject.catalog import load_fault_definition
+from agent_fault_injection.fault_inject.apply_plan import apply_injection_plan
 from agent_fault_injection.fault_inject.installer import InstallSession
-from agent_fault_injection.fault_inject.injection_tools import (
-    InjectionContext,
-    apply_injection_plan,
-)
+from agent_fault_injection.fault_inject.injection_tools import InjectionContext
 from agent_fault_injection.fault_inject.injection_tools.file_ops import (
     file_delete,
     file_delete_section,
@@ -113,21 +111,17 @@ class InjectionToolsTests(TestCase):
             apply_injection_plan(fault, ctx)
 
             self.assertFalse((ctx.workspace / "MEMORY.md").exists())
-            before = ctx.artifacts_dir / "injection" / "before_mut.md"
-            after = ctx.artifacts_dir / "injection" / "after_mut.md"
-            self.assertTrue(before.is_file())
-            self.assertTrue(after.is_file())
-            self.assertIn("CONSTRAINT_TOKEN", before.read_text(encoding="utf-8"))
-            self.assertEqual(after.read_text(encoding="utf-8"), "")
-
-            events = [
-                json.loads(line)
-                for line in ctx.events_file.read_text(encoding="utf-8").splitlines()
-                if line.strip()
-            ]
-            types = {event["type"] for event in events}
-            self.assertIn("fault.injection.applied", types)
-            self.assertIn("memory.fault.injected", types)
+            # Ops return structured results; tools do not write evidence snapshots.
+            self.assertTrue(ctx.last_ops)
+            ops = {item.get("op") for item in ctx.last_ops}
+            self.assertIn("file.write", ops)
+            self.assertIn("file.delete", ops)
+            write_op = next(item for item in ctx.last_ops if item.get("op") == "file.write")
+            self.assertTrue(write_op.get("exists"))
+            self.assertGreater(int(write_op.get("size") or 0), 0)
+            delete_op = next(item for item in ctx.last_ops if item.get("op") == "file.delete")
+            self.assertTrue(delete_op["before"]["exists"])
+            self.assertFalse(delete_op["after"]["exists"])
 
             installation.cleanup()
             self.assertFalse((ctx.workspace / "MEMORY.md").exists())
@@ -212,3 +206,25 @@ class InjectionToolsTests(TestCase):
             apply_injection_plan(fault, ctx)
             self.assertTrue((ctx.workspace / "a.txt").is_file())
             self.assertFalse((ctx.workspace / "b.txt").exists())
+
+    def test_resolve_asset_rejects_parent_traversal(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            ctx, _ = self._ctx(root)
+            assets = root / "assets"
+            assets.mkdir()
+            (assets / "ok.txt").write_text("ok", encoding="utf-8")
+            (root / "secret.txt").write_text("secret", encoding="utf-8")
+            ctx.assets_root = assets
+            with self.assertRaises(ValueError):
+                ctx.resolve_asset("../secret.txt")
+
+    def test_delete_path_removes_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = root / "nested" / "dir"
+            target.mkdir(parents=True)
+            (target / "f.txt").write_text("x", encoding="utf-8")
+            installation = InstallSession()
+            installation.delete_path(target)
+            self.assertFalse(target.exists())

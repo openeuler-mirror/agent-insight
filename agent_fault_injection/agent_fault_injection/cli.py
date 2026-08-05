@@ -483,7 +483,7 @@ def _containment_label(status: FaultContainmentStatus) -> str:
         FaultContainmentStatus.UNRESOLVED: "UNRESOLVED",
         FaultContainmentStatus.RECOVERED: "RECOVERED",
         FaultContainmentStatus.PREVENTED: "PREVENTED",
-        FaultContainmentStatus.NO_TRACE: "NO EXECUTION TRACE",
+        FaultContainmentStatus.INCONCLUSIVE: "INCONCLUSIVE",
     }
     return labels[status]
 

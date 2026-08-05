@@ -36,6 +36,9 @@
 | Agent Fault Injection 合并 | [`../agent-fault-injection/`](../agent-fault-injection/README.md) | 仓根 `agent_fault_injection/` **实现模块**；Insight 侧 Task/BFF/Judge/UI；关系见 [ras-fi-insight-relationship](../agent-fault-injection/designs/ras-fi-insight-relationship.md) | Feature | 2026-08-04 | ✅ 已实现（UI 对齐 + opencode/xiaoo 真跑 collect） | —（待补） |
 | Insight · RAS · FI 关系说明 | [`../agent-fault-injection/designs/ras-fi-insight-relationship.md`](../agent-fault-injection/designs/ras-fi-insight-relationship.md) | 平台 vs 实现模块边界；部署与四条上报通道；前端/DB 归 Insight | Docs | 2026-08-05 | ✅ 文档已落地 | — |
 | FI 服务端/客户端分离 | [fi-server-client-split](fi-server-client-split/) | 任务下发与展示留服务端；注入编排与能力在本机 FI Worker；curl/`install-fault-injection` 安装对齐 agent-ras | Refactor | 2026-08-05 | ✅ 已实现（浏览器 E2E：dry-run + Worker claim） | — |
+| 记忆故障 FI 方案（文件丢失等） | [`../agent-ras/designs/features/memory-file-loss.md`](../agent-ras/designs/features/memory-file-loss.md) | 记忆丢失/损坏/投毒注入方案；FI-P0=`memory-file-loss` 已落地 | Feature | 2026-08-03 | 🟡 FI-P0 已落地；检测器与其余子类规划中 | — |
+| 记忆噪声干扰 FI | [`../agent-ras/designs/features/memory-noise-interference.md`](../agent-ras/designs/features/memory-noise-interference.md) | Skill S1–S3 已落地；S4 压缩失真未实施 | Feature | 2026-08-03 | 🟡 S1–S3 已落地 | — |
+| FI 证据边界与 inconclusive 语义 | [`../agent-fault-injection/designs/modules/server-judge.md`](../agent-fault-injection/designs/modules/server-judge.md) | 注入工具不写自证快照；Judge 以轨迹为主；`no_trace`→`inconclusive` | Refactor | 2026-08-05 | ✅ 已实现 | — |
 
 ## 字段口径
 
