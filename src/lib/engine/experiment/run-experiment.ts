@@ -37,6 +37,29 @@ import {
 import { isResultPresetId, runResultPreset } from './result-preset-evaluators';
 import { isContentPresetId, runContentPreset } from './content-preset-evaluators';
 import { isCreativityPresetId, runCreativityPreset } from './creativity-preset-evaluators';
+import { isSafetyPresetId, runSafetyPreset } from './safety-preset-evaluators';
+
+/**
+ * 重跑/重评前把结果行清回 pending 的字段集。
+ *
+ * 人工修正分一并清除：它修正的是**那一次**评估结果，重评产出的是新结果——留着旧
+ * 修正会算出错误的均分（机器改判 85 时，按当初对 60 分做的 80 分修正反而把分拉低）。
+ * 入口需向用户明示「重评会清除该行的人工修正」。
+ */
+const RESET_RESULT_FIELDS = {
+  status: 'pending',
+  verdict: null,
+  summary: null,
+  score: null,
+  pointsJson: null,
+  evidenceJson: null,
+  humanScore: null,
+  humanReason: null,
+  humanBy: null,
+  humanAt: null,
+  errorMessage: null,
+  durationMs: null,
+} as const;
 
 /** 引擎参数（测试可改小重试退避/超时；生产用默认值）。 */
 export const experimentEngineConfig = {
@@ -225,12 +248,15 @@ async function evaluateOnce(
   if (isResultPresetId(evaluatorId)) {
     return runResultPreset(evaluatorId, user, runtime.faithfulCtx);
   }
-  // 安全与创意预置评估器：LLM Judge 直连（共用 faithfulCtx，与 §4.3 签名一致）
+  // 内容、安全与创意预置评估器：LLM Judge 直连（共用 faithfulCtx，与 §4.3 签名一致）
   if (isContentPresetId(evaluatorId)) {
     return runContentPreset(evaluatorId, user, runtime.faithfulCtx);
   }
   if (isCreativityPresetId(evaluatorId)) {
     return runCreativityPreset(evaluatorId, user, runtime.faithfulCtx);
+  }
+  if (isSafetyPresetId(evaluatorId)) {
+    return runSafetyPreset(evaluatorId, user, runtime.faithfulCtx);
   }
   const card = await resolveEvaluatorCard(user, evaluatorId);
   if (!card) throw new Error(`未找到评估器 ${evaluatorId}（可能已被删除）`);
