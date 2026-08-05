@@ -87,7 +87,7 @@ LlamaIndex Dispatcher
 
 - 安装：`/api/ingest/setup` 与 `/api/ingest/setup/auto` 先在指定 Python 中安装 `llama-index-observability-otel==0.6.4`，再下载服务端提供的运行时归档，经暂存目录校验后替换 `~/.agent-insight/collectors/llamaindex/current/`。
 - 配置：CLI `configure` 写 `~/.agent-insight/llamaindex.json`（0600）；`run -- python app.py` 只为子进程注入专用 bootstrap。
-- 资源：`/api/ingest/setup/llamaindex-collector` 只读返回白名单内的采集器源文件，不包含测试、缓存或 npm 外部资源。
+- 资源：`/api/ingest/setup/llamaindex-collector` 只读返回白名单内的采集器运行时源文件，并将 `docs/user-guide/observability/llamaindex-trace-collector.md` 放入归档根目录作为 `README.md`。归档不包含测试、缓存、`pyproject.toml` 或其他 npm 外部资源；该用户指南是项目文档与离线安装说明的唯一内容源。
 - 卸载：安装器生成 `uninstall_llamaindex_collector.sh/.ps1`，默认删除 LlamaIndex 采集器源码、环境入口和 profile 注册并保留 Trace；`--purge`/`-Purge` 额外删除 LlamaIndex config/spool，不操作共享 `.env` 或其他采集器，也不卸载同 Python 环境可能共用的官方 OTel 包。
 
 ## 6. 安全与性能

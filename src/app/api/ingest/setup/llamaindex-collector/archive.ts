@@ -1,5 +1,5 @@
 import AdmZip from 'adm-zip';
-import { existsSync, lstatSync, readdirSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 
 let cachedArchive: { root: string; signature: string; buffer: Buffer } | undefined;
@@ -14,6 +14,16 @@ function collectorRoot(): string {
     );
     if (!root) throw new Error('Bundled LlamaIndex collector is missing');
     return root;
+}
+
+function collectorReadme(root: string): string | undefined {
+    const candidates = [
+        path.resolve(root, '..', '..', 'docs', 'user-guide', 'observability', 'llamaindex-trace-collector.md'),
+        path.join(root, 'README.md'),
+    ];
+    return candidates.find((candidate) =>
+        existsSync(candidate) && lstatSync(candidate).isFile() && !lstatSync(candidate).isSymbolicLink(),
+    );
 }
 
 function shouldSkip(name: string): boolean {
@@ -47,10 +57,10 @@ function appendSourceSignature(root: string, current: string, parts: string[]): 
     }
 }
 
-function collectorSourceSignature(root: string, packageRoot: string, readme: string): string {
+function collectorSourceSignature(root: string, packageRoot: string, readme?: string): string {
     const parts: string[] = [];
     appendSourceSignature(root, packageRoot, parts);
-    if (existsSync(readme)) {
+    if (readme && existsSync(readme)) {
         const metadata = lstatSync(readme);
         if (metadata.isFile() && !metadata.isSymbolicLink()) {
             parts.push(`README.md:${metadata.size}:${metadata.mtimeMs}:${metadata.ctimeMs}`);
@@ -65,7 +75,7 @@ export function collectorArchive(
 ): Buffer {
     const sourceRoot = path.join(root, 'src');
     const packageRoot = path.join(sourceRoot, 'agent_insight_llamaindex');
-    const readme = path.join(root, 'README.md');
+    const readme = collectorReadme(root);
     if (!existsSync(packageRoot)) throw new Error('Missing bundled collector package');
     if (lstatSync(packageRoot).isSymbolicLink()) throw new Error('Refusing bundled collector symlink');
     const signature = collectorSourceSignature(root, packageRoot, readme);
@@ -74,7 +84,7 @@ export function collectorArchive(
     }
     const zip = new AdmZip();
     addDirectory(zip, sourceRoot, packageRoot);
-    if (existsSync(readme) && lstatSync(readme).isFile()) zip.addLocalFile(readme);
+    if (readme) zip.addFile('README.md', readFileSync(readme));
     const buffer = zip.toBuffer();
     if (useCache) cachedArchive = { root, signature, buffer };
     return buffer;

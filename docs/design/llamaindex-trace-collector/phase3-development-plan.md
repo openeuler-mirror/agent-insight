@@ -22,9 +22,10 @@
 - `src/lib/storage/data-service.ts`
 - `src/app/api/ingest/setup/{route,auto/route}.ts`
 - `src/app/api/ingest/setup/llamaindex-collector/{route,archive}.ts`
-- 对应 Python/TypeScript 测试及用户/开发者指南
+- `docs/user-guide/observability/llamaindex-trace-collector.md`
+- 对应 Python/TypeScript 测试及开发者指南
 
-`pyproject.toml` 只用于仓库内开发、测试和依赖声明，不进入 npm 包中的 collector ZIP。共享 Trace renderer 只消费归一化 Interaction，不增加 `framework === 'llamaindex'` 分支；LlamaIndex 特有的错误摘要、包装 Span 去重与子 Agent 归属均在 Adapter 内完成。
+`pyproject.toml` 只用于仓库内开发、测试和依赖声明，不进入 npm 包中的 collector ZIP。`docs/user-guide/observability/llamaindex-trace-collector.md` 随 Agent Insight npm 制品发布，并由归档路由作为根目录 `README.md` 写入运行时 ZIP；它是项目接入指南和离线安装说明的唯一内容源。共享 Trace renderer 只消费归一化 Interaction，不增加 `framework === 'llamaindex'` 分支；LlamaIndex 特有的错误摘要、包装 Span 去重与子 Agent 归属均在 Adapter 内完成。
 
 ## 3. 测试矩阵
 

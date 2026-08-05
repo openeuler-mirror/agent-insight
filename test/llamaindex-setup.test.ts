@@ -271,10 +271,12 @@ test('collector endpoint serves a directly deployable Python runtime archive', a
   assert.equal(response.status, 200);
   assert.equal(response.headers.get('content-type'), 'application/zip');
   assert.deepEqual(Array.from(bytes.slice(0, 2)), [0x50, 0x4b]);
-  const entries = new AdmZip(Buffer.from(bytes)).getEntries().map((entry) => entry.entryName);
+  const archive = new AdmZip(Buffer.from(bytes));
+  const entries = archive.getEntries().map((entry) => entry.entryName);
   assert.ok(entries.includes('agent_insight_llamaindex/_bootstrap/sitecustomize.py'));
   assert.ok(entries.includes('agent_insight_llamaindex/__init__.py'));
   assert.ok(entries.includes('README.md'));
+  assert.match(archive.readAsText('README.md'), /# LlamaIndex Trace Collector/);
   assert.ok(!entries.includes('pyproject.toml'));
   assert.ok(!entries.some((name) => name.startsWith('src/')));
   assert.ok(!entries.includes('install.py'));
@@ -310,6 +312,7 @@ test('collector archive cache invalidates when bundled source changes', (t) => {
 test('local npm server package carries collector source without Python package metadata', () => {
   const manifest = JSON.parse(readFileSync('package.json', 'utf8')) as { files: string[] };
   assert.ok(manifest.files.includes('scripts/'));
+  assert.ok(manifest.files.includes('docs/user-guide/observability/llamaindex-trace-collector.md'));
   assert.ok(!manifest.files.includes('scripts/llamaindex_extension/tests/**'));
   assert.ok(manifest.files.includes('!scripts/llamaindex_extension/tests/**'));
   assert.ok(manifest.files.includes('!scripts/llamaindex_extension/pyproject.toml'));

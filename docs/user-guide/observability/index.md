@@ -84,7 +84,10 @@ CodeAgent 当前会同时发出 Logs、Traces 和 Metrics，且内部配置会�
 
 ## LlamaIndex 接入
 
-LlamaIndex 项目使用由 Agent Insight 服务端直接分发的 Python 模块 `agent_insight_llamaindex`。该模块复用官方 `llama-index-observability-otel` 的 OpenTelemetry Span/Event Handler 和 LlamaIndex instrumentation dispatcher，采集 Agent、子 Agent、Tool、LLM、Retriever、Synthesizer 和 Workflow span。插件使用持久化 spool 与后台上传线程，支持进程重启续传、事件/定时上传及指数退避，不在业务调用线程执行网络请求。
+完整的安装、配置、代码注册、spool、故障排查和卸载说明见
+[LlamaIndex Trace Collector 接入指南](./llamaindex-trace-collector)。
+
+LlamaIndex 项目使用由 Agent Insight 服务端直接分发的 Python 模块 `agent_insight_llamaindex`。运行时信息来自 LlamaIndex instrumentation dispatcher；该模块注册自定义 Span/Event Handler，并继承官方 `llama-index-observability-otel` 的 Handler 基类，复用 OTel Span 生命周期、上下文传播、父子关系和状态管理，再补充 Agent Insight 所需的 Agent、子 Agent、Tool、LLM、Retriever、Synthesizer 和 Workflow 语义。它不会同时注册官方默认 Handler，因此不会重复产生 Span。插件使用持久化 spool 与后台上传线程，支持进程重启续传、事件/定时上传及指数退避，不在业务调用线程执行网络请求。
 
 “安装指导”页面把 `LlamaIndex` 与其他框架放在同一选择器中；勾选后直接运行页面生成的 `curl ... | bash` 或 `irm ... | iex` 一行命令，页面本身不要求填写 Python 环境。普通 setup 脚本开始执行后再询问是否使用虚拟环境，直接回车默认使用全局 `python3`/`python`；选择虚拟环境后输入根目录，脚本自动选择 Linux/macOS 的 `bin/python` 或 Windows 的 `Scripts/python.exe`。auto setup 保持非交互，未预设环境时默认使用全局 Python。普通 setup 和 auto setup 的 Linux/Windows 安装选择均支持该采集器。安装器先在所选环境中安装 `llama-index-observability-otel==0.6.4`，再从当前 Agent Insight 实例下载运行时归档并直接部署到 `~/.agent-insight/collectors/llamaindex/current/`。Agent Insight 模块本身不写入 `site-packages`。安装器还会保存最终解释器路径并生成卸载脚本。自动部署或手写命令也可通过 `AGENT_INSIGHT_LLAMAINDEX_VENV` 指定虚拟环境根目录，或用 `AGENT_INSIGHT_LLAMAINDEX_PYTHON` 直接指定解释器。npm 负责安装 Agent Insight 服务端并携带采集器源码。
 
@@ -94,8 +97,8 @@ LlamaIndex 项目使用由 Agent Insight 服务端直接分发的 Python 模块 
 
 LlamaIndex、模型 SDK 和 MCP Tool 依赖继续由业务项目管理。FunctionTool、QueryEngineTool 与由 `McpToolSpec` 创建的 MCP Tool 均沿同一 Tool Trace 路径采集参数、返回值、状态和耗时。
 
-运行时的数据路径是：LlamaIndex dispatcher 产生调用与事件，官方兼容 Handler 创建 OTel Span 并补充 Agent Insight 语义，自定义 exporter 将结束的 Span 非阻塞送入有界队列，后台线程再写入按 API Key 隔离的 spool 并上传。Agent Insight 接收 OTLP 后由 LlamaIndex Adapter 合并会话、去除同一逻辑 LLM 调用的包装 Span，并生成统一 ExecutionRecord。独立 Retriever 或 LLM 调用不会为了展示而伪造 Agent 根节点；它们保留真实 OTel 根节点，并以 traceId 作为缺省 sessionId。
+运行时的数据路径是：LlamaIndex dispatcher 发出 Span 生命周期回调和原始 Event；自定义 Handler 对同一次回调先调用官方 OTel 基类创建 Span/context，再读取原始 Event、参数和返回值补充 Agent Insight 语义；自定义 exporter 将结束的 Span 非阻塞送入有界队列，后台线程再写入按 API Key 隔离的 spool 并上传。Agent Insight 接收 OTLP 后由 LlamaIndex Adapter 合并会话、去除同一逻辑 LLM 调用的包装 Span，并生成统一 ExecutionRecord。独立 Retriever 或 LLM 调用不会为了展示而伪造 Agent 根节点；它们保留真实 OTel 根节点，并以 traceId 作为缺省 sessionId。
 
 接入后可先执行 `python -m agent_insight_llamaindex.cli status` 检查 endpoint、账号隔离目录和待上传批次，再运行一个包含真实 LLM 与 Tool 的任务并在“链路追踪”页核对 model、Token、耗时和父子关系。Provider 未返回 usage 时 Token 可能为 0，这不代表 Span 未采集。
 
-完整安装、手动接入、正文截断和卸载说明见 [`scripts/llamaindex_extension/README.md`](../../../scripts/llamaindex_extension/README.md)。
+需要开始接入时，直接阅读 [LlamaIndex Trace Collector 接入指南](./llamaindex-trace-collector)；该文档同时作为安装器运行时 ZIP 中的 `README.md`，项目文档与离线安装说明使用同一内容源。

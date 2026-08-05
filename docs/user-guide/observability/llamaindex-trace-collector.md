@@ -1,13 +1,24 @@
-# agent-insight-llamaindex
+---
+title: "LlamaIndex Trace Collector"
+description: "LlamaIndex 采集器的安装、配置、接入、存储与卸载指南"
+---
 
-`agent-insight-llamaindex` 是 Agent Insight 的 LlamaIndex Trace 采集器。它复用官方
-`llama-index-observability-otel`，通过 LlamaIndex instrumentation dispatcher 和官方
-OpenTelemetry Span/Event Handler 采集 Agent、子 Agent、Tool、LLM、RAG 和 Workflow
-调用链，先将数据持久化到本地 spool，再由后台线程异步上传到 Agent Insight。
+# LlamaIndex Trace Collector
+
+本文是项目内的 LlamaIndex 采集器用户指南，也是安装器生成运行时 ZIP 时使用的 `README.md`
+内容源；项目文档与离线部署说明因此不会维护两份副本。
+
+`agent-insight-llamaindex` 是 Agent Insight 的 LlamaIndex Trace 采集器。运行时信息来自
+LlamaIndex instrumentation dispatcher；采集器注册自定义 Span/Event Handler，并继承官方
+`llama-index-observability-otel` 的 Handler 基类，复用其 OTel Span 生命周期、上下文传播、
+父子关系和状态管理。采集器补充 Agent、子 Agent、Tool、LLM、RAG 和 Workflow 语义，先将
+数据持久化到本地 spool，再由后台线程异步上传到 Agent Insight。
 
 采集器不修改 LlamaIndex 业务对象，也不替换进程全局 OpenTelemetry `TracerProvider`。
-它创建隔离 Provider，使用官方 OTel Handler 生成 span/context，再由轻量
-`SimpleSpanProcessor` 把已结束 span 非阻塞送入有界队列；文件写入与网络上传由后台线程处理。
+它创建隔离 Provider；自定义 Handler 对同一次 Dispatcher 回调先调用官方 OTel 基类生成
+span/context，再读取原始 Event、参数和返回值补充语义。采集器不并行注册官方默认 Handler，
+不会重复生成 Span。轻量 `SimpleSpanProcessor` 把已结束 span 非阻塞送入有界队列；文件写入与
+网络上传由后台线程处理。
 
 ## 支持范围
 
@@ -275,8 +286,14 @@ shutdown(timeout=5.0)
 - prompt、响应、Tool 参数/结果和检索正文默认最多保留 2000 字符，并写入截断元数据；
 - 设置 `AGENT_INSIGHT_LLAMA_CAPTURE_CONTENT=false` 可完全关闭正文采集；
 - 结构化数据中名称为 API Key、authorization、password、secret、token 等的字段会脱敏；
-- modelName、provider 和 Token 使用 LlamaIndex/provider 返回的 metadata；provider 不返回
-  usage 时 Token 可能显示为 0；
+- modelName、provider 和 Token 使用 LlamaIndex/provider 返回的 metadata；Token 解析不判断
+  DeepSeek、OpenAI 等具体 Provider，而是从 response、`raw`、`additional_kwargs` 中查找
+  `usage`/`usage_metadata`，兼容 `prompt_tokens/input_tokens/input`、
+  `completion_tokens/output_tokens/output` 和 `total_tokens/total`；
+- `gen_ai.usage.input_tokens` 与 `gen_ai.usage.output_tokens` 使用 OTel GenAI 标准字段名；
+  `gen_ai.usage.total_tokens` 是 Agent Insight 兼容扩展，缺失时服务端以 input + output 计算；
+- 当前尚未单独输出 reasoning/cache Token 细分，Provider 不返回或未向 LlamaIndex response 传递
+  usage 时 Token 可能显示为 0，采集器不会用 tokenizer 猜测；
 - `achat → chat → complete` 等同一逻辑调用的包装 span 会在服务端聚合时去重，避免 Token
   和 LLM 次数重复计算。
 
@@ -339,8 +356,10 @@ spool 容量；修复配置并确认数据不再需要后再执行清理。
 
 ### Trace 中 Token 为 0
 
-确认模型 provider 的响应 metadata 是否包含 usage。MockLLM、部分本地模型或错误响应可能
-不提供 Token 使用量。
+确认模型 Provider 是否在 LlamaIndex response、`raw` 或 `additional_kwargs` 中提供
+`usage`/`usage_metadata`。MockLLM、部分本地模型、错误响应或未汇总 usage 的流式响应可能不提供
+Token 使用量。Provider 名称目前来自 LlamaIndex `model_dict.provider` 或 `class_name`，因此某些
+值可能仍是 SDK class name，而不是 OTel 推荐的规范枚举。
 
 ### 多 Agent 关系不稳定
 
@@ -391,7 +410,7 @@ python -m mypy src
 Workflow、MCP Tool、spool 原子写入和恢复、容量保护、上传重试、进程退出、重复注册卸载、
 以及同一 Agent 任务三次执行的结构一致性。
 
-采集器单测当前为 `41 passed`；服务端 LlamaIndex 定向测试为 `23 passed, 1 platform skip`。
+采集器单测当前为 `41 passed`；服务端 LlamaIndex 专项测试为 `35 passed, 1 platform skip`。
 仓库外的标准化验收用例位于开发工作区 `demos/`，覆盖 AC5～AC34。每个用例启动前都通过
 `llamaindex_case_bootstrap.ps1` 选择当前源码或已部署采集器，并由
 `llamaindex_case_common.py` 断言以下运行时信息：
