@@ -13,10 +13,12 @@
    `python -m ras_embed.ipc_worker`（socket 默认 `$AGENT_INSIGHT_RAS_HOME/ras_embed.sock`）
 3. 按平时方式跑 xiaoO（`xiaoo --cli run` / TUI / daemon 均可）
 4. Insight：`/agent-ras` 或 `GET /api/ingest/ras-events?platform=xiaoo`
+5. 观测（OTel）：hooker 在会话 `idle`+完成 outcome 时向 `{Insight}/api/ingest/otel/v1/traces` 上报（与 RAS 共用 `config.json` 的 api_key；`session.id` = 裸 gateway session id，与 RAS `taskId` 对齐）。详情页即可出现完整链路。设计：[xiaoo-observe-ingest.md](../designs/features/xiaoo-observe-ingest.md)。
 
 ## 本地 harness / CLI E2E（无需 daemon HTTP）
 
 ```bash
 cd agent_ras && PYTHONPATH=. python scripts/e2e_xiaoo_inproc_harness.py
 cd agent_ras && PYTHONPATH=. python scripts/e2e_xiaoo_cli.py
+cd agent_ras && PYTHONPATH=. python scripts/e2e_xiaoo_otel_upload.py
 ```

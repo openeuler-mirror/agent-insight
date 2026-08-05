@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 # coding: utf-8
-"""xiaoO Plugin Hooker entry — thin Signal mapping into shared ras_embed.
+"""xiaoO Plugin Hooker entry — thin Signal mapping into shared ras_embed + OTel buffer.
 
 Hook points:
-  - ``*.Chat.message.received`` → hello
-  - ``*.Tool.*.post`` → tool observe
-  - ``*.Session.lifecycle.state`` → optional reset on closed-like outcomes
+  - ``*.Chat.message.received`` → hello + otel user note
+  - ``*.Tool.*.post`` → tool observe + otel tool span
+  - ``*.Session.lifecycle.state`` → reset + otel flush on idle/complete
+  - ``stream_delta`` → text observe + otel assistant buffer
 
-Also accepts ``stream_delta`` for gateway LoopEventSink fan-out.
-
-stdin JSON → RasClient → stdout JSON. Fail-open on RAS errors.
+stdin JSON → RasClient → stdout JSON. Fail-open on RAS/OTel errors.
 """
 from __future__ import annotations
 
@@ -80,6 +79,39 @@ def _ensure_embed() -> None:
         print(f"agent_ras ensure_worker: {exc}", file=sys.stderr)
 
 
+def _sync_capability_config() -> None:
+    """Best-effort Insight → local config.json sync (TTL-gated)."""
+    try:
+        from platform_adapter.xiaoo.config_sync import sync_capability_config_from_insight
+
+        result = sync_capability_config_from_insight(
+            platform="xiaoo",
+            log=lambda msg: print(msg, file=sys.stderr),
+        )
+        if result.get("applied"):
+            print(
+                f"agent_ras sync: applied revision={result.get('revision')}",
+                file=sys.stderr,
+            )
+    except Exception as exc:
+        print(f"agent_ras sync: {exc}", file=sys.stderr)
+
+
+def _hello_config() -> dict[str, Any]:
+    try:
+        from platform_adapter.xiaoo.config_sync import load_hello_config_from_ras_config
+
+        return load_hello_config_from_ras_config()
+    except Exception as exc:
+        print(f"agent_ras hello_config: {exc}", file=sys.stderr)
+        return {
+            "detection_start_chars": int(os.environ.get("RAS_DETECTION_START_CHARS", "300")),
+            "window_max_chars": int(os.environ.get("RAS_WINDOW_MAX_CHARS", "1000")),
+            "loop_repeat_threshold": int(os.environ.get("RAS_LOOP_REPEAT_THRESHOLD", "5")),
+            "semantic_content_enabled": False,
+        }
+
+
 def _client(session_native: str):
     from platform_adapter.xiaoo.hooks import build_xiaoo_ras_client
 
@@ -105,24 +137,26 @@ def _wire_actions_from_result(result: dict[str, Any] | None) -> list[dict[str, A
     return out
 
 
+def _otel_safe(fn, *args, **kwargs) -> None:
+    try:
+        fn(*args, **kwargs)
+    except Exception as exc:
+        print(f"agent_ras otel: {exc}", file=sys.stderr)
+
+
 def handle_chat_received(payload: dict[str, Any]) -> dict[str, Any]:
     _ensure_path()
+    _sync_capability_config()
     _ensure_embed()
     sid = _session_key(payload)
     native = _native_id(sid)
     os.environ["XIAOO_RAS_SESSION_ID"] = native
+    from platform_adapter.xiaoo import otel_trace
+
+    _otel_safe(otel_trace.note_chat, sid, payload)
     client, _host = _client(native)
     client.ensure()
-    client.hello(
-        sid,
-        "xiaoo",
-        {
-            "detection_start_chars": int(os.environ.get("RAS_DETECTION_START_CHARS", "300")),
-            "window_max_chars": int(os.environ.get("RAS_WINDOW_MAX_CHARS", "1000")),
-            "loop_repeat_threshold": int(os.environ.get("RAS_LOOP_REPEAT_THRESHOLD", "5")),
-            "semantic_content_enabled": False,
-        },
-    )
+    client.hello(sid, "xiaoo", _hello_config())
     return {"type": "Acknowledged"}
 
 
@@ -132,22 +166,29 @@ def handle_session_state(payload: dict[str, Any]) -> dict[str, Any]:
     sid = _session_key(payload)
     native = _native_id(sid)
     client, _host = _client(native)
+    from platform_adapter.xiaoo import otel_trace
+
+    do_flush = otel_trace.should_flush_lifecycle(payload)
     state = str(payload.get("state") or payload.get("outcome") or "").lower()
-    if state in {"closed", "force_closed", "destroyed"}:
+    if do_flush or state in {"closed", "force_closed", "destroyed", "idle"}:
         client.reset(sid)
+        _otel_safe(otel_trace.flush_session, sid)
     return {"type": "Acknowledged"}
 
 
 def handle_tool_post(payload: dict[str, Any]) -> dict[str, Any]:
     _ensure_path()
+    _sync_capability_config()
     _ensure_embed()
     from platform_adapter.xiaoo.stream_bridge import observe_tool_after
+    from platform_adapter.xiaoo import otel_trace
 
     sid = _session_key(payload)
     native = _native_id(sid)
+    _otel_safe(otel_trace.note_tool, sid, payload)
     client, _host = _client(native)
     client.ensure()
-    if not client.hello(sid, "xiaoo", {"semantic_content_enabled": False}):
+    if not client.hello(sid, "xiaoo", _hello_config()):
         pass
     call = payload.get("call") or {}
     result = observe_tool_after(
@@ -160,7 +201,6 @@ def handle_tool_post(payload: dict[str, Any]) -> dict[str, Any]:
     actions = _wire_actions_from_result(result)
     resp: dict[str, Any] = {"type": "accept"}
     if actions:
-        # Fill session_id for send_prompt actions.
         for a in actions:
             if a.get("kind") == "send_prompt" and not a.get("session_id"):
                 a["session_id"] = native
@@ -174,6 +214,7 @@ def handle_stream_delta(payload: dict[str, Any]) -> dict[str, Any]:
     _ensure_path()
     _ensure_embed()
     from platform_adapter.xiaoo.stream_bridge import observe_text_delta
+    from platform_adapter.xiaoo import otel_trace
 
     sid = _session_key(payload)
     native = _native_id(sid)
@@ -185,6 +226,7 @@ def handle_stream_delta(payload: dict[str, Any]) -> dict[str, Any]:
     else:
         channel = "llm_output"
     text = str(payload.get("text") or payload.get("delta") or "")
+    _otel_safe(otel_trace.note_stream, sid, text, channel=channel)
     result = observe_text_delta(
         client,
         sid,

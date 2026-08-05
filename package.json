@@ -17,6 +17,7 @@
     "!scripts/**/*.jsonl.*",
     "prisma/",
     "agent_ras/",
+    "agent_fault_injection/",
     "public/",
     ".next/standalone/",
     "!.next/standalone/.env",

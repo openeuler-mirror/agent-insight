@@ -59,6 +59,29 @@ const ICON_HEALTH = <path d="M2 7h2.5l1.5-3 2 6 1.5-3H12" />;
 const ICON_INSTALL = (<><path d="M7 1.5v7M4 6l3 3 3-3" /><path d="M2 11h10" /></>);
 const ICON_WEB = (<><circle cx="7" cy="7" r="5" /><path d="M2 7h10M7 2a8 8 0 0 1 0 10M7 2a8 8 0 0 0 0 10" /></>);
 const ICON_RAS = <path d="M7 1.5L2 4v4.5c0 3 2.5 4.5 5 5 2.5-.5 5-2 5-5V4L7 1.5z" />;
+const ICON_RAS_OBSERVE = (
+    <>
+        <circle cx="7" cy="7" r="5.5" />
+        <circle cx="7" cy="7" r="3" />
+        <circle cx="7" cy="7" r="1" />
+        <path d="M7 7l3.8-3.8" />
+    </>
+);
+const ICON_RAS_CAPABILITY = (
+    <>
+        <path d="M2 4h10M2 7.5h10M2 11h10" />
+        <circle cx="5" cy="4" r="1.35" />
+        <circle cx="9.5" cy="7.5" r="1.35" />
+        <circle cx="6.5" cy="11" r="1.35" />
+    </>
+);
+const ICON_RAS_INJECT = (
+    <>
+        <path d="M8.8 2.2l3 3-6.2 6.2-3.3.7.7-3.3 5.8-6.6z" />
+        <path d="M8.2 3.5l2.3 2.3" />
+        <path d="M2.2 11.8l2.2-2.2" />
+    </>
+);
 
 const SKILLS_TREE: NavItem = {
     key: 'skills',
@@ -77,9 +100,9 @@ const RAS_TREE: NavItem = {
     labelKey: 'nav.groupAgentRas',
     iconPath: ICON_RAS,
     children: [
-        { key: 'agent-ras-trace', href: '/agent-ras/trace', labelKey: 'nav.rasTrace', iconPath: ICON_TRACE, matchPrefixes: ['/agent-ras/trace'] },
-        { key: 'agent-ras-fault-modes', href: '/agent-ras/fault-modes', labelKey: 'nav.rasFaultModes', iconPath: ICON_FAULT, matchPrefixes: ['/agent-ras/fault-modes'] },
-        { key: 'agent-ras-fault-injection', href: '/agent-ras/fault-injection', labelKey: 'nav.rasFaultInjection', iconPath: ICON_FAULT, matchPrefixes: ['/agent-ras/fault-injection'] },
+        { key: 'agent-ras-trace', href: '/agent-ras/trace', labelKey: 'nav.rasTrace', iconPath: ICON_RAS_OBSERVE, matchPrefixes: ['/agent-ras/trace'] },
+        { key: 'agent-ras-fault-modes', href: '/agent-ras/fault-modes', labelKey: 'nav.rasFaultModes', iconPath: ICON_RAS_CAPABILITY, matchPrefixes: ['/agent-ras/fault-modes'] },
+        { key: 'agent-ras-fault-injection', href: '/agent-ras/fault-injection', labelKey: 'nav.rasFaultInjection', iconPath: ICON_RAS_INJECT, matchPrefixes: ['/agent-ras/fault-injection'] },
     ],
 };
 

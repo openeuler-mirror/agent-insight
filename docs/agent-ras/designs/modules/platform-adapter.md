@@ -36,7 +36,7 @@ flowchart TB
 
 | ID | 名称 | 职责 | 路径 |
 |----|------|------|------|
-| M-pa.common | common | RasClient、applyActions、FFI bridge、Insight reporter | `common/` |
+| M-pa.common | common | RasClient、applyActions、FFI bridge、Insight RAS reporter、**OTLP HTTP + witty/现网 span builder** | `common/` |
 | M-pa.jiuwen | openjiuwen | Rail 深挂载 + Monitor + StreamObserver | `openjiuwen/` |
 | M-pa.opencode | opencode | Plugin + HostControl + skill_judge | `opencode/` |
 | M-pa.skel | openclaw/hermes | 骨架 hooks/host | `openclaw/`, `hermes/` |
@@ -55,7 +55,7 @@ flowchart LR
 
 | 区域 | 关键文件 | 职责 |
 |------|----------|------|
-| common | `ras_client.py/js`, `host_actions.js`, `protocol_client.py`, `python_bridge.js`, `insight_anomaly_reporter.py` | L2 契约与 FFI / 协议工厂 |
+| common | `ras_client.py/js`, `host_actions.js`, `protocol_client.py`, `python_bridge.js`, `insight_anomaly_reporter.py`, `otlp_http.py`, `otel_spans.py`, `session_ids.py` | L2 契约、FFI / 协议工厂、可选 OTLP 观测导出 |
 | openjiuwen | `factory.py`, `rail.py`, `host_control.py`, `stream_observer.py`, `deep_agent_adapter.py` | 深挂载 |
 | opencode | `plugin.js`, `host_control.js`, `skill_judge.js`, `INSTALL.md` | inproc 插件 |
 | xiaoo | `hooks.py`, `host_control.py`, `hooker/`, `INSTALL.md` | Hook 映射 + CallableHost；见 [xiaoo-adapter](../features/xiaoo-adapter.md) |

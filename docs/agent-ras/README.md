@@ -7,6 +7,7 @@
 | 目的 | 打开 |
 |------|------|
 | 理解四层同进程与主流程 | [designs/architecture.md](designs/architecture.md) |
+| **与 Insight / FI 的边界** | [../agent-fault-injection/designs/ras-fi-insight-relationship.md](../agent-fault-injection/designs/ras-fi-insight-relationship.md) |
 | 改 Monitor / 检测 / 恢复 / 适配代码 | [designs/modules/](designs/modules/) 对应篇 |
 | 装上并跑起来 | [guides/getting-started.md](guides/getting-started.md) |
 
@@ -44,6 +45,7 @@
 | [planning-error.md](designs/features/planning-error.md) | 策略层规划错误检测 | 规划中 |
 | [domain-cognitive-bias.md](designs/features/domain-cognitive-bias.md) | 领域认知偏差六类场景 | 规划中 |
 | [xiaoo-adapter.md](designs/features/xiaoo-adapter.md) | xiaoO 协议 inproc / 入口无关（无 HTTP/SSE） | 已落地（inproc E2E） |
+| [xiaoo-observe-ingest.md](designs/features/xiaoo-observe-ingest.md) | xiaoO OTel 观测（现网 OTLP + RAS join；Insight 最小侵入） | 已落地 |
 
 ---
 
@@ -65,4 +67,5 @@
 |------|------|
 | Insight「AgentRAS 可靠性」UI | [docs/design/reliability-standalone-ui](../design/reliability-standalone-ui/) |
 | RAS 旁路 ingest API 契约 | [developer-guide/09-otlp-attribute-contract.md](../developer-guide/09-otlp-attribute-contract.md) |
+| **故障注入 / 与 Insight·RAS 关系** | [docs/agent-fault-injection/](../agent-fault-injection/) · [关系设计说明](../agent-fault-injection/designs/ras-fi-insight-relationship.md) |
 | 源码与安装 | [`agent_ras/README.md`](../../agent_ras/README.md) |

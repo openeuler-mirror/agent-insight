@@ -820,6 +820,90 @@ model InfraSource {
   @@index([endpoint])
 }
 
+/// 故障注入编排任务（1:N Run）。
+model FaultInjectionTask {
+  id              String   @id @default(cuid())
+  taskKey         String   @unique // task-{hex}
+  name            String
+  status          String   // queued | running | completed | failed | stopped | dry_run
+  platform        String
+  agent           String
+  prompt          String
+  workspace       String   // logical: __default__ | relative | client absolute (never server-expanded ~)
+  model           String?
+  requestJson     String?  // timeouts, auto, etc.
+  itemsJson       String   // TaskFaultItem[]
+  progressJson    String?
+  error           String?
+  user            String?
+  startedAt       DateTime?
+  finishedAt      DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  runs            FaultInjectionRun[]
+
+  @@index([user, createdAt])
+  @@index([status, createdAt])
+}
+
+/// 单次故障注入采集 + 服务端评判。
+model FaultInjectionRun {
+  id                       String   @id @default(cuid())
+  runId                    String   @unique // ras-...
+  fiTaskId                 String?
+  fiTask                   FaultInjectionTask? @relation(fields: [fiTaskId], references: [id], onDelete: SetNull)
+  itemId                   String?
+  user                     String?
+  platform                 String
+  agent                    String
+  fault                    String
+  submode                  String?
+  injectionMethod          String?
+  status                   String   // queued|collecting|judging|completed|failed|judge_skipped|dry_run|stopped
+  workerId                 String?
+  stopRequested            Boolean  @default(false)
+  queuedAt                 DateTime @default(now())
+  claimedAt                DateTime?
+  sessionTaskId            String?  // aligns Session.taskId / Execution.taskId
+  faultActivated           Boolean  @default(false)
+  faultActivatedAt         DateTime?
+  requestJson              String?
+  markersJson              String?
+  injectionEvidenceJson    String?
+  outcome                  String?
+  faultContainmentStatus   String?
+  judgeReason              String?
+  judgeRawJson             String?
+  judgedAt                 DateTime?
+  artifactDir              String?
+  error                    String?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  @@index([user, createdAt])
+  @@index([fiTaskId])
+  @@index([sessionTaskId])
+  @@index([status, createdAt])
+  @@index([workerId, status])
+}
+
+/// 本机 FI Worker 注册与 inventory 缓存。
+model FaultInjectionWorker {
+  id             String   @id @default(cuid())
+  workerId       String   @unique
+  user           String
+  hostname       String?
+  version        String?
+  lastSeenAt     DateTime
+  inventoryJson  String   @default("{}")
+  busySlots      Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([user, lastSeenAt])
+}
+
 /// RAS 环内事件旁路落库（对齐 ingest 规范；不进 OTLP spool）。
 /// taskId = witty.session.id = Execution.taskId / Session.taskId。
 model RasAnomalyEvent {

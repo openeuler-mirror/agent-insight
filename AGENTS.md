@@ -95,6 +95,7 @@ push 前先 `git remote -v` 确认 fork remote 的实际名（不要假设是 `o
 - `skills/` —— 内置 Skill 定义，每个 skill 一个子目录，含 `SKILL.md`。
 - `docs/developer-guide/` —— 面向开发者 / LLM 的架构与契约指南（入口 [`INDEX.md`](docs/developer-guide/INDEX.md)）；`docs/user-guide/` —— 面向使用者的操作指南；`docs/design/` —— 需求 / 设计文档（见 [需求清单](docs/design/README.md)）。
 - `docs/agent-ras/` —— Agent RAS 文档统一入口（`designs/` 架构与特性、`guides/` 使用指导）；源码在仓根 `agent_ras/`。
+- `docs/agent-fault-injection/` —— 故障注入文档；源码在仓根 `agent_fault_injection/`。
 - `features/` —— 单 feature 的设计草稿（比 plan 更轻量）。
 - `scripts/develop_start.sh` —— 验证流程要用，不要换别的方式启 dev server。
 

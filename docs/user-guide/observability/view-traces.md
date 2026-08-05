@@ -72,7 +72,7 @@ description: "查看、筛选并分析一次执行的完整 Trace"
 
 其中，**执行状态**只表示 Trace 生命周期：平台收到明确完成信号后显示成功；尚未收到完成信号时显示运行中。它不等同于评测状态；部分接入会在有最终回答且能从 Trace 时间戳推断完成点时补齐完成时间，例如 Hermes 可使用根 span/交互时间，OpenCode 可使用 `session.idle`；Hermes/OpenCode 的旧记录或漏写完成信号时还会用 60 秒静默窗口兜底，但不会只凭回答文本判定完成。
 
-**环内 RAS（可靠性）与普通链路追踪解耦。** 「运行观测 / 链路追踪」（`/trace`）列表与详情**不再**展示 RAS 徽章或异常面板；环内异常与恢复请到侧栏 **AgentRAS 可靠性 / 可靠性观测**（`/agent-ras/trace`）查看。该页以当前账号的根 Trace（Execution）左连接 RAS 事件，并合并**仅有 RAS 事件、无 Execution** 的任务（例如 xiaoO CLI / inproc 注入），同时包含无故障 Trace 和异常 Trace。详情页在有 Execution / OTel 时复用完整链路视图并叠 RAS 标记；**仅有 RAS 事件**时改为展示 RAS 检测与恢复处置时间线（不会凭空造出 Agent 对话链路）。
+**环内 RAS（可靠性）与普通链路追踪解耦。** 「运行观测 / 链路追踪」（`/trace`）列表与详情**不再**展示 RAS 徽章或异常面板；环内异常与恢复请到侧栏 **AgentRAS 可靠性 / 可靠性观测**（`/agent-ras/trace`）查看。该页以当前账号的根 Trace（Execution）左连接 RAS 事件，并合并**仅有 RAS 事件、无 Execution** 的任务（例如 xiaoO CLI / inproc 注入），同时包含无故障 Trace 和异常 Trace。详情页在有 Execution / OTel 时复用完整链路视图并叠 RAS 标记；**仅有 RAS 事件**时改为展示 RAS 检测与恢复处置时间线（不会凭空造出 Agent 对话链路）。xiaoO 在会话结束（idle/完成）时会旁路上报 OTLP（`service.name=xiaoo`，`session.id` 与 RAS `taskId` 对齐），因此正常跑完的任务应同时有 Execution 与 RAS 事件，详情即可看到完整 Trace。
 
 可靠性观测列表额外提供 **平台**列，以及顶部的 **搜索 / 平台 / 状态** 过滤（交互对齐「链路追踪」页的筛选条，字段集更精简）。**RAS 处置**列按「有故障 → 是否启动恢复 → 恢复是否成功」展示，与 **执行状态** 解耦：
 

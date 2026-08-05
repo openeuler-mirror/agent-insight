@@ -1,4 +1,4 @@
-"""Shared L2: RasClient, protocol factory, Insight reporter."""
+"""Shared L2: RasClient, protocol factory, Insight reporter, OTLP helpers."""
 
 from platform_adapter.common.observe import observe_assistant_text, observe_tool_after
 from platform_adapter.common.protocol_client import (

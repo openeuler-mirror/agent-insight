@@ -25,8 +25,11 @@ flowchart LR
   Embed -->|wire| Apply[apply_wire_actions]
   Apply --> Host[CallableHostControl]
   Host -->|cancel_pending| GW
-  Embed -->|insight_push| Insight[AgentInsight]
+  Embed -->|insight_push| InsightRAS[ras-events]
+  Hooker[xiaoo_hooker] -->|OTLP| InsightOTel[otel_v1_traces]
 ```
+
+观测旁路见 [`xiaoo-observe-ingest.md`](xiaoo-observe-ingest.md)（Insight 最小侵入；OpenCode 不迁）。
 
 - 装配：[`build_protocol_ras_client`](../../../agent_ras/platform_adapter/common/protocol_client.py)
 - 子进程 hook 共享 SessionHub：[`ras_embed` IPC worker](../../../agent_ras/ras_embed/ipc_worker.py)（平台中性，非 xiaoo 私有 sidecar）

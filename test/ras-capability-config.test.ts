@@ -59,13 +59,19 @@ test('buildUpdatedEnvelope bumps revision only when content changes', () => {
   }
 })
 
-test('skeleton platforms cannot enable sync', () => {
+test('sync platforms and non-sync platforms', () => {
   assert.equal(platformSupportsSync('opencode'), true)
-  assert.equal(platformSupportsSync('hermes'), false)
-  const base = defaultEnvelope('hermes')
+  assert.equal(platformSupportsSync('xiaoo'), true)
+  assert.equal(platformSupportsSync('openjiuwen'), false)
+  const base = defaultEnvelope('openjiuwen')
   const next = buildUpdatedEnvelope(base, { syncEnabled: true, config: base.config })
   assert.equal(next.ok, true)
   if (next.ok) assert.equal(next.envelope.syncEnabled, false)
+
+  const xiaoo = defaultEnvelope('xiaoo')
+  const xiaooNext = buildUpdatedEnvelope(xiaoo, { syncEnabled: true, config: xiaoo.config })
+  assert.equal(xiaooNext.ok, true)
+  if (xiaooNext.ok) assert.equal(xiaooNext.envelope.syncEnabled, true)
 })
 
 test('toIngestPayload hides config when sync disabled', () => {

@@ -1,0 +1,213 @@
+import assert from 'node:assert/strict'
+import { describe, it } from 'node:test'
+import {
+  isValidOutcomeContainmentPair,
+  parseFaultJudgeResponse,
+  skippedJudgeResult,
+} from '../src/lib/fault-injection/judge-result'
+import {
+  buildFiPipelineMarkers,
+  buildFiTraceMarkers,
+  mergeEvaluationMarkers,
+} from '../src/lib/fault-injection/trace-markers'
+import { buildMarkerPipeline } from '../src/lib/fault-injection/marker-pipeline'
+import { buildStubCollectPayload, listFaultsViaPython } from '../src/lib/fault-injection/engine'
+import {
+  FI_WORKSPACE_DEFAULT,
+  normalizeFiWorkspaceInput,
+  resolveFiWorkspaceOnClient,
+} from '../src/lib/fault-injection/workspace'
+import {
+  buildRasRecordsFromFiCollect,
+  mapFaultToAnomalyKind,
+} from '../src/lib/fault-injection/ras-bridge'
+import { normalizeFault } from '../src/components/fault-injection/types'
+
+describe('fault-injection judge-result', () => {
+  it('accepts valid pairs', () => {
+    assert.equal(isValidOutcomeContainmentPair('occurred', 'unresolved'), true)
+    assert.equal(isValidOutcomeContainmentPair('not_occurred', 'prevented'), true)
+    assert.equal(isValidOutcomeContainmentPair('occurred', 'prevented'), false)
+  })
+
+  it('parses judge JSON from noisy text', () => {
+    const parsed = parseFaultJudgeResponse(`Here you go:
+{"outcome":"occurred","fault_containment_status":"unresolved","reason":"agent followed bad tool output"}
+`)
+    assert.equal(parsed.outcome, 'occurred')
+    assert.equal(parsed.fault_containment_status, 'unresolved')
+  })
+
+  it('rejects invalid pairs', () => {
+    assert.throws(() =>
+      parseFaultJudgeResponse(
+        JSON.stringify({
+          outcome: 'occurred',
+          fault_containment_status: 'prevented',
+          reason: 'bad',
+        }),
+      ),
+    )
+  })
+
+  it('builds skipped result', () => {
+    const skipped = skippedJudgeResult('not activated')
+    assert.equal(skipped.outcome, 'not_occurred')
+    assert.equal(skipped.fault_containment_status, 'no_trace')
+  })
+})
+
+describe('fault-injection markers', () => {
+  it('maps FI markers with anchors and payload', () => {
+    const markers = buildFiTraceMarkers([
+      {
+        id: 'm1',
+        kind: 'fault_activation',
+        label: 'Fault activation requested',
+        timestamp: 1700000000000,
+        payload: {
+          faultSkill: 'thinking-dead-loop',
+          instruction: 'do case 2',
+          callID: 'call-1',
+          trace_anchor: { message_id: 'msg-1' },
+        },
+      },
+    ])
+    assert.equal(markers.length, 1)
+    assert.equal(markers[0].source, 'fi')
+    assert.equal(markers[0].messageId, 'msg-1')
+    assert.equal(markers[0].callId, 'call-1')
+    assert.equal(markers[0].payload?.faultSkill, 'thinking-dead-loop')
+  })
+
+  it('builds four-node pipeline from activation markers', () => {
+    const pipeline = buildFiPipelineMarkers([
+      { id: '1', kind: 'fault_activation', label: 'Fault activation requested', payload: {} },
+      { id: '2', kind: 'fault_activation', label: 'Fault activation started', payload: {} },
+      { id: '3', kind: 'fault_activation', label: 'Fault activation completed', payload: {} },
+      {
+        id: '4',
+        kind: 'evaluation',
+        label: 'Evaluation skipped',
+        payload: { reason: 'judge_skipped' },
+      },
+    ])
+    const steps = buildMarkerPipeline(pipeline)
+    assert.equal(steps.length, 4)
+    assert.equal(steps.filter((s) => s.done).length, 4)
+    assert.equal(steps[3].skipped, true)
+  })
+
+  it('merges evaluation markers after judge', () => {
+    const merged = mergeEvaluationMarkers(
+      [{ id: '1', kind: 'fault_activation', label: 'Fault activation requested' }],
+      { skipped: true, reason: 'No active model configured in Insight settings.' },
+    )
+    assert.equal(merged.length, 2)
+    assert.equal((merged[1] as { kind: string }).kind, 'evaluation')
+  })
+})
+
+describe('fault-injection stub collector', () => {
+  it('returns insight-shaped payload', () => {
+    const payload = buildStubCollectPayload({
+      runId: 'ras-test',
+      fault: 'step-omission',
+      platform: 'opencode',
+      prompt: 'do it',
+    })
+    assert.equal(payload.fault, 'step-omission')
+    assert.ok(Array.isArray(payload.interactions))
+    assert.ok(payload.interactions.length >= 2)
+    assert.equal(payload.faultActivated, true)
+  })
+})
+
+describe('fault-injection RAS bridge', () => {
+  it('maps thinking-dead-loop to llm_thinking_dead_loop', () => {
+    assert.equal(mapFaultToAnomalyKind('thinking-dead-loop'), 'llm_thinking_dead_loop')
+    assert.equal(mapFaultToAnomalyKind('tool_repeat_dead_loop'), 'tool_call_loop')
+  })
+
+  it('excludes stub/dry-run payloads from reliability observation', () => {
+    const stub = buildStubCollectPayload({
+      runId: 'ras-stub',
+      fault: 'thinking-dead-loop',
+      platform: 'opencode',
+      prompt: 'x',
+    })
+    assert.equal(buildRasRecordsFromFiCollect({ insightRunId: 'ras-stub', payload: stub }).length, 0)
+  })
+
+  it('emits anomaly record for real activated collect', () => {
+    const records = buildRasRecordsFromFiCollect({
+      insightRunId: 'ras-real',
+      payload: {
+        runId: 'ras-real',
+        taskId: 'ras-20260804-140722-5eddaa0e',
+        framework: 'opencode',
+        fault: 'thinking-dead-loop',
+        injectionMethod: 'skill_inject',
+        faultActivated: true,
+        faultActivatedAt: Date.now(),
+        interactions: [{ role: 'user', content: 'hi' }],
+        markers: [],
+        injectionEvidence: { runtime: { stub: false } },
+      },
+    })
+    assert.equal(records.length, 1)
+    assert.equal(records[0].type, 'anomaly')
+    assert.equal(records[0].anomalyKind, 'llm_thinking_dead_loop')
+    assert.equal(records[0].taskId, 'ras-20260804-140722-5eddaa0e')
+    const payload = JSON.parse(records[0].payloadJson)
+    assert.equal(payload.source, 'fault_injection')
+  })
+})
+
+describe('fault-injection catalog submodes', () => {
+  it('resolves thinking-dead-loop submode ids 1/2/3', async () => {
+    const rows = (await listFaultsViaPython()) as Array<Record<string, unknown>>
+    const raw = rows.find((row) => String(row.name || row.id) === 'thinking-dead-loop')
+    assert.ok(raw, 'thinking-dead-loop missing from catalog')
+    const fault = normalizeFault(raw!)
+    assert.equal(fault.submodes?.length, 3)
+    assert.deepEqual(
+      fault.submodes?.map((s) => s.id),
+      ['1', '2', '3'],
+    )
+    assert.ok(fault.submodes?.some((s) => s.name.includes('逻辑')))
+    assert.ok(fault.labelZh)
+    assert.ok(fault.injectionMethodLabel)
+  })
+
+  it('resolves tool_repeat_dead_loop submodes 1..4', async () => {
+    const rows = (await listFaultsViaPython()) as Array<Record<string, unknown>>
+    const raw = rows.find((row) => String(row.name || row.id) === 'tool_repeat_dead_loop')
+    assert.ok(raw)
+    const fault = normalizeFault(raw!)
+    assert.equal(fault.submodes?.length, 4)
+    assert.deepEqual(
+      fault.submodes?.map((s) => s.id),
+      ['1', '2', '3', '4'],
+    )
+  })
+})
+
+describe('fault-injection workspace contract', () => {
+  it('normalizes empty and ~ to logical default', () => {
+    assert.equal(normalizeFiWorkspaceInput(''), FI_WORKSPACE_DEFAULT)
+    assert.equal(normalizeFiWorkspaceInput('~'), FI_WORKSPACE_DEFAULT)
+    assert.equal(normalizeFiWorkspaceInput('~/work'), FI_WORKSPACE_DEFAULT)
+    assert.equal(normalizeFiWorkspaceInput('/tmp/ws'), '/tmp/ws')
+    assert.equal(normalizeFiWorkspaceInput('rel/path'), 'rel/path')
+  })
+
+  it('resolves logical workspace on client', () => {
+    const base = '/home/u/.agent-insight/fault-injection/workspaces'
+    const join = (...parts: string[]) => parts.join('/').replace(/\/+/g, '/')
+    const resolve = (_b: string, rel: string) => `/resolved/${rel}`
+    assert.equal(resolveFiWorkspaceOnClient(FI_WORKSPACE_DEFAULT, base, join, resolve), base)
+    assert.equal(resolveFiWorkspaceOnClient('sub', base, join, resolve), '/resolved/sub')
+    assert.equal(resolveFiWorkspaceOnClient('/abs', base, join, resolve), '/abs')
+  })
+})

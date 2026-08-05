@@ -15,7 +15,12 @@ App Router。页面位于 `src/app` 下。主仪表盘位于 `(main)` 路由组�
 | `/(main)/agent-ras/trace` | `AgentRasTracePage` (`(main)/agent-ras/trace/page.tsx`) | 可靠性观测：故障等级汇总 + Trace 列表（左连接 RAS） |
 | `/(main)/agent-ras/trace/[taskId]` | `AgentRasTraceDetailPage` (`(main)/agent-ras/trace/[taskId]/page.tsx`) | 可靠性详情：RAS 异常卡 + 复用 `AgentTraceView`（叠 marker） |
 | `/(main)/agent-ras/fault-modes` | `AgentRasFaultModesPage` (`(main)/agent-ras/fault-modes/page.tsx`) | 能力目录 + 平台配置双视图（`?view=configure`）；配置对齐 `AgentRASConfig`，可选同步 OpenCode |
-| `/(main)/agent-ras/fault-injection` | `AgentRasFaultInjectionPage` (`(main)/agent-ras/fault-injection/page.tsx`) | 故障注入与评测（本期 mock UI） |
+| `/(main)/agent-ras/fault-injection` | Faults 浏览（子模式拆行 + HelpTip + Skill 对话框） | BFF `/api/fault-injection/faults`（`resolve_fault_submodes`） |
+| `/(main)/agent-ras/fault-injection/tasks` | 任务列表（表内工具栏/行级图标操作/轮询） | `GET/POST /api/fault-injection/tasks` |
+| `/(main)/agent-ras/fault-injection/tasks/new` | 三步向导（卡内 footer；`?rerunFrom=` 预填） | platforms/agents/models |
+| `/(main)/agent-ras/fault-injection/tasks/[taskId]` | 任务详情（进度卡、中文故障名、图标操作） | `GET .../task/:id` |
+| `/(main)/agent-ras/fault-injection/runs/[runId]` | 单卡摘要 + MarkerPipeline 四节点 + `AgentTraceView`；可跳可靠性观测 | `GET .../runs/:id/trace`；激活后写 `RasAnomalyEvent`（`source=fault_injection`） |
+
 | `/(main)/fault` | `FaultPage` (`(main)/fault/page.tsx`) | 故障诊断 |
 | `/(main)/dataset`, `/(main)/dataset/[id]` | `DatasetPage`, `DatasetDataItemsRoutePage` | 评测数据集；详情页按字段 schema 渲染动态列，支持新增字段和逐条编辑字段值 |
 | `/(main)/eval`, `/(main)/eval/run/[runId]`, `/(main)/eval/trajectory/*` | `EvalPage`, `RunDetailPage`, `TrajectoryDetailPage`/`TrajectoryTracePage` | 评测运行与轨迹视图 |

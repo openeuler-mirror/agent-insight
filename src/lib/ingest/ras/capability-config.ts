@@ -6,8 +6,7 @@
 export const RAS_CAPABILITY_PLATFORMS = [
   'opencode',
   'openjiuwen',
-  'hermes',
-  'openclaw',
+  'xiaoo',
 ] as const
 
 export type RasCapabilityPlatformId = (typeof RAS_CAPABILITY_PLATFORMS)[number]
@@ -102,9 +101,9 @@ export function isRasCapabilityPlatformId(value: unknown): value is RasCapabilit
   return typeof value === 'string' && (RAS_CAPABILITY_PLATFORMS as readonly string[]).includes(value)
 }
 
-/** Platforms that can receive automatic client sync in phase 1. */
+/** Platforms that can receive automatic client sync. */
 export function platformSupportsSync(platform: RasCapabilityPlatformId): boolean {
-  return platform === 'opencode'
+  return platform === 'opencode' || platform === 'xiaoo'
 }
 
 function asFiniteNumber(value: unknown, fallback: number): number | null {

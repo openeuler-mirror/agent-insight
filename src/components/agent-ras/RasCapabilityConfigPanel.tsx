@@ -61,7 +61,7 @@ export function RasCapabilityConfigPanel({ focusDetector = null }: Props) {
   const { apiKey } = useAuth();
   const zh = locale === 'zh';
 
-  const [platform, setPlatform] = useState<string>('opencode');
+  const [platform, setPlatform] = useState<RasCapabilityPlatformId>('opencode');
   const [envelope, setEnvelope] = useState<RasCapabilityConfigEnvelope | null>(null);
   const [draftConfig, setDraftConfig] = useState<RasCapabilityConfigBody>(defaultCapabilityConfigBody());
   const [draftSync, setDraftSync] = useState(false);
@@ -252,7 +252,13 @@ export function RasCapabilityConfigPanel({ focusDetector = null }: Props) {
                 </div>
                 <div className="text-xs text-foreground-muted mt-0.5">
                   {syncSupported
-                    ? (zh ? '开启后 OpenCode 启动时拉取本配置' : 'OpenCode pulls this config on startup')
+                    ? (zh
+                      ? (platform === 'xiaoo'
+                        ? '开启后 xiaoO hooker 启动会话时拉取本配置'
+                        : '开启后 OpenCode 启动时拉取本配置')
+                      : (platform === 'xiaoo'
+                        ? 'xiaoO hooker pulls this config when a session starts'
+                        : 'OpenCode pulls this config on startup'))
                     : (zh ? '该平台请导出后人工落盘' : 'Export and apply manually for this platform')}
                 </div>
               </div>

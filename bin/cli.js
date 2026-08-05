@@ -7,7 +7,9 @@ const commands = {
   status: () => require('../scripts/status.js'),
   logs: () => require('../scripts/logs.js'),
   install: () => require('../scripts/install.js'),
-  'install-ras': () => require('../scripts/install-ras.js')
+  'install-ras': () => require('../scripts/install-ras.js'),
+  'install-fault-injection': () => require('../scripts/install-fault-injection.js'),
+  'fi-worker': () => require('../scripts/fi-worker.js'),
 }
 
 function parseOptions(args) {
@@ -43,6 +45,8 @@ Commands:
   logs                     Show service logs
   install                  One-click install: npm install, start service, setup plugins, add skill
   install-ras [--check]    Install/update Agent RAS, or only check its state
+  install-fault-injection [--check] [--start]  Install FI package + Worker config; --start runs fi-worker
+  fi-worker                Run local FI Worker (claim + collect + upload)
 
 Options:
   --port, -p <port>       Specify port number
@@ -65,7 +69,10 @@ function showCommandHelp(command) {
     status: 'Show Agent-insight service status\n\nOptions:\n  --port, -p <port>  Specify port (default: 3000)',
     logs: 'Show Agent-insight service logs',
     install: 'One-click install Agent-insight\n\nThis command will:\n  1. npm install agent-insight\n  2. Start the service\n  3. Create admin user and get API Key\n  4. Install selected Agent integrations (including RAS for OpenCode)\n  5. Add skill to your agent',
-    'install-ras': 'Install or update Agent RAS for OpenCode\n\nOptions:\n  --check  Check without modifying runtime or OpenCode config\n\nSet AGENT_INSIGHT_RAS=0 to disable automatic RAS installation.'
+    'install-ras': 'Install or update Agent RAS for OpenCode\n\nOptions:\n  --check  Check without modifying runtime or OpenCode config\n\nSet AGENT_INSIGHT_RAS=0 to disable automatic RAS installation.',
+    'install-fault-injection':
+      'Install Agent Fault Injection + Worker config (~/.agent-insight/fault-injection)\n\nOptions:\n  --check  Only verify install state\n  --start  Start fi-worker after install\n\nEnv: AGENT_INSIGHT_HOST, AGENT_INSIGHT_API_KEY',
+    'fi-worker': 'Run local FI Worker (poll claim, run CLI, upload collect-result)',
   }
   console.log(`\nagent-insight ${command}\n\n${helps[command] || ''}`)
 }

@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `d9d4b93ac271eaaf9ea96bd696a839041e707dbe` (`d9d4b93`) |
+| Commit | `037bd69a0492810cbe957445c26eb71e2a14ef58` (`037bd69`) |
 | Branch | `dev_agent_ras` |
-| Date | 2026-08-03 |
+| Date | 2026-08-04 |
 | Author | iceory |
-| Subject | `docs: 同步 RAS 实现状态与过时路径描述` |
+| Subject | `feat(ras): 扩展多平台 inproc 并重组 agent-ras 文档` |
 
-**如何更新：** `git diff d9d4b93 HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff 037bd69 HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
@@ -31,6 +31,7 @@
 
 - [09-otlp-attribute-contract.md](09-otlp-attribute-contract.md)：OTLP 属性契约（FR-011），定义 OpenClaw 及其他 OTLP 客户端上报 trace/log 时必须遵守的属性规范；含 RAS 旁路 ingest（非 OTLP）说明。
 - 仓根 [`agent_ras/`](../../agent_ras/)：环内可靠性同进程真源（OpenCode L3 inproc）；统一安装入口见 [`scripts/install-ras.js`](../../scripts/install-ras.js)。
+- 仓根 [`agent_fault_injection/`](../../agent_fault_injection/)：故障注入引擎（注入+采集）；文档 [`docs/agent-fault-injection/`](../agent-fault-injection/README.md)；UI `/agent-ras/fault-injection`，BFF `/api/fault-injection`。
 - Agent RAS 文档统一入口：[`docs/agent-ras/`](../agent-ras/README.md)（[designs](../agent-ras/designs/) / [guides](../agent-ras/guides/)）。
 
 ## Quick lookup

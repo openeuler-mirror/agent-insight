@@ -71,7 +71,7 @@
 
 | 项 | 内容 |
 |----|------|
-| 产物 | `PlatformSelector`、`FaultCatalog`、`InjectionConfig`、`InjectionHistory` 组件；mock 数据；`agent-ras/fault-injection/page.tsx` 完整实现 |
+| 产物 | ~~`FaultCatalog` / `InjectionConfig` / `InjectionHistory` + mockData~~（已删除，改走真实 BFF `/agent-ras/fault-injection`）；`PlatformSelector` 仍用于 RAS 能力配置 |
 | 依赖 | T1（可与 T2 并行） |
 | 禁止 | 从 Mock 页面向 Agent 下发真实故障；连接本地 RAS 控制服务 |
 | 验收 | 平台切换正常；故障目录可浏览；注入配置可交互；历史列表展示 mock 数据 |
