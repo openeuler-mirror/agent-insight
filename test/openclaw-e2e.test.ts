@@ -329,6 +329,21 @@ test("OpenClaw aggregation is stable when the same spans are retransmitted", () 
   assert.deepEqual(retransmitted, once)
 })
 
+test("OpenClaw aggregation falls back to receivedAt when spans omit start time", () => {
+  const receivedAt = "2026-08-05T01:02:03.000Z"
+  const body = makeTraceRequest()
+  const span = body.resourceSpans[0].scopeSpans[0].spans[0] as any
+  delete span.startTime
+  delete span.endTime
+
+  const events = normalizeClaudeOtlpTraces(body, { receivedAt })
+  assert.deepEqual(events.map((event) => event.startTimeMs), [0])
+
+  const record = aggregateOpenClawOtelTraceEvents("inst-001", events)
+  assert.ok(record)
+  assert.equal((record.timestamp as Date).getTime(), Date.parse(receivedAt))
+})
+
 // ── TC-003: JSON vs protobuf equivalence ──
 test("TC-003: json/protobuf equivalence - same trace decoded both ways yields matching span count", async () => {
   /* eslint-disable @typescript-eslint/no-require-imports */

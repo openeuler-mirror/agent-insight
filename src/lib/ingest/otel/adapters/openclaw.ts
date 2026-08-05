@@ -307,7 +307,7 @@ export function aggregateOpenClawOtelTraceEvents(sessionId: string, inputEvents:
     tokens: llmEvents.reduce((sum, event) => sum + tokenTotal(event), 0),
     latency: starts.length && ends.length ? Math.max(0, Math.max(...ends) - Math.min(...starts)) : 0,
     final_result: lastContent?.content || '',
-    timestamp: new Date(Math.min(...starts) || Date.parse(events[0].receivedAt) || Date.now()),
+    timestamp: new Date((starts.length ? Math.min(...starts) : 0) || Date.parse(events[0].receivedAt) || Date.now()),
     trace_completed_at: ends.length ? toIso(Math.max(...ends)) : undefined,
     label: 'openclaw',
     user: events.map((event) => event.user).find((value) => value?.trim()) || null,
