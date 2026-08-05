@@ -47,7 +47,15 @@ import {
 } from '@/lib/trace-tags';
 
 /** 允许派生子 Agent 树的框架集合。先落地者集合化，后落地者仅加值。 */
-const SUBAGENT_TREE_FRAMEWORKS = new Set(['opencode', 'openclaw', 'hermes', 'langfuse-langgraph', 'codeagent', 'llamaindex']);
+const SUBAGENT_TREE_FRAMEWORKS = new Set([
+    'opencode',
+    'openclaw',
+    'hermes',
+    'langfuse-langgraph',
+    'codeagent',
+    'claudecode',
+    'llamaindex',
+]);
 
 export interface InvokedSkill {
     name: string;
@@ -82,6 +90,9 @@ export function shouldRefreshStoredQueryFromInteractions(
     if (!current) return true;
     const fw = typeof framework === 'string' ? framework.trim().toLowerCase() : '';
     if (!fw) return false;
+    if (fw === 'claudecode') {
+        return /^Claude Code Session [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(current);
+    }
     return current.toLowerCase() === `${fw} session`;
 }
 

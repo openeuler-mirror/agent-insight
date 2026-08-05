@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `b2d096c84f3045cf3c07a0116b1f188719880c2a` (`b2d096c`) |
-| Branch | `feat/llamaindex-trace-collector` |
-| Date | 2026-08-03T14:32:49+08:00 |
-| Author | JZ Chen |
-| Subject | `feat: migrate LlamaIndex collector to official OpenTelemetry` |
+| Commit | `cfc3ea36348b3d4ce8a6a7bfef841c1e0d21505d` (`cfc3ea3`) |
+| Branch | `new-dev-8-5` |
+| Date | 2026-08-04T20:18:14+08:00 |
+| Author | openeuler-ci-bot |
+| Subject | `!258 对齐trace回流数据集和理想输出数据集字段名` |
 
-**如何更新：** `git diff b2d096c HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff cfc3ea3 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。

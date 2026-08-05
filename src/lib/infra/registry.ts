@@ -46,15 +46,18 @@ export interface ProbeResult {
   error?: string;
 }
 
-/** 探测一个候选源的 /metrics：可达且有 vllm: 指标 = 可观测源。 */
+/**
+ * 探测一个候选源的 /metrics：可达且有 vllm: 指标 = 可观测源。
+ * headers 给带鉴权的源用 —— 不带的话这里会拿到 401，UI 的「添加源」按钮就永远点不动。
+ */
 export async function probeEndpoint(
   endpoint: string,
-  opts: { fetchImpl?: typeof fetch; timeoutMs?: number } = {},
+  opts: { fetchImpl?: typeof fetch; timeoutMs?: number; headers?: Record<string, string> } = {},
 ): Promise<ProbeResult> {
-  const { fetchImpl = fetch, timeoutMs = 8000 } = opts;
+  const { fetchImpl = fetch, timeoutMs = 8000, headers } = opts;
   const url = metricsUrl(endpoint);
   try {
-    const res = await fetchImpl(url, { signal: AbortSignal.timeout(timeoutMs) });
+    const res = await fetchImpl(url, { headers, signal: AbortSignal.timeout(timeoutMs) });
     if (!res.ok) return { endpoint, reachable: false, metricCount: 0, model: null, error: `HTTP ${res.status}` };
     const text = await res.text();
     const parsed = parsePromText(text);

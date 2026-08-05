@@ -301,7 +301,7 @@ function Body({
                 </div>
             )}
             {!loading && session && !session.error && ((session.interactions?.length || 0) > 0 || (session.langfuseTraceNodes?.length || 0) > 0) && (
-                <AgentTraceView interactions={session.interactions || []} langfuseTraceNodes={session.langfuseTraceNodes} />
+                <AgentTraceView interactions={session.interactions || []} framework={framework} langfuseTraceNodes={session.langfuseTraceNodes} />
             )}
             {!loading && session && !session.error && (!session.interactions || session.interactions.length === 0) && (!session.langfuseTraceNodes || session.langfuseTraceNodes.length === 0) && (
                 <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--foreground-muted)', fontSize: 12 }}>
