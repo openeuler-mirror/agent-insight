@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Activity, BarChart3, Download, Loader2, Tag } from 'lucide-react';
+import { Activity, BarChart3, Download, HelpCircle, Loader2, Tag } from 'lucide-react';
 import {
   CartesianGrid,
   Line,
@@ -19,6 +19,7 @@ import { PageContainer, PageHeader, PageToolbar } from '@/components/shell/PageC
 import { Button } from '@/components/ui/button';
 import { Select, type SelectOption } from '@/components/ui/select';
 import { EmptyState } from '@/components/feedback/EmptyState';
+import { Tooltip as UiTooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
 import { useLocale } from '@/lib/client/locale-context';
@@ -27,7 +28,7 @@ import type { VersionAnalysisTrace, VersionCompareResponse, VersionMetric, Versi
 
 const basePath = process.env.NEXT_PUBLIC_URL_PREFIX || '';
 
-type MetricKey = 'accuracy' | 'tokens' | 'latency' | 'cost';
+type MetricKey = 'taskCompletion' | 'tokens' | 'latency' | 'cost';
 type WindowKey = '1h' | '1d' | '7d' | '30d' | 'all';
 type AnalysisView = 'compare' | 'detail';
 
@@ -57,7 +58,10 @@ function strings(locale: string) {
       last7d: '近 7 天',
       last30d: '近 30 天',
       allTime: '全部时间',
-      accuracy: '准确率',
+      taskCompletion: '平均任务完成度',
+      traceTaskCompletion: '任务完成度',
+      taskCompletionHelp: '满分 100 分。取每条 Trace 最新一次成功的「Agent 任务完成度」实验评测结果；存在人工修正时优先使用人工评分。',
+      taskCompletionCoverageHelp: '有任务完成度评分的 Trace 数占全部 Trace 的比例。',
       tokens: '平均 Token',
       latency: 'p95 时延',
       cost: '单次成本',
@@ -82,7 +86,7 @@ function strings(locale: string) {
       questions: '问题覆盖',
       traces: 'Trace 明细',
       traceCount: 'Trace 数',
-      scoreCoverage: '评分覆盖率',
+      scoreCoverage: '任务完成度评测覆盖率',
       runSuccessRate: '运行成功率',
       noTagsTitle: '还没有版本标签',
       noTagsDesc: '先在版本管理中新建版本标签，再从链路追踪给 Trace 打标。',
@@ -90,7 +94,7 @@ function strings(locale: string) {
       noTraceDesc: '调整筛选条件，或先在链路追踪中给 Trace 绑定版本标签。',
       loadFailed: '加载版本分析失败',
       detailFailed: '加载版本详情失败',
-      derivedHint: '口径：只统计 root Trace；准确率来自 Execution.answerScore；运行成功率由 Trace 完成状态派生，不是独立存储字段。版本分析暂不支持业务标签二次过滤。',
+      derivedHint: '口径：只统计 root Trace；任务完成度取该 Trace 在实验中最新一次成功的「Agent 任务完成度」评测生效分（人工修正分优先）；运行成功率由 Trace 完成状态派生。版本分析暂不支持业务标签二次过滤。',
       selected: '版本标签',
       description: '说明',
       noDesc: '无说明',
@@ -125,7 +129,10 @@ function strings(locale: string) {
     last7d: 'Last 7d',
     last30d: 'Last 30d',
     allTime: 'All time',
-    accuracy: 'Accuracy',
+    taskCompletion: 'Avg task completion',
+    traceTaskCompletion: 'Task completion',
+    taskCompletionHelp: 'Scored out of 100 using the latest successful Agent Task Completion experiment result for each trace. Human overrides take precedence.',
+    taskCompletionCoverageHelp: 'The percentage of traces that have a task completion score.',
     tokens: 'Avg tokens',
     latency: 'P95 latency',
     cost: 'Avg cost',
@@ -150,7 +157,7 @@ function strings(locale: string) {
     questions: 'Question coverage',
     traces: 'Trace details',
     traceCount: 'Traces',
-    scoreCoverage: 'Score coverage',
+    scoreCoverage: 'Task completion coverage',
     runSuccessRate: 'Run success rate',
     noTagsTitle: 'No version tags yet',
     noTagsDesc: 'Create version tags, then attach them to traces from Trace.',
@@ -158,7 +165,7 @@ function strings(locale: string) {
     noTraceDesc: 'Adjust filters or attach version tags from Trace first.',
     loadFailed: 'Failed to load version analysis',
     detailFailed: 'Failed to load version detail',
-    derivedHint: 'Run success rate is derived from trace completion state. Accuracy uses Execution.answerScore with coverage shown.',
+    derivedHint: 'Root traces only. Task completion uses the latest successful Agent Task Completion result from experiments, with human overrides taking precedence. Run success rate is derived from trace completion state.',
     selected: 'Version tag',
     description: 'Description',
     noDesc: 'No description',
@@ -176,7 +183,7 @@ function strings(locale: string) {
 
 function metricOptions(copy: ReturnType<typeof strings>): SelectOption<MetricKey>[] {
   return [
-    { value: 'accuracy', label: copy.accuracy },
+    { value: 'taskCompletion', label: copy.taskCompletion },
     { value: 'tokens', label: copy.tokens },
     { value: 'latency', label: copy.latency },
     { value: 'cost', label: copy.cost },
@@ -201,14 +208,9 @@ function getWindowRange(windowKey: WindowKey): { from?: string; to?: string } {
   return { from: from.toISOString(), to: to.toISOString() };
 }
 
-function normalizeAccuracy(value: number | null | undefined): number | null {
-  if (value == null || !Number.isFinite(value)) return null;
-  return value <= 1 ? value * 100 : value;
-}
-
 function metricValue(version: VersionMetric, metric: MetricKey): number | null {
   switch (metric) {
-    case 'accuracy': return normalizeAccuracy(version.answerScoreAvg);
+    case 'taskCompletion': return version.taskCompletionScoreAvg;
     case 'tokens': return version.avgTokens;
     case 'latency': return version.p95LatencySec;
     case 'cost': return version.avgCost;
@@ -217,7 +219,7 @@ function metricValue(version: VersionMetric, metric: MetricKey): number | null {
 
 function traceMetricValue(trace: VersionAnalysisTrace, metric: MetricKey): number | null {
   switch (metric) {
-    case 'accuracy': return normalizeAccuracy(trace.answerScore);
+    case 'taskCompletion': return trace.taskCompletionScore;
     case 'tokens': return trace.tokens;
     case 'latency': return trace.latencySec;
     case 'cost': return trace.cost;
@@ -225,7 +227,7 @@ function traceMetricValue(trace: VersionAnalysisTrace, metric: MetricKey): numbe
 }
 
 function metricColor(metric: MetricKey): string {
-  if (metric === 'accuracy') return 'var(--success)';
+  if (metric === 'taskCompletion') return 'var(--success)';
   if (metric === 'tokens') return 'var(--warning)';
   if (metric === 'latency') return '#0ea5e9';
   return '#14b8a6';
@@ -252,10 +254,10 @@ function formatCurrency(value: number): string {
   return String.fromCharCode(36) + value.toFixed(value < 0.01 ? 5 : 4);
 }
 
-function formatChartTick(value: number, metric: MetricKey): string {
+function formatChartTick(value: number, metric: MetricKey, locale: string): string {
   if (!Number.isFinite(value)) return '';
   switch (metric) {
-    case 'accuracy': return Math.round(value).toLocaleString() + '%';
+    case 'taskCompletion': return locale.toLowerCase().startsWith('zh') ? `${Math.round(value)}分` : `${Math.round(value)} pts`;
     case 'tokens': return formatCompactNumber(value);
     case 'latency': return formatLatency(value);
     case 'cost': return formatCurrency(value);
@@ -265,7 +267,7 @@ function formatChartTick(value: number, metric: MetricKey): string {
 function formatMetric(value: number | null | undefined, metric: MetricKey, locale: string): string {
   if (value == null || !Number.isFinite(value)) return '-';
   switch (metric) {
-    case 'accuracy': return String((normalizeAccuracy(value) ?? 0).toFixed(1)) + '%';
+    case 'taskCompletion': return locale.toLowerCase().startsWith('zh') ? `${value.toFixed(1)} 分` : `${value.toFixed(1)} pts`;
     case 'tokens': return formatCompactNumber(value);
     case 'latency': return formatLatency(value);
     case 'cost': return formatCurrency(value);
@@ -406,7 +408,7 @@ export default function VersionAnalysisPage() {
   const summaryCards = summary ? [
     { label: copy.versionTagCount, value: summary.versionTagCount.toLocaleString(), detail: copy.availableTags, tone: 'var(--foreground)' },
     { label: copy.traceTotal, value: summary.traceCount.toLocaleString(), detail: activeWindowLabel, tone: 'var(--foreground)' },
-    { label: copy.accuracy, value: formatMetric(summary.answerScoreAvg, 'accuracy', locale), detail: copy.currentWindow, tone: 'var(--success)' },
+    { label: copy.taskCompletion, help: copy.taskCompletionHelp, value: formatMetric(summary.taskCompletionScoreAvg, 'taskCompletion', locale), detail: copy.currentWindow, tone: 'var(--success)' },
     { label: copy.tokens, value: formatMetric(summary.avgTokens, 'tokens', locale), detail: copy.currentWindow, tone: 'var(--warning)' },
     { label: copy.latency, value: formatMetric(summary.p95LatencySec, 'latency', locale), detail: copy.currentWindow, tone: '#0ea5e9' },
     { label: copy.cost, value: formatMetric(summary.avgCost, 'cost', locale), detail: copy.currentWindow, tone: '#14b8a6' },
@@ -434,7 +436,7 @@ export default function VersionAnalysisPage() {
       status: trace.traceStatus,
       label: formatDateTime(trace.timestamp),
       query: trace.query,
-      answerScore: trace.answerScore,
+      taskCompletionScore: trace.taskCompletionScore,
       tokens: trace.tokens,
       latencySec: trace.latencySec,
       cost: trace.cost,
@@ -501,7 +503,7 @@ export default function VersionAnalysisPage() {
         {summaryCards.length > 0 && (
           <section className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-6" aria-label={copy.overview}>
             {summaryCards.map(item => (
-              <SummaryCard key={item.label} label={item.label} value={item.value} detail={item.detail} tone={item.tone} />
+              <SummaryCard key={item.label} label={item.label} help={'help' in item ? item.help : undefined} value={item.value} detail={item.detail} tone={item.tone} />
             ))}
           </section>
         )}
@@ -563,7 +565,7 @@ export default function VersionAnalysisPage() {
                       </defs>
                       <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" vertical={false} />
                       <XAxis dataKey="name" tick={{ fontSize: 11, fill: 'var(--foreground-muted)' }} interval={0} minTickGap={8} />
-                      <YAxis tick={{ fontSize: 11, fill: 'var(--foreground-muted)' }} tickFormatter={(value) => formatChartTick(Number(value), metric)} width={64} />
+                      <YAxis tick={{ fontSize: 11, fill: 'var(--foreground-muted)' }} tickFormatter={(value) => formatChartTick(Number(value), metric, locale)} width={64} />
                       <Tooltip
                         cursor={{ stroke: 'var(--border-dark)', strokeDasharray: '4 4' }}
                         formatter={(value: any) => [formatMetric(Number(value), metric, locale), copy[metric]]}
@@ -588,8 +590,8 @@ export default function VersionAnalysisPage() {
                         <Th>{copy.selected}</Th>
                         <Th>{copy.description}</Th>
                         <Th>{copy.traceCount}</Th>
-                        <Th>{copy.accuracy}</Th>
-                        <Th>{copy.scoreCoverage}</Th>
+                        <Th><MetricHelpLabel label={copy.taskCompletion} help={copy.taskCompletionHelp} /></Th>
+                        <Th><MetricHelpLabel label={copy.scoreCoverage} help={copy.taskCompletionCoverageHelp} /></Th>
                         <Th>{copy.runSuccessRate}</Th>
                         <Th>{copy.tokens}</Th>
                         <Th>{copy.latency}</Th>
@@ -611,8 +613,8 @@ export default function VersionAnalysisPage() {
                           </Td>
                           <Td><span className="line-clamp-2 max-w-[260px]">{version.tag.description || copy.noDesc}</span></Td>
                           <Td>{version.traceCount.toLocaleString()}</Td>
-                          <Td>{formatMetric(version.answerScoreAvg, 'accuracy', locale)}</Td>
-                          <Td>{formatPercent(version.answerScoreCoverage)}</Td>
+                          <Td>{formatMetric(version.taskCompletionScoreAvg, 'taskCompletion', locale)}</Td>
+                          <Td>{formatPercent(version.taskCompletionScoreCoverage)}</Td>
                           <Td>{formatPercent(version.runSuccessRate)}</Td>
                           <Td>{formatMetric(version.avgTokens, 'tokens', locale)}</Td>
                           <Td>{formatMetric(version.p95LatencySec, 'latency', locale)}</Td>
@@ -644,7 +646,7 @@ export default function VersionAnalysisPage() {
                   {selectedVersion && (
                     <div className='grid min-w-[520px] flex-1 grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6'>
                       <CompactMetric label={copy.traceCount} value={selectedVersion.traceCount.toLocaleString()} />
-                      <CompactMetric label={copy.accuracy} value={formatMetric(selectedVersion.answerScoreAvg, 'accuracy', locale)} />
+                      <CompactMetric label={copy.taskCompletion} help={copy.taskCompletionHelp} value={formatMetric(selectedVersion.taskCompletionScoreAvg, 'taskCompletion', locale)} />
                       <CompactMetric label={copy.tokens} value={formatMetric(selectedVersion.avgTokens, 'tokens', locale)} />
                       <CompactMetric label={copy.latency} value={formatMetric(selectedVersion.p95LatencySec, 'latency', locale)} />
                       <CompactMetric label={copy.cost} value={formatMetric(selectedVersion.avgCost, 'cost', locale)} />
@@ -670,7 +672,7 @@ export default function VersionAnalysisPage() {
                       <LineChart data={detailChartData} margin={{ top: 8, right: 12, bottom: 2, left: -4 }}>
                         <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" vertical={false} />
                         <XAxis dataKey="index" tick={{ fontSize: 11, fill: 'var(--foreground-muted)' }} />
-                        <YAxis tick={{ fontSize: 11, fill: 'var(--foreground-muted)' }} tickFormatter={(value) => formatChartTick(Number(value), metric)} width={64} />
+                        <YAxis tick={{ fontSize: 11, fill: 'var(--foreground-muted)' }} tickFormatter={(value) => formatChartTick(Number(value), metric, locale)} width={64} />
                         <Tooltip
                           content={<TraceMetricTooltip metric={metric} copy={copy} locale={locale} />}
                           cursor={{ stroke: 'var(--border-dark)', strokeDasharray: '4 4' }}
@@ -714,7 +716,7 @@ export default function VersionAnalysisPage() {
                       <Th>{copy.time}</Th>
                       <Th>{copy.status}</Th>
                       <Th>{copy.query}</Th>
-                      <Th>{copy.accuracy}</Th>
+                      <Th><MetricHelpLabel label={copy.traceTaskCompletion} help={copy.taskCompletionHelp} /></Th>
                       <Th>{copy.tokens}</Th>
                       <Th>{copy.latency}</Th>
                       <Th>{copy.cost}</Th>
@@ -727,7 +729,7 @@ export default function VersionAnalysisPage() {
                         <Td>{formatDateTime(trace.timestamp)}</Td>
                         <Td><StatusChip status={trace.traceStatus} copy={copy} /></Td>
                         <Td><span className="line-clamp-2 max-w-[360px] text-foreground-secondary">{trace.query || '-'}</span></Td>
-                        <Td>{formatMetric(trace.answerScore, 'accuracy', locale)}</Td>
+                        <Td>{formatMetric(trace.taskCompletionScore, 'taskCompletion', locale)}</Td>
                         <Td>{formatMetric(trace.tokens, 'tokens', locale)}</Td>
                         <Td>{formatMetric(trace.latencySec, 'latency', locale)}</Td>
                         <Td>{formatMetric(trace.cost, 'cost', locale)}</Td>
@@ -753,10 +755,34 @@ export default function VersionAnalysisPage() {
   );
 }
 
-function SummaryCard({ label, value, detail, tone }: { label: string; value: string; detail: React.ReactNode; tone: string }) {
+function MetricHelpLabel({ label, help }: { label: string; help: string }) {
+  return (
+    <span className="inline-flex items-center gap-1">
+      <span>{label}</span>
+      <UiTooltip delayDuration={300}>
+        <TooltipTrigger asChild>
+          <button type="button" className="inline-flex text-foreground-muted hover:text-foreground-secondary" aria-label={`${label}说明`}>
+            <HelpCircle className="size-3 cursor-help" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent
+          side="bottom"
+          sideOffset={6}
+          hideArrow
+          style={{ textWrap: 'wrap' }}
+          className="max-w-[260px] whitespace-normal border border-border bg-card p-3 text-left text-xs leading-5 text-foreground shadow-md"
+        >
+          {help}
+        </TooltipContent>
+      </UiTooltip>
+    </span>
+  );
+}
+
+function SummaryCard({ label, help, value, detail, tone }: { label: string; help?: string; value: string; detail: React.ReactNode; tone: string }) {
   return (
     <div className="rounded-md border border-border bg-card px-3 py-2.5">
-      <div className="text-[11px] text-foreground-muted">{label}</div>
+      <div className="text-[11px] text-foreground-muted">{help ? <MetricHelpLabel label={label} help={help} /> : label}</div>
       <div className="mt-1 truncate text-lg font-semibold tabular-nums" style={{ color: tone }}>{value}</div>
       <div className="mt-1 truncate text-[11px] text-foreground-muted">{detail}</div>
     </div>
@@ -781,10 +807,10 @@ function MetricSelector({ value, onChange, copy }: { value: MetricKey; onChange:
   );
 }
 
-function CompactMetric({ label, value }: { label: string; value: string }) {
+function CompactMetric({ label, help, value }: { label: string; help?: string; value: string }) {
   return (
     <div className='min-w-0 rounded-sm border border-border bg-background px-2 py-1.5'>
-      <div className='truncate text-[10px] leading-none text-foreground-muted'>{label}</div>
+      <div className='truncate text-[10px] leading-none text-foreground-muted'>{help ? <MetricHelpLabel label={label} help={help} /> : label}</div>
       <div className='mt-1 truncate text-xs font-semibold tabular-nums text-foreground'>{value}</div>
     </div>
   );
@@ -815,7 +841,7 @@ function TraceMetricTooltip({ active, payload, label, metric, copy, locale }: {
       </div>
       {item.query && <div className="mt-2 line-clamp-2 text-foreground-secondary">{item.query}</div>}
       <div className="mt-3 grid gap-1.5">
-        <MetricTooltipRow color="var(--success)" label={copy.accuracy} value={formatMetric(item.answerScore, 'accuracy', locale)} />
+        <MetricTooltipRow color="var(--success)" label={copy.traceTaskCompletion} value={formatMetric(item.taskCompletionScore, 'taskCompletion', locale)} />
         <MetricTooltipRow color="var(--warning)" label={copy.tokens} value={formatMetric(item.tokens, 'tokens', locale)} />
         <MetricTooltipRow color="#0ea5e9" label={copy.latency} value={formatMetric(item.latencySec, 'latency', locale)} />
         <MetricTooltipRow color="#14b8a6" label={copy.cost} value={formatMetric(item.cost, 'cost', locale)} />

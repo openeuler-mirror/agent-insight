@@ -1,5 +1,6 @@
 import { db } from '@/lib/storage/prisma';
 import { recomputeExecutionSkills } from '@/lib/storage/data-service';
+import type { LangfuseTraceNode } from '@/lib/ingest/otel/adapters/langfuse-trace';
 import {
     TRACE_BUNDLE_FORMAT,
     TRACE_BUNDLE_VERSION,
@@ -80,7 +81,19 @@ function portableExecution(record: any): PortableTraceExecution {
     };
 }
 
-function portableSession(session: any, taskId: string | null): PortableTraceSession | null {
+function parseLangfuseTraceNodes(value: unknown): LangfuseTraceNode[] {
+    let parsed = value;
+    if (typeof value === 'string' && value) {
+        try { parsed = JSON.parse(value); } catch { return []; }
+    }
+    return Array.isArray(parsed) ? parsed as LangfuseTraceNode[] : [];
+}
+
+function portableSession(
+    session: any,
+    taskId: string | null,
+    subagentSessionBySpanId: Map<string, string>,
+): PortableTraceSession | null {
     if (!session || !taskId) return null;
     let interactions: unknown[] = [];
     if (Array.isArray(session.interactions)) interactions = session.interactions;
@@ -90,6 +103,10 @@ function portableSession(session: any, taskId: string | null): PortableTraceSess
             if (Array.isArray(parsed)) interactions = parsed;
         } catch {}
     }
+    const langfuseTraceNodes = parseLangfuseTraceNodes(session.langfuseTraceNodes).map((node) => {
+        const subagentSessionId = node.subagentSessionId || subagentSessionBySpanId.get(node.spanId);
+        return subagentSessionId ? { ...node, subagentSessionId } : node;
+    });
     return {
         taskId,
         label: session.label ?? null,
@@ -97,6 +114,7 @@ function portableSession(session: any, taskId: string | null): PortableTraceSess
         startTime: iso(session.startTime, new Date()),
         endTime: session.endTime ? iso(session.endTime) : null,
         interactions,
+        ...(langfuseTraceNodes.length ? { langfuseTraceNodes } : {}),
         model: session.model ?? null,
     };
 }
@@ -121,12 +139,20 @@ export async function exportTraceBundle(executionId: string, user: string): Prom
         .filter((record: any) => record.id !== root.id && record.rootExecutionId === root.id && record.isSubagent === true && ownsTrace(record, user))
         .sort((a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
     const records = [root, ...children];
+    const subagentSessionBySpanId = new Map<string, string>();
+    for (const child of children) {
+        const childTaskId = String(child.agentSessionId || child.taskId || '');
+        const markerIndex = childTaskId.lastIndexOf(':subagent:');
+        if (markerIndex >= 0) {
+            subagentSessionBySpanId.set(childTaskId.slice(markerIndex + ':subagent:'.length), childTaskId);
+        }
+    }
     const executions: TraceBundleNodeV1[] = await Promise.all(records.map(async (record: any) => {
         const storedSession = record.taskId ? await db.findSessionByTaskId(record.taskId) : null;
         const session = storedSession && ownsTrace(storedSession, user) ? storedSession : null;
         return {
             execution: portableExecution(record),
-            session: portableSession(session, record.taskId ?? null),
+            session: portableSession(session, record.taskId ?? null, subagentSessionBySpanId),
         };
     }));
 
@@ -195,6 +221,9 @@ function sessionCreateData(session: PortableTraceSession, user: string): Record<
         startTime: new Date(session.startTime),
         endTime: session.endTime ? new Date(session.endTime) : null,
         interactions: JSON.stringify(session.interactions),
+        ...(session.langfuseTraceNodes ? {
+            langfuseTraceNodes: JSON.stringify(session.langfuseTraceNodes),
+        } : {}),
         user,
         model: session.model,
     };

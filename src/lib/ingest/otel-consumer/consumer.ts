@@ -10,12 +10,10 @@ import {
 } from './checkpoint';
 import { compactProcessedSpoolFiles } from './retention';
 import { listSources, type SpoolAggregationResult, type SpoolSource } from './sources';
-import { scheduleResultEvaluation as scheduleQualityResultEvaluation } from '@/lib/engine/evaluation/result-quality-evaluator';
 
 type TimerHandle = ReturnType<typeof setTimeout>;
 type IntervalHandle = ReturnType<typeof setInterval>;
 type SaveExecution = (data: ExecutionRecord) => Promise<{ success: boolean; record: ExecutionRecord }>;
-type ScheduleResultEvaluation = (executionId: string, user?: string | null) => Promise<unknown>;
 
 type PendingFile = {
   source: SpoolSource;
@@ -65,7 +63,6 @@ export type OtelSpoolConsumerState = {
   sessions: Map<string, SessionState>;
   fileLists: Map<string, FileListCache>;
   saveExecution: SaveExecution;
-  scheduleResultEvaluation: ScheduleResultEvaluation;
   shortMs: number;
   longMs: number;
   maxWaitMs: number;
@@ -103,7 +100,6 @@ export type OtelSpoolConsumerState = {
 export type OtelSpoolConsumerOptions = {
   sources?: SpoolSource[];
   saveExecution?: SaveExecution;
-  scheduleResultEvaluation?: ScheduleResultEvaluation;
   shortMs?: number;
   longMs?: number;
   maxWaitMs?: number;
@@ -147,7 +143,6 @@ function createState(options: OtelSpoolConsumerOptions = {}): OtelSpoolConsumerS
     sessions: new Map(),
     fileLists: new Map(),
     saveExecution: wrapSaveExecutionWithAttributionGuard(options.saveExecution || saveExecutionRecord, options.log || console.log),
-    scheduleResultEvaluation: options.scheduleResultEvaluation || scheduleQualityResultEvaluation,
     shortMs: options.shortMs ?? envNumber('AGENT_INSIGHT_OTEL_CONSUMER_SHORT_MS', 3000),
     longMs: options.longMs ?? envNumber('AGENT_INSIGHT_OTEL_CONSUMER_LONG_MS', 30000),
     maxWaitMs: options.maxWaitMs ?? envNumber('AGENT_INSIGHT_OTEL_CONSUMER_MAX_WAIT_MS', 120000),
@@ -523,10 +518,6 @@ async function runJob(state: OtelSpoolConsumerState, session: SessionState, mode
         markSourceDone(state, session.sessionId, sourceId);
         session.lastAggregate = undefined;
 
-        const executionId = saved.record.upload_id || saved.record.task_id;
-        if (executionId && result.record.trace_completed_at && result.record.final_result) {
-          await state.scheduleResultEvaluation(executionId, result.record.user);
-        }
       }
     } catch (err) {
       handleSessionFailure(state, session.sessionId, err);

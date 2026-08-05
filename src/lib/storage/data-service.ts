@@ -46,6 +46,9 @@ import {
     type TraceTagDto,
 } from '@/lib/trace-tags';
 
+/** 允许派生子 Agent 树的框架集合。先落地者集合化，后落地者仅加值。 */
+const SUBAGENT_TREE_FRAMEWORKS = new Set(['opencode', 'openclaw', 'hermes', 'langfuse-langgraph', 'codeagent', 'claudecode']);
+
 export interface InvokedSkill {
     name: string;
     version: number | null;
@@ -79,6 +82,9 @@ export function shouldRefreshStoredQueryFromInteractions(
     if (!current) return true;
     const fw = typeof framework === 'string' ? framework.trim().toLowerCase() : '';
     if (!fw) return false;
+    if (fw === 'claudecode') {
+        return /^Claude Code Session [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(current);
+    }
     return current.toLowerCase() === `${fw} session`;
 }
 
@@ -279,6 +285,7 @@ export interface ExecutionRecord {
     cost?: number;
     latency?: number;
     timestamp?: string | Date;
+    trace_started_at?: string | Date | null;
     trace_completed_at?: string | Date | null;
     final_result?: string;
     skill?: string;
@@ -1213,6 +1220,24 @@ interface ReadRecordsOptions {
     databasePagination?: boolean;
 }
 
+export function resolveExecutionSubagentFilter(filters?: {
+    includeSubagents?: boolean;
+    onlySubagents?: boolean;
+    parentExecutionId?: string | null;
+    taskId?: string;
+    taskIds?: string[];
+    skill?: string;
+}): boolean | undefined {
+    if (filters?.onlySubagents === true) return true;
+    if (
+        filters?.includeSubagents === true
+        || filters?.parentExecutionId !== undefined
+        || filters?.taskId
+        || filters?.taskIds?.length
+    ) return undefined;
+    return false;
+}
+
 export interface ReadRecordPageStats {
     total: number;
     failedCount: number;
@@ -1811,14 +1836,8 @@ async function readRecordsInternal(
         where.user = user;
     }
 
-    // 默认列表只显示 root execution；sub-agent 行通过 trace 视图下钻进入。
-    // 显式按 taskId / taskIds / parentExecutionId 查询时跳过该过滤，
-    // 让"按 sub-agent sessionID 直查"和"列出某 root 的所有子 agent"都能工作。
-    const hasExplicitTaskIdFilter = !!(filters?.taskIds?.length || filters?.taskId);
-    // 按 skill 筛选时走 ExecutionSkill(agent 作用域):结果应精确命中真正用到该 skill 的那一层,
-    // 可能是 sub-agent 行,因此放开默认的 isSubagent=false 排除。
-    // skill 既可来自单值 filters.skill(旧路径 / ?skill= 深链),也可来自结构化过滤的
-    // `skill any of [...]` clause(左侧栏 facet 多选)。合并成一组 skillName 一次反查。
+    // 默认列表严格只显示 root execution；显式选择 sub-agent / 全部层级，或按 taskId
+    // 下钻时才放开。Skill 是内容过滤条件，不能覆盖用户选择的 Agent 层级。
     const skillNamesFromClauses = (filters?.clauses ?? [])
         .filter((c) => c.column === 'skill' && (c.operator === 'any of' || c.operator === '='))
         .flatMap((c) => (Array.isArray(c.value) ? c.value : c.value != null ? [c.value] : []))
@@ -1828,16 +1847,8 @@ async function readRecordsInternal(
         ...skillNamesFromClauses,
     ]));
     const skillFilterActive = EXECUTION_SKILL_ENABLED && skillNames.length > 0;
-    if (filters?.onlySubagents === true) {
-        where.isSubagent = true;
-    } else if (
-        filters?.includeSubagents !== true &&
-        filters?.parentExecutionId === undefined &&
-        !hasExplicitTaskIdFilter &&
-        !skillFilterActive
-    ) {
-        where.isSubagent = false;
-    }
+    const subagentFilter = resolveExecutionSubagentFilter(filters);
+    if (subagentFilter !== undefined) where.isSubagent = subagentFilter;
 
     if (filters?.parentExecutionId !== undefined) {
         where.parentExecutionId = filters.parentExecutionId;
@@ -2855,6 +2866,11 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
         }
     }
 
+    const explicitTraceStartedAt = targetRecord.trace_started_at
+        ? new Date(targetRecord.trace_started_at)
+        : null;
+    const hasExplicitTraceStart = explicitTraceStartedAt != null
+        && Number.isFinite(explicitTraceStartedAt.getTime());
     const explicitTraceCompletedAt = targetRecord.trace_completed_at
         ? new Date(targetRecord.trace_completed_at)
         : null;
@@ -2873,7 +2889,8 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
         targetRecord.trace_completed_at = inferredHermesTraceCompletedAt;
     }
     const hasTraceCompletion = traceCompletedAtForSession != null
-        && Number.isFinite(traceCompletedAtForSession.getTime());
+        && Number.isFinite(traceCompletedAtForSession.getTime())
+        && (!hasExplicitTraceStart || traceCompletedAtForSession.getTime() >= explicitTraceStartedAt.getTime());
 
     if (targetRecord.task_id && mergedInteractionsForSession) {
         const isLangfuseTrace = targetRecord.framework === 'langfuse' || targetRecord.framework === 'langfuse-langgraph';
@@ -2900,6 +2917,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
                 model: targetRecord.model,
                 interactions: JSON.stringify(mergedInteractionsForSession),
                 ...(langfuseTraceNodesJson !== undefined ? { langfuseTraceNodes: langfuseTraceNodesJson } : {}),
+                ...(hasExplicitTraceStart ? { startTime: explicitTraceStartedAt } : {}),
                 ...(hasTraceCompletion ? { endTime: traceCompletedAtForSession } : {}),
             },
             {
@@ -2909,6 +2927,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
                 model: targetRecord.model,
                 interactions: JSON.stringify(mergedInteractionsForSession),
                 ...(langfuseTraceNodesJson !== undefined ? { langfuseTraceNodes: langfuseTraceNodesJson } : {}),
+                ...(hasExplicitTraceStart ? { startTime: explicitTraceStartedAt } : {}),
             }
         );
         if (hasTraceCompletion) {

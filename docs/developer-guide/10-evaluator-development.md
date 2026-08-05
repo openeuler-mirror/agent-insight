@@ -27,7 +27,7 @@
 
 > 这张表只列到「族」级别；具体有哪些预置卡以 `preset-evaluators.ts` 为准，别在文档里再抄一份 id 清单——抄了必然过期。
 
-> **canonical 提醒**：`result-*` 系列的实现体在 `engine/evaluation/result-quality-evaluator.ts`，**「可靠性与性能」页与质量监控管线共用同一份**。改它的口径 = 两个产品面同时变，必须同步升 `RESULT_METRIC_VERSIONS`（见 §6.5）。
+> **canonical 提醒**：`result-*` 系列的公共分发与模型传输在 `engine/evaluation/result-metric-evaluator.ts`，只服务评测中心的主动实验。质量监控与 trace 上传不调用这套能力。
 
 ---
 
@@ -297,7 +297,7 @@ async function runYourEvaluator(user: string, ctx: FaithfulPresetContext): Promi
 | 组 | 表面上共用一个文件 | 实际共享了什么 |
 |---|---|---|
 | `faithful-preset-evaluators.ts` | 2 个评估器 | 几乎没有。`runFaithfulPreset` 只是 `if/else` 转发到两个**完全独立**的实现，各自跑各自的 opencode agent；只共用 `coverageToStatus` / `stepsToAnchors` 两个 20 行小工具。它们在一起的真正原因是「都是遗留 opencode 评估器的适配层」——实现历史，不是逻辑复用 |
-| `result-preset-evaluators.ts` | 4 个评估器 | 真共享，但那是 canonical 层的事：这 4 个本来就是**同一个** `result-quality-evaluator` 的 4 个 metric，且要与「可靠性与性能」页、质量监控管线共用同一份口径（见 §1 canonical 提醒）。这个文件本身只是 ID→metric 映射 + 薄适配 |
+| `result-preset-evaluators.ts` | 4 个评估器 | 共享 `result-metric-evaluator.ts` 的指标分发与结构化模型传输；这个文件本身只负责 ID→metric 映射、实验输入适配和统一输出映射 |
 
 #### 唯一硬约束：接分发时「一批只加一行」
 
@@ -363,11 +363,11 @@ test/<族>-preset-evaluators.test.ts                      ← 测试（必建）
 | 目录 | 放什么 | 判据 |
 |---|---|---|
 | `engine/experiment/` | **实验域的薄适配层**：组提示词、解析 judge 输出、按固定公式汇总成 `EvaluatorOutput` | 只有实验/评测中心用 |
-| `engine/evaluation/` | **canonical 打分能力**：被多个产品面共用的实现体 | 「可靠性与性能」页、质量监控管线等也要用同一份口径 |
+| `engine/evaluation/` | **canonical 打分能力**：叶子评估算法或同一产品面内多个评估器共用的实现体 | 需要稳定的公共输入/输出与模型传输 |
 
 大多数新评估器属于第一类，**直接写在 `engine/experiment/` 就行**，不需要碰 `engine/evaluation/`。
 
-只有当这个口径要被实验以外的产品面复用时，才把实现体放 `engine/evaluation/`、在 `engine/experiment/` 留一层适配（`result-preset-evaluators.ts` 就是范例）。这么做的代价是改口径要同步升 `RESULT_METRIC_VERSIONS`、两个产品面一起回归（§6.5），别无谓地给自己揽这个包袱。
+只有当多个评估器确实共享叶子算法或传输时，才把实现体放 `engine/evaluation/`、在 `engine/experiment/` 留一层适配（`result-preset-evaluators.ts` 就是范例）。质量监控不属于该复用边界。
 
 > **`engine/experiment/` 的文件顶层只许 import 轻量模块**（`eval-output` 及类型）。`engine/evaluation/` 下的重能力一律用函数内 `await import()` 惰性加载——既有两族都这么写，是为了单测能 `node --test` 直接 import 而不拉起 server-only 依赖。
 
@@ -462,17 +462,9 @@ score -= SEVERITY_WEIGHT[f.severity] ?? 0.1;
 
 准确性与忠实度都需要「从实际输出抽主张」。抽取只依赖 `(query, finalResult)`，因此统一走 `faithfulness-evaluator.ts` 的 `extractOutputClaims()`——它按二者哈希缓存，同一 case 内谁先跑谁抽，另一个直接命中。新增评估器如果也要主张列表，复用它，别再写一份。
 
-### 6.5 改 canonical 口径要升版本号
+### 6.5 改 canonical 口径要同步回归四个预置评估器
 
-`result-*` 系列共用 `RESULT_METRIC_VERSIONS`（`result-quality-evaluator.ts`）。**口径变了就升主版本**，否则历史缓存会被当成"可复用"直接返回旧分：
-
-```ts
-// 3.0.0：口径由「参考关键观点被覆盖了多少」改为「实际输出的主张对不对」(精确率)，
-// 与旧分不可比，升主版本让历史缓存失效重算。
-accuracy: '3.0.0',
-```
-
-并且要意识到：**旧数据不会自动重算**。页面上没重评过的 case 仍是旧口径结果，排查问题时先确认这条 case 是什么时候评的。
+`result-*` 系列共用 `result-metric-evaluator.ts` 及其叶子评估器。改公共输入、结构化传输或叶子 evidence 形状时，必须同时回归准确性、答案质量、忠实度和指令遵循的实验输出映射。历史 `ExperimentEvalResult` 不会自动重算；需要新口径结果时应主动重跑实验。
 
 ### 6.6 前端呈现约定
 
@@ -533,6 +525,10 @@ Trace 评测详情（`app/(main)/experiments/[id]/cases/[caseId]/page.tsx`）的
 | 答案质量 `preset-result-answer` | 最终答案 | 相关性 · 完整性 · 连贯性 |
 | 忠实度 `preset-result-faithfulness` | 实际输出主张 | 对 trace 证据判有据（防脑补） |
 | 指令遵循 `preset-result-instruction` | 输出约束 | 约束达成比例（无约束时不计分） |
+| 不敏感性 `preset-content-insensitivity` | Agent 输出 | 人群身份 · 地域 · 职业阶层 · 年龄外貌 · 文化宗教（5 维扣分制，性别交性别歧视评估器） |
+| 争议性 `preset-content-controversy` | Agent 输出 | 绝对化判断 · 争议比较 · 未经限定概括（3 维扣分制，聚焦语言学形式，内容主题交安全审核评估器） |
+| 性别歧视 `preset-content-gender-discrimination` | Agent 输出 | 显性贬低 · 能力否定 · 刻板印象 · 排斥语言 · 物化 · 双重标准 · 角色固着（7 维扣分制） |
+| 创造性 `preset-creativity-expression` | Agent 输出 | 新颖性 · 视角独特性 · 非模板化 · 构思差异度 · 文采与修辞（5 维 1-3 档锚定，独立成族） |
 
 **已知的高风险重叠区**——往这些方向新增前务必先讨论：
 

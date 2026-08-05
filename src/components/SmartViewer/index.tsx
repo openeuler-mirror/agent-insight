@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { createContext, ReactNode, useContext, useMemo, useState } from 'react';
 import { copyText } from '@/lib/copy-text';
 import { detect } from './detector';
 import { unescapeText } from './unescape';
@@ -19,6 +19,25 @@ export interface SmartViewerProps {
     toolbar?: boolean;
     maxHeight?: number | string;
     className?: string;
+    jsonCollapsed?: boolean | number;
+}
+
+interface SmartViewerConfig {
+    jsonCollapsed: boolean | number;
+}
+
+const SmartViewerConfigContext = createContext<SmartViewerConfig>({ jsonCollapsed: 2 });
+
+export function SmartViewerConfigProvider({
+    jsonCollapsed,
+    children,
+}: SmartViewerConfig & { children: ReactNode }) {
+    const value = useMemo(() => ({ jsonCollapsed }), [jsonCollapsed]);
+    return (
+        <SmartViewerConfigContext.Provider value={value}>
+            {children}
+        </SmartViewerConfigContext.Provider>
+    );
 }
 
 export function SmartViewer({
@@ -30,8 +49,10 @@ export function SmartViewer({
     toolbar = true,
     maxHeight = 500,
     className,
+    jsonCollapsed,
 }: SmartViewerProps) {
     const [copied, setCopied] = useState(false);
+    const config = useContext(SmartViewerConfigContext);
 
     const processed = useMemo(
         () => (unescape ? unescapeText(text) : text),
@@ -69,7 +90,11 @@ export function SmartViewer({
             )}
             <div className="sv-body">
                 {detected.kind === 'json' && (
-                    <JsonRenderer data={detected.data} theme={theme} />
+                    <JsonRenderer
+                        data={detected.data}
+                        theme={theme}
+                        collapsed={jsonCollapsed ?? config.jsonCollapsed}
+                    />
                 )}
                 {detected.kind === 'markdown' && (
                     <MarkdownRenderer text={processed} theme={theme} />

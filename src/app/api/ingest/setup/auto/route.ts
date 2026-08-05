@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server';
-import { configuredQoderJetBrainsPackageUrl } from '@/lib/ingest/qoder-plugin-release';
 
+import { configuredQoderJetBrainsPackageUrl } from '@/lib/ingest/qoder-plugin-release';
+import {
+  CODEAGENT_UNIX_SETUP_BLOCK,
+  CODEAGENT_WINDOWS_SETUP_BLOCK,
+} from '../codeagent-setup';
 function bashDoubleQuoted(value: string): string {
     return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$').replace(/`/g, '\\`');
 }
@@ -537,51 +541,25 @@ CLAUDE_OTEL_EOF
     fi
     echo "✅ Claude Code OTel env installed at $HOME/.agent-insight/claude_otel_env.sh"
     echo "   Restart your terminal or run: source $HOME/.agent-insight/claude_otel_env.sh"
+    # 上下文补传器:system prompt 与 hook additionalContext 只在客户端本机磁盘上,
+    # OTel 事件里没有(详见脚本头部注释),靠 Stop 等 hook 每轮异步补发,SessionEnd 最终兜底。
+    echo "⏬ Downloading Claude Code context uploader..."
+    if curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/claude-context-uploader" -o "$HOME/.agent-insight/claude_context_uploader.cjs"; then
+        if command -v node &> /dev/null; then
+            node "$HOME/.agent-insight/claude_context_uploader.cjs" --install-hook || \
+                echo "⚠️  注册 Claude 上下文补传 hook 失败,可稍后手动执行:node $HOME/.agent-insight/claude_context_uploader.cjs --install-hook"
+        else
+            echo "⚠️  未找到 node,跳过 Claude 上下文补传 hook 注册(装好 node 后执行:node $HOME/.agent-insight/claude_context_uploader.cjs --install-hook)"
+        fi
+    else
+        echo "⚠️  下载上下文补传器失败,system prompt / hook 上下文将无法跨机上报"
+    fi
     pkill -f "claude_watcher_client.ts" 2>/dev/null || true
     rm -f "$HOME/.agent-insight/claude_watcher_client.ts" "$HOME/.agent-insight/start_claude_watcher.sh" "$HOME/.agent-insight/stop_claude_watcher.sh" "$HOME/.agent-insight/claude_watcher.pid"
     echo "🧹 Removed legacy Claude session-file watcher if it was installed."
 fi
 
-# 6.6 Configure CodeAgent OpenTelemetry wrapper
-if [ "$INSTALL_CODEAGENT" = "true" ]; then
-    cat > "$HOME/.agent-insight/codeagent_otel_env.sh" << 'CODEAGENT_OTEL_EOF'
-# Agent-Insight CodeAgent OpenTelemetry integration
-unalias codeagent 2>/dev/null || true
-
-_skill_insight_codeagent_load_env() {
-  if [ -f "$HOME/.agent-insight/.env" ]; then
-    set -a
-    . "$HOME/.agent-insight/.env"
-    set +a
-  fi
-}
-
-codeagent() {
-  _skill_insight_codeagent_load_env
-  local _si_host="\${AGENT_INSIGHT_HOST:-127.0.0.1:3000}"
-  case "$_si_host" in http://*|https://*) ;; *) _si_host="http://$_si_host" ;; esac
-  _si_host="\${_si_host%/}"
-  env \
-    CODEAGENT3_ENABLE_TELEMETRY=1 \
-    OTEL_EXPORTER_OTLP_ENDPOINT="$_si_host/api/ingest/otel" \
-    OTEL_EXPORTER_OTLP_PROTOCOL=http/json \
-    OTEL_EXPORTER_OTLP_LOGS_PROTOCOL=http/json \
-    OTEL_EXPORTER_OTLP_HEADERS="x-witty-api-key=\${AGENT_INSIGHT_API_KEY:-}" \
-    codeagent "$@"
-}
-
-CODEAGENT_OTEL_EOF
-    SHELL_RC="$HOME/.zshrc"
-    [ -f "$HOME/.bashrc" ] && SHELL_RC="$HOME/.bashrc"
-    if [ -f "$SHELL_RC" ] && ! grep -q "\.agent-insight/codeagent_otel_env\.sh" "$SHELL_RC"; then
-        echo "" >> "$SHELL_RC"
-        echo "# Agent-Insight CodeAgent OTel" >> "$SHELL_RC"
-        echo "source \"$HOME/.agent-insight/codeagent_otel_env.sh\"" >> "$SHELL_RC"
-    fi
-    echo "✅ CodeAgent OTel env installed at $HOME/.agent-insight/codeagent_otel_env.sh"
-    echo "   Restart your terminal, then run: codeagent"
-    echo "   CodeAgent may still send traces/metrics; Agent Insight accepts and discards those signals."
-fi
+${CODEAGENT_UNIX_SETUP_BLOCK}
 
 # 7. Create Watcher Startup/Stop Scripts
 NEEDS_WATCHER_SCRIPTS=false
@@ -1173,48 +1151,24 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    }',
         '    Write-Host "✅ Claude Code OTel env installed at $claudeOtelPath"',
         '    Write-Host "   Restart PowerShell or run: . `"$claudeOtelPath`""',
+        '    # 上下文补传器:system prompt 与 hook additionalContext 只在客户端本机磁盘上,OTel 事件里没有。',
+        '    $claudeContextUploader = Join-Path $skillInsightDir "claude_context_uploader.cjs"',
+        '    try {',
+        '        Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/setup/claude-context-uploader" -OutFile $claudeContextUploader',
+        '        if (Get-Command node -ErrorAction SilentlyContinue) {',
+        '            & node $claudeContextUploader --install-hook',
+        '        } else {',
+        '            Write-Host "⚠️  未找到 node,跳过 Claude 上下文补传 hook 注册(装好 node 后执行:node `"$claudeContextUploader`" --install-hook)"',
+        '        }',
+        '    } catch {',
+        '        Write-Host "⚠️  下载上下文补传器失败,system prompt / hook 上下文将无法跨机上报"',
+        '    }',
         '    Get-Process | Where-Object { $_.CommandLine -like "*claude_watcher_client.ts*" } | Stop-Process -Force -ErrorAction SilentlyContinue',
         '    Remove-Item (Join-Path $skillInsightDir "claude_watcher_client.ts"), (Join-Path $skillInsightDir "start_claude_watcher.ps1"), (Join-Path $skillInsightDir "stop_claude_watcher.ps1"), (Join-Path $skillInsightDir "claude_watcher.pid") -Force -ErrorAction SilentlyContinue',
         '    Write-Host "🧹 Removed legacy Claude session-file watcher if it was installed."',
         '}',
         '',
-        '# 6.6a Configure CodeAgent OpenTelemetry wrapper',
-        'if ($INSTALL_CODEAGENT) {',
-        '    $codeAgentOtelScript = @\'',
-        'function Invoke-AgentInsightCodeAgent {',
-        '  $envFile = Join-Path (Join-Path $env:USERPROFILE ".agent-insight") ".env"',
-        '  if (Test-Path $envFile) {',
-        '    Get-Content $envFile | ForEach-Object {',
-        '      if ($_ -match "^([^#=]+)=(.*)$") { [Environment]::SetEnvironmentVariable($matches[1], $matches[2], "Process") }',
-        '    }',
-        '  }',
-        '  $siHost = if ($env:AGENT_INSIGHT_HOST) { $env:AGENT_INSIGHT_HOST } else { "127.0.0.1:3000" }',
-        '  if ($siHost -notmatch "^https?://") { $siHost = "http://$siHost" }',
-        '  $siHost = $siHost.TrimEnd("/")',
-        '  $env:CODEAGENT3_ENABLE_TELEMETRY = "1"',
-        '  $env:OTEL_EXPORTER_OTLP_ENDPOINT = "$siHost/api/ingest/otel"',
-        '  $env:OTEL_EXPORTER_OTLP_PROTOCOL = "http/json"',
-        '  $env:OTEL_EXPORTER_OTLP_LOGS_PROTOCOL = "http/json"',
-        '  $env:OTEL_EXPORTER_OTLP_HEADERS = "x-witty-api-key=$($env:AGENT_INSIGHT_API_KEY)"',
-        '  $command = Get-Command codeagent -CommandType Application, ExternalScript -ErrorAction SilentlyContinue | Select-Object -First 1',
-        '  if (-not $command) { throw "CodeAgent executable not found in PATH." }',
-        '  & $command.Source @args',
-        '}',
-        'Set-Alias codeagent Invoke-AgentInsightCodeAgent',
-        '\'@',
-        '    $codeAgentOtelPath = Join-Path $skillInsightDir "codeagent_otel_env.ps1"',
-        '    Set-Content -Path $codeAgentOtelPath -Value $codeAgentOtelScript -Encoding UTF8',
-        '    $profileDir = Split-Path $PROFILE -Parent',
-        '    if ($profileDir) { New-Item -ItemType Directory -Path $profileDir -Force | Out-Null }',
-        '    if (-not (Test-Path $PROFILE) -or -not ((Get-Content $PROFILE -Raw) -match "codeagent_otel_env.ps1")) {',
-        '        Add-Content -Path $PROFILE -Value ""',
-        '        Add-Content -Path $PROFILE -Value "# Agent-Insight CodeAgent OTel"',
-        '        Add-Content -Path $PROFILE -Value ". `"$codeAgentOtelPath`""',
-        '    }',
-        '    Write-Host "✅ CodeAgent OTel env installed at $codeAgentOtelPath"',
-        '    Write-Host "   Restart PowerShell, then run: codeagent"',
-        '    Write-Host "   CodeAgent may still send traces/metrics; Agent Insight accepts and discards those signals."',
-        '}',
+        ...CODEAGENT_WINDOWS_SETUP_BLOCK.split('\n'),
         '',
         '# 7. Create Watcher Startup/Stop Scripts',
         '$NEEDS_WATCHER_SCRIPTS = $INSTALL_OPENCLAW',
@@ -1328,7 +1282,7 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    Write-Host "  2. Restart PowerShell, then run: claude"',
         '}',
         'if ($INSTALL_CODEAGENT) {',
-        '    Write-Host "  3. Restart PowerShell, then run: codeagent"',
+        '    Write-Host "  3. Start a new terminal, then run: codeagent"',
         '}',
         'if ($INSTALL_HERMES) {',
         '    Write-Host "  3. Restart Hermes or start a new Hermes conversation"',

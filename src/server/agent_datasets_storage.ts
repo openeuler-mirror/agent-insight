@@ -192,15 +192,19 @@ export function duplicateDatasetFieldName(fields: DatasetField[]): string | null
 export function normalizeCase(item: unknown): DatasetCase {
   const obj = (item || {}) as Partial<DatasetCase>;
   const values = normalizeValues((obj as { values?: unknown }).values);
+  const source = normalizeCaseSource((obj as { source?: unknown }).source);
   const hasInput = Object.prototype.hasOwnProperty.call(obj, 'input');
   const hasInputValue = Object.prototype.hasOwnProperty.call(values, 'input');
   const hasExpectedOutput = Object.prototype.hasOwnProperty.call(obj, 'expectedOutput');
   const hasTrajectory = Object.prototype.hasOwnProperty.call(obj, 'trajectory');
   const input = String(hasInput ? obj.input ?? '' : values.input ?? '').trim();
+  const explicitExpectedOutput = String(hasExpectedOutput ? obj.expectedOutput ?? '' : '').trim();
   const expectedOutput = String(
-    hasExpectedOutput ? obj.expectedOutput ?? '' : values.reference_output ?? '',
+    explicitExpectedOutput
+      ? explicitExpectedOutput
+      : values.reference_output ?? (source === 'trace-backflow' ? values.output : '') ?? '',
   ).trim();
-  const traceValue = values.trace;
+  const traceValue = values.trajectory ?? values.trace;
   const trajectoryRaw = (obj as { trajectory?: unknown }).trajectory;
   const trajectory =
     hasTrajectory
@@ -225,7 +229,7 @@ export function normalizeCase(item: unknown): DatasetCase {
       ...(expectedOutput || Object.hasOwn(values, 'reference_output') ? { reference_output: expectedOutput } : {}),
       ...(trajectory && !Object.hasOwn(values, 'trace') ? { trajectory } : {}),
     },
-    source: normalizeCaseSource((obj as { source?: unknown }).source),
+    source,
     traceSource: (() => {
       const source = (obj as { traceSource?: unknown }).traceSource;
       if (!source || typeof source !== 'object' || Array.isArray(source)) return undefined;

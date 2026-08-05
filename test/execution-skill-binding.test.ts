@@ -8,6 +8,7 @@ import {
     extractExplicitSkillsFromNode,
     extractInvokedSkillsFromSessionInteractions,
     projectAgentNodeExecution,
+    resolveExecutionSubagentFilter,
 } from '@/lib/storage/data-service';
 
 // 看护 ExecutionSkill 的 agent 作用域绑定口径(需求 1/2 的核心):
@@ -60,6 +61,15 @@ function subagentNode(tree: AgentNode, sessionId: string): AgentNode | null {
     walkTree(tree, n => { if (n.depth > 0 && n.sessionId === sessionId) found = n; });
     return found;
 }
+
+test('trace scope: root-only remains strict when combined with a skill filter', () => {
+    assert.equal(resolveExecutionSubagentFilter({ skill: 'child-skill' }), false);
+    assert.equal(resolveExecutionSubagentFilter({ includeSubagents: false }), false);
+    assert.equal(resolveExecutionSubagentFilter({ onlySubagents: true }), true);
+    assert.equal(resolveExecutionSubagentFilter({ includeSubagents: true }), undefined);
+    assert.equal(resolveExecutionSubagentFilter({ taskId: 'subagent-session' }), undefined);
+    assert.equal(resolveExecutionSubagentFilter({ parentExecutionId: 'root-id' }), undefined);
+});
 
 test('binding: root 只绑自己显式调用的 skill,不含子 agent 的 skill', () => {
     const own = computeOwnSkills('opencode', nestedFixture());

@@ -261,6 +261,40 @@ test("一个文件里的几百个会话，文件处理完后必须整批回收�
   }
 })
 
+test("终态 trace 只入库，不调度结果质量评估", async () => {
+  const sessions = Array.from({ length: 6 }, (_, i) => `eval-block-${i}`)
+  const { dir, files } = makeSpool("otel-eval-block-", sessions)
+  stopOtelSpoolConsumer()
+  try {
+    const saved: string[] = []
+    startOtelSpoolConsumer({
+      sources: [makeSource(dir, files)],
+      saveExecution: async (data) => {
+        saved.push(String(data.task_id))
+        return { success: true, record: data }
+      },
+      shortMs: 5,
+      longMs: 5,
+      maxWaitMs: 5,
+      tickMs: 5,
+      seedOnStart: false,
+      log: () => {},
+      warn: () => {},
+    })
+
+    await waitFor(() => new Set(saved).size >= sessions.length, 8000)
+    assert.equal(new Set(saved).size, sessions.length,
+      `所有 trace 都应只完成入库，实际 ${new Set(saved).size}/${sessions.length} 条`)
+
+    // 簿记也要照常推进，否则重启会重读、retention 归档不掉
+    await waitFor(() => (getOtelSpoolConsumerForTest()?.pendingFiles.size ?? 1) === 0, 3000)
+    assert.equal(getOtelSpoolConsumerForTest()?.pendingFiles.size, 0, "backlog 必须排空")
+  } finally {
+    stopOtelSpoolConsumer()
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test("有新数据时 evaluated 必须重新聚合，不能复用旧快照", async () => {
   const { dir, files } = makeSpool("otel-resnapshot-", ["session-y"])
   stopOtelSpoolConsumer()

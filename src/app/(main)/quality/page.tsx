@@ -12,7 +12,6 @@ import { QualityConfigBar, type ConfigState } from '@/components/quality/Quality
 import { QualityHero } from '@/components/quality/QualityHero';
 import { MethodologyCards } from '@/components/quality/MethodologyCards';
 import { ProcessPanel } from '@/components/quality/ProcessPanel';
-import { ResultPanel } from '@/components/quality/ResultPanel';
 import { QualityTrendChart } from '@/components/quality/QualityTrendChart';
 import { ProblemSummaryPanel } from '@/components/quality/ProblemSummaryPanel';
 import { ExecutionScoreTable } from '@/components/quality/ExecutionScoreTable';
@@ -36,9 +35,9 @@ function bucketRange(b: TrendBucket, g: TrendGranularity): { from: string; to: s
     return { from: start.toISOString(), to: end.toISOString(), label };
 }
 
-// 信息金字塔：Hero(结论+先修) → 四维卡 → 问题汇总 → 结果评测 → 趋势/过程/执行表默认折叠（证据层按需展开）。
-type SectionKey = 'trend' | 'process' | 'exec' | 'result';
-const ANCHOR_TO_SECTION: Record<string, SectionKey | undefined> = { result: 'result', cost: 'trend', process: 'process', exec: 'exec' };
+// 信息金字塔：Hero(结论+先修) → 三维卡 → 问题汇总 → 趋势/过程/执行表默认折叠（证据层按需展开）。
+type SectionKey = 'trend' | 'process' | 'exec';
+const ANCHOR_TO_SECTION: Record<string, SectionKey | undefined> = { cost: 'trend', process: 'process', exec: 'exec' };
 
 export default function QualityPage() {
     const { t } = useLocale();
@@ -47,11 +46,11 @@ export default function QualityPage() {
 
     const [agents, setAgents] = useState<QualityAgentInfo[]>([]);
     const [skills, setSkills] = useState<string[]>([]);
-    const [config, setConfig] = useState<ConfigState>({ agent: '', window: '1w', skill: 'all', status: 'all' });
+    const [config, setConfig] = useState<ConfigState>({ agent: '', window: '1w', skill: 'all' });
     const [report, setReport] = useState<QualityReport | null>(null);
     const [loading, setLoading] = useState(false);
     const [bucketSel, setBucketSel] = useState<{ from: string; to: string; label: string } | null>(null);
-    const [open, setOpen] = useState<Record<SectionKey, boolean>>({ result: true, trend: false, process: false, exec: false });
+    const [open, setOpen] = useState<Record<SectionKey, boolean>>({ trend: false, process: false, exec: false });
 
     // 加载 Agent 列表 + skill facet（按用户隔离：?user= 是身份口径，缺失会越权拿全量）
     useEffect(() => {
@@ -67,7 +66,7 @@ export default function QualityPage() {
             .catch(() => setAgents([]));
     }, [user]);
 
-    // 切 Agent/窗口/Skill → 全页重算（BR-002）。status 为行级三态，不触发重算。
+    // 切 Agent/窗口/Skill → 全页重算（BR-002）。
     const loadReport = useCallback((agent: string, window: WindowKind, skill: string) => {
         if (!agent || !user) { setReport(null); return; }
         setLoading(true);
@@ -112,7 +111,6 @@ export default function QualityPage() {
         { id: 'verdict', label: t('quality.nav.verdict') },
         { id: 'analysis', label: t('quality.nav.dims') },
         { id: 'problems', label: t('quality.nav.problems') },
-        { id: 'result', label: t('quality.nav.result') },
         { id: 'cost', label: t('quality.nav.trend') },
         { id: 'process', label: t('quality.nav.process') },
         { id: 'exec', label: t('quality.nav.exec') },
@@ -159,11 +157,10 @@ export default function QualityPage() {
                         <div style={{ opacity: loading ? 0.6 : 1, transition: 'opacity .15s' }}>
                             {/* ① 结论层：10 秒拿走 判断+瓶颈+行动 */}
                             <QualityHero report={report} onDrillTrace={onDrillTrace} onAnchor={onAnchor} />
-                            {/* ② 方向层：四维卡 */}
+                            {/* ② 方向层：过程 / 成本 / 错误三维卡 */}
                             <MethodologyCards report={report} onAnchor={onAnchor} />
                             {/* ③ 行动层：完整问题清单（核心差异点，默认展开） */}
                             <ProblemSummaryPanel report={report} onDrillTrace={onDrillTrace} />
-                            <ResultPanel report={report} />
                             {/* ④ 证据层：默认折叠，按需展开 */}
                             <QualityTrendChart
                                 report={report}
@@ -183,7 +180,6 @@ export default function QualityPage() {
                                 from={execRange.from}
                                 to={execRange.to}
                                 skill={config.skill}
-                                statusFilter={config.status}
                                 bucketLabel={bucketSel?.label ?? null}
                                 onClearBucket={() => setBucketSel(null)}
                                 onDrill={onDrillTrace}

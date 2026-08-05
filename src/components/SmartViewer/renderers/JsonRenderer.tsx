@@ -6,15 +6,16 @@ import 'react18-json-view/src/style.css';
 interface Props {
     data: unknown;
     theme?: 'light' | 'dark';
+    collapsed?: boolean | number;
 }
 
-export function JsonRenderer({ data, theme = 'light' }: Props) {
+export function JsonRenderer({ data, theme = 'light', collapsed = 2 }: Props) {
     const isDark = theme === 'dark';
     return (
         <div className="sv-json">
             <JsonView
                 src={data as object}
-                collapsed={2}
+                collapsed={collapsed}
                 theme={isDark ? 'vscode' : 'default'}
                 dark={isDark}
             />
