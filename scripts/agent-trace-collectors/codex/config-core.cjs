@@ -29,10 +29,20 @@ function commandQuotes(value) {
 
 function buildHookHandler(handlerPath, nodePath = process.execPath) {
   const command = `${commandQuotes(nodePath)} ${commandQuotes(handlerPath)}`;
+  const isWindows = process.platform === "win32";
+  // Windows：Codex 通过 MSYS/Git Bash 的 execvp() 执行 hook 命令，execvp()
+  // 无法直接执行 Windows PE 二进制（node.exe）→ ENOEXEC → hook exit 1。
+  // 用 cmd /c 包装让 cmd.exe 经 CreateProcess 原生执行（见
+  // gsd-build/get-shit-done PR #3768 的同类修复）。
+  // cmd /c 后整体再用引号包裹（`cmd /c ""node.exe" "handler.cjs""`），
+  // 与实测可执行的格式一致。
+  const windowsCommand = isWindows
+    ? `cmd /c "${command}"`
+    : command;
   return {
     type: "command",
     command,
-    commandWindows: command,
+    commandWindows: windowsCommand,
     timeout: 5,
     statusMessage: "Recording Agent Insight trace",
   };
@@ -137,7 +147,10 @@ function managedOtelBlock(options) {
     OTEL_BEGIN,
     "[otel]",
     'environment = "agent-insight"',
-    "log_user_prompt = false",
+    // 导出真实用户 prompt（任务内容）。Codex 在 log_user_prompt=false 时把
+    // OTel 与 hook 输入都脱敏成 "[REDACTED]"，任务内容无法展示（Bug 12）。
+    // trace 分析平台的核心价值是任务内容；与 Pi 等框架行为对齐。
+    "log_user_prompt = true",
     `exporter = { otlp-http = { endpoint = "${escapeTomlString(endpoint)}", protocol = "json", headers = { "x-agent-insight-relay" = "${escapeTomlString(options.installSecret)}" } } }`,
     OTEL_END,
   ].join("\n");

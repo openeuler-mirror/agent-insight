@@ -123,7 +123,7 @@ test("OTel managed block installs into an empty config and uninstalls cleanly", 
   assert.equal(installed.conflict, false)
   assert.match(installed.source, new RegExp(OTEL_BEGIN))
   assert.match(installed.source, /protocol = "json"/)
-  assert.match(installed.source, /log_user_prompt = false/)
+  assert.match(installed.source, /log_user_prompt = true/)
   assert.match(installed.source, /127\.0\.0\.1:43191\/v1\/logs/)
   const removed = uninstallOtelBlock(installed.source, installed.previousBlock)
   assert.equal(removed.source, source)
@@ -448,17 +448,18 @@ test("setup route returns the PowerShell staging installer for Windows", async (
   assert.doesNotMatch(source, /apiKey=/)
 })
 
-test("Codex version parser accepts the minimum compatible version and later releases", () => {
-  const minimum = parseCodexVersion("codex-cli 0.145.0")
-  assert.deepEqual(minimum, {
+test("Codex version parser accepts the tested 0.145.x and 0.146.x compatibility line", () => {
+  const supported = parseCodexVersion("codex-cli 0.146.0")
+  assert.deepEqual(supported, {
     major: 0,
-    minor: 145,
+    minor: 146,
     patch: 0,
-    raw: "codex-cli 0.145.0",
+    raw: "codex-cli 0.146.0",
   })
-  assert.equal(isSupportedCodexVersion(minimum), true)
-  assert.equal(isSupportedCodexVersion(parseCodexVersion("codex-cli 0.146.0")), true)
+  assert.equal(isSupportedCodexVersion(parseCodexVersion("codex-cli 0.145.9")), true)
+  assert.equal(isSupportedCodexVersion(supported), true)
   assert.equal(isSupportedCodexVersion(parseCodexVersion("codex-cli 0.144.9")), false)
+  assert.equal(isSupportedCodexVersion(parseCodexVersion("codex-cli 0.147.0")), false)
   assert.equal(parseCodexVersion("not a version"), undefined)
 })
 
@@ -475,4 +476,25 @@ test("source checkout uninstaller refuses recursive removal outside managed path
   })
   assert.notEqual(result.status, 0)
   assert.match(result.stderr, /Refusing to remove unexpected collector path/)
+})
+
+test("Windows hook handlers wrap node invocation in cmd /c", () => {
+  const handlerPath = "C:\\Users\\test\\.agent-insight\\collectors\\codex\\hook-handler.cjs"
+  // 模拟 Windows 平台：nodePath 为 Windows 可执行文件路径
+  const installed = installHooksDocument({ hooks: {} }, {
+    handlerPath,
+    nodePath: "C:\\Program Files\\nodejs\\node.exe",
+  })
+  const handler = installed.document.hooks.SessionStart[0].hooks[0]
+  // command 保持原始 node 调用；commandWindows 用 cmd /c 包装（MSYS execvp 无法
+  // 直接执行 PE 二进制，见 docs/tasks/bugs/issue-159-codex-open.md Bug 7）
+  assert.equal(
+    handler.command,
+    '"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\test\\.agent-insight\\collectors\\codex\\hook-handler.cjs"',
+  )
+  assert.ok(handler.commandWindows.startsWith('cmd /c "'), "commandWindows wraps in cmd /c")
+  assert.ok(
+    handler.commandWindows.includes('"C:\\Program Files\\nodejs\\node.exe"'),
+    "commandWindows keeps node path",
+  )
 })

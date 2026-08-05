@@ -183,12 +183,11 @@ test("CLI exposes framework preselection and detects the installed local package
   assert.equal(help.status, 0, help.stderr)
   assert.match(help.stdout, /--frameworks <list>/)
 
-  const invalid = spawnSync(process.execPath, ["bin/cli.js", "install", "--frameworks", "codex,unknown"], {
-    cwd: ROOT,
-    encoding: "utf8",
-  })
-  assert.notEqual(invalid.status, 0)
-  assert.match(invalid.stderr, /Invalid framework list/)
+  const invalidFramework = spawnSync(process.execPath, [
+    "bin/cli.js", "install", "--frameworks", "codex,not-a-framework",
+  ], { cwd: ROOT, encoding: "utf8" })
+  assert.notEqual(invalidFramework.status, 0)
+  assert.match(invalidFramework.stderr, /Invalid framework list: not-a-framework/)
 
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-insight-local-package-"))
   const linkPath = path.join(tempDir, "node_modules", "agent-insight")

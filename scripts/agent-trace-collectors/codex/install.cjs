@@ -62,7 +62,12 @@ function parseCodexVersion(output) {
 }
 
 function isSupportedCodexVersion(version) {
-  return Boolean(version && (version.major > 0 || version.minor >= 145));
+  return Boolean(
+    version &&
+    version.major === 0 &&
+    version.minor >= 145 &&
+    version.minor <= 146,
+  );
 }
 
 function assertSupportedRuntime(options = {}) {
@@ -81,7 +86,7 @@ function assertSupportedRuntime(options = {}) {
     throw new Error("Codex CLI >=0.145.0 is required and must be available on PATH");
   }
   if (!isSupportedCodexVersion(version)) {
-    throw new Error(`Codex CLI >=0.145.0 is required; found ${version.raw}`);
+    throw new Error(`Codex CLI >=0.145.0 <0.147.0 is required; found ${version.raw}`);
   }
   return version;
 }

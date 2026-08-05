@@ -44,6 +44,7 @@ test("transport derives stable API-key-isolated paths and identifiers", () => {
   assert.equal(transport.stableSpanId("s", "x").length, 16)
   assert.throws(() => transport.collectorStateDir("../codex", "key", "/home/test"))
   assert.throws(() => transport.collectorStateDir("codex", "key", "../outside"), /must be absolute/)
+  assert.throws(() => transport.collectorStateDir("codex", "key", "relative-home"))
 })
 
 test("transport redacts recursively before Unicode code-point truncation", () => {

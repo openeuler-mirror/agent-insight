@@ -209,7 +209,7 @@ async function createRelay(options = {}) {
       }
 
       if (url.pathname === "/v1/logs") {
-        const persistRawOtel = async () => {
+        const processRaw = async () => {
           const filePath = rawFileFor(stateDir);
           await appendJsonl(filePath, {
             receivedAt: new Date().toISOString(),
@@ -225,8 +225,12 @@ async function createRelay(options = {}) {
           await atomicWriteJson(checkpointPath, checkpoint);
           await persistState();
         };
-        rawPending = rawPending.catch(() => {}).then(persistRawOtel);
-        await rawPending;
+        // Keep serialization, but do not let one malformed native batch poison
+        // the relay permanently. The failed request remains a 500; its successor
+        // starts after the rejection has been observed and can be persisted.
+        const processing = rawPending.catch(() => undefined).then(processRaw);
+        rawPending = processing.catch(() => undefined);
+        await processing;
         writeJson(response, 200, { partialSuccess: {} });
         return;
       }

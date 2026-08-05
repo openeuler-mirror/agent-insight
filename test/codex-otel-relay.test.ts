@@ -19,6 +19,7 @@ const {
 const transport = require("../scripts/agent-trace-collectors/shared/trace-transport.cjs")
 
 type CapturedEvent = {
+  sessionId?: string
   spanId: string
   parentSpanId?: string
   kind: string
@@ -172,6 +173,161 @@ test("OTel user_prompt uses length metadata without fabricating content", async 
   }))
   const root = writer.events.find((event) => event.kind === "agent")
   assert.equal(root?.input, "[REDACTED prompt length=42]")
+})
+
+test("OTel's exact redaction placeholder does not create a second root turn", async () => {
+  const writer = new MemoryWriter()
+  const core = new CodexTraceCore({ writer })
+  await core.processOtel(otlpLogs("codex.user_prompt", {
+    "conversation.id": "redacted-native-prompt",
+    "turn.id": "native-turn",
+    prompt: "[REDACTED]",
+  }))
+  assert.equal(writer.events.length, 0)
+})
+
+test("Hook and OTel prompt aliases keep native internal turn ids inside one user execution", async () => {
+  for (const order of ["otel-first", "hook-first"] as const) {
+    const writer = new MemoryWriter()
+    const core = new CodexTraceCore({ writer, now: () => 1_700_000_000_000 })
+    const nativePrompt = () => core.processOtel(otlpLogs("codex.user_prompt", {
+      "conversation.id": "alias-session",
+      "turn.id": "native-prompt-turn",
+      prompt: "inspect one file",
+    }))
+    const hookPrompt = () => core.processHook(hook("UserPromptSubmit", {
+      session_id: "alias-session",
+      turn_id: "hook-prompt-turn",
+      prompt: "inspect one file",
+      timestamp_ms: 1_700_000_000_600,
+    }))
+    if (order === "otel-first") {
+      await nativePrompt()
+      await hookPrompt()
+    } else {
+      await hookPrompt()
+      await nativePrompt()
+    }
+
+    for (const [turnId, responseId] of [
+      ["native-internal-1", "response-1"],
+      ["native-internal-2", "response-2"],
+      ["native-internal-3", "response-3"],
+    ]) {
+      await core.processOtel(otlpLogs("codex.sse_event", {
+        "conversation.id": "alias-session",
+        "turn.id": turnId,
+        kind: "response.completed",
+        response_id: responseId,
+        input_token_count: 10,
+        output_token_count: 2,
+        total_token_count: 12,
+      }))
+    }
+    await core.processOtel(otlpLogs("codex.tool_result", {
+      "conversation.id": "alias-session",
+      "turn.id": "native-tool-turn",
+      tool_name: "shell_command",
+      call_id: "alias-tool-call",
+      success: true,
+      output: "done",
+    }))
+
+    const roots = writer.events.filter((event) => event.kind === "agent")
+    const rootSessions = new Set(roots.map((event) => event.sessionId))
+    const rootSpans = new Set(roots.map((event) => event.spanId))
+    const llms = writer.events.filter((event) => event.kind === "llm")
+    const tool = writer.events.find((event) => event.kind === "tool")
+    assert.equal(rootSessions.size, 1, `${order}: one logical root session`)
+    assert.equal(rootSpans.size, 1, `${order}: one logical root span`)
+    assert.equal(llms.length, 3)
+    assert.ok(llms.every((event) => event.sessionId === roots[0]?.sessionId))
+    assert.equal(tool?.sessionId, roots[0]?.sessionId)
+    assert.ok(llms.every((event) => event.attributes?.["codex.native.turn.id"] !== undefined))
+  }
+})
+
+test("restored relay state keeps a Hook prompt for later native OTel attribution", async () => {
+  const original = new CodexTraceCore({ writer: new MemoryWriter() })
+  await original.processHook(hook("UserPromptSubmit", {
+    session_id: "restore-session",
+    turn_id: "hook-turn",
+    prompt: "restore this user task",
+  }))
+  const writer = new MemoryWriter()
+  const restored = new CodexTraceCore({ writer })
+  restored.restore(original.snapshot())
+  await restored.processOtel(otlpLogs("codex.sse_event", {
+    "conversation.id": "restore-session",
+    "turn.id": "native-internal-turn",
+    kind: "response.completed",
+    response_id: "restored-response",
+    input_token_count: 5,
+    output_token_count: 2,
+    total_token_count: 7,
+  }))
+  const llm = writer.events.find((event) => event.kind === "llm")
+  assert.equal(llm?.sessionId, "restore-session:turn:hook-turn")
+  assert.equal(llm?.attributes?.["codex.association.pending"], undefined)
+})
+
+test("uncorrelated native OTel activity remains pending instead of creating a root", async () => {
+  const writer = new MemoryWriter()
+  const core = new CodexTraceCore({ writer })
+  await core.processOtel(otlpLogs("codex.sse_event", {
+    "conversation.id": "native-without-prompt",
+    "turn.id": "internal-only-turn",
+    kind: "response.completed",
+    response_id: "internal-only-response",
+    input_token_count: 1,
+    output_token_count: 1,
+  }))
+  const llm = writer.events.find((event) => event.kind === "llm")
+  assert.equal(writer.events.some((event) => event.kind === "agent"), false)
+  assert.equal(llm?.attributes?.["codex.association.pending"], "true")
+  assert.match(llm?.sessionId || "", /^pending:/)
+})
+
+test("startup API telemetry without a user turn is ignored instead of failing the relay", async () => {
+  const writer = new MemoryWriter()
+  const core = new CodexTraceCore({ writer })
+  await core.processOtel(otlpLogs("codex.api_request", {
+    "conversation.id": "startup-api-session",
+    request_id: "startup-request",
+    status_code: 200,
+  }))
+  assert.equal(writer.events.length, 0)
+})
+
+test("a uniquely recent closed root tolerates Hook and OTel clock skew", async () => {
+  const writer = new MemoryWriter()
+  const core = new CodexTraceCore({ writer, now: () => 1_700_000_000_000 })
+  await core.processHook(hook("UserPromptSubmit", {
+    session_id: "clock-skew-session",
+    turn_id: "hook-user-turn",
+    prompt: "inspect one file",
+    timestamp_ms: 1_700_000_000_100,
+  }))
+  await core.processHook(hook("Stop", {
+    session_id: "clock-skew-session",
+    turn_id: "hook-user-turn",
+    timestamp_ms: 1_700_000_000_300,
+  }))
+  const delayedNative = otlpLogs("codex.sse_event", {
+    "conversation.id": "clock-skew-session",
+    "turn.id": "native-internal-turn",
+    kind: "response.completed",
+    response_id: "clock-skew-response",
+    input_token_count: 3,
+    output_token_count: 1,
+  })
+  delayedNative.resourceLogs[0].scopeLogs[0].logRecords[0].timeUnixNano = "1700000000200000000"
+  await core.processOtel(delayedNative)
+
+  const root = writer.events.find((event) => event.kind === "agent")
+  const llm = writer.events.find((event) => event.kind === "llm")
+  assert.equal(llm?.sessionId, root?.sessionId)
+  assert.equal(llm?.attributes?.["codex.association.pending"], undefined)
 })
 
 test("Hook and native OTel merge exact Token, TTFT, and Tool facts by stable ids", async () => {
@@ -400,20 +556,17 @@ test("relay rejects unauthenticated loopback writers", async (t) => {
   assert.equal(response.status, 401)
 })
 
-test("relay continues processing raw OTel after a prior queue failure", async (t) => {
+test("relay recovers its serialized raw queue after one bad OTel batch", async (t) => {
   const dir = await tempDir(t)
-  let attempts = 0
-  const core = {
-    async processOtel() {
-      attempts += 1
-      if (attempts === 1) throw new Error("fixture processing failure")
-    },
-    snapshot() {
-      return { version: 1 }
-    },
-    status() {
-      return { version: 1 }
-    },
+  const core = new CodexTraceCore({ writer: new MemoryWriter() })
+  const processOtel = core.processOtel.bind(core)
+  let failOnce = true
+  core.processOtel = async (payload: unknown) => {
+    if (failOnce) {
+      failOnce = false
+      throw new Error("synthetic malformed batch")
+    }
+    return processOtel(payload)
   }
   const relay = await createRelay({
     config: {
@@ -426,26 +579,32 @@ test("relay continues processing raw OTel after a prior queue failure", async (t
     },
     stateDir: dir,
     core,
-    writer: new MemoryWriter(),
     uploader: new MemoryUploader(),
     port: 0,
   })
   const address = await relay.start()
   t.after(() => relay.stop().catch(() => {}))
 
-  const first = await httpJson(address.port, "/v1/logs", "relay-secret", { first: true })
-  const second = await httpJson(address.port, "/v1/logs", "relay-secret", { second: true })
+  const first = await httpJson(address.port, "/v1/logs", "relay-secret", otlpLogs(
+    "codex.api_request",
+    { "conversation.id": "broken-session" },
+  ))
+  const second = await httpJson(address.port, "/v1/logs", "relay-secret", otlpLogs(
+    "codex.user_prompt",
+    { "conversation.id": "recovered-session", "turn.id": "turn-a", prompt: "recover" },
+  ))
   assert.equal(first.status, 500)
   assert.equal(second.status, 200)
-  assert.equal(attempts, 2)
 })
 
 test("raw replay processes only complete JSONL lines and leaves a torn tail", async (t) => {
   const dir = await tempDir(t)
   const filePath = path.join(dir, "2026-07-27", "raw-otel.jsonl")
   await transport.appendJsonl(filePath, {
-    payload: otlpLogs("codex.conversation_starts", {
+    payload: otlpLogs("codex.user_prompt", {
       "conversation.id": "replay-session",
+      "turn.id": "replay-turn",
+      prompt: "replay this prompt",
     }),
   })
   await fsp.appendFile(filePath, "{\"payload\":", "utf8")
@@ -456,4 +615,52 @@ test("raw replay processes only complete JSONL lines and leaves a torn tail", as
   assert.equal(writer.events.length, 1)
   const checkpoint = await transport.readCheckpoint(path.join(dir, "raw-checkpoint.json"))
   assert.ok(checkpoint.files["2026-07-27/raw-otel.jsonl"].bytes < (await fsp.stat(filePath)).size)
+})
+
+test("Codex LLM spans get non-zero durations from adjacent sse_event timestamps", async (t) => {
+  const writer = new MemoryWriter()
+  const core = new CodexTraceCore({ writer, now: () => 1_700_000_000_000 })
+  const otlpAt = (timeNano: string, eventName: string, attrs: Record<string, unknown>) => ({
+    resourceLogs: [{
+      resource: { attributes: [{ key: "service.name", value: av("codex-cli") }] },
+      scopeLogs: [{
+        scope: { name: "codex-otel", version: "0.145.0" },
+        logRecords: [{
+          timeUnixNano: timeNano,
+          attributes: Object.entries({
+            "event.name": eventName,
+            "conversation.id": "session-dur",
+            "turn.id": "turn-dur",
+            ...attrs,
+          }).map(([key, value]) => ({ key, value: av(value) })),
+        }],
+      }],
+    }],
+  })
+  const sse = (responseId: string) => otlpAt("1700000009500000000", "codex.sse_event", {
+    kind: "response.completed",
+    response_id: responseId,
+    input_token_count: 10,
+    output_token_count: 5,
+    total_token_count: 15,
+  })
+
+  // 先发 user_prompt 创建 turn（turn.startedAt = prompt 时间 100ms）
+  await core.processOtel(otlpAt("1700000000100000000", "codex.user_prompt", { prompt: "hi" }))
+  // 首条 LLM：turn 开始 100ms → 本条 900ms
+  await core.processOtel(sse("r1"))
+  // 第二条 LLM：上一条 900ms → 本条 950ms（相邻 sse_event 时间差）
+  await core.processOtel(otlpAt("1700000010000000000", "codex.sse_event", {
+    kind: "response.completed",
+    response_id: "r2",
+    input_token_count: 10,
+    output_token_count: 5,
+    total_token_count: 15,
+  }))
+  const llms = writer.events.filter((event) => event.kind === "llm")
+  assert.equal(llms.length, 2)
+  assert.ok(llms[0]?.endTimeMs! - llms[0]?.startTimeMs! > 0, "first LLM duration > 0")
+  assert.ok(llms[1]?.endTimeMs! - llms[1]?.startTimeMs! > 0, "second LLM duration > 0")
+  // 第二条 start = 第一条 end（相邻 sse_event）
+  assert.equal(llms[1]?.startTimeMs, llms[0]?.endTimeMs)
 })
