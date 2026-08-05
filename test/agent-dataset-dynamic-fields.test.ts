@@ -209,10 +209,11 @@ test('normalizes legacy dataset cases into editable values', () => {
   assert.equal(row.values?.trajectory, '{"steps":[]}');
 });
 
-test('normalizes trace backflow values without requiring reference output', () => {
+test('treats legacy trace backflow output as the approved reference output', () => {
   const trace = [{ role: 'user', content: 'processed task' }];
   const row = normalizeCase({
     id: 'trace-case',
+    expectedOutput: '',
     values: {
       input: 'processed task',
       output: 'processed result',
@@ -223,7 +224,8 @@ test('normalizes trace backflow values without requiring reference output', () =
   });
 
   assert.equal(row.input, 'processed task');
-  assert.equal(row.expectedOutput, '');
+  assert.equal(row.expectedOutput, 'processed result');
+  assert.equal(row.values?.reference_output, 'processed result');
   assert.equal(row.trajectory, JSON.stringify(trace));
   assert.deepEqual(row.values?.trace, trace);
   assert.equal(row.values?.scenario, 'failure');
