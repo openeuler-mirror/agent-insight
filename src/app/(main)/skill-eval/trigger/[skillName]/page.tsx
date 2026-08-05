@@ -2395,7 +2395,7 @@ function ImportFromDatasetDialog({
       try {
         setLoading(true);
         setLoadError(null);
-        const res = await apiFetch(`/api/agent-datasets?user=${encodeURIComponent(user)}`);
+        const res = await apiFetch(`/api/agent-datasets?user=${encodeURIComponent(user)}&view=reference`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = (await res.json()) as AgentDatasetLite[];
         if (!cancelled) setDatasets(Array.isArray(data) ? data : []);

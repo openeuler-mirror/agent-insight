@@ -531,20 +531,23 @@ model CustomEvaluatorList {
 
 /// 评测集定义与数据项（cases 存 JSON）
 model AgentEvalDataset {
-  id          String   @id
-  user        String
-  name        String
-  description String   @default("")
-  targetAgent String   @default("")
+  id                 String   @id
+  user               String
+  name               String
+  description        String   @default("")
+  targetAgent        String   @default("")
   /// 服务于哪个 skill；为空表示通用 agent eval（不绑定 skill）。skill 生成时
   /// 自动起草的行为评测集会填这个字段（用 Skill.name）。
-  targetSkill String   @default("")
-  tagsJson    String   @default("[]")
-  fieldsJson  String   @default("[]")
-  casesJson   String   @default("[]")
-  datasetKind String   @default("ideal_output")
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  targetSkill        String   @default("")
+  tagsJson           String   @default("[]")
+  fieldsJson         String   @default("[]")
+  casesJson          String   @default("[]")
+  caseCount          Int      @default(0)
+  referenceCasesJson String   @default("[]")
+  projectionReady    Boolean  @default(false)
+  datasetKind        String   @default("ideal_output")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
   @@index([user])
   @@index([user, targetSkill])

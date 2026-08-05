@@ -87,6 +87,74 @@ export interface AgentDatasetRecord {
   updatedAt: string;
 }
 
+export interface AgentDatasetReferenceCase {
+  id: string;
+  input: string;
+  expectedOutput: string;
+  evaluationFocus: string;
+  tags: string[];
+}
+
+export interface AgentDatasetSummary extends Omit<AgentDatasetRecord, 'cases'> {
+  caseCount: number;
+}
+
+export interface AgentDatasetReference extends AgentDatasetSummary {
+  cases: AgentDatasetReferenceCase[];
+}
+
+const DATASET_TRAJECTORY_PREVIEW_CHARS = 600;
+
+function datasetTrajectoryPreview(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '';
+  const text = typeof value === 'string' ? value : JSON.stringify(value);
+  return text.length <= DATASET_TRAJECTORY_PREVIEW_CHARS
+    ? text
+    : `${text.slice(0, DATASET_TRAJECTORY_PREVIEW_CHARS)}…`;
+}
+
+export function buildAgentDatasetItemsView(dataset: AgentDatasetRecord): AgentDatasetRecord {
+  const trajectoryKeys = new Set(
+    dataset.fields
+      .map(field => field.key)
+      .filter(key => ['trace', 'trajectory'].includes(key.trim().toLocaleLowerCase())),
+  );
+  trajectoryKeys.add('trace');
+  trajectoryKeys.add('trajectory');
+
+  return {
+    ...dataset,
+    cases: dataset.cases.map(item => {
+      const values = { ...(item.values || {}) };
+      for (const key of trajectoryKeys) {
+        if (Object.hasOwn(values, key)) values[key] = datasetTrajectoryPreview(values[key]);
+      }
+      return {
+        ...item,
+        trajectory: datasetTrajectoryPreview(item.trajectory),
+        values,
+      };
+    }),
+  };
+}
+
+export function buildAgentDatasetProjection(cases: DatasetCase[]): {
+  caseCount: number;
+  referenceCasesJson: string;
+} {
+  const normalized = normalizeCases(cases);
+  return {
+    caseCount: normalized.length,
+    referenceCasesJson: JSON.stringify(normalized.map(item => ({
+      id: item.id,
+      input: item.input,
+      expectedOutput: item.expectedOutput,
+      evaluationFocus: item.evaluationFocus,
+      tags: item.tags,
+    }))),
+  };
+}
+
 function tryGetPrisma(): PrismaClient | null {
   const client = db.getClient();
   return client instanceof PrismaClient ? client : null;
@@ -341,6 +409,40 @@ function recordFromDbRow(row: {
   };
 }
 
+function summaryFromDbRow(row: {
+  id: string;
+  user: string;
+  name: string;
+  description: string;
+  targetAgent: string;
+  targetSkill?: string;
+  tagsJson: string;
+  fieldsJson: string;
+  datasetKind: string;
+  caseCount: number;
+  createdAt: Date;
+  updatedAt: Date;
+}): AgentDatasetSummary {
+  let tags: unknown = [];
+  let fields: unknown = [];
+  try { tags = JSON.parse(row.tagsJson || '[]'); } catch { tags = []; }
+  try { fields = JSON.parse(row.fieldsJson || '[]'); } catch { fields = []; }
+  return {
+    id: row.id,
+    user: row.user,
+    name: row.name,
+    description: row.description,
+    targetAgent: row.targetAgent,
+    targetSkill: row.targetSkill ?? '',
+    tags: normalizeTags(tags),
+    fields: normalizeFields(fields, normalizeDatasetKind(row.datasetKind)),
+    datasetKind: normalizeDatasetKind(row.datasetKind),
+    caseCount: row.caseCount,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
 function readLegacyFileSync(): AgentDatasetRecord[] {
   ensureLegacyDir();
   try {
@@ -399,6 +501,7 @@ async function migrateLegacyJsonIfNeeded(prisma: PrismaClient): Promise<void> {
     if (list.length === 0) return;
 
     for (const r of list) {
+      const projection = buildAgentDatasetProjection(r.cases);
       await prisma.agentEvalDataset.create({
         data: {
           id: r.id,
@@ -410,6 +513,8 @@ async function migrateLegacyJsonIfNeeded(prisma: PrismaClient): Promise<void> {
           tagsJson: JSON.stringify(r.tags),
           fieldsJson: JSON.stringify(r.fields),
           casesJson: JSON.stringify(r.cases),
+          ...projection,
+          projectionReady: true,
           datasetKind: r.datasetKind,
           createdAt: r.createdAt ? new Date(r.createdAt) : new Date(),
           updatedAt: r.updatedAt ? new Date(r.updatedAt) : new Date(),
@@ -439,6 +544,105 @@ export async function readAllAgentDatasets(): Promise<AgentDatasetRecord[]> {
   return readLegacyFileSync();
 }
 
+export async function readUserAgentDatasets(user: string): Promise<AgentDatasetRecord[]> {
+  const prisma = tryGetPrisma();
+  if (prisma) {
+    await migrateLegacyJsonIfNeeded(prisma);
+    const rows = await prisma.agentEvalDataset.findMany({
+      where: { user },
+      orderBy: { updatedAt: 'desc' },
+    });
+    return rows.map(recordFromDbRow);
+  }
+  warnFileBackendOnce();
+  return readLegacyFileSync().filter(item => item.user === user);
+}
+
+async function ensureAgentDatasetProjectionsForUser(prisma: PrismaClient, user: string): Promise<void> {
+  const pending = await prisma.agentEvalDataset.findMany({
+    where: { user, projectionReady: false },
+    select: { id: true, casesJson: true, updatedAt: true },
+  });
+  for (const row of pending) {
+    let rawCases: unknown = [];
+    try { rawCases = JSON.parse(row.casesJson || '[]'); } catch { rawCases = []; }
+    const projection = buildAgentDatasetProjection(normalizeCases(rawCases));
+    await prisma.agentEvalDataset.update({
+      where: { id: row.id },
+      data: { ...projection, projectionReady: true, updatedAt: row.updatedAt },
+    });
+  }
+}
+
+export async function readAgentDatasetSummaries(
+  user: string,
+  targetSkill?: string,
+): Promise<AgentDatasetSummary[]> {
+  const prisma = tryGetPrisma();
+  if (prisma) {
+    await migrateLegacyJsonIfNeeded(prisma);
+    await ensureAgentDatasetProjectionsForUser(prisma, user);
+    const rows = await prisma.agentEvalDataset.findMany({
+      where: { user, ...(targetSkill !== undefined ? { targetSkill } : {}) },
+      select: {
+        id: true, user: true, name: true, description: true, targetAgent: true,
+        targetSkill: true, tagsJson: true, fieldsJson: true, datasetKind: true,
+        caseCount: true, createdAt: true, updatedAt: true,
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+    return rows.map(summaryFromDbRow);
+  }
+  warnFileBackendOnce();
+  return readLegacyFileSync()
+    .filter(item => item.user === user && (targetSkill === undefined || item.targetSkill === targetSkill))
+    .map(({ cases, ...item }) => ({ ...item, caseCount: cases.length }));
+}
+
+export async function readAgentDatasetReferences(
+  user: string,
+  targetSkill?: string,
+): Promise<AgentDatasetReference[]> {
+  const prisma = tryGetPrisma();
+  if (prisma) {
+    await migrateLegacyJsonIfNeeded(prisma);
+    await ensureAgentDatasetProjectionsForUser(prisma, user);
+    const rows = await prisma.agentEvalDataset.findMany({
+      where: { user, ...(targetSkill !== undefined ? { targetSkill } : {}) },
+      select: {
+        id: true, user: true, name: true, description: true, targetAgent: true,
+        targetSkill: true, tagsJson: true, fieldsJson: true, datasetKind: true,
+        caseCount: true, referenceCasesJson: true, createdAt: true, updatedAt: true,
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+    return rows.map(row => {
+      let cases: AgentDatasetReferenceCase[] = [];
+      try {
+        const parsed = JSON.parse(row.referenceCasesJson || '[]');
+        if (Array.isArray(parsed)) cases = parsed.map(item => ({
+          id: String(item?.id || ''),
+          input: String(item?.input || ''),
+          expectedOutput: String(item?.expectedOutput || ''),
+          evaluationFocus: String(item?.evaluationFocus || ''),
+          tags: normalizeTags(item?.tags),
+        }));
+      } catch { cases = []; }
+      return { ...summaryFromDbRow(row), cases };
+    });
+  }
+  warnFileBackendOnce();
+  return readLegacyFileSync()
+    .filter(item => item.user === user && (targetSkill === undefined || item.targetSkill === targetSkill))
+    .map(item => ({
+      ...item,
+      caseCount: item.cases.length,
+      cases: item.cases.map(({ id, input, expectedOutput, evaluationFocus, tags }) => ({
+        id, input, expectedOutput, evaluationFocus, tags,
+      })),
+    }));
+}
+
 export async function findAgentDataset(user: string, id: string): Promise<AgentDatasetRecord | null> {
   const prisma = tryGetPrisma();
   if (prisma) {
@@ -456,6 +660,7 @@ export async function createAgentDatasetRecord(record: AgentDatasetRecord): Prom
   const prisma = tryGetPrisma();
   if (prisma) {
     await migrateLegacyJsonIfNeeded(prisma);
+    const projection = buildAgentDatasetProjection(record.cases);
     await prisma.agentEvalDataset.create({
       data: {
         id: record.id,
@@ -467,6 +672,8 @@ export async function createAgentDatasetRecord(record: AgentDatasetRecord): Prom
         tagsJson: JSON.stringify(record.tags),
         fieldsJson: JSON.stringify(record.fields),
         casesJson: JSON.stringify(record.cases),
+        ...projection,
+        projectionReady: true,
         datasetKind: record.datasetKind,
         createdAt: new Date(record.createdAt),
         updatedAt: new Date(record.updatedAt),
@@ -484,6 +691,7 @@ export async function updateAgentDatasetRecord(updated: AgentDatasetRecord): Pro
   const prisma = tryGetPrisma();
   if (prisma) {
     await migrateLegacyJsonIfNeeded(prisma);
+    const projection = buildAgentDatasetProjection(updated.cases);
     const res = await prisma.agentEvalDataset.updateMany({
       where: { id: updated.id, user: updated.user },
       data: {
@@ -494,6 +702,8 @@ export async function updateAgentDatasetRecord(updated: AgentDatasetRecord): Pro
         tagsJson: JSON.stringify(updated.tags),
         fieldsJson: JSON.stringify(updated.fields),
         casesJson: JSON.stringify(updated.cases),
+        ...projection,
+        projectionReady: true,
         datasetKind: updated.datasetKind,
         updatedAt: new Date(updated.updatedAt),
       },

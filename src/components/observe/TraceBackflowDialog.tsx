@@ -183,7 +183,7 @@ export function TraceBackflowDialog(props: {
       setError('');
       try {
         const [datasetList, prepared] = await Promise.all([
-          apiFetch(`/api/agent-datasets?user=${encodeURIComponent(props.user)}`).then(async response => {
+          apiFetch(`/api/agent-datasets?user=${encodeURIComponent(props.user)}&view=summary`).then(async response => {
             const data = await response.json();
             if (!response.ok) throw new Error(data?.error || '评测数据集加载失败');
             return Array.isArray(data) ? data : [];
