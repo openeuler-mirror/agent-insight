@@ -296,7 +296,7 @@ provides_hooks:
   - on_session_end
 HERMES_PLUGIN_EOF
     if command -v hermes >/dev/null 2>&1; then
-        hermes plugins enable agent_insight_hermes || echo "Warning: enable the plugin manually with: hermes plugins enable agent_insight_hermes"
+        hermes plugins enable agent_insight_hermes --no-allow-tool-override || echo "Warning: enable the plugin manually with: hermes plugins enable agent_insight_hermes --no-allow-tool-override"
     else
         echo "Warning: hermes command not found. The plugin files were installed; enable agent_insight_hermes after installing Hermes."
     fi
@@ -926,7 +926,7 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    @("name: agent_insight_hermes", "version: 0.2.0", "description: Agent Insight telemetry for Hermes", "provides_hooks:", "  - pre_llm_call", "  - post_llm_call", "  - pre_api_request", "  - post_api_request", "  - api_request_error", "  - pre_tool_call", "  - post_tool_call", "  - subagent_start", "  - subagent_stop", "  - on_session_end") | Set-Content -Path (Join-Path $hermesPluginDir "plugin.yaml") -Encoding UTF8',
         '    $hermesCmd = Get-Command hermes -ErrorAction SilentlyContinue',
         '    if ($hermesCmd) {',
-        '        & $hermesCmd.Source plugins enable agent_insight_hermes',
+        '        & $hermesCmd.Source plugins enable agent_insight_hermes --no-allow-tool-override',
         '    } else {',
         '        Write-Host "Warning: hermes command not found. The plugin files were installed; enable agent_insight_hermes after installing Hermes."',
         '    }',

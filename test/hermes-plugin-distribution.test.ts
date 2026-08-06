@@ -36,6 +36,8 @@ test("Hermes setup paths install the first-party plugin without GitHub or venv d
     assert.match(source, /plugins[\\/]agent_insight_hermes/)
     assert.doesNotMatch(source, /briancaffey\/hermes-otel/)
     assert.doesNotMatch(source, /opentelemetry-exporter-otlp-proto-http/)
+    assert.match(source, /hermes plugins enable agent_insight_hermes --no-allow-tool-override/)
+    assert.match(source, /\$hermesCmd\.Source plugins enable agent_insight_hermes --no-allow-tool-override/)
   }
 })
 
