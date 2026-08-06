@@ -7,8 +7,8 @@ import tempfile
 from pathlib import Path
 from unittest import TestCase
 
-from agent_fault_injection.models import RunArtifacts
-from agent_fault_injection.trace import InsightInteractionsMapper, write_interactions_artifact
+from agent_fault_injection.pipeline.models import RunArtifacts
+from agent_fault_injection.pipeline.interactions_mapper import InsightInteractionsMapper, write_interactions_artifact
 
 
 def _artifacts(root: Path) -> RunArtifacts:

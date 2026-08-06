@@ -26,7 +26,7 @@ flowchart TB
     UI["可靠性观测与 FI 任务界面<br/>· Insight 前端 UI"]
     API["接收任务下发与数据上报<br/>· Insight API / 协议"]
     DB[("权威业务落库<br/>· Prisma")]
-    Judge["注入结果评判与观测桥接<br/>· Judge / ras-bridge"]
+    Judge["注入结果评判（FI Run）<br/>· Judge"]
   end
   subgraph client ["用户本机（部署位置）"]
     Host["执行对话与工具调用<br/>· Agent 宿主 opencode/xiaoo"]
@@ -48,7 +48,7 @@ flowchart TB
   FIC -->|"② 发起心跳/认领/拉停命令"| API
   API -.->|"② claim 响应：下发 runs"| FIC
   FIC -->|"③ 上传 collect-result"| API
-  API -->|"④ 激活后桥接观测"| Judge
+  API -->|"Judge 写入 FI Run / Session"| Judge
 ```
 
 ---
@@ -61,7 +61,7 @@ flowchart TB
 | 2 | Insight 为 RAS/FI **新增了哪些平台能力**（UI/DB/API） | §2 |
 | 3 | agent-ras 模块做什么、如何对接 Insight（含 **RAS 拓扑**） | §3 |
 | 4 | agent-fi / FI Client 做什么、如何对接 Insight（含 **FI 拓扑**） | §4 |
-| 5 | 数据上报与协议（含 **⓪ OTel** 与 ①–④） | §5 |
+| 5 | 数据上报与协议（含 OTel、取舍结论、**代码级上报链路与时机**） | §5 |
 | 6 | OpenCode / xiaoO 上 RAS vs FI 挂载对照 | §6 |
 | 7 | .so / 安装路径 / 分册索引 | §7–§9 |
 
@@ -77,7 +77,7 @@ flowchart TB
     Browser["打开可靠性与 FI 页面<br/>· 浏览器 UI"]
     API["编排任务 / 鉴权 / 收上报<br/>· Insight API"]
     Prisma[("持久化任务·轨迹·异常事件<br/>· Prisma 权威库")]
-    Judge["评判注入结果并写入观测<br/>· Judge / ras-bridge"]
+    Judge["评判注入结果并写入 FI Run<br/>· Judge"]
   end
   subgraph client ["用户本机（部署位置）"]
     Host["跑 Agent 对话与工具<br/>· 宿主 opencode/xiaoo"]
@@ -103,12 +103,12 @@ flowchart TB
   FIC -->|"② 发起心跳/认领/拉取停命令"| API
   API -.->|"② claim 响应下发 runs"| FIC
   FIC -->|"③ 上传 collect-result"| API
-  API -->|"③ 后 Judge；④ 激活则 bridge"| Judge
+  API -->|"③ 后 Judge（不写 RasAnomalyEvent）"| Judge
 ```
 
 | 角色 / 部署位 | 归属 | 内容 |
 |---------------|------|------|
-| **Insight 服务端** | agent-insight | UI、Insight API、Prisma、Judge、bridge、鉴权 |
+| **Insight 服务端** | agent-insight | UI、Insight API、Prisma、Judge、鉴权 |
 | 本机 · **agent-ras** | 功能模块 | 检测/恢复（宿主内旁路） |
 | 本机 · **FI Client** | 角色（由 agent-fi + 本机编排实现） | 认领/回传/驱动注入；当前实现含 `fi-worker.js` + CLI，叙述用角色名 |
 | 本机 · 共享 | 宿主 + 运行目录 | opencode/xiaoo；`~/.agent-insight/`（非权威） |
@@ -144,9 +144,9 @@ flowchart TB
 
 | 能力 | 说明 |
 |------|------|
-| FI Judge（`judge.ts`） | 二维 outcome × containment |
-| `ras-bridge` | FI 激活后写入观测表（`source=fault_injection`） |
-| FI Client 租约 / claim 超时 sweep（表名可含 Worker） | 服务端状态机 |
+| FI Judge（`judge.ts`） | 二维 outcome × containment；结果落 FI Run |
+| ~~`ras-bridge`~~ | **已移除**：不再为 FI 激活合成 `RasAnomalyEvent`；可靠性观测靠正常轨迹（Execution）+ 真 RAS ① |
+| FI Client 任务占用 / 超时回收（实现可称 lease） | 服务端状态机 |
 | dry-run stub | 不经本机模块 |
 
 **Insight 不做**：在 Agent 进程内跑 Detector/Recovery；在服务端 `spawn` 用户本机的 opencode/xiaoo（已废弃）。
@@ -198,7 +198,7 @@ flowchart TB
 |------|-----|------------|
 | 本机角色 | **功能模块** agent-ras（嵌宿主） | **角色** FI Client + agent-fi |
 | 与 Insight | 单向旁路上报 ① | 双向控制面 ② + 结果 ③ |
-| Insight 决策 | **无**（恢复在环内） | 有 Judge；可选 ④ 桥进观测 |
+| Insight 决策 | **无**（恢复在环内） | 有 Judge（FI Run）；**不**桥进 `RasAnomalyEvent` |
 | 断连 | fail-open，不影响会话 | Client 停则无法认领新 Run |
 
 ### 3.4 RAS 不上报什么
@@ -225,7 +225,7 @@ flowchart TB
 |------|------|------|
 | Insight → FI Client | 任务元数据经 claim 下发（platform/fault/prompt/…） | **任务模型与 API = Insight** |
 | FI Client → Insight | 上传 collect-result（interactions / markers / evidence） | **契约与入库 = Insight** |
-| Insight 内部 | Judge、ras-bridge、FI UI | Insight |
+| Insight 内部 | Judge、FI UI | Insight |
 
 **FI Client** 是角色；当前实现里编排常驻进程是 `scripts/fi-worker.js`，注入在 agent-fi 包内。协议与契约属 Insight，叙述默认用角色名。
 
@@ -297,9 +297,9 @@ flowchart LR
 |---|------|---------------------|--------------|------|------|
 | ⓪ | 主观测 | **OTLP/HTTP**（JSON 或 Protobuf）：`ResourceSpans` / `ResourceLogs` | `/api/ingest/otel/v1/{traces\|logs\|…}` | spool → `Execution` | 通用链路追踪 |
 | ① | RAS 旁路 | **flat JSON**（非 OTLP）：`taskId` / `type` / `deliveryId` / `payload` | `/api/ingest/ras-events` | `RasAnomalyEvent` | 检出/恢复事件；fail-open |
-| ② | FI 控制面 | FI Worker JSON（非 OTLP）：heartbeat / claim / commands | `/api/fault-injection/worker/*` | Client/Run 租约 | 无轨迹正文 |
-| ③ | FI 采集 | **collect-result JSON**（非 OTLP）：`interactions` / `markers` / `injectionEvidence` | `…/runs/:id/collect-result` | `Session` + `FaultInjectionRun` → Judge | 实验轨迹真源 |
-| ④ | FI→观测 | Insight 内部写库（非 OTLP） | ras-bridge | `RasAnomalyEvent`（`source=fault_injection`） | 仅激活且非 dry-run |
+| ② | FI 控制面 | FI Worker JSON（非 OTLP）：heartbeat / claim / commands | `/api/fault-injection/worker/*` | 任务占用与超时回收 | 无轨迹正文 |
+| ③ | FI 采集 | **collect-result JSON**（非 OTLP）：`interactions` / `markers`（`injectionEvidence` 已废弃，恒 `{}`） | `…/runs/:id/collect-result` | `Session` + `FaultInjectionRun` → Judge | 实验轨迹真源 |
+| ~~④~~ | ~~FI→观测~~ | **已移除** | — | 不再写 `RasAnomalyEvent` | 可靠性观测以 Execution / 真 RAS ① 为准 |
 
 ```mermaid
 flowchart TB
@@ -307,7 +307,6 @@ flowchart TB
   Host -->|"0 OTLP/HTTP json or protobuf"| Otel["otel/v1 to spool to Execution"]
   Host -->|"1 flat JSON"| RasIn["ras-events to RasAnomalyEvent"]
   FIC["FI Client"] -->|"2 3 Worker or collect JSON"| FiApi["FI API to Session Run Judge"]
-  FiApi -->|"4 internal"| RasIn
   Otel --> DB[("Prisma")]
   RasIn --> DB
   FiApi --> DB
@@ -318,7 +317,7 @@ flowchart TB
 | 表 | 写入 | Insight UI |
 |----|------|------------|
 | `Execution`（及派生） | ⓪ OTel consumer | `/trace` 等链路追踪 |
-| `RasAnomalyEvent` | ① 或 ④ | `/agent-ras/trace`（可左连接根 Execution） |
+| `RasAnomalyEvent` | ①（真 RAS） | `/agent-ras/trace`（可左连接根 Execution） |
 | `Session.interactions` | ③（及既有 ingest） | FI Run 轨迹等 |
 | `FaultInjection*` | UI + ②/③ | `/agent-ras/fault-injection` |
 
@@ -330,89 +329,202 @@ flowchart TB
 |------|------|
 | `runId` / `taskId` | Run id / 平台 session → `Session.taskId` |
 | `framework` / `fault` / `injectionMethod` | 平台与故障元数据 |
-| `faultActivated` | ④ 的门闩 |
-| `interactions` / `markers` / `injectionEvidence` | 轨迹与证据 |
+| `faultActivated` | Judge / FI Run 门闩（**不**再触发观测表写入） |
+| `interactions` / `markers` | 轨迹真源（`injectionEvidence` 已废弃） |
 
 ### 5.4 时序（RAS ① 展开）
 
-约定：实线 `->>` = 请求；虚线 `-->>` = 对应响应（成对出现）。本图只画 RAS 主路径，不展开 OTel。
+约定：实线 `->>` = 请求；虚线 `-->>` = 对应响应（成对出现）。本图只画 RAS 环内检测 / 恢复 / 旁路上报，不体现 OTLP。
 
 ```mermaid
 sequenceDiagram
-  participant A as 目标Agent平台
-  participant R as AgentRAS
-  participant N as AgentInsight ingest
-  participant DB as 数据落库 · Prisma
   participant U as AgentInsight UI
+  participant N as AgentInsight API
+  participant DB as AgentInsight 数据库
+  participant R as AgentRAS
+  participant A as 目标Agent平台（OpenCode/XiaoO/...）
+
+
 
   A->>R: 会话事件 / hooks
   R-->>A: 已接收（继续会话）
 
   R->>R: 检测并决策恢复
 
-  R->>A: 恢复投递（中断流 / 转向）
-  A-->>R: 投递完成 / 已应用
+  R->>A: 恢复操作（中断流 / 转向）
+  A-->>R: 恢复执行完成
 
-  R->>N: 旁路上报异常事件
+  R->>N: 上报异常事件
   N->>DB: 写入异常事件
   DB-->>N: 写入成功
   N-->>R: 接受（失败亦可忽略）
 
   U->>N: 查询可靠性轨迹
-  N->>DB: 读取异常事件
-  DB-->>N: 事件列表
+  N->>DB: 读取异常事件、轨迹
+  DB-->>N: 事件列表、轨迹
   N-->>U: 展示数据
 ```
 
-恢复路径不经 AgentInsight 决策；旁路上报失败不影响会话。
+旁路上报为自研 JSON（非 OTLP）。恢复不经 AgentInsight 决策；上报失败不影响会话。
 
 ### 5.5 时序（FI ③ 展开）
 
-约定同上。本图只画故障注入主路径，不展开 OTel。
+约定同上。本图只画故障注入主路径，不体现 OTLP。
+
+**下发方式**：创建任务后只在 AgentInsight **排队**（`queued`），**不会**由服务端主动推到本机。**AgentFI** 常驻拉取；**认领成功时的响应**才是「下发运行参数」（拉模式，不是推模式）。
 
 ```mermaid
 sequenceDiagram
   participant U as AgentInsight UI
   participant N as AgentInsight API
-  participant W as AgentFI Client
-  participant M as agent-fi CLI
-  participant A as 目标Agent平台
-  participant DB as 数据落库 · Prisma
-
+  participant DB as AgentInsight 数据库
+  participant F as AgentFI 故障注入
+  participant A as 目标Agent平台(OpenCode/XiaoO/...)
+  
   U->>N: 创建任务
-  N->>DB: 写入任务与运行记录
+  N->>DB: 写入任务与运行记录（queued 排队）
   DB-->>N: 落库成功
-  N-->>U: 返回任务标识
+  N-->>U: 返回任务标识（已排队，待 AgentFI 拉取）
 
-  W->>N: 心跳
-  N-->>W: 正常（续租）
+  F->>N: 请求认领待下发任务
+  N-->>F: 下发运行参数
 
-  W->>N: 认领任务
-  N->>DB: 绑定运行租约
-  DB-->>N: 更新成功
-  N-->>W: 下发运行参数
+  F->>A: 注入并采集（挂插件/hooker）
+  A-->>F: 故障注入结果
 
-  W->>M: 编排并驱动
-  M->>A: 注入并采集
-  A-->>M: 故障注入结果
-  M-->>W: 故障注入结果
-
-  W->>N: 故障注入结果上传
-  N->>DB: 会话 + 执行 + 判断结果
+  F->>N: 故障注入结果上传
+  N-->>F: 上传成功
+    
+  N->>DB: 落库并评判
   DB-->>N: 落库成功
   opt 激活 AgentRAS 观测
-    N->>DB: 故障事件、恢复信息上报
+    N->>DB: 写入故障观测事件
     DB-->>N: 写入成功
   end
-  N-->>W: 上传接受 / 状态更新
 
-  U->>N: 查询运行轨迹
-  N->>DB: 读取
-  DB-->>N: 结果
-  N-->>U: 展示数据
+
+  U->>N: 查询运行结果
+  N->>DB: 读取轨迹与评判
+  DB-->>N: 查询结果
+  N-->>U: 返回展示数据
 ```
 
-对照：AgentRAS = 环内自治 + 旁路上报；AgentFI = AgentInsight 编排 + Client 认领回传（可选桥进观测）。OTel 主观测见 §5.0，不在本图展开。
+认领 / 故障注入结果上传均为自研 JSON（非 OTLP）。主观测 OTLP 见 §5.0。
+
+### 5.6 设计取舍与展示路径（讨论结论）
+
+以下为架构讨论沉淀，**不改变上文时序图**；图仍按实现语义绘制。
+
+#### 5.6.1 为何不统一成 OTLP
+
+| 通道 | 协议 | 原因 |
+|------|------|------|
+| ⓪ 主观测 | OTLP | 通用 Agent 运行轨迹，生态与属性契约已有 |
+| ① RAS 异常/恢复 | 自研 flat JSON | 领域事件（`deliveryId` 幂等、fail-open、actions/anchor）；**禁止**写入 OTLP spool |
+| ③ FI 实验包 | 自研 collect-result JSON | Judge 需要 `faultActivated` / markers / evidence；与 Run 生命周期绑死 |
+
+OTLP 可「硬套」attributes，但会变成「穿 OTLP 壳的私有协议」，Judge/租约/停杀仍无法用 exporter 模型表达。更合理的「统一」是：**关联键统一（`taskId`）+ 权威库统一（Prisma）+ UI 按场景拼**，而不是所有字节走一种线上协议。
+
+#### 5.6.2 与观测链路如何关联
+
+- **不是**协议层把 RAS/FI 嵌进 Span，而是落库后用 **`taskId`（会话 ID）** 对齐。
+- RAS 推送会剥平台前缀以对齐 OTel/`Execution.taskId`；可靠性页以根 `Execution` **左连接**同 `taskId` 的 `RasAnomalyEvent`（可含 ras-only、无链路任务）。
+- FI：`collect-result.taskId` → `Session`；注入观测只在 FI Run；**不再**写 `RasAnomalyEvent`。
+- 普通 `/trace` **不嵌** RAS 面板；可靠性看 `/agent-ras/trace`（真 RAS / Execution）。
+
+#### 5.6.3 服务端如何展示
+
+模式：**先落 Prisma，再 API 读库拼视图**（不是边收边流式渲染原始协议）。
+
+1. 写：各 ingest 入口落库（OTel 另经 spool consumer）。
+2. 读：可靠性列表并行查 `Execution` + `RasAnomalyEvent` 后按 `taskId` 合并；FI Run 读已落库 `Session.interactions`。
+3. OTel：`accepted` 只表示进 spool，**不等于**立刻在所有观测查询可见。
+
+#### 5.6.4 FI「下发」为何图上是认领（拉模式）
+
+- **业务语义**：Insight 排队后把任务交给本机 AgentFI。
+- **工程实现**：本机常驻轮询 `heartbeat` + `claim`；**下发发生在认领响应里**（拉模式）。服务端一般无法稳定主动连入用户本机（NAT/休眠/无公网）。
+- 时序图保留认领箭头以反映实现；若改真推送（长连接/回调）属协议变更，不在本文「只改图」范围。
+
+#### 5.6.5 AgentFI 角色边界（叙述不拆 CLI）
+
+文档角色统一称 **AgentFI**（认领 + 注入采集 + 回传）。实现上可含 `fi-worker.js` 与 `python -m agent_fault_injection.cli`，**不必**在关系说明里拆成两个产品角色。
+
+#### 5.6.6 FI 实验轨迹 vs 平台日常上报
+
+- **实验真源**仍是 FI 本机采集 → collect-result（插件/hooker 埋点 + Adapter 映射）。
+- 平台 OTel 可并存对照，**不能替代**激活/证据/按 `runId` 绑定的实验包。
+- 插件双重职责：注入改写 + 写 `events.jsonl`；Adapter 负责编排与跑完后映射，不实时旁听对话。
+
+### 5.7 数据上报具体链路与时机
+
+#### 5.7.1 时机总表
+
+| 通道 | 何时上报 Insight | 实时？ |
+|------|------------------|--------|
+| ⓪ OTel | 宿主/插件按自身 exporter 节奏推送 | **近似实时**（流式/批）；落库展示仍经 spool consumer，有延迟 |
+| ① RAS | **检出异常或产生 action_result 等事件时**即 push | **近实时（事件级）**，非等整段会话结束；fail-open |
+| ② FI 控制面 | Client 周期 heartbeat / 需要时 claim、拉 commands | 轮询；无轨迹正文 |
+| ③ FI 采集 | **单次 Run（一次注入实验）结束后**读 `collect-result.json` 再 POST | **任务/Run 完成后**整包上报（非边跑边传 interactions） |
+| ~~④ FI→观测~~ | **已移除** | — |
+
+#### 5.7.2 ① RAS 旁路（事件级、近实时）
+
+```text
+SessionHub 检出/恢复
+  → fire_push_anomaly / fire_push_action_result
+  → push_anomaly / push_action_result → push_event
+  → POST /api/ingest/ras-events
+  → normalizeRasIngestBody → upsertRasIngestRecords
+  → RasAnomalyEvent（可挂 executionId）
+```
+
+| 步骤 | 路径 | 符号 |
+|------|------|------|
+| 触发推送 | [`agent_ras/ras_embed/session_hub.py`](../../../agent_ras/ras_embed/session_hub.py) | 调用 `fire_push_anomaly` / `fire_push_action_result` |
+| 组包与 HTTP | [`agent_ras/ras_embed/insight_push.py`](../../../agent_ras/ras_embed/insight_push.py) | `fire_push_*` → `push_anomaly` / `push_action_result` → `push_event` |
+| 路由 | [`src/app/api/ingest/ras-events/route.ts`](../../../src/app/api/ingest/ras-events/route.ts) | `POST` |
+| 归一化 | [`src/lib/ingest/ras/normalize.ts`](../../../src/lib/ingest/ras/normalize.ts) | `normalizeRasIngestBody` |
+| 落库 | [`src/lib/ingest/ras/store.ts`](../../../src/lib/ingest/ras/store.ts) | `upsertRasIngestRecords`（内可 `findRootExecutionId`） |
+
+载荷：`{ events: [{ taskId, type, deliveryId, framework, anomalyKind, severity, summary, actionTypes, payload }] }`。契约见 [OTLP 文档 RAS 旁路节](../../developer-guide/09-otlp-attribute-contract.md#ras-旁路属性)。
+
+#### 5.7.3 ③ FI 采集（Run 完成后整包）
+
+本机先写盘，**实验跑完**再上传；不是边注入边向 Insight POST interactions。
+
+```text
+fi-worker tick: claim
+  → runCollector: spawn cli run --no-judge
+  → ExperimentRunner.run
+       Adapter.execute（插件/hooker → raw/events.jsonl 等）
+       map_trajectory / InsightInteractionsMapper.map
+       build_collect_payload → write_collect_payload（collect-result.json）
+  → uploadResult: POST …/collect-result
+  → ingestCollectAndJudge
+       Session.interactions + FaultInjectionRun + Judge
+```
+
+| 步骤 | 路径 | 符号 |
+|------|------|------|
+| 轮询认领/上传 | [`scripts/fi-worker.js`](../../../scripts/fi-worker.js) | `tick` → `runCollector` → `uploadResult` |
+| CLI / 编排 | [`agent_fault_injection/.../cli.py`](../../../agent_fault_injection/cli.py)、[`runner.py`](../../../agent_fault_injection/runner.py) | `ExperimentRunner.run` |
+| 映射 interactions | [`.../pipeline/interactions_mapper.py`](../../../agent_fault_injection/pipeline/interactions_mapper.py) | `InsightInteractionsMapper.map` |
+| 组装/写盘 | [`.../collect_payload.py`](../../../agent_fault_injection/collect_payload.py) | `build_collect_payload`、`write_collect_payload` |
+| 路由 | [`src/app/api/fault-injection/runs/[runId]/collect-result/route.ts`](../../../src/app/api/fault-injection/runs/[runId]/collect-result/route.ts) | `POST` |
+| 入库+评判 | [`src/lib/fault-injection/store.ts`](../../../src/lib/fault-injection/store.ts) | `ingestCollectAndJudge` |
+| ~~④ bridge~~ | **已移除**（原 `ras-bridge.ts`） | — |
+
+运行中插件只往本机 `raw/` append；**对 Insight 的 ③ 是 Run 结束一次 POST**。控制面 ②（heartbeat/claim）与 ③ 分开，可周期发生。
+
+#### 5.7.4 ⓪ OTel（对照，非 RAS/FI 真源）
+
+| 步骤 | 路径（示意） | 说明 |
+|------|----------------|------|
+| 接入 | [`src/app/api/ingest/otel/v1/traces/route.ts`](../../../src/app/api/ingest/otel/v1/traces/route.ts) 等 | OTLP/HTTP |
+| 消费 | [`src/lib/ingest/otel-consumer/`](../../../src/lib/ingest/otel-consumer/) | spool → `Execution` |
+
+与 ①/③ 仅靠 `taskId` 对齐展示，互不替代。
 
 ---
 
@@ -496,11 +608,11 @@ npx agent-insight install-fault-injection --start
 | 术语 | 含义 |
 |------|------|
 | agent-insight / Insight 服务端 | 平台角色：UI + API/协议 + DB + Judge |
-| FI Client | 本机 FI **角色**：认领、回传、编排注入（相对 Insight 服务端） |
+| AgentFI / FI Client | 本机故障注入**角色**：认领、注入采集、回传（实现上可含 worker + `agent_fault_injection` 进程，叙述不拆） |
 | agent-ras | 环内检测/恢复**实现模块** |
-| agent-fi | 故障注入/采集**实现模块**（包名 `agent_fault_injection`），支撑 FI Client |
-| `fi-worker.js` | FI Client 角色的**当前实现进程之一**（编排）；叙述优先写 FI Client |
+| agent-fi | AgentFI 的**实现包**（`agent_fault_injection`） |
+| `fi-worker.js` | AgentFI 侧编排实现细节；叙述优先写 AgentFI |
 | ⓪ OTel / OTLP | **数据协议**：OTLP/HTTP（JSON 或 Protobuf）上报 traces/logs；端点 `/api/ingest/otel/v1/*`；归一化后落 Prisma `Execution`。RAS/FI 旁路 **不是** OTLP |
-| ①②③④ | RAS/FI 四条数据/控制通道（均非替代 Prisma） |
+| ①②③ | RAS/FI 数据/控制通道（④ FI→观测 bridge 已移除；均非替代 Prisma） |
 | Prisma | 权威库访问层（水缸）；OTel/RAS/FI 最终多落于此 |
 | inproc | RAS 同进程嵌入（可含 libpython） |

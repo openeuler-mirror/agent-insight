@@ -8,7 +8,7 @@
 
 ## Fact
 
-- [ERROR] [Fact] IF-N01 写成「CLI `run --run-id`」易被读成「仅凭 runId 即可采集」。现网 [`cli.py`](../../../agent_fault_injection/agent_fault_injection/cli.py) 中 `--run-id` 只是产物 ID；`--platform/--agent/--fault/--prompt/--workspace` 等仍为必填（除非 YAML config）。Worker 必须按 claim 回包拼齐参数，与 [`engine.runCollector`](../../../src/lib/fault-injection/engine.ts) 一致。
+- [ERROR] [Fact] IF-N01 写成「CLI `run --run-id`」易被读成「仅凭 runId 即可采集」。现网 [`cli.py`](../../../agent_fault_injection/cli.py) 中 `--run-id` 只是产物 ID；`--platform/--agent/--fault/--prompt/--workspace` 等仍为必填（除非 YAML config）。Worker 必须按 claim 回包拼齐参数，与 [`engine.runCollector`](../../../src/lib/fault-injection/engine.ts) 一致。
 - [WARNING] [Fact] IF-E01b 写 `taskId`，现网 [`tasks/stop/route.ts`](../../../src/app/api/fault-injection/tasks/stop/route.ts) 契约是 `taskIds: string[]`，且仅当 `task.status === 'running'` 才处理；目标态若引入 Task `queued`，现 stop 门闩会直接跳过未开跑任务。
 - [WARNING] [Fact] §5.3 称创建后 Task 可为 `queued`，并「沿用 `refreshTaskProgress`」。现 [`store.createTaskWithRuns`](../../../src/lib/fault-injection/store.ts) 固定 `status: 'running'`，且 `refreshTaskProgress` 在未全部终态时一律写成 `running`——「全 queued」展示不会自然出现，必须改聚合规则，不能只扩枚举。
 - [WARNING] [Fact] 状态机 §3.3 缺现网已存在的 Run/Task 状态 `dry_run`（[`ingestCollectAndJudge`](../../../src/lib/fault-injection/store.ts) / `refreshTaskProgress` 已统计）。冻结 Judge 契约的同时漏掉 stub 终态会误导实现与 UI。

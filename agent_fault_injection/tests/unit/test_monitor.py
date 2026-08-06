@@ -1,8 +1,8 @@
 import asyncio
 from unittest import IsolatedAsyncioTestCase
 
-from agent_fault_injection.exceptions import PlatformConnectionError
-from agent_fault_injection.monitor import ProcessMonitor
+from agent_fault_injection.pipeline.exceptions import PlatformConnectionError
+from agent_fault_injection.pipeline.monitor import ProcessMonitor
 
 
 class _HangingProcess:

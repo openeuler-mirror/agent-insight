@@ -34,7 +34,9 @@ npx --yes agent-insight install-fault-injection --start || {
   echo "  AGENT_INSIGHT_HOST=\$HOST AGENT_INSIGHT_API_KEY=\$KEY node scripts/install-fault-injection.js --start"
   exit 1
 }
-echo "Keep the FI worker process running while using Fault Injection."
+echo "==> Setup finished. Worker runs in the background; you can close this terminal."
+echo "    If a Worker was previously started with another API key, this run restarts it with the new key."
+echo "    Refresh /agent-ras/fault-injection/tasks/new to confirm Worker is online."
 `
 
   return new NextResponse(script, {

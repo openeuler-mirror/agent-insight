@@ -3,10 +3,12 @@ import { resolveUser } from '@/lib/auth/auth'
 import { prisma } from '@/lib/storage/prisma'
 import {
   buildFiPipelineMarkers,
-  buildFiReliabilityEvents,
   buildFiTraceMarkers,
   mergeEvaluationMarkers,
 } from '@/lib/fault-injection/trace-markers'
+import type { RasEventRow } from '@/lib/ingest/ras/normalize'
+import { listRasEventsByTaskIds } from '@/lib/ingest/ras/store'
+import { buildRasTraceMarkers } from '@/lib/ingest/ras/trace-markers'
 
 export const dynamic = 'force-dynamic'
 
@@ -56,6 +58,33 @@ export async function GET(
   }
   const markers = buildFiTraceMarkers(markersList)
   const pipelineMarkers = buildFiPipelineMarkers(markersList)
+
+  // Real RAS detections for this session (if any) — keep separate from FI markers.
+  let rasMarkers: ReturnType<typeof buildRasTraceMarkers> = []
+  if (run.sessionTaskId) {
+    const rasRows = await listRasEventsByTaskIds({
+      taskIds: [run.sessionTaskId],
+      user: run.user || undefined,
+      limit: 200,
+    })
+    const eventRows: RasEventRow[] = rasRows.map((row) => ({
+      id: row.id,
+      deliveryId: row.deliveryId,
+      type: row.type,
+      taskId: row.taskId,
+      anomalyKind: row.anomalyKind,
+      severity: row.severity,
+      summary: row.summary,
+      actionTypes: row.actionTypes,
+      payloadJson: row.payloadJson,
+      ts: row.ts instanceof Date ? row.ts.toISOString() : String(row.ts),
+    }))
+    rasMarkers = buildRasTraceMarkers(eventRows, 'zh').map((marker) => ({
+      ...marker,
+      source: 'ras' as const,
+    }))
+  }
+
   return NextResponse.json({
     taskId: run.sessionTaskId,
     taskKey,
@@ -75,6 +104,8 @@ export async function GET(
     interactions,
     markers,
     pipelineMarkers,
-    reliabilityEvents: buildFiReliabilityEvents(markers),
+    rasMarkers,
+    // Never promote FI markers into RAS timeline rows.
+    reliabilityEvents: [],
   })
 }

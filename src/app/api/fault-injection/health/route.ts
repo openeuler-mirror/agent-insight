@@ -9,9 +9,7 @@ export async function GET(req: Request) {
   const { platforms, workers, ok } = await listPlatformsFromWorkers(username)
   return NextResponse.json({
     ok,
-    dryRunDefault: false,
-    envDryRun: process.env.AGENT_INSIGHT_FI_DRY_RUN === '1',
-    needsWorker: true,
+    needsWorker: !ok,
     workers,
     platforms,
   })

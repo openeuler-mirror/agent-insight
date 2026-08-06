@@ -10,8 +10,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from agent_fault_injection.fault_inject.registry import FaultRegistry
-from agent_fault_injection.models import RunArtifacts, RunRequest
+from agent_fault_injection.fault_inject.catalog.registry import FaultRegistry
+from agent_fault_injection.pipeline.models import RunArtifacts, RunRequest
 from agent_fault_injection.platform_adapters.registry import PlatformAdapterRegistry
 from agent_fault_injection.platform_adapters.xiaoo import XiaoOAdapter
 from agent_fault_injection.platform_adapters.xiaoo import config_overlay
@@ -77,6 +77,40 @@ class XiaoOConfigOverlayTests(unittest.TestCase):
             for item in entries:
                 self.assertIn("ras_eval_hook.py", item["command"])
                 self.assertTrue(item["command"].startswith("python3 "))
+
+    def test_prepare_overlay_keeps_user_ras_plugin(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            ras_plugin = root / "ras" / "plugin.json"
+            ras_plugin.parent.mkdir(parents=True)
+            ras_plugin.write_text("[]\n", encoding="utf-8")
+            user_cfg = root / "user.toml"
+            user_cfg.write_text(
+                "[llm]\n"
+                'provider = "minimax-anthropic"\n'
+                'model = "Minimax-M2.7-highspeed"\n'
+                'api_key_env = "MINIMAX_API_KEY"\n'
+                "\n"
+                "[trace]\n"
+                'storage_backend = "moirai-sqlite"\n'
+                "\n"
+                "[hooker]\n"
+                f'plugins = ["{ras_plugin.resolve()}"]\n',
+                encoding="utf-8",
+            )
+            config_toml, plugin_json = config_overlay.prepare_overlay(
+                overlay_root=root / "overlay",
+                user_config_path=user_cfg,
+            )
+            text = config_toml.read_text(encoding="utf-8")
+            plugins = config_overlay.extract_hooker_plugins(text)
+            self.assertEqual(
+                plugins,
+                [str(ras_plugin.resolve()), str(plugin_json.resolve())],
+            )
+            self.assertIn("[trace]", text)
+            self.assertIn('storage_backend = "moirai-sqlite"', text)
+            self.assertIn('provider = "minimax-anthropic"', text)
 
     def test_prepare_overlay_can_enable_chat_llm_hooks(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -491,7 +525,7 @@ class XiaoOAdapterUnitTests(unittest.TestCase):
             ]
             self.assertEqual(len(events2), 1)
 
-            from agent_fault_injection.trace import InsightInteractionsMapper
+            from agent_fault_injection.pipeline.interactions_mapper import InsightInteractionsMapper
 
             document = InsightInteractionsMapper().map(
                 artifacts,

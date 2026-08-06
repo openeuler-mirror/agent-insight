@@ -105,7 +105,6 @@ export function FaultTable({
     <div
       className={cn(
         'flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-border bg-card',
-        !compact && 'min-h-[28rem]',
         className,
       )}
     >

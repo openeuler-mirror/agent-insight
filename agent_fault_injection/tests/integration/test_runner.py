@@ -3,11 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agent_fault_injection.fault_inject.registry import FaultRegistry
-from agent_fault_injection.models import (
-    FaultContainmentStatus,
-    FaultEvaluation,
-    FaultOutcome,
+from agent_fault_injection.fault_inject.catalog.registry import FaultRegistry
+from agent_fault_injection.pipeline.models import (
     PlatformRunResult,
     RunRequest,
     RunStatus,
@@ -17,11 +14,20 @@ from agent_fault_injection.platform_adapters.base import PlatformAdapter
 from agent_fault_injection.platform_adapters.opencode.mapper import (
     OpenCodeTrajectoryMapper,
 )
-from agent_fault_injection.runner import ExperimentRunner
+from agent_fault_injection.pipeline.runner import ExperimentRunner
 
 
 class FakeOpenCodeAdapter(PlatformAdapter):
     name = "opencode"
+
+    def install_fault_assets(self, ctx):  # noqa: ANN001
+        return None
+
+    def merge_platform_env(self, ctx, environment):  # noqa: ANN001
+        return dict(environment)
+
+    async def run_platform_session(self, ctx, environment):  # noqa: ANN001
+        raise AssertionError("execute override should be used")
 
     async def execute(self, request, fault, artifacts, store):
         rows = [
@@ -87,39 +93,6 @@ class InterruptedPlatformRegistry:
         return InterruptedOpenCodeAdapter()
 
 
-class FakeJudge:
-    async def evaluate(self, request, fault, artifacts, platform_result, store):
-        return FaultEvaluation(
-            outcome=FaultOutcome.OCCURRED,
-            fault_containment_status=FaultContainmentStatus.UNRESOLVED,
-            reason="fake adapter followed the injected behavior",
-        )
-
-
-class ProtectingJudge:
-    async def evaluate(self, request, fault, artifacts, platform_result, store):
-        store.write_json(
-            artifacts.root / "judge-request.json",
-            {
-                "collection": {},
-                "platform_protection": {
-                    "triggered": True,
-                    "type": "repetition_guard",
-                },
-            },
-        )
-        return FaultEvaluation(
-            outcome=FaultOutcome.OCCURRED,
-            fault_containment_status=FaultContainmentStatus.RECOVERED,
-            reason="repetition was stopped by the platform guard",
-        )
-
-
-class FailingJudge:
-    async def evaluate(self, request, fault, artifacts, platform_result, store):
-        raise ValueError("invalid judge response")
-
-
 class RunnerIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_runner_selects_adapter_and_writes_trajectory(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -136,7 +109,6 @@ class RunnerIntegrationTests(unittest.IsolatedAsyncioTestCase):
             runner = ExperimentRunner(
                 fault_registry=FaultRegistry(),
                 platform_registry=FakePlatformRegistry(),
-                judge=FakeJudge(),
                 progress_callback=lambda event, details: progress_events.append(
                     (event, details)
                 ),
@@ -145,17 +117,11 @@ class RunnerIntegrationTests(unittest.IsolatedAsyncioTestCase):
             result = await runner.run(request)
 
             self.assertEqual(result.status, RunStatus.COMPLETED)
-            self.assertEqual(result.fault_outcome, FaultOutcome.OCCURRED)
-            self.assertEqual(
-                result.fault_containment_status,
-                FaultContainmentStatus.UNRESOLVED,
-            )
             self.assertEqual(
                 [event for event, _ in progress_events],
                 [
                     "created",
                     "agent_execution_finished",
-                    "fault_verification_started",
                 ],
             )
             created_details = progress_events[0][1]
@@ -182,39 +148,22 @@ class RunnerIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 Path(execution_details["trajectory"]).is_file()
             )
             self.assertTrue(result.artifacts.trajectory_file.is_file())
-            trajectory = [
-                json.loads(line)
-                for line in result.artifacts.trajectory_file.read_text(
-                    encoding="utf-8"
-                ).splitlines()
-            ]
-            self.assertEqual(
-                [event["kind"] for event in trajectory[-2:]],
-                ["evaluation.started", "evaluation.completed"],
-            )
             self.assertTrue(
-                all(
-                    event["phase"] == "evaluation"
-                    for event in trajectory[-2:]
+                (result.artifacts.root / "collect-result.json").is_file()
+            )
+            collect = json.loads(
+                (result.artifacts.root / "collect-result.json").read_text(
+                    encoding="utf-8"
                 )
             )
-            self.assertEqual(
-                trajectory[-1]["payload"]["outcome"],
-                "occurred",
-            )
-            self.assertEqual(
-                trajectory[-1]["payload"]["fault_containment_status"],
-                "unresolved",
-            )
+            self.assertEqual(collect.get("injectionEvidence"), {})
             manifest = json.loads(
                 result.artifacts.manifest_file.read_text(encoding="utf-8")
             )
             self.assertEqual(manifest["status"], "completed")
-            self.assertEqual(manifest["fault_outcome"], "occurred")
-            self.assertEqual(manifest["fault_containment_status"], "unresolved")
-            self.assertEqual(manifest["evaluation_status"], "completed")
+            self.assertTrue(manifest.get("fault_activated"))
 
-    async def test_completed_judging_survives_interrupted_agent(self) -> None:
+    async def test_completed_collection_survives_interrupted_agent(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             progress_events = []
@@ -229,7 +178,6 @@ class RunnerIntegrationTests(unittest.IsolatedAsyncioTestCase):
             runner = ExperimentRunner(
                 fault_registry=FaultRegistry(),
                 platform_registry=InterruptedPlatformRegistry(),
-                judge=ProtectingJudge(),
                 progress_callback=lambda event, details: progress_events.append(
                     (event, details)
                 ),
@@ -241,11 +189,6 @@ class RunnerIntegrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(
                 result.termination_reason,
                 TerminationReason.SESSION_ERROR,
-            )
-            self.assertEqual(result.fault_outcome, FaultOutcome.OCCURRED)
-            self.assertEqual(
-                result.fault_containment_status,
-                FaultContainmentStatus.RECOVERED,
             )
             self.assertEqual(
                 next(
@@ -263,56 +206,6 @@ class RunnerIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 manifest["agent_execution_status"],
                 "interrupted",
             )
-            self.assertEqual(
-                manifest["fault_containment_status"],
-                "recovered",
-            )
-
-    async def test_runner_marks_evaluation_failure_without_losing_termination(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            request = RunRequest(
-                platform="opencode",
-                agent="build",
-                fault="step-omission",
-                prompt="test",
-                workspace=root,
-                output_dir=root / "artifacts",
-            )
-            runner = ExperimentRunner(
-                fault_registry=FaultRegistry(),
-                platform_registry=FakePlatformRegistry(),
-                judge=FailingJudge(),
-            )
-
-            result = await runner.run(request)
-
-            self.assertEqual(result.status, RunStatus.FAILED)
-            self.assertEqual(
-                result.termination_reason,
-                TerminationReason.SESSION_IDLE,
-            )
-            self.assertIn("invalid judge response", result.evaluation_error)
-            trajectory = [
-                json.loads(line)
-                for line in result.artifacts.trajectory_file.read_text(
-                    encoding="utf-8"
-                ).splitlines()
-            ]
-            self.assertEqual(
-                [event["kind"] for event in trajectory[-2:]],
-                ["evaluation.started", "evaluation.failed"],
-            )
-            self.assertIn(
-                "invalid judge response",
-                trajectory[-1]["payload"]["error"],
-            )
-            manifest = json.loads(
-                result.artifacts.manifest_file.read_text(encoding="utf-8")
-            )
-            self.assertEqual(manifest["evaluation_status"], "failed")
 
 
 if __name__ == "__main__":

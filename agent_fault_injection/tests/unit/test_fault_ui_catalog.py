@@ -2,8 +2,8 @@ import tempfile
 from pathlib import Path
 from unittest import TestCase
 
-from agent_fault_injection.exceptions import ConfigurationError
-from agent_fault_injection.fault_inject.ui_catalog import (
+from agent_fault_injection.pipeline.exceptions import ConfigurationError
+from agent_fault_injection.fault_inject.catalog.ui_catalog import (
     load_fault_ui_catalog,
     resolve_fault_labels,
     resolve_fault_submodes,
@@ -37,7 +37,7 @@ class FaultUiCatalogTests(TestCase):
 
     def test_builtin_multi_submodes_id_filled_from_skill(self) -> None:
         catalog = load_fault_ui_catalog()
-        from agent_fault_injection.fault_inject.registry import FaultRegistry
+        from agent_fault_injection.fault_inject.catalog.registry import FaultRegistry
 
         fault = FaultRegistry().get("thinking-dead-loop")
         submodes = resolve_fault_submodes(

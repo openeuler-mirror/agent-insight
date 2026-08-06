@@ -4,7 +4,7 @@
 
 
 > 面向 `agent-fault-injection`：如何把 **xiaoO**（openEuler AgentOS 智能中枢）作为被测 Agent 平台接入故障注入评测。  
-> 产品评判在 **Insight 服务端 Judge**；本机可选 OpenCodeFaultJudge 调试。  
+> 产品评判在 **Insight 服务端 Judge**（本机 Python Judge 已删除）。  
 > 相关：主设计 [server-judge.md](modules/server-judge.md)；故障矩阵 [fault-catalog.md](fault-catalog.md)；接入契约 [platform-adapter-contract.md](modules/platform-adapter-contract.md)。
 
 ## 实现状态
@@ -58,9 +58,9 @@ flowchart TB
     Traj[trajectory / interactions]
   end
 
-  subgraph judge [评判 - 固定 OpenCode]
-    Ev[ExecutionEvidenceBuilder]
-    OJ[OpenCodeFaultJudge<br/>opencode --pure]
+  subgraph collect [采集 → Insight]
+    Payload[collect-result.json]
+    InsightJudge[Insight 服务端 Judge]
   end
 
   CLI --> Runner
@@ -72,17 +72,17 @@ flowchart TB
   Daemon --> Hook
   Hook --> Loop
   Loop --> Events --> Exec --> Traj
-  Runner --> Ev --> OJ
-  Exec --> Ev
+  Runner --> Payload --> InsightJudge
+  Traj --> Payload
 ```
 
 **两层「发起」不要混淆：**
 
 | 层级 | 谁发起 | 方式 | 职责 |
 |------|--------|------|------|
-| **评测编排** | 用户 / CI / Web | `agent-fault-injection run --platform xiaoo …` | 选故障、分配 workspace、超时、产物、调 Judge |
+| **评测编排** | 用户 / CI / Web | `agent-fault-injection run --platform xiaoo …` | 选故障、分配 workspace、超时、产物、上传 collect |
 | **被测 Agent** | `XiaoOAdapter` | **默认 CLI**；可选 Daemon | 在真实 xiaoO 运行时里执行带故障 Skill 的任务 |
-| **评判** | `OpenCodeFaultJudge` | `opencode run --pure` | 只读证据，输出两轴判定 |
+| **评判** | Insight `judge.ts` | 用户 `getActiveConfig` | 轨迹为主，输出两轴判定 |
 
 ---
 
@@ -118,7 +118,7 @@ AGENT_RAS_PLUGIN_READY=.../plugin-ready.json \
 **为何默认 CLI：**
 
 - 实现简单，与 OpenCode 子进程模型一致，易于超时 / kill / 捕获 stdout
-- 每次 run 用临时 `XIAOO_CONFIG`，天然隔离 hooker / skills，不污染用户日常配置
+- 每次 run 写临时 `XIAOO_CONFIG`（不改用户文件），但以用户真实 config 为底并叠加 FI hooker，保留用户 RAS 等 plugins
 - 适合单次调试与 CI 冒烟
 
 ### 3.2 可选增强：Daemon HTTP + SSE
@@ -170,9 +170,8 @@ flowchart LR
 ```mermaid
 flowchart TB
   subgraph common [agent-fault-injection 公共层]
-    R[ExperimentRunner]
+    R[ExperimentRunner / pipeline]
     FR[FaultRegistry]
-    J[OpenCodeFaultJudge]
   end
 
   subgraph oc [platform = opencode]
@@ -192,7 +191,6 @@ flowchart TB
   OA --> TS
   XA --> HK
   FR --> R
-  R --> J
 ```
 
 | ras-eval 概念 | OpenCode | xiaoO |
@@ -202,9 +200,9 @@ flowchart TB
 | 强制激活 | TS `experimental.chat.system.transform` | Hook `*.Chat.system.transform` |
 | 事件采集 | TS 插件 → `events.jsonl` | Hook 写 `events.jsonl`（+ CLI json / SSE） |
 | 激活信号 | skill 工具成功加载 | 同：观察 skill 工具成功 → `fault.activation.completed` |
-| 配置隔离 | 临时 `OPENCODE_CONFIG_DIR` | 临时 `XIAOO_CONFIG` |
+| 配置策略 | 系统 `~/.config/opencode` + workspace 注入插件 | 系统 `~/.config/xiaoo` 内容合并进临时 `XIAOO_CONFIG`，**保留用户 hooker（含 RAS）并叠加 FI** |
 | Agents / Models | `opencode agent list` / `models` | 解析 `config.toml` 的 `[agent.*]` / `[llm]` |
-| Judge | OpenCode `--pure` | **同一套** OpenCode Judge |
+| Judge | Insight 服务端 | **同一套** Insight Judge |
 
 ---
 
@@ -218,7 +216,7 @@ sequenceDiagram
   participant FS as workspace/.xiaoo
   participant XO as xiaoo CLI或Daemon
   participant HK as ras_eval Hook
-  participant OJ as OpenCodeFaultJudge
+  participant Insight as Insight collect-result / Judge
 
   U->>RAS: run --platform xiaoo --fault ...
   RAS->>XA: execute(RunRequest, FaultDefinition)
@@ -230,10 +228,8 @@ sequenceDiagram
   XO-->>XA: 进程结束 / SSE done
   XA->>XA: map_trajectory → execution.jsonl
   XA-->>RAS: PlatformRunResult(fault_activated=...)
-  alt fault_activated 且 judge_enabled
-    RAS->>OJ: evaluate（始终 opencode）
-    OJ-->>RAS: outcome × fault_containment_status
-  end
+  RAS->>RAS: write collect-result.json
+  Note over Insight: Worker 上传后由 Insight Judge
   RAS-->>U: artifacts/ + RunResult
 ```
 

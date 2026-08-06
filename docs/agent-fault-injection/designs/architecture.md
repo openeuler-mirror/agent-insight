@@ -27,9 +27,9 @@
 |----|------|
 | Task 1:N Run；Faults/Tasks/Run 详情 UI | 保留 FastAPI / 独立 Vite |
 | 轨迹唯一真源 `Session.interactions`（Prisma） | 产品契约暴露 trajectory/execution 多文件树；服务端读本机 artifact 路径 |
-| Judge 在 Insight（二维 outcome×containment） | 本机 OpenCode `ras-judge`（默认） |
+| Judge 在 Insight（二维 outcome×containment） | 本机 Python Judge（已删除） |
 | 注入方式五类落地 + `route_manipulate` 预留 | 与环内 RAS detector **混同检测**；写 OTLP spool |
-| 激活后桥接 `RasAnomalyEvent`（`source=fault_injection`） | 把注入实验伪装成环内实时检出 |
+| FI Run / Session 观测注入结果 | ~~激活后桥接 `RasAnomalyEvent`~~（已移除；观测靠正常轨迹上报） |
 | 本机 FI Worker claim / heartbeat / stop | Next 进程内 `spawn` collector（已废弃） |
 
 ## 分层（当前实现）
@@ -38,14 +38,29 @@
 Browser → Next /api/fault-injection（建任务 queued / 展示 / Judge）
 本机 FI Worker → claim → Python CLI(inject+collect)
        → POST /runs/:runId/collect-result
-       → Session.interactions + Run.injectionEvidenceJson
-       → server judge → RasAnomalyEvent bridge（dry-run 不写）
-       → AgentTraceView / 可靠性观测
+       → Session.interactions + Run.injectionEvidenceJson（恒为 `{}`，字段已废弃）
+       → server judge（写入 FI Run；不写 RasAnomalyEvent）
+       → FI Run 页 / AgentTraceView
 
-Dry-run：仅服务端 stub，不经 Worker。
+任务创建后一律 `queued`，由本机 Worker claim 执行（不再提供 dry-run / 服务端 stub 产品入口）。
 ```
 
 旧同机 spawn 路径已删除。单机调试 = Next + Worker 两进程。
+Worker inventory：`which` + 静态 builtin agents + 读本地配置 models（**不**在启动时调 `opencode agent list` / `opencode models`）。
+
+## 包目录（Python）
+
+```text
+agent_fault_injection/
+├── cli.py
+├── pipeline/          # inject → run → artifacts → collect-result
+│   └── interactions_mapper.py   # 原 trace/
+├── fault_inject/
+│   ├── skills/
+│   ├── catalog/       # models / registry / ui_catalog / yamls
+│   └── injection/     # installer / apply_plan / file_ops / rewrite_engine
+└── platform_adapters/
+```
 
 ## 注入方式（catalog key）
 
@@ -64,11 +79,12 @@ Dry-run：仅服务端 stub，不经 Worker。
 代码分层：
 
 ```text
-catalog / fault.json     → 定义 injection_plan + injection_runtime
-apply_plan / runtime_env → 薄胶水（跑 plan / 序列化 AGENT_RAS_INJECTION_RUNTIME）
-injection_tools          → 能力：file_ops + rewrite_engine（只做副作用，不写自证快照）
-Adapter plugin/hooker    → 挂点执行 + fault.injection.applied 事件
-collect_payload          → interactions + 可选 injectionEvidence → Insight Judge
+catalog / fault.json + capability_api.yaml  → L2 能力面（封闭 op/method）
+apply_plan / runtime_env / lifecycle        → 薄胶水
+fault_inject/injection/                     → L3：file_ops + rewrite_engine
+PlatformAdapter Template Method + SPI       → L4：平台只接线
+OpenCode rewrite-runtime.ts（`platform_adapters/opencode/lib/`） → 表驱动薄层（隔离环境拷到 `config/lib/`，勿进 `plugins/`）
+collect_payload                             → interactions（injectionEvidence 固定 `{}`，已废弃）→ Insight Judge
 ```
 
-Judge 以**轨迹 / 终答 / 终态 workspace**为主；`injectionEvidence` 缺省非必要。containment 含 `inconclusive`（历史 `no_trace` 读路径兼容）。
+不做：完整 Ports 六边形；L2 Method 类 Facade；FI→RasAnomalyEvent bridge。

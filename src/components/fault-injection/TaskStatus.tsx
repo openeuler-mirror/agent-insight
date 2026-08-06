@@ -7,7 +7,6 @@ const TASK_STATUS_LABELS: Record<string, string> = {
   running: '运行中',
   completed: '运行完成',
   failed: '运行失败',
-  dry_run: '模拟运行',
   stopped: '已停止',
 }
 
@@ -17,7 +16,6 @@ const RUN_STATUS_LABELS: Record<string, string> = {
   collecting: '采集中',
   judging: '评判中',
   judge_skipped: '评判跳过',
-  dry_run: '模拟运行',
   stopping: '停止中',
   completed: '运行完成',
   succeeded: '运行完成',
@@ -43,7 +41,7 @@ function toneClass(status: string): string {
   if (status === 'stopped') {
     return 'bg-background-secondary text-foreground-muted'
   }
-  if (status === 'judge_skipped' || status === 'dry_run') {
+  if (status === 'judge_skipped') {
     return 'bg-[var(--warning-subtle)] text-[var(--warning)]'
   }
   if (status === 'queued') {
@@ -79,12 +77,11 @@ export function TaskProgressBar({
     (progress.completed || 0) +
     (progress.failed || 0) +
     (progress.judge_skipped || 0) +
-    (progress.dry_run || 0) +
     (progress.stopped || 0)
   const total = progress.total || 0
   const parts = [
     { key: 'ok', n: progress.completed || 0, className: 'bg-[var(--success)]' },
-    { key: 'skip', n: (progress.judge_skipped || 0) + (progress.dry_run || 0), className: 'bg-[var(--warning)]' },
+    { key: 'skip', n: progress.judge_skipped || 0, className: 'bg-[var(--warning)]' },
     { key: 'bad', n: progress.failed || 0, className: 'bg-[var(--error)]' },
     { key: 'stop', n: progress.stopped || 0, className: 'bg-[var(--foreground-muted)]/55' },
     { key: 'run', n: progress.running || 0, className: 'bg-[var(--primary)]' },

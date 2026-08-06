@@ -22,7 +22,6 @@ def normalize_skill_name(name: str) -> str:
 
 PLUGIN_PATH = (
     Path(__file__).resolve().parents[2]
-    / "agent_fault_injection"
     / "platform_adapters"
     / "opencode"
     / "plugin"
@@ -63,6 +62,29 @@ class SkillNameNormalizeTests(unittest.TestCase):
             source,
             r"if\s*\(\s*skillName\s*===\s*faultSkill\s*\)",
         )
+
+    def test_plugin_imports_message_role_from_rewrite_runtime(self) -> None:
+        self.assertTrue(PLUGIN_PATH.is_file(), f"missing plugin: {PLUGIN_PATH}")
+        source = PLUGIN_PATH.read_text(encoding="utf-8")
+        self.assertIn("messageRole", source)
+        self.assertRegex(
+            source,
+            r'from\s+["\']\.\./lib/rewrite-runtime["\']',
+        )
+        self.assertRegex(
+            source,
+            r"import\s*\{[^}]*\bmessageRole\b[^}]*\}\s*from\s*[\"']\.\./lib/rewrite-runtime[\"']",
+        )
+        runtime = (
+            Path(__file__).resolve().parents[2]
+            / "platform_adapters"
+            / "opencode"
+            / "lib"
+            / "rewrite-runtime.ts"
+        )
+        self.assertTrue(runtime.is_file())
+        runtime_source = runtime.read_text(encoding="utf-8")
+        self.assertIn("export function messageRole(", runtime_source)
 
 
 if __name__ == "__main__":

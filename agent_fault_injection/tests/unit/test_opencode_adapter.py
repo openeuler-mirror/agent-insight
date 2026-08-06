@@ -1,6 +1,5 @@
 import json
 import os
-import shutil
 import sys
 import tempfile
 import unittest
@@ -9,10 +8,9 @@ from unittest import mock
 from unittest import TestCase
 from unittest.mock import patch
 
-from agent_fault_injection.exceptions import ToolInstallationError
-from agent_fault_injection.fault_inject.installer import InstallSession
-from agent_fault_injection.fault_inject.registry import FaultRegistry
-from agent_fault_injection.models import RunArtifacts, RunRequest
+from agent_fault_injection.fault_inject.injection.installer import InstallSession
+from agent_fault_injection.fault_inject.catalog.registry import FaultRegistry
+from agent_fault_injection.pipeline.models import RunArtifacts, RunRequest
 from agent_fault_injection.platform_adapters.opencode.adapter import OpenCodeAdapter
 
 
@@ -242,7 +240,7 @@ class OpenCodeAdapterTests(TestCase):
         )
         self.assertEqual(data["model"], "zhipuai/glm-4")
 
-    def test_copy_user_providers_reads_jsonc(self) -> None:
+    def test_load_user_opencode_config_prefers_jsonc(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary)
             config_dir = home / ".config" / "opencode"
@@ -270,35 +268,14 @@ class OpenCodeAdapterTests(TestCase):
             )
 
             with patch.object(Path, "home", return_value=home):
-                providers = OpenCodeAdapter._copy_user_providers()
+                config = OpenCodeAdapter._load_user_opencode_config()
 
-            self.assertIsNotNone(providers)
-            assert providers is not None
+            self.assertIsNotNone(config)
+            assert config is not None
             self.assertEqual(
-                providers["zhipuai"]["options"]["baseURL"],
+                config["provider"]["zhipuai"]["options"]["baseURL"],
                 "https://open.bigmodel.cn/api/paas/v4",
             )
-
-    def test_resolves_matching_plugin_version_from_opencode(self) -> None:
-        completed = mock.Mock(
-            returncode=0,
-            stdout="1.18.9\n",
-            stderr="",
-        )
-        with mock.patch(
-            "agent_fault_injection.platform_adapters.opencode.adapter.subprocess.run",
-            return_value=completed,
-        ) as run:
-            version = OpenCodeAdapter._resolve_plugin_version("/bin/opencode")
-
-        self.assertEqual(version, "1.18.9")
-        run.assert_called_once_with(
-            ["/bin/opencode", "--version"],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=10,
-        )
 
     def test_installs_and_cleans_up_fault_tools(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -323,35 +300,6 @@ class OpenCodeAdapterTests(TestCase):
             installation.cleanup()
 
             self.assertFalse(tool_dest.exists())
-
-    def test_assert_fault_tools_installed_raises_when_missing(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            workspace = Path(temporary)
-            fault = FaultRegistry().get("execution-goal-drift")
-            with self.assertRaisesRegex(
-                ToolInstallationError,
-                "goal_state_tool.py",
-            ):
-                OpenCodeAdapter._assert_fault_tools_installed(
-                    fault=fault,
-                    workspace=workspace,
-                )
-
-    def test_assert_fault_tools_installed_ok_after_install(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            workspace = Path(temporary)
-            fault = FaultRegistry().get("execution-goal-drift")
-            installation = InstallSession()
-            OpenCodeAdapter._install_fault_tools(
-                installation=installation,
-                fault=fault,
-                workspace=workspace,
-            )
-            OpenCodeAdapter._assert_fault_tools_installed(
-                fault=fault,
-                workspace=workspace,
-            )
-            installation.cleanup()
 
     def test_install_fault_tools_overwrites_leftover_files(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -384,123 +332,60 @@ class OpenCodeAdapterTests(TestCase):
                 "stale-tool\n",
             )
 
-    def test_isolated_environment_preserves_model_state_and_loads_plugin_once(
-        self,
-    ) -> None:
+    def test_installs_workspace_plugin_skill_and_lib(self) -> None:
+        plugin_source = (
+            Path(__file__).resolve().parents[2]
+            / "platform_adapters"
+            / "opencode"
+            / "plugin"
+            / "agent-fault-injection.ts"
+        )
+        rewrite_source = (
+            Path(__file__).resolve().parents[2]
+            / "platform_adapters"
+            / "opencode"
+            / "lib"
+            / "rewrite-runtime.ts"
+        )
+        self.assertTrue(plugin_source.is_file())
+        self.assertTrue(rewrite_source.is_file())
+
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            workspace = root / "workspace"
-            workspace.mkdir()
-            plugin = workspace / "agent-fault-injection-source.ts"
-            plugin.write_text("export default {}", encoding="utf-8")
-            request = RunRequest(
-                platform="opencode",
-                agent="build",
-                fault="step-order-error",
-                prompt="run scene 1",
-                workspace=workspace,
-                output_dir=root / "artifacts",
-            )
+            workspace = Path(temporary)
             fault = FaultRegistry().get("step-order-error")
-            artifacts = RunArtifacts(
-                run_id="run-isolated",
-                root=root / "run",
-                raw_dir=root / "run" / "raw",
-                resolved_fault_dir=root / "run" / "resolved",
-                events_file=root / "run" / "raw" / "events.jsonl",
-                session_file=root / "run" / "raw" / "session.json",
-                stdout_file=root / "run" / "raw" / "stdout.log",
-                stderr_file=root / "run" / "raw" / "stderr.log",
-                trajectory_file=root / "run" / "trajectory.jsonl",
-                interactions_file=root / "run" / "interactions.json",
-                execution_file=root / "run" / "execution.jsonl",
-                manifest_file=root / "run" / "manifest.json",
-                request_file=root / "run" / "request.json",
-                plugin_ready_file=root / "run" / "raw" / "ready.json",
+            installation = InstallSession()
+            OpenCodeAdapter._install_workspace_plugin_and_skill(
+                installation=installation,
+                workspace=workspace,
+                fault=fault,
+                plugin_source=plugin_source,
             )
-            home = root / "home"
-            config_dir = home / ".config" / "opencode"
-            config_dir.mkdir(parents=True)
-            provider = {
-                "custom": {
-                    "options": {"baseURL": "http://provider.example/v1"},
-                    "models": {"UPPER": {"name": "UPPER"}},
-                }
-            }
-            (config_dir / "opencode.jsonc").write_text(
-                json.dumps(
-                    {
-                        "model": "custom/UPPER",
-                        "small_model": "custom/UPPER",
-                        "provider": provider,
-                        "plugin": ["must-not-be-copied"],
-                    }
-                ),
-                encoding="utf-8",
+
+            plugins_dir = workspace / ".opencode" / "plugins"
+            plugin_dest = plugins_dir / "agent-fault-injection.ts"
+            skill_dest = (
+                workspace / ".opencode" / "skills" / fault.skill_name / "SKILL.md"
             )
-            with mock.patch.object(Path, "home", return_value=home):
-                isolated = OpenCodeAdapter._prepare_isolated_environment(
-                    request=request,
-                    artifacts=artifacts,
-                    fault=fault,
-                    plugin_source=plugin,
-                    plugin_version="1.18.9",
-                )
-            try:
-                config = json.loads(
-                    (isolated / "config" / "opencode.json").read_text(
-                        encoding="utf-8"
-                    )
-                )
-                isolated_plugin = isolated / "config" / "plugins" / "agent-fault-injection.ts"
-                self.assertEqual(config["plugin"], [str(isolated_plugin.resolve())])
-                self.assertEqual(config["model"], "custom/UPPER")
-                self.assertEqual(config["small_model"], "custom/UPPER")
-                self.assertEqual(config["provider"], provider)
-                self.assertEqual(
-                    isolated_plugin.read_text(encoding="utf-8"),
-                    "export default {}",
-                )
-                isolated_skill = (
-                    isolated / "config" / "skills" / fault.skill_name / "SKILL.md"
-                )
-                self.assertEqual(
-                    isolated_skill.read_text(encoding="utf-8"),
-                    fault.skill_file.read_text(encoding="utf-8"),
-                )
-                package = json.loads(
-                    (isolated / "config" / "package.json").read_text(encoding="utf-8")
-                )
-                self.assertEqual(
-                    package["dependencies"]["@opencode-ai/plugin"],
-                    "1.18.9",
-                )
-                with mock.patch.dict(
-                    os.environ,
-                    {
-                        "HOME": "/real/home",
-                        "XDG_DATA_HOME": "/real/data",
-                        "OPENCODE_CONFIG_DIR": "/old/config",
-                    },
-                    clear=True,
-                ):
-                    environment = OpenCodeAdapter._build_environment(
-                        artifacts=artifacts,
-                        fault=fault,
-                        isolated_root=isolated,
-                    )
-                self.assertEqual(environment["HOME"], "/real/home")
-                self.assertEqual(environment["XDG_DATA_HOME"], "/real/data")
-                self.assertEqual(
-                    environment["OPENCODE_CONFIG_DIR"],
-                    str(isolated / "config"),
-                )
-                self.assertEqual(
-                    environment["AGENT_RAS_FAULT_SKILL"],
-                    fault.skill_name,
-                )
-            finally:
-                shutil.rmtree(isolated, ignore_errors=True)
+            lib_runtime = workspace / ".opencode" / "lib" / "rewrite-runtime.ts"
+            self.assertTrue(plugin_dest.is_file())
+            self.assertTrue(skill_dest.is_file())
+            self.assertTrue(lib_runtime.is_file())
+            self.assertEqual(
+                sorted(p.name for p in plugins_dir.iterdir() if p.is_file()),
+                ["agent-fault-injection.ts"],
+            )
+            self.assertFalse((plugins_dir / "rewrite-runtime.ts").exists())
+            plugin_text = plugin_dest.read_text(encoding="utf-8")
+            self.assertIn('from "../lib/rewrite-runtime"', plugin_text)
+            self.assertEqual(
+                skill_dest.read_text(encoding="utf-8"),
+                fault.skill_file.read_text(encoding="utf-8"),
+            )
+
+            installation.cleanup()
+            self.assertFalse(plugin_dest.exists())
+            self.assertFalse(skill_dest.exists())
+            self.assertFalse(lib_runtime.exists())
 
     def test_provider_retry_failure_uses_attempt_not_duplicate_count(
         self,
@@ -539,6 +424,47 @@ class OpenCodeAdapterTests(TestCase):
                 ),
             )
 
+    def test_is_database_locked_failure_reads_stderr(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "raw").mkdir(parents=True, exist_ok=True)
+            stderr = root / "stderr.log"
+            stderr.write_text(
+                "Error: Unexpected error\ndatabase is locked\n", encoding="utf-8"
+            )
+            empty = root / "empty-stderr"
+            empty.write_text("", encoding="utf-8")
+
+            def make_artifacts(stderr_file: Path) -> RunArtifacts:
+                return RunArtifacts(
+                    run_id="run-lock",
+                    root=root,
+                    raw_dir=root / "raw",
+                    resolved_fault_dir=root / "resolved",
+                    events_file=root / "events",
+                    session_file=root / "session",
+                    stdout_file=root / "stdout",
+                    stderr_file=stderr_file,
+                    trajectory_file=root / "trajectory",
+                    interactions_file=root / "interactions",
+                    execution_file=root / "execution.jsonl",
+                    manifest_file=root / "manifest",
+                    request_file=root / "request",
+                    plugin_ready_file=root / "ready",
+                )
+
+            self.assertTrue(
+                OpenCodeAdapter._is_database_locked_failure(
+                    "Platform exited before plugin initialization",
+                    make_artifacts(stderr),
+                )
+            )
+            self.assertFalse(
+                OpenCodeAdapter._is_database_locked_failure(
+                    "some other error",
+                    make_artifacts(empty),
+                )
+            )
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,29 @@
+# L2 injection capability surface (closed set).
+# Fault modes (skills/*/fault.json) may only reference methods/ops listed here.
+# Evolving this file is an infrastructure change (lane B), not a fault-mode PR (lane A).
+version: "1"
+
+injection_methods:
+  - skill_inject
+  - file_tamper
+  - prompt_modify
+  - tool_result_tamper
+  - intercept_rewrite
+  - route_manipulate  # reserved; not implemented
+
+structural_ops:
+  - file.write
+  - file.delete
+  - file.delete_section
+  - file.truncate
+  - file.replace_text
+
+runtime_ops:
+  - tool_result.replace_text
+  - tool_result.replace_all
+  - system.append
+  - system.replace_text
+  - messages.history.drop
+  - messages.inject
+  - assistant.replace_text
+  - assistant.truncate

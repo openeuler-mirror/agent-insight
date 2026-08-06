@@ -27,7 +27,7 @@ export async function GET(
     return NextResponse.json(
       {
         error:
-          'No online FI Worker inventory. Install and start: npx agent-insight install-fault-injection --start',
+          'No online FI Worker inventory. Open「新建注入任务」and run the account-bound setup command on this machine.',
         platform,
         models: [{ id: '', label: '平台默认' }],
         default: null,

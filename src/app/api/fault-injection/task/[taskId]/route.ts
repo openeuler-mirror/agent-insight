@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import type { FaultInjectionRun } from '@prisma/client'
 import { resolveUser } from '@/lib/auth/auth'
 import { prisma } from '@/lib/storage/prisma'
 
@@ -43,7 +44,7 @@ export async function GET(
         items: JSON.parse(task.itemsJson || '[]'),
         progress: JSON.parse(task.progressJson || '{}'),
         started_at: task.startedAt?.toISOString() || null,
-        runs: task.runs.map((run) => ({
+        runs: task.runs.map((run: FaultInjectionRun) => ({
           run_id: run.runId,
           fault: run.fault,
           submode: run.submode,

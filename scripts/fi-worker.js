@@ -25,7 +25,7 @@ function loadConfig() {
     raw.workerId ||
     process.env.AGENT_INSIGHT_FI_WORKER_ID ||
     `fi-worker-${os.hostname()}-${randomBytes(3).toString('hex')}`
-  const maxParallel = Math.max(1, Number(raw.maxParallel || 2))
+  const maxParallel = Math.max(1, Number(raw.maxParallel || 5))
   const pollIntervalMs = Math.max(500, Number(raw.pollIntervalMs || 2000))
   const workspaceBase =
     raw.workspaceBase || path.join(homeFi, 'workspaces')
@@ -59,10 +59,31 @@ function resolveWorkspace(logical, workspaceBase) {
   return path.resolve(workspaceBase, value)
 }
 
-// Prefer curl --noproxy when HTTP(S)_PROXY is set (Node fetch often ignores NO_PROXY).
+// Prefer fetch for loopback. When HTTP(S)_PROXY is set for remote hosts, use curl
+// with --noproxy and -d @file so large collect-result bodies do not blow argv.
+function isLoopbackHost(urlStr) {
+  try {
+    const host = new URL(urlStr).hostname
+    return host === 'localhost' || host === '127.0.0.1' || host === '::1'
+  } catch {
+    return false
+  }
+}
+
+function hasHttpProxy() {
+  return Boolean(
+    process.env.http_proxy ||
+      process.env.HTTP_PROXY ||
+      process.env.https_proxy ||
+      process.env.HTTPS_PROXY,
+  )
+}
+
 async function api(cfg, method, apiPath, body) {
   const url = `${cfg.insightBaseUrl}${apiPath}`
-  if (process.env.http_proxy || process.env.HTTP_PROXY || process.env.https_proxy || process.env.HTTPS_PROXY) {
+  const useCurl = hasHttpProxy() && !isLoopbackHost(url)
+
+  if (useCurl) {
     const args = [
       '--noproxy',
       '*',
@@ -74,19 +95,45 @@ async function api(cfg, method, apiPath, body) {
       '-H',
       'content-type: application/json',
     ]
-    if (body) args.push('-d', JSON.stringify(body))
-    args.push(url)
-    const r = spawnSync('curl', args, { encoding: 'utf8', maxBuffer: 20 * 1024 * 1024 })
-    if (r.status !== 0) throw new Error(r.stderr || `curl exit ${r.status}`)
-    return r.stdout ? JSON.parse(r.stdout) : null
+    let tmpFile = null
+    try {
+      if (body !== undefined) {
+        tmpFile = path.join(
+          os.tmpdir(),
+          `fi-worker-body-${process.pid}-${randomBytes(4).toString('hex')}.json`,
+        )
+        fs.writeFileSync(tmpFile, JSON.stringify(body), 'utf8')
+        args.push('-d', `@${tmpFile}`)
+      }
+      args.push(url)
+      const r = spawnSync('curl', args, {
+        encoding: 'utf8',
+        maxBuffer: 20 * 1024 * 1024,
+      })
+      if (r.error) throw new Error(r.error.message || String(r.error))
+      if (r.signal) throw new Error(`curl killed by signal ${r.signal}`)
+      if (r.status !== 0) {
+        throw new Error((r.stderr || '').trim() || `curl exit ${r.status}`)
+      }
+      return r.stdout ? JSON.parse(r.stdout) : null
+    } finally {
+      if (tmpFile) {
+        try {
+          fs.unlinkSync(tmpFile)
+        } catch {
+          /* ignore */
+        }
+      }
+    }
   }
+
   const res = await fetch(url, {
     method,
     headers: {
       'content-type': 'application/json',
       'x-witty-api-key': cfg.apiKey,
     },
-    body: body ? JSON.stringify(body) : undefined,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
   })
   const text = await res.text()
   let json = null
@@ -108,52 +155,196 @@ function which(bin) {
   return r.status === 0 ? (r.stdout || '').trim() : null
 }
 
-function probeInventory(packageRoot) {
-  const platforms = {}
-  for (const id of ['opencode', 'xiaoo']) {
-    const executable = which(id)
-    platforms[id] = {
-      ready: Boolean(executable),
-      executable,
-      agents: executable
-        ? [{ id: id === 'xiaoo' ? 'default' : 'build', label: id === 'xiaoo' ? 'default' : 'build' }]
-        : [],
-      models: [],
+const OPENCODE_BUILTIN_AGENTS = ['build', 'plan', 'general', 'explore']
+
+function stripJsonc(text) {
+  let out = ''
+  let i = 0
+  let inString = false
+  let escape = false
+  while (i < text.length) {
+    const ch = text[i]
+    if (inString) {
+      out += ch
+      if (escape) escape = false
+      else if (ch === '\\') escape = true
+      else if (ch === '"') inString = false
+      i += 1
+      continue
     }
+    if (ch === '"') {
+      inString = true
+      out += ch
+      i += 1
+      continue
+    }
+    if (ch === '/' && text[i + 1] === '/') {
+      i += 2
+      while (i < text.length && text[i] !== '\n') i += 1
+      continue
+    }
+    if (ch === '/' && text[i + 1] === '*') {
+      i += 2
+      while (i + 1 < text.length && !(text[i] === '*' && text[i + 1] === '/')) i += 1
+      i += 2
+      continue
+    }
+    out += ch
+    i += 1
   }
+  return out.replace(/,\s*([}\]])/g, '$1')
+}
+
+function readJsonConfig(filePath) {
   try {
-    const code = `
-import json
-from agent_fault_injection.platform_adapters.opencode.adapter import OpenCodeAdapter
-from agent_fault_injection.platform_adapters.xiaoo.adapter import XiaoOAdapter
-out = {}
-for name, Adapter in (("opencode", OpenCodeAdapter), ("xiaoo", XiaoOAdapter)):
-    try:
-        ad = Adapter()
-        agents = ad.list_agents().get("agents") or ad.list_agents().get("items") or []
-        models = ad.list_models().get("models") or ad.list_models().get("items") or []
-        out[name] = {"agents": agents, "models": models}
-    except Exception as e:
-        out[name] = {"agents": [], "models": [], "error": str(e)}
-print(json.dumps(out))
-`
-    const r = spawnSync('python3', ['-c', code], {
-      cwd: packageRoot,
-      encoding: 'utf8',
-      env: process.env,
-    })
-    if (r.status === 0 && r.stdout) {
-      const parsed = JSON.parse(r.stdout)
-      for (const id of Object.keys(platforms)) {
-        const agents = parsed[id]?.agents
-        const models = parsed[id]?.models
-        if (Array.isArray(agents) && agents.length) platforms[id].agents = agents
-        if (Array.isArray(models)) platforms[id].models = models
+    if (!fs.existsSync(filePath)) return null
+    const raw = fs.readFileSync(filePath, 'utf8')
+    return JSON.parse(stripJsonc(raw))
+  } catch {
+    return null
+  }
+}
+
+function loadOpenCodeConfig() {
+  const home = path.join(os.homedir(), '.config', 'opencode')
+  for (const name of ['opencode.jsonc', 'opencode.json', 'config.json']) {
+    const data = readJsonConfig(path.join(home, name))
+    if (data && typeof data === 'object') return data
+  }
+  return null
+}
+
+function modelsFromOpenCodeConfig(config) {
+  const models = []
+  const seen = new Set()
+  const providers = config && typeof config.provider === 'object' ? config.provider : null
+  if (providers) {
+    for (const [providerId, body] of Object.entries(providers)) {
+      if (!providerId || !body || typeof body !== 'object') continue
+      const providerModels = body.models
+      if (!providerModels || typeof providerModels !== 'object') continue
+      for (const [modelId, meta] of Object.entries(providerModels)) {
+        if (!modelId) continue
+        const id = `${providerId}/${modelId}`
+        if (seen.has(id)) continue
+        seen.add(id)
+        const label =
+          meta && typeof meta === 'object' && typeof meta.name === 'string' && meta.name.trim()
+            ? meta.name.trim()
+            : modelId
+        models.push({
+          id,
+          providerID: providerId,
+          modelID: modelId,
+          name: label,
+          label,
+          default: false,
+        })
       }
     }
-  } catch {
-    /* keep which-based defaults */
   }
+  const top = typeof config?.model === 'string' ? config.model.trim() : ''
+  if (top && top.includes('/')) {
+    const [providerID, modelID] = top.split('/', 2)
+    if (providerID && modelID && !seen.has(top)) {
+      models.unshift({
+        id: top,
+        providerID,
+        modelID,
+        name: modelID,
+        label: modelID,
+        default: true,
+      })
+      seen.add(top)
+    } else {
+      for (const row of models) {
+        row.default = row.id === top
+      }
+    }
+  }
+  return models
+}
+
+function loadXiaoOLlm() {
+  const envPath = (process.env.XIAOO_CONFIG || '').trim()
+  const configPath = envPath
+    ? envPath.replace(/^~(?=\/|$)/, os.homedir())
+    : path.join(os.homedir(), '.config', 'xiaoo', 'config.toml')
+  try {
+    if (!fs.existsSync(configPath)) return { models: [], note: `missing ${configPath}` }
+    const text = fs.readFileSync(configPath, 'utf8')
+    let inLlm = false
+    const values = {}
+    for (const line of text.split(/\r?\n/)) {
+      const stripped = line.trim()
+      if (!stripped || stripped.startsWith('#')) continue
+      if (stripped.startsWith('[') && stripped.endsWith(']')) {
+        inLlm = stripped === '[llm]'
+        continue
+      }
+      if (!inLlm) continue
+      const eq = stripped.indexOf('=')
+      if (eq < 0) continue
+      const key = stripped.slice(0, eq).trim()
+      let val = stripped.slice(eq + 1).trim()
+      if (
+        (val.startsWith('"') && val.endsWith('"')) ||
+        (val.startsWith("'") && val.endsWith("'"))
+      ) {
+        val = val.slice(1, -1)
+      }
+      values[key] = val
+    }
+    const provider = typeof values.provider === 'string' ? values.provider.trim() : ''
+    const model = typeof values.model === 'string' ? values.model.trim() : ''
+    if (!provider || !model) {
+      return { models: [], note: `No [llm] provider/model in ${configPath}` }
+    }
+    const id = `${provider}/${model}`
+    return {
+      models: [
+        {
+          id,
+          providerID: provider,
+          modelID: model,
+          name: model,
+          label: model,
+          default: true,
+        },
+      ],
+    }
+  } catch (err) {
+    return { models: [], note: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+/** Lightweight inventory: which + builtins + local config files. Never shells out to platform CLIs. */
+function probeInventory() {
+  const platforms = {}
+
+  const ocExe = which('opencode')
+  const ocConfig = loadOpenCodeConfig()
+  platforms.opencode = {
+    ready: Boolean(ocExe),
+    executable: ocExe,
+    agents: ocExe
+      ? OPENCODE_BUILTIN_AGENTS.map((id) => ({ id, name: id, label: id }))
+      : [],
+    models: ocExe && ocConfig ? modelsFromOpenCodeConfig(ocConfig) : [],
+  }
+
+  const xoExe = which('xiaoo')
+  const xo = loadXiaoOLlm()
+  platforms.xiaoo = {
+    ready: Boolean(xoExe),
+    executable: xoExe,
+    agents: xoExe
+      ? [{ id: 'defaultagent', name: 'defaultagent', label: 'defaultagent' }]
+      : [],
+    models: xoExe ? xo.models : [],
+  }
+  if (xo.note && xoExe) platforms.xiaoo.note = xo.note
+
   return { platforms }
 }
 
@@ -180,7 +371,6 @@ function runCollector(cfg, run) {
       cfg.artifactsDir,
       '--run-id',
       run.runId,
-      '--no-judge',
     ]
     if (run.model) args.push('--model', run.model)
     if (run.submode) args.push('--submode', run.submode)
@@ -204,8 +394,15 @@ function runCollector(cfg, run) {
     child.on('close', (code) => {
       activeChildren.delete(run.runId)
       if (code !== 0) {
-        reject(new Error(stderr || `collector exited ${code}`))
-        return
+        // Still prefer a written collect-result (e.g. fault activated then
+        // session abort) over treating the whole run as empty failure.
+        try {
+          resolve(readCollectResult(cfg.artifactsDir, run.runId))
+          return
+        } catch {
+          reject(new Error(stderr || `collector exited ${code}`))
+          return
+        }
       }
       resolve(readCollectResult(cfg.artifactsDir, run.runId))
     })
@@ -270,7 +467,7 @@ async function main() {
   console.log(`[fi-worker] workerId=${cfg.workerId} host=${cfg.insightBaseUrl}`)
 
   let busy = 0
-  const inventory = probeInventory(cfg.packageRoot)
+  const inventory = probeInventory()
 
   async function tick() {
     try {

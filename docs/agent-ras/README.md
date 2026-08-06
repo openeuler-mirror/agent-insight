@@ -48,6 +48,7 @@
 | [memory-noise-interference.md](designs/features/memory-noise-interference.md) | 记忆噪声干扰 FI（S1–S3 Skill 已落地，S4 未做） | FI S1–S3 已落地 |
 | [xiaoo-adapter.md](designs/features/xiaoo-adapter.md) | xiaoO 协议 inproc / 入口无关（无 HTTP/SSE） | 已落地（inproc E2E） |
 | [xiaoo-observe-ingest.md](designs/features/xiaoo-observe-ingest.md) | xiaoO OTel 观测（现网 OTLP + RAS join；Insight 最小侵入） | 已落地 |
+| [fault-domain-plugins.md](designs/features/fault-domain-plugins.md) | 内核/能力分层（core 下三目录整体上移，结构原样）+ detector 注册入口统一 | 规划中 |
 
 ---
 

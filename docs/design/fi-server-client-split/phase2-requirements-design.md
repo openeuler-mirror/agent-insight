@@ -407,7 +407,7 @@ IF run.status=collecting
 |insightBaseUrl|增|Worker 连接的 Insight|string|安装时写入|URL|
 |apiKey|增|用户密钥|string|安装时写入|—|
 |workerId|增|Worker 标识|string|安装生成|—|
-|maxParallel|增|本机并行 Run 数|number|`[[PH:fi_worker_max_parallel | rec:2 | why:对齐现网 AGENT_INSIGHT_FI_MAX_PARALLEL 默认]]`|≥1|
+|maxParallel|增|本机并行 Run 数|number|`[[PH:fi_worker_max_parallel | rec:5 | why:对齐参考仓 RunJobManager.max_parallel_runs 默认]]`|≥1|
 |pollIntervalMs|增|claim/heartbeat 周期|number|`[[PH:fi_poll_ms | rec:2000 | why:与现 UI 轮询量级同级、平衡及时性与负载]]`|≥500|
 |AGENT_INSIGHT_FI_CLAIM_TIMEOUT_SEC|增|**服务端** collecting 回收阈值|number|`[[PH:fi_claim_timeout_sec | rec:300 | why:覆盖单次注入常见超时量级并留余量]]`|≥60|
 |artifactsDir / workspaceBase|既有|**本机**产物与默认 workspace|path|`~/.agent-insight/fault-injection/...`|仅 Worker 展开 ~|

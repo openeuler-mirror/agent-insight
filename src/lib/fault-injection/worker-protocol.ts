@@ -1,3 +1,4 @@
+import type { FaultInjectionWorker } from '@prisma/client'
 import { prisma } from '@/lib/storage/prisma'
 import { refreshTaskProgress } from '@/lib/fault-injection/store'
 
@@ -204,7 +205,7 @@ export async function listStopCommandsForWorker(user: string, workerId: string) 
     },
     select: { runId: true },
   })
-  return runs.map((r) => ({ type: 'stop' as const, runId: r.runId }))
+  return runs.map((r: { runId: string }) => ({ type: 'stop' as const, runId: r.runId }))
 }
 
 export async function getLatestWorkerInventory(user: string | null, platform: string) {
@@ -287,7 +288,9 @@ export async function listPlatformsFromWorkers(user: string | null): Promise<{
       }
     }
     if (!workers.length) {
-      errors = ['No online FI Worker; run: npx agent-insight install-fault-injection --start']
+      errors = [
+        '无在线 FI Worker；请在「新建注入任务」页复制账号相关的 setup 命令并在本机执行',
+      ]
     }
     return {
       id,
@@ -300,7 +303,7 @@ export async function listPlatformsFromWorkers(user: string | null): Promise<{
 
   return {
     platforms,
-    workers: workers.map((w) => ({
+    workers: workers.map((w: FaultInjectionWorker) => ({
       workerId: w.workerId,
       hostname: w.hostname,
       lastSeenAt: w.lastSeenAt.toISOString(),

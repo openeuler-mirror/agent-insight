@@ -119,6 +119,8 @@ function RasNodeBadge({
 }) {
     const first = markers[0];
     if (!first) return null;
+    const isFi = first.source === 'fi' || markers.every((m) => m.source === 'fi');
+    const prefix = isFi ? 'FI' : 'RAS';
     const title = markers
         .map(marker => `${marker.label} (${marker.severity})${marker.summary ? `: ${marker.summary}` : ''}`)
         .join('\n');
@@ -134,7 +136,7 @@ function RasNodeBadge({
         >
             <AlertIcon className="size-3 shrink-0" aria-hidden />
             <span className="truncate">
-                {compact ? 'RAS' : `RAS · ${first.label}`}
+                {compact ? prefix : `${prefix} · ${first.label}`}
             </span>
             {markers.length > 1 && <span className="shrink-0 tabular-nums">+{markers.length - 1}</span>}
         </span>
@@ -144,14 +146,16 @@ function RasNodeBadge({
 function RasReliabilityDetails({ markers }: { markers: RasAnomalyMarker[] }) {
     const { t: tt } = useLocale();
     if (!markers.length) return null;
+    const isFi = markers.every((m) => m.source === 'fi');
+    const heading = isFi ? 'FI Events' : tt('traceTree.rasEvents');
     return (
         <section
             className="rounded-md border border-error-border bg-error-subtle p-3"
-            aria-label={tt('traceTree.rasEvents')}
+            aria-label={heading}
         >
             <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-error">
                 <AlertIcon className="size-4" aria-hidden />
-                {tt('traceTree.rasEvents')}
+                {heading}
                 <span className="rounded-full bg-background px-1.5 py-0.5 text-[10px] tabular-nums text-foreground-secondary">
                     {markers.length}
                 </span>
@@ -576,6 +580,8 @@ export interface AgentTraceViewProps {
     anomalies?: RasAnomalyMarker[];
     /** RAS 告警、处置请求和处置结果，合并到根 Agent 行为时间线 */
     reliabilityEvents?: RasTimelineEvent[];
+    /** Optional class for the dual-pane grid (e.g. FI run page fillHeight). */
+    panelClassName?: string;
 }
 
 export default function AgentTraceView({
@@ -588,6 +594,7 @@ export default function AgentTraceView({
     traceKey,
     anomalies,
     reliabilityEvents,
+    panelClassName,
 }: AgentTraceViewProps) {
     const { user } = useAuth();
     const { t: tt } = useLocale();
@@ -1089,7 +1096,13 @@ export default function AgentTraceView({
                 </div>
             )}
 
-            <div className="grid gap-3 min-h-[520px] h-[calc(100vh-200px)]" style={{ gridTemplateColumns: 'minmax(400px, 62%) 1fr' }}>
+            <div
+              className={cn(
+                'grid min-h-[520px] gap-3',
+                panelClassName || 'h-[calc(100vh-200px)]',
+              )}
+              style={{ gridTemplateColumns: 'minmax(400px, 62%) 1fr' }}
+            >
                 {/* ─── Left: Unified Span Tree ─── */}
                 <div className="rounded-lg border border-card-border bg-card flex flex-col h-full min-h-0 overflow-hidden">
                     {/* Toolbar: expand/collapse + search + filters */}

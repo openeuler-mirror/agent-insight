@@ -15,7 +15,6 @@ export type FaultJudgeInput = {
   injectionMethod?: string | null
   faultActivated: boolean
   interactions: unknown[]
-  injectionEvidence?: Record<string, unknown> | null
   submode?: string | null
 }
 
@@ -76,7 +75,6 @@ export async function judgeFaultInjection(input: FaultJudgeInput): Promise<Fault
     injectionMethod: input.injectionMethod,
     submode: input.submode,
     stepsText,
-    injectionEvidence: input.injectionEvidence || {},
   })
 
   const completion = await client.chat.completions.create({

@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `037bd69a0492810cbe957445c26eb71e2a14ef58` (`037bd69`) |
+| Commit | `a65aa8b0bbead76329c0782425770578cedac83b` (`a65aa8b`) |
 | Branch | `dev_agent_ras` |
-| Date | 2026-08-04 |
+| Date | 2026-08-05 |
 | Author | iceory |
-| Subject | `feat(ras): 扩展多平台 inproc 并重组 agent-ras 文档` |
+| Subject | `feat(fi): 吸收 Judge 证据边界与 injection_tools 扁平化` |
 
-**如何更新：** `git diff 037bd69 HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff a65aa8b HEAD -- src/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。

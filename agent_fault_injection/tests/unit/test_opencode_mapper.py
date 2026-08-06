@@ -3,8 +3,8 @@ import tempfile
 from pathlib import Path
 from unittest import TestCase
 
-from agent_fault_injection.fault_inject.registry import FaultRegistry
-from agent_fault_injection.models import RunArtifacts, RunRequest
+from agent_fault_injection.fault_inject.catalog.registry import FaultRegistry
+from agent_fault_injection.pipeline.models import RunArtifacts, RunRequest
 from agent_fault_injection.platform_adapters.opencode.mapper import (
     OpenCodeTrajectoryMapper,
 )

@@ -5,8 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agent_fault_injection.fault_inject.registry import FaultRegistry
-from agent_fault_injection.fault_inject.scenarios import parse_skill_submodes
+from agent_fault_injection.fault_inject.catalog.registry import FaultRegistry
+from agent_fault_injection.fault_inject.catalog.scenarios import parse_skill_submodes
 
 
 class ExecutionGoalDriftToolTests(unittest.TestCase):

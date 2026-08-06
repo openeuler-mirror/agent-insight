@@ -16,7 +16,6 @@ from agent_fault_injection.platform_adapters.opencode.catalog import (
     parse_opencode_models_output,
     select_usable_agents,
 )
-from agent_fault_injection.web.models_catalog import list_platform_agents, list_platform_models
 
 
 _AGENT_CLI = """
@@ -240,11 +239,3 @@ class OpenCodeCatalogParseTests(TestCase):
             require_usable=True,
         )
         self.assertEqual([item["id"] for item in usable], ["huawei-blue/GLM-5.2"])
-
-    def test_unknown_platform_stubs(self) -> None:
-        agents = list_platform_agents("openclaw")
-        models = list_platform_models("hermes")
-        self.assertEqual(agents["agents"], [])
-        self.assertEqual(models["models"], [])
-        self.assertIn("note", agents)
-        self.assertIn("note", models)

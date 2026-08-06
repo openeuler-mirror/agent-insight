@@ -63,7 +63,8 @@
 
 | 日期 | 说明 |
 |------|------|
-| 2026-08-05 | 边界重划：injection_tools 仅能力；不写自证快照；Judge 看轨迹/终答 |
+| 2026-08-05 | 边界重划：injection 仅能力；不写自证快照；Judge 看轨迹/终答 |
+| 2026-08-06 | `injectionEvidence` 产品字段废弃（collect 固定 `{}`）；本机 Judge / evaluation.py 删除；包目录归位 pipeline + catalog/injection |
 | 2026-08-04 | 意译六 key（skill_inject / …）；无旧版兼容；落地 prompt + intercept；route 预留 |
 | 2026-08-04 | 改名六类；落地 prompt + interception P0；routing 预留 |
 | 2026-08-04 | 初版 L3 runtime FI |

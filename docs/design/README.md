@@ -38,6 +38,7 @@
 | FI 服务端/客户端分离 | [fi-server-client-split](fi-server-client-split/) | 任务下发与展示留服务端；注入编排与能力在本机 FI Worker；curl/`install-fault-injection` 安装对齐 agent-ras | Refactor | 2026-08-05 | ✅ 已实现（浏览器 E2E：dry-run + Worker claim） | — |
 | 记忆故障 FI 方案（文件丢失等） | [`../agent-ras/designs/features/memory-file-loss.md`](../agent-ras/designs/features/memory-file-loss.md) | 记忆丢失/损坏/投毒注入方案；FI-P0=`memory-file-loss` 已落地 | Feature | 2026-08-03 | 🟡 FI-P0 已落地；检测器与其余子类规划中 | — |
 | 记忆噪声干扰 FI | [`../agent-ras/designs/features/memory-noise-interference.md`](../agent-ras/designs/features/memory-noise-interference.md) | Skill S1–S3 已落地；S4 压缩失真未实施 | Feature | 2026-08-03 | 🟡 S1–S3 已落地 | — |
+| Agent RAS 内核/能力分层与注册入口统一 | [`../agent-ras/designs/features/fault-domain-plugins.md`](../agent-ras/designs/features/fault-domain-plugins.md) | core 下 agents/detectors/recovery 整体上移一层（内部结构与 skills 不动）；ras_embed 更名 ras_runtime；SessionHub/factory 统一走 detectors/registry，消灭 force_thinking_loop | Refactor | 2026-08-06 | ⬜ 未实现（设计已对齐） | — |
 | FI 证据边界与 inconclusive 语义 | [`../agent-fault-injection/designs/modules/server-judge.md`](../agent-fault-injection/designs/modules/server-judge.md) | 注入工具不写自证快照；Judge 以轨迹为主；`no_trace`→`inconclusive` | Refactor | 2026-08-05 | ✅ 已实现 | — |
 
 ## 字段口径

@@ -26,7 +26,6 @@ export type ProgressCounts = {
   completed: number
   failed: number
   judge_skipped?: number
-  dry_run?: number
   stopped?: number
 }
 

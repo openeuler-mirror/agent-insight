@@ -6,9 +6,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agent_fault_injection.fault_inject.registry import FaultRegistry
-from agent_fault_injection.fault_inject.scenarios import parse_skill_submodes
-from agent_fault_injection.fault_inject.ui_catalog import (
+from agent_fault_injection.fault_inject.catalog.registry import FaultRegistry
+from agent_fault_injection.fault_inject.catalog.scenarios import parse_skill_submodes
+from agent_fault_injection.fault_inject.catalog.ui_catalog import (
     load_fault_ui_catalog,
     resolve_fault_labels,
 )
@@ -27,7 +27,6 @@ class ToolArgumentErrorToolTests(unittest.TestCase):
         cls.tools = {path.name: path for path in cls.fault.tool_files}
         cls.plugin_source = (
             Path(__file__).parents[2]
-            / "agent_fault_injection"
             / "platform_adapters"
             / "opencode"
             / "plugin"

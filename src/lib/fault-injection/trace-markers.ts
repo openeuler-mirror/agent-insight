@@ -1,5 +1,4 @@
 import type { RasTraceMarker } from '@/lib/ingest/ras/trace-markers'
-import type { RasTimelineEvent } from '@/components/observe/AgentTraceView'
 
 /** FI marker shaped for AgentTraceView `anomalies` + MarkerPipeline. */
 export type FiTraceMarker = RasTraceMarker & {
@@ -87,22 +86,6 @@ export function buildFiPipelineMarkers(rawMarkers: unknown): FiPipelineMarker[] 
     timestamp: marker.ts,
     severity: marker.severity,
     payload: marker.payload,
-  }))
-}
-
-/** FI markers as root-timeline reliability events. */
-export function buildFiReliabilityEvents(markers: FiTraceMarker[]): RasTimelineEvent[] {
-  return markers.map((marker) => ({
-    ts: marker.ts,
-    type: marker.kind,
-    label: marker.label,
-    summary: marker.summary,
-    payload: {
-      source: 'fi',
-      severity: marker.severity,
-      messageId: marker.messageId,
-      ...(marker.payload || {}),
-    },
   }))
 }
 

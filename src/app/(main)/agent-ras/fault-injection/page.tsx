@@ -29,7 +29,7 @@ export default function FaultInjectionFaultsPage() {
   }, [load])
 
   return (
-    <FiPageShell title="故障注入" contentClassName="min-h-[70vh]">
+    <FiPageShell className="overflow-hidden" contentClassName="min-h-0 overflow-hidden">
       <FaultTable faults={faults} loading={loading} />
     </FiPageShell>
   )

@@ -825,7 +825,7 @@ model FaultInjectionTask {
   id              String   @id @default(cuid())
   taskKey         String   @unique // task-{hex}
   name            String
-  status          String   // queued | running | completed | failed | stopped | dry_run
+  status          String   // queued | running | completed | failed | stopped
   platform        String
   agent           String
   prompt          String
@@ -860,7 +860,7 @@ model FaultInjectionRun {
   fault                    String
   submode                  String?
   injectionMethod          String?
-  status                   String   // queued|collecting|judging|completed|failed|judge_skipped|dry_run|stopped
+  status                   String   // queued|collecting|judging|completed|failed|judge_skipped|stopped
   workerId                 String?
   stopRequested            Boolean  @default(false)
   queuedAt                 DateTime @default(now())

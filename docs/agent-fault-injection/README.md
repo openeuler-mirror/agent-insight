@@ -40,5 +40,7 @@
 | [task-orchestration.md](designs/modules/task-orchestration.md) | Insight FI API | ✅ |
 | [fault-inject.md](designs/modules/fault-inject.md) | 六类 injection_method | ✅（route 未落地） |
 | [platform-adapter-contract.md](designs/modules/platform-adapter-contract.md) | Adapter 接入契约 | ✅ |
+| [platform-adapter-spi.md](designs/modules/platform-adapter-spi.md) | Template Method SPI 对照 | ✅ |
+| [opencode-rewrite-spike.md](designs/opencode-rewrite-spike.md) | OpenCode 消镜像 spike | ✅ |
 | [server-judge.md](designs/modules/server-judge.md) | Insight Judge（含 inconclusive） | ✅ |
-| [insight-bridge.md](designs/modules/insight-bridge.md) | Session + RAS bridge | ✅ |
+| [insight-bridge.md](designs/modules/insight-bridge.md) | Session 采集（已去 RAS bridge） | ✅ |

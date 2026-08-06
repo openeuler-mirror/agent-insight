@@ -8,18 +8,18 @@ from pathlib import Path
 from unittest import TestCase
 
 from agent_fault_injection.fault_inject.catalog import load_fault_definition
-from agent_fault_injection.fault_inject.apply_plan import apply_injection_plan
-from agent_fault_injection.fault_inject.installer import InstallSession
-from agent_fault_injection.fault_inject.injection_tools import InjectionContext
-from agent_fault_injection.fault_inject.injection_tools.file_ops import (
+from agent_fault_injection.fault_inject.injection.apply_plan import apply_injection_plan
+from agent_fault_injection.fault_inject.injection.installer import InstallSession
+from agent_fault_injection.fault_inject.injection import InjectionContext
+from agent_fault_injection.fault_inject.injection.file_ops import (
     file_delete,
     file_delete_section,
     file_replace_text,
     file_truncate,
     file_write,
 )
-from agent_fault_injection.fault_inject.models import InjectionStep
-from agent_fault_injection.fault_inject.registry import FaultRegistry
+from agent_fault_injection.fault_inject.catalog.models import InjectionStep
+from agent_fault_injection.fault_inject.catalog.registry import FaultRegistry
 
 
 class InjectionToolsTests(TestCase):
@@ -183,7 +183,7 @@ class InjectionToolsTests(TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             ctx, _installation = self._ctx(root, submode="1")
-            from agent_fault_injection.fault_inject.models import FaultDefinition
+            from agent_fault_injection.fault_inject.catalog.models import FaultDefinition
 
             fault = FaultDefinition(
                 name="x",

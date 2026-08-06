@@ -11,6 +11,7 @@ export type CollectPayload = {
   faultActivatedAt?: number | null
   interactions: unknown[]
   markers?: unknown[]
+  /** @deprecated Always `{}`; Judge uses interactions only. DB column retained. */
   injectionEvidence?: Record<string, unknown>
 }
 
@@ -25,8 +26,8 @@ function packageRoot(): string {
 export async function listFaultsViaPython(platform?: string): Promise<unknown[]> {
   const script = `
 import json
-from agent_fault_injection.fault_inject.registry import FaultRegistry
-from agent_fault_injection.fault_inject.ui_catalog import (
+from agent_fault_injection.fault_inject.catalog.registry import FaultRegistry
+from agent_fault_injection.fault_inject.catalog.ui_catalog import (
     get_fault_ui_catalog,
     injection_method_label,
     resolve_fault_labels,
@@ -90,7 +91,7 @@ export async function readSkillMarkdown(faultName: string): Promise<{
   const script = `
 import json
 from pathlib import Path
-from agent_fault_injection.fault_inject.registry import FaultRegistry
+from agent_fault_injection.fault_inject.catalog.registry import FaultRegistry
 fault = FaultRegistry().get(${JSON.stringify(faultName)})
 skill = Path(fault.skill_file)
 print(json.dumps({
@@ -103,53 +104,6 @@ print(json.dumps({
 }, ensure_ascii=False))
 `
   return JSON.parse(await runPython(script))
-}
-
-/** Dry-run collect for E2E without launching a real agent. */
-export function buildStubCollectPayload(input: {
-  runId: string
-  fault: string
-  platform: string
-  prompt: string
-}): CollectPayload {
-  const now = Date.now()
-  const sessionId = `fi-session-${input.runId}`
-  return {
-    runId: input.runId,
-    taskId: sessionId,
-    framework: input.platform,
-    fault: input.fault,
-    injectionMethod: 'skill_inject',
-    faultActivated: true,
-    faultActivatedAt: now,
-    interactions: [
-      {
-        messageID: `${sessionId}-user`,
-        role: 'user',
-        content: input.prompt,
-        timestamp: now,
-      },
-      {
-        messageID: `${sessionId}-assistant`,
-        role: 'assistant',
-        content: `Stub run for fault ${input.fault}: simulated agent output.`,
-        timestamp: now + 1000,
-      },
-    ],
-    markers: [
-      {
-        id: `${input.runId}-activation`,
-        kind: 'fault_activation',
-        label: 'Fault activated (stub)',
-        timestamp: now,
-        severity: 'warning',
-        payload: { trace_anchor: { message_id: `${sessionId}-assistant` } },
-      },
-    ],
-    injectionEvidence: {
-      runtime: { stub: true, note: 'E2E stub collector' },
-    },
-  }
 }
 
 function runPython(code: string): Promise<string> {

@@ -2,8 +2,8 @@ import tempfile
 from pathlib import Path
 from unittest import TestCase
 
-from agent_fault_injection.exceptions import InstallationConflictError
-from agent_fault_injection.fault_inject.installer import InstallSession
+from agent_fault_injection.pipeline.exceptions import InstallationConflictError
+from agent_fault_injection.fault_inject.injection.installer import InstallSession
 
 
 class InstallSessionTests(TestCase):

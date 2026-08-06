@@ -7,13 +7,11 @@ from unittest import TestCase
 
 from agent_fault_injection.cli import (
     _parser,
-    _print_judge_result,
     _print_run_progress,
+    _print_run_result,
     build_request,
 )
-from agent_fault_injection.models import (
-    FaultContainmentStatus,
-    FaultOutcome,
+from agent_fault_injection.pipeline.models import (
     RunArtifacts,
     RunRequest,
     RunResult,
@@ -53,12 +51,11 @@ class CliTests(TestCase):
             (
                 ["run", "--help"],
                 [
-                    "--judge, --no-judge",
                     "--auto, --no-auto",
                     "--plugin-startup-timeout",
                     "--run-id",
                     "available names",
-                    "server-side judge",
+                    "server-side",
                 ],
             ),
             (
@@ -84,10 +81,12 @@ class CliTests(TestCase):
                     _parser().parse_args(arguments)
 
                 self.assertEqual(raised.exception.code, 0)
+                rendered = output.getvalue()
+                self.assertNotIn("--judge", rendered)
                 for text in expected:
-                    self.assertIn(text, output.getvalue())
+                    self.assertIn(text, rendered)
 
-    def test_prints_agent_report_then_judge_wait_message(self) -> None:
+    def test_prints_agent_execution_report(self) -> None:
         output = StringIO()
 
         with redirect_stdout(output):
@@ -107,7 +106,6 @@ class CliTests(TestCase):
                     "artifacts": "/tmp/artifacts",
                 },
             )
-            _print_run_progress("fault_verification_started", {})
 
         rendered = output.getvalue()
         self.assertIn("Agent Execution", rendered)
@@ -115,64 +113,16 @@ class CliTests(TestCase):
         self.assertIn("thinking-dead-loop", rendered)
         self.assertIn("Execution Status  finished", rendered)
         self.assertIn("Fault Activated   yes", rendered)
-        self.assertIn(
-            "Judge is evaluating the collected execution data...",
-            rendered,
-        )
+        self.assertNotIn("Judge is evaluating", rendered)
 
-    def test_prints_completed_judge_result(self) -> None:
+    def test_prints_run_result(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             artifacts = _artifacts(root)
             artifacts.manifest_file.write_text("{}", encoding="utf-8")
             artifacts.trajectory_file.write_text("", encoding="utf-8")
-            request = RunRequest(
-                platform="opencode",
-                agent="build",
-                fault="thinking-dead-loop",
-                prompt="test",
-                workspace=root,
-                output_dir=root,
-            )
-            result = RunResult(
-                run_id=artifacts.run_id,
-                status=RunStatus.COMPLETED,
-                termination_reason=TerminationReason.SESSION_ERROR,
-                artifacts=artifacts,
-                exit_code=1,
-                fault_outcome=FaultOutcome.OCCURRED,
-                fault_reason=(
-                    "Repetitive reasoning was observed and then interrupted."
-                ),
-                fault_containment_status=(
-                    FaultContainmentStatus.RECOVERED
-                ),
-            )
-            output = StringIO()
-
-            with redirect_stdout(output):
-                _print_judge_result(request, result)
-
-            rendered = output.getvalue()
-            self.assertIn("Judge Result", rendered)
-            self.assertIn("FAULT OCCURRED", rendered)
-            self.assertIn("RECOVERED", rendered)
-            self.assertIn("occurred + recovered", rendered)
-            self.assertIn("Repetitive reasoning was observed", rendered)
-            self.assertIn(str(artifacts.manifest_file), rendered)
-
-    def test_prints_skipped_judge_result(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            artifacts = _artifacts(root)
-            request = RunRequest(
-                platform="opencode",
-                agent="build",
-                fault="step-omission",
-                prompt="test",
-                workspace=root,
-                output_dir=root,
-                platform_options={"judge_enabled": False},
+            (artifacts.root / "collect-result.json").write_text(
+                "{}", encoding="utf-8"
             )
             result = RunResult(
                 run_id=artifacts.run_id,
@@ -184,11 +134,12 @@ class CliTests(TestCase):
             output = StringIO()
 
             with redirect_stdout(output):
-                _print_judge_result(request, result)
+                _print_run_result(result)
 
             rendered = output.getvalue()
-            self.assertIn("Evaluation        skipped", rendered)
-            self.assertIn("judge disabled", rendered)
+            self.assertIn("Experiment Result", rendered)
+            self.assertIn("Overall Status    completed", rendered)
+            self.assertIn(str(artifacts.root), rendered)
 
     def test_parses_fault_add_command(self) -> None:
         namespace = _parser().parse_args(
@@ -224,8 +175,7 @@ class CliTests(TestCase):
                         "workspace": str(root),
                         "output_dir": str(root / "artifacts"),
                         "platform_options": {
-                            "judge_agent": "plan",
-                            "judge_timeout_seconds": 90,
+                            "plugin_startup_timeout": 90,
                         },
                     }
                 ),
@@ -240,10 +190,8 @@ class CliTests(TestCase):
                     "build",
                     "--prompt",
                     "from cli",
-                    "--judge-agent",
-                    "build",
-                    "--judge-model",
-                    "judge/model",
+                    "--plugin-startup-timeout",
+                    "180",
                 ]
             )
 
@@ -259,16 +207,8 @@ class CliTests(TestCase):
             self.assertEqual(request.workspace.parent.name, "single")
             self.assertNotEqual(request.workspace.resolve(), root.resolve())
             self.assertEqual(
-                request.platform_options["judge_agent"],
-                "build",
-            )
-            self.assertEqual(
-                request.platform_options["judge_model"],
-                "judge/model",
-            )
-            self.assertEqual(
-                request.platform_options["judge_timeout_seconds"],
-                90,
+                request.platform_options["plugin_startup_timeout"],
+                180.0,
             )
             self.assertTrue(request.platform_options["auto"])
 

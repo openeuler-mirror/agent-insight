@@ -13,6 +13,12 @@ const { randomBytes } = require('crypto')
 
 const home = path.join(os.homedir(), '.agent-insight', 'fault-injection')
 
+function normalizeHost(host) {
+  return String(host || '')
+    .trim()
+    .replace(/\/$/, '')
+}
+
 function resolvePackageRoot() {
   const fromCwd = path.join(process.cwd(), 'agent_fault_injection')
   if (
@@ -35,11 +41,9 @@ function ensureDirs() {
 function writeConfig(packageRoot) {
   const configPath = path.join(home, 'config.json')
   const prev = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, 'utf8')) : {}
-  const insightBaseUrl = (
-    process.env.AGENT_INSIGHT_HOST ||
-    prev.insightBaseUrl ||
-    'http://127.0.0.1:3000'
-  ).replace(/\/$/, '')
+  const insightBaseUrl = normalizeHost(
+    process.env.AGENT_INSIGHT_HOST || prev.insightBaseUrl || 'http://127.0.0.1:3000',
+  )
   const apiKey = process.env.AGENT_INSIGHT_API_KEY || prev.apiKey || ''
   const workerId =
     prev.workerId || `fi-worker-${os.hostname()}-${randomBytes(3).toString('hex')}`
@@ -48,11 +52,10 @@ function writeConfig(packageRoot) {
     insightBaseUrl,
     apiKey,
     workerId,
-    maxParallel: prev.maxParallel || 2,
+    maxParallel: prev.maxParallel || 5,
     pollIntervalMs: prev.pollIntervalMs || 2000,
     artifactsDir: path.join(home, 'artifacts'),
     workspaceBase: path.join(home, 'workspaces'),
-    dryRunDefault: false,
     packageRoot,
   }
   fs.writeFileSync(configPath, JSON.stringify(next, null, 2))
@@ -68,9 +71,178 @@ function pythonOk() {
   return r.status === 0
 }
 
+function isPidAlive(pid) {
+  if (!pid || !Number.isFinite(pid) || pid <= 0) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function readPidFile(pidPath) {
+  try {
+    const raw = fs.readFileSync(pidPath, 'utf8').trim()
+    return Number(raw)
+  } catch {
+    return NaN
+  }
+}
+
+function sleepMs(ms) {
+  const seconds = Math.max(0.1, ms / 1000)
+  spawnSync('sleep', [String(seconds)], { stdio: 'ignore' })
+}
+
+/** Read AGENT_INSIGHT_* from /proc/<pid>/environ (Linux/WSL). Returns null if unreadable. */
+function readProcessEnvKeys(pid) {
+  if (!pid || !Number.isFinite(pid) || pid <= 0) return null
+  try {
+    const raw = fs.readFileSync(`/proc/${pid}/environ`)
+    const map = {}
+    for (const entry of raw.toString('utf8').split('\0')) {
+      if (!entry) continue
+      const eq = entry.indexOf('=')
+      if (eq <= 0) continue
+      map[entry.slice(0, eq)] = entry.slice(eq + 1)
+    }
+    if (!('AGENT_INSIGHT_API_KEY' in map) && !('AGENT_INSIGHT_HOST' in map)) {
+      return null
+    }
+    return {
+      apiKey: map.AGENT_INSIGHT_API_KEY || '',
+      insightBaseUrl: normalizeHost(map.AGENT_INSIGHT_HOST || ''),
+    }
+  } catch {
+    return null
+  }
+}
+
+function credentialsMatch(desired, running) {
+  if (!desired || !running) return false
+  return (
+    String(desired.apiKey || '') === String(running.apiKey || '') &&
+    normalizeHost(desired.insightBaseUrl) === normalizeHost(running.insightBaseUrl)
+  )
+}
+
+/** true when existing worker must be killed and replaced for the desired credentials. */
+function shouldRestartWorker(desired, running) {
+  if (!running) return true
+  return !credentialsMatch(desired, running)
+}
+
+function stopWorker(pid, pidPath) {
+  if (!isPidAlive(pid)) {
+    try {
+      fs.unlinkSync(pidPath)
+    } catch {
+      /* ignore */
+    }
+    return
+  }
+  try {
+    process.kill(pid, 'SIGTERM')
+  } catch {
+    /* ignore */
+  }
+  for (let i = 0; i < 20; i++) {
+    if (!isPidAlive(pid)) break
+    sleepMs(100)
+  }
+  if (isPidAlive(pid)) {
+    try {
+      process.kill(pid, 'SIGKILL')
+    } catch {
+      /* ignore */
+    }
+    sleepMs(200)
+  }
+  try {
+    fs.unlinkSync(pidPath)
+  } catch {
+    /* ignore */
+  }
+}
+
+function workerEnv(desired) {
+  return {
+    ...process.env,
+    AGENT_INSIGHT_API_KEY: desired.apiKey || '',
+    AGENT_INSIGHT_HOST: normalizeHost(desired.insightBaseUrl),
+  }
+}
+
+function startWorkerDaemon(workerScript, { foreground = false, desired = {} } = {}) {
+  const logPath = path.join(home, 'worker.log')
+  const pidPath = path.join(home, 'worker.pid')
+  const existingPid = readPidFile(pidPath)
+  if (isPidAlive(existingPid)) {
+    const running = readProcessEnvKeys(existingPid)
+    if (!shouldRestartWorker(desired, running)) {
+      console.log(`FI Worker 已在运行 pid=${existingPid}`)
+      console.log(`日志: ${logPath}`)
+      console.log(`停止: kill $(cat ${pidPath})`)
+      return 0
+    }
+    console.log(
+      `配置已变更（apiKey/host），正在重启 Worker… (旧 pid=${existingPid})`,
+    )
+    stopWorker(existingPid, pidPath)
+  }
+
+  const env = workerEnv(desired)
+
+  if (foreground || process.env.AGENT_INSIGHT_FI_WORKER_FOREGROUND === '1') {
+    console.log('Starting FI worker in foreground…')
+    const child = spawn(process.execPath, [workerScript], {
+      stdio: 'inherit',
+      env,
+    })
+    child.on('exit', (code) => process.exit(code || 0))
+    return null
+  }
+
+  const logFd = fs.openSync(logPath, 'a')
+  const child = spawn(process.execPath, [workerScript], {
+    detached: true,
+    stdio: ['ignore', logFd, logFd],
+    env,
+  })
+  fs.closeSync(logFd)
+  if (!child.pid) {
+    console.error('FI Worker 启动失败：未获得 pid')
+    return 1
+  }
+  fs.writeFileSync(pidPath, String(child.pid))
+  child.unref()
+
+  sleepMs(2500)
+  if (!isPidAlive(child.pid)) {
+    console.error('FI Worker 启动后立即退出，请查看日志：')
+    console.error(`  ${logPath}`)
+    try {
+      const tail = fs.readFileSync(logPath, 'utf8').slice(-800)
+      if (tail.trim()) console.error(tail)
+    } catch {
+      /* ignore */
+    }
+    return 1
+  }
+
+  console.log('FI Worker 已在后台启动')
+  console.log(`pid=${child.pid}`)
+  console.log(`日志: ${logPath}`)
+  console.log(`停止: kill $(cat ${pidPath})`)
+  console.log('可关闭本终端；刷新「新建注入任务」页应看到 Worker 在线。')
+  return 0
+}
+
 function run(_options = {}) {
   const checkOnly = process.argv.includes('--check')
   const startWorker = process.argv.includes('--start')
+  const foreground = process.argv.includes('--foreground')
   const packageRoot = resolvePackageRoot()
 
   ensureDirs()
@@ -105,20 +277,30 @@ function run(_options = {}) {
 
   if (startWorker) {
     const workerScript = path.join(__dirname, 'fi-worker.js')
-    console.log('Starting FI worker (keep this process running)…')
-    const child = spawn(process.execPath, [workerScript], {
-      stdio: 'inherit',
-      env: process.env,
+    const code = startWorkerDaemon(workerScript, {
+      foreground,
+      desired: {
+        apiKey: config.apiKey,
+        insightBaseUrl: config.insightBaseUrl,
+      },
     })
-    child.on('exit', (code) => process.exit(code || 0))
-    return
+    if (code === null) return
+    process.exit(code)
   }
 
-  console.log('Start worker with: npx agent-insight fi-worker')
-  console.log('  or: node scripts/fi-worker.js')
+  console.log('Start worker with: npx agent-insight install-fault-injection --start')
+  console.log('  or foreground: … --start --foreground')
 }
 
-module.exports = { run }
+module.exports = {
+  run,
+  normalizeHost,
+  readProcessEnvKeys,
+  credentialsMatch,
+  shouldRestartWorker,
+  stopWorker,
+  workerEnv,
+}
 
 if (require.main === module) {
   run()

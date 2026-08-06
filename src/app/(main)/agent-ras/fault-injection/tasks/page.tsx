@@ -155,7 +155,7 @@ export default function FaultInjectionTasksPage() {
   }
 
   return (
-    <FiPageShell title="注入任务">
+    <FiPageShell>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap gap-1.5">
           {(

@@ -80,6 +80,5 @@ export function emptyProgress(total = 0): ProgressCounts {
     completed: 0,
     failed: 0,
     judge_skipped: 0,
-    dry_run: 0,
   }
 }

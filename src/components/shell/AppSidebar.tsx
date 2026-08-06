@@ -102,7 +102,7 @@ const RAS_TREE: NavItem = {
     children: [
         { key: 'agent-ras-trace', href: '/agent-ras/trace', labelKey: 'nav.rasTrace', iconPath: ICON_RAS_OBSERVE, matchPrefixes: ['/agent-ras/trace'] },
         { key: 'agent-ras-fault-modes', href: '/agent-ras/fault-modes', labelKey: 'nav.rasFaultModes', iconPath: ICON_RAS_CAPABILITY, matchPrefixes: ['/agent-ras/fault-modes'] },
-        { key: 'agent-ras-fault-injection', href: '/agent-ras/fault-injection', labelKey: 'nav.rasFaultInjection', iconPath: ICON_RAS_INJECT, matchPrefixes: ['/agent-ras/fault-injection'] },
+        { key: 'agent-ras-fault-injection', href: '/agent-ras/fault-injection/tasks', labelKey: 'nav.rasFaultInjection', iconPath: ICON_RAS_INJECT, matchPrefixes: ['/agent-ras/fault-injection'] },
     ],
 };
 

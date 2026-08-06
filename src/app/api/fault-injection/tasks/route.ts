@@ -1,13 +1,9 @@
 import { NextResponse } from 'next/server'
 import { resolveUser } from '@/lib/auth/auth'
 import { prisma } from '@/lib/storage/prisma'
-import { buildStubCollectPayload } from '@/lib/fault-injection/engine'
-import {
-  createTaskWithRuns,
-  ingestCollectAndJudge,
-  refreshTaskProgress,
-} from '@/lib/fault-injection/store'
+import { createTaskWithRuns, refreshTaskProgress } from '@/lib/fault-injection/store'
 import { normalizeFiWorkspaceInput } from '@/lib/fault-injection/workspace'
+import { listPlatformsFromWorkers } from '@/lib/fault-injection/worker-protocol'
 
 export const dynamic = 'force-dynamic'
 
@@ -42,8 +38,8 @@ export async function POST(req: Request) {
     if (!body.agent || typeof body.agent !== 'string') {
       return NextResponse.json({ error: 'agent required' }, { status: 400 })
     }
-    if (!body.prompt || typeof body.prompt !== 'string' || !body.prompt.trim()) {
-      return NextResponse.json({ error: 'prompt required' }, { status: 400 })
+    if (body.prompt != null && typeof body.prompt !== 'string') {
+      return NextResponse.json({ error: 'prompt must be a string' }, { status: 400 })
     }
     for (const item of items) {
       if (!item?.fault || typeof item.fault !== 'string') {
@@ -51,56 +47,44 @@ export async function POST(req: Request) {
       }
     }
 
-    const envForcesDry = process.env.AGENT_INSIGHT_FI_DRY_RUN === '1'
-    const wantReal = !envForcesDry && body.dryRun !== true
+    const { platforms, ok } = await listPlatformsFromWorkers(username)
+    if (!ok) {
+      return NextResponse.json(
+        {
+          error:
+            '无在线 FI Worker；请在「新建注入任务」页复制账号相关的 setup 命令并在本机执行',
+        },
+        { status: 503 },
+      )
+    }
+    const platformInfo = platforms.find((p) => p.id === body.platform)
+    if (!platformInfo || platformInfo.readiness !== 'ready') {
+      return NextResponse.json(
+        { error: `平台 ${body.platform} 不可用（需在线 Worker 上报就绪）` },
+        { status: 400 },
+      )
+    }
+
     const workspace = normalizeFiWorkspaceInput(body.workspace)
     const timeoutSeconds =
-      typeof body.timeout_seconds === 'number' ? body.timeout_seconds : wantReal ? 180 : null
+      typeof body.timeout_seconds === 'number' ? body.timeout_seconds : 180
 
-    const { task, runs } = await createTaskWithRuns({
+    const { task } = await createTaskWithRuns({
       user: effectiveUser,
       name: body.name,
       platform: body.platform,
       agent: body.agent,
-      prompt: body.prompt.trim(),
+      prompt: typeof body.prompt === 'string' ? body.prompt.trim() : '',
       workspace,
       model: body.model || null,
       timeoutSeconds,
-      initialStatus: wantReal ? 'queued' : 'running',
+      initialStatus: 'queued',
       items: items.map((item: { fault: string; submode?: string }) => ({
         fault: item.fault,
         submode: item.submode,
       })),
     })
 
-    // D-005: dry-run stays on server as zero-process stub (no Worker, no spawn).
-    if (!wantReal) {
-      for (const run of runs) {
-        try {
-          const payload = buildStubCollectPayload({
-            runId: run.runId,
-            fault: run.fault,
-            platform: task.platform,
-            prompt: task.prompt,
-          })
-          await ingestCollectAndJudge({
-            runId: run.runId,
-            user: task.user,
-            payload,
-          })
-        } catch (err: unknown) {
-          const message = err instanceof Error ? err.message : String(err)
-          await prisma.faultInjectionRun.update({
-            where: { id: run.id },
-            data: { status: 'failed', error: message },
-          })
-        }
-      }
-      const updated = await refreshTaskProgress(task.id)
-      return NextResponse.json({ task: serializeTask(updated || task), async: false, dryRun: true })
-    }
-
-    // Real collect: queue only; FI Worker claims on user machine.
     const updated = await refreshTaskProgress(task.id)
     return NextResponse.json({
       task: serializeTask(updated || task),

@@ -1,11 +1,11 @@
 /**
- * E2E (dry-run): create task → stub collect → ingest session → server judge path.
- * Run with: AGENT_INSIGHT_FI_DRY_RUN=1 node --import tsx --test test/fault-injection-e2e.test.ts
+ * E2E: create task → collect-shaped payload → ingest session → server judge path.
+ * Run with: node --import tsx --test test/fault-injection-e2e.test.ts
  */
 import assert from 'node:assert/strict'
 import { describe, it, before } from 'node:test'
 import { prisma } from '../src/lib/storage/prisma'
-import { buildStubCollectPayload } from '../src/lib/fault-injection/engine'
+import type { CollectPayload } from '../src/lib/fault-injection/engine'
 import {
   createTaskWithRuns,
   ingestCollectAndJudge,
@@ -13,18 +13,63 @@ import {
 } from '../src/lib/fault-injection/store'
 import { buildFiTraceMarkers } from '../src/lib/fault-injection/trace-markers'
 
-describe('fault-injection e2e dry-run', () => {
+function sampleCollectPayload(input: {
+  runId: string
+  fault: string
+  platform: string
+  prompt: string
+}): CollectPayload {
+  const now = Date.now()
+  const sessionId = `ses_fi_e2e_${input.runId}`
+  return {
+    runId: input.runId,
+    taskId: sessionId,
+    framework: input.platform,
+    fault: input.fault,
+    injectionMethod: 'skill_inject',
+    faultActivated: true,
+    faultActivatedAt: now,
+    interactions: [
+      {
+        messageID: `${sessionId}-user`,
+        role: 'user',
+        content: input.prompt,
+        timestamp: now,
+      },
+      {
+        messageID: `${sessionId}-assistant`,
+        role: 'assistant',
+        content: `Collect payload for fault ${input.fault}`,
+        timestamp: now + 1000,
+      },
+    ],
+    markers: [
+      {
+        id: `${input.runId}-activation`,
+        kind: 'fault_activation',
+        label: 'Fault activated',
+        timestamp: now,
+        severity: 'warning',
+        payload: { trace_anchor: { message_id: `${sessionId}-assistant` } },
+      },
+    ],
+    injectionEvidence: {
+      runtime: { note: 'unit e2e collect payload' },
+    },
+  }
+}
+
+describe('fault-injection e2e ingest', () => {
   before(async () => {
-    // Ensure prisma client knows new models (db must be pushed beforehand)
     assert.ok(prisma.faultInjectionTask)
     assert.ok(prisma.faultInjectionRun)
   })
 
-  it('runs stub collect + ingest + judge_skipped/completed', async () => {
+  it('runs collect ingest + judge_skipped/completed', async () => {
     const user = 'fi-e2e-user'
     const { task, runs } = await createTaskWithRuns({
       user,
-      name: 'e2e-dry-run',
+      name: 'e2e-ingest',
       platform: 'opencode',
       agent: 'build',
       prompt: 'e2e prompt',
@@ -34,7 +79,7 @@ describe('fault-injection e2e dry-run', () => {
     assert.equal(runs.length, 1)
     const run = runs[0]
 
-    const payload = buildStubCollectPayload({
+    const payload = sampleCollectPayload({
       runId: run.runId,
       fault: 'step-omission',
       platform: 'opencode',
@@ -48,7 +93,7 @@ describe('fault-injection e2e dry-run', () => {
       user,
       payload,
     })
-    assert.ok(['dry_run', 'completed', 'judge_skipped'].includes(judged.status))
+    assert.ok(['completed', 'judge_skipped'].includes(judged.status))
     assert.ok(judged.sessionTaskId)
 
     const session = await prisma.session.findUnique({ where: { taskId: judged.sessionTaskId! } })
@@ -56,13 +101,12 @@ describe('fault-injection e2e dry-run', () => {
 
     const markers = buildFiTraceMarkers(JSON.parse(judged.markersJson || '[]'))
     assert.ok(markers.length >= 1)
+    assert.ok(markers.every((m) => m.source === 'fi'))
 
     const updatedTask = await refreshTaskProgress(task.id)
     assert.ok(updatedTask)
-    // Stub ingest ends as dry_run (not green completed)
-    assert.ok(['dry_run', 'completed', 'judge_skipped', 'failed'].includes(updatedTask!.status))
+    assert.ok(['completed', 'judge_skipped', 'failed'].includes(updatedTask!.status))
 
-    // cleanup
     await prisma.faultInjectionRun.deleteMany({ where: { fiTaskId: task.id } })
     await prisma.faultInjectionTask.delete({ where: { id: task.id } })
     if (judged.sessionTaskId) {

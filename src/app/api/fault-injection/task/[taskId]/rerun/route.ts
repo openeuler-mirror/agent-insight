@@ -1,12 +1,7 @@
 import { NextResponse } from 'next/server'
 import { resolveUser } from '@/lib/auth/auth'
 import { prisma } from '@/lib/storage/prisma'
-import { buildStubCollectPayload } from '@/lib/fault-injection/engine'
-import {
-  createTaskWithRuns,
-  ingestCollectAndJudge,
-  refreshTaskProgress,
-} from '@/lib/fault-injection/store'
+import { createTaskWithRuns, refreshTaskProgress } from '@/lib/fault-injection/store'
 import { normalizeFiWorkspaceInput } from '@/lib/fault-injection/workspace'
 
 export const dynamic = 'force-dynamic'
@@ -33,8 +28,6 @@ export async function POST(
       fault: string
       submode?: string | null
     }>
-    const dryRun =
-      process.env.AGENT_INSIGHT_FI_DRY_RUN === '1' || body.dryRun === true
     const workspace = normalizeFiWorkspaceInput(source.workspace)
     const timeoutSeconds =
       typeof body.timeout_seconds === 'number'
@@ -42,7 +35,7 @@ export async function POST(
         : ((JSON.parse(source.requestJson || '{}') as { timeoutSeconds?: number })
             .timeoutSeconds ?? 180)
 
-    const { task, runs } = await createTaskWithRuns({
+    const { task } = await createTaskWithRuns({
       user: source.user,
       name: `${source.name.replace(/\s*\(再次\)\s*$/, '')} (再次)`,
       platform: source.platform,
@@ -50,34 +43,10 @@ export async function POST(
       prompt: source.prompt,
       workspace,
       model: source.model,
-      timeoutSeconds: dryRun ? null : timeoutSeconds,
-      initialStatus: dryRun ? 'running' : 'queued',
+      timeoutSeconds,
+      initialStatus: 'queued',
       items: items.map((item) => ({ fault: item.fault, submode: item.submode })),
     })
-
-    if (dryRun) {
-      for (const run of runs) {
-        try {
-          const payload = buildStubCollectPayload({
-            runId: run.runId,
-            fault: run.fault,
-            platform: task.platform,
-            prompt: task.prompt,
-          })
-          await ingestCollectAndJudge({
-            runId: run.runId,
-            user: task.user,
-            payload,
-          })
-        } catch (err: unknown) {
-          const message = err instanceof Error ? err.message : String(err)
-          await prisma.faultInjectionRun.update({
-            where: { id: run.id },
-            data: { status: 'failed', error: message },
-          })
-        }
-      }
-    }
 
     const updated = await refreshTaskProgress(task.id)
     return NextResponse.json({
@@ -87,7 +56,7 @@ export async function POST(
         name: (updated || task).name,
         status: (updated || task).status,
       },
-      needsWorker: !dryRun,
+      needsWorker: true,
     })
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err)

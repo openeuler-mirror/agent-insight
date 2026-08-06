@@ -4,7 +4,7 @@
 
 
 > 面向在 `agent-fault-injection` 中新增被测 Agent 平台（如 xiaoO）。  
-> 产品评判走 Insight 服务端 Judge；被测平台只负责注入、执行与规范化证据（本机可选 OpenCodeFaultJudge 调试）。  
+> 产品评判走 Insight 服务端 Judge；被测平台只负责注入、执行与轨迹映射（本机 Python Judge 已删除）。  
 > 另见 [../xiaoo-platform-adaptation.md](../xiaoo-platform-adaptation.md)、[server-judge.md](server-judge.md)。
 
 ---
@@ -57,7 +57,7 @@ registry.register("xiaoo", XiaoOAdapter)
 
 路径：`RunArtifacts.execution_file` → `{run_root}/execution.jsonl`。
 
-`ExecutionEvidenceBuilder` **优先**读取该文件；缺失或空文件时回退 OpenCode stdout 解析。
+平台 `map_trajectory` 应写出该文件，供轨迹 / interactions 映射使用（**不再**经本机 `ExecutionEvidenceBuilder` / Judge）。
 
 每行一个 JSON 对象，常用 `type`：
 
@@ -84,16 +84,16 @@ OpenCode 适配器在 `map_trajectory` 末尾会从 stdout/events **派生**写�
 ## 5. 统一 Judge（Insight 服务端）
 
 - 产品路径：采集上传后由 Insight `src/lib/fault-injection/judge.ts` 评判（用户 `getActiveConfig`）。
-- Python `OpenCodeFaultJudge` 仅作本机调试可选路径（默认 `--no-judge` 给 Worker）。
+- 本机 Python Judge / CLI `--judge*` **已删除**；Worker 只跑 inject+collect。
 - 语义：`outcome` × `faultContainmentStatus`（含 `inconclusive`）；以轨迹为主。见 [server-judge.md](server-judge.md)。
 
 ---
 
 ## 6. `platform_options` 约定
 
-**公共键（编排 / Judge）：**
+**公共键（编排）：**
 
-`judge_enabled`、`judge_agent`、`judge_model`、`judge_timeout_seconds`、`judge_executable`、`model`、`auto`、`executable`、`plugin_startup_timeout`
+`model`、`auto`、`executable`、`plugin_startup_timeout`
 
 **平台私有键：** 与公共键同层放在 `platform_options`（暂不强制嵌套 `opencode.*` / `xiaoo.*`）。
 
@@ -109,3 +109,11 @@ OpenCode 适配器在 `map_trajectory` 末尾会从 stdout/events **派生**写�
 
 - setuptools entry points：`agent_fault_injection.platforms`
 - 按平台过滤故障 catalog（`platforms: [opencode, xiaoo]`）
+
+---
+
+## 9. 扩展约定（防债）
+
+- 新平台：实现 [`platform-adapter-spi.md`](platform-adapter-spi.md) SPI；**不要**复制 OpenCode/xiaoO 整段 `execute`。
+- **不做**完整 Ports 六边形 / L2 Method 类 Facade；能力面以 `capability_api.yaml` + CI 为准。
+- OpenCode runtime 改写：见 [opencode-rewrite-spike.md](../opencode-rewrite-spike.md)。

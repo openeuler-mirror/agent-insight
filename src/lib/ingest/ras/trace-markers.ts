@@ -33,6 +33,8 @@ export interface RasTraceMarker {
   deliveryMessageIds: string[]
   actions: RasRecoveryAction[]
   actionResults: RasActionResult[]
+  /** FI run markers reuse this shape; UI must not label them as RAS. */
+  source?: 'fi' | 'ras'
 }
 
 type JsonRecord = Record<string, unknown>

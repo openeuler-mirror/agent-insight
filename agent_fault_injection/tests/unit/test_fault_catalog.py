@@ -3,12 +3,12 @@ import tempfile
 from pathlib import Path
 from unittest import TestCase
 
-from agent_fault_injection.exceptions import (
+from agent_fault_injection.pipeline.exceptions import (
     ConfigurationError,
     InstallationConflictError,
 )
 from agent_fault_injection.fault_inject.catalog import add_fault
-from agent_fault_injection.fault_inject.registry import FaultRegistry
+from agent_fault_injection.fault_inject.catalog.registry import FaultRegistry
 
 
 class FaultCatalogTests(TestCase):

@@ -8,13 +8,13 @@ from pathlib import Path
 from unittest import TestCase
 
 from agent_fault_injection.fault_inject.catalog import load_fault_definition
-from agent_fault_injection.fault_inject.injection_tools import (
+from agent_fault_injection.fault_inject.injection import (
     apply_assistant_text_rewrite,
     apply_messages_rewrite,
     apply_system_rewrite,
     apply_tool_result_rewrite,
 )
-from agent_fault_injection.fault_inject.runtime_env import runtime_plan_to_json
+from agent_fault_injection.fault_inject.injection.runtime_env import runtime_plan_to_json
 
 
 class RuntimePlanTests(TestCase):
@@ -165,10 +165,10 @@ class RuntimePlanTests(TestCase):
         self.assertTrue(meta3["applied"])
 
     def test_filter_runtime_steps_normalizes_submode_labels(self) -> None:
-        from agent_fault_injection.fault_inject.runtime_env import (
+        from agent_fault_injection.fault_inject.injection.runtime_env import (
             filter_runtime_steps_for_submode,
         )
-        from agent_fault_injection.fault_inject.models import InjectionStep
+        from agent_fault_injection.fault_inject.catalog.models import InjectionStep
 
         steps = (
             InjectionStep(

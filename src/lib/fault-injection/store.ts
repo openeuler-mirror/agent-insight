@@ -1,8 +1,8 @@
 import { randomBytes } from 'crypto'
 import { prisma } from '@/lib/storage/prisma'
-import type { CollectPayload } from '@/lib/fault-injection/engine'
+import { composeFaultPrompt, findSubmode } from '@/lib/fault-injection/compose-prompt'
+import { listFaultsViaPython, type CollectPayload } from '@/lib/fault-injection/engine'
 import { judgeFaultInjection } from '@/lib/fault-injection/judge'
-import { bridgeFiCollectToRas } from '@/lib/fault-injection/ras-bridge'
 import { mergeEvaluationMarkers } from '@/lib/fault-injection/trace-markers'
 
 export function newTaskKey(): string {
@@ -24,7 +24,7 @@ export async function createTaskWithRuns(input: {
   model?: string | null
   items: Array<{ fault: string; submode?: string | null }>
   timeoutSeconds?: number | null
-  initialStatus?: 'queued' | 'running' | 'dry_run'
+  initialStatus?: 'queued' | 'running'
 }) {
   const taskKey = newTaskKey()
   const items = input.items.map((item, index) => ({
@@ -62,7 +62,6 @@ export async function createTaskWithRuns(input: {
         completed: 0,
         failed: 0,
         judge_skipped: 0,
-        dry_run: 0,
         stopped: 0,
       }),
       user: input.user,
@@ -70,10 +69,28 @@ export async function createTaskWithRuns(input: {
     },
   })
 
+  const catalog = (await listFaultsViaPython(input.platform)) as Array<{
+    id?: string
+    name?: string
+    skillName?: string
+    skill_name?: string
+    submodes?: Array<{ id: string; name: string }>
+  }>
+  const byFault = new Map(catalog.map((row) => [String(row.id || row.name || ''), row]))
+
   const runs = []
   for (const item of items) {
     const runId = newRunId()
     item.run_id = runId
+    const faultMeta = byFault.get(item.fault)
+    const skillName =
+      faultMeta?.skillName || faultMeta?.skill_name || item.fault
+    const selected = findSubmode(faultMeta?.submodes || [], item.submode)
+    const prompt = composeFaultPrompt({
+      skillName,
+      basePrompt: input.prompt,
+      submode: selected,
+    })
     const run = await prisma.faultInjectionRun.create({
       data: {
         runId,
@@ -87,7 +104,7 @@ export async function createTaskWithRuns(input: {
         status: 'queued',
         queuedAt: new Date(),
         requestJson: JSON.stringify({
-          prompt: input.prompt,
+          prompt,
           workspace: input.workspace,
           model: input.model || null,
           timeoutSeconds: input.timeoutSeconds ?? null,
@@ -132,6 +149,7 @@ export async function ingestCollectAndJudge(input: {
     where: { runId: input.runId },
     data: {
       status: 'judging',
+      error: null,
       sessionTaskId,
       faultActivated: Boolean(input.payload.faultActivated),
       faultActivatedAt: input.payload.faultActivatedAt
@@ -143,31 +161,22 @@ export async function ingestCollectAndJudge(input: {
     },
   })
 
-  const isStub =
-    Boolean(
-      input.payload.injectionEvidence &&
-        typeof input.payload.injectionEvidence === 'object' &&
-        (input.payload.injectionEvidence as { runtime?: { stub?: boolean } }).runtime?.stub,
-    ) || String(input.payload.taskId || '').startsWith('fi-session-')
-
   const judged = await judgeFaultInjection({
     user: input.user,
     fault: input.payload.fault,
     injectionMethod: input.payload.injectionMethod,
     faultActivated: Boolean(input.payload.faultActivated),
     interactions: input.payload.interactions || [],
-    injectionEvidence: input.payload.injectionEvidence || {},
   })
 
-  // Dry-run must never look like a real completed evaluation.
-  // Any skipped judge stays judge_skipped (not completed).
-  const status = isStub ? 'dry_run' : judged.skipped ? 'judge_skipped' : 'completed'
+  // Skipped judge stays judge_skipped (not completed).
+  const status = judged.skipped ? 'judge_skipped' : 'completed'
 
   const markersJson = JSON.stringify(
     mergeEvaluationMarkers(input.payload.markers || [], {
-      skipped: Boolean(judged.skipped) || isStub,
+      skipped: Boolean(judged.skipped),
       outcome: judged.outcome,
-      reason: isStub ? `Dry-run stub; ${judged.reason}` : judged.reason,
+      reason: judged.reason,
       model: judged.model,
     }),
   )
@@ -176,31 +185,18 @@ export async function ingestCollectAndJudge(input: {
     where: { runId: input.runId },
     data: {
       status,
-      outcome: isStub ? null : judged.outcome,
-      faultContainmentStatus: isStub ? null : judged.fault_containment_status,
-      judgeReason: isStub ? `Dry-run stub; ${judged.reason}` : judged.reason,
+      outcome: judged.outcome,
+      faultContainmentStatus: judged.fault_containment_status,
+      judgeReason: judged.reason,
       judgeRawJson: JSON.stringify({
         raw: judged.raw || null,
         model: judged.model || null,
         skipped: judged.skipped,
-        dryRun: isStub,
       }),
       markersJson,
       judgedAt: new Date(),
     },
   })
-
-  // Bridge real (non-stub) activated injects into 可靠性观测.
-  const bridge = await bridgeFiCollectToRas({
-    insightRunId: input.runId,
-    user: input.user,
-    payload: input.payload,
-    outcome: isStub ? null : judged.outcome,
-    judgeSkipped: judged.skipped || isStub,
-  })
-  if (bridge.written === 0 && bridge.skippedReason) {
-    console.info(`[FI→RAS] run=${input.runId} bridge skipped: ${bridge.skippedReason}`)
-  }
 
   return updated
 }
@@ -231,14 +227,12 @@ export async function refreshTaskProgress(taskId: string) {
     running: runs.filter((r: RunRow) => ['collecting', 'judging'].includes(r.status)).length,
     completed: runs.filter((r: RunRow) => r.status === 'completed').length,
     judge_skipped: runs.filter((r: RunRow) => r.status === 'judge_skipped').length,
-    dry_run: runs.filter((r: RunRow) => r.status === 'dry_run').length,
     failed: runs.filter((r: RunRow) => r.status === 'failed').length,
     stopped: runs.filter((r: RunRow) => r.status === 'stopped').length,
   }
   const finished =
     progress.completed +
     progress.judge_skipped +
-    progress.dry_run +
     progress.failed +
     progress.stopped
   let status = task.status
@@ -250,7 +244,7 @@ export async function refreshTaskProgress(taskId: string) {
     status = 'stopped'
   } else if (progress.failed && finished === progress.total) status = 'failed'
   else if (finished === progress.total && progress.total > 0) {
-    status = progress.dry_run === progress.total ? 'dry_run' : 'completed'
+    status = 'completed'
   } else if (progress.queued > 0) {
     status = 'queued'
   } else status = 'running'

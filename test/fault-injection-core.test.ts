@@ -11,16 +11,13 @@ import {
   mergeEvaluationMarkers,
 } from '../src/lib/fault-injection/trace-markers'
 import { buildMarkerPipeline } from '../src/lib/fault-injection/marker-pipeline'
-import { buildStubCollectPayload, listFaultsViaPython } from '../src/lib/fault-injection/engine'
+import { listFaultsViaPython } from '../src/lib/fault-injection/engine'
 import {
   FI_WORKSPACE_DEFAULT,
   normalizeFiWorkspaceInput,
   resolveFiWorkspaceOnClient,
 } from '../src/lib/fault-injection/workspace'
-import {
-  buildRasRecordsFromFiCollect,
-  mapFaultToAnomalyKind,
-} from '../src/lib/fault-injection/ras-bridge'
+import { composeFaultPrompt, findSubmode } from '../src/lib/fault-injection/compose-prompt'
 import { normalizeFault } from '../src/components/fault-injection/types'
 
 describe('fault-injection judge-result', () => {
@@ -108,62 +105,6 @@ describe('fault-injection markers', () => {
   })
 })
 
-describe('fault-injection stub collector', () => {
-  it('returns insight-shaped payload', () => {
-    const payload = buildStubCollectPayload({
-      runId: 'ras-test',
-      fault: 'step-omission',
-      platform: 'opencode',
-      prompt: 'do it',
-    })
-    assert.equal(payload.fault, 'step-omission')
-    assert.ok(Array.isArray(payload.interactions))
-    assert.ok(payload.interactions.length >= 2)
-    assert.equal(payload.faultActivated, true)
-  })
-})
-
-describe('fault-injection RAS bridge', () => {
-  it('maps thinking-dead-loop to llm_thinking_dead_loop', () => {
-    assert.equal(mapFaultToAnomalyKind('thinking-dead-loop'), 'llm_thinking_dead_loop')
-    assert.equal(mapFaultToAnomalyKind('tool_repeat_dead_loop'), 'tool_call_loop')
-  })
-
-  it('excludes stub/dry-run payloads from reliability observation', () => {
-    const stub = buildStubCollectPayload({
-      runId: 'ras-stub',
-      fault: 'thinking-dead-loop',
-      platform: 'opencode',
-      prompt: 'x',
-    })
-    assert.equal(buildRasRecordsFromFiCollect({ insightRunId: 'ras-stub', payload: stub }).length, 0)
-  })
-
-  it('emits anomaly record for real activated collect', () => {
-    const records = buildRasRecordsFromFiCollect({
-      insightRunId: 'ras-real',
-      payload: {
-        runId: 'ras-real',
-        taskId: 'ras-20260804-140722-5eddaa0e',
-        framework: 'opencode',
-        fault: 'thinking-dead-loop',
-        injectionMethod: 'skill_inject',
-        faultActivated: true,
-        faultActivatedAt: Date.now(),
-        interactions: [{ role: 'user', content: 'hi' }],
-        markers: [],
-        injectionEvidence: { runtime: { stub: false } },
-      },
-    })
-    assert.equal(records.length, 1)
-    assert.equal(records[0].type, 'anomaly')
-    assert.equal(records[0].anomalyKind, 'llm_thinking_dead_loop')
-    assert.equal(records[0].taskId, 'ras-20260804-140722-5eddaa0e')
-    const payload = JSON.parse(records[0].payloadJson)
-    assert.equal(payload.source, 'fault_injection')
-  })
-})
-
 describe('fault-injection catalog submodes', () => {
   it('resolves thinking-dead-loop submode ids 1/2/3', async () => {
     const rows = (await listFaultsViaPython()) as Array<Record<string, unknown>>
@@ -209,5 +150,37 @@ describe('fault-injection workspace contract', () => {
     assert.equal(resolveFiWorkspaceOnClient(FI_WORKSPACE_DEFAULT, base, join, resolve), base)
     assert.equal(resolveFiWorkspaceOnClient('sub', base, join, resolve), '/resolved/sub')
     assert.equal(resolveFiWorkspaceOnClient('/abs', base, join, resolve), '/abs')
+  })
+})
+
+describe('fault-injection compose prompt', () => {
+  it('builds skill activation for submode', () => {
+    const prompt = composeFaultPrompt({
+      skillName: 'thinking-dead-loop',
+      basePrompt: '',
+      submode: { id: '2', name: '逻辑死循环' },
+    })
+    assert.equal(prompt, '使用 thinking-dead-loop 技能，执行逻辑死循环。')
+  })
+
+  it('appends base prompt when provided', () => {
+    const prompt = composeFaultPrompt({
+      skillName: 'thinking-dead-loop',
+      basePrompt: '额外说明',
+      submode: { id: '1', name: '字面重复死循环' },
+    })
+    assert.match(prompt, /^使用 thinking-dead-loop 技能，执行字面重复死循环。/)
+    assert.match(prompt, /额外说明/)
+  })
+
+  it('finds submode by id', () => {
+    const found = findSubmode(
+      [
+        { id: '1', name: 'Alpha' },
+        { id: '2', name: 'Beta' },
+      ],
+      '2',
+    )
+    assert.equal(found?.name, 'Beta')
   })
 })

@@ -13,7 +13,11 @@ import {
   OUTCOME_LABELS,
   labelMap,
 } from '@/components/fault-injection/types'
-import AgentTraceView from '@/components/observe/AgentTraceView'
+import AgentTraceView, {
+  type RasAnomalyMarker,
+  type RasTimelineEvent,
+} from '@/components/observe/AgentTraceView'
+import type { RawInteraction } from '@/lib/engine/observability/agent-trace'
 import type { FiPipelineMarker } from '@/lib/fault-injection/trace-markers'
 
 type TracePayload = {
@@ -32,13 +36,14 @@ type TracePayload = {
     faultContainmentStatus?: string | null
     reason?: string | null
   }
-  interactions?: unknown[]
-  markers?: unknown[]
+  interactions?: RawInteraction[]
+  markers?: RasAnomalyMarker[]
+  rasMarkers?: RasAnomalyMarker[]
   pipelineMarkers?: FiPipelineMarker[]
-  reliabilityEvents?: unknown[]
+  reliabilityEvents?: RasTimelineEvent[]
 }
 
-const TERMINAL = new Set(['completed', 'judge_skipped', 'dry_run', 'failed', 'stopped'])
+const TERMINAL = new Set(['completed', 'judge_skipped', 'failed', 'stopped'])
 
 export default function FaultInjectionRunTracePage() {
   const params = useParams<{ runId: string }>()
@@ -95,8 +100,9 @@ export default function FaultInjectionRunTracePage() {
     : '/agent-ras/fault-injection/tasks'
 
   return (
-    <FiPageShell>
-      <div className="flex flex-wrap items-center gap-1.5 text-sm text-foreground-muted">
+    <FiPageShell className="overflow-hidden" contentClassName="overflow-hidden">
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
+      <div className="flex shrink-0 flex-wrap items-center gap-1.5 text-sm text-foreground-muted">
         <Link href="/agent-ras/fault-injection/tasks" className="text-primary hover:underline">
           注入任务
         </Link>
@@ -108,15 +114,9 @@ export default function FaultInjectionRunTracePage() {
         <span className="font-mono text-xs text-foreground">{params.runId}</span>
         <HelpTip widthClass="w-80">
           单次故障注入的摘要与调用树。数据来自 collect-result / Session.interactions；顶部四节点展示注入与评判流程。
-          若故障已激活，会同步写入 RasAnomalyEvent，可在「可靠性观测」按 Session taskId 查看。
+          注入细节只在本页与 FI 任务视图；可靠性观测以正常上报的轨迹（Execution）为准，不再为「注入激活」合成 RasAnomalyEvent。
         </HelpTip>
       </div>
-
-      {trace?.status === 'dry_run' ? (
-        <p className="rounded-md border border-[var(--warning)]/40 bg-[var(--warning-subtle)] px-3 py-2 text-sm text-[var(--warning)]">
-          这是 Dry-run 模拟数据，未启动真实 Agent，也不会写入可靠性观测。
-        </p>
-      ) : null}
 
       {trace?.taskId ? (
         <p className="text-sm text-foreground-muted">
@@ -128,6 +128,7 @@ export default function FaultInjectionRunTracePage() {
           >
             打开可靠性观测
           </Link>
+          <span className="ml-1 text-xs">（需同 taskId 已有轨迹上报）</span>
         </p>
       ) : null}
       {loading && <p className="text-sm text-foreground-muted">加载中…</p>}
@@ -135,7 +136,7 @@ export default function FaultInjectionRunTracePage() {
 
       {trace && (
         <>
-          <div className="rounded-md border border-border bg-card">
+          <div className="shrink-0 rounded-md border border-border bg-card">
             <div className="grid gap-0 sm:grid-cols-2 lg:grid-cols-5">
               <div className="border-b border-border p-3 lg:border-b-0 lg:border-r">
                 <LabelWithHelp tip="实验管线终态。失败常见于插件未就绪、平台超时或执行异常。">
@@ -183,12 +184,12 @@ export default function FaultInjectionRunTracePage() {
           </div>
 
           {trace.error ? (
-            <div className="rounded-md border border-[var(--error-border)] bg-[var(--error-subtle)] px-3 py-2 text-sm text-[var(--error)]">
+            <div className="shrink-0 rounded-md border border-[var(--error-border)] bg-[var(--error-subtle)] px-3 py-2 text-sm text-[var(--error)]">
               {trace.error}
             </div>
           ) : null}
 
-          <div className="space-y-3">
+          <div className="shrink-0 space-y-3">
             <div className="flex items-center gap-1.5">
               <h2 className="text-[13px] font-semibold">注入流程</h2>
               <HelpTip>固定四节点：请求 → 开始 → 完成 → 评判。未到达的节点保持空心。</HelpTip>
@@ -196,8 +197,8 @@ export default function FaultInjectionRunTracePage() {
             <MarkerPipeline markers={trace.pipelineMarkers || []} />
           </div>
 
-          <div className="space-y-3">
-            <div className="flex items-center gap-1.5">
+          <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
+            <div className="flex shrink-0 items-center gap-1.5">
               <h2 className="text-[13px] font-semibold">完整链路追踪</h2>
               <HelpTip widthClass="w-80">
                 过滤 AGENT / LLM / TOOL 等 span；左侧调用树，右侧详情。非终态时自动轮询并尽量保持选中。
@@ -206,15 +207,19 @@ export default function FaultInjectionRunTracePage() {
                 {(trace.interactions || []).length} interactions
               </span>
             </div>
-            <AgentTraceView
-              interactions={trace.interactions || []}
-              traceKey={trace.taskId || params.runId}
-              anomalies={trace.markers || []}
-              reliabilityEvents={(trace.reliabilityEvents || []) as any}
-            />
+            <div className="min-h-0 flex-1 overflow-hidden">
+              <AgentTraceView
+                interactions={trace.interactions || []}
+                traceKey={trace.taskId || params.runId}
+                anomalies={[...(trace.rasMarkers || []), ...(trace.markers || [])]}
+                reliabilityEvents={[]}
+                panelClassName="h-full min-h-[520px]"
+              />
+            </div>
           </div>
         </>
       )}
+      </div>
     </FiPageShell>
   )
 }

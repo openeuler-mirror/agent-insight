@@ -22,6 +22,10 @@ import {
   labelMap,
   type ProgressCounts,
 } from '@/components/fault-injection/types'
+import {
+  loadFaultLabelsMap,
+  peekFaultLabelsCache,
+} from '@/lib/fault-injection/fault-labels-cache'
 
 type TaskDetail = {
   task_id: string
@@ -55,7 +59,9 @@ export default function FaultInjectionTaskDetailPage() {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
-  const [faultLabels, setFaultLabels] = useState<Record<string, string>>({})
+  const [faultLabels, setFaultLabels] = useState<Record<string, string> | null>(
+    () => peekFaultLabelsCache(),
+  )
 
   const refresh = useCallback(async () => {
     if (!params.taskId) return
@@ -73,17 +79,9 @@ export default function FaultInjectionTaskDetailPage() {
   }, [refresh])
 
   useEffect(() => {
-    void fetch('/api/fault-injection/faults')
-      .then((r) => r.json())
-      .then((data) => {
-        const map: Record<string, string> = {}
-        for (const row of data.faults || []) {
-          const id = String(row.name || row.id || '')
-          map[id] = String(row.labelZh || row.label_zh || row.label || id)
-        }
-        setFaultLabels(map)
-      })
-      .catch(() => undefined)
+    void loadFaultLabelsMap()
+      .then((map) => setFaultLabels(map))
+      .catch(() => setFaultLabels({}))
   }, [])
 
   useEffect(() => {
@@ -232,7 +230,9 @@ export default function FaultInjectionTaskDetailPage() {
                   <tr key={run.run_id} className="border-t border-border">
                     <td className="px-3 py-2.5">
                       <div className="font-medium">
-                        {faultLabels[run.fault] || run.fault}
+                        {faultLabels == null
+                          ? '…'
+                          : faultLabels[run.fault] || '—'}
                       </div>
                       <div className="font-mono text-[11px] text-foreground-muted">{run.fault}</div>
                     </td>

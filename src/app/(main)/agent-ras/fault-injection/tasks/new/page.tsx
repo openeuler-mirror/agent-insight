@@ -43,26 +43,43 @@ function FaultInjectionTaskWizardPage() {
   const [agentOptions, setAgentOptions] = useState<PlatformOption[]>([])
   const [modelOptions, setModelOptions] = useState<PlatformOption[]>([])
   const [name, setName] = useState('')
-  const [prompt, setPrompt] = useState('执行注入场景')
+  const [prompt, setPrompt] = useState('')
   const [workspace, setWorkspace] = useState('~/.agent-insight/fault-injection/workspaces')
   const [timeoutSeconds, setTimeoutSeconds] = useState(180)
-  const [dryRun, setDryRun] = useState(false)
   const [needsWorker, setNeedsWorker] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [rerunLoaded, setRerunLoaded] = useState(false)
+  const [copiedSetup, setCopiedSetup] = useState(false)
+
+  const workerSetupCommand = useMemo(() => {
+    if (!apiKey || typeof window === 'undefined') return null
+    const origin = window.location.origin
+    return `curl -fsSL "${origin}/api/fault-injection/setup?key=${apiKey}" | bash`
+  }, [apiKey])
 
   useEffect(() => {
     void fetch('/api/fault-injection/health', { headers: authHeaders })
       .then((r) => r.json())
       .then((data) => {
         setPlatforms(data.platforms || [])
-        setNeedsWorker(Boolean(data.needsWorker && !data.ok))
-        if (typeof data.dryRunDefault === 'boolean') setDryRun(data.dryRunDefault)
+        setNeedsWorker(Boolean(!data.ok))
         const ready = (data.platforms || []).find((p: PlatformInfo) => p.readiness === 'ready')
         if (ready && !rerunFrom) setPlatform(ready.id)
       })
       .catch(() => undefined)
   }, [rerunFrom, authHeaders])
+
+  const copySetupCommand = async () => {
+    if (!workerSetupCommand) return
+    try {
+      await navigator.clipboard.writeText(workerSetupCommand)
+      setCopiedSetup(true)
+      toast.success('已复制 setup 命令')
+      window.setTimeout(() => setCopiedSetup(false), 2000)
+    } catch {
+      toast.error('复制失败，请手动选中命令')
+    }
+  }
 
   const refreshCatalog = useCallback(
     async (platformId: string) => {
@@ -182,22 +199,22 @@ function FaultInjectionTaskWizardPage() {
   }, [selected, faults])
 
   const selectedPlatform = platforms.find((item) => item.id === platform)
+  const platformReady =
+    !!selectedPlatform && selectedPlatform.readiness === 'ready'
 
   const checklist = [
     { ok: !!platform, label: '已选择平台' },
-    {
-      ok:
-        platforms.length === 0 ||
-        (!!selectedPlatform && selectedPlatform.readiness !== 'not_ready'),
-      label: '平台可用',
-    },
+    { ok: platformReady, label: '平台可用' },
     { ok: selected.size > 0, label: '至少选择 1 个故障模式' },
     { ok: !!workspace.trim(), label: '已填写工作目录' },
-    { ok: !!prompt.trim(), label: '已填写提示词' },
   ]
 
   const canNext =
-    step === 1 ? !!platform : step === 2 ? selected.size > 0 : checklist.every((item) => item.ok)
+    step === 1
+      ? platformReady && agentOptions.length > 0
+      : step === 2
+        ? selected.size > 0
+        : checklist.every((item) => item.ok)
 
   const autoName = () => {
     const stamp = new Date()
@@ -225,7 +242,6 @@ function FaultInjectionTaskWizardPage() {
           prompt,
           workspace: workspace.startsWith('~') ? undefined : workspace,
           timeout_seconds: timeoutSeconds,
-          dryRun,
           items: [...selected.values()].map((item) => ({
             fault: item.fault,
             submode: item.submode,
@@ -244,8 +260,9 @@ function FaultInjectionTaskWizardPage() {
   }
 
   return (
-    <FiPageShell hideSubNav>
-      <div className="flex flex-wrap items-center gap-3">
+    <FiPageShell className="overflow-hidden" contentClassName="min-h-0 overflow-hidden">
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
+      <div className="flex shrink-0 flex-wrap items-center gap-3">
         <Link
           href="/agent-ras/fault-injection/tasks"
           className="text-sm text-primary hover:underline"
@@ -257,7 +274,7 @@ function FaultInjectionTaskWizardPage() {
         </h1>
       </div>
 
-      <ol className="flex flex-wrap gap-4 text-sm font-medium text-foreground-muted">
+      <ol className="flex shrink-0 flex-wrap gap-4 text-sm font-medium text-foreground-muted">
         {(
           [
             [1, '选择平台'],
@@ -277,31 +294,66 @@ function FaultInjectionTaskWizardPage() {
         ))}
       </ol>
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_260px]">
-        <div className="flex min-h-0 flex-col overflow-hidden rounded-md border border-border bg-card">
-          <div className="min-h-0 flex-1 p-4">
-            {step === 1 ? (
+      <div className="grid min-h-0 flex-1 gap-4 overflow-hidden lg:grid-cols-[minmax(0,1fr)_260px]">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-border bg-card">
+          <div
+            className={cn(
+              'min-h-0 flex-1 p-4',
+              step === 2 ? 'flex flex-col overflow-hidden' : 'overflow-auto',
+            )}
+          >            {step === 1 ? (
               <div className="space-y-3">
                 <p className="text-sm text-foreground-muted">
                   任务锁定一个平台；子运行共享 Agent / Model。平台就绪来自本机 FI Worker inventory。
                 </p>
                 {needsWorker ? (
-                  <p className="rounded-md border border-[var(--warning-border,var(--border))] bg-[var(--warning-subtle,var(--background-secondary))] px-3 py-2 text-sm text-foreground">
-                    未检测到在线 FI Worker。请在本机执行：
-                    <code className="mx-1 rounded bg-background px-1 py-0.5 text-xs">
-                      npx agent-insight install-fault-injection --start
-                    </code>
-                    （Dry-run 可不启 Worker。）
-                  </p>
+                  <div className="space-y-2 rounded-md border border-[var(--warning-border,var(--border))] bg-[var(--warning-subtle,var(--background-secondary))] px-3 py-2 text-sm text-foreground">
+                    <p>
+                      未检测到与当前登录账号匹配的在线 FI Worker。请在本机执行下方命令（已绑定本站与当前 API
+                      Key）：
+                    </p>
+                    {workerSetupCommand ? (
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
+                        <code className="block min-w-0 flex-1 break-all rounded bg-background px-2 py-1.5 font-mono text-[11px]">
+                          {workerSetupCommand}
+                        </code>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="shrink-0"
+                          onClick={() => void copySetupCommand()}
+                        >
+                          {copiedSetup ? '已复制' : '复制'}
+                        </Button>
+                      </div>
+                    ) : (
+                      <p className="text-foreground-muted">
+                        请先登录并取得 API Key，再刷新本页生成安装命令。
+                      </p>
+                    )}
+                    <p className="text-[11px] text-foreground-muted">
+                      Worker 必须与当前登录账号一致，并保持进程常驻。
+                    </p>
+                  </div>
                 ) : null}
                 <div className="grid gap-2 sm:grid-cols-2">
-                  {platforms.map((item) => (
+                  {platforms.map((item) => {
+                    const ready = item.readiness === 'ready'
+                    return (
                     <button
                       key={item.id}
                       type="button"
-                      onClick={() => setPlatform(item.id)}
+                      disabled={!ready}
+                      onClick={() => {
+                        if (!ready) return
+                        setPlatform(item.id)
+                      }}
                       className={cn(
-                        'rounded-md border p-3 text-left transition-colors hover:bg-background-secondary',
+                        'rounded-md border p-3 text-left transition-colors',
+                        ready
+                          ? 'hover:bg-background-secondary'
+                          : 'cursor-not-allowed opacity-60',
                         platform === item.id
                           ? 'border-primary bg-[var(--primary-subtle)]'
                           : 'border-border',
@@ -309,7 +361,7 @@ function FaultInjectionTaskWizardPage() {
                     >
                       <div className="font-medium">{item.label}</div>
                       <div className="mt-1 text-xs text-foreground-muted">
-                        {item.readiness === 'ready' ? '就绪' : '不可用'}
+                        {ready ? '就绪' : '不可用'}
                       </div>
                       {(item.preflight_errors || []).length > 0 ? (
                         <ul className="mt-1 space-y-0.5 text-[11px] text-[var(--error)]">
@@ -319,9 +371,9 @@ function FaultInjectionTaskWizardPage() {
                         </ul>
                       ) : null}
                     </button>
-                  ))}
-                </div>
-                <div className="grid gap-3 sm:grid-cols-2">
+                    )
+                  })}
+                </div>                <div className="grid gap-3 sm:grid-cols-2">
                   <label className="text-sm">
                     <span className="text-foreground-muted">Agent</span>
                     <select
@@ -364,7 +416,7 @@ function FaultInjectionTaskWizardPage() {
                 faults={faults}
                 selectable
                 compact
-                className="min-h-[24rem]"
+                className="min-h-0 flex-1"
                 selectedKeys={new Set(selected.keys())}
                 onToggle={toggleRow}
               />
@@ -382,14 +434,15 @@ function FaultInjectionTaskWizardPage() {
                   />
                 </label>
                 <label className="block text-sm">
-                  <span className="text-foreground-muted">Prompt</span>
+                  <span className="text-foreground-muted">基础 Prompt（可选）</span>
                   <textarea
                     className="mt-1 min-h-28 w-full rounded-md border border-border bg-background p-2"
                     value={prompt}
+                    placeholder="可留空；每个故障会自动附加 Skill 激活指令"
                     onChange={(e) => setPrompt(e.target.value)}
                   />
                   <span className="mt-1 block text-[11px] text-foreground-muted">
-                    建议包含场景编号或子模式名称，便于 Agent 进入对应注入路径。
+                    每个故障模式会自动附加「使用 … 技能，执行…」激活指令；此处仅填写额外任务说明。
                   </span>
                 </label>
                 <label className="block text-sm">
@@ -408,14 +461,6 @@ function FaultInjectionTaskWizardPage() {
                     value={timeoutSeconds}
                     onChange={(e) => setTimeoutSeconds(Number(e.target.value) || 180)}
                   />
-                </label>
-                <label className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={dryRun}
-                    onChange={(e) => setDryRun(e.target.checked)}
-                  />
-                  Dry-run（联调用 stub；真跑请关闭）
                 </label>
               </div>
             ) : null}
@@ -454,6 +499,7 @@ function FaultInjectionTaskWizardPage() {
           workspace={workspace}
           checklist={checklist}
         />
+      </div>
       </div>
     </FiPageShell>
   )

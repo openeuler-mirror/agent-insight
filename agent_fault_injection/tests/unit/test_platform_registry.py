@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest import TestCase
 
-from agent_fault_injection.exceptions import PlatformNotFoundError
+from agent_fault_injection.pipeline.exceptions import PlatformNotFoundError
 from agent_fault_injection.platform_adapters.base import PlatformAdapter
 from agent_fault_injection.platform_adapters.registry import PlatformAdapterRegistry
 
@@ -12,7 +12,13 @@ from agent_fault_injection.platform_adapters.registry import PlatformAdapterRegi
 class _StubAdapter(PlatformAdapter):
     name = "stub"
 
-    async def execute(self, request, fault, artifacts, store):  # noqa: ANN001
+    def install_fault_assets(self, ctx):  # noqa: ANN001
+        return None
+
+    def merge_platform_env(self, ctx, base_env):  # noqa: ANN001
+        return dict(base_env)
+
+    async def run_platform_session(self, ctx, environment):  # noqa: ANN001
         raise NotImplementedError
 
     def map_trajectory(self, request, fault, artifacts):  # noqa: ANN001
