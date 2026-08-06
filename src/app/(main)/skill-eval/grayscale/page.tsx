@@ -1632,7 +1632,7 @@ export function GrayscaleEvaluation({
     useEffect(() => {
         if (!user) return;
         Promise.all([
-            apiFetch(`/api/agent-datasets?user=${encodeURIComponent(user)}`).then(r => r.json()),
+            apiFetch(`/api/agent-datasets?user=${encodeURIComponent(user)}&view=reference`).then(r => r.json()),
             apiFetch(`/api/skills?user=${encodeURIComponent(user)}`).then(r => r.json()),
         ]).then(([ds, sk]) => {
             if (Array.isArray(ds)) setDatasets(ds);

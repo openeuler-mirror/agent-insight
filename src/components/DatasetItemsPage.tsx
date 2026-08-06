@@ -66,10 +66,12 @@ function TooltipCell({
   shortText,
   fullText,
   tdStyle,
+  onClick,
 }: {
   shortText: string;
   fullText: string;
   tdStyle?: React.CSSProperties;
+  onClick?: () => void;
 }) {
   const [show, setShow] = useState(false);
   const [rect, setRect] = useState<DOMRect | null>(null);
@@ -84,6 +86,7 @@ function TooltipCell({
         setShow(true);
       }}
       onMouseLeave={() => setShow(false)}
+      onClick={onClick}
     >
       {shortText}
       {show && rect && fullText && (
@@ -165,6 +168,7 @@ export default function DatasetItemsPage() {
   const { user } = useAuth();
 
   const [dataset, setDataset] = useState<AgentDataset | null>(null);
+  const fullDatasetRef = useRef<AgentDataset | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   // ?case=<caseId> 入参支持: 别处(如 grayscale 执行记录 modal 的 Case ID 链接)
@@ -193,7 +197,7 @@ export default function DatasetItemsPage() {
     setError('');
     setLoading(true);
     try {
-      const res = await apiFetch(`/api/agent-datasets/${id}?user=${encodeURIComponent(user)}`);
+      const res = await apiFetch(`/api/agent-datasets/${id}?user=${encodeURIComponent(user)}&view=items`);
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data?.error || '加载失败');
@@ -212,6 +216,7 @@ export default function DatasetItemsPage() {
         createdAt: d.createdAt,
         updatedAt: d.updatedAt,
       });
+      fullDatasetRef.current = null;
     } catch (e) {
       setError(e instanceof Error ? e.message : '加载失败');
       setDataset(null);
@@ -219,6 +224,27 @@ export default function DatasetItemsPage() {
       setLoading(false);
     }
   }, [user, id]);
+
+  const loadFullDataset = async (): Promise<AgentDataset> => {
+    if (!user || !id) throw new Error('缺少数据集信息');
+    if (fullDatasetRef.current) return fullDatasetRef.current;
+    const res = await apiFetch(`/api/agent-datasets/${id}?user=${encodeURIComponent(user)}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data?.error || '完整数据加载失败');
+    const full = data as AgentDataset;
+    fullDatasetRef.current = full;
+    return full;
+  };
+
+  const loadFullCase = async (caseId: string): Promise<DatasetCase> => {
+    if (!user || !id) throw new Error('缺少数据集信息');
+    const res = await apiFetch(
+      `/api/agent-datasets/${id}?user=${encodeURIComponent(user)}&view=case&caseId=${encodeURIComponent(caseId)}`,
+    );
+    const data = await res.json();
+    if (!res.ok) throw new Error(data?.error || '完整数据项加载失败');
+    return data as DatasetCase;
+  };
 
   useEffect(() => {
     void Promise.resolve().then(() => load());
@@ -292,8 +318,17 @@ export default function DatasetItemsPage() {
     setRowEditor({ mode: 'add', row: createEmptyCase() });
   };
 
-  const openEdit = (row: DatasetCase) => {
-    setRowEditor({ mode: 'edit', row: { ...row, values: { ...(row.values || {}) } } });
+  const openEdit = async (row: DatasetCase) => {
+    setSaving(true);
+    setError('');
+    try {
+      const fullRow = await loadFullCase(row.id);
+      setRowEditor({ mode: 'edit', row: { ...fullRow, values: { ...(fullRow.values || {}) } } });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '完整数据加载失败');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const persistFields = async (fields: DatasetField[]) => {
@@ -349,8 +384,12 @@ export default function DatasetItemsPage() {
 
   const removeRow = async (rowId: string) => {
     if (!dataset) return;
-    const next = dataset.cases.filter(c => c.id !== rowId);
-    await persistCases(next);
+    try {
+      const full = await loadFullDataset();
+      await persistCases(full.cases.filter(c => c.id !== rowId));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '完整数据加载失败');
+    }
   };
 
   const saveRowFromModal = async () => {
@@ -377,10 +416,17 @@ export default function DatasetItemsPage() {
       }
     }
     const row = { ...rowEditor.row, values };
+    let full: AgentDataset;
+    try {
+      full = await loadFullDataset();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '完整数据加载失败');
+      return;
+    }
     const next =
       mode === 'add'
-        ? [...dataset.cases, row]
-        : dataset.cases.map(c => (c.id === row.id ? row : c));
+        ? [...full.cases, row]
+        : full.cases.map(c => (c.id === row.id ? row : c));
     await persistCases(next);
   };
 
@@ -410,7 +456,8 @@ export default function DatasetItemsPage() {
           setBatchModalError(result.message || '未能解析出有效数据');
           return;
         }
-        const merged = [...dataset.cases, ...result.cases];
+        const full = await loadFullDataset();
+        const merged = [...full.cases, ...result.cases];
         const ok = await persistCases(merged);
         if (!ok) {
           setBatchModalError('保存失败，请查看上方错误提示');
@@ -430,7 +477,8 @@ export default function DatasetItemsPage() {
         setBatchModalError(result.message || '未能解析出有效数据');
         return;
       }
-      const merged = [...dataset.cases, ...result.cases];
+      const full = await loadFullDataset();
+      const merged = [...full.cases, ...result.cases];
       const ok = await persistCases(merged);
       if (!ok) {
         setBatchModalError('保存失败，请查看上方错误提示');
@@ -607,6 +655,7 @@ export default function DatasetItemsPage() {
                       </td>
                       {dataset.fields.map(field => {
                         const fullText = fieldText(row, field.key);
+                        const isTrajectoryField = ['trace', 'trajectory'].includes(field.key.trim().toLocaleLowerCase());
                         return (
                         <TooltipCell
                           key={field.id}
@@ -615,12 +664,14 @@ export default function DatasetItemsPage() {
                           tdStyle={{
                             maxWidth: field.type === 'json' ? 220 : 260,
                             ...(field.type === 'json' ? { fontFamily: 'ui-monospace, monospace', fontSize: 12 } : {}),
+                            ...(isTrajectoryField ? { cursor: 'pointer', color: 'var(--primary)' } : {}),
                           }}
+                          onClick={isTrajectoryField ? () => void openEdit(row) : undefined}
                         />
                         );
                       })}
                       <td style={{ whiteSpace: 'nowrap' }}>
-                        <button type="button" className={styles.linkBtn} onClick={() => openEdit(row)}>
+                        <button type="button" className={styles.linkBtn} onClick={() => void openEdit(row)} disabled={saving}>
                           编辑
                         </button>
                         <button type="button" className={styles.linkBtnDanger} onClick={() => void removeRow(row.id)}>
