@@ -13,6 +13,7 @@ export const claudeAdapter: FrameworkAdapter = {
   capabilities: {
     skills: true,
     skillScope: "session",
+    subagentTree: true,
   },
   normalizeForStorage: normalizeClaudeCodeInteractionsForStorage,
   // 聚合器每次都从 spool 全量事件重建完整快照(readClaudeOtelEventsForSession 扫全部天),
