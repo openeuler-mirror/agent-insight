@@ -36,6 +36,7 @@ type SessionState = {
   sourceIds: Set<string>;
   failures: number;
   parked: boolean;
+  parkedAt?: number;
   /** 到点时刻。取代原来的三个 per-session timer——调度统一由中央 dispatcher 决定。 */
   fastDueAt?: number;
   evaluatedDueAt?: number;
@@ -56,6 +57,7 @@ type FileListCache = {
 
 export type OtelSpoolConsumerState = {
   interval?: IntervalHandle;
+  stopped: boolean;
   ticking: boolean;
   sources: SpoolSource[];
   sourcesById: Map<string, SpoolSource>;
@@ -82,6 +84,7 @@ export type OtelSpoolConsumerState = {
   liveQuota: number;
   historyScanMs: number;
   maxTrackedSessions: number;
+  parkedRetryMs: number;
   stallMs: number;
   /** 全局(跨 session)最近一轮聚合的结束时刻/耗时——多会话并发时的总量闸 */
   lastGlobalAggEndedAt?: number;
@@ -116,6 +119,7 @@ export type OtelSpoolConsumerOptions = {
   liveQuota?: number;
   historyScanMs?: number;
   maxTrackedSessions?: number;
+  parkedRetryMs?: number;
   stallMs?: number;
   log?: (...args: any[]) => void;
   warn?: (...args: any[]) => void;
@@ -136,6 +140,7 @@ function envNumber(name: string, fallback: number): number {
 function createState(options: OtelSpoolConsumerOptions = {}): OtelSpoolConsumerState {
   const sources = options.sources || listSources();
   return {
+    stopped: false,
     ticking: false,
     sources,
     sourcesById: new Map(sources.map((source) => [source.id, source])),
@@ -165,7 +170,12 @@ function createState(options: OtelSpoolConsumerOptions = {}): OtelSpoolConsumerS
     liveWindowMs: options.liveWindowMs ?? envNumber('AGENT_INSIGHT_OTEL_CONSUMER_LIVE_WINDOW_MS', 60000),
     liveQuota: options.liveQuota ?? envNumber('AGENT_INSIGHT_OTEL_CONSUMER_LIVE_QUOTA', 3),
     historyScanMs: options.historyScanMs ?? envNumber('AGENT_INSIGHT_OTEL_CONSUMER_HISTORY_SCAN_MS', 60000),
-    maxTrackedSessions: options.maxTrackedSessions ?? envNumber('AGENT_INSIGHT_OTEL_CONSUMER_MAX_SESSIONS', 20000),
+    maxTrackedSessions: Math.max(
+      1,
+      options.maxTrackedSessions ?? envNumber('AGENT_INSIGHT_OTEL_CONSUMER_MAX_SESSIONS', 20000),
+    ),
+    parkedRetryMs: options.parkedRetryMs
+      ?? envNumber('AGENT_INSIGHT_OTEL_CONSUMER_PARKED_RETRY_MS', 300000),
     stallMs: options.stallMs ?? envNumber('AGENT_INSIGHT_OTEL_CONSUMER_STALL_MS', 15000),
     dispatching: false,
     liveServed: 0,
@@ -208,6 +218,7 @@ function wrapSaveExecutionWithAttributionGuard(
 function getSession(state: OtelSpoolConsumerState, sessionId: string): SessionState {
   let session = state.sessions.get(sessionId);
   if (!session) {
+    for (const candidate of [...state.sessions.values()]) evictIdleSession(state, candidate);
     session = {
       sessionId,
       pendingFileKeys: new Set(),
@@ -280,6 +291,7 @@ function handleSessionFailure(state: OtelSpoolConsumerState, sessionId: string, 
   });
   if (session.failures >= state.parkAfter) {
     session.parked = true;
+    session.parkedAt = Date.now();
     session.fastDueAt = undefined;
     session.evaluatedDueAt = undefined;
     session.maxDueAt = undefined;
@@ -351,7 +363,17 @@ function pickJob(state: OtelSpoolConsumerState, now: number): { job: Job | null;
   let recoveryDueAt = Number.POSITIVE_INFINITY;
 
   for (const session of state.sessions.values()) {
-    if (session.parked) continue;
+    if (session.parked) {
+      const retryAt = (session.parkedAt || now) + state.parkedRetryMs;
+      if (retryAt > now) {
+        if (retryAt < nextWakeAt) nextWakeAt = retryAt;
+        continue;
+      }
+      session.parked = false;
+      session.parkedAt = undefined;
+      session.failures = 0;
+      session.fastDueAt = now;
+    }
 
     const fastAt = session.fastDueAt;
     const evalAt = evaluatedDueAt(session);
@@ -403,6 +425,7 @@ function pickJob(state: OtelSpoolConsumerState, now: number): { job: Job | null;
 }
 
 function armDispatch(state: OtelSpoolConsumerState, delayMs: number): void {
+  if (state.stopped) return;
   if (state.dispatchTimer) clearTimeout(state.dispatchTimer);
   state.dispatchTimer = setTimeout(() => {
     state.dispatchTimer = undefined;
@@ -417,7 +440,7 @@ function armDispatch(state: OtelSpoolConsumerState, delayMs: number): void {
  * 就是每 50ms 上千次无效唤醒,且先到先得没有公平性。现在唤醒次数是 O(1)/次调度。
  */
 async function pumpDispatch(state: OtelSpoolConsumerState): Promise<void> {
-  if (state.dispatching) return;
+  if (state.stopped || state.dispatching) return;
 
   const now = Date.now();
   const gate = globalGateRemaining(state, now);
@@ -456,7 +479,7 @@ async function pumpDispatch(state: OtelSpoolConsumerState): Promise<void> {
     state.activeSessionId = undefined;
     state.activeStartedAt = undefined;
     evictIdleSession(state, session);
-    armDispatch(state, 1);
+    if (!state.stopped) armDispatch(state, 1);
   }
 }
 
@@ -481,6 +504,7 @@ function aggregateForSession(
 
 async function runJob(state: OtelSpoolConsumerState, session: SessionState, mode: 'fast' | 'evaluated'): Promise<void> {
   for (const sourceId of Array.from(session.sourceIds)) {
+    if (session.parked) break;
     const source = state.sourcesById.get(sourceId);
     if (!source) continue;
     try {
@@ -514,6 +538,7 @@ async function runJob(state: OtelSpoolConsumerState, session: SessionState, mode
       }
     } catch (err) {
       handleSessionFailure(state, session.sessionId, err);
+      if (session.parked) break;
     }
   }
 }
@@ -540,7 +565,7 @@ function sourceFiles(state: OtelSpoolConsumerState, source: SpoolSource): string
 }
 
 export async function runOtelSpoolConsumerTick(state: OtelSpoolConsumerState): Promise<void> {
-  if (state.ticking) return;
+  if (state.stopped || state.ticking) return;
   state.ticking = true;
   let discovered = 0;
   let parseErrors = 0;
@@ -557,7 +582,8 @@ export async function runOtelSpoolConsumerTick(state: OtelSpoolConsumerState): P
         // 从磁盘位重读,聚合冷却期间会反复 parse 整段未落盘 backlog(大会话 = 每秒
         // 重复 parse 几十 MB,CPU 直接烧满——线上踩过)。崩溃重启后从磁盘位重放一次,语义不变。
         const cursor = inflight ? inflight.nextCursor : getFileCursor(spoolDir, relPath);
-        const read = readNewLinesSince<any>(file, cursor);
+        const readLimit = Math.max(1, state.maxTrackedSessions - state.sessions.size);
+        const read = readNewLinesSince<any>(file, cursor, readLimit);
         parseErrors += read.parseErrors;
         if (read.lineCount === 0) continue;
 
@@ -578,6 +604,23 @@ export async function runOtelSpoolConsumerTick(state: OtelSpoolConsumerState): P
           continue;
         }
 
+        const newSessionCount = [...sessionIds]
+          .filter(sessionId => !state.sessions.has(sessionId))
+          .length;
+        if (
+          newSessionCount > 0
+          && state.sessions.size > 0
+          && state.sessions.size + newSessionCount > state.maxTrackedSessions
+        ) {
+          state.warn('[OTelConsumer] deferring spool file at session capacity', {
+            source: source.id,
+            file: relPath,
+            sessions: state.sessions.size,
+            incoming: newSessionCount,
+            limit: state.maxTrackedSessions,
+          });
+          continue;
+        }
         let pending = inflight;
         let resetTimers = false;
         if (!pending) {
@@ -683,6 +726,7 @@ export function startOtelSpoolConsumer(options: OtelSpoolConsumerOptions = {}): 
 export function stopOtelSpoolConsumer(): void {
   const state = globalThis.__otelSpoolConsumer;
   if (!state) return;
+  state.stopped = true;
   if (state.interval) clearInterval(state.interval);
   if (state.dispatchTimer) clearTimeout(state.dispatchTimer);
   globalThis.__otelSpoolConsumer = undefined;

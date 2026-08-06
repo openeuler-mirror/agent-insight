@@ -25,6 +25,8 @@ class Spool:
         self._prefix = f"{os.getpid()}-{secrets.token_hex(4)}"
         self._sequence = 0
         self._recover_stale_claims()
+        self._size_bytes = self._scan_size_bytes()
+        self._size_checked_at = time.monotonic()
 
     def _recover_stale_claims(self) -> None:
         cutoff = time.time() - self.config.spool_claim_timeout_seconds
@@ -37,7 +39,7 @@ class Spool:
             except (FileNotFoundError, OSError):
                 continue
 
-    def size_bytes(self) -> int:
+    def _scan_size_bytes(self) -> int:
         try:
             paths = chain(
                 self.directory.glob("*.ready"),
@@ -48,9 +50,39 @@ class Spool:
         except OSError:
             return 0
 
+    def size_bytes(self, *, refresh: bool = False) -> int:
+        # Periodic reconciliation sees files written by sibling processes while
+        # avoiding an O(number-of-files) directory walk for every local batch.
+        if refresh or time.monotonic() - self._size_checked_at >= 1.0:
+            self._size_bytes = self._scan_size_bytes()
+            self._size_checked_at = time.monotonic()
+        return self._size_bytes
+
+    def _reclaim_rejected(self, required: int) -> None:
+        if self.size_bytes() + required <= self.config.spool_max_bytes:
+            return
+        if self.size_bytes(refresh=True) + required <= self.config.spool_max_bytes:
+            return
+        rejected: list[tuple[float, Path]] = []
+        for path in self.directory.glob("*.rejected"):
+            try:
+                rejected.append((path.stat().st_mtime, path))
+            except FileNotFoundError:
+                continue
+        for _, path in sorted(rejected):
+            try:
+                size = path.stat().st_size
+                path.unlink()
+                self._size_bytes = max(0, self._size_bytes - size)
+            except FileNotFoundError:
+                continue
+            if self._size_bytes + required <= self.config.spool_max_bytes:
+                break
+
     def write(self, payload: dict[str, Any]) -> Path | None:
         encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         with self._lock:
+            self._reclaim_rejected(len(encoded))
             if self.size_bytes() + len(encoded) > self.config.spool_max_bytes:
                 return None
             self._sequence += 1
@@ -63,6 +95,7 @@ class Spool:
                 os.fsync(stream.fileno())
             os.chmod(temporary, 0o600)
             os.replace(temporary, ready)
+            self._size_bytes += len(encoded)
             return ready
 
     def pending(self) -> list[Path]:
@@ -73,7 +106,10 @@ class Spool:
 
     def claim_next(self) -> Path | None:
         while True:
-            ready = min(self.directory.glob("*.ready"), key=lambda path: path.name, default=None)
+            # Upload order is not semantically significant; taking the first
+            # directory entry avoids rescanning the entire backlog for every
+            # claimed batch.
+            ready = next(self.directory.glob("*.ready"), None)
             if ready is None:
                 return None
             claimed = ready.with_suffix(f".uploading-{self._prefix}")
@@ -95,10 +131,13 @@ class Spool:
             return None
 
     def acknowledge(self, path: Path) -> None:
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            pass
+        with self._lock:
+            try:
+                size = path.stat().st_size
+                path.unlink()
+                self._size_bytes = max(0, self._size_bytes - size)
+            except FileNotFoundError:
+                pass
 
     def reject(self, path: Path) -> Path:
         rejected = path.with_suffix(".rejected")
@@ -114,4 +153,6 @@ class Spool:
                     count += 1
                 except FileNotFoundError:
                     pass
+        self._size_bytes = 0
+        self._size_checked_at = time.monotonic()
         return count

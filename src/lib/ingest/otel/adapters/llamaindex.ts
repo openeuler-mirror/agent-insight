@@ -98,7 +98,7 @@ function readableLlmText(value: any): string | undefined {
       const nested = visit(candidate[key], depth + 1);
       if (nested) return nested;
     }
-    for (const key of ['message', 'response', 'output', 'delta', 'blocks', 'choices', 'candidates']) {
+    for (const key of ['message', 'response', 'output', 'result', 'delta', 'blocks', 'choices', 'candidates']) {
       const nested = visit(candidate[key], depth + 1);
       if (nested) return nested;
     }
@@ -282,6 +282,11 @@ function buildRelationships(events: OtelTraceEvent[]) {
   const owner = (event: OtelTraceEvent): AgentIdentity => {
     const own = identityFor(event);
     if (own && text(attr(event, 'agent.instance.id'))) return own;
+    // A non-root name declared on the event is explicit ownership metadata.
+    // Resolve it through explicitByName before considering sibling timing;
+    // otherwise concurrent ResearcherA/ResearcherB spans can be assigned to
+    // whichever sibling happened to start most recently.
+    if (own && own.key !== primary.key) return own;
     let parentId = event.parentSpanId;
     const seen = new Set<string>();
     let nearestContext: AgentIdentity | undefined;
@@ -303,6 +308,8 @@ function buildRelationships(events: OtelTraceEvent[]) {
       && Boolean(text(attr(candidate, 'agent.instance.id')))
     );
     if (nearestContext && nearestContext.key !== primary.key) return nearestContext;
+    // The temporal fallback is only needed for AgentWorkflow events whose
+    // agent.name remains stuck on the workflow root after a handoff.
     if (priorExplicit) return identityFor(priorExplicit) as AgentIdentity;
     if (nearestContext) return nearestContext;
     if (own) return own;
@@ -580,8 +587,13 @@ export function aggregateLlamaIndexTraceEvents(sessionId: string, source: OtelTr
     && String(item.interaction.content || '').trim()
   );
   const finalEvent = [...events].reverse().find(event => event.kind === 'agent') || events.at(-1);
-  const finalResult = rootOutputs.at(-1)?.interaction.content
-    || readableLlmText(finalEvent ? attr(finalEvent, 'output.value') : undefined)
+  const agentOutput = readableLlmText(finalEvent ? attr(finalEvent, 'output.value') : undefined);
+  const terminalLlmOutput = [...llmInteractions].reverse()
+    .map(item => String(item.interaction.content || '').trim())
+    .find(Boolean);
+  const finalResult = agentOutput
+    || terminalLlmOutput
+    || rootOutputs.at(-1)?.interaction.content
     || '';
   const started = Math.min(...events.map(event => event.startTimeMs || Date.now()));
   const completed = Math.max(...events.map(eventEnd));

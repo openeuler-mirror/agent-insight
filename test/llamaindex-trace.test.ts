@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 
+import { POST as postOtlpTraces } from '@/app/api/ingest/otel/v1/traces/route';
 import {
   buildAgentCallTree,
   type RawInteraction,
@@ -10,6 +14,7 @@ import { getAdapter, resolveFrameworkId } from '@/lib/ingest/adapters/registry';
 import { getOtelTraceAdapter } from '@/lib/ingest/otel/adapter-registry';
 import { aggregateLlamaIndexTraceEvents } from '@/lib/ingest/otel/adapters/llamaindex';
 import { isLlamaIndexOtlpTraceBody, normalizeLlamaIndexOtlpTraces } from '@/lib/ingest/otel/llamaindex';
+import { listOtelTraceSpoolFiles } from '@/lib/ingest/otel/spool';
 
 function value(input: unknown): Record<string, unknown> {
   if (typeof input === 'number') return Number.isInteger(input) ? { intValue: String(input) } : { doubleValue: input };
@@ -408,6 +413,112 @@ test('keeps concurrent same-name Agent instances as separate child nodes', () =>
       String(call.function?.arguments).includes('researcher-instance-b')
     );
   assert.equal(failedSpawn?.state, 'error');
+});
+
+test('uses an event non-root agent name ahead of an unrelated concurrent sibling', () => {
+  const body = payload();
+  body.resourceSpans[0].scopeSpans[0].spans = [
+    span({
+      id: 'root',
+      name: 'AgentWorkflow.run',
+      kind: 'agent',
+      start: 1000,
+      duration: 500,
+      attributes: { 'agent.name': 'Coordinator', 'agent.query': 'parallel research' },
+    }),
+    span({
+      id: 'agenta',
+      parent: 'root',
+      name: 'AgentWorkflow.run_agent_step',
+      kind: 'workflow_step',
+      start: 1010,
+      attributes: { 'agent.name': 'ResearcherA', 'agent.instance.id': 'researcher-a' },
+    }),
+    span({
+      id: 'agentb',
+      parent: 'root',
+      name: 'AgentWorkflow.run_agent_step',
+      kind: 'workflow_step',
+      start: 1020,
+      attributes: { 'agent.name': 'ResearcherB', 'agent.instance.id': 'researcher-b' },
+    }),
+    span({
+      id: 'llma',
+      parent: 'root',
+      name: 'OpenAILike.chat',
+      kind: 'llm',
+      start: 1030,
+      attributes: {
+        'agent.name': 'ResearcherA',
+        'gen_ai.request.model': 'deepseek-v4-pro',
+        'output.value': 'A result',
+      },
+    }),
+  ];
+
+  const record = aggregateLlamaIndexTraceEvents(
+    'li-session',
+    normalizeLlamaIndexOtlpTraces(body, { authenticatedUser: 'alice' }),
+  );
+  assert.ok(record);
+  const tree = buildAgentCallTree(record.interactions);
+  assert.ok(tree);
+  const researcherA = tree.children.find(child => child.agentName === 'ResearcherA');
+  const researcherB = tree.children.find(child => child.agentName === 'ResearcherB');
+  assert.ok(researcherA?.events.some(event => event.kind === 'llm' && event.summary === 'A result'));
+  assert.ok(!researcherB?.events.some(event => event.kind === 'llm'));
+});
+
+test('uses a child Agent terminal LLM output as the workflow final result', () => {
+  const body = payload();
+  const spans = body.resourceSpans[0].scopeSpans[0].spans;
+  // Remove the later Coordinator answer so the last root-owned LLM is only a
+  // handoff thought. The child answer is the actual AgentWorkflow result.
+  body.resourceSpans[0].scopeSpans[0].spans = spans.filter(item => item.spanId !== 'llm3'.padEnd(16, '0'));
+  const childLlm = body.resourceSpans[0].scopeSpans[0].spans.find(item => item.spanId === 'llm2'.padEnd(16, '0'));
+  assert.ok(childLlm);
+  const output = childLlm.attributes.find(item => item.key === 'output.value');
+  assert.ok(output);
+  output.value = value('AC5_AC8_OK');
+
+  const record = aggregateLlamaIndexTraceEvents(
+    'li-session',
+    normalizeLlamaIndexOtlpTraces(body, { authenticatedUser: 'alice' }),
+  );
+  assert.ok(record);
+  assert.equal(record.final_result, 'AC5_AC8_OK');
+});
+
+test('rejects unauthenticated or explicitly invalid LlamaIndex OTLP credentials', async () => {
+  const previousSpool = process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR;
+  const spoolDir = fs.mkdtempSync(path.join(os.tmpdir(), 'llamaindex-auth-'));
+  const secret = 'invalid-key-must-not-be-logged';
+  const warnings: unknown[][] = [];
+  const originalWarn = console.warn;
+  process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR = spoolDir;
+  console.warn = (...args: unknown[]) => { warnings.push(args); };
+  try {
+    const missing = await postOtlpTraces(new Request('http://localhost/api/ingest/otel/v1/traces', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload()),
+    }));
+    assert.equal(missing.status, 401);
+
+    const invalid = await postOtlpTraces(new Request('http://localhost/api/ingest/otel/v1/traces', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-witty-api-key': secret },
+      body: JSON.stringify(payload()),
+    }));
+    assert.equal(invalid.status, 401);
+    assert.equal(listOtelTraceSpoolFiles(spoolDir).length, 0);
+    assert.ok(!JSON.stringify(warnings).includes(secret));
+  } finally {
+    console.warn = originalWarn;
+    if (previousSpool === undefined) delete process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR;
+    else process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR = previousSpool;
+    fs.rmSync(spoolDir, { recursive: true, force: true });
+  }
 });
 
 test('registers LlamaIndex ahead of the generic OTLP fallback', () => {

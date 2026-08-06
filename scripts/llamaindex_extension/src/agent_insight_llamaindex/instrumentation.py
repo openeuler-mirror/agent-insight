@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import atexit
+import os
 import threading
 from dataclasses import dataclass
 from typing import Any
@@ -14,6 +15,7 @@ from .uploader import CollectorRuntime
 
 @dataclass(slots=True)
 class InstrumentationState:
+    owner_pid: int
     config: CollectorConfig
     runtime: CollectorRuntime
     instrumentor: AgentInsightOpenTelemetry
@@ -26,11 +28,27 @@ _state: InstrumentationState | None = None
 _atexit_registered = False
 
 
+def _reset_after_fork() -> None:
+    global _lock, _state
+    inherited = _state
+    _lock = threading.RLock()
+    _state = None
+    if inherited is not None:
+        inherited.instrumentor.detach_after_fork()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_after_fork)
+
+
 def instrument(
     config: CollectorConfig | None = None, **overrides: Any
 ) -> InstrumentationState | None:
     global _state, _atexit_registered
     with _lock:
+        if _state is not None and _state.owner_pid != os.getpid():
+            _state.instrumentor.detach_after_fork()
+            _state = None
         if _state is not None:
             return _state
         resolved = config or CollectorConfig.load(**overrides)
@@ -48,6 +66,7 @@ def instrument(
             runtime.close(1.0)
             raise
         _state = InstrumentationState(
+            owner_pid=os.getpid(),
             config=resolved,
             runtime=runtime,
             instrumentor=instrumentor,

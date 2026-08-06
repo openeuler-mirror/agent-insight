@@ -19,7 +19,7 @@ from .config import CollectorConfig
 from .context import trace_metadata
 from .exporter import AgentInsightSpanExporter
 from .model import SpanRecord
-from .serialization import add_content_attribute, extract_nodes
+from .serialization import add_content_attribute, add_json_attribute, extract_nodes
 
 
 class CollectorSpan(SimpleSpan):
@@ -340,10 +340,13 @@ class LlamaIndexSpanHandler(OTelCompatibleSpanHandler):
                 )
             elif class_name == "RetrievalEndEvent":
                 span.kind = "retriever"
-                add_content_attribute(
+                node_values = list(getattr(event, "nodes", []) or [])
+                nodes = extract_nodes(node_values, self.config)
+                span.attributes["retrieval.document_count"] = len(node_values)
+                add_json_attribute(
                     span.attributes,
                     "retrieval.nodes",
-                    extract_nodes(getattr(event, "nodes", []), self.config),
+                    nodes,
                     self.config,
                 )
             elif class_name.startswith("Synthesize"):
@@ -445,9 +448,12 @@ class LlamaIndexSpanHandler(OTelCompatibleSpanHandler):
         if span.kind == "retriever":
             nodes = getattr(result, "nodes", result if isinstance(result, list) else None)
             if nodes is not None:
-                add_content_attribute(
+                node_values = list(nodes)
+                extracted = extract_nodes(node_values, self.config)
+                span.attributes["retrieval.document_count"] = len(node_values)
+                add_json_attribute(
                     span.attributes,
                     "retrieval.nodes",
-                    extract_nodes(nodes, self.config),
+                    extracted,
                     self.config,
                 )

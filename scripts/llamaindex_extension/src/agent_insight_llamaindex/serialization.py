@@ -10,12 +10,27 @@ from typing import Any, cast
 from .config import CollectorConfig
 
 _SECRET_KEY = re.compile(r"(?:api[_-]?key|authorization|password|secret|token)$", re.I)
+_SECRET_ASSIGNMENT = re.compile(
+    r"(?i)([?&](?:api[_-]?key|access[_-]?token|token|password|secret)=)[^&#\s]+"
+)
+_AUTHORIZATION_VALUE = re.compile(
+    r"(?i)(\bauthorization\s*[:=]\s*)(?:(?:bearer|basic)\s+)?[^\s,;]+"
+)
+_AUTH_SCHEME_VALUE = re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]+")
+
+
+def _redact_string(value: str) -> str:
+    value = _SECRET_ASSIGNMENT.sub(r"\1***REDACTED***", value)
+    value = _AUTHORIZATION_VALUE.sub(r"\1***REDACTED***", value)
+    return _AUTH_SCHEME_VALUE.sub(r"\1 ***REDACTED***", value)
 
 
 def _plain(value: Any, depth: int = 0) -> Any:
     if depth > 6:
         return "<max-depth>"
-    if value is None or isinstance(value, (str, int, float, bool)):
+    if isinstance(value, str):
+        return _redact_string(value)
+    if value is None or isinstance(value, (int, float, bool)):
         return value
     if isinstance(value, (datetime, date)):
         return value.isoformat()
@@ -28,6 +43,13 @@ def _plain(value: Any, depth: int = 0) -> Any:
             str(key): "***REDACTED***" if _SECRET_KEY.search(str(key)) else _plain(item, depth + 1)
             for key, item in list(value.items())[:200]
         }
+    if (
+        isinstance(value, (list, tuple))
+        and len(value) == 2
+        and isinstance(value[0], str)
+        and _SECRET_KEY.search(value[0])
+    ):
+        return [_redact_string(value[0]), "***REDACTED***"]
     if isinstance(value, (list, tuple, set)):
         return [_plain(item, depth + 1) for item in list(value)[:200]]
     model_dump = getattr(value, "model_dump", None)
@@ -39,7 +61,7 @@ def _plain(value: Any, depth: int = 0) -> Any:
     for attribute in ("content", "text"):
         item = getattr(value, attribute, None)
         if isinstance(item, str):
-            return item
+            return _redact_string(item)
     return f"<{type(value).__module__}.{type(value).__name__}>"
 
 
@@ -65,6 +87,65 @@ def add_content_attribute(
     attributes: dict[str, Any], key: str, value: Any, config: CollectorConfig
 ) -> None:
     content, truncated, original = safe_value(value, config)
+    attributes[key] = content
+    if truncated:
+        attributes[f"{key}.truncated"] = True
+        attributes[f"{key}.original_chars"] = original
+
+
+def safe_json_value(value: Any, config: CollectorConfig) -> tuple[str, bool, int | None]:
+    """Serialize structured content without cutting through JSON syntax."""
+    if not config.capture_content:
+        return json.dumps("<content-capture-disabled>"), False, None
+    plain = _plain(value)
+    try:
+        encoded = json.dumps(plain, ensure_ascii=False, separators=(",", ":"))
+    except (TypeError, ValueError):
+        encoded = json.dumps(str(plain), ensure_ascii=False)
+    original = len(encoded)
+    limit = config.max_content_chars
+    if not limit or original <= limit:
+        return encoded, False, original
+
+    if not isinstance(plain, list):
+        marker = "…<truncated>"
+        available = max(0, limit - len(json.dumps(marker, ensure_ascii=False)) + 2)
+        return json.dumps(str(plain)[:available] + marker, ensure_ascii=False), True, original
+
+    compact: list[Any] = []
+    for raw_item in plain:
+        candidates: list[Any] = [raw_item]
+        if isinstance(raw_item, dict) and isinstance(raw_item.get("content"), str):
+            item_content = raw_item["content"]
+            shortened = {
+                **raw_item,
+                "content": item_content[:256]
+                + ("…<truncated>" if len(item_content) > 256 else ""),
+            }
+            if len(item_content) > 256:
+                shortened["content_truncated"] = True
+                shortened["content_original_chars"] = len(item_content)
+            candidates = [
+                shortened,
+                {key: item for key, item in raw_item.items() if key != "content"},
+            ]
+
+        selected = None
+        for candidate in candidates:
+            probe = json.dumps([*compact, candidate], ensure_ascii=False, separators=(",", ":"))
+            if len(probe) <= limit:
+                selected = candidate
+                break
+        if selected is None:
+            break
+        compact.append(selected)
+    return json.dumps(compact, ensure_ascii=False, separators=(",", ":")), True, original
+
+
+def add_json_attribute(
+    attributes: dict[str, Any], key: str, value: Any, config: CollectorConfig
+) -> None:
+    content, truncated, original = safe_json_value(value, config)
     attributes[key] = content
     if truncated:
         attributes[f"{key}.truncated"] = True

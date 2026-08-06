@@ -87,6 +87,20 @@ class AgentInsightOpenTelemetry(LlamaIndexOpenTelemetry):
         self._span_handler = None
         self._event_handler = None
 
+    def detach_after_fork(self) -> None:
+        """Remove inherited handlers without flushing into dead parent threads."""
+        if self._span_handler is None or self._event_handler is None:
+            return
+        dispatcher = get_dispatcher()
+        dispatcher.span_handlers = [
+            item for item in dispatcher.span_handlers if item is not self._span_handler
+        ]
+        dispatcher.event_handlers = [
+            item for item in dispatcher.event_handlers if item is not self._event_handler
+        ]
+        self._span_handler = None
+        self._event_handler = None
+
     def force_flush(self, timeout_millis: int = 10_000) -> bool:
         provider = self.tracer_provider
         if provider is None:

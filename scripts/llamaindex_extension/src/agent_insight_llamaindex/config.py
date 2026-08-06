@@ -17,15 +17,16 @@ def _default_spool_root() -> Path:
     return _default_home() / "otel_data" / "llamaindex"
 
 
-def _account_namespace(api_key: str) -> str:
+def _account_namespace(api_key: str, endpoint: str = "") -> str:
     if not api_key:
         return "unconfigured"
-    digest = hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:16]
+    destination = _normalize_endpoint(endpoint)
+    digest = hashlib.sha256(f"{destination}\0{api_key}".encode()).hexdigest()[:16]
     return f"account-{digest}"
 
 
-def _default_spool_dir(api_key: str = "") -> Path:
-    return _default_spool_root() / _account_namespace(api_key) / "spool"
+def _default_spool_dir(api_key: str = "", endpoint: str = "") -> Path:
+    return _default_spool_root() / _account_namespace(api_key, endpoint) / "spool"
 
 
 def _default_user() -> str:
@@ -89,7 +90,7 @@ class CollectorConfig:
             _default_spool_dir(),
             _default_home() / "data" / "llamaindex-spool",
         }:
-            self.spool_dir = _default_spool_dir(self.api_key)
+            self.spool_dir = _default_spool_dir(self.api_key, self.endpoint)
         self.spool_dir = Path(self.spool_dir).expanduser()
         self.config_path = Path(self.config_path).expanduser()
         self.max_content_chars = max(0, self.max_content_chars)
@@ -172,7 +173,16 @@ class CollectorConfig:
             except (OSError, ValueError):
                 is_managed = False
             if is_managed:
-                values["spool_dir"] = _default_spool_dir(str(values.get("api_key") or ""))
+                stored_endpoint = _normalize_endpoint(str(stored.get("endpoint") or ""))
+                selected_endpoint = _normalize_endpoint(str(values.get("endpoint") or ""))
+                stored_key = str(stored.get("api_key") or "")
+                selected_key = str(values.get("api_key") or "")
+                # Preserve an existing managed directory while its destination
+                # is unchanged, including the legacy key-only namespace. A
+                # destination/key switch always gets a fresh namespace so old
+                # batches can never be uploaded to the new server.
+                if not stored or stored_endpoint != selected_endpoint or stored_key != selected_key:
+                    values["spool_dir"] = _default_spool_dir(selected_key, selected_endpoint)
         return cls(**values)
 
     def write(self) -> None:

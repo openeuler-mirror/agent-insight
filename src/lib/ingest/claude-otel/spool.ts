@@ -293,6 +293,7 @@ export function readOtelTraceEventsForSession(sessionId: string, spoolDir = getO
 export function readNewLinesSince<T = any>(
   file: string,
   cursor: SpoolCursor = { bytes: 0 },
+  maxLines = Number.POSITIVE_INFINITY,
 ): SpoolReadResult<T> {
   let stat: Stats;
   try {
@@ -323,9 +324,10 @@ export function readNewLinesSince<T = any>(
   let nextBytes = start;
   let pending = '';
   let offset = start;
+  let reachedLimit = false;
 
   try {
-    while (offset < stat.size) {
+    while (offset < stat.size && !reachedLimit) {
       const bytesRead = fs.readSync(fd, buffer, 0, Math.min(buffer.length, stat.size - offset), offset);
       if (bytesRead <= 0) break;
       offset += bytesRead;
@@ -334,6 +336,10 @@ export function readNewLinesSince<T = any>(
       pending = lines.pop() ?? '';
 
       for (const line of lines) {
+        if (lineCount >= maxLines) {
+          reachedLimit = true;
+          break;
+        }
         nextBytes += Buffer.byteLength(line, 'utf8') + 1;
         if (!line.trim()) continue;
         lineCount += 1;

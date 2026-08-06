@@ -33,7 +33,7 @@ from agent_insight_llamaindex.event_handler import LlamaIndexEventHandler
 from agent_insight_llamaindex.model import SpanRecord
 from agent_insight_llamaindex.otel_integration import AgentInsightOpenTelemetry
 from agent_insight_llamaindex.otlp import encode_batch
-from agent_insight_llamaindex.serialization import extract_usage, safe_value
+from agent_insight_llamaindex.serialization import extract_usage, safe_json_value, safe_value
 from agent_insight_llamaindex.span_handler import LlamaIndexSpanHandler
 from agent_insight_llamaindex.spool import Spool
 from agent_insight_llamaindex.uploader import CollectorRuntime
@@ -121,6 +121,16 @@ def test_default_spool_is_isolated_by_api_key(
     assert first.spool_dir.is_dir()
 
 
+def test_default_spool_is_isolated_by_endpoint(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AGENT_INSIGHT_HOME", str(tmp_path))
+    monkeypatch.delenv("AGENT_INSIGHT_LLAMA_SPOOL_DIR", raising=False)
+    first = CollectorConfig.load(endpoint="https://one.example", api_key="shared-key")
+    second = CollectorConfig.load(endpoint="https://two.example", api_key="shared-key")
+    assert first.spool_dir != second.spool_dir
+
+
 def test_default_content_limit_is_2000_characters() -> None:
     value, truncated, original = safe_value("x" * 2001, CollectorConfig())
     assert truncated is True
@@ -136,6 +146,35 @@ def test_safe_value_redacts_secrets_and_truncates(tmp_path: Path) -> None:
     assert "REDACTED" in value
     assert truncated
     assert original and original > 30
+
+
+def test_safe_value_redacts_url_and_header_secrets(tmp_path: Path) -> None:
+    value, _, _ = safe_value(
+        {
+            "url": "https://example.test/query?q=x&api_key=hidden-url-secret",
+            "headers": [["Authorization", "Bearer hidden-header-secret"]],
+            "note": "authorization: Basic hidden-inline-secret",
+        },
+        config(tmp_path),
+    )
+    assert "hidden-url-secret" not in value
+    assert "hidden-header-secret" not in value
+    assert "hidden-inline-secret" not in value
+    assert value.count("REDACTED") >= 3
+
+
+def test_safe_json_value_keeps_truncated_retrieval_nodes_valid(tmp_path: Path) -> None:
+    nodes = [
+        {"source": f"doc-{index}.md", "score": 1 - index / 10, "content": "x" * 600}
+        for index in range(5)
+    ]
+    value, truncated, original = safe_json_value(nodes, config(tmp_path))
+    decoded = json.loads(value)
+    assert truncated is True
+    assert original and original > 2_000
+    assert decoded
+    assert all("source" in node and "score" in node for node in decoded)
+    assert len(value) <= 2_000
 
 
 def test_usage_accepts_openai_and_llamaindex_shapes() -> None:
@@ -321,13 +360,14 @@ def test_spool_capacity_drops_new_batch_without_corrupting_existing(tmp_path: Pa
     assert len(spool.pending()) == 1
 
 
-def test_rejected_batches_remain_bounded_by_spool_capacity(tmp_path: Path) -> None:
+def test_rejected_batches_are_reclaimed_before_dropping_new_telemetry(tmp_path: Path) -> None:
     spool = Spool(config(tmp_path, spool_max_bytes=1024 * 1024))
     assert spool.write({"value": "x" * 700_000})
     claimed = spool.claim_next()
     assert claimed is not None
     spool.reject(claimed)
-    assert spool.write({"value": "y" * 700_000}) is None
+    assert spool.write({"value": "y" * 700_000}) is not None
+    assert not list(spool.directory.glob("*.rejected"))
 
 
 def test_runtime_close_stops_threads_and_rejects_late_submissions(tmp_path: Path) -> None:
@@ -755,6 +795,8 @@ def test_real_rag_pipeline_captures_retrieval_synthesis_and_llm(tmp_path: Path) 
     assert {"retriever", "synthesizer", "llm"}.issubset(kinds)
     retrieval = next(item for item in emitted if item.kind == "retriever")
     assert "Agent Insight" in retrieval.attributes["retrieval.nodes"]
+    assert json.loads(retrieval.attributes["retrieval.nodes"])
+    assert retrieval.attributes["retrieval.document_count"] == 1
 
 
 def test_workflow_step_name_does_not_get_reclassified_as_retriever(

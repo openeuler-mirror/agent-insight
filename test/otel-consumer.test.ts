@@ -5,7 +5,11 @@ import path from "node:path"
 import test from "node:test"
 
 import { loadCheckpoint, toCheckpointRelPath } from "@/lib/ingest/otel-consumer/checkpoint"
-import { startOtelSpoolConsumer, stopOtelSpoolConsumer } from "@/lib/ingest/otel-consumer/consumer"
+import {
+  getOtelSpoolConsumerForTest,
+  startOtelSpoolConsumer,
+  stopOtelSpoolConsumer,
+} from "@/lib/ingest/otel-consumer/consumer"
 import type { SpoolSource } from "@/lib/ingest/otel-consumer/sources"
 import type { ExecutionRecord } from "@/lib/storage/data-service"
 
@@ -94,6 +98,116 @@ test("OTel consumer: runs one loop, fast-saves, evaluates, and advances checkpoi
     const relPath = toCheckpointRelPath(dir, file)
     const checkpoint = loadCheckpoint(dir)
     assert.equal(checkpoint.files[relPath]?.bytes, fs.statSync(file).size)
+  } finally {
+    stopOtelSpoolConsumer()
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("OTel consumer: poisoned sessions retry from spool and release after recovery", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "otel-consumer-poison-"))
+  stopOtelSpoolConsumer()
+  try {
+    const dayDir = path.join(dir, new Date().toISOString().slice(0, 10))
+    fs.mkdirSync(dayDir, { recursive: true })
+    const file = path.join(dayDir, "logs.jsonl")
+    fs.writeFileSync(file, "{\"sessionId\":\"session-poison\"}\n", "utf8")
+    const warnings: unknown[][] = []
+    let attempts = 0
+    const source = makeSource(dir, file, {
+      task_id: "session-poison",
+      user: "test-user",
+      query: "bad",
+      framework: "test",
+      final_result: "bad",
+    })
+
+    startOtelSpoolConsumer({
+      sources: [source],
+      saveExecution: async (data) => {
+        attempts += 1
+        if (attempts === 1) throw new Error("transient failure")
+        return { success: true, record: data }
+      },
+      shortMs: 5,
+      longMs: 10,
+      maxWaitMs: 20,
+      tickMs: 5,
+      parkAfter: 1,
+      parkedRetryMs: 20,
+      maxTrackedSessions: 2,
+      seedOnStart: false,
+      log: () => {},
+      warn: (...args) => { warnings.push(args) },
+    })
+
+    await waitFor(() => {
+      const state = getOtelSpoolConsumerForTest()
+      return Boolean(state && state.sessions.size === 0 && state.pendingFiles.size === 0)
+    })
+    const state = getOtelSpoolConsumerForTest()
+    assert.ok(state)
+    assert.equal(state.sessions.size, 0)
+    assert.equal(state.pendingFiles.size, 0)
+    assert.ok(attempts >= 2)
+    assert.ok(JSON.stringify(warnings).includes("poisoned"))
+    const checkpoint = loadCheckpoint(dir)
+    assert.equal(checkpoint.files[toCheckpointRelPath(dir, file)]?.bytes, fs.statSync(file).size)
+  } finally {
+    stopOtelSpoolConsumer()
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("OTel consumer: session limit chunks a multi-session file without losing records", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "otel-consumer-capacity-"))
+  stopOtelSpoolConsumer()
+  try {
+    const dayDir = path.join(dir, new Date().toISOString().slice(0, 10))
+    fs.mkdirSync(dayDir, { recursive: true })
+    const file = path.join(dayDir, "logs.jsonl")
+    fs.writeFileSync(
+      file,
+      ["session-a", "session-b", "session-c"]
+        .map(sessionId => JSON.stringify({ sessionId }))
+        .join("\n") + "\n",
+      "utf8",
+    )
+    const saved = new Set<string>()
+    let observedMax = 0
+    const source = makeSource(dir, file, {
+      task_id: "placeholder",
+      user: "test-user",
+      query: "capacity",
+      framework: "test",
+      final_result: "done",
+    })
+
+    startOtelSpoolConsumer({
+      sources: [source],
+      saveExecution: async (data) => {
+        saved.add(String(data.task_id))
+        return { success: true, record: data }
+      },
+      shortMs: 5,
+      longMs: 10,
+      maxWaitMs: 20,
+      tickMs: 5,
+      maxTrackedSessions: 2,
+      seedOnStart: false,
+      log: () => {},
+      warn: () => {},
+    })
+
+    await waitFor(() => {
+      const state = getOtelSpoolConsumerForTest()
+      observedMax = Math.max(observedMax, state?.sessions.size || 0)
+      return saved.size === 3 && state?.pendingFiles.size === 0
+    })
+    assert.deepEqual([...saved].sort(), ["session-a", "session-b", "session-c"])
+    assert.ok(observedMax <= 2)
+    const checkpoint = loadCheckpoint(dir)
+    assert.equal(checkpoint.files[toCheckpointRelPath(dir, file)]?.bytes, fs.statSync(file).size)
   } finally {
     stopOtelSpoolConsumer()
     fs.rmSync(dir, { recursive: true, force: true })

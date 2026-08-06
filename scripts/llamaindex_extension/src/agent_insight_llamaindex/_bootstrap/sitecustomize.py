@@ -16,7 +16,15 @@ if os.environ.get("AGENT_INSIGHT_LLAMAINDEX_AUTOSTART") == "1":
         from agent_insight_llamaindex import setup
 
         setup()
-    except Exception:
+    except Exception as error:
         # Observability must never prevent the instrumented application from
-        # starting. Runtime diagnostics remain available through the CLI.
-        pass
+        # starting. Do not include the exception message because it may contain
+        # request headers or credentials; the exception type is enough to make
+        # a broken deployment visible without leaking content.
+        import sys
+
+        print(
+            "Agent Insight LlamaIndex collector failed to start "
+            f"({type(error).__name__}); run `python -m agent_insight_llamaindex.cli status`.",
+            file=sys.stderr,
+        )
