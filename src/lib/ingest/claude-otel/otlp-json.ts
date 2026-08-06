@@ -300,6 +300,7 @@ export function normalizeClaudeOtlpTraces(
             kind: classification.kind === 'tool' ? 'tool' : 'llm',
             serviceName,
             user: resourceUser,
+            authenticatedUser: Boolean(opts.authenticatedUser),
             model: firstOptionalString(
               attributes['gen_ai.request.model'],
               attributes['llm.request.model'],

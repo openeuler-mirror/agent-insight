@@ -26,6 +26,8 @@ test("registry resolves framework ids and aliases", () => {
   assert.equal(resolveFrameworkId("unknown-framework"), "unknown-framework")
   assert.equal(resolveFrameworkId("jiuwen"), "jiuwenswarm")
   assert.equal(resolveFrameworkId("openjiuwen"), "jiuwenswarm")
+  assert.equal(resolveFrameworkId("qoder-cli"), "qoder")
+  assert.equal(resolveFrameworkId("qoder-cn"), "qoder")
   assert.equal(resolveFrameworkId(null), "")
   assert.equal(getAdapter("claudecode"), getAdapter("claude"))
 })
@@ -33,17 +35,29 @@ test("registry resolves framework ids and aliases", () => {
 test("registry exposes the framework descriptor list", () => {
   assert.deepEqual(
     listFrameworks().map((descriptor) => descriptor.id),
-    ["opencode", "claude", "codeagent", "openclaw", "hermes", "jiuwenswarm", "langfuse-langgraph", "trae"],
+    ["opencode", "claude", "codeagent", "openclaw", "hermes", "jiuwenswarm", "langfuse-langgraph", "qoder", "trae"],
   )
 })
 
 test("registry adapters keep direct references to existing functions", () => {
   assert.equal(getAdapter("opencode").extractSkills, extractSkillsWithVersionsFromOpencodeSession)
+  assert.deepEqual(getAdapter("opencode").capabilities, {
+    skills: true,
+    subagentTree: true,
+    skillScope: "agent-tree",
+  })
   assert.equal(getAdapter("claude").extractSkills, extractSkillsWithVersionsFromClaudeSession)
+  assert.equal(getAdapter("claude").capabilities?.skillScope, "session")
   assert.equal(getAdapter("claude").normalizeForStorage, normalizeClaudeCodeInteractionsForStorage)
   assert.equal(getAdapter("codeagent").extractSkills, extractSkillsWithVersionsFromOpencodeSession)
   assert.equal(getAdapter("codeagent").capabilities?.subagentTree, true)
   assert.equal(getAdapter("openclaw").extractSkills, extractSkillsWithVersionsFromOpenClawSession)
+  assert.equal(getAdapter("openclaw").capabilities?.subagentTree, true)
+  assert.equal(getAdapter("openclaw").capabilities?.skillScope, "session")
+  assert.equal(getAdapter("jiuwen").capabilities?.subagentTree, undefined)
+  assert.equal(getAdapter("qoder").capabilities?.subagentTree, true)
+  assert.equal(getAdapter("qoder").capabilities?.skillScope, "agent-tree")
+  assert.equal(getAdapter("qoder").capabilities?.allowSnapshotShrink, true)
 })
 
 test("registry adapters match golden skill extraction outputs", () => {

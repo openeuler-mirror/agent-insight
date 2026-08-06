@@ -1,8 +1,44 @@
 import { NextResponse } from 'next/server';
+
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { configuredQoderJetBrainsPackageUrl } from '@/lib/ingest/qoder-plugin-release';
 import {
   CODEAGENT_UNIX_SETUP_BLOCK,
   CODEAGENT_WINDOWS_SETUP_BLOCK,
 } from './codeagent-setup';
+const QODER_SETUP_COMPONENTS = new Set([
+    'qoder_setup.mjs',
+    'qoder_token_usage_env.mjs',
+    'qoder_trace_collector.mjs',
+    'qoder_uploader_client.mjs',
+    'qoder_work_setup.mjs',
+]);
+
+async function serveQoderSetupComponent(component: string): Promise<NextResponse> {
+    if (!QODER_SETUP_COMPONENTS.has(component)) {
+        return new NextResponse('Unknown setup component', {
+            status: 404,
+            headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+        });
+    }
+
+    try {
+        const source = await readFile(path.join(process.cwd(), 'scripts', component), 'utf8');
+        return new NextResponse(source, {
+            headers: {
+                'Content-Type': 'text/javascript; charset=utf-8',
+                'Cache-Control': 'no-store',
+            },
+        });
+    } catch {
+        return new NextResponse('Setup component is unavailable', {
+            status: 404,
+            headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+        });
+    }
+}
+
 
 // 安装页可预选的框架。value 会被拼进生成脚本，所以只接受白名单内的值——
 // 不能把 query 参数原样带进 shell/PowerShell 字符串。
@@ -14,6 +50,7 @@ const FRAMEWORKS: { value: string; label: string }[] = [
     { value: 'hermes', label: 'Hermes' },
     { value: 'jiuwen', label: 'JiuwenSwarm' },
     { value: 'trae', label: 'Trae IDE' },
+    { value: 'qoder', label: 'Qoder CN product family' },
 ];
 
 function parseFrameworks(raw: string | null): { value: string; label: string }[] {
@@ -46,6 +83,7 @@ function powerShellDoubleQuoted(value: string): string {
 }
 
 function generateBashScript(host: string, baseUrl: string, apiKey: string, preselected: { value: string; label: string }[]): string {
+    const qoderJetBrainsPackageUrl = configuredQoderJetBrainsPackageUrl();
     const lines = [
         '#!/bin/bash',
         '# =============================================================================',
@@ -55,6 +93,7 @@ function generateBashScript(host: string, baseUrl: string, apiKey: string, prese
         'AGENT_INSIGHT_HOST="' + bashDoubleQuoted(host) + '"',
         'AGENT_INSIGHT_BASE_URL="' + bashDoubleQuoted(baseUrl) + '"',
         'AGENT_INSIGHT_SETUP_API_KEY="' + bashDoubleQuoted(apiKey) + '"',
+        'QODER_JETBRAINS_RELEASE_URL="' + bashDoubleQuoted(qoderJetBrainsPackageUrl) + '"',
         'OPENCODE_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/opencode"',
         '',
         'echo "🚀 Fetching Agent-insight telemetry components from $AGENT_INSIGHT_BASE_URL..."',
@@ -130,8 +169,9 @@ function generateBashScript(host: string, baseUrl: string, apiKey: string, prese
         '    { name: \'Claude Code\', value: \'claude\' },',
         '    { name: \'CodeAgent\', value: \'codeagent\' },',
         '    { name: \'Hermes\', value: \'hermes\' },',
-'    { name: \'JiuwenSwarm\', value: \'jiuwen\' },',
-'    { name: \'Trae IDE\', value: \'trae\' }',
+        '    { name: \'JiuwenSwarm\', value: \'jiuwen\' },',
+        '    { name: \'Trae IDE\', value: \'trae\' },',
+        '    { name: \'Qoder CN product family\', value: \'qoder\' }',
         '];',
         '',
         'async function select() {',
@@ -204,6 +244,7 @@ function generateBashScript(host: string, baseUrl: string, apiKey: string, prese
         'INSTALL_HERMES=false',
         'INSTALL_JIUWEN=false',
         'INSTALL_TRAE=false',
+        'INSTALL_QODER=false',
         '',
         'if [[ "$SELECTED_FRAMEWORKS" == *"opencode"* ]]; then',
         '    INSTALL_OPENCODE=true',
@@ -226,9 +267,12 @@ function generateBashScript(host: string, baseUrl: string, apiKey: string, prese
         'if [[ "$SELECTED_FRAMEWORKS" == *"trae"* ]]; then',
         '    INSTALL_TRAE=true',
         'fi',
+        'if [[ "$SELECTED_FRAMEWORKS" == *"qoder"* ]]; then',
+        '    INSTALL_QODER=true',
+        'fi',
         '',
         '# Exit if nothing selected',
-        'if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_TRAE" = "false" ]; then',
+        'if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_TRAE" = "false" ] && [ "$INSTALL_QODER" = "false" ]; then',
         '    echo "⚠️  未选择任何框架组件，将跳过插件安装。"',
         '    echo "   继续执行配置步骤..."',
         '    echo ""',
@@ -325,8 +369,8 @@ function generateBashScript(host: string, baseUrl: string, apiKey: string, prese
         '  type: object',
         'JIUWEN_EXT_EOF',
         '    echo "✅ JiuwenSwarm extension installed at $JW_EXT_DIR"',
-        'fi',
-        '',
+'fi',
+'',
 'if [ "$INSTALL_TRAE" = "true" ]; then',
 '    echo "Installing Trae IDE collector..."',
 '    echo "  Step 1: Downloading VSIX..."',
@@ -408,6 +452,15 @@ function generateBashScript(host: string, baseUrl: string, apiKey: string, prese
 '    echo "  [OK] Trae IDE collector installed"',
 '    echo "  [NOTE] Restart TRAE IDE to activate"',
 'fi',
+'',
+'if [ "$INSTALL_QODER" = "true" ]; then',
+        '    echo "Downloading Agent Insight Qoder CN collectors..."',
+        '    QODER_DIST_DIR="$HOME/.agent-insight/qoder-distribution"',
+        '    mkdir -p "$QODER_DIST_DIR"',
+        '    for component in qoder_setup.mjs qoder_token_usage_env.mjs qoder_trace_collector.mjs qoder_uploader_client.mjs qoder_work_setup.mjs; do',
+        '        curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup?component=$component" -o "$QODER_DIST_DIR/$component"',
+        '    done',
+        'fi',
         '',
         '# 4. Configure ~/.agent-insight/.env',
         'AGENT_INSIGHT_CONFIG_FILE="$HOME/.agent-insight/.env"',
@@ -476,6 +529,52 @@ function generateBashScript(host: string, baseUrl: string, apiKey: string, prese
         'echo "AGENT_INSIGHT_OPENCODE_UPLOAD_COOLDOWN_MS=15000" >> "$AGENT_INSIGHT_CONFIG_FILE"',
         'rm "${AGENT_INSIGHT_CONFIG_FILE}.bak"',
         'echo "✅ Configuration updated at $AGENT_INSIGHT_CONFIG_FILE"',
+        '',
+        '# 6.35 Install Qoder CN product-family collectors',
+        'if [ "$INSTALL_QODER" = "true" ]; then',
+        '    if [ -z "$FINAL_KEY" ]; then',
+        '        echo "Warning: Qoder CN collector installation requires an API key; configure one and rerun setup."',
+        '    elif node "$QODER_DIST_DIR/qoder_setup.mjs" install --host="$FINAL_HOST" --api-key="$FINAL_KEY" --scope=user --product=cli --owner=cli && node "$QODER_DIST_DIR/qoder_setup.mjs" install --host="$FINAL_HOST" --api-key="$FINAL_KEY" --scope=user --product=desktop --owner=desktop && node "$QODER_DIST_DIR/qoder_setup.mjs" install --host="$FINAL_HOST" --api-key="$FINAL_KEY" --scope=user --product=jetbrains --owner=jetbrains && node "$QODER_DIST_DIR/qoder_work_setup.mjs" install --host="$FINAL_HOST" --api-key="$FINAL_KEY"; then',
+        '        echo "Qoder CN CLI/Desktop/JetBrains/Work collectors installed."',
+        '        echo ""',
+        '        QODER_PLUGIN_DIR="$HOME/.agent-insight/packages/qoder"',
+        '        mkdir -p "$QODER_PLUGIN_DIR"',
+        '        download_qoder_plugin() {',
+        '            local label="$1" url="$2" target="$3" temp="${3}.tmp.$$"',
+        '            if curl -fsSL "$url" -o "$temp"; then',
+        '                mv -f "$temp" "$target"',
+        '                echo "  Downloaded $label: $target"',
+        '                return 0',
+        '            else',
+        '                rm -f "$temp"',
+        '                echo "  Warning: $label could not be downloaded from $url"',
+        '                return 1',
+        '            fi',
+        '        }',
+        '        echo "Downloading Qoder CN plugin packages..."',
+        '        download_qoder_plugin "Qoder CN Desktop VSIX" "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/qoder-desktop-vsix" "$QODER_PLUGIN_DIR/agent-insight-qoder-desktop.vsix" || true',
+        '        QODER_JETBRAINS_TARGET="$QODER_PLUGIN_DIR/agent-insight-qoder-jetbrains.zip"',
+        '        if ! download_qoder_plugin "Qoder for JetBrains ZIP" "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/qoder-jetbrains-plugin" "$QODER_JETBRAINS_TARGET"; then',
+        '            if [ -n "$QODER_JETBRAINS_RELEASE_URL" ]; then',
+        '                echo "    Release attachment direct URL: $QODER_JETBRAINS_RELEASE_URL"',
+        '                echo "    Retrying from the Release attachment..."',
+        '                if ! download_qoder_plugin "Qoder for JetBrains ZIP (Release)" "$QODER_JETBRAINS_RELEASE_URL" "$QODER_JETBRAINS_TARGET"; then',
+        '                    echo "    Manual download (Linux/macOS):"',
+        '                    echo "      curl -fL \\"$QODER_JETBRAINS_RELEASE_URL\\" -o \\"$QODER_JETBRAINS_TARGET\\""',
+        '                fi',
+        '            else',
+        '                echo "    Release attachment direct URL is not configured on the Agent Insight server."',
+        '                echo "    Server administrator: set AGENT_INSIGHT_QODER_JETBRAINS_PACKAGE_URL to the trusted Release attachment URL, restart Agent Insight, and rerun setup."',
+        '            fi',
+        '        fi',
+        '        echo "    Desktop install: Qoder CN Desktop -> Extensions -> ... -> Install from VSIX."',
+        '        echo "    JetBrains package path: $QODER_JETBRAINS_TARGET"',
+        '        echo "    JetBrains install: Settings -> Plugins -> gear icon -> Install Plugin from Disk -> select the ZIP above."',
+        '        echo "    Restart the corresponding IDE after installing the downloaded package."',
+        '    else',
+        '        echo "Warning: Qoder CN collector installation did not complete; review the errors above."',
+        '    fi',
+        'fi',
         '',
         '# 6.4 Configure Agent Insight Hermes plugin',
         'if [ "$INSTALL_HERMES" = "true" ]; then',
@@ -770,6 +869,7 @@ function generateBashScript(host: string, baseUrl: string, apiKey: string, prese
 }
 
 function generatePowerShellScript(host: string, baseUrl: string, apiKey: string, preselected: { value: string; label: string }[]): string {
+    const qoderJetBrainsPackageUrl = configuredQoderJetBrainsPackageUrl();
     const lines = [
         '# =============================================================================',
         '# Agent-insight One-Click Setup (PowerShell)',
@@ -778,6 +878,7 @@ function generatePowerShellScript(host: string, baseUrl: string, apiKey: string,
         '$AGENT_INSIGHT_HOST = "' + powerShellDoubleQuoted(host) + '"',
         '$AGENT_INSIGHT_BASE_URL = "' + powerShellDoubleQuoted(baseUrl) + '"',
         '$AGENT_INSIGHT_SETUP_API_KEY = "' + powerShellDoubleQuoted(apiKey) + '"',
+        '$QODER_JETBRAINS_RELEASE_URL = "' + powerShellDoubleQuoted(qoderJetBrainsPackageUrl) + '"',
         '',
         'Write-Host "🚀 Fetching Agent-insight telemetry components from $AGENT_INSIGHT_BASE_URL..."',
         '',
@@ -845,7 +946,8 @@ function generatePowerShellScript(host: string, baseUrl: string, apiKey: string,
         '    { name: \'CodeAgent\', value: \'codeagent\' },',
         '    { name: \'Hermes\', value: \'hermes\' },',
         '    { name: \'JiuwenSwarm\', value: \'jiuwen\' },',
-        '    { name: \'Trae IDE\', value: \'trae\' }',
+        '    { name: \'Trae IDE\', value: \'trae\' },',
+        '    { name: \'Qoder CN product family\', value: \'qoder\' }',
         '];',
         '',
         'async function select() {',
@@ -921,6 +1023,7 @@ function generatePowerShellScript(host: string, baseUrl: string, apiKey: string,
         '$INSTALL_HERMES = $false',
         '$INSTALL_JIUWEN = $false',
         '$INSTALL_TRAE = $false',
+        '$INSTALL_QODER = $false',
         '',
         'if ($SELECTED_FRAMEWORKS -match "opencode") {',
         '    $INSTALL_OPENCODE = $true',
@@ -943,9 +1046,12 @@ function generatePowerShellScript(host: string, baseUrl: string, apiKey: string,
         'if ($SELECTED_FRAMEWORKS -match "trae") {',
         '    $INSTALL_TRAE = $true',
         '}',
+        'if ($SELECTED_FRAMEWORKS -match "qoder") {',
+        '    $INSTALL_QODER = $true',
+        '}',
         '',
         '# Exit if nothing selected',
-        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_OPENCLAW -and -not $INSTALL_CODEAGENT -and -not $INSTALL_HERMES -and -not $INSTALL_JIUWEN -and -not $INSTALL_TRAE) {',
+        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_OPENCLAW -and -not $INSTALL_CODEAGENT -and -not $INSTALL_HERMES -and -not $INSTALL_JIUWEN -and -not $INSTALL_TRAE -and -not $INSTALL_QODER) {',
         '    Write-Host "⚠️  未选择任何框架组件，将跳过插件安装。"',
         '    Write-Host "   继续执行配置步骤..."',
         '    Write-Host ""',
@@ -1009,10 +1115,10 @@ function generatePowerShellScript(host: string, baseUrl: string, apiKey: string,
         '    New-Item -ItemType Directory -Path (Join-Path $jwHome "config") -Force | Out-Null',
         '    Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/setup/jiuwen-extension" -OutFile (Join-Path $jwExtDir "extension.py")',
         '    @(\'id: agent-insight-observability\', \'name: agent-insight-observability\', \'version: 0.1.0\', \'description: Zero-code observability onboarding for JiuwenSwarm via agent-core OTLP.\', \'author: agent-insight\', \'min_jiuwenswarm_version: "0.2.0"\', \'dependencies: {}\', \'config_schema:\', \'  type: object\') | Set-Content -Path (Join-Path $jwExtDir "extension.yaml") -Encoding UTF8',
-        '    Write-Host "✅ JiuwenSwarm extension installed at $jwExtDir"',
-        '}',
-        '',
-        'if ($INSTALL_TRAE) {',
+'    Write-Host "✅ JiuwenSwarm extension installed at $jwExtDir"',
+'}',
+'',
+'if ($INSTALL_TRAE) {',
         '    Write-Host "Installing Trae IDE collector..."',
         '    $tmpVsix = Join-Path $env:TEMP "trae-collector.vsix"',
         '    Write-Host "  Step 1: Downloading VSIX..."',
@@ -1133,11 +1239,20 @@ function generatePowerShellScript(host: string, baseUrl: string, apiKey: string,
         '        Write-Host "  [WARN] setup.ps1 not found"',
         '    }',
         '',
-        '    Write-Host "  [OK] Trae IDE collector installed"',
-        '    Write-Host "  [NOTE] Restart TRAE IDE to activate"',
-        '}',
-        '',
-        '# 4. Configure ~/.agent-insight/.env',
+'    Write-Host "  [OK] Trae IDE collector installed"',
+'    Write-Host "  [NOTE] Restart TRAE IDE to activate"',
+'}',
+'',
+'if ($INSTALL_QODER) {',
+'    Write-Host "Downloading Agent Insight Qoder CN collectors..."',
+'    $qoderDistDir = Join-Path $homeDir ".agent-insight\\qoder-distribution"',
+'    New-Item -ItemType Directory -Path $qoderDistDir -Force | Out-Null',
+'    foreach ($component in @("qoder_setup.mjs", "qoder_token_usage_env.mjs", "qoder_trace_collector.mjs", "qoder_uploader_client.mjs", "qoder_work_setup.mjs")) {',
+'        Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/setup?component=$component" -OutFile (Join-Path $qoderDistDir $component)',
+'    }',
+'}',
+'',
+'# 4. Configure ~/.agent-insight/.env',
         '$AGENT_INSIGHT_CONFIG_FILE = "$homeDir\\.agent-insight\\.env"',
         '$EXISTING_KEY = ""',
         '$EXISTING_HOST = ""',
@@ -1215,6 +1330,62 @@ function generatePowerShellScript(host: string, baseUrl: string, apiKey: string,
         'Add-Content $AGENT_INSIGHT_CONFIG_FILE "AGENT_INSIGHT_OPENCODE_UPLOAD_COOLDOWN_MS=15000"',
         'Remove-Item "$AGENT_INSIGHT_CONFIG_FILE.bak" -Force',
         'Write-Host "✅ Configuration updated at $AGENT_INSIGHT_CONFIG_FILE"',
+        '',
+        '# 6.35 Install Qoder CN product-family collectors',
+        'if ($INSTALL_QODER) {',
+        '    if (-not $FINAL_KEY) {',
+        '        Write-Host "Warning: Qoder CN collector installation requires an API key; configure one and rerun setup."',
+        '    } else {',
+        '        & node (Join-Path $qoderDistDir "qoder_setup.mjs") install "--host=$FINAL_HOST" "--api-key=$FINAL_KEY" --scope=user --product=cli --owner=cli',
+        '        if ($LASTEXITCODE -eq 0) { & node (Join-Path $qoderDistDir "qoder_setup.mjs") install "--host=$FINAL_HOST" "--api-key=$FINAL_KEY" --scope=user --product=desktop --owner=desktop }',
+        '        if ($LASTEXITCODE -eq 0) { & node (Join-Path $qoderDistDir "qoder_setup.mjs") install "--host=$FINAL_HOST" "--api-key=$FINAL_KEY" --scope=user --product=jetbrains --owner=jetbrains }',
+        '        if ($LASTEXITCODE -eq 0) { & node (Join-Path $qoderDistDir "qoder_work_setup.mjs") install "--host=$FINAL_HOST" "--api-key=$FINAL_KEY" }',
+        '        if ($LASTEXITCODE -eq 0) {',
+        '            Write-Host "Qoder CN CLI/Desktop/JetBrains/Work collectors installed."',
+        '            Write-Host ""',
+        '            $qoderPluginDir = Join-Path $homeDir ".agent-insight\\packages\\qoder"',
+        '            New-Item -ItemType Directory -Path $qoderPluginDir -Force | Out-Null',
+        '            function Save-QoderPluginPackage {',
+        '                param([string]$Label, [string]$Uri, [string]$TargetPath)',
+        '                $tempPath = "$TargetPath.tmp.$PID"',
+        '                try {',
+        '                    Invoke-WebRequest -Uri $Uri -OutFile $tempPath -UseBasicParsing -ErrorAction Stop',
+        '                    Move-Item -LiteralPath $tempPath -Destination $TargetPath -Force',
+        '                    Write-Host "  Downloaded ${Label}: $TargetPath"',
+        '                    return $true',
+        '                } catch {',
+        '                    Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue',
+        '                    Write-Host "  Warning: $Label could not be downloaded from $Uri"',
+        '                    return $false',
+        '                }',
+        '            }',
+        '            Write-Host "Downloading Qoder CN plugin packages..."',
+        '            $null = Save-QoderPluginPackage "Qoder CN Desktop VSIX" "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/qoder-desktop-vsix" (Join-Path $qoderPluginDir "agent-insight-qoder-desktop.vsix")',
+        '            $qoderJetBrainsTarget = Join-Path $qoderPluginDir "agent-insight-qoder-jetbrains.zip"',
+        '            $qoderJetBrainsDownloaded = Save-QoderPluginPackage "Qoder for JetBrains ZIP" "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/qoder-jetbrains-plugin" $qoderJetBrainsTarget',
+        '            if (-not $qoderJetBrainsDownloaded) {',
+        '                if ($QODER_JETBRAINS_RELEASE_URL) {',
+        '                    Write-Host "    Release attachment direct URL: $QODER_JETBRAINS_RELEASE_URL"',
+        '                    Write-Host "    Retrying from the Release attachment..."',
+        '                    $qoderJetBrainsDownloaded = Save-QoderPluginPackage "Qoder for JetBrains ZIP (Release)" $QODER_JETBRAINS_RELEASE_URL $qoderJetBrainsTarget',
+        '                    if (-not $qoderJetBrainsDownloaded) {',
+        '                        Write-Host "    Manual download (PowerShell):"',
+        '                        Write-Host (\'      Invoke-WebRequest -Uri "\' + $QODER_JETBRAINS_RELEASE_URL + \'" -OutFile "\' + $qoderJetBrainsTarget + \'"\')',
+        '                    }',
+        '                } else {',
+        '                    Write-Host "    Release attachment direct URL is not configured on the Agent Insight server."',
+        '                    Write-Host "    Server administrator: set AGENT_INSIGHT_QODER_JETBRAINS_PACKAGE_URL to the trusted Release attachment URL, restart Agent Insight, and rerun setup."',
+        '                }',
+        '            }',
+        '            Write-Host "    Desktop install: Qoder CN Desktop -> Extensions -> ... -> Install from VSIX."',
+        '            Write-Host "    JetBrains package path: $qoderJetBrainsTarget"',
+        '            Write-Host "    JetBrains install: Settings -> Plugins -> gear icon -> Install Plugin from Disk -> select the ZIP above."',
+        '            Write-Host "    Restart the corresponding IDE after installing the downloaded package."',
+        '        } else {',
+        '            Write-Host "Warning: Qoder CN collector installation did not complete; review the errors above."',
+        '        }',
+        '    }',
+        '}',
         '',
         '# 6.4 Configure Agent Insight Hermes plugin',
         'if ($INSTALL_HERMES) {',
@@ -1481,10 +1652,15 @@ function generatePowerShellScript(host: string, baseUrl: string, apiKey: string,
 }
 
 export async function GET(request: Request) {
+    const requestUrl = new URL(request.url);
+    const component = requestUrl.searchParams.get('component');
+    if (component !== null) {
+        return serveQoderSetupComponent(component);
+    }
+
     const host = request.headers.get('x-forwarded-host') || request.headers.get('host') || '127.0.0.1:3000';
     const protocol = request.headers.get('x-forwarded-proto') || 'https';
 
-    const requestUrl = new URL(request.url);
     // --- 直接读取环境变量，不再通过 pathname 截取 ---
     const urlPrefix = process.env.NEXT_PUBLIC_URL_PREFIX || '';
     const baseUrl = `${protocol}://${host}${urlPrefix}`;

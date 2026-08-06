@@ -21,6 +21,18 @@ import {
   RESULT_PRESET_IDS,
   isResultPresetId,
 } from '../src/lib/engine/experiment/result-preset-evaluators';
+import {
+  CONTENT_PRESET_IDS,
+  isContentPresetId,
+} from '../src/lib/engine/experiment/content-preset-evaluators';
+import {
+  CREATIVITY_PRESET_IDS,
+  isCreativityPresetId,
+} from '../src/lib/engine/experiment/creativity-preset-evaluators';
+import {
+  SAFETY_PRESET_IDS,
+  isSafetyPresetId,
+} from '../src/lib/engine/experiment/safety-preset-evaluators';
 
 /**
  * 分发谓词清单——与 run-experiment.ts 的 evaluateOnce() 一一对应。
@@ -29,6 +41,9 @@ import {
 const PRESET_RUNNERS: Array<{ name: string; claims: (id: string) => boolean; ids: readonly string[] }> = [
   { name: 'faithful-preset-evaluators.ts', claims: isFaithfulPresetId, ids: FAITHFUL_PRESET_IDS },
   { name: 'result-preset-evaluators.ts', claims: isResultPresetId, ids: RESULT_PRESET_IDS },
+  { name: 'content-preset-evaluators.ts', claims: isContentPresetId, ids: CONTENT_PRESET_IDS as readonly string[] },
+  { name: 'creativity-preset-evaluators.ts', claims: isCreativityPresetId, ids: CREATIVITY_PRESET_IDS },
+  { name: 'safety-preset-evaluators.ts', claims: isSafetyPresetId, ids: SAFETY_PRESET_IDS },
 ];
 
 test('预置卡 id 唯一', () => {

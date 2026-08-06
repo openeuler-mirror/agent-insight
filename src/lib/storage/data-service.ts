@@ -47,7 +47,7 @@ import {
 } from '@/lib/trace-tags';
 
 /** 允许派生子 Agent 树的框架集合。先落地者集合化，后落地者仅加值。 */
-const SUBAGENT_TREE_FRAMEWORKS = new Set(['opencode', 'openclaw', 'hermes', 'langfuse-langgraph', 'codeagent', 'claudecode', 'trae']);
+const SUBAGENT_TREE_FRAMEWORKS = new Set(['opencode', 'openclaw', 'hermes', 'langfuse-langgraph', 'codeagent', 'claudecode']);
 
 export interface InvokedSkill {
     name: string;
@@ -187,11 +187,22 @@ async function persistExecutionSkills(
  */
 export function computeOwnSkills(framework: string | null | undefined, interactions: any[]): InvokedSkill[] {
     if (!Array.isArray(interactions) || interactions.length === 0) return [];
-    if (framework === 'opencode' || framework === 'hermes' || framework === 'langfuse-langgraph' || framework === 'codeagent' || framework === 'trae') {
+    const capabilities = getAdapter(framework).capabilities;
+    if (capabilities?.skills !== true) return [];
+    if (capabilities.skillScope === 'agent-tree') {
         const tree = buildAgentCallTree(interactions as any);
         return tree ? extractExplicitSkillsFromNode(tree) : [];
     }
     return extractInvokedSkillsFromSessionInteractions(framework, interactions) ?? [];
+}
+
+export function allowsSnapshotShrinkForFramework(framework: string | null | undefined): boolean {
+    const adapter = getAdapter(framework);
+    return adapter.capabilities?.allowSnapshotShrink === true
+        || (
+            adapter.descriptor.id === 'jiuwenswarm'
+            && process.env.AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK === 'true'
+        );
 }
 
 /**
@@ -261,6 +272,11 @@ export async function recomputeExecutionSkills(
 }
 
 export interface ExecutionRecord {
+    /**
+     * Internal ingest provenance. This is consumed before persistence and is
+     * intentionally not stored in the Execution table.
+     */
+    authenticated_ingest?: boolean;
     upload_id?: string;
     task_id?: string;
     query?: string;
@@ -2383,9 +2399,9 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
                 // snapshot-replace 防退化护栏：上游或服务端聚合层每批都重新形成「当前会话快照」后整条
                 // 覆盖，正常情况下 incoming 是越来越全的快照。但若 span spool 在极端下仍残缺（历史 span
                 // 永久丢失等），一个偏小的快照会把库里更完整的记录盖没。这里比较 interaction 数：incoming
-                // 严格更小则判为退化快照，保留库里现有记录、不覆盖。设 AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK=true
-                // 可在确有「正当缩小」场景时放行。
-                const allowShrink = process.env.AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK === 'true';
+                // 严格更小则判为退化快照，保留库里现有记录、不覆盖。Qoder 的完整 turn
+                // 快照允许缩小；Jiuwen 仅可由服务端环境开关显式放行。
+                const allowShrink = allowsSnapshotShrinkForFramework(targetRecord.framework);
                 if (!allowShrink) {
                     const existingSession = await db.findSessionByTaskId(targetRecord.task_id);
                     let existingInteractions = existingSession?.interactions
@@ -2398,7 +2414,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
                         console.warn(
                             `[Data-Service] snapshot-replace 退化护栏：拒绝用更小快照覆盖 task ${targetRecord.task_id}` +
                             `（incoming ${incomingCount} < existing ${existingCount} interactions），保留现有记录。` +
-                            `设 AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK=true 可放行。`,
+                            `Jiuwen 可由服务端设置 AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK=true 放行。`,
                         );
                         return { success: true, record: targetRecord };
                     }
@@ -2832,7 +2848,11 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
     // 通过 parentExecutionId 与 root 建立父子关系。列表/聚合默认 filter isSubagent=false，
     // 详情页可下钻到 sub-agent。历史上这里曾对相同 taskId 的 child Execution 做 dedup 删除，
     // 现在反过来——保留它们，并补齐父子链接。
-    if (typeof targetRecord.framework === 'string' && SUBAGENT_TREE_FRAMEWORKS.has(targetRecord.framework) && targetRecord.task_id && Array.isArray(mergedInteractionsForSession)) {
+    if (
+        getAdapter(targetRecord.framework).capabilities?.subagentTree === true
+        && targetRecord.task_id
+        && Array.isArray(mergedInteractionsForSession)
+    ) {
         try {
             await deriveSubagentExecutions({
                 parentExecutionId: recordId,

@@ -697,7 +697,7 @@ function SkillAnalysisPage() {
     // 用例分析 AB 式配置区: 共享的「数据集多选」+「评估器多选」。
     // 数据集作为评测参考集 (后端按 datasetIds 收窄 trace↔case 匹配)，评估器多选决定开始评测时调用哪些评估器。
     // Phase 1 仅 trace 模式消费这套选择; dataset 模式后续并入。
-    const [caseDatasets, setCaseDatasets] = useState<Array<{ id: string; name: string; cases?: unknown[] }>>([]);
+    const [caseDatasets, setCaseDatasets] = useState<Array<{ id: string; name: string; caseCount: number }>>([]);
     const [caseUserEvaluators, setCaseUserEvaluators] = useState<Array<{ id: string; name: string }>>([]);
     const [caseDatasetIds, setCaseDatasetIds] = useState<string[]>([]);
     // 默认只勾任务完成度 + 轨迹质量；下拉框仍列出全部 ready，用户可自行加勾。
@@ -713,14 +713,14 @@ function SkillAnalysisPage() {
     useEffect(() => {
         if (!user) { setCaseDatasets([]); setCaseUserEvaluators([]); return; }
         Promise.all([
-            apiFetch(`/api/agent-datasets?user=${encodeURIComponent(user)}`).then(r => r.json()).catch(() => []),
+            apiFetch(`/api/agent-datasets?user=${encodeURIComponent(user)}&view=summary`).then(r => r.json()).catch(() => []),
             apiFetch(`/api/user-evaluators?user=${encodeURIComponent(user)}`).then(r => r.json()).catch(() => []),
         ]).then(([ds, ev]) => {
             if (Array.isArray(ds)) {
-                setCaseDatasets(ds.map((d: { id?: unknown; name?: unknown; cases?: unknown[] }) => ({
+                setCaseDatasets(ds.map((d: { id?: unknown; name?: unknown; caseCount?: unknown }) => ({
                     id: String(d.id || ''),
                     name: String(d.name || ''),
-                    cases: d.cases,
+                    caseCount: Number(d.caseCount) || 0,
                 })));
             }
             if (Array.isArray(ev)) {

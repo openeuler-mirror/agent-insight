@@ -20,9 +20,11 @@
 | 质量监控结果维度评测 | [quality-monitoring](quality-monitoring/) | 对 Agent 最终交付按忠实度、指令遵循、答案质量、准确性四项异步评测，持久化证据并为质量报告、趋势和执行记录提供统一分数 | Feature | 2026-06-23 | 🟡 实现中（代码与自动化验证已完成，浏览器验收待确认） | —（待补） |
 | 标签化版本管理与版本分析 | [tag-based-version-management](tag-based-version-management/) | 通过系统标签、版本标签、业务标签三类标签重构版本管理、链路追踪打标/筛选与版本分析；版本分析只做已有 Trace 指标汇总，不做模型分析 | Feature | 2026-07-06 | 🟡 MVP implemented; browser validation pending | —（待补） |
 | Trace 回流到评测数据集 | [trace-to-dataset-backflow](trace-to-dataset-backflow/) | 支持 Trace 单条/批量回流到评测数据集、数据集新增自定义字段，以及逐条编辑样本字段值；input/output 使用评测执行已有逻辑处理后写入 | Feature | 2026-07-15 | 🟡 实现中（代码与目标测试已完成，浏览器验收待确认） | —（待补） |
+| 评测数据集加载性能优化 | [agent-dataset-loading-performance](agent-dataset-loading-performance/) | 为评测数据集增加样本数与参考答案轻量投影，列表和实验导入不再传输完整轨迹，并在数据库层按用户过滤 | Performance | 2026-08-04 | 🟡 实现中 | —（待补） |
 | Openclaw 平台适配 | [openclaw-adapter](openclaw-adapter/) | (待补充:定义 Openclaw 平台的接入适配设计,包括链路数据上报、解析及面板呈现等) | Feature | 2026-06-17 | ⬜ 未实现（设计起草中） | —（待补） |
 | Trace Bundle 导入导出 | [trace-bundle-import-export](trace-bundle-import-export/) | 将链路追踪详情导出的 Trace 作为版本化 Bundle 重新导入平台，保留无冲突 ID，并完整恢复多 Agent 父子树 | Feature | 2026-07-15 | 🟡 实现中（代码与自动化验证已完成，浏览器验收待确认） | —（待补） |
 | Langfuse Trace 完整展示 | [langfuse-trace-fidelity](langfuse-trace-fidelity/) | 为 Langfuse OTLP 增加独立完整节点快照，保留业务 CHAIN/AGENT/TOOL 与真实时序，同时保持其他框架和现有 interactions 行为不变 | Bugfix | 2026-07-21 | 🟡 代码与自动化验证已完成，浏览器验收待确认 | —（待补） |
+| 安全与创意预置评估器 | [build-in-evaluators](build-in-evaluators/) | 新增不敏感性、争议性、性别歧视性、创造性 4 个 LLM Judge 预置评估器，专项检测 Agent 输出文本的安全风险与创意质量 | Feature | 2026-07-26 | 🟡 代码与自动化验证已完成，浏览器验收待确认 | [#160](https://gitcode.com/openeuler/opensource-intern/issues/160) |
 | JiuwenSwarm 接入追踪（OTEL seam） | [jiuwenswarm-tracing](jiuwenswarm-tracing/) | 把 agent-insight 接入 openJiuwen / JiuwenSwarm，通过 OTEL seam 端到端追踪一次执行；含持久化 span spool 与 token 归属边界记录 | Feature | 2026-06-13 | ✅ 已验证（spike 结论已落地，见 design.md status: validated） | —（待补） |
 | 链路追踪搜索/过滤改造（langfuse operator 模型） | [langfuse-style-trace-search](langfuse-style-trace-search/) | `/trace` 列表的搜索与过滤对齐 langfuse 的 operator 模型（搜索栏 + 左侧 facet 侧栏） | Feature | 2026-06-15 | 🟡 实现中（front-half 已落地：搜索栏 + facet 侧栏 + skill 接线） | —（待补） |
 

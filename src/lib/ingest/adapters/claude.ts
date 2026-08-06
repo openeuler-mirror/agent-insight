@@ -10,6 +10,11 @@ export const claudeAdapter: FrameworkAdapter = {
     onboard: "watcher",
     platform: "claude",
   },
+  capabilities: {
+    skills: true,
+    skillScope: "session",
+    subagentTree: true,
+  },
   normalizeForStorage: normalizeClaudeCodeInteractionsForStorage,
   // 聚合器每次都从 spool 全量事件重建完整快照(readClaudeOtelEventsForSession 扫全部天),
   // incoming 永远是"当前最全的解释" —— 和 codeagent/jiuwen 同理,应整条覆盖。

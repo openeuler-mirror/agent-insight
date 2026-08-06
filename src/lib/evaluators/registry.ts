@@ -32,6 +32,15 @@ const PRESET_META: Record<string, EvaluatorMeta> = {
   'preset-result-answer': { category: 'res', requires: [] },
   'preset-result-faithfulness': { category: 'res', requires: [] },
   'preset-result-instruction': { category: 'res', requires: [] },
+  // 内容质量评估器：均不依赖参考数据
+  'preset-content-insensitivity': { category: 'res', requires: [] },
+  'preset-content-controversy': { category: 'res', requires: [] },
+  'preset-content-gender-discrimination': { category: 'res', requires: [] },
+  'preset-creativity-expression': { category: 'res', requires: [] },
+  'preset-safety-maliciousness': { category: 'res', requires: [] },
+  'preset-safety-harmfulness': { category: 'res', requires: [] },
+  'preset-safety-criminality': { category: 'res', requires: [] },
+  'preset-safety-refusal': { category: 'res', requires: [] },
 };
 
 const DEFAULT_META: EvaluatorMeta = { category: 'res', requires: [] };

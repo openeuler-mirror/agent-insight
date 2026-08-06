@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `528a92cae9dcb53dad2f0c732b6eec7156e3524e` (`528a92c`) |
-| Branch | `feat/claude-context-supplement` |
-| Date | 2026-08-04T12:01:49+08:00 |
-| Author | gyctl |
-| Subject | `chore: 合并 master 并解决文档冲突` |
+| Commit | `cfc3ea36348b3d4ce8a6a7bfef841c1e0d21505d` (`cfc3ea3`) |
+| Branch | `new-dev-8-5` |
+| Date | 2026-08-04T20:18:14+08:00 |
+| Author | openeuler-ci-bot |
+| Subject | `!258 对齐trace回流数据集和理想输出数据集字段名` |
 
-**如何更新：** `git diff 528a92c HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff cfc3ea3 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。
@@ -29,6 +29,8 @@
 - [08-design-system.md](08-design-system.md)：视觉设计语言、设计令牌、排版、控件尺寸、UI/UX 审计与漂移检测。机器可读的令牌：[design-tokens.json](design-tokens.json)。
 - [09-otlp-attribute-contract.md](09-otlp-attribute-contract.md)：OTLP 属性契约（FR-011），定义 OpenClaw 及其他 OTLP 客户端上报 trace/log 时必须遵守的属性规范。
 - [10-evaluator-development.md](10-evaluator-development.md)：新增/改造评测中心评估器。含打分方法论（禁止自由打分、分解+确定性汇总、三档锚定、精确率/召回率/有据性三轴）与工程接入（契约、注册元数据、canonical 影响面、坑位）。
+- [qoder-cn-acceptance-validation.md](qoder-cn-acceptance-validation.md)：Qoder CN 产品家族 Trace 采集器 AC1–AC37 的完整验收、真实客户端演示、性能、卸载和数据正确性测试。
+- [qoder-cn-cross-machine-validation.md](qoder-cn-cross-machine-validation.md)：Qoder CN 采集器与 Agent Insight 服务端分布在不同机器时的安装、上传、排查和卸载验证。
 - [docker-image-release.md](docker-image-release.md)：维护者发布 Docker Hub 多架构镜像、验证 manifest、导出离线 `.tar` 镜像包的流程。
 
 ## Quick lookup
@@ -43,6 +45,8 @@
 | 为页面设置样式 / 使用正确的颜色、间距或组件 | [08-design-system.md](08-design-system.md) |
 | 遵循项目的模式 | [07-conventions-and-extension.md](07-conventions-and-extension.md) |
 | 新增或改造评估器 / 设计打分口径 | [10-evaluator-development.md](10-evaluator-development.md) |
+| 验收 Qoder CN Trace 采集器 | [qoder-cn-acceptance-validation.md](qoder-cn-acceptance-validation.md) |
+| 验证 Qoder CN 跨机器上报 | [qoder-cn-cross-machine-validation.md](qoder-cn-cross-machine-validation.md) |
 | 发布 Docker Hub 镜像 / 导出离线镜像包 | [docker-image-release.md](docker-image-release.md) |
 
 ## Glossary

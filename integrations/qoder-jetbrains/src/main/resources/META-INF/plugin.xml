@@ -1,0 +1,29 @@
+<idea-plugin>
+    <id>org.openeuler.agentinsight.qoder.jetbrains</id>
+    <name>Agent Insight Qoder Collector</name>
+    <version>0.1.9</version>
+    <vendor url="https://atomgit.com/openeuler/agent-insight">openEuler</vendor>
+
+    <idea-version since-build="233"/>
+
+    <description><![CDATA[
+        Collects Qoder for JetBrains Agent, Tool, Skill, MCP, Subagent, and LLM traces for Agent Insight.
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <applicationService serviceImplementation="org.openeuler.agentinsight.qoder.JetBrainsMarkerService"/>
+        <postStartupActivity implementation="org.openeuler.agentinsight.qoder.AgentInsightStartupActivity"/>
+        <statusBarWidgetFactory id="AgentInsightQoder"
+                                implementation="org.openeuler.agentinsight.qoder.AgentInsightStatusBarWidgetFactory"/>
+        <applicationConfigurable id="org.openeuler.agentinsight.qoder.settings"
+                                 displayName="Agent Insight"
+                                 instance="org.openeuler.agentinsight.qoder.AgentInsightConfigurable"/>
+    </extensions>
+
+    <applicationListeners>
+        <listener class="org.openeuler.agentinsight.qoder.AgentInsightPluginLifecycle"
+                  topic="com.intellij.ide.plugins.DynamicPluginListener"/>
+    </applicationListeners>
+</idea-plugin>

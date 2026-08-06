@@ -10,7 +10,7 @@ import { getAdapter, listFrameworks } from "../src/lib/ingest/adapters/registry"
 test("AC36: traeAdapter is registered in adapter registry", () => {
   const adapter = getAdapter("trae")
   assert.equal(adapter.descriptor.id, "trae")
-  assert.equal(adapter.descriptor.label, "TRAE AI IDE")
+  assert.equal(adapter.descriptor.label, "Trae IDE")
   assert.equal(adapter.descriptor.onboard, "plugin")
 })
 
@@ -24,7 +24,7 @@ test("AC36: traeAdapter is listed in frameworks", () => {
   const frameworks = listFrameworks()
   const traeFramework = frameworks.find(f => f.id === "trae")
   assert.ok(traeFramework)
-  assert.equal(traeFramework.label, "TRAE AI IDE")
+  assert.equal(traeFramework.label, "Trae IDE")
 })
 
 // ============================================================================

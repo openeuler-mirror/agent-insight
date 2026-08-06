@@ -58,6 +58,7 @@ interface DatasetOption {
   id: string;
   name: string;
   targetAgent?: string;
+  caseCount?: number;
   cases?: Array<{ input?: string; expectedOutput?: string }>;
 }
 
@@ -515,7 +516,7 @@ export default function NewExperimentPage() {
     setDatasetHint('');
     setImportOpen(true);
     if (!user) return;
-    apiFetch(`/api/agent-datasets?user=${encodeURIComponent(user)}`)
+    apiFetch(`/api/agent-datasets?user=${encodeURIComponent(user)}&view=reference`)
       .then((r) => (r.ok ? r.json() : []))
       .then((d) => setDatasets(Array.isArray(d) ? d : []))
       .catch(() => setDatasets([]));
@@ -1364,7 +1365,7 @@ export default function NewExperimentPage() {
                     >
                       <span style={{ fontSize: 12.5, fontWeight: 700, flex: 1 }}>{ds.name}</span>
                       {ds.targetAgent && <span style={CHIP_MUT}>{ds.targetAgent}</span>}
-                      <span style={{ fontSize: 10.5, color: 'var(--foreground-muted)' }}>{(ds.cases ?? []).length} 条</span>
+                      <span style={{ fontSize: 10.5, color: 'var(--foreground-muted)' }}>{ds.caseCount ?? (ds.cases ?? []).length} 条</span>
                     </button>
                   ))}
                 </div>

@@ -1547,6 +1547,7 @@ function TraceDetailView({
                 ) : (session?.interactions?.length || 0) > 0 || (session?.langfuseTraceNodes?.length || 0) > 0 ? (
                     <AgentTraceView
                         interactions={session.interactions || []}
+                        framework={execution.framework}
                         langfuseTraceNodes={session.langfuseTraceNodes}
                         loadInteraction={loadInteraction}
                         loadAllInteractions={loadFullInteractions}

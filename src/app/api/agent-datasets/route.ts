@@ -1,7 +1,9 @@
 import { randomUUID } from 'crypto';
 import { NextResponse } from 'next/server';
 import {
-  readAllAgentDatasets,
+  readUserAgentDatasets,
+  readAgentDatasetReferences,
+  readAgentDatasetSummaries,
   findAgentDataset,
   createAgentDatasetRecord,
   updateAgentDatasetRecord,
@@ -29,7 +31,17 @@ export async function GET(request: Request) {
     // 可选过滤：?targetSkill=<name> 拉挂在某 skill 上的；?targetSkill=__none__ 拉通用 agent eval（targetSkill === ''）。
     // 不传则全部。
     const targetSkillParam = searchParams.get('targetSkill');
-    let datasets = (await readAllAgentDatasets()).filter(item => item.user === user);
+    const wantedTargetSkill = targetSkillParam === null
+      ? undefined
+      : targetSkillParam === '__none__' ? '' : targetSkillParam.trim();
+    const view = searchParams.get('view');
+    if (view === 'summary') {
+      return NextResponse.json(await readAgentDatasetSummaries(user, wantedTargetSkill));
+    }
+    if (view === 'reference') {
+      return NextResponse.json(await readAgentDatasetReferences(user, wantedTargetSkill));
+    }
+    let datasets = await readUserAgentDatasets(user);
     if (targetSkillParam !== null) {
       const wanted = targetSkillParam === '__none__' ? '' : targetSkillParam.trim();
       datasets = datasets.filter(d => (d.targetSkill ?? '') === wanted);

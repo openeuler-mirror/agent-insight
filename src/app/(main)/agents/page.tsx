@@ -18,10 +18,15 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { AppTopBar } from '@/components/shell/AppTopBar';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
+import {
+    AGENT_PLATFORMS,
+    normalizeAgentPlatform,
+    type AgentPlatform,
+} from '@/lib/engine/observability/agent-platform';
 
 type AgentOwnership = 'system' | 'user';
 type AgentLayer = 'main' | 'subagent';
-type PlatformFilter = 'all' | 'opencode' | 'openclaw' | 'hermes' | 'trae' | 'unknown';
+type PlatformFilter = 'all' | AgentPlatform;
 type ExecutionTimeFilter = 'all' | '1h' | '24h' | '7d' | 'exact';
 type SortOption = 'lastExecutedDesc' | 'lastExecutedAsc' | 'platformAsc' | 'nameAsc';
 type AgentLayerFilter = 'all' | AgentLayer;
@@ -32,7 +37,7 @@ interface Agent {
     name: string;
     ownership: AgentOwnership;
     layer: AgentLayer;
-    platform: Exclude<PlatformFilter, 'all'>;
+    platform: AgentPlatform;
     version: string;
     framework: string;
     status: 'running' | 'idle';
@@ -43,14 +48,13 @@ interface Agent {
     lastExecutedAt: string;
 }
 
-const MOCK_NOW = new Date('2026-05-06T12:00:00');
 const DEFAULT_PLATFORM: PlatformFilter = 'opencode';
 const DEFAULT_EXECUTION_TIME: ExecutionTimeFilter = '1h';
 const DEFAULT_SORT: SortOption = 'lastExecutedDesc';
 const DEFAULT_AGENT_LAYER: AgentLayerFilter = 'main';
 const DEFAULT_OWNERSHIP: AgentOwnershipFilter = 'user';
 
-function getRelativeTimeParts(dateString: string, now = MOCK_NOW) {
+function getRelativeTimeParts(dateString: string, now: Date) {
     const diffMs = Math.max(0, now.getTime() - new Date(dateString).getTime());
     const diffMinutes = Math.floor(diffMs / (1000 * 60));
 
@@ -102,7 +106,7 @@ function formatDateTimeLabel(value: string) {
     return value.replace('T', ' ');
 }
 
-function getDefaultExactTimeRange(value: ExecutionTimeFilter, now = MOCK_NOW) {
+function getDefaultExactTimeRange(value: ExecutionTimeFilter, now: Date) {
     const windowMs = getExecutionWindowMs(value);
 
     if (windowMs === null) {
@@ -137,41 +141,12 @@ function sortAgents(agents: Agent[], sortBy: SortOption) {
     return sorted;
 }
 
-function normalizePlatform(value: string): Exclude<PlatformFilter, 'all'> {
-    if (value === 'opencode' || value === 'openclaw' || value === 'hermes' || value === 'trae') return value;
-    return 'unknown';
-}
-
 function normalizeOwnership(value: string): AgentOwnership {
     return value === 'system' ? 'system' : 'user';
 }
 
 function normalizeLayer(value: string): AgentLayer {
     return value === 'subagent' ? 'subagent' : 'main';
-}
-
-function dedupeAgentsByPlatformAndName(agents: Agent[]): Agent[] {
-    const ownershipRank: Record<AgentOwnership, number> = {
-        user: 2,
-        system: 1,
-    };
-    const map = new Map<string, Agent>();
-    for (const agent of agents) {
-        const key = `${agent.platform}-${agent.name}`;
-        const current = map.get(key);
-        if (!current) {
-            map.set(key, agent);
-            continue;
-        }
-        const rankDiff = ownershipRank[agent.ownership] - ownershipRank[current.ownership];
-        if (
-            rankDiff > 0 ||
-            (rankDiff === 0 && new Date(agent.lastExecutedAt).getTime() > new Date(current.lastExecutedAt).getTime())
-        ) {
-            map.set(key, agent);
-        }
-    }
-    return Array.from(map.values());
 }
 
 // ============================================================
@@ -382,9 +357,10 @@ function AgentsPageInner() {
     const { user } = useAuth();
     const router = useRouter();
     const searchParams = useSearchParams();
+    const [now] = useState(() => new Date());
     const defaultExactRange = useMemo(
-        () => getDefaultExactTimeRange(DEFAULT_EXECUTION_TIME),
-        []
+        () => getDefaultExactTimeRange(DEFAULT_EXECUTION_TIME, now),
+        [now]
     );
 
     const [platform, setPlatform] = useState<PlatformFilter>(
@@ -482,7 +458,7 @@ function AgentsPageInner() {
                     name: a.name,
                     ownership: normalizeOwnership(a.agentOwnership || a.ownership || 'user'),
                     layer: normalizeLayer(a.agentType || a.layer || 'main'),
-                    platform: normalizePlatform(a.platform),
+                    platform: normalizeAgentPlatform(a.platform),
                     version: a.version || 'v1.0',
                     framework: a.framework || 'Custom',
                     status: 'idle',
@@ -507,104 +483,7 @@ function AgentsPageInner() {
         };
     }, [fetchDbAgents]);
 
-    const mockAgents: Agent[] = useMemo(() => [
-        {
-            id: 'customer-service-agent',
-            name: 'customer-service-agent',
-            ownership: 'system',
-            layer: 'main',
-            platform: 'opencode',
-            version: 'v2.1',
-            framework: 'LangChain',
-            status: 'running',
-            successRate: '87.3%',
-            todayCalls: '3,847',
-            lastExecutedAt: '2026-05-06T11:48:00',
-        },
-        {
-            id: 'data-analyzer-v2',
-            name: 'data-analyzer-v2',
-            ownership: 'user',
-            layer: 'main',
-            platform: 'openclaw',
-            version: 'v1.0',
-            framework: 'Custom',
-            status: 'idle',
-            successRate: '94.1%',
-            todayCalls: '128',
-            lastExecutedAt: '2026-05-05T20:10:00',
-        },
-        {
-            id: 'order-executor',
-            name: 'order-executor',
-            ownership: 'system',
-            layer: 'subagent',
-            platform: 'opencode',
-            version: 'v1.1',
-            framework: 'LangGraph',
-            status: 'running',
-            todayCalls: '412',
-            p99: '4.3s',
-            parentAgent: 'customer-service-agent',
-            lastExecutedAt: '2026-05-06T11:43:00',
-        },
-        {
-            id: 'email-dispatcher',
-            name: 'email-dispatcher',
-            ownership: 'user',
-            layer: 'main',
-            platform: 'hermes',
-            version: 'v0.9',
-            framework: 'AutoGPT',
-            status: 'running',
-            successRate: '99.2%',
-            todayCalls: '1,024',
-            lastExecutedAt: '2026-05-06T09:24:00',
-        },
-        {
-            id: 'security-guard',
-            name: 'security-guard',
-            ownership: 'system',
-            layer: 'main',
-            platform: 'opencode',
-            version: 'v3.0',
-            framework: 'Internal',
-            status: 'running',
-            successRate: '100%',
-            todayCalls: '45,201',
-            lastExecutedAt: '2026-05-06T11:56:00',
-        },
-        {
-            id: 'trace-quality-evaluator',
-            name: 'trace-quality-evaluator',
-            ownership: 'system',
-            layer: 'main',
-            platform: 'opencode',
-            version: 'v1.0',
-            framework: 'opencode',
-            status: 'running',
-            successRate: '—',
-            todayCalls: '—',
-            lastExecutedAt: '2026-05-06T12:00:00',
-        },
-        {
-            id: 'task-completion-evaluator',
-            name: 'task-completion-evaluator',
-            ownership: 'system',
-            layer: 'main',
-            platform: 'opencode',
-            version: 'v1.0',
-            framework: 'opencode',
-            status: 'running',
-            successRate: '—',
-            todayCalls: '—',
-            lastExecutedAt: '2026-05-06T12:00:00',
-        },
-    ], []);
-
-    const agents = useMemo(() => {
-        return dedupeAgentsByPlatformAndName([...dbAgents, ...mockAgents]);
-    }, [dbAgents, mockAgents]);
+    const agents = dbAgents;
 
     const hasActiveFilters =
         platform !== DEFAULT_PLATFORM ||
@@ -636,7 +515,7 @@ function AgentsPageInner() {
             const lastExecutedMs = new Date(agent.lastExecutedAt).getTime();
 
             if (windowMs !== null) {
-                const diffMs = MOCK_NOW.getTime() - lastExecutedMs;
+                const diffMs = now.getTime() - lastExecutedMs;
                 if (diffMs > windowMs) {
                     return false;
                 }
@@ -654,15 +533,12 @@ function AgentsPageInner() {
         });
 
         return sortAgents(result, sortBy);
-    }, [agentLayer, agents, exactEndAt, exactStartAt, executionTime, ownership, platform, sortBy]);
+    }, [agentLayer, agents, exactEndAt, exactStartAt, executionTime, now, ownership, platform, sortBy]);
 
     const filterOptions = {
         platforms: [
             { value: 'all', label: t('nav.filterDefaultOption') },
-            { value: 'opencode', label: 'opencode' },
-            { value: 'openclaw', label: 'openclaw' },
-            { value: 'hermes', label: 'hermes' },
-            { value: 'trae', label: 'Trae IDE' },
+            ...AGENT_PLATFORMS.map(value => ({ value, label: value })),
         ],
         executionTimes: [
             { value: 'all', label: t('nav.filterDefaultOption') },
@@ -702,7 +578,7 @@ function AgentsPageInner() {
                 key: 'executionTime',
                 label: `${t('nav.filterTimeRange')}: ${executionTime !== 'all' ? (filterOptions.executionTimes.find(option => option.value === executionTime)?.label ?? executionTime) : t('nav.filterDefaultOption')}${executionTime === 'exact' && (exactStartAt || exactEndAt) ? ` (${formatDateTimeLabel(exactStartAt || '...')} ~ ${formatDateTimeLabel(exactEndAt || '...')})` : ''}`,
                 clear: () => {
-                    const nextRange = getDefaultExactTimeRange(DEFAULT_EXECUTION_TIME);
+                    const nextRange = getDefaultExactTimeRange(DEFAULT_EXECUTION_TIME, new Date());
                     setExecutionTime(DEFAULT_EXECUTION_TIME);
                     setExactStartAt(nextRange.start);
                     setExactEndAt(nextRange.end);
@@ -801,7 +677,7 @@ function AgentsPageInner() {
                                     openExactTimeDialog();
                                     return;
                                 }
-                                const nextRange = getDefaultExactTimeRange(nextValue);
+                                const nextRange = getDefaultExactTimeRange(nextValue, new Date());
                                 setExecutionTime(nextValue);
                                 setExactStartAt(nextRange.start);
                                 setExactEndAt(nextRange.end);
@@ -904,7 +780,7 @@ function AgentsPageInner() {
                             <button
                                 type="button"
                                 onClick={() => {
-                                    const nextRange = getDefaultExactTimeRange(DEFAULT_EXECUTION_TIME);
+                                    const nextRange = getDefaultExactTimeRange(DEFAULT_EXECUTION_TIME, new Date());
                                     setPlatform(DEFAULT_PLATFORM);
                                     setExecutionTime(DEFAULT_EXECUTION_TIME);
                                     setExactStartAt(nextRange.start);
@@ -946,7 +822,7 @@ function AgentsPageInner() {
                                     key={agent.id}
                                     variants={{ hidden: { opacity: 0, y: 10 }, visible: { opacity: 1, y: 0 } }}
                                 >
-                                    <AgentCard agent={agent} onDelete={() => {
+                                    <AgentCard agent={agent} now={now} onDelete={() => {
                                         setDeleteTarget({ id: agent.id, name: agent.name });
                                     }} />
                                 </motion.div>
@@ -1130,12 +1006,12 @@ export default function AgentsPage() {
 // 卡片组件
 // ============================================================
 
-function AgentCard({ agent, onDelete }: { agent: Agent; onDelete?: () => void }) {
+function AgentCard({ agent, now, onDelete }: { agent: Agent; now: Date; onDelete?: () => void }) {
     const { t } = useLocale();
     const router = useRouter();
     const [hover, setHover] = useState(false);
 
-    const relativeExecution = getRelativeTimeParts(agent.lastExecutedAt);
+    const relativeExecution = getRelativeTimeParts(agent.lastExecutedAt, now);
 
     const formatRelativeLabel = (value: ReturnType<typeof getRelativeTimeParts>) => {
         if (value.unit === 'minutes') {

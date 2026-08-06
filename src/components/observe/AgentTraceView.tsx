@@ -7,7 +7,7 @@ import { toast } from 'sonner';
 import { CartesianGrid, Line, LineChart, ReferenceArea, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from 'recharts';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { SmartViewer } from '@/components/SmartViewer';
+import { SmartViewer, SmartViewerConfigProvider } from '@/components/SmartViewer';
 import type { LangfuseTraceNode } from '@/lib/ingest/otel/adapters/langfuse-trace';
 import { SkillLink } from '@/components/skills/SkillLink';
 import { useAuth } from '@/lib/auth/auth-context';
@@ -26,7 +26,10 @@ import {
     RawInteraction,
     walkTree,
 } from '@/lib/engine/observability/agent-trace';
-import { buildLangfuseAgentTrace } from '@/lib/engine/observability/langfuse-agent-trace';
+import {
+    buildLangfuseAgentTrace,
+    langfusePromptHistoryCount,
+} from '@/lib/engine/observability/langfuse-agent-trace';
 import {
     extractSkillsWithVersionsFromClaudeSession,
     extractSkillsWithVersionsFromHermesSession,
@@ -333,6 +336,7 @@ interface SpanInfo {
 }
 
 interface TraceCtxValue {
+    framework?: string;
     searchQuery: string;
     matchedKeys: Set<string>;
     activeMatchKey: string | null;
@@ -359,6 +363,7 @@ const TraceCtx = React.createContext<TraceCtxValue>(defaultCtx);
 
 export interface AgentTraceViewProps {
     interactions: RawInteraction[];
+    framework?: string;
     langfuseTraceNodes?: LangfuseTraceNode[];
     /** 按 interaction index 读取完整原文；未提供时保持旧的一次性完整数据行为。 */
     loadInteraction?: (index: number) => Promise<RawInteraction>;
@@ -379,6 +384,7 @@ export interface AgentTraceViewProps {
 
 export default function AgentTraceView({
     interactions: sourceInteractions,
+    framework,
     langfuseTraceNodes,
     loadInteraction,
     loadAllInteractions,
@@ -548,6 +554,10 @@ export default function AgentTraceView({
         });
         return { agents, tasks, chains, tools, skills, llm, tokens };
     }, [tree]);
+    const tokenUsageEstimated = useMemo(
+        () => interactions.some(interaction => interaction.usage?.estimated === true),
+        [interactions],
+    );
 
     const totalStart = tree?.startedAt;
     const totalDuration = tree?.stats.durationMs;
@@ -770,6 +780,7 @@ export default function AgentTraceView({
     };
 
     const ctxValue: TraceCtxValue = {
+        framework: framework?.trim().toLowerCase(),
         searchQuery, matchedKeys, activeMatchKey,
         treeKindFilter, minDurationMs, minTokenK, slowOnly,
         onJumpToKey, topNDuration, topNTokens, slowNodesList,
@@ -787,8 +798,9 @@ export default function AgentTraceView({
     }
 
     return (
-        <TraceCtx.Provider value={ctxValue}>
-        <div className="flex flex-col gap-2.5">
+        <SmartViewerConfigProvider jsonCollapsed={framework?.trim().toLowerCase() === 'langfuse-langgraph' ? false : 2}>
+            <TraceCtx.Provider value={ctxValue}>
+            <div className="flex flex-col gap-2.5">
             {fullInteractionLoadError && (
                 <div className="flex items-center justify-between gap-3 rounded-md border border-error-border bg-error-subtle px-3 py-2 text-sm text-error" role="alert">
                     <span>{fullInteractionLoadError}</span>
@@ -808,7 +820,11 @@ export default function AgentTraceView({
                     <StatChip label="SKILL CALLS" value={totalStats.skills} accentClass={KIND_META.skill.text} isActive={eventTypeFilter === 'skill'} onClick={() => handleStatChipClick('skill')} hint={tt('traceTree.filterType') + ' Skill'} />
                     <StatChip label="LLM TURNS"   value={totalStats.llm}   accentClass={KIND_META.llm.text}   isActive={eventTypeFilter === 'llm'}   onClick={() => handleStatChipClick('llm')}   hint={tt('traceTree.filterType') + ' LLM'} />
                     <Sep />
-                    <StatChip label="TOKENS" value={formatTokens(totalStats.tokens)} />
+                    <StatChip
+                        label="TOKENS"
+                        value={`${tokenUsageEstimated && totalStats.tokens > 0 ? '≈' : ''}${formatTokens(totalStats.tokens)}`}
+                        hint={tokenUsageEstimated ? 'Local estimate from visible transcript; hidden context is not included' : undefined}
+                    />
                     {eventTypeFilter !== 'all' && (
                         <Button variant="ghost" size="sm" onClick={() => setEventTypeFilter('all')} className="ml-auto h-6 text-xs">
                             <XIcon className="size-3" />{tt('traceTree.clearFilter')}
@@ -1018,8 +1034,9 @@ export default function AgentTraceView({
                     ) : null}
                 </div>
             </div>
-        </div>
-        </TraceCtx.Provider>
+            </div>
+            </TraceCtx.Provider>
+        </SmartViewerConfigProvider>
     );
 }
 
@@ -1405,6 +1422,9 @@ function UnifiedEventRow({
     const spanTokens = event.kind === 'task' && childNode
         ? childNode.stats.totalTokens
         : event.usage?.total || 0;
+    const spanTokensEstimated = event.kind === 'task' && childNode
+        ? childNode.events.some(childEvent => childEvent.usage?.estimated === true)
+        : event.usage?.estimated === true;
 
     // Gantt bar: for task events use child agent start
     const spanStart = event.kind === 'task' && childNode ? childNode.startedAt : event.startedAt;
@@ -1507,7 +1527,7 @@ function UnifiedEventRow({
                 {formatDuration(spanDurationMs)}
             </span>
             <span className="w-11 text-right ml-1 text-xs text-foreground-muted tabular-nums font-mono shrink-0">
-                {spanTokens ? formatTokens(spanTokens) : ''}
+                {spanTokens ? `${spanTokensEstimated ? '≈' : ''}${formatTokens(spanTokens)}` : ''}
             </span>
             <span className="w-2 ml-1 flex items-center justify-center">
                 {isSlow && <span className="size-1.5 rounded-full bg-warning" />}
@@ -1822,13 +1842,76 @@ function countRepeatedPromptPrefix(prev: PromptSnapshotMessage[], current: Promp
     return count;
 }
 
-function buildLlmPromptSnapshot(event: AgentEvent, node: AgentNode, interactions: RawInteraction[]): LlmPromptSnapshot {
+function requestMessageContent(value: unknown): string {
+    if (typeof value === 'string') return value;
+    if (value == null) return '';
+    try {
+        return JSON.stringify(value, null, 2);
+    } catch {
+        return String(value);
+    }
+}
+
+function requestMessageToolCalls(message: NonNullable<RawInteraction['requestMessages']>[number]): PromptSnapshotMessage['toolCalls'] {
+    if (!Array.isArray(message.tool_calls)) return undefined;
+    return message.tool_calls
+        .filter((call): call is Record<string, unknown> => !!call && typeof call === 'object' && !Array.isArray(call))
+        .map(call => {
+            const fn = call.function && typeof call.function === 'object'
+                ? call.function as Record<string, unknown>
+                : undefined;
+            const name = String(call.name ?? fn?.name ?? 'tool');
+            const rawArgs = call.args ?? call.arguments ?? fn?.arguments;
+            return {
+                name,
+                args: typeof rawArgs === 'string' ? rawArgs : (rawArgs == null ? '' : JSON.stringify(rawArgs)),
+                output: '',
+            };
+        });
+}
+
+function promptMessagesFromRequest(requestMessages: NonNullable<RawInteraction['requestMessages']>): PromptSnapshotMessage[] {
+    return requestMessages.map((message, index) => ({
+        role: normalizePromptRole(message.role),
+        content: requestMessageContent(message.content),
+        toolCalls: requestMessageToolCalls(message),
+        source: message.role === 'system' ? 'system' : 'history',
+        position: index + 1,
+    }));
+}
+
+function buildLlmPromptSnapshot(
+    event: AgentEvent,
+    node: AgentNode,
+    interactions: RawInteraction[],
+    useLangfuseRequestMessages: boolean,
+): LlmPromptSnapshot {
     const eventIdx = event.interactionIndex;
-    const current = buildInputMessagesForLlmIndex(node, interactions, eventIdx);
     const previousLlmEvents = node.events
         .filter(ev => ev.kind === 'llm' && ev.interactionIndex < eventIdx)
         .sort((a, b) => a.interactionIndex - b.interactionIndex);
     const prevEvent = previousLlmEvents[previousLlmEvents.length - 1];
+    const requestMessages = event.interaction.requestMessages;
+    if (useLangfuseRequestMessages && Array.isArray(requestMessages) && requestMessages.length > 0) {
+        const previousRequest = Array.isArray(prevEvent?.interaction.requestMessages)
+            ? prevEvent.interaction.requestMessages
+            : [];
+        return {
+            inputMessages: promptMessagesFromRequest(requestMessages),
+            repeatedPrefixCount: langfusePromptHistoryCount(
+                requestMessages,
+                previousRequest,
+                typeof prevEvent?.interaction.content === 'string' ? prevEvent.interaction.content : '',
+                prevEvent?.interaction.tool_calls || [],
+            ),
+            activeCompaction: null,
+            foldedOriginalRaw: null,
+            foldedOriginalCount: 0,
+            llmOrdinal: previousLlmEvents.length + 1,
+        };
+    }
+
+    const current = buildInputMessagesForLlmIndex(node, interactions, eventIdx);
     // The previous call's OUTPUT is part of this call's input, so it belongs to
     // History — not "本轮新增". Moving the cutoff one interaction further (`+ 1`)
     // folds that turn into the compared prefix. Only valid for a pure-text reply:
@@ -2515,7 +2598,14 @@ function EventDetailPanel({ event, node, interactions, onSelectChild }: { event:
                 </div>
                 <div style={{ display: 'flex', gap: 12, fontSize: '0.6875rem', color: 'var(--foreground-muted)', flexWrap: 'wrap', alignItems: 'center' }}>
                     {dur && <span style={{ fontVariantNumeric: 'tabular-nums' }}>{dur}</span>}
-                    {event.usage?.total ? <span style={{ fontVariantNumeric: 'tabular-nums' }}>{exactTokens(event.usage.total)} tok</span> : null}
+                    {event.usage?.total ? (
+                        <span
+                            title={event.usage.estimated ? 'Local estimate from visible transcript; hidden context is not included' : undefined}
+                            style={{ fontVariantNumeric: 'tabular-nums' }}
+                        >
+                            {event.usage.estimated ? '≈' : ''}{exactTokens(event.usage.total)} tok
+                        </span>
+                    ) : null}
                     {/* 毫秒级绝对时间:对时后端日志 / Infra 曲线时需要 */}
                     {startClock && <span style={{ fontVariantNumeric: 'tabular-nums' }}>开始 {startClock}</span>}
                     {endClock && <span style={{ fontVariantNumeric: 'tabular-nums' }}>结束 {endClock}</span>}
@@ -2589,6 +2679,7 @@ function LLMEventBody({ event, responseText, interactions, node }: {
     interactions: RawInteraction[];
     node: AgentNode;
 }) {
+    const { framework } = React.useContext(TraceCtx);
     const it = event.interaction as RawInteraction & {
         model?: string;
         modelID?: string;
@@ -2623,8 +2714,8 @@ function LLMEventBody({ event, responseText, interactions, node }: {
         || topP != null || freqPenalty != null || presPenalty != null || hasUsage || finishReason || callLatencyMs != null;
 
     const snapshot = useMemo(
-        () => buildLlmPromptSnapshot(event, node, interactions),
-        [event, node, interactions],
+        () => buildLlmPromptSnapshot(event, node, interactions, framework === 'langfuse-langgraph'),
+        [event, node, interactions, framework],
     );
 
     return (
