@@ -37,6 +37,7 @@ import {
 import { isResultPresetId, runResultPreset } from './result-preset-evaluators';
 import { isContentPresetId, runContentPreset } from './content-preset-evaluators';
 import { isCreativityPresetId, runCreativityPreset } from './creativity-preset-evaluators';
+import { isSafetyPresetId, runSafetyPreset } from './safety-preset-evaluators';
 
 /** 引擎参数（测试可改小重试退避/超时；生产用默认值）。 */
 export const experimentEngineConfig = {
@@ -225,12 +226,15 @@ async function evaluateOnce(
   if (isResultPresetId(evaluatorId)) {
     return runResultPreset(evaluatorId, user, runtime.faithfulCtx);
   }
-  // 安全与创意预置评估器：LLM Judge 直连（共用 faithfulCtx，与 §4.3 签名一致）
+  // 内容、安全与创意预置评估器：LLM Judge 直连（共用 faithfulCtx，与 §4.3 签名一致）
   if (isContentPresetId(evaluatorId)) {
     return runContentPreset(evaluatorId, user, runtime.faithfulCtx);
   }
   if (isCreativityPresetId(evaluatorId)) {
     return runCreativityPreset(evaluatorId, user, runtime.faithfulCtx);
+  }
+  if (isSafetyPresetId(evaluatorId)) {
+    return runSafetyPreset(evaluatorId, user, runtime.faithfulCtx);
   }
   const card = await resolveEvaluatorCard(user, evaluatorId);
   if (!card) throw new Error(`未找到评估器 ${evaluatorId}（可能已被删除）`);
