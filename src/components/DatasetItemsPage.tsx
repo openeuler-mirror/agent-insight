@@ -11,10 +11,13 @@ import {
   type DatasetCase,
   type DatasetField,
   type DatasetFieldType,
+  createEvaluatorCatalogField,
   createEmptyCase,
+  evaluatorCatalogFieldKeyFromLabel,
   nextDatasetFieldKey,
   parseDatasetNumberValue,
   TRAJECTORY_PLACEHOLDER,
+  withEvaluatorCatalogFields,
 } from '@/lib/agent-dataset-model';
 import {
   parseBatchAuto,
@@ -128,7 +131,11 @@ function isDatasetPublished(d: AgentDataset): boolean {
 const BATCH_JSON_PLACEHOLDER = `请粘贴 JSON 数组，例如：
 [
   {"input": "问题1", "expected_output": "答案1"},
-  {"input": "问题2", "output": "答案2"}
+  {
+    "input": "读取配置并汇总关键项",
+    "available_tools": [{"name": "read_file", "description": "读取文件"}],
+    "available_skills": [{"name": "config-review", "description": "检查配置"}]
+  }
 ]
 
 若以逗号分隔且无表头，也可直接粘贴 CSV（前两列为输入、预期输出）。`;
@@ -276,6 +283,7 @@ export default function DatasetItemsPage() {
       const payload = {
         user,
         id: dataset.id,
+        fields: withEvaluatorCatalogFields(dataset.fields, cases),
         cases: cases.map(item => ({
           id: item.id,
           input: fieldText(item, 'input').trim(),
@@ -365,10 +373,17 @@ export default function DatasetItemsPage() {
       setFieldError('字段名称已存在');
       return;
     }
-    const key = nextDatasetFieldKey(dataset.fields.map(field => field.key));
+    const catalogKey = evaluatorCatalogFieldKeyFromLabel(label);
+    if (catalogKey && dataset.fields.some(field => field.key === catalogKey)) {
+      setFieldError(`${catalogKey} 已存在`);
+      return;
+    }
+    const key = catalogKey ?? nextDatasetFieldKey(dataset.fields.map(field => field.key));
     const ok = await persistFields([
       ...dataset.fields,
-      { id: crypto.randomUUID(), key, label, type: fieldDraft.type },
+      catalogKey
+        ? createEvaluatorCatalogField(catalogKey, label)
+        : { id: crypto.randomUUID(), key, label, type: fieldDraft.type },
     ]);
     if (ok) {
       setFieldEditorOpen(false);
@@ -516,6 +531,7 @@ export default function DatasetItemsPage() {
   if (!dataset) return null;
 
   const isTraj = dataset.datasetKind === 'trajectory';
+  const catalogDraftKey = evaluatorCatalogFieldKeyFromLabel(fieldDraft.label);
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
@@ -819,7 +835,8 @@ export default function DatasetItemsPage() {
               <div className={styles.hintCard}>
                 自动识别字段：<strong>input</strong> 与 <strong>expected_output</strong>（兼容 <strong>output</strong>、
                 reference_output 等）。内容以 <strong>[</strong> 开头按 JSON，否则按 CSV。轨迹集可含{' '}
-                <strong>trajectory</strong> 或 CSV 第三列。
+                <strong>trajectory</strong> 或 CSV 第三列。JSON 中的 <strong>available_tools</strong> 与{' '}
+                <strong>available_skills</strong> 会自动新增为目录字段。
               </div>
 
               {batchModalError ? <div className={styles.modalError}>{batchModalError}</div> : null}
@@ -846,13 +863,25 @@ export default function DatasetItemsPage() {
             <div className={styles.modalBody} style={{ display: 'grid', gap: 14 }}>
               <label style={{ display: 'grid', gap: 5 }}>
                 <span style={{ fontSize: 12, color: 'var(--foreground-muted)' }}>字段名称</span>
-                <Input value={fieldDraft.label} onChange={e => setFieldDraft({ ...fieldDraft, label: e.target.value })} />
+                <Input
+                  value={fieldDraft.label}
+                  onChange={e => {
+                    const label = e.target.value;
+                    setFieldDraft({
+                      label,
+                      type: evaluatorCatalogFieldKeyFromLabel(label) ? 'json' : fieldDraft.type,
+                    });
+                  }}
+                  placeholder="如 available_tools 或 可用 Tool"
+                />
               </label>
               <div style={{ display: 'grid', gap: 5 }}>
                 <span style={{ fontSize: 12, color: 'var(--foreground-muted)' }}>字段类型</span>
                 <Select
-                  value={fieldDraft.type}
-                  onChange={type => setFieldDraft({ ...fieldDraft, type })}
+                  value={catalogDraftKey ? 'json' : fieldDraft.type}
+                  onChange={type => {
+                    if (!catalogDraftKey) setFieldDraft({ ...fieldDraft, type });
+                  }}
                   options={[
                     { value: 'text', label: '文本' },
                     { value: 'number', label: '数字' },
@@ -865,6 +894,11 @@ export default function DatasetItemsPage() {
                   aria-label="字段类型"
                 />
               </div>
+              {catalogDraftKey && (
+                <div style={{ fontSize: 12, lineHeight: 1.6, color: 'var(--foreground-secondary)' }}>
+                  将识别为 <code>{catalogDraftKey}</code>，并固定使用 JSON 类型，供工具类评估器读取。
+                </div>
+              )}
               {fieldError && <div className={styles.modalError}>{fieldError}</div>}
             </div>
             <div className={styles.modalFooter}>

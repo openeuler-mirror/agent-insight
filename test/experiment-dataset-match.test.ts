@@ -61,10 +61,57 @@ describe('实验 ③ 步与数据集互通', () => {
     assert.equal(r.unmatched, 1);
   });
 
+  it('同一 input 的参考答案和能力目录可来自不同数据项', () => {
+    const r = matchDatasetCases(
+      [{ key: 'c1', input: 'q', referenceOutput: null, evaluatorContext: null }],
+      [
+        { input: 'q', values: { available_tools: [{ name: 'search' }] } },
+        { input: 'q', expectedOutput: '正确答案' },
+      ],
+    );
+    assert.equal(r.updates.c1, '正确答案');
+    assert.deepEqual(r.contextUpdates.c1.availableTools, [{ name: 'search' }]);
+    assert.equal(r.matched, 1);
+    assert.equal(r.contextMatched, 1);
+    assert.equal(r.unmatched, 0);
+  });
+
   it('摘要文案随结果变化', () => {
-    assert.equal(describeMatchResult({ updates: {}, matched: 2, skipped: 1, unmatched: 1 }),
+    assert.equal(describeMatchResult({
+      updates: {}, contextUpdates: {}, matched: 2, skipped: 1, unmatched: 1,
+      contextMatched: 0, contextSkipped: 0,
+    }),
       '已回填 2 条 · 跳过 1 条已标注 · 1 条未匹配');
-    assert.equal(describeMatchResult({ updates: {}, matched: 3, skipped: 0, unmatched: 0 }), '已回填 3 条');
+    assert.equal(describeMatchResult({
+      updates: {}, contextUpdates: {}, matched: 3, skipped: 0, unmatched: 0,
+      contextMatched: 0, contextSkipped: 0,
+    }), '已回填 3 条');
+  });
+
+  it('按输入精确导入 available_tools / available_skills，并保留显式空目录', () => {
+    const r = matchDatasetCases(
+      [
+        { key: 'a', input: '需要搜索', referenceOutput: null, evaluatorContext: null },
+        { key: 'b', input: '无需工具', referenceOutput: null, evaluatorContext: null },
+      ],
+      [
+        {
+          input: '需要搜索',
+          values: {
+            available_tools: [{ name: 'search' }],
+            available_skills: [{ name: 'research_playbook', description: '检索后归纳资料' }],
+          },
+        },
+        { input: '无需工具', values: { available_tools: '[]' } },
+      ],
+    );
+    assert.equal(r.contextMatched, 2);
+    assert.deepEqual(r.contextUpdates.a.availableTools, [{ name: 'search' }]);
+    assert.deepEqual(r.contextUpdates.a.availableSkills, [{
+      name: 'research_playbook', description: '检索后归纳资料',
+    }]);
+    assert.deepEqual(r.contextUpdates.b.availableTools, []);
+    assert.equal(r.unmatched, 0);
   });
 
   it('存为数据集：只导出已标注的 case 且去空白', () => {
@@ -74,5 +121,20 @@ describe('实验 ③ 步与数据集互通', () => {
       { input: '', referenceOutput: 'x' },
     ]);
     assert.deepEqual(out, [{ input: 'a', expectedOutput: 'ans' }]);
+  });
+
+  it('存为数据集时导出 Tool/Skill 目录，包括显式空数组', () => {
+    const out = toDatasetCases([{
+      input: 'q', referenceOutput: null,
+      evaluatorContext: {
+        schemaVersion: 1,
+        availableTools: [],
+        availableSkills: [{ name: 'research_playbook' }],
+      },
+    }]);
+    assert.deepEqual(out, [{
+      input: 'q', expectedOutput: '',
+      values: { available_tools: [], available_skills: [{ name: 'research_playbook' }] },
+    }]);
   });
 });

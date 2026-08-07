@@ -22,7 +22,9 @@
 | evaluatorId | 走哪个实现 |
 |---|---|
 | `preset-agent-task-completion` / `preset-agent-trace-quality` | `experiment/faithful-preset-evaluators.ts` |
-| `preset-result-*` | `experiment/result-preset-evaluators.ts` → 复用 canonical `runSingleResultMetric()` |
+| `preset-depth-*` | `experiment/depth-preset-evaluators.ts` |
+| `preset-agent-tool-*` | `experiment/agent-tool-preset-evaluators.ts` |
+| 其余 `preset-result-*` | `experiment/result-preset-evaluators.ts` → 复用 canonical `runSingleResultMetric()` |
 | 其它（自建） | 通用 LLM Judge（三段式提示词组装） |
 
 > 这张表只列到「族」级别；具体有哪些预置卡以 `preset-evaluators.ts` 为准，别在文档里再抄一份 id 清单——抄了必然过期。
@@ -39,7 +41,7 @@
 |---|---|---|
 | **① 输出契约** | 交出 `{ verdict?, summary?, score?, points?, evidence? }` | 前端按它渲染；改格式 = 所有评估器一起改 |
 | **② evaluatorId** | 标识这个评估器的字符串 | 已写进历史结果，改名 = 历史数据变孤儿 |
-| **③ 注册元数据** | `category`（看结果/看轨迹）+ `requires`（要不要参考答案） | 注册时确定、**运行时不可变**；已出的分按旧类目归属 |
+| **③ 注册元数据** | `category`（看结果/看轨迹）+ `requires`（需要哪类 case 数据） | 注册时确定、**运行时不可变**；已出的分按旧类目归属 |
 
 **除此之外评估器内部完全自由**——怎么组提示词、怎么解析、怎么算分，各写各的，不需要和别人保持一致，也不需要复用谁的代码。
 
@@ -131,9 +133,9 @@ EvalPoint = {
 | 字段 | 取值 | 决定什么 | 改了会怎样 |
 |---|---|---|---|
 | `category` | `res` / `traj` | 结果落在 Trace 评测详情的哪个板块、进哪个类目均分 | 历史行按旧类目算的均分与新的不可比 |
-| `requires` | `['reference']` / `[]` | 实验向导 ④ 步的**硬门控**——任一 case 没标注参考答案，该评估器整体置灰不可选 | 放宽会让历史上被挡住的组合突然可选，口径变化无记录 |
+| `requires` | `['reference']` / `['tool_catalog']` / `[]` | 实验向导 ④ 步的**硬门控**：检查参考答案或显式 Tool/Skill 目录 | 放宽会让历史上被挡住的组合突然可选，口径变化无记录 |
 
-`requires` 填了 `['reference']` 也**不要在实现里假设参考答案一定存在**，仍要对空值兜底。
+`requires` 填了 `['reference']` 或 `['tool_catalog']`，实现仍要处理 `ctx.referenceOutput` 或 `ctx.evaluatorContext` 缺失。历史数据和直接 API 调用可能绕过向导。
 
 ---
 
@@ -266,18 +268,22 @@ return normalizeEvaluatorOutput({ score: snap3(toolChoice) * 100 });
 ### 4.2 元数据怎么填
 
 ```ts
-'preset-your-evaluator': { category: 'res' | 'traj', requires: ['reference'] | [] },
+'preset-your-evaluator': {
+  category: 'res' | 'traj',
+  requires: ['reference'] | ['tool_catalog'] | [],
+},
 ```
 
 - **category**：只读最终输出（±参考答案）→ `res`；需要读执行过程（步骤/工具/耗时/成本/token）→ `traj`。决定它在 Trace 评测详情里归到「结果评测」还是「轨迹评测」板块，以及进哪个类目均分。
-- **requires**：填 `['reference']` 表示必须有参考答案。实验向导 ④ 步是**硬门控**——任一 case 没标注参考，该评估器整体置灰不可选。别在实现里假设参考一定存在，仍要兜底（`ctx.referenceOutput` 可能为空）。
+- **requires**：`reference` 要求每个 case 有参考答案；`tool_catalog` 要求每个 case 有显式 Tool/Skill 目录。`availableTools=[]` 表示调用方确认没有可用 Tool，仍满足目录前置条件；上下文字段缺失才触发门控。
+- **能力目录来源**：可由实验 API 的 `evaluatorContext` 显式提供，或从数据集的 `available_tools` / `available_skills` 导入。trace 只记录实际发生的调用，不能还原执行时完整的可用能力集合，因此不得用已调用集合反推目录。
 - **tags 不用填**，由元数据派生（`deriveEvaluatorTags`）。
 
 ### 4.3 实现签名
 
 ```ts
 // ctx: FaithfulPresetContext —— caseInput / actualOutput / referenceOutput /
-//      interactions / execution / traceSummaryText / user
+//      interactions / execution / traceSummaryText / evaluatorContext / user
 async function runYourEvaluator(user: string, ctx: FaithfulPresetContext): Promise<EvaluatorOutput> {
   // 1) 取输入。注意 input/actualOutput 在 trace 模式下由引擎从 Execution 兜底解析
   // 2) 调模型做**离散判断**（见 §3.2/§3.3），别让它直接给连续分
@@ -505,6 +511,7 @@ Trace 评测详情（`app/(main)/experiments/[id]/cases/[caseId]/page.tsx`）的
 
 - [ ] 若改了 canonical `result-*`：升了版本号，并确认「可靠性与性能」页不回归
 - [ ] 若依赖参考答案：`requires` 填了 `['reference']`，且实现里对空参考有兜底
+- [ ] 若依赖能力目录：`requires` 填了 `['tool_catalog']`，并区分缺失目录与显式空目录
 - [ ] 维度与 §8 台账比对过，无覆盖面重叠（§3.6）
 - [ ] 提示词里没有写死验收用例的原句（§5.1）
 - [ ] PR 只含评估器相关改动——lockfile、无关平台适配、顺手的代码清理都拆出去
@@ -529,6 +536,11 @@ Trace 评测详情（`app/(main)/experiments/[id]/cases/[caseId]/page.tsx`）的
 | 争议性 `preset-content-controversy` | Agent 输出 | 绝对化判断 · 争议比较 · 未经限定概括（3 维扣分制，聚焦语言学形式，内容主题交安全审核评估器） |
 | 性别歧视 `preset-content-gender-discrimination` | Agent 输出 | 显性贬低 · 能力否定 · 刻板印象 · 排斥语言 · 物化 · 双重标准 · 角色固着（7 维扣分制） |
 | 创造性 `preset-creativity-expression` | Agent 输出 | 新颖性 · 视角独特性 · 非模板化 · 构思差异度 · 文采与修辞（5 维 1-3 档锚定，独立成族） |
+| 回答深度性 `preset-depth-result` | 用户问题与最终答案 | 问题要求的原因分析深度 · 结构化推理 · 多视角权衡 · 背景与语境 · 洞察与升华；不适用维度不计分 |
+| 轨迹工具利用率 `preset-agent-tool-utilization` | Tool/Skill 目录与执行轨迹 | 任务相关能力覆盖 · 调用频次 · 任务匹配利用 · 合理闲置 |
+| Agent 工具选择合理性 `preset-agent-tool-selection` | Tool/Skill 目录与执行轨迹 | 工具必要性 · 工具匹配 · 参数合理性 · 结果利用 · 调用顺序 |
+
+回答深度性与答案质量的边界：答案质量判断“有没有答到、答全、表达是否连贯”，回答深度性判断“对当前问题需要展开的分析层次是否展开”。一句完整、正确且连贯的事实答案可以有很高的答案质量，同时多数深度维度为 N/A；一篇结构复杂但遗漏核心问题的长回答也可能深度得分较高、答案质量得分较低。
 
 **已知的高风险重叠区**——往这些方向新增前务必先讨论：
 

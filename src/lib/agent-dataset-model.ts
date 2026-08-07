@@ -105,6 +105,77 @@ export interface AgentDataset {
   updatedAt: string;
 }
 
+export const EVALUATOR_CATALOG_FIELD_KEYS = ['available_tools', 'available_skills'] as const;
+export type EvaluatorCatalogFieldKey = (typeof EVALUATOR_CATALOG_FIELD_KEYS)[number];
+
+const EVALUATOR_CATALOG_FIELD_DEFINITIONS: Record<EvaluatorCatalogFieldKey, Omit<DatasetField, 'id' | 'label'>> = {
+  available_tools: {
+    key: 'available_tools',
+    type: 'json',
+    description: '任务执行时完整的可用 Tool 目录',
+  },
+  available_skills: {
+    key: 'available_skills',
+    type: 'json',
+    description: '任务执行时完整的可用 Skill 目录',
+  },
+};
+
+const EVALUATOR_CATALOG_FIELD_LABELS: Record<EvaluatorCatalogFieldKey, string> = {
+  available_tools: '可用 Tool',
+  available_skills: '可用 Skill',
+};
+
+export function evaluatorCatalogFieldKeyFromLabel(label: string): EvaluatorCatalogFieldKey | null {
+  const normalized = label.trim().toLocaleLowerCase().replace(/[\s_-]/g, '');
+  if (['availabletools', '可用tool', '可用工具'].includes(normalized)) return 'available_tools';
+  if (['availableskills', '可用skill', '可用技能'].includes(normalized)) return 'available_skills';
+  return null;
+}
+
+export function createEvaluatorCatalogField(
+  key: EvaluatorCatalogFieldKey,
+  label = EVALUATOR_CATALOG_FIELD_LABELS[key],
+): DatasetField {
+  return {
+    id: key,
+    ...EVALUATOR_CATALOG_FIELD_DEFINITIONS[key],
+    label: label.trim() || EVALUATOR_CATALOG_FIELD_LABELS[key],
+  };
+}
+
+export function defaultDatasetSchemaFields(kind: DatasetKind): DatasetField[] {
+  const fields: DatasetField[] = [
+    { id: 'input', key: 'input', label: '输入', type: 'text', system: true },
+    { id: 'reference_output', key: 'reference_output', label: '预期输出', type: 'text', system: true },
+  ];
+  if (kind === 'trajectory') {
+    fields.push({ id: 'trajectory', key: 'trajectory', label: '轨迹', type: 'json', system: true });
+  }
+  return fields;
+}
+
+export function withEvaluatorCatalogFields(
+  fields: DatasetField[],
+  cases: Iterable<Pick<DatasetCase, 'values'>>,
+): DatasetField[] {
+  const present = new Set<EvaluatorCatalogFieldKey>();
+  for (const item of cases) {
+    const values = item.values;
+    if (!values) continue;
+    for (const key of EVALUATOR_CATALOG_FIELD_KEYS) {
+      if (Object.prototype.hasOwnProperty.call(values, key)) present.add(key);
+    }
+  }
+  const existing = new Set(fields.map(field => field.key));
+  return [
+    ...fields,
+    ...EVALUATOR_CATALOG_FIELD_KEYS
+      .filter(key => present.has(key) && !existing.has(key))
+      .map(key => createEvaluatorCatalogField(key)),
+  ];
+}
+
 export const TRAJECTORY_PLACEHOLDER = `{
   "id": "trace_id",
   "root_step": { }

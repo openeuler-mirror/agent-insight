@@ -2,10 +2,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  createEvaluatorCatalogField,
   defaultTraceBackflowSourceForField,
+  evaluatorCatalogFieldKeyFromLabel,
   nextDatasetFieldKey,
   parseDatasetNumberValue,
   sortTraceBackflowDatasetsByRecency,
+  withEvaluatorCatalogFields,
 } from '@/lib/agent-dataset-model';
 import { extractTaskArtifacts } from '@/lib/engine/evaluation/task-artifacts';
 import { POST as saveDataset } from '@/app/api/agent-datasets/route';
@@ -83,6 +86,26 @@ test('generates stable internal keys without exposing them as field input', () =
     nextDatasetFieldKey(['input', 'custom_field_1', 'custom_field_3']),
     'custom_field_2',
   );
+});
+
+test('keeps Tool/Skill catalog fields under evaluator-readable JSON keys', () => {
+  assert.equal(evaluatorCatalogFieldKeyFromLabel('available_tools'), 'available_tools');
+  assert.equal(evaluatorCatalogFieldKeyFromLabel('可用 Skill'), 'available_skills');
+  assert.equal(evaluatorCatalogFieldKeyFromLabel('普通备注'), null);
+
+  const fields = withEvaluatorCatalogFields([
+    { id: 'input', key: 'input', label: '输入', type: 'text', system: true },
+  ], [{
+    values: {
+      available_tools: [],
+      available_skills: [{ name: 'research' }],
+    },
+  }]);
+
+  assert.deepEqual(fields.slice(1), [
+    createEvaluatorCatalogField('available_tools'),
+    createEvaluatorCatalogField('available_skills'),
+  ]);
 });
 
 test('maps standard dataset fields to trace backflow artifacts by default', () => {

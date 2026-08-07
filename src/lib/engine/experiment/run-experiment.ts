@@ -9,8 +9,15 @@
  * 单行执行：
  * - 忠实版预置 LLM 评估器（任务完成度/轨迹质量）→ 复用原 opencode 评估器；
  * - 结果评测预置评估器 → 复用可靠性页 canonical 结果评估能力；
+ * - 回答深度性评估器 → 使用 case 输入与实际回答做离散 Judge，再由代码加权；
+ * - Tool/Skill 利用率、选择合理性评估器 → 使用显式能力目录与原始 interactions，
+ *   分别执行确定性统计、离散 Judge 和加权；Agent/子 Agent 不计入能力调用；
  * - 自建 LLM 评估器 → buildJudgePrompt → callJudgeLlm（薄封装，测试可注入 fake）
  *   → parseJudgeText → normalizeEvaluatorOutput。
+ *
+ * 专项评估器上下文数据流：ExperimentCase.evaluatorContextJson 在 loadCaseRuntime 中解析为
+ * evaluatorContext，并与 caseInput、actualOutput、interactions 一起传给对应评估器。目录缺失或
+ * 存量 JSON 非法时，工具类评估器返回不计分结果；回答深度性不依赖该目录。
  *
  * 失败处理：异常写 status='failed' + errorMessage + attempts；JudgeOutputParseError /
  * 超时类可重试（退避见 experimentEngineConfig.retryDelaysMs，默认 2s/8s）；
@@ -25,6 +32,11 @@ import {
 } from '@/lib/evaluators/judge-assembly';
 import type { EvaluatorOutput } from '@/lib/evaluators/eval-output';
 import type { EvaluatorCard } from '@/lib/evaluators/custom-evaluator-model';
+import {
+  normalizeEvaluatorCaseContext,
+  parseStoredEvaluatorCaseContext,
+  type EvaluatorCaseContext,
+} from '@/lib/evaluators/evaluator-case-context';
 import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
 import { readUserCustomEvaluators } from '@/server/user_evaluators_storage';
 import { createSimpleAsyncLimiter } from '@/lib/engine/evaluation/eval-run-guards';
@@ -38,6 +50,11 @@ import { isResultPresetId, runResultPreset } from './result-preset-evaluators';
 import { isContentPresetId, runContentPreset } from './content-preset-evaluators';
 import { isCreativityPresetId, runCreativityPreset } from './creativity-preset-evaluators';
 import { isSafetyPresetId, runSafetyPreset } from './safety-preset-evaluators';
+import { isDepthPresetId, runDepthPreset } from './depth-preset-evaluators';
+import {
+  isAgentToolPresetId,
+  runAgentToolPreset,
+} from './agent-tool-preset-evaluators';
 
 /** 引擎参数（测试可改小重试退避/超时；生产用默认值）。 */
 export const experimentEngineConfig = {
@@ -98,15 +115,19 @@ export function extractToolCallNames(interactions: unknown[]): string[] {
     const calls = Array.isArray(r.tool_calls) ? r.tool_calls : [];
     let pushed = false;
     for (const tc of calls) {
-      if (tc && typeof tc === 'object' && typeof (tc as any).name === 'string' && (tc as any).name) {
-        names.push((tc as any).name);
+      if (!tc || typeof tc !== 'object') continue;
+      const call = tc as Record<string, unknown>;
+      if (typeof call.name === 'string' && call.name) {
+        names.push(call.name);
         pushed = true;
       }
     }
     if (!pushed && Array.isArray(r.parts)) {
       for (const p of r.parts) {
-        if (p && typeof p === 'object' && (p as any).type === 'tool' && typeof (p as any).tool === 'string') {
-          names.push((p as any).tool);
+        if (!p || typeof p !== 'object') continue;
+        const part = p as Record<string, unknown>;
+        if (part.type === 'tool' && typeof part.tool === 'string') {
+          names.push(part.tool);
         }
       }
     }
@@ -120,6 +141,7 @@ async function loadCaseRuntime(caseRow: {
   input: string;
   actualOutput: string;
   referenceOutput: string | null;
+  evaluatorContextJson: string | null;
 }, user: string): Promise<CaseRuntime> {
   // executionId 优先；skill 评测接入只带 taskId(=sessionId) 时按 taskId 兜底解析 Execution，
   // 以拿到 skill 上下文与 finalResult（actualOutput 兜底）。
@@ -166,6 +188,7 @@ async function loadCaseRuntime(caseRow: {
   // 用 Execution.query / Execution.finalResult 兜底（trace 模式无 dataset case）。
   const caseInput = caseRow.input || execution?.query || '';
   const actualOutput = caseRow.actualOutput || execution?.finalResult || '';
+  const evaluatorContextResult = parseStoredEvaluatorCaseContext(caseRow.evaluatorContextJson);
 
   const judgeCtx: JudgeCaseContext = {
     input: caseInput,
@@ -180,6 +203,8 @@ async function loadCaseRuntime(caseRow: {
     referenceOutput: caseRow.referenceOutput,
     traceSummaryText: trajectory,
     interactions: rawInteractions,
+    evaluatorContext: evaluatorContextResult.context,
+    evaluatorContextError: evaluatorContextResult.error,
     taskId,
     executionId: caseRow.executionId,
     user,
@@ -235,6 +260,12 @@ async function evaluateOnce(
   }
   if (isSafetyPresetId(evaluatorId)) {
     return runSafetyPreset(evaluatorId, user, runtime.faithfulCtx);
+  }
+  if (isDepthPresetId(evaluatorId)) {
+    return runDepthPreset(user, runtime.faithfulCtx);
+  }
+  if (isAgentToolPresetId(evaluatorId)) {
+    return runAgentToolPreset(evaluatorId, user, runtime.faithfulCtx);
   }
   const card = await resolveEvaluatorCard(user, evaluatorId);
   if (!card) throw new Error(`未找到评估器 ${evaluatorId}（可能已被删除）`);
@@ -550,6 +581,7 @@ export async function addEvalExperimentCase(
     input: string;
     actualOutput: string;
     referenceOutput?: string | null;
+    evaluatorContext?: EvaluatorCaseContext | null;
   },
 ): Promise<string> {
   if (c.taskId) {
@@ -558,11 +590,25 @@ export async function addEvalExperimentCase(
       select: { id: true },
     });
     if (existing) {
-      // 复用已有 case；若这次拿到了参考答案而旧值为空则回填
-      if (c.referenceOutput != null && String(c.referenceOutput).trim()) {
+      // 复用已有 case；若这次拿到了参考答案或评估器上下文则回填。
+      if (
+        (c.referenceOutput != null && String(c.referenceOutput).trim())
+        || c.evaluatorContext !== undefined
+      ) {
         await prisma.experimentCase.update({
           where: { id: existing.id },
-          data: { referenceOutput: c.referenceOutput },
+          data: {
+            ...(c.referenceOutput != null && String(c.referenceOutput).trim()
+              ? { referenceOutput: c.referenceOutput }
+              : {}),
+            ...(c.evaluatorContext !== undefined
+              ? {
+                  evaluatorContextJson: c.evaluatorContext
+                    ? JSON.stringify(normalizeEvaluatorCaseContext(c.evaluatorContext))
+                    : null,
+                }
+              : {}),
+          },
         });
       }
       return existing.id;
@@ -576,6 +622,9 @@ export async function addEvalExperimentCase(
       input: c.input,
       actualOutput: c.actualOutput,
       referenceOutput: c.referenceOutput ?? null,
+      evaluatorContextJson: c.evaluatorContext
+        ? JSON.stringify(normalizeEvaluatorCaseContext(c.evaluatorContext))
+        : null,
     },
     select: { id: true },
   });
