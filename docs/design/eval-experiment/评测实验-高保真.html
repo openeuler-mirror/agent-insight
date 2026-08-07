@@ -1,0 +1,1300 @@
+<title>评测实验 — 高保真与功能说明</title>
+<!-- v2：② 步改为以 input 为中心的齐备度矩阵 -->
+<style>
+  .root[data-theme='light']{
+    --background:#ffffff;--foreground:#18181B;--foreground-secondary:#52525B;--foreground-muted:#71717A;
+    --background-secondary:#F4F4F5;--card-bg:#ffffff;--card-border:#E4E4E7;--border:#E4E4E7;--border-dark:#D4D4D8;
+    --input-bg:#ffffff;--input-border:#D4D4D8;--primary:#4F46E5;--primary-hover:#4338CA;--primary-subtle:#EEF2FF;--primary-subtle-border:#C7D2FE;
+    --success:#16A34A;--success-subtle:#F0FDF4;--success-subtle-border:#BBF7D0;
+    --warning:#D97706;--warning-subtle:#FFFBEB;--warning-subtle-border:#FDE68A;
+    --error:#DC2626;--error-subtle:#FEF2F2;--error-subtle-border:#FECACA;
+    --sidebar-bg:#FAFAFA;--ring:rgba(79,70,229,.25);--shadow-primary:0 8px 24px rgba(79,70,229,.12);--overlay:rgba(0,0,0,.5);
+    --sky:#0EA5E9;--violet:#8B5CF6;--pink:#EC4899;--teal:#14B8A6;--zinc:#71717A;
+    --ga:#4F46E5;--gb:#0D9488;
+  }
+  .root[data-theme='dark']{
+    --background:#09090B;--foreground:#FAFAFA;--foreground-secondary:#A1A1AA;--foreground-muted:#8A8A93;
+    --background-secondary:#27272A;--card-bg:#18181B;--card-border:#27272A;--border:#27272A;--border-dark:#3F3F46;
+    --input-bg:#09090B;--input-border:#3F3F46;--primary:#818CF8;--primary-hover:#A5B4FC;--primary-subtle:rgba(129,140,248,.15);--primary-subtle-border:rgba(129,140,248,.35);
+    --success:#4ADE80;--success-subtle:rgba(74,222,128,.12);--success-subtle-border:rgba(74,222,128,.28);
+    --warning:#FBBF24;--warning-subtle:rgba(251,191,36,.12);--warning-subtle-border:rgba(251,191,36,.28);
+    --error:#F87171;--error-subtle:rgba(248,113,113,.12);--error-subtle-border:rgba(248,113,113,.28);
+    --sidebar-bg:#0C0C0F;--ring:rgba(129,140,248,.4);--shadow-primary:0 8px 24px rgba(0,0,0,.55);--overlay:rgba(0,0,0,.66);
+    --sky:#38BDF8;--violet:#A78BFA;--pink:#F472B6;--teal:#2DD4BF;--zinc:#8A8A93;
+    --ga:#818CF8;--gb:#2DD4BF;
+  }
+  *{box-sizing:border-box;}
+  .root{--sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;--mono:ui-monospace,'SF Mono',SFMono-Regular,Menlo,Consolas,monospace;font-family:var(--sans);color:var(--foreground);background:var(--background);font-size:13px;line-height:1.5;letter-spacing:-.01em;-webkit-font-smoothing:antialiased;}
+  .mono{font-family:var(--mono);font-variant-numeric:tabular-nums;letter-spacing:0;}
+  button{font-family:inherit;}
+  :focus-visible{outline:2px solid var(--ring);outline-offset:2px;border-radius:4px;}
+
+  .shell{display:flex;min-height:100vh;}
+  .sidebar{width:222px;flex-shrink:0;background:var(--sidebar-bg);border-right:1px solid var(--border);display:flex;flex-direction:column;position:sticky;top:0;height:100vh;overflow-y:auto;}
+  .brand{display:flex;align-items:center;gap:9px;padding:15px 15px 13px;border-bottom:1px solid var(--border);}
+  .brand-m{width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,var(--primary),#6366F1);display:grid;place-items:center;color:#fff;box-shadow:0 2px 6px rgba(79,70,229,.35);}
+  .brand-n{font-size:13.5px;font-weight:800;letter-spacing:-.02em;}
+  .brand-s{font-size:9.5px;color:var(--foreground-muted);font-weight:500;margin-top:-2px;}
+  .nav{flex:1;padding:6px 10px 16px;}
+  .nav-label{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--foreground-muted);padding:12px 8px 5px;}
+  .nav-item{display:flex;align-items:center;gap:9px;padding:6px 9px;border-radius:7px;font-size:12px;font-weight:500;color:var(--foreground-secondary);cursor:pointer;margin-bottom:1px;border:none;background:none;width:100%;text-align:left;}
+  .nav-item:hover{background:var(--background-secondary);color:var(--foreground);}
+  .nav-item.active{background:var(--primary-subtle);color:var(--primary);font-weight:600;}
+  .nav-sub{padding-left:12px;}
+  .nav-dot{width:5px;height:5px;border-radius:50%;background:currentColor;opacity:.45;margin:0 5px;flex-shrink:0;}
+  .nav-item.active .nav-dot{opacity:1;}
+  .nav-badge{margin-left:auto;font-size:8.5px;font-weight:700;padding:1px 6px;border-radius:20px;background:var(--primary);color:#fff;}
+
+  .main{flex:1;min-width:0;display:flex;flex-direction:column;}
+  .topbar{height:52px;flex-shrink:0;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;padding:0 20px;position:sticky;top:0;background:color-mix(in srgb,var(--background) 88%,transparent);backdrop-filter:blur(8px);z-index:30;}
+  .crumb{font-size:12.5px;color:var(--foreground-muted);}.crumb b{color:var(--foreground);font-weight:700;}
+  .top-sp{flex:1;}
+  .icon-btn{width:32px;height:32px;border-radius:8px;border:1px solid var(--border);background:var(--card-bg);display:grid;place-items:center;cursor:pointer;color:var(--foreground-secondary);}
+  .icon-btn:hover{background:var(--background-secondary);}
+  .avatar{width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,#8B5CF6,#4F46E5);color:#fff;display:grid;place-items:center;font-size:11px;font-weight:700;}
+  .content{flex:1;padding:16px 22px 60px;}
+  .page{display:none;}.page.on{display:block;animation:fade .18s ease;}
+  @keyframes fade{from{opacity:0;transform:translateY(4px);}to{opacity:1;transform:none;}}
+
+  .pagehead{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:2px 0 12px;}
+  .pagehead h1{font-size:16px;font-weight:800;letter-spacing:-.02em;margin:0;}
+  .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:30px;padding:0 12px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid transparent;white-space:nowrap;}
+  .btn svg{width:14px;height:14px;}
+  .btn-primary{background:var(--primary);color:#fff;}.btn-primary:hover{background:var(--primary-hover);}
+  .btn-outline{background:var(--card-bg);color:var(--foreground);border-color:var(--border-dark);}.btn-outline:hover{background:var(--background-secondary);}
+  .btn-ghost{background:none;color:var(--foreground-secondary);border:none;}.btn-ghost:hover{background:var(--background-secondary);color:var(--foreground);}
+  .btn-sm{height:26px;padding:0 9px;font-size:11.5px;}
+  .btn[disabled]{opacity:.5;cursor:not-allowed;}
+
+  .demo-hint{display:flex;gap:9px;align-items:flex-start;border:1px dashed var(--primary-subtle-border);background:var(--primary-subtle);color:var(--primary);border-radius:10px;padding:9px 13px;font-size:11.5px;line-height:1.6;margin-bottom:14px;}
+  .demo-hint b{font-weight:700;}
+
+  .kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px;}
+  .kpi{background:var(--card-bg);border:1px solid var(--card-border);border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:5px;}
+  .kpi .lbl{font-size:11px;color:var(--foreground-muted);}
+  .kpi .val{font-size:22px;font-weight:800;line-height:1.1;}
+  .kpi .d{font-size:10.5px;font-weight:600;color:var(--foreground-muted);}
+
+  .panel{background:var(--card-bg);border:1px solid var(--card-border);border-radius:12px;margin-bottom:14px;}
+  .panel-h{padding:11px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+  .panel-t{font-size:13px;font-weight:800;}
+  .panel-hint{font-size:10.5px;color:var(--foreground-muted);}
+  .panel-h .grow{flex:1;}
+  .panel-b{padding:13px 15px;}
+
+  table.tbl{width:100%;border-collapse:collapse;font-size:12.5px;}
+  .tbl th{text-align:left;font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.045em;color:var(--foreground-muted);padding:9px 12px;border-bottom:1px solid var(--border);background:var(--background-secondary);white-space:nowrap;}
+  .tbl td{padding:9px 12px;border-bottom:1px solid var(--border);color:var(--foreground-secondary);vertical-align:top;}
+  /* Case 明细操作列：sticky 固定在表格右侧（对比场景 A/B 两列操作，opc2 为左侧那列） */
+  .tbl .opc{position:sticky;right:0;min-width:96px;max-width:96px;background:var(--card-bg);box-shadow:-8px 0 8px -8px rgba(0,0,0,.28);white-space:nowrap;z-index:1;}
+  .tbl th.opc{background:var(--background-secondary);}
+  .tbl .opc2{right:96px;}
+  .oplink{color:var(--primary);cursor:pointer;font-size:11px;text-decoration:underline;margin-right:8px;}
+  .oplink:last-child{margin-right:0;}
+  /* 评估器中心页签（对齐现存 TabButton 风格） */
+  .evtab{font-size:12.5px;font-weight:600;padding:8px 14px;border:none;background:transparent;color:var(--foreground-secondary);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;}
+  /* 居中悬浮窗（评估器详情） */
+  .modal-ov{position:fixed;inset:0;background:var(--overlay);z-index:220;display:flex;align-items:center;justify-content:center;padding:24px;}
+  .modal{width:560px;max-width:92vw;max-height:86vh;overflow-y:auto;background:var(--background);border:1px solid var(--border);border-radius:14px;padding:18px 20px;box-shadow:0 24px 80px rgba(0,0,0,.35);animation:pop .16s ease;}
+  @keyframes pop{from{transform:scale(.96);opacity:0;}}
+  .dsec{margin-bottom:12px;}
+  .dsec .dk{font-size:10.5px;font-weight:800;color:var(--primary);text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;display:flex;align-items:center;gap:6px;}
+  .dsec .dk::before{content:'';width:3px;height:11px;border-radius:2px;background:var(--primary);}
+  .dsec .dv{font-size:12px;color:var(--foreground-secondary);line-height:1.65;background:var(--background-secondary);border:1px solid var(--border);border-radius:9px;padding:9px 12px;}
+  .evtab.on{color:var(--primary);border-bottom-color:var(--primary);font-weight:700;}
+  /* 评估器卡片内：证据折叠块（Markdown / JSON，默认折叠，收起显示单行预览） */
+  .evd{cursor:pointer;min-width:0;}
+  .evd .evd-h{display:flex;align-items:center;gap:8px;min-width:0;}
+  .evd .evcaret{display:inline-block;color:var(--foreground-muted);font-size:13px;transition:transform .15s;flex-shrink:0;}
+  .evd.open .evcaret{transform:rotate(90deg);}
+  .evd .evd-prev{font-size:11px;color:var(--foreground-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .evd .evd-b{display:none;margin:8px 0 3px 21px;cursor:auto;}
+  .evd.open .evd-b{display:block;}
+  .evd.open .evd-prev{display:none;}
+  .tbl tr:last-child td{border-bottom:none;}
+  .tbl .rowlink{cursor:pointer;}.tbl .rowlink:hover{background:var(--background-secondary);}
+
+  .chip{display:inline-flex;align-items:center;gap:5px;height:20px;padding:0 8px;border-radius:6px;font-size:10.5px;font-weight:600;white-space:nowrap;}
+  .chip .cd{width:6px;height:6px;border-radius:50%;}
+  .chip-a{background:color-mix(in srgb,var(--ga) 12%,transparent);color:var(--ga);}
+  .chip-b{background:color-mix(in srgb,var(--gb) 12%,transparent);color:var(--gb);}
+  .chip-mut{background:var(--background-secondary);color:var(--foreground-secondary);}
+  .chip-warn{background:var(--warning-subtle);color:var(--warning);border:1px solid var(--warning-subtle-border);}
+  .chip-ok{background:var(--success-subtle);color:var(--success);border:1px solid var(--success-subtle-border);}
+  .st{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;}
+  .st .dd{width:7px;height:7px;border-radius:50%;}
+  .st-done{color:var(--success);}.st-done .dd{background:var(--success);}
+  .st-run{color:var(--sky);}.st-run .dd{background:var(--sky);animation:pulse 1.4s infinite;}
+  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.35;}}
+
+  /* stepper */
+  .stepper{display:flex;background:var(--card-bg);border:1px solid var(--card-border);border-radius:12px;overflow:hidden;margin-bottom:16px;}
+  .step{flex:1;display:flex;align-items:center;gap:10px;padding:11px 14px;cursor:pointer;border-right:1px solid var(--border);background:none;border-top:none;border-bottom:none;border-left:none;text-align:left;min-width:0;}
+  .step:last-child{border-right:none;}
+  .step:hover{background:var(--background-secondary);}
+  .step.on{background:var(--primary-subtle);}
+  .step .n{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;font-size:11px;font-weight:800;background:var(--background-secondary);color:var(--foreground-muted);flex-shrink:0;}
+  .step.on .n{background:var(--primary);color:#fff;}
+  .step.done .n{background:var(--success);color:#fff;}
+  .step .tt{min-width:0;display:flex;flex-direction:column;align-items:flex-start;}
+  .step .t1{font-size:12px;font-weight:700;color:var(--foreground);white-space:nowrap;}
+  .step.on .t1{color:var(--primary);}
+  .step .t2{font-size:10px;color:var(--foreground-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .step .opt{font-size:8.5px;font-weight:700;padding:1px 5px;border-radius:4px;background:var(--background-secondary);color:var(--foreground-muted);margin-left:4px;vertical-align:1px;}
+  .wstep{display:none;}.wstep.on{display:block;animation:fade .18s ease;}
+
+  .fieldlbl{font-size:10.5px;font-weight:700;color:var(--foreground-muted);text-transform:uppercase;letter-spacing:.04em;display:block;margin-bottom:7px;}
+  .field input[type=text]{width:100%;height:34px;border:1px solid var(--input-border);border-radius:8px;background:var(--input-bg);padding:0 11px;font-size:13px;color:var(--foreground);outline:none;}
+  .field input:focus{border-color:var(--primary);}
+  .select{display:inline-flex;align-items:center;gap:7px;height:30px;padding:0 11px;border-radius:8px;border:1px solid var(--input-border);background:var(--input-bg);font-size:12.5px;font-weight:600;cursor:pointer;}
+  .select svg{width:14px;height:14px;opacity:.5;}
+  .search{display:inline-flex;align-items:center;gap:7px;height:30px;padding:0 11px;border-radius:8px;border:1px solid var(--input-border);background:var(--input-bg);min-width:200px;color:var(--foreground-muted);font-size:12.5px;}
+  .search svg{width:14px;height:14px;}
+  .seg{display:inline-flex;gap:3px;background:var(--card-bg);border:1px solid var(--border);border-radius:8px;padding:2px;}
+  .seg button{height:26px;padding:0 11px;border-radius:6px;font-size:11.5px;font-weight:600;color:var(--foreground-secondary);cursor:pointer;border:none;background:transparent;}
+  .seg button.on{background:var(--primary);color:#fff;}
+  .fchip{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 12px;border-radius:20px;font-size:11.5px;font-weight:600;cursor:pointer;border:1px solid var(--border);background:var(--card-bg);color:var(--foreground-secondary);}
+  .fchip.on{background:var(--primary-subtle);border-color:var(--primary-subtle-border);color:var(--primary);}
+  .fchip.lock{cursor:help;background:var(--background-secondary);border-style:dashed;color:var(--foreground);font-weight:700;}
+  .fchip .cnt{font-size:9.5px;font-weight:700;padding:0 5px;border-radius:8px;background:var(--background-secondary);}
+  .fchip.on .cnt{background:var(--card-bg);}
+
+  /* 分页 */
+  .pager{display:flex;align-items:center;gap:4px;padding:9px 14px;border-top:1px solid var(--border);font-size:11px;color:var(--foreground-muted);flex-wrap:wrap;}
+  .pager .pg-sp{flex:1;}
+  .pager button{min-width:24px;height:24px;padding:0 7px;border-radius:6px;border:1px solid var(--border);background:var(--card-bg);color:var(--foreground-secondary);font-size:11px;font-weight:600;cursor:pointer;}
+  .pager button.on{background:var(--primary);border-color:var(--primary);color:#fff;}
+  .pager button:disabled{opacity:.4;cursor:not-allowed;}
+  .pager .dots{padding:0 2px;color:var(--foreground-muted);}
+
+  /* 变量维度 / 来源 卡片 */
+  .optcards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:9px;}
+  .optcard{border:1px solid var(--border);border-radius:10px;padding:11px 13px;cursor:pointer;background:var(--card-bg);}
+  .optcard:hover{border-color:var(--border-dark);}
+  .optcard.on{border-color:var(--primary);background:var(--primary-subtle);box-shadow:var(--shadow-primary);}
+  .optcard.dis{opacity:.5;cursor:not-allowed;}
+  .optcard .t{font-size:12.5px;font-weight:700;display:flex;align-items:center;gap:7px;}
+  .optcard.on .t{color:var(--primary);}
+  .optcard .d{font-size:10.5px;color:var(--foreground-muted);margin-top:3px;line-height:1.45;}
+  .optcard .soon{font-size:8.5px;font-weight:700;padding:1px 6px;border-radius:20px;background:var(--background-secondary);color:var(--foreground-muted);margin-left:auto;}
+
+  .grpwrap{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px;}
+  .grpcard{border:1px solid var(--border);border-radius:11px;padding:12px 14px;position:relative;overflow:hidden;background:var(--card-bg);}
+  .grpcard::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--gc);}
+  .grpcard .gh{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:800;}
+  .grpcard .gh .gb{width:20px;height:20px;border-radius:6px;background:var(--gc);color:#fff;display:grid;place-items:center;font-size:10.5px;font-weight:800;}
+  .grpcard .gr{display:flex;align-items:center;gap:8px;margin-top:9px;font-size:11.5px;color:var(--foreground-secondary);}
+  .grpadd{border:1px dashed var(--border-dark);border-radius:11px;display:grid;place-items:center;color:var(--foreground-muted);font-size:12px;font-weight:600;cursor:pointer;min-height:84px;background:transparent;}
+  .grpadd:hover{border-color:var(--primary);color:var(--primary);}
+
+  .gtab{display:inline-flex;gap:3px;background:var(--card-bg);border:1px solid var(--border);border-radius:9px;padding:3px;}
+  .gtab button{height:30px;padding:0 14px;border-radius:7px;font-size:12px;font-weight:700;color:var(--foreground-secondary);cursor:pointer;border:none;background:transparent;display:inline-flex;align-items:center;gap:7px;}
+  .gtab button .cd{width:8px;height:8px;border-radius:50%;}
+  .gtab button.on{background:var(--primary-subtle);color:var(--primary);}
+
+  .chk{width:15px;height:15px;border-radius:4px;border:1.5px solid var(--border-dark);display:inline-grid;place-items:center;flex-shrink:0;cursor:pointer;vertical-align:-3px;}
+  .chk.on{background:var(--primary);border-color:var(--primary);}
+  .chk svg{width:10px;height:10px;color:#fff;display:none;}
+  .chk.on svg{display:block;}
+
+  .code{font-family:var(--mono);font-size:11.5px;background:var(--background-secondary);border:1px solid var(--border);border-radius:9px;padding:11px 13px;line-height:1.7;overflow-x:auto;white-space:pre;color:var(--foreground);}
+  .code .cm{color:var(--foreground-muted);}
+  .code .kw{color:var(--violet);font-weight:600;}
+
+  .progress{height:7px;border-radius:4px;background:var(--background-secondary);overflow:hidden;}
+  .progress i{display:block;height:100%;border-radius:4px;background:var(--sky);}
+  .covbar{height:7px;border-radius:4px;background:var(--background-secondary);overflow:hidden;flex:1;}
+  .covbar i{display:block;height:100%;border-radius:4px;background:var(--warning);}
+
+  /* 评估器卡片 */
+  .evgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:10px;}
+  .evcard{border:1px solid var(--border);border-radius:11px;padding:13px 15px;cursor:pointer;background:var(--card-bg);position:relative;}
+  .evcard:hover{border-color:var(--border-dark);}
+  .evcard.on{border-color:var(--primary);background:var(--primary-subtle);box-shadow:var(--shadow-primary);}
+  .evcard.dis{opacity:.55;cursor:not-allowed;}
+  .evcard .eh{display:flex;align-items:center;gap:8px;}
+  .evcard .en{font-size:13px;font-weight:800;}
+  .evcard.on .en{color:var(--primary);}
+  .evcard .echk{margin-left:auto;}
+  .evcard .ed{font-size:11px;color:var(--foreground-muted);margin-top:5px;line-height:1.5;}
+  .evtags{display:flex;gap:5px;margin-top:8px;flex-wrap:wrap;}
+  .evreq{display:block;margin-top:9px;padding:7px 10px;border-radius:8px;background:var(--warning-subtle);border:1px solid var(--warning-subtle-border);font-size:10.5px;color:var(--warning);font-weight:600;line-height:1.55;}
+  .evreq b{margin:0 2px;}
+  .evreq.ok{background:var(--success-subtle);border-color:var(--success-subtle-border);color:var(--success);}
+  .evreq a{color:inherit;text-decoration:underline;cursor:pointer;}
+
+  .wfoot{position:sticky;bottom:0;z-index:20;margin-top:16px;background:color-mix(in srgb,var(--background) 92%,transparent);backdrop-filter:blur(8px);border:1px solid var(--card-border);border-radius:12px;padding:11px 16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;box-shadow:0 -4px 20px rgba(0,0,0,.06);}
+  .wfoot .sum{font-size:11.5px;color:var(--foreground-secondary);display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+
+  /* 详情页 */
+  .concl{display:flex;gap:11px;padding:13px 16px;border-radius:12px;background:var(--success-subtle);border:1px solid var(--success-subtle-border);font-size:12.5px;color:var(--foreground-secondary);line-height:1.6;margin-bottom:14px;}
+  .concl b{color:var(--foreground);}
+  .cmpgrid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;}
+  .cmpcard{border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--card-bg);position:relative;}
+  .cmpcard::before{content:'';position:absolute;left:0;top:0;right:0;height:3px;background:var(--gc);}
+  .cmpcard .ch{padding:12px 16px 9px;display:flex;align-items:center;gap:9px;}
+  .cmpcard .ch .gb{width:22px;height:22px;border-radius:6px;background:var(--gc);color:#fff;display:grid;place-items:center;font-size:11px;font-weight:800;}
+  .cmpcard .ch .nm{font-size:13.5px;font-weight:800;}
+  .cmpcard .ch .sub{font-size:10.5px;color:var(--foreground-muted);}
+  .cmpcard .bigs{padding:0 16px 11px;display:flex;align-items:baseline;gap:8px;}
+  .cmpcard .bigs .v{font-size:30px;font-weight:800;letter-spacing:-.02em;}
+  .cmpcard .bigs .l{font-size:11px;color:var(--foreground-muted);}
+  .cmpcard .win{font-size:9.5px;font-weight:800;padding:2px 8px;border-radius:20px;background:var(--success-subtle);color:var(--success);border:1px solid var(--success-subtle-border);margin-left:auto;}
+  .mrow{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--border);border-top:1px solid var(--border);}
+  .mcell{background:var(--card-bg);padding:9px 13px;}
+  .mcell .k{font-size:9.5px;color:var(--foreground-muted);font-weight:600;text-transform:uppercase;}
+  .mcell .v{font-size:14.5px;font-weight:800;margin-top:2px;display:flex;align-items:center;gap:5px;}
+  .mcell .v .tri{font-size:10px;}
+  .tri-up{color:var(--success);}.tri-dn{color:var(--error);}
+
+  .evbar{display:grid;grid-template-columns:170px 1fr;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);}
+  .evbar:last-child{border-bottom:none;}
+  .evbar .nm{font-size:12px;font-weight:700;}
+  .evbar .nm small{display:block;font-size:9.5px;font-weight:500;color:var(--foreground-muted);}
+  .dualbar{display:flex;flex-direction:column;gap:4px;}
+  .dualbar .row{display:flex;align-items:center;gap:8px;}
+  .dualbar .bt{height:9px;border-radius:5px;}
+  .dualbar .bv{font-size:10.5px;font-weight:700;font-family:var(--mono);min-width:34px;}
+
+  .vd{display:inline-flex;align-items:center;height:20px;padding:0 9px;border-radius:20px;font-size:10.5px;font-weight:800;}
+  .vd-a{background:color-mix(in srgb,var(--ga) 13%,transparent);color:var(--ga);}
+  .vd-b{background:color-mix(in srgb,var(--gb) 13%,transparent);color:var(--gb);}
+  .vd-t{background:var(--background-secondary);color:var(--foreground-muted);}
+  .sc{font-family:var(--mono);font-weight:800;font-size:12.5px;}
+  .outclip{font-size:11.5px;color:var(--foreground-secondary);line-height:1.5;max-width:290px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;}
+  .inpt{font-weight:600;color:var(--foreground);max-width:250px;}
+
+  textarea.exped{width:100%;min-height:64px;border:1px solid var(--primary);border-radius:8px;background:var(--input-bg);padding:8px 11px;font-size:12px;color:var(--foreground);outline:none;resize:vertical;font-family:inherit;line-height:1.55;}
+
+  /* trace 评测详情（重构版） */
+  .fbox{background:var(--background-secondary);border:1px solid var(--border);border-radius:8px;padding:8px 11px;font-size:11.5px;line-height:1.55;color:var(--foreground-secondary);min-height:58px;}
+  .flbl{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--foreground-muted);margin-bottom:5px;}
+  .dimrow{border:1px solid var(--border);border-radius:10px;padding:10px 14px;margin-bottom:8px;cursor:pointer;}
+  .dimrow:hover{border-color:var(--border-dark);}
+  .dimrow .dr-h{display:flex;align-items:center;gap:11px;}
+  .dimrow .caret{margin-left:2px;color:var(--foreground-muted);transition:transform .15s;font-weight:700;}
+  .dimrow.open .caret{transform:rotate(90deg);}
+  .dimrow .dr-b{display:none;margin-top:9px;padding-top:9px;border-top:1px solid var(--border);font-size:11.5px;color:var(--foreground-secondary);line-height:1.6;}
+  .dimrow.open .dr-b{display:block;}
+  /* case 评测详情抽屉 */
+  .drawer-ov{position:fixed;inset:0;background:var(--overlay);z-index:220;display:flex;justify-content:flex-end;}
+  .drawer{width:800px;max-width:94vw;background:var(--background);height:100%;overflow-y:auto;padding:16px 18px;box-shadow:-18px 0 50px rgba(0,0,0,.3);animation:slidein .18s ease;}
+  @keyframes slidein{from{transform:translateX(30px);opacity:0}to{transform:none;opacity:1}}
+  .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--foreground);color:var(--background);padding:10px 18px;border-radius:10px;font-size:12.5px;font-weight:600;z-index:300;box-shadow:0 10px 30px rgba(0,0,0,.25);opacity:0;transition:opacity .2s;pointer-events:none;}
+  .toast.show{opacity:1;}
+
+  /* 功能说明 */
+  .spec-sec{margin-top:34px;border-top:2px solid var(--foreground);padding-top:26px;}
+  .spec-eyebrow{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.14em;color:var(--primary);margin-bottom:8px;}
+  .spec-sec h2{font-size:20px;font-weight:800;letter-spacing:-.02em;margin:0 0 6px;}
+  .spec-sec>p.sub{font-size:13px;color:var(--foreground-secondary);margin:0 0 22px;max-width:78ch;}
+  .lead{padding:15px 17px;border-radius:12px;background:var(--card-bg);border:1px solid var(--border);border-left:3px solid var(--primary);margin-bottom:22px;font-size:13px;color:var(--foreground-secondary);line-height:1.6;}
+  .lead b{color:var(--foreground);}
+  .sub-h{font-size:14.5px;font-weight:720;margin:28px 0 11px;display:flex;align-items:center;gap:9px;}
+  .sub-h .k{font-family:var(--mono);font-size:11px;font-weight:700;color:#fff;background:var(--primary);padding:2px 7px;border-radius:5px;letter-spacing:0;}
+  .spec{width:100%;border-collapse:collapse;font-size:12.5px;background:var(--card-bg);}
+  .spec-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:12px;}
+  .spec th{text-align:left;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--foreground-muted);padding:11px 15px;background:var(--background-secondary);border-bottom:1px solid var(--border);white-space:nowrap;}
+  .spec td{padding:12px 15px;border-bottom:1px solid var(--border);color:var(--foreground-secondary);vertical-align:top;line-height:1.55;}
+  .spec tr:last-child td{border-bottom:none;}
+  .spec td b{color:var(--foreground);font-weight:650;}
+  .spec .feat{color:var(--foreground);font-weight:700;white-space:nowrap;}
+  .c{font-family:var(--mono);font-size:11.5px;background:var(--background-secondary);border:1px solid var(--border);border-radius:5px;padding:1px 6px;color:var(--foreground);white-space:nowrap;}
+  .note{display:flex;gap:10px;padding:13px 16px;border-radius:10px;background:var(--warning-subtle);border:1px solid var(--warning-subtle-border);font-size:12.5px;color:var(--warning);line-height:1.55;margin-top:14px;}
+  .note b{color:var(--foreground);}
+
+  @media (max-width:960px){.sidebar{display:none;}.cmpgrid{grid-template-columns:1fr;}.mrow{grid-template-columns:repeat(2,1fr);}}
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;}}
+</style>
+
+<div class="root" data-theme="light" id="root">
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand"><span class="brand-m"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg></span><div><div class="brand-n">Agent Insight</div><div class="brand-s">Agent 评估与观测</div></div></div>
+    <nav class="nav">
+      <div class="nav-label">Skills 能力</div>
+      <div class="nav-sub">
+        <button class="nav-item"><span class="nav-dot"></span>Skills Hub</button>
+        <button class="nav-item"><span class="nav-dot"></span>Skills 生成</button>
+        <button class="nav-item"><span class="nav-dot"></span>Skills 评测</button>
+        <button class="nav-item"><span class="nav-dot"></span>Skills 优化</button>
+      </div>
+      <div class="nav-label">评测中心</div>
+      <div class="nav-sub">
+        <button class="nav-item active" data-page="list" onclick="switchPage('list')"><span class="nav-dot"></span>实验<span class="nav-badge">NEW</span></button>
+        <button class="nav-item"><span class="nav-dot"></span>评测数据集</button>
+        <button class="nav-item" data-page="evaluators" onclick="switchPage('evaluators')"><span class="nav-dot"></span>评估器<span class="nav-badge">NEW</span></button>
+      </div>
+      <div class="nav-label">运行观测</div>
+      <div class="nav-sub">
+        <button class="nav-item"><span class="nav-dot"></span>链路追踪</button>
+        <button class="nav-item"><span class="nav-dot"></span>版本分析</button>
+        <button class="nav-item"><span class="nav-dot"></span>智能诊断</button>
+        <button class="nav-item"><span class="nav-dot"></span>可靠性与性能</button>
+        <button class="nav-item"><span class="nav-dot"></span>推理 Infra</button>
+      </div>
+      <div class="nav-label">Agent Workspace</div>
+      <div class="nav-sub">
+        <button class="nav-item"><span class="nav-dot"></span>仪表盘</button>
+        <button class="nav-item"><span class="nav-dot"></span>Agent 管理</button>
+      </div>
+      <div class="nav-label">配置</div>
+      <div class="nav-sub">
+        <button class="nav-item"><span class="nav-dot"></span>模型注册</button>
+        <button class="nav-item"><span class="nav-dot"></span>版本管理</button>
+        <button class="nav-item"><span class="nav-dot"></span>安装指导</button>
+      </div>
+    </nav>
+  </aside>
+
+  <div class="main">
+    <div class="topbar">
+      <span class="crumb" id="crumb">评测中心 / <b>实验</b></span>
+      <span class="top-sp"></span>
+      <div class="icon-btn" id="themeBtn" title="切换主题"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></div>
+      <div class="avatar">GY</div>
+    </div>
+
+    <div class="content">
+
+      <!-- ═══════════ 实验列表 ═══════════ -->
+      <div class="page on" id="page-list">
+        <div class="pagehead">
+          <h1>实验</h1>
+          <span class="top-sp"></span>
+          <button class="btn btn-primary" onclick="startNew()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 5v14M5 12h14"/></svg>新建实验</button>
+        </div>
+        <div class="demo-hint">🖱 <span><b>本页可交互：</b>点击「新建实验」进入四步向导；点第一行实验查看<b>对比详情页</b>；点第二行「进行中」实验直达向导第 ② 步；点最后一行单组实验查看<b>单组详情页</b>；右上角可切换深浅主题。</span></div>
+
+        <div class="panel" style="overflow:hidden">
+          <div class="panel-h"><span class="panel-t">实验列表</span><span class="panel-hint">实验 = 同一批任务 × 一个变量 × 多组 Trace 对比；也支持单组纯评测</span></div>
+          <div style="overflow-x:auto"><table class="tbl" style="min-width:900px">
+            <thead><tr><th>实验</th><th>待评测 Agent</th><th>实验类型</th><th>分组</th><th>Case</th><th>评估器</th><th>状态</th><th>创建</th></tr></thead>
+            <tbody>
+              <tr class="rowlink" onclick="switchPage('detail')">
+                <td class="inpt">GLM-4.7 vs Qwen3-Max · 编码能力对比</td><td>code-assist</td>
+                <td><span class="chip chip-mut">LLM 对比实验</span></td>
+                <td><span class="chip chip-a"><span class="cd" style="background:var(--ga)"></span>GLM-4.7</span> <span class="chip chip-b"><span class="cd" style="background:var(--gb)"></span>Qwen3-Max</span></td>
+                <td class="mono">50</td><td class="mono">4</td>
+                <td><span class="st st-done"><span class="dd"></span>已完成</span></td>
+                <td class="mono">07-14</td>
+              </tr>
+              <tr class="rowlink" onclick="startNew();gotoStep(2)">
+                <td class="inpt">订单助手 skill v2 → v3 灰度前验证</td><td>order-bot</td>
+                <td><span class="chip chip-mut">Skill 版本对比实验</span></td>
+                <td><span class="chip chip-a"><span class="cd" style="background:var(--ga)"></span>skill v2</span> <span class="chip chip-b"><span class="cd" style="background:var(--gb)"></span>skill v3</span></td>
+                <td class="mono">50</td><td class="mono">3</td>
+                <td><span class="st st-run"><span class="dd"></span>进行中</span></td>
+                <td class="mono">07-15</td>
+              </tr>
+              <tr class="rowlink" onclick="switchPage('detail')">
+                <td class="inpt">LangGraph 迁移 AgentScope 验证</td><td>cs-agent</td>
+                <td><span class="chip chip-mut">Agent 框架对比实验</span></td>
+                <td><span class="chip chip-a"><span class="cd" style="background:var(--ga)"></span>LangGraph</span> <span class="chip chip-b"><span class="cd" style="background:var(--gb)"></span>AgentScope</span></td>
+                <td class="mono">40</td><td class="mono">3</td>
+                <td><span class="st st-done"><span class="dd"></span>已完成</span></td>
+                <td class="mono">07-11</td>
+              </tr>
+              <tr class="rowlink" onclick="switchPage('detail-single')" title="单组实验 = 原「评测执行」的退化形态：只圈一批 trace 打分，不做对比">
+                <td class="inpt">客服 agent 周常质量评测</td><td>cs-agent</td>
+                <td><span class="chip chip-mut">单组实验</span></td>
+                <td><span class="chip chip-a"><span class="cd" style="background:var(--ga)"></span>本周线上 trace</span></td>
+                <td class="mono">132</td><td class="mono">2</td>
+                <td><span class="st st-done"><span class="dd"></span>已完成</span></td>
+                <td class="mono">07-13</td>
+              </tr>
+            </tbody>
+          </table></div>
+          <div class="pager">共 23 个实验 · 每页 10 个<span class="pg-sp"></span>
+            <button disabled>‹</button><button class="on" onclick="pgClick(this)">1</button><button onclick="pgClick(this)">2</button><button onclick="pgClick(this)">3</button><button onclick="toast('示意：翻页')">›</button>
+          </div>
+        </div>
+
+        <!-- ═══ 功能说明 ═══ -->
+        <section class="spec-sec">
+          <div class="spec-eyebrow">交付给开发 · 不含代码实现</div>
+          <h2>功能说明 — 评测「实验」化</h2>
+          <p class="sub">把原「评测执行」升级为<b>实验</b>：固定一批任务、只改一个变量（LLM / Skill / Prompt / Agent 版本）、每组收一批 trace，统一评估后做组间对比。三个页面：<b>实验列表</b>、<b>新建实验（四步向导）</b>、<b>实验对比详情</b>。</p>
+          <div class="lead"><b>核心解题：数据集不再是门槛。</b> 发起评测不要求先建数据集——第 ③ 步「预期答案」整体可跳过；用户若愿意标注，可预填 trace 实际输出降低成本，标注结果可一键<b>沉淀为数据集</b>（数据集从前置门槛变为实验副产品，同时充当组间对比的 input 对齐键）。</div>
+
+          <div class="sub-h"><span class="k">1</span>概念模型</div>
+          <div class="spec-wrap"><table class="spec">
+            <thead><tr><th style="width:110px">概念</th><th>含义</th><th>规则</th></tr></thead>
+            <tbody>
+              <tr><td class="feat">实验</td><td>一次评测活动：评测 Agent + 变量 + 分组 + 评估器。</td><td>变量可为「无」→ 退化为单组纯评测（覆盖原评测执行全部场景，含自动观测）。</td></tr>
+              <tr><td class="feat">组</td><td>变量的一个取值（如 GLM-4.7 组），对应一批 trace。</td><td>2~4 组；组内 trace 按元数据规则/实验标识自动关联，用户选择的是 input。</td></tr>
+              <tr><td class="feat">配对</td><td>组间自动对齐成 case，判定三条件：<b>① input 相同/相似 ② 双方满足本组变量取值 ③ 变量之外的关键条件一致</b>（agent / skill / prompt 版本，按 trace metadata 自动校验）。</td><td>①不满足 → 「未配对」；③不满足 → 「<b>不可比</b>」（input 同但条件不受控，看到的差异分不清归因）。两者均单列展示、不参与任何组间统计，可导出清单补跑/受控重跑后增量并入。</td></tr>
+              <tr><td class="feat">预期答案</td><td>case 级参考标准（expectedOutput），可选。</td><td>决定依赖型评估器的可用性与覆盖范围。</td></tr>
+            </tbody>
+          </table></div>
+
+          <div class="sub-h"><span class="k">2</span>四步向导行为</div>
+          <div class="spec-wrap"><table class="spec">
+            <thead><tr><th style="width:150px">步骤</th><th>行为</th><th>关键规则</th></tr></thead>
+            <tbody>
+              <tr><td class="feat">① 实验设计</td><td>选评测 Agent、变量维度、定义分组。</td><td><b>分组可选取值由变量维度决定</b>（切换 LLM → 模型列表；切换 Skill 版本 → 该 Agent 的 skill 版本；Prompt 同理）；选「无变量」时隐藏分组，② 变为直接圈选 trace；stepper 任意可回跳，改动即时反映到后续步骤。</td></tr>
+              <tr><td class="feat">② 关联 Trace</td><td>对比模式下以 <b>input 为中心</b>：一行一个任务输入，各组一列显示该取值下的 trace 齐备情况（有 / 缺失 / 多条·取最新可改选 / 条件不受控），勾选要纳入实验的 input——<b>选择对象是 case，不是 trace</b>。</td><td>各组 trace 由元数据规则 / 实验标识<b>自动关联</b>（见表 3），无需手动圈选；缺失侧标「待补跑」，自动收集到达后<b>自动补评</b>；不可比行禁用勾选；单组模式退化为直接圈选 trace 列表；进行中实验可随时回本步看收集进度。</td></tr>
+              <tr><td class="feat">③ 预期答案（可选）</td><td>为已配对 case 补 expectedOutput：预填实际输出、支持从数据集导入、可存为数据集。</td><td><b>整步可跳过</b>，跳过只影响 ④ 中依赖型评估器的覆盖范围，不阻断流程。</td></tr>
+              <tr><td class="feat">④ 评估器 → 开始</td><td>按数据具备情况门控评估器，展示实验概要后启动。</td><td>依赖预期答案的评估器：覆盖为 0 → 禁用+说明+回跳链接；部分覆盖 → 可选，<b>仅对具备的子集评测</b>并在结果页标注覆盖率（如 12/50）。</td></tr>
+            </tbody>
+          </table></div>
+
+          <div class="sub-h"><span class="k">3</span>各组 Trace 的三种收集方式</div>
+          <div class="spec-wrap"><table class="spec">
+            <thead><tr><th style="width:140px">来源</th><th>机制</th><th style="width:90px">本期范围</th></tr></thead>
+            <tbody>
+              <tr><td class="feat">存量自动匹配</td><td>实验创建时按各组变量取值的元数据规则自动关联历史 trace——用户不逐条圈选 trace，<b>选择对象是 input</b>；同 input 多条默认取最新（可改选）。单组模式仍为手动圈选 trace。</td><td><b>本期</b></td></tr>
+              <tr><td class="feat">自动收集新 trace</td><td>用户切好变量配置后照常运行 agent，新 trace 自动归组，页面实时显示「已收 18/50 · 有效配对 16」。<b>归组依据自动判定</b>：变量取值可从 trace 元数据读出时（如切换 LLM → 模型字段）按元数据规则归组、<b>零代码改动</b>；元数据读不到（Prompt / 编排版本，Skill 版本视框架而定）或需隔离线上灰度流量时，注入实验标识（环境变量或 SDK 打标）作为归组依据。</td><td><b>本期</b></td></tr>
+              <tr><td class="feat">平台触发执行</td><td>平台代跑（内置基准 / 已注册可调用 agent）。</td><td>规划中，入口置灰</td></tr>
+            </tbody>
+          </table></div>
+
+          <div class="sub-h"><span class="k">4</span>对比详情页</div>
+          <div class="spec-wrap"><table class="spec">
+            <thead><tr><th style="width:130px">模块</th><th>内容</th></tr></thead>
+            <tbody>
+              <tr><td class="feat">结论横幅</td><td>一句话结论：综合得分差 + 代价差（如「A 组高 6.3 分，B 组成本低 26%」），由汇总数据直接算出，不调用大模型。</td></tr>
+              <tr><td class="feat">组汇总卡</td><td>每组：综合分、成功率、成本、时长、步数——后四项来自 trace 天然指标，<b>无评估器也能对比</b>；优势项带 ▲ 标绿。</td></tr>
+              <tr><td class="feat">评估器分解</td><td>逐评估器双色条形对比；部分覆盖的评估器标注「覆盖 12/50」。</td></tr>
+              <tr><td class="feat">逐 case 配对表</td><td>同一 input 下 A/B 输出摘要 + 得分 + 胜负徽章；按 全部/A 胜/B 胜/平/未配对 筛选；<b>得分列可切换评估维度</b>（综合 / 结果类·任务完成度 / 轨迹类·轨迹质量），承接原"结果评测 vs 轨迹评测"二分，胜负徽章固定按综合分；行点击打开<b>case 评测详情抽屉</b>。</td></tr>
+              <tr><td class="feat">case 评测详情抽屉</td><td><b>原「结果评测 / 轨迹评测」详情的完整保留</b>：A/B 两侧并排，各含 ① 输出摘要 ② 结果评测——任务完成度得分 + Judge 理由 ③ 轨迹评测——轨迹质量得分 + 四子维度（完整性/工具选择/冗余度/归因）+ Judge 理由 ④「查看完整 trace 评测详情」深链到 <span class="c">/eval/trajectory/[id]</span>——该页同步重构（见表 5），链路观测步骤树页不动。单组实验详情页即原「评测执行」批次页形态（汇总卡 + trace 评测列表 + 点行进详情），完全沿用。</td></tr>
+              <tr><td class="feat">可比性规则</td><td><b>组间一切对比（结论横幅 / 组汇总卡 / 评估器分解 / 胜负统计）仅基于"可比配对"交集计算</b>——可比 = input 相同 + 变量之外条件受控。单边跑过的 case 没有对照，若计入组均分会把"任务集差异"错当"能力差异"（选择偏差）；input 相同但条件不受控的标「不可比」，计入会把"混杂变量的贡献"错当"变量差异"（归因污染）。两者单列展示自身得分仅供参考；可导出清单补跑（未配对）或以受控条件重跑（不可比），新 trace 配对成功后<b>增量补评并自动并入统计</b>；可比率过低（建议阈值 70%）时结论横幅降级提示"对比可信度有限"。</td></tr>
+            </tbody>
+          </table></div>
+
+          <div class="sub-h"><span class="k">5</span>Trace 评测详情页重构（/eval/trajectory/[id] · 视觉降噪）</div>
+          <div class="spec-wrap"><table class="spec">
+            <thead><tr><th style="width:230px">现状（TrajectoryDetailView）</th><th>重构后（见本高保真「Trace 评测详情」页）</th></tr></thead>
+            <tbody>
+              <tr><td>头部卡与综合结论卡各一处 135° 浅色<b>渐变</b>（米色 / 绿色）+ 彩色边框</td><td>中性 panel + 3px 主色左条（与实验页组卡同款）；综合分/结果分/轨迹分一行横排，评级只用小 chip。</td></tr>
+              <tr><td>「结果评测 / 轨迹评测」<b>tab 二选一</b>（绿色 3px 下划线）</td><td><b>并列面板</b>，一屏尽览，与实验详情页的信息组织方式一致。</td></tr>
+              <tr><td>关键观点 = <b>彩色卡片堆</b>：整卡按覆盖状态染色（danger/warning/success 浅底）+ 多层左色条块</td><td><b>表格</b>：关键观点 / 覆盖状态 chip / 得分 / 判断依据；问题定位（失败阶段 + 相关步骤 + Skill 归因）收为表格下一行说明，颜色仅出现在 chip 与分数上。</td></tr>
+              <tr><td>维度卡自绘 3px 细进度条 + 独立展开样式；「归因」维度说明混在注释里</td><td>维度行与实验详情页「评估器分解」<b>同款条形</b>；统一 dimrow 展开交互（› 旋转）；归因不计分以脚注说明。</td></tr>
+              <tr><td>Skill 关键动作用独立 <span class="c">.efv-*</span> CSS 体系，与页面其余内联 COLORS <b>两套并存</b></td><td>统一为平台 panel / chip / tbl 组件体系，删除第二套样式系统。</td></tr>
+              <tr><td>底部<b>整宽紫色大按钮</b>跳转链路观测</td><td>常规 btn-outline 移至页头右侧（「前往链路观测 · 执行步骤树 →」）。</td></tr>
+              <tr><td colspan="2"><b>信息零删减</b>：任务输入 / Ground Truth / 实际输出、关键观点覆盖判定、问题定位（失败阶段+步骤+Skill 归因）、judge 执行路径分析原文、三维度得分与 findings、评测中/失败/未开启等状态文案、链路观测跳转——全部保留，仅换呈现方式。分数颜色分档（绿≥80 / 黄≥50 / 红<50）保留在分数徽章上。</td></tr>
+            </tbody>
+          </table></div>
+
+          <div class="note">⚠ <span><b>兼容与迁移：</b>现有「评测执行」批次自动迁移为「无变量·单组」实验；「自动观测」保留为 ② 步中「自动收集」的一个开关（持续接收新 trace）。评估器需新增 <span class="c">requires</span> 声明（如 <span class="c">expectedOutput</span>）以支撑 ④ 步门控——这是唯一的模型层改动。</span></div>
+        </section>
+      </div>
+
+      <!-- ═══════════ 新建实验（四步向导） ═══════════ -->
+      <div class="page" id="page-new">
+        <div class="pagehead">
+          <button class="btn btn-ghost btn-sm" onclick="switchPage('list')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="m15 18-6-6 6-6"/></svg>返回</button>
+          <h1>新建实验</h1>
+          <span class="chip chip-mut mono">exp_8f3a2c</span>
+        </div>
+        <div class="demo-hint">🖱 <span><b>本页可交互：</b>stepper 四步任意点击回跳；① 中切换变量维度——<b>分组可选取值随之变化</b>（试试切到「切换 Skill 版本」，再进 ② 看组页签与锁定筛选同步变为 skill v2/v3；选「无变量·单组」看退化形态）；② 是<b>以 input 为中心的齐备度矩阵</b>——一行一个 input，A/B 两列显示各组取值下的 trace（第 2 行有「2 条·取最新」示例，⚠ 不可比 行悬停看原因）；勾选 input、用「全部/两组齐备/不可比」筛选；③ 中点「标注」展开行内编辑（预填实际输出）；④ 中可按标签多选筛选评估器，点「开始实验」进入详情页。</span></div>
+
+        <!-- stepper -->
+        <div class="stepper" id="stepper">
+          <button class="step on" onclick="gotoStep(1)"><span class="n">1</span><span class="tt"><span class="t1">实验设计</span><span class="t2" id="sm1">code-assist · 切换 LLM · 2 组</span></span></button>
+          <button class="step" onclick="gotoStep(2)"><span class="n">2</span><span class="tt"><span class="t1">关联 Trace</span><span class="t2" id="sm2">已选 3 个 input</span></span></button>
+          <button class="step" onclick="gotoStep(3)"><span class="n">3</span><span class="tt"><span class="t1">预期答案<span class="opt">可选</span></span><span class="t2" id="sm3">已标注 12/50 · 可跳过</span></span></button>
+          <button class="step" onclick="gotoStep(4)"><span class="n">4</span><span class="tt"><span class="t1">评估器</span><span class="t2" id="sm4">已选 1 个</span></span></button>
+        </div>
+
+        <!-- ── 步骤 1 实验设计 ── -->
+        <div class="wstep on" id="wstep-1">
+          <div class="panel"><div class="panel-b">
+            <div style="display:grid;grid-template-columns:minmax(260px,320px) 1fr;gap:14px;margin-bottom:16px">
+              <div class="field"><label class="fieldlbl">待评测 Agent</label><span class="select" style="width:100%;height:34px;justify-content:space-between;font-size:13px;border-color:var(--primary-subtle-border)"><span style="display:inline-flex;align-items:center;gap:7px">🤖 <b>code-assist</b></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></span><div style="font-size:10px;color:var(--foreground-muted);margin-top:5px">实验所评测的对象——变量、分组与 trace 圈选都作用于它</div></div>
+              <div class="field"><label class="fieldlbl">实验名称</label><input type="text" value="GLM-4.7 vs Qwen3-Max · 编码能力对比"></div>
+            </div>
+            <label class="fieldlbl">变量维度 — 本次实验只改什么？</label>
+            <div class="optcards" id="varCards">
+              <div class="optcard" onclick="selVar(this,'none')"><div class="t">🎯 无变量 · 单组评测</div><div class="d">只圈一批 trace 打分，不做对比（原「评测执行」）</div></div>
+              <div class="optcard on" onclick="selVar(this,'llm')"><div class="t">🔁 切换 LLM</div><div class="d">同一 agent 换底座模型，对比模型能力差异</div></div>
+              <div class="optcard" onclick="selVar(this,'skill')"><div class="t">🧩 切换 Skill 版本</div><div class="d">skill 升级/裁剪前后对比</div></div>
+              <div class="optcard" onclick="selVar(this,'framework')"><div class="t">⚙️ 切换 Agent 框架</div><div class="d">同一批任务在不同框架/编排实现间对比</div></div>
+            </div>
+            <div class="only-multi" id="grpSec">
+              <label class="fieldlbl" style="margin-top:18px">分组 — 可选取值随变量维度变化；除变量外任务输入保持一致，组间将按 input 自动配对</label>
+              <div class="grpwrap">
+                <div class="grpcard" style="--gc:var(--ga)">
+                  <div class="gh"><span class="gb">A</span>对照组</div>
+                  <div class="gr"><span id="gvalLblA">模型</span>：<span class="select" style="height:26px;font-size:11.5px"><span id="gvalA">GLM-4.7</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></span></div>
+                  <div class="gr" style="color:var(--foreground-muted);font-size:10.5px">现网默认配置，作为基线</div>
+                </div>
+                <div class="grpcard" style="--gc:var(--gb)">
+                  <div class="gh"><span class="gb">B</span>实验组</div>
+                  <div class="gr"><span id="gvalLblB">模型</span>：<span class="select" style="height:26px;font-size:11.5px"><span id="gvalB">Qwen3-Max</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></span></div>
+                  <div class="gr" style="color:var(--foreground-muted);font-size:10.5px">候选切换目标</div>
+                </div>
+                <button class="grpadd">＋ 添加分组（最多 4 组）</button>
+              </div>
+            </div>
+            <div class="only-single" id="singleSec" style="display:none">
+              <div style="margin-top:16px;padding:12px 15px;border-radius:10px;background:var(--background-secondary);font-size:12px;color:var(--foreground-secondary)">🎯 单组模式：跳过分组，下一步直接<b style="color:var(--foreground)">筛选并圈选一批 trace</b> 打分——与原「评测执行」体验一致，也支持开启<b style="color:var(--foreground)">自动观测</b>持续评测新 trace。</div>
+            </div>
+          </div></div>
+          <div class="wfoot"><span class="top-sp"></span><button class="btn btn-primary" onclick="gotoStep(2)">下一步：关联 Trace →</button></div>
+        </div>
+
+        <!-- ── 步骤 2 关联 Trace ── -->
+        <div class="wstep" id="wstep-2">
+          <!-- 对比模式：以 input 为中心的齐备度矩阵 -->
+          <div id="w2-multi">
+            <div class="grpwrap" style="margin-bottom:12px">
+              <div class="grpcard" style="--gc:var(--ga)">
+                <div class="gh"><span class="gb">A</span>对照组 · <span id="cardAV">GLM-4.7</span></div>
+              </div>
+              <div class="grpcard" style="--gc:var(--gb)">
+                <div class="gh"><span class="gb">B</span>实验组 · <span id="cardBV">Qwen3-Max</span></div>
+              </div>
+            </div>
+
+            <div class="panel" style="overflow:hidden">
+              <div class="panel-h">
+                <span class="panel-t">选择要实验的 input</span>
+                <span class="search" style="min-width:170px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>搜索 input…</span>
+                <span class="seg"><button>近1天</button><button class="on">近7天</button><button>近30天</button></span>
+                <span class="grow"></span>
+                <span class="fchip on" onclick="filtInputs(this,'all')">全部 <span class="cnt">50</span></span>
+                <span class="fchip" onclick="filtInputs(this,'ok')">两组齐备 <span class="cnt">16</span></span>
+                <span class="fchip" onclick="filtInputs(this,'inc')">不可比 <span class="cnt">34</span></span>
+              </div>
+              <div style="padding:7px 16px;border-bottom:1px solid var(--border);font-size:10.5px;color:var(--foreground-muted)">对比实验以 <b style="color:var(--foreground)">input 为单位</b>：一行一个任务输入，A / B 两列显示各组取值下是否已有 trace（<b style="color:var(--foreground)">同 input 多条时默认取最新，可点开改选</b>）。勾选要纳入实验的 input；<b style="color:var(--warning)">不可比</b> = 缺任一组 trace 或变量之外条件不一致，不可勾选，<b style="color:var(--foreground)">悬停查看原因</b>。</div>
+              <div style="overflow-x:auto"><table class="tbl" style="min-width:860px"><thead><tr><th style="width:36px"></th><th>任务输入（input）</th><th id="thA">A · GLM-4.7</th><th id="thB">B · Qwen3-Max</th><th style="width:150px">可比状态</th></tr></thead><tbody id="inputRows"></tbody></table></div>
+              <div class="pager">共 50 个 input · 每页 8 条<span class="pg-sp"></span>
+                <button disabled>‹</button><button class="on" onclick="pgClick(this)">1</button><button onclick="pgClick(this)">2</button><button onclick="pgClick(this)">3</button><span class="dots">…</span><button onclick="pgClick(this)">7</button><button onclick="toast('示意：翻页')">›</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 单组模式：退化为直接圈选 trace -->
+          <div id="w2-single" style="display:none">
+            <div class="panel" style="overflow:hidden">
+              <div class="panel-h">
+                <span class="panel-t">筛选并圈选 trace</span>
+                <span class="fchip lock" title="待评测 Agent 已在第 ① 步选定，此处仅展示、不可更改；要换 Agent 请回第 ① 步">🔒 Agent：code-assist</span>
+                <span class="search" style="min-width:150px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>搜索任务输入…</span>
+                <span class="seg"><button>近1天</button><button class="on">近7天</button><button>近30天</button></span>
+                <span class="fchip on">状态：成功</span>
+                <span class="grow"></span>
+                <span class="panel-hint">已选 <b id="selCnt" style="color:var(--primary)">4</b> / 8 条（示意 132）</span>
+                <button class="btn btn-outline btn-sm" onclick="checkAll()">全选本页</button>
+              </div>
+              <div style="overflow-x:auto"><table class="tbl" style="min-width:760px"><thead><tr><th style="width:36px"></th><th>Trace ID</th><th>任务输入</th><th>状态</th><th>耗时</th><th>Token</th><th>时间</th></tr></thead><tbody id="traceRows"></tbody></table></div>
+              <div class="pager">共 132 条 trace · 每页 8 条<span class="pg-sp"></span>
+                <button disabled>‹</button><button class="on" onclick="pgClick(this)">1</button><button onclick="pgClick(this)">2</button><button onclick="pgClick(this)">3</button><span class="dots">…</span><button onclick="pgClick(this)">17</button><button onclick="toast('示意：翻页')">›</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="wfoot"><span class="top-sp"></span><button class="btn btn-ghost" onclick="gotoStep(1)">← 上一步</button><button class="btn btn-primary" onclick="gotoStep(3)">下一步：预期答案 →</button></div>
+        </div>
+
+        <!-- ── 步骤 3 预期答案（可选） ── -->
+        <div class="wstep" id="wstep-3">
+          <div style="display:flex;gap:10px;padding:11px 15px;border-radius:10px;background:var(--background-secondary);font-size:12px;color:var(--foreground-secondary);margin-bottom:13px;line-height:1.6">💡 <span><b style="color:var(--foreground)">这一步完全可以跳过</b>，不影响继续实验——只是「精确匹配」「语义相似度」这类依赖标准答案的评估器将只覆盖已标注的 case。标注时可直接<b style="color:var(--foreground)">采用 trace 的实际输出</b>作为预期答案再微调，成本很低；标注成果可一键<b style="color:var(--foreground)">存为数据集</b>复用到下次实验。</span></div>
+          <div class="panel" style="overflow:hidden">
+            <div class="panel-h">
+              <span class="panel-t">为 case 补充预期答案</span>
+              <span style="display:flex;align-items:center;gap:9px;min-width:220px"><span class="covbar"><i id="covFill" style="width:24%"></i></span><span class="panel-hint">已标注 <b id="covNum" style="color:var(--warning)">12</b>/50</span></span>
+              <span class="grow"></span>
+              <button class="btn btn-outline btn-sm">📥 从数据集导入匹配</button>
+              <button class="btn btn-outline btn-sm" onclick="toast('已存为数据集「coding-golden-v1」，可在评测数据集页管理')">💾 存为数据集</button>
+            </div>
+            <div style="overflow-x:auto"><table class="tbl" style="min-width:820px">
+              <thead><tr><th>任务输入</th><th>实际输出（A 组）</th><th>预期答案</th><th style="width:120px">状态 / 操作</th></tr></thead>
+              <tbody>
+                <tr>
+                  <td class="inpt">修复 date-utils 时区转换在夏令时边界的 bug</td>
+                  <td><div class="outclip">定位到 offset 计算未考虑 DST，改为 tzdata 查表并补充回归用例…</div></td>
+                  <td><div class="outclip">应识别 DST 根因并用时区库修复，禁止硬编码偏移；需含回归测试</div></td>
+                  <td><span class="chip chip-ok">已标注</span></td>
+                </tr>
+                <tr id="annRow">
+                  <td class="inpt">为 /api/orders 增加分页参数校验</td>
+                  <td><div class="outclip" id="annActual">新增 zod schema 校验 page/pageSize，越界返回 400 与错误详情</div></td>
+                  <td id="annCell"><span style="color:var(--foreground-muted);font-size:11.5px">未标注</span></td>
+                  <td id="annOps"><button class="btn btn-outline btn-sm" onclick="openAnn()">✏️ 标注</button></td>
+                </tr>
+                <tr>
+                  <td class="inpt">CI 中 flaky 的 e2e 用例排查并修复</td>
+                  <td><div class="outclip">发现等待条件竞态，改用显式 waitFor 并去除固定 sleep</div></td>
+                  <td><span style="color:var(--foreground-muted);font-size:11.5px">未标注</span></td>
+                  <td><button class="btn btn-outline btn-sm">✏️ 标注</button></td>
+                </tr>
+                <tr>
+                  <td class="inpt">将 utils 包的 lodash 依赖替换为原生实现</td>
+                  <td><div class="outclip">替换 12 处调用，bundle 减少 41KB，测试全绿</div></td>
+                  <td><div class="outclip">全部调用点替换且不引入行为差异；bundle 应减小；测试通过</div></td>
+                  <td><span class="chip chip-ok">已标注</span></td>
+                </tr>
+              </tbody>
+            </table></div>
+            <div class="pager">共 50 个 case · 每页 8 条<span class="pg-sp"></span>
+              <button disabled>‹</button><button class="on" onclick="pgClick(this)">1</button><button onclick="pgClick(this)">2</button><button onclick="pgClick(this)">3</button><span class="dots">…</span><button onclick="pgClick(this)">7</button><button onclick="toast('示意：翻页')">›</button>
+            </div>
+          </div>
+          <div class="wfoot"><span class="top-sp"></span><button class="btn btn-ghost" onclick="gotoStep(2)">← 上一步</button><button class="btn btn-primary" onclick="gotoStep(4)">下一步：评估器 →</button></div>
+        </div>
+
+        <!-- ── 步骤 4 评估器 ── -->
+        <div class="wstep" id="wstep-4">
+          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:11px">
+            <span class="fieldlbl" style="margin:0">按标签筛选</span>
+            <span class="fchip" onclick="evFilt(this,'LLM Judge')">LLM Judge</span>
+            <span class="fchip" onclick="evFilt(this,'代码')">代码</span>
+            <span class="fchip" onclick="evFilt(this,'看结果')">看结果</span>
+            <span class="fchip" onclick="evFilt(this,'看轨迹')">看轨迹</span>
+            <span class="fchip" onclick="evFilt(this,'依赖参考数据')">依赖参考数据</span>
+            <span style="font-size:10.5px;color:var(--foreground-muted)">可多选</span>
+          </div>
+          <div class="evgrid" id="evGrid">
+            <div class="evcard dis" data-tags="LLM Judge,看结果,依赖参考数据" title="依赖参考答案：当前已选 50 个 case 中仅 12 个已标注参考答案，不满足要求，暂不可选——回第 ③ 步补齐标注后开放" onclick="toggleEv(this)">
+              <div class="eh"><span class="en">Agent 任务完成度</span><span class="chk echk"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2"><path d="m5 13 4 4L19 7"/></svg></span></div>
+              <div class="ed">LLM Judge 对照参考答案判断最终结果是否达成用户目标，输出 0-100 分与理由。</div>
+              <div class="evtags"><span class="chip chip-mut">LLM Judge</span><span class="chip chip-mut">看结果</span><span class="chip chip-mut">依赖参考数据</span></div>
+            </div>
+            <div class="evcard on" data-tags="LLM Judge,看轨迹" onclick="toggleEv(this)">
+              <div class="eh"><span class="en">Agent 轨迹质量</span><span class="chk on echk"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2"><path d="m5 13 4 4L19 7"/></svg></span></div>
+              <div class="ed">LLM Judge 评执行过程：完整性 / 工具选择 / 冗余度 / 归因。</div>
+              <div class="evtags"><span class="chip chip-mut">LLM Judge</span><span class="chip chip-mut">看轨迹</span></div>
+            </div>
+          </div>
+          <div id="evEmpty" style="display:none;margin-top:10px;padding:26px;text-align:center;color:var(--foreground-muted);font-size:12px;border:1px dashed var(--border-dark);border-radius:11px">没有匹配所选标签的评估器</div>
+          <div class="wfoot">
+            <span class="top-sp"></span>
+            <button class="btn btn-ghost" onclick="gotoStep(3)">← 上一步</button>
+            <button class="btn btn-primary" onclick="toast('实验已创建，评测执行中——B 组新 trace 到达后自动补评');switchPage('detail')">🚀 开始实验</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══════════ 实验对比详情 ═══════════ -->
+      <div class="page" id="page-detail">
+        <div class="pagehead">
+          <button class="btn btn-ghost btn-sm" onclick="switchPage('list')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="m15 18-6-6 6-6"/></svg>返回</button>
+          <h1>GLM-4.7 vs Qwen3-Max · 编码能力对比</h1>
+          <span class="st st-done"><span class="dd"></span>已完成</span>
+          <span class="top-sp"></span>
+          <button class="btn btn-outline"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3v18M16 3v18M3 8h18M3 16h18"/></svg>对比另一次实验</button>
+          <button class="btn btn-outline">导出报告</button>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">
+          <span class="chip chip-mut">Agent：code-assist</span><span class="chip chip-mut">变量：LLM</span><span class="chip chip-mut">50 case · 可比配对 46 · 未配对 3 · 不可比 1</span><span class="chip chip-mut">评估器 4</span><span class="chip chip-mut mono">exp_8f3a2c · 07-14</span>
+        </div>
+        <div class="demo-hint">🖱 <span><b>本页可交互：</b>点击「全部 / A 胜 / B 胜 / 平」筛选 Case 明细表；每行并排展示<b>参考输出与 A/B 实际输出</b>，以及各组的<b>综合 / 结果 / 轨迹三列得分</b>（表格横向滚动时右侧 <b>A/B 两列操作固定</b>：详情→trace 评测详情页，重试→重跑该侧 case 后自动重评）；「精确匹配」行标注 12/46 覆盖率——这是 ③ 步部分标注的结果呈现。</span></div>
+
+        <div class="cmpgrid">
+          <div class="cmpcard" style="--gc:var(--ga)">
+            <div class="ch"><span class="gb">A</span><div class="nm">对照组 · GLM-4.7</div></div>
+            <div class="bigs"><span class="v" style="color:var(--ga)">82.4</span><span class="l">综合得分</span></div>
+          </div>
+          <div class="cmpcard" style="--gc:var(--gb)">
+            <div class="ch"><span class="gb">B</span><div class="nm">实验组 · Qwen3-Max</div></div>
+            <div class="bigs"><span class="v" style="color:var(--gb)">76.1</span><span class="l">综合得分</span></div>
+          </div>
+        </div>
+
+        <div class="panel"><div class="panel-h"><span class="panel-t">评估器分解</span><span class="panel-hint">均分仅基于 46 个可比配对 case；双色条 = A / B 组均分；依赖预期答案的评估器标注覆盖率</span></div><div class="panel-b">
+          <div class="evbar"><span class="nm">任务完成度<small>LLM Judge · 46/46</small></span><div class="dualbar"><div class="row"><span class="bt" style="width:86%;background:var(--ga)"></span><span class="bv" style="color:var(--ga)">86.2</span></div><div class="row"><span class="bt" style="width:79%;background:var(--gb)"></span><span class="bv" style="color:var(--gb)">79.4</span></div></div></div>
+          <div class="evbar"><span class="nm">轨迹质量<small>LLM Judge · 46/46</small></span><div class="dualbar"><div class="row"><span class="bt" style="width:80%;background:var(--ga)"></span><span class="bv" style="color:var(--ga)">80.1</span></div><div class="row"><span class="bt" style="width:74%;background:var(--gb)"></span><span class="bv" style="color:var(--gb)">73.8</span></div></div></div>
+          <div class="evbar"><span class="nm">答案精确匹配<small>代码 · ⚠ 覆盖 12/46</small></span><div class="dualbar"><div class="row"><span class="bt" style="width:75%;background:var(--ga)"></span><span class="bv" style="color:var(--ga)">9/12</span></div><div class="row"><span class="bt" style="width:58%;background:var(--gb)"></span><span class="bv" style="color:var(--gb)">7/12</span></div></div></div>
+          <div class="evbar"><span class="nm">答案语义相似度<small>LLM Judge · ⚠ 覆盖 12/46</small></span><div class="dualbar"><div class="row"><span class="bt" style="width:84%;background:var(--ga)"></span><span class="bv" style="color:var(--ga)">84.0</span></div><div class="row"><span class="bt" style="width:81%;background:var(--gb)"></span><span class="bv" style="color:var(--gb)">81.2</span></div></div></div>
+        </div></div>
+
+        <div class="panel" style="overflow:hidden">
+          <div class="panel-h">
+            <span class="panel-t">Case 明细</span>
+            <span class="grow"></span>
+            <span class="fchip on" onclick="filtPair(this,'all')">全部 <span class="cnt">46</span></span>
+            <span class="fchip" onclick="filtPair(this,'A')">A 胜 <span class="cnt">22</span></span>
+            <span class="fchip" onclick="filtPair(this,'B')">B 胜 <span class="cnt">14</span></span>
+            <span class="fchip" onclick="filtPair(this,'T')">平 <span class="cnt">10</span></span>
+          </div>
+          <div style="overflow-x:auto"><table class="tbl" style="min-width:1560px">
+            <thead><tr><th>输入</th><th>参考输出</th>
+              <th><span class="chip chip-a" style="height:17px"><span class="cd" style="background:var(--ga)"></span>A · GLM-4.7</span> 实际输出</th><th style="width:60px">综合得分</th><th style="width:60px">结果得分</th><th style="width:60px">轨迹得分</th>
+              <th><span class="chip chip-b" style="height:17px"><span class="cd" style="background:var(--gb)"></span>B · Qwen3-Max</span> 实际输出</th><th style="width:60px">综合得分</th><th style="width:60px">结果得分</th><th style="width:60px">轨迹得分</th>
+              <th class="opc opc2">操作 · A</th><th class="opc">操作 · B</th></tr></thead>
+            <tbody id="pairRows"></tbody>
+          </table></div>
+          <div class="pager">共 46 个可比配对 · 每页 8 条<span class="pg-sp"></span>
+            <button disabled>‹</button><button class="on" onclick="pgClick(this)">1</button><button onclick="pgClick(this)">2</button><button onclick="pgClick(this)">3</button><span class="dots">…</span><button onclick="pgClick(this)">6</button><button onclick="toast('示意：翻页')">›</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══════════ 单组实验详情 ═══════════ -->
+      <div class="page" id="page-detail-single">
+        <div class="pagehead">
+          <button class="btn btn-ghost btn-sm" onclick="switchPage('list')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="m15 18-6-6 6-6"/></svg>返回</button>
+          <h1 style="font-size:16.5px">客服 agent 周常质量评测</h1>
+          <span class="chip chip-mut">单组实验</span>
+          <span class="st st-done"><span class="dd"></span>已完成</span>
+          <span class="top-sp"></span>
+          <button class="btn btn-outline">导出报告</button>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">
+          <span class="chip chip-mut">Agent：cs-agent</span><span class="chip chip-mut">132 case</span><span class="chip chip-mut">评估器 2</span><span class="chip chip-a"><span class="cd" style="background:var(--ga)"></span>本周线上 trace</span><span class="chip chip-mut mono">07-13</span>
+        </div>
+        <div class="demo-hint">🖱 <span><b>单组实验详情</b> = 对比详情的退化形态：无分组 / 配对 / 胜负，只有整体均分、评估器分解与 <b>Case 明细</b>（输入 / 参考输出 / 实际输出 / 综合·结果·轨迹得分，右侧操作列固定：详情 / 重试）。</span></div>
+
+        <div class="cmpcard" style="--gc:var(--ga);margin-bottom:14px">
+          <div class="ch"><div class="nm">整体表现 · 132 条 trace</div></div>
+          <div class="bigs"><span class="v" style="color:var(--ga)">81.2</span><span class="l">综合均分</span></div>
+        </div>
+
+        <div class="panel"><div class="panel-h"><span class="panel-t">评估器分解</span></div><div class="panel-b">
+          <div class="evbar"><span class="nm">任务完成度<small>LLM Judge · 132/132</small></span><div class="dualbar"><div class="row"><span class="bt" style="width:84%;background:var(--ga)"></span><span class="bv" style="color:var(--ga)">83.5</span></div></div></div>
+          <div class="evbar"><span class="nm">轨迹质量<small>LLM Judge · 132/132</small></span><div class="dualbar"><div class="row"><span class="bt" style="width:79%;background:var(--ga)"></span><span class="bv" style="color:var(--ga)">78.9</span></div></div></div>
+        </div></div>
+
+        <div class="panel" style="overflow:hidden">
+          <div class="panel-h"><span class="panel-t">Case 明细</span></div>
+          <div style="overflow-x:auto"><table class="tbl" style="min-width:1080px">
+            <thead><tr><th>输入</th><th>参考输出</th><th>实际输出</th><th style="width:72px">综合得分</th><th style="width:72px">结果得分</th><th style="width:72px">轨迹得分</th><th class="opc">操作</th></tr></thead>
+            <tbody>
+              <tr><td class="inpt">查询订单物流状态并解释延迟原因</td><td><div class="outclip">需给出当前物流节点与延迟原因，并安抚客户</div></td><td><div class="outclip">查询到滞留广州转运中心，因暴雨延迟，已致歉并给出预计送达时间</div></td><td><span class="sc">88</span></td><td><span class="sc">91</span></td><td><span class="sc">84</span></td><td class="opc"><a class="oplink" onclick="switchPage('trace-eval')">详情</a><a class="oplink" onclick="toast('示意：已发起该 case 重试，完成后自动重评')">重试</a></td></tr>
+              <tr><td class="inpt">处理重复扣款投诉并发起退款</td><td><div class="outclip">核实重复扣款后应发起原路退款并告知时效</div></td><td><div class="outclip">核实两笔相同扣款，发起原路退款，告知 3-5 个工作日到账</div></td><td><span class="sc">92</span></td><td><span class="sc">95</span></td><td><span class="sc">88</span></td><td class="opc"><a class="oplink" onclick="switchPage('trace-eval')">详情</a><a class="oplink" onclick="toast('示意：已发起该 case 重试，完成后自动重评')">重试</a></td></tr>
+              <tr><td class="inpt">修改收货地址（已发货场景）</td><td><span style="color:var(--foreground-muted);font-size:11px">未标注</span></td><td><div class="outclip">已发货订单无法改址，引导拒收后重新下单，未提供拦截选项</div></td><td><span class="sc">54</span></td><td><span class="sc">48</span></td><td><span class="sc">62</span></td><td class="opc"><a class="oplink" onclick="switchPage('trace-eval')">详情</a><a class="oplink" onclick="toast('示意：已发起该 case 重试，完成后自动重评')">重试</a></td></tr>
+              <tr><td class="inpt">会员积分兑换规则咨询</td><td><span style="color:var(--foreground-muted);font-size:11px">未标注</span></td><td><div class="outclip">给出积分兑换比例、有效期与本月可兑换商品列表</div></td><td><span class="sc">85</span></td><td><span class="sc">87</span></td><td><span class="sc">82</span></td><td class="opc"><a class="oplink" onclick="switchPage('trace-eval')">详情</a><a class="oplink" onclick="toast('示意：已发起该 case 重试，完成后自动重评')">重试</a></td></tr>
+              <tr><td class="inpt">发票抬头变更申请</td><td><div class="outclip">需说明开票周期内可变更并引导提交新抬头</div></td><td><div class="outclip">确认订单在开票周期内，收集新抬头并提交变更</div></td><td><span class="sc">81</span></td><td><span class="sc">83</span></td><td><span class="sc">78</span></td><td class="opc"><a class="oplink" onclick="switchPage('trace-eval')">详情</a><a class="oplink" onclick="toast('示意：已发起该 case 重试，完成后自动重评')">重试</a></td></tr>
+              <tr><td class="inpt">退货运费承担争议处理</td><td><span style="color:var(--foreground-muted);font-size:11px">未标注</span></td><td><div class="outclip">按质量问题判定商家承担运费，但未引用具体条款</div></td><td><span class="sc">69</span></td><td><span class="sc">72</span></td><td><span class="sc">65</span></td><td class="opc"><a class="oplink" onclick="switchPage('trace-eval')">详情</a><a class="oplink" onclick="toast('示意：已发起该 case 重试，完成后自动重评')">重试</a></td></tr>
+              <tr><td class="inpt">优惠券叠加使用规则解释</td><td><span style="color:var(--foreground-muted);font-size:11px">未标注</span></td><td><div class="outclip">解释满减与折扣券不可叠加，给出最优组合建议</div></td><td><span class="sc">84</span></td><td><span class="sc">86</span></td><td><span class="sc">81</span></td><td class="opc"><a class="oplink" onclick="switchPage('trace-eval')">详情</a><a class="oplink" onclick="toast('示意：已发起该 case 重试，完成后自动重评')">重试</a></td></tr>
+              <tr><td class="inpt">账号异地登录安全提醒处理</td><td><div class="outclip">需引导改密并核实近期订单安全</div></td><td><div class="outclip">引导修改密码并开启二次验证，确认无异常订单</div></td><td><span class="sc">79</span></td><td><span class="sc">81</span></td><td><span class="sc">76</span></td><td class="opc"><a class="oplink" onclick="switchPage('trace-eval')">详情</a><a class="oplink" onclick="toast('示意：已发起该 case 重试，完成后自动重评')">重试</a></td></tr>
+            </tbody>
+          </table></div>
+          <div class="pager">共 132 个 case · 每页 8 条<span class="pg-sp"></span>
+            <button disabled>‹</button><button class="on" onclick="pgClick(this)">1</button><button onclick="pgClick(this)">2</button><button onclick="pgClick(this)">3</button><span class="dots">…</span><button onclick="pgClick(this)">17</button><button onclick="toast('示意：翻页')">›</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══════════ 评估器（对齐现存评估器中心布局：自建 / 预置双页签） ═══════════ -->
+      <div class="page" id="page-evaluators">
+        <div class="pagehead">
+          <h1>评估器</h1>
+          <span class="top-sp"></span>
+          <button class="btn btn-primary" id="evCreateBtn" onclick="openEvCreate()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 5v14M5 12h14"/></svg>新建自定义评估器</button>
+        </div>
+        <div class="demo-hint">🧩 <span><b>沿用现有评估器中心布局</b>（自建 / 预置双页签 + 搜索筛选 + 卡片网格，🖱 点卡片弹出<b>评估器详情</b>：描述 / 应用场景 / 前置条件 / 输出 / 呈现位置），本次增强三点：① 预置新增 5 个<b>代码类评估器</b>（工具可靠性 / 时延 / 成本 / 冗余循环 / Token 效率）——零配置、不依赖参考数据；② 卡片统一带标签（LLM Judge / 代码 · 看结果 / 看轨迹 · 依赖参考数据），与 ④ 步门控同一套；③ 全部评估器共用输出契约 <b>score? + points[]? + evidence?（md/json）</b>。🖱 「新建自定义评估器」为大号居中悬浮窗、仅支持提示词形式：占位符点选插入，可选定义<b>评分点清单</b>（填写后 Judge 按清单逐条强制给分），用到 <span class="c">{{reference}}</span> 自动打「依赖参考数据」标。</span></div>
+
+        <div style="display:flex;gap:2px;border-bottom:1px solid var(--border);margin-bottom:12px">
+          <button class="evtab on" id="evTabCustom" onclick="evLibTabSw('自定义',this)">自建评估器</button>
+          <button class="evtab" onclick="evLibTabSw('预置',this)">预置评估器</button>
+        </div>
+
+        
+
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:11px">
+          <div class="field" style="width:200px"><input type="text" id="evLibSearch" placeholder="搜索名称" oninput="renderEvLib()"></div>
+          <span class="fchip" onclick="evLibFilt(this,'LLM Judge')">LLM Judge</span>
+          <span class="fchip" onclick="evLibFilt(this,'代码')">代码</span>
+          <span class="fchip" onclick="evLibFilt(this,'看结果')">看结果</span>
+          <span class="fchip" onclick="evLibFilt(this,'看轨迹')">看轨迹</span>
+          <span class="fchip" onclick="evLibFilt(this,'依赖参考数据')">依赖参考数据</span>
+          <span style="font-size:10.5px;color:var(--foreground-muted)">标签可多选</span>
+        </div>
+
+        <div id="evLibGrid" style="display:grid;grid-template-columns:repeat(2,minmax(320px,1fr));gap:12px"></div>
+        <div id="evLibEmpty" style="display:none;padding:26px;text-align:center;color:var(--foreground-muted);font-size:12px;border:1px dashed var(--border-dark);border-radius:11px">没有匹配的评估器</div>
+      </div>
+
+      <!-- ═══════════ Trace 评测详情（重构版） ═══════════ -->
+      <div class="page" id="page-trace-eval">
+        <div class="pagehead">
+          <button class="btn btn-ghost btn-sm" onclick="switchPage('detail')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="m15 18-6-6 6-6"/></svg>返回实验详情</button>
+          <h1>Trace 评测详情</h1>
+          <span class="chip chip-mut mono">tr_9f21</span>
+          <span class="chip chip-a"><span class="cd" style="background:var(--ga)"></span>A 组 · GLM-4.7</span>
+          <span class="st st-done"><span class="dd"></span>评测完成</span>
+          <span class="top-sp"></span>
+          <button class="btn btn-outline" onclick="toast('跳转链路观测：该 trace 的执行步骤树（现有 /eval/trajectory/[id]/trace 页面，不在本次重构范围）')">前往链路观测 · 执行步骤树 →</button>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">
+          <span class="chip chip-mut">Agent：code-assist</span><span class="chip chip-mut">框架：langgraph</span><span class="chip chip-mut">运行模型：GLM-4.7</span><span class="chip chip-ok">综合 92</span><span class="chip chip-mut mono">实验 exp_8f3a2c</span><span class="chip chip-mut mono">07-12 14:03</span>
+        </div>
+        <div class="demo-hint">🎨 <span><b>本页为 Trace 评测详情重构示意</b>——只有「结果评测」「轨迹评测」两大类，<b>卡片一律占一整行</b>、结构统一：<b>评估器名 + 评估器标签 + 得分</b>，卡内为评分点列表（<b>评分点 / 得分 / 证据</b>）——评分点既可以是评估器固定维度（完整性 / 冗余度），也可以是按 case 动态提取的判断点（参考答案中的关键观点是否提及），平台不区分来源、统一渲染。🖱 <b>证据默认折叠</b>——收起时显示单行预览，点击展开后按内容格式（Markdown / JSON）自动渲染，界面不展示格式标记。「评估失败」为降噪状态卡——不记 0 分、不入类目均分（均分旁标注 N/M 项计入），可单项重评；前置条件依托 trace 标签在 ④ 步全部门控，不存在「不适用」卡。平台聚合契约只有一个字段：<b>score（0-100，可选）——有分则加权计入综合分，无分则只展示原因、不入均分</b>。<b>新增评估器无需修改界面</b>，多一条结果数据就自动多一张卡。</span></div>
+
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px">
+          <div><div class="flbl">任务输入</div><div class="fbox">修复 date-utils 时区转换在夏令时边界的 bug</div></div>
+          <div><div class="flbl">参考答案</div><div class="fbox">应识别 DST 根因并用时区库修复，禁止硬编码偏移；需包含回归测试</div></div>
+          <div><div class="flbl">实际输出</div><div class="fbox">定位到 offset 计算未考虑 DST，改为 tzdata 查表修复，并补充夏令时边界回归用例</div></div>
+        </div>
+
+        <!-- 结果评测：该类目下所有评估器卡片 -->
+        <div class="panel">
+          <div class="panel-h"><span class="panel-t">🎯 结果评测</span><span class="grow"></span><span class="sc" style="font-size:16px" title="仅计入评估成功的 2 项（96、100）；「评估失败」不记 0 分、不入均分">98</span><span style="font-size:10px;color:var(--foreground-muted)">类目均分 · 2/3 项计入</span></div>
+          <div class="panel-b"><div id="resCards" style="display:grid;gap:10px"></div></div>
+        </div>
+
+        <!-- 轨迹评测：该类目下所有评估器卡片 -->
+        <div class="panel">
+          <div class="panel-h"><span class="panel-t">🧭 轨迹评测</span><span class="grow"></span><span class="sc" style="font-size:16px">86</span><span style="font-size:10px;color:var(--foreground-muted)">类目均分</span></div>
+          <div class="panel-b"><div id="trajCards" style="display:grid;gap:10px"></div></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+<div id="modalRoot"></div>
+<div class="toast" id="toast"></div>
+</div>
+
+<script>
+const $=s=>document.querySelector(s);
+
+// ─── 页面切换 ───
+window.switchPage=name=>{
+ document.querySelectorAll('.page').forEach(p=>p.classList.toggle('on',p.id==='page-'+name));
+ document.querySelectorAll('.nav-item[data-page]').forEach(n=>n.classList.toggle('active',n.dataset.page===(name==='evaluators'?'evaluators':'list')));
+ $('#crumb').innerHTML='评测中心 / <b>'+({list:'实验',new:'新建实验',detail:'实验详情 · GLM-4.7 vs Qwen3-Max','detail-single':'实验详情 · 客服 agent 周常质量评测','trace-eval':'Trace 评测详情 · tr_9f21',evaluators:'评估器'})[name]+'</b>';
+ window.scrollTo({top:0});
+};
+window.startNew=()=>{switchPage('new');gotoStep(1);};
+
+// ─── 向导 stepper ───
+window.gotoStep=n=>{
+ document.querySelectorAll('.wstep').forEach((w,i)=>w.classList.toggle('on',i===n-1));
+ document.querySelectorAll('#stepper .step').forEach((s,i)=>{s.classList.toggle('on',i===n-1);s.classList.toggle('done',i<n-1);});
+};
+
+// ─── 步骤1：变量维度 / 单组退化 / 分组取值联动 ───
+const VAR_OPTS={
+ llm:   {name:'LLM',        lbl:'模型',      a:'GLM-4.7',  b:'Qwen3-Max',
+  meta:'ok',  note:'变量「LLM」可从 trace 元数据直接读出——切好模型照常跑即可，<b>无需改动任何代码</b>，系统按右侧规则自动归组。',
+  rule:'模型 = Qwen3-Max · Agent = code-assist · 上报时间 > 实验创建'},
+ skill: {name:'Skill 版本', lbl:'Skill 版本', a:'skill v2', b:'skill v3',
+  meta:'warn',note:'Skill 版本是否在 trace 元数据中<b>取决于接入框架</b>——能读到则零改动自动归组；读不到时需注入实验标识（见下）。',
+  rule:'Skill 版本 = v3（若框架上报）· Agent = order-bot'},
+ framework:{name:'Agent 框架', lbl:'框架', a:'LangGraph', b:'AgentScope',
+  meta:'ok', note:'变量「Agent 框架」可从 trace 元数据的 framework 字段直接读出——两套实现照常跑即可，<b>无需改动任何代码</b>，系统按右侧规则自动归组。',
+  rule:'框架 = AgentScope · Agent = code-assist · 上报时间 > 实验创建'},
+};
+let singleMode=false;
+window.selVar=(el,kind)=>{
+ document.querySelectorAll('#varCards .optcard').forEach(c=>c.classList.toggle('on',c===el));
+ const single=kind==='none';singleMode=single;
+ document.querySelectorAll('.only-multi').forEach(e=>e.style.display=single?'none':'');
+ $('#singleSec').style.display=single?'':'none';
+ $('#w2-multi').style.display=single?'none':'';
+ $('#w2-single').style.display=single?'':'none';
+ $('#sm1').textContent=single?'code-assist · 单组评测':'code-assist · 切换 '+VAR_OPTS[kind].name+' · 2 组';
+ if(single){updateW2Sum();return;}
+ // 变量维度 → 分组取值、② 步收集卡/矩阵表头/归组依据 联动
+ const v=VAR_OPTS[kind];
+ $('#gvalLblA').textContent=v.lbl;$('#gvalLblB').textContent=v.lbl;
+ $('#gvalA').textContent=v.a;$('#gvalB').textContent=v.b;
+ $('#cardAV').textContent=v.a;$('#cardBV').textContent=v.b;
+ $('#thA').textContent='A · '+v.a;$('#thB').textContent='B · '+v.b;
+ updateW2Sum();
+};
+
+// ─── 步骤2：组页签 / trace 勾选 ───
+// ─── 步骤2（对比模式）：以 input 为中心的齐备度矩阵 ───
+let inpFilter='all';
+const INPUTS=[
+ {i:'修复 date-utils 时区转换在夏令时边界的 bug', a:1,b:1, st:'ok',  sel:1},
+ {i:'为 /api/orders 增加分页参数校验',            a:1,b:2, st:'ok',  sel:1},
+ {i:'将 utils 包的 lodash 依赖替换为原生实现',     a:1,b:1, st:'ok',  sel:1},
+ {i:'重构订单状态机，消除重复分支',               a:1,b:1, st:'inc', sel:0, why:'两侧都有 trace 且 input 相同，但 B 侧 skill=v3、A 侧=v2——变量（LLM）之外的条件未受控，计入会把 skill 差异错当模型差异'},
+ {i:'CI 中 flaky 的 e2e 用例排查并修复',          a:1,b:0, st:'inc', sel:0, why:'B 组（Qwen3-Max）暂无该 input 的 trace，无法配对'},
+ {i:'为 webhook 回调增加签名校验',                a:1,b:0, st:'inc', sel:0, why:'B 组（Qwen3-Max）暂无该 input 的 trace，无法配对'},
+ {i:'重构 webpack 配置迁移到 rspack',             a:0,b:1, st:'inc', sel:0, why:'A 组（GLM-4.7）暂无该 input 的 trace，无法配对'},
+ {i:'升级 Next.js 15 并处理 breaking change',     a:1,b:0, st:'inc', sel:0, why:'B 组（Qwen3-Max）暂无该 input 的 trace，无法配对'},
+];
+function gcell(n,cls){
+ if(!n)return '<span class="chip chip-mut" title="该组取值下暂无此 input 的 trace">— 缺失</span>';
+ if(n===1)return `<span class="chip ${cls}">◉ 1 条</span>`;
+ return `<span class="chip ${cls}" style="cursor:pointer" title="该 input 下有 ${n} 条 trace，默认取最新一条参与实验，点击可改选" onclick="toast('示意：弹出该 input 的 ${n} 条 trace 供改选（默认取最新）')">◉ ${n} 条 · 取最新 ▾</span>`;
+}
+function renderInputs(){
+ const list=INPUTS.map((x,i)=>[x,i]).filter(([x])=>inpFilter==='all'||x.st===inpFilter);
+ $('#inputRows').innerHTML=list.map(([x,i])=>`<tr>
+  <td>${x.st==='inc'
+    ?'<span class="chk" style="opacity:.35;cursor:not-allowed" title="不可比 input 不能纳入实验——先以受控条件重跑任一侧"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2"><path d="m5 13 4 4L19 7"/></svg></span>'
+    :`<span class="chk ${x.sel?'on':''}" onclick="tickInput(${i})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2"><path d="m5 13 4 4L19 7"/></svg></span>`}</td>
+  <td class="inpt">${x.i}</td>
+  <td>${gcell(x.a,'chip-a')}</td><td>${gcell(x.b,'chip-b')}</td>
+  <td>${x.st==='ok'?'<span class="chip chip-ok">◉ 可实验</span>'
+     :`<span class="chip chip-warn" title="${x.why}">⚠ 不可比</span>`}</td></tr>`).join('')
+  ||'<tr><td colspan="5" style="text-align:center;color:var(--foreground-muted)">无数据</td></tr>';
+ updateW2Sum();
+}
+window.tickInput=i=>{INPUTS[i].sel^=1;renderInputs();};
+window.filtInputs=(el,f)=>{inpFilter=f;document.querySelectorAll('#w2-multi .fchip').forEach(x=>x.classList.toggle('on',x===el));renderInputs();};
+function updateW2Sum(){
+ if(singleMode){$('#sm2').textContent='圈选 132 条 trace';return;}
+ $('#sm2').textContent='已选 '+INPUTS.filter(x=>x.sel).length+' 个 input';
+}
+// 分页（示意）：切换页码高亮
+window.pgClick=el=>{[...el.parentElement.querySelectorAll('button')].forEach(b=>b.classList.toggle('on',b===el));};
+// 末两位：是否勾选 / 另一组是否已有相同 input（可配对）
+const TRACES=[
+ ['tr_9f21','修复 date-utils 时区转换在夏令时边界的 bug','成功','41s','18,620','07-12 14:03',1,1],
+ ['tr_8e4c','为 /api/orders 增加分页参数校验','成功','28s','9,480','07-12 15:11',1,1],
+ ['tr_7b0a','CI 中 flaky 的 e2e 用例排查并修复','成功','66s','24,310','07-12 16:40',1,1],
+ ['tr_6d92','将 utils 包的 lodash 依赖替换为原生实现','成功','52s','17,050','07-13 09:22',1,1],
+ ['tr_5c17','为 webhook 回调增加签名校验','成功','33s','11,270','07-13 10:05',0,1],
+ ['tr_4a88','重构订单状态机，消除重复分支','成功','74s','27,940','07-13 11:47',0,2],
+ ['tr_3e5f','补齐 payment 模块单测覆盖到 80%','成功','58s','20,180','07-13 14:30',0,0],
+ ['tr_2d61','升级 Next.js 15 并处理 breaking change','成功','89s','31,420','07-14 09:15',0,0],
+];
+function renderTraces(){
+ $('#traceRows').innerHTML=TRACES.map((t,i)=>`<tr>
+  <td><span class="chk ${t[6]?'on':''}" onclick="tickTrace(${i},this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2"><path d="m5 13 4 4L19 7"/></svg></span></td>
+  <td class="mono" style="color:var(--primary)">${t[0]}</td><td class="inpt">${t[1]}</td>
+  <td><span class="st st-done"><span class="dd"></span>${t[2]}</span></td>
+  <td class="mono">${t[3]}</td><td class="mono">${t[4]}</td><td class="mono">${t[5]}</td></tr>`).join('');
+ $('#selCnt').textContent=TRACES.filter(t=>t[6]).length;
+ updateW2Sum();
+}
+window.tickTrace=(i,el)=>{TRACES[i][6]=TRACES[i][6]?0:1;renderTraces();};
+window.checkAll=()=>{TRACES.forEach(t=>t[6]=1);renderTraces();};
+
+// ─── 步骤3：行内标注（预填实际输出） ───
+let cov=12;
+window.openAnn=()=>{
+ $('#annCell').innerHTML=`<textarea class="exped" id="annTa" placeholder="填写预期答案…"></textarea>
+  <div style="display:flex;gap:6px;margin-top:6px"><button class="btn btn-outline btn-sm" onclick="fillActual()">↙ 采用实际输出</button><button class="btn btn-primary btn-sm" onclick="saveAnn()">保存</button><button class="btn btn-ghost btn-sm" onclick="cancelAnn()">取消</button></div>`;
+ $('#annOps').innerHTML='<span class="chip chip-warn">编辑中</span>';
+};
+window.fillActual=()=>{$('#annTa').value=$('#annActual').textContent.trim();};
+window.cancelAnn=()=>{$('#annCell').innerHTML='<span style="color:var(--foreground-muted);font-size:11.5px">未标注</span>';$('#annOps').innerHTML='<button class="btn btn-outline btn-sm" onclick="openAnn()">✏️ 标注</button>';};
+window.saveAnn=()=>{
+ const v=$('#annTa').value.trim();if(!v){toast('先填写或点「采用实际输出」');return;}
+ $('#annCell').innerHTML=`<div class="outclip">${v.replace(/</g,'&lt;')}</div>`;
+ $('#annOps').innerHTML='<span class="chip chip-ok">已标注</span>';
+ cov++;updateCov();toast('已保存 · 已标注 '+cov+'/50');
+};
+function updateCov(){
+ $('#covNum').textContent=cov;
+ $('#covFill').style.width=(cov/50*100)+'%';
+ $('#sm3').textContent='已标注 '+cov+'/50 · 可跳过';
+}
+
+// ─── 步骤4：评估器选择 ───
+window.toggleEv=el=>{
+ if(el.classList.contains('dis'))return;
+ el.classList.toggle('on');el.querySelector('.echk').classList.toggle('on');
+ $('#sm4').textContent='已选 '+document.querySelectorAll('.evcard.on').length+' 个';
+};
+// 评估器标签筛选（可多选，AND 语义）；全部取消 = 不过滤
+const evTagSel=new Set();
+window.evFilt=(el,t)=>{
+ el.classList.toggle('on');
+ el.classList.contains('on')?evTagSel.add(t):evTagSel.delete(t);
+ let vis=0;
+ document.querySelectorAll('#evGrid .evcard').forEach(c=>{
+  const ts=(c.dataset.tags||'').split(',');
+  const show=[...evTagSel].every(x=>ts.includes(x));
+  c.style.display=show?'':'none';if(show)vis++;
+ });
+ $('#evEmpty').style.display=vis?'none':'';
+};
+
+// ─── 详情页：配对表 ───
+// ac/at = A 侧结果分/轨迹分；ar/aj = A 侧结果评语/轨迹评语；b* 同理
+const PAIRS=[
+ {i:'修复 date-utils 时区转换在夏令时边界的 bug',ref:'应识别 DST 根因并用时区库修复，禁止硬编码偏移；需含回归测试',a:'定位 DST 根因，tzdata 查表修复并补回归用例',as:92,b:'对结果 +8h 硬编码修正，未覆盖其他时区',bs:58,v:'A',
+  ac:96,at:86,ar:'根因（DST 未处理）定位准确，修复方式正确且补充了回归用例，完全达成用户目标',aj:'排查路径简洁：复现→定位→修复→验证；工具选择恰当，无冗余步骤',
+  bc:62,bt:52,br:'仅对结果硬编码 +8h，未识别 DST 根因，其他时区场景仍会出错，目标未真正达成',bj:'跳过复现直接改代码，多次重复读取同一文件，冗余明显且归因缺失'},
+ {i:'为 /api/orders 增加分页参数校验',a:'zod schema 校验，越界返回 400 与错误详情',as:88,b:'手写校验逻辑完整，另补了 openapi 描述',bs:90,v:'B',
+  ac:90,at:85,ar:'校验完整、错误响应规范，达成目标',aj:'直接复用项目既有 zod 模式，路径高效',
+  bc:94,bt:85,br:'校验完整且额外补齐 openapi 文档，超出预期',bj:'步骤合理，文档补充体现任务理解深度'},
+ {i:'CI 中 flaky 的 e2e 用例排查并修复',a:'发现等待条件竞态，改显式 waitFor 去除固定 sleep',as:90,b:'仅增加重试次数掩盖问题，未除根因',bs:52,v:'A',
+  ac:93,at:86,ar:'竞态根因确认并根治，flaky 消除',aj:'先稳定复现再修复，方法论正确',
+  bc:55,bt:50,br:'重试只是掩盖，flaky 依旧存在，目标未达成',bj:'未尝试复现与定位，直接改配置，归因缺失'},
+ {i:'将 utils 包的 lodash 依赖替换为原生实现',ref:'全部调用点替换且不引入行为差异；bundle 应减小；测试通过',a:'替换 12 处调用，bundle -41KB，测试全绿',as:86,b:'替换 12 处调用，bundle -39KB，测试全绿',bs:85,v:'T',
+  ac:89,at:82,ar:'全部调用点替换且行为一致，测试通过',aj:'逐文件替换并即时跑测试，稳健',
+  bc:88,bt:81,br:'替换完整、效果相当',bj:'路径与 A 相近，略多两次无效搜索'},
+ {i:'为 webhook 回调增加签名校验',a:'HMAC 校验 + 时间戳防重放，含单测',as:84,b:'HMAC 校验实现正确但缺防重放',bs:71,v:'A',
+  ac:88,at:79,ar:'校验与防重放齐备，含单测，达成目标',aj:'安全场景考虑周全，步骤紧凑',
+  bc:75,bt:66,br:'HMAC 正确但缺防重放，安全目标部分达成',bj:'未查阅相关安全规范即动手，遗漏场景'},
+ {i:'重构订单状态机，消除重复分支',a:'引入状态表驱动，分支数 17→6',as:78,b:'状态表驱动 + 补状态迁移图文档',bs:83,v:'B',
+  ac:80,at:75,ar:'重构达成，分支大幅减少',aj:'先补测试再重构，但中途走了弯路',
+  bc:86,bt:79,br:'重构达成且补文档，可维护性更好',bj:'重构路径清晰，文档一步到位'},
+ {i:'补齐 payment 模块单测覆盖到 80%',a:'覆盖 82%，含边界与异常路径',as:81,b:'覆盖 80%，缺并发退款场景',bs:76,v:'A',
+  ac:85,at:76,ar:'覆盖率达标且含边界/异常路径',aj:'按模块结构系统性补测，条理清楚',
+  bc:79,bt:72,br:'覆盖率勉强达标，缺并发退款关键场景',bj:'挑易测函数优先，难点场景回避'},
+ {i:'升级 Next.js 15 并处理 breaking change',a:'升级完成，middleware API 迁移正确',as:80,b:'升级完成，等效处理',bs:80,v:'T',
+  ac:84,at:75,ar:'升级完成，breaking change 处理正确',aj:'先读迁移指南再动手，步骤规范',
+  bc:84,bt:75,br:'升级完成，处理等效',bj:'路径与 A 基本一致'},
+];
+// 未配对/不可比 case 不在配对表中展示（② 步圈选时已排除，此处只有可比配对）。
+let pairFilter='all';
+window.filtPair=(el,f)=>{
+ pairFilter=f;
+ document.querySelectorAll('#page-detail .fchip').forEach(c=>c.classList.toggle('on',c===el));
+ renderPairs(f);
+};
+const opCell=(cls,side)=>`<td class="${cls}"><a class="oplink" onclick="switchPage('trace-eval')">详情</a><a class="oplink" onclick="toast('示意：已发起 ${side} 侧该 case 重试，完成后自动重评')">重试</a></td>`;
+const refCell=p=>p.ref?`<td><div class="outclip">${p.ref}</div></td>`:'<td><span style="color:var(--foreground-muted);font-size:11px">未标注</span></td>';
+function renderPairs(f='all'){
+ const rows=PAIRS.filter(p=>f==='all'||p.v===f).map(p=>`<tr>
+   <td class="inpt">${p.i}</td>${refCell(p)}
+   <td><div class="outclip">${p.a}</div></td><td><span class="sc" style="color:var(--ga)">${p.as}</span></td><td><span class="sc">${p.ac}</span></td><td><span class="sc">${p.at}</span></td>
+   <td><div class="outclip">${p.b}</div></td><td><span class="sc" style="color:var(--gb)">${p.bs}</span></td><td><span class="sc">${p.bc}</span></td><td><span class="sc">${p.bt}</span></td>
+   ${opCell('opc opc2','A')}${opCell('opc','B')}</tr>`).join('');
+ $('#pairRows').innerHTML=rows||'<tr><td colspan="12" style="text-align:center;color:var(--foreground-muted)">无数据</td></tr>';
+}
+
+// ─── Trace 评测详情：评估器结果统一卡片（数据驱动，新增评估器自动多一张卡） ───
+// 评估器输出 schema（每次评估仅上报以下内容；评估器名/标签/类目是注册时元数据，不随结果上报）：
+//   { score?: 0-100,                          // 总分，可选——无分则不入均分（唯一聚合字段）
+//     points?: [{label, score?, evidence?}],  // 评分点：固定维度或按 case 动态提取的判断点，可选
+//     evidence?: {md:string}|{json:object} }  // 卡片级证据，可选——无评分点的简单评估器直接用
+// 证据格式由字段自识别（md/json），界面不展示格式标记。评分点的 score 可选（纯定性判断点）。
+// 「评估失败」由平台调用层记录（超时/解析失败），不属于评估器输出；渲染为状态卡 + 单项重评。
+const EVAL_RESULTS=[
+ {cat:'res', name:'任务完成度', tags:['LLM Judge','依赖参考数据'], score:96, points:[
+  {label:'识别 DST 根因', score:98, evidence:{md:'**判定：已覆盖**\n明确指出 offset 计算未考虑夏令时切换，与参考答案根因一致。\n- 引用输出：`定位到 offset 计算未考虑 DST`\n- 相关步骤：step-4'}},
+  {label:'使用时区库而非硬编码偏移', score:96, evidence:{md:'**判定：已覆盖**\n采用 tzdata 查表，未出现魔法数字。\n- 相关步骤：step-8'}},
+  {label:'补充回归测试', score:88, evidence:{md:'**判定：部分覆盖**\n覆盖 DST 边界用例，缺**南半球时区**场景。\n- 失败阶段：测试补充\n- 相关步骤：step-11 / step-12'}},
+ ]},
+ {cat:'res', name:'答案精确匹配', tags:['代码','依赖参考数据'], score:100, points:[
+  {label:'关键片段匹配', score:100, evidence:{json:{verdict:'hit',normalize:['trim','lowercase','synonym-table-v3'],expected:['时区库修复','回归测试'],matched:[{fragment:'tzdata 查表修复',rule:'synonym: 时区库修复'},{fragment:'夏令时边界回归用例',rule:'synonym: 回归测试'}]}}},
+ ]},
+ {cat:'res', name:'答案语义相似度', tags:['LLM Judge','依赖参考数据'], status:'error',
+  reason:'Judge 调用超时（3 次重试失败），未产出分数——不记 0 分、不入类目均分。'},
+ {cat:'traj', name:'轨迹质量', tags:['LLM Judge'], score:86, points:[
+  {label:'完整性', score:90, evidence:{md:'✓ 复现、定位、修复、验证四阶段齐备\n✓ 修复后主动运行既有测试确认无回归'}},
+  {label:'工具选择', score:87, evidence:{md:'✓ `grep → read_file → edit → bash(test)` 链路合理\n△ step-9 可用增量 diff 代替全文重写，属可优化项非错误\n- 相关步骤：step-9'}},
+  {label:'冗余度', score:81, evidence:{md:'✗ step-3 / step-7 重复读取 `date-utils.ts` 全文（根因步骤）\n- 建议：首次读取后复用上下文，或按行段精读\n- 相关步骤：step-3 / step-7'}},
+  {label:'归因', score:86, evidence:{md:'不计入总分，仅作说明：冗余主因是上下文未复用，非工具误用。'}},
+ ]},
+ // 无「不适用」状态：前置条件（缺参考数据、是否多 Agent 等）已在 ④ 步按 trace 标签门控；
+ // 运行期意外（judge 超时/解析失败）统一走「评估失败」+ 单项重评。
+];
+// ── 证据渲染：Markdown / JSON 两种格式，默认折叠（收起时显示格式徽章 + 单行预览） ──
+function mdRender(s){
+ const html=s.split('\n').map(l=>{
+  l=l.replace(/\*\*(.+?)\*\*/g,'<b>$1</b>').replace(/`([^`]+)`/g,'<span class="c">$1</span>');
+  if(l.startsWith('- '))return '<li>'+l.slice(2)+'</li>';
+  return l.trim()?'<p style="margin:3px 0">'+l+'</p>':'';
+ }).join('');
+ return html.replace(/(<li>.*?<\/li>)+/g,m=>'<ul style="margin:4px 0;padding-left:17px">'+m+'</ul>');
+}
+function evdBlock(ev){
+ const isJson=!!ev.json;
+ const body=isJson
+  ?`<div class="code">${JSON.stringify(ev.json,null,2)}</div>`
+  :`<div style="font-size:11.5px;line-height:1.65;color:var(--foreground-secondary)">${mdRender(ev.md)}</div>`;
+ const prev=isJson?'{ '+Object.keys(ev.json).join(' · ')+' }':ev.md.replace(/[*`#-]/g,'').split('\n').map(x=>x.trim()).filter(Boolean).join('；');
+ return `<div class="evd" onclick="this.classList.toggle('open')">
+  <div class="evd-h"><span class="evcaret">›</span><span class="evd-prev">${prev}</span></div>
+  <div class="evd-b" onclick="event.stopPropagation()">${body}</div>
+ </div>`;
+}
+// 无分数状态：评估失败(error)——不记 0 分、不入均分，卡片降噪展示 + 单项重评。
+// （skipped 仅作防御性保留；「不适用」不存在——前置条件已在 ④ 步按 trace 标签门控。）
+const EV_STATUS={skipped:['chip-mut','未评'],error:['chip-warn','评估失败']};
+function evResCard(e){
+ const st=e.status||'ok';
+ const tags=(e.tags||[]).map(t=>`<span class="chip chip-mut">${t}</span>`).join('');
+ if(st!=='ok'){
+  const [cls,lbl]=EV_STATUS[st];
+  return `<div class="evcard" style="cursor:default;opacity:.8">
+   <div class="eh"><span class="en">${e.name}</span>${tags}<span class="top-sp"></span><span class="chip ${cls}">${lbl}</span></div>
+   <div class="ed" style="margin-top:7px">${e.reason}</div>
+   ${st==='error'?`<div style="margin-top:8px"><button class="btn btn-outline btn-sm" onclick="toast('已发起重评（示意）：仅重跑该评估器')">↻ 重评</button></div>`:''}
+  </div>`;
+ }
+ const rows=(e.points||[]).map(m=>`<tr>
+  <td style="width:210px"><b style="font-size:11.5px;color:var(--foreground)">${m.label}</b></td>
+  <td style="width:64px"><span class="sc">${m.score!=null?m.score:'—'}</span></td>
+  <td>${m.evidence?evdBlock(m.evidence):''}</td></tr>`).join('');
+ const body=rows
+  ?`<div style="margin-top:9px"><table class="tbl">
+   <thead><tr><th style="width:210px">评分点</th><th style="width:64px">得分</th><th>证据</th></tr></thead>
+   <tbody>${rows}</tbody></table></div>`
+  :(e.evidence?`<div style="margin-top:9px">${evdBlock(e.evidence)}</div>`:'');
+ return `<div class="evcard" style="cursor:default">
+  <div class="eh"><span class="en">${e.name}</span>${tags}<span class="top-sp"></span><span class="sc" style="font-size:17px">${e.score}</span></div>
+  ${body}
+ </div>`;
+}
+function renderEvalResults(){
+ $('#resCards').innerHTML=EVAL_RESULTS.filter(e=>e.cat==='res').map(evResCard).join('');
+ $('#trajCards').innerHTML=EVAL_RESULTS.filter(e=>e.cat==='traj').map(evResCard).join('');
+}
+
+// ─── 评估器（对齐现存 EvaluatorsCenter：自建/预置双页签）───
+// 预置代码类评估器（工具可靠性 / 时延 / 成本 / 冗余循环 / Token 效率）是独立能力单元，
+// 卡片不标注来源——可靠性与性能等监控页只是消费这些能力（依赖方向：监控页 → 评估器能力库）。
+// 全部评估器输出同一契约：score? + points[]? + evidence?(md/json)。
+//
+// 类目（结果 res / 轨迹 traj）= 评估器【注册时元数据】，不在运行输出里：
+//   预置评估器在注册声明里写死 category；自定义评估器由新建表单的「看结果/看轨迹」填入。
+//   详情页按 评估器ID → 注册表.category 把结果卡归入两个 panel，评估器无法在运行时改类目，
+//   保证同一评估器在所有 trace/实验中归组一致、类目均分口径稳定。
+//   归类准绳：只读最终输出（±参考答案）→ res；需要读执行过程（步骤/工具/耗时/成本/token）→ traj。
+const EVALUATOR_LIB=[
+ {name:'任务完成度', tags:['预置','LLM Judge','看结果','依赖参考数据'],
+  desc:'对照参考答案判断最终结果是否达成用户目标；评分点=从参考答案提取的关键观点是否覆盖。',
+  scene:'通用结果验收：回归对比、灰度前验证、周常质量巡检的主指标。',
+  output:'score 0-100 + 评分点（关键观点逐条判定）+ 判断依据（Markdown）'},
+ {name:'轨迹质量', tags:['预置','LLM Judge','看轨迹'],
+  desc:'评估执行过程质量；评分点=完整性 / 工具选择 / 冗余度 / 归因四个固定维度。',
+  scene:'关注过程而非结果：排查 Agent 绕路 / 冗余 / 工具误用，优化提示词与编排。',
+  output:'score 0-100 + 评分点（四固定维度）+ 判断依据（Markdown）'},
+ {name:'工具调用可靠性', tags:['预置','代码','看轨迹'],
+  desc:'按 trace 内工具调用错误率给分（硬错误口径：state / failures）。',
+  scene:'工具链稳定性验收：框架升级、工具变更后的回归；日常可靠性巡检。',
+  output:'score 0-100（错误率折算）+ 失败工具与步骤清单（JSON）'},
+ {name:'时延预算', tags:['预置','代码','看轨迹'],
+  desc:'端到端耗时对照预算阈值给分。',
+  scene:'性能敏感场景的上线门禁：校验端到端时延是否守住预算。',
+  output:'score 0-100（预算达成度）+ 最慢 span 耗时分解（JSON）'},
+ {name:'成本预算', tags:['预置','代码','看轨迹'],
+  desc:'按模型单价加权的 trace 成本对照预算给分。',
+  scene:'控本场景：模型 / 编排调整后确认单任务成本不回涨。',
+  output:'score 0-100（预算达成度）+ 分模型成本构成（JSON）'},
+ {name:'冗余循环检测', tags:['预置','代码','看轨迹'],
+  desc:'检测重复工具调用与循环执行模式，按冗余步数占比给分。',
+  scene:'定位 Agent 空转：重复读取、循环调用的专项检查，常与轨迹质量搭配。',
+  output:'score 0-100（冗余占比折算）+ 重复调用对与步骤锚点（JSON）'},
+ {name:'Token 效率', tags:['预置','代码','看轨迹'],
+  desc:'单位任务 Token 对照同类任务基线给分，识别上下文膨胀与超长单次调用。',
+  scene:'上下文膨胀排查：对比同类任务基线，识别 token 异常增长。',
+  output:'score 0-100（相对基线）+ 超基线调用明细（JSON）'},
+ {name:'答案精确匹配', tags:['自定义','代码','看结果','依赖参考数据'],
+  desc:'归一化后与参考答案做精确 / 包含匹配。',
+  scene:'答案确定性高的任务（分类 / 抽取 / 固定话术），要求严格一致。',
+  output:'score 0 / 100（命中与否）+ 匹配明细（JSON）'},
+ {name:'答案语义相似度', tags:['自定义','LLM Judge','看结果','依赖参考数据'],
+  desc:'判断输出与参考答案的语义一致性，与精确匹配互补，容忍表述差异。',
+  scene:'答案表述灵活的任务：容忍措辞差异但要求语义一致。',
+  output:'score 0-100 + 相似度判定理由（Markdown）'},
+];
+let evLibTab='自定义';
+const evLibSel=new Set();
+window.evLibTabSw=(t,el)=>{evLibTab=t;document.querySelectorAll('#page-evaluators .evtab').forEach(b=>b.classList.toggle('on',b===el));
+ // 只能新建自定义评估器：预置页签下隐藏新建入口（预置由平台随版本内置，用户不可增删）
+ $('#evCreateBtn').style.display=t==='自定义'?'':'none';renderEvLib();};
+window.evLibFilt=(el,t)=>{el.classList.toggle('on');el.classList.contains('on')?evLibSel.add(t):evLibSel.delete(t);renderEvLib();};
+function renderEvLib(){
+ const q=($('#evLibSearch')?.value||'').trim();
+ const list=EVALUATOR_LIB.filter(e=>e.tags.includes(evLibTab))
+  .filter(e=>[...evLibSel].every(t=>e.tags.includes(t)))
+  .filter(e=>!q||e.name.includes(q));
+ $('#evLibGrid').innerHTML=list.map(e=>`
+  <div class="evcard" style="cursor:pointer" onclick="openEvDetail('${e.name}')">
+   <div class="eh"><span class="en">${e.name}</span><span class="top-sp"></span><span class="chip chip-ok" style="height:16px;font-size:9.5px">已就绪</span></div>
+   <div class="evtags">${e.tags.filter(t=>t!=='预置'&&t!=='自定义').map(t=>`<span class="chip chip-mut">${t}</span>`).join('')}</div>
+   <div class="ed" style="margin-top:7px">${e.desc}</div>
+  </div>`).join('');
+ $('#evLibEmpty').style.display=list.length?'none':'';
+}
+
+// ─── 评估器详情弹层：宏观了解（名称/标签/描述/应用场景/前置条件/输出/呈现位置），不展开实现细节 ───
+window.openEvDetail=name=>{
+ const e=EVALUATOR_LIB.find(x=>x.name===name);if(!e)return;
+ const isPre=e.tags.includes('预置');
+ const needRef=e.tags.includes('依赖参考数据');
+ const cat=e.tags.includes('看结果')?'结果评测':'轨迹评测';
+ const sec=(k,v)=>`<div class="dsec"><div class="dk">${k}</div><div class="dv">${v}</div></div>`;
+ $('#modalRoot').innerHTML=`<div class="modal-ov" onclick="if(event.target===this)closeEvCreate()"><div class="modal" style="width:760px;padding:20px 24px">
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:9px"><b style="font-size:15.5px">${e.name}</b><span class="chip ${isPre?'chip-ok':'chip-mut'}">${isPre?'预置':'自定义'}</span><span class="top-sp"></span><button class="btn btn-ghost btn-sm" onclick="closeEvCreate()">✕ 关闭</button></div>
+  <div class="evtags" style="margin-bottom:14px">${e.tags.filter(t=>t!=='预置'&&t!=='自定义').map(t=>`<span class="chip chip-mut">${t}</span>`).join('')}</div>
+  ${sec('描述',e.desc)}
+  ${sec('应用场景',e.scene||'—')}
+  ${sec('前置条件',needRef?'需已标注参考答案——能否在实验中使用，取决于实验第 ② 步圈选的 trace 是否满足标注覆盖，第 ④ 步自动校验门控。':'无——任意已圈选的 trace 均可评，不依赖参考数据。')}
+  ${sec('输出',e.output||'score 0-100 + 评分点 + 判断依据（Markdown）')}
+  ${sec('结果呈现位置','Trace 评测详情 · <b style="color:var(--foreground)">「'+cat+'」</b>板块（类目为注册时元数据，运行时不可变更）')}
+  <div style="display:flex;gap:10px;align-items:center;margin-top:16px;border-top:1px solid var(--border);padding-top:14px">
+    <span style="font-size:10.5px;color:var(--foreground-muted);flex:1;line-height:1.5">能否勾选以实验 ④ 步的校验为准（按已圈选 trace 检查前置条件）</span>
+    ${isPre?'':'<button class="btn btn-outline" onclick="toast(\'示意：编辑自定义评估器（名称 / 类目 / 提示词）\')">编辑</button>'}
+    <button class="btn btn-primary" onclick="closeEvCreate();startNew()">去新建实验 →</button>
+  </div>
+ </div></div>`;
+};
+
+// ─── 新建评估器（仅提示词形式）───
+// 提示词中可插入占位符（点选，插到光标处）；运行时由平台按 case 替换：
+//   {{input}}=任务输入  {{output}}=实际输出  {{reference}}=参考输出  {{trajectory}}=执行轨迹
+// 用到 {{reference}} 自动打「依赖参考数据」标（④ 步据此门控）。
+// 输出【形状】不可自定义：平台以结构化输出强制契约 score? + points[]? + evidence?；
+// 可自定义的是「怎么评」（提示词）与「评什么」（可选的评分点清单——填写后 Judge 必须按
+// 清单逐条给分，输出必含这些评分点；留空则由 Judge 自行提取评分点）。
+// 评分点与提示词的组装关系（运行时，编辑态互不污染）：
+//   最终 Judge 请求 = ① 用户提示词（占位符已替换，管"怎么评"）
+//                   + ② 平台注入的评分点指令段（清单→"必须逐条评以下点"，管"评什么"）
+//                   + ③ 结构化输出约束（points.label 枚举=清单，管"输出形状"）。
+//   用户提示词不被改写；清单是权威——即使提示词里另写了评的方面，输出仍以清单为准。
+//   自由模式（清单留空）无需用户在提示词写任何特殊描述——② 段指令由平台按有无清单自动切换：
+//   有清单→"按清单逐条给分"；无清单→"自行提取评分点并逐条给分，不适合拆点可只给总分+依据"。
+//   提示词中的评判角度会语义上引导自由模式提取的评分点，但不构成语法要求。
+const EV_PHS=[['{{input}}','任务输入'],['{{output}}','实际输出'],['{{reference}}','参考输出'],['{{trajectory}}','执行轨迹']];
+const EVC_IPT='height:32px;border:1px solid var(--input-border);border-radius:8px;background:var(--input-bg);padding:0 10px;font-size:12px;color:var(--foreground);outline:none;width:100%';
+let evCat='看结果';
+window.openEvCreate=()=>{
+ evCat='看结果';
+ $('#modalRoot').innerHTML=`<div class="modal-ov" onclick="if(event.target===this)closeEvCreate()"><div class="modal" style="width:760px;padding:20px 24px">
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:18px"><b style="font-size:15.5px">新建自定义评估器</b><span class="chip chip-mut">仅提示词（LLM Judge）</span><span class="top-sp"></span><button class="btn btn-ghost btn-sm" onclick="closeEvCreate()">✕ 关闭</button></div>
+  <div style="display:grid;grid-template-columns:1fr auto;gap:16px;margin-bottom:15px;align-items:end">
+    <div class="field" style="margin:0"><label class="fieldlbl">评估器名称</label><input type="text" id="evcName" placeholder="如：客服话术合规性"></div>
+    <div><label class="fieldlbl">类目</label><div class="seg" style="display:inline-flex"><button class="on" onclick="evcCat(this,'看结果')">看结果</button><button onclick="evcCat(this,'看轨迹')">看轨迹</button></div></div>
+  </div>
+  <div class="field" style="margin-bottom:15px"><label class="fieldlbl">应用场景（可选）</label><input type="text" id="evcScene" placeholder="一句话说明什么时候用它——展示在评估器详情里"></div>
+  <label class="fieldlbl">评估提示词</label>
+  <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:7px">
+    <span style="font-size:10.5px;color:var(--foreground-muted)">点击插入占位符：</span>
+    ${EV_PHS.map(([t,l])=>`<button class="btn btn-outline btn-sm" style="font-size:10.5px;padding:3px 9px;font-family:var(--mono)" title="插入到光标处 · ${l}" onclick="evcInsert('${t.replace(/\{/g,'\\u007b').replace(/\}/g,'\\u007d')}')">${t} <span style="font-family:var(--sans);color:var(--foreground-muted)">${l}</span></button>`).join('')}
+  </div>
+  <textarea id="evcPrompt" rows="10" style="width:100%;border:1px solid var(--input-border);border-radius:9px;background:var(--input-bg);padding:11px 13px;font-size:12px;color:var(--foreground);outline:none;resize:vertical;font-family:var(--mono);line-height:1.7" placeholder="你是一名评估专家，请评估 Agent 的表现。&#10;&#10;任务输入：{{input}}&#10;实际输出：{{output}}&#10;参考输出：{{reference}}&#10;&#10;请判断实际输出是否达成任务目标。" oninput="evcDeps()"></textarea>
+  <div id="evcDep" style="font-size:10.5px;color:var(--foreground-muted);margin-top:7px">未使用占位符——点击上方按钮插入到光标处</div>
+  <div style="margin-top:17px">
+    <label class="fieldlbl">评分点（可选）</label>
+    <div id="evcPts"></div>
+    <button class="btn btn-outline btn-sm" onclick="addEvcPt()">＋ 添加评分点</button>
+  </div>
+  <div style="display:flex;gap:9px;justify-content:flex-end;margin-top:17px;border-top:1px solid var(--border);padding-top:15px"><button class="btn btn-ghost" onclick="closeEvCreate()">取消</button><button class="btn btn-primary" onclick="evcSave()">保存评估器</button></div>
+ </div></div>`;
+ addEvcPt();
+};
+window.closeEvCreate=()=>{$('#modalRoot').innerHTML='';};
+window.evcCat=(el,c)=>{evCat=c;el.parentElement.querySelectorAll('button').forEach(b=>b.classList.toggle('on',b===el));};
+window.addEvcPt=()=>{
+ const d=document.createElement('div');
+ d.style.cssText='display:grid;grid-template-columns:220px 1fr 30px;gap:8px;margin-bottom:8px;align-items:center';
+ d.innerHTML=`<input type="text" class="evc-pt-name" placeholder="评分点名称，如 礼貌用语" style="${EVC_IPT}">`
+  +`<input type="text" class="evc-pt-desc" placeholder="判定说明（可选），如 是否使用敬语、无生硬否定" style="${EVC_IPT}">`
+  +`<button class="btn btn-ghost btn-sm" style="padding:2px 6px" title="删除该评分点" onclick="this.parentElement.remove()">✕</button>`;
+ $('#evcPts').appendChild(d);
+};
+window.evcInsert=t=>{
+ const ta=$('#evcPrompt');if(!ta)return;
+ const s=ta.selectionStart??ta.value.length,e2=ta.selectionEnd??ta.value.length;
+ ta.value=ta.value.slice(0,s)+t+ta.value.slice(e2);
+ ta.focus();ta.selectionStart=ta.selectionEnd=s+t.length;evcDeps();
+};
+window.evcDeps=()=>{
+ const v=$('#evcPrompt').value;
+ const used=EV_PHS.filter(([t])=>v.includes(t));
+ $('#evcDep').innerHTML=used.length
+  ?'已使用占位符：'+used.map(([t])=>`<span class="c">${t}</span>`).join(' ')+(v.includes('{{reference}}')?' · 将自动打标 <span class="chip chip-mut" style="height:16px;font-size:9.5px">依赖参考数据</span>':'')
+  :'未使用占位符——点击上方按钮插入到光标处';
+};
+window.evcSave=()=>{
+ const name=$('#evcName').value.trim(),p=$('#evcPrompt').value.trim();
+ if(!name)return toast('请填写评估器名称');
+ if(!p)return toast('请编写评估提示词');
+ if(!EV_PHS.some(([t])=>p.includes(t)))return toast('提示词至少要包含一个占位符（如 {{output}}）');
+ const pts=[...document.querySelectorAll('.evc-pt-name')].map(i=>i.value.trim()).filter(Boolean);
+ const tags=['自定义','LLM Judge',evCat];
+ if(p.includes('{{reference}}'))tags.push('依赖参考数据');
+ EVALUATOR_LIB.push({name,tags,
+  desc:'提示词评估器：'+p.replace(/\s+/g,' ').slice(0,56)+'…',
+  scene:$('#evcScene').value.trim()||'—',
+  output:'score 0-100 + 评分点（'+(pts.length?pts.join(' / ')+'，逐条强制给分':'Judge 自行提取')+'）+ 判断依据（Markdown）'});
+ evLibTabSw('自定义',$('#evTabCustom'));closeEvCreate();toast('已创建评估器「'+name+'」——可在 ④ 步勾选使用');
+};
+
+// ─── toast / 主题 ───
+let toastTimer;
+window.toast=msg=>{const t=$('#toast');t.textContent=msg;t.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.remove('show'),2600);};
+$('#themeBtn').addEventListener('click',()=>{const r=$('#root');r.dataset.theme=r.dataset.theme==='dark'?'light':'dark';});
+
+// init
+renderTraces();renderInputs();renderPairs();updateCov();renderEvalResults();renderEvLib();
+</script>
