@@ -1,5 +1,6 @@
 import { canAccessSkill, resolveUser } from '@/lib/auth/auth';
 import { db } from '@/lib/storage/prisma';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { NextRequest, NextResponse } from 'next/server';
 import { deleteEnterpriseSkill, fetchEnterpriseSkillInfo } from '@/lib/engine/skill-generation/legacy/skill-sync-service';
 
@@ -80,6 +81,8 @@ export async function DELETE(
                 console.log(`[Delete Version] Updated activeVersion from ${version} to ${newActiveVersion}`);
             }
         }
+
+        recordUsageEvent({ user: username, featureKey: 'skill', eventKey: 'skill.delete' });
 
         return NextResponse.json({
             success: true,

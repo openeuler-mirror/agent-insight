@@ -3,6 +3,7 @@ import { db } from '@/lib/storage/prisma';
 import { runStaticEvaluation } from '@/lib/engine/skill-issues/static-evaluator';
 import { getActiveConfig } from '@/lib/storage/server-config';
 import { NextRequest, NextResponse } from 'next/server';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 
 /**
  * 手动触发当前 SkillVersion 的静态评估（完整 L1+L2 流程，L1 不单独评分）。
@@ -53,6 +54,10 @@ export async function POST(
       user: username || null,
       trigger: 'manual',
     });
+
+    // trigger: 'manual' —— 只有用户主动发起的静态评测计数；
+    // 上传/应用草稿后的自动评测走别的路由，不计。
+    recordUsageEvent({ user: username, featureKey: 'skill-eval', eventKey: 'skill.eval.static.run' });
 
     return NextResponse.json(result);
   } catch (e: any) {

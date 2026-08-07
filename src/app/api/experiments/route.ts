@@ -1,6 +1,7 @@
 // 评测「实验」API —— 列表 + 创建（本期仅单组实验 type='single'）。
 // 执行引擎（ExperimentEvalResult 写入）为后续里程碑，POST 仅落 draft。
 import { NextResponse } from 'next/server';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { prisma } from '@/lib/storage/prisma';
 import { resolveUser } from '@/lib/auth/auth';
 
@@ -116,6 +117,8 @@ export async function POST(req: Request) {
       },
       select: { id: true },
     });
+
+    recordUsageEvent({ user: username, featureKey: 'experiments', eventKey: 'experiment.create' });
 
     return NextResponse.json({ id: experiment.id });
   } catch (error) {

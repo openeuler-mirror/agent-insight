@@ -10,6 +10,7 @@ import { runTriggerEvalLive } from '@/lib/engine/skill-generation/evaluator/runn
 import { prismaRaw } from '@/lib/storage/prisma';
 import { deriveAndPersistTriggerOptPoints } from '@/lib/engine/evaluation/derive-trigger-opt-points';
 import { ensureSessionWorkspace } from '@/lib/engine/general-agent/workspace';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import {
   registerTriggerEvalRun,
   unregisterTriggerEvalRun,
@@ -247,6 +248,9 @@ export async function POST(
       modelId: modelConfigId ?? null,
       workspaceRoot,
     });
+
+    // run 已成功创建 = 一次有效使用；上面命中 409「已在运行」的分支不计。
+    recordUsageEvent({ user, featureKey: 'skill-eval', eventKey: 'skill.eval.trigger.run' });
 
     // 5. 登记一个 AbortController（供「终止」用），把它的 signal 穿进后台评测。
     const controller = registerTriggerEvalRun(run.id);

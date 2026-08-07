@@ -1,4 +1,5 @@
 import { canAccessSkill, resolveUser } from '@/lib/auth/auth';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { parseSkillFlow } from '@/lib/engine/observability/flow-parser';
 import { runStaticEvaluation } from '@/lib/engine/skill-issues/static-evaluator';
 import { findSkillMd } from '@/lib/skill-generator/skill-files';
@@ -173,6 +174,8 @@ export async function POST(
         await (prismaRaw as any).skillOptIteration.deleteMany({
             where: { sessionId },
         });
+
+        recordUsageEvent({ user, featureKey: 'skill-opt', eventKey: 'skill.draft.apply' });
 
         return NextResponse.json({
             success: true,

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { resolveUser } from '@/lib/auth/auth';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { importTraceBundle } from '@/lib/trace-transfer-service';
 import { TRACE_BUNDLE_MAX_BYTES, TraceBundleValidationError } from '@/lib/trace-transfer';
 
@@ -27,6 +28,9 @@ export async function POST(request: Request) {
 
     try {
         const result = await importTraceBundle(body?.bundle, username);
+
+        recordUsageEvent({ user: username, featureKey: 'trace', eventKey: 'trace.import' });
+
         return NextResponse.json({
             success: true,
             fileName: typeof body?.fileName === 'string' ? body.fileName : null,

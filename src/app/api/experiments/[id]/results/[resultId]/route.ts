@@ -6,6 +6,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/storage/prisma';
 import { resolveUser } from '@/lib/auth/auth';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 
 export const dynamic = 'force-dynamic';
 
@@ -67,6 +68,9 @@ export async function PATCH(
         : { humanScore, humanReason: reason, humanBy: username, humanAt: new Date() },
       select: { id: true, score: true, humanScore: true, humanReason: true, humanBy: true, humanAt: true },
     });
+
+    // 人工修正得分 = 对已有用例结果的一次编辑保存；输入过程不计，只在保存成功时记 1 次。
+    recordUsageEvent({ user: username, featureKey: 'experiments', eventKey: 'experiment.case.update' });
 
     return NextResponse.json(updated);
   } catch (error) {

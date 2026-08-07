@@ -8,6 +8,8 @@ import path from 'node:path';
 import { inferSubagentNamesFromInteractions } from '@/lib/engine/observability/subagent-inference';
 import { normalizeClaudeCodeInteractionsForStorage } from '@/lib/shared/interaction-content';
 import { db, prismaRaw } from '@/lib/storage/prisma';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
+import { isUsageEnabled } from '@/lib/usage-analytics/config';
 import {
   findAgentDebugReport,
   findAgentDebugSkillsAnalysis,
@@ -383,6 +385,19 @@ export async function POST(request: Request) {
       content: message,
     },
   });
+
+  // 用户消息已被接受 = 一次有效使用。首条算"启动诊断"，后续算"继续对话"；
+  // 流式 token 不在这里计（每次 POST 只走一遍）。
+  if (isUsageEnabled()) {
+    const priorUserMessages = await (prismaRaw as any).faultDiagnosisMessage.count({
+      where: { sessionId: diagnosisSessionId, role: 'user' },
+    });
+    recordUsageEvent({
+      user,
+      featureKey: 'fault',
+      eventKey: priorUserMessages <= 1 ? 'fault.diagnosis.run' : 'fault.message.send',
+    });
+  }
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({

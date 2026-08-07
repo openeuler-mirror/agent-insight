@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/storage/prisma';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 
 interface ActiveGrayscaleRun {
     taskId: string;
@@ -233,6 +234,9 @@ export async function POST(req: NextRequest) {
                 }),
             },
         });
+        // 只在真正新建 A/B 任务时计数；上面命中同名任务走 409，不计。
+        recordUsageEvent({ user, featureKey: 'skill-eval', eventKey: 'skill.eval.ab.run' });
+
         return NextResponse.json({
             ...task,
             configJson: {

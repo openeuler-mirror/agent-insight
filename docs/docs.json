@@ -76,7 +76,8 @@
             "pages": [
               "user-guide/settings/model-registry",
               "user-guide/settings/web-search",
-              "user-guide/settings/access-control"
+              "user-guide/settings/access-control",
+              "user-guide/settings/usage-analytics"
             ]
           }
         ]

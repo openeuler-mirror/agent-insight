@@ -1,6 +1,7 @@
 // 单项重评：重置该行 pending 并同步单行执行，返回该行终态。
 import { NextResponse } from 'next/server';
 import { resolveUser } from '@/lib/auth/auth';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { retryResultRow } from '@/lib/engine/experiment/run-experiment';
 
 export const dynamic = 'force-dynamic';
@@ -21,6 +22,8 @@ export async function POST(
     if (!status) {
       return NextResponse.json({ error: 'result not found' }, { status: 404 });
     }
+    recordUsageEvent({ user: username, featureKey: 'experiments', eventKey: 'experiment.retry' });
+
     return NextResponse.json({ status });
   } catch (error) {
     console.error('[Experiment Retry Error]', error);

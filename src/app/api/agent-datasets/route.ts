@@ -17,6 +17,7 @@ import {
   validateCasesForKind,
   type AgentDatasetRecord,
 } from '@/server/agent_datasets_storage';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 
 export const dynamic = 'force-dynamic';
 
@@ -112,6 +113,8 @@ export async function POST(request: Request) {
 
     await createAgentDatasetRecord(dataset);
 
+    recordUsageEvent({ user, featureKey: 'dataset', eventKey: 'dataset.create' });
+
     return NextResponse.json({ success: true, dataset, warnings });
   } catch (error) {
     console.error('agent-datasets POST error:', error);
@@ -194,6 +197,8 @@ export async function PATCH(request: Request) {
     if (!ok) {
       return NextResponse.json({ error: 'dataset not found' }, { status: 404 });
     }
+    recordUsageEvent({ user, featureKey: 'dataset', eventKey: 'dataset.sample.update' });
+
     return NextResponse.json({ success: true, dataset: updated, warnings: preparedCasesResult.warnings });
   } catch (error) {
     console.error('agent-datasets PATCH error:', error);

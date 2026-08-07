@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { AppTopBar } from '@/components/shell/AppTopBar';
+import { reportClientUsage } from '@/lib/usage-analytics/client-events';
 
 interface InfraSource {
   id: string;
@@ -173,6 +174,7 @@ export default function InfraSourcesPage() {
       });
       const body = await res.json();
       setTestRes({ ok: !!body.ok, message: body.message || body.error || '检测失败' });
+      reportClientUsage('infra', 'infra.source.test');
     } catch (e) {
       setTestRes({ ok: false, message: e instanceof Error ? e.message : String(e) });
     } finally {
@@ -225,6 +227,7 @@ export default function InfraSourcesPage() {
       });
       const body = await res.json();
       if (!res.ok) { setMsg(body.message || body.error || '添加失败'); return; }
+      reportClientUsage('infra', 'infra.source.save');
       setNewUrl('');
       setNewAuth('');
       setTestRes(null);

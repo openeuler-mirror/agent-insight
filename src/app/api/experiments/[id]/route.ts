@@ -5,6 +5,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/storage/prisma';
 import { resolveUser } from '@/lib/auth/auth';
 import { overallAverage, evaluatorBreakdown } from '@/lib/engine/experiment/detail-agg';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 
 export const dynamic = 'force-dynamic';
 
@@ -173,6 +174,8 @@ export async function PATCH(
       where: { id },
       data: { watchMode: false, watchEnabledAt: null },
     });
+    recordUsageEvent({ user: username, featureKey: 'experiments', eventKey: 'experiment.watch.stop' });
+
     return NextResponse.json({ success: true, watchMode: false });
   } catch (error) {
     console.error('[Experiment PATCH Error]', error);
