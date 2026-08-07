@@ -12,8 +12,7 @@ export type VersionAnalysisTrace = {
   timestamp: string;
   traceCompletedAt: string | null;
   traceStatus: 'running' | 'success';
-  answerScore: number | null;
-  isAnswerCorrect: boolean | null;
+  taskCompletionScore: number | null;
   tokens: number | null;
   latencySec: number | null;
   cost: number | null;
@@ -22,8 +21,8 @@ export type VersionAnalysisTrace = {
 
 export type VersionMetricSummary = {
   traceCount: number;
-  answerScoreAvg: number | null;
-  answerScoreCoverage: number;
+  taskCompletionScoreAvg: number | null;
+  taskCompletionScoreCoverage: number;
   runSuccessRate: number | null;
   avgTokens: number | null;
   p95LatencySec: number | null;
@@ -45,7 +44,7 @@ export type VersionQuestionSummary = {
   label: string;
   traceCount: number;
   versionCount: number;
-  answerScoreAvg: number | null;
+  taskCompletionScoreAvg: number | null;
 };
 
 export type VersionCompareResponse = {
@@ -78,6 +77,23 @@ export type VersionAnalysisFilters = {
 };
 
 const EMPTY_QUESTION_KEY = '__empty_query__';
+const TASK_COMPLETION_EVALUATOR_ID = 'preset-agent-task-completion';
+
+type TaskCompletionScoreLookup = {
+  byExecutionId: Map<string, number>;
+  byLegacyTaskId: Map<string, number>;
+};
+
+type TaskCompletionResultCandidate = {
+  id?: string;
+  score: number | null;
+  humanScore: number | null;
+  updatedAt?: Date | string;
+  case: {
+    executionId: string | null;
+    taskId: string | null;
+  };
+};
 
 function assertSupported() {
   if (process.env.DB_HOST) {
@@ -121,6 +137,40 @@ function toNumber(value: unknown): number | null {
 function average(values: number[]): number | null {
   if (!values.length) return null;
   return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+export function buildLatestTaskCompletionScoreLookup(
+  candidates: TaskCompletionResultCandidate[],
+): TaskCompletionScoreLookup {
+  const lookup: TaskCompletionScoreLookup = {
+    byExecutionId: new Map(),
+    byLegacyTaskId: new Map(),
+  };
+  const newestFirst = [...candidates].sort((a, b) => {
+    const timeDiff = new Date(b.updatedAt ?? 0).getTime() - new Date(a.updatedAt ?? 0).getTime();
+    return timeDiff || String(b.id || '').localeCompare(String(a.id || ''));
+  });
+  for (const candidate of newestFirst) {
+    const effectiveScore = toNumber(candidate.humanScore) ?? toNumber(candidate.score);
+    if (effectiveScore == null) continue;
+    const executionId = cleanOptional(candidate.case.executionId);
+    if (executionId) {
+      if (!lookup.byExecutionId.has(executionId)) lookup.byExecutionId.set(executionId, effectiveScore);
+      continue;
+    }
+    const taskId = cleanOptional(candidate.case.taskId);
+    if (taskId && !lookup.byLegacyTaskId.has(taskId)) lookup.byLegacyTaskId.set(taskId, effectiveScore);
+  }
+  return lookup;
+}
+
+function resolveTaskCompletionScore(execution: any, lookup: TaskCompletionScoreLookup): number | null {
+  const executionId = cleanOptional(execution.id);
+  if (executionId && lookup.byExecutionId.has(executionId)) {
+    return lookup.byExecutionId.get(executionId) ?? null;
+  }
+  const taskId = cleanOptional(execution.taskId);
+  return taskId ? lookup.byLegacyTaskId.get(taskId) ?? null : null;
 }
 
 function percentile(values: number[], p: number): number | null {
@@ -195,7 +245,55 @@ async function loadSessionEndTimes(user: string, taskIds: string[]): Promise<Map
   return out;
 }
 
-function toTrace(row: any, sessionEndByTaskId: Map<string, string>): VersionAnalysisTrace {
+async function loadLatestTaskCompletionScores(user: string, executions: any[]): Promise<TaskCompletionScoreLookup> {
+  const executionIds = Array.from(new Set(executions.map(execution => cleanOptional(execution?.id)).filter(Boolean))) as string[];
+  const taskIds = Array.from(new Set(executions.map(execution => cleanOptional(execution?.taskId)).filter(Boolean))) as string[];
+  if (!executionIds.length && !taskIds.length) return buildLatestTaskCompletionScoreLookup([]);
+
+  const select = {
+    id: true,
+    score: true,
+    humanScore: true,
+    updatedAt: true,
+    case: { select: { executionId: true, taskId: true } },
+  };
+  const rows: TaskCompletionResultCandidate[] = [];
+  const batchSize = 400;
+  for (let offset = 0; offset < executionIds.length; offset += batchSize) {
+    rows.push(...await (prismaRaw as any).experimentEvalResult.findMany({
+      where: {
+        evaluatorId: TASK_COMPLETION_EVALUATOR_ID,
+        status: 'done',
+        case: {
+          experiment: { user },
+          executionId: { in: executionIds.slice(offset, offset + batchSize) },
+        },
+      },
+      select,
+    }));
+  }
+  for (let offset = 0; offset < taskIds.length; offset += batchSize) {
+    rows.push(...await (prismaRaw as any).experimentEvalResult.findMany({
+      where: {
+        evaluatorId: TASK_COMPLETION_EVALUATOR_ID,
+        status: 'done',
+        case: {
+          experiment: { user },
+          executionId: null,
+          taskId: { in: taskIds.slice(offset, offset + batchSize) },
+        },
+      },
+      select,
+    }));
+  }
+  return buildLatestTaskCompletionScoreLookup(rows);
+}
+
+function toTrace(
+  row: any,
+  sessionEndByTaskId: Map<string, string>,
+  taskCompletionScores: TaskCompletionScoreLookup,
+): VersionAnalysisTrace {
   const execution = row.execution;
   const taskId = execution.taskId ?? null;
   const completedAt = taskId ? sessionEndByTaskId.get(taskId) ?? null : null;
@@ -210,8 +308,7 @@ function toTrace(row: any, sessionEndByTaskId: Map<string, string>): VersionAnal
     timestamp: toIso(execution.timestamp) || new Date(0).toISOString(),
     traceCompletedAt: completedAt,
     traceStatus: completedAt ? 'success' : 'running',
-    answerScore: toNumber(execution.answerScore),
-    isAnswerCorrect: typeof execution.isAnswerCorrect === 'boolean' ? execution.isAnswerCorrect : null,
+    taskCompletionScore: resolveTaskCompletionScore(execution, taskCompletionScores),
     tokens: effectiveTokens(execution),
     latencySec: latencyMs == null ? null : latencyMs / 1000,
     cost: toNumber(execution.cost),
@@ -220,7 +317,7 @@ function toTrace(row: any, sessionEndByTaskId: Map<string, string>): VersionAnal
 }
 
 function summarizeTraceMetrics(traces: VersionAnalysisTrace[]): VersionMetricSummary {
-  const scores = traces.map(t => t.answerScore).filter((v): v is number => typeof v === 'number');
+  const scores = traces.map(t => t.taskCompletionScore).filter((v): v is number => typeof v === 'number');
   const tokens = traces.map(t => t.tokens).filter((v): v is number => typeof v === 'number');
   const latencies = traces.map(t => t.latencySec).filter((v): v is number => typeof v === 'number');
   const costs = traces.map(t => t.cost).filter((v): v is number => typeof v === 'number');
@@ -228,8 +325,8 @@ function summarizeTraceMetrics(traces: VersionAnalysisTrace[]): VersionMetricSum
   const times = traces.map(t => new Date(t.timestamp).getTime()).filter(Number.isFinite);
   return {
     traceCount: traces.length,
-    answerScoreAvg: average(scores),
-    answerScoreCoverage: traces.length ? scores.length / traces.length : 0,
+    taskCompletionScoreAvg: average(scores),
+    taskCompletionScoreCoverage: traces.length ? scores.length / traces.length : 0,
     runSuccessRate: traces.length ? terminal.length / traces.length : null,
     avgTokens: average(tokens),
     p95LatencySec: percentile(latencies, 95),
@@ -246,20 +343,25 @@ function summarizeVersion(tag: any, traces: VersionAnalysisTrace[]): VersionMetr
   };
 }
 
-function summarizeOverall(tags: any[], rows: any[], sessionEndByTaskId: Map<string, string>): VersionAnalysisSummary {
+function summarizeOverall(
+  tags: any[],
+  rows: any[],
+  sessionEndByTaskId: Map<string, string>,
+  taskCompletionScores: TaskCompletionScoreLookup,
+): VersionAnalysisSummary {
   const byExecution = new Map<string, any>();
   for (const row of rows) {
     const id = row.execution?.id;
     if (id && !byExecution.has(id)) byExecution.set(id, row);
   }
-  const traces = Array.from(byExecution.values()).map(row => toTrace(row, sessionEndByTaskId));
+  const traces = Array.from(byExecution.values()).map(row => toTrace(row, sessionEndByTaskId, taskCompletionScores));
   return {
     versionTagCount: tags.length,
     ...summarizeTraceMetrics(traces),
   };
 }
 
-function summarizeQuestions(rows: any[]): VersionQuestionSummary[] {
+function summarizeQuestions(rows: any[], taskCompletionScores: TaskCompletionScoreLookup): VersionQuestionSummary[] {
   const byQuestion = new Map<string, { label: string; executions: Map<string, any>; versions: Set<string> }>();
   for (const row of rows) {
     const execution = row.execution;
@@ -272,13 +374,15 @@ function summarizeQuestions(rows: any[]): VersionQuestionSummary[] {
   return Array.from(byQuestion.entries())
     .map(([key, bucket]) => {
       const executions = Array.from(bucket.executions.values());
-      const scores = executions.map(e => toNumber(e.answerScore)).filter((v): v is number => typeof v === 'number');
+      const scores = executions
+        .map(execution => resolveTaskCompletionScore(execution, taskCompletionScores))
+        .filter((v): v is number => typeof v === 'number');
       return {
         key,
         label: bucket.label,
         traceCount: executions.length,
         versionCount: bucket.versions.size,
-        answerScoreAvg: average(scores),
+        taskCompletionScoreAvg: average(scores),
       };
     })
     .sort((a, b) => b.traceCount - a.traceCount || a.label.localeCompare(b.label));
@@ -322,8 +426,6 @@ async function loadVersionRows(user: string, filters: VersionAnalysisFilters): P
           framework: true,
           agentName: true,
           timestamp: true,
-          answerScore: true,
-          isAnswerCorrect: true,
           tokens: true,
           inputTokens: true,
           outputTokens: true,
@@ -352,17 +454,18 @@ async function loadVersionRows(user: string, filters: VersionAnalysisFilters): P
 export async function getVersionCompare(filters: VersionAnalysisFilters): Promise<VersionCompareResponse> {
   const user = cleanUser(filters.user);
   const { tags, rows, meta } = await loadVersionRows(user, filters);
-  const questions = summarizeQuestions(rows);
+  const taskCompletionScores = await loadLatestTaskCompletionScores(user, rows.map(row => row.execution));
+  const questions = summarizeQuestions(rows, taskCompletionScores);
   const selectedQuestionKey = cleanOptional(filters.questionKey);
   const rowsForMetrics = selectedQuestionKey
     ? rows.filter(row => normalizeVersionQuestionKey(row.execution?.query) === selectedQuestionKey)
     : rows;
   const sessionEndByTaskId = await loadSessionEndTimes(user, rows.map(row => row.execution?.taskId).filter(Boolean));
-  const summary = summarizeOverall(tags, rows, sessionEndByTaskId);
+  const summary = summarizeOverall(tags, rows, sessionEndByTaskId, taskCompletionScores);
   const tracesByTag = new Map<string, VersionAnalysisTrace[]>();
   for (const row of rowsForMetrics) {
     const traces = tracesByTag.get(row.tagId) ?? [];
-    traces.push(toTrace(row, sessionEndByTaskId));
+    traces.push(toTrace(row, sessionEndByTaskId, taskCompletionScores));
     tracesByTag.set(row.tagId, traces);
   }
   return {
@@ -398,8 +501,6 @@ export async function getVersionTagTraces(tagIdInput: string, filters: VersionAn
           framework: true,
           agentName: true,
           timestamp: true,
-          answerScore: true,
-          isAnswerCorrect: true,
           tokens: true,
           inputTokens: true,
           outputTokens: true,
@@ -416,8 +517,9 @@ export async function getVersionTagTraces(tagIdInput: string, filters: VersionAn
     ? rows.filter((row: any) => normalizeVersionQuestionKey(row.execution?.query) === selectedQuestionKey)
     : rows;
   const sessionEndByTaskId = await loadSessionEndTimes(user, filteredRows.map((row: any) => row.execution?.taskId).filter(Boolean));
+  const taskCompletionScores = await loadLatestTaskCompletionScores(user, filteredRows.map((row: any) => row.execution));
   const traces = filteredRows
-    .map((row: any) => toTrace(row, sessionEndByTaskId))
+    .map((row: any) => toTrace(row, sessionEndByTaskId, taskCompletionScores))
     .sort((a: VersionAnalysisTrace, b: VersionAnalysisTrace) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
   return {
     tag: toTagDto(tag, traces.length),

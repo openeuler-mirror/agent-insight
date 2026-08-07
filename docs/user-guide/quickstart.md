@@ -315,8 +315,9 @@ Agent 名称要和客户端中的实际名称一致，例如 `opencode` 默认�
 
 安装命令会自动写入当前平台地址和 API Key，比手动配置更直接。
 
-你也可以选择 **OpenClaw** 作为客户端集成方式（CLI sidecar 模式），它会自动包裹你的 Agent 进程并按 OTLP/HTTP 协议上报 Trace，无需手动埋点。
-安装脚本末尾会输出纯配置环境变量块（env block），按指引设置即可启用 OpenClaw OTel 上报。
+你也可以选择 **OpenClaw**。安装脚本会生成一个同名命令包装函数，在调用原始 `openclaw` 命令时注入 OTel 环境变量；OpenClaw 仍直接访问自己的模型供应商，Agent Insight 只接收遥测数据，不代理模型请求。
+
+默认接入使用 OTLP/HTTP JSON：Logs 上报到 `/api/ingest/otel/v1/logs`，Traces 上报到 `/api/ingest/otel/v1/traces`。安装脚本末尾也会输出一份可手动复制的纯配置环境变量块。旧版 watcher 仅作为兼容方式保留；同一 OpenClaw 实例只能选择 OTel 或 watcher 其中一种，避免重复 Trace。
 
 
 ---

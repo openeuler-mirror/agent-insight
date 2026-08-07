@@ -11,12 +11,60 @@ import { extractTaskArtifacts } from '@/lib/engine/evaluation/task-artifacts';
 import { POST as saveDataset } from '@/app/api/agent-datasets/route';
 
 import {
+  buildAgentDatasetProjection,
+  buildAgentDatasetItemsView,
   duplicateDatasetFieldName,
   normalizeCase,
   normalizeFields,
   validateDatasetFieldKeysForWrite,
   validateCasesForKind,
 } from '@/server/agent_datasets_storage';
+
+test('builds lightweight dataset projections without trajectory payloads', () => {
+  const projection = buildAgentDatasetProjection([normalizeCase({
+    id: 'case-1',
+    input: 'question',
+    expectedOutput: 'answer',
+    evaluationFocus: 'focus',
+    tags: ['smoke'],
+    trajectory: JSON.stringify([{ content: 'very large trace' }]),
+  })]);
+
+  assert.equal(projection.caseCount, 1);
+  assert.deepEqual(JSON.parse(projection.referenceCasesJson), [{
+    id: 'case-1',
+    input: 'question',
+    expectedOutput: 'answer',
+    evaluationFocus: 'focus',
+    tags: ['smoke'],
+  }]);
+  assert.doesNotMatch(projection.referenceCasesJson, /very large trace/);
+});
+
+test('builds a bounded data-items trajectory preview without losing ordinary custom fields', () => {
+  const largeTrace = `trace-start-${'x'.repeat(800)}-trace-end`;
+  const dataset = {
+    id: 'dataset-1', user: 'user', name: 'dataset', description: '', targetAgent: '', targetSkill: '',
+    tags: [], datasetKind: 'trajectory' as const,
+    fields: [
+      { id: 'input', key: 'input', label: '输入', type: 'text' as const },
+      { id: 'trace', key: 'trace', label: '轨迹', type: 'json' as const },
+      { id: 'custom', key: 'custom_field_1', label: '普通字段', type: 'text' as const },
+    ],
+    cases: [normalizeCase({
+      id: 'case-1', input: 'question', trajectory: largeTrace,
+      values: { input: 'question', trace: largeTrace, custom_field_1: 'keep me' },
+    })],
+    createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(),
+  };
+
+  const view = buildAgentDatasetItemsView(dataset);
+  assert.match(view.cases[0].trajectory, /^trace-start-/);
+  assert.match(String(view.cases[0].values?.trace), /…$/);
+  assert.ok(view.cases[0].trajectory.length <= 601);
+  assert.equal(view.cases[0].values?.custom_field_1, 'keep me');
+  assert.equal(dataset.cases[0].trajectory, largeTrace);
+});
 
 test('trace backflow keeps the original user input and final output', async () => {
   const artifacts = await extractTaskArtifacts({
@@ -161,10 +209,11 @@ test('normalizes legacy dataset cases into editable values', () => {
   assert.equal(row.values?.trajectory, '{"steps":[]}');
 });
 
-test('normalizes trace backflow values without requiring reference output', () => {
+test('treats legacy trace backflow output as the approved reference output', () => {
   const trace = [{ role: 'user', content: 'processed task' }];
   const row = normalizeCase({
     id: 'trace-case',
+    expectedOutput: '',
     values: {
       input: 'processed task',
       output: 'processed result',
@@ -175,7 +224,8 @@ test('normalizes trace backflow values without requiring reference output', () =
   });
 
   assert.equal(row.input, 'processed task');
-  assert.equal(row.expectedOutput, '');
+  assert.equal(row.expectedOutput, 'processed result');
+  assert.equal(row.values?.reference_output, 'processed result');
   assert.equal(row.trajectory, JSON.stringify(trace));
   assert.deepEqual(row.values?.trace, trace);
   assert.equal(row.values?.scenario, 'failure');

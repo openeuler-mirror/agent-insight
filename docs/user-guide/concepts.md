@@ -114,7 +114,7 @@ description: "Agent、Trace、Skill、Evaluator 等核心概念"
 | 配置 | **模型注册** | 为当前 Workspace 配置模型供应商、Endpoint 和 API Key 的过程，是诊断、评测、Skill 生成等能力的前置条件。 |
 | 配置 | **联网搜索** | 为部分生成、分析或推理流程配置外部搜索能力的页面。 |
 | 配置 | **安装指导** | 平台为某个 Agent 生成的接入说明页，用于复制安装命令、API Key 和上报配置。 |
-|| 配置 | **OpenClaw** | CLI sidecar 工具，包裹 Agent 进程后自动按 OTLP/HTTP 协议上报 Trace 和 Log。无需修改代码，适合已有 Agent 的快速接入。 |
+| 配置 | **OpenClaw** | 默认通过同名命令包装函数注入 OTel 配置，按 OTLP/HTTP 上报 Trace 和 Log；OpenClaw 仍直连模型供应商。旧 watcher 是互斥的兼容接入方式。 |
 
 ## 常见混淆
 

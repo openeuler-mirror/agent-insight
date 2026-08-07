@@ -10,6 +10,8 @@ export type OtelTraceEvent = {
   kind: 'llm' | 'tool' | 'agent' | 'chain' | 'span';
   serviceName: string;
   user?: string;
+  /** True only when the server resolved `user` from a valid ingest credential. */
+  authenticatedUser?: boolean;
   model?: string;
   usage: {
     input_tokens: number;

@@ -2,6 +2,10 @@ import { randomUUID } from 'crypto';
 import { NextResponse } from 'next/server';
 import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import {
+  defaultTraceBackflowSourceForField,
+  type TraceBackflowArtifactSource,
+} from '@/lib/agent-dataset-model';
+import {
   createAgentDatasetRecord,
   findAgentDataset,
   normalizeCase,
@@ -16,6 +20,12 @@ export const dynamic = 'force-dynamic';
 
 const FIELD_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9_]*$/;
 const FIELD_TYPES = new Set<DatasetFieldType>(['text', 'number', 'boolean', 'json']);
+const ARTIFACT_SOURCES = new Set<TraceBackflowArtifactSource>(['input', 'output', 'trace', 'none']);
+
+export interface BackflowFieldMapping {
+  key: string;
+  source: TraceBackflowArtifactSource;
+}
 
 export function parseBackflowFields(
   value: unknown,
@@ -93,6 +103,57 @@ export function normalizeBackflowValues(
   }));
 }
 
+export function parseBackflowFieldMappings(
+  value: unknown,
+  fields: DatasetField[],
+): BackflowFieldMapping[] {
+  if (value === undefined || value === null) {
+    return fields.map(field => ({
+      key: field.key,
+      source: defaultTraceBackflowSourceForField(field.key),
+    }));
+  }
+  if (!Array.isArray(value)) throw new Error('fieldMappings must be an array');
+  const fieldKeys = new Set(fields.map(field => field.key));
+  const seen = new Set<string>();
+  return value.map((item, index) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      throw new Error(`field mapping ${index + 1} is invalid`);
+    }
+    const raw = item as Record<string, unknown>;
+    const key = String(raw.key || '').trim();
+    const source = String(raw.source || 'none') as TraceBackflowArtifactSource;
+    if (!fieldKeys.has(key)) throw new Error(`field mapping ${key || index + 1} is not defined`);
+    if (seen.has(key)) throw new Error(`field mapping ${key} already exists`);
+    if (!ARTIFACT_SOURCES.has(source)) throw new Error(`field mapping ${key} source is invalid`);
+    seen.add(key);
+    return { key, source };
+  });
+}
+
+function firstMappedValue(
+  values: Record<string, unknown>,
+  mappings: BackflowFieldMapping[],
+  source: Exclude<TraceBackflowArtifactSource, 'none'>,
+): unknown {
+  const mapping = mappings.find(item => item.source === source && Object.hasOwn(values, item.key));
+  return mapping ? values[mapping.key] : undefined;
+}
+
+export function mapBackflowCanonicalValues(
+  values: Record<string, unknown>,
+  mappings: BackflowFieldMapping[],
+): { input?: unknown; expectedOutput?: unknown; trajectory?: unknown } {
+  const input = firstMappedValue(values, mappings, 'input');
+  const expectedOutput = firstMappedValue(values, mappings, 'output');
+  const trajectory = firstMappedValue(values, mappings, 'trace');
+  return {
+    ...(input !== undefined ? { input } : {}),
+    ...(expectedOutput !== undefined ? { expectedOutput } : {}),
+    ...(trajectory !== undefined ? { trajectory } : {}),
+  };
+}
+
 export async function POST(request: Request) {
   try {
     const body = await request.json();
@@ -139,6 +200,16 @@ export async function POST(request: Request) {
       );
     }
 
+    let fieldMappings: BackflowFieldMapping[];
+    try {
+      fieldMappings = parseBackflowFieldMappings(body.fieldMappings, fields);
+    } catch (reason) {
+      return NextResponse.json(
+        { error: reason instanceof Error ? reason.message : 'invalid field mappings' },
+        { status: 400 },
+      );
+    }
+
     const fieldKeys = new Set(fields.map(field => field.key));
     const rows: DatasetCase[] = [];
     for (let index = 0; index < candidates.length; index += 1) {
@@ -160,9 +231,11 @@ export async function POST(request: Request) {
         );
       }
       try {
+        const normalizedValues = normalizeBackflowValues(values, fields);
         rows.push(normalizeCase({
           id: randomUUID(),
-          values: normalizeBackflowValues(values, fields),
+          ...mapBackflowCanonicalValues(normalizedValues, fieldMappings),
+          values: normalizedValues,
           source: 'trace-backflow',
           traceSource: item.traceSource,
         }));

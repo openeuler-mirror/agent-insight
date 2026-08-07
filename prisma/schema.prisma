@@ -60,18 +60,23 @@ model Execution {
   taskId                   String?
   query                    String?
   framework                String?
-  tokens                   Int?
+  // 下面六列是「整个 session 累计求和」，长命 session（尤其带 prompt cache）会突破
+  // 32 位上限 2,147,483,647。Prisma 的 Int 是 i32：超限值仍会被 SQLite 存下，但 Prisma
+  // 回读时抛 P2023，此后任何 select 到这些列的查询整条失败。故一律用 BigInt。
+  // JS 侧仍按 number 使用——读边界由 executionBigIntToNumber 扩展统一转回（见 prisma-client.ts）。
+  tokens                   BigInt?
   cost                     Float?
   latency                  Float?
   toolCallCount            Int?
   llmCallCount             Int?
-  inputTokens              Int?
-  outputTokens             Int?
+  inputTokens              BigInt?
+  outputTokens             BigInt?
   toolCallErrorCount       Int?
-  cacheReadInputTokens     Int?
-  cacheCreationInputTokens Int?
+  cacheReadInputTokens     BigInt?
+  cacheCreationInputTokens BigInt?
+  // 单次调用取 max、不累计，到不了 32 位上限，保持 Int。
   maxSingleCallTokens      Int?
-  reasoningTokens          Int?
+  reasoningTokens          BigInt?
   timestamp                DateTime @default(now())
   model                    String?
   // 真实推理源 URL（scheme://host:port），用作 session↔infra 关联键。
@@ -531,20 +536,23 @@ model CustomEvaluatorList {
 
 /// 评测集定义与数据项（cases 存 JSON）
 model AgentEvalDataset {
-  id          String   @id
-  user        String
-  name        String
-  description String   @default("")
-  targetAgent String   @default("")
+  id                 String   @id
+  user               String
+  name               String
+  description        String   @default("")
+  targetAgent        String   @default("")
   /// 服务于哪个 skill；为空表示通用 agent eval（不绑定 skill）。skill 生成时
   /// 自动起草的行为评测集会填这个字段（用 Skill.name）。
-  targetSkill String   @default("")
-  tagsJson    String   @default("[]")
-  fieldsJson  String   @default("[]")
-  casesJson   String   @default("[]")
-  datasetKind String   @default("ideal_output")
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  targetSkill        String   @default("")
+  tagsJson           String   @default("[]")
+  fieldsJson         String   @default("[]")
+  casesJson          String   @default("[]")
+  caseCount          Int      @default(0)
+  referenceCasesJson String   @default("[]")
+  projectionReady    Boolean  @default(false)
+  datasetKind        String   @default("ideal_output")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
   @@index([user])
   @@index([user, targetSkill])

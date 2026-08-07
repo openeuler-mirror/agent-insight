@@ -3,6 +3,10 @@ import test from 'node:test';
 
 import { toTraceStructureInteractions } from '@/app/api/observe/session/route';
 import { buildAgentCallTree } from '@/lib/engine/observability/agent-trace';
+import {
+    extractSkillsWithVersionsFromHermesSession,
+    normalizeInteractions,
+} from '@/lib/shared/interaction-utils';
 
 test('trace structure removes long payloads while preserving the call tree', () => {
     const longMessage = 'message-'.repeat(2_000);
@@ -61,4 +65,43 @@ test('trace structure removes long payloads while preserving the call tree', () 
     assert.equal(structureTree.children.length, 1);
     assert.equal(structureTree.children[0].sessionId, 'sub-session-1');
     assert.equal(structureTree.children[0].agentName, 'general');
+});
+
+test('single interaction lazy load preserves top-level skill calls', () => {
+    const interactions = [
+        {
+            role: 'user',
+            content: 'Show me the skill.',
+        },
+        {
+            role: 'assistant',
+            content: '',
+            requestMessages: [
+                { role: 'system', content: 'You are a Hermes agent.' },
+                { role: 'user', content: 'Show me the skill.' },
+            ],
+            tool_calls: [{
+                id: 'skill-1',
+                function: {
+                    name: 'skill_view',
+                    arguments: JSON.stringify({ skill: 'hermes-agent' }),
+                },
+            }],
+        },
+        {
+            role: 'assistant',
+            content: 'Final answer.',
+        },
+    ];
+
+    const structure = toTraceStructureInteractions(interactions);
+    const afterSingleLoad = structure.map((interaction, index) => (
+        index === 1 ? interactions[index] : interaction
+    ));
+    const extractSkills = (source: any[]) => extractSkillsWithVersionsFromHermesSession(
+        normalizeInteractions(source),
+    );
+
+    assert.deepEqual(extractSkills(structure), [{ name: 'hermes-agent', version: null }]);
+    assert.deepEqual(extractSkills(afterSingleLoad), [{ name: 'hermes-agent', version: null }]);
 });
