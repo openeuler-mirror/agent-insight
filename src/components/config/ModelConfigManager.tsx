@@ -14,8 +14,6 @@ import {
     BadgeCheck,
     Star,
     HeartPulse,
-    BookOpen,
-    ExternalLink,
     RefreshCw,
     Loader2,
     XCircle,
@@ -492,7 +490,6 @@ export function ModelConfigManager({}: ModelConfigManagerProps = {}) {
                                 onRecheck={recheckHealth}
                                 locale={locale}
                             />
-                            <DocsPanel locale={locale} />
                         </aside>
                     </div>
                 </>
@@ -801,36 +798,6 @@ function HealthCheckPanel({
                     </button>
                 </>
             )}
-        </section>
-    );
-}
-
-function DocsPanel({ locale }: { locale: string }) {
-    const links = locale === 'zh' ? [
-        { label: '如何获取 API Key', href: '#' },
-        { label: '密钥加密与轮转策略', href: '#' },
-        { label: '模型注册最佳实践', href: '#' },
-    ] : [
-        { label: 'How to obtain an API Key', href: '#' },
-        { label: 'Key encryption & rotation', href: '#' },
-        { label: 'Model registry best practices', href: '#' },
-    ];
-    return (
-        <section style={panelCard}>
-            <header style={panelHeader}>
-                <BookOpen size={13} strokeWidth={2.2} style={{ color: 'var(--foreground-secondary)' }} />
-                <span>{locale === 'zh' ? '相关文档' : 'Related Docs'}</span>
-            </header>
-            <ul style={{ display: 'flex', flexDirection: 'column', gap: 2, padding: 0, margin: 0, listStyle: 'none' }}>
-                {links.map(l => (
-                    <li key={l.label}>
-                        <a href={l.href} style={docLink}>
-                            <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.label}</span>
-                            <ExternalLink size={12} strokeWidth={2} style={{ color: 'var(--foreground-muted)', flexShrink: 0 }} />
-                        </a>
-                    </li>
-                ))}
-            </ul>
         </section>
     );
 }

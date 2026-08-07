@@ -97,10 +97,7 @@ const OBSERVE_TREE: NavItem = {
     iconPath: ICON_OBSERVE,
     children: [
         { key: 'trace', href: '/trace', labelKey: 'nav.trace', iconPath: ICON_TRACE, matchPrefixes: ['/trace'] },
-        { key: 'version-analysis', href: '/version-analysis', labelKey: 'nav.versionAnalysis', iconPath: ICON_VERSION_ANALYSIS },
         { key: 'fault', href: '/fault', labelKey: 'nav.fault', iconPath: ICON_FAULT },
-        { key: 'quality', href: '/quality', labelKey: 'nav.quality', iconPath: ICON_QUALITY },
-        { key: 'infra', href: '/infra', labelKey: 'nav.infra', iconPath: ICON_METRICS, matchPrefixes: ['/infra'] },
     ],
 };
 
@@ -110,11 +107,7 @@ const AGENT_GROUP: NavGroup = {
     variant: 'agent',
     iconPath: <path d="M1 3h8M1 5h8M1 7h8" />,
     items: [
-        { key: 'dashboard', href: '/dashboard', labelKey: 'nav.dashboard', iconPath: ICON_DASHBOARD },
-        { key: 'agents', href: '/agents', labelKey: 'nav.agents', iconPath: ICON_AGENT },
         OBSERVE_TREE,
-        EVAL_TREE,
-        SKILLS_TREE,
     ],
 };
 
@@ -124,15 +117,7 @@ const CONFIG_GROUP: NavGroup = {
     iconPath: ICON_MODEL,
     items: [
         { key: 'model-registry', href: '/modelconfig/registry', labelKey: 'nav.modelRegistry', iconPath: ICON_MODEL },
-        { key: 'web-search', href: '/modelconfig/web-search', labelKey: 'nav.webSearch', iconPath: ICON_WEB },
-        { key: 'version-management', href: '/version-management', labelKey: 'nav.versionManagement', iconPath: ICON_TAGS },
         { key: 'access-install', href: '/accessconfig/install', labelKey: 'nav.accessInstall', iconPath: ICON_INSTALL },
-        // 暂时屏蔽 channels / webhooks / health —— 后端能力未稳定,先不暴露给用户。
-        // 页面源码保留在 src/app/(main)/accessconfig/{channels,webhooks,health} 下,
-        // 恢复时取消下面三行注释即可。
-        // { key: 'access-channels', href: '/accessconfig/channels', labelKey: 'nav.accessChannels', iconPath: ICON_ACCESS },
-        // { key: 'access-webhooks', href: '/accessconfig/webhooks', labelKey: 'nav.accessWebhooks', iconPath: ICON_WEBHOOK },
-        // { key: 'access-health', href: '/accessconfig/health', labelKey: 'nav.accessHealth', iconPath: ICON_HEALTH },
     ],
 };
 
@@ -168,7 +153,7 @@ export function AppSidebar() {
         return t(key);
     };
     const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
-    const [expandedTrees, setExpandedTrees] = useState<Set<string>>(new Set(['skills', 'eval-center', 'observe']));
+    const [expandedTrees, setExpandedTrees] = useState<Set<string>>(new Set(['observe']));
 
     useEffect(() => {
         setExpandedTrees(prev => {
