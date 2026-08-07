@@ -3,7 +3,10 @@ import path from 'path'
 
 export type CollectPayload = {
   runId: string
-  taskId: string
+  /** Bare platform session id for FI↔RAS alignment. Null/empty when unaligned. */
+  taskId: string | null
+  /** False when taskId is missing — do not treat runId as Session.taskId. */
+  sessionAligned?: boolean
   framework: string
   fault: string
   injectionMethod?: string

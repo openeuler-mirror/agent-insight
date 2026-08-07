@@ -43,13 +43,23 @@ class CallableHostControl:
     def requestAbortStream(self) -> dict[str, Any]:
         return self.request_abort_stream()
 
+    @staticmethod
+    def _fn_outcome(raw: Any, channel: str) -> dict[str, Any] | None:
+        """fn 返回 {"ok": ...} 时以 fn 自报结果为准（禁止无脑 ok=True）。"""
+        if isinstance(raw, dict) and "ok" in raw:
+            out: dict[str, Any] = {"ok": bool(raw.get("ok")), "channel": channel}
+            if raw.get("error"):
+                out["error"] = raw["error"]
+            return out
+        return None
+
     def request_abort_stream(self) -> dict[str, Any]:
         channel = f"{self.platform}.abort"
         if self._abort_fn is None:
             return {"ok": False, "error": f"{self.platform} abort_fn not wired", "channel": channel}
         try:
-            self._abort_fn()
-            return {"ok": True, "channel": channel}
+            outcome = self._fn_outcome(self._abort_fn(), channel)
+            return outcome if outcome is not None else {"ok": True, "channel": channel}
         except Exception as exc:
             logger.warning("%s abort failed", self.platform, exc_info=True)
             return {"ok": False, "error": str(exc), "channel": channel}
@@ -65,7 +75,9 @@ class CallableHostControl:
             )
             return {"ok": False, "error": f"{self.platform} notice_fn not wired", "channel": channel}
         try:
-            self._notice_fn(message)
+            outcome = self._fn_outcome(self._notice_fn(message), channel)
+            if outcome is not None:
+                return outcome
             return {
                 "ok": True,
                 "channel": channel,
@@ -82,7 +94,9 @@ class CallableHostControl:
         if self._steer_fn is None:
             return {"ok": False, "error": f"{self.platform} steer_fn not wired", "channel": channel}
         try:
-            self._steer_fn(message)
+            outcome = self._fn_outcome(self._steer_fn(message), channel)
+            if outcome is not None:
+                return outcome
             return {
                 "ok": True,
                 "channel": channel,

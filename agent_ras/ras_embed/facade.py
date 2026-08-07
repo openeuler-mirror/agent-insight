@@ -28,7 +28,7 @@ def call(op: str, session_id: str, payload_json: str = "{}") -> str:
     """
     try:
         if _should_use_ipc():
-            from .ipc import call_ipc
+            from platform_adapter.common.transport.subprocess_ipc import call_ipc
 
             payload = _parse_payload(payload_json)
             result = call_ipc(str(op or ""), str(session_id or ""), payload)
@@ -55,7 +55,7 @@ def _should_use_ipc() -> bool:
     if prefer in {"0", "false", "no"}:
         return False
     try:
-        from .ipc import ipc_available
+        from platform_adapter.common.transport.subprocess_ipc import ipc_available
 
         return ipc_available()
     except Exception:

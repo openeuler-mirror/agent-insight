@@ -32,6 +32,10 @@ import {
     findRasMarkersForEvent,
     type RasTraceMarker,
 } from '@/lib/ingest/ras/trace-markers';
+import {
+    alignInteractionsToRasAnchors,
+    applyRasRecoveryTree,
+} from '@/lib/ingest/ras/recovery-tree';
 import { interleaveRasActions } from '@/lib/ingest/ras/delivery-link';
 import {
     extractSkillsWithVersionsFromClaudeSession,
@@ -227,50 +231,6 @@ function RasReliabilityDetails({ markers }: { markers: RasAnomalyMarker[] }) {
             </div>
         </section>
     );
-}
-
-function deliveryActionTypeByMessageId(markers: RasTraceMarker[]): Map<string, string> {
-    const map = new Map<string, string>();
-    for (const marker of markers) {
-        for (const result of marker.actionResults) {
-            if (result.deliveryMessageId) {
-                map.set(result.deliveryMessageId, result.action);
-            }
-        }
-        for (const messageId of marker.deliveryMessageIds) {
-            if (!map.has(messageId)) map.set(messageId, 'emit_notice');
-        }
-    }
-    return map;
-}
-
-function reclassifyRasDeliveryEvents(
-    node: AgentNode,
-    deliveryIds: Set<string>,
-    actionByMessageId: Map<string, string>,
-): AgentNode {
-    return {
-        ...node,
-        events: node.events.map((event) => {
-            const messageId = event.interaction?.messageID;
-            if (
-                (event.kind === 'user' || event.kind === 'ras')
-                && messageId
-                && deliveryIds.has(messageId)
-            ) {
-                const actionType = actionByMessageId.get(messageId) || 'emit_notice';
-                return {
-                    ...event,
-                    kind: 'ras' as const,
-                    name: actionType,
-                    summary: event.summary || event.interaction.content || actionType,
-                };
-            }
-            return event;
-        }),
-        children: node.children.map((child) =>
-            reclassifyRasDeliveryEvents(child, deliveryIds, actionByMessageId)),
-    };
 }
 
 type DetailTab = 'timeline' | 'prompt' | 'overview' | 'skills' | 'infra';
@@ -671,18 +631,12 @@ export default function AgentTraceView({
 
     const displayInteractions = langfuseProjection?.interactions || interactions;
     const tree = useMemo(() => {
-        let baseTree = langfuseProjection?.tree || buildAgentCallTree(interactions || []);
+        const alignedInteractions = anomalies?.length
+            ? alignInteractionsToRasAnchors(interactions || [], anomalies)
+            : (interactions || []);
+        let baseTree = langfuseProjection?.tree || buildAgentCallTree(alignedInteractions);
         if (baseTree && anomalies?.length) {
-            const deliveryIds = new Set(
-                anomalies.flatMap((marker) => marker.deliveryMessageIds || []),
-            );
-            if (deliveryIds.size) {
-                baseTree = reclassifyRasDeliveryEvents(
-                    baseTree,
-                    deliveryIds,
-                    deliveryActionTypeByMessageId(anomalies),
-                );
-            }
+            baseTree = applyRasRecoveryTree(baseTree, anomalies);
         }
         if (!baseTree || !reliabilityEvents?.length) return baseTree;
         const rasEvents: AgentEvent[] = reliabilityEvents.map((event) => ({
@@ -881,32 +835,22 @@ export default function AgentTraceView({
     }, [tree]);
 
     // ── RAS anomaly markers ──────────────────────────────────────────────────
-    const findAnomaliesInRange = useCallback((startMs?: number, endMs?: number): RasAnomalyMarker[] => {
-        if (!anomalies?.length || !startMs) return [];
-        return anomalies.filter((anomaly) => {
-            if (anomaly.messageId || anomaly.partId || anomaly.callId) return false;
-            const end = (endMs != null && endMs > startMs) ? endMs : startMs + 1000;
-            return anomaly.ts >= startMs && anomaly.ts <= end;
-        });
-    }, [anomalies]);
-
     const findEventAnomalies = useCallback((event: AgentEvent): RasAnomalyMarker[] => {
         if (!anomalies?.length) return [];
-        const exact = findRasMarkersForEvent(event, anomalies);
-        const fallback = findAnomaliesInRange(event.startedAt, event.completedAt);
-        return [...new Map([...exact, ...fallback].map(marker => [marker.id, marker])).values()];
-    }, [anomalies, findAnomaliesInRange]);
+        // Recovery is a dedicated RAS row — do not attach markers to LLM/tool for badges.
+        if (event.kind !== 'ras') return [];
+        const markerId = (event.args as { rasMarkerId?: string } | undefined)?.rasMarkerId;
+        if (markerId) return anomalies.filter((marker) => marker.id === markerId);
+        return findRasMarkersForEvent(event, anomalies);
+    }, [anomalies]);
 
     const findNodeAnomalies = useCallback((node: AgentNode): RasAnomalyMarker[] => {
         const matches = new Map<string, RasAnomalyMarker>();
         for (const event of node.events) {
             for (const marker of findEventAnomalies(event)) matches.set(marker.id, marker);
         }
-        for (const marker of findAnomaliesInRange(node.startedAt, node.endedAt)) {
-            matches.set(marker.id, marker);
-        }
         return [...matches.values()];
-    }, [findAnomaliesInRange, findEventAnomalies]);
+    }, [findEventAnomalies]);
 
     const anomalyCount = useMemo(() => {
         if (!tree || !anomalies?.length) return 0;
@@ -1608,14 +1552,6 @@ function UnifiedSpanTree({
                     depth === 0 ? 'font-semibold' : 'font-medium',
                 )}>
                     {node.agentName}
-                    {/* RAS anomaly severity indicator */}
-                    {anomalyHits.length > 0 && (
-                        <RasNodeBadge
-                            markers={anomalyHits}
-                            compact
-                            className="ml-1.5"
-                        />
-                    )}
                     {node.subagentType && (
                         <span className="ml-1.5 text-xs text-foreground-muted font-normal">{node.subagentType}</span>
                     )}
@@ -1800,8 +1736,7 @@ function UnifiedEventRow({
                 event.kind === 'task' ? 'font-medium' : 'font-normal',
             )}>
                 {primaryLabel}
-                {/* RAS anomaly indicator for event */}
-                {evAnomalyHits.length > 0 && (
+                {event.kind === 'ras' && evAnomalyHits.length > 0 && (
                     <RasNodeBadge markers={evAnomalyHits} className="ml-1.5" />
                 )}
                 {secondaryLabel && (

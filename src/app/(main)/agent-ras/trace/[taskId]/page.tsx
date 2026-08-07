@@ -10,7 +10,6 @@ import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
 import { rasKindLabel, rasSeverityLabel, severityToStatusKind, type RasEventRow } from '@/lib/ingest/ras/normalize';
 import AgentTraceView from '@/components/observe/AgentTraceView';
-import { RasOnlyEventTimeline } from '@/components/agent-ras/RasOnlyEventTimeline';
 import type { RawInteraction } from '@/lib/engine/observability/agent-trace';
 import type { LangfuseTraceNode } from '@/lib/ingest/otel/adapters/langfuse-trace';
 import { StatusBadge } from '@/components/feedback/StatusBadge';
@@ -24,7 +23,7 @@ import {
   buildRasTraceMarkers,
   type RasRecoveryAction,
 } from '@/lib/ingest/ras/trace-markers';
-import { buildRasDeliveryLinks } from '@/lib/ingest/ras/delivery-link';
+import { buildRasDeliveryLinks, interleaveRasActions } from '@/lib/ingest/ras/delivery-link';
 
 export default function RasTraceDetailPage({
   params,
@@ -219,14 +218,41 @@ function RasTraceDetailContent({ taskId }: { taskId: string }) {
                           {ev.summary}
                         </p>
                       )}
-                      {marker?.actions.length ? (
+                      {marker && (marker.actions.length > 0 || marker.actionResults.length > 0) ? (
                         <div className="mt-2 space-y-1.5">
-                          {marker.actions.map((action, index) => (
-                            <RasActionContent
-                              key={`${action.type}-${index}`}
-                              action={action}
-                              locale={locale === 'zh' ? 'zh' : 'en'}
-                            />
+                          {interleaveRasActions(marker.actions, marker.actionResults).map((step, index) => (
+                            step.kind === 'action' ? (
+                              <RasActionContent
+                                key={`action-${step.action.type}-${index}`}
+                                action={step.action}
+                                locale={locale === 'zh' ? 'zh' : 'en'}
+                              />
+                            ) : (
+                              <div
+                                key={`result-${step.result.action}-${step.result.ts}-${index}`}
+                                className="flex flex-wrap items-center gap-1.5 rounded-md border border-border bg-background-secondary px-2.5 py-1.5 text-[11px] text-foreground-secondary"
+                              >
+                                <Badge variant="outline" className="text-[10px] font-mono">
+                                  {step.result.action}
+                                </Badge>
+                                <span>
+                                  {step.result.ok
+                                    ? (locale === 'zh' ? '成功' : 'ok')
+                                    : (locale === 'zh' ? '失败' : 'failed')}
+                                </span>
+                                {step.result.channel && (
+                                  <span className="text-foreground-muted">· {step.result.channel}</span>
+                                )}
+                                {step.result.error && (
+                                  <span className="basis-full text-error">{step.result.error}</span>
+                                )}
+                                {step.result.message && (
+                                  <pre className="basis-full mt-0.5 max-h-32 overflow-auto whitespace-pre-wrap break-words font-sans text-xs leading-relaxed text-foreground-secondary">
+                                    {step.result.message}
+                                  </pre>
+                                )}
+                              </div>
+                            )
                           ))}
                         </div>
                       ) : null}
@@ -239,14 +265,10 @@ function RasTraceDetailContent({ taskId }: { taskId: string }) {
 
           <Separator />
 
-          {/* Full Trace View (or RAS-only timeline) */}
+          {/* Full Trace View — no RAS-events-only timeline fallback */}
           <div className="flex-1 min-h-0 flex flex-col">
             <h2 className="text-sm font-semibold text-foreground mb-3">
-              {!sessionLoading && !rasLoading
-                && !(interactions.length > 0 || langfuseTraceNodes.length > 0)
-                && (rasEvents?.length ?? 0) > 0
-                ? (locale === 'zh' ? 'RAS 处置时间线' : 'RAS Recovery Timeline')
-                : (locale === 'zh' ? '完整链路追踪' : 'Full Trace')}
+              {locale === 'zh' ? '完整链路追踪' : 'Full Trace'}
             </h2>
 
             {sessionLoading || rasLoading ? (
@@ -272,23 +294,22 @@ function RasTraceDetailContent({ taskId }: { taskId: string }) {
                   reliabilityEvents={reliabilityEvents}
                 />
               </div>
-            ) : (rasEvents?.length ?? 0) > 0 ? (
-              <RasOnlyEventTimeline
-                events={rasEvents || []}
-                locale={locale === 'zh' ? 'zh' : 'en'}
-              />
             ) : sessionError ? (
               <EmptyState
                 title={locale === 'zh' ? '无法加载 Trace' : 'Unable to Load Trace'}
-                description={locale === 'zh' ? '该 Trace 可能尚未同步到观测系统' : 'This trace may not be synced to the observability system yet'}
+                description={
+                  locale === 'zh'
+                    ? '该任务尚无平台对话链路（Execution / OTel / Session），请确认观测上报已完成'
+                    : 'No platform conversation (Execution / OTel / Session) for this task yet'
+                }
               />
             ) : (
               <EmptyState
                 title={locale === 'zh' ? '无 Trace 数据' : 'No Trace Data'}
                 description={
                   locale === 'zh'
-                    ? '该任务既无平台对话链路（Execution / OTel），也无 RAS 环内事件'
-                    : 'No Execution/OTel conversation and no RAS in-loop events for this task'
+                    ? '该任务无平台对话链路（Execution / OTel / Session）。仅有 RAS 环内事件时不在此展示链路树'
+                    : 'No platform conversation (Execution / OTel / Session). RAS-only events are not shown as a trace tree'
                 }
               />
             )}

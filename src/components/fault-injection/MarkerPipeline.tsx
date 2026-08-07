@@ -7,6 +7,7 @@ import {
   buildMarkerPipeline,
   type PipelineStep,
 } from '@/lib/fault-injection/marker-pipeline'
+import { useLocale } from '@/lib/client/locale-context'
 
 export { buildMarkerPipeline } from '@/lib/fault-injection/marker-pipeline'
 
@@ -54,7 +55,7 @@ function CheckDot({
   )
 }
 
-function PipelineView({ steps }: { steps: PipelineStep[] }) {
+function PipelineView({ steps, zh }: { steps: PipelineStep[]; zh: boolean }) {
   const firstDoneWithDetail = steps.find((step) => step.done && (step.detail || step.summary))
   const [selectedKey, setSelectedKey] = useState(firstDoneWithDetail?.key ?? steps[0]?.key ?? '')
   const selected = steps.find((step) => step.key === selectedKey) ?? firstDoneWithDetail ?? steps[0]
@@ -128,7 +129,17 @@ function PipelineView({ steps }: { steps: PipelineStep[] }) {
                   : 'bg-background-secondary text-foreground-muted',
               )}
             >
-              {selected.done ? (selected.skipped ? '已跳过' : '已执行') : '未执行'}
+              {selected.done
+                ? selected.skipped
+                  ? zh
+                    ? '已跳过'
+                    : 'Skipped'
+                  : zh
+                    ? '已执行'
+                    : 'Done'
+                : zh
+                  ? '未执行'
+                  : 'Pending'}
             </span>
             {selected.meta ? (
               <span className="rounded bg-card px-1.5 py-0.5 font-mono text-[10px] text-foreground-secondary">
@@ -144,7 +155,11 @@ function PipelineView({ steps }: { steps: PipelineStep[] }) {
               {selected.detail}
             </pre>
           ) : !selected.done ? (
-            <p className="text-xs text-foreground-muted">该节点尚未发生，因此没有可展示的内容。</p>
+            <p className="text-xs text-foreground-muted">
+              {zh
+                ? '该节点尚未发生，因此没有可展示的内容。'
+                : 'This step has not occurred yet, so there is nothing to show.'}
+            </p>
           ) : null}
         </div>
       ) : null}
@@ -153,6 +168,7 @@ function PipelineView({ steps }: { steps: PipelineStep[] }) {
 }
 
 export function MarkerPipeline({ markers }: { markers: FiPipelineMarker[] }) {
-  const steps = useMemo(() => buildMarkerPipeline(markers), [markers])
-  return <PipelineView steps={steps} />
+  const { locale } = useLocale()
+  const steps = useMemo(() => buildMarkerPipeline(markers, locale), [markers, locale])
+  return <PipelineView steps={steps} zh={locale === 'zh'} />
 }

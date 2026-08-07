@@ -9,6 +9,7 @@ import {
 } from '@/components/ui/dialog'
 import { HelpTip } from '@/components/fault-injection/HelpTip'
 import { MarkdownText } from '@/components/thread/markdown-text'
+import { useLocale } from '@/lib/client/locale-context'
 import { cn } from '@/lib/utils'
 
 type ViewMode = 'preview' | 'source'
@@ -24,6 +25,8 @@ export function SkillContentDialog({
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
+  const { locale } = useLocale()
+  const zh = locale === 'zh'
   const [content, setContent] = useState<string>('')
   const [skillName, setSkillName] = useState<string>('')
   const [error, setError] = useState<string | null>(null)
@@ -73,9 +76,11 @@ export function SkillContentDialog({
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <DialogTitle className="inline-flex items-center gap-1.5 text-[13px]">
-                Skill 注入内容
+                {zh ? 'Skill 注入内容' : 'Skill inject content'}
                 <HelpTip>
-                  经平台安装后加载该 Skill 进行故障注入。预览为 Markdown 渲染；可切换查看原文。
+                  {zh
+                    ? '经平台安装后加载该 Skill 进行故障注入。预览为 Markdown 渲染；可切换查看原文。'
+                    : 'Loaded after platform install to drive fault injection. Preview is Markdown; switch to view source.'}
                 </HelpTip>
               </DialogTitle>
               <p className="mt-1 truncate text-xs text-foreground-muted">
@@ -95,7 +100,7 @@ export function SkillContentDialog({
                   )}
                   onClick={() => setMode('preview')}
                 >
-                  预览
+                  {zh ? '预览' : 'Preview'}
                 </button>
                 <button
                   type="button"
@@ -107,14 +112,16 @@ export function SkillContentDialog({
                   )}
                   onClick={() => setMode('source')}
                 >
-                  原文
+                  {zh ? '原文' : 'Source'}
                 </button>
               </div>
             ) : null}
           </div>
         </DialogHeader>
         <div className="min-h-0 flex-1 overflow-auto p-4">
-          {loading ? <p className="text-sm text-foreground-muted">加载中…</p> : null}
+          {loading ? (
+            <p className="text-sm text-foreground-muted">{zh ? '加载中…' : 'Loading…'}</p>
+          ) : null}
           {error ? (
             <p className="whitespace-pre-wrap text-sm text-[var(--error)]">{error}</p>
           ) : null}

@@ -18,6 +18,7 @@ import {
   TaskStatusBadge,
 } from '@/components/fault-injection/TaskStatus'
 import type { ProgressCounts } from '@/components/fault-injection/types'
+import { useLocale } from '@/lib/client/locale-context'
 import { cn } from '@/lib/utils'
 
 type StatusFilter = 'all' | 'running' | 'completed' | 'failed'
@@ -33,6 +34,8 @@ type TaskRow = {
 }
 
 export default function FaultInjectionTasksPage() {
+  const { locale } = useLocale()
+  const zh = locale === 'zh'
   const router = useRouter()
   const [tasks, setTasks] = useState<TaskRow[]>([])
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
@@ -101,7 +104,9 @@ export default function FaultInjectionTasksPage() {
     if (!ids.length) return
     if (
       !window.confirm(
-        `确认停止 ${ids.length} 个运行中的任务？停止后对应 run 将记为失败。`,
+        zh
+          ? `确认停止 ${ids.length} 个运行中的任务？停止后对应 run 将记为失败。`
+          : `Stop ${ids.length} running task(s)? Matching runs will be marked failed.`,
       )
     ) {
       return
@@ -126,12 +131,18 @@ export default function FaultInjectionTasksPage() {
 
   const deleteTasks = async (ids: string[]) => {
     if (!ids.length) {
-      toast.error('运行中的任务不可删除，请先停止')
+      toast.error(
+        zh
+          ? '运行中的任务不可删除，请先停止'
+          : 'Running tasks cannot be deleted; stop them first',
+      )
       return
     }
     if (
       !window.confirm(
-        `确认删除 ${ids.length} 个任务？任务记录与关联产物引用将一并移除。`,
+        zh
+          ? `确认删除 ${ids.length} 个任务？任务记录与关联产物引用将一并移除。`
+          : `Delete ${ids.length} task(s)? Task records and related artifact refs will be removed.`,
       )
     ) {
       return
@@ -154,18 +165,20 @@ export default function FaultInjectionTasksPage() {
     }
   }
 
+  const filters = (
+    [
+      ['all', zh ? '全部' : 'All'],
+      ['running', zh ? '运行中' : 'Running'],
+      ['completed', zh ? '运行完成' : 'Completed'],
+      ['failed', zh ? '运行失败' : 'Failed'],
+    ] as const
+  )
+
   return (
     <FiPageShell>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap gap-1.5">
-          {(
-            [
-              ['all', '全部'],
-              ['running', '运行中'],
-              ['completed', '运行完成'],
-              ['failed', '运行失败'],
-            ] as const
-          ).map(([value, label]) => (
+          {filters.map(([value, label]) => (
             <button
               key={value}
               type="button"
@@ -182,18 +195,20 @@ export default function FaultInjectionTasksPage() {
           ))}
         </div>
         <Button size="sm" onClick={() => router.push('/agent-ras/fault-injection/tasks/new')}>
-          新建任务
+          {zh ? '新建任务' : 'New task'}
         </Button>
       </div>
 
       <div className="overflow-hidden rounded-md border border-border bg-card">
         <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2.5">
           <span className="text-xs text-foreground-muted">
-            已选 {selected.size} / 当前筛选 {filtered.length}
+            {zh
+              ? `已选 ${selected.size} / 当前筛选 ${filtered.length}`
+              : `Selected ${selected.size} / filtered ${filtered.length}`}
           </span>
           <input
             className="min-w-[12rem] flex-1 rounded-md border border-border bg-background px-2 py-1 text-sm"
-            placeholder="搜索名称或 ID"
+            placeholder={zh ? '搜索名称或 ID' : 'Search name or ID'}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
@@ -207,7 +222,7 @@ export default function FaultInjectionTasksPage() {
               )
             }
           >
-            停止
+            {zh ? '停止' : 'Stop'}
           </Button>
           <DangerOutlineButton
             disabled={!canDelete || busy}
@@ -217,7 +232,7 @@ export default function FaultInjectionTasksPage() {
               )
             }
           >
-            删除
+            {zh ? '删除' : 'Delete'}
           </DangerOutlineButton>
         </div>
 
@@ -236,13 +251,13 @@ export default function FaultInjectionTasksPage() {
                     }}
                   />
                 </th>
-                <th className="px-3 py-2.5">状态</th>
-                <th className="px-3 py-2.5">任务</th>
-                <th className="px-3 py-2.5">平台</th>
-                <th className="px-3 py-2.5">故障数</th>
-                <th className="px-3 py-2.5">进度</th>
-                <th className="px-3 py-2.5">更新</th>
-                <th className="w-28 px-3 py-2.5">操作</th>
+                <th className="px-3 py-2.5">{zh ? '状态' : 'Status'}</th>
+                <th className="px-3 py-2.5">{zh ? '任务' : 'Task'}</th>
+                <th className="px-3 py-2.5">{zh ? '平台' : 'Platform'}</th>
+                <th className="px-3 py-2.5">{zh ? '故障数' : 'Faults'}</th>
+                <th className="px-3 py-2.5">{zh ? '进度' : 'Progress'}</th>
+                <th className="px-3 py-2.5">{zh ? '更新' : 'Updated'}</th>
+                <th className="w-28 px-3 py-2.5">{zh ? '操作' : 'Actions'}</th>
               </tr>
             </thead>
             <tbody>
@@ -324,15 +339,15 @@ export default function FaultInjectionTasksPage() {
                 <tr>
                   <td colSpan={8} className="px-4 py-10 text-center text-sm text-foreground-muted">
                     {loading ? (
-                      '加载中…'
+                      zh ? '加载中…' : 'Loading…'
                     ) : (
                       <span>
-                        暂无注入任务。
+                        {zh ? '暂无注入任务。' : 'No injection tasks yet.'}
                         <Link
                           href="/agent-ras/fault-injection/tasks/new"
                           className="ml-1 text-primary hover:underline"
                         >
-                          新建任务
+                          {zh ? '新建任务' : 'New task'}
                         </Link>
                       </span>
                     )}

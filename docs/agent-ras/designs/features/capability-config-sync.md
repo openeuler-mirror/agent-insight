@@ -56,12 +56,22 @@ interface RasCapabilityConfigEnvelope {
 
 ## 同步语义
 
-1. Insight 存期望配置。
+1. Insight 存期望配置（user × platform）。服务端 envelope 仍有 `revision` / `updatedAt`（UI / 审计 / PUT 乐观并发），**不作为客户端合并游标**。
 2. 客户端拉取（fail-open）：
    - OpenCode 插件启动 → `GET .../ras-config?platform=opencode`
-   - xiaoO hooker 会话开始（chat/tool，TTL 节流）→ `?platform=xiaoo`
-3. 仅当 `syncEnabled && revision > localRevision` 合并 `config` 进本地 `~/.agent-insight/ras/config.json`（不覆盖 `service.*` / `insight.*`）。
-4. 写入 `agent_ras.ras_config_revision`；下次 `hello` 用新阈值（xiaoo 强制 `semantic_content_enabled=false`）。
+   - xiaoO hooker 会话开始（chat/tool，TTL 节流，**按 platform 分 stamp**）→ `?platform=xiaoo`
+3. 合并条件（Insight 为源）：`syncEnabled` 且远端 `config` 存在，并且：
+   - **能力字段内容指纹** 与本地该平台切片不一致 → 合并（`merged` / `content_drift`）
+   - 指纹相同但本地仍有遗留 `ras_config_revision(s)` 或缺 `syncedFrom.contentHash` → 写盘迁移布局（`layout_migrate`），不改阈值
+   - 指纹相同且布局已新 → `already_current`
+4. 写入共享 `~/.agent-insight/ras/config.json`：
+   - `agent_ras.platforms.<platform>` ← `enabled` / `detectors` / `recovery`
+   - `agent_ras.platforms.<platform>.syncedFrom` ← `{ contentHash, revision?, updatedAt? }`（溯源元数据，**不参与下次比对决策**）
+   - 合并时清除遗留的 `ras_config_revision` / `ras_config_revisions`（独立整数计数器已废弃）
+   - 顶层 `detectors` / `recovery` 仅作 **最后一次 merge 的遗留镜像**；运行时读取优先 `platforms.<platform>`（OpenCode `loadThinkingConfig`、xiaoo `load_hello_config_from_ras_config`）。
+5. 不覆盖 `service.*` / `insight.*`。xiaoo hello 仍强制 `semantic_content_enabled=false`。
+
+可检测场景：远端内容变了（含 revision 未涨）→ 指纹变 → 合并；本地手工改了切片 → 指纹与远端不一致 → Insight 覆盖。
 
 ## 相关代码
 

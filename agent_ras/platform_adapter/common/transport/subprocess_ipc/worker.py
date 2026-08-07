@@ -1,5 +1,5 @@
 # coding: utf-8
-"""Long-lived ras_embed SessionHub over a Unix socket (NDJSON request/response)."""
+"""Long-lived SessionHub worker for subprocess-hook hosts (NDJSON over Unix socket)."""
 from __future__ import annotations
 
 import json
@@ -10,8 +10,8 @@ import socket
 import sys
 from pathlib import Path
 
+from platform_adapter.common.transport.subprocess_ipc.client import default_sock_path
 from ras_embed.facade import call as local_call
-from ras_embed.ipc import default_sock_path
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,7 @@ def serve(sock_path: Path | None = None) -> None:
     os.environ["RAS_EMBED_SOCK"] = str(path)
     # Force local dispatch inside this process (avoid ipc recursion).
     os.environ["RAS_EMBED_IPC_FORCE_LOCAL"] = "1"
-    logger.info("ras_embed ipc worker listening on %s", path)
+    logger.info("subprocess_ipc worker listening on %s", path)
 
     def _shutdown(*_args: object) -> None:
         try:

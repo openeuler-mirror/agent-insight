@@ -36,7 +36,7 @@ npx agent-insight install-ras
 | 行为 | 说明 |
 |------|------|
 | 保存 | 写入用户级 `~/.agent-insight/data/ras-capability-configs/<user>.json` |
-| 同步到客户端 | **OpenCode** / **xiaoO** 支持；开启后分别在插件启动 / hooker 会话开始时 `GET /api/ingest/ras-config?platform=...`，按 `revision` 合并到本地 `config.json`（不覆盖 `service.*` / `insight.*`） |
+| 同步到客户端 | **OpenCode** / **xiaoO** 支持；开启后分别在插件启动 / hooker 会话开始时 `GET /api/ingest/ras-config?platform=...`，按 **内容指纹** 合并到本地 `config.json` 的 `platforms.<platform>`（并写入 `syncedFrom` 溯源；不覆盖 `service.*` / `insight.*`；两平台可并存不同阈值） |
 | 导出 | YAML / JSON 复制，供 openjiuwen 等人工落盘 |
 
 设计见 [capability-config-sync.md](../designs/features/capability-config-sync.md)。

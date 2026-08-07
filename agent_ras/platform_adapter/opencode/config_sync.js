@@ -1,10 +1,81 @@
 /**
  * OpenCode-side helpers: pull Insight capability config and merge into local ras config.json.
  * Fail-open — never throw into the host plugin.
+ *
+ * Local layout (shared file, per-platform slices):
+ *   agent_ras.platforms.<platform>              # enabled / detectors / recovery
+ *   agent_ras.platforms.<platform>.syncedFrom   # Insight provenance (not a decision cursor)
+ *
+ * Merge decision is content-fingerprint only (Insight wins on drift).
+ * Top-level detectors/recovery remain a legacy mirror of the last merged platform;
+ * readers should prefer platforms.<platform>.
  */
+import { createHash } from "node:crypto"
 import { existsSync, readFileSync, renameSync, writeFileSync, mkdirSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { homedir } from "node:os"
+
+function capabilitySlice(body) {
+  const detectors = body?.detectors && typeof body.detectors === "object" ? body.detectors : {}
+  const repeatTool =
+    detectors.repeat_tool && typeof detectors.repeat_tool === "object" ? detectors.repeat_tool : {}
+  const thinking =
+    detectors.llm_thinking_loop && typeof detectors.llm_thinking_loop === "object"
+      ? detectors.llm_thinking_loop
+      : {}
+  const recovery = body?.recovery && typeof body.recovery === "object" ? body.recovery : {}
+  return {
+    enabled: Boolean(body?.enabled ?? true),
+    detectors: {
+      repeat_tool: { ...repeatTool },
+      llm_thinking_loop: { ...thinking },
+    },
+    recovery: { ...recovery },
+  }
+}
+
+function stableStringify(value) {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value)
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item)).join(",")}]`
+  }
+  const keys = Object.keys(value).sort()
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(",")}}`
+}
+
+export function capabilityFingerprint(body) {
+  if (!body || typeof body !== "object") return ""
+  return stableStringify(capabilitySlice(body))
+}
+
+export function capabilityContentHash(body) {
+  const fp = capabilityFingerprint(body)
+  if (!fp) return ""
+  return createHash("sha256").update(fp).digest("hex").slice(0, 16)
+}
+
+/**
+ * @param {Record<string, unknown> | null | undefined} ras
+ * @param {string} platform
+ * @returns {{ enabled: boolean, detectors: object, recovery: object } | null}
+ */
+export function resolvePlatformCapabilityFromRas(ras, platform) {
+  if (!ras || typeof ras !== "object") return null
+  const platforms = ras.platforms
+  if (platforms && typeof platforms === "object" && !Array.isArray(platforms)) {
+    const slot = platforms[platform]
+    if (slot && typeof slot === "object" && ("detectors" in slot || "recovery" in slot || "enabled" in slot)) {
+      return capabilitySlice(slot)
+    }
+    if (Object.keys(platforms).length > 0) return null
+  }
+  if (ras.detectors != null || ras.recovery != null) {
+    return capabilitySlice(ras)
+  }
+  return null
+}
 
 /**
  * @param {Record<string, unknown>} localConfig
@@ -16,26 +87,63 @@ import { homedir } from "node:os"
  *   }
  *   recovery: Record<string, unknown>
  * }} body
- * @param {number} revision
+ * @param {{ revision?: number, updatedAt?: string, contentHash?: string } | number | null | undefined} syncMeta
+ * @param {string} [platform]
  */
-export function mergeCapabilityIntoLocalRasConfig(localConfig, body, revision) {
+export function mergeCapabilityIntoLocalRasConfig(localConfig, body, syncMeta, platform = "opencode") {
   const root = { ...localConfig }
   const prevRas =
     root.agent_ras && typeof root.agent_ras === "object" && !Array.isArray(root.agent_ras)
       ? { ...root.agent_ras }
       : {}
 
-  root.agent_ras = {
-    ...prevRas,
-    enabled: body.enabled,
-    detectors: {
-      repeat_tool: { ...body.detectors.repeat_tool },
-      llm_thinking_loop: { ...body.detectors.llm_thinking_loop },
-    },
-    recovery: { ...body.recovery },
-    ras_config_revision: revision,
-    llm_thinking_loop: { ...body.detectors.llm_thinking_loop },
+  const slice = capabilitySlice(body)
+  const prevPlatforms =
+    prevRas.platforms && typeof prevRas.platforms === "object" && !Array.isArray(prevRas.platforms)
+      ? { ...prevRas.platforms }
+      : {}
+
+  const metaIn =
+    syncMeta && typeof syncMeta === "object" && !Array.isArray(syncMeta)
+      ? syncMeta
+      : typeof syncMeta === "number"
+        ? { revision: syncMeta }
+        : {}
+  const contentHash =
+    typeof metaIn.contentHash === "string" && metaIn.contentHash
+      ? metaIn.contentHash
+      : capabilityContentHash(slice)
+  const syncedFrom = {
+    contentHash,
   }
+  if (typeof metaIn.revision === "number" && Number.isFinite(metaIn.revision)) {
+    syncedFrom.revision = metaIn.revision
+  }
+  if (typeof metaIn.updatedAt === "string" && metaIn.updatedAt) {
+    syncedFrom.updatedAt = metaIn.updatedAt
+  }
+
+  prevPlatforms[platform] = {
+    ...slice,
+    syncedFrom,
+  }
+
+  const nextRas = {
+    ...prevRas,
+    enabled: slice.enabled,
+    detectors: {
+      repeat_tool: { ...slice.detectors.repeat_tool },
+      llm_thinking_loop: { ...slice.detectors.llm_thinking_loop },
+    },
+    recovery: { ...slice.recovery },
+    llm_thinking_loop: { ...slice.detectors.llm_thinking_loop },
+    platforms: prevPlatforms,
+  }
+  // Drop legacy integer revision maps — fingerprint + syncedFrom replace them.
+  delete nextRas.ras_config_revisions
+  delete nextRas.ras_config_revision
+
+  root.agent_ras = nextRas
   return root
 }
 
@@ -129,13 +237,15 @@ export function resolveRasConfigUrl(insight) {
  * @param {object} [opts]
  * @param {typeof fetch} [opts.fetchImpl]
  * @param {string} [opts.rasHome]
+ * @param {string} [opts.platform]
  * @param {(msg: string) => void} [opts.log]
- * @returns {Promise<{ applied: boolean, reason: string, revision?: number }>}
+ * @returns {Promise<{ applied: boolean, reason: string, revision?: number, contentHash?: string }>}
  */
 export async function syncCapabilityConfigFromInsight(opts = {}) {
   const log = opts.log || (() => {})
   const fetchImpl = opts.fetchImpl || defaultRasConfigFetch
   const rasHome = opts.rasHome || resolveRasHome()
+  const platform = opts.platform || "opencode"
   const configPath = resolveConfigPath(rasHome)
 
   try {
@@ -171,7 +281,7 @@ export async function syncCapabilityConfigFromInsight(opts = {}) {
 
     const url = new URL(urlBase)
     if (!url.searchParams.has("platform")) {
-      url.searchParams.set("platform", "opencode")
+      url.searchParams.set("platform", platform)
     }
 
     const res = await fetchImpl(url.toString(), {
@@ -192,18 +302,55 @@ export async function syncCapabilityConfigFromInsight(opts = {}) {
     }
 
     const remoteRevision = Number(payload.revision) || 0
-    const localRevision = Number(ras.ras_config_revision) || 0
-    if (remoteRevision <= localRevision) {
-      return { applied: false, reason: "already_current", revision: localRevision }
+    const remoteUpdatedAt = typeof payload.updatedAt === "string" ? payload.updatedAt : undefined
+    const remoteCfg = payload.config && typeof payload.config === "object" ? payload.config : {}
+    const localSlice = resolvePlatformCapabilityFromRas(ras, platform)
+    const remoteFp = capabilityFingerprint(remoteCfg)
+    const localFp = capabilityFingerprint(localSlice)
+    const contentHash = capabilityContentHash(remoteCfg)
+
+    const platforms =
+      ras.platforms && typeof ras.platforms === "object" && !Array.isArray(ras.platforms)
+        ? ras.platforms
+        : null
+    const slot = platforms && platforms[platform] && typeof platforms[platform] === "object"
+      ? platforms[platform]
+      : null
+    const hasSyncedFrom =
+      Boolean(slot?.syncedFrom) &&
+      typeof slot.syncedFrom === "object" &&
+      typeof slot.syncedFrom.contentHash === "string" &&
+      slot.syncedFrom.contentHash.length > 0
+    const hasLegacyRevisionKeys =
+      Object.prototype.hasOwnProperty.call(ras, "ras_config_revisions") ||
+      Object.prototype.hasOwnProperty.call(ras, "ras_config_revision")
+
+    if (localFp && localFp === remoteFp && hasSyncedFrom && !hasLegacyRevisionKeys) {
+      return {
+        applied: false,
+        reason: "already_current",
+        revision: remoteRevision,
+        contentHash,
+      }
     }
 
-    const merged = mergeCapabilityIntoLocalRasConfig(local, payload.config, remoteRevision)
+    const merged = mergeCapabilityIntoLocalRasConfig(
+      local,
+      remoteCfg,
+      { revision: remoteRevision, updatedAt: remoteUpdatedAt, contentHash },
+      platform,
+    )
     mkdirSync(dirname(configPath), { recursive: true })
     const tmp = `${configPath}.${process.pid}.tmp`
     writeFileSync(tmp, `${JSON.stringify(merged, null, 2)}\n`, "utf8")
     renameSync(tmp, configPath)
-    log(`[insight-ras] ras-config applied revision=${remoteRevision}`)
-    return { applied: true, reason: "merged", revision: remoteRevision }
+    let reason = "merged"
+    if (localFp && localFp === remoteFp) reason = "layout_migrate"
+    else if (localFp) reason = "content_drift"
+    log(
+      `[insight-ras] ras-config applied platform=${platform} contentHash=${contentHash} reason=${reason}`,
+    )
+    return { applied: true, reason, revision: remoteRevision, contentHash }
   } catch (err) {
     log(`[insight-ras] ras-config sync failed: ${err?.message || err}`)
     return { applied: false, reason: "exception" }

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from ...pipeline.exceptions import (
+    ExperimentTimeoutError,
     PlatformConnectionError,
     PlatformExecutableNotFoundError,
     PluginStartupError,
@@ -27,7 +28,7 @@ from ...pipeline.models import (
 )
 from ...pipeline.monitor import ProcessMonitor
 from ..base import PlatformAdapter
-from ..lifecycle import AdapterRunContext
+from ..lifecycle import AdapterRunContext, strip_ras_detector_env
 from .mapper import OpenCodeTrajectoryMapper
 
 
@@ -70,8 +71,8 @@ class OpenCodeAdapter(PlatformAdapter):
         base_env: dict[str, str],
     ) -> dict[str, str]:
         # Real system env (HOME/config/user plugins including RAS).
-        # Only overlay AGENT_RAS_* from base_env.
-        return self.build_runtime_env(agent_ras=base_env)
+        # Only overlay AGENT_FI_* from base_env.
+        return self.build_runtime_env(fi_injection=base_env)
 
     async def run_platform_session(
         self,
@@ -107,6 +108,7 @@ class OpenCodeAdapter(PlatformAdapter):
             )
             attempt = 0
             exit_code = 1
+            timed_out = False
             while True:
                 attempt += 1
                 with (
@@ -170,19 +172,29 @@ class OpenCodeAdapter(PlatformAdapter):
                         if failure is not None:
                             raise PlatformConnectionError(failure)
 
-                    exit_code = await self.monitor.wait_for_exit(
-                        process,
-                        request.timeout_seconds,
-                        health_check=(
-                            provider_health_check
-                            if retry_limit > 0
-                            else None
-                        ),
-                    )
+                    try:
+                        exit_code = await self.monitor.wait_for_exit(
+                            process,
+                            request.timeout_seconds,
+                            health_check=(
+                                provider_health_check
+                                if retry_limit > 0
+                                else None
+                            ),
+                        )
+                    except ExperimentTimeoutError:
+                        exit_code = 124
+                        timed_out = True
                     break
 
+            if timed_out and process is not None and process.returncode is None:
+                await self.monitor.stop(process)
+                await asyncio.sleep(1.5)
+
             capture = self.mapper.inspect(artifacts.events_file)
-            if not capture.fault_activated:
+            if timed_out:
+                reason = TerminationReason.TIMEOUT
+            elif not capture.fault_activated:
                 reason = TerminationReason.FAULT_NOT_ACTIVATED
             elif capture.session_error:
                 reason = TerminationReason.SESSION_ERROR
@@ -227,22 +239,22 @@ class OpenCodeAdapter(PlatformAdapter):
         self.mapper.map(request, fault, artifacts)
 
     @staticmethod
-    def build_runtime_env(*, agent_ras: dict[str, str] | None = None) -> dict[str, str]:
-        """Real system environment, optionally overlaying AGENT_RAS_* keys."""
+    def build_runtime_env(*, fi_injection: dict[str, str] | None = None) -> dict[str, str]:
+        """Real system environment, optionally overlaying AGENT_FI_* keys."""
 
         environment = os.environ.copy()
-        if agent_ras:
-            environment.update(agent_ras)
-        return environment
+        if fi_injection:
+            environment.update(fi_injection)
+        return strip_ras_detector_env(environment)
 
     @staticmethod
-    def strip_agent_ras_env(environment: dict[str, str]) -> dict[str, str]:
-        """Copy env without AGENT_RAS_* so the eval plugin is not activated."""
+    def strip_fi_injection_env(environment: dict[str, str]) -> dict[str, str]:
+        """Copy env without AGENT_FI_* so the eval plugin is not activated."""
 
         return {
             key: value
             for key, value in environment.items()
-            if not key.startswith("AGENT_RAS_")
+            if not key.startswith("AGENT_FI_")
         }
 
     @staticmethod

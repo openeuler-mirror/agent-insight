@@ -28,6 +28,41 @@ logger = logging.getLogger(__name__)
 
 PROTOCOL_VERSION = 1
 
+# abort 生效性探针窗口：请求 abort 后该窗口内仍有新 assistant 文本到达，
+# 说明 abort 未真正停流，补记一条 abort_stream ok=false(no_effect)。
+ABORT_PROBE_WINDOW_S = 3.0
+
+_LLM_ANCHOR_KEYS = ("message_id", "part_id", "channel")
+_TOOL_ANCHOR_KEYS = ("call_id", "channel")
+_ALL_ANCHOR_KEYS = ("message_id", "part_id", "call_id", "channel")
+
+
+def _normalize_anchor(
+    raw: dict[str, Any] | None,
+    *,
+    keys: tuple[str, ...] = _ALL_ANCHOR_KEYS,
+) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    out = {key: value for key, value in raw.items() if key in keys and value}
+    return out or None
+
+
+def _is_tool_channel(channel: str | None) -> bool:
+    return str(channel or "").strip() == "tool_call"
+
+
+def _is_llm_anomaly_kind(kind: str | None) -> bool:
+    value = str(kind or "").strip()
+    return value in {"llm_thinking_loop", "llm_thinking_dead_loop"}
+
+
+def _anchor_for_anomaly(state: "SessionState", kind: str | None) -> dict[str, Any] | None:
+    """LLM anomalies bind to LLM identity only; tool anomalies to call_id only."""
+    if _is_llm_anomaly_kind(kind):
+        return dict(state.last_llm_anchor) if state.last_llm_anchor else None
+    return dict(state.last_tool_anchor) if state.last_tool_anchor else None
+
 
 def _config_from_payload(raw: dict[str, Any] | None) -> AgentRASConfig:
     raw = dict(raw or {})
@@ -82,11 +117,15 @@ class SessionState:
     latched_abort: bool = False
     last_seen: float = field(default_factory=time.time)
     last_anomaly: dict[str, Any] | None = None
-    last_trace_anchor: dict[str, Any] | None = None
+    last_llm_anchor: dict[str, Any] | None = None
+    last_tool_anchor: dict[str, Any] | None = None
     observe_count: int = 0
     host_adapter: HostCallbackAgentAdapter | None = None
     deferred_actions: list[dict[str, Any]] = field(default_factory=list)
     deferred_anomaly: dict[str, Any] | None = None
+    # abort 生效性探针状态；reset(idle 轮次结束）即视为生效并结案。
+    last_abort_ts: float | None = None
+    abort_no_effect_reported: bool = False
 
     @classmethod
     def create(cls, session_id: str, platform: str, config_payload: dict[str, Any] | None) -> SessionState:
@@ -141,8 +180,8 @@ class SessionState:
                     if hasattr(anomaly.severity, "value")
                     else str(anomaly.severity),
                 }
-                if state.last_trace_anchor:
-                    anomaly_dict["trace_anchor"] = dict(state.last_trace_anchor)
+                if state.last_llm_anchor:
+                    anomaly_dict["trace_anchor"] = dict(state.last_llm_anchor)
                 state.latched_abort = True
                 state.last_anomaly = anomaly_dict
                 state.deferred_actions = list(actions)
@@ -160,9 +199,13 @@ class SessionState:
         self.last_text.clear()
         self.latched_abort = False
         self.last_anomaly = None
-        self.last_trace_anchor = None
+        self.last_llm_anchor = None
+        self.last_tool_anchor = None
         self.deferred_actions.clear()
         self.deferred_anomaly = None
+        # idle/reset 说明轮次真的结束了：abort 已生效，探针结案。
+        self.last_abort_ts = None
+        self.abort_no_effect_reported = False
         self.last_seen = time.time()
 
     def to_public(self) -> dict[str, Any]:
@@ -282,10 +325,12 @@ class SessionHub:
             body["trace_anchor"] = {
                 key: value
                 for key, value in explicit_anchor.items()
-                if key in ("message_id", "part_id", "call_id", "channel") and value
+                if key in _ALL_ANCHOR_KEYS and value
             }
-        elif state is not None and state.last_trace_anchor:
-            body["trace_anchor"] = dict(state.last_trace_anchor)
+        elif state is not None:
+            fallback = state.last_llm_anchor or state.last_tool_anchor
+            if fallback:
+                body["trace_anchor"] = dict(fallback)
         delivery_anchor = raw.get("delivery_anchor")
         if isinstance(delivery_anchor, dict) and delivery_anchor:
             body["delivery_anchor"] = {
@@ -302,6 +347,37 @@ class SessionHub:
         fire_push_action_result(session_id, platform, body)
         return {"session_id": session_id, "ok": True, **body}
 
+    @staticmethod
+    def _mark_abort_requested(state: SessionState, actions: list[dict[str, Any]]) -> None:
+        if any(str(a.get("type") or "") == "abort_stream" for a in actions if isinstance(a, dict)):
+            state.last_abort_ts = time.time()
+            state.abort_no_effect_reported = False
+
+    def _probe_abort_effect(self, state: SessionState, *, kind: str, text: str) -> None:
+        ts = state.last_abort_ts
+        if ts is None or state.abort_no_effect_reported:
+            return
+        if time.time() - ts > ABORT_PROBE_WINDOW_S:
+            state.last_abort_ts = None
+            return
+        if kind != "assistant_text" or not text:
+            return
+        state.abort_no_effect_reported = True
+        body = {
+            "action": "abort_stream",
+            "ok": False,
+            "channel": f"{state.platform}.abort",
+            "error": "no_effect: stream traffic observed after abort request",
+            "message": None,
+        }
+        self.events.emit(
+            "action_result",
+            session_id=state.session_id,
+            platform=state.platform,
+            payload=body,
+        )
+        fire_push_action_result(state.session_id, state.platform, body)
+
     async def observe(self, session_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         state = self._sessions.get(session_id)
         if state is None:
@@ -311,18 +387,20 @@ class SessionHub:
             state = self.ensure(session_id, platform, payload.get("config"))
         state.last_seen = time.time()
         state.observe_count += 1
-        trace_anchor = payload.get("trace_anchor")
-        if isinstance(trace_anchor, dict):
-            normalized_anchor = {
-                key: value
-                for key, value in trace_anchor.items()
-                if key in ("message_id", "part_id", "call_id", "channel") and value
-            }
-            if normalized_anchor:
-                state.last_trace_anchor = normalized_anchor
-
+        self._probe_abort_effect(state, kind=str(payload.get("kind") or "assistant_text"), text=str(payload.get("text") or ""))
         kind = str(payload.get("kind") or "assistant_text")
         channel = str(payload.get("channel") or "")
+        normalized_anchor = _normalize_anchor(payload.get("trace_anchor"))
+        if normalized_anchor:
+            if kind == "tool" or _is_tool_channel(str(normalized_anchor.get("channel") or channel)):
+                tool_anchor = _normalize_anchor(normalized_anchor, keys=_TOOL_ANCHOR_KEYS)
+                if tool_anchor:
+                    state.last_tool_anchor = tool_anchor
+            else:
+                llm_anchor = _normalize_anchor(normalized_anchor, keys=_LLM_ANCHOR_KEYS)
+                if llm_anchor:
+                    state.last_llm_anchor = llm_anchor
+
         text = str(payload.get("text") or "")
         self.events.emit(
             "observe",
@@ -376,6 +454,7 @@ class SessionHub:
 
         state.latched_abort = True
         actions = self._actions_for(anomaly, state)
+        self._mark_abort_requested(state, actions)
         anomaly_dict = {
             "kind": anomaly.kind.value,
             "summary": anomaly.summary,
@@ -384,8 +463,11 @@ class SessionHub:
             if hasattr(anomaly.severity, "value")
             else str(anomaly.severity),
         }
-        if state.last_trace_anchor:
-            anomaly_dict["trace_anchor"] = dict(state.last_trace_anchor)
+        if state.last_llm_anchor or state.last_tool_anchor:
+            # Prefer kind-appropriate bucket; never hang LLM anomalies on tool call_id.
+            selected = _anchor_for_anomaly(state, anomaly.kind.value if hasattr(anomaly.kind, "value") else str(anomaly.kind))
+            if selected:
+                anomaly_dict["trace_anchor"] = selected
         state.last_anomaly = anomaly_dict
         self.events.emit(
             "anomaly",
@@ -474,6 +556,7 @@ class SessionHub:
         state.deferred_actions.clear()
         state.deferred_anomaly = None
         if actions:
+            self._mark_abort_requested(state, actions)
             self.events.emit(
                 "anomaly",
                 session_id=session_id,

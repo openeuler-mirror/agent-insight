@@ -15,7 +15,7 @@ from agent_fault_injection.pipeline.models import RunArtifacts, RunRequest
 from agent_fault_injection.platform_adapters.registry import PlatformAdapterRegistry
 from agent_fault_injection.platform_adapters.xiaoo import XiaoOAdapter
 from agent_fault_injection.platform_adapters.xiaoo import config_overlay
-from agent_fault_injection.platform_adapters.xiaoo.hooker import ras_eval_hook
+from agent_fault_injection.platform_adapters.xiaoo.hooker import fi_eval_hook
 from agent_fault_injection.platform_adapters.xiaoo.mapper import XiaoOTrajectoryMapper
 
 
@@ -75,7 +75,7 @@ class XiaoOConfigOverlayTests(unittest.TestCase):
             entries = json.loads(plugin_json.read_text(encoding="utf-8"))
             self.assertEqual(len(entries), 2)
             for item in entries:
-                self.assertIn("ras_eval_hook.py", item["command"])
+                self.assertIn("fi_eval_hook.py", item["command"])
                 self.assertTrue(item["command"].startswith("python3 "))
 
     def test_prepare_overlay_keeps_user_ras_plugin(self) -> None:
@@ -134,7 +134,7 @@ class XiaoOHookerTests(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=True):
             with patch("sys.stdin", io.StringIO(stdin)):
                 with patch("sys.stdout", new_callable=io.StringIO) as stdout:
-                    code = ras_eval_hook.main()
+                    code = fi_eval_hook.main()
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(stdout.getvalue()), {"result": "allow"})
 
@@ -143,10 +143,10 @@ class XiaoOHookerTests(unittest.TestCase):
             raw = Path(temporary)
             ready = raw / "plugin-ready.json"
             env = {
-                "AGENT_RAS_RUN_ID": "run-1",
-                "AGENT_RAS_FAULT_SKILL": "ras-step-omission",
-                "AGENT_RAS_RAW_DIR": str(raw),
-                "AGENT_RAS_PLUGIN_READY": str(ready),
+                "AGENT_FI_RUN_ID": "run-1",
+                "AGENT_FI_FAULT_SKILL": "ras-step-omission",
+                "AGENT_FI_RAW_DIR": str(raw),
+                "AGENT_FI_PLUGIN_READY": str(ready),
             }
             stdin = json.dumps(
                 {
@@ -157,7 +157,7 @@ class XiaoOHookerTests(unittest.TestCase):
             with patch.dict(os.environ, env, clear=True):
                 with patch("sys.stdin", io.StringIO(stdin)):
                     with patch("sys.stdout", new_callable=io.StringIO) as stdout:
-                        code = ras_eval_hook.main()
+                        code = fi_eval_hook.main()
             self.assertEqual(code, 0)
             result = json.loads(stdout.getvalue())
             self.assertEqual(result["result"], "transform")
@@ -172,9 +172,9 @@ class XiaoOHookerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             raw = Path(temporary)
             env = {
-                "AGENT_RAS_RUN_ID": "run-1",
-                "AGENT_RAS_FAULT_SKILL": "ras-step-omission",
-                "AGENT_RAS_RAW_DIR": str(raw),
+                "AGENT_FI_RUN_ID": "run-1",
+                "AGENT_FI_FAULT_SKILL": "ras-step-omission",
+                "AGENT_FI_RAW_DIR": str(raw),
             }
             stdin = json.dumps(
                 {
@@ -189,7 +189,7 @@ class XiaoOHookerTests(unittest.TestCase):
             with patch.dict(os.environ, env, clear=True):
                 with patch("sys.stdin", io.StringIO(stdin)):
                     with patch("sys.stdout", new_callable=io.StringIO) as stdout:
-                        code = ras_eval_hook.main()
+                        code = fi_eval_hook.main()
             self.assertEqual(code, 0)
             self.assertEqual(json.loads(stdout.getvalue()), {"result": "accept"})
             events = (raw / "events.jsonl").read_text(encoding="utf-8")
@@ -207,10 +207,10 @@ class XiaoOHookerTests(unittest.TestCase):
                 }
             ]
             env = {
-                "AGENT_RAS_RUN_ID": "run-1",
-                "AGENT_RAS_FAULT_SKILL": "ras-tool-result-corruption",
-                "AGENT_RAS_RAW_DIR": str(raw),
-                "AGENT_RAS_INJECTION_RUNTIME": json.dumps(plan),
+                "AGENT_FI_RUN_ID": "run-1",
+                "AGENT_FI_FAULT_SKILL": "ras-tool-result-corruption",
+                "AGENT_FI_RAW_DIR": str(raw),
+                "AGENT_FI_INJECTION_RUNTIME": json.dumps(plan),
             }
             # Activate first so rewrite path is exercised after skill gate.
             (raw / "fault-activated.json").write_text("{}", encoding="utf-8")
@@ -230,7 +230,7 @@ class XiaoOHookerTests(unittest.TestCase):
             with patch.dict(os.environ, env, clear=True):
                 with patch("sys.stdin", io.StringIO(stdin)):
                     with patch("sys.stdout", new_callable=io.StringIO) as stdout:
-                        code = ras_eval_hook.main()
+                        code = fi_eval_hook.main()
             self.assertEqual(code, 0)
             result = json.loads(stdout.getvalue())
             self.assertEqual(result["result"], "transform")
@@ -242,9 +242,9 @@ class XiaoOHookerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             raw = Path(temporary)
             env = {
-                "AGENT_RAS_RUN_ID": "run-1",
-                "AGENT_RAS_FAULT_SKILL": "ras-tool-result-corruption",
-                "AGENT_RAS_RAW_DIR": str(raw),
+                "AGENT_FI_RUN_ID": "run-1",
+                "AGENT_FI_FAULT_SKILL": "ras-tool-result-corruption",
+                "AGENT_FI_RAW_DIR": str(raw),
             }
             stdin = json.dumps(
                 {
@@ -256,7 +256,7 @@ class XiaoOHookerTests(unittest.TestCase):
             with patch.dict(os.environ, env, clear=True):
                 with patch("sys.stdin", io.StringIO(stdin)):
                     with patch("sys.stdout", new_callable=io.StringIO) as stdout:
-                        code = ras_eval_hook.main()
+                        code = fi_eval_hook.main()
             self.assertEqual(code, 0)
             self.assertEqual(json.loads(stdout.getvalue()), {"result": "allow"})
             events = (raw / "events.jsonl").read_text(encoding="utf-8")
@@ -266,9 +266,9 @@ class XiaoOHookerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             raw = Path(temporary)
             env = {
-                "AGENT_RAS_RUN_ID": "run-1",
-                "AGENT_RAS_FAULT_SKILL": "ras-step-omission",
-                "AGENT_RAS_RAW_DIR": str(raw),
+                "AGENT_FI_RUN_ID": "run-1",
+                "AGENT_FI_FAULT_SKILL": "ras-step-omission",
+                "AGENT_FI_RAW_DIR": str(raw),
             }
             stdin = json.dumps(
                 {
@@ -282,7 +282,7 @@ class XiaoOHookerTests(unittest.TestCase):
             with patch.dict(os.environ, env, clear=True):
                 with patch("sys.stdin", io.StringIO(stdin)):
                     with patch("sys.stdout", new_callable=io.StringIO) as stdout:
-                        code = ras_eval_hook.main()
+                        code = fi_eval_hook.main()
             self.assertEqual(code, 0)
             result = json.loads(stdout.getvalue())
             self.assertEqual(result["result"], "deny")
@@ -294,9 +294,9 @@ class XiaoOHookerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             raw = Path(temporary)
             env = {
-                "AGENT_RAS_RUN_ID": "run-1",
-                "AGENT_RAS_FAULT_SKILL": "ras-step-omission",
-                "AGENT_RAS_RAW_DIR": str(raw),
+                "AGENT_FI_RUN_ID": "run-1",
+                "AGENT_FI_FAULT_SKILL": "ras-step-omission",
+                "AGENT_FI_RAW_DIR": str(raw),
             }
             stdin = json.dumps(
                 {
@@ -310,7 +310,7 @@ class XiaoOHookerTests(unittest.TestCase):
             with patch.dict(os.environ, env, clear=True):
                 with patch("sys.stdin", io.StringIO(stdin)):
                     with patch("sys.stdout", new_callable=io.StringIO) as stdout:
-                        code = ras_eval_hook.main()
+                        code = fi_eval_hook.main()
             self.assertEqual(code, 0)
             self.assertEqual(json.loads(stdout.getvalue()), {"result": "allow"})
 

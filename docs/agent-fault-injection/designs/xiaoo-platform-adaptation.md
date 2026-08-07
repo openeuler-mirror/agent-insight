@@ -44,7 +44,7 @@ flowchart TB
   end
 
   subgraph harness [内层被测 harness - XiaoOAdapter]
-    Prep["装 Skill + 临时 config + AGENT_RAS_*"]
+    Prep["装 Skill + 临时 config + AGENT_FI_*"]
     Choice{harness 模式}
     CliRun["xiaoo --cli run -p ..."]
     Daemon["xiaoo-daemon<br/>open / input SSE / close"]
@@ -105,10 +105,10 @@ Adapter 内部等价于（示意）：
 
 ```bash
 XIAOO_CONFIG=/path/to/run-private/config.toml \
-AGENT_RAS_RUN_ID=... \
-AGENT_RAS_FAULT_SKILL=... \
-AGENT_RAS_EVENTS_FILE=.../events.jsonl \
-AGENT_RAS_PLUGIN_READY=.../plugin-ready.json \
+AGENT_FI_RUN_ID=... \
+AGENT_FI_FAULT_SKILL=... \
+AGENT_FI_EVENTS_FILE=.../events.jsonl \
+AGENT_FI_PLUGIN_READY=.../plugin-ready.json \
   xiaoo --cli run \
     -p "使用 <skill> 技能。Analyze the project..." \
     --format json \
@@ -242,7 +242,7 @@ sequenceDiagram
    - `[skills].dirs`（如需要）
    - `[hooker].plugins` → 指向 bundled `ras_eval` 的 `plugin.json`
    - 可选对齐 `[agent.<name>]`
-5. 设置 `AGENT_RAS_*`；无这些变量时 Hook **空操作**（残留插件安全）。
+5. 设置 `AGENT_FI_*`；无这些变量时 Hook **空操作**（残留插件安全）。
 
 ### 5.2 Hooker 最小行为
 

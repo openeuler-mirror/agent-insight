@@ -11,4 +11,12 @@ Against **current** xiaoO (`/home/iceory/work/agent-reliability/xiaoO`):
 | `HookAction` | 可扩展 `cancel_active_turn`；本地立即执行 |
 | `POST /api/v1/runtimes/*` | **RAS 不依赖**（非观测/恢复路径） |
 
-SessionHub 跨 hooker 子进程：agent-ras `ras_embed.ipc_worker`（unix socket）。
+SessionHub 跨 hooker 子进程：`platform_adapter.common.transport.subprocess_ipc`
+（Unix socket worker；非 SessionHub 本体）。
+
+## `ras_control.sock` ack 契约（2026-08-07 起）
+
+投递改为**请求-响应**：网关执行完 abort/steer/notice 后必须回一行 JSON ack
+（`{"ok": true}` 或 `{"ok": false, "error": "..."}`）。不写回 ack 的监听器
+（含旧版直接关连接）会被如实记为 `ok=false error=no_ack`——
+`action_result` 的 ok 从此以网关确认为准，不再"发出即成功"。

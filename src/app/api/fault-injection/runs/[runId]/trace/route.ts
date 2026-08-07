@@ -6,22 +6,107 @@ import {
   buildFiTraceMarkers,
   mergeEvaluationMarkers,
 } from '@/lib/fault-injection/trace-markers'
+import { getLatestWorkerInventory } from '@/lib/fault-injection/worker-protocol'
 import type { RasEventRow } from '@/lib/ingest/ras/normalize'
 import { listRasEventsByTaskIds } from '@/lib/ingest/ras/store'
 import { buildRasTraceMarkers } from '@/lib/ingest/ras/trace-markers'
 
 export const dynamic = 'force-dynamic'
 
+function asNonEmptyString(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  return trimmed || null
+}
+
+function modelFromInteractions(interactions: unknown[]): string | null {
+  for (const item of interactions) {
+    if (!item || typeof item !== 'object') continue
+    const row = item as Record<string, unknown>
+    if (row.role !== 'assistant') continue
+    const modelId =
+      asNonEmptyString(row.modelID) ||
+      asNonEmptyString(row.model_id) ||
+      asNonEmptyString(row.model)
+    const providerId =
+      asNonEmptyString(row.providerID) || asNonEmptyString(row.provider_id)
+    if (modelId && providerId) return `${providerId}/${modelId}`
+    if (modelId) return modelId
+  }
+  return null
+}
+
+function modelFromRequestJson(raw: string | null | undefined): string | null {
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    return asNonEmptyString(parsed.model)
+  } catch {
+    return null
+  }
+}
+
+function stampAssistantModel(
+  interactions: unknown[],
+  model: string | null,
+): unknown[] {
+  if (!model || !interactions.length) return interactions
+  let providerId: string | null = null
+  let modelId = model
+  if (model.includes('/')) {
+    const [provider, rest] = model.split('/', 2)
+    providerId = asNonEmptyString(provider)
+    modelId = asNonEmptyString(rest) || model
+  }
+  return interactions.map((item) => {
+    if (!item || typeof item !== 'object') return item
+    const row = item as Record<string, unknown>
+    if (row.role !== 'assistant') return item
+    const next = { ...row }
+    if (!asNonEmptyString(next.modelID) && !asNonEmptyString(next.model)) {
+      next.modelID = modelId
+    }
+    if (providerId && !asNonEmptyString(next.providerID)) {
+      next.providerID = providerId
+    }
+    return next
+  })
+}
+
+async function platformDefaultModel(
+  user: string | null,
+  platform: string,
+): Promise<string | null> {
+  const inv = await getLatestWorkerInventory(user, platform)
+  const models = inv?.platformInventory?.models
+  if (!Array.isArray(models)) return null
+  for (const row of models) {
+    if (!row || typeof row !== 'object') continue
+    const rec = row as Record<string, unknown>
+    if (rec.default === true) {
+      const id = asNonEmptyString(rec.id)
+      if (id) return id
+    }
+  }
+  for (const row of models) {
+    if (!row || typeof row !== 'object') continue
+    const id = asNonEmptyString((row as Record<string, unknown>).id)
+    if (id) return id
+  }
+  return null
+}
+
 export async function GET(
   req: Request,
   ctx: { params: Promise<{ runId: string }> },
 ) {
-  await resolveUser(req)
+  const { username } = await resolveUser(req)
   const { runId } = await ctx.params
   const run = await prisma.faultInjectionRun.findUnique({ where: { runId } })
   if (!run) return NextResponse.json({ error: 'not found' }, { status: 404 })
 
   let interactions: unknown[] = []
+  let sessionModel: string | null = null
   if (run.sessionTaskId) {
     const session = await prisma.session.findUnique({ where: { taskId: run.sessionTaskId } })
     if (session?.interactions) {
@@ -31,6 +116,7 @@ export async function GET(
         interactions = []
       }
     }
+    sessionModel = asNonEmptyString(session?.model)
   }
 
   let model: string | null = null
@@ -38,10 +124,18 @@ export async function GET(
   let taskName: string | null = null
   if (run.fiTaskId) {
     const task = await prisma.faultInjectionTask.findUnique({ where: { id: run.fiTaskId } })
-    model = task?.model || null
+    model = asNonEmptyString(task?.model)
     taskKey = task?.taskKey || null
     taskName = task?.name || null
   }
+  if (!model) model = sessionModel
+  if (!model) model = modelFromInteractions(interactions)
+  if (!model) model = modelFromRequestJson(run.requestJson)
+  if (!model) {
+    model = await platformDefaultModel(username || run.user || null, run.platform)
+  }
+
+  interactions = stampAssistantModel(interactions, model)
 
   const rawMarkers = JSON.parse(run.markersJson || '[]')
   let markersList = Array.isArray(rawMarkers) ? [...rawMarkers] : []

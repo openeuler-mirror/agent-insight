@@ -1,6 +1,7 @@
 'use client'
 
 import type { ProgressCounts } from '@/components/fault-injection/types'
+import { useLocale } from '@/lib/client/locale-context'
 
 export function WizardSummary({
   platform,
@@ -17,12 +18,15 @@ export function WizardSummary({
   workspace?: string
   checklist: Array<{ ok: boolean; label: string }>
 }) {
+  const { locale } = useLocale()
+  const zh = locale === 'zh'
+
   return (
     <aside className="space-y-4 rounded-md border border-border bg-card p-4 lg:sticky lg:top-4">
-      <h3 className="text-[13px] font-semibold">任务摘要</h3>
+      <h3 className="text-[13px] font-semibold">{zh ? '任务摘要' : 'Task summary'}</h3>
       <dl className="space-y-2 text-xs">
         <div>
-          <dt className="text-foreground-muted">平台</dt>
+          <dt className="text-foreground-muted">{zh ? '平台' : 'Platform'}</dt>
           <dd className="font-medium">{platform || '—'}</dd>
         </div>
         <div>
@@ -31,10 +35,12 @@ export function WizardSummary({
         </div>
         <div>
           <dt className="text-foreground-muted">Model</dt>
-          <dd className="font-medium">{model || '平台默认'}</dd>
+          <dd className="font-medium">
+            {model || (zh ? '平台默认' : 'Platform default')}
+          </dd>
         </div>
         <div>
-          <dt className="text-foreground-muted">故障</dt>
+          <dt className="text-foreground-muted">{zh ? '故障' : 'Faults'}</dt>
           <dd className="mt-1 flex flex-wrap gap-1">
             {faultLabels.length
               ? faultLabels.map((label) => (
@@ -54,7 +60,9 @@ export function WizardSummary({
         </div>
       </dl>
       <div>
-        <p className="mb-2 text-[13px] font-semibold">启动前检查</p>
+        <p className="mb-2 text-[13px] font-semibold">
+          {zh ? '启动前检查' : 'Pre-flight checks'}
+        </p>
         <ul className="space-y-1.5 text-xs">
           {checklist.map((item) => (
             <li key={item.label} className="flex items-center gap-2">

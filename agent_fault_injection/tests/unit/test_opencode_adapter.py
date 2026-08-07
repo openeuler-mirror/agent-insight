@@ -194,26 +194,26 @@ class OpenCodeAdapterTests(TestCase):
             clear=True,
         ):
             environment = OpenCodeAdapter.build_runtime_env(
-                agent_ras={
-                    "AGENT_RAS_RUN_ID": "run-1",
-                    "AGENT_RAS_FAULT_SKILL": "step-omission",
+                fi_injection={
+                    "AGENT_FI_RUN_ID": "run-1",
+                    "AGENT_FI_FAULT_SKILL": "step-omission",
                 }
             )
 
-            self.assertEqual(environment["AGENT_RAS_RUN_ID"], "run-1")
-            self.assertEqual(environment["AGENT_RAS_FAULT_SKILL"], "step-omission")
+            self.assertEqual(environment["AGENT_FI_RUN_ID"], "run-1")
+            self.assertEqual(environment["AGENT_FI_FAULT_SKILL"], "step-omission")
             self.assertEqual(environment["HOME"], "/home/user")
             # Must not invent isolation knobs on top of the real env.
             self.assertNotIn("OPENCODE_CONFIG_DIR", environment)
             self.assertNotIn("OPENCODE_DB", environment)
             self.assertNotIn("OPENCODE_DISABLE_DEFAULT_PLUGINS", environment)
 
-    def test_strip_agent_ras_env(self) -> None:
-        cleaned = OpenCodeAdapter.strip_agent_ras_env(
+    def test_strip_fi_injection_env(self) -> None:
+        cleaned = OpenCodeAdapter.strip_fi_injection_env(
             {
                 "HOME": "/home/user",
-                "AGENT_RAS_RUN_ID": "run-1",
-                "AGENT_RAS_FAULT_SKILL": "step-omission",
+                "AGENT_FI_RUN_ID": "run-1",
+                "AGENT_FI_FAULT_SKILL": "step-omission",
                 "PATH": "/usr/bin",
             }
         )

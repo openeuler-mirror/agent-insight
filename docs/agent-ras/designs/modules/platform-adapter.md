@@ -36,7 +36,7 @@ flowchart TB
 
 | ID | 名称 | 职责 | 路径 |
 |----|------|------|------|
-| M-pa.common | common | RasClient、applyActions、FFI bridge、Insight RAS reporter、**OTLP HTTP + witty/现网 span builder** | `common/` |
+| M-pa.common | common | RasClient、applyActions、FFI bridge、Insight RAS reporter、**OTLP HTTP + witty/现网 span builder**、**embedding transports**（`transport/inproc` vs `transport/subprocess_ipc`） | `common/` |
 | M-pa.jiuwen | openjiuwen | Rail 深挂载 + Monitor + StreamObserver | `openjiuwen/` |
 | M-pa.opencode | opencode | Plugin + HostControl + skill_judge | `opencode/` |
 | M-pa.skel | openclaw/hermes | 骨架 hooks/host | `openclaw/`, `hermes/` |
@@ -85,6 +85,8 @@ flowchart LR
 ### HostControl（协议真源 `core/host_control.py`）
 
 平台实现：`request_abort_stream`、`push_steering`、`emit_user_notice`、`request_force_finish`、`write_stream_content` 等。
+
+**ok 语义（2026-08-07 收紧）**：返回值必须以宿主**执行确认**为准，禁止"调用没抛异常即 ok=true"。fn 返回 `{"ok": ...}` 时 `CallableHostControl` 原样透出；xiaoo 走 `ras_control.sock` 请求-响应（网关回 ack 才算成功，无 ack 记 `no_ack` 失败）。SessionHub 另有 abort 生效性探针：abort 后 3s 窗口内仍有新 assistant 文本到达，补记 `abort_stream ok=false error=no_effect`。
 
 ### L2 Wire（`host_actions.js`）
 

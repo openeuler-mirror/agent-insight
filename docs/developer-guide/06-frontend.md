@@ -19,7 +19,7 @@ App Router。页面位于 `src/app` 下。主仪表盘位于 `(main)` 路由组�
 | `/(main)/agent-ras/fault-injection/tasks` | 任务列表（侧栏默认入口；表内工具栏/行级图标操作/轮询） | `GET/POST /api/fault-injection/tasks` |
 | `/(main)/agent-ras/fault-injection/tasks/new` | 三步向导（卡内 footer；`?rerunFrom=` 预填） | platforms/agents/models |
 | `/(main)/agent-ras/fault-injection/tasks/[taskId]` | 任务详情（进度卡、中文故障名、图标操作） | `GET .../task/:id` |
-| `/(main)/agent-ras/fault-injection/runs/[runId]` | 单卡摘要 + MarkerPipeline 四节点 + `AgentTraceView`；可跳可靠性观测 | `GET .../runs/:id/trace`；激活后写 `RasAnomalyEvent`（`source=fault_injection`） |
+| `/(main)/agent-ras/fault-injection/runs/[runId]` | 单卡摘要 + MarkerPipeline 四节点 + `AgentTraceView`；可跳可靠性观测 | `GET .../runs/:id/trace`；collect 后 upsert Session；**不再**写 `RasAnomalyEvent`；可靠性列表依赖平台真实 Execution 上报 |
 
 | `/(main)/fault` | `FaultPage` (`(main)/fault/page.tsx`) | 故障诊断 |
 | `/(main)/dataset`, `/(main)/dataset/[id]` | `DatasetPage`, `DatasetDataItemsRoutePage` | 评测数据集；详情页按字段 schema 渲染动态列，支持新增字段和逐条编辑字段值 |

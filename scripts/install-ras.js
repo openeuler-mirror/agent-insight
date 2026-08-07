@@ -88,6 +88,11 @@ function mergeOpenCodeConfig(existing) {
   return output
 }
 
+function fileSha256(filePath) {
+  if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) return null
+  return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex')
+}
+
 function installXiaooHooker(runtimeRoot, rasRoot, home = os.homedir()) {
   const sourceHooker = path.join(runtimeRoot, 'platform_adapter', 'xiaoo', 'hooker')
   if (!fs.existsSync(sourceHooker)) {
@@ -103,7 +108,13 @@ function installXiaooHooker(runtimeRoot, rasRoot, home = os.homedir()) {
     }
   }
   const hookerMain = path.join(destRoot, 'hooker_main.py')
+  const sourceMain = path.join(sourceHooker, 'hooker_main.py')
+  if (fileSha256(hookerMain) !== fileSha256(sourceMain)) {
+    return { ok: false, error: 'xiaoo hooker_main.py hash mismatch after copy' }
+  }
   const pluginPath = path.join(destRoot, 'plugin.json')
+  // Plugin hooks only (Chat / Tool / Session). stream_delta is NOT a hook_point —
+  // xiaoO gateway LoopEventSink invokes hooker_main.py stream_delta directly.
   const entries = [
     ['agent_ras_chat_received', '*.Chat.message.received', 'chat_received'],
     ['agent_ras_tool_post', '*.Tool.*.post', 'tool_post'],
@@ -316,34 +327,81 @@ function checkRasInstallation(options = {}) {
     const pythonPackages = path.join(runtimeRoot, '.python-packages')
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'))
     const service = config?.agent_ras?.service || {}
-    const configHome = env.XDG_CONFIG_HOME || path.join(options.home || os.homedir(), '.config')
-    const openCodeRoot = path.join(configHome, 'opencode')
-    const wrapperPath = path.join(openCodeRoot, 'plugins', 'agent-insight-ras.js')
-    const openCodeConfigPath = path.join(openCodeRoot, 'opencode.json')
-    const openCodeConfig = JSON.parse(fs.readFileSync(openCodeConfigPath, 'utf8'))
-    const expectedPlugin = './plugins/agent-insight-ras.js'
-    if (
-      marker.fingerprint !== fingerprint
-      || marker.runtimeRoot !== runtimeRoot
-      || !fs.existsSync(runtimeRoot)
-      || !fs.existsSync(pythonPackages)
-      || service.transport !== 'inproc'
-      || service.repo_root !== runtimeRoot
-      || service.python_packages !== pythonPackages
-      || !fs.existsSync(wrapperPath)
-      || !fs.readFileSync(wrapperPath, 'utf8').includes(
-        path.join(runtimeRoot, 'platform_adapter', 'opencode', 'plugin.js'),
-      )
-      || !Array.isArray(openCodeConfig.plugin)
-      || !openCodeConfig.plugin.includes(expectedPlugin)
-      || !openCodeConfig.agent?.['ras-judge']
-    ) {
-      return statusResult('failed', 'Agent RAS runtime 或 OpenCode 配置不是当前版本，请执行 agent-insight install-ras')
+
+    const coreOk =
+      marker.fingerprint === fingerprint
+      && marker.runtimeRoot === runtimeRoot
+      && fs.existsSync(runtimeRoot)
+      && fs.existsSync(pythonPackages)
+      && service.transport === 'inproc'
+      && service.repo_root === runtimeRoot
+      && service.python_packages === pythonPackages
+
+    if (!coreOk) {
+      return statusResult('failed', 'Agent RAS runtime 不是当前版本，请执行 agent-insight install-ras')
     }
-    return statusResult('already current', 'Agent RAS 已是当前版本', {
-      configPath,
-      runtimeRoot,
-    })
+
+    const want = options.platforms || ['opencode', 'xiaoo']
+    const configHome = env.XDG_CONFIG_HOME || path.join(options.home || os.homedir(), '.config')
+    const details = { configPath, runtimeRoot, platforms: {} }
+
+    if (want.includes('opencode')) {
+      const openCodeRoot = path.join(configHome, 'opencode')
+      const wrapperPath = path.join(openCodeRoot, 'plugins', 'agent-insight-ras.js')
+      const openCodeConfigPath = path.join(openCodeRoot, 'opencode.json')
+      let openCodeOk = false
+      try {
+        const openCodeConfig = JSON.parse(fs.readFileSync(openCodeConfigPath, 'utf8'))
+        const expectedPlugin = './plugins/agent-insight-ras.js'
+        openCodeOk =
+          fs.existsSync(wrapperPath)
+          && fs.readFileSync(wrapperPath, 'utf8').includes(
+            path.join(runtimeRoot, 'platform_adapter', 'opencode', 'plugin.js'),
+          )
+          && Array.isArray(openCodeConfig.plugin)
+          && openCodeConfig.plugin.includes(expectedPlugin)
+          && Boolean(openCodeConfig.agent?.['ras-judge'])
+      } catch {
+        openCodeOk = false
+      }
+      details.platforms.opencode = openCodeOk ? 'ok' : 'missing'
+      if (!openCodeOk && want.length === 1) {
+        return statusResult('failed', 'OpenCode RAS 配置不是当前版本，请执行 agent-insight install-ras', details)
+      }
+    }
+
+    if (want.includes('xiaoo')) {
+      const hookerMain = path.join(rasRoot, 'xiaoo', 'hooker', 'hooker_main.py')
+      const runtimeHooker = path.join(
+        runtimeRoot,
+        'platform_adapter',
+        'xiaoo',
+        'hooker',
+        'hooker_main.py',
+      )
+      const xiaooOk =
+        fs.existsSync(hookerMain)
+        && fs.existsSync(runtimeHooker)
+        && fileSha256(hookerMain) === fileSha256(runtimeHooker)
+        && fs.existsSync(path.join(runtimeRoot, 'platform_adapter', 'xiaoo', 'hooks.py'))
+      details.platforms.xiaoo = xiaooOk ? 'ok' : 'missing'
+      if (!xiaooOk && want.length === 1) {
+        return statusResult('failed', 'xiaoO RAS hooker 不是当前版本，请执行 agent-insight install-ras', details)
+      }
+    }
+
+    const missing = Object.entries(details.platforms)
+      .filter(([, v]) => v !== 'ok')
+      .map(([k]) => k)
+    if (missing.length && want.length > 1) {
+      return statusResult(
+        'failed',
+        `Agent RAS 核心已就绪，但平台装配不完整：${missing.join(', ')}；请执行 agent-insight install-ras`,
+        details,
+      )
+    }
+
+    return statusResult('already current', 'Agent RAS 已是当前版本', details)
   } catch (error) {
     return statusResult('failed', `Agent RAS 安装状态无效：${error.message}`)
   }

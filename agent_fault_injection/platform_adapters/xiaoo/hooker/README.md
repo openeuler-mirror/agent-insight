@@ -1,7 +1,7 @@
 # xiaoO ras-eval Hooker
 
-Bundled with `agent-fault-injection`. Activated only when `AGENT_RAS_RUN_ID`,
-`AGENT_RAS_FAULT_SKILL`, and `AGENT_RAS_RAW_DIR` are set.
+Bundled with `agent-fault-injection`. Activated only when `AGENT_FI_RUN_ID`,
+`AGENT_FI_FAULT_SKILL`, and `AGENT_FI_RAW_DIR` are set.
 
 Hooks (compatible with installed xiaoO builds that reject Chat.* points):
 

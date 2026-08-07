@@ -15,19 +15,25 @@ def observe_assistant_text(
     message_id: str | None = None,
     mode: str = "snapshot",
 ) -> dict[str, Any] | None:
-    """Push one assistant text/reasoning chunk into SessionHub."""
+    """Push one assistant text/reasoning chunk into SessionHub.
+
+    Always attaches an LLM ``trace_anchor`` (message_id + llm channel). Callers
+    should pass a turn-stable ``message_id``; when omitted a session-scoped
+    placeholder is used so SessionHub refreshes the LLM bucket and never leaves
+    a stale tool ``call_id`` as the only anchor for thinking-loop anomalies.
+    """
+    mid = (message_id or "").strip() or f"{platform}-llm-{session_id}-{channel}"
     payload: dict[str, Any] = {
         "platform": platform,
         "kind": "assistant_text",
         "channel": channel,
         "text": text,
         "mode": mode,
-    }
-    if message_id:
-        payload["trace_anchor"] = {
-            "message_id": message_id,
+        "trace_anchor": {
+            "message_id": mid,
             "channel": channel,
-        }
+        },
+    }
     return client.observe(session_id, payload)
 
 

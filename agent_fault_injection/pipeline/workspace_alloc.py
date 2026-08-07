@@ -95,6 +95,9 @@ def allocate_run_workspace(
     safe_fault = sanitize_path_component(fault, fallback="fault")
     safe_run = sanitize_path_component(run_id, fallback="run")
     destination = base_path / ".ras-runs" / safe_scope / f"{safe_fault}-{safe_run}"
+    if destination.exists():
+        # Leftover from a failed/retried run with the same run_id — reclaim.
+        shutil.rmtree(destination)
     destination.mkdir(parents=True, exist_ok=False)
 
     readme = base_path / "README.md"

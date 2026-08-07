@@ -37,7 +37,7 @@ class _FakeAdapter(PlatformAdapter):
         base_env: dict[str, str],
     ) -> dict[str, str]:
         self.calls.append("merge")
-        assert "AGENT_RAS_FAULT_SKILL" in base_env
+        assert "AGENT_FI_FAULT_SKILL" in base_env
         env = dict(base_env)
         env["FAKE"] = "1"
         return env

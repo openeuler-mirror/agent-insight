@@ -5,7 +5,8 @@
 
 > 权威发现方式：`python -m agent_fault_injection.cli fault list`。每个故障目录**必须**含 `SKILL.md`（YAML frontmatter 必填 `name` / `description`）。多数故障仅需该文件；若需声明 tools / `agent_tools` / `authoritative_verifier`，可另加**可选**的 `fault.json`。  
 > 子模式由 `fault_inject/scenarios.py` 从「场景总览」表或 `## 场景N：…` 标题解析；Web / `compose_fault_prompt` 据此合成用户任务。  
-> 注入方式 key（`injection_method`）：`skill_inject` / `file_tamper` / `prompt_modify` / `tool_result_tamper` / `intercept_rewrite` / `route_manipulate`（预留）；无旧版别名。纯 Skill 故障默认 `skill_inject`。
+> 注入方式 key（`injection_method`）：`skill_inject` / `file_tamper` / `prompt_modify` / `tool_result_tamper` / `intercept_rewrite` / `route_manipulate`（预留）；无旧版别名。纯 Skill 故障默认 `skill_inject`。  
+> **新增故障模式（Lane A）**：见 [guides/lane-a-add-fault.md](../guides/lane-a-add-fault.md)。
 
 | 目录名 (`--fault`) | frontmatter `name` (`skill_name`) | 子模式 (id → 名称) | 关联检测 / 主题 | 示例配置 | 设计文档 |
 |-|-|-|-|-|-|

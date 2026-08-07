@@ -1,5 +1,25 @@
 import type { FiPipelineMarker } from '@/lib/fault-injection/trace-markers'
 
+export type FiPipelineLocale = 'zh' | 'en'
+
+const OUTCOME_LABELS: Record<FiPipelineLocale, Record<string, string>> = {
+  zh: {
+    occurred: '注入成功',
+    not_occurred: '注入未发生',
+    skipped: '跳过',
+  },
+  en: {
+    occurred: 'Occurred',
+    not_occurred: 'Not occurred',
+    skipped: 'Skipped',
+  },
+}
+
+function outcomeLabel(value: string | undefined, locale: FiPipelineLocale): string | undefined {
+  if (!value) return undefined
+  return OUTCOME_LABELS[locale][value] ?? value
+}
+
 export type PipelineStep = {
   key: string
   label: string
@@ -11,10 +31,17 @@ export type PipelineStep = {
   meta?: string
 }
 
-const EVAL_REASON_LABELS: Record<string, string> = {
-  judge_disabled: '已关闭评判（CLI --no-judge）',
-  judge_skipped: 'Insight 评判已跳过',
-  fault_not_activated: '故障未注入，跳过评判',
+const EVAL_REASON_LABELS: Record<FiPipelineLocale, Record<string, string>> = {
+  zh: {
+    judge_disabled: '已关闭评判（CLI --no-judge）',
+    judge_skipped: 'Insight 评判已跳过',
+    fault_not_activated: '故障未注入，跳过评判',
+  },
+  en: {
+    judge_disabled: 'Judge disabled (CLI --no-judge)',
+    judge_skipped: 'Insight judge skipped',
+    fault_not_activated: 'Fault not activated; judge skipped',
+  },
 }
 
 function pipelineStageKey(marker: FiPipelineMarker): string | null {
@@ -56,11 +83,13 @@ function markerCallId(marker: FiPipelineMarker): string | undefined {
 function formatMarkerDetail(
   marker: FiPipelineMarker,
   stageKey: string,
+  locale: FiPipelineLocale,
 ): { summary?: string; detail?: string; meta?: string; severity: string } {
   const payload = marker.payload && typeof marker.payload === 'object' ? marker.payload : {}
   const skill = markerSkill(marker)
   const callID = markerCallId(marker)
   const severity = marker.severity || 'info'
+  const zh = locale === 'zh'
 
   if (stageKey === 'fault_requested') {
     const instruction =
@@ -70,7 +99,13 @@ function formatMarkerDetail(
     return {
       severity,
       meta: skill,
-      summary: skill ? `请求加载 skill: ${skill}` : '已向 system 写入故障注入请求',
+      summary: skill
+        ? zh
+          ? `请求加载 skill: ${skill}`
+          : `Requested skill load: ${skill}`
+        : zh
+          ? '已向 system 写入故障注入请求'
+          : 'Fault-injection request written to system',
       detail: instruction,
     }
   }
@@ -78,7 +113,13 @@ function formatMarkerDetail(
     return {
       severity,
       meta: skill,
-      summary: skill ? `开始加载 skill: ${skill}` : '故障注入开始（skill 工具已调用）',
+      summary: skill
+        ? zh
+          ? `开始加载 skill: ${skill}`
+          : `Started skill load: ${skill}`
+        : zh
+          ? '故障注入开始（skill 工具已调用）'
+          : 'Fault injection started (skill tool invoked)',
       detail: [
         skill ? `skill: ${skill}` : null,
         callID ? `callID: ${callID}` : null,
@@ -92,7 +133,13 @@ function formatMarkerDetail(
     return {
       severity,
       meta: skill,
-      summary: skill ? `skill 加载完成: ${skill}` : '故障注入完成',
+      summary: skill
+        ? zh
+          ? `skill 加载完成: ${skill}`
+          : `Skill load completed: ${skill}`
+        : zh
+          ? '故障注入完成'
+          : 'Fault injection completed',
       detail: [
         skill ? `skill: ${skill}` : null,
         callID ? `callID: ${callID}` : null,
@@ -104,7 +151,10 @@ function formatMarkerDetail(
   }
   if (stageKey === 'eval_skipped') {
     const reason = typeof payload.reason === 'string' ? payload.reason : ''
-    const reasonLabel = EVAL_REASON_LABELS[reason] || reason || '评判已跳过'
+    const reasonLabel =
+      EVAL_REASON_LABELS[locale][reason] ||
+      reason ||
+      (zh ? '评判已跳过' : 'Judge skipped')
     return {
       severity: 'info',
       summary: reasonLabel,
@@ -114,7 +164,7 @@ function formatMarkerDetail(
   if (stageKey === 'eval_started') {
     return {
       severity,
-      summary: '评判已开始',
+      summary: zh ? '评判已开始' : 'Judge started',
       detail: [
         typeof payload.judge_agent === 'string' ? `judge_agent: ${payload.judge_agent}` : null,
         typeof payload.judge_model === 'string' ? `judge_model: ${payload.judge_model}` : null,
@@ -126,10 +176,20 @@ function formatMarkerDetail(
   if (stageKey === 'eval_completed') {
     const outcome = typeof payload.outcome === 'string' ? payload.outcome : undefined
     const reason = typeof payload.reason === 'string' ? payload.reason : undefined
+    const labeled = outcomeLabel(outcome, locale)
     return {
       severity,
-      summary: outcome ? `评判完成 · ${outcome}` : '评判完成',
-      detail: [outcome ? `outcome: ${outcome}` : null, reason ? `reason: ${reason}` : null]
+      summary: labeled
+        ? zh
+          ? `评判完成 · ${labeled}`
+          : `Judge completed · ${labeled}`
+        : zh
+          ? '评判完成'
+          : 'Judge completed',
+      detail: [
+        labeled ? (zh ? `注入结果: ${labeled}` : `Outcome: ${labeled}`) : null,
+        reason ? (zh ? `原因: ${reason}` : `Reason: ${reason}`) : null,
+      ]
         .filter(Boolean)
         .join('\n'),
     }
@@ -138,15 +198,27 @@ function formatMarkerDetail(
     const error = typeof payload.error === 'string' ? payload.error : undefined
     return {
       severity: 'critical',
-      summary: '评判失败',
+      summary: zh ? '评判失败' : 'Judge failed',
       detail: error || 'evaluation.failed',
     }
   }
   return { severity }
 }
 
+function evalSlotLabel(evalKey: string | null, locale: FiPipelineLocale): string {
+  const zh = locale === 'zh'
+  if (evalKey === 'eval_failed') return zh ? '评判失败' : 'Judge failed'
+  if (evalKey === 'eval_completed') return zh ? '评判完成' : 'Judge completed'
+  if (evalKey === 'eval_skipped') return zh ? '评判已跳过' : 'Judge skipped'
+  if (evalKey === 'eval_started') return zh ? '评判开始' : 'Judge started'
+  return zh ? '评判' : 'Judge'
+}
+
 /** Build fixed 4-node pipeline; pending steps stay hollow until markers arrive. */
-export function buildMarkerPipeline(markers: FiPipelineMarker[]): PipelineStep[] {
+export function buildMarkerPipeline(
+  markers: FiPipelineMarker[],
+  locale: FiPipelineLocale = 'zh',
+): PipelineStep[] {
   const byKey = new Map<string, FiPipelineMarker>()
   for (const marker of markers) {
     const key = pipelineStageKey(marker)
@@ -164,22 +236,26 @@ export function buildMarkerPipeline(markers: FiPipelineMarker[]): PipelineStep[]
           ? 'eval_started'
           : null
 
+  const zh = locale === 'zh'
   const slots: Array<{ key: string; label: string; markerKey: string | null }> = [
-    { key: 'fault_requested', label: '故障注入请求', markerKey: 'fault_requested' },
-    { key: 'fault_started', label: '故障注入开始', markerKey: 'fault_started' },
-    { key: 'fault_completed', label: '故障注入完成', markerKey: 'fault_completed' },
+    {
+      key: 'fault_requested',
+      label: zh ? '故障注入请求' : 'Injection requested',
+      markerKey: 'fault_requested',
+    },
+    {
+      key: 'fault_started',
+      label: zh ? '故障注入开始' : 'Injection started',
+      markerKey: 'fault_started',
+    },
+    {
+      key: 'fault_completed',
+      label: zh ? '故障注入完成' : 'Injection completed',
+      markerKey: 'fault_completed',
+    },
     {
       key: 'evaluation',
-      label:
-        evalKey === 'eval_failed'
-          ? '评判失败'
-          : evalKey === 'eval_completed'
-            ? '评判完成'
-            : evalKey === 'eval_skipped'
-              ? '评判已跳过'
-              : evalKey === 'eval_started'
-                ? '评判开始'
-                : '评判',
+      label: evalSlotLabel(evalKey, locale),
       markerKey: evalKey,
     },
   ]
@@ -192,10 +268,10 @@ export function buildMarkerPipeline(markers: FiPipelineMarker[]): PipelineStep[]
         label: slot.label,
         done: false,
         severity: 'info',
-        summary: '尚未执行',
+        summary: zh ? '尚未执行' : 'Not started',
       }
     }
-    const formatted = formatMarkerDetail(marker, slot.markerKey)
+    const formatted = formatMarkerDetail(marker, slot.markerKey, locale)
     return {
       key: slot.key,
       label: slot.label,

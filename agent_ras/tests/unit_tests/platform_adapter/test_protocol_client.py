@@ -39,6 +39,33 @@ def test_callable_host_unwired_returns_ok_false() -> None:
     assert host.push_steering("y")["ok"] is False
 
 
+def test_callable_host_fn_self_reported_failure_propagates() -> None:
+    host = CallableHostControl(
+        platform="xiaoo",
+        abort_fn=lambda: {"ok": False, "error": "no_ack: gateway gave no execution confirmation"},
+        notice_fn=lambda _m: {"ok": False, "error": "socket unavailable"},
+        steer_fn=lambda _m: {"ok": False, "error": "cancel rejected"},
+    )
+    abort = host.request_abort_stream()
+    assert abort["ok"] is False
+    assert "no_ack" in abort["error"]
+    assert abort["channel"] == "xiaoo.abort"
+    assert host.emit_user_notice("n1")["ok"] is False
+    assert host.push_steering("s1")["ok"] is False
+
+
+def test_apply_wire_actions_propagates_fn_failure() -> None:
+    host = CallableHostControl(
+        platform="xiaoo",
+        abort_fn=lambda: {"ok": False, "error": "no_ack"},
+        notice_fn=lambda _m: {"ok": True},
+        steer_fn=lambda _m: {"ok": True},
+    )
+    results = apply_wire_actions(host, [{"type": "abort_stream"}])
+    assert results[0]["ok"] is False
+    assert results[0]["error"] == "no_ack"
+
+
 def test_apply_wire_actions_dispatches_in_order() -> None:
     host = CallableHostControl(
         platform="openclaw",

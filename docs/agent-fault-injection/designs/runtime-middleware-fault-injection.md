@@ -36,7 +36,7 @@
 
 ## 3. 配方与示例
 
-`injection.runtime` 由 Adapter 注入 `AGENT_RAS_INJECTION_RUNTIME`。
+`injection.runtime` 由 Adapter 注入 `AGENT_FI_INJECTION_RUNTIME`。
 
 | method | 示例故障 | 主要 op |
 |--------|----------|---------|

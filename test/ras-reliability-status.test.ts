@@ -119,40 +119,17 @@ test("buildRasTaskSummaries: action_result ok=false → recovery failed", () => 
   assert.equal(byTask.t3.abortedStream, false)
 })
 
-test("deriveTraceLifecycle: abort does not force failed when finalResult present", () => {
+test("deriveTraceLifecycle: completedAt → success (ignore failures/finalResult)", () => {
   const life = deriveTraceLifecycle({
     completedAt: "2026-07-30T10:01:00.000Z",
-    finalResult: "done",
-    failures: null,
   })
   assert.equal(life.traceStatus, "success")
   assert.equal(life.traceStatusReason, "session-ended")
 })
 
-test("deriveTraceLifecycle: failures → failed", () => {
-  const life = deriveTraceLifecycle({
-    completedAt: "2026-07-30T10:01:00.000Z",
-    finalResult: "partial",
-    failures: JSON.stringify([{ message: "boom" }]),
-  })
-  assert.equal(life.traceStatus, "failed")
-  assert.equal(life.traceStatusReason, "execution-failed")
-})
-
-test("deriveTraceLifecycle: completed without finalResult → failed", () => {
-  const life = deriveTraceLifecycle({
-    completedAt: "2026-07-30T10:01:00.000Z",
-    finalResult: "  ",
-    failures: null,
-  })
-  assert.equal(life.traceStatus, "failed")
-})
-
 test("deriveTraceLifecycle: no completedAt → running", () => {
   const life = deriveTraceLifecycle({
     completedAt: null,
-    finalResult: null,
-    failures: null,
   })
   assert.equal(life.traceStatus, "running")
   assert.equal(life.traceStatusReason, "missing-completion-signal")
@@ -206,8 +183,6 @@ test("combined: abort recovered + session ended → success lifecycle + success 
   ]).t4
   const life = deriveTraceLifecycle({
     completedAt: "2026-07-30T11:00:00.000Z",
-    finalResult: "answer after recovery",
-    failures: null,
   })
   assert.equal(summary.abortedStream, true)
   assert.equal(summary.recoveryOutcome, "success")

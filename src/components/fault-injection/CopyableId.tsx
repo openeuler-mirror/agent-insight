@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { Check, Copy } from 'lucide-react'
+import { useLocale } from '@/lib/client/locale-context'
 import { cn } from '@/lib/utils'
 
 export function CopyableId({
@@ -11,15 +12,18 @@ export function CopyableId({
   value: string
   className?: string
 }) {
+  const { locale } = useLocale()
+  const zh = locale === 'zh'
   const [copied, setCopied] = useState(false)
+  const copyLabel = zh ? '复制' : 'Copy'
 
   return (
     <span className={cn('inline-flex max-w-full items-center gap-1', className)}>
       <code className="truncate font-mono text-xs text-foreground-secondary">{value}</code>
       <button
         type="button"
-        title="复制"
-        aria-label="复制"
+        title={copyLabel}
+        aria-label={copyLabel}
         className="inline-flex size-6 shrink-0 items-center justify-center rounded text-foreground-muted hover:bg-background-secondary hover:text-foreground"
         onClick={async () => {
           try {

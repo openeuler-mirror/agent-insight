@@ -89,7 +89,7 @@ opencode    # 可直接启动；桥接层会 RTLD_GLOBAL 加载 libpython，无�
 }
 ```
 
-改完后**新开一轮对话**（或重启 OpenCode）才会 `hello` 带上新阈值。联调 L1/L2 可把 `detection_start_chars` 临时改成 `200`～`500`。
+改完后**新开一轮对话**（或重启 OpenCode）才会 `hello` 带上新阈值。联调 L1/L2 可把 `detection_start_chars` 临时改成 `200`～`500`（只改运行时 `~/.agent-insight/ras/config.json`，不要改仓库默认值）。
 
 ### L3 语义判定（仅 inproc）
 

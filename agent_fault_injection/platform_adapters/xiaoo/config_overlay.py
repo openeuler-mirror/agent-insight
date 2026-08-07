@@ -11,7 +11,7 @@ from typing import Any
 
 
 HOOKER_DIR = Path(__file__).resolve().parent / "hooker"
-HOOK_SCRIPT = HOOKER_DIR / "ras_eval_hook.py"
+HOOK_SCRIPT = HOOKER_DIR / "fi_eval_hook.py"
 PLUGIN_TEMPLATE = HOOKER_DIR / "plugin.json"
 PLUGIN_CHAT_LLM_TEMPLATE = HOOKER_DIR / "plugin.chat-llm.json"
 
@@ -37,7 +37,7 @@ def _looks_like_fi_overlay(path: Path) -> bool:
     if _GENERATED_MARKER in head:
         return True
     # Temp dirs from prepare_runtime_isolation.
-    return "agent-ras-xiaoo-" in str(path)
+    return "agent-fi-xiaoo-" in str(path)
 
 
 def _parse_simple_toml_section(text: str, section: str) -> dict[str, Any]:
@@ -319,5 +319,5 @@ def prepare_overlay(
         model_override=model_override,
         llm=load_user_llm_config(source) if not source.is_file() else None,
     )
-    shutil.copy2(HOOK_SCRIPT, overlay_root / "ras_eval_hook.py")
+    shutil.copy2(HOOK_SCRIPT, overlay_root / "fi_eval_hook.py")
     return config_toml, plugin_json

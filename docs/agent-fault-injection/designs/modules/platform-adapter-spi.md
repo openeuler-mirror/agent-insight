@@ -11,7 +11,7 @@
 | copy SKILL.md artifact | shared | 同左 | 同左 | **共享** |
 | `apply_injection_plan` | shared | 同左 | 同左 | **共享** |
 | isolation / overlay | `_prepare_isolated_environment` | `prepare_overlay` | 同 cli | **SPI** `prepare_runtime_isolation` |
-| build AGENT_RAS_* | `build_agent_ras_env` | 同左 | 同左 | **共享** |
+| build AGENT_FI_* | `build_fi_injection_env` | 同左 | 同左 | **共享** |
 | merge platform env | OpenCode XDG/OPENCODE_* | XIAOO_CONFIG / PYTHONPATH / events | 同 cli | **SPI** `merge_platform_env` |
 | build launch | `_build_command` | `_build_cli_command` | daemon HTTP session | **SPI**（在 `run_platform_session` 内） |
 | wait ready | plugin_ready file | plugin_ready / mark_ready | daemon ready | **SPI**（在 `run_platform_session` 内） |

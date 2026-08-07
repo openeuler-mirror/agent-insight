@@ -65,3 +65,27 @@ def test_otel_trace_lifecycle_and_flush(monkeypatch) -> None:
     assert len(posted) == 1
     # second flush is no-op
     assert otel_trace.flush_session(sid) is False
+
+
+def test_otel_buffer_survives_memory_clear(monkeypatch, tmp_path) -> None:
+    """Simulate short-lived hooker processes: notes persist on disk across reset."""
+    monkeypatch.setenv("AGENT_INSIGHT_RAS_HOME", str(tmp_path))
+    otel_trace.reset_buffers_for_tests()
+    posted: list[dict] = []
+    monkeypatch.setattr(
+        "platform_adapter.xiaoo.otel_trace.post_otlp_traces",
+        lambda payload, timeout=8.0: posted.append(payload) or True,
+    )
+
+    sid = "xiaoo:persist-1"
+    otel_trace.note_chat(sid, {"message": {"text": "user asks"}})
+    otel_trace.note_stream(sid, "assistant reply", channel="llm_output")
+    # Drop in-process cache (as if the hooker process exited).
+    with otel_trace._LOCK:
+        otel_trace._BUFFERS.clear()
+
+    assert otel_trace.flush_session(sid) is True
+    assert len(posted) == 1
+    spans = posted[0]["resourceSpans"][0]["scopeSpans"][0]["spans"]
+    assert any(s["name"].startswith("llm ") for s in spans)
+

@@ -1,6 +1,7 @@
 'use client'
 
-import { Square, Play, Trash2, type LucideIcon } from 'lucide-react'
+import { Square, RotateCcw, Trash2, type LucideIcon } from 'lucide-react'
+import { useLocale } from '@/lib/client/locale-context'
 import { cn } from '@/lib/utils'
 
 function IconAction({
@@ -40,15 +41,22 @@ function IconAction({
 }
 
 export function StopIconButton(props: { onClick: () => void; disabled?: boolean }) {
-  return <IconAction icon={Square} title="停止" {...props} />
+  const { locale } = useLocale()
+  return <IconAction icon={Square} title={locale === 'zh' ? '停止' : 'Stop'} {...props} />
 }
 
 export function RerunIconButton(props: { onClick: () => void; disabled?: boolean }) {
-  return <IconAction icon={Play} title="再次运行" {...props} />
+  const { locale } = useLocale()
+  return (
+    <IconAction icon={RotateCcw} title={locale === 'zh' ? '再次运行' : 'Rerun'} {...props} />
+  )
 }
 
 export function DeleteIconButton(props: { onClick: () => void; disabled?: boolean }) {
-  return <IconAction icon={Trash2} title="删除" danger {...props} />
+  const { locale } = useLocale()
+  return (
+    <IconAction icon={Trash2} title={locale === 'zh' ? '删除' : 'Delete'} danger {...props} />
+  )
 }
 
 export function DangerOutlineButton({

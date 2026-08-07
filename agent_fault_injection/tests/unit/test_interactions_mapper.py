@@ -450,6 +450,8 @@ class InsightInteractionsMapperTests(TestCase):
                     "payload": {
                         "type": "tool.pre",
                         "tool": "skill",
+                        "call_id": "call_function_skill_1",
+                        "callID": "call_function_skill_1",
                         "input": {"skill": "ras-step-omission"},
                     },
                 },
@@ -462,6 +464,8 @@ class InsightInteractionsMapperTests(TestCase):
                     "payload": {
                         "type": "tool.post",
                         "tool": "skill",
+                        "call_id": "call_function_skill_1",
+                        "callID": "call_function_skill_1",
                         "input": {"skill": "ras-step-omission"},
                         "outcome": {"type": "success", "output": "loaded"},
                     },
@@ -483,6 +487,8 @@ class InsightInteractionsMapperTests(TestCase):
                     "payload": {
                         "type": "tool.pre",
                         "tool": "bash",
+                        "call_id": "call_function_bash_1",
+                        "callID": "call_function_bash_1",
                         "input": {"command": "ls"},
                     },
                 },
@@ -495,6 +501,8 @@ class InsightInteractionsMapperTests(TestCase):
                     "payload": {
                         "type": "tool.post",
                         "tool": "bash",
+                        "call_id": "call_function_bash_1",
+                        "callID": "call_function_bash_1",
                         "input": {"command": "ls"},
                         "outcome": {"type": "success", "output": "alpha.txt"},
                     },
@@ -530,13 +538,84 @@ class InsightInteractionsMapperTests(TestCase):
             self.assertEqual(document.interactions[0]["role"], "user")
             skill = document.interactions[1]
             self.assertEqual(skill["role"], "assistant")
+            self.assertEqual(skill["modelID"], "Minimax-M2.7-highspeed")
+            self.assertEqual(skill["providerID"], "minimax-anthropic")
             self.assertEqual(skill["tool_calls"][0]["function"]["name"], "skill")
+            self.assertEqual(skill["tool_calls"][0]["id"], "call_function_skill_1")
             self.assertEqual(skill["tool_calls"][0]["output"], "loaded")
             bash = document.interactions[2]
             self.assertEqual(bash["tool_calls"][0]["function"]["name"], "bash")
+            self.assertEqual(bash["tool_calls"][0]["id"], "call_function_bash_1")
             final = document.interactions[-1]
             self.assertEqual(final["role"], "assistant")
             self.assertEqual(final["content"], "done with scenario 1")
-            self.assertTrue(
-                any(m["kind"] == "fault_activation" for m in document.markers)
+            self.assertEqual(final["modelID"], "Minimax-M2.7-highspeed")
+
+    def test_xiaoo_resolved_llm_fills_model_when_request_omits_it(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            artifacts = _artifacts(root)
+            artifacts.request_file.write_text(
+                json.dumps(
+                    {
+                        "platform": "xiaoo",
+                        "platform_options": {"auto": True},
+                    }
+                ),
+                encoding="utf-8",
             )
+            (artifacts.raw_dir / "resolved-llm.json").write_text(
+                json.dumps(
+                    {
+                        "providerID": "minimax-anthropic",
+                        "modelID": "Minimax-M2.7-highspeed",
+                        "id": "minimax-anthropic/Minimax-M2.7-highspeed",
+                        "source": "user_config",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            events = [
+                {
+                    "schema_version": "1",
+                    "run_id": "run-test",
+                    "sequence": 1,
+                    "recorded_at": 1_700_000_000_200,
+                    "kind": "xiaoo.event",
+                    "payload": {
+                        "type": "tool.pre",
+                        "tool": "skill",
+                        "input": {"skill": "thinking-dead-loop"},
+                    },
+                },
+                {
+                    "schema_version": "1",
+                    "run_id": "run-test",
+                    "sequence": 2,
+                    "recorded_at": 1_700_000_000_300,
+                    "kind": "xiaoo.event",
+                    "payload": {
+                        "type": "tool.post",
+                        "tool": "skill",
+                        "input": {"skill": "thinking-dead-loop"},
+                        "outcome": {"type": "success", "output": "loaded"},
+                    },
+                },
+            ]
+            artifacts.events_file.write_text(
+                "".join(json.dumps(item) + "\n" for item in events),
+                encoding="utf-8",
+            )
+
+            document = InsightInteractionsMapper().map(
+                artifacts,
+                framework="xiaoo",
+                prompt="run fault",
+            )
+            self.assertEqual(document.model_id, "Minimax-M2.7-highspeed")
+            self.assertEqual(document.provider_id, "minimax-anthropic")
+            assistant = next(
+                item for item in document.interactions if item.get("role") == "assistant"
+            )
+            self.assertEqual(assistant["modelID"], "Minimax-M2.7-highspeed")
+            self.assertEqual(assistant["providerID"], "minimax-anthropic")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from dataclasses import asdict
 from datetime import UTC, datetime
 from enum import Enum
@@ -37,6 +38,9 @@ class ArtifactStore:
         root = self.output_dir / run_id
         raw_dir = root / "raw"
         resolved_fault_dir = root / "resolved_fault"
+        if root.exists():
+            # Same run_id retried after a partial failure — reclaim.
+            shutil.rmtree(root, ignore_errors=True)
         raw_dir.mkdir(parents=True, exist_ok=False)
         resolved_fault_dir.mkdir(parents=True, exist_ok=False)
 

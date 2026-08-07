@@ -5,7 +5,7 @@
 ## 模型
 
 - **FaultInjectionTask**（`task-{hex}`）：一次实验，含 N 个故障项；状态含 `queued|running|completed|failed|stopped`
-- **FaultInjectionRun**：单故障一次采集+评判；`sessionTaskId` 对齐 `Session.taskId`；含 `workerId` / `stopRequested` / `queuedAt` / `claimedAt`
+- **FaultInjectionRun**：单故障一次采集+评判；`sessionTaskId` = **Trace ID**（对齐 `Session.taskId` / `Execution.taskId`）；含 `workerId` / `stopRequested` / `queuedAt` / `claimedAt`
 - **FaultInjectionWorker**：本机 Worker 注册；`lastSeenAt` + `inventoryJson`（平台 agents/models）
 
 `Task.workspace` 存**逻辑值**（`__default__` / 相对 / `~` / 用户绝对路径原文），禁止服务端用自家 `homedir` 展开后写入跨主机路径；Worker 用本机 `workspaceBase` 解析。
@@ -24,7 +24,7 @@ Worker 协议：
 - `POST /worker/heartbeat` — 续命 + inventory；入口做 claim 超时 sweep
 - `POST /worker/claim` — 原子认领 `queued` → `collecting`
 - `POST /worker/commands` — 拉取 stop 等命令
-- `POST /runs/:runId/collect-result` — ingest + judge + RAS bridge
+- `POST /runs/:runId/collect-result` — ingest + judge（无 FI→RAS bridge）
 
 行为要点：
 

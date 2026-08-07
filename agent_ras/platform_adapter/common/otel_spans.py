@@ -261,3 +261,43 @@ class SessionSpanBuffer:
 
     def has_content(self) -> bool:
         return bool(self.user_text or self.assistant_text or self.reasoning_text or self.tools)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "native_id": self.native_id,
+            "service_name": self.service_name,
+            "agent_name": self.agent_name,
+            "trace_id": self.trace_id,
+            "root_span_id": self.root_span_id,
+            "started_ns": self.started_ns,
+            "user_text": self.user_text,
+            "assistant_text": self.assistant_text,
+            "reasoning_text": self.reasoning_text,
+            "tools": list(self.tools),
+            "llm_span_id": self._llm_span_id,
+            "closed": self._closed,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> SessionSpanBuffer:
+        buf = cls(
+            str(data.get("native_id") or ""),
+            service_name=str(data.get("service_name") or "xiaoo"),
+            agent_name=str(data.get("agent_name") or "xiaoo"),
+        )
+        if data.get("trace_id"):
+            buf.trace_id = str(data["trace_id"])
+        if data.get("root_span_id"):
+            buf.root_span_id = str(data["root_span_id"])
+        if data.get("started_ns") is not None:
+            buf.started_ns = int(data["started_ns"])
+        buf.user_text = str(data.get("user_text") or "")
+        buf.assistant_text = str(data.get("assistant_text") or "")
+        buf.reasoning_text = str(data.get("reasoning_text") or "")
+        tools = data.get("tools")
+        buf.tools = list(tools) if isinstance(tools, list) else []
+        if data.get("llm_span_id"):
+            buf._llm_span_id = str(data["llm_span_id"])
+        buf._closed = bool(data.get("closed"))
+        return buf
+

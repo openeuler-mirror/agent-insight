@@ -9,7 +9,10 @@ import { createRasClient } from "../common/ras_client.js"
 import { applyActions } from "../common/host_actions.js"
 import { createOpenCodeHost } from "./host_control.js"
 import { runSkillJudge } from "./skill_judge.js"
-import { syncCapabilityConfigFromInsight } from "./config_sync.js"
+import {
+  resolvePlatformCapabilityFromRas,
+  syncCapabilityConfigFromInsight,
+} from "./config_sync.js"
 import { existsSync, readFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
@@ -91,19 +94,41 @@ function loadThinkingConfig() {
     const rasHome = process.env.AGENT_INSIGHT_RAS_HOME || join(homedir(), ".agent-insight", "ras")
     const p = join(rasHome, "config.json")
     // Default L3 on (matches LlmThinkingLoopConfig); explicit false still wins via ...loop.
-    if (!existsSync(p)) return { semantic_content_enabled: true }
-    const cfg = JSON.parse(readFileSync(p, "utf8"))
-    const ras = cfg?.agent_ras || {}
-    const loop =
-      ras.llm_thinking_loop ||
-      ras.detectors?.llm_thinking_loop ||
-      {}
-    return {
-      semantic_content_enabled: true,
-      ...loop,
-      // Plugin breadcrumbs only; not sent to core detectors.
-      debug: Boolean(ras.debug || loop.debug),
+    let loop = {}
+    if (existsSync(p)) {
+      const cfg = JSON.parse(readFileSync(p, "utf8"))
+      const ras = cfg?.agent_ras || {}
+      const platformSlice = resolvePlatformCapabilityFromRas(ras, "opencode")
+      loop =
+        platformSlice?.detectors?.llm_thinking_loop ||
+        ras.llm_thinking_loop ||
+        ras.detectors?.llm_thinking_loop ||
+        {}
+      loop = {
+        semantic_content_enabled: true,
+        ...loop,
+        // Plugin breadcrumbs only; not sent to core detectors.
+        debug: Boolean(ras.debug || loop.debug),
+      }
+    } else {
+      loop = { semantic_content_enabled: true }
     }
+    // Optional RAS process-env overrides (RAS-owned; not set by FI).
+    const envInt = (key) => {
+      const raw = process.env[key]
+      if (!raw || !String(raw).trim()) return null
+      const n = Number(raw)
+      return Number.isFinite(n) && n > 0 ? n : null
+    }
+    const start = envInt("RAS_DETECTION_START_CHARS")
+    if (start != null) loop.detection_start_chars = start
+    const window = envInt("RAS_WINDOW_MAX_CHARS")
+    if (window != null) loop.window_max_chars = window
+    const threshold = envInt("RAS_LOOP_REPEAT_THRESHOLD")
+    if (threshold != null) loop.loop_repeat_threshold = threshold
+    const semanticEval = envInt("RAS_SEMANTIC_EVAL_CHARS")
+    if (semanticEval != null) loop.semantic_eval_chars = semanticEval
+    return loop
   } catch {
     return { semantic_content_enabled: true }
   }

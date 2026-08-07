@@ -215,7 +215,7 @@ flowchart TB
   end
   subgraph inject [注入与执行]
     Install[InstallSession<br/>插件 + SKILL.md]
-    Env[AGENT_RAS_*]
+    Env[AGENT_FI_*]
     Plug[agent-fault-injection.ts<br/>system / messages / tool / compacting]
     Agent[被测 OpenCode Agent]
     Cap[events / session / interactions]
@@ -259,7 +259,7 @@ description: >-
 插件激活方式与现有故障一致：
 
 1. `InstallSession` 拷贝 `SKILL.md` 到 `workspace/.opencode/skills/<skill_name>/`
-2. 设置 `AGENT_RAS_RUN_ID` / `AGENT_RAS_FAULT_SKILL` / `AGENT_RAS_RAW_DIR`
+2. 设置 `AGENT_FI_RUN_ID` / `AGENT_FI_FAULT_SKILL` / `AGENT_FI_RAW_DIR`
 3. `experimental.chat.system.transform` 要求 *load the fault skill exactly once*
 
 **局限**：依赖模型配合，噪声比例不如中间件精确。
@@ -269,7 +269,7 @@ description: >-
 扩展 `platform_adapters/opencode/plugin/agent-fault-injection.ts`：
 
 ```typescript
-// 伪代码：按 AGENT_RAS_FAULT_SKILL + 子模式参数分支
+// 伪代码：按 AGENT_FI_FAULT_SKILL + 子模式参数分支
 return {
   "experimental.chat.system.transform": async (input, output) => {
     // 现有：强制 load skill
@@ -332,7 +332,7 @@ Skill 路径：`skills/memory-noise-interference/SKILL.md`。
 - [ ] 轨迹中可定位噪声注入点（system / message / tool；S4 compaction 仍为 P2）
 - [ ] 主任务成功标准与噪声诱导动作互斥、可自动核对
 - [ ] 相似复杂度任务下，token 消耗方差可作为辅助指标（FM005）
-- [ ] Judge 环境剥离 `AGENT_RAS_*`，避免二次激活注入插件
+- [ ] Judge 环境剥离 `AGENT_FI_*`，避免二次激活注入插件
 
 ### 6.5 与现有故障的边界（实现时勿混用）
 

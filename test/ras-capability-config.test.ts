@@ -101,16 +101,34 @@ test('mergeCapabilityIntoLocalRasConfig preserves service paths', () => {
   const body = defaultEnvelope('opencode').config
   body.detectors.llm_thinking_loop.detection_start_chars = 999
   body.enabled = false
-  const merged = mergeCapabilityIntoLocalRasConfig(local, body, 7)
+  const merged = mergeCapabilityIntoLocalRasConfig(
+    local,
+    body,
+    { revision: 7, updatedAt: '2026-08-07T00:00:00.000Z', contentHash: 'abc123' },
+    'opencode',
+  )
   const ras = merged.agent_ras as Record<string, unknown>
   assert.equal(ras.enabled, false)
   assert.equal((ras.service as Record<string, unknown>).python, '/keep/python')
-  assert.equal(ras.ras_config_revision, 7)
+  assert.equal(ras.ras_config_revision, undefined)
+  assert.equal(ras.ras_config_revisions, undefined)
   assert.equal(
     (ras.detectors as { llm_thinking_loop: { detection_start_chars: number } }).llm_thinking_loop
       .detection_start_chars,
     999,
   )
+  const oc = (
+    ras.platforms as {
+      opencode: {
+        detectors: { llm_thinking_loop: { detection_start_chars: number } }
+        syncedFrom: { revision: number; contentHash: string; updatedAt: string }
+      }
+    }
+  ).opencode
+  assert.equal(oc.detectors.llm_thinking_loop.detection_start_chars, 999)
+  assert.equal(oc.syncedFrom.revision, 7)
+  assert.equal(oc.syncedFrom.contentHash, 'abc123')
+  assert.equal(oc.syncedFrom.updatedAt, '2026-08-07T00:00:00.000Z')
 })
 
 test('capability config store isolates platforms per user', () => {

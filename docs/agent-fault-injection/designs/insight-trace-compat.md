@@ -21,13 +21,20 @@ align with [agent-insight](https://gitcode.com/openeuler/agent-insight)
 
 ```json
 {
-  "taskId": "<session_id or run_id>",
+  "taskId": "<platform session id when aligned; null when unaligned>",
+  "sessionAligned": true,
   "framework": "opencode",
   "runId": "ras-...",
   "interactions": [ /* RawInteraction[] */ ],
   "markers": [ /* optional eval / fault markers */ ]
 }
 ```
+
+`taskId` is the **Trace ID** / FI↔reliability join key (bare platform session: OpenCode `ses_…`, xiaoo gateway UUID). It must match `RasAnomalyEvent.taskId` / `Execution.taskId` / OTel `session.id`. Product UI labels this **Trace ID**; Prisma column `FaultInjectionRun.sessionTaskId` stores the same value.
+
+`runId` identifies the FI experiment only. **Do not** silently fall back to `runId` as `taskId` — that breaks reliability join. When the platform session cannot be resolved, set `sessionAligned: false` and leave `taskId` null.
+
+`raw/session.json` (when present) is an **OpenCode plugin session snapshot** used to rebuild interactions. It is an internal capture artifact, **not** a public association key and must not be introduced as a separate “session id file” join contract. Trace ID resolution prefers platform capture / `interactions.json.taskId`, then falls back to the snapshot’s `session_id` if needed.
 
 ## `RawInteraction` subset (V1)
 

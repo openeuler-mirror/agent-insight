@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from datetime import UTC, datetime
 
@@ -73,6 +74,8 @@ class ExperimentRunner:
                 else "finished"
             )
             store.update_manifest(artifacts, status=RunStatus.MAPPING)
+            # Trace ID (= platform session) is passed into mapper/collect;
+            # do not fabricate raw/session.json as a join-key sidecar.
             adapter.map_trajectory(request, fault, artifacts)
             trace_document = InsightInteractionsMapper().map(
                 artifacts,
@@ -237,6 +240,24 @@ class ExperimentRunner:
         adapter,
     ) -> None:
         """On timeout/failure, still map interactions + collect-result when possible."""
+        # Platform-specific finalize (e.g. xiaoo CLI stdout → events).
+        ingest = getattr(adapter, "_ingest_cli_stdout_events", None)
+        if callable(ingest):
+            try:
+                ingest(artifacts)
+            except Exception:
+                pass
+
+        session_id: str | None = None
+        mapper = getattr(adapter, "mapper", None)
+        inspect = getattr(mapper, "inspect", None) if mapper is not None else None
+        if callable(inspect):
+            try:
+                capture = inspect(artifacts.events_file)
+                session_id = getattr(capture, "session_id", None)
+            except Exception:
+                pass
+
         try:
             adapter.map_trajectory(request, fault, artifacts)
         except Exception:
@@ -246,7 +267,7 @@ class ExperimentRunner:
                 artifacts,
                 framework=request.platform,
                 prompt=request.prompt,
-                session_id=None,
+                session_id=session_id,
             )
             write_interactions_artifact(artifacts, trace_document)
             store.update_manifest(
@@ -263,7 +284,7 @@ class ExperimentRunner:
                 injection_method=getattr(fault, "injection_method", None)
                 or "skill_inject",
                 fault_activated=True,
-                session_id=trace_document.task_id,
+                session_id=session_id or trace_document.task_id,
             )
             write_collect_payload(artifacts, collect)
         except Exception:

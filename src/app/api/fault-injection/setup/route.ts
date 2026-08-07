@@ -29,11 +29,25 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 export AGENT_INSIGHT_HOST="\$HOST"
 export AGENT_INSIGHT_API_KEY="\$KEY"
-npx --yes agent-insight install-fault-injection --start || {
-  echo "npx install failed; if you have a local clone, run:"
-  echo "  AGENT_INSIGHT_HOST=\$HOST AGENT_INSIGHT_API_KEY=\$KEY node scripts/install-fault-injection.js --start"
-  exit 1
-}
+
+# Prefer a local clone when the shell cwd is the repo (common while developing).
+# Otherwise run npx from an empty temp dir: if cwd is inside this package (esp. on
+# WSL /mnt/*), npx resolves agent-insight via file: and can fail with ECOMPROMISED.
+if [ -f "./scripts/install-fault-injection.js" ] && [ -d "./agent_fault_injection" ]; then
+  echo "    using local clone installer"
+  node "./scripts/install-fault-injection.js" --start
+else
+  fi_tmp=\$(mktemp -d "\${TMPDIR:-/tmp}/agent-insight-fi.XXXXXX")
+  cleanup_fi_tmp() { rm -rf -- "\$fi_tmp"; }
+  trap cleanup_fi_tmp EXIT
+  if ! (cd "\$fi_tmp" && npx --yes agent-insight install-fault-injection --start); then
+    echo "npx install failed" >&2
+    exit 1
+  fi
+  trap - EXIT
+  cleanup_fi_tmp
+fi
+
 echo "==> Setup finished. Worker runs in the background; you can close this terminal."
 echo "    If a Worker was previously started with another API key, this run restarts it with the new key."
 echo "    Refresh /agent-ras/fault-injection/tasks/new to confirm Worker is online."

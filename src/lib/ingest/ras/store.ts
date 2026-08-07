@@ -1,6 +1,7 @@
 import { prismaRaw } from "@/lib/storage/prisma"
 import type { RasIngestRecord } from "@/lib/ingest/ras/normalize"
 import { resolveTracePlatform } from "@/lib/ingest/ras/platform-label"
+import { pickReliabilityTraceSummary } from "@/lib/ingest/ras/trace-summary"
 
 type RasEventForDedupe = {
   id: string
@@ -267,30 +268,15 @@ export async function summarizeRasByTaskIds(opts: {
   return buildRasTaskSummaries(rows)
 }
 
-function hasRecordedFailure(raw: string | null): boolean {
-  if (!raw) return false
-  try {
-    const parsed = JSON.parse(raw)
-    return Array.isArray(parsed) ? parsed.length > 0 : Boolean(parsed)
-  } catch {
-    return true
-  }
-}
-
-/** Lifecycle only: abort_stream does not force failed. */
+/**
+ * Align with observe `/api/observe/data` getTraceLifecycle:
+ * only Session completion signal — not failures, finalResult, RAS, or FI judge.
+ */
 export function deriveTraceLifecycle(opts: {
   completedAt: string | null
-  finalResult: string | null | undefined
-  failures: string | null | undefined
 }): { traceStatus: "running" | "success" | "failed"; traceStatusReason: string } {
   if (!opts.completedAt) {
     return { traceStatus: "running", traceStatusReason: "missing-completion-signal" }
-  }
-  const failed =
-    hasRecordedFailure(opts.failures ?? null)
-    || !String(opts.finalResult || "").trim()
-  if (failed) {
-    return { traceStatus: "failed", traceStatusReason: "execution-failed" }
   }
   return { traceStatus: "success", traceStatusReason: "session-ended" }
 }
@@ -317,8 +303,6 @@ export async function listReliabilityTraces(opts: {
         framework: true,
         agentName: true,
         query: true,
-        finalResult: true,
-        failures: true,
       },
     }),
     prismaRaw.rasAnomalyEvent.findMany({
@@ -335,8 +319,6 @@ export async function listReliabilityTraces(opts: {
   ])
 
   const platformByTaskId = new Map<string, string>()
-  const rasOnlyOrder: string[] = []
-  const rasSeen = new Set<string>()
   for (const row of rasMetaRows) {
     if (!platformByTaskId.has(row.taskId)) {
       const platform = resolveTracePlatform({
@@ -344,10 +326,6 @@ export async function listReliabilityTraces(opts: {
         eventFramework: row.framework,
       })
       if (platform) platformByTaskId.set(row.taskId, platform)
-    }
-    if (!rasSeen.has(row.taskId)) {
-      rasSeen.add(row.taskId)
-      rasOnlyOrder.push(row.taskId)
     }
   }
 
@@ -357,16 +335,14 @@ export async function listReliabilityTraces(opts: {
     execByTaskId.set(execution.taskId, execution)
   }
 
-  const taskIds = [
-    ...execByTaskId.keys(),
-    ...rasOnlyOrder.filter(id => !execByTaskId.has(id)),
-  ]
+  // List only tasks with an Execution — no ras-events-only fallback rows.
+  const taskIds = [...execByTaskId.keys()]
   if (!taskIds.length) return []
 
   const [sessions, summaries] = await Promise.all([
     prismaRaw.session.findMany({
       where: { taskId: { in: taskIds } },
-      select: { taskId: true, endTime: true },
+      select: { taskId: true, endTime: true, label: true },
     }),
     summarizeRasByTaskIds({ taskIds, user: opts.user }),
   ])
@@ -378,11 +354,7 @@ export async function listReliabilityTraces(opts: {
     const anomaly = summaries[taskId]
     const session = sessionByTaskId.get(taskId)
     const completedAt = session?.endTime?.toISOString() || null
-    const { traceStatus, traceStatusReason } = deriveTraceLifecycle({
-      completedAt,
-      finalResult: execution.finalResult,
-      failures: execution.failures,
-    })
+    const { traceStatus, traceStatusReason } = deriveTraceLifecycle({ completedAt })
     const platform = resolveTracePlatform({
       eventPlatform: platformByTaskId.get(taskId),
       executionFramework: execution.framework,
@@ -396,7 +368,11 @@ export async function listReliabilityTraces(opts: {
       anomalyKind: anomaly?.kinds[0] || "",
       detectionLevel: anomaly?.detectionLevel || null,
       severity: anomaly?.maxSeverity || null,
-      summary: anomaly?.summaries[0] || execution.query || null,
+      summary: pickReliabilityTraceSummary({
+        anomalySummary: anomaly?.summaries[0],
+        executionQuery: execution.query,
+        sessionLabel: session?.label,
+      }),
       eventCount: anomaly?.count || 0,
       traceStatus,
       traceStatusReason,
@@ -407,33 +383,6 @@ export async function listReliabilityTraces(opts: {
       platform,
       framework: execution.framework,
       agentName: execution.agentName,
-    })
-  }
-
-  for (const taskId of rasOnlyOrder) {
-    if (execByTaskId.has(taskId)) continue
-    const anomaly = summaries[taskId]
-    if (!anomaly || anomaly.count <= 0) continue
-    const platform = platformByTaskId.get(taskId) || null
-    items.push({
-      taskId,
-      executionId: "",
-      latestTs: anomaly.latestTs || new Date(0).toISOString(),
-      completedAt: null,
-      anomalyKind: anomaly.kinds[0] || "",
-      detectionLevel: anomaly.detectionLevel || null,
-      severity: anomaly.maxSeverity || null,
-      summary: anomaly.summaries[0] || null,
-      eventCount: anomaly.count,
-      traceStatus: "success",
-      traceStatusReason: "ras-events-only",
-      hasFault: anomaly.hasFault,
-      recoveryStarted: anomaly.recoveryStarted,
-      recoveryOutcome: anomaly.recoveryOutcome,
-      abortedStream: anomaly.abortedStream,
-      platform,
-      framework: platform,
-      agentName: null,
     })
   }
 

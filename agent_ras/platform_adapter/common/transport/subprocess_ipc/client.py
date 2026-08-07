@@ -1,8 +1,12 @@
 # coding: utf-8
-"""Unix-socket IPC so subprocess hooks share one SessionHub process.
+"""Unix-socket client for subprocess-hook embedding.
 
-Platform-neutral: any stdin-hook host can point ``RAS_EMBED_SOCK`` here.
-Default path: ``$AGENT_INSIGHT_RAS_HOME/ras_embed.sock``.
+Any stdin-hook host (xiaoo today) can point ``RAS_EMBED_SOCK`` here so short-lived
+hook processes share one SessionHub worker. This is an embedding transport, not
+RAS core — see ``platform_adapter.common.transport``.
+
+Default SessionHub path: ``$AGENT_INSIGHT_RAS_HOME/ras_embed.sock``.
+Host control path: ``$AGENT_INSIGHT_RAS_HOME/ras_control.sock``.
 """
 from __future__ import annotations
 
@@ -95,12 +99,46 @@ def ipc_available(sock_path: Path | None = None) -> bool:
         return False
 
 
+def _runtime_pythonpath_entries() -> list[str]:
+    """Resolve install-ras runtime roots so the subprocess IPC worker imports."""
+
+    home = (os.environ.get(_ENV_HOME) or "").strip() or str(
+        Path.home() / ".agent-insight" / "ras"
+    )
+    entries: list[str] = []
+    marker = Path(home) / "install.json"
+    if marker.is_file():
+        try:
+            meta = json.loads(marker.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            meta = {}
+        runtime_root = meta.get("runtimeRoot")
+        if isinstance(runtime_root, str) and runtime_root.strip():
+            root = Path(runtime_root.strip())
+            entries.append(str(root))
+            packages = root / ".python-packages"
+            if packages.is_dir():
+                entries.append(str(packages))
+            py_packages = meta.get("pythonPackages")
+            if isinstance(py_packages, str) and py_packages.strip():
+                entries.append(py_packages.strip())
+    entries.append(home)
+    # Deduplicate while preserving order.
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in entries:
+        if item and item not in seen:
+            seen.add(item)
+            out.append(item)
+    return out
+
+
 def ensure_worker(
     *,
     sock_path: Path | None = None,
     wait_s: float = 5.0,
 ) -> Path:
-    """Connect to existing worker or spawn ``python -m ras_embed.ipc_worker``."""
+    """Connect to existing worker or spawn the subprocess IPC worker module."""
     path = sock_path or default_sock_path()
     if ipc_available(path):
         return path
@@ -112,8 +150,18 @@ def ensure_worker(
             pass
     env = os.environ.copy()
     env[_ENV_SOCK] = str(path)
+    path_entries = _runtime_pythonpath_entries()
+    existing = env.get("PYTHONPATH", "")
+    if existing:
+        path_entries.append(existing)
+    if path_entries:
+        env["PYTHONPATH"] = os.pathsep.join(path_entries)
     subprocess.Popen(
-        [sys.executable, "-m", "ras_embed.ipc_worker"],
+        [
+            sys.executable,
+            "-m",
+            "platform_adapter.common.transport.subprocess_ipc",
+        ],
         env=env,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -127,14 +175,21 @@ def ensure_worker(
     raise RuntimeError(f"ras_embed ipc worker not ready: {path}")
 
 
-def publish_host_control(
+def send_host_control(
     op: str,
     session_id: str,
     *,
     message: str | None = None,
     sock_path: Path | None = None,
-) -> bool:
-    """Best-effort notify host gateway (xiaoO etc.) of wire delivery."""
+    ack_timeout: float = 2.0,
+) -> dict[str, Any]:
+    """Send a control op to the host gateway and wait for its ack.
+
+    Returns ``{"delivered": bool, "ack": dict | None, "error": str | None}``:
+    ``delivered=False`` means the socket write itself failed; ``ack=None``
+    means the gateway accepted the bytes but gave no execution confirmation
+    (legacy fire-and-forget listener), so the caller must not report success.
+    """
     path = sock_path or default_control_path()
     payload: dict[str, Any] = {"op": op, "session_id": session_id}
     if message is not None:
@@ -145,10 +200,37 @@ def publish_host_control(
             sock.settimeout(1.0)
             sock.connect(str(path))
             sock.sendall(data)
-        return True
-    except OSError:
+            try:
+                raw = _recv_line(sock, timeout=ack_timeout)
+            except (OSError, socket.timeout):
+                return {"delivered": True, "ack": None, "error": None}
+    except OSError as exc:
         logger.debug("host control sock unavailable path=%s op=%s", path, op)
-        return False
+        return {"delivered": False, "ack": None, "error": str(exc) or "socket unavailable"}
+    if not raw:
+        return {"delivered": True, "ack": None, "error": None}
+    try:
+        ack = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return {"delivered": True, "ack": None, "error": None}
+    if not isinstance(ack, dict):
+        return {"delivered": True, "ack": None, "error": None}
+    return {"delivered": True, "ack": ack, "error": None}
+
+
+def publish_host_control(
+    op: str,
+    session_id: str,
+    *,
+    message: str | None = None,
+    sock_path: Path | None = None,
+) -> bool:
+    """Legacy fire-and-forget wrapper; prefer ``send_host_control``."""
+    return bool(
+        send_host_control(
+            op, session_id, message=message, sock_path=sock_path, ack_timeout=0.2
+        )["delivered"]
+    )
 
 
 __all__ = [
@@ -158,4 +240,5 @@ __all__ = [
     "ensure_worker",
     "ipc_available",
     "publish_host_control",
+    "send_host_control",
 ]

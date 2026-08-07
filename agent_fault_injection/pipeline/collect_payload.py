@@ -7,6 +7,31 @@ from pathlib import Path
 from typing import Any
 
 from .models import RunArtifacts
+from .session_ids import resolve_platform_session_id
+
+
+def events_indicate_fault_activated(artifacts: RunArtifacts) -> bool:
+    """True when events.jsonl contains fault.activation.completed."""
+
+    path = artifacts.events_file
+    if not path.is_file():
+        return False
+    try:
+        with path.open("r", encoding="utf-8") as stream:
+            for line in stream:
+                if not line.strip():
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(event, dict) and event.get("kind") == (
+                    "fault.activation.completed"
+                ):
+                    return True
+    except OSError:
+        return False
+    return False
 
 
 def build_collect_payload(
@@ -21,6 +46,7 @@ def build_collect_payload(
     markers: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     interactions: list[Any] = []
+    interactions_task_id: str | None = None
     interactions_file = artifacts.root / "interactions.json"
     if interactions_file.is_file():
         try:
@@ -28,19 +54,31 @@ def build_collect_payload(
             if isinstance(data, dict) and isinstance(data.get("interactions"), list):
                 interactions = data["interactions"]
                 markers = markers or data.get("markers") or []
-                session_id = session_id or data.get("taskId")
+                raw_tid = data.get("taskId")
+                if isinstance(raw_tid, str):
+                    interactions_task_id = raw_tid
             elif isinstance(data, list):
                 interactions = data
         except (json.JSONDecodeError, OSError):
             pass
 
+    platform_session_id, session_aligned = resolve_platform_session_id(
+        session_file=artifacts.session_file,
+        interactions_task_id=interactions_task_id,
+        platform_session_id=session_id,
+    )
+
+    activated = bool(fault_activated) or events_indicate_fault_activated(artifacts)
+
     return {
         "runId": artifacts.run_id,
-        "taskId": session_id or artifacts.run_id,
+        # Trace ID: bare platform session only. Never silently use runId.
+        "taskId": platform_session_id,
+        "sessionAligned": session_aligned,
         "framework": framework,
         "fault": fault,
         "injectionMethod": injection_method or "skill_inject",
-        "faultActivated": fault_activated,
+        "faultActivated": activated,
         "faultActivatedAt": fault_activated_at,
         "interactions": interactions,
         "markers": markers or [],

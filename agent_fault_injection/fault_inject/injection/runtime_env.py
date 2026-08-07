@@ -47,7 +47,7 @@ def parse_runtime_plan_json(raw: str | None) -> list[dict[str, Any]]:
         return []
     value = json.loads(raw)
     if not isinstance(value, list):
-        raise ValueError("AGENT_RAS_INJECTION_RUNTIME must be a JSON array")
+        raise ValueError("AGENT_FI_INJECTION_RUNTIME must be a JSON array")
     return [item for item in value if isinstance(item, dict)]
 
 

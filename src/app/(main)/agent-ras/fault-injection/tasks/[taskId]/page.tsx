@@ -11,21 +11,22 @@ import {
   StopIconButton,
 } from '@/components/fault-injection/ActionIcons'
 import {
+  ContainmentBadge,
+  OutcomeBadge,
   PlatformChip,
   RunStatusBadge,
   TaskProgressBar,
   TaskStatusBadge,
 } from '@/components/fault-injection/TaskStatus'
+import { CopyableId } from '@/components/fault-injection/CopyableId'
+import type { ProgressCounts } from '@/components/fault-injection/types'
 import {
-  CONTAINMENT_LABELS,
-  OUTCOME_LABELS,
-  labelMap,
-  type ProgressCounts,
-} from '@/components/fault-injection/types'
-import {
-  loadFaultLabelsMap,
+  loadFaultLabelsBundle,
   peekFaultLabelsCache,
+  resolveSubmodeLabel,
 } from '@/lib/fault-injection/fault-labels-cache'
+import { useLocale } from '@/lib/client/locale-context'
+import { cn } from '@/lib/utils'
 
 type TaskDetail = {
   task_id: string
@@ -45,14 +46,23 @@ type TaskDetail = {
     judge_reason?: string | null
     error?: string | null
     submode?: string | null
-    phase?: string | null
+    /** Trace ID (= platform session / Execution.taskId) */
+    session_task_id?: string | null
+    trace_id?: string | null
   }>
   model?: string | null
   workspace?: string
   started_at?: string | null
 }
 
+function runTraceId(run: NonNullable<TaskDetail['runs']>[number]): string | null {
+  const value = run.trace_id || run.session_task_id
+  return value && value.trim() ? value.trim() : null
+}
+
 export default function FaultInjectionTaskDetailPage() {
+  const { locale } = useLocale()
+  const zh = locale === 'zh'
   const params = useParams<{ taskId: string }>()
   const router = useRouter()
   const [task, setTask] = useState<TaskDetail | null>(null)
@@ -60,8 +70,9 @@ export default function FaultInjectionTaskDetailPage() {
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [faultLabels, setFaultLabels] = useState<Record<string, string> | null>(
-    () => peekFaultLabelsCache(),
+    () => peekFaultLabelsCache(locale),
   )
+  const [labelsReady, setLabelsReady] = useState(() => peekFaultLabelsCache(locale) != null)
 
   const refresh = useCallback(async () => {
     if (!params.taskId) return
@@ -79,10 +90,16 @@ export default function FaultInjectionTaskDetailPage() {
   }, [refresh])
 
   useEffect(() => {
-    void loadFaultLabelsMap()
-      .then((map) => setFaultLabels(map))
-      .catch(() => setFaultLabels({}))
-  }, [])
+    void loadFaultLabelsBundle()
+      .then((bundle) => {
+        setFaultLabels(bundle[locale])
+        setLabelsReady(true)
+      })
+      .catch(() => {
+        setFaultLabels({})
+        setLabelsReady(true)
+      })
+  }, [locale])
 
   useEffect(() => {
     if (task?.status !== 'running') return
@@ -102,7 +119,15 @@ export default function FaultInjectionTaskDetailPage() {
 
   const stopTask = async () => {
     if (!task) return
-    if (!window.confirm('确认停止该任务？停止后对应 run 将记为失败。')) return
+    if (
+      !window.confirm(
+        zh
+          ? '确认停止该任务？停止后对应 run 将记为失败。'
+          : 'Stop this task? Matching runs will be marked failed.',
+      )
+    ) {
+      return
+    }
     setBusy(true)
     try {
       const res = await fetch('/api/fault-injection/tasks/stop', {
@@ -122,7 +147,15 @@ export default function FaultInjectionTaskDetailPage() {
 
   const deleteTask = async () => {
     if (!task) return
-    if (!window.confirm('确认删除该任务？任务记录将一并移除。')) return
+    if (
+      !window.confirm(
+        zh
+          ? '确认删除该任务？任务记录将一并移除。'
+          : 'Delete this task? The task record will be removed.',
+      )
+    ) {
+      return
+    }
     setBusy(true)
     try {
       const res = await fetch('/api/fault-injection/tasks/delete', {
@@ -140,17 +173,23 @@ export default function FaultInjectionTaskDetailPage() {
     }
   }
 
+  const openRun = (runId: string) => {
+    router.push(`/agent-ras/fault-injection/runs/${runId}`)
+  }
+
   return (
     <FiPageShell>
       <div className="text-sm text-foreground-muted">
         <Link href="/agent-ras/fault-injection/tasks" className="text-primary hover:underline">
-          注入任务
+          {zh ? '注入任务' : 'Injection tasks'}
         </Link>
         <span className="mx-1.5">/</span>
         <span>{task?.name || params.taskId}</span>
       </div>
 
-      {loading && <p className="text-sm text-foreground-muted">加载中…</p>}
+      {loading && (
+        <p className="text-sm text-foreground-muted">{zh ? '加载中…' : 'Loading…'}</p>
+      )}
       {error && <p className="text-sm text-[var(--error)]">{error}</p>}
 
       {task && (
@@ -164,7 +203,9 @@ export default function FaultInjectionTaskDetailPage() {
               <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-xs text-foreground-muted">
                 <PlatformChip platform={task.platform} />
                 <span>agent: {task.agent}</span>
-                <span>model: {task.model || '默认'}</span>
+                <span>
+                  model: {task.model || (zh ? '默认' : 'Default')}
+                </span>
                 <span className="font-mono">{task.task_id}</span>
               </div>
             </div>
@@ -190,7 +231,7 @@ export default function FaultInjectionTaskDetailPage() {
 
           <div className="rounded-md border border-border bg-card p-4">
             <div className="mb-2 flex items-center justify-between text-[13px] font-semibold">
-              <span>执行进度</span>
+              <span>{zh ? '执行进度' : 'Progress'}</span>
               <span className="font-mono text-xs font-normal text-foreground-muted">
                 {(progress.completed || 0) + (progress.failed || 0)} / {progress.total || 0}
               </span>
@@ -198,16 +239,20 @@ export default function FaultInjectionTaskDetailPage() {
             <TaskProgressBar progress={progress} />
             <div className="mt-2 flex flex-wrap gap-4 text-xs text-foreground-muted">
               <span>
-                完成 <strong className="text-foreground">{progress.completed || 0}</strong>
+                {zh ? '完成' : 'Done'}{' '}
+                <strong className="text-foreground">{progress.completed || 0}</strong>
               </span>
               <span>
-                失败 <strong className="text-foreground">{progress.failed || 0}</strong>
+                {zh ? '失败' : 'Failed'}{' '}
+                <strong className="text-foreground">{progress.failed || 0}</strong>
               </span>
               <span>
-                运行中 <strong className="text-foreground">{progress.running || 0}</strong>
+                {zh ? '运行中' : 'Running'}{' '}
+                <strong className="text-foreground">{progress.running || 0}</strong>
               </span>
               <span>
-                排队 <strong className="text-foreground">{progress.queued || 0}</strong>
+                {zh ? '排队' : 'Queued'}{' '}
+                <strong className="text-foreground">{progress.queued || 0}</strong>
               </span>
             </div>
           </div>
@@ -216,53 +261,79 @@ export default function FaultInjectionTaskDetailPage() {
             <table className="w-full text-sm">
               <thead className="bg-background-secondary text-left text-[11px] text-foreground-muted">
                 <tr>
-                  <th className="px-3 py-2.5">故障</th>
-                  <th className="px-3 py-2.5">子模式</th>
-                  <th className="px-3 py-2.5">阶段</th>
-                  <th className="px-3 py-2.5">状态</th>
-                  <th className="px-3 py-2.5">Outcome</th>
-                  <th className="px-3 py-2.5">Containment</th>
-                  <th className="px-3 py-2.5" />
+                  <th className="px-3 py-2.5">Trace ID</th>
+                  <th className="px-3 py-2.5">{zh ? '故障' : 'Fault'}</th>
+                  <th className="px-3 py-2.5">{zh ? '子模式' : 'Sub-mode'}</th>
+                  <th className="px-3 py-2.5">{zh ? '状态' : 'Status'}</th>
+                  <th className="px-3 py-2.5">{zh ? '注入结果' : 'Outcome'}</th>
+                  <th className="px-3 py-2.5">{zh ? '恢复' : 'Recovery'}</th>
                 </tr>
               </thead>
               <tbody>
-                {(task.runs || []).map((run) => (
-                  <tr key={run.run_id} className="border-t border-border">
-                    <td className="px-3 py-2.5">
-                      <div className="font-medium">
-                        {faultLabels == null
-                          ? '…'
-                          : faultLabels[run.fault] || '—'}
-                      </div>
-                      <div className="font-mono text-[11px] text-foreground-muted">{run.fault}</div>
-                    </td>
-                    <td className="px-3 py-2.5 text-foreground-muted">{run.submode || '—'}</td>
-                    <td className="px-3 py-2.5 text-xs text-foreground-muted">
-                      {run.phase || run.status}
-                    </td>
-                    <td className="px-3 py-2.5">
-                      <RunStatusBadge status={run.status} />
-                    </td>
-                    <td className="px-3 py-2.5">{labelMap(OUTCOME_LABELS, run.outcome)}</td>
-                    <td className="px-3 py-2.5">
-                      {labelMap(CONTAINMENT_LABELS, run.fault_containment_status)}
-                    </td>
-                    <td className="px-3 py-2.5">
-                      <Link
-                        className="rounded border border-border px-2 py-1 text-xs text-primary hover:bg-[var(--primary-subtle)]"
-                        href={`/agent-ras/fault-injection/runs/${run.run_id}`}
+                {(task.runs || []).map((run) => {
+                  const traceId = runTraceId(run)
+                  const submodeName =
+                    resolveSubmodeLabel(run.fault, run.submode) ||
+                    (labelsReady ? run.submode || null : null)
+                  return (
+                    <tr
+                      key={run.run_id}
+                      role="link"
+                      tabIndex={0}
+                      className={cn(
+                        'border-t border-border cursor-pointer transition-colors',
+                        'hover:bg-background-secondary focus-visible:outline-none',
+                        'focus-visible:bg-background-secondary focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset',
+                      )}
+                      onClick={() => openRun(run.run_id)}
+                      onKeyDown={(ev) => {
+                        if (ev.key === 'Enter' || ev.key === ' ') {
+                          ev.preventDefault()
+                          openRun(run.run_id)
+                        }
+                      }}
+                    >
+                      <td
+                        className="px-3 py-2.5"
+                        onClick={(ev) => ev.stopPropagation()}
+                        onKeyDown={(ev) => ev.stopPropagation()}
                       >
-                        查看轨迹
-                      </Link>
-                    </td>
-                  </tr>
-                ))}
+                        {traceId ? <CopyableId value={traceId} /> : '—'}
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <div className="font-medium">
+                          {faultLabels == null ? '…' : faultLabels[run.fault] || '—'}
+                        </div>
+                        <div className="font-mono text-[11px] text-foreground-muted">
+                          {run.fault}
+                        </div>
+                      </td>
+                      <td className="px-3 py-2.5 text-foreground-muted">
+                        {!labelsReady ? '…' : submodeName || '—'}
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <RunStatusBadge status={run.status} />
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <OutcomeBadge value={run.outcome} locale={locale} />
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <ContainmentBadge
+                          value={run.fault_containment_status}
+                          locale={locale}
+                        />
+                      </td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>
 
           <details className="rounded-md border border-border bg-card p-3 text-sm">
-            <summary className="cursor-pointer font-medium">任务配置</summary>
+            <summary className="cursor-pointer font-medium">
+              {zh ? '任务配置' : 'Task config'}
+            </summary>
             <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
               <div>
                 <dt className="text-foreground-muted">Prompt</dt>
@@ -275,7 +346,7 @@ export default function FaultInjectionTaskDetailPage() {
               <div>
                 <dt className="text-foreground-muted">Agent / Model</dt>
                 <dd className="mt-0.5">
-                  {task.agent} / {task.model || '默认'}
+                  {task.agent} / {task.model || (zh ? '默认' : 'Default')}
                 </dd>
               </div>
             </dl>

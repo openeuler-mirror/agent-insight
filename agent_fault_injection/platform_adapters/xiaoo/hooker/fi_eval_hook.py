@@ -2,7 +2,7 @@
 """agent-fault-injection hooker for xiaoO fault injection.
 
 Reads one JSON object from stdin, writes one JSON object to stdout.
-Gated by AGENT_RAS_* environment variables (no-op when unset).
+Gated by AGENT_FI_* environment variables (no-op when unset).
 """
 
 from __future__ import annotations
@@ -38,10 +38,18 @@ def _normalize_skill_name(name: str) -> str:
     return parts[-1] if parts else ""
 
 
+def _call_id_from_call(call: dict[str, Any]) -> str | None:
+    for key in ("call_id", "callID", "callId", "id"):
+        value = call.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
 def _env_ready() -> tuple[str, str, Path] | None:
-    run_id = os.environ.get("AGENT_RAS_RUN_ID", "").strip()
-    fault_skill = os.environ.get("AGENT_RAS_FAULT_SKILL", "").strip()
-    raw_dir = os.environ.get("AGENT_RAS_RAW_DIR", "").strip()
+    run_id = os.environ.get("AGENT_FI_RUN_ID", "").strip()
+    fault_skill = os.environ.get("AGENT_FI_FAULT_SKILL", "").strip()
+    raw_dir = os.environ.get("AGENT_FI_RAW_DIR", "").strip()
     if not run_id or not fault_skill or not raw_dir:
         return None
     return run_id, fault_skill, Path(raw_dir)
@@ -79,7 +87,7 @@ def _append_event(
 
 
 def _mark_ready(raw_dir: Path, run_id: str) -> None:
-    ready_env = os.environ.get("AGENT_RAS_PLUGIN_READY", "").strip()
+    ready_env = os.environ.get("AGENT_FI_PLUGIN_READY", "").strip()
     ready = Path(ready_env) if ready_env else raw_dir / "plugin-ready.json"
     if ready.is_file():
         return
@@ -188,15 +196,20 @@ def _handle_tool_pre(
 ) -> dict[str, Any]:
     call = payload.get("call") if isinstance(payload.get("call"), dict) else {}
     tool_name = _tool_name(call)
+    call_id = _call_id_from_call(call)
+    event_payload: dict[str, Any] = {
+        "type": "tool.pre",
+        "tool": tool_name,
+        "input": call.get("input"),
+    }
+    if call_id:
+        event_payload["call_id"] = call_id
+        event_payload["callID"] = call_id
     _append_event(
         run_id=run_id,
         raw_dir=raw_dir,
         kind="xiaoo.event",
-        payload={
-            "type": "tool.pre",
-            "tool": tool_name,
-            "input": call.get("input"),
-        },
+        payload=event_payload,
     )
     _mark_ready(raw_dir, run_id)
     _ensure_activation_started(
@@ -274,7 +287,7 @@ def _handle_system_transform(
     )
     if not any(fault_skill in part for part in parts):
         parts.append(injection)
-    plan = parse_runtime_plan_json(os.environ.get("AGENT_RAS_INJECTION_RUNTIME"))
+    plan = parse_runtime_plan_json(os.environ.get("AGENT_FI_INJECTION_RUNTIME"))
     if plan:
         parts, meta = apply_system_rewrite(plan, system_parts=parts)
         if meta.get("applied"):
@@ -324,7 +337,7 @@ def _handle_llm_pre(
             else None,
         },
     )
-    plan = parse_runtime_plan_json(os.environ.get("AGENT_RAS_INJECTION_RUNTIME"))
+    plan = parse_runtime_plan_json(os.environ.get("AGENT_FI_INJECTION_RUNTIME"))
     request = payload.get("request")
     if not plan or not isinstance(request, dict):
         return {"result": "allow"}
@@ -375,7 +388,7 @@ def _handle_llm_post(
             else None,
         },
     )
-    plan = parse_runtime_plan_json(os.environ.get("AGENT_RAS_INJECTION_RUNTIME"))
+    plan = parse_runtime_plan_json(os.environ.get("AGENT_FI_INJECTION_RUNTIME"))
     response = payload.get("response")
     if not plan or not isinstance(response, dict):
         return {"result": "accept"}
@@ -416,7 +429,7 @@ def _maybe_rewrite_tool_output(
     tool_name: str,
     output: str,
 ) -> tuple[str, bool]:
-    plan = parse_runtime_plan_json(os.environ.get("AGENT_RAS_INJECTION_RUNTIME"))
+    plan = parse_runtime_plan_json(os.environ.get("AGENT_FI_INJECTION_RUNTIME"))
     if not plan:
         return output, False
     call_index = next_tool_call_index(
@@ -464,17 +477,22 @@ def _handle_tool_post(
     success = outcome.get("type") == "success"
     output = outcome.get("output")
     output_text = output if isinstance(output, str) else None
+    call_id = _call_id_from_call(call)
 
+    event_payload: dict[str, Any] = {
+        "type": "tool.post",
+        "tool": tool_name,
+        "input": call.get("input"),
+        "outcome": outcome,
+    }
+    if call_id:
+        event_payload["call_id"] = call_id
+        event_payload["callID"] = call_id
     _append_event(
         run_id=run_id,
         raw_dir=raw_dir,
         kind="xiaoo.event",
-        payload={
-            "type": "tool.post",
-            "tool": tool_name,
-            "input": call.get("input"),
-            "outcome": outcome,
-        },
+        payload=event_payload,
     )
 
     if (

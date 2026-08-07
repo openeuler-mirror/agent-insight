@@ -16,6 +16,7 @@ from urllib.request import Request, urlopen
 
 from ...pipeline.artifact_store import ArtifactStore
 from ...pipeline.exceptions import (
+    ExperimentTimeoutError,
     PlatformExecutableNotFoundError,
     PluginStartupError,
     ToolInstallationError,
@@ -32,9 +33,9 @@ from ...pipeline.models import (
 )
 from ...pipeline.monitor import ProcessMonitor
 from ..base import PlatformAdapter
-from ..lifecycle import AdapterRunContext, build_agent_ras_env
+from ..lifecycle import AdapterRunContext, build_fi_injection_env, strip_ras_detector_env
 from .catalog import list_xiaoo_agents, list_xiaoo_models
-from .config_overlay import prepare_overlay
+from .config_overlay import load_user_llm_config, prepare_overlay
 from .mapper import XiaoOTrajectoryMapper
 
 
@@ -68,7 +69,7 @@ class XiaoOAdapter(PlatformAdapter):
         """Merged XIAOO_CONFIG: user system config + FI hooker (keeps RAS)."""
 
         overlay_root = Path(
-            tempfile.mkdtemp(prefix=f"agent-ras-xiaoo-{ctx.artifacts.run_id}-")
+            tempfile.mkdtemp(prefix=f"agent-fi-xiaoo-{ctx.artifacts.run_id}-")
         )
         model = ctx.request.platform_options.get("model")
         model_override = (
@@ -92,6 +93,11 @@ class XiaoOAdapter(PlatformAdapter):
             model_override=cli_model,
             enable_chat_llm_hooks=enable_chat_llm,
         )
+        self._write_resolved_llm_artifact(
+            artifacts=ctx.artifacts,
+            config_toml=config_toml,
+            model_override=model_override,
+        )
         return {
             "overlay_root": overlay_root,
             "config_toml": config_toml,
@@ -99,6 +105,47 @@ class XiaoOAdapter(PlatformAdapter):
             "enable_chat_llm": enable_chat_llm,
             "executable": executable,
         }
+
+    def _write_resolved_llm_artifact(
+        self,
+        *,
+        artifacts: RunArtifacts,
+        config_toml: Path,
+        model_override: str | None,
+    ) -> None:
+        """Persist effective [llm] so collect/mapper can fill modelID when hooks omit it."""
+
+        llm = load_user_llm_config(config_toml)
+        provider = llm.get("provider")
+        model = llm.get("model")
+        provider_id = (
+            provider.strip() if isinstance(provider, str) and provider.strip() else None
+        )
+        model_id = model.strip() if isinstance(model, str) and model.strip() else None
+        if model_override and "/" in model_override:
+            override_provider, _, override_model = model_override.partition("/")
+            provider_id = override_provider.strip() or provider_id
+            model_id = override_model.strip() or model_id
+        elif model_override and model_override.strip():
+            model_id = model_override.strip()
+        if not model_id and not provider_id:
+            return
+        composed = (
+            f"{provider_id}/{model_id}"
+            if provider_id and model_id
+            else (model_id or provider_id)
+        )
+        payload = {
+            "providerID": provider_id,
+            "modelID": model_id,
+            "id": composed,
+            "source": "override" if model_override else "user_config",
+        }
+        path = artifacts.raw_dir / "resolved-llm.json"
+        path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
 
     def merge_platform_env(
         self,
@@ -119,8 +166,8 @@ class XiaoOAdapter(PlatformAdapter):
         environment.update(
             {
                 "XIAOO_CONFIG": str(config_toml.resolve()),
-                "AGENT_RAS_EVENTS_FILE": str(ctx.artifacts.events_file.resolve()),
-                "AGENT_RAS_PLUGIN_READY": str(
+                "AGENT_FI_EVENTS_FILE": str(ctx.artifacts.events_file.resolve()),
+                "AGENT_FI_PLUGIN_READY": str(
                     ctx.artifacts.plugin_ready_file.resolve()
                 ),
             }
@@ -207,7 +254,7 @@ class XiaoOAdapter(PlatformAdapter):
                 except PluginStartupError as exc:
                     raise PluginStartupError(
                         f"{exc}. Check xiaoo CLI, XIAOO_CONFIG overlay, and "
-                        f"AGENT_RAS_* hook activation. stderr: "
+                        f"AGENT_FI_* hook activation. stderr: "
                         f"{artifacts.stderr_file}"
                     ) from exc
 
@@ -218,14 +265,28 @@ class XiaoOAdapter(PlatformAdapter):
                 )
                 store.update_manifest(artifacts, status=RunStatus.AGENT_RUNNING)
 
-                exit_code = await self.monitor.wait_for_exit(
-                    process,
-                    request.timeout_seconds,
-                )
+                timed_out = False
+                try:
+                    exit_code = await self.monitor.wait_for_exit(
+                        process,
+                        request.timeout_seconds,
+                    )
+                except ExperimentTimeoutError:
+                    timed_out = True
+                    exit_code = 124
 
+            if timed_out and process is not None and process.returncode is None:
+                await self.monitor.stop(process)
+                # Hooker may still flush activation markers after SIGTERM.
+                await asyncio.sleep(1.5)
+
+            # Always ingest CLI NDJSON (incl. session_start) before inspect —
+            # including timeout paths where wait_for_exit raises.
             self._ingest_cli_stdout_events(artifacts)
             capture = self.mapper.inspect(artifacts.events_file)
-            if not capture.fault_activated:
+            if timed_out:
+                reason = TerminationReason.TIMEOUT
+            elif not capture.fault_activated:
                 reason = TerminationReason.FAULT_NOT_ACTIVATED
             elif capture.session_error:
                 reason = TerminationReason.SESSION_ERROR
@@ -291,10 +352,10 @@ class XiaoOAdapter(PlatformAdapter):
                 "http://127.0.0.1:18080",
             )
         ).rstrip("/")
-        client_id = f"agent-ras-{artifacts.run_id}"
+        client_id = f"agent-fi-{artifacts.run_id}"
         store.update_manifest(artifacts, status=RunStatus.AGENT_RUNNING)
 
-        # Propagate AGENT_RAS_* into the daemon process environment is not
+        # Propagate AGENT_FI_* into the daemon process environment is not
         # possible remotely; daemon mode still relies on XIAOO_CONFIG overlay
         # being the daemon's config. Document that daemon must be started with
         # the same XIAOO_CONFIG for hooks. For Phase 2 we set env for any
@@ -306,7 +367,7 @@ class XiaoOAdapter(PlatformAdapter):
                 "type": "note",
                 "message": (
                     "Daemon harness expects the daemon process to load the "
-                    "run overlay via XIAOO_CONFIG and AGENT_RAS_* in its env."
+                    "run overlay via XIAOO_CONFIG and AGENT_FI_* in its env."
                 ),
                 "XIAOO_CONFIG": environment.get("XIAOO_CONFIG"),
             },
@@ -737,7 +798,7 @@ class XiaoOAdapter(PlatformAdapter):
             path_parts.append(existing_pythonpath)
         environment["PYTHONPATH"] = os.pathsep.join(path_parts)
         environment.update(
-            build_agent_ras_env(
+            build_fi_injection_env(
                 artifacts=artifacts,
                 fault=fault,
                 submode=submode,
@@ -746,13 +807,13 @@ class XiaoOAdapter(PlatformAdapter):
         environment.update(
             {
                 "XIAOO_CONFIG": str(config_toml.resolve()),
-                "AGENT_RAS_EVENTS_FILE": str(artifacts.events_file.resolve()),
-                "AGENT_RAS_PLUGIN_READY": str(
+                "AGENT_FI_EVENTS_FILE": str(artifacts.events_file.resolve()),
+                "AGENT_FI_PLUGIN_READY": str(
                     artifacts.plugin_ready_file.resolve()
                 ),
             }
         )
-        return environment
+        return strip_ras_detector_env(environment)
 
     @classmethod
     def _requires_cli_prefix(cls, executable: str) -> bool:
@@ -850,7 +911,9 @@ class XiaoOAdapter(PlatformAdapter):
             f"Do not call bash, read, write, glob, grep, or any other tool "
             f"before that skill load succeeds. Other tools are blocked until "
             f"then. After the skill loads, follow the skill instructions "
-            f"exactly to complete the user task."
+            f"exactly to complete the user task. For thinking-loop skills, "
+            f"emit the required repeated text as native assistant/thinking "
+            f"stream output — never use bash/echo/python to print the loop."
         )
         # Fallback when Chat.system.transform is unavailable: fold system.append
         # into --system so prompt FI still applies on older binaries.
@@ -892,6 +955,20 @@ class XiaoOAdapter(PlatformAdapter):
             executable, "--format", use_cli_prefix=use_cli_prefix
         ):
             command.extend(["--format", "json"])
+        # Only when caller explicitly sets platform_options.reasoning_effort.
+        # Do not default for RAS observation — use the agent's own config.
+        reasoning = request.platform_options.get("reasoning_effort")
+        if (
+            isinstance(reasoning, str)
+            and reasoning.strip()
+            and reasoning.strip().lower() != "off"
+            and cls._run_supports_flag(
+                executable,
+                "--reasoning-effort",
+                use_cli_prefix=use_cli_prefix,
+            )
+        ):
+            command.extend(["--reasoning-effort", reasoning.strip()])
         if cls._run_supports_flag(
             executable, "--title", use_cli_prefix=use_cli_prefix
         ):

@@ -10,9 +10,23 @@ from platform_adapter.common.protocol_client import (
     build_protocol_ras_client,
 )
 from platform_adapter.common.ras_client import RasClient
-from ras_embed.ipc import publish_host_control
+from platform_adapter.common.transport.subprocess_ipc import send_host_control
 
 logger = logging.getLogger(__name__)
+
+# ack 语义：网关执行完回 {"ok": ...} 才算成功；无 ack 只能证明字节写进了
+# socket，不能证明网关执行了 cancel/steer，按失败上报以避免 action_result 虚报。
+def _delivery_result(op: str, rid: str, res: dict[str, Any]) -> dict[str, Any]:
+    if not res.get("delivered"):
+        logger.warning("xiaoo %s: host control sock unavailable session=%s", op, rid)
+        return {"ok": False, "error": res.get("error") or "host control sock unavailable"}
+    ack = res.get("ack")
+    if not isinstance(ack, dict):
+        return {"ok": False, "error": "no_ack: gateway gave no execution confirmation"}
+    return {
+        "ok": bool(ack.get("ok")),
+        "error": ack.get("error") if not ack.get("ok") else None,
+    }
 
 
 def build_xiaoo_host_fns(
@@ -23,24 +37,21 @@ def build_xiaoo_host_fns(
     """Map wire Host methods to gateway local control (cancel / pending).
 
     Delivery goes through ``ras_control.sock`` (xiaoO shared listens). No HTTP.
+    Each fn returns the delivery/ack outcome so callers never report blind ok.
     """
     rid = str(session_id)
 
-    def abort_fn() -> None:
-        if not publish_host_control("abort", rid):
-            logger.warning("xiaoo abort: host control sock unavailable session=%s", rid)
+    def abort_fn() -> dict[str, Any]:
+        return _delivery_result("abort", rid, send_host_control("abort", rid))
 
-    def steer_fn(message: str) -> None:
-        if not publish_host_control("steer", rid, message=message):
-            logger.warning("xiaoo steer: host control sock unavailable session=%s", rid)
+    def steer_fn(message: str) -> dict[str, Any]:
+        return _delivery_result("steer", rid, send_host_control("steer", rid, message=message))
 
-    def notice_fn(message: str) -> None:
+    def notice_fn(message: str) -> dict[str, Any]:
         text = f"[RAS] {message}" if notice_as_steer else message
         if notice_as_steer:
-            steer_fn(text)
-            return
-        if not publish_host_control("notice", rid, message=text):
-            logger.warning("xiaoo notice: host control sock unavailable session=%s", rid)
+            return steer_fn(text)
+        return _delivery_result("notice", rid, send_host_control("notice", rid, message=text))
 
     return abort_fn, notice_fn, steer_fn
 

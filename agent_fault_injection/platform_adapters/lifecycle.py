@@ -1,4 +1,4 @@
-"""Shared prepare / AGENT_RAS_* env assembly for platform adapters (L3 glue)."""
+"""Shared prepare / AGENT_FI_* env assembly for platform adapters."""
 
 from __future__ import annotations
 
@@ -86,25 +86,51 @@ def assert_fault_tools_installed(*, fault: FaultDefinition, workspace: Path) -> 
     )
 
 
-def build_agent_ras_env(
+# RAS detector knobs — never injected or inherited via FI child env.
+_RAS_DETECTOR_ENV_KEYS = frozenset(
+    {
+        "RAS_DETECTION_START_CHARS",
+        "RAS_WINDOW_MAX_CHARS",
+        "RAS_LOOP_REPEAT_THRESHOLD",
+        "RAS_SEMANTIC_EVAL_CHARS",
+    }
+)
+
+
+def strip_ras_detector_env(environment: dict[str, str]) -> dict[str, str]:
+    """Drop RAS detector overrides so FI does not ferry RAS config."""
+
+    return {
+        key: value
+        for key, value in environment.items()
+        if key not in _RAS_DETECTOR_ENV_KEYS
+    }
+
+
+def build_fi_injection_env(
     *,
     artifacts: RunArtifacts,
     fault: FaultDefinition,
     submode: str | None = None,
 ) -> dict[str, str]:
-    """Shared AGENT_RAS_* injection contract (platforms may merge more keys)."""
+    """FI injection-plugin env (``AGENT_FI_*``); not RAS detector or install config.
+
+    Detection thresholds and ``AGENT_INSIGHT_RAS_HOME`` belong to RAS
+    (``config.json`` / RAS-side env / Insight capability sync). Platforms may
+    merge private keys (e.g. ``XIAOO_CONFIG``).
+    """
 
     runtime_steps = filter_runtime_steps_for_submode(
         fault.injection_runtime,
         submode,
     )
     return {
-        "AGENT_RAS_RUN_ID": artifacts.run_id,
-        "AGENT_RAS_FAULT_SKILL": fault.skill_name,
-        "AGENT_RAS_RAW_DIR": str(artifacts.raw_dir.resolve()),
-        "AGENT_RAS_SCHEMA_VERSION": "1",
-        "AGENT_RAS_INJECTION_RUNTIME": runtime_plan_to_json(runtime_steps),
-        "AGENT_RAS_INJECTION_ARTIFACTS": str(
+        "AGENT_FI_RUN_ID": artifacts.run_id,
+        "AGENT_FI_FAULT_SKILL": fault.skill_name,
+        "AGENT_FI_RAW_DIR": str(artifacts.raw_dir.resolve()),
+        "AGENT_FI_SCHEMA_VERSION": "1",
+        "AGENT_FI_INJECTION_RUNTIME": runtime_plan_to_json(runtime_steps),
+        "AGENT_FI_INJECTION_ARTIFACTS": str(
             (artifacts.resolved_fault_dir / "injection").resolve()
         ),
     }

@@ -4,6 +4,8 @@ import { composeFaultPrompt, findSubmode } from '@/lib/fault-injection/compose-p
 import { listFaultsViaPython, type CollectPayload } from '@/lib/fault-injection/engine'
 import { judgeFaultInjection } from '@/lib/fault-injection/judge'
 import { mergeEvaluationMarkers } from '@/lib/fault-injection/trace-markers'
+import { saveExecutionRecord } from '@/lib/storage/data-service'
+import { pickFiUserQuery } from '@/lib/ingest/ras/trace-summary'
 
 export function newTaskKey(): string {
   return `task-${randomBytes(4).toString('hex')}`
@@ -122,34 +124,111 @@ export async function createTaskWithRuns(input: {
   return { task: updatedTask, runs, items }
 }
 
+function looksLikeFiRunId(value: string): boolean {
+  return /^ras-\d{8}T[0-9a-zA-Z_-]+$/.test(value.trim())
+}
+
+function looksLikeMessageOrPartId(value: string): boolean {
+  return /^(msg_|prt_)[0-9a-zA-Z_-]+$/.test(value.trim())
+}
+
+/** True when value is a bare platform session usable as FI↔RAS join key. */
+export function isPlatformSessionId(value: string | null | undefined): boolean {
+  if (!value || !value.trim()) return false
+  const s = value.trim()
+  if (looksLikeFiRunId(s) || looksLikeMessageOrPartId(s)) return false
+  return true
+}
+
 export async function ingestCollectAndJudge(input: {
   runId: string
   user: string | null
   payload: CollectPayload
 }) {
   const interactionsJson = JSON.stringify(input.payload.interactions || [])
-  const sessionTaskId = input.payload.taskId
+  const rawTaskId =
+    typeof input.payload.taskId === 'string' ? input.payload.taskId.trim() : ''
+  const sessionAligned =
+    input.payload.sessionAligned !== false && isPlatformSessionId(rawTaskId)
+  const sessionTaskId = sessionAligned ? rawTaskId : null
 
-  await prisma.session.upsert({
-    where: { taskId: sessionTaskId },
-    create: {
-      taskId: sessionTaskId,
-      label: `FI ${input.payload.fault}`,
-      query: null,
-      interactions: interactionsJson,
-      user: input.user,
-    },
-    update: {
-      interactions: interactionsJson,
-      user: input.user || undefined,
-    },
-  })
+  // Only upsert Session when aligned — never use runId as Session.taskId.
+  if (sessionTaskId) {
+    let sessionModel: string | null = null
+    for (const item of input.payload.interactions || []) {
+      if (!item || typeof item !== 'object') continue
+      const row = item as Record<string, unknown>
+      if (row.role !== 'assistant') continue
+      const modelId =
+        (typeof row.modelID === 'string' && row.modelID.trim()) ||
+        (typeof row.model === 'string' && row.model.trim()) ||
+        ''
+      const providerId =
+        (typeof row.providerID === 'string' && row.providerID.trim()) || ''
+      if (modelId) {
+        sessionModel = providerId ? `${providerId}/${modelId}` : modelId
+        break
+      }
+    }
+    const endedAt = new Date()
+    await prisma.session.upsert({
+      where: { taskId: sessionTaskId },
+      create: {
+        taskId: sessionTaskId,
+        label: `FI ${input.payload.fault}`,
+        query: null,
+        interactions: interactionsJson,
+        user: input.user,
+        model: sessionModel,
+        endTime: endedAt,
+      },
+      update: {
+        interactions: interactionsJson,
+        user: input.user || undefined,
+        ...(sessionModel ? { model: sessionModel } : {}),
+        endTime: endedAt,
+      },
+    })
+
+    // /agent-ras/trace list requires Execution; FI collect previously only wrote Session.
+    // Skip OpenCode [search-mode]/[analyze-mode] preambles — they hide the FI prompt.
+    const queryText = pickFiUserQuery(input.payload.interactions || [], input.payload.fault)
+    const finalText = (() => {
+      for (let i = (input.payload.interactions || []).length - 1; i >= 0; i -= 1) {
+        const item = (input.payload.interactions || [])[i]
+        if (!item || typeof item !== 'object') continue
+        const row = item as Record<string, unknown>
+        if (row.role !== 'assistant') continue
+        const content = row.content
+        if (typeof content === 'string' && content.trim()) return content.trim().slice(0, 4000)
+      }
+      return input.payload.faultActivated ? 'fi-collect:fault-activated' : 'fi-collect'
+    })()
+    try {
+      await saveExecutionRecord({
+        upload_id: sessionTaskId,
+        task_id: sessionTaskId,
+        framework: input.payload.framework || 'unknown',
+        agentName: input.payload.framework || null,
+        user: input.user,
+        query: queryText,
+        final_result: finalText,
+        model: sessionModel,
+        timestamp: new Date().toISOString(),
+        is_subagent: false,
+      })
+    } catch (err) {
+      console.error('[fi] saveExecutionRecord failed', sessionTaskId, err)
+    }
+  }
 
   await prisma.faultInjectionRun.update({
     where: { runId: input.runId },
     data: {
       status: 'judging',
-      error: null,
+      error: sessionAligned
+        ? null
+        : 'session_unaligned: missing platform session id (FI runId is not a RAS join key)',
       sessionTaskId,
       faultActivated: Boolean(input.payload.faultActivated),
       faultActivatedAt: input.payload.faultActivatedAt
@@ -192,9 +271,17 @@ export async function ingestCollectAndJudge(input: {
         raw: judged.raw || null,
         model: judged.model || null,
         skipped: judged.skipped,
+        sessionAligned,
       }),
       markersJson,
       judgedAt: new Date(),
+      // Keep unaligned notice; do not wipe with null on success path.
+      ...(sessionAligned
+        ? {}
+        : {
+            error:
+              'session_unaligned: missing platform session id (FI runId is not a RAS join key)',
+          }),
     },
   })
 

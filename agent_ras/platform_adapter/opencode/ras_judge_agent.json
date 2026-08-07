@@ -16,6 +16,7 @@
       "list": "deny",
       "webfetch": "deny",
       "websearch": "deny"
-    }
+    },
+    "model": "personal/Minimax-M3"
   }
 }

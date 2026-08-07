@@ -12,9 +12,10 @@ from .lifecycle import (
     AdapterRunContext,
     apply_structural_plan,
     assert_fault_tools_installed,
-    build_agent_ras_env,
+    build_fi_injection_env,
     copy_skill_artifact,
     mark_preparing,
+    strip_ras_detector_env,
     validate_workspace,
 )
 
@@ -23,7 +24,7 @@ class PlatformAdapter(ABC):
     """Platform-specific inject / execute / trajectory mapping.
 
     ``execute`` is a Template Method: shared prepare + structural plan +
-    AGENT_RAS_* env; subclasses implement SPI hooks only.
+    AGENT_FI_* env; subclasses implement SPI hooks only.
     """
 
     name: str
@@ -56,12 +57,14 @@ class PlatformAdapter(ABC):
                 submode=request.submode,
             )
             ctx.isolation = self.prepare_runtime_isolation(ctx)
-            base_env = build_agent_ras_env(
+            base_env = build_fi_injection_env(
                 artifacts=artifacts,
                 fault=fault,
                 submode=request.submode,
             )
-            environment = self.merge_platform_env(ctx, base_env)
+            environment = strip_ras_detector_env(
+                self.merge_platform_env(ctx, base_env)
+            )
             return await self.run_platform_session(ctx, environment)
         finally:
             try:
@@ -84,7 +87,7 @@ class PlatformAdapter(ABC):
         ctx: AdapterRunContext,
         base_env: dict[str, str],
     ) -> dict[str, str]:
-        """Merge platform keys onto shared AGENT_RAS_* env (do not drop them)."""
+        """Merge platform keys onto shared AGENT_FI_* env (do not drop them)."""
 
     @abstractmethod
     async def run_platform_session(

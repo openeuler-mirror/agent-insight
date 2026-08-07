@@ -19,7 +19,7 @@
 
 | 车道 | 做什么 | 允许改动 |
 |------|--------|----------|
-| **A 加故障模式** | 日常产品扩展 | 仅 `fault_inject/skills/<id>/`（`SKILL.md` / 可选 `fault.json` / assets）+ `fault_inject/catalog/fault-catalog.yaml`。只引用能力清单内已有 method/op；**禁止**改 `rewrite_engine` / `file_ops` / 平台插件业务逻辑 |
+| **A 加故障模式** | 日常产品扩展 | 仅 `fault_inject/skills/<id>/`（`SKILL.md` / 可选 `fault.json` / assets）+ `fault_inject/catalog/fault-catalog.yaml`。只引用能力清单内已有 method/op；**禁止**改 `rewrite_engine` / `file_ops` / 平台插件业务逻辑。**操作指南 →** [guides/lane-a-add-fault.md](../../guides/lane-a-add-fault.md) |
 | **B 演进能力面** | 基础设施 | 更新 `capability_api.yaml` + L3 实现 + 对拍测试；再让故障模式调用 |
 | **C 加平台** | 稀缺 | 实现 Adapter SPI；禁止复制 execute / rewrite |
 

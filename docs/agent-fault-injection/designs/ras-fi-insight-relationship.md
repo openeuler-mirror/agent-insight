@@ -427,9 +427,11 @@ OTLP 可「硬套」attributes，但会变成「穿 OTLP 壳的私有协议」�
 
 #### 5.6.2 与观测链路如何关联
 
-- **不是**协议层把 RAS/FI 嵌进 Span，而是落库后用 **`taskId`（会话 ID）** 对齐。
+- **不是**协议层把 RAS/FI 嵌进 Span，而是落库后用 **Trace ID**（=`taskId`，平台原生会话 ID）对齐。
+- 对齐键 = 剥掉 `opencode:` / `xiaoo:` 后的裸 session（OpenCode `ses_…`、xiaoo gateway UUID）。产品 UI 称 **Trace ID**；Prisma 字段 `FaultInjectionRun.sessionTaskId` 存同一值。`FaultInjectionRun.runId`（`ras-…`）只标识实验 Run，**禁止**静默当作 `Session.taskId` / 可靠性 join key。
+- **不要**新增独立 session id 文件作为对外关联契约。OpenCode 插件可选写出的 `raw/session.json` 仅是会话快照（重建 interactions），不是公开 join 键。
 - RAS 推送会剥平台前缀以对齐 OTel/`Execution.taskId`；可靠性页以根 `Execution` **左连接**同 `taskId` 的 `RasAnomalyEvent`（可含 ras-only、无链路任务）。
-- FI：`collect-result.taskId` → `Session`；注入观测只在 FI Run；**不再**写 `RasAnomalyEvent`。
+- FI：`collect-result.taskId` 仅在 `sessionAligned=true` 时写入 `Session` / `sessionTaskId`；拿不到平台 session 时标记 `session_unaligned`，注入观测仍在 FI Run；**不再**写 `RasAnomalyEvent`。
 - 普通 `/trace` **不嵌** RAS 面板；可靠性看 `/agent-ras/trace`（真 RAS / Execution）。
 
 #### 5.6.3 服务端如何展示

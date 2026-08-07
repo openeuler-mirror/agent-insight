@@ -15,8 +15,15 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
+import uuid
 from pathlib import Path
 from typing import Any
+
+# Turn-stable LLM message ids when host omits them (cleared on tool_post).
+_LLM_TURN_MSG: dict[str, str] = {}
+# FI event dedupe: message_id already written this process.
+_FI_LLM_TURN_WRITTEN: set[str] = set()
 
 
 def _load_stdin() -> dict[str, Any]:
@@ -29,6 +36,44 @@ def _load_stdin() -> dict[str, Any]:
 def _emit(result: dict[str, Any]) -> None:
     sys.stdout.write(json.dumps(result, ensure_ascii=False))
     sys.stdout.flush()
+
+
+def _append_fi_llm_turn_event(*, message_id: str, channel: str, session_id: str) -> None:
+    """Mirror LLM identity into FI events so interactions can carry messageID (OC parity)."""
+    if not message_id or message_id in _FI_LLM_TURN_WRITTEN:
+        return
+    run_id = (os.environ.get("AGENT_FI_RUN_ID") or "").strip()
+    raw_dir = (os.environ.get("AGENT_FI_RAW_DIR") or "").strip()
+    if not run_id or not raw_dir:
+        return
+    events_file = Path(raw_dir) / "events.jsonl"
+    try:
+        events_file.parent.mkdir(parents=True, exist_ok=True)
+        sequence = 1
+        if events_file.is_file():
+            with events_file.open("r", encoding="utf-8") as stream:
+                for line in stream:
+                    if line.strip():
+                        sequence += 1
+        row = {
+            "schema_version": "1",
+            "run_id": run_id,
+            "sequence": sequence,
+            "recorded_at": int(time.time() * 1000),
+            "source": "xiaoo-ras-hooker",
+            "kind": "xiaoo.event",
+            "payload": {
+                "type": "llm.turn",
+                "message_id": message_id,
+                "channel": channel,
+                "session_id": session_id,
+            },
+        }
+        with events_file.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(row, ensure_ascii=False) + "\n")
+        _FI_LLM_TURN_WRITTEN.add(message_id)
+    except OSError:
+        pass
 
 
 def _ensure_path() -> None:
@@ -72,7 +117,7 @@ def _native_id(sid: str) -> str:
 
 def _ensure_embed() -> None:
     try:
-        from ras_embed import ensure_worker
+        from platform_adapter.common.transport.subprocess_ipc import ensure_worker
 
         ensure_worker()
     except Exception as exc:
@@ -191,6 +236,9 @@ def handle_tool_post(payload: dict[str, Any]) -> dict[str, Any]:
     if not client.hello(sid, "xiaoo", _hello_config()):
         pass
     call = payload.get("call") or {}
+    # Next assistant stream is a new LLM identity (do not inherit skill call_id).
+    _LLM_TURN_MSG.pop(sid, None)
+    _LLM_TURN_MSG.pop(native, None)
     result = observe_tool_after(
         client,
         sid,
@@ -226,13 +274,20 @@ def handle_stream_delta(payload: dict[str, Any]) -> dict[str, Any]:
     else:
         channel = "llm_output"
     text = str(payload.get("text") or payload.get("delta") or "")
+    mid = str(payload.get("message_id") or "").strip()
+    if mid:
+        _LLM_TURN_MSG[sid] = mid
+    else:
+        mid = _LLM_TURN_MSG.get(sid) or f"xiaoo-llm-{uuid.uuid4().hex[:16]}"
+        _LLM_TURN_MSG[sid] = mid
+    _append_fi_llm_turn_event(message_id=mid, channel=channel, session_id=native)
     _otel_safe(otel_trace.note_stream, sid, text, channel=channel)
     result = observe_text_delta(
         client,
         sid,
         text,
         channel=channel,
-        message_id=str(payload.get("message_id") or "") or None,
+        message_id=mid,
     )
     actions = _wire_actions_from_result(result)
     resp: dict[str, Any] = {"type": "accept"}

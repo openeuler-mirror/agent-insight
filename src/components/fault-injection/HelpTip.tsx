@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from 'react'
 import { createPortal } from 'react-dom'
+import { useLocale } from '@/lib/client/locale-context'
 
 interface Props {
   label?: string
@@ -30,11 +31,13 @@ function clamp(value: number, min: number, max: number): number {
  * parent overflow (modals, tables, scroll panes) cannot clip it.
  */
 export function HelpTip({
-  label = '说明',
+  label,
   children,
   widthClass = 'w-72',
   side = 'bottom',
 }: Props) {
+  const { locale } = useLocale()
+  const tipLabel = label ?? (locale === 'zh' ? '说明' : 'Help')
   const buttonRef = useRef<HTMLButtonElement>(null)
   const tipRef = useRef<HTMLSpanElement>(null)
   const [open, setOpen] = useState(false)
@@ -112,7 +115,7 @@ export function HelpTip({
       <button
         ref={buttonRef}
         type="button"
-        aria-label={label}
+        aria-label={tipLabel}
         className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-border text-[10px] font-semibold text-foreground-muted hover:border-foreground-muted"
         style={{ cursor: 'help' }}
       >

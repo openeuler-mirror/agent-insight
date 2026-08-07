@@ -29,7 +29,7 @@ function asSerializable(value: unknown): JsonValue {
 }
 
 /**
- * Normalize skill tool names so model variants still match AGENT_RAS_FAULT_SKILL.
+ * Normalize skill tool names so model variants still match AGENT_FI_FAULT_SKILL.
  * Keep in sync with tests/unit/test_skill_name_normalize.py.
  *
  * - trim whitespace
@@ -128,10 +128,10 @@ function replaceInPlace(target: unknown[], next: unknown[]): void {
 }
 
 export const AgentRasEvalPlugin: Plugin = async ({ client, directory }) => {
-  const runID = process.env.AGENT_RAS_RUN_ID
-  const faultSkill = process.env.AGENT_RAS_FAULT_SKILL
-  const rawDirectory = process.env.AGENT_RAS_RAW_DIR
-  const runtimePlan = parseRuntimePlan(process.env.AGENT_RAS_INJECTION_RUNTIME)
+  const runID = process.env.AGENT_FI_RUN_ID
+  const faultSkill = process.env.AGENT_FI_FAULT_SKILL
+  const rawDirectory = process.env.AGENT_FI_RAW_DIR
+  const runtimePlan = parseRuntimePlan(process.env.AGENT_FI_INJECTION_RUNTIME)
 
   // The plugin can remain installed without affecting normal OpenCode usage.
   if (!runID || !faultSkill || !rawDirectory) {

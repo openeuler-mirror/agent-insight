@@ -1,34 +1,42 @@
 'use client'
 
 import type { ProgressCounts } from '@/components/fault-injection/types'
+import {
+  containmentLabel,
+  outcomeLabel,
+  type FiLocale,
+} from '@/components/fault-injection/types'
+import { useLocale } from '@/lib/client/locale-context'
 import { cn } from '@/lib/utils'
 
-const TASK_STATUS_LABELS: Record<string, string> = {
-  running: '运行中',
-  completed: '运行完成',
-  failed: '运行失败',
-  stopped: '已停止',
+type Locale = 'zh' | 'en'
+
+const TASK_STATUS_I18N: Record<string, { zh: string; en: string }> = {
+  running: { zh: '运行中', en: 'Running' },
+  completed: { zh: '运行完成', en: 'Completed' },
+  failed: { zh: '运行失败', en: 'Failed' },
+  stopped: { zh: '已停止', en: 'Stopped' },
 }
 
-const RUN_STATUS_LABELS: Record<string, string> = {
-  queued: '排队中',
-  running: '运行中',
-  collecting: '采集中',
-  judging: '评判中',
-  judge_skipped: '评判跳过',
-  stopping: '停止中',
-  completed: '运行完成',
-  succeeded: '运行完成',
-  failed: '运行失败',
-  stopped: '已停止',
+const RUN_STATUS_I18N: Record<string, { zh: string; en: string }> = {
+  queued: { zh: '排队中', en: 'Queued' },
+  running: { zh: '运行中', en: 'Running' },
+  collecting: { zh: '采集中', en: 'Collecting' },
+  judging: { zh: '评判中', en: 'Judging' },
+  judge_skipped: { zh: '评判跳过', en: 'Judge skipped' },
+  stopping: { zh: '停止中', en: 'Stopping' },
+  completed: { zh: '运行完成', en: 'Completed' },
+  succeeded: { zh: '运行完成', en: 'Completed' },
+  failed: { zh: '运行失败', en: 'Failed' },
+  stopped: { zh: '已停止', en: 'Stopped' },
 }
 
-export function taskStatusLabel(status: string): string {
-  return TASK_STATUS_LABELS[status] ?? status
+export function taskStatusLabel(status: string, locale: Locale = 'zh'): string {
+  return TASK_STATUS_I18N[status]?.[locale] ?? status
 }
 
-export function runStatusLabel(status: string): string {
-  return RUN_STATUS_LABELS[status] ?? status
+export function runStatusLabel(status: string, locale: Locale = 'zh'): string {
+  return RUN_STATUS_I18N[status]?.[locale] ?? status
 }
 
 function toneClass(status: string): string {
@@ -50,18 +58,78 @@ function toneClass(status: string): string {
   return 'bg-[var(--warning-subtle)] text-[var(--warning)]'
 }
 
+function outcomeTone(value: string): string {
+  if (value === 'occurred') return 'bg-[var(--success-subtle)] text-[var(--success)]'
+  if (value === 'not_occurred') return 'bg-[var(--error-subtle)] text-[var(--error)]'
+  if (value === 'skipped') return 'bg-[var(--warning-subtle)] text-[var(--warning)]'
+  return 'bg-background-secondary text-foreground-muted'
+}
+
+function containmentTone(value: string): string {
+  if (value === 'recovered' || value === 'prevented') {
+    return 'bg-[var(--success-subtle)] text-[var(--success)]'
+  }
+  if (value === 'unresolved') return 'bg-[var(--error-subtle)] text-[var(--error)]'
+  if (value === 'inconclusive' || value === 'no_trace') {
+    return 'bg-[var(--warning-subtle)] text-[var(--warning)]'
+  }
+  return 'bg-background-secondary text-foreground-muted'
+}
+
 export function TaskStatusBadge({ status }: { status: string }) {
+  const { locale } = useLocale()
   return (
     <span className={cn('inline-flex rounded px-2 py-0.5 text-[11px] font-medium', toneClass(status))}>
-      {taskStatusLabel(status)}
+      {taskStatusLabel(status, locale)}
     </span>
   )
 }
 
 export function RunStatusBadge({ status }: { status: string }) {
+  const { locale } = useLocale()
   return (
     <span className={cn('inline-flex rounded px-2 py-0.5 text-[11px] font-medium', toneClass(status))}>
-      {runStatusLabel(status)}
+      {runStatusLabel(status, locale)}
+    </span>
+  )
+}
+
+export function OutcomeBadge({
+  value,
+  locale,
+}: {
+  value?: string | null
+  locale?: FiLocale
+}) {
+  const { locale: ctxLocale } = useLocale()
+  const loc = locale || ctxLocale
+  if (!value) {
+    return <span className="text-foreground-muted">—</span>
+  }
+  return (
+    <span className={cn('inline-flex rounded px-2 py-0.5 text-[11px] font-medium', outcomeTone(value))}>
+      {outcomeLabel(value, loc)}
+    </span>
+  )
+}
+
+export function ContainmentBadge({
+  value,
+  locale,
+}: {
+  value?: string | null
+  locale?: FiLocale
+}) {
+  const { locale: ctxLocale } = useLocale()
+  const loc = locale || ctxLocale
+  if (!value) {
+    return <span className="text-foreground-muted">—</span>
+  }
+  return (
+    <span
+      className={cn('inline-flex rounded px-2 py-0.5 text-[11px] font-medium', containmentTone(value))}
+    >
+      {containmentLabel(value, loc)}
     </span>
   )
 }

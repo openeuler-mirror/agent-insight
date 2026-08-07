@@ -137,6 +137,14 @@ def _timestamp(value: Any) -> str | None:
     return None
 
 
+def _xiaoo_event_call_id(payload: dict[str, Any]) -> str:
+    for key in ("call_id", "callID", "callId"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
 def _first_nonempty_str(*values: Any) -> str | None:
     for value in values:
         if isinstance(value, str) and value.strip():
@@ -212,6 +220,54 @@ def _model_fields_from_request(request_file: Path) -> tuple[str | None, str | No
     return _parse_model_option(options.get("model"))
 
 
+def _model_fields_from_resolved_llm(events_file: Path) -> tuple[str | None, str | None]:
+    """Read adapter-persisted effective LLM (e.g. xiaoO overlay [llm])."""
+
+    path = events_file.parent / "resolved-llm.json"
+    if not path.is_file():
+        return None, None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None, None
+    if not isinstance(payload, dict):
+        return None, None
+    model_id = _first_nonempty_str(payload.get("modelID"), payload.get("model_id"))
+    provider_id = _first_nonempty_str(
+        payload.get("providerID"),
+        payload.get("provider_id"),
+    )
+    if model_id is None and provider_id is None:
+        composed = _first_nonempty_str(payload.get("id"))
+        if composed:
+            return _parse_model_option(composed)
+    return model_id, provider_id
+
+
+def _stamp_assistant_model_fields(
+    interactions: list[dict[str, Any]],
+    *,
+    model_id: str | None,
+    provider_id: str | None,
+) -> None:
+    """Fill missing per-turn modelID/providerID so LLM nodes can render identity."""
+
+    if not model_id and not provider_id:
+        return
+    for item in interactions:
+        if item.get("role") != "assistant":
+            continue
+        if model_id and not (
+            isinstance(item.get("modelID"), str) and str(item.get("modelID")).strip()
+        ):
+            item["modelID"] = model_id
+        if provider_id and not (
+            isinstance(item.get("providerID"), str)
+            and str(item.get("providerID")).strip()
+        ):
+            item["providerID"] = provider_id
+
+
 def _model_fields_from_events(events_file: Path) -> tuple[str | None, str | None]:
     """Read model early from OpenCode session/message events (before session.json)."""
     if not events_file.is_file():
@@ -250,7 +306,7 @@ def resolve_document_model_fields(
     events_file: Path | None = None,
     request_file: Path | None = None,
 ) -> tuple[str | None, str | None]:
-    """Resolve model for document summary: interactions → request → early events."""
+    """Resolve model: interactions → request → resolved-llm → early events."""
     model_id, provider_id = _summarize_model_fields(interactions)
     if model_id is not None and provider_id is not None:
         return model_id, provider_id
@@ -263,6 +319,13 @@ def resolve_document_model_fields(
         if model_id is not None and provider_id is not None:
             return model_id, provider_id
     if events_file is not None:
+        snap_model, snap_provider = _model_fields_from_resolved_llm(events_file)
+        if model_id is None:
+            model_id = snap_model
+        if provider_id is None:
+            provider_id = snap_provider
+        if model_id is not None and provider_id is not None:
+            return model_id, provider_id
         ev_model, ev_provider = _model_fields_from_events(events_file)
         if model_id is None:
             model_id = ev_model
@@ -546,6 +609,9 @@ def _fallback_interactions_from_events(
     tool_only: list[dict[str, Any]] = []
     final_replies: list[dict[str, Any]] = []
     xiaoo_tool_counter = 0
+    # message_id -> first seen timestamp (from ras/FI llm.turn events)
+    llm_turns: dict[str, Any] = {}
+    llm_turn_order: list[str] = []
 
     with events_file.open("r", encoding="utf-8") as stream:
         for line in stream:
@@ -639,9 +705,16 @@ def _fallback_interactions_from_events(
                 event_type = payload.get("type")
                 tool_name = payload.get("tool")
                 tool_input = payload.get("input")
-                if event_type == "tool.pre":
-                    xiaoo_tool_counter += 1
-                    call_id = f"xiaoo-tool-{xiaoo_tool_counter}"
+                if event_type in {"llm.turn", "llm.stream"}:
+                    mid = payload.get("message_id")
+                    if isinstance(mid, str) and mid.strip() and mid not in llm_turns:
+                        llm_turns[mid] = timestamp or recorded_at
+                        llm_turn_order.append(mid)
+                elif event_type == "tool.pre":
+                    call_id = _xiaoo_event_call_id(payload)
+                    if not call_id:
+                        xiaoo_tool_counter += 1
+                        call_id = f"xiaoo-tool-{xiaoo_tool_counter}"
                     tool_pending[call_id] = _pending_tool_interaction(
                         tool=tool_name,
                         args=tool_input,
@@ -660,9 +733,10 @@ def _fallback_interactions_from_events(
                         if outcome_type in {None, "success", "completed"}
                         else str(outcome_type)
                     )
+                    call_id = _xiaoo_event_call_id(payload)
                     matched_id, existing = _pop_pending_tool(
                         tool_pending,
-                        call_id="",
+                        call_id=call_id,
                         tool_name=tool_name,
                     )
                     tool_only.append(
@@ -671,7 +745,7 @@ def _fallback_interactions_from_events(
                             tool=tool_name,
                             args=tool_input,
                             output=output,
-                            call_id=matched_id,
+                            call_id=matched_id or call_id,
                             timestamp=timestamp,
                             recorded_at=recorded_at,
                             status=status,
@@ -683,13 +757,27 @@ def _fallback_interactions_from_events(
                 if not isinstance(text, str) or not text.strip():
                     text = payload.get("text") if isinstance(payload.get("text"), str) else None
                 if isinstance(text, str) and text.strip():
-                    final_replies.append(
-                        {
-                            "role": "assistant",
-                            "content": text,
-                            **({"timestamp": timestamp} if timestamp else {}),
+                    mid = None
+                    created = None
+                    if llm_turn_order:
+                        mid = llm_turn_order[-1]
+                        created = llm_turns.get(mid)
+                    reply: dict[str, Any] = {
+                        "role": "assistant",
+                        "content": text,
+                    }
+                    if mid:
+                        reply["messageID"] = mid
+                    # Prefer stream-start time (OC created) over CLI completion time.
+                    ts = created or timestamp
+                    if ts:
+                        reply["timestamp"] = ts
+                    if created or timestamp:
+                        reply["timeInfo"] = {
+                            "created": created or timestamp,
+                            "completed": timestamp or created,
                         }
-                    )
+                    final_replies.append(reply)
 
     # Flush unmatched tool.pre / tool.before as still-running interactions.
     for pending_id, pending in list(tool_pending.items()):
@@ -893,8 +981,10 @@ class InsightInteractionsMapper:
         prompt: str | None = None,
         session_id: str | None = None,
     ) -> TraceDocument:
+        from .session_ids import resolve_platform_session_id
+
         interactions: list[dict[str, Any]] = []
-        task_id = session_id or artifacts.run_id
+        session_payload: Any = None
 
         if artifacts.session_file.is_file():
             try:
@@ -903,10 +993,6 @@ class InsightInteractionsMapper:
                 )
             except (json.JSONDecodeError, OSError):
                 session_payload = None
-            if isinstance(session_payload, dict):
-                sid = session_payload.get("session_id")
-                if isinstance(sid, str) and sid.strip():
-                    task_id = sid
             for entry in _extract_messages(
                 session_payload.get("messages")
                 if isinstance(session_payload, dict)
@@ -929,9 +1015,20 @@ class InsightInteractionsMapper:
             events_file=artifacts.events_file,
             request_file=artifacts.request_file,
         )
+        _stamp_assistant_model_fields(
+            interactions,
+            model_id=model_id,
+            provider_id=provider_id,
+        )
 
+        task_id, _aligned = resolve_platform_session_id(
+            session_file=artifacts.session_file,
+            platform_session_id=session_id,
+        )
+        # TraceDocument.task_id is Trace ID when aligned; empty when not so
+        # collect does not invent a fake join key.
         return TraceDocument(
-            task_id=task_id,
+            task_id=task_id or "",
             framework=framework,
             run_id=artifacts.run_id,
             interactions=interactions,

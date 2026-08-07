@@ -23,24 +23,27 @@ class CaptureSummary:
 
 
 def _session_id(payload: Any) -> str | None:
+    """Extract OpenCode session id — never message/part ``info.id``."""
+
     if not isinstance(payload, dict):
         return None
     for key in ("sessionID", "session_id"):
         value = payload.get(key)
-        if isinstance(value, str):
-            return value
+        if isinstance(value, str) and value.strip():
+            return value.strip()
 
     properties = payload.get("properties")
     if isinstance(properties, dict):
-        value = properties.get("sessionID")
-        if isinstance(value, str):
-            return value
+        value = properties.get("sessionID") or properties.get("session_id")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
 
         info = properties.get("info")
         if isinstance(info, dict):
-            value = info.get("id") or info.get("sessionID")
-            if isinstance(value, str):
-                return value
+            # message.updated uses info.id = msg_…; only accept sessionID.
+            value = info.get("sessionID") or info.get("session_id")
+            if isinstance(value, str) and value.strip():
+                return value.strip()
     return None
 
 

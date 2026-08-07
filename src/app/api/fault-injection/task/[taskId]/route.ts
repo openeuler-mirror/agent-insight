@@ -52,6 +52,8 @@ export async function GET(
           outcome: run.outcome,
           fault_containment_status: run.faultContainmentStatus,
           judge_reason: run.judgeReason,
+          // Trace ID (= platform session / Execution.taskId). Keep session_task_id alias.
+          trace_id: run.sessionTaskId,
           session_task_id: run.sessionTaskId,
           error: run.error,
         })),

@@ -865,7 +865,7 @@ model FaultInjectionRun {
   stopRequested            Boolean  @default(false)
   queuedAt                 DateTime @default(now())
   claimedAt                DateTime?
-  sessionTaskId            String?  // aligns Session.taskId / Execution.taskId
+  sessionTaskId            String?  // Trace ID = Session.taskId / Execution.taskId (platform session)
   faultActivated           Boolean  @default(false)
   faultActivatedAt         DateTime?
   requestJson              String?

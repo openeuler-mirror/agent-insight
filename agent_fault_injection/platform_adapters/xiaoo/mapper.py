@@ -60,6 +60,12 @@ class XiaoOTrajectoryMapper:
                     value = payload.get(key)
                     if isinstance(value, str) and value:
                         session_id = value
+                data = payload.get("data")
+                if isinstance(data, dict):
+                    for key in ("session_id", "sessionID"):
+                        value = data.get(key)
+                        if isinstance(value, str) and value:
+                            session_id = value
             if kind == "fault.activation.started":
                 fault_started = True
             elif kind == "fault.activation.completed":
@@ -67,13 +73,12 @@ class XiaoOTrajectoryMapper:
             elif kind == "xiaoo.cli" and isinstance(payload, dict):
                 if payload.get("type") == "error":
                     session_error = True
-                if payload.get("type") == "response":
-                    session_idle = True
-                data = payload.get("data")
-                if isinstance(data, dict):
-                    sid = data.get("session_id")
-                    if isinstance(sid, str) and sid:
-                        session_id = sid
+                if payload.get("type") in {"response", "session_start", "done", "complete"}:
+                    session_idle = session_idle or payload.get("type") in {
+                        "response",
+                        "done",
+                        "complete",
+                    }
 
         return CaptureSummary(
             session_id=session_id,

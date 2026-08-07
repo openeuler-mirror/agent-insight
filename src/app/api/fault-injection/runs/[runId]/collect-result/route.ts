@@ -44,9 +44,24 @@ export async function POST(
       return NextResponse.json({ ok: true, status: 'stopped' })
     }
 
+    const rawTaskId =
+      (typeof body.taskId === 'string' && body.taskId.trim()) ||
+      (typeof body.sessionTaskId === 'string' && body.sessionTaskId.trim()) ||
+      null
+    // Never fall back to runId as the RAS alignment key.
+    const sessionAligned =
+      body.sessionAligned === true ||
+      (body.sessionAligned !== false &&
+        typeof rawTaskId === 'string' &&
+        rawTaskId.length > 0 &&
+        rawTaskId !== runId &&
+        !/^ras-\d{8}T/.test(rawTaskId) &&
+        !/^(msg_|prt_)/.test(rawTaskId))
+
     const payload = {
       runId,
-      taskId: body.taskId || body.sessionTaskId || runId,
+      taskId: sessionAligned ? rawTaskId : null,
+      sessionAligned,
       framework: body.framework || run.platform,
       fault: body.fault || run.fault,
       injectionMethod: body.injectionMethod,

@@ -21,6 +21,7 @@
 | **服务端/客户端分离（FI）** | [designs/server-client-split.md](designs/server-client-split.md) · [phase2 SDD](../design/fi-server-client-split/phase2-requirements-design.md) |
 | FI 模块架构摘要 | [designs/architecture.md](designs/architecture.md) |
 | 内置故障覆盖矩阵 | [designs/fault-catalog.md](designs/fault-catalog.md) |
+| **Lane A：新增故障模式** | [guides/lane-a-add-fault.md](guides/lane-a-add-fault.md) |
 | 运行时注入（prompt / tool_result / intercept） | [designs/runtime-middleware-fault-injection.md](designs/runtime-middleware-fault-injection.md) |
 | Task / Worker API（Insight） | [designs/modules/task-orchestration.md](designs/modules/task-orchestration.md) |
 | 最短启用 | [guides/getting-started.md](guides/getting-started.md) |
@@ -38,7 +39,8 @@
 | [insight-trace-compat.md](designs/insight-trace-compat.md) | interactions 契约 | ✅ |
 | [agent-semantic-fault-injection-survey.md](designs/agent-semantic-fault-injection-survey.md) | 语义层 FI 调研附录 | ✅ |
 | [task-orchestration.md](designs/modules/task-orchestration.md) | Insight FI API | ✅ |
-| [fault-inject.md](designs/modules/fault-inject.md) | 六类 injection_method | ✅（route 未落地） |
+| [fault-inject.md](designs/modules/fault-inject.md) | 六类 injection_method + 扩展车道 | ✅（route 未落地） |
+| [lane-a-add-fault.md](guides/lane-a-add-fault.md) | Lane A 新增故障模式操作指南 | ✅ |
 | [platform-adapter-contract.md](designs/modules/platform-adapter-contract.md) | Adapter 接入契约 | ✅ |
 | [platform-adapter-spi.md](designs/modules/platform-adapter-spi.md) | Template Method SPI 对照 | ✅ |
 | [opencode-rewrite-spike.md](designs/opencode-rewrite-spike.md) | OpenCode 消镜像 spike | ✅ |

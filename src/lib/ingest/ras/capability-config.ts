@@ -333,20 +333,62 @@ export function exportCapabilityYaml(envelope: RasCapabilityConfigEnvelope): str
   ].join('\n')
 }
 
+export type RasCapabilitySyncMeta = {
+  revision?: number
+  updatedAt?: string
+  contentHash?: string
+}
+
 /**
- * Merge Insight capability config into a local OpenCode ras config.json object.
- * Preserves service / insight / unknown keys; updates logical AgentRAS fields.
+ * Merge Insight capability config into a local ras config.json object.
+ * Preserves service / insight / unknown keys; stores per-platform slices under
+ * ``platforms.<platform>`` with optional ``syncedFrom`` provenance
+ * (shared file, multi-platform safe). Legacy ``ras_config_revision(s)`` are dropped.
  */
 export function mergeCapabilityIntoLocalRasConfig(
   localConfig: Record<string, unknown>,
   body: RasCapabilityConfigBody,
-  revision: number,
+  syncMeta: RasCapabilitySyncMeta | number = {},
+  platform: RasCapabilityPlatformId = 'opencode',
 ): Record<string, unknown> {
   const root = { ...localConfig }
   const prevRas =
     root.agent_ras && typeof root.agent_ras === 'object' && !Array.isArray(root.agent_ras)
       ? ({ ...(root.agent_ras as Record<string, unknown>) } as Record<string, unknown>)
       : {}
+
+  const meta: RasCapabilitySyncMeta =
+    typeof syncMeta === 'number' ? { revision: syncMeta } : syncMeta ?? {}
+
+  const syncedFrom: Record<string, unknown> = {}
+  if (typeof meta.contentHash === 'string' && meta.contentHash) {
+    syncedFrom.contentHash = meta.contentHash
+  }
+  if (typeof meta.revision === 'number' && Number.isFinite(meta.revision)) {
+    syncedFrom.revision = meta.revision
+  }
+  if (typeof meta.updatedAt === 'string' && meta.updatedAt) {
+    syncedFrom.updatedAt = meta.updatedAt
+  }
+
+  const slice: Record<string, unknown> = {
+    enabled: body.enabled,
+    detectors: {
+      repeat_tool: { ...body.detectors.repeat_tool },
+      llm_thinking_loop: { ...body.detectors.llm_thinking_loop },
+    },
+    recovery: { ...body.recovery },
+  }
+  if (Object.keys(syncedFrom).length > 0) {
+    slice.syncedFrom = syncedFrom
+  }
+
+  const prevPlatforms =
+    prevRas.platforms && typeof prevRas.platforms === 'object' && !Array.isArray(prevRas.platforms)
+      ? ({ ...(prevRas.platforms as Record<string, unknown>) } as Record<string, unknown>)
+      : {}
+
+  prevPlatforms[platform] = slice
 
   const nextRas: Record<string, unknown> = {
     ...prevRas,
@@ -356,11 +398,12 @@ export function mergeCapabilityIntoLocalRasConfig(
       llm_thinking_loop: { ...body.detectors.llm_thinking_loop },
     },
     recovery: { ...body.recovery },
-    ras_config_revision: revision,
+    // Keep flat llm_thinking_loop in sync for older plugin readers.
+    llm_thinking_loop: { ...body.detectors.llm_thinking_loop },
+    platforms: prevPlatforms,
   }
-
-  // Keep flat llm_thinking_loop in sync for older plugin readers.
-  nextRas.llm_thinking_loop = { ...body.detectors.llm_thinking_loop }
+  delete nextRas.ras_config_revisions
+  delete nextRas.ras_config_revision
 
   root.agent_ras = nextRas
   return root

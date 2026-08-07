@@ -1,3 +1,5 @@
+export type FiLocale = 'zh' | 'en'
+
 export type FaultSubmode = {
   id: string
   name: string
@@ -96,40 +98,77 @@ export function normalizeFault(raw: Record<string, unknown>): FaultItem {
   }
 }
 
-export function faultDisplayName(fault: FaultItem): string {
+export function faultDisplayName(fault: FaultItem, locale: FiLocale = 'zh'): string {
+  if (locale === 'en') return fault.labelEn || fault.label || fault.name
   return fault.labelZh || fault.label || fault.name
 }
 
-export function injectionMethodLabel(fault: FaultItem): string {
+export function injectionMethodLabel(fault: FaultItem, locale: FiLocale = 'zh'): string {
   if (fault.injectionMethodLabel) return fault.injectionMethodLabel
-  if (!fault.injectionMethod || fault.injectionMethod === 'skill_inject') return 'Skill 注入'
+  if (!fault.injectionMethod || fault.injectionMethod === 'skill_inject') {
+    return locale === 'zh' ? 'Skill 注入' : 'Skill inject'
+  }
   return fault.injectionMethod
 }
 
-export const OUTCOME_LABELS: Record<string, string> = {
-  occurred: '注入成功',
-  not_occurred: '注入未发生',
-  skipped: '跳过',
+type LocaleMap = Record<string, { zh: string; en: string }>
+
+const OUTCOME_I18N: LocaleMap = {
+  occurred: { zh: '注入成功', en: 'Occurred' },
+  not_occurred: { zh: '注入未发生', en: 'Not occurred' },
+  skipped: { zh: '跳过', en: 'Skipped' },
 }
 
-export const CONTAINMENT_LABELS: Record<string, string> = {
-  unresolved: '未恢复',
-  recovered: '已恢复',
-  prevented: '已阻断',
-  // Insufficient containment evidence — not "missing execution trajectory".
-  inconclusive: '证据不足',
-  // Legacy stored results (pre-rename).
-  no_trace: '证据不足',
+const CONTAINMENT_I18N: LocaleMap = {
+  unresolved: { zh: '未恢复', en: 'Unresolved' },
+  recovered: { zh: '已恢复', en: 'Recovered' },
+  prevented: { zh: '已阻断', en: 'Prevented' },
+  inconclusive: { zh: '证据不足', en: 'Inconclusive' },
+  no_trace: { zh: '证据不足', en: 'Inconclusive' },
 }
 
-export const RUN_STATUS_LABELS: Record<string, string> = {
-  queued: '排队中',
-  collecting: '采集中',
-  judging: '评判中',
-  completed: '运行完成',
-  judge_skipped: '评判跳过',
-  failed: '失败',
-  stopped: '已停止',
+const RUN_STATUS_I18N: LocaleMap = {
+  queued: { zh: '排队中', en: 'Queued' },
+  collecting: { zh: '采集中', en: 'Collecting' },
+  judging: { zh: '评判中', en: 'Judging' },
+  completed: { zh: '运行完成', en: 'Completed' },
+  judge_skipped: { zh: '评判跳过', en: 'Judge skipped' },
+  failed: { zh: '失败', en: 'Failed' },
+  stopped: { zh: '已停止', en: 'Stopped' },
+}
+
+/** @deprecated Prefer outcomeLabel(value, locale) */
+export const OUTCOME_LABELS: Record<string, string> = Object.fromEntries(
+  Object.entries(OUTCOME_I18N).map(([k, v]) => [k, v.zh]),
+)
+
+/** @deprecated Prefer containmentLabel(value, locale) */
+export const CONTAINMENT_LABELS: Record<string, string> = Object.fromEntries(
+  Object.entries(CONTAINMENT_I18N).map(([k, v]) => [k, v.zh]),
+)
+
+/** @deprecated Prefer fiRunStatusLabel(value, locale) */
+export const RUN_STATUS_LABELS: Record<string, string> = Object.fromEntries(
+  Object.entries(RUN_STATUS_I18N).map(([k, v]) => [k, v.zh]),
+)
+
+function pickLocaleLabel(map: LocaleMap, value: string, locale: FiLocale): string {
+  return map[value]?.[locale] ?? value
+}
+
+export function outcomeLabel(value?: string | null, locale: FiLocale = 'zh'): string {
+  if (!value) return '—'
+  return pickLocaleLabel(OUTCOME_I18N, value, locale)
+}
+
+export function containmentLabel(value?: string | null, locale: FiLocale = 'zh'): string {
+  if (!value) return '—'
+  return pickLocaleLabel(CONTAINMENT_I18N, value, locale)
+}
+
+export function fiRunStatusLabel(value?: string | null, locale: FiLocale = 'zh'): string {
+  if (!value) return '—'
+  return pickLocaleLabel(RUN_STATUS_I18N, value, locale)
 }
 
 export function labelMap(map: Record<string, string>, value?: string | null): string {
