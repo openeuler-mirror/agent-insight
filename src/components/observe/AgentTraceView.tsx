@@ -538,6 +538,8 @@ export interface AgentTraceViewProps {
     traceKey?: string;
     /** RAS 异常事件标记列表，用于在链路中高亮异常节点 */
     anomalies?: RasAnomalyMarker[];
+    /** When set, select + scroll to the injected `kind:'ras'` event with this marker id. */
+    focusRasMarkerId?: string | null;
     /** RAS 告警、处置请求和处置结果，合并到根 Agent 行为时间线 */
     reliabilityEvents?: RasTimelineEvent[];
     /** Optional class for the dual-pane grid (e.g. FI run page fillHeight). */
@@ -553,6 +555,7 @@ export default function AgentTraceView({
     rootExecutionId,
     traceKey,
     anomalies,
+    focusRasMarkerId,
     reliabilityEvents,
     panelClassName,
 }: AgentTraceViewProps) {
@@ -988,6 +991,23 @@ export default function AgentTraceView({
             document.querySelector(`[data-span-key="${key}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }, 80);
     };
+
+    useEffect(() => {
+        if (!focusRasMarkerId || !tree) return;
+        let found: string | null = null;
+        walkTree(tree, (node) => {
+            if (found) return;
+            node.events.forEach((event, idx) => {
+                if (found) return;
+                if (event.kind !== 'ras') return;
+                const markerId = (event.args as { rasMarkerId?: string } | undefined)?.rasMarkerId;
+                if (markerId === focusRasMarkerId) found = eventKey(node.id, idx);
+            });
+        });
+        if (found) onJumpToKey(found);
+        // Intentionally depend on focusRasMarkerId + tree identity; onJumpToKey closes over allSpans.
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- jump when external strip selects a marker
+    }, [focusRasMarkerId, tree]);
 
     const ctxValue: TraceCtxValue = {
         searchQuery, matchedKeys, activeMatchKey,
