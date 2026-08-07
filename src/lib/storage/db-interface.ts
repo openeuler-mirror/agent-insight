@@ -1,9 +1,9 @@
 import { loadAgentInsightEnv } from '@/lib/env';
 loadAgentInsightEnv();
 
-import { PrismaClient } from '@prisma/client';
 import { Pool, PoolClient, QueryResult } from 'pg';
 import { v4 as uuidv4 } from 'uuid';
+import { createPrismaClient, ExtendedPrismaClient } from '@/lib/storage/prisma-client';
 
 export interface DatabaseAdapter {
     // Session operations
@@ -67,13 +67,13 @@ export interface DatabaseAdapter {
     updateUserGuideState(user: string, data: any): Promise<any>;
 
     // Raw access if needed (use sparingly)
-    getClient(): PrismaClient | Pool;
+    getClient(): ExtendedPrismaClient | Pool;
 }
 
 class PrismaAdapter implements DatabaseAdapter {
-    private client: PrismaClient;
+    private client: ExtendedPrismaClient;
 
-    constructor(client: PrismaClient) {
+    constructor(client: ExtendedPrismaClient) {
         this.client = client;
     }
 
@@ -1073,8 +1073,8 @@ export function getDatabaseAdapter(): DatabaseAdapter {
     }
 
     if (shouldLog) console.log('[DatabaseAdapter] Using Prisma Adapter');
-    const globalForPrisma = global as unknown as { prisma: PrismaClient };
-    const prismaClient = globalForPrisma.prisma || new PrismaClient();
+    const globalForPrisma = global as unknown as { prisma: ExtendedPrismaClient };
+    const prismaClient = globalForPrisma.prisma || createPrismaClient();
     if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prismaClient;
     
     return new PrismaAdapter(prismaClient);
