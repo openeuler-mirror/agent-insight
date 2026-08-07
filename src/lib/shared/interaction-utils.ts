@@ -29,11 +29,14 @@ export function jiuwenSkillNameFromToolCall(name: string | undefined, rawArgs: a
 export function normalizeInteractions(messages: any[]): any[] {
   if (!messages || !Array.isArray(messages) || messages.length === 0) return []
 
-  const isInteractions = messages.some((m) => m && (m.requestMessages || m.responseMessage))
-  if (isInteractions) return messages
-
   const normalized: any[] = []
   let turnMessages: any[] = []
+
+  const isNormalizedInteraction = (message: any) => {
+    if (!message || typeof message !== "object" || Array.isArray(message)) return false
+    if (Object.prototype.hasOwnProperty.call(message, "responseMessage")) return true
+    return !Object.prototype.hasOwnProperty.call(message, "role") && Array.isArray(message.requestMessages)
+  }
 
   const flushTurn = (msgs: any[]) => {
     if (msgs.length === 0) return
@@ -61,6 +64,13 @@ export function normalizeInteractions(messages: any[]): any[] {
 
   for (const msg of messages) {
     if (!msg) continue
+    if (isNormalizedInteraction(msg)) {
+      flushTurn(turnMessages)
+      turnMessages = []
+      normalized.push(msg)
+      continue
+    }
+
     const role = msg.role || "unknown"
     const isUserBoundary = role === "user" || role === "opencode"
 
