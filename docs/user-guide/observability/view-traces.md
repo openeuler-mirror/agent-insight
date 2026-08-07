@@ -72,7 +72,7 @@ description: "查看、筛选并分析一次执行的完整 Trace"
 
 其中，**执行状态**只表示 Trace 生命周期：平台收到明确完成信号后显示成功；尚未收到完成信号时显示运行中。它不等同于评测状态；部分接入会在有最终回答且能从 Trace 时间戳推断完成点时补齐完成时间，例如 Hermes 可使用根 span/交互时间，OpenCode 可使用 `session.idle`；Hermes/OpenCode 的旧记录或漏写完成信号时还会用 60 秒静默窗口兜底，但不会只凭回答文本判定完成。
 
-**环内 RAS（可靠性）与普通链路追踪解耦。** 「运行观测 / 链路追踪」（`/trace`）列表与详情**不再**展示 RAS 徽章或异常面板；环内异常与恢复请到侧栏 **AgentRAS 可靠性 / 可靠性观测**（`/agent-ras/trace`）查看。该页以当前账号的根 Trace（Execution）左连接 RAS 事件，并合并**仅有 RAS 事件、无 Execution** 的任务（例如 xiaoO CLI / inproc 注入），同时包含无故障 Trace 和异常 Trace。详情页在有 Execution / OTel 时复用完整链路视图并叠 RAS 标记；**仅有 RAS 事件**时改为展示 RAS 检测与恢复处置时间线（不会凭空造出 Agent 对话链路）。xiaoO 在会话结束（idle/完成）时会旁路上报 OTLP（`service.name=xiaoo`，`session.id` 与 RAS `taskId` 对齐），因此正常跑完的任务应同时有 Execution 与 RAS 事件，详情即可看到完整 Trace。
+**环内 RAS（可靠性）与普通链路追踪解耦。** 「运行观测 / 链路追踪」（`/trace`）列表与详情**不再**展示 RAS 徽章或异常面板；环内异常与恢复请到侧栏 **AgentRAS 可靠性 / 可靠性观测**（`/agent-ras/trace`）查看。该页以当前账号的根 Trace（Execution）左连接 RAS 事件，并合并**仅有 RAS 事件、无 Execution** 的任务（例如 xiaoO CLI / inproc 注入），同时包含无故障 Trace 和异常 Trace。详情页顶部用**可折叠 RAS 异常摘要条**（默认收起，保证完整链路在首屏）：按**一次 anomaly 检测**一行展示类型、严重度、摘要、操作标签与恢复结果；同一次故障的恢复 / 中断等操作并入该行，不拆成多张卡。点选行会联动下方链路树中的 RAS 节点，右侧展示完整摘要与动作详情。有 Execution / OTel 时复用完整链路视图并叠 RAS 标记；**仅有 RAS 事件、无平台对话链路**时不展示链路树。xiaoO 在会话结束（idle/完成）时会旁路上报 OTLP（`service.name=xiaoo`，`session.id` 与 RAS `taskId` 对齐），因此正常跑完的任务应同时有 Execution 与 RAS 事件，详情即可看到完整 Trace。
 
 可靠性观测列表额外提供 **平台**列，以及顶部的 **搜索 / 平台 / 状态** 过滤（交互对齐「链路追踪」页的筛选条，字段集更精简）。**RAS 处置**列按「有故障 → 是否启动恢复 → 恢复是否成功」展示，与 **执行状态** 解耦：
 
@@ -143,12 +143,12 @@ Langfuse / LangGraph Trace 继续使用原有的 Agent Trace 界面，并把根�
 - Token 消耗
 - 成本或资源消耗估算
 
-若该 Trace 关联到环内 RAS 事件，摘要下方会出现 **环内检测（RAS）** 面板：异常种类、严重度、已下发动作（如 `abort_stream`）与摘要文案。这与「故障诊断 / Fault」不同——Fault 是事后 AgentDebug；RAS 标记是环内实时检测落库后的只读回放。
+若在 **可靠性观测详情**（`/agent-ras/trace/[taskId]`）打开关联了环内 RAS 的 Trace，顶部会出现可折叠的 **RAS 异常**摘要条：严重度分布芯片、单故障单行列表（操作如 `abort_stream` 以标签展示）。默认收起以免挤占链路；展开后点选某行可定位完整链路中的 RAS 节点，右侧展示检测摘要与恢复动作/结果。这与「故障诊断 / Fault」不同——Fault 是事后 AgentDebug；RAS 标记是环内实时检测落库后的只读回放。
 
 可靠性详情同时提供两种定位方式：
 
-- **检测点** LLM/Tool/Skill Span 显示 **RAS · 异常类型** 徽标；选中后右侧按「RAS恢复操作 → 对应结果」交错展示。
-- 经宿主写入的恢复通知 / steering 在时间线上标识为 **RAS**（不是 USER）。靠 `action_result.delivery_anchor.message_id` 关联；**不做**正文匹配。时间线不再额外堆叠扁平的「请求处置 / 处置成功」行。
+- **摘要条**（推荐扫读）：一次 anomaly 检测一行；恢复 / 中断操作并入同行标签，不另开多卡。
+- **检测点** 链路树中的 **RAS** 节点；选中后右侧按「RAS恢复操作 → 对应结果」交错展示。经宿主写入的恢复通知 / steering 在时间线上标识为 **RAS**（不是 USER）。靠 `action_result.delivery_anchor.message_id` 关联；**不做**正文匹配。时间线不再额外堆叠扁平的「请求处置 / 处置成功」行。
 
 新产生的事件使用 `messageID + partID` 定位 LLM 输出/思考节点，使用 `callID` 定位工具调用；投递消息另有 `delivery_anchor`。没有精确锚点时检测点仅在一秒时间窗口内兜底匹配，投递行保持 USER。
 

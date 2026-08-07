@@ -8,22 +8,18 @@ import { PageContainer, PageContent } from '@/components/shell/PageContainer';
 import { useLocale } from '@/lib/client/locale-context';
 import { useAuth } from '@/lib/auth/auth-context';
 import { apiFetch } from '@/lib/client/api';
-import { rasKindLabel, rasSeverityLabel, severityToStatusKind, type RasEventRow } from '@/lib/ingest/ras/normalize';
+import { type RasEventRow } from '@/lib/ingest/ras/normalize';
 import AgentTraceView from '@/components/observe/AgentTraceView';
 import type { RawInteraction } from '@/lib/engine/observability/agent-trace';
 import type { LangfuseTraceNode } from '@/lib/ingest/otel/adapters/langfuse-trace';
-import { StatusBadge } from '@/components/feedback/StatusBadge';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Separator } from '@/components/ui/separator';
 import { IdChip } from '@/components/text/IdChip';
 import { EmptyState } from '@/components/feedback/EmptyState';
-import {
-  buildRasTraceMarkers,
-  type RasRecoveryAction,
-} from '@/lib/ingest/ras/trace-markers';
-import { buildRasDeliveryLinks, interleaveRasActions } from '@/lib/ingest/ras/delivery-link';
+import { RasAnomalyStrip } from '@/components/agent-ras/RasAnomalyStrip';
+import { buildRasTraceMarkers } from '@/lib/ingest/ras/trace-markers';
+import { buildRasDeliveryLinks } from '@/lib/ingest/ras/delivery-link';
 
 export default function RasTraceDetailPage({
   params,
@@ -50,6 +46,7 @@ function RasTraceDetailContent({ taskId }: { taskId: string }) {
   const [session, setSession] = useState<ObserveSessionPayload | null>(null);
   const [sessionLoading, setSessionLoading] = useState(true);
   const [sessionError, setSessionError] = useState<string | null>(null);
+  const [selectedMarkerId, setSelectedMarkerId] = useState<string | null>(null);
 
   // Load RAS events
   useEffect(() => {
@@ -142,10 +139,6 @@ function RasTraceDetailContent({ taskId }: { taskId: string }) {
       };
     });
   }, [interactions, locale, rasEvents]);
-  const anomalyMarkerById = useMemo(
-    () => new Map(anomalyMarkers.map(marker => [marker.id, marker])),
-    [anomalyMarkers],
-  );
 
   // Detection + delivery hang on LLM/RAS nodes; do not inject flat 处置成功 rows.
   const reliabilityEvents = useMemo(() => [], []);
@@ -171,97 +164,21 @@ function RasTraceDetailContent({ taskId }: { taskId: string }) {
       />
       <PageContainer>
         <PageContent className="flex flex-col gap-4">
-          {/* RAS Anomaly Events */}
-          <div>
-            <h2 className="text-sm font-semibold text-foreground mb-3">
-              {locale === 'zh' ? 'RAS 可靠性异常事件' : 'RAS Reliability Anomaly Events'}
-              <span className="ml-2 text-foreground-muted font-normal text-xs tabular-nums">
-                {anomalies.length}
-              </span>
-            </h2>
-
-            {rasLoading ? (
-              <div className="space-y-2">
-                <Skeleton className="h-20 w-full rounded-md" />
-                <Skeleton className="h-20 w-full rounded-md" />
-              </div>
-            ) : anomalies.length === 0 ? (
-              <EmptyState
-                title={locale === 'zh' ? '无 RAS 异常事件' : 'No RAS anomaly events'}
-                description={locale === 'zh' ? '该 Trace 暂未检测到 RAS 异常' : 'No RAS anomalies detected for this trace'}
-              />
-            ) : (
-              <div className="space-y-2">
-                {anomalies.map(ev => {
-                  const marker = anomalyMarkerById.get(ev.id);
-                  return (
-                    <div
-                      key={ev.id}
-                      className="rounded-md border border-card-border bg-card p-3"
-                    >
-                      <div className="flex items-center gap-2 flex-wrap mb-2">
-                        {ev.anomalyKind && (
-                          <Badge variant="outline" className="text-[11px]">
-                            {rasKindLabel(ev.anomalyKind, locale === 'zh' ? 'zh' : 'en')}
-                          </Badge>
-                        )}
-                        <StatusBadge
-                          status={severityToStatusKind(ev.severity)}
-                          label={rasSeverityLabel(ev.severity, locale === 'zh' ? 'zh' : 'en')}
-                        />
-                        <span className="text-[11px] text-foreground-muted">
-                          {new Date(ev.ts).toLocaleString()}
-                        </span>
-                      </div>
-                      {ev.summary && (
-                        <p className="text-xs text-foreground-secondary mt-1 leading-relaxed">
-                          {ev.summary}
-                        </p>
-                      )}
-                      {marker && (marker.actions.length > 0 || marker.actionResults.length > 0) ? (
-                        <div className="mt-2 space-y-1.5">
-                          {interleaveRasActions(marker.actions, marker.actionResults).map((step, index) => (
-                            step.kind === 'action' ? (
-                              <RasActionContent
-                                key={`action-${step.action.type}-${index}`}
-                                action={step.action}
-                                locale={locale === 'zh' ? 'zh' : 'en'}
-                              />
-                            ) : (
-                              <div
-                                key={`result-${step.result.action}-${step.result.ts}-${index}`}
-                                className="flex flex-wrap items-center gap-1.5 rounded-md border border-border bg-background-secondary px-2.5 py-1.5 text-[11px] text-foreground-secondary"
-                              >
-                                <Badge variant="outline" className="text-[10px] font-mono">
-                                  {step.result.action}
-                                </Badge>
-                                <span>
-                                  {step.result.ok
-                                    ? (locale === 'zh' ? '成功' : 'ok')
-                                    : (locale === 'zh' ? '失败' : 'failed')}
-                                </span>
-                                {step.result.channel && (
-                                  <span className="text-foreground-muted">· {step.result.channel}</span>
-                                )}
-                                {step.result.error && (
-                                  <span className="basis-full text-error">{step.result.error}</span>
-                                )}
-                                {step.result.message && (
-                                  <pre className="basis-full mt-0.5 max-h-32 overflow-auto whitespace-pre-wrap break-words font-sans text-xs leading-relaxed text-foreground-secondary">
-                                    {step.result.message}
-                                  </pre>
-                                )}
-                              </div>
-                            )
-                          ))}
-                        </div>
-                      ) : null}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
+          {/* RAS Anomaly Events — collapsible strip, one row per anomaly */}
+          {rasLoading ? (
+            <Skeleton className="h-10 w-full rounded-md" />
+          ) : anomalies.length === 0 ? (
+            <EmptyState
+              title={locale === 'zh' ? '无 RAS 异常事件' : 'No RAS anomaly events'}
+              description={locale === 'zh' ? '该 Trace 暂未检测到 RAS 异常' : 'No RAS anomalies detected for this trace'}
+            />
+          ) : (
+            <RasAnomalyStrip
+              markers={anomalyMarkers}
+              selectedMarkerId={selectedMarkerId}
+              onSelect={setSelectedMarkerId}
+            />
+          )}
 
           <Separator />
 
@@ -291,6 +208,7 @@ function RasTraceDetailContent({ taskId }: { taskId: string }) {
                   rootExecutionId={rootExecutionId || taskId}
                   traceKey={taskId}
                   anomalies={anomalyMarkers}
+                  focusRasMarkerId={selectedMarkerId}
                   reliabilityEvents={reliabilityEvents}
                 />
               </div>
@@ -317,31 +235,5 @@ function RasTraceDetailContent({ taskId }: { taskId: string }) {
         </PageContent>
       </PageContainer>
     </>
-  );
-}
-
-function RasActionContent({
-  action,
-  locale,
-}: {
-  action: RasRecoveryAction;
-  locale: 'zh' | 'en';
-}) {
-  return (
-    <div className="rounded-md border border-border bg-background-secondary px-2.5 py-2">
-      <div className="flex items-center gap-2">
-        <Badge variant="secondary" className="text-[10px] font-mono">
-          {action.type}
-        </Badge>
-        <span className="text-[11px] font-medium text-foreground-secondary">
-          {locale === 'zh' ? 'RAS恢复操作' : 'RAS recovery action'}
-        </span>
-      </div>
-      {action.message && (
-        <pre className="mt-1.5 max-h-40 overflow-auto whitespace-pre-wrap break-words font-sans text-xs leading-relaxed text-foreground-secondary">
-          {action.message}
-        </pre>
-      )}
-    </div>
   );
 }
