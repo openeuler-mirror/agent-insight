@@ -58,6 +58,10 @@ function parseFrameworks(raw: string | null): { value: string; label: string }[]
     return FRAMEWORKS.filter(f => wanted.has(f.value));
 }
 
+function queryFlagEnabled(raw: string | null): boolean {
+    return raw !== null && !['0', 'false', 'no'].includes(raw.trim().toLowerCase());
+}
+
 function detectPlatform(request: Request): 'windows' | 'unix' {
     const userAgent = request.headers.get('user-agent') || '';
     const platformHeader = request.headers.get('x-platform') || '';
@@ -81,7 +85,14 @@ function powerShellDoubleQuoted(value: string): string {
     return value.replace(/`/g, '``').replace(/"/g, '`"').replace(/\$/g, '`$');
 }
 
-function generateBashScript(host: string, baseUrl: string, apiKey: string, preselected: { value: string; label: string }[]): string {
+function generateBashScript(
+    host: string,
+    baseUrl: string,
+    apiKey: string,
+    preselected: { value: string; label: string }[],
+    noninteractive: boolean,
+    forceNoKey: boolean,
+): string {
     const qoderJetBrainsPackageUrl = configuredQoderJetBrainsPackageUrl();
     const lines = [
         '#!/bin/bash',
@@ -94,6 +105,19 @@ function generateBashScript(host: string, baseUrl: string, apiKey: string, prese
         'AGENT_INSIGHT_SETUP_API_KEY="' + bashDoubleQuoted(apiKey) + '"',
         'QODER_JETBRAINS_RELEASE_URL="' + bashDoubleQuoted(qoderJetBrainsPackageUrl) + '"',
         'OPENCODE_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/opencode"',
+        'NONINTERACTIVE=' + (noninteractive ? 'true' : 'false'),
+        'NONINTERACTIVE_FRAMEWORKS="' + bashDoubleQuoted(preselected.map(f => f.value).join(',') || 'opencode') + '"',
+        'FORCE_NO_KEY=' + (forceNoKey ? 'true' : 'false'),
+        'for arg in "$@"; do',
+        '    case "$arg" in',
+        '        -y|--yes|--non-interactive|--noninteractive) NONINTERACTIVE=true ;;',
+        '        --no-key|--nokey) FORCE_NO_KEY=true ;;',
+        '        --frameworks=*) NONINTERACTIVE=true; NONINTERACTIVE_FRAMEWORKS="${arg#*=}" ;;',
+        '    esac',
+        'done',
+        'if [ "${AGENT_INSIGHT_NONINTERACTIVE:-}" = "1" ] || [ "${AGENT_INSIGHT_NONINTERACTIVE:-}" = "true" ]; then NONINTERACTIVE=true; fi',
+        'if [ -n "${AGENT_INSIGHT_FRAMEWORKS:-}" ]; then NONINTERACTIVE=true; NONINTERACTIVE_FRAMEWORKS="$AGENT_INSIGHT_FRAMEWORKS"; fi',
+        'if [ "${AGENT_INSIGHT_NO_KEY:-}" = "1" ] || [ "${AGENT_INSIGHT_NO_KEY:-}" = "true" ]; then FORCE_NO_KEY=true; fi',
         '',
         'echo "🚀 Fetching Agent-insight telemetry components from $AGENT_INSIGHT_BASE_URL..."',
         '',
@@ -137,6 +161,7 @@ function generateBashScript(host: string, baseUrl: string, apiKey: string, prese
         // 那段要 npm install inquirer/tsx + npx，内网/离线环境访问不到 registry 就卡死在这里。
         '# 2. Framework selection',
         'SELECTED_FRAMEWORKS="' + preselected.map(f => f.value).join(',') + '"',
+        'if [ "$NONINTERACTIVE" = "true" ]; then SELECTED_FRAMEWORKS="$NONINTERACTIVE_FRAMEWORKS"; fi',
         'if [ -n "$SELECTED_FRAMEWORKS" ]; then',
         '    echo ""',
         '    echo "✅ 将安装以下组件: ' + bashDoubleQuoted(preselected.map(f => f.label).join('、')) + '"',
@@ -387,17 +412,24 @@ function generateBashScript(host: string, baseUrl: string, apiKey: string, prese
         '',
         '# -- API Key Logic --',
         'FINAL_KEY="${AGENT_INSIGHT_SETUP_API_KEY:-$EXISTING_KEY}"',
-        'if [ -n "$AGENT_INSIGHT_SETUP_API_KEY" ]; then',
+        'if [ "$FORCE_NO_KEY" = "true" ]; then',
+        '    FINAL_KEY=""',
+        '    echo "🔑 --no-key: clearing any existing API Key."',
+        'elif [ -n "$AGENT_INSIGHT_SETUP_API_KEY" ]; then',
         '    echo "🔑 Using API Key from setup URL."',
         'elif [ -n "$EXISTING_KEY" ]; then',
         '    echo "🔑 Found existing API Key."',
-        '    read -p "👉 Use existing key? (y/N, Default: y): " USE_EXISTING < /dev/tty',
-        '    if [[ "$USE_EXISTING" =~ ^[Nn]$ ]]; then',
-        '        read -p "👉 Please enter your NEW API Key: " FINAL_KEY < /dev/tty',
+        '    if [ "$NONINTERACTIVE" != "true" ]; then',
+        '        read -p "👉 Use existing key? (y/N, Default: y): " USE_EXISTING < /dev/tty',
+        '        if [[ "$USE_EXISTING" =~ ^[Nn]$ ]]; then',
+        '            read -p "👉 Please enter your NEW API Key: " FINAL_KEY < /dev/tty',
+        '        fi',
         '    fi',
         'else',
         '    echo "🔑 AGENT_INSIGHT_API_KEY is not set."',
-        '    read -p "👉 Please enter your API Key: " FINAL_KEY < /dev/tty',
+        '    if [ "$NONINTERACTIVE" != "true" ]; then',
+        '        read -p "👉 Please enter your API Key: " FINAL_KEY < /dev/tty',
+        '    fi',
         'fi',
         '',
         '# -- Host Logic --',
@@ -405,9 +437,11 @@ function generateBashScript(host: string, baseUrl: string, apiKey: string, prese
         'if [ -n "$EXISTING_HOST" ] && [ "$EXISTING_HOST" != "$AGENT_INSIGHT_HOST" ]; then',
         '    echo "🌐 Current Host in config: $EXISTING_HOST"',
         '    echo "🌐 New Host detected: $AGENT_INSIGHT_HOST"',
-        '    read -p "👉 Change to new Host? (y/N, Default: y): " CHANGE_HOST < /dev/tty',
-        '    if [[ "$CHANGE_HOST" =~ ^[Nn]$ ]]; then',
-        '        FINAL_HOST="$EXISTING_HOST"',
+        '    if [ "$NONINTERACTIVE" != "true" ]; then',
+        '        read -p "👉 Change to new Host? (y/N, Default: y): " CHANGE_HOST < /dev/tty',
+        '        if [[ "$CHANGE_HOST" =~ ^[Nn]$ ]]; then',
+        '            FINAL_HOST="$EXISTING_HOST"',
+        '        fi',
         '    fi',
         'elif [ -z "$EXISTING_HOST" ]; then',
         '    FINAL_HOST="$AGENT_INSIGHT_HOST"',
@@ -645,9 +679,9 @@ function generateBashScript(host: string, baseUrl: string, apiKey: string, prese
         '    echo "  export CLAW_ENABLE_TELEMETRY=1"',
         '    echo "  export OTEL_LOGS_EXPORTER=otlp"',
         '    echo "  export OTEL_METRICS_EXPORTER=none"',
-        '    echo "  export OTEL_EXPORTER_OTLP_LOGS_PROTOCOL=http/protobuf"',
-        '    echo "  export OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=http://127.0.0.1:3000/api/ingest/otel/v1/traces"',
-        '    echo "  export OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf"',
+        '    echo "  export OTEL_EXPORTER_OTLP_LOGS_PROTOCOL=http/json"',
+        '    echo "  export OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=http://127.0.0.1:3000/api/ingest/otel/v1/logs"',
+        '    echo "  export OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/json"',
         '    echo "  export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://127.0.0.1:3000/api/ingest/otel/v1/traces"',
         '    echo "  export OTEL_EXPORTER_OTLP_HEADERS=x-witty-api-key=<your-api-key>"',
         '    echo "  export OTEL_SERVICE_NAME=openclaw"',
@@ -778,7 +812,14 @@ function generateBashScript(host: string, baseUrl: string, apiKey: string, prese
     return lines.join('\n');
 }
 
-function generatePowerShellScript(host: string, baseUrl: string, apiKey: string, preselected: { value: string; label: string }[]): string {
+function generatePowerShellScript(
+    host: string,
+    baseUrl: string,
+    apiKey: string,
+    preselected: { value: string; label: string }[],
+    noninteractive: boolean,
+    forceNoKey: boolean,
+): string {
     const qoderJetBrainsPackageUrl = configuredQoderJetBrainsPackageUrl();
     const lines = [
         '# =============================================================================',
@@ -788,6 +829,12 @@ function generatePowerShellScript(host: string, baseUrl: string, apiKey: string,
         '$AGENT_INSIGHT_HOST = "' + powerShellDoubleQuoted(host) + '"',
         '$AGENT_INSIGHT_BASE_URL = "' + powerShellDoubleQuoted(baseUrl) + '"',
         '$AGENT_INSIGHT_SETUP_API_KEY = "' + powerShellDoubleQuoted(apiKey) + '"',
+        '$NONINTERACTIVE = $' + (noninteractive ? 'true' : 'false'),
+        '$NONINTERACTIVE_FRAMEWORKS = "' + powerShellDoubleQuoted(preselected.map(f => f.value).join(',') || 'opencode') + '"',
+        '$FORCE_NO_KEY = $' + (forceNoKey ? 'true' : 'false'),
+        'if ($env:AGENT_INSIGHT_NONINTERACTIVE -eq "1" -or $env:AGENT_INSIGHT_NONINTERACTIVE -eq "true") { $NONINTERACTIVE = $true }',
+        'if ($env:AGENT_INSIGHT_FRAMEWORKS) { $NONINTERACTIVE = $true; $NONINTERACTIVE_FRAMEWORKS = $env:AGENT_INSIGHT_FRAMEWORKS }',
+        'if ($env:AGENT_INSIGHT_NO_KEY -eq "1" -or $env:AGENT_INSIGHT_NO_KEY -eq "true") { $FORCE_NO_KEY = $true }',
         '$QODER_JETBRAINS_RELEASE_URL = "' + powerShellDoubleQuoted(qoderJetBrainsPackageUrl) + '"',
         '',
         'Write-Host "🚀 Fetching Agent-insight telemetry components from $AGENT_INSIGHT_BASE_URL..."',
@@ -824,6 +871,7 @@ function generatePowerShellScript(host: string, baseUrl: string, apiKey: string,
         // 同 bash 侧：安装页勾选后跳过 inquirer 交互，免去 npm registry 依赖。
         '# 2. Framework selection',
         '$SELECTED_FRAMEWORKS = "' + preselected.map(f => f.value).join(',') + '"',
+        'if ($NONINTERACTIVE) { $SELECTED_FRAMEWORKS = $NONINTERACTIVE_FRAMEWORKS }',
         'if ($SELECTED_FRAMEWORKS) {',
         '    Write-Host ""',
         '    Write-Host "✅ 将安装以下组件: ' + powerShellDoubleQuoted(preselected.map(f => f.label).join('、')) + '"',
@@ -1055,17 +1103,24 @@ function generatePowerShellScript(host: string, baseUrl: string, apiKey: string,
         '',
         '# -- API Key Logic --',
         '$FINAL_KEY = if ($AGENT_INSIGHT_SETUP_API_KEY) { $AGENT_INSIGHT_SETUP_API_KEY } else { $EXISTING_KEY }',
-        'if ($AGENT_INSIGHT_SETUP_API_KEY) {',
+        'if ($FORCE_NO_KEY) {',
+        '    $FINAL_KEY = ""',
+        '    Write-Host "🔑 --no-key: clearing any existing API Key."',
+        '} elseif ($AGENT_INSIGHT_SETUP_API_KEY) {',
         '    Write-Host "🔑 Using API Key from setup URL."',
         '} elseif ($EXISTING_KEY) {',
         '    Write-Host "🔑 Found existing API Key."',
-        '    $USE_EXISTING = Read-Host "👉 Use existing key? (y/N, Default: y)"',
-        '    if ($USE_EXISTING -match \'^[Nn]$\') {',
-        '        $FINAL_KEY = Read-Host "👉 Please enter your NEW API Key"',
+        '    if (-not $NONINTERACTIVE) {',
+        '        $USE_EXISTING = Read-Host "👉 Use existing key? (y/N, Default: y)"',
+        '        if ($USE_EXISTING -match \'^[Nn]$\') {',
+        '            $FINAL_KEY = Read-Host "👉 Please enter your NEW API Key"',
+        '        }',
         '    }',
         '} else {',
         '    Write-Host "🔑 AGENT_INSIGHT_API_KEY is not set."',
-        '    $FINAL_KEY = Read-Host "👉 Please enter your API Key"',
+        '    if (-not $NONINTERACTIVE) {',
+        '        $FINAL_KEY = Read-Host "👉 Please enter your API Key"',
+        '    }',
         '}',
         '',
         '# -- Host Logic --',
@@ -1073,9 +1128,11 @@ function generatePowerShellScript(host: string, baseUrl: string, apiKey: string,
         'if ($EXISTING_HOST -and ($EXISTING_HOST -ne $AGENT_INSIGHT_HOST)) {',
         '    Write-Host "🌐 Current Host in config: $EXISTING_HOST"',
         '    Write-Host "🌐 New Host detected: $AGENT_INSIGHT_HOST"',
-        '    $CHANGE_HOST = Read-Host "👉 Change to new Host? (y/N, Default: y)"',
-        '    if ($CHANGE_HOST -match \'^[Nn]$\') {',
-        '        $FINAL_HOST = $EXISTING_HOST',
+        '    if (-not $NONINTERACTIVE) {',
+        '        $CHANGE_HOST = Read-Host "👉 Change to new Host? (y/N, Default: y)"',
+        '        if ($CHANGE_HOST -match \'^[Nn]$\') {',
+        '            $FINAL_HOST = $EXISTING_HOST',
+        '        }',
         '    }',
         '} elseif (-not $EXISTING_HOST) {',
         '    $FINAL_HOST = $AGENT_INSIGHT_HOST',
@@ -1311,9 +1368,9 @@ function generatePowerShellScript(host: string, baseUrl: string, apiKey: string,
         '    Write-Host "  `$env:CLAW_ENABLE_TELEMETRY = 1"',
         '    Write-Host "  `$env:OTEL_LOGS_EXPORTER = \"otlp\""',
         '    Write-Host "  `$env:OTEL_METRICS_EXPORTER = \"none\""',
-        '    Write-Host "  `$env:OTEL_EXPORTER_OTLP_LOGS_PROTOCOL = \"http/protobuf\""',
-        '    Write-Host "  `$env:OTEL_EXPORTER_OTLP_LOGS_ENDPOINT = \"http://127.0.0.1:3000/api/ingest/otel/v1/traces\""',
-        '    Write-Host "  `$env:OTEL_EXPORTER_OTLP_TRACES_PROTOCOL = \"http/protobuf\""',
+        '    Write-Host "  `$env:OTEL_EXPORTER_OTLP_LOGS_PROTOCOL = \"http/json\""',
+        '    Write-Host "  `$env:OTEL_EXPORTER_OTLP_LOGS_ENDPOINT = \"http://127.0.0.1:3000/api/ingest/otel/v1/logs\""',
+        '    Write-Host "  `$env:OTEL_EXPORTER_OTLP_TRACES_PROTOCOL = \"http/json\""',
         '    Write-Host "  `$env:OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = \"http://127.0.0.1:3000/api/ingest/otel/v1/traces\""',
         '    Write-Host "  `$env:OTEL_EXPORTER_OTLP_HEADERS = \"x-witty-api-key=<your-api-key>\""',
         '    Write-Host "  `$env:OTEL_SERVICE_NAME = \"openclaw\""',
@@ -1444,21 +1501,47 @@ export async function GET(request: Request) {
     const baseUrl = `${protocol}://${host}${urlPrefix}`;
     const skillInsightHost = baseUrl;
     const apiKey = requestUrl.searchParams.get('key') || requestUrl.searchParams.get('apiKey') || '';
+    const noninteractiveRaw = requestUrl.searchParams.get('yes')
+        ?? requestUrl.searchParams.get('y')
+        ?? requestUrl.searchParams.get('noninteractive');
+    const noninteractive = queryFlagEnabled(noninteractiveRaw);
+    const forceNoKey = queryFlagEnabled(
+        requestUrl.searchParams.get('nokey') ?? requestUrl.searchParams.get('no-key'),
+    );
     // ?frameworks=opencode,claude —— 安装页勾选后带上，脚本据此跳过终端内的交互选择。
     // 不传（老命令）时行为不变，仍在终端里问一遍。
-    const preselected = parseFrameworks(requestUrl.searchParams.get('frameworks'));
+    const requestedFrameworks = parseFrameworks(
+        requestUrl.searchParams.get('frameworks') ?? requestUrl.searchParams.get('framework'),
+    );
+    const preselected = requestedFrameworks.length > 0
+        ? requestedFrameworks
+        : noninteractive ? [FRAMEWORKS[0]] : [];
 
     const platform = detectPlatform(request);
 
     if (platform === 'windows') {
-        const script = generatePowerShellScript(skillInsightHost, baseUrl, apiKey, preselected);
+        const script = generatePowerShellScript(
+            skillInsightHost,
+            baseUrl,
+            apiKey,
+            preselected,
+            noninteractive,
+            forceNoKey,
+        );
         return new NextResponse(script, {
             headers: {
                 'Content-Type': 'text/plain; charset=utf-8',
             },
         });
     } else {
-        const script = generateBashScript(skillInsightHost, baseUrl, apiKey, preselected);
+        const script = generateBashScript(
+            skillInsightHost,
+            baseUrl,
+            apiKey,
+            preselected,
+            noninteractive,
+            forceNoKey,
+        );
         return new NextResponse(script, {
             headers: {
                 'Content-Type': 'text/x-shellscript',

@@ -99,9 +99,9 @@ const ENDPOINTS: { label: string; url: string; handler: string; sources: string[
     sources: ["scripts/opencode_uploader_client.js"],
   },
   {
-    label: "openclaw watcher 上报（OTel 桥接）",
-    url: "/api/ingest/openclaw/upload",
-    handler: "api/ingest/openclaw/upload",
+    label: "openclaw watcher 无损上报",
+    url: "/api/ingest/upload",
+    handler: "api/ingest/upload",
     sources: ["scripts/openclaw_watcher_client.ts"],
   },
   {
@@ -200,6 +200,18 @@ test("opencode uploader 真实拼出来的上报路径能解析到 ingest/upload
       `host=${host} 时 uploader 打的是 ${urlPath}，没落到 ingest/upload`,
     )
   }
+})
+
+test("openclaw 旧专用地址仍保留兼容 handler", async () => {
+  assert.equal(
+    await resolveRoute("/api/ingest/openclaw/upload"),
+    "api/ingest/openclaw/upload",
+  )
+})
+
+test("openclaw watcher 的实际 request path 使用 canonical ingest/upload", () => {
+  const source = fs.readFileSync(path.join(process.cwd(), "scripts/openclaw_watcher_client.ts"), "utf8")
+  assert.match(source, /path:\s*`\$\{basePath\}\/api\/ingest\/upload`/)
 })
 
 test("legacy alias 的静态 source 上不能有真实路由（否则别名被遮蔽）", async () => {

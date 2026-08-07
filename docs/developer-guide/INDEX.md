@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `cfc3ea36348b3d4ce8a6a7bfef841c1e0d21505d` (`cfc3ea3`) |
-| Branch | `new-dev-8-5` |
-| Date | 2026-08-04T20:18:14+08:00 |
-| Author | openeuler-ci-bot |
-| Subject | `!258 对齐trace回流数据集和理想输出数据集字段名` |
+| Commit | `035e93d2f4402628c52d0ff5ac270a88c21680bc` (`035e93d2`) |
+| Branch | `codex/openclaw-otel-rebuild` |
+| Date | 2026-08-07T09:44:03+08:00 |
+| Author | gyctl |
+| Subject | `chore: 合并 upstream/master 并解决 OpenClaw 冲突` |
 
-**如何更新：** `git diff cfc3ea3 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff 035e93d2 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。

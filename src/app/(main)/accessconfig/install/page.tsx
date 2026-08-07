@@ -93,6 +93,7 @@ export default function AccessInstallPage() {
         // 逗号在 query 里合法，不编码——命令行里可读性更好。
         const query = [
             apiKey ? `key=${encodeURIComponent(apiKey)}` : '',
+            frameworks.length ? `yes=1` : '',
             frameworks.length ? `frameworks=${frameworks.join(',')}` : '',
         ].filter(Boolean).join('&');
         const suffix = query ? `?${query}` : '';

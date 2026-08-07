@@ -1,10 +1,5 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import fs from "node:fs"
-import os from "node:os"
-import path from "node:path"
-
-import { readOtelTraceEventsForSession } from "@/lib/ingest/claude-otel/spool"
 
 /**
  * 上报正文契约：**打过去的东西，落到存储时还得在**。
@@ -110,57 +105,45 @@ test("opencode 上报 payload：多轮交互一轮都不能少", async () => {
   assert.equal(derived.llm_call_count, 2, "两轮助手回复应计 2 次 LLM 调用")
 })
 
-// ── openclaw 桥接：这条路会丢正文，把它固化成用例 ──────────────────────────────
+// ── openclaw watcher：新旧地址都复用通用无损上传语义 ─────────────────────────
 
-test("openclaw 桥接：整包 record 只留 query/final_result，interactions 会被丢掉", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bridge-"))
-  const previous = process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR
-  process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR = dir
+test("openclaw 兼容入口原样委托通用 upload，并复用 400/401 身份错误", async () => {
+  const [{ POST: legacyPost }, { POST: canonicalPost }] = await Promise.all([
+    import("@/app/api/ingest/openclaw/upload/route"),
+    import("@/app/api/ingest/upload/route"),
+  ])
+  assert.equal(legacyPost, canonicalPost, "兼容入口必须直接复用 canonical handler，不能再转换 record")
+
+  const previousDefaultUser = process.env.AGENT_INSIGHT_DEFAULT_INGEST_USER
+  process.env.AGENT_INSIGHT_DEFAULT_INGEST_USER = ""
   try {
-    const { POST } = await import("@/app/api/ingest/openclaw/upload/route")
-    const taskId = "ses_bridge_contract"
-    const response = await POST(new Request("http://localhost/api/ingest/openclaw/upload", {
+    const record = {
+      task_id: "ses_bridge_contract",
+      framework: "openclaw",
+      query: "你能做什么？",
+      final_result: "星期一",
+      interactions: [
+        { role: "user", content: "你能做什么？" },
+        { role: "assistant", content: "软件工程：代码编写、调试、重构、测试" },
+        { role: "user", content: "今天星期几？" },
+        { role: "assistant", content: "星期一" },
+      ],
+    }
+    const missingIdentity = await legacyPost(new Request("http://localhost/api/ingest/openclaw/upload", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        task_id: taskId,
-        framework: "openclaw",
-        query: "你能做什么？",
-        final_result: "星期一",
-        model: "GLM-5",
-        tokens: 100,
-        skills: ["demo-skill"],
-        interactions: [
-          { role: "user", content: "你能做什么？" },
-          { role: "assistant", content: "软件工程：代码编写、调试、重构、测试" },
-          { role: "user", content: "今天星期几？" },
-          { role: "assistant", content: "星期一" },
-        ],
-      }),
+      body: JSON.stringify(record),
     }))
+    assert.equal(missingIdentity.status, 400)
 
-    assert.equal(response.status, 200)
-    const events = readOtelTraceEventsForSession(taskId, dir)
-
-    // 1 条 llm span + 每个 skill 一条 tool span——**不是**每轮对话一条
-    assert.deepEqual(events.map(e => e.kind), ["llm", "tool"])
-    assert.ok(events.every(e => e.serviceName === "openclaw"), "桥接产物一律标记为 openclaw")
-    assert.equal(events[0].attributes?.["gen_ai.prompt"], "你能做什么？")
-    assert.equal(events[0].attributes?.["gen_ai.completion"], "星期一")
-
-    // 这是本条用例的重点：中间两轮正文在产物里找不到。
-    // 桥接是给 openclaw watcher 的有损转换，任何带完整 interactions 的上报都不该走这里，
-    // 该走 /api/ingest/upload（见 ingest-endpoint-contract）。
-    const serialized = JSON.stringify(events)
-    assert.ok(
-      !serialized.includes("软件工程：代码编写、调试、重构、测试"),
-      "如果这条断言开始失败，说明桥接已经保留正文了——好事，但要连同注释和端点契约一起复核",
-    )
-    assert.equal(events[0].usage?.input_tokens, 50, "tokens 被对半劈成 input/output，不是真实分布")
-    assert.equal(events[0].usage?.output_tokens, 50)
+    const invalidKey = await legacyPost(new Request("http://localhost/api/ingest/openclaw/upload", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-witty-api-key": "invalid-openclaw-contract-key" },
+      body: JSON.stringify({ ...record, user: "untrusted-user" }),
+    }))
+    assert.equal(invalidKey.status, 401)
   } finally {
-    if (previous === undefined) delete process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR
-    else process.env.AGENT_INSIGHT_OTEL_TRACE_SPOOL_DIR = previous
-    fs.rmSync(dir, { recursive: true, force: true })
+    if (previousDefaultUser === undefined) delete process.env.AGENT_INSIGHT_DEFAULT_INGEST_USER
+    else process.env.AGENT_INSIGHT_DEFAULT_INGEST_USER = previousDefaultUser
   }
 })
