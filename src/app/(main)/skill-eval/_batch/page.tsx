@@ -639,7 +639,7 @@ export function BatchEvaluation({
     useEffect(() => {
         if (!user) return;
         Promise.all([
-            apiFetch(`/api/agent-datasets?user=${encodeURIComponent(user)}`).then(r => r.json()),
+            apiFetch(`/api/agent-datasets?user=${encodeURIComponent(user)}&view=reference`).then(r => r.json()),
             apiFetch(`/api/skills?user=${encodeURIComponent(user)}`).then(r => r.json()),
             apiFetch(`/api/user-evaluators?user=${encodeURIComponent(user)}`).then(r => r.json()).catch(() => []),
         ]).then(([ds, sk, ev]) => {

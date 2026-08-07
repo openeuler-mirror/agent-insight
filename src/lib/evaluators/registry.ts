@@ -37,6 +37,10 @@ const PRESET_META: Record<string, EvaluatorMeta> = {
   'preset-content-controversy': { category: 'res', requires: [] },
   'preset-content-gender-discrimination': { category: 'res', requires: [] },
   'preset-creativity-expression': { category: 'res', requires: [] },
+  'preset-safety-maliciousness': { category: 'res', requires: [] },
+  'preset-safety-harmfulness': { category: 'res', requires: [] },
+  'preset-safety-criminality': { category: 'res', requires: [] },
+  'preset-safety-refusal': { category: 'res', requires: [] },
 };
 
 const DEFAULT_META: EvaluatorMeta = { category: 'res', requires: [] };

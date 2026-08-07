@@ -316,6 +316,7 @@ export function normalizeClaudeOtlpTraces(
             kind: classification.kind,
             serviceName,
             user: opts.authenticatedUser || asOptionalString(attributes['witty.user.id']) || resourceUser,
+            authenticatedUser: Boolean(opts.authenticatedUser),
             model: firstOptionalString(
               attributes['gen_ai.request.model'],
               attributes['llm.request.model'],

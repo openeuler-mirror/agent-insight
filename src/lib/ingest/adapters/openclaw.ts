@@ -9,6 +9,11 @@ export const openclawAdapter: FrameworkAdapter = {
     onboard: "plugin",
     platform: "openclaw",
   },
+  capabilities: {
+    skills: true,
+    subagentTree: true,
+    skillScope: "session",
+  },
   extractSkills: extractSkillsWithVersionsFromOpenClawSession,
   normalizeForStorage: (interactions: CanonicalInteraction[]) => {
     if (!Array.isArray(interactions)) return interactions;
