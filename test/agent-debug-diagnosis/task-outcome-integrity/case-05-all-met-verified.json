@@ -1,0 +1,389 @@
+{
+  "format": "agent-insight.trace-bundle",
+  "version": 1,
+  "exportedAt": "2026-08-07T11:00:00.000Z",
+  "rootExecutionId": "jiuwen-case-05-all-met-verified-81409",
+  "executions": [
+    {
+      "execution": {
+        "id": "jiuwen-case-05-all-met-verified-81409",
+        "taskId": "jiuwen-case-05-all-met-verified-81409",
+        "query": "实现 power 函数、补充测试、更新文档，并运行测试确认，全部有证据。",
+        "framework": "jiuwenswarm",
+        "tokens": 77500,
+        "cost": null,
+        "latency": 10.0,
+        "toolCallCount": 10,
+        "llmCallCount": 10,
+        "inputTokens": 75000,
+        "outputTokens": 2500,
+        "toolCallErrorCount": null,
+        "cacheReadInputTokens": null,
+        "cacheCreationInputTokens": null,
+        "maxSingleCallTokens": null,
+        "reasoningTokens": null,
+        "timestamp": "2026-08-07T11:00:00.000Z",
+        "model": "deepseek-v4-flash",
+        "endpoint": null,
+        "answerScore": 95,
+        "isAnswerCorrect": true,
+        "judgmentReason": "实现+测试+文档全部完成，验证发生在最后一次修改之后，证据最新",
+        "diagnostics": {
+          "expectedViolation": null
+        },
+        "agentName": "TeamLeader",
+        "finalResult": "全部满足且有最新验证证据。",
+        "skill": null,
+        "skills": [],
+        "invokedSkills": [],
+        "skillVersion": null,
+        "label": "jiuwenswarm",
+        "observedAgents": [
+          "TeamLeader",
+          "reporter"
+        ],
+        "parentExecutionId": null,
+        "rootExecutionId": null,
+        "agentSessionId": null,
+        "subagentType": null,
+        "subagentName": null,
+        "isSubagent": false
+      },
+      "session": {
+        "taskId": "jiuwen-case-05-all-met-verified-81409",
+        "label": "jiuwenswarm",
+        "query": "实现 power 函数、补充测试、更新文档，并运行测试确认，全部有证据。",
+        "startTime": "2026-08-07T11:00:00.000Z",
+        "endTime": "2026-08-07T11:00:10.000Z",
+        "interactions": [
+          {
+            "role": "user",
+            "content": "实现 power 函数、补充测试、更新文档，并运行测试确认，全部有证据。",
+            "kind": "user",
+            "requirements": [
+              {
+                "obligation": "实现power函数",
+                "action": {
+                  "tool": "edit",
+                  "file": "src/math.js"
+                }
+              },
+              {
+                "obligation": "补充测试",
+                "action": {
+                  "tool": "write",
+                  "file": "src/math.spec.js"
+                }
+              },
+              {
+                "obligation": "更新文档",
+                "action": {
+                  "tool": "edit",
+                  "file": "README.md"
+                }
+              },
+              {
+                "obligation": "运行测试确认",
+                "action": {
+                  "tool": "test",
+                  "file": "src/math.spec.js"
+                }
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "组建团队，实现 power。",
+            "kind": "scenario",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "build_team_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "build_team",
+                  "arguments": "[{\"display_name\": \"函数小队\", \"team_desc\": \"实现 power 函数。\", \"leader_display_name\": \"队长\", \"leader_desc\": \"组织实现。\"}, {\"session\": \"session:jiuwen-case-05-all-met-verified-81409\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 0,
+              "completed": 400
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "创建任务 pw_t，要求实现+测试+文档+验证（结构化义务含 action 锚点）。",
+            "kind": "scenario",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "create_task_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "create_task",
+                  "arguments": "[{\"tasks\": [{\"task_id\": \"pw_t\", \"title\": \"实现power\", \"content\": \"实现 power 函数。\", \"requirements\": [{\"obligation\": \"实现power函数\", \"action\": {\"tool\": \"edit\", \"file\": \"src/math.js\"}}, {\"obligation\": \"补充测试\", \"action\": {\"tool\": \"write\", \"file\": \"src/math.spec.js\"}}, {\"obligation\": \"更新文档\", \"action\": {\"tool\": \"edit\", \"file\": \"README.md\"}}, {\"obligation\": \"运行测试确认\", \"action\": {\"tool\": \"test\", \"file\": \"src/math.spec.js\"}}]}]}, {\"session\": \"session:jiuwen-case-05-all-met-verified-81409\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 400,
+              "completed": 800
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "派 reporter 执行。",
+            "kind": "scenario",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "spawn_teammate_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "spawn_teammate",
+                  "arguments": "[{\"member_name\": \"reporter\", \"display_name\": \"实现员\", \"desc\": \"实现 power。\", \"prompt\": \"实现并全面验证。\"}, {\"session\": \"session:jiuwen-case-05-all-met-verified-81409\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 800,
+              "completed": 1200
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "通知开始。",
+            "kind": "scenario",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"*\", \"content\": \"实现 power。\"}, {\"session\": \"session:jiuwen-case-05-all-met-verified-81409\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 1200,
+              "completed": 1600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-all-met-verified_reporter",
+            "content": "实现 power。",
+            "kind": "scenario",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "edit_reporter",
+                "type": "function",
+                "function": {
+                  "name": "edit",
+                  "arguments": "[{\"file\": \"src/math.js\", \"content\": \"export function power(a,b){return a**b;}\"}, {\"session\": \"session:jiuwen-case-05-all-met-verified-81409\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 1600,
+              "completed": 2000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-all-met-verified_reporter",
+            "content": "补充测试。",
+            "kind": "scenario",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "write_reporter",
+                "type": "function",
+                "function": {
+                  "name": "write",
+                  "arguments": "[{\"file\": \"src/math.spec.js\", \"content\": \"test power\"}, {\"session\": \"session:jiuwen-case-05-all-met-verified-81409\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 2000,
+              "completed": 2400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-all-met-verified_reporter",
+            "content": "更新文档。",
+            "kind": "scenario",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "edit_reporter",
+                "type": "function",
+                "function": {
+                  "name": "edit",
+                  "arguments": "[{\"file\": \"README.md\", \"content\": \"## power\"}, {\"session\": \"session:jiuwen-case-05-all-met-verified-81409\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 2400,
+              "completed": 2800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-all-met-verified_reporter",
+            "content": "运行测试确认。",
+            "kind": "scenario",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "test_reporter",
+                "type": "function",
+                "function": {
+                  "name": "test",
+                  "arguments": "[{\"task_id\": \"pw_t\", \"result\": \"PASS\"}, {\"session\": \"session:jiuwen-case-05-all-met-verified-81409\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 2800,
+              "completed": 3200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-05-all-met-verified_reporter",
+            "content": "全部完成且测试通过。",
+            "kind": "scenario",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_reporter",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"team_leader\", \"content\": \"power 完成\", \"summary\": \"reporter 完整交付\", \"deliverable\": true}, {\"session\": \"session:jiuwen-case-05-all-met-verified-81409\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 3200,
+              "completed": 3600
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "全部义务满足且验证证据最新。",
+            "kind": "scenario",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-05-all-met-verified-81409\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'pw_t','status':'completed'}],'count':1} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 3600,
+              "completed": 4000
+            }
+          }
+        ],
+        "model": "deepseek-v4-flash"
+      }
+    }
+  ]
+}

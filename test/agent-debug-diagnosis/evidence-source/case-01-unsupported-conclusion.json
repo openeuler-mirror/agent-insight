@@ -1,0 +1,224 @@
+{
+  "format": "agent-insight.trace-bundle",
+  "version": 1,
+  "exportedAt": "2026-08-07T04:00:00.000Z",
+  "rootExecutionId": "jiuwen-case-01-unsupported-conclusion-38818",
+  "executions": [
+    {
+      "execution": {
+        "id": "jiuwen-case-01-unsupported-conclusion-38818",
+        "taskId": "jiuwen-case-01-unsupported-conclusion-38818",
+        "query": "说明项目使用的 Node.js 默认版本。",
+        "framework": "jiuwenswarm",
+        "tokens": 49600,
+        "cost": null,
+        "latency": 10.0,
+        "toolCallCount": 5,
+        "llmCallCount": 6,
+        "inputTokens": 48000,
+        "outputTokens": 1600,
+        "toolCallErrorCount": null,
+        "cacheReadInputTokens": null,
+        "cacheCreationInputTokens": null,
+        "maxSingleCallTokens": null,
+        "reasoningTokens": null,
+        "timestamp": "2026-08-07T04:00:00.000Z",
+        "model": "deepseek-v4-flash",
+        "endpoint": null,
+        "agentName": "TeamLeader",
+        "finalResult": "完成。Node 默认版本为 20。",
+        "skill": null,
+        "skills": [],
+        "invokedSkills": [],
+        "skillVersion": null,
+        "label": "jiuwenswarm",
+        "observedAgents": [
+          "TeamLeader",
+          "reporter"
+        ],
+        "parentExecutionId": null,
+        "rootExecutionId": null,
+        "agentSessionId": null,
+        "subagentType": null,
+        "subagentName": null,
+        "isSubagent": false
+      },
+      "session": {
+        "taskId": "jiuwen-case-01-unsupported-conclusion-38818",
+        "label": "jiuwenswarm",
+        "query": "说明项目使用的 Node.js 默认版本。",
+        "startTime": "2026-08-07T04:00:00.000Z",
+        "endTime": "2026-08-07T04:00:10.000Z",
+        "interactions": [
+          {
+            "role": "user",
+            "content": "说明项目使用的 Node.js 默认版本。",
+            "kind": "user"
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "组建团队，派成员答复 Node 版本问题。",
+            "kind": "scenario",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "build_team_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "build_team",
+                  "arguments": "[{\"display_name\": \"查询小队\", \"team_desc\": \"成员直接答复 Node 版本。\", \"leader_display_name\": \"队长\", \"leader_desc\": \"派成员答复问题。\"}, {\"session\": \"session:jiuwen-case-01-unsupported-conclusion-38818\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 0,
+              "completed": 500
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "派 reporter 答复。",
+            "kind": "scenario",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "spawn_teammate_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "spawn_teammate",
+                  "arguments": "[{\"member_name\": \"reporter\", \"display_name\": \"答复员\", \"desc\": \"直接答复 Node 版本。\", \"prompt\": \"直接给出 Node 版本结论。\"}, {\"session\": \"session:jiuwen-case-01-unsupported-conclusion-38818\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 400,
+              "completed": 800
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "通知开始。",
+            "kind": "scenario",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"*\", \"content\": \"答复 Node 版本。\"}, {\"session\": \"session:jiuwen-case-01-unsupported-conclusion-38818\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 800,
+              "completed": 1200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-01-unsupported-conclusion_reporter",
+            "content": "根据我的了解，项目默认 Node 版本是 20。",
+            "kind": "scenario",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 1200,
+              "completed": 1600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-01-unsupported-conclusion_reporter",
+            "content": "",
+            "kind": "scenario",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_reporter",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"team_leader\", \"content\": \"Node 默认版本是 20\", \"summary\": \"reporter 答复 Node 版本 20\"}, {\"session\": \"session:jiuwen-case-01-unsupported-conclusion-38818\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 1600,
+              "completed": 2000
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "收到答复，汇总。",
+            "kind": "scenario",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-01-unsupported-conclusion-38818\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'q1','status':'claimed','assignee':'reporter'}],'count':1} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 2000,
+              "completed": 2400
+            }
+          }
+        ],
+        "model": "deepseek-v4-flash"
+      }
+    }
+  ]
+}

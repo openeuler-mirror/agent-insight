@@ -1,0 +1,1845 @@
+{
+  "format": "agent-insight.trace-bundle",
+  "version": 1,
+  "exportedAt": "2026-08-07T07:00:00.000Z",
+  "rootExecutionId": "jiuwen-case-03-latency-runaway-24780",
+  "executions": [
+    {
+      "execution": {
+        "id": "jiuwen-case-03-latency-runaway-24780",
+        "taskId": "jiuwen-case-03-latency-runaway-24780",
+        "query": "逐批执行耗时任务。",
+        "framework": "jiuwenswarm",
+        "tokens": 241420,
+        "cost": 0.1293,
+        "latency": 2959.3,
+        "toolCallCount": 42,
+        "llmCallCount": 53,
+        "inputTokens": 226000,
+        "outputTokens": 10850,
+        "toolCallErrorCount": null,
+        "cacheReadInputTokens": 0,
+        "cacheCreationInputTokens": 0,
+        "maxSingleCallTokens": null,
+        "reasoningTokens": 4570,
+        "timestamp": "2026-08-07T07:00:00.000Z",
+        "model": "deepseek-v4-flash",
+        "endpoint": null,
+        "agentName": "TeamLeader",
+        "finalResult": "完成。",
+        "skill": null,
+        "skills": [],
+        "invokedSkills": [],
+        "skillVersion": null,
+        "label": "jiuwenswarm",
+        "observedAgents": [
+          "TeamLeader",
+          "reporter"
+        ],
+        "parentExecutionId": null,
+        "rootExecutionId": null,
+        "agentSessionId": null,
+        "subagentType": null,
+        "subagentName": null,
+        "isSubagent": false
+      },
+      "session": {
+        "taskId": "jiuwen-case-03-latency-runaway-24780",
+        "label": "jiuwenswarm",
+        "query": "逐批执行耗时任务。",
+        "startTime": "2026-08-07T07:00:00.000Z",
+        "endTime": "2026-08-07T07:49:19.300Z",
+        "interactions": [
+          {
+            "role": "user",
+            "content": "逐批执行耗时任务。"
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "组建团队，执行任务。",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 200,
+              "total": 9500
+            },
+            "durationMs": 400,
+            "inputLength": 36000,
+            "outputLength": 1200,
+            "isCompaction": false,
+            "isSummary": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "build_team_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "build_team",
+                  "arguments": "[{\"display_name\": \"耗时小队\", \"team_desc\": \"逐批执行耗时任务。\", \"leader_display_name\": \"队长\", \"leader_desc\": \"组织耗时任务执行。\"}, {\"session\": \"session:jiuwen-case-03-latency-runaway-24780\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 0,
+              "completed": 400
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "派 reporter 执行耗时任务。",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 200,
+              "total": 9500
+            },
+            "durationMs": 400,
+            "inputLength": 36000,
+            "outputLength": 1200,
+            "isCompaction": false,
+            "isSummary": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "spawn_teammate_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "spawn_teammate",
+                  "arguments": "[{\"member_name\": \"reporter\", \"display_name\": \"执行员\", \"desc\": \"执行耗时任务。\", \"prompt\": \"逐批执行耗时任务。\"}, {\"session\": \"session:jiuwen-case-03-latency-runaway-24780\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 400,
+              "completed": 800
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "通知开始。",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 200,
+              "total": 9500
+            },
+            "durationMs": 400,
+            "inputLength": 36000,
+            "outputLength": 1200,
+            "isCompaction": false,
+            "isSummary": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"*\", \"content\": \"执行任务。\"}, {\"session\": \"session:jiuwen-case-03-latency-runaway-24780\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 800,
+              "completed": 1200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第1批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 1000,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"batch\": 1}, {\"session\": \"session:jiuwen-case-03-latency-runaway-24780\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 1200,
+              "completed": 2200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第2批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 1200,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 2200,
+              "completed": 3400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第3批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 1400,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"batch\": 3}, {\"session\": \"session:jiuwen-case-03-latency-runaway-24780\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 3400,
+              "completed": 4800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第4批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 1600,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 4800,
+              "completed": 6400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第5批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 2000,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"batch\": 5}, {\"session\": \"session:jiuwen-case-03-latency-runaway-24780\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 6400,
+              "completed": 8400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第6批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 2500,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 8400,
+              "completed": 10900
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第7批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 3000,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"batch\": 7}, {\"session\": \"session:jiuwen-case-03-latency-runaway-24780\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 10900,
+              "completed": 13900
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第8批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 4000,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 13900,
+              "completed": 17900
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第9批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 5000,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"batch\": 9}, {\"session\": \"session:jiuwen-case-03-latency-runaway-24780\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 17900,
+              "completed": 22900
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第10批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 6500,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 22900,
+              "completed": 29400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第11批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 8000,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"batch\": 11}, {\"session\": \"session:jiuwen-case-03-latency-runaway-24780\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 29400,
+              "completed": 37400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第12批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 10000,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 37400,
+              "completed": 47400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第13批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 13000,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"batch\": 13}, {\"session\": \"session:jiuwen-case-03-latency-runaway-24780\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 47400,
+              "completed": 60400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第14批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 16000,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 60400,
+              "completed": 76400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第15批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 20000,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"batch\": 15}, {\"session\": \"session:jiuwen-case-03-latency-runaway-24780\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 76400,
+              "completed": 96400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第16批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 25000,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 96400,
+              "completed": 121400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第17批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 30000,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"batch\": 17}, {\"session\": \"session:jiuwen-case-03-latency-runaway-24780\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 121400,
+              "completed": 151400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第18批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 36000,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 151400,
+              "completed": 187400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第19批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 42000,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"batch\": 19}, {\"session\": \"session:jiuwen-case-03-latency-runaway-24780\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 187400,
+              "completed": 229400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第20批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 48000,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 229400,
+              "completed": 277400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第21批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 54000,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"batch\": 21}, {\"session\": \"session:jiuwen-case-03-latency-runaway-24780\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 277400,
+              "completed": 331400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第22批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 60000,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [],
+            "timeInfo": {
+              "created": 331400,
+              "completed": 391400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第23批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 62500,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"batch\": 23}, {\"session\": \"session:jiuwen-case-03-latency-runaway-24780\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 391400,
+              "completed": 453900
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第24批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 65000,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"batch\": 24}, {\"session\": \"session:jiuwen-case-03-latency-runaway-24780\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 453900,
+              "completed": 518900
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第25批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 67500,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"batch\": 25}, {\"session\": \"session:jiuwen-case-03-latency-runaway-24780\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 518900,
+              "completed": 586400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第26批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 70000,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"batch\": 26}, {\"session\": \"session:jiuwen-case-03-latency-runaway-24780\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 586400,
+              "completed": 656400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第27批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 72500,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"batch\": 27}, {\"session\": \"session:jiuwen-case-03-latency-runaway-24780\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 656400,
+              "completed": 728900
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第28批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 75000,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"batch\": 28}, {\"session\": \"session:jiuwen-case-03-latency-runaway-24780\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 728900,
+              "completed": 803900
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第29批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 77500,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"batch\": 29}, {\"session\": \"session:jiuwen-case-03-latency-runaway-24780\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 803900,
+              "completed": 881400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第30批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 80000,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"batch\": 30}, {\"session\": \"session:jiuwen-case-03-latency-runaway-24780\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 881400,
+              "completed": 961400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第31批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 82500,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"batch\": 31}, {\"session\": \"session:jiuwen-case-03-latency-runaway-24780\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 961400,
+              "completed": 1043900
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第32批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 85000,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"batch\": 32}, {\"session\": \"session:jiuwen-case-03-latency-runaway-24780\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 1043900,
+              "completed": 1128900
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第33批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 87500,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"batch\": 33}, {\"session\": \"session:jiuwen-case-03-latency-runaway-24780\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 1128900,
+              "completed": 1216400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第34批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 90000,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"batch\": 34}, {\"session\": \"session:jiuwen-case-03-latency-runaway-24780\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 1216400,
+              "completed": 1306400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第35批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 92500,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"batch\": 35}, {\"session\": \"session:jiuwen-case-03-latency-runaway-24780\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 1306400,
+              "completed": 1398900
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第36批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 95000,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"batch\": 36}, {\"session\": \"session:jiuwen-case-03-latency-runaway-24780\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 1398900,
+              "completed": 1493900
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第37批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 97500,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"batch\": 37}, {\"session\": \"session:jiuwen-case-03-latency-runaway-24780\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 1493900,
+              "completed": 1591400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第38批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 100000,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"batch\": 38}, {\"session\": \"session:jiuwen-case-03-latency-runaway-24780\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 1591400,
+              "completed": 1691400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第39批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 102500,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"batch\": 39}, {\"session\": \"session:jiuwen-case-03-latency-runaway-24780\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 1691400,
+              "completed": 1793900
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第40批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 105000,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"batch\": 40}, {\"session\": \"session:jiuwen-case-03-latency-runaway-24780\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 1793900,
+              "completed": 1898900
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第41批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 107500,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"batch\": 41}, {\"session\": \"session:jiuwen-case-03-latency-runaway-24780\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 1898900,
+              "completed": 2006400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第42批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 110000,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"batch\": 42}, {\"session\": \"session:jiuwen-case-03-latency-runaway-24780\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 2006400,
+              "completed": 2116400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第43批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 112500,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"batch\": 43}, {\"session\": \"session:jiuwen-case-03-latency-runaway-24780\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 2116400,
+              "completed": 2228900
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第44批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 115000,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"batch\": 44}, {\"session\": \"session:jiuwen-case-03-latency-runaway-24780\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 2228900,
+              "completed": 2343900
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第45批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 117500,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"batch\": 45}, {\"session\": \"session:jiuwen-case-03-latency-runaway-24780\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 2343900,
+              "completed": 2461400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第46批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 120000,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"batch\": 46}, {\"session\": \"session:jiuwen-case-03-latency-runaway-24780\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 2461400,
+              "completed": 2581400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第47批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 122500,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"batch\": 47}, {\"session\": \"session:jiuwen-case-03-latency-runaway-24780\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 2581400,
+              "completed": 2703900
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第48批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 125000,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"batch\": 48}, {\"session\": \"session:jiuwen-case-03-latency-runaway-24780\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 2703900,
+              "completed": 2828900
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reporter",
+            "subagent_name": "reporter",
+            "subagent_session_id": "team_case-03-latency-runaway_reporter",
+            "content": "执行第49批",
+            "usage": {
+              "input": 4000,
+              "output": 200,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 80,
+              "total": 4280
+            },
+            "durationMs": 130000,
+            "inputLength": 16000,
+            "outputLength": 400,
+            "isCompaction": false,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_reporter",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\", \"batch\": 49}, {\"session\": \"session:jiuwen-case-03-latency-runaway-24780\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 2828900,
+              "completed": 2958900
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "完成。",
+            "usage": {
+              "input": 3000,
+              "output": 150,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "reasoning": 50,
+              "total": 3200
+            },
+            "durationMs": 400,
+            "inputLength": 12000,
+            "outputLength": 300,
+            "isCompaction": false,
+            "isSummary": true,
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-03-latency-runaway-24780\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 2958900,
+              "completed": 2959300
+            }
+          }
+        ],
+        "model": "deepseek-v4-flash"
+      }
+    }
+  ]
+}
