@@ -1,0 +1,1559 @@
+{
+  "format": "agent-insight.trace-bundle",
+  "version": 1,
+  "exportedAt": "2026-08-07T03:00:00.000Z",
+  "rootExecutionId": "jiuwen-case-04-agent-handover-loop-95553",
+  "executions": [
+    {
+      "execution": {
+        "id": "jiuwen-case-04-agent-handover-loop-95553",
+        "taskId": "jiuwen-case-04-agent-handover-loop-95553",
+        "query": "executor 与 reviewer 协作，互相等待对方结果。",
+        "framework": "jiuwenswarm",
+        "tokens": 341000,
+        "cost": null,
+        "latency": 20.8,
+        "toolCallCount": 52,
+        "llmCallCount": 52,
+        "inputTokens": 330000,
+        "outputTokens": 11000,
+        "toolCallErrorCount": null,
+        "cacheReadInputTokens": null,
+        "cacheCreationInputTokens": null,
+        "maxSingleCallTokens": null,
+        "reasoningTokens": null,
+        "timestamp": "2026-08-07T03:00:00.000Z",
+        "model": "deepseek-v4-flash",
+        "endpoint": null,
+        "agentName": "TeamLeader",
+        "finalResult": "executor 等待 reviewer 审批，reviewer 等待 executor 结果，形成等待闭环（wait_for 互相指向），无法解耦。",
+        "skill": null,
+        "skills": [],
+        "invokedSkills": [],
+        "skillVersion": null,
+        "label": "jiuwenswarm",
+        "observedAgents": [
+          "TeamLeader",
+          "executor",
+          "reviewer"
+        ],
+        "parentExecutionId": null,
+        "rootExecutionId": null,
+        "agentSessionId": null,
+        "subagentType": null,
+        "subagentName": null,
+        "isSubagent": false
+      },
+      "session": {
+        "taskId": "jiuwen-case-04-agent-handover-loop-95553",
+        "label": "jiuwenswarm",
+        "query": "executor 与 reviewer 协作，互相等待对方结果。",
+        "startTime": "2026-08-07T03:00:00.000Z",
+        "endTime": "2026-08-07T03:00:20.800Z",
+        "interactions": [
+          {
+            "role": "user",
+            "content": "executor 与 reviewer 协作，互相等待对方结果。"
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "组建团队并派 executor 与 reviewer。",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "build_team_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "build_team",
+                  "arguments": "[{\"display_name\": \"协作小队\", \"team_desc\": \"executor 与 reviewer 互相等待。\", \"leader_display_name\": \"队长\", \"leader_desc\": \"负责组织协作。\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 0,
+              "completed": 500
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "创建任务 x。",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "create_task_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "create_task",
+                  "arguments": "[{\"tasks\": [{\"task_id\": \"x\", \"title\": \"协作任务\", \"content\": \"需要执行与审批。\"}]}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 400,
+              "completed": 800
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "派 executor。",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "spawn_teammate_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "spawn_teammate",
+                  "arguments": "[{\"member_name\": \"executor\", \"display_name\": \"执行者\", \"desc\": \"执行任务。\", \"prompt\": \"等待 reviewer 审批后执行。\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 800,
+              "completed": 1200
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "派 reviewer。",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "spawn_teammate_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "spawn_teammate",
+                  "arguments": "[{\"member_name\": \"reviewer\", \"display_name\": \"审批者\", \"desc\": \"审批任务。\", \"prompt\": \"等待 executor 结果后审批。\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 1200,
+              "completed": 1600
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "通知开始。",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"*\", \"content\": \"开始协作。\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 1600,
+              "completed": 2000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "executor",
+            "subagent_name": "executor",
+            "subagent_session_id": "team_case-04-agent-handover-loop_executor",
+            "content": "等待 reviewer 审批。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_executor",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"reviewer\", \"content\": \"await approval\", \"summary\": \"执行者等待审批\", \"wait_for\": \"reviewer.approval\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 2000,
+              "completed": 2400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reviewer",
+            "subagent_name": "reviewer",
+            "subagent_session_id": "team_case-04-agent-handover-loop_reviewer",
+            "content": "等待 executor 结果。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_reviewer",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"executor\", \"content\": \"await result\", \"summary\": \"审批者等待结果\", \"wait_for\": \"executor.result\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 2400,
+              "completed": 2800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "executor",
+            "subagent_name": "executor",
+            "subagent_session_id": "team_case-04-agent-handover-loop_executor",
+            "content": "仍在等待审批。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_executor",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"reviewer\", \"content\": \"await approval\", \"summary\": \"执行者等待审批\", \"wait_for\": \"reviewer.approval\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 2800,
+              "completed": 3200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reviewer",
+            "subagent_name": "reviewer",
+            "subagent_session_id": "team_case-04-agent-handover-loop_reviewer",
+            "content": "仍在等待结果。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_reviewer",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"executor\", \"content\": \"await result\", \"summary\": \"审批者等待结果\", \"wait_for\": \"executor.result\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 3200,
+              "completed": 3600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "executor",
+            "subagent_name": "executor",
+            "subagent_session_id": "team_case-04-agent-handover-loop_executor",
+            "content": "仍在等待审批。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_executor",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"reviewer\", \"content\": \"await approval\", \"summary\": \"执行者等待审批\", \"wait_for\": \"reviewer.approval\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 3600,
+              "completed": 4000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reviewer",
+            "subagent_name": "reviewer",
+            "subagent_session_id": "team_case-04-agent-handover-loop_reviewer",
+            "content": "仍在等待结果。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_reviewer",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"executor\", \"content\": \"await result\", \"summary\": \"审批者等待结果\", \"wait_for\": \"executor.result\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 4000,
+              "completed": 4400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "executor",
+            "subagent_name": "executor",
+            "subagent_session_id": "team_case-04-agent-handover-loop_executor",
+            "content": "仍在等待审批。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_executor",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"reviewer\", \"content\": \"await approval\", \"summary\": \"执行者等待审批\", \"wait_for\": \"reviewer.approval\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 4400,
+              "completed": 4800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reviewer",
+            "subagent_name": "reviewer",
+            "subagent_session_id": "team_case-04-agent-handover-loop_reviewer",
+            "content": "仍在等待结果。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_reviewer",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"executor\", \"content\": \"await result\", \"summary\": \"审批者等待结果\", \"wait_for\": \"executor.result\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 4800,
+              "completed": 5200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "executor",
+            "subagent_name": "executor",
+            "subagent_session_id": "team_case-04-agent-handover-loop_executor",
+            "content": "仍在等待审批。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_executor",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"reviewer\", \"content\": \"await approval\", \"summary\": \"执行者等待审批\", \"wait_for\": \"reviewer.approval\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 5200,
+              "completed": 5600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reviewer",
+            "subagent_name": "reviewer",
+            "subagent_session_id": "team_case-04-agent-handover-loop_reviewer",
+            "content": "仍在等待结果。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_reviewer",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"executor\", \"content\": \"await result\", \"summary\": \"审批者等待结果\", \"wait_for\": \"executor.result\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 5600,
+              "completed": 6000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "executor",
+            "subagent_name": "executor",
+            "subagent_session_id": "team_case-04-agent-handover-loop_executor",
+            "content": "仍在等待审批。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_executor",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"reviewer\", \"content\": \"await approval\", \"summary\": \"执行者等待审批\", \"wait_for\": \"reviewer.approval\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 6000,
+              "completed": 6400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reviewer",
+            "subagent_name": "reviewer",
+            "subagent_session_id": "team_case-04-agent-handover-loop_reviewer",
+            "content": "仍在等待结果。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_reviewer",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"executor\", \"content\": \"await result\", \"summary\": \"审批者等待结果\", \"wait_for\": \"executor.result\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 6400,
+              "completed": 6800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "executor",
+            "subagent_name": "executor",
+            "subagent_session_id": "team_case-04-agent-handover-loop_executor",
+            "content": "仍在等待审批。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_executor",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"reviewer\", \"content\": \"await approval\", \"summary\": \"执行者等待审批\", \"wait_for\": \"reviewer.approval\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 6800,
+              "completed": 7200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reviewer",
+            "subagent_name": "reviewer",
+            "subagent_session_id": "team_case-04-agent-handover-loop_reviewer",
+            "content": "仍在等待结果。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_reviewer",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"executor\", \"content\": \"await result\", \"summary\": \"审批者等待结果\", \"wait_for\": \"executor.result\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 7200,
+              "completed": 7600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "executor",
+            "subagent_name": "executor",
+            "subagent_session_id": "team_case-04-agent-handover-loop_executor",
+            "content": "仍在等待审批。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_executor",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"reviewer\", \"content\": \"await approval\", \"summary\": \"执行者等待审批\", \"wait_for\": \"reviewer.approval\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 7600,
+              "completed": 8000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reviewer",
+            "subagent_name": "reviewer",
+            "subagent_session_id": "team_case-04-agent-handover-loop_reviewer",
+            "content": "仍在等待结果。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_reviewer",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"executor\", \"content\": \"await result\", \"summary\": \"审批者等待结果\", \"wait_for\": \"executor.result\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 8000,
+              "completed": 8400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "executor",
+            "subagent_name": "executor",
+            "subagent_session_id": "team_case-04-agent-handover-loop_executor",
+            "content": "仍在等待审批。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_executor",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"reviewer\", \"content\": \"await approval\", \"summary\": \"执行者等待审批\", \"wait_for\": \"reviewer.approval\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 8400,
+              "completed": 8800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reviewer",
+            "subagent_name": "reviewer",
+            "subagent_session_id": "team_case-04-agent-handover-loop_reviewer",
+            "content": "仍在等待结果。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_reviewer",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"executor\", \"content\": \"await result\", \"summary\": \"审批者等待结果\", \"wait_for\": \"executor.result\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 8800,
+              "completed": 9200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "executor",
+            "subagent_name": "executor",
+            "subagent_session_id": "team_case-04-agent-handover-loop_executor",
+            "content": "仍在等待审批。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_executor",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"reviewer\", \"content\": \"await approval\", \"summary\": \"执行者等待审批\", \"wait_for\": \"reviewer.approval\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 9200,
+              "completed": 9600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reviewer",
+            "subagent_name": "reviewer",
+            "subagent_session_id": "team_case-04-agent-handover-loop_reviewer",
+            "content": "仍在等待结果。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_reviewer",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"executor\", \"content\": \"await result\", \"summary\": \"审批者等待结果\", \"wait_for\": \"executor.result\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 9600,
+              "completed": 10000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "executor",
+            "subagent_name": "executor",
+            "subagent_session_id": "team_case-04-agent-handover-loop_executor",
+            "content": "仍在等待审批。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_executor",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"reviewer\", \"content\": \"await approval\", \"summary\": \"执行者等待审批\", \"wait_for\": \"reviewer.approval\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 10000,
+              "completed": 10400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reviewer",
+            "subagent_name": "reviewer",
+            "subagent_session_id": "team_case-04-agent-handover-loop_reviewer",
+            "content": "仍在等待结果。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_reviewer",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"executor\", \"content\": \"await result\", \"summary\": \"审批者等待结果\", \"wait_for\": \"executor.result\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 10400,
+              "completed": 10800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "executor",
+            "subagent_name": "executor",
+            "subagent_session_id": "team_case-04-agent-handover-loop_executor",
+            "content": "仍在等待审批。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_executor",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"reviewer\", \"content\": \"await approval\", \"summary\": \"执行者等待审批\", \"wait_for\": \"reviewer.approval\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 10800,
+              "completed": 11200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reviewer",
+            "subagent_name": "reviewer",
+            "subagent_session_id": "team_case-04-agent-handover-loop_reviewer",
+            "content": "仍在等待结果。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_reviewer",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"executor\", \"content\": \"await result\", \"summary\": \"审批者等待结果\", \"wait_for\": \"executor.result\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 11200,
+              "completed": 11600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "executor",
+            "subagent_name": "executor",
+            "subagent_session_id": "team_case-04-agent-handover-loop_executor",
+            "content": "仍在等待审批。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_executor",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"reviewer\", \"content\": \"await approval\", \"summary\": \"执行者等待审批\", \"wait_for\": \"reviewer.approval\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 11600,
+              "completed": 12000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reviewer",
+            "subagent_name": "reviewer",
+            "subagent_session_id": "team_case-04-agent-handover-loop_reviewer",
+            "content": "仍在等待结果。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_reviewer",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"executor\", \"content\": \"await result\", \"summary\": \"审批者等待结果\", \"wait_for\": \"executor.result\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 12000,
+              "completed": 12400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "executor",
+            "subagent_name": "executor",
+            "subagent_session_id": "team_case-04-agent-handover-loop_executor",
+            "content": "仍在等待审批。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_executor",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"reviewer\", \"content\": \"await approval\", \"summary\": \"执行者等待审批\", \"wait_for\": \"reviewer.approval\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 12400,
+              "completed": 12800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reviewer",
+            "subagent_name": "reviewer",
+            "subagent_session_id": "team_case-04-agent-handover-loop_reviewer",
+            "content": "仍在等待结果。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_reviewer",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"executor\", \"content\": \"await result\", \"summary\": \"审批者等待结果\", \"wait_for\": \"executor.result\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 12800,
+              "completed": 13200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "executor",
+            "subagent_name": "executor",
+            "subagent_session_id": "team_case-04-agent-handover-loop_executor",
+            "content": "仍在等待审批。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_executor",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"reviewer\", \"content\": \"await approval\", \"summary\": \"执行者等待审批\", \"wait_for\": \"reviewer.approval\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 13200,
+              "completed": 13600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reviewer",
+            "subagent_name": "reviewer",
+            "subagent_session_id": "team_case-04-agent-handover-loop_reviewer",
+            "content": "仍在等待结果。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_reviewer",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"executor\", \"content\": \"await result\", \"summary\": \"审批者等待结果\", \"wait_for\": \"executor.result\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 13600,
+              "completed": 14000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "executor",
+            "subagent_name": "executor",
+            "subagent_session_id": "team_case-04-agent-handover-loop_executor",
+            "content": "仍在等待审批。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_executor",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"reviewer\", \"content\": \"await approval\", \"summary\": \"执行者等待审批\", \"wait_for\": \"reviewer.approval\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 14000,
+              "completed": 14400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reviewer",
+            "subagent_name": "reviewer",
+            "subagent_session_id": "team_case-04-agent-handover-loop_reviewer",
+            "content": "仍在等待结果。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_reviewer",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"executor\", \"content\": \"await result\", \"summary\": \"审批者等待结果\", \"wait_for\": \"executor.result\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 14400,
+              "completed": 14800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "executor",
+            "subagent_name": "executor",
+            "subagent_session_id": "team_case-04-agent-handover-loop_executor",
+            "content": "仍在等待审批。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_executor",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"reviewer\", \"content\": \"await approval\", \"summary\": \"执行者等待审批\", \"wait_for\": \"reviewer.approval\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 14800,
+              "completed": 15200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reviewer",
+            "subagent_name": "reviewer",
+            "subagent_session_id": "team_case-04-agent-handover-loop_reviewer",
+            "content": "仍在等待结果。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_reviewer",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"executor\", \"content\": \"await result\", \"summary\": \"审批者等待结果\", \"wait_for\": \"executor.result\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 15200,
+              "completed": 15600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "executor",
+            "subagent_name": "executor",
+            "subagent_session_id": "team_case-04-agent-handover-loop_executor",
+            "content": "仍在等待审批。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_executor",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"reviewer\", \"content\": \"await approval\", \"summary\": \"执行者等待审批\", \"wait_for\": \"reviewer.approval\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 15600,
+              "completed": 16000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reviewer",
+            "subagent_name": "reviewer",
+            "subagent_session_id": "team_case-04-agent-handover-loop_reviewer",
+            "content": "仍在等待结果。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_reviewer",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"executor\", \"content\": \"await result\", \"summary\": \"审批者等待结果\", \"wait_for\": \"executor.result\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 16000,
+              "completed": 16400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "executor",
+            "subagent_name": "executor",
+            "subagent_session_id": "team_case-04-agent-handover-loop_executor",
+            "content": "仍在等待审批。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_executor",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"reviewer\", \"content\": \"await approval\", \"summary\": \"执行者等待审批\", \"wait_for\": \"reviewer.approval\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 16400,
+              "completed": 16800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reviewer",
+            "subagent_name": "reviewer",
+            "subagent_session_id": "team_case-04-agent-handover-loop_reviewer",
+            "content": "仍在等待结果。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_reviewer",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"executor\", \"content\": \"await result\", \"summary\": \"审批者等待结果\", \"wait_for\": \"executor.result\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 16800,
+              "completed": 17200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "executor",
+            "subagent_name": "executor",
+            "subagent_session_id": "team_case-04-agent-handover-loop_executor",
+            "content": "仍在等待审批。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_executor",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"reviewer\", \"content\": \"await approval\", \"summary\": \"执行者等待审批\", \"wait_for\": \"reviewer.approval\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 17200,
+              "completed": 17600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reviewer",
+            "subagent_name": "reviewer",
+            "subagent_session_id": "team_case-04-agent-handover-loop_reviewer",
+            "content": "仍在等待结果。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_reviewer",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"executor\", \"content\": \"await result\", \"summary\": \"审批者等待结果\", \"wait_for\": \"executor.result\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 17600,
+              "completed": 18000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "executor",
+            "subagent_name": "executor",
+            "subagent_session_id": "team_case-04-agent-handover-loop_executor",
+            "content": "仍在等待审批。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_executor",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"reviewer\", \"content\": \"await approval\", \"summary\": \"执行者等待审批\", \"wait_for\": \"reviewer.approval\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 18000,
+              "completed": 18400
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reviewer",
+            "subagent_name": "reviewer",
+            "subagent_session_id": "team_case-04-agent-handover-loop_reviewer",
+            "content": "仍在等待结果。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_reviewer",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"executor\", \"content\": \"await result\", \"summary\": \"审批者等待结果\", \"wait_for\": \"executor.result\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 18400,
+              "completed": 18800
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "executor",
+            "subagent_name": "executor",
+            "subagent_session_id": "team_case-04-agent-handover-loop_executor",
+            "content": "仍在等待审批。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_executor",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"reviewer\", \"content\": \"await approval\", \"summary\": \"执行者等待审批\", \"wait_for\": \"reviewer.approval\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 18800,
+              "completed": 19200
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reviewer",
+            "subagent_name": "reviewer",
+            "subagent_session_id": "team_case-04-agent-handover-loop_reviewer",
+            "content": "仍在等待结果。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_reviewer",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"executor\", \"content\": \"await result\", \"summary\": \"审批者等待结果\", \"wait_for\": \"executor.result\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 19200,
+              "completed": 19600
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "executor",
+            "subagent_name": "executor",
+            "subagent_session_id": "team_case-04-agent-handover-loop_executor",
+            "content": "仍在等待审批。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_executor",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"reviewer\", \"content\": \"await approval\", \"summary\": \"执行者等待审批\", \"wait_for\": \"reviewer.approval\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 19600,
+              "completed": 20000
+            }
+          },
+          {
+            "role": "subagent",
+            "agent": "reviewer",
+            "subagent_name": "reviewer",
+            "subagent_session_id": "team_case-04-agent-handover-loop_reviewer",
+            "content": "仍在等待结果。",
+            "usage": {
+              "input": 6000,
+              "output": 200,
+              "total": 6200
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "send_message_reviewer",
+                "type": "function",
+                "function": {
+                  "name": "send_message",
+                  "arguments": "[{\"to\": \"executor\", \"content\": \"await result\", \"summary\": \"审批者等待结果\", \"wait_for\": \"executor.result\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": ""
+              }
+            ],
+            "timeInfo": {
+              "created": 20000,
+              "completed": 20400
+            }
+          },
+          {
+            "role": "assistant",
+            "agent": "TeamLeader",
+            "content": "executor 与 reviewer 互相等待，形成闭环。",
+            "usage": {
+              "input": 9000,
+              "output": 300,
+              "total": 9300
+            },
+            "modelID": "deepseek-v4-flash",
+            "tool_calls": [
+              {
+                "id": "view_task_TeamLeader",
+                "type": "function",
+                "function": {
+                  "name": "view_task",
+                  "arguments": "[{\"action\": \"list\"}, {\"session\": \"session:jiuwen-case-04-agent-handover-loop-95553\"}]"
+                },
+                "state": "success",
+                "output": "success=True data={'tasks':[{'task_id':'x','status':'in_progress','blocked_by':['waiting:reviewer.approval','waiting:executor.result']}],'count':1} error=None"
+              }
+            ],
+            "timeInfo": {
+              "created": 20400,
+              "completed": 20800
+            }
+          }
+        ],
+        "model": "deepseek-v4-flash"
+      }
+    }
+  ]
+}
