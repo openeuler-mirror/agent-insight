@@ -61,7 +61,7 @@ assistant-ui 集成：`client.ts`、`Stream.tsx`、`Thread.tsx` —— 串联起
 `(main)/` 下的页面（每个功能一个路由组：dashboard、agents、dataset、eval、fault、metrics、modelconfig、quality、security、skill-eval、skill-generator、skill-opt、skill-release、skills、trace），以及 `api/` 下的 API 路由处理器。这里是 HTTP 请求的入口；处理器将工作委派给 `lib`/`server`。参见 [01-architecture.md](01-architecture.md#entry-surface) 和 [06-frontend.md](06-frontend.md)。
 
 ## `scripts` (`scripts/`) — edge, operational + client agents
-安装器/生命周期（`install.js`、`start.js`、`stop.js`、`status.js`、`restart*.{js,sh}`）、客户端接入 watcher/插件（`openclaw_watcher_client.ts`、`opencode_plugin*.ts`、`opencode_uploader_client.js`、`opencode_tui_plugin.tsx`）、Claude Code 官方 OTel 配置脚本、数据回填/种子，以及一个 Python OTel 接收器（`otel_receiver.py`）。
+安装器/生命周期（`install.js`、`start.js`、`stop.js`、`status.js`、`restart*.{js,sh}`）、客户端接入 watcher/插件（`openclaw_watcher_client.ts`、`opencode_plugin*.ts`、`opencode_uploader_client.js`、`opencode_tui_plugin.tsx`、`trae-collector/`）、Claude Code 官方 OTel 配置脚本、数据回填/种子，以及一个 Python OTel 接收器（`otel_receiver.py`）。
 
 ## `public`, `tools`, `test` — edge / peripheral
 - `public/` —— 静态资源 + `sync_skills.ts`（客户端 Skill 同步脚本）。

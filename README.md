@@ -58,6 +58,7 @@ Agent Insight 框架无关，已接入以下 Agent 运行时/框架，更多平�
 | OpenCode    | 原生插件    |
 | Claude Code | OTLP 上报 |
 | Hermes      | 原生插件    |
+| Trae IDE | VS Code 插件 |
 | JiuwenSwarm | OTLP 上报 |
 | Langgraph | OTLP 上报 |
 
@@ -100,6 +101,8 @@ npx agent-insight install
 git clone https://gitcode.com/openeuler/agent-insight.git
 cd agent-insight
 npm install
+# 构建 Trae IDE 采集器插件（生成 scripts/trae-collector/agent-insight-trae-collector-0.1.0.vsix）
+cd scripts/trae-collector && npm install && npm run build
 ```
 
 #### 方式三：使用 Docker 镜像部署

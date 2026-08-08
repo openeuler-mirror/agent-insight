@@ -232,6 +232,8 @@ function getFrameworkLabel(framework?: string | null): string {
             return 'Claude Code';
         case 'hermes':
             return 'Hermes';
+        case 'trae':
+            return 'Trae IDE';
         default:
             return value;
     }

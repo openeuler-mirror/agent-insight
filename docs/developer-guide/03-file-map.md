@@ -49,7 +49,7 @@
 | `storage/server-config.ts` | storage | `getActiveConfig`、`getUserSettings`、`saveUserSettings`；`ModelConfig`、`UserSettings` |
 | `auth/auth.ts` | auth | `resolveUser`、`canAccessSkill`；`AuthResult` |
 | `ingest/proxy-config.ts` / `proxy-store.ts` | ingest | `getProxyConfig`；`ProxyConfig`、`SessionData` |
-| `ingest/adapters/{registry,types,opencode,claude,codeagent,openclaw,hermes,langfuse-langgraph,qoder}.ts` | ingest | `getAdapter`、`resolveFrameworkId`、`listFrameworks`；`FrameworkAdapter`、`FrameworkDescriptor` |
+| `ingest/adapters/{registry,types,opencode,claude,codeagent,openclaw,hermes,langfuse-langgraph,qoder,trae}.ts` | ingest | `getAdapter`、`resolveFrameworkId`、`listFrameworks`；`FrameworkAdapter`、`FrameworkDescriptor` |
 | `ingest/routing-signature.ts` | ingest | `RoutingSemanticSignature`、`RoutingSemanticMatch` |
 | `ingest/claude-otel/` / `ingest/codeagent-otel/` / `ingest/otel-consumer/` / `openclaw-watcher.ts` | ingest | 特定框架的接入与 OTel spool 消费 |
 | `ingest/otel/langfuse.ts` / `ingest/otel/adapters/{langfuse-langgraph,langfuse-trace}.ts` | ingest | Langfuse Python SDK / LangGraph OTLP 归属转换；现有 interactions 投影与无损 `LangfuseTraceNode` 投影并行生成 |
