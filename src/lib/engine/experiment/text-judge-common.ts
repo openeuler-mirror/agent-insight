@@ -90,7 +90,7 @@ const judgeSchema = z.object({
     reason: textField.default(''),
     suggestion: textField.default(''),
   })).default([]),
-  summary: textField.default(''),
+  summary: textField.pipe(z.string().min(1, 'summary 不能为空')),
 });
 
 export const TEXT_POINT_SCORES: Readonly<Record<TextSeverity, number>> = {
@@ -227,7 +227,6 @@ export function configuredDeductionScore(
   config: TextRiskAggregateConfig,
   overrides: Partial<Record<string, Readonly<Record<TextSeverity, number>>>> = {},
 ): number {
-  if (!verdicts.length) return 100;
   const byDimension = new Map(verdicts.map((verdict) => [verdict.dimension, verdict]));
   if (byDimension.size !== config.dimensionKeys.length || config.dimensionKeys.some((key) => !byDimension.has(key))) {
     throw new Error('文本风险聚合输入必须包含全部且仅包含评估器维度');

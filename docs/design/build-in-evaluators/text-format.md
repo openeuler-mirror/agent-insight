@@ -33,6 +33,8 @@ Judge 对七个固定维度返回 `safe/minor/moderate/severe`、问题原文、
 
 `numbering_continuity`（序号连续性）和 `citation_mark_correctness`（引用标记正确性）属于关键维度。跳号、重复编号、引用断开或引用目标不存在会直接破坏文档结构或可追溯性，因此关键维度按 100 的扣分权重计算。
 
+关键权重不代表所有引用样式差异都应判为严重问题：引用样式不统一但仍可准确追溯时通常判 `minor`；引用目标不存在、正文与参考文献无法对应或引用链断开时判 `moderate` 或 `severe`。
+
 `list_hierarchy`、`punctuation_standardization`、`layout_consistency`、`tabular_format` 和 `special_format_correctness` 属于普通维度，按 90 的扣分权重计算。普通维度仍会逐项扣分，但同等严重程度下影响略低于关键维度。
 
 综合分继续采用“最大扣分完整计入，其余扣分按维度总数均摊追加”的公式：关键维度扣分为 `100 × (100-s)/100`，普通维度扣分为 `90 × (100-s)/100`，`D = max(d_i) + (Σd_i-max(d_i))/N`，最终 `score = clamp(round(100-D), 0, 100)`。

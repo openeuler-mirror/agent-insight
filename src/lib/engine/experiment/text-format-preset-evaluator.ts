@@ -39,7 +39,7 @@ const DEFINITION = defineTextJudgeDefinition({
   title: '文本格式规范性评估器',
   dimensions: [
     { key: 'numbering_continuity', label: '序号连续性', description: '编号跳号、重复、格式混排及同层级编号不一致；代码块中的命令序号不纳入检查。' },
-    { key: 'citation_mark_correctness', label: '引用标记正确性', description: '引用格式、位置、引用列表对应关系及不存在的引用目标。' },
+    { key: 'citation_mark_correctness', label: '引用标记正确性', description: '引用格式、位置、引用列表对应关系及不存在的引用目标；需区分样式差异与引用断开。' },
     { key: 'list_hierarchy', label: '列表层级一致性', description: '嵌套列表的编号样式、缩进和父子层级是否清晰一致。' },
     { key: 'punctuation_standardization', label: '标点符号规范性', description: '中英文标点、全半角、成对符号和语言规范的一致性。' },
     { key: 'layout_consistency', label: '排版格式一致性', description: '标题层级、段落间距、表格和代码块的整体排版一致性。' },
@@ -49,6 +49,7 @@ const DEFINITION = defineTextJudgeDefinition({
   rules: [
     '只评价 agent_output；user_question 不计入格式评分。',
     '连续性、引用断裂和无法渲染的问题比单纯风格差异扣分更重。',
+    '仅引用样式不统一、但仍能准确对应来源时通常判 minor；引用目标不存在、正文与参考文献无法对应或引用链断开时判 moderate 或 severe。',
     '没有列表、引用、表格或特殊格式时，对应维度必须判 safe，不得强行制造问题。',
   ],
   boundaryRules: [

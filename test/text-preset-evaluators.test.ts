@@ -8,6 +8,7 @@ import {
   defineTextJudgeDefinition,
   defineTextRiskAggregateConfig,
   TEXT_POINT_SCORES,
+  type TextRiskAggregateConfig,
   type TextSeverity,
   type TextVerdict,
 } from '../src/lib/engine/experiment/text-judge-common';
@@ -259,6 +260,38 @@ describe('文本评估器公式和输出契约', () => {
       criticalDimensionKeys: ['critical', 'ordinary'],
       ordinaryDimensionKeys: ['ordinary'],
     }));
+    assert.throws(() => configuredDeductionScore([], TEXT_FORMAT_RISK_CONFIG), /必须包含全部且仅包含/);
+  });
+
+  it('格式与语种真实配置在全部严重度组合下保持逐维单调', () => {
+    const configs: readonly TextRiskAggregateConfig[] = [TEXT_FORMAT_RISK_CONFIG, TEXT_LANGUAGE_RISK_CONFIG];
+    for (const config of configs) {
+      const combinations = SEVERITIES.length ** config.dimensionKeys.length;
+      for (let encoded = 0; encoded < combinations; encoded += 1) {
+        let cursor = encoded;
+        const levels = config.dimensionKeys.map(() => {
+          const level = cursor % SEVERITIES.length;
+          cursor = Math.floor(cursor / SEVERITIES.length);
+          return level;
+        });
+        const verdicts = config.dimensionKeys.map((dimension, index) => ({
+          dimension,
+          severity: SEVERITIES[levels[index]],
+          quote: '',
+          reason: '',
+          suggestion: '',
+        } satisfies TextVerdict));
+        const before = configuredDeductionScore(verdicts, config);
+        for (const [index, level] of levels.entries()) {
+          if (level === SEVERITIES.length - 1) continue;
+          const upgraded = verdicts.map((verdict, verdictIndex) => verdictIndex === index
+            ? { ...verdict, severity: SEVERITIES[level + 1] }
+            : verdict);
+          const after = configuredDeductionScore(upgraded, config);
+          assert.ok(after <= before, `${config.dimensionKeys[index]}: ${before} -> ${after}`);
+        }
+      }
+    }
   });
 
   it('语种关键/普通扣分和简洁性加权公式均保持单调', () => {
@@ -317,18 +350,30 @@ describe('文本评估器公式和输出契约', () => {
     assert.equal(called, false);
   });
 
-  it('未知、重复、缺失维度及无证据的非 safe verdict 均失败', async () => {
+  it('未知、重复、缺失维度、空总结及无证据的非 safe verdict 均失败', async () => {
     const valid = JSON.parse(judgeJson('preset-text-ai-flavor')) as { verdicts: Array<Record<string, string>>; summary: string };
     const invalids = [
       { ...valid, verdicts: [...valid.verdicts, { ...valid.verdicts[0], dimension: 'unknown' }] },
       { ...valid, verdicts: [...valid.verdicts, { ...valid.verdicts[0] }] },
       { ...valid, verdicts: valid.verdicts.slice(1) },
+      { ...valid, summary: '' },
       { ...valid, verdicts: valid.verdicts.map((verdict, index) => index === 0 ? { ...verdict, severity: 'moderate', quote: '', reason: '', suggestion: '' } : verdict) },
     ];
     for (const invalid of invalids) {
       setJudgeLlmCallerForTest(async () => JSON.stringify(invalid));
       await assert.rejects(runTextPreset('preset-text-ai-flavor', USER, ctx('待评估文本')));
     }
+  });
+
+  it('格式 Judge 明确区分可追溯的引用样式差异与引用断开', async () => {
+    let request: JudgeLlmRequest | undefined;
+    setJudgeLlmCallerForTest(async (_user, currentRequest) => {
+      request = currentRequest;
+      return judgeJson('preset-text-format');
+    });
+    await runTextPreset('preset-text-format', USER, ctx('根据资料 [1]，结论成立。\n[1] 示例资料'));
+    assert.match(request?.system ?? '', /引用样式不统一.*minor/);
+    assert.match(request?.system ?? '', /引用目标不存在.*moderate.*severe/);
   });
 
   it('配置定义在模块加载期拒绝空维度、重复 key 和越界细则分', () => {
