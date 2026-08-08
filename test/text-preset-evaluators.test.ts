@@ -17,7 +17,6 @@ const ctx = (output: string, input = '') => ({
   user: USER,
   execution: null,
 });
-
 const dimensions: Record<string, string[]> = {
   'preset-text-ai-flavor': ['template_opening', 'template_closing', 'mechanical_transitions', 'generic_names', 'empty_summary', 'politeness_overuse'],
   'preset-text-format': ['numbering_continuity', 'citation_mark_correctness', 'list_hierarchy', 'punctuation_standardization', 'layout_consistency', 'tabular_format', 'special_format_correctness'],
@@ -123,4 +122,3 @@ describe('文本简洁性', () => {
     assert.ok((await runTextPreset('preset-text-conciseness', USER, ctx('您好，很高兴收到您的问题。', '这是什么？'))).score <= 20);
   });
 });
-
