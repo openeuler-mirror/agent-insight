@@ -9,13 +9,13 @@
 
 | Field | Value |
 |---|---|
-| Commit | `035e93d2f4402628c52d0ff5ac270a88c21680bc` (`035e93d2`) |
-| Branch | `codex/openclaw-otel-rebuild` |
-| Date | 2026-08-07T09:44:03+08:00 |
-| Author | gyctl |
-| Subject | `chore: 合并 upstream/master 并解决 OpenClaw 冲突` |
+| Commit | `285f431013d75416196f3a1fc6a8b43609990c91` (`285f431`) |
+| Branch | `feat/agent-evaluator-suite` |
+| Date | 2026-08-07T11:25:18+08:00 |
+| Author | kaibin-2026 |
+| Subject | `feat(eval): 新增 Agent 专项评估器套件` |
 
-**如何更新：** `git diff 035e93d2 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
+**如何更新：** `git diff 285f431 HEAD -- src/ scripts/` 可显示自此快照以来的代码变更；重新生成受影响的文档，然后将本区块更新到新的 `HEAD` commit。
 
 ## Documents
 - [00-positioning.md](00-positioning.md)：项目为何存在、面向谁、所属领域、成熟度。

@@ -897,6 +897,9 @@ model ExperimentCase {
   input           String     @default("")
   actualOutput    String     @default("")
   referenceOutput String?
+  /// 评估器专用 case 上下文（EvaluatorCaseContextV1 JSON）；null=未提供。
+  /// availableTools: [] 表示调用方明确确认本任务无需工具。
+  evaluatorContextJson String?
   createdAt       DateTime   @default(now())
 
   results ExperimentEvalResult[]

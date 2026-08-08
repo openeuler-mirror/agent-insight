@@ -1,3 +1,10 @@
+/**
+ * 预置评估器元数据目录：定义评估器列表页和实验选择步骤使用的稳定 ID、名称、摘要、
+ * 评估目标、适用场景、分数范围及运行实现提示。
+ *
+ * 本文件只声明产品层元数据，不执行评估。详情页结合本文件与 registry.ts 派生展示内容；
+ * 实际 Prompt、轨迹统计和确定性计分位于 src/lib/engine/experiment/。
+ */
 import type { EvaluatorCard } from './custom-evaluator-model';
 
 /**
@@ -245,5 +252,53 @@ export const presetEvaluators: EvaluatorCard[] = [
     mappedMetrics: ['触发条件判断', '拒答正确性', '拒答充分性', '过度拒答检测', '替代方案提供'],
     status: 'ready',
     runtimeNote: 'safety-preset-evaluators.ts · text-refusal',
+  },
+  {
+    id: 'preset-depth-result',
+    name: '回答深度性',
+    description: '按问题所需深度评估因果、结构、权衡、背景与洞察；不重复评价答案完整性和连贯性。',
+    evaluatorType: 'LLM',
+    source: 'preset',
+    targetTypes: ['结果'],
+    objectives: ['内容质量'],
+    scenarios: ['开放式回答质量评估', '分析深度评估'],
+    runMode: 'LLM Judge (离散 rubric)',
+    scoreRange: '0-100',
+    popularity: 79,
+    mappedMetrics: ['因果深度', '结构化推理', '多视角权衡', '背景语境', '洞察升华'],
+    status: 'ready',
+    runtimeNote: 'depth-preset-evaluators.ts',
+  },
+  {
+    id: 'preset-agent-tool-utilization',
+    name: '轨迹工具利用率',
+    description: '结合显式 Tool/Skill 目录，以必要能力覆盖率、调用匹配率和调用节制率计算百分制；闲置原因作为评估依据展示。',
+    evaluatorType: 'LLM',
+    source: 'preset',
+    targetTypes: ['轨迹'],
+    objectives: ['轨迹质量', '执行效率'],
+    scenarios: ['Agent通用评测', '轨迹评测'],
+    runMode: 'Trace Judge（语义判断 + 比例聚合）',
+    scoreRange: '0-100',
+    popularity: 78,
+    mappedMetrics: ['必要能力覆盖率', '调用匹配率', '调用节制率'],
+    status: 'ready',
+    runtimeNote: 'agent-tool-utilization-evaluator.ts',
+  },
+  {
+    id: 'preset-agent-tool-selection',
+    name: 'Agent 工具选择合理性',
+    description: '逐步检查 Tool/Skill 必要性、任务匹配、参数来源、结果利用与依赖顺序，问题定位到能力和步骤。',
+    evaluatorType: 'LLM',
+    source: 'preset',
+    targetTypes: ['轨迹'],
+    objectives: ['轨迹质量', '工具调用质量'],
+    scenarios: ['Agent通用评测', '轨迹评测'],
+    runMode: 'Trace Judge (规则 + 离散 rubric)',
+    scoreRange: '0-100',
+    popularity: 77,
+    mappedMetrics: ['工具必要性', '工具匹配', '参数合理性', '结果利用', '调用顺序'],
+    status: 'ready',
+    runtimeNote: 'agent-tool-selection-evaluator.ts',
   },
 ];

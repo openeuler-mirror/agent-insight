@@ -10,6 +10,7 @@
  */
 
 import { stringifyClaudeContent } from '@/lib/shared/interaction-content';
+import { isSkillLoaderToolName } from '@/lib/evaluators/evaluator-case-context';
 
 export type InteractionRole = 'user' | 'assistant' | 'opencode' | 'subagent' | string;
 
@@ -673,7 +674,7 @@ function interactionToEvents(it: RawInteraction, idx: number): AgentEvent[] {
         // (drives the per-agent Skill stat / timeline). Other frameworks don't emit it.
         const kind: CallKind = normalizedName === 'task'
             ? 'task'
-            : normalizedName === 'skill' || normalizedName === 'load_skill' || normalizedName === 'skill_view' || normalizedName === 'skill_tool'
+            : isSkillLoaderToolName(normalizedName)
                 ? 'skill'
                 : 'tool';
         const ev: AgentEvent = {

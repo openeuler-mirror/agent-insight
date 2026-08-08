@@ -4,7 +4,17 @@ import { useCallback, useMemo, useState, useEffect, useRef, startTransition, typ
 import { useRouter } from 'next/navigation';
 import { ClipboardList, Pencil, PlayCircle, Trash2 } from 'lucide-react';
 import { apiFetch } from '@/lib/client/api';
-import { type DatasetKind, type AgentDataset, type DatasetCase, type DatasetField, schemaColumnTags, defaultFieldsForKind, type DatasetDefaultFieldDef } from '@/lib/agent-dataset-model';
+import {
+  type DatasetKind,
+  type AgentDataset,
+  type DatasetCase,
+  type DatasetField,
+  defaultDatasetSchemaFields,
+  defaultFieldsForKind,
+  schemaColumnTags,
+  type DatasetDefaultFieldDef,
+  withEvaluatorCatalogFields,
+} from '@/lib/agent-dataset-model';
 import { parseBatchFromFileContent, readFileAsText } from '@/lib/dataset-batch-import';
 import { useAuth } from '@/lib/auth/auth-context';
 
@@ -363,6 +373,7 @@ export default function AgentDatasetCenter() {
           ...emptyDraft,
           name: baseName.slice(0, 50),
           datasetKind,
+          fields: withEvaluatorCatalogFields(defaultDatasetSchemaFields(datasetKind), cases),
           cases,
         });
         setError(

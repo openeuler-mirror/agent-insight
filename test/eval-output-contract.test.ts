@@ -160,11 +160,17 @@ describe('评估器注册表 registry', () => {
     llmConfig: { model: 'deepseek-chat', systemPrompt: '对照 {{reference_output}} 评估 {{output}}' },
   };
 
-  it('预置元数据：任务完成度=res+依赖参考；轨迹质量=traj 无前置', () => {
+  it('预置元数据声明结果/轨迹类目及参考答案、工具目录依赖', () => {
     const tc = getEvaluatorMeta({ id: 'preset-agent-task-completion', source: 'preset' } as EvaluatorCard);
     assert.deepEqual(tc, { category: 'res', requires: ['reference'] });
     const tq = getEvaluatorMeta({ id: 'preset-agent-trace-quality', source: 'preset' } as EvaluatorCard);
     assert.deepEqual(tq, { category: 'traj', requires: [] });
+    const depth = getEvaluatorMeta({ id: 'preset-depth-result', source: 'preset' } as EvaluatorCard);
+    assert.deepEqual(depth, { category: 'res', requires: [] });
+    for (const id of ['preset-agent-tool-utilization', 'preset-agent-tool-selection']) {
+      const toolMeta = getEvaluatorMeta({ id, source: 'preset' } as EvaluatorCard);
+      assert.deepEqual(toolMeta, { category: 'traj', requires: ['tool_catalog'] });
+    }
   });
 
   it('自建评估器 requires 由提示词占位符推导', () => {
@@ -177,13 +183,20 @@ describe('评估器注册表 registry', () => {
     assert.deepEqual(deriveEvaluatorTags(customWithRef), ['自建', 'LLM Judge', '看结果', '依赖参考数据']);
   });
 
-  it('硬门控：任一 case 未标注参考 → 不可用并给出原因；全满足 → 可用', () => {
+  it('硬门控要求所有 case 满足参考答案或 Tool/Skill 目录依赖', () => {
     const meta = { category: 'res' as const, requires: ['reference' as const] };
-    const g1 = gateEvaluator(meta, [{ hasReference: true }, { hasReference: false }]);
+    const g1 = gateEvaluator(meta, [
+      { hasReference: true, hasToolCatalog: false },
+      { hasReference: false, hasToolCatalog: false },
+    ]);
     assert.equal(g1.usable, false);
     assert.match(g1.reason ?? '', /1 个未标注/);
-    assert.equal(gateEvaluator(meta, [{ hasReference: true }]).usable, true);
+    assert.equal(gateEvaluator(meta, [{ hasReference: true, hasToolCatalog: false }]).usable, true);
     assert.equal(gateEvaluator(meta, []).usable, false);
     assert.equal(gateEvaluator({ category: 'traj', requires: [] }, []).usable, true);
+
+    const toolMeta = { category: 'traj' as const, requires: ['tool_catalog' as const] };
+    assert.equal(gateEvaluator(toolMeta, [{ hasReference: false, hasToolCatalog: true }]).usable, true);
+    assert.equal(gateEvaluator(toolMeta, [{ hasReference: false, hasToolCatalog: false }]).usable, false);
   });
 });
