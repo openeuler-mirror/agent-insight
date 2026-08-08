@@ -1,12 +1,12 @@
 import type { EvaluatorOutput } from '../../evaluators/eval-output';
 import type { FaithfulPresetContext } from './faithful-preset-evaluators';
-import { runTextJudge, type TextDimension, type TextJudgeDefinition, type TextSeverity, type TextVerdict } from './text-judge-common';
+import { defineTextJudgeDefinition, runTextJudge, type TextDimension, type TextSeverity, type TextVerdict } from './text-judge-common';
 
 export const TEXT_CONCISENESS_PRESET_ID = 'preset-text-conciseness';
 
 const POINT_SCORES: Readonly<Record<TextSeverity, number>> = { safe: 100, minor: 70, moderate: 40, severe: 0 };
 
-function aggregate(verdicts: readonly TextVerdict[]): number {
+export function aggregateTextConcisenessScore(verdicts: readonly TextVerdict[]): number {
   const weights: Record<string, number> = {
     expression_efficiency: 0.3,
     cliche_condensation: 0.2,
@@ -25,7 +25,7 @@ function aggregate(verdicts: readonly TextVerdict[]): number {
   return Math.max(0, Math.min(100, Math.round(score)));
 }
 
-const DEFINITION: TextJudgeDefinition = {
+const DEFINITION = defineTextJudgeDefinition({
   id: 'text-conciseness',
   title: '文本简洁性评估器',
   dimensions: [
@@ -44,9 +44,9 @@ const DEFINITION: TextJudgeDefinition = {
     '简单事实问答可以只有一句话；背景信息若有必要，应在核心答案之后并保持紧凑。',
   ],
   buildInput: (ctx) => JSON.stringify({ user_question: ctx.caseInput, agent_output: ctx.actualOutput }, null, 2),
-  aggregate,
+  aggregate: aggregateTextConcisenessScore,
   pointScore: POINT_SCORES,
-};
+});
 
 export function runTextConcisenessPreset(user: string, ctx: FaithfulPresetContext): Promise<EvaluatorOutput> {
   return runTextJudge(DEFINITION, user, ctx);

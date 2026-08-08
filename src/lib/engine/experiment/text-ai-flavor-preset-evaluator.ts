@@ -1,19 +1,19 @@
 import type { EvaluatorOutput } from '../../evaluators/eval-output';
 import type { FaithfulPresetContext } from './faithful-preset-evaluators';
-import { deductionScore, runTextJudge, type TextDimension, type TextJudgeDefinition } from './text-judge-common';
+import { deductionScore, defineTextJudgeDefinition, runTextJudge, type TextDimension } from './text-judge-common';
 
 export const TEXT_AI_FLAVOR_PRESET_ID = 'preset-text-ai-flavor';
 
-const DEFINITION: TextJudgeDefinition = {
+const DEFINITION = defineTextJudgeDefinition({
   id: 'text-ai-flavor',
   title: '文本 AI 味检查评估器',
   dimensions: [
-    { key: 'template_opening', label: '模板化开篇', description: '固定套话、泛化背景铺垫和每次回答都重复的开场句。' },
-    { key: 'template_closing', label: '模板化结尾', description: '机械总结、祝福和“有问题随时提问”等固定收束句。' },
-    { key: 'mechanical_transitions', label: '机械连接词堆砌', description: '首先/其次/再次/最后、值得注意的是等过度公式化的连接。' },
-    { key: 'generic_names', label: '泛化人物名称', description: '示例中反复使用小明、小红、张三等缺乏真实感的默认人名。' },
+    { key: 'template_opening', label: '模板化开篇', description: '脱离具体语境的固定套话、泛化背景铺垫或重复开场句。' },
+    { key: 'template_closing', label: '模板化结尾', description: '不增加信息的机械总结、祝福、邀约式固定收束句。' },
+    { key: 'mechanical_transitions', label: '机械连接词堆砌', description: '连续堆叠序列、递进或宣告性连接词，使结构过度公式化。' },
+    { key: 'generic_names', label: '泛化人物名称', description: '示例角色反复使用占位式默认姓名，缺乏语境、真实感和多样性。' },
     { key: 'empty_summary', label: '空洞总结与冗余收束', description: '不增加新信息、只重复前文或凑字数的总结段落。' },
-    { key: 'politeness_overuse', label: '语气词与过度礼貌', description: '不合场景地堆叠亲、您好、哦、啦、呢、祝福和讨好式表达。' },
+    { key: 'politeness_overuse', label: '语气词与过度礼貌', description: '不合场景地堆叠语气词、礼貌用语、祝福或讨好式表达。' },
   ] satisfies readonly TextDimension[],
   rules: [
     '只评价 agent_output；user_question 仅用于理解文体与服务场景。',
@@ -27,7 +27,7 @@ const DEFINITION: TextJudgeDefinition = {
   ],
   buildInput: (ctx) => JSON.stringify({ user_question: ctx.caseInput, agent_output: ctx.actualOutput }, null, 2),
   aggregate: (verdicts) => deductionScore(verdicts),
-};
+});
 
 export function runTextAiFlavorPreset(user: string, ctx: FaithfulPresetContext): Promise<EvaluatorOutput> {
   return runTextJudge(DEFINITION, user, ctx);

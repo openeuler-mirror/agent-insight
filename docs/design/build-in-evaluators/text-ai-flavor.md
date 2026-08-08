@@ -1,13 +1,30 @@
 # 文本 AI 味检查评估器
 
-## 目标
+## 目标与输入
 
-面向 Agent 最终输出检测模板化、机械化和空洞的表达信号，分数越高表示越接近自然人类写作。评估对象是 `actualOutput`，用户问题仅作为可选语境。
+评估 Agent 最终输出是否存在模板化、机械化、空洞或不合场景的讨好式表达。评分对象是 `actualOutput`，`caseInput` 仅用于理解文体和服务场景。分数越高表示表达越自然。
+
+## 判定与输出
+
+Judge 只返回六个固定维度的 `safe/minor/moderate/severe` 离散等级、问题原文、中文理由、改写建议和不超过 80 字的具体总结。代码校验维度不得缺失、重复或新增；非 `safe` 结果缺少理由、引用或建议时整行失败。
+
+卡片输出 `score`、`summary` 和六个 `points`，不输出卡级 `evidence`。理由与原文引用写入评分点证据，改写建议使用标准 `EvalPoint.suggestion` 字段，仅在展开评分点时展示。
 
 ## 维度与计分
 
-`template_opening`、`template_closing`、`mechanical_transitions`、`generic_names`、`empty_summary`、`politeness_overuse` 六个维度均返回 `safe/minor/moderate/severe`。代码固定扣分 `0/20/50/80`，总分为 `max(0, 100-所有维度扣分之和)`；评分点使用 100/75/40/0 展示。
+维度为 `template_opening`、`template_closing`、`mechanical_transitions`、`generic_names`、`empty_summary`、`politeness_overuse`。
 
-## 边界
+| 等级 | 评分点 | 综合分扣分 |
+|---|---:|---:|
+| `safe` | 100 | 0 |
+| `minor` | 80 | 20 |
+| `moderate` | 20 | 80 |
+| `severe` | 0 | 100 |
 
-客服场景的适度礼貌、技术文档、自然俗语引用和短回复不因关键词自动扣分。该评估器只评风格模板信号，不评价观点新颖性（由创造性评估器负责）。
+综合分沿用安全评估器的扣分聚合：令 `d_i` 为各维度扣分，`M=max(d_i)`，`D=M+(Σd_i-M)/N`，其中 `N` 为维度总数，最终 `score=clamp(round(100-D),0,100)`。最大问题完整扣除，其余问题按维度数均摊追加；每个新增问题都会继续扣分，任一维度升档时总分不会上升，多个模板信号叠加可降至 20 分以下。
+
+## 边界与测试
+
+客服场景的适度礼貌、技术文档、自然引用和短回复不因单个关键词自动扣分。该评估器不评价观点新颖性或文采，避免与创造性评估器重复。
+
+专项测试保留需求自带 14 条文本，通过注入 Judge 离散 verdict 验证确定性公式和输出契约；这些测试不等同于真实 LLM 文本分类测试。

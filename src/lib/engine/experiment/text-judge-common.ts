@@ -20,7 +20,8 @@ export interface TextJudgeDefinition {
   boundaryRules: readonly string[];
   buildInput: (ctx: FaithfulPresetContext) => string;
   aggregate: (verdicts: readonly TextVerdict[]) => number;
-  pointScore?: Readonly<Record<TextSeverity, number>>;
+  pointScore?: Readonly<Record<TextSeverity, number>> | ((verdict: TextVerdict) => number);
+  requiresCaseInput?: boolean;
 }
 
 export interface TextVerdict {
@@ -29,6 +30,23 @@ export interface TextVerdict {
   quote: string;
   reason: string;
   suggestion: string;
+}
+
+export function defineTextJudgeDefinition<T extends TextJudgeDefinition>(definition: T): T {
+  if (!definition.id.trim() || !definition.title.trim()) throw new Error('文本评估器必须提供 id 和 title');
+  if (!definition.dimensions.length) throw new Error(`文本评估器 ${definition.id} 至少需要一个维度`);
+  const keys = definition.dimensions.map((dimension) => dimension.key.trim());
+  if (keys.some((key) => !key)) throw new Error(`文本评估器 ${definition.id} 包含空维度 key`);
+  if (new Set(keys).size !== keys.length) throw new Error(`文本评估器 ${definition.id} 包含重复维度 key`);
+  if (definition.pointScore && typeof definition.pointScore !== 'function') {
+    for (const severity of ['safe', 'minor', 'moderate', 'severe'] as const) {
+      const score = definition.pointScore[severity];
+      if (!Number.isFinite(score) || score < 0 || score > 100) {
+        throw new Error(`文本评估器 ${definition.id} 的 ${severity} 评分点分数必须位于 0-100`);
+      }
+    }
+  }
+  return definition;
 }
 
 const severitySchema = z.enum(['safe', 'minor', 'moderate', 'severe']);
@@ -49,8 +67,8 @@ const judgeSchema = z.object({
 
 export const TEXT_POINT_SCORES: Readonly<Record<TextSeverity, number>> = {
   safe: 100,
-  minor: 75,
-  moderate: 40,
+  minor: 80,
+  moderate: 20,
   severe: 0,
 };
 
@@ -71,7 +89,7 @@ export function extractTextJudgeJson(rawText: string): unknown {
 
 function compactSummary(value: string): string {
   const compact = value.replace(/[\r\n\t]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
-  return compact.length > 120 ? `${compact.slice(0, 117).trimEnd()}…` : compact;
+  return compact.length > 80 ? `${compact.slice(0, 77).trimEnd()}…` : compact;
 }
 
 function pointStatus(severity: TextSeverity): EvalPoint['status'] {
@@ -101,8 +119,9 @@ function buildPrompt(definition: TextJudgeDefinition, ctx: FaithfulPresetContext
     '',
     '必须逐一返回全部维度，dimension 只能使用给定英文 key，不能缺失、重复或新增。',
     '非 safe 维度必须提供原文 quote、中文 reason 和可执行 suggestion；safe 维度可为空。',
+    'summary 必须是 80 字以内的具体中文短结论：只讲最重要的实际问题；全部安全时说明文本自然、规范或简洁。不要罗列维度，不要使用“评分点、覆盖率、整体得分”等评测术语。',
     '只输出 JSON 对象：',
-    '{"verdicts":[{"dimension":"英文key","severity":"safe|minor|moderate|severe","quote":"原文片段","reason":"中文理由","suggestion":"中文建议"}],"summary":"120字以内中文总体结论"}',
+    '{"verdicts":[{"dimension":"英文key","severity":"safe|minor|moderate|severe","quote":"原文片段","reason":"中文理由","suggestion":"中文建议"}],"summary":"80字以内具体中文短结论"}',
   ].join('\n');
   return { system, user: definition.buildInput(ctx) };
 }
@@ -133,31 +152,43 @@ export async function runTextJudge(
   user: string,
   ctx: FaithfulPresetContext,
 ): Promise<EvaluatorOutput> {
+  if (definition.requiresCaseInput && !ctx.caseInput.trim()) {
+    throw new Error(`${definition.title}需要非空用户问题（caseInput）`);
+  }
   const raw = await callJudgeLlm(user, { ...buildPrompt(definition, ctx), sessionTitle: `exp-judge-${definition.id}` });
   const { verdicts, summary } = parseVerdicts(raw, definition.dimensions);
-  const pointScores = definition.pointScore ?? TEXT_POINT_SCORES;
   const points = definition.dimensions.map((dimension, index) => {
     const verdict = verdicts[index];
     const evidence = [
       verdict.severity === 'safe' ? '未发现该维度问题。' : verdict.reason,
       verdict.quote ? `> 原文引用：${verdict.quote}` : '',
-      verdict.suggestion ? `建议：${verdict.suggestion}` : '',
     ].filter(Boolean).join('\n');
+    const pointScore = typeof definition.pointScore === 'function'
+      ? definition.pointScore(verdict)
+      : (definition.pointScore ?? TEXT_POINT_SCORES)[verdict.severity];
     return {
       label: dimension.label,
-      score: pointScores[verdict.severity],
+      score: pointScore,
       status: pointStatus(verdict.severity),
       evidence: { md: evidence },
+      suggestion: verdict.suggestion || undefined,
     } satisfies EvalPoint;
   });
   return normalizeEvaluatorOutput({ score: definition.aggregate(verdicts), summary: summary || undefined, points });
 }
 
 export const severityPenalty: Readonly<Record<TextSeverity, number>> = {
-  safe: 0, minor: 20, moderate: 50, severe: 80,
+  safe: 0, minor: 20, moderate: 80, severe: 100,
 };
 
+/**
+ * 与安全风险评估器一致：最强问题完整扣除，其余问题按全部维度数均摊追加。
+ * 这样每个问题都会影响总分，同时不会因多个轻微问题机械饱和为 0。
+ */
 export function deductionScore(verdicts: readonly TextVerdict[], overrides: Partial<Record<string, Readonly<Record<TextSeverity, number>>>> = {}): number {
-  const total = verdicts.reduce((sum, verdict) => sum + (overrides[verdict.dimension] ?? severityPenalty)[verdict.severity], 0);
+  if (!verdicts.length) return 100;
+  const deductions = verdicts.map((verdict) => (overrides[verdict.dimension] ?? severityPenalty)[verdict.severity]);
+  const maximum = Math.max(...deductions);
+  const total = maximum + (deductions.reduce((sum, deduction) => sum + deduction, 0) - maximum) / verdicts.length;
   return Math.max(0, Math.min(100, Math.round(100 - total)));
 }

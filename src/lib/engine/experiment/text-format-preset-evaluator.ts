@@ -1,10 +1,10 @@
 import type { EvaluatorOutput } from '../../evaluators/eval-output';
 import type { FaithfulPresetContext } from './faithful-preset-evaluators';
-import { deductionScore, runTextJudge, type TextDimension, type TextJudgeDefinition } from './text-judge-common';
+import { deductionScore, defineTextJudgeDefinition, runTextJudge, type TextDimension } from './text-judge-common';
 
 export const TEXT_FORMAT_PRESET_ID = 'preset-text-format';
 
-const DEFINITION: TextJudgeDefinition = {
+const DEFINITION = defineTextJudgeDefinition({
   id: 'text-format',
   title: '文本格式规范性评估器',
   dimensions: [
@@ -27,7 +27,7 @@ const DEFINITION: TextJudgeDefinition = {
   ],
   buildInput: (ctx) => JSON.stringify({ agent_output: ctx.actualOutput }, null, 2),
   aggregate: (verdicts) => deductionScore(verdicts),
-};
+});
 
 export function runTextFormatPreset(user: string, ctx: FaithfulPresetContext): Promise<EvaluatorOutput> {
   return runTextJudge(DEFINITION, user, ctx);
