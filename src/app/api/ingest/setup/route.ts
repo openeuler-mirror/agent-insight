@@ -94,6 +94,7 @@ function generateBashScript(
     preselected: { value: string; label: string }[],
     llamaIndexVenv: string,
     llamaIndexPythonMode: string,
+    promptLlamaIndexPython: boolean,
     noninteractive: boolean,
     forceNoKey: boolean,
 ): string {
@@ -112,6 +113,7 @@ function generateBashScript(
         'OPENCODE_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/opencode"',
         'NONINTERACTIVE=' + (noninteractive ? 'true' : 'false'),
         'NONINTERACTIVE_FRAMEWORKS="' + bashDoubleQuoted(preselected.map(f => f.value).join(',') || 'opencode') + '"',
+        'PROMPT_LLAMAINDEX_PYTHON=' + (promptLlamaIndexPython ? 'true' : 'false'),
         'FORCE_NO_KEY=' + (forceNoKey ? 'true' : 'false'),
         'for arg in "$@"; do',
         '    case "$arg" in',
@@ -414,7 +416,7 @@ function generateBashScript(
         'if [ "$INSTALL_LLAMAINDEX" = "true" ]; then',
         '    LLAMAINDEX_CONFIGURED_VENV="' + bashDoubleQuoted(llamaIndexVenv) + '"',
         '    LLAMAINDEX_CONFIGURED_MODE="' + bashDoubleQuoted(llamaIndexPythonMode) + '"',
-        '    if [ "$LLAMAINDEX_CONFIGURED_MODE" = "auto" ] && [ "$NONINTERACTIVE" != "true" ] && { : < /dev/tty; } 2>/dev/null; then',
+        '    if [ "$LLAMAINDEX_CONFIGURED_MODE" = "auto" ] && { [ "$NONINTERACTIVE" != "true" ] || [ "$PROMPT_LLAMAINDEX_PYTHON" = "true" ]; } && { : < /dev/tty; } 2>/dev/null; then',
         '        read -r -p "👉 Use a virtual environment for LlamaIndex? (y/N, default: global Python): " LLAMAINDEX_USE_VENV < /dev/tty',
         '        if [[ "$LLAMAINDEX_USE_VENV" =~ ^[Yy]$ ]]; then',
         '            read -r -p "👉 Virtual environment root (for example, /workspace/app/.venv): " LLAMAINDEX_CONFIGURED_VENV < /dev/tty',
@@ -1069,6 +1071,7 @@ function generatePowerShellScript(
     preselected: { value: string; label: string }[],
     llamaIndexVenv: string,
     llamaIndexPythonMode: string,
+    promptLlamaIndexPython: boolean,
     noninteractive: boolean,
     forceNoKey: boolean,
 ): string {
@@ -1084,6 +1087,7 @@ function generatePowerShellScript(
         '$AGENT_INSIGHT_SETUP_API_KEY = "' + powerShellDoubleQuoted(apiKey) + '"',
         '$NONINTERACTIVE = $' + (noninteractive ? 'true' : 'false'),
         '$NONINTERACTIVE_FRAMEWORKS = "' + powerShellDoubleQuoted(preselected.map(f => f.value).join(',') || 'opencode') + '"',
+        '$PROMPT_LLAMAINDEX_PYTHON = $' + (promptLlamaIndexPython ? 'true' : 'false'),
         '$FORCE_NO_KEY = $' + (forceNoKey ? 'true' : 'false'),
         'if ($env:AGENT_INSIGHT_NONINTERACTIVE -eq "1" -or $env:AGENT_INSIGHT_NONINTERACTIVE -eq "true") { $NONINTERACTIVE = $true }',
         'if ($env:AGENT_INSIGHT_FRAMEWORKS) { $NONINTERACTIVE = $true; $NONINTERACTIVE_FRAMEWORKS = $env:AGENT_INSIGHT_FRAMEWORKS }',
@@ -1344,7 +1348,7 @@ function generatePowerShellScript(
         '    $llamaIndexConfiguredVenv = "' + powerShellDoubleQuoted(llamaIndexVenv) + '"',
         '    $llamaIndexConfiguredMode = "' + powerShellDoubleQuoted(llamaIndexPythonMode) + '"',
         '    $llamaIndexCanPrompt = [Environment]::UserInteractive -and -not [Console]::IsInputRedirected',
-        '    if ($llamaIndexConfiguredMode -eq "auto" -and -not $NONINTERACTIVE -and $llamaIndexCanPrompt) {',
+        '    if ($llamaIndexConfiguredMode -eq "auto" -and ((-not $NONINTERACTIVE) -or $PROMPT_LLAMAINDEX_PYTHON) -and $llamaIndexCanPrompt) {',
         '        $llamaIndexUseVenv = Read-Host "👉 Use a virtual environment for LlamaIndex? (y/N, default: global Python)"',
         '        if ($llamaIndexUseVenv -match "^[Yy]$") {',
         '            $llamaIndexConfiguredVenv = Read-Host "👉 Virtual environment root (for example, C:\\workspace\\app\\.venv)"',
@@ -2065,6 +2069,12 @@ export async function GET(request: Request) {
     const llamaIndexPythonMode = requestedPythonMode === 'global' || requestedPythonMode === 'venv'
         ? requestedPythonMode
         : 'auto';
+    // 安装指导仍用 yes=1 跳过框架、Key 和 Host 的重复询问，但 LlamaIndex
+    // 需要在脚本启动后由用户选择实际项目所用的全局 Python 或虚拟环境。
+    // 独立标志避免改变 CI/自动部署中 yes=1 的全程非交互语义。
+    const promptLlamaIndexPython = queryFlagEnabled(
+        requestUrl.searchParams.get('llamaindexPromptPython'),
+    );
 
     const platform = detectPlatform(request);
 
@@ -2076,6 +2086,7 @@ export async function GET(request: Request) {
             preselected,
             llamaIndexVenv,
             llamaIndexPythonMode,
+            promptLlamaIndexPython,
             noninteractive,
             forceNoKey,
         );
@@ -2092,6 +2103,7 @@ export async function GET(request: Request) {
             preselected,
             llamaIndexVenv,
             llamaIndexPythonMode,
+            promptLlamaIndexPython,
             noninteractive,
             forceNoKey,
         );

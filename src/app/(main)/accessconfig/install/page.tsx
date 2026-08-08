@@ -98,6 +98,7 @@ export default function AccessInstallPage() {
             apiKey ? `key=${encodeURIComponent(apiKey)}` : '',
             frameworks.length ? `yes=1` : '',
             frameworks.length ? `frameworks=${frameworks.join(',')}` : '',
+            frameworks.includes('llamaindex') ? 'llamaindexPromptPython=1' : '',
         ].filter(Boolean).join('&');
         const suffix = query ? `?${query}` : '';
         setLinuxCmd(`curl -sSf "${baseUrl}${setupUrl}${suffix}" | bash`);

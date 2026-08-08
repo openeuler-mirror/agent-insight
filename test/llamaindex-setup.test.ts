@@ -108,6 +108,7 @@ test('install guide exposes LlamaIndex through the shared one-line installer', (
   assert.match(page, /value: 'llamaindex'/);
   assert.match(page, /getApiUrl\('\/api\/ingest\/setup'\)/);
   assert.match(page, /frameworks=\$\{frameworks\.join\(','\)\}/);
+  assert.match(page, /frameworks\.includes\('llamaindex'\) \? 'llamaindexPromptPython=1' : ''/);
   assert.doesNotMatch(page, /llamaindexVenv=/);
   assert.doesNotMatch(page, /llamaindexPython=/);
   assert.doesNotMatch(page, /LlamaIndex Python environment/);
@@ -153,6 +154,31 @@ test('interactive setup chooses the LlamaIndex Python environment after the scri
   const autoScript = await autoResponse.text();
   assert.doesNotMatch(autoScript, /Use a virtual environment for LlamaIndex/);
   assert.match(autoScript, /LLAMAINDEX_CONFIGURED_MODE="auto"/);
+});
+
+test('install-guide command stays non-interactive except for LlamaIndex Python selection', async () => {
+  const query = 'key=test-key&yes=1&frameworks=llamaindex&llamaindexPromptPython=1';
+
+  const unixResponse = await getSetup(new Request(
+    `http://localhost/api/ingest/setup?${query}`,
+    { headers: { 'x-platform': 'unix', host: 'localhost:3000' } },
+  ));
+  const unixScript = await unixResponse.text();
+  assert.match(unixScript, /^NONINTERACTIVE=true$/m);
+  assert.match(unixScript, /^PROMPT_LLAMAINDEX_PYTHON=true$/m);
+  assert.match(unixScript, /\[ "\$NONINTERACTIVE" != "true" \] \|\| \[ "\$PROMPT_LLAMAINDEX_PYTHON" = "true" \]/);
+  assert.match(unixScript, /Use a virtual environment for LlamaIndex/);
+  assert.equal(spawnSync('bash', ['-n'], { input: unixScript, encoding: 'utf8' }).status, 0);
+
+  const windowsResponse = await getSetup(new Request(
+    `http://localhost/api/ingest/setup?${query}`,
+    { headers: { 'x-platform': 'windows', host: 'localhost:3000' } },
+  ));
+  const windowsScript = await windowsResponse.text();
+  assert.match(windowsScript, /^\$NONINTERACTIVE = \$true$/m);
+  assert.match(windowsScript, /^\$PROMPT_LLAMAINDEX_PYTHON = \$true$/m);
+  assert.match(windowsScript, /\(\(-not \$NONINTERACTIVE\) -or \$PROMPT_LLAMAINDEX_PYTHON\)/);
+  assert.match(windowsScript, /Read-Host "👉 Use a virtual environment for LlamaIndex/);
 });
 
 test('setup embeds an optional LlamaIndex virtual environment and otherwise keeps global Python', async () => {
