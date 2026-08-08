@@ -32,6 +32,34 @@ export interface TextVerdict {
   suggestion: string;
 }
 
+export interface TextRiskAggregateConfig {
+  dimensionKeys: readonly string[];
+  criticalDimensionKeys: readonly string[];
+  ordinaryDimensionKeys: readonly string[];
+}
+
+function validateTextRiskAggregateConfig(config: TextRiskAggregateConfig): void {
+  const all = [...config.criticalDimensionKeys, ...config.ordinaryDimensionKeys];
+  if (new Set(config.dimensionKeys).size !== config.dimensionKeys.length) {
+    throw new Error('文本风险聚合配置中的维度定义存在重复项');
+  }
+  if (new Set(all).size !== all.length) {
+    throw new Error('文本风险聚合配置中的关键项和普通项存在重复项');
+  }
+  const expected = new Set(config.dimensionKeys);
+  if (all.length !== expected.size || all.some((key) => !expected.has(key))) {
+    throw new Error('文本风险聚合配置必须完整覆盖全部维度');
+  }
+  if (config.criticalDimensionKeys.length === 0) {
+    throw new Error('文本风险聚合配置至少需要一个关键维度');
+  }
+}
+
+export function defineTextRiskAggregateConfig<T extends TextRiskAggregateConfig>(config: T): Readonly<T> {
+  validateTextRiskAggregateConfig(config);
+  return Object.freeze(config);
+}
+
 export function defineTextJudgeDefinition<T extends TextJudgeDefinition>(definition: T): T {
   if (!definition.id.trim() || !definition.title.trim()) throw new Error('文本评估器必须提供 id 和 title');
   if (!definition.dimensions.length) throw new Error(`文本评估器 ${definition.id} 至少需要一个维度`);
@@ -190,5 +218,27 @@ export function deductionScore(verdicts: readonly TextVerdict[], overrides: Part
   const deductions = verdicts.map((verdict) => (overrides[verdict.dimension] ?? severityPenalty)[verdict.severity]);
   const maximum = Math.max(...deductions);
   const total = maximum + (deductions.reduce((sum, deduction) => sum + deduction, 0) - maximum) / verdicts.length;
+  return Math.max(0, Math.min(100, Math.round(100 - total)));
+}
+
+/** 扣分聚合：关键维度按 100、普通维度按 90；最大扣分完整计入，其余风险按 N 均摊追加。 */
+export function configuredDeductionScore(
+  verdicts: readonly TextVerdict[],
+  config: TextRiskAggregateConfig,
+  overrides: Partial<Record<string, Readonly<Record<TextSeverity, number>>>> = {},
+): number {
+  if (!verdicts.length) return 100;
+  const byDimension = new Map(verdicts.map((verdict) => [verdict.dimension, verdict]));
+  if (byDimension.size !== config.dimensionKeys.length || config.dimensionKeys.some((key) => !byDimension.has(key))) {
+    throw new Error('文本风险聚合输入必须包含全部且仅包含评估器维度');
+  }
+  const critical = new Set(config.criticalDimensionKeys);
+  const deductions = config.dimensionKeys.map((key) => {
+    const verdict = byDimension.get(key)!;
+    const penalty = (overrides[key] ?? severityPenalty)[verdict.severity];
+    return (critical.has(key) ? 100 : 90) * penalty / 100;
+  });
+  const maximum = Math.max(...deductions);
+  const total = maximum + (deductions.reduce((sum, deduction) => sum + deduction, 0) - maximum) / config.dimensionKeys.length;
   return Math.max(0, Math.min(100, Math.round(100 - total)));
 }

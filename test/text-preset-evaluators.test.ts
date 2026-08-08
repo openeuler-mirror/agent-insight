@@ -3,13 +3,16 @@ import { afterEach, describe, it } from 'node:test';
 import type { EvalPoint } from '../src/lib/evaluators/eval-output';
 import { setJudgeLlmCallerForTest, type JudgeLlmRequest } from '../src/lib/engine/experiment/judge-llm';
 import {
+  configuredDeductionScore,
   deductionScore,
   defineTextJudgeDefinition,
+  defineTextRiskAggregateConfig,
   TEXT_POINT_SCORES,
   type TextSeverity,
   type TextVerdict,
 } from '../src/lib/engine/experiment/text-judge-common';
 import { aggregateTextConcisenessScore } from '../src/lib/engine/experiment/text-conciseness-preset-evaluator';
+import { TEXT_FORMAT_RISK_CONFIG } from '../src/lib/engine/experiment/text-format-preset-evaluator';
 import { TEXT_LANGUAGE_PENALTIES } from '../src/lib/engine/experiment/text-language-consistency-preset-evaluator';
 import { runTextPreset, type TextPresetId } from '../src/lib/engine/experiment/text-preset-evaluators';
 
@@ -225,6 +228,38 @@ describe('文本评估器公式和输出契约', () => {
     assert.equal(deductionScore(makeVerdicts(['minor', 'safe', 'safe', 'safe'])), 80);
     assert.equal(deductionScore(makeVerdicts(['moderate', 'safe', 'safe', 'safe'])), 20);
     assert.equal(deductionScore(makeVerdicts(['minor', 'minor', 'safe', 'safe'])), 75);
+  });
+
+  it('格式评估器关键维度比普通维度扣分更重', () => {
+    const make = (dimension: string, severity: TextSeverity): TextVerdict[] => TEXT_FORMAT_RISK_CONFIG.dimensionKeys.map((key) => ({
+      dimension: key,
+      severity: key === dimension ? severity : 'safe',
+      quote: '',
+      reason: '',
+      suggestion: '',
+    }));
+    assert.equal(configuredDeductionScore(make('numbering_continuity', 'minor'), TEXT_FORMAT_RISK_CONFIG), 80);
+    assert.equal(configuredDeductionScore(make('punctuation_standardization', 'minor'), TEXT_FORMAT_RISK_CONFIG), 82);
+    assert.equal(configuredDeductionScore(make('numbering_continuity', 'severe'), TEXT_FORMAT_RISK_CONFIG), 0);
+    assert.equal(configuredDeductionScore(make('punctuation_standardization', 'severe'), TEXT_FORMAT_RISK_CONFIG), 10);
+  });
+
+  it('文本关键/普通聚合配置在模块加载期拒绝遗漏、重复和无关键维度', () => {
+    assert.doesNotThrow(() => defineTextRiskAggregateConfig({
+      dimensionKeys: ['critical', 'ordinary'],
+      criticalDimensionKeys: ['critical'],
+      ordinaryDimensionKeys: ['ordinary'],
+    }));
+    assert.throws(() => defineTextRiskAggregateConfig({
+      dimensionKeys: ['critical', 'ordinary'],
+      criticalDimensionKeys: ['critical'],
+      ordinaryDimensionKeys: [],
+    }));
+    assert.throws(() => defineTextRiskAggregateConfig({
+      dimensionKeys: ['critical', 'ordinary'],
+      criticalDimensionKeys: ['critical', 'ordinary'],
+      ordinaryDimensionKeys: ['ordinary'],
+    }));
   });
 
   it('语种差异化扣分和简洁性加权公式均保持单调', () => {

@@ -1,8 +1,38 @@
 import type { EvaluatorOutput } from '../../evaluators/eval-output';
 import type { FaithfulPresetContext } from './faithful-preset-evaluators';
-import { deductionScore, defineTextJudgeDefinition, runTextJudge, type TextDimension } from './text-judge-common';
+import {
+  configuredDeductionScore,
+  defineTextJudgeDefinition,
+  defineTextRiskAggregateConfig,
+  runTextJudge,
+  type TextDimension,
+} from './text-judge-common';
 
 export const TEXT_FORMAT_PRESET_ID = 'preset-text-format';
+
+/**
+ * 连续性和引用断开会破坏文档结构或可追溯性，因此是关键维度；
+ * 其余维度属于普通风格/呈现问题，使用略低的扣分权重。
+ */
+export const TEXT_FORMAT_RISK_CONFIG = defineTextRiskAggregateConfig({
+  dimensionKeys: [
+    'numbering_continuity',
+    'citation_mark_correctness',
+    'list_hierarchy',
+    'punctuation_standardization',
+    'layout_consistency',
+    'tabular_format',
+    'special_format_correctness',
+  ],
+  criticalDimensionKeys: ['numbering_continuity', 'citation_mark_correctness'],
+  ordinaryDimensionKeys: [
+    'list_hierarchy',
+    'punctuation_standardization',
+    'layout_consistency',
+    'tabular_format',
+    'special_format_correctness',
+  ],
+});
 
 const DEFINITION = defineTextJudgeDefinition({
   id: 'text-format',
@@ -26,7 +56,7 @@ const DEFINITION = defineTextJudgeDefinition({
     '纯自然段文本无需额外排版规则，全部维度可判 safe。',
   ],
   buildInput: (ctx) => JSON.stringify({ agent_output: ctx.actualOutput }, null, 2),
-  aggregate: (verdicts) => deductionScore(verdicts),
+  aggregate: (verdicts) => configuredDeductionScore(verdicts, TEXT_FORMAT_RISK_CONFIG),
 });
 
 export function runTextFormatPreset(user: string, ctx: FaithfulPresetContext): Promise<EvaluatorOutput> {

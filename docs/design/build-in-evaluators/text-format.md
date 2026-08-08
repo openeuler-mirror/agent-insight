@@ -28,3 +28,11 @@ Judge 对七个固定维度返回 `safe/minor/moderate/severe`、问题原文、
 代码块按代码语义处理，不把命令或关键字误判为正文编号；纯自然段无需强制套用标题、列表或表格格式。
 
 专项测试保留需求自带 14 条格式样例，通过注入 Judge 离散 verdict 验证阈值、细则证据和输出契约，不调用外部模型。
+
+## 关键维度与普通维度
+
+`numbering_continuity`（序号连续性）和 `citation_mark_correctness`（引用标记正确性）属于关键维度。跳号、重复编号、引用断开或引用目标不存在会直接破坏文档结构或可追溯性，因此关键维度按 100 的扣分权重计算。
+
+`list_hierarchy`、`punctuation_standardization`、`layout_consistency`、`tabular_format` 和 `special_format_correctness` 属于普通维度，按 90 的扣分权重计算。普通维度仍会逐项扣分，但同等严重程度下影响略低于关键维度。
+
+综合分继续采用“最大扣分完整计入，其余扣分按维度总数均摊追加”的公式：关键维度扣分为 `100 × (100-s)/100`，普通维度扣分为 `90 × (100-s)/100`，`D = max(d_i) + (Σd_i-max(d_i))/N`，最终 `score = clamp(round(100-D), 0, 100)`。
