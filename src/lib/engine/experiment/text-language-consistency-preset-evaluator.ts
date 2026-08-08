@@ -1,15 +1,25 @@
 import type { EvaluatorOutput } from '../../evaluators/eval-output';
 import type { FaithfulPresetContext } from './faithful-preset-evaluators';
-import { deductionScore, defineTextJudgeDefinition, runTextJudge, type TextDimension, type TextSeverity } from './text-judge-common';
+import {
+  configuredDeductionScore,
+  defineTextJudgeDefinition,
+  defineTextRiskAggregateConfig,
+  runTextJudge,
+  type TextDimension,
+} from './text-judge-common';
 
 export const TEXT_LANGUAGE_CONSISTENCY_PRESET_ID = 'preset-text-language-consistency';
 
-export const TEXT_LANGUAGE_PENALTIES: Readonly<Record<string, Readonly<Record<TextSeverity, number>>>> = {
-  primary_language_match: { safe: 0, minor: 20, moderate: 60, severe: 90 },
-  unnecessary_mixing: { safe: 0, minor: 25, moderate: 55, severe: 75 },
-  code_switch_rationale: { safe: 0, minor: 20, moderate: 45, severe: 65 },
-  bilingual_handling: { safe: 0, minor: 25, moderate: 55, severe: 70 },
-};
+export const TEXT_LANGUAGE_RISK_CONFIG = defineTextRiskAggregateConfig({
+  dimensionKeys: [
+    'primary_language_match',
+    'unnecessary_mixing',
+    'code_switch_rationale',
+    'bilingual_handling',
+  ],
+  criticalDimensionKeys: ['primary_language_match'],
+  ordinaryDimensionKeys: ['unnecessary_mixing', 'code_switch_rationale', 'bilingual_handling'],
+});
 
 const DEFINITION = defineTextJudgeDefinition({
   id: 'text-language-consistency',
@@ -30,8 +40,7 @@ const DEFINITION = defineTextJudgeDefinition({
     '用户问题本身混合多种语言且是在逐词教学或翻译时，逐一解释属于合理处理。',
   ],
   buildInput: (ctx) => JSON.stringify({ user_question: ctx.caseInput, agent_output: ctx.actualOutput }, null, 2),
-  aggregate: (verdicts) => deductionScore(verdicts, TEXT_LANGUAGE_PENALTIES),
-  pointScore: (verdict) => 100 - TEXT_LANGUAGE_PENALTIES[verdict.dimension][verdict.severity],
+  aggregate: (verdicts) => configuredDeductionScore(verdicts, TEXT_LANGUAGE_RISK_CONFIG),
   requiresCaseInput: true,
 });
 

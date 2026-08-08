@@ -539,7 +539,7 @@ Trace 评测详情（`app/(main)/experiments/[id]/cases/[caseId]/page.tsx`）的
 | 创造性 `preset-creativity-expression` | Agent 输出 | 新颖性 · 视角独特性 · 非模板化 · 构思差异度 · 文采与修辞（5 维 1-3 档锚定，独立成族） |
 | 文本 AI 味 `preset-text-ai-flavor` | Agent 输出 | 模板化开篇 · 模板化结尾 · 机械连接词 · 泛化人物名称 · 空洞总结 · 过度礼貌（6 维扣分制） |
 | 文本格式 `preset-text-format` | Agent 输出 | 序号连续性 · 引用标记 · 列表层级 · 标点 · 排版 · 表格 · 特殊格式（7 维扣分制） |
-| 文本语种一致性 `preset-text-language-consistency` | 用户问题与 Agent 输出 | 主语言匹配 · 非必要混杂 · 代码切换理由 · 双语场景处理（4 维扣分制） |
+| 文本语种一致性 `preset-text-language-consistency` | 用户问题与 Agent 输出 | 主语言匹配（关键维度）· 非必要混杂 · 代码切换理由 · 双语场景处理（3 个普通维度，4 维扣分制） |
 | 文本简洁性 `preset-text-conciseness` | 用户问题与 Agent 输出 | 表达效率 · 套话精简 · 主需求聚焦 · 信息完整（0.3/0.2/0.3/0.2 加权） |
 | 回答深度性 `preset-depth-result` | 用户问题与最终答案 | 问题要求的原因分析深度 · 结构化推理 · 多视角权衡 · 背景与语境 · 洞察与升华；不适用维度不计分 |
 | 轨迹工具利用率 `preset-agent-tool-utilization` | Tool/Skill 目录与执行轨迹 | 任务相关能力覆盖 · 调用频次 · 任务匹配利用 · 合理闲置 |

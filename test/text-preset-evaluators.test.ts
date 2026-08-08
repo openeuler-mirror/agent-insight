@@ -13,7 +13,7 @@ import {
 } from '../src/lib/engine/experiment/text-judge-common';
 import { aggregateTextConcisenessScore } from '../src/lib/engine/experiment/text-conciseness-preset-evaluator';
 import { TEXT_FORMAT_RISK_CONFIG } from '../src/lib/engine/experiment/text-format-preset-evaluator';
-import { TEXT_LANGUAGE_PENALTIES } from '../src/lib/engine/experiment/text-language-consistency-preset-evaluator';
+import { TEXT_LANGUAGE_RISK_CONFIG } from '../src/lib/engine/experiment/text-language-consistency-preset-evaluator';
 import { runTextPreset, type TextPresetId } from '../src/lib/engine/experiment/text-preset-evaluators';
 
 const USER = 'text-evaluator-test';
@@ -140,8 +140,7 @@ function judgeJson(id: TextPresetId, findings: Record<string, ExpectedFinding> =
   });
 }
 
-function expectedPointScore(id: TextPresetId, dimension: string, severity: TextSeverity): number {
-  if (id === 'preset-text-language-consistency') return 100 - TEXT_LANGUAGE_PENALTIES[dimension][severity];
+function expectedPointScore(id: TextPresetId, _dimension: string, severity: TextSeverity): number {
   if (id === 'preset-text-conciseness') return CONCISENESS_POINT_SCORES[severity];
   return TEXT_POINT_SCORES[severity];
 }
@@ -262,7 +261,7 @@ describe('文本评估器公式和输出契约', () => {
     }));
   });
 
-  it('语种差异化扣分和简洁性加权公式均保持单调', () => {
+  it('语种关键/普通扣分和简洁性加权公式均保持单调', () => {
     for (const id of ['preset-text-language-consistency', 'preset-text-conciseness'] as const) {
       const base = dimensions[id].map((dimension) => ({ dimension, severity: 'safe', quote: '', reason: '', suggestion: '' } satisfies TextVerdict));
       for (const dimension of dimensions[id]) {
@@ -270,13 +269,31 @@ describe('文本评估器公式和输出契约', () => {
         for (const severity of SEVERITIES) {
           const verdicts = base.map((verdict) => verdict.dimension === dimension ? { ...verdict, severity } : verdict);
           const score = id === 'preset-text-language-consistency'
-            ? deductionScore(verdicts, TEXT_LANGUAGE_PENALTIES)
+            ? configuredDeductionScore(verdicts, TEXT_LANGUAGE_RISK_CONFIG)
             : aggregateTextConcisenessScore(verdicts);
           assert.ok(score <= previous, `${id}/${dimension}: ${severity} 时 ${score} > ${previous}`);
           previous = score;
         }
       }
     }
+  });
+
+  it('语种一致性将主语言匹配设为关键维度，其余维度为普通维度', () => {
+    assert.deepEqual(TEXT_LANGUAGE_RISK_CONFIG.criticalDimensionKeys, ['primary_language_match']);
+    assert.deepEqual(TEXT_LANGUAGE_RISK_CONFIG.ordinaryDimensionKeys, [
+      'unnecessary_mixing',
+      'code_switch_rationale',
+      'bilingual_handling',
+    ]);
+    const make = (dimension: string, severity: TextSeverity): TextVerdict[] => TEXT_LANGUAGE_RISK_CONFIG.dimensionKeys.map((key) => ({
+      dimension: key,
+      severity: key === dimension ? severity : 'safe',
+      quote: '',
+      reason: '',
+      suggestion: '',
+    }));
+    assert.equal(configuredDeductionScore(make('primary_language_match', 'severe'), TEXT_LANGUAGE_RISK_CONFIG), 0);
+    assert.equal(configuredDeductionScore(make('unnecessary_mixing', 'severe'), TEXT_LANGUAGE_RISK_CONFIG), 10);
   });
 
   it('细则 0 分被完整保留，summary 被压缩到 80 字以内', async () => {
