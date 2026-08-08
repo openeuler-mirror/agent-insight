@@ -1,4 +1,5 @@
 import { resolveUser } from '@/lib/auth/auth';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { parseSkillFlow } from '@/lib/engine/observability/flow-parser';
 import { getSkillVersionAssetPath, getSkillVersionStorageDir } from '@/lib/env';
 import { findSkillMd, fileContentToString } from '@/lib/skill-generator/skill-files';
@@ -135,6 +136,13 @@ export async function POST(request: NextRequest) {
                 }
             })
             .catch(e => console.warn(`[Publish] Flow parse error:`, e));
+
+        recordUsageEvent({
+            user: authResult.username,
+            featureKey: 'skill',
+            eventKey: 'skill.publish',
+            route: request.nextUrl.pathname,
+        });
 
         return NextResponse.json({
             success: true,

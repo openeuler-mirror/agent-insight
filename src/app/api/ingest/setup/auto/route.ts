@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server';
+
+import { configuredQoderJetBrainsPackageUrl } from '@/lib/ingest/qoder-plugin-release';
 import {
   CODEAGENT_UNIX_SETUP_BLOCK,
   CODEAGENT_WINDOWS_SETUP_BLOCK,
 } from '../codeagent-setup';
-
 function bashDoubleQuoted(value: string): string {
     return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$').replace(/`/g, '\\`');
 }
@@ -67,6 +68,7 @@ export async function GET(request: Request) {
 }
 
 function generateBashScript(baseUrl: string, hostParam: string, apiKey: string, llamaIndexVenv: string, llamaIndexPythonMode: string): NextResponse {
+    const qoderJetBrainsPackageUrl = configuredQoderJetBrainsPackageUrl();
     const script = `#!/bin/bash
 # =============================================================================
 # Agent-insight Auto Setup (Non-Interactive)
@@ -75,6 +77,7 @@ function generateBashScript(baseUrl: string, hostParam: string, apiKey: string, 
 AGENT_INSIGHT_HOST="${hostParam}"
 AGENT_INSIGHT_BASE_URL="${baseUrl}"
 AGENT_INSIGHT_API_KEY="${apiKey}"
+QODER_JETBRAINS_RELEASE_URL="${bashDoubleQuoted(qoderJetBrainsPackageUrl)}"
 
 echo "🚀 Fetching Agent-insight telemetry components from $AGENT_INSIGHT_BASE_URL..."
 
@@ -129,7 +132,9 @@ const frameworks = [
     { name: 'Hermes', value: 'hermes' },
     { name: 'OpenClaw', value: 'openclaw' },
     { name: 'JiuwenSwarm', value: 'jiuwen' },
-    { name: 'LlamaIndex', value: 'llamaindex' }
+    { name: 'LlamaIndex', value: 'llamaindex' },
+    { name: 'Qoder CN product family', value: 'qoder' },
+    { name: 'Trae IDE', value: 'trae' }
 ];
 
 async function select() {
@@ -203,6 +208,8 @@ INSTALL_OPENCLAW=false
 INSTALL_JIUWEN=false
 INSTALL_LLAMAINDEX=false
 LLAMAINDEX_READY=false
+INSTALL_QODER=false
+INSTALL_TRAE=false
 
 if [[ "$SELECTED_FRAMEWORKS" == *"opencode"* ]]; then
     INSTALL_OPENCODE=true
@@ -225,9 +232,15 @@ fi
 if [[ "$SELECTED_FRAMEWORKS" == *"llamaindex"* ]]; then
     INSTALL_LLAMAINDEX=true
 fi
+if [[ "$SELECTED_FRAMEWORKS" == *"qoder"* ]]; then
+    INSTALL_QODER=true
+fi
+if [[ "$SELECTED_FRAMEWORKS" == *"trae"* ]]; then
+    INSTALL_TRAE=true
+fi
 
 # Exit if nothing selected
-if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_LLAMAINDEX" = "false" ]; then
+if [ "$INSTALL_OPENCODE" = "false" ] && [ "$INSTALL_CLAUDE" = "false" ] && [ "$INSTALL_CODEAGENT" = "false" ] && [ "$INSTALL_HERMES" = "false" ] && [ "$INSTALL_OPENCLAW" = "false" ] && [ "$INSTALL_JIUWEN" = "false" ] && [ "$INSTALL_LLAMAINDEX" = "false" ] && [ "$INSTALL_QODER" = "false" ] && [ "$INSTALL_TRAE" = "false" ]; then
     echo "⚠️  未选择任何框架组件，将跳过插件安装。"
     echo "   继续执行配置步骤..."
     echo ""
@@ -437,6 +450,114 @@ LLAMAINDEX_UNINSTALL_EOF
     fi
 fi
 
+if [ "$INSTALL_QODER" = "true" ]; then
+    echo "Downloading Agent Insight Qoder CN collectors..."
+    QODER_DIST_DIR="$HOME/.agent-insight/qoder-distribution"
+    mkdir -p "$QODER_DIST_DIR"
+    for component in qoder_setup.mjs qoder_token_usage_env.mjs qoder_trace_collector.mjs qoder_uploader_client.mjs qoder_work_setup.mjs; do
+        curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup?component=$component" -o "$QODER_DIST_DIR/$component"
+    done
+fi
+if [ "$INSTALL_TRAE" = "true" ]; then
+    echo "Installing Trae IDE collector..."
+    echo "  Step 1: Downloading VSIX..."
+    TMP_VSIX="/tmp/trae-collector.vsix"
+    curl -sSf "$AGENT_INSIGHT_BASE_URL/api/setup/trae" -o "$TMP_VSIX"
+
+    INSTALLED=false
+    # Try TRAE CLI first (handles extension registration automatically)
+    if command -v trae-cn &>/dev/null; then
+        echo "  Step 2: Installing via trae-cn CLI..."
+        trae-cn --install-extension "$TMP_VSIX" --force 2>/dev/null && INSTALLED=true
+    fi
+    if ! $INSTALLED && command -v trae &>/dev/null; then
+        echo "  Step 2: Installing via trae CLI..."
+        trae --install-extension "$TMP_VSIX" --force 2>/dev/null && INSTALLED=true
+    fi
+
+    # Fallback: deploy directly to filesystem
+    if ! $INSTALLED; then
+        echo "  Step 2: No IDE CLI found, deploying to filesystem..."
+        # Detect TRAE install directory (trae-cn or trae-cn-server)
+        TRAE_ROOT=""
+        for d in "$HOME/.trae-cn" "$HOME/.trae-cn-server"; do
+            if [ -d "$d" ]; then TRAE_ROOT="$d"; break; fi
+        done
+        if [ -z "$TRAE_ROOT" ]; then
+            TRAE_ROOT="$HOME/.trae-cn-server"
+            echo "  (TRAE not found, using default: $TRAE_ROOT)"
+        else
+            echo "  Found TRAE at: $TRAE_ROOT"
+        fi
+
+        EXT_DIR="$TRAE_ROOT/extensions"
+        EXT_NAME="agent-insight.agent-insight-trae-collector-0.1.0"
+        TARGET="$EXT_DIR/$EXT_NAME"
+
+        # Step 3: Extract VSIX to extensions directory
+        echo "  Step 3: Extracting VSIX to $TARGET..."
+        mkdir -p "$TARGET"
+        unzip -o "$TMP_VSIX" -d "$TARGET" 2>/dev/null
+        if [ -d "$TARGET/extension" ]; then
+            cp -r "$TARGET/extension/"* "$TARGET/" 2>/dev/null
+            rm -rf "$TARGET/extension" "$TARGET/extension.vsixmanifest" "$TARGET/[Content_Types].xml" 2>/dev/null
+        fi
+
+        # Step 4: Register in extensions.json (remove old + add new)
+        echo "  Step 4: Registering extension..."
+        EXT_JSON="$EXT_DIR/extensions.json"
+        if [ -f "$EXT_JSON" ]; then
+            export _EXT_JSON="$EXT_JSON" _TARGET="$TARGET" _EXT_NAME="$EXT_NAME"
+            python3 << 'TRAE_PYEOF'
+import json, time, os
+ext_id = "agent-insight.agent-insight-trae-collector"
+ext_json = os.environ["_EXT_JSON"]
+target = os.environ["_TARGET"]
+ext_name = os.environ["_EXT_NAME"]
+with open(ext_json) as f:
+    exts = json.load(f)
+exts = [e for e in exts if e.get("identifier",{}).get("id","") != ext_id]
+exts.append({
+    "identifier": {"id": ext_id},
+    "version": "0.1.0",
+    "location": {"$mid": 1, "fsPath": target, "path": target, "scheme": "file"},
+    "relativeLocation": ext_name,
+    "metadata": {"installedTimestamp": int(time.time() * 1000), "pinned": True, "source": "vsix"}
+})
+with open(ext_json, "w") as f:
+    json.dump(exts, f, indent=2)
+TRAE_PYEOF
+            echo "  [OK] Extension registered"
+        else
+            echo "  [WARN] extensions.json not found, extension registration skipped"
+        fi
+        INSTALLED=true
+    fi
+
+    # Clean stale cached copies in Trae IDE bin/ to prevent version mismatch
+    for TRAE_SERVER in "$HOME/.trae-cn-server" "$HOME/.trae-cn"; do
+        if [ -d "$TRAE_SERVER/bin" ]; then
+            find "$TRAE_SERVER/bin" -maxdepth 3 -type d -name "agent-insight*" -exec rm -rf {} + 2>/dev/null
+        fi
+    done
+
+    rm -f "$TMP_VSIX"
+
+    # Step 5: Deploy Hook scripts (via extension setup.sh)
+    EXT_NAME="agent-insight.agent-insight-trae-collector-0.1.0"
+    for TRAE_BASE in "$HOME/.trae-cn" "$HOME/.trae-cn-server"; do
+        SETUP_SCRIPT="$TRAE_BASE/extensions/$EXT_NAME/setup.sh"
+        if [ -f "$SETUP_SCRIPT" ]; then
+            echo "  Step 5: Deploying Hook scripts..."
+            bash "$SETUP_SCRIPT"
+            break
+        fi
+    done
+
+    echo "  [OK] Trae IDE collector installed"
+    echo "  [NOTE] Restart TRAE IDE to activate"
+fi
+
 # 4. Configure ~/.agent-insight/.env (Auto mode - no interaction)
 AGENT_INSIGHT_CONFIG_FILE="$HOME/.agent-insight/.env"
 FINAL_SHOW_TASK_STATS="true"
@@ -494,6 +615,50 @@ if [ "$LLAMAINDEX_READY" = "true" ]; then
     if ! PYTHONPATH="$LLAMAINDEX_SOURCE_DIR\${PYTHONPATH:+:$PYTHONPATH}" AGENT_INSIGHT_API_KEY="$AGENT_INSIGHT_API_KEY" "$LLAMAINDEX_PYTHON" -m agent_insight_llamaindex.cli configure --endpoint "$AGENT_INSIGHT_HOST"; then
         echo "❌ Unable to configure the LlamaIndex collector."
         LLAMAINDEX_READY=false
+    fi
+fi
+
+# 6.35 Install Qoder CN product-family collectors
+if [ "$INSTALL_QODER" = "true" ]; then
+    if node "$QODER_DIST_DIR/qoder_setup.mjs" install --host="$AGENT_INSIGHT_HOST" --api-key="$AGENT_INSIGHT_API_KEY" --scope=user --product=cli --owner=cli && node "$QODER_DIST_DIR/qoder_setup.mjs" install --host="$AGENT_INSIGHT_HOST" --api-key="$AGENT_INSIGHT_API_KEY" --scope=user --product=desktop --owner=desktop && node "$QODER_DIST_DIR/qoder_setup.mjs" install --host="$AGENT_INSIGHT_HOST" --api-key="$AGENT_INSIGHT_API_KEY" --scope=user --product=jetbrains --owner=jetbrains && node "$QODER_DIST_DIR/qoder_work_setup.mjs" install --host="$AGENT_INSIGHT_HOST" --api-key="$AGENT_INSIGHT_API_KEY"; then
+        echo "Qoder CN CLI/Desktop/JetBrains/Work collectors installed."
+        echo ""
+        QODER_PLUGIN_DIR="$HOME/.agent-insight/packages/qoder"
+        mkdir -p "$QODER_PLUGIN_DIR"
+        download_qoder_plugin() {
+            local label="$1" url="$2" target="$3" temp="\${3}.tmp.$$"
+            if curl -fsSL "$url" -o "$temp"; then
+                mv -f "$temp" "$target"
+                echo "  Downloaded $label: $target"
+                return 0
+            else
+                rm -f "$temp"
+                echo "  Warning: $label could not be downloaded from $url"
+                return 1
+            fi
+        }
+        echo "Downloading Qoder CN plugin packages..."
+        download_qoder_plugin "Qoder CN Desktop VSIX" "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/qoder-desktop-vsix" "$QODER_PLUGIN_DIR/agent-insight-qoder-desktop.vsix" || true
+        QODER_JETBRAINS_TARGET="$QODER_PLUGIN_DIR/agent-insight-qoder-jetbrains.zip"
+        if ! download_qoder_plugin "Qoder for JetBrains ZIP" "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/qoder-jetbrains-plugin" "$QODER_JETBRAINS_TARGET"; then
+            if [ -n "$QODER_JETBRAINS_RELEASE_URL" ]; then
+                echo "    Release attachment direct URL: $QODER_JETBRAINS_RELEASE_URL"
+                echo "    Retrying from the Release attachment..."
+                if ! download_qoder_plugin "Qoder for JetBrains ZIP (Release)" "$QODER_JETBRAINS_RELEASE_URL" "$QODER_JETBRAINS_TARGET"; then
+                    echo "    Manual download (Linux/macOS):"
+                    echo "      curl -fL \"$QODER_JETBRAINS_RELEASE_URL\" -o \"$QODER_JETBRAINS_TARGET\""
+                fi
+            else
+                echo "    Release attachment direct URL is not configured on the Agent Insight server."
+                echo "    Server administrator: set AGENT_INSIGHT_QODER_JETBRAINS_PACKAGE_URL to the trusted Release attachment URL, restart Agent Insight, and rerun setup."
+            fi
+        fi
+        echo "    Desktop install: Qoder CN Desktop -> Extensions -> ... -> Install from VSIX."
+        echo "    JetBrains package path: $QODER_JETBRAINS_TARGET"
+        echo "    JetBrains install: Settings -> Plugins -> gear icon -> Install Plugin from Disk -> select the ZIP above."
+        echo "    Restart the corresponding IDE after installing the downloaded package."
+    else
+        echo "Warning: Qoder CN collector installation did not complete; review the errors above."
     fi
 fi
 
@@ -729,6 +894,9 @@ fi
 if [ "$LLAMAINDEX_READY" = "true" ]; then
     echo "  ✅ LlamaIndex Trace Collector: $LLAMAINDEX_SOURCE_DIR"
 fi
+if [ "$INSTALL_TRAE" = "true" ]; then
+    echo "  [OK] Trae IDE Collector: installed"
+fi
 
 if [ "$NEEDS_WATCHER_SCRIPTS" = "true" ]; then
     echo ""
@@ -756,6 +924,9 @@ fi
 if [ "$INSTALL_HERMES" = "true" ]; then
     echo "  3. Restart Hermes or start a new Hermes conversation"
 fi
+if [ "$INSTALL_TRAE" = "true" ]; then
+    echo "  6. Restart TRAE IDE to activate the collector"
+fi
 if [ "$INSTALL_OPENCLAW" = "true" ]; then
     echo "  4. OpenClaw will automatically monitor and upload telemetry"
 fi
@@ -776,6 +947,7 @@ echo "------------------------------------------------"
 }
 
 function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: string, llamaIndexVenv: string, llamaIndexPythonMode: string): NextResponse {
+    const qoderJetBrainsPackageUrl = configuredQoderJetBrainsPackageUrl();
     const script = [
         '# =============================================================================',
         '# Skill-insight Auto Setup (Non-Interactive) - PowerShell',
@@ -784,6 +956,7 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '$AGENT_INSIGHT_HOST = "' + hostParam + '"',
         '$AGENT_INSIGHT_BASE_URL = "' + baseUrl + '"',
         '$AGENT_INSIGHT_API_KEY = "' + apiKey + '"',
+        '$QODER_JETBRAINS_RELEASE_URL = "' + powerShellDoubleQuoted(qoderJetBrainsPackageUrl) + '"',
         '',
         'Write-Host "🚀 Fetching Skill-insight telemetry components from $AGENT_INSIGHT_BASE_URL..."',
         '',
@@ -846,7 +1019,9 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    "    { name: \'Hermes\', value: \'hermes\' },"',
         '    "    { name: \'OpenClaw\', value: \'openclaw\' },"',
         '    "    { name: \'JiuwenSwarm\', value: \'jiuwen\' },"',
-        '    "    { name: \'LlamaIndex\', value: \'llamaindex\' }"',
+        '    "    { name: \'LlamaIndex\', value: \'llamaindex\' },"',
+        '    "    { name: \'Qoder CN product family\', value: \'qoder\' },"',
+        '    "    { name: \'Trae IDE\', value: \'trae\' }"',
         '    "];"',
         '    ""',
         '    "async function select() {"',
@@ -922,6 +1097,8 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '$INSTALL_JIUWEN = $false',
         '$INSTALL_LLAMAINDEX = $false',
         '$LLAMAINDEX_READY = $false',
+        '$INSTALL_QODER = $false',
+        '$INSTALL_TRAE = $false',
         '',
         'if ($SELECTED_FRAMEWORKS -match "opencode") {',
         '    $INSTALL_OPENCODE = $true',
@@ -944,9 +1121,15 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         'if ($SELECTED_FRAMEWORKS -match "llamaindex") {',
         '    $INSTALL_LLAMAINDEX = $true',
         '}',
+        'if ($SELECTED_FRAMEWORKS -match "qoder") {',
+        '    $INSTALL_QODER = $true',
+        '}',
+        'if ($SELECTED_FRAMEWORKS -match "trae") {',
+        '    $INSTALL_TRAE = $true',
+        '}',
         '',
         '# Exit if nothing selected',
-        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_CODEAGENT -and -not $INSTALL_HERMES -and -not $INSTALL_OPENCLAW -and -not $INSTALL_JIUWEN -and -not $INSTALL_LLAMAINDEX) {',
+        'if (-not $INSTALL_OPENCODE -and -not $INSTALL_CLAUDE -and -not $INSTALL_CODEAGENT -and -not $INSTALL_HERMES -and -not $INSTALL_OPENCLAW -and -not $INSTALL_JIUWEN -and -not $INSTALL_LLAMAINDEX -and -not $INSTALL_QODER -and -not $INSTALL_TRAE) {',
         '    Write-Host "⚠️  未选择任何框架组件，将跳过插件安装。"',
         '    Write-Host "   继续执行配置步骤..."',
         '    Write-Host ""',
@@ -1128,6 +1311,137 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    }',
         '}',
         '',
+        'if ($INSTALL_QODER) {',
+        '    Write-Host "Downloading Agent Insight Qoder CN collectors..."',
+        '    $qoderDistDir = Join-Path $skillInsightDir "qoder-distribution"',
+        '    New-Item -ItemType Directory -Path $qoderDistDir -Force | Out-Null',
+        '    foreach ($component in @("qoder_setup.mjs", "qoder_token_usage_env.mjs", "qoder_trace_collector.mjs", "qoder_uploader_client.mjs", "qoder_work_setup.mjs")) {',
+        '        Invoke-WebRequest -Uri "$AGENT_INSIGHT_BASE_URL/api/setup?component=$component" -OutFile (Join-Path $qoderDistDir $component)',
+        '    }',
+        '}',
+        '',
+        'if ($INSTALL_TRAE) {',
+        '    Write-Host "Installing Trae IDE collector..."',
+        '    $tmpVsix = Join-Path $env:TEMP "trae-collector.vsix"',
+        '    Write-Host "  Step 1: Downloading VSIX..."',
+        '    (New-Object System.Net.WebClient).DownloadFile("$AGENT_INSIGHT_BASE_URL/api/setup/trae", $tmpVsix)',
+        '',
+        '    $installed = $false',
+        '    # Try TRAE CLI first (check PATH + common install locations)',
+        '    $traeCli = Get-Command trae-cn -ErrorAction SilentlyContinue',
+        '    if (-not $traeCli) {',
+        '        $traeDirs = @("$env:LOCALAPPDATA\\Programs\\trae-cn", "$env:APPDATA\\trae-cn")',
+        '        foreach ($d in $traeDirs) {',
+        '            $bin = Join-Path $d "bin\\trae-cn.cmd"',
+        '            if (Test-Path $bin) { $traeCli = $bin; break }',
+        '        }',
+        '    }',
+        '    if (-not $traeCli) { $traeCli = Get-Command trae -ErrorAction SilentlyContinue }',
+        '    if ($traeCli) {',
+        '        Write-Host "  Step 2: Installing via CLI..."',
+        '        & $traeCli --install-extension $tmpVsix --force',
+        '        if ($LASTEXITCODE -eq 0) { $installed = $true }',
+        '    }',
+        '',
+        '    if (-not $installed) {',
+        '        Write-Host "  Step 2: No CLI found, deploying to filesystem..."',
+        '        $traeRoot = $null',
+        '        foreach ($d in @("$env:USERPROFILE\\.trae-cn", "$env:USERPROFILE\\.trae-cn-server")) {',
+        '            if (Test-Path $d) { $traeRoot = $d; break }',
+        '        }',
+        '        if (-not $traeRoot) { $traeRoot = "$env:USERPROFILE\\.trae-cn-server" }',
+        '',
+        '        $extDir = Join-Path $traeRoot "extensions"',
+        '        $extName = "agent-insight.agent-insight-trae-collector-0.1.0"',
+        '        $target = Join-Path $extDir $extName',
+        '',
+        '        Write-Host "  Step 3: Extracting VSIX to $target..."',
+        '        if (Test-Path $target) { Remove-Item $target -Recurse -Force }',
+        '        Add-Type -AssemblyName System.IO.Compression.FileSystem',
+        '        [System.IO.Compression.ZipFile]::ExtractToDirectory($tmpVsix, $target)',
+        '        # Move files from extension/ subdirectory to root',
+        '        $extSubDir = Join-Path $target "extension"',
+        '        if (Test-Path $extSubDir) {',
+        '            Get-ChildItem $extSubDir | Copy-Item -Destination $target -Recurse -Force',
+        '            Remove-Item $extSubDir -Recurse -Force',
+        '            Remove-Item (Join-Path $target "extension.vsixmanifest") -Force -ErrorAction SilentlyContinue',
+        '            Remove-Item (Join-Path $target "[Content_Types].xml") -Force -ErrorAction SilentlyContinue',
+        '        }',
+        '',
+        '        Write-Host "  Step 4: Registering extension..."',
+        '        $extJson = Join-Path $extDir "extensions.json"',
+        '        $extId = "agent-insight.agent-insight-trae-collector"',
+        '        $ts = [int64]((Get-Date).ToUniversalTime() - (Get-Date "1970-01-01")).TotalMilliseconds',
+        '        $normalizedTarget = $target -replace \'\\\\\', \'/\'',
+        '        $nodeScript = @\'',
+        'const fs = require("fs");',
+        'const extJson = process.argv[2];',
+        'const fsPath = process.argv[3];',
+        'const normPath = process.argv[4];',
+        'const extName = process.argv[5];',
+        'const extId = process.argv[6];',
+        'const ts = parseInt(process.argv[7], 10);',
+        'const newEntry = {',
+        '    identifier: { id: extId },',
+        '    version: "0.1.0",',
+        '    location: { "$mid": 1, fsPath: fsPath, path: normPath, scheme: "file" },',
+        '    relativeLocation: extName,',
+        '    metadata: { isMachineScoped: true, installedTimestamp: ts, pinned: true, source: "vsix" }',
+        '};',
+        'let raw = "";',
+        'if (fs.existsSync(extJson)) {',
+        '    let buf = fs.readFileSync(extJson);',
+        '    if (buf.length >= 3 && buf[0] === 0xEF && buf[1] === 0xBB && buf[2] === 0xBF) { buf = buf.slice(3); }',
+        '    raw = buf.toString("utf8").trim();',
+        '}',
+        'if (!raw) {',
+        '    fs.writeFileSync(extJson, JSON.stringify([newEntry], null, 2));',
+        '    console.log("Created new extensions.json");',
+        '} else {',
+        '    try {',
+        '        let data = JSON.parse(raw);',
+        '        let exts = Array.isArray(data) ? data : (data && Array.isArray(data.value) ? data.value : [data]);',
+        '        exts = exts.filter(e => e && e.identifier && e.identifier.id !== extId);',
+        '        exts.push(newEntry);',
+        '        fs.writeFileSync(extJson, JSON.stringify(exts, null, 2));',
+        '        console.log("Extension registered successfully, total:", exts.length);',
+        '    } catch (e) {',
+        '        console.error("JSON parse failed, using string append:", e.message);',
+        '        if (raw.startsWith("[") && raw.endsWith("]")) {',
+        '            const insertPos = raw.lastIndexOf("]");',
+        '            const before = raw.slice(0, insertPos).trimEnd();',
+        '            const sep = before.length > 0 && before.endsWith("}") ? ",\\n" : "";',
+        '            const newContent = before + sep + JSON.stringify(newEntry, null, 2) + "\\n" + raw.slice(insertPos);',
+        '            fs.writeFileSync(extJson, newContent);',
+        '            console.log("Appended via string mode");',
+        '        } else {',
+        '            fs.writeFileSync(extJson, JSON.stringify([newEntry], null, 2));',
+        '            console.log("Recreated extensions.json");',
+        '        }',
+        '    }',
+        '}',
+        '\'@',
+        '        $nodeScriptPath = Join-Path $env:TEMP "register-trae-ext.js"',
+        '        Set-Content -Path $nodeScriptPath -Value $nodeScript -Encoding UTF8',
+        '        node $nodeScriptPath $extJson $target $normalizedTarget $extName $extId $ts',
+        '        Remove-Item $nodeScriptPath -Force -ErrorAction SilentlyContinue',
+        '        $installed = $true',
+        '    }',
+        '',
+        '    Remove-Item $tmpVsix -Force -ErrorAction SilentlyContinue',
+        '',
+        '    Write-Host "  Step 5: Deploying Hook scripts..."',
+        '    $setupScript = Join-Path $target "setup.ps1"',
+        '    if (Test-Path $setupScript) {',
+        '        powershell -ExecutionPolicy Bypass -File $setupScript',
+        '    } else {',
+        '        Write-Host "  [WARN] setup.ps1 not found"',
+        '    }',
+        '',
+        '    Write-Host "  [OK] Trae IDE collector installed"',
+        '    Write-Host "  [NOTE] Restart TRAE IDE to activate"',
+        '}',
+        '',
         '# 4. Configure ~/.agent-insight/.env (Auto mode - no interaction)',
         '$AGENT_INSIGHT_CONFIG_FILE = Join-Path $skillInsightDir ".env"',
         '',
@@ -1154,7 +1468,7 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    $filteredContent = $existingContent | Where-Object { $_ -notmatch "^AGENT_INSIGHT_HOST=" -and $_ -notmatch "^AGENT_INSIGHT_API_KEY=" -and $_ -notmatch "^AGENT_INSIGHT_SHOW_TASK_STATS=" -and $_ -notmatch "^AGENT_INSIGHT_RETENTION_DAYS=" -and $_ -notmatch "^AGENT_INSIGHT_OPENCODE_OTEL_ENABLE=" -and $_ -notmatch "^AGENT_INSIGHT_OPENCODE_SPOOL_DIR=" -and $_ -notmatch "^AGENT_INSIGHT_OPENCODE_UPLOADER=" -and $_ -notmatch "^AGENT_INSIGHT_CLAUDE_OTEL_SPOOL_DIR=" -and $_ -notmatch "^AGENT_INSIGHT_CODEAGENT_OTEL_SPOOL_DIR=" -and $_ -notmatch "^AGENT_INSIGHT_CLAUDE_OTEL_RAW_API_BODIES=" -and $_ -notmatch "^AGENT_INSIGHT_MAX_TOOL_IO=" -and $_ -notmatch "^AGENT_INSIGHT_MAX_EVENT_STRING=" -and $_ -notmatch "^AGENT_INSIGHT_OPENCODE_UPLOAD_COOLDOWN_MS=" -and $_ -notmatch "^AGENT_INSIGHT_CLIENT_KEY_HASH=" -and $_ -notmatch "^AGENT_INSIGHT_OPENCODE_CHECKPOINT=" -and $_ -notmatch "^AGENT_INSIGHT_OPENCODE_UPLOAD_SINCE_MS=" }',
         '    Set-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value $filteredContent',
         '} else {',
-        '    New-Item -ItemType File -Path $AGENT_INSIGHT_CONFIG_FILE -Force | Out-Null',
+        '    $envLines = @()',
         '    $showValue = "true"',
         '}',
         'Add-Content -Path $AGENT_INSIGHT_CONFIG_FILE -Value "AGENT_INSIGHT_HOST=$AGENT_INSIGHT_HOST"',
@@ -1183,6 +1497,58 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '    if ($LASTEXITCODE -ne 0) {',
         '        Write-Host "❌ Unable to configure the LlamaIndex collector." -ForegroundColor Red',
         '        $LLAMAINDEX_READY = $false',
+        '    }',
+        '}',
+        '',
+        '# 6.35 Install Qoder CN product-family collectors',
+        'if ($INSTALL_QODER) {',
+        '    & node (Join-Path $qoderDistDir "qoder_setup.mjs") install "--host=$AGENT_INSIGHT_HOST" "--api-key=$AGENT_INSIGHT_API_KEY" --scope=user --product=cli --owner=cli',
+        '    if ($LASTEXITCODE -eq 0) { & node (Join-Path $qoderDistDir "qoder_setup.mjs") install "--host=$AGENT_INSIGHT_HOST" "--api-key=$AGENT_INSIGHT_API_KEY" --scope=user --product=desktop --owner=desktop }',
+        '    if ($LASTEXITCODE -eq 0) { & node (Join-Path $qoderDistDir "qoder_setup.mjs") install "--host=$AGENT_INSIGHT_HOST" "--api-key=$AGENT_INSIGHT_API_KEY" --scope=user --product=jetbrains --owner=jetbrains }',
+        '    if ($LASTEXITCODE -eq 0) { & node (Join-Path $qoderDistDir "qoder_work_setup.mjs") install "--host=$AGENT_INSIGHT_HOST" "--api-key=$AGENT_INSIGHT_API_KEY" }',
+        '    if ($LASTEXITCODE -eq 0) {',
+        '        Write-Host "Qoder CN CLI/Desktop/JetBrains/Work collectors installed."',
+        '        Write-Host ""',
+        '        $qoderPluginDir = Join-Path $skillInsightDir "packages\\qoder"',
+        '        New-Item -ItemType Directory -Path $qoderPluginDir -Force | Out-Null',
+        '        function Save-QoderPluginPackage {',
+        '            param([string]$Label, [string]$Uri, [string]$TargetPath)',
+        '            $tempPath = "$TargetPath.tmp.$PID"',
+        '            try {',
+        '                Invoke-WebRequest -Uri $Uri -OutFile $tempPath -UseBasicParsing -ErrorAction Stop',
+        '                Move-Item -LiteralPath $tempPath -Destination $TargetPath -Force',
+        '                Write-Host "  Downloaded ${Label}: $TargetPath"',
+        '                return $true',
+        '            } catch {',
+        '                Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue',
+        '                Write-Host "  Warning: $Label could not be downloaded from $Uri"',
+        '                return $false',
+        '            }',
+        '        }',
+        '        Write-Host "Downloading Qoder CN plugin packages..."',
+        '        $null = Save-QoderPluginPackage "Qoder CN Desktop VSIX" "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/qoder-desktop-vsix" (Join-Path $qoderPluginDir "agent-insight-qoder-desktop.vsix")',
+        '        $qoderJetBrainsTarget = Join-Path $qoderPluginDir "agent-insight-qoder-jetbrains.zip"',
+        '        $qoderJetBrainsDownloaded = Save-QoderPluginPackage "Qoder for JetBrains ZIP" "$AGENT_INSIGHT_BASE_URL/api/ingest/setup/qoder-jetbrains-plugin" $qoderJetBrainsTarget',
+        '        if (-not $qoderJetBrainsDownloaded) {',
+        '            if ($QODER_JETBRAINS_RELEASE_URL) {',
+        '                Write-Host "    Release attachment direct URL: $QODER_JETBRAINS_RELEASE_URL"',
+        '                Write-Host "    Retrying from the Release attachment..."',
+        '                $qoderJetBrainsDownloaded = Save-QoderPluginPackage "Qoder for JetBrains ZIP (Release)" $QODER_JETBRAINS_RELEASE_URL $qoderJetBrainsTarget',
+        '                if (-not $qoderJetBrainsDownloaded) {',
+        '                    Write-Host "    Manual download (PowerShell):"',
+        '                    Write-Host (\'      Invoke-WebRequest -Uri "\' + $QODER_JETBRAINS_RELEASE_URL + \'" -OutFile "\' + $qoderJetBrainsTarget + \'"\')',
+        '                }',
+        '            } else {',
+        '                Write-Host "    Release attachment direct URL is not configured on the Agent Insight server."',
+        '                Write-Host "    Server administrator: set AGENT_INSIGHT_QODER_JETBRAINS_PACKAGE_URL to the trusted Release attachment URL, restart Agent Insight, and rerun setup."',
+        '            }',
+        '        }',
+        '        Write-Host "    Desktop install: Qoder CN Desktop -> Extensions -> ... -> Install from VSIX."',
+        '        Write-Host "    JetBrains package path: $qoderJetBrainsTarget"',
+        '        Write-Host "    JetBrains install: Settings -> Plugins -> gear icon -> Install Plugin from Disk -> select the ZIP above."',
+        '        Write-Host "    Restart the corresponding IDE after installing the downloaded package."',
+        '    } else {',
+        '        Write-Host "Warning: Qoder CN collector installation did not complete; review the errors above."',
         '    }',
         '}',
         '',
@@ -1389,6 +1755,9 @@ function generatePowerShellScript(baseUrl: string, hostParam: string, apiKey: st
         '}',
         'if ($INSTALL_JIUWEN) { $summaryJwHome = if ($env:JIUWENSWARM_DATA_DIR) { $env:JIUWENSWARM_DATA_DIR } else { Join-Path $env:USERPROFILE ".jiuwenswarm" }; Write-Host "  ✅ JiuwenSwarm Extension: $summaryJwHome\\extensions\\agent-insight-observability (telemetry in config\\.env)" }',
         'if ($LLAMAINDEX_READY) { Write-Host "  ✅ LlamaIndex Trace Collector: $llamaIndexSourceDir" }',
+        'if ($INSTALL_TRAE) {',
+        '    Write-Host "  [OK] Trae IDE Collector: ~/.trae-cn-server/extensions/agent-insight.agent-insight-trae-collector-0.1.0"',
+        '}',
         '',
         'if ($NEEDS_WATCHER_SCRIPTS) {',
         '    Write-Host ""',

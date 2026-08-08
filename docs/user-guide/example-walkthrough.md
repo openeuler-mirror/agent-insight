@@ -24,14 +24,14 @@ Agent，就能把核心能力完整体验一遍：**智能诊断 → Skill 生�
 | --- | --- | --- |
 | **messages 日志分析（内置示例）** 数据集 | 评测中心 → **数据集** | `ideal_output` 类型，10 条用例，覆盖认证攻击 / SSH 爆破 / 登录异常等场景。 |
 | **linux-messages-auth-triage-demo** Skill | **Skills** 列表 | 内置示例 Skill：离线分析用户提供的 messages 日志，识别认证失败、暴力破解、用户枚举和登录异常（含 references / scripts）。名字带 `-demo`，避免和你之后自己生成的 Skill 撞名。 |
-| 两条示例 **Trace** | **链路追踪** | 内置 `messages-log-analyzer` Agent 调用 `linux-messages-auth-triage-demo` Skill 对示例日志做的安全分析（一条聚焦 root SSH 爆破、一条做整体安全评估）。进入链路追踪页**默认就能看到**（它们被归到「用户 Agent」视图）。 |
+| 三条示例 **Trace** | **链路追踪** | 内置 `messages-log-analyzer` Agent 调用 `linux-messages-auth-triage-demo` Skill 对示例日志做的安全分析（两条成功样例，以及一条因日志路径错误而失败的诊断样例）。进入链路追踪页**默认就能看到**（它们被归到「用户 Agent」视图）。 |
 | `~/.agent-insight/example/messages` | 你机器的本地目录 | 一份真实的 Linux `messages` 日志（SSH 爆破、认证失败等）。**注意：它不是注册时就有的**，而是你执行**客户端安装命令**后才落到本地——见下方说明。 |
 
 > **Note**
-> 上面前三项（数据集 / Skill / 两条 Trace）在你**注册那一刻**就注入到看板里了，打开即见。
+> 上面前三项（数据集 / Skill / 三条 Trace）在你**注册那一刻**就注入到看板里了，打开即见。
 >
 > 而 `~/.agent-insight/example/messages` 这个**本地日志文件**，需要你先安装客户端才会出现：
-> 在看板 **安装指导** 页复制客户端安装命令（形如 `curl -sSf "http://<看板地址>/api/ingest/setup" | bash`，README「安装客户端」一节也有），在你的机器上执行一次即可。它在建好接入环境的同时，会把这份示例日志下载到 `~/.agent-insight/example/messages`。**想用内置数据集真正跑评测（③）时才需要它**；只是查看已生成的两条 Trace（①）则不需要。
+> 在看板 **安装指导** 页复制客户端安装命令（形如 `curl -sSf "http://<看板地址>/api/ingest/setup" | bash`，README「安装客户端」一节也有），在你的机器上执行一次即可。它在建好接入环境的同时，会把这份示例日志下载到 `~/.agent-insight/example/messages`。**想用内置数据集真正跑评测（③）时才需要它**；只是查看已生成的三条 Trace（①）则不需要。
 >
 > 这套示例数据完全归你所有：可随时编辑或删除。**删除后不会再自动补回**——它只在你注册那一刻注入一次。
 
@@ -59,7 +59,7 @@ Agent，就能把核心能力完整体验一遍：**智能诊断 → Skill 生�
 
 ## ① 智能诊断：读懂示例 Trace
 
-1. 左侧导航进入 **链路追踪**。默认筛选为「用户 Agent」，你会直接看到两条内置示例 Trace
+1. 左侧导航进入 **链路追踪**。默认筛选为「用户 Agent」，你会直接看到三条内置示例 Trace
    （Agent 名 `messages-log-analyzer`，调用内置的 `linux-messages-auth-triage-demo` Skill 对
    `~/.agent-insight/example/messages` 做的安全分析）。
 2. 点开任意一条，进入 **智能诊断** 视图。重点看：

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { resolveUser } from '@/lib/auth/auth';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { exportTraceBundle } from '@/lib/trace-transfer-service';
 
 export const dynamic = 'force-dynamic';
@@ -16,6 +17,9 @@ export async function GET(request: Request) {
 
     try {
         const bundle = await exportTraceBundle(executionId, username);
+
+        recordUsageEvent({ user: username, featureKey: 'trace', eventKey: 'trace.export' });
+
         return NextResponse.json(bundle, {
             headers: {
                 'Content-Disposition': `attachment; filename="trace-${safeFileSegment(bundle.rootExecutionId)}.json"`,

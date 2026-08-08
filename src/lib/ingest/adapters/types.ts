@@ -14,8 +14,8 @@ export interface FrameworkDescriptor {
 export interface FrameworkCapabilities {
   skills?: boolean
   subagentTree?: boolean
-  /** Root-level skills must be read from buildAgentCallTree to exclude child-agent calls. */
-  ownSkillsFromTree?: boolean
+  skillScope?: "session" | "agent-tree"
+  allowSnapshotShrink?: boolean
 }
 
 export interface FrameworkAdapter {

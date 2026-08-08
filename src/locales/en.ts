@@ -102,6 +102,7 @@ export const en = {
     accessChannels: 'Channel Registry',
     accessWebhooks: 'Webhook Routing',
     accessHealth: 'Health Check',
+    usageAnalytics: 'Usage Analytics',
     configGroup: 'Configuration',
     // === Agents ===
     agentAssets: 'Agent Assets',

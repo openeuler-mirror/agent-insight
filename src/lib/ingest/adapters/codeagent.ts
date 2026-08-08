@@ -11,7 +11,7 @@ export const codeagentAdapter: FrameworkAdapter = {
   capabilities: {
     skills: true,
     subagentTree: true,
-    ownSkillsFromTree: true,
+    skillScope: 'agent-tree',
   },
   sessionMergeStrategy: 'snapshot-replace',
   extractSkills: extractSkillsWithVersionsFromOpencodeSession,

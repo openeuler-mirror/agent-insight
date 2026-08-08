@@ -7,6 +7,7 @@ import {
     openclawSkillMessages,
 } from './fixtures/framework-skill-fixtures';
 import {
+    allowsSnapshotShrinkForFramework,
     computeOwnSkills,
     extractExplicitSkillsFromNode,
     extractInvokedSkillsFromSessionInteractions,
@@ -93,6 +94,31 @@ test('binding: OpenClaw ownSkills keeps its content-block extractor', () => {
         computeOwnSkills('openclaw', openclawSkillMessages as any[]),
         openclawExpectedSkills,
     );
+});
+
+test('binding: Qoder scopes root skills to the root Agent and excludes Subagent skills', () => {
+    const own = computeOwnSkills('qoder', nestedFixture());
+    const names = own.map(skill => skill.name).sort();
+    assert.deepEqual(names, ['skill-a', 'skill-c']);
+    assert.ok(!names.includes('skill-b'));
+});
+
+test('snapshot shrink: only trusted server-side framework capabilities can enable Qoder replacement', () => {
+    const previousJiuwen = process.env.AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK;
+    delete process.env.AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK;
+    try {
+        assert.equal(allowsSnapshotShrinkForFramework('qoder'), true);
+        assert.equal(allowsSnapshotShrinkForFramework('opencode'), false);
+        assert.equal(allowsSnapshotShrinkForFramework('unknown-framework'), false);
+        assert.equal(allowsSnapshotShrinkForFramework('jiuwen'), false);
+
+        process.env.AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK = 'true';
+        assert.equal(allowsSnapshotShrinkForFramework('jiuwen'), true);
+        assert.equal(allowsSnapshotShrinkForFramework('opencode'), false);
+    } finally {
+        if (previousJiuwen === undefined) delete process.env.AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK;
+        else process.env.AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK = previousJiuwen;
+    }
 });
 
 test('binding: 一层 agent 可绑多个 skill,版本随调用带出(没带版本则 null)', () => {

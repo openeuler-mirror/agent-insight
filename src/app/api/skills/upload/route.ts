@@ -1,4 +1,5 @@
 import { resolveUser } from '@/lib/auth/auth';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { parseSkillFlow } from '@/lib/engine/observability/flow-parser';
 import { runStaticEvaluation } from '@/lib/engine/skill-issues/static-evaluator';
 import { getSkillVersionAssetPath, getSkillVersionStorageDir } from '@/lib/env';
@@ -166,6 +167,13 @@ export async function POST(request: NextRequest) {
                 }
             })
             .catch(e => console.warn(`[Upload] Static eval error for skill ${skill.name} v${nextVersionNum}:`, e));
+
+        recordUsageEvent({
+            user: authResult.username,
+            featureKey: 'skill',
+            eventKey: 'skill.upload',
+            route: request.nextUrl.pathname,
+        });
 
         return NextResponse.json({ success: true, skill, version: skillVersion });
 

@@ -2,6 +2,9 @@ import { listObservedAgentNames, listObservedFieldValues, listObservedSkills, li
 import type { FilterClause } from '@/lib/filters/types';
 import { db, prismaRaw as prisma } from '@/lib/storage/prisma';
 import { NextResponse } from 'next/server';
+import { resolveUser } from '@/lib/auth/auth';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
+import { isUsageEnabled } from '@/lib/usage-analytics/config';
 import { isActive } from '@/lib/evaluation-task-manager';
 import { triggerExperimentWatchForTask } from '@/lib/engine/experiment/experiment-watch';
 import { buildOpencodeTelemetryIndex } from '@/lib/observe/opencode-telemetry-index';
@@ -678,6 +681,16 @@ export async function DELETE(request: Request) {
         }
         
         console.log(`[Data-API] ✅ Delete completed, total deleted: ${deleteCount}`);
+
+        // 一次用户删除记 1 次，不按实际删掉的 Trace 条数重复计。
+        // 本接口 body 不带 user，身份只能从 API Key 解析；只在统计开启时才多这一次查询。
+        if (deleteCount > 0 && isUsageEnabled()) {
+            try {
+                const { username } = await resolveUser(request);
+                recordUsageEvent({ user: username, featureKey: 'trace', eventKey: 'trace.delete' });
+            } catch { /* 统计失败绝不影响已完成的删除 */ }
+        }
+
         return NextResponse.json({ success: true, count: deleteCount });
 
     } catch (error) {
@@ -693,6 +706,15 @@ export async function PATCH(request: Request) {
 
         if (!task_id && !upload_id) {
             return NextResponse.json({ error: 'task_id or upload_id is required' }, { status: 400 });
+        }
+
+        // 走到这里说明参数合法、确实是一次用户编辑。PATCH 有多个成功出口
+        // （标注/查询/标题各一条），在入口记一次避免同一次编辑被重复计数。
+        if (isUsageEnabled()) {
+            try {
+                const { username } = await resolveUser(request);
+                recordUsageEvent({ user: username, featureKey: 'trace', eventKey: 'trace.update' });
+            } catch { /* 忽略：统计不得影响编辑 */ }
         }
 
         if (user_feedback !== undefined) {

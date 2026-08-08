@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { AppTopBar } from '@/components/shell/AppTopBar';
+import { reportClientUsage } from '@/lib/usage-analytics/client-events';
 
 interface Finding { sev: 'critical' | 'warn' | 'healthy' | 'info'; cls: string; title: string; evidence: string; diagnosis: string; remediation: string[]; }
 interface Sli { runningPeak: number; waitingPeak: number; kvPeakPerc: number; genTokPerS: number; ttftP95: number | null; itlP95: number | null; prefixHit: number | null; preemptRate: number; }
@@ -121,6 +122,7 @@ export default function InfraPage() {
       const body = await res.json();
       if (!res.ok) throw new Error(body.message || body.error || `HTTP ${res.status}`);
       setData(body as Summary);
+      reportClientUsage('infra', 'infra.diagnose');
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setData(null);

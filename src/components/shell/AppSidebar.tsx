@@ -8,6 +8,7 @@ import { useAuth } from '@/lib/auth/auth-context';
 import { useTheme } from '@/lib/client/theme-context';
 import { useLocale } from '@/lib/client/locale-context';
 import { useSidebar } from '@/lib/client/sidebar-context';
+import { useUsageAccess } from '@/lib/usage-analytics/use-usage-access';
 
 const basePath = process.env.NEXT_PUBLIC_URL_PREFIX || '';
 
@@ -138,6 +139,16 @@ const CONFIG_GROUP: NavGroup = {
 
 const GROUPS: NavGroup[] = [AGENT_GROUP, CONFIG_GROUP];
 
+const ICON_USAGE = (<><path d="M2 12h10" /><path d="M4 12V7M7 12V3M10 12V9" /></>);
+
+const USAGE_ITEM: NavItem = {
+    key: 'usage',
+    href: '/usage',
+    labelKey: 'nav.usageAnalytics',
+    iconPath: ICON_USAGE,
+    badge: { text: 'ADMIN', kind: 'g' },
+};
+
 function normalizePath(p: string): string {
     const stripped = p.startsWith(basePath) ? p.slice(basePath.length) : p;
     return stripped || '/';
@@ -167,6 +178,14 @@ export function AppSidebar() {
         if (inline) return locale === 'zh' ? inline.zh : inline.en;
         return t(key);
     };
+    // 用量统计入口只在功能开启且当前用户是显式配置的平台管理员时出现；
+    // access 请求失败、未配置管理员或功能关闭都保持隐藏。
+    const usageAccess = useUsageAccess();
+    const showUsage = usageAccess.enabled && usageAccess.isAdmin;
+    const groups: NavGroup[] = showUsage
+        ? GROUPS.map(g => (g.key === 'config' ? { ...g, items: [...(g.items || []), USAGE_ITEM] } : g))
+        : GROUPS;
+
     const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
     const [expandedTrees, setExpandedTrees] = useState<Set<string>>(new Set(['skills', 'eval-center', 'observe']));
 
@@ -245,7 +264,7 @@ export function AppSidebar() {
             </div>
 
             <div style={{ flex: 1, overflowY: 'auto', padding: '2px 0' }}>
-                {GROUPS.map(group => {
+                {groups.map(group => {
                     const collapsed = collapsedGroups.has(group.key);
                     return (
                         <div

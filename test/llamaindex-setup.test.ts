@@ -259,10 +259,11 @@ test('OpenCode watcher management is scoped to the installing account', async ()
 
 test('agents page preserves LlamaIndex platform and does not mislabel unknown frameworks', () => {
   const page = readFileSync('src/app/(main)/agents/page.tsx', 'utf8');
-  assert.match(page, /value === 'llamaindex'/);
-  assert.match(page, /\{ value: 'llamaindex', label: 'llamaindex' \}/);
-  assert.match(page, /return 'unknown'/);
-  assert.match(page, /\{ value: 'unknown', label: '未知' \}/);
+  const platforms = readFileSync('src/lib/engine/observability/agent-platform.ts', 'utf8');
+  assert.match(page, /normalizeAgentPlatform\(a\.platform\)/);
+  assert.match(page, /AGENT_PLATFORMS\.map/);
+  assert.match(platforms, /'llamaindex'/);
+  assert.match(platforms, /: 'unknown'/);
 });
 
 test('collector endpoint serves a directly deployable Python runtime archive', async () => {

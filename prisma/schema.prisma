@@ -60,18 +60,23 @@ model Execution {
   taskId                   String?
   query                    String?
   framework                String?
-  tokens                   Int?
+  // 下面六列是「整个 session 累计求和」，长命 session（尤其带 prompt cache）会突破
+  // 32 位上限 2,147,483,647。Prisma 的 Int 是 i32：超限值仍会被 SQLite 存下，但 Prisma
+  // 回读时抛 P2023，此后任何 select 到这些列的查询整条失败。故一律用 BigInt。
+  // JS 侧仍按 number 使用——读边界由 executionBigIntToNumber 扩展统一转回（见 prisma-client.ts）。
+  tokens                   BigInt?
   cost                     Float?
   latency                  Float?
   toolCallCount            Int?
   llmCallCount             Int?
-  inputTokens              Int?
-  outputTokens             Int?
+  inputTokens              BigInt?
+  outputTokens             BigInt?
   toolCallErrorCount       Int?
-  cacheReadInputTokens     Int?
-  cacheCreationInputTokens Int?
+  cacheReadInputTokens     BigInt?
+  cacheCreationInputTokens BigInt?
+  // 单次调用取 max、不累计，到不了 32 位上限，保持 Int。
   maxSingleCallTokens      Int?
-  reasoningTokens          Int?
+  reasoningTokens          BigInt?
   timestamp                DateTime @default(now())
   model                    String?
   // 真实推理源 URL（scheme://host:port），用作 session↔infra 关联键。
@@ -96,10 +101,10 @@ model Execution {
   skillTriggerRate         Float?
   // 写入时从 trace interactions 预解析的 agent 名列表(JSON string[],来自 extractObservedAgentNames)。
   // 让轻量列表(fields=light)无需加载/解析 session interactions 即可拿到完整 agents,根治堆 OOM 又不丢数据。
-  observedAgents       String?
+  observedAgents           String?
   // 写入时预解析的 per-call 统计摘要(固定体积对数桶直方图,大盘 B 档面板消费,
   // 结构见 src/lib/fleet/call-stats.ts / docs/design/fleet-dashboard-tier-b-preparse-risk.md)。
-  callStats            String?
+  callStats                String?
 
   // --- 多 Agent 拆分字段 ---
   // 一次主 agent 的 trace 会被拆成 1 条 root execution + N 条 sub-agent execution，
@@ -324,16 +329,16 @@ model Config {
 }
 
 model Session {
-  id           String    @id @default(cuid())
-  taskId       String    @unique
-  label        String?
-  query        String?
-  startTime    DateTime  @default(now())
-  endTime      DateTime?
-  interactions String?  // JSON array of interactions
+  id                 String    @id @default(cuid())
+  taskId             String    @unique
+  label              String?
+  query              String?
+  startTime          DateTime  @default(now())
+  endTime            DateTime?
+  interactions       String? // JSON array of interactions
   langfuseTraceNodes String? // Lossless Langfuse observation tree JSON
-  user         String?
-  model        String?
+  user               String?
+  model              String?
 }
 
 model UserSettings {
@@ -531,20 +536,23 @@ model CustomEvaluatorList {
 
 /// 评测集定义与数据项（cases 存 JSON）
 model AgentEvalDataset {
-  id          String   @id
-  user        String
-  name        String
-  description String   @default("")
-  targetAgent String   @default("")
+  id                 String   @id
+  user               String
+  name               String
+  description        String   @default("")
+  targetAgent        String   @default("")
   /// 服务于哪个 skill；为空表示通用 agent eval（不绑定 skill）。skill 生成时
   /// 自动起草的行为评测集会填这个字段（用 Skill.name）。
-  targetSkill String   @default("")
-  tagsJson    String   @default("[]")
-  fieldsJson  String   @default("[]")
-  casesJson   String   @default("[]")
-  datasetKind String   @default("ideal_output")
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  targetSkill        String   @default("")
+  tagsJson           String   @default("[]")
+  fieldsJson         String   @default("[]")
+  casesJson          String   @default("[]")
+  caseCount          Int      @default(0)
+  referenceCasesJson String   @default("[]")
+  projectionReady    Boolean  @default(false)
+  datasetKind        String   @default("ideal_output")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
   @@index([user])
   @@index([user, targetSkill])
@@ -889,6 +897,9 @@ model ExperimentCase {
   input           String     @default("")
   actualOutput    String     @default("")
   referenceOutput String?
+  /// 评估器专用 case 上下文（EvaluatorCaseContextV1 JSON）；null=未提供。
+  /// availableTools: [] 表示调用方明确确认本任务无需工具。
+  evaluatorContextJson String?
   createdAt       DateTime   @default(now())
 
   results ExperimentEvalResult[]
@@ -951,4 +962,40 @@ model ExperimentEvalComment {
   @@index([experimentId, createdAt])
   @@index([caseId, createdAt])
   @@index([resultId, createdAt])
+}
+
+/// 平台用量原始事件：默认保留 365 天，只用于短期回溯，不参与"全部"范围统计。
+/// user 存字符串不建外键 —— 与 Execution.user 口径一致，避免用户删除导致历史统计丢失。
+model PlatformUsageEvent {
+  id         String   @id @default(cuid())
+  eventId    String   @unique
+  occurredAt DateTime
+  dateKey    String
+  user       String
+  featureKey String
+  eventKey   String
+  source     String
+  route      String?
+  createdAt  DateTime @default(now())
+
+  @@index([occurredAt])
+  @@index([dateKey, featureKey])
+  @@index([user, dateKey, featureKey])
+}
+
+/// 平台用量日聚合：永久保留，"全部"范围只读这张表，因此不受原始事件清理影响。
+model PlatformUsageDaily {
+  dateKey         String
+  user            String
+  featureKey      String
+  eventKey        String
+  count           Int      @default(0)
+  firstOccurredAt DateTime
+  lastOccurredAt  DateTime
+  updatedAt       DateTime @updatedAt
+
+  @@id([dateKey, user, featureKey, eventKey])
+  @@index([dateKey, featureKey])
+  @@index([featureKey, dateKey])
+  @@index([user, dateKey])
 }

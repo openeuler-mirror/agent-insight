@@ -29,6 +29,18 @@ import {
   CREATIVITY_PRESET_IDS,
   isCreativityPresetId,
 } from '../src/lib/engine/experiment/creativity-preset-evaluators';
+import {
+  SAFETY_PRESET_IDS,
+  isSafetyPresetId,
+} from '../src/lib/engine/experiment/safety-preset-evaluators';
+import {
+  DEPTH_PRESET_ID,
+  isDepthPresetId,
+} from '../src/lib/engine/experiment/depth-preset-evaluators';
+import {
+  AGENT_TOOL_PRESET_IDS,
+  isAgentToolPresetId,
+} from '../src/lib/engine/experiment/agent-tool-preset-evaluators';
 
 /**
  * 分发谓词清单——与 run-experiment.ts 的 evaluateOnce() 一一对应。
@@ -39,6 +51,13 @@ const PRESET_RUNNERS: Array<{ name: string; claims: (id: string) => boolean; ids
   { name: 'result-preset-evaluators.ts', claims: isResultPresetId, ids: RESULT_PRESET_IDS },
   { name: 'content-preset-evaluators.ts', claims: isContentPresetId, ids: CONTENT_PRESET_IDS as readonly string[] },
   { name: 'creativity-preset-evaluators.ts', claims: isCreativityPresetId, ids: CREATIVITY_PRESET_IDS },
+  { name: 'safety-preset-evaluators.ts', claims: isSafetyPresetId, ids: SAFETY_PRESET_IDS },
+  { name: 'depth-preset-evaluators.ts', claims: isDepthPresetId, ids: [DEPTH_PRESET_ID] },
+  {
+    name: 'agent-tool-preset-evaluators.ts',
+    claims: isAgentToolPresetId,
+    ids: AGENT_TOOL_PRESET_IDS,
+  },
 ];
 
 test('预置卡 id 唯一', () => {

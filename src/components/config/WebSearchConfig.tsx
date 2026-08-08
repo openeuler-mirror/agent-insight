@@ -85,7 +85,7 @@ export function WebSearchConfig() {
             const res = await apiFetch('/api/eval/settings', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ settings: updated, user }),
+                body: JSON.stringify({ settings: updated, user, usageSource: 'web-search' }),
             });
             if (!res.ok) {
                 const err = await res.json().catch(() => ({}));

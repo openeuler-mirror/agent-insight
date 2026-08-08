@@ -10,6 +10,7 @@
  */
 
 import { stringifyClaudeContent } from '@/lib/shared/interaction-content';
+import { isSkillLoaderToolName } from '@/lib/evaluators/evaluator-case-context';
 
 export type InteractionRole = 'user' | 'assistant' | 'opencode' | 'subagent' | string;
 
@@ -19,6 +20,10 @@ export interface InteractionUsage {
     output?: number;
     reasoning?: number;
     cache?: { read?: number; write?: number };
+    estimated?: boolean;
+    source?: string;
+    scope?: string;
+    missing_context?: boolean;
 }
 
 export interface ToolCall {
@@ -496,7 +501,8 @@ export function buildAgentCallTree(interactions: RawInteraction[]): AgentNode | 
             else if (ev.kind === 'skill') host.stats.skillCalls++;
             else if (ev.kind === 'task') {
                 host.stats.taskCalls++;
-                const sType = ev.args?.subagent_type || ev.args?.subagentType;
+                const rawSubagentType = ev.args?.subagent_type || ev.args?.subagentType;
+                const sType = typeof rawSubagentType === 'string' ? rawSubagentType.trim().toLowerCase() : rawSubagentType;
                 if (sType) {
                     addPendingTask(host, sType, ev, idx);
                 }
@@ -694,7 +700,7 @@ function interactionToEvents(it: RawInteraction, idx: number): AgentEvent[] {
         // (drives the per-agent Skill stat / timeline). Other frameworks don't emit it.
         const kind: CallKind = normalizedName === 'task'
             ? 'task'
-            : normalizedName === 'skill' || normalizedName === 'load_skill' || normalizedName === 'skill_view' || normalizedName === 'skill_tool'
+            : isSkillLoaderToolName(normalizedName)
                 ? 'skill'
                 : 'tool';
         const ev: AgentEvent = {
@@ -831,6 +837,8 @@ function extractPartsText(parts: InteractionPart[] | undefined, partType: string
 }
 
 export function inferSubagentType(it: RawInteraction): string | null {
+    const explicit = String((it as any).subagent_type || (it as any).subagentType || '').trim();
+    if (explicit) return explicit.toLowerCase();
     // The subagent_name field looks like "Kuafu (General Diagnostic Executor)".
     // The subagent_type field on the spawning task arg is lowercased: "kuafu".
     // We compare loosely.

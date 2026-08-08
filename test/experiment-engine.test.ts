@@ -61,6 +61,7 @@ async function createExperiment(
   executionId: string,
   evaluatorIds: string[],
   referenceOutput: string | null = 'ref answer',
+  evaluatorContextJson: string | null = null,
 ): Promise<{ experimentId: string; caseId: string }> {
   const exp = await prisma.experiment.create({
     data: {
@@ -76,6 +77,7 @@ async function createExperiment(
           input: '请回答问题 X',
           actualOutput: '答案是 42',
           referenceOutput,
+          evaluatorContextJson,
         }],
       },
     },
@@ -260,6 +262,40 @@ test('engine: 预置 task-completion/trace-quality 走忠实版通道，归因�
   assert.equal(p.suggestion, '在 SKILL.md 补校验清单');
   assert.deepEqual(p.anchors, ['step-3']);
   setFaithfulPresetRunnerForTest(null);
+});
+
+test('engine: 专项预置通道读取 evaluatorContextJson 并落库 0 分', async () => {
+  let seenContext: unknown = null;
+  setJudgeLlmCallerForTest(async (_user, request) => {
+    seenContext = JSON.parse(request.user).evaluation_input.capability_catalog;
+    return JSON.stringify({
+      dimensions: [
+        { dimension: 'tool_necessity', verdict: 'missing', reason: '未调用必要能力', suggestion: '调用必要能力' },
+        { dimension: 'tool_match', verdict: 'missing', reason: '没有可核验选择', suggestion: '选择匹配能力' },
+        { dimension: 'parameter_validity', verdict: 'missing', reason: '没有可核验参数', suggestion: '提供有效参数' },
+        { dimension: 'result_utilization', verdict: 'missing', reason: '没有可核验结果', suggestion: '使用工具结果' },
+        { dimension: 'call_order', verdict: 'missing', reason: '没有可核验顺序', suggestion: '按依赖顺序调用' },
+      ],
+      issues: [],
+      suggestions: ['补充必要调用'],
+    });
+  });
+  const executionId = await createExecution();
+  const { experimentId } = await createExperiment(
+    executionId,
+    ['preset-agent-tool-selection'],
+    null,
+    JSON.stringify({ schemaVersion: 1, availableTools: [] }),
+  );
+  const start = await startExperimentRun(experimentId, TEST_USER);
+  await start!.completion;
+
+  assert.deepEqual(seenContext, []);
+  const row = await prisma.experimentEvalResult.findFirst({ where: { experimentId } });
+  assert.equal(row!.status, 'done');
+  assert.equal(row!.score, 0);
+  assert.equal(JSON.parse(row!.pointsJson!)[0].score, 0);
+  setJudgeLlmCallerForTest(null);
 });
 
 test('engine: skill 评测接入——ensure/add/evaluate 单 case 走实验后端', async () => {

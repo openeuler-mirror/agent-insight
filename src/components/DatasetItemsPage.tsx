@@ -11,10 +11,13 @@ import {
   type DatasetCase,
   type DatasetField,
   type DatasetFieldType,
+  createEvaluatorCatalogField,
   createEmptyCase,
+  evaluatorCatalogFieldKeyFromLabel,
   nextDatasetFieldKey,
   parseDatasetNumberValue,
   TRAJECTORY_PLACEHOLDER,
+  withEvaluatorCatalogFields,
 } from '@/lib/agent-dataset-model';
 import {
   parseBatchAuto,
@@ -22,6 +25,7 @@ import {
   readFileAsText,
 } from '@/lib/dataset-batch-import';
 import { useAuth } from '@/lib/auth/auth-context';
+import { reportClientUsage } from '@/lib/usage-analytics/client-events';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import styles from '@/components/DatasetItemsPage.module.css';
@@ -66,10 +70,12 @@ function TooltipCell({
   shortText,
   fullText,
   tdStyle,
+  onClick,
 }: {
   shortText: string;
   fullText: string;
   tdStyle?: React.CSSProperties;
+  onClick?: () => void;
 }) {
   const [show, setShow] = useState(false);
   const [rect, setRect] = useState<DOMRect | null>(null);
@@ -84,6 +90,7 @@ function TooltipCell({
         setShow(true);
       }}
       onMouseLeave={() => setShow(false)}
+      onClick={onClick}
     >
       {shortText}
       {show && rect && fullText && (
@@ -124,7 +131,11 @@ function isDatasetPublished(d: AgentDataset): boolean {
 const BATCH_JSON_PLACEHOLDER = `请粘贴 JSON 数组，例如：
 [
   {"input": "问题1", "expected_output": "答案1"},
-  {"input": "问题2", "output": "答案2"}
+  {
+    "input": "读取配置并汇总关键项",
+    "available_tools": [{"name": "read_file", "description": "读取文件"}],
+    "available_skills": [{"name": "config-review", "description": "检查配置"}]
+  }
 ]
 
 若以逗号分隔且无表头，也可直接粘贴 CSV（前两列为输入、预期输出）。`;
@@ -165,6 +176,7 @@ export default function DatasetItemsPage() {
   const { user } = useAuth();
 
   const [dataset, setDataset] = useState<AgentDataset | null>(null);
+  const fullDatasetRef = useRef<AgentDataset | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   // ?case=<caseId> 入参支持: 别处(如 grayscale 执行记录 modal 的 Case ID 链接)
@@ -193,7 +205,7 @@ export default function DatasetItemsPage() {
     setError('');
     setLoading(true);
     try {
-      const res = await apiFetch(`/api/agent-datasets/${id}?user=${encodeURIComponent(user)}`);
+      const res = await apiFetch(`/api/agent-datasets/${id}?user=${encodeURIComponent(user)}&view=items`);
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data?.error || '加载失败');
@@ -212,6 +224,7 @@ export default function DatasetItemsPage() {
         createdAt: d.createdAt,
         updatedAt: d.updatedAt,
       });
+      fullDatasetRef.current = null;
     } catch (e) {
       setError(e instanceof Error ? e.message : '加载失败');
       setDataset(null);
@@ -219,6 +232,27 @@ export default function DatasetItemsPage() {
       setLoading(false);
     }
   }, [user, id]);
+
+  const loadFullDataset = async (): Promise<AgentDataset> => {
+    if (!user || !id) throw new Error('缺少数据集信息');
+    if (fullDatasetRef.current) return fullDatasetRef.current;
+    const res = await apiFetch(`/api/agent-datasets/${id}?user=${encodeURIComponent(user)}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data?.error || '完整数据加载失败');
+    const full = data as AgentDataset;
+    fullDatasetRef.current = full;
+    return full;
+  };
+
+  const loadFullCase = async (caseId: string): Promise<DatasetCase> => {
+    if (!user || !id) throw new Error('缺少数据集信息');
+    const res = await apiFetch(
+      `/api/agent-datasets/${id}?user=${encodeURIComponent(user)}&view=case&caseId=${encodeURIComponent(caseId)}`,
+    );
+    const data = await res.json();
+    if (!res.ok) throw new Error(data?.error || '完整数据项加载失败');
+    return data as DatasetCase;
+  };
 
   useEffect(() => {
     void Promise.resolve().then(() => load());
@@ -249,6 +283,7 @@ export default function DatasetItemsPage() {
       const payload = {
         user,
         id: dataset.id,
+        fields: withEvaluatorCatalogFields(dataset.fields, cases),
         cases: cases.map(item => ({
           id: item.id,
           input: fieldText(item, 'input').trim(),
@@ -292,8 +327,17 @@ export default function DatasetItemsPage() {
     setRowEditor({ mode: 'add', row: createEmptyCase() });
   };
 
-  const openEdit = (row: DatasetCase) => {
-    setRowEditor({ mode: 'edit', row: { ...row, values: { ...(row.values || {}) } } });
+  const openEdit = async (row: DatasetCase) => {
+    setSaving(true);
+    setError('');
+    try {
+      const fullRow = await loadFullCase(row.id);
+      setRowEditor({ mode: 'edit', row: { ...fullRow, values: { ...(fullRow.values || {}) } } });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '完整数据加载失败');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const persistFields = async (fields: DatasetField[]) => {
@@ -329,10 +373,17 @@ export default function DatasetItemsPage() {
       setFieldError('字段名称已存在');
       return;
     }
-    const key = nextDatasetFieldKey(dataset.fields.map(field => field.key));
+    const catalogKey = evaluatorCatalogFieldKeyFromLabel(label);
+    if (catalogKey && dataset.fields.some(field => field.key === catalogKey)) {
+      setFieldError(`${catalogKey} 已存在`);
+      return;
+    }
+    const key = catalogKey ?? nextDatasetFieldKey(dataset.fields.map(field => field.key));
     const ok = await persistFields([
       ...dataset.fields,
-      { id: crypto.randomUUID(), key, label, type: fieldDraft.type },
+      catalogKey
+        ? createEvaluatorCatalogField(catalogKey, label)
+        : { id: crypto.randomUUID(), key, label, type: fieldDraft.type },
     ]);
     if (ok) {
       setFieldEditorOpen(false);
@@ -349,8 +400,12 @@ export default function DatasetItemsPage() {
 
   const removeRow = async (rowId: string) => {
     if (!dataset) return;
-    const next = dataset.cases.filter(c => c.id !== rowId);
-    await persistCases(next);
+    try {
+      const full = await loadFullDataset();
+      await persistCases(full.cases.filter(c => c.id !== rowId));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '完整数据加载失败');
+    }
   };
 
   const saveRowFromModal = async () => {
@@ -377,10 +432,17 @@ export default function DatasetItemsPage() {
       }
     }
     const row = { ...rowEditor.row, values };
+    let full: AgentDataset;
+    try {
+      full = await loadFullDataset();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '完整数据加载失败');
+      return;
+    }
     const next =
       mode === 'add'
-        ? [...dataset.cases, row]
-        : dataset.cases.map(c => (c.id === row.id ? row : c));
+        ? [...full.cases, row]
+        : full.cases.map(c => (c.id === row.id ? row : c));
     await persistCases(next);
   };
 
@@ -410,7 +472,8 @@ export default function DatasetItemsPage() {
           setBatchModalError(result.message || '未能解析出有效数据');
           return;
         }
-        const merged = [...dataset.cases, ...result.cases];
+        const full = await loadFullDataset();
+        const merged = [...full.cases, ...result.cases];
         const ok = await persistCases(merged);
         if (!ok) {
           setBatchModalError('保存失败，请查看上方错误提示');
@@ -430,12 +493,16 @@ export default function DatasetItemsPage() {
         setBatchModalError(result.message || '未能解析出有效数据');
         return;
       }
-      const merged = [...dataset.cases, ...result.cases];
+      const full = await loadFullDataset();
+      const merged = [...full.cases, ...result.cases];
       const ok = await persistCases(merged);
       if (!ok) {
         setBatchModalError('保存失败，请查看上方错误提示');
         return;
       }
+      // 一次导入记 1 次，不按样本数重复；与编辑样本共用 PATCH 接口，
+      // 服务端无从区分，因此在这个只有导入会走到的分支上报。
+      reportClientUsage('dataset', 'dataset.import');
       closeBatchModal();
     } catch (e) {
       setBatchModalError(e instanceof Error ? e.message : '导入失败');
@@ -464,6 +531,7 @@ export default function DatasetItemsPage() {
   if (!dataset) return null;
 
   const isTraj = dataset.datasetKind === 'trajectory';
+  const catalogDraftKey = evaluatorCatalogFieldKeyFromLabel(fieldDraft.label);
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
@@ -607,6 +675,7 @@ export default function DatasetItemsPage() {
                       </td>
                       {dataset.fields.map(field => {
                         const fullText = fieldText(row, field.key);
+                        const isTrajectoryField = ['trace', 'trajectory'].includes(field.key.trim().toLocaleLowerCase());
                         return (
                         <TooltipCell
                           key={field.id}
@@ -615,12 +684,14 @@ export default function DatasetItemsPage() {
                           tdStyle={{
                             maxWidth: field.type === 'json' ? 220 : 260,
                             ...(field.type === 'json' ? { fontFamily: 'ui-monospace, monospace', fontSize: 12 } : {}),
+                            ...(isTrajectoryField ? { cursor: 'pointer', color: 'var(--primary)' } : {}),
                           }}
+                          onClick={isTrajectoryField ? () => void openEdit(row) : undefined}
                         />
                         );
                       })}
                       <td style={{ whiteSpace: 'nowrap' }}>
-                        <button type="button" className={styles.linkBtn} onClick={() => openEdit(row)}>
+                        <button type="button" className={styles.linkBtn} onClick={() => void openEdit(row)} disabled={saving}>
                           编辑
                         </button>
                         <button type="button" className={styles.linkBtnDanger} onClick={() => void removeRow(row.id)}>
@@ -764,7 +835,8 @@ export default function DatasetItemsPage() {
               <div className={styles.hintCard}>
                 自动识别字段：<strong>input</strong> 与 <strong>expected_output</strong>（兼容 <strong>output</strong>、
                 reference_output 等）。内容以 <strong>[</strong> 开头按 JSON，否则按 CSV。轨迹集可含{' '}
-                <strong>trajectory</strong> 或 CSV 第三列。
+                <strong>trajectory</strong> 或 CSV 第三列。JSON 中的 <strong>available_tools</strong> 与{' '}
+                <strong>available_skills</strong> 会自动新增为目录字段。
               </div>
 
               {batchModalError ? <div className={styles.modalError}>{batchModalError}</div> : null}
@@ -791,13 +863,25 @@ export default function DatasetItemsPage() {
             <div className={styles.modalBody} style={{ display: 'grid', gap: 14 }}>
               <label style={{ display: 'grid', gap: 5 }}>
                 <span style={{ fontSize: 12, color: 'var(--foreground-muted)' }}>字段名称</span>
-                <Input value={fieldDraft.label} onChange={e => setFieldDraft({ ...fieldDraft, label: e.target.value })} />
+                <Input
+                  value={fieldDraft.label}
+                  onChange={e => {
+                    const label = e.target.value;
+                    setFieldDraft({
+                      label,
+                      type: evaluatorCatalogFieldKeyFromLabel(label) ? 'json' : fieldDraft.type,
+                    });
+                  }}
+                  placeholder="如 available_tools 或 可用 Tool"
+                />
               </label>
               <div style={{ display: 'grid', gap: 5 }}>
                 <span style={{ fontSize: 12, color: 'var(--foreground-muted)' }}>字段类型</span>
                 <Select
-                  value={fieldDraft.type}
-                  onChange={type => setFieldDraft({ ...fieldDraft, type })}
+                  value={catalogDraftKey ? 'json' : fieldDraft.type}
+                  onChange={type => {
+                    if (!catalogDraftKey) setFieldDraft({ ...fieldDraft, type });
+                  }}
                   options={[
                     { value: 'text', label: '文本' },
                     { value: 'number', label: '数字' },
@@ -810,6 +894,11 @@ export default function DatasetItemsPage() {
                   aria-label="字段类型"
                 />
               </div>
+              {catalogDraftKey && (
+                <div style={{ fontSize: 12, lineHeight: 1.6, color: 'var(--foreground-secondary)' }}>
+                  将识别为 <code>{catalogDraftKey}</code>，并固定使用 JSON 类型，供工具类评估器读取。
+                </div>
+              )}
               {fieldError && <div className={styles.modalError}>{fieldError}</div>}
             </div>
             <div className={styles.modalFooter}>

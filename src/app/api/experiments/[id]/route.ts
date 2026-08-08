@@ -2,9 +2,12 @@
 // 进度 progress，均由全量结果算出）+ 服务端分页的 case 列表（cases 及其 results，
 // 仅当前页）。case 多（尤其监听实验会持续累积）时不再一次拉全量。
 import { NextResponse } from 'next/server';
+import type { ExperimentCase, ExperimentEvalResult } from '@prisma/client';
+import { parseStoredEvaluatorCaseContext } from '@/lib/evaluators/evaluator-case-context';
 import { prisma } from '@/lib/storage/prisma';
 import { resolveUser } from '@/lib/auth/auth';
 import { overallAverage, evaluatorBreakdown } from '@/lib/engine/experiment/detail-agg';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 
 export const dynamic = 'force-dynamic';
 
@@ -64,14 +67,14 @@ export async function GET(
       orderBy: { createdAt: 'asc' },
       ...(wantCaseId ? {} : { skip: (casePage - 1) * casePageSize, take: casePageSize }),
       include: { results: { orderBy: { createdAt: 'asc' } } },
-    });
+    }) as Array<ExperimentCase & { results: ExperimentEvalResult[] }>;
 
     // input/actualOutput 兜底：trace/监听模式建的 case 这两字段存空，从对应 Execution
     // 的 query/finalResult 兜底（与评估时 loadCaseRuntime 口径一致），否则详情页显示为 "-"。
     const needExecTaskIds = Array.from(new Set(
       pagedCases
-        .filter((c: any) => c.taskId && (!c.input || !c.actualOutput))
-        .map((c: any) => c.taskId as string),
+        .filter((c) => c.taskId && (!c.input || !c.actualOutput))
+        .map((c) => c.taskId as string),
     ));
     const execFallback = new Map<string, { query: string; finalResult: string }>();
     if (needExecTaskIds.length) {
@@ -91,8 +94,8 @@ export async function GET(
       if (!s) return null;
       try { return JSON.parse(s); } catch { return null; }
     };
-    const results = pagedCases.flatMap((c: any) =>
-      c.results.map((r: any) => ({
+    const results = pagedCases.flatMap((c) =>
+      c.results.map((r) => ({
         id: r.id,
         caseId: r.caseId,
         evaluatorId: r.evaluatorId,
@@ -124,8 +127,9 @@ export async function GET(
       createdAt: experiment.createdAt,
       overall,
       breakdown,
-      cases: pagedCases.map((c: any) => {
+      cases: pagedCases.map((c) => {
         const ex = c.taskId ? execFallback.get(c.taskId) : undefined;
+        const evaluatorContext = parseStoredEvaluatorCaseContext(c.evaluatorContextJson);
         return {
           id: c.id,
           executionId: c.executionId,
@@ -133,6 +137,8 @@ export async function GET(
           input: c.input || ex?.query || '',
           actualOutput: c.actualOutput || ex?.finalResult || '',
           referenceOutput: c.referenceOutput,
+          evaluatorContext: evaluatorContext.context,
+          evaluatorContextError: evaluatorContext.error,
         };
       }),
       results,
@@ -173,6 +179,8 @@ export async function PATCH(
       where: { id },
       data: { watchMode: false, watchEnabledAt: null },
     });
+    recordUsageEvent({ user: username, featureKey: 'experiments', eventKey: 'experiment.watch.stop' });
+
     return NextResponse.json({ success: true, watchMode: false });
   } catch (error) {
     console.error('[Experiment PATCH Error]', error);

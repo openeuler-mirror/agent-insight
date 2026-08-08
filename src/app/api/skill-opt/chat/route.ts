@@ -3,6 +3,7 @@ import { streamSkillOptOpencode } from '@/lib/skill-opt-bridge';
 import type { SkillOptIssueLite, SkillOptPlanItemLite } from '@/lib/engine/general-agent/skill-opt-prompt';
 import { prismaRaw } from '@/lib/storage/prisma';
 import { createBlockMirror } from '@/lib/chat/block-mirror';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 
 export const dynamic = 'force-dynamic';
 
@@ -143,6 +144,9 @@ export async function POST(req: NextRequest) {
       await (prismaRaw as any).skillOptMessage.create({
         data: { sessionId: threadId, role: 'user', content: userMessageText, blocks: '[]' },
       });
+
+      // 优化请求已被接受 = 一次有效使用；流式 token 不重复计。
+      recordUsageEvent({ user, featureKey: 'skill-opt', eventKey: 'skill.optimize.run' });
       // 默认 title 时用首条 user message 截 30 字（skill-generator 同款）
       if (session && (session.title === '新对话' || !session.title)) {
         const newTitle = userMessageText.length > 30 ? userMessageText.slice(0, 27) + '…' : userMessageText;

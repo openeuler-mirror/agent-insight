@@ -102,6 +102,7 @@ export const zh = {
     accessChannels: '渠道注册',
     accessWebhooks: 'Webhook 路由',
     accessHealth: '健康检查',
+    usageAnalytics: '用量统计',
     configGroup: '配置',
     // === Agents ===
     agentAssets: 'Agent 资产管理',

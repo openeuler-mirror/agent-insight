@@ -60,6 +60,9 @@ description: "创建、导入与版本化管理离线评测所需的样本数据
 - **删除**：删除当前评测集及其数据项。
 - **发起评测**：进入后续评测流程。**轨迹评测集** 直接进入轨迹评测入口，**理想输出评测集** 进入评估器选择入口。
 
+数据集管理页只加载名称、字段和数据量等摘要；打开编辑或数据项页时才读取完整样本。
+发起评测时只加载输入、预期输出等参考字段，不传输体积较大的轨迹内容，因此大数据集不会拖慢所有数据集操作。
+
 ## 新建评测集
 
 新建评测集即定义一组样本的元信息与数据结构。**类型一经确定将影响可录入的字段与可用的评测方式，建议在创建前明确评测目标。**
@@ -198,6 +201,34 @@ input,expected_output
 ]
 ```
 
+工具类评估器还需要执行任务时完整的可用 Tool/Skill 目录。JSON 样本可增加以下字段：
+
+```json
+[
+  {
+    "input": "读取配置文件并汇总关键项。",
+    "expected_output": "输出关键配置项及风险。",
+    "available_tools": [
+      { "name": "read_file", "description": "读取文件" }
+    ],
+    "available_skills": [
+      { "name": "config-review", "description": "检查配置" }
+    ]
+  }
+]
+```
+
+`available_tools` 是必需的入口字段，`available_skills` 可省略。缺少 `available_tools` 表示系统无法确认能力目录；填写空数组表示已确认没有可用 Tool。目录不包含 Agent、子 Agent 或任务委派。对于 OpenCode/Jiuwen，`skill`、`load_skill` 等只是 Skill 加载入口，不要作为独立 Tool 写入 `available_tools`，应把实际 Skill 名称写入 `available_skills`。JSON 导入识别到这两个字段后，会自动创建对应的 JSON 数据列。导入后，在新建实验第 ③ 步点击“从数据集导入匹配”，系统按 input 精确匹配并回填目录。
+
+trace 只能说明 Agent 实际调用了哪些能力，不能说明当时还有哪些能力可用。不要把 trace 中的已调用集合直接当作完整目录，否则无法判断遗漏的必要工具。需要批量填写时，请使用数据集 JSON 维护上述目录字段；当前 CSV 导入仅识别输入、预期输出（含兼容别名）和轨迹列，不会自动写入 `available_tools` / `available_skills`。CSV 导入后可在界面手动补充这两个 JSON 字段；需要程序化创建实验时，通过实验 API 的 `evaluatorContext` 提供。
+
+### 在界面手动填写 Tool/Skill 目录
+
+1. 打开目标评测数据集，在数据项区域点击 **新增字段**。
+2. 字段名称填写 `available_tools`（或“可用 Tool”）。界面会自动识别该名称、固定为 JSON 类型，并保存为工具类评估器可读取的标准字段。
+3. 如需 Skill 目录，再新增 `available_skills`（或“可用 Skill”）字段。
+4. 点击 **单个添加** 或编辑某条数据，在两个 JSON 字段中分别粘贴数组，例如 `[{"name":"read_file","description":"读取文件"}]`。只确认无需 Tool 时填写 `[]`；不要用空值表示“没有工具”。
+
 ### 页面功能
 
 - **JSON / CSV 文本**：直接粘贴结构化文本，适合从脚本、表格或日志处理中快速导入。
@@ -238,6 +269,8 @@ input,expected_output
 | `input` | 输入 | — | 全部 | 发送给评测对象的问题、任务或请求。 |
 | `reference_output` | 预期输出 | `expected_output`、`output` | 全部 | 标准答案 / 参考输出，作为结果比对的基线。 |
 | `trajectory` | 轨迹 trajectory | `trace`、`agent_trace` | 轨迹评测集 | 过程轨迹、关键步骤或结构化执行记录。 |
+| `available_tools` | 可用 Tool | — | 全部 | JSON 数组；工具类评估器的能力目录入口。空数组表示确认无可用 Tool。 |
+| `available_skills` | 可用 Skill | — | 全部 | 可选 JSON 数组；与 `available_tools` 一起构成能力目录。 |
 
 除上述字段外，导入前还可追加标签、评测焦点等元数据，用于后续的筛选、解释与分析。
 

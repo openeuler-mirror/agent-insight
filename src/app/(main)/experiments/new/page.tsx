@@ -24,6 +24,7 @@ import { matchDatasetCases, describeMatchResult, toDatasetCases } from '@/lib/en
 import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
 import type { EvaluatorCard } from '@/lib/evaluators/custom-evaluator-model';
 import { deriveEvaluatorTags, gateEvaluator, getEvaluatorMeta } from '@/lib/evaluators/registry';
+import type { EvaluatorCaseContext } from '@/lib/evaluators/evaluator-case-context';
 
 interface AgentOption { name: string; traces: number }
 
@@ -52,13 +53,19 @@ interface SelectedCase {
   input: string;
   actualOutput: string;
   referenceOutput: string | null;
+  evaluatorContext: EvaluatorCaseContext | null;
 }
 
 interface DatasetOption {
   id: string;
   name: string;
   targetAgent?: string;
-  cases?: Array<{ input?: string; expectedOutput?: string }>;
+  caseCount?: number;
+  cases?: Array<{
+    input?: string;
+    expectedOutput?: string;
+    values?: Record<string, unknown>;
+  }>;
 }
 
 const STEPS = ['实验设计', '关联 Trace', '预期答案', '评估器'];
@@ -388,6 +395,7 @@ export default function NewExperimentPage() {
     input: t.query || '',
     actualOutput: t.finalResult || '',
     referenceOutput: null,
+    evaluatorContext: null,
   });
 
   const pageAllSelected = traces.length > 0 && traces.every((t) => selected.has(t.id));
@@ -484,6 +492,7 @@ export default function NewExperimentPage() {
           input: t.query || '',
           actualOutput: t.finalResult || '',
           referenceOutput: null,
+          evaluatorContext: null,
         });
       }
       return next;
@@ -500,6 +509,8 @@ export default function NewExperimentPage() {
 
   const selectedList = useMemo(() => Array.from(selected.values()), [selected]);
   const annotated = selectedList.filter((c) => !!c.referenceOutput).length;
+  const capabilityCatalogAnnotated = selectedList.filter((c) => c.evaluatorContext !== null).length;
+  const persistable = selectedList.filter((c) => c.referenceOutput || c.evaluatorContext).length;
 
   const setReference = (executionId: string, value: string | null) => {
     setSelected((prev) => {
@@ -515,27 +526,46 @@ export default function NewExperimentPage() {
     setDatasetHint('');
     setImportOpen(true);
     if (!user) return;
-    apiFetch(`/api/agent-datasets?user=${encodeURIComponent(user)}`)
+    apiFetch(`/api/agent-datasets?user=${encodeURIComponent(user)}&view=reference`)
       .then((r) => (r.ok ? r.json() : []))
       .then((d) => setDatasets(Array.isArray(d) ? d : []))
       .catch(() => setDatasets([]));
   };
 
   const importFromDataset = (ds: DatasetOption) => {
-    const result = matchDatasetCases(
-      selectedList.map((c) => ({ key: c.executionId, input: c.input, referenceOutput: c.referenceOutput })),
-      (ds.cases ?? []).map((x) => ({ input: String(x.input ?? ''), expectedOutput: String(x.expectedOutput ?? '') })),
-    );
-    setSelected((prev) => {
-      const next = new Map(prev);
-      for (const [key, ref] of Object.entries(result.updates)) {
-        const c = next.get(key);
-        if (c) next.set(key, { ...c, referenceOutput: ref });
+    try {
+      const result = matchDatasetCases(
+        selectedList.map((c) => ({
+          key: c.executionId,
+          input: c.input,
+          referenceOutput: c.referenceOutput,
+          evaluatorContext: c.evaluatorContext,
+        })),
+        (ds.cases ?? []).map((x) => ({
+          input: String(x.input ?? ''),
+          expectedOutput: String(x.expectedOutput ?? ''),
+          values: x.values,
+        })),
+      );
+      setSelected((prev) => {
+        const next = new Map(prev);
+        for (const [key, ref] of Object.entries(result.updates)) {
+          const c = next.get(key);
+          if (c) next.set(key, { ...c, referenceOutput: ref });
+        }
+        for (const [key, evaluatorContext] of Object.entries(result.contextUpdates)) {
+          const c = next.get(key);
+          if (c) next.set(key, { ...c, evaluatorContext });
+        }
+        return next;
+      });
+      setDatasetHint(describeMatchResult(result));
+      if (result.matched > 0 || result.contextMatched > 0) {
+        setTimeout(() => setImportOpen(false), 900);
       }
-      return next;
-    });
-    setDatasetHint(describeMatchResult(result));
-    if (result.matched > 0) setTimeout(() => setImportOpen(false), 900);
+    } catch (error) {
+      setDatasetHint(`导入失败：${error instanceof Error ? error.message : 'Tool/Skill 目录无法解析'}`);
+    }
   };
 
   // ③ 存为数据集：已标注的 case 沉淀为评测数据集（数据集是实验副产品）
@@ -554,6 +584,12 @@ export default function NewExperimentPage() {
           description: `由实验「${name.trim() || '未命名'}」的预期答案标注沉淀`,
           targetAgent: agentName,
           datasetKind: 'ideal_output',
+          fields: [
+            { id: 'input', key: 'input', label: '输入', type: 'text', system: true },
+            { id: 'reference_output', key: 'reference_output', label: '预期输出', type: 'text', system: true },
+            { id: 'available_tools', key: 'available_tools', label: '可用 Tool', type: 'json' },
+            { id: 'available_skills', key: 'available_skills', label: '可用 Skill', type: 'json' },
+          ],
           cases,
         }),
       });
@@ -571,9 +607,12 @@ export default function NewExperimentPage() {
     }
   };
 
-  // ④ 门控输入：每条已选 case 的参考标注情况
+  // ④ 门控输入：每条已选 case 的参考标注和 Tool/Skill 目录情况
   const gateCases = useMemo(
-    () => selectedList.map((c) => ({ hasReference: !!c.referenceOutput })),
+    () => selectedList.map((c) => ({
+      hasReference: !!c.referenceOutput,
+      hasToolCatalog: c.evaluatorContext !== null,
+    })),
     [selectedList],
   );
 
@@ -590,14 +629,14 @@ export default function NewExperimentPage() {
     });
   };
 
-  // 监听模式开启时，剔除已选的依赖参考数据的评估器（方案A：监听 trace 无参考答案）
+  // 监听 trace 不携带逐条参考答案或 Tool/Skill 目录，移除带前置条件的评估器。
   useEffect(() => {
     if (!watchMode) return;
     const timer = window.setTimeout(() => {
       setSelectedEvaluators((prev) => {
         const next = new Set(prev);
         for (const card of allEvaluators) {
-          if (getEvaluatorMeta(card).requires.includes('reference')) next.delete(card.id);
+          if (getEvaluatorMeta(card).requires.length > 0) next.delete(card.id);
         }
         return next.size === prev.size ? prev : next;
       });
@@ -644,7 +683,7 @@ export default function NewExperimentPage() {
   const stepSummaries = [
     `${name.trim() || '未命名'} · 单组`,
     `已选 ${selected.size} 条 trace`,
-    `已标注 ${annotated}/${selectedList.length}`,
+    `参考 ${annotated}/${selectedList.length} · Tool/Skill 目录 ${capabilityCatalogAnnotated}/${selectedList.length}`,
     `已选 ${selectedEvaluators.size} 个`,
   ];
 
@@ -1139,7 +1178,7 @@ export default function NewExperimentPage() {
           <div style={PANEL}>
             <div style={PANEL_H}>
               <span style={{ fontSize: 12, color: 'var(--foreground-secondary)', flex: 1, minWidth: 260, lineHeight: 1.6 }}>
-                预期答案为可选标注——不标注也可直接下一步；依赖参考数据的评估器将按标注情况在第 ④ 步门控。
+                参考答案和 Tool/Skill 目录可从数据集按输入精确导入；目录不会从 trace 的已调用集合反推。依赖相应数据的评估器会在第 ④ 步门控。
               </span>
               <span style={{ display: 'flex', alignItems: 'center', gap: 9, minWidth: 200 }}>
                 <span style={{ flex: 1, height: 7, borderRadius: 4, background: 'var(--background-secondary)', overflow: 'hidden' }}>
@@ -1150,7 +1189,7 @@ export default function NewExperimentPage() {
                   }} />
                 </span>
                 <span style={{ fontSize: 10.5, color: 'var(--foreground-muted)', whiteSpace: 'nowrap' }}>
-                  已标注 <b style={{ color: 'var(--primary)' }}>{annotated}</b>/{selectedList.length}
+                  参考 <b style={{ color: 'var(--primary)' }}>{annotated}</b> · Tool/Skill 目录 <b style={{ color: 'var(--primary)' }}>{capabilityCatalogAnnotated}</b>/{selectedList.length}
                 </span>
               </span>
               <span style={{ display: 'flex', gap: 8 }}>
@@ -1158,10 +1197,10 @@ export default function NewExperimentPage() {
                   📥 从数据集导入匹配
                 </button>
                 <button
-                  style={{ ...BTN_OUTLINE_SM, opacity: annotated > 0 ? 1 : 0.5, cursor: annotated > 0 ? 'pointer' : 'not-allowed' }}
-                  disabled={annotated === 0}
+                  style={{ ...BTN_OUTLINE_SM, opacity: persistable > 0 ? 1 : 0.5, cursor: persistable > 0 ? 'pointer' : 'not-allowed' }}
+                  disabled={persistable === 0}
                   onClick={() => { setDatasetHint(''); setDatasetName(''); setSaveOpen(true); }}
-                  title={annotated > 0 ? '把已标注的预期答案沉淀为评测数据集' : '尚无已标注的 case'}
+                  title={persistable > 0 ? '把参考答案和 Tool/Skill 目录沉淀为评测数据集' : '尚无可保存的 case 上下文'}
                 >
                   💾 存为数据集
                 </button>
@@ -1192,6 +1231,13 @@ export default function NewExperimentPage() {
                           ? { ...CHIP, background: 'var(--success-subtle)', color: 'var(--success)', border: '1px solid var(--success-subtle-border)' }
                           : CHIP_MUT}>
                           {c.referenceOutput ? '已标注' : '未标注'}
+                        </span>
+                        <span style={c.evaluatorContext
+                          ? { ...CHIP, background: 'var(--success-subtle)', color: 'var(--success)', border: '1px solid var(--success-subtle-border)' }
+                          : CHIP_MUT}>
+                          {c.evaluatorContext
+                            ? `Tool ${c.evaluatorContext.availableTools.length} · Skill ${c.evaluatorContext.availableSkills?.length ?? 0}`
+                            : '无 Tool/Skill 目录'}
                         </span>
                         <button
                           style={BTN_OUTLINE_SM}
@@ -1261,14 +1307,14 @@ export default function NewExperimentPage() {
           <div style={PANEL}>
             <div style={PANEL_B}>
               <div style={{ fontSize: 12, color: 'var(--foreground-secondary)', marginBottom: 12, lineHeight: 1.6 }}>
-                为本次实验挑选评估器（可多选）。依赖参考数据的评估器要求所有已选 case 均已标注预期答案。
+                为本次实验挑选评估器（可多选）。依赖参考数据或 Tool/Skill 目录的评估器要求所有已选 case 满足对应前置条件。
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(290px, 1fr))', gap: 10 }}>
                 {allEvaluators.map((card) => {
                   const meta = getEvaluatorMeta(card);
-                  // 监听模式：新 trace 无逐条参考答案 → 依赖参考数据的评估器不可用（方案A）
-                  const gate = watchMode && meta.requires.includes('reference')
-                    ? { usable: false, reason: '监听模式下新 trace 无参考答案——依赖参考数据的评估器不可用' }
+                  // 监听模式的新 trace 没有逐条参考答案或 Tool/Skill 目录，带前置条件的评估器不可用。
+                  const gate = watchMode && meta.requires.length > 0
+                    ? { usable: false, reason: '监听模式下新 trace 不携带评估器所需的逐条上下文' }
                     : gateEvaluator(meta, gateCases);
                   const checked = selectedEvaluators.has(card.id);
                   return (
@@ -1364,7 +1410,7 @@ export default function NewExperimentPage() {
                     >
                       <span style={{ fontSize: 12.5, fontWeight: 700, flex: 1 }}>{ds.name}</span>
                       {ds.targetAgent && <span style={CHIP_MUT}>{ds.targetAgent}</span>}
-                      <span style={{ fontSize: 10.5, color: 'var(--foreground-muted)' }}>{(ds.cases ?? []).length} 条</span>
+                      <span style={{ fontSize: 10.5, color: 'var(--foreground-muted)' }}>{ds.caseCount ?? (ds.cases ?? []).length} 条</span>
                     </button>
                   ))}
                 </div>
@@ -1386,7 +1432,7 @@ export default function NewExperimentPage() {
                 <button style={BTN_GHOST} onClick={() => setSaveOpen(false)}>✕ 关闭</button>
               </div>
               <div style={{ fontSize: 11.5, color: 'var(--foreground-muted)', marginBottom: 12, lineHeight: 1.6 }}>
-                将 <b style={{ color: 'var(--primary)' }}>{annotated}</b> 条已标注的预期答案存为评测数据集，后续实验可直接导入复用。
+                将 <b style={{ color: 'var(--primary)' }}>{persistable}</b> 条参考答案或 Tool/Skill 目录存为评测数据集，后续实验可直接导入复用。
               </div>
               <label style={FIELDLBL}>数据集名称</label>
               <input

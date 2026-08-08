@@ -1,6 +1,6 @@
 import { createHash } from 'crypto';
 import {
-  readAllAgentDatasets,
+  readUserAgentDatasets,
   type AgentDatasetRecord,
   type DatasetCase,
 } from '@/server/agent_datasets_storage';
@@ -36,7 +36,7 @@ export function normalizeDatasetCaseMatchText(value: string | null | undefined):
 
 export async function loadUserAgentDatasets(user: string): Promise<AgentDatasetRecord[]> {
   if (!user.trim()) return [];
-  return (await readAllAgentDatasets()).filter(dataset => dataset.user === user);
+  return readUserAgentDatasets(user);
 }
 
 export function hashAgentDatasetScope(datasets: AgentDatasetRecord[]): string {

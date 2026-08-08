@@ -25,6 +25,7 @@ import { parseAsInteger, parseAsString, useQueryState } from 'nuqs';
 import { toast } from 'sonner';
 
 import { AppTopBar } from '@/components/shell/AppTopBar';
+import { createOnceReporter } from '@/lib/usage-analytics/client-events';
 import { PageContainer, PageContent, PageFooter } from '@/components/shell/PageContainer';
 import AgentTraceView from '@/components/observe/AgentTraceView';
 import TraceFilterBar from '@/components/observe/TraceFilterBar';
@@ -231,6 +232,8 @@ function getFrameworkLabel(framework?: string | null): string {
             return 'Claude Code';
         case 'hermes':
             return 'Hermes';
+        case 'trae':
+            return 'Trae IDE';
         default:
             return value;
     }
@@ -582,11 +585,19 @@ function TracePageContent() {
         return 44 + fixedWidth;
     }, [widths, columnVisibility]);
 
+    // 只在用户主动点开某条 Trace 时计一次有效使用；地址栏进入、刷新与列表轮询
+    // 走的是下面的 URL 解析 effect，不经过这里，因此不会计数。
+    const reportTraceDetailView = useMemo(
+        () => createOnceReporter('trace', 'trace.detail.view'),
+        [],
+    );
+
     const handleSelectExecution = useCallback((e: Execution | null) => {
         setSelectedExecution(e);
         const id = e ? (e.task_id || e.upload_id || null) : null;
         setTaskIdParam(id);
-    }, [setTaskIdParam]);
+        if (id) reportTraceDetailView(id);
+    }, [setTaskIdParam, reportTraceDetailView]);
 
     // Resolve selectedExecution from URL on data load or URL change.
     //   - data 列表里没这条(比如系统 agent grayscale-* 被前端过滤掉)

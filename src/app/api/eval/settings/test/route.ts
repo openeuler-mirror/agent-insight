@@ -11,6 +11,7 @@ import {
 } from '@/lib/shared/model-connection';
 import { NextResponse } from 'next/server';
 import { OpenAI } from "openai";
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 
 export async function POST(request: Request) {
     try {
@@ -82,6 +83,10 @@ export async function POST(request: Request) {
         });
 
         if (completion && completion.choices) {
+             // 只有用户主动触发的测试计数；页面健康轮询不带 usageActive，不计。
+             if (body.usageActive && body.user) {
+                 recordUsageEvent({ user: body.user, featureKey: 'model-registry', eventKey: 'model.test' });
+             }
              return NextResponse.json({ success: true, message: 'Connection successful' });
         } else {
              throw new Error('No response from model');
