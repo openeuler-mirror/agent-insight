@@ -47,7 +47,7 @@ import {
 } from '@/lib/trace-tags';
 
 /** 允许派生子 Agent 树的框架集合。先落地者集合化，后落地者仅加值。 */
-const SUBAGENT_TREE_FRAMEWORKS = new Set(['opencode', 'openclaw', 'hermes', 'langfuse-langgraph', 'codeagent']);
+const SUBAGENT_TREE_FRAMEWORKS = new Set(['opencode', 'openclaw', 'hermes', 'langfuse-langgraph', 'codeagent', 'claudecode']);
 
 export interface InvokedSkill {
     name: string;
@@ -82,6 +82,9 @@ export function shouldRefreshStoredQueryFromInteractions(
     if (!current) return true;
     const fw = typeof framework === 'string' ? framework.trim().toLowerCase() : '';
     if (!fw) return false;
+    if (fw === 'claudecode') {
+        return /^Claude Code Session [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(current);
+    }
     return current.toLowerCase() === `${fw} session`;
 }
 
@@ -184,11 +187,22 @@ async function persistExecutionSkills(
  */
 export function computeOwnSkills(framework: string | null | undefined, interactions: any[]): InvokedSkill[] {
     if (!Array.isArray(interactions) || interactions.length === 0) return [];
-    if (framework === 'opencode' || framework === 'hermes' || framework === 'langfuse-langgraph' || framework === 'codeagent') {
+    const capabilities = getAdapter(framework).capabilities;
+    if (capabilities?.skills !== true) return [];
+    if (capabilities.skillScope === 'agent-tree') {
         const tree = buildAgentCallTree(interactions as any);
         return tree ? extractExplicitSkillsFromNode(tree) : [];
     }
     return extractInvokedSkillsFromSessionInteractions(framework, interactions) ?? [];
+}
+
+export function allowsSnapshotShrinkForFramework(framework: string | null | undefined): boolean {
+    const adapter = getAdapter(framework);
+    return adapter.capabilities?.allowSnapshotShrink === true
+        || (
+            adapter.descriptor.id === 'jiuwenswarm'
+            && process.env.AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK === 'true'
+        );
 }
 
 /**
@@ -258,6 +272,11 @@ export async function recomputeExecutionSkills(
 }
 
 export interface ExecutionRecord {
+    /**
+     * Internal ingest provenance. This is consumed before persistence and is
+     * intentionally not stored in the Execution table.
+     */
+    authenticated_ingest?: boolean;
     upload_id?: string;
     task_id?: string;
     query?: string;
@@ -266,6 +285,7 @@ export interface ExecutionRecord {
     cost?: number;
     latency?: number;
     timestamp?: string | Date;
+    trace_started_at?: string | Date | null;
     trace_completed_at?: string | Date | null;
     final_result?: string;
     skill?: string;
@@ -1200,6 +1220,24 @@ interface ReadRecordsOptions {
     databasePagination?: boolean;
 }
 
+export function resolveExecutionSubagentFilter(filters?: {
+    includeSubagents?: boolean;
+    onlySubagents?: boolean;
+    parentExecutionId?: string | null;
+    taskId?: string;
+    taskIds?: string[];
+    skill?: string;
+}): boolean | undefined {
+    if (filters?.onlySubagents === true) return true;
+    if (
+        filters?.includeSubagents === true
+        || filters?.parentExecutionId !== undefined
+        || filters?.taskId
+        || filters?.taskIds?.length
+    ) return undefined;
+    return false;
+}
+
 export interface ReadRecordPageStats {
     total: number;
     failedCount: number;
@@ -1798,14 +1836,8 @@ async function readRecordsInternal(
         where.user = user;
     }
 
-    // 默认列表只显示 root execution；sub-agent 行通过 trace 视图下钻进入。
-    // 显式按 taskId / taskIds / parentExecutionId 查询时跳过该过滤，
-    // 让"按 sub-agent sessionID 直查"和"列出某 root 的所有子 agent"都能工作。
-    const hasExplicitTaskIdFilter = !!(filters?.taskIds?.length || filters?.taskId);
-    // 按 skill 筛选时走 ExecutionSkill(agent 作用域):结果应精确命中真正用到该 skill 的那一层,
-    // 可能是 sub-agent 行,因此放开默认的 isSubagent=false 排除。
-    // skill 既可来自单值 filters.skill(旧路径 / ?skill= 深链),也可来自结构化过滤的
-    // `skill any of [...]` clause(左侧栏 facet 多选)。合并成一组 skillName 一次反查。
+    // 默认列表严格只显示 root execution；显式选择 sub-agent / 全部层级，或按 taskId
+    // 下钻时才放开。Skill 是内容过滤条件，不能覆盖用户选择的 Agent 层级。
     const skillNamesFromClauses = (filters?.clauses ?? [])
         .filter((c) => c.column === 'skill' && (c.operator === 'any of' || c.operator === '='))
         .flatMap((c) => (Array.isArray(c.value) ? c.value : c.value != null ? [c.value] : []))
@@ -1815,16 +1847,8 @@ async function readRecordsInternal(
         ...skillNamesFromClauses,
     ]));
     const skillFilterActive = EXECUTION_SKILL_ENABLED && skillNames.length > 0;
-    if (filters?.onlySubagents === true) {
-        where.isSubagent = true;
-    } else if (
-        filters?.includeSubagents !== true &&
-        filters?.parentExecutionId === undefined &&
-        !hasExplicitTaskIdFilter &&
-        !skillFilterActive
-    ) {
-        where.isSubagent = false;
-    }
+    const subagentFilter = resolveExecutionSubagentFilter(filters);
+    if (subagentFilter !== undefined) where.isSubagent = subagentFilter;
 
     if (filters?.parentExecutionId !== undefined) {
         where.parentExecutionId = filters.parentExecutionId;
@@ -2375,9 +2399,9 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
                 // snapshot-replace 防退化护栏：上游或服务端聚合层每批都重新形成「当前会话快照」后整条
                 // 覆盖，正常情况下 incoming 是越来越全的快照。但若 span spool 在极端下仍残缺（历史 span
                 // 永久丢失等），一个偏小的快照会把库里更完整的记录盖没。这里比较 interaction 数：incoming
-                // 严格更小则判为退化快照，保留库里现有记录、不覆盖。设 AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK=true
-                // 可在确有「正当缩小」场景时放行。
-                const allowShrink = process.env.AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK === 'true';
+                // 严格更小则判为退化快照，保留库里现有记录、不覆盖。Qoder 的完整 turn
+                // 快照允许缩小；Jiuwen 仅可由服务端环境开关显式放行。
+                const allowShrink = allowsSnapshotShrinkForFramework(targetRecord.framework);
                 if (!allowShrink) {
                     const existingSession = await db.findSessionByTaskId(targetRecord.task_id);
                     let existingInteractions = existingSession?.interactions
@@ -2390,7 +2414,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
                         console.warn(
                             `[Data-Service] snapshot-replace 退化护栏：拒绝用更小快照覆盖 task ${targetRecord.task_id}` +
                             `（incoming ${incomingCount} < existing ${existingCount} interactions），保留现有记录。` +
-                            `设 AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK=true 可放行。`,
+                            `Jiuwen 可由服务端设置 AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK=true 放行。`,
                         );
                         return { success: true, record: targetRecord };
                     }
@@ -2824,7 +2848,11 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
     // 通过 parentExecutionId 与 root 建立父子关系。列表/聚合默认 filter isSubagent=false，
     // 详情页可下钻到 sub-agent。历史上这里曾对相同 taskId 的 child Execution 做 dedup 删除，
     // 现在反过来——保留它们，并补齐父子链接。
-    if (typeof targetRecord.framework === 'string' && SUBAGENT_TREE_FRAMEWORKS.has(targetRecord.framework) && targetRecord.task_id && Array.isArray(mergedInteractionsForSession)) {
+    if (
+        getAdapter(targetRecord.framework).capabilities?.subagentTree === true
+        && targetRecord.task_id
+        && Array.isArray(mergedInteractionsForSession)
+    ) {
         try {
             await deriveSubagentExecutions({
                 parentExecutionId: recordId,
@@ -2838,6 +2866,11 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
         }
     }
 
+    const explicitTraceStartedAt = targetRecord.trace_started_at
+        ? new Date(targetRecord.trace_started_at)
+        : null;
+    const hasExplicitTraceStart = explicitTraceStartedAt != null
+        && Number.isFinite(explicitTraceStartedAt.getTime());
     const explicitTraceCompletedAt = targetRecord.trace_completed_at
         ? new Date(targetRecord.trace_completed_at)
         : null;
@@ -2856,7 +2889,8 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
         targetRecord.trace_completed_at = inferredHermesTraceCompletedAt;
     }
     const hasTraceCompletion = traceCompletedAtForSession != null
-        && Number.isFinite(traceCompletedAtForSession.getTime());
+        && Number.isFinite(traceCompletedAtForSession.getTime())
+        && (!hasExplicitTraceStart || traceCompletedAtForSession.getTime() >= explicitTraceStartedAt.getTime());
 
     if (targetRecord.task_id && mergedInteractionsForSession) {
         const isLangfuseTrace = targetRecord.framework === 'langfuse' || targetRecord.framework === 'langfuse-langgraph';
@@ -2883,6 +2917,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
                 model: targetRecord.model,
                 interactions: JSON.stringify(mergedInteractionsForSession),
                 ...(langfuseTraceNodesJson !== undefined ? { langfuseTraceNodes: langfuseTraceNodesJson } : {}),
+                ...(hasExplicitTraceStart ? { startTime: explicitTraceStartedAt } : {}),
                 ...(hasTraceCompletion ? { endTime: traceCompletedAtForSession } : {}),
             },
             {
@@ -2892,6 +2927,7 @@ export async function saveExecutionRecord(data: ExecutionRecord): Promise<{ succ
                 model: targetRecord.model,
                 interactions: JSON.stringify(mergedInteractionsForSession),
                 ...(langfuseTraceNodesJson !== undefined ? { langfuseTraceNodes: langfuseTraceNodesJson } : {}),
+                ...(hasExplicitTraceStart ? { startTime: explicitTraceStartedAt } : {}),
             }
         );
         if (hasTraceCompletion) {

@@ -233,6 +233,8 @@ export function ModelConfigManager({}: ModelConfigManagerProps = {}) {
                     headers: configToSave.headers,
                     user,
                     configId: configToSave.id,
+                    // 用户点保存触发的主动测试才计入用量；recheckHealth 的页面轮询不传这个标记
+                    usageActive: true,
                 }),
             });
             const testData = await testRes.json();

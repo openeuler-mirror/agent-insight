@@ -24,8 +24,8 @@
 系统的枢纽。大部分业务逻辑都在这里。主要子区域：
 - **`engine/`** —— 领域引擎，按能力组织：
   - `agent-debug/` —— 失败根因分析（`AgentDebugReportPayload`，step/issue/triage 模型）。驱动故障诊断。
-  - `evaluation/` —— 评测核心：`judge.ts`（LLM 评判）、`result-quality-evaluator.ts`（质量监控结果四指标编排）、`result-accuracy-evaluator.ts`（预期关键观点与完整最终输出的准确性裁决）、`dataset-case-match.ts`（评测中心与质量监控共用的 Case 精确/语义匹配）、`faithfulness-evaluator.ts`（链路工具证据、原子主张和逐项忠实度裁决）、`instruction-adherence-evaluator.ts`（两阶段输出约束评测）、`answer-quality-evaluator.ts`（相关性/完整性/连贯性评测）、`trajectory-evaluator.ts`、`custom-llm-evaluator.ts`、`semantic-dataset-match.ts`、`task-completion-scoring.ts`、`trace-summarizer.ts`、`config-target.ts` / `config-dataset.ts`、`derive-skill-opt-points.ts`，以及大型契约文件 `evaluation-types.ts`。
-  - `quality-monitoring/` —— 按 Agent/时间窗收集 trace，批量 join `TraceEvaluation`，聚合结果、过程、成本和错误维度，生成趋势、问题汇总和历史回填。
+  - `evaluation/` —— 评测核心：`judge.ts`（LLM 评判）、`result-metric-evaluator.ts`（评测中心四个结果类预置评估器的公共分发与模型传输）、`result-accuracy-evaluator.ts`（预期关键观点与完整最终输出的准确性裁决）、`dataset-case-match.ts`（评测中心的 Case 精确/语义匹配）、`faithfulness-evaluator.ts`（链路工具证据、原子主张和逐项忠实度裁决）、`instruction-adherence-evaluator.ts`（两阶段输出约束评测）、`answer-quality-evaluator.ts`（相关性/完整性/连贯性评测）、`trajectory-evaluator.ts`、`custom-llm-evaluator.ts`、`semantic-dataset-match.ts`、`task-completion-scoring.ts`、`trace-summarizer.ts`、`config-target.ts` / `config-dataset.ts`、`derive-skill-opt-points.ts`，以及大型契约文件 `evaluation-types.ts`。
+  - `quality-monitoring/` —— 按 Agent/时间窗收集 trace，聚合过程、成本和错误维度，生成趋势、问题汇总和执行记录；不读取 `TraceEvaluation`，也不调度结果评估器。
   - `general-agent/` —— 内部的 LangGraph/deepagents 运行时：`runner.ts`（`runGeneralAgent`）、`concurrency-limiter.ts`、`pending-requests.ts`、`skill-resolver.ts`、`skill-workspace-deployer.ts`、`skill-opt-prompt.ts`。
   - `observability/` —— trace 解析/归一化：`agent-trace.ts`（`buildAgentCallTree`、`AgentNode`）、`claude-parser.ts`、`openclaw-parser.ts`、`flow-parser.ts`（Skill 流程对齐）、`fault-path.ts`、`trace-bundle.ts`、`agent-registration.ts`。
   - `skill-generation/` —— 通过 Agent 进行 Skill 创作：`index.ts`（`generateSkill` / `generateSkillStream`）、`types.ts`（`SkillSpec`）、`opencode-agent-cli/`（OpenCode 客户端 + 事件类型）、`evaluator/runners/`，以及一个 `legacy/` 的 skill-sync/registry 层。
@@ -61,7 +61,7 @@ assistant-ui 集成：`client.ts`、`Stream.tsx`、`Thread.tsx` —— 串联起
 `(main)/` 下的页面（每个功能一个路由组：dashboard、agents、dataset、eval、fault、metrics、modelconfig、quality、security、skill-eval、skill-generator、skill-opt、skill-release、skills、trace），以及 `api/` 下的 API 路由处理器。这里是 HTTP 请求的入口；处理器将工作委派给 `lib`/`server`。参见 [01-architecture.md](01-architecture.md#entry-surface) 和 [06-frontend.md](06-frontend.md)。
 
 ## `scripts` (`scripts/`) — edge, operational + client agents
-安装器/生命周期（`install.js`、`start.js`、`stop.js`、`status.js`、`restart*.{js,sh}`）、客户端接入 watcher/插件（`openclaw_watcher_client.ts`、`opencode_plugin*.ts`、`opencode_uploader_client.js`、`opencode_tui_plugin.tsx`）、Claude Code 官方 OTel 配置脚本、数据回填/种子，以及一个 Python OTel 接收器（`otel_receiver.py`）。
+安装器/生命周期（`install.js`、`start.js`、`stop.js`、`status.js`、`restart*.{js,sh}`）、客户端接入 watcher/插件（`openclaw_watcher_client.ts`、`opencode_plugin*.ts`、`opencode_uploader_client.js`、`opencode_tui_plugin.tsx`、`trae-collector/`）、Claude Code 官方 OTel 配置脚本、数据回填/种子，以及一个 Python OTel 接收器（`otel_receiver.py`）。
 
 ## `public`, `tools`, `test` — edge / peripheral
 - `public/` —— 静态资源 + `sync_skills.ts`（客户端 Skill 同步脚本）。

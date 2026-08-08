@@ -1,8 +1,14 @@
 // 评测「实验」API —— 列表 + 创建（本期仅单组实验 type='single'）。
 // 执行引擎（ExperimentEvalResult 写入）为后续里程碑，POST 仅落 draft。
 import { NextResponse } from 'next/server';
+import type { Experiment } from '@prisma/client';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { prisma } from '@/lib/storage/prisma';
 import { resolveUser } from '@/lib/auth/auth';
+import {
+  EvaluatorContextValidationError,
+  serializeEvaluatorCaseContext,
+} from '@/lib/evaluators/evaluator-case-context';
 
 export const dynamic = 'force-dynamic';
 
@@ -12,6 +18,7 @@ interface CaseInput {
   input?: string;
   actualOutput?: string;
   referenceOutput?: string | null;
+  evaluatorContext?: unknown;
 }
 
 export async function GET(req: Request) {
@@ -24,7 +31,7 @@ export async function GET(req: Request) {
     const limit = Math.min(Math.max(Number(q.get('limit')) || 20, 1), 100);
     const offset = Math.max(Number(q.get('offset')) || 0, 0);
 
-    const [total, rows] = await Promise.all([
+    const [total, rawRows] = await Promise.all([
       prisma.experiment.count({ where: userFilter }),
       prisma.experiment.findMany({
         where: userFilter,
@@ -34,8 +41,9 @@ export async function GET(req: Request) {
         include: { _count: { select: { cases: true } } },
       }),
     ]);
+    const rows = rawRows as Array<Experiment & { _count: { cases: number } }>;
 
-    const items = rows.map((r: any) => {
+    const items = rows.map((r) => {
       let evaluatorCount = 0;
       try {
         const ids = JSON.parse(r.evaluatorIdsJson || '[]');
@@ -91,6 +99,20 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'at least one evaluator is required' }, { status: 400 });
     }
 
+    let normalizedCases: Array<CaseInput & { evaluatorContextJson: string | null }>;
+    try {
+      normalizedCases = cases.map((item) => ({
+        ...item,
+        evaluatorContextJson: serializeEvaluatorCaseContext(item.evaluatorContext),
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'invalid evaluatorContext';
+      return NextResponse.json(
+        { error: error instanceof EvaluatorContextValidationError ? message : 'invalid evaluatorContext' },
+        { status: 400 },
+      );
+    }
+
     const experiment = await prisma.experiment.create({
       data: {
         user: username,
@@ -102,7 +124,7 @@ export async function POST(req: Request) {
         watchMode,
         watchEnabledAt: watchMode ? new Date() : null,
         cases: {
-          create: cases.map((c) => ({
+          create: normalizedCases.map((c) => ({
             executionId: c.executionId ? String(c.executionId) : null,
             taskId: c.taskId ? String(c.taskId) : null,
             input: String(c.input ?? ''),
@@ -111,11 +133,14 @@ export async function POST(req: Request) {
               c.referenceOutput != null && String(c.referenceOutput).trim() !== ''
                 ? String(c.referenceOutput)
                 : null,
+            evaluatorContextJson: c.evaluatorContextJson,
           })),
         },
       },
       select: { id: true },
     });
+
+    recordUsageEvent({ user: username, featureKey: 'experiments', eventKey: 'experiment.create' });
 
     return NextResponse.json({ id: experiment.id });
   } catch (error) {

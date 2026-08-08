@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prismaRaw } from '@/lib/storage/prisma';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
+import { isUsageEnabled } from '@/lib/usage-analytics/config';
 
 export const dynamic = 'force-dynamic';
 
@@ -68,9 +70,17 @@ export async function DELETE(
 ) {
     try {
         const { id } = await params;
+
+        // 删除后拿不到归属人，先读一次；只在统计开启时才多这一次查询。
+        const owner = isUsageEnabled()
+            ? (await (prismaRaw as any).skillGeneratorSession.findUnique({ where: { id }, select: { user: true } }))?.user
+            : null;
+
         await (prismaRaw as any).skillGeneratorSession.delete({
             where: { id }
         });
+
+        recordUsageEvent({ user: owner, featureKey: 'skill-generator', eventKey: 'skill.generate.session.delete' });
 
         return NextResponse.json({ success: true });
     } catch (error: any) {

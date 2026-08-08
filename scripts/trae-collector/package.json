@@ -1,0 +1,144 @@
+{
+  "name": "agent-insight-trae-collector",
+  "displayName": "Agent Insight TRAE Collector",
+  "description": "全链路 Trace 采集器 — 采集 TRAE Agent/LLM/Tool/MCP 调用数据并上报到 Agent Insight 平台",
+  "version": "0.1.0",
+  "publisher": "agent-insight",
+  "license": "MIT",
+  "icon": "icon.png",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "extensionKind": [
+    "workspace"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    }
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "agent-insight-trae.showStatus",
+        "title": "Agent Insight TRAE: 显示状态"
+      },
+      {
+        "command": "agent-insight-trae.flushNow",
+        "title": "Agent Insight TRAE: 立即上传 Spool 数据"
+      },
+      {
+        "command": "agent-insight-trae.openSpoolDir",
+        "title": "Agent Insight TRAE: 打开 Spool 目录"
+      },
+      {
+        "command": "agent-insight-trae.openLogs",
+        "title": "Agent Insight TRAE: 查看日志"
+      }
+    ],
+    "configuration": {
+      "title": "Agent Insight TRAE Collector",
+      "properties": {
+        "agentInsight.trae.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "启用 Trace 采集"
+        },
+        "agentInsight.trae.host": {
+          "type": "string",
+          "default": "",
+          "description": "Agent Insight 服务地址"
+        },
+        "agentInsight.trae.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "API Key"
+        },
+        "agentInsight.trae.uploadIntervalMs": {
+          "type": "number",
+          "default": 30000,
+          "description": "定时上传间隔 (毫秒，默认5分钟)"
+        },
+        "agentInsight.trae.requestTimeoutMs": {
+          "type": "number",
+          "default": 15000,
+          "description": "HTTP 上传请求超时 (毫秒)，对应 AC23"
+        },
+        "agentInsight.trae.maxRetries": {
+          "type": "number",
+          "default": 3,
+          "description": "上传失败最大重试次数，对应 AC23"
+        },
+        "agentInsight.trae.retryBaseDelayMs": {
+          "type": "number",
+          "default": 10000,
+          "description": "指数退避基延迟 (毫秒)，对应 AC23"
+        },
+        "agentInsight.trae.llmEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "启用 LLM Token 采集 (DB 轮询)，对应 AC14-15"
+        },
+        "agentInsight.trae.llmPollIntervalMs": {
+          "type": "number",
+          "default": 30000,
+          "description": "LLM DB 轮询间隔 (毫秒)，对应 AC14-15"
+        },
+        "agentInsight.trae.logLevel": {
+          "type": "string",
+          "default": "info",
+          "enum": [
+            "error",
+            "warn",
+            "info",
+            "debug"
+          ],
+          "description": "日志级别: error/warn/info/debug"
+        },
+        "agentInsight.trae.spoolDir": {
+          "type": "string",
+          "default": "",
+          "description": "Spool 数据目录 (留空使用默认 ~/.agent-insight/otel_data/trae/)"
+        },
+        "agentInsight.trae.heartbeatEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "启用心跳上报 (会话活跃时定时上传)"
+        },
+        "agentInsight.trae.heartbeatIntervalMs": {
+          "type": "number",
+          "default": 30000,
+          "description": "心跳上报间隔 (毫秒，默认30秒)"
+        },
+        "agentInsight.trae.modelName": {
+          "type": "string",
+          "default": "",
+          "description": "模型名称（TRAE Hook 不提供模型信息，在此手动指定）"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "npx esbuild src/extension.ts --bundle --platform=node --target=node16 --format=cjs --outfile=dist/extension.js --external:vscode --external:fs --external:path --external:os --external:child_process --sourcemap",
+    "watch": "npx esbuild src/extension.ts --bundle --platform=node --target=node16 --format=cjs --outfile=dist/extension.js --external:vscode --external:fs --external:path --external:os --external:child_process --sourcemap --watch",
+    "package": "vsce package --no-dependencies",
+    "build": "node scripts/build.js",
+    "lint": "eslint src --ext ts",
+    "vscode:uninstall": "node ./scripts/uninstall-cleanup.js"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^2.22.0",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "js-tiktoken": "^1.0.21"
+  }
+}

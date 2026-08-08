@@ -3,10 +3,12 @@ import test from 'node:test';
 
 import { buildAgentCallTree, walkTree, type AgentNode } from '@/lib/engine/observability/agent-trace';
 import {
+    allowsSnapshotShrinkForFramework,
     computeOwnSkills,
     extractExplicitSkillsFromNode,
     extractInvokedSkillsFromSessionInteractions,
     projectAgentNodeExecution,
+    resolveExecutionSubagentFilter,
 } from '@/lib/storage/data-service';
 
 // 看护 ExecutionSkill 的 agent 作用域绑定口径(需求 1/2 的核心):
@@ -60,12 +62,46 @@ function subagentNode(tree: AgentNode, sessionId: string): AgentNode | null {
     return found;
 }
 
+test('trace scope: root-only remains strict when combined with a skill filter', () => {
+    assert.equal(resolveExecutionSubagentFilter({ skill: 'child-skill' }), false);
+    assert.equal(resolveExecutionSubagentFilter({ includeSubagents: false }), false);
+    assert.equal(resolveExecutionSubagentFilter({ onlySubagents: true }), true);
+    assert.equal(resolveExecutionSubagentFilter({ includeSubagents: true }), undefined);
+    assert.equal(resolveExecutionSubagentFilter({ taskId: 'subagent-session' }), undefined);
+    assert.equal(resolveExecutionSubagentFilter({ parentExecutionId: 'root-id' }), undefined);
+});
+
 test('binding: root 只绑自己显式调用的 skill,不含子 agent 的 skill', () => {
     const own = computeOwnSkills('opencode', nestedFixture());
     const names = own.map(s => s.name).sort();
     // root 自己调了 skill-a / skill-c;kuafu 的 skill-b 不应冒泡到 root。
     assert.deepEqual(names, ['skill-a', 'skill-c']);
     assert.ok(!names.includes('skill-b'), 'parent must NOT be bound to the sub-agent skill');
+});
+
+test('binding: Qoder scopes root skills to the root Agent and excludes Subagent skills', () => {
+    const own = computeOwnSkills('qoder', nestedFixture());
+    const names = own.map(skill => skill.name).sort();
+    assert.deepEqual(names, ['skill-a', 'skill-c']);
+    assert.ok(!names.includes('skill-b'));
+});
+
+test('snapshot shrink: only trusted server-side framework capabilities can enable Qoder replacement', () => {
+    const previousJiuwen = process.env.AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK;
+    delete process.env.AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK;
+    try {
+        assert.equal(allowsSnapshotShrinkForFramework('qoder'), true);
+        assert.equal(allowsSnapshotShrinkForFramework('opencode'), false);
+        assert.equal(allowsSnapshotShrinkForFramework('unknown-framework'), false);
+        assert.equal(allowsSnapshotShrinkForFramework('jiuwen'), false);
+
+        process.env.AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK = 'true';
+        assert.equal(allowsSnapshotShrinkForFramework('jiuwen'), true);
+        assert.equal(allowsSnapshotShrinkForFramework('opencode'), false);
+    } finally {
+        if (previousJiuwen === undefined) delete process.env.AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK;
+        else process.env.AGENT_INSIGHT_JIUWEN_ALLOW_SHRINK = previousJiuwen;
+    }
 });
 
 test('binding: 一层 agent 可绑多个 skill,版本随调用带出(没带版本则 null)', () => {

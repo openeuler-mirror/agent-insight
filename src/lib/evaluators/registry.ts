@@ -7,14 +7,18 @@
  *   执行过程（步骤/工具/耗时/成本/token）→ traj。
  * - 前置条件（requires）：实验 ④ 步按所选 case 的元数据门控——任一 case 不满足则
  *   该评估器整体不可选（硬门控，无"部分覆盖"）。自建 LLM 评估器的 requires 由
- *   提示词占位符自动推导（用到 {{reference_output}} → 'reference'）。
+ *   提示词占位符自动推导（用到 {{reference_output}} → 'reference'）。tool_catalog 表示
+ *   每个 case 必须显式提供 Tool/Skill 目录；availableTools=[] 仍算已提供，字段缺失才失败。
  * - 标签（tags）：UI 筛选与展示用，全部由元数据派生，不单独存储。
+ *
+ * 本文件只决定评估器归类、标签和可选性，不负责读取目录或执行评分。预置评估器产品信息位于
+ * preset-evaluators.ts，实际运行由 src/lib/engine/experiment/run-experiment.ts 分发。
  */
 import type { EvaluatorCard } from './custom-evaluator-model';
 
 export type EvaluatorCategory = 'res' | 'traj';
-/** 'reference' = 需要该 case 已标注参考输出（预期答案） */
-export type EvaluatorRequirement = 'reference';
+/** 'reference' = 需要参考输出；'tool_catalog' = 需要显式 Tool/Skill 目录（空数组也算已提供）。 */
+export type EvaluatorRequirement = 'reference' | 'tool_catalog';
 
 export interface EvaluatorMeta {
   category: EvaluatorCategory;
@@ -32,6 +36,18 @@ const PRESET_META: Record<string, EvaluatorMeta> = {
   'preset-result-answer': { category: 'res', requires: [] },
   'preset-result-faithfulness': { category: 'res', requires: [] },
   'preset-result-instruction': { category: 'res', requires: [] },
+  // 内容质量评估器：均不依赖参考数据
+  'preset-content-insensitivity': { category: 'res', requires: [] },
+  'preset-content-controversy': { category: 'res', requires: [] },
+  'preset-content-gender-discrimination': { category: 'res', requires: [] },
+  'preset-creativity-expression': { category: 'res', requires: [] },
+  'preset-safety-maliciousness': { category: 'res', requires: [] },
+  'preset-safety-harmfulness': { category: 'res', requires: [] },
+  'preset-safety-criminality': { category: 'res', requires: [] },
+  'preset-safety-refusal': { category: 'res', requires: [] },
+  'preset-depth-result': { category: 'res', requires: [] },
+  'preset-agent-tool-utilization': { category: 'traj', requires: ['tool_catalog'] },
+  'preset-agent-tool-selection': { category: 'traj', requires: ['tool_catalog'] },
 };
 
 const DEFAULT_META: EvaluatorMeta = { category: 'res', requires: [] };
@@ -68,6 +84,7 @@ export function deriveEvaluatorTags(card: EvaluatorCard): string[] {
   tags.push(card.evaluatorType === 'LLM' ? 'LLM Judge' : '代码');
   tags.push(meta.category === 'res' ? '看结果' : '看轨迹');
   if (meta.requires.includes('reference')) tags.push('依赖参考数据');
+  if (meta.requires.includes('tool_catalog')) tags.push('依赖 Tool/Skill 目录');
   return tags;
 }
 
@@ -75,6 +92,8 @@ export function deriveEvaluatorTags(card: EvaluatorCard): string[] {
 export interface CaseGateInfo {
   /** 该 case 是否已标注参考输出 */
   hasReference: boolean;
+  /** 该 case 是否显式提供 Tool/Skill 目录；availableTools=[] 时为 true */
+  hasToolCatalog: boolean;
 }
 
 export interface EvaluatorGateResult {
@@ -85,15 +104,24 @@ export interface EvaluatorGateResult {
 
 /** 硬门控：所选 case 有任一不满足 requires → 整体不可选。 */
 export function gateEvaluator(meta: EvaluatorMeta, cases: CaseGateInfo[]): EvaluatorGateResult {
+  if (meta.requires.length > 0 && cases.length === 0) {
+    return { usable: false, reason: '尚未圈选 case——先在第 ② 步关联 Trace' };
+  }
   if (meta.requires.includes('reference')) {
     const missing = cases.filter((c) => !c.hasReference).length;
-    if (cases.length === 0) {
-      return { usable: false, reason: '尚未圈选 case——先在第 ② 步关联 Trace' };
-    }
     if (missing > 0) {
       return {
         usable: false,
         reason: `依赖参考数据：已选 ${cases.length} 个 case 中 ${missing} 个未标注参考答案——回第 ③ 步补齐标注后开放`,
+      };
+    }
+  }
+  if (meta.requires.includes('tool_catalog')) {
+    const missing = cases.filter((c) => !c.hasToolCatalog).length;
+    if (missing > 0) {
+      return {
+        usable: false,
+        reason: `依赖 Tool/Skill 目录：已选 ${cases.length} 个 case 中 ${missing} 个未提供 available_tools——回第 ③ 步从数据集导入后开放`,
       };
     }
   }

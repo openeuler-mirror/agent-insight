@@ -13,26 +13,97 @@ import {
 } from '@/lib/engine/experiment/run-experiment';
 import { findAgentDataset } from '@/server/agent_datasets_storage';
 import { matchAgentDatasetCase } from '@/lib/engine/evaluation/dataset-case-match';
+import {
+  contextFromAvailableCatalogFields,
+  EvaluatorContextValidationError,
+  normalizeEvaluatorCaseContext,
+  type EvaluatorCaseContext,
+} from '@/lib/evaluators/evaluator-case-context';
 
 export const dynamic = 'force-dynamic';
 
-interface Pair { caseId: string; taskId: string }
+interface Pair {
+  caseId: string;
+  taskId: string;
+  evaluatorContext?: unknown;
+}
 
 function asStrArr(v: unknown): string[] {
   return Array.isArray(v) ? v.map((x) => String(x || '').trim()).filter(Boolean) : [];
 }
 
-/** 从 datasetIds 反查每个 caseId 的预期输出（评测参考答案），缺失为 null。 */
-async function buildExpectedMap(user: string, datasetIds: string[]): Promise<Map<string, string>> {
-  const map = new Map<string, string>();
+interface DatasetEvaluationContext {
+  referenceOutput: string | null;
+  evaluatorContext?: EvaluatorCaseContext;
+}
+
+/** 从 datasetIds 按 caseId 反查参考输出和 available_tools / available_skills。 */
+async function buildDatasetContextMap(
+  user: string,
+  datasetIds: string[],
+): Promise<Map<string, DatasetEvaluationContext>> {
+  const map = new Map<string, DatasetEvaluationContext>();
   for (const id of datasetIds) {
     const ds = await findAgentDataset(user, id).catch(() => null);
     if (!ds) continue;
     for (const c of ds.cases) {
-      if (c.id && typeof c.expectedOutput === 'string' && !map.has(c.id)) map.set(c.id, c.expectedOutput);
+      if (!c.id || map.has(c.id)) continue;
+      const hasTools = c.values && Object.prototype.hasOwnProperty.call(c.values, 'available_tools');
+      const hasSkills = c.values && Object.prototype.hasOwnProperty.call(c.values, 'available_skills');
+      let evaluatorContext: EvaluatorCaseContext | null = null;
+      if (hasTools) {
+        try {
+          evaluatorContext = contextFromAvailableCatalogFields(
+            c.values?.available_tools,
+            hasSkills ? c.values?.available_skills : undefined,
+          );
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'available_tools / available_skills 无法解析';
+          throw new EvaluatorContextValidationError(`数据集 ${id} case ${c.id}: ${message}`);
+        }
+      }
+      map.set(c.id, {
+        referenceOutput: typeof c.expectedOutput === 'string' && c.expectedOutput.trim()
+          ? c.expectedOutput
+          : null,
+        ...(evaluatorContext ? { evaluatorContext } : {}),
+      });
     }
   }
   return map;
+}
+
+async function resolveTraceToolCatalog(
+  user: string,
+  taskId: string,
+  datasetIds: string[],
+): Promise<EvaluatorCaseContext | null> {
+  if (!datasetIds.length || !taskId) return null;
+  const exec = await prisma.execution.findFirst({
+    where: { taskId, OR: [{ user }, { user: null }] },
+    orderBy: { timestamp: 'desc' },
+    select: { query: true },
+  });
+  const query = String(exec?.query || '').trim();
+  if (!query) return null;
+  for (const datasetId of datasetIds) {
+    const dataset = await findAgentDataset(user, datasetId).catch(() => null);
+    if (!dataset) continue;
+    const matched = dataset.cases.find((item) => String(item.input || '').trim() === query);
+    if (!matched?.values || !Object.prototype.hasOwnProperty.call(matched.values, 'available_tools')) continue;
+    try {
+      return contextFromAvailableCatalogFields(
+        matched.values.available_tools,
+        Object.prototype.hasOwnProperty.call(matched.values, 'available_skills')
+          ? matched.values.available_skills
+          : undefined,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'available_tools / available_skills 无法解析';
+      throw new EvaluatorContextValidationError(`数据集 ${datasetId} case ${matched.id}: ${message}`);
+    }
+  }
+  return null;
 }
 
 /**
@@ -73,7 +144,13 @@ export async function POST(req: Request) {
     const pairs: Pair[] = Array.isArray(body.pairs)
       ? body.pairs
           .map((p: unknown) => (p && typeof p === 'object' ? p as Record<string, unknown> : {}))
-          .map((p: Record<string, unknown>) => ({ caseId: String(p.caseId || '').trim(), taskId: String(p.taskId || '').trim() }))
+          .map((p: Record<string, unknown>) => ({
+            caseId: String(p.caseId || '').trim(),
+            taskId: String(p.taskId || '').trim(),
+            ...(Object.prototype.hasOwnProperty.call(p, 'evaluatorContext')
+              ? { evaluatorContext: p.evaluatorContext }
+              : {}),
+          }))
           .filter((p: Pair) => p.taskId)
       : [];
     const taskIds = asStrArr(body.taskIds);
@@ -83,7 +160,18 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'taskIds or pairs is required' }, { status: 400 });
     }
 
-    const expectedMap = datasetIds.length ? await buildExpectedMap(username, datasetIds) : new Map<string, string>();
+    const datasetContextMap = datasetIds.length
+      ? await buildDatasetContextMap(username, datasetIds)
+      : new Map<string, DatasetEvaluationContext>();
+    const hasDefaultContext = Object.prototype.hasOwnProperty.call(body, 'evaluatorContext');
+    const defaultContext = hasDefaultContext
+      ? normalizeEvaluatorCaseContext(body.evaluatorContext)
+      : undefined;
+    const pairContexts: Array<EvaluatorCaseContext | null | undefined> = pairs.map((pair) => (
+      Object.prototype.hasOwnProperty.call(pair, 'evaluatorContext')
+        ? normalizeEvaluatorCaseContext(pair.evaluatorContext)
+        : undefined
+    ));
 
     const skillName = typeof body.skillName === 'string' ? body.skillName : '';
     const skillVersion = typeof body.skillVersion === 'number' ? body.skillVersion
@@ -105,17 +193,34 @@ export async function POST(req: Request) {
 
     // 目标列表：pairs（带 caseId → 参考答案）优先；否则 taskIds（trace 模式，按输入匹配数据集取参考答案）
     const targets = pairs.length
-      ? pairs.map((p) => ({ taskId: p.taskId, caseId: p.caseId, referenceOutput: expectedMap.get(p.caseId) ?? null }))
+      ? pairs.map((p, index) => {
+          const datasetContext = datasetContextMap.get(p.caseId);
+          const evaluatorContext = pairContexts[index] !== undefined
+            ? pairContexts[index]
+            : hasDefaultContext
+              ? defaultContext
+              : datasetContext?.evaluatorContext;
+          return {
+            taskId: p.taskId,
+            caseId: p.caseId,
+            referenceOutput: datasetContext?.referenceOutput ?? null,
+            evaluatorContext,
+          };
+        })
       : await Promise.all(taskIds.map(async (t) => ({
           taskId: t,
           caseId: undefined as string | undefined,
           referenceOutput: await resolveTraceReference(username, t, datasetIds),
+          evaluatorContext: hasDefaultContext
+            ? defaultContext
+            : (await resolveTraceToolCatalog(username, t, datasetIds)) ?? undefined,
         })));
 
     const results = [];
     for (const t of targets) {
       const expCaseId = await addEvalExperimentCase(experimentId, {
         taskId: t.taskId, input: '', actualOutput: '', referenceOutput: t.referenceOutput,
+        evaluatorContext: t.evaluatorContext,
       });
       const rows = await evaluateEvalExperimentCase(experimentId, expCaseId, username);
       const done = rows.filter((r) => r.status === 'done' && typeof r.score === 'number');
@@ -133,6 +238,9 @@ export async function POST(req: Request) {
     return NextResponse.json({ success: true, experimentId, results });
   } catch (error) {
     console.error('[eval-traces POST Error]', error);
+    if (error instanceof EvaluatorContextValidationError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
     return NextResponse.json({ error: 'Failed to evaluate traces via experiment' }, { status: 500 });
   }
 }

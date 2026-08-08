@@ -17,6 +17,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db, prismaRaw } from '@/lib/storage/prisma';
 import { resolveUser, canAccessSkill } from '@/lib/auth/auth';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import { getActiveConfig, getUserSettings } from '@/lib/storage/server-config';
 import { aggregateSkillIssues } from '@/lib/engine/skill-issues';
 import { runMergeOperator, type MergeIssueInput } from '@/lib/engine/skill-opt/merge-operator';
@@ -216,6 +217,9 @@ export async function POST(req: NextRequest) {
     }).catch((err) => {
       console.error('[skill-opt plan] background merge crashed:', err);
     });
+
+    // 只在真正新建 plan 时计数；上面 reused=true 的幂等分支是同一次用户意图，不重复计。
+    recordUsageEvent({ user, featureKey: 'skill-opt', eventKey: 'skill.plan.confirm' });
 
     return NextResponse.json({ plan: serializePlan(plan), reused: false });
   } catch (err: any) {

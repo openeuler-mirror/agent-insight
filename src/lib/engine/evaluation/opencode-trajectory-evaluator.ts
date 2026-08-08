@@ -559,10 +559,12 @@ async function evaluateTrajectoryDirectAndRecord(
 ): Promise<TrajectoryEvalOutput> {
     const model = makeDirectModel(config);
     const userMsg = buildUserMessage(input);
+    const startedAt = new Date();
     const response = await model.invoke([
         new SystemMessage(DIRECT_EVALUATOR_SYSTEM_PROMPT),
         new HumanMessage(userMsg),
     ]);
+    const completedAt = new Date();
     const assistantText = typeof response.content === 'string'
         ? response.content
         : JSON.stringify(response.content);
@@ -590,6 +592,8 @@ async function evaluateTrajectoryDirectAndRecord(
         usage: extractLangchainUsage(response),
         modelID: config.model,
         skill: def?.traceSkill ?? null,
+        startedAtISO: startedAt.toISOString(),
+        completedAtISO: completedAt.toISOString(),
     }).catch((err) => {
         console.warn('[opencode-trajectory-eval] failed to record direct evaluator trace:', (err as Error)?.message || err);
     });

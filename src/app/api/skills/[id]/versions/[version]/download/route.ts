@@ -2,6 +2,7 @@
 import { canAccessSkill, resolveUser } from '@/lib/auth/auth';
 import { getSkillVersionStorageDir, resolveRuntimeAssetPath } from '@/lib/env';
 import { db } from '@/lib/storage/prisma';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 import archiver from 'archiver';
 import fs from 'fs';
 import { NextRequest, NextResponse } from 'next/server';
@@ -88,6 +89,13 @@ export async function GET(
         archive.append(skillVersion.content, { name: 'SKILL.md' });
 
         archive.finalize();
+
+        recordUsageEvent({
+            user: username,
+            featureKey: 'skill',
+            eventKey: 'skill.download',
+            route: request.nextUrl.pathname,
+        });
 
         const webStream = new ReadableStream({
             start(controller) {

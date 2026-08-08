@@ -25,6 +25,7 @@ import { parseAsInteger, parseAsString, useQueryState } from 'nuqs';
 import { toast } from 'sonner';
 
 import { AppTopBar } from '@/components/shell/AppTopBar';
+import { createOnceReporter } from '@/lib/usage-analytics/client-events';
 import { PageContainer, PageContent, PageFooter } from '@/components/shell/PageContainer';
 import AgentTraceView from '@/components/observe/AgentTraceView';
 import TraceFilterBar from '@/components/observe/TraceFilterBar';
@@ -35,6 +36,7 @@ import { useAuth } from '@/lib/auth/auth-context';
 import { useLocale } from '@/lib/client/locale-context';
 import { apiFetch } from '@/lib/client/api';
 import { drillTraceEvalUrl } from '@/lib/client/drill-trace-eval';
+import { clusterTraceTagsByPrefix, fitTraceTagCount } from '@/lib/trace-tag-clustering';
 
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
@@ -158,30 +160,31 @@ type SortDir = 'asc' | 'desc';
 const PAGE_SIZE_OPTIONS = [20, 50, 100] as const;
 const REFRESH_INTERVAL_OPTIONS = [5, 10, 30, 60] as const;
 
-// space via `table-fixed` + col without width. Widths persist to localStorage per
 type TraceColumnKey = 'traceId' | 'agent' | 'status' | 'userTags' | 'systemTags' | 'task' | 'tokens' | 'time' | 'actions';
-type ResizableColKey = Exclude<TraceColumnKey, 'task'>;
+type ResizableColKey = TraceColumnKey;
 
 const TRACE_COLUMN_ORDER: TraceColumnKey[] = ['traceId', 'agent', 'status', 'userTags', 'systemTags', 'task', 'tokens', 'time', 'actions'];
 
 const DEFAULT_COLUMN_WIDTHS: Record<ResizableColKey, number> = {
     traceId:    130,
+    task:       280,
     agent:      170,
     status:     110,
     userTags:   220,
     systemTags: 220,
     tokens:     110,
-    time:       120,
+    time:       176,
     actions:    220,
 };
 const MIN_COLUMN_WIDTH: Record<ResizableColKey, number> = {
     traceId:    90,
+    task:       280,
     agent:      100,
     status:     80,
     userTags:   150,
     systemTags: 140,
     tokens:     70,
-    time:       80,
+    time:       160,
     actions:    160,
 };
 const DEFAULT_COLUMN_VISIBILITY: Record<TraceColumnKey, boolean> = {
@@ -196,10 +199,9 @@ const DEFAULT_COLUMN_VISIBILITY: Record<TraceColumnKey, boolean> = {
     actions: true,
 };
 const MAX_COLUMN_WIDTH = 640;
+const MAX_TASK_COLUMN_WIDTH = 1600;
 const COL_WIDTHS_STORAGE_KEY = 'trace.columnWidths.v1';
 const COL_VISIBILITY_STORAGE_KEY = 'trace.columnVisibility.v1';
-const TASK_COL_MIN_PX = 280; // reserved minimum for the flexible "task" column
-
 function getInvokedSkillNames(execution: Execution): string[] {
     const invoked = Array.isArray(execution.invoked_skills)
         ? execution.invoked_skills
@@ -230,6 +232,8 @@ function getFrameworkLabel(framework?: string | null): string {
             return 'Claude Code';
         case 'hermes':
             return 'Hermes';
+        case 'trae':
+            return 'Trae IDE';
         default:
             return value;
     }
@@ -243,18 +247,24 @@ function safeFilenameSegment(value: string): string {
 }
 
 function clampColumnWidth(key: ResizableColKey, width: number): number {
-    return Math.min(MAX_COLUMN_WIDTH, Math.max(MIN_COLUMN_WIDTH[key], Math.round(width)));
+    const maxWidth = key === 'task' ? MAX_TASK_COLUMN_WIDTH : MAX_COLUMN_WIDTH;
+    return Math.min(maxWidth, Math.max(MIN_COLUMN_WIDTH[key], Math.round(width)));
 }
 
 function useColumnWidths() {
     const [widths, setWidths] = useState<Record<ResizableColKey, number>>(DEFAULT_COLUMN_WIDTHS);
+    const [tableWidth, setTableWidth] = useState<number | null>(null);
+    const [taskWidthCustomized, setTaskWidthCustomized] = useState(false);
 
     // Hydrate from localStorage on mount (skipped on server).
     useEffect(() => {
         try {
             const raw = window.localStorage.getItem(COL_WIDTHS_STORAGE_KEY);
             if (!raw) return;
-            const parsed = JSON.parse(raw) as Partial<Record<ResizableColKey, number>> & { tags?: number };
+            const parsed = JSON.parse(raw) as Partial<Record<ResizableColKey, number>> & {
+                tags?: number;
+                tableWidth?: number;
+            };
             setWidths(prev => {
                 const next = { ...prev };
                 (Object.keys(prev) as ResizableColKey[]).forEach(k => {
@@ -266,29 +276,49 @@ function useColumnWidths() {
                 }
                 return next;
             });
+            if (typeof parsed.task === 'number' && Number.isFinite(parsed.task)) {
+                setTaskWidthCustomized(true);
+            }
+            if (typeof parsed.tableWidth === 'number' && Number.isFinite(parsed.tableWidth)) {
+                setTableWidth(Math.max(0, Math.round(parsed.tableWidth)));
+            }
         } catch { /* ignore */ }
     }, []);
 
-    const setColumnWidth = useCallback((key: ResizableColKey, width: number) => {
+    const setColumnWidth = useCallback((key: ResizableColKey, width: number, nextTableWidth?: number) => {
+        if (key === 'task') setTaskWidthCustomized(true);
         setWidths(prev => {
             const next = { ...prev, [key]: clampColumnWidth(key, width) };
-            try { window.localStorage.setItem(COL_WIDTHS_STORAGE_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+            const normalizedTableWidth = typeof nextTableWidth === 'number' && Number.isFinite(nextTableWidth)
+                ? Math.max(0, Math.round(nextTableWidth))
+                : tableWidth;
+            if (normalizedTableWidth != null) setTableWidth(normalizedTableWidth);
+            try {
+                window.localStorage.setItem(COL_WIDTHS_STORAGE_KEY, JSON.stringify({
+                    ...next,
+                    ...(normalizedTableWidth != null ? { tableWidth: normalizedTableWidth } : {}),
+                }));
+            } catch { /* ignore */ }
             return next;
         });
-    }, []);
+    }, [tableWidth]);
 
     const resetColumnWidths = useCallback(() => {
         setWidths(DEFAULT_COLUMN_WIDTHS);
+        setTableWidth(null);
+        setTaskWidthCustomized(false);
         try { window.localStorage.removeItem(COL_WIDTHS_STORAGE_KEY); } catch { /* ignore */ }
     }, []);
 
     const isCustomized = useMemo(
-        () => (Object.keys(DEFAULT_COLUMN_WIDTHS) as ResizableColKey[])
-            .some(k => widths[k] !== DEFAULT_COLUMN_WIDTHS[k]),
-        [widths],
+        () => tableWidth != null
+            || taskWidthCustomized
+            || (Object.keys(DEFAULT_COLUMN_WIDTHS) as ResizableColKey[])
+                .some(k => widths[k] !== DEFAULT_COLUMN_WIDTHS[k]),
+        [tableWidth, taskWidthCustomized, widths],
     );
 
-    return { widths, setColumnWidth, resetColumnWidths, isCustomized };
+    return { widths, tableWidth, taskWidthCustomized, setColumnWidth, resetColumnWidths, isCustomized };
 }
 
 function useColumnVisibility() {
@@ -348,15 +378,22 @@ function ResizeHandle({
 }: {
     colKey: ResizableColKey;
     currentWidth: number;
-    onResize: (key: ResizableColKey, width: number) => void;
+    onResize: (key: ResizableColKey, width: number, tableWidth?: number) => void;
 }) {
     const onMouseDown = (e: React.MouseEvent<HTMLSpanElement>) => {
         e.preventDefault();
         e.stopPropagation();
         const startX = e.clientX;
-        const startW = currentWidth;
+        const startW = e.currentTarget.closest('th')?.getBoundingClientRect().width ?? currentWidth;
+        const startTableWidth = e.currentTarget.closest('table')?.getBoundingClientRect().width;
         const handleMove = (ev: MouseEvent) => {
-            onResize(colKey, startW + (ev.clientX - startX));
+            const nextColumnWidth = clampColumnWidth(colKey, startW + (ev.clientX - startX));
+            const appliedDelta = nextColumnWidth - startW;
+            onResize(
+                colKey,
+                nextColumnWidth,
+                startTableWidth == null ? undefined : startTableWidth + appliedDelta,
+            );
         };
         const handleUp = () => {
             window.removeEventListener('mousemove', handleMove);
@@ -532,20 +569,35 @@ function TracePageContent() {
         actions: t('tracePage.columnActions'),
     }), [t]);
 
-    const { widths, setColumnWidth, resetColumnWidths, isCustomized } = useColumnWidths();
+    const {
+        widths,
+        tableWidth,
+        taskWidthCustomized,
+        setColumnWidth,
+        resetColumnWidths,
+        isCustomized,
+    } = useColumnWidths();
     const { columnVisibility, setColumnVisible, resetColumnVisibility, isVisibilityCustomized } = useColumnVisibility();
     const tableMinWidth = useMemo(() => {
         const fixedWidth = (Object.keys(DEFAULT_COLUMN_WIDTHS) as ResizableColKey[])
             .filter(key => columnVisibility[key])
             .reduce((sum, key) => sum + widths[key], 0);
-        return 44 + fixedWidth + (columnVisibility.task ? TASK_COL_MIN_PX : 0);
+        return 44 + fixedWidth;
     }, [widths, columnVisibility]);
+
+    // 只在用户主动点开某条 Trace 时计一次有效使用；地址栏进入、刷新与列表轮询
+    // 走的是下面的 URL 解析 effect，不经过这里，因此不会计数。
+    const reportTraceDetailView = useMemo(
+        () => createOnceReporter('trace', 'trace.detail.view'),
+        [],
+    );
 
     const handleSelectExecution = useCallback((e: Execution | null) => {
         setSelectedExecution(e);
         const id = e ? (e.task_id || e.upload_id || null) : null;
         setTaskIdParam(id);
-    }, [setTaskIdParam]);
+        if (id) reportTraceDetailView(id);
+    }, [setTaskIdParam, reportTraceDetailView]);
 
     // Resolve selectedExecution from URL on data load or URL change.
     //   - data 列表里没这条(比如系统 agent grayscale-* 被前端过滤掉)
@@ -595,12 +647,23 @@ function TracePageContent() {
         if (fetchGuardRef.current === taskIdParam) return;
         fetchGuardRef.current = taskIdParam;
         apiFetch(`/api/observe/data?taskId=${encodeURIComponent(taskIdParam)}&includeEvaluations=0&skipAutoEvalReady=1`)
-            .then(r => r.json())
-            .then((d: Execution[]) => {
-                if (Array.isArray(d) && d.length > 0) setSelectedExecution(d[0]);
+            .then(async r => ({ ok: r.ok, status: r.status, body: await r.json() }))
+            .then(({ ok, status, body }) => {
+                if (fetchGuardRef.current !== taskIdParam) return;
+                if (!ok && status !== 404) throw new Error('Trace lookup failed');
+                const d = body as Execution[];
+                if (Array.isArray(d) && d.length > 0) {
+                    setSelectedExecution(d[0]);
+                    return;
+                }
+                setSelectedExecution(null);
+                void setTaskIdParam(null);
+                toast.error(locale === 'zh' ? '未找到对应的子 Agent Trace' : 'Sub-agent trace not found');
             })
             .catch(() => {
-                if (fetchGuardRef.current === taskIdParam) fetchGuardRef.current = null;
+                if (fetchGuardRef.current !== taskIdParam) return;
+                fetchGuardRef.current = null;
+                toast.error(locale === 'zh' ? '子 Agent Trace 加载失败' : 'Failed to load sub-agent trace');
             });
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [taskIdParam, data]);
@@ -1038,12 +1101,22 @@ function TracePageContent() {
                                         ) : undefined}
                                     />
                                 ) : (
-                                    <table className="w-full table-fixed text-sm" style={{ minWidth: tableMinWidth }}>
+                                    <table
+                                        className="w-full table-fixed text-sm"
+                                        style={{
+                                            minWidth: tableMinWidth,
+                                            width: tableWidth == null
+                                                ? undefined
+                                                : `max(100%, ${Math.max(tableWidth, tableMinWidth)}px)`,
+                                        }}
+                                    >
                                         <colgroup>
                                             <col style={{ width: 44 }} />
                                             {columnVisibility.traceId && <col style={{ width: widths.traceId }} />}
                                             {/* 任务内容放第二列：用户最关心的信息 */}
-                                            {columnVisibility.task && <col />}
+                                            {columnVisibility.task && (
+                                                <col style={{ width: taskWidthCustomized ? widths.task : undefined }} />
+                                            )}
                                             {columnVisibility.agent && <col style={{ width: widths.agent }} />}
                                             {columnVisibility.status && <col style={{ width: widths.status }} />}
                                             {columnVisibility.userTags && <col style={{ width: widths.userTags }} />}
@@ -1067,7 +1140,11 @@ function TracePageContent() {
                                                         <Term id="trace" label={t('tracePage.columnTraceId')} />
                                                     </Th>
                                                 )}
-                                                {columnVisibility.task && <Th>{t('tracePage.columnTask')}</Th>}
+                                                {columnVisibility.task && (
+                                                    <Th colKey="task" currentWidth={widths.task} onResize={setColumnWidth}>
+                                                        {t('tracePage.columnTask')}
+                                                    </Th>
+                                                )}
                                                 {columnVisibility.agent && (
                                                     <SortableTh sortKey="agent" currentKey={sortKey as SortKey} dir={sortDir as SortDir} onSort={handleSort} colKey="agent" currentWidth={widths.agent} onResize={setColumnWidth}>
                                                         <Term id="agent" label={t('tracePage.columnAgent')} />
@@ -1479,10 +1556,12 @@ function TraceDetailView({
                 ) : (session?.interactions?.length || 0) > 0 || (session?.langfuseTraceNodes?.length || 0) > 0 ? (
                     <AgentTraceView
                         interactions={session.interactions || []}
+                        framework={execution.framework}
                         langfuseTraceNodes={session.langfuseTraceNodes}
                         loadInteraction={loadInteraction}
                         loadAllInteractions={loadFullInteractions}
                         onSubagentNavigate={navigateToTaskId}
+                        rootSessionId={taskId}
                         rootExecutionId={execution.upload_id || execution.task_id}
                     />
                 ) : (
@@ -1568,7 +1647,7 @@ function Th({
     className?: string;
     colKey?: ResizableColKey;
     currentWidth?: number;
-    onResize?: (key: ResizableColKey, width: number) => void;
+    onResize?: (key: ResizableColKey, width: number, tableWidth?: number) => void;
 }) {
     const resizable = !!(colKey && onResize && currentWidth != null);
     return (
@@ -1624,7 +1703,7 @@ function SortableTh({
     onSort: (k: SortKey) => void;
     colKey?: ResizableColKey;
     currentWidth?: number;
-    onResize?: (key: ResizableColKey, width: number) => void;
+    onResize?: (key: ResizableColKey, width: number, tableWidth?: number) => void;
 }) {
     const active = sortKey === currentKey;
     const resizable = !!(colKey && onResize && currentWidth != null);
@@ -1771,7 +1850,7 @@ function Row({
             )}
             {columnVisibility.time && (
                 <Td>
-                    <RelativeTime value={e.timestamp} className="text-xs text-foreground-secondary font-mono whitespace-nowrap" />
+                    <RelativeTime value={e.timestamp} display="absolute" className="text-xs text-foreground-secondary font-mono whitespace-nowrap" />
                 </Td>
             )}
             {columnVisibility.actions && (
@@ -1818,11 +1897,22 @@ function tagKindLabel(kind: TraceUserTag['kind'], locale: string): string {
     return locale === 'zh' ? '业务' : 'Business';
 }
 
-function UserTagChip({ tag, removable }: { tag: TraceUserTag; removable?: boolean }) {
+function UserTagChip({
+    tag,
+    removable,
+    className,
+}: {
+    tag: TraceUserTag;
+    removable?: boolean;
+    className?: string;
+}) {
     return (
         <span
             title={tag.name}
-            className="inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-0.5 text-xs text-foreground leading-none"
+            className={cn(
+                'inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-0.5 text-xs text-foreground leading-none',
+                className,
+            )}
             // 标签色只用于描边/淡底，文字保持前景色：用户可自选任意颜色，
             // 直接拿它当文字色在深浅主题下都可能读不清。
             style={{
@@ -1853,14 +1943,23 @@ function TraceTagCell({
     const { user } = useAuth();
     const { t, locale } = useLocale();
     const executionId = getExecutionRowKey(execution);
-    const selectedTags = execution.userTags ?? [];
-    const selectedIds = new Set(selectedTags.map(tag => tag.id));
+    const selectedTags = useMemo(
+        () => execution.userTags ?? [],
+        [execution.userTags],
+    );
+    const selectedIds = useMemo(
+        () => new Set(selectedTags.map(tag => tag.id)),
+        [selectedTags],
+    );
     const [open, setOpen] = useState(false);
     const [savingId, setSavingId] = useState<string | null>(null);
     const [creating, setCreating] = useState(false);
     const [newName, setNewName] = useState('');
     const [newKind, setNewKind] = useState<TraceUserTag['kind']>('business');
     const [newColor, setNewColor] = useState('#6366f1');
+    const tagAreaRef = useRef<HTMLSpanElement>(null);
+    const tagMeasureRef = useRef<HTMLSpanElement>(null);
+    const [visibleTagCount, setVisibleTagCount] = useState(selectedTags.length);
 
     const applyTagsResponse = useCallback(async (response: Response) => {
         if (!response.ok) throw new Error(await readApiError(response));
@@ -1921,8 +2020,42 @@ function TraceTagCell({
     const versionTags = availableTags.filter(tag => tag.kind === 'version');
     const businessTags = availableTags.filter(tag => tag.kind === 'business');
 
-    // 列宽有限（默认 220px），超出的标签折叠成 +N，避免 wrap 撑高表格行
-    const visibleTags = selectedTags.slice(0, 2);
+    useEffect(() => {
+        if (mode !== 'cell' || selectedTags.length === 0) return;
+        const area = tagAreaRef.current;
+        const measurements = tagMeasureRef.current;
+        if (!area || !measurements) return;
+
+        const measure = () => {
+            const tagWidths = Array.from(
+                measurements.querySelectorAll<HTMLElement>('[data-trace-tag-measure]'),
+                element => element.getBoundingClientRect().width,
+            );
+            const overflowWidths = Array(selectedTags.length + 1).fill(0);
+            measurements
+                .querySelectorAll<HTMLElement>('[data-trace-tag-overflow]')
+                .forEach(element => {
+                    const count = Number(element.dataset.traceTagOverflow);
+                    if (Number.isInteger(count) && count > 0) {
+                        overflowWidths[count] = element.getBoundingClientRect().width;
+                    }
+                });
+            const nextCount = fitTraceTagCount({
+                availableWidth: area.clientWidth,
+                tagWidths,
+                overflowWidths,
+            });
+            setVisibleTagCount(previous => previous === nextCount ? previous : nextCount);
+        };
+
+        measure();
+        if (typeof ResizeObserver === 'undefined') return;
+        const observer = new ResizeObserver(measure);
+        observer.observe(area);
+        return () => observer.disconnect();
+    }, [mode, selectedTags]);
+
+    const visibleTags = selectedTags.slice(0, visibleTagCount);
     const overflowCount = selectedTags.length - visibleTags.length;
     const allTagNames = selectedTags.map(tag => tag.name).join(locale === 'zh' ? '、' : ', ');
 
@@ -1946,7 +2079,7 @@ function TraceTagCell({
     ) : (
         <button
             type="button"
-            className="group/tag flex min-h-7 w-full min-w-0 items-center gap-1 rounded-sm px-1 py-0.5 text-left hover:bg-background-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="group/tag relative flex min-h-7 w-full min-w-0 items-center gap-1 overflow-hidden rounded-sm px-1 py-0.5 text-left hover:bg-background-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             title={selectedTags.length > 0 ? allTagNames : t('tracePage.editTags')}
             onClick={ev => ev.stopPropagation()}
         >
@@ -1958,15 +2091,42 @@ function TraceTagCell({
                 </span>
             ) : (
                 <>
-                    <span className="flex min-w-0 items-center gap-1">
-                        {visibleTags.map(tag => <UserTagChip key={tag.id} tag={tag} />)}
+                    <span ref={tagAreaRef} className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
+                        {visibleTags.map(tag => (
+                            <UserTagChip key={tag.id} tag={tag} className="min-w-12 shrink" />
+                        ))}
                         {overflowCount > 0 && (
                             <span className="shrink-0 rounded-full border border-border px-1.5 py-0.5 text-xs tabular-nums text-foreground-muted">
                                 +{overflowCount}
                             </span>
                         )}
                     </span>
-                    <Plus className="size-3.5 shrink-0 text-foreground-muted opacity-0 transition-opacity group-hover/tag:opacity-100" aria-hidden />
+                    <span className="ml-auto inline-flex size-6 shrink-0 items-center justify-center rounded-full text-foreground-muted transition-colors group-hover/tag:bg-primary-subtle group-hover/tag:text-primary">
+                        <Plus className="size-3.5" aria-hidden />
+                    </span>
+                    <span
+                        ref={tagMeasureRef}
+                        className="pointer-events-none absolute invisible left-0 top-0 flex items-center gap-1 whitespace-nowrap"
+                        aria-hidden
+                    >
+                        {selectedTags.map(tag => (
+                            <span key={tag.id} data-trace-tag-measure>
+                                <UserTagChip tag={tag} />
+                            </span>
+                        ))}
+                        {selectedTags.map((_, index) => {
+                            const hiddenCount = index + 1;
+                            return (
+                                <span
+                                    key={hiddenCount}
+                                    data-trace-tag-overflow={hiddenCount}
+                                    className="rounded-full border border-border px-1.5 py-0.5 text-xs tabular-nums text-foreground-muted"
+                                >
+                                    +{hiddenCount}
+                                </span>
+                            );
+                        })}
+                    </span>
                 </>
             )}
         </button>
@@ -1975,7 +2135,11 @@ function TraceTagCell({
     return (
         <Popover open={open} onOpenChange={setOpen}>
             <PopoverTrigger asChild>{trigger}</PopoverTrigger>
-            <PopoverContent align="start" className="w-80 p-3" onClick={ev => ev.stopPropagation()}>
+            <PopoverContent
+                align="start"
+                className="w-[30rem] max-w-[calc(100vw-2rem)] p-3"
+                onClick={ev => ev.stopPropagation()}
+            >
                 <div className="space-y-3">
                     <div className="flex items-center justify-between gap-2">
                         <span className="text-sm font-semibold text-foreground">{t('tracePage.editTags')}</span>
@@ -2064,33 +2228,52 @@ function TagPickerGroup({
     savingId: string | null;
     onToggle: (tag: TraceUserTag) => void;
 }) {
-    const { t } = useLocale();
+    const { t, locale } = useLocale();
+    const clusters = clusterTraceTagsByPrefix(tags, locale);
+    const ungroupedLabel = locale === 'zh' ? '未分组' : 'Ungrouped';
     return (
         <div className="space-y-1.5">
             <div className="text-xs font-medium text-foreground-muted">{title}</div>
             {tags.length === 0 ? (
                 <p className="text-xs text-foreground-muted">{t('tracePage.noTagsAvailable')}</p>
             ) : (
-                <div className="max-h-36 overflow-auto space-y-1 pr-1">
-                    {tags.map(tag => {
-                        const selected = selectedIds.has(tag.id);
-                        return (
-                            <button
-                                key={tag.id}
-                                type="button"
-                                disabled={savingId === tag.id}
-                                onClick={() => onToggle(tag)}
-                                className={cn(
-                                    'flex h-8 w-full items-center gap-2 rounded-sm px-2 text-left text-sm hover:bg-background-secondary disabled:opacity-60',
-                                    selected && 'bg-primary-subtle text-primary',
-                                )}
+                <div className="max-h-48 space-y-2 overflow-auto pr-1">
+                    {clusters.map(cluster => (
+                        <div
+                            key={cluster.key}
+                            className="flex items-start gap-2"
+                        >
+                            <div
+                                className="w-fit max-w-[40%] shrink-0 truncate rounded-sm bg-background-secondary px-2 py-1.5 text-xs font-medium text-foreground-secondary"
+                                title={cluster.prefix || ungroupedLabel}
                             >
-                                <span className="size-2 rounded-full shrink-0" style={{ backgroundColor: tag.color }} aria-hidden />
-                                <span className="min-w-0 flex-1 truncate">{tag.name}</span>
-                                {selected && <Check className="size-3.5 shrink-0" aria-hidden />}
-                            </button>
-                        );
-                    })}
+                                {cluster.prefix || ungroupedLabel}
+                            </div>
+                            <div className="flex min-w-0 flex-wrap gap-1.5">
+                                {cluster.tags.map(tag => {
+                                    const selected = selectedIds.has(tag.id);
+                                    return (
+                                        <button
+                                            key={tag.id}
+                                            type="button"
+                                            aria-pressed={selected}
+                                            disabled={savingId === tag.id}
+                                            onClick={() => onToggle(tag)}
+                                            className={cn(
+                                                'inline-flex min-h-7 max-w-full items-center gap-1.5 rounded-full border border-border px-2 py-1 text-left text-xs text-foreground transition-colors hover:bg-background-secondary disabled:opacity-60',
+                                                selected && 'border-primary-border bg-primary-subtle text-primary',
+                                            )}
+                                            title={tag.name}
+                                        >
+                                            <span className="size-2 shrink-0 rounded-full" style={{ backgroundColor: tag.color }} aria-hidden />
+                                            <span className="max-w-44 truncate">{tag.name}</span>
+                                            {selected && <Check className="size-3.5 shrink-0" aria-hidden />}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    ))}
                 </div>
             )}
         </div>

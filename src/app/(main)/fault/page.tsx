@@ -27,6 +27,7 @@ import {
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { AppTopBar } from '@/components/shell/AppTopBar';
+import { createOnceReporter } from '@/lib/usage-analytics/client-events';
 import { PageContainer, PageToolbar } from '@/components/shell/PageContainer';
 import { AgentDebugCard, type TraceExplicitError } from '@/components/observe/AgentDebugCard';
 import { StatusBadge } from '@/components/feedback/StatusBadge';
@@ -669,12 +670,19 @@ function FaultDetailView({ execution, locale, user, onBack }: { execution: Execu
         setShowHistoryPanel(false);
     }, [saveCurrentConversation]);
 
+    // 用户主动选择历史记录且成功载入才计数；历史列表本身的展开与轮询不计。
+    const reportHistoryView = useMemo(
+        () => createOnceReporter('fault', 'fault.history.view'),
+        [],
+    );
+
     const handleLoadConversation = useCallback((conv: ConversationSnapshot) => {
         saveCurrentConversation();
         setMessages(conv.messages);
         setAgentSessionId(conv.agentSessionId);
         setShowHistoryPanel(false);
-    }, [saveCurrentConversation]);
+        if (conv.agentSessionId) reportHistoryView(conv.agentSessionId);
+    }, [saveCurrentConversation, reportHistoryView]);
 
     // ── Submit ──
     async function handleSubmit(e: FormEvent) {

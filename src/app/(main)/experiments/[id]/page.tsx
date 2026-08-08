@@ -65,6 +65,9 @@ const TH: React.CSSProperties = {
   textAlign: 'left', padding: '8px 12px', fontSize: 11, fontWeight: 600,
   color: 'var(--foreground-muted)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap',
 };
+const STICKY_TH: React.CSSProperties = {
+  ...TH, position: 'sticky', top: 0, zIndex: 1, background: 'var(--card-bg)',
+};
 const TD: React.CSSProperties = {
   padding: '9px 12px', fontSize: 12, color: 'var(--foreground)',
   borderBottom: '1px solid var(--border)', verticalAlign: 'top',
@@ -244,7 +247,7 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
   return (
     <>
       <AppTopBar title={detail ? detail.name : '实验详情'} />
-      <PageContainer>
+      <PageContainer className="[&>*]:shrink-0">
         {loading ? (
           <div style={{ padding: 32, textAlign: 'center', fontSize: 12, color: 'var(--foreground-muted)' }}>加载中…</div>
         ) : error && !detail ? (
@@ -419,17 +422,17 @@ export default function ExperimentDetailPage({ params }: { params: Promise<{ id:
                   + 新增 Case
                 </button>
               </div>
-              <div style={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 960 }}>
+              <div style={{ maxHeight: 'min(42vh, 420px)', overflow: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1100 }}>
                   <thead>
                     <tr>
-                      <th style={TH}>输入</th>
-                      <th style={TH}>参考输出</th>
-                      <th style={TH}>实际输出</th>
-                      <th style={{ ...TH, width: 72 }}>综合得分</th>
-                      <th style={{ ...TH, width: 72 }}>结果得分</th>
-                      <th style={{ ...TH, width: 72 }}>轨迹得分</th>
-                      <th style={{ ...TH, width: 128, textAlign: 'center', position: 'sticky', right: 0, background: 'var(--card-bg)', boxShadow: '-6px 0 8px -6px rgba(0,0,0,.18)' }}>操作</th>
+                      <th style={STICKY_TH}>输入</th>
+                      <th style={STICKY_TH}>参考输出</th>
+                      <th style={STICKY_TH}>实际输出</th>
+                      <th style={{ ...STICKY_TH, width: 72 }}>综合得分</th>
+                      <th style={{ ...STICKY_TH, width: 72 }}>结果得分</th>
+                      <th style={{ ...STICKY_TH, width: 72 }}>轨迹得分</th>
+                      <th style={{ ...STICKY_TH, width: 128, textAlign: 'center', right: 0, zIndex: 2, boxShadow: '-6px 0 8px -6px rgba(0,0,0,.18)' }}>操作</th>
                     </tr>
                   </thead>
                   <tbody>

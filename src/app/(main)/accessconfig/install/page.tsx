@@ -19,6 +19,7 @@ import { AppTopBar } from '@/components/shell/AppTopBar';
 import { useAuth } from '@/lib/auth/auth-context';
 import { useLocale } from '@/lib/client/locale-context';
 import { apiFetch, getApiUrl } from '@/lib/client/api';
+import { reportClientUsage } from '@/lib/usage-analytics/client-events';
 import { Term } from '@/components/text/Term';
 
 /**
@@ -39,6 +40,8 @@ const FRAMEWORK_OPTIONS: { value: string; label: string }[] = [
     { value: 'openclaw', label: 'OpenClaw' },
     { value: 'hermes', label: 'Hermes' },
     { value: 'jiuwen', label: 'JiuwenSwarm' },
+    { value: 'qoder', label: 'Qoder CN product family' },
+    { value: 'trae', label: 'Trae IDE' },
 ];
 
 export default function AccessInstallPage() {
@@ -92,6 +95,7 @@ export default function AccessInstallPage() {
         // 逗号在 query 里合法，不编码——命令行里可读性更好。
         const query = [
             apiKey ? `key=${encodeURIComponent(apiKey)}` : '',
+            frameworks.length ? `yes=1` : '',
             frameworks.length ? `frameworks=${frameworks.join(',')}` : '',
         ].filter(Boolean).join('&');
         const suffix = query ? `?${query}` : '';
@@ -102,6 +106,8 @@ export default function AccessInstallPage() {
 
     const toggleFramework = (value: string) => {
         setFrameworks(prev => prev.includes(value) ? prev.filter(v => v !== value) : [...prev, value]);
+        // 用户主动改接入组件 = 重新生成一份接入配置；页面进入时的首次生成（上面的 effect）不计。
+        reportClientUsage('access-install', 'access.config.generate');
     };
 
     const handleCopy = async (text: string, key: string) => {
@@ -135,6 +141,7 @@ export default function AccessInstallPage() {
         if (ok) {
             setCopied(key);
             setTimeout(() => setCopied(null), 1500);
+            reportClientUsage('access-install', 'access.command.copy');
         }
         // 复制失败时静默——不打扰用户;按钮没变绿,他自然会再点一下或者手动复制
     };

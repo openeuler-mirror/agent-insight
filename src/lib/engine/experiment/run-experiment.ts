@@ -9,8 +9,15 @@
  * 单行执行：
  * - 忠实版预置 LLM 评估器（任务完成度/轨迹质量）→ 复用原 opencode 评估器；
  * - 结果评测预置评估器 → 复用可靠性页 canonical 结果评估能力；
+ * - 回答深度性评估器 → 使用 case 输入与实际回答做离散 Judge，再由代码加权；
+ * - Tool/Skill 利用率、选择合理性评估器 → 使用显式能力目录与原始 interactions，
+ *   分别执行确定性统计、离散 Judge 和加权；Agent/子 Agent 不计入能力调用；
  * - 自建 LLM 评估器 → buildJudgePrompt → callJudgeLlm（薄封装，测试可注入 fake）
  *   → parseJudgeText → normalizeEvaluatorOutput。
+ *
+ * 专项评估器上下文数据流：ExperimentCase.evaluatorContextJson 在 loadCaseRuntime 中解析为
+ * evaluatorContext，并与 caseInput、actualOutput、interactions 一起传给对应评估器。目录缺失或
+ * 存量 JSON 非法时，工具类评估器返回不计分结果；回答深度性不依赖该目录。
  *
  * 失败处理：异常写 status='failed' + errorMessage + attempts；JudgeOutputParseError /
  * 超时类可重试（退避见 experimentEngineConfig.retryDelaysMs，默认 2s/8s）；
@@ -25,6 +32,11 @@ import {
 } from '@/lib/evaluators/judge-assembly';
 import type { EvaluatorOutput } from '@/lib/evaluators/eval-output';
 import type { EvaluatorCard } from '@/lib/evaluators/custom-evaluator-model';
+import {
+  normalizeEvaluatorCaseContext,
+  parseStoredEvaluatorCaseContext,
+  type EvaluatorCaseContext,
+} from '@/lib/evaluators/evaluator-case-context';
 import { presetEvaluators } from '@/lib/evaluators/preset-evaluators';
 import { readUserCustomEvaluators } from '@/server/user_evaluators_storage';
 import { createSimpleAsyncLimiter } from '@/lib/engine/evaluation/eval-run-guards';
@@ -35,28 +47,14 @@ import {
   type FaithfulPresetContext,
 } from './faithful-preset-evaluators';
 import { isResultPresetId, runResultPreset } from './result-preset-evaluators';
-
-/**
- * 重跑/重评前把结果行清回 pending 的字段集。
- *
- * 人工修正分一并清除：它修正的是**那一次**评估结果，重评产出的是新结果——留着旧
- * 修正会算出错误的均分（机器改判 85 时，按当初对 60 分做的 80 分修正反而把分拉低）。
- * 入口需向用户明示「重评会清除该行的人工修正」。
- */
-const RESET_RESULT_FIELDS = {
-  status: 'pending',
-  verdict: null,
-  summary: null,
-  score: null,
-  pointsJson: null,
-  evidenceJson: null,
-  humanScore: null,
-  humanReason: null,
-  humanBy: null,
-  humanAt: null,
-  errorMessage: null,
-  durationMs: null,
-} as const;
+import { isContentPresetId, runContentPreset } from './content-preset-evaluators';
+import { isCreativityPresetId, runCreativityPreset } from './creativity-preset-evaluators';
+import { isSafetyPresetId, runSafetyPreset } from './safety-preset-evaluators';
+import { isDepthPresetId, runDepthPreset } from './depth-preset-evaluators';
+import {
+  isAgentToolPresetId,
+  runAgentToolPreset,
+} from './agent-tool-preset-evaluators';
 
 /** 引擎参数（测试可改小重试退避/超时；生产用默认值）。 */
 export const experimentEngineConfig = {
@@ -84,7 +82,8 @@ async function resolveEvaluatorCard(user: string, evaluatorId: string): Promise<
 
 interface CaseRuntime {
   judgeCtx: JudgeCaseContext;
-  /** 忠实版预置评估器（复用原 opencode 评估器）所需的原始上下文。 */
+  /** 忠实版预置评估器（复用原 opencode 评估器）所需的原始上下文；
+   *  安全与创意评估器也共用此类型（见 §4.3 实现签名）。 */
   faithfulCtx: FaithfulPresetContext;
 }
 
@@ -116,15 +115,19 @@ export function extractToolCallNames(interactions: unknown[]): string[] {
     const calls = Array.isArray(r.tool_calls) ? r.tool_calls : [];
     let pushed = false;
     for (const tc of calls) {
-      if (tc && typeof tc === 'object' && typeof (tc as any).name === 'string' && (tc as any).name) {
-        names.push((tc as any).name);
+      if (!tc || typeof tc !== 'object') continue;
+      const call = tc as Record<string, unknown>;
+      if (typeof call.name === 'string' && call.name) {
+        names.push(call.name);
         pushed = true;
       }
     }
     if (!pushed && Array.isArray(r.parts)) {
       for (const p of r.parts) {
-        if (p && typeof p === 'object' && (p as any).type === 'tool' && typeof (p as any).tool === 'string') {
-          names.push((p as any).tool);
+        if (!p || typeof p !== 'object') continue;
+        const part = p as Record<string, unknown>;
+        if (part.type === 'tool' && typeof part.tool === 'string') {
+          names.push(part.tool);
         }
       }
     }
@@ -138,6 +141,7 @@ async function loadCaseRuntime(caseRow: {
   input: string;
   actualOutput: string;
   referenceOutput: string | null;
+  evaluatorContextJson: string | null;
 }, user: string): Promise<CaseRuntime> {
   // executionId 优先；skill 评测接入只带 taskId(=sessionId) 时按 taskId 兜底解析 Execution，
   // 以拿到 skill 上下文与 finalResult（actualOutput 兜底）。
@@ -184,6 +188,7 @@ async function loadCaseRuntime(caseRow: {
   // 用 Execution.query / Execution.finalResult 兜底（trace 模式无 dataset case）。
   const caseInput = caseRow.input || execution?.query || '';
   const actualOutput = caseRow.actualOutput || execution?.finalResult || '';
+  const evaluatorContextResult = parseStoredEvaluatorCaseContext(caseRow.evaluatorContextJson);
 
   const judgeCtx: JudgeCaseContext = {
     input: caseInput,
@@ -198,6 +203,8 @@ async function loadCaseRuntime(caseRow: {
     referenceOutput: caseRow.referenceOutput,
     traceSummaryText: trajectory,
     interactions: rawInteractions,
+    evaluatorContext: evaluatorContextResult.context,
+    evaluatorContextError: evaluatorContextResult.error,
     taskId,
     executionId: caseRow.executionId,
     user,
@@ -243,6 +250,22 @@ async function evaluateOnce(
   // 结果评测预置评估器：复用可靠性页同一 canonical 结果评估能力
   if (isResultPresetId(evaluatorId)) {
     return runResultPreset(evaluatorId, user, runtime.faithfulCtx);
+  }
+  // 内容、安全与创意预置评估器：LLM Judge 直连（共用 faithfulCtx，与 §4.3 签名一致）
+  if (isContentPresetId(evaluatorId)) {
+    return runContentPreset(evaluatorId, user, runtime.faithfulCtx);
+  }
+  if (isCreativityPresetId(evaluatorId)) {
+    return runCreativityPreset(evaluatorId, user, runtime.faithfulCtx);
+  }
+  if (isSafetyPresetId(evaluatorId)) {
+    return runSafetyPreset(evaluatorId, user, runtime.faithfulCtx);
+  }
+  if (isDepthPresetId(evaluatorId)) {
+    return runDepthPreset(user, runtime.faithfulCtx);
+  }
+  if (isAgentToolPresetId(evaluatorId)) {
+    return runAgentToolPreset(evaluatorId, user, runtime.faithfulCtx);
   }
   const card = await resolveEvaluatorCard(user, evaluatorId);
   if (!card) throw new Error(`未找到评估器 ${evaluatorId}（可能已被删除）`);
@@ -293,8 +316,6 @@ export async function executeResultRow(user: string, resultId: string): Promise<
         where: { id: resultId },
         data: {
           status: 'done',
-          // 结论：评估器没上报 verdict 就存 null，呈现层按 deriveVerdict(score) 派生，
-          // 这样调整阈值口径不需要重刷历史数据。
           verdict: out.verdict ?? null,
           summary: out.summary ?? null,
           score: out.score ?? null,
@@ -400,7 +421,20 @@ export async function startExperimentRun(
         const row = await prisma.experimentEvalResult.upsert({
           where: { caseId_evaluatorId: { caseId: c.id, evaluatorId } },
           create: { experimentId, caseId: c.id, evaluatorId, status: 'pending' },
-          update: { ...RESET_RESULT_FIELDS },
+          update: {
+            status: 'pending',
+            verdict: null,
+            summary: null,
+            score: null,
+            pointsJson: null,
+            evidenceJson: null,
+            errorMessage: null,
+            durationMs: null,
+            humanScore: null,
+            humanReason: null,
+            humanBy: null,
+            humanAt: null,
+          },
           select: { id: true },
         });
         resultIds.push(row.id);
@@ -461,7 +495,20 @@ export async function retryResultRow(
 
   await prisma.experimentEvalResult.update({
     where: { id: resultId },
-    data: { ...RESET_RESULT_FIELDS },
+    data: {
+      status: 'pending',
+      verdict: null,
+      summary: null,
+      score: null,
+      pointsJson: null,
+      evidenceJson: null,
+      errorMessage: null,
+      durationMs: null,
+      humanScore: null,
+      humanReason: null,
+      humanBy: null,
+      humanAt: null,
+    },
   });
   const status = await executeResultRow(user, resultId);
   await settleExperimentStatus(experimentId);
@@ -534,6 +581,7 @@ export async function addEvalExperimentCase(
     input: string;
     actualOutput: string;
     referenceOutput?: string | null;
+    evaluatorContext?: EvaluatorCaseContext | null;
   },
 ): Promise<string> {
   if (c.taskId) {
@@ -542,11 +590,25 @@ export async function addEvalExperimentCase(
       select: { id: true },
     });
     if (existing) {
-      // 复用已有 case；若这次拿到了参考答案而旧值为空则回填
-      if (c.referenceOutput != null && String(c.referenceOutput).trim()) {
+      // 复用已有 case；若这次拿到了参考答案或评估器上下文则回填。
+      if (
+        (c.referenceOutput != null && String(c.referenceOutput).trim())
+        || c.evaluatorContext !== undefined
+      ) {
         await prisma.experimentCase.update({
           where: { id: existing.id },
-          data: { referenceOutput: c.referenceOutput },
+          data: {
+            ...(c.referenceOutput != null && String(c.referenceOutput).trim()
+              ? { referenceOutput: c.referenceOutput }
+              : {}),
+            ...(c.evaluatorContext !== undefined
+              ? {
+                  evaluatorContextJson: c.evaluatorContext
+                    ? JSON.stringify(normalizeEvaluatorCaseContext(c.evaluatorContext))
+                    : null,
+                }
+              : {}),
+          },
         });
       }
       return existing.id;
@@ -560,6 +622,9 @@ export async function addEvalExperimentCase(
       input: c.input,
       actualOutput: c.actualOutput,
       referenceOutput: c.referenceOutput ?? null,
+      evaluatorContextJson: c.evaluatorContext
+        ? JSON.stringify(normalizeEvaluatorCaseContext(c.evaluatorContext))
+        : null,
     },
     select: { id: true },
   });
@@ -588,7 +653,12 @@ export async function evaluateEvalExperimentCase(
     const rowRec = await prisma.experimentEvalResult.upsert({
       where: { caseId_evaluatorId: { caseId, evaluatorId } },
       create: { experimentId, caseId, evaluatorId, status: 'pending' },
-      update: { ...RESET_RESULT_FIELDS },
+      update: {
+        status: 'pending', verdict: null, summary: null,
+        score: null, pointsJson: null,
+        evidenceJson: null, errorMessage: null, durationMs: null,
+        humanScore: null, humanReason: null, humanBy: null, humanAt: null,
+      },
       select: { id: true },
     });
     // executeResultRow 内部已把失败写成 failed 终态，这里吞掉抛出、按落库状态读回

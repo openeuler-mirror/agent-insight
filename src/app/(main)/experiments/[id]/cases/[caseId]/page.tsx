@@ -140,6 +140,12 @@ const CATEGORY_LABEL: Record<EvaluatorCategory, string> = {
   traj: '轨迹评测',
 };
 
+const SPECIALIZED_PRESET_IDS = new Set([
+  'preset-depth-result',
+  'preset-agent-tool-utilization',
+  'preset-agent-tool-selection',
+]);
+
 /** 评分点的「状态 / 可归因 skill」标签组（评分点与子项复用）。 */
 function PointBadges({ point }: { point: PointRow }) {
   if (!point.status && !point.skillAttributable) return null;
@@ -162,10 +168,10 @@ function PointBadges({ point }: { point: PointRow }) {
 }
 
 /** 评分点「证据」列内容：证据块 + 建议 + 相关步骤锚点（评分点与子项复用）。 */
-function PointEvidence({ point, taskId }: { point: PointRow; taskId: string | null }) {
+function PointEvidence({ point, taskId, evaluatorId }: { point: PointRow; taskId: string | null; evaluatorId: string }) {
   return (
     <>
-      {point.evidence ? <EvidenceBlock evidence={point.evidence} /> : null}
+      {point.evidence ? <EvidenceBlock evidence={point.evidence} evaluatorId={evaluatorId} /> : null}
       {point.suggestion && (
         <div style={{ marginTop: point.evidence ? 6 : 0, fontSize: 11, color: 'var(--primary)' }}>
           ↗ 建议：{point.suggestion}
@@ -552,6 +558,7 @@ export default function TraceEvalDetailPage({ params }: { params: Promise<{ id: 
                       const failed = r.status === 'failed';
                       const pendingLike = r.status === 'pending' || r.status === 'running';
                       const points = parsePoints(r.points);
+                      const isSpecializedPreset = SPECIALIZED_PRESET_IDS.has(r.evaluatorId);
                       const open = expandedCards.has(r.id);
                       const adjusted = typeof r.humanScore === 'number';
                       const shownScore = effectiveScore(r);
@@ -645,9 +652,10 @@ export default function TraceEvalDetailPage({ params }: { params: Promise<{ id: 
 
                               {/* 完整判断依据：与卡头那句结论逐字相同就不重复渲染。
                                   （此前这段在有评分点时被 else 分支吃掉，永远显示不出来。） */}
-                              {r.evidence && !isEvidenceRedundant(r.summary, r.evidence) ? (
+                              {r.evidence && !isEvidenceRedundant(r.summary, r.evidence)
+                                && !(isSpecializedPreset && points.length > 0) ? (
                                 <div style={{ marginTop: 9 }}>
-                                  <EvidenceBlock evidence={r.evidence} />
+                                  <EvidenceBlock evidence={r.evidence} evaluatorId={r.evaluatorId} />
                                 </div>
                               ) : null}
 
@@ -692,7 +700,7 @@ export default function TraceEvalDetailPage({ params }: { params: Promise<{ id: 
                                             </td>
                                             <td style={{ ...TD, verticalAlign: 'top', fontWeight: 700 }}>{typeof p.score === 'number' ? p.score : '—'}</td>
                                             <td style={{ ...TD, verticalAlign: 'top', overflow: 'hidden' }}>
-                                              <PointEvidence point={p} taskId={caseRow.taskId} />
+                                              <PointEvidence point={p} taskId={caseRow.taskId} evaluatorId={r.evaluatorId} />
                                             </td>
                                           </tr>
                                         ))}

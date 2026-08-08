@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  mapBackflowCanonicalValues,
   normalizeBackflowValues,
+  parseBackflowFieldMappings,
   POST,
   parseBackflowFields,
 } from '@/app/api/agent-datasets/backflow/route';
@@ -35,6 +37,49 @@ test('parses edited JSON field text before backflow persistence', () => {
     ),
     /field trace must be valid JSON/,
   );
+});
+
+test('maps trace artifacts into canonical dataset case fields', () => {
+  const fields = parseBackflowFields([
+    { key: 'input', label: '输入', type: 'text' },
+    { key: 'reference_output', label: '预期输出', type: 'text' },
+    { key: 'trajectory', label: '轨迹', type: 'json' },
+  ]);
+  const mappings = parseBackflowFieldMappings([
+    { key: 'input', source: 'input' },
+    { key: 'reference_output', source: 'output' },
+    { key: 'trajectory', source: 'trace' },
+  ], fields);
+  const trace = [{ role: 'assistant', content: 'done' }];
+
+  assert.deepEqual(mapBackflowCanonicalValues({
+    input: 'question',
+    reference_output: 'good answer',
+    trajectory: trace,
+  }, mappings), {
+    input: 'question',
+    expectedOutput: 'good answer',
+    trajectory: trace,
+  });
+});
+
+test('infers legacy output and trace field mappings for older clients', () => {
+  const fields = parseBackflowFields([
+    { key: 'input', label: '任务输入', type: 'text' },
+    { key: 'output', label: '任务输出', type: 'text' },
+    { key: 'trace', label: 'Trace', type: 'json' },
+  ]);
+  const mappings = parseBackflowFieldMappings(undefined, fields);
+
+  assert.deepEqual(mapBackflowCanonicalValues({
+    input: 'question',
+    output: 'approved answer',
+    trace: [{ role: 'assistant' }],
+  }, mappings), {
+    input: 'question',
+    expectedOutput: 'approved answer',
+    trajectory: [{ role: 'assistant' }],
+  });
 });
 
 test('accepts an explicit backflow schema without an input field', () => {

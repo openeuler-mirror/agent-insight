@@ -1,16 +1,20 @@
 /**
- * 忠实版预置 LLM 评估器：让实验的
+ * 忠实版预置 LLM 评估器适配层：只负责
  *   preset-agent-task-completion / preset-agent-trace-quality
- * 复用「评测执行」原有的 opencode 评估器逻辑（四固定维度 / 关键观点 / skill 归因 /
- * deviation 步骤），而非通用三段式简化版——保证口径与评测执行一致、并为 skill 优化
- * 闭环产出归因字段（status / skillAttributable / suggestion / anchors）。
+ * 两个既有预置评估器，复用「评测执行」原有的 opencode 逻辑（四固定维度 / 关键观点 /
+ * skill 归因 / deviation 步骤），并把原 0–1 输出映射到统一 0–100 契约。
  *
- * 原评估器输出为 0-1 量纲；本模块映射到统一契约（0-100，见 eval-output.ts），
- * 最终统一过 normalizeEvaluatorOutput 兜底。
+ * 本文件还定义实验预置评估器共用的 FaithfulPresetContext。新增的回答深度性、Tool/Skill
+ * 利用率和选择合理性评估器只复用该运行上下文，不由 runFaithfulPreset 执行；它们的实现位于
+ * src/lib/engine/experiment/depth-preset-evaluators.ts、agent-tool-utilization-evaluator.ts 和
+ * agent-tool-selection-evaluator.ts。
+ * evaluatorContext 保存显式可用 Tool/Skill 目录，evaluatorContextError 传递历史存量 JSON
+ * 无法解析的原因；这两个字段只影响工具类评估器，不改变上述既有评估器的评分口径。
  */
 // 原 opencode 评估器传递依赖 @opencode-ai/sdk（server-only，node --test 无法静态加载）。
 // 与 judge-llm.ts 同策略：惰性 import()，运行时才加载——测试注入/纯函数校验时零加载。
 import { normalizeEvaluatorOutput, type EvaluatorOutput, type EvalPoint, type EvalPointStatus } from '../../evaluators/eval-output';
+import type { EvaluatorCaseContext } from '../../evaluators/evaluator-case-context';
 
 export const FAITHFUL_PRESET_IDS = ['preset-agent-task-completion', 'preset-agent-trace-quality'] as const;
 export type FaithfulPresetId = (typeof FAITHFUL_PRESET_IDS)[number];
@@ -27,6 +31,10 @@ export interface FaithfulPresetContext {
   traceSummaryText: string | null;
   /** 原始 interactions（轨迹评估器用作 actualInteractions） */
   interactions: unknown[];
+  /** 工具类评估器使用的显式可用工具目录；null/undefined 表示未提供。 */
+  evaluatorContext?: EvaluatorCaseContext | null;
+  /** 历史脏数据解析错误；工具类评估器据此输出不计分原因。 */
+  evaluatorContextError?: string | null;
   taskId: string | null;
   executionId: string | null;
   /** trace 归属用户（skill 记录按 user 查找） */

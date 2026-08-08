@@ -2,19 +2,72 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  createEvaluatorCatalogField,
+  defaultTraceBackflowSourceForField,
+  evaluatorCatalogFieldKeyFromLabel,
   nextDatasetFieldKey,
   parseDatasetNumberValue,
+  sortTraceBackflowDatasetsByRecency,
+  withEvaluatorCatalogFields,
 } from '@/lib/agent-dataset-model';
 import { extractTaskArtifacts } from '@/lib/engine/evaluation/task-artifacts';
 import { POST as saveDataset } from '@/app/api/agent-datasets/route';
 
 import {
+  buildAgentDatasetProjection,
+  buildAgentDatasetItemsView,
   duplicateDatasetFieldName,
   normalizeCase,
   normalizeFields,
   validateDatasetFieldKeysForWrite,
   validateCasesForKind,
 } from '@/server/agent_datasets_storage';
+
+test('builds lightweight dataset projections without trajectory payloads', () => {
+  const projection = buildAgentDatasetProjection([normalizeCase({
+    id: 'case-1',
+    input: 'question',
+    expectedOutput: 'answer',
+    evaluationFocus: 'focus',
+    tags: ['smoke'],
+    trajectory: JSON.stringify([{ content: 'very large trace' }]),
+  })]);
+
+  assert.equal(projection.caseCount, 1);
+  assert.deepEqual(JSON.parse(projection.referenceCasesJson), [{
+    id: 'case-1',
+    input: 'question',
+    expectedOutput: 'answer',
+    evaluationFocus: 'focus',
+    tags: ['smoke'],
+  }]);
+  assert.doesNotMatch(projection.referenceCasesJson, /very large trace/);
+});
+
+test('builds a bounded data-items trajectory preview without losing ordinary custom fields', () => {
+  const largeTrace = `trace-start-${'x'.repeat(800)}-trace-end`;
+  const dataset = {
+    id: 'dataset-1', user: 'user', name: 'dataset', description: '', targetAgent: '', targetSkill: '',
+    tags: [], datasetKind: 'trajectory' as const,
+    fields: [
+      { id: 'input', key: 'input', label: '输入', type: 'text' as const },
+      { id: 'trace', key: 'trace', label: '轨迹', type: 'json' as const },
+      { id: 'custom', key: 'custom_field_1', label: '普通字段', type: 'text' as const },
+    ],
+    cases: [normalizeCase({
+      id: 'case-1', input: 'question', trajectory: largeTrace,
+      values: { input: 'question', trace: largeTrace, custom_field_1: 'keep me' },
+    })],
+    createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(),
+  };
+
+  const view = buildAgentDatasetItemsView(dataset);
+  assert.match(view.cases[0].trajectory, /^trace-start-/);
+  assert.match(String(view.cases[0].values?.trace), /…$/);
+  assert.ok(view.cases[0].trajectory.length <= 601);
+  assert.equal(view.cases[0].values?.custom_field_1, 'keep me');
+  assert.equal(dataset.cases[0].trajectory, largeTrace);
+});
 
 test('trace backflow keeps the original user input and final output', async () => {
   const artifacts = await extractTaskArtifacts({
@@ -33,6 +86,44 @@ test('generates stable internal keys without exposing them as field input', () =
     nextDatasetFieldKey(['input', 'custom_field_1', 'custom_field_3']),
     'custom_field_2',
   );
+});
+
+test('keeps Tool/Skill catalog fields under evaluator-readable JSON keys', () => {
+  assert.equal(evaluatorCatalogFieldKeyFromLabel('available_tools'), 'available_tools');
+  assert.equal(evaluatorCatalogFieldKeyFromLabel('可用 Skill'), 'available_skills');
+  assert.equal(evaluatorCatalogFieldKeyFromLabel('普通备注'), null);
+
+  const fields = withEvaluatorCatalogFields([
+    { id: 'input', key: 'input', label: '输入', type: 'text', system: true },
+  ], [{
+    values: {
+      available_tools: [],
+      available_skills: [{ name: 'research' }],
+    },
+  }]);
+
+  assert.deepEqual(fields.slice(1), [
+    createEvaluatorCatalogField('available_tools'),
+    createEvaluatorCatalogField('available_skills'),
+  ]);
+});
+
+test('maps standard dataset fields to trace backflow artifacts by default', () => {
+  assert.equal(defaultTraceBackflowSourceForField('input'), 'input');
+  assert.equal(defaultTraceBackflowSourceForField('reference_output'), 'output');
+  assert.equal(defaultTraceBackflowSourceForField('expected_output'), 'output');
+  assert.equal(defaultTraceBackflowSourceForField('trajectory'), 'trace');
+  assert.equal(defaultTraceBackflowSourceForField('custom_field_1'), 'none');
+});
+
+test('selects the most recently updated dataset first for trace backflow', () => {
+  const datasets = sortTraceBackflowDatasetsByRecency([
+    { id: 'older', updatedAt: '2026-07-01T00:00:00.000Z' },
+    { id: 'latest', updatedAt: '2026-07-30T00:00:00.000Z' },
+    { id: 'unknown' },
+  ]);
+
+  assert.deepEqual(datasets.map(dataset => dataset.id), ['latest', 'older', 'unknown']);
 });
 
 test('detects duplicate dataset field names case-insensitively', () => {
@@ -141,10 +232,11 @@ test('normalizes legacy dataset cases into editable values', () => {
   assert.equal(row.values?.trajectory, '{"steps":[]}');
 });
 
-test('normalizes trace backflow values without requiring reference output', () => {
+test('treats legacy trace backflow output as the approved reference output', () => {
   const trace = [{ role: 'user', content: 'processed task' }];
   const row = normalizeCase({
     id: 'trace-case',
+    expectedOutput: '',
     values: {
       input: 'processed task',
       output: 'processed result',
@@ -155,7 +247,8 @@ test('normalizes trace backflow values without requiring reference output', () =
   });
 
   assert.equal(row.input, 'processed task');
-  assert.equal(row.expectedOutput, '');
+  assert.equal(row.expectedOutput, 'processed result');
+  assert.equal(row.values?.reference_output, 'processed result');
   assert.equal(row.trajectory, JSON.stringify(trace));
   assert.deepEqual(row.values?.trace, trace);
   assert.equal(row.values?.scenario, 'failure');

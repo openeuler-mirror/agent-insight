@@ -5,6 +5,7 @@ import fs from 'fs';
 import { NextRequest, NextResponse } from 'next/server';
 import path from 'path';
 import { deleteEnterpriseSkill, fetchEnterpriseSkillInfo } from '@/lib/engine/skill-generation/legacy/skill-sync-service';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 
 export const dynamic = 'force-dynamic';
 
@@ -232,6 +233,8 @@ export async function DELETE(request: NextRequest) {
     }
 
     await db.deleteSkill(id);
+
+    recordUsageEvent({ user, featureKey: 'skill', eventKey: 'skill.remove' });
 
     return NextResponse.json({ success: true });
   } catch (e: any) {

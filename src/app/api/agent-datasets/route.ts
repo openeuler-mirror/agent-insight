@@ -1,7 +1,9 @@
 import { randomUUID } from 'crypto';
 import { NextResponse } from 'next/server';
 import {
-  readAllAgentDatasets,
+  readUserAgentDatasets,
+  readAgentDatasetReferences,
+  readAgentDatasetSummaries,
   findAgentDataset,
   createAgentDatasetRecord,
   updateAgentDatasetRecord,
@@ -15,6 +17,7 @@ import {
   validateCasesForKind,
   type AgentDatasetRecord,
 } from '@/server/agent_datasets_storage';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 
 export const dynamic = 'force-dynamic';
 
@@ -29,7 +32,17 @@ export async function GET(request: Request) {
     // 可选过滤：?targetSkill=<name> 拉挂在某 skill 上的；?targetSkill=__none__ 拉通用 agent eval（targetSkill === ''）。
     // 不传则全部。
     const targetSkillParam = searchParams.get('targetSkill');
-    let datasets = (await readAllAgentDatasets()).filter(item => item.user === user);
+    const wantedTargetSkill = targetSkillParam === null
+      ? undefined
+      : targetSkillParam === '__none__' ? '' : targetSkillParam.trim();
+    const view = searchParams.get('view');
+    if (view === 'summary') {
+      return NextResponse.json(await readAgentDatasetSummaries(user, wantedTargetSkill));
+    }
+    if (view === 'reference') {
+      return NextResponse.json(await readAgentDatasetReferences(user, wantedTargetSkill));
+    }
+    let datasets = await readUserAgentDatasets(user);
     if (targetSkillParam !== null) {
       const wanted = targetSkillParam === '__none__' ? '' : targetSkillParam.trim();
       datasets = datasets.filter(d => (d.targetSkill ?? '') === wanted);
@@ -99,6 +112,8 @@ export async function POST(request: Request) {
     };
 
     await createAgentDatasetRecord(dataset);
+
+    recordUsageEvent({ user, featureKey: 'dataset', eventKey: 'dataset.create' });
 
     return NextResponse.json({ success: true, dataset, warnings });
   } catch (error) {
@@ -182,6 +197,8 @@ export async function PATCH(request: Request) {
     if (!ok) {
       return NextResponse.json({ error: 'dataset not found' }, { status: 404 });
     }
+    recordUsageEvent({ user, featureKey: 'dataset', eventKey: 'dataset.sample.update' });
+
     return NextResponse.json({ success: true, dataset: updated, warnings: preparedCasesResult.warnings });
   } catch (error) {
     console.error('agent-datasets PATCH error:', error);

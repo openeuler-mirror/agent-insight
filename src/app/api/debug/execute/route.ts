@@ -3,6 +3,7 @@ import { runGeneralAgent } from '@/lib/engine/general-agent';
 import { extractDebugJobTokenUsage } from '@/lib/skill-analysis/grayscale-utils';
 import { withBackgroundOpencodeSlot } from '@/lib/engine/general-agent/concurrency-limiter';
 import { prisma } from '@/lib/storage/prisma';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 
 export const dynamic = 'force-dynamic';
 
@@ -159,6 +160,8 @@ export async function POST(request: Request) {
       store.set(jobId, { status: 'failed', startedAt, error: errMsg });
       persistJob(jobId, user, { status: 'failed', error: errMsg });
     });
+
+  recordUsageEvent({ user, featureKey: 'skill-eval', eventKey: 'skill.eval.debug.run' });
 
   return NextResponse.json({ jobId });
 }

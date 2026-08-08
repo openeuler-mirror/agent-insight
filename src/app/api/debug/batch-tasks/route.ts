@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/storage/prisma';
+import { recordUsageEvent } from '@/lib/usage-analytics/collector';
 
 export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
@@ -40,6 +41,9 @@ export async function POST(req: NextRequest) {
         const task = await (prisma as any).batchEvalTask.create({
             data: { user, taskName: taskName.trim() },
         });
+
+        recordUsageEvent({ user, featureKey: 'skill-eval', eventKey: 'skill.eval.case.run' });
+
         return NextResponse.json(task);
     } catch (err) {
         console.error('[BATCH_TASKS_POST] Failed:', err);

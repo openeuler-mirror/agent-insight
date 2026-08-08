@@ -31,8 +31,17 @@ test('experiments API: POST create -> GET list -> GET detail', async (t) => {
     name: '冒烟实验',
     agentName: 'smoke-agent',
     cases: [
-      { executionId: 'exec-1', taskId: 'task-1', input: 'q1', actualOutput: 'a1', referenceOutput: 'ref1' },
-      { executionId: 'exec-2', taskId: 'task-2', input: 'q2', actualOutput: 'a2' },
+      {
+        executionId: 'exec-1', taskId: 'task-1', input: 'q1', actualOutput: 'a1', referenceOutput: 'ref1',
+        evaluatorContext: {
+          schemaVersion: 1,
+          availableTools: [{ name: 'search', description: '搜索' }],
+          availableSkills: [{ name: 'research_playbook', description: '检索后归纳资料' }],
+        },
+      },
+      {
+        executionId: 'exec-2', taskId: 'task-2', input: 'q2', actualOutput: 'a2',
+      },
     ],
     evaluatorIds: ['preset-agent-trace-quality', 'preset-agent-task-completion'],
   }));
@@ -67,6 +76,12 @@ test('experiments API: POST create -> GET list -> GET detail', async (t) => {
   assert.equal(detail.cases.length, 2);
   assert.equal(detail.cases[0].referenceOutput, 'ref1');
   assert.equal(detail.cases[1].referenceOutput, null);
+  assert.deepEqual(detail.cases[0].evaluatorContext, {
+    schemaVersion: 1,
+    availableTools: [{ name: 'search', description: '搜索' }],
+    availableSkills: [{ name: 'research_playbook', description: '检索后归纳资料' }],
+  });
+  assert.equal(detail.cases[1].evaluatorContext, null);
   assert.deepEqual(detail.results, []);
 });
 
@@ -87,6 +102,14 @@ test('experiments API: POST validation rejects empty payloads', async () => {
     cases: [{ input: 'q', actualOutput: 'a' }], evaluatorIds: [],
   }));
   assert.equal(noEvaluators.status, 400);
+
+  const invalidContext = await createExperiment(postReq({
+    user: TEST_USER, name: 'n', agentName: 'a',
+    cases: [{ input: 'q', actualOutput: 'a', evaluatorContext: { schemaVersion: 1 } }],
+    evaluatorIds: ['x'],
+  }));
+  assert.equal(invalidContext.status, 400);
+  assert.match(String((await invalidContext.json()).error), /availableTools/);
 });
 
 test('experiments API: detail 404 for missing experiment', async () => {
