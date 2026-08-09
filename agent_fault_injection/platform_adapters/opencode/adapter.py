@@ -138,12 +138,27 @@ class OpenCodeAdapter(PlatformAdapter):
                             startup_timeout,
                         )
                     except PluginStartupError as exc:
+                        exit_before_stop = process.returncode
+                        plugin_path = (
+                            workspace
+                            / ".opencode"
+                            / "plugins"
+                            / "agent-fault-injection.ts"
+                        )
+                        plugin_installed = plugin_path.is_file()
                         await self.monitor.stop(process)
+                        stopped_code = process.returncode
                         process = None
                         message = self._startup_failure_message(
                             exc=exc,
                             artifacts=artifacts,
                             startup_timeout=startup_timeout,
+                            process_exit_code=exit_before_stop
+                            if exit_before_stop is not None
+                            else stopped_code,
+                            plugin_installed=plugin_installed,
+                            agent_fi_raw_dir=environment.get("AGENT_FI_RAW_DIR"),
+                            agent_fi_run_id=environment.get("AGENT_FI_RUN_ID"),
                         )
                         if (
                             attempt <= lock_retries
@@ -436,18 +451,57 @@ class OpenCodeAdapter(PlatformAdapter):
         exc: PluginStartupError,
         artifacts: RunArtifacts,
         startup_timeout: float,
+        process_exit_code: int | None = None,
+        plugin_installed: bool | None = None,
+        agent_fi_raw_dir: str | None = None,
+        agent_fi_run_id: str | None = None,
     ) -> str:
         extras: list[str] = []
+        ready = artifacts.plugin_ready_file
+        extras.append(
+            "plugin-ready="
+            + ("present" if ready.is_file() else f"missing({ready})")
+        )
+        if plugin_installed is not None:
+            extras.append(
+                "workspace-plugin="
+                + ("installed" if plugin_installed else "missing")
+            )
+        if agent_fi_run_id is not None or agent_fi_raw_dir is not None:
+            extras.append(
+                "AGENT_FI="
+                + (
+                    "set"
+                    if agent_fi_run_id and agent_fi_raw_dir
+                    else "incomplete"
+                )
+            )
+        if process_exit_code is not None:
+            extras.append(f"process-exit={process_exit_code}")
+        else:
+            extras.append("process-exit=still-running-at-timeout")
+
         for label, path in (
             ("stderr", artifacts.stderr_file),
+            ("stdout", artifacts.stdout_file),
             ("opencode.log", artifacts.raw_dir / "opencode.log"),
         ):
             try:
+                size = path.stat().st_size if path.is_file() else 0
+            except OSError:
+                extras.append(f"{label}: unreadable")
+                continue
+            if size <= 0:
+                extras.append(f"{label}: empty(0B)")
+                continue
+            try:
                 text = path.read_text(encoding="utf-8", errors="replace")
             except OSError:
+                extras.append(f"{label}: unreadable({size}B)")
                 continue
             lines = [line for line in text.splitlines() if line.strip()]
             if not lines:
+                extras.append(f"{label}: blank({size}B)")
                 continue
             interesting = [
                 line
@@ -474,8 +528,9 @@ class OpenCodeAdapter(PlatformAdapter):
         hints = (
             "检查：1) `opencode run` 是否可用且 provider token 有效；"
             "2) 系统 OpenCode 配置（~/.config/opencode，含 jsonc）是否正确；"
-            "3) artifacts/<run>/raw/stderr.log；"
-            f"4) 可调大 plugin_startup_timeout（当前 {startup_timeout:g}s）。"
+            "3) workspace `.opencode/plugins/agent-fault-injection.ts` 与 AGENT_FI_*；"
+            "4) artifacts/<run>/raw/stderr.log（空日志多为进程挂起未加载插件）；"
+            f"5) 可调大 plugin_startup_timeout（当前 {startup_timeout:g}s）。"
         )
         return f"{exc}{detail} — {hints}"
 

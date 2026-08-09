@@ -15,11 +15,12 @@ App Router。页面位于 `src/app` 下。主仪表盘位于 `(main)` 路由组�
 | `/(main)/agent-ras/trace` | `AgentRasTracePage` (`(main)/agent-ras/trace/page.tsx`) | 可靠性观测：故障等级汇总 + Trace 列表（左连接 RAS） |
 | `/(main)/agent-ras/trace/[taskId]` | `AgentRasTraceDetailPage` (`(main)/agent-ras/trace/[taskId]/page.tsx`) | 可靠性详情：`RasAnomalyStrip`（可折叠摘要条 + 单故障单行）+ 复用 `AgentTraceView`（叠 marker；点选行 `focusRasMarkerId` 联动） |
 | `/(main)/agent-ras/fault-modes` | `AgentRasFaultModesPage` (`(main)/agent-ras/fault-modes/page.tsx`) | 能力目录 + 平台配置双视图（`?view=configure`）；配置对齐 `AgentRASConfig`，可选同步 OpenCode |
-| `/(main)/agent-ras/fault-injection` | 故障模式目录（子模式拆行 + HelpTip + Skill 对话框）；经标题右上角进入 | BFF `/api/fault-injection/faults`（`resolve_fault_submodes`） |
+| `/(main)/agent-ras/fault-injection` | redirect → `/tasks`（与侧栏入口对齐） | — |
+| `/(main)/agent-ras/fault-injection/faults` | 故障目录（子模式拆行 + HelpTip + Skill 对话框）；经标题右上角「故障目录」进入 | BFF `/api/fault-injection/faults`（`resolve_fault_submodes`） |
 | `/(main)/agent-ras/fault-injection/tasks` | 任务列表（侧栏默认入口；表内工具栏/行级图标操作/轮询） | `GET/POST /api/fault-injection/tasks` |
 | `/(main)/agent-ras/fault-injection/tasks/new` | 三步向导（卡内 footer；`?rerunFrom=` 预填） | platforms/agents/models |
 | `/(main)/agent-ras/fault-injection/tasks/[taskId]` | 任务详情（进度卡、中文故障名、图标操作） | `GET .../task/:id` |
-| `/(main)/agent-ras/fault-injection/runs/[runId]` | 单卡摘要 + MarkerPipeline 四节点 + `AgentTraceView`；可跳可靠性观测 | `GET .../runs/:id/trace`；collect 后 upsert Session；**不再**写 `RasAnomalyEvent`；可靠性列表依赖平台真实 Execution 上报 |
+| `/(main)/agent-ras/fault-injection/runs/[runId]` | 单卡摘要 + 可折叠 MarkerPipeline + `AgentTraceView`（FI/`source=fi` 与真 RAS/`source=ras` 分源并列；可跳独立可靠性页） | `GET .../runs/:id/trace`；collect 后可写 Session；**不再**写合成 `RasAnomalyEvent`；真 RAS 只读拉取 |
 
 | `/(main)/fault` | `FaultPage` (`(main)/fault/page.tsx`) | 故障诊断 |
 | `/(main)/dataset`, `/(main)/dataset/[id]` | `DatasetPage`, `DatasetDataItemsRoutePage` | 评测数据集；详情页按字段 schema 渲染动态列，支持新增字段和逐条编辑字段值 |
@@ -55,7 +56,7 @@ AGENT WORKSPACE  (nav.groupAgentWorkspace)
 │  ├─ 可靠性观测         → /agent-ras/trace
 │  ├─ 可靠性能力         → /agent-ras/fault-modes
 │  └─ 故障注入与评测     → /agent-ras/fault-injection/tasks
-│     （标题右上角「故障模式」→ /agent-ras/fault-injection）
+│     （标题右上角「故障目录」→ /agent-ras/fault-injection/faults；裸 /fault-injection → /tasks）
 ├─ 评测中心 (evalCenter)
 │  ├─ 评测数据集         → /dataset
 │  ├─ 评估器             → /metrics
@@ -89,7 +90,7 @@ AGENT WORKSPACE  (nav.groupAgentWorkspace)
 | 状态 | 路由 | 说明 |
 |---|---|---|
 | ✅ 导航可达 | `/dashboard` `/agents` `/trace` `/agent-ras/trace` `/agent-ras/fault-modes` `/agent-ras/fault-injection/tasks` `/fault` `/quality` `/dataset` `/metrics` `/eval` `/skills` `/skill-generator` `/skill-eval` `/skill-opt` `/modelconfig/registry` `/modelconfig/web-search` `/accessconfig/install` | 侧边栏直达；`/quality` 的 `QualityPage` 含 `ResultPanel` 结果明细 |
-| 🔁 间接可达 | `/agent-ras/fault-injection`（经 FI 页标题右上角「故障模式」）、`/skill-history` `/skill-detail`（经 Skills Hub）、`/details`（经链路追踪）、`/agent-ras/trace/[taskId]`（经可靠性观测）、`/eval/run/[runId]`、`/skill-opt/[name]/[version]` 等子路由 | 由父页面跳转，无独立 nav 项 |
+| 🔁 间接可达 | `/agent-ras/fault-injection/faults`（经 FI 页标题右上角「故障目录」）、`/skill-history` `/skill-detail`（经 Skills Hub）、`/details`（经链路追踪）、`/agent-ras/trace/[taskId]`（经可靠性观测）、`/eval/run/[runId]`、`/skill-opt/[name]/[version]` 等子路由 | 由父页面跳转，无独立 nav 项 |
 | 🚫 存在但未挂导航 | `/memory` `/optapi` `/security` `/skill-release` `/modelconfig`(index) `/accessconfig/{channels,webhooks,health}` | nav 中注释或未引用；多为半成品/已下线，源码保留 |
 
 > 折叠状态：`AppSidebar` 默认展开 `['skills','eval-center','observe']` 三棵子树（`useState` 初值），并在路由命中时自动展开对应祖先。

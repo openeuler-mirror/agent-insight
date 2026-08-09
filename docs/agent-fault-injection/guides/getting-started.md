@@ -14,7 +14,7 @@
 3. 本机安装 OpenCode 和/或 xiaoo（须与 Worker 同机）
 4. 打开侧栏「故障注入与评测」（默认 `/agent-ras/fault-injection/tasks`）：
    - **注入任务** → **新建任务**：三步向导（平台 → 故障+submode → 配置）；行级停/再跑/删
-   - 标题右上角 **故障模式** → `/agent-ras/fault-injection`：目录表按子模式拆行（`?` 说明）；点「注入方式」看 Skill
+   - 标题右上角 **故障目录** → `/agent-ras/fault-injection/faults`：目录表按子模式拆行（`?` 说明）；点「注入方式」看 Skill（与侧栏「可靠性能力」`/agent-ras/fault-modes` 不同）
    - 详情轮询进度 → Run：「注入流程」四节点 + 调用树
 
 任务创建后一律 `queued`，由本机 Worker claim 后执行。无在线 Worker 时平台不可选、无法下一步；请先完成步骤 1。

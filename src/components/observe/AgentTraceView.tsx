@@ -112,18 +112,41 @@ function rasSeverityClass(severity: string): string {
     return 'border-border bg-background-secondary text-foreground-secondary';
 }
 
+function isFiMarker(marker: RasTraceMarker): boolean {
+    return marker.source === 'fi';
+}
+
+function rasOnlyMarkers(markers: RasTraceMarker[]): RasTraceMarker[] {
+    return markers.filter((marker) => !isFiMarker(marker));
+}
+
+function fiOnlyMarkers(markers: RasTraceMarker[]): RasTraceMarker[] {
+    return markers.filter(isFiMarker);
+}
+
 function RasNodeBadge({
     markers,
     compact = false,
     className,
 }: {
-    markers: RasAnomalyMarker[];
+    markers: RasTraceMarker[];
     compact?: boolean;
     className?: string;
 }) {
+    if (!markers.length) return null;
+    const fi = fiOnlyMarkers(markers);
+    const ras = rasOnlyMarkers(markers);
+    // Mixed FI+RAS on one node: show separate badges so FI is never labeled RAS.
+    if (fi.length && ras.length) {
+        return (
+            <span className={cn('inline-flex max-w-full flex-wrap items-center gap-1', className)}>
+                <RasNodeBadge markers={fi} compact={compact} />
+                <RasNodeBadge markers={ras} compact={compact} />
+            </span>
+        );
+    }
     const first = markers[0];
-    if (!first) return null;
-    const isFi = first.source === 'fi' || markers.every((m) => m.source === 'fi');
+    const isFi = fi.length > 0;
     const prefix = isFi ? 'FI' : 'RAS';
     const title = markers
         .map(marker => `${marker.label} (${marker.severity})${marker.summary ? `: ${marker.summary}` : ''}`)
@@ -147,11 +170,15 @@ function RasNodeBadge({
     );
 }
 
-function RasReliabilityDetails({ markers }: { markers: RasAnomalyMarker[] }) {
+function MarkerSourceSection({
+    markers,
+    heading,
+}: {
+    markers: RasTraceMarker[];
+    heading: string;
+}) {
     const { t: tt } = useLocale();
     if (!markers.length) return null;
-    const isFi = markers.every((m) => m.source === 'fi');
-    const heading = isFi ? 'FI Events' : tt('traceTree.rasEvents');
     return (
         <section
             className="rounded-md border border-error-border bg-error-subtle p-3"
@@ -231,6 +258,25 @@ function RasReliabilityDetails({ markers }: { markers: RasAnomalyMarker[] }) {
             </div>
         </section>
     );
+}
+
+function RasReliabilityDetails({ markers }: { markers: RasTraceMarker[] }) {
+    const { t: tt } = useLocale();
+    if (!markers.length) return null;
+    const fi = fiOnlyMarkers(markers);
+    const ras = rasOnlyMarkers(markers);
+    if (fi.length && ras.length) {
+        return (
+            <div className="space-y-3">
+                <MarkerSourceSection markers={fi} heading="FI Events" />
+                <MarkerSourceSection markers={ras} heading={tt('traceTree.rasEvents')} />
+            </div>
+        );
+    }
+    if (fi.length) {
+        return <MarkerSourceSection markers={fi} heading="FI Events" />;
+    }
+    return <MarkerSourceSection markers={ras} heading={tt('traceTree.rasEvents')} />;
 }
 
 type DetailTab = 'timeline' | 'prompt' | 'overview' | 'skills' | 'infra';
@@ -634,12 +680,13 @@ export default function AgentTraceView({
 
     const displayInteractions = langfuseProjection?.interactions || interactions;
     const tree = useMemo(() => {
-        const alignedInteractions = anomalies?.length
-            ? alignInteractionsToRasAnchors(interactions || [], anomalies)
+        const rasAnomalies = rasOnlyMarkers(anomalies || []);
+        const alignedInteractions = rasAnomalies.length
+            ? alignInteractionsToRasAnchors(interactions || [], rasAnomalies)
             : (interactions || []);
         let baseTree = langfuseProjection?.tree || buildAgentCallTree(alignedInteractions);
-        if (baseTree && anomalies?.length) {
-            baseTree = applyRasRecoveryTree(baseTree, anomalies);
+        if (baseTree && rasAnomalies.length) {
+            baseTree = applyRasRecoveryTree(baseTree, rasAnomalies);
         }
         if (!baseTree || !reliabilityEvents?.length) return baseTree;
         const rasEvents: AgentEvent[] = reliabilityEvents.map((event) => ({

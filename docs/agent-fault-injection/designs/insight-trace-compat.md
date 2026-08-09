@@ -30,7 +30,7 @@ align with [agent-insight](https://gitcode.com/openeuler/agent-insight)
 }
 ```
 
-`taskId` is the **Trace ID** / FI↔reliability join key (bare platform session: OpenCode `ses_…`, xiaoo gateway UUID). It must match `RasAnomalyEvent.taskId` / `Execution.taskId` / OTel `session.id`. Product UI labels this **Trace ID**; Prisma column `FaultInjectionRun.sessionTaskId` stores the same value.
+`taskId` is the **Trace ID** (bare platform session: OpenCode `ses_…`, xiaoo gateway UUID). Product UI labels this **Trace ID**; Prisma column `FaultInjectionRun.sessionTaskId` stores the same value when aligned. The same session id may appear on both FI Run and reliability pages when real RAS events exist, but **FI markers and RAS events are different sources** — FI UI must not re-label FI as RAS, and FI collect must not synthesize `RasAnomalyEvent`.
 
 `runId` identifies the FI experiment only. **Do not** silently fall back to `runId` as `taskId` — that breaks reliability join. When the platform session cannot be resolved, set `sessionAligned: false` and leave `taskId` null.
 

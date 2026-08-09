@@ -126,7 +126,7 @@ flowchart TB
 | 入口 | 说明 |
 |------|------|
 | `/agent-ras/trace` 等 | 可靠性观测（读 `RasAnomalyEvent` 等） |
-| `/agent-ras/fault-injection` | FI 任务/故障目录/Run 轨迹 UI |
+| `/agent-ras/fault-injection` | FI UI 入口（redirect → `/tasks`；目录在 `/faults`） |
 | 设置页活跃模型 | FI Judge 依赖 |
 
 ### 2.2 数据与协议

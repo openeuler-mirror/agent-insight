@@ -203,6 +203,96 @@ class BestEffortSessionCaptureTests(unittest.TestCase):
                 collect["taskId"], "c3ea1a83-eedc-4e75-a606-862962e5e9a1"
             )
             self.assertTrue(collect["sessionAligned"])
+            self.assertTrue(collect["faultActivated"])
+
+    def test_best_effort_collect_does_not_fake_fault_activated(self) -> None:
+        from agent_fault_injection.pipeline.runner import ExperimentRunner
+        from agent_fault_injection.pipeline.artifact_store import ArtifactStore
+        from agent_fault_injection.platform_adapters.opencode.adapter import (
+            OpenCodeAdapter,
+        )
+        from agent_fault_injection.fault_inject.catalog.registry import FaultRegistry
+        from agent_fault_injection.pipeline.models import RunRequest
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            artifacts = _artifacts(root)
+            # No events.jsonl — plugin never started.
+            store = ArtifactStore(root.parent / "out")
+            request = RunRequest(
+                platform="opencode",
+                agent="build",
+                fault="thinking-dead-loop",
+                prompt="use thinking-dead-loop",
+                workspace=root,
+                output_dir=root,
+                run_id=artifacts.run_id,
+            )
+            fault = FaultRegistry().get("thinking-dead-loop")
+            ExperimentRunner()._best_effort_collect(
+                request=request,
+                fault=fault,
+                artifacts=artifacts,
+                store=store,
+                adapter=OpenCodeAdapter(),
+            )
+            collect = json.loads(
+                (artifacts.root / "collect-result.json").read_text(encoding="utf-8")
+            )
+            self.assertFalse(collect["faultActivated"])
+            self.assertIsNone(collect["taskId"])
+            self.assertFalse(collect["sessionAligned"])
+
+    def test_plugin_start_failed_never_promoted_to_completed(self) -> None:
+        from agent_fault_injection.pipeline.runner import ExperimentRunner
+        from agent_fault_injection.pipeline.exceptions import PluginStartupError
+        from agent_fault_injection.pipeline.models import (
+            RunStatus,
+            TerminationReason,
+        )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            artifacts = _artifacts(root)
+            # Even a stale/fake collect must not override plugin_start_failed.
+            (artifacts.root / "collect-result.json").write_text(
+                json.dumps(
+                    {
+                        "runId": artifacts.run_id,
+                        "taskId": None,
+                        "sessionAligned": False,
+                        "faultActivated": True,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            store = type(
+                "Store",
+                (),
+                {
+                    "update_manifest": staticmethod(
+                        lambda *args, **kwargs: None
+                    )
+                },
+            )()
+            recovered = ExperimentRunner()._completed_from_collect_if_activated(
+                store=store,
+                artifacts=artifacts,
+                reason=TerminationReason.PLUGIN_START_FAILED,
+                error=PluginStartupError("plugin not ready"),
+            )
+            self.assertIsNone(recovered)
+
+            # Non-plugin failures may still recover when collect proves activation.
+            recovered_ok = ExperimentRunner()._completed_from_collect_if_activated(
+                store=store,
+                artifacts=artifacts,
+                reason=TerminationReason.PLATFORM_ERROR,
+                error=RuntimeError("agent aborted after activation"),
+            )
+            self.assertIsNotNone(recovered_ok)
+            assert recovered_ok is not None
+            self.assertEqual(recovered_ok.status, RunStatus.COMPLETED)
 
 
 if __name__ == "__main__":

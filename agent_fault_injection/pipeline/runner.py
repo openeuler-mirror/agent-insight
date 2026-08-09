@@ -240,6 +240,8 @@ class ExperimentRunner:
         adapter,
     ) -> None:
         """On timeout/failure, still map interactions + collect-result when possible."""
+        from .collect_payload import events_indicate_fault_activated
+
         # Platform-specific finalize (e.g. xiaoo CLI stdout → events).
         ingest = getattr(adapter, "_ingest_cli_stdout_events", None)
         if callable(ingest):
@@ -249,14 +251,18 @@ class ExperimentRunner:
                 pass
 
         session_id: str | None = None
+        fault_activated = False
         mapper = getattr(adapter, "mapper", None)
         inspect = getattr(mapper, "inspect", None) if mapper is not None else None
         if callable(inspect):
             try:
                 capture = inspect(artifacts.events_file)
                 session_id = getattr(capture, "session_id", None)
+                fault_activated = bool(getattr(capture, "fault_activated", False))
             except Exception:
                 pass
+        if not fault_activated:
+            fault_activated = events_indicate_fault_activated(artifacts)
 
         try:
             adapter.map_trajectory(request, fault, artifacts)
@@ -283,8 +289,8 @@ class ExperimentRunner:
                 fault=fault.name,
                 injection_method=getattr(fault, "injection_method", None)
                 or "skill_inject",
-                fault_activated=True,
-                session_id=session_id or trace_document.task_id,
+                fault_activated=fault_activated,
+                session_id=session_id or trace_document.task_id or None,
             )
             write_collect_payload(artifacts, collect)
         except Exception:
@@ -292,8 +298,6 @@ class ExperimentRunner:
 
     @staticmethod
     def _collect_fault_activated(artifacts: RunArtifacts) -> bool:
-        import json
-
         path = artifacts.root / "collect-result.json"
         if not path.is_file():
             return False
@@ -311,8 +315,14 @@ class ExperimentRunner:
         reason: TerminationReason,
         error: Exception,
     ) -> RunResult | None:
-        """Worker path: fault already activated + collect written → success."""
+        """Promote to success only when events prove fault activation.
 
+        Plugin-start failure with no real activation must stay FAILED so UI
+        surfaces the startup error instead of a fake completed run.
+        """
+
+        if reason == TerminationReason.PLUGIN_START_FAILED:
+            return None
         if not self._collect_fault_activated(artifacts):
             return None
         message = f"{type(error).__name__}: {error}"

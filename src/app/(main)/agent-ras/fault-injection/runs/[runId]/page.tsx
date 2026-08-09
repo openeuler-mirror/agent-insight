@@ -1,8 +1,9 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
+import { ChevronDown, ChevronRight } from 'lucide-react'
 import { FiPageShell } from '@/components/fault-injection/FiPageShell'
 import { HelpTip, LabelWithHelp } from '@/components/fault-injection/HelpTip'
 import { CopyableId } from '@/components/fault-injection/CopyableId'
@@ -18,8 +19,10 @@ import {
   loadFaultLabelsBundle,
   resolveSubmodeLabel,
 } from '@/lib/fault-injection/fault-labels-cache'
+import { buildMarkerPipeline } from '@/lib/fault-injection/marker-pipeline'
 import type { FiPipelineMarker } from '@/lib/fault-injection/trace-markers'
 import { useLocale } from '@/lib/client/locale-context'
+import { cn } from '@/lib/utils'
 
 type TracePayload = {
   taskId?: string | null
@@ -54,6 +57,7 @@ export default function FaultInjectionRunTracePage() {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [submodeLabel, setSubmodeLabel] = useState<string | null>(null)
+  const [pipelineOpen, setPipelineOpen] = useState(false)
   const statusRef = useRef<string | undefined>(undefined)
 
   const load = useCallback(async () => {
@@ -111,6 +115,15 @@ export default function FaultInjectionRunTracePage() {
     return () => window.clearTimeout(t)
   }, [trace?.status, trace?.interactions, load])
 
+  const pipelineSteps = useMemo(
+    () => buildMarkerPipeline(trace?.pipelineMarkers || [], locale === 'zh' ? 'zh' : 'en'),
+    [trace?.pipelineMarkers, locale],
+  )
+  const pipelineDoneCount = pipelineSteps.filter((step) => step.done).length
+  const pipelineLatestLabel =
+    [...pipelineSteps].reverse().find((step) => step.done)?.label ||
+    (zh ? '尚未开始' : 'Not started')
+
   const judge = trace?.judge
   const taskHref = trace?.taskKey
     ? `/agent-ras/fault-injection/tasks/${trace.taskKey}`
@@ -131,8 +144,8 @@ export default function FaultInjectionRunTracePage() {
           <span className="font-mono text-xs text-foreground">{params.runId}</span>
           <HelpTip widthClass="w-80">
             {zh
-              ? '单次故障注入的摘要与调用树。数据来自 collect-result / Session.interactions；顶部四节点展示注入与评判流程。注入细节只在本页与 FI 任务视图；可靠性观测以正常上报的轨迹（Execution）为准，不再为「注入激活」合成 RasAnomalyEvent。'
-              : 'Summary and call tree for one fault-injection run. Data comes from collect-result / Session.interactions; the top four nodes show injection and judge flow. Injection details stay on this page and FI tasks; reliability observing uses normally uploaded Execution traces — no synthetic RasAnomalyEvent for activation.'}
+              ? '单次故障注入的摘要与调用树。FI 注入/评判事件与同 session 的真 RAS 检出是不同来源：本页可并列显示，但互不归属；可靠性观测是独立入口。'
+              : 'Summary and call tree for one fault-injection run. FI injection/judge events and real RAS detections on the same session are different sources: both may appear here, but neither owns the other. Reliability observing is a separate entry.'}
           </HelpTip>
         </div>
 
@@ -147,7 +160,9 @@ export default function FaultInjectionRunTracePage() {
               {zh ? '打开可靠性观测' : 'Open reliability'}
             </Link>
             <span className="ml-1 text-xs">
-              {zh ? '（需同 Trace ID 已有轨迹上报）' : '(requires an uploaded trace for this Trace ID)'}
+              {zh
+                ? '（同 session 的 RAS 独立事件，若有）'
+                : '(independent RAS events for this session, if any)'}
             </span>
           </p>
         ) : null}
@@ -226,8 +241,8 @@ export default function FaultInjectionRunTracePage() {
                   <LabelWithHelp
                     tip={
                       zh
-                        ? 'Trace ID（平台原生 session），与可靠性观测 Execution.taskId 对齐。可复制。'
-                        : 'Trace ID (bare platform session), aligns with reliability Execution.taskId. Copyable.'
+                        ? '平台原生 session（Trace ID）。可复制；同 session 上的 RAS 事件是独立来源，不由此页合成。'
+                        : 'Bare platform session (Trace ID). Copyable; RAS events on the same session are a separate source, not synthesized here.'
                     }
                   >
                     <span className="text-[11px] text-foreground-muted">Trace ID</span>
@@ -245,18 +260,35 @@ export default function FaultInjectionRunTracePage() {
               </div>
             ) : null}
 
-            <div className="shrink-0 space-y-3">
-              <div className="flex items-center gap-1.5">
-                <h2 className="text-[13px] font-semibold">
-                  {zh ? '注入流程' : 'Injection pipeline'}
-                </h2>
+            <div className="shrink-0 rounded-md border border-border bg-card">
+              <div className="flex items-center gap-1 pr-2">
+                <button
+                  type="button"
+                  className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left hover:bg-background-secondary/60"
+                  aria-expanded={pipelineOpen}
+                  onClick={() => setPipelineOpen((open) => !open)}
+                >
+                  {pipelineOpen ? (
+                    <ChevronDown className="size-4 shrink-0 text-foreground-muted" aria-hidden />
+                  ) : (
+                    <ChevronRight className="size-4 shrink-0 text-foreground-muted" aria-hidden />
+                  )}
+                  <span className="text-[13px] font-semibold">
+                    {zh ? '注入流程' : 'Injection pipeline'}
+                  </span>
+                  <span className="ml-auto truncate text-xs text-foreground-muted">
+                    {`${pipelineDoneCount}/4 · ${pipelineLatestLabel}`}
+                  </span>
+                </button>
                 <HelpTip>
                   {zh
-                    ? '固定四节点：请求 → 开始 → 完成 → 评判。未到达的节点保持空心。'
-                    : 'Fixed four nodes: request → start → complete → judge. Pending nodes stay hollow.'}
+                    ? '固定四节点：请求 → 开始 → 完成 → 评判。默认收起以免挤占下方链路追踪；点击标题展开。'
+                    : 'Fixed four nodes: request → start → complete → judge. Collapsed by default so the call tree keeps the first screen; click to expand.'}
                 </HelpTip>
               </div>
-              <MarkerPipeline markers={trace.pipelineMarkers || []} />
+              <div className={cn('border-t border-border px-3 py-3', !pipelineOpen && 'hidden')}>
+                <MarkerPipeline markers={trace.pipelineMarkers || []} />
+              </div>
             </div>
 
             <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
@@ -266,20 +298,20 @@ export default function FaultInjectionRunTracePage() {
                 </h2>
                 <HelpTip widthClass="w-80">
                   {zh
-                    ? '过滤 AGENT / LLM / TOOL 等 span；左侧调用树，右侧详情。非终态时自动轮询并尽量保持选中。'
-                    : 'Filters AGENT / LLM / TOOL spans; call tree on the left, details on the right. Auto-polls before terminal and tries to keep selection.'}
+                    ? '过滤 AGENT / LLM / TOOL 等 span；左侧调用树，右侧详情。FI markers 与真 RAS markers 分源标注。非终态时自动轮询并尽量保持选中。'
+                    : 'Filters AGENT / LLM / TOOL spans; call tree on the left, details on the right. FI markers and real RAS markers keep distinct sources. Auto-polls before terminal and tries to keep selection.'}
                 </HelpTip>
                 <span className="text-xs text-foreground-muted">
                   {(trace.interactions || []).length} interactions
                 </span>
               </div>
-              <div className="min-h-0 flex-1 overflow-hidden">
+              <div className="min-h-0 flex-1 overflow-auto rounded-md border border-border bg-card">
                 <AgentTraceView
                   interactions={trace.interactions || []}
                   traceKey={trace.taskId || params.runId}
                   anomalies={[...(trace.rasMarkers || []), ...(trace.markers || [])]}
                   reliabilityEvents={[]}
-                  panelClassName="h-full min-h-[520px]"
+                  panelClassName="h-full min-h-0"
                 />
               </div>
             </div>

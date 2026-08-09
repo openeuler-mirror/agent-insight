@@ -8,7 +8,7 @@ import { HelpTip } from '@/components/fault-injection/HelpTip'
 import { useLocale } from '@/lib/client/locale-context'
 import { cn } from '@/lib/utils'
 
-const FAULTS_HREF = '/agent-ras/fault-injection'
+const FAULTS_HREF = '/agent-ras/fault-injection/faults'
 const TASKS_HREF = '/agent-ras/fault-injection/tasks'
 
 export function FiPageShell({
@@ -25,18 +25,18 @@ export function FiPageShell({
   const { locale } = useLocale()
   const zh = locale === 'zh'
   const pathname = usePathname() || ''
-  const onFaultsPage = pathname === FAULTS_HREF
+  const onFaultsPage = pathname === FAULTS_HREF || pathname.startsWith(`${FAULTS_HREF}/`)
   const navHref = onFaultsPage ? TASKS_HREF : FAULTS_HREF
   const navLabel = onFaultsPage
     ? zh
       ? '注入任务'
       : 'Injection tasks'
     : zh
-      ? '故障模式'
-      : 'Fault modes'
+      ? '故障目录'
+      : 'Fault catalog'
   const titleTip = zh
-    ? '在真实 Agent 平台上注入内置故障模式，采集轨迹并由 Insight 评判是否发生与是否恢复。默认进入注入任务列表；右上角可切换到故障模式目录。'
-    : 'Inject built-in fault modes on a real Agent platform, collect the trajectory, and let Insight judge occurrence and recovery. Defaults to the task list; use the top-right link for the fault catalog.'
+    ? '在真实 Agent 平台上注入内置故障 skill，采集轨迹并由 Insight 评判是否发生与是否恢复。侧栏默认进入注入任务；右上角可切换到故障目录（勿与侧栏「可靠性能力」混淆）。'
+    : 'Inject built-in fault skills on a real Agent platform, collect the trajectory, and let Insight judge occurrence and recovery. Sidebar defaults to the task list; use the top-right link for the FI fault catalog (distinct from sidebar Reliability Capabilities).'
 
   return (
     <PageContainer className={cn('min-h-0', className)}>

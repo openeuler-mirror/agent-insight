@@ -93,6 +93,34 @@ class InterruptedPlatformRegistry:
         return InterruptedOpenCodeAdapter()
 
 
+class PluginStartFailedAdapter(PlatformAdapter):
+    name = "opencode"
+
+    def install_fault_assets(self, ctx):  # noqa: ANN001
+        return None
+
+    def merge_platform_env(self, ctx, environment):  # noqa: ANN001
+        return dict(environment)
+
+    async def run_platform_session(self, ctx, environment):  # noqa: ANN001
+        raise AssertionError("execute override should be used")
+
+    async def execute(self, request, fault, artifacts, store):
+        from agent_fault_injection.pipeline.exceptions import PluginStartupError
+
+        raise PluginStartupError("Platform plugin did not become ready within 120s")
+
+    def map_trajectory(self, request, fault, artifacts):
+        return None
+
+
+class PluginStartFailedRegistry:
+    def get(self, name):
+        if name != "opencode":
+            raise AssertionError(name)
+        return PluginStartFailedAdapter()
+
+
 class RunnerIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_runner_selects_adapter_and_writes_trajectory(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -206,6 +234,42 @@ class RunnerIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 manifest["agent_execution_status"],
                 "interrupted",
             )
+
+    async def test_plugin_start_failed_stays_failed_without_trace(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            request = RunRequest(
+                platform="opencode",
+                agent="build",
+                fault="thinking-dead-loop",
+                prompt="use thinking-dead-loop",
+                workspace=root,
+                output_dir=root / "artifacts",
+            )
+            runner = ExperimentRunner(
+                fault_registry=FaultRegistry(),
+                platform_registry=PluginStartFailedRegistry(),
+            )
+
+            result = await runner.run(request)
+
+            self.assertEqual(result.status, RunStatus.FAILED)
+            self.assertEqual(
+                result.termination_reason,
+                TerminationReason.PLUGIN_START_FAILED,
+            )
+            collect_path = result.artifacts.root / "collect-result.json"
+            self.assertTrue(collect_path.is_file())
+            collect = json.loads(collect_path.read_text(encoding="utf-8"))
+            self.assertFalse(collect.get("faultActivated"))
+            self.assertIsNone(collect.get("taskId"))
+            self.assertFalse(collect.get("sessionAligned"))
+            manifest = json.loads(
+                result.artifacts.manifest_file.read_text(encoding="utf-8")
+            )
+            self.assertEqual(manifest["status"], "failed")
+            self.assertEqual(manifest["termination_reason"], "plugin_start_failed")
+            self.assertIn("PluginStartupError", manifest.get("error") or "")
 
 
 if __name__ == "__main__":

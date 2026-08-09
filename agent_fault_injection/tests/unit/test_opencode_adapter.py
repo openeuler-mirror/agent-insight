@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from agent_fault_injection.fault_inject.injection.installer import InstallSession
 from agent_fault_injection.fault_inject.catalog.registry import FaultRegistry
+from agent_fault_injection.pipeline.exceptions import PluginStartupError
 from agent_fault_injection.pipeline.models import RunArtifacts, RunRequest
 from agent_fault_injection.platform_adapters.opencode.adapter import OpenCodeAdapter
 
@@ -465,6 +466,51 @@ class OpenCodeAdapterTests(TestCase):
                     make_artifacts(empty),
                 )
             )
+
+    def test_startup_failure_message_reports_empty_logs_and_plugin_gap(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            raw = root / "raw"
+            raw.mkdir(parents=True, exist_ok=True)
+            stdout = raw / "stdout.log"
+            stderr = raw / "stderr.log"
+            stdout.write_text("", encoding="utf-8")
+            stderr.write_text("", encoding="utf-8")
+            ready = raw / "plugin-ready.json"
+            artifacts = RunArtifacts(
+                run_id="run-diag",
+                root=root,
+                raw_dir=raw,
+                resolved_fault_dir=root / "resolved",
+                events_file=raw / "events.jsonl",
+                session_file=raw / "session.json",
+                stdout_file=stdout,
+                stderr_file=stderr,
+                trajectory_file=root / "trajectory",
+                interactions_file=root / "interactions",
+                execution_file=root / "execution.jsonl",
+                manifest_file=root / "manifest",
+                request_file=root / "request",
+                plugin_ready_file=ready,
+            )
+            message = OpenCodeAdapter._startup_failure_message(
+                exc=PluginStartupError(
+                    "Platform plugin did not become ready within 120s"
+                ),
+                artifacts=artifacts,
+                startup_timeout=120,
+                process_exit_code=None,
+                plugin_installed=False,
+                agent_fi_raw_dir=str(raw),
+                agent_fi_run_id="run-diag",
+            )
+            self.assertIn("plugin-ready=missing", message)
+            self.assertIn("workspace-plugin=missing", message)
+            self.assertIn("AGENT_FI=set", message)
+            self.assertIn("process-exit=still-running-at-timeout", message)
+            self.assertIn("stderr: empty(0B)", message)
+            self.assertIn("stdout: empty(0B)", message)
+
 
 if __name__ == "__main__":
     unittest.main()

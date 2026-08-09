@@ -146,8 +146,12 @@ core 零能力依赖）需要抽 `ports.py` 并改写 Monitor 接口，代价与
 ### D7：`ras_embed/` 更名为 `ras_runtime/`
 
 原名的问题是「embed」只描述了嵌入形态，没说明它是**进程内运行时**（FFI 门面 +
-embed loop + SessionHub 编排核 + IPC + 旁路 push）。新名与文档既有术语
+embed loop + SessionHub 编排核 + 旁路 push）。新名与文档既有术语
 「进程内 runtime」一致。内部文件结构不变。
+
+> 注：2026-08-07 的 `037bd69`（扩展多平台 inproc）已把 IPC 迁出本包——
+> 原 `ipc.py` / `ipc_worker.py` 移至 `platform_adapter/common/transport/subprocess_ipc/`，
+> 本包公共 API 收缩为 `call / ensure_runtime / reset_runtime_for_tests`，更名面相应缩小。
 
 **契约面盘点（改名即改约，全部仓内同步，不留别名兼容层）**：
 
@@ -155,9 +159,13 @@ embed loop + SessionHub 编排核 + IPC + 旁路 push）。新名与文档既有
 |--------|------|
 | JS FFI 字符串契约 | `platform_adapter/common/python_bridge.js`：`PyRun_SimpleString` 内 `from ras_embed import call` |
 | Python client | `platform_adapter/common/ras_client.py`、`platform_adapter/xiaoo/hooks.py`、`xiaoo/hooker/hooker_main.py`、`common/insight_anomaly_reporter.py` |
+| transport 层 | `common/transport/subprocess_ipc/worker.py`（`from ras_embed.facade import call`）、`client.py` 内 docstring/错误消息字样 |
 | 打包 | `pyproject.toml` 的 `packages.find` include |
 | 测试 | `tests/unit_tests/ras_embed/` → `ras_runtime/`；harness 下同名目录 |
 | 文档 | `architecture.md` §4 全节、`modules/ras-embed.md` → 更名 `modules/ras-runtime.md`、guides |
+
+**保留不改**：`transport/subprocess_ipc/client.py` 的 socket 文件名 `ras_embed.sock`
+（磁盘上的进程间契约，避免与残留旧 worker 进程不兼容）；仅包名变更。
 
 **仓外风险**：若有仓外部署/手写代码 pin 了 `from ras_embed import ...`（独立维护的
 xiaoo / openjiuwen 环境），需同步通知。仓内分发的桥接代码随安装器走，自洽。
